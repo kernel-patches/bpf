@@ -9,6 +9,7 @@
 #include <linux/compiler.h>
 #include <linux/ctype.h>
 #include <linux/errno.h>
+#include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/anon_inodes.h>
 #include <linux/file.h>
@@ -347,6 +348,7 @@ const char *btf_type_str(const struct btf_type *t)
 {
 	return btf_kind_str[BTF_INFO_KIND(t->info)];
 }
+EXPORT_SYMBOL_GPL(btf_type_str);
 
 /* Chunk size we use in safe copy of data to be shown. */
 #define BTF_SHOW_OBJ_SAFE_SIZE		32
@@ -497,6 +499,7 @@ bool btf_type_is_void(const struct btf_type *t)
 {
 	return t == &btf_void;
 }
+EXPORT_SYMBOL_GPL(btf_type_is_void);
 
 static bool btf_type_is_datasec(const struct btf_type *t)
 {
@@ -542,6 +545,7 @@ u32 btf_nr_types(const struct btf *btf)
 
 	return total;
 }
+EXPORT_SYMBOL_GPL(btf_nr_types);
 
 s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind)
 {
@@ -562,6 +566,7 @@ s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind)
 
 	return -ENOENT;
 }
+EXPORT_SYMBOL_GPL(btf_find_by_name_kind);
 
 struct btf *bpf_get_btf_vmlinux(void)
 {
@@ -635,6 +640,7 @@ const struct btf_type *btf_type_skip_modifiers(const struct btf *btf,
 
 	return t;
 }
+EXPORT_SYMBOL_GPL(btf_type_skip_modifiers);
 
 const struct btf_type *btf_type_resolve_ptr(const struct btf *btf,
 					    u32 id, u32 *res_id)
@@ -647,6 +653,7 @@ const struct btf_type *btf_type_resolve_ptr(const struct btf *btf,
 
 	return btf_type_skip_modifiers(btf, t->type, res_id);
 }
+EXPORT_SYMBOL_GPL(btf_type_resolve_ptr);
 
 const struct btf_type *btf_type_resolve_func_ptr(const struct btf *btf,
 						 u32 id, u32 *res_id)
@@ -659,6 +666,7 @@ const struct btf_type *btf_type_resolve_func_ptr(const struct btf *btf,
 
 	return NULL;
 }
+EXPORT_SYMBOL_GPL(btf_type_resolve_func_ptr);
 
 /* Types that act only as a source, not sink or intermediate
  * type when resolving.
@@ -855,6 +863,7 @@ const char *btf_name_by_offset(const struct btf *btf, u32 offset)
 {
 	return btf_str_by_offset(btf, offset);
 }
+EXPORT_SYMBOL_GPL(btf_name_by_offset);
 
 const struct btf_type *btf_type_by_id(const struct btf *btf, u32 type_id)
 {
@@ -1760,11 +1769,13 @@ const char *btf_get_name(const struct btf *btf)
 {
 	return btf->name;
 }
+EXPORT_SYMBOL_GPL(btf_get_name);
 
 void btf_get(struct btf *btf)
 {
 	refcount_inc(&btf->refcnt);
 }
+EXPORT_SYMBOL_GPL(btf_get);
 
 void btf_put(struct btf *btf)
 {
@@ -1773,6 +1784,7 @@ void btf_put(struct btf *btf)
 		call_rcu(&btf->rcu, btf_free_rcu);
 	}
 }
+EXPORT_SYMBOL_GPL(btf_put);
 
 struct btf *btf_base_btf(const struct btf *btf)
 {
@@ -2018,6 +2030,7 @@ btf_resolve_size(const struct btf *btf, const struct btf_type *type,
 {
 	return __btf_resolve_size(btf, type, type_size, NULL, NULL, NULL, NULL);
 }
+EXPORT_SYMBOL_GPL(btf_resolve_size);
 
 static u32 btf_resolved_type_id(const struct btf *btf, u32 type_id)
 {
@@ -3433,6 +3446,7 @@ const char *btf_find_decl_tag_value(const struct btf *btf, const struct btf_type
 
 	return value;
 }
+EXPORT_SYMBOL_GPL(btf_find_decl_tag_value);
 
 static int
 btf_find_graph_root(const struct btf *btf, const struct btf_type *pt,
@@ -5701,6 +5715,7 @@ struct btf_struct_meta *btf_find_struct_meta(const struct btf *btf, u32 btf_id)
 		return NULL;
 	return bsearch(&btf_id, tab->types, tab->cnt, sizeof(tab->types[0]), btf_id_cmp_func);
 }
+EXPORT_SYMBOL_GPL(btf_find_struct_meta);
 
 static int btf_check_type_tags(struct btf_verifier_env *env,
 			       struct btf *btf, int start_id)
@@ -5946,6 +5961,7 @@ bool btf_is_projection_of(const char *pname, const char *tname)
 		return true;
 	return false;
 }
+EXPORT_SYMBOL_GPL(btf_is_projection_of);
 
 bool btf_is_prog_ctx_type(struct bpf_verifier_log *log, const struct btf *btf,
 			  const struct btf_type *t, enum bpf_prog_type prog_type,
@@ -6023,6 +6039,7 @@ again:
 	}
 	return true;
 }
+EXPORT_SYMBOL_GPL(btf_is_prog_ctx_type);
 
 /* forward declarations for arch-specific underlying types of
  * bpf_user_pt_regs_t; this avoids the need for arch-specific #ifdef
@@ -6197,6 +6214,7 @@ int get_kern_ctx_btf_id(struct bpf_verifier_log *log, enum bpf_prog_type prog_ty
 
 	return kctx_type_id;
 }
+EXPORT_SYMBOL_GPL(get_kern_ctx_btf_id);
 
 BTF_ID_LIST(bpf_ctx_convert_btf_id)
 BTF_ID(struct, bpf_ctx_convert)
@@ -6280,6 +6298,7 @@ err_out:
 	btf_verifier_env_free(env);
 	return btf;
 }
+EXPORT_SYMBOL_GPL(btf_parse_vmlinux);
 
 /* If .BTF_ids section was created with distilled base BTF, both base and
  * split BTF ids will need to be mapped to actual base/split ids for
@@ -7257,6 +7276,7 @@ int btf_struct_access(struct bpf_verifier_log *log,
 
 	return -EINVAL;
 }
+EXPORT_SYMBOL_GPL(btf_struct_access);
 
 /* Check that two BTF types, each specified as an BTF object + id, are exactly
  * the same. Trivial ID check is not enough due to module BTFs, because we can
@@ -7272,6 +7292,7 @@ bool btf_types_are_same(const struct btf *btf1, u32 id1,
 		return true;
 	return btf_type_by_id(btf1, id1) == btf_type_by_id(btf2, id2);
 }
+EXPORT_SYMBOL_GPL(btf_types_are_same);
 
 bool btf_struct_ids_match(struct bpf_verifier_log *log,
 			  const struct btf *btf, u32 id, int off,
@@ -7311,6 +7332,7 @@ again:
 
 	return true;
 }
+EXPORT_SYMBOL_GPL(btf_struct_ids_match);
 
 static int __get_type_size(struct btf *btf, u32 btf_id,
 			   const struct btf_type **ret_type)
@@ -7417,6 +7439,7 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 	m->nr_args = nargs;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(btf_distill_func_proto);
 
 /* Compare BTFs of two functions assuming only scalars and pointers to context.
  * t1 points to BTF_KIND_FUNC in btf1
@@ -7559,6 +7582,7 @@ int btf_check_type_match(struct bpf_verifier_log *log, const struct bpf_prog *pr
 
 	return btf_check_func_type_match(log, btf1, t1, btf2, t2);
 }
+EXPORT_SYMBOL_GPL(btf_check_type_match);
 
 static bool btf_is_dynptr_ptr(const struct btf *btf, const struct btf_type *t)
 {
@@ -7872,6 +7896,7 @@ skip_pointer:
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(btf_prepare_func_args);
 
 static void btf_type_show(const struct btf *btf, u32 type_id, void *obj,
 			  struct btf_show *show)
@@ -7983,6 +8008,7 @@ const struct file_operations btf_fops = {
 #endif
 	.release	= btf_release,
 };
+EXPORT_SYMBOL_GPL(btf_fops);
 
 static int __btf_new_fd(struct btf *btf)
 {
@@ -8028,6 +8054,7 @@ struct btf *btf_get_by_fd(int fd)
 
 	return btf;
 }
+EXPORT_SYMBOL_GPL(btf_get_by_fd);
 
 int btf_get_info_by_fd(const struct btf *btf,
 		       const union bpf_attr *attr,
@@ -8114,16 +8141,19 @@ u32 btf_obj_id(const struct btf *btf)
 {
 	return btf->id;
 }
+EXPORT_SYMBOL_GPL(btf_obj_id);
 
 bool btf_is_kernel(const struct btf *btf)
 {
 	return btf->kernel_btf;
 }
+EXPORT_SYMBOL_GPL(btf_is_kernel);
 
 bool btf_is_module(const struct btf *btf)
 {
 	return btf->kernel_btf && strcmp(btf->name, "vmlinux") != 0;
 }
+EXPORT_SYMBOL_GPL(btf_is_module);
 
 enum {
 	BTF_MODULE_F_LIVE = (1 << 0),
@@ -8289,6 +8319,7 @@ struct module *btf_try_get_module(const struct btf *btf)
 
 	return res;
 }
+EXPORT_SYMBOL_GPL(btf_try_get_module);
 
 /* Returns struct btf corresponding to the struct module.
  * This function can return NULL or ERR_PTR.
@@ -8374,6 +8405,7 @@ BTF_ID_LIST_GLOBAL(btf_tracing_ids, MAX_BTF_TRACING_TYPE)
 #define BTF_TRACING_TYPE(name, type) BTF_ID(struct, type)
 BTF_TRACING_TYPE_xxx
 #undef BTF_TRACING_TYPE
+EXPORT_SYMBOL_GPL(btf_tracing_ids);
 
 /* Validate well-formedness of iter argument type.
  * On success, return positive BTF ID of iter state's STRUCT type.
@@ -8403,6 +8435,7 @@ int btf_check_iter_arg(struct btf *btf, const struct btf_type *func, int arg_idx
 
 	return btf_id;
 }
+EXPORT_SYMBOL_GPL(btf_check_iter_arg);
 
 static int btf_check_iter_kfuncs(struct btf *btf, const char *func_name,
 				 const struct btf_type *func, u32 func_flags)
@@ -8708,12 +8741,14 @@ u32 *btf_kfunc_id_set_contains(const struct btf *btf,
 	hook = bpf_prog_type_to_kfunc_hook(prog_type);
 	return __btf_kfunc_id_set_contains(btf, hook, kfunc_btf_id, prog);
 }
+EXPORT_SYMBOL_GPL(btf_kfunc_id_set_contains);
 
 u32 *btf_kfunc_is_modify_return(const struct btf *btf, u32 kfunc_btf_id,
 				const struct bpf_prog *prog)
 {
 	return __btf_kfunc_id_set_contains(btf, BTF_KFUNC_HOOK_FMODRET, kfunc_btf_id, prog);
 }
+EXPORT_SYMBOL_GPL(btf_kfunc_is_modify_return);
 
 static int __register_btf_kfunc_id_set(enum btf_kfunc_hook hook,
 				       const struct btf_kfunc_id_set *kset)
@@ -9311,6 +9346,7 @@ out:
 	}
 	return err;
 }
+EXPORT_SYMBOL_GPL(bpf_core_apply);
 
 bool btf_nested_type_is_trusted(struct bpf_verifier_log *log,
 				const struct bpf_reg_state *reg,
@@ -9358,6 +9394,7 @@ bool btf_nested_type_is_trusted(struct bpf_verifier_log *log,
 
 	return false;
 }
+EXPORT_SYMBOL_GPL(btf_nested_type_is_trusted);
 
 bool btf_type_ids_nocast_alias(struct bpf_verifier_log *log,
 			       const struct btf *reg_btf, u32 reg_id,
@@ -9413,6 +9450,7 @@ bool btf_type_ids_nocast_alias(struct bpf_verifier_log *log,
 
 	return !strncmp(reg_name, arg_name, cmp_len);
 }
+EXPORT_SYMBOL_GPL(btf_type_ids_nocast_alias);
 
 #ifdef CONFIG_BPF_JIT
 static int
@@ -9502,6 +9540,7 @@ bpf_struct_ops_find(struct btf *btf, u32 type_id)
 
 	return NULL;
 }
+EXPORT_SYMBOL_GPL(bpf_struct_ops_find);
 
 int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops)
 {
@@ -9551,3 +9590,4 @@ bool btf_param_match_suffix(const struct btf *btf,
 	param_name += len - suffix_len;
 	return !strncmp(param_name, suffix, suffix_len);
 }
+EXPORT_SYMBOL_GPL(btf_param_match_suffix);

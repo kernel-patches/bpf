@@ -30,6 +30,7 @@
 #include <linux/netdevice.h>
 #include <linux/if_packet.h>
 #include <linux/if_arp.h>
+#include <linux/export.h>
 #include <linux/gfp.h>
 #include <net/inet_common.h>
 #include <net/ip.h>
@@ -7194,6 +7195,7 @@ bool bpf_tcp_sock_is_valid_access(int off, int size, enum bpf_access_type type,
 		return size == sizeof(__u32);
 	}
 }
+EXPORT_SYMBOL_GPL(bpf_tcp_sock_is_valid_access);
 
 u32 bpf_tcp_sock_convert_ctx_access(enum bpf_access_type type,
 				    const struct bpf_insn *si,
@@ -7317,6 +7319,7 @@ u32 bpf_tcp_sock_convert_ctx_access(enum bpf_access_type type,
 
 	return insn - insn_buf;
 }
+EXPORT_SYMBOL_GPL(bpf_tcp_sock_convert_ctx_access);
 
 BPF_CALL_1(bpf_tcp_sock, struct sock *, sk)
 {
@@ -7388,6 +7391,7 @@ bool bpf_xdp_sock_is_valid_access(int off, int size, enum bpf_access_type type,
 		return size == sizeof(__u32);
 	}
 }
+EXPORT_SYMBOL_GPL(bpf_xdp_sock_is_valid_access);
 
 u32 bpf_xdp_sock_convert_ctx_access(enum bpf_access_type type,
 				    const struct bpf_insn *si,
@@ -7413,6 +7417,7 @@ u32 bpf_xdp_sock_convert_ctx_access(enum bpf_access_type type,
 
 	return insn - insn_buf;
 }
+EXPORT_SYMBOL_GPL(bpf_xdp_sock_convert_ctx_access);
 
 static const struct bpf_func_proto bpf_skb_ecn_set_ce_proto = {
 	.func           = bpf_skb_ecn_set_ce,
@@ -8879,6 +8884,7 @@ bool bpf_sock_common_is_valid_access(int off, int size,
 		return bpf_sock_is_valid_access(off, size, type, info);
 	}
 }
+EXPORT_SYMBOL_GPL(bpf_sock_common_is_valid_access);
 
 bool bpf_sock_is_valid_access(int off, int size, enum bpf_access_type type,
 			      struct bpf_insn_access_aux *info)
@@ -8916,6 +8922,7 @@ bool bpf_sock_is_valid_access(int off, int size, enum bpf_access_type type,
 
 	return size == size_default;
 }
+EXPORT_SYMBOL_GPL(bpf_sock_is_valid_access);
 
 static bool sock_filter_is_valid_access(int off, int size,
 					enum bpf_access_type type,
@@ -10156,6 +10163,7 @@ u32 bpf_sock_convert_ctx_access(enum bpf_access_type type,
 
 	return insn - insn_buf;
 }
+EXPORT_SYMBOL_GPL(bpf_sock_convert_ctx_access);
 
 static u32 tc_cls_act_convert_ctx_access(enum bpf_access_type type,
 					 const struct bpf_insn *si,
@@ -11075,6 +11083,7 @@ const struct bpf_verifier_ops sk_filter_verifier_ops = {
 	.convert_ctx_access	= bpf_convert_ctx_access,
 	.gen_ld_abs		= bpf_gen_ld_abs,
 };
+EXPORT_SYMBOL_GPL(sk_filter_verifier_ops);
 
 const struct bpf_prog_ops sk_filter_prog_ops = {
 	.test_run		= bpf_prog_test_run_skb,
@@ -11088,6 +11097,7 @@ const struct bpf_verifier_ops tc_cls_act_verifier_ops = {
 	.gen_ld_abs		= bpf_gen_ld_abs,
 	.btf_struct_access	= tc_cls_act_btf_struct_access,
 };
+EXPORT_SYMBOL_GPL(tc_cls_act_verifier_ops);
 
 const struct bpf_prog_ops tc_cls_act_prog_ops = {
 	.test_run		= bpf_prog_test_run_skb,
@@ -11100,6 +11110,7 @@ const struct bpf_verifier_ops xdp_verifier_ops = {
 	.gen_prologue		= bpf_noop_prologue,
 	.btf_struct_access	= xdp_btf_struct_access,
 };
+EXPORT_SYMBOL_GPL(xdp_verifier_ops);
 
 const struct bpf_prog_ops xdp_prog_ops = {
 	.test_run		= bpf_prog_test_run_xdp,
@@ -11110,6 +11121,7 @@ const struct bpf_verifier_ops cg_skb_verifier_ops = {
 	.is_valid_access	= cg_skb_is_valid_access,
 	.convert_ctx_access	= bpf_convert_ctx_access,
 };
+EXPORT_SYMBOL_GPL(cg_skb_verifier_ops);
 
 const struct bpf_prog_ops cg_skb_prog_ops = {
 	.test_run		= bpf_prog_test_run_skb,
@@ -11120,6 +11132,7 @@ const struct bpf_verifier_ops lwt_in_verifier_ops = {
 	.is_valid_access	= lwt_is_valid_access,
 	.convert_ctx_access	= bpf_convert_ctx_access,
 };
+EXPORT_SYMBOL_GPL(lwt_in_verifier_ops);
 
 const struct bpf_prog_ops lwt_in_prog_ops = {
 	.test_run		= bpf_prog_test_run_skb,
@@ -11130,6 +11143,7 @@ const struct bpf_verifier_ops lwt_out_verifier_ops = {
 	.is_valid_access	= lwt_is_valid_access,
 	.convert_ctx_access	= bpf_convert_ctx_access,
 };
+EXPORT_SYMBOL_GPL(lwt_out_verifier_ops);
 
 const struct bpf_prog_ops lwt_out_prog_ops = {
 	.test_run		= bpf_prog_test_run_skb,
@@ -11141,6 +11155,7 @@ const struct bpf_verifier_ops lwt_xmit_verifier_ops = {
 	.convert_ctx_access	= bpf_convert_ctx_access,
 	.gen_prologue		= tc_cls_act_prologue,
 };
+EXPORT_SYMBOL_GPL(lwt_xmit_verifier_ops);
 
 const struct bpf_prog_ops lwt_xmit_prog_ops = {
 	.test_run		= bpf_prog_test_run_skb,
@@ -11151,6 +11166,7 @@ const struct bpf_verifier_ops lwt_seg6local_verifier_ops = {
 	.is_valid_access	= lwt_is_valid_access,
 	.convert_ctx_access	= bpf_convert_ctx_access,
 };
+EXPORT_SYMBOL_GPL(lwt_seg6local_verifier_ops);
 
 const struct bpf_prog_ops lwt_seg6local_prog_ops = {
 };
@@ -11160,6 +11176,7 @@ const struct bpf_verifier_ops cg_sock_verifier_ops = {
 	.is_valid_access	= sock_filter_is_valid_access,
 	.convert_ctx_access	= bpf_sock_convert_ctx_access,
 };
+EXPORT_SYMBOL_GPL(cg_sock_verifier_ops);
 
 const struct bpf_prog_ops cg_sock_prog_ops = {
 };
@@ -11169,6 +11186,7 @@ const struct bpf_verifier_ops cg_sock_addr_verifier_ops = {
 	.is_valid_access	= sock_addr_is_valid_access,
 	.convert_ctx_access	= sock_addr_convert_ctx_access,
 };
+EXPORT_SYMBOL_GPL(cg_sock_addr_verifier_ops);
 
 const struct bpf_prog_ops cg_sock_addr_prog_ops = {
 };
@@ -11178,6 +11196,7 @@ const struct bpf_verifier_ops sock_ops_verifier_ops = {
 	.is_valid_access	= sock_ops_is_valid_access,
 	.convert_ctx_access	= sock_ops_convert_ctx_access,
 };
+EXPORT_SYMBOL_GPL(sock_ops_verifier_ops);
 
 const struct bpf_prog_ops sock_ops_prog_ops = {
 };
@@ -11188,6 +11207,7 @@ const struct bpf_verifier_ops sk_skb_verifier_ops = {
 	.convert_ctx_access	= sk_skb_convert_ctx_access,
 	.gen_prologue		= sk_skb_prologue,
 };
+EXPORT_SYMBOL_GPL(sk_skb_verifier_ops);
 
 const struct bpf_prog_ops sk_skb_prog_ops = {
 };
@@ -11198,6 +11218,7 @@ const struct bpf_verifier_ops sk_msg_verifier_ops = {
 	.convert_ctx_access	= sk_msg_convert_ctx_access,
 	.gen_prologue		= bpf_noop_prologue,
 };
+EXPORT_SYMBOL_GPL(sk_msg_verifier_ops);
 
 const struct bpf_prog_ops sk_msg_prog_ops = {
 };
@@ -11207,6 +11228,7 @@ const struct bpf_verifier_ops flow_dissector_verifier_ops = {
 	.is_valid_access	= flow_dissector_is_valid_access,
 	.convert_ctx_access	= flow_dissector_convert_ctx_access,
 };
+EXPORT_SYMBOL_GPL(flow_dissector_verifier_ops);
 
 const struct bpf_prog_ops flow_dissector_prog_ops = {
 	.test_run		= bpf_prog_test_run_flow_dissector,
@@ -11547,6 +11569,7 @@ const struct bpf_verifier_ops sk_reuseport_verifier_ops = {
 	.is_valid_access	= sk_reuseport_is_valid_access,
 	.convert_ctx_access	= sk_reuseport_convert_ctx_access,
 };
+EXPORT_SYMBOL_GPL(sk_reuseport_verifier_ops);
 
 const struct bpf_prog_ops sk_reuseport_prog_ops = {
 };
@@ -11759,6 +11782,7 @@ const struct bpf_verifier_ops sk_lookup_verifier_ops = {
 	.is_valid_access	= sk_lookup_is_valid_access,
 	.convert_ctx_access	= sk_lookup_convert_ctx_access,
 };
+EXPORT_SYMBOL_GPL(sk_lookup_verifier_ops);
 
 #endif /* CONFIG_INET */
 
@@ -11773,6 +11797,7 @@ BTF_ID_LIST_GLOBAL(btf_sock_ids, MAX_BTF_SOCK_TYPE)
 #define BTF_SOCK_TYPE(name, type) BTF_ID(struct, type)
 BTF_SOCK_TYPE_xxx
 #undef BTF_SOCK_TYPE
+EXPORT_SYMBOL_GPL(btf_sock_ids);
 
 BPF_CALL_1(bpf_skc_to_tcp6_sock, struct sock *, sk)
 {
@@ -12161,6 +12186,7 @@ int bpf_dynptr_from_skb_rdonly(struct __sk_buff *skb, u64 flags,
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_dynptr_from_skb_rdonly);
 
 BTF_KFUNCS_START(bpf_kfunc_check_set_skb)
 BTF_ID_FLAGS(func, bpf_dynptr_from_skb, KF_TRUSTED_ARGS)

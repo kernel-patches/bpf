@@ -2,6 +2,7 @@
 // error-inject.c: Function-level error injection table
 #include <linux/error-injection.h>
 #include <linux/debugfs.h>
+#include <linux/export.h>
 #include <linux/kallsyms.h>
 #include <linux/kprobes.h>
 #include <linux/module.h>
@@ -36,6 +37,7 @@ bool within_error_injection_list(unsigned long addr)
 	mutex_unlock(&ei_mutex);
 	return ret;
 }
+EXPORT_SYMBOL_GPL(within_error_injection_list);
 
 int get_injectable_error_type(unsigned long addr)
 {

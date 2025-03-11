@@ -3,6 +3,7 @@
 #include <linux/mm.h>
 #include <linux/llist.h>
 #include <linux/bpf.h>
+#include <linux/export.h>
 #include <linux/irq_work.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/memcontrol.h>
@@ -587,6 +588,7 @@ int bpf_mem_alloc_percpu_init(struct bpf_mem_alloc *ma, struct obj_cgroup *objcg
 	ma->percpu = true;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_mem_alloc_percpu_init);
 
 int bpf_mem_alloc_percpu_unit_init(struct bpf_mem_alloc *ma, int size)
 {
@@ -623,6 +625,7 @@ int bpf_mem_alloc_percpu_unit_init(struct bpf_mem_alloc *ma, int size)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_mem_alloc_percpu_unit_init);
 
 static void drain_mem_cache(struct bpf_mem_cache *c)
 {

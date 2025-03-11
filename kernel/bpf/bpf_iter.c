@@ -366,6 +366,7 @@ int bpf_iter_prog_supported(struct bpf_prog *prog)
 	return bpf_prog_ctx_arg_info_init(prog, tinfo->reg_info->ctx_arg_info,
 					  tinfo->reg_info->ctx_arg_info_size);
 }
+EXPORT_SYMBOL_GPL(bpf_iter_prog_supported);
 
 const struct bpf_func_proto *
 bpf_iter_get_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)

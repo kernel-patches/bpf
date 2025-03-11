@@ -9,6 +9,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/bpf_perf_event.h>
 #include <linux/btf.h>
+#include <linux/export.h>
 #include <linux/filter.h>
 #include <linux/uaccess.h>
 #include <linux/ctype.h>
@@ -1645,6 +1646,7 @@ const struct bpf_verifier_ops kprobe_verifier_ops = {
 	.get_func_proto  = kprobe_prog_func_proto,
 	.is_valid_access = kprobe_prog_is_valid_access,
 };
+EXPORT_SYMBOL_GPL(kprobe_verifier_ops);
 
 const struct bpf_prog_ops kprobe_prog_ops = {
 };
@@ -1751,6 +1753,7 @@ const struct bpf_verifier_ops tracepoint_verifier_ops = {
 	.get_func_proto  = tp_prog_func_proto,
 	.is_valid_access = tp_prog_is_valid_access,
 };
+EXPORT_SYMBOL_GPL(tracepoint_verifier_ops);
 
 const struct bpf_prog_ops tracepoint_prog_ops = {
 };
@@ -2067,6 +2070,7 @@ const struct bpf_verifier_ops raw_tracepoint_verifier_ops = {
 	.get_func_proto  = raw_tp_prog_func_proto,
 	.is_valid_access = raw_tp_prog_is_valid_access,
 };
+EXPORT_SYMBOL_GPL(raw_tracepoint_verifier_ops);
 
 const struct bpf_prog_ops raw_tracepoint_prog_ops = {
 #ifdef CONFIG_NET
@@ -2078,6 +2082,7 @@ const struct bpf_verifier_ops tracing_verifier_ops = {
 	.get_func_proto  = tracing_prog_func_proto,
 	.is_valid_access = tracing_prog_is_valid_access,
 };
+EXPORT_SYMBOL_GPL(tracing_verifier_ops);
 
 const struct bpf_prog_ops tracing_prog_ops = {
 	.test_run = bpf_prog_test_run_tracing,
@@ -2100,6 +2105,7 @@ const struct bpf_verifier_ops raw_tracepoint_writable_verifier_ops = {
 	.get_func_proto  = raw_tp_prog_func_proto,
 	.is_valid_access = raw_tp_writable_prog_is_valid_access,
 };
+EXPORT_SYMBOL_GPL(raw_tracepoint_writable_verifier_ops);
 
 const struct bpf_prog_ops raw_tracepoint_writable_prog_ops = {
 };
@@ -2183,6 +2189,7 @@ const struct bpf_verifier_ops perf_event_verifier_ops = {
 	.is_valid_access	= pe_prog_is_valid_access,
 	.convert_ctx_access	= pe_prog_convert_ctx_access,
 };
+EXPORT_SYMBOL_GPL(perf_event_verifier_ops);
 
 const struct bpf_prog_ops perf_event_prog_ops = {
 };
@@ -2333,6 +2340,7 @@ struct bpf_raw_event_map *bpf_get_raw_tracepoint(const char *name)
 
 	return bpf_get_raw_tracepoint_module(name);
 }
+EXPORT_SYMBOL_GPL(bpf_get_raw_tracepoint);
 
 void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp)
 {
@@ -2342,6 +2350,7 @@ void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp)
 	mod = __module_address((unsigned long)btp);
 	module_put(mod);
 }
+EXPORT_SYMBOL_GPL(bpf_put_raw_tracepoint);
 
 static __always_inline
 void __bpf_trace_run(struct bpf_raw_tp_link *link, u64 *args)

@@ -16,6 +16,7 @@
 #include <linux/bpf.h>
 #include <linux/bpf_verifier.h>
 #include <linux/bug.h>
+#include <linux/export.h>
 #include <linux/kdev_t.h>
 #include <linux/list.h>
 #include <linux/lockdep.h>
@@ -309,6 +310,7 @@ int bpf_prog_offload_verifier_prep(struct bpf_prog *prog)
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(bpf_prog_offload_verifier_prep);
 
 int bpf_prog_offload_verify_insn(struct bpf_verifier_env *env,
 				 int insn_idx, int prev_insn_idx)
@@ -325,6 +327,7 @@ int bpf_prog_offload_verify_insn(struct bpf_verifier_env *env,
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(bpf_prog_offload_verify_insn);
 
 int bpf_prog_offload_finalize(struct bpf_verifier_env *env)
 {
@@ -343,6 +346,7 @@ int bpf_prog_offload_finalize(struct bpf_verifier_env *env)
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(bpf_prog_offload_finalize);
 
 void
 bpf_prog_offload_replace_insn(struct bpf_verifier_env *env, u32 off,
@@ -362,6 +366,7 @@ bpf_prog_offload_replace_insn(struct bpf_verifier_env *env, u32 off,
 	}
 	up_read(&bpf_devs_lock);
 }
+EXPORT_SYMBOL_GPL(bpf_prog_offload_replace_insn);
 
 void
 bpf_prog_offload_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
@@ -378,6 +383,7 @@ bpf_prog_offload_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 	}
 	up_read(&bpf_devs_lock);
 }
+EXPORT_SYMBOL_GPL(bpf_prog_offload_remove_insns);
 
 void bpf_prog_dev_bound_destroy(struct bpf_prog *prog)
 {
@@ -744,6 +750,7 @@ bool bpf_prog_dev_bound_match(const struct bpf_prog *lhs, const struct bpf_prog 
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(bpf_prog_dev_bound_match);
 
 bool bpf_offload_prog_map_match(struct bpf_prog *prog, struct bpf_map *map)
 {
@@ -760,6 +767,7 @@ bool bpf_offload_prog_map_match(struct bpf_prog *prog, struct bpf_map *map)
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(bpf_offload_prog_map_match);
 
 int bpf_offload_dev_netdev_register(struct bpf_offload_dev *offdev,
 				    struct net_device *netdev)
@@ -840,6 +848,7 @@ int bpf_dev_bound_kfunc_check(struct bpf_verifier_log *log,
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_dev_bound_kfunc_check);
 
 void *bpf_dev_bound_resolve_kfunc(struct bpf_prog *prog, u32 func_id)
 {
@@ -869,6 +878,7 @@ out:
 
 	return p;
 }
+EXPORT_SYMBOL_GPL(bpf_dev_bound_resolve_kfunc);
 
 static int __init bpf_offload_init(void)
 {

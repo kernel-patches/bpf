@@ -2,6 +2,7 @@
 /* Copyright (c) 2019 Facebook */
 #include <linux/hash.h>
 #include <linux/bpf.h>
+#include <linux/export.h>
 #include <linux/filter.h>
 #include <linux/ftrace.h>
 #include <linux/rbtree_latch.h>
@@ -17,6 +18,8 @@
 /* dummy _ops. The verifier will operate on target program's ops. */
 const struct bpf_verifier_ops bpf_extension_verifier_ops = {
 };
+EXPORT_SYMBOL_GPL(bpf_extension_verifier_ops);
+
 const struct bpf_prog_ops bpf_extension_prog_ops = {
 };
 
@@ -114,6 +117,7 @@ bool bpf_prog_has_trampoline(const struct bpf_prog *prog)
 		 eatype == BPF_MODIFY_RETURN)) ||
 		(ptype == BPF_PROG_TYPE_LSM && eatype == BPF_LSM_MAC);
 }
+EXPORT_SYMBOL_GPL(bpf_prog_has_trampoline);
 
 void bpf_image_ksym_init(void *data, unsigned int size, struct bpf_ksym *ksym)
 {
@@ -836,6 +840,7 @@ out:
 	mutex_unlock(&tr->mutex);
 	return tr;
 }
+EXPORT_SYMBOL_GPL(bpf_trampoline_get);
 
 void bpf_trampoline_put(struct bpf_trampoline *tr)
 {

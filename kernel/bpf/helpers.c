@@ -5,6 +5,7 @@
 #include <linux/btf.h>
 #include <linux/bpf-cgroup.h>
 #include <linux/cgroup.h>
+#include <linux/export.h>
 #include <linux/rcupdate.h>
 #include <linux/random.h>
 #include <linux/smp.h>
@@ -1041,6 +1042,7 @@ out:
 		bpf_bprintf_cleanup(data);
 	return err;
 }
+EXPORT_SYMBOL_GPL(bpf_bprintf_prepare);
 
 BPF_CALL_5(bpf_snprintf, char *, str, u32, str_size, char *, fmt,
 	   const void *, args, u32, data_len)

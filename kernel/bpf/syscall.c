@@ -8,6 +8,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/bsearch.h>
 #include <linux/btf.h>
+#include <linux/export.h>
 #include <linux/syscalls.h>
 #include <linux/slab.h>
 #include <linux/sched/signal.h>
@@ -104,6 +105,7 @@ int bpf_check_uarg_tail_zero(bpfptr_t uaddr,
 		return res;
 	return res ? 0 : -E2BIG;
 }
+EXPORT_SYMBOL_GPL(bpf_check_uarg_tail_zero);
 
 const struct bpf_map_ops bpf_map_offload_ops = {
 	.map_meta_equal = bpf_map_meta_equal,
@@ -112,6 +114,7 @@ const struct bpf_map_ops bpf_map_offload_ops = {
 	.map_check_btf = map_check_no_btf,
 	.map_mem_usage = bpf_map_offload_map_mem_usage,
 };
+EXPORT_SYMBOL_GPL(bpf_map_offload_ops);
 
 static void bpf_map_write_active_inc(struct bpf_map *map)
 {
@@ -127,6 +130,7 @@ bool bpf_map_write_active(const struct bpf_map *map)
 {
 	return atomic64_read(&map->writecnt) != 0;
 }
+EXPORT_SYMBOL_GPL(bpf_map_write_active);
 
 static u32 bpf_map_value_size(const struct bpf_map *map)
 {
@@ -642,6 +646,7 @@ struct btf_field *btf_record_find(const struct btf_record *rec, u32 offset,
 		return NULL;
 	return field;
 }
+EXPORT_SYMBOL_GPL(btf_record_find);
 
 void btf_record_free(struct btf_record *rec)
 {
@@ -1145,6 +1150,7 @@ const struct file_operations bpf_map_fops = {
 	.poll		= bpf_map_poll,
 	.get_unmapped_area = bpf_get_unmapped_area,
 };
+EXPORT_SYMBOL_GPL(bpf_map_fops);
 
 int bpf_map_new_fd(struct bpf_map *map, int flags)
 {
@@ -6103,6 +6109,7 @@ const struct bpf_verifier_ops bpf_syscall_verifier_ops = {
 	.get_func_proto  = syscall_prog_func_proto,
 	.is_valid_access = syscall_prog_is_valid_access,
 };
+EXPORT_SYMBOL_GPL(bpf_syscall_verifier_ops);
 
 const struct bpf_prog_ops bpf_syscall_prog_ops = {
 	.test_run = bpf_prog_test_run_syscall,

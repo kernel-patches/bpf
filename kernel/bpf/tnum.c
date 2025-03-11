@@ -12,11 +12,13 @@
 #define TNUM(_v, _m)	(struct tnum){.value = _v, .mask = _m}
 /* A completely unknown value */
 const struct tnum tnum_unknown = { .value = 0, .mask = -1 };
+EXPORT_SYMBOL_GPL(tnum_unknown);
 
 struct tnum tnum_const(u64 value)
 {
 	return TNUM(value, 0);
 }
+EXPORT_SYMBOL_GPL(tnum_const);
 
 struct tnum tnum_range(u64 min, u64 max)
 {
@@ -33,16 +35,19 @@ struct tnum tnum_range(u64 min, u64 max)
 	delta = (1ULL << bits) - 1;
 	return TNUM(min & ~delta, delta);
 }
+EXPORT_SYMBOL_GPL(tnum_range);
 
 struct tnum tnum_lshift(struct tnum a, u8 shift)
 {
 	return TNUM(a.value << shift, a.mask << shift);
 }
+EXPORT_SYMBOL_GPL(tnum_lshift);
 
 struct tnum tnum_rshift(struct tnum a, u8 shift)
 {
 	return TNUM(a.value >> shift, a.mask >> shift);
 }
+EXPORT_SYMBOL_GPL(tnum_rshift);
 
 struct tnum tnum_arshift(struct tnum a, u8 min_shift, u8 insn_bitness)
 {
@@ -58,6 +63,7 @@ struct tnum tnum_arshift(struct tnum a, u8 min_shift, u8 insn_bitness)
 		return TNUM((s64)a.value >> min_shift,
 			    (s64)a.mask  >> min_shift);
 }
+EXPORT_SYMBOL_GPL(tnum_arshift);
 
 struct tnum tnum_add(struct tnum a, struct tnum b)
 {
@@ -70,6 +76,7 @@ struct tnum tnum_add(struct tnum a, struct tnum b)
 	mu = chi | a.mask | b.mask;
 	return TNUM(sv & ~mu, mu);
 }
+EXPORT_SYMBOL_GPL(tnum_add);
 
 struct tnum tnum_sub(struct tnum a, struct tnum b)
 {
@@ -82,6 +89,7 @@ struct tnum tnum_sub(struct tnum a, struct tnum b)
 	mu = chi | a.mask | b.mask;
 	return TNUM(dv & ~mu, mu);
 }
+EXPORT_SYMBOL_GPL(tnum_sub);
 
 struct tnum tnum_and(struct tnum a, struct tnum b)
 {
@@ -92,6 +100,7 @@ struct tnum tnum_and(struct tnum a, struct tnum b)
 	v = a.value & b.value;
 	return TNUM(v, alpha & beta & ~v);
 }
+EXPORT_SYMBOL_GPL(tnum_and);
 
 struct tnum tnum_or(struct tnum a, struct tnum b)
 {
@@ -101,6 +110,7 @@ struct tnum tnum_or(struct tnum a, struct tnum b)
 	mu = a.mask | b.mask;
 	return TNUM(v, mu & ~v);
 }
+EXPORT_SYMBOL_GPL(tnum_or);
 
 struct tnum tnum_xor(struct tnum a, struct tnum b)
 {
@@ -110,6 +120,7 @@ struct tnum tnum_xor(struct tnum a, struct tnum b)
 	mu = a.mask | b.mask;
 	return TNUM(v & ~mu, mu);
 }
+EXPORT_SYMBOL_GPL(tnum_xor);
 
 /* Generate partial products by multiplying each bit in the multiplier (tnum a)
  * with the multiplicand (tnum b), and add the partial products after
@@ -137,6 +148,7 @@ struct tnum tnum_mul(struct tnum a, struct tnum b)
 	}
 	return tnum_add(TNUM(acc_v, 0), acc_m);
 }
+EXPORT_SYMBOL_GPL(tnum_mul);
 
 /* Note that if a and b disagree - i.e. one has a 'known 1' where the other has
  * a 'known 0' - this will return a 'known 1' for that bit.
@@ -149,6 +161,7 @@ struct tnum tnum_intersect(struct tnum a, struct tnum b)
 	mu = a.mask & b.mask;
 	return TNUM(v & ~mu, mu);
 }
+EXPORT_SYMBOL_GPL(tnum_intersect);
 
 struct tnum tnum_cast(struct tnum a, u8 size)
 {
@@ -156,6 +169,7 @@ struct tnum tnum_cast(struct tnum a, u8 size)
 	a.mask &= (1ULL << (size * 8)) - 1;
 	return a;
 }
+EXPORT_SYMBOL_GPL(tnum_cast);
 
 bool tnum_is_aligned(struct tnum a, u64 size)
 {
@@ -163,6 +177,7 @@ bool tnum_is_aligned(struct tnum a, u64 size)
 		return true;
 	return !((a.value | a.mask) & (size - 1));
 }
+EXPORT_SYMBOL_GPL(tnum_is_aligned);
 
 bool tnum_in(struct tnum a, struct tnum b)
 {
@@ -171,6 +186,7 @@ bool tnum_in(struct tnum a, struct tnum b)
 	b.value &= ~a.mask;
 	return a.value == b.value;
 }
+EXPORT_SYMBOL_GPL(tnum_in);
 
 int tnum_sbin(char *str, size_t size, struct tnum a)
 {
@@ -196,18 +212,22 @@ struct tnum tnum_subreg(struct tnum a)
 {
 	return tnum_cast(a, 4);
 }
+EXPORT_SYMBOL_GPL(tnum_subreg);
 
 struct tnum tnum_clear_subreg(struct tnum a)
 {
 	return tnum_lshift(tnum_rshift(a, 32), 32);
 }
+EXPORT_SYMBOL_GPL(tnum_clear_subreg);
 
 struct tnum tnum_with_subreg(struct tnum reg, struct tnum subreg)
 {
 	return tnum_or(tnum_clear_subreg(reg), tnum_subreg(subreg));
 }
+EXPORT_SYMBOL_GPL(tnum_with_subreg);
 
 struct tnum tnum_const_subreg(struct tnum a, u32 value)
 {
 	return tnum_with_subreg(a, tnum_const(value));
 }
+EXPORT_SYMBOL_GPL(tnum_const_subreg);
