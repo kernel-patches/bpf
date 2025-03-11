@@ -50,6 +50,7 @@ int arena_htab_llvm(void *ctx)
 	}
 	cast_user(htab);
 	htab_for_user = htab;
+	for (i = zero; can_loop; i++) {}
 #else
 	skip = true;
 #endif
