@@ -2759,6 +2759,41 @@ static bool is_perfmon_prog_type(enum bpf_prog_type prog_type)
 	}
 }
 
+static const struct bpf_check_hook *bpf_check_get(void)
+{
+	const struct bpf_check_hook *hook;
+	int err;
+
+	/* RCU protects us from races against module unloading */
+	rcu_read_lock();
+	hook = rcu_dereference(bpf_check);
+	if (!hook) {
+		rcu_read_unlock();
+		err = request_module("verifier");
+		if (err)
+			return ERR_PTR(err < 0 ? err : -ENOENT);
+
+		rcu_read_lock();
+		hook = rcu_dereference(bpf_check);
+	}
+
+	if (hook && try_module_get(hook->owner)) {
+		/* Once we have a refcnt on the module, we no longer need RCU */
+		hook = rcu_pointer_handoff(hook);
+	} else {
+		WARN_ONCE(!hook, "verifier has bad registration");
+		hook = ERR_PTR(-ENOENT);
+	}
+	rcu_read_unlock();
+
+	return hook;
+}
+
+static void bpf_check_put(const struct bpf_check_hook *c)
+{
+	module_put(c->owner);
+}
+
 /* last field in 'union bpf_attr' used by this command */
 #define BPF_PROG_LOAD_LAST_FIELD fd_array_cnt
 
@@ -2766,6 +2801,7 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 {
 	enum bpf_prog_type type = attr->prog_type;
 	struct bpf_prog *prog, *dst_prog = NULL;
+	const struct bpf_check_hook *hook;
 	struct btf *attach_btf = NULL;
 	struct bpf_token *token = NULL;
 	bool bpf_cap;
@@ -2973,8 +3009,15 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	if (err)
 		goto free_prog_sec;
 
+	hook = bpf_check_get();
+	if (IS_ERR(hook)) {
+		err = PTR_ERR(hook);
+		goto free_used_maps;
+	}
+
 	/* run eBPF verifier */
-	err = bpf_check(&prog, attr, uattr, uattr_size);
+	err = hook->bpf_check(&prog, attr, uattr, uattr_size);
+	bpf_check_put(hook);
 	if (err < 0)
 		goto free_used_maps;
 
