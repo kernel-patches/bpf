@@ -415,6 +415,18 @@ struct irq_stack {
 	char		stack[IRQ_STACK_SIZE];
 } __aligned(IRQ_STACK_SIZE);
 
+DECLARE_PER_CPU_CACHE_HOT(struct irq_stack *, hardirq_stack_ptr);
+#ifdef CONFIG_X86_64
+DECLARE_PER_CPU_CACHE_HOT(bool, hardirq_stack_inuse);
+#else
+DECLARE_PER_CPU_CACHE_HOT(struct irq_stack *, softirq_stack_ptr);
+#endif
+
+DECLARE_PER_CPU_CACHE_HOT(unsigned long, cpu_current_top_of_stack);
+/* const-qualified alias provided by the linker. */
+DECLARE_PER_CPU_CACHE_HOT(const unsigned long __percpu_seg_override,
+			  const_cpu_current_top_of_stack);
+
 #ifdef CONFIG_X86_64
 static inline unsigned long cpu_kernelmode_gs_base(int cpu)
 {
@@ -540,9 +552,9 @@ static __always_inline unsigned long current_top_of_stack(void)
 	 *  entry trampoline.
 	 */
 	if (IS_ENABLED(CONFIG_USE_X86_SEG_SUPPORT))
-		return this_cpu_read_const(const_pcpu_hot.top_of_stack);
+		return this_cpu_read_const(const_cpu_current_top_of_stack);
 
-	return this_cpu_read_stable(pcpu_hot.top_of_stack);
+	return this_cpu_read_stable(cpu_current_top_of_stack);
 }
 
 static __always_inline bool on_thread_stack(void)
@@ -647,16 +659,12 @@ static __always_inline void prefetchw(const void *x)
 	.sysenter_cs		= __KERNEL_CS,				  \
 }
 
-#define KSTK_ESP(task)		(task_pt_regs(task)->sp)
-
 #else
 extern unsigned long __top_init_kernel_stack[];
 
 #define INIT_THREAD {							\
 	.sp	= (unsigned long)&__top_init_kernel_stack,		\
 }
-
-extern unsigned long KSTK_ESP(struct task_struct *task);
 
 #endif /* CONFIG_X86_64 */
 
@@ -671,6 +679,7 @@ extern void start_thread(struct pt_regs *regs, unsigned long new_ip,
 #define TASK_UNMAPPED_BASE		__TASK_UNMAPPED_BASE(TASK_SIZE_LOW)
 
 #define KSTK_EIP(task)		(task_pt_regs(task)->ip)
+#define KSTK_ESP(task)		(task_pt_regs(task)->sp)
 
 /* Get/set a process' ability to use the timestamp counter instruction */
 #define GET_TSC_CTL(adr)	get_tsc_mode((adr))
