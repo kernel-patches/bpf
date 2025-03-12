@@ -18111,7 +18111,7 @@ static void clean_live_states(struct bpf_verifier_env *env, int insn,
 		if (sl->state.branches)
 			continue;
 		loop_entry = get_loop_entry(env, &sl->state);
-		if (!IS_ERR_OR_NULL(loop_entry) && loop_entry->branches)
+		if (!IS_ERR_OR_NULL(loop_entry))
 			continue;
 		if (sl->state.insn_idx != insn ||
 		    !same_callsites(&sl->state, cur))
@@ -18816,7 +18816,7 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 	struct bpf_verifier_state_list *sl;
 	struct bpf_verifier_state *cur = env->cur_state, *new, *loop_entry;
 	int i, j, n, err, states_cnt = 0;
-	bool force_new_state, add_new_state, force_exact;
+	bool force_new_state, add_new_state;
 	struct list_head *pos, *tmp, *head;
 
 	force_new_state = env->test_state_freq || is_force_checkpoint(env, insn_idx) ||
@@ -18996,9 +18996,8 @@ skip_inf_loop_check:
 		loop_entry = get_loop_entry(env, &sl->state);
 		if (IS_ERR(loop_entry))
 			return PTR_ERR(loop_entry);
-		force_exact = loop_entry && loop_entry->branches > 0;
-		if (states_equal(env, &sl->state, cur, force_exact ? RANGE_WITHIN : NOT_EXACT)) {
-			if (force_exact)
+		if (states_equal(env, &sl->state, cur, loop_entry ? RANGE_WITHIN : NOT_EXACT)) {
+			if (loop_entry)
 				update_loop_entry(env, cur, loop_entry);
 hit:
 			sl->hit_cnt++;
