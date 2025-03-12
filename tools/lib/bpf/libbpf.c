@@ -3604,9 +3604,10 @@ static int bpf_object__sanitize_and_load_btf(struct bpf_object *obj)
 		 */
 		btf__set_fd(kern_btf, 0);
 	} else {
+		btf_mandatory = kernel_needs_btf(obj);
 		/* currently BPF_BTF_LOAD only supports log_level 1 */
 		err = btf_load_into_kernel(kern_btf, obj->log_buf, obj->log_size,
-					   obj->log_level ? 1 : 0, obj->token_fd);
+					   obj->log_level ? 1 : 0, obj->token_fd, btf_mandatory);
 	}
 	if (sanitize) {
 		if (!err) {

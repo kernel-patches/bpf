@@ -1379,9 +1379,10 @@ static void *btf_get_raw_data(const struct btf *btf, __u32 *size, bool swap_endi
 
 int btf_load_into_kernel(struct btf *btf,
 			 char *log_buf, size_t log_sz, __u32 log_level,
-			 int token_fd)
+			 int token_fd, bool btf_mandatory)
 {
 	LIBBPF_OPTS(bpf_btf_load_opts, opts);
+	enum libbpf_print_level print_level;
 	__u32 buf_sz = 0, raw_size;
 	char *buf = NULL, *tmp;
 	void *raw_data;
@@ -1435,22 +1436,25 @@ retry_load:
 
 	btf->fd = bpf_btf_load(raw_data, raw_size, &opts);
 	if (btf->fd < 0) {
-		/* time to turn on verbose mode and try again */
-		if (log_level == 0) {
-			log_level = 1;
-			goto retry_load;
+		if (btf_mandatory) {
+			/* time to turn on verbose mode and try again */
+			if (log_level == 0) {
+				log_level = 1;
+				goto retry_load;
+			}
+			/* only retry if caller didn't provide custom log_buf, but
+			 * make sure we can never overflow buf_sz
+			 */
+			if (!log_buf && errno == ENOSPC && buf_sz <= UINT_MAX / 2)
+				goto retry_load;
 		}
-		/* only retry if caller didn't provide custom log_buf, but
-		 * make sure we can never overflow buf_sz
-		 */
-		if (!log_buf && errno == ENOSPC && buf_sz <= UINT_MAX / 2)
-			goto retry_load;
-
 		err = -errno;
-		pr_warn("BTF loading error: %s\n", errstr(err));
-		/* don't print out contents of custom log_buf */
-		if (!log_buf && buf[0])
-			pr_warn("-- BEGIN BTF LOAD LOG ---\n%s\n-- END BTF LOAD LOG --\n", buf);
+		print_level = btf_mandatory ? LIBBPF_WARN : LIBBPF_INFO;
+		__pr(print_level, "BTF loading error: %s\n", errstr(err));
+		if (!log_buf && log_level)
+			__pr(print_level,
+			     "-- BEGIN BTF LOAD LOG ---\n%s\n-- END BTF LOAD LOG --\n",
+			     buf);
 	}
 
 done:
@@ -1460,7 +1464,7 @@ done:
 
 int btf__load_into_kernel(struct btf *btf)
 {
-	return btf_load_into_kernel(btf, NULL, 0, 0, 0);
+	return btf_load_into_kernel(btf, NULL, 0, 0, 0, true);
 }
 
 int btf__fd(const struct btf *btf)
