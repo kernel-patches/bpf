@@ -62,7 +62,7 @@ static int nested_callback1(__u32 index, void *data)
 	return 0;
 }
 
-SEC("fentry/" SYS_PREFIX "sys_nanosleep")
+SEC("kprobe/" SYS_PREFIX "sys_nanosleep")
 int test_prog(void *ctx)
 {
 	struct callback_ctx data = {};
@@ -80,7 +80,7 @@ int test_prog(void *ctx)
 	return 0;
 }
 
-SEC("fentry/" SYS_PREFIX "sys_nanosleep")
+SEC("kprobe/" SYS_PREFIX "sys_nanosleep")
 int prog_null_ctx(void *ctx)
 {
 	if (bpf_get_current_pid_tgid() >> 32 != pid)
@@ -91,7 +91,7 @@ int prog_null_ctx(void *ctx)
 	return 0;
 }
 
-SEC("fentry/" SYS_PREFIX "sys_nanosleep")
+SEC("kprobe/" SYS_PREFIX "sys_nanosleep")
 int prog_invalid_flags(void *ctx)
 {
 	struct callback_ctx data = {};
@@ -104,7 +104,7 @@ int prog_invalid_flags(void *ctx)
 	return 0;
 }
 
-SEC("fentry/" SYS_PREFIX "sys_nanosleep")
+SEC("kprobe/" SYS_PREFIX "sys_nanosleep")
 int prog_nested_calls(void *ctx)
 {
 	struct callback_ctx data = {};
@@ -135,7 +135,7 @@ static int callback_set_0f(int i, void *ctx)
 /*
  * non-constant callback is a corner case for bpf_loop inline logic
  */
-SEC("fentry/" SYS_PREFIX "sys_nanosleep")
+SEC("kprobe/" SYS_PREFIX "sys_nanosleep")
 int prog_non_constant_callback(void *ctx)
 {
 	if (bpf_get_current_pid_tgid() >> 32 != pid)
@@ -199,7 +199,7 @@ static int stack_check_outer_callback(void *ctx)
  * variables is preserved between calls to bpf_loop (might be an issue
  * if loop inlining allocates stack slots incorrectly).
  */
-SEC("fentry/" SYS_PREFIX "sys_nanosleep")
+SEC("kprobe/" SYS_PREFIX "sys_nanosleep")
 int stack_check(void *ctx)
 {
 	if (bpf_get_current_pid_tgid() >> 32 != pid)
