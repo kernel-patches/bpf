@@ -228,6 +228,7 @@ struct sock_common {
 		u32		skc_window_clamp;
 		u32		skc_tw_snd_nxt; /* struct tcp_timewait_sock */
 	};
+	__s64			skc_idx;
 	/* public: */
 };
 
@@ -378,6 +379,7 @@ struct sock {
 #define sk_incoming_cpu		__sk_common.skc_incoming_cpu
 #define sk_flags		__sk_common.skc_flags
 #define sk_rxhash		__sk_common.skc_rxhash
+#define sk_idx			__sk_common.skc_idx
 
 	__cacheline_group_begin(sock_write_rx);
 
