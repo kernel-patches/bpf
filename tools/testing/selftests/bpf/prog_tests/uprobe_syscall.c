@@ -277,10 +277,10 @@ static void test_uretprobe_syscall_call(void)
 		_exit(0);
 	}
 
-	skel->links.test = bpf_program__attach_uprobe_multi(skel->progs.test, pid,
-							    "/proc/self/exe",
-							    "uretprobe_syscall_call", &opts);
-	if (!ASSERT_OK_PTR(skel->links.test, "bpf_program__attach_uprobe_multi"))
+	skel->links.test_uretprobe_multi = bpf_program__attach_uprobe_multi(skel->progs.test_uretprobe_multi,
+							pid, "/proc/self/exe",
+							"uretprobe_syscall_call", &opts);
+	if (!ASSERT_OK_PTR(skel->links.test_uretprobe_multi, "bpf_program__attach_uprobe_multi"))
 		goto cleanup;
 
 	/* kick the child */

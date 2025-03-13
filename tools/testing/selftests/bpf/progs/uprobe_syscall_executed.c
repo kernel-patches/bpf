@@ -10,8 +10,8 @@ char _license[] SEC("license") = "GPL";
 int executed = 0;
 
 SEC("uretprobe.multi")
-int test(struct pt_regs *regs)
+int test_uretprobe_multi(struct pt_regs *ctx)
 {
-	executed = 1;
+	executed++;
 	return 0;
 }
