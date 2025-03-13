@@ -68,6 +68,12 @@
 struct bpf_mem_alloc bpf_global_ma;
 bool bpf_global_ma_set;
 
+struct bpf_mem_alloc bpf_global_percpu_ma;
+EXPORT_SYMBOL_GPL(bpf_global_percpu_ma);
+
+bool bpf_global_percpu_ma_set;
+EXPORT_SYMBOL_GPL(bpf_global_percpu_ma_set);
+
 /* No hurry in this branch
  *
  * Exported for the bpf jit load helper.
