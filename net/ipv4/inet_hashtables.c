@@ -534,6 +534,12 @@ found:
 }
 EXPORT_SYMBOL_GPL(__inet_lookup_established);
 
+static inline __s64 inet_hashinfo_next_idx(struct inet_hashinfo *hinfo,
+					   bool pos)
+{
+	return (pos ? 1 : -1) * atomic64_inc_return(&hinfo->ver);
+}
+
 /* called with local bh disabled */
 static int __inet_check_established(struct inet_timewait_death_row *death_row,
 				    struct sock *sk, __u16 lport,
@@ -581,6 +587,7 @@ static int __inet_check_established(struct inet_timewait_death_row *death_row,
 	sk->sk_hash = hash;
 	WARN_ON(!sk_unhashed(sk));
 	__sk_nulls_add_node_rcu(sk, &head->chain);
+	sk->sk_idx = inet_hashinfo_next_idx(hinfo, false);
 	if (tw) {
 		sk_nulls_del_node_init_rcu((struct sock *)tw);
 		__NET_INC_STATS(net, LINUX_MIB_TIMEWAITRECYCLED);
@@ -678,8 +685,10 @@ bool inet_ehash_insert(struct sock *sk, struct sock *osk, bool *found_dup_sk)
 			ret = false;
 	}
 
-	if (ret)
+	if (ret) {
 		__sk_nulls_add_node_rcu(sk, list);
+		sk->sk_idx = inet_hashinfo_next_idx(hashinfo, false);
+	}
 
 	spin_unlock(lock);
 
@@ -729,6 +738,7 @@ int __inet_hash(struct sock *sk, struct sock *osk)
 {
 	struct inet_hashinfo *hashinfo = tcp_or_dccp_get_hashinfo(sk);
 	struct inet_listen_hashbucket *ilb2;
+	bool add_tail;
 	int err = 0;
 
 	if (sk->sk_state != TCP_LISTEN) {
@@ -747,11 +757,13 @@ int __inet_hash(struct sock *sk, struct sock *osk)
 			goto unlock;
 	}
 	sock_set_flag(sk, SOCK_RCU_FREE);
-	if (IS_ENABLED(CONFIG_IPV6) && sk->sk_reuseport &&
-		sk->sk_family == AF_INET6)
+	add_tail = IS_ENABLED(CONFIG_IPV6) && sk->sk_reuseport &&
+		   sk->sk_family == AF_INET6;
+	if (add_tail)
 		__sk_nulls_add_node_tail_rcu(sk, &ilb2->nulls_head);
 	else
 		__sk_nulls_add_node_rcu(sk, &ilb2->nulls_head);
+	sk->sk_idx = inet_hashinfo_next_idx(hashinfo, add_tail);
 	sock_prot_inuse_add(sock_net(sk), sk->sk_prot, 1);
 unlock:
 	spin_unlock(&ilb2->lock);

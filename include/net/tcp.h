@@ -2202,7 +2202,8 @@ struct tcp_iter_state {
 	struct seq_net_private	p;
 	enum tcp_seq_states	state;
 	struct sock		*syn_wait_sk;
-	int			bucket, offset, sbucket, num;
+	int			bucket, sbucket, num;
+	__s64			prev_idx;
 	loff_t			last_pos;
 };
 

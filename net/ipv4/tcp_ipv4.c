@@ -2602,7 +2602,7 @@ static void *listening_get_first(struct seq_file *seq)
 	struct inet_hashinfo *hinfo = seq_file_net(seq)->ipv4.tcp_death_row.hashinfo;
 	struct tcp_iter_state *st = seq->private;
 
-	st->offset = 0;
+	st->prev_idx = 0;
 	for (; st->bucket <= hinfo->lhash2_mask; st->bucket++) {
 		struct inet_listen_hashbucket *ilb2;
 		struct hlist_nulls_node *node;
@@ -2637,7 +2637,7 @@ static void *listening_get_next(struct seq_file *seq, void *cur)
 	struct sock *sk = cur;
 
 	++st->num;
-	++st->offset;
+	st->prev_idx = sk->sk_idx;
 
 	sk = sk_nulls_next(sk);
 	sk_nulls_for_each_from(sk, node) {
@@ -2658,7 +2658,6 @@ static void *listening_get_idx(struct seq_file *seq, loff_t *pos)
 	void *rc;
 
 	st->bucket = 0;
-	st->offset = 0;
 	rc = listening_get_first(seq);
 
 	while (rc && *pos) {
@@ -2683,7 +2682,7 @@ static void *established_get_first(struct seq_file *seq)
 	struct inet_hashinfo *hinfo = seq_file_net(seq)->ipv4.tcp_death_row.hashinfo;
 	struct tcp_iter_state *st = seq->private;
 
-	st->offset = 0;
+	st->prev_idx = 0;
 	for (; st->bucket <= hinfo->ehash_mask; ++st->bucket) {
 		struct sock *sk;
 		struct hlist_nulls_node *node;
@@ -2714,7 +2713,6 @@ static void *established_get_next(struct seq_file *seq, void *cur)
 	struct sock *sk = cur;
 
 	++st->num;
-	++st->offset;
 
 	sk = sk_nulls_next(sk);
 
@@ -2763,8 +2761,8 @@ static void *tcp_seek_last_pos(struct seq_file *seq)
 {
 	struct inet_hashinfo *hinfo = seq_file_net(seq)->ipv4.tcp_death_row.hashinfo;
 	struct tcp_iter_state *st = seq->private;
+	__s64 prev_idx = st->prev_idx;
 	int bucket = st->bucket;
-	int offset = st->offset;
 	int orig_num = st->num;
 	void *rc = NULL;
 
@@ -2773,18 +2771,21 @@ static void *tcp_seek_last_pos(struct seq_file *seq)
 		if (st->bucket > hinfo->lhash2_mask)
 			break;
 		rc = listening_get_first(seq);
-		while (offset-- && rc && bucket == st->bucket)
+		while (rc && bucket == st->bucket && prev_idx &&
+		       ((struct sock *)rc)->sk_idx <= prev_idx)
 			rc = listening_get_next(seq, rc);
 		if (rc)
 			break;
 		st->bucket = 0;
+		prev_idx = 0;
 		st->state = TCP_SEQ_STATE_ESTABLISHED;
 		fallthrough;
 	case TCP_SEQ_STATE_ESTABLISHED:
 		if (st->bucket > hinfo->ehash_mask)
 			break;
 		rc = established_get_first(seq);
-		while (offset-- && rc && bucket == st->bucket)
+		while (rc && bucket == st->bucket && prev_idx &&
+		       ((struct sock *)rc)->sk_idx <= prev_idx)
 			rc = established_get_next(seq, rc);
 	}
 
@@ -2807,7 +2808,7 @@ void *tcp_seq_start(struct seq_file *seq, loff_t *pos)
 	st->state = TCP_SEQ_STATE_LISTENING;
 	st->num = 0;
 	st->bucket = 0;
-	st->offset = 0;
+	st->prev_idx = 0;
 	rc = *pos ? tcp_get_idx(seq, *pos - 1) : SEQ_START_TOKEN;
 
 out:
@@ -2832,7 +2833,7 @@ void *tcp_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 		if (!rc) {
 			st->state = TCP_SEQ_STATE_ESTABLISHED;
 			st->bucket = 0;
-			st->offset = 0;
+			st->prev_idx = 0;
 			rc	  = established_get_first(seq);
 		}
 		break;
@@ -3124,7 +3125,7 @@ static struct sock *bpf_iter_tcp_batch(struct seq_file *seq)
 	 * it has to advance to the next bucket.
 	 */
 	if (iter->st_bucket_done) {
-		st->offset = 0;
+		st->prev_idx = 0;
 		st->bucket++;
 		if (st->state == TCP_SEQ_STATE_LISTENING &&
 		    st->bucket > hinfo->lhash2_mask) {
@@ -3192,8 +3193,9 @@ static void *bpf_iter_tcp_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 		 * the future start() will resume at st->offset in
 		 * st->bucket.  See tcp_seek_last_pos().
 		 */
-		st->offset++;
-		sock_gen_put(iter->batch[iter->cur_sk++]);
+		sk = iter->batch[iter->cur_sk++];
+		st->prev_idx = sk->sk_idx;
+		sock_gen_put(sk);
 	}
 
 	if (iter->cur_sk < iter->end_sk)
