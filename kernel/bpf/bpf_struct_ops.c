@@ -461,6 +461,8 @@ int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 		goto errout;
 	}
 
+	st_ops->type = t;
+
 	return 0;
 
 errout:
