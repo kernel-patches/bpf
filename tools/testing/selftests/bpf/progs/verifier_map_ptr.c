@@ -110,9 +110,17 @@ __naked void ptr_read_ops_field_accepted(void)
 
 SEC("socket")
 __description("bpf_map_ptr: r = 0, map_ptr = map_ptr + r")
-__success __failure_unpriv
-__msg_unpriv("R1 has pointer with unsupported alu operation")
+__success __success_unpriv
 __retval(0)
+#ifdef SPEC_V1
+__xlated_unpriv("r1 = 0x") /* r0 = %[map_hash_16b] ll */
+/* This nospec is not really needed here, because there is no bypassable
+ * branch/store that could lead to r0 not containing 0 when `r1 += r0` executes.
+ * We still keep it like this to not complicate the verifier.
+ */
+__xlated_unpriv("nospec") /* inserted to prevent `R1 has pointer with unsupported alu operation` */
+__xlated_unpriv("r1 += r0")
+#endif
 __naked void map_ptr_map_ptr_r(void)
 {
 	asm volatile ("					\
@@ -134,9 +142,13 @@ __naked void map_ptr_map_ptr_r(void)
 
 SEC("socket")
 __description("bpf_map_ptr: r = 0, r = r + map_ptr")
-__success __failure_unpriv
-__msg_unpriv("R0 has pointer with unsupported alu operation")
+__success __success_unpriv
 __retval(0)
+#ifdef SPEC_V1
+__xlated_unpriv("r0 = 0x") /* r0 = %[map_hash_16b] ll */
+__xlated_unpriv("nospec") /* inserted to prevent `R0 has pointer with unsupported alu operation` */
+__xlated_unpriv("r1 += r0")
+#endif
 __naked void _0_r_r_map_ptr(void)
 {
 	asm volatile ("					\
