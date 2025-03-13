@@ -8,6 +8,7 @@
 #include <linux/bpfptr.h>
 #include <linux/bsearch.h>
 #include <linux/btf_ids.h>
+#include <linux/mutex.h>
 #include <uapi/linux/btf.h>
 #include <uapi/linux/bpf.h>
 
@@ -140,6 +141,9 @@ struct btf_struct_metas {
 };
 
 extern const struct file_operations btf_fops;
+
+extern struct mutex btf_mutex;
+extern struct btf *btf_vmlinux;
 
 const char *btf_get_name(const struct btf *btf);
 void btf_get(struct btf *btf);
