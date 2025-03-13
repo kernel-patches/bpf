@@ -60,7 +60,10 @@
 #define RUN_ALL_TESTS UINT_MAX
 #define NUM_MAC_ADDRESSES 4
 
+#define print_msg(x...) ksft_print_msg(x)
 #define print_verbose(x...) do { if (opt_verbose) ksft_print_msg(x); } while (0)
+#define skip_reason(x...) ksft_test_result_skip(x)
+#define fail_reason(x...) ksft_test_result_fail(x)
 
 enum test_mode {
 	TEST_MODE_SKB,
