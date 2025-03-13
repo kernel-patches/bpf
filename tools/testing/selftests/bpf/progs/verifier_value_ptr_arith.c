@@ -41,9 +41,17 @@ struct {
 
 SEC("socket")
 __description("map access: known scalar += value_ptr unknown vs const")
-__success __failure_unpriv
-__msg_unpriv("R1 tried to add from different maps, paths or scalars")
+__success __success_unpriv
 __retval(1)
+#ifdef SPEC_V1
+__xlated_unpriv("r1 &= 7")
+__xlated_unpriv("goto pc+1")
+/* l3_%=: */
+__xlated_unpriv("r1 = 3")
+/* l4_%=: */
+__xlated_unpriv("nospec") /* inserted to prevent `R1 tried to add from different maps, paths or scalars` */
+__xlated_unpriv("r1 += r0")
+#endif
 __naked void value_ptr_unknown_vs_const(void)
 {
 	asm volatile ("					\
@@ -79,9 +87,14 @@ l2_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: known scalar += value_ptr const vs unknown")
-__success __failure_unpriv
-__msg_unpriv("R1 tried to add from different maps, paths or scalars")
+__success __success_unpriv
 __retval(1)
+#ifdef SPEC_V1
+__xlated_unpriv("r1 &= 7")
+/* l4_%=: */
+__xlated_unpriv("nospec") /* inserted to prevent `R1 tried to add from different maps, paths or scalars` */
+__xlated_unpriv("r1 += r0")
+#endif
 __naked void value_ptr_const_vs_unknown(void)
 {
 	asm volatile ("					\
@@ -117,9 +130,16 @@ l2_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: known scalar += value_ptr const vs const (ne)")
-__success __failure_unpriv
-__msg_unpriv("R1 tried to add from different maps, paths or scalars")
+__success __success_unpriv
 __retval(1)
+#ifdef SPEC_V1
+__xlated_unpriv("goto pc+1") /* to l4, must not be pc+2 as this would skip nospec */
+/* l3_%=: */
+__xlated_unpriv("r1 = 5")
+/* l4_%=: */
+__xlated_unpriv("nospec") /* inserted to prevent `R1 tried to add from different maps, paths or scalars` */
+__xlated_unpriv("r1 += r0")
+#endif
 __naked void ptr_const_vs_const_ne(void)
 {
 	asm volatile ("					\
@@ -225,9 +245,18 @@ l2_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: known scalar += value_ptr unknown vs unknown (lt)")
-__success __failure_unpriv
-__msg_unpriv("R1 tried to add from different maps, paths or scalars")
+__success __success_unpriv
 __retval(1)
+#ifdef SPEC_V1
+__xlated_unpriv("r1 &= 3")
+__xlated_unpriv("goto pc+3") /* must go to l4 (nospec) */
+__xlated_unpriv("r1 = 6")
+__xlated_unpriv("r1 = -r1")
+__xlated_unpriv("r1 &= 7")
+/* l4_%=: */
+__xlated_unpriv("nospec") /* inserted to prevent `R1 tried to add from different maps, paths or scalars` */
+__xlated_unpriv("r1 += r0")
+#endif
 __naked void ptr_unknown_vs_unknown_lt(void)
 {
 	asm volatile ("					\
@@ -265,9 +294,14 @@ l2_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: known scalar += value_ptr unknown vs unknown (gt)")
-__success __failure_unpriv
-__msg_unpriv("R1 tried to add from different maps, paths or scalars")
+__success __success_unpriv
 __retval(1)
+#ifdef SPEC_V1
+__xlated_unpriv("r1 &= 3")
+/* l4_%=: */
+__xlated_unpriv("nospec") /* inserted to prevent `R1 tried to add from different maps, paths or scalars` */
+__xlated_unpriv("r1 += r0")
+#endif
 __naked void ptr_unknown_vs_unknown_gt(void)
 {
 	asm volatile ("					\
@@ -398,9 +432,27 @@ l2_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: mixing value pointer and scalar, 1")
-__success __failure_unpriv
-__msg_unpriv("R2 tried to add from different maps, paths or scalars, pointer arithmetic with it prohibited for !root")
+__success __success_unpriv
 __retval(0)
+#ifdef SPEC_V1
+__xlated_unpriv("goto pc+2") /* to l2, must not be pc+3 as this would skip nospec */
+__xlated_unpriv("r2 = 0")
+__xlated_unpriv("r3 = 1048576")
+/* l2_%=: */
+__xlated_unpriv("nospec") /* inserted to prevent `R2 tried to add from different maps, paths or scalars, pointer arithmetic with it prohibited for !root` */
+__xlated_unpriv("r2 += r3")
+__xlated_unpriv("if r1 != 0x0 goto pc+1")
+__xlated_unpriv("goto pc+5") /* to l4 */
+/* l3_%=: */
+__xlated_unpriv("r0 = 322376503")
+__xlated_unpriv("nospec") /* inserted to prevent `R2 pointer comparison prohibited` */
+__xlated_unpriv("if r2 != 0x100000 goto pc+2") /* to l4 */
+__xlated_unpriv("r0 = 0")
+__xlated_unpriv("exit")
+/* l4_%=: */
+__xlated_unpriv("nospec")
+__xlated_unpriv("r0 = *(u8 *)(r0 +0)")
+#endif
 __naked void value_pointer_and_scalar_1(void)
 {
 	asm volatile ("					\
@@ -434,7 +486,6 @@ l2_%=:	/* common instruction */			\
 l3_%=:	/* branch B */					\
 	r0 = 0x13371337;				\
 	/* verifier follows fall-through */		\
-	/* unpriv: nospec (inserted to prevent `R2 pointer comparison prohibited`) */\
 	if r2 != 0x100000 goto l4_%=;			\
 	r0 = 0;						\
 	exit;						\
@@ -452,9 +503,24 @@ l4_%=:	/* fake-dead code; targeted from branch A to	\
 
 SEC("socket")
 __description("map access: mixing value pointer and scalar, 2")
-__success __failure_unpriv
-__msg_unpriv("R2 tried to add from different maps, paths or scalars, pointer arithmetic with it prohibited for !root")
+__success __success_unpriv
 __retval(0)
+#ifdef SPEC_V1
+__xlated_unpriv("goto pc+2")
+__xlated_unpriv("r2 = r0")
+__xlated_unpriv("r3 = 0")
+__xlated_unpriv("nospec")
+__xlated_unpriv("r2 += r3")
+__xlated_unpriv("if r1 != 0x0 goto pc+1")
+__xlated_unpriv("goto pc+5")
+__xlated_unpriv("r0 = 322376503")
+__xlated_unpriv("nospec")
+__xlated_unpriv("if r2 != 0x100000 goto pc+2")
+__xlated_unpriv("r0 = 0")
+__xlated_unpriv("exit")
+__xlated_unpriv("nospec") /* inserted to prevent `R0 invalid mem access 'scalar'` */
+__xlated_unpriv("r0 = *(u8 *)(r0 +0)")
+#endif
 __naked void value_pointer_and_scalar_2(void)
 {
 	asm volatile ("					\
@@ -495,7 +561,6 @@ l4_%=:	/* fake-dead code; targeted from branch A to	\
 	 * prevent dead code sanitization, rejected	\
 	 * via branch B however				\
 	 */						\
-	/* unpriv: nospec (inserted to prevent `R0 invalid mem access 'scalar'`) */\
 	r0 = *(u8*)(r0 + 0);				\
 	r0 = 0;						\
 	exit;						\
