@@ -5,7 +5,6 @@
 #include <linux/ethtool.h>
 #include <linux/if_xdp.h>
 
-#include "../kselftest.h"
 #include "xsk.h"
 
 #ifndef SO_PREFER_BUSY_POLL
@@ -31,11 +30,28 @@
 #define SOCK_RECONF_CTR			10
 #define USLEEP_MAX			10000
 
+
+#ifdef XSK_KSELFTEST
+#include "../kselftest.h"
+
 static bool opt_verbose;
 #define print_msg(x...) ksft_print_msg(x)
 #define print_verbose(x...) do { if (opt_verbose) ksft_print_msg(x); } while (0)
 #define skip_reason(x...) ksft_test_result_skip(x)
 #define fail_reason(x...) ksft_test_result_fail(x)
+
+#else
+
+void xsk_log(const char *msg, ...);
+void xsk_verbose(const char *msg, ...);
+void xsk_skip(const char *msg);
+
+#define print_msg(x...) xsk_verbose(x)
+#define print_verbose(x...) xsk_verbose(x)
+#define skip_reason(x...) xsk_skip(x)
+#define fail_reason(x...) xsk_log(x)
+
+#endif
 
 static inline u32 ceil_u32(u32 a, u32 b)
 {
