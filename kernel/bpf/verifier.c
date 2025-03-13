@@ -10638,13 +10638,12 @@ static int set_map_elem_callback_state(struct bpf_verifier_env *env,
 
 	/* valid map_ptr and poison value does not matter */
 	map = insn_aux->map_ptr_state.map_ptr;
-	if (!map->ops->map_set_for_each_callback_args ||
-	    !map->ops->map_for_each_callback) {
+	if (!map->ops->map_for_each_callback) {
 		verbose(env, "callback function not allowed for map\n");
 		return -ENOTSUPP;
 	}
 
-	err = map->ops->map_set_for_each_callback_args(env, caller, callee);
+	err = map_set_for_each_callback_args(env, caller, callee);
 	if (err)
 		return err;
 
