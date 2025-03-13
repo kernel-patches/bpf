@@ -1387,3 +1387,16 @@ void bpf_map_struct_ops_info_fill(struct bpf_map_info *info, struct bpf_map *map
 
 	info->btf_vmlinux_id = btf_obj_id(st_map->btf);
 }
+
+u32 bpf_struct_ops_prog_moff(const struct bpf_prog *prog)
+{
+	const struct btf_member *m;
+	const struct btf_type *t;
+	u32 midx;
+
+	t = btf_type_by_id(prog->aux->attach_btf, prog->aux->attach_btf_id);
+	midx = prog->expected_attach_type;
+	m = &btf_type_member(t)[midx];
+
+	return __btf_member_bit_offset(t, m) / 8;
+}
