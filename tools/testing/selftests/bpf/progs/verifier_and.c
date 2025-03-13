@@ -85,7 +85,7 @@ l0_%=:	r0 = r0;					\
 
 SEC("socket")
 __description("check known subreg with unknown reg")
-__success __failure_unpriv __msg_unpriv("R1 !read_ok")
+__success __success_unpriv
 __retval(0)
 __naked void known_subreg_with_unknown_reg(void)
 {
@@ -96,6 +96,7 @@ __naked void known_subreg_with_unknown_reg(void)
 	r0 &= 0xFFFF1234;				\
 	/* Upper bits are unknown but AND above masks out 1 zero'ing lower bits */\
 	if w0 < 1 goto l0_%=;				\
+	/* unpriv: nospec (inserted to prevent `R1 !read_ok'`) */\
 	r1 = *(u32*)(r1 + 512);				\
 l0_%=:	r0 = 0;						\
 	exit;						\
