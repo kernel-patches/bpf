@@ -4,6 +4,8 @@
 
 #ifdef __x86_64__
 
+#pragma GCC diagnostic ignored "-Wattributes"
+
 #include <unistd.h>
 #include <asm/ptrace.h>
 #include <linux/compiler.h>
@@ -36,14 +38,10 @@ static void *find_nop5(void *fn)
 
 static unsigned long get_nop5_offset(void *fn, void **paddr)
 {
-	void *addr = find_nop5(fn);
-
-	if (paddr)
-		*paddr = addr;
-	return addr ? get_uprobe_offset(addr) : -1;
+	return get_uprobe_offset(fn);
 }
 
-__naked unsigned long uprobe_regs_trigger(void)
+__nocf_check __weak __naked long uprobe_regs_trigger(void)
 {
 	asm volatile (
 		".byte 0x0f, 0x1f, 0x44, 0x00, 0x00	\n"
@@ -52,7 +50,7 @@ __naked unsigned long uprobe_regs_trigger(void)
 	);
 }
 
-__naked void uprobe_regs(struct pt_regs *before, struct pt_regs *after)
+__nocf_check __weak __naked void uprobe_regs(struct pt_regs *before, struct pt_regs *after)
 {
 	asm volatile (
 		"movq %r15,   0(%rdi)\n"
@@ -269,7 +267,7 @@ static void test_uprobe_regs_change(void)
 #define __NR_uretprobe 335
 #endif
 
-__naked unsigned long uretprobe_syscall_call_1(void)
+__nocf_check __weak __naked unsigned long uretprobe_syscall_call_1(void)
 {
 	/*
 	 * Pretend we are uretprobe trampoline to trigger the return
@@ -287,7 +285,7 @@ __naked unsigned long uretprobe_syscall_call_1(void)
 	);
 }
 
-__naked unsigned long uretprobe_syscall_call(void)
+__nocf_check __weak __naked unsigned long uretprobe_syscall_call(void)
 {
 	asm volatile (
 		"call uretprobe_syscall_call_1\n"
@@ -403,7 +401,7 @@ static void test_uretprobe_shadow_stack(void)
 
 #define TRAMP "[uprobes-trampoline]"
 
-__naked noinline void uprobe_test(void)
+__nocf_check __weak __naked void uprobe_test(void)
 {
 	asm volatile ("					\n"
 		".byte 0x0f, 0x1f, 0x44, 0x00, 0x00	\n"
