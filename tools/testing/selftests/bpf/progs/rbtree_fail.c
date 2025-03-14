@@ -69,7 +69,7 @@ long rbtree_api_nolock_first(void *ctx)
 }
 
 SEC("?tc")
-__failure __msg("rbtree_remove node input must be non-owning ref")
+__failure __msg("bpf_rbtree_remove can only take non-owning bpf_rb_node pointer")
 long rbtree_api_remove_unadded_node(void *ctx)
 {
 	struct node_data *n, *m;
@@ -178,7 +178,7 @@ err_out:
 }
 
 SEC("?tc")
-__failure __msg("rbtree_remove node input must be non-owning ref")
+__failure __msg("bpf_rbtree_remove can only take non-owning bpf_rb_node pointer")
 long rbtree_api_add_release_unlock_escape(void *ctx)
 {
 	struct node_data *n;
@@ -202,7 +202,7 @@ long rbtree_api_add_release_unlock_escape(void *ctx)
 }
 
 SEC("?tc")
-__failure __msg("rbtree_remove node input must be non-owning ref")
+__failure __msg("bpf_rbtree_remove can only take non-owning bpf_rb_node pointer")
 long rbtree_api_first_release_unlock_escape(void *ctx)
 {
 	struct bpf_rb_node *res;
