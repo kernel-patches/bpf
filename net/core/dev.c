@@ -2141,21 +2141,15 @@ int register_netdevice_notifier_dev_net(struct net_device *dev,
 					struct notifier_block *nb,
 					struct netdev_net_notifier *nn)
 {
-	struct net *net = dev_net(dev);
 	int err;
 
-	/* rtnl_net_lock() assumes dev is not yet published by
-	 * register_netdevice().
-	 */
-	DEBUG_NET_WARN_ON_ONCE(!list_empty(&dev->dev_list));
-
-	rtnl_net_lock(net);
-	err = __register_netdevice_notifier_net(net, nb, false);
+	rtnl_net_dev_lock(dev);
+	err = __register_netdevice_notifier_net(dev_net(dev), nb, false);
 	if (!err) {
 		nn->nb = nb;
 		list_add(&nn->list, &dev->net_notifier_list);
 	}
-	rtnl_net_unlock(net);
+	rtnl_net_dev_unlock(dev);
 
 	return err;
 }
@@ -3878,6 +3872,9 @@ static struct sk_buff *validate_xmit_skb(struct sk_buff *skb, struct net_device 
 {
 	netdev_features_t features;
 
+	if (!skb_frags_readable(skb))
+		goto out_kfree_skb;
+
 	features = netif_skb_features(skb);
 	skb = validate_xmit_vlan(skb, features);
 	if (unlikely(!skb))
@@ -4763,7 +4760,7 @@ use_local_napi:
 	 * we have to raise NET_RX_SOFTIRQ.
 	 */
 	if (!sd->in_net_rx_action)
-		__raise_softirq_irqoff(NET_RX_SOFTIRQ);
+		raise_softirq_irqoff(NET_RX_SOFTIRQ);
 }
 
 #ifdef CONFIG_RPS
@@ -7019,8 +7016,7 @@ void netif_napi_add_weight_locked(struct net_device *dev,
 
 	INIT_LIST_HEAD(&napi->poll_list);
 	INIT_HLIST_NODE(&napi->napi_hash_node);
-	hrtimer_init(&napi->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED);
-	napi->timer.function = napi_watchdog;
+	hrtimer_setup(&napi->timer, napi_watchdog, CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED);
 	init_gro_hash(napi);
 	napi->skb = NULL;
 	INIT_LIST_HEAD(&napi->rx_list);
