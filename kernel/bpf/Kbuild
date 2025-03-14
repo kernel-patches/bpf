@@ -1,0 +1,8 @@
+# Because Kbuild is preferred over Makefile for in-tree builds
+# but Kbuild is necessary for an out-of-tree module, we need an
+# explicit dispatch to Makefile if doing an in-tree build.
+ifneq ($(M),)
+	obj-m = verifier.o
+else
+	include $(src)/Makefile
+endif
