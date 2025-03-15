@@ -695,6 +695,11 @@ static inline void emit_jirl(union loongarch_instruction *insn,
 	insn->reg2i16_format.rj = rj;
 }
 
+static inline void emit_nop(union loongarch_instruction *insn)
+{
+	insn->word = INSN_NOP;
+}
+
 #define DEF_EMIT_REG2BSTRD_FORMAT(NAME, OP)				\
 static inline void emit_##NAME(union loongarch_instruction *insn,	\
 			       enum loongarch_gpr rd,			\
