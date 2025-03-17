@@ -1320,8 +1320,7 @@ static bool cmp_str_seq(const char *log, const char *exp)
 			printf("FAIL\nTestcase bug\n");
 			return false;
 		}
-		strncpy(needle, exp, len);
-		needle[len] = 0;
+		strscpy(needle, exp, len);
 		q = strstr(log, needle);
 		if (!q) {
 			printf("FAIL\nUnexpected verifier log!\n"
