@@ -75,9 +75,8 @@ void test_libbpf_get_fd_by_id_opts(void)
 	if (!ASSERT_EQ(ret, -EINVAL, "bpf_link_get_fd_by_id_opts"))
 		goto close_prog;
 
-	/* BTF get fd with opts set should not work (no kernel support). */
 	ret = bpf_btf_get_fd_by_id_opts(0, &fd_opts_rdonly);
-	ASSERT_EQ(ret, -EINVAL, "bpf_btf_get_fd_by_id_opts");
+	ASSERT_EQ(ret, -ENOENT, "bpf_btf_get_fd_by_id_opts");
 
 close_prog:
 	if (fd >= 0)
