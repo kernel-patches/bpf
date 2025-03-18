@@ -9877,6 +9877,8 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 		    func_id != BPF_FUNC_map_push_elem)
 			goto error;
 		break;
+	case BPF_MAP_TYPE_INSN_SET:
+		goto error;
 	default:
 		break;
 	}
@@ -19873,6 +19875,13 @@ static int __add_used_map(struct bpf_verifier_env *env, struct bpf_map *map)
 
 	env->used_maps[env->used_map_cnt++] = map;
 
+	if (map->map_type == BPF_MAP_TYPE_INSN_SET) {
+		err = bpf_insn_set_init(map, env->prog);
+		if (err)
+			return err;
+		env->insn_set_maps[env->insn_set_map_cnt++] = map;
+	}
+
 	return env->used_map_cnt - 1;
 }
 
@@ -20122,6 +20131,41 @@ static void adjust_subprog_starts(struct bpf_verifier_env *env, u32 off, u32 len
 	}
 }
 
+static void mark_insn_sets_ready(struct bpf_verifier_env *env)
+{
+	int i;
+
+	for (i = 0; i < env->insn_set_map_cnt; i++)
+		bpf_insn_set_ready(env->insn_set_maps[i]);
+}
+
+static void release_insn_sets(struct bpf_verifier_env *env)
+{
+	int i;
+
+	for (i = 0; i < env->insn_set_map_cnt; i++)
+		bpf_insn_set_release(env->insn_set_maps[i]);
+}
+
+static void adjust_insn_sets(struct bpf_verifier_env *env, u32 off, u32 len)
+{
+	int i;
+
+	if (len == 1)
+		return;
+
+	for (i = 0; i < env->insn_set_map_cnt; i++)
+		bpf_insn_set_adjust(env->insn_set_maps[i], off, len);
+}
+
+static void adjust_insn_sets_after_remove(struct bpf_verifier_env *env, u32 off, u32 len)
+{
+	int i;
+
+	for (i = 0; i < env->insn_set_map_cnt; i++)
+		bpf_insn_set_adjust_after_remove(env->insn_set_maps[i], off, len);
+}
+
 static void adjust_poke_descs(struct bpf_prog *prog, u32 off, u32 len)
 {
 	struct bpf_jit_poke_descriptor *tab = prog->aux->poke_tab;
@@ -20160,6 +20204,7 @@ static struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 of
 	}
 	adjust_insn_aux_data(env, new_data, new_prog, off, len);
 	adjust_subprog_starts(env, off, len);
+	adjust_insn_sets(env, off, len);
 	adjust_poke_descs(new_prog, off, len);
 	return new_prog;
 }
@@ -20342,6 +20387,8 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 	err = bpf_adj_linfo_after_remove(env, off, cnt);
 	if (err)
 		return err;
+
+	adjust_insn_sets_after_remove(env, off, cnt);
 
 	memmove(aux_data + off,	aux_data + off + cnt,
 		sizeof(*aux_data) * (orig_prog_len - off - cnt));
@@ -23927,8 +23974,11 @@ skip_full_check:
 	}
 
 	adjust_btf_func(env);
+	mark_insn_sets_ready(env);
 
 err_release_maps:
+	if (ret)
+		release_insn_sets(env);
 	if (!env->prog->aux->used_maps)
 		/* if we didn't copy map pointers into bpf_prog_info, release
 		 * them now. Otherwise free_used_maps() will release them.

@@ -1436,6 +1436,7 @@ static int map_create(union bpf_attr *attr, bool kernel)
 	case BPF_MAP_TYPE_STRUCT_OPS:
 	case BPF_MAP_TYPE_CPUMAP:
 	case BPF_MAP_TYPE_ARENA:
+	case BPF_MAP_TYPE_INSN_SET:
 		if (!bpf_token_capable(token, CAP_BPF))
 			goto put_token;
 		break;
