@@ -429,4 +429,59 @@ extern void bpf_iter_num_destroy(struct bpf_iter_num *it) __weak __ksym;
 )
 #endif /* bpf_repeat */
 
+#define DEFINE_STATIC_KEY(NAME)									\
+	struct {										\
+		__uint(type, BPF_MAP_TYPE_INSN_SET);						\
+		__type(key, __u32);								\
+		__type(value, __u32);								\
+		__uint(map_extra, BPF_F_STATIC_KEY);						\
+	} NAME SEC(".maps")
+
+static __always_inline int __bpf_static_branch_nop(void *static_key)
+{
+	asm goto("1:\n\t"
+		"gotol_or_nop %l[l_yes]\n\t"
+		".pushsection .static_keys, \"aw\"\n\t"
+		".balign 8\n\t"
+		".long 1b - .\n\t"
+		".long %l[l_yes] - .\n\t"
+		".quad %c0 - .\n\t"
+		".popsection\n\t"
+		:: "i" (static_key)
+		:: l_yes);
+	return 0;
+l_yes:
+	return 1;
+}
+
+static __always_inline int __bpf_static_branch_jump(void *static_key)
+{
+	asm goto("1:\n\t"
+		"nop_or_gotol %l[l_yes]\n\t"
+		".pushsection .static_keys, \"aw\"\n\t"
+		".balign 8\n\t"
+		".long 1b - .\n\t"
+		".long %l[l_yes] - .\n\t"
+		".quad %c0 - . + 1\n\t"
+		".popsection\n\t"
+		:: "i" (static_key)
+		:: l_yes);
+	return 0;
+l_yes:
+	return 1;
+}
+
+/*
+ * The bpf_static_branch_{unlikely,likely} macros provide a way to utilize BPF
+ * Static Keys in BPF programs in exactly the same manner this is done in the
+ * Linux Kernel.  The "unlikely" macro compiles in the code where the else-branch
+ * (key is off) is prioritized, the "likely" macro prioritises the if-branch.
+ */
+
+#define bpf_static_branch_unlikely(static_key) \
+	unlikely(__bpf_static_branch_nop(static_key))
+
+#define bpf_static_branch_likely(static_key) \
+	likely(!__bpf_static_branch_jump(static_key))
+
 #endif

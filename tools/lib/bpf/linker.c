@@ -28,6 +28,7 @@
 #include "str_error.h"
 
 #define BTF_EXTERN_SEC ".extern"
+#define STATIC_KEYS_REL_SEC ".rel.static_keys"
 
 struct src_sec {
 	const char *sec_name;
@@ -1037,7 +1038,8 @@ static int linker_sanity_check_elf_relos(struct src_obj *obj, struct src_sec *se
 		size_t sym_type = ELF64_R_TYPE(relo->r_info);
 
 		if (sym_type != R_BPF_64_64 && sym_type != R_BPF_64_32 &&
-		    sym_type != R_BPF_64_ABS64 && sym_type != R_BPF_64_ABS32) {
+		    sym_type != R_BPF_64_ABS64 && sym_type != R_BPF_64_ABS32 &&
+		    sym_type != R_BPF_64_NODYLD32 && strcmp(sec->sec_name, STATIC_KEYS_REL_SEC)) {
 			pr_warn("ELF relo #%d in section #%zu has unexpected type %zu in %s\n",
 				i, sec->sec_idx, sym_type, obj->filename);
 			return -EINVAL;
@@ -2272,7 +2274,7 @@ static int linker_append_elf_relos(struct bpf_linker *linker, struct src_obj *ob
 						insn->imm += sec->dst_off / sizeof(struct bpf_insn);
 					else
 						insn->imm += sec->dst_off;
-				} else {
+				} else if (strcmp(src_sec->sec_name, STATIC_KEYS_REL_SEC)) {
 					pr_warn("relocation against STT_SECTION in non-exec section is not supported!\n");
 					return -EINVAL;
 				}

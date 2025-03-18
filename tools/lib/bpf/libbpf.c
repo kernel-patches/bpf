@@ -422,6 +422,17 @@ struct bpf_sec_def {
 	libbpf_prog_attach_fn_t prog_attach_fn;
 };
 
+struct static_key_insn {
+	__u32 insn_offset;
+	__u32 jump_target;
+};
+
+struct static_key {
+	struct bpf_map *map;
+	struct static_key_insn *insns;
+	__u32 insns_cnt;
+};
+
 /*
  * bpf_prog should be a better name but it has been used in
  * linux/filter.h.
@@ -494,6 +505,9 @@ struct bpf_program {
 	__u32 line_info_rec_size;
 	__u32 line_info_cnt;
 	__u32 prog_flags;
+
+	struct static_key *static_keys;
+	__u32 static_keys_cnt;
 };
 
 struct bpf_struct_ops {
@@ -523,6 +537,7 @@ struct bpf_struct_ops {
 #define STRUCT_OPS_SEC ".struct_ops"
 #define STRUCT_OPS_LINK_SEC ".struct_ops.link"
 #define ARENA_SEC ".addr_space.1"
+#define STATIC_KEYS_SEC ".static_keys"
 
 enum libbpf_map_type {
 	LIBBPF_MAP_UNSPEC,
@@ -656,6 +671,7 @@ struct elf_state {
 	Elf64_Ehdr *ehdr;
 	Elf_Data *symbols;
 	Elf_Data *arena_data;
+	Elf_Data *static_keys_data;
 	size_t shstrndx; /* section index for section name strings */
 	size_t strtabidx;
 	struct elf_sec_desc *secs;
@@ -666,6 +682,7 @@ struct elf_state {
 	int symbols_shndx;
 	bool has_st_ops;
 	int arena_data_shndx;
+	int static_keys_data_shndx;
 };
 
 struct usdt_manager;
@@ -763,6 +780,7 @@ void bpf_program__unload(struct bpf_program *prog)
 
 	zfree(&prog->func_info);
 	zfree(&prog->line_info);
+	zfree(&prog->static_keys);
 }
 
 static void bpf_program__exit(struct bpf_program *prog)
@@ -1893,6 +1911,213 @@ static char *internal_map_name(struct bpf_object *obj, const char *real_name)
 			*p = '_';
 
 	return strdup(map_name);
+}
+
+struct static_keys_table_entry {
+	__u32 insn_offset;
+	__u32 jump_target;
+	union {
+		__u64 map_ptr;	/* map_ptr is always zero, as it is relocated */
+		__u64 flags;	/* so we can reuse it to store flags */
+	};
+};
+
+static struct bpf_program *shndx_to_prog(struct bpf_object *obj,
+					 size_t sec_idx,
+					 struct static_keys_table_entry *entry)
+{
+	__u32 insn_offset = entry->insn_offset / 8;
+	__u32 jump_target = entry->jump_target / 8;
+	struct bpf_program *prog;
+	size_t i;
+
+	for (i = 0; i < obj->nr_programs; i++) {
+		prog = &obj->programs[i];
+		if (prog->sec_idx != sec_idx)
+			continue;
+
+		if (insn_offset < prog->sec_insn_off ||
+		    insn_offset >= prog->sec_insn_off + prog->sec_insn_cnt)
+			continue;
+
+		if (jump_target < prog->sec_insn_off ||
+		    jump_target >= prog->sec_insn_off + prog->sec_insn_cnt) {
+			pr_warn("static key: offset %u is in boundaries, target %u is not\n",
+				insn_offset, jump_target);
+			return NULL;
+		}
+
+		return prog;
+	}
+
+	return NULL;
+}
+
+static struct bpf_program *find_prog_for_jump_entry(struct bpf_object *obj,
+						    int nrels,
+						    Elf_Data *relo_data,
+						    __u32 entry_offset,
+						    struct static_keys_table_entry *entry)
+{
+	struct bpf_program *prog;
+	Elf64_Rel *rel;
+	Elf64_Sym *sym;
+	int i;
+
+	for (i = 0; i < nrels; i++) {
+		rel = elf_rel_by_idx(relo_data, i);
+		if (!rel) {
+			pr_warn("static key: relo #%d: failed to get ELF relo\n", i);
+			return ERR_PTR(-LIBBPF_ERRNO__FORMAT);
+		}
+
+		if ((__u32)rel->r_offset != entry_offset)
+			continue;
+
+		sym = elf_sym_by_idx(obj, ELF64_R_SYM(rel->r_info));
+		if (!sym) {
+			pr_warn("static key: .maps relo #%d: symbol %zx not found\n",
+				i, (size_t)ELF64_R_SYM(rel->r_info));
+			return ERR_PTR(-LIBBPF_ERRNO__FORMAT);
+		}
+
+		prog = shndx_to_prog(obj, sym->st_shndx, entry);
+		if (!prog) {
+			pr_warn("static key: .maps relo #%d: program %zx not found\n",
+				i, (size_t)sym->st_shndx);
+			return ERR_PTR(-LIBBPF_ERRNO__FORMAT);
+		}
+		return prog;
+	}
+	return ERR_PTR(-LIBBPF_ERRNO__FORMAT);
+}
+
+static struct bpf_map *find_map_for_jump_entry(struct bpf_object *obj,
+					       int nrels,
+					       Elf_Data *relo_data,
+					       __u32 entry_offset)
+{
+	struct bpf_map *map;
+	const char *name;
+	Elf64_Rel *rel;
+	Elf64_Sym *sym;
+	int i;
+
+	for (i = 0; i < nrels; i++) {
+		rel = elf_rel_by_idx(relo_data, i);
+		if (!rel) {
+			pr_warn("static key: relo #%d: failed to get ELF relo\n", i);
+			return NULL;
+		}
+
+		if ((__u32)rel->r_offset != entry_offset)
+			continue;
+
+		sym = elf_sym_by_idx(obj, ELF64_R_SYM(rel->r_info));
+		if (!sym) {
+			pr_warn(".maps relo #%d: symbol %zx not found\n",
+				i, (size_t)ELF64_R_SYM(rel->r_info));
+			return NULL;
+		}
+
+		name = elf_sym_str(obj, sym->st_name) ?: "<?>";
+		if (!name || !strcmp(name, "")) {
+			pr_warn(".maps relo #%d: symbol name is zero or empty\n", i);
+			return NULL;
+		}
+
+		map = bpf_object__find_map_by_name(obj, name);
+		if (!map)
+			return NULL;
+		return map;
+	}
+	return NULL;
+}
+
+static struct static_key *find_static_key(struct bpf_program *prog, struct bpf_map *map)
+{
+	__u32 i;
+
+	for (i = 0; i < prog->static_keys_cnt; i++)
+		if (prog->static_keys[i].map == map)
+			return &prog->static_keys[i];
+
+	return NULL;
+}
+
+static int add_static_key_insn(struct bpf_program *prog,
+			       struct static_keys_table_entry *entry,
+			       struct bpf_map *map)
+{
+	struct static_key_insn *insn;
+	struct static_key *key;
+	void *x;
+
+	key = find_static_key(prog, map);
+	if (!key) {
+		__u32 size_old = prog->static_keys_cnt * sizeof(*key);
+
+		x = realloc(prog->static_keys, size_old + sizeof(*key));
+		if (!x)
+			return -ENOMEM;
+
+		prog->static_keys = x;
+		prog->static_keys_cnt += 1;
+
+		key = x + size_old;
+		key->map = map;
+		key->insns = NULL;
+		key->insns_cnt = 0;
+	}
+
+	x = realloc(key->insns, (key->insns_cnt + 1) * sizeof(key->insns[0]));
+	if (!x)
+		return -ENOMEM;
+
+	key->insns = x;
+	insn = &key->insns[key->insns_cnt++];
+	insn->insn_offset = (entry->insn_offset / 8) - prog->sec_insn_off;
+	insn->jump_target = (entry->jump_target / 8) - prog->sec_insn_off;
+	key->map->def.max_entries += 1;
+
+	return 0;
+}
+
+static int
+bpf_object__collect_static_keys_relos(struct bpf_object *obj,
+				      Elf64_Shdr *shdr,
+				      Elf_Data *relo_data)
+{
+	Elf_Data *data = obj->efile.static_keys_data;
+	int nrels = shdr->sh_size / shdr->sh_entsize;
+	struct static_keys_table_entry *entries;
+	size_t i;
+	int err;
+
+	if (!data)
+		return 0;
+
+	entries = (void *)data->d_buf;
+	for (i = 0; i < data->d_size / sizeof(struct static_keys_table_entry); i++) {
+		__u32 entry_offset = i * sizeof(struct static_keys_table_entry);
+		struct bpf_program *prog;
+		struct bpf_map *map;
+
+		prog = find_prog_for_jump_entry(obj, nrels, relo_data, entry_offset, &entries[i]);
+		if (IS_ERR(prog))
+			return PTR_ERR(prog);
+
+		map = find_map_for_jump_entry(obj, nrels, relo_data,
+				entry_offset + offsetof(struct static_keys_table_entry, map_ptr));
+		if (!map)
+			return -EINVAL;
+
+		err = add_static_key_insn(prog, &entries[i], map);
+		if (err)
+			return err;
+	}
+
+	return 0;
 }
 
 static int
@@ -3951,6 +4176,9 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 			} else if (strcmp(name, ARENA_SEC) == 0) {
 				obj->efile.arena_data = data;
 				obj->efile.arena_data_shndx = idx;
+			} else if (strcmp(name, STATIC_KEYS_SEC) == 0) {
+				obj->efile.static_keys_data = data;
+				obj->efile.static_keys_data_shndx = idx;
 			} else {
 				pr_info("elf: skipping unrecognized data section(%d) %s\n",
 					idx, name);
@@ -3968,7 +4196,8 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 			    strcmp(name, ".rel" STRUCT_OPS_LINK_SEC) &&
 			    strcmp(name, ".rel?" STRUCT_OPS_SEC) &&
 			    strcmp(name, ".rel?" STRUCT_OPS_LINK_SEC) &&
-			    strcmp(name, ".rel" MAPS_ELF_SEC)) {
+			    strcmp(name, ".rel" MAPS_ELF_SEC) &&
+			    strcmp(name, ".rel" STATIC_KEYS_SEC)) {
 				pr_info("elf: skipping relo section(%d) %s for section(%d) %s\n",
 					idx, name, targ_sec_idx,
 					elf_sec_name(obj, elf_sec_by_idx(obj, targ_sec_idx)) ?: "<?>");
@@ -5200,6 +5429,69 @@ bpf_object__populate_internal_map(struct bpf_object *obj, struct bpf_map *map)
 	return 0;
 }
 
+static struct static_key *
+bpf_object__find_static_key(struct bpf_object *obj, struct bpf_map *map)
+{
+	struct static_key *key = NULL;
+	int i;
+
+	for (i = 0; i < obj->nr_programs; i++) {
+		key = find_static_key(&obj->programs[i], map);
+		if (key)
+			return key;
+	}
+
+	return NULL;
+}
+
+static int bpf_object__init_static_key_map(struct bpf_object *obj,
+					   struct bpf_map *map)
+{
+	struct static_key *key;
+	__u32 map_key;
+	int err;
+	int i;
+
+	if (obj->gen_loader) {
+		pr_warn("not supported: obj->gen_loader ^ static keys\n");
+		return libbpf_err(-ENOTSUP);
+	}
+
+	key = bpf_object__find_static_key(obj, map);
+	if (!key) {
+		pr_warn("map '%s': static key is not used by any program\n",
+			bpf_map__name(map));
+		return libbpf_err(-EINVAL);
+	}
+
+	if (key->insns_cnt != map->def.max_entries) {
+		pr_warn("map '%s': static key #entries and max_entries differ: %d != %d\n",
+			bpf_map__name(map), key->insns_cnt, map->def.max_entries);
+		return libbpf_err(-EINVAL);
+	}
+
+	for (i = 0; i < key->insns_cnt; i++) {
+		map_key = key->insns[i].insn_offset;
+		err = bpf_map_update_elem(map->fd, &i, &map_key, 0);
+		if (err) {
+			err = -errno;
+			pr_warn("map '%s': failed to set initial contents: %s\n",
+				bpf_map__name(map), errstr(err));
+			return err;
+		}
+	}
+
+	err = bpf_map_freeze(map->fd);
+	if (err) {
+		err = -errno;
+		pr_warn("map '%s': failed to freeze as read-only: %s\n",
+			bpf_map__name(map), errstr(err));
+		return err;
+	}
+
+	return 0;
+}
+
 static void bpf_map__destroy(struct bpf_map *map);
 
 static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, bool is_inner)
@@ -5519,6 +5811,12 @@ retry:
 				if (obj->arena_data) {
 					memcpy(map->mmaped, obj->arena_data, obj->arena_data_sz);
 					zfree(&obj->arena_data);
+				}
+			} else if (map->def.type == BPF_MAP_TYPE_INSN_SET) {
+				if (map->map_extra & BPF_F_STATIC_KEY) {
+					err = bpf_object__init_static_key_map(obj, map);
+					if (err < 0)
+						goto err_out;
 				}
 			}
 			if (map->init_slots_sz && map->def.type != BPF_MAP_TYPE_PROG_ARRAY) {
@@ -6344,10 +6642,43 @@ static struct reloc_desc *find_prog_insn_relo(const struct bpf_program *prog, si
 		       sizeof(*prog->reloc_desc), cmp_relo_by_insn_idx);
 }
 
+static int append_subprog_static_keys(struct bpf_program *main_prog,
+				      struct bpf_program *subprog)
+{
+	size_t main_size = main_prog->static_keys_cnt * sizeof(struct static_key);
+	size_t subprog_size = subprog->static_keys_cnt * sizeof(struct static_key);
+	struct static_key *key;
+	void *new_keys;
+	int i, j;
+
+	if (!subprog->static_keys_cnt)
+		return 0;
+
+	new_keys = realloc(main_prog->static_keys, subprog_size + main_size);
+	if (!new_keys)
+		return -ENOMEM;
+
+	memcpy(new_keys + main_size, subprog->static_keys, subprog_size);
+
+	for (i = 0; i < subprog->static_keys_cnt; i++) {
+		key = new_keys + main_size + i * sizeof(struct static_key);
+		for (j = 0; j < key->insns_cnt; j++) {
+			key->insns[j].insn_offset += subprog->sub_insn_off;
+			key->insns[j].jump_target += subprog->sub_insn_off;
+		}
+	}
+
+	main_prog->static_keys = new_keys;
+	main_prog->static_keys_cnt += subprog->static_keys_cnt;
+
+	return 0;
+}
+
 static int append_subprog_relos(struct bpf_program *main_prog, struct bpf_program *subprog)
 {
 	int new_cnt = main_prog->nr_reloc + subprog->nr_reloc;
 	struct reloc_desc *relos;
+	int err;
 	int i;
 
 	if (main_prog == subprog)
@@ -6370,6 +6701,11 @@ static int append_subprog_relos(struct bpf_program *main_prog, struct bpf_progra
 	 */
 	main_prog->reloc_desc = relos;
 	main_prog->nr_reloc = new_cnt;
+
+	err = append_subprog_static_keys(main_prog, subprog);
+	if (err)
+		return err;
+
 	return 0;
 }
 
@@ -7337,6 +7673,8 @@ static int bpf_object__collect_relos(struct bpf_object *obj)
 			err = bpf_object__collect_st_ops_relos(obj, shdr, data);
 		else if (idx == obj->efile.btf_maps_shndx)
 			err = bpf_object__collect_map_relos(obj, shdr, data);
+		else if (idx == obj->efile.static_keys_data_shndx)
+			err = bpf_object__collect_static_keys_relos(obj, shdr, data);
 		else
 			err = bpf_object__collect_prog_relos(obj, shdr, data);
 		if (err)
@@ -7461,6 +7799,7 @@ static int libbpf_prepare_prog_load(struct bpf_program *prog,
 		opts->attach_btf_obj_fd = btf_obj_fd;
 		opts->attach_btf_id = btf_type_id;
 	}
+
 	return 0;
 }
 
@@ -7549,6 +7888,27 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 				   prog - obj->programs);
 		*prog_fd = -1;
 		return 0;
+	}
+
+	if (obj->fd_array_cnt) {
+		pr_warn("not supported: fd_array was already present\n");
+		return -ENOTSUP;
+	} else if (prog->static_keys_cnt) {
+		int i, fd, *fd_array;
+
+		fd_array = calloc(prog->static_keys_cnt, sizeof(int));
+		if (!fd_array)
+			return -ENOMEM;
+
+		for (i = 0; i < prog->static_keys_cnt; i++) {
+			fd = prog->static_keys[i].map->fd;
+			if (fd < 0)
+				return -EINVAL;
+			fd_array[i] = fd;
+		}
+
+		load_attr.fd_array = fd_array;
+		load_attr.fd_array_cnt = prog->static_keys_cnt;
 	}
 
 retry_load:
