@@ -183,6 +183,30 @@ static inline bool is_mov_percpu_addr(const struct bpf_insn *insn)
 	return insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) && insn->off == BPF_ADDR_PERCPU;
 }
 
+static void print_bpf_ja_insn(bpf_insn_print_t verbose,
+			      void *private_data,
+			      const struct bpf_insn *insn)
+{
+	bool jmp32 = insn->code == (BPF_JMP32 | BPF_JA);
+	int off = jmp32 ? insn->imm : insn->off;
+	const char *suffix = jmp32 ? "l" : "";
+	char op[16];
+
+	switch (insn->src_reg & BPF_STATIC_BRANCH_MASK) {
+	case BPF_STATIC_BRANCH_JA:
+		snprintf(op, sizeof(op), "goto%s_or_nop", suffix);
+		break;
+	case BPF_STATIC_BRANCH_JA | BPF_STATIC_BRANCH_NOP:
+		snprintf(op, sizeof(op), "nop_or_goto%s", suffix);
+		break;
+	default:
+		snprintf(op, sizeof(op), "goto%s", suffix);
+		break;
+	}
+
+	verbose(private_data, "(%02x) %s pc%+d\n", insn->code, op, off);
+}
+
 void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 		    const struct bpf_insn *insn,
 		    bool allow_ptr_leaks)
@@ -355,16 +379,13 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 							tmp, sizeof(tmp)),
 					insn->imm);
 			}
-		} else if (insn->code == (BPF_JMP | BPF_JA)) {
-			verbose(cbs->private_data, "(%02x) goto pc%+d\n",
-				insn->code, insn->off);
+		} else if (insn->code == (BPF_JMP | BPF_JA) ||
+			   insn->code == (BPF_JMP32 | BPF_JA)) {
+			print_bpf_ja_insn(verbose, cbs->private_data, insn);
 		} else if (insn->code == (BPF_JMP | BPF_JCOND) &&
 			   insn->src_reg == BPF_MAY_GOTO) {
 			verbose(cbs->private_data, "(%02x) may_goto pc%+d\n",
 				insn->code, insn->off);
-		} else if (insn->code == (BPF_JMP32 | BPF_JA)) {
-			verbose(cbs->private_data, "(%02x) gotol pc%+d\n",
-				insn->code, insn->imm);
 		} else if (insn->code == (BPF_JMP | BPF_EXIT)) {
 			verbose(cbs->private_data, "(%02x) exit\n", insn->code);
 		} else if (BPF_SRC(insn->code) == BPF_X) {
