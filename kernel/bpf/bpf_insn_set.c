@@ -33,7 +33,8 @@ static int insn_set_alloc_check(union bpf_attr *attr)
 	if (attr->max_entries == 0 ||
 	    attr->key_size != 4 ||
 	    attr->value_size != 4 ||
-	    attr->map_flags != 0)
+	    attr->map_flags != 0 ||
+	    attr->map_extra & ~BPF_F_STATIC_KEY)
 		return -EINVAL;
 
 	if (attr->max_entries > MAX_ISET_ENTRIES)
@@ -176,6 +177,30 @@ static inline bool is_frozen(struct bpf_map *map)
 	return ret;
 }
 
+static bool is_static_key(const struct bpf_map *map)
+{
+	if (map->map_type != BPF_MAP_TYPE_INSN_SET)
+		return false;
+
+	if (!(map->map_extra & BPF_F_STATIC_KEY))
+		return false;
+
+	return true;
+}
+
+static bool is_ja_or_nop(const struct bpf_insn *insn)
+{
+	u8 code = insn->code;
+
+	return (code == (BPF_JMP | BPF_JA) || code == (BPF_JMP32 | BPF_JA)) &&
+		(insn->src_reg & BPF_STATIC_BRANCH_JA);
+}
+
+static bool is_inverse_ja_or_nop(const struct bpf_insn *insn)
+{
+	return insn->src_reg & BPF_STATIC_BRANCH_NOP;
+}
+
 static inline bool valid_offsets(const struct bpf_insn_set *insn_set,
 				 const struct bpf_prog *prog)
 {
@@ -188,16 +213,17 @@ static inline bool valid_offsets(const struct bpf_insn_set *insn_set,
 		if (off >= prog->len)
 			return false;
 
-		if (off > 0) {
-			if (prog->insnsi[off-1].code == (BPF_LD | BPF_DW | BPF_IMM))
-				return false;
-		}
+		if (off > 0 && prog->insnsi[off-1].code == (BPF_LD | BPF_DW | BPF_IMM))
+			return false;
 
 		if (i > 0) {
 			prev_off = insn_set->ptrs[i-1].orig_xlated_off;
 			if (off <= prev_off)
 				return false;
 		}
+
+		if (is_static_key(&insn_set->map) && !is_ja_or_nop(&prog->insnsi[off]))
+			return false;
 	}
 
 	return true;
@@ -206,6 +232,7 @@ static inline bool valid_offsets(const struct bpf_insn_set *insn_set,
 int bpf_insn_set_init(struct bpf_map *map, const struct bpf_prog *prog)
 {
 	struct bpf_insn_set *insn_set = cast_insn_set(map);
+	const struct bpf_insn *insn;
 	int i;
 
 	if (!is_frozen(map))
@@ -228,10 +255,15 @@ int bpf_insn_set_init(struct bpf_map *map, const struct bpf_prog *prog)
 	/*
 	 * Reset all the map indexes to the original values.  This is needed,
 	 * e.g., when a replay of verification with different log level should
-	 * be performed.
+	 * be performed
 	 */
 	for (i = 0; i < map->max_entries; i++)
 		insn_set->ptrs[i].xlated_off = insn_set->ptrs[i].orig_xlated_off;
+
+	for (i = 0; i < map->max_entries; i++) {
+		insn = &prog->insnsi[insn_set->ptrs[i].xlated_off];
+		insn_set->ptrs[i].inverse_ja_or_nop = is_inverse_ja_or_nop(insn);
+	}
 
 	return 0;
 }
@@ -285,4 +317,84 @@ void bpf_insn_set_adjust_after_remove(struct bpf_map *map, u32 off, u32 len)
 		else
 			insn_set->ptrs[i].xlated_off -= len;
 	}
+}
+
+static struct bpf_insn_ptr *insn_ptr_by_offset(struct bpf_prog *prog, u32 xlated_off)
+{
+	struct bpf_insn_set *insn_set;
+	struct bpf_map *map;
+	int i, j;
+
+	for (i = 0; i < prog->aux->used_map_cnt; i++) {
+		map = prog->aux->used_maps[i];
+		if (!is_static_key(map))
+			continue;
+
+		insn_set = cast_insn_set(map);
+		for (j = 0; j < map->max_entries; j++) {
+			if (insn_set->ptrs[j].xlated_off == xlated_off)
+				return &insn_set->ptrs[j];
+		}
+	}
+
+	return NULL;
+}
+
+void bpf_prog_update_insn_ptr(struct bpf_prog *prog,
+			      u32 xlated_off,
+			      u32 jitted_off,
+			      u32 jitted_len,
+			      int jitted_jump_offset,
+			      void *jitted_ip)
+{
+	struct bpf_insn_ptr *ptr;
+
+	ptr = insn_ptr_by_offset(prog, xlated_off);
+	if (ptr) {
+		ptr->jitted_ip = jitted_ip;
+		ptr->jitted_off = jitted_off;
+		ptr->jitted_len = jitted_len;
+		ptr->jitted_jump_offset = jitted_jump_offset;
+	}
+}
+
+static int check_state(struct bpf_insn_set *insn_set)
+{
+	int ret = 0;
+
+	mutex_lock(&insn_set->state_mutex);
+	if (insn_set->state == INSN_SET_STATE_FREE)
+		ret = -EINVAL;
+	if (insn_set->state == INSN_SET_STATE_INIT)
+		ret = -EBUSY;
+	mutex_unlock(&insn_set->state_mutex);
+
+	return ret;
+}
+
+int bpf_static_key_set(struct bpf_map *map, bool on)
+{
+	struct bpf_insn_set *insn_set = cast_insn_set(map);
+	struct bpf_insn_ptr *ptr;
+	int ret = 0;
+	int i;
+
+	if (!is_static_key(map))
+		return -EINVAL;
+
+	ret = check_state(insn_set);
+	if (ret)
+		return ret;
+
+	for (i = 0; i < map->max_entries && ret == 0; i++) {
+		ptr = &insn_set->ptrs[i];
+		if (ptr->xlated_off == INSN_DELETED)
+			continue;
+
+		ret = bpf_arch_poke_static_branch(ptr, on ^ ptr->inverse_ja_or_nop);
+		if (ret)
+			return ret;
+	}
+
+	return ret;
 }

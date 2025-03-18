@@ -3173,6 +3173,11 @@ static int __init bpf_global_ma_init(void)
 late_initcall(bpf_global_ma_init);
 #endif
 
+int __weak bpf_arch_poke_static_branch(struct bpf_insn_ptr *ptr, bool on)
+{
+	return -EOPNOTSUPP;
+}
+
 DEFINE_STATIC_KEY_FALSE(bpf_stats_enabled_key);
 EXPORT_SYMBOL(bpf_stats_enabled_key);
 
