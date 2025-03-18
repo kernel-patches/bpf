@@ -33,6 +33,9 @@
 
 void xsk_verbose(const char *msg, ...);
 #define print_verbose(x...) xsk_verbose(x)
+#define print_msg(x...) ksft_print_msg(x)
+#define skip_reason(x...) ksft_test_result_skip(x)
+#define fail_reason(x...) ksft_test_result_fail(x)
 
 static void __exit_with_error(int error, const char *file, const char *func, int line)
 {
