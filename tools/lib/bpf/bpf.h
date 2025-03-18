@@ -704,6 +704,25 @@ struct bpf_token_create_opts {
 LIBBPF_API int bpf_token_create(int bpffs_fd,
 				struct bpf_token_create_opts *opts);
 
+struct bpf_static_key_update_opts {
+	size_t sz; /* size of this struct for forward/backward compatibility */
+	__u32 on;
+	size_t :0;
+};
+#define bpf_static_key_update_opts__last_field on
+
+/**
+ * @brief **bpf_static_key_update()** updates the value of a static key
+ *
+ * @param map_fd FD for the static key.
+ * @param opts optional BPF token creation options, can be NULL
+ *
+ * @return 0 on success; negative error code, otherwise (errno
+ * is also set to the error code)
+ */
+LIBBPF_API int bpf_static_key_update(int map_fd,
+				     struct bpf_static_key_update_opts *opts);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
