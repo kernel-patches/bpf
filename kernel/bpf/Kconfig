@@ -41,7 +41,7 @@ config BPF_SYSCALL
 
 config BPF_JIT
 	bool "Enable BPF Just In Time compiler"
-	depends on BPF
+	depends on BPF_SYSCALL
 	depends on HAVE_CBPF_JIT || HAVE_EBPF_JIT
 	select EXECMEM
 	help
