@@ -65,6 +65,7 @@ static int bpf_token_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
+#ifdef CONFIG_PROC_FS
 static void bpf_token_show_fdinfo(struct seq_file *m, struct file *filp)
 {
 	struct bpf_token *token = filp->private_data;
@@ -98,6 +99,7 @@ static void bpf_token_show_fdinfo(struct seq_file *m, struct file *filp)
 	else
 		seq_printf(m, "allowed_attachs:\t0x%llx\n", token->allowed_attachs);
 }
+#endif
 
 #define BPF_TOKEN_INODE_NAME "bpf-token"
 
@@ -105,7 +107,9 @@ static const struct inode_operations bpf_token_iops = { };
 
 static const struct file_operations bpf_token_fops = {
 	.release	= bpf_token_release,
+#ifdef CONFIG_PROC_FS
 	.show_fdinfo	= bpf_token_show_fdinfo,
+#endif
 };
 
 int bpf_token_create(union bpf_attr *attr)
