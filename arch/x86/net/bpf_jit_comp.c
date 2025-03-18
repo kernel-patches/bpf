@@ -1482,6 +1482,15 @@ static void emit_priv_frame_ptr(u8 **pprog, void __percpu *priv_frame_ptr)
 	*pprog = prog;
 }
 
+static bool is_static_ja_nop(const struct bpf_insn *insn)
+{
+	u8 code = insn->code;
+
+	return (code == (BPF_JMP | BPF_JA) || code == (BPF_JMP32 | BPF_JA)) &&
+	       (insn->src_reg & BPF_STATIC_BRANCH_JA) &&
+	       (insn->src_reg & BPF_STATIC_BRANCH_NOP);
+}
+
 #define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
 
 #define __LOAD_TCC_PTR(off)			\
@@ -2519,9 +2528,15 @@ emit_jmp:
 					}
 					emit_nops(&prog, INSN_SZ_DIFF - 2);
 				}
-				EMIT2(0xEB, jmp_offset);
+				if (is_static_ja_nop(insn))
+					emit_nops(&prog, 2);
+				else
+					EMIT2(0xEB, jmp_offset);
 			} else if (is_simm32(jmp_offset)) {
-				EMIT1_off32(0xE9, jmp_offset);
+				if (is_static_ja_nop(insn))
+					emit_nops(&prog, 5);
+				else
+					EMIT1_off32(0xE9, jmp_offset);
 			} else {
 				pr_err("jmp gen bug %llx\n", jmp_offset);
 				return -EFAULT;
