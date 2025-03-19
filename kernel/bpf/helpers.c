@@ -4674,6 +4674,11 @@ __bpf_kfunc u64 bpf_get_cpu_time_counter(void)
 	return ktime_get_raw_fast_ns();
 }
 
+__bpf_kfunc u64 bpf_cpu_time_counter_to_ns(u64 counter)
+{
+	return counter;
+}
+
 __bpf_kfunc_end_defs();
 
 static void bpf_task_work_cancel_scheduled(struct irq_work *irq_work)
@@ -4870,6 +4875,7 @@ BTF_ID_FLAGS(func, bpf_dynptr_from_file)
 BTF_ID_FLAGS(func, bpf_dynptr_file_discard)
 BTF_ID_FLAGS(func, bpf_timer_cancel_async)
 BTF_ID_FLAGS(func, bpf_get_cpu_time_counter)
+BTF_ID_FLAGS(func, bpf_cpu_time_counter_to_ns, KF_FASTCALL)
 BTF_KFUNCS_END(common_btf_ids)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
