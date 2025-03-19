@@ -60,7 +60,8 @@
 #define RUN_ALL_TESTS UINT_MAX
 #define NUM_MAC_ADDRESSES 4
 
-#define print_verbose(x...) do { if (opt_verbose) ksft_print_msg(x); } while (0)
+void xsk_verbose(const char *msg, ...);
+#define print_verbose(x...) xsk_verbose(x)
 
 enum test_mode {
 	TEST_MODE_SKB,
