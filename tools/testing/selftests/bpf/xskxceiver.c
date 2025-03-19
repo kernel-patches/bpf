@@ -110,6 +110,18 @@
 #include <network_helpers.h>
 
 static bool opt_verbose;
+
+void xsk_verbose(const char *msg, ...)
+{
+	if (opt_verbose) {
+		va_list args;
+
+		va_start(args, msg);
+		ksft_print_msg(msg, args);
+		va_end(args);
+	}
+}
+
 static bool opt_print_tests;
 static enum test_mode opt_mode = TEST_MODE_ALL;
 static u32 opt_run_test = RUN_ALL_TESTS;
