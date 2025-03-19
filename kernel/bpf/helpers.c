@@ -4664,6 +4664,16 @@ __bpf_kfunc int bpf_timer_cancel_async(struct bpf_timer *timer)
 	}
 }
 
+__bpf_kfunc u64 bpf_get_cpu_time_counter(void)
+{
+	/* CLOCK_MONOTONIC_RAW is the closest analogue to what is implemented
+	 * in JIT. The access time is the same as for CLOCK_MONOTONIC, but the
+	 * slope of 'raw' is not affected by NTP adjustments, and with stable
+	 * TSC it can provide less jitter in short term measurements.
+	 */
+	return ktime_get_raw_fast_ns();
+}
+
 __bpf_kfunc_end_defs();
 
 static void bpf_task_work_cancel_scheduled(struct irq_work *irq_work)
@@ -4859,6 +4869,7 @@ BTF_ID_FLAGS(func, bpf_task_work_schedule_resume, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_dynptr_from_file)
 BTF_ID_FLAGS(func, bpf_dynptr_file_discard)
 BTF_ID_FLAGS(func, bpf_timer_cancel_async)
+BTF_ID_FLAGS(func, bpf_get_cpu_time_counter)
 BTF_KFUNCS_END(common_btf_ids)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {

@@ -17035,7 +17035,9 @@ bool bpf_get_call_summary(struct bpf_verifier_env *env, struct bpf_insn *call,
 			/* error would be reported later */
 			return false;
 		cs->num_params = btf_type_vlen(meta.func_proto);
-		cs->fastcall = meta.kfunc_flags & KF_FASTCALL;
+		cs->fastcall = (meta.kfunc_flags & KF_FASTCALL) ||
+			       (meta.btf == btf_vmlinux &&
+				bpf_jit_inlines_kfunc_call(call->imm));
 		cs->is_void = btf_type_is_void(btf_type_by_id(meta.btf, meta.func_proto->type));
 		return true;
 	}
