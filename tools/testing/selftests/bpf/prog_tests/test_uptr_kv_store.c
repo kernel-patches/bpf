@@ -3,6 +3,7 @@
 #include "uptr_kv_store.h"
 #include "test_uptr_kv_store_common.h"
 #include "test_uptr_kv_store.skel.h"
+#include "test_uptr_kv_store_v1.skel.h"
 
 static void test_uptr_kv_store_basic(void)
 {
@@ -70,8 +71,84 @@ out:
 	kv_store_close(kvs);
 }
 
+static void test_uptr_kv_store_change_value(void)
+{
+	int err, pid;
+	struct test_uptr_kv_store_v1 *skel_v1;
+	struct test_uptr_kv_store *skel;
+	struct test_struct_v1 val_v1;
+	struct test_struct val, *val_p;
+	struct kv_store *kvs = NULL;
+
+	skel = test_uptr_kv_store__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open_and_load"))
+		return;
+
+	skel->bss->target_pid = -1;
+	err = test_uptr_kv_store__attach(skel);
+	if (!ASSERT_OK(err, "skel_attach"))
+		return;
+
+	pid = sys_gettid();
+	kvs = kv_store_init(pid, skel->maps.data_map, "/sys/fs/bpf/kv_store_data_map");
+
+	/* update key 0 to test_struct in user space */
+	val.a = 1;
+	val.b = 2;
+	err = kv_store_put(kvs, 0, &val, sizeof(val));
+	ASSERT_OK(err, "kv_store_put struct val");
+	val_p = kv_store_get(kvs, 0);
+	ASSERT_OK_PTR(val_p, "kv_store_get struct val");
+	ASSERT_EQ(val_p->a, val.a, "user space: check get val.a == put val.a");
+	ASSERT_EQ(val_p->b, val.b, "user space: check get val.b == put val.b");
+
+	/* lookup test_struct at key 0 in test_uptr_kv_store */
+	skel->bss->test_key = 0;
+	skel->bss->test_op = KVS_STRUCT_GET;
+	skel->bss->target_pid = pid;
+	sys_gettid();
+	skel->bss->target_pid = -1;
+	ASSERT_EQ(skel->bss->test_struct_val.a, val.a, "bpf: check get val.a == put val.a");
+	ASSERT_EQ(skel->bss->test_struct_val.b, val.b, "bpf: check get val.b == put val.b");
+
+	/* add a new field to test_struct */
+	err = kv_store_update_value_size(kvs, 0, sizeof(val_v1));
+	ASSERT_OK(err, "kv_store_update_value_size");
+
+	/* rollout a new version */
+	skel_v1 = test_uptr_kv_store_v1__open();
+	if (!ASSERT_OK_PTR(skel, "skel_open v1"))
+		goto out;
+
+	kv_store_data_map_set_reuse(kvs, skel_v1->maps.data_map);
+
+	err = test_uptr_kv_store_v1__load(skel_v1);
+	if (!ASSERT_OK(err, "skel_load v1"))
+		goto out;
+
+	skel_v1->bss->target_pid = -1;
+	err = test_uptr_kv_store_v1__attach(skel_v1);
+	if (!ASSERT_OK(err, "skel_attach v1"))
+		goto out;
+
+	/* lookup struct_key_0 in test_uptr_kv_store */
+	skel_v1->bss->test_key = 0;
+	skel_v1->bss->test_op = KVS_STRUCT_GET;
+	skel_v1->bss->target_pid = pid;
+	sys_gettid();
+	skel_v1->bss->target_pid = -1;
+
+	ASSERT_EQ(skel_v1->bss->test_struct_val.a, val.a, "bpf: check get val_v1.a == put val.a");
+	ASSERT_EQ(skel_v1->bss->test_struct_val.b, val.b, "bpf: check get val_v1.b == put val.b");
+
+out:
+	kv_store_close(kvs);
+}
+
 void test_uptr_kv_store(void)
 {
 	if (test__start_subtest("uptr_kv_store_basic"))
 		test_uptr_kv_store_basic();
+	if (test__start_subtest("uptr_kv_store_change_value"))
+		test_uptr_kv_store_change_value();
 }

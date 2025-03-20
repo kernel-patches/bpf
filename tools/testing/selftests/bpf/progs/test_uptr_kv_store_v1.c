@@ -8,7 +8,7 @@ pid_t target_pid = 0;
 int test_op;
 int test_key;
 int test_int_val;
-struct test_struct test_struct_val;
+struct test_struct_v1 test_struct_val;
 
 SEC("tp_btf/sys_enter")
 int on_enter(__u64 *ctx)
