@@ -5566,7 +5566,9 @@ union bpf_attr {
  *	Description
  *		Get a dynptr to local memory *data*.
  *
- *		*data* must be a ptr to a map value.
+ *		*data* must be a ptr to valid local memory such as a map value, a uptr,
+ *		a null-checked non-void pointer pass to a global subprogram, and allocated
+ *		memory returned by a kfunc such as hid_bpf_get_data(),
  *		The maximum *size* supported is DYNPTR_MAX_SIZE.
  *		*flags* is currently unused.
  *	Return

@@ -11366,7 +11366,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		}
 		break;
 	case BPF_FUNC_dynptr_from_mem:
-		if (regs[BPF_REG_1].type != PTR_TO_MAP_VALUE) {
+		if (regs[BPF_REG_1].type != PTR_TO_MAP_VALUE &&
+		    regs[BPF_REG_1].type != PTR_TO_MEM) {
 			verbose(env, "Unsupported reg type %s for bpf_dynptr_from_mem data\n",
 				reg_type_str(env, regs[BPF_REG_1].type));
 			return -EACCES;
