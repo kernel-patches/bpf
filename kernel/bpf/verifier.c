@@ -12117,6 +12117,7 @@ enum special_kfunc_type {
 	KF_bpf_res_spin_lock_irqsave,
 	KF_bpf_res_spin_unlock_irqrestore,
 	KF_bpf_dynptr_from_mem_slice,
+	KF_bpf_stream_get,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -12221,6 +12222,7 @@ BTF_ID(func, bpf_res_spin_unlock)
 BTF_ID(func, bpf_res_spin_lock_irqsave)
 BTF_ID(func, bpf_res_spin_unlock_irqrestore)
 BTF_ID(func, bpf_dynptr_from_mem_slice)
+BTF_ID(func, bpf_stream_get)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -13886,10 +13888,11 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			regs[BPF_REG_0].type = PTR_TO_BTF_ID;
 			regs[BPF_REG_0].btf_id = ptr_type_id;
 
-			if (meta.func_id == special_kfunc_list[KF_bpf_get_kmem_cache])
+			if (meta.func_id == special_kfunc_list[KF_bpf_get_kmem_cache]) {
 				regs[BPF_REG_0].type |= PTR_UNTRUSTED;
-
-			if (is_iter_next_kfunc(&meta)) {
+			} else if (meta.func_id == special_kfunc_list[KF_bpf_stream_get]) {
+				regs[BPF_REG_0].type |= PTR_TRUSTED;
+			} else if (is_iter_next_kfunc(&meta)) {
 				struct bpf_reg_state *cur_iter;
 
 				cur_iter = get_iter_from_state(env->cur_state, &meta);
@@ -21521,8 +21524,10 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		   desc->func_id == special_kfunc_list[KF_bpf_rdonly_cast]) {
 		insn_buf[0] = BPF_MOV64_REG(BPF_REG_0, BPF_REG_1);
 		*cnt = 1;
-	} else if (is_bpf_wq_set_callback_impl_kfunc(desc->func_id)) {
-		struct bpf_insn ld_addrs[2] = { BPF_LD_IMM64(BPF_REG_4, (long)env->prog->aux) };
+	} else if (is_bpf_wq_set_callback_impl_kfunc(desc->func_id) ||
+		   desc->func_id == special_kfunc_list[KF_bpf_stream_get]) {
+		u32 regno = is_bpf_wq_set_callback_impl_kfunc(desc->func_id) ? BPF_REG_4 : BPF_REG_2;
+		struct bpf_insn ld_addrs[2] = { BPF_LD_IMM64(regno, (long)env->prog->aux) };
 
 		insn_buf[0] = ld_addrs[0];
 		insn_buf[1] = ld_addrs[1];
