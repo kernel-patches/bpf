@@ -13882,10 +13882,9 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			regs[BPF_REG_0].type = PTR_TO_BTF_ID;
 			regs[BPF_REG_0].btf_id = ptr_type_id;
 
-			if (meta.func_id == special_kfunc_list[KF_bpf_get_kmem_cache])
+			if (meta.func_id == special_kfunc_list[KF_bpf_get_kmem_cache]) {
 				regs[BPF_REG_0].type |= PTR_UNTRUSTED;
-
-			if (is_iter_next_kfunc(&meta)) {
+			} else if (is_iter_next_kfunc(&meta)) {
 				struct bpf_reg_state *cur_iter;
 
 				cur_iter = get_iter_from_state(env->cur_state, &meta);

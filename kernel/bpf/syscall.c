@@ -576,7 +576,7 @@ static bool can_alloc_pages(void)
 		!IS_ENABLED(CONFIG_PREEMPT_RT);
 }
 
-static struct page *__bpf_alloc_page(int nid)
+struct page *__bpf_alloc_page(int nid)
 {
 	if (!can_alloc_pages())
 		return try_alloc_pages(nid, 0);
@@ -5794,6 +5794,28 @@ static int token_create(union bpf_attr *attr)
 	return bpf_token_create(attr);
 }
 
+#define BPF_PROG_STREAM_READ_BY_FD_LAST_FIELD prog_stream_read.prog_fd
+
+static int prog_stream_read(union bpf_attr *attr)
+{
+	char __user *buf = u64_to_user_ptr(attr->prog_stream_read.stream_buf);
+	u32 len = attr->prog_stream_read.stream_buf_len;
+	struct bpf_prog *prog;
+	int ret;
+
+	if (CHECK_ATTR(BPF_PROG_STREAM_READ_BY_FD))
+		return -EINVAL;
+
+	prog = bpf_prog_get(attr->prog_stream_read.prog_fd);
+	if (IS_ERR(prog))
+		return PTR_ERR(prog);
+
+	ret = bpf_prog_stream_read(prog, attr->prog_stream_read.stream_id, buf, len);
+	bpf_prog_put(prog);
+
+	return ret;
+}
+
 static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
 {
 	union bpf_attr attr;
@@ -5929,6 +5951,9 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
 		break;
 	case BPF_TOKEN_CREATE:
 		err = token_create(&attr);
+		break;
+	case BPF_PROG_STREAM_READ_BY_FD:
+		err = prog_stream_read(&attr);
 		break;
 	default:
 		err = -EINVAL;
