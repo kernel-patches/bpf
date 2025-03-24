@@ -27,7 +27,7 @@ __flag(BPF_F_ANY_ALIGNMENT)
 __naked void invalid_and_of_negative_number(void)
 {
 	asm volatile ("					\
-	r1 = 0;						\
+	r1 = 10;						\
 	*(u64*)(r10 - 8) = r1;				\
 	r2 = r10;					\
 	r2 += -8;					\
