@@ -281,6 +281,7 @@ static void htab_mem_read_mem_cgrp_file(const char *name, unsigned long *value)
 	got = read(fd, buf, sizeof(buf) - 1);
 	if (got <= 0) {
 		*value = 0;
+		close(fd);
 		return;
 	}
 	buf[got] = 0;
