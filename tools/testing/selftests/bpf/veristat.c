@@ -23,6 +23,7 @@
 #include <float.h>
 #include <math.h>
 #include <limits.h>
+#include <linux/err.h>
 
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
@@ -1486,7 +1487,124 @@ static bool is_preset_supported(const struct btf_type *t)
 	return btf_is_int(t) || btf_is_enum(t) || btf_is_enum64(t);
 }
 
-static int set_global_var(struct bpf_object *obj, struct btf *btf, const struct btf_type *t,
+struct btf_anon_stack {
+	const struct btf_type *type;
+	__u32 offset;
+};
+
+const struct btf_member *btf_find_member(const struct btf *btf,
+					 const struct btf_type *parent_type,
+					 const char *member_name,
+					 __u32 *anon_offset)
+{
+	struct btf_anon_stack *anon_stack;
+	const struct btf_member *retval = NULL;
+	__u32 cur_offset = 0;
+	const char *name;
+	int top = 0, i;
+
+	if (!btf_is_struct(parent_type) && !btf_is_union(parent_type))
+		return ERR_PTR(-EINVAL);
+
+	anon_stack = malloc(sizeof(*anon_stack));
+	if (!anon_stack)
+		return ERR_PTR(-ENOMEM);
+
+	anon_stack[top].type = parent_type;
+	anon_stack[top++].offset = 0;
+
+	do {
+		parent_type = anon_stack[--top].type;
+		cur_offset = anon_stack[top].offset;
+
+		for (i = 0; i < btf_vlen(parent_type); ++i) {
+			const struct btf_member *member;
+			const struct btf_type *member_type;
+			int member_tid;
+
+			member = btf_members(parent_type) + i;
+			member_tid =  btf__resolve_type(btf, member->type);
+			if (member_tid < 0) {
+				retval = ERR_PTR(-EINVAL);
+				goto out;
+			}
+			member_type = btf__type_by_id(btf, member_tid);
+			if (member->name_off) {
+				name = btf__name_by_offset(btf, member->name_off);
+				if (name && strcmp(member_name, name) == 0) {
+					*anon_offset = cur_offset;
+					retval = member;
+					goto out;
+				}
+			} else if (btf_is_struct(member_type) || btf_is_union(member_type)) {
+				struct btf_anon_stack *tmp;
+				/* Anonymous union/struct: push to stack */
+				tmp = realloc(anon_stack, (top + 1) * sizeof(*anon_stack));
+				if (!tmp) {
+					retval = ERR_PTR(-ENOMEM);
+					goto out;
+				}
+				anon_stack = tmp;
+				anon_stack[top].type = member_type;
+				anon_stack[top++].offset = cur_offset + member->offset;
+			}
+		}
+	} while (top > 0);
+out:
+	free(anon_stack);
+	return retval;
+}
+
+static int adjust_var_secinfo_tok(char **name_tok, const struct btf *btf,
+				  const struct btf_type *t, struct btf_var_secinfo *sinfo)
+{
+	char *name = strtok_r(NULL, ".", name_tok);
+	const struct btf_type *member_type;
+	const struct btf_member *member;
+	int member_tid;
+	__u32 anon_offset = 0;
+
+	if (!name)
+		return 0;
+
+	member = btf_find_member(btf, t, name, &anon_offset);
+	if (IS_ERR(member)) {
+		fprintf(stderr, "Could not find member %s\n", name);
+		return -EINVAL;
+	}
+
+	member_tid = btf__resolve_type(btf, member->type);
+	member_type = btf__type_by_id(btf, member_tid);
+
+	if (btf_kflag(t)) {
+		fprintf(stderr, "Bitfield presets are not supported %s\n", name);
+		return -EINVAL;
+	}
+	sinfo->offset += (member->offset + anon_offset) / 8;
+	sinfo->size = member_type->size;
+	sinfo->type = member_tid;
+
+	return adjust_var_secinfo_tok(name_tok, btf, member_type, sinfo);
+}
+
+static int adjust_var_secinfo(struct btf *btf, const struct btf_type *t,
+			      struct btf_var_secinfo *sinfo, const char *var)
+{
+	char expr[256], *saveptr;
+	const struct btf_type *base_type;
+	int err;
+
+	base_type = btf__type_by_id(btf, btf__resolve_type(btf, t->type));
+	strncpy(expr, var, 256);
+	strtok_r(expr, ".", &saveptr);
+	err = adjust_var_secinfo_tok(&saveptr, btf, base_type, sinfo);
+	if (err)
+		return err;
+
+	return 0;
+}
+
+static int set_global_var(struct bpf_object *obj, struct btf *btf,
 			  struct bpf_map *map, struct btf_var_secinfo *sinfo,
 			  struct var_preset *preset)
 {
@@ -1495,9 +1613,9 @@ static int set_global_var(struct bpf_object *obj, struct btf *btf, const struct 
 	long long value = preset->ivalue;
 	size_t size;
 
-	base_type = btf__type_by_id(btf, btf__resolve_type(btf, t->type));
+	base_type = btf__type_by_id(btf, btf__resolve_type(btf, sinfo->type));
 	if (!base_type) {
-		fprintf(stderr, "Failed to resolve type %d\n", t->type);
+		fprintf(stderr, "Failed to resolve type %d\n", sinfo->type);
 		return -EINVAL;
 	}
 	if (!is_preset_supported(base_type)) {
@@ -1530,7 +1648,7 @@ static int set_global_var(struct bpf_object *obj, struct btf *btf, const struct 
 		if (value >= max_val || value < -max_val) {
 			fprintf(stderr,
 				"Variable %s value %lld is out of range [%lld; %lld]\n",
-				btf__name_by_offset(btf, t->name_off), value,
+				btf__name_by_offset(btf, base_type->name_off), value,
 				is_signed ? -max_val : 0, max_val - 1);
 			return -EINVAL;
 		}
@@ -1590,7 +1708,12 @@ static int set_global_vars(struct bpf_object *obj, struct var_preset *presets, i
 			var_name = btf__name_by_offset(btf, var_type->name_off);
 
 			for (k = 0; k < npresets; ++k) {
-				if (strcmp(var_name, presets[k].name) != 0)
+				struct btf_var_secinfo tmp_sinfo;
+				int var_len = strlen(var_name);
+
+				if (strncmp(var_name, presets[k].name, var_len) != 0 ||
+				    (presets[k].name[var_len] != '\0' &&
+				     presets[k].name[var_len] != '.'))
 					continue;
 
 				if (presets[k].applied) {
@@ -1598,13 +1721,17 @@ static int set_global_vars(struct bpf_object *obj, struct var_preset *presets, i
 						var_name);
 					return -EINVAL;
 				}
+				memcpy(&tmp_sinfo, sinfo, sizeof(*sinfo));
+				err = adjust_var_secinfo(btf, var_type,
+							 &tmp_sinfo, presets[k].name);
+				if (err)
+					return err;
 
-				err = set_global_var(obj, btf, var_type, map, sinfo, presets + k);
+				err = set_global_var(obj, btf, map, &tmp_sinfo, presets + k);
 				if (err)
 					return err;
 
 				presets[k].applied = true;
-				break;
 			}
 		}
 	}
