@@ -28,7 +28,7 @@ __naked void invalid_and_of_negative_number(void)
 {
 	asm volatile ("					\
 	r1 = 0;						\
-	*(u64*)(r10 - 8) = r1;				\
+	*(u64*)(r10 - 48) = r1;				\
 	r2 = r10;					\
 	r2 += -8;					\
 	r1 = %[map_hash_48b] ll;			\
