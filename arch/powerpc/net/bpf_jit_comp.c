@@ -833,7 +833,12 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	EMIT(PPC_RAW_STL(_R26, _R1, nvr_off + SZL));
 
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
-		PPC_LI_ADDR(_R3, (unsigned long)im);
+		/*
+		 * Emit maximum possible instructions while getting the size of
+		 * bpf trampoline to ensure trampoline JIT code doesn't overflow.
+		 */
+		PPC_LI_ADDR(_R3, im ? (unsigned long)im :
+				(unsigned long)(~(1UL << (BITS_PER_LONG - 1))));
 		ret = bpf_jit_emit_func_call_rel(image, ro_image, ctx,
 						 (unsigned long)__bpf_tramp_enter);
 		if (ret)
@@ -889,7 +894,8 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 			bpf_trampoline_restore_tail_call_cnt(image, ctx, func_frame_offset, r4_off);
 
 		/* Reserve space to patch branch instruction to skip fexit progs */
-		im->ip_after_call = &((u32 *)ro_image)[ctx->idx];
+		if (im)
+			im->ip_after_call = &((u32 *)ro_image)[ctx->idx];
 		EMIT(PPC_RAW_NOP());
 	}
 
@@ -912,8 +918,14 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		}
 
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
-		im->ip_epilogue = &((u32 *)ro_image)[ctx->idx];
-		PPC_LI_ADDR(_R3, im);
+		if (im)
+			im->ip_epilogue = &((u32 *)ro_image)[ctx->idx];
+		/*
+		 * Emit maximum possible instructions while getting the size of
+		 * bpf trampoline to ensure trampoline JIT code doesn't overflow.
+		 */
+		PPC_LI_ADDR(_R3, im ? (unsigned long)im :
+				(unsigned long)(~(1UL << (BITS_PER_LONG - 1))));
 		ret = bpf_jit_emit_func_call_rel(image, ro_image, ctx,
 						 (unsigned long)__bpf_tramp_exit);
 		if (ret)
@@ -972,7 +984,6 @@ cleanup:
 int arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
 			     struct bpf_tramp_links *tlinks, void *func_addr)
 {
-	struct bpf_tramp_image im;
 	void *image;
 	int ret;
 
@@ -988,7 +999,13 @@ int arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
 	if (!image)
 		return -ENOMEM;
 
-	ret = __arch_prepare_bpf_trampoline(&im, image, image + PAGE_SIZE, image,
+	/*
+	 * Pass NULL as bpf_tramp_image pointer to differentiate the intent to get the
+	 * buffer size for trampoline here. This differentiation helps in accounting for
+	 * maximum possible instructions if the JIT code size is likely to vary during
+	 * the actual JIT compile of the trampoline.
+	 */
+	ret = __arch_prepare_bpf_trampoline(NULL, image, image + PAGE_SIZE, image,
 					    m, flags, tlinks, func_addr);
 	bpf_jit_free_exec(image);
 
