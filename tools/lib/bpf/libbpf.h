@@ -940,6 +940,14 @@ LIBBPF_API int bpf_program__set_log_level(struct bpf_program *prog, __u32 log_le
 LIBBPF_API const char *bpf_program__log_buf(const struct bpf_program *prog, size_t *log_size);
 LIBBPF_API int bpf_program__set_log_buf(struct bpf_program *prog, char *log_buf, size_t log_size);
 
+LIBBPF_API void *bpf_program__func_info(struct bpf_program *prog);
+LIBBPF_API __u32 bpf_program__func_info_cnt(struct bpf_program *prog);
+LIBBPF_API __u32 bpf_program__func_info_rec_size(struct bpf_program *prog);
+
+LIBBPF_API void *bpf_program__line_info(struct bpf_program *prog);
+LIBBPF_API __u32 bpf_program__line_info_cnt(struct bpf_program *prog);
+LIBBPF_API __u32 bpf_program__line_info_rec_size(struct bpf_program *prog);
+
 /**
  * @brief **bpf_program__set_attach_target()** sets BTF-based attach target
  * for supported BPF program types:
