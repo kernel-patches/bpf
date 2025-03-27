@@ -7370,7 +7370,16 @@ struct bpf_wq {
 } __attribute__((aligned(8)));
 
 struct bpf_dynptr {
-	__u64 __opaque[2];
+	union {
+		/* For bpf program */
+		__u64 __opaque[2];
+		/* For userspace application only */
+		struct {
+			__bpf_md_ptr(void *, data);
+			__u32 size;
+			__u32 reserved;
+		};
+	};
 } __attribute__((aligned(8)));
 
 struct bpf_list_head {
