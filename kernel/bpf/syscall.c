@@ -1262,9 +1262,10 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 			ret = -EACCES;
 			goto free_map_tab;
 		}
-		/* Enable for BPF_MAP_TYPE_HASH later */
-		ret = -EOPNOTSUPP;
-		goto free_map_tab;
+		if (map->map_type != BPF_MAP_TYPE_HASH) {
+			ret = -EOPNOTSUPP;
+			goto free_map_tab;
+		}
 	} else if (IS_ERR(map->key_record)) {
 		/* Return an error early even the bpf program doesn't use it */
 		ret = PTR_ERR(map->key_record);
