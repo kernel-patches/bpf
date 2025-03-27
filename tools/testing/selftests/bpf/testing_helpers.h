@@ -58,4 +58,13 @@ int get_xlated_program(int fd_prog, struct bpf_insn **buf, __u32 *cnt);
 int testing_prog_flags(void);
 bool is_jit_enabled(void);
 
+/* sys_bpf() will check the validity of data and size */
+static inline void bpf_dynptr_user_init(void *data, __u32 size,
+					struct bpf_dynptr *dynptr)
+{
+	dynptr->data = data;
+	dynptr->size = size;
+	dynptr->reserved = 0;
+}
+
 #endif /* __TESTING_HELPERS_H */
