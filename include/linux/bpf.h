@@ -206,6 +206,7 @@ enum btf_field_type {
 	BPF_WORKQUEUE  = (1 << 10),
 	BPF_UPTR       = (1 << 11),
 	BPF_RES_SPIN_LOCK = (1 << 12),
+	BPF_DYNPTR     = (1 << 13),
 };
 
 typedef void (*btf_dtor_kfunc_t)(void *);
