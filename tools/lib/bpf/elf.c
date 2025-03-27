@@ -439,8 +439,10 @@ int elf_resolve_syms_offsets(const char *binary_path, int cnt,
 		struct elf_sym *sym;
 
 		err = elf_sym_iter_new(&iter, elf_fd.elf, binary_path, sh_types[i], st_type);
-		if (err == -ENOENT)
+		if (err == -ENOENT) {
+			err = 0;
 			continue;
+		}
 		if (err)
 			goto out;
 
