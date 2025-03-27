@@ -3513,6 +3513,7 @@ static int btf_get_field_type(const struct btf *btf, const struct btf_type *var_
 	field_mask_test_name(BPF_RB_ROOT,   "bpf_rb_root");
 	field_mask_test_name(BPF_RB_NODE,   "bpf_rb_node");
 	field_mask_test_name(BPF_REFCOUNT,  "bpf_refcount");
+	field_mask_test_name(BPF_DYNPTR,    "bpf_dynptr");
 
 	/* Only return BPF_KPTR when all other types with matchable names fail */
 	if (field_mask & (BPF_KPTR | BPF_UPTR) && !__btf_type_is_struct(var_type)) {
@@ -3551,6 +3552,7 @@ static int btf_repeat_fields(struct btf_field_info *info, int info_cnt,
 		case BPF_UPTR:
 		case BPF_LIST_HEAD:
 		case BPF_RB_ROOT:
+		case BPF_DYNPTR:
 			break;
 		default:
 			return -EINVAL;
@@ -3674,6 +3676,7 @@ static int btf_find_field_one(const struct btf *btf,
 	case BPF_LIST_NODE:
 	case BPF_RB_NODE:
 	case BPF_REFCOUNT:
+	case BPF_DYNPTR:
 		ret = btf_find_struct(btf, var_type, off, sz, field_type,
 				      info_cnt ? &info[0] : &tmp);
 		if (ret < 0)
@@ -4037,6 +4040,7 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 			break;
 		case BPF_LIST_NODE:
 		case BPF_RB_NODE:
+		case BPF_DYNPTR:
 			break;
 		default:
 			ret = -EFAULT;
