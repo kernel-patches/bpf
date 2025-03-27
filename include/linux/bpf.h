@@ -316,6 +316,11 @@ struct bpf_map {
 	s64 __percpu *elem_count;
 };
 
+static inline bool bpf_map_has_dynptr_key(const struct bpf_map *map)
+{
+	return !!map->key_record;
+}
+
 static inline const char *btf_field_type_name(enum btf_field_type type)
 {
 	switch (type) {
