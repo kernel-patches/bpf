@@ -38,3 +38,13 @@ int BPF_PROG(test3, __u64 a, __u64 b, __u64 c, __u64 d, __u64 e, __u64 f,
 		i == 24 && j == 25 && k == 26 && ret == 231;
 	return 0;
 }
+
+__u64 test4_result = 0;
+SEC("fexit/bpf_testmod_fentry_test12")
+int BPF_PROG2(test4, __int128, a, __int128, b, __int128, c, __int128, d, int, e,
+	      __int128, f, int, ret)
+{
+	test4_result = a == 27 && b == 28 && c == 29 && d == 30 && e == 31 && f == 32 && ret == 177;
+	return 0;
+}
+

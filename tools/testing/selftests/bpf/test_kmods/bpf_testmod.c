@@ -62,6 +62,11 @@ struct bpf_testmod_struct_arg_5 {
 	long d;
 };
 
+struct bpf_testmod_struct_arg_6 {
+	u64 a;
+	u64 b;
+};
+
 __bpf_hook_start();
 
 noinline int
@@ -125,6 +130,28 @@ bpf_testmod_test_struct_arg_9(u64 a, void *b, short c, int d, void *e, char f,
 {
 	bpf_testmod_test_struct_arg_result = a + (long)b + c + d + (long)e +
 		f + g + h.a + h.b + h.c + h.d + i;
+	return bpf_testmod_test_struct_arg_result;
+}
+
+noinline int bpf_testmod_test_struct_arg_10(struct bpf_testmod_struct_arg_6 a,
+					    struct bpf_testmod_struct_arg_6 b,
+					    struct bpf_testmod_struct_arg_6 c,
+					    struct bpf_testmod_struct_arg_6 d,
+					    short e,
+					    struct bpf_testmod_struct_arg_6 f)
+{
+	bpf_testmod_test_struct_arg_result =
+		a.a + a.b + b.a + b.b + c.a + c.b + d.a + d.b + e + f.a + f.b;
+	return bpf_testmod_test_struct_arg_result;
+}
+
+noinline int bpf_testmod_test_struct_arg_11(__int128 a,
+					    __int128 b,
+					    __int128 c,
+					    __int128 d, short e,
+					    __int128 f)
+{
+	bpf_testmod_test_struct_arg_result = a + b + c + d + e + f;
 	return bpf_testmod_test_struct_arg_result;
 }
 
@@ -381,6 +408,16 @@ noinline int bpf_testmod_fentry_test11(u64 a, void *b, short c, int d,
 	return a + (long)b + c + d + (long)e + f + g + h + i + j + k;
 }
 
+noinline int bpf_testmod_fentry_test12(__int128 a,
+					__int128 b,
+					__int128 c,
+					__int128 d,
+					int e,
+					__int128 f)
+{
+	return a + b + c + d + e + f;
+}
+
 int bpf_testmod_fentry_ok;
 
 noinline ssize_t
@@ -398,6 +435,11 @@ bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 	struct bpf_testmod_struct_arg_3 *struct_arg3;
 	struct bpf_testmod_struct_arg_4 struct_arg4 = {21, 22};
 	struct bpf_testmod_struct_arg_5 struct_arg5 = {23, 24, 25, 26};
+	struct bpf_testmod_struct_arg_6 struct_arg6_a = {27, 28};
+	struct bpf_testmod_struct_arg_6 struct_arg6_b = {29, 30};
+	struct bpf_testmod_struct_arg_6 struct_arg6_c = {31, 32};
+	struct bpf_testmod_struct_arg_6 struct_arg6_d = {33, 34};
+	struct bpf_testmod_struct_arg_6 struct_arg6_f = {36, 37};
 	int i = 1;
 
 	while (bpf_testmod_return_ptr(i))
@@ -414,6 +456,12 @@ bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 					    (void *)20, struct_arg4, 23);
 	(void)bpf_testmod_test_struct_arg_9(16, (void *)17, 18, 19, (void *)20,
 					    21, 22, struct_arg5, 27);
+
+	(void)bpf_testmod_test_struct_arg_10(struct_arg6_a, struct_arg6_b,
+					     struct_arg6_c, struct_arg6_d, 35,
+					     struct_arg6_f);
+
+	(void)bpf_testmod_test_struct_arg_11(38, 39, 40, 41, 42, 43);
 
 	(void)bpf_testmod_test_arg_ptr_to_struct(&struct_arg1_2);
 
@@ -453,7 +501,8 @@ bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 	    bpf_testmod_fentry_test7(16, (void *)17, 18, 19, (void *)20,
 			21, 22) != 133 ||
 	    bpf_testmod_fentry_test11(16, (void *)17, 18, 19, (void *)20,
-			21, 22, 23, 24, 25, 26) != 231)
+			21, 22, 23, 24, 25, 26) != 231 ||
+	    bpf_testmod_fentry_test12(27, 28, 29, 30, 31, 32) != 177)
 		goto out;
 
 	bpf_testmod_fentry_ok = 1;

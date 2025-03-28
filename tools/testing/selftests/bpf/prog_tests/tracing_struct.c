@@ -108,6 +108,20 @@ static void test_struct_many_args(void)
 	ASSERT_EQ(skel->bss->t9_i, 27, "t9:i");
 	ASSERT_EQ(skel->bss->t9_ret, 258, "t9 ret");
 
+	ASSERT_EQ(skel->bss->t10_a_a, 27, "t10:a.a");
+	ASSERT_EQ(skel->bss->t10_a_b, 28, "t10:a.b");
+	ASSERT_EQ(skel->bss->t10_b_a, 29, "t10:b.a");
+	ASSERT_EQ(skel->bss->t10_b_b, 30, "t10:b.b");
+	ASSERT_EQ(skel->bss->t10_c_a, 31, "t10:c.a");
+	ASSERT_EQ(skel->bss->t10_c_b, 32, "t10:c.b");
+	ASSERT_EQ(skel->bss->t10_d_a, 33, "t10:d.a");
+	ASSERT_EQ(skel->bss->t10_d_b, 34, "t10:d.b");
+	ASSERT_EQ(skel->bss->t10_e, 35, "t10:e");
+	ASSERT_EQ(skel->bss->t10_f_a, 36, "t10:f.a");
+	ASSERT_EQ(skel->bss->t10_f_b, 37, "t10:f.b");
+
+	ASSERT_EQ(skel->bss->t10_ret, 352, "t10 ret");
+
 destroy_skel:
 	tracing_struct_many_args__destroy(skel);
 }
