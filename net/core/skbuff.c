@@ -5552,6 +5552,9 @@ static void skb_tstamp_tx_report_bpf_timestamping(struct sk_buff *skb,
 	case SCM_TSTAMP_ACK:
 		op = BPF_SOCK_OPS_TSTAMP_ACK_CB;
 		break;
+	case SCM_TSTAMP_COMPLETION:
+		op = BPF_SOCK_OPS_TSTAMP_COMPLETION_CB;
+		break;
 	default:
 		return;
 	}

@@ -7062,6 +7062,11 @@ enum {
 					 * sendmsg timestamp with corresponding
 					 * tskey.
 					 */
+	BPF_SOCK_OPS_TSTAMP_COMPLETION_CB,	/* Called on skb completion
+						 * report from hardware when
+						 * SK_BPF_CB_TX_TIMESTAMPING
+						 * feature is on.
+						 */
 };
 
 /* List of TCP states. There is a build check in net/ipv4/tcp.c to detect
