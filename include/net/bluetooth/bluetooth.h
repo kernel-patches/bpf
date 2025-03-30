@@ -383,6 +383,7 @@ struct bt_sock {
 	struct list_head accept_q;
 	struct sock *parent;
 	unsigned long flags;
+	atomic_t bpf_tskey;
 	void (*skb_msg_name)(struct sk_buff *, void *, int *);
 	void (*skb_put_cmsg)(struct sk_buff *, struct msghdr *, struct sock *);
 };
