@@ -30,9 +30,49 @@ check_connection()
 	local message=${3}
 	RET=0
 
+	ip netns exec ${ns}        nstat >/dev/null
+	ip netns exec ${xvlan2_ns} nstat >/dev/null
 	ip netns exec ${ns} ping ${target} -c 4 -i 0.1 &>/dev/null
-	check_err $? "ping failed"
+	R=$?
+	N=$( ip netns exec ${ns}        nstat)
+	N2=$(ip netns exec ${xvlan2_ns} nstat)
+	check_err $R "ping failed"
 	log_test "${bond_mode}/${xvlan_type}_${xvlan_mode}: ${message}"
+
+	if [ $R -ne 0 ]; then
+	    echo "==="
+	    echo $O
+	    echo
+	    echo $N
+	    echo
+	    echo $N2
+	    echo
+	    echo 'local'
+	    ip link
+	    echo
+	    ip addr
+	    echo
+	    ip neigh
+	    echo
+	    ip route
+	    echo 'ns'
+	    ip -s -s -netns ${ns} link
+	    echo
+	    ip -netns ${ns} addr
+	    echo
+	    ip -netns ${ns} neigh
+	    echo
+	    ip -netns ${ns} route
+	    echo 'X ns 2'
+	    ip -s -s -netns ${xvlan2_ns} link
+	    echo
+	    ip -netns ${xvlan2_ns} addr
+	    echo
+	    ip -netns ${xvlan2_ns} neigh
+	    echo
+	    ip -netns ${xvlan2_ns} route
+	    echo "=<="
+	fi
 }
 
 xvlan_over_bond()
