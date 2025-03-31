@@ -35,12 +35,16 @@
 #include "main.h"
 #include "xlated_dumper.h"
 
+#include "stream.skel.h"
+
 #define BPF_METADATA_PREFIX "bpf_metadata_"
 #define BPF_METADATA_PREFIX_LEN (sizeof(BPF_METADATA_PREFIX) - 1)
 
 enum dump_mode {
 	DUMP_JITED,
 	DUMP_XLATED,
+	DUMP_STDOUT,
+	DUMP_STDERR,
 };
 
 static const bool attach_types[] = {
@@ -697,6 +701,55 @@ static int do_show(int argc, char **argv)
 	return err;
 }
 
+static int process_stream_sample(void *ctx, void *data, size_t len)
+{
+	FILE *file = ctx;
+
+	fprintf(file, "%s", (char *)data);
+	fflush(file);
+	return 0;
+}
+
+static int
+prog_dump_stream(struct bpf_prog_info *info, enum dump_mode mode, const char *filepath)
+{
+	FILE *file = mode == DUMP_STDOUT ? stdout : stderr;
+	LIBBPF_OPTS(bpf_test_run_opts, opts);
+	struct ring_buffer *ringbuf;
+	struct stream_bpf *skel;
+	int map_fd, ret = -1;
+
+	__u32 prog_id = info->id;
+	__u32 stream_id = mode == DUMP_STDOUT ? 1 : 2;
+
+	skel = stream_bpf__open_and_load();
+	if (!skel)
+		return -errno;
+	skel->bss->prog_id = prog_id;
+	skel->bss->stream_id = stream_id;
+
+	//TODO(kkd): Filepath handling
+	map_fd = bpf_map__fd(skel->maps.ringbuf);
+	ringbuf = ring_buffer__new(map_fd, process_stream_sample, file, NULL);
+	if (!ringbuf) {
+		ret = -errno;
+		goto end;
+	}
+	do {
+		skel->bss->written_count = skel->bss->written_size = 0;
+		ret = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.bpftool_dump_prog_stream), &opts);
+		ret = -EINVAL;
+		if (ring_buffer__consume_n(ringbuf, skel->bss->written_count) != skel->bss->written_count)
+			goto end;
+	} while (!ret && opts.retval == EAGAIN);
+
+	if (opts.retval != 0)
+		ret = -EINVAL;
+end:
+	stream_bpf__destroy(skel);
+	return ret;
+}
+
 static int
 prog_dump(struct bpf_prog_info *info, enum dump_mode mode,
 	  char *filepath, bool opcodes, bool visual, bool linum)
@@ -719,13 +772,15 @@ prog_dump(struct bpf_prog_info *info, enum dump_mode mode,
 		}
 		buf = u64_to_ptr(info->jited_prog_insns);
 		member_len = info->jited_prog_len;
-	} else {	/* DUMP_XLATED */
+	} else if (mode == DUMP_XLATED) {	/* DUMP_XLATED */
 		if (info->xlated_prog_len == 0 || !info->xlated_prog_insns) {
 			p_err("error retrieving insn dump: kernel.kptr_restrict set?");
 			return -1;
 		}
 		buf = u64_to_ptr(info->xlated_prog_insns);
 		member_len = info->xlated_prog_len;
+	} else if (mode == DUMP_STDOUT || mode == DUMP_STDERR) {
+		return prog_dump_stream(info, mode, filepath);
 	}
 
 	if (info->btf_id) {
@@ -898,8 +953,10 @@ static int do_dump(int argc, char **argv)
 		mode = DUMP_JITED;
 	} else if (is_prefix(*argv, "xlated")) {
 		mode = DUMP_XLATED;
+	} else if (is_prefix(*argv, "stdout") || is_prefix(*argv, "stderr")) {
+		mode = is_prefix(*argv, "stdout") ? DUMP_STDOUT : DUMP_STDERR;
 	} else {
-		p_err("expected 'xlated' or 'jited', got: %s", *argv);
+		p_err("expected 'stdout', 'stderr', 'xlated' or 'jited', got: %s", *argv);
 		return -1;
 	}
 	NEXT_ARG();
@@ -946,6 +1003,14 @@ static int do_dump(int argc, char **argv)
 			NEXT_ARG();
 		} else {
 			usage();
+			goto exit_close;
+		}
+	}
+
+	if (mode == DUMP_STDOUT || mode == DUMP_STDERR) {
+		if (opcodes || visual || linum) {
+			p_err("'%s' is not compatible with 'opcodes', 'visual', or 'linum'",
+			      mode == DUMP_STDOUT ? "stdout" : "stderr");
 			goto exit_close;
 		}
 	}
@@ -2468,6 +2533,8 @@ static int do_help(int argc, char **argv)
 		"Usage: %1$s %2$s { show | list } [PROG]\n"
 		"       %1$s %2$s dump xlated PROG [{ file FILE | [opcodes] [linum] [visual] }]\n"
 		"       %1$s %2$s dump jited  PROG [{ file FILE | [opcodes] [linum] }]\n"
+		"	%1$s %2$s dump stdout PROG [{ file FILE }]\n"
+		"	%1$s %2$s dump stderr PROG [{ file FILE }]\n"
 		"       %1$s %2$s pin   PROG FILE\n"
 		"       %1$s %2$s { load | loadall } OBJ  PATH \\\n"
 		"                         [type TYPE] [{ offload_dev | xdpmeta_dev } NAME] \\\n"
