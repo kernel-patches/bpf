@@ -2765,8 +2765,9 @@ union bpf_attr {
  *
  * long bpf_xdp_adjust_head(struct xdp_buff *xdp_md, int delta)
  * 	Description
- * 		Adjust (move) *xdp_md*\ **->data** by *delta* bytes. Note that
- * 		it is possible to use a negative value for *delta*. This helper
+ *		Adjust (move) *xdp_md*\ **->data** by *delta* bytes. Note that
+ *		it is possible to use a negative value for *delta*. If *delta*
+ *		is negative, the new header will be memset to zero. This helper
  * 		can be used to prepare the packet for pushing or popping
  * 		headers.
  *
@@ -2994,7 +2995,8 @@ union bpf_attr {
  * long bpf_xdp_adjust_meta(struct xdp_buff *xdp_md, int delta)
  * 	Description
  * 		Adjust the address pointed by *xdp_md*\ **->data_meta** by
- * 		*delta* (which can be positive or negative). Note that this
+ *		*delta* (which can be positive or negative). If *delta* is
+ *		negative, the new meta will be memset to zero. Note that this
  * 		operation modifies the address stored in *xdp_md*\ **->data**,
  * 		so the latter must be loaded only after the helper has been
  * 		called.

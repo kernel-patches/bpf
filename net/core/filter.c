@@ -3947,6 +3947,8 @@ BPF_CALL_2(bpf_xdp_adjust_head, struct xdp_buff *, xdp, int, offset)
 	if (metalen)
 		memmove(xdp->data_meta + offset,
 			xdp->data_meta, metalen);
+	if (offset < 0)
+		memset(data, 0, -offset);
 	xdp->data_meta += offset;
 	xdp->data = data;
 
@@ -4239,7 +4241,8 @@ BPF_CALL_2(bpf_xdp_adjust_meta, struct xdp_buff *, xdp, int, offset)
 		return -EINVAL;
 	if (unlikely(xdp_metalen_invalid(metalen)))
 		return -EACCES;
-
+	if (offset < 0)
+		memset(meta, 0, -offset);
 	xdp->data_meta = meta;
 
 	return 0;
