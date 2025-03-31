@@ -3113,9 +3113,10 @@ static bool btf_needs_sanitization(struct bpf_object *obj)
 	bool has_type_tag = kernel_supports(obj, FEAT_BTF_TYPE_TAG);
 	bool has_enum64 = kernel_supports(obj, FEAT_BTF_ENUM64);
 	bool has_qmark_datasec = kernel_supports(obj, FEAT_BTF_QMARK_DATASEC);
+    bool has_kind_bit_support = kernel_supports(obj, FEAT_BTF_TYPE_KIND_FLAG);
 
 	return !has_func || !has_datasec || !has_func_global || !has_float ||
-	       !has_decl_tag || !has_type_tag || !has_enum64 || !has_qmark_datasec;
+	       !has_decl_tag || !has_type_tag || !has_enum64 || !has_qmark_datasec || has_kind_bit_support;
 }
 
 static int bpf_object__sanitize_btf(struct bpf_object *obj, struct btf *btf)
@@ -3128,6 +3129,7 @@ static int bpf_object__sanitize_btf(struct bpf_object *obj, struct btf *btf)
 	bool has_type_tag = kernel_supports(obj, FEAT_BTF_TYPE_TAG);
 	bool has_enum64 = kernel_supports(obj, FEAT_BTF_ENUM64);
 	bool has_qmark_datasec = kernel_supports(obj, FEAT_BTF_QMARK_DATASEC);
+	bool has_kind_bit_support = kernel_supports(obj, FEAT_BTF_TYPE_KIND_FLAG);
 
 	char name_gen_buff[32] = {0};
 	int enum64_placeholder_id = 0;
@@ -3263,6 +3265,64 @@ static int bpf_object__sanitize_btf(struct bpf_object *obj, struct btf *btf)
 				m->type = enum64_placeholder_id;
 				m->offset = 0;
 			}
+		} else if (!has_kind_bit_support && (btf_is_struct(t) || btf_is_union(t) || btf_is_fwd(t) || btf_is_enum(t) || btf_is_enum64(t))) {
+			const uint16_t members_cnt = btf_vlen(t);
+
+			/* type encoded with a kind flag */
+		    if (t->info != BTF_INFO_ENC(btf_kind(t), 1, members_cnt)) {
+		        continue;
+		    }
+
+		    /* unset kind flag anyway */
+		    t->info = BTF_INFO_ENC(btf_kind(t), 0, btf_vlen(t));
+
+		    /* structs an unions has a different bitfield processing behaviour is kind flag is set */
+		    if (btf_is_struct(t) || btf_is_union(t)) {
+		        struct btf_member* members = btf_members(t);
+				struct btf_type* new_int_type = NULL;
+				int new_int_type_id;
+				__u32* new_int_type_data;
+				int encoding = 0;
+		        int nmember;
+
+		        for (nmember = 0; nmember < members_cnt; nmember++) {
+		            struct btf_member* member = &members[nmember];
+		            const struct btf_type* member_type = btf_type_by_id(btf, member->type);
+
+		            while (btf_is_typedef(member_type)) { /* unwrap typedefs */
+		                member_type = btf_type_by_id(btf, member_type->type);
+		            }
+
+		            /* bitfields can be only int or enum values */
+		            if (!(btf_is_int(member_type) || btf_is_enum(member_type))) {
+		                continue;
+		            }
+
+		            encoding = btf_int_encoding(member_type);
+		            if (btf_is_enum(member_type) && member_type->info & 0x80000000 /* kind flag */) {
+		                /* enum value encodes integer signed/unsigned info in the kind flag */
+		                encoding = BTF_INT_SIGNED;
+		            }
+
+		            /* create new integral type with the same info */
+		            snprintf(name_gen_buff, sizeof(name_gen_buff), "__int_%d_%d", i, nmember);
+		            new_int_type_id = btf__add_int(btf, name_gen_buff, member_type->size, encoding);
+
+		            if (new_int_type_id < 0) {
+		                pr_warn("Error adding integer type for a bitfield %d of [%d]", nmember, i);
+		                return new_int_type_id;
+		            }
+
+		            new_int_type = btf_type_by_id(btf, new_int_type_id);
+
+		            /* encode int in legacy way, keep offset 0 and specify bit size as set in the member */
+		            new_int_type_data = (__u32*)(new_int_type + 1);
+		            *new_int_type_data = BTF_INT_ENC(encoding, 0, BTF_MEMBER_BITFIELD_SIZE(member->offset));
+
+		            member->type = new_int_type_id;
+		            member->offset = BTF_MEMBER_BIT_OFFSET(member->offset) /* old kernels looks only on offset */;
+		        }
+		    }
 		}
 	}
 
