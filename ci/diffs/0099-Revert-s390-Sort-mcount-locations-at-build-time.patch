@@ -1,0 +1,38 @@
+From df11fe822d2f44a80cdafb35db673b0bc7e602ab Mon Sep 17 00:00:00 2001
+From: Ihor Solodrai <ihor.solodrai@linux.dev>
+Date: Tue, 1 Apr 2025 10:35:55 -0700
+Subject: [PATCH] Revert "s390: Sort mcount locations at build time"
+
+This reverts commit fa1518875286c94111bdaf1c7bae188c9c426c6b.
+---
+ arch/s390/Kconfig                 | 1 -
+ arch/s390/configs/debug_defconfig | 1 -
+ 2 files changed, 2 deletions(-)
+
+diff --git a/arch/s390/Kconfig b/arch/s390/Kconfig
+index 6412e39a795d..594a2993f5c6 100644
+--- a/arch/s390/Kconfig
++++ b/arch/s390/Kconfig
+@@ -182,7 +182,6 @@ config S390
+ 	select HAVE_ARCH_TRANSPARENT_HUGEPAGE
+ 	select HAVE_ARCH_VMAP_STACK
+ 	select HAVE_ASM_MODVERSIONS
+-	select HAVE_BUILDTIME_MCOUNT_SORT
+ 	select HAVE_CMPXCHG_DOUBLE
+ 	select HAVE_CMPXCHG_LOCAL
+ 	select HAVE_DEBUG_KMEMLEAK
+diff --git a/arch/s390/configs/debug_defconfig b/arch/s390/configs/debug_defconfig
+index 8b825e3578d8..b32a7915922c 100644
+--- a/arch/s390/configs/debug_defconfig
++++ b/arch/s390/configs/debug_defconfig
+@@ -885,7 +885,6 @@ CONFIG_USER_EVENTS=y
+ CONFIG_HIST_TRIGGERS=y
+ CONFIG_FTRACE_STARTUP_TEST=y
+ # CONFIG_EVENT_TRACE_STARTUP_TEST is not set
+-CONFIG_FTRACE_SORT_STARTUP_TEST=y
+ CONFIG_SAMPLES=y
+ CONFIG_SAMPLE_TRACE_PRINTK=m
+ CONFIG_SAMPLE_FTRACE_DIRECT=m
+-- 
+2.49.0
+
