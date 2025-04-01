@@ -13229,8 +13229,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 					return -EINVAL;
 				}
 			} else {
-				if (!type_is_non_owning_ref(reg->type) || reg->ref_obj_id) {
-					verbose(env, "rbtree_{remove,left,right} node input must be either non-owning ref\n");
+				if (!type_is_non_owning_ref(reg->type) && !reg->ref_obj_id) {
+					verbose(env, "rbtree_{remove,left,right} node input must be either non-owning ref or refcounted\n");
 					return -EINVAL;
 				}
 				if (in_rbtree_lock_required_cb(env)) {
