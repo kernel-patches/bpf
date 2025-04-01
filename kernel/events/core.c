@@ -14644,3 +14644,4 @@ struct cgroup_subsys perf_event_cgrp_subsys = {
 #endif /* CONFIG_CGROUP_PERF */
 
 DEFINE_STATIC_CALL_RET0(perf_snapshot_branch_stack, perf_snapshot_branch_stack_t);
+EXPORT_STATIC_CALL_GPL(perf_snapshot_branch_stack);
