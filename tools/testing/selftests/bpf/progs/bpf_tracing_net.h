@@ -121,6 +121,7 @@
 #define ir_v6_rmt_addr		req.__req_common.skc_v6_daddr
 #define ir_v6_loc_addr		req.__req_common.skc_v6_rcv_saddr
 
+#define sk_hash			__sk_common.skc_hash
 #define sk_num			__sk_common.skc_num
 #define sk_dport		__sk_common.skc_dport
 #define sk_family		__sk_common.skc_family

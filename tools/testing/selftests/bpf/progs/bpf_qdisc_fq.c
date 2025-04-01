@@ -643,8 +643,6 @@ static int fq_remove_flows_in_list(u32 index, void *ctx)
 	return 0;
 }
 
-extern unsigned CONFIG_HZ __kconfig;
-
 /* limit number of collected flows per round */
 #define FQ_GC_MAX 8
 #define FQ_GC_AGE (3*CONFIG_HZ)
