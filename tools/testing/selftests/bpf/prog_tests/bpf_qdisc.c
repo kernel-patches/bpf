@@ -7,6 +7,7 @@
 #include "network_helpers.h"
 #include "bpf_qdisc_fifo.skel.h"
 #include "bpf_qdisc_fq.skel.h"
+#include "bpf_sch_fq.skel.h"
 
 #define LO_IFINDEX 1
 
@@ -86,6 +87,24 @@ static void test_fq(void)
 
 	bpf_link__destroy(link);
 	bpf_qdisc_fq__destroy(fq_skel);
+}
+
+static void test_sch_fq(void)
+{
+	struct bpf_sch_fq *skel;
+
+	skel = bpf_sch_fq__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "bpf_sch_fq__open_and_load"))
+		return;
+
+	skel->links.fq = bpf_map__attach_struct_ops(skel->maps.fq);
+	if (!ASSERT_OK_PTR(skel->links.fq, "bpf_map__attach_struct_ops"))
+		goto done;
+
+	do_test("bpf_sch_fq");
+
+done:
+	bpf_sch_fq__destroy(skel);
 }
 
 static void test_qdisc_attach_to_mq(void)
@@ -171,6 +190,8 @@ void test_bpf_qdisc(void)
 		test_fifo();
 	if (test__start_subtest("fq"))
 		test_fq();
+	if (test__start_subtest("sch_fq"))
+		test_sch_fq();
 	if (test__start_subtest("attach to mq"))
 		test_qdisc_attach_to_mq();
 	if (test__start_subtest("attach to non root"))
