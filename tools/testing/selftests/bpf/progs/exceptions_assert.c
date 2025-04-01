@@ -124,7 +124,7 @@ int check_assert_generic(struct __sk_buff *ctx)
 	return data[128];
 }
 
-SEC("?fentry/bpf_check")
+SEC("?fentry/bpf_fentry_test1")
 __failure __msg("At program exit the register R1 has smin=64 smax=64")
 int check_assert_with_return(void *ctx)
 {

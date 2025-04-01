@@ -299,7 +299,7 @@ __noinline int exception_cb_bad_ret(u64 c)
 	return c;
 }
 
-SEC("?fentry/bpf_check")
+SEC("?fentry/bpf_fentry_test1")
 __exception_cb(exception_cb_bad_ret)
 __failure __msg("At program exit the register R0 has unknown scalar value should")
 int reject_set_exception_cb_bad_ret1(void *ctx)
@@ -307,7 +307,7 @@ int reject_set_exception_cb_bad_ret1(void *ctx)
 	return 0;
 }
 
-SEC("?fentry/bpf_check")
+SEC("?fentry/bpf_fentry_test1")
 __failure __msg("At program exit the register R1 has smin=64 smax=64 should")
 int reject_set_exception_cb_bad_ret2(void *ctx)
 {
