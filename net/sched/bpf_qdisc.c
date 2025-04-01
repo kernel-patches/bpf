@@ -7,6 +7,7 @@
 #include <linux/filter.h>
 #include <net/pkt_sched.h>
 #include <net/pkt_cls.h>
+#include <net/sock.h>
 
 #define QDISC_OP_IDX(op)	(offsetof(struct Qdisc_ops, op) / sizeof(void (*)(void)))
 #define QDISC_MOFF_IDX(moff)	(moff / sizeof(void (*)(void)))
@@ -214,6 +215,22 @@ __bpf_kfunc void bpf_qdisc_skb_drop(struct sk_buff *skb,
 	__qdisc_drop(skb, (struct sk_buff **)to_free_list);
 }
 
+__bpf_kfunc int bpf_qdisc_set_sk_pacing(struct sk_buff *skb, enum sk_pacing pacing)
+{
+	struct sock *sk = skb->sk;
+
+	if (!sk || sk_listener_or_tw(sk) || pacing < 0 || pacing > SK_PACING_FQ)
+		return -EINVAL;
+
+	smp_store_release(&sk->sk_pacing_status, pacing);
+	return 0;
+}
+
+__bpf_kfunc void bpf_qdisc_skb_orphan(struct sk_buff *skb)
+{
+	skb_orphan(skb);
+}
+
 /* bpf_qdisc_watchdog_schedule - Schedule a qdisc to a later time using a timer.
  * @sch: The qdisc to be scheduled.
  * @expire: The expiry time of the timer.
@@ -274,6 +291,8 @@ BTF_KFUNCS_START(qdisc_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_skb_get_hash, KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_kfree_skb, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_qdisc_skb_drop, KF_RELEASE)
+BTF_ID_FLAGS(func, bpf_qdisc_set_sk_pacing, KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_qdisc_skb_orphan, KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_dynptr_from_skb, KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_qdisc_watchdog_schedule, KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_qdisc_init_prologue, KF_TRUSTED_ARGS)
@@ -290,6 +309,8 @@ BTF_SET_END(qdisc_common_kfunc_set)
 BTF_SET_START(qdisc_enqueue_kfunc_set)
 BTF_ID(func, bpf_qdisc_skb_drop)
 BTF_ID(func, bpf_qdisc_watchdog_schedule)
+BTF_ID(func, bpf_qdisc_set_sk_pacing)
+BTF_ID(func, bpf_qdisc_skb_orphan)
 BTF_SET_END(qdisc_enqueue_kfunc_set)
 
 BTF_SET_START(qdisc_dequeue_kfunc_set)
