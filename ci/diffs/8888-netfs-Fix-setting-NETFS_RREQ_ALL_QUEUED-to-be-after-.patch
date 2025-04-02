@@ -1,0 +1,100 @@
+From a99b3ef16d4473f8f9b7547f89791d037112a7e6 Mon Sep 17 00:00:00 2001
+From: David Howells <dhowells@redhat.com>
+Date: Wed, 12 Feb 2025 22:24:01 +0000
+Subject: [PATCH] netfs: Fix setting NETFS_RREQ_ALL_QUEUED to be after all
+ subreqs queued
+
+Due to the code that queues a subreq on the active subrequest list getting
+moved to netfs_issue_read(), the NETFS_RREQ_ALL_QUEUED flag may now get set
+before the list-add actually happens.  This is not a problem if the
+collection worker happens after the list-add, but it's a race - and, for
+9P, where the read from the server is synchronous and done in the
+submitting thread, this is a lot more likely.
+
+The result is that, if the timing is wrong, a ref gets leaked because the
+collector thinks that all the subreqs have completed (because it can't see
+the last one yet) and clears NETFS_RREQ_IN_PROGRESS - at which point, the
+collection worker no longer goes into the collector.
+
+This can be provoked with AFS by injecting an msleep() right before the
+final subreq is queued.
+
+Fix this by splitting the queuing part out of netfs_issue_read() into a new
+function, netfs_queue_read(), and calling it separately.  The setting of
+NETFS_RREQ_ALL_QUEUED is then done by netfs_queue_read() whilst it is
+holding the spinlock (that's probably unnecessary, but shouldn't hurt).
+
+It might be better to set a flag on the final subreq, but this could be a
+problem if an error occurs and we can't queue it.
+
+Fixes: e2d46f2ec332 ("netfs: Change the read result collector to only use one work item")
+Reported-by: Ihor Solodrai <ihor.solodrai@pm.me>
+Closes: https://lore.kernel.org/r/a7x33d4dnMdGTtRivptq6S1i8btK70SNBP2XyX_xwDAhLvgQoPox6FVBOkifq4eBinfFfbZlIkMZBe3QarlWTxoEtHZwJCZbNKtaqrR7PvI=@pm.me/
+Signed-off-by: David Howells <dhowells@redhat.com>
+Tested-by: Ihor Solodrai <ihor.solodrai@linux.dev>
+cc: Eric Van Hensbergen <ericvh@kernel.org>
+cc: Latchesar Ionkov <lucho@ionkov.net>
+cc: Dominique Martinet <asmadeus@codewreck.org>
+cc: Christian Schoenebeck <linux_oss@crudebyte.com>
+cc: Marc Dionne <marc.dionne@auristor.com>
+cc: Steve French <stfrench@microsoft.com>
+cc: Paulo Alcantara <pc@manguebit.com>
+cc: Jeff Layton <jlayton@kernel.org>
+cc: v9fs@lists.linux.dev
+cc: linux-cifs@vger.kernel.org
+cc: netfs@lists.linux.dev
+cc: linux-fsdevel@vger.kernel.org
+---
+ fs/netfs/buffered_read.c | 19 +++++++++++++------
+ 1 file changed, 13 insertions(+), 6 deletions(-)
+
+diff --git a/fs/netfs/buffered_read.c b/fs/netfs/buffered_read.c
+index f761d44b3436..0d1b6d35ff3b 100644
+--- a/fs/netfs/buffered_read.c
++++ b/fs/netfs/buffered_read.c
+@@ -155,8 +155,9 @@ static void netfs_read_cache_to_pagecache(struct netfs_io_request *rreq,
+ 			netfs_cache_read_terminated, subreq);
+ }
+ 
+-static void netfs_issue_read(struct netfs_io_request *rreq,
+-			     struct netfs_io_subrequest *subreq)
++static void netfs_queue_read(struct netfs_io_request *rreq,
++			     struct netfs_io_subrequest *subreq,
++			     bool last_subreq)
+ {
+ 	struct netfs_io_stream *stream = &rreq->io_streams[0];
+ 
+@@ -177,8 +178,17 @@ static void netfs_issue_read(struct netfs_io_request *rreq,
+ 		}
+ 	}
+ 
++	if (last_subreq) {
++		smp_wmb(); /* Write lists before ALL_QUEUED. */
++		set_bit(NETFS_RREQ_ALL_QUEUED, &rreq->flags);
++	}
++
+ 	spin_unlock(&rreq->lock);
++}
+ 
++static void netfs_issue_read(struct netfs_io_request *rreq,
++			     struct netfs_io_subrequest *subreq)
++{
+ 	switch (subreq->source) {
+ 	case NETFS_DOWNLOAD_FROM_SERVER:
+ 		rreq->netfs_ops->issue_read(subreq);
+@@ -293,11 +303,8 @@ static void netfs_read_to_pagecache(struct netfs_io_request *rreq)
+ 		}
+ 		size -= slice;
+ 		start += slice;
+-		if (size <= 0) {
+-			smp_wmb(); /* Write lists before ALL_QUEUED. */
+-			set_bit(NETFS_RREQ_ALL_QUEUED, &rreq->flags);
+-		}
+ 
++		netfs_queue_read(rreq, subreq, size <= 0);
+ 		netfs_issue_read(rreq, subreq);
+ 		cond_resched();
+ 	} while (size > 0);
+-- 
+2.48.1
+
