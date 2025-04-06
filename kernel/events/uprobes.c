@@ -486,13 +486,12 @@ remap:
  * Called with mm->mmap_lock held for read or write.
  * Return 0 (success) or a negative errno.
  */
-int uprobe_write_opcode(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
-		const unsigned long opcode_vaddr, uprobe_opcode_t opcode)
+int uprobe_write_opcode(struct vm_area_struct *vma, const unsigned long opcode_vaddr,
+			uprobe_opcode_t opcode)
 {
 	const unsigned long vaddr = opcode_vaddr & PAGE_MASK;
 	struct mm_struct *mm = vma->vm_mm;
-	struct uprobe *uprobe;
-	int ret, is_register, ref_ctr_updated = 0;
+	int ret, is_register;
 	unsigned int gup_flags = FOLL_FORCE;
 	struct mmu_notifier_range range;
 	struct folio_walk fw;
@@ -500,7 +499,6 @@ int uprobe_write_opcode(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
 	struct page *page;
 
 	is_register = is_swbp_insn(&opcode);
-	uprobe = container_of(auprobe, struct uprobe, arch);
 
 	if (WARN_ON_ONCE(!is_cow_mapping(vma->vm_flags)))
 		return -EINVAL;
@@ -526,17 +524,6 @@ retry:
 	if (ret <= 0) {
 		folio_put(folio);
 		goto out;
-	}
-
-	/* We are going to replace instruction, update ref_ctr. */
-	if (!ref_ctr_updated && uprobe->ref_ctr_offset) {
-		ret = update_ref_ctr(uprobe, mm, is_register ? 1 : -1);
-		if (ret) {
-			folio_put(folio);
-			goto out;
-		}
-
-		ref_ctr_updated = 1;
 	}
 
 	ret = 0;
@@ -580,10 +567,6 @@ retry:
 	}
 
 out:
-	/* Revert back reference counter if instruction update failed. */
-	if (ret < 0 && is_register && ref_ctr_updated)
-		update_ref_ctr(uprobe, mm, -1);
-
 	/* try collapse pmd for compound page */
 	if (ret > 0)
 		collapse_pte_mapped_thp(mm, vaddr, false);
@@ -603,7 +586,27 @@ out:
 int __weak set_swbp(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
 		unsigned long vaddr)
 {
-	return uprobe_write_opcode(auprobe, vma, vaddr, UPROBE_SWBP_INSN);
+	return uprobe_write_opcode(vma, vaddr, UPROBE_SWBP_INSN);
+}
+
+static int set_swbp_refctr(struct uprobe *uprobe, struct vm_area_struct *vma, unsigned long vaddr)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	int err;
+
+	/* We are going to replace instruction, update ref_ctr. */
+	if (uprobe->ref_ctr_offset) {
+		err = update_ref_ctr(uprobe, mm, 1);
+		if (err)
+			return err;
+	}
+
+	err = set_swbp(&uprobe->arch, vma, vaddr);
+
+	/* Revert back reference counter if instruction update failed. */
+	if (err && uprobe->ref_ctr_offset)
+		update_ref_ctr(uprobe, mm, -1);
+	return err;
 }
 
 /**
@@ -618,8 +621,17 @@ int __weak set_swbp(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
 int __weak set_orig_insn(struct arch_uprobe *auprobe,
 		struct vm_area_struct *vma, unsigned long vaddr)
 {
-	return uprobe_write_opcode(auprobe, vma, vaddr,
-			*(uprobe_opcode_t *)&auprobe->insn);
+	return uprobe_write_opcode(vma, vaddr, *(uprobe_opcode_t *)&auprobe->insn);
+}
+
+static int set_orig_refctr(struct uprobe *uprobe, struct vm_area_struct *vma, unsigned long vaddr)
+{
+	int err = set_orig_insn(&uprobe->arch, vma, vaddr);
+
+	/* Revert back reference counter even if instruction update failed. */
+	if (uprobe->ref_ctr_offset)
+		update_ref_ctr(uprobe, vma->vm_mm, -1);
+	return err;
 }
 
 /* uprobe should have guaranteed positive refcount */
@@ -1158,7 +1170,7 @@ static int install_breakpoint(struct uprobe *uprobe, struct vm_area_struct *vma,
 	if (first_uprobe)
 		set_bit(MMF_HAS_UPROBES, &mm->flags);
 
-	ret = set_swbp(&uprobe->arch, vma, vaddr);
+	ret = set_swbp_refctr(uprobe, vma, vaddr);
 	if (!ret)
 		clear_bit(MMF_RECALC_UPROBES, &mm->flags);
 	else if (first_uprobe)
@@ -1173,7 +1185,7 @@ static int remove_breakpoint(struct uprobe *uprobe, struct vm_area_struct *vma,
 	struct mm_struct *mm = vma->vm_mm;
 
 	set_bit(MMF_RECALC_UPROBES, &mm->flags);
-	return set_orig_insn(&uprobe->arch, vma, vaddr);
+	return set_orig_refctr(uprobe, vma, vaddr);
 }
 
 struct map_info {
