@@ -399,12 +399,12 @@ static bool orig_page_is_identical(struct vm_area_struct *vma,
 	return identical;
 }
 
-static int __uprobe_write_opcode(struct vm_area_struct *vma,
-		struct folio_walk *fw, struct folio *folio,
-		unsigned long opcode_vaddr, uprobe_opcode_t opcode)
+static int __uprobe_write(struct vm_area_struct *vma, struct folio_walk *fw,
+		struct folio *folio, unsigned long opcode_vaddr,
+		uprobe_opcode_t *opcode)
 {
 	const unsigned long vaddr = opcode_vaddr & PAGE_MASK;
-	const bool is_register = !!is_swbp_insn(&opcode);
+	const bool is_register = !!is_swbp_insn(opcode);
 	bool pmd_mappable;
 
 	/* For now, we'll only handle PTE-mapped folios. */
@@ -489,6 +489,12 @@ remap:
 int uprobe_write_opcode(struct vm_area_struct *vma, const unsigned long opcode_vaddr,
 			uprobe_opcode_t opcode)
 {
+	return uprobe_write(vma, opcode_vaddr, &opcode, verify_opcode);
+}
+
+int uprobe_write(struct vm_area_struct *vma, const unsigned long opcode_vaddr,
+		 uprobe_opcode_t *opcode, uprobe_write_verify_t verify)
+{
 	const unsigned long vaddr = opcode_vaddr & PAGE_MASK;
 	struct mm_struct *mm = vma->vm_mm;
 	int ret, is_register;
@@ -498,7 +504,7 @@ int uprobe_write_opcode(struct vm_area_struct *vma, const unsigned long opcode_v
 	struct folio *folio;
 	struct page *page;
 
-	is_register = is_swbp_insn(&opcode);
+	is_register = is_swbp_insn(opcode);
 
 	if (WARN_ON_ONCE(!is_cow_mapping(vma->vm_flags)))
 		return -EINVAL;
@@ -508,7 +514,7 @@ int uprobe_write_opcode(struct vm_area_struct *vma, const unsigned long opcode_v
 	 * page that we can safely modify. Use FOLL_WRITE to trigger a write
 	 * fault if required. When unregistering, we might be lucky and the
 	 * anon page is already gone. So defer write faults until really
-	 * required. Use FOLL_SPLIT_PMD, because __uprobe_write_opcode()
+	 * required. Use FOLL_SPLIT_PMD, because __uprobe_write()
 	 * cannot deal with PMDs yet.
 	 */
 	if (is_register)
@@ -520,7 +526,7 @@ retry:
 		goto out;
 	folio = page_folio(page);
 
-	ret = verify_opcode(page, opcode_vaddr, &opcode);
+	ret = verify(page, opcode_vaddr, opcode);
 	if (ret <= 0) {
 		folio_put(folio);
 		goto out;
@@ -548,7 +554,7 @@ retry:
 	/* Walk the page tables again, to perform the actual update. */
 	if (folio_walk_start(&fw, vma, vaddr, 0)) {
 		if (fw.page == page)
-			ret = __uprobe_write_opcode(vma, &fw, folio, opcode_vaddr, opcode);
+			ret = __uprobe_write(vma, &fw, folio, opcode_vaddr, opcode);
 		folio_walk_end(&fw, vma);
 	}
 
