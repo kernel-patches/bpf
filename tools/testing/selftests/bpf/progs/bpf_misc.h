@@ -239,6 +239,19 @@
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 #endif
 
+/* Implement the kernel macro skb_end_pointer(skb) for BPF programs on both
+ * 32-bit and 64-bit systems.  The end pointer and struct sk_buff depend on
+ * the system word-size, which is directly available only to kernel code
+ * via macro BITS_PER_LONG. For BPF, we rely instead on skb->head and
+ * skb->end type info to properly determine the end pointer.
+ */
+#define skb_end_pointer(SKB_KERN)					\
+	__builtin_choose_expr(						\
+		__builtin_types_compatible_p(typeof(SKB_KERN->head),	\
+					     typeof(SKB_KERN->end)),	\
+		SKB_KERN->end,						\
+		SKB_KERN->head + (uintptr_t) SKB_KERN->end)
+
 #if (defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_x86) ||	\
      (defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64) ||		\
      defined(__TARGET_ARCH_arm) || defined(__TARGET_ARCH_s390) ||	\
