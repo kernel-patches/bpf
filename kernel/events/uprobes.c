@@ -402,10 +402,9 @@ static bool orig_page_is_identical(struct vm_area_struct *vma,
 
 static int __uprobe_write(struct vm_area_struct *vma, struct folio_walk *fw,
 		struct folio *folio, unsigned long insn_vaddr,
-		uprobe_opcode_t *insn, int nbytes)
+		uprobe_opcode_t *insn, int nbytes, bool is_register)
 {
 	const unsigned long vaddr = insn_vaddr & PAGE_MASK;
-	const bool is_register = !!is_swbp_insn(insn);
 	bool pmd_mappable;
 
 	/* For now, we'll only handle PTE-mapped folios. */
@@ -488,24 +487,24 @@ remap:
  * Return 0 (success) or a negative errno.
  */
 int uprobe_write_opcode(struct vm_area_struct *vma, const unsigned long opcode_vaddr,
-			uprobe_opcode_t opcode)
+			uprobe_opcode_t opcode, bool orig)
 {
-	return uprobe_write(vma, opcode_vaddr, &opcode, UPROBE_SWBP_INSN_SIZE, verify_opcode);
+	return uprobe_write(vma, opcode_vaddr, &opcode, UPROBE_SWBP_INSN_SIZE,
+			    verify_opcode, orig);
 }
 
 int uprobe_write(struct vm_area_struct *vma, const unsigned long insn_vaddr,
-		 uprobe_opcode_t *insn, int nbytes, uprobe_write_verify_t verify)
+		 uprobe_opcode_t *insn, int nbytes, uprobe_write_verify_t verify,
+		 bool orig)
 {
 	const unsigned long vaddr = insn_vaddr & PAGE_MASK;
 	struct mm_struct *mm = vma->vm_mm;
-	int ret, is_register;
+	int ret;
 	unsigned int gup_flags = FOLL_FORCE;
 	struct mmu_notifier_range range;
 	struct folio_walk fw;
 	struct folio *folio;
 	struct page *page;
-
-	is_register = is_swbp_insn(insn);
 
 	if (WARN_ON_ONCE(!is_cow_mapping(vma->vm_flags)))
 		return -EINVAL;
@@ -518,7 +517,7 @@ int uprobe_write(struct vm_area_struct *vma, const unsigned long insn_vaddr,
 	 * required. Use FOLL_SPLIT_PMD, because __uprobe_write()
 	 * cannot deal with PMDs yet.
 	 */
-	if (is_register)
+	if (!orig)
 		gup_flags |= FOLL_WRITE | FOLL_SPLIT_PMD;
 
 retry:
@@ -535,12 +534,12 @@ retry:
 
 	ret = 0;
 	if (unlikely(!folio_test_anon(folio))) {
-		VM_WARN_ON_ONCE(is_register);
+		VM_WARN_ON_ONCE(!orig);
 		folio_put(folio);
 		goto out;
 	}
 
-	if (!is_register) {
+	if (orig) {
 		/*
 		 * In the common case, we'll be able to zap the page when
 		 * unregistering. So trigger MMU notifiers now, as we won't
@@ -555,11 +554,11 @@ retry:
 	/* Walk the page tables again, to perform the actual update. */
 	if (folio_walk_start(&fw, vma, vaddr, 0)) {
 		if (fw.page == page)
-			ret = __uprobe_write(vma, &fw, folio, insn_vaddr, insn, nbytes);
+			ret = __uprobe_write(vma, &fw, folio, insn_vaddr, insn, nbytes, !orig);
 		folio_walk_end(&fw, vma);
 	}
 
-	if (!is_register)
+	if (orig)
 		mmu_notifier_invalidate_range_end(&range);
 
 	folio_put(folio);
@@ -593,7 +592,7 @@ out:
 int __weak set_swbp(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
 		unsigned long vaddr)
 {
-	return uprobe_write_opcode(vma, vaddr, UPROBE_SWBP_INSN);
+	return uprobe_write_opcode(vma, vaddr, UPROBE_SWBP_INSN, false);
 }
 
 static int set_swbp_refctr(struct uprobe *uprobe, struct vm_area_struct *vma, unsigned long vaddr)
@@ -628,7 +627,7 @@ static int set_swbp_refctr(struct uprobe *uprobe, struct vm_area_struct *vma, un
 int __weak set_orig_insn(struct arch_uprobe *auprobe,
 		struct vm_area_struct *vma, unsigned long vaddr)
 {
-	return uprobe_write_opcode(vma, vaddr, *(uprobe_opcode_t *)&auprobe->insn);
+	return uprobe_write_opcode(vma, vaddr, *(uprobe_opcode_t *)&auprobe->insn, true);
 }
 
 static int set_orig_refctr(struct uprobe *uprobe, struct vm_area_struct *vma, unsigned long vaddr)
