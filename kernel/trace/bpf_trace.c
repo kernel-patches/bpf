@@ -3384,6 +3384,13 @@ int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	/* no support for 32bit archs yet */
 	if (sizeof(u64) != sizeof(void *))
 		return -EOPNOTSUPP;
+	/*
+	 * The target_fd sometimes will be initialized -1 such as
+	 * probe_uprobe_multi_link in libbpf, so do not check it at the
+	 * current stage suggested by jiri.
+	 */
+	if (attr->link_create.flags)
+		return -EINVAL;
 
 	if (attr->link_create.flags)
 		return -EINVAL;
