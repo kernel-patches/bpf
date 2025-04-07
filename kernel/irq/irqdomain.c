@@ -398,7 +398,7 @@ void irq_domain_remove(struct irq_domain *domain)
 	 * If the going away domain is the default one, reset it.
 	 */
 	if (unlikely(irq_default_domain == domain))
-		irq_set_default_host(NULL);
+		irq_set_default_domain(NULL);
 
 	mutex_unlock(&irq_domain_mutex);
 
@@ -573,7 +573,7 @@ struct irq_domain *irq_find_matching_fwspec(struct irq_fwspec *fwspec,
 EXPORT_SYMBOL_GPL(irq_find_matching_fwspec);
 
 /**
- * irq_set_default_host() - Set a "default" irq domain
+ * irq_set_default_domain() - Set a "default" irq domain
  * @domain: default domain pointer
  *
  * For convenience, it's possible to set a "default" domain that will be used
@@ -581,16 +581,16 @@ EXPORT_SYMBOL_GPL(irq_find_matching_fwspec);
  * platforms that want to manipulate a few hard coded interrupt numbers that
  * aren't properly represented in the device-tree.
  */
-void irq_set_default_host(struct irq_domain *domain)
+void irq_set_default_domain(struct irq_domain *domain)
 {
 	pr_debug("Default domain set to @0x%p\n", domain);
 
 	irq_default_domain = domain;
 }
-EXPORT_SYMBOL_GPL(irq_set_default_host);
+EXPORT_SYMBOL_GPL(irq_set_default_domain);
 
 /**
- * irq_get_default_host() - Retrieve the "default" irq domain
+ * irq_get_default_domain() - Retrieve the "default" irq domain
  *
  * Returns: the default domain, if any.
  *
@@ -598,11 +598,11 @@ EXPORT_SYMBOL_GPL(irq_set_default_host);
  * systems that cannot implement a firmware->fwnode mapping (which
  * both DT and ACPI provide).
  */
-struct irq_domain *irq_get_default_host(void)
+struct irq_domain *irq_get_default_domain(void)
 {
 	return irq_default_domain;
 }
-EXPORT_SYMBOL_GPL(irq_get_default_host);
+EXPORT_SYMBOL_GPL(irq_get_default_domain);
 
 static bool irq_domain_is_nomap(struct irq_domain *domain)
 {
@@ -1133,6 +1133,31 @@ int irq_domain_xlate_twocell(struct irq_domain *d, struct device_node *ctrlr,
 EXPORT_SYMBOL_GPL(irq_domain_xlate_twocell);
 
 /**
+ * irq_domain_xlate_twothreecell() - Generic xlate for direct two or three cell bindings
+ * @d:		Interrupt domain involved in the translation
+ * @ctrlr:	The device tree node for the device whose interrupt is translated
+ * @intspec:	The interrupt specifier data from the device tree
+ * @intsize:	The number of entries in @intspec
+ * @out_hwirq:	Pointer to storage for the hardware interrupt number
+ * @out_type:	Pointer to storage for the interrupt type
+ *
+ * Device Tree interrupt specifier translation function for two or three
+ * cell bindings, where the cell values map directly to the hardware
+ * interrupt number and the type specifier.
+ */
+int irq_domain_xlate_twothreecell(struct irq_domain *d, struct device_node *ctrlr,
+				  const u32 *intspec, unsigned int intsize,
+				  irq_hw_number_t *out_hwirq, unsigned int *out_type)
+{
+	struct irq_fwspec fwspec;
+
+	of_phandle_args_to_fwspec(ctrlr, intspec, intsize, &fwspec);
+
+	return irq_domain_translate_twothreecell(d, &fwspec, out_hwirq, out_type);
+}
+EXPORT_SYMBOL_GPL(irq_domain_xlate_twothreecell);
+
+/**
  * irq_domain_xlate_onetwocell() - Generic xlate for one or two cell bindings
  * @d:		Interrupt domain involved in the translation
  * @ctrlr:	The device tree node for the device whose interrupt is translated
@@ -1215,6 +1240,37 @@ int irq_domain_translate_twocell(struct irq_domain *d,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(irq_domain_translate_twocell);
+
+/**
+ * irq_domain_translate_twothreecell() - Generic translate for direct two or three cell
+ * bindings
+ * @d:		Interrupt domain involved in the translation
+ * @fwspec:	The firmware interrupt specifier to translate
+ * @out_hwirq:	Pointer to storage for the hardware interrupt number
+ * @out_type:	Pointer to storage for the interrupt type
+ *
+ * Firmware interrupt specifier translation function for two or three cell
+ * specifications, where the parameter values map directly to the hardware
+ * interrupt number and the type specifier.
+ */
+int irq_domain_translate_twothreecell(struct irq_domain *d, struct irq_fwspec *fwspec,
+				      unsigned long *out_hwirq, unsigned int *out_type)
+{
+	if (fwspec->param_count == 2) {
+		*out_hwirq = fwspec->param[0];
+		*out_type = fwspec->param[1] & IRQ_TYPE_SENSE_MASK;
+		return 0;
+	}
+
+	if (fwspec->param_count == 3) {
+		*out_hwirq = fwspec->param[1];
+		*out_type = fwspec->param[2] & IRQ_TYPE_SENSE_MASK;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+EXPORT_SYMBOL_GPL(irq_domain_translate_twothreecell);
 
 int irq_domain_alloc_descs(int virq, unsigned int cnt, irq_hw_number_t hwirq,
 			   int node, const struct irq_affinity_desc *affinity)
