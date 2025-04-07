@@ -3119,6 +3119,8 @@ static int bpf_object__sanitize_btf(struct bpf_object *obj, struct btf *btf)
 	bool has_type_tag = kernel_supports(obj, FEAT_BTF_TYPE_TAG);
 	bool has_enum64 = kernel_supports(obj, FEAT_BTF_ENUM64);
 	bool has_qmark_datasec = kernel_supports(obj, FEAT_BTF_QMARK_DATASEC);
+
+	char name_gen_buff[32] = {0};
 	int enum64_placeholder_id = 0;
 	struct btf_type *t;
 	int i, j, vlen;
@@ -3169,10 +3171,50 @@ static int bpf_object__sanitize_btf(struct bpf_object *obj, struct btf *btf)
 			if (name[0] == '?')
 				name[0] = '_';
 		} else if (!has_func && btf_is_func_proto(t)) {
+			struct btf_param *params;
+			int new_name_off;
+
 			/* replace FUNC_PROTO with ENUM */
 			vlen = btf_vlen(t);
 			t->info = BTF_INFO_ENC(BTF_KIND_ENUM, 0, vlen);
 			t->size = sizeof(__u32); /* kernel enforced */
+
+			/* since the btf_enum and btf_param has the same binary layout
+			 * it's ok to use btf_param
+			 */
+			params = btf_params(t);
+
+			for (j = 0; j < vlen; ++j) {
+				struct btf_param *param = &params[j];
+				const char *param_name = btf__str_by_offset(btf, param->name_off);
+
+				/*
+				 * kernel disallow any unnamed enum members which can be generated for,
+				 * as example, struct members like
+				 * struct quota_format_ops {
+				 *     ...
+				 *     int (*get_next_id)(struct super_block *, struct kqid *);
+				 *     ...
+				 * }
+				 */
+				if (param_name && param_name[0])
+					continue; /* definitely has a name */
+
+				/*
+				 * generate an uniq name for each func_proto
+				 */
+				snprintf(name_gen_buff, sizeof(name_gen_buff), "__parm_proto_%d_%d", i, j);
+				new_name_off = btf__add_str(btf, name_gen_buff);
+
+				if (new_name_off < 0) {
+					pr_warn("Error creating the name for func_proto param\n");
+					return new_name_off;
+				}
+
+				/* give a valid name to func_proto param as it now an enum member */
+				param->name_off = new_name_off;
+			}
+
 		} else if (!has_func && btf_is_func(t)) {
 			/* replace FUNC with TYPEDEF */
 			t->info = BTF_INFO_ENC(BTF_KIND_TYPEDEF, 0, 0);
