@@ -2986,6 +2986,12 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	/* no support for 32bit archs yet */
 	if (sizeof(u64) != sizeof(void *))
 		return -EOPNOTSUPP;
+	/*
+	 * Perhaps due to their usage habits, users may set the target_fd to -1. Therefore,
+	 * no check is carried out here, and it is kept consistent with the multi_uprobe.
+	 */
+	if (attr->link_create.flags)
+		return -EINVAL;
 
 	if (attr->link_create.flags)
 		return -EINVAL;
