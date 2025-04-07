@@ -64,6 +64,12 @@ struct test_case {
 	.field_offset = offsetof(type, field),		\
 	.field_sz = sizeof(typeof(((type *)NULL)->field))
 
+#if BITS_PER_LONG > 32
+#  define ZEXT_32(reg)
+#else
+#  define ZEXT_32(reg)	#reg " = " #reg ";"
+#endif
+
 static struct test_case test_cases[] = {
 /* Sign extension on s390 changes the pattern */
 #if defined(__x86_64__) || defined(__aarch64__)
@@ -146,24 +152,30 @@ static struct test_case test_cases[] = {
 	{
 		N(CGROUP_SYSCTL, struct bpf_sysctl, file_pos),
 #if __BYTE_ORDER == __LITTLE_ENDIAN
-		.read  = "$dst = *(u64 *)($ctx + bpf_sysctl_kern::ppos);"
-			 "$dst = *(u32 *)($dst +0);",
+		.read  = "$dst = *($ptrsz *)($ctx + bpf_sysctl_kern::ppos);"
+			 ZEXT_32($dst_w)
+			 "$dst = *(u32 *)($dst +0);"
+			 ZEXT_32($dst_w),
 		.write = "*(u64 *)($ctx + bpf_sysctl_kern::tmp_reg) = r9;"
-			 "r9 = *(u64 *)($ctx + bpf_sysctl_kern::ppos);"
+			 "r9 = *($ptrsz *)($ctx + bpf_sysctl_kern::ppos);"
+			 ZEXT_32(w9)
 			 "*(u32 *)(r9 +0) = $src;"
 			 "r9 = *(u64 *)($ctx + bpf_sysctl_kern::tmp_reg);",
 #else
-		.read  = "$dst = *(u64 *)($ctx + bpf_sysctl_kern::ppos);"
-			 "$dst = *(u32 *)($dst +4);",
+		.read  = "$dst = *($ptrsz *)($ctx + bpf_sysctl_kern::ppos);"
+			 ZEXT_32($dst_w)
+			 "$dst = *(u32 *)($dst +4);"
+			 ZEXT_32($dst_w),
 		.write = "*(u64 *)($ctx + bpf_sysctl_kern::tmp_reg) = r9;"
-			 "r9 = *(u64 *)($ctx + bpf_sysctl_kern::ppos);"
+			 "r9 = *($ptrsz *)($ctx + bpf_sysctl_kern::ppos);"
+			 ZEXT_32(w9)
 			 "*(u32 *)(r9 +4) = $src;"
 			 "r9 = *(u64 *)($ctx + bpf_sysctl_kern::tmp_reg);",
 #endif
 	},
 	{
 		N(CGROUP_SOCKOPT, struct bpf_sockopt, sk),
-		.read  = "$dst = *(u64 *)($ctx + bpf_sockopt_kern::sk);",
+		.read  = "$dst = *($ptrsz *)($ctx + bpf_sockopt_kern::sk);",
 		.expected_attach_type = BPF_CGROUP_GETSOCKOPT,
 	},
 	{
@@ -186,28 +198,34 @@ static struct test_case test_cases[] = {
 	},
 	{
 		N(CGROUP_SOCKOPT, struct bpf_sockopt, retval),
-		.read  = "$dst = *(u64 *)($ctx + bpf_sockopt_kern::current_task);"
-			 "$dst = *(u64 *)($dst + task_struct::bpf_ctx);"
-			 "$dst = *(u32 *)($dst + bpf_cg_run_ctx::retval);",
+		.read  = "$dst = *($ptrsz *)($ctx + bpf_sockopt_kern::current_task);"
+			 ZEXT_32($dst_w)
+			 "$dst = *($ptrsz *)($dst + task_struct::bpf_ctx);"
+			 ZEXT_32($dst_w)
+			 "$dst = *(u32 *)($dst + bpf_cg_run_ctx::retval);"
+			 ZEXT_32($dst_w),
 		.write = "*(u64 *)($ctx + bpf_sockopt_kern::tmp_reg) = r9;"
-			 "r9 = *(u64 *)($ctx + bpf_sockopt_kern::current_task);"
-			 "r9 = *(u64 *)(r9 + task_struct::bpf_ctx);"
+			 "r9 = *($ptrsz *)($ctx + bpf_sockopt_kern::current_task);"
+			 ZEXT_32(w9)
+			 "r9 = *($ptrsz *)(r9 + task_struct::bpf_ctx);"
+			 ZEXT_32(w9)
 			 "*(u32 *)(r9 + bpf_cg_run_ctx::retval) = $src;"
 			 "r9 = *(u64 *)($ctx + bpf_sockopt_kern::tmp_reg);",
 		.expected_attach_type = BPF_CGROUP_GETSOCKOPT,
 	},
 	{
 		N(CGROUP_SOCKOPT, struct bpf_sockopt, optval),
-		.read  = "$dst = *(u64 *)($ctx + bpf_sockopt_kern::optval);",
+		.read  = "$dst = *($ptrsz *)($ctx + bpf_sockopt_kern::optval);",
 		.expected_attach_type = BPF_CGROUP_GETSOCKOPT,
 	},
 	{
 		N(CGROUP_SOCKOPT, struct bpf_sockopt, optval_end),
-		.read  = "$dst = *(u64 *)($ctx + bpf_sockopt_kern::optval_end);",
+		.read  = "$dst = *($ptrsz *)($ctx + bpf_sockopt_kern::optval_end);",
 		.expected_attach_type = BPF_CGROUP_GETSOCKOPT,
 	},
 };
 
+#undef ZEXT_32
 #undef N
 
 static regex_t *ident_regex;
@@ -705,10 +723,13 @@ out:
 static void run_one_testcase(struct btf *btf, struct test_case *test)
 {
 	struct prog_info pinfo = {};
+	char *ptr_sz;
 	int bpf_sz;
 
 	if (!test__start_subtest(test->name))
 		return;
+
+	ptr_sz = sizeof(void *) == 8 ? "u64" : "u32";
 
 	switch (test->field_sz) {
 	case 8:
@@ -739,7 +760,9 @@ static void run_one_testcase(struct btf *btf, struct test_case *test)
 		};
 		char *reg_map[][2] = {
 			{ "$ctx", "r1" },
+			{ "$dst_w", "w2" },
 			{ "$dst", "r2" },
+			{ "$ptrsz", ptr_sz },
 			{}
 		};
 
@@ -759,6 +782,7 @@ static void run_one_testcase(struct btf *btf, struct test_case *test)
 		char *stx_reg_map[][2] = {
 			{ "$ctx", "r1" },
 			{ "$src", "r2" },
+			{ "$ptrsz", ptr_sz },
 			{}
 		};
 		struct bpf_insn st_prog[] = {
@@ -770,6 +794,7 @@ static void run_one_testcase(struct btf *btf, struct test_case *test)
 		char *st_reg_map[][2] = {
 			{ "$ctx", "r1" },
 			{ "$src", "42" },
+			{ "$ptrsz", ptr_sz },
 			{}
 		};
 
