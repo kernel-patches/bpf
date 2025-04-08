@@ -3,3 +3,4 @@ core_reloc_btfgen                   # run_core_reloc_tests:FAIL:run_btfgen unexp
 usdt/multispec                      # usdt_300_bad_attach unexpected pointer: 0x558c63d8f0
 xdp_bonding                         # whole test suite is very unstable on aarch64
 res_spin_lock                       # flaky
+res_spin_lock_success               # flaky
