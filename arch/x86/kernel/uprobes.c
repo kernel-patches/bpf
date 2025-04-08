@@ -608,6 +608,16 @@ static void riprel_post_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 		*sr = utask->autask.saved_scratch_register;
 	}
 }
+
+static int is_nop5_insn(uprobe_opcode_t *insn)
+{
+	return !memcmp(insn, x86_nops[5], 5);
+}
+
+static bool emulate_nop5_insn(struct arch_uprobe *auprobe)
+{
+	return is_nop5_insn((uprobe_opcode_t *) &auprobe->insn);
+}
 #else /* 32-bit: */
 /*
  * No RIP-relative addressing on 32-bit
@@ -620,6 +630,10 @@ static void riprel_pre_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 }
 static void riprel_post_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
+}
+static bool emulate_nop5_insn(struct arch_uprobe *auprobe)
+{
+	return false;
 }
 #endif /* CONFIG_X86_64 */
 
@@ -852,6 +866,8 @@ static int branch_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn)
 		break;
 
 	case 0x0f:
+		if (emulate_nop5_insn(auprobe))
+			goto setup;
 		if (insn->opcode.nbytes != 2)
 			return -ENOSYS;
 		/*
