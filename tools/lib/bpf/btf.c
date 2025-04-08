@@ -1201,6 +1201,12 @@ static struct btf *btf_parse_elf(const char *path, struct btf *base_btf,
 		goto done;
 	}
 
+	if (!secs.btf_data->d_buf) {
+		pr_warn("BTF data is empty in %s\n", path);
+		err = -ENODATA;
+		goto done;
+	}
+
 	if (secs.btf_base_data) {
 		dist_base_btf = btf_new(secs.btf_base_data->d_buf, secs.btf_base_data->d_size,
 					NULL);
