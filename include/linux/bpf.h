@@ -169,9 +169,6 @@ struct bpf_map_ops {
 			       const struct bpf_map *meta1);
 
 
-	int (*map_set_for_each_callback_args)(struct bpf_verifier_env *env,
-					      struct bpf_func_state *caller,
-					      struct bpf_func_state *callee);
 	long (*map_for_each_callback)(struct bpf_map *map,
 				     bpf_callback_t callback_fn,
 				     void *callback_ctx, u64 flags);
