@@ -30,6 +30,7 @@
 #include <linux/kallsyms.h>
 #include <linux/rcupdate.h>
 #include <linux/perf_event.h>
+#include <linux/export.h>
 #include <linux/extable.h>
 #include <linux/log2.h>
 #include <linux/bpf_verifier.h>
@@ -43,6 +44,9 @@
 
 #include <asm/barrier.h>
 #include <linux/unaligned.h>
+
+const struct bpf_check_hook *bpf_check __rcu __read_mostly;
+EXPORT_SYMBOL_GPL(bpf_check);
 
 /* Registers */
 #define BPF_R0	regs[BPF_REG_0]

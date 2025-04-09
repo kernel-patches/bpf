@@ -18351,7 +18351,6 @@ static __init int unbound_reg_init(void)
 	unbound_reg.live |= REG_LIVE_READ;
 	return 0;
 }
-late_initcall(unbound_reg_init);
 
 static bool is_stack_all_misc(struct bpf_verifier_env *env,
 			      struct bpf_stack_state *stack)
@@ -23428,7 +23427,7 @@ out:
 	return err;
 }
 
-int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u32 uattr_size)
+static int __bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u32 uattr_size)
 {
 	u64 start_time = ktime_get_ns();
 	struct bpf_verifier_env *env;
@@ -23695,3 +23694,28 @@ err_free_env:
 	kvfree(env);
 	return ret;
 }
+
+static const struct bpf_check_hook verifier = {
+	.owner = THIS_MODULE,
+	.bpf_check = __bpf_check,
+};
+
+static int __init bpf_verifier_init(void)
+{
+	unbound_reg_init();
+	rcu_assign_pointer(bpf_check, &verifier);
+
+	return 0;
+}
+
+static void __exit bpf_verifier_fini(void)
+{
+	rcu_assign_pointer(bpf_check, NULL);
+}
+
+
+module_init(bpf_verifier_init);
+module_exit(bpf_verifier_fini);
+
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("eBPF verifier");

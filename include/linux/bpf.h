@@ -72,6 +72,18 @@ typedef int (*bpf_iter_init_seq_priv_t)(void *private_data,
 typedef void (*bpf_iter_fini_seq_priv_t)(void *private_data);
 typedef unsigned int (*bpf_func_t)(const void *,
 				   const struct bpf_insn *);
+
+struct bpf_check_hook {
+	struct module *owner;
+	/* verify correctness of eBPF program */
+	int (*bpf_check)(struct bpf_prog **prog,
+			 union bpf_attr *attr,
+			 bpfptr_t uattr,
+			 __u32 uattr_size);
+};
+
+extern const struct bpf_check_hook __rcu *bpf_check;
+
 struct bpf_iter_seq_info {
 	const struct seq_operations *seq_ops;
 	bpf_iter_init_seq_priv_t init_seq_private;
@@ -2662,9 +2674,6 @@ int bpf_fd_htab_map_lookup_elem(struct bpf_map *map, void *key, u32 *value);
 int bpf_get_file_flag(int flags);
 int bpf_check_uarg_tail_zero(bpfptr_t uaddr, size_t expected_size,
 			     size_t actual_size);
-
-/* verify correctness of eBPF program */
-int bpf_check(struct bpf_prog **fp, union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size);
 
 #ifndef CONFIG_BPF_JIT_ALWAYS_ON
 void bpf_patch_call_args(struct bpf_insn *insn, u32 stack_depth);

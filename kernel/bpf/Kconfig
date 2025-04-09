@@ -39,6 +39,18 @@ config BPF_SYSCALL
 	  Enable the bpf() system call that allows to manipulate BPF programs
 	  and maps via file descriptors.
 
+config BPF_VERIFIER
+	tristate "BPF verifier"
+	default y
+	depends on BPF_SYSCALL
+	help
+	  Controls if BPF verifier is built as a kernel module or not.
+
+	  Regardless of choice, it is possible to dynamically load a new verifier
+	  module.
+
+	  If you are unsure how to answer this question, answer Y.
+
 config BPF_JIT
 	bool "Enable BPF Just In Time compiler"
 	depends on BPF
