@@ -2797,6 +2797,8 @@ static inline int kfunc_desc_cmp_by_id_off(const void *a, const void *b)
 }
 const struct bpf_kfunc_desc *
 find_kfunc_desc(const struct bpf_prog *prog, u32 func_id, u16 offset);
+unsigned long bpf_lookup_type_addr(struct btf *btf, const struct btf_type *func,
+				   const char **name);
 int bpf_get_kfunc_addr(const struct bpf_prog *prog, u32 func_id,
 		       u16 btf_fd_idx, u8 **func_addr);
 

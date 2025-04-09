@@ -1639,6 +1639,20 @@ find_kfunc_desc(const struct bpf_prog *prog, u32 func_id, u16 offset)
 }
 EXPORT_SYMBOL_GPL(find_kfunc_desc);
 
+unsigned long bpf_lookup_type_addr(struct btf *btf, const struct btf_type *t,
+				   const char **name)
+{
+	unsigned long addr;
+
+	*name = btf_name_by_offset(btf, t->name_off);
+	addr = kallsyms_lookup_name(*name);
+	if (!addr)
+		return -ENOENT;
+
+	return addr;
+}
+EXPORT_SYMBOL_GPL(bpf_lookup_type_addr);
+
 int bpf_get_kfunc_addr(const struct bpf_prog *prog, u32 func_id,
 		       u16 btf_fd_idx, u8 **func_addr)
 {

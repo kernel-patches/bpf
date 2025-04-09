@@ -3131,11 +3131,9 @@ static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 		return -EINVAL;
 	}
 
-	func_name = btf_name_by_offset(desc_btf, func->name_off);
-	addr = kallsyms_lookup_name(func_name);
-	if (!addr) {
-		verbose(env, "cannot find address for kernel function %s\n",
-			func_name);
+	addr = bpf_lookup_type_addr(desc_btf, func, &func_name);
+	if (addr < 0) {
+		verbose(env, "cannot find address for kernel function %s\n", func_name);
 		return -EINVAL;
 	}
 	specialize_kfunc(env, func_id, offset, &addr);
@@ -19707,9 +19705,8 @@ static int __check_pseudo_btf_id(struct bpf_verifier_env *env,
 		return -EINVAL;
 	}
 
-	sym_name = btf_name_by_offset(btf, t->name_off);
-	addr = kallsyms_lookup_name(sym_name);
-	if (!addr) {
+	addr = bpf_lookup_type_addr(btf, t, &sym_name);
+	if (addr < 0) {
 		verbose(env, "ldimm64 failed to find the address for kernel symbol '%s'.\n",
 			sym_name);
 		return -ENOENT;
