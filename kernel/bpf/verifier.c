@@ -2957,80 +2957,12 @@ static int bpf_find_exception_callback_insn_off(struct bpf_verifier_env *env)
 	return ret;
 }
 
-#define MAX_KFUNC_DESCS 256
-#define MAX_KFUNC_BTFS	256
-
-struct bpf_kfunc_desc {
-	struct btf_func_model func_model;
-	u32 func_id;
-	s32 imm;
-	u16 offset;
-	unsigned long addr;
-};
-
-struct bpf_kfunc_btf {
-	struct btf *btf;
-	struct module *module;
-	u16 offset;
-};
-
-struct bpf_kfunc_desc_tab {
-	/* Sorted by func_id (BTF ID) and offset (fd_array offset) during
-	 * verification. JITs do lookups by bpf_insn, where func_id may not be
-	 * available, therefore at the end of verification do_misc_fixups()
-	 * sorts this by imm and offset.
-	 */
-	struct bpf_kfunc_desc descs[MAX_KFUNC_DESCS];
-	u32 nr_descs;
-};
-
-struct bpf_kfunc_btf_tab {
-	struct bpf_kfunc_btf descs[MAX_KFUNC_BTFS];
-	u32 nr_descs;
-};
-
-static int kfunc_desc_cmp_by_id_off(const void *a, const void *b)
-{
-	const struct bpf_kfunc_desc *d0 = a;
-	const struct bpf_kfunc_desc *d1 = b;
-
-	/* func_id is not greater than BTF_MAX_TYPE */
-	return d0->func_id - d1->func_id ?: d0->offset - d1->offset;
-}
-
 static int kfunc_btf_cmp_by_off(const void *a, const void *b)
 {
 	const struct bpf_kfunc_btf *d0 = a;
 	const struct bpf_kfunc_btf *d1 = b;
 
 	return d0->offset - d1->offset;
-}
-
-static const struct bpf_kfunc_desc *
-find_kfunc_desc(const struct bpf_prog *prog, u32 func_id, u16 offset)
-{
-	struct bpf_kfunc_desc desc = {
-		.func_id = func_id,
-		.offset = offset,
-	};
-	struct bpf_kfunc_desc_tab *tab;
-
-	tab = prog->aux->kfunc_tab;
-	return bsearch(&desc, tab->descs, tab->nr_descs,
-		       sizeof(tab->descs[0]), kfunc_desc_cmp_by_id_off);
-}
-
-int bpf_get_kfunc_addr(const struct bpf_prog *prog, u32 func_id,
-		       u16 btf_fd_idx, u8 **func_addr)
-{
-	const struct bpf_kfunc_desc *desc;
-
-	desc = find_kfunc_desc(prog, func_id, btf_fd_idx);
-	if (!desc)
-		return -EFAULT;
-
-	*func_addr = (u8 *)desc->addr;
-	return 0;
 }
 
 static struct btf *__find_kfunc_desc_btf(struct bpf_verifier_env *env,

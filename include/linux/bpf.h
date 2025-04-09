@@ -1470,6 +1470,38 @@ static inline bool bpf_prog_has_trampoline(const struct bpf_prog *prog)
 }
 #endif
 
+#define MAX_KFUNC_DESCS 256
+#define MAX_KFUNC_BTFS	256
+
+struct bpf_kfunc_desc {
+	struct btf_func_model func_model;
+	u32 func_id;
+	s32 imm;
+	u16 offset;
+	unsigned long addr;
+};
+
+struct bpf_kfunc_btf {
+	struct btf *btf;
+	struct module *module;
+	u16 offset;
+};
+
+struct bpf_kfunc_desc_tab {
+	/* Sorted by func_id (BTF ID) and offset (fd_array offset) during
+	 * verification. JITs do lookups by bpf_insn, where func_id may not be
+	 * available, therefore at the end of verification do_misc_fixups()
+	 * sorts this by imm and offset.
+	 */
+	struct bpf_kfunc_desc descs[MAX_KFUNC_DESCS];
+	u32 nr_descs;
+};
+
+struct bpf_kfunc_btf_tab {
+	struct bpf_kfunc_btf descs[MAX_KFUNC_BTFS];
+	u32 nr_descs;
+};
+
 struct bpf_func_info_aux {
 	u16 linkage;
 	bool unreliable;
@@ -2755,6 +2787,16 @@ bool bpf_prog_has_kfunc_call(const struct bpf_prog *prog);
 const struct btf_func_model *
 bpf_jit_find_kfunc_model(const struct bpf_prog *prog,
 			 const struct bpf_insn *insn);
+static inline int kfunc_desc_cmp_by_id_off(const void *a, const void *b)
+{
+	const struct bpf_kfunc_desc *d0 = a;
+	const struct bpf_kfunc_desc *d1 = b;
+
+	/* func_id is not greater than BTF_MAX_TYPE */
+	return d0->func_id - d1->func_id ?: d0->offset - d1->offset;
+}
+const struct bpf_kfunc_desc *
+find_kfunc_desc(const struct bpf_prog *prog, u32 func_id, u16 offset);
 int bpf_get_kfunc_addr(const struct bpf_prog *prog, u32 func_id,
 		       u16 btf_fd_idx, u8 **func_addr);
 
