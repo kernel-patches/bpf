@@ -44,9 +44,6 @@ static const struct bpf_verifier_ops * const bpf_verifier_ops[] = {
 #undef BPF_LINK_TYPE
 };
 
-struct bpf_mem_alloc bpf_global_percpu_ma;
-static bool bpf_global_percpu_ma_set;
-
 /* bpf_check() is a static code analyzer that walks eBPF program
  * instruction by instruction and updates register/stack state.
  * All paths of conditional branches are analyzed until 'bpf_exit' insn.
