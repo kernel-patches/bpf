@@ -68,6 +68,7 @@ static DEFINE_MUTEX(update_mutex);
 
 const struct bpf_verifier_ops bpf_struct_ops_verifier_ops = {
 };
+EXPORT_SYMBOL_GPL(bpf_struct_ops_verifier_ops);
 
 const struct bpf_prog_ops bpf_struct_ops_prog_ops = {
 #ifdef CONFIG_NET
@@ -327,6 +328,7 @@ int bpf_struct_ops_supported(const struct bpf_struct_ops *st_ops, u32 moff)
 
 	return func_ptr ? 0 : -ENOTSUPP;
 }
+EXPORT_SYMBOL_GPL(bpf_struct_ops_supported);
 
 int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 			     struct btf *btf,

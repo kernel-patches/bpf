@@ -131,6 +131,7 @@ const struct bpf_verifier_ops lirc_mode2_verifier_ops = {
 	.get_func_proto  = lirc_mode2_func_proto,
 	.is_valid_access = lirc_mode2_is_valid_access
 };
+EXPORT_SYMBOL_GPL(lirc_mode2_verifier_ops);
 
 #define BPF_MAX_PROGS 64
 

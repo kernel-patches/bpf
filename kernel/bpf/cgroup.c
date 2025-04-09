@@ -8,6 +8,7 @@
 #include <linux/kernel.h>
 #include <linux/atomic.h>
 #include <linux/cgroup.h>
+#include <linux/export.h>
 #include <linux/filter.h>
 #include <linux/slab.h>
 #include <linux/sysctl.h>
@@ -1702,6 +1703,7 @@ const struct bpf_verifier_ops cg_dev_verifier_ops = {
 	.get_func_proto		= cgroup_dev_func_proto,
 	.is_valid_access	= cgroup_dev_is_valid_access,
 };
+EXPORT_SYMBOL_GPL(cg_dev_verifier_ops);
 
 /**
  * __cgroup_bpf_run_filter_sysctl - Run a program on sysctl
@@ -2322,6 +2324,7 @@ const struct bpf_verifier_ops cg_sysctl_verifier_ops = {
 	.is_valid_access	= sysctl_is_valid_access,
 	.convert_ctx_access	= sysctl_convert_ctx_access,
 };
+EXPORT_SYMBOL_GPL(cg_sysctl_verifier_ops);
 
 const struct bpf_prog_ops cg_sysctl_prog_ops = {
 };
@@ -2550,6 +2553,7 @@ const struct bpf_verifier_ops cg_sockopt_verifier_ops = {
 	.convert_ctx_access	= cg_sockopt_convert_ctx_access,
 	.gen_prologue		= cg_sockopt_get_prologue,
 };
+EXPORT_SYMBOL_GPL(cg_sockopt_verifier_ops);
 
 const struct bpf_prog_ops cg_sockopt_prog_ops = {
 };

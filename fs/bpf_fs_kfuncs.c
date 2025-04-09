@@ -6,6 +6,7 @@
 #include <linux/btf.h>
 #include <linux/btf_ids.h>
 #include <linux/dcache.h>
+#include <linux/export.h>
 #include <linux/fs.h>
 #include <linux/fsnotify.h>
 #include <linux/file.h>
@@ -231,6 +232,7 @@ int bpf_set_dentry_xattr_locked(struct dentry *dentry, const char *name__str,
 	}
 	return ret;
 }
+EXPORT_SYMBOL_GPL(bpf_set_dentry_xattr_locked);
 
 /**
  * bpf_remove_dentry_xattr_locked - remove a xattr of a dentry
@@ -266,6 +268,7 @@ int bpf_remove_dentry_xattr_locked(struct dentry *dentry, const char *name__str)
 	}
 	return ret;
 }
+EXPORT_SYMBOL_GPL(bpf_remove_dentry_xattr_locked);
 
 __bpf_kfunc_start_defs();
 
@@ -373,6 +376,7 @@ bool bpf_lsm_has_d_inode_locked(const struct bpf_prog *prog)
 {
 	return btf_id_set_contains(&d_inode_locked_hooks, prog->aux->attach_btf_id);
 }
+EXPORT_SYMBOL_GPL(bpf_lsm_has_d_inode_locked);
 
 static const struct btf_kfunc_id_set bpf_fs_kfunc_set = {
 	.owner = THIS_MODULE,

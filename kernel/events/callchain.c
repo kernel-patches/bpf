@@ -21,6 +21,8 @@ struct callchain_cpus_entries {
 };
 
 int sysctl_perf_event_max_stack __read_mostly = PERF_MAX_STACK_DEPTH;
+EXPORT_SYMBOL_GPL(sysctl_perf_event_max_stack);
+
 int sysctl_perf_event_max_contexts_per_stack __read_mostly = PERF_MAX_CONTEXTS_PER_STACK;
 static const int six_hundred_forty_kb = 640 * 1024;
 
@@ -142,6 +144,7 @@ exit:
 
 	return err;
 }
+EXPORT_SYMBOL_GPL(get_callchain_buffers);
 
 void put_callchain_buffers(void)
 {

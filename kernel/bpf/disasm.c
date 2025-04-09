@@ -4,6 +4,7 @@
  */
 
 #include <linux/bpf.h>
+#include <linux/export.h>
 
 #include "disasm.h"
 
@@ -58,6 +59,7 @@ const char *func_id_name(int id)
 	else
 		return "unknown";
 }
+EXPORT_SYMBOL_GPL(func_id_name);
 
 const char *const bpf_class_string[8] = {
 	[BPF_LD]    = "ld",
@@ -86,6 +88,7 @@ const char *const bpf_alu_string[16] = {
 	[BPF_ARSH >> 4] = "s>>=",
 	[BPF_END >> 4]  = "endian",
 };
+EXPORT_SYMBOL_GPL(bpf_alu_string);
 
 static const char *const bpf_alu_sign_string[16] = {
 	[BPF_DIV >> 4]  = "s/=",
@@ -388,3 +391,4 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 			insn->code, bpf_class_string[class]);
 	}
 }
+EXPORT_SYMBOL_GPL(print_bpf_insn);

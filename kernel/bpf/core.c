@@ -69,6 +69,7 @@
 
 struct bpf_mem_alloc bpf_global_ma;
 bool bpf_global_ma_set;
+EXPORT_SYMBOL_GPL(bpf_global_ma_set);
 
 struct bpf_mem_alloc bpf_global_percpu_ma;
 EXPORT_SYMBOL_GPL(bpf_global_percpu_ma);
@@ -510,6 +511,7 @@ struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flag
 
 	return fp;
 }
+EXPORT_SYMBOL_GPL(bpf_prog_alloc_no_stats);
 
 struct bpf_prog *bpf_prog_alloc(unsigned int size, gfp_t gfp_extra_flags)
 {
@@ -552,6 +554,7 @@ int bpf_prog_alloc_jited_linfo(struct bpf_prog *prog)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_prog_alloc_jited_linfo);
 
 void bpf_prog_jit_attempt_done(struct bpf_prog *prog)
 {
@@ -564,6 +567,7 @@ void bpf_prog_jit_attempt_done(struct bpf_prog *prog)
 	kfree(prog->aux->kfunc_tab);
 	prog->aux->kfunc_tab = NULL;
 }
+EXPORT_SYMBOL_GPL(bpf_prog_jit_attempt_done);
 
 /* The jit engine is responsible to provide an array
  * for insn_off to the jited_off mapping (insn_to_jit_off).
@@ -733,6 +737,7 @@ int bpf_prog_calc_tag(struct bpf_prog *fp)
 	vfree(raw);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_prog_calc_tag);
 
 static int bpf_adj_delta_to_imm(struct bpf_insn *insn, u32 pos, s32 end_old,
 				s32 end_new, s32 curr, const bool probe_pass)
@@ -910,6 +915,7 @@ struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 
 	return prog_adj;
 }
+EXPORT_SYMBOL_GPL(bpf_patch_insn_single);
 
 int bpf_remove_insns(struct bpf_prog *prog, u32 off, u32 cnt)
 {
@@ -926,6 +932,7 @@ int bpf_remove_insns(struct bpf_prog *prog, u32 off, u32 cnt)
 	WARN_ON_ONCE(err);
 	return err;
 }
+EXPORT_SYMBOL_GPL(bpf_remove_insns);
 
 static void bpf_prog_kallsyms_del_subprogs(struct bpf_prog *fp)
 {
@@ -1093,6 +1100,7 @@ void bpf_prog_kallsyms_add(struct bpf_prog *fp)
 	bpf_ksym_add(&fp->aux->ksym_prefix);
 #endif
 }
+EXPORT_SYMBOL_GPL(bpf_prog_kallsyms_add);
 
 void bpf_prog_kallsyms_del(struct bpf_prog *fp)
 {
@@ -1238,6 +1246,7 @@ int bpf_jit_add_poke_descriptor(struct bpf_prog *prog,
 
 	return slot;
 }
+EXPORT_SYMBOL_GPL(bpf_jit_add_poke_descriptor);
 
 /*
  * BPF program pack allocator.
@@ -2129,6 +2138,7 @@ bool bpf_opcode_in_insntable(u8 code)
 #undef BPF_INSN_2_TBL
 	return public_insntable[code];
 }
+EXPORT_SYMBOL_GPL(bpf_opcode_in_insntable);
 
 #ifndef CONFIG_BPF_JIT_ALWAYS_ON
 /**
@@ -3237,6 +3247,7 @@ void __bpf_free_used_maps(struct bpf_prog_aux *aux,
 		bpf_map_put(map);
 	}
 }
+EXPORT_SYMBOL_GPL(__bpf_free_used_maps);
 
 static void bpf_free_used_maps(struct bpf_prog_aux *aux)
 {
@@ -3258,6 +3269,7 @@ void __bpf_free_used_btfs(struct btf_mod_pair *used_btfs, u32 len)
 	}
 #endif
 }
+EXPORT_SYMBOL_GPL(__bpf_free_used_btfs);
 
 static void bpf_free_used_btfs(struct bpf_prog_aux *aux)
 {
@@ -3336,6 +3348,7 @@ void bpf_user_rnd_init_once(void)
 {
 	prandom_init_once(&bpf_user_rnd_state);
 }
+EXPORT_SYMBOL_GPL(bpf_user_rnd_init_once);
 
 BPF_CALL_0(bpf_user_rnd_u32)
 {
@@ -3445,6 +3458,7 @@ bool __weak bpf_helper_changes_pkt_data(enum bpf_func_id func_id)
 {
 	return false;
 }
+EXPORT_SYMBOL_GPL(bpf_helper_changes_pkt_data);
 
 /* Return TRUE if the JIT backend wants verifier to enable sub-register usage
  * analysis code and wants explicit zero extension inserted by verifier.
@@ -3458,6 +3472,7 @@ bool __weak bpf_jit_needs_zext(void)
 {
 	return false;
 }
+EXPORT_SYMBOL_GPL(bpf_jit_needs_zext);
 
 /* Return true if the JIT inlines the call to the helper corresponding to
  * the imm.
@@ -3469,37 +3484,44 @@ bool __weak bpf_jit_inlines_helper_call(s32 imm)
 {
 	return false;
 }
+EXPORT_SYMBOL_GPL(bpf_jit_inlines_helper_call);
 
 /* Return TRUE if the JIT backend supports mixing bpf2bpf and tailcalls. */
 bool __weak bpf_jit_supports_subprog_tailcalls(void)
 {
 	return false;
 }
+EXPORT_SYMBOL_GPL(bpf_jit_supports_subprog_tailcalls);
 
 bool __weak bpf_jit_supports_percpu_insn(void)
 {
 	return false;
 }
+EXPORT_SYMBOL_GPL(bpf_jit_supports_percpu_insn);
 
 bool __weak bpf_jit_supports_kfunc_call(void)
 {
 	return false;
 }
+EXPORT_SYMBOL_GPL(bpf_jit_supports_kfunc_call);
 
 bool __weak bpf_jit_supports_far_kfunc_call(void)
 {
 	return false;
 }
+EXPORT_SYMBOL_GPL(bpf_jit_supports_far_kfunc_call);
 
 bool __weak bpf_jit_supports_arena(void)
 {
 	return false;
 }
+EXPORT_SYMBOL_GPL(bpf_jit_supports_arena);
 
 bool __weak bpf_jit_supports_insn(struct bpf_insn *insn, bool in_arena)
 {
 	return false;
 }
+EXPORT_SYMBOL_GPL(bpf_jit_supports_insn);
 
 u64 __weak bpf_arch_uaddress_limit(void)
 {
@@ -3509,6 +3531,7 @@ u64 __weak bpf_arch_uaddress_limit(void)
 	return 0;
 #endif
 }
+EXPORT_SYMBOL_GPL(bpf_arch_uaddress_limit);
 
 /* Return TRUE if the JIT backend satisfies the following two conditions:
  * 1) JIT backend supports atomic_xchg() on pointer-sized words.
@@ -3519,6 +3542,7 @@ bool __weak bpf_jit_supports_ptr_xchg(void)
 {
 	return false;
 }
+EXPORT_SYMBOL_GPL(bpf_jit_supports_ptr_xchg);
 
 /* To execute LD_ABS/LD_IND instructions __bpf_prog_run() may call
  * skb_copy_bits(), so provide a weak definition of it for NET-less config.
@@ -3549,11 +3573,13 @@ bool __weak bpf_jit_supports_exceptions(void)
 {
 	return false;
 }
+EXPORT_SYMBOL_GPL(bpf_jit_supports_exceptions);
 
 bool __weak bpf_jit_supports_private_stack(void)
 {
 	return false;
 }
+EXPORT_SYMBOL_GPL(bpf_jit_supports_private_stack);
 
 void __weak arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp), void *cookie)
 {
@@ -3563,11 +3589,13 @@ bool __weak bpf_jit_supports_timed_may_goto(void)
 {
 	return false;
 }
+EXPORT_SYMBOL_GPL(bpf_jit_supports_timed_may_goto);
 
 u64 __weak arch_bpf_timed_may_goto(void)
 {
 	return 0;
 }
+EXPORT_SYMBOL_GPL(arch_bpf_timed_may_goto);
 
 u64 bpf_check_timed_may_goto(struct bpf_timed_may_goto *p)
 {
@@ -3591,6 +3619,7 @@ __weak u64 bpf_arena_get_user_vm_start(struct bpf_arena *arena)
 {
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_arena_get_user_vm_start);
 __weak u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena)
 {
 	return 0;

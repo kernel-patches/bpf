@@ -326,3 +326,4 @@ const struct bpf_verifier_ops netfilter_verifier_ops = {
 	.is_valid_access	= nf_is_valid_access,
 	.get_func_proto		= bpf_nf_func_proto,
 };
+EXPORT_SYMBOL_GPL(netfilter_verifier_ops);

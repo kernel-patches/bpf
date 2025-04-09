@@ -8,6 +8,7 @@
 #include <linux/types.h>
 #include <linux/bpf.h>
 #include <linux/bpf_verifier.h>
+#include <linux/export.h>
 #include <linux/math64.h>
 #include <linux/string.h>
 
@@ -41,6 +42,7 @@ int bpf_vlog_init(struct bpf_verifier_log *log, u32 log_level,
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_vlog_init);
 
 static void bpf_vlog_update_len_max(struct bpf_verifier_log *log, u32 add_len)
 {
@@ -145,6 +147,7 @@ void bpf_verifier_vlog(struct bpf_verifier_log *log, const char *fmt,
 fail:
 	log->ubuf = NULL;
 }
+EXPORT_SYMBOL_GPL(bpf_verifier_vlog);
 
 void bpf_vlog_reset(struct bpf_verifier_log *log, u64 new_pos)
 {
@@ -176,6 +179,7 @@ void bpf_vlog_reset(struct bpf_verifier_log *log, u64 new_pos)
 	if (pos < log->len_total && put_user(zero, log->ubuf + pos))
 		log->ubuf = NULL;
 }
+EXPORT_SYMBOL_GPL(bpf_vlog_reset);
 
 static void bpf_vlog_reverse_kbuf(char *buf, int len)
 {
@@ -296,6 +300,7 @@ skip_log_rotate:
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_vlog_finalize);
 
 /* log_level controls verbosity level of eBPF verifier.
  * bpf_verifier_log_write() is used to dump the verification trace to the log,
@@ -426,6 +431,7 @@ __printf(3, 4) void verbose_linfo(struct bpf_verifier_env *env,
 
 	env->prev_linfo = linfo;
 }
+EXPORT_SYMBOL_GPL(verbose_linfo);
 
 static const char *btf_type_name(const struct btf *btf, u32 id)
 {
@@ -486,6 +492,7 @@ const char *reg_type_str(struct bpf_verifier_env *env, enum bpf_reg_type type)
 		 prefix, str[base_type(type)], postfix);
 	return env->tmp_str_buf;
 }
+EXPORT_SYMBOL_GPL(reg_type_str);
 
 const char *dynptr_type_str(enum bpf_dynptr_type type)
 {
@@ -505,6 +512,7 @@ const char *dynptr_type_str(enum bpf_dynptr_type type)
 		return "<unknown>";
 	}
 }
+EXPORT_SYMBOL_GPL(dynptr_type_str);
 
 const char *iter_type_str(const struct btf *btf, u32 btf_id)
 {
@@ -514,6 +522,7 @@ const char *iter_type_str(const struct btf *btf, u32 btf_id)
 	/* we already validated that type is valid and has conforming name */
 	return btf_type_name(btf, btf_id) + sizeof(ITER_PREFIX) - 1;
 }
+EXPORT_SYMBOL_GPL(iter_type_str);
 
 const char *iter_state_str(enum bpf_iter_state state)
 {
@@ -529,6 +538,7 @@ const char *iter_state_str(enum bpf_iter_state state)
 		return "<unknown>";
 	}
 }
+EXPORT_SYMBOL_GPL(iter_state_str);
 
 static char slot_type_char[] = {
 	[STACK_INVALID]	= '?',
@@ -859,6 +869,7 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 	if (!print_all)
 		mark_verifier_state_clean(env);
 }
+EXPORT_SYMBOL_GPL(print_verifier_state);
 
 static inline u32 vlog_alignment(u32 pos)
 {
@@ -878,3 +889,4 @@ void print_insn_state(struct bpf_verifier_env *env, const struct bpf_verifier_st
 	}
 	print_verifier_state(env, vstate, frameno, false);
 }
+EXPORT_SYMBOL_GPL(print_insn_state);

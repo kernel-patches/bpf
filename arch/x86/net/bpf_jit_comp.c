@@ -3704,6 +3704,7 @@ out:
 					   tmp : orig_prog);
 	return prog;
 }
+EXPORT_SYMBOL_GPL(bpf_int_jit_compile);
 
 bool bpf_jit_supports_kfunc_call(void)
 {
@@ -3762,6 +3763,7 @@ void bpf_jit_free(struct bpf_prog *prog)
 
 	bpf_prog_unlock_free(prog);
 }
+EXPORT_SYMBOL_GPL(bpf_jit_free);
 
 bool bpf_jit_supports_exceptions(void)
 {

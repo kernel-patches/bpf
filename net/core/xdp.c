@@ -6,6 +6,7 @@
 #include <linux/bpf.h>
 #include <linux/btf.h>
 #include <linux/btf_ids.h>
+#include <linux/export.h>
 #include <linux/filter.h>
 #include <linux/types.h>
 #include <linux/mm.h>
@@ -984,6 +985,7 @@ bool bpf_dev_bound_kfunc_id(u32 btf_id)
 {
 	return btf_id_set8_contains(&xdp_metadata_kfunc_ids, btf_id);
 }
+EXPORT_SYMBOL_GPL(bpf_dev_bound_kfunc_id);
 
 static int __init xdp_metadata_init(void)
 {

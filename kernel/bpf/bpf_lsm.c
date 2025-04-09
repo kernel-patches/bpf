@@ -8,6 +8,7 @@
 #include <linux/bpf.h>
 #include <linux/btf.h>
 #include <linux/binfmts.h>
+#include <linux/export.h>
 #include <linux/lsm_hooks.h>
 #include <linux/bpf_lsm.h>
 #include <linux/kallsyms.h>
@@ -137,6 +138,7 @@ int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_lsm_verify_prog);
 
 /* Mask for all the currently supported BPRM option flags */
 #define BPF_F_BRPM_OPTS_MASK	BPF_F_BPRM_SECUREEXEC
@@ -399,6 +401,7 @@ bool bpf_lsm_is_sleepable_hook(u32 btf_id)
 {
 	return btf_id_set_contains(&sleepable_lsm_hooks, btf_id);
 }
+EXPORT_SYMBOL_GPL(bpf_lsm_is_sleepable_hook);
 
 bool bpf_lsm_is_trusted(const struct bpf_prog *prog)
 {
@@ -412,6 +415,7 @@ const struct bpf_verifier_ops lsm_verifier_ops = {
 	.get_func_proto = bpf_lsm_func_proto,
 	.is_valid_access = btf_ctx_access,
 };
+EXPORT_SYMBOL_GPL(lsm_verifier_ops);
 
 /* hooks return 0 or 1 */
 BTF_SET_START(bool_lsm_hooks)
@@ -445,3 +449,4 @@ int bpf_lsm_get_retval_range(const struct bpf_prog *prog,
 	}
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_lsm_get_retval_range);

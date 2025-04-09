@@ -4,6 +4,7 @@
 #include <linux/bpf_local_storage.h>
 #include <linux/btf.h>
 #include <linux/bug.h>
+#include <linux/export.h>
 #include <linux/filter.h>
 #include <linux/mm.h>
 #include <linux/rbtree.h>
@@ -478,6 +479,7 @@ int bpf_cgroup_storage_assign(struct bpf_prog_aux *aux, struct bpf_map *_map)
 	aux->cgroup_storage[stype] = _map;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(bpf_cgroup_storage_assign);
 
 static size_t bpf_cgroup_storage_calculate_size(struct bpf_map *map, u32 *pages)
 {
