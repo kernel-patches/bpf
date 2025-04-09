@@ -563,6 +563,18 @@ s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind)
 	return -ENOENT;
 }
 
+struct btf *bpf_get_btf_vmlinux(void)
+{
+	if (!btf_vmlinux && IS_ENABLED(CONFIG_DEBUG_INFO_BTF)) {
+		mutex_lock(&btf_mutex);
+		if (!btf_vmlinux)
+			btf_vmlinux = btf_parse_vmlinux();
+		mutex_unlock(&btf_mutex);
+	}
+	return btf_vmlinux;
+}
+EXPORT_SYMBOL_GPL(bpf_get_btf_vmlinux);
+
 s32 bpf_find_btf_id(const char *name, u32 kind, struct btf **btf_p)
 {
 	struct btf *btf;
@@ -5857,7 +5869,12 @@ errout_free:
 
 extern char __start_BTF[];
 extern char __stop_BTF[];
-extern struct btf *btf_vmlinux;
+
+DEFINE_MUTEX(btf_mutex);
+EXPORT_SYMBOL_GPL(btf_mutex);
+
+struct btf *btf_vmlinux;
+EXPORT_SYMBOL_GPL(btf_vmlinux);
 
 #define BPF_MAP_TYPE(_id, _ops)
 #define BPF_LINK_TYPE(_id, _name)
@@ -6252,7 +6269,7 @@ struct btf *btf_parse_vmlinux(void)
 	if (IS_ERR(btf))
 		goto err_out;
 
-	/* btf_parse_vmlinux() runs under bpf_verifier_lock */
+	/* btf_parse_vmlinux() runs under btf_mutex */
 	bpf_ctx_convert.t = btf_type_by_id(btf, bpf_ctx_convert_btf_id[0]);
 	err = btf_alloc_id(btf);
 	if (err) {

@@ -345,14 +345,11 @@ struct bpf_kfunc_call_arg_meta {
 	u64 mem_size;
 };
 
-struct btf *btf_vmlinux;
-
 static const char *btf_type_name(const struct btf *btf, u32 id)
 {
 	return btf_name_by_offset(btf, btf_type_by_id(btf, id)->name_off);
 }
 
-static DEFINE_MUTEX(bpf_verifier_lock);
 static DEFINE_MUTEX(bpf_percpu_ma_lock);
 
 __printf(2, 3) static void verbose(void *private_data, const char *fmt, ...)
@@ -23518,17 +23515,6 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	return 0;
 }
 
-struct btf *bpf_get_btf_vmlinux(void)
-{
-	if (!btf_vmlinux && IS_ENABLED(CONFIG_DEBUG_INFO_BTF)) {
-		mutex_lock(&bpf_verifier_lock);
-		if (!btf_vmlinux)
-			btf_vmlinux = btf_parse_vmlinux();
-		mutex_unlock(&bpf_verifier_lock);
-	}
-	return btf_vmlinux;
-}
-
 /*
  * The add_fd_from_fd_array() is executed only if fd_array_cnt is non-zero. In
  * this case expect that every file descriptor in the array is either a map or
@@ -23932,9 +23918,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 
 	bpf_get_btf_vmlinux();
 
-	/* grab the mutex to protect few globals used by verifier */
+	/* grab the mutex to protect BTF globals used by verifier */
 	if (!is_priv)
-		mutex_lock(&bpf_verifier_lock);
+		mutex_lock(&btf_mutex);
 
 	/* user could have requested verbose verifier output
 	 * and supplied buffer to store the verification trace
@@ -24151,7 +24137,7 @@ err_release_maps:
 	module_put(env->attach_btf_mod);
 err_unlock:
 	if (!is_priv)
-		mutex_unlock(&bpf_verifier_lock);
+		mutex_unlock(&btf_mutex);
 	vfree(env->insn_aux_data);
 	kvfree(env->insn_hist);
 err_free_env:
