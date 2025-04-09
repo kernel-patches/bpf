@@ -22895,15 +22895,6 @@ static void print_verification_stats(struct bpf_verifier_env *env)
 		env->peak_states, env->longest_mark_read_walk);
 }
 
-int bpf_prog_ctx_arg_info_init(struct bpf_prog *prog,
-			       const struct bpf_ctx_arg_aux *info, u32 cnt)
-{
-	prog->aux->ctx_arg_info = kmemdup_array(info, cnt, sizeof(*info), GFP_KERNEL);
-	prog->aux->ctx_arg_info_size = cnt;
-
-	return prog->aux->ctx_arg_info ? 0 : -ENOMEM;
-}
-
 static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 {
 	const struct btf_type *t, *func_proto;
