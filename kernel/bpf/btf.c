@@ -7318,6 +7318,29 @@ static int __get_type_size(struct btf *btf, u32 btf_id,
 	return -EINVAL;
 }
 
+static u8 __get_largest_member_size(struct btf *btf, const struct btf_type *t)
+{
+	const struct btf_member *member;
+	const struct btf_type *mtype;
+	u8 largest_member_size = 0;
+	int i;
+
+	if (!__btf_type_is_struct(t))
+		return largest_member_size;
+
+	for_each_member(i, t, member) {
+		mtype = btf_type_by_id(btf, member->type);
+		while (mtype && btf_type_is_modifier(mtype))
+			mtype = btf_type_by_id(btf, mtype->type);
+		if (!mtype)
+			return -EINVAL;
+		if (mtype->size > largest_member_size)
+			largest_member_size = mtype->size;
+	}
+
+	return largest_member_size;
+}
+
 static u8 __get_type_fmodel_flags(const struct btf_type *t)
 {
 	u8 flags = 0;
@@ -7396,6 +7419,8 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 		}
 		m->arg_size[i] = ret;
 		m->arg_flags[i] = __get_type_fmodel_flags(t);
+		m->arg_largest_member_size[i] =
+			__get_largest_member_size(btf, t);
 	}
 	m->nr_args = nargs;
 	return 0;
