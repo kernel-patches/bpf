@@ -1106,6 +1106,7 @@ struct btf_func_model {
 	u8 nr_args;
 	u8 arg_size[MAX_BPF_FUNC_ARGS];
 	u8 arg_flags[MAX_BPF_FUNC_ARGS];
+	u8 arg_largest_member_size[MAX_BPF_FUNC_ARGS];
 };
 
 /* Restore arguments before returning from trampoline to let original function
