@@ -840,6 +840,12 @@ static int branch_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn)
 	insn_byte_t p;
 	int i;
 
+	/* x86_nops[i]; same as jmp with .offs = 0 */
+	for (i = 1; i <= ASM_NOP_MAX; ++i) {
+		if (!memcmp(insn->kaddr, x86_nops[i], i))
+			goto setup;
+	}
+
 	switch (opc1) {
 	case 0xeb:	/* jmp 8 */
 	case 0xe9:	/* jmp 32 */
