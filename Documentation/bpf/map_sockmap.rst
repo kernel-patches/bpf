@@ -100,7 +100,7 @@ bpf_sk_redirect_map()
 ^^^^^^^^^^^^^^^^^^^^^
 .. code-block:: c
 
-    long bpf_sk_redirect_map(struct sk_buff *skb, struct bpf_map *map, u32 key u64 flags)
+    long bpf_sk_redirect_map(struct sk_buff *skb, struct bpf_map *map, u32 key, u64 flags)
 
 Redirect the packet to the socket referenced by ``map`` (of type
 ``BPF_MAP_TYPE_SOCKMAP``) at index ``key``. Both ingress and egress interfaces
