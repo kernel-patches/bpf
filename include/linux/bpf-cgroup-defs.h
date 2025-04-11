@@ -62,6 +62,7 @@ struct cgroup_bpf {
 	 * when BPF_F_ALLOW_MULTI the list can have up to BPF_CGROUP_MAX_PROGS
 	 */
 	struct hlist_head progs[MAX_CGROUP_BPF_ATTACH_TYPE];
+	atomic64_t revisions[MAX_CGROUP_BPF_ATTACH_TYPE];
 	u8 flags[MAX_CGROUP_BPF_ATTACH_TYPE];
 
 	/* list of cgroup shared storages */

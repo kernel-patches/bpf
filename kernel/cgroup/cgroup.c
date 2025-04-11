@@ -2053,7 +2053,7 @@ static int cgroup_reconfigure(struct fs_context *fc)
 static void init_cgroup_housekeeping(struct cgroup *cgrp)
 {
 	struct cgroup_subsys *ss;
-	int ssid;
+	int i, ssid;
 
 	INIT_LIST_HEAD(&cgrp->self.sibling);
 	INIT_LIST_HEAD(&cgrp->self.children);
@@ -2070,6 +2070,9 @@ static void init_cgroup_housekeeping(struct cgroup *cgrp)
 
 	for_each_subsys(ss, ssid)
 		INIT_LIST_HEAD(&cgrp->e_csets[ssid]);
+
+	for (i = 0; i < ARRAY_SIZE(cgrp->bpf.revisions); i++)
+		atomic64_set(&cgrp->bpf.revisions[i], 1);
 
 	init_waitqueue_head(&cgrp->offline_waitq);
 	INIT_WORK(&cgrp->release_agent_work, cgroup1_release_agent);
