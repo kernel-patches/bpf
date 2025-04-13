@@ -2,6 +2,7 @@
 /* Copyright (c) 2025 Meta Platforms, Inc. and affiliates. */
 
 #include <linux/bpf.h>
+#include <linux/filter.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/percpu.h>
 #include <linux/refcount.h>
@@ -493,4 +494,102 @@ int bpf_prog_stderr_printk(struct bpf_prog *prog, const char *fmt, ...)
 	ret = bpf_stream_push_str(stream, buf->buf, ret);
 	bpf_put_buffers();
 	return ret;
+}
+
+struct walk_stack_ctx {
+	struct bpf_prog *prog;
+};
+
+static bool find_from_stack_cb(void *cookie, u64 ip, u64 sp, u64 bp)
+{
+	struct walk_stack_ctx *ctxp = cookie;
+	struct bpf_prog *prog;
+
+	if (!is_bpf_text_address(ip))
+		return true;
+	prog = bpf_prog_ksym_find(ip);
+	if (bpf_is_subprog(prog))
+		return true;
+	ctxp->prog = prog;
+	return false;
+}
+
+struct bpf_prog *bpf_prog_find_from_stack(void)
+{
+	struct walk_stack_ctx ctx = {};
+
+	arch_bpf_stack_walk(find_from_stack_cb, &ctx);
+	return ctx.prog;
+}
+
+struct dump_stack_ctx {
+	struct bpf_prog *prog;
+};
+
+static int dump_stack_bpf_linfo(u64 ip, const char **filep)
+{
+	struct bpf_prog *prog = bpf_prog_ksym_find(ip);
+	int idx = -1, insn_start, insn_end, len;
+	struct bpf_line_info *linfo;
+	void **jited_linfo;
+	struct btf *btf;
+
+	btf = prog->aux->btf;
+	linfo = prog->aux->linfo;
+	jited_linfo = prog->aux->jited_linfo;
+
+	if (!btf || !linfo || !prog->aux->jited_linfo)
+		return -1;
+	len = prog->aux->func ? prog->aux->func[prog->aux->func_idx]->len : prog->len;
+
+	linfo = &prog->aux->linfo[prog->aux->linfo_idx];
+	jited_linfo = &prog->aux->jited_linfo[prog->aux->linfo_idx];
+
+	insn_start = linfo[0].insn_off;
+	insn_end = insn_start + len;
+
+	for (int i = 0; linfo[i].insn_off >= insn_start && linfo[i].insn_off < insn_end; i++) {
+		if (jited_linfo[i] >= (void *)ip)
+			break;
+		idx = i;
+	}
+
+	if (idx == -1)
+		return -1;
+
+	*filep = btf_name_by_offset(btf, linfo[idx].file_name_off);
+	*filep = strrchr(*filep, '/') ?: *filep;
+	*filep += 1;
+
+	return BPF_LINE_INFO_LINE_NUM(linfo[idx].line_col);
+}
+
+static bool dump_stack_cb(void *cookie, u64 ip, u64 sp, u64 bp)
+{
+	struct dump_stack_ctx *ctxp = cookie;
+	const char *file = "";
+	int num;
+
+	if (is_bpf_text_address(ip)) {
+		num = dump_stack_bpf_linfo(ip, &file);
+		if (num == -1)
+			goto end;
+		bpf_prog_stderr_printk(ctxp->prog, " %pS: [%s:%d]\n", (void *)ip, file, num);
+		return true;
+	}
+end:
+	bpf_prog_stderr_printk(ctxp->prog, " %pS\n", (void *)ip);
+	return true;
+}
+
+void bpf_prog_stderr_dump_stack(struct bpf_prog *prog)
+{
+	struct dump_stack_ctx ctx = { .prog = prog };
+
+	bpf_prog_stderr_printk(prog, "CPU: %d UID: %d PID: %d Comm: %s\n",
+			       raw_smp_processor_id(), __kuid_val(current_real_cred()->euid),
+			       current->pid, current->comm);
+	bpf_prog_stderr_printk(prog, "Call trace:\n");
+	arch_bpf_stack_walk(dump_stack_cb, &ctx);
+	bpf_prog_stderr_printk(prog, "\n");
 }

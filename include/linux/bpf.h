@@ -3588,6 +3588,8 @@ void bpf_prog_stream_init(struct bpf_prog *prog);
 void bpf_prog_stream_free(struct bpf_prog *prog);
 __printf(2, 3)
 int bpf_prog_stderr_printk(struct bpf_prog *prog, const char *fmt, ...);
+struct bpf_prog *bpf_prog_find_from_stack(void);
+void bpf_prog_stderr_dump_stack(struct bpf_prog *prog);
 
 #ifdef CONFIG_BPF_LSM
 void bpf_cgroup_atype_get(u32 attach_btf_id, int cgroup_atype);
