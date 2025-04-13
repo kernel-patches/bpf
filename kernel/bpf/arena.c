@@ -590,3 +590,17 @@ static int __init kfunc_init(void)
 	return register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &common_kfunc_set);
 }
 late_initcall(kfunc_init);
+
+void bpf_prog_report_arena_violation(bool write, unsigned long addr)
+{
+	struct bpf_prog *prog;
+
+	prog = bpf_prog_find_from_stack();
+	if (!prog)
+		return;
+	if (atomic_long_fetch_add(1, &prog->aux->error_count) >= BPF_PROG_ERROR_COUNT_MAX)
+		return;
+	bpf_prog_stderr_printk(prog, "ERROR: Arena %s access at unmapped address 0x%lx\n",
+			       write ? "WRITE" : "READ", addr);
+	bpf_prog_stderr_dump_stack(prog);
+}
