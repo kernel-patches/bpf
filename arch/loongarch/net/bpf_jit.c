@@ -1186,7 +1186,7 @@ static int validate_code(struct jit_ctx *ctx)
 	return 0;
 }
 
-struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
+struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 {
 	bool tmp_blinded = false, extra_pass = false;
 	u8 *image_ptr;

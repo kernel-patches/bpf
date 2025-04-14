@@ -21074,10 +21074,11 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	if (err)
 		goto out_undo_insn;
 
-	err = -ENOMEM;
 	func = kcalloc(env->subprog_cnt, sizeof(prog), GFP_KERNEL);
-	if (!func)
+	if (!func) {
+		err = -ENOMEM;
 		goto out_undo_insn;
+	}
 
 	for (i = 0; i < env->subprog_cnt; i++) {
 		subprog_start = subprog_end;
@@ -21090,14 +21091,18 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		 * func[i]->stats will never be accessed and stays NULL
 		 */
 		func[i] = bpf_prog_alloc_no_stats(bpf_prog_size(len), GFP_USER);
-		if (!func[i])
+		if (!func[i]) {
+			err = -ENOMEM;
 			goto out_free;
+		}
 		memcpy(func[i]->insnsi, &prog->insnsi[subprog_start],
 		       len * sizeof(struct bpf_insn));
 		func[i]->type = prog->type;
 		func[i]->len = len;
-		if (bpf_prog_calc_tag(func[i]))
+		if (bpf_prog_calc_tag(func[i])) {
+			err = -ENOMEM;
 			goto out_free;
+		}
 		func[i]->is_func = 1;
 		func[i]->sleepable = prog->sleepable;
 		func[i]->aux->func_idx = i;
@@ -21154,7 +21159,9 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->might_sleep = env->subprog_info[i].might_sleep;
 		if (!i)
 			func[i]->aux->exception_boundary = env->seen_exception;
-		func[i] = bpf_int_jit_compile(func[i]);
+		func[i] = bpf_int_jit_compile(func[i], &err);
+		if (err)
+			goto out_free;
 		if (!func[i]->jited) {
 			err = -ENOTSUPP;
 			goto out_free;
@@ -21198,7 +21205,9 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	}
 	for (i = 0; i < env->subprog_cnt; i++) {
 		old_bpf_func = func[i]->bpf_func;
-		tmp = bpf_int_jit_compile(func[i]);
+		tmp = bpf_int_jit_compile(func[i], &err);
+		if (err)
+			goto out_free;
 		if (tmp != func[i] || func[i]->bpf_func != old_bpf_func) {
 			verbose(env, "JIT doesn't support bpf-to-bpf calls\n");
 			err = -ENOTSUPP;
