@@ -18426,6 +18426,8 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		       range_within(rold, rcur) &&
 		       tnum_in(rold->var_off, rcur->var_off) &&
 		       check_ids(rold->id, rcur->id, idmap) &&
+		       (base_type(rold->type) == PTR_TO_MEM ?
+			check_ids(rold->dynptr_id, rcur->dynptr_id, idmap) : 1) &&
 		       check_ids(rold->ref_obj_id, rcur->ref_obj_id, idmap);
 	case PTR_TO_PACKET_META:
 	case PTR_TO_PACKET:
