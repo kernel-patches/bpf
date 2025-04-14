@@ -2143,23 +2143,23 @@ TRACE_EVENT(svc_wake_up,
 TRACE_EVENT(svc_alloc_arg_err,
 	TP_PROTO(
 		unsigned int requested,
-		unsigned int allocated
+		int ret
 	),
 
-	TP_ARGS(requested, allocated),
+	TP_ARGS(requested, ret),
 
 	TP_STRUCT__entry(
 		__field(unsigned int, requested)
-		__field(unsigned int, allocated)
+		__field(int, ret)
 	),
 
 	TP_fast_assign(
 		__entry->requested = requested;
-		__entry->allocated = allocated;
+		__entry->ret = ret;
 	),
 
-	TP_printk("requested=%u allocated=%u",
-		__entry->requested, __entry->allocated)
+	TP_printk("requested=%u ret=%d",
+		__entry->requested, __entry->ret)
 );
 
 DECLARE_EVENT_CLASS(svc_deferred_event,

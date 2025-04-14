@@ -68,7 +68,7 @@ int z_erofs_gbuf_growsize(unsigned int nrpages)
 	struct page **tmp_pages = NULL;
 	struct z_erofs_gbuf *gbuf;
 	void *ptr, *old_ptr;
-	int last, i, j;
+	int ret, i, j;
 
 	mutex_lock(&gbuf_resize_mutex);
 	/* avoid shrinking gbufs, since no idea how many fses rely on */
@@ -86,12 +86,11 @@ int z_erofs_gbuf_growsize(unsigned int nrpages)
 		for (j = 0; j < gbuf->nrpages; ++j)
 			tmp_pages[j] = gbuf->pages[j];
 		do {
-			last = j;
-			j = alloc_pages_bulk(GFP_KERNEL, nrpages,
-					     tmp_pages);
-			if (last == j)
+			ret = alloc_pages_bulk_refill(GFP_KERNEL, nrpages,
+						      tmp_pages);
+			if (ret == -ENOMEM)
 				goto out;
-		} while (j != nrpages);
+		} while (ret == -EAGAIN);
 
 		ptr = vmap(tmp_pages, nrpages, VM_MAP, PAGE_KERNEL);
 		if (!ptr)

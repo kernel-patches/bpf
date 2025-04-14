@@ -623,21 +623,22 @@ int btrfs_alloc_page_array(unsigned int nr_pages, struct page **page_array,
 			   bool nofail)
 {
 	const gfp_t gfp = nofail ? (GFP_NOFS | __GFP_NOFAIL) : GFP_NOFS;
-	unsigned int allocated;
+	int ret;
 
-	for (allocated = 0; allocated < nr_pages;) {
-		unsigned int last = allocated;
-
-		allocated = alloc_pages_bulk(gfp, nr_pages, page_array);
-		if (unlikely(allocated == last)) {
+	do {
+		ret = alloc_pages_bulk_refill(gfp, nr_pages, page_array);
+		if (unlikely(ret == -ENOMEM)) {
 			/* No progress, fail and do cleanup. */
-			for (int i = 0; i < allocated; i++) {
-				__free_page(page_array[i]);
-				page_array[i] = NULL;
+			for (int i = 0; i < nr_pages; i++) {
+				if (page_array[i]) {
+					__free_page(page_array[i]);
+					page_array[i] = NULL;
+				}
 			}
 			return -ENOMEM;
 		}
-	}
+	} while (ret == -EAGAIN);
+
 	return 0;
 }
 

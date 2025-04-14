@@ -653,7 +653,8 @@ static bool svc_alloc_arg(struct svc_rqst *rqstp)
 {
 	struct svc_serv *serv = rqstp->rq_server;
 	struct xdr_buf *arg = &rqstp->rq_arg;
-	unsigned long pages, filled, ret;
+	unsigned long pages;
+	int ret;
 
 	pages = (serv->sv_max_mesg + 2 * PAGE_SIZE) >> PAGE_SHIFT;
 	if (pages > RPCSVC_MAXPAGES) {
@@ -663,9 +664,12 @@ static bool svc_alloc_arg(struct svc_rqst *rqstp)
 		pages = RPCSVC_MAXPAGES;
 	}
 
-	for (filled = 0; filled < pages; filled = ret) {
-		ret = alloc_pages_bulk(GFP_KERNEL, pages, rqstp->rq_pages);
-		if (ret > filled)
+	while (true) {
+		ret = alloc_pages_bulk_refill(GFP_KERNEL, pages, rqstp->rq_pages);
+		if (!ret)
+			break;
+
+		if (ret == -EAGAIN)
 			/* Made progress, don't sleep yet */
 			continue;
 
