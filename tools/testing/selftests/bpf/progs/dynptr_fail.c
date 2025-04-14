@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2022 Facebook */
-
+#include <vmlinux.h>
 #include <errno.h>
 #include <string.h>
 #include <stdbool.h>
-#include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
-#include <linux/if_ether.h>
 #include "bpf_misc.h"
 #include "bpf_kfuncs.h"
 
@@ -46,7 +44,7 @@ struct {
 	__type(value, __u64);
 } array_map4 SEC(".maps");
 
-struct sample {
+struct dynptr_sample {
 	int pid;
 	long value;
 	char comm[16];
@@ -95,7 +93,7 @@ __failure __msg("Unreleased reference id=4")
 int ringbuf_missing_release2(void *ctx)
 {
 	struct bpf_dynptr ptr1, ptr2;
-	struct sample *sample;
+	struct dynptr_sample *sample;
 
 	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);
 	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
@@ -173,7 +171,7 @@ __failure __msg("type=mem expected=ringbuf_mem")
 int ringbuf_invalid_api(void *ctx)
 {
 	struct bpf_dynptr ptr;
-	struct sample *sample;
+	struct dynptr_sample *sample;
 
 	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr);
 	sample = bpf_dynptr_data(&ptr, 0, sizeof(*sample));
@@ -295,7 +293,7 @@ __failure __msg("invalid mem access 'scalar'")
 int data_slice_use_after_release1(void *ctx)
 {
 	struct bpf_dynptr ptr;
-	struct sample *sample;
+	struct dynptr_sample *sample;
 
 	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr);
 	sample = bpf_dynptr_data(&ptr, 0, sizeof(*sample));
@@ -327,7 +325,7 @@ __failure __msg("invalid mem access 'scalar'")
 int data_slice_use_after_release2(void *ctx)
 {
 	struct bpf_dynptr ptr1, ptr2;
-	struct sample *sample;
+	struct dynptr_sample *sample;
 
 	bpf_ringbuf_reserve_dynptr(&ringbuf, 64, 0, &ptr1);
 	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
