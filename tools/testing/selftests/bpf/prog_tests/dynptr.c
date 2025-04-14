@@ -4,6 +4,7 @@
 #include <test_progs.h>
 #include <network_helpers.h>
 #include "dynptr_fail.skel.h"
+#include "dynptr_fail_qdisc.skel.h"
 #include "dynptr_success.skel.h"
 
 enum test_setup_type {
@@ -161,4 +162,5 @@ void test_dynptr(void)
 	}
 
 	RUN_TESTS(dynptr_fail);
+	RUN_TESTS(dynptr_fail_qdisc);
 }
