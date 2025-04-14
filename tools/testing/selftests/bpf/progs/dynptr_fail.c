@@ -1734,3 +1734,31 @@ int test_dynptr_reg_type(void *ctx)
 	global_call_bpf_dynptr((const struct bpf_dynptr *)current);
 	return 0;
 }
+
+SEC("?syscall")
+__failure __msg("Expected an initialized dynptr as arg #2")
+int test_dynptr_source_release_btf(void *ctx)
+{
+	struct bpf_stream_elem_batch *elem_batch;
+	struct bpf_stream_elem *elem;
+	struct bpf_stream *stream;
+	struct bpf_dynptr dptr;
+	char buf[8];
+
+	stream = bpf_stream_get(BPF_STDERR, NULL);
+	if (!stream)
+		return 0;
+	elem_batch = bpf_stream_next_elem_batch(stream);
+	if (!elem_batch)
+		return 0;
+	elem = bpf_stream_next_elem(elem_batch);
+	if (!elem) {
+		bpf_stream_free_elem_batch(elem_batch);
+		return 0;
+	}
+	bpf_dynptr_from_mem_slice(&elem->mem_slice, 0, &dptr);
+	bpf_stream_free_elem(elem);
+
+	bpf_dynptr_read(buf, sizeof(buf), &dptr, 0, 0);
+	return 0;
+}
