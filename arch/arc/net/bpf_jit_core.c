@@ -1335,7 +1335,7 @@ static int jit_patch_relocations(struct jit_context *ctx)
  * to get the necessary data for the real compilation phase,
  * jit_compile().
  */
-static struct bpf_prog *do_normal_pass(struct bpf_prog *prog)
+static struct bpf_prog *do_normal_pass(struct bpf_prog *prog, int *err)
 {
 	struct jit_context ctx;
 
@@ -1343,13 +1343,17 @@ static struct bpf_prog *do_normal_pass(struct bpf_prog *prog)
 	if (!prog->jit_requested)
 		return prog;
 
-	if (jit_ctx_init(&ctx, prog)) {
+	*err = jit_ctx_init(&ctx, prog);
+	if (*err) {
 		jit_ctx_cleanup(&ctx);
 		return prog;
 	}
 
 	/* Get the lengths and allocate buffer. */
-	if (jit_prepare(&ctx)) {
+	*err = jit_prepare(&ctx);
+	if (*err) {
+		if (*err != -ENOMEM)
+			*err = 0;
 		jit_ctx_cleanup(&ctx);
 		return prog;
 	}
@@ -1374,7 +1378,7 @@ static struct bpf_prog *do_normal_pass(struct bpf_prog *prog)
  * again to get the newly translated addresses in order to resolve
  * the "call"s.
  */
-static struct bpf_prog *do_extra_pass(struct bpf_prog *prog)
+static struct bpf_prog *do_extra_pass(struct bpf_prog *prog, int *err)
 {
 	struct jit_context ctx;
 
@@ -1382,7 +1386,8 @@ static struct bpf_prog *do_extra_pass(struct bpf_prog *prog)
 	if (check_jit_context(prog))
 		return prog;
 
-	if (jit_ctx_init(&ctx, prog)) {
+	*err = jit_ctx_init(&ctx, prog);
+	if (*err) {
 		jit_ctx_cleanup(&ctx);
 		return prog;
 	}
@@ -1417,9 +1422,9 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 
 	/* Was this program already translated? */
 	if (!prog->jited)
-		return do_normal_pass(prog);
+		return do_normal_pass(prog, err);
 	else
-		return do_extra_pass(prog);
+		return do_extra_pass(prog, err);
 
 	return prog;
 }

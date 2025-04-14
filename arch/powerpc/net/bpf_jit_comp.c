@@ -155,8 +155,11 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp, int *err)
 		return org_fp;
 
 	tmp_fp = bpf_jit_blind_constants(org_fp);
-	if (IS_ERR(tmp_fp))
+	if (IS_ERR(tmp_fp)) {
+		if (PTR_ERR(tmp_fp) == -ENOMEM)
+			*err = -ENOMEM;
 		return org_fp;
+	}
 
 	if (tmp_fp != org_fp) {
 		bpf_blinded = true;
@@ -167,6 +170,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp, int *err)
 	if (!jit_data) {
 		jit_data = kzalloc(sizeof(*jit_data), GFP_KERNEL);
 		if (!jit_data) {
+			*err = -ENOMEM;
 			fp = org_fp;
 			goto out;
 		}
@@ -195,6 +199,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp, int *err)
 
 	addrs = kcalloc(flen + 1, sizeof(*addrs), GFP_KERNEL);
 	if (addrs == NULL) {
+		*err = -ENOMEM;
 		fp = org_fp;
 		goto out_addrs;
 	}
@@ -246,6 +251,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp, int *err)
 	fhdr = bpf_jit_binary_pack_alloc(alloclen, &fimage, 4, &hdr, &image,
 					      bpf_jit_fill_ill_insns);
 	if (!fhdr) {
+		*err = -ENOMEM;
 		fp = org_fp;
 		goto out_addrs;
 	}

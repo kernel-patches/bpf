@@ -2164,8 +2164,11 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 	 */
 	tmp = bpf_jit_blind_constants(prog);
 
-	if (IS_ERR(tmp))
+	if (IS_ERR(tmp)) {
+		if (PTR_ERR(tmp) == -ENOMEM)
+			*err = -ENOMEM;
 		return orig_prog;
+	}
 	if (tmp != prog) {
 		tmp_blinded = true;
 		prog = tmp;
@@ -2180,6 +2183,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 	 */
 	ctx.offsets = kcalloc(prog->len, sizeof(int), GFP_KERNEL);
 	if (ctx.offsets == NULL) {
+		*err = -ENOMEM;
 		prog = orig_prog;
 		goto out;
 	}
@@ -2214,6 +2218,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 	if (ctx.imm_count) {
 		ctx.imms = kcalloc(ctx.imm_count, sizeof(u32), GFP_KERNEL);
 		if (ctx.imms == NULL) {
+			*err = -ENOMEM;
 			prog = orig_prog;
 			goto out_off;
 		}
@@ -2239,6 +2244,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 	 * we must fall back to the interpretation
 	 */
 	if (header == NULL) {
+		*err = -ENOMEM;
 		prog = orig_prog;
 		goto out_imms;
 	}

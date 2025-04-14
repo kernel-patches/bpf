@@ -2274,8 +2274,11 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp, int *err)
 	 * If blinding was requested and we failed during blinding,
 	 * we must fall back to the interpreter.
 	 */
-	if (IS_ERR(tmp))
+	if (IS_ERR(tmp)) {
+		if (PTR_ERR(tmp) == -ENOMEM)
+			*err = -ENOMEM;
 		return orig_fp;
+	}
 	if (tmp != fp) {
 		tmp_blinded = true;
 		fp = tmp;
@@ -2285,6 +2288,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp, int *err)
 	if (!jit_data) {
 		jit_data = kzalloc(sizeof(*jit_data), GFP_KERNEL);
 		if (!jit_data) {
+			*err = -ENOMEM;
 			fp = orig_fp;
 			goto out;
 		}
@@ -2301,6 +2305,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp, int *err)
 	memset(&jit, 0, sizeof(jit));
 	jit.addrs = kvcalloc(fp->len + 1, sizeof(*jit.addrs), GFP_KERNEL);
 	if (jit.addrs == NULL) {
+		*err = -ENOMEM;
 		fp = orig_fp;
 		goto free_addrs;
 	}

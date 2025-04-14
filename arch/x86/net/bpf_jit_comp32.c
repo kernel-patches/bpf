@@ -2538,8 +2538,11 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 	 * If blinding was requested and we failed during blinding,
 	 * we must fall back to the interpreter.
 	 */
-	if (IS_ERR(tmp))
+	if (IS_ERR(tmp)) {
+		if (PTR_ERR(tmp) == -ENOMEM)
+			*err = -ENOMEM;
 		return orig_prog;
+	}
 	if (tmp != prog) {
 		tmp_blinded = true;
 		prog = tmp;
@@ -2547,6 +2550,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 
 	addrs = kmalloc_array(prog->len, sizeof(*addrs), GFP_KERNEL);
 	if (!addrs) {
+		*err = -ENOMEM;
 		prog = orig_prog;
 		goto out;
 	}
@@ -2589,6 +2593,7 @@ out_image:
 			header = bpf_jit_binary_alloc(proglen, &image,
 						      1, jit_fill_hole);
 			if (!header) {
+				*err = -ENOMEM;
 				prog = orig_prog;
 				goto out_addrs;
 			}

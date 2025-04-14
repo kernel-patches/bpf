@@ -3522,8 +3522,11 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 	 * If blinding was requested and we failed during blinding,
 	 * we must fall back to the interpreter.
 	 */
-	if (IS_ERR(tmp))
+	if (IS_ERR(tmp)) {
+		if (PTR_ERR(tmp) == -ENOMEM)
+			*err = -ENOMEM;
 		return orig_prog;
+	}
 	if (tmp != prog) {
 		tmp_blinded = true;
 		prog = tmp;
@@ -3533,6 +3536,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 	if (!jit_data) {
 		jit_data = kzalloc(sizeof(*jit_data), GFP_KERNEL);
 		if (!jit_data) {
+			*err = -ENOMEM;
 			prog = orig_prog;
 			goto out;
 		}
@@ -3548,6 +3552,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 				      2 * PRIV_STACK_GUARD_SZ;
 		priv_stack_ptr = __alloc_percpu_gfp(priv_stack_alloc_sz, 8, GFP_KERNEL);
 		if (!priv_stack_ptr) {
+			*err = -ENOMEM;
 			prog = orig_prog;
 			goto out_priv_stack;
 		}
@@ -3569,6 +3574,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 	}
 	addrs = kvmalloc_array(prog->len + 1, sizeof(*addrs), GFP_KERNEL);
 	if (!addrs) {
+		*err = -ENOMEM;
 		prog = orig_prog;
 		goto out_addrs;
 	}
@@ -3635,6 +3641,7 @@ out_image:
 							   &image, align, &rw_header, &rw_image,
 							   jit_fill_hole);
 			if (!header) {
+				*err = -ENOMEM;
 				prog = orig_prog;
 				goto out_addrs;
 			}

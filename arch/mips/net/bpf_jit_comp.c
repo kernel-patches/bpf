@@ -932,8 +932,11 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 	 * the new JITed code.
 	 */
 	tmp = bpf_jit_blind_constants(prog);
-	if (IS_ERR(tmp))
+	if (IS_ERR(tmp)) {
+		if (PTR_ERR(tmp) == -ENOMEM)
+			*err = -ENOMEM;
 		return orig_prog;
+	}
 	if (tmp != prog) {
 		tmp_blinded = true;
 		prog = tmp;
@@ -948,8 +951,10 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 	 */
 	ctx.descriptors = kcalloc(prog->len + 1, sizeof(*ctx.descriptors),
 				  GFP_KERNEL);
-	if (ctx.descriptors == NULL)
+	if (ctx.descriptors == NULL) {
+		*err = -ENOMEM;
 		goto out_err;
+	}
 
 	/* First pass discovers used resources */
 	if (build_body(&ctx) < 0)
@@ -991,8 +996,10 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog, int *err)
 	 * Not able to allocate memory for the structure then
 	 * we must fall back to the interpretation
 	 */
-	if (header == NULL)
+	if (header == NULL) {
+		*err = -ENOMEM;
 		goto out_err;
+	}
 
 	/* Actual pass to generate final JIT code */
 	ctx.target = (u32 *)image_ptr;
