@@ -159,4 +159,6 @@ void bpf_kfunc_trusted_task_test(struct task_struct *ptr) __ksym;
 void bpf_kfunc_trusted_num_test(int *ptr) __ksym;
 void bpf_kfunc_rcu_task_test(struct task_struct *ptr) __ksym;
 
+void bpf_kfunc_looooooooooooooooooooooooooooooong_name(void) __ksym;
+
 #endif /* _BPF_TESTMOD_KFUNC_H */
