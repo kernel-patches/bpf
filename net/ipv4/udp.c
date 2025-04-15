@@ -3377,6 +3377,7 @@ int udp4_seq_show(struct seq_file *seq, void *v)
 }
 
 #ifdef CONFIG_BPF_SYSCALL
+#define MAX_REALLOC_ATTEMPTS 3
 struct bpf_iter__udp {
 	__bpf_md_ptr(struct bpf_iter_meta *, meta);
 	__bpf_md_ptr(struct udp_sock *, udp_sk);
@@ -3401,11 +3402,13 @@ static struct sock *bpf_iter_udp_batch(struct seq_file *seq)
 	struct bpf_udp_iter_state *iter = seq->private;
 	struct udp_iter_state *state = &iter->state;
 	struct net *net = seq_file_net(seq);
+	int resizes = MAX_REALLOC_ATTEMPTS;
 	int resume_bucket, resume_offset;
 	struct udp_table *udptable;
 	unsigned int batch_sks = 0;
-	bool resized = false;
+	spinlock_t *lock = NULL;
 	struct sock *sk;
+	int err = 0;
 
 	resume_bucket = state->bucket;
 	resume_offset = iter->offset;
@@ -3433,10 +3436,13 @@ again:
 		struct udp_hslot *hslot2 = &udptable->hash2[state->bucket].hslot;
 
 		if (hlist_empty(&hslot2->head))
-			continue;
+			goto next_bucket;
 
 		iter->offset = 0;
-		spin_lock_bh(&hslot2->lock);
+		if (!lock) {
+			lock = &hslot2->lock;
+			spin_lock_bh(lock);
+		}
 		udp_portaddr_for_each_entry(sk, &hslot2->head) {
 			if (seq_sk_match(seq, sk)) {
 				/* Resume from the last iterated socket at the
@@ -3454,15 +3460,28 @@ again:
 				batch_sks++;
 			}
 		}
-		spin_unlock_bh(&hslot2->lock);
 
 		if (iter->end_sk)
 			break;
+next_bucket:
+		/* Somehow the bucket was emptied or all matching sockets were
+		 * removed while we held onto its lock. This should not happen.
+		 */
+		if (WARN_ON_ONCE(!resizes))
+			/* Best effort; reset the resize budget and move on. */
+			resizes = MAX_REALLOC_ATTEMPTS;
+		if (lock)
+			spin_unlock_bh(lock);
+		lock = NULL;
 	}
 
 	/* All done: no batch made. */
-	if (!iter->end_sk)
-		return NULL;
+	if (!iter->end_sk) {
+		sk = NULL;
+		goto done;
+	}
+
+	sk = iter->batch[0];
 
 	if (iter->end_sk == batch_sks) {
 		/* Batching is done for the current bucket; return the first
@@ -3471,16 +3490,30 @@ again:
 		iter->st_bucket_done = true;
 		goto done;
 	}
-	if (!resized && !bpf_iter_udp_realloc_batch(iter, batch_sks * 3 / 2,
-						    GFP_USER)) {
-		resized = true;
-		/* After allocating a larger batch, retry one more time to grab
-		 * the whole bucket.
-		 */
-		goto again;
+
+	/* Somehow the batch size still wasn't big enough even though we held
+	 * a lock on the bucket. This should not happen.
+	 */
+	if (WARN_ON_ONCE(!resizes))
+		goto done;
+
+	resizes--;
+	if (resizes) {
+		spin_unlock_bh(lock);
+		lock = NULL;
 	}
+	err = bpf_iter_udp_realloc_batch(iter, batch_sks * 3 / 2,
+					 resizes ? GFP_USER : GFP_ATOMIC);
+	if (err) {
+		sk = ERR_PTR(err);
+		goto done;
+	}
+
+	goto again;
 done:
-	return iter->batch[0];
+	if (lock)
+		spin_unlock_bh(lock);
+	return sk;
 }
 
 static void *bpf_iter_udp_seq_next(struct seq_file *seq, void *v, loff_t *pos)
