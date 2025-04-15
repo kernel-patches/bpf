@@ -1,0 +1,41 @@
+From 5f799e4752d441263ae6656062e2fca98f51c6cb Mon Sep 17 00:00:00 2001
+From: Vasily Gorbik <gor@linux.ibm.com>
+Date: Wed, 2 Apr 2025 03:15:35 +0200
+Subject: [PATCH] scripts/sorttable: Fix endianness handling in build-time
+ mcount sort
+
+Kernel cross-compilation with BUILDTIME_MCOUNT_SORT produces zeroed
+mcount values if the build-host endianness does not match the ELF
+file endianness.
+
+The mcount values array is converted from ELF file
+endianness to build-host endianness during initialization in
+fill_relocs()/fill_addrs(). Avoid extra conversion of these values during
+weak-function zeroing; otherwise, they do not match nm-parsed addresses
+and all mcount values are zeroed out.
+
+Fixes: ef378c3b8233 ("scripts/sorttable: Zero out weak functions in mcount_loc table")
+Reported-by: Ilya Leoshkevich <iii@linux.ibm.com>
+Reported-by: Ihor Solodrai <ihor.solodrai@linux.dev>
+Closes: https://lore.kernel.org/all/your-ad-here.call-01743522822-ext-4975@work.hours/
+Signed-off-by: Vasily Gorbik <gor@linux.ibm.com>
+---
+ scripts/sorttable.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/scripts/sorttable.c b/scripts/sorttable.c
+index 7b4b3714b1af..deed676bfe38 100644
+--- a/scripts/sorttable.c
++++ b/scripts/sorttable.c
+@@ -857,7 +857,7 @@ static void *sort_mcount_loc(void *arg)
+ 		for (void *ptr = vals; ptr < vals + size; ptr += long_size) {
+ 			uint64_t key;
+ 
+-			key = long_size == 4 ? r((uint32_t *)ptr) : r8((uint64_t *)ptr);
++			key = long_size == 4 ? *(uint32_t *)ptr : *(uint64_t *)ptr;
+ 			if (!find_func(key)) {
+ 				if (long_size == 4)
+ 					*(uint32_t *)ptr = 0;
+-- 
+2.49.0
+
