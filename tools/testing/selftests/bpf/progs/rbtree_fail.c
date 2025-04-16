@@ -69,11 +69,11 @@ long rbtree_api_nolock_first(void *ctx)
 }
 
 SEC("?tc")
-__failure __msg("bpf_rbtree_remove can only take non-owning bpf_rb_node pointer")
+__retval(0)
 long rbtree_api_remove_unadded_node(void *ctx)
 {
 	struct node_data *n, *m;
-	struct bpf_rb_node *res;
+	struct bpf_rb_node *res_n, *res_m;
 
 	n = bpf_obj_new(typeof(*n));
 	if (!n)
@@ -89,18 +89,20 @@ long rbtree_api_remove_unadded_node(void *ctx)
 	bpf_rbtree_add(&groot, &n->node, less);
 
 	/* This remove should pass verifier */
-	res = bpf_rbtree_remove(&groot, &n->node);
-	n = container_of(res, struct node_data, node);
+	res_n = bpf_rbtree_remove(&groot, &n->node);
 
 	/* This remove shouldn't, m isn't in an rbtree */
-	res = bpf_rbtree_remove(&groot, &m->node);
-	m = container_of(res, struct node_data, node);
+	res_m = bpf_rbtree_remove(&groot, &m->node);
 	bpf_spin_unlock(&glock);
 
-	if (n)
-		bpf_obj_drop(n);
-	if (m)
-		bpf_obj_drop(m);
+	bpf_obj_drop(m);
+	if (res_n)
+		bpf_obj_drop(container_of(res_n, struct node_data, node));
+	if (res_m) {
+		bpf_obj_drop(container_of(res_m, struct node_data, node));
+		return 2;
+	}
+
 	return 0;
 }
 
@@ -178,7 +180,7 @@ err_out:
 }
 
 SEC("?tc")
-__failure __msg("bpf_rbtree_remove can only take non-owning bpf_rb_node pointer")
+__failure __msg("bpf_rbtree_remove can only take non-owning or refcounted bpf_rb_node pointer")
 long rbtree_api_add_release_unlock_escape(void *ctx)
 {
 	struct node_data *n;
@@ -202,7 +204,7 @@ long rbtree_api_add_release_unlock_escape(void *ctx)
 }
 
 SEC("?tc")
-__failure __msg("bpf_rbtree_remove can only take non-owning bpf_rb_node pointer")
+__failure __msg("bpf_rbtree_remove can only take non-owning or refcounted bpf_rb_node pointer")
 long rbtree_api_first_release_unlock_escape(void *ctx)
 {
 	struct bpf_rb_node *res;
