@@ -94,3 +94,48 @@ cleanup_cgroup:
 	close(cgroup_fd);
 	cleanup_cgroup_environment();
 }
+
+void test_cgroup_storage_update(void)
+{
+	struct cgroup_storage *skel;
+	struct nstoken *ns = NULL;
+	int cgroup_fd;
+	int err;
+
+	cgroup_fd = cgroup_setup_and_join(TEST_CGROUP);
+	if (!ASSERT_OK_FD(cgroup_fd, "create cgroup"))
+		return;
+
+	if (!ASSERT_OK(setup_network(&ns), "setup network"))
+		goto cleanup_cgroup;
+
+	skel = cgroup_storage__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "load program"))
+		goto cleanup_network;
+
+	skel->links.bpf_prog_no_map =
+		bpf_program__attach_cgroup(skel->progs.bpf_prog_no_map,
+					   cgroup_fd);
+	if (!ASSERT_OK_PTR(skel->links.bpf_prog_no_map, "attach no map prog"))
+		goto cleanup_progs;
+
+	err = bpf_link_update(bpf_link__fd(skel->links.bpf_prog_no_map),
+			      bpf_program__fd(skel->progs.bpf_prog), NULL);
+	if (!ASSERT_OK(err, "bpf_link_update"))
+		goto cleanup_progs;
+
+	err = SYS_NOFAIL(PING_CMD);
+	ASSERT_OK(err, "first ping");
+	err = SYS_NOFAIL(PING_CMD);
+	ASSERT_NEQ(err, 0, "second ping");
+	err = SYS_NOFAIL(PING_CMD);
+	ASSERT_OK(err, "third ping");
+
+cleanup_progs:
+	cgroup_storage__destroy(skel);
+cleanup_network:
+	cleanup_network(ns);
+cleanup_cgroup:
+	close(cgroup_fd);
+	cleanup_cgroup_environment();
+}

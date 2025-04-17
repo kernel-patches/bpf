@@ -21,4 +21,10 @@ int bpf_prog(struct __sk_buff *skb)
 	return (*counter & 1);
 }
 
+SEC("cgroup_skb/egress")
+int bpf_prog_no_map(struct __sk_buff *skb)
+{
+	return 1;
+}
+
 char _license[] SEC("license") = "GPL";
