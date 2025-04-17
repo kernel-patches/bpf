@@ -770,12 +770,14 @@ static int cgroup_bpf_attach(struct cgroup *cgrp,
 }
 
 /* Swap updated BPF program for given link in effective program arrays across
- * all descendant cgroups. This function is guaranteed to succeed.
+ * all descendant cgroups.
  */
-static void replace_effective_prog(struct cgroup *cgrp,
-				   enum cgroup_bpf_attach_type atype,
-				   struct bpf_cgroup_link *link)
+static int replace_effective_prog(struct cgroup *cgrp,
+				  enum cgroup_bpf_attach_type atype,
+				  struct bpf_cgroup_link *link)
 {
+	struct bpf_cgroup_storage *new_storage[MAX_BPF_CGROUP_STORAGE_TYPE] = {};
+	struct bpf_cgroup_storage *storage[MAX_BPF_CGROUP_STORAGE_TYPE] = {};
 	struct bpf_prog_array_item *item;
 	struct cgroup_subsys_state *css;
 	struct bpf_prog_array *progs;
@@ -783,6 +785,10 @@ static void replace_effective_prog(struct cgroup *cgrp,
 	struct hlist_head *head;
 	struct cgroup *cg;
 	int pos;
+
+	if (bpf_cgroup_storages_alloc(storage, new_storage, link->type,
+				      link->link.prog, cgrp))
+		return -ENOMEM;
 
 	css_for_each_descendant_pre(css, &cgrp->self) {
 		struct cgroup *desc = container_of(css, struct cgroup, self);
@@ -810,8 +816,11 @@ found:
 				desc->bpf.effective[atype],
 				lockdep_is_held(&cgroup_mutex));
 		item = &progs->items[pos];
+		bpf_cgroup_storages_assign(item->cgroup_storage, storage);
 		WRITE_ONCE(item->prog, link->link.prog);
 	}
+	bpf_cgroup_storages_link(new_storage, cgrp, link->type);
+	return 0;
 }
 
 /**
@@ -833,6 +842,7 @@ static int __cgroup_bpf_replace(struct cgroup *cgrp,
 	struct bpf_prog_list *pl;
 	struct hlist_head *progs;
 	bool found = false;
+	int err;
 
 	atype = bpf_cgroup_atype_find(link->type, new_prog->aux->attach_btf_id);
 	if (atype < 0)
@@ -853,7 +863,11 @@ static int __cgroup_bpf_replace(struct cgroup *cgrp,
 		return -ENOENT;
 
 	old_prog = xchg(&link->link.prog, new_prog);
-	replace_effective_prog(cgrp, atype, link);
+	err = replace_effective_prog(cgrp, atype, link);
+	if (err) {
+		xchg(&link->link.prog, old_prog);
+		return err;
+	}
 	bpf_prog_put(old_prog);
 	return 0;
 }
