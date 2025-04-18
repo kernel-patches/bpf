@@ -1462,8 +1462,6 @@ bpf_tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_current_comm_proto;
 	case BPF_FUNC_trace_printk:
 		return bpf_get_trace_printk_proto();
-	case BPF_FUNC_get_smp_processor_id:
-		return &bpf_get_smp_processor_id_proto;
 	case BPF_FUNC_get_numa_node_id:
 		return &bpf_get_numa_node_id_proto;
 	case BPF_FUNC_perf_event_read:
