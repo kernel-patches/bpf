@@ -3613,8 +3613,10 @@ __printf(2, 3)
 int bpf_stream_stage_printk(struct bpf_stream_stage *ss, const char *fmt, ...);
 int bpf_stream_stage_commit(struct bpf_stream_stage *ss, struct bpf_prog *prog,
 			    enum bpf_stream_id stream_id);
+int bpf_stream_stage_dump_stack(struct bpf_stream_stage *ss);
 
 #define bpf_stream_printk(...) bpf_stream_stage_printk(&__ss, __VA_ARGS__)
+#define bpf_stream_dump_stack() bpf_stream_stage_dump_stack(&__ss)
 
 #define bpf_stream_stage(prog, stream_id, expr)                  \
 	({                                                       \
