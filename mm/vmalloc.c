@@ -900,6 +900,11 @@ static struct vmap_node *vmap_nodes = &single;
 static __read_mostly unsigned int nr_vmap_nodes = 1;
 static __read_mostly unsigned int vmap_zone_size = 1;
 
+/* A simple iterator over all vmap-nodes. */
+#define for_each_vmap_node(vn)	\
+	for ((vn) = &vmap_nodes[0];	\
+		(vn) < &vmap_nodes[nr_vmap_nodes]; (vn)++)
+
 static inline unsigned int
 addr_to_node_id(unsigned long addr)
 {
@@ -916,6 +921,19 @@ static inline struct vmap_node *
 id_to_node(unsigned int id)
 {
 	return &vmap_nodes[id % nr_vmap_nodes];
+}
+
+static inline unsigned int
+node_to_id(struct vmap_node *node)
+{
+	/* Pointer arithmetic. */
+	unsigned int id = node - vmap_nodes;
+
+	if (likely(id < nr_vmap_nodes))
+		return id;
+
+	WARN_ONCE(1, "An address 0x%p is out-of-bounds.\n", node);
+	return 0;
 }
 
 /*
@@ -1056,12 +1074,11 @@ find_vmap_area_exceed_addr_lock(unsigned long addr, struct vmap_area **va)
 {
 	unsigned long va_start_lowest;
 	struct vmap_node *vn;
-	int i;
 
 repeat:
-	for (i = 0, va_start_lowest = 0; i < nr_vmap_nodes; i++) {
-		vn = &vmap_nodes[i];
+	va_start_lowest = 0;
 
+	for_each_vmap_node(vn) {
 		spin_lock(&vn->busy.lock);
 		*va = __find_vmap_area_exceed_addr(addr, &vn->busy.root);
 
@@ -2255,9 +2272,7 @@ static bool __purge_vmap_area_lazy(unsigned long start, unsigned long end,
 	 */
 	purge_nodes = CPU_MASK_NONE;
 
-	for (i = 0; i < nr_vmap_nodes; i++) {
-		vn = &vmap_nodes[i];
-
+	for_each_vmap_node(vn) {
 		INIT_LIST_HEAD(&vn->purge_list);
 		vn->skip_populate = full_pool_decay;
 		decay_va_pool_node(vn, full_pool_decay);
@@ -2276,7 +2291,7 @@ static bool __purge_vmap_area_lazy(unsigned long start, unsigned long end,
 		end = max(end, list_last_entry(&vn->purge_list,
 			struct vmap_area, list)->va_end);
 
-		cpumask_set_cpu(i, &purge_nodes);
+		cpumask_set_cpu(node_to_id(vn), &purge_nodes);
 	}
 
 	nr_purge_nodes = cpumask_weight(&purge_nodes);
@@ -2355,7 +2370,7 @@ static void free_vmap_area_noflush(struct vmap_area *va)
 	if (WARN_ON_ONCE(!list_empty(&va->list)))
 		return;
 
-	nr_lazy = atomic_long_add_return(va_size(va) >> PAGE_SHIFT,
+	nr_lazy = atomic_long_add_return_relaxed(va_size(va) >> PAGE_SHIFT,
 					 &vmap_lazy_nr);
 
 	/*
@@ -3370,12 +3385,13 @@ void vfree(const void *addr)
 
 	if (unlikely(vm->flags & VM_FLUSH_RESET_PERMS))
 		vm_reset_perms(vm);
+	/* All pages of vm should be charged to same memcg, so use first one. */
+	if (vm->nr_pages && !(vm->flags & VM_MAP_PUT_PAGES))
+		mod_memcg_page_state(vm->pages[0], MEMCG_VMALLOC, -vm->nr_pages);
 	for (i = 0; i < vm->nr_pages; i++) {
 		struct page *page = vm->pages[i];
 
 		BUG_ON(!page);
-		if (!(vm->flags & VM_MAP_PUT_PAGES))
-			mod_memcg_page_state(page, MEMCG_VMALLOC, -1);
 		/*
 		 * High-order allocs for huge vmallocs are split, so
 		 * can be freed as an array of order-0 allocations
@@ -3671,12 +3687,10 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 		node, page_order, nr_small_pages, area->pages);
 
 	atomic_long_add(area->nr_pages, &nr_vmalloc_pages);
-	if (gfp_mask & __GFP_ACCOUNT) {
-		int i;
-
-		for (i = 0; i < area->nr_pages; i++)
-			mod_memcg_page_state(area->pages[i], MEMCG_VMALLOC, 1);
-	}
+	/* All pages of vm should be charged to same memcg, so use first one. */
+	if (gfp_mask & __GFP_ACCOUNT && area->nr_pages)
+		mod_memcg_page_state(area->pages[0], MEMCG_VMALLOC,
+				     area->nr_pages);
 
 	/*
 	 * If not enough pages were obtained to accomplish an
@@ -4942,11 +4956,8 @@ static void show_purge_info(struct seq_file *m)
 {
 	struct vmap_node *vn;
 	struct vmap_area *va;
-	int i;
 
-	for (i = 0; i < nr_vmap_nodes; i++) {
-		vn = &vmap_nodes[i];
-
+	for_each_vmap_node(vn) {
 		spin_lock(&vn->lazy.lock);
 		list_for_each_entry(va, &vn->lazy.head, list) {
 			seq_printf(m, "0x%pK-0x%pK %7ld unpurged vm_area\n",
@@ -4962,11 +4973,8 @@ static int vmalloc_info_show(struct seq_file *m, void *p)
 	struct vmap_node *vn;
 	struct vmap_area *va;
 	struct vm_struct *v;
-	int i;
 
-	for (i = 0; i < nr_vmap_nodes; i++) {
-		vn = &vmap_nodes[i];
-
+	for_each_vmap_node(vn) {
 		spin_lock(&vn->busy.lock);
 		list_for_each_entry(va, &vn->busy.head, list) {
 			if (!va->vm) {
@@ -5087,7 +5095,7 @@ static void __init vmap_init_free_space(void)
 static void vmap_init_nodes(void)
 {
 	struct vmap_node *vn;
-	int i, n;
+	int i;
 
 #if BITS_PER_LONG == 64
 	/*
@@ -5104,7 +5112,7 @@ static void vmap_init_nodes(void)
 	 * set of cores. Therefore a per-domain purging is supposed to
 	 * be added as well as a per-domain balancing.
 	 */
-	n = clamp_t(unsigned int, num_possible_cpus(), 1, 128);
+	int n = clamp_t(unsigned int, num_possible_cpus(), 1, 128);
 
 	if (n > 1) {
 		vn = kmalloc_array(n, sizeof(*vn), GFP_NOWAIT | __GFP_NOWARN);
@@ -5119,8 +5127,7 @@ static void vmap_init_nodes(void)
 	}
 #endif
 
-	for (n = 0; n < nr_vmap_nodes; n++) {
-		vn = &vmap_nodes[n];
+	for_each_vmap_node(vn) {
 		vn->busy.root = RB_ROOT;
 		INIT_LIST_HEAD(&vn->busy.head);
 		spin_lock_init(&vn->busy.lock);
@@ -5141,15 +5148,13 @@ static void vmap_init_nodes(void)
 static unsigned long
 vmap_node_shrink_count(struct shrinker *shrink, struct shrink_control *sc)
 {
-	unsigned long count;
+	unsigned long count = 0;
 	struct vmap_node *vn;
-	int i, j;
+	int i;
 
-	for (count = 0, i = 0; i < nr_vmap_nodes; i++) {
-		vn = &vmap_nodes[i];
-
-		for (j = 0; j < MAX_VA_SIZE_PAGES; j++)
-			count += READ_ONCE(vn->pool[j].len);
+	for_each_vmap_node(vn) {
+		for (i = 0; i < MAX_VA_SIZE_PAGES; i++)
+			count += READ_ONCE(vn->pool[i].len);
 	}
 
 	return count ? count : SHRINK_EMPTY;
@@ -5158,10 +5163,10 @@ vmap_node_shrink_count(struct shrinker *shrink, struct shrink_control *sc)
 static unsigned long
 vmap_node_shrink_scan(struct shrinker *shrink, struct shrink_control *sc)
 {
-	int i;
+	struct vmap_node *vn;
 
-	for (i = 0; i < nr_vmap_nodes; i++)
-		decay_va_pool_node(&vmap_nodes[i], true);
+	for_each_vmap_node(vn)
+		decay_va_pool_node(vn, true);
 
 	return SHRINK_STOP;
 }

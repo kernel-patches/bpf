@@ -12,6 +12,7 @@
 #include <linux/rbtree.h>
 #include <linux/atomic.h>
 #include <linux/debug_locks.h>
+#include <linux/compiler.h>
 #include <linux/mm_types.h>
 #include <linux/mmap_lock.h>
 #include <linux/range.h>
@@ -1218,6 +1219,23 @@ static inline unsigned int folio_order(const struct folio *folio)
 	return folio_large_order(folio);
 }
 
+/**
+ * folio_reset_order - Reset the folio order and derived _nr_pages
+ * @folio: The folio.
+ *
+ * Reset the order and derived _nr_pages to 0. Must only be used in the
+ * process of splitting large folios.
+ */
+static inline void folio_reset_order(struct folio *folio)
+{
+	if (WARN_ON_ONCE(!folio_test_large(folio)))
+		return;
+	folio->_flags_1 &= ~0xffUL;
+#ifdef NR_PAGES_IN_LARGE_FOLIO
+	folio->_nr_pages = 0;
+#endif
+}
+
 #include <linux/huge_mm.h>
 
 /*
@@ -1987,6 +2005,45 @@ static inline struct folio *pfn_folio(unsigned long pfn)
 	return page_folio(pfn_to_page(pfn));
 }
 
+#ifdef CONFIG_MMU
+static inline pte_t mk_pte(struct page *page, pgprot_t pgprot)
+{
+	return pfn_pte(page_to_pfn(page), pgprot);
+}
+
+/**
+ * folio_mk_pte - Create a PTE for this folio
+ * @folio: The folio to create a PTE for
+ * @pgprot: The page protection bits to use
+ *
+ * Create a page table entry for the first page of this folio.
+ * This is suitable for passing to set_ptes().
+ *
+ * Return: A page table entry suitable for mapping this folio.
+ */
+static inline pte_t folio_mk_pte(struct folio *folio, pgprot_t pgprot)
+{
+	return pfn_pte(folio_pfn(folio), pgprot);
+}
+
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+/**
+ * folio_mk_pmd - Create a PMD for this folio
+ * @folio: The folio to create a PMD for
+ * @pgprot: The page protection bits to use
+ *
+ * Create a page table entry for the first page of this folio.
+ * This is suitable for passing to set_pmd_at().
+ *
+ * Return: A page table entry suitable for mapping this folio.
+ */
+static inline pmd_t folio_mk_pmd(struct folio *folio, pgprot_t pgprot)
+{
+	return pmd_mkhuge(pfn_pmd(folio_pfn(folio), pgprot));
+}
+#endif
+#endif /* CONFIG_MMU */
+
 static inline bool folio_has_pincount(const struct folio *folio)
 {
 	if (IS_ENABLED(CONFIG_64BIT))
@@ -2165,15 +2222,6 @@ static inline long compound_nr(struct page *page)
 	if (!test_bit(PG_head, &folio->flags))
 		return 1;
 	return folio_large_nr_pages(folio);
-}
-
-/**
- * thp_nr_pages - The number of regular pages in this huge page.
- * @page: The head page of a huge page.
- */
-static inline long thp_nr_pages(struct page *page)
-{
-	return folio_nr_pages((struct folio *)page);
 }
 
 /**
@@ -2389,7 +2437,6 @@ static inline void clear_page_pfmemalloc(struct page *page)
 extern void pagefault_out_of_memory(void);
 
 #define offset_in_page(p)	((unsigned long)(p) & ~PAGE_MASK)
-#define offset_in_thp(page, p)	((unsigned long)(p) & (thp_size(page) - 1))
 #define offset_in_folio(folio, p) ((unsigned long)(p) & (folio_size(folio) - 1))
 
 /*
@@ -2750,7 +2797,7 @@ static inline void update_hiwater_rss(struct mm_struct *mm)
 {
 	unsigned long _rss = get_mm_rss(mm);
 
-	if ((mm)->hiwater_rss < _rss)
+	if (data_race(mm->hiwater_rss) < _rss)
 		(mm)->hiwater_rss = _rss;
 }
 
@@ -3100,9 +3147,10 @@ static inline void pagetable_dtor_free(struct ptdesc *ptdesc)
 	pagetable_free(ptdesc);
 }
 
-static inline bool pagetable_pte_ctor(struct ptdesc *ptdesc)
+static inline bool pagetable_pte_ctor(struct mm_struct *mm,
+				      struct ptdesc *ptdesc)
 {
-	if (!ptlock_init(ptdesc))
+	if (mm != &init_mm && !ptlock_init(ptdesc))
 		return false;
 	__pagetable_ctor(ptdesc);
 	return true;
@@ -3206,9 +3254,10 @@ static inline spinlock_t *pmd_lock(struct mm_struct *mm, pmd_t *pmd)
 	return ptl;
 }
 
-static inline bool pagetable_pmd_ctor(struct ptdesc *ptdesc)
+static inline bool pagetable_pmd_ctor(struct mm_struct *mm,
+				      struct ptdesc *ptdesc)
 {
-	if (!pmd_ptlock_init(ptdesc))
+	if (mm != &init_mm && !pmd_ptlock_init(ptdesc))
 		return false;
 	ptdesc_pmd_pts_init(ptdesc);
 	__pagetable_ctor(ptdesc);

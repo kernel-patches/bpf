@@ -278,8 +278,17 @@ static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 	p4d_free_tlb(tlb, p4d, start);
 }
 
-/*
- * This function frees user-level page tables of a process.
+/**
+ * free_pgd_range - Unmap and free page tables in the range
+ * @tlb: the mmu_gather containing pending TLB flush info
+ * @addr: virtual address start
+ * @end: virtual address end
+ * @floor: lowest address boundary
+ * @ceiling: highest address boundary
+ *
+ * This function tears down all user-level page tables in the
+ * specified virtual address range [@addr..@end). It is part of
+ * the memory unmap flow.
  */
 void free_pgd_range(struct mmu_gather *tlb,
 			unsigned long addr, unsigned long end,
@@ -929,7 +938,7 @@ copy_present_page(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 	rss[MM_ANONPAGES]++;
 
 	/* All done, just insert the new page copy in the child */
-	pte = mk_pte(&new_folio->page, dst_vma->vm_page_prot);
+	pte = folio_mk_pte(new_folio, dst_vma->vm_page_prot);
 	pte = maybe_mkwrite(pte_mkdirty(pte), dst_vma);
 	if (userfaultfd_pte_wp(dst_vma, ptep_get(src_pte)))
 		/* Uffd-wp needs to be delivered to dest pte as well */
@@ -1361,7 +1370,7 @@ copy_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 	struct mm_struct *dst_mm = dst_vma->vm_mm;
 	struct mm_struct *src_mm = src_vma->vm_mm;
 	struct mmu_notifier_range range;
-	unsigned long next, pfn;
+	unsigned long next, pfn = 0;
 	bool is_cow;
 	int ret;
 
@@ -1990,6 +1999,48 @@ void unmap_vmas(struct mmu_gather *tlb, struct ma_state *mas,
 }
 
 /**
+ * zap_page_range_single_batched - remove user pages in a given range
+ * @tlb: pointer to the caller's struct mmu_gather
+ * @vma: vm_area_struct holding the applicable pages
+ * @address: starting address of pages to remove
+ * @size: number of bytes to remove
+ * @details: details of shared cache invalidation
+ *
+ * @tlb shouldn't be NULL.  The range must fit into one VMA.  If @vma is for
+ * hugetlb, @tlb is flushed and re-initialized by this function.
+ */
+void zap_page_range_single_batched(struct mmu_gather *tlb,
+		struct vm_area_struct *vma, unsigned long address,
+		unsigned long size, struct zap_details *details)
+{
+	const unsigned long end = address + size;
+	struct mmu_notifier_range range;
+
+	VM_WARN_ON_ONCE(!tlb || tlb->mm != vma->vm_mm);
+
+	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, vma->vm_mm,
+				address, end);
+	hugetlb_zap_begin(vma, &range.start, &range.end);
+	update_hiwater_rss(vma->vm_mm);
+	mmu_notifier_invalidate_range_start(&range);
+	/*
+	 * unmap 'address-end' not 'range.start-range.end' as range
+	 * could have been expanded for hugetlb pmd sharing.
+	 */
+	unmap_single_vma(tlb, vma, address, end, details, false);
+	mmu_notifier_invalidate_range_end(&range);
+	if (is_vm_hugetlb_page(vma)) {
+		/*
+		 * flush tlb and free resources before hugetlb_zap_end(), to
+		 * avoid concurrent page faults' allocation failure.
+		 */
+		tlb_finish_mmu(tlb);
+		hugetlb_zap_end(vma, details);
+		tlb_gather_mmu(tlb, vma->vm_mm);
+	}
+}
+
+/**
  * zap_page_range_single - remove user pages in a given range
  * @vma: vm_area_struct holding the applicable pages
  * @address: starting address of pages to zap
@@ -2001,24 +2052,11 @@ void unmap_vmas(struct mmu_gather *tlb, struct ma_state *mas,
 void zap_page_range_single(struct vm_area_struct *vma, unsigned long address,
 		unsigned long size, struct zap_details *details)
 {
-	const unsigned long end = address + size;
-	struct mmu_notifier_range range;
 	struct mmu_gather tlb;
 
-	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, vma->vm_mm,
-				address, end);
-	hugetlb_zap_begin(vma, &range.start, &range.end);
 	tlb_gather_mmu(&tlb, vma->vm_mm);
-	update_hiwater_rss(vma->vm_mm);
-	mmu_notifier_invalidate_range_start(&range);
-	/*
-	 * unmap 'address-end' not 'range.start-range.end' as range
-	 * could have been expanded for hugetlb pmd sharing.
-	 */
-	unmap_single_vma(&tlb, vma, address, end, details, false);
-	mmu_notifier_invalidate_range_end(&range);
+	zap_page_range_single_batched(&tlb, vma, address, size, details);
 	tlb_finish_mmu(&tlb);
-	hugetlb_zap_end(vma, details);
 }
 
 /**
@@ -2938,11 +2976,11 @@ static int apply_to_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	if (fn) {
 		do {
 			if (create || !pte_none(ptep_get(pte))) {
-				err = fn(pte++, addr, data);
+				err = fn(pte, addr, data);
 				if (err)
 					break;
 			}
-		} while (addr += PAGE_SIZE, addr != end);
+		} while (pte++, addr += PAGE_SIZE, addr != end);
 	}
 	*mask |= PGTBL_PTE_MODIFIED;
 
@@ -3523,7 +3561,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 			inc_mm_counter(mm, MM_ANONPAGES);
 		}
 		flush_cache_page(vma, vmf->address, pte_pfn(vmf->orig_pte));
-		entry = mk_pte(&new_folio->page, vma->vm_page_prot);
+		entry = folio_mk_pte(new_folio, vma->vm_page_prot);
 		entry = pte_sw_mkyoung(entry);
 		if (unlikely(unshare)) {
 			if (pte_soft_dirty(vmf->orig_pte))
@@ -3734,8 +3772,6 @@ static bool __wp_can_reuse_large_anon_folio(struct folio *folio,
 		return false;
 
 	VM_WARN_ON_ONCE(folio_test_ksm(folio));
-	VM_WARN_ON_ONCE(folio_mapcount(folio) > folio_nr_pages(folio));
-	VM_WARN_ON_ONCE(folio_entire_mapcount(folio));
 
 	if (unlikely(folio_test_swapcache(folio))) {
 		/*
@@ -3760,6 +3796,8 @@ static bool __wp_can_reuse_large_anon_folio(struct folio *folio,
 	if (folio_large_mapcount(folio) != folio_ref_count(folio))
 		goto unlock;
 
+	VM_WARN_ON_ONCE_FOLIO(folio_large_mapcount(folio) > folio_nr_pages(folio), folio);
+	VM_WARN_ON_ONCE_FOLIO(folio_entire_mapcount(folio), folio);
 	VM_WARN_ON_ONCE(folio_mm_id(folio, 0) != vma->vm_mm->mm_id &&
 			folio_mm_id(folio, 1) != vma->vm_mm->mm_id);
 
@@ -5013,7 +5051,7 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	 */
 	__folio_mark_uptodate(folio);
 
-	entry = mk_pte(&folio->page, vma->vm_page_prot);
+	entry = folio_mk_pte(folio, vma->vm_page_prot);
 	entry = pte_sw_mkyoung(entry);
 	if (vma->vm_flags & VM_WRITE)
 		entry = pte_mkwrite(pte_mkdirty(entry), vma);
@@ -5188,7 +5226,7 @@ vm_fault_t do_set_pmd(struct vm_fault *vmf, struct page *page)
 
 	flush_icache_pages(vma, page, HPAGE_PMD_NR);
 
-	entry = mk_huge_pmd(page, vma->vm_page_prot);
+	entry = folio_mk_pmd(folio, vma->vm_page_prot);
 	if (write)
 		entry = maybe_pmd_mkwrite(pmd_mkdirty(entry), vma);
 
@@ -5245,6 +5283,8 @@ void set_pte_range(struct vm_fault *vmf, struct folio *folio,
 
 	if (write)
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
+	else if (pte_write(entry) && folio_test_dirty(folio))
+		entry = pte_mkdirty(entry);
 	if (unlikely(vmf_orig_pte_uffd_wp(vmf)))
 		entry = pte_mkuffd_wp(entry);
 	/* copy-on-write page */
