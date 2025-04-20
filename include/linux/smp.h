@@ -173,7 +173,7 @@ void wake_up_all_idle_cpus(void);
  * Generic and arch helpers
  */
 void __init call_function_init(void);
-void generic_smp_call_function_single_interrupt(void);
+void generic_smp_call_function_single_interrupt(struct pt_regs *regs);
 #define generic_smp_call_function_interrupt \
 	generic_smp_call_function_single_interrupt
 

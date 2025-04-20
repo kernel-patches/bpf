@@ -26,6 +26,7 @@
 #include <linux/sched/debug.h>
 #include <linux/jump_label.h>
 #include <linux/string_choices.h>
+#include <linux/filter.h>
 
 #include <trace/events/ipi.h>
 #define CREATE_TRACE_POINTS
@@ -49,7 +50,7 @@ static DEFINE_PER_CPU_SHARED_ALIGNED(struct llist_head, call_single_queue);
 
 static DEFINE_PER_CPU(atomic_t, trigger_backtrace) = ATOMIC_INIT(1);
 
-static void __flush_smp_call_function_queue(bool warn_cpu_offline);
+static void __flush_smp_call_function_queue(struct pt_regs *regs, bool warn_cpu_offline);
 
 int smpcfd_prepare_cpu(unsigned int cpu)
 {
@@ -94,7 +95,7 @@ int smpcfd_dying_cpu(unsigned int cpu)
 	 * ensure that the outgoing CPU doesn't go offline with work
 	 * still pending.
 	 */
-	__flush_smp_call_function_queue(false);
+	__flush_smp_call_function_queue(NULL, false);
 	irq_work_run();
 	return 0;
 }
@@ -452,14 +453,15 @@ static int generic_exec_single(int cpu, call_single_data_t *csd)
  * Invoked by arch to handle an IPI for call function single.
  * Must be called with interrupts disabled.
  */
-void generic_smp_call_function_single_interrupt(void)
+void generic_smp_call_function_single_interrupt(struct pt_regs *regs)
 {
-	__flush_smp_call_function_queue(true);
+	__flush_smp_call_function_queue(regs, true);
 }
 
 /**
  * __flush_smp_call_function_queue - Flush pending smp-call-function callbacks
  *
+ * @regs : register state when the interrupted the CPU
  * @warn_cpu_offline: If set to 'true', warn if callbacks were queued on an
  *		      offline CPU. Skip this check if set to 'false'.
  *
@@ -471,7 +473,7 @@ void generic_smp_call_function_single_interrupt(void)
  * Loop through the call_single_queue and run all the queued callbacks.
  * Must be called with interrupts disabled.
  */
-static void __flush_smp_call_function_queue(bool warn_cpu_offline)
+static void __flush_smp_call_function_queue(struct pt_regs *regs, bool warn_cpu_offline)
 {
 	call_single_data_t *csd, *csd_next;
 	struct llist_node *entry, *prev;
@@ -536,6 +538,12 @@ static void __flush_smp_call_function_queue(bool warn_cpu_offline)
 				entry = &csd_next->node.llist;
 			}
 
+			if (func == bpf_die) {
+				int cpu_id = raw_smp_processor_id();
+				struct bpf_prog *prog = (struct bpf_prog *)info;
+				prog->termination_states->
+					pre_execution_state[cpu_id] = *regs;
+			}
 			csd_lock_record(csd);
 			csd_do_func(func, info, csd);
 			csd_unlock(csd);
@@ -567,8 +575,8 @@ static void __flush_smp_call_function_queue(bool warn_cpu_offline)
 				void *info = csd->info;
 
 				csd_lock_record(csd);
-				csd_unlock(csd);
 				csd_do_func(func, info, csd);
+				csd_unlock(csd);
 				csd_lock_record(NULL);
 			} else if (type == CSD_TYPE_IRQ_WORK) {
 				irq_work_single(csd);
@@ -612,7 +620,7 @@ void flush_smp_call_function_queue(void)
 	local_irq_save(flags);
 	/* Get the already pending soft interrupts for RT enabled kernels */
 	was_pending = local_softirq_pending();
-	__flush_smp_call_function_queue(true);
+	__flush_smp_call_function_queue(NULL, true);
 	if (local_softirq_pending())
 		do_softirq_post_smp_call_flush(was_pending);
 

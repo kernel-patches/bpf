@@ -259,7 +259,7 @@ DEFINE_IDTENTRY_SYSVEC(sysvec_call_function)
 	apic_eoi();
 	trace_call_function_entry(CALL_FUNCTION_VECTOR);
 	inc_irq_stat(irq_call_count);
-	generic_smp_call_function_interrupt();
+	generic_smp_call_function_interrupt(regs);
 	trace_call_function_exit(CALL_FUNCTION_VECTOR);
 }
 
@@ -268,7 +268,7 @@ DEFINE_IDTENTRY_SYSVEC(sysvec_call_function_single)
 	apic_eoi();
 	trace_call_function_single_entry(CALL_FUNCTION_SINGLE_VECTOR);
 	inc_irq_stat(irq_call_count);
-	generic_smp_call_function_single_interrupt();
+	generic_smp_call_function_single_interrupt(regs);
 	trace_call_function_single_exit(CALL_FUNCTION_SINGLE_VECTOR);
 }
 
