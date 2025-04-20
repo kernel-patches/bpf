@@ -99,6 +99,7 @@ struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flag
 	gfp_t gfp_flags = bpf_memcg_flags(GFP_KERNEL | __GFP_ZERO | gfp_extra_flags);
 	struct bpf_prog_aux *aux;
 	struct bpf_prog *fp;
+	struct termination_aux_states *termination_states = NULL;
 
 	size = round_up(size, __PAGE_SIZE);
 	fp = __vmalloc(size, gfp_flags);
@@ -117,11 +118,35 @@ struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flag
 		return NULL;
 	}
 
+	termination_states = kzalloc(sizeof(*termination_states),
+					bpf_memcg_flags(GFP_KERNEL | gfp_extra_flags));
+	if (!termination_states)
+		goto free_bpf_struct_ptr_alloc;
+
+	termination_states->per_cpu_state = kzalloc(sizeof(struct cpu_aux) * NR_CPUS,
+					bpf_memcg_flags(GFP_KERNEL | gfp_extra_flags));
+	if (!termination_states->per_cpu_state)
+		goto free_bpf_termination_states;
+
+	for (int i = 0; i < NR_CPUS; i++) {
+		termination_states->per_cpu_state[i].cpu_flag = 0;
+		spin_lock_init(&termination_states->per_cpu_state[i].lock);
+	}
+
+	termination_states->pre_execution_state = kzalloc(
+					sizeof(struct pt_regs) * NR_CPUS,
+					bpf_memcg_flags(GFP_KERNEL | gfp_extra_flags)
+					);
+	if (!termination_states->pre_execution_state)
+		goto free_per_cpu_state;
+
+	termination_states->is_termination_prog = false;
 	fp->pages = size / PAGE_SIZE;
 	fp->aux = aux;
 	fp->aux->prog = fp;
 	fp->jit_requested = ebpf_jit_enabled();
 	fp->blinding_requested = bpf_jit_blinding_enabled(fp);
+	fp->termination_states = termination_states;
 #ifdef CONFIG_CGROUP_BPF
 	aux->cgroup_atype = CGROUP_BPF_ATTACH_TYPE_INVALID;
 #endif
@@ -135,6 +160,16 @@ struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flag
 	mutex_init(&fp->aux->dst_mutex);
 
 	return fp;
+
+free_per_cpu_state:
+	kfree(termination_states->per_cpu_state);
+free_bpf_termination_states:
+	kfree(termination_states);
+free_bpf_struct_ptr_alloc:
+	free_percpu(fp->active);
+	vfree(fp);
+	kfree(aux);
+	return NULL;
 }
 
 struct bpf_prog *bpf_prog_alloc(unsigned int size, gfp_t gfp_extra_flags)
@@ -282,6 +317,13 @@ void __bpf_prog_free(struct bpf_prog *fp)
 		kfree(fp->aux->poke_tab);
 		kfree(fp->aux);
 	}
+
+	if (fp->termination_states) {
+		kfree(fp->termination_states->pre_execution_state);
+		kfree(fp->termination_states->per_cpu_state);
+		kfree(fp->termination_states);
+	}
+
 	free_percpu(fp->stats);
 	free_percpu(fp->active);
 	vfree(fp);
