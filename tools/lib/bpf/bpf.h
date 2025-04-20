@@ -704,6 +704,16 @@ struct bpf_token_create_opts {
 LIBBPF_API int bpf_token_create(int bpffs_fd,
 				struct bpf_token_create_opts *opts);
 
+
+/**
+ * @brief **bpf_prog_terminate()** when provided with prog id and cpu id
+ * of the running prog, it terminated the running BPF program.
+ *
+ * @param BPF program file descriptor
+ * @cpu_id cpu id of the running program
+ */
+LIBBPF_API int bpf_prog_terminate(int prog_id, int cpu_id);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

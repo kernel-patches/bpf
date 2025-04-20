@@ -1331,3 +1331,18 @@ int bpf_token_create(int bpffs_fd, struct bpf_token_create_opts *opts)
 	fd = sys_bpf_fd(BPF_TOKEN_CREATE, &attr, attr_sz);
 	return libbpf_err_errno(fd);
 }
+
+int bpf_prog_terminate(int prog_id, int cpu_id)
+{
+	int fd;
+	union bpf_attr attr;
+	const size_t attr_sz = offsetofend(union bpf_attr, prog_terminate);
+
+	memset(&attr, 0, sizeof(attr));
+	attr.prog_terminate.prog_id = prog_id;
+	attr.prog_terminate.term_cpu_id = cpu_id;
+
+	fd = sys_bpf(BPF_PROG_TERMINATE, &attr, attr_sz);
+
+	return libbpf_err_errno(fd);
+}
