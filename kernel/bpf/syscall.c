@@ -36,6 +36,7 @@
 #include <linux/memcontrol.h>
 #include <linux/trace_events.h>
 #include <linux/tracepoint.h>
+#include <asm/unwind.h>
 
 #include <net/netfilter/nf_bpf_link.h>
 #include <net/netkit.h>
@@ -50,6 +51,17 @@
 			IS_FD_HASH(map))
 
 #define BPF_OBJ_FLAG_MASK   (BPF_F_RDONLY | BPF_F_WRONLY)
+
+static const struct bpf_verifier_ops * const bpf_verifier_ops[] = {
+#define BPF_PROG_TYPE(_id, _name, prog_ctx_type, kern_ctx_type) \
+	[_id] = & _name ## _verifier_ops,
+#define BPF_MAP_TYPE(_id, _ops)
+#define BPF_LINK_TYPE(_id, _name)
+#include <linux/bpf_types.h>
+#undef BPF_PROG_TYPE
+#undef BPF_MAP_TYPE
+#undef BPF_LINK_TYPE
+};
 
 DEFINE_PER_CPU(int, bpf_prog_active);
 static DEFINE_IDR(prog_idr);
@@ -2756,6 +2768,207 @@ static bool is_perfmon_prog_type(enum bpf_prog_type prog_type)
 /* last field in 'union bpf_attr' used by this command */
 #define BPF_PROG_LOAD_LAST_FIELD fd_array_cnt
 
+static int clone_bpf_prog(struct bpf_prog *patch_prog, struct bpf_prog *prog)
+{
+	int err = 0;
+	patch_prog->expected_attach_type = prog->expected_attach_type;
+	patch_prog->len = prog->len;
+	patch_prog->gpl_compatible = prog->gpl_compatible;
+
+	memcpy(patch_prog->insnsi, prog->insnsi,  bpf_prog_insn_size(prog));
+
+	patch_prog->orig_prog = NULL;
+	patch_prog->jited = 0;
+	patch_prog->type = prog->type;
+
+	char *patch_prefix = "patch_";
+	strncpy(patch_prog->aux->name, patch_prefix, strlen(patch_prefix));
+	strncat(patch_prog->aux->name, prog->aux->name, sizeof(prog->aux->name));
+
+	return err;
+}
+
+static bool is_verifier_inlined_function(int func_id) {
+	switch (func_id) {
+		case BPF_FUNC_get_smp_processor_id:
+		case BPF_FUNC_jiffies64:
+		case BPF_FUNC_get_func_arg:
+		case BPF_FUNC_get_func_ret:
+		case BPF_FUNC_get_func_arg_cnt:
+		case BPF_FUNC_get_func_ip:
+		case BPF_FUNC_get_branch_snapshot:
+		case BPF_FUNC_kptr_xchg:
+		case BPF_FUNC_map_lookup_elem:
+			return true;
+		default:
+			return false;
+	}
+}
+
+static bool is_debug_function(int func_id) {
+	switch (func_id) {
+		case BPF_FUNC_trace_printk:
+			return true;
+		default:
+			return false;
+	}
+}
+
+static bool is_resource_release_function(int func_id) {
+	switch (func_id) {
+		case BPF_FUNC_spin_unlock:
+		case BPF_FUNC_ringbuf_submit:
+		case BPF_FUNC_ringbuf_discard:
+			return true;
+		default:
+			return false;
+	}
+}
+
+static bool find_in_skiplist(int func_id) {
+	return is_verifier_inlined_function(func_id) ||
+	       is_debug_function(func_id) ||
+	       is_resource_release_function(func_id);
+}
+
+static int get_replacement_helper(int func_id, enum bpf_return_type ret_type) {
+
+	switch (func_id) {
+		case BPF_FUNC_loop:
+			return BPF_FUNC_loop_termination;
+		case BPF_FUNC_for_each_map_elem:
+		case BPF_FUNC_user_ringbuf_drain:
+			return -ENOTSUPP;
+	}
+
+	switch (ret_type) {
+		case RET_VOID:
+			return BPF_FUNC_dummy_void;
+		case RET_INTEGER:
+			return BPF_FUNC_dummy_int;
+		case RET_PTR_TO_MAP_VALUE_OR_NULL:
+			return BPF_FUNC_dummy_ptr_to_map;
+		case RET_PTR_TO_SOCKET_OR_NULL:
+		case RET_PTR_TO_TCP_SOCK_OR_NULL:
+		case RET_PTR_TO_SOCK_COMMON_OR_NULL:
+		case RET_PTR_TO_RINGBUF_MEM_OR_NULL:
+		case RET_PTR_TO_DYNPTR_MEM_OR_NULL:
+		case RET_PTR_TO_BTF_ID_OR_NULL:
+		case RET_PTR_TO_BTF_ID_TRUSTED:
+		case RET_PTR_TO_MAP_VALUE:
+		case RET_PTR_TO_SOCKET:
+		case RET_PTR_TO_TCP_SOCK:
+		case RET_PTR_TO_SOCK_COMMON:
+		case RET_PTR_TO_MEM:
+		case RET_PTR_TO_MEM_OR_BTF_ID:
+		case RET_PTR_TO_BTF_ID:
+		default:
+			return -ENOTSUPP;
+	}
+}
+
+static void patch_generator(struct bpf_prog *prog)
+{
+	struct call_insn_aux{
+		int insn_idx;
+		int replacement_helper;
+	};
+
+	struct call_insn_aux *call_indices;
+	int num_calls=0;
+	call_indices = vmalloc(sizeof(call_indices) * prog->len);
+
+	/* Find all call insns */
+	for(int insn_idx =0 ;insn_idx < prog->len; insn_idx++)
+	{
+		struct bpf_insn *insn = &prog->insnsi[insn_idx] ;
+		u8 class = BPF_CLASS(insn->code);
+		if (class == BPF_JMP || class == BPF_JMP32) {
+			if (BPF_OP(insn->code) == BPF_CALL){
+				if (insn->src_reg == BPF_PSEUDO_CALL) {
+					continue;
+				}
+				if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL){ /*kfunc */
+					// TODO Need to use btf for getting proto
+					// If release function --> skip
+					// If acquire function --> find return type and add to list
+				}
+				else {
+					int func_id = insn->imm;
+					const struct bpf_func_proto *fn = NULL;
+					int new_helper_id = -1;
+
+					if (find_in_skiplist(func_id)) {
+						continue;
+					}
+
+					fn = bpf_verifier_ops[prog->type]->get_func_proto(func_id, prog);
+					if (!fn && !fn->func) {
+						continue;
+					}
+
+					new_helper_id = get_replacement_helper(func_id, fn->ret_type);
+					if (new_helper_id < 0) {
+						continue;
+					}
+
+					call_indices[num_calls].insn_idx = insn_idx;
+					call_indices[num_calls].replacement_helper= new_helper_id;
+					num_calls++;
+				}
+			}
+		}
+	}
+
+	/* Patch all call insns */
+	for(int k =0; k < num_calls; k++){
+		prog->insnsi[call_indices[k].insn_idx].imm = call_indices[k].replacement_helper;
+	}
+}
+
+static bool create_termination_prog(struct bpf_prog *prog,
+					union bpf_attr *attr,
+					bpfptr_t uattr,
+					u32 uattr_size)
+{
+	if (prog->len < 10)
+		return false;
+
+	int err;
+	struct bpf_prog *patch_prog;
+	patch_prog = bpf_prog_alloc_no_stats(bpf_prog_size(prog->len), 0);
+	if (!patch_prog) {
+		return false;
+	}
+
+	patch_prog->termination_states->is_termination_prog = true;
+
+	err = clone_bpf_prog(patch_prog, prog);
+	if (err)
+			goto free_termination_prog;
+
+	patch_generator(patch_prog);
+
+	err = bpf_check(&patch_prog, attr, uattr, uattr_size);
+	if (err) {
+		goto free_termination_prog;
+	}
+
+	patch_prog = bpf_prog_select_runtime(patch_prog, &err);
+	if (err) {
+		goto free_termination_prog;
+	}
+
+	prog->termination_states->patch_prog = patch_prog;
+	return true;
+
+free_termination_prog:
+	free_percpu(patch_prog->stats);
+	free_percpu(patch_prog->active);
+	kfree(patch_prog->aux);
+	return false;
+}
+
 static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 {
 	enum bpf_prog_type type = attr->prog_type;
@@ -2765,6 +2978,7 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	bool bpf_cap;
 	int err;
 	char license[128];
+	bool have_termination_prog = false;
 
 	if (CHECK_ATTR(BPF_PROG_LOAD))
 		return -EINVAL;
@@ -2966,6 +3180,8 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	err = security_bpf_prog_load(prog, attr, token, uattr.is_kernel);
 	if (err)
 		goto free_prog_sec;
+
+	have_termination_prog = create_termination_prog( prog, attr, uattr, uattr_size);
 
 	/* run eBPF verifier */
 	err = bpf_check(&prog, attr, uattr, uattr_size);

@@ -513,6 +513,7 @@ static bool is_sync_callback_calling_function(enum bpf_func_id func_id)
 	return func_id == BPF_FUNC_for_each_map_elem ||
 	       func_id == BPF_FUNC_find_vma ||
 	       func_id == BPF_FUNC_loop ||
+	       func_id == BPF_FUNC_loop_termination ||
 	       func_id == BPF_FUNC_user_ringbuf_drain;
 }
 
@@ -11424,6 +11425,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		err = check_bpf_snprintf_call(env, regs);
 		break;
 	case BPF_FUNC_loop:
+	case BPF_FUNC_loop_termination:
 		update_loop_inline_state(env, meta.subprogno);
 		/* Verifier relies on R1 value to determine if bpf_loop() iteration
 		 * is finished, thus mark it precise.
@@ -22470,10 +22472,12 @@ static struct bpf_prog *inline_bpf_loop(struct bpf_verifier_env *env,
 
 	struct bpf_insn *insn_buf = env->insn_buf;
 	struct bpf_prog *new_prog;
+	struct termination_aux_states *termination_states;
 	u32 callback_start;
 	u32 call_insn_offset;
 	s32 callback_offset;
 	u32 cnt = 0;
+	termination_states = env->prog->termination_states;
 
 	/* This represents an inlined version of bpf_iter.c:bpf_loop,
 	 * be careful to modify this code in sync.
@@ -22502,7 +22506,14 @@ static struct bpf_prog *inline_bpf_loop(struct bpf_verifier_env *env,
 	 */
 	insn_buf[cnt++] = BPF_MOV64_REG(BPF_REG_1, reg_loop_cnt);
 	insn_buf[cnt++] = BPF_MOV64_REG(BPF_REG_2, reg_loop_ctx);
-	insn_buf[cnt++] = BPF_CALL_REL(0);
+
+	if (termination_states && termination_states->is_termination_prog) {
+		/* In a termination BPF prog, we want to exit - set R0 = 1 */
+		insn_buf[cnt++] = BPF_MOV64_IMM(BPF_REG_0, 1);
+	} else {
+		insn_buf[cnt++] = BPF_CALL_REL(0);
+	}
+
 	/* increment loop counter */
 	insn_buf[cnt++] = BPF_ALU64_IMM(BPF_ADD, reg_loop_cnt, 1);
 	/* jump to loop header if callback returned 0 */
@@ -22535,7 +22546,8 @@ static bool is_bpf_loop_call(struct bpf_insn *insn)
 {
 	return insn->code == (BPF_JMP | BPF_CALL) &&
 		insn->src_reg == 0 &&
-		insn->imm == BPF_FUNC_loop;
+		(insn->imm == BPF_FUNC_loop
+		 || insn->imm == BPF_FUNC_loop_termination);
 }
 
 /* For all sub-programs in the program (including main) check

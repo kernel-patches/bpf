@@ -3003,6 +3003,9 @@ const struct bpf_func_proto bpf_snprintf_btf_proto __weak;
 const struct bpf_func_proto bpf_seq_printf_btf_proto __weak;
 const struct bpf_func_proto bpf_set_retval_proto __weak;
 const struct bpf_func_proto bpf_get_retval_proto __weak;
+const struct bpf_func_proto bpf_dummy_void __weak;
+const struct bpf_func_proto bpf_dummy_int __weak;
+const struct bpf_func_proto bpf_dummy_ptr_to_map __weak;
 
 const struct bpf_func_proto * __weak bpf_get_trace_printk_proto(void)
 {

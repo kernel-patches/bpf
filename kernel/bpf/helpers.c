@@ -1965,6 +1965,12 @@ bpf_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_current_pid_tgid_proto;
 	case BPF_FUNC_get_ns_current_pid_tgid:
 		return &bpf_get_ns_current_pid_tgid_proto;
+	case BPF_FUNC_dummy_void:
+		return &bpf_dummy_void_proto;
+	case BPF_FUNC_dummy_int:
+		return &bpf_dummy_int_proto;
+	case BPF_FUNC_dummy_ptr_to_map:
+		return &bpf_dummy_ptr_to_map_proto;
 	default:
 		break;
 	}
@@ -1997,6 +2003,8 @@ bpf_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_for_each_map_elem_proto;
 	case BPF_FUNC_loop:
 		return &bpf_loop_proto;
+	case BPF_FUNC_loop_termination:
+		return &bpf_loop_termination_proto;
 	case BPF_FUNC_user_ringbuf_drain:
 		return &bpf_user_ringbuf_drain_proto;
 	case BPF_FUNC_ringbuf_reserve_dynptr:

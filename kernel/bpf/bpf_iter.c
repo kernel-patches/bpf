@@ -6,6 +6,7 @@
 #include <linux/filter.h>
 #include <linux/bpf.h>
 #include <linux/rcupdate_trace.h>
+#include <asm/unwind.h>
 
 struct bpf_iter_target_info {
 	struct list_head list;
@@ -773,6 +774,70 @@ const struct bpf_func_proto bpf_loop_proto = {
 	.arg2_type	= ARG_PTR_TO_FUNC,
 	.arg3_type	= ARG_PTR_TO_STACK_OR_NULL,
 	.arg4_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_4(bpf_loop_termination, u32, nr_loops, void *, callback_fn,
+		void *, callback_ctx, u64, flags)
+{
+	/* Since a patched BPF program for termination will want
+	 * to finish as fast as possible,
+	 * we simply don't run any loop in here.
+	 */
+
+	/* Restoring the callee-saved registers and exit.
+	 * Hacky/ err prone way of restoring the registers.
+	 * We are figuring out a way to have arch independent
+	 * way to do this.
+	 */
+
+	asm volatile(
+	"pop %rbx\n\t"
+	"pop %rbp\n\t"
+	"pop %r12\n\t"
+	"pop %r13\n\t"
+	);
+
+	return 0;
+}
+
+const struct bpf_func_proto bpf_loop_termination_proto = {
+       .func           = bpf_loop_termination,
+       .gpl_only       = false,
+       .ret_type       = RET_INTEGER,
+       .arg1_type      = ARG_ANYTHING,
+       .arg2_type      = ARG_PTR_TO_FUNC,
+       .arg3_type      = ARG_PTR_TO_STACK_OR_NULL,
+       .arg4_type      = ARG_ANYTHING,
+};
+
+BPF_CALL_0(bpf_dummy_void) {
+	return 0;
+}
+
+const struct bpf_func_proto bpf_dummy_void_proto = {
+	.func           = bpf_dummy_void,
+	.gpl_only	= false,
+	.ret_type	= RET_VOID,
+};
+
+BPF_CALL_0(bpf_dummy_int) {
+	return -1;
+}
+
+const struct bpf_func_proto bpf_dummy_int_proto = {
+	.func		= bpf_dummy_int,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+};
+
+BPF_CALL_0(bpf_dummy_ptr_to_map) {
+	return 0;
+}
+
+const struct bpf_func_proto bpf_dummy_ptr_to_map_proto = {
+	.func		= bpf_dummy_ptr_to_map,
+	.gpl_only	= false,
+	.ret_type	= RET_PTR_TO_MAP_VALUE_OR_NULL,
 };
 
 struct bpf_iter_num_kern {
