@@ -4874,9 +4874,11 @@ void *__skb_ext_set(struct sk_buff *skb, enum skb_ext_id id,
 		    struct skb_ext *ext);
 void *skb_ext_add(struct sk_buff *skb, enum skb_ext_id id);
 void *skb_ext_from_headroom(struct sk_buff *skb, enum skb_ext_id id, int head_offset, int size);
+bool skb_ext_grow_headroom(const struct sk_buff *skb, int add);
 void __skb_ext_del(struct sk_buff *skb, enum skb_ext_id id);
 void __skb_ext_put(struct skb_ext *ext);
 int __skb_ext_total_size(const struct skb_ext *ext);
+int skb_ext_size(const struct sk_buff *skb, enum skb_ext_id id);
 
 static inline void skb_ext_put(struct sk_buff *skb)
 {
@@ -4959,6 +4961,13 @@ static inline void *skb_traits(const struct sk_buff *skb)
 	return NULL;
 #endif
 }
+
+int skb_trait_set(struct sk_buff *skb, u64 key,
+			const void *val, u64 val__sz, u64 flags);
+int skb_trait_is_set(const struct sk_buff *skb, u64 key);
+int skb_trait_get(const struct sk_buff *skb, u64 key,
+			void *val, u64 val__sz);
+int skb_trait_del(const struct sk_buff *skb, u64 key);
 
 static inline void nf_reset_ct(struct sk_buff *skb)
 {

@@ -7148,6 +7148,19 @@ void *skb_ext_from_headroom(struct sk_buff *skb, enum skb_ext_id id, int head_of
 	return __skb_ext_set_active(skb, new, id);
 }
 
+bool skb_ext_grow_headroom(const struct sk_buff *skb, int add)
+{
+	if (!skb->active_extensions)
+		return false;
+	if (skb->extensions->mode != SKB_EXT_HEADROOM)
+		return false;
+	if (skb_headroom(skb) < add)
+		return false;
+
+	skb->extensions->chunks += SKB_EXT_CHUNKS(add);
+	return true;
+}
+
 #ifdef CONFIG_XFRM
 static void skb_ext_put_sp(struct sec_path *sp)
 {
@@ -7215,7 +7228,106 @@ int __skb_ext_total_size(const struct skb_ext *ext)
 {
 	return SKB_EXT_CHUNKS_BYTES(ext->chunks);
 }
+
+int skb_ext_size(const struct sk_buff *skb, enum skb_ext_id id)
+{
+	if (!skb_ext_exist(skb, id))
+		return 0;
+
+	switch (skb->extensions->mode) {
+	case SKB_EXT_ALLOC:
+		return skb_ext_type_len[id];
+	case SKB_EXT_HEADROOM:
+		return SKB_EXT_CHUNKS_BYTES(skb->extensions->chunks - skb->extensions->offset[id]);
+	}
+}
 #endif /* CONFIG_SKB_EXTENSIONS */
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int skb_trait_set(struct sk_buff *skb, u64 key,
+			      const void *val, u64 val__sz, u64 flags)
+{
+#ifndef CONFIG_SKB_EXTENSIONS
+	return -EOPNOTSUPP;
+#else
+	int err;
+	void *traits = skb_traits(skb);
+
+	if (!traits)
+		return -EOPNOTSUPP;
+
+	/* Traits are shared, get our own copy before modifying */
+	if (refcount_read(&skb->extensions->refcnt) > 1) {
+		traits = skb_ext_add(skb, SKB_EXT_TRAITS);
+		if (!traits)
+			return -ENOMEM;
+	}
+
+	err = trait_set(traits, traits + skb_ext_size(skb, SKB_EXT_TRAITS),
+			key, val, val__sz, flags);
+	if (err == -ENOSPC && skb->extensions->mode == SKB_EXT_HEADROOM) {
+		/* Take more headroom if available */
+		if (!skb_ext_grow_headroom(skb, val__sz))
+			return err;
+
+		err = trait_set(traits, traits + skb_ext_size(skb, SKB_EXT_TRAITS),
+				key, val, val__sz, flags);
+	}
+	return err;
+#endif /* CONFIG_SKB_EXTENSIONS */
+}
+
+__bpf_kfunc int skb_trait_is_set(const struct sk_buff *skb, u64 key)
+{
+	void *traits = skb_traits(skb);
+
+	if (!traits)
+		return -EOPNOTSUPP;
+
+	return trait_is_set(traits, key);
+}
+
+__bpf_kfunc int skb_trait_get(const struct sk_buff *skb, u64 key,
+			      void *val, u64 val__sz)
+{
+	void *traits = skb_traits(skb);
+
+	if (!traits)
+		return -EOPNOTSUPP;
+
+	return trait_get(traits, key, val, val__sz);
+}
+
+__bpf_kfunc int skb_trait_del(const struct sk_buff *skb, u64 key)
+{
+	void *traits = skb_traits(skb);
+
+	if (!traits)
+		return -EOPNOTSUPP;
+
+	return trait_del(traits, key);
+}
+
+__bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(bpf_skb_traits)
+BTF_ID_FLAGS(func, skb_trait_set)
+BTF_ID_FLAGS(func, skb_trait_is_set)
+BTF_ID_FLAGS(func, skb_trait_get)
+BTF_ID_FLAGS(func, skb_trait_del)
+BTF_KFUNCS_END(bpf_skb_traits)
+
+static const struct btf_kfunc_id_set bpf_traits_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set   = &bpf_skb_traits,
+};
+
+static int init_subsystem(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_SOCKET_FILTER, &bpf_traits_kfunc_set);
+}
+late_initcall(init_subsystem);
 
 static void kfree_skb_napi_cache(struct sk_buff *skb)
 {
