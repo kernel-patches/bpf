@@ -10746,3 +10746,25 @@ void sched_enq_and_set_task(struct sched_enq_and_set_ctx *ctx)
 		set_next_task(rq, ctx->p);
 }
 #endif	/* CONFIG_SCHED_CLASS_EXT */
+
+#ifdef CONFIG_IRQ_TIME_ACCOUNTING
+/*
+ * Returns the irqtime minus the softirq time computed by ksoftirqd.
+ * Otherwise ksoftirqd's sum_exec_runtime is subtracted its own runtime
+ * and never move forward.
+ */
+inline u64 irq_time_read(int cpu)
+{
+	struct irqtime *irqtime = &per_cpu(cpu_irqtime, cpu);
+	unsigned int seq;
+	u64 total;
+
+	do {
+		seq = __u64_stats_fetch_begin(&irqtime->sync);
+		total = irqtime->total;
+	} while (__u64_stats_fetch_retry(&irqtime->sync, seq));
+
+	return total;
+}
+EXPORT_SYMBOL(irq_time_read);
+#endif /* CONFIG_IRQ_TIME_ACCOUNTING */

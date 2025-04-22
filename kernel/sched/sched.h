@@ -3209,25 +3209,6 @@ static inline int irqtime_enabled(void)
 	return sched_clock_irqtime;
 }
 
-/*
- * Returns the irqtime minus the softirq time computed by ksoftirqd.
- * Otherwise ksoftirqd's sum_exec_runtime is subtracted its own runtime
- * and never move forward.
- */
-static inline u64 irq_time_read(int cpu)
-{
-	struct irqtime *irqtime = &per_cpu(cpu_irqtime, cpu);
-	unsigned int seq;
-	u64 total;
-
-	do {
-		seq = __u64_stats_fetch_begin(&irqtime->sync);
-		total = irqtime->total;
-	} while (__u64_stats_fetch_retry(&irqtime->sync, seq));
-
-	return total;
-}
-
 #else
 
 static inline int irqtime_enabled(void)

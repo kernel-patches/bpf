@@ -2281,4 +2281,8 @@ static __always_inline void alloc_tag_restore(struct alloc_tag *tag, struct allo
 #define alloc_tag_restore(_tag, _old)		do {} while (0)
 #endif
 
+#ifdef CONFIG_IRQ_TIME_ACCOUNTING
+extern inline u64 irq_time_read(int cpu);
+#endif
+
 #endif
