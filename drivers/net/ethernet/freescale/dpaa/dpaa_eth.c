@@ -2629,12 +2629,7 @@ static u32 dpaa_run_xdp(struct dpaa_priv *priv, struct qm_fd *fd, void *vaddr,
 
 	switch (xdp_act) {
 	case XDP_PASS:
-#ifdef CONFIG_DPAA_ERRATUM_A050385
-		*xdp_meta_len = xdp_data_meta_unsupported(&xdp) ? 0 :
-				xdp.data - xdp.data_meta;
-#else
 		*xdp_meta_len = xdp.data - xdp.data_meta;
-#endif
 		break;
 	case XDP_TX:
 		/* We can access the full headroom when sending the frame

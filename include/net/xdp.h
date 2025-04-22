@@ -76,6 +76,9 @@ enum xdp_buff_flags {
 	XDP_FLAGS_FRAGS_PF_MEMALLOC	= BIT(1), /* xdp paged memory is under
 						   * pressure
 						   */
+	XDP_FLAGS_META_SUPPORTED	= BIT(2), /* metadata in headroom supported
+						   * by driver
+						   */
 };
 
 struct xdp_buff {
@@ -132,7 +135,10 @@ xdp_prepare_buff(struct xdp_buff *xdp, unsigned char *hard_start,
 	xdp->data_hard_start = hard_start;
 	xdp->data = data;
 	xdp->data_end = data + data_len;
-	xdp->data_meta = meta_valid ? data : data + 1;
+	xdp->data_meta = data;
+
+	if (meta_valid)
+		xdp->flags |= XDP_FLAGS_META_SUPPORTED;
 }
 
 /* Reserve memory area at end-of data area.
@@ -497,13 +503,13 @@ static inline void xdp_rxq_info_detach_mem_model(struct xdp_rxq_info *xdp_rxq)
 static __always_inline void
 xdp_set_data_meta_invalid(struct xdp_buff *xdp)
 {
-	xdp->data_meta = xdp->data + 1;
+	xdp->flags &= ~XDP_FLAGS_META_SUPPORTED;
 }
 
 static __always_inline bool
 xdp_data_meta_unsupported(const struct xdp_buff *xdp)
 {
-	return unlikely(xdp->data_meta > xdp->data);
+	return unlikely(!(xdp->flags & XDP_FLAGS_META_SUPPORTED));
 }
 
 static inline bool xdp_metalen_invalid(unsigned long metalen)

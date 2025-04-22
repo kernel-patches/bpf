@@ -3937,8 +3937,7 @@ const struct bpf_func_proto bpf_xdp_get_buff_len_trace_proto = {
 
 static unsigned long xdp_get_metalen(const struct xdp_buff *xdp)
 {
-	return xdp_data_meta_unsupported(xdp) ? 0 :
-	       xdp->data - xdp->data_meta;
+	return xdp->data - xdp->data_meta;
 }
 
 BPF_CALL_2(bpf_xdp_adjust_head, struct xdp_buff *, xdp, int, offset)

@@ -188,14 +188,6 @@ err:
 	return err;
 }
 
-static void *xsk_copy_xdp_start(struct xdp_buff *from)
-{
-	if (unlikely(xdp_data_meta_unsupported(from)))
-		return from->data;
-	else
-		return from->data_meta;
-}
-
 static u32 xsk_copy_xdp(void *to, void **from, u32 to_len,
 			u32 *from_len, skb_frag_t **frag, u32 rem)
 {
@@ -227,12 +219,13 @@ static u32 xsk_copy_xdp(void *to, void **from, u32 to_len,
 static int __xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len)
 {
 	u32 frame_size = xsk_pool_get_rx_frame_size(xs->pool);
-	void *copy_from = xsk_copy_xdp_start(xdp), *copy_to;
+	void *copy_from, *copy_to;
 	u32 from_len, meta_len, rem, num_desc;
 	struct xdp_buff_xsk *xskb;
 	struct xdp_buff *xsk_xdp;
 	skb_frag_t *frag;
 
+	copy_from = xdp->data_meta;
 	from_len = xdp->data_end - copy_from;
 	meta_len = xdp->data - copy_from;
 	rem = len + meta_len;

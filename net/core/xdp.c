@@ -580,8 +580,7 @@ struct xdp_frame *xdp_convert_zc_to_xdp_frame(struct xdp_buff *xdp)
 	struct page *page;
 
 	/* Clone into a MEM_TYPE_PAGE_ORDER0 xdp_frame. */
-	metasize = xdp_data_meta_unsupported(xdp) ? 0 :
-		   xdp->data - xdp->data_meta;
+	metasize = xdp->data - xdp->data_meta;
 	totsize = xdp->data_end - xdp->data + metasize;
 
 	if (sizeof(*xdpf) + totsize > PAGE_SIZE)
