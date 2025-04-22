@@ -573,6 +573,8 @@ ice_construct_skb_zc(struct ice_rx_ring *rx_ring, struct xdp_buff *xdp)
 		__skb_pull(skb, metasize);
 	}
 
+	xdp_buff_update_skb(xdp, skb);
+
 	if (likely(!xdp_buff_has_frags(xdp)))
 		goto out;
 
