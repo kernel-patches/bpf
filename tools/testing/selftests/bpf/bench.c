@@ -284,6 +284,7 @@ extern struct argp bench_htab_mem_argp;
 extern struct argp bench_trigger_batch_argp;
 extern struct argp bench_crypto_argp;
 extern struct argp bench_sockmap_argp;
+extern struct argp bench_trait_argp;
 
 static const struct argp_child bench_parsers[] = {
 	{ &bench_ringbufs_argp, 0, "Ring buffers benchmark", 0 },
@@ -299,6 +300,7 @@ static const struct argp_child bench_parsers[] = {
 	{ &bench_trigger_batch_argp, 0, "BPF triggering benchmark", 0 },
 	{ &bench_crypto_argp, 0, "bpf crypto benchmark", 0 },
 	{ &bench_sockmap_argp, 0, "bpf sockmap benchmark", 0 },
+	{ &bench_trait_argp, 0, "XDP trait benchmark", 0 },
 	{},
 };
 
@@ -552,6 +554,9 @@ extern const struct bench bench_htab_mem;
 extern const struct bench bench_crypto_encrypt;
 extern const struct bench bench_crypto_decrypt;
 extern const struct bench bench_sockmap;
+extern const struct bench bench_xdp_trait_get;
+extern const struct bench bench_xdp_trait_set;
+extern const struct bench bench_xdp_trait_move;
 
 static const struct bench *benchs[] = {
 	&bench_count_global,
@@ -613,6 +618,9 @@ static const struct bench *benchs[] = {
 	&bench_crypto_encrypt,
 	&bench_crypto_decrypt,
 	&bench_sockmap,
+	&bench_xdp_trait_get,
+	&bench_xdp_trait_set,
+	&bench_xdp_trait_move,
 };
 
 static void find_benchmark(void)
