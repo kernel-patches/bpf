@@ -2829,6 +2829,10 @@ static inline void *pskb_pull(struct sk_buff *skb, unsigned int len)
 
 void skb_condense(struct sk_buff *skb);
 
+#ifdef CONFIG_SKB_EXTENSIONS
+int skb_ext_headroom_used(const struct sk_buff *skb);
+#endif
+
 /**
  *	skb_headroom - bytes at buffer head
  *	@skb: buffer to check
@@ -2837,7 +2841,11 @@ void skb_condense(struct sk_buff *skb);
  */
 static inline unsigned int skb_headroom(const struct sk_buff *skb)
 {
+#ifdef CONFIG_SKB_EXTENSIONS
+	return skb->data - skb->head - skb_ext_headroom_used(skb);
+#else
 	return skb->data - skb->head;
+#endif
 }
 
 /**
@@ -4830,10 +4838,21 @@ enum skb_ext_id {
 	SKB_EXT_NUM, /* must be last */
 };
 
+enum skb_ext_mode {
+	/* struct skb_ext heap allocated */
+	SKB_EXT_ALLOC,
+	/* struct skb_ext in skb data headroom.
+	 * Only a single extension can be used at a time.
+	 * Size given to extension is dynamic.
+	 */
+	SKB_EXT_HEADROOM,
+};
+
 /**
  *	struct skb_ext - sk_buff extensions
  *	@refcnt: 1 on allocation, deallocated on 0
  *	@offset: offset to add to @data to obtain extension address
+ *	@mode: see enum skb_ext_mode
  *	@chunks: size currently allocated, stored in SKB_EXT_ALIGN_SHIFT units
  *	@data: start of extension data, variable sized
  *
@@ -4844,6 +4863,7 @@ struct skb_ext {
 	refcount_t refcnt;
 	u8 offset[SKB_EXT_NUM]; /* in chunks of 8 bytes */
 	u8 chunks;		/* same */
+	enum skb_ext_mode mode;
 	char data[] __aligned(8);
 };
 
@@ -4851,8 +4871,10 @@ struct skb_ext *__skb_ext_alloc(gfp_t flags);
 void *__skb_ext_set(struct sk_buff *skb, enum skb_ext_id id,
 		    struct skb_ext *ext);
 void *skb_ext_add(struct sk_buff *skb, enum skb_ext_id id);
+void *skb_ext_from_headroom(struct sk_buff *skb, enum skb_ext_id id, int head_offset, int size);
 void __skb_ext_del(struct sk_buff *skb, enum skb_ext_id id);
 void __skb_ext_put(struct skb_ext *ext);
+int __skb_ext_total_size(const struct skb_ext *ext);
 
 static inline void skb_ext_put(struct sk_buff *skb)
 {

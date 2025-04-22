@@ -2232,7 +2232,7 @@ int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail,
 	unsigned int osize = skb_end_offset(skb);
 	unsigned int size = osize + nhead + ntail;
 	long off;
-	u8 *data;
+	u8 *data, *head;
 	int i;
 
 	BUG_ON(nhead < 0);
@@ -2249,10 +2249,20 @@ int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail,
 		goto nodata;
 	size = SKB_WITH_OVERHEAD(size);
 
+	head = skb->head;
+#ifdef CONFIG_SKB_EXTENSIONS
+	/* Keep skb_ext at the start of the new headroom */
+	if (skb_has_extensions(skb) && skb->extensions->mode == SKB_EXT_HEADROOM) {
+		head += __skb_ext_total_size(skb->extensions);
+		memcpy(data, skb->extensions, __skb_ext_total_size(skb->extensions));
+		skb->extensions = (struct skb_ext *)data;
+	}
+#endif
+
 	/* Copy only real data... and, alas, header. This should be
 	 * optimized for the cases when header is void.
 	 */
-	memcpy(data + nhead, skb->head, skb_tail_pointer(skb) - skb->head);
+	memcpy(data + nhead, head, skb_tail_pointer(skb) - head);
 
 	memcpy((struct skb_shared_info *)(data + size),
 	       skb_shinfo(skb),
@@ -5013,7 +5023,9 @@ EXPORT_SYMBOL_GPL(skb_segment);
 
 #ifdef CONFIG_SKB_EXTENSIONS
 #define SKB_EXT_ALIGN_VALUE	8
-#define SKB_EXT_CHUNKSIZEOF(x)	(ALIGN((sizeof(x)), SKB_EXT_ALIGN_VALUE) / SKB_EXT_ALIGN_VALUE)
+#define SKB_EXT_CHUNKS(x)	(ALIGN((x), SKB_EXT_ALIGN_VALUE) / SKB_EXT_ALIGN_VALUE)
+#define SKB_EXT_CHUNKSIZEOF(x)	(SKB_EXT_CHUNKS(sizeof(x)))
+#define SKB_EXT_CHUNKS_BYTES(x) ((x) * SKB_EXT_ALIGN_VALUE)
 
 static const u8 skb_ext_type_len[] = {
 #if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
@@ -5033,7 +5045,7 @@ static const u8 skb_ext_type_len[] = {
 #endif
 };
 
-static __always_inline unsigned int skb_ext_total_length(void)
+static __always_inline unsigned int skb_ext_alloc_length(void)
 {
 	unsigned int l = SKB_EXT_CHUNKSIZEOF(struct skb_ext);
 	int i;
@@ -5048,11 +5060,11 @@ static void skb_extensions_init(void)
 {
 	BUILD_BUG_ON(SKB_EXT_NUM >= 8);
 #if !IS_ENABLED(CONFIG_KCOV_INSTRUMENT_ALL)
-	BUILD_BUG_ON(skb_ext_total_length() > 255);
+	BUILD_BUG_ON(skb_ext_alloc_length() > 255);
 #endif
 
 	skbuff_ext_cache = kmem_cache_create("skbuff_ext_cache",
-					     SKB_EXT_ALIGN_VALUE * skb_ext_total_length(),
+					     SKB_EXT_CHUNKS_BYTES(skb_ext_alloc_length()),
 					     0,
 					     SLAB_HWCACHE_ALIGN|SLAB_PANIC,
 					     NULL);
@@ -6934,7 +6946,7 @@ EXPORT_SYMBOL(skb_condense);
 #ifdef CONFIG_SKB_EXTENSIONS
 static void *skb_ext_get_ptr(struct skb_ext *ext, enum skb_ext_id id)
 {
-	return (void *)ext + (ext->offset[id] * SKB_EXT_ALIGN_VALUE);
+	return (void *)ext + SKB_EXT_CHUNKS_BYTES(ext->offset[id]);
 }
 
 /**
@@ -6963,14 +6975,15 @@ static struct skb_ext *skb_ext_maybe_cow(struct skb_ext *old,
 {
 	struct skb_ext *new;
 
-	if (refcount_read(&old->refcnt) == 1)
+	/* SKB_EXT_HEADROOM only supports a single extension, always copy */
+	if (refcount_read(&old->refcnt) == 1 && old->mode == SKB_EXT_ALLOC)
 		return old;
 
 	new = kmem_cache_alloc(skbuff_ext_cache, GFP_ATOMIC);
 	if (!new)
 		return NULL;
 
-	memcpy(new, old, old->chunks * SKB_EXT_ALIGN_VALUE);
+	memcpy(new, old, SKB_EXT_CHUNKS_BYTES(old->chunks));
 	refcount_set(&new->refcnt, 1);
 
 #ifdef CONFIG_XFRM
@@ -7018,6 +7031,14 @@ void *__skb_ext_set(struct sk_buff *skb, enum skb_ext_id id,
 	return skb_ext_get_ptr(ext, id);
 }
 
+static void *__skb_ext_set_active(struct sk_buff *skb, struct skb_ext *ext, enum skb_ext_id id)
+{
+	skb->slow_gro = 1;
+	skb->extensions = ext;
+	skb->active_extensions |= 1 << id;
+	return skb_ext_get_ptr(ext, id);
+}
+
 /**
  * skb_ext_add - allocate space for given extension, COW if needed
  * @skb: buffer
@@ -7045,7 +7066,7 @@ void *skb_ext_add(struct sk_buff *skb, enum skb_ext_id id)
 			return NULL;
 
 		if (__skb_ext_exist(new, id))
-			goto set_active;
+			return __skb_ext_set_active(skb, new, id);
 
 		newoff = new->chunks;
 	} else {
@@ -7059,13 +7080,69 @@ void *skb_ext_add(struct sk_buff *skb, enum skb_ext_id id)
 	newlen = newoff + skb_ext_type_len[id];
 	new->chunks = newlen;
 	new->offset[id] = newoff;
-set_active:
-	skb->slow_gro = 1;
-	skb->extensions = new;
-	skb->active_extensions |= 1 << id;
-	return skb_ext_get_ptr(new, id);
+
+	return __skb_ext_set_active(skb, new, id);
 }
 EXPORT_SYMBOL(skb_ext_add);
+
+/**
+ * skb_ext_headroom_used - Number of headroom bytes used by extensions.
+ * @skb: buffer
+ *
+ * Returns the number of headroom bytes currently used by extensions.
+ */
+int skb_ext_headroom_used(const struct sk_buff *skb)
+{
+	if (!skb->active_extensions)
+		return 0;
+	if (skb->extensions->mode != SKB_EXT_HEADROOM)
+		return 0;
+
+	return SKB_EXT_CHUNKS_BYTES(skb->extensions->chunks);
+}
+
+/**
+ * skb_ext_from_headroom - store skb_ext in the packet headroom,
+ * and reuse headroom data for a single extension.
+ * @skb: buffer
+ * @id: extension to use headroom data for
+ * @head_offset: offset in bytes to start of headroom data to reuse
+ *               Must be a multiple of SKB_EXT_ALIGN_VALUE.
+ *               Must be bigger than sizeof(struct skb_ext).
+ * @size: size bytes following head_offset will be used for the
+ *        extension.
+ *
+ * Reuses the packet headroom to avoid a separate memory allocation:
+ * - struct skb_ext is stored at the start of the headroom.
+ * - head_offset - head_offset+size is given to the extension.
+ *
+ * Returns pointer to the extension or NULL on failure.
+ */
+void *skb_ext_from_headroom(struct sk_buff *skb, enum skb_ext_id id, int head_offset, int size)
+{
+	struct skb_ext *new;
+	unsigned int newoff;
+
+	if (head_offset % SKB_EXT_ALIGN_VALUE != 0)
+		return NULL;
+	if (head_offset < sizeof(struct skb_ext))
+		return NULL;
+	if (skb_headroom(skb) < head_offset + size)
+		return NULL;
+	if (skb->active_extensions)
+		return NULL;
+
+	new = (struct skb_ext *)skb->head;
+	new->mode = SKB_EXT_HEADROOM;
+	memset(new->offset, 0, sizeof(new->offset));
+	refcount_set(&new->refcnt, 1);
+
+	newoff = SKB_EXT_CHUNKS(head_offset);
+	new->chunks = newoff + SKB_EXT_CHUNKS(size);
+	new->offset[id] = newoff;
+
+	return __skb_ext_set_active(skb, new, id);
+}
 
 #ifdef CONFIG_XFRM
 static void skb_ext_put_sp(struct sec_path *sp)
@@ -7125,9 +7202,15 @@ free_now:
 		skb_ext_put_mctp(skb_ext_get_ptr(ext, SKB_EXT_MCTP));
 #endif
 
-	kmem_cache_free(skbuff_ext_cache, ext);
+	if (ext->mode == SKB_EXT_ALLOC)
+		kmem_cache_free(skbuff_ext_cache, ext);
 }
 EXPORT_SYMBOL(__skb_ext_put);
+
+int __skb_ext_total_size(const struct skb_ext *ext)
+{
+	return SKB_EXT_CHUNKS_BYTES(ext->chunks);
+}
 #endif /* CONFIG_SKB_EXTENSIONS */
 
 static void kfree_skb_napi_cache(struct sk_buff *skb)
