@@ -10,6 +10,7 @@
 #include <linux/filter.h>
 #include <linux/netdevice.h>
 #include <linux/skbuff.h> /* skb_shared_info */
+#include <net/trait.h>
 
 #include <net/page_pool/types.h>
 
@@ -79,6 +80,7 @@ enum xdp_buff_flags {
 	XDP_FLAGS_META_SUPPORTED	= BIT(2), /* metadata in headroom supported
 						   * by driver
 						   */
+	XDP_FLAGS_TRAITS_SUPPORTED	= BIT(3), /* traits in headroom supported */
 };
 
 struct xdp_buff {
@@ -118,6 +120,13 @@ static __always_inline void xdp_buff_set_frag_pfmemalloc(struct xdp_buff *xdp)
 	xdp->flags |= XDP_FLAGS_FRAGS_PF_MEMALLOC;
 }
 
+#define _XDP_FRAME_SIZE (40)
+
+static __always_inline void *xdp_buff_traits(const struct xdp_buff *xdp)
+{
+	return xdp->data_hard_start + _XDP_FRAME_SIZE;
+}
+
 static __always_inline void
 xdp_init_buff(struct xdp_buff *xdp, u32 frame_sz, struct xdp_rxq_info *rxq)
 {
@@ -137,8 +146,15 @@ xdp_prepare_buff(struct xdp_buff *xdp, unsigned char *hard_start,
 	xdp->data_end = data + data_len;
 	xdp->data_meta = data;
 
-	if (meta_valid)
+	if (meta_valid) {
 		xdp->flags |= XDP_FLAGS_META_SUPPORTED;
+
+		xdp->flags |= XDP_FLAGS_TRAITS_SUPPORTED;
+		/* We assume drivers reserve enough headroom to store xdp_frame
+		 * and the traits header.
+		 */
+		traits_init(xdp_buff_traits(xdp), xdp->data_meta);
+	}
 }
 
 /* Reserve memory area at end-of data area.
@@ -272,6 +288,8 @@ struct xdp_frame {
 	u32 frame_sz;
 	u32 flags; /* supported values defined in xdp_buff_flags */
 };
+
+static_assert(sizeof(struct xdp_frame) == _XDP_FRAME_SIZE);
 
 static __always_inline bool xdp_frame_has_frags(const struct xdp_frame *frame)
 {
@@ -520,6 +538,11 @@ static inline bool xdp_metalen_invalid(unsigned long metalen)
 	BUILD_BUG_ON(!__builtin_constant_p(meta_max));
 
 	return !IS_ALIGNED(metalen, sizeof(u32)) || metalen > meta_max;
+}
+
+static __always_inline void *xdp_data_hard_start(const struct xdp_buff *xdp)
+{
+	return xdp_buff_traits(xdp) + traits_size(xdp_buff_traits(xdp));
 }
 
 struct xdp_attachment_info {

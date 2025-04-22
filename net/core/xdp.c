@@ -1021,3 +1021,69 @@ void xdp_features_clear_redirect_target(struct net_device *dev)
 	xdp_set_features_flag(dev, val);
 }
 EXPORT_SYMBOL_GPL(xdp_features_clear_redirect_target);
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_xdp_trait_set(struct xdp_buff *xdp, u64 key,
+				  const void *val, u64 val__sz, u64 flags)
+{
+	if (!(xdp->flags & XDP_FLAGS_TRAITS_SUPPORTED))
+		return -EOPNOTSUPP;
+	/* Traits and meta can't be used together */
+	xdp->flags &= ~XDP_FLAGS_META_SUPPORTED;
+
+	return trait_set(xdp_buff_traits(xdp), xdp->data, key,
+			 val, val__sz, flags);
+}
+
+__bpf_kfunc int bpf_xdp_trait_is_set(struct xdp_buff *xdp, u64 key)
+{
+	if (!(xdp->flags & XDP_FLAGS_TRAITS_SUPPORTED))
+		return -EOPNOTSUPP;
+	/* Traits and meta can't be used together */
+	xdp->flags &= ~XDP_FLAGS_META_SUPPORTED;
+
+	return trait_is_set(xdp_buff_traits(xdp), key);
+}
+
+__bpf_kfunc int bpf_xdp_trait_get(struct xdp_buff *xdp, u64 key,
+				  void *val, u64 val__sz)
+{
+	if (!(xdp->flags & XDP_FLAGS_TRAITS_SUPPORTED))
+		return -EOPNOTSUPP;
+	/* Traits and meta can't be used together */
+	xdp->flags &= ~XDP_FLAGS_META_SUPPORTED;
+
+	return trait_get(xdp_buff_traits(xdp), key, val, val__sz);
+}
+
+__bpf_kfunc int bpf_xdp_trait_del(struct xdp_buff *xdp, u64 key)
+{
+	if (!(xdp->flags & XDP_FLAGS_TRAITS_SUPPORTED))
+		return -EOPNOTSUPP;
+	/* Traits and meta can't be used together */
+	xdp->flags &= ~XDP_FLAGS_META_SUPPORTED;
+
+	return trait_del(xdp_buff_traits(xdp), key);
+}
+
+__bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(xdp_trait)
+BTF_ID_FLAGS(func, bpf_xdp_trait_set)
+BTF_ID_FLAGS(func, bpf_xdp_trait_is_set)
+BTF_ID_FLAGS(func, bpf_xdp_trait_get)
+BTF_ID_FLAGS(func, bpf_xdp_trait_del)
+BTF_KFUNCS_END(xdp_trait)
+
+static const struct btf_kfunc_id_set xdp_trait_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &xdp_trait,
+};
+
+static int xdp_trait_init(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP,
+					 &xdp_trait_kfunc_set);
+}
+late_initcall(xdp_trait_init);
