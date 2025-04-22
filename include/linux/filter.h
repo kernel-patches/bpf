@@ -703,12 +703,32 @@ static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 	cant_migrate();
 	if (static_branch_unlikely(&bpf_stats_enabled_key)) {
 		struct bpf_prog_stats *stats;
-		u64 duration, start = sched_clock();
+		u64 duration, start, start_time, end_time, irq_delta;
 		unsigned long flags;
+		unsigned int cpu;
 
+		#ifdef CONFIG_IRQ_TIME_ACCOUNTING
+		if (in_task()) {
+			cpu = get_cpu();
+			put_cpu();
+			start_time = irq_time_read(cpu);
+		}
+		#endif
+
+		start = sched_clock();
 		ret = dfunc(ctx, prog->insnsi, prog->bpf_func);
-
 		duration = sched_clock() - start;
+
+		#ifdef CONFIG_IRQ_TIME_ACCOUNTING
+		if (in_task()) {
+			end_time = irq_time_read(cpu);
+			if (end_time > start_time) {
+				irq_delta = end_time - start_time;
+				duration -= irq_delta;
+			}
+		}
+		#endif
+
 		stats = this_cpu_ptr(prog->stats);
 		flags = u64_stats_update_begin_irqsave(&stats->syncp);
 		u64_stats_inc(&stats->cnt);
