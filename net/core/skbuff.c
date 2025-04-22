@@ -5043,6 +5043,10 @@ static const u8 skb_ext_type_len[] = {
 #if IS_ENABLED(CONFIG_MCTP_FLOWS)
 	[SKB_EXT_MCTP] = SKB_EXT_CHUNKSIZEOF(struct mctp_flow),
 #endif
+	/* TODO: skb_ext is slab allocated with room for all extensions,
+	 * this makes it a LOT bigger.
+	 */
+	[SKB_EXT_TRAITS] = SKB_EXT_CHUNKS(XDP_PACKET_HEADROOM),
 };
 
 static __always_inline unsigned int skb_ext_alloc_length(void)

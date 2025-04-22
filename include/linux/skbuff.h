@@ -39,6 +39,7 @@
 #include <net/net_debug.h>
 #include <net/dropreason-core.h>
 #include <net/netmem.h>
+#include <net/trait.h>
 
 /**
  * DOC: skb checksums
@@ -4835,6 +4836,7 @@ enum skb_ext_id {
 #if IS_ENABLED(CONFIG_MCTP_FLOWS)
 	SKB_EXT_MCTP,
 #endif
+	SKB_EXT_TRAITS,
 	SKB_EXT_NUM, /* must be last */
 };
 
@@ -4948,6 +4950,15 @@ static inline void __skb_ext_copy(struct sk_buff *d, const struct sk_buff *s) {}
 static inline void skb_ext_copy(struct sk_buff *dst, const struct sk_buff *s) {}
 static inline bool skb_has_extensions(struct sk_buff *skb) { return false; }
 #endif /* CONFIG_SKB_EXTENSIONS */
+
+static inline void *skb_traits(const struct sk_buff *skb)
+{
+#ifdef CONFIG_SKB_EXTENSIONS
+	return skb_ext_find(skb, SKB_EXT_TRAITS);
+#else
+	return NULL;
+#endif
+}
 
 static inline void nf_reset_ct(struct sk_buff *skb)
 {

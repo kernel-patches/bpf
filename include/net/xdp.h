@@ -127,6 +127,17 @@ static __always_inline void *xdp_buff_traits(const struct xdp_buff *xdp)
 	return xdp->data_hard_start + _XDP_FRAME_SIZE;
 }
 
+static __always_inline void __xdp_flags_update_skb(u32 flags, struct sk_buff *skb, void *traits)
+{
+	if (flags & XDP_FLAGS_TRAITS_SUPPORTED)
+		skb_ext_from_headroom(skb, SKB_EXT_TRAITS, _XDP_FRAME_SIZE, traits_size(traits));
+}
+
+static __always_inline void xdp_buff_update_skb(const struct xdp_buff *xdp, struct sk_buff *skb)
+{
+	__xdp_flags_update_skb(xdp->flags, skb, xdp_buff_traits(xdp));
+}
+
 static __always_inline void
 xdp_init_buff(struct xdp_buff *xdp, u32 frame_sz, struct xdp_rxq_info *rxq)
 {
@@ -300,6 +311,16 @@ static __always_inline bool
 xdp_frame_is_frag_pfmemalloc(const struct xdp_frame *frame)
 {
 	return !!(frame->flags & XDP_FLAGS_FRAGS_PF_MEMALLOC);
+}
+
+static void *xdp_frame_traits(const struct xdp_frame *frame)
+{
+	return frame->data + _XDP_FRAME_SIZE;
+}
+
+static __always_inline void xdp_frame_update_skb(struct xdp_frame *frame, struct sk_buff *skb)
+{
+	__xdp_flags_update_skb(frame->flags, skb, xdp_frame_traits(frame));
 }
 
 #define XDP_BULK_QUEUE_SIZE	16
