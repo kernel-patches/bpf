@@ -45,9 +45,9 @@ int main_prog(struct __sk_buff *skb)
 		goto out;
 
 	tcp = (void*)(ip + 1);
-	if (tcp->dest != 0)
-		goto out;
 	if (!tcp)
+		goto out;
+	if (tcp->dest != 0)
 		goto out;
 
 	urg_ptr = tcp->urg_ptr;
