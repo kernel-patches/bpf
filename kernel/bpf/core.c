@@ -2358,6 +2358,26 @@ static unsigned int __bpf_prog_ret0_warn(const void *ctx,
 	return 0;
 }
 
+static bool bpf_prog_dev_bound_map_compatible(struct bpf_map *map,
+					      const struct bpf_prog *prog)
+{
+	if (!bpf_prog_is_dev_bound(prog->aux))
+		return true;
+
+	if (map->map_type == BPF_MAP_TYPE_PROG_ARRAY)
+		return false;
+
+	if (map->map_type == BPF_MAP_TYPE_DEVMAP &&
+	    prog->expected_attach_type != BPF_XDP_DEVMAP)
+		return true;
+
+	if (map->map_type == BPF_MAP_TYPE_CPUMAP &&
+	    prog->expected_attach_type != BPF_XDP_CPUMAP)
+		return true;
+
+	return false;
+}
+
 bool bpf_prog_map_compatible(struct bpf_map *map,
 			     const struct bpf_prog *fp)
 {
@@ -2373,7 +2393,7 @@ bool bpf_prog_map_compatible(struct bpf_map *map,
 	 * in the case of devmap and cpumap). Until device checks
 	 * are implemented, prohibit adding dev-bound programs to program maps.
 	 */
-	if (bpf_prog_is_dev_bound(aux))
+	if (!bpf_prog_dev_bound_map_compatible(map, fp))
 		return false;
 
 	spin_lock(&map->owner.lock);
