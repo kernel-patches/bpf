@@ -1632,7 +1632,8 @@ static inline void mlx5e_complete_rx_cqe(struct mlx5e_rq *rq,
 static inline
 struct sk_buff *mlx5e_build_linear_skb(struct mlx5e_rq *rq, void *va,
 				       u32 frag_size, u16 headroom,
-				       u32 cqe_bcnt, u32 metasize)
+				       u32 cqe_bcnt, u32 metasize,
+				       struct mlx5e_xdp_buff *mxbuf)
 {
 	struct sk_buff *skb = napi_build_skb(va, frag_size);
 
@@ -1646,6 +1647,8 @@ struct sk_buff *mlx5e_build_linear_skb(struct mlx5e_rq *rq, void *va,
 
 	if (metasize)
 		skb_metadata_set(skb, metasize);
+	if (mxbuf)
+		xdp_buff_update_skb(&mxbuf->xdp, skb);
 
 	return skb;
 }
@@ -1696,7 +1699,7 @@ mlx5e_skb_from_cqe_linear(struct mlx5e_rq *rq, struct mlx5e_wqe_frag_info *wi,
 		cqe_bcnt = mxbuf->xdp.data_end - mxbuf->xdp.data;
 	}
 	frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
-	skb = mlx5e_build_linear_skb(rq, va, frag_size, rx_headroom, cqe_bcnt, metasize);
+	skb = mlx5e_build_linear_skb(rq, va, frag_size, rx_headroom, cqe_bcnt, metasize, mxbuf);
 	if (unlikely(!skb))
 		return NULL;
 
@@ -1772,7 +1775,7 @@ mlx5e_skb_from_cqe_nonlinear(struct mlx5e_rq *rq, struct mlx5e_wqe_frag_info *wi
 	skb = mlx5e_build_linear_skb(rq, mxbuf->xdp.data_hard_start, rq->buff.frame0_sz,
 				     mxbuf->xdp.data - mxbuf->xdp.data_hard_start,
 				     mxbuf->xdp.data_end - mxbuf->xdp.data,
-				     mxbuf->xdp.data - mxbuf->xdp.data_meta);
+				     mxbuf->xdp.data - mxbuf->xdp.data_meta, mxbuf);
 	if (unlikely(!skb))
 		return NULL;
 
@@ -2071,7 +2074,7 @@ mlx5e_skb_from_cqe_mpwrq_nonlinear(struct mlx5e_rq *rq, struct mlx5e_mpw_info *w
 		skb = mlx5e_build_linear_skb(rq, mxbuf->xdp.data_hard_start,
 					     linear_frame_sz,
 					     mxbuf->xdp.data - mxbuf->xdp.data_hard_start, 0,
-					     mxbuf->xdp.data - mxbuf->xdp.data_meta);
+					     mxbuf->xdp.data - mxbuf->xdp.data_meta, mxbuf);
 		if (unlikely(!skb)) {
 			mlx5e_page_release_fragmented(rq, &wi->linear_page);
 			return NULL;
@@ -2168,7 +2171,7 @@ mlx5e_skb_from_cqe_mpwrq_linear(struct mlx5e_rq *rq, struct mlx5e_mpw_info *wi,
 		cqe_bcnt = mxbuf->xdp.data_end - mxbuf->xdp.data;
 	}
 	frag_size = MLX5_SKB_FRAG_SZ(rx_headroom + cqe_bcnt);
-	skb = mlx5e_build_linear_skb(rq, va, frag_size, rx_headroom, cqe_bcnt, metasize);
+	skb = mlx5e_build_linear_skb(rq, va, frag_size, rx_headroom, cqe_bcnt, metasize, mxbuf);
 	if (unlikely(!skb))
 		return NULL;
 
@@ -2202,7 +2205,7 @@ mlx5e_skb_from_cqe_shampo(struct mlx5e_rq *rq, struct mlx5e_mpw_info *wi,
 		dma_sync_single_range_for_cpu(rq->pdev, dma_addr, 0, frag_size, rq->buff.map_dir);
 		net_prefetchw(hdr);
 		net_prefetch(data);
-		skb = mlx5e_build_linear_skb(rq, hdr, frag_size, rx_headroom, head_size, 0);
+		skb = mlx5e_build_linear_skb(rq, hdr, frag_size, rx_headroom, head_size, 0, NULL);
 		if (unlikely(!skb))
 			return NULL;
 
