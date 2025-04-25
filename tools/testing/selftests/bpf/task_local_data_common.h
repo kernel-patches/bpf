@@ -38,4 +38,12 @@ struct task_local_data_map_value {
 	short udata_start;
 };
 
+/* test specific */
+struct test_struct {
+	unsigned long a;
+	unsigned long b;
+	unsigned long c;
+	unsigned long d;
+};
+
 #endif
