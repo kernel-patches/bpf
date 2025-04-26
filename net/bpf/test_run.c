@@ -690,6 +690,9 @@ int bpf_prog_test_run_tracing(struct bpf_prog *prog,
 	int b = 2, err = -EFAULT;
 	u32 retval = 0;
 
+	if (prog->expected_attach_type == BPF_TRACE_RAW_TP)
+		return bpf_prog_test_run_raw_tp(prog, kattr, uattr);
+
 	if (kattr->test.flags || kattr->test.cpu || kattr->test.batch_size)
 		return -EINVAL;
 
