@@ -760,6 +760,7 @@ int bpf_prog_test_run_raw_tp(struct bpf_prog *prog,
 	void __user *ctx_in = u64_to_user_ptr(kattr->test.ctx_in);
 	__u32 ctx_size_in = kattr->test.ctx_size_in;
 	struct bpf_raw_tp_test_run_info info;
+	u64 args[MAX_BPF_FUNC_ARGS + 1] = {};
 	int cpu = kattr->test.cpu, err = 0;
 	int current_cpu;
 
@@ -776,14 +777,11 @@ int bpf_prog_test_run_raw_tp(struct bpf_prog *prog,
 	if ((kattr->test.flags & BPF_F_TEST_RUN_ON_CPU) == 0 && cpu != 0)
 		return -EINVAL;
 
-	if (ctx_size_in) {
-		info.ctx = memdup_user(ctx_in, ctx_size_in);
-		if (IS_ERR(info.ctx))
-			return PTR_ERR(info.ctx);
-	} else {
-		info.ctx = NULL;
-	}
+	if (ctx_size_in && copy_from_user(args + 1, ctx_in, ctx_size_in))
+		return -EFAULT;
 
+	args[0] = ctx_size_in / sizeof(u64);
+	info.ctx = args + 1;
 	info.prog = prog;
 
 	current_cpu = get_cpu();
@@ -807,7 +805,6 @@ int bpf_prog_test_run_raw_tp(struct bpf_prog *prog,
 	    copy_to_user(&uattr->test.retval, &info.retval, sizeof(u32)))
 		err = -EFAULT;
 
-	kfree(info.ctx);
 	return err;
 }
 
