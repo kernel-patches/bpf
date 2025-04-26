@@ -5,7 +5,7 @@
 #include "bpf/libbpf_internal.h"
 #include "test_raw_tp_test_run.skel.h"
 
-void test_raw_tp_test_run(void)
+static void test_raw_tp(bool is_tp_btf)
 {
 	int comm_fd = -1, err, nr_online, i, prog_fd;
 	__u64 args[2] = {0x1234ULL, 0x5678ULL};
@@ -28,6 +28,9 @@ void test_raw_tp_test_run(void)
 	if (!ASSERT_OK_PTR(skel, "skel_open"))
 		goto cleanup;
 
+	bpf_program__set_autoattach(skel->progs.rename_tp_btf, is_tp_btf);
+	bpf_program__set_autoattach(skel->progs.rename_raw_tp, !is_tp_btf);
+
 	err = test_raw_tp_test_run__attach(skel);
 	if (!ASSERT_OK(err, "skel_attach"))
 		goto cleanup;
@@ -42,7 +45,10 @@ void test_raw_tp_test_run(void)
 	ASSERT_NEQ(skel->bss->count, 0, "check_count");
 	ASSERT_EQ(skel->data->on_cpu, 0xffffffff, "check_on_cpu");
 
-	prog_fd = bpf_program__fd(skel->progs.rename);
+	if (is_tp_btf)
+		prog_fd = bpf_program__fd(skel->progs.rename_tp_btf);
+	else
+		prog_fd = bpf_program__fd(skel->progs.rename_raw_tp);
 	opts.ctx_in = args;
 	opts.ctx_size_in = sizeof(__u64);
 
@@ -83,4 +89,12 @@ cleanup:
 	close(comm_fd);
 	test_raw_tp_test_run__destroy(skel);
 	free(online);
+}
+
+void test_raw_tp_test_run(void)
+{
+	if (test__start_subtest("raw_tp"))
+		test_raw_tp(false);
+	if (test__start_subtest("tp_btf"))
+		test_raw_tp(true);
 }
