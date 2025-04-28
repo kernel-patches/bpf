@@ -125,6 +125,34 @@ int enable_controllers(const char *relative_path, const char *controllers)
 	return __enable_controllers(cgroup_path, controllers);
 }
 
+static int __open_cgroup_file(const char *cgroup_path, const char *file,
+			      int flags)
+{
+	char file_path[PATH_MAX + 1];
+
+	snprintf(file_path, sizeof(file_path), "%s/%s", cgroup_path, file);
+	return open(file_path, flags);
+}
+
+/**
+ * open_cgroup_file() - Open a cgroup file
+ * @relative_path: The cgroup path, relative to the workdir
+ * @file: The name of the file in cgroupfs to open to
+ * @flags: Flags
+ *
+ * Open a file in the given cgroup's directory.
+ *
+ * If successful, fd is returned.
+ */
+int open_cgroup_file(const char *relative_path, const char *file,
+		     int flags)
+{
+	char cgroup_path[PATH_MAX - 24];
+
+	format_cgroup_path(cgroup_path, relative_path);
+	return __open_cgroup_file(cgroup_path, file, flags);
+}
+
 static size_t __read_cgroup_file(const char *cgroup_path, const char *file,
 				 char *buf, size_t size)
 {

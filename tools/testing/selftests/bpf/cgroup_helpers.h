@@ -11,6 +11,7 @@
 
 /* cgroupv2 related */
 int enable_controllers(const char *relative_path, const char *controllers);
+int open_cgroup_file(const char *relative_path, const char *file, int flags);
 size_t read_cgroup_file(const char *relative_path, const char *file,
 			char *buf, size_t size);
 int write_cgroup_file(const char *relative_path, const char *file,
