@@ -6424,7 +6424,14 @@ static bool prog_args_trusted(const struct bpf_prog *prog)
 
 	switch (prog->type) {
 	case BPF_PROG_TYPE_TRACING:
-		return atype == BPF_TRACE_RAW_TP || atype == BPF_TRACE_ITER;
+		switch (atype) {
+		case BPF_TRACE_RAW_TP:
+		case BPF_TRACE_ITER:
+		case BPF_MODIFY_RETURN:
+			return true;
+		default:
+			return false;
+		}
 	case BPF_PROG_TYPE_LSM:
 		return bpf_lsm_is_trusted(prog);
 	case BPF_PROG_TYPE_STRUCT_OPS:
