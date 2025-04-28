@@ -45,6 +45,7 @@
 #include <linux/mmu_notifier.h>
 #include <linux/cred.h>
 #include <linux/nmi.h>
+#include <linux/bpf.h>
 
 #include <asm/tlb.h>
 #include "internal.h"
@@ -1100,6 +1101,30 @@ int unregister_oom_notifier(struct notifier_block *nb)
 }
 EXPORT_SYMBOL_GPL(unregister_oom_notifier);
 
+#ifdef CONFIG_BPF_SYSCALL
+int bpf_handle_out_of_memory(struct oom_control *oc);
+
+/*
+ * Returns true if the bpf oom program returns 1 and some memory was
+ * freed.
+ */
+static bool bpf_handle_oom(struct oom_control *oc)
+{
+	if (WARN_ON_ONCE(oc->chosen))
+		oc->chosen = NULL;
+
+	oc->bpf_memory_freed = false;
+
+	return bpf_handle_out_of_memory(oc) && oc->bpf_memory_freed;
+}
+
+#else
+static inline bool bpf_handle_oom(struct oom_control *oc)
+{
+	return 0;
+}
+#endif
+
 /**
  * out_of_memory - kill the "best" process when we run out of memory
  * @oc: pointer to struct oom_control
@@ -1160,6 +1185,13 @@ bool out_of_memory(struct oom_control *oc)
 		oom_kill_process(oc, "Out of memory (oom_kill_allocating_task)");
 		return true;
 	}
+
+	/*
+	 * Let bpf handle the OOM first. If it was able to free up some memory,
+	 * bail out. Otherwise fall back to the kernel OOM killer.
+	 */
+	if (bpf_handle_oom(oc))
+		return true;
 
 	select_bad_process(oc);
 	/* Found nothing?!?! */
@@ -1264,3 +1296,39 @@ put_task:
 	return -ENOSYS;
 #endif /* CONFIG_MMU */
 }
+
+#ifdef CONFIG_BPF_SYSCALL
+
+__bpf_hook_start();
+
+/*
+ * Bpf hook to customize the oom handling policy.
+ */
+__weak noinline int bpf_handle_out_of_memory(struct oom_control *oc)
+{
+	return 0;
+}
+
+__bpf_hook_end();
+
+BTF_KFUNCS_START(bpf_oom_hooks)
+BTF_ID_FLAGS(func, bpf_handle_out_of_memory, KF_SLEEPABLE)
+BTF_KFUNCS_END(bpf_oom_hooks)
+
+static const struct btf_kfunc_id_set bpf_oom_hook_set = {
+	.owner = THIS_MODULE,
+	.set   = &bpf_oom_hooks,
+};
+static int __init bpf_oom_init(void)
+{
+	int err;
+
+	err = register_btf_fmodret_id_set(&bpf_oom_hook_set);
+	if (err)
+		pr_warn("error while registering bpf oom hooks: %d", err);
+
+	return err;
+}
+late_initcall(bpf_oom_init);
+
+#endif
