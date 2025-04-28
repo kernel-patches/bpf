@@ -176,6 +176,32 @@ static void psi_avgs_work(struct work_struct *work);
 
 static void poll_timer_fn(struct timer_list *t);
 
+#ifdef CONFIG_BPF_SYSCALL
+__bpf_hook_start();
+
+__weak noinline int bpf_handle_psi_event(struct psi_trigger *t)
+{
+	return 0;
+}
+
+__bpf_hook_end();
+
+BTF_KFUNCS_START(bpf_psi_hooks)
+BTF_ID_FLAGS(func, bpf_handle_psi_event, KF_SLEEPABLE)
+BTF_KFUNCS_END(bpf_psi_hooks)
+
+static const struct btf_kfunc_id_set bpf_psi_hook_set = {
+	.owner = THIS_MODULE,
+	.set   = &bpf_psi_hooks,
+};
+
+#else
+static inline int bpf_handle_psi_event(struct psi_trigger *t)
+{
+	return 0;
+}
+#endif
+
 static void group_init(struct psi_group *group)
 {
 	int cpu;
@@ -489,6 +515,7 @@ static void update_triggers(struct psi_group *group, u64 now,
 
 		/* Generate an event */
 		if (cmpxchg(&t->event, 0, 1) == 0) {
+			bpf_handle_psi_event(t);
 			if (t->of)
 				kernfs_notify(t->of->kn);
 			else
@@ -1655,6 +1682,8 @@ static const struct proc_ops psi_irq_proc_ops = {
 
 static int __init psi_proc_init(void)
 {
+	int err = 0;
+
 	if (psi_enable) {
 		proc_mkdir("pressure", NULL);
 		proc_create("pressure/io", 0666, NULL, &psi_io_proc_ops);
@@ -1663,8 +1692,13 @@ static int __init psi_proc_init(void)
 #ifdef CONFIG_IRQ_TIME_ACCOUNTING
 		proc_create("pressure/irq", 0666, NULL, &psi_irq_proc_ops);
 #endif
+#ifdef CONFIG_BPF_SYSCALL
+		err = register_btf_fmodret_id_set(&bpf_psi_hook_set);
+		if (err)
+			pr_err("error while registering bpf psi hooks: %d", err);
+#endif
 	}
-	return 0;
+	return err;
 }
 module_init(psi_proc_init);
 
