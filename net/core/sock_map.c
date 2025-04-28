@@ -701,6 +701,45 @@ const struct bpf_func_proto bpf_msg_redirect_map_proto = {
 	.arg4_type      = ARG_ANYTHING,
 };
 
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_sk_skb_set_redirect_cpu(struct __sk_buff *s, int redir_cpu)
+{
+	struct sk_buff *skb = (struct sk_buff *)s;
+	struct sock *sk = skb->sk;
+	struct sk_psock *psock;
+
+	WARN_ON_ONCE(!rcu_read_lock_held());
+
+	if (!sk || redir_cpu >= num_possible_cpus())
+		return -EINVAL;
+
+	psock = sk_psock(sk);
+	if (!psock)
+		return -ENOENT;
+
+	psock->redir_cpu = redir_cpu;
+	return 0;
+}
+
+__bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(bpf_sk_sockmap_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_sk_skb_set_redirect_cpu)
+BTF_KFUNCS_END(bpf_sk_sockmap_kfunc_ids)
+
+static const struct btf_kfunc_id_set bpf_sk_sockmap_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set   = &bpf_sk_sockmap_kfunc_ids,
+};
+
+static int init_sockmap_subsystem(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_SK_SKB, &bpf_sk_sockmap_kfunc_set);
+}
+
+late_initcall(init_sockmap_subsystem);
+
 struct sock_map_seq_info {
 	struct bpf_map *map;
 	struct sock *sk;

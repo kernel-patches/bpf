@@ -219,6 +219,7 @@ enum btf_kfunc_hook {
 	BTF_KFUNC_HOOK_LWT,
 	BTF_KFUNC_HOOK_NETFILTER,
 	BTF_KFUNC_HOOK_KPROBE,
+	BTF_KFUNC_HOOK_SK_MSG,
 	BTF_KFUNC_HOOK_MAX,
 };
 
@@ -8649,6 +8650,8 @@ static int bpf_prog_type_to_kfunc_hook(enum bpf_prog_type prog_type)
 		return BTF_KFUNC_HOOK_SCHED_ACT;
 	case BPF_PROG_TYPE_SK_SKB:
 		return BTF_KFUNC_HOOK_SK_SKB;
+	case BPF_PROG_TYPE_SK_MSG:
+		return BTF_KFUNC_HOOK_SK_MSG;
 	case BPF_PROG_TYPE_SOCKET_FILTER:
 		return BTF_KFUNC_HOOK_SOCKET_FILTER;
 	case BPF_PROG_TYPE_LWT_OUT:

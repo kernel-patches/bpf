@@ -16,6 +16,8 @@
 #define MAX_MSG_FRAGS			MAX_SKB_FRAGS
 #define NR_MSG_FRAG_IDS			(MAX_MSG_FRAGS + 1)
 
+#define BPF_SK_REDIR_CPU_UNSET		-1
+
 enum __sk_action {
 	__SK_DROP = 0,
 	__SK_PASS,
@@ -86,6 +88,7 @@ struct sk_psock {
 	u32				apply_bytes;
 	u32				cork_bytes;
 	u32				eval;
+	s32				redir_cpu;
 	bool				redir_ingress; /* undefined if sk_redir is null */
 	struct sk_msg			*cork;
 	struct sk_psock_progs		progs;

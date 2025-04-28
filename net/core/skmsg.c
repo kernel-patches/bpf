@@ -741,6 +741,7 @@ struct sk_psock *sk_psock_init(struct sock *sk, int node)
 	psock->saved_destroy = prot->destroy;
 	psock->saved_close = prot->close;
 	psock->saved_write_space = sk->sk_write_space;
+	psock->redir_cpu = BPF_SK_REDIR_CPU_UNSET;
 
 	INIT_LIST_HEAD(&psock->link);
 	spin_lock_init(&psock->link_lock);

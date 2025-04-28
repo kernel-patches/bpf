@@ -212,6 +212,20 @@ following cases:
 
 Returns 0
 
+bpf_sk_skb_set_redirect_cpu()
+^^^^^^^^^^^^^^^^^^^^^^
+.. code-block:: c
+
+    int bpf_sk_skb_set_redirect_cpu(struct __sk_buff *s, int redir_cpu)
+
+This kfunc ``bpf_sk_skb_set_redirect_cpu()`` is available to
+``BPF_PROG_TYPE_SK_SKB`` BPF programs. It sets the CPU affinity, allowing the
+sockmap packet redirecting process to run on the specified CPU as much as
+possible, helping users reduce the interference between the sockmap redirecting
+background thread and other threads.
+
+Returns 0 on success, or a negative error in case of failure.
+
 bpf_msg_cork_bytes()
 ^^^^^^^^^^^^^^^^^^^^^^
 .. code-block:: c
