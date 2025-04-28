@@ -689,7 +689,7 @@ static void sk_psock_backlog(struct work_struct *work)
 					 * other work that might be here.
 					 */
 					if (sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED))
-						schedule_delayed_work(&psock->work, 1);
+						sk_psock_schedule_delayed_work(psock, 1);
 					goto end;
 				}
 				/* Hard errors break pipe and stop xmit. */
@@ -940,6 +940,7 @@ static int sk_psock_skb_redirect(struct sk_psock *from, struct sk_buff *skb)
 		sock_drop(from->sk, skb);
 		return -EIO;
 	}
+	psock_other->redir_cpu = from->redir_cpu;
 	spin_lock_bh(&psock_other->ingress_lock);
 	if (!sk_psock_test_state(psock_other, SK_PSOCK_TX_ENABLED)) {
 		spin_unlock_bh(&psock_other->ingress_lock);
@@ -949,7 +950,7 @@ static int sk_psock_skb_redirect(struct sk_psock *from, struct sk_buff *skb)
 	}
 
 	skb_queue_tail(&psock_other->ingress_skb, skb);
-	schedule_delayed_work(&psock_other->work, 0);
+	sk_psock_schedule_delayed_work(psock_other, 0);
 	spin_unlock_bh(&psock_other->ingress_lock);
 	return 0;
 }
@@ -1027,7 +1028,7 @@ static int sk_psock_verdict_apply(struct sk_psock *psock, struct sk_buff *skb,
 			spin_lock_bh(&psock->ingress_lock);
 			if (sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED)) {
 				skb_queue_tail(&psock->ingress_skb, skb);
-				schedule_delayed_work(&psock->work, 0);
+				sk_psock_schedule_delayed_work(psock, 0);
 				err = 0;
 			}
 			spin_unlock_bh(&psock->ingress_lock);
@@ -1059,7 +1060,7 @@ static void sk_psock_write_space(struct sock *sk)
 	psock = sk_psock(sk);
 	if (likely(psock)) {
 		if (sk_psock_test_state(psock, SK_PSOCK_TX_ENABLED))
-			schedule_delayed_work(&psock->work, 0);
+			sk_psock_schedule_delayed_work(psock, 0);
 		write_space = psock->saved_write_space;
 	}
 	rcu_read_unlock();

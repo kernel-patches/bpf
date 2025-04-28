@@ -396,6 +396,18 @@ static inline void sk_psock_report_error(struct sk_psock *psock, int err)
 	sk_error_report(sk);
 }
 
+static inline void sk_psock_schedule_delayed_work(struct sk_psock *psock,
+						  int delay)
+{
+	s32 redir_cpu = psock->redir_cpu;
+
+	if (redir_cpu != BPF_SK_REDIR_CPU_UNSET)
+		schedule_delayed_work_on(redir_cpu, &psock->work,
+					 delay);
+	else
+		schedule_delayed_work(&psock->work, delay);
+}
+
 struct sk_psock *sk_psock_init(struct sock *sk, int node);
 void sk_psock_stop(struct sk_psock *psock);
 
