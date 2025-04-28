@@ -2,11 +2,15 @@
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
+#include <stdbool.h>
+#include "bpf_kfuncs.h"
 
 long process_byte = 0;
 int  verdict_dir = 0;
 int  dropped = 0;
 int  pkt_size = 0;
+int  redir_cpu = -1;
+
 struct {
 	__uint(type, BPF_MAP_TYPE_SOCKMAP);
 	__uint(max_entries, 20);
@@ -32,6 +36,9 @@ int prog_skb_verdict(struct __sk_buff *skb)
 {
 	int one = 1;
 	int ret =  bpf_sk_redirect_map(skb, &sock_map_rx, one, verdict_dir);
+
+	if (redir_cpu != -1)
+		bpf_sk_skb_set_redirect_cpu(skb, redir_cpu);
 
 	if (ret == SK_DROP)
 		dropped++;

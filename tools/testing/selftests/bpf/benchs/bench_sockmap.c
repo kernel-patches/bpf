@@ -43,6 +43,8 @@ enum SOCKMAP_ARG_FLAG {
 	ARG_FW_TX_VERDICT_INGRESS,
 	ARG_FW_TX_VERDICT_EGRESS,
 	ARG_CTL_RX_STRP,
+	ARG_CTL_CPU_AFFINITY,
+	ARG_CTL_NO_VERIFY,
 	ARG_CONSUMER_DELAY_TIME,
 	ARG_PRODUCER_DURATION,
 };
@@ -109,6 +111,8 @@ static struct socmap_ctx {
 	int		delay_consumer;
 	int		prod_run_time;
 	int		strp_size;
+	int		cpu_affinity;
+	int		skip_verify;
 } ctx = {
 	.prod_send	= 0,
 	.user_read	= 0,
@@ -118,6 +122,8 @@ static struct socmap_ctx {
 	.delay_consumer = 0,
 	.prod_run_time	= 0,
 	.strp_size	= 0,
+	.cpu_affinity	= 0,
+	.skip_verify	= 0,
 };
 
 static void bench_sockmap_prog_destroy(void)
@@ -235,11 +241,18 @@ static int create_sockets(void)
 static void validate(void)
 {
 	if (env.consumer_cnt != 2 || env.producer_cnt != 1 ||
-	    !env.affinity)
+	    !env.affinity) {
+		fprintf(stderr, "argument '-c 2 -p 1 -a' is necessary\n");
 		goto err;
+	}
+
+	if (!ctx.cpu_affinity && env.nr_cpus < 4) {
+		fprintf(stderr, "4 CPU are needed to test cpu-affinity\n");
+		goto err;
+	}
+
 	return;
 err:
-	fprintf(stderr, "argument '-c 2 -p 1 -a' is necessary");
 	exit(1);
 }
 
@@ -327,6 +340,9 @@ static void setup(void)
 		exit(1);
 	}
 
+	if (ctx.cpu_affinity)
+		ctx.skel->data->redir_cpu = 3;
+
 	if (create_sockets()) {
 		fprintf(stderr, "create_net_mode error\n");
 		goto err;
@@ -367,9 +383,12 @@ static void measure(struct bench_res *res)
 
 static void verify_data(int *check_pos, char *buf, int rcv)
 {
+	if (ctx.skip_verify)
+		return;
+
 	for (int i = 0 ; i < rcv; i++) {
 		if (buf[i] != snd_data[(*check_pos) % DATA_REPEAT_SIZE]) {
-			fprintf(stderr, "verify data fail");
+			fprintf(stderr, "verify data fail\n");
 			exit(1);
 		}
 		(*check_pos)++;
@@ -553,6 +572,10 @@ static const struct argp_option opts[] = {
 		"delay consumer start"},
 	{ "producer-duration", ARG_PRODUCER_DURATION, "SEC", 0,
 		"producer duration"},
+	{ "cpu-affinity", ARG_CTL_CPU_AFFINITY, NULL, 0,
+		"set cpu-affinity for sockmap backlog thread"},
+	{ "no-verify", ARG_CTL_NO_VERIFY, NULL, 0,
+		"skip data validation for performance enhancements"},
 	{},
 };
 
@@ -570,6 +593,12 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		break;
 	case ARG_CTL_RX_STRP:
 		ctx.strp_size = strtol(arg, NULL, 10);
+		break;
+	case ARG_CTL_CPU_AFFINITY:
+		ctx.cpu_affinity = 1;
+		break;
+	case ARG_CTL_NO_VERIFY:
+		ctx.skip_verify = 1;
 		break;
 	default:
 		return ARGP_ERR_UNKNOWN;

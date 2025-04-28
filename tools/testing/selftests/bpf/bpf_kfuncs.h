@@ -92,4 +92,10 @@ extern int bpf_set_dentry_xattr(struct dentry *dentry, const char *name__str,
 				const struct bpf_dynptr *value_p, int flags) __ksym __weak;
 extern int bpf_remove_dentry_xattr(struct dentry *dentry, const char *name__str) __ksym __weak;
 
+/* Description
+ *  Set sockmap redir cpu
+ * Returns
+ *  Error code
+ */
+extern int bpf_sk_skb_set_redirect_cpu(struct __sk_buff *skb, int redir_cpu) __ksym;
 #endif
