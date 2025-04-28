@@ -1333,6 +1333,27 @@ __bpf_kfunc int bpf_oom_kill_process(struct oom_control *oc,
 	return 0;
 }
 
+__bpf_kfunc int bpf_out_of_memory(struct mem_cgroup *memcg__nullable, int order)
+{
+	struct oom_control oc = {
+		.memcg = memcg__nullable,
+		.order = order,
+	};
+	int ret = -EINVAL;
+
+	if (oc.order < 0 || oc.order > MAX_PAGE_ORDER)
+		goto out;
+
+	ret = -EBUSY;
+	if (mutex_trylock(&oom_lock)) {
+		ret = out_of_memory(&oc);
+		mutex_unlock(&oom_lock);
+	}
+
+out:
+	return ret;
+}
+
 __bpf_kfunc_end_defs();
 
 __bpf_hook_start();
@@ -1358,6 +1379,7 @@ static const struct btf_kfunc_id_set bpf_oom_hook_set = {
 
 BTF_KFUNCS_START(bpf_oom_kfuncs)
 BTF_ID_FLAGS(func, bpf_oom_kill_process, KF_SLEEPABLE | KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_out_of_memory, KF_SLEEPABLE | KF_TRUSTED_ARGS)
 BTF_KFUNCS_END(bpf_oom_kfuncs)
 
 static const struct btf_kfunc_id_set bpf_oom_kfunc_set = {
