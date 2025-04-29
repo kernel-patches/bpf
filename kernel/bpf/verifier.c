@@ -1756,6 +1756,7 @@ static int copy_verifier_state(struct bpf_verifier_state *dst_state,
 	dst_state->used_as_loop_entry = src->used_as_loop_entry;
 	dst_state->may_goto_depth = src->may_goto_depth;
 	dst_state->loop_entry = src->loop_entry;
+	dst_state->scc_epoch = src->scc_epoch;
 	for (i = 0; i <= src->curframe; i++) {
 		dst = dst_state->frame[i];
 		if (!dst) {
@@ -1804,6 +1805,57 @@ static u32 frame_insn_idx(struct bpf_verifier_state *st, u32 frame)
 	return frame == st->curframe
 	       ? st->insn_idx
 	       : st->frame[frame + 1]->callsite;
+}
+
+static struct bpf_scc_info *insn_scc(struct bpf_verifier_env *env, int insn_idx)
+{
+	u32 scc;
+
+	scc = env->insn_aux_data[insn_idx].scc;
+	return scc ? &env->scc_info[scc] : NULL;
+}
+
+/*
+ * Returns true iff:
+ * - verifier is currently exploring states with origins in some CFG SCCs;
+ * - st->insn_idx belongs to one of these SCCs;
+ * - st->scc_epoch is the current SCC epoch, indicating that some parent
+ *   of st started current SCC exploration epoch.
+ *
+ * When above conditions are true, mark_all_regs_read_and_precise()
+ * has not yet been called for st, meaning that read and precision
+ * marks can't be relied upon.
+ *
+ * See comments for mark_all_regs_read_and_precise().
+ */
+static bool incomplete_read_marks(struct bpf_verifier_env *env,
+				  struct bpf_verifier_state *st,
+				  bool same_epoch)
+{
+	struct bpf_scc_info *scc_info;
+	u32 insn_idx, i;
+
+	for (i = 0; i <= st->curframe; i++) {
+		insn_idx = frame_insn_idx(st, i);
+		scc_info = insn_scc(env, insn_idx);
+		if (scc_info &&
+		    scc_info->state_loops_possible &&
+		    (same_epoch ? scc_info->scc_epoch == st->scc_epoch
+		    	        : scc_info->scc_epoch > st->scc_epoch))
+			return true;
+	}
+
+	return false;
+}
+
+static void mark_state_loops_possible(struct bpf_verifier_env *env,
+				      struct bpf_verifier_state *st)
+{
+	struct bpf_scc_info *scc_info;
+
+	scc_info = insn_scc(env, st->insn_idx);
+	if (scc_info)
+		scc_info->state_loops_possible = 1;
 }
 
 /* Open coded iterators allow back-edges in the state graph in order to
@@ -1964,17 +2016,11 @@ static void update_branch_counts(struct bpf_verifier_env *env, struct bpf_verifi
 {
 	struct bpf_verifier_state_list *sl = NULL, *parent_sl;
 	struct bpf_verifier_state *parent;
+	struct bpf_scc_info *scc_info;
+	u32 insn_idx, i;
 
 	while (st) {
 		u32 br = --st->branches;
-
-		/* br == 0 signals that DFS exploration for 'st' is finished,
-		 * thus it is necessary to update parent's loop entry if it
-		 * turned out that st is a part of some loop.
-		 * This is a part of 'case A' in get_loop_entry() comment.
-		 */
-		if (br == 0 && st->parent && st->loop_entry)
-			update_loop_entry(env, st->parent, st->loop_entry);
 
 		/* WARN_ON(br > 1) technically makes sense here,
 		 * but see comment in push_stack(), hence:
@@ -1984,6 +2030,14 @@ static void update_branch_counts(struct bpf_verifier_env *env, struct bpf_verifi
 			  br);
 		if (br)
 			break;
+		for (i = 0; i <= st->curframe; i++) {
+			insn_idx = frame_insn_idx(st, i);
+			scc_info = insn_scc(env, insn_idx);
+			if (scc_info && scc_info->entry_state == st) {
+				scc_info->entry_state = NULL;
+				scc_info->scc_epoch++;
+			}
+		}
 		parent = st->parent;
 		parent_sl = state_parent_as_list(st);
 		if (sl)
@@ -2240,6 +2294,18 @@ static void __mark_reg_unbounded(struct bpf_reg_state *reg)
 	reg->s32_max_value = S32_MAX;
 	reg->u32_min_value = 0;
 	reg->u32_max_value = U32_MAX;
+}
+
+static bool is_reg_unbounded(struct bpf_reg_state *reg)
+{
+	return reg->smin_value == S64_MIN &&
+	       reg->smax_value == S64_MAX &&
+	       reg->umin_value == 0 &&
+	       reg->umax_value == U64_MAX &&
+	       reg->s32_min_value == S32_MIN &&
+	       reg->s32_max_value == S32_MAX &&
+	       reg->u32_min_value == 0 &&
+	       reg->u32_max_value == U32_MAX;
 }
 
 static void __mark_reg64_unbounded(struct bpf_reg_state *reg)
@@ -18239,6 +18305,116 @@ static void clean_verifier_state(struct bpf_verifier_env *env,
 		clean_func_state(env, st->frame[i]);
 }
 
+/*
+ * Open coded iterators introduce loops in the verifier state graph.
+ * State graph loops can result in incomplete read and precision marks
+ * on individual states. E.g. consider the following states graph:
+ *
+ *  .-> A --.  Assume the states are visited in the order A, B, C.
+ *  |   |   |  Assume that state B reaches a state equivalent to state A.
+ *  |   v   v  At this point, state C has not been processed yet,
+ *  '-- B   C  so state A does not have any read or precision marks from C yet.
+ *             As a result, these marks won't be propagated to B.
+ *
+ * If the marks on B are incomplete, it would be unsafe to use it in
+ * states_equal(NOT_EXACT) checks, states_equal(RANGE_WITHIN) should
+ * be used instead.
+ *
+ * To avoid this safety issue, and since states with incomplete read
+ * marks can only occur within control flow graph loops, the verifier
+ * assumes that any state with bpf_verifier_state->insn_idx residing
+ * in a strongly connected component (SCC) has read and precision
+ * marks for all registers. This assumption is enforced by the
+ * function mark_all_regs_read_and_precise(), which assigns
+ * corresponding marks.
+ *
+ * An intuitive point to call mark_all_regs_read_and_precise() would
+ * be when a new state is created in is_state_visited().
+ * However, doing so would interfere with widen_imprecise_scalars(),
+ * which widens scalars in the current state after checking registers in a
+ * parent state. Registers are not widened if they are marked as precise
+ * in the parent state.
+ *
+ * To avoid interfering with widening logic,
+ * a call to mark_all_regs_read_and_precise() for state is postponed
+ * until no widening is possible in any descendant of state S.
+ *
+ * Another intuitive spot to call mark_all_regs_read_and_precise()
+ * would be in update_branch_counts() when S's branches counter
+ * reaches 0. However, this falls short in the following case:
+ *
+ *	sum = 0
+ *	bpf_repeat(10) {                              // a
+ *		if (unlikely(bpf_get_prandom_u32()))  // b
+ *			sum += 1;
+ *		if (bpf_get_prandom_u32())            // c
+ *			asm volatile ("");
+ *		asm volatile ("goto +0;");            // d
+ *	}
+ *
+ * Here a checkpoint is created at (d) with {sum=0} and the branch counter
+ * for (d) reaches 0, so 'sum' would be marked precise.
+ * When second branch of (c) reaches (d), checkpoint would be hit,
+ * and the precision mark for 'sum' propagated to (a).
+ * When the second branch of (b) reaches (a), the state would be {sum=1},
+ * no widening would occur, causing verification to continue forever.
+ *
+ * To avoid such premature precision markings, the verifier postpones
+ * the call to mark_all_regs_read_and_precise() for state S even further.
+ * Suppose state P is a [grand]parent of state S and is the first state
+ * in the current state chain with state->insn_idx within current SCC.
+ * mark_all_regs_read_and_precise() for state S is only called once P
+ * is fully explored.
+ *
+ * The struct 'bpf_scc_info' is used to track this condition:
+ * - bpf_scc_info->branches counts how many states currently
+ *   in env->cur_state or env->head originate from this SCC;
+ * - bpf_scc_info->scc_epoch counts how many times 'branches'
+ *   has reached zero;
+ * - bpf_verifier_state->scc_epoch records the epoch of the SCC
+ *   corresponding to bpf_verifier_state->insn_idx at the moment
+ *   of state creation.
+ *
+ * Functions parent_scc_enter() and parent_scc_exit() maintain the
+ * bpf_scc_info->{branches,scc_epoch} counters.
+ *
+ * bpf_scc_info->branches reaching zero indicates that state P is
+ * fully explored. Its descendants residing in the same SCC have
+ * state->scc_epoch == scc_info->scc_epoch. parent_scc_exit()
+ * increments scc_info->scc_epoch, allowing clean_live_states() to
+ * detect these states and apply mark_all_regs_read_and_precise().
+ */
+static void mark_all_regs_read_and_precise(struct bpf_verifier_env *env,
+					   struct bpf_verifier_state *st)
+{
+	struct bpf_func_state *func;
+	struct bpf_reg_state *reg;
+	u16 live_regs;
+	u32 insn_idx;
+	int i, j;
+
+	for (i = 0; i <= st->curframe; i++) {
+		insn_idx = frame_insn_idx(st, i);
+		live_regs = env->insn_aux_data[insn_idx].live_regs_before;
+		func = st->frame[i];
+		for (j = 0; j < BPF_REG_FP; j++) {
+			reg = &func->regs[j];
+			if (!(BIT(j) & live_regs) || reg->type == NOT_INIT)
+				continue;
+			reg->live |= REG_LIVE_READ64;
+			if (reg->type == SCALAR_VALUE && !is_reg_unbounded(reg))
+				reg->precise = true;
+		}
+		for (j = 0; j < func->allocated_stack / BPF_REG_SIZE; j++) {
+			reg = &func->stack[j].spilled_ptr;
+			reg->live |= REG_LIVE_READ64;
+			if (is_spilled_reg(&func->stack[j]) &&
+			    reg->type == SCALAR_VALUE && !is_reg_unbounded(reg))
+				reg->precise = true;
+		}
+	}
+}
+
 /* the parentage chains form a tree.
  * the verifier states are added to state lists at given insn and
  * pushed into state stack for future exploration.
@@ -18274,7 +18450,6 @@ static void clean_verifier_state(struct bpf_verifier_env *env,
 static void clean_live_states(struct bpf_verifier_env *env, int insn,
 			      struct bpf_verifier_state *cur)
 {
-	struct bpf_verifier_state *loop_entry;
 	struct bpf_verifier_state_list *sl;
 	struct list_head *pos, *head;
 
@@ -18283,15 +18458,16 @@ static void clean_live_states(struct bpf_verifier_env *env, int insn,
 		sl = container_of(pos, struct bpf_verifier_state_list, node);
 		if (sl->state.branches)
 			continue;
-		loop_entry = get_loop_entry(env, &sl->state);
-		if (!IS_ERR_OR_NULL(loop_entry) && loop_entry->branches)
-			continue;
 		if (sl->state.insn_idx != insn ||
 		    !same_callsites(&sl->state, cur))
 			continue;
 		if (sl->state.frame[0]->regs[0].live & REG_LIVE_DONE)
 			/* all regs in this state in all frames were already marked */
 			continue;
+		if (incomplete_read_marks(env, &sl->state, true))
+			continue;
+		if (incomplete_read_marks(env, &sl->state, false))
+			mark_all_regs_read_and_precise(env, &sl->state);
 		clean_verifier_state(env, &sl->state);
 	}
 }
@@ -18995,10 +19171,11 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 {
 	struct bpf_verifier_state_list *new_sl;
 	struct bpf_verifier_state_list *sl;
-	struct bpf_verifier_state *cur = env->cur_state, *new, *loop_entry;
+	struct bpf_verifier_state *cur = env->cur_state, *new;
 	int i, j, n, err, states_cnt = 0;
 	bool force_new_state, add_new_state, force_exact;
 	struct list_head *pos, *tmp, *head;
+	struct bpf_scc_info *scc_info;
 
 	force_new_state = env->test_state_freq || is_force_checkpoint(env, insn_idx) ||
 			  /* Avoid accumulating infinitely long jmp history */
@@ -19098,7 +19275,7 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 					spi = __get_spi(iter_reg->off + iter_reg->var_off.value);
 					iter_state = &func(env, iter_reg)->stack[spi].spilled_ptr;
 					if (iter_state->iter.state == BPF_ITER_STATE_ACTIVE) {
-						update_loop_entry(env, cur, &sl->state);
+						mark_state_loops_possible(env, &sl->state);
 						goto hit;
 					}
 				}
@@ -19107,7 +19284,7 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 			if (is_may_goto_insn_at(env, insn_idx)) {
 				if (sl->state.may_goto_depth != cur->may_goto_depth &&
 				    states_equal(env, &sl->state, cur, RANGE_WITHIN)) {
-					update_loop_entry(env, cur, &sl->state);
+					mark_state_loops_possible(env, &sl->state);
 					goto hit;
 				}
 			}
@@ -19149,38 +19326,9 @@ skip_inf_loop_check:
 				add_new_state = false;
 			goto miss;
 		}
-		/* If sl->state is a part of a loop and this loop's entry is a part of
-		 * current verification path then states have to be compared exactly.
-		 * 'force_exact' is needed to catch the following case:
-		 *
-		 *                initial     Here state 'succ' was processed first,
-		 *                  |         it was eventually tracked to produce a
-		 *                  V         state identical to 'hdr'.
-		 *     .---------> hdr        All branches from 'succ' had been explored
-		 *     |            |         and thus 'succ' has its .branches == 0.
-		 *     |            V
-		 *     |    .------...        Suppose states 'cur' and 'succ' correspond
-		 *     |    |       |         to the same instruction + callsites.
-		 *     |    V       V         In such case it is necessary to check
-		 *     |   ...     ...        if 'succ' and 'cur' are states_equal().
-		 *     |    |       |         If 'succ' and 'cur' are a part of the
-		 *     |    V       V         same loop exact flag has to be set.
-		 *     |   succ <- cur        To check if that is the case, verify
-		 *     |    |                 if loop entry of 'succ' is in current
-		 *     |    V                 DFS path.
-		 *     |   ...
-		 *     |    |
-		 *     '----'
-		 *
-		 * Additional details are in the comment before get_loop_entry().
-		 */
-		loop_entry = get_loop_entry(env, &sl->state);
-		if (IS_ERR(loop_entry))
-			return PTR_ERR(loop_entry);
-		force_exact = loop_entry && loop_entry->branches > 0;
+		/* See comments for mark_all_regs_read_and_precise() */
+		force_exact = incomplete_read_marks(env, &sl->state, true);
 		if (states_equal(env, &sl->state, cur, force_exact ? RANGE_WITHIN : NOT_EXACT)) {
-			if (force_exact)
-				update_loop_entry(env, cur, loop_entry);
 hit:
 			sl->hit_cnt++;
 			/* reached equivalent register/stack state,
@@ -19278,6 +19426,12 @@ miss:
 		return err;
 	}
 	new->insn_idx = insn_idx;
+	scc_info = insn_scc(env, insn_idx);
+	if (scc_info) {
+		new->scc_epoch = scc_info->scc_epoch;
+		if (!scc_info->entry_state)
+			scc_info->entry_state = new;
+	}
 	WARN_ONCE(new->branches != 1,
 		  "BUG is_state_visited:branches_to_explore=%d insn %d\n", new->branches, insn_idx);
 
@@ -19664,10 +19818,6 @@ process_bpf_exit:
 						return err;
 					break;
 				} else {
-					if (WARN_ON_ONCE(env->cur_state->loop_entry)) {
-						verbose(env, "verifier bug: env->cur_state->loop_entry != NULL\n");
-						return -EFAULT;
-					}
 					do_print_state = true;
 					continue;
 				}
@@ -24076,6 +24226,12 @@ dfs_continue:
 			dfs_sz--;
 		}
 	}
+	env->scc_info = kvcalloc(next_scc_id, sizeof(*env->scc_info), GFP_KERNEL);
+	if (!env->scc_info) {
+		err = -ENOMEM;
+		goto exit;
+	}
+	env->num_sccs = next_scc_id;
 exit:
 	kvfree(stack);
 	kvfree(pre);
@@ -24352,6 +24508,7 @@ err_unlock:
 	kvfree(env->insn_hist);
 err_free_env:
 	kvfree(env->cfg.insn_postorder);
+	kvfree(env->scc_info);
 	kvfree(env);
 	return ret;
 }

@@ -471,6 +471,11 @@ struct bpf_verifier_state {
 	 * while they are still in use.
 	 */
 	u32 used_as_loop_entry;
+	/*
+	 * If this state is a checkpoint at insn_idx that belongs to an SCC,
+	 * record the SCC epoch at the time of checkpoint creation.
+	 */
+	u32 scc_epoch;
 };
 
 #define bpf_get_spilled_reg(slot, frame, mask)				\
@@ -718,6 +723,25 @@ struct bpf_idset {
 	u32 ids[BPF_ID_MAP_SIZE];
 };
 
+/* Information tracked for CFG strongly connected components */
+struct bpf_scc_info {
+	/*
+	 * Set to true when is_state_visited() detected convergence of
+	 * open coded iterator for a state with insn_idx within this SCC.
+	 * Indicates that read and precision marks are incomplete for
+	 * states with insn_idx in this SCC.
+	 */
+	bool state_loops_possible;
+	/*
+	 * Number of times this SCC was entered by some verifier state
+	 * and that state was fully explored.
+	 * In other words, number of times .branches became non-zero
+	 * and then zero again.
+	 */
+	u32 scc_epoch;
+	struct bpf_verifier_state *entry_state;
+};
+
 /* single container for all structs
  * one verifier_env per bpf_check() call
  */
@@ -810,6 +834,8 @@ struct bpf_verifier_env {
 	u64 prev_log_pos, prev_insn_print_pos;
 	/* buffer used to temporary hold constants as scalar registers */
 	struct bpf_reg_state fake_reg[2];
+	struct bpf_scc_info *scc_info;
+	u32 num_sccs;
 	/* buffer used to generate temporary string representations,
 	 * e.g., in reg_type_str() to generate reg_type string
 	 */
