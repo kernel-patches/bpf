@@ -829,7 +829,7 @@ int btf__align_of(const struct btf *btf, __u32 id)
 	case BTF_KIND_ENUM:
 	case BTF_KIND_ENUM64:
 	case BTF_KIND_FLOAT:
-		return min(btf_ptr_sz(btf), (size_t)t->size);
+		return (size_t)t->size;
 	case BTF_KIND_PTR:
 		return btf_ptr_sz(btf);
 	case BTF_KIND_TYPEDEF:
