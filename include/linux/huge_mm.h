@@ -177,19 +177,6 @@ extern unsigned long huge_anon_orders_always;
 extern unsigned long huge_anon_orders_madvise;
 extern unsigned long huge_anon_orders_inherit;
 
-static inline bool hugepage_global_enabled(void)
-{
-	return transparent_hugepage_flags &
-			((1<<TRANSPARENT_HUGEPAGE_FLAG) |
-			(1<<TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG));
-}
-
-static inline bool hugepage_global_always(void)
-{
-	return transparent_hugepage_flags &
-			(1<<TRANSPARENT_HUGEPAGE_FLAG);
-}
-
 static inline int highest_order(unsigned long orders)
 {
 	return fls_long(orders) - 1;
@@ -260,49 +247,10 @@ static inline unsigned long thp_vma_suitable_orders(struct vm_area_struct *vma,
 	return orders;
 }
 
-unsigned long __thp_vma_allowable_orders(struct vm_area_struct *vma,
-					 unsigned long vm_flags,
-					 unsigned long tva_flags,
-					 unsigned long orders);
-
-/**
- * thp_vma_allowable_orders - determine hugepage orders that are allowed for vma
- * @vma:  the vm area to check
- * @vm_flags: use these vm_flags instead of vma->vm_flags
- * @tva_flags: Which TVA flags to honour
- * @orders: bitfield of all orders to consider
- *
- * Calculates the intersection of the requested hugepage orders and the allowed
- * hugepage orders for the provided vma. Permitted orders are encoded as a set
- * bit at the corresponding bit position (bit-2 corresponds to order-2, bit-3
- * corresponds to order-3, etc). Order-0 is never considered a hugepage order.
- *
- * Return: bitfield of orders allowed for hugepage in the vma. 0 if no hugepage
- * orders are allowed.
- */
-static inline
 unsigned long thp_vma_allowable_orders(struct vm_area_struct *vma,
 				       unsigned long vm_flags,
 				       unsigned long tva_flags,
-				       unsigned long orders)
-{
-	/* Optimization to check if required orders are enabled early. */
-	if ((tva_flags & TVA_ENFORCE_SYSFS) && vma_is_anonymous(vma)) {
-		unsigned long mask = READ_ONCE(huge_anon_orders_always);
-
-		if (vm_flags & VM_HUGEPAGE)
-			mask |= READ_ONCE(huge_anon_orders_madvise);
-		if (hugepage_global_always() ||
-		    ((vm_flags & VM_HUGEPAGE) && hugepage_global_enabled()))
-			mask |= READ_ONCE(huge_anon_orders_inherit);
-
-		orders &= mask;
-		if (!orders)
-			return 0;
-	}
-
-	return __thp_vma_allowable_orders(vma, vm_flags, tva_flags, orders);
-}
+				       unsigned long orders);
 
 struct thpsize {
 	struct kobject kobj;

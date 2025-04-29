@@ -1625,5 +1625,19 @@ static inline bool reclaim_pt_is_enabled(unsigned long start, unsigned long end,
 }
 #endif /* CONFIG_PT_RECLAIM */
 
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+static inline bool hugepage_global_enabled(void)
+{
+	return transparent_hugepage_flags &
+			((1<<TRANSPARENT_HUGEPAGE_FLAG) |
+			(1<<TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG));
+}
+
+static inline bool hugepage_global_always(void)
+{
+	return transparent_hugepage_flags &
+			(1<<TRANSPARENT_HUGEPAGE_FLAG);
+}
+#endif /* CONFIG_TRANSPARENT_HUGEPAGE */
 
 #endif	/* __MM_INTERNAL_H */
