@@ -21,6 +21,7 @@
 
 /* Internal core VMA manipulation functions. */
 #include "vma.h"
+#include "bpf.h"
 
 struct folio_batch;
 
@@ -1632,6 +1633,7 @@ static inline bool reclaim_pt_is_enabled(unsigned long start, unsigned long end,
  */
 static inline bool hugepage_global_enabled(struct vm_area_struct *vma)
 {
+	MM_BPF_ALLOWABLE_HOOK(mm_bpf_thp_vma_allowable, vma);
 	return transparent_hugepage_flags &
 			((1<<TRANSPARENT_HUGEPAGE_FLAG) |
 			(1<<TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG));
@@ -1639,6 +1641,7 @@ static inline bool hugepage_global_enabled(struct vm_area_struct *vma)
 
 static inline bool hugepage_global_always(struct vm_area_struct *vma)
 {
+	MM_BPF_ALLOWABLE_HOOK(mm_bpf_thp_vma_allowable, vma);
 	return transparent_hugepage_flags &
 			(1<<TRANSPARENT_HUGEPAGE_FLAG);
 }
