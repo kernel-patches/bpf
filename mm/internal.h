@@ -1626,14 +1626,18 @@ static inline bool reclaim_pt_is_enabled(unsigned long start, unsigned long end,
 #endif /* CONFIG_PT_RECLAIM */
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
-static inline bool hugepage_global_enabled(void)
+/*
+ * Checks whether a given @vma can use THP. If @vma is NULL, the check is
+ * performed globally by khugepaged during a system-wide scan.
+ */
+static inline bool hugepage_global_enabled(struct vm_area_struct *vma)
 {
 	return transparent_hugepage_flags &
 			((1<<TRANSPARENT_HUGEPAGE_FLAG) |
 			(1<<TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG));
 }
 
-static inline bool hugepage_global_always(void)
+static inline bool hugepage_global_always(struct vm_area_struct *vma)
 {
 	return transparent_hugepage_flags &
 			(1<<TRANSPARENT_HUGEPAGE_FLAG);

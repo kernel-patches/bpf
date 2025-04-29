@@ -176,8 +176,8 @@ static unsigned long __thp_vma_allowable_orders(struct vm_area_struct *vma,
 		 * were already handled in thp_vma_allowable_orders().
 		 */
 		if (enforce_sysfs &&
-		    (!hugepage_global_enabled() || (!(vm_flags & VM_HUGEPAGE) &&
-						    !hugepage_global_always())))
+		    (!hugepage_global_enabled(vma) || (!(vm_flags & VM_HUGEPAGE) &&
+						      !hugepage_global_always(vma))))
 			return 0;
 
 		/*
@@ -234,8 +234,8 @@ unsigned long thp_vma_allowable_orders(struct vm_area_struct *vma,
 
 		if (vm_flags & VM_HUGEPAGE)
 			mask |= READ_ONCE(huge_anon_orders_madvise);
-		if (hugepage_global_always() ||
-		    ((vm_flags & VM_HUGEPAGE) && hugepage_global_enabled()))
+		if (hugepage_global_always(vma) ||
+		    ((vm_flags & VM_HUGEPAGE) && hugepage_global_enabled(vma)))
 			mask |= READ_ONCE(huge_anon_orders_inherit);
 
 		orders &= mask;
