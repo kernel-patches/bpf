@@ -83,6 +83,7 @@ struct bpf_prog_load_opts {
 	__u32 attach_btf_id;
 	__u32 attach_prog_fd;
 	__u32 attach_btf_obj_fd;
+	__u64 fentry_func;
 
 	const int *fd_array;
 

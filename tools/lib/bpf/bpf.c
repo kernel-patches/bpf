@@ -312,6 +312,7 @@ int bpf_prog_load(enum bpf_prog_type prog_type,
 
 	attr.fd_array = ptr_to_u64(OPTS_GET(opts, fd_array, NULL));
 	attr.fd_array_cnt = OPTS_GET(opts, fd_array_cnt, 0);
+	attr.fentry_func = OPTS_GET(opts, fentry_func, 0);
 
 	if (log_level) {
 		attr.log_buf = ptr_to_u64(log_buf);

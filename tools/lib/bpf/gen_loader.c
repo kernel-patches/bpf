@@ -1023,6 +1023,7 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 	attr.kern_version = 0;
 	attr.insn_cnt = tgt_endian((__u32)insn_cnt);
 	attr.prog_flags = tgt_endian(load_attr->prog_flags);
+	attr.fentry_func = tgt_endian(load_attr->fentry_func);
 
 	attr.func_info_rec_size = tgt_endian(load_attr->func_info_rec_size);
 	attr.func_info_cnt = tgt_endian(load_attr->func_info_cnt);

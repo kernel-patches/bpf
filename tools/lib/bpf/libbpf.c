@@ -7458,6 +7458,50 @@ static int libbpf_prepare_prog_load(struct bpf_program *prog,
 }
 
 static void fixup_verifier_log(struct bpf_program *prog, char *buf, size_t buf_sz);
+static const char *tracefs_available_filter_functions_addrs(void);
+
+static void try_get_fentry_func_addr(const char *func_name, struct bpf_prog_load_opts *load_attr)
+{
+	const char *available_functions_file = tracefs_available_filter_functions_addrs();
+	char sym_name[500];
+	FILE *f;
+	char *suffix;
+	int ret;
+	unsigned long long sym_addr;
+
+	f = fopen(available_functions_file, "re");
+	if (!f) {
+		pr_warn("failed to open %s: %s\n", available_functions_file, errstr(errno));
+		return;
+	}
+
+	while (true) {
+		ret = fscanf(f, "%llx %499s%*[^\n]\n", &sym_addr, sym_name);
+		if (ret == EOF && feof(f))
+			break;
+
+		if (ret != 2) {
+			pr_warn("failed to parse available_filter_functions_addrs entry: %d\n",
+				ret);
+			goto cleanup;
+		}
+
+		if (strcmp(func_name, sym_name) == 0) {
+			load_attr->fentry_func = sym_addr;
+			break;
+		}
+		/* find [func_name] optimized by compiler like [func_name].isra.0 */
+		suffix = strstr(sym_name, ".");
+		if (suffix && strncmp(sym_name, func_name,
+					strlen(sym_name) - strlen(suffix)) == 0) {
+			load_attr->fentry_func = sym_addr;
+			break;
+		}
+	}
+
+cleanup:
+	fclose(f);
+}
 
 static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog,
 				struct bpf_insn *insns, int insns_cnt,
@@ -7505,6 +7549,15 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 	load_attr.kern_version = kern_version;
 	load_attr.prog_ifindex = prog->prog_ifindex;
 	load_attr.expected_attach_type = prog->expected_attach_type;
+
+	if (load_attr.expected_attach_type == BPF_TRACE_FENTRY ||
+		load_attr.expected_attach_type == BPF_TRACE_FEXIT) {
+		const char *func_name;
+
+		func_name = strchr(prog->sec_name, '/');
+		if (func_name)
+			try_get_fentry_func_addr(++func_name, &load_attr);
+	}
 
 	/* specify func_info/line_info only if kernel supports them */
 	if (obj->btf && btf__fd(obj->btf) >= 0 && kernel_supports(obj, FEAT_BTF_FUNC)) {
