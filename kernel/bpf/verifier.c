@@ -23304,6 +23304,15 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			} else {
 				addr = kallsyms_lookup_name(tname);
 			}
+
+			if (!addr && (prog->expected_attach_type == BPF_TRACE_FENTRY ||
+					prog->expected_attach_type == BPF_TRACE_FEXIT)) {
+				fname = kallsyms_lookup((unsigned long)prog->aux->fentry_func,
+							NULL, NULL, NULL, trace_symbol);
+				if (fname)
+					addr = (long)prog->aux->fentry_func;
+			}
+
 			if (!addr) {
 				module_put(mod);
 				bpf_log(log,

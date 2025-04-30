@@ -1577,6 +1577,7 @@ union bpf_attr {
 		 * If provided, prog_flags should have BPF_F_TOKEN_FD flag set.
 		 */
 		__s32		prog_token_fd;
+		__aligned_u64	fentry_func;
 		/* The fd_array_cnt can be used to pass the length of the
 		 * fd_array array. In this case all the [map] file descriptors
 		 * passed in this array will be bound to the program, even if
