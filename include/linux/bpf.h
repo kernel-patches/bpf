@@ -1682,6 +1682,7 @@ struct bpf_prog_aux {
 		struct rcu_head	rcu;
 	};
 	struct bpf_stream stream[2];
+	atomic_t stream_error_cnt;
 };
 
 struct bpf_prog {
@@ -3604,6 +3605,8 @@ void bpf_bprintf_cleanup(struct bpf_bprintf_data *data);
 int bpf_try_get_buffers(struct bpf_bprintf_buffers **bufs);
 void bpf_put_buffers(void);
 
+#define BPF_PROG_STREAM_ERROR_CNT 512
+
 void bpf_prog_stream_init(struct bpf_prog *prog);
 void bpf_prog_stream_free(struct bpf_prog *prog);
 int bpf_prog_stream_read(struct bpf_prog *prog, enum bpf_stream_id stream_id, void __user *buf, int len);
@@ -3615,16 +3618,20 @@ int bpf_stream_stage_commit(struct bpf_stream_stage *ss, struct bpf_prog *prog,
 			    enum bpf_stream_id stream_id);
 int bpf_stream_stage_dump_stack(struct bpf_stream_stage *ss);
 
+bool bpf_prog_stream_error_limit(struct bpf_prog *prog);
+
 #define bpf_stream_printk(...) bpf_stream_stage_printk(&__ss, __VA_ARGS__)
 #define bpf_stream_dump_stack() bpf_stream_stage_dump_stack(&__ss)
 
-#define bpf_stream_stage(prog, stream_id, expr)                  \
-	({                                                       \
-		struct bpf_stream_stage __ss;                    \
-		bpf_stream_stage_init(&__ss);                    \
-		(expr);                                          \
-		bpf_stream_stage_commit(&__ss, prog, stream_id); \
-		bpf_stream_stage_free(&__ss);                    \
+#define bpf_stream_stage(prog, stream_id, expr)                          \
+	({                                                               \
+		struct bpf_stream_stage __ss;                            \
+		if (!bpf_prog_stream_error_limit(prog)) {                \
+			bpf_stream_stage_init(&__ss);                    \
+			(expr);                                          \
+			bpf_stream_stage_commit(&__ss, prog, stream_id); \
+			bpf_stream_stage_free(&__ss);                    \
+		}                                                        \
 	})
 
 #ifdef CONFIG_BPF_LSM

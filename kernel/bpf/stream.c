@@ -537,3 +537,8 @@ int bpf_stream_stage_dump_stack(struct bpf_stream_stage *ss)
 	ret = ret ?: ctx.err;
 	return ret ?: bpf_stream_stage_printk(ss, "\n");
 }
+
+bool bpf_prog_stream_error_limit(struct bpf_prog *prog)
+{
+	return atomic_fetch_add(1, &prog->aux->stream_error_cnt) >= BPF_PROG_STREAM_ERROR_CNT;
+}
