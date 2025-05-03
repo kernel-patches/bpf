@@ -3244,3 +3244,29 @@ int bpf_prog_get_file_line(struct bpf_prog *prog, unsigned long ip, const char *
 		*linep += 1;
 	return BPF_LINE_INFO_LINE_NUM(linfo[idx].line_col);
 }
+
+struct walk_stack_ctx {
+	struct bpf_prog *prog;
+};
+
+static bool find_from_stack_cb(void *cookie, u64 ip, u64 sp, u64 bp)
+{
+	struct walk_stack_ctx *ctxp = cookie;
+	struct bpf_prog *prog;
+
+	if (!is_bpf_text_address(ip))
+		return true;
+	prog = bpf_prog_ksym_find(ip);
+	if (bpf_is_subprog(prog))
+		return true;
+	ctxp->prog = prog;
+	return false;
+}
+
+struct bpf_prog *bpf_prog_find_from_stack(void)
+{
+	struct walk_stack_ctx ctx = {};
+
+	arch_bpf_stack_walk(find_from_stack_cb, &ctx);
+	return ctx.prog;
+}
