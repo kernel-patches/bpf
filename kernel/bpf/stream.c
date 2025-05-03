@@ -257,7 +257,12 @@ __bpf_kfunc int bpf_stream_vprintk(struct bpf_stream *stream, const char *fmt__s
 	return ret;
 }
 
-__bpf_kfunc struct bpf_stream *bpf_stream_get(enum bpf_stream_id stream_id, void *aux__ign)
+/* Use int vs enum stream_id here, we use this kfunc in bpf_helpers.h, and
+ * keeping enum stream_id necessitates a complete definition of enum, but we
+ * can't copy it in the header as it may conflict with the definition in
+ * vmlinux.h.
+ */
+__bpf_kfunc struct bpf_stream *bpf_stream_get(int stream_id, void *aux__ign)
 {
 	struct bpf_prog_aux *aux = aux__ign;
 
@@ -351,7 +356,8 @@ end:
 	return elem;
 }
 
-__bpf_kfunc struct bpf_stream *bpf_prog_stream_get(enum bpf_stream_id stream_id, u32 prog_id)
+/* Use int vs enum bpf_stream_id for consistency with bpf_stream_get. */
+__bpf_kfunc struct bpf_stream *bpf_prog_stream_get(int stream_id, u32 prog_id)
 {
 	struct bpf_stream *stream;
 	struct bpf_prog *prog;

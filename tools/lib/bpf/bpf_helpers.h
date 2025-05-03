@@ -314,17 +314,47 @@ enum libbpf_tristate {
 			  ___param, sizeof(___param));		\
 })
 
+struct bpf_stream;
+
+extern struct bpf_stream *bpf_stream_get(int stream_id, void *aux__ign) __weak __ksym;
+extern int bpf_stream_vprintk(struct bpf_stream *stream, const char *fmt__str, const void *args,
+			      __u32 len__sz) __weak __ksym;
+
+#define __bpf_stream_vprintk(stream, fmt, args...)				\
+({										\
+	static const char ___fmt[] = fmt;					\
+	unsigned long long ___param[___bpf_narg(args)];				\
+										\
+	_Pragma("GCC diagnostic push")						\
+	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")			\
+	___bpf_fill(___param, args);						\
+	_Pragma("GCC diagnostic pop")						\
+										\
+	int ___id = stream;							\
+	struct bpf_stream *___sptr = bpf_stream_get(___id, NULL);		\
+	if (___sptr)								\
+		bpf_stream_vprintk(___sptr, ___fmt, ___param, sizeof(___param));\
+})
+
 /* Use __bpf_printk when bpf_printk call has 3 or fewer fmt args
- * Otherwise use __bpf_vprintk
+ * Otherwise use __bpf_vprintk. Virtualize choices so stream printk
+ * can override it to bpf_stream_vprintk.
  */
-#define ___bpf_pick_printk(...) \
-	___bpf_nth(_, ##__VA_ARGS__, __bpf_vprintk, __bpf_vprintk, __bpf_vprintk,	\
-		   __bpf_vprintk, __bpf_vprintk, __bpf_vprintk, __bpf_vprintk,		\
-		   __bpf_vprintk, __bpf_vprintk, __bpf_printk /*3*/, __bpf_printk /*2*/,\
-		   __bpf_printk /*1*/, __bpf_printk /*0*/)
+#define ___bpf_pick_printk(choice, choice_3, ...)			\
+	___bpf_nth(_, ##__VA_ARGS__, choice, choice, choice,		\
+		   choice, choice, choice, choice,			\
+		   choice, choice, choice_3 /*3*/, choice_3 /*2*/,	\
+		   choice_3 /*1*/, choice_3 /*0*/)
 
 /* Helper macro to print out debug messages */
-#define bpf_printk(fmt, args...) ___bpf_pick_printk(args)(fmt, ##args)
+#define __bpf_trace_printk(fmt, args...) \
+	___bpf_pick_printk(__bpf_vprintk, __bpf_printk, args)(fmt, ##args)
+#define __bpf_stream_printk(stream, fmt, args...) \
+	___bpf_pick_printk(__bpf_stream_vprintk, __bpf_stream_vprintk, args)(stream, fmt, ##args)
+
+#define bpf_stream_printk(stream, fmt, args...) __bpf_stream_printk(stream, fmt, ##args)
+
+#define bpf_printk(arg, args...) __bpf_trace_printk(arg, ##args)
 
 struct bpf_iter_num;
 
