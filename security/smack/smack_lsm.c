@@ -3890,7 +3890,8 @@ static int smack_unix_stream_connect(struct sock *sock,
  * Return 0 if a subject with the smack of sock could access
  * an object with the smack of other, otherwise an error code
  */
-static int smack_unix_may_send(struct socket *sock, struct socket *other)
+static int smack_unix_may_send(struct socket *sock, struct socket *other,
+			       struct sk_buff *skb)
 {
 	struct socket_smack *ssp = smack_sock(sock->sk);
 	struct socket_smack *osp = smack_sock(other->sk);

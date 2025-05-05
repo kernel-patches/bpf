@@ -4531,9 +4531,10 @@ EXPORT_SYMBOL(security_unix_stream_connect);
  *
  * Return: Returns 0 if permission is granted.
  */
-int security_unix_may_send(struct socket *sock,  struct socket *other)
+int security_unix_may_send(struct socket *sock,  struct socket *other,
+			   struct sk_buff *skb)
 {
-	return call_int_hook(unix_may_send, sock, other);
+	return call_int_hook(unix_may_send, sock, other, skb);
 }
 EXPORT_SYMBOL(security_unix_may_send);
 

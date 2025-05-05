@@ -5099,7 +5099,8 @@ static int selinux_socket_unix_stream_connect(struct sock *sock,
 }
 
 static int selinux_socket_unix_may_send(struct socket *sock,
-					struct socket *other)
+					struct socket *other,
+					struct sk_buff *skb)
 {
 	struct sk_security_struct *ssec = selinux_sock(sock->sk);
 	struct sk_security_struct *osec = selinux_sock(other->sk);
