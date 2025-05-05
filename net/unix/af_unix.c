@@ -1885,6 +1885,21 @@ static int unix_scm_to_skb(struct scm_cookie *scm, struct sk_buff *skb, bool sen
 	return err;
 }
 
+int unix_scrub_fds(struct sk_buff *skb)
+{
+	struct scm_cookie scm = {};
+
+	if (skb->destructor != unix_destruct_scm)
+		return -EINVAL;
+
+	if (UNIXCB(skb).fp) {
+		unix_detach_fds(&scm, skb);
+		scm_fp_destroy(&scm);
+	}
+
+	return 0;
+}
+
 static bool unix_passcred_enabled(const struct socket *sock,
 				  const struct sock *other)
 {

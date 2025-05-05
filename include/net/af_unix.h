@@ -58,4 +58,5 @@ struct unix_sock {
 #define unix_state_lock(s)	spin_lock(&unix_sk(s)->lock)
 #define unix_state_unlock(s)	spin_unlock(&unix_sk(s)->lock)
 
+int unix_scrub_fds(struct sk_buff *skb);
 #endif

@@ -82,7 +82,7 @@
 #include <net/mptcp.h>
 #include <net/netfilter/nf_conntrack_bpf.h>
 #include <net/netkit.h>
-#include <linux/un.h>
+#include <net/af_unix.h>
 #include <net/xdp_sock_drv.h>
 #include <net/inet_dscp.h>
 
@@ -12153,6 +12153,11 @@ __bpf_kfunc int bpf_sock_ops_enable_tx_tstamp(struct bpf_sock_ops_kern *skops,
 	return 0;
 }
 
+__bpf_kfunc int bpf_unix_scrub_fds(struct sk_buff *skb)
+{
+	return unix_scrub_fds(skb);
+}
+
 __bpf_kfunc_end_defs();
 
 int bpf_dynptr_from_skb_rdonly(struct __sk_buff *skb, u64 flags,
@@ -12190,6 +12195,10 @@ BTF_KFUNCS_START(bpf_kfunc_check_set_sock_ops)
 BTF_ID_FLAGS(func, bpf_sock_ops_enable_tx_tstamp, KF_TRUSTED_ARGS)
 BTF_KFUNCS_END(bpf_kfunc_check_set_sock_ops)
 
+BTF_KFUNCS_START(bpf_kfunc_check_set_scm_rights)
+BTF_ID_FLAGS(func, bpf_unix_scrub_fds, KF_TRUSTED_ARGS)
+BTF_KFUNCS_END(bpf_kfunc_check_set_scm_rights)
+
 static const struct btf_kfunc_id_set bpf_kfunc_set_skb = {
 	.owner = THIS_MODULE,
 	.set = &bpf_kfunc_check_set_skb,
@@ -12215,6 +12224,11 @@ static const struct btf_kfunc_id_set bpf_kfunc_set_sock_ops = {
 	.set = &bpf_kfunc_check_set_sock_ops,
 };
 
+static const struct btf_kfunc_id_set bpf_kfunc_set_scm_rights = {
+	.owner = THIS_MODULE,
+	.set = &bpf_kfunc_check_set_scm_rights,
+};
+
 static int __init bpf_kfunc_init(void)
 {
 	int ret;
@@ -12234,7 +12248,8 @@ static int __init bpf_kfunc_init(void)
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SOCK_ADDR,
 					       &bpf_kfunc_set_sock_addr);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &bpf_kfunc_set_tcp_reqsk);
-	return ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SOCK_OPS, &bpf_kfunc_set_sock_ops);
+	ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SOCK_OPS, &bpf_kfunc_set_sock_ops);
+	return ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_LSM, &bpf_kfunc_set_scm_rights);
 }
 late_initcall(bpf_kfunc_init);
 
