@@ -130,20 +130,19 @@ static int scm_fp_copy(struct cmsghdr *cmsg, struct scm_fp_list **fplp)
 	return num;
 }
 
-void __scm_destroy(struct scm_cookie *scm)
+void scm_fp_destroy(struct scm_cookie *scm)
 {
 	struct scm_fp_list *fpl = scm->fp;
 	int i;
 
-	if (fpl) {
-		scm->fp = NULL;
-		for (i=fpl->count-1; i>=0; i--)
-			fput(fpl->fp[i]);
-		free_uid(fpl->user);
-		kfree(fpl);
-	}
+	scm->fp = NULL;
+
+	for (i = fpl->count - 1; i >= 0; i--)
+		fput(fpl->fp[i]);
+
+	free_uid(fpl->user);
+	kfree(fpl);
 }
-EXPORT_SYMBOL(__scm_destroy);
 
 int __scm_send(struct socket *sock, struct msghdr *msg, struct scm_cookie *p)
 {
@@ -375,7 +374,7 @@ void scm_detach_fds(struct msghdr *msg, struct scm_cookie *scm)
 	 * All of the files that fit in the message have had their usage counts
 	 * incremented, so we just free the list.
 	 */
-	__scm_destroy(scm);
+	scm_fp_destroy(scm);
 }
 EXPORT_SYMBOL(scm_detach_fds);
 

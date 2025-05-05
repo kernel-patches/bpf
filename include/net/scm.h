@@ -53,7 +53,7 @@ struct scm_cookie {
 void scm_detach_fds(struct msghdr *msg, struct scm_cookie *scm);
 void scm_detach_fds_compat(struct msghdr *msg, struct scm_cookie *scm);
 int __scm_send(struct socket *sock, struct msghdr *msg, struct scm_cookie *scm);
-void __scm_destroy(struct scm_cookie *scm);
+void scm_fp_destroy(struct scm_cookie *scm);
 struct scm_fp_list *scm_fp_dup(struct scm_fp_list *fpl);
 
 #ifdef CONFIG_SECURITY_NETWORK
@@ -84,8 +84,9 @@ static __inline__ void scm_destroy_cred(struct scm_cookie *scm)
 static __inline__ void scm_destroy(struct scm_cookie *scm)
 {
 	scm_destroy_cred(scm);
+
 	if (scm->fp)
-		__scm_destroy(scm);
+		scm_fp_destroy(scm);
 }
 
 static __inline__ int scm_send(struct socket *sock, struct msghdr *msg,

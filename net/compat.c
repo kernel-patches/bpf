@@ -326,7 +326,7 @@ void scm_detach_fds_compat(struct msghdr *msg, struct scm_cookie *scm)
 	 * All of the files that fit in the message have had their usage counts
 	 * incremented, so we just free the list.
 	 */
-	__scm_destroy(scm);
+	scm_fp_destroy(scm);
 }
 
 /* Argument list sizes for compat_sys_socketcall */
