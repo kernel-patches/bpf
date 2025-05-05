@@ -2101,11 +2101,9 @@ restart_locked:
 		goto out_unlock;
 	}
 
-	if (sk->sk_type != SOCK_SEQPACKET) {
-		err = security_unix_may_send(sk->sk_socket, other->sk_socket);
-		if (err)
-			goto out_unlock;
-	}
+	err = security_unix_may_send(sk->sk_socket, other->sk_socket);
+	if (err)
+		goto out_unlock;
 
 	/* other == sk && unix_peer(other) != sk if
 	 * - unix_peer(sk) == NULL, destination address bound to sk
@@ -2201,9 +2199,14 @@ static int queue_oob(struct socket *sock, struct msghdr *msg, struct sock *other
 
 	if (sock_flag(other, SOCK_DEAD) ||
 	    (other->sk_shutdown & RCV_SHUTDOWN)) {
-		unix_state_unlock(other);
 		err = -EPIPE;
-		goto out;
+		goto out_unlock;
+	}
+
+	if (!fds_sent) {
+		err = security_unix_may_send(sock, other->sk_socket);
+		if (err)
+			goto out_unlock;
 	}
 
 	maybe_add_creds(skb, sock, other);
@@ -2219,6 +2222,8 @@ static int queue_oob(struct socket *sock, struct msghdr *msg, struct sock *other
 	other->sk_data_ready(other);
 
 	return 0;
+out_unlock:
+	unix_state_unlock(other);
 out:
 	consume_skb(skb);
 	return err;
@@ -2296,8 +2301,6 @@ static int unix_stream_sendmsg(struct socket *sock, struct msghdr *msg,
 		if (err < 0)
 			goto out_free;
 
-		fds_sent = true;
-
 		if (unlikely(msg->msg_flags & MSG_SPLICE_PAGES)) {
 			skb->ip_summed = CHECKSUM_UNNECESSARY;
 			err = skb_splice_from_iter(skb, &msg->msg_iter, size,
@@ -2321,6 +2324,16 @@ static int unix_stream_sendmsg(struct socket *sock, struct msghdr *msg,
 		if (sock_flag(other, SOCK_DEAD) ||
 		    (other->sk_shutdown & RCV_SHUTDOWN))
 			goto out_pipe_unlock;
+
+		if (!fds_sent) {
+			err = security_unix_may_send(sock, other->sk_socket);
+			if (err) {
+				unix_state_unlock(other);
+				goto out_free;
+			}
+		}
+
+		fds_sent = true;
 
 		maybe_add_creds(skb, sock, other);
 		scm_stat_add(other, skb);

@@ -305,6 +305,9 @@ static int hook_unix_may_send(struct socket *const sock,
 	if (!subject)
 		return 0;
 
+	if (sock->sk->sk_type != SOCK_DGRAM)
+		return 0;
+
 	/*
 	 * Checks if this datagram socket was already allowed to be connected
 	 * to other.

@@ -3904,6 +3904,9 @@ static int smack_unix_may_send(struct socket *sock, struct socket *other)
 	smk_ad_setfield_u_net_sk(&ad, other->sk);
 #endif
 
+	if (sock->sk->sk_type != SOCK_DGRAM)
+		return 0;
+
 	if (smack_privileged(CAP_MAC_OVERRIDE))
 		return 0;
 
