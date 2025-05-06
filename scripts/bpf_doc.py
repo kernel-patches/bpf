@@ -8,6 +8,7 @@
 from __future__ import print_function
 
 import argparse
+import json
 import re
 import sys, os
 import subprocess
@@ -675,7 +676,7 @@ COMMANDS
         self.print_elem(command)
 
 
-class PrinterHelpers(Printer):
+class PrinterHelpersHeader(Printer):
     """
     A printer for dumping collected information about helpers as C header to
     be included from BPF program.
@@ -896,6 +897,27 @@ class PrinterHelpers(Printer):
         print(') = (void *) %d;' % helper.enum_val)
         print('')
 
+
+class PrinterHelpersJSON(Printer):
+    """
+    A printer for dumping collected information about helpers as a JSON file.
+    @parser: A HeaderParser with Helper objects to print to standard output
+    """
+
+    def __init__(self, parser):
+        self.elements = parser.helpers
+        self.elem_number_check(
+            parser.desc_unique_helpers,
+            parser.define_unique_helpers,
+            "helper",
+            "___BPF_FUNC_MAPPER",
+        )
+
+    def print_all(self):
+        protos = [helper.proto_break_down() for helper in self.elements]
+        out_dict = {"helpers": protos}
+        print(json.dumps(out_dict, indent=4))
+
 ###############################################################################
 
 # If script is launched from scripts/ from kernel tree and can access
@@ -917,6 +939,8 @@ rst2man utility.
 """)
 argParser.add_argument('--header', action='store_true',
                        help='generate C header file')
+argParser.add_argument("--json", action="store_true",
+                       help="generate a JSON with information about helpers")
 if (os.path.isfile(bpfh)):
     argParser.add_argument('--filename', help='path to include/uapi/linux/bpf.h',
                            default=bpfh)
@@ -930,11 +954,19 @@ args = argParser.parse_args()
 headerParser = HeaderParser(args.filename)
 headerParser.run()
 
-# Print formatted output to standard output.
+if args.header and args.json:
+    print("bpf_doc.py: Use --header or --json, not both")
+    exit(1)
+if args.target != "helpers" and (args.header or args.json):
+    print("bpf_doc.py: Only helpers header/json generation is supported")
+    exit(1)
+
 if args.header:
-    if args.target != 'helpers':
-        raise NotImplementedError('Only helpers header generation is supported')
-    printer = PrinterHelpers(headerParser)
+    printer = PrinterHelpersHeader(headerParser)
+elif args.json:
+    printer = PrinterHelpersJSON(headerParser)
 else:
     printer = printers[args.target](headerParser)
+
+# Print formatted output to standard output.
 printer.print_all()
