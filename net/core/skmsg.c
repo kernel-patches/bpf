@@ -9,6 +9,7 @@
 #include <net/tcp.h>
 #include <net/tls.h>
 #include <trace/events/sock.h>
+#include <trace/events/sockmap.h>
 
 static bool sk_msg_try_coalesce_ok(struct sk_msg *msg, int elem_first_coalesce)
 {
@@ -910,6 +911,7 @@ int sk_psock_msg_verdict(struct sock *sk, struct sk_psock *psock,
 		sock_hold(psock->sk_redir);
 	}
 out:
+	trace_sockmap_skmsg_redirect(sk, prog, msg, ret);
 	rcu_read_unlock();
 	return ret;
 }
@@ -981,6 +983,7 @@ int sk_psock_tls_strp_read(struct sk_psock *psock, struct sk_buff *skb)
 		ret = bpf_prog_run_pin_on_cpu(prog, skb);
 		ret = sk_psock_map_verd(ret, skb_bpf_redirect_fetch(skb));
 		skb->sk = NULL;
+		trace_sockmap_skb_redirect(psock->sk, prog, skb, ret);
 	}
 	sk_psock_tls_verdict_apply(skb, psock, ret);
 	rcu_read_unlock();
@@ -1090,6 +1093,7 @@ static void sk_psock_strp_read(struct strparser *strp, struct sk_buff *skb)
 		skb_bpf_set_strparser(skb);
 		ret = sk_psock_map_verd(ret, skb_bpf_redirect_fetch(skb));
 		skb->sk = NULL;
+		trace_sockmap_skb_redirect(sk, prog, skb, ret);
 	}
 	sk_psock_verdict_apply(psock, skb, ret);
 out:
@@ -1113,6 +1117,7 @@ static int sk_psock_strp_parse(struct strparser *strp, struct sk_buff *skb)
 		skb->sk = psock->sk;
 		ret = bpf_prog_run_pin_on_cpu(prog, skb);
 		skb->sk = NULL;
+		trace_sockmap_skb_strp_parse(psock->sk, prog, skb, ret);
 	}
 	rcu_read_unlock();
 	return ret;
@@ -1217,6 +1222,7 @@ static int sk_psock_verdict_recv(struct sock *sk, struct sk_buff *skb)
 		skb_bpf_redirect_clear(skb);
 		ret = bpf_prog_run_pin_on_cpu(prog, skb);
 		ret = sk_psock_map_verd(ret, skb_bpf_redirect_fetch(skb));
+		trace_sockmap_skb_redirect(psock->sk, prog, skb, ret);
 	}
 	ret = sk_psock_verdict_apply(psock, skb, ret);
 	if (ret < 0)
