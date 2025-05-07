@@ -1344,6 +1344,12 @@ enum bpf_dynptr_type {
 	BPF_DYNPTR_TYPE_XDP,
 };
 
+struct bpf_mem_slice {
+	void *ptr;
+	u32 len;
+	u32 reserved;
+};
+
 int bpf_dynptr_check_size(u32 size);
 u32 __bpf_dynptr_size(const struct bpf_dynptr_kern *ptr);
 const void *__bpf_dynptr_data(const struct bpf_dynptr_kern *ptr, u32 len);

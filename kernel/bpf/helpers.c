@@ -2873,6 +2873,42 @@ __bpf_kfunc int bpf_dynptr_copy(struct bpf_dynptr *dst_ptr, u32 dst_off,
 	return 0;
 }
 
+/**
+ * bpf_dynptr_from_mem_slice - Create a dynptr from a bpf_mem_slice
+ * @mem_slice: Source bpf_mem_slice, backing the underlying memory for dynptr
+ * @flags: Flags for dynptr construction, currently no supported flags.
+ * @dptr__uninit: Destination dynptr, which will be initialized.
+ *
+ * Creates a dynptr that points to variable-length read-only memory represented
+ * by a bpf_mem_slice fat pointer.
+ * Returns 0 on success; negative error, otherwise.
+ */
+__bpf_kfunc int bpf_dynptr_from_mem_slice(struct bpf_mem_slice *mem_slice, u64 flags, struct bpf_dynptr *dptr__uninit)
+{
+	struct bpf_dynptr_kern *dptr = (struct bpf_dynptr_kern *)dptr__uninit;
+	int err;
+
+	/* mem_slice is never NULL, as we use KF_TRUSTED_ARGS. */
+	err = bpf_dynptr_check_size(mem_slice->len);
+	if (err)
+		goto error;
+
+	/* flags is currently unsupported */
+	if (flags) {
+		err = -EINVAL;
+		goto error;
+	}
+
+	bpf_dynptr_init(dptr, mem_slice->ptr, BPF_DYNPTR_TYPE_LOCAL, 0, mem_slice->len);
+	bpf_dynptr_set_rdonly(dptr);
+
+	return 0;
+
+error:
+	bpf_dynptr_set_null(dptr);
+	return err;
+}
+
 __bpf_kfunc void *bpf_cast_to_kern_ctx(void *obj)
 {
 	return obj;
@@ -3327,6 +3363,7 @@ BTF_ID_FLAGS(func, bpf_dynptr_is_rdonly)
 BTF_ID_FLAGS(func, bpf_dynptr_size)
 BTF_ID_FLAGS(func, bpf_dynptr_clone)
 BTF_ID_FLAGS(func, bpf_dynptr_copy)
+BTF_ID_FLAGS(func, bpf_dynptr_from_mem_slice, KF_TRUSTED_ARGS)
 #ifdef CONFIG_NET
 BTF_ID_FLAGS(func, bpf_modify_return_test_tp)
 #endif
