@@ -23,6 +23,7 @@
 #include <linux/btf_ids.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/kasan.h>
+#include <linux/uaccess.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -3241,6 +3242,433 @@ __bpf_kfunc void bpf_local_irq_restore(unsigned long *flags__irq_flag)
 	local_irq_restore(*flags__irq_flag);
 }
 
+/* Kfuncs for string operations.
+ *
+ * Since strings are not necessarily %NUL-terminated, we cannot directly call
+ * in-kernel implementations. Instead, we open-code the implementations using
+ * __get_kernel_nofault instead of plain dereference to make them safe.
+ */
+
+/**
+ * bpf_strcmp - Compare two strings
+ * @s1: One string
+ * @s2: Another string
+ *
+ * Return:
+ * * %0       - Strings are equal
+ * * %-1      - @s1 is smaller
+ * * %1       - @s2 is smaller
+ * * %-EFAULT - Cannot read one of the strings
+ * * %-E2BIG  - One of strings is too large
+ */
+__bpf_kfunc int bpf_strcmp(const char *s1, const char *s2)
+{
+	char c1, c2;
+	int i;
+
+	if (!s1 || !s2)
+		return -EFAULT;
+
+	guard(pagefault)();
+	for (i = 0; i < XATTR_SIZE_MAX; i++) {
+		__get_kernel_nofault(&c1, s1, char, err_out);
+		__get_kernel_nofault(&c2, s2, char, err_out);
+		if (c1 != c2)
+			return c1 < c2 ? -1 : 1;
+		if (c1 == '\0')
+			return 0;
+		s1++;
+		s2++;
+	}
+	return -E2BIG;
+err_out:
+	return -EFAULT;
+}
+
+/**
+ * bpf_strchr - Find the first occurrence of a character in a string
+ * @s: The string to be searched
+ * @c: The character to search for
+ *
+ * Note that the %NUL-terminator is considered part of the string, and can
+ * be searched for.
+ *
+ * Return:
+ * * const char * - Pointer to the first occurrence of @c within @s
+ * * %NULL        - @c not found in @s
+ * * %-EFAULT     - Cannot read @s
+ * * %-E2BIG      - @s too large
+ */
+__bpf_kfunc const char *bpf_strchr(const char *s, char c)
+{
+	char sc;
+	int i;
+
+	if (!s)
+		return ERR_PTR(-EFAULT);
+
+	guard(pagefault)();
+	for (i = 0; i < XATTR_SIZE_MAX; i++) {
+		__get_kernel_nofault(&sc, s, char, err_out);
+		if (sc == c)
+			return s;
+		if (sc == '\0')
+			return NULL;
+		s++;
+	}
+	return ERR_PTR(-E2BIG);
+err_out:
+	return ERR_PTR(-EFAULT);
+}
+
+/**
+ * bpf_strnchr - Find a character in a length limited string
+ * @s: The string to be searched
+ * @count: The number of characters to be searched
+ * @c: The character to search for
+ *
+ * Note that the %NUL-terminator is considered part of the string, and can
+ * be searched for.
+ *
+ * Return:
+ * * const char * - Pointer to the first occurrence of @c within @s
+ * * %NULL        - @c not found in the first @count characters of @s
+ * * %-EFAULT     - Cannot read @s
+ * * %-E2BIG      - @s too large
+ */
+__bpf_kfunc const char *bpf_strnchr(const char *s, size_t count, char c)
+{
+	char sc;
+	int i;
+
+	if (!s)
+		return ERR_PTR(-EFAULT);
+
+	guard(pagefault)();
+	for (i = 0; i < count && i < XATTR_SIZE_MAX; i++) {
+		__get_kernel_nofault(&sc, s, char, err_out);
+		if (sc == c)
+			return s;
+		if (sc == '\0')
+			return NULL;
+		s++;
+	}
+	return i == XATTR_SIZE_MAX ? ERR_PTR(-E2BIG) : NULL;
+err_out:
+	return ERR_PTR(-EFAULT);
+}
+
+/**
+ * bpf_strchrnul - Find and return a character in a string, or end of string
+ * @s: The string to be searched
+ * @c: The character to search for
+ *
+ * Return:
+ * * const char * - Pointer to the first occurrence of @c within @s or pointer
+ *                  to the null byte at the end of @s when @c is not found
+ * * %-EFAULT     - Cannot read @s
+ * * %-E2BIG      - @s too large
+ */
+__bpf_kfunc const char *bpf_strchrnul(const char *s, char c)
+{
+	char sc;
+	int i;
+
+	if (!s)
+		return ERR_PTR(-EFAULT);
+
+	guard(pagefault)();
+	for (i = 0; i < XATTR_SIZE_MAX; i++) {
+		__get_kernel_nofault(&sc, s, char, err_out);
+		if (sc == '\0' || sc == c)
+			return s;
+		s++;
+	}
+	return ERR_PTR(-E2BIG);
+err_out:
+	return ERR_PTR(-EFAULT);
+}
+
+/**
+ * bpf_strrchr - Find the last occurrence of a character in a string
+ * @s: The string to be searched
+ * @c: The character to search for
+ *
+ * Return:
+ * * const char * - Pointer to the last occurrence of @c within @s
+ * * %NULL        - @c not found in @s
+ * * %-EFAULT     - Cannot read @s
+ * * %-E2BIG      - @s too large
+ */
+__bpf_kfunc const char *bpf_strrchr(const char *s, int c)
+{
+	const char *last = NULL;
+	char sc;
+	int i;
+
+	if (!s)
+		return ERR_PTR(-EFAULT);
+
+	guard(pagefault)();
+	for (i = 0; i < XATTR_SIZE_MAX; i++) {
+		__get_kernel_nofault(&sc, s, char, err_out);
+		if (sc == '\0')
+			return last;
+		if (sc == c)
+			last = s;
+		s++;
+	}
+	return ERR_PTR(-E2BIG);
+err_out:
+	return ERR_PTR(-EFAULT);
+}
+
+/**
+ * bpf_strlen - Calculate the length of a string
+ * @s: The string
+ *
+ * Return:
+ * * >=0      - The length of @s
+ * * %-EFAULT - Cannot read @s
+ * * %-E2BIG  - @s too large
+ */
+__bpf_kfunc int bpf_strlen(const char *s)
+{
+	char c;
+	int i;
+
+	if (!s)
+		return -EFAULT;
+
+	guard(pagefault)();
+	for (i = 0; i < XATTR_SIZE_MAX; i++) {
+		__get_kernel_nofault(&c, s, char, err_out);
+		if (c == '\0')
+			return i;
+		s++;
+	}
+	return -E2BIG;
+err_out:
+	return -EFAULT;
+}
+
+/**
+ * bpf_strlen - Calculate the length of a length-limited string
+ * @s: The string
+ * @count: The maximum number of characters to count
+ *
+ * Return:
+ * * >=0      - The length of @s
+ * * %-EFAULT - Cannot read @s
+ * * %-E2BIG  - @s too large
+ */
+__bpf_kfunc int bpf_strnlen(const char *s, size_t count)
+{
+	char c;
+	int i;
+
+	if (!s)
+		return -EFAULT;
+
+	guard(pagefault)();
+	for (i = 0; i < count && i < XATTR_SIZE_MAX; i++) {
+		__get_kernel_nofault(&c, s, char, err_out);
+		if (c == '\0')
+			return i;
+		s++;
+	}
+	return i == XATTR_SIZE_MAX ? -E2BIG : i;
+err_out:
+	return -EFAULT;
+}
+
+/**
+ * bpf_strspn - Calculate the length of the initial substring of @s which only
+ *              contains letters in @accept
+ * @s: The string to be searched
+ * @accept: The string to search for
+ *
+ * Return:
+ * * >=0      - The length of the initial substring of @s which only contains
+ *              letter in @accept
+ * * %-EFAULT - Cannot read @s
+ * * %-E2BIG  - @s too large
+ */
+__bpf_kfunc int bpf_strspn(const char *s, const char *accept)
+{
+	const char *p;
+	char c;
+	int i;
+
+	if (!s || !accept)
+		return -EFAULT;
+
+	guard(pagefault)();
+	for (i = 0; i < XATTR_SIZE_MAX; i++) {
+		__get_kernel_nofault(&c, s, char, err_out);
+		p = bpf_strchr(accept, c);
+		if (IS_ERR(p))
+			return PTR_ERR(p);
+		if (c == '\0' || !p)
+			return i;
+		s++;
+	}
+	return -E2BIG;
+err_out:
+	return -EFAULT;
+}
+
+/**
+ * strcspn - Calculate the length of the initial substring of @s which does not
+ *           contain letters in @reject
+ * @s: The string to be searched
+ * @reject: The string to avoid
+ *
+ * Return:
+ * * >=0      - The length of the initial substring of @s which does not contain
+ *              letters from @reject
+ * * %-EFAULT - Cannot read @s
+ * * %-E2BIG  - @s too large
+ */
+__bpf_kfunc int bpf_strcspn(const char *s, const char *reject)
+{
+	const char *p;
+	char c;
+	int i;
+
+	if (!s || !reject)
+		return -EFAULT;
+
+	guard(pagefault)();
+	for (i = 0; i < XATTR_SIZE_MAX; i++) {
+		__get_kernel_nofault(&c, s, char, err_out);
+		p = bpf_strchr(reject, c);
+		if (IS_ERR(p))
+			return PTR_ERR(p);
+		if (c == '\0' || p)
+			return i;
+		s++;
+	}
+	return -E2BIG;
+err_out:
+	return -EFAULT;
+}
+
+/**
+ * bpf_strpbrk - Find the first occurrence of a set of characters
+ * @s: The string to be searched
+ * @accept: The characters to search for
+ *
+ * Return:
+ * * const char * - Pointer to the first occurrence of a character from @accept
+ *                  within @s
+ * * %NULL        - No character from @accept found in @s
+ * * %-EFAULT     - Cannot read one of the strings
+ * * %-E2BIG      - One of the strings is too large
+ */
+__bpf_kfunc const char *bpf_strpbrk(const char *s, const char *accept)
+{
+	const char *p;
+	char c;
+	int i;
+
+	if (!s || !accept)
+		return ERR_PTR(-EFAULT);
+
+	guard(pagefault)();
+	for (i = 0; i < XATTR_SIZE_MAX; i++) {
+		__get_kernel_nofault(&c, s, char, err_out);
+		if (c == '\0')
+			return NULL;
+		p = bpf_strchr(accept, c);
+		if (IS_ERR(p))
+			return p;
+		if (p)
+			return s;
+		s++;
+	}
+	return ERR_PTR(-E2BIG);
+err_out:
+	return ERR_PTR(-EFAULT);
+}
+
+/**
+ * bpf_strstr - Find the first substring in a string
+ * @s1: The string to be searched
+ * @s2: The string to search for
+ *
+ * Return:
+ * * const char * - Pointer to the first occurrence of @s2 within @s1
+ * * %NULL        - @s2 is not a substring of @s1
+ * * %-EFAULT     - Cannot read one of the strings
+ * * %-E2BIG      - One of the strings is too large
+ */
+__bpf_kfunc const char *bpf_strstr(const char *s1, const char *s2)
+{
+	char c1, c2;
+	int i, j;
+
+	if (!s1 || !s2)
+		return ERR_PTR(-EFAULT);
+
+	guard(pagefault)();
+	for (i = 0; i < XATTR_SIZE_MAX; i++) {
+		for (j = 0; j < XATTR_SIZE_MAX; j++) {
+			__get_kernel_nofault(&c1, s1 + j, char, err_out);
+			__get_kernel_nofault(&c2, s2 + j, char, err_out);
+			if (c2 == '\0')
+				return s1;
+			if (c1 == '\0')
+				return NULL;
+			if (c1 != c2)
+				break;
+		}
+		if (j == XATTR_SIZE_MAX)
+			return ERR_PTR(-E2BIG);
+		s1++;
+	}
+	return ERR_PTR(-E2BIG);
+err_out:
+	return ERR_PTR(-EFAULT);
+}
+
+/**
+ * bpf_strnstr - Find the first substring in a length-limited string
+ * @s1: The string to be searched
+ * @s2: The string to search for
+ * @len: the maximum number of characters to search
+ */
+__bpf_kfunc const char *bpf_strnstr(const char *s1, const char *s2, size_t len)
+{
+	char c1, c2;
+	int i, j;
+
+	if (!s1 || !s2)
+		return ERR_PTR(-EFAULT);
+
+	guard(pagefault)();
+	for (i = 0; i < XATTR_SIZE_MAX; i++) {
+		for (j = 0; i + j < len && j < XATTR_SIZE_MAX; j++) {
+			__get_kernel_nofault(&c1, s1 + j, char, err_out);
+			__get_kernel_nofault(&c2, s2 + j, char, err_out);
+			if (c2 == '\0')
+				return s1;
+			if (c1 == '\0')
+				return NULL;
+			if (c1 != c2)
+				break;
+		}
+		if (j == XATTR_SIZE_MAX)
+			return ERR_PTR(-E2BIG);
+		if (i + j == len)
+			return NULL;
+		s1++;
+	}
+	return ERR_PTR(-E2BIG);
+err_out:
+	return ERR_PTR(-EFAULT);
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(generic_btf_ids)
@@ -3346,6 +3774,18 @@ BTF_ID_FLAGS(func, bpf_iter_kmem_cache_next, KF_ITER_NEXT | KF_RET_NULL | KF_SLE
 BTF_ID_FLAGS(func, bpf_iter_kmem_cache_destroy, KF_ITER_DESTROY | KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_local_irq_save)
 BTF_ID_FLAGS(func, bpf_local_irq_restore)
+BTF_ID_FLAGS(func, bpf_strcmp);
+BTF_ID_FLAGS(func, bpf_strchr, KF_RET_NULL);
+BTF_ID_FLAGS(func, bpf_strchrnul);
+BTF_ID_FLAGS(func, bpf_strnchr, KF_RET_NULL);
+BTF_ID_FLAGS(func, bpf_strrchr, KF_RET_NULL);
+BTF_ID_FLAGS(func, bpf_strlen);
+BTF_ID_FLAGS(func, bpf_strnlen);
+BTF_ID_FLAGS(func, bpf_strspn);
+BTF_ID_FLAGS(func, bpf_strcspn);
+BTF_ID_FLAGS(func, bpf_strpbrk, KF_RET_NULL);
+BTF_ID_FLAGS(func, bpf_strstr, KF_RET_NULL);
+BTF_ID_FLAGS(func, bpf_strnstr, KF_RET_NULL);
 BTF_KFUNCS_END(common_btf_ids)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
