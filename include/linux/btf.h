@@ -391,6 +391,11 @@ static inline bool btf_type_is_type_tag(const struct btf_type *t)
 	return BTF_INFO_KIND(t->info) == BTF_KIND_TYPE_TAG;
 }
 
+static inline bool btf_type_is_const(const struct btf_type *t)
+{
+	return BTF_INFO_KIND(t->info) == BTF_KIND_CONST;
+}
+
 /* union is only a special case of struct:
  * all its offsetof(member) == 0
  */
