@@ -42,7 +42,7 @@ DECLARE_TRACE(bpf_testmod_test_nullable_bare,
 
 struct sk_buff;
 
-DECLARE_TRACE(bpf_testmod_test_raw_tp_null,
+DECLARE_TRACE(bpf_testmod_test_raw_null,
 	TP_PROTO(struct sk_buff *skb),
 	TP_ARGS(skb)
 );
