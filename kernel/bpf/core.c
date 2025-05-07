@@ -134,6 +134,10 @@ struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flag
 	mutex_init(&fp->aux->ext_mutex);
 	mutex_init(&fp->aux->dst_mutex);
 
+#ifdef CONFIG_BPF_SYSCALL
+	bpf_prog_stream_init(fp);
+#endif
+
 	return fp;
 }
 
@@ -2861,6 +2865,7 @@ static void bpf_prog_free_deferred(struct work_struct *work)
 	aux = container_of(work, struct bpf_prog_aux, work);
 #ifdef CONFIG_BPF_SYSCALL
 	bpf_free_kfunc_btf_tab(aux->kfunc_btf_tab);
+	bpf_prog_stream_free(aux->prog);
 #endif
 #ifdef CONFIG_CGROUP_BPF
 	if (aux->cgroup_atype != CGROUP_BPF_ATTACH_TYPE_INVALID)
@@ -2877,6 +2882,13 @@ static void bpf_prog_free_deferred(struct work_struct *work)
 	if (aux->dst_trampoline)
 		bpf_trampoline_put(aux->dst_trampoline);
 	for (i = 0; i < aux->real_func_cnt; i++) {
+#ifdef CONFIG_BPF_SYSCALL
+		/* Ensure we don't push to subprog lists. */
+		if (bpf_is_subprog(aux->func[i])) {
+			WARN_ON_ONCE(!llist_empty(&aux->func[i]->aux->stream[0].log));
+			WARN_ON_ONCE(!llist_empty(&aux->func[i]->aux->stream[1].log));
+		}
+#endif
 		/* We can just unlink the subprog poke descriptor table as
 		 * it was originally linked to the main program and is also
 		 * released along with it.
