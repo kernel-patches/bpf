@@ -35,6 +35,8 @@
 #include "main.h"
 #include "xlated_dumper.h"
 
+#include "stream.skel.h"
+
 #define BPF_METADATA_PREFIX "bpf_metadata_"
 #define BPF_METADATA_PREFIX_LEN (sizeof(BPF_METADATA_PREFIX) - 1)
 
@@ -697,6 +699,15 @@ static int do_show(int argc, char **argv)
 	return err;
 }
 
+static int process_stream_sample(void *ctx, void *data, size_t len)
+{
+	FILE *file = ctx;
+
+	fprintf(file, "%s", (char *)data);
+	fflush(file);
+	return 0;
+}
+
 static int
 prog_dump(struct bpf_prog_info *info, enum dump_mode mode,
 	  char *filepath, bool opcodes, bool visual, bool linum)
@@ -1111,6 +1122,80 @@ static int do_detach(int argc, char **argv)
 	if (json_output)
 		jsonw_null(json_wtr);
 	return 0;
+}
+
+enum prog_tracelog_mode {
+	TRACE_STDOUT,
+	TRACE_STDERR,
+};
+
+static int
+prog_tracelog_stream(struct bpf_prog_info *info, enum prog_tracelog_mode mode)
+{
+	FILE *file = mode == TRACE_STDOUT ? stdout : stderr;
+	LIBBPF_OPTS(bpf_test_run_opts, opts);
+	struct ring_buffer *ringbuf;
+	struct stream_bpf *skel;
+	int map_fd, ret = -1;
+
+	__u32 prog_id = info->id;
+	__u32 stream_id = mode == TRACE_STDOUT ? 1 : 2;
+
+	skel = stream_bpf__open_and_load();
+	if (!skel)
+		return -errno;
+	skel->bss->prog_id = prog_id;
+	skel->bss->stream_id = stream_id;
+
+	map_fd = bpf_map__fd(skel->maps.ringbuf);
+	ringbuf = ring_buffer__new(map_fd, process_stream_sample, file, NULL);
+	if (!ringbuf) {
+		ret = -errno;
+		goto end;
+	}
+	do {
+		skel->bss->written_count = skel->bss->written_size = 0;
+		ret = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.bpftool_dump_prog_stream), &opts);
+		if (ring_buffer__consume_n(ringbuf, skel->bss->written_count) != skel->bss->written_count) {
+			ret = -EINVAL;
+			goto end;
+		}
+	} while (!ret && opts.retval == EAGAIN);
+
+	if (opts.retval != 0)
+		ret = -EINVAL;
+end:
+	stream_bpf__destroy(skel);
+	return ret;
+}
+
+
+static int do_tracelog_any(int argc, char **argv)
+{
+	enum prog_tracelog_mode mode;
+	struct bpf_prog_info info;
+	__u32 info_len = sizeof(info);
+	int fd, err;
+
+	if (argc == 0)
+		return do_tracelog(argc, argv);
+	if (!is_prefix(*argv, "stdout") && !is_prefix(*argv, "stderr"))
+		usage();
+	mode = is_prefix(*argv, "stdout") ? TRACE_STDOUT : TRACE_STDERR;
+	NEXT_ARG();
+
+	if (!REQ_ARGS(2))
+		return -1;
+
+	fd = prog_parse_fd(&argc, &argv);
+	if (fd < 0)
+		return -1;
+
+	err = bpf_prog_get_info_by_fd(fd, &info, &info_len);
+	if (err < 0)
+		return -1;
+
+	return prog_tracelog_stream(&info, mode);
 }
 
 static int check_single_stdin(char *file_data_in, char *file_ctx_in)
@@ -2483,6 +2568,7 @@ static int do_help(int argc, char **argv)
 		"                         [repeat N]\n"
 		"       %1$s %2$s profile PROG [duration DURATION] METRICs\n"
 		"       %1$s %2$s tracelog\n"
+		"       %1$s %2$s tracelog { stdout | stderr } PROG\n"
 		"       %1$s %2$s help\n"
 		"\n"
 		"       " HELP_SPEC_MAP "\n"
@@ -2522,7 +2608,7 @@ static const struct cmd cmds[] = {
 	{ "loadall",	do_loadall },
 	{ "attach",	do_attach },
 	{ "detach",	do_detach },
-	{ "tracelog",	do_tracelog },
+	{ "tracelog",	do_tracelog_any },
 	{ "run",	do_run },
 	{ "profile",	do_profile },
 	{ 0 }
