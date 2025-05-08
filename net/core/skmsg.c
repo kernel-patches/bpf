@@ -480,7 +480,7 @@ int sk_msg_recvmsg(struct sock *sk, struct sk_psock *psock, struct msghdr *msg,
 		msg_rx->sg.start = i;
 		if (!sge->length && (i == msg_rx->sg.end || sg_is_last(sge))) {
 			msg_rx = sk_psock_dequeue_msg(psock);
-			kfree_sk_msg(msg_rx);
+			kfree_sk_msg(psock, msg_rx);
 		}
 		msg_rx = sk_psock_peek_msg(psock);
 	}
@@ -514,16 +514,36 @@ static struct sk_msg *alloc_sk_msg(gfp_t gfp)
 	return msg;
 }
 
-static struct sk_msg *sk_psock_create_ingress_msg(struct sock *sk,
+static struct sk_msg *sk_psock_create_ingress_msg(struct sk_psock *psock,
+						  struct sock *sk,
 						  struct sk_buff *skb)
 {
+	spin_lock_bh(&psock->ingress_lock);
 	if (atomic_read(&sk->sk_rmem_alloc) > sk->sk_rcvbuf)
-		return NULL;
+		goto unlock_err;
 
 	if (!sk_rmem_schedule(sk, skb, skb->truesize))
-		return NULL;
+		goto unlock_err;
 
+	/* This will transition ownership of the data from the socket where
+	 * the BPF program was run initiating the redirect to the socket
+	 * we will eventually receive this data on. The data will be released
+	 * from consume_skb whether in sk_msg_recvmsg() after its been copied
+	 * into user buffers or in other skb release processes.
+	 */
+	skb_set_owner_r(skb, sk);
+	spin_unlock_bh(&psock->ingress_lock);
+
+	/* sk_msg itself is not under sk memory limitations and we only concern
+	 * sk_msg->skb, hence no lock protection is needed here. Furthermore,
+	 * adding a ingress_lock would trigger a warning from lockdep about
+	 * 'softirq-safe to softirq-unsafe'.
+	 */
 	return alloc_sk_msg(GFP_KERNEL);
+
+unlock_err:
+	spin_unlock_bh(&psock->ingress_lock);
+	return NULL;
 }
 
 static int sk_psock_skb_ingress_enqueue(struct sk_buff *skb,
@@ -585,17 +605,10 @@ static int sk_psock_skb_ingress(struct sk_psock *psock, struct sk_buff *skb,
 	 */
 	if (unlikely(skb->sk == sk))
 		return sk_psock_skb_ingress_self(psock, skb, off, len, true);
-	msg = sk_psock_create_ingress_msg(sk, skb);
+	msg = sk_psock_create_ingress_msg(psock, sk, skb);
 	if (!msg)
 		return -EAGAIN;
 
-	/* This will transition ownership of the data from the socket where
-	 * the BPF program was run initiating the redirect to the socket
-	 * we will eventually receive this data on. The data will be released
-	 * from skb_consume found in __tcp_bpf_recvmsg() after its been copied
-	 * into user buffers.
-	 */
-	skb_set_owner_r(skb, sk);
 	err = sk_psock_skb_ingress_enqueue(skb, off, len, psock, sk, msg, true);
 	if (err < 0)
 		kfree(msg);

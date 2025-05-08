@@ -378,10 +378,13 @@ static inline bool sk_psock_queue_empty(const struct sk_psock *psock)
 	return psock ? list_empty(&psock->ingress_msg) : true;
 }
 
-static inline void kfree_sk_msg(struct sk_msg *msg)
+static inline void kfree_sk_msg(struct sk_psock *psock, struct sk_msg *msg)
 {
-	if (msg->skb)
+	if (msg->skb) {
+		spin_lock_bh(&psock->ingress_lock);
 		consume_skb(msg->skb);
+		spin_unlock_bh(&psock->ingress_lock);
+	}
 	kfree(msg);
 }
 
