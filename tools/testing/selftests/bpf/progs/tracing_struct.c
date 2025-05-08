@@ -18,6 +18,13 @@ struct bpf_testmod_struct_arg_3 {
 	int b[];
 };
 
+struct bpf_testmod_struct_arg_6 {
+};
+
+struct bpf_testmod_struct_ret {
+	int val;
+};
+
 long t1_a_a, t1_a_b, t1_b, t1_c, t1_ret, t1_nregs;
 __u64 t1_reg0, t1_reg1, t1_reg2, t1_reg3;
 long t2_a, t2_b_a, t2_b_b, t2_c, t2_ret;
@@ -25,6 +32,8 @@ long t3_a, t3_b, t3_c_a, t3_c_b, t3_ret;
 long t4_a_a, t4_b, t4_c, t4_d, t4_e_a, t4_e_b, t4_ret;
 long t5_ret;
 int t6;
+int t7;
+int t7_ret;
 
 SEC("fentry/bpf_testmod_test_struct_arg_1")
 int BPF_PROG2(test_struct_arg_1, struct bpf_testmod_struct_arg_2, a, int, b, int, c)
@@ -127,6 +136,21 @@ SEC("fentry/bpf_testmod_test_struct_arg_6")
 int BPF_PROG2(test_struct_arg_11, struct bpf_testmod_struct_arg_3 *, a)
 {
 	t6 = a->b[0];
+	return 0;
+}
+
+SEC("fentry/bpf_testmod_test_struct_arg_10")
+int BPF_PROG2(test_struct_arg_12, struct bpf_testmod_struct_arg_6, h, u64, a, short, c)
+{
+	t7 = a + c;
+	return 0;
+}
+
+SEC("fexit/bpf_testmod_test_struct_arg_10")
+int BPF_PROG2(test_struct_arg_13, struct bpf_testmod_struct_arg_6, h, u64, a, short, c,
+	      struct bpf_testmod_struct_ret, ret)
+{
+	t7_ret = ret.val;
 	return 0;
 }
 

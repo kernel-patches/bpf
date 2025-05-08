@@ -56,6 +56,9 @@ static void test_struct_args(void)
 
 	ASSERT_EQ(skel->bss->t6, 1, "t6 ret");
 
+	ASSERT_EQ(skel->bss->t7, 34, "t7 a + c");
+	ASSERT_EQ(skel->bss->t7_ret, 102, "t7 ret");
+
 destroy_skel:
 	tracing_struct__destroy(skel);
 }
