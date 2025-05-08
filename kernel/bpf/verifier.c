@@ -196,6 +196,12 @@ struct bpf_verifier_stack_elem {
 
 #define BPF_PRIV_STACK_MIN_SIZE		64
 
+#define verifier_bug(env, fmt, args...)				\
+	do {							\
+		WARN_ONCE(1, "verifier bug: " fmt, ##args);	\
+		verbose(env, "verifier bug: " fmt, ##args);	\
+	} while (0)
+
 static int acquire_reference(struct bpf_verifier_env *env, int insn_idx);
 static int release_reference_nomark(struct bpf_verifier_state *state, int ref_obj_id);
 static int release_reference(struct bpf_verifier_env *env, int ref_obj_id);
@@ -1924,8 +1930,7 @@ static struct bpf_verifier_state *get_loop_entry(struct bpf_verifier_env *env,
 
 	while (topmost && topmost->loop_entry) {
 		if (steps++ > st->dfs_depth) {
-			WARN_ONCE(true, "verifier bug: infinite loop in get_loop_entry\n");
-			verbose(env, "verifier bug: infinite loop in get_loop_entry()\n");
+			verifier_bug(env, "infinite loop in get_loop_entry\n");
 			return ERR_PTR(-EFAULT);
 		}
 		topmost = topmost->loop_entry;
@@ -3460,9 +3465,9 @@ static int mark_reg_read(struct bpf_verifier_env *env,
 		if (writes && state->live & REG_LIVE_WRITTEN)
 			break;
 		if (parent->live & REG_LIVE_DONE) {
-			verbose(env, "verifier BUG type %s var_off %lld off %d\n",
-				reg_type_str(env, parent->type),
-				parent->var_off.value, parent->off);
+			verifier_bug(env, "type %s var_off %lld off %d\n",
+				     reg_type_str(env, parent->type),
+				     parent->var_off.value, parent->off);
 			return -EFAULT;
 		}
 		/* The first condition is more likely to be true than the
@@ -6562,13 +6567,13 @@ continue_func:
 		next_insn = i + insn[i].imm + 1;
 		sidx = find_subprog(env, next_insn);
 		if (sidx < 0) {
-			WARN_ONCE(1, "verifier bug. No program starts at insn %d\n",
-				  next_insn);
+			verifier_bug(env, "No program starts at insn %d\n",
+				     next_insn);
 			return -EFAULT;
 		}
 		if (subprog[sidx].is_async_cb) {
 			if (subprog[sidx].has_tail_call) {
-				verbose(env, "verifier bug. subprog has tail_call and async cb\n");
+				verifier_bug(env, "subprog has tail_call and async cb\n");
 				return -EFAULT;
 			}
 			/* async callbacks don't increase bpf prog stack size unless called directly */
@@ -6676,8 +6681,8 @@ static int get_callee_stack_depth(struct bpf_verifier_env *env,
 
 	subprog = find_subprog(env, start);
 	if (subprog < 0) {
-		WARN_ONCE(1, "verifier bug. No program starts at insn %d\n",
-			  start);
+		verifier_bug(env, "No program starts at insn %d\n",
+			     start);
 		return -EFAULT;
 	}
 	return env->subprog_info[subprog].stack_depth;
@@ -7984,7 +7989,7 @@ static int check_stack_range_initialized(
 		slot = -i - 1;
 		spi = slot / BPF_REG_SIZE;
 		if (state->allocated_stack <= slot) {
-			verbose(env, "verifier bug: allocated_stack too small\n");
+			verbose(env, "allocated_stack too small\n");
 			return -EFAULT;
 		}
 
@@ -8413,7 +8418,7 @@ static int process_timer_func(struct bpf_verifier_env *env, int regno,
 		return -EINVAL;
 	}
 	if (meta->map_ptr) {
-		verbose(env, "verifier bug. Two map pointers in a timer helper\n");
+		verifier_bug(env, "Two map pointers in a timer helper\n");
 		return -EFAULT;
 	}
 	meta->map_uid = reg->map_uid;
@@ -10285,8 +10290,8 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	}
 
 	if (state->frame[state->curframe + 1]) {
-		verbose(env, "verifier bug. Frame %d already allocated\n",
-			state->curframe + 1);
+		verifier_bug(env, "Frame %d already allocated\n",
+			     state->curframe + 1);
 		return -EFAULT;
 	}
 
@@ -10400,8 +10405,8 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 			if (err)
 				return err;
 		} else {
-			bpf_log(log, "verifier bug: unrecognized arg#%d type %d\n",
-				i, arg->arg_type);
+			verifier_bug(env, "unrecognized arg#%d type %d\n",
+				     i, arg->arg_type);
 			return -EFAULT;
 		}
 	}
@@ -10464,13 +10469,13 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	env->subprog_info[subprog].is_cb = true;
 	if (bpf_pseudo_kfunc_call(insn) &&
 	    !is_callback_calling_kfunc(insn->imm)) {
-		verbose(env, "verifier bug: kfunc %s#%d not marked as callback-calling\n",
-			func_id_name(insn->imm), insn->imm);
+		verifier_bug(env, "kfunc %s#%d not marked as callback-calling\n",
+			     func_id_name(insn->imm), insn->imm);
 		return -EFAULT;
 	} else if (!bpf_pseudo_kfunc_call(insn) &&
 		   !is_callback_calling_function(insn->imm)) { /* helper */
-		verbose(env, "verifier bug: helper %s#%d not marked as callback-calling\n",
-			func_id_name(insn->imm), insn->imm);
+		verifier_bug(env, "helper %s#%d not marked as callback-calling\n",
+			     func_id_name(insn->imm), insn->imm);
 		return -EFAULT;
 	}
 
@@ -10523,7 +10528,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	target_insn = *insn_idx + insn->imm + 1;
 	subprog = find_subprog(env, target_insn);
 	if (subprog < 0) {
-		verbose(env, "verifier bug. No program starts at insn %d\n", target_insn);
+		verifier_bug(env, "No program starts at insn %d\n", target_insn);
 		return -EFAULT;
 	}
 
@@ -11124,7 +11129,7 @@ static int check_bpf_snprintf_call(struct bpf_verifier_env *env,
 	err = fmt_map->ops->map_direct_value_addr(fmt_map, &fmt_addr,
 						  fmt_map_off);
 	if (err) {
-		verbose(env, "verifier bug\n");
+		verbose(env, "failed to retrieve map value address\n");
 		return -EFAULT;
 	}
 	fmt = (char *)(long)fmt_addr + fmt_map_off;
@@ -19689,8 +19694,8 @@ process_bpf_exit:
 						return err;
 					break;
 				} else {
-					if (WARN_ON_ONCE(env->cur_state->loop_entry)) {
-						verbose(env, "verifier bug: env->cur_state->loop_entry != NULL\n");
+					if (unlikely(env->cur_state->loop_entry)) {
+						verifier_bug(env, "env->cur_state->loop_entry != NULL\n");
 						return -EFAULT;
 					}
 					do_print_state = true;
@@ -20750,8 +20755,8 @@ static int opt_subreg_zext_lo32_rnd_hi32(struct bpf_verifier_env *env,
 		if (bpf_pseudo_kfunc_call(&insn))
 			continue;
 
-		if (WARN_ON(load_reg == -1)) {
-			verbose(env, "verifier bug. zext_dst is set, but no reg is defined\n");
+		if (unlikely(load_reg == -1)) {
+			verifier_bug(env, "zext_dst is set, but no reg is defined\n");
 			return -EFAULT;
 		}
 
@@ -21071,8 +21076,8 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		 */
 		subprog = find_subprog(env, i + insn->imm + 1);
 		if (subprog < 0) {
-			WARN_ONCE(1, "verifier bug. No program starts at insn %d\n",
-				  i + insn->imm + 1);
+			verifier_bug(env, "No program starts at insn %d\n",
+				     i + insn->imm + 1);
 			return -EFAULT;
 		}
 		/* temporarily remember subprog id inside insn instead of
@@ -22433,7 +22438,7 @@ next_insn:
 			continue;
 		/* We need two slots in case timed may_goto is supported. */
 		if (stack_slots > slots) {
-			verbose(env, "verifier bug: stack_slots supports may_goto only\n");
+			verifier_bug(env, "stack_slots supports may_goto only\n");
 			return -EFAULT;
 		}
 
