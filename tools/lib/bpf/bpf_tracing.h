@@ -694,12 +694,13 @@ ____##name(unsigned long long *ctx, ##args)
 #endif
 
 #define ___bpf_treg_cnt(t) \
+	__builtin_choose_expr(sizeof(t) == 0, 0,	\
 	__builtin_choose_expr(sizeof(t) == 1, 1,	\
 	__builtin_choose_expr(sizeof(t) == 2, 1,	\
 	__builtin_choose_expr(sizeof(t) == 4, 1,	\
 	__builtin_choose_expr(sizeof(t) == 8, 1,	\
 	__builtin_choose_expr(sizeof(t) == 16, 2,	\
-			      (void)0)))))
+			      (void)0))))))
 
 #define ___bpf_reg_cnt0()		(0)
 #define ___bpf_reg_cnt1(t, x)		(___bpf_reg_cnt0() + ___bpf_treg_cnt(t))
@@ -717,12 +718,13 @@ ____##name(unsigned long long *ctx, ##args)
 #define ___bpf_reg_cnt(args...)	 ___bpf_apply(___bpf_reg_cnt, ___bpf_narg2(args))(args)
 
 #define ___bpf_union_arg(t, x, n) \
+	__builtin_choose_expr(sizeof(t) == 0, ({ t ___t; ___t; }), \
 	__builtin_choose_expr(sizeof(t) == 1, ({ union { __u8 z[1]; t x; } ___t = { .z = {ctx[n]}}; ___t.x; }), \
 	__builtin_choose_expr(sizeof(t) == 2, ({ union { __u16 z[1]; t x; } ___t = { .z = {ctx[n]} }; ___t.x; }), \
 	__builtin_choose_expr(sizeof(t) == 4, ({ union { __u32 z[1]; t x; } ___t = { .z = {ctx[n]} }; ___t.x; }), \
 	__builtin_choose_expr(sizeof(t) == 8, ({ union { __u64 z[1]; t x; } ___t = {.z = {ctx[n]} }; ___t.x; }), \
 	__builtin_choose_expr(sizeof(t) == 16, ({ union { __u64 z[2]; t x; } ___t = {.z = {ctx[n], ctx[n + 1]} }; ___t.x; }), \
-			      (void)0)))))
+			      (void)0))))))
 
 #define ___bpf_ctx_arg0(n, args...)
 #define ___bpf_ctx_arg1(n, t, x)		, ___bpf_union_arg(t, x, n - ___bpf_reg_cnt1(t, x))
