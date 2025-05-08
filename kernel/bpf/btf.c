@@ -7385,7 +7385,7 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 				tname, i, btf_type_str(t));
 			return -EINVAL;
 		}
-		if (ret == 0) {
+		if (ret == 0 && !__btf_type_is_struct(t)) {
 			bpf_log(log,
 				"The function %s has malformed void argument.\n",
 				tname);
