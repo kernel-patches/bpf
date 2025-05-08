@@ -7360,7 +7360,7 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 		return -EINVAL;
 	}
 	ret = __get_type_size(btf, func->type, &t);
-	if (ret < 0 || __btf_type_is_struct(t)) {
+	if (ret < 0 || (__btf_type_is_struct(t) && ret > 8)) {
 		bpf_log(log,
 			"The function %s return type %s is unsupported.\n",
 			tname, btf_type_str(t));
@@ -7385,7 +7385,7 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 				tname, i, btf_type_str(t));
 			return -EINVAL;
 		}
-		if (ret == 0) {
+		if (ret == 0 && !__btf_type_is_struct(t)) {
 			bpf_log(log,
 				"The function %s has malformed void argument.\n",
 				tname);
