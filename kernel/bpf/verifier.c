@@ -4413,8 +4413,10 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			 * before it would be equally necessary to
 			 * propagate it to dreg.
 			 */
-			bt_set_reg(bt, dreg);
-			bt_set_reg(bt, sreg);
+			if (dreg != BPF_REG_FP)
+				bt_set_reg(bt, dreg);
+			if (sreg != BPF_REG_FP)
+				bt_set_reg(bt, sreg);
 		} else if (BPF_SRC(insn->code) == BPF_K) {
 			 /* dreg <cond> K
 			  * Only dreg still needs precision before
