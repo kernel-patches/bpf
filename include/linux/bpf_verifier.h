@@ -606,6 +606,7 @@ struct bpf_insn_aux_data {
 	bool calls_callback;
 	/* registers alive before this instruction. */
 	u16 live_regs_before;
+	u16 arg_prog_aux;
 };
 
 #define MAX_USED_MAPS 64 /* max number of maps accessed by one eBPF program */
