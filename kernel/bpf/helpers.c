@@ -3012,9 +3012,9 @@ __bpf_kfunc int bpf_wq_start(struct bpf_wq *wq, unsigned int flags)
 __bpf_kfunc int bpf_wq_set_callback_impl(struct bpf_wq *wq,
 					 int (callback_fn)(void *map, int *key, void *value),
 					 unsigned int flags,
-					 void *aux__ign)
+					 void *aux__aux)
 {
-	struct bpf_prog_aux *aux = (struct bpf_prog_aux *)aux__ign;
+	struct bpf_prog_aux *aux = (struct bpf_prog_aux *)aux__aux;
 	struct bpf_async_kern *async = (struct bpf_async_kern *)wq;
 
 	if (flags)
