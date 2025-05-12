@@ -184,8 +184,111 @@ out:
 	test_task_local_data__destroy(skel);
 }
 
+#define TEST_RACE_THREAD_NUM (TLD_MAX_DATA_CNT - 3)
+
+void *test_task_local_data_race_thread(void *arg)
+{
+	int err = 0, id = (intptr_t)arg;
+	char key_name[32];
+	tld_key_t key;
+
+	key = tld_create_key("value_not_exist", TLD_PAGE_SIZE + 1);
+	if (tld_key_err_or_zero(key) != -E2BIG) {
+		err = 1;
+		goto out;
+	}
+
+	/*
+	 * If more than one thread succeed in creating value1 or value2,
+	 * some threads will fail to create thread_<id> later.
+	 */
+	key = tld_create_key("value1", sizeof(int));
+	if (!tld_key_is_err(key))
+		tld_keys[TEST_RACE_THREAD_NUM] = key;
+	key = tld_create_key("value2", sizeof(struct test_tld_struct));
+	if (!tld_key_is_err(key))
+		tld_keys[TEST_RACE_THREAD_NUM + 1] = key;
+
+	snprintf(key_name, 32, "thread_%d", id);
+	tld_keys[id] = tld_create_key(key_name, sizeof(int));
+	if (tld_key_is_err(tld_keys[id]))
+		err = 2;
+out:
+	return (void *)(intptr_t)err;
+}
+
+static void test_task_local_data_race(void)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, opts);
+	pthread_t thread[TEST_RACE_THREAD_NUM];
+	struct test_task_local_data *skel;
+	int fd, i, j, err, *data;
+	void *ret = NULL;
+
+	skel = test_task_local_data__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open_and_load"))
+		return;
+
+	tld_keys = calloc(TEST_RACE_THREAD_NUM + 2, sizeof(tld_key_t));
+	if (!ASSERT_OK_PTR(tld_keys, "calloc tld_keys"))
+		goto out;
+
+	fd = bpf_map__fd(skel->maps.tld_data_map);
+
+	for (j = 0; j < 100; j++) {
+		reset_tld();
+
+		for (i = 0; i < TEST_RACE_THREAD_NUM; i++) {
+			/*
+			 * Try to make tld_create_key() race with each other. Call
+			 * tld_create_key(), both valid and invalid, from different threads.
+			 */
+			err = pthread_create(&thread[i], NULL, test_task_local_data_race_thread,
+					     (void *)(intptr_t)i);
+			if (CHECK_FAIL(err))
+				break;
+		}
+
+		/* Wait for all tld_create_key() to return */
+		for (i = 0; i < TEST_RACE_THREAD_NUM; i++) {
+			pthread_join(thread[i], &ret);
+			if (CHECK_FAIL(ret))
+				break;
+		}
+
+		/* Write a unique number in the range of [0, TEST_RACE_THREAD_NUM) to each TLD */
+		for (i = 0; i < TEST_RACE_THREAD_NUM; i++) {
+			data = tld_get_data(fd, tld_keys[i]);
+			if (CHECK_FAIL(!data))
+				break;
+			*data = i;
+		}
+
+		/* Read TLDs and check the value to see if any address collides with another */
+		for (i = 0; i < TEST_RACE_THREAD_NUM; i++) {
+			data = tld_get_data(fd, tld_keys[i]);
+			if (CHECK_FAIL(*data != i))
+				break;
+		}
+
+		/* Run task_main to make sure no invalid TLDs are added */
+		err = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.task_main), &opts);
+		ASSERT_OK(err, "run task_main");
+		ASSERT_OK(opts.retval, "task_main retval");
+	}
+out:
+	if (tld_keys) {
+		free(tld_keys);
+		tld_keys = NULL;
+	}
+	tld_free();
+	test_task_local_data__destroy(skel);
+}
+
 void test_task_local_data(void)
 {
 	if (test__start_subtest("task_local_data_basic"))
 		test_task_local_data_basic();
+	if (test__start_subtest("task_local_data_race"))
+		test_task_local_data_race();
 }
