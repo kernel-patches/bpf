@@ -104,7 +104,6 @@ config EXT4_DEBUG
 config EXT4_KUNIT_TESTS
 	tristate "KUnit tests for ext4" if !KUNIT_ALL_TESTS
 	depends on EXT4_FS && KUNIT
-	default KUNIT_ALL_TESTS
 	help
 	  This builds the ext4 KUnit tests.
 
