@@ -536,7 +536,6 @@ source "drivers/clk/zynqmp/Kconfig"
 config CLK_KUNIT_TEST
 	tristate "Basic Clock Framework Kunit Tests" if !KUNIT_ALL_TESTS
 	depends on KUNIT
-	default KUNIT_ALL_TESTS
 	select DTC
 	help
 	  Kunit tests for the common clock framework.
@@ -544,7 +543,6 @@ config CLK_KUNIT_TEST
 config CLK_FIXED_RATE_KUNIT_TEST
 	tristate "Basic fixed rate clk type KUnit test" if !KUNIT_ALL_TESTS
 	depends on KUNIT
-	default KUNIT_ALL_TESTS
 	select DTC
 	help
 	  KUnit tests for the basic fixed rate clk type.
@@ -553,14 +551,12 @@ config CLK_GATE_KUNIT_TEST
 	tristate "Basic gate type Kunit test" if !KUNIT_ALL_TESTS
 	depends on KUNIT
 	depends on !S390
-	default KUNIT_ALL_TESTS
 	help
 	  Kunit test for the basic clk gate type.
 
 config CLK_FD_KUNIT_TEST
 	tristate "Basic fractional divider type Kunit test" if !KUNIT_ALL_TESTS
 	depends on KUNIT
-	default KUNIT_ALL_TESTS
 	help
 	  Kunit test for the clk-fractional-divider type.
 

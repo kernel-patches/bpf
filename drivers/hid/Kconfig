@@ -1403,7 +1403,6 @@ config HID_KUNIT_TEST
 	depends on KUNIT
 	depends on HID_BATTERY_STRENGTH
 	depends on HID_UCLOGIC
-	default KUNIT_ALL_TESTS
 	help
 	  This builds unit tests for HID. This option is not useful for
 	  distributions or general kernels, but only for kernel
