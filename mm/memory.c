@@ -278,8 +278,17 @@ static inline void free_p4d_range(struct mmu_gather *tlb, pgd_t *pgd,
 	p4d_free_tlb(tlb, p4d, start);
 }
 
-/*
- * This function frees user-level page tables of a process.
+/**
+ * free_pgd_range - Unmap and free page tables in the range
+ * @tlb: the mmu_gather containing pending TLB flush info
+ * @addr: virtual address start
+ * @end: virtual address end
+ * @floor: lowest address boundary
+ * @ceiling: highest address boundary
+ *
+ * This function tears down all user-level page tables in the
+ * specified virtual address range [@addr..@end). It is part of
+ * the memory unmap flow.
  */
 void free_pgd_range(struct mmu_gather *tlb,
 			unsigned long addr, unsigned long end,
@@ -929,7 +938,7 @@ copy_present_page(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma
 	rss[MM_ANONPAGES]++;
 
 	/* All done, just insert the new page copy in the child */
-	pte = mk_pte(&new_folio->page, dst_vma->vm_page_prot);
+	pte = folio_mk_pte(new_folio, dst_vma->vm_page_prot);
 	pte = maybe_mkwrite(pte_mkdirty(pte), dst_vma);
 	if (userfaultfd_pte_wp(dst_vma, ptep_get(src_pte)))
 		/* Uffd-wp needs to be delivered to dest pte as well */
@@ -1990,6 +1999,48 @@ void unmap_vmas(struct mmu_gather *tlb, struct ma_state *mas,
 }
 
 /**
+ * zap_page_range_single_batched - remove user pages in a given range
+ * @tlb: pointer to the caller's struct mmu_gather
+ * @vma: vm_area_struct holding the applicable pages
+ * @address: starting address of pages to remove
+ * @size: number of bytes to remove
+ * @details: details of shared cache invalidation
+ *
+ * @tlb shouldn't be NULL.  The range must fit into one VMA.  If @vma is for
+ * hugetlb, @tlb is flushed and re-initialized by this function.
+ */
+void zap_page_range_single_batched(struct mmu_gather *tlb,
+		struct vm_area_struct *vma, unsigned long address,
+		unsigned long size, struct zap_details *details)
+{
+	const unsigned long end = address + size;
+	struct mmu_notifier_range range;
+
+	VM_WARN_ON_ONCE(!tlb || tlb->mm != vma->vm_mm);
+
+	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, vma->vm_mm,
+				address, end);
+	hugetlb_zap_begin(vma, &range.start, &range.end);
+	update_hiwater_rss(vma->vm_mm);
+	mmu_notifier_invalidate_range_start(&range);
+	/*
+	 * unmap 'address-end' not 'range.start-range.end' as range
+	 * could have been expanded for hugetlb pmd sharing.
+	 */
+	unmap_single_vma(tlb, vma, address, end, details, false);
+	mmu_notifier_invalidate_range_end(&range);
+	if (is_vm_hugetlb_page(vma)) {
+		/*
+		 * flush tlb and free resources before hugetlb_zap_end(), to
+		 * avoid concurrent page faults' allocation failure.
+		 */
+		tlb_finish_mmu(tlb);
+		hugetlb_zap_end(vma, details);
+		tlb_gather_mmu(tlb, vma->vm_mm);
+	}
+}
+
+/**
  * zap_page_range_single - remove user pages in a given range
  * @vma: vm_area_struct holding the applicable pages
  * @address: starting address of pages to zap
@@ -2001,24 +2052,11 @@ void unmap_vmas(struct mmu_gather *tlb, struct ma_state *mas,
 void zap_page_range_single(struct vm_area_struct *vma, unsigned long address,
 		unsigned long size, struct zap_details *details)
 {
-	const unsigned long end = address + size;
-	struct mmu_notifier_range range;
 	struct mmu_gather tlb;
 
-	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, vma->vm_mm,
-				address, end);
-	hugetlb_zap_begin(vma, &range.start, &range.end);
 	tlb_gather_mmu(&tlb, vma->vm_mm);
-	update_hiwater_rss(vma->vm_mm);
-	mmu_notifier_invalidate_range_start(&range);
-	/*
-	 * unmap 'address-end' not 'range.start-range.end' as range
-	 * could have been expanded for hugetlb pmd sharing.
-	 */
-	unmap_single_vma(&tlb, vma, address, end, details, false);
-	mmu_notifier_invalidate_range_end(&range);
+	zap_page_range_single_batched(&tlb, vma, address, size, details);
 	tlb_finish_mmu(&tlb);
-	hugetlb_zap_end(vma, details);
 }
 
 /**
@@ -3523,7 +3561,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 			inc_mm_counter(mm, MM_ANONPAGES);
 		}
 		flush_cache_page(vma, vmf->address, pte_pfn(vmf->orig_pte));
-		entry = mk_pte(&new_folio->page, vma->vm_page_prot);
+		entry = folio_mk_pte(new_folio, vma->vm_page_prot);
 		entry = pte_sw_mkyoung(entry);
 		if (unlikely(unshare)) {
 			if (pte_soft_dirty(vmf->orig_pte))
@@ -3751,7 +3789,7 @@ static bool __wp_can_reuse_large_anon_folio(struct folio *folio,
 
 	/* Stabilize the mapcount vs. refcount and recheck. */
 	folio_lock_large_mapcount(folio);
-	VM_WARN_ON_ONCE(folio_large_mapcount(folio) < folio_ref_count(folio));
+	VM_WARN_ON_ONCE_FOLIO(folio_large_mapcount(folio) > folio_ref_count(folio), folio);
 
 	if (folio_test_large_maybe_mapped_shared(folio))
 		goto unlock;
@@ -5013,7 +5051,7 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	 */
 	__folio_mark_uptodate(folio);
 
-	entry = mk_pte(&folio->page, vma->vm_page_prot);
+	entry = folio_mk_pte(folio, vma->vm_page_prot);
 	entry = pte_sw_mkyoung(entry);
 	if (vma->vm_flags & VM_WRITE)
 		entry = pte_mkwrite(pte_mkdirty(entry), vma);
@@ -5188,7 +5226,7 @@ vm_fault_t do_set_pmd(struct vm_fault *vmf, struct page *page)
 
 	flush_icache_pages(vma, page, HPAGE_PMD_NR);
 
-	entry = mk_huge_pmd(page, vma->vm_page_prot);
+	entry = folio_mk_pmd(folio, vma->vm_page_prot);
 	if (write)
 		entry = maybe_pmd_mkwrite(pmd_mkdirty(entry), vma);
 
@@ -5245,6 +5283,8 @@ void set_pte_range(struct vm_fault *vmf, struct folio *folio,
 
 	if (write)
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
+	else if (pte_write(entry) && folio_test_dirty(folio))
+		entry = pte_mkdirty(entry);
 	if (unlikely(vmf_orig_pte_uffd_wp(vmf)))
 		entry = pte_mkuffd_wp(entry);
 	/* copy-on-write page */
@@ -6337,258 +6377,6 @@ out:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(handle_mm_fault);
-
-#ifdef CONFIG_LOCK_MM_AND_FIND_VMA
-#include <linux/extable.h>
-
-static inline bool get_mmap_lock_carefully(struct mm_struct *mm, struct pt_regs *regs)
-{
-	if (likely(mmap_read_trylock(mm)))
-		return true;
-
-	if (regs && !user_mode(regs)) {
-		unsigned long ip = exception_ip(regs);
-		if (!search_exception_tables(ip))
-			return false;
-	}
-
-	return !mmap_read_lock_killable(mm);
-}
-
-static inline bool mmap_upgrade_trylock(struct mm_struct *mm)
-{
-	/*
-	 * We don't have this operation yet.
-	 *
-	 * It should be easy enough to do: it's basically a
-	 *    atomic_long_try_cmpxchg_acquire()
-	 * from RWSEM_READER_BIAS -> RWSEM_WRITER_LOCKED, but
-	 * it also needs the proper lockdep magic etc.
-	 */
-	return false;
-}
-
-static inline bool upgrade_mmap_lock_carefully(struct mm_struct *mm, struct pt_regs *regs)
-{
-	mmap_read_unlock(mm);
-	if (regs && !user_mode(regs)) {
-		unsigned long ip = exception_ip(regs);
-		if (!search_exception_tables(ip))
-			return false;
-	}
-	return !mmap_write_lock_killable(mm);
-}
-
-/*
- * Helper for page fault handling.
- *
- * This is kind of equivalent to "mmap_read_lock()" followed
- * by "find_extend_vma()", except it's a lot more careful about
- * the locking (and will drop the lock on failure).
- *
- * For example, if we have a kernel bug that causes a page
- * fault, we don't want to just use mmap_read_lock() to get
- * the mm lock, because that would deadlock if the bug were
- * to happen while we're holding the mm lock for writing.
- *
- * So this checks the exception tables on kernel faults in
- * order to only do this all for instructions that are actually
- * expected to fault.
- *
- * We can also actually take the mm lock for writing if we
- * need to extend the vma, which helps the VM layer a lot.
- */
-struct vm_area_struct *lock_mm_and_find_vma(struct mm_struct *mm,
-			unsigned long addr, struct pt_regs *regs)
-{
-	struct vm_area_struct *vma;
-
-	if (!get_mmap_lock_carefully(mm, regs))
-		return NULL;
-
-	vma = find_vma(mm, addr);
-	if (likely(vma && (vma->vm_start <= addr)))
-		return vma;
-
-	/*
-	 * Well, dang. We might still be successful, but only
-	 * if we can extend a vma to do so.
-	 */
-	if (!vma || !(vma->vm_flags & VM_GROWSDOWN)) {
-		mmap_read_unlock(mm);
-		return NULL;
-	}
-
-	/*
-	 * We can try to upgrade the mmap lock atomically,
-	 * in which case we can continue to use the vma
-	 * we already looked up.
-	 *
-	 * Otherwise we'll have to drop the mmap lock and
-	 * re-take it, and also look up the vma again,
-	 * re-checking it.
-	 */
-	if (!mmap_upgrade_trylock(mm)) {
-		if (!upgrade_mmap_lock_carefully(mm, regs))
-			return NULL;
-
-		vma = find_vma(mm, addr);
-		if (!vma)
-			goto fail;
-		if (vma->vm_start <= addr)
-			goto success;
-		if (!(vma->vm_flags & VM_GROWSDOWN))
-			goto fail;
-	}
-
-	if (expand_stack_locked(vma, addr))
-		goto fail;
-
-success:
-	mmap_write_downgrade(mm);
-	return vma;
-
-fail:
-	mmap_write_unlock(mm);
-	return NULL;
-}
-#endif
-
-#ifdef CONFIG_PER_VMA_LOCK
-static inline bool __vma_enter_locked(struct vm_area_struct *vma, bool detaching)
-{
-	unsigned int tgt_refcnt = VMA_LOCK_OFFSET;
-
-	/* Additional refcnt if the vma is attached. */
-	if (!detaching)
-		tgt_refcnt++;
-
-	/*
-	 * If vma is detached then only vma_mark_attached() can raise the
-	 * vm_refcnt. mmap_write_lock prevents racing with vma_mark_attached().
-	 */
-	if (!refcount_add_not_zero(VMA_LOCK_OFFSET, &vma->vm_refcnt))
-		return false;
-
-	rwsem_acquire(&vma->vmlock_dep_map, 0, 0, _RET_IP_);
-	rcuwait_wait_event(&vma->vm_mm->vma_writer_wait,
-		   refcount_read(&vma->vm_refcnt) == tgt_refcnt,
-		   TASK_UNINTERRUPTIBLE);
-	lock_acquired(&vma->vmlock_dep_map, _RET_IP_);
-
-	return true;
-}
-
-static inline void __vma_exit_locked(struct vm_area_struct *vma, bool *detached)
-{
-	*detached = refcount_sub_and_test(VMA_LOCK_OFFSET, &vma->vm_refcnt);
-	rwsem_release(&vma->vmlock_dep_map, _RET_IP_);
-}
-
-void __vma_start_write(struct vm_area_struct *vma, unsigned int mm_lock_seq)
-{
-	bool locked;
-
-	/*
-	 * __vma_enter_locked() returns false immediately if the vma is not
-	 * attached, otherwise it waits until refcnt is indicating that vma
-	 * is attached with no readers.
-	 */
-	locked = __vma_enter_locked(vma, false);
-
-	/*
-	 * We should use WRITE_ONCE() here because we can have concurrent reads
-	 * from the early lockless pessimistic check in vma_start_read().
-	 * We don't really care about the correctness of that early check, but
-	 * we should use WRITE_ONCE() for cleanliness and to keep KCSAN happy.
-	 */
-	WRITE_ONCE(vma->vm_lock_seq, mm_lock_seq);
-
-	if (locked) {
-		bool detached;
-
-		__vma_exit_locked(vma, &detached);
-		WARN_ON_ONCE(detached); /* vma should remain attached */
-	}
-}
-EXPORT_SYMBOL_GPL(__vma_start_write);
-
-void vma_mark_detached(struct vm_area_struct *vma)
-{
-	vma_assert_write_locked(vma);
-	vma_assert_attached(vma);
-
-	/*
-	 * We are the only writer, so no need to use vma_refcount_put().
-	 * The condition below is unlikely because the vma has been already
-	 * write-locked and readers can increment vm_refcnt only temporarily
-	 * before they check vm_lock_seq, realize the vma is locked and drop
-	 * back the vm_refcnt. That is a narrow window for observing a raised
-	 * vm_refcnt.
-	 */
-	if (unlikely(!refcount_dec_and_test(&vma->vm_refcnt))) {
-		/* Wait until vma is detached with no readers. */
-		if (__vma_enter_locked(vma, true)) {
-			bool detached;
-
-			__vma_exit_locked(vma, &detached);
-			WARN_ON_ONCE(!detached);
-		}
-	}
-}
-
-/*
- * Lookup and lock a VMA under RCU protection. Returned VMA is guaranteed to be
- * stable and not isolated. If the VMA is not found or is being modified the
- * function returns NULL.
- */
-struct vm_area_struct *lock_vma_under_rcu(struct mm_struct *mm,
-					  unsigned long address)
-{
-	MA_STATE(mas, &mm->mm_mt, address, address);
-	struct vm_area_struct *vma;
-
-	rcu_read_lock();
-retry:
-	vma = mas_walk(&mas);
-	if (!vma)
-		goto inval;
-
-	vma = vma_start_read(mm, vma);
-	if (IS_ERR_OR_NULL(vma)) {
-		/* Check if the VMA got isolated after we found it */
-		if (PTR_ERR(vma) == -EAGAIN) {
-			count_vm_vma_lock_event(VMA_LOCK_MISS);
-			/* The area was replaced with another one */
-			goto retry;
-		}
-
-		/* Failed to lock the VMA */
-		goto inval;
-	}
-	/*
-	 * At this point, we have a stable reference to a VMA: The VMA is
-	 * locked and we know it hasn't already been isolated.
-	 * From here on, we can access the VMA without worrying about which
-	 * fields are accessible for RCU readers.
-	 */
-
-	/* Check if the vma we locked is the right one. */
-	if (unlikely(vma->vm_mm != mm ||
-		     address < vma->vm_start || address >= vma->vm_end))
-		goto inval_end_read;
-
-	rcu_read_unlock();
-	return vma;
-
-inval_end_read:
-	vma_end_read(vma);
-inval:
-	rcu_read_unlock();
-	count_vm_vma_lock_event(VMA_LOCK_ABORT);
-	return NULL;
-}
-#endif /* CONFIG_PER_VMA_LOCK */
 
 #ifndef __PAGETABLE_P4D_FOLDED
 /*

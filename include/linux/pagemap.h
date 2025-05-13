@@ -945,19 +945,6 @@ static inline bool folio_contains(struct folio *folio, pgoff_t index)
 	return index - folio_index(folio) < folio_nr_pages(folio);
 }
 
-/*
- * Given the page we found in the page cache, return the page corresponding
- * to this index in the file
- */
-static inline struct page *find_subpage(struct page *head, pgoff_t index)
-{
-	/* HugeTLBfs wants the head page regardless */
-	if (PageHuge(head))
-		return head;
-
-	return head + (index & (thp_nr_pages(head) - 1));
-}
-
 unsigned filemap_get_folios(struct address_space *mapping, pgoff_t *start,
 		pgoff_t end, struct folio_batch *fbatch);
 unsigned filemap_get_folios_contig(struct address_space *mapping,
@@ -1308,9 +1295,9 @@ static inline bool filemap_range_needs_writeback(struct address_space *mapping,
  * struct readahead_control - Describes a readahead request.
  *
  * A readahead request is for consecutive pages.  Filesystems which
- * implement the ->readahead method should call readahead_page() or
- * readahead_page_batch() in a loop and attempt to start I/O against
- * each page in the request.
+ * implement the ->readahead method should call readahead_folio() or
+ * __readahead_batch() in a loop and attempt to start reads into each
+ * folio in the request.
  *
  * Most of the fields in this struct are private and should be accessed
  * by the functions below.
@@ -1416,22 +1403,6 @@ static inline struct folio *__readahead_folio(struct readahead_control *ractl)
 }
 
 /**
- * readahead_page - Get the next page to read.
- * @ractl: The current readahead request.
- *
- * Context: The page is locked and has an elevated refcount.  The caller
- * should decreases the refcount once the page has been submitted for I/O
- * and unlock the page once all I/O to that page has completed.
- * Return: A pointer to the next page, or %NULL if we are done.
- */
-static inline struct page *readahead_page(struct readahead_control *ractl)
-{
-	struct folio *folio = __readahead_folio(ractl);
-
-	return &folio->page;
-}
-
-/**
  * readahead_folio - Get the next folio to read.
  * @ractl: The current readahead request.
  *
@@ -1453,7 +1424,7 @@ static inline unsigned int __readahead_batch(struct readahead_control *rac,
 {
 	unsigned int i = 0;
 	XA_STATE(xas, &rac->mapping->i_pages, 0);
-	struct page *page;
+	struct folio *folio;
 
 	BUG_ON(rac->_batch_count > rac->_nr_pages);
 	rac->_nr_pages -= rac->_batch_count;
@@ -1462,13 +1433,12 @@ static inline unsigned int __readahead_batch(struct readahead_control *rac,
 
 	xas_set(&xas, rac->_index);
 	rcu_read_lock();
-	xas_for_each(&xas, page, rac->_index + rac->_nr_pages - 1) {
-		if (xas_retry(&xas, page))
+	xas_for_each(&xas, folio, rac->_index + rac->_nr_pages - 1) {
+		if (xas_retry(&xas, folio))
 			continue;
-		VM_BUG_ON_PAGE(!PageLocked(page), page);
-		VM_BUG_ON_PAGE(PageTail(page), page);
-		array[i++] = page;
-		rac->_batch_count += thp_nr_pages(page);
+		VM_BUG_ON_FOLIO(!folio_test_locked(folio), folio);
+		array[i++] = folio_page(folio, 0);
+		rac->_batch_count += folio_nr_pages(folio);
 		if (i == array_sz)
 			break;
 	}
@@ -1476,20 +1446,6 @@ static inline unsigned int __readahead_batch(struct readahead_control *rac,
 
 	return i;
 }
-
-/**
- * readahead_page_batch - Get a batch of pages to read.
- * @rac: The current readahead request.
- * @array: An array of pointers to struct page.
- *
- * Context: The pages are locked and have an elevated refcount.  The caller
- * should decreases the refcount once the page has been submitted for I/O
- * and unlock the page once all I/O to that page has completed.
- * Return: The number of pages placed in the array.  0 indicates the request
- * is complete.
- */
-#define readahead_page_batch(rac, array)				\
-	__readahead_batch(rac, array, ARRAY_SIZE(array))
 
 /**
  * readahead_pos - The byte offset into the file of this readahead request.

@@ -113,6 +113,7 @@
 #include <asm/tlbflush.h>
 #include <asm/tlb.h>
 #include <linux/uaccess.h>
+#include <linux/memory.h>
 
 #include "internal.h"
 
@@ -566,6 +567,7 @@ static void queue_folios_pmd(pmd_t *pmd, struct mm_walk *walk)
 static int queue_folios_pte_range(pmd_t *pmd, unsigned long addr,
 			unsigned long end, struct mm_walk *walk)
 {
+	const fpb_t fpb_flags = FPB_IGNORE_DIRTY | FPB_IGNORE_SOFT_DIRTY;
 	struct vm_area_struct *vma = walk->vma;
 	struct folio *folio;
 	struct queue_pages *qp = walk->private;
@@ -573,6 +575,7 @@ static int queue_folios_pte_range(pmd_t *pmd, unsigned long addr,
 	pte_t *pte, *mapped_pte;
 	pte_t ptent;
 	spinlock_t *ptl;
+	int max_nr, nr;
 
 	ptl = pmd_trans_huge_lock(pmd, vma);
 	if (ptl) {
@@ -586,7 +589,9 @@ static int queue_folios_pte_range(pmd_t *pmd, unsigned long addr,
 		walk->action = ACTION_AGAIN;
 		return 0;
 	}
-	for (; addr != end; pte++, addr += PAGE_SIZE) {
+	for (; addr != end; pte += nr, addr += nr * PAGE_SIZE) {
+		max_nr = (end - addr) >> PAGE_SHIFT;
+		nr = 1;
 		ptent = ptep_get(pte);
 		if (pte_none(ptent))
 			continue;
@@ -598,6 +603,10 @@ static int queue_folios_pte_range(pmd_t *pmd, unsigned long addr,
 		folio = vm_normal_folio(vma, addr, ptent);
 		if (!folio || folio_is_zone_device(folio))
 			continue;
+		if (folio_test_large(folio) && max_nr != 1)
+			nr = folio_pte_batch(folio, addr, pte, ptent,
+					     max_nr, fpb_flags,
+					     NULL, NULL, NULL);
 		/*
 		 * vm_normal_folio() filters out zero pages, but there might
 		 * still be reserved folios to skip, perhaps in a VDSO.
@@ -630,7 +639,7 @@ static int queue_folios_pte_range(pmd_t *pmd, unsigned long addr,
 		if (!(flags & (MPOL_MF_MOVE | MPOL_MF_MOVE_ALL)) ||
 		    !vma_migratable(vma) ||
 		    !migrate_folio_add(folio, qp->pagelist, flags)) {
-			qp->nr_failed++;
+			qp->nr_failed += nr;
 			if (strictly_unmovable(flags))
 				break;
 		}
@@ -3419,6 +3428,14 @@ struct iw_node_attr {
 	int nid;
 };
 
+struct sysfs_wi_group {
+	struct kobject wi_kobj;
+	struct mutex kobj_lock;
+	struct iw_node_attr *nattrs[];
+};
+
+static struct sysfs_wi_group *wi_group;
+
 static ssize_t node_show(struct kobject *kobj, struct kobj_attribute *attr,
 			 char *buf)
 {
@@ -3461,94 +3478,37 @@ static ssize_t node_store(struct kobject *kobj, struct kobj_attribute *attr,
 	return count;
 }
 
-static struct iw_node_attr **node_attrs;
-
-static void sysfs_wi_node_release(struct iw_node_attr *node_attr,
-				  struct kobject *parent)
+static void sysfs_wi_node_delete(int nid)
 {
-	if (!node_attr)
+	struct iw_node_attr *attr;
+
+	if (nid < 0 || nid >= nr_node_ids)
 		return;
-	sysfs_remove_file(parent, &node_attr->kobj_attr.attr);
-	kfree(node_attr->kobj_attr.attr.name);
-	kfree(node_attr);
+
+	mutex_lock(&wi_group->kobj_lock);
+	attr = wi_group->nattrs[nid];
+	if (!attr) {
+		mutex_unlock(&wi_group->kobj_lock);
+		return;
+	}
+
+	wi_group->nattrs[nid] = NULL;
+	mutex_unlock(&wi_group->kobj_lock);
+
+	sysfs_remove_file(&wi_group->wi_kobj, &attr->kobj_attr.attr);
+	kfree(attr->kobj_attr.attr.name);
+	kfree(attr);
 }
 
-static void sysfs_wi_release(struct kobject *wi_kobj)
+static void sysfs_wi_node_delete_all(void)
 {
-	int i;
+	int nid;
 
-	for (i = 0; i < nr_node_ids; i++)
-		sysfs_wi_node_release(node_attrs[i], wi_kobj);
-	kobject_put(wi_kobj);
+	for (nid = 0; nid < nr_node_ids; nid++)
+		sysfs_wi_node_delete(nid);
 }
 
-static const struct kobj_type wi_ktype = {
-	.sysfs_ops = &kobj_sysfs_ops,
-	.release = sysfs_wi_release,
-};
-
-static int add_weight_node(int nid, struct kobject *wi_kobj)
-{
-	struct iw_node_attr *node_attr;
-	char *name;
-
-	node_attr = kzalloc(sizeof(*node_attr), GFP_KERNEL);
-	if (!node_attr)
-		return -ENOMEM;
-
-	name = kasprintf(GFP_KERNEL, "node%d", nid);
-	if (!name) {
-		kfree(node_attr);
-		return -ENOMEM;
-	}
-
-	sysfs_attr_init(&node_attr->kobj_attr.attr);
-	node_attr->kobj_attr.attr.name = name;
-	node_attr->kobj_attr.attr.mode = 0644;
-	node_attr->kobj_attr.show = node_show;
-	node_attr->kobj_attr.store = node_store;
-	node_attr->nid = nid;
-
-	if (sysfs_create_file(wi_kobj, &node_attr->kobj_attr.attr)) {
-		kfree(node_attr->kobj_attr.attr.name);
-		kfree(node_attr);
-		pr_err("failed to add attribute to weighted_interleave\n");
-		return -ENOMEM;
-	}
-
-	node_attrs[nid] = node_attr;
-	return 0;
-}
-
-static int add_weighted_interleave_group(struct kobject *root_kobj)
-{
-	struct kobject *wi_kobj;
-	int nid, err;
-
-	wi_kobj = kzalloc(sizeof(struct kobject), GFP_KERNEL);
-	if (!wi_kobj)
-		return -ENOMEM;
-
-	err = kobject_init_and_add(wi_kobj, &wi_ktype, root_kobj,
-				   "weighted_interleave");
-	if (err) {
-		kfree(wi_kobj);
-		return err;
-	}
-
-	for_each_node_state(nid, N_POSSIBLE) {
-		err = add_weight_node(nid, wi_kobj);
-		if (err) {
-			pr_err("failed to add sysfs [node%d]\n", nid);
-			break;
-		}
-	}
-	if (err)
-		kobject_put(wi_kobj);
-	return 0;
-}
-
-static void mempolicy_kobj_release(struct kobject *kobj)
+static void iw_table_free(void)
 {
 	u8 *old;
 
@@ -3557,53 +3517,157 @@ static void mempolicy_kobj_release(struct kobject *kobj)
 					lockdep_is_held(&iw_table_lock));
 	rcu_assign_pointer(iw_table, NULL);
 	mutex_unlock(&iw_table_lock);
+
 	synchronize_rcu();
 	kfree(old);
-	kfree(node_attrs);
-	kfree(kobj);
 }
 
-static const struct kobj_type mempolicy_ktype = {
-	.release = mempolicy_kobj_release
+static void wi_cleanup(void) {
+	sysfs_wi_node_delete_all();
+	iw_table_free();
+}
+
+static void wi_kobj_release(struct kobject *wi_kobj)
+{
+	kfree(wi_group);
+}
+
+static const struct kobj_type wi_ktype = {
+	.sysfs_ops = &kobj_sysfs_ops,
+	.release = wi_kobj_release,
 };
+
+static int sysfs_wi_node_add(int nid)
+{
+	int ret;
+	char *name;
+	struct iw_node_attr *new_attr;
+
+	if (nid < 0 || nid >= nr_node_ids) {
+		pr_err("invalid node id: %d\n", nid);
+		return -EINVAL;
+	}
+
+	new_attr = kzalloc(sizeof(*new_attr), GFP_KERNEL);
+	if (!new_attr)
+		return -ENOMEM;
+
+	name = kasprintf(GFP_KERNEL, "node%d", nid);
+	if (!name) {
+		kfree(new_attr);
+		return -ENOMEM;
+	}
+
+	sysfs_attr_init(&new_attr->kobj_attr.attr);
+	new_attr->kobj_attr.attr.name = name;
+	new_attr->kobj_attr.attr.mode = 0644;
+	new_attr->kobj_attr.show = node_show;
+	new_attr->kobj_attr.store = node_store;
+	new_attr->nid = nid;
+
+	mutex_lock(&wi_group->kobj_lock);
+	if (wi_group->nattrs[nid]) {
+		mutex_unlock(&wi_group->kobj_lock);
+		ret = -EEXIST;
+		goto out;
+	}
+
+	ret = sysfs_create_file(&wi_group->wi_kobj, &new_attr->kobj_attr.attr);
+	if (ret) {
+		mutex_unlock(&wi_group->kobj_lock);
+		goto out;
+	}
+	wi_group->nattrs[nid] = new_attr;
+	mutex_unlock(&wi_group->kobj_lock);
+	return 0;
+
+out:
+	kfree(new_attr->kobj_attr.attr.name);
+	kfree(new_attr);
+	return ret;
+}
+
+static int wi_node_notifier(struct notifier_block *nb,
+			       unsigned long action, void *data)
+{
+	int err;
+	struct memory_notify *arg = data;
+	int nid = arg->status_change_nid;
+
+	if (nid < 0)
+		return NOTIFY_OK;
+
+	switch (action) {
+	case MEM_ONLINE:
+		err = sysfs_wi_node_add(nid);
+		if (err)
+			pr_err("failed to add sysfs for node%d during hotplug: %d\n",
+			       nid, err);
+		break;
+	case MEM_OFFLINE:
+		sysfs_wi_node_delete(nid);
+		break;
+	}
+
+	return NOTIFY_OK;
+}
+
+static int __init add_weighted_interleave_group(struct kobject *mempolicy_kobj)
+{
+	int nid, err;
+
+	wi_group = kzalloc(struct_size(wi_group, nattrs, nr_node_ids),
+			   GFP_KERNEL);
+	if (!wi_group)
+		return -ENOMEM;
+	mutex_init(&wi_group->kobj_lock);
+
+	err = kobject_init_and_add(&wi_group->wi_kobj, &wi_ktype, mempolicy_kobj,
+				   "weighted_interleave");
+	if (err)
+		goto err_put_kobj;
+
+	for_each_online_node(nid) {
+		if (!node_state(nid, N_MEMORY))
+			continue;
+
+		err = sysfs_wi_node_add(nid);
+		if (err) {
+			pr_err("failed to add sysfs for node%d during init: %d\n",
+			       nid, err);
+			goto err_cleanup_kobj;
+		}
+	}
+
+	hotplug_memory_notifier(wi_node_notifier, DEFAULT_CALLBACK_PRI);
+	return 0;
+
+err_cleanup_kobj:
+	wi_cleanup();
+	kobject_del(&wi_group->wi_kobj);
+err_put_kobj:
+	kobject_put(&wi_group->wi_kobj);
+	return err;
+}
 
 static int __init mempolicy_sysfs_init(void)
 {
 	int err;
 	static struct kobject *mempolicy_kobj;
 
-	mempolicy_kobj = kzalloc(sizeof(*mempolicy_kobj), GFP_KERNEL);
-	if (!mempolicy_kobj) {
-		err = -ENOMEM;
-		goto err_out;
-	}
-
-	node_attrs = kcalloc(nr_node_ids, sizeof(struct iw_node_attr *),
-			     GFP_KERNEL);
-	if (!node_attrs) {
-		err = -ENOMEM;
-		goto mempol_out;
-	}
-
-	err = kobject_init_and_add(mempolicy_kobj, &mempolicy_ktype, mm_kobj,
-				   "mempolicy");
-	if (err)
-		goto node_out;
+	mempolicy_kobj = kobject_create_and_add("mempolicy", mm_kobj);
+	if (!mempolicy_kobj)
+		return -ENOMEM;
 
 	err = add_weighted_interleave_group(mempolicy_kobj);
-	if (err) {
-		pr_err("mempolicy sysfs structure failed to initialize\n");
-		kobject_put(mempolicy_kobj);
-		return err;
-	}
+	if (err)
+		goto err_kobj;
 
-	return err;
-node_out:
-	kfree(node_attrs);
-mempol_out:
-	kfree(mempolicy_kobj);
-err_out:
-	pr_err("failed to add mempolicy kobject to the system\n");
+	return 0;
+
+err_kobj:
+	kobject_del(mempolicy_kobj);
+	kobject_put(mempolicy_kobj);
 	return err;
 }
 
