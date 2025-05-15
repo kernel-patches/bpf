@@ -45,7 +45,7 @@ static struct {
 
 static void verify_success(const char *prog_name, enum test_setup_type setup_type)
 {
-	char user_data[384] = {[0 ... 382] = 'a', '\0'};
+	char user_data[384] = {[0 ... 383] = 'a'};
 	struct dynptr_success *skel;
 	struct bpf_program *prog;
 	struct bpf_link *link;
