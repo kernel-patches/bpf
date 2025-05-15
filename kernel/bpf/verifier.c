@@ -206,6 +206,7 @@ static int ref_set_non_owning(struct bpf_verifier_env *env,
 static void specialize_kfunc(struct bpf_verifier_env *env,
 			     u32 func_id, u16 offset, unsigned long *addr);
 static bool is_trusted_reg(const struct bpf_reg_state *reg);
+static void verbose_insn(struct bpf_verifier_env *env, struct bpf_insn *insn);
 
 static bool bpf_map_ptr_poisoned(const struct bpf_insn_aux_data *aux)
 {
@@ -3399,7 +3400,10 @@ static int check_subprogs(struct bpf_verifier_env *env)
 	int i, subprog_start, subprog_end, off, cur_subprog = 0;
 	struct bpf_subprog_info *subprog = env->subprog_info;
 	struct bpf_insn *insn = env->prog->insnsi;
+	bool is_bpf_unreachable = false;
 	int insn_cnt = env->prog->len;
+	const struct btf_type *t;
+	const char *tname;
 
 	/* now check that all jumps are within the same subprog */
 	subprog_start = subprog[cur_subprog].start;
@@ -3434,7 +3438,18 @@ next:
 			if (code != (BPF_JMP | BPF_EXIT) &&
 			    code != (BPF_JMP32 | BPF_JA) &&
 			    code != (BPF_JMP | BPF_JA)) {
-				verbose(env, "last insn is not an exit or jmp\n");
+				verbose_insn(env, &insn[i]);
+				if (btf_vmlinux && insn[i].code == (BPF_CALL | BPF_JMP) &&
+				    insn[i].src_reg == BPF_PSEUDO_KFUNC_CALL) {
+					t = btf_type_by_id(btf_vmlinux, insn[i].imm);
+					tname = btf_name_by_offset(btf_vmlinux, t->name_off);
+					if (strcmp(tname, "bpf_unreachable") == 0)
+						is_bpf_unreachable = true;
+				}
+				if (is_bpf_unreachable)
+					verbose(env, "last insn is bpf_unreachable, due to uninitialized var?\n");
+				else
+					verbose(env, "last insn is not an exit or jmp\n");
 				return -EINVAL;
 			}
 			subprog_start = subprog_end;
@@ -12122,6 +12137,7 @@ enum special_kfunc_type {
 	KF_bpf_res_spin_unlock,
 	KF_bpf_res_spin_lock_irqsave,
 	KF_bpf_res_spin_unlock_irqrestore,
+	KF_bpf_unreachable,
 };
 
 BTF_SET_START(special_kfunc_set)
@@ -12225,6 +12241,7 @@ BTF_ID(func, bpf_res_spin_lock)
 BTF_ID(func, bpf_res_spin_unlock)
 BTF_ID(func, bpf_res_spin_lock_irqsave)
 BTF_ID(func, bpf_res_spin_unlock_irqrestore)
+BTF_ID(func, bpf_unreachable)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -13525,6 +13542,9 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			return err;
 		}
 		__mark_btf_func_reg_size(env, regs, BPF_REG_0, sizeof(u32));
+	} else if (insn->imm == special_kfunc_list[KF_bpf_unreachable]) {
+		verbose(env, "unexpected hit bpf_unreachable, due to uninit var or incorrect verification?\n");
+		return -EFAULT;
 	}
 
 	if (is_kfunc_destructive(&meta) && !capable(CAP_SYS_BOOT)) {
