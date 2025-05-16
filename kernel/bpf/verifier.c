@@ -3739,6 +3739,11 @@ static int check_reg_arg(struct bpf_verifier_env *env, u32 regno,
 	return __check_reg_arg(env, state->regs, regno, t);
 }
 
+static int insn_reg_with_access_flag(int reg)
+{
+	return INSN_F_REG_ACCESS | reg;
+}
+
 static int insn_stack_access_flags(int frameno, int spi)
 {
 	return INSN_F_STACK_ACCESS | (spi << INSN_F_SPI_SHIFT) | frameno;
@@ -3844,7 +3849,7 @@ static void linked_regs_unpack(u64 val, struct linked_regs *s)
 
 /* for any branch, call, exit record the history of jmps in the given state */
 static int push_insn_history(struct bpf_verifier_env *env, struct bpf_verifier_state *cur,
-			     int insn_flags, u64 linked_regs)
+			     int insn_flags, u64 linked_regs, u8 sreg_flag, u8 dreg_flag)
 {
 	struct bpf_insn_hist_entry *p;
 	size_t alloc_size;
@@ -3863,6 +3868,8 @@ static int push_insn_history(struct bpf_verifier_env *env, struct bpf_verifier_s
 				"insn history: insn_idx %d linked_regs: %#llx",
 				env->insn_idx, env->cur_hist_ent->linked_regs);
 		env->cur_hist_ent->linked_regs = linked_regs;
+		env->cur_hist_ent->sreg_flag = sreg_flag;
+		env->cur_hist_ent->dreg_flag = dreg_flag;
 		return 0;
 	}
 
@@ -3880,6 +3887,8 @@ static int push_insn_history(struct bpf_verifier_env *env, struct bpf_verifier_s
 	p->prev_idx = env->prev_insn_idx;
 	p->flags = insn_flags;
 	p->linked_regs = linked_regs;
+	p->sreg_flag = sreg_flag;
+	p->dreg_flag = dreg_flag;
 
 	cur->insn_hist_end++;
 	env->cur_hist_ent = p;
@@ -4402,6 +4411,8 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			 */
 			return 0;
 		} else if (BPF_SRC(insn->code) == BPF_X) {
+			bool dreg_precise, sreg_precise;
+
 			if (!bt_is_reg_set(bt, dreg) && !bt_is_reg_set(bt, sreg))
 				return 0;
 			/* dreg <cond> sreg
@@ -4410,8 +4421,16 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			 * before it would be equally necessary to
 			 * propagate it to dreg.
 			 */
-			bt_set_reg(bt, dreg);
-			bt_set_reg(bt, sreg);
+			if (!hist)
+				return 0;
+			dreg_precise = hist->dreg_flag == insn_reg_with_access_flag(dreg);
+			sreg_precise = hist->sreg_flag == insn_reg_with_access_flag(sreg);
+			if (!dreg_precise && !sreg_precise)
+				return 0;
+			if (dreg_precise)
+				bt_set_reg(bt, dreg);
+			if (sreg_precise)
+				bt_set_reg(bt, sreg);
 		} else if (BPF_SRC(insn->code) == BPF_K) {
 			 /* dreg <cond> K
 			  * Only dreg still needs precision before
@@ -5107,7 +5126,7 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 	}
 
 	if (insn_flags)
-		return push_insn_history(env, env->cur_state, insn_flags, 0);
+		return push_insn_history(env, env->cur_state, insn_flags, 0, 0, 0);
 	return 0;
 }
 
@@ -5414,7 +5433,7 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 		insn_flags = 0; /* we are not restoring spilled register */
 	}
 	if (insn_flags)
-		return push_insn_history(env, env->cur_state, insn_flags, 0);
+		return push_insn_history(env, env->cur_state, insn_flags, 0, 0, 0);
 	return 0;
 }
 
@@ -16397,6 +16416,27 @@ static void sync_linked_regs(struct bpf_verifier_state *vstate, struct bpf_reg_s
 	}
 }
 
+static int push_cond_jmp_history(struct bpf_verifier_env *env, struct bpf_verifier_state *state,
+				 struct bpf_insn *insn, u64 linked_regs)
+{
+	int err;
+
+	if ((BPF_SRC(insn->code) != BPF_X ||
+	     (insn->src_reg == BPF_REG_FP && insn->dst_reg == BPF_REG_FP)) &&
+	    !linked_regs)
+		return 0;
+
+	err = push_insn_history(env, state, 0, linked_regs,
+		BPF_SRC(insn->code) == BPF_X && insn->src_reg != BPF_REG_FP
+			? insn_reg_with_access_flag(insn->src_reg)
+			: 0,
+		BPF_SRC(insn->code) == BPF_X && insn->dst_reg != BPF_REG_FP
+			? insn_reg_with_access_flag(insn->dst_reg)
+			: 0);
+
+	return err;
+}
+
 static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			     struct bpf_insn *insn, int *insn_idx)
 {
@@ -16500,6 +16540,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		    !sanitize_speculative_path(env, insn, *insn_idx + 1,
 					       *insn_idx))
 			return -EFAULT;
+		err = push_cond_jmp_history(env, this_branch, insn, 0);
+		if (err)
+			return err;
 		if (env->log.level & BPF_LOG_LEVEL)
 			print_insn_state(env, this_branch, this_branch->curframe);
 		*insn_idx += insn->off;
@@ -16514,6 +16557,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 					       *insn_idx + insn->off + 1,
 					       *insn_idx))
 			return -EFAULT;
+		err = push_cond_jmp_history(env, this_branch, insn, 0);
+		if (err)
+			return err;
 		if (env->log.level & BPF_LOG_LEVEL)
 			print_insn_state(env, this_branch, this_branch->curframe);
 		return 0;
@@ -16528,11 +16574,10 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		collect_linked_regs(this_branch, src_reg->id, &linked_regs);
 	if (dst_reg->type == SCALAR_VALUE && dst_reg->id)
 		collect_linked_regs(this_branch, dst_reg->id, &linked_regs);
-	if (linked_regs.cnt > 1) {
-		err = push_insn_history(env, this_branch, 0, linked_regs_pack(&linked_regs));
-		if (err)
-			return err;
-	}
+	err = push_cond_jmp_history(env, this_branch, insn,
+				    linked_regs.cnt > 1 ? linked_regs_pack(&linked_regs) : 0);
+	if (err)
+		return err;
 
 	other_branch = push_stack(env, *insn_idx + insn->off + 1, *insn_idx,
 				  false);
@@ -19226,7 +19271,7 @@ hit:
 			 * the current state.
 			 */
 			if (is_jmp_point(env, env->insn_idx))
-				err = err ? : push_insn_history(env, cur, 0, 0);
+				err = err ? : push_insn_history(env, cur, 0, 0, 0, 0);
 			err = err ? : propagate_precision(env, &sl->state);
 			if (err)
 				return err;
@@ -19477,7 +19522,7 @@ static int do_check(struct bpf_verifier_env *env)
 		}
 
 		if (is_jmp_point(env, env->insn_idx)) {
-			err = push_insn_history(env, state, 0, 0);
+			err = push_insn_history(env, state, 0, 0, 0, 0);
 			if (err)
 				return err;
 		}

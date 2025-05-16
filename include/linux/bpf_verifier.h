@@ -357,6 +357,8 @@ enum {
 	INSN_F_SPI_SHIFT = 3, /* shifted 3 bits to the left */
 
 	INSN_F_STACK_ACCESS = BIT(9), /* we need 10 bits total */
+
+	INSN_F_REG_ACCESS = BIT(4), /* we need 5 bits total */
 };
 
 static_assert(INSN_F_FRAMENO_MASK + 1 >= MAX_CALL_FRAMES);
@@ -372,6 +374,11 @@ struct bpf_insn_hist_entry {
 	 * jump is backtracked, vector of six 10-bit records
 	 */
 	u64 linked_regs;
+	/* special flag, e.g., whether reg is used for non-load/store insns
+	 * during precision backtracking.
+	 */
+	u8 sreg_flag;
+	u8 dreg_flag;
 };
 
 /* Maximum number of register states that can exist at once */
