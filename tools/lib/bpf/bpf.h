@@ -704,6 +704,21 @@ struct bpf_token_create_opts {
 LIBBPF_API int bpf_token_create(int bpffs_fd,
 				struct bpf_token_create_opts *opts);
 
+/**
+ * @brief **bpf_prog_stream_read** reads data from the BPF stream of a given BPF
+ * program.
+ *
+ * @param prog_fd FD for the BPF program whose BPF stream is to be read.
+ * @param stream_id ID of the BPF stream to be read.
+ * @param stream_buf Buffer to read data into from the BPF stream.
+ * @param stream_buf_len Maximum number of bytes to read from the BPF stream.
+ *
+ * @return The number of bytes read, on success; negative error code, otherwise
+ * (errno is also set to the error code)
+ */
+LIBBPF_API int bpf_prog_stream_read(int prog_fd, __u32 stream_id, void *stream_buf,
+				    __u32 stream_buf_len);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
