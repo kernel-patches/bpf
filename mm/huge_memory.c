@@ -79,6 +79,7 @@ static atomic_t huge_zero_refcount;
 struct folio *huge_zero_folio __read_mostly;
 unsigned long huge_zero_pfn __read_mostly = ~0UL;
 unsigned long huge_anon_orders_always __read_mostly;
+unsigned long huge_anon_orders_bpf __read_mostly;
 unsigned long huge_anon_orders_madvise __read_mostly;
 unsigned long huge_anon_orders_inherit __read_mostly;
 static bool anon_orders_configured __initdata;
@@ -297,12 +298,15 @@ static ssize_t enabled_show(struct kobject *kobj,
 	const char *output;
 
 	if (test_bit(TRANSPARENT_HUGEPAGE_FLAG, &transparent_hugepage_flags))
-		output = "[always] madvise never";
+		output = "[always] bpf madvise never";
+	else if (test_bit(TRANSPARENT_HUGEPAGE_REQ_BPF_FLAG,
+			  &transparent_hugepage_flags))
+		output = "always [bpf] madvise never";
 	else if (test_bit(TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG,
 			  &transparent_hugepage_flags))
-		output = "always [madvise] never";
+		output = "always bpf [madvise] never";
 	else
-		output = "always madvise [never]";
+		output = "always bpf madvise [never]";
 
 	return sysfs_emit(buf, "%s\n", output);
 }
@@ -315,13 +319,20 @@ static ssize_t enabled_store(struct kobject *kobj,
 
 	if (sysfs_streq(buf, "always")) {
 		clear_bit(TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG, &transparent_hugepage_flags);
+		clear_bit(TRANSPARENT_HUGEPAGE_REQ_BPF_FLAG, &transparent_hugepage_flags);
 		set_bit(TRANSPARENT_HUGEPAGE_FLAG, &transparent_hugepage_flags);
+	} else if (sysfs_streq(buf, "bpf")) {
+		clear_bit(TRANSPARENT_HUGEPAGE_FLAG, &transparent_hugepage_flags);
+		clear_bit(TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG, &transparent_hugepage_flags);
+		set_bit(TRANSPARENT_HUGEPAGE_REQ_BPF_FLAG, &transparent_hugepage_flags);
 	} else if (sysfs_streq(buf, "madvise")) {
 		clear_bit(TRANSPARENT_HUGEPAGE_FLAG, &transparent_hugepage_flags);
+		clear_bit(TRANSPARENT_HUGEPAGE_REQ_BPF_FLAG, &transparent_hugepage_flags);
 		set_bit(TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG, &transparent_hugepage_flags);
 	} else if (sysfs_streq(buf, "never")) {
 		clear_bit(TRANSPARENT_HUGEPAGE_FLAG, &transparent_hugepage_flags);
 		clear_bit(TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG, &transparent_hugepage_flags);
+		clear_bit(TRANSPARENT_HUGEPAGE_REQ_BPF_FLAG, &transparent_hugepage_flags);
 	} else
 		ret = -EINVAL;
 
@@ -495,13 +506,15 @@ static ssize_t anon_enabled_show(struct kobject *kobj,
 	const char *output;
 
 	if (test_bit(order, &huge_anon_orders_always))
-		output = "[always] inherit madvise never";
+		output = "[always] bpf inherit madvise never";
+	else if (test_bit(order, &huge_anon_orders_bpf))
+		output = "always [bpf] inherit madvise never";
 	else if (test_bit(order, &huge_anon_orders_inherit))
-		output = "always [inherit] madvise never";
+		output = "always bpf [inherit] madvise never";
 	else if (test_bit(order, &huge_anon_orders_madvise))
-		output = "always inherit [madvise] never";
+		output = "always bpf inherit [madvise] never";
 	else
-		output = "always inherit madvise [never]";
+		output = "always bpf inherit madvise [never]";
 
 	return sysfs_emit(buf, "%s\n", output);
 }
@@ -515,25 +528,36 @@ static ssize_t anon_enabled_store(struct kobject *kobj,
 
 	if (sysfs_streq(buf, "always")) {
 		spin_lock(&huge_anon_orders_lock);
+		clear_bit(order, &huge_anon_orders_bpf);
 		clear_bit(order, &huge_anon_orders_inherit);
 		clear_bit(order, &huge_anon_orders_madvise);
 		set_bit(order, &huge_anon_orders_always);
 		spin_unlock(&huge_anon_orders_lock);
+	} else if (sysfs_streq(buf, "bpf")) {
+		spin_lock(&huge_anon_orders_lock);
+		clear_bit(order, &huge_anon_orders_always);
+		clear_bit(order, &huge_anon_orders_inherit);
+		clear_bit(order, &huge_anon_orders_madvise);
+		set_bit(order, &huge_anon_orders_bpf);
+		spin_unlock(&huge_anon_orders_lock);
 	} else if (sysfs_streq(buf, "inherit")) {
 		spin_lock(&huge_anon_orders_lock);
 		clear_bit(order, &huge_anon_orders_always);
+		clear_bit(order, &huge_anon_orders_bpf);
 		clear_bit(order, &huge_anon_orders_madvise);
 		set_bit(order, &huge_anon_orders_inherit);
 		spin_unlock(&huge_anon_orders_lock);
 	} else if (sysfs_streq(buf, "madvise")) {
 		spin_lock(&huge_anon_orders_lock);
 		clear_bit(order, &huge_anon_orders_always);
+		clear_bit(order, &huge_anon_orders_bpf);
 		clear_bit(order, &huge_anon_orders_inherit);
 		set_bit(order, &huge_anon_orders_madvise);
 		spin_unlock(&huge_anon_orders_lock);
 	} else if (sysfs_streq(buf, "never")) {
 		spin_lock(&huge_anon_orders_lock);
 		clear_bit(order, &huge_anon_orders_always);
+		clear_bit(order, &huge_anon_orders_bpf);
 		clear_bit(order, &huge_anon_orders_inherit);
 		clear_bit(order, &huge_anon_orders_madvise);
 		spin_unlock(&huge_anon_orders_lock);
@@ -943,10 +967,22 @@ static int __init setup_transparent_hugepage(char *str)
 			&transparent_hugepage_flags);
 		clear_bit(TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG,
 			  &transparent_hugepage_flags);
+		clear_bit(TRANSPARENT_HUGEPAGE_REQ_BPF_FLAG,
+			&transparent_hugepage_flags);
+		ret = 1;
+	} else if (!strcmp(str, "bpf")) {
+		clear_bit(TRANSPARENT_HUGEPAGE_FLAG,
+			  &transparent_hugepage_flags);
+		clear_bit(TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG,
+			  &transparent_hugepage_flags);
+		set_bit(TRANSPARENT_HUGEPAGE_REQ_BPF_FLAG,
+			&transparent_hugepage_flags);
 		ret = 1;
 	} else if (!strcmp(str, "madvise")) {
 		clear_bit(TRANSPARENT_HUGEPAGE_FLAG,
 			  &transparent_hugepage_flags);
+		clear_bit(TRANSPARENT_HUGEPAGE_REQ_BPF_FLAG,
+			&transparent_hugepage_flags);
 		set_bit(TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG,
 			&transparent_hugepage_flags);
 		ret = 1;
@@ -955,6 +991,8 @@ static int __init setup_transparent_hugepage(char *str)
 			  &transparent_hugepage_flags);
 		clear_bit(TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG,
 			  &transparent_hugepage_flags);
+		clear_bit(TRANSPARENT_HUGEPAGE_REQ_BPF_FLAG,
+			&transparent_hugepage_flags);
 		ret = 1;
 	}
 out:
@@ -967,8 +1005,8 @@ __setup("transparent_hugepage=", setup_transparent_hugepage);
 static char str_dup[PAGE_SIZE] __initdata;
 static int __init setup_thp_anon(char *str)
 {
+	unsigned long always, bpf, inherit, madvise;
 	char *token, *range, *policy, *subtoken;
-	unsigned long always, inherit, madvise;
 	char *start_size, *end_size;
 	int start, end, nr;
 	char *p;
@@ -978,6 +1016,7 @@ static int __init setup_thp_anon(char *str)
 	strscpy(str_dup, str);
 
 	always = huge_anon_orders_always;
+	bpf = huge_anon_orders_bpf;
 	madvise = huge_anon_orders_madvise;
 	inherit = huge_anon_orders_inherit;
 	p = str_dup;
@@ -1019,18 +1058,27 @@ static int __init setup_thp_anon(char *str)
 				bitmap_set(&always, start, nr);
 				bitmap_clear(&inherit, start, nr);
 				bitmap_clear(&madvise, start, nr);
+				bitmap_clear(&bpf, start, nr);
+			} else if (!strcmp(policy, "bpf")) {
+				bitmap_set(&bpf, start, nr);
+				bitmap_clear(&inherit, start, nr);
+				bitmap_clear(&always, start, nr);
+				bitmap_clear(&madvise, start, nr);
 			} else if (!strcmp(policy, "madvise")) {
 				bitmap_set(&madvise, start, nr);
 				bitmap_clear(&inherit, start, nr);
 				bitmap_clear(&always, start, nr);
+				bitmap_clear(&bpf, start, nr);
 			} else if (!strcmp(policy, "inherit")) {
 				bitmap_set(&inherit, start, nr);
 				bitmap_clear(&madvise, start, nr);
 				bitmap_clear(&always, start, nr);
+				bitmap_clear(&bpf, start, nr);
 			} else if (!strcmp(policy, "never")) {
 				bitmap_clear(&inherit, start, nr);
 				bitmap_clear(&madvise, start, nr);
 				bitmap_clear(&always, start, nr);
+				bitmap_clear(&bpf, start, nr);
 			} else {
 				pr_err("invalid policy %s in thp_anon boot parameter\n", policy);
 				goto err;
@@ -1041,6 +1089,7 @@ static int __init setup_thp_anon(char *str)
 	huge_anon_orders_always = always;
 	huge_anon_orders_madvise = madvise;
 	huge_anon_orders_inherit = inherit;
+	huge_anon_orders_bpf = bpf;
 	anon_orders_configured = true;
 	return 1;
 

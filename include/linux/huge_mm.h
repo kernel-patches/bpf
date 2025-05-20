@@ -54,6 +54,7 @@ enum transparent_hugepage_flag {
 	TRANSPARENT_HUGEPAGE_DEFRAG_REQ_MADV_FLAG,
 	TRANSPARENT_HUGEPAGE_DEFRAG_KHUGEPAGED_FLAG,
 	TRANSPARENT_HUGEPAGE_USE_ZERO_PAGE_FLAG,
+	TRANSPARENT_HUGEPAGE_REQ_BPF_FLAG,	/* "bpf" mode */
 };
 
 struct kobject;
@@ -174,6 +175,7 @@ static inline void count_mthp_stat(int order, enum mthp_stat_item item)
 
 extern unsigned long transparent_hugepage_flags;
 extern unsigned long huge_anon_orders_always;
+extern unsigned long huge_anon_orders_bpf;
 extern unsigned long huge_anon_orders_madvise;
 extern unsigned long huge_anon_orders_inherit;
 
