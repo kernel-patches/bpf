@@ -193,18 +193,7 @@ static inline bool hugepage_global_always(void)
 			(1<<TRANSPARENT_HUGEPAGE_FLAG);
 }
 
-static inline bool hugepage_bpf_allowable(void)
-{
-	/* Works only for BPF mode */
-	if (!(transparent_hugepage_flags & (1<<TRANSPARENT_HUGEPAGE_REQ_BPF_FLAG)))
-		return 0;
-
-	/* No BPF program is attached */
-	if (!(transparent_hugepage_flags & (1<<TRANSPARENT_HUGEPAGE_BPF_ATTACHED)))
-		return 0;
-	/* We will add struct ops in the future */
-	return 1;
-}
+bool hugepage_bpf_allowable(void);
 
 static inline bool hugepaged_bpf_allowable(void)
 {
