@@ -432,6 +432,9 @@ static bool hugepage_pmd_enabled(void)
 	if (test_bit(PMD_ORDER, &huge_anon_orders_inherit) &&
 	    hugepage_global_enabled())
 		return true;
+	if (test_bit(PMD_ORDER, &huge_anon_orders_bpf) &&
+	    hugepaged_bpf_allowable())
+		return true;
 	if (IS_ENABLED(CONFIG_SHMEM) && shmem_hpage_pmd_enabled())
 		return true;
 	return false;

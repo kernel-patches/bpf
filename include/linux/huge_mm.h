@@ -55,6 +55,7 @@ enum transparent_hugepage_flag {
 	TRANSPARENT_HUGEPAGE_DEFRAG_KHUGEPAGED_FLAG,
 	TRANSPARENT_HUGEPAGE_USE_ZERO_PAGE_FLAG,
 	TRANSPARENT_HUGEPAGE_REQ_BPF_FLAG,	/* "bpf" mode */
+	TRANSPARENT_HUGEPAGE_BPF_ATTACHED,	/* BPF program is attached */
 };
 
 struct kobject;
@@ -192,6 +193,26 @@ static inline bool hugepage_global_always(void)
 			(1<<TRANSPARENT_HUGEPAGE_FLAG);
 }
 
+static inline bool hugepage_bpf_allowable(void)
+{
+	/* Works only for BPF mode */
+	if (!(transparent_hugepage_flags & (1<<TRANSPARENT_HUGEPAGE_REQ_BPF_FLAG)))
+		return 0;
+
+	/* No BPF program is attached */
+	if (!(transparent_hugepage_flags & (1<<TRANSPARENT_HUGEPAGE_BPF_ATTACHED)))
+		return 0;
+	/* We will add struct ops in the future */
+	return 1;
+}
+
+static inline bool hugepaged_bpf_allowable(void)
+{
+	if (!(transparent_hugepage_flags & (1<<TRANSPARENT_HUGEPAGE_BPF_ATTACHED)))
+		return 0;
+	return 1;
+}
+
 static inline int highest_order(unsigned long orders)
 {
 	return fls_long(orders) - 1;
@@ -295,7 +316,8 @@ unsigned long thp_vma_allowable_orders(struct vm_area_struct *vma,
 		if (vm_flags & VM_HUGEPAGE)
 			mask |= READ_ONCE(huge_anon_orders_madvise);
 		if (hugepage_global_always() ||
-		    ((vm_flags & VM_HUGEPAGE) && hugepage_global_enabled()))
+		    ((vm_flags & VM_HUGEPAGE) && hugepage_global_enabled()) ||
+		    hugepage_bpf_allowable())
 			mask |= READ_ONCE(huge_anon_orders_inherit);
 
 		orders &= mask;
