@@ -12105,6 +12105,7 @@ enum special_kfunc_type {
 	KF_bpf_res_spin_unlock,
 	KF_bpf_res_spin_lock_irqsave,
 	KF_bpf_res_spin_unlock_irqrestore,
+	KF_bpf_unreachable,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12170,6 +12171,7 @@ BTF_ID(func, bpf_res_spin_lock)
 BTF_ID(func, bpf_res_spin_unlock)
 BTF_ID(func, bpf_res_spin_lock_irqsave)
 BTF_ID(func, bpf_res_spin_unlock_irqrestore)
+BTF_ID(func, bpf_unreachable)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -13638,6 +13640,9 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			return err;
 		}
 		__mark_btf_func_reg_size(env, regs, BPF_REG_0, sizeof(u32));
+	} else if (!insn->off && insn->imm == special_kfunc_list[KF_bpf_unreachable]) {
+		verbose(env, "unexpected bpf_unreachable() due to uninitialized variable?\n");
+		return -EFAULT;
 	}
 
 	if (is_kfunc_destructive(&meta) && !capable(CAP_SYS_BOOT)) {
