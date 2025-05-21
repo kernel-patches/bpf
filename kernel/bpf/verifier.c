@@ -3643,6 +3643,9 @@ static bool is_reg64(struct bpf_verifier_env *env, struct bpf_insn *insn,
 /* Return the regno defined by the insn, or -1. */
 static int insn_def_regno(const struct bpf_insn *insn)
 {
+	if (is_atomic_load_insn(insn))
+		return insn->dst_reg;
+
 	switch (BPF_CLASS(insn->code)) {
 	case BPF_JMP:
 	case BPF_JMP32:
