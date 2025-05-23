@@ -1092,6 +1092,15 @@ LIBBPF_API void *bpf_map__initial_value(const struct bpf_map *map, size_t *psize
 LIBBPF_API bool bpf_map__is_internal(const struct bpf_map *map);
 
 /**
+ * @brief **bpf_map__is_internal_percpu()** tells the caller whether or not
+ * the passed map is an internal map used for global percpu variables.
+ * @param map the bpf_map
+ * @return true, if the map is an internal map used for global percpu
+ * variables; false, otherwise
+ */
+LIBBPF_API bool bpf_map__is_internal_percpu(const struct bpf_map *map);
+
+/**
  * @brief **bpf_map__set_pin_path()** sets the path attribute that tells where the
  * BPF map should be pinned. This does not actually create the 'pin'.
  * @param map The bpf_map
