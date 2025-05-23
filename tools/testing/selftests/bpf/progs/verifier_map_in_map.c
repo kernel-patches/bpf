@@ -139,4 +139,28 @@ __naked void on_the_inner_map_pointer(void)
 	: __clobber_all);
 }
 
+SEC("socket")
+int map_ptr_is_never_null(void *ctx)
+{
+	struct bpf_map *maps[2] = { 0 };
+	struct bpf_map *map = NULL;
+	int __attribute__((aligned(8))) key = 0;
+
+	for (key = 0; key < 2; key++) {
+		map = bpf_map_lookup_elem(&map_in_map, &key);
+		if (map)
+			maps[key] = map;
+		else
+			return 0;
+	}
+
+	/* After the loop every element of maps is CONST_PTR_TO_MAP so
+	 * the invalid branch should not be explored by the verifier.
+	 */
+	if (!maps[0])
+		asm volatile ("r10 = 0;");
+
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
