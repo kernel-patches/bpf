@@ -6939,6 +6939,8 @@ static int bpf_map_direct_read(struct bpf_map *map, int off, int size, u64 *val,
 	u64 addr;
 	int err;
 
+	if (map->map_type != BPF_MAP_TYPE_ARRAY)
+		return -EINVAL;
 	err = map->ops->map_direct_value_addr(map, &addr, off);
 	if (err)
 		return err;
@@ -7451,6 +7453,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 			/* if map is read-only, track its contents as scalars */
 			if (tnum_is_const(reg->var_off) &&
 			    bpf_map_is_rdonly(map) &&
+			    map->map_type == BPF_MAP_TYPE_ARRAY &&
 			    map->ops->map_direct_value_addr) {
 				int map_off = off + reg->var_off.value;
 				u64 val = 0;
@@ -9414,6 +9417,11 @@ static int check_reg_const_str(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
+	if (map->map_type != BPF_MAP_TYPE_ARRAY) {
+		verbose(env, "only array map supports direct string value access\n");
+		return -EINVAL;
+	}
+
 	err = check_map_access(env, regno, reg->off,
 			       map->value_size - reg->off, false,
 			       ACCESS_HELPER);
@@ -11100,6 +11108,11 @@ static int check_bpf_snprintf_call(struct bpf_verifier_env *env,
 	if (data_len_reg->var_off.value % 8)
 		return -EINVAL;
 	num_args = data_len_reg->var_off.value / 8;
+
+	if (fmt_map->map_type != BPF_MAP_TYPE_ARRAY) {
+		verbose(env, "only array map supports snprintf\n");
+		return -EINVAL;
+	}
 
 	/* fmt being ARG_PTR_TO_CONST_STR guarantees that var_off is const
 	 * and map_direct_value_addr is set.
@@ -21905,6 +21918,38 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			insn = new_prog->insnsi + i + delta;
 			goto next_insn;
 		}
+
+#ifdef CONFIG_SMP
+		if (insn->code == (BPF_LD | BPF_IMM | BPF_DW) &&
+		    (insn->src_reg == BPF_PSEUDO_MAP_VALUE ||
+		     insn->src_reg == BPF_PSEUDO_MAP_IDX_VALUE)) {
+			struct bpf_map *map;
+
+			aux = &env->insn_aux_data[i + delta];
+			map = env->used_maps[aux->map_index];
+			if (map->map_type != BPF_MAP_TYPE_PERCPU_ARRAY)
+				goto next_insn;
+
+			/* Reuse the original ld_imm64 insn. And add one
+			 * mov64_percpu_reg insn.
+			 */
+
+			insn_buf[0] = insn[1];
+			insn_buf[1] = BPF_MOV64_PERCPU_REG(insn->dst_reg, insn->dst_reg);
+			cnt = 2;
+
+			i++;
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += cnt - 1;
+			env->prog = prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
+
+			goto next_insn;
+		}
+#endif
 
 		if (insn->code != (BPF_JMP | BPF_CALL))
 			goto next_insn;
