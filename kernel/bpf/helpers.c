@@ -2936,7 +2936,9 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 
 	if (!is_bpf_text_address(ip))
 		return !ctx->cnt;
+	rcu_read_lock();
 	prog = bpf_prog_ksym_find(ip);
+	rcu_read_unlock();
 	ctx->cnt++;
 	if (bpf_is_subprog(prog))
 		return true;
