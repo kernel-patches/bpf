@@ -600,7 +600,7 @@ static struct bpf_map *trie_alloc(union bpf_attr *attr)
 	/* Allocate intermediate and leaf nodes from the same allocator */
 	leaf_size = sizeof(struct lpm_trie_node) + trie->data_size +
 		    trie->map.value_size;
-	err = bpf_mem_alloc_init(&trie->ma, leaf_size, false);
+	err = bpf_mem_alloc_init(&trie->ma, leaf_size, false, NULL, NULL);
 	if (err)
 		goto free_out;
 	return &trie->map;

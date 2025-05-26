@@ -839,11 +839,12 @@ bpf_local_storage_map_alloc(union bpf_attr *attr,
 	 */
 	smap->bpf_ma = IS_ENABLED(CONFIG_PREEMPT_RT) ? true : bpf_ma;
 	if (smap->bpf_ma) {
-		err = bpf_mem_alloc_init(&smap->selem_ma, smap->elem_size, false);
+		err = bpf_mem_alloc_init(&smap->selem_ma, smap->elem_size, false, NULL, NULL);
 		if (err)
 			goto free_smap;
 
-		err = bpf_mem_alloc_init(&smap->storage_ma, sizeof(struct bpf_local_storage), false);
+		err = bpf_mem_alloc_init(&smap->storage_ma, sizeof(struct bpf_local_storage), false,
+					 NULL, NULL);
 		if (err) {
 			bpf_mem_alloc_destroy(&smap->selem_ma);
 			goto free_smap;
