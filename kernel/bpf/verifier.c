@@ -16478,7 +16478,11 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	}
 
 	is_jmp32 = BPF_CLASS(insn->code) == BPF_JMP32;
-	pred = is_branch_taken(dst_reg, src_reg, opcode, is_jmp32);
+	if (env->allow_ptr_leaks)
+		pred = is_branch_taken(dst_reg, src_reg, opcode, is_jmp32);
+	else
+		pred = -1;
+
 	if (pred >= 0) {
 		/* If we get here with a dst_reg pointer type it is because
 		 * above is_branch_taken() special cased the 0 comparison.
