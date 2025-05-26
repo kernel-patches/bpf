@@ -128,6 +128,8 @@ struct htab_elem {
 	char key[] __aligned(8);
 };
 
+static void check_and_free_fields(struct bpf_htab *htab, struct htab_elem *elem);
+
 static inline bool htab_is_prealloc(const struct bpf_htab *htab)
 {
 	return !(htab->map.map_flags & BPF_F_NO_PREALLOC);
@@ -464,6 +466,33 @@ static int htab_map_alloc_check(union bpf_attr *attr)
 	return 0;
 }
 
+static void htab_ma_dtor(void *obj, void *ctx)
+{
+	struct bpf_htab *htab = ctx;
+
+	/* The per-cpu pointer saved in the htab_elem may have been freed
+	 * by htab->pcpu_ma. Therefore, freeing the special fields in the
+	 * per-cpu pointer through the dtor of htab->pcpu_ma instead.
+	 */
+	if (htab_is_percpu(htab))
+		return;
+	check_and_free_fields(htab, obj);
+}
+
+static void htab_pcpu_ma_dtor(void *obj, void *ctx)
+{
+	struct bpf_htab *htab = ctx;
+	void __percpu *pptr;
+	int cpu;
+
+	if (IS_ERR_OR_NULL(htab->map.record))
+		return;
+
+	pptr = *(void __percpu **)obj;
+	for_each_possible_cpu(cpu)
+		bpf_obj_free_fields(htab->map.record, per_cpu_ptr(pptr, cpu));
+}
+
 static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 {
 	bool percpu = (attr->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
@@ -568,13 +597,14 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 				goto free_prealloc;
 		}
 	} else {
-		err = bpf_mem_alloc_init(&htab->ma, htab->elem_size, false, NULL, NULL);
+		err = bpf_mem_alloc_init(&htab->ma, htab->elem_size, false,
+					 htab_ma_dtor, htab);
 		if (err)
 			goto free_map_locked;
 		if (percpu) {
 			err = bpf_mem_alloc_init(&htab->pcpu_ma,
 						 round_up(htab->map.value_size, 8), true,
-						 NULL, NULL);
+						 htab_pcpu_ma_dtor, htab);
 			if (err)
 				goto free_map_locked;
 		}
