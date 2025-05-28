@@ -113,6 +113,8 @@ bool ftrace_pids_enabled(struct ftrace_ops *ops)
 }
 
 static void ftrace_update_trampoline(struct ftrace_ops *ops);
+static int __unregister_ftrace_direct(struct ftrace_ops *ops, unsigned long addr,
+				      bool free_filters);
 
 /*
  * ftrace_disabled is set when an anomaly is discovered.
@@ -6046,8 +6048,8 @@ EXPORT_SYMBOL_GPL(register_ftrace_direct);
  *  0 on success
  *  -EINVAL - The @ops object was not properly registered.
  */
-int unregister_ftrace_direct(struct ftrace_ops *ops, unsigned long addr,
-			     bool free_filters)
+static int __unregister_ftrace_direct(struct ftrace_ops *ops, unsigned long addr,
+				      bool free_filters)
 {
 	struct ftrace_hash *hash = ops->func_hash->filter_hash;
 	int err;
@@ -6057,10 +6059,8 @@ int unregister_ftrace_direct(struct ftrace_ops *ops, unsigned long addr,
 	if (!(ops->flags & FTRACE_OPS_FL_ENABLED))
 		return -EINVAL;
 
-	mutex_lock(&direct_mutex);
 	err = unregister_ftrace_function(ops);
 	remove_direct_functions_hash(hash, addr);
-	mutex_unlock(&direct_mutex);
 
 	/* cleanup for possible another register call */
 	ops->func = NULL;
@@ -6068,6 +6068,18 @@ int unregister_ftrace_direct(struct ftrace_ops *ops, unsigned long addr,
 
 	if (free_filters)
 		ftrace_free_filter(ops);
+	return err;
+}
+
+int unregister_ftrace_direct(struct ftrace_ops *ops, unsigned long addr,
+			     bool free_filters)
+{
+	int err;
+
+	mutex_lock(&direct_mutex);
+	err = __unregister_ftrace_direct(ops, addr, free_filters);
+	mutex_unlock(&direct_mutex);
+
 	return err;
 }
 EXPORT_SYMBOL_GPL(unregister_ftrace_direct);
