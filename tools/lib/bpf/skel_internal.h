@@ -61,8 +61,12 @@ struct bpf_load_and_run_opts {
 	struct bpf_loader_ctx *ctx;
 	const void *data;
 	const void *insns;
+	const void *signature;
+	const void *signature_maps;
 	__u32 data_sz;
 	__u32 insns_sz;
+	__u32 signature_sz;
+	__u32 signature_maps_sz;
 	const char *errstr;
 };
 
@@ -263,6 +267,17 @@ static inline int skel_map_delete_elem(int fd, const void *key)
 	return skel_sys_bpf(BPF_MAP_DELETE_ELEM, &attr, attr_sz);
 }
 
+static inline int skel_map_freeze(int fd)
+{
+	const size_t attr_sz = offsetofend(union bpf_attr, map_fd);
+	union bpf_attr attr;
+
+	memset(&attr, 0, attr_sz);
+	attr.map_fd = fd;
+
+	return skel_sys_bpf(BPF_MAP_FREEZE, &attr, attr_sz);
+}
+
 static inline int skel_map_get_fd_by_id(__u32 id)
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, flags);
@@ -308,7 +323,7 @@ static inline int skel_link_create(int prog_fd, int target_fd,
 
 static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 {
-	const size_t prog_load_attr_sz = offsetofend(union bpf_attr, fd_array);
+	const size_t prog_load_attr_sz = offsetofend(union bpf_attr, signature_maps_size);
 	const size_t test_run_attr_sz = offsetofend(union bpf_attr, test);
 	int map_fd = -1, prog_fd = -1, key = 0, err;
 	union bpf_attr attr;
@@ -327,6 +342,13 @@ static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 		goto out;
 	}
 
+	err = skel_map_freeze(map_fd);
+	if (err < 0) {
+		opts->errstr = "failed to freeze map";
+		set_err;
+		goto out;
+	}
+
 	memset(&attr, 0, prog_load_attr_sz);
 	attr.prog_type = BPF_PROG_TYPE_SYSCALL;
 	attr.insns = (long) opts->insns;
@@ -338,6 +360,10 @@ static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 	attr.log_size = opts->ctx->log_size;
 	attr.log_buf = opts->ctx->log_buf;
 	attr.prog_flags = BPF_F_SLEEPABLE;
+	attr.signature = (long) opts->signature;
+	attr.signature_size = opts->signature_sz;
+	attr.signature_maps = (long) opts->signature_maps;
+	attr.signature_maps_size = opts->signature_maps_sz;
 	err = prog_fd = skel_sys_bpf(BPF_PROG_LOAD, &attr, prog_load_attr_sz);
 	if (prog_fd < 0) {
 		opts->errstr = "failed to load loader prog";
