@@ -58,12 +58,15 @@ struct bpf_token;
 struct user_namespace;
 struct super_block;
 struct inode;
+struct bpf_tramp_link;
+struct bpf_gtramp_link;
 
 extern struct idr btf_idr;
 extern spinlock_t btf_idr_lock;
 extern struct kobject *btf_kobj;
 extern struct bpf_mem_alloc bpf_global_ma, bpf_global_percpu_ma;
 extern bool bpf_global_ma_set;
+extern struct bpf_global_trampoline global_tr;
 
 typedef u64 (*bpf_callback_t)(u64, u64, u64, u64, u64);
 typedef int (*bpf_iter_init_seq_priv_t)(void *private_data,
@@ -1279,6 +1282,12 @@ struct bpf_trampoline {
 	struct bpf_tramp_image *cur_image;
 };
 
+struct bpf_global_trampoline {
+	struct list_head list;
+	struct ftrace_ops *fops;
+	void *image;
+};
+
 struct bpf_attach_target_info {
 	struct btf_func_model fmodel;
 	long tgt_addr;
@@ -1381,6 +1390,12 @@ struct bpf_trampoline *bpf_trampoline_get(u64 key,
 					  struct bpf_attach_target_info *tgt_info);
 void bpf_trampoline_put(struct bpf_trampoline *tr);
 int arch_prepare_bpf_dispatcher(void *image, void *buf, s64 *funcs, int num_funcs);
+
+#ifdef CONFIG_ARCH_HAS_BPF_GLOBAL_CALLER
+void bpf_global_caller(void);
+#endif
+int bpf_gtrampoline_link_prog(struct bpf_gtramp_link *link);
+int bpf_gtrampoline_unlink_prog(struct bpf_gtramp_link *link);
 
 /*
  * When the architecture supports STATIC_CALL replace the bpf_dispatcher_fn
@@ -1744,6 +1759,22 @@ struct bpf_tramp_link {
 struct bpf_shim_tramp_link {
 	struct bpf_tramp_link link;
 	struct bpf_trampoline *trampoline;
+};
+
+struct bpf_gtramp_link_entry {
+	struct bpf_prog *tgt_prog;
+	struct bpf_trampoline *trampoline;
+	void *addr;
+	struct btf *attach_btf;
+	u64 cookie;
+	u32 btf_id;
+	u32 nr_args;
+};
+
+struct bpf_gtramp_link {
+	struct bpf_link link;
+	struct bpf_gtramp_link_entry *entries;
+	u32 entry_cnt;
 };
 
 struct bpf_tracing_link {
