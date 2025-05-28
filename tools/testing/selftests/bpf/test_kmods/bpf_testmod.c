@@ -405,6 +405,20 @@ noinline int bpf_testmod_fentry_test11(u64 a, void *b, short c, int d,
 	return a + (long)b + c + d + (long)e + f + g + h + i + j + k;
 }
 
+extern int bpf_fentry_test1(int a);
+noinline u64 bpf_testmod_bench_run(void)
+{
+	u64 start = ktime_get_boottime_ns();
+	u64 time;
+
+	for (int i = 0; i < 10000000; i++)
+		bpf_fentry_test1(i);
+
+	time = ktime_get_boottime_ns() - start;
+
+	return time;
+}
+
 int bpf_testmod_fentry_ok;
 
 noinline ssize_t
@@ -442,6 +456,8 @@ bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 	(void)bpf_testmod_test_arg_ptr_to_struct(&struct_arg1_2);
 
 	(void)trace_bpf_testmod_test_raw_tp_null(NULL);
+
+	(void)bpf_testmod_bench_run();
 
 	bpf_testmod_test_struct_ops3();
 
