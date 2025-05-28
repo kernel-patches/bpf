@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <bpf/btf.h>
+#include <openssl/sha.h>
 
 #include "json_writer.h"
 #include "main.h"
@@ -493,6 +494,30 @@ static size_t bpf_map_mmap_sz(const struct bpf_map *map)
 	return map_sz;
 }
 
+static int sign_loader_and_map(struct gen_loader_opts *opts)
+{
+	BIO *bo;
+	BUF_MEM *bptr;
+	unsigned char hash[SHA256_DIGEST_LENGTH  * 2];
+	unsigned char term[SHA256_DIGEST_LENGTH];
+
+	if (!x509)
+		return 0;
+
+	SHA256((const unsigned char *)opts->insns, opts->insns_sz, hash);
+	SHA256((const unsigned char *)opts->data, opts->data_sz, hash + SHA256_DIGEST_LENGTH);
+	SHA256(hash, sizeof(hash), term);
+
+	bo = generate_signature(term, sizeof(term));
+	if (IS_ERR(bo))
+		return -EINVAL;
+	BIO_get_mem_ptr(bo, &bptr);
+	opts->signature = bptr->data;
+	opts->signature_sz = bptr->length;
+
+	return 0;
+}
+
 /* Emit type size asserts for all top-level fields in memory-mapped internal maps. */
 static void codegen_asserts(struct bpf_object *obj, const char *obj_name)
 {
@@ -701,6 +726,11 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 		p_err("failed to load object file");
 		goto out;
 	}
+	err = sign_loader_and_map(&opts);
+	if (err) {
+		p_err("failed to sign loader");
+		goto out;
+	}
 	/* If there was no error during load then gen_loader_opts
 	 * are populated with the loader program.
 	 */
@@ -778,7 +808,38 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 			static const char opts_insn[] __attribute__((__aligned__(8))) = \"\\\n\
 		");
 	print_hex(opts.insns, opts.insns_sz);
-	codegen("\
+	if (opts.signature) {
+		codegen("\
+		\n\
+		\";							    \n\
+			static const char opts_signature[] __attribute__((__aligned__(8))) = \"\\\n\
+		");
+		print_hex(opts.signature, opts.signature_sz);
+		codegen("\
+		\n\
+		\";							    \n\
+			static const int opts_signature_maps[1] __attribute__((__aligned__(8))) = {0}; \n\
+		");
+		codegen("\
+		\n\
+									    \n\
+			opts.ctx = (struct bpf_loader_ctx *)skel;	    \n\
+			opts.data_sz = sizeof(opts_data) - 1;		    \n\
+			opts.data = (void *)opts_data;			    \n\
+			opts.insns_sz = sizeof(opts_insn) - 1;		    \n\
+			opts.insns = (void *)opts_insn;			    \n\
+			opts.signature_sz = sizeof(opts_signature) - 1;	    \n\
+			opts.signature = (void *)opts_signature;	    \n\
+			opts.signature_maps_sz = 1;	                    \n\
+			opts.signature_maps = (void *)opts_signature_maps;  \n\
+									    \n\
+			err = bpf_load_and_run(&opts);			    \n\
+			if (err < 0)					    \n\
+				return err;				    \n\
+		");
+
+	} else {
+		codegen("\
 		\n\
 		\";							    \n\
 									    \n\
@@ -787,11 +848,14 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 			opts.data = (void *)opts_data;			    \n\
 			opts.insns_sz = sizeof(opts_insn) - 1;		    \n\
 			opts.insns = (void *)opts_insn;			    \n\
+			opts.signature_sz  = 0;		                    \n\
+			opts.signature = NULL;			            \n\
 									    \n\
 			err = bpf_load_and_run(&opts);			    \n\
 			if (err < 0)					    \n\
 				return err;				    \n\
 		");
+	}
 	bpf_object__for_each_map(map, obj) {
 		const char *mmap_flags;
 

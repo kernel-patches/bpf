@@ -1785,8 +1785,12 @@ struct gen_loader_opts {
 	size_t sz; /* size of this struct, for forward/backward compatibility */
 	const char *data;
 	const char *insns;
+	const char *signature;
+	const int *signature_maps;
 	__u32 data_sz;
 	__u32 insns_sz;
+	__u32 signature_sz;
+	__u32 signature_maps_sz;
 };
 
 #define gen_loader_opts__last_field insns_sz

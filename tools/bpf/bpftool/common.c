@@ -5,6 +5,7 @@
 #define _GNU_SOURCE
 #endif
 #include <ctype.h>
+#include <err.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <ftw.h>
@@ -30,6 +31,24 @@
 #include <bpf/hashmap.h>
 #include <bpf/libbpf.h> /* libbpf_num_possible_cpus */
 #include <bpf/btf.h>
+
+#include <openssl/opensslv.h>
+#include <openssl/bio.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/err.h>
+#include <openssl/cms.h>
+#if OPENSSL_VERSION_MAJOR >= 3
+# define USE_PKCS11_PROVIDER
+# include <openssl/provider.h>
+# include <openssl/store.h>
+#else
+# if !defined(OPENSSL_NO_ENGINE) && !defined(OPENSSL_NO_DEPRECATED_3_0)
+#  define USE_PKCS11_ENGINE
+#  include <openssl/engine.h>
+# endif
+#endif
+#include "../../scripts/ssl-common.h"
 
 #include "main.h"
 
@@ -1180,4 +1199,189 @@ int pathname_concat(char *buf, int buf_sz, const char *path,
 		return -ENAMETOOLONG;
 
 	return 0;
+}
+
+static const char *key_pass;
+
+static int pem_pw_cb(char *buf, int len, int w, void *v)
+{
+	int pwlen;
+
+	if (!key_pass)
+		return -1;
+
+	pwlen = strlen(key_pass);
+	if (pwlen >= len)
+		return -1;
+
+	strcpy(buf, key_pass);
+
+	/* If it's wrong, don't keep trying it. */
+	key_pass = NULL;
+
+	return pwlen;
+}
+
+static EVP_PKEY *read_private_key_pkcs11(const char *private_key_name)
+{
+	EVP_PKEY *pk = NULL;
+#ifdef USE_PKCS11_PROVIDER
+	OSSL_STORE_CTX *store;
+
+	if (!OSSL_PROVIDER_try_load(NULL, "pkcs11", true))
+		ERR(1, "OSSL_PROVIDER_try_load(pkcs11)");
+	if (!OSSL_PROVIDER_try_load(NULL, "default", true))
+		ERR(1, "OSSL_PROVIDER_try_load(default)");
+
+	store = OSSL_STORE_open(private_key_name, NULL, NULL, NULL, NULL);
+	ERR(!store, "OSSL_STORE_open");
+
+	while (!OSSL_STORE_eof(store)) {
+		OSSL_STORE_INFO *info = OSSL_STORE_load(store);
+
+		if (!info) {
+			drain_openssl_errors(__LINE__, 0);
+			continue;
+		}
+		if (OSSL_STORE_INFO_get_type(info) == OSSL_STORE_INFO_PKEY) {
+			pk = OSSL_STORE_INFO_get1_PKEY(info);
+			ERR(!pk, "OSSL_STORE_INFO_get1_PKEY");
+		}
+		OSSL_STORE_INFO_free(info);
+		if (pk)
+			break;
+	}
+	OSSL_STORE_close(store);
+#elif defined(USE_PKCS11_ENGINE)
+	ENGINE *e;
+
+	ENGINE_load_builtin_engines();
+	drain_openssl_errors(__LINE__, 1);
+	e = ENGINE_by_id("pkcs11");
+	ERR(!e, "Load PKCS#11 ENGINE");
+	if (ENGINE_init(e))
+		drain_openssl_errors(__LINE__, 1);
+	else
+		ERR(1, "ENGINE_init");
+	if (key_pass)
+		ERR(!ENGINE_ctrl_cmd_string(e, "PIN", key_pass, 0), "Set PKCS#11 PIN");
+	pk = ENGINE_load_private_key(e, private_key_name, NULL, NULL);
+	ERR(!pk, "%s", private_key_name);
+#else
+	fprintf(stderr, "no pkcs11 engine/provider available\n");
+	exit(1);
+#endif
+	return pk;
+}
+
+EVP_PKEY *read_private_key(const char *private_key_name)
+{
+	if (!strncmp(private_key_name, "pkcs11:", 7)) {
+		return read_private_key_pkcs11(private_key_name);
+	} else {
+		EVP_PKEY *pk;
+		BIO *b;
+
+		b = BIO_new_file(private_key_name, "rb");
+		ERR(!b, "%s", private_key_name);
+		pk = PEM_read_bio_PrivateKey(b, NULL, pem_pw_cb,
+					     NULL);
+		ERR(!pk, "%s", private_key_name);
+		BIO_free(b);
+
+		return pk;
+	}
+}
+
+X509 *read_x509(const char *x509_name)
+{
+	unsigned char buf[2];
+	X509 *x509_cert;
+	BIO *b;
+	int n;
+
+	b = BIO_new_file(x509_name, "rb");
+	ERR(!b, "%s", x509_name);
+
+	/* Look at the first two bytes of the file to determine the encoding */
+	n = BIO_read(b, buf, 2);
+	if (n != 2) {
+		if (BIO_should_retry(b)) {
+			fprintf(stderr, "%s: Read wanted retry\n", x509_name);
+			exit(1);
+		}
+		if (n >= 0) {
+			fprintf(stderr, "%s: Short read\n", x509_name);
+			exit(1);
+		}
+		ERR(1, "%s", x509_name);
+	}
+
+	ERR(BIO_reset(b) != 0, "%s", x509_name);
+
+	if (buf[0] == 0x30 && buf[1] >= 0x81 && buf[1] <= 0x84)
+		/* Assume raw DER encoded X.509 */
+		x509_cert = d2i_X509_bio(b, NULL);
+	else
+		/* Assume PEM encoded X.509 */
+		x509_cert = PEM_read_bio_X509(b, NULL, NULL, NULL);
+
+	BIO_free(b);
+	ERR(!x509_cert, "%s", x509_name);
+
+	return x509_cert;
+}
+
+BIO* generate_signature(const void *buffer, size_t length)
+{
+	const EVP_MD *digest_algo;
+	unsigned int use_signed_attrs;
+#ifndef USE_PKCS7
+	CMS_ContentInfo *cms = NULL;
+	unsigned int use_keyid = 0;
+#else
+	PKCS7 *pkcs7 = NULL;
+#endif
+	BIO *mem = BIO_new_mem_buf(buffer, length);
+	BIO *bd = BIO_new(BIO_s_mem());
+
+#ifndef USE_PKCS7
+	use_signed_attrs = CMS_NOATTR;
+#else
+	use_signed_attrs = PKCS7_NOATTR;
+#endif
+	/* Digest the module data. */
+	OpenSSL_add_all_digests();
+	drain_openssl_errors(__LINE__, 0);
+	digest_algo = EVP_get_digestbyname(hash_algo);
+	ERR(!digest_algo, "EVP_get_digestbyname");
+
+#ifndef USE_PKCS7
+	/* Load the signature message from the digest buffer. */
+	cms = CMS_sign(NULL, NULL, NULL, NULL,
+		       CMS_NOCERTS | CMS_PARTIAL | CMS_BINARY |
+		       CMS_DETACHED | CMS_STREAM);
+	ERR(!cms, "CMS_sign");
+
+	ERR(!CMS_add1_signer(cms, x509, private_key, digest_algo,
+			     CMS_NOCERTS | CMS_BINARY |
+			     CMS_NOSMIMECAP | use_keyid |
+			     use_signed_attrs),
+	    "CMS_add1_signer");
+	ERR(CMS_final(cms, mem, NULL, CMS_NOCERTS | CMS_BINARY) != 1,
+	    "CMS_final");
+
+#else
+	pkcs7 = PKCS7_sign(x509, private_key, NULL, mem,
+			   PKCS7_NOCERTS | PKCS7_BINARY |
+			   PKCS7_DETACHED | use_signed_attrs);
+	ERR(!pkcs7, "PKCS7_sign");
+#endif
+
+#ifndef USE_PKCS7
+	ERR(i2d_CMS_bio_stream(bd, cms, NULL, 0) != 1, "%s", "bpftool");
+#else
+	ERR(i2d_PKCS7_bio(bd, pkcs7) != 1, "%s", "bpftool");
+#endif
+	return bd;
 }

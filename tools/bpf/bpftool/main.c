@@ -33,6 +33,9 @@ bool relaxed_maps;
 bool use_loader;
 struct btf *base_btf;
 struct hashmap *refs_table;
+const char *hash_algo;
+EVP_PKEY *private_key;
+X509 *x509;
 
 static void __noreturn clean_and_exit(int i)
 {
@@ -473,7 +476,7 @@ int main(int argc, char **argv)
 	bin_name = "bpftool";
 
 	opterr = 0;
-	while ((opt = getopt_long(argc, argv, "VhpjfLmndB:l",
+	while ((opt = getopt_long(argc, argv, "VhpjfLmndB:lH:lP:lX:l",
 				  options, NULL)) >= 0) {
 		switch (opt) {
 		case 'V':
@@ -518,6 +521,25 @@ int main(int argc, char **argv)
 			break;
 		case 'L':
 			use_loader = true;
+			break;
+		case 'H':
+			hash_algo = optarg;
+			break;
+		case 'P':
+			private_key = read_private_key(optarg);
+			if (!private_key) {
+				p_err("failed to parse private key '%s': %d\n",
+				      optarg, -errno);
+				return -1;
+			}
+			break;
+		case 'X':
+			x509 = read_x509(optarg);
+			if (!x509) {
+				p_err("failed to parse x509 '%s': %d\n",
+				      optarg, -errno);
+				return -1;
+			}
 			break;
 		default:
 			p_err("unrecognized option '%s'", argv[optind - 1]);

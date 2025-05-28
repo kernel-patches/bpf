@@ -16,6 +16,22 @@
 #include <bpf/hashmap.h>
 #include <bpf/libbpf.h>
 
+#include <openssl/opensslv.h>
+#include <openssl/bio.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/err.h>
+#if OPENSSL_VERSION_MAJOR >= 3
+# define USE_PKCS11_PROVIDER
+# include <openssl/provider.h>
+# include <openssl/store.h>
+#else
+# if !defined(OPENSSL_NO_ENGINE) && !defined(OPENSSL_NO_DEPRECATED_3_0)
+#  define USE_PKCS11_ENGINE
+#  include <openssl/engine.h>
+# endif
+#endif
+
 #include "json_writer.h"
 
 /* Make sure we do not use kernel-only integer typedefs */
@@ -84,6 +100,9 @@ extern bool relaxed_maps;
 extern bool use_loader;
 extern struct btf *base_btf;
 extern struct hashmap *refs_table;
+extern const char *hash_algo;
+extern EVP_PKEY *private_key;
+extern X509 *x509;
 
 void __printf(1, 2) p_err(const char *fmt, ...);
 void __printf(1, 2) p_info(const char *fmt, ...);
@@ -271,4 +290,8 @@ int pathname_concat(char *buf, int buf_sz, const char *path,
 /* print netfilter bpf_link info */
 void netfilter_dump_plain(const struct bpf_link_info *info);
 void netfilter_dump_json(const struct bpf_link_info *info, json_writer_t *wtr);
+
+X509 *read_x509(const char *x509_name);
+EVP_PKEY *read_private_key(const char *private_key_name);
+BIO *generate_signature(const void *buffer, size_t length);
 #endif
