@@ -2656,7 +2656,22 @@ static void perf_event_unthrottle(struct perf_event *event, bool start)
 
 static void perf_event_throttle(struct perf_event *event)
 {
-	event->pmu->stop(event, 0);
+	/*
+	 * Some PMUs, e.g., cpu-clock and task_clock, may rely on
+	 * a special mechanism (hrtimer) to manipulate counters.
+	 * The regular stop doesn't work, since the hrtimer interrupt
+	 * handler cannot cancel itself.
+	 *
+	 * The stop should be avoided for such cases. Let the
+	 * driver-specific code handle it.
+	 *
+	 * The counters will eventually be disabled in the driver-specific
+	 * code. In unthrottle, they still need to be re-enabled.
+	 * There is no handling for PERF_PMU_CAP_NO_THROTTLE_STOP in
+	 * the perf_event_unthrottle().
+	 */
+	if (!(event->pmu->capabilities & PERF_PMU_CAP_NO_THROTTLE_STOP))
+		event->pmu->stop(event, 0);
 	event->hw.interrupts = MAX_INTERRUPTS;
 	if (event == event->group_leader)
 		perf_log_throttle(event, 0);
@@ -11848,7 +11863,8 @@ static int cpu_clock_event_init(struct perf_event *event)
 static struct pmu perf_cpu_clock = {
 	.task_ctx_nr	= perf_sw_context,
 
-	.capabilities	= PERF_PMU_CAP_NO_NMI,
+	.capabilities	= PERF_PMU_CAP_NO_NMI |
+			  PERF_PMU_CAP_NO_THROTTLE_STOP,
 	.dev		= PMU_NULL_DEV,
 
 	.event_init	= cpu_clock_event_init,
@@ -11930,7 +11946,8 @@ static int task_clock_event_init(struct perf_event *event)
 static struct pmu perf_task_clock = {
 	.task_ctx_nr	= perf_sw_context,
 
-	.capabilities	= PERF_PMU_CAP_NO_NMI,
+	.capabilities	= PERF_PMU_CAP_NO_NMI |
+			  PERF_PMU_CAP_NO_THROTTLE_STOP,
 	.dev		= PMU_NULL_DEV,
 
 	.event_init	= task_clock_event_init,
