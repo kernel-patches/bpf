@@ -56,7 +56,7 @@ struct core_text {
 	const char	*name;
 };
 
-static bool thunks_initialized __ro_after_init;
+bool thunks_initialized __ro_after_init;
 
 static const struct core_text builtin_coretext = {
 	.base = (unsigned long)_text,

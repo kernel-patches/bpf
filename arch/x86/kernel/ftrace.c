@@ -26,6 +26,7 @@
 #include <linux/vmalloc.h>
 #include <linux/set_memory.h>
 #include <linux/execmem.h>
+#include <linux/kfunc_md.h>
 
 #include <trace/syscall.h>
 
@@ -568,6 +569,31 @@ void arch_ftrace_trampoline_free(struct ftrace_ops *ops)
 	tramp_free((void *)ops->trampoline);
 	ops->trampoline = 0;
 }
+
+#if defined(CONFIG_FUNCTION_METADATA) && !defined(CONFIG_FUNCTION_METADATA_PADDING)
+bool kfunc_md_arch_support(int *insn, int *data)
+{
+	/* when fineibt is enabled, the 16-bytes padding are all used */
+	if (IS_ENABLED(CONFIG_FINEIBT) && cfi_mode == CFI_FINEIBT)
+		return false;
+
+	if (IS_ENABLED(CONFIG_CALL_THUNKS) && IS_ENABLED(CONFIG_CFI_CLANG)) {
+		/* when call thunks and cfi are both enabled, no enough space
+		 * for us.
+		 */
+		if (thunks_initialized)
+			return false;
+		/* use the tail 5-bytes for function meta data */
+		*insn = 5;
+		*data = 4;
+
+		return true;
+	}
+
+	WARN_ON_ONCE(1);
+	return true;
+}
+#endif
 
 #endif /* CONFIG_X86_64 */
 #endif /* CONFIG_DYNAMIC_FTRACE */

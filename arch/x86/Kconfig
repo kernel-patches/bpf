@@ -2459,6 +2459,32 @@ config PREFIX_SYMBOLS
 	def_bool y
 	depends on CALL_PADDING && !CFI_CLANG
 
+config FUNCTION_METADATA
+	bool "Per-function metadata storage support"
+	default y
+	depends on CC_HAS_ENTRY_PADDING && OBJTOOL
+	help
+	  Support function padding based per-function metadata storage for
+	  kernel functions, and get the metadata of the function by its
+	  address with almost no overhead.
+
+	  The index of the metadata will be stored in the function padding
+	  and consumes 5-bytes.
+
+	  Hash table based function metadata will be used if this option
+	  is not enabled.
+
+config FUNCTION_METADATA_PADDING
+	bool "function padding is available for metadata"
+	default y
+	depends on FUNCTION_METADATA && !FINEIBT && !(CFI_CLANG && CALL_THUNKS)
+	select CALL_PADDING
+	help
+	  Function padding is available for the function metadata. If this
+	  option is disabled, function metadata will try to probe if there
+	  are usable function padding during the system boot. If not, the
+	  hash table based function metadata will be used instead.
+
 menuconfig CPU_MITIGATIONS
 	bool "Mitigations for CPU vulnerabilities"
 	default y
