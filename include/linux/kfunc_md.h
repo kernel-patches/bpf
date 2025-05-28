@@ -29,6 +29,8 @@ struct kfunc_md {
 #endif
 	unsigned long func;
 	struct kfunc_md_tramp_prog *bpf_progs[BPF_TRAMP_MAX];
+	/* fallback case, there is already a trampoline on this function */
+	struct bpf_trampoline *tramp;
 #ifdef CONFIG_FUNCTION_METADATA
 	/* the array is used for the fast mode */
 	struct kfunc_md_array *array;

@@ -141,7 +141,8 @@ static int kfunc_md_hash_bpf_ips(void **ips)
 	for (i = 0; i < (1 << KFUNC_MD_HASH_BITS); i++) {
 		head = &kfunc_md_table[i];
 		hlist_for_each_entry(md, head, hash) {
-			if (md->bpf_prog_cnt > !!(md->flags & KFUNC_MD_FL_BPF_REMOVING))
+			if (md->bpf_prog_cnt > !!(md->flags & KFUNC_MD_FL_BPF_REMOVING) &&
+			    !md->tramp)
 				ips[c++] = (void *)md->func;
 		}
 	}
@@ -472,7 +473,8 @@ static int kfunc_md_fast_bpf_ips(void **ips)
 
 	for (i = 0; i < kfunc_mds->kfunc_md_count; i++) {
 		md = &kfunc_mds->mds[i];
-		if (md->users && md->bpf_prog_cnt > !!(md->flags & KFUNC_MD_FL_BPF_REMOVING))
+		if (md->users && md->bpf_prog_cnt > !!(md->flags & KFUNC_MD_FL_BPF_REMOVING) &&
+		    !md->tramp)
 			ips[c++] = (void *)md->func;
 	}
 	return c;
@@ -661,6 +663,9 @@ int kfunc_md_bpf_unlink(struct kfunc_md *md, struct bpf_prog *prog, int type)
 	if (!md->bpf_progs[BPF_TRAMP_FEXIT] &&
 	    !md->bpf_progs[BPF_TRAMP_MODIFY_RETURN])
 		md->flags &= ~KFUNC_MD_FL_TRACING_ORIGIN;
+
+	if (!md->bpf_prog_cnt)
+		md->tramp = NULL;
 
 	return 0;
 }

@@ -3184,7 +3184,7 @@ static void bpf_link_defer_dealloc_mult_rcu_gp(struct rcu_head *rcu)
 }
 
 /* bpf_link_free is guaranteed to be called from process context */
-static void bpf_link_free(struct bpf_link *link)
+void bpf_link_free(struct bpf_link *link)
 {
 	const struct bpf_link_ops *ops = link->ops;
 

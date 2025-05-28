@@ -1173,6 +1173,11 @@ struct btf_func_model {
  */
 #define BPF_TRAMP_F_INDIRECT		BIT(8)
 
+/* Indicate that bpf global trampoline is also used on this function and
+ * the trampoline is replacing it.
+ */
+#define BPF_TRAMP_F_REPLACE		BIT(9)
+
 /* Each call __bpf_prog_enter + call bpf_func + call __bpf_prog_exit is ~50
  * bytes on x86.
  */
@@ -2554,6 +2559,7 @@ void bpf_link_put(struct bpf_link *link);
 int bpf_link_new_fd(struct bpf_link *link);
 struct bpf_link *bpf_link_get_from_fd(u32 ufd);
 struct bpf_link *bpf_link_get_curr_or_next(u32 *id);
+void bpf_link_free(struct bpf_link *link);
 
 void bpf_token_inc(struct bpf_token *token);
 void bpf_token_put(struct bpf_token *token);

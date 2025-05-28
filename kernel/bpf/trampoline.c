@@ -14,6 +14,7 @@
 #include <linux/bpf_lsm.h>
 #include <linux/delay.h>
 #include <linux/kfunc_md.h>
+#include <linux/execmem.h>
 
 /* dummy _ops. The verifier will operate on target program's ops. */
 const struct bpf_verifier_ops bpf_extension_verifier_ops = {
@@ -142,6 +143,33 @@ void bpf_image_ksym_del(struct bpf_ksym *ksym)
 			   PAGE_SIZE, true, ksym->name);
 }
 
+static struct bpf_trampoline *__bpf_trampoline_lookup_exist(u64 key)
+{
+	struct bpf_trampoline *tr;
+	struct hlist_head *head;
+
+	head = &trampoline_table[hash_64(key, TRAMPOLINE_HASH_BITS)];
+	hlist_for_each_entry(tr, head, hlist) {
+		if (tr->key == key) {
+			refcount_inc(&tr->refcnt);
+			return tr;
+		}
+	}
+
+	return NULL;
+}
+
+static struct bpf_trampoline *bpf_trampoline_lookup_exist(u64 key)
+{
+	struct bpf_trampoline *tr;
+
+	mutex_lock(&trampoline_mutex);
+	tr = __bpf_trampoline_lookup_exist(key);
+	mutex_unlock(&trampoline_mutex);
+
+	return tr;
+}
+
 static struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 {
 	struct bpf_trampoline *tr;
@@ -149,13 +177,10 @@ static struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 	int i;
 
 	mutex_lock(&trampoline_mutex);
-	head = &trampoline_table[hash_64(key, TRAMPOLINE_HASH_BITS)];
-	hlist_for_each_entry(tr, head, hlist) {
-		if (tr->key == key) {
-			refcount_inc(&tr->refcnt);
-			goto out;
-		}
-	}
+	tr = __bpf_trampoline_lookup_exist(key);
+	if (tr)
+		goto out;
+
 	tr = kzalloc(sizeof(*tr), GFP_KERNEL);
 	if (!tr)
 		goto out;
@@ -172,6 +197,7 @@ static struct bpf_trampoline *bpf_trampoline_lookup(u64 key)
 
 	tr->key = key;
 	INIT_HLIST_NODE(&tr->hlist);
+	head = &trampoline_table[hash_64(key, TRAMPOLINE_HASH_BITS)];
 	hlist_add_head(&tr->hlist, head);
 	refcount_set(&tr->refcnt, 1);
 	mutex_init(&tr->mutex);
@@ -228,12 +254,27 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 
 	if (tr->func.ftrace_managed) {
 		ftrace_set_filter_ip(tr->fops, (unsigned long)ip, 0, 1);
-		ret = register_ftrace_direct(tr->fops, (long)new_addr);
+		if (tr->flags & BPF_TRAMP_F_REPLACE)
+			ret = replace_ftrace_direct(tr->fops, global_tr.fops,
+						    (long)new_addr);
+		else
+			ret = register_ftrace_direct(tr->fops, (long)new_addr);
 	} else {
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, NULL, new_addr);
 	}
 
 	return ret;
+}
+
+static int
+bpf_trampoline_get_count(const struct bpf_trampoline *tr)
+{
+	int count = 0;
+
+	for (int kind = 0; kind < BPF_TRAMP_MAX; kind++)
+		count += tr->progs_cnt[kind];
+
+	return count;
 }
 
 static struct bpf_tramp_links *
@@ -608,15 +649,173 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 	return err;
 }
 
+static int bpf_gtrampoline_get_link(struct bpf_trampoline *tr, struct bpf_prog *prog,
+				    u64 cookie, int kind,
+				    struct bpf_shim_tramp_link **link)
+{
+	struct bpf_shim_tramp_link *__link;
+
+	__link = kzalloc(sizeof(*__link), GFP_KERNEL);
+	if (!__link)
+		return -ENOMEM;
+
+	__link->link.cookie = cookie;
+
+	bpf_link_init(&__link->link.link, BPF_LINK_TYPE_UNSPEC,
+		      &bpf_shim_tramp_link_lops, prog);
+
+	/* the bpf_shim_tramp_link will hold a reference on the prog and tr */
+	refcount_inc(&tr->refcnt);
+	bpf_prog_inc(prog);
+	*link = __link;
+
+	return 0;
+}
+
+static struct bpf_tramp_link *
+bpf_gtrampoline_find_link(struct bpf_trampoline *tr, struct bpf_prog *prog)
+{
+	struct bpf_tramp_link *link;
+
+	for (int kind = 0; kind < BPF_TRAMP_MAX; kind++) {
+		hlist_for_each_entry(link, &tr->progs_hlist[kind], tramp_hlist) {
+			if (link->link.prog == prog)
+				return link;
+		}
+	}
+
+	return NULL;
+}
+
+static int bpf_gtrampoline_remove(struct bpf_trampoline *tr, struct bpf_prog *prog,
+				  bool remove_list)
+{
+	struct bpf_shim_tramp_link *slink;
+	int kind;
+
+	slink = (struct bpf_shim_tramp_link *)bpf_gtrampoline_find_link(tr, prog);
+	if (WARN_ON_ONCE(!slink))
+		return -EINVAL;
+
+	if (!slink->trampoline && remove_list) {
+		kind = bpf_attach_type_to_tramp(prog);
+		hlist_del_init(&slink->link.tramp_hlist);
+		tr->progs_cnt[kind]--;
+	}
+	bpf_link_free(&slink->link.link);
+
+	return 0;
+}
+
+static int bpf_gtrampoline_replace(struct bpf_trampoline *tr)
+{
+	struct kfunc_md_tramp_prog *progs;
+	struct bpf_shim_tramp_link *link;
+	struct kfunc_md *md;
+	int err = 0, count;
+
+	kfunc_md_lock();
+	md = kfunc_md_get((unsigned long)tr->func.addr);
+	if (!md || md->tramp) {
+		kfunc_md_put_entry(md);
+		kfunc_md_unlock();
+		return 0;
+	}
+	kfunc_md_unlock();
+
+	rcu_read_lock();
+	md = kfunc_md_get_noref((unsigned long)tr->func.addr);
+	if (!md || md->tramp)
+		goto on_fail;
+
+	count = bpf_trampoline_get_count(tr);
+	/* we are attaching a new link, so +1 here */
+	count += md->bpf_prog_cnt + 1;
+	if (count > BPF_MAX_TRAMP_LINKS) {
+		err = -E2BIG;
+		goto on_fail;
+	}
+
+	for (int kind = 0; kind < BPF_TRAMP_MAX; kind++) {
+		progs = md->bpf_progs[kind];
+		while (progs) {
+			err = bpf_gtrampoline_get_link(tr, progs->prog, progs->cookie,
+						       kind, &link);
+			if (err)
+				goto on_fail;
+
+			hlist_add_head(&link->link.tramp_hlist, &tr->progs_hlist[kind]);
+			tr->progs_cnt[kind]++;
+			progs = progs->next;
+			link->trampoline = tr;
+		}
+	}
+
+	tr->flags |= BPF_TRAMP_F_REPLACE;
+	rcu_read_unlock();
+
+	return 0;
+
+on_fail:
+	kfunc_md_put_entry(md);
+	rcu_read_unlock();
+
+	return err;
+}
+
+static void bpf_gtrampoline_replace_finish(struct bpf_trampoline *tr, int err)
+{
+	struct kfunc_md_tramp_prog *progs;
+	struct kfunc_md *md;
+
+	if (!(tr->flags & BPF_TRAMP_F_REPLACE))
+		return;
+
+	kfunc_md_lock();
+	md = kfunc_md_get_noref((unsigned long)tr->func.addr);
+	/* this shouldn't happen, as the md->tramp can only be set with
+	 * global_tr_lock.
+	 */
+	if (WARN_ON_ONCE(!md || md->tramp))
+		return;
+
+	if (err) {
+		for (int kind = 0; kind < BPF_TRAMP_MAX; kind++) {
+			progs = md->bpf_progs[kind];
+			while (progs) {
+				/* the progs is already added to trampoline
+				 * and we need clean it on this case.
+				 */
+				bpf_gtrampoline_remove(tr, progs->prog, true);
+				progs = progs->next;
+			}
+		}
+	} else {
+		md->tramp = tr;
+	}
+
+	kfunc_md_put_entry(md);
+	kfunc_md_unlock();
+}
+
 int bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 			     struct bpf_trampoline *tr,
 			     struct bpf_prog *tgt_prog)
 {
 	int err;
 
-	mutex_lock(&tr->mutex);
-	err = __bpf_trampoline_link_prog(link, tr, tgt_prog);
-	mutex_unlock(&tr->mutex);
+	down_read(&global_tr_lock);
+
+	err = bpf_gtrampoline_replace(tr);
+	if (!err) {
+		mutex_lock(&tr->mutex);
+		err = __bpf_trampoline_link_prog(link, tr, tgt_prog);
+		mutex_unlock(&tr->mutex);
+	}
+
+	bpf_gtrampoline_replace_finish(tr, err);
+	up_read(&global_tr_lock);
+
 	return err;
 }
 
@@ -745,7 +944,7 @@ int bpf_gtrampoline_unlink_prog(struct bpf_gtramp_link *link)
 	kfunc_md_lock();
 	for (int i = 0; i < link->entry_cnt; i++) {
 		md = kfunc_md_get_noref((long)link->entries[i].addr);
-		if (WARN_ON_ONCE(!md))
+		if (WARN_ON_ONCE(!md) || md->tramp)
 			continue;
 
 		md->flags |= KFUNC_MD_FL_BPF_REMOVING;
@@ -761,13 +960,65 @@ int bpf_gtrampoline_unlink_prog(struct bpf_gtramp_link *link)
 	return err;
 }
 
+static int bpf_gtrampoline_link_tramp(struct bpf_gtramp_link_entry *entry,
+				      struct bpf_prog *prog)
+{
+	struct bpf_trampoline *tr, *new_tr = NULL;
+	struct bpf_shim_tramp_link *slink = NULL;
+	struct kfunc_md *md;
+	int err, kind;
+	u64 key;
+
+	kfunc_md_lock();
+	md = kfunc_md_get_noref((long)entry->addr);
+	kind = bpf_attach_type_to_tramp(prog);
+	if (!md->tramp) {
+		key = bpf_trampoline_compute_key(NULL, entry->attach_btf,
+						 entry->btf_id);
+		new_tr = bpf_trampoline_lookup_exist(key);
+		md->tramp = new_tr;
+	}
+
+	/* check if we need to be replaced by trampoline */
+	tr = md->tramp;
+	kfunc_md_unlock();
+	if (!tr)
+		return 0;
+
+	mutex_lock(&tr->mutex);
+	err = bpf_gtrampoline_get_link(tr, prog, entry->cookie, kind, &slink);
+	if (err)
+		goto err_out;
+
+	err = __bpf_trampoline_link_prog(&slink->link, tr, NULL);
+	if (err)
+		goto err_out;
+	mutex_unlock(&tr->mutex);
+
+	bpf_trampoline_put(new_tr);
+	/* this can only be set on the link success */
+	slink->trampoline = tr;
+	tr->flags |= BPF_TRAMP_F_REPLACE;
+
+	return 0;
+err_out:
+	mutex_unlock(&tr->mutex);
+
+	bpf_trampoline_put(new_tr);
+	if (slink) {
+		bpf_trampoline_put(tr);
+		bpf_link_free(&slink->link.link);
+	}
+	return err;
+}
+
 int bpf_gtrampoline_link_prog(struct bpf_gtramp_link *link)
 {
 	struct bpf_gtramp_link_entry *entry;
 	enum bpf_tramp_prog_type kind;
 	struct bpf_prog *prog;
 	struct kfunc_md *md;
-	bool update = false;
+	bool update = false, linked;
 	int err = 0, i;
 
 	prog = link->link.prog;
@@ -785,6 +1036,7 @@ int bpf_gtrampoline_link_prog(struct bpf_gtramp_link *link)
 		 * lock instead.
 		 */
 		kfunc_md_lock();
+		linked = false;
 		md = kfunc_md_create((long)entry->addr, entry->nr_args);
 		if (md) {
 			/* the function is not in the filter hash of gtr,
@@ -793,16 +1045,27 @@ int bpf_gtrampoline_link_prog(struct bpf_gtramp_link *link)
 			if (!md->bpf_prog_cnt)
 				update = true;
 			err = kfunc_md_bpf_link(md, prog, kind, entry->cookie);
+			if (!err)
+				linked = true;
 		} else {
 			err = -ENOMEM;
 		}
-
-		if (err) {
-			kfunc_md_put_entry(md);
-			kfunc_md_unlock();
-			goto on_fallback;
-		}
 		kfunc_md_unlock();
+
+		if (!err) {
+			err = bpf_gtrampoline_link_tramp(entry, prog);
+			if (!err)
+				continue;
+		}
+
+		/* on error case, fallback the md and previous */
+		kfunc_md_lock();
+		md = kfunc_md_get_noref((long)entry->addr);
+		if (linked)
+			kfunc_md_bpf_unlink(md, prog, kind);
+		kfunc_md_put_entry(md);
+		kfunc_md_unlock();
+		goto on_fallback;
 	}
 
 	if (update) {
