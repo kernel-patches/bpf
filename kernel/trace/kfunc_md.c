@@ -131,6 +131,23 @@ static bool kfunc_md_fast(void)
 {
 	return static_branch_likely(&kfunc_md_use_padding);
 }
+
+static int kfunc_md_hash_bpf_ips(void **ips)
+{
+	struct hlist_head *head;
+	struct kfunc_md *md;
+	int c = 0, i;
+
+	for (i = 0; i < (1 << KFUNC_MD_HASH_BITS); i++) {
+		head = &kfunc_md_table[i];
+		hlist_for_each_entry(md, head, hash) {
+			if (md->bpf_prog_cnt > !!(md->flags & KFUNC_MD_FL_BPF_REMOVING))
+				ips[c++] = (void *)md->func;
+		}
+	}
+
+	return c;
+}
 #else
 
 static void kfunc_md_hash_put(struct kfunc_md *md)
@@ -148,6 +165,11 @@ static struct kfunc_md *kfunc_md_hash_create(unsigned long ip, int nr_args)
 }
 
 #define kfunc_md_fast() 1
+
+static int kfunc_md_hash_bpf_ips(void **ips)
+{
+	return 0;
+}
 #endif /* CONFIG_FUNCTION_METADATA_PADDING */
 
 #ifdef CONFIG_FUNCTION_METADATA
@@ -442,6 +464,19 @@ static struct kfunc_md *kfunc_md_fast_create(unsigned long ip, int nr_args)
 
 	return md;
 }
+
+static int kfunc_md_fast_bpf_ips(void **ips)
+{
+	struct kfunc_md *md;
+	int i, c = 0;
+
+	for (i = 0; i < kfunc_mds->kfunc_md_count; i++) {
+		md = &kfunc_mds->mds[i];
+		if (md->users && md->bpf_prog_cnt > !!(md->flags & KFUNC_MD_FL_BPF_REMOVING))
+			ips[c++] = (void *)md->func;
+	}
+	return c;
+}
 #else
 
 static void kfunc_md_fast_put(struct kfunc_md *md)
@@ -458,6 +493,10 @@ static struct kfunc_md *kfunc_md_fast_create(unsigned long ip, int nr_args)
 	return NULL;
 }
 
+static int kfunc_md_fast_bpf_ips(void **ips)
+{
+	return 0;
+}
 #endif /* !CONFIG_FUNCTION_METADATA */
 
 void kfunc_md_enter(struct kfunc_md *md)
@@ -546,6 +585,85 @@ struct kfunc_md *kfunc_md_create(unsigned long ip, int nr_args)
 		    struct kfunc_md *, ip, nr_args);
 }
 EXPORT_SYMBOL_GPL(kfunc_md_create);
+
+int kfunc_md_bpf_ips(void ***ips)
+{
+	void **tmp;
+	int c;
+
+	c = atomic_read(&kfunc_mds->kfunc_md_used);
+	if (!c)
+		return 0;
+
+	tmp = kmalloc_array(c, sizeof(*tmp), GFP_KERNEL);
+	if (!tmp)
+		return -ENOMEM;
+
+	rcu_read_lock();
+	c = CALL(kfunc_md_fast_bpf_ips, kfunc_md_hash_bpf_ips, int, tmp);
+	rcu_read_unlock();
+
+	*ips = tmp;
+
+	return c;
+}
+
+int kfunc_md_bpf_link(struct kfunc_md *md, struct bpf_prog *prog, int type,
+		      u64 cookie)
+{
+	struct kfunc_md_tramp_prog *tramp_prog, **last;
+
+	tramp_prog = md->bpf_progs[type];
+	/* check if the prog is already linked */
+	while (tramp_prog) {
+		if (tramp_prog->prog == prog)
+			return -EEXIST;
+		tramp_prog = tramp_prog->next;
+	}
+
+	tramp_prog = kmalloc(sizeof(*tramp_prog), GFP_KERNEL);
+	if (!tramp_prog)
+		return -ENOMEM;
+
+	tramp_prog->prog = prog;
+	tramp_prog->cookie = cookie;
+	tramp_prog->next = NULL;
+
+	/* add the new prog to the list tail */
+	last = &md->bpf_progs[type];
+	while (*last)
+		last = &(*last)->next;
+	*last = tramp_prog;
+
+	md->bpf_prog_cnt++;
+	if (type == BPF_TRAMP_FEXIT || type == BPF_TRAMP_MODIFY_RETURN)
+		md->flags |= KFUNC_MD_FL_TRACING_ORIGIN;
+
+	return 0;
+}
+
+int kfunc_md_bpf_unlink(struct kfunc_md *md, struct bpf_prog *prog, int type)
+{
+	struct kfunc_md_tramp_prog *cur, **prev;
+
+	prev = &md->bpf_progs[type];
+	while (*prev && (*prev)->prog != prog)
+		prev = &(*prev)->next;
+
+	cur = *prev;
+	if (!cur)
+		return -EINVAL;
+
+	*prev = cur->next;
+	kfree_rcu(cur, rcu);
+	md->bpf_prog_cnt--;
+
+	if (!md->bpf_progs[BPF_TRAMP_FEXIT] &&
+	    !md->bpf_progs[BPF_TRAMP_MODIFY_RETURN])
+		md->flags &= ~KFUNC_MD_FL_TRACING_ORIGIN;
+
+	return 0;
+}
 
 bool __weak kfunc_md_arch_support(int *insn, int *data)
 {
