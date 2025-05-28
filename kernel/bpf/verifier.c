@@ -16947,10 +16947,13 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 		switch (env->prog->expected_attach_type) {
 		case BPF_TRACE_FENTRY:
 		case BPF_TRACE_FEXIT:
+		case BPF_TRACE_FENTRY_MULTI:
+		case BPF_TRACE_FEXIT_MULTI:
 			range = retval_range(0, 0);
 			break;
 		case BPF_TRACE_RAW_TP:
 		case BPF_MODIFY_RETURN:
+		case BPF_MODIFY_RETURN_MULTI:
 			return 0;
 		case BPF_TRACE_ITER:
 			break;
@@ -22266,7 +22269,9 @@ patch_map_ops_generic:
 		if (prog_type == BPF_PROG_TYPE_TRACING &&
 		    insn->imm == BPF_FUNC_get_func_ret) {
 			if (eatype == BPF_TRACE_FEXIT ||
-			    eatype == BPF_MODIFY_RETURN) {
+			    eatype == BPF_MODIFY_RETURN ||
+			    eatype == BPF_TRACE_FEXIT_MULTI ||
+			    eatype == BPF_MODIFY_RETURN_MULTI) {
 				/* Load nr_args from ctx - 8 */
 				insn_buf[0] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1, -8);
 				insn_buf[1] = BPF_ALU64_IMM(BPF_LSH, BPF_REG_0, 3);
@@ -23248,7 +23253,9 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		if (tgt_prog->type == BPF_PROG_TYPE_TRACING &&
 		    prog_extension &&
 		    (tgt_prog->expected_attach_type == BPF_TRACE_FENTRY ||
-		     tgt_prog->expected_attach_type == BPF_TRACE_FEXIT)) {
+		     tgt_prog->expected_attach_type == BPF_TRACE_FEXIT ||
+		     tgt_prog->expected_attach_type == BPF_TRACE_FENTRY_MULTI ||
+		     tgt_prog->expected_attach_type == BPF_TRACE_FEXIT_MULTI)) {
 			/* Program extensions can extend all program types
 			 * except fentry/fexit. The reason is the following.
 			 * The fentry/fexit programs are used for performance
@@ -23347,6 +23354,9 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 	case BPF_LSM_CGROUP:
 	case BPF_TRACE_FENTRY:
 	case BPF_TRACE_FEXIT:
+	case BPF_MODIFY_RETURN_MULTI:
+	case BPF_TRACE_FENTRY_MULTI:
+	case BPF_TRACE_FEXIT_MULTI:
 		if (!btf_type_is_func(t)) {
 			bpf_log(log, "attach_btf_id %u is not a function\n",
 				btf_id);
@@ -23432,7 +23442,8 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				bpf_log(log, "%s is not sleepable\n", tname);
 				return ret;
 			}
-		} else if (prog->expected_attach_type == BPF_MODIFY_RETURN) {
+		} else if (prog->expected_attach_type == BPF_MODIFY_RETURN ||
+			   prog->expected_attach_type == BPF_MODIFY_RETURN_MULTI) {
 			if (tgt_prog) {
 				module_put(mod);
 				bpf_log(log, "can't modify return codes of BPF programs\n");
@@ -23485,6 +23496,9 @@ static bool can_be_sleepable(struct bpf_prog *prog)
 		case BPF_TRACE_FEXIT:
 		case BPF_MODIFY_RETURN:
 		case BPF_TRACE_ITER:
+		case BPF_TRACE_FENTRY_MULTI:
+		case BPF_TRACE_FEXIT_MULTI:
+		case BPF_MODIFY_RETURN_MULTI:
 			return true;
 		default:
 			return false;
@@ -23558,6 +23572,11 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	} else if (prog->expected_attach_type == BPF_TRACE_ITER) {
 		return bpf_iter_prog_supported(prog);
 	}
+
+	if (prog->expected_attach_type == BPF_TRACE_FENTRY_MULTI ||
+	    prog->expected_attach_type == BPF_TRACE_FEXIT_MULTI ||
+	    prog->expected_attach_type == BPF_MODIFY_RETURN_MULTI)
+		return 0;
 
 	key = bpf_trampoline_compute_key(tgt_prog, prog->aux->attach_btf, btf_id);
 	tr = bpf_trampoline_get(key, &tgt_info);

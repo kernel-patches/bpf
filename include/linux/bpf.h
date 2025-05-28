@@ -1802,6 +1802,17 @@ struct bpf_raw_tp_link {
 	u64 cookie;
 };
 
+struct bpf_tracing_multi_link {
+	struct bpf_gtramp_link link;
+	enum bpf_attach_type attach_type;
+	struct bpf_prog **tgt_progs;
+	struct btf **tgt_btfs;
+	struct module **mods;
+	u32 prog_cnt;
+	u32 btf_cnt;
+	u32 mods_cnt;
+};
+
 struct bpf_link_primer {
 	struct bpf_link *link;
 	struct file *file;
