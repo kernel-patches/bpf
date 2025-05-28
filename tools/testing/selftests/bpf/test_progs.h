@@ -468,6 +468,8 @@ int trigger_module_test_write(int write_sz);
 int write_sysctl(const char *sysctl, const char *value);
 int get_bpf_max_tramp_links_from(struct btf *btf);
 int get_bpf_max_tramp_links(void);
+int bpf_get_ksyms(char ***symsp, size_t *cntp, bool kernel);
+int bpf_get_addrs(unsigned long **addrsp, size_t *cntp, bool kernel);
 
 struct netns_obj;
 struct netns_obj *netns_new(const char *name, bool open);
