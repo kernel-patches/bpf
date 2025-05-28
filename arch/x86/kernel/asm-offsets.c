@@ -12,7 +12,9 @@
 #include <linux/stddef.h>
 #include <linux/hardirq.h>
 #include <linux/suspend.h>
+#include <linux/bpf.h>
 #include <linux/kbuild.h>
+#include <linux/kfunc_md.h>
 #include <asm/processor.h>
 #include <asm/thread_info.h>
 #include <asm/sigframe.h>
@@ -115,4 +117,17 @@ static void __used common(void)
 	OFFSET(ARIA_CTX_rounds, aria_ctx, rounds);
 #endif
 
+	DEFINE(RUN_CTX_SIZE, sizeof(struct bpf_tramp_run_ctx));
+	OFFSET(RUN_CTX_cookie, bpf_tramp_run_ctx, bpf_cookie);
+
+	OFFSET(BPF_PROG_func, bpf_prog, bpf_func);
+
+	DEFINE(KFUNC_MD_SIZE, sizeof(struct kfunc_md));
+	OFFSET(KFUNC_MD_progs, kfunc_md, bpf_progs);
+	OFFSET(KFUNC_MD_addr, kfunc_md, func);
+	OFFSET(KFUNC_MD_flags, kfunc_md, flags);
+	OFFSET(KFUNC_MD_nr_args, kfunc_md, nr_args);
+
+	OFFSET(KFUNC_MD_PROG_prog, kfunc_md_tramp_prog, prog);
+	OFFSET(KFUNC_MD_PROG_cookie, kfunc_md_tramp_prog, cookie);
 }

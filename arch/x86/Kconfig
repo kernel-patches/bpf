@@ -153,6 +153,7 @@ config X86
 	select ARCH_WANT_HUGETLB_VMEMMAP_PREINIT if X86_64
 	select ARCH_WANTS_THP_SWAP		if X86_64
 	select ARCH_HAS_PARANOID_L1D_FLUSH
+	select ARCH_HAS_BPF_GLOBAL_CALLER	if X86_64
 	select BUILDTIME_TABLE_SORT
 	select CLKEVT_I8253
 	select CLOCKSOURCE_WATCHDOG
@@ -430,6 +431,9 @@ config PGTABLE_LEVELS
 	default 4 if X86_64
 	default 3 if X86_PAE
 	default 2
+
+config ARCH_HAS_BPF_GLOBAL_CALLER
+	bool
 
 menu "Processor type and features"
 

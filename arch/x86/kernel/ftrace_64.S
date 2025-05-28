@@ -6,6 +6,7 @@
 #include <linux/export.h>
 #include <linux/cfi_types.h>
 #include <linux/linkage.h>
+#include <linux/kfunc_md.h>
 #include <asm/asm-offsets.h>
 #include <asm/ptrace.h>
 #include <asm/ftrace.h>
@@ -384,3 +385,233 @@ SYM_CODE_START(return_to_handler)
 		    X86_FEATURE_CALL_DEPTH
 SYM_CODE_END(return_to_handler)
 #endif
+
+/*
+ * the stack layout for bpf_global_caller:
+ *
+ *	callee rip
+ *	rbp
+ *	---------------------- rbp
+ *	return value	- for origin call
+ *	arg6
+ *	......
+ *	arg1
+ *	arg count
+ *	origin ip	- for bpf_get_func_ip()
+ *	rbx		- keep pointer to kfunc_md_tramp_prog
+ *	bpf_tramp_run_ctx
+ *	kfunc_md_ptr
+ *	kfunc_md_flags
+ *	r12		- keep the start time
+ *	r13		- keep the return value address, for origin call
+ *
+ * Note: the return value can be in the position of arg6, arg5, etc,
+ *       depending on the number of args. That's why we need the %r13
+ */
+
+#define FUNC_RETURN_OFFSET	(-8)
+
+#define FUNC_ARGS_SIZE		(6 * 8)
+#define FUNC_ARGS_OFFSET	(FUNC_RETURN_OFFSET - FUNC_ARGS_SIZE)
+#define FUNC_ARGS_1		(FUNC_ARGS_OFFSET + 0 * 8)
+#define FUNC_ARGS_2		(FUNC_ARGS_OFFSET + 1 * 8)
+#define FUNC_ARGS_3		(FUNC_ARGS_OFFSET + 2 * 8)
+#define FUNC_ARGS_4		(FUNC_ARGS_OFFSET + 3 * 8)
+#define FUNC_ARGS_5		(FUNC_ARGS_OFFSET + 4 * 8)
+#define FUNC_ARGS_6		(FUNC_ARGS_OFFSET + 5 * 8)
+
+/* the args count, rbp - 8 * 8 */
+#define FUNC_ARGS_COUNT_OFFSET	(FUNC_ARGS_OFFSET - 1 * 8)
+#define FUNC_ORIGIN_IP		(FUNC_ARGS_OFFSET - 2 * 8) /* -9 * 8 */
+#define RBX_OFFSET		(FUNC_ARGS_OFFSET - 3 * 8)
+
+/* bpf_tramp_run_ctx, rbp - RUN_CTX_OFFSET */
+#define RUN_CTX_OFFSET		(RBX_OFFSET - RUN_CTX_SIZE)
+#define KFUNC_MD_OFFSET		(RUN_CTX_OFFSET - 1 * 8)
+#define KFUNC_MD_FLAGS_OFFSET	(KFUNC_MD_OFFSET - 8)
+#define R12_OFFSET		(KFUNC_MD_OFFSET - 16)
+#define R13_OFFSET		(KFUNC_MD_OFFSET - 24)
+#define STACK_SIZE		(-1 * R13_OFFSET)
+
+/* restore the regs before we return or before we do the origin call */
+.macro tramp_restore_regs
+	movq FUNC_ARGS_1(%rbp), %rdi
+	movq FUNC_ARGS_2(%rbp), %rsi
+	movq FUNC_ARGS_3(%rbp), %rdx
+	movq FUNC_ARGS_4(%rbp), %rcx
+	movq FUNC_ARGS_5(%rbp), %r8
+	movq FUNC_ARGS_6(%rbp), %r9
+	.endm
+
+/* save the args to stack, only regs is supported for now */
+.macro tramp_save_regs
+	movq %rdi, FUNC_ARGS_1(%rbp)
+	movq %rsi, FUNC_ARGS_2(%rbp)
+	movq %rdx, FUNC_ARGS_3(%rbp)
+	movq %rcx, FUNC_ARGS_4(%rbp)
+	movq %r8, FUNC_ARGS_5(%rbp)
+	movq %r9, FUNC_ARGS_6(%rbp)
+	.endm
+
+#define BPF_TRAMP_FENTRY	0
+#define BPF_TRAMP_FEXIT		1
+#define BPF_TRAMP_MODIFY_RETURN	2
+
+.macro bpf_caller_prog_run type
+	/* check if the prog list is NULL */
+1:	testq %rbx, %rbx
+	jz 3f
+
+	/* load bpf prog to the 1st arg */
+	movq KFUNC_MD_PROG_prog(%rbx), %rdi
+
+	/* load the pointer of tramp_run_ctx to the 2nd arg */
+	leaq RUN_CTX_OFFSET(%rbp), %rsi
+	/* save the bpf cookie to the tramp_run_ctx */
+	movq KFUNC_MD_PROG_cookie(%rbx), %rax
+	movq %rax, RUN_CTX_cookie(%rsi)
+	call __bpf_prog_enter_recur
+	/* save the start time to r12 */
+	movq %rax, %r12
+	testq %rax, %rax
+	jz 2f
+
+	movq KFUNC_MD_PROG_prog(%rbx), %rdi
+	/* load the JITed prog to rax */
+	movq BPF_PROG_func(%rdi), %rax
+	/* load func args array to the 1st arg */
+	leaq FUNC_ARGS_OFFSET(%rbp), %rdi
+
+	/* load and call the JITed bpf func */
+	CALL_NOSPEC rax
+.if \type==BPF_TRAMP_MODIFY_RETURN
+	/* modify_return case, save the return value */
+	movq %rax, (%r13)
+.endif
+
+	/* load bpf prog to the 1st arg */
+2:	movq KFUNC_MD_PROG_prog(%rbx), %rdi
+	/* load the rbx(start time) to the 2nd arg */
+	movq %r12, %rsi
+	/* load the pointer of tramp_run_ctx to the 3rd arg */
+	leaq RUN_CTX_OFFSET(%rbp), %rdx
+	call __bpf_prog_exit_recur
+
+.if \type==BPF_TRAMP_MODIFY_RETURN
+	/* modify_return case, break the loop and skip the origin function call */
+	cmpq $0, (%r13)
+	jne do_bpf_fexit
+.endif
+	/* load the next tramp prog to rbx */
+	movq 0(%rbx), %rbx
+	jmp 1b
+
+3:
+	.endm
+
+SYM_FUNC_START(bpf_global_caller)
+	ANNOTATE_NOENDBR
+
+	/* prepare the stack space and store the args to the stack */
+	pushq %rbp
+	movq %rsp, %rbp
+	subq $STACK_SIZE, %rsp
+	tramp_save_regs
+
+	CALL_DEPTH_ACCOUNT
+
+	/* save rbx and r12, which will be used later */
+	movq %rbx, RBX_OFFSET(%rbp)
+	movq %r12, R12_OFFSET(%rbp)
+
+	/* get the function address */
+	movq 8(%rbp), %rdi
+	/* for x86_64, the function is 16-bytes aligned */
+	andq $0xfffffffffffffff0, %rdi
+	/* save the origin function ip */
+	movq %rdi, FUNC_ORIGIN_IP(%rbp)
+
+	/* get the function meta data */
+	call kfunc_md_get_noref
+	testq %rax, %rax
+	jz do_bpf_out
+	movq %rax, %rbx
+	movq %rbx, KFUNC_MD_OFFSET(%rbp)
+
+	/* save the function args count */
+	movzbq KFUNC_MD_nr_args(%rbx), %rax
+	movq %rax, FUNC_ARGS_COUNT_OFFSET(%rbp)
+
+	/* call kfunc_md_enter only if we need origin call */
+	movl KFUNC_MD_flags(%rbx), %edi
+	movl %edi, KFUNC_MD_FLAGS_OFFSET(%rbp)
+	andl $KFUNC_MD_FL_TRACING_ORIGIN, %edi
+	jz 1f
+
+	/* save the address of the return value to r13 */
+	movq %r13, R13_OFFSET(%rbp)
+	leaq FUNC_ARGS_OFFSET(%rbp, %rax, 8), %r13
+
+	movq %rbx, %rdi
+	call kfunc_md_enter
+
+	/* try run fentry progs */
+1:	movq (KFUNC_MD_progs + BPF_TRAMP_FENTRY * 8)(%rbx), %rbx
+	bpf_caller_prog_run BPF_TRAMP_FENTRY
+
+	/* check if we need to do the origin call */
+	movl KFUNC_MD_FLAGS_OFFSET(%rbp), %eax
+	andl $KFUNC_MD_FL_TRACING_ORIGIN, %eax
+	jz do_bpf_out
+
+	/* try run modify_return progs */
+	movq KFUNC_MD_OFFSET(%rbp), %r12
+	movq (KFUNC_MD_progs + BPF_TRAMP_MODIFY_RETURN * 8)(%r12), %rbx
+	movq $0, (%r13)
+	bpf_caller_prog_run BPF_TRAMP_MODIFY_RETURN
+
+	/* do the origin call */
+	tramp_restore_regs
+	/* call the origin function from the stack, just like BPF_TRAMP_F_ORIG_STACK */
+	movq 8(%rbp), %rax
+	CALL_NOSPEC rax
+	movq %rax, (%r13)
+
+do_bpf_fexit:
+	/* for origin case, run fexit and return */
+	movq KFUNC_MD_OFFSET(%rbp), %r12
+	movq (KFUNC_MD_progs + BPF_TRAMP_FEXIT * 8)(%r12), %rbx
+	bpf_caller_prog_run BPF_TRAMP_FEXIT
+	movq KFUNC_MD_OFFSET(%rbp), %rdi
+	call kfunc_md_exit
+
+	movq (%r13), %rax
+	movq RBX_OFFSET(%rbp), %rbx
+	movq R12_OFFSET(%rbp), %r12
+	movq R13_OFFSET(%rbp), %r13
+	leave
+
+	/* rebalance the RSB. We can simply use:
+	 *
+	 *   leaq 8(%rsp), %rsp
+	 *   RET
+	 *
+	 * instead here if we don't want do the rebalance.
+	 */
+	movq $bpf_global_caller_rsb, (%rsp)
+	RET
+SYM_INNER_LABEL(bpf_global_caller_rsb, SYM_L_LOCAL)
+	ANNOTATE_NOENDBR
+	RET
+
+do_bpf_out:
+	/* for no origin call case, restore regs and return */
+	tramp_restore_regs
+
+	movq RBX_OFFSET(%rbp), %rbx
+	movq R12_OFFSET(%rbp), %r12
+	leave
+	RET
+
+SYM_FUNC_END(bpf_global_caller)
+STACK_FRAME_NON_STANDARD(bpf_global_caller)
