@@ -35,6 +35,7 @@ struct btf {
 	void *raw_data;
 	/* raw BTF data in non-native endianness */
 	void *raw_data_swapped;
+	struct hashmap *func_hash;
 	__u32 raw_size;
 	/* whether target endianness differs from the native one */
 	bool swapped_endian;
@@ -129,6 +130,12 @@ struct btf {
 
 	/* Pointer size (in bytes) for a target architecture of this BTF */
 	int ptr_sz;
+};
+
+struct btf_type_key {
+	__u32 dummy;
+	const char *name;
+	int kind;
 };
 
 static inline __u64 ptr_to_u64(const void *ptr)
@@ -938,6 +945,100 @@ static __s32 btf_find_by_name_kind(const struct btf *btf, int start_id,
 	return libbpf_err(-ENOENT);
 }
 
+static size_t btf_hash_name(long key, void *btf)
+{
+	const struct btf_type *t = (const struct btf_type *)key;
+	const char *name;
+
+	if (t->name_off > BTF_MAX_NAME_OFFSET)
+		name = ((struct btf_type_key *)key)->name;
+	else
+		name = btf__name_by_offset(btf, t->name_off);
+
+	return str_hash(name);
+}
+
+static bool btf_name_equal(long key1, long key2, void *btf)
+{
+	const struct btf_type *t1 = (const struct btf_type *)key1,
+		*t2 = (const struct btf_type *)key2;
+	const char *name1, *name2;
+	int k1, k2;
+
+	name1 = btf__name_by_offset(btf, t1->name_off);
+	k1 = btf_kind(t1);
+
+	if (t2->name_off > BTF_MAX_NAME_OFFSET) {
+		struct btf_type_key *t2_key = (struct btf_type_key *)key2;
+
+		name2 = t2_key->name;
+		k2 = t2_key->kind;
+	} else {
+		name2 = btf__name_by_offset(btf, t2->name_off);
+		k2 = btf_kind(t2);
+	}
+
+	return k1 == k2 && strcmp(name1, name2) == 0;
+}
+
+__s32 btf__make_hash(struct btf *btf)
+{
+	__u32 i, nr_types = btf__type_cnt(btf);
+	struct hashmap *map;
+
+	if (btf->func_hash)
+		return 0;
+
+	map = hashmap__new(btf_hash_name, btf_name_equal, (void *)btf);
+	if (!map)
+		return libbpf_err(-ENOMEM);
+
+	for (i = btf->start_id; i < nr_types; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+		int err;
+
+		/* only function need this */
+		if (btf_kind(t) != BTF_KIND_FUNC)
+			continue;
+
+		err = hashmap__add(map, t, i);
+		if (err == -EEXIST) {
+			pr_warn("btf type exist: name=%s\n",
+				btf__name_by_offset(btf, t->name_off));
+			continue;
+		}
+
+		if (err)
+			return libbpf_err(err);
+	}
+
+	btf->func_hash = map;
+	return 0;
+}
+
+bool btf__hash_hash(struct btf *btf)
+{
+	return !!btf->func_hash;
+}
+
+int btf__find_by_func_hash(struct btf *btf, const char *type_name, __u32 kind)
+{
+	struct btf_type_key key = {
+		.dummy = 0xffffffff,
+		.name = type_name,
+		.kind = kind,
+	};
+	long t;
+
+	if (!btf->func_hash)
+		return -ENOENT;
+
+	if (hashmap__find(btf->func_hash, &key, &t))
+		return t;
+
+	return -ENOENT;
+}
+
 __s32 btf__find_by_name_kind_own(const struct btf *btf, const char *type_name,
 				 __u32 kind)
 {
@@ -974,6 +1075,7 @@ void btf__free(struct btf *btf)
 	if (btf->fd >= 0)
 		close(btf->fd);
 
+	hashmap__free(btf->func_hash);
 	if (btf_is_modifiable(btf)) {
 		/* if BTF was modified after loading, it will have a split
 		 * in-memory representation for header, types, and strings

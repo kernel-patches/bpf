@@ -445,4 +445,7 @@ LIBBPF_1.6.0 {
 		bpf_program__line_info_cnt;
 		btf__add_decl_attr;
 		btf__add_type_attr;
+		btf__hash_hash;
+		btf__find_by_func_hash;
+		btf__make_hash;
 } LIBBPF_1.5.0;

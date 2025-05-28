@@ -634,6 +634,7 @@ struct extern_desc {
 
 struct module_btf {
 	struct btf *btf;
+	struct hashmap *btf_name_hash;
 	char *name;
 	__u32 id;
 	int fd;
@@ -717,6 +718,7 @@ struct bpf_object {
 	 * it at load time.
 	 */
 	struct btf *btf_vmlinux;
+	struct hashmap *btf_name_hash;
 	/* Path to the custom BTF to be used for BPF CO-RE relocations as an
 	 * override for vmlinux BTF.
 	 */
@@ -1004,7 +1006,7 @@ static int find_ksym_btf_id(struct bpf_object *obj, const char *ksym_name,
 			    struct module_btf **res_mod_btf);
 
 #define STRUCT_OPS_VALUE_PREFIX "bpf_struct_ops_"
-static int find_btf_by_prefix_kind(const struct btf *btf, const char *prefix,
+static int find_btf_by_prefix_kind(struct btf *btf, const char *prefix,
 				   const char *name, __u32 kind);
 
 static int
@@ -10040,7 +10042,7 @@ void btf_get_kernel_prefix_kind(enum bpf_attach_type attach_type,
 	}
 }
 
-static int find_btf_by_prefix_kind(const struct btf *btf, const char *prefix,
+static int find_btf_by_prefix_kind(struct btf *btf, const char *prefix,
 				   const char *name, __u32 kind)
 {
 	char btf_type_name[BTF_MAX_NAME_SIZE];
@@ -10054,6 +10056,10 @@ static int find_btf_by_prefix_kind(const struct btf *btf, const char *prefix,
 	 */
 	if (ret < 0 || ret >= sizeof(btf_type_name))
 		return -ENAMETOOLONG;
+
+	if (btf__hash_hash(btf))
+		return btf__find_by_func_hash(btf, btf_type_name, kind);
+
 	return btf__find_by_name_kind(btf, btf_type_name, kind);
 }
 
@@ -10126,9 +10132,9 @@ out:
 
 static int find_kernel_btf_id(struct bpf_object *obj, const char *attach_name,
 			      enum bpf_attach_type attach_type,
-			      int *btf_obj_fd, int *btf_type_id)
+			      int *btf_obj_fd, int *btf_type_id, bool use_hash)
 {
-	int ret, i, mod_len;
+	int ret, i, mod_len, err;
 	const char *fn_name, *mod_name = NULL;
 
 	fn_name = strchr(attach_name, ':');
@@ -10139,6 +10145,11 @@ static int find_kernel_btf_id(struct bpf_object *obj, const char *attach_name,
 	}
 
 	if (!mod_name || strncmp(mod_name, "vmlinux", mod_len) == 0) {
+		if (use_hash) {
+			err = btf__make_hash(obj->btf_vmlinux);
+			if (err)
+				return err;
+		}
 		ret = find_attach_btf_id(obj->btf_vmlinux,
 					 mod_name ? fn_name : attach_name,
 					 attach_type);
@@ -10161,6 +10172,11 @@ static int find_kernel_btf_id(struct bpf_object *obj, const char *attach_name,
 		if (mod_name && strncmp(mod->name, mod_name, mod_len) != 0)
 			continue;
 
+		if (use_hash) {
+			err = btf__make_hash(mod->btf);
+			if (err)
+				return err;
+		}
 		ret = find_attach_btf_id(mod->btf,
 					 mod_name ? fn_name : attach_name,
 					 attach_type);
@@ -10210,7 +10226,7 @@ static int libbpf_find_attach_btf_id(struct bpf_program *prog, const char *attac
 	} else {
 		err = find_kernel_btf_id(prog->obj, attach_name,
 					 attach_type, btf_obj_fd,
-					 btf_type_id);
+					 btf_type_id, false);
 	}
 	if (err) {
 		pr_warn("prog '%s': failed to find kernel BTF type ID of '%s': %s\n",
@@ -12854,11 +12870,16 @@ struct bpf_link *bpf_program__attach_trace_multi_opts(const struct bpf_program *
 			goto err_free;
 		}
 		for (i = 0; i < cnt; i++) {
-			btf_obj_fd = btf_type_id = 0;
+			/* only use btf type function hashmap when the count
+			 * is big enough.
+			 */
+			bool func_hash = cnt > 1024;
 
+
+			btf_obj_fd = btf_type_id = 0;
 			err = find_kernel_btf_id(prog->obj, opts->syms[i],
 					 prog->expected_attach_type, &btf_obj_fd,
-					 &btf_type_id);
+					 &btf_type_id, func_hash);
 			if (err)
 				goto err_free;
 			btf_ids[i] = btf_type_id;
@@ -13936,7 +13957,7 @@ int bpf_program__set_attach_target(struct bpf_program *prog,
 			return libbpf_err(err);
 		err = find_kernel_btf_id(prog->obj, attach_func_name,
 					 prog->expected_attach_type,
-					 &btf_obj_fd, &btf_id);
+					 &btf_obj_fd, &btf_id, false);
 		if (err)
 			return libbpf_err(err);
 	}

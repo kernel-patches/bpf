@@ -335,6 +335,12 @@ btf_dump__dump_type_data(struct btf_dump *d, __u32 id,
 			 const void *data, size_t data_sz,
 			 const struct btf_dump_type_data_opts *opts);
 
+
+LIBBPF_API __s32 btf__make_hash(struct btf *btf);
+LIBBPF_API bool btf__hash_hash(struct btf *btf);
+LIBBPF_API int
+btf__find_by_func_hash(struct btf *btf, const char *type_name, __u32 kind);
+
 /*
  * A set of helpers for easier BTF types handling.
  *
