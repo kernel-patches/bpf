@@ -5910,6 +5910,66 @@ static void register_ftrace_direct_cb(struct rcu_head *rhp)
 	free_ftrace_hash(fhp);
 }
 
+static int ftrace_direct_update(struct ftrace_hash *hash, unsigned long addr)
+{
+	struct ftrace_func_entry *entry, *new;
+	struct ftrace_hash *new_hash = NULL;
+	int err = -EBUSY, size, i;
+
+	/* Make sure requested entries are not already registered.. */
+	size = 1 << hash->size_bits;
+	for (i = 0; i < size; i++) {
+		hlist_for_each_entry(entry, &hash->buckets[i], hlist) {
+			if (ftrace_find_rec_direct(entry->ip))
+				goto out;
+		}
+	}
+
+	err = -ENOMEM;
+
+	/* Make a copy hash to place the new and the old entries in */
+	size = hash->count + direct_functions->count;
+	size = fls(size);
+	if (size > FTRACE_HASH_MAX_BITS)
+		size = FTRACE_HASH_MAX_BITS;
+	new_hash = alloc_ftrace_hash(size);
+	if (!new_hash)
+		goto out;
+
+	/* Now copy over the existing direct entries */
+	size = 1 << direct_functions->size_bits;
+	for (i = 0; i < size; i++) {
+		hlist_for_each_entry(entry, &direct_functions->buckets[i], hlist) {
+			new = add_hash_entry(new_hash, entry->ip);
+			if (!new)
+				goto out;
+			new->direct = entry->direct;
+		}
+	}
+
+	/* ... and add the new entries */
+	size = 1 << hash->size_bits;
+	for (i = 0; i < size; i++) {
+		hlist_for_each_entry(entry, &hash->buckets[i], hlist) {
+			new = add_hash_entry(new_hash, entry->ip);
+			if (!new)
+				goto out;
+			/* Update both the copy and the hash entry */
+			new->direct = addr;
+			entry->direct = addr;
+		}
+	}
+
+	rcu_assign_pointer(direct_functions, new_hash);
+	new_hash = NULL;
+	err = 0;
+out:
+	if (new_hash)
+		free_ftrace_hash(new_hash);
+
+	return err;
+}
+
 /**
  * register_ftrace_direct - Call a custom trampoline directly
  * for multiple functions registered in @ops
@@ -5934,9 +5994,8 @@ static void register_ftrace_direct_cb(struct rcu_head *rhp)
  */
 int register_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 {
-	struct ftrace_hash *hash, *new_hash = NULL, *free_hash = NULL;
-	struct ftrace_func_entry *entry, *new;
-	int err = -EBUSY, size, i;
+	struct ftrace_hash *hash, *free_hash = NULL;
+	int err = -EBUSY;
 
 	if (ops->func || ops->trampoline)
 		return -EINVAL;
@@ -5951,53 +6010,10 @@ int register_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 
 	mutex_lock(&direct_mutex);
 
-	/* Make sure requested entries are not already registered.. */
-	size = 1 << hash->size_bits;
-	for (i = 0; i < size; i++) {
-		hlist_for_each_entry(entry, &hash->buckets[i], hlist) {
-			if (ftrace_find_rec_direct(entry->ip))
-				goto out_unlock;
-		}
-	}
-
-	err = -ENOMEM;
-
-	/* Make a copy hash to place the new and the old entries in */
-	size = hash->count + direct_functions->count;
-	size = fls(size);
-	if (size > FTRACE_HASH_MAX_BITS)
-		size = FTRACE_HASH_MAX_BITS;
-	new_hash = alloc_ftrace_hash(size);
-	if (!new_hash)
-		goto out_unlock;
-
-	/* Now copy over the existing direct entries */
-	size = 1 << direct_functions->size_bits;
-	for (i = 0; i < size; i++) {
-		hlist_for_each_entry(entry, &direct_functions->buckets[i], hlist) {
-			new = add_hash_entry(new_hash, entry->ip);
-			if (!new)
-				goto out_unlock;
-			new->direct = entry->direct;
-		}
-	}
-
-	/* ... and add the new entries */
-	size = 1 << hash->size_bits;
-	for (i = 0; i < size; i++) {
-		hlist_for_each_entry(entry, &hash->buckets[i], hlist) {
-			new = add_hash_entry(new_hash, entry->ip);
-			if (!new)
-				goto out_unlock;
-			/* Update both the copy and the hash entry */
-			new->direct = addr;
-			entry->direct = addr;
-		}
-	}
-
 	free_hash = direct_functions;
-	rcu_assign_pointer(direct_functions, new_hash);
-	new_hash = NULL;
+	err = ftrace_direct_update(hash, addr);
+	if (err)
+		goto out_unlock;
 
 	ops->func = call_direct_funcs;
 	ops->flags = MULTI_FLAGS;
@@ -6005,15 +6021,11 @@ int register_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 	ops->direct_call = addr;
 
 	err = register_ftrace_function_nolock(ops);
-
- out_unlock:
-	mutex_unlock(&direct_mutex);
-
 	if (free_hash && free_hash != EMPTY_HASH)
 		call_rcu_tasks(&free_hash->rcu, register_ftrace_direct_cb);
 
-	if (new_hash)
-		free_ftrace_hash(new_hash);
+ out_unlock:
+	mutex_unlock(&direct_mutex);
 
 	return err;
 }
