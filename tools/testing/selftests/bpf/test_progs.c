@@ -685,6 +685,68 @@ static bool skip_entry(char *name)
 	if (!strncmp(name, "__ftrace_invalid_address__",
 		     sizeof("__ftrace_invalid_address__") - 1))
 		return true;
+
+	/* skip functions in "btf_id_deny" */
+	if (!strcmp(name, "migrate_disable"))
+		return true;
+	if (!strcmp(name, "migrate_enable"))
+		return true;
+	if (!strcmp(name, "rcu_read_unlock_strict"))
+		return true;
+	if (!strcmp(name, "preempt_count_add"))
+		return true;
+	if (!strcmp(name, "preempt_count_sub"))
+		return true;
+	if (!strcmp(name, "__rcu_read_lock"))
+		return true;
+	if (!strcmp(name, "__rcu_read_unlock"))
+		return true;
+
+	/* Following symbols have multi definition in kallsyms, take
+	 * "t_next" for example:
+	 *
+	 *     ffffffff813c10d0 t t_next
+	 *     ffffffff813d31b0 t t_next
+	 *     ffffffff813e06b0 t t_next
+	 *     ffffffff813eb360 t t_next
+	 *     ffffffff81613360 t t_next
+	 *
+	 * but only one of them have corresponding mrecord:
+	 *     ffffffff81613364 t_next
+	 *
+	 * The kernel search the target function address by the symbol
+	 * name "t_next" with kallsyms_lookup_name() during attaching
+	 * and the function "0xffffffff813c10d0" can be matched, which
+	 * doesn't have a corresponding mrecord. And this will make
+	 * the attach failing. Skip the functions like this.
+	 *
+	 * The list maybe not whole, so we still can fail......
+	 */
+	if (!strcmp(name, "kill_pid_usb_asyncio"))
+		return true;
+	if (!strcmp(name, "t_next"))
+		return true;
+	if (!strcmp(name, "t_stop"))
+		return true;
+	if (!strcmp(name, "t_start"))
+		return true;
+	if (!strcmp(name, "p_next"))
+		return true;
+	if (!strcmp(name, "p_stop"))
+		return true;
+	if (!strcmp(name, "p_start"))
+		return true;
+	if (!strcmp(name, "mem32_serial_out"))
+		return true;
+	if (!strcmp(name, "mem32_serial_in"))
+		return true;
+	if (!strcmp(name, "io_serial_in"))
+		return true;
+	if (!strcmp(name, "io_serial_out"))
+		return true;
+	if (!strcmp(name, "event_callback"))
+		return true;
+
 	return false;
 }
 
@@ -858,6 +920,56 @@ error:
 	if (err)
 		free(addrs);
 	return err;
+}
+
+int bpf_to_tracing_multi(struct bpf_program **progs, int prog_cnt)
+{
+	enum bpf_attach_type type;
+	int i, err;
+
+	for (i = 0; i < prog_cnt; i++) {
+		type = bpf_program__get_expected_attach_type(progs[i]);
+		if (type == BPF_TRACE_FENTRY)
+			type = BPF_TRACE_FENTRY_MULTI;
+		else if (type == BPF_TRACE_FEXIT)
+			type = BPF_TRACE_FEXIT_MULTI;
+		else if (type == BPF_MODIFY_RETURN)
+			type = BPF_MODIFY_RETURN_MULTI;
+		else
+			continue;
+		err = bpf_program__set_expected_attach_type(progs[i], type);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+int bpf_attach_as_tracing_multi(struct bpf_program **progs, int prog_cnt,
+				struct bpf_link **link)
+{
+	struct bpf_link *__link;
+	int err, type;
+
+	for (int i = 0; i < prog_cnt; i++) {
+		LIBBPF_OPTS(bpf_trace_multi_opts, opts);
+
+		type = bpf_program__get_expected_attach_type(progs[i]);
+		if (type != BPF_TRACE_FENTRY_MULTI &&
+		    type != BPF_TRACE_FEXIT_MULTI &&
+		    type != BPF_MODIFY_RETURN_MULTI)
+			continue;
+
+		opts.attach_tracing = true;
+		__link = bpf_program__attach_trace_multi_opts(progs[i], &opts);
+		err = libbpf_get_error(link);
+		if (err)
+			return err;
+
+		link[i] = __link;
+	}
+
+	return 0;
 }
 
 int compare_map_keys(int map1_fd, int map2_fd)
