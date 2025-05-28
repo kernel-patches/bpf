@@ -23077,6 +23077,52 @@ static int check_non_sleepable_error_inject(u32 btf_id)
 	return btf_id_set_contains(&btf_non_sleepable_error_inject, btf_id);
 }
 
+BTF_SET_START(btf_id_deny)
+BTF_ID_UNUSED
+#ifdef CONFIG_SMP
+BTF_ID(func, migrate_disable)
+BTF_ID(func, migrate_enable)
+#endif
+#if !defined CONFIG_PREEMPT_RCU && !defined CONFIG_TINY_RCU
+BTF_ID(func, rcu_read_unlock_strict)
+#endif
+#if defined(CONFIG_DEBUG_PREEMPT) || defined(CONFIG_TRACE_PREEMPT_TOGGLE)
+BTF_ID(func, preempt_count_add)
+BTF_ID(func, preempt_count_sub)
+#endif
+#ifdef CONFIG_PREEMPT_RCU
+BTF_ID(func, __rcu_read_lock)
+BTF_ID(func, __rcu_read_unlock)
+#endif
+BTF_SET_END(btf_id_deny)
+
+/* fexit and fmod_ret can't be used to attach to __noreturn functions.
+ * Currently, we must manually list all __noreturn functions here. Once a more
+ * robust solution is implemented, this workaround can be removed.
+ */
+BTF_SET_START(noreturn_deny)
+#ifdef CONFIG_IA32_EMULATION
+BTF_ID(func, __ia32_sys_exit)
+BTF_ID(func, __ia32_sys_exit_group)
+#endif
+#ifdef CONFIG_KUNIT
+BTF_ID(func, __kunit_abort)
+BTF_ID(func, kunit_try_catch_throw)
+#endif
+#ifdef CONFIG_MODULES
+BTF_ID(func, __module_put_and_kthread_exit)
+#endif
+#ifdef CONFIG_X86_64
+BTF_ID(func, __x64_sys_exit)
+BTF_ID(func, __x64_sys_exit_group)
+#endif
+BTF_ID(func, do_exit)
+BTF_ID(func, do_group_exit)
+BTF_ID(func, kthread_complete_and_exit)
+BTF_ID(func, kthread_exit)
+BTF_ID(func, make_task_dead)
+BTF_SET_END(noreturn_deny)
+
 int bpf_check_attach_target(struct bpf_verifier_log *log,
 			    const struct bpf_prog *prog,
 			    const struct bpf_prog *tgt_prog,
@@ -23400,58 +23446,31 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 
 		break;
 	}
+
+	if (prog->type == BPF_PROG_TYPE_LSM) {
+		ret = bpf_lsm_verify_prog(log, prog);
+		if (ret < 0) {
+			module_put(mod);
+			return ret;
+		}
+	} else if (prog->type == BPF_PROG_TYPE_TRACING &&
+		   btf_id_set_contains(&btf_id_deny, btf_id)) {
+		module_put(mod);
+		return -EINVAL;
+	} else if ((prog->expected_attach_type == BPF_TRACE_FEXIT ||
+		   prog->expected_attach_type == BPF_MODIFY_RETURN) &&
+		   btf_id_set_contains(&noreturn_deny, btf_id)) {
+		module_put(mod);
+		bpf_log(log, "Attaching fexit/fmod_ret to __noreturn functions is rejected.\n");
+		return -EINVAL;
+	}
+
 	tgt_info->tgt_addr = addr;
 	tgt_info->tgt_name = tname;
 	tgt_info->tgt_type = t;
 	tgt_info->tgt_mod = mod;
 	return 0;
 }
-
-BTF_SET_START(btf_id_deny)
-BTF_ID_UNUSED
-#ifdef CONFIG_SMP
-BTF_ID(func, migrate_disable)
-BTF_ID(func, migrate_enable)
-#endif
-#if !defined CONFIG_PREEMPT_RCU && !defined CONFIG_TINY_RCU
-BTF_ID(func, rcu_read_unlock_strict)
-#endif
-#if defined(CONFIG_DEBUG_PREEMPT) || defined(CONFIG_TRACE_PREEMPT_TOGGLE)
-BTF_ID(func, preempt_count_add)
-BTF_ID(func, preempt_count_sub)
-#endif
-#ifdef CONFIG_PREEMPT_RCU
-BTF_ID(func, __rcu_read_lock)
-BTF_ID(func, __rcu_read_unlock)
-#endif
-BTF_SET_END(btf_id_deny)
-
-/* fexit and fmod_ret can't be used to attach to __noreturn functions.
- * Currently, we must manually list all __noreturn functions here. Once a more
- * robust solution is implemented, this workaround can be removed.
- */
-BTF_SET_START(noreturn_deny)
-#ifdef CONFIG_IA32_EMULATION
-BTF_ID(func, __ia32_sys_exit)
-BTF_ID(func, __ia32_sys_exit_group)
-#endif
-#ifdef CONFIG_KUNIT
-BTF_ID(func, __kunit_abort)
-BTF_ID(func, kunit_try_catch_throw)
-#endif
-#ifdef CONFIG_MODULES
-BTF_ID(func, __module_put_and_kthread_exit)
-#endif
-#ifdef CONFIG_X86_64
-BTF_ID(func, __x64_sys_exit)
-BTF_ID(func, __x64_sys_exit_group)
-#endif
-BTF_ID(func, do_exit)
-BTF_ID(func, do_group_exit)
-BTF_ID(func, kthread_complete_and_exit)
-BTF_ID(func, kthread_exit)
-BTF_ID(func, make_task_dead)
-BTF_SET_END(noreturn_deny)
 
 static bool can_be_sleepable(struct bpf_prog *prog)
 {
@@ -23533,20 +23552,6 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 		return 0;
 	} else if (prog->expected_attach_type == BPF_TRACE_ITER) {
 		return bpf_iter_prog_supported(prog);
-	}
-
-	if (prog->type == BPF_PROG_TYPE_LSM) {
-		ret = bpf_lsm_verify_prog(&env->log, prog);
-		if (ret < 0)
-			return ret;
-	} else if (prog->type == BPF_PROG_TYPE_TRACING &&
-		   btf_id_set_contains(&btf_id_deny, btf_id)) {
-		return -EINVAL;
-	} else if ((prog->expected_attach_type == BPF_TRACE_FEXIT ||
-		   prog->expected_attach_type == BPF_MODIFY_RETURN) &&
-		   btf_id_set_contains(&noreturn_deny, btf_id)) {
-		verbose(env, "Attaching fexit/fmod_ret to __noreturn functions is rejected.\n");
-		return -EINVAL;
 	}
 
 	key = bpf_trampoline_compute_key(tgt_prog, prog->aux->attach_btf, btf_id);
