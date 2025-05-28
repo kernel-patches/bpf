@@ -6181,6 +6181,81 @@ int modify_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 	return err;
 }
 EXPORT_SYMBOL_GPL(modify_ftrace_direct);
+
+/* reset the ips for a direct ftrace (add or remove) */
+int reset_ftrace_direct_ips(struct ftrace_ops *ops, unsigned long *ips,
+			    unsigned int cnt)
+{
+	struct ftrace_hash *hash, *free_hash;
+	struct ftrace_func_entry *entry, *del;
+	unsigned long ip;
+	int err, size;
+
+	if (check_direct_multi(ops))
+		return -EINVAL;
+	if (!(ops->flags & FTRACE_OPS_FL_ENABLED))
+		return -EINVAL;
+
+	mutex_lock(&direct_mutex);
+	hash = alloc_ftrace_hash(FTRACE_HASH_DEFAULT_BITS);
+	if (!hash) {
+		err = -ENOMEM;
+		goto out_unlock;
+	}
+
+	/* find out the new functions from ips and add to hash */
+	for (int i = 0; i < cnt; i++) {
+		ip = ftrace_location(ips[i]);
+		if (!ip) {
+			err = -ENOENT;
+			goto out_unlock;
+		}
+		if (__ftrace_lookup_ip(ops->func_hash->filter_hash, ip))
+			continue;
+		err = __ftrace_match_addr(hash, ip, 0);
+		if (err)
+			goto out_unlock;
+	}
+
+	free_hash = direct_functions;
+	/* add the new ips to direct hash. */
+	err = ftrace_direct_update(hash, ops->direct_call);
+	if (err)
+		goto out_unlock;
+
+	if (free_hash && free_hash != EMPTY_HASH)
+		call_rcu_tasks(&free_hash->rcu, register_ftrace_direct_cb);
+
+	free_ftrace_hash(hash);
+	hash = alloc_and_copy_ftrace_hash(FTRACE_HASH_DEFAULT_BITS,
+					  ops->func_hash->filter_hash);
+	if (!hash) {
+		err = -ENOMEM;
+		goto out_unlock;
+	}
+	err = ftrace_set_filter_ips(ops, ips, cnt, 0, 1);
+
+	/* remove the entries that don't exist in our filter_hash anymore
+	 * from the direct_functions.
+	 */
+	size = 1 << hash->size_bits;
+	for (int i = 0; i < size; i++) {
+		hlist_for_each_entry(entry, &hash->buckets[i], hlist) {
+			if (__ftrace_lookup_ip(ops->func_hash->filter_hash, entry->ip))
+				continue;
+			del = __ftrace_lookup_ip(direct_functions, entry->ip);
+			if (del && del->direct == ops->direct_call) {
+				remove_hash_entry(direct_functions, del);
+				kfree(del);
+			}
+		}
+	}
+out_unlock:
+	mutex_unlock(&direct_mutex);
+	if (hash)
+		free_ftrace_hash(hash);
+	return err;
+}
 #endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */
 
 /**

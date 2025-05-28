@@ -526,6 +526,8 @@ int modify_ftrace_direct_nolock(struct ftrace_ops *ops, unsigned long addr);
 
 void ftrace_stub_direct_tramp(void);
 
+int reset_ftrace_direct_ips(struct ftrace_ops *ops, unsigned long *ips,
+			    unsigned int cnt);
 #else
 struct ftrace_ops;
 static inline unsigned long ftrace_find_rec_direct(unsigned long ip)
@@ -546,6 +548,11 @@ static inline int modify_ftrace_direct(struct ftrace_ops *ops, unsigned long add
 	return -ENODEV;
 }
 static inline int modify_ftrace_direct_nolock(struct ftrace_ops *ops, unsigned long addr)
+{
+	return -ENODEV;
+}
+static inline int reset_ftrace_direct_ips(struct ftrace_ops *ops, unsigned long *ips,
+					  unsigned int cnt)
 {
 	return -ENODEV;
 }
