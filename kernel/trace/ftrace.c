@@ -1727,6 +1727,24 @@ static bool skip_record(struct dyn_ftrace *rec)
 		!(rec->flags & FTRACE_FL_ENABLED);
 }
 
+static struct ftrace_ops *
+ftrace_find_direct_ops_any_other(struct dyn_ftrace *rec, struct ftrace_ops *op_exclude)
+{
+	struct ftrace_ops *op;
+	unsigned long ip = rec->ip;
+
+	do_for_each_ftrace_op(op, ftrace_ops_list) {
+
+		if (op == op_exclude || !(op->flags & FTRACE_OPS_FL_DIRECT))
+			continue;
+
+		if (hash_contains_ip(ip, op->func_hash))
+			return op;
+	} while_for_each_ftrace_op(op);
+
+	return NULL;
+}
+
 /*
  * This is the main engine to the ftrace updates to the dyn_ftrace records.
  *
@@ -1831,8 +1849,10 @@ static bool __ftrace_hash_rec_update(struct ftrace_ops *ops,
 			 * function, then that function should no longer
 			 * be direct.
 			 */
-			if (ops->flags & FTRACE_OPS_FL_DIRECT)
-				rec->flags &= ~FTRACE_FL_DIRECT;
+			if (ops->flags & FTRACE_OPS_FL_DIRECT) {
+				if (!ftrace_find_direct_ops_any_other(rec, ops))
+					rec->flags &= ~FTRACE_FL_DIRECT;
+			}
 
 			/*
 			 * If the rec had REGS enabled and the ops that is
@@ -6032,6 +6052,69 @@ int register_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 	return err;
 }
 EXPORT_SYMBOL_GPL(register_ftrace_direct);
+
+int replace_ftrace_direct(struct ftrace_ops *ops, struct ftrace_ops *src_ops,
+			  unsigned long addr)
+{
+	struct ftrace_hash *hash;
+	struct ftrace_func_entry *entry, *iter;
+	int err = -EBUSY, size, count;
+
+	if (ops->func || ops->trampoline)
+		return -EINVAL;
+	if (!(ops->flags & FTRACE_OPS_FL_INITIALIZED))
+		return -EINVAL;
+	if (ops->flags & FTRACE_OPS_FL_ENABLED)
+		return -EINVAL;
+
+	hash = ops->func_hash->filter_hash;
+	if (ftrace_hash_empty(hash))
+		return -EINVAL;
+
+	mutex_lock(&direct_mutex);
+
+	ops->func = call_direct_funcs;
+	ops->flags = MULTI_FLAGS;
+	ops->trampoline = FTRACE_REGS_ADDR;
+	ops->direct_call = addr;
+
+	err = register_ftrace_function_nolock(ops);
+	if (err)
+		goto out_unlock;
+
+	hash = ops->func_hash->filter_hash;
+	size = 1 << hash->size_bits;
+	for (int i = 0; i < size; i++) {
+		hlist_for_each_entry(iter, &hash->buckets[i], hlist) {
+			entry = __ftrace_lookup_ip(direct_functions, iter->ip);
+			if (!entry) {
+				err = -ENOENT;
+				goto out_unlock;
+			}
+			WRITE_ONCE(entry->direct, addr);
+			/* remove the ip from the hash, and this will make the trampoline
+			 * be called directly.
+			 */
+			count = src_ops->func_hash->filter_hash->count;
+			if (count <= 1) {
+				if (WARN_ON_ONCE(!count))
+					continue;
+				err = __unregister_ftrace_direct(src_ops, src_ops->direct_call,
+								 true);
+			} else {
+				err = ftrace_set_filter_ip(src_ops, iter->ip, 1, 0);
+			}
+			if (err)
+				goto out_unlock;
+		}
+	}
+
+out_unlock:
+	mutex_unlock(&direct_mutex);
+
+	return err;
+}
+EXPORT_SYMBOL_GPL(replace_ftrace_direct);
 
 /**
  * unregister_ftrace_direct - Remove calls to custom trampoline
