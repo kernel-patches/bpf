@@ -36,6 +36,8 @@
 #include <linux/memcontrol.h>
 #include <linux/trace_events.h>
 #include <linux/tracepoint.h>
+#include <crypto/pkcs7.h>
+#include <crypto/sha2.h>
 
 #include <net/netfilter/nf_bpf_link.h>
 #include <net/netkit.h>
@@ -2216,6 +2218,15 @@ err_put:
 	return err;
 }
 
+static int __map_get_hash(struct bpf_map *map, u8 *out)
+{
+	if (map->ops->map_get_hash) {
+		map->ops->map_get_hash(map, out);
+		return 0;
+	}
+	return -EINVAL;
+}
+
 static const struct bpf_prog_ops * const bpf_prog_types[] = {
 #define BPF_PROG_TYPE(_id, _name, prog_ctx_type, kern_ctx_type) \
 	[_id] = & _name ## _prog_ops,
@@ -2753,8 +2764,113 @@ static bool is_perfmon_prog_type(enum bpf_prog_type prog_type)
 	}
 }
 
+static int bpf_check_signature(struct bpf_prog *prog, union bpf_attr *attr, bpfptr_t uattr,
+			       __u32 uattr_size)
+{
+	u64 hash[4];
+	u64 buffer[8];
+	int err;
+	char *signature;
+	int *used_maps;
+	int n;
+	int map_fd;
+	struct bpf_map *map;
+
+	if (!attr->signature)
+		return 0;
+
+	signature = kmalloc(attr->signature_size, GFP_KERNEL);
+	if (!signature) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	if (copy_from_bpfptr(signature,
+			     make_bpfptr(attr->signature, uattr.is_kernel),
+			     attr->signature_size) != 0) {
+		err = -EINVAL;
+		goto free_sig;
+	}
+
+	if (!attr->signature_maps_size) {
+		sha256((u8 *)prog->insnsi, prog->len * sizeof(struct bpf_insn), (u8 *)&hash);
+		err = verify_pkcs7_signature(hash, sizeof(hash), signature, attr->signature_size,
+				     VERIFY_USE_SECONDARY_KEYRING,
+				     VERIFYING_EBPF_SIGNATURE,
+				     NULL, NULL);
+	} else {
+		used_maps = kmalloc_array(attr->signature_maps_size,
+					  sizeof(*used_maps), GFP_KERNEL);
+		if (!used_maps) {
+			err = -ENOMEM;
+			goto free_sig;
+		}
+		n = attr->signature_maps_size;
+		n--;
+
+		err = copy_from_bpfptr_offset(&map_fd, make_bpfptr(attr->fd_array, uattr.is_kernel),
+					      used_maps[n] * sizeof(map_fd),
+					      sizeof(map_fd));
+		if (err < 0)
+			goto free_maps;
+
+		/* calculate the terminal hash */
+		CLASS(fd, f)(map_fd);
+		map = __bpf_map_get(f);
+		if (IS_ERR(map)) {
+			err = PTR_ERR(map);
+			goto free_maps;
+		}
+		if (__map_get_hash(map, (u8 *)hash)) {
+			err = -EINVAL;
+			goto free_maps;
+		}
+
+		n--;
+		/* calculate a link in the hash chain */
+		while (n >= 0) {
+			memcpy(buffer, hash, sizeof(hash));
+			err = copy_from_bpfptr_offset(&map_fd,
+						      make_bpfptr(attr->fd_array, uattr.is_kernel),
+						      used_maps[n] * sizeof(map_fd),
+						      sizeof(map_fd));
+			if (err < 0)
+				goto free_maps;
+
+			CLASS(fd, f)(map_fd);
+			map = __bpf_map_get(f);
+			if (!map) {
+				err = -EINVAL;
+				goto free_maps;
+			}
+			if (__map_get_hash(map, (u8 *)buffer+4)) {
+				err = -EINVAL;
+				goto free_maps;
+			}
+			sha256((u8 *)buffer, sizeof(buffer), (u8 *)&hash);
+			n--;
+		}
+		/* calculate the root hash and verify it's signature */
+		sha256((u8 *)prog->insnsi, prog->len * sizeof(struct bpf_insn), (u8 *)&buffer);
+		memcpy(buffer+4, hash, sizeof(hash));
+		sha256((u8 *)buffer, sizeof(buffer), (u8 *)&hash);
+		err = verify_pkcs7_signature(hash, sizeof(hash), signature, attr->signature_size,
+				     VERIFY_USE_SECONDARY_KEYRING,
+				     VERIFYING_EBPF_SIGNATURE,
+				     NULL, NULL);
+free_maps:
+		kfree(used_maps);
+	}
+
+free_sig:
+	kfree(signature);
+out:
+	prog->aux->signature_verified = !err;
+	return err;
+}
+
 /* last field in 'union bpf_attr' used by this command */
-#define BPF_PROG_LOAD_LAST_FIELD fd_array_cnt
+#define BPF_PROG_LOAD_LAST_FIELD signature_maps_size
 
 static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 {
@@ -2960,6 +3076,11 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	prog->aux->load_time = ktime_get_boottime_ns();
 	err = bpf_obj_name_cpy(prog->aux->name, attr->prog_name,
 			       sizeof(attr->prog_name));
+	if (err < 0)
+		goto free_prog;
+
+	/* run eBPF signature verifier */
+	err = bpf_check_signature(prog, attr, uattr, uattr_size);
 	if (err < 0)
 		goto free_prog;
 

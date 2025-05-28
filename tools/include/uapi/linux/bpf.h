@@ -1587,6 +1587,10 @@ union bpf_attr {
 		 * continuous.
 		 */
 		__u32		fd_array_cnt;
+		__aligned_u64	signature;	/* program signature */
+		__u32		signature_size;	/* size of program signature */
+		__aligned_u64	signature_maps;	/* maps used in signature */
+		__u32		signature_maps_size;	/* size of maps used in signature */
 	};
 
 	struct { /* anonymous struct used by BPF_OBJ_* commands */

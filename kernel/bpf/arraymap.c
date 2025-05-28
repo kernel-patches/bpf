@@ -12,6 +12,7 @@
 #include <uapi/linux/btf.h>
 #include <linux/rcupdate_trace.h>
 #include <linux/btf_ids.h>
+#include <crypto/sha2.h>
 
 #include "map_in_map.h"
 
@@ -426,6 +427,14 @@ static long array_map_delete_elem(struct bpf_map *map, void *key)
 	return -EINVAL;
 }
 
+static int array_map_get_hash(struct bpf_map *map, u8 *out)
+{
+	struct bpf_array *array = container_of(map, struct bpf_array, map);
+
+	sha256(array->value, array->elem_size * array->map.max_entries, out);
+	return 0;
+}
+
 static void *array_map_vmalloc_addr(struct bpf_array *array)
 {
 	return (void *)round_down((unsigned long)array, PAGE_SIZE);
@@ -792,6 +801,7 @@ const struct bpf_map_ops array_map_ops = {
 	.map_lookup_elem = array_map_lookup_elem,
 	.map_update_elem = array_map_update_elem,
 	.map_delete_elem = array_map_delete_elem,
+	.map_get_hash = array_map_get_hash,
 	.map_gen_lookup = array_map_gen_lookup,
 	.map_direct_value_addr = array_map_direct_value_addr,
 	.map_direct_value_meta = array_map_direct_value_meta,
@@ -940,7 +950,6 @@ static long fd_array_map_delete_elem(struct bpf_map *map, void *key)
 {
 	return __fd_array_map_delete_elem(map, key, true);
 }
-
 static void *prog_fd_array_get_ptr(struct bpf_map *map,
 				   struct file *map_file, int fd)
 {
