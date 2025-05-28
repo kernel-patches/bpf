@@ -426,6 +426,8 @@ int cgroup_bpf_prog_query(const union bpf_attr *attr,
 
 const struct bpf_func_proto *
 cgroup_common_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog);
+const struct bpf_func_proto *
+cgroup_current_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog);
 #else
 
 static inline void cgroup_bpf_lifetime_notifier_init(void)
@@ -460,6 +462,12 @@ static inline int cgroup_bpf_prog_query(const union bpf_attr *attr,
 
 static inline const struct bpf_func_proto *
 cgroup_common_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	return NULL;
+}
+
+static inline const struct bpf_func_proto *
+cgroup_current_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	return NULL;
 }
