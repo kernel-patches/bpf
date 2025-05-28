@@ -846,8 +846,12 @@ struct bpf_trace_multi_opts {
 	__u64 *cookies;
 	/* number of elements in syms/btf_ids/cookies arrays */
 	size_t cnt;
+	/* skip the invalid btf type before attaching */
+	bool skip_invalid;
+	/* attach a TRACING prog as TRACING_MULTI */
+	bool attach_tracing;
 };
-#define bpf_trace_multi_opts__last_field cnt
+#define bpf_trace_multi_opts__last_field attach_tracing
 
 LIBBPF_API struct bpf_link *
 bpf_program__attach_trace_multi_opts(const struct bpf_program *prog,

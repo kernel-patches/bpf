@@ -10132,7 +10132,8 @@ out:
 
 static int find_kernel_btf_id(struct bpf_object *obj, const char *attach_name,
 			      enum bpf_attach_type attach_type,
-			      int *btf_obj_fd, int *btf_type_id, bool use_hash)
+			      int *btf_obj_fd, int *btf_type_id, bool use_hash,
+			      const struct btf **btf)
 {
 	int ret, i, mod_len, err;
 	const char *fn_name, *mod_name = NULL;
@@ -10156,6 +10157,8 @@ static int find_kernel_btf_id(struct bpf_object *obj, const char *attach_name,
 		if (ret > 0) {
 			*btf_obj_fd = 0; /* vmlinux BTF */
 			*btf_type_id = ret;
+			if (btf)
+				*btf = obj->btf_vmlinux;
 			return 0;
 		}
 		if (ret != -ENOENT)
@@ -10183,6 +10186,8 @@ static int find_kernel_btf_id(struct bpf_object *obj, const char *attach_name,
 		if (ret > 0) {
 			*btf_obj_fd = mod->fd;
 			*btf_type_id = ret;
+			if (btf)
+				*btf = mod->btf;
 			return 0;
 		}
 		if (ret == -ENOENT)
@@ -10226,7 +10231,7 @@ static int libbpf_find_attach_btf_id(struct bpf_program *prog, const char *attac
 	} else {
 		err = find_kernel_btf_id(prog->obj, attach_name,
 					 attach_type, btf_obj_fd,
-					 btf_type_id, false);
+					 btf_type_id, false, NULL);
 	}
 	if (err) {
 		pr_warn("prog '%s': failed to find kernel BTF type ID of '%s': %s\n",
@@ -12836,6 +12841,53 @@ static int attach_trace(const struct bpf_program *prog, long cookie, struct bpf_
 	return libbpf_get_error(*link);
 }
 
+static bool is_trace_valid(const struct btf *btf, int btf_type_id, const char *name)
+{
+	const struct btf_type *t;
+
+	t = skip_mods_and_typedefs(btf, btf_type_id, NULL);
+	if (btf_is_func(t)) {
+		const struct btf_param *args;
+		__u32 nargs, m;
+
+		t = skip_mods_and_typedefs(btf, t->type, NULL);
+		if (!btf_is_func_proto(t)) {
+			pr_debug("skipping no function btf type for %s\n",
+				 name);
+			return false;
+		}
+
+		args = (const struct btf_param *)(t + 1);
+		nargs = btf_vlen(t);
+		if (nargs > 6) {
+			pr_debug("skipping args count more than 6 for %s\n",
+				 name);
+			return false;
+		}
+
+		t = skip_mods_and_typedefs(btf, t->type, NULL);
+		if (btf_is_struct(t) || btf_is_union(t) ||
+		    (nargs && args[nargs - 1].type == 0)) {
+			pr_debug("skipping invalid return type for %s\n",
+				 name);
+			return false;
+		}
+
+		for (m = 0; m < nargs; m++) {
+			t = skip_mods_and_typedefs(btf, args[m].type, NULL);
+			if (btf_is_struct(t) || btf_is_union(t)) {
+				pr_debug("skipping not supported arg type %s\n",
+					 name);
+				break;
+			}
+		}
+		if (m < nargs)
+			return false;
+	}
+
+	return true;
+}
+
 struct bpf_link *bpf_program__attach_trace_multi_opts(const struct bpf_program *prog,
 						      const struct bpf_trace_multi_opts *opts)
 {
@@ -12856,7 +12908,7 @@ struct bpf_link *bpf_program__attach_trace_multi_opts(const struct bpf_program *
 
 	cnt = OPTS_GET(opts, cnt, 0);
 	if (opts->syms) {
-		int btf_obj_fd, btf_type_id, i;
+		int btf_obj_fd, btf_type_id, i, j = 0;
 
 		if (opts->btf_ids || opts->tgt_fds) {
 			pr_warn("can set both opts->syms and opts->btf_ids\n");
@@ -12870,23 +12922,41 @@ struct bpf_link *bpf_program__attach_trace_multi_opts(const struct bpf_program *
 			goto err_free;
 		}
 		for (i = 0; i < cnt; i++) {
+			const struct btf *btf = NULL;
+			bool func_hash;
+
 			/* only use btf type function hashmap when the count
 			 * is big enough.
 			 */
-			bool func_hash = cnt > 1024;
-
-
+			func_hash = cnt > 1024;
 			btf_obj_fd = btf_type_id = 0;
 			err = find_kernel_btf_id(prog->obj, opts->syms[i],
-					 prog->expected_attach_type, &btf_obj_fd,
-					 &btf_type_id, func_hash);
-			if (err)
-				goto err_free;
-			btf_ids[i] = btf_type_id;
-			tgt_fds[i] = btf_obj_fd;
+					prog->expected_attach_type, &btf_obj_fd,
+					&btf_type_id, func_hash, &btf);
+			if (err) {
+				if (!opts->skip_invalid)
+					goto err_free;
+
+				pr_debug("can't find btf type for %s, skip\n",
+					 opts->syms[i]);
+				continue;
+			}
+
+			if (opts->skip_invalid &&
+			    !is_trace_valid(btf, btf_type_id, opts->syms[i]))
+				continue;
+
+			btf_ids[j] = btf_type_id;
+			tgt_fds[j] = btf_obj_fd;
+			j++;
 		}
+		cnt = j;
 		link_opts.tracing_multi.btf_ids = btf_ids;
 		link_opts.tracing_multi.tgt_fds = tgt_fds;
+	} else if (opts->attach_tracing) {
+		link_opts.tracing_multi.btf_ids = &prog->attach_btf_id;
+		link_opts.tracing_multi.tgt_fds = &prog->attach_btf_obj_fd;
+		cnt = 1;
 	} else {
 		link_opts.tracing_multi.btf_ids = OPTS_GET(opts, btf_ids, 0);
 		link_opts.tracing_multi.tgt_fds = OPTS_GET(opts, tgt_fds, 0);
@@ -13957,7 +14027,8 @@ int bpf_program__set_attach_target(struct bpf_program *prog,
 			return libbpf_err(err);
 		err = find_kernel_btf_id(prog->obj, attach_func_name,
 					 prog->expected_attach_type,
-					 &btf_obj_fd, &btf_id, false);
+					 &btf_obj_fd, &btf_id, false,
+					 NULL);
 		if (err)
 			return libbpf_err(err);
 	}
