@@ -2945,6 +2945,33 @@ static int invoke_bpf_mod_ret(const struct btf_func_model *m, u8 **pprog,
 	return 0;
 }
 
+static int __arch_bpf_get_regs_nr(const struct btf_func_model *m)
+{
+	int nr_regs = m->nr_args;
+
+	/* extra registers for struct arguments */
+	for (int i = 0; i < m->nr_args; i++) {
+		if (m->arg_flags[i] & BTF_FMODEL_STRUCT_ARG)
+			nr_regs += (m->arg_size[i] + 7) / 8 - 1;
+	}
+
+	return nr_regs;
+}
+
+int arch_bpf_get_regs_nr(const struct btf_func_model *m)
+{
+	int nr_regs = __arch_bpf_get_regs_nr(m);
+
+	/* The maximum number of registers that can be used to pass
+	 * arguments is 6. If the number of registers exceeds this,
+	 * return -ENOTSUPP.
+	 */
+	if (nr_regs > 6)
+		return -EOPNOTSUPP;
+
+	return nr_regs;
+}
+
 /* mov rax, qword ptr [rbp - rounded_stack_depth - 8] */
 #define LOAD_TRAMP_TAIL_CALL_CNT_PTR(stack)	\
 	__LOAD_TCC_PTR(-round_up(stack, 8) - 8)
@@ -3015,7 +3042,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 					 struct bpf_tramp_links *tlinks,
 					 void *func_addr)
 {
-	int i, ret, nr_regs = m->nr_args, stack_size = 0;
+	int i, ret, nr_regs, stack_size = 0;
 	int regs_off, nregs_off, ip_off, run_ctx_off, arg_stack_off, rbx_off;
 	struct bpf_tramp_links *fentry = &tlinks[BPF_TRAMP_FENTRY];
 	struct bpf_tramp_links *fexit = &tlinks[BPF_TRAMP_FEXIT];
@@ -3033,15 +3060,10 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	WARN_ON_ONCE((flags & BPF_TRAMP_F_INDIRECT) &&
 		     (flags & ~(BPF_TRAMP_F_INDIRECT | BPF_TRAMP_F_RET_FENTRY_RET)));
 
-	/* extra registers for struct arguments */
-	for (i = 0; i < m->nr_args; i++) {
-		if (m->arg_flags[i] & BTF_FMODEL_STRUCT_ARG)
-			nr_regs += (m->arg_size[i] + 7) / 8 - 1;
-	}
-
 	/* x86-64 supports up to MAX_BPF_FUNC_ARGS arguments. 1-6
 	 * are passed through regs, the remains are through stack.
 	 */
+	nr_regs = __arch_bpf_get_regs_nr(m);
 	if (nr_regs > MAX_BPF_FUNC_ARGS)
 		return -ENOTSUPP;
 

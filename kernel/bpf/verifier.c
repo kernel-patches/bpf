@@ -22903,6 +22903,11 @@ static int do_check_main(struct bpf_verifier_env *env)
 }
 
 
+int __weak arch_bpf_get_regs_nr(const struct btf_func_model *m)
+{
+	return -ENODEV;
+}
+
 static void print_verification_stats(struct bpf_verifier_env *env)
 {
 	int i;
