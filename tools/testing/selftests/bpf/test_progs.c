@@ -17,6 +17,7 @@
 #include <sys/un.h>
 #include <bpf/btf.h>
 #include <time.h>
+#include "bpf/libbpf_internal.h"
 #include "json_writer.h"
 
 #include "network_helpers.h"
@@ -127,28 +128,6 @@ static int traffic_monitor_print_fn(const char *format, va_list args)
 	pthread_mutex_unlock(&stdout_lock);
 
 	return 0;
-}
-
-/* Adapted from perf/util/string.c */
-static bool glob_match(const char *str, const char *pat)
-{
-	while (*str && *pat && *pat != '*') {
-		if (*str != *pat)
-			return false;
-		str++;
-		pat++;
-	}
-	/* Check wild card */
-	if (*pat == '*') {
-		while (*pat == '*')
-			pat++;
-		if (!*pat) /* Tail wild card matches all */
-			return true;
-		while (*str)
-			if (glob_match(str++, pat))
-				return true;
-	}
-	return !*str && !*pat;
 }
 
 #define EXIT_NO_TEST		2
