@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/vmalloc.h>
 #include <linux/kexec.h>
+#include <linux/elf.h>
 #include <linux/pe.h>
 #include <linux/string.h>
 #include <linux/bpf.h>
@@ -21,6 +22,7 @@
 #include <asm/image.h>
 #include <asm/memory.h>
 
+#include "kexec_bpf/kexec_pe_parser_bpf.lskel.h"
 
 static LIST_HEAD(phase_head);
 
@@ -163,14 +165,82 @@ static bool pe_has_bpf_section(char *file_buf, unsigned long pe_sz)
 	return true;
 }
 
+static struct kexec_pe_parser_bpf *pe_parser;
+
+static void *get_symbol_from_elf(const char *elf_data, size_t elf_size,
+		const char *symbol_name, unsigned int *symbol_size)
+{
+	Elf_Ehdr *ehdr = (Elf_Ehdr *)elf_data;
+	Elf_Shdr *shdr, *symtab_shdr, *strtab_shdr, *dst_shdr;
+	Elf64_Sym *sym, *symtab = NULL;
+	char *strtab = NULL;
+	void *symbol_data = NULL;
+	int i;
+
+	symtab_shdr = strtab_shdr = NULL;
+	if (memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) {
+		pr_err("Not a valid ELF file\n");
+		goto out;
+	}
+
+	shdr = (struct elf_shdr *)(elf_data + ehdr->e_shoff);
+	for (i = 0; i < ehdr->e_shnum; i++) {
+		if (shdr[i].sh_type == SHT_SYMTAB)
+			symtab_shdr = &shdr[i];
+		else if (shdr[i].sh_type == SHT_STRTAB && i != ehdr->e_shstrndx)
+			strtab_shdr = &shdr[i];
+	}
+
+	if (!symtab_shdr || !strtab_shdr) {
+		pr_err("Symbol table or string table not found\n");
+		goto out;
+	}
+	symtab = (Elf64_Sym *)(elf_data + symtab_shdr->sh_offset);
+	strtab = (char *)(elf_data + strtab_shdr->sh_offset);
+	for (i = 0; i < symtab_shdr->sh_size / sizeof(Elf64_Sym); i++) {
+		sym = &symtab[i];
+		if (strcmp(&strtab[sym->st_name], symbol_name) == 0) {
+			if (sym->st_shndx >= SHN_LORESERVE)
+				return NULL; // No section data for these
+			dst_shdr = &shdr[sym->st_shndx];
+			symbol_data = (void *)(elf_data + dst_shdr->sh_offset + sym->st_value);
+			*symbol_size = symtab[i].st_size;
+			break;
+		}
+	}
+
+out:
+	return symbol_data;
+}
+
 /* Load a ELF */
 static int arm_bpf_prog(char *bpf_elf, unsigned long sz)
 {
+	opts_data = get_symbol_from_elf(bpf_elf, sz, "opts_data", &opts_data_sz);
+	opts_insn = get_symbol_from_elf(bpf_elf, sz, "opts_insn", &opts_insn_sz);
+	if (!opts_data || !opts_insn)
+		return -1;
+	/*
+	 * When light skeleton generates opts_data[] and opts_insn[], it appends a
+	 * NULL terminator at the end of string
+	 */
+	opts_data_sz = opts_data_sz - 1;
+	opts_insn_sz = opts_insn_sz - 1;
+
+	pe_parser = kexec_pe_parser_bpf__open_and_load();
+	if (!pe_parser)
+		return -1;
+	kexec_pe_parser_bpf__attach(pe_parser);
+
 	return 0;
 }
 
 static void disarm_bpf_prog(void)
 {
+	kexec_pe_parser_bpf__destroy(pe_parser);
+	pe_parser = NULL;
+	opts_data = NULL;
+	opts_insn = NULL;
 }
 
 struct kexec_context {
