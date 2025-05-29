@@ -23,6 +23,7 @@
 #include <linux/btf_ids.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/kasan.h>
+#include <linux/decompress/generic.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -3194,12 +3195,122 @@ __bpf_kfunc void bpf_local_irq_restore(unsigned long *flags__irq_flag)
 	local_irq_restore(*flags__irq_flag);
 }
 
+#define MAX_UNCOMPRESSED_BUF_SIZE	(1 << 28)
+/*
+ * At present, one global allocator for decompression. Later if needed, changing the
+ * prototype of decompress_fn to introduce each task's allocator.
+ */
+static char *output_buf;
+static char *output_cur;
+static DEFINE_MUTEX(output_buf_mutex);
+
+/*
+ * Copy the partial decompressed content in [buf, buf + len) to dst.
+ * If the dst size is beyond the capacity, return -1 to indicate the
+ * decompress method that something is wrong.
+ */
+static long flush(void *buf, unsigned long len)
+{
+
+	if (output_cur - output_buf > MAX_UNCOMPRESSED_BUF_SIZE - len)
+		return -1;
+	memcpy(output_cur, buf, len);
+	output_cur += len;
+	return len;
+}
+
+__bpf_kfunc struct mem_range_result *bpf_decompress(char *image_gz_payload, int image_gz_sz)
+{
+	struct mem_cgroup *memcg, *old_memcg;
+	decompress_fn decompressor;
+	struct mem_range_result *range;
+	const char *name;
+	char *input_buf;
+	int ret;
+
+	memcg = get_mem_cgroup_from_current();
+	old_memcg = set_active_memcg(memcg);
+	range = kmalloc(sizeof(struct mem_range_result), GFP_KERNEL);
+	if (!range) {
+		pr_err("fail to allocate mem_range_result\n");
+		goto error;
+	}
+	kref_init(&range->ref);
+
+	input_buf = __vmalloc(image_gz_sz, GFP_KERNEL | __GFP_ACCOUNT);
+	if (!input_buf) {
+		kfree(range);
+		pr_err("fail to allocate input buffer\n");
+		goto error;
+	}
+
+	ret = copy_from_kernel_nofault(input_buf, image_gz_payload, image_gz_sz);
+	if (ret < 0) {
+		kfree(range);
+		vfree(input_buf);
+		pr_err("Error when copying from 0x%p, size:0x%x\n",
+				image_gz_payload, image_gz_sz);
+		goto error;
+	}
+
+	mutex_lock(&output_buf_mutex);
+	output_buf = __vmalloc(MAX_UNCOMPRESSED_BUF_SIZE, GFP_KERNEL | __GFP_ACCOUNT);
+	if (!output_buf) {
+		mutex_unlock(&output_buf_mutex);
+		kfree(range);
+		vfree(input_buf);
+		pr_err("fail to allocate output buffer\n");
+		goto error;
+	}
+	output_cur = output_buf;
+	decompressor = decompress_method(input_buf, image_gz_sz, &name);
+	if (!decompressor) {
+		kfree(range);
+		vfree(input_buf);
+		vfree(output_buf);
+		mutex_unlock(&output_buf_mutex);
+		pr_err("Can not find decompress method\n");
+		goto error;
+	}
+	ret = decompressor(input_buf, image_gz_sz, NULL, flush,
+				NULL, NULL, NULL);
+
+	vfree(input_buf);
+	/* Update the range map */
+	if (ret == 0) {
+		range->kmalloc = false;
+		range->buf = output_buf;
+		range->buf_sz = MAX_UNCOMPRESSED_BUF_SIZE;
+		range->data_sz = output_cur - output_buf;
+		output_buf = output_cur = NULL;
+		mutex_unlock(&output_buf_mutex);
+		range->status = 0;
+		/* Do not release the reference */
+		range->memcg = memcg;
+		set_active_memcg(old_memcg);
+		return range;
+	}
+
+	/* Decompression fails */
+	vfree(output_buf);
+	output_buf = output_cur = NULL;
+	mutex_unlock(&output_buf_mutex);
+	kfree(range);
+	pr_err("Decompress error\n");
+
+error:
+	set_active_memcg(old_memcg);
+	mem_cgroup_put(memcg);
+	return NULL;
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(generic_btf_ids)
 #ifdef CONFIG_CRASH_DUMP
 BTF_ID_FLAGS(func, crash_kexec, KF_DESTRUCTIVE)
 #endif
+BTF_ID_FLAGS(func, bpf_decompress, KF_TRUSTED_ARGS | KF_ACQUIRE | KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_mem_range_result_put, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_copy_to_kernel, KF_TRUSTED_ARGS | KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_obj_new_impl, KF_ACQUIRE | KF_RET_NULL)
