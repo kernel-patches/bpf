@@ -24,6 +24,10 @@
 #include <linux/bpf_mem_alloc.h>
 #include <linux/kasan.h>
 #include <linux/bpf_verifier.h>
+#include <linux/fs.h>
+#include <linux/fs_struct.h>
+#include <linux/path.h>
+#include <linux/string.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -2644,6 +2648,46 @@ __bpf_kfunc struct task_struct *bpf_task_from_vpid(s32 vpid)
 }
 
 /**
+ * bpf_task_cwd_from_pid - Get a task's absolute pathname of the current
+ * working directory from its pid.
+ * @pid: The pid of the task being looked up.
+ * @buf: The array pointed to by buf.
+ * @buf_len: buf length.
+ */
+__bpf_kfunc int bpf_task_cwd_from_pid(s32 pid, char *buf, u32 buf_len)
+{
+	struct path pwd;
+	char kpath[256], *path;
+	struct task_struct *task;
+
+	if (!buf || buf_len == 0)
+		return -EINVAL;
+
+	rcu_read_lock();
+	task = pid_task(find_vpid(pid), PIDTYPE_PID);
+	if (!task) {
+		rcu_read_unlock();
+		return -ESRCH;
+	}
+	task_lock(task);
+	if (!task->fs) {
+		task_unlock(task);
+		return -ENOENT;
+	}
+	get_fs_pwd(task->fs, &pwd);
+	task_unlock(task);
+	rcu_read_unlock();
+
+	path = d_path(&pwd, kpath, sizeof(kpath));
+	path_put(&pwd);
+	if (IS_ERR(path))
+		return PTR_ERR(path);
+
+	strncpy(buf, path, buf_len);
+	return 0;
+}
+
+/**
  * bpf_dynptr_slice() - Obtain a read-only pointer to the dynptr data.
  * @p: The dynptr whose data slice to retrieve
  * @offset: Offset into the dynptr
@@ -3314,6 +3358,7 @@ BTF_ID_FLAGS(func, bpf_task_get_cgroup1, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_from_vpid, KF_ACQUIRE | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_task_cwd_from_pid, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_throw)
 #ifdef CONFIG_BPF_EVENTS
 BTF_ID_FLAGS(func, bpf_send_signal_task, KF_TRUSTED_ARGS)
