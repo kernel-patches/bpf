@@ -352,6 +352,53 @@ int BPF_PROG(test_task_from_pid_invalid, struct task_struct *task, u64 clone_fla
 }
 
 SEC("tp_btf/task_newtask")
+int BPF_PROG(test_task_cwd_from_pid_arg, struct task_struct *task, u64 clone_flags)
+{
+	char cwd[256];
+
+	if (!is_test_kfunc_task())
+		return 0;
+
+	err = 0;
+	err += bpf_task_cwd_from_pid(task->pid, NULL, sizeof(cwd)) != -EINVAL;
+	err += bpf_task_cwd_from_pid(task->pid, cwd, 0) != -EINVAL;
+	err += bpf_task_cwd_from_pid(-1, cwd, sizeof(cwd)) != -ESRCH;
+	return 0;
+}
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(test_task_cwd_from_pid, struct task_struct *task, u64 clone_flags)
+{
+	char cwd[256];
+
+	if (!is_test_kfunc_task())
+		return 0;
+
+	err = bpf_task_cwd_from_pid(task->pid, cwd, sizeof(cwd));
+	return 0;
+}
+
+SEC("tp_btf/task_newtask")
+int BPF_PROG(test_task_cwd_from_pid_current, struct task_struct *task, u64 clone_flags)
+{
+	char cwd[128], cwd2[128];
+	struct task_struct *current;
+
+	if (!is_test_kfunc_task())
+		return 0;
+
+	current = bpf_get_current_task_btf();
+
+	err = 0;
+	err += bpf_task_cwd_from_pid(task->pid, cwd, sizeof(cwd));
+	err += bpf_task_cwd_from_pid(current->pid, cwd2, sizeof(cwd2));
+
+	err += bpf_strncmp(cwd, sizeof(cwd), cwd2) != 0;
+
+	return 0;
+}
+
+SEC("tp_btf/task_newtask")
 int BPF_PROG(task_kfunc_acquire_trusted_walked, struct task_struct *task, u64 clone_flags)
 {
 	struct task_struct *acquired;

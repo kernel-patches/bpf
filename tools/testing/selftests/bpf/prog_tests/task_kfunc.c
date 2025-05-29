@@ -149,6 +149,9 @@ static const char * const success_tests[] = {
 	"task_kfunc_acquire_trusted_walked",
 	"test_task_kfunc_flavor_relo",
 	"test_task_kfunc_flavor_relo_not_found",
+	"test_task_cwd_from_pid_arg",
+	"test_task_cwd_from_pid",
+	"test_task_cwd_from_pid_current",
 };
 
 static const char * const vpid_success_tests[] = {
