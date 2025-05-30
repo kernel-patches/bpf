@@ -1,0 +1,2 @@
+netcnt              # with kvm enabled, fail with packets unexpected packets: actual 10001 != expected 10000
+btf_tag/btf_type_tag_percpu_vmlinux_helper # https://lore.kernel.org/all/6f688f2e-7d26-423a-9029-d1b1ef1c938a@linux.dev/
