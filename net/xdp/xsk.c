@@ -528,24 +528,24 @@ static int xsk_wakeup(struct xdp_sock *xs, u8 flags)
 	return dev->netdev_ops->ndo_xsk_wakeup(dev, xs->queue_id, flags);
 }
 
-static int xsk_cq_reserve_addr_locked(struct xsk_buff_pool *pool, u64 addr)
+static int xsk_cq_reserve_locked(struct xsk_buff_pool *pool)
 {
 	unsigned long flags;
 	int ret;
 
 	spin_lock_irqsave(&pool->cq_lock, flags);
-	ret = xskq_prod_reserve_addr(pool->cq, addr);
+	ret = xskq_prod_reserve(pool->cq);
 	spin_unlock_irqrestore(&pool->cq_lock, flags);
 
 	return ret;
 }
 
-static void xsk_cq_submit_locked(struct xsk_buff_pool *pool, u32 n)
+static void xsk_cq_submit_locked(struct xsk_buff_pool *pool, u64 *descs, u32 n)
 {
 	unsigned long flags;
 
 	spin_lock_irqsave(&pool->cq_lock, flags);
-	xskq_prod_submit_n(pool->cq, n);
+	xskq_prod_write_submit_addr_n(pool->cq, descs, n);
 	spin_unlock_irqrestore(&pool->cq_lock, flags);
 }
 
@@ -572,7 +572,9 @@ static void xsk_destruct_skb(struct sk_buff *skb)
 		*compl->tx_timestamp = ktime_get_tai_fast_ns();
 	}
 
-	xsk_cq_submit_locked(xdp_sk(skb->sk)->pool, xsk_get_num_desc(skb));
+	xsk_cq_submit_locked(xdp_sk(skb->sk)->pool,
+			     skb_shinfo(skb)->xsk_descs,
+			     xsk_get_num_desc(skb));
 	sock_wfree(skb);
 }
 
@@ -754,7 +756,9 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 	skb->priority = READ_ONCE(xs->sk.sk_priority);
 	skb->mark = READ_ONCE(xs->sk.sk_mark);
 	skb->destructor = xsk_destruct_skb;
+
 	xsk_tx_metadata_to_compl(meta, &skb_shinfo(skb)->xsk_meta);
+	skb_shinfo(skb)->xsk_descs[xsk_get_num_desc(skb)] = desc->addr;
 	xsk_set_destructor_arg(skb);
 
 	return skb;
@@ -765,6 +769,7 @@ free_err:
 
 	if (err == -EOVERFLOW) {
 		/* Drop the packet */
+		skb_shinfo(xs->skb)->xsk_descs[xsk_get_num_desc(xs->skb)] = desc->addr;
 		xsk_set_destructor_arg(xs->skb);
 		xsk_drop_skb(xs->skb);
 		xskq_cons_release(xs->tx);
@@ -807,7 +812,7 @@ static int __xsk_generic_xmit(struct sock *sk)
 		 * if there is space in it. This avoids having to implement
 		 * any buffering in the Tx path.
 		 */
-		err = xsk_cq_reserve_addr_locked(xs->pool, desc.addr);
+		err = xsk_cq_reserve_locked(xs->pool);
 		if (err) {
 			err = -EAGAIN;
 			goto out;

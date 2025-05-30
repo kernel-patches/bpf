@@ -624,6 +624,8 @@ struct skb_shared_info {
 		void		*destructor_arg;
 	};
 
+	u64 xsk_descs[MAX_SKB_FRAGS];
+
 	/* must be last field, see pskb_expand_head() */
 	skb_frag_t	frags[MAX_SKB_FRAGS];
 };

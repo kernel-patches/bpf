@@ -436,6 +436,17 @@ static inline void xskq_prod_submit_n(struct xsk_queue *q, u32 nb_entries)
 	__xskq_prod_submit(q, q->ring->producer + nb_entries);
 }
 
+static inline void xskq_prod_write_submit_addr_n(struct xsk_queue *q, u64 *addrs, u32 nb_entries)
+{
+	struct xdp_umem_ring *ring = (struct xdp_umem_ring *)q->ring;
+	u32 prod = q->ring->producer;
+
+	for (u32 i = 0; i < nb_entries; ++i)
+		ring->desc[prod++ & q->ring_mask] = addrs[i];
+
+	__xskq_prod_submit(q, prod);
+}
+
 static inline bool xskq_prod_is_empty(struct xsk_queue *q)
 {
 	/* No barriers needed since data is not accessed */
