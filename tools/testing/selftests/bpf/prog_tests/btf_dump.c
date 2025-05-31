@@ -879,6 +879,106 @@ static void test_btf_dump_var_data(struct btf *btf, struct btf_dump *d,
 			  "static int bpf_cgrp_storage_busy = (int)2", 2);
 }
 
+/*
+ * String-like types are generally not named, so they need to be
+ * found this way rather than via btf__find_by_name().
+ */
+static int find_char_array_type(struct btf *btf, int nelems)
+{
+	const int nr_types = btf__type_cnt(btf);
+	const int char_type = btf__find_by_name(btf, "char");
+
+	for (int i = 1; i < nr_types; i++) {
+		const struct btf_type *t;
+		const struct btf_array *at;
+
+		t = btf__type_by_id(btf, i);
+		if (btf_kind(t) != BTF_KIND_ARRAY)
+			continue;
+
+		at = btf_array(t);
+		if (at->nelems == nelems && at->type == char_type)
+			return i;
+	}
+
+	return -ENOENT;
+}
+
+static int btf_dump_string_data(struct btf *btf, struct btf_dump *d,
+				char *str, struct btf_dump_type_data_opts *opts,
+				char *ptr, size_t ptr_sz,
+				const char *expected_val)
+{
+	char name[64];
+	size_t type_sz;
+	int type_id;
+	int ret = 0;
+
+	snprintf(name, sizeof(name), "char[%zu]", ptr_sz);
+	type_id = find_char_array_type(btf, ptr_sz);
+	if (!ASSERT_GE(type_id, 0, "find type id"))
+		return -ENOENT;
+	type_sz = btf__resolve_size(btf, type_id);
+	str[0] = '\0';
+	ret = btf_dump__dump_type_data(d, type_id, ptr, ptr_sz, opts);
+	if (type_sz <= ptr_sz) {
+		if (!ASSERT_EQ(ret, type_sz, "failed/unexpected type_sz"))
+			return -EINVAL;
+	} else {
+		if (!ASSERT_EQ(ret, -E2BIG, "failed to return -E2BIG"))
+			return -EINVAL;
+	}
+	if (!ASSERT_STREQ(str, expected_val, "ensure expected/actual match"))
+		return -EFAULT;
+	return 0;
+}
+
+static void test_btf_dump_string_data(struct btf *btf, struct btf_dump *d,
+				      char *str)
+{
+	DECLARE_LIBBPF_OPTS(btf_dump_type_data_opts, opts);
+
+	opts.compact = true;
+	opts.emit_zeroes = false;
+	opts.print_strings = true;
+
+	opts.skip_names = false;
+	btf_dump_string_data(btf, d, str, &opts, "foo", 4,
+		"(char[4])\"foo\"");
+
+	opts.skip_names = true;
+	btf_dump_string_data(btf, d, str, &opts, "foo", 4,
+		"\"foo\"");
+
+	/* This should have no effect. */
+	opts.emit_zeroes = false;
+	btf_dump_string_data(btf, d, str, &opts, "foo", 4,
+		"\"foo\"");
+
+	/* This should have no effect. */
+	opts.compact = false;
+	btf_dump_string_data(btf, d, str, &opts, "foo", 4,
+		"\"foo\"");
+
+	/* Non-printable characters come out as hex. */
+	btf_dump_string_data(btf, d, str, &opts, "fo\xff", 4,
+		"\"fo\\xff\"");
+	btf_dump_string_data(btf, d, str, &opts, "fo\x7", 4,
+		"\"fo\\x07\"");
+
+	/* Should get printed properly even though there's no NUL. */
+	char food[4] = { 'f', 'o', 'o', 'd' };
+
+	btf_dump_string_data(btf, d, str, &opts, food, 4,
+		"\"food\"");
+
+	/* The embedded NUL should terminate the string. */
+	char embed[4] = { 'f', 'o', '\0', 'd' };
+
+	btf_dump_string_data(btf, d, str, &opts, embed, 4,
+		"\"fo\"");
+}
+
 static void test_btf_datasec(struct btf *btf, struct btf_dump *d, char *str,
 			     const char *name, const char *expected_val,
 			     void *data, size_t data_sz)
@@ -970,6 +1070,8 @@ void test_btf_dump() {
 		test_btf_dump_struct_data(btf, d, str);
 	if (test__start_subtest("btf_dump: var_data"))
 		test_btf_dump_var_data(btf, d, str);
+	if (test__start_subtest("btf_dump: string_data"))
+		test_btf_dump_string_data(btf, d, str);
 	btf_dump__free(d);
 	btf__free(btf);
 
