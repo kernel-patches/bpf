@@ -1,0 +1,38 @@
+From ba73c1ca1e1dfd75e882b549e838f8c6bfdc951a Mon Sep 17 00:00:00 2001
+From: Alexei Starovoitov <ast@kernel.org>
+Date: Sun, 1 Jun 2025 16:56:29 -0700
+Subject: [PATCH 3/4] Revert "perf: Only dump the throttle log for the leader"
+
+This reverts commit e800ac51202f053018f3d6acb1819ecec4d75a2c.
+
+Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+---
+ kernel/events/core.c | 6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/kernel/events/core.c b/kernel/events/core.c
+index f34c99f8ce8f..8327ab0ee641 100644
+--- a/kernel/events/core.c
++++ b/kernel/events/core.c
+@@ -2650,16 +2650,14 @@ static void perf_event_unthrottle(struct perf_event *event, bool start)
+ 	event->hw.interrupts = 0;
+ 	if (start)
+ 		event->pmu->start(event, 0);
+-	if (event == event->group_leader)
+-		perf_log_throttle(event, 1);
++	perf_log_throttle(event, 1);
+ }
+ 
+ static void perf_event_throttle(struct perf_event *event)
+ {
+ 	event->pmu->stop(event, 0);
+ 	event->hw.interrupts = MAX_INTERRUPTS;
+-	if (event == event->group_leader)
+-		perf_log_throttle(event, 0);
++	perf_log_throttle(event, 0);
+ }
+ 
+ static void perf_event_unthrottle_group(struct perf_event *event, bool skip_start_event)
+-- 
+2.49.0
+
