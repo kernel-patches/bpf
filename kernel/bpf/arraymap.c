@@ -385,12 +385,15 @@ int bpf_percpu_array_update(struct bpf_map *map, void *key, void *value,
 			    u64 map_flags)
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
-	u32 index = *(u32 *)key;
+	u32 index = *(u32 *)key, cpu;
 	void __percpu *pptr;
-	int cpu, off = 0;
+	bool reuse_value;
+	int off = 0;
 	u32 size;
 
-	if (unlikely(map_flags > BPF_EXIST))
+	cpu = map_flags >> 32;
+	map_flags &= BPF_F_CPU_MASK;
+	if (unlikely(map_flags > BPF_F_CPU))
 		/* unknown flags */
 		return -EINVAL;
 
@@ -409,10 +412,25 @@ int bpf_percpu_array_update(struct bpf_map *map, void *key, void *value,
 	 * so no kernel data leaks possible
 	 */
 	size = array->elem_size;
+
+	if ((map_flags & BPF_F_CPU) && cpu != BPF_F_CPU_MASK) {
+		if (cpu >= num_possible_cpus())
+			return -E2BIG;
+
+		rcu_read_lock();
+		pptr = array->pptrs[index & array->index_mask];
+		copy_map_value_long(map, per_cpu_ptr(pptr, cpu), value);
+		bpf_obj_free_fields(array->map.record, per_cpu_ptr(pptr, cpu));
+		rcu_read_unlock();
+		return 0;
+	}
+
+	reuse_value = (map_flags & BPF_F_CPU) && cpu == BPF_F_CPU_MASK;
 	rcu_read_lock();
 	pptr = array->pptrs[index & array->index_mask];
 	for_each_possible_cpu(cpu) {
-		copy_map_value_long(map, per_cpu_ptr(pptr, cpu), value + off);
+		copy_map_value_long(map, per_cpu_ptr(pptr, cpu),
+				    reuse_value ? value : value + off);
 		bpf_obj_free_fields(array->map.record, per_cpu_ptr(pptr, cpu));
 		off += size;
 	}

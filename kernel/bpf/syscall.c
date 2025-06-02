@@ -1941,17 +1941,24 @@ int generic_map_update_batch(struct bpf_map *map, struct file *map_file,
 {
 	void __user *values = u64_to_user_ptr(attr->batch.values);
 	void __user *keys = u64_to_user_ptr(attr->batch.keys);
+	u64 elem_flags = attr->batch.elem_flags & BPF_F_CPU_MASK;
 	u32 value_size, cp, max_count;
 	void *key, *value;
 	int err = 0;
 
-	if (attr->batch.elem_flags & ~BPF_F_LOCK)
+	if (elem_flags & ~(BPF_F_LOCK | BPF_F_CPU))
 		return -EINVAL;
 
-	if ((attr->batch.elem_flags & BPF_F_LOCK) &&
+	if ((elem_flags & BPF_F_LOCK) &&
 	    !btf_record_has_field(map->record, BPF_SPIN_LOCK)) {
 		return -EINVAL;
 	}
+
+	/* Only support percpu_array map. We can relax this restriction for
+	 * other percpu maps in the future.
+	 */
+	if ((elem_flags & BPF_F_CPU) && map->map_type != BPF_MAP_TYPE_PERCPU_ARRAY)
+		return -EINVAL;
 
 	value_size = bpf_map_value_size(map);
 
