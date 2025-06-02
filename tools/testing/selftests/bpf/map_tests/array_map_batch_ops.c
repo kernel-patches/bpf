@@ -153,6 +153,76 @@ static void array_percpu_map_batch_ops(void)
 	printf("test_%s:PASS\n", __func__);
 }
 
+static void array_percpu_map_batch_cpu(void)
+{
+	int map_fd, *keys, value_size, cpu, i, j, err;
+	u32 max_entries = 1, count = max_entries;
+	const u64 value = 0xDEADC0DE;
+	u64 batch = 0, cpu_flag;
+	__s64 *values;
+	DECLARE_LIBBPF_OPTS(bpf_map_batch_opts, opts,
+			    .elem_flags = 0,
+			    .flags = 0,
+	);
+
+	map_fd = bpf_map_create(BPF_MAP_TYPE_PERCPU_ARRAY, "percpu_array_map",
+				sizeof(int), sizeof(__s64), max_entries, NULL);
+	if (!ASSERT_FALSE(map_fd < 0, "bpf_map_create"))
+		return;
+
+	value_size = sizeof(__s64) * nr_cpus;
+	values = calloc(max_entries, value_size);
+	keys = calloc(max_entries, sizeof(*keys));
+	if (!ASSERT_FALSE(!keys || !values, "calloc keys and values"))
+		goto out;
+
+	cpu_flag = nr_cpus;
+	opts.elem_flags = (cpu_flag << 32) | BPF_F_CPU;
+	err = bpf_map_update_batch(map_fd, keys, values, &max_entries, &opts);
+	if (!ASSERT_EQ(err, -E2BIG, "bpf_map_update_batch E2BIG"))
+		goto out;
+
+	for (cpu = 0; cpu < nr_cpus; cpu++) {
+		memset(values, 0, max_entries * value_size);
+
+		/* clear value on all cpus */
+		cpu_flag = BPF_F_CPU_MASK;
+		opts.elem_flags = (cpu_flag << 32) | BPF_F_CPU;
+		err = bpf_map_update_batch(map_fd, keys, values, &max_entries, &opts);
+		if (!ASSERT_OK(err, "bpf_map_update_batch all cpus"))
+			goto out;
+
+		/* update value on current cpu */
+		cpu_flag = cpu;
+		values[0] = value;
+		opts.elem_flags = (cpu_flag << 32) | BPF_F_CPU;
+		err = bpf_map_update_batch(map_fd, keys, values, &max_entries, &opts);
+		if (!ASSERT_OK(err, "bpf_map_update_batch current cpu"))
+			goto out;
+
+		opts.elem_flags = 0;
+		err = bpf_map_lookup_batch(map_fd, NULL, &batch, keys, values, &count, &opts);
+		if (!ASSERT_TRUE(!err || err == -ENOENT, "bpf_map_lookup_batch"))
+			goto out;
+
+		for (i = 0; i < max_entries; i++) {
+			for (j = 0; j < nr_cpus; j++) {
+				if (!ASSERT_EQ(values[i*nr_cpus + j], j != cpu ? 0 : value,
+					       "value on cpu"))
+					goto out;
+			}
+		}
+	}
+
+	printf("test_%s:PASS\n", __func__);
+out:
+	if (keys)
+		free(keys);
+	if (values)
+		free(values);
+	close(map_fd);
+}
+
 void test_array_map_batch_ops(void)
 {
 	nr_cpus = libbpf_num_possible_cpus();
@@ -162,4 +232,5 @@ void test_array_map_batch_ops(void)
 
 	array_map_batch_ops();
 	array_percpu_map_batch_ops();
+	array_percpu_map_batch_cpu();
 }
