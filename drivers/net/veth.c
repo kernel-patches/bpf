@@ -1651,6 +1651,10 @@ static int veth_xdp(struct net_device *dev, struct netdev_bpf *xdp)
 static int veth_xdp_rx_timestamp(const struct xdp_md *ctx, u64 *timestamp)
 {
 	struct veth_xdp_buff *_ctx = (void *)ctx;
+	const struct xdp_buff *xdp = &_ctx->xdp;
+
+	if (!xdp_load_rx_ts_from_buff(xdp, timestamp))
+		return 0;
 
 	if (!_ctx->skb)
 		return -ENODATA;
@@ -1663,7 +1667,11 @@ static int veth_xdp_rx_hash(const struct xdp_md *ctx, u32 *hash,
 			    enum xdp_rss_hash_type *rss_type)
 {
 	struct veth_xdp_buff *_ctx = (void *)ctx;
+	const struct xdp_buff *xdp = &_ctx->xdp;
 	struct sk_buff *skb = _ctx->skb;
+
+	if (!xdp_load_rx_hash_from_buff(xdp, hash, rss_type))
+		return 0;
 
 	if (!skb)
 		return -ENODATA;
@@ -1678,8 +1686,12 @@ static int veth_xdp_rx_vlan_tag(const struct xdp_md *ctx, __be16 *vlan_proto,
 				u16 *vlan_tci)
 {
 	const struct veth_xdp_buff *_ctx = (void *)ctx;
+	const struct xdp_buff *xdp = &_ctx->xdp;
 	const struct sk_buff *skb = _ctx->skb;
 	int err;
+
+	if (!xdp_load_rx_vlan_tag_from_buff(xdp, vlan_proto, vlan_tci))
+		return 0;
 
 	if (!skb)
 		return -ENODATA;
