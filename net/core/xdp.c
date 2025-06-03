@@ -606,6 +606,7 @@ struct xdp_frame *xdp_convert_zc_to_xdp_frame(struct xdp_buff *xdp)
 	xdpf->metasize = metasize;
 	xdpf->frame_sz = PAGE_SIZE;
 	xdpf->mem_type = MEM_TYPE_PAGE_ORDER0;
+	memcpy(&xdpf->rx_meta, xdp->rx_meta, sizeof(*xdp->rx_meta));
 
 	xsk_buff_free(xdp);
 	return xdpf;
