@@ -71,11 +71,31 @@ struct xdp_txq_info {
 	struct net_device *dev;
 };
 
+struct xdp_rx_meta {
+	struct xdp_rx_meta_hash {
+		u32 val;
+		u32 type; /* enum xdp_rss_hash_type */
+	} hash;
+	struct xdp_rx_meta_vlan {
+		__be16 proto;
+		u16 tci;
+	} vlan;
+};
+
+/* Storage area for HW RX metadata only available with reasonable headroom
+ * available. Less than XDP_PACKET_HEADROOM due to Intel drivers.
+ */
+#define XDP_MIN_HEADROOM	192
+
 enum xdp_buff_flags {
 	XDP_FLAGS_HAS_FRAGS		= BIT(0), /* non-linear xdp buff */
 	XDP_FLAGS_FRAGS_PF_MEMALLOC	= BIT(1), /* xdp paged memory is under
 						   * pressure
 						   */
+	XDP_FLAGS_META_AREA		= BIT(2), /* storage area available */
+	XDP_FLAGS_META_RX_HASH		= BIT(3), /* hw rx hash */
+	XDP_FLAGS_META_RX_VLAN		= BIT(4), /* hw rx vlan */
+	XDP_FLAGS_META_RX_TS		= BIT(5), /* hw rx timestamp */
 };
 
 struct xdp_buff {
@@ -87,6 +107,24 @@ struct xdp_buff {
 	struct xdp_txq_info *txq;
 	u32 frame_sz; /* frame size to deduce data_hard_end/reserved tailroom*/
 	u32 flags; /* supported values defined in xdp_buff_flags */
+	struct xdp_rx_meta *rx_meta; /* rx hw metadata pointer in the
+				      * buffer headroom
+				      */
+};
+
+struct xdp_frame {
+	void *data;
+	u32 len;
+	u32 headroom;
+	u32 metasize; /* uses lower 8-bits */
+	/* Lifetime of xdp_rxq_info is limited to NAPI/enqueue time,
+	 * while mem_type is valid on remote CPU.
+	 */
+	enum xdp_mem_type mem_type:32;
+	struct net_device *dev_rx; /* used by cpumap */
+	u32 frame_sz;
+	u32 flags; /* supported values defined in xdp_buff_flags */
+	struct xdp_rx_meta rx_meta; /* rx hw metadata */
 };
 
 static __always_inline bool xdp_buff_has_frags(const struct xdp_buff *xdp)
@@ -133,6 +171,9 @@ xdp_prepare_buff(struct xdp_buff *xdp, unsigned char *hard_start,
 	xdp->data = data;
 	xdp->data_end = data + data_len;
 	xdp->data_meta = meta_valid ? data : data + 1;
+	xdp->flags = (headroom < XDP_MIN_HEADROOM) ? 0 : XDP_FLAGS_META_AREA;
+	xdp->rx_meta = (void *)(hard_start +
+				offsetof(struct xdp_frame, rx_meta));
 }
 
 /* Reserve memory area at end-of data area.
@@ -253,20 +294,6 @@ static inline bool xdp_buff_add_frag(struct xdp_buff *xdp, netmem_ref netmem,
 	return true;
 }
 
-struct xdp_frame {
-	void *data;
-	u32 len;
-	u32 headroom;
-	u32 metasize; /* uses lower 8-bits */
-	/* Lifetime of xdp_rxq_info is limited to NAPI/enqueue time,
-	 * while mem_type is valid on remote CPU.
-	 */
-	enum xdp_mem_type mem_type:32;
-	struct net_device *dev_rx; /* used by cpumap */
-	u32 frame_sz;
-	u32 flags; /* supported values defined in xdp_buff_flags */
-};
-
 static __always_inline bool xdp_frame_has_frags(const struct xdp_frame *frame)
 {
 	return !!(frame->flags & XDP_FLAGS_HAS_FRAGS);
@@ -355,6 +382,8 @@ void xdp_convert_frame_to_buff(const struct xdp_frame *frame,
 	xdp->data_meta = frame->data - frame->metasize;
 	xdp->frame_sz = frame->frame_sz;
 	xdp->flags = frame->flags;
+	xdp->rx_meta = xdp->data_hard_start +
+		       offsetof(struct xdp_frame, rx_meta);
 }
 
 static inline
