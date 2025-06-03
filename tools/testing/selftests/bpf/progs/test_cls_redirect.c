@@ -978,7 +978,14 @@ int cls_redirect(struct __sk_buff *skb)
 		return TC_ACT_OK;
 	}
 
-	/* TODO Check UDP length? */
+	uint16_t udp_len = bpf_ntohs(encap->udp.len);
+	uint16_t min_encap_len = sizeof(encap->udp) + sizeof(encap->gue) + sizeof(encap->unigue);
+
+	if (udp_len < min_encap_len) {
+		metrics->errors_total_malformed_encapsulation++;
+		return TC_ACT_SHOT;
+	}
+
 	if (encap->udp.dest != ENCAPSULATION_PORT) {
 		return TC_ACT_OK;
 	}
