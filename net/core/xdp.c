@@ -792,6 +792,23 @@ out:
 }
 EXPORT_SYMBOL_GPL(xdp_build_skb_from_zc);
 
+static void xdp_set_skb_rx_hash_from_meta(struct xdp_frame *frame,
+					  struct sk_buff *skb)
+{
+	enum pkt_hash_types hash_type = PKT_HASH_TYPE_NONE;
+
+	if (!xdp_frame_has_rx_meta_hash(frame))
+		return;
+
+	if (frame->rx_meta.hash.type & XDP_RSS_TYPE_L4_ANY)
+		hash_type = PKT_HASH_TYPE_L4;
+	else if (frame->rx_meta.hash.type & (XDP_RSS_TYPE_L3_IPV4 |
+					     XDP_RSS_TYPE_L3_IPV6))
+		hash_type = PKT_HASH_TYPE_L3;
+
+	skb_set_hash(skb, frame->rx_meta.hash.val, hash_type);
+}
+
 struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 					   struct sk_buff *skb,
 					   struct net_device *dev)
@@ -800,10 +817,14 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	unsigned int headroom, frame_size;
 	void *hard_start;
 	u8 nr_frags;
+	u64 ts;
 
 	/* xdp frags frame */
 	if (unlikely(xdp_frame_has_frags(xdpf)))
 		nr_frags = sinfo->nr_frags;
+
+	if (unlikely(xdp_frame_has_rx_meta_ts(xdpf)))
+		ts = sinfo->hwtstamps.hwtstamp;
 
 	/* Part of headroom was reserved to xdpf */
 	headroom = sizeof(*xdpf) + xdpf->headroom;
@@ -832,9 +853,15 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	/* Essential SKB info: protocol and skb->dev */
 	skb->protocol = eth_type_trans(skb, dev);
 
+	xdp_set_skb_rx_hash_from_meta(xdpf, skb);
+	if (xdp_frame_has_rx_meta_vlan(xdpf))
+		__vlan_hwaccel_put_tag(skb, xdpf->rx_meta.vlan.proto,
+				       xdpf->rx_meta.vlan.tci);
+	if (unlikely(xdp_frame_has_rx_meta_ts(xdpf)))
+		skb_hwtstamps(skb)->hwtstamp = ts;
+
 	/* Optional SKB info, currently missing:
 	 * - HW checksum info		(skb->ip_summed)
-	 * - HW RX hash			(skb_set_hash)
 	 * - RX ring dev queue index	(skb_record_rx_queue)
 	 */
 
