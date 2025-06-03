@@ -59,12 +59,12 @@ static int attach_tc_prog(struct bpf_tc_hook *hook, int fd)
 
 /* The maximum permissible size is: PAGE_SIZE - sizeof(struct xdp_page_head) -
  * SKB_DATA_ALIGN(sizeof(struct skb_shared_info)) - XDP_PACKET_HEADROOM =
- * 3408 bytes for 64-byte cacheline and 3216 for 256-byte one.
+ * 3392 bytes for 64-byte cacheline and 3200 for 256-byte one.
  */
 #if defined(__s390x__)
-#define MAX_PKT_SIZE 3216
+#define MAX_PKT_SIZE 3200
 #else
-#define MAX_PKT_SIZE 3408
+#define MAX_PKT_SIZE 3392
 #endif
 static void test_max_pkt_size(int fd)
 {
