@@ -23,6 +23,7 @@ const volatile enum Enum var_ea = EA1;
 const volatile enum Enumu64 var_eb = EB1;
 const volatile enum Enums64 var_ec = EC1;
 const volatile bool var_b = false;
+const volatile __s32 arr[5];
 
 struct Struct {
 	int:16;
@@ -35,16 +36,16 @@ struct Struct {
 		volatile struct {
 			const int:1;
 			union {
-				const volatile __u8 var_u8;
+				const volatile __u8 var_u8[3];
 				const volatile __s16 filler3;
 				const int:1;
 			} u;
 		};
-	} struct2;
+	} struct2[2];
 };
 
 const volatile __u32 stru = 0; /* same prefix as below */
-const volatile struct Struct struct1 = {.struct2 = {.u = {.var_u8 = 1}}};
+const volatile struct Struct struct1[3] = {{.struct2 = {{}, {.u = {.var_u8 = {1}}}}}};
 
 union Union {
 	__u16 var_u16;
@@ -61,8 +62,6 @@ union Union {
 };
 
 const volatile union Union union1 = {.var_u16 = -1};
-
-char arr[4] = {0};
 
 SEC("socket")
 int test_set_globals(void *ctx)
@@ -81,8 +80,9 @@ int test_set_globals(void *ctx)
 	a = var_eb;
 	a = var_ec;
 	a = var_b;
-	a = struct1.struct2.u.var_u8;
+	a = struct1[2].struct2[1].u.var_u8[2];
 	a = union1.var_u16;
+	a = arr[3];
 
 	return a;
 }

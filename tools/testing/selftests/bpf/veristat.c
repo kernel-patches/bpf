@@ -1379,7 +1379,7 @@ static int append_var_preset(struct var_preset **presets, int *cnt, const char *
 	memset(cur, 0, sizeof(*cur));
 	(*cnt)++;
 
-	if (sscanf(expr, "%s = %s %n", var, val, &n) != 2 || n != strlen(expr)) {
+	if (sscanf(expr, "%[][a-zA-Z0-9_.] = %s %n", var, val, &n) != 2 || n != strlen(expr)) {
 		fprintf(stderr, "Failed to parse expression '%s'\n", expr);
 		return -EINVAL;
 	}
@@ -1486,6 +1486,39 @@ static bool is_preset_supported(const struct btf_type *t)
 	return btf_is_int(t) || btf_is_enum(t) || btf_is_enum64(t);
 }
 
+static int adjust_array_secinfo(const struct btf *btf, const struct btf_type *t,
+				struct btf_var_secinfo *sinfo, const char *var)
+{
+	struct btf_array *barr;
+	const struct btf_type *type;
+	char arr[64], idx[64];
+	int i = 0, tid;
+
+	if (!btf_is_array(t))
+		return 0;
+
+	barr = btf_array(t);
+	tid = btf__resolve_type(btf, barr->type);
+	type = btf__type_by_id(btf, tid);
+
+	/* var may contain chained expression e.g.: foo[1].bar */
+	if (sscanf(var, "%[a-zA-Z0-9_][%[a-zA-Z0-9]]", arr, idx) != 2) {
+		fprintf(stderr, "Could not parse array expression %s\n", var);
+		return -EINVAL;
+	}
+	errno = 0;
+	i = strtol(idx, NULL, 0);
+	if (errno || i < 0 || i >= barr->nelems) {
+		fprintf(stderr, "Preset index %s is invalid or out of bounds [0, %d]\n",
+			idx, barr->nelems);
+		return -EINVAL;
+	}
+	sinfo->size = type->size;
+	sinfo->type = tid;
+	sinfo->offset += i * type->size;
+	return 0;
+}
+
 const int btf_find_member(const struct btf *btf,
 			  const struct btf_type *parent_type,
 			  __u32 parent_offset,
@@ -1493,7 +1526,7 @@ const int btf_find_member(const struct btf *btf,
 			  int *member_tid,
 			  __u32 *member_offset)
 {
-	int i;
+	int i, err;
 
 	if (!btf_is_composite(parent_type))
 		return -EINVAL;
@@ -1511,8 +1544,12 @@ const int btf_find_member(const struct btf *btf,
 		member_type = btf__type_by_id(btf, tid);
 		if (member->name_off) {
 			const char *name = btf__name_by_offset(btf, member->name_off);
+			int name_len = strlen(name);
 
-			if (strcmp(member_name, name) == 0) {
+			if (strcmp(member_name, name) == 0 ||
+			    (btf_is_array(member_type) &&
+			     strncmp(name, member_name, name_len) == 0 &&
+			     member_name[name_len] == '[')) {
 				if (btf_member_bitfield_size(parent_type, i) != 0) {
 					fprintf(stderr, "Bitfield presets are not supported %s\n",
 						name);
@@ -1520,6 +1557,16 @@ const int btf_find_member(const struct btf *btf,
 				}
 				*member_offset = parent_offset + member->offset;
 				*member_tid = tid;
+				if (btf_is_array(member_type)) {
+					struct btf_var_secinfo sinfo = {.offset = 0};
+
+					err = adjust_array_secinfo(btf, member_type,
+								   &sinfo, member_name);
+					if (err)
+						return err;
+					*member_tid = sinfo.type;
+					*member_offset += sinfo.offset * 8;
+				}
 				return 0;
 			}
 		} else if (btf_is_composite(member_type)) {
@@ -1547,6 +1594,13 @@ static int adjust_var_secinfo(struct btf *btf, const struct btf_type *t,
 	base_type = btf__type_by_id(btf, btf__resolve_type(btf, t->type));
 	snprintf(expr, sizeof(expr), "%s", var);
 	strtok_r(expr, ".", &saveptr);
+
+	if (btf_is_array(base_type)) {
+		err = adjust_array_secinfo(btf, base_type, sinfo, var);
+		if (err)
+			return err;
+		base_type = btf__type_by_id(btf, sinfo->type);
+	}
 
 	while ((name = strtok_r(NULL, ".", &saveptr))) {
 		err = btf_find_member(btf, base_type, 0, name, &member_tid, &member_offset);
@@ -1673,7 +1727,8 @@ static int set_global_vars(struct bpf_object *obj, struct var_preset *presets, i
 
 				if (strncmp(var_name, presets[k].name, var_len) != 0 ||
 				    (presets[k].name[var_len] != '\0' &&
-				     presets[k].name[var_len] != '.'))
+				     presets[k].name[var_len] != '.' &&
+				     presets[k].name[var_len] != '['))
 					continue;
 
 				if (presets[k].applied) {
