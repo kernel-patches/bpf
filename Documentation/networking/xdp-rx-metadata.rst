@@ -90,22 +90,64 @@ the ``data_meta`` pointer.
 In the future, we'd like to support a case where an XDP program
 can override some of the metadata used for building ``skbs``.
 
-bpf_redirect_map
-================
+XDP_REDIRECT
+============
 
-``bpf_redirect_map`` can redirect the frame to a different device.
-Some devices (like virtual ethernet links) support running a second XDP
-program after the redirect. However, the final consumer doesn't have
-access to the original hardware descriptor and can't access any of
-the original metadata. The same applies to XDP programs installed
-into devmaps and cpumaps.
+The ``XDP_REDIRECT`` action forwards an XDP frame to another net device or a CPU
+(via cpumap/devmap) for further processing. It is invoked using BPF helpers like
+``bpf_redirect_map()`` or ``bpf_redirect()``.  When an XDP frame is redirected,
+the recipient (e.g., an XDP program on a veth device, or the kernel stack via
+cpumap) loses direct access to the original NIC's hardware descriptor and thus
+its hardware metadata
 
-This means that for redirected packets only custom metadata is
-currently supported, which has to be prepared by the initial XDP program
-before redirect. If the frame is eventually passed to the kernel, the
-``skb`` created from such a frame won't have any hardware metadata populated
-in its ``skb``. If such a packet is later redirected into an ``XSK``,
-that will also only have access to the custom metadata.
+By default, this loss of access means that if an ``xdp_frame`` is redirected and
+then converted to an ``skb``, its ``skb`` fields for hardware-derived metadata
+(like ``skb->hash`` or VLAN info) are not populated from the original
+packet. This can impact features like Generic Receive Offload (GRO).  While XDP
+programs can manually save custom data (e.g., using ``bpf_xdp_adjust_meta()``),
+propagating specific *hardware* RX hints to ``skb`` creation requires using the
+kfuncs described below.
+
+To enable propagating selected hardware RX hints, store BPF kfuncs allow an
+XDP program on the initial NIC to read these hints and then explicitly
+*store* them. The kfuncs place this metadata in locations associated with
+the XDP packet buffer, making it available if an ``skb`` is later built or
+the frame is otherwise processed. For instance, RX hash and VLAN tags are
+stored within the XDP frame's addressable headroom, while RX timestamps are
+typically written to an area corresponding to ``skb_shared_info``.
+
+**Crucially, the BPF programmer must call these "store" kfuncs to save the
+desired hardware hints for propagation.** The system does not do this
+automatically. The NIC driver is responsible for ensuring sufficient headroom is
+available; kfuncs may return ``-ENOSPC`` if space is inadequate for storing
+these hints.
+
+When these kfuncs are used to store hints before redirection:
+
+* If the ``xdp_frame`` is converted to an ``skb``, the networking stack can use
+  the stored hints to populate ``skb`` fields (e.g., ``skb->hash``,
+  ``skb->vlan_tci``, timestamps), aiding netstack features like GRO.
+* When running a second XDP-program after the redirect. The veth driver supports
+  access to the previous stored metadata is accessed though the normal reader
+  kfuncs.
+
+Kfuncs are available for storing RX hash (``bpf_xdp_store_rx_hash()``),
+VLAN information (``bpf_xdp_store_rx_vlan()``), and hardware timestamps
+(``bpf_xdp_store_rx_ts()``). Consult the kfunc API documentation for usage
+details, expected data, return codes, and relevant XDP flags that may
+indicate success or metadata availability.
+
+Kfuncs for **store** operations:
+
+.. kernel-doc:: net/core/xdp.c
+   :identifiers: bpf_xdp_store_rx_timestamp
+
+.. kernel-doc:: net/core/xdp.c
+   :identifiers: bpf_xdp_store_rx_hash
+
+.. kernel-doc:: net/core/xdp.c
+   :identifiers: bpf_xdp_store_rx_vlan_tag
+
 
 bpf_tail_call
 =============
