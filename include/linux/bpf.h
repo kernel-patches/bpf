@@ -2218,12 +2218,12 @@ bpf_prog_run_array(const struct bpf_prog_array *array,
 	const struct bpf_prog *prog;
 	struct bpf_run_ctx *old_run_ctx;
 	struct bpf_trace_run_ctx run_ctx;
-	u32 ret = 1;
+	u32 ret = 0;
 
 	RCU_LOCKDEP_WARN(!rcu_read_lock_held(), "no rcu lock held");
 
 	if (unlikely(!array))
-		return ret;
+		return 1;
 
 	run_ctx.is_uprobe = false;
 
@@ -2232,7 +2232,7 @@ bpf_prog_run_array(const struct bpf_prog_array *array,
 	item = &array->items[0];
 	while ((prog = READ_ONCE(item->prog))) {
 		run_ctx.bpf_cookie = item->bpf_cookie;
-		ret &= run_prog(prog, ctx);
+		ret |= run_prog(prog, ctx);
 		item++;
 	}
 	bpf_reset_run_ctx(old_run_ctx);
