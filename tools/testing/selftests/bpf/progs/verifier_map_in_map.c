@@ -139,4 +139,81 @@ __naked void on_the_inner_map_pointer(void)
 	: __clobber_all);
 }
 
+SEC("socket")
+int map_ptr_is_never_null(void *ctx)
+{
+	struct bpf_map *maps[2] = { 0 };
+	struct bpf_map *map = NULL;
+	int __attribute__((aligned(8))) key = 0;
+
+	for (key = 0; key < 2; key++) {
+		map = bpf_map_lookup_elem(&map_in_map, &key);
+		if (map)
+			maps[key] = map;
+		else
+			return 0;
+	}
+
+	/* After the loop every element of maps is CONST_PTR_TO_MAP so
+	 * the invalid branch should not be explored by the verifier.
+	 */
+	if (!maps[0])
+		asm volatile ("r10 = 0;");
+
+	return 0;
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY_OF_MAPS);
+	__uint(max_entries, 1);
+	__type(key, int);
+	__type(value, int);
+	__array(values, struct {
+		__uint(type, BPF_MAP_TYPE_RINGBUF);
+		__uint(max_entries, 4096);
+	});
+} rb_in_map SEC(".maps");
+
+struct rb_ctx {
+	void *rb;
+	struct bpf_dynptr dptr;
+};
+
+static __always_inline struct rb_ctx __rb_event_reserve(__u32 sz)
+{
+	struct rb_ctx rb_ctx = {};
+	void *rb;
+	__u32 cpu = bpf_get_smp_processor_id();
+	__u32 rb_slot = cpu & 1;
+
+	rb = bpf_map_lookup_elem(&rb_in_map, &rb_slot);
+	if (!rb)
+		return rb_ctx;
+
+	rb_ctx.rb = rb;
+	bpf_ringbuf_reserve_dynptr(rb, sz, 0, &rb_ctx.dptr);
+
+	return rb_ctx;
+}
+
+static __noinline void __rb_event_submit(struct rb_ctx *ctx)
+{
+	if (!ctx->rb)
+		return;
+
+	/* If the verifier (incorrectly) concludes that ctx->rb can be
+	 * NULL at this point, we'll get "BPF_EXIT instruction in main
+	 * prog would lead to reference leak" error
+	 */
+	bpf_ringbuf_submit_dynptr(&ctx->dptr, 0);
+}
+
+SEC("socket")
+int map_ptr_is_never_null_rb(void *ctx)
+{
+	struct rb_ctx event_ctx = __rb_event_reserve(256);
+	__rb_event_submit(&event_ctx);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
