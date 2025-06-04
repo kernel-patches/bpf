@@ -60,12 +60,15 @@ static void test_set_global_vars_succeeds(void)
 	    " -G \"var_s8 = -128\" "\
 	    " -G \"var_u8 = 255\" "\
 	    " -G \"var_ea = EA2\" "\
-	    " -G \"var_eb = EB2\" "\
-	    " -G \"var_ec = EC2\" "\
+	    " -G \"var_eb  =  EB2\" "\
+	    " -G \"var_ec=EC2\" "\
 	    " -G \"var_b = 1\" "\
-	    " -G \"struct1.struct2.u.var_u8 = 170\" "\
+	    " -G \"struct1[2].struct2[1].u.var_u8[2]=170\" "\
 	    " -G \"union1.struct3.var_u8_l = 0xaa\" "\
 	    " -G \"union1.struct3.var_u8_h = 0xaa\" "\
+	    " -G \"arr[3]= 171\" "	\
+	    " -G \"arr[EA2] =172\" "	\
+	    " -G \"enum_arr[EC2]=EA3\" "	\
 	    "-vl2 > %s", fix->veristat, fix->tmpfile);
 
 	read(fix->fd, fix->output, fix->sz);
@@ -81,8 +84,11 @@ static void test_set_global_vars_succeeds(void)
 	__CHECK_STR("_w=12 ", "var_eb = EB2");
 	__CHECK_STR("_w=13 ", "var_ec = EC2");
 	__CHECK_STR("_w=1 ", "var_b = 1");
-	__CHECK_STR("_w=170 ", "struct1.struct2.u.var_u8 = 170");
+	__CHECK_STR("_w=170 ", "struct1.struct2[1].u.var_u8[2] = 170");
 	__CHECK_STR("_w=0xaaaa ", "union1.var_u16 = 0xaaaa");
+	__CHECK_STR("_w=171 ", "arr[3]= 171");
+	__CHECK_STR("_w=172 ", "arr[EA2] =172");
+	__CHECK_STR("_w=10 ", "enum_arr[EC2]=EA3");
 
 out:
 	teardown_fixture(fix);
@@ -129,6 +135,66 @@ out:
 	teardown_fixture(fix);
 }
 
+static void test_unsupported_2dim_array_type(void)
+{
+	struct fixture *fix = init_fixture();
+
+	SYS_FAIL(out,
+		 "%s set_global_vars.bpf.o -G \"matrix[0][0] = 1\" -vl2 2> %s",
+		 fix->veristat, fix->tmpfile);
+
+	read(fix->fd, fix->output, fix->sz);
+	__CHECK_STR("Could not parse 'matrix[0][0]'", "matrix");
+
+out:
+	teardown_fixture(fix);
+}
+
+static void test_unsupported_ptr_array_type(void)
+{
+	struct fixture *fix = init_fixture();
+
+	SYS_FAIL(out,
+		 "%s set_global_vars.bpf.o -G \"ptr_arr[0] = 0\" -vl2 2> %s",
+		 fix->veristat, fix->tmpfile);
+
+	read(fix->fd, fix->output, fix->sz);
+	__CHECK_STR("Unsupported array type for variable ptr_arr", "ptr_arr");
+
+out:
+	teardown_fixture(fix);
+}
+
+static void test_array_out_of_bounds(void)
+{
+	struct fixture *fix = init_fixture();
+
+	SYS_FAIL(out,
+		 "%s set_global_vars.bpf.o -G \"arr[99] = 0\" -vl2 2> %s",
+		 fix->veristat, fix->tmpfile);
+
+	read(fix->fd, fix->output, fix->sz);
+	__CHECK_STR("Preset index 99 is invalid or out of bounds", "arr[99]");
+
+out:
+	teardown_fixture(fix);
+}
+
+static void test_array_index_not_found(void)
+{
+	struct fixture *fix = init_fixture();
+
+	SYS_FAIL(out,
+		 "%s set_global_vars.bpf.o -G \"arr[EG2] = 0\" -vl2 2> %s",
+		 fix->veristat, fix->tmpfile);
+
+	read(fix->fd, fix->output, fix->sz);
+	__CHECK_STR("Could not find array index as enum value EG2", "arr[EG2]");
+
+out:
+	teardown_fixture(fix);
+}
+
 void test_veristat(void)
 {
 	if (test__start_subtest("set_global_vars_succeeds"))
@@ -139,6 +205,18 @@ void test_veristat(void)
 
 	if (test__start_subtest("set_global_vars_from_file_succeeds"))
 		test_set_global_vars_from_file_succeeds();
+
+	if (test__start_subtest("test_unsupported_2dim_array_type"))
+		test_unsupported_2dim_array_type();
+
+	if (test__start_subtest("test_unsupported_ptr_array_type"))
+		test_unsupported_ptr_array_type();
+
+	if (test__start_subtest("test_array_out_of_bounds"))
+		test_array_out_of_bounds();
+
+	if (test__start_subtest("test_array_index_not_found"))
+		test_array_index_not_found();
 }
 
 #undef __CHECK_STR
