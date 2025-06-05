@@ -107,8 +107,10 @@ bpftool gen skeleton *FILE*
       global data maps. It corresponds to libbpf's **bpf_object__load**\ ()
       API.
 
-    - **example__open_and_load** combines **example__open** and
-      **example__load** invocations in one commonly used operation.
+    - **example__open_and_load** and **example__open_and_load_opts**.
+      Combines **example__open** and **example__load** invocations in one
+      commonly used operation. **_opts** variants accepts extra
+      **bpf_object_open_opts** options.
 
     - **example__attach** and **example__detach**.
       This pair of functions allow to attach and detach, correspondingly,
@@ -336,6 +338,9 @@ files into the final BPF ELF object file *example.bpf.o*.
                 const struct bpf_object_open_opts *opts);
   static inline struct example *example__open();
   static inline int example__load(struct example *obj);
+  static inline struct example *example__open();
+  static inline struct example *example__open_and_load_opts(
+                const struct bpf_object_open_opts *opts);
   static inline struct example *example__open_and_load();
   static inline int example__attach(struct example *obj);
   static inline void example__detach(struct example *obj);
