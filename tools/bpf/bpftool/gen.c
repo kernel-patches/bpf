@@ -1371,6 +1371,7 @@ static int do_skeleton(int argc, char **argv)
 		#ifdef __cplusplus					    \n\
 			static inline struct %1$s *open(const struct bpf_object_open_opts *opts = nullptr);\n\
 			static inline struct %1$s *open_and_load();	    \n\
+			static inline struct %1$s *open_and_load_opts(const struct bpf_object_open_opts *opts = nullptr);    \n\
 			static inline int load(struct %1$s *skel);	    \n\
 			static inline int attach(struct %1$s *skel);	    \n\
 			static inline void detach(struct %1$s *skel);	    \n\
@@ -1438,12 +1439,12 @@ static int do_skeleton(int argc, char **argv)
 		}							    \n\
 									    \n\
 		static inline struct %1$s *				    \n\
-		%1$s__open_and_load(void)				    \n\
+		%1$s__open_and_load_opts(const struct bpf_object_open_opts *opts)\n\
 		{							    \n\
 			struct %1$s *obj;				    \n\
 			int err;					    \n\
 									    \n\
-			obj = %1$s__open();				    \n\
+			obj = %1$s__open_opts(opts);			    \n\
 			if (!obj)					    \n\
 				return NULL;				    \n\
 			err = %1$s__load(obj);				    \n\
@@ -1453,6 +1454,12 @@ static int do_skeleton(int argc, char **argv)
 				return NULL;				    \n\
 			}						    \n\
 			return obj;					    \n\
+		}							    \n\
+									    \n\
+		static inline struct %1$s *				    \n\
+		%1$s__open_and_load(void)				    \n\
+		{							    \n\
+			return %1$s__open_and_load_opts(NULL);		    \n\
 		}							    \n\
 									    \n\
 		static inline int					    \n\
@@ -1530,7 +1537,11 @@ static int do_skeleton(int argc, char **argv)
 									    \n\
 		#ifdef __cplusplus					    \n\
 		struct %1$s *%1$s::open(const struct bpf_object_open_opts *opts) { return %1$s__open_opts(opts); }\n\
-		struct %1$s *%1$s::open_and_load() { return %1$s__open_and_load(); }	\n\
+		struct %1$s *%1$s::open_and_load() { return %1$s__open_and_load(); }\n\
+		struct %1$s *%1$s::open_and_load_opts(const struct bpf_object_open_opts *opts)\n\
+		{							    \n\
+			return %1$s__open_and_load_opts(opts);		    \n\
+		}							    \n\
 		int %1$s::load(struct %1$s *skel) { return %1$s__load(skel); }		\n\
 		int %1$s::attach(struct %1$s *skel) { return %1$s__attach(skel); }	\n\
 		void %1$s::detach(struct %1$s *skel) { %1$s__detach(skel); }		\n\
