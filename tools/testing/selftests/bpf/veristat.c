@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/mount.h>
 #include <sys/time.h>
 #include <sys/sysinfo.h>
 #include <sys/stat.h>
@@ -49,6 +50,7 @@ enum stat_id {
 	STACK,
 	PROG_TYPE,
 	ATTACH_TYPE,
+	MEMORY_PEAK,
 
 	FILE_NAME,
 	PROG_NAME,
@@ -208,6 +210,9 @@ static struct env {
 	int top_src_lines;
 	struct var_preset *presets;
 	int npresets;
+	char cgroup_fs_mount[PATH_MAX + 1];
+	char stat_cgroup[PATH_MAX + 1];
+	int memory_peak_fd;
 } env;
 
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
@@ -217,6 +222,22 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va
 	if (level == LIBBPF_DEBUG  && !env.debug)
 		return 0;
 	return vfprintf(stderr, format, args);
+}
+
+#define log_errno(fmt, ...) log_errno_aux(__FILE__, __LINE__, fmt, ##__VA_ARGS__)
+
+__printf(3, 4)
+static int log_errno_aux(const char *file, int line, const char *fmt, ...)
+{
+	int err = -errno;
+	va_list ap;
+
+	va_start(ap, fmt);
+	fprintf(stderr, "%s:%d: ", file, line);
+	vfprintf(stderr, fmt, ap);
+	fprintf(stderr, " failed with error '%s'\n", strerror(errno));
+	va_end(ap);
+	return err;
 }
 
 #ifndef VERISTAT_VERSION
@@ -734,13 +755,13 @@ cleanup:
 }
 
 static const struct stat_specs default_csv_output_spec = {
-	.spec_cnt = 14,
+	.spec_cnt = 15,
 	.ids = {
 		FILE_NAME, PROG_NAME, VERDICT, DURATION,
 		TOTAL_INSNS, TOTAL_STATES, PEAK_STATES,
 		MAX_STATES_PER_INSN, MARK_READ_MAX_LEN,
 		SIZE, JITED_SIZE, PROG_TYPE, ATTACH_TYPE,
-		STACK,
+		STACK, MEMORY_PEAK,
 	},
 };
 
@@ -781,6 +802,7 @@ static struct stat_def {
 	[STACK] = {"Stack depth", {"stack_depth", "stack"}, },
 	[PROG_TYPE] = { "Program type", {"prog_type"}, },
 	[ATTACH_TYPE] = { "Attach type", {"attach_type", }, },
+	[MEMORY_PEAK] = { "Peak memory (KiB)", {"mem_peak", }, },
 };
 
 static bool parse_stat_id_var(const char *name, size_t len, int *id,
@@ -1278,16 +1300,213 @@ static int max_verifier_log_size(void)
 	return log_size;
 }
 
+__printf(2, 3)
+static int write_one_line(const char *file, const char *fmt, ...)
+{
+	int err, saved_errno;
+	va_list ap;
+	FILE *f;
+
+	f = fopen(file, "w");
+	if (!f)
+		return -1;
+
+	va_start(ap, fmt);
+	errno = 0;
+	err = vfprintf(f, fmt, ap);
+	saved_errno = errno;
+	va_end(ap);
+	fclose(f);
+	errno = saved_errno;
+	return err < 0 ? -1 : 0;
+}
+
+/*
+ * This works around GCC warning about snprintf truncating strings like:
+ *
+ *   char a[PATH_MAX], b[PATH_MAX];
+ *   snprintf(a, "%s/foo", b);      // triggers -Wformat-truncation
+ */
+__printf(3, 4)
+static int snprintf_trunc(char *str, volatile size_t size, const char *fmt, ...)
+{
+	va_list ap;
+	int ret;
+
+	va_start(ap, fmt);
+	ret = vsnprintf(str, size, fmt, ap);
+	va_end(ap);
+	return ret;
+}
+
+static void destroy_stat_cgroup(void);
+static void umount_cgroupfs(void);
+
+/*
+ * Enters new cgroup namespace and mounts cgroupfs at /tmp/veristat-cgroup-mount-XXXXXX,
+ * enables "memory" controller for the root cgroup.
+ */
+static int mount_cgroupfs(void)
+{
+	char buf[PATH_MAX + 1];
+	int err;
+
+	env.memory_peak_fd = -1;
+
+	err = unshare(CLONE_NEWCGROUP);
+	if (err < 0) {
+		err = log_errno("unshare(CLONE_NEWCGROUP)");
+		goto err_out;
+	}
+
+	snprintf_trunc(buf, sizeof(buf), "%s/veristat-cgroup-mount-XXXXXX", P_tmpdir);
+	if (mkdtemp(buf) == NULL) {
+		err = log_errno("mkdtemp(%s)", buf);
+		goto err_out;
+	}
+	strcpy(env.cgroup_fs_mount, buf);
+
+	err = mount("none", env.cgroup_fs_mount, "cgroup2", 0, NULL);
+	if (err < 0) {
+		err = log_errno("mount none %s -t cgroup2", env.cgroup_fs_mount);
+		goto err_out;
+	}
+
+	snprintf_trunc(buf, sizeof(buf), "%s/cgroup.subtree_control", env.cgroup_fs_mount);
+	err = write_one_line(buf, "+memory\n");
+	if (err < 0) {
+		err = log_errno("echo '+memory' > %s", buf);
+		goto err_out;
+	}
+
+	return 0;
+
+err_out:
+	umount_cgroupfs();
+	return err;
+}
+
+static void umount_cgroupfs(void)
+{
+	int err;
+
+	if (!env.cgroup_fs_mount[0])
+		return;
+
+	err = umount(env.cgroup_fs_mount);
+	if (err < 0)
+		log_errno("umount %s", env.cgroup_fs_mount);
+
+	err = rmdir(env.cgroup_fs_mount);
+	if (err < 0)
+		log_errno("rmdir %s", env.cgroup_fs_mount);
+
+	env.cgroup_fs_mount[0] = 0;
+}
+
+/*
+ * Creates a cgroup at /tmp/veristat-cgroup-mount-XXXXXX/accounting-<pid>,
+ * moves current process to this cgroup.
+ */
+static int create_stat_cgroup(void)
+{
+	char buf[PATH_MAX + 1];
+	int err;
+
+	if (!env.cgroup_fs_mount[0])
+		return -1;
+
+	env.memory_peak_fd = -1;
+
+	snprintf_trunc(buf, sizeof(buf), "%s/accounting-%d", env.cgroup_fs_mount, getpid());
+	err = mkdir(buf, 0777);
+	if (err < 0) {
+		err = log_errno("mkdir(%s)", buf);
+		goto err_out;
+	}
+	strcpy(env.stat_cgroup, buf);
+
+	snprintf_trunc(buf, sizeof(buf), "%s/cgroup.procs", env.stat_cgroup);
+	err = write_one_line(buf, "%d\n", getpid());
+	if (err < 0) {
+		err = log_errno("echo %d > %s", getpid(), buf);
+		goto err_out;
+	}
+
+	snprintf_trunc(buf, sizeof(buf), "%s/memory.peak", env.stat_cgroup);
+	env.memory_peak_fd = open(buf, O_RDWR | O_APPEND);
+	if (env.memory_peak_fd < 0) {
+		err = log_errno("open(%s)", buf);
+		goto err_out;
+	}
+
+	return 0;
+
+err_out:
+	destroy_stat_cgroup();
+	return err;
+}
+
+static void destroy_stat_cgroup(void)
+{
+	char buf[PATH_MAX];
+	int err;
+
+	close(env.memory_peak_fd);
+
+	if (env.cgroup_fs_mount[0]) {
+		snprintf_trunc(buf, sizeof(buf), "%s/cgroup.procs", env.cgroup_fs_mount);
+		err = write_one_line(buf, "%d\n", getpid());
+		if (err < 0)
+			log_errno("echo %d > %s", getpid(), buf);
+	}
+
+	if (env.stat_cgroup[0]) {
+		err = rmdir(env.stat_cgroup);
+		if (err < 0)
+			log_errno("rmdir %s", env.stat_cgroup);
+	}
+
+	env.stat_cgroup[0] = 0;
+}
+
+/* Current value of /tmp/veristat-cgroup-mount-XXXXXX/accounting-<pid>/memory.peak */
+static long cgroup_memory_peak(void)
+{
+	long err, memory_peak;
+	char buf[32];
+
+	if (env.memory_peak_fd < 0)
+		return -1;
+
+	err = pread(env.memory_peak_fd, buf, sizeof(buf) - 1, 0);
+	if (err <= 0) {
+		log_errno("read(%s/memory.peak)", env.stat_cgroup);
+		return -1;
+	}
+
+	buf[err] = 0;
+	errno = 0;
+	memory_peak = strtoll(buf, NULL, 10);
+	if (errno) {
+		log_errno("unrecognized %s/memory.peak format: %s", env.stat_cgroup, buf);
+		return -1;
+	}
+
+	return memory_peak;
+}
+
 static int process_prog(const char *filename, struct bpf_object *obj, struct bpf_program *prog)
 {
 	const char *base_filename = basename(strdupa(filename));
 	const char *prog_name = bpf_program__name(prog);
+	long mem_peak_a, mem_peak_b, mem_peak = -1;
 	char *buf;
 	int buf_sz, log_level;
 	struct verif_stats *stats;
 	struct bpf_prog_info info;
 	__u32 info_len = sizeof(info);
-	int err = 0;
+	int err = 0, cgroup_err;
 	void *tmp;
 	int fd;
 
@@ -1332,7 +1551,16 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 	if (env.force_reg_invariants)
 		bpf_program__set_flags(prog, bpf_program__flags(prog) | BPF_F_TEST_REG_INVARIANTS);
 
-	err = bpf_object__load(obj);
+	err = bpf_object__prepare(obj);
+	if (!err) {
+		cgroup_err = create_stat_cgroup();
+		mem_peak_a = cgroup_memory_peak();
+		err = bpf_object__load(obj);
+		mem_peak_b = cgroup_memory_peak();
+		destroy_stat_cgroup();
+		if (!cgroup_err && mem_peak_a >= 0 && mem_peak_b >= 0)
+			mem_peak = mem_peak_b - mem_peak_a;
+	}
 	env.progs_processed++;
 
 	stats->file_name = strdup(base_filename);
@@ -1341,6 +1569,7 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 	stats->stats[SIZE] = bpf_program__insn_cnt(prog);
 	stats->stats[PROG_TYPE] = bpf_program__type(prog);
 	stats->stats[ATTACH_TYPE] = bpf_program__expected_attach_type(prog);
+	stats->stats[MEMORY_PEAK] = mem_peak < 0 ? -1 : mem_peak / 1024;
 
 	memset(&info, 0, info_len);
 	fd = bpf_program__fd(prog);
@@ -1824,6 +2053,7 @@ static int cmp_stat(const struct verif_stats *s1, const struct verif_stats *s2,
 	case TOTAL_STATES:
 	case PEAK_STATES:
 	case MAX_STATES_PER_INSN:
+	case MEMORY_PEAK:
 	case MARK_READ_MAX_LEN: {
 		long v1 = s1->stats[id];
 		long v2 = s2->stats[id];
@@ -2053,6 +2283,7 @@ static void prepare_value(const struct verif_stats *s, enum stat_id id,
 	case STACK:
 	case SIZE:
 	case JITED_SIZE:
+	case MEMORY_PEAK:
 		*val = s ? s->stats[id] : 0;
 		break;
 	default:
@@ -2139,6 +2370,7 @@ static int parse_stat_value(const char *str, enum stat_id id, struct verif_stats
 	case MARK_READ_MAX_LEN:
 	case SIZE:
 	case JITED_SIZE:
+	case MEMORY_PEAK:
 	case STACK: {
 		long val;
 		int err, n;
@@ -2776,7 +3008,7 @@ static void output_prog_stats(void)
 
 static int handle_verif_mode(void)
 {
-	int i, err;
+	int i, err = 0;
 
 	if (env.filename_cnt == 0) {
 		fprintf(stderr, "Please provide path to BPF object file!\n\n");
@@ -2784,11 +3016,12 @@ static int handle_verif_mode(void)
 		return -EINVAL;
 	}
 
+	mount_cgroupfs();
 	for (i = 0; i < env.filename_cnt; i++) {
 		err = process_obj(env.filenames[i]);
 		if (err) {
 			fprintf(stderr, "Failed to process '%s': %d\n", env.filenames[i], err);
-			return err;
+			goto out;
 		}
 	}
 
@@ -2796,7 +3029,9 @@ static int handle_verif_mode(void)
 
 	output_prog_stats();
 
-	return 0;
+out:
+	umount_cgroupfs();
+	return err;
 }
 
 static int handle_replay_mode(void)
