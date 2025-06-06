@@ -596,4 +596,10 @@ extern int bpf_iter_dmabuf_new(struct bpf_iter_dmabuf *it) __weak __ksym;
 extern struct dma_buf *bpf_iter_dmabuf_next(struct bpf_iter_dmabuf *it) __weak __ksym;
 extern void bpf_iter_dmabuf_destroy(struct bpf_iter_dmabuf *it) __weak __ksym;
 
+struct bpf_iter_path;
+extern int bpf_iter_path_new(struct bpf_iter_path *it, struct path *start,
+			     __u64 flags) __weak __ksym;
+extern struct path *bpf_iter_path_next(struct bpf_iter_path *it) __weak __ksym;
+extern void bpf_iter_path_destroy(struct bpf_iter_path *it) __weak __ksym;
+
 #endif
