@@ -17,6 +17,7 @@
  * Kris Katterjohn - Added many additional checks in bpf_check_classic()
  */
 
+#include <crypto/hash.h>
 #include <uapi/linux/btf.h>
 #include <linux/filter.h>
 #include <linux/skbuff.h>
@@ -285,6 +286,44 @@ void __bpf_prog_free(struct bpf_prog *fp)
 	free_percpu(fp->stats);
 	free_percpu(fp->active);
 	vfree(fp);
+}
+
+int bpf_sha256(u8 *data, size_t data_size, u8 *output_digest)
+{
+	struct crypto_shash *tfm;
+	struct shash_desc *shash_desc;
+	size_t desc_size;
+	int ret = 0;
+
+	tfm = crypto_alloc_shash("sha256", 0, 0);
+	if (IS_ERR(tfm))
+		return PTR_ERR(tfm);
+
+
+	desc_size = crypto_shash_descsize(tfm) + sizeof(*shash_desc);
+	shash_desc = kmalloc(desc_size, GFP_KERNEL);
+	if (!shash_desc) {
+		crypto_free_shash(tfm);
+		return -ENOMEM;
+	}
+
+	shash_desc->tfm = tfm;
+	ret = crypto_shash_init(shash_desc);
+	if (ret)
+		goto out_free_desc;
+
+	ret = crypto_shash_update(shash_desc, data, data_size);
+	if (ret)
+		goto out_free_desc;
+
+	ret = crypto_shash_final(shash_desc, output_digest);
+	if (ret)
+		goto out_free_desc;
+
+out_free_desc:
+	kfree(shash_desc);
+	crypto_free_shash(tfm);
+	return ret;
 }
 
 int bpf_prog_calc_tag(struct bpf_prog *fp)

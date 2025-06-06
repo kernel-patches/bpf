@@ -2086,6 +2086,7 @@ static inline bool map_type_contains_progs(struct bpf_map *map)
 }
 
 bool bpf_prog_map_compatible(struct bpf_map *map, const struct bpf_prog *fp);
+int bpf_sha256(u8 *data, size_t data_size, u8 *output_digest);
 int bpf_prog_calc_tag(struct bpf_prog *fp);
 
 const struct bpf_func_proto *bpf_get_trace_printk_proto(void);
