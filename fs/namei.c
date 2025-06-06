@@ -1424,6 +1424,57 @@ static bool choose_mountpoint(struct mount *m, const struct path *root,
 	return found;
 }
 
+/**
+ * path_walk_parent - Walk to the parent of path
+ * @path: input and output path.
+ * @root: root of the path walk, do not go beyond this root. If @root is
+ *        zero'ed, walk all the way to real root.
+ *
+ * Given a path, find the parent path. Replace @path with the parent path.
+ * If we were already at the real root or a disconnected root, @path is
+ * not changed.
+ *
+ * The logic of path_walk_parent() is similar to follow_dotdot(), except
+ * that path_walk_parent() will continue walking for !path_connected case.
+ * This effectively means we are walking from disconnected bind mount to
+ * the original mount. If this behavior is not desired, the caller can add
+ * a check like:
+ *
+ *   if (path_walk_parent(&path) && !path_connected(path.mnt, path.dentry)
+ *           // continue walking
+ *   else
+ *           // stop walking
+ *
+ * Returns:
+ *  true  - if @path is updated to its parent.
+ *  false - if @path is already the root (real root or @root).
+ */
+bool path_walk_parent(struct path *path, const struct path *root)
+{
+	struct dentry *parent;
+
+	if (path_equal(path, root))
+		return false;
+
+	if (unlikely(path->dentry == path->mnt->mnt_root)) {
+		struct path p;
+
+		if (!choose_mountpoint(real_mount(path->mnt), root, &p))
+			return false;
+		path_put(path);
+		*path = p;
+	}
+
+	if (unlikely(IS_ROOT(path->dentry)))
+		return false;
+
+	parent = dget_parent(path->dentry);
+	dput(path->dentry);
+	path->dentry = parent;
+	return true;
+}
+EXPORT_SYMBOL_GPL(path_walk_parent);
+
 /*
  * Perform an automount
  * - return -EISDIR to tell follow_managed() to stop and return the path we
