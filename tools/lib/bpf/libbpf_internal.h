@@ -736,4 +736,13 @@ int elf_resolve_pattern_offsets(const char *binary_path, const char *pattern,
 
 int probe_fd(int fd);
 
+#ifndef SHA256_DIGEST_LENGTH
+#define SHA256_DIGEST_LENGTH 32
+#endif
+
+#ifndef SHA256_DWORD_SIZE
+#define SHA256_DWORD_SIZE SHA256_DIGEST_LENGTH / sizeof(__u64)
+#endif
+
+int libbpf_sha256(const void *data, size_t data_size, void *sha_out);
 #endif /* __LIBBPF_LIBBPF_INTERNAL_H */
