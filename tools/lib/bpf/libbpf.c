@@ -499,6 +499,7 @@ struct bpf_program {
 	__u32 line_info_rec_size;
 	__u32 line_info_cnt;
 	__u32 prog_flags;
+	__u8  hash[SHA256_DIGEST_LENGTH];
 };
 
 struct bpf_struct_ops {
@@ -578,6 +579,8 @@ struct bpf_map {
 	bool autocreate;
 	bool autoattach;
 	__u64 map_extra;
+	const void *excl_prog_sha;
+	__u32 excl_prog_sha_size;
 };
 
 enum extern_type {
@@ -4485,6 +4488,43 @@ bpf_object__section_to_libbpf_map_type(const struct bpf_object *obj, int shndx)
 	}
 }
 
+static int bpf_program__compute_hash(struct bpf_program *prog)
+{
+	struct bpf_insn *purged;
+	bool was_ld_map;
+	int i, err;
+
+	purged = calloc(1, BPF_INSN_SZ * prog->insns_cnt);
+	if (!purged)
+		return -ENOMEM;
+
+	/* If relocations have been done, the map_fd needs to be
+	 * discarded for the digest calculation.
+	 */
+	for (i = 0, was_ld_map = false; i < prog->insns_cnt; i++) {
+		purged[i] = prog->insns[i];
+		if (!was_ld_map &&
+		    purged[i].code == (BPF_LD | BPF_IMM | BPF_DW) &&
+		    (purged[i].src_reg == BPF_PSEUDO_MAP_FD ||
+		     purged[i].src_reg == BPF_PSEUDO_MAP_VALUE)) {
+			was_ld_map = true;
+			purged[i].imm = 0;
+		} else if (was_ld_map && purged[i].code == 0 &&
+			   purged[i].dst_reg == 0 && purged[i].src_reg == 0 &&
+			   purged[i].off == 0) {
+			was_ld_map = false;
+			purged[i].imm = 0;
+		} else {
+			was_ld_map = false;
+		}
+	}
+	err = libbpf_sha256(purged,
+			    prog->insns_cnt * sizeof(struct bpf_insn),
+			    prog->hash);
+	free(purged);
+	return err;
+}
+
 static int bpf_program__record_reloc(struct bpf_program *prog,
 				     struct reloc_desc *reloc_desc,
 				     __u32 insn_idx, const char *sym_name,
@@ -5214,6 +5254,10 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 	create_attr.token_fd = obj->token_fd;
 	if (obj->token_fd)
 		create_attr.map_flags |= BPF_F_TOKEN_FD;
+	if (map->excl_prog_sha) {
+		create_attr.excl_prog_hash = map->excl_prog_sha;
+		create_attr.excl_prog_hash_size = map->excl_prog_sha_size;
+	}
 
 	if (bpf_map__is_struct_ops(map)) {
 		create_attr.btf_vmlinux_value_type_id = map->btf_vmlinux_value_type_id;
@@ -7933,6 +7977,11 @@ static int bpf_object_prepare_progs(struct bpf_object *obj)
 		err = bpf_object__sanitize_prog(obj, prog);
 		if (err)
 			return err;
+		/* Now that the instruction buffer is stable finalize the hash
+		 */
+		err = bpf_program__compute_hash(&obj->programs[i]);
+		if (err)
+			return err;
 	}
 	return 0;
 }
@@ -8602,8 +8651,8 @@ static int bpf_object_prepare(struct bpf_object *obj, const char *target_btf_pat
 	err = err ? : bpf_object_adjust_struct_ops_autoload(obj);
 	err = err ? : bpf_object__relocate(obj, obj->btf_custom_path ? : target_btf_path);
 	err = err ? : bpf_object__sanitize_and_load_btf(obj);
-	err = err ? : bpf_object__create_maps(obj);
 	err = err ? : bpf_object_prepare_progs(obj);
+	err = err ? : bpf_object__create_maps(obj);
 
 	if (err) {
 		bpf_object_unpin(obj);
@@ -10501,6 +10550,23 @@ int bpf_map__set_inner_map_fd(struct bpf_map *map, int fd)
 	map->inner_map_fd = fd;
 	return 0;
 }
+
+int bpf_map__make_exclusive(struct bpf_map *map, struct bpf_program *prog)
+{
+	if (map_is_created(map)) {
+		pr_warn("%s must be called before creation\n", __func__);
+		return libbpf_err(-EINVAL);
+	}
+
+	if (prog->obj->state == OBJ_LOADED) {
+		pr_warn("%s must be called before the prog load\n", __func__);
+		return libbpf_err(-EINVAL);
+	}
+	map->excl_prog_sha = prog->hash;
+	map->excl_prog_sha_size = SHA256_DIGEST_LENGTH;
+	return 0;
+}
+
 
 static struct bpf_map *
 __bpf_map__iter(const struct bpf_map *m, const struct bpf_object *obj, int i)

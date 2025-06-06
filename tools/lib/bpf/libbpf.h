@@ -1249,6 +1249,19 @@ LIBBPF_API int bpf_map__lookup_and_delete_elem(const struct bpf_map *map,
  */
 LIBBPF_API int bpf_map__get_next_key(const struct bpf_map *map,
 				     const void *cur_key, void *next_key, size_t key_sz);
+/**
+ * @brief **bpf_map__make_exclusive()** makes the map exclusive to a single program.
+ * @param map BPF map to make exclusive.
+ * @param prog BPF program to be the exclusive user of the map.
+ * @return 0 on success; a negative error code otherwise.
+ *
+ * Once a map is made exclusive, only the specified program can access its
+ * contents. **bpf_map__make_exclusive** must be called before the objects are
+ * loaded.
+ */
+LIBBPF_API int bpf_map__make_exclusive(struct bpf_map *map, struct bpf_program *prog);
+
+int bpf_map__make_exclusive(struct bpf_map *map, struct bpf_program *prog);
 
 struct bpf_xdp_set_link_opts {
 	size_t sz;
