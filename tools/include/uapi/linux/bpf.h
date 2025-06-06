@@ -1504,6 +1504,8 @@ union bpf_attr {
 		 * If provided, map_flags should have BPF_F_TOKEN_FD flag set.
 		 */
 		__s32	map_token_fd;
+		__u32 excl_prog_hash_size;
+		__aligned_u64 excl_prog_hash;
 	};
 
 	struct { /* anonymous struct used by BPF_MAP_*_ELEM and BPF_MAP_FREEZE commands */
@@ -1841,7 +1843,6 @@ union bpf_attr {
 		__u32		flags;
 		__u32		bpffs_fd;
 	} token_create;
-
 } __attribute__((aligned(8)));
 
 /* The description below is an attempt at providing documentation to eBPF

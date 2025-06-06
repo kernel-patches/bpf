@@ -2537,22 +2537,25 @@ int bpf_fd_htab_map_lookup_elem(struct bpf_map *map, void *key, u32 *value)
 int bpf_fd_htab_map_update_elem(struct bpf_map *map, struct file *map_file,
 				void *key, void *value, u64 map_flags)
 {
-	void *ptr;
+	struct bpf_map *inner_map;
 	int ret;
 
-	ptr = map->ops->map_fd_get_ptr(map, map_file, *(int *)value);
-	if (IS_ERR(ptr))
-		return PTR_ERR(ptr);
+	inner_map = map->ops->map_fd_get_ptr(map, map_file, *(int *)value);
+	if (IS_ERR(inner_map))
+		return PTR_ERR(inner_map);
+
+	if (inner_map->excl_prog_sha)
+		return -EOPNOTSUPP;
 
 	/* The htab bucket lock is always held during update operations in fd
 	 * htab map, and the following rcu_read_lock() is only used to avoid
 	 * the WARN_ON_ONCE in htab_map_update_elem_in_place().
 	 */
 	rcu_read_lock();
-	ret = htab_map_update_elem_in_place(map, key, &ptr, map_flags, false, false);
+	ret = htab_map_update_elem_in_place(map, key, &inner_map, map_flags, false, false);
 	rcu_read_unlock();
 	if (ret)
-		map->ops->map_fd_put_ptr(map, ptr, false);
+		map->ops->map_fd_put_ptr(map, inner_map, false);
 
 	return ret;
 }
