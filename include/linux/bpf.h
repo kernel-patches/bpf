@@ -2778,7 +2778,14 @@ bpf_jit_find_kfunc_model(const struct bpf_prog *prog,
 int bpf_get_kfunc_addr(const struct bpf_prog *prog, u32 func_id,
 		       u16 btf_fd_idx, u8 **func_addr);
 
-struct bpf_core_ctx {
+__bpf_kfunc struct bpf_key *bpf_lookup_user_key(u32 serial, u64 flags);
+__bpf_kfunc struct bpf_key *bpf_lookup_system_key(u64 id);
+__bpf_kfunc void bpf_key_put(struct bpf_key *bkey);
+__bpf_kfunc int bpf_verify_pkcs7_signature(struct bpf_dynptr *data_p,
+					   struct bpf_dynptr *sig_p,
+					   struct bpf_key *trusted_keyring);
+
+	struct bpf_core_ctx {
 	struct bpf_verifier_log *log;
 	const struct btf *btf;
 };

@@ -1351,7 +1351,6 @@ __bpf_kfunc void bpf_key_put(struct bpf_key *bkey)
 	kfree(bkey);
 }
 
-#ifdef CONFIG_SYSTEM_DATA_VERIFICATION
 /**
  * bpf_verify_pkcs7_signature - verify a PKCS#7 signature
  * @data_p: data to verify
@@ -1367,6 +1366,7 @@ __bpf_kfunc int bpf_verify_pkcs7_signature(struct bpf_dynptr *data_p,
 			       struct bpf_dynptr *sig_p,
 			       struct bpf_key *trusted_keyring)
 {
+#ifdef CONFIG_SYSTEM_DATA_VERIFICATION
 	struct bpf_dynptr_kern *data_ptr = (struct bpf_dynptr_kern *)data_p;
 	struct bpf_dynptr_kern *sig_ptr = (struct bpf_dynptr_kern *)sig_p;
 	const void *data, *sig;
@@ -1396,8 +1396,10 @@ __bpf_kfunc int bpf_verify_pkcs7_signature(struct bpf_dynptr *data_p,
 				      trusted_keyring->key,
 				      VERIFYING_UNSPECIFIED_SIGNATURE, NULL,
 				      NULL);
-}
+#else
+	return -EOPNOTSUPP;
 #endif /* CONFIG_SYSTEM_DATA_VERIFICATION */
+}
 
 __bpf_kfunc_end_defs();
 
