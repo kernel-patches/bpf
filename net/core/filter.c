@@ -3084,7 +3084,7 @@ static const struct bpf_func_proto bpf_msg_pop_data_proto = {
 #ifdef CONFIG_CGROUP_NET_CLASSID
 BPF_CALL_0(bpf_get_cgroup_classid_curr)
 {
-	return __task_get_classid(current);
+	return task_cls_classid(current);
 }
 
 const struct bpf_func_proto bpf_get_cgroup_classid_curr_proto = {
