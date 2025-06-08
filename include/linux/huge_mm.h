@@ -54,6 +54,7 @@ enum transparent_hugepage_flag {
 	TRANSPARENT_HUGEPAGE_DEFRAG_REQ_MADV_FLAG,
 	TRANSPARENT_HUGEPAGE_DEFRAG_KHUGEPAGED_FLAG,
 	TRANSPARENT_HUGEPAGE_USE_ZERO_PAGE_FLAG,
+	TRANSPARENT_HUGEPAGE_BPF_ATTACHED,	/* BPF prog is attached */
 };
 
 struct kobject;
@@ -192,16 +193,8 @@ static inline bool hugepage_global_always(void)
 
 #define THP_ALLOC_KHUGEPAGED (1 << 1)
 #define THP_ALLOC_CURRENT (1 << 2)
-static inline int bpf_thp_allocator(unsigned long vm_flags,
-				     unsigned long tva_flags)
-{
-	return THP_ALLOC_KHUGEPAGED | THP_ALLOC_CURRENT;
-}
-
-static inline gfp_t bpf_thp_gfp_mask(bool vma_madvised)
-{
-	return 0;
-}
+int bpf_thp_allocator(unsigned long vm_flags, unsigned long tva_flags);
+gfp_t bpf_thp_gfp_mask(bool vma_madvised);
 
 static inline int highest_order(unsigned long orders)
 {
