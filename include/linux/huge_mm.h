@@ -190,6 +190,14 @@ static inline bool hugepage_global_always(void)
 			(1<<TRANSPARENT_HUGEPAGE_FLAG);
 }
 
+#define THP_ALLOC_KHUGEPAGED (1 << 1)
+#define THP_ALLOC_CURRENT (1 << 2)
+static inline int bpf_thp_allocator(unsigned long vm_flags,
+				     unsigned long tva_flags)
+{
+	return THP_ALLOC_KHUGEPAGED | THP_ALLOC_CURRENT;
+}
+
 static inline int highest_order(unsigned long orders)
 {
 	return fls_long(orders) - 1;
@@ -290,6 +298,8 @@ unsigned long thp_vma_allowable_orders(struct vm_area_struct *vma,
 	if ((tva_flags & TVA_ENFORCE_SYSFS) && vma_is_anonymous(vma)) {
 		unsigned long mask = READ_ONCE(huge_anon_orders_always);
 
+		if (!(bpf_thp_allocator(vm_flags, tva_flags) & THP_ALLOC_CURRENT))
+			return 0;
 		if (vm_flags & VM_HUGEPAGE)
 			mask |= READ_ONCE(huge_anon_orders_madvise);
 		if (hugepage_global_always() ||

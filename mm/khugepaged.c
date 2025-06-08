@@ -472,6 +472,8 @@ void __khugepaged_enter(struct mm_struct *mm)
 void khugepaged_enter_vma(struct vm_area_struct *vma,
 			  unsigned long vm_flags)
 {
+	if (!(bpf_thp_allocator(vm_flags, 0) & THP_ALLOC_KHUGEPAGED))
+		return;
 	if (!test_bit(MMF_VM_HUGEPAGE, &vma->vm_mm->flags) &&
 	    hugepage_pmd_enabled()) {
 		if (__thp_vma_allowable_orders(vma, vm_flags, TVA_ENFORCE_SYSFS,
