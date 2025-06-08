@@ -94,7 +94,7 @@ int change_tail(struct __sk_buff *skb)
 			bpf_skb_change_tail(skb, len, 0);
 		return TCX_PASS;
 	} else if (payload[0] == 'E') { /* Error */
-		change_tail_ret = bpf_skb_change_tail(skb, 65535, 0);
+		change_tail_ret = bpf_skb_change_tail(skb, 262143, 0);
 		return TCX_PASS;
 	} else if (payload[0] == 'Z') { /* Zero */
 		change_tail_ret = bpf_skb_change_tail(skb, 0, 0);
