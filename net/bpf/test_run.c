@@ -1214,6 +1214,7 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 	u32 repeat = kattr->test.repeat;
 	struct netdev_rx_queue *rxqueue;
 	struct skb_shared_info *sinfo;
+	const u32 frame_sz = 4096;
 	struct xdp_buff xdp = {};
 	int i, ret = -EINVAL;
 	struct xdp_md *ctx;
@@ -1255,7 +1256,7 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 		headroom -= ctx->data;
 	}
 
-	max_data_sz = 4096 - headroom - tailroom;
+	max_data_sz = frame_sz - headroom - tailroom;
 	if (size > max_data_sz) {
 		/* disallow live data mode for jumbo frames */
 		if (do_live)
@@ -1301,7 +1302,7 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 			frag = &sinfo->frags[sinfo->nr_frags++];
 
 			data_len = min_t(u32, kattr->test.data_size_in - size,
-					 PAGE_SIZE);
+					 frame_sz);
 			skb_frag_fill_page_desc(frag, page, 0, data_len);
 
 			if (copy_from_user(page_address(page), data_in + size,
