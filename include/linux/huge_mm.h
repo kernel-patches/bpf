@@ -198,6 +198,11 @@ static inline int bpf_thp_allocator(unsigned long vm_flags,
 	return THP_ALLOC_KHUGEPAGED | THP_ALLOC_CURRENT;
 }
 
+static inline gfp_t bpf_thp_gfp_mask(bool vma_madvised)
+{
+	return 0;
+}
+
 static inline int highest_order(unsigned long orders)
 {
 	return fls_long(orders) - 1;

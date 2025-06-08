@@ -1280,6 +1280,11 @@ release:
 gfp_t vma_thp_gfp_mask(struct vm_area_struct *vma)
 {
 	const bool vma_madvised = vma && (vma->vm_flags & VM_HUGEPAGE);
+	gfp_t gfp_mask;
+
+	gfp_mask = bpf_thp_gfp_mask(vma_madvised);
+	if (gfp_mask)
+		return gfp_mask;
 
 	/* Always do synchronous compaction */
 	if (test_bit(TRANSPARENT_HUGEPAGE_DEFRAG_DIRECT_FLAG, &transparent_hugepage_flags))
