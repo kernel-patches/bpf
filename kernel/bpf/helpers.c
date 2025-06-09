@@ -24,7 +24,7 @@
 #include <linux/bpf_mem_alloc.h>
 #include <linux/kasan.h>
 #include <linux/bpf_verifier.h>
-
+#include <linux/task_work.h>
 #include "../../lib/kstrtox.h"
 
 /* If kernel subsystem is allowing eBPF programs to call this function,
@@ -1140,6 +1140,61 @@ enum bpf_async_type {
 	BPF_ASYNC_TYPE_TIMER = 0,
 	BPF_ASYNC_TYPE_WQ,
 };
+
+struct bpf_defer {
+	struct bpf_map *map;
+	bpf_callback_t callback_fn;
+	struct callback_head work;
+};
+
+struct bpf_defer_work {
+	struct bpf_defer *defer;
+} __attribute__((aligned(8)));
+/*
+static void bpf_task_work_callback(struct callback_head *cb)
+{
+	struct bpf_defer *defer = container_of(cb, struct bpf_defer, work);
+	bpf_callback_t callback_fn;
+
+	printk("Callback called %p\n", defer);
+
+	callback_fn = defer->callback_fn;
+	printk("Callback called is %p\n", callback_fn);
+	if (callback_fn) {
+		printk("Callback called 2 %p\n", callback_fn);
+		printk("Key size %d\n",  defer->map->key_size);
+		callback_fn(0, 0, 0, 0, 0);
+		printk("Callback called 3 %p\n", callback_fn);
+	}
+}
+*/
+__bpf_kfunc int bpf_task_work_schedule(void* callback__ign)
+{
+	bpf_callback_t callback_fn;
+	//struct bpf_defer *defer;
+	/*
+	struct bpf_defer_work *defer_work = (struct bpf_defer_work *)task_work;
+
+	BTF_TYPE_EMIT(struct bpf_task_work);
+
+	defer = bpf_map_kmalloc_node(map, sizeof(struct bpf_defer), GFP_ATOMIC, map->numa_node);
+	if (!defer) {
+		return -ENOMEM;
+	}
+	//defer->map = map;
+	defer->work.func = bpf_task_work_callback;
+	defer->work.next = NULL;
+	defer->callback_fn = callback__ign;
+	printk("Callback is %p\n", callback__ign);
+	defer_work->defer = defer;
+	printk("Scheduling callback\n");
+	*/
+	callback_fn = callback__ign;
+	callback_fn(0,0,0,0,0);
+	//task_work_add(NULL, &defer->work, TWA_RESUME);
+	printk("Callback scheduled \n");
+	return 0;
+}
 
 static DEFINE_PER_CPU(struct bpf_hrtimer *, hrtimer_running);
 
@@ -3303,7 +3358,7 @@ BTF_ID_FLAGS(func, bpf_rbtree_first, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_rbtree_root, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_rbtree_left, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_rbtree_right, KF_RET_NULL)
-
+BTF_ID_FLAGS(func, bpf_task_work_schedule)
 #ifdef CONFIG_CGROUPS
 BTF_ID_FLAGS(func, bpf_cgroup_acquire, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_cgroup_release, KF_RELEASE)

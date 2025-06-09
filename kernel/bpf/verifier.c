@@ -517,9 +517,11 @@ static bool is_sync_callback_calling_function(enum bpf_func_id func_id)
 	       func_id == BPF_FUNC_user_ringbuf_drain;
 }
 
+static bool is_kfunc_callback_calling_function(enum bpf_func_id func_id);
+
 static bool is_async_callback_calling_function(enum bpf_func_id func_id)
 {
-	return func_id == BPF_FUNC_timer_set_callback;
+	return func_id == BPF_FUNC_timer_set_callback || is_kfunc_callback_calling_function(func_id);
 }
 
 static bool is_callback_calling_function(enum bpf_func_id func_id)
@@ -10781,6 +10783,24 @@ static int set_rbtree_add_callback_state(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static int set_task_work_schedule_callback_state(struct bpf_verifier_env *env,
+						 struct bpf_func_state *caller,
+						 struct bpf_func_state *callee,
+						 int insn_idx)
+{
+
+	callee->regs[BPF_REG_1] = caller->regs[BPF_REG_1];
+
+	/* unused */
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_2]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
+	__mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
+	callee->in_callback_fn = true;
+	callee->callback_ret_range = retval_range(0, 1);
+	return 0;
+}
+
 static bool is_rbtree_lock_required_kfunc(u32 btf_id);
 
 /* Are we currently verifying the callback for a rbtree helper that must
@@ -12108,6 +12128,7 @@ enum special_kfunc_type {
 	KF_bpf_res_spin_lock_irqsave,
 	KF_bpf_res_spin_unlock_irqrestore,
 	KF___bpf_trap,
+	KF_bpf_task_work_schedule,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12174,6 +12195,12 @@ BTF_ID(func, bpf_res_spin_unlock)
 BTF_ID(func, bpf_res_spin_lock_irqsave)
 BTF_ID(func, bpf_res_spin_unlock_irqrestore)
 BTF_ID(func, __bpf_trap)
+BTF_ID(func, bpf_task_work_schedule)
+
+static bool is_kfunc_callback_calling_function(enum bpf_func_id func_id)
+{
+	return func_id == special_kfunc_list[KF_bpf_task_work_schedule];
+}
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -12608,7 +12635,7 @@ static bool is_sync_callback_calling_kfunc(u32 btf_id)
 
 static bool is_async_callback_calling_kfunc(u32 btf_id)
 {
-	return btf_id == special_kfunc_list[KF_bpf_wq_set_callback_impl];
+	return btf_id == special_kfunc_list[KF_bpf_wq_set_callback_impl] || btf_id == special_kfunc_list[KF_bpf_task_work_schedule];
 }
 
 static bool is_bpf_throw_kfunc(struct bpf_insn *insn)
@@ -12861,7 +12888,7 @@ static bool check_css_task_iter_allowlist(struct bpf_verifier_env *env)
 
 static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_arg_meta *meta,
 			    int insn_idx)
-{
+{ // todo check
 	const char *func_name = meta->func_name, *ref_tname;
 	const struct btf *btf = meta->btf;
 	const struct btf_param *args;
@@ -13665,6 +13692,16 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	err = check_kfunc_args(env, &meta, insn_idx);
 	if (err < 0)
 		return err;
+
+	if (meta.func_id == special_kfunc_list[KF_bpf_task_work_schedule]) {
+		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
+					 set_task_work_schedule_callback_state);
+		if (err) {
+			verbose(env, "kfunc %s#%d failed callback verification\n",
+				func_name, meta.func_id);
+			return err;
+		}
+	}
 
 	if (meta.func_id == special_kfunc_list[KF_bpf_rbtree_add_impl]) {
 		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
@@ -16700,7 +16737,7 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 		return 0;
 	}
 
-	if (insn->src_reg == BPF_PSEUDO_FUNC) {
+	if (insn->src_reg == BPF_PSEUDO_FUNC) { // todo check
 		struct bpf_prog_aux *aux = env->prog->aux;
 		u32 subprogno = find_subprog(env,
 					     env->insn_idx + insn->imm + 1);
@@ -20161,7 +20198,7 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 			}
 
 			if (insn[0].src_reg == BPF_PSEUDO_FUNC) {
-				aux = &env->insn_aux_data[i];
+				aux = &env->insn_aux_data[i]; // todo check
 				aux->ptr_type = PTR_TO_FUNC;
 				goto next_insn;
 			}
@@ -21202,7 +21239,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	 * now populate all bpf_calls with correct addresses and
 	 * run last pass of JIT
 	 */
-	for (i = 0; i < env->subprog_cnt; i++) {
+	for (i = 0; i < env->subprog_cnt; i++) { // Check what this is doing
 		insn = func[i]->insnsi;
 		for (j = 0; j < func[i]->len; j++, insn++) {
 			if (bpf_pseudo_func(insn)) {
@@ -21458,7 +21495,9 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn->imm = BPF_CALL_IMM(desc->addr);
 	if (insn->off)
 		return 0;
-	if (desc->func_id == special_kfunc_list[KF_bpf_obj_new_impl] ||
+	if (desc->func_id == special_kfunc_list[KF_bpf_task_work_schedule]) {
+		printk("Can patch program here\n");
+	} else if (desc->func_id == special_kfunc_list[KF_bpf_obj_new_impl] ||
 	    desc->func_id == special_kfunc_list[KF_bpf_percpu_obj_new_impl]) {
 		struct btf_struct_meta *kptr_struct_meta = env->insn_aux_data[insn_idx].kptr_struct_meta;
 		struct bpf_insn addr[2] = { BPF_LD_IMM64(BPF_REG_2, (long)kptr_struct_meta) };
@@ -21604,8 +21643,8 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		mark_subprog_exc_cb(env, env->exception_callback_subprog);
 	}
 
-	for (i = 0; i < insn_cnt;) {
-		if (insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) && insn->imm) {
+	for (i = 0; i < insn_cnt;) { // When i == 25 insns[27] is our instruction, i ==27 is call
+ 		if (insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) && insn->imm) {
 			if ((insn->off == BPF_ADDR_SPACE_CAST && insn->imm == 1) ||
 			    (((struct bpf_map *)env->prog->aux->arena)->map_flags & BPF_F_NO_USER_CONV)) {
 				/* convert to 32-bit mov that clears upper 32-bit */
@@ -24109,7 +24148,7 @@ skip_full_check:
 		ret = convert_ctx_accesses(env);
 
 	if (ret == 0)
-		ret = do_misc_fixups(env);
+		ret = do_misc_fixups(env); // kkl overwrites are here !!!!!!
 
 	/* do 32-bit optimization after insn patching has done so those patched
 	 * insns could be handled correctly.
