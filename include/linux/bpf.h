@@ -1646,6 +1646,11 @@ struct bpf_prog_aux {
 		struct work_struct work;
 		struct rcu_head	rcu;
 	};
+	/* pointer to struct_ops struct registered to the kernel.
+	 * Only valid when BPF_STRUCT_OPS_F_THIS_PTR is set in
+	 * bpf_struct_ops.flags
+	 */
+	void __rcu *this_st_ops;
 };
 
 struct bpf_prog {
@@ -1794,6 +1799,10 @@ struct bpf_token {
 struct bpf_struct_ops_value;
 struct btf_member;
 
+#define BPF_STRUCT_OPS_F_THIS_PTR BIT(0)
+
+#define BPF_STRUCT_OPS_FLAG_MASK BPF_STRUCT_OPS_F_THIS_PTR
+
 #define BPF_STRUCT_OPS_MAX_NR_MEMBERS 64
 /**
  * struct bpf_struct_ops - A structure of callbacks allowing a subsystem to
@@ -1859,6 +1868,7 @@ struct bpf_struct_ops {
 	struct module *owner;
 	const char *name;
 	struct btf_func_model func_models[BPF_STRUCT_OPS_MAX_NR_MEMBERS];
+	u32 flags;
 };
 
 /* Every member of a struct_ops type has an instance even a member is not

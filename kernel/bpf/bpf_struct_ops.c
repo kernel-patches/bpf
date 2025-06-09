@@ -533,6 +533,17 @@ static void bpf_struct_ops_map_put_progs(struct bpf_struct_ops_map *st_map)
 	}
 }
 
+static void bpf_struct_ops_map_clear_this_ptr(struct bpf_struct_ops_map *st_map)
+{
+	u32 i;
+
+	for (i = 0; i < st_map->funcs_cnt; i++) {
+		if (!st_map->links[i])
+			break;
+		RCU_INIT_POINTER(st_map->links[i]->prog->aux->this_st_ops, NULL);
+	}
+}
+
 static void bpf_struct_ops_map_free_image(struct bpf_struct_ops_map *st_map)
 {
 	int i;
@@ -695,6 +706,9 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 	if (flags)
 		return -EINVAL;
 
+	if (st_ops->flags & ~BPF_STRUCT_OPS_FLAG_MASK)
+		return -EINVAL;
+
 	if (*(u32 *)key != 0)
 		return -E2BIG;
 
@@ -801,6 +815,19 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 			goto reset_unlock;
 		}
 
+		if (st_ops->flags & BPF_STRUCT_OPS_F_THIS_PTR) {
+			/* Make sure a struct_ops map will not have programs with
+			 * different this_st_ops. Once a program is associated with
+			 * a struct_ops map, it cannot be used in another struct_ops
+			 * map also with BPF_STRUCT_OPS_F_THIS_PTR
+			 */
+			if (cmpxchg(&prog->aux->this_st_ops, NULL, kdata)) {
+				bpf_prog_put(prog);
+				err = -EINVAL;
+				goto reset_unlock;
+			}
+		}
+
 		link = kzalloc(sizeof(*link), GFP_USER);
 		if (!link) {
 			bpf_prog_put(prog);
@@ -894,6 +921,8 @@ reset_unlock:
 	bpf_struct_ops_map_free_ksyms(st_map);
 	bpf_struct_ops_map_free_image(st_map);
 	bpf_struct_ops_map_put_progs(st_map);
+	if (st_ops->flags & BPF_STRUCT_OPS_F_THIS_PTR)
+		bpf_struct_ops_map_clear_this_ptr(st_map);
 	memset(uvalue, 0, map->value_size);
 	memset(kvalue, 0, map->value_size);
 unlock:
@@ -919,6 +948,8 @@ static long bpf_struct_ops_map_delete_elem(struct bpf_map *map, void *key)
 	switch (prev_state) {
 	case BPF_STRUCT_OPS_STATE_INUSE:
 		st_map->st_ops_desc->st_ops->unreg(&st_map->kvalue.data, NULL);
+		if (st_map->st_ops_desc->st_ops->flags & BPF_STRUCT_OPS_F_THIS_PTR)
+			bpf_struct_ops_map_clear_this_ptr(st_map);
 		bpf_map_put(map);
 		return 0;
 	case BPF_STRUCT_OPS_STATE_TOBEFREE:
@@ -1194,6 +1225,8 @@ static void bpf_struct_ops_map_link_dealloc(struct bpf_link *link)
 		rcu_dereference_protected(st_link->map, true);
 	if (st_map) {
 		st_map->st_ops_desc->st_ops->unreg(&st_map->kvalue.data, link);
+		if (st_map->st_ops_desc->st_ops->flags & BPF_STRUCT_OPS_F_THIS_PTR)
+			bpf_struct_ops_map_clear_this_ptr(st_map);
 		bpf_map_put(&st_map->map);
 	}
 	kfree(st_link);
@@ -1268,6 +1301,9 @@ static int bpf_struct_ops_map_link_update(struct bpf_link *link, struct bpf_map 
 	if (err)
 		goto err_out;
 
+	if (st_map->st_ops_desc->st_ops->flags & BPF_STRUCT_OPS_F_THIS_PTR)
+		bpf_struct_ops_map_clear_this_ptr(st_map);
+
 	bpf_map_inc(new_map);
 	rcu_assign_pointer(st_link->map, new_map);
 	bpf_map_put(old_map);
@@ -1294,6 +1330,8 @@ static int bpf_struct_ops_map_link_detach(struct bpf_link *link)
 	st_map = container_of(map, struct bpf_struct_ops_map, map);
 
 	st_map->st_ops_desc->st_ops->unreg(&st_map->kvalue.data, link);
+	if (st_map->st_ops_desc->st_ops->flags & BPF_STRUCT_OPS_F_THIS_PTR)
+		bpf_struct_ops_map_clear_this_ptr(st_map);
 
 	RCU_INIT_POINTER(st_link->map, NULL);
 	/* Pair with bpf_map_get() in bpf_struct_ops_link_create() or
