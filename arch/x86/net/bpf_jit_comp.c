@@ -61,6 +61,8 @@ static u8 *emit_code(u8 *ptr, u32 bytes, unsigned int len)
 #define EMIT_ENDBR_POISON()
 #endif
 
+#define MAX_REGS_FOR_ARGS	6
+
 static bool is_imm8(int value)
 {
 	return value <= 127 && value >= -128;
@@ -2710,10 +2712,10 @@ static int get_nr_used_regs(const struct btf_func_model *m)
 
 	for (i = 0; i < min_t(int, m->nr_args, MAX_BPF_FUNC_ARGS); i++) {
 		arg_regs = (m->arg_size[i] + 7) / 8;
-		if (nr_used_regs + arg_regs <= 6)
+		if (nr_used_regs + arg_regs <= MAX_REGS_FOR_ARGS)
 			nr_used_regs += arg_regs;
 
-		if (nr_used_regs >= 6)
+		if (nr_used_regs >= MAX_REGS_FOR_ARGS)
 			break;
 	}
 
@@ -2751,7 +2753,7 @@ static void save_args(const struct btf_func_model *m, u8 **prog,
 		 * the arg1-5,arg7 will be passed by regs, and arg6 will
 		 * by stack.
 		 */
-		if (nr_regs + arg_regs > 6) {
+		if (nr_regs + arg_regs > MAX_REGS_FOR_ARGS) {
 			/* copy function arguments from origin stack frame
 			 * into current stack frame.
 			 *
@@ -2811,7 +2813,7 @@ static void restore_regs(const struct btf_func_model *m, u8 **prog,
 	 */
 	for (i = 0; i < min_t(int, m->nr_args, MAX_BPF_FUNC_ARGS); i++) {
 		arg_regs = (m->arg_size[i] + 7) / 8;
-		if (nr_regs + arg_regs <= 6) {
+		if (nr_regs + arg_regs <= MAX_REGS_FOR_ARGS) {
 			for (j = 0; j < arg_regs; j++) {
 				emit_ldx(prog, BPF_DW,
 					 nr_regs == 5 ? X86_REG_R9 : BPF_REG_1 + nr_regs,
@@ -2824,7 +2826,7 @@ static void restore_regs(const struct btf_func_model *m, u8 **prog,
 			stack_size -= 8 * arg_regs;
 		}
 
-		if (nr_regs >= 6)
+		if (nr_regs >= MAX_REGS_FOR_ARGS)
 			break;
 	}
 }
@@ -3149,7 +3151,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	stack_size += (sizeof(struct bpf_tramp_run_ctx) + 7) & ~0x7;
 	run_ctx_off = stack_size;
 
-	if (nr_regs > 6 && (flags & BPF_TRAMP_F_CALL_ORIG)) {
+	if (nr_regs > MAX_REGS_FOR_ARGS && (flags & BPF_TRAMP_F_CALL_ORIG)) {
 		/* the space that used to pass arguments on-stack */
 		stack_size += (nr_regs - get_nr_used_regs(m)) * 8;
 		/* make sure the stack pointer is 16-byte aligned if we
