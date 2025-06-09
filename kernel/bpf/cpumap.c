@@ -34,6 +34,7 @@
 #include <linux/btf_ids.h>
 
 #include <linux/netdevice.h>
+#include <net/netdev_rx_queue.h>
 #include <net/gro.h>
 
 /* General idea: XDP packets getting XDP redirected to another CPU,
@@ -196,7 +197,7 @@ static int cpu_map_bpf_prog_run_xdp(struct bpf_cpu_map_entry *rcpu,
 
 		rxq.dev = xdpf->dev_rx;
 		rxq.mem.type = xdpf->mem_type;
-		/* TODO: report queue_index to xdp_rxq_info */
+		rxq.queue_index = get_netdev_rx_queue_index(xdpf->dev_rx->_rx);
 
 		xdp_convert_frame_to_buff(xdpf, &xdp);
 
