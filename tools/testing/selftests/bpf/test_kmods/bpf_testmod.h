@@ -103,6 +103,7 @@ struct bpf_testmod_ops2 {
 struct bpf_testmod_ops3 {
 	int (*test_1)(void);
 	int (*test_2)(void);
+	int data;
 };
 
 struct st_ops_args {

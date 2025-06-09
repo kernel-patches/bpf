@@ -272,9 +272,9 @@ static void bpf_testmod_test_struct_ops3(void)
 		st_ops3->test_1();
 }
 
-__bpf_kfunc void bpf_testmod_ops3_call_test_1(void)
+__bpf_kfunc int bpf_testmod_ops3_call_test_1(void)
 {
-	st_ops3->test_1();
+	return st_ops3->test_1();
 }
 
 __bpf_kfunc void bpf_testmod_ops3_call_test_2(void)
@@ -1057,6 +1057,23 @@ __bpf_kfunc int bpf_kfunc_st_ops_inc10(struct st_ops_args *args)
 	return args->a;
 }
 
+__bpf_kfunc int bpf_kfunc_st_ops_test_this_ptr_impl(void *aux__prog)
+{
+	struct bpf_prog_aux *aux = (struct bpf_prog_aux *)aux__prog;
+	struct bpf_testmod_ops3 *ops;
+	int data = -1;
+
+	rcu_read_lock();
+	ops = rcu_dereference(aux->this_st_ops);
+	if (!ops)
+		goto out;
+
+	data = ops->data;
+out:
+	rcu_read_unlock();
+	return data;
+}
+
 BTF_KFUNCS_START(bpf_testmod_check_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_testmod_test_mod_kfunc)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test1)
@@ -1097,6 +1114,7 @@ BTF_ID_FLAGS(func, bpf_kfunc_st_ops_test_prologue, KF_TRUSTED_ARGS | KF_SLEEPABL
 BTF_ID_FLAGS(func, bpf_kfunc_st_ops_test_epilogue, KF_TRUSTED_ARGS | KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_kfunc_st_ops_test_pro_epilogue, KF_TRUSTED_ARGS | KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_kfunc_st_ops_inc10, KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_kfunc_st_ops_test_this_ptr_impl)
 BTF_KFUNCS_END(bpf_testmod_check_kfunc_ids)
 
 static int bpf_testmod_ops_init(struct btf *btf)
@@ -1269,6 +1287,17 @@ static void test_1_recursion_detected(struct bpf_prog *prog)
 	       u64_stats_read(&stats->misses));
 }
 
+static int st_ops3_init_member(const struct btf_type *t,
+			       const struct btf_member *member,
+			       void *kdata, const void *udata)
+{
+	if (member->offset == offsetof(struct bpf_testmod_ops3, data) * 8) {
+		((struct bpf_testmod_ops3 *)kdata)->data = ((struct bpf_testmod_ops3 *)udata)->data;
+		return 1;
+	}
+	return 0;
+}
+
 static int st_ops3_check_member(const struct btf_type *t,
 				const struct btf_member *member,
 				const struct bpf_prog *prog)
@@ -1289,13 +1318,14 @@ static int st_ops3_check_member(const struct btf_type *t,
 struct bpf_struct_ops bpf_testmod_ops3 = {
 	.verifier_ops = &bpf_testmod_verifier_ops3,
 	.init = bpf_testmod_ops_init,
-	.init_member = bpf_testmod_ops_init_member,
+	.init_member = st_ops3_init_member,
 	.reg = st_ops3_reg,
 	.unreg = st_ops3_unreg,
 	.check_member = st_ops3_check_member,
 	.cfi_stubs = &__bpf_testmod_ops3,
 	.name = "bpf_testmod_ops3",
 	.owner = THIS_MODULE,
+	.flags = BPF_STRUCT_OPS_F_THIS_PTR,
 };
 
 static int bpf_test_mod_st_ops__test_prologue(struct st_ops_args *args)
