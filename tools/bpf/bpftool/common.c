@@ -1010,13 +1010,17 @@ static int map_fd_by_name(char *name, int **fds,
 			continue;
 		}
 
-		/* Get an fd with the requested options. */
-		close(fd);
-		fd = bpf_map_get_fd_by_id_opts(id, opts);
-		if (fd < 0) {
-			p_err("can't get map by id (%u): %s", id,
-			      strerror(errno));
-			goto err_close_fds;
+		/* Get an fd with the requested options, if they differ
+		 * from the read-only options used to get the fd above.
+		 */
+		if (memcmp(opts, &opts_ro, sizeof(opts_ro))) {
+			close(fd);
+			fd = bpf_map_get_fd_by_id_opts(id, opts);
+			if (fd < 0) {
+				p_err("can't get map by id (%u): %s", id,
+					strerror(errno));
+				goto err_close_fds;
+			}
 		}
 
 		if (nb_fds > 0) {
@@ -1042,10 +1046,7 @@ int map_parse_fds(int *argc, char ***argv, int **fds, __u32 open_flags)
 {
 	LIBBPF_OPTS(bpf_get_fd_by_id_opts, opts);
 
-	if (open_flags & ~BPF_F_RDONLY) {
-		p_err("invalid open_flags: %x", open_flags);
-		return -1;
-	}
+	assert((open_flags & ~BPF_F_RDONLY) == 0);
 	opts.open_flags = open_flags;
 
 	if (is_prefix(**argv, "id")) {

@@ -1202,7 +1202,7 @@ static int do_delete(int argc, char **argv)
 	if (argc < 2)
 		usage();
 
-	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, BPF_F_RDONLY);
+	fd = map_parse_fd_and_info(&argc, &argv, &info, &len, 0);
 	if (fd < 0)
 		return -1;
 
@@ -1329,7 +1329,7 @@ offload_dev:
 			if (!REQ_ARGS(2))
 				usage();
 			inner_map_fd = map_parse_fd_and_info(&argc, &argv,
-							     &info, &len, 0);
+							     &info, &len, BPF_F_RDONLY);
 			if (inner_map_fd < 0)
 				return -1;
 			attr.inner_map_fd = inner_map_fd;

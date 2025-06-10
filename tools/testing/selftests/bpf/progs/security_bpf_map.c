@@ -18,18 +18,31 @@ struct {
 	__type(key, __u32);
 	__type(value, __u32);
 	__uint(max_entries, 1);
+} prot_status_map SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__type(key, __u32);
+	__type(value, __u32);
+	__uint(max_entries, 3);
 } prot_map SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, __u32);
 	__type(value, __u32);
-	__uint(max_entries, 1);
+	__uint(max_entries, 3);
 } not_prot_map SEC(".maps");
 
 SEC("fmod_ret/security_bpf_map")
 int BPF_PROG(fmod_bpf_map, struct bpf_map *map, int fmode)
 {
+	__u32 key = 0;
+	__u32 *status_ptr = bpf_map_lookup_elem(&prot_status_map, &key);
+	if (!status_ptr || !*status_ptr) {
+		return 0;
+	}
+
 	if (map == &prot_map) {
 		/* Allow read-only access */
 		if (fmode & FMODE_WRITE)
@@ -44,7 +57,7 @@ int BPF_PROG(fmod_bpf_map, struct bpf_map *map, int fmode)
  * optimizing them out.
  */
 SEC("fentry/bpf_fentry_test1")
-int BPF_PROG(bpf_map_test0, int a)
+int BPF_PROG(fentry_dummy1, int a)
 {
 	__u32 key = 0;
 	__u32 val1 = a;
