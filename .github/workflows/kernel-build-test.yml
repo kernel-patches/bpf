@@ -137,6 +137,19 @@ jobs:
     secrets:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 
+  veristat-scx:
+    if: ${{ inputs.run_veristat }}
+    uses: ./.github/workflows/veristat-scx.yml
+    needs: [build]
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      arch: ${{ inputs.arch }}
+      toolchain_full: ${{ inputs.toolchain_full }}
+      runs_on: ${{ inputs.runs_on }}
+      llvm_version: ${{ inputs.llvm_version }}
+
   gcc-bpf:
     name: 'GCC BPF'
     if: ${{ inputs.arch == 'x86_64' }}

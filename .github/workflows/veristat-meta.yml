@@ -38,6 +38,7 @@ jobs:
       REPO_PATH: ""
       KBUILD_OUTPUT: kbuild-output/
       ARCH_AND_TOOL: ${{ inputs.arch }}-${{ inputs.toolchain_full }}
+      VERISTAT_TARGET: meta
 
     steps:
 
@@ -76,7 +77,7 @@ jobs:
           vmlinuz: '${{ github.workspace }}/vmlinuz'
           kernel-root: '.'
           max-cpu: 8
-          kernel-test: 'run_veristat_meta'
+          kernel-test: 'run_veristat'
           output-dir: '${{ github.workspace }}'
 
       - name: Compare and save veristat.meta.csv

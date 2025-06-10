@@ -31,6 +31,7 @@ jobs:
       KBUILD_OUTPUT: kbuild-output/
       ARCH_AND_TOOL: ${{ inputs.arch }}-${{ inputs.toolchain_full }}
       VERISTAT_DUMP_LOG_ON_FAILURE: 'true'
+      VERISTAT_TARGET: kernel
 
     steps:
 
