@@ -49,8 +49,6 @@
 #define EFFICIENT_UNALIGNED_ACCESS 0
 #endif
 
-static int sysctl_unpriv_disabled = -1;
-
 enum mode {
 	PRIV = 1,
 	UNPRIV = 2
@@ -815,11 +813,14 @@ static int restore_capabilities(struct cap_state *caps)
 	return err;
 }
 
-static bool can_execute_unpriv(struct test_loader *tester, struct test_spec *spec)
+static int can_execute_unpriv(struct test_loader *tester, struct test_spec *spec)
 {
-	if (sysctl_unpriv_disabled < 0)
-		sysctl_unpriv_disabled = get_unpriv_disabled() ? 1 : 0;
-	if (sysctl_unpriv_disabled)
+	int unpriv_disabled;
+
+	unpriv_disabled = get_unpriv_disabled();
+	if (unpriv_disabled < 0)
+		return unpriv_disabled;
+	if (unpriv_disabled)
 		return false;
 	if ((spec->prog_flags & BPF_F_ANY_ALIGNMENT) && !EFFICIENT_UNALIGNED_ACCESS)
 		return false;
@@ -973,7 +974,13 @@ void run_subtest(struct test_loader *tester,
 	}
 
 	if (unpriv) {
-		if (!can_execute_unpriv(tester, spec)) {
+		err = can_execute_unpriv(tester, spec);
+		if (err < 0) {
+			PRINT_FAIL("can_execute_unpriv() failed\n");
+			test__end_subtest();
+			return;
+		}
+		if (err == 0) {
 			test__skip();
 			test__end_subtest();
 			return;

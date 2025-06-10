@@ -4,4 +4,8 @@
 
 #define UNPRIV_SYSCTL "kernel/unprivileged_bpf_disabled"
 
-bool get_unpriv_disabled(void);
+/*
+ * Return true if /proc/sys/kernel/unprivileged_bpf_disabled is non-zero,
+ * or if kernel-side CPU vulnerability mitigations are disabled.
+ */
+int get_unpriv_disabled(void);

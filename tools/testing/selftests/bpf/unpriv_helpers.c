@@ -6,42 +6,49 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <bpf/bpf.h>
 
 #include "unpriv_helpers.h"
+#include "detect_mitigations_off.skel.h"
 
-static bool get_mitigations_off(void)
+static int unpriv_disabled_cached;
+static bool cache_valid;
+
+static int get_mitigations_off(void)
 {
-	char cmdline[4096], *c;
-	int fd, ret = false;
+	struct detect_mitigations_off *obj = NULL;
+	LIBBPF_OPTS(bpf_test_run_opts, run_opts);
+	int err;
 
-	fd = open("/proc/cmdline", O_RDONLY);
-	if (fd < 0) {
-		perror("open /proc/cmdline");
-		return false;
-	}
-
-	if (read(fd, cmdline, sizeof(cmdline) - 1) < 0) {
-		perror("read /proc/cmdline");
+	obj = detect_mitigations_off__open_and_load();
+	if (!obj) {
+		err = -errno;
+		fprintf(stderr, "%s: can't load detector program: %s\n",
+			__FUNCTION__, strerror(errno));
 		goto out;
 	}
-
-	cmdline[sizeof(cmdline) - 1] = '\0';
-	for (c = strtok(cmdline, " \n"); c; c = strtok(NULL, " \n")) {
-		if (strncmp(c, "mitigations=off", strlen(c)))
-			continue;
-		ret = true;
-		break;
+	err = bpf_prog_test_run_opts(bpf_program__fd(obj->progs.cpu_mitigations_off), &run_opts);
+	if (err < 0) {
+		err = -errno;
+		fprintf(stderr, "%s: can't run detector program: %s\n",
+			__FUNCTION__, strerror(errno));
+		goto out;
 	}
+	return !!run_opts.retval;
+
 out:
-	close(fd);
-	return ret;
+	detect_mitigations_off__destroy(obj);
+	return err;
 }
 
-bool get_unpriv_disabled(void)
+int get_unpriv_disabled(void)
 {
 	bool disabled;
 	char buf[2];
 	FILE *fd;
+
+	if (cache_valid)
+		return unpriv_disabled_cached;
 
 	fd = fopen("/proc/sys/" UNPRIV_SYSCTL, "r");
 	if (fd) {
@@ -52,5 +59,7 @@ bool get_unpriv_disabled(void)
 		disabled = true;
 	}
 
-	return disabled ? true : get_mitigations_off();
+	unpriv_disabled_cached = disabled ? true : get_mitigations_off();
+	cache_valid = true;
+	return unpriv_disabled_cached;
 }
