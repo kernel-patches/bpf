@@ -648,6 +648,24 @@ static void bpf_trampoline_restore_args_stack(u32 *image, struct codegen_context
 	bpf_trampoline_restore_args_regs(image, ctx, nr_regs, regs_off);
 }
 
+static int validate_args(const struct btf_func_model *m)
+{
+	int nr_regs = m->nr_args, i;
+
+	for (i = 0; i < m->nr_args; i++) {
+		if (m->arg_size[i] > SZL)
+			nr_regs += round_up(m->arg_size[i], SZL) / SZL - 1;
+		if (i > MAX_REGS_FOR_ARGS &&
+		    m->arg_flags[i] & BTF_FMODEL_STRUCT_ARG)
+			return -ENOTSUPP;
+	}
+
+	if (nr_regs > MAX_BPF_FUNC_ARGS)
+		return -ENOTSUPP;
+
+	return 0;
+}
+
 static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_image,
 					 void *rw_image_end, void *ro_image,
 					 const struct btf_func_model *m, u32 flags,
@@ -668,14 +686,18 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	if (IS_ENABLED(CONFIG_PPC32))
 		return -EOPNOTSUPP;
 
+	/* make sure that any argument can be located and processed by the
+	 * trampoline
+	 */
+	ret = validate_args(m);
+	if (ret)
+		return ret;
+
 	nr_regs = m->nr_args;
 	/* Extra registers for struct arguments */
 	for (i = 0; i < m->nr_args; i++)
 		if (m->arg_size[i] > SZL)
 			nr_regs += round_up(m->arg_size[i], SZL) / SZL - 1;
-
-	if (nr_regs > MAX_BPF_FUNC_ARGS)
-		return -EOPNOTSUPP;
 
 	ctx = &codegen_ctx;
 	memset(ctx, 0, sizeof(*ctx));
