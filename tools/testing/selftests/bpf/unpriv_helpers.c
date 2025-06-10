@@ -6,10 +6,46 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <zlib.h>
 
 #include "unpriv_helpers.h"
 
-static bool get_mitigations_off(void)
+static bool scan_config(const char *pat)
+{
+	bool ret = false;
+	const char *msg;
+	char buf[1024];
+	gzFile config;
+	int n, err;
+
+	config = gzopen("/proc/config.gz", "rb");
+	if (!config) {
+		perror("gzopen /proc/config.gz");
+		goto out;
+	}
+	for (;;) {
+		if (!gzgets(config, buf, sizeof(buf))) {
+			msg = gzerror(config, &err);
+			if (err == Z_ERRNO)
+				perror("gzgets /proc/config.gz");
+			else if (err != Z_OK)
+				fprintf(stderr, "gzgets /proc/config.gz: %s", msg);
+			goto out;
+		}
+		n = strlen(buf);
+		if (buf[n - 1] == '\n')
+			buf[n - 1] = 0;
+		if (strcmp(buf, pat) == 0) {
+			ret = true;
+			goto out;
+		}
+	}
+out:
+	gzclose(config);
+	return ret;
+}
+
+static bool scan_cmdline(const char *pat)
 {
 	char cmdline[4096], *c;
 	int fd, ret = false;
@@ -27,7 +63,7 @@ static bool get_mitigations_off(void)
 
 	cmdline[sizeof(cmdline) - 1] = '\0';
 	for (c = strtok(cmdline, " \n"); c; c = strtok(NULL, " \n")) {
-		if (strncmp(c, "mitigations=off", strlen(c)))
+		if (strncmp(c, pat, strlen(c)))
 			continue;
 		ret = true;
 		break;
@@ -35,6 +71,11 @@ static bool get_mitigations_off(void)
 out:
 	close(fd);
 	return ret;
+}
+
+static bool get_mitigations_off(void)
+{
+	return scan_cmdline("mitigations=off") || !scan_config("CONFIG_CPU_MITIGATIONS=y");
 }
 
 bool get_unpriv_disabled(void)
