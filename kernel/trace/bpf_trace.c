@@ -916,11 +916,14 @@ BPF_CALL_3(bpf_d_path, struct path *, path, char *, buf, u32, sz)
 	 * potentially broken verifier.
 	 */
 	len = copy_from_kernel_nofault(&copy, path, sizeof(*path));
-	if (len < 0)
+	if (len < 0) {
+		memset(buf, 0, sz);
 		return len;
+	}
 
 	p = d_path(&copy, buf, sz);
 	if (IS_ERR(p)) {
+		memset(buf, 0, sz);
 		len = PTR_ERR(p);
 	} else {
 		len = buf + sz - p;
