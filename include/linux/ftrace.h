@@ -536,11 +536,10 @@ struct ftrace_func_entry {
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
 unsigned long ftrace_find_rec_direct(unsigned long ip);
-int register_ftrace_direct(struct ftrace_ops *ops, unsigned long addr);
-int unregister_ftrace_direct(struct ftrace_ops *ops, unsigned long addr,
+int register_ftrace_direct(struct ftrace_ops *ops, unsigned long ip, unsigned long addr);
+int unregister_ftrace_direct(struct ftrace_ops *ops, unsigned long ip, unsigned long addr,
 			     bool free_filters);
-int modify_ftrace_direct(struct ftrace_ops *ops, unsigned long addr);
-int modify_ftrace_direct_nolock(struct ftrace_ops *ops, unsigned long addr);
+int modify_ftrace_direct(struct ftrace_ops *ops, unsigned long ip, unsigned long addr, bool lock_direct_mutex);
 
 int update_ftrace_direct_add(struct ftrace_ops *ops, struct ftrace_hash *hash);
 int update_ftrace_direct_del(struct ftrace_ops *ops, struct ftrace_hash *hash);
@@ -554,20 +553,16 @@ static inline unsigned long ftrace_find_rec_direct(unsigned long ip)
 {
 	return 0;
 }
-static inline int register_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
+static inline int register_ftrace_direct(struct ftrace_ops *ops, unsigned long ip, unsigned long addr)
 {
 	return -ENODEV;
 }
-static inline int unregister_ftrace_direct(struct ftrace_ops *ops, unsigned long addr,
+static inline int unregister_ftrace_direct(struct ftrace_ops *ops, unsigned long ip, unsigned long addr,
 					   bool free_filters)
 {
 	return -ENODEV;
 }
-static inline int modify_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
-{
-	return -ENODEV;
-}
-static inline int modify_ftrace_direct_nolock(struct ftrace_ops *ops, unsigned long addr)
+static inline int modify_ftrace_direct(struct ftrace_ops *ops, unsigned long ip, unsigned long addr, bool lock_direct_mutex)
 {
 	return -ENODEV;
 }

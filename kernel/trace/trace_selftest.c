@@ -1135,8 +1135,7 @@ trace_selftest_startup_function_graph(struct tracer *trace,
 	 * Register direct function together with graph tracer
 	 * and make sure we get graph trace.
 	 */
-	ftrace_set_filter_ip(&direct, (unsigned long)DYN_FTRACE_TEST_NAME, 0, 0);
-	ret = register_ftrace_direct(&direct,
+	ret = register_ftrace_direct(&direct, (unsigned long)DYN_FTRACE_TEST_NAME,
 				     (unsigned long)ftrace_stub_direct_tramp);
 	if (ret)
 		goto out;
@@ -1159,7 +1158,7 @@ trace_selftest_startup_function_graph(struct tracer *trace,
 
 	unregister_ftrace_graph(&fgraph_ops);
 
-	ret = unregister_ftrace_direct(&direct,
+	ret = unregister_ftrace_direct(&direct, (unsigned long)DYN_FTRACE_TEST_NAME,
 				       (unsigned long)ftrace_stub_direct_tramp,
 				       true);
 	if (ret)
