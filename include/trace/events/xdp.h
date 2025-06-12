@@ -187,6 +187,7 @@ DEFINE_EVENT(xdp_redirect_template, xdp_redirect_map_err,
 	TP_ARGS(dev, xdp, tgt, err, map_type, map_id, index)
 );
 
+#ifdef CONFIG_BPF_SYSCALL
 TRACE_EVENT(xdp_cpumap_kthread,
 
 	TP_PROTO(int map_id, unsigned int processed,  unsigned int drops,
@@ -300,6 +301,7 @@ TRACE_EVENT(xdp_devmap_xmit,
 		  __entry->sent, __entry->drops,
 		  __entry->err)
 );
+#endif /* CONFIG_BPF_SYSCALL */
 
 /* Expect users already include <net/xdp.h>, but not xdp_priv.h */
 #include <net/xdp_priv.h>
