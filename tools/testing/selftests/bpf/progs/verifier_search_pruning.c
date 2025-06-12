@@ -253,14 +253,14 @@ l0_%=:	w3 /= 0;					\
 	*(u32*)(r10 - 8) = r7;				\
 	r8 = *(u64*)(r10 - 8);				\
 	/* if r8 != X goto pc+1  r8 known in fallthrough branch */\
-	if r8 != 0xffffffff goto l1_%=;			\
+	if r8 != -1 goto l1_%=;				\
 	r3 = 1;						\
 l1_%=:	/* if r8 == X goto pc+1  condition always true on first\
 	 * traversal, so starts backtracking to mark r8 as requiring\
 	 * precision. r7 marked as needing precision. r6 not marked\
 	 * since it's not tracked.			\
 	 */						\
-	if r8 == 0xffffffff goto l2_%=;			\
+	if r8 == -1 goto l2_%=;				\
 	/* fails if r8 correctly marked unknown after fill. */\
 	w3 /= 0;					\
 l2_%=:	r0 = 0;						\
@@ -324,7 +324,7 @@ __naked void and_register_parent_chain_bug(void)
 	/* if r0 > r6 goto +1 */			\
 	if r0 > r6 goto l0_%=;				\
 	/* *(u64 *)(r10 - 8) = 0xdeadbeef */		\
-	r0 = 0xdeadbeef;				\
+	r0 = -559038737;				\
 	*(u64*)(r10 - 8) = r0;				\
 l0_%=:	r1 = 42;					\
 	*(u8*)(r10 - 8) = r1;				\

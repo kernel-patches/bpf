@@ -761,7 +761,7 @@ int dynptr_pruning_type_confusion(struct __sk_buff *ctx)
 		 *(u64 *)(r2 + 0) = r9;			\
 		 r3 = r10;				\
 		 r3 += -24;				\
-		 r9 = 0xeB9FeB9F;			\
+		 r9 = -341840993;			\
 		 *(u64 *)(r10 - 16) = r9;		\
 		 *(u64 *)(r10 - 24) = r9;		\
 		 r9 = 0;				\

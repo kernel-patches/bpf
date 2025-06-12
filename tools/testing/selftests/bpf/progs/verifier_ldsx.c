@@ -50,7 +50,7 @@ __success __success_unpriv __retval(-1)
 __naked void ldsx_s32(void)
 {
 	asm volatile (
-	"r1 = 0xfffffffe;"
+	"r1 = -2;"
 	"*(u64 *)(r10 - 8) = r1;"
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 	"r0 = *(s32 *)(r10 - 8);"

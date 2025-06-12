@@ -280,9 +280,9 @@ __naked void load_bytes_invalid_access_3(void)
 	asm volatile ("					\
 	r2 = 4;						\
 	r6 = r10;					\
-	r6 += 0xffffffff;				\
+	r6 += -1;					\
 	r3 = r6;					\
-	r4 = 0xffffffff;				\
+	r4 = -1;					\
 	call %[bpf_skb_load_bytes];			\
 	r0 = *(u64*)(r6 + 0);				\
 	exit;						\

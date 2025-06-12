@@ -28,7 +28,7 @@ __naked void ptr_to_stack_store_load(void)
 	asm volatile ("					\
 	r1 = r10;					\
 	r1 += -10;					\
-	r0 = 0xfaceb00c;				\
+	r0 = -87117812;					\
 	*(u64*)(r1 + 2) = r0;				\
 	r0 = *(u64*)(r1 + 2);				\
 	exit;						\
@@ -44,7 +44,7 @@ __naked void load_bad_alignment_on_off(void)
 	asm volatile ("					\
 	r1 = r10;					\
 	r1 += -8;					\
-	r0 = 0xfaceb00c;				\
+	r0 = -87117812;					\
 	*(u64*)(r1 + 2) = r0;				\
 	r0 = *(u64*)(r1 + 2);				\
 	exit;						\
@@ -60,7 +60,7 @@ __naked void load_bad_alignment_on_reg(void)
 	asm volatile ("					\
 	r1 = r10;					\
 	r1 += -10;					\
-	r0 = 0xfaceb00c;				\
+	r0 = -87117812;					\
 	*(u64*)(r1 + 8) = r0;				\
 	r0 = *(u64*)(r1 + 8);				\
 	exit;						\
@@ -76,7 +76,7 @@ __naked void load_out_of_bounds_low(void)
 	asm volatile ("					\
 	r1 = r10;					\
 	r1 += -80000;					\
-	r0 = 0xfaceb00c;				\
+	r0 = -87117812;					\
 	*(u64*)(r1 + 8) = r0;				\
 	r0 = *(u64*)(r1 + 8);				\
 	exit;						\
@@ -92,7 +92,7 @@ __naked void load_out_of_bounds_high(void)
 	asm volatile ("					\
 	r1 = r10;					\
 	r1 += -8;					\
-	r0 = 0xfaceb00c;				\
+	r0 = -87117812;					\
 	*(u64*)(r1 + 8) = r0;				\
 	r0 = *(u64*)(r1 + 8);				\
 	exit;						\

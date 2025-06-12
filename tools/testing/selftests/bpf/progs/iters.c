@@ -774,7 +774,7 @@ __naked int delayed_read_mark(void)
 	"3:"
 		"r1 = r7;"
 		"r2 = 8;"
-		"r3 = 0xdeadbeef;"
+		"r3 = -559038737;"
 		"call %[bpf_probe_read_user];"
 		"goto 1b;"
 	"2:"

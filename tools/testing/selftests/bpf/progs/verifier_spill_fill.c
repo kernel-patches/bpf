@@ -393,7 +393,7 @@ __naked void spill_32bit_of_64bit_fail(void)
 	call %[bpf_get_prandom_u32];			\
 	r0 &= 0x8;					\
 	/* Put a large number into r1. */		\
-	r1 = 0xffffffff;				\
+	r1 = -1;					\
 	r1 <<= 32;					\
 	r1 += r0;					\
 	/* Assign an ID to r1. */			\
@@ -827,7 +827,7 @@ __naked void spill_64bit_of_64bit_ok(void)
 	asm volatile ("					\
 	/* Roll one bit to make the register inexact. */\
 	call %[bpf_get_prandom_u32];			\
-	r0 &= 0x80000000;				\
+	r0 &= -2147483648;				\
 	r0 <<= 32;					\
 	/* 64-bit spill r0 to stack - should assign an ID. */\
 	*(u64*)(r10 - 8) = r0;				\
@@ -1057,7 +1057,7 @@ __naked void fill_32bit_after_spill_64bit_clear_id(void)
 	call %[bpf_get_prandom_u32];			\
 	r0 &= 0x8;					\
 	/* Put a large number into r1. */		\
-	r1 = 0xffffffff;				\
+	r1 = -1;					\
 	r1 <<= 32;					\
 	r1 += r0;					\
 	/* 64-bit spill r1 to stack - should assign an ID. */\

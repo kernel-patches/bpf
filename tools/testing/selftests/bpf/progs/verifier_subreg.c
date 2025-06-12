@@ -615,7 +615,7 @@ __naked void ldx_b_zero_extend_check(void)
 	asm volatile ("					\
 	r6 = r10;					\
 	r6 += -4;					\
-	r7 = 0xfaceb00c;				\
+	r7 = -87117812;					\
 	*(u32*)(r6 + 0) = r7;				\
 	call %[bpf_get_prandom_u32];			\
 	r1 = 0x1000000000 ll;				\
@@ -636,7 +636,7 @@ __naked void ldx_h_zero_extend_check(void)
 	asm volatile ("					\
 	r6 = r10;					\
 	r6 += -4;					\
-	r7 = 0xfaceb00c;				\
+	r7 = -87117812;					\
 	*(u32*)(r6 + 0) = r7;				\
 	call %[bpf_get_prandom_u32];			\
 	r1 = 0x1000000000 ll;				\
@@ -657,7 +657,7 @@ __naked void ldx_w_zero_extend_check(void)
 	asm volatile ("					\
 	r6 = r10;					\
 	r6 += -4;					\
-	r7 = 0xfaceb00c;				\
+	r7 = -87117812;					\
 	*(u32*)(r6 + 0) = r7;				\
 	call %[bpf_get_prandom_u32];			\
 	r1 = 0x1000000000 ll;				\

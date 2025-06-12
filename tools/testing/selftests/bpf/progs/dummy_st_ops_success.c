@@ -19,7 +19,7 @@ int BPF_PROG(test_1, struct bpf_dummy_ops_state *state)
 	 */
 	asm volatile (
 		"if %[state] != 0 goto +2;"
-		"r0 = 0xf2f3f4f5;"
+		"r0 = -218893067;"
 		"exit;"
 	::[state]"p"(state));
 

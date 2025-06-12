@@ -171,7 +171,7 @@ __success __success_unpriv __retval(0)
 __naked void test_out_of_bounds_9(void)
 {
 	asm volatile ("					\
-	r1 = 0xffffffff;				\
+	r1 = -1;					\
 	w2 = %[__imm_0];				\
 	r2 -= r1;					\
 	r2 |= r1;					\
@@ -191,7 +191,7 @@ __success __success_unpriv __retval(0)
 __naked void test_out_of_bounds_10(void)
 {
 	asm volatile ("					\
-	r1 = 0xffffffff;				\
+	r1 = -1;					\
 	w2 = %[__imm_0];				\
 	r2 -= r1;					\
 	r2 |= r1;					\

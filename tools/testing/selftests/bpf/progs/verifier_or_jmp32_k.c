@@ -11,7 +11,7 @@ __msg("R0 invalid mem access 'scalar'")
 __naked void or_jmp32_k(void)
 {
 	asm volatile ("					\
-	r0 = 0xffffffff;				\
+	r0 = -1;					\
 	r0 /= 1;					\
 	r1 = 0;						\
 	w1 = -1;					\

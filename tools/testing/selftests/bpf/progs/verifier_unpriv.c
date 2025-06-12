@@ -776,7 +776,7 @@ __naked void unpriv_spec_v1_type_confusion(void)
 	r6 = r10;					\
 	r6 += -8;					\
 	/* r6: pointer to readable stack slot */	\
-	r9 = 0xffffc900;				\
+	r9 = -14080;					\
 	r9 <<= 32;					\
 	/* r9: scalar controlled by attacker */		\
 	r0 = *(u64 *)(r0 + 0); /* cache miss */		\

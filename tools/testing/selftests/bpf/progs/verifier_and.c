@@ -99,7 +99,7 @@ __naked void known_subreg_with_unknown_reg(void)
 	call %[bpf_get_prandom_u32];			\
 	r0 <<= 32;					\
 	r0 += 1;					\
-	r0 &= 0xFFFF1234;				\
+	r0 &= -60876;					\
 	/* Upper bits are unknown but AND above masks out 1 zero'ing lower bits */\
 	if w0 < 1 goto l0_%=;				\
 	r1 = *(u32*)(r1 + 512);				\

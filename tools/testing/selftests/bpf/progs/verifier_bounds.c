@@ -152,7 +152,7 @@ __naked void on_sign_extended_mov_test1(void)
 	call %[bpf_map_lookup_elem];			\
 	if r0 == 0 goto l0_%=;				\
 	/* r2 = 0xffff'ffff'ffff'ffff */		\
-	r2 = 0xffffffff;				\
+	r2 = -1;					\
 	/* r2 = 0xffff'ffff */				\
 	r2 >>= 32;					\
 	/* r0 = <oob pointer> */			\
@@ -183,7 +183,7 @@ __naked void on_sign_extended_mov_test2(void)
 	call %[bpf_map_lookup_elem];			\
 	if r0 == 0 goto l0_%=;				\
 	/* r2 = 0xffff'ffff'ffff'ffff */		\
-	r2 = 0xffffffff;				\
+	r2 = -1;					\
 	/* r2 = 0xfff'ffff */				\
 	r2 >>= 36;					\
 	/* r0 = <oob pointer> */			\

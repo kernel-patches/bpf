@@ -485,7 +485,7 @@ __naked void test20_x_pkt_ptr_1(void)
 	asm volatile ("					\
 	r2 = *(u32*)(r1 + %[__sk_buff_data]);		\
 	r3 = *(u32*)(r1 + %[__sk_buff_data_end]);	\
-	r0 = 0xffffffff;				\
+	r0 = -1;					\
 	*(u64*)(r10 - 8) = r0;				\
 	r0 = *(u64*)(r10 - 8);				\
 	r0 &= 0x7fff;					\
@@ -515,7 +515,7 @@ __naked void test21_x_pkt_ptr_2(void)
 	r0 = r2;					\
 	r0 += 8;					\
 	if r0 > r3 goto l0_%=;				\
-	r4 = 0xffffffff;				\
+	r4 = -1;					\
 	*(u64*)(r10 - 8) = r4;				\
 	r4 = *(u64*)(r10 - 8);				\
 	r4 &= 0x7fff;					\
@@ -548,7 +548,7 @@ __naked void test22_x_pkt_ptr_3(void)
 	r3 = *(u64*)(r10 - 16);				\
 	if r0 > r3 goto l0_%=;				\
 	r2 = *(u64*)(r10 - 8);				\
-	r4 = 0xffffffff;				\
+	r4 = -1;					\
 	lock *(u64 *)(r10 - 8) += r4;			\
 	r4 = *(u64*)(r10 - 8);				\
 	r4 >>= 49;					\
@@ -605,7 +605,7 @@ __naked void test24_x_pkt_ptr_5(void)
 	asm volatile ("					\
 	r2 = *(u32*)(r1 + %[__sk_buff_data]);		\
 	r3 = *(u32*)(r1 + %[__sk_buff_data_end]);	\
-	r0 = 0xffffffff;				\
+	r0 = -1;					\
 	*(u64*)(r10 - 8) = r0;				\
 	r0 = *(u64*)(r10 - 8);				\
 	r0 &= 0xff;					\

@@ -64,7 +64,7 @@ __success __success_unpriv __retval(-1)
 __naked void mov64sx_s32(void)
 {
 	asm volatile ("					\
-	r0 = 0xfffffffe;				\
+	r0 = -2;					\
 	r0 = (s32)r0;					\
 	r0 >>= 1;					\
 	exit;						\
