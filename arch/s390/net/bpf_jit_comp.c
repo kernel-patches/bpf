@@ -2566,6 +2566,27 @@ static int alloc_stack(struct bpf_tramp_jit *tjit, size_t size)
 /* -mfentry generates a 6-byte nop on s390x. */
 #define S390X_PATCH_SIZE 6
 
+static int validate_args(const struct btf_func_model *m)
+{
+	int i = 0, nr_reg_args, nr_stack_args;
+
+	nr_reg_args = min_t(int, m->nr_args, MAX_NR_REG_ARGS);
+	nr_stack_args = m->nr_args - nr_reg_args;
+
+	if (nr_stack_args == 0)
+		return 0;
+
+	/* Support as many stack arguments as "mvc" instruction can handle. */
+	if (nr_stack_args > MAX_NR_STACK_ARGS)
+		return -ENOTSUPP;
+
+	for (i = nr_reg_args; i < m->nr_args; i++)
+		if (m->arg_flags[i] & BTF_FMODEL_STRUCT_ARG)
+			return -ENOTSUPP;
+
+	return 0;
+}
+
 static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 					 struct bpf_tramp_jit *tjit,
 					 const struct btf_func_model *m,
@@ -2579,13 +2600,17 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	int nr_bpf_args, nr_reg_args, nr_stack_args;
 	struct bpf_jit *jit = &tjit->common;
 	int arg, bpf_arg_off;
-	int i, j;
+	int i, j, ret;
 
-	/* Support as many stack arguments as "mvc" instruction can handle. */
+	/* make sure that any argument can be located and processed by the
+	 * trampoline
+	 */
+	ret = validate_args(m);
+	if (ret)
+		return ret;
+
 	nr_reg_args = min_t(int, m->nr_args, MAX_NR_REG_ARGS);
 	nr_stack_args = m->nr_args - nr_reg_args;
-	if (nr_stack_args > MAX_NR_STACK_ARGS)
-		return -ENOTSUPP;
 
 	/* Return to %r14 in the struct_ops case. */
 	if (flags & BPF_TRAMP_F_INDIRECT)
