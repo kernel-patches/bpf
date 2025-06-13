@@ -2022,7 +2022,7 @@ static struct bpf_verifier_state *push_stack(struct bpf_verifier_env *env,
 
 	elem = kzalloc(sizeof(struct bpf_verifier_stack_elem), GFP_KERNEL);
 	if (!elem)
-		goto err;
+		return NULL;
 
 	elem->insn_idx = insn_idx;
 	elem->prev_insn_idx = prev_insn_idx;
@@ -2032,12 +2032,12 @@ static struct bpf_verifier_state *push_stack(struct bpf_verifier_env *env,
 	env->stack_size++;
 	err = copy_verifier_state(&elem->st, cur);
 	if (err)
-		goto err;
+		return NULL;
 	elem->st.speculative |= speculative;
 	if (env->stack_size > BPF_COMPLEXITY_LIMIT_JMP_SEQ) {
 		verbose(env, "The sequence of %d jumps is too complex.\n",
 			env->stack_size);
-		goto err;
+		return NULL;
 	}
 	if (elem->st.parent) {
 		++elem->st.parent->branches;
@@ -2052,12 +2052,6 @@ static struct bpf_verifier_state *push_stack(struct bpf_verifier_env *env,
 		 */
 	}
 	return &elem->st;
-err:
-	free_verifier_state(env->cur_state, true);
-	env->cur_state = NULL;
-	/* pop all elements and return */
-	while (!pop_stack(env, NULL, NULL, false));
-	return NULL;
 }
 
 #define CALLER_SAVED_REGS 6
@@ -2789,7 +2783,7 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 
 	elem = kzalloc(sizeof(struct bpf_verifier_stack_elem), GFP_KERNEL);
 	if (!elem)
-		goto err;
+		return NULL;
 
 	elem->insn_idx = insn_idx;
 	elem->prev_insn_idx = prev_insn_idx;
@@ -2801,7 +2795,7 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 		verbose(env,
 			"The sequence of %d jumps is too complex for async cb.\n",
 			env->stack_size);
-		goto err;
+		return NULL;
 	}
 	/* Unlike push_stack() do not copy_verifier_state().
 	 * The caller state doesn't matter.
@@ -2817,19 +2811,13 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 	elem->st.insn_hist_end = elem->st.insn_hist_start;
 	frame = kzalloc(sizeof(*frame), GFP_KERNEL);
 	if (!frame)
-		goto err;
+		return NULL;
 	init_func_state(env, frame,
 			BPF_MAIN_FUNC /* callsite */,
 			0 /* frameno within this callchain */,
 			subprog /* subprog number within this prog */);
 	elem->st.frame[0] = frame;
 	return &elem->st;
-err:
-	free_verifier_state(env->cur_state, true);
-	env->cur_state = NULL;
-	/* pop all elements and return */
-	while (!pop_stack(env, NULL, NULL, false));
-	return NULL;
 }
 
 
@@ -22664,6 +22652,11 @@ static void free_states(struct bpf_verifier_env *env)
 	struct list_head *head, *pos, *tmp;
 	int i;
 
+	WARN_ON_ONCE(!env->cur_state);
+	free_verifier_state(env->cur_state, true);
+	env->cur_state = NULL;
+	while (!pop_stack(env, NULL, NULL, false));
+
 	list_for_each_safe(pos, tmp, &env->free_list) {
 		sl = container_of(pos, struct bpf_verifier_state_list, node);
 		free_verifier_state(&sl->state, false);
@@ -22807,14 +22800,6 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 
 	ret = do_check(env);
 out:
-	/* check for NULL is necessary, since cur_state can be freed inside
-	 * do_check() under memory pressure.
-	 */
-	if (env->cur_state) {
-		free_verifier_state(env->cur_state, true);
-		env->cur_state = NULL;
-	}
-	while (!pop_stack(env, NULL, NULL, false));
 	if (!ret && pop_log)
 		bpf_vlog_reset(&env->log, 0);
 	free_states(env);
