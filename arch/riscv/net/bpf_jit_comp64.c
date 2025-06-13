@@ -1005,6 +1005,24 @@ static int invoke_bpf_prog(struct bpf_tramp_link *l, int args_off, int retval_of
 	return ret;
 }
 
+static int validate_args(const struct btf_func_model *m)
+{
+	int i, nr_arg_slots, nr_regs = 0;
+
+	if (m->nr_args > MAX_BPF_FUNC_ARGS)
+		return -ENOTSUPP;
+
+	for (i = 0; i < m->nr_args; i++) {
+		nr_arg_slots = round_up(m->arg_size[i], 8) / 8;
+		if (nr_regs + nr_arg_slots > RV_MAX_REG_ARGS &&
+		    m->arg_flags[i] & BTF_FMODEL_STRUCT_ARG)
+			return -ENOTSUPP;
+		nr_regs += nr_arg_slots;
+	}
+
+	return 0;
+}
+
 static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 					 const struct btf_func_model *m,
 					 struct bpf_tramp_links *tlinks,
@@ -1069,8 +1087,12 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	if (flags & (BPF_TRAMP_F_ORIG_STACK | BPF_TRAMP_F_SHARE_IPMODIFY))
 		return -ENOTSUPP;
 
-	if (m->nr_args > MAX_BPF_FUNC_ARGS)
-		return -ENOTSUPP;
+	/* make sure that any argument can be located and processed by the
+	 * trampoline
+	 */
+	ret = validate_args(m);
+	if (ret)
+		return ret;
 
 	for (i = 0; i < m->nr_args; i++)
 		nr_arg_slots += round_up(m->arg_size[i], 8) / 8;
