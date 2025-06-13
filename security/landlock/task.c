@@ -294,8 +294,8 @@ static int hook_unix_stream_connect(struct sock *const sock,
 	return -EPERM;
 }
 
-static int hook_unix_may_send(struct socket *const sock,
-			      struct socket *const other)
+static int hook_unix_may_send(struct sock *const sk,
+			      struct sock *const other)
 {
 	size_t handle_layer;
 	const struct landlock_cred_security *const subject =
@@ -309,13 +309,13 @@ static int hook_unix_may_send(struct socket *const sock,
 	 * Checks if this datagram socket was already allowed to be connected
 	 * to other.
 	 */
-	if (unix_peer(sock->sk) == other->sk)
+	if (unix_peer(sk) == other)
 		return 0;
 
-	if (!is_abstract_socket(other->sk))
+	if (!is_abstract_socket(other))
 		return 0;
 
-	if (!sock_is_scoped(other->sk, subject->domain))
+	if (!sock_is_scoped(other, subject->domain))
 		return 0;
 
 	landlock_log_denial(subject, &(struct landlock_request) {
@@ -323,7 +323,7 @@ static int hook_unix_may_send(struct socket *const sock,
 		.audit = {
 			.type = LSM_AUDIT_DATA_NET,
 			.u.net = &(struct lsm_network_audit) {
-				.sk = other->sk,
+				.sk = other,
 			},
 		},
 		.layer_plus_one = handle_layer + 1,

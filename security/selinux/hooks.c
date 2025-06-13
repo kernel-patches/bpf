@@ -5176,15 +5176,15 @@ static int selinux_socket_unix_stream_connect(struct sock *sock,
 	return 0;
 }
 
-static int selinux_socket_unix_may_send(struct socket *sock,
-					struct socket *other)
+static int selinux_socket_unix_may_send(struct sock *sk,
+					struct sock *other)
 {
-	struct sk_security_struct *ssec = selinux_sock(sock->sk);
-	struct sk_security_struct *osec = selinux_sock(other->sk);
+	struct sk_security_struct *ssec = selinux_sock(sk);
+	struct sk_security_struct *osec = selinux_sock(other);
 	struct common_audit_data ad;
 	struct lsm_network_audit net;
 
-	ad_net_init_from_sk(&ad, &net, other->sk);
+	ad_net_init_from_sk(&ad, &net, other);
 
 	return avc_has_perm(ssec->sid, osec->sid, osec->sclass, SOCKET__SENDTO,
 			    &ad);

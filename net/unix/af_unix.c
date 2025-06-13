@@ -1516,7 +1516,7 @@ restart:
 		if (!unix_may_send(sk, other))
 			goto out_unlock;
 
-		err = security_unix_may_send(sk->sk_socket, other->sk_socket);
+		err = security_unix_may_send(sk, other);
 		if (err)
 			goto out_unlock;
 
@@ -2171,7 +2171,7 @@ restart_locked:
 	}
 
 	if (sk->sk_type != SOCK_SEQPACKET) {
-		err = security_unix_may_send(sk->sk_socket, other->sk_socket);
+		err = security_unix_may_send(sk, other);
 		if (err)
 			goto out_unlock;
 	}
