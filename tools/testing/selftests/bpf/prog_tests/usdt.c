@@ -272,12 +272,19 @@ static void subtest_multispec_usdt(void)
 
 	/* we'll reuse usdt_100 BPF program for usdt_300 test */
 	bpf_link__destroy(skel->links.usdt_100);
+
 	skel->links.usdt_100 = bpf_program__attach_usdt(skel->progs.usdt_100, -1, "/proc/self/exe",
 							"test", "usdt_300", NULL);
+#if __clang__ && defined(__aarch64__)
+	if (!ASSERT_OK_PTR(skel->links.usdt_100, "usdt_300_bad_attach"))
+		goto cleanup;
+	bpf_link__destroy(skel->links.usdt_100);
+#else
 	err = -errno;
 	if (!ASSERT_ERR_PTR(skel->links.usdt_100, "usdt_300_bad_attach"))
 		goto cleanup;
 	ASSERT_EQ(err, -E2BIG, "usdt_300_attach_err");
+#endif
 
 	/* let's check that there are no "dangling" BPF programs attached due
 	 * to partial success of the above test:usdt_300 attachment
