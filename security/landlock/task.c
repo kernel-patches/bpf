@@ -295,7 +295,8 @@ static int hook_unix_stream_connect(struct sock *const sock,
 }
 
 static int hook_unix_may_send(struct sock *const sk,
-			      struct sock *const other)
+			      struct sock *const other,
+			      struct sk_buff *skb)
 {
 	size_t handle_layer;
 	const struct landlock_cred_security *const subject =
