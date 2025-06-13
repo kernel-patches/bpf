@@ -62,6 +62,7 @@ static int do_ipv4 = 1;
 static int do_ipv6 = 1;
 static int cfg_payload_len = 10;
 static int cfg_poll_timeout = 100;
+static bool cfg_wake_every_msec = true;
 static int cfg_delay_snd;
 static int cfg_delay_ack;
 static int cfg_delay_tolerance_usec = 500;
@@ -286,6 +287,16 @@ static void print_pktinfo(int family, int ifindex, void *saddr, void *daddr)
 		daddr ? inet_ntop(family, daddr, da, sizeof(da)) : "unknown");
 }
 
+static int64_t get_time_now_us64(void)
+{
+	static struct timespec ts;
+
+	if (clock_gettime(CLOCK_REALTIME, &ts))
+		error(1, errno, "clock_gettime");
+
+	return timespec_to_us64(&ts);
+}
+
 static void __epoll(int epfd)
 {
 	struct epoll_event events;
@@ -300,11 +311,19 @@ static void __epoll(int epfd)
 static void __poll(int fd)
 {
 	struct pollfd pollfd;
+	int64_t end_of_wait;
+	int timeout;
 	int ret;
 
-	memset(&pollfd, 0, sizeof(pollfd));
-	pollfd.fd = fd;
-	ret = poll(&pollfd, 1, cfg_poll_timeout);
+	timeout = cfg_wake_every_msec ? 1 : cfg_poll_timeout;
+	end_of_wait = get_time_now_us64() + cfg_poll_timeout * 1000;
+
+	do {
+		memset(&pollfd, 0, sizeof(pollfd));
+		pollfd.fd = fd;
+		ret = poll(&pollfd, 1, timeout);
+	} while (!ret && get_time_now_us64() < end_of_wait);
+
 	if (ret != 1)
 		error(1, errno, "poll");
 }
@@ -707,6 +726,7 @@ static void __attribute__((noreturn)) usage(const char *filepath)
 			"  -P:   use PF_PACKET\n"
 			"  -r:   use raw\n"
 			"  -R:   use raw (IP_HDRINCL)\n"
+			"  -s:   single sleep until timeout (from -S), by default wake every 1msec\n"
 			"  -S N: usec to sleep before reading error queue\n"
 			"  -t N: tolerance (usec) for timestamp validation\n"
 			"  -u:   use udp\n"
@@ -723,7 +743,7 @@ static void parse_opt(int argc, char **argv)
 	int c;
 
 	while ((c = getopt(argc, argv,
-				"46bc:CeEFhIl:LnNo:p:PrRS:t:uv:V:x")) != -1) {
+				"46bc:CeEFhIl:LnNo:p:PrRsS:t:uv:V:x")) != -1) {
 		switch (c) {
 		case '4':
 			do_ipv6 = 0;
@@ -787,6 +807,9 @@ static void parse_opt(int argc, char **argv)
 			cfg_proto = SOCK_RAW;
 			cfg_ipproto = IPPROTO_RAW;
 			break;
+		case 's': /* sleep 'till timeout */
+			cfg_wake_every_msec = false;
+			break;
 		case 'S':
 			cfg_sleep_usec = strtoul(optarg, NULL, 10);
 			break;
@@ -825,6 +848,8 @@ static void parse_opt(int argc, char **argv)
 		error(1, 0, "cannot ask for pktinfo over pf_packet");
 	if (cfg_busy_poll && cfg_use_epoll)
 		error(1, 0, "pass epoll or busy_poll, not both");
+	if (cfg_wake_every_msec && cfg_use_epoll)
+		error(1, 0, "periodic wake not implemented for epoll, use -s");
 	if (cfg_proto == SOCK_STREAM && cfg_use_cmsg_opt_id)
 		error(1, 0, "TCP sockets don't support SCM_TS_OPT_ID");
 
