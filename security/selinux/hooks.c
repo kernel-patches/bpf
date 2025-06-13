@@ -5184,6 +5184,9 @@ static int selinux_socket_unix_may_send(struct sock *sk,
 	struct common_audit_data ad;
 	struct lsm_network_audit net;
 
+	if (sk->sk_type != SOCK_DGRAM)
+		return 0;
+
 	ad_net_init_from_sk(&ad, &net, other);
 
 	return avc_has_perm(ssec->sid, osec->sid, osec->sclass, SOCKET__SENDTO,
