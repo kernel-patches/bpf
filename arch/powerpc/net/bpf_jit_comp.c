@@ -22,6 +22,8 @@
 
 #include "bpf_jit.h"
 
+#define MAX_REGS_FOR_ARGS	8
+
 /* These offsets are from bpf prog end and stay the same across progs */
 static int bpf_jit_ool_stub, bpf_jit_long_branch_stub;
 
@@ -613,7 +615,7 @@ static void bpf_trampoline_save_args(u32 *image, struct codegen_context *ctx, in
 	param_save_area_offset += STACK_FRAME_MIN_SIZE; /* param save area is past frame header */
 
 	for (int i = 0; i < nr_regs; i++) {
-		if (i < 8) {
+		if (i < MAX_REGS_FOR_ARGS) {
 			EMIT(PPC_RAW_STL(_R3 + i, _R1, regs_off + i * SZL));
 		} else {
 			EMIT(PPC_RAW_LL(_R3, _R1, param_save_area_offset + i * SZL));
@@ -626,7 +628,7 @@ static void bpf_trampoline_save_args(u32 *image, struct codegen_context *ctx, in
 static void bpf_trampoline_restore_args_regs(u32 *image, struct codegen_context *ctx,
 					     int nr_regs, int regs_off)
 {
-	for (int i = 0; i < nr_regs && i < 8; i++)
+	for (int i = 0; i < nr_regs && i < MAX_REGS_FOR_ARGS; i++)
 		EMIT(PPC_RAW_LL(_R3 + i, _R1, regs_off + i * SZL));
 }
 
@@ -725,7 +727,9 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	 *
 	 * Reserve space for at least 8 registers for now. This can be optimized later.
 	 */
-	bpf_frame_size += (nr_regs > 8 ? nr_regs : 8) * SZL;
+	bpf_frame_size +=
+		(nr_regs > MAX_REGS_FOR_ARGS ? nr_regs : MAX_REGS_FOR_ARGS) *
+		SZL;
 
 	/* Room for struct bpf_tramp_run_ctx */
 	run_ctx_off = bpf_frame_size;
