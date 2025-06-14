@@ -21386,6 +21386,8 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 			goto out_free;
 		func[i]->is_func = 1;
 		func[i]->sleepable = prog->sleepable;
+		if (prog->is_termination_prog)
+			func[i]->is_termination_prog = 1;
 		func[i]->aux->func_idx = i;
 		/* Below members will be freed only at prog->aux */
 		func[i]->aux->btf = prog->aux->btf;
@@ -21503,8 +21505,10 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 			goto out_free;
 	}
 
-	for (i = 1; i < env->subprog_cnt; i++)
-		bpf_prog_kallsyms_add(func[i]);
+	if (!prog->is_termination_prog) {
+		for (i = 1; i < env->subprog_cnt; i++)
+			bpf_prog_kallsyms_add(func[i]);
+	}
 
 	/* Last step: make now unused interpreter insns from main
 	 * prog consistent for later dump requests, so they can
@@ -21682,14 +21686,20 @@ static void __fixup_collection_insert_kfunc(struct bpf_insn_aux_data *insn_aux,
 }
 
 static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
-			    struct bpf_insn *insn_buf, int insn_idx, int *cnt)
+			    struct bpf_insn *insn_buf, int insn_idx, int *cnt, int *kfunc_btf_id)
 {
 	const struct bpf_kfunc_desc *desc;
+	struct bpf_kfunc_call_arg_meta meta;
+	int err;
 
 	if (!insn->imm) {
 		verbose(env, "invalid kernel function call not eliminated in verifier pass\n");
 		return -EINVAL;
 	}
+
+	err = fetch_kfunc_meta(env, insn, &meta, NULL);
+	if (err)
+		return err;
 
 	*cnt = 0;
 
@@ -21704,8 +21714,11 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return -EFAULT;
 	}
 
-	if (!bpf_jit_supports_far_kfunc_call())
+	if (!bpf_jit_supports_far_kfunc_call()) {
+		if (meta.kfunc_flags & KF_RET_NULL)
+			*kfunc_btf_id = insn->imm;
 		insn->imm = BPF_CALL_IMM(desc->addr);
+	}
 	if (insn->off)
 		return 0;
 	if (desc->func_id == special_kfunc_list[KF_bpf_obj_new_impl] ||
@@ -21835,7 +21848,13 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 	struct bpf_subprog_info *subprogs = env->subprog_info;
 	u16 stack_depth = subprogs[cur_subprog].stack_depth;
 	u16 stack_depth_extra = 0;
+	int call_sites_cnt = 0;
+	int *call_idx;
+	env->bpf_term_patch_call_sites.call_idx = NULL;
 
+	call_idx = vmalloc(sizeof(*call_idx) * prog->len);
+	if (!call_idx)
+		return -ENOMEM;
 	if (env->seen_exception && !env->exception_callback_subprog) {
 		struct bpf_insn patch[] = {
 			env->prog->insnsi[insn_cnt - 1],
@@ -22171,11 +22190,12 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 		if (insn->src_reg == BPF_PSEUDO_CALL)
 			goto next_insn;
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
-			ret = fixup_kfunc_call(env, insn, insn_buf, i + delta, &cnt);
+			int kfunc_btf_id = 0;
+			ret = fixup_kfunc_call(env, insn, insn_buf, i + delta, &cnt, &kfunc_btf_id);
 			if (ret)
 				return ret;
 			if (cnt == 0)
-				goto next_insn;
+				goto store_call_indices;
 
 			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
 			if (!new_prog)
@@ -22184,6 +22204,12 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			delta	 += cnt - 1;
 			env->prog = prog = new_prog;
 			insn	  = new_prog->insnsi + i + delta;
+
+store_call_indices:
+			if (kfunc_btf_id != 0) {
+				call_idx[call_sites_cnt] = i + delta;
+				call_sites_cnt++;
+			}
 			goto next_insn;
 		}
 
@@ -22662,6 +22688,10 @@ patch_call_imm:
 				func_id_name(insn->imm), insn->imm);
 			return -EFAULT;
 		}
+		if (fn->ret_type & PTR_MAYBE_NULL) {
+			call_idx[call_sites_cnt] = i + delta;
+			call_sites_cnt++;
+		}
 		insn->imm = fn->func - __bpf_call_base;
 next_insn:
 		if (subprogs[cur_subprog + 1].start == i + delta + 1) {
@@ -22682,6 +22712,8 @@ next_insn:
 		insn++;
 	}
 
+	env->bpf_term_patch_call_sites.call_sites_cnt = call_sites_cnt;
+	env->bpf_term_patch_call_sites.call_idx = call_idx;
 	env->prog->aux->stack_depth = subprogs[0].stack_depth;
 	for (i = 0; i < env->subprog_cnt; i++) {
 		int delta = bpf_jit_supports_timed_may_goto() ? 2 : 1;
@@ -22817,6 +22849,8 @@ static struct bpf_prog *inline_bpf_loop(struct bpf_verifier_env *env,
 	call_insn_offset = position + 12;
 	callback_offset = callback_start - call_insn_offset - 1;
 	new_prog->insnsi[call_insn_offset].imm = callback_offset;
+	/* marking offset field to identify and patch the patch_prog*/
+	new_prog->insnsi[call_insn_offset].off = 0x1;
 
 	return new_prog;
 }
@@ -24380,6 +24414,194 @@ exit:
 	return err;
 }
 
+static int clone_patch_prog(struct bpf_verifier_env *env)
+{
+	gfp_t gfp_flags = bpf_memcg_flags(GFP_KERNEL | __GFP_ZERO | GFP_USER);
+	unsigned int size, prog_name_len;
+	struct bpf_prog *patch_prog, *prog = env->prog;
+	struct bpf_prog_aux *aux;
+
+	size = prog->pages * PAGE_SIZE;
+	patch_prog = __vmalloc(size, gfp_flags);
+	if (!patch_prog)
+		return -ENOMEM;
+
+	aux = kzalloc(sizeof(*aux), bpf_memcg_flags(GFP_KERNEL | GFP_USER));
+	if (!aux) {
+		vfree(patch_prog);
+		return -ENOMEM;
+	}
+
+	/*
+	 * Copying prog fields
+	 */
+	patch_prog->pages = prog->pages;
+	patch_prog->jited = 0;
+	patch_prog->jit_requested = prog->jit_requested;
+	patch_prog->gpl_compatible = prog->gpl_compatible;
+	patch_prog->blinding_requested = prog->blinding_requested;
+	patch_prog->is_termination_prog = 1;
+	patch_prog->len = prog->len;
+	patch_prog->type = prog->type;
+	patch_prog->aux = aux;
+
+	/*
+	 * Copying prog aux fields
+	 */
+	patch_prog->aux->used_map_cnt = prog->aux->used_map_cnt;
+	patch_prog->aux->used_btf_cnt = prog->aux->used_btf_cnt;
+	patch_prog->aux->max_ctx_offset = prog->aux->max_ctx_offset;
+	patch_prog->aux->stack_depth = prog->aux->stack_depth;
+	patch_prog->aux->func_cnt = prog->aux->func_cnt; /* will be populated by jit_subprogs */
+	patch_prog->aux->real_func_cnt = prog->aux->real_func_cnt; /* will be populated by jit_subprogs */
+	patch_prog->aux->func_idx = prog->aux->func_idx; /* will be populated by jit_subprogs */
+	patch_prog->aux->attach_btf_id = prog->aux->attach_btf_id;
+	patch_prog->aux->attach_st_ops_member_off = prog->aux->attach_st_ops_member_off;
+	patch_prog->aux->ctx_arg_info_size = prog->aux->ctx_arg_info_size;
+	patch_prog->aux->max_rdonly_access = prog->aux->max_rdonly_access;
+	patch_prog->aux->max_rdwr_access = prog->aux->max_rdwr_access;
+	patch_prog->aux->verifier_zext = prog->aux->verifier_zext;
+	patch_prog->aux->dev_bound = prog->aux->dev_bound;
+	patch_prog->aux->offload_requested = prog->aux->offload_requested;
+	patch_prog->aux->attach_btf_trace = prog->aux->attach_btf_trace;
+	patch_prog->aux->attach_tracing_prog = prog->aux->attach_tracing_prog;
+	patch_prog->aux->func_proto_unreliable = prog->aux->func_proto_unreliable;
+	patch_prog->aux->tail_call_reachable = prog->aux->tail_call_reachable;
+	patch_prog->aux->xdp_has_frags = prog->aux->xdp_has_frags;
+	patch_prog->aux->exception_cb = prog->aux->exception_cb;
+	patch_prog->aux->exception_boundary = prog->aux->exception_boundary;
+	patch_prog->aux->is_extended = prog->aux->is_extended;
+	patch_prog->aux->jits_use_priv_stack = prog->aux->jits_use_priv_stack;
+	patch_prog->aux->priv_stack_requested = prog->aux->priv_stack_requested;
+	patch_prog->aux->changes_pkt_data = prog->aux->changes_pkt_data;
+	patch_prog->aux->might_sleep = prog->aux->might_sleep;
+	patch_prog->aux->prog_array_member_cnt = prog->aux->prog_array_member_cnt;
+	patch_prog->aux->size_poke_tab = prog->aux->size_poke_tab;
+	patch_prog->aux->cgroup_atype = prog->aux->cgroup_atype;
+	patch_prog->aux->linfo = prog->aux->linfo; 
+	patch_prog->aux->func_info_cnt = prog->aux->func_info_cnt;
+	patch_prog->aux->nr_linfo = prog->aux->nr_linfo;
+	patch_prog->aux->linfo_idx = prog->aux->linfo_idx;
+	patch_prog->aux->num_exentries = prog->aux->num_exentries;
+
+	patch_prog->aux->poke_tab = kmalloc_array(patch_prog->aux->size_poke_tab, 
+					sizeof(struct bpf_jit_poke_descriptor), GFP_KERNEL);
+	if (!patch_prog->aux->poke_tab) {
+		kfree(patch_prog->aux);
+		vfree(patch_prog);
+		return -ENOMEM;
+	}
+	
+	for (int i = 0; i < patch_prog->aux->size_poke_tab; i++) {
+		memcpy(&patch_prog->aux->poke_tab[i], &prog->aux->poke_tab[i], 
+				sizeof(struct bpf_jit_poke_descriptor));
+	}
+
+	memcpy(patch_prog->insnsi, prog->insnsi, bpf_prog_insn_size(prog));
+
+	char *patch_prefix = "patch_";
+	prog_name_len = strlen(prog->aux->name);
+	strncpy(patch_prog->aux->name, patch_prefix, strlen(patch_prefix));
+
+	if (prog_name_len + strlen(patch_prefix) + 1 > BPF_OBJ_NAME_LEN) {
+		prog_name_len = BPF_OBJ_NAME_LEN - strlen(patch_prefix) - 1;
+	}
+	strncat(patch_prog->aux->name, prog->aux->name, prog_name_len);
+	
+	prog->term_states->patch_prog = patch_prog;
+
+	return 0;
+}
+
+static int patch_call_sites(struct bpf_verifier_env *env)
+{
+	int i, subprog;
+	struct bpf_insn *insn;
+	struct bpf_prog *prog = env->prog;
+	struct bpf_prog *patch_prog = prog->term_states->patch_prog;
+	int call_sites_cnt = env->bpf_term_patch_call_sites.call_sites_cnt;
+	int *call_idx = env->bpf_term_patch_call_sites.call_idx;
+	
+	for (int i = 0; i < call_sites_cnt; i++) {
+		patch_prog->insnsi[call_idx[i]].imm = 
+			BPF_CALL_IMM(bpf_termination_null_func);
+	}
+
+	if (!env->subprog_cnt)
+		return 0;
+
+	for (i = 0, insn = patch_prog->insnsi; i < patch_prog->len; i++, insn++) {
+		if (!bpf_pseudo_func(insn) && !bpf_pseudo_call(insn))
+			continue;
+
+		subprog = find_subprog(env, i + insn->imm + 1);
+		if (subprog < 0)
+			return -EFAULT;
+
+		if (insn->off == 0x1) {
+			patch_prog->insnsi[i].imm = BPF_CALL_IMM(bpf_loop_term_callback);
+			prog->insnsi[i].off = 0x0; /* Removing the marker */
+			/*
+			 * Modify callback call -> function call
+			 */
+			patch_prog->insnsi[i].off = 0x0;
+			patch_prog->insnsi[i].src_reg = 0x0;
+		}
+		
+	}
+
+	return 0;
+}
+
+
+
+static int prepare_patch_prog(struct bpf_verifier_env *env)
+{
+	int err = 0;
+
+	err = clone_patch_prog(env);
+	if (err)
+		return err;
+
+	err = patch_call_sites(env);
+	if (err)
+		return err;
+
+	return err;
+}
+
+
+static int fixup_patch_prog(struct bpf_verifier_env *env, union bpf_attr *attr)
+{
+	
+	struct bpf_verifier_env *patch_env;
+	int err = 0;
+
+	patch_env = kvzalloc(sizeof(struct bpf_verifier_env), GFP_KERNEL);
+	if (!patch_env) 
+		return -ENOMEM;
+
+	memcpy(patch_env, env, sizeof(*env));
+	patch_env->prog = env->prog->term_states->patch_prog;
+
+	/* do 32-bit optimization after insn patching has done so those patched
+	 * insns could be handled correctly.
+	 */
+	if (!bpf_prog_is_offloaded(patch_env->prog->aux)) {
+		err = opt_subreg_zext_lo32_rnd_hi32(patch_env, attr);
+		patch_env->prog->aux->verifier_zext = bpf_jit_needs_zext() ? !err
+								     : false;
+	}
+
+	if (err == 0)
+		err = fixup_call_args(patch_env);
+
+	kfree(patch_env);
+
+	return err;
+
+}
+
 int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u32 uattr_size)
 {
 	u64 start_time = ktime_get_ns();
@@ -24554,6 +24776,13 @@ skip_full_check:
 	if (ret == 0)
 		ret = do_misc_fixups(env);
 
+	/*
+	 * Preparing patch_prog for termination
+	 * - Cloning and patching call sites.
+	 */
+	if (ret == 0)
+		ret = prepare_patch_prog(env);
+
 	/* do 32-bit optimization after insn patching has done so those patched
 	 * insns could be handled correctly.
 	 */
@@ -24565,6 +24794,9 @@ skip_full_check:
 
 	if (ret == 0)
 		ret = fixup_call_args(env);
+
+	if (ret == 0)
+		ret = fixup_patch_prog(env, attr);
 
 	env->verification_time = ktime_get_ns() - start_time;
 	print_verification_stats(env);
@@ -24646,6 +24878,7 @@ err_unlock:
 		mutex_unlock(&bpf_verifier_lock);
 	vfree(env->insn_aux_data);
 err_free_env:
+	vfree(env->bpf_term_patch_call_sites.call_idx);
 	kvfree(env->cfg.insn_postorder);
 	kvfree(env->scc_info);
 	kvfree(env);

@@ -2757,6 +2757,16 @@ static bool is_perfmon_prog_type(enum bpf_prog_type prog_type)
 /* last field in 'union bpf_attr' used by this command */
 #define BPF_PROG_LOAD_LAST_FIELD fd_array_cnt
 
+static int sanity_check_jit_len(struct bpf_prog *prog)
+{
+	struct bpf_prog *patch_prog = prog->term_states->patch_prog;
+
+	if (prog->jited_len != patch_prog->jited_len)
+		return -EFAULT;
+
+	return 0;
+}
+
 static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 {
 	enum bpf_prog_type type = attr->prog_type;
@@ -2921,6 +2931,7 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 
 	prog->orig_prog = NULL;
 	prog->jited = 0;
+	prog->is_termination_prog = 0;
 
 	atomic64_set(&prog->aux->refcnt, 1);
 
@@ -2974,6 +2985,14 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 		goto free_used_maps;
 
 	prog = bpf_prog_select_runtime(prog, &err);
+	if (err < 0)
+		goto free_used_maps;
+
+	prog->term_states->patch_prog = bpf_prog_select_runtime(prog->term_states->patch_prog, &err);
+	if (err < 0)
+		goto free_used_maps;
+
+	err = sanity_check_jit_len(prog);
 	if (err < 0)
 		goto free_used_maps;
 

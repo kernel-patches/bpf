@@ -1571,6 +1571,18 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_prog *prog)
 }
 #endif /* CONFIG_BPF_JIT */
 
+noinline void *bpf_termination_null_func(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
+{
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(bpf_termination_null_func);
+
+noinline int bpf_loop_term_callback(u64 reg_loop_cnt, u64 *reg_loop_ctx)
+{
+	return 1;
+}
+EXPORT_SYMBOL_GPL(bpf_loop_term_callback);
+
 /* Base function for offset calculation. Needs to go into .text section,
  * therefore keeping it non-static as well; will also be used by JITs
  * anyway later on, so do not let the compiler omit it. This also needs

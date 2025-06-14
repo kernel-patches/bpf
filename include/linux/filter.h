@@ -1119,6 +1119,8 @@ int sk_get_filter(struct sock *sk, sockptr_t optval, unsigned int len);
 bool sk_filter_charge(struct sock *sk, struct sk_filter *fp);
 void sk_filter_uncharge(struct sock *sk, struct sk_filter *fp);
 
+int bpf_loop_term_callback(u64 reg_loop_cnt, u64 *reg_loop_ctx);
+void *bpf_termination_null_func(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
 u64 __bpf_call_base(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
 #define __bpf_call_base_args \
 	((u64 (*)(u64, u64, u64, u64, u64, const struct bpf_insn *)) \
