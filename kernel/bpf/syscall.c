@@ -37,6 +37,10 @@
 #include <linux/trace_events.h>
 #include <linux/tracepoint.h>
 #include <linux/overflow.h>
+#include <asm/unwind.h>
+#include <asm/insn.h>
+#include <asm/text-patching.h>
+#include <asm/irq_regs.h>
 
 #include <net/netfilter/nf_bpf_link.h>
 #include <net/netkit.h>
@@ -2767,6 +2771,207 @@ static int sanity_check_jit_len(struct bpf_prog *prog)
 	return 0;
 }
 
+static bool per_cpu_flag_is_true(struct bpf_term_aux_states *term_states, int cpu_id)
+{
+	unsigned long flags;
+	spin_lock_irqsave(&term_states->per_cpu_state[cpu_id].lock, 
+				flags);
+	if (term_states->per_cpu_state[cpu_id].cpu_flag == 1) {
+		spin_unlock_irqrestore(&term_states->per_cpu_state[cpu_id].lock,
+					flags);
+		return true;
+	}
+	spin_unlock_irqrestore(&term_states->per_cpu_state[cpu_id].lock,
+				flags);
+	return false;
+}
+
+static int is_bpf_address(struct bpf_prog *prog, unsigned long addr) 
+{
+
+        unsigned long bpf_func_addr = (unsigned long)prog->bpf_func;
+        if ((addr > bpf_func_addr) &&
+                        (addr < bpf_func_addr + prog->jited_len)){
+                return 1;
+        }
+
+        for (int subprog = 1; subprog < prog->aux->func_cnt; subprog++) {
+                struct bpf_prog *bpf_subprog = prog->aux->func[subprog];
+                unsigned long bpf_subprog_func_addr =
+                                        (unsigned long)bpf_subprog->bpf_func;
+                if ((addr > bpf_subprog_func_addr) && (addr < bpf_subprog_func_addr +
+                                                        bpf_subprog->jited_len)) {
+                        return 1;
+                }
+        }
+
+        return 0;
+}
+
+/* 
+ * For a call instruction in a BPF program, return the stubbed insn buff.
+ * Returns new instruction buff if stubbing required,
+ *	   NULL if no change needed.
+ */
+__always_inline char* find_termination_realloc(struct insn orig_insn, unsigned char *orig_addr, 
+					       struct insn patch_insn, unsigned char *patch_addr) {
+
+	unsigned long new_target;
+	unsigned long original_call_target = (unsigned long)orig_addr + 5 + orig_insn.immediate.value;
+
+	unsigned long patch_call_target = (unsigned long)patch_addr + 5 + patch_insn.immediate.value;
+
+	/* As per patch prog, no stubbing needed. */
+	if (patch_call_target == original_call_target)
+		return NULL;
+
+	/* bpf_termination_null_func is the generic stub function unless its either of
+	* the bpf_loop helper or the associated callback
+	*/
+	new_target = (unsigned long)bpf_termination_null_func;
+	if (patch_call_target == (unsigned long)bpf_loop_term_callback)
+		new_target = (unsigned long)bpf_loop_term_callback;
+	
+
+	unsigned long new_rel = (unsigned long)(new_target - (unsigned long)(orig_addr + 5));
+
+	char *new_insn = kmalloc(5, GFP_KERNEL);
+	new_insn[0] = 0xE8;
+	new_insn[1] = (new_rel >> 0) & 0xff;
+	new_insn[2] = (new_rel >> 8) & 0xff;
+	new_insn[3] = (new_rel >> 16) & 0xff;
+	new_insn[4] = (new_rel >> 24) & 0xff;
+
+ 	return new_insn;
+}
+
+/* 
+ * Given a bpf program and a corresponding termination patch prog
+ * (generated during verification), this program will patch all
+ * call instructions in prog and decide whether to stub them
+ * based on whether the termination_prog has stubbed or not.
+ */
+static void __maybe_unused in_place_patch_bpf_prog(struct bpf_prog *prog, struct bpf_prog *patch_prog){
+
+       uint32_t size = 0;
+  
+       while (size < prog->jited_len) {
+	       unsigned char *addr = (unsigned char*)prog->bpf_func;
+	       unsigned char *addr_patch = (unsigned char*)patch_prog->bpf_func;
+
+	       struct insn insn;
+	       struct insn insn_patch;
+
+	       addr += size;
+	       /* Decode original instruction */
+               if (WARN_ON_ONCE(insn_decode_kernel(&insn, addr))) {
+	       		return;
+               }
+
+               /* Check for call instruction */
+               if (insn.opcode.bytes[0] != CALL_INSN_OPCODE) {
+                       goto next_insn;  
+               }
+  
+	       addr_patch += size;
+	       /* Decode patch_prog instruction */
+               if (WARN_ON_ONCE(insn_decode_kernel(&insn_patch, addr_patch))) {
+	       		return ;
+               }
+
+	       // Stub the call instruction if needed
+	       char *buf;
+	       if ((buf = find_termination_realloc(insn, addr, insn_patch, addr_patch)) != NULL) {
+		       smp_text_poke_batch_add(addr, buf, insn.length, NULL);
+		       kfree(buf);
+	       }
+               
+       next_insn:
+               size += insn.length;
+       }       
+}
+
+
+void bpf_die(void *data)
+{
+	struct bpf_prog *prog, *patch_prog;
+	int cpu_id = raw_smp_processor_id();
+
+	prog = (struct bpf_prog *)data;
+	patch_prog = prog->term_states->patch_prog;
+
+	if (!per_cpu_flag_is_true(prog->term_states, cpu_id))
+		return;
+
+	unsigned long jmp_offset = prog->jited_len - (4 /*First endbr is 4 bytes*/
+						+ 5 /*5 bytes of noop*/ 
+						+ 5 /*5 bytes of jmp return_thunk*/);
+	char new_insn[5];
+	new_insn[0] = 0xE9;
+	new_insn[1] = (jmp_offset >> 0) & 0xff;
+	new_insn[2] = (jmp_offset >> 8) & 0xff;
+	new_insn[3] = (jmp_offset >> 16) & 0xff;
+	new_insn[4] = (jmp_offset >> 24) & 0xff;
+	smp_text_poke_batch_add(prog->bpf_func + 4, new_insn, 5, NULL);
+
+	/* poke all progs and subprogs */
+	if (prog->aux->func_cnt) {
+		for(int i=0; i<prog->aux->func_cnt; i++){
+			in_place_patch_bpf_prog(prog->aux->func[i], patch_prog->aux->func[i]);
+		}
+	} else {
+		in_place_patch_bpf_prog(prog, patch_prog);
+	}
+	/* flush all text poke calls */
+	smp_text_poke_batch_finish();
+
+
+ #ifdef CONFIG_X86_64
+	struct unwind_state state;
+	unsigned long addr, bpf_loop_addr, bpf_loop_term_addr;
+	struct pt_regs *regs = get_irq_regs();
+	char str[KSYM_SYMBOL_LEN];
+	bpf_loop_addr = (unsigned long)bpf_loop_proto.func;
+	bpf_loop_term_addr = (unsigned long)bpf_loop_termination;
+	unwind_start(&state, current, regs, NULL);
+
+	addr = unwind_get_return_address(&state);
+
+	unsigned long stack_addr = regs->sp;
+	while (addr) {
+		if (is_bpf_address(prog, addr)) {
+			break;
+		} else {
+			const char *name = kallsyms_lookup(addr, NULL, NULL, NULL, str);
+			if (name) {
+				unsigned long lookup_addr = kallsyms_lookup_name(name);
+				if (lookup_addr && lookup_addr == bpf_loop_addr) {
+					while (*(unsigned long *)stack_addr != addr) {
+						stack_addr += 1;
+					}
+					*(unsigned long *)stack_addr = bpf_loop_term_addr;
+				}
+			}
+		}
+		unwind_next_frame(&state);
+		addr = unwind_get_return_address(&state);
+	}
+#endif
+
+	return;
+}
+
+enum hrtimer_restart bpf_termination_wd_callback(struct hrtimer *hr)
+{
+
+	struct bpf_term_aux_states *term_states = container_of(hr, struct bpf_term_aux_states, hrtimer);
+	struct bpf_prog *prog = term_states->prog;
+	bpf_die(prog);
+	return HRTIMER_NORESTART;
+
+}
+EXPORT_SYMBOL_GPL(bpf_termination_wd_callback);
+
 static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 {
 	enum bpf_prog_type type = attr->prog_type;
@@ -2995,6 +3200,7 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	err = sanity_check_jit_len(prog);
 	if (err < 0)
 		goto free_used_maps;
+	prog->term_states->prog = prog;
 
 	err = bpf_prog_alloc_id(prog);
 	if (err)

@@ -1583,6 +1583,21 @@ noinline int bpf_loop_term_callback(u64 reg_loop_cnt, u64 *reg_loop_ctx)
 }
 EXPORT_SYMBOL_GPL(bpf_loop_term_callback);
 
+#ifdef CONFIG_X86_64
+noinline int bpf_loop_termination(u32 nr_loops, void *callback_fn, void *callback_ctx, u64 flags)
+{
+	asm volatile(
+		"pop %rbx\n\t"
+		"pop %rbp\n\t"
+		"pop %r12\n\t"
+		"pop %r13\n\t"
+	);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(bpf_loop_termination);
+STACK_FRAME_NON_STANDARD(bpf_loop_termination);
+#endif
+
 /* Base function for offset calculation. Needs to go into .text section,
  * therefore keeping it non-static as well; will also be used by JITs
  * anyway later on, so do not let the compiler omit it. This also needs

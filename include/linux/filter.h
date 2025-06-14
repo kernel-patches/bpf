@@ -689,10 +689,39 @@ extern int (*nfct_btf_struct_access)(struct bpf_verifier_log *log,
 				     const struct bpf_reg_state *reg,
 				     int off, int size);
 
+void bpf_die(void *data);
+
 typedef unsigned int (*bpf_dispatcher_fn)(const void *ctx,
 					  const struct bpf_insn *insnsi,
 					  unsigned int (*bpf_func)(const void *,
 								   const struct bpf_insn *));
+
+static void update_term_per_cpu_flag(const struct bpf_prog *prog, u8 cpu_flag)
+{
+	unsigned long flags;
+	u32 cpu_id = raw_smp_processor_id();
+	spin_lock_irqsave(&prog->term_states->per_cpu_state[cpu_id].lock, 
+				flags);
+	prog->term_states->per_cpu_state[cpu_id].cpu_flag = cpu_flag;
+	spin_unlock_irqrestore(&prog->term_states->per_cpu_state[cpu_id].lock,
+				flags);
+}
+
+static void bpf_terminate_timer_init(const struct bpf_prog *prog)
+{
+	ktime_t timeout = ktime_set(1, 0); // 1s, 0ns
+
+	/* Initialize timer on Monotonic clock, relative mode */
+	hrtimer_setup(&prog->term_states->hrtimer, bpf_termination_wd_callback, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+
+	/* Start watchdog */
+	hrtimer_start(&prog->term_states->hrtimer, timeout, HRTIMER_MODE_REL);
+}
+
+static void bpf_terminate_timer_cancel(const struct bpf_prog *prog)
+{
+	hrtimer_cancel(&prog->term_states->hrtimer);  
+}
 
 static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 					  const void *ctx,
@@ -706,7 +735,11 @@ static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 		u64 duration, start = sched_clock();
 		unsigned long flags;
 
+		update_term_per_cpu_flag(prog, 1);
+		bpf_terminate_timer_init(prog);
 		ret = dfunc(ctx, prog->insnsi, prog->bpf_func);
+		bpf_terminate_timer_cancel(prog);
+		update_term_per_cpu_flag(prog, 0);
 
 		duration = sched_clock() - start;
 		stats = this_cpu_ptr(prog->stats);
@@ -715,8 +748,11 @@ static __always_inline u32 __bpf_prog_run(const struct bpf_prog *prog,
 		u64_stats_add(&stats->nsecs, duration);
 		u64_stats_update_end_irqrestore(&stats->syncp, flags);
 	} else {
+		update_term_per_cpu_flag(prog, 1);
+		bpf_terminate_timer_init(prog);
 		ret = dfunc(ctx, prog->insnsi, prog->bpf_func);
-	}
+		bpf_terminate_timer_cancel(prog);
+		update_term_per_cpu_flag(prog, 0);}
 	return ret;
 }
 
@@ -1119,6 +1155,9 @@ int sk_get_filter(struct sock *sk, sockptr_t optval, unsigned int len);
 bool sk_filter_charge(struct sock *sk, struct sk_filter *fp);
 void sk_filter_uncharge(struct sock *sk, struct sk_filter *fp);
 
+#ifdef CONFIG_X86_64
+int bpf_loop_termination(u32 nr_loops, void *callback_fn, void *callback_ctx, u64 flags);
+#endif
 int bpf_loop_term_callback(u64 reg_loop_cnt, u64 *reg_loop_ctx);
 void *bpf_termination_null_func(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
 u64 __bpf_call_base(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);

@@ -1547,6 +1547,7 @@ struct cpu_aux {
 
 struct bpf_term_aux_states {
 	struct bpf_prog *patch_prog;
+	struct bpf_prog *prog;
 	struct cpu_aux *per_cpu_state;
 	struct hrtimer hrtimer;
 };
