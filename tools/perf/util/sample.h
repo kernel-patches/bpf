@@ -108,7 +108,8 @@ struct perf_sample {
 		u16 p_stage_cyc;
 		u16 retire_lat;
 	};
-	bool no_hw_idx;		/* No hw_idx collected in branch_stack */
+	bool no_hw_idx;			/* No hw_idx collected in branch_stack */
+	bool deferred_callchain;	/* Has deferred user callchains */
 	char insn[MAX_INSN];
 	void *raw_data;
 	struct ip_callchain *callchain;
