@@ -31,6 +31,7 @@
 #include <linux/memcontrol.h>
 #include <linux/cfi.h>
 #include <asm/rqspinlock.h>
+#include <linux/hrtimer.h>
 
 struct bpf_verifier_env;
 struct bpf_verifier_log;
@@ -39,6 +40,7 @@ struct bpf_prog;
 struct bpf_prog_aux;
 struct bpf_map;
 struct bpf_arena;
+struct bpf_term_aux_states;
 struct sock;
 struct seq_file;
 struct btf;
@@ -1538,6 +1540,17 @@ struct btf_mod_pair {
 
 struct bpf_kfunc_desc_tab;
 
+struct cpu_aux {
+	u8 cpu_flag;
+	spinlock_t lock;
+};
+
+struct bpf_term_aux_states {
+	struct bpf_prog *patch_prog;
+	struct cpu_aux *per_cpu_state;
+	struct hrtimer hrtimer;
+};
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1664,7 +1677,8 @@ struct bpf_prog {
 				call_get_stack:1, /* Do we call bpf_get_stack() or bpf_get_stackid() */
 				call_get_func_ip:1, /* Do we call get_func_ip() */
 				tstamp_type_access:1, /* Accessed __sk_buff->tstamp_type */
-				sleepable:1;	/* BPF program is sleepable */
+				sleepable:1,	/* BPF program is sleepable */
+				is_termination_prog:1; /* Is patch prog? */
 	enum bpf_prog_type	type;		/* Type of BPF program */
 	enum bpf_attach_type	expected_attach_type; /* For some prog types */
 	u32			len;		/* Number of filter blocks */
@@ -1676,6 +1690,7 @@ struct bpf_prog {
 					    const struct bpf_insn *insn);
 	struct bpf_prog_aux	*aux;		/* Auxiliary fields */
 	struct sock_fprog_kern	*orig_prog;	/* Original BPF program */
+	struct bpf_term_aux_states *term_states; /* Program termination aux fields */
 	/* Instructions for interpreter */
 	union {
 		DECLARE_FLEX_ARRAY(struct sock_filter, insns);
@@ -2385,6 +2400,7 @@ static inline struct btf *__btf_get_by_fd(struct fd f)
 	return fd_file(f)->private_data;
 }
 
+enum hrtimer_restart bpf_termination_wd_callback(struct hrtimer *hr);
 void bpf_map_inc(struct bpf_map *map);
 void bpf_map_inc_with_uref(struct bpf_map *map);
 struct bpf_map *__bpf_map_inc_not_zero(struct bpf_map *map, bool uref);
