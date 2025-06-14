@@ -695,6 +695,7 @@ struct swevent_hlist {
 struct bpf_prog;
 struct perf_cgroup;
 struct perf_buffer;
+struct perf_unwind_deferred;
 
 struct pmu_event_list {
 	raw_spinlock_t			lock;
@@ -847,6 +848,9 @@ struct perf_event {
 	struct callback_head		pending_unwind_work;
 	struct rcuwait			pending_unwind_wait;
 
+	struct perf_unwind_deferred	*unwind_deferred;
+	struct list_head		unwind_list;
+
 	atomic_t			event_limit;
 
 	/* address range filters */
@@ -887,6 +891,7 @@ struct perf_event {
 #ifdef CONFIG_SECURITY
 	void *security;
 #endif
+
 	struct list_head		sb_list;
 	struct list_head		pmu_list;
 
