@@ -5564,6 +5564,89 @@ static bool exclusive_event_installable(struct perf_event *event,
 	return true;
 }
 
+static void perf_pending_unwind_sync(struct perf_event *event)
+{
+	might_sleep();
+
+	if (!event->pending_unwind_callback)
+		return;
+
+	/*
+	 * If the task is queued to the current task's queue, we
+	 * obviously can't wait for it to complete. Simply cancel it.
+	 */
+	if (task_work_cancel(current, &event->pending_unwind_work)) {
+		event->pending_unwind_callback = 0;
+		local_dec(&event->ctx->nr_no_switch_fast);
+		return;
+	}
+
+	/*
+	 * All accesses related to the event are within the same RCU section in
+	 * perf_event_callchain_deferred(). The RCU grace period before the
+	 * event is freed will make sure all those accesses are complete by then.
+	 */
+	rcuwait_wait_event(&event->pending_unwind_wait, !event->pending_unwind_callback, TASK_UNINTERRUPTIBLE);
+}
+
+struct perf_callchain_deferred_event {
+	struct perf_event_header	header;
+	u64				nr;
+	u64				ips[];
+};
+
+static void perf_event_callchain_deferred(struct callback_head *work)
+{
+	struct perf_event *event = container_of(work, struct perf_event, pending_unwind_work);
+	struct perf_callchain_deferred_event deferred_event;
+	u64 callchain_context = PERF_CONTEXT_USER;
+	struct unwind_stacktrace trace;
+	struct perf_output_handle handle;
+	struct perf_sample_data data;
+	u64 nr;
+
+	if (!event->pending_unwind_callback)
+		return;
+
+	if (unwind_deferred_trace(&trace) < 0)
+		goto out;
+
+	/*
+	 * All accesses to the event must belong to the same implicit RCU
+	 * read-side critical section as the ->pending_unwind_callback reset.
+	 * See comment in perf_pending_unwind_sync().
+	 */
+	guard(rcu)();
+
+	if (current->flags & PF_KTHREAD)
+		goto out;
+
+	nr = trace.nr + 1 ; /* '+1' == callchain_context */
+
+	deferred_event.header.type = PERF_RECORD_CALLCHAIN_DEFERRED;
+	deferred_event.header.misc = PERF_RECORD_MISC_USER;
+	deferred_event.header.size = sizeof(deferred_event) + (nr * sizeof(u64));
+
+	deferred_event.nr = nr;
+
+	perf_event_header__init_id(&deferred_event.header, &data, event);
+
+	if (perf_output_begin(&handle, &data, event, deferred_event.header.size))
+		goto out;
+
+	perf_output_put(&handle, deferred_event);
+	perf_output_put(&handle, callchain_context);
+	perf_output_copy(&handle, trace.entries, trace.nr * sizeof(u64));
+	perf_event__output_id_sample(event, &handle, &data);
+
+	perf_output_end(&handle);
+
+out:
+	event->pending_unwind_callback = 0;
+	local_dec(&event->ctx->nr_no_switch_fast);
+	rcuwait_wake_up(&event->pending_unwind_wait);
+}
+
 static void perf_free_addr_filters(struct perf_event *event);
 
 /* vs perf_event_alloc() error */
@@ -5631,6 +5714,7 @@ static void _free_event(struct perf_event *event)
 {
 	irq_work_sync(&event->pending_irq);
 	irq_work_sync(&event->pending_disable_irq);
+	perf_pending_unwind_sync(event);
 
 	unaccount_event(event);
 
@@ -8140,6 +8224,65 @@ static u64 perf_get_page_size(unsigned long addr)
 
 static struct perf_callchain_entry __empty_callchain = { .nr = 0, };
 
+/* Returns the same as deferred_request() below */
+static int deferred_request_nmi(struct perf_event *event)
+{
+	struct callback_head *work = &event->pending_unwind_work;
+	int ret;
+
+	if (event->pending_unwind_callback)
+		return 1;
+
+	ret = task_work_add(current, work, TWA_NMI_CURRENT);
+	if (ret)
+		return ret;
+
+	event->pending_unwind_callback = 1;
+	return 0;
+}
+
+/*
+ * Returns:
+*     > 0 : if already queued.
+ *      0 : if it performed the queuing
+ *    < 0 : if it did not get queued.
+ */
+static int deferred_request(struct perf_event *event)
+{
+	struct callback_head *work = &event->pending_unwind_work;
+	int pending;
+	int ret;
+
+	/* Only defer for task events */
+	if (!event->ctx->task)
+		return -EINVAL;
+
+	if ((current->flags & PF_KTHREAD) || !user_mode(task_pt_regs(current)))
+		return -EINVAL;
+
+	if (in_nmi())
+		return deferred_request_nmi(event);
+
+	guard(irqsave)();
+
+	/* callback already pending? */
+	pending = READ_ONCE(event->pending_unwind_callback);
+	if (pending)
+		return 1;
+
+	/* Claim the work unless an NMI just now swooped in to do so. */
+	if (!try_cmpxchg(&event->pending_unwind_callback, &pending, 1))
+		return 1;
+
+	/* The work has been claimed, now schedule it. */
+	ret = task_work_add(current, work, TWA_RESUME);
+	if (WARN_ON_ONCE(ret)) {
+		WRITE_ONCE(event->pending_unwind_callback, 0);
+		return ret;
+	}
+	return 0;
+}
+
 struct perf_callchain_entry *
 perf_callchain(struct perf_event *event, struct pt_regs *regs)
 {
@@ -8150,12 +8293,27 @@ perf_callchain(struct perf_event *event, struct pt_regs *regs)
 	bool crosstask = event->ctx->task && event->ctx->task != current;
 	const u32 max_stack = event->attr.sample_max_stack;
 	struct perf_callchain_entry *callchain;
+	bool defer_user = IS_ENABLED(CONFIG_UNWIND_USER) && user &&
+			  event->attr.defer_callchain;
 
 	if (!kernel && !user)
 		return &__empty_callchain;
 
-	callchain = get_perf_callchain(regs, kernel, user,
-				       max_stack, crosstask, true);
+	/* Disallow cross-task callchains. */
+	if (event->ctx->task && event->ctx->task != current)
+		return &__empty_callchain;
+
+	if (defer_user) {
+		int ret = deferred_request(event);
+		if (!ret)
+			local_inc(&event->ctx->nr_no_switch_fast);
+		else if (ret < 0)
+			defer_user = false;
+	}
+
+	callchain = get_perf_callchain(regs, kernel, user, max_stack,
+				       crosstask, true, defer_user);
+
 	return callchain ?: &__empty_callchain;
 }
 
@@ -12818,6 +12976,8 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
 	event->pending_disable_irq = IRQ_WORK_INIT_HARD(perf_pending_disable);
 	init_task_work(&event->pending_task, perf_pending_task);
 
+	rcuwait_init(&event->pending_unwind_wait);
+
 	mutex_init(&event->mmap_mutex);
 	raw_spin_lock_init(&event->addr_filters.lock);
 
@@ -12985,6 +13145,10 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
 	err = security_perf_event_alloc(event);
 	if (err)
 		return ERR_PTR(err);
+
+	if (event->attr.defer_callchain)
+		init_task_work(&event->pending_unwind_work,
+			       perf_event_callchain_deferred);
 
 	/* symmetric to unaccount_event() in _free_event() */
 	account_event(event);
