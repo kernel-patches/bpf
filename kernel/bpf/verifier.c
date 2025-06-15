@@ -17792,6 +17792,27 @@ static bool insn_is_gotox(struct bpf_insn *insn)
 	       BPF_SRC(insn->code) == BPF_X;
 }
 
+static bool insn_is_ja(struct bpf_insn *insn)
+{
+	return BPF_CLASS(insn->code) == BPF_JMP &&
+	       BPF_OP(insn->code) == BPF_JA &&
+	       BPF_SRC(insn->code) == BPF_K;
+}
+
+/*
+ * This is a workaround to overcome a LLVM "bug". The problem is that
+ * sometimes LLVM would generate code like
+ *
+ *     gotox rX
+ *     goto +offset
+ *
+ * even though rX never points to the goto +offset instruction.
+ */
+static inline bool magic_dead_ja(struct bpf_insn *insn, bool have_prev)
+{
+	return have_prev && insn_is_gotox(insn - 1) && insn_is_ja(insn);
+}
+
 /* non-recursive depth-first-search to detect loops in BPF program
  * loop == back-edge in directed graph
  */
@@ -17866,6 +17887,9 @@ walk_cfg:
 		struct bpf_insn *insn = &env->prog->insnsi[i];
 
 		if (insn_state[i] != EXPLORED) {
+			if (magic_dead_ja(insn, i > 0))
+				continue;
+
 			verbose(env, "unreachable insn %d\n", i);
 			ret = -EINVAL;
 			goto err_free;
