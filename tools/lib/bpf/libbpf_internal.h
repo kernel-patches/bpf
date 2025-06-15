@@ -64,6 +64,10 @@
 #define SHT_LLVM_ADDRSIG 0x6FFF4C03
 #endif
 
+#ifndef SHT_LLVM_JT_SIZES
+#define SHT_LLVM_JT_SIZES 0x6FFF4C0D
+#endif
+
 /* if libelf is old and doesn't support mmap(), fall back to read() */
 #ifndef ELF_C_READ_MMAP
 #define ELF_C_READ_MMAP ELF_C_READ
