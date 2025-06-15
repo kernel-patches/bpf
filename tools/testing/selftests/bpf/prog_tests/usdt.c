@@ -7,6 +7,7 @@
 
 #include "test_usdt.skel.h"
 #include "test_urandom_usdt.skel.h"
+#include "test_usdt_multispec_fail.skel.h"
 
 int lets_test_this(int);
 
@@ -305,10 +306,10 @@ cleanup:
 static void subtest_multispec_fail_usdt(void)
 {
 	LIBBPF_OPTS(bpf_usdt_opts, opts);
-	struct test_usdt *skel;
+	struct test_usdt_multispec_fail *skel;
 	int err;
 
-	skel = test_usdt__open_and_load();
+	skel = test_usdt_multispec_fail__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "skel_open"))
 		return;
 
@@ -322,7 +323,7 @@ static void subtest_multispec_fail_usdt(void)
 	ASSERT_EQ(err, -E2BIG, "usdt_300_attach_err");
 
 cleanup:
-	test_usdt__destroy(skel);
+	test_usdt_multispec_fail__destroy(skel);
 }
 
 static FILE *urand_spawn(int *pid)
