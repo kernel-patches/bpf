@@ -1083,9 +1083,14 @@ unsigned long vmalloc_to_pfn(const void *addr);
  */
 #ifdef CONFIG_MMU
 extern bool is_vmalloc_addr(const void *x);
+extern bool is_module_addr(const void *x);
 extern int is_vmalloc_or_module_addr(const void *x);
 #else
 static inline bool is_vmalloc_addr(const void *x)
+{
+	return false;
+}
+static inline bool is_module_addr(const void *x)
 {
 	return false;
 }

@@ -84,6 +84,17 @@ bool is_vmalloc_addr(const void *x)
 }
 EXPORT_SYMBOL(is_vmalloc_addr);
 
+bool is_module_addr(const void *x)
+{
+#if defined(CONFIG_EXECMEM) && defined(MODULES_VADDR)
+	unsigned long addr = (unsigned long)kasan_reset_tag(x);
+	return addr >= MODULES_VADDR && addr < MODULES_END;
+#else
+	return false;
+#endif
+}
+EXPORT_SYMBOL_GPL(is_module_addr);
+
 struct vfree_deferred {
 	struct llist_head list;
 	struct work_struct wq;
@@ -762,12 +773,7 @@ int is_vmalloc_or_module_addr(const void *x)
 	 * and fall back on vmalloc() if that fails. Others
 	 * just put it in the vmalloc space.
 	 */
-#if defined(CONFIG_EXECMEM) && defined(MODULES_VADDR)
-	unsigned long addr = (unsigned long)kasan_reset_tag(x);
-	if (addr >= MODULES_VADDR && addr < MODULES_END)
-		return 1;
-#endif
-	return is_vmalloc_addr(x);
+	return is_module_addr(x) || is_vmalloc_addr(x);
 }
 EXPORT_SYMBOL_GPL(is_vmalloc_or_module_addr);
 
@@ -2290,6 +2296,70 @@ static void purge_vmap_node(struct work_struct *work)
 }
 
 /*
+ * Flush TLB for lazily-freed vmap areas within the [start, end] region. If
+ * the vmap areas span multiple address ranges (vmalloc, module, etc) then
+ * the overall region may be 2 to 3 orders of magnitude larger than the
+ * vmap areas themselves, and incur severe overhead when flushed page-wise.
+ * In this case, rescan vmap areas to decompose [start, end] into
+ * subregions within each address range, and flush each separately.
+ */
+static void __flush_tlb_kernel_range_lazy(unsigned long start, unsigned long end)
+{
+	enum {
+		VMALLOC_RANGE, MODULE_RANGE, OTHER_RANGE, NUM_RANGES
+	};
+	typedef bool (*addr_range_fn)(const void *);
+	struct {
+		unsigned long start, end;
+		addr_range_fn in_addr_range;
+	} tlb_range[NUM_RANGES] = {
+		[VMALLOC_RANGE] = {ULONG_MAX, 0, is_vmalloc_addr},
+		[MODULE_RANGE] = {ULONG_MAX, 0, is_module_addr},
+		/* fallback range must be last */
+		/* XXX is this really needed? */
+		[OTHER_RANGE] = {ULONG_MAX, 0, NULL}
+	};
+	addr_range_fn in_rng;
+	struct vmap_node *vn;
+	struct vmap_area *va;
+	unsigned long *s, *e;
+	int i;
+
+	for (i = 0; i < NUM_RANGES; i++) {
+		in_rng = tlb_range[i].in_addr_range;
+		if (in_rng && in_rng((void *)start) && in_rng((void *)end))
+			return flush_tlb_kernel_range(start, end);
+	}
+
+	/*
+	 * At this point the region to flush spans multiple address ranges,
+	 * so determine subregions within each range and then flush.
+	 */
+	for_each_vmap_node(vn) {
+		list_for_each_entry(va, &vn->purge_list, list) {
+			for (i = 0; i < NUM_RANGES; i++) {
+				s = &tlb_range[i].start;
+				e = &tlb_range[i].end;
+				in_rng = tlb_range[i].in_addr_range;
+
+				if (!in_rng || in_rng((void *)va->va_start)) {
+					*s = min(*s, va->va_start);
+					*e = max(*e, va->va_end);
+					break;
+				}
+			}
+		}
+	}
+
+	for (i = 0; i < NUM_RANGES; i++) {
+		s = &tlb_range[i].start;
+		e = &tlb_range[i].end;
+		if (*s < *e)
+			flush_tlb_kernel_range(*s, *e);
+	}
+}
+
+/*
  * Purges all lazily-freed vmap areas.
  */
 static bool __purge_vmap_area_lazy(unsigned long start, unsigned long end,
@@ -2333,7 +2403,7 @@ static bool __purge_vmap_area_lazy(unsigned long start, unsigned long end,
 
 	nr_purge_nodes = cpumask_weight(&purge_nodes);
 	if (nr_purge_nodes > 0) {
-		flush_tlb_kernel_range(start, end);
+		__flush_tlb_kernel_range_lazy(start, end);
 
 		/* One extra worker is per a lazy_max_pages() full set minus one. */
 		nr_purge_helpers = atomic_long_read(&vmap_lazy_nr) / lazy_max_pages();
