@@ -270,18 +270,8 @@ static void subtest_multispec_usdt(void)
 	 */
 	trigger_300_usdts();
 
-	/* we'll reuse usdt_100 BPF program for usdt_300 test */
 	bpf_link__destroy(skel->links.usdt_100);
-	skel->links.usdt_100 = bpf_program__attach_usdt(skel->progs.usdt_100, -1, "/proc/self/exe",
-							"test", "usdt_300", NULL);
-	err = -errno;
-	if (!ASSERT_ERR_PTR(skel->links.usdt_100, "usdt_300_bad_attach"))
-		goto cleanup;
-	ASSERT_EQ(err, -E2BIG, "usdt_300_attach_err");
 
-	/* let's check that there are no "dangling" BPF programs attached due
-	 * to partial success of the above test:usdt_300 attachment
-	 */
 	bss->usdt_100_called = 0;
 	bss->usdt_100_sum = 0;
 
@@ -307,6 +297,29 @@ static void subtest_multispec_usdt(void)
 
 	ASSERT_EQ(bss->usdt_100_called, 400, "usdt_400_called");
 	ASSERT_EQ(bss->usdt_100_sum, 400 * 400, "usdt_400_sum");
+
+cleanup:
+	test_usdt__destroy(skel);
+}
+
+static void subtest_multispec_fail_usdt(void)
+{
+	LIBBPF_OPTS(bpf_usdt_opts, opts);
+	struct test_usdt *skel;
+	int err;
+
+	skel = test_usdt__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open"))
+		return;
+
+	skel->bss->my_pid = getpid();
+
+	skel->links.usdt_100 = bpf_program__attach_usdt(skel->progs.usdt_100, -1, "/proc/self/exe",
+							"test", "usdt_300", NULL);
+	err = -errno;
+	if (!ASSERT_ERR_PTR(skel->links.usdt_100, "usdt_300_bad_attach"))
+		goto cleanup;
+	ASSERT_EQ(err, -E2BIG, "usdt_300_attach_err");
 
 cleanup:
 	test_usdt__destroy(skel);
@@ -422,6 +435,8 @@ void test_usdt(void)
 		subtest_basic_usdt();
 	if (test__start_subtest("multispec"))
 		subtest_multispec_usdt();
+	if (test__start_subtest("multispec_fail"))
+		subtest_multispec_fail_usdt();
 	if (test__start_subtest("urand_auto_attach"))
 		subtest_urandom_usdt(true /* auto_attach */);
 	if (test__start_subtest("urand_pid_attach"))
