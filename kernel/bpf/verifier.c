@@ -206,6 +206,7 @@ static int ref_set_non_owning(struct bpf_verifier_env *env,
 static void specialize_kfunc(struct bpf_verifier_env *env,
 			     u32 func_id, u16 offset, unsigned long *addr);
 static bool is_trusted_reg(const struct bpf_reg_state *reg);
+static int add_used_map(struct bpf_verifier_env *env, int fd, struct bpf_map **map_ptr);
 
 static bool bpf_map_ptr_poisoned(const struct bpf_insn_aux_data *aux)
 {
@@ -5648,6 +5649,19 @@ static int check_map_access_type(struct bpf_verifier_env *env, u32 regno,
 	return 0;
 }
 
+static int check_insn_set_mem_access(struct bpf_verifier_env *env,
+				     const struct bpf_map *map,
+				     int off, int size, u32 mem_size)
+{
+	if ((off < 0) || (off % sizeof(long)) || (off/sizeof(long) >= map->max_entries))
+		return -EACCES;
+
+	if (mem_size != 8 || size != 8)
+		return -EACCES;
+
+	return 0;
+}
+
 /* check read/write into memory region (e.g., map value, ringbuf sample, etc) */
 static int __check_mem_access(struct bpf_verifier_env *env, int regno,
 			      int off, int size, u32 mem_size,
@@ -5666,6 +5680,10 @@ static int __check_mem_access(struct bpf_verifier_env *env, int regno,
 			mem_size, off, size);
 		break;
 	case PTR_TO_MAP_VALUE:
+		if (reg->map_ptr->map_type == BPF_MAP_TYPE_INSN_SET &&
+		    check_insn_set_mem_access(env, reg->map_ptr, off, size, mem_size) == 0)
+			return 0;
+
 		verbose(env, "invalid access to map value, value_size=%d off=%d size=%d\n",
 			mem_size, off, size);
 		break;
@@ -7713,12 +7731,18 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 static int save_aux_ptr_type(struct bpf_verifier_env *env, enum bpf_reg_type type,
 			     bool allow_trust_mismatch);
 
+static bool map_is_insn_set(struct bpf_map *map)
+{
+	return map && map->map_type == BPF_MAP_TYPE_INSN_SET;
+}
+
 static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			  bool strict_alignment_once, bool is_ldsx,
 			  bool allow_trust_mismatch, const char *ctx)
 {
 	struct bpf_reg_state *regs = cur_regs(env);
 	enum bpf_reg_type src_reg_type;
+	struct bpf_map *map_ptr_copy = NULL;
 	int err;
 
 	/* check src operand */
@@ -7733,6 +7757,9 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 	src_reg_type = regs[insn->src_reg].type;
 
+	if (src_reg_type == PTR_TO_MAP_VALUE && map_is_insn_set(regs[insn->src_reg].map_ptr))
+		map_ptr_copy = regs[insn->src_reg].map_ptr;
+
 	/* Check if (src_reg + off) is readable. The state of dst_reg will be
 	 * updated by this call.
 	 */
@@ -7742,6 +7769,13 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	err = err ?: save_aux_ptr_type(env, src_reg_type,
 				       allow_trust_mismatch);
 	err = err ?: reg_bounds_sanity_check(env, &regs[insn->dst_reg], ctx);
+
+	if (map_ptr_copy) {
+		regs[insn->dst_reg].type = PTR_TO_INSN;
+		regs[insn->dst_reg].map_ptr = map_ptr_copy;
+		regs[insn->dst_reg].min_index = regs[insn->src_reg].min_index;
+		regs[insn->dst_reg].max_index = regs[insn->src_reg].max_index;
+	}
 
 	return err;
 }
@@ -15296,6 +15330,22 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 		return 0;
 	}
 
+	if (dst_reg->type == PTR_TO_MAP_VALUE && map_is_insn_set(dst_reg->map_ptr)) {
+		if (opcode != BPF_ADD) {
+			verbose(env, "Operation %s on ptr to instruction set map is prohibited\n",
+				bpf_alu_string[opcode >> 4]);
+			return -EACCES;
+		}
+		src_reg = &regs[insn->src_reg];
+		if (src_reg->type != SCALAR_VALUE) {
+			verbose(env, "Adding non-scalar R%d to an instruction ptr is prohibited\n",
+				insn->src_reg);
+			return -EACCES;
+		}
+		dst_reg->min_index = src_reg->umin_value / sizeof(long);
+		dst_reg->max_index = src_reg->umax_value / sizeof(long);
+	}
+
 	if (dst_reg->type != SCALAR_VALUE)
 		ptr_reg = dst_reg;
 
@@ -16797,6 +16847,11 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			__mark_reg_unknown(env, dst_reg);
 			return 0;
 		}
+		if (map->map_type == BPF_MAP_TYPE_INSN_SET) {
+			dst_reg->type = PTR_TO_MAP_VALUE;
+			dst_reg->off = aux->map_off;
+			return 0;
+		}
 		dst_reg->type = PTR_TO_MAP_VALUE;
 		dst_reg->off = aux->map_off;
 		WARN_ON_ONCE(map->max_entries != 1);
@@ -17552,6 +17607,62 @@ static int mark_fastcall_patterns(struct bpf_verifier_env *env)
 	return 0;
 }
 
+#define SET_HIGH(STATE, LAST)	STATE = (STATE & 0xffffU) | ((LAST) << 16)
+#define GET_HIGH(STATE)		((u16)((STATE) >> 16))
+
+static int gotox_sanity_check(struct bpf_verifier_env *env, int from, int to)
+{
+	/* TBD: check that to belongs to the same BPF function && whatever else */
+
+	return 0;
+}
+
+static int push_goto_x_edge(int t, struct bpf_verifier_env *env, struct bpf_map *map)
+{
+	int *insn_stack = env->cfg.insn_stack;
+	int *insn_state = env->cfg.insn_state;
+	u16 prev_edge = GET_HIGH(insn_state[t]);
+	int err;
+	int w;
+
+	w = bpf_insn_set_iter_xlated_offset(map, prev_edge);
+	if (w == -ENOENT)
+		return DONE_EXPLORING;
+	else if (w < 0)
+		return w;
+
+	err = gotox_sanity_check(env, t, w);
+	if (err)
+		return err;
+
+	mark_prune_point(env, t);
+
+	if (env->cfg.cur_stack >= env->prog->len)
+		return -E2BIG;
+	insn_stack[env->cfg.cur_stack++] = w;
+
+	mark_jmp_point(env, w);
+
+	SET_HIGH(insn_state[t], prev_edge + 1);
+	return KEEP_EXPLORING;
+}
+
+/* "conditional jump with N edges" */
+static int visit_goto_x_insn(int t, struct bpf_verifier_env *env, int fd)
+{
+	struct bpf_map *map;
+	int ret;
+
+	ret = add_used_map(env, fd, &map);
+	if (ret < 0)
+		return ret;
+
+	if (map->map_type != BPF_MAP_TYPE_INSN_SET)
+		return -EINVAL;
+
+	return push_goto_x_edge(t, env, map);
+}
+
 /* Visits the instruction at index t and returns one of the following:
  *  < 0 - an error occurred
  *  DONE_EXPLORING - the instruction was fully explored
@@ -17642,8 +17753,8 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 		return visit_func_call_insn(t, insns, env, insn->src_reg == BPF_PSEUDO_CALL);
 
 	case BPF_JA:
-		if (BPF_SRC(insn->code) != BPF_K)
-			return -EINVAL;
+		if (BPF_SRC(insn->code) == BPF_X)
+			return visit_goto_x_insn(t, env, insn->imm);
 
 		if (BPF_CLASS(insn->code) == BPF_JMP)
 			off = insn->off;
@@ -17672,6 +17783,13 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 
 		return push_insn(t, t + insn->off + 1, BRANCH, env);
 	}
+}
+
+static bool insn_is_gotox(struct bpf_insn *insn)
+{
+	return BPF_CLASS(insn->code) == BPF_JMP &&
+	       BPF_OP(insn->code) == BPF_JA &&
+	       BPF_SRC(insn->code) == BPF_X;
 }
 
 /* non-recursive depth-first-search to detect loops in BPF program
@@ -18786,10 +18904,21 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 			      struct bpf_func_state *cur, u32 insn_idx, enum exact_level exact)
 {
 	u16 live_regs = env->insn_aux_data[insn_idx].live_regs_before;
+	struct bpf_insn *insn;
 	u16 i;
 
 	if (old->callback_depth > cur->callback_depth)
 		return false;
+
+	insn = &env->prog->insnsi[insn_idx];
+	if (insn_is_gotox(insn)) {
+		struct bpf_reg_state *old_dst = &old->regs[insn->dst_reg];
+		struct bpf_reg_state *cur_dst = &cur->regs[insn->dst_reg];
+
+		if (old_dst->min_index != cur_dst->min_index ||
+		    old_dst->max_index != cur_dst->max_index)
+			return false;
+	}
 
 	for (i = 0; i < MAX_BPF_REG; i++)
 		if (((1 << i) & live_regs) &&
@@ -19654,6 +19783,55 @@ static int process_bpf_exit_full(struct bpf_verifier_env *env,
 	return PROCESS_BPF_EXIT;
 }
 
+static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *insn)
+{
+	struct bpf_verifier_state *other_branch;
+	struct bpf_reg_state *dst_reg;
+	struct bpf_map *map;
+	int xoff;
+	int err;
+	u32 i;
+
+	/* this map should already have been added */
+	err = add_used_map(env, insn->imm, &map);
+	if (err < 0)
+		return err;
+
+	dst_reg = reg_state(env, insn->dst_reg);
+	if (dst_reg->type != PTR_TO_INSN) {
+		verbose(env, "BPF_JA|BPF_X R%d has type %d, expected PTR_TO_INSN\n",
+				insn->dst_reg, dst_reg->type);
+		return -EINVAL;
+	}
+
+	if (dst_reg->map_ptr != map) {
+		verbose(env, "BPF_JA|BPF_X R%d was loaded from map id=%u, expected id=%u\n",
+				insn->dst_reg, dst_reg->map_ptr->id, map->id);
+		return -EINVAL;
+	}
+
+	if (dst_reg->max_index >= map->max_entries)
+		return -EINVAL;
+
+	for (i = dst_reg->min_index + 1; i <= dst_reg->max_index; i++) {
+		xoff = bpf_insn_set_iter_xlated_offset(map, i);
+		if (xoff == -ENOENT)
+			break;
+		if (xoff < 0)
+			return xoff;
+
+		other_branch = push_stack(env, xoff, env->insn_idx, false);
+		if (!other_branch)
+			return -EFAULT;
+	}
+
+	env->insn_idx = bpf_insn_set_iter_xlated_offset(map, dst_reg->min_index);
+	if (env->insn_idx < 0)
+		return env->insn_idx;
+
+	return 0;
+}
+
 static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 {
 	int err;
@@ -19756,6 +19934,9 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 
 			mark_reg_scratched(env, BPF_REG_0);
 		} else if (opcode == BPF_JA) {
+			if (BPF_SRC(insn->code) == BPF_X)
+				return check_indirect_jump(env, insn);
+
 			if (BPF_SRC(insn->code) != BPF_K ||
 			    insn->src_reg != BPF_REG_0 ||
 			    insn->dst_reg != BPF_REG_0 ||
@@ -20243,6 +20424,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 		case BPF_MAP_TYPE_QUEUE:
 		case BPF_MAP_TYPE_STACK:
 		case BPF_MAP_TYPE_ARENA:
+		case BPF_MAP_TYPE_INSN_SET:
 			break;
 		default:
 			verbose(env,
@@ -20330,10 +20512,11 @@ static int __add_used_map(struct bpf_verifier_env *env, struct bpf_map *map)
  * its index.
  * Returns <0 on error, or >= 0 index, on success.
  */
-static int add_used_map(struct bpf_verifier_env *env, int fd)
+static int add_used_map(struct bpf_verifier_env *env, int fd, struct bpf_map **map_ptr)
 {
 	struct bpf_map *map;
 	CLASS(fd, f)(fd);
+	int ret;
 
 	map = __bpf_map_get(f);
 	if (IS_ERR(map)) {
@@ -20341,7 +20524,10 @@ static int add_used_map(struct bpf_verifier_env *env, int fd)
 		return PTR_ERR(map);
 	}
 
-	return __add_used_map(env, map);
+	ret = __add_used_map(env, map);
+	if (ret >= 0 && map_ptr)
+		*map_ptr = map;
+	return ret;
 }
 
 /* find and rewrite pseudo imm in ld_imm64 instructions:
@@ -20435,7 +20621,7 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 				break;
 			}
 
-			map_idx = add_used_map(env, fd);
+			map_idx = add_used_map(env, fd, NULL);
 			if (map_idx < 0)
 				return map_idx;
 			map = env->used_maps[map_idx];
@@ -21459,6 +21645,8 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->jited_linfo = prog->aux->jited_linfo;
 		func[i]->aux->linfo_idx = env->subprog_info[i].linfo_idx;
 		func[i]->aux->arena = prog->aux->arena;
+		func[i]->aux->used_maps = env->used_maps;
+		func[i]->aux->used_map_cnt = env->used_map_cnt;
 		num_exentries = 0;
 		insn = func[i]->insnsi;
 		for (j = 0; j < func[i]->len; j++, insn++) {

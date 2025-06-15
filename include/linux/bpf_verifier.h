@@ -229,6 +229,10 @@ struct bpf_reg_state {
 	enum bpf_reg_liveness live;
 	/* if (!precise && SCALAR_VALUE) min/max/tnum don't affect safety */
 	bool precise;
+
+	/* Used to track boundaries of a PTR_TO_INSN */
+	u32 min_index;
+	u32 max_index;
 };
 
 enum bpf_stack_slot_type {

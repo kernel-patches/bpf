@@ -9,6 +9,8 @@ struct bpf_insn_set {
 	struct bpf_map map;
 	struct mutex state_mutex;
 	int state;
+	u32 **unique_offsets;
+	u32 unique_offsets_cnt;
 	long *ips;
 	DECLARE_FLEX_ARRAY(struct bpf_insn_ptr, ptrs);
 };
@@ -50,6 +52,7 @@ static void insn_set_free(struct bpf_map *map)
 {
 	struct bpf_insn_set *insn_set = cast_insn_set(map);
 
+	kfree(insn_set->unique_offsets);
 	kfree(insn_set->ips);
 	bpf_map_area_free(insn_set);
 }
@@ -65,6 +68,12 @@ static struct bpf_map *insn_set_alloc(union bpf_attr *attr)
 
 	insn_set->ips = kcalloc(attr->max_entries, sizeof(long), GFP_KERNEL);
 	if (!insn_set->ips) {
+		insn_set_free(&insn_set->map);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	insn_set->unique_offsets = kzalloc(sizeof(long) * attr->max_entries, GFP_KERNEL);
+	if (!insn_set->unique_offsets) {
 		insn_set_free(&insn_set->map);
 		return ERR_PTR(-ENOMEM);
 	}
@@ -165,8 +174,23 @@ static u64 insn_set_mem_usage(const struct bpf_map *map)
 	u64 extra_size = 0;
 
 	extra_size += sizeof(long) * map->max_entries; /* insn_set->ips */
+	extra_size += 4 * map->max_entries; /* insn_set->unique_offsets */
 
 	return insn_set_alloc_size(map->max_entries) + extra_size;
+}
+
+static int insn_set_map_direct_value_addr(const struct bpf_map *map, u64 *imm, u32 off)
+{
+	struct bpf_insn_set *insn_set = cast_insn_set(map);
+
+	/* for now, just reject all such loads */
+	if (off > 0)
+		return -EINVAL;
+
+	/* from BPF's point of view, this map is a jump table */
+	*imm = (unsigned long)insn_set->ips;
+
+	return 0;
 }
 
 BTF_ID_LIST_SINGLE(insn_set_btf_ids, struct, bpf_insn_set)
@@ -181,6 +205,7 @@ const struct bpf_map_ops insn_set_map_ops = {
 	.map_delete_elem = insn_set_delete_elem,
 	.map_check_btf = insn_set_check_btf,
 	.map_mem_usage = insn_set_mem_usage,
+	.map_direct_value_addr = insn_set_map_direct_value_addr,
 	.map_btf_id = &insn_set_btf_ids[0],
 };
 
@@ -217,6 +242,37 @@ static inline bool valid_offsets(const struct bpf_insn_set *insn_set,
 	return true;
 }
 
+static int cmp_unique_offsets(const void *a, const void *b)
+{
+	return *(u32 *)a - *(u32 *)b;
+}
+
+static int bpf_insn_set_init_unique_offsets(struct bpf_insn_set *insn_set)
+{
+	u32 cnt = insn_set->map.max_entries, ucnt = 1;
+	u32 **off = insn_set->unique_offsets;
+	int i;
+
+	/* [0,3,2,4,6,5,5,5,1,1,0,0] */
+	for (i = 0; i < cnt; i++)
+		off[i] = &insn_set->ptrs[i].user_value.xlated_off;
+
+	/* [0,0,0,1,1,2,3,4,5,5,5,6] */
+	sort(off, cnt, sizeof(off[0]), cmp_unique_offsets, NULL);
+
+	/*
+	 * [0,1,2,3,4,5,6,x,x,x,x,x]
+	 *  \.........../
+	 *    unique_offsets_cnt
+	 */
+	for (i = 1; i < cnt; i++)
+		if (*off[i] != *off[ucnt-1])
+			off[ucnt++] = off[i];
+
+	insn_set->unique_offsets_cnt = ucnt;
+	return 0;
+}
+
 int bpf_insn_set_init(struct bpf_map *map, const struct bpf_prog *prog)
 {
 	struct bpf_insn_set *insn_set = cast_insn_set(map);
@@ -247,7 +303,10 @@ int bpf_insn_set_init(struct bpf_map *map, const struct bpf_prog *prog)
 	for (i = 0; i < map->max_entries; i++)
 		insn_set->ptrs[i].user_value.xlated_off = insn_set->ptrs[i].orig_xlated_off;
 
-	return 0;
+	/*
+	 * Prepare a set of unique offsets
+	 */
+	return bpf_insn_set_init_unique_offsets(insn_set);
 }
 
 int bpf_insn_set_ready(struct bpf_map *map)
@@ -335,4 +394,14 @@ void bpf_prog_update_insn_ptr(struct bpf_prog *prog,
 			}
 		}
 	}
+}
+
+int bpf_insn_set_iter_xlated_offset(struct bpf_map *map, u32 iter_no)
+{
+	struct bpf_insn_set *insn_set = cast_insn_set(map);
+
+	if (iter_no >= insn_set->unique_offsets_cnt)
+		return -ENOENT;
+
+	return *insn_set->unique_offsets[iter_no];
 }
