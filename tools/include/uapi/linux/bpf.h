@@ -1013,6 +1013,7 @@ enum bpf_map_type {
 	BPF_MAP_TYPE_USER_RINGBUF,
 	BPF_MAP_TYPE_CGRP_STORAGE,
 	BPF_MAP_TYPE_ARENA,
+	BPF_MAP_TYPE_INSN_SET,
 	__MAX_BPF_MAP_TYPE
 };
 
@@ -7588,5 +7589,15 @@ struct bpf_iter_num {
 enum bpf_kfunc_flags {
 	BPF_F_PAD_ZEROS = (1ULL << 0),
 };
+
+/*
+ * Values of a BPF_MAP_TYPE_INSN_SET entry must be of this type.
+ * On updates jitted_off must be equal to 0.
+ */
+struct bpf_insn_set_value {
+	__u32 jitted_off;
+	__u32 xlated_off;
+};
+
 
 #endif /* _UAPI__LINUX_BPF_H__ */

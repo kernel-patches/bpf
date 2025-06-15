@@ -1615,6 +1615,8 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		const s32 imm32 = insn->imm;
 		u32 dst_reg = insn->dst_reg;
 		u32 src_reg = insn->src_reg;
+		int adjust_off = 0;
+		int abs_xlated_off;
 		u8 b2 = 0, b3 = 0;
 		u8 *start_of_ldx;
 		s64 jmp_offset;
@@ -1770,6 +1772,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 			emit_mov_imm64(&prog, dst_reg, insn[1].imm, insn[0].imm);
 			insn++;
 			i++;
+			adjust_off = 1;
 			break;
 
 			/* dst %= src, dst /= src, dst %= imm32, dst /= imm32 */
@@ -2642,6 +2645,14 @@ emit_jmp:
 				return -EFAULT;
 			}
 			memcpy(rw_image + proglen, temp, ilen);
+
+			/*
+			 * Instruction sets need to know how xlated code
+			 * maps to jited code
+			 */
+			abs_xlated_off = bpf_prog->aux->subprog_start + i - 1 - adjust_off;
+			bpf_prog_update_insn_ptr(bpf_prog, abs_xlated_off, proglen, ilen,
+						 jmp_offset, image + proglen);
 		}
 		proglen += ilen;
 		addrs[i] = proglen;

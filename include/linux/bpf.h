@@ -3596,4 +3596,25 @@ static inline bool bpf_is_subprog(const struct bpf_prog *prog)
 	return prog->aux->func_idx != 0;
 }
 
+int bpf_insn_set_init(struct bpf_map *map, const struct bpf_prog *prog);
+int bpf_insn_set_ready(struct bpf_map *map);
+void bpf_insn_set_release(struct bpf_map *map);
+void bpf_insn_set_adjust(struct bpf_map *map, u32 off, u32 len);
+void bpf_insn_set_adjust_after_remove(struct bpf_map *map, u32 off, u32 len);
+
+struct bpf_insn_ptr {
+	void *jitted_ip;
+	u32 jitted_len;
+	int jitted_jump_offset;
+	struct bpf_insn_set_value user_value; /* userspace-visible value */
+	u32 orig_xlated_off;
+};
+
+void bpf_prog_update_insn_ptr(struct bpf_prog *prog,
+			      u32 xlated_off,
+			      u32 jitted_off,
+			      u32 jitted_len,
+			      int jitted_jump_offset,
+			      void *jitted_ip);
+
 #endif /* _LINUX_BPF_H */
