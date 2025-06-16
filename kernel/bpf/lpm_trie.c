@@ -646,6 +646,8 @@ static void trie_free(struct bpf_map *map)
 			RCU_INIT_POINTER(*slot, NULL);
 			break;
 		}
+
+		cond_resched();
 	}
 
 out:
