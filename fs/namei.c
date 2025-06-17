@@ -2048,36 +2048,95 @@ in_root:
 	return nd->path.dentry;
 }
 
-static struct dentry *follow_dotdot(struct nameidata *nd)
+/**
+ * __path_walk_parent - Find the parent of the given struct path
+ * @path  - The struct path to start from
+ * @root  - A struct path which serves as a boundary not to be crosses.
+ *        - If @root is zero'ed, walk all the way to global root.
+ * @flags - Some LOOKUP_ flags.
+ *
+ * Find and return the dentry for the parent of the given path
+ * (mount/dentry). If the given path is the root of a mounted tree, it
+ * is first updated to the mount point on which that tree is mounted.
+ *
+ * If %LOOKUP_NO_XDEV is given, then *after* the path is updated to a new
+ * mount, the error EXDEV is returned.
+ *
+ * If no parent can be found, either because the tree is not mounted or
+ * because the @path matches the @root, then @path->dentry is returned
+ * unless @flags contains %LOOKUP_BENEATH, in which case -EXDEV is returned.
+ *
+ * Returns: either an ERR_PTR() or the chosen parent which will have had
+ * the refcount incremented.
+ */
+static struct dentry *__path_walk_parent(struct path *path, const struct path *root, int flags)
 {
-	struct dentry *parent;
-
-	if (path_equal(&nd->path, &nd->root))
+	if (path_equal(path, root))
 		goto in_root;
-	if (unlikely(nd->path.dentry == nd->path.mnt->mnt_root)) {
-		struct path path;
+	if (unlikely(path->dentry == path->mnt->mnt_root)) {
+		struct path new_path;
 
-		if (!choose_mountpoint(real_mount(nd->path.mnt),
-				       &nd->root, &path))
+		if (!choose_mountpoint(real_mount(path->mnt),
+				       root, &new_path))
 			goto in_root;
-		path_put(&nd->path);
-		nd->path = path;
-		nd->inode = path.dentry->d_inode;
-		if (unlikely(nd->flags & LOOKUP_NO_XDEV))
+		path_put(path);
+		*path = new_path;
+		if (unlikely(flags & LOOKUP_NO_XDEV))
 			return ERR_PTR(-EXDEV);
 	}
 	/* rare case of legitimate dget_parent()... */
-	parent = dget_parent(nd->path.dentry);
+	return dget_parent(path->dentry);
+
+in_root:
+	if (unlikely(flags & LOOKUP_BENEATH))
+		return ERR_PTR(-EXDEV);
+	return dget(path->dentry);
+}
+
+/**
+ * path_walk_parent - Walk to the parent of path
+ * @path: input and output path.
+ * @root: root of the path walk, do not go beyond this root. If @root is
+ *        zero'ed, walk all the way to real root.
+ *
+ * Given a path, find the parent path. Replace @path with the parent path.
+ * If we were already at the real root or a disconnected root, @path is
+ * not changed.
+ *
+ * Returns:
+ *  0  - if @path is updated to its parent.
+ *  <0 - if @path is already the root (real root or @root).
+ */
+int path_walk_parent(struct path *path, const struct path *root)
+{
+	struct dentry *parent;
+
+	parent = __path_walk_parent(path, root, LOOKUP_BENEATH);
+
+	if (IS_ERR(parent))
+		return PTR_ERR(parent);
+
+	if (parent == path->dentry) {
+		dput(parent);
+		return -ENOENT;
+	}
+	dput(path->dentry);
+	path->dentry = parent;
+	return 0;
+}
+
+static struct dentry *follow_dotdot(struct nameidata *nd)
+{
+	struct dentry *parent = __path_walk_parent(&nd->path, &nd->root, nd->flags);
+
+	if (IS_ERR(parent))
+		return parent;
 	if (unlikely(!path_connected(nd->path.mnt, parent))) {
 		dput(parent);
 		return ERR_PTR(-ENOENT);
 	}
+	nd->inode = nd->path.dentry->d_inode;
 	return parent;
-
-in_root:
-	if (unlikely(nd->flags & LOOKUP_BENEATH))
-		return ERR_PTR(-EXDEV);
-	return dget(nd->path.dentry);
 }
 
 static const char *handle_dots(struct nameidata *nd, int type)
