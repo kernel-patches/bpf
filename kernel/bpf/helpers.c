@@ -2906,6 +2906,33 @@ __bpf_kfunc int bpf_dynptr_copy(struct bpf_dynptr *dst_ptr, u32 dst_off,
 	return 0;
 }
 
+/**
+ * bpf_dynptr_memset() - Fill dynptr memory with a constant byte.
+ * @ptr: Destination dynptr - where data will be filled
+ * @val: Constant byte to fill the memory with
+ * @n: Number of bytes to fill
+ *
+ * Fills the first n bytes of the memory area pointed to by ptr
+ * with the constant byte val.
+ * Returns 0 on success; negative error, otherwise.
+ */
+ __bpf_kfunc int bpf_dynptr_memset(struct bpf_dynptr *ptr, u8 val, u32 n)
+ {
+	struct bpf_dynptr_kern *p = (struct bpf_dynptr_kern *)ptr;
+	int err;
+
+	if (__bpf_dynptr_is_rdonly(p))
+		return -EINVAL;
+
+	err = bpf_dynptr_check_off_len(p, 0, n);
+	if (err)
+		return err;
+
+	memset(p->data + p->offset, val, n);
+
+	return 0;
+}
+
 __bpf_kfunc void *bpf_cast_to_kern_ctx(void *obj)
 {
 	return obj;
@@ -3364,6 +3391,7 @@ BTF_ID_FLAGS(func, bpf_dynptr_is_rdonly)
 BTF_ID_FLAGS(func, bpf_dynptr_size)
 BTF_ID_FLAGS(func, bpf_dynptr_clone)
 BTF_ID_FLAGS(func, bpf_dynptr_copy)
+BTF_ID_FLAGS(func, bpf_dynptr_memset)
 #ifdef CONFIG_NET
 BTF_ID_FLAGS(func, bpf_modify_return_test_tp)
 #endif
