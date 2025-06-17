@@ -1371,4 +1371,89 @@ __naked void mult_sign_ovf(void)
 	  __imm(bpf_skb_store_bytes)
 	: __clobber_all);
 }
+
+SEC("socket")
+__description("64-bit addition overflow, all outcomes overflow")
+__success __log_level(2)
+__msg("7: (0f) r5 += r3 {{.*}} R5_w=scalar(smin=0x800003d67e960f7d,umin=0x551ee3d67e960f7d,umax=0xc0149fffffffffff,smin32=0xfe960f7d,umin32=0x7e960f7d,var_off=(0x3d67e960f7d; 0xfffffc298169f082))")
+__retval(0)
+__naked void add64_ovf(void)
+{
+	asm volatile (
+	"call %[bpf_get_prandom_u32];"
+	"r3 = r0;"
+	"r4 = 0x950a43d67e960f7d ll;"
+	"r3 |= r4;"
+	"r5 = 0xc014a00000000000 ll;"
+	"r5 += r3;"
+	"r0 = 0;"
+	"exit"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("32-bit addition overflow, all outcomes overflow")
+__success __log_level(2)
+__msg("5: (0c) w5 += w3 {{.*}} R5_w=scalar(smin=umin=umin32=0x20130018,smax=umax=umax32=0x8000ffff,smin32=0x80000018,var_off=(0x18; 0xffffffe7))")
+__retval(0)
+__naked void add32_ovf(void)
+{
+	asm volatile (
+	"call %[bpf_get_prandom_u32];"
+	"r3 = r0;"
+	"w4 = 0xa0120018;"
+	"w3 |= w4;"
+	"w5 = 0x80010000;"
+	"w5 += w3;"
+	"r0 = 0;"
+	"exit"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("64-bit subtraction overflow, all outcomes underflow")
+__success __log_level(2)
+__msg("6: (1f) r3 -= r1 {{.*}} R3_w=scalar(umin=1,umax=0x8000000000000000)")
+__retval(0)
+__naked void sub64_ovf(void)
+{
+	asm volatile (
+	"call %[bpf_get_prandom_u32];"
+	"r1 = r0;"
+	"r2 = 0x8000000000000000 ll;"
+	"r1 |= r2;"
+	"r3 = 0x0;"
+	"r3 -= r1;"
+	"r0 = 0;"
+	"exit"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("32-bit subtraction overflow, all outcomes underflow")
+__success __log_level(2)
+__msg("5: (1c) w3 -= w1 {{.*}} R3_w=scalar(smin=umin=umin32=1,smax=umax=umax32=0x80000000,var_off=(0x0; 0xffffffff))")
+__retval(0)
+__naked void sub32_ovf(void)
+{
+	asm volatile (
+	"call %[bpf_get_prandom_u32];"
+	"r1 = r0;"
+	"w2 = 0x80000000;"
+	"w1 |= w2;"
+	"r3 = 0x0;"
+	"w3 -= w1;"
+	"r0 = 0;"
+	"exit"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
