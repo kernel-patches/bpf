@@ -837,8 +837,8 @@ static bool is_access_to_paths_allowed(
 	 * restriction.
 	 */
 	while (true) {
-		struct dentry *parent_dentry;
 		const struct landlock_rule *rule;
+		struct path root = {};
 
 		/*
 		 * If at least all accesses allowed on the destination are
@@ -895,34 +895,20 @@ static bool is_access_to_paths_allowed(
 		/* Stops when a rule from each layer grants access. */
 		if (allowed_parent1 && allowed_parent2)
 			break;
-jump_up:
-		if (walker_path.dentry == walker_path.mnt->mnt_root) {
-			if (follow_up(&walker_path)) {
-				/* Ignores hidden mount points. */
-				goto jump_up;
-			} else {
-				/*
-				 * Stops at the real root.  Denies access
-				 * because not all layers have granted access.
-				 */
-				break;
-			}
-		}
-		if (unlikely(IS_ROOT(walker_path.dentry))) {
+
+		if (unlikely(IS_ROOT(walker_path.dentry)) &&
+		    (walker_path.mnt->mnt_flags & MNT_INTERNAL)) {
 			/*
 			 * Stops at disconnected root directories.  Only allows
 			 * access to internal filesystems (e.g. nsfs, which is
 			 * reachable through /proc/<pid>/ns/<namespace>).
 			 */
-			if (walker_path.mnt->mnt_flags & MNT_INTERNAL) {
-				allowed_parent1 = true;
-				allowed_parent2 = true;
-			}
+			allowed_parent1 = true;
+			allowed_parent2 = true;
 			break;
 		}
-		parent_dentry = dget_parent(walker_path.dentry);
-		dput(walker_path.dentry);
-		walker_path.dentry = parent_dentry;
+		if (path_walk_parent(&walker_path, &root))
+			break;
 	}
 	path_put(&walker_path);
 
