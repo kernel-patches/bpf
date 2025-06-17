@@ -1359,3 +1359,13 @@ bool bpf_jit_supports_subprog_tailcalls(void)
 {
 	return true;
 }
+
+bool bpf_jit_bypass_spec_v1(void)
+{
+	return true;
+}
+
+bool bpf_jit_bypass_spec_v4(void)
+{
+	return true;
+}
