@@ -681,6 +681,72 @@ out:
 	return XDP_DROP;
 }
 
+char memset_zero_data[] = "data to be zeroed";
+
+SEC("?tp/syscalls/sys_enter_nanosleep")
+int test_dynptr_memset_zero(void *ctx)
+{
+	__u32 data_sz = sizeof(memset_zero_data);
+	char zeroes[32] = {'\0'};
+	struct bpf_dynptr ptr;
+
+	err = bpf_dynptr_from_mem(memset_zero_data, data_sz, 0, &ptr);
+	err = err ?: bpf_dynptr_memset(&ptr, 0, data_sz);
+	err = err ?: bpf_memcmp(zeroes, memset_zero_data, data_sz);
+
+	return 0;
+}
+
+char memset_zero_offset_data[] = "data to be zeroed partially";
+
+SEC("?tp/syscalls/sys_enter_nanosleep")
+int test_dynptr_memset_zero_offset(void *ctx)
+{
+	char expected[] = "data\0\0\0\0be zeroed partially";
+	__u32 data_sz = sizeof(memset_zero_offset_data);
+	struct bpf_dynptr ptr;
+
+	err = bpf_dynptr_from_mem(memset_zero_offset_data, data_sz, 0, &ptr);
+	err = err ?: bpf_dynptr_adjust(&ptr, 4, 8);
+	err = err ?: bpf_dynptr_memset(&ptr, 0, bpf_dynptr_size(&ptr));
+	err = err ?: bpf_memcmp(expected, memset_zero_offset_data, data_sz);
+
+	return 0;
+}
+
+char memset_overflow_data[] = "memset overflow data";
+
+SEC("?tp/syscalls/sys_enter_nanosleep")
+int test_dynptr_memset_overflow(void *ctx)
+{
+	__u32 data_sz = sizeof(memset_overflow_data);
+	struct bpf_dynptr ptr;
+	int ret;
+
+	err = bpf_dynptr_from_mem(memset_overflow_data, data_sz, 0, &ptr);
+	ret = bpf_dynptr_memset(&ptr, 0, data_sz + 1);
+	if (ret != -E2BIG)
+		err = 1;
+
+	return 0;
+}
+
+SEC("?cgroup_skb/egress")
+int test_dynptr_memset_readonly(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	int ret;
+
+	err = bpf_dynptr_from_skb(skb, 0, &ptr);
+
+	/* cgroup skbs are read only, memset should fail */
+	ret = bpf_dynptr_memset(&ptr, 0, bpf_dynptr_size(&ptr));
+	if (ret != -EINVAL)
+		err = 1;
+
+	return 0;
+}
+
 void *user_ptr;
 /* Contains the copy of the data pointed by user_ptr.
  * Size 384 to make it not fit into a single kernel chunk when copying
