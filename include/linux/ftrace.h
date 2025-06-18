@@ -457,9 +457,6 @@ struct ftrace_ops {
 	struct list_head		subop_list;
 	ftrace_ops_func_t		ops_func;
 	struct ftrace_ops		*managed;
-#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
-	unsigned long			direct_call;
-#endif
 #endif
 };
 
