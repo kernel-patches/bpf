@@ -911,8 +911,8 @@ static u64 notrace __bpf_prog_enter_recur(struct bpf_prog *prog, struct bpf_tram
 	return bpf_prog_start_time();
 }
 
-static void notrace update_prog_stats(struct bpf_prog *prog,
-				      u64 start)
+static __always_inline void notrace update_prog_stats(struct bpf_prog *prog,
+						      u64 start)
 {
 	struct bpf_prog_stats *stats;
 
