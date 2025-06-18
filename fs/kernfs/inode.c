@@ -302,6 +302,20 @@ int kernfs_xattr_get(struct kernfs_node *kn, const char *name,
 	return simple_xattr_get(&attrs->xattrs, name, value, size);
 }
 
+int __kernfs_xattr_get(struct kernfs_node *kn, const char *name,
+		       void *value, size_t size)
+{
+	struct kernfs_iattrs *attrs;
+
+	WARN_ON_ONCE(!rcu_read_lock_held());
+
+	attrs = rcu_dereference(kn->iattr);
+	if (!attrs)
+		return -ENODATA;
+
+	return simple_xattr_get(&attrs->xattrs, name, value, size);
+}
+
 int kernfs_xattr_set(struct kernfs_node *kn, const char *name,
 		     const void *value, size_t size, int flags)
 {

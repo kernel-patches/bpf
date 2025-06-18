@@ -456,6 +456,8 @@ void kernfs_notify(struct kernfs_node *kn);
 
 int kernfs_xattr_get(struct kernfs_node *kn, const char *name,
 		     void *value, size_t size);
+int __kernfs_xattr_get(struct kernfs_node *kn, const char *name,
+		       void *value, size_t size);
 int kernfs_xattr_set(struct kernfs_node *kn, const char *name,
 		     const void *value, size_t size, int flags);
 
