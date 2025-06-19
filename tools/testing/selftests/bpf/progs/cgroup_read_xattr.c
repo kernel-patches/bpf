@@ -134,3 +134,25 @@ out:
 	bpf_cgroup_release(cgrp);
 	return 0;
 }
+
+SEC("cgroup/sendmsg4")
+__success
+int BPF_PROG(cgroup_skb)
+{
+	u64 cgrp_id = bpf_get_current_cgroup_id();
+	struct cgroup *cgrp, *ancestor;
+
+	cgrp = bpf_cgroup_from_id(cgrp_id);
+	if (!cgrp)
+		return 0;
+
+	ancestor = bpf_cgroup_ancestor(cgrp, 1);
+	if (!ancestor)
+		goto out;
+
+	read_xattr(cgrp);
+	bpf_cgroup_release(ancestor);
+out:
+	bpf_cgroup_release(cgrp);
+	return 0;
+}

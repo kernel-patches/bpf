@@ -356,7 +356,7 @@ __bpf_kfunc int bpf_cgroup_read_xattr(struct cgroup *cgroup, const char *name__s
 
 __bpf_kfunc_end_defs();
 
-BTF_KFUNCS_START(bpf_fs_kfunc_set_ids)
+BTF_KFUNCS_START(bpf_lsm_fs_kfunc_set_ids)
 BTF_ID_FLAGS(func, bpf_get_task_exe_file,
 	     KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_put_file, KF_RELEASE)
@@ -366,11 +366,11 @@ BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_set_dentry_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_remove_dentry_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_cgroup_read_xattr, KF_RCU)
-BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
+BTF_KFUNCS_END(bpf_lsm_fs_kfunc_set_ids)
 
-static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
+static int bpf_lsm_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
-	if (!btf_id_set8_contains(&bpf_fs_kfunc_set_ids, kfunc_id) ||
+	if (!btf_id_set8_contains(&bpf_lsm_fs_kfunc_set_ids, kfunc_id) ||
 	    prog->type == BPF_PROG_TYPE_LSM)
 		return 0;
 	return -EACCES;
@@ -407,6 +407,40 @@ bool bpf_lsm_has_d_inode_locked(const struct bpf_prog *prog)
 	return btf_id_set_contains(&d_inode_locked_hooks, prog->aux->attach_btf_id);
 }
 
+static const struct btf_kfunc_id_set bpf_lsm_fs_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &bpf_lsm_fs_kfunc_set_ids,
+	.filter = bpf_lsm_fs_kfuncs_filter,
+};
+
+/*
+ * This set contains kfuncs available to BPF programs of cgroup type and
+ * struct_ops type.
+ */
+BTF_KFUNCS_START(bpf_fs_kfunc_set_ids)
+BTF_ID_FLAGS(func, bpf_cgroup_read_xattr, KF_RCU)
+BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
+
+static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	if (!btf_id_set8_contains(&bpf_fs_kfunc_set_ids, kfunc_id))
+		return 0;
+	switch (prog->type) {
+	case BPF_PROG_TYPE_LSM:
+	case BPF_PROG_TYPE_STRUCT_OPS:
+	case BPF_PROG_TYPE_CGROUP_SKB:
+	case BPF_PROG_TYPE_CGROUP_SOCK:
+	case BPF_PROG_TYPE_CGROUP_DEVICE:
+	case BPF_PROG_TYPE_CGROUP_SOCK_ADDR:
+	case BPF_PROG_TYPE_CGROUP_SYSCTL:
+	case BPF_PROG_TYPE_CGROUP_SOCKOPT:
+		return 0;
+	default:
+		break;
+	}
+	return -EACCES;
+}
+
 static const struct btf_kfunc_id_set bpf_fs_kfunc_set = {
 	.owner = THIS_MODULE,
 	.set = &bpf_fs_kfunc_set_ids,
@@ -415,7 +449,16 @@ static const struct btf_kfunc_id_set bpf_fs_kfunc_set = {
 
 static int __init bpf_fs_kfuncs_init(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_LSM, &bpf_fs_kfunc_set);
+	int ret;
+
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_LSM, &bpf_lsm_fs_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &bpf_fs_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SKB, &bpf_fs_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SOCK, &bpf_fs_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_DEVICE, &bpf_fs_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SOCK_ADDR, &bpf_fs_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SYSCTL, &bpf_fs_kfunc_set);
+	return ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SOCKOPT, &bpf_fs_kfunc_set);
 }
 
 late_initcall(bpf_fs_kfuncs_init);
