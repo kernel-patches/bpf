@@ -2438,6 +2438,7 @@ static void bpf_prog_show_fdinfo(struct seq_file *m, struct file *filp)
 	const struct bpf_prog *prog = filp->private_data;
 	char prog_tag[sizeof(prog->tag) * 2 + 1] = { };
 	struct bpf_prog_kstats stats;
+	u64 now = ktime_get_boottime_ns();
 
 	bpf_prog_get_stats(prog, &stats);
 	bin2hex(prog_tag, prog->tag, sizeof(prog->tag));
@@ -2450,7 +2451,8 @@ static void bpf_prog_show_fdinfo(struct seq_file *m, struct file *filp)
 		   "run_time_ns:\t%llu\n"
 		   "run_cnt:\t%llu\n"
 		   "recursion_misses:\t%llu\n"
-		   "verified_insns:\t%u\n",
+		   "verified_insns:\t%u\n"
+		   "load_time_s:\t%llu\n",
 		   prog->type,
 		   prog->jited,
 		   prog_tag,
@@ -2459,7 +2461,8 @@ static void bpf_prog_show_fdinfo(struct seq_file *m, struct file *filp)
 		   stats.nsecs,
 		   stats.cnt,
 		   stats.misses,
-		   prog->aux->verified_insns);
+		   prog->aux->verified_insns,
+		   (now - prog->aux->load_time) / NSEC_PER_SEC);
 }
 #endif
 
