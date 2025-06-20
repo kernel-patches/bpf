@@ -19811,7 +19811,14 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 	return 0;
 }
 
-static int do_check(struct bpf_verifier_env *env)
+#if defined(CONFIG_CC_IS_CLANG) && CONFIG_CLANG_VERSION < 180100
+/* old clang versions cause excessive stack usage here */
+#define __workaround_kasan  __disable_sanitizer_instrumentation
+#else
+#define __workaround_kasan
+#endif
+
+static __workaround_kasan int do_check(struct bpf_verifier_env *env)
 {
 	bool pop_log = !(env->log.level & BPF_LOG_LEVEL2);
 	struct bpf_verifier_state *state = env->cur_state;
@@ -21818,7 +21825,7 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 /* Do various post-verification rewrites in a single program pass.
  * These rewrites simplify JIT and interpreter implementations.
  */
-static int do_misc_fixups(struct bpf_verifier_env *env)
+static __workaround_kasan int do_misc_fixups(struct bpf_verifier_env *env)
 {
 	struct bpf_prog *prog = env->prog;
 	enum bpf_attach_type eatype = prog->expected_attach_type;
