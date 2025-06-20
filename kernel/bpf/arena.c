@@ -48,6 +48,7 @@ struct bpf_arena {
 	u64 user_vm_end;
 	struct vm_struct *kern_vm;
 	struct range_tree rt;
+	struct range_tree rt_guard;
 	struct list_head vma_list;
 	struct mutex lock;
 };
@@ -143,6 +144,20 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 		bpf_map_area_free(arena);
 		goto err;
 	}
+
+	/*
+	 * Use the same semantics as the main range tree to reuse
+	 * its methods: Present ranges are all unguarded, while
+	 * absent ones are guarded.
+	 */
+	range_tree_init(&arena->rt_guard);
+	err = range_tree_set(&arena->rt_guard, 0, attr->max_entries);
+	if (err) {
+		range_tree_destroy(&arena->rt);
+		bpf_map_area_free(arena);
+		goto err;
+	}
+
 	mutex_init(&arena->lock);
 
 	return &arena->map;
@@ -193,6 +208,7 @@ static void arena_map_free(struct bpf_map *map)
 	apply_to_existing_page_range(&init_mm, bpf_arena_get_kern_vm_start(arena),
 				     KERN_VM_SZ - GUARD_SZ, existing_page_cb, NULL);
 	free_vm_area(arena->kern_vm);
+	range_tree_destroy(&arena->rt_guard);
 	range_tree_destroy(&arena->rt);
 	bpf_map_area_free(arena);
 }
@@ -280,6 +296,11 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 
 	if (arena->map.map_flags & BPF_F_SEGV_ON_FAULT)
 		/* User space requested to segfault when page is not allocated by bpf prog */
+		return VM_FAULT_SIGSEGV;
+
+	/* Make sure the page is not guarded. */
+	ret = is_range_tree_set(&arena->rt_guard, vmf->pgoff, 1);
+	if (ret)
 		return VM_FAULT_SIGSEGV;
 
 	ret = range_tree_clear(&arena->rt, vmf->pgoff, 1);
@@ -456,12 +477,17 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 		ret = is_range_tree_set(&arena->rt, pgoff, page_cnt);
 		if (ret)
 			goto out_free_pages;
-		ret = range_tree_clear(&arena->rt, pgoff, page_cnt);
 	} else {
 		ret = pgoff = range_tree_find(&arena->rt, page_cnt);
-		if (pgoff >= 0)
-			ret = range_tree_clear(&arena->rt, pgoff, page_cnt);
+		if (pgoff < 0)
+			goto out_free_pages;
 	}
+
+	ret = is_range_tree_set(&arena->rt_guard, pgoff, page_cnt);
+	if (ret)
+		goto out_free_pages;
+
+	ret = range_tree_clear(&arena->rt, pgoff, page_cnt);
 	if (ret)
 		goto out_free_pages;
 
@@ -512,6 +538,7 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt)
 	u64 full_uaddr, uaddr_end;
 	long kaddr, pgoff, i;
 	struct page *page;
+	int ret;
 
 	/* only aligned lower 32-bit are relevant */
 	uaddr = (u32)uaddr;
@@ -525,7 +552,14 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt)
 
 	guard(mutex)(&arena->lock);
 
+
 	pgoff = compute_pgoff(arena, uaddr);
+
+	/* Do not free regions that include guarded pages. */
+	ret = is_range_tree_set(&arena->rt_guard, pgoff, page_cnt);
+	if (ret)
+		return;
+
 	/* clear range */
 	range_tree_set(&arena->rt, pgoff, page_cnt);
 
@@ -548,6 +582,46 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt)
 		vm_area_unmap_pages(arena->kern_vm, kaddr, kaddr + PAGE_SIZE);
 		__free_page(page);
 	}
+}
+
+static int arena_guard_pages(struct bpf_arena *arena, long uaddr, u32 page_cnt)
+{
+	long page_cnt_max = (arena->user_vm_end - arena->user_vm_start) >> PAGE_SHIFT;
+	long pgoff;
+	int ret;
+
+	if (uaddr & ~PAGE_MASK)
+		return 0;
+
+	pgoff = compute_pgoff(arena, uaddr);
+	if (pgoff + page_cnt > page_cnt_max)
+		return -EINVAL;
+
+	guard(mutex)(&arena->lock);
+
+	/* Make sure we have not already guarded the pages. */
+	ret = is_range_tree_set(&arena->rt_guard, pgoff, page_cnt);
+	if (ret)
+		return -EALREADY;
+
+	/* Cannot guard already allocated pages. */
+	ret = is_range_tree_set(&arena->rt, pgoff, page_cnt);
+	if (ret)
+		return -EINVAL;
+
+	/* Reserve the region. */
+	ret = range_tree_clear(&arena->rt_guard, pgoff, page_cnt);
+	if (ret)
+		return ret;
+
+	/* Also "allocate" the region to prevent it from being allocated. */
+	ret = range_tree_clear(&arena->rt, pgoff, page_cnt);
+	if (ret) {
+		range_tree_set(&arena->rt_guard, pgoff, page_cnt);
+		return ret;
+	}
+
+	return 0;
 }
 
 __bpf_kfunc_start_defs();
@@ -573,11 +647,26 @@ __bpf_kfunc void bpf_arena_free_pages(void *p__map, void *ptr__ign, u32 page_cnt
 		return;
 	arena_free_pages(arena, (long)ptr__ign, page_cnt);
 }
+
+__bpf_kfunc int bpf_arena_guard_pages(void *p__map, void *ptr__ign, u32 page_cnt)
+{
+	struct bpf_map *map = p__map;
+	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+
+	if (map->map_type != BPF_MAP_TYPE_ARENA)
+		return -EINVAL;
+
+	if (!page_cnt)
+		return 0;
+
+	return arena_guard_pages(arena, (long)ptr__ign, page_cnt);
+}
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(arena_kfuncs)
 BTF_ID_FLAGS(func, bpf_arena_alloc_pages, KF_TRUSTED_ARGS | KF_SLEEPABLE | KF_ARENA_RET | KF_ARENA_ARG2)
 BTF_ID_FLAGS(func, bpf_arena_free_pages, KF_TRUSTED_ARGS | KF_SLEEPABLE | KF_ARENA_ARG2)
+BTF_ID_FLAGS(func, bpf_arena_guard_pages, KF_TRUSTED_ARGS | KF_SLEEPABLE | KF_ARENA_ARG2)
 BTF_KFUNCS_END(arena_kfuncs)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
