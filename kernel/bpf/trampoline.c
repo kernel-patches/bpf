@@ -911,18 +911,16 @@ static u64 notrace __bpf_prog_enter_recur(struct bpf_prog *prog, struct bpf_tram
 	return bpf_prog_start_time();
 }
 
-static void notrace update_prog_stats(struct bpf_prog *prog,
-				      u64 start)
+static void notrace __update_prog_stats(struct bpf_prog *prog, u64 start)
 {
 	struct bpf_prog_stats *stats;
 
-	if (static_branch_unlikely(&bpf_stats_enabled_key) &&
-	    /* static_key could be enabled in __bpf_prog_enter*
-	     * and disabled in __bpf_prog_exit*.
-	     * And vice versa.
-	     * Hence check that 'start' is valid.
-	     */
-	    start > NO_START_TIME) {
+	/* static_key could be enabled in __bpf_prog_enter*
+	 * and disabled in __bpf_prog_exit*.
+	 * And vice versa.
+	 * Hence check that 'start' is valid.
+	 */
+	if (start > NO_START_TIME) {
 		u64 duration = sched_clock() - start;
 		unsigned long flags;
 
@@ -932,6 +930,13 @@ static void notrace update_prog_stats(struct bpf_prog *prog,
 		u64_stats_add(&stats->nsecs, duration);
 		u64_stats_update_end_irqrestore(&stats->syncp, flags);
 	}
+}
+
+static __always_inline void notrace update_prog_stats(struct bpf_prog *prog,
+						      u64 start)
+{
+	if (static_branch_unlikely(&bpf_stats_enabled_key))
+		__update_prog_stats(prog, start);
 }
 
 static void notrace __bpf_prog_exit_recur(struct bpf_prog *prog, u64 start,
