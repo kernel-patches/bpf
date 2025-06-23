@@ -1,0 +1,59 @@
+From 4b65d5ae971430287855a89635a184c489bd02a5 Mon Sep 17 00:00:00 2001
+From: Saket Kumar Bhaskar <skb99@linux.ibm.com>
+Date: Mon, 12 May 2025 14:41:07 +0530
+Subject: [PATCH 1/3] selftests/bpf: Fix bpf selftest build error
+
+On linux-next, build for bpf selftest displays an error due to
+mismatch in the expected function signature of bpf_testmod_test_read
+and bpf_testmod_test_write.
+
+Commit 97d06802d10a ("sysfs: constify bin_attribute argument of bin_attribute::read/write()")
+changed the required type for struct bin_attribute to const struct bin_attribute.
+
+To resolve the error, update corresponding signature for the callback.
+
+Fixes: 97d06802d10a ("sysfs: constify bin_attribute argument of bin_attribute::read/write()")
+Reported-by: Venkat Rao Bagalkote <venkat88@linux.ibm.com>
+Closes: https://lore.kernel.org/all/e915da49-2b9a-4c4c-a34f-877f378129f6@linux.ibm.com/
+Tested-by: Venkat Rao Bagalkote <venkat88@linux.ibm.com>
+Signed-off-by: Saket Kumar Bhaskar <skb99@linux.ibm.com>
+Link: https://lore.kernel.org/r/20250512091108.2015615-1-skb99@linux.ibm.com
+Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+---
+ tools/testing/selftests/bpf/test_kmods/bpf_testmod.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/tools/testing/selftests/bpf/test_kmods/bpf_testmod.c b/tools/testing/selftests/bpf/test_kmods/bpf_testmod.c
+index e6c248e3ae54..e9e918cdf31f 100644
+--- a/tools/testing/selftests/bpf/test_kmods/bpf_testmod.c
++++ b/tools/testing/selftests/bpf/test_kmods/bpf_testmod.c
+@@ -385,7 +385,7 @@ int bpf_testmod_fentry_ok;
+ 
+ noinline ssize_t
+ bpf_testmod_test_read(struct file *file, struct kobject *kobj,
+-		      struct bin_attribute *bin_attr,
++		      const struct bin_attribute *bin_attr,
+ 		      char *buf, loff_t off, size_t len)
+ {
+ 	struct bpf_testmod_test_read_ctx ctx = {
+@@ -465,7 +465,7 @@ ALLOW_ERROR_INJECTION(bpf_testmod_test_read, ERRNO);
+ 
+ noinline ssize_t
+ bpf_testmod_test_write(struct file *file, struct kobject *kobj,
+-		      struct bin_attribute *bin_attr,
++		      const struct bin_attribute *bin_attr,
+ 		      char *buf, loff_t off, size_t len)
+ {
+ 	struct bpf_testmod_test_write_ctx ctx = {
+@@ -567,7 +567,7 @@ static void testmod_unregister_uprobe(void)
+ 
+ static ssize_t
+ bpf_testmod_uprobe_write(struct file *file, struct kobject *kobj,
+-			 struct bin_attribute *bin_attr,
++			 const struct bin_attribute *bin_attr,
+ 			 char *buf, loff_t off, size_t len)
+ {
+ 	unsigned long offset = 0;
+-- 
+2.49.0
+

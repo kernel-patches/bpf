@@ -1,0 +1,59 @@
+From baa39c169dd526cb0186187fc44ec462266efcc6 Mon Sep 17 00:00:00 2001
+From: Yonghong Song <yonghong.song@linux.dev>
+Date: Thu, 29 May 2025 13:11:51 -0700
+Subject: [PATCH 2/3] selftests/bpf: Fix selftest
+ btf_tag/btf_type_tag_percpu_vmlinux_helper failure
+
+Ihor Solodrai reported selftest 'btf_tag/btf_type_tag_percpu_vmlinux_helper'
+failure ([1]) during 6.16 merge window. The failure log:
+
+  ...
+  7: (15) if r0 == 0x0 goto pc+1        ; R0=ptr_css_rstat_cpu()
+  ; *(volatile int *)rstat; @ btf_type_tag_percpu.c:68
+  8: (61) r1 = *(u32 *)(r0 +0)
+  cannot access ptr member updated_children with moff 0 in struct css_rstat_cpu with off 0 size 4
+
+Two changes are needed. First, 'struct cgroup_rstat_cpu' needs to be
+replaced with 'struct css_rstat_cpu' to be consistent with new data
+structure. Second, layout of 'css_rstat_cpu' is changed compared
+to 'cgroup_rstat_cpu'. The first member becomes a pointer so
+the bpf prog needs to do 8-byte load instead of 4-byte load.
+
+  [1] https://lore.kernel.org/bpf/6f688f2e-7d26-423a-9029-d1b1ef1c938a@linux.dev/
+
+Cc: Ihor Solodrai <ihor.solodrai@linux.dev>
+Cc: JP Kobryn <inwardvessel@gmail.com>
+Signed-off-by: Yonghong Song <yonghong.song@linux.dev>
+Acked-by: JP Kobryn <inwardvessel@gmail.com>
+Link: https://lore.kernel.org/r/20250529201151.1787575-1-yonghong.song@linux.dev
+Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+---
+ tools/testing/selftests/bpf/progs/btf_type_tag_percpu.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/tools/testing/selftests/bpf/progs/btf_type_tag_percpu.c b/tools/testing/selftests/bpf/progs/btf_type_tag_percpu.c
+index 69f81cb555ca..d93f68024cc6 100644
+--- a/tools/testing/selftests/bpf/progs/btf_type_tag_percpu.c
++++ b/tools/testing/selftests/bpf/progs/btf_type_tag_percpu.c
+@@ -57,15 +57,15 @@ int BPF_PROG(test_percpu_load, struct cgroup *cgrp, const char *path)
+ SEC("tp_btf/cgroup_mkdir")
+ int BPF_PROG(test_percpu_helper, struct cgroup *cgrp, const char *path)
+ {
+-	struct cgroup_rstat_cpu *rstat;
++	struct css_rstat_cpu *rstat;
+ 	__u32 cpu;
+ 
+ 	cpu = bpf_get_smp_processor_id();
+-	rstat = (struct cgroup_rstat_cpu *)bpf_per_cpu_ptr(
++	rstat = (struct css_rstat_cpu *)bpf_per_cpu_ptr(
+ 			cgrp->self.rstat_cpu, cpu);
+ 	if (rstat) {
+ 		/* READ_ONCE */
+-		*(volatile int *)rstat;
++		*(volatile long *)rstat;
+ 	}
+ 
+ 	return 0;
+-- 
+2.49.0
+
