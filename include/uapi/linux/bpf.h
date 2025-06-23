@@ -1359,7 +1359,11 @@ enum {
 	BPF_NOEXIST	= 1, /* create new element if it didn't exist */
 	BPF_EXIST	= 2, /* update existing element */
 	BPF_F_LOCK	= 4, /* spin_lock-ed map_lookup/map_update */
+	BPF_F_CPU	= 8, /* map_update for percpu_array */
 };
+
+/* indicate all CPUs for updating percpu_array map */
+#define BPF_ALL_CPU	0xFFFFFFFF
 
 /* flags for BPF_MAP_CREATE command */
 enum {
@@ -1514,6 +1518,7 @@ union bpf_attr {
 			__aligned_u64 next_key;
 		};
 		__u64		flags;
+		__u32		cpu;
 	};
 
 	struct { /* struct used by BPF_MAP_*_BATCH commands */
@@ -1531,6 +1536,7 @@ union bpf_attr {
 		__u32		map_fd;
 		__u64		elem_flags;
 		__u64		flags;
+		__u32		cpu;
 	} batch;
 
 	struct { /* anonymous struct used by BPF_PROG_LOAD command */
