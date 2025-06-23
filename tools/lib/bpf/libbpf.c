@@ -10636,6 +10636,34 @@ int bpf_map__lookup_elem(const struct bpf_map *map,
 	return bpf_map_lookup_elem_flags(map->fd, key, value, flags);
 }
 
+int bpf_map__lookup_elem_opts(const struct bpf_map *map, const void *key,
+			      size_t key_sz, void *value, size_t value_sz,
+			      const struct bpf_map_lookup_elem_opts *opts)
+{
+	int nr_cpus = libbpf_num_possible_cpus();
+	__u32 cpu = OPTS_GET(opts, cpu, nr_cpus);
+	__u64 flags = OPTS_GET(opts, flags, 0);
+	int err;
+
+	if (flags & BPF_F_CPU) {
+		if (map->def.type != BPF_MAP_TYPE_PERCPU_ARRAY)
+			return -EINVAL;
+		if (cpu >= nr_cpus)
+			return -E2BIG;
+		if (map->def.value_size != value_sz) {
+			pr_warn("map '%s': unexpected value size %zu provided, expected %u\n",
+				map->name, value_sz, map->def.value_size);
+			return -EINVAL;
+		}
+	} else {
+		err = validate_map_op(map, key_sz, value_sz, true);
+		if (err)
+			return libbpf_err(err);
+	}
+
+	return bpf_map_lookup_elem_opts(map->fd, key, value, opts);
+}
+
 int bpf_map__update_elem(const struct bpf_map *map,
 			 const void *key, size_t key_sz,
 			 const void *value, size_t value_sz, __u64 flags)
@@ -10647,6 +10675,34 @@ int bpf_map__update_elem(const struct bpf_map *map,
 		return libbpf_err(err);
 
 	return bpf_map_update_elem(map->fd, key, value, flags);
+}
+
+int bpf_map__update_elem_opts(const struct bpf_map *map, const void *key,
+			      size_t key_sz, const void *value, size_t value_sz,
+			      const struct bpf_map_update_elem_opts *opts)
+{
+	int nr_cpus = libbpf_num_possible_cpus();
+	__u32 cpu = OPTS_GET(opts, cpu, nr_cpus);
+	__u64 flags = OPTS_GET(opts, flags, 0);
+	int err;
+
+	if (flags & BPF_F_CPU) {
+		if (map->def.type != BPF_MAP_TYPE_PERCPU_ARRAY)
+			return -EINVAL;
+		if (cpu != BPF_ALL_CPU && cpu >= nr_cpus)
+			return -E2BIG;
+		if (map->def.value_size != value_sz) {
+			pr_warn("map '%s': unexpected value size %zu provided, expected %u\n",
+				map->name, value_sz, map->def.value_size);
+			return -EINVAL;
+		}
+	} else {
+		err = validate_map_op(map, key_sz, value_sz, true);
+		if (err)
+			return libbpf_err(err);
+	}
+
+	return bpf_map_update_elem_opts(map->fd, key, value, opts);
 }
 
 int bpf_map__delete_elem(const struct bpf_map *map,
