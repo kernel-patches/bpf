@@ -402,6 +402,24 @@ int bpf_map_update_elem(int fd, const void *key, const void *value,
 	return libbpf_err_errno(ret);
 }
 
+int bpf_map_update_elem_opts(int fd, const void *key, const void *value,
+			     const struct bpf_map_update_elem_opts *opts)
+{
+	const size_t attr_sz = offsetofend(union bpf_attr, cpu);
+	union bpf_attr attr;
+	int ret;
+
+	memset(&attr, 0, attr_sz);
+	attr.map_fd = fd;
+	attr.key = ptr_to_u64(key);
+	attr.value = ptr_to_u64(value);
+	attr.flags = OPTS_GET(opts, flags, 0);
+	attr.cpu = OPTS_GET(opts, cpu, BPF_ALL_CPU);
+
+	ret = sys_bpf(BPF_MAP_UPDATE_ELEM, &attr, attr_sz);
+	return libbpf_err_errno(ret);
+}
+
 int bpf_map_lookup_elem(int fd, const void *key, void *value)
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, flags);
@@ -428,6 +446,24 @@ int bpf_map_lookup_elem_flags(int fd, const void *key, void *value, __u64 flags)
 	attr.key = ptr_to_u64(key);
 	attr.value = ptr_to_u64(value);
 	attr.flags = flags;
+
+	ret = sys_bpf(BPF_MAP_LOOKUP_ELEM, &attr, attr_sz);
+	return libbpf_err_errno(ret);
+}
+
+int bpf_map_lookup_elem_opts(int fd, const void *key, void *value,
+			     const struct bpf_map_lookup_elem_opts *opts)
+{
+	const size_t attr_sz = offsetofend(union bpf_attr, cpu);
+	union bpf_attr attr;
+	int ret;
+
+	memset(&attr, 0, attr_sz);
+	attr.map_fd = fd;
+	attr.key = ptr_to_u64(key);
+	attr.value = ptr_to_u64(value);
+	attr.flags = OPTS_GET(opts, flags, 0);
+	attr.cpu = OPTS_GET(opts, cpu, BPF_ALL_CPU);
 
 	ret = sys_bpf(BPF_MAP_LOOKUP_ELEM, &attr, attr_sz);
 	return libbpf_err_errno(ret);
@@ -542,6 +578,7 @@ static int bpf_map_batch_common(int cmd, int fd, void  *in_batch,
 	attr.batch.count = *count;
 	attr.batch.elem_flags  = OPTS_GET(opts, elem_flags, 0);
 	attr.batch.flags = OPTS_GET(opts, flags, 0);
+	attr.batch.cpu = OPTS_GET(opts, cpu, BPF_ALL_CPU);
 
 	ret = sys_bpf(cmd, &attr, attr_sz);
 	*count = attr.batch.count;

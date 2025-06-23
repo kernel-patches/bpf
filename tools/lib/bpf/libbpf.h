@@ -1186,6 +1186,28 @@ LIBBPF_API int bpf_map__lookup_elem(const struct bpf_map *map,
 				    void *value, size_t value_sz, __u64 flags);
 
 /**
+ * @brief **bpf_map__lookup_elem_opts()** allows to lookup BPF map value
+ * corresponding to provided key with options to lookup percpu map.
+ * @param map BPF map to lookup element in
+ * @param key pointer to memory containing bytes of the key used for lookup
+ * @param key_sz size in bytes of key data, needs to match BPF map definition's **key_size**
+ * @param value pointer to memory in which looked up value will be stored
+ * @param value_sz size in byte of value data memory; it has to match BPF map
+ * definition's **value_size**. For per-CPU BPF maps value size can be
+ * definition's **value_size** if **BPF_F_CPU** is specified in **opts->flags**,
+ * or the size described in **bpf_map__lookup_elem()**.
+ * @opts extra options passed to kernel for this operation
+ * @return 0, on success; negative error, otherwise
+ *
+ * **bpf_map__lookup_elem_opts()** is high-level equivalent of
+ * **bpf_map_lookup_elem_opts()** API with added check for key and value size.
+ */
+LIBBPF_API int bpf_map__lookup_elem_opts(const struct bpf_map *map,
+					 const void *key, size_t key_sz,
+					 void *value, size_t value_sz,
+					 const struct bpf_map_lookup_elem_opts *opts);
+
+/**
  * @brief **bpf_map__update_elem()** allows to insert or update value in BPF
  * map that corresponds to provided key.
  * @param map BPF map to insert to or update element in
@@ -1208,6 +1230,29 @@ LIBBPF_API int bpf_map__lookup_elem(const struct bpf_map *map,
 LIBBPF_API int bpf_map__update_elem(const struct bpf_map *map,
 				    const void *key, size_t key_sz,
 				    const void *value, size_t value_sz, __u64 flags);
+
+/**
+ * @brief **bpf_map__update_elem_opts()** allows to insert or update value in BPF
+ * map that corresponds to provided key with options for percpu maps.
+ * @param map BPF map to insert to or update element in
+ * @param key pointer to memory containing bytes of the key
+ * @param key_sz size in bytes of key data, needs to match BPF map definition's **key_size**
+ * @param value pointer to memory containing bytes of the value
+ * @param value_sz size in byte of value data memory; it has to match BPF map
+ * definition's **value_size**. For per-CPU BPF maps value size can be
+ * definition's **value_size** if **BPF_F_CPU** is specified in **opts->flags**,
+ * or the size described in **bpf_map__update_elem()**.
+ * @opts extra options passed to kernel for this operation
+ * @flags extra flags passed to kernel for this operation
+ * @return 0, on success; negative error, otherwise
+ *
+ * **bpf_map__update_elem_opts()** is high-level equivalent of
+ * **bpf_map_update_elem_opts()** API with added check for key and value size.
+ */
+LIBBPF_API int bpf_map__update_elem_opts(const struct bpf_map *map,
+					 const void *key, size_t key_sz,
+					 const void *value, size_t value_sz,
+					 const struct bpf_map_update_elem_opts *opts);
 
 /**
  * @brief **bpf_map__delete_elem()** allows to delete element in BPF map that
