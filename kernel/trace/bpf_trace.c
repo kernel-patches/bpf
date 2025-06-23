@@ -3013,7 +3013,21 @@ error:
 	kvfree(cookies);
 	return err;
 }
+
+void bpf_kprobe_multi_link_type_show(const struct bpf_link *link, char *link_type,
+				     int len)
+{
+	struct bpf_kprobe_multi_link *kmulti_link;
+
+	kmulti_link = container_of(link, struct bpf_kprobe_multi_link, link);
+	strscpy(link_type, kmulti_link->flags == BPF_F_KPROBE_MULTI_RETURN ?
+				"kretprobe_multi" : "kprobe_multi", len);
+}
 #else /* !CONFIG_FPROBE */
+void bpf_kprobe_multi_link_type_show(const struct bpf_link *link, char *link_type,
+				     int len)
+{
+}
 int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {
 	return -EOPNOTSUPP;
@@ -3404,7 +3418,21 @@ error_path_put:
 	path_put(&path);
 	return err;
 }
+
+void bpf_uprobe_multi_link_type_show(const struct bpf_link *link, char *link_type,
+				     int len)
+{
+	struct bpf_uprobe_multi_link *umulti_link;
+
+	umulti_link = container_of(link, struct bpf_uprobe_multi_link, link);
+	strscpy(link_type, umulti_link->flags == BPF_F_UPROBE_MULTI_RETURN ?
+				"uretprobe_multi" : "uprobe_multi", len);
+}
 #else /* !CONFIG_UPROBES */
+void bpf_uprobe_multi_link_type_show(const struct bpf_link *link, char *link_type,
+				     int len)
+{
+}
 int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {
 	return -EOPNOTSUPP;

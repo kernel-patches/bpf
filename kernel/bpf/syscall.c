@@ -3226,9 +3226,16 @@ static void bpf_link_show_fdinfo(struct seq_file *m, struct file *filp)
 	const struct bpf_prog *prog = link->prog;
 	enum bpf_link_type type = link->type;
 	char prog_tag[sizeof(prog->tag) * 2 + 1] = { };
+	char link_type[64] = {};
 
 	if (type < ARRAY_SIZE(bpf_link_type_strs) && bpf_link_type_strs[type]) {
-		seq_printf(m, "link_type:\t%s\n", bpf_link_type_strs[type]);
+		if (link->type == BPF_LINK_TYPE_KPROBE_MULTI)
+			bpf_kprobe_multi_link_type_show(link, link_type, sizeof(link_type));
+		else if (link->type == BPF_LINK_TYPE_UPROBE_MULTI)
+			bpf_uprobe_multi_link_type_show(link, link_type, sizeof(link_type));
+		else
+			strscpy(link_type, bpf_link_type_strs[type], sizeof(link_type));
+		seq_printf(m, "link_type:\t%s\n", link_type);
 	} else {
 		WARN_ONCE(1, "missing BPF_LINK_TYPE(...) for link type %u\n", type);
 		seq_printf(m, "link_type:\t<%u>\n", type);
