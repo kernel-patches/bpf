@@ -381,8 +381,7 @@ __bpf_kfunc int bpf_stream_vprintk(int stream_id, const char *fmt__str, const vo
 		return ret;
 
 	ret = bstr_printf(data.buf, MAX_BPRINTF_BUF, fmt__str, data.bin_args);
-	/* If the string was truncated, we only wrote until the size of buffer. */
-	ret = min_t(u32, ret + 1, MAX_BPRINTF_BUF);
+	/* Exclude NULL byte during push. */
 	ret = bpf_stream_push_str(stream, data.buf, ret);
 	bpf_bprintf_cleanup(&data);
 
@@ -444,9 +443,8 @@ int bpf_stream_stage_printk(struct bpf_stream_stage *ss, const char *fmt, ...)
 	va_start(args, fmt);
 	ret = vsnprintf(buf->buf, ARRAY_SIZE(buf->buf), fmt, args);
 	va_end(args);
-	/* If the string was truncated, we only wrote until the size of buffer. */
-	ret = min_t(u32, ret + 1, ARRAY_SIZE(buf->buf));
 	ss->len += ret;
+	/* Exclude NULL byte during push. */
 	ret = __bpf_stream_push_str(&ss->log, buf->buf, ret);
 	bpf_put_buffers();
 	return ret;
