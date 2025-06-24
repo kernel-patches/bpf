@@ -24,22 +24,22 @@ struct {
 } stream_error_arr[] = {
 	{
 		offsetof(struct stream, progs.stream_cond_break),
-		"ERROR: Timeout detected for may_goto instruction\n\0"
-		"CPU: [0-9]+ UID: 0 PID: [0-9]+ Comm: test_progs\n\0"
-		"Call trace:\n\0"
-		"([a-zA-Z_][a-zA-Z0-9_]*\\+0x[0-9a-fA-F]+/0x[0-9a-fA-F]+\n\0"
-		"|[ \t]+[^\n]+\n\0)*",
+		"ERROR: Timeout detected for may_goto instruction\n"
+		"CPU: [0-9]+ UID: 0 PID: [0-9]+ Comm: test_progs\n"
+		"Call trace:\n"
+		"([a-zA-Z_][a-zA-Z0-9_]*\\+0x[0-9a-fA-F]+/0x[0-9a-fA-F]+\n"
+		"|[ \t]+[^\n]+\n)*",
 	},
 	{
 		offsetof(struct stream, progs.stream_deadlock),
-		"ERROR: AA or ABBA deadlock detected for bpf_res_spin_lock\n\0"
-		"Attempted lock   = (0x[0-9a-fA-F]+)\n\0"
-		"Total held locks = 1\n\0"
-		"Held lock\\[ 0\\] = \\1\n\0"  // Lock address must match
-		"CPU: [0-9]+ UID: 0 PID: [0-9]+ Comm: test_progs\n\0"
-		"Call trace:\n\0"
-		"([a-zA-Z_][a-zA-Z0-9_]*\\+0x[0-9a-fA-F]+/0x[0-9a-fA-F]+\n\0"
-		"|[ \t]+[^\n]+\n\0)*",
+		"ERROR: AA or ABBA deadlock detected for bpf_res_spin_lock\n"
+		"Attempted lock   = (0x[0-9a-fA-F]+)\n"
+		"Total held locks = 1\n"
+		"Held lock\\[ 0\\] = \\1\n"  // Lock address must match
+		"CPU: [0-9]+ UID: 0 PID: [0-9]+ Comm: test_progs\n"
+		"Call trace:\n"
+		"([a-zA-Z_][a-zA-Z0-9_]*\\+0x[0-9a-fA-F]+/0x[0-9a-fA-F]+\n"
+		"|[ \t]+[^\n]+\n)*",
 	},
 };
 
@@ -60,9 +60,9 @@ void test_stream_errors(void)
 {
 	LIBBPF_OPTS(bpf_test_run_opts, opts);
 	LIBBPF_OPTS(bpf_prog_stream_read_opts, ropts);
-	char buf[1024] = {};
 	struct stream *skel;
 	int ret, prog_fd;
+	char buf[1024];
 
 	skel = stream__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "stream__open_and_load"))
@@ -130,7 +130,7 @@ void test_stream_syscall(void)
 	ret = bpf_prog_stream_read(prog_fd, BPF_STREAM_STDOUT, buf, 2, NULL);
 	ASSERT_EQ(ret, 2, "bytes");
 	ret = bpf_prog_stream_read(prog_fd, BPF_STREAM_STDOUT, buf, 2, NULL);
-	ASSERT_EQ(ret, 2, "bytes");
+	ASSERT_EQ(ret, 1, "bytes");
 	ret = bpf_prog_stream_read(prog_fd, BPF_STREAM_STDOUT, buf, 1, &ropts);
 	ASSERT_EQ(ret, 0, "no bytes stdout");
 	ret = bpf_prog_stream_read(prog_fd, BPF_STREAM_STDERR, buf, 1, &ropts);
