@@ -857,27 +857,27 @@ const struct btf_type *btf_type_by_id(const struct btf *btf, u32 type_id)
 }
 EXPORT_SYMBOL_GPL(btf_type_by_id);
 
-/*
- * Regular int is not a bit field and it must be either
- * u8/u16/u32/u64 or __int128.
- */
-static bool btf_type_int_is_regular(const struct btf_type *t)
+static bool btf_type_int_is_regular(const struct btf_type *t, size_t expected_size)
 {
-	u8 nr_bits, nr_bytes;
-	u32 int_data;
+	u32 int_data = btf_type_int(t);
+	u8 nr_bits = BTF_INT_BITS(int_data);
+	u8 nr_bytes = BITS_ROUNDUP_BYTES(nr_bits);
 
-	int_data = btf_type_int(t);
-	nr_bits = BTF_INT_BITS(int_data);
-	nr_bytes = BITS_ROUNDUP_BYTES(nr_bits);
-	if (BITS_PER_BYTE_MASKED(nr_bits) ||
-	    BTF_INT_OFFSET(int_data) ||
-	    (nr_bytes != sizeof(u8) && nr_bytes != sizeof(u16) &&
-	     nr_bytes != sizeof(u32) && nr_bytes != sizeof(u64) &&
-	     nr_bytes != (2 * sizeof(u64)))) {
-		return false;
-	}
+	return BITS_PER_BYTE_MASKED(nr_bits) == 0 &&
+	       BTF_INT_OFFSET(int_data) == 0 &&
+	       (nr_bytes <= 16 && is_power_of_2(nr_bytes)) &&
+	       (expected_size == 0 || nr_bytes == expected_size);
+}
 
-	return true;
+/*
+ * Check that the type @t is a regular int. This means that @t is not
+ * a bit field and it has the same size as either of u8/u16/u32/u64
+ * or __int128. If @expected_size is not zero, then size of @t should
+ * be the same.
+ */
+bool btf_type_is_regular_int(const struct btf_type *t, size_t expected_size)
+{
+	return btf_type_is_int(t) && btf_type_int_is_regular(t, expected_size);
 }
 
 /*
@@ -2180,7 +2180,7 @@ static int btf_int_check_kflag_member(struct btf_verifier_env *env,
 	u32 nr_copy_bits;
 
 	/* a regular int type is required for the kflag int member */
-	if (!btf_type_int_is_regular(member_type)) {
+	if (!btf_type_int_is_regular(member_type, 0)) {
 		btf_verifier_log_member(env, struct_type, member,
 					"Invalid member base type");
 		return -EINVAL;
@@ -2969,8 +2969,7 @@ static int btf_array_resolve(struct btf_verifier_env *env,
 		return env_stack_push(env, index_type, index_type_id);
 
 	index_type = btf_type_id_size(btf, &index_type_id, NULL);
-	if (!index_type || !btf_type_is_int(index_type) ||
-	    !btf_type_int_is_regular(index_type)) {
+	if (!index_type || !btf_type_is_regular_int(index_type, 0)) {
 		btf_verifier_log_type(env, v->t, "Invalid index");
 		return -EINVAL;
 	}
@@ -2995,7 +2994,7 @@ static int btf_array_resolve(struct btf_verifier_env *env,
 		return -EINVAL;
 	}
 
-	if (btf_type_is_int(elem_type) && !btf_type_int_is_regular(elem_type)) {
+	if (btf_type_is_int(elem_type) && !btf_type_int_is_regular(elem_type, 0)) {
 		btf_verifier_log_type(env, v->t, "Invalid array of int");
 		return -EINVAL;
 	}
