@@ -495,10 +495,10 @@ static bool dump_stack_cb(void *cookie, u64 ip, u64 sp, u64 bp)
 	struct bpf_prog *prog;
 	int num, ret;
 
-	if (is_bpf_text_address(ip)) {
-		rcu_read_lock();
-		prog = bpf_prog_ksym_find(ip);
-		rcu_read_unlock();
+	rcu_read_lock();
+	prog = bpf_prog_ksym_find(ip);
+	rcu_read_unlock();
+	if (prog) {
 		ret = bpf_prog_get_file_line(prog, ip, &file, &line, &num);
 		if (ret < 0)
 			goto end;
