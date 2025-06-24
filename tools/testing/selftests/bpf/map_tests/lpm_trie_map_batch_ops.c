@@ -32,7 +32,7 @@ static void map_batch_update(int map_fd, __u32 max_entries,
 
 	for (i = 0; i < max_entries; i++) {
 		keys[i].prefix = 32;
-		snprintf(buff, 16, "192.168.1.%d", i + 1);
+		snprintf(buff, 16, "192.168.1.%hhu", i + 1);
 		inet_pton(AF_INET, buff, &keys[i].ipv4);
 		values[i] = i + 1;
 	}
