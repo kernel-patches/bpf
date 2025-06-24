@@ -89,4 +89,16 @@
 		memcpy(&NAME, &___##NAME, sizeof(NAME));		    \
 	} while (0)
 
+struct bpf_map_update_elem_opts {
+	size_t sz; /* size of this struct for forward/backward compatibility */
+	__u64 flags;
+	__u32 cpu;
+};
+
+struct bpf_map_lookup_elem_opts {
+	size_t sz; /* size of this struct for forward/backward compatibility */
+	__u64 flags;
+	__u32 cpu;
+};
+
 #endif /* __LIBBPF_LIBBPF_COMMON_H */
