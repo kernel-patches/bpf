@@ -231,4 +231,34 @@ __naked void bpf_cond_op_not_r10(void)
 	::: __clobber_all);
 }
 
+SEC("lsm.s/socket_connect")
+__success
+__naked int bpf_neg_2(void)
+{
+	/*
+	 * lsm.s/socket_connect requires a return value within [-4095, 0].
+	 * Returning -1 is allowed
+	 */
+	asm volatile (
+	"r0 = 1;"
+	"w0 = -w0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+SEC("lsm.s/socket_connect")
+__failure __msg("At program exit the register R0 has")
+__naked int bpf_neg_3(void)
+{
+	/*
+	 * lsm.s/socket_connect requires a return value within [-4095, 0].
+	 * Returning -10000 is not allowed.
+	 */
+	asm volatile (
+	"r0 = 10000;"
+	"w0 = -w0;"
+	"exit;"
+	::: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
