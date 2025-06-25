@@ -19921,6 +19921,7 @@ static int do_check(struct bpf_verifier_env *env)
 	int insn_cnt = env->prog->len;
 	bool do_print_state = false;
 	int prev_insn_idx = -1;
+	int insn_sz;
 
 	for (;;) {
 		struct bpf_insn *insn;
@@ -20044,7 +20045,8 @@ static int do_check(struct bpf_verifier_env *env)
 			 * to document this in case nospec_result is used
 			 * elsewhere in the future.
 			 */
-			WARN_ON_ONCE(env->insn_idx != prev_insn_idx + 1);
+			insn_sz = bpf_is_ldimm64(insn) ? 2 : 1;
+			WARN_ON_ONCE(env->insn_idx != prev_insn_idx + insn_sz);
 process_bpf_exit:
 			mark_verifier_state_scratched(env);
 			err = update_branch_counts(env, env->cur_state);
