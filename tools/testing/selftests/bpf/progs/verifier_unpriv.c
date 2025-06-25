@@ -744,4 +744,23 @@ l0_%=:	r0 = 0;						\
 "	::: __clobber_all);
 }
 
+SEC("socket")
+__description("ldimm64 nospec")
+__success __success_unpriv
+__retval(0)
+/* BUG v4 */
+#ifdef SPEC_V1
+__xlated_unpriv("r1 = 0x2020200005642020")
+__xlated_unpriv("*(u64*)(r10 - 8) = r1")
+__xlated_unpriv("nospec")
+#endif
+__naked void ldimm64_nospec(void)
+{
+	asm volatile ("					\
+	r1 = 0x2020200005642020;			\
+	*(u64*)(r10 - 8) = r1;				\
+	exit;						\
+"	::: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
