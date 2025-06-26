@@ -798,12 +798,17 @@ int test_dynptr_memset_readonly(struct __sk_buff *skb)
 	return 0;
 }
 
+#define min_t(type, x, y) ({		\
+	type __x = (x);			\
+	type __y = (y);			\
+	__x < __y ? __x : __y; })
+
 SEC("xdp")
 int test_dynptr_memset_xdp_chunks(struct xdp_md *xdp)
 {
 	const int max_chunks = 200;
 	struct bpf_dynptr ptr_xdp;
-	u32 data_sz, offset = 0;
+	u32 data_sz, chunk_sz, offset = 0;
 	char expected_buf[32];
 	char buf[32];
 	int i;
@@ -820,26 +825,15 @@ int test_dynptr_memset_xdp_chunks(struct xdp_md *xdp)
 
 	bpf_for(i, 0, max_chunks) {
 		offset = i * sizeof(buf);
-		err = bpf_dynptr_read(&buf, sizeof(buf), &ptr_xdp, offset, 0);
-		switch (err) {
-		case 0:
-			break;
-		case -E2BIG:
-			goto handle_tail;
-		default:
+		if (offset >= data_sz)
 			goto out;
-		}
+		chunk_sz = min_t(u32, sizeof(buf), data_sz - offset);
+		err = bpf_dynptr_read(&buf, chunk_sz, &ptr_xdp, offset, 0);
+		if (err)
+			goto out;
 		err = bpf_memcmp(buf, expected_buf, sizeof(buf));
 		if (err)
 			goto out;
-	}
-
-handle_tail:
-	if (data_sz - offset < sizeof(buf)) {
-		err = bpf_dynptr_read(&buf, data_sz - offset, &ptr_xdp, offset, 0);
-		if (err)
-			goto out;
-		err = bpf_memcmp(buf, expected_buf, data_sz - offset);
 	}
 out:
 	return XDP_DROP;
