@@ -20022,11 +20022,11 @@ static int do_check(struct bpf_verifier_env *env)
 			/* Prevent this speculative path from ever reaching the
 			 * insn that would have been unsafe to execute.
 			 */
-			cur_aux(env)->nospec = true;
+			env->insn_aux_data[prev_insn_idx].nospec = true;
 			/* If it was an ADD/SUB insn, potentially remove any
 			 * markings for alu sanitization.
 			 */
-			cur_aux(env)->alu_state = 0;
+			env->insn_aux_data[prev_insn_idx].alu_state = 0;
 			goto process_bpf_exit;
 		} else if (err < 0) {
 			return err;
@@ -20035,7 +20035,7 @@ static int do_check(struct bpf_verifier_env *env)
 		}
 		WARN_ON_ONCE(err);
 
-		if (state->speculative && cur_aux(env)->nospec_result) {
+		if (state->speculative && env->insn_aux_data[prev_insn_idx].nospec_result) {
 			/* If we are on a path that performed a jump-op, this
 			 * may skip a nospec patched-in after the jump. This can
 			 * currently never happen because nospec_result is only
@@ -20044,6 +20044,8 @@ static int do_check(struct bpf_verifier_env *env)
 			 * never skip the following insn. Still, add a warning
 			 * to document this in case nospec_result is used
 			 * elsewhere in the future.
+			 *
+			 * Therefore, no special case for ldimm64/call required.
 			 */
 			WARN_ON_ONCE(env->insn_idx != prev_insn_idx + 1);
 process_bpf_exit:
