@@ -307,8 +307,21 @@ show_kprobe_multi_json(struct bpf_link_info *info, json_writer_t *wtr)
 		goto error;
 
 	for (i = 0; i < dd.sym_count; i++) {
-		if (dd.sym_mapping[i].address != data[j].addr)
+		if (dd.sym_mapping[i].address != data[j].addr) {
+#if defined(__x86_64__) || defined(__amd64__)
+			/*
+			 * On x86_64 architectures with CET (Control-flow Enforcement Technology),
+			 * function entry points have a 4-byte 'endbr' instruction prefix.
+			 * This causes the actual function address = symbol address + 4.
+			 * Here we check if this symbol matches the target address minus 4,
+			 * indicating we've found a CET-enabled function entry point.
+			 */
+			if (dd.sym_mapping[i].address == data[j].addr - 4)
+				goto found;
+#endif
 			continue;
+		}
+found:
 		jsonw_start_object(json_wtr);
 		jsonw_uint_field(json_wtr, "addr", dd.sym_mapping[i].address);
 		jsonw_string_field(json_wtr, "func", dd.sym_mapping[i].name);
@@ -744,8 +757,21 @@ static void show_kprobe_multi_plain(struct bpf_link_info *info)
 
 	printf("\n\t%-16s %-16s %s", "addr", "cookie", "func [module]");
 	for (i = 0; i < dd.sym_count; i++) {
-		if (dd.sym_mapping[i].address != data[j].addr)
+		if (dd.sym_mapping[i].address != data[j].addr) {
+#if defined(__x86_64__) || defined(__amd64__)
+			/*
+			 * On x86_64 architectures with CET (Control-flow Enforcement Technology),
+			 * function entry points have a 4-byte 'endbr' instruction prefix.
+			 * This causes the actual function address = symbol address + 4.
+			 * Here we check if this symbol matches the target address minus 4,
+			 * indicating we've found a CET-enabled function entry point.
+			 */
+			if (dd.sym_mapping[i].address == data[j].addr - 4)
+				goto found;
+#endif
 			continue;
+		}
+found:
 		printf("\n\t%016lx %-16llx %s",
 		       dd.sym_mapping[i].address, data[j].cookie, dd.sym_mapping[i].name);
 		if (dd.sym_mapping[i].module[0] != '\0')
