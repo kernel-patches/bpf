@@ -820,4 +820,94 @@ __naked void ldimm64_nospec(void)
 "	::: __clobber_all);
 }
 
+SEC("socket")
+__description("spec_v4-induced path termination only after insn check")
+__success __success_unpriv
+__retval(0)
+#ifdef SPEC_V1
+#ifdef SPEC_V4
+/* starts with r0 == r8 == r9 == 0 */
+__xlated_unpriv("if r8 != 0x0 goto pc+1")
+__xlated_unpriv("goto pc+2")
+__xlated_unpriv("if r9 == 0x0 goto pc+4")
+__xlated_unpriv("r2 = r0")
+/* Following nospec required to prevent following `*(u64 *)(NULL -64) = r1` iff
+ * `if r9 == 0 goto pc+4` was mispredicted because of Spectre v1
+ */
+__xlated_unpriv("nospec") /* Spectre v1 */
+__xlated_unpriv("*(u64 *)(r2 -64) = r1")
+__xlated_unpriv("nospec") /* Spectre v4 (nospec_result) */
+#endif
+#endif
+__naked void v4_nospec_result_terminates_v1_path(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	*(u64*)(r10 - 8) = r1;				\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = %[map_hash_8b] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	r8 = r0;					\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = %[map_hash_8b] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	r9 = r0;					\
+	r0 = r10;					\
+	r1 = 0;						\
+	r2 = r10;					\
+	if r8 != 0 goto l0_%=;				\
+	if r9 != 0 goto l0_%=;				\
+	r0 = 0;						\
+l0_%=:	if r8 != 0 goto l1_%=;				\
+	goto l2_%=;					\
+l1_%=:	if r9 == 0 goto l3_%=;				\
+	r2 = r0;					\
+l2_%=:	*(u64 *)(r2 -64) = r1;				\
+l3_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_hash_8b)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("spec_v4-induced path termination only after insn check (simplified, with dead code)")
+__success __success_unpriv
+__retval(0)
+#ifdef SPEC_V1
+#ifdef SPEC_V4
+/* starts with r0 == r8 == r9 == 0 */
+__xlated_unpriv("if r8 != 0x0 goto pc+1") /* if r9 == 0 goto l3_%= */
+__xlated_unpriv("goto pc+2") /* goto l2_%= */
+__xlated_unpriv("goto pc-1") /* if r9 == 0 goto l3_%= */
+__xlated_unpriv("goto pc-1") /* r2 = r0 */
+__xlated_unpriv("nospec") /* Spectre v1 */
+__xlated_unpriv("*(u64 *)(r2 -64) = r1")
+__xlated_unpriv("nospec") /* Spectre v4 (nospec_result) */
+#endif
+#endif
+__naked void v4_nospec_result_terminates_v1_path_simple(void)
+{
+	asm volatile ("					\
+	r8 = 0;						\
+	r9 = 0;						\
+	r0 = r10;					\
+	r1 = 0;						\
+	r2 = r10;					\
+	if r8 != 0 goto l0_%=;				\
+	if r9 != 0 goto l0_%=;				\
+	r0 = 0;						\
+l0_%=:	if r8 != 0 goto l1_%=;				\
+	goto l2_%=;					\
+l1_%=:	if r9 == 0 goto l3_%=;				\
+	r2 = r0;					\
+l2_%=:	*(u64 *)(r2 -64) = r1;				\
+l3_%=:	r0 = 0;						\
+	exit;						\
+"	::: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
