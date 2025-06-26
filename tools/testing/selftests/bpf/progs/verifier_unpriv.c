@@ -820,4 +820,31 @@ __naked void ldimm64_nospec(void)
 "	::: __clobber_all);
 }
 
+SEC("socket")
+__description("spec v4 path termination")
+__success __success_unpriv
+__retval(0)
+#ifdef SPEC_V4
+__xlated_unpriv("if r0 == 0x0 goto pc+2")
+__xlated_unpriv("goto pc-1") /* sanitized dead code */
+__xlated_unpriv("nospec")
+__xlated_unpriv("goto pc-1") /* sanitized dead code */
+__xlated_unpriv("nospec")
+__xlated_unpriv("exit")
+#endif
+__naked void nospec_result_terminates_v1_path(void)
+{
+	/* TODO: prevent dead code san to clarify problem */
+	asm volatile ("					\
+	w7 = 0;						\
+	w7 &= 1;					\
+	w0 = w7;					\
+	if r0 != 0 goto l0_%=;				\
+	if r0 == 0 goto l1_%=;				\
+	r0 = *(u64*)(r7 + 0);				\
+l0_%=:	*(u64 *)(r10 -8) = r1;				\
+l1_%=:	exit;						\
+"	::: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
