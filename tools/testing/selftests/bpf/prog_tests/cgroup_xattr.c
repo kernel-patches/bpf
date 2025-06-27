@@ -7,94 +7,44 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/socket.h>
-#include <sys/xattr.h>
-
 #include <test_progs.h>
+#include "cgroup_helpers.h"
 
 #include "read_cgroupfs_xattr.skel.h"
 #include "cgroup_read_xattr.skel.h"
 
-#define CGROUP_FS_ROOT "/sys/fs/cgroup/"
-#define CGROUP_FS_PARENT CGROUP_FS_ROOT "foo/"
+#define CGROUP_FS_PARENT "foo/"
 #define CGROUP_FS_CHILD CGROUP_FS_PARENT "bar/"
 #define TMP_FILE "/tmp/selftests_cgroup_xattr"
-
-static int move_pid_to_cgroup(const char *cgroup_folder, pid_t pid)
-{
-	char filename[128];
-	char pid_str[64];
-	int procs_fd;
-	int ret;
-
-	snprintf(filename, sizeof(filename), "%scgroup.procs", cgroup_folder);
-	snprintf(pid_str, sizeof(pid_str), "%d", pid);
-
-	procs_fd = open(filename, O_WRONLY | O_APPEND);
-	if (!ASSERT_OK_FD(procs_fd, "open"))
-		return -1;
-
-	ret = write(procs_fd, pid_str, strlen(pid_str));
-	close(procs_fd);
-	if (!ASSERT_GT(ret, 0, "write cgroup.procs"))
-		return -1;
-	return 0;
-}
-
-static void cleanup(void)
-{
-	rmdir(CGROUP_FS_CHILD);
-	rmdir(CGROUP_FS_PARENT);
-	unlink(TMP_FILE);
-}
 
 static const char xattr_value_a[] = "bpf_selftest_value_a";
 static const char xattr_value_b[] = "bpf_selftest_value_b";
 static const char xattr_name[] = "user.bpf_test";
 
-static int setup(void)
-{
-	int err;
-
-	err = mkdir(CGROUP_FS_PARENT, 0755);
-	if (!ASSERT_OK(err, "mkdir 1"))
-		goto error;
-	err = mkdir(CGROUP_FS_CHILD, 0755);
-	if (!ASSERT_OK(err, "mkdir 2"))
-		goto error;
-
-	err = setxattr(CGROUP_FS_PARENT, xattr_name, xattr_value_a,
-		       strlen(xattr_value_a) + 1, 0);
-	if (!ASSERT_OK(err, "setxattr 1"))
-		goto error;
-
-	err = setxattr(CGROUP_FS_CHILD, xattr_name, xattr_value_b,
-		       strlen(xattr_value_b) + 1, 0);
-	if (!ASSERT_OK(err, "setxattr 2"))
-		goto error;
-
-	return 0;
-error:
-	cleanup();
-	return err;
-}
-
 static void test_read_cgroup_xattr(void)
 {
+	int tmp_fd, parent_cgroup_fd = -1, child_cgroup_fd = -1;
 	struct read_cgroupfs_xattr *skel = NULL;
-	pid_t pid = gettid();
-	int tmp_fd;
 
-	if (!ASSERT_OK(setup(), "setup"))
+	parent_cgroup_fd = test__join_cgroup(CGROUP_FS_PARENT);
+	if (!ASSERT_OK_FD(parent_cgroup_fd, "create parent cgroup"))
 		return;
-	if (!ASSERT_OK(move_pid_to_cgroup(CGROUP_FS_CHILD, pid),
-		       "move_pid_to_cgroup"))
+	if (!ASSERT_OK(set_cgroup_xattr(CGROUP_FS_PARENT, xattr_name, xattr_value_a),
+		       "set parent xattr"))
+		goto out;
+
+	child_cgroup_fd = test__join_cgroup(CGROUP_FS_CHILD);
+	if (!ASSERT_OK_FD(child_cgroup_fd, "create child cgroup"))
+		goto out;
+	if (!ASSERT_OK(set_cgroup_xattr(CGROUP_FS_CHILD, xattr_name, xattr_value_b),
+		       "set child xattr"))
 		goto out;
 
 	skel = read_cgroupfs_xattr__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "read_cgroupfs_xattr__open_and_load"))
 		goto out;
 
-	skel->bss->target_pid = pid;
+	skel->bss->target_pid = gettid();
 
 	if (!ASSERT_OK(read_cgroupfs_xattr__attach(skel), "read_cgroupfs_xattr__attach"))
 		goto out;
@@ -107,9 +57,10 @@ static void test_read_cgroup_xattr(void)
 	ASSERT_TRUE(skel->bss->found_value_b, "found_value_b");
 
 out:
+	close(child_cgroup_fd);
+	close(parent_cgroup_fd);
 	read_cgroupfs_xattr__destroy(skel);
-	move_pid_to_cgroup(CGROUP_FS_ROOT, pid);
-	cleanup();
+	unlink(TMP_FILE);
 }
 
 void test_cgroup_xattr(void)
