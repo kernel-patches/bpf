@@ -19978,7 +19978,9 @@ static int do_check(struct bpf_verifier_env *env)
 			 * to document this in case nospec_result is used
 			 * elsewhere in the future.
 			 */
-			WARN_ON_ONCE(env->insn_idx != prev_insn_idx + 1);
+			if (verifier_bug_if(env->insn_idx != prev_insn_idx + 1,
+					    env, "nospec_result"))
+				return -EFAULT;
 process_bpf_exit:
 			mark_verifier_state_scratched(env);
 			err = update_branch_counts(env, env->cur_state);
