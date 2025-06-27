@@ -40,7 +40,7 @@ int percpu_arr[1] SEC(".data.percpu_arr");
  * but by having externs for the resizing tests it will cover this path.
  */
 extern int LINUX_KERNEL_VERSION __kconfig;
-long version_sink;
+int version_sink;
 
 SEC("tp/syscalls/sys_enter_getpid")
 int bss_array_sum(void *ctx)
