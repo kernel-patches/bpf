@@ -11967,12 +11967,27 @@ bpf_sk_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	return func;
 }
 
+enum skb_dynptr_offset {
+	SKB_DYNPTR_METADATA	= -1,
+	SKB_DYNPTR_PAYLOAD	= 0,
+};
+
 int bpf_dynptr_skb_read(const struct bpf_dynptr_kern *src, u32 offset,
 			void *dst, u32 len)
 {
 	const struct sk_buff *skb = src->data;
 
-	return ____bpf_skb_load_bytes(skb, offset, dst, len);
+	switch (src->offset) {
+	case SKB_DYNPTR_PAYLOAD:
+		return ____bpf_skb_load_bytes(skb, offset, dst, len);
+
+	case SKB_DYNPTR_METADATA:
+		return -EOPNOTSUPP; /* not implemented */
+
+	default:
+		WARN_ONCE(true, "%s: unknown skb dynptr offset %d\n", __func__, src->offset);
+		return -EFAULT;
+	}
 }
 
 int bpf_dynptr_skb_write(const struct bpf_dynptr_kern *dst, u32 offset,
@@ -11980,7 +11995,17 @@ int bpf_dynptr_skb_write(const struct bpf_dynptr_kern *dst, u32 offset,
 {
 	struct sk_buff *skb = dst->data;
 
-	return ____bpf_skb_store_bytes(skb, offset, src, len, flags);
+	switch (dst->offset) {
+	case SKB_DYNPTR_PAYLOAD:
+		return ____bpf_skb_store_bytes(skb, offset, src, len, flags);
+
+	case SKB_DYNPTR_METADATA:
+		return -EOPNOTSUPP; /* not implemented */
+
+	default:
+		WARN_ONCE(true, "%s: unknown skb dynptr offset %d\n", __func__, dst->offset);
+		return -EFAULT;
+	}
 }
 
 void *bpf_dynptr_skb_slice(const struct bpf_dynptr_kern *ptr, u32 offset,
@@ -11988,10 +12013,20 @@ void *bpf_dynptr_skb_slice(const struct bpf_dynptr_kern *ptr, u32 offset,
 {
 	const struct sk_buff *skb = ptr->data;
 
-	if (buf)
-		return skb_header_pointer(skb, offset, len, buf);
-	else
-		return skb_pointer_if_linear(skb, offset, len);
+	switch (ptr->offset) {
+	case SKB_DYNPTR_PAYLOAD:
+		if (buf)
+			return skb_header_pointer(skb, offset, len, buf);
+		else
+			return skb_pointer_if_linear(skb, offset, len);
+
+	case SKB_DYNPTR_METADATA:
+		return NULL;	/* not implemented */
+
+	default:
+		WARN_ONCE(true, "%s: unknown skb dynptr offset %d\n", __func__, ptr->offset);
+		return NULL;
+	}
 }
 
 __bpf_kfunc_start_defs();
@@ -12000,13 +12035,22 @@ __bpf_kfunc int bpf_dynptr_from_skb(struct __sk_buff *s, u64 flags,
 {
 	struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)ptr__uninit;
 	struct sk_buff *skb = (struct sk_buff *)s;
+	u32 offset, size;
 
-	if (flags) {
+	if (unlikely(flags & ~BPF_DYNPTR_F_SKB_METADATA)) {
 		bpf_dynptr_set_null(ptr);
 		return -EINVAL;
 	}
 
-	bpf_dynptr_init(ptr, skb, BPF_DYNPTR_TYPE_SKB, 0, skb->len);
+	if (flags & BPF_DYNPTR_F_SKB_METADATA) {
+		offset = SKB_DYNPTR_METADATA;
+		size = skb_metadata_len(skb);
+	} else {
+		offset = SKB_DYNPTR_PAYLOAD;
+		size = skb->len;
+	}
+
+	bpf_dynptr_init(ptr, skb, BPF_DYNPTR_TYPE_SKB, offset, size);
 
 	return 0;
 }
