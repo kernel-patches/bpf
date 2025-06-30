@@ -12005,8 +12005,15 @@ int bpf_dynptr_skb_write(const struct bpf_dynptr_kern *dst, u32 offset,
 	case SKB_DYNPTR_PAYLOAD:
 		return ____bpf_skb_store_bytes(skb, offset, src, len, flags);
 
-	case SKB_DYNPTR_METADATA:
-		return -EOPNOTSUPP; /* not implemented */
+	case SKB_DYNPTR_METADATA: {
+		u32 meta_len = skb_metadata_len(skb);
+
+		if (len > meta_len || offset > meta_len - len)
+			return -E2BIG; /* out of bounds */
+
+		memmove(skb_metadata_end(skb) - meta_len + offset, src, len);
+		return 0;
+	}
 
 	default:
 		WARN_ONCE(true, "%s: unknown skb dynptr offset %d\n", __func__, dst->offset);
