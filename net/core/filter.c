@@ -1736,12 +1736,6 @@ static const struct bpf_func_proto bpf_skb_store_bytes_proto = {
 	.arg5_type	= ARG_ANYTHING,
 };
 
-int __bpf_skb_store_bytes(struct sk_buff *skb, u32 offset, const void *from,
-			  u32 len, u64 flags)
-{
-	return ____bpf_skb_store_bytes(skb, offset, from, len, flags);
-}
-
 BPF_CALL_4(bpf_skb_load_bytes, const struct sk_buff *, skb, u32, offset,
 	   void *, to, u32, len)
 {
@@ -1771,11 +1765,6 @@ static const struct bpf_func_proto bpf_skb_load_bytes_proto = {
 	.arg3_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg4_type	= ARG_CONST_SIZE,
 };
-
-int __bpf_skb_load_bytes(const struct sk_buff *skb, u32 offset, void *to, u32 len)
-{
-	return ____bpf_skb_load_bytes(skb, offset, to, len);
-}
 
 BPF_CALL_4(bpf_flow_dissector_load_bytes,
 	   const struct bpf_flow_dissector *, ctx, u32, offset,
@@ -11976,6 +11965,33 @@ bpf_sk_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return NULL;
 
 	return func;
+}
+
+int bpf_dynptr_skb_read(const struct bpf_dynptr_kern *src, u32 offset,
+			void *dst, u32 len)
+{
+	const struct sk_buff *skb = src->data;
+
+	return ____bpf_skb_load_bytes(skb, offset, dst, len);
+}
+
+int bpf_dynptr_skb_write(const struct bpf_dynptr_kern *dst, u32 offset,
+			 const void *src, u32 len, u64 flags)
+{
+	struct sk_buff *skb = dst->data;
+
+	return ____bpf_skb_store_bytes(skb, offset, src, len, flags);
+}
+
+void *bpf_dynptr_skb_slice(const struct bpf_dynptr_kern *ptr, u32 offset,
+			   void *buf, u32 len)
+{
+	const struct sk_buff *skb = ptr->data;
+
+	if (buf)
+		return skb_header_pointer(skb, offset, len, buf);
+	else
+		return skb_pointer_if_linear(skb, offset, len);
 }
 
 __bpf_kfunc_start_defs();

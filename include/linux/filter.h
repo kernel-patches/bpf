@@ -1764,25 +1764,36 @@ static __always_inline long __bpf_xdp_redirect_map(struct bpf_map *map, u64 inde
 }
 
 #ifdef CONFIG_NET
-int __bpf_skb_load_bytes(const struct sk_buff *skb, u32 offset, void *to, u32 len);
-int __bpf_skb_store_bytes(struct sk_buff *skb, u32 offset, const void *from,
-			  u32 len, u64 flags);
+int bpf_dynptr_skb_read(const struct bpf_dynptr_kern *src, u32 offset,
+			void *dst, u32 len);
+int bpf_dynptr_skb_write(const struct bpf_dynptr_kern *dst, u32 offset,
+			 const void *src, u32 len, u64 flags);
+void *bpf_dynptr_skb_slice(const struct bpf_dynptr_kern *ptr, u32 offset,
+			   void *buf, u32 len);
 int __bpf_xdp_load_bytes(struct xdp_buff *xdp, u32 offset, void *buf, u32 len);
 int __bpf_xdp_store_bytes(struct xdp_buff *xdp, u32 offset, void *buf, u32 len);
 void *bpf_xdp_pointer(struct xdp_buff *xdp, u32 offset, u32 len);
 void bpf_xdp_copy_buf(struct xdp_buff *xdp, unsigned long off,
 		      void *buf, unsigned long len, bool flush);
 #else /* CONFIG_NET */
-static inline int __bpf_skb_load_bytes(const struct sk_buff *skb, u32 offset,
-				       void *to, u32 len)
+static inline int bpf_dynptr_skb_read(const struct bpf_dynptr_kern *src,
+				      u32 offset, void *dst, u32 len)
 {
 	return -EOPNOTSUPP;
 }
 
-static inline int __bpf_skb_store_bytes(struct sk_buff *skb, u32 offset,
-					const void *from, u32 len, u64 flags)
+static inline int bpf_dynptr_skb_write(const struct bpf_dynptr_kern *dst,
+				       u32 offset, const void *src, u32 len,
+				       u64 flags);
 {
 	return -EOPNOTSUPP;
+}
+
+static inline void *bpf_dynptr_skb_slice(const struct bpf_dynptr_kern *ptr,
+					 u32 offset, void *buf, u32 len);
+
+{
+	return NULL;
 }
 
 static inline int __bpf_xdp_load_bytes(struct xdp_buff *xdp, u32 offset,
