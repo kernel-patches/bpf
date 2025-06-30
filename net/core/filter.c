@@ -12033,9 +12033,14 @@ void *bpf_dynptr_skb_slice(const struct bpf_dynptr_kern *ptr, u32 offset,
 		else
 			return skb_pointer_if_linear(skb, offset, len);
 
-	case SKB_DYNPTR_METADATA:
-		return NULL;	/* not implemented */
+	case SKB_DYNPTR_METADATA: {
+		u32 meta_len = skb_metadata_len(skb);
 
+		if (len > meta_len || offset > meta_len - len)
+			return NULL; /* out of bounds */
+
+		return skb_metadata_end(skb) - meta_len + offset;
+	}
 	default:
 		WARN_ONCE(true, "%s: unknown skb dynptr offset %d\n", __func__, ptr->offset);
 		return NULL;
