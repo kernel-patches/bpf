@@ -7591,4 +7591,13 @@ enum bpf_kfunc_flags {
 	BPF_F_PAD_ZEROS = (1ULL << 0),
 };
 
+/**
+ * enum bpf_dynptr_from_skb_flags - Flags for bpf_dynptr_from_skb()
+ *
+ * @BPF_DYNPTR_F_SKB_METADATA: Create dynptr to the SKB metadata area
+ */
+enum bpf_dynptr_from_skb_flags {
+	BPF_DYNPTR_F_SKB_METADATA = (1ULL << 0),
+};
+
 #endif /* _UAPI__LINUX_BPF_H__ */
