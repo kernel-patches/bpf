@@ -1776,7 +1776,7 @@ static int __bpf_dynptr_read(void *dst, u32 len, const struct bpf_dynptr_kern *s
 		memmove(dst, src->data + src->offset + offset, len);
 		return 0;
 	case BPF_DYNPTR_TYPE_SKB:
-		return __bpf_skb_load_bytes(src->data, src->offset + offset, dst, len);
+		return __bpf_skb_load_bytes(src->data, offset, dst, len);
 	case BPF_DYNPTR_TYPE_XDP:
 		return __bpf_xdp_load_bytes(src->data, src->offset + offset, dst, len);
 	default:
@@ -1829,8 +1829,7 @@ int __bpf_dynptr_write(const struct bpf_dynptr_kern *dst, u32 offset, void *src,
 		memmove(dst->data + dst->offset + offset, src, len);
 		return 0;
 	case BPF_DYNPTR_TYPE_SKB:
-		return __bpf_skb_store_bytes(dst->data, dst->offset + offset, src, len,
-					     flags);
+		return __bpf_skb_store_bytes(dst->data, offset, src, len, flags);
 	case BPF_DYNPTR_TYPE_XDP:
 		if (flags)
 			return -EINVAL;
@@ -2695,9 +2694,9 @@ __bpf_kfunc void *bpf_dynptr_slice(const struct bpf_dynptr *p, u32 offset,
 		return ptr->data + ptr->offset + offset;
 	case BPF_DYNPTR_TYPE_SKB:
 		if (buffer__opt)
-			return skb_header_pointer(ptr->data, ptr->offset + offset, len, buffer__opt);
+			return skb_header_pointer(ptr->data, offset, len, buffer__opt);
 		else
-			return skb_pointer_if_linear(ptr->data, ptr->offset + offset, len);
+			return skb_pointer_if_linear(ptr->data, offset, len);
 	case BPF_DYNPTR_TYPE_XDP:
 	{
 		void *xdp_ptr = bpf_xdp_pointer(ptr->data, ptr->offset + offset, len);
