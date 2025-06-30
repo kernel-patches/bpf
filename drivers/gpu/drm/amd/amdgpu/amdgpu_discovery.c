@@ -80,6 +80,7 @@
 #include "soc21.h"
 #include "soc24.h"
 #include "soc_v1_0.h"
+#include "soc_v2_0.h"
 #include "navi10_ih.h"
 #include "ih_v6_0.h"
 #include "ih_v6_1.h"
@@ -2726,6 +2727,9 @@ static int amdgpu_discovery_set_common_ip_blocks(struct amdgpu_device *adev)
 		break;
 	case IP_VERSION(12, 1, 0):
 		amdgpu_device_ip_block_add(adev, &soc_v1_0_common_ip_block);
+		break;
+	case IP_VERSION(13, 0, 1):
+		amdgpu_device_ip_block_add(adev, &soc_v2_0_common_ip_block);
 		break;
 	default:
 		dev_err(adev->dev,
