@@ -990,6 +990,18 @@ __bpf_kfunc int bpf_xdp_metadata_rx_vlan_tag(const struct xdp_md *ctx,
 	return -EOPNOTSUPP;
 }
 
+/**
+ * bpf_xdp_store_rx_hash - Store XDP frame RX hash.
+ * @ctx: XDP context pointer.
+ * @hash: 32-bit hash value.
+ * @rss_type: RSS hash type.
+ *
+ * The RSS hash type (@rss_type) is as descibed in bpf_xdp_metadata_rx_hash.
+ *
+ * Return:
+ * * Returns 0 on success or ``-errno`` on error.
+ * * ``-NOSPC``   : means device driver doesn't provide enough headroom for storing
+ */
 __bpf_kfunc int bpf_xdp_store_rx_hash(struct xdp_md *ctx, u32 hash,
 				      enum xdp_rss_hash_type rss_type)
 {
@@ -1005,6 +1017,18 @@ __bpf_kfunc int bpf_xdp_store_rx_hash(struct xdp_md *ctx, u32 hash,
 	return 0;
 }
 
+/**
+ * bpf_xdp_store_rx_vlan_tag - Store XDP packet outermost VLAN tag
+ * @ctx: XDP context pointer.
+ * @vlan_proto: VLAN protocol stored in **network byte order (BE)**
+ * @vlan_tci: VLAN TCI (VID + DEI + PCP) stored in **host byte order**
+ *
+ * See bpf_xdp_metadata_rx_vlan_tag() for byte order reasoning.
+ *
+ * Return:
+ * * Returns 0 on success or ``-errno`` on error.
+ * * ``-NOSPC``   : means device driver doesn't provide enough headroom for storing
+ */
 __bpf_kfunc int bpf_xdp_store_rx_vlan(struct xdp_md *ctx, __be16 vlan_proto,
 				      u16 vlan_tci)
 {
@@ -1020,6 +1044,14 @@ __bpf_kfunc int bpf_xdp_store_rx_vlan(struct xdp_md *ctx, __be16 vlan_proto,
 	return 0;
 }
 
+/**
+ * bpf_xdp_metadata_rx_timestamp - Store XDP frame RX timestamp.
+ * @ctx: XDP context pointer.
+ * @timestamp: Timestamp value.
+ *
+ * Return:
+ * * Returns 0 on success or ``-errno`` on error.
+ */
 __bpf_kfunc int bpf_xdp_store_rx_ts(struct xdp_md *ctx, u64 ts)
 {
 	struct xdp_buff *xdp = (struct xdp_buff *)ctx;
