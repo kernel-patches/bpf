@@ -72,7 +72,7 @@ int rx(struct xdp_md *ctx)
 		return XDP_PASS;
 	}
 
-	err = bpf_xdp_adjust_meta(ctx, -(int)sizeof(struct xdp_meta));
+	err = bpf_xdp_adjust_meta(ctx, -(int)XDP_METADATA_SIZE);
 	if (err) {
 		__sync_add_and_fetch(&pkts_fail, 1);
 		return XDP_PASS;

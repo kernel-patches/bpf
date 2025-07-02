@@ -302,7 +302,7 @@ static int verify_xsk_metadata(struct xsk *xsk, bool sent_from_af_xdp)
 
 	/* custom metadata */
 
-	meta = data - sizeof(struct xdp_meta);
+	meta = data - XDP_METADATA_SIZE;
 
 	if (!ASSERT_NEQ(meta->rx_timestamp, 0, "rx_timestamp"))
 		return -1;

@@ -223,7 +223,7 @@ static void verify_xdp_metadata(void *data, clockid_t clock_id)
 {
 	struct xdp_meta *meta;
 
-	meta = data - sizeof(*meta);
+	meta = data - XDP_METADATA_SIZE;
 
 	if (meta->hint_valid & XDP_META_FIELD_RSS)
 		printf("rx_hash: 0x%X with RSS type:0x%X\n",

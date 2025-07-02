@@ -50,3 +50,10 @@ struct xdp_meta {
 	};
 	enum xdp_meta_field hint_valid;
 };
+
+/* XDP_METADATA_SIZE must be at least the size of struct xdp_meta. An additional
+ * 32 bytes of padding is included as a conservative measure to accommodate any
+ * metadata areas reserved by Ethernet devices. If the device-reserved metadata
+ * exceeds 32 bytes, this value will need adjustment.
+ */
+#define XDP_METADATA_SIZE	(sizeof(struct xdp_meta) + 32)

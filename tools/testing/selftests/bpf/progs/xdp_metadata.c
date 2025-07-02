@@ -73,7 +73,7 @@ int rx(struct xdp_md *ctx)
 
 	/* Reserve enough for all custom metadata. */
 
-	ret = bpf_xdp_adjust_meta(ctx, -(int)sizeof(struct xdp_meta));
+	ret = bpf_xdp_adjust_meta(ctx, -(int)XDP_METADATA_SIZE);
 	if (ret != 0)
 		return XDP_DROP;
 
