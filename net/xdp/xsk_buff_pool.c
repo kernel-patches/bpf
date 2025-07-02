@@ -574,7 +574,9 @@ struct xdp_buff *xp_alloc(struct xsk_buff_pool *pool)
 
 	xskb->xdp.data = xskb->xdp.data_hard_start + XDP_PACKET_HEADROOM;
 	xskb->xdp.data_meta = xskb->xdp.data;
-	xskb->xdp.flags = 0;
+	xskb->xdp.flags = XDP_FLAGS_META_AREA;
+	xskb->xdp.rx_meta = (void *)(xskb->xdp.data_hard_start +
+				     offsetof(struct xdp_frame, rx_meta));
 
 	if (pool->dev)
 		xp_dma_sync_for_device(pool, xskb->dma, pool->frame_len);
