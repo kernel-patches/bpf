@@ -2909,35 +2909,35 @@ __bpf_kfunc int bpf_dynptr_copy(struct bpf_dynptr *dst_ptr, u32 dst_off,
 
 /**
  * bpf_dynptr_memset() - Fill dynptr memory with a constant byte.
- * @ptr: Destination dynptr - where data will be filled
+ * @p: Destination dynptr - where data will be filled
  * @offset: Offset into the dynptr to start filling from
  * @size: Number of bytes to fill
  * @val: Constant byte to fill the memory with
  *
- * Fills the size bytes of the memory area pointed to by ptr
- * at offset with the constant byte val.
+ * Fills the @size bytes of the memory area pointed to by @p
+ * at @offset with the constant byte @val.
  * Returns 0 on success; negative error, otherwise.
  */
- __bpf_kfunc int bpf_dynptr_memset(struct bpf_dynptr *ptr, u32 offset, u32 size, u8 val)
+ __bpf_kfunc int bpf_dynptr_memset(struct bpf_dynptr *p, u32 offset, u32 size, u8 val)
  {
-	struct bpf_dynptr_kern *p = (struct bpf_dynptr_kern *)ptr;
+	struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)p;
 	u32 chunk_sz, write_off;
 	char buf[256];
 	void* slice;
 	int err;
 
-	if (__bpf_dynptr_is_rdonly(p))
-		return -EINVAL;
-
-	err = bpf_dynptr_check_off_len(p, offset, size);
-	if (err)
-		return err;
-
-	slice = bpf_dynptr_slice_rdwr(ptr, offset, NULL, size);
+	slice = bpf_dynptr_slice_rdwr(p, offset, NULL, size);
 	if (likely(slice)) {
 		memset(slice, val, size);
 		return 0;
 	}
+
+	if (__bpf_dynptr_is_rdonly(ptr))
+		return -EINVAL;
+
+	err = bpf_dynptr_check_off_len(ptr, offset, size);
+	if (err)
+		return err;
 
 	/* Non-linear data under the dynptr, write from a local buffer */
 	chunk_sz = min_t(u32, sizeof(buf), size);
@@ -2945,7 +2945,7 @@ __bpf_kfunc int bpf_dynptr_copy(struct bpf_dynptr *dst_ptr, u32 dst_off,
 
 	for (write_off = 0; write_off < size; write_off += chunk_sz) {
 		chunk_sz = min_t(u32, sizeof(buf), size - write_off);
-		err = __bpf_dynptr_write(p, offset + write_off, buf, chunk_sz, 0);
+		err = __bpf_dynptr_write(ptr, offset + write_off, buf, chunk_sz, 0);
 		if (err)
 			return err;
 	}
