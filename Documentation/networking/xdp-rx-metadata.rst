@@ -90,22 +90,67 @@ the ``data_meta`` pointer.
 In the future, we'd like to support a case where an XDP program
 can override some of the metadata used for building ``skbs``.
 
-bpf_redirect_map
-================
+XDP_REDIRECT
+============
 
-``bpf_redirect_map`` can redirect the frame to a different device.
-Some devices (like virtual ethernet links) support running a second XDP
-program after the redirect. However, the final consumer doesn't have
-access to the original hardware descriptor and can't access any of
-the original metadata. The same applies to XDP programs installed
-into devmaps and cpumaps.
+The ``XDP_REDIRECT`` action forwards an XDP frame (``xdp_frame``) to another net
+device or a CPU (via cpumap/devmap) for further processing. It is invoked using
+BPF helpers like ``bpf_redirect_map()`` or ``bpf_redirect()``.  When an XDP
+frame is redirected, the recipient (e.g., an XDP program on a veth device, or
+the kernel stack via cpumap) naturally loses direct access to the original NIC's
+hardware descriptor and thus its hardware metadata hints.
 
-This means that for redirected packets only custom metadata is
-currently supported, which has to be prepared by the initial XDP program
-before redirect. If the frame is eventually passed to the kernel, the
-``skb`` created from such a frame won't have any hardware metadata populated
-in its ``skb``. If such a packet is later redirected into an ``XSK``,
-that will also only have access to the custom metadata.
+By default, if an ``xdp_frame`` is redirected and then converted to an ``skb``,
+its fields for hardware-derived metadata like ``skb->hash`` are not
+populated. When this occurs, the network stack recalculates the hash in
+software. This is particularly problematic for encapsulated tunnel traffic
+(e.g., IPsec, GRE), as the software hash is based on the outer headers. For a
+single tunnel, this can cause all flows to receive the same hash, leading to
+poor load balancing when redirected to a veth device or processed by cpumap.
+
+To solve this, a BPF program can calculate a more appropriate hint from the
+packet data (e.g., from the inner headers of a tunnel) and store it for later
+use. While it is also possible for the BPF program to propagate existing
+hardware hints, this is not useful for the tunnel use case; it is unnecessary to
+read the existing hardware metadata hint, as it is based on the outer headers
+and must be recalculated to correctly reflect the inner flow.
+
+For example, a BPF program can perform partial decryption on an IPsec packet,
+calculate a hash from the inner headers, and use ``bpf_xdp_store_rx_hash()`` to
+save it. This ensures that when the packet is redirected to a veth device, it is
+placed on the correct RX queue, achieving proper load balancing.
+
+When these kfuncs are used to store hints before redirection:
+
+* If the ``xdp_frame`` is converted to an ``skb``, the networking stack will use
+  the stored hints to populate the corresponding ``skb`` fields (e.g.,
+  ``skb->hash``, ``skb->vlan_tci``, timestamps).
+
+* When running a second XDP-program after the redirect. The veth driver supports
+  access to the previous stored metadata is accessed though the normal reader
+  kfuncs.
+
+The BPF programmer must explicitly call these "store" kfuncs to save the desired
+hints. The NIC driver is responsible for ensuring sufficient headroom is
+available; kfuncs may return ``-ENOSPC`` if space is inadequate.
+
+Kfuncs are available for storing RX hash (``bpf_xdp_store_rx_hash()``),
+VLAN information (``bpf_xdp_store_rx_vlan()``), and hardware timestamps
+(``bpf_xdp_store_rx_ts()``). Consult the kfunc API documentation for usage
+details, expected data, return codes, and relevant XDP flags that may
+indicate success or metadata availability.
+
+Kfuncs for **store** operations:
+
+.. kernel-doc:: net/core/xdp.c
+   :identifiers: bpf_xdp_store_rx_timestamp
+
+.. kernel-doc:: net/core/xdp.c
+   :identifiers: bpf_xdp_store_rx_hash
+
+.. kernel-doc:: net/core/xdp.c
+   :identifiers: bpf_xdp_store_rx_vlan_tag
+
 
 bpf_tail_call
 =============
