@@ -54,6 +54,19 @@ area in whichever format it chooses. Later consumers of the metadata
 will have to agree on the format by some out of band contract (like for
 the AF_XDP use case, see below).
 
+It is important to note that some devices may utilize the ``data_meta`` area for
+their own purposes. For example, the IGC device utilizes ``IGC_TS_HDR_LEN``
+bytes of the ``data_meta`` area for receiving hardware timestamps. Therefore,
+the XDP program should ensure that it does not overwrite any existing metadata.
+The metadata layout of such device is depicted below::
+
+  +----------+-----------------+--------------------------+------+
+  | headroom | custom metadata | device-reserved metadata | data |
+  +----------+-----------------+--------------------------+------+
+             ^                                            ^
+             |                                            |
+   xdp_buff->data_meta                              xdp_buff->data
+
 AF_XDP
 ======
 
@@ -69,12 +82,23 @@ descriptor does _not_ explicitly carry the size of the metadata).
 
 Here is the ``AF_XDP`` consumer layout (note missing ``data_meta`` pointer)::
 
-  +----------+-----------------+------+
-  | headroom | custom metadata | data |
-  +----------+-----------------+------+
-                               ^
-                               |
-                        rx_desc->address
+             |<--------------METADATA_SIZE--------------->|
+  +----------+-----------------+--------------------------+------+
+  | headroom | custom metadata | device-reserved metadata | data |
+  +----------+-----------------+--------------------------+------+
+                                                          ^
+                                                          |
+                                                   rx_desc->address
+
+It is crucial that the agreed ``METADATA_SIZE`` between the BPF program and the
+final consumer is sufficient to accommodate both device-reserved metadata and
+the data the BPF program needs to populate.
+
+``bpf_xdp_adjust_meta`` ensures that ``METADATA_SIZE`` is aligned to 4 bytes,
+does not exceed 252 bytes, and leaves sufficient space for building the
+xdp_frame. If these conditions are not met, it returns a negative error. In this
+case, the BPF program should not proceed to populate data into the ``data_meta``
+area.
 
 XDP_PASS
 ========
