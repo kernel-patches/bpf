@@ -446,4 +446,7 @@ LIBBPF_1.6.0 {
 		btf__add_type_attr;
 		bpf_object__free_btfs;
 		bpf_program__attach_trace_multi_opts;
+		btf__has_hash;
+		btf__find_by_func_hash;
+		btf__make_hash;
 } LIBBPF_1.5.0;
