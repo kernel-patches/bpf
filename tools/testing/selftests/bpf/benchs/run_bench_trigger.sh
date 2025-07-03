@@ -5,6 +5,7 @@ set -eufo pipefail
 def_tests=( \
 	usermode-count kernel-count syscall-count \
 	fentry fexit fmodret \
+	fentry-multi fentry-multi-all fexit-multi fmodret-multi \
 	rawtp tp \
 	kprobe kprobe-multi \
 	kretprobe kretprobe-multi \
