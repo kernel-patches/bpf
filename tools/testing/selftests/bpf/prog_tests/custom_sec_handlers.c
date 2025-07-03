@@ -37,7 +37,7 @@ static int custom_attach_prog(const struct bpf_program *prog, long cookie,
 		*link = bpf_program__attach_raw_tracepoint(prog, "sys_enter");
 		return libbpf_get_error(*link);
 	case COOKIE_CUSTOM:
-		*link = bpf_program__attach_tracepoint(prog, "syscalls", "sys_enter_nanosleep");
+		*link = bpf_program__attach_tracepoint(prog, "syscalls", SYS_ENTER_NANOSLEEP);
 		return libbpf_get_error(*link);
 	case COOKIE_KPROBE:
 	case COOKIE_FALLBACK:

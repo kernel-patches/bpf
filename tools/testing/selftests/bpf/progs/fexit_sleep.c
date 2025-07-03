@@ -11,7 +11,7 @@ int pid = 0;
 int fentry_cnt = 0;
 int fexit_cnt = 0;
 
-SEC("fentry/" SYS_PREFIX "sys_nanosleep")
+SEC("fentry/" SYS_NANOSLEEP)
 int nanosleep_fentry(void *ctx)
 {
 	if (bpf_get_current_pid_tgid() >> 32 != pid)
@@ -21,7 +21,7 @@ int nanosleep_fentry(void *ctx)
 	return 0;
 }
 
-SEC("fexit/" SYS_PREFIX "sys_nanosleep")
+SEC("fexit/" SYS_NANOSLEEP)
 int nanosleep_fexit(void *ctx)
 {
 	if (bpf_get_current_pid_tgid() >> 32 != pid)

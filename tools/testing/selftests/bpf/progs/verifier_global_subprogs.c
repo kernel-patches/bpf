@@ -305,7 +305,7 @@ __weak int tracing_subprog_u64(u64 *ctx __arg_ctx)
 
 int acc;
 
-SEC("?fentry/" SYS_PREFIX "sys_nanosleep")
+SEC("?fentry/" SYS_NANOSLEEP)
 __success __log_level(2)
 int BPF_PROG(arg_tag_ctx_fentry)
 {
@@ -313,7 +313,7 @@ int BPF_PROG(arg_tag_ctx_fentry)
 	return 0;
 }
 
-SEC("?fexit/" SYS_PREFIX "sys_nanosleep")
+SEC("?fexit/" SYS_NANOSLEEP)
 __success __log_level(2)
 int BPF_PROG(arg_tag_ctx_fexit)
 {
@@ -321,7 +321,7 @@ int BPF_PROG(arg_tag_ctx_fexit)
 	return 0;
 }
 
-SEC("?fmod_ret/" SYS_PREFIX "sys_nanosleep")
+SEC("?fmod_ret/" SYS_NANOSLEEP)
 __success __log_level(2)
 int BPF_PROG(arg_tag_ctx_fmod_ret)
 {

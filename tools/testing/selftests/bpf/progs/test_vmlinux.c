@@ -6,6 +6,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
+#include "bpf_misc.h"
 
 #define MY_TV_NSEC 1337
 
@@ -15,7 +16,7 @@ bool tp_btf_called = false;
 bool kprobe_called = false;
 bool fentry_called = false;
 
-SEC("tp/syscalls/sys_enter_nanosleep")
+SEC("tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int handle__tp(struct syscall_trace_enter *args)
 {
 	struct __kernel_timespec *ts;

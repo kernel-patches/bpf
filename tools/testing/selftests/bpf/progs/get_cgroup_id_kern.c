@@ -3,11 +3,12 @@
 
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
+#include "bpf_misc.h"
 
 __u64 cg_id;
 __u64 expected_pid;
 
-SEC("tracepoint/syscalls/sys_enter_nanosleep")
+SEC("tracepoint/syscalls/" SYS_ENTER_NANOSLEEP)
 int trace(void *ctx)
 {
 	__u32 pid = bpf_get_current_pid_tgid();

@@ -377,14 +377,14 @@ static void tp_subtest(struct test_bpf_cookie *skel)
 	/* attach first tp prog */
 	opts.bpf_cookie = 0x10000;
 	link1 = bpf_program__attach_tracepoint_opts(skel->progs.handle_tp1,
-						    "syscalls", "sys_enter_nanosleep", &opts);
+						    "syscalls", SYS_ENTER_NANOSLEEP, &opts);
 	if (!ASSERT_OK_PTR(link1, "link1"))
 		goto cleanup;
 
 	/* attach second tp prog */
 	opts.bpf_cookie = 0x20000;
 	link2 = bpf_program__attach_tracepoint_opts(skel->progs.handle_tp2,
-						    "syscalls", "sys_enter_nanosleep", &opts);
+						    "syscalls", SYS_ENTER_NANOSLEEP, &opts);
 	if (!ASSERT_OK_PTR(link2, "link2"))
 		goto cleanup;
 
@@ -406,7 +406,7 @@ static void tp_subtest(struct test_bpf_cookie *skel)
 	/* attach third tp prog */
 	opts.bpf_cookie = 0x40000;
 	link3 = bpf_program__attach_tracepoint_opts(skel->progs.handle_tp3,
-						    "syscalls", "sys_enter_nanosleep", &opts);
+						    "syscalls", SYS_ENTER_NANOSLEEP, &opts);
 	if (!ASSERT_OK_PTR(link3, "link3"))
 		goto cleanup;
 

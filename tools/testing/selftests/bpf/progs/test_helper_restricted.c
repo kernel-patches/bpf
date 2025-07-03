@@ -2,6 +2,7 @@
 #include <time.h>
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
+#include "bpf_misc.h"
 
 struct timer {
 	struct bpf_timer t;
@@ -64,7 +65,7 @@ int raw_tp_timer(void *ctx)
 	return 0;
 }
 
-SEC("?tp/syscalls/sys_enter_nanosleep")
+SEC("?tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int tp_timer(void *ctx)
 {
 	timer_work();
@@ -96,7 +97,7 @@ int raw_tp_spin_lock(void *ctx)
 	return 0;
 }
 
-SEC("?tp/syscalls/sys_enter_nanosleep")
+SEC("?tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int tp_spin_lock(void *ctx)
 {
 	spin_lock_work();

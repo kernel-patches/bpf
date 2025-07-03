@@ -41,7 +41,7 @@ char _license[] SEC("license") = "GPL";
 int pid = 0;
 bool done = false;
 
-SEC("fentry/" SYS_PREFIX "sys_nanosleep")
+SEC("fentry/" SYS_NANOSLEEP)
 int add_to_list_in_inner_array(void *ctx)
 {
 	struct map_value *value;

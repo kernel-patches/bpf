@@ -188,6 +188,7 @@
 #define __used __attribute__((used))
 #endif
 
+/* Set up tracepoint and probe symbol names */
 #if defined(__TARGET_ARCH_x86)
 #define SYSCALL_WRAPPER 1
 #define SYS_PREFIX "__x64_"
@@ -207,6 +208,15 @@
 #define SYSCALL_WRAPPER 0
 #define SYS_PREFIX "__se_"
 #endif
+
+#if defined(__TARGET_ARCH_arm)
+#define SYS_SUFFIX_TIME "_time32"
+#else
+#define SYS_SUFFIX_TIME ""
+#endif
+
+#define SYS_NANOSLEEP SYS_PREFIX "sys_nanosleep" SYS_SUFFIX_TIME
+#define SYS_ENTER_NANOSLEEP "sys_enter_nanosleep" SYS_SUFFIX_TIME
 
 /* How many arguments are passed to function in register */
 #if defined(__TARGET_ARCH_x86) || defined(__x86_64__)

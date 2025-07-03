@@ -68,7 +68,7 @@ int BPF_PROG(untrusted_ptr, struct pt_regs *regs, long id)
 	return 0;
 }
 
-SEC("?tracepoint/syscalls/sys_enter_nanosleep")
+SEC("?tracepoint/syscalls/" SYS_ENTER_NANOSLEEP)
 int kctx_u64(void *ctx)
 {
 	u64 *kctx = bpf_core_cast(ctx, u64);

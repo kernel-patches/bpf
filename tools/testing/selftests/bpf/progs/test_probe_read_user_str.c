@@ -3,6 +3,7 @@
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
+#include "bpf_misc.h"
 
 #include <sys/types.h>
 
@@ -11,7 +12,7 @@ long ret = 0;
 void *user_ptr = 0;
 char buf[256] = {};
 
-SEC("tracepoint/syscalls/sys_enter_nanosleep")
+SEC("tracepoint/syscalls/" SYS_ENTER_NANOSLEEP)
 int on_write(void *ctx)
 {
 	if (pid != (bpf_get_current_pid_tgid() >> 32))

@@ -502,6 +502,12 @@ struct netns_obj;
 struct netns_obj *netns_new(const char *name, bool open);
 void netns_free(struct netns_obj *netns);
 
+#if BITS_PER_LONG == 32
+#define SYS_SUFFIX_TIME "_time32"
+#else
+#define SYS_SUFFIX_TIME ""
+#endif
+
 #ifdef __x86_64__
 #define SYS_NANOSLEEP_KPROBE_NAME "__x64_sys_nanosleep"
 #elif defined(__s390x__)
@@ -511,8 +517,10 @@ void netns_free(struct netns_obj *netns);
 #elif defined(__riscv)
 #define SYS_NANOSLEEP_KPROBE_NAME "__riscv_sys_nanosleep"
 #else
-#define SYS_NANOSLEEP_KPROBE_NAME "sys_nanosleep"
+#define SYS_NANOSLEEP_KPROBE_NAME "sys_nanosleep" SYS_SUFFIX_TIME
 #endif
+
+#define SYS_ENTER_NANOSLEEP "sys_enter_nanosleep" SYS_SUFFIX_TIME
 
 #define BPF_TESTMOD_TEST_FILE "/sys/kernel/bpf_testmod"
 

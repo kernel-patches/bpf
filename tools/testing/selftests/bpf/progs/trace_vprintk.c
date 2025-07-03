@@ -12,7 +12,7 @@ int null_data_vprintk_ret = 0;
 int trace_vprintk_ret = 0;
 int trace_vprintk_ran = 0;
 
-SEC("fentry/" SYS_PREFIX "sys_nanosleep")
+SEC("fentry/" SYS_NANOSLEEP)
 int sys_enter(void *ctx)
 {
 	static const char one[] = "1";

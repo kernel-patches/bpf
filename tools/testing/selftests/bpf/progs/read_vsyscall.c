@@ -19,7 +19,7 @@ int bpf_copy_from_user_str(void *dst, u32, const void *, u64) __weak __ksym;
 int bpf_copy_from_user_task_str(void *dst, u32, const void *,
 				struct task_struct *, u64) __weak __ksym;
 
-SEC("fentry/" SYS_PREFIX "sys_nanosleep")
+SEC("fentry/" SYS_NANOSLEEP)
 int do_probe_read(void *ctx)
 {
 	char buf[8];
@@ -37,7 +37,7 @@ int do_probe_read(void *ctx)
 	return 0;
 }
 
-SEC("fentry.s/" SYS_PREFIX "sys_nanosleep")
+SEC("fentry.s/" SYS_NANOSLEEP)
 int do_copy_from_user(void *ctx)
 {
 	char buf[8];

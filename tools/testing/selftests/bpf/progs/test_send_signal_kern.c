@@ -3,6 +3,7 @@
 #include <vmlinux.h>
 #include <linux/version.h>
 #include <bpf/bpf_helpers.h>
+#include "bpf_misc.h"
 
 struct task_struct *bpf_task_from_pid(int pid) __ksym;
 void bpf_task_release(struct task_struct *p) __ksym;
@@ -48,7 +49,7 @@ static __always_inline int bpf_send_signal_test(void *ctx)
 	return 0;
 }
 
-SEC("tracepoint/syscalls/sys_enter_nanosleep")
+SEC("tracepoint/syscalls/" SYS_ENTER_NANOSLEEP)
 int send_signal_tp(void *ctx)
 {
 	return bpf_send_signal_test(ctx);

@@ -4,6 +4,7 @@
 #include <linux/bpf.h>
 #include <stdint.h>
 #include <bpf/bpf_helpers.h>
+#include "bpf_misc.h"
 
 struct {
 	__uint(type, BPF_MAP_TYPE_SOCKMAP);
@@ -28,7 +29,7 @@ static void get_pid_tgid(void)
 	user_tgid = nsdata.tgid;
 }
 
-SEC("?tracepoint/syscalls/sys_enter_nanosleep")
+SEC("?tracepoint/syscalls/" SYS_ENTER_NANOSLEEP)
 int tp_handler(const void *ctx)
 {
 	get_pid_tgid();

@@ -77,7 +77,7 @@ out:
 	return 0;
 }
 
-SEC("?fentry.s/" SYS_PREFIX "sys_nanosleep")
+SEC("?fentry.s/" SYS_NANOSLEEP)
 int no_lock(void *ctx)
 {
 	struct task_struct *task, *real_parent;
@@ -89,7 +89,7 @@ int no_lock(void *ctx)
 	return 0;
 }
 
-SEC("?fentry.s/" SYS_PREFIX "sys_nanosleep")
+SEC("?fentry.s/" SYS_NANOSLEEP)
 int two_regions(void *ctx)
 {
 	struct task_struct *task, *real_parent;
@@ -143,7 +143,7 @@ out:
 	return 0;
 }
 
-SEC("?fentry.s/" SYS_PREFIX "sys_nanosleep")
+SEC("?fentry.s/" SYS_NANOSLEEP)
 int task_acquire(void *ctx)
 {
 	struct task_struct *task, *real_parent, *gparent;
@@ -259,7 +259,7 @@ int BPF_PROG(inproper_sleepable_kfunc, int cmd, union bpf_attr *attr, unsigned i
 	return 0;
 }
 
-SEC("?fentry.s/" SYS_PREFIX "sys_nanosleep")
+SEC("?fentry.s/" SYS_NANOSLEEP)
 int nested_rcu_region(void *ctx)
 {
 	struct task_struct *task, *real_parent;
@@ -306,7 +306,7 @@ int task_untrusted_rcuptr(void *ctx)
 	return 0;
 }
 
-SEC("?fentry.s/" SYS_PREFIX "sys_nanosleep")
+SEC("?fentry.s/" SYS_NANOSLEEP)
 int cross_rcu_region(void *ctx)
 {
 	struct task_struct *task, *real_parent;

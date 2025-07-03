@@ -30,7 +30,7 @@ bool done = false;
 bool pid_match = false;
 bool outer_map_match = false;
 
-SEC("fentry/" SYS_PREFIX "sys_nanosleep")
+SEC("fentry/" SYS_NANOSLEEP)
 int add_to_list_in_inner_array(void *ctx)
 {
 	__u32 curr_pid, zero = 0;

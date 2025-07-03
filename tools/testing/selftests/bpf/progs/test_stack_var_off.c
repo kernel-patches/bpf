@@ -2,13 +2,14 @@
 
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
+#include "bpf_misc.h"
 
 int probe_res;
 
 char input[4] = {};
 int test_pid;
 
-SEC("tracepoint/syscalls/sys_enter_nanosleep")
+SEC("tracepoint/syscalls/" SYS_ENTER_NANOSLEEP)
 int probe(void *ctx)
 {
 	/* This BPF program performs variable-offset reads and writes on a

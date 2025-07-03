@@ -33,7 +33,7 @@ struct {
 	__type(value, __u32);
 } array_map SEC(".maps");
 
-SEC("?tp/syscalls/sys_enter_nanosleep")
+SEC("?tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_read_write(void *ctx)
 {
 	char write_data[64] = "hello there, world!!";
@@ -64,7 +64,7 @@ int test_read_write(void *ctx)
 	return 0;
 }
 
-SEC("?tp/syscalls/sys_enter_nanosleep")
+SEC("?tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_dynptr_data(void *ctx)
 {
 	__u32 key = 0, val = 235, *map_val;
@@ -134,7 +134,7 @@ static int ringbuf_callback(__u32 index, void *data)
 	return 0;
 }
 
-SEC("?tp/syscalls/sys_enter_nanosleep")
+SEC("?tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_ringbuf(void *ctx)
 {
 	struct bpf_dynptr ptr;
@@ -265,7 +265,7 @@ int test_dynptr_skb_meta_flags(struct __sk_buff *skb)
 	return 1;
 }
 
-SEC("tp/syscalls/sys_enter_nanosleep")
+SEC("tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_adjust(void *ctx)
 {
 	struct bpf_dynptr ptr;
@@ -317,7 +317,7 @@ done:
 	return 0;
 }
 
-SEC("tp/syscalls/sys_enter_nanosleep")
+SEC("tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_adjust_err(void *ctx)
 {
 	char write_data[45] = "hello there, world!!";
@@ -375,7 +375,7 @@ done:
 	return 0;
 }
 
-SEC("tp/syscalls/sys_enter_nanosleep")
+SEC("tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_zero_size_dynptr(void *ctx)
 {
 	char write_data = 'x', read_data;
@@ -425,7 +425,7 @@ done:
 	return 0;
 }
 
-SEC("tp/syscalls/sys_enter_nanosleep")
+SEC("tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_dynptr_is_null(void *ctx)
 {
 	struct bpf_dynptr ptr1;
@@ -634,7 +634,7 @@ static inline int bpf_memcmp(const char *a, const char *b, u32 size)
 	return 0;
 }
 
-SEC("?tp/syscalls/sys_enter_nanosleep")
+SEC("?tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_dynptr_copy(void *ctx)
 {
 	char data[] = "hello there, world!!";
@@ -740,7 +740,7 @@ out:
 
 char memset_zero_data[] = "data to be zeroed";
 
-SEC("?tp/syscalls/sys_enter_nanosleep")
+SEC("?tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_dynptr_memset_zero(void *ctx)
 {
 	__u32 data_sz = sizeof(memset_zero_data);
@@ -758,7 +758,7 @@ int test_dynptr_memset_zero(void *ctx)
 
 char memset_notzero_data[] = "data to be overwritten";
 
-SEC("?tp/syscalls/sys_enter_nanosleep")
+SEC("?tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_dynptr_memset_notzero(void *ctx)
 {
 	u32 data_sz = sizeof(memset_notzero_data);
@@ -776,7 +776,7 @@ int test_dynptr_memset_notzero(void *ctx)
 
 char memset_zero_offset_data[] = "data to be zeroed partially";
 
-SEC("?tp/syscalls/sys_enter_nanosleep")
+SEC("?tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_dynptr_memset_zero_offset(void *ctx)
 {
 	char expected[] = "data to \0\0\0\0eroed partially";
@@ -792,7 +792,7 @@ int test_dynptr_memset_zero_offset(void *ctx)
 
 char memset_zero_adjusted_data[] = "data to be zeroed partially";
 
-SEC("?tp/syscalls/sys_enter_nanosleep")
+SEC("?tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_dynptr_memset_zero_adjusted(void *ctx)
 {
 	char expected[] = "data\0\0\0\0be zeroed partially";
@@ -809,7 +809,7 @@ int test_dynptr_memset_zero_adjusted(void *ctx)
 
 char memset_overflow_data[] = "memset overflow data";
 
-SEC("?tp/syscalls/sys_enter_nanosleep")
+SEC("?tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_dynptr_memset_overflow(void *ctx)
 {
 	__u32 data_sz = sizeof(memset_overflow_data);
@@ -824,7 +824,7 @@ int test_dynptr_memset_overflow(void *ctx)
 	return 0;
 }
 
-SEC("?tp/syscalls/sys_enter_nanosleep")
+SEC("?tp/syscalls/" SYS_ENTER_NANOSLEEP)
 int test_dynptr_memset_overflow_offset(void *ctx)
 {
 	__u32 data_sz = sizeof(memset_overflow_data);
@@ -1091,14 +1091,14 @@ int test_probe_read_kernel_str_dynptr(struct xdp_md *xdp)
 	return XDP_PASS;
 }
 
-SEC("fentry.s/" SYS_PREFIX "sys_nanosleep")
+SEC("fentry.s/" SYS_NANOSLEEP)
 int test_copy_from_user_dynptr(void *ctx)
 {
 	test_dynptr_probe(user_ptr, bpf_copy_from_user_dynptr);
 	return 0;
 }
 
-SEC("fentry.s/" SYS_PREFIX "sys_nanosleep")
+SEC("fentry.s/" SYS_NANOSLEEP)
 int test_copy_from_user_str_dynptr(void *ctx)
 {
 	test_dynptr_probe_str(user_ptr, bpf_copy_from_user_str_dynptr);
@@ -1121,14 +1121,14 @@ static int bpf_copy_data_from_user_task_str(struct bpf_dynptr *dptr, u32 off,
 	return bpf_copy_from_user_task_str_dynptr(dptr, off, size, unsafe_ptr, task);
 }
 
-SEC("fentry.s/" SYS_PREFIX "sys_nanosleep")
+SEC("fentry.s/" SYS_NANOSLEEP)
 int test_copy_from_user_task_dynptr(void *ctx)
 {
 	test_dynptr_probe(user_ptr, bpf_copy_data_from_user_task);
 	return 0;
 }
 
-SEC("fentry.s/" SYS_PREFIX "sys_nanosleep")
+SEC("fentry.s/" SYS_NANOSLEEP)
 int test_copy_from_user_task_str_dynptr(void *ctx)
 {
 	test_dynptr_probe_str(user_ptr, bpf_copy_data_from_user_task_str);
