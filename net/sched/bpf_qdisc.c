@@ -38,7 +38,7 @@ static bool bpf_qdisc_is_valid_access(int off, int size,
 	struct btf *btf = prog->aux->attach_btf;
 	u32 arg;
 
-	arg = btf_ctx_arg_idx(btf, prog->aux->attach_func_proto, off);
+	arg = btf_ctx_arg_idx(btf, prog->aux->attach_func_proto, off, NULL);
 	if (prog->aux->attach_st_ops_member_off == offsetof(struct Qdisc_ops, enqueue)) {
 		if (arg == 2 && type == BPF_READ) {
 			info->reg_type = PTR_TO_BTF_ID | PTR_TRUSTED;
