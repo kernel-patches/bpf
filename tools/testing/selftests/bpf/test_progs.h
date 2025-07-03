@@ -496,6 +496,9 @@ int trigger_module_test_write(int write_sz);
 int write_sysctl(const char *sysctl, const char *value);
 int get_bpf_max_tramp_links_from(struct btf *btf);
 int get_bpf_max_tramp_links(void);
+int bpf_to_tracing_multi(struct bpf_program **progs, int prog_cnt);
+int bpf_attach_as_tracing_multi(struct bpf_program **progs, int prog_cnt,
+				struct bpf_link **link);
 
 struct netns_obj;
 struct netns_obj *netns_new(const char *name, bool open);

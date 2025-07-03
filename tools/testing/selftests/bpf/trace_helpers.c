@@ -559,6 +559,75 @@ static bool skip_entry(char *name)
 	if (!strncmp(name, "__ftrace_invalid_address__",
 		     sizeof("__ftrace_invalid_address__") - 1))
 		return true;
+
+	/* skip functions in "btf_id_deny" */
+	if (!strcmp(name, "migrate_disable"))
+		return true;
+	if (!strcmp(name, "migrate_enable"))
+		return true;
+	if (!strcmp(name, "rcu_read_unlock_strict"))
+		return true;
+	if (!strcmp(name, "preempt_count_add"))
+		return true;
+	if (!strcmp(name, "preempt_count_sub"))
+		return true;
+	if (!strcmp(name, "__rcu_read_lock"))
+		return true;
+	if (!strcmp(name, "__rcu_read_unlock"))
+		return true;
+
+	/* Following symbols have multi definition in kallsyms, take
+	 * "t_next" for example:
+	 *
+	 *     ffffffff813c10d0 t t_next
+	 *     ffffffff813d31b0 t t_next
+	 *     ffffffff813e06b0 t t_next
+	 *     ffffffff813eb360 t t_next
+	 *     ffffffff81613360 t t_next
+	 *
+	 * but only one of them have corresponding mrecord:
+	 *     ffffffff81613364 t_next
+	 *
+	 * The kernel search the target function address by the symbol
+	 * name "t_next" with kallsyms_lookup_name() during attaching
+	 * and the function "0xffffffff813c10d0" can be matched, which
+	 * doesn't have a corresponding mrecord. And this will make
+	 * the attach failing. Skip the functions like this.
+	 *
+	 * The list maybe not whole, so we still can fail......We need a
+	 * way to make the whole things right. Yes, we need fix it :/
+	 */
+	if (!strcmp(name, "kill_pid_usb_asyncio"))
+		return true;
+	if (!strcmp(name, "t_next"))
+		return true;
+	if (!strcmp(name, "t_stop"))
+		return true;
+	if (!strcmp(name, "t_start"))
+		return true;
+	if (!strcmp(name, "p_next"))
+		return true;
+	if (!strcmp(name, "p_stop"))
+		return true;
+	if (!strcmp(name, "p_start"))
+		return true;
+	if (!strcmp(name, "mem32_serial_out"))
+		return true;
+	if (!strcmp(name, "mem32_serial_in"))
+		return true;
+	if (!strcmp(name, "io_serial_in"))
+		return true;
+	if (!strcmp(name, "io_serial_out"))
+		return true;
+	if (!strcmp(name, "event_callback"))
+		return true;
+	if (!strcmp(name, "amd_pmu_init"))
+		return true;
+	if (!strcmp(name, "sync_regs"))
+		return true;
+	if (!strcmp(name, "empty"))
+		return true;
+
 	return false;
 }
 

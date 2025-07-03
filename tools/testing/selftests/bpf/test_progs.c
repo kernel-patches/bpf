@@ -667,6 +667,56 @@ int bpf_find_map(const char *test, struct bpf_object *obj, const char *name)
 	return bpf_map__fd(map);
 }
 
+int bpf_to_tracing_multi(struct bpf_program **progs, int prog_cnt)
+{
+	enum bpf_attach_type type;
+	int i, err;
+
+	for (i = 0; i < prog_cnt; i++) {
+		type = bpf_program__get_expected_attach_type(progs[i]);
+		if (type == BPF_TRACE_FENTRY)
+			type = BPF_TRACE_FENTRY_MULTI;
+		else if (type == BPF_TRACE_FEXIT)
+			type = BPF_TRACE_FEXIT_MULTI;
+		else if (type == BPF_MODIFY_RETURN)
+			type = BPF_MODIFY_RETURN_MULTI;
+		else
+			continue;
+		err = bpf_program__set_expected_attach_type(progs[i], type);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+int bpf_attach_as_tracing_multi(struct bpf_program **progs, int prog_cnt,
+				struct bpf_link **link)
+{
+	struct bpf_link *__link;
+	int err, type;
+
+	for (int i = 0; i < prog_cnt; i++) {
+		LIBBPF_OPTS(bpf_trace_multi_opts, opts);
+
+		type = bpf_program__get_expected_attach_type(progs[i]);
+		if (type != BPF_TRACE_FENTRY_MULTI &&
+		    type != BPF_TRACE_FEXIT_MULTI &&
+		    type != BPF_MODIFY_RETURN_MULTI)
+			continue;
+
+		opts.attach_tracing = true;
+		__link = bpf_program__attach_trace_multi_opts(progs[i], &opts);
+		err = libbpf_get_error(link);
+		if (err)
+			return err;
+
+		link[i] = __link;
+	}
+
+	return 0;
+}
+
 int compare_map_keys(int map1_fd, int map2_fd)
 {
 	__u32 key, next_key;
