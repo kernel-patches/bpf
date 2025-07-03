@@ -58,6 +58,8 @@ struct bpf_token;
 struct user_namespace;
 struct super_block;
 struct inode;
+struct bpf_tramp_link;
+struct bpf_gtramp_link;
 
 extern struct idr btf_idr;
 extern spinlock_t btf_idr_lock;
@@ -1279,6 +1281,12 @@ struct bpf_trampoline {
 	struct bpf_tramp_image *cur_image;
 };
 
+struct bpf_global_trampoline {
+	struct ftrace_ops *fops;
+	void *image;
+	int nr_args;
+};
+
 struct bpf_attach_target_info {
 	struct btf_func_model fmodel;
 	long tgt_addr;
@@ -1381,6 +1389,9 @@ struct bpf_trampoline *bpf_trampoline_get(u64 key,
 					  struct bpf_attach_target_info *tgt_info);
 void bpf_trampoline_put(struct bpf_trampoline *tr);
 int arch_prepare_bpf_dispatcher(void *image, void *buf, s64 *funcs, int num_funcs);
+
+int bpf_gtrampoline_link_prog(struct bpf_gtramp_link *link);
+int bpf_gtrampoline_unlink_prog(struct bpf_gtramp_link *link);
 
 /*
  * When the architecture supports STATIC_CALL replace the bpf_dispatcher_fn
@@ -1489,6 +1500,14 @@ static inline bool is_bpf_image_address(unsigned long address)
 static inline bool bpf_prog_has_trampoline(const struct bpf_prog *prog)
 {
 	return false;
+}
+int bpf_gtrampoline_link_prog(struct bpf_gtramp_link *link)
+{
+	return -ENODEV;
+}
+int bpf_gtrampoline_unlink_prog(struct bpf_gtramp_link *link)
+{
+	return -ENODEV;
 }
 #endif
 
@@ -1744,6 +1763,22 @@ struct bpf_tramp_link {
 struct bpf_shim_tramp_link {
 	struct bpf_tramp_link link;
 	struct bpf_trampoline *trampoline;
+};
+
+struct bpf_gtramp_link_entry {
+	struct bpf_prog *tgt_prog;
+	struct bpf_trampoline *trampoline;
+	void *addr;
+	struct btf *attach_btf;
+	u64 cookie;
+	u32 btf_id;
+	u32 nr_args;
+};
+
+struct bpf_gtramp_link {
+	struct bpf_link link;
+	struct bpf_gtramp_link_entry *entries;
+	u32 entry_cnt;
 };
 
 struct bpf_tracing_link {
