@@ -13,6 +13,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/bpf_lsm.h>
 #include <linux/delay.h>
+#include <linux/bpf_tramp.h>
 
 /* dummy _ops. The verifier will operate on target program's ops. */
 const struct bpf_verifier_ops bpf_extension_verifier_ops = {
@@ -868,19 +869,6 @@ out:
 	mutex_unlock(&trampoline_mutex);
 }
 
-#define NO_START_TIME 1
-static __always_inline u64 notrace bpf_prog_start_time(void)
-{
-	u64 start = NO_START_TIME;
-
-	if (static_branch_unlikely(&bpf_stats_enabled_key)) {
-		start = sched_clock();
-		if (unlikely(!start))
-			start = NO_START_TIME;
-	}
-	return start;
-}
-
 /* The logic is similar to bpf_prog_run(), but with an explicit
  * rcu_read_lock() and migrate_disable() which are required
  * for the trampoline. The macro is split into
@@ -911,7 +899,7 @@ static u64 notrace __bpf_prog_enter_recur(struct bpf_prog *prog, struct bpf_tram
 	return bpf_prog_start_time();
 }
 
-static void notrace __update_prog_stats(struct bpf_prog *prog, u64 start)
+void notrace __update_prog_stats(struct bpf_prog *prog, u64 start)
 {
 	struct bpf_prog_stats *stats;
 	unsigned long flags;
@@ -930,13 +918,6 @@ static void notrace __update_prog_stats(struct bpf_prog *prog, u64 start)
 	u64_stats_inc(&stats->cnt);
 	u64_stats_add(&stats->nsecs, duration);
 	u64_stats_update_end_irqrestore(&stats->syncp, flags);
-}
-
-static __always_inline void notrace update_prog_stats(struct bpf_prog *prog,
-						      u64 start)
-{
-	if (static_branch_unlikely(&bpf_stats_enabled_key))
-		__update_prog_stats(prog, start);
 }
 
 static void notrace __bpf_prog_exit_recur(struct bpf_prog *prog, u64 start,

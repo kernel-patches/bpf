@@ -11,6 +11,8 @@
 #include <linux/bpf.h>
 #include <linux/memory.h>
 #include <linux/sort.h>
+#include <linux/bpf_tramp.h>
+#include <linux/kfunc_md.h>
 #include <asm/extable.h>
 #include <asm/ftrace.h>
 #include <asm/set_memory.h>
@@ -3412,6 +3414,272 @@ int arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
 	bpf_jit_free_exec(image);
 	return ret;
 }
+
+#define FUNC_ARGS_0		((2 - 1) * 8)
+#define FUNC_ARGS_1		((2 + 0) * 8)
+#define FUNC_ARGS_2		((2 + 1) * 8)
+#define FUNC_ARGS_3		((2 + 2) * 8)
+#define FUNC_ARGS_4		((2 + 3) * 8)
+#define FUNC_ARGS_5		((2 + 4) * 8)
+#define FUNC_ARGS_6		((2 + 5) * 8)
+
+#define SAVE_ARGS_0
+#define SAVE_ARGS_1						\
+	"movq %rdi, " __stringify(FUNC_ARGS_1) "(%rsp)\n"
+#define SAVE_ARGS_2 SAVE_ARGS_1					\
+	"movq %rsi, " __stringify(FUNC_ARGS_2) "(%rsp)\n"
+#define SAVE_ARGS_3 SAVE_ARGS_2					\
+	"movq %rdx, " __stringify(FUNC_ARGS_3) "(%rsp)\n"
+#define SAVE_ARGS_4 SAVE_ARGS_3					\
+	"movq %rcx, " __stringify(FUNC_ARGS_4) "(%rsp)\n"
+#define SAVE_ARGS_5 SAVE_ARGS_4					\
+	"movq %r8, " __stringify(FUNC_ARGS_5) "(%rsp)\n"
+#define SAVE_ARGS_6 SAVE_ARGS_5					\
+	"movq %r9, " __stringify(FUNC_ARGS_6) "(%rsp)\n"	\
+
+#define RESTORE_ARGS_0
+#define RESTORE_ARGS_1						\
+	"movq " __stringify(FUNC_ARGS_1) "(%rsp), %rdi\n"
+#define RESTORE_ARGS_2 RESTORE_ARGS_1				\
+	"movq " __stringify(FUNC_ARGS_2) "(%rsp), %rsi\n"
+#define RESTORE_ARGS_3 RESTORE_ARGS_2				\
+	"movq " __stringify(FUNC_ARGS_3) "(%rsp), %rdx\n"
+#define RESTORE_ARGS_4 RESTORE_ARGS_3				\
+	"movq " __stringify(FUNC_ARGS_4) "(%rsp), %rcx\n"
+#define RESTORE_ARGS_5 RESTORE_ARGS_4				\
+	"movq " __stringify(FUNC_ARGS_5) "(%rsp), %r8\n"
+#define RESTORE_ARGS_6 RESTORE_ARGS_5				\
+	"movq " __stringify(FUNC_ARGS_6) "(%rsp), %r9\n"
+
+#define RESTORE_ORIGIN_0
+#define RESTORE_ORIGIN_1						\
+	"movq " __stringify(FUNC_ARGS_1 - FUNC_ARGS_1) "(%[args]), %%rdi\n"
+#define RESTORE_ORIGIN_2 RESTORE_ORIGIN_1				\
+	"movq " __stringify(FUNC_ARGS_2 - FUNC_ARGS_1) "(%[args]), %%rsi\n"
+#define RESTORE_ORIGIN_3 RESTORE_ORIGIN_2				\
+	"movq " __stringify(FUNC_ARGS_3 - FUNC_ARGS_1) "(%[args]), %%rdx\n"
+#define RESTORE_ORIGIN_4 RESTORE_ORIGIN_3				\
+	"movq " __stringify(FUNC_ARGS_4 - FUNC_ARGS_1) "(%[args]), %%rcx\n"
+#define RESTORE_ORIGIN_5 RESTORE_ORIGIN_4				\
+	"movq " __stringify(FUNC_ARGS_5 - FUNC_ARGS_1) "(%[args]), %%r8\n"
+#define RESTORE_ORIGIN_6 RESTORE_ORIGIN_5				\
+	"movq " __stringify(FUNC_ARGS_6 - FUNC_ARGS_1) "(%[args]), %%r9\n"
+
+static __always_inline void
+do_origin_call(unsigned long *args, unsigned long *ip, int nr_args)
+{
+	/* Following code will be optimized by the compiler, as nr_args
+	 * is a const, and there will be no condition here.
+	 */
+	if (nr_args == 0) {
+		asm volatile(
+			RESTORE_ORIGIN_0 CALL_NOSPEC "\n"
+			"movq %%rax, %0\n"
+			: "=m"(args[nr_args]), ASM_CALL_CONSTRAINT
+			: [args]"r"(args), [thunk_target]"r"(*ip)
+			:
+		);
+	} else if (nr_args == 1) {
+		asm volatile(
+			RESTORE_ORIGIN_1 CALL_NOSPEC "\n"
+			"movq %%rax, %0\n"
+			: "=m"(args[nr_args]), ASM_CALL_CONSTRAINT
+			: [args]"r"(args), [thunk_target]"r"(*ip)
+			: "rdi"
+		);
+	} else if (nr_args == 2) {
+		asm volatile(
+			RESTORE_ORIGIN_2 CALL_NOSPEC "\n"
+			"movq %%rax, %0\n"
+			: "=m"(args[nr_args]), ASM_CALL_CONSTRAINT
+			: [args]"r"(args), [thunk_target]"r"(*ip)
+			: "rdi", "rsi"
+		);
+	} else if (nr_args == 3) {
+		asm volatile(
+			RESTORE_ORIGIN_3 CALL_NOSPEC "\n"
+			"movq %%rax, %0\n"
+			: "=m"(args[nr_args]), ASM_CALL_CONSTRAINT
+			: [args]"r"(args), [thunk_target]"r"(*ip)
+			: "rdi", "rsi", "rdx"
+		);
+	} else if (nr_args == 4) {
+		asm volatile(
+			RESTORE_ORIGIN_4 CALL_NOSPEC "\n"
+			"movq %%rax, %0\n"
+			: "=m"(args[nr_args]), ASM_CALL_CONSTRAINT
+			: [args]"r"(args), [thunk_target]"r"(*ip)
+			: "rdi", "rsi", "rdx", "rcx"
+		);
+	} else if (nr_args == 5) {
+		asm volatile(
+			RESTORE_ORIGIN_5 CALL_NOSPEC "\n"
+			"movq %%rax, %0\n"
+			: "=m"(args[nr_args]), ASM_CALL_CONSTRAINT
+			: [args]"r"(args), [thunk_target]"r"(*ip)
+			: "rdi", "rsi", "rdx", "rcx", "r8"
+		);
+	} else if (nr_args == 6) {
+		asm volatile(
+			RESTORE_ORIGIN_6 CALL_NOSPEC "\n"
+			"movq %%rax, %0\n"
+			: "=m"(args[nr_args]), ASM_CALL_CONSTRAINT
+			: [args]"r"(args), [thunk_target]"r"(*ip)
+			: "rdi", "rsi", "rdx", "rcx", "r8", "r9"
+		);
+	}
+}
+
+static __always_inline notrace void
+run_tramp_prog(struct kfunc_md_tramp_prog *tramp_prog,
+	       struct bpf_tramp_run_ctx *run_ctx, unsigned long *args)
+{
+	struct bpf_prog *prog;
+	u64 start_time;
+
+	while (tramp_prog) {
+		prog = tramp_prog->prog;
+		run_ctx->bpf_cookie = tramp_prog->cookie;
+		start_time = bpf_gtramp_enter(prog, run_ctx);
+
+		if (likely(start_time)) {
+			asm volatile(
+				CALL_NOSPEC "\n"
+				: : [thunk_target]"r"(prog->bpf_func), [args]"D"(args)
+			);
+		}
+
+		bpf_gtramp_exit(prog, start_time, run_ctx);
+		tramp_prog = tramp_prog->next;
+	}
+}
+
+static __always_inline notrace int
+bpf_global_caller_run(unsigned long *args, unsigned long *ip, int nr_args)
+{
+	unsigned long origin_ip = (*ip) & 0xfffffffffffffff0; // Align to 16 bytes
+	struct kfunc_md_tramp_prog *tramp_prog;
+	struct bpf_tramp_run_ctx run_ctx;
+	struct kfunc_md *md;
+	bool do_orgin;
+
+	rcu_read_lock();
+	md = kfunc_md_get_rcu(origin_ip);
+	do_orgin = md->bpf_origin_call;
+	if (do_orgin)
+		kfunc_md_enter(md);
+	rcu_read_unlock();
+
+	/* save the origin function ip for bpf_get_func_ip() */
+	*(args - 2) = origin_ip;
+	*(args - 1) = nr_args;
+
+	run_tramp_prog(md->bpf_progs[BPF_TRAMP_FENTRY], &run_ctx, args);
+
+	/* no fexit and modify_return, return directly */
+	if (!do_orgin)
+		return 0;
+
+	/* modify return case */
+	tramp_prog = md->bpf_progs[BPF_TRAMP_MODIFY_RETURN];
+	/* initialize return value */
+	args[nr_args] = 0;
+	while (tramp_prog) {
+		struct bpf_prog *prog;
+		u64 start_time, ret;
+
+		prog = tramp_prog->prog;
+		run_ctx.bpf_cookie = tramp_prog->cookie;
+		start_time = bpf_gtramp_enter(prog, &run_ctx);
+
+		if (likely(start_time)) {
+			asm volatile(
+				CALL_NOSPEC "\n"
+				: "=a"(ret), ASM_CALL_CONSTRAINT
+				: [thunk_target]"r"(prog->bpf_func),
+				  [args]"D"(args)
+			);
+			args[nr_args] = ret;
+		} else {
+			ret = 0;
+		}
+
+		bpf_gtramp_exit(prog, start_time, &run_ctx);
+		if (ret)
+			goto do_fexit;
+		tramp_prog = tramp_prog->next;
+	}
+
+	/* restore the function arguments and call the origin function */
+	do_origin_call(args, ip, nr_args);
+do_fexit:
+	run_tramp_prog(md->bpf_progs[BPF_TRAMP_FEXIT], &run_ctx, args);
+	kfunc_md_exit(md);
+	return 1;
+}
+
+/* Layout of the stack frame:
+ *   rip		----> 8 bytes
+ *   return value	----> 8 bytes
+ *   args		----> 8 * 6 bytes
+ *   arg count		----> 8 bytes
+ *   origin ip		----> 8 bytes
+ */
+#define stack_size __stringify(8 + 8 + 6 * 8 + 8)
+
+#define CALLER_DEFINE(name, nr_args)					\
+static __always_used __no_stack_protector notrace int			\
+name##_run(unsigned long *args, unsigned long *ip)			\
+{									\
+	return bpf_global_caller_run(args, ip, nr_args);		\
+}									\
+static __naked void name(void)						\
+{									\
+	asm volatile(							\
+		"subq $" stack_size ", %rsp\n"				\
+		SAVE_ARGS_##nr_args					\
+	);								\
+									\
+	asm volatile(							\
+		"leaq " __stringify(FUNC_ARGS_1) "(%rsp), %rdi\n"	\
+		"leaq " stack_size "(%rsp), %rsi\n"			\
+		"call " #name "_run\n"					\
+		"test %rax, %rax\n"					\
+		"jne 1f\n"						\
+	);								\
+									\
+	asm volatile(							\
+		RESTORE_ARGS_##nr_args					\
+		"addq $" stack_size ", %rsp\n"				\
+		ASM_RET							\
+	);								\
+									\
+	asm volatile(							\
+		"1:\n"							\
+		"movq " __stringify(FUNC_ARGS_##nr_args + 8)		\
+		"(%rsp), %rax\n"					\
+		"addq $(" stack_size " + 8), %rsp\n"			\
+		ASM_RET);						\
+}									\
+STACK_FRAME_NON_STANDARD(name)
+
+CALLER_DEFINE(bpf_global_caller_0, 0);
+CALLER_DEFINE(bpf_global_caller_1, 1);
+CALLER_DEFINE(bpf_global_caller_2, 2);
+CALLER_DEFINE(bpf_global_caller_3, 3);
+CALLER_DEFINE(bpf_global_caller_4, 4);
+CALLER_DEFINE(bpf_global_caller_5, 5);
+CALLER_DEFINE(bpf_global_caller_6, 6);
+
+void *bpf_gloabl_caller_array[MAX_BPF_FUNC_ARGS + 1] = {
+	bpf_global_caller_0,
+	bpf_global_caller_1,
+	bpf_global_caller_2,
+	bpf_global_caller_3,
+	bpf_global_caller_4,
+	bpf_global_caller_5,
+	bpf_global_caller_6,
+};
 
 static int emit_bpf_dispatcher(u8 **pprog, int a, int b, s64 *progs, u8 *image, u8 *buf)
 {
