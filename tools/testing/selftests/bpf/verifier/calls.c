@@ -2433,3 +2433,16 @@
 	.errstr = "more than one arg with ref_obj_id",
 	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 },
+{
+	"calls: wrong map type for tail call",
+	.insns = {
+	BPF_MOV64_IMM(BPF_REG_3, 0),
+	BPF_LD_MAP_FD(BPF_REG_2, 0),
+	BPF_EMIT_CALL(BPF_FUNC_tail_call),
+	BPF_EXIT_INSN(),
+	},
+	.fixup_map_array_small = { 1 },
+	.result = REJECT,
+	.errstr = "expected prog array map for tail call",
+	.prog_type = BPF_PROG_TYPE_CGROUP_SKB,
+},
