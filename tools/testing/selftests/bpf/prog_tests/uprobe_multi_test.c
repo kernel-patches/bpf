@@ -1085,8 +1085,11 @@ static void run_pid_filter(struct uprobe_multi_pid_filter *skel, bool clone_vm, 
 		link[i] = bpf_program__attach_uprobe_multi(uprobe_multi_program(skel, i),
 							   child[i].pid, "/proc/self/exe",
 							   "uprobe_multi_func_1", &opts);
-		if (!ASSERT_OK_PTR(link[i], "bpf_program__attach_uprobe_multi"))
+		if (!ASSERT_OK_PTR(link[i], "bpf_program__attach_uprobe_multi")) {
+			for (i = 0; i < TASKS; i++)
+				kick_child(&child[i]);
 			goto cleanup;
+		}
 	}
 
 	for (i = 0; i < TASKS; i++)
