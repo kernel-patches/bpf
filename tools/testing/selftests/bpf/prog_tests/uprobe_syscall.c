@@ -799,6 +799,72 @@ static void test_uprobe_sigill(void)
 	ASSERT_EQ(WTERMSIG(status), SIGILL, "WTERMSIG");
 }
 
+#define UPROBE_TRAMPOLINE_TEST_FILE "/sys/kernel/uprobe_trampoline"
+
+static int write_trampoline(unsigned long vaddr)
+{
+	size_t n, ret;
+	char buf[30];
+	int fd;
+
+	fprintf(stderr, "KRAVA vaddr %lx\n", vaddr);
+
+	n = sprintf(buf, "%lu", vaddr);
+
+	fd = open(UPROBE_TRAMPOLINE_TEST_FILE, O_WRONLY);
+	if (fd < 0)
+		return -errno;
+
+	ret = write(fd, buf, n);
+	close(fd);
+	return ret != n ? (int) ret : 0;
+}
+
+#define TASK_SIZE 0x7ffffffff000
+static void test_trampoline(void)
+{
+	int i;
+
+	fprintf(stderr, "KRAVA 1\n");
+
+	write_trampoline(0x2000);
+	write_trampoline((1UL << 32) + 0x2000);
+	write_trampoline((1UL << 32)*10 + 0x1000);
+	write_trampoline((1UL << 32)*10 - 0x1000);
+
+	fprintf(stderr, "KRAVA 2\n");
+
+	for (i = 0; i < 10; i++) {
+		write_trampoline((1UL << 32)*10 - i*1*(1UL << 30));
+		write_trampoline((1UL << 32)*10 - i*1*(1UL << 30) + 4096);
+	}
+
+	fprintf(stderr, "KRAVA 3\n");
+
+	for (i = 0; i < 10; i++) {
+		write_trampoline((1UL << 32)*10 + i*1*(1UL << 30));
+		write_trampoline((1UL << 32)*10 + i*1*(1UL << 30) + 4096);
+	}
+
+	fprintf(stderr, "KRAVA 4\n");
+
+	write_trampoline(TASK_SIZE - 0x1000);
+	write_trampoline(TASK_SIZE - 0x2000);
+
+	fprintf(stderr, "KRAVA 5\n");
+
+	for (i = 0; i < 10; i++) {
+		write_trampoline(TASK_SIZE + i*1*(1UL << 30));
+		write_trampoline(TASK_SIZE + i*1*(1UL << 30) + 4096);
+	}
+
+	fprintf(stderr, "KRAVA 6\n");
+
+	for (i = 0; i < 1024*1024; i++) {
+		write_trampoline((unsigned long) i * (1024UL*1024UL*1024UL));
+	}
+}
+
 static void __test_uprobe_syscall(void)
 {
 	if (test__start_subtest("uretprobe_regs_equal"))
@@ -823,6 +889,8 @@ static void __test_uprobe_syscall(void)
 		test_uprobe_regs_equal(false);
 	if (test__start_subtest("regs_change"))
 		test_regs_change();
+	if (test__start_subtest("trampoline"))
+		test_trampoline();
 }
 #else
 static void __test_uprobe_syscall(void)

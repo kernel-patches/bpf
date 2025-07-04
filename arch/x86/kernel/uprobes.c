@@ -866,10 +866,37 @@ asm (
 
 extern u8 uprobe_trampoline_entry[];
 
+static ssize_t
+bpf_uprobe_trampoline_write(struct file *file, struct kobject *kobj,
+			    const struct bin_attribute *bin_attr,
+			    char *buf, loff_t off, size_t len)
+{
+	struct mm_struct *mm = current->mm;
+	struct uprobe_trampoline *tramp;
+	unsigned long vaddr = 0;
+	bool new = false;
+
+	if (kstrtoul(buf, 0, &vaddr))
+		return -EINVAL;
+
+	mmap_write_lock(mm);
+	tramp = get_uprobe_trampoline(vaddr, &new);
+	mmap_write_unlock(mm);
+
+	trace_printk("vaddr %lx tramp %lx new %d\n", vaddr, tramp ? tramp->vaddr : 0, new);
+	return strlen(buf);
+}
+
+static struct bin_attribute bin_attr_uprobe_trampoline_file __ro_after_init = {
+	.attr = { .name = "uprobe_trampoline", .mode = 0666, },
+	.write = bpf_uprobe_trampoline_write,
+};
+
 static int __init arch_uprobes_init(void)
 {
+	printk("KRAVA TASK_SIZE %lx\n", TASK_SIZE);
 	tramp_mapping_pages[0] = virt_to_page(uprobe_trampoline_entry);
-	return 0;
+	return sysfs_create_bin_file(kernel_kobj, &bin_attr_uprobe_trampoline_file);
 }
 
 late_initcall(arch_uprobes_init);
