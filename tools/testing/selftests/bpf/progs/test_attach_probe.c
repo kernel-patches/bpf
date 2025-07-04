@@ -25,14 +25,14 @@ void *user_ptr = 0;
 
 int bpf_copy_from_user_str(void *dst, u32, const void *, u64) __weak __ksym;
 
-SEC("ksyscall/nanosleep")
-int BPF_KSYSCALL(handle_kprobe_auto, struct __kernel_timespec *req, struct __kernel_timespec *rem)
+SEC("kprobe/" SYS_NANOSLEEP)
+int BPF_KPROBE(handle_kprobe_auto, struct __kernel_timespec *req, struct __kernel_timespec *rem)
 {
 	kprobe2_res = 11;
 	return 0;
 }
 
-SEC("kretsyscall/nanosleep")
+SEC("kretprobe/" SYS_NANOSLEEP)
 int BPF_KRETPROBE(handle_kretprobe_auto, int ret)
 {
 	kretprobe2_res = 22;
