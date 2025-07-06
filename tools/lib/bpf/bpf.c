@@ -402,6 +402,17 @@ int bpf_map_update_elem(int fd, const void *key, const void *value,
 	return libbpf_err_errno(ret);
 }
 
+int bpf_map_update_elem_opts(int fd, const void *key, const void *value,
+			     const struct bpf_map_update_elem_opts *opts)
+{
+	__u64 flags;
+	__u32 cpu;
+
+	cpu = OPTS_GET(opts, cpu, 0);
+	flags = ((__u64) cpu) << 32 | OPTS_GET(opts, flags, 0);
+	return bpf_map_update_elem(fd, key, value, flags);
+}
+
 int bpf_map_lookup_elem(int fd, const void *key, void *value)
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, flags);
@@ -431,6 +442,17 @@ int bpf_map_lookup_elem_flags(int fd, const void *key, void *value, __u64 flags)
 
 	ret = sys_bpf(BPF_MAP_LOOKUP_ELEM, &attr, attr_sz);
 	return libbpf_err_errno(ret);
+}
+
+int bpf_map_lookup_elem_opts(int fd, const void *key, void *value,
+			     const struct bpf_map_lookup_elem_opts *opts)
+{
+	__u64 flags;
+	__u32 cpu;
+
+	cpu = OPTS_GET(opts, cpu, 0);
+	flags = ((__u64) cpu) << 32 | OPTS_GET(opts, flags, 0);
+	return bpf_map_lookup_elem_flags(fd, key, value, flags);
 }
 
 int bpf_map_lookup_and_delete_elem(int fd, const void *key, void *value)
@@ -542,6 +564,7 @@ static int bpf_map_batch_common(int cmd, int fd, void  *in_batch,
 	attr.batch.count = *count;
 	attr.batch.elem_flags  = OPTS_GET(opts, elem_flags, 0);
 	attr.batch.flags = OPTS_GET(opts, flags, 0);
+	attr.batch.cpu = OPTS_GET(opts, cpu, 0);
 
 	ret = sys_bpf(cmd, &attr, attr_sz);
 	*count = attr.batch.count;
