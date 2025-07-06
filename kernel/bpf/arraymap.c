@@ -295,16 +295,23 @@ static void *percpu_array_map_lookup_percpu_elem(struct bpf_map *map, void *key,
 	return per_cpu_ptr(array->pptrs[index & array->index_mask], cpu);
 }
 
-int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value)
+int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value, u64 flags)
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	u32 index = *(u32 *)key;
 	void __percpu *pptr;
-	int cpu, off = 0;
-	u32 size;
+	u32 size, cpu;
+	int off = 0;
 
 	if (unlikely(index >= array->map.max_entries))
 		return -ENOENT;
+
+	cpu = (u32)(flags >> 32);
+	flags &= (u32)~0;
+	if (unlikely(flags > BPF_F_CPU))
+		return -EINVAL;
+	if (unlikely((flags & BPF_F_CPU) && cpu >= num_possible_cpus()))
+		return -E2BIG;
 
 	/* per_cpu areas are zero-filled and bpf programs can only
 	 * access 'value_size' of them, so copying rounded areas
@@ -313,10 +320,15 @@ int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value)
 	size = array->elem_size;
 	rcu_read_lock();
 	pptr = array->pptrs[index & array->index_mask];
-	for_each_possible_cpu(cpu) {
-		copy_map_value_long(map, value + off, per_cpu_ptr(pptr, cpu));
-		check_and_init_map_value(map, value + off);
-		off += size;
+	if (flags & BPF_F_CPU) {
+		copy_map_value_long(map, value, per_cpu_ptr(pptr, cpu));
+		check_and_init_map_value(map, value);
+	} else {
+		for_each_possible_cpu(cpu) {
+			copy_map_value_long(map, value + off, per_cpu_ptr(pptr, cpu));
+			check_and_init_map_value(map, value + off);
+			off += size;
+		}
 	}
 	rcu_read_unlock();
 	return 0;
@@ -387,12 +399,20 @@ int bpf_percpu_array_update(struct bpf_map *map, void *key, void *value,
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	u32 index = *(u32 *)key;
 	void __percpu *pptr;
-	int cpu, off = 0;
-	u32 size;
+	bool reuse_value;
+	u32 size, cpu;
+	int off = 0;
 
-	if (unlikely(map_flags > BPF_EXIST))
+	cpu = (u32)(map_flags >> 32);
+	map_flags = map_flags & (u32)~0;
+	if (unlikely(map_flags > BPF_F_CPU))
 		/* unknown flags */
 		return -EINVAL;
+
+	if (unlikely((map_flags & BPF_F_CPU) && cpu != BPF_ALL_CPUS &&
+		     cpu >= num_possible_cpus()))
+		/* invalid cpu */
+		return -E2BIG;
 
 	if (unlikely(index >= array->map.max_entries))
 		/* all elements were pre-allocated, cannot insert a new one */
@@ -409,12 +429,22 @@ int bpf_percpu_array_update(struct bpf_map *map, void *key, void *value,
 	 * so no kernel data leaks possible
 	 */
 	size = array->elem_size;
+	reuse_value = (map_flags & BPF_F_CPU) && cpu == BPF_ALL_CPUS;
 	rcu_read_lock();
 	pptr = array->pptrs[index & array->index_mask];
-	for_each_possible_cpu(cpu) {
-		copy_map_value_long(map, per_cpu_ptr(pptr, cpu), value + off);
+	if ((map_flags & BPF_F_CPU) && cpu != BPF_ALL_CPUS) {
+		copy_map_value_long(map, per_cpu_ptr(pptr, cpu), value);
 		bpf_obj_free_fields(array->map.record, per_cpu_ptr(pptr, cpu));
-		off += size;
+	} else {
+		for_each_possible_cpu(cpu) {
+			if (!reuse_value) {
+				copy_map_value_long(map, per_cpu_ptr(pptr, cpu), value + off);
+				off += size;
+			} else {
+				copy_map_value_long(map, per_cpu_ptr(pptr, cpu), value);
+			}
+			bpf_obj_free_fields(array->map.record, per_cpu_ptr(pptr, cpu));
+		}
 	}
 	rcu_read_unlock();
 	return 0;
