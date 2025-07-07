@@ -436,6 +436,10 @@ LIBBPF_1.6.0 {
 		bpf_linker__add_buf;
 		bpf_linker__add_fd;
 		bpf_linker__new_fd;
+		bpf_map__lookup_elem_opts;
+		bpf_map__update_elem_opts;
+		bpf_map_lookup_elem_opts;
+		bpf_map_update_elem_opts;
 		bpf_object__prepare;
 		bpf_prog_stream_read;
 		bpf_program__attach_cgroup_opts;
