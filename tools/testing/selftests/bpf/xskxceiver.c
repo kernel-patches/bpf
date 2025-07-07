@@ -1244,14 +1244,14 @@ static int __receive_pkts(struct test_spec *test, struct xsk_socket_info *xsk)
 		if (!nb_frags) {
 			pkt = pkt_stream_get_next_rx_pkt(pkt_stream, &pkts_sent);
 			if (!pkt) {
-				ksft_print_msg("[%s] received too many packets addr: %lx len %u\n",
-					       __func__, addr, desc->len);
+				ksft_print_msg("[%s] received too many packets addr: %llx len %u\n",
+					       __func__, (unsigned long long)addr, desc->len);
 				return TEST_FAILURE;
 			}
 		}
 
-		print_verbose("Rx: addr: %lx len: %u options: %u pkt_nb: %u valid: %u\n",
-			      addr, desc->len, desc->options, pkt->pkt_nb, pkt->valid);
+		print_verbose("Rx: addr: %llx len: %u options: %u pkt_nb: %u valid: %u\n",
+			      (unsigned long long)addr, desc->len, desc->options, pkt->pkt_nb, pkt->valid);
 
 		if (!is_frag_valid(umem, addr, desc->len, pkt->pkt_nb, pkt_len) ||
 		    !is_offset_correct(umem, pkt, addr) || (ifobj->use_metadata &&
