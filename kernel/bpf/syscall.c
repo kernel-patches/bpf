@@ -129,8 +129,12 @@ bool bpf_map_write_active(const struct bpf_map *map)
 	return atomic64_read(&map->writecnt) != 0;
 }
 
-static u32 bpf_map_value_size(const struct bpf_map *map)
+static u32 bpf_map_value_size(const struct bpf_map *map, u64 flags)
 {
+	if ((flags & BPF_F_CPU) &&
+		map->map_type == BPF_MAP_TYPE_PERCPU_ARRAY)
+		return round_up(map->value_size, 8);
+
 	if (map->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
 	    map->map_type == BPF_MAP_TYPE_LRU_PERCPU_HASH ||
 	    map->map_type == BPF_MAP_TYPE_PERCPU_ARRAY ||
@@ -312,7 +316,7 @@ static int bpf_map_copy_value(struct bpf_map *map, void *key, void *value,
 	    map->map_type == BPF_MAP_TYPE_LRU_PERCPU_HASH) {
 		err = bpf_percpu_hash_copy(map, key, value);
 	} else if (map->map_type == BPF_MAP_TYPE_PERCPU_ARRAY) {
-		err = bpf_percpu_array_copy(map, key, value);
+		err = bpf_percpu_array_copy(map, key, value, flags);
 	} else if (map->map_type == BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE) {
 		err = bpf_percpu_cgroup_storage_copy(map, key, value);
 	} else if (map->map_type == BPF_MAP_TYPE_STACK_TRACE) {
@@ -1662,7 +1666,7 @@ static int map_lookup_elem(union bpf_attr *attr)
 	if (CHECK_ATTR(BPF_MAP_LOOKUP_ELEM))
 		return -EINVAL;
 
-	if (attr->flags & ~BPF_F_LOCK)
+	if ((attr->flags & (u32)~0) & ~(BPF_F_LOCK | BPF_F_CPU))
 		return -EINVAL;
 
 	CLASS(fd, f)(attr->map_fd);
@@ -1680,7 +1684,7 @@ static int map_lookup_elem(union bpf_attr *attr)
 	if (IS_ERR(key))
 		return PTR_ERR(key);
 
-	value_size = bpf_map_value_size(map);
+	value_size = bpf_map_value_size(map, attr->flags);
 
 	err = -ENOMEM;
 	value = kvmalloc(value_size, GFP_USER | __GFP_NOWARN);
@@ -1749,7 +1753,7 @@ static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 		goto err_put;
 	}
 
-	value_size = bpf_map_value_size(map);
+	value_size = bpf_map_value_size(map, attr->flags);
 	value = kvmemdup_bpfptr(uvalue, value_size);
 	if (IS_ERR(value)) {
 		err = PTR_ERR(value);
@@ -1941,19 +1945,25 @@ int generic_map_update_batch(struct bpf_map *map, struct file *map_file,
 {
 	void __user *values = u64_to_user_ptr(attr->batch.values);
 	void __user *keys = u64_to_user_ptr(attr->batch.keys);
-	u32 value_size, cp, max_count;
+	u32 value_size, cp, max_count, cpu = attr->batch.cpu;
+	u64 elem_flags = attr->batch.elem_flags;
 	void *key, *value;
 	int err = 0;
 
-	if (attr->batch.elem_flags & ~BPF_F_LOCK)
+	if (elem_flags & ~(BPF_F_LOCK | BPF_F_CPU))
 		return -EINVAL;
 
-	if ((attr->batch.elem_flags & BPF_F_LOCK) &&
+	if ((elem_flags & BPF_F_LOCK) &&
 	    !btf_record_has_field(map->record, BPF_SPIN_LOCK)) {
 		return -EINVAL;
 	}
 
-	value_size = bpf_map_value_size(map);
+	if ((elem_flags & BPF_F_CPU) &&
+		map->map_type != BPF_MAP_TYPE_PERCPU_ARRAY)
+		return -EINVAL;
+
+	value_size = bpf_map_value_size(map, elem_flags);
+	elem_flags = (((u64)cpu) << 32) | elem_flags;
 
 	max_count = attr->batch.count;
 	if (!max_count)
@@ -1979,8 +1989,7 @@ int generic_map_update_batch(struct bpf_map *map, struct file *map_file,
 		    copy_from_user(value, values + cp * value_size, value_size))
 			break;
 
-		err = bpf_map_update_value(map, map_file, key, value,
-					   attr->batch.elem_flags);
+		err = bpf_map_update_value(map, map_file, key, value, elem_flags);
 
 		if (err)
 			break;
@@ -2004,18 +2013,24 @@ int generic_map_lookup_batch(struct bpf_map *map,
 	void __user *ubatch = u64_to_user_ptr(attr->batch.in_batch);
 	void __user *values = u64_to_user_ptr(attr->batch.values);
 	void __user *keys = u64_to_user_ptr(attr->batch.keys);
+	u32 value_size, cp, max_count, cpu = attr->batch.cpu;
 	void *buf, *buf_prevkey, *prev_key, *key, *value;
-	u32 value_size, cp, max_count;
+	u64 elem_flags = attr->batch.elem_flags;
 	int err;
 
-	if (attr->batch.elem_flags & ~BPF_F_LOCK)
+	if (elem_flags & ~(BPF_F_LOCK | BPF_F_CPU))
 		return -EINVAL;
 
-	if ((attr->batch.elem_flags & BPF_F_LOCK) &&
+	if ((elem_flags & BPF_F_LOCK) &&
 	    !btf_record_has_field(map->record, BPF_SPIN_LOCK))
 		return -EINVAL;
 
-	value_size = bpf_map_value_size(map);
+	if ((elem_flags & BPF_F_CPU) &&
+		map->map_type != BPF_MAP_TYPE_PERCPU_ARRAY)
+		return -EINVAL;
+
+	value_size = bpf_map_value_size(map, elem_flags);
+	elem_flags = (((u64)cpu) << 32) | elem_flags;
 
 	max_count = attr->batch.count;
 	if (!max_count)
@@ -2049,8 +2064,7 @@ int generic_map_lookup_batch(struct bpf_map *map,
 		rcu_read_unlock();
 		if (err)
 			break;
-		err = bpf_map_copy_value(map, key, value,
-					 attr->batch.elem_flags);
+		err = bpf_map_copy_value(map, key, value, elem_flags);
 
 		if (err == -ENOENT)
 			goto next_key;
@@ -2137,7 +2151,7 @@ static int map_lookup_and_delete_elem(union bpf_attr *attr)
 		goto err_put;
 	}
 
-	value_size = bpf_map_value_size(map);
+	value_size = bpf_map_value_size(map, attr->flags);
 
 	err = -ENOMEM;
 	value = kvmalloc(value_size, GFP_USER | __GFP_NOWARN);
@@ -5434,7 +5448,7 @@ put_file:
 	return err;
 }
 
-#define BPF_MAP_BATCH_LAST_FIELD batch.flags
+#define BPF_MAP_BATCH_LAST_FIELD batch.cpu
 
 #define BPF_DO_BATCH(fn, ...)			\
 	do {					\
