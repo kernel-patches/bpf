@@ -52,7 +52,7 @@ check_elem(struct bpf_map *map, __u32 *key, __u32 *val,
 	return 0;
 }
 
-SEC("fentry/" SYS_PREFIX "sys_getpgid")
+SEC("kprobe/" SYS_PREFIX "sys_getpgid")
 int inner_map(void *ctx)
 {
 	struct bpf_map *inner_map;
@@ -71,7 +71,7 @@ int inner_map(void *ctx)
 	return 0;
 }
 
-SEC("fentry/" SYS_PREFIX "sys_getpgid")
+SEC("kprobe/" SYS_PREFIX "sys_getpgid")
 int check_bloom(void *ctx)
 {
 	struct callback_ctx data;
