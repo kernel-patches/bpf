@@ -59,6 +59,7 @@ struct bpf_struct_ops_link {
 	struct bpf_link link;
 	struct bpf_map __rcu *map;
 	wait_queue_head_t wait_hup;
+	u64 cookie;
 };
 
 static DEFINE_MUTEX(update_mutex);
@@ -673,7 +674,7 @@ static void bpf_struct_ops_map_free_ksyms(struct bpf_struct_ops_map *st_map)
 	}
 }
 
-static int bpf_struct_ops_prepare_attach(struct bpf_struct_ops_map *st_map)
+static int bpf_struct_ops_prepare_attach(struct bpf_struct_ops_map *st_map, u64 cookie)
 {
 	const struct bpf_struct_ops *st_ops = st_map->st_ops_desc->st_ops;
 	const struct btf_type *t = st_map->st_ops_desc->type;
@@ -714,6 +715,7 @@ static int bpf_struct_ops_prepare_attach(struct bpf_struct_ops_map *st_map)
 
 		mname = btf_name_by_offset(st_map->btf, member->name_off);
 		link = container_of(*plink++, struct bpf_tramp_link, link);
+		link->cookie = cookie;
 
 		ksym = kzalloc(sizeof(*ksym), GFP_USER);
 		if (!ksym) {
@@ -892,10 +894,6 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		*(unsigned long *)(udata + moff) = prog->aux->id;
 	}
 
-	err = bpf_struct_ops_prepare_attach(st_map);
-	if (err)
-		goto reset_unlock;
-
 	if (st_map->map.map_flags & BPF_F_LINK) {
 		err = 0;
 		/* Let bpf_link handle registration & unregistration.
@@ -906,6 +904,10 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		goto unlock;
 	}
 
+	err = bpf_struct_ops_prepare_attach(st_map, 0);
+	if (err)
+		goto reset_unlock;
+
 	err = st_ops->reg(kdata, NULL);
 	if (likely(!err)) {
 		/* This refcnt increment on the map here after
@@ -915,6 +917,7 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		 * or transition it to TOBEFREE concurrently.
 		 */
 		bpf_map_inc(map);
+		bpf_struct_ops_map_add_ksyms(st_map);
 		/* Pair with smp_load_acquire() during lookup_elem().
 		 * It ensures the above udata updates (e.g. prog->aux->id)
 		 * can be seen once BPF_STRUCT_OPS_STATE_INUSE is set.
@@ -937,8 +940,6 @@ reset_unlock:
 	memset(kvalue, 0, map->value_size);
 unlock:
 	mutex_unlock(&st_map->lock);
-	if (!err)
-		bpf_struct_ops_map_add_ksyms(st_map);
 	return err;
 }
 
@@ -1247,7 +1248,11 @@ static void bpf_struct_ops_map_link_show_fdinfo(const struct bpf_link *link,
 	rcu_read_lock();
 	map = rcu_dereference(st_link->map);
 	if (map)
-		seq_printf(seq, "map_id:\t%d\n", map->id);
+		seq_printf(seq,
+			   "map_id:\t%d\n"
+			   "cookie:\t%llu\n",
+			   map->id,
+			   st_link->cookie);
 	rcu_read_unlock();
 }
 
@@ -1302,14 +1307,28 @@ static int bpf_struct_ops_map_link_update(struct bpf_link *link, struct bpf_map 
 		goto err_out;
 	}
 
+	err = bpf_struct_ops_prepare_attach(st_map, st_link->cookie);
+	if (err)
+		goto free_image;
+
 	err = st_map->st_ops_desc->st_ops->update(st_map->kvalue.data, old_st_map->kvalue.data, link);
 	if (err)
-		goto err_out;
+		goto free_image;
 
 	bpf_map_inc(new_map);
 	rcu_assign_pointer(st_link->map, new_map);
+	bpf_struct_ops_map_add_ksyms(st_map);
+	bpf_struct_ops_map_del_ksyms(old_st_map);
+	bpf_struct_ops_map_free_ksyms(old_st_map);
+	bpf_struct_ops_map_free_image(old_st_map);
 	bpf_map_put(old_map);
+	mutex_unlock(&update_mutex);
 
+	return 0;
+
+free_image:
+	bpf_struct_ops_map_free_ksyms(st_map);
+	bpf_struct_ops_map_free_image(st_map);
 err_out:
 	mutex_unlock(&update_mutex);
 
@@ -1395,24 +1414,34 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 	if (err)
 		goto err_out;
 
+	link->cookie = attr->link_create.struct_ops.cookie;
+
 	init_waitqueue_head(&link->wait_hup);
 
 	/* Hold the update_mutex such that the subsystem cannot
 	 * do link->ops->detach() before the link is fully initialized.
 	 */
 	mutex_lock(&update_mutex);
+	err = bpf_struct_ops_prepare_attach(st_map, link->cookie);
+	if (err)
+		goto free_image;
+
 	err = st_map->st_ops_desc->st_ops->reg(st_map->kvalue.data, &link->link);
-	if (err) {
-		mutex_unlock(&update_mutex);
-		bpf_link_cleanup(&link_primer);
-		link = NULL;
-		goto err_out;
-	}
+	if (err)
+		goto free_image;
+
 	RCU_INIT_POINTER(link->map, map);
+	bpf_struct_ops_map_add_ksyms(st_map);
 	mutex_unlock(&update_mutex);
 
 	return bpf_link_settle(&link_primer);
 
+free_image:
+	bpf_struct_ops_map_free_ksyms(st_map);
+	bpf_struct_ops_map_free_image(st_map);
+	mutex_unlock(&update_mutex);
+	bpf_link_cleanup(&link_primer);
+	link = NULL;
 err_out:
 	bpf_map_put(map);
 	kfree(link);

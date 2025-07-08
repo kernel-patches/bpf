@@ -1894,6 +1894,21 @@ static const struct bpf_func_proto bpf_dynptr_data_proto = {
 	.arg3_type	= ARG_CONST_ALLOC_SIZE_OR_ZERO,
 };
 
+BPF_CALL_1(bpf_get_attach_cookie_struct_ops, void *, ctx)
+{
+	struct bpf_tramp_run_ctx *run_ctx;
+
+	run_ctx = container_of(current->bpf_ctx, struct bpf_tramp_run_ctx, run_ctx);
+	return run_ctx->bpf_cookie;
+}
+
+static const struct bpf_func_proto bpf_get_attach_cookie_proto_struct_ops = {
+	.func		= bpf_get_attach_cookie_struct_ops,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_CTX,
+};
+
 const struct bpf_func_proto bpf_get_current_task_proto __weak;
 const struct bpf_func_proto bpf_get_current_task_btf_proto __weak;
 const struct bpf_func_proto bpf_probe_read_user_proto __weak;
@@ -1962,6 +1977,9 @@ bpf_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_get_ns_current_pid_tgid_proto;
 	case BPF_FUNC_get_current_uid_gid:
 		return &bpf_get_current_uid_gid_proto;
+	case BPF_FUNC_get_attach_cookie:
+		return prog->type == BPF_PROG_TYPE_STRUCT_OPS ?
+		       &bpf_get_attach_cookie_proto_struct_ops : NULL;
 	default:
 		break;
 	}

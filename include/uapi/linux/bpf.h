@@ -1818,6 +1818,9 @@ union bpf_attr {
 				};
 				__u64		expected_revision;
 			} cgroup;
+			struct {
+				__u64		cookie;
+			} struct_ops;
 		};
 	} link_create;
 
