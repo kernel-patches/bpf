@@ -1795,7 +1795,7 @@ found:
 	return 0;
 }
 
-static void do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
+static int do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 {
 	struct folio *folio;
 	unsigned long pfn;
@@ -1819,8 +1819,10 @@ static void do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 			pfn = folio_pfn(folio) + folio_nr_pages(folio) - 1;
 
 		if (folio_contain_hwpoisoned_page(folio)) {
-			if (WARN_ON(folio_test_lru(folio)))
-				folio_isolate_lru(folio);
+			if (folio_test_large(folio) && !folio_test_hugetlb(folio))
+				goto err_out;
+			if (folio_test_lru(folio) && !folio_isolate_lru(folio))
+				goto err_out;
 			if (folio_mapped(folio)) {
 				folio_lock(folio);
 				unmap_poisoned_folio(folio, pfn, false);
@@ -1877,6 +1879,11 @@ put_folio:
 			putback_movable_pages(&source);
 		}
 	}
+	return 0;
+err_out:
+	folio_put(folio);
+	putback_movable_pages(&source);
+	return -EBUSY;
 }
 
 static int __init cmdline_parse_movable_node(char *p)
@@ -2041,11 +2048,9 @@ int offline_pages(unsigned long start_pfn, unsigned long nr_pages,
 
 			ret = scan_movable_pages(pfn, end_pfn, &pfn);
 			if (!ret) {
-				/*
-				 * TODO: fatal migration failures should bail
-				 * out
-				 */
-				do_migrate_range(pfn, end_pfn);
+				ret = do_migrate_range(pfn, end_pfn);
+				if (ret)
+					break;
 			}
 		} while (!ret);
 
