@@ -881,6 +881,11 @@ int bpf_link_create(int prog_fd, int target_fd,
 		if (!OPTS_ZEROED(opts, cgroup))
 			return libbpf_err(-EINVAL);
 		break;
+	case BPF_STRUCT_OPS:
+		attr.link_create.struct_ops.cookie = OPTS_GET(opts, struct_ops.cookie, 0);
+		if (!OPTS_ZEROED(opts, struct_ops))
+			return libbpf_err(-EINVAL);
+		break;
 	default:
 		if (!OPTS_ZEROED(opts, flags))
 			return libbpf_err(-EINVAL);

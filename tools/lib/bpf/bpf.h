@@ -443,6 +443,9 @@ struct bpf_link_create_opts {
 			__u32 relative_id;
 			__u64 expected_revision;
 		} cgroup;
+		struct {
+			__u64 cookie;
+		} struct_ops;
 	};
 	size_t :0;
 };

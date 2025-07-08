@@ -894,6 +894,16 @@ bpf_program__attach_cgroup_opts(const struct bpf_program *prog, int cgroup_fd,
 
 struct bpf_map;
 
+struct bpf_struct_ops_opts {
+	/* size of this struct, for forward/backward compatibility */
+	size_t sz;
+	__u64 cookie;
+	size_t :0;
+};
+#define bpf_struct_ops_opts__last_field cookie
+
+LIBBPF_API struct bpf_link *bpf_map__attach_struct_ops_opts(const struct bpf_map *map,
+							    const struct bpf_struct_ops_opts* opts);
 LIBBPF_API struct bpf_link *bpf_map__attach_struct_ops(const struct bpf_map *map);
 LIBBPF_API int bpf_link__update_map(struct bpf_link *link, const struct bpf_map *map);
 
