@@ -673,6 +673,95 @@ static void bpf_struct_ops_map_free_ksyms(struct bpf_struct_ops_map *st_map)
 	}
 }
 
+static int bpf_struct_ops_prepare_attach(struct bpf_struct_ops_map *st_map)
+{
+	const struct bpf_struct_ops *st_ops = st_map->st_ops_desc->st_ops;
+	const struct btf_type *t = st_map->st_ops_desc->type;
+	struct bpf_link **plink = st_map->links;
+	struct bpf_ksym **pksym = st_map->ksyms;
+	const struct btf_member *member;
+	struct bpf_tramp_links *tlinks;
+	void *udata, *kdata;
+	int i, err = 0;
+	u32 trampoline_start, image_off = 0;
+	void *cur_image = NULL, *image = NULL;
+	const char *tname, *mname;
+
+	tlinks = kcalloc(BPF_TRAMP_MAX, sizeof(*tlinks), GFP_KERNEL);
+	if (!tlinks)
+		return -ENOMEM;
+
+	udata = &st_map->uvalue->data;
+	kdata = &st_map->kvalue.data;
+
+	tname = btf_name_by_offset(st_map->btf, t->name_off);
+
+	for_each_member(i, t, member) {
+		const struct btf_type *ptype;
+		struct bpf_tramp_link *link;
+		struct bpf_ksym *ksym;
+		u32 moff, id;
+
+		ptype = btf_type_resolve_ptr(st_map->btf, member->type, NULL);
+		if (!ptype || !btf_type_is_func_proto(ptype))
+			continue;
+
+		moff = __btf_member_bit_offset(t, member) / 8;
+
+		id = *(unsigned long *)(udata + moff);
+		if (!id)
+			continue;
+
+		mname = btf_name_by_offset(st_map->btf, member->name_off);
+		link = container_of(*plink++, struct bpf_tramp_link, link);
+
+		ksym = kzalloc(sizeof(*ksym), GFP_USER);
+		if (!ksym) {
+			err = -ENOMEM;
+			goto out;
+		}
+		*pksym++ = ksym;
+
+		trampoline_start = image_off;
+		err = bpf_struct_ops_prepare_trampoline(tlinks, link,
+						&st_ops->func_models[i],
+						*(void **)(st_ops->cfi_stubs + moff),
+						&image, &image_off,
+						st_map->image_pages_cnt < MAX_TRAMP_IMAGE_PAGES);
+		if (err)
+			goto out;
+
+		if (cur_image != image) {
+			st_map->image_pages[st_map->image_pages_cnt++] = image;
+			cur_image = image;
+			trampoline_start = 0;
+		}
+
+		*(void **)(kdata + moff) = image + trampoline_start + cfi_get_offset();
+
+		/* init ksym for this trampoline */
+		bpf_struct_ops_ksym_init(tname, mname,
+					 image + trampoline_start,
+					 image_off - trampoline_start,
+					 ksym);
+	}
+
+	if (st_ops->validate) {
+		err = st_ops->validate(kdata);
+		if (err)
+			goto out;
+	}
+	for (i = 0; i < st_map->image_pages_cnt; i++) {
+		err = arch_protect_bpf_trampoline(st_map->image_pages[i],
+						  PAGE_SIZE);
+		if (err)
+			goto out;
+	}
+out:
+	kfree(tlinks);
+	return err;
+}
+
 static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 					   void *value, u64 flags)
 {
@@ -683,14 +772,10 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 	const struct btf_type *module_type;
 	const struct btf_member *member;
 	const struct btf_type *t = st_ops_desc->type;
-	struct bpf_tramp_links *tlinks;
 	void *udata, *kdata;
 	int prog_fd, err;
-	u32 i, trampoline_start, image_off = 0;
-	void *cur_image = NULL, *image = NULL;
+	u32 i;
 	struct bpf_link **plink;
-	struct bpf_ksym **pksym;
-	const char *tname, *mname;
 
 	if (flags)
 		return -EINVAL;
@@ -710,10 +795,6 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 	if (uvalue->common.state || refcount_read(&uvalue->common.refcnt))
 		return -EINVAL;
 
-	tlinks = kcalloc(BPF_TRAMP_MAX, sizeof(*tlinks), GFP_KERNEL);
-	if (!tlinks)
-		return -ENOMEM;
-
 	uvalue = (struct bpf_struct_ops_value *)st_map->uvalue;
 	kvalue = (struct bpf_struct_ops_value *)&st_map->kvalue;
 
@@ -730,18 +811,14 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 	kdata = &kvalue->data;
 
 	plink = st_map->links;
-	pksym = st_map->ksyms;
-	tname = btf_name_by_offset(st_map->btf, t->name_off);
 	module_type = btf_type_by_id(btf_vmlinux, st_ops_ids[IDX_MODULE_ID]);
 	for_each_member(i, t, member) {
 		const struct btf_type *mtype, *ptype;
 		struct bpf_prog *prog;
 		struct bpf_tramp_link *link;
-		struct bpf_ksym *ksym;
 		u32 moff;
 
 		moff = __btf_member_bit_offset(t, member) / 8;
-		mname = btf_name_by_offset(st_map->btf, member->name_off);
 		ptype = btf_type_resolve_ptr(st_map->btf, member->type, NULL);
 		if (ptype == module_type) {
 			if (*(void **)(udata + moff))
@@ -811,51 +888,13 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 			      &bpf_struct_ops_link_lops, prog);
 		*plink++ = &link->link;
 
-		ksym = kzalloc(sizeof(*ksym), GFP_USER);
-		if (!ksym) {
-			err = -ENOMEM;
-			goto reset_unlock;
-		}
-		*pksym++ = ksym;
-
-		trampoline_start = image_off;
-		err = bpf_struct_ops_prepare_trampoline(tlinks, link,
-						&st_ops->func_models[i],
-						*(void **)(st_ops->cfi_stubs + moff),
-						&image, &image_off,
-						st_map->image_pages_cnt < MAX_TRAMP_IMAGE_PAGES);
-		if (err)
-			goto reset_unlock;
-
-		if (cur_image != image) {
-			st_map->image_pages[st_map->image_pages_cnt++] = image;
-			cur_image = image;
-			trampoline_start = 0;
-		}
-
-		*(void **)(kdata + moff) = image + trampoline_start + cfi_get_offset();
-
 		/* put prog_id to udata */
 		*(unsigned long *)(udata + moff) = prog->aux->id;
-
-		/* init ksym for this trampoline */
-		bpf_struct_ops_ksym_init(tname, mname,
-					 image + trampoline_start,
-					 image_off - trampoline_start,
-					 ksym);
 	}
 
-	if (st_ops->validate) {
-		err = st_ops->validate(kdata);
-		if (err)
-			goto reset_unlock;
-	}
-	for (i = 0; i < st_map->image_pages_cnt; i++) {
-		err = arch_protect_bpf_trampoline(st_map->image_pages[i],
-						  PAGE_SIZE);
-		if (err)
-			goto reset_unlock;
-	}
+	err = bpf_struct_ops_prepare_attach(st_map);
+	if (err)
+		goto reset_unlock;
 
 	if (st_map->map.map_flags & BPF_F_LINK) {
 		err = 0;
@@ -897,7 +936,6 @@ reset_unlock:
 	memset(uvalue, 0, map->value_size);
 	memset(kvalue, 0, map->value_size);
 unlock:
-	kfree(tlinks);
 	mutex_unlock(&st_map->lock);
 	if (!err)
 		bpf_struct_ops_map_add_ksyms(st_map);
