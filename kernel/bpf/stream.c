@@ -104,7 +104,7 @@ static int bpf_stream_page_check_room(struct bpf_stream_page *stream_page, int l
 	int rem = max(0, total - consumed - min);
 
 	/* Let's give room of at least 8 bytes. */
-	WARN_ON_ONCE(rem % 8 != 0);
+	WARN_ON_ONCE(rem % sizeof(long) != 0);
 	rem = rem < 8 ? 0 : rem;
 	return min(len, rem);
 }
@@ -127,7 +127,7 @@ static struct bpf_stream_elem *bpf_stream_page_push_elem(struct bpf_stream_page 
 {
 	u32 consumed = stream_page->consumed;
 
-	stream_page->consumed += round_up(offsetof(struct bpf_stream_elem, str[len]), 8);
+	stream_page->consumed += round_up(offsetof(struct bpf_stream_elem, str[len]), sizeof(long));
 	return (struct bpf_stream_elem *)&stream_page->buf[consumed];
 }
 
