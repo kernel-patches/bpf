@@ -4,6 +4,7 @@
  *
  * Copyright (C) 2022 Loongson Technology Corporation Limited
  */
+#include <linux/memory.h>
 #include "bpf_jit.h"
 
 #define REG_TCC		LOONGARCH_GPR_A6
@@ -1366,4 +1367,93 @@ out_free:
 bool bpf_jit_supports_subprog_tailcalls(void)
 {
 	return true;
+}
+
+static int emit_jump_and_link(struct jit_ctx *ctx, u8 rd, u64 ip, u64 target)
+{
+	s64 offset = (s64)(target - ip);
+
+	if (offset && (offset >= -SZ_128M && offset < SZ_128M)) {
+		emit_insn(ctx, bl, offset >> 2);
+	} else {
+		move_imm(ctx, LOONGARCH_GPR_T1, target, false);
+		emit_insn(ctx, jirl, rd, LOONGARCH_GPR_T1, 0);
+	}
+
+	return 0;
+}
+
+static int gen_jump_or_nops(void *target, void *ip, u32 *insns, bool is_call)
+{
+	struct jit_ctx ctx;
+
+	ctx.idx = 0;
+	ctx.image = (union loongarch_instruction *)insns;
+
+	if (!target) {
+		emit_insn((&ctx), nop);
+		emit_insn((&ctx), nop);
+		return 0;
+	}
+
+	return emit_jump_and_link(&ctx, is_call ? LOONGARCH_GPR_T0 : LOONGARCH_GPR_ZERO,
+				  (unsigned long)ip, (unsigned long)target);
+}
+
+int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type poke_type,
+		       void *old_addr, void *new_addr)
+{
+	u32 old_insns[5] = {[0 ... 4] = INSN_NOP};
+	u32 new_insns[5] = {[0 ... 4] = INSN_NOP};
+	bool is_call = poke_type == BPF_MOD_CALL;
+	int ret;
+
+	if (!is_kernel_text((unsigned long)ip) &&
+		!is_bpf_text_address((unsigned long)ip))
+		return -ENOTSUPP;
+
+	ret = gen_jump_or_nops(old_addr, ip, old_insns, is_call);
+	if (ret)
+		return ret;
+
+	if (memcmp(ip, old_insns, 5 * 4))
+		return -EFAULT;
+
+	ret = gen_jump_or_nops(new_addr, ip, new_insns, is_call);
+	if (ret)
+		return ret;
+
+	mutex_lock(&text_mutex);
+	if (memcmp(ip, new_insns, 5 * 4))
+		ret = larch_insn_text_copy(ip, new_insns, 5 * 4);
+	mutex_unlock(&text_mutex);
+	return ret;
+}
+
+int bpf_arch_text_invalidate(void *dst, size_t len)
+{
+	int i;
+	int ret = 0;
+	u32 *inst;
+
+	inst = kvmalloc(len, GFP_KERNEL);
+	if (!inst)
+		return -ENOMEM;
+
+	for (i = 0; i < (len/sizeof(u32)); i++)
+		inst[i] = INSN_BREAK;
+
+	if (larch_insn_text_copy(dst, inst, len))
+		ret = -EINVAL;
+
+	kvfree(inst);
+	return ret;
+}
+
+void *bpf_arch_text_copy(void *dst, void *src, size_t len)
+{
+	if (larch_insn_text_copy(dst, src, len))
+		return ERR_PTR(-EINVAL);
+
+	return dst;
 }
