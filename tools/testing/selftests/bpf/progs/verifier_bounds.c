@@ -1532,4 +1532,20 @@ __naked void sub32_partial_overflow(void)
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("dead branch on jset, doesn't result in invariants violation error")
+__success __log_level(2)
+__retval(0)
+__naked void jset_range_analysis(void)
+{
+	asm volatile ("				\
+	call %[bpf_get_netns_cookie];	\
+	if r0 == 0 goto l0_%=;			\
+	if r0 & Oxffffffff goto l0_%=;		\
+l0_%=:	exit;					\
+"	:
+	: __imm(bpf_get_netns_cookie)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
