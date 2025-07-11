@@ -21062,9 +21062,7 @@ static int opt_subreg_zext_lo32_rnd_hi32(struct bpf_verifier_env *env,
 	int i, patch_len, delta = 0, len = env->prog->len;
 	struct bpf_insn *insns = env->prog->insnsi;
 	struct bpf_prog *new_prog;
-	bool rnd_hi32;
 
-	rnd_hi32 = attr->prog_flags & BPF_F_TEST_RND_HI32;
 	zext_patch[1] = BPF_ZEXT_REG(0);
 	rnd_hi32_patch[1] = BPF_ALU64_IMM(BPF_MOV, BPF_REG_AX, 0);
 	rnd_hi32_patch[2] = BPF_ALU64_IMM(BPF_LSH, BPF_REG_AX, 32);
@@ -21079,9 +21077,6 @@ static int opt_subreg_zext_lo32_rnd_hi32(struct bpf_verifier_env *env,
 		if (!aux[adj_idx].zext_dst) {
 			u8 code, class;
 			u32 imm_rnd;
-
-			if (!rnd_hi32)
-				continue;
 
 			code = insn.code;
 			class = BPF_CLASS(code);
@@ -24700,7 +24695,9 @@ skip_full_check:
 	 * insns could be handled correctly.
 	 */
 	if (ret == 0 && !bpf_prog_is_offloaded(env->prog->aux)) {
-		ret = opt_subreg_zext_lo32_rnd_hi32(env, attr);
+		if (attr->prog_flags & BPF_F_TEST_RND_HI32)
+			ret = opt_subreg_zext_lo32_rnd_hi32(env, attr);
+
 		env->prog->aux->verifier_zext = bpf_jit_needs_zext() ? !ret
 								     : false;
 	}
