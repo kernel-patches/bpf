@@ -436,6 +436,8 @@ LIBBPF_1.6.0 {
 		bpf_linker__add_buf;
 		bpf_linker__add_fd;
 		bpf_linker__new_fd;
+		bpf_map__set_exclusive_program;
+		bpf_map__get_exclusive_program;
 		bpf_object__prepare;
 		bpf_prog_stream_read;
 		bpf_program__attach_cgroup_opts;
