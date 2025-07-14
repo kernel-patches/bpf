@@ -349,7 +349,7 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 					__func_get_name(cbs, insn,
 							tmp, sizeof(tmp)));
 			} else {
-				strcpy(tmp, "unknown");
+				strscpy(tmp, "unknown");
 				verbose(cbs->private_data, "(%02x) call %s#%d\n", insn->code,
 					__func_get_name(cbs, insn,
 							tmp, sizeof(tmp)),
