@@ -35,9 +35,7 @@ endif
 
 .PHONY: all clean
 
-all: iterators.lskel-little-endian.h
-
-big: iterators.lskel-big-endian.h
+all: iterators.lskel-little-endian.h iterators.lskel-big-endian.h
 
 clean:
 	$(call msg,CLEAN)
@@ -48,7 +46,7 @@ iterators.lskel-%.h: $(OUTPUT)/%/iterators.bpf.o | $(BPFTOOL)
 	$(Q)$(BPFTOOL) gen skeleton -L $< > $@
 
 $(OUTPUT)/%/iterators.bpf.o: iterators.bpf.c $(BPFOBJ) | $(OUTPUT)
-	$(call msg,BPF,$@)
+	$(call msg,BPF,$@,($*))
 	$(Q)mkdir -p $(@D)
 	$(Q)$(CLANG) -g -O2 --target=bpf -m$* $(INCLUDES)		      \
 		 -c $(filter %.c,$^) -o $@ &&				      \
