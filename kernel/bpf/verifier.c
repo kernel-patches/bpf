@@ -7248,6 +7248,19 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		}
 
 		ret = btf_struct_access(&env->log, reg, off, size, atype, &btf_id, &flag, &field_name);
+
+		/* Block access to sensitive kernel-internal fields */
+		if (field_name && reg->btf && btf_is_kernel(reg->btf)) {
+			const struct btf_type *base_type = btf_type_by_id(reg->btf, reg->btf_id);
+			const char *type_name = btf_name_by_offset(reg->btf, base_type->name_off);
+
+			if (strcmp(type_name, "bpf_lru_node") == 0 &&
+				strcmp(field_name, "ref") == 0) {
+				verbose(env,
+					"access to field 'ref' in struct bpf_lru_node is not allowed\n");
+				return -EACCES;
+			}
+		}
 	}
 
 	if (ret < 0)
