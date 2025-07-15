@@ -49,7 +49,10 @@ as follows::
              |                 |
    xdp_buff->data_meta   xdp_buff->data
 
-An XDP program can store individual metadata items into this ``data_meta``
+Certain devices may utilize the ``data_meta`` area for specific purposes.
+Drivers for these devices must move any hardware-related metadata out from the
+``data_meta`` area before presenting the frame to the XDP program. This ensures
+that the XDP program can store individual metadata items into this ``data_meta``
 area in whichever format it chooses. Later consumers of the metadata
 will have to agree on the format by some out of band contract (like for
 the AF_XDP use case, see below).
@@ -63,18 +66,36 @@ the final consumer. Thus the BPF program manually allocates a fixed number of
 bytes out of metadata via ``bpf_xdp_adjust_meta`` and calls a subset
 of kfuncs to populate it. The userspace ``XSK`` consumer computes
 ``xsk_umem__get_data() - METADATA_SIZE`` to locate that metadata.
-Note, ``xsk_umem__get_data`` is defined in ``libxdp`` and
-``METADATA_SIZE`` is an application-specific constant (``AF_XDP`` receive
-descriptor does _not_ explicitly carry the size of the metadata).
+Note, ``xsk_umem__get_data`` is defined in ``libxdp`` and ``METADATA_SIZE`` is
+an application-specific constant. Since the ``AF_XDP`` receive descriptor does
+_not_ explicitly carry the size of the metadata, it is the responsibility of the
+driver to copy any device-reserved metadata out from the metadata area and
+ensure that ``xdp_buff->data_meta`` is set equal to ``xdp_buff->data`` before a
+BPF program is executed. This is necessary so that, after the BPF program
+adjusts the metadata area, the consumer can reliably retrieve the metadata
+address using ``METADATA_SIZE`` offset.
 
-Here is the ``AF_XDP`` consumer layout (note missing ``data_meta`` pointer)::
+The following diagram shows how custom metadata is positioned relative to the
+packet data and how pointers are adjusted for metadata access (note the absence
+of the ``data_meta`` pointer in ``xdp_desc``)::
 
-  +----------+-----------------+------+
-  | headroom | custom metadata | data |
-  +----------+-----------------+------+
-                               ^
-                               |
-                        rx_desc->address
+              |<-- bpf_xdp_adjust_meta(xdp_buff, -METADATA_SIZE) --|
+  new xdp_buff->data_meta                              old xdp_buff->data_meta
+              |                                                    |
+              |                                            xdp_buff->data
+              |                                                    |
+   +----------+----------------------------------------------------+------+
+   | headroom |                  custom metadata                   | data |
+   +----------+----------------------------------------------------+------+
+              |                                                    |
+              |                                            xdp_desc->addr
+              |<------ xsk_umem__get_data() - METADATA_SIZE -------|
+
+``bpf_xdp_adjust_meta`` ensures that ``METADATA_SIZE`` is aligned to 4 bytes,
+does not exceed 252 bytes, and leaves sufficient space for building the
+xdp_frame. If these conditions are not met, it returns a negative error. In this
+case, the BPF program should not proceed to populate data into the ``data_meta``
+area.
 
 XDP_PASS
 ========
