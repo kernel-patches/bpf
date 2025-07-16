@@ -5839,6 +5839,7 @@ skip_taps:
 	}
 #endif
 	skb_reset_redirect(skb);
+	skb_metadata_clear(skb);
 skip_classify:
 	if (pfmemalloc && !skb_pfmemalloc_protocol(skb))
 		goto drop;
