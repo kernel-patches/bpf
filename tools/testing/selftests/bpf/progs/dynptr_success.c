@@ -189,6 +189,26 @@ int test_skb_readonly(struct __sk_buff *skb)
 }
 
 SEC("?cgroup_skb/egress")
+int test_skb_meta_readonly(struct __sk_buff *skb)
+{
+	struct bpf_dynptr meta;
+	int ret;
+
+	err = 1;
+	ret = bpf_dynptr_from_skb_meta(skb, 0, &meta);
+	if (ret)
+		return 1;
+
+	err = 2;
+	ret = bpf_dynptr_write(&meta, 0, "x", 1, 0);
+	if (ret != -EINVAL)
+		return 1;
+
+	err = 0;
+	return 1;
+}
+
+SEC("?cgroup_skb/egress")
 int test_dynptr_skb_data(struct __sk_buff *skb)
 {
 	struct bpf_dynptr ptr;
@@ -206,6 +226,27 @@ int test_dynptr_skb_data(struct __sk_buff *skb)
 		return 1;
 	}
 
+	return 1;
+}
+
+SEC("?cgroup_skb/egress")
+int test_dynptr_skb_meta_data(struct __sk_buff *skb)
+{
+	struct bpf_dynptr meta;
+	__u8 *md;
+	int ret;
+
+	err = 1;
+	ret = bpf_dynptr_from_skb_meta(skb, 0, &meta);
+	if (ret)
+		return 1;
+
+	err = 2;
+	md = bpf_dynptr_data(&meta, 0, sizeof(*md));
+	if (md)
+		return 1;
+
+	err = 0;
 	return 1;
 }
 
@@ -564,6 +605,27 @@ int BPF_PROG(test_dynptr_skb_tp_btf, void *skb, void *location)
 		return 1;
 	}
 
+	return 1;
+}
+
+SEC("tp_btf/kfree_skb")
+int BPF_PROG(test_dynptr_skb_meta_tp_btf, void *skb, void *location)
+{
+	struct bpf_dynptr meta;
+	int ret;
+
+	err = 1;
+	ret = bpf_dynptr_from_skb_meta(skb, 0, &meta);
+	if (ret)
+		return 1;
+
+	/* Expect write failure. tp_btf skb is readonly. */
+	err = 2;
+	ret = bpf_dynptr_write(&meta, 0, "x", 1, 0);
+	if (ret != -EINVAL)
+		return 1;
+
+	err = 0;
 	return 1;
 }
 
