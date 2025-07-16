@@ -35,6 +35,14 @@ struct {
 	__uint(value_size, META_SIZE);
 } test_result SEC(".maps");
 
+__u32 prog_run_cnt = 0;
+
+static __always_inline int run_ok(int retval)
+{
+	__sync_fetch_and_add(&prog_run_cnt, 1);
+	return retval;
+}
+
 SEC("tc")
 int ing_cls(struct __sk_buff *ctx)
 {
@@ -49,7 +57,7 @@ int ing_cls(struct __sk_buff *ctx)
 
 	bpf_map_update_elem(&test_result, &key, data_meta, BPF_ANY);
 
-	return TC_ACT_SHOT;
+	return run_ok(TC_ACT_SHOT);
 }
 
 /* Read from metadata using bpf_dynptr_read helper */
@@ -67,7 +75,7 @@ int ing_cls_dynptr_read(struct __sk_buff *ctx)
 	bpf_dynptr_from_skb_meta(ctx, 0, &meta);
 	bpf_dynptr_read(dst, META_SIZE, &meta, 0, 0);
 
-	return TC_ACT_SHOT;
+	return run_ok(TC_ACT_SHOT);
 }
 
 /* Check that we can't get a dynptr slice to skb metadata yet */
@@ -81,7 +89,7 @@ int ing_nf(struct bpf_nf_ctx *ctx)
 	if (bpf_dynptr_size(&meta) != 0)
 		return NF_DROP;
 
-	return NF_ACCEPT;
+	return run_ok(NF_ACCEPT);
 }
 
 /* Write to metadata using bpf_dynptr_write helper */
@@ -99,7 +107,7 @@ int ing_cls_dynptr_write(struct __sk_buff *ctx)
 	bpf_dynptr_from_skb_meta(ctx, 0, &meta);
 	bpf_dynptr_write(&meta, 0, src, META_SIZE, 0);
 
-	return TC_ACT_UNSPEC; /* pass */
+	return run_ok(TC_ACT_UNSPEC); /* pass */
 }
 
 /* Read from metadata using read-only dynptr slice */
@@ -121,7 +129,7 @@ int ing_cls_dynptr_slice(struct __sk_buff *ctx)
 
 	__builtin_memcpy(dst, src, META_SIZE);
 
-	return TC_ACT_SHOT;
+	return run_ok(TC_ACT_SHOT);
 }
 
 /* Write to metadata using writeable dynptr slice */
@@ -143,7 +151,7 @@ int ing_cls_dynptr_slice_rdwr(struct __sk_buff *ctx)
 
 	__builtin_memcpy(dst, src, META_SIZE);
 
-	return TC_ACT_UNSPEC; /* pass */
+	return run_ok(TC_ACT_UNSPEC); /* pass */
 }
 
 /*
@@ -181,7 +189,7 @@ int ing_cls_dynptr_offset_rd(struct __sk_buff *ctx)
 		return TC_ACT_SHOT;
 	__builtin_memcpy(dst, src, chunk_len);
 
-	return TC_ACT_SHOT;
+	return run_ok(TC_ACT_SHOT);
 }
 
 /* Write skb metadata in chunks at various offsets in different ways. */
@@ -216,7 +224,7 @@ int ing_cls_dynptr_offset_wr(struct __sk_buff *ctx)
 		return TC_ACT_SHOT;
 	__builtin_memcpy(dst, src, chunk_len);
 
-	return TC_ACT_UNSPEC; /* pass */
+	return run_ok(TC_ACT_UNSPEC); /* pass */
 }
 
 /* Reserve and clear space for metadata but don't populate it */
@@ -247,7 +255,7 @@ int ing_xdp_zalloc_meta(struct xdp_md *ctx)
 
 	__builtin_memset(meta, 0, META_SIZE);
 
-	return XDP_PASS;
+	return run_ok(XDP_PASS);
 }
 
 SEC("xdp")
@@ -278,7 +286,7 @@ int ing_xdp(struct xdp_md *ctx)
 		return XDP_DROP;
 
 	__builtin_memcpy(data_meta, payload, META_SIZE);
-	return XDP_PASS;
+	return run_ok(XDP_PASS);
 }
 
 char _license[] SEC("license") = "GPL";

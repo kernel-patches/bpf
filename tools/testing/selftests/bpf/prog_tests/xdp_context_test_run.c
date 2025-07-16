@@ -294,13 +294,15 @@ close:
 static void test_tuntap(struct bpf_program *xdp_prog,
 			struct bpf_program *tc_prio_1_prog,
 			struct bpf_program *tc_prio_2_prog,
-			struct bpf_program *nf_prog,
+			struct bpf_program *nf_prog, __u32 *prog_run_cnt,
 			struct bpf_map *result_map)
 {
 	LIBBPF_OPTS(bpf_tc_hook, tc_hook, .attach_point = BPF_TC_INGRESS);
 	struct bpf_link *nf_link = NULL;
 	struct netns_obj *ns = NULL;
 	__u8 packet[PACKET_LEN];
+	__u32 want_run_cnt = 0;
+	__u32 have_run_cnt;
 	int tap_fd = -1;
 	int tap_ifindex;
 	int ret;
@@ -336,6 +338,7 @@ static void test_tuntap(struct bpf_program *xdp_prog,
 		ret = bpf_tc_attach(&tc_hook, &tc_opts);
 		if (!ASSERT_OK(ret, "bpf_tc_attach"))
 			goto close;
+		want_run_cnt++;
 	}
 
 	if (tc_prio_2_prog) {
@@ -345,6 +348,7 @@ static void test_tuntap(struct bpf_program *xdp_prog,
 		ret = bpf_tc_attach(&tc_hook, &tc_opts);
 		if (!ASSERT_OK(ret, "bpf_tc_attach"))
 			goto close;
+		want_run_cnt++;
 	}
 
 	if (nf_prog) {
@@ -354,16 +358,23 @@ static void test_tuntap(struct bpf_program *xdp_prog,
 		nf_link = bpf_program__attach_netfilter(nf_prog, &nf_opts);
 		if (!ASSERT_OK_PTR(nf_link, "attach_netfilter"))
 			goto close;
+		want_run_cnt++;
 	}
 
 	ret = bpf_xdp_attach(tap_ifindex, bpf_program__fd(xdp_prog),
 			     0, NULL);
 	if (!ASSERT_GE(ret, 0, "bpf_xdp_attach"))
 		goto close;
+	want_run_cnt++;
 
 	init_test_packet(packet);
 	ret = write(tap_fd, packet, sizeof(packet));
 	if (!ASSERT_EQ(ret, sizeof(packet), "write packet"))
+		goto close;
+
+	have_run_cnt = __atomic_exchange_n(prog_run_cnt, 0, __ATOMIC_SEQ_CST);
+	if (!ASSERT_EQ(have_run_cnt, want_run_cnt,
+		       "unexpected bpf prog runs"))
 		goto close;
 
 	if (result_map)
@@ -390,42 +401,49 @@ void test_xdp_context_tuntap(void)
 			    skel->progs.ing_cls,
 			    NULL, /* tc prio 2 */
 			    NULL, /* netfilter */
+			    &skel->bss->prog_run_cnt,
 			    skel->maps.test_result);
 	if (test__start_subtest("dynptr_read"))
 		test_tuntap(skel->progs.ing_xdp,
 			    skel->progs.ing_cls_dynptr_read,
 			    NULL, /* tc prio 2 */
 			    NULL, /* netfilter */
+			    &skel->bss->prog_run_cnt,
 			    skel->maps.test_result);
 	if (test__start_subtest("dynptr_slice"))
 		test_tuntap(skel->progs.ing_xdp,
 			    skel->progs.ing_cls_dynptr_slice,
 			    NULL, /* tc prio 2 */
 			    NULL, /* netfilter */
+			    &skel->bss->prog_run_cnt,
 			    skel->maps.test_result);
 	if (test__start_subtest("dynptr_write"))
 		test_tuntap(skel->progs.ing_xdp_zalloc_meta,
 			    skel->progs.ing_cls_dynptr_write,
 			    skel->progs.ing_cls_dynptr_read,
 			    NULL, /* netfilter */
+			    &skel->bss->prog_run_cnt,
 			    skel->maps.test_result);
 	if (test__start_subtest("dynptr_slice_rdwr"))
 		test_tuntap(skel->progs.ing_xdp_zalloc_meta,
 			    skel->progs.ing_cls_dynptr_slice_rdwr,
 			    skel->progs.ing_cls_dynptr_slice,
 			    NULL, /* netfilter */
+			    &skel->bss->prog_run_cnt,
 			    skel->maps.test_result);
 	if (test__start_subtest("dynptr_offset"))
 		test_tuntap(skel->progs.ing_xdp_zalloc_meta,
 			    skel->progs.ing_cls_dynptr_offset_wr,
 			    skel->progs.ing_cls_dynptr_offset_rd,
 			    NULL, /* netfilter */
+			    &skel->bss->prog_run_cnt,
 			    skel->maps.test_result);
 	if (test__start_subtest("dynptr_nf_hook"))
 		test_tuntap(skel->progs.ing_xdp,
 			    NULL, /* tc prio 1 */
 			    NULL, /* tc prio 2 */
 			    skel->progs.ing_nf,
+			    &skel->bss->prog_run_cnt,
 			    NULL /* ignore result for now */);
 
 	test_xdp_meta__destroy(skel);
