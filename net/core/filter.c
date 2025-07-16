@@ -11978,6 +11978,25 @@ bpf_sk_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	return func;
 }
 
+static int dynptr_from_skb_meta(struct __sk_buff *skb_, u64 flags,
+				struct bpf_dynptr *ptr_, bool rdonly)
+{
+	struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)ptr_;
+	struct sk_buff *skb = (struct sk_buff *)skb_;
+
+	if (flags) {
+		bpf_dynptr_set_null(ptr);
+		return -EINVAL;
+	}
+
+	bpf_dynptr_init(ptr, skb, BPF_DYNPTR_TYPE_SKB_META, 0, skb_metadata_len(skb));
+
+	if (rdonly)
+		bpf_dynptr_set_rdonly(ptr);
+
+	return 0;
+}
+
 __bpf_kfunc_start_defs();
 __bpf_kfunc int bpf_dynptr_from_skb(struct __sk_buff *s, u64 flags,
 				    struct bpf_dynptr *ptr__uninit)
@@ -11993,6 +12012,12 @@ __bpf_kfunc int bpf_dynptr_from_skb(struct __sk_buff *s, u64 flags,
 	bpf_dynptr_init(ptr, skb, BPF_DYNPTR_TYPE_SKB, 0, skb->len);
 
 	return 0;
+}
+
+__bpf_kfunc int bpf_dynptr_from_skb_meta(struct __sk_buff *skb, u64 flags,
+					 struct bpf_dynptr *ptr__uninit)
+{
+	return dynptr_from_skb_meta(skb, flags, ptr__uninit, false);
 }
 
 __bpf_kfunc int bpf_dynptr_from_xdp(struct xdp_md *x, u64 flags,
@@ -12165,8 +12190,15 @@ int bpf_dynptr_from_skb_rdonly(struct __sk_buff *skb, u64 flags,
 	return 0;
 }
 
+int bpf_dynptr_from_skb_meta_rdonly(struct __sk_buff *skb, u64 flags,
+				    struct bpf_dynptr *ptr__uninit)
+{
+	return dynptr_from_skb_meta(skb, flags, ptr__uninit, true);
+}
+
 BTF_KFUNCS_START(bpf_kfunc_check_set_skb)
 BTF_ID_FLAGS(func, bpf_dynptr_from_skb, KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_dynptr_from_skb_meta, KF_TRUSTED_ARGS)
 BTF_KFUNCS_END(bpf_kfunc_check_set_skb)
 
 BTF_KFUNCS_START(bpf_kfunc_check_set_xdp)
