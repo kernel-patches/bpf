@@ -1,14 +1,24 @@
 #include <stdbool.h>
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
+#include <linux/ip.h>
 #include <linux/pkt_cls.h>
 
+#include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
 #include "bpf_kfuncs.h"
 
+#define META_OFFSET (sizeof(struct ethhdr) + sizeof(struct iphdr))
 #define META_SIZE 32
 
+#define NF_DROP 0
+#define NF_ACCEPT 1
+
 #define ctx_ptr(ctx, mem) (void *)(unsigned long)ctx->mem
+
+struct bpf_nf_ctx {
+	struct sk_buff *skb;
+} __attribute__((preserve_access_index));
 
 /* Demonstrates how metadata can be passed from an XDP program to a TC program
  * using bpf_xdp_adjust_meta.
@@ -60,6 +70,20 @@ int ing_cls_dynptr_read(struct __sk_buff *ctx)
 	return TC_ACT_SHOT;
 }
 
+/* Check that we can't get a dynptr slice to skb metadata yet */
+SEC("netfilter")
+int ing_nf(struct bpf_nf_ctx *ctx)
+{
+	struct __sk_buff *skb = (struct __sk_buff *)ctx->skb;
+	struct bpf_dynptr meta;
+
+	bpf_dynptr_from_skb_meta(skb, 0, &meta);
+	if (bpf_dynptr_size(&meta) != 0)
+		return NF_DROP;
+
+	return NF_ACCEPT;
+}
+
 /* Write to metadata using bpf_dynptr_write helper */
 SEC("tc")
 int ing_cls_dynptr_write(struct __sk_buff *ctx)
@@ -68,7 +92,7 @@ int ing_cls_dynptr_write(struct __sk_buff *ctx)
 	__u8 *src;
 
 	bpf_dynptr_from_skb(ctx, 0, &data);
-	src = bpf_dynptr_slice(&data, sizeof(struct ethhdr), NULL, META_SIZE);
+	src = bpf_dynptr_slice(&data, META_OFFSET, NULL, META_SIZE);
 	if (!src)
 		return TC_ACT_SHOT;
 
@@ -108,7 +132,7 @@ int ing_cls_dynptr_slice_rdwr(struct __sk_buff *ctx)
 	__u8 *src, *dst;
 
 	bpf_dynptr_from_skb(ctx, 0, &data);
-	src = bpf_dynptr_slice(&data, sizeof(struct ethhdr), NULL, META_SIZE);
+	src = bpf_dynptr_slice(&data, META_OFFSET, NULL, META_SIZE);
 	if (!src)
 		return TC_ACT_SHOT;
 
@@ -169,7 +193,7 @@ int ing_cls_dynptr_offset_wr(struct __sk_buff *ctx)
 	struct bpf_dynptr meta;
 	__u8 *dst, *src;
 
-	bpf_skb_load_bytes(ctx, sizeof(struct ethhdr), payload, sizeof(payload));
+	bpf_skb_load_bytes(ctx, META_OFFSET, payload, sizeof(payload));
 	src = payload;
 
 	/* 1. Regular write */
@@ -199,14 +223,18 @@ int ing_cls_dynptr_offset_wr(struct __sk_buff *ctx)
 SEC("xdp")
 int ing_xdp_zalloc_meta(struct xdp_md *ctx)
 {
-	struct ethhdr *eth = ctx_ptr(ctx, data);
+	const void *data_end = ctx_ptr(ctx, data_end);
+	const struct ethhdr *eth;
+	const struct iphdr *iph;
 	__u8 *meta;
 	int ret;
 
-	/* Drop any non-test packets */
-	if (eth + 1 > ctx_ptr(ctx, data_end))
+	/* Expect Eth | IPv4 (proto=61) | ... */
+	eth = ctx_ptr(ctx, data);
+	if (eth + 1 > data_end || eth->h_proto != bpf_htons(ETH_P_IP))
 		return XDP_DROP;
-	if (eth->h_proto != 0)
+	iph = (void *)(eth + 1);
+	if (iph + 1 > data_end || iph->protocol != 61)
 		return XDP_DROP;
 
 	ret = bpf_xdp_adjust_meta(ctx, -META_SIZE);
@@ -226,7 +254,8 @@ SEC("xdp")
 int ing_xdp(struct xdp_md *ctx)
 {
 	__u8 *data, *data_meta, *data_end, *payload;
-	struct ethhdr *eth;
+	const struct ethhdr *eth;
+	const struct iphdr *iph;
 	int ret;
 
 	ret = bpf_xdp_adjust_meta(ctx, -META_SIZE);
@@ -237,18 +266,15 @@ int ing_xdp(struct xdp_md *ctx)
 	data_end  = ctx_ptr(ctx, data_end);
 	data      = ctx_ptr(ctx, data);
 
-	eth = (struct ethhdr *)data;
-	payload = data + sizeof(struct ethhdr);
-
-	if (payload + META_SIZE > data_end ||
-	    data_meta + META_SIZE > data)
+	/* Expect Eth | IPv4 (proto=61) | meta blob */
+	eth = (void *)data;
+	if (eth + 1 > data_end || eth->h_proto != bpf_htons(ETH_P_IP))
 		return XDP_DROP;
-
-	/* The Linux networking stack may send other packets on the test
-	 * interface that interfere with the test. Just drop them.
-	 * The test packets can be recognized by their ethertype of zero.
-	 */
-	if (eth->h_proto != 0)
+	iph = (void *)(eth + 1);
+	if (iph + 1 > data_end || iph->protocol != 61)
+		return XDP_DROP;
+	payload = (void *)(iph + 1);
+	if (payload + META_SIZE > data_end || data_meta + META_SIZE > data)
 		return XDP_DROP;
 
 	__builtin_memcpy(data_meta, payload, META_SIZE);

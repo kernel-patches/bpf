@@ -19,6 +19,9 @@ static const __u8 test_payload[TEST_PAYLOAD_LEN] = {
 	0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
 };
 
+#define PACKET_LEN \
+	(sizeof(struct ethhdr) + sizeof(struct iphdr) + TEST_PAYLOAD_LEN)
+
 void test_xdp_context_error(int prog_fd, struct bpf_test_run_opts opts,
 			    __u32 data_meta, __u32 data, __u32 data_end,
 			    __u32 ingress_ifindex, __u32 rx_queue_index,
@@ -120,18 +123,38 @@ void test_xdp_context_test_run(void)
 	test_xdp_context_test_run__destroy(skel);
 }
 
+static void init_test_packet(__u8 *pkt)
+{
+	struct ethhdr *eth = &(struct ethhdr){
+		.h_dest = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 },
+		.h_source = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x02 },
+		.h_proto = htons(ETH_P_IP),
+	};
+	struct iphdr *iph = &(struct iphdr){
+		.ihl = 5,
+		.version = IPVERSION,
+		.ttl = IPDEFTTL,
+		.protocol = 61, /* host internal protocol */
+		.saddr = inet_addr("10.0.0.2"),
+		.daddr = inet_addr("10.0.0.1"),
+	};
+
+	eth = memcpy(pkt, eth, sizeof(*eth));
+	pkt += sizeof(*eth);
+	iph = memcpy(pkt, iph, sizeof(*iph));
+	pkt += sizeof(*iph);
+	memcpy(pkt, test_payload, sizeof(test_payload));
+
+	iph->tot_len = htons(sizeof(*iph) + sizeof(test_payload));
+	iph->check = build_ip_csum(iph);
+}
+
 static int send_test_packet(int ifindex)
 {
+	__u8 packet[PACKET_LEN];
 	int n, sock = -1;
-	__u8 packet[sizeof(struct ethhdr) + TEST_PAYLOAD_LEN];
 
-	/* The ethernet header is not relevant for this test and doesn't need to
-	 * be meaningful.
-	 */
-	struct ethhdr eth = { 0 };
-
-	memcpy(packet, &eth, sizeof(eth));
-	memcpy(packet + sizeof(eth), test_payload, TEST_PAYLOAD_LEN);
+	init_test_packet(packet);
 
 	sock = socket(AF_PACKET, SOCK_RAW, IPPROTO_RAW);
 	if (!ASSERT_GE(sock, 0, "socket"))
@@ -271,17 +294,18 @@ close:
 static void test_tuntap(struct bpf_program *xdp_prog,
 			struct bpf_program *tc_prio_1_prog,
 			struct bpf_program *tc_prio_2_prog,
+			struct bpf_program *nf_prog,
 			struct bpf_map *result_map)
 {
 	LIBBPF_OPTS(bpf_tc_hook, tc_hook, .attach_point = BPF_TC_INGRESS);
-	LIBBPF_OPTS(bpf_tc_opts, tc_opts, .handle = 1, .priority = 1);
+	struct bpf_link *nf_link = NULL;
 	struct netns_obj *ns = NULL;
-	__u8 packet[sizeof(struct ethhdr) + TEST_PAYLOAD_LEN];
+	__u8 packet[PACKET_LEN];
 	int tap_fd = -1;
 	int tap_ifindex;
 	int ret;
 
-	if (!clear_test_result(result_map))
+	if (result_map && !clear_test_result(result_map))
 		return;
 
 	ns = netns_new(TAP_NETNS, true);
@@ -292,6 +316,8 @@ static void test_tuntap(struct bpf_program *xdp_prog,
 	if (!ASSERT_GE(tap_fd, 0, "open_tuntap"))
 		goto close;
 
+	SYS(close, "ip link set dev " TAP_NAME " addr 02:00:00:00:00:01");
+	SYS(close, "ip addr add dev " TAP_NAME " 10.0.0.1/24");
 	SYS(close, "ip link set dev " TAP_NAME " up");
 
 	tap_ifindex = if_nametoindex(TAP_NAME);
@@ -303,10 +329,14 @@ static void test_tuntap(struct bpf_program *xdp_prog,
 	if (!ASSERT_OK(ret, "bpf_tc_hook_create"))
 		goto close;
 
-	tc_opts.prog_fd = bpf_program__fd(tc_prio_1_prog);
-	ret = bpf_tc_attach(&tc_hook, &tc_opts);
-	if (!ASSERT_OK(ret, "bpf_tc_attach"))
-		goto close;
+	if (tc_prio_1_prog) {
+		LIBBPF_OPTS(bpf_tc_opts, tc_opts, .handle = 1, .priority = 1,
+			    .prog_fd = bpf_program__fd(tc_prio_1_prog));
+
+		ret = bpf_tc_attach(&tc_hook, &tc_opts);
+		if (!ASSERT_OK(ret, "bpf_tc_attach"))
+			goto close;
+	}
 
 	if (tc_prio_2_prog) {
 		LIBBPF_OPTS(bpf_tc_opts, tc_opts, .handle = 1, .priority = 2,
@@ -317,28 +347,33 @@ static void test_tuntap(struct bpf_program *xdp_prog,
 			goto close;
 	}
 
+	if (nf_prog) {
+		LIBBPF_OPTS(bpf_netfilter_opts, nf_opts,
+			    .pf = NFPROTO_IPV4, .hooknum = NF_INET_PRE_ROUTING);
+
+		nf_link = bpf_program__attach_netfilter(nf_prog, &nf_opts);
+		if (!ASSERT_OK_PTR(nf_link, "attach_netfilter"))
+			goto close;
+	}
+
 	ret = bpf_xdp_attach(tap_ifindex, bpf_program__fd(xdp_prog),
 			     0, NULL);
 	if (!ASSERT_GE(ret, 0, "bpf_xdp_attach"))
 		goto close;
 
-	/* The ethernet header is not relevant for this test and doesn't need to
-	 * be meaningful.
-	 */
-	struct ethhdr eth = { 0 };
-
-	memcpy(packet, &eth, sizeof(eth));
-	memcpy(packet + sizeof(eth), test_payload, TEST_PAYLOAD_LEN);
-
+	init_test_packet(packet);
 	ret = write(tap_fd, packet, sizeof(packet));
 	if (!ASSERT_EQ(ret, sizeof(packet), "write packet"))
 		goto close;
 
-	assert_test_result(result_map);
+	if (result_map)
+		assert_test_result(result_map);
 
 close:
 	if (tap_fd >= 0)
 		close(tap_fd);
+	if (nf_link)
+		bpf_link__destroy(nf_link);
 	netns_free(ns);
 }
 
@@ -354,32 +389,44 @@ void test_xdp_context_tuntap(void)
 		test_tuntap(skel->progs.ing_xdp,
 			    skel->progs.ing_cls,
 			    NULL, /* tc prio 2 */
+			    NULL, /* netfilter */
 			    skel->maps.test_result);
 	if (test__start_subtest("dynptr_read"))
 		test_tuntap(skel->progs.ing_xdp,
 			    skel->progs.ing_cls_dynptr_read,
 			    NULL, /* tc prio 2 */
+			    NULL, /* netfilter */
 			    skel->maps.test_result);
 	if (test__start_subtest("dynptr_slice"))
 		test_tuntap(skel->progs.ing_xdp,
 			    skel->progs.ing_cls_dynptr_slice,
 			    NULL, /* tc prio 2 */
+			    NULL, /* netfilter */
 			    skel->maps.test_result);
 	if (test__start_subtest("dynptr_write"))
 		test_tuntap(skel->progs.ing_xdp_zalloc_meta,
 			    skel->progs.ing_cls_dynptr_write,
 			    skel->progs.ing_cls_dynptr_read,
+			    NULL, /* netfilter */
 			    skel->maps.test_result);
 	if (test__start_subtest("dynptr_slice_rdwr"))
 		test_tuntap(skel->progs.ing_xdp_zalloc_meta,
 			    skel->progs.ing_cls_dynptr_slice_rdwr,
 			    skel->progs.ing_cls_dynptr_slice,
+			    NULL, /* netfilter */
 			    skel->maps.test_result);
 	if (test__start_subtest("dynptr_offset"))
 		test_tuntap(skel->progs.ing_xdp_zalloc_meta,
 			    skel->progs.ing_cls_dynptr_offset_wr,
 			    skel->progs.ing_cls_dynptr_offset_rd,
+			    NULL, /* netfilter */
 			    skel->maps.test_result);
+	if (test__start_subtest("dynptr_nf_hook"))
+		test_tuntap(skel->progs.ing_xdp,
+			    NULL, /* tc prio 1 */
+			    NULL, /* tc prio 2 */
+			    skel->progs.ing_nf,
+			    NULL /* ignore result for now */);
 
 	test_xdp_meta__destroy(skel);
 }
