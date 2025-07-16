@@ -11990,6 +11990,18 @@ int bpf_skb_meta_load_bytes(const struct sk_buff *skb, u32 offset,
 	return 0;
 }
 
+int bpf_skb_meta_store_bytes(struct sk_buff *dst, u32 offset,
+			     const void *src, u32 len)
+{
+	u32 meta_len = skb_metadata_len(dst);
+
+	if (len > meta_len || offset > meta_len - len)
+		return -E2BIG; /* out of bounds */
+
+	memmove(skb_metadata_end(dst) - meta_len + offset, src, len);
+	return 0;
+}
+
 static int dynptr_from_skb_meta(struct __sk_buff *skb_, u64 flags,
 				struct bpf_dynptr *ptr_, bool rdonly)
 {

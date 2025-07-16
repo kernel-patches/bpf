@@ -1774,6 +1774,8 @@ void bpf_xdp_copy_buf(struct xdp_buff *xdp, unsigned long off,
 		      void *buf, unsigned long len, bool flush);
 int bpf_skb_meta_load_bytes(const struct sk_buff *src, u32 offset,
 			    void *dst, u32 len);
+int bpf_skb_meta_store_bytes(struct sk_buff *dst, u32 offset,
+			     const void *src, u32 len);
 #else /* CONFIG_NET */
 static inline int __bpf_skb_load_bytes(const struct sk_buff *skb, u32 offset,
 				       void *to, u32 len)
@@ -1811,6 +1813,12 @@ static inline void bpf_xdp_copy_buf(struct xdp_buff *xdp, unsigned long off, voi
 
 static inline int bpf_skb_meta_load_bytes(const struct sk_buff *src, u32 offset,
 					  void *dst, u32 len)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int bpf_skb_meta_store_bytes(struct sk_buff *dst, u32 offset,
+					   const void *src, u32 len)
 {
 	return -EOPNOTSUPP;
 }
