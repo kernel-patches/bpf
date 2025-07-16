@@ -1776,6 +1776,7 @@ int bpf_skb_meta_load_bytes(const struct sk_buff *src, u32 offset,
 			    void *dst, u32 len);
 int bpf_skb_meta_store_bytes(struct sk_buff *dst, u32 offset,
 			     const void *src, u32 len);
+void *bpf_skb_meta_pointer(struct sk_buff *skb, u32 offset, u32 len);
 #else /* CONFIG_NET */
 static inline int __bpf_skb_load_bytes(const struct sk_buff *skb, u32 offset,
 				       void *to, u32 len)
@@ -1821,6 +1822,11 @@ static inline int bpf_skb_meta_store_bytes(struct sk_buff *dst, u32 offset,
 					   const void *src, u32 len)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline void *bpf_skb_meta_pointer(struct sk_buff *skb, u32 offset, u32 len)
+{
+	return NULL;
 }
 #endif /* CONFIG_NET */
 
