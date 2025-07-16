@@ -29,7 +29,7 @@ int stream_exhaust(void *ctx)
 	/* Use global variable for loop convergence. */
 	size = 0;
 	bpf_repeat(BPF_MAX_LOOPS) {
-		if (bpf_stream_printk(BPF_STDOUT, _STR) == -ENOSPC && size == 99954)
+		if (__bpf_stream_printk(BPF_STDOUT, _STR) == -ENOSPC && size == 99954)
 			return 0;
 		size += sizeof(_STR) - 1;
 	}
@@ -72,7 +72,7 @@ SEC("syscall")
 __success __retval(0)
 int stream_syscall(void *ctx)
 {
-	bpf_stream_printk(BPF_STDOUT, "foo");
+	__bpf_stream_printk(BPF_STDOUT, "foo");
 	return 0;
 }
 

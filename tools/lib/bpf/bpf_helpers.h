@@ -318,7 +318,7 @@ enum libbpf_tristate {
 extern int bpf_stream_vprintk(int stream_id, const char *fmt__str, const void *args,
 			      __u32 len__sz, void *aux__prog) __weak __ksym;
 
-#define bpf_stream_printk(stream_id, fmt, args...)				\
+#define __bpf_stream_printk(stream_id, fmt, args...)				\
 ({										\
 	static const char ___fmt[] = fmt;					\
 	unsigned long long ___param[___bpf_narg(args)];				\
