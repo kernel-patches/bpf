@@ -676,11 +676,11 @@ static void bpf_prog_report_rqspinlock_violation(const char *str, void *lock, bo
 	if (!prog)
 		return;
 	bpf_stream_stage(ss, prog, BPF_STDERR, ({
-		bpf_stream_printk(ss, "ERROR: %s for bpf_res_spin_lock%s\n", str, irqsave ? "_irqsave" : "");
-		bpf_stream_printk(ss, "Attempted lock   = 0x%px\n", lock);
-		bpf_stream_printk(ss, "Total held locks = %d\n", rqh->cnt);
+		bpf_stream_stage_printk(&ss, "ERROR: %s for bpf_res_spin_lock%s\n", str, irqsave ? "_irqsave" : "");
+		bpf_stream_stage_printk(&ss, "Attempted lock   = 0x%px\n", lock);
+		bpf_stream_stage_printk(&ss, "Total held locks = %d\n", rqh->cnt);
 		for (int i = 0; i < min(RES_NR_HELD, rqh->cnt); i++)
-			bpf_stream_printk(ss, "Held lock[%2d] = 0x%px\n", i, rqh->locks[i]);
+			bpf_stream_stage_printk(&ss, "Held lock[%2d] = 0x%px\n", i, rqh->locks[i]);
 		bpf_stream_dump_stack(ss);
 	}));
 }

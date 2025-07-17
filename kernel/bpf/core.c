@@ -3178,7 +3178,7 @@ static noinline void bpf_prog_report_may_goto_violation(void)
 	if (!prog)
 		return;
 	bpf_stream_stage(ss, prog, BPF_STDERR, ({
-		bpf_stream_printk(ss, "ERROR: Timeout detected for may_goto instruction\n");
+		bpf_stream_stage_printk(&ss, "ERROR: Timeout detected for may_goto instruction\n");
 		bpf_stream_dump_stack(ss);
 	}));
 #endif
