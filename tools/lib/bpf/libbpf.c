@@ -1495,7 +1495,7 @@ static struct bpf_object *bpf_object__new(const char *path,
 		return ERR_PTR(-ENOMEM);
 	}
 
-	strcpy(obj->path, path);
+	memcpy(obj->path, path, strlen(path) + 1);
 	if (obj_name) {
 		libbpf_strlcpy(obj->name, obj_name, sizeof(obj->name));
 	} else {
