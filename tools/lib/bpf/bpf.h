@@ -163,12 +163,42 @@ LIBBPF_API int bpf_map_delete_elem_flags(int fd, const void *key, __u64 flags);
 LIBBPF_API int bpf_map_get_next_key(int fd, const void *key, void *next_key);
 LIBBPF_API int bpf_map_freeze(int fd);
 
+/**
+ * @brief **bpf_map_update_elem_opts** allows for updating map with options.
+ *
+ * @param fd BPF map file descriptor
+ * @param key pointer to key
+ * @param value pointer to value
+ * @param opts options for configuring the way to update map
+ * @return 0, on success; negative error code, otherwise (errno is also set to
+ * the error code)
+ */
+LIBBPF_API int bpf_map_update_elem_opts(int fd, const void *key, const void *value,
+					const struct bpf_map_update_elem_opts *opts);
+
+/**
+ * @brief **bpf_map_lookup_elem_opts** allows for looking up the value with
+ * options.
+ *
+ * @param fd BPF map file descriptor
+ * @param key pointer to key
+ * @param value pointer to value
+ * @param opts options for configuring the way to lookup map
+ * @return 0, on success; negative error code, otherwise (errno is also set to
+ * the error code)
+ */
+LIBBPF_API int bpf_map_lookup_elem_opts(int fd, const void *key, void *value,
+					const struct bpf_map_lookup_elem_opts *opts);
+
+
 struct bpf_map_batch_opts {
 	size_t sz; /* size of this struct for forward/backward compatibility */
 	__u64 elem_flags;
 	__u64 flags;
+	__u32 cpu;
+	size_t:0;
 };
-#define bpf_map_batch_opts__last_field flags
+#define bpf_map_batch_opts__last_field cpu
 
 
 /**
@@ -285,6 +315,10 @@ LIBBPF_API int bpf_map_lookup_and_delete_batch(int fd, void *in_batch,
  * **BPF_F_LOCK**
  *    Update spin_lock-ed map elements. This must be
  *    specified if the map value contains a spinlock.
+ *
+ * **BPF_F_CPU**
+ *    As for percpu map, update value across all CPUs if **opts->cpu** is
+ *    (__u32)~0, or on specified CPU otherwise.
  *
  * @param fd BPF map file descriptor
  * @param keys pointer to an array of *count* keys
