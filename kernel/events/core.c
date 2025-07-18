@@ -8409,7 +8409,7 @@ static void __perf_event_aux_pause(struct perf_event *event, bool pause)
 	}
 }
 
-static void perf_event_aux_pause(struct perf_event *event, bool pause)
+void perf_event_aux_pause(struct perf_event *event, bool pause)
 {
 	struct perf_buffer *rb;
 

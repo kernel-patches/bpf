@@ -1252,6 +1252,7 @@ extern int perf_event_read_local(struct perf_event *event, u64 *value,
 				 u64 *enabled, u64 *running);
 extern u64 perf_event_read_value(struct perf_event *event,
 				 u64 *enabled, u64 *running);
+extern void perf_event_aux_pause(struct perf_event *event, bool pause);
 
 extern struct perf_callchain_entry *perf_callchain(struct perf_event *event, struct pt_regs *regs);
 
