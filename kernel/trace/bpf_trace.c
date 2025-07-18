@@ -704,6 +704,66 @@ static const struct bpf_func_proto bpf_perf_event_output_proto = {
 	.arg5_type	= ARG_CONST_SIZE_OR_ZERO,
 };
 
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_perf_event_aux_pause(void *p__map, u64 flags, u32 pause)
+{
+	struct bpf_map *map = p__map;
+	struct bpf_array *array = container_of(map, struct bpf_array, map);
+	unsigned int cpu = smp_processor_id();
+	u64 index = flags & BPF_F_INDEX_MASK;
+	struct bpf_event_entry *ee;
+	int ret = 0;
+
+	/* Disabling IRQ avoids race condition with perf event flows. */
+	guard(irqsave)();
+
+	if (unlikely(flags & ~(BPF_F_INDEX_MASK))) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (index == BPF_F_CURRENT_CPU)
+		index = cpu;
+
+	if (unlikely(index >= array->map.max_entries)) {
+		ret = -E2BIG;
+		goto out;
+	}
+
+	ee = READ_ONCE(array->ptrs[index]);
+	if (!ee) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	if (!has_aux(ee->event))
+		ret = -EINVAL;
+
+	perf_event_aux_pause(ee->event, pause);
+out:
+	return ret;
+}
+
+__bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(perf_event_kfunc_set_ids)
+BTF_ID_FLAGS(func, bpf_perf_event_aux_pause, KF_TRUSTED_ARGS)
+BTF_KFUNCS_END(perf_event_kfunc_set_ids)
+
+static const struct btf_kfunc_id_set bpf_perf_event_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &perf_event_kfunc_set_ids,
+};
+
+static int __init bpf_perf_event_kfuncs_init(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC,
+					 &bpf_perf_event_kfunc_set);
+}
+
+late_initcall(bpf_perf_event_kfuncs_init);
+
 static DEFINE_PER_CPU(int, bpf_event_output_nest_level);
 struct bpf_nested_pt_regs {
 	struct pt_regs regs[3];
