@@ -907,4 +907,47 @@ void itrace_synth_opts__clear_time_range(struct itrace_synth_opts *opts
 
 #endif
 
+#if defined(HAVE_AUXTRACE_SUPPORT) && defined(HAVE_BPF_SKEL)
+
+int auxtrace__prepare_bpf(struct auxtrace_record *itr, const char *str);
+int auxtrace__set_bpf_filter(struct evlist *evlist, struct record_opts *opts);
+int auxtrace__enable_bpf(void);
+int auxtrace__cleanup_bpf(void);
+int auxtrace__update_bpf_map(struct evsel *evsel, int cpu_map_idx, int fd);
+
+#else	/* HAVE_AUXTRACE_SUPPORT && HAVE_BPF_SKEL */
+
+static inline int auxtrace__prepare_bpf(struct auxtrace_record *itr
+					__maybe_unused,
+					const char *str __maybe_unused)
+{
+	return -EINVAL;
+}
+
+static inline int auxtrace__set_bpf_filter(struct evlist *evlist __maybe_unused,
+					   struct record_opts *opts
+					   __maybe_unused)
+{
+	return -EINVAL;
+}
+
+static inline int auxtrace__enable_bpf(void)
+{
+	return -EINVAL;
+}
+
+static inline int auxtrace__cleanup_bpf(void)
+{
+	return -EINVAL;
+}
+
+static int auxtrace__update_bpf_map(struct evsel *evsel __maybe_unused,
+				    int cpu_map_idx __maybe_unused,
+				    int fd __maybe_unused)
+{
+	return -EINVAL;
+}
+
+#endif
+
 #endif
