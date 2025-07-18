@@ -11,13 +11,18 @@
 static unsigned int nf_hook_run_bpf(void *bpf_prog, struct sk_buff *skb,
 				    const struct nf_hook_state *s)
 {
+	u32 ret;
 	const struct bpf_prog *prog = bpf_prog;
 	struct bpf_nf_ctx ctx = {
 		.state = s,
 		.skb = skb,
 	};
 
-	return bpf_prog_run(prog, &ctx);
+	migrate_disable();
+	ret = bpf_prog_run(prog, &ctx);
+	migrate_enable();
+
+	return ret;
 }
 
 struct bpf_nf_link {
