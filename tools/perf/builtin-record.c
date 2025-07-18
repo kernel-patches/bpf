@@ -880,7 +880,12 @@ static int record__auxtrace_init(struct record *rec)
 	if (err)
 		return err;
 
-	return auxtrace_parse_filters(rec->evlist);
+	err = auxtrace_parse_filters(rec->evlist);
+	if (err)
+		return err;
+
+	return auxtrace__prepare_bpf(rec->itr,
+				     rec->opts.auxtrace_bpf_aux_pause_opts);
 }
 
 #else
@@ -2506,6 +2511,10 @@ static int __cmd_record(struct record *rec, int argc, const char **argv)
 
 	evlist__config(rec->evlist, opts, &callchain_param);
 
+	err = auxtrace__set_bpf_filter(rec->evlist, opts);
+	if (err)
+		goto out_free_threads;
+
 	/* Debug message used by test scripts */
 	pr_debug3("perf record opening and mmapping events\n");
 	if (record__open(rec) != 0) {
@@ -2577,6 +2586,9 @@ static int __cmd_record(struct record *rec, int argc, const char **argv)
 	}
 
 	if (record__start_threads(rec))
+		goto out_free_threads;
+
+	if (auxtrace__enable_bpf())
 		goto out_free_threads;
 
 	/*
@@ -2907,6 +2919,7 @@ out_free_threads:
 	}
 
 out_delete_session:
+	auxtrace__cleanup_bpf();
 #ifdef HAVE_EVENTFD_SUPPORT
 	if (done_fd >= 0) {
 		fd = done_fd;
@@ -3629,6 +3642,11 @@ static struct option __record_options[] = {
 	OPT_CALLBACK(0, "off-cpu-thresh", &record.opts, "ms",
 		     "Dump off-cpu samples if off-cpu time exceeds this threshold (in milliseconds). (Default: 500ms)",
 		     record__parse_off_cpu_thresh),
+	OPT_STRING_OPTARG(0, "bpf-aux-pause", &record.opts.auxtrace_bpf_aux_pause_opts,
+			  "{kprobe|kretprobe}:{p|r}:function_name\n"
+			  "\t\t\t  {uprobe|uretprobe}:{p|r}:executable:function_name\n"
+			  "\t\t\t  {tp|tracepoint}:{p|r}:category:tracepoint\n",
+			  "Enable AUX pause with BPF backend", ""),
 	OPT_END()
 };
 
