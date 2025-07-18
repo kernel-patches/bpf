@@ -1248,6 +1248,7 @@ enum perf_event_type {
 	 *
 	 * struct {
 	 *	struct perf_event_header	header;
+	 *	u64				cookie;
 	 *	u64				nr;
 	 *	u64				ips[nr];
 	 *	struct sample_id		sample_id;
