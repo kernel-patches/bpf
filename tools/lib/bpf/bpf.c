@@ -69,6 +69,50 @@ static inline __u64 ptr_to_u64(const void *ptr)
 	return (__u64) (unsigned long) ptr;
 }
 
+static inline int sys_bpf_extended(enum bpf_cmd cmd, union bpf_attr *attr,
+				   unsigned int size,
+				   struct bpf_common_attr *common_attrs,
+				   unsigned int size_common)
+{
+	cmd = common_attrs ? cmd | BPF_COMMON_ATTRS : cmd & ~BPF_COMMON_ATTRS;
+	return syscall(__NR_bpf, cmd, attr, size, common_attrs, size_common);
+}
+
+static inline int sys_bpf_fd_extended(enum bpf_cmd cmd, union bpf_attr *attr,
+				      unsigned int size,
+				      struct bpf_common_attr *common_attrs,
+				      unsigned int size_common)
+{
+	int fd;
+
+	fd = sys_bpf_extended(cmd, attr, size, common_attrs, size_common);
+	return ensure_good_fd(fd);
+}
+
+int probe_sys_bpf_extended(int token_fd)
+{
+	const size_t attr_sz = offsetofend(union bpf_attr, prog_token_fd);
+	struct bpf_common_attr common_attrs;
+	struct bpf_insn insns[] = {
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	union bpf_attr attr;
+
+	memset(&attr, 0, attr_sz);
+	attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
+	attr.license = ptr_to_u64("GPL");
+	attr.insns = ptr_to_u64(insns);
+	attr.insn_cnt = (__u32)ARRAY_SIZE(insns);
+	attr.prog_token_fd = token_fd;
+	if (token_fd)
+		attr.prog_flags |= BPF_F_TOKEN_FD;
+	libbpf_strlcpy(attr.prog_name, "libbpf_sysbpftest", sizeof(attr.prog_name));
+	memset(&common_attrs, 0, sizeof(common_attrs));
+
+	return sys_bpf_fd_extended(BPF_PROG_LOAD, &attr, attr_sz, &common_attrs, sizeof(common_attrs));
+}
+
 static inline int sys_bpf(enum bpf_cmd cmd, union bpf_attr *attr,
 			  unsigned int size)
 {
