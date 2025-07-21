@@ -773,6 +773,7 @@ int bpf_link_create(int prog_fd, int target_fd,
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, link_create);
 	__u32 target_btf_id, iter_info_len, relative_id;
+	struct bpf_common_attr common_attrs;
 	int fd, err, relative_fd;
 	union bpf_attr attr;
 
@@ -786,7 +787,9 @@ int bpf_link_create(int prog_fd, int target_fd,
 	if (iter_info_len || target_btf_id) {
 		if (iter_info_len && target_btf_id)
 			return libbpf_err(-EINVAL);
-		if (!OPTS_ZEROED(opts, target_btf_id))
+		if (iter_info_len && !OPTS_ZEROED(opts, target_btf_id))
+			return libbpf_err(-EINVAL);
+		if (target_btf_id && !OPTS_ZEROED(opts, tracing.log_size))
 			return libbpf_err(-EINVAL);
 	}
 
@@ -796,7 +799,12 @@ int bpf_link_create(int prog_fd, int target_fd,
 	attr.link_create.attach_type = attach_type;
 	attr.link_create.flags = OPTS_GET(opts, flags, 0);
 
+	memset(&common_attrs, 0, sizeof(common_attrs));
 	if (target_btf_id) {
+		common_attrs.log_buf = (__u64) OPTS_GET(opts, tracing.log_buf, NULL);
+		common_attrs.log_size = OPTS_GET(opts, tracing.log_size, 0);
+		if (common_attrs.log_buf && !feat_supported(NULL, FEAT_EXTENDED_SYSCALL))
+			return -EOPNOTSUPP;
 		attr.link_create.target_btf_id = target_btf_id;
 		goto proceed;
 	}
@@ -932,7 +940,9 @@ int bpf_link_create(int prog_fd, int target_fd,
 		break;
 	}
 proceed:
-	fd = sys_bpf_fd(BPF_LINK_CREATE, &attr, attr_sz);
+	fd = !common_attrs.log_buf ? sys_bpf_fd(BPF_LINK_CREATE, &attr, attr_sz)
+				   : sys_bpf_fd_extended(BPF_LINK_CREATE, &attr, attr_sz,
+							 &common_attrs, sizeof(common_attrs));
 	if (fd >= 0)
 		return fd;
 	/* we'll get EINVAL if LINK_CREATE doesn't support attaching fentry

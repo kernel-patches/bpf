@@ -829,6 +829,10 @@ bpf_program__attach_sockmap(const struct bpf_program *prog, int map_fd);
 LIBBPF_API struct bpf_link *
 bpf_program__attach_xdp(const struct bpf_program *prog, int ifindex);
 LIBBPF_API struct bpf_link *
+bpf_program__attach_freplace_log(const struct bpf_program *prog,
+				 int target_fd, const char *attach_func_name,
+				 const char *log_buf, unsigned int log_size);
+LIBBPF_API struct bpf_link *
 bpf_program__attach_freplace(const struct bpf_program *prog,
 			     int target_fd, const char *attach_func_name);
 
