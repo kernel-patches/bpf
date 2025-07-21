@@ -12,7 +12,10 @@ _Static_assert(MAX_ENTRIES < LOOP_BOUND, "MAX_ENTRIES must be < LOOP_BOUND");
 
 enum bpf_map_type g_map_type = BPF_MAP_TYPE_UNSPEC;
 __u32 g_line = 0;
-int page_size = 0; /* userspace should set it */
+
+int page_size = 0; /* userspace should set these */
+int num_cpus = 0;
+int htab_elem_size = 0;
 
 #define VERIFY_TYPE(type, func) ({	\
 	g_map_type = type;		\
@@ -114,7 +117,7 @@ static inline int check_hash(void)
 	VERIFY(check_default_noinline(&hash->map, map));
 
 	VERIFY(hash->n_buckets == MAX_ENTRIES);
-	VERIFY(hash->elem_size == 64);
+	VERIFY(hash->elem_size == htab_elem_size);
 
 	VERIFY(hash->count.counter == 0);
 	VERIFY(bpf_map_sum_elem_count(map) == 0);
@@ -463,7 +466,7 @@ static inline int check_cpumap(void)
 	struct bpf_cpu_map *cpumap = (struct bpf_cpu_map *)&m_cpumap;
 	struct bpf_map *map = (struct bpf_map *)&m_cpumap;
 
-	VERIFY(check_default(&cpumap->map, map));
+	VERIFY(check(&cpumap->map, map, sizeof(__u32), sizeof(__u32), num_cpus));
 
 	return 1;
 }
