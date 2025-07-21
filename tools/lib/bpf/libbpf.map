@@ -448,4 +448,6 @@ LIBBPF_1.6.0 {
 } LIBBPF_1.5.0;
 
 LIBBPF_1.7.0 {
+	global:
+		probe_sys_bpf_extended;
 } LIBBPF_1.6.0;
