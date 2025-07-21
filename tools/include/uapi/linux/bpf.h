@@ -1474,6 +1474,13 @@ struct bpf_stack_build_id {
 	};
 };
 
+struct bpf_common_attr {
+	__u64 log_buf;
+	__u32 log_size;
+	__u32 log_level;
+};
+
+#define BPF_COMMON_ATTRS (1 << 16)
 #define BPF_OBJ_NAME_LEN 16U
 
 enum {
