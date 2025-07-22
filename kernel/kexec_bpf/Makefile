@@ -39,6 +39,14 @@ clean:
 kexec_pe_parser_bpf.lskel.h: $(OUTPUT)/kexec_pe_parser_bpf.o | $(BPFTOOL)
 	$(call msg,GEN-SKEL,$@)
 	$(Q)$(BPFTOOL) gen skeleton -L $< > $@
+	@# The following sed commands make opts_data[] and opts_insn[] visible in a file instead of only in a function.
+	@# And it removes the bytecode
+	$(Q) sed -i '/static const char opts_data\[\].*=/,/";$$/d' $@
+	$(Q) sed -i '/static const char opts_insn\[\].*=/,/";$$/d' $@
+	$(Q) sed -i \
+		-e 's/opts\.data_sz = sizeof(opts_data) - 1;/opts.data_sz = opts_data_sz;/' \
+		-e 's/opts\.insns_sz = sizeof(opts_insn) - 1;/opts.insns_sz = opts_insn_sz;/' $@
+	$(Q) sed -i '7i static char *opts_data, *opts_insn;\nstatic unsigned int opts_data_sz, opts_insn_sz;' $@
 
 $(OUTPUT)/vmlinux.h: $(VMLINUX) $(BPFOBJ) | $(OUTPUT)
 	@$(BPFTOOL) btf dump file $(VMLINUX) format c > $(OUTPUT)/vmlinux.h
