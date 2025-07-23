@@ -11978,6 +11978,45 @@ bpf_sk_base_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	return func;
 }
 
+static void *skb_metadata_pointer(const struct sk_buff *skb, u32 off, u32 len)
+{
+	u32 meta_len = skb_metadata_len(skb);
+
+	if (len > meta_len || off > meta_len - len)
+		return ERR_PTR(-E2BIG); /* out of bounds */
+
+	return skb_metadata_end(skb) - meta_len + off;
+}
+
+int bpf_skb_meta_load_bytes(const struct sk_buff *src, u32 off, void *dst, u32 len)
+{
+	const void *p = skb_metadata_pointer(src, off, len);
+
+	if (IS_ERR(p))
+		return PTR_ERR(p);
+
+	memmove(dst, p, len);
+	return 0;
+}
+
+int bpf_skb_meta_store_bytes(struct sk_buff *dst, u32 off, const void *src, u32 len)
+{
+	void *p = skb_metadata_pointer(dst, off, len);
+
+	if (IS_ERR(p))
+		return PTR_ERR(p);
+
+	memmove(p, src, len);
+	return 0;
+}
+
+void *bpf_skb_meta_pointer(struct sk_buff *skb, u32 off, u32 len)
+{
+	void *p = skb_metadata_pointer(skb, off, len);
+
+	return IS_ERR(p) ? NULL : p;
+}
+
 __bpf_kfunc_start_defs();
 __bpf_kfunc int bpf_dynptr_from_skb(struct __sk_buff *s, u64 flags,
 				    struct bpf_dynptr *ptr__uninit)
