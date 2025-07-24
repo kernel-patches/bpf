@@ -877,5 +877,7 @@ override define INSTALL_RULE
 	@for DIR in $(TEST_INST_SUBDIRS); do		  \
 		mkdir -p $(INSTALL_PATH)/$$DIR;   \
 		rsync -a $(OUTPUT)/$$DIR/*.bpf.o $(INSTALL_PATH)/$$DIR;\
+		rsync -a $(OUTPUT)/$$DIR/*.ko $(INSTALL_PATH)/$$DIR;\
+		rsync -a $(OUTPUT)/*.ko $(INSTALL_PATH);\
 	done
 endef
