@@ -3656,10 +3656,7 @@ static inline void bpf_cgroup_atype_put(int cgroup_atype) {}
 struct key;
 
 #ifdef CONFIG_KEYS
-struct bpf_key {
-	struct key *key;
-	bool has_ref;
-};
+struct bpf_key;
 #endif /* CONFIG_KEYS */
 
 static inline bool type_is_alloc(u32 type)
