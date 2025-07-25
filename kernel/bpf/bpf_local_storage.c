@@ -371,37 +371,6 @@ static bool check_storage_bpf_ma(struct bpf_local_storage *local_storage,
 	return selem_smap->bpf_ma;
 }
 
-static void bpf_selem_unlink_storage(struct bpf_local_storage_elem *selem,
-				     bool reuse_now)
-{
-	struct bpf_local_storage_map *storage_smap;
-	struct bpf_local_storage *local_storage;
-	bool bpf_ma, free_local_storage = false;
-	HLIST_HEAD(selem_free_list);
-	unsigned long flags;
-
-	if (unlikely(!selem_linked_to_storage_lockless(selem)))
-		/* selem has already been unlinked from sk */
-		return;
-
-	local_storage = rcu_dereference_check(selem->local_storage,
-					      bpf_rcu_lock_held());
-	storage_smap = rcu_dereference_check(local_storage->smap,
-					     bpf_rcu_lock_held());
-	bpf_ma = check_storage_bpf_ma(local_storage, storage_smap, selem);
-
-	raw_spin_lock_irqsave(&local_storage->lock, flags);
-	if (likely(selem_linked_to_storage(selem)))
-		free_local_storage = bpf_selem_unlink_storage_nolock(
-			local_storage, selem, true, &selem_free_list);
-	raw_spin_unlock_irqrestore(&local_storage->lock, flags);
-
-	bpf_selem_free_list(&selem_free_list, reuse_now);
-
-	if (free_local_storage)
-		bpf_local_storage_free(local_storage, storage_smap, bpf_ma, reuse_now);
-}
-
 void bpf_selem_link_storage_nolock(struct bpf_local_storage *local_storage,
 				   struct bpf_local_storage_elem *selem)
 {
@@ -459,24 +428,51 @@ static void bpf_selem_link_map_nolock(struct bpf_local_storage_map *smap,
 
 void bpf_selem_unlink(struct bpf_local_storage_elem *selem, bool reuse_now)
 {
+	struct bpf_local_storage_map *storage_smap;
+	struct bpf_local_storage *local_storage = NULL;
+	bool bpf_ma, free_local_storage = false;
+	HLIST_HEAD(selem_free_list);
 	struct bpf_local_storage_map_bucket *b;
-	struct bpf_local_storage_map *smap;
-	unsigned long flags;
+	struct bpf_local_storage_map *smap = NULL;
+	unsigned long flags, b_flags;
 
 	if (likely(selem_linked_to_map_lockless(selem))) {
 		smap = rcu_dereference_check(SDATA(selem)->smap, bpf_rcu_lock_held());
 		b = select_bucket(smap, selem);
-		raw_spin_lock_irqsave(&b->lock, flags);
-
-		/* Always unlink from map before unlinking from local_storage
-		 * because selem will be freed after successfully unlinked from
-		 * the local_storage.
-		 */
-		bpf_selem_unlink_map_nolock(selem);
-		raw_spin_unlock_irqrestore(&b->lock, flags);
 	}
 
-	bpf_selem_unlink_storage(selem, reuse_now);
+	if (likely(selem_linked_to_storage_lockless(selem))) {
+		local_storage = rcu_dereference_check(selem->local_storage,
+						      bpf_rcu_lock_held());
+		storage_smap = rcu_dereference_check(local_storage->smap,
+						     bpf_rcu_lock_held());
+		bpf_ma = check_storage_bpf_ma(local_storage, storage_smap, selem);
+	}
+
+	if (local_storage)
+		raw_spin_lock_irqsave(&local_storage->lock, flags);
+	if (smap)
+		raw_spin_lock_irqsave(&b->lock, b_flags);
+
+	/* Always unlink from map before unlinking from local_storage
+	 * because selem will be freed after successfully unlinked from
+	 * the local_storage.
+	 */
+	if (smap)
+		bpf_selem_unlink_map_nolock(selem);
+	if (local_storage && likely(selem_linked_to_storage(selem)))
+		free_local_storage = bpf_selem_unlink_storage_nolock(
+			local_storage, selem, true, &selem_free_list);
+
+	if (smap)
+		raw_spin_unlock_irqrestore(&b->lock, b_flags);
+	if (local_storage)
+		raw_spin_unlock_irqrestore(&local_storage->lock, flags);
+
+	bpf_selem_free_list(&selem_free_list, reuse_now);
+
+	if (free_local_storage)
+		bpf_local_storage_free(local_storage, storage_smap, bpf_ma, reuse_now);
 }
 
 void __bpf_local_storage_insert_cache(struct bpf_local_storage *local_storage,
