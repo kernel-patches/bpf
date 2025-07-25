@@ -186,6 +186,10 @@ ifeq ($(CONFIG_LIBTRACEEVENT),y)
   perf-util-$(CONFIG_PERF_BPF_SKEL) += bpf_kwork_top.o
 endif
 
+ifeq ($(CONFIG_AUXTRACE),y)
+  perf-util-$(CONFIG_PERF_BPF_SKEL) += bpf_auxtrace_pause.o
+endif
+
 perf-util-$(CONFIG_LIBELF) += symbol-elf.o
 perf-util-$(CONFIG_LIBELF) += probe-file.o
 perf-util-$(CONFIG_LIBELF) += probe-event.o
