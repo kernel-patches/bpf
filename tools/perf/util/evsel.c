@@ -2650,6 +2650,12 @@ retry_open:
 
 			bpf_counter__install_pe(evsel, idx, fd);
 
+			/* Update event info into BPF map for AUX trace */
+			if (auxtrace__update_bpf_map(evsel, idx, fd)) {
+				err = -EINVAL;
+				goto out_close;
+			}
+
 			if (unlikely(test_attr__enabled())) {
 				test_attr__open(&evsel->core.attr, pid, cpu,
 						fd, group_fd, evsel->open_flags);

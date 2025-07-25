@@ -65,6 +65,7 @@ struct record_opts {
 	size_t	      auxtrace_snapshot_size;
 	const char    *auxtrace_snapshot_opts;
 	const char    *auxtrace_sample_opts;
+	const char    *auxtrace_bpf_aux_pause_opts;
 	bool	      sample_transaction;
 	bool	      use_clockid;
 	clockid_t     clockid;
