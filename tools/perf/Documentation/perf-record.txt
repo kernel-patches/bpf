@@ -544,6 +544,57 @@ must be an AUX area event. Samples on other events will be created containing
 data from the AUX area. Optionally sample size may be specified, otherwise it
 defaults to 4KiB.
 
+--bpf-aux-pause=[=OPTIONS]::
+Specify trace events for triggering AUX pause with a BPF program. A trace event
+can be static ftrace tracepoint, or dynamic tracepoint by using kprobe,
+kretprobe, uprobe or uretprobe. This option must be enabled in combination with
+the "aux-action=start-paused" configuration in an AUX event.
+
+For attaching a kprobe or kretprobe event, the format is:
+
+  {kprobe|kretprobe}:{p|r}:function_name
+
+The format for attaching a uprobe or uretprobe event is:
+
+  {uprobe|uretprobe}:{p|r}:executable:function_name
+
+The format for attaching a tracepoint is:
+
+  {tp|tracepoint}:{p|r}:category:tracepint
+
+The first field is for the trace event type. It supports five types: kprobe,
+kretprobe, uprobe, uretprobe, and tracepoint ('tp' is also supported as an
+abbreviation for "tracepoint"). The second field specifies whether the action is
+pause ("p") or resume ("r").
+
+For probes, the "function_name" field is used to specify a function name. In
+particular, for a uprobe or uretprobe, an executable path must also be provided.
+In the case of a ftrace tracepoint, the "category" and "tracepoint" fields are
+used together to provide complete tracepoint information.
+
+The '--bpf-aux-pause' option does not support inherit mode.  In the default
+trace mode, it needs to be combined with the '-i' or '--no-inherit' option to
+disable inherit mode.
+
+The syntax supports multiple trace events, with each separated by a comma (,).
+For example, users can set up AUX pause on a kernel function with kretprobe and
+AUX resume on a tracepoint with the syntax below:
+
+  For default trace mode (with inherit mode disabled):
+  perf record -e cs_etm/aux-action=start-paused/ \
+    --bpf-aux-pause="kretprobe:p:__arm64_sys_openat,tp:r:sched:sched_switch" \
+    -i ...
+
+  For system wide trace mode:
+  perf record -e cs_etm/aux-action=start-paused/ \
+    --bpf-aux-pause="kretprobe:p:__arm64_sys_openat,tp:r:sched:sched_switch" \
+    -a ...
+
+  For trace with uprobe and uretprobe:
+  perf record -e cs_etm/aux-action=start-paused/ \
+    --bpf-aux-pause="uretprobe:p:~/sort:bubble_sort,uprobe:r:~/sort:bubble_sort" \
+    -i --per-thread -- ~/sort
+
 --proc-map-timeout::
 When processing pre-existing threads /proc/XXX/mmap, it may take a long time,
 because the file may be huge. A time out is needed in such cases.
