@@ -271,13 +271,13 @@ static int push_disasm_msg(const char *regex_str, bool *on_next_line, struct exp
 static int parse_int(const char *str, int *val, const char *name)
 {
 	char *end;
-	long tmp;
+	long long tmp;
 
 	errno = 0;
 	if (str_has_pfx(str, "0x"))
-		tmp = strtol(str + 2, &end, 16);
+		tmp = strtoll(str + 2, &end, 16);
 	else
-		tmp = strtol(str, &end, 10);
+		tmp = strtoll(str, &end, 10);
 	if (errno || end[0] != '\0') {
 		PRINT_FAIL("failed to parse %s from '%s'\n", name, str);
 		return -EINVAL;
