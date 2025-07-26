@@ -2,22 +2,17 @@
 
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 #include "bpf_misc.h"
 
 SEC("fentry/bpf_fentry_test_sinfo")
 __description("typedef: resolve")
 __success __retval(0)
-__naked void resolve_typedef(void)
+int BPF_PROG(resolve_typedef, struct skb_shared_info *si)
 {
-	asm volatile ("					\
-	r1 = *(u64 *)(r1 +0);				\
-	r2 = *(u64 *)(r1 +%[frags_offs]);		\
-	r0 = 0;						\
-	exit;						\
-"	:
-	: __imm_const(frags_offs,
-		      offsetof(struct skb_shared_info, frags))
-	: __clobber_all);
+	volatile netmem_ref tmp __attribute__((unused)) = si->frags->netmem;
+
+	return 0;
 }
 
 char _license[] SEC("license") = "GPL";
