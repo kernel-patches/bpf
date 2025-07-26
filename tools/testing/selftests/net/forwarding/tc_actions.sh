@@ -223,19 +223,32 @@ mirred_egress_to_ingress_tcp_test()
 		ip_proto icmp \
 			action drop
 
+	echo P2
+
+	$MZ $h1 -c 10 -p 64 -a $h1mac -b $h1mac -A 192.0.2.1 -B 192.0.2.1 \
+		-t icmp "ping,id=42,seq=5" -q
+	echo P2.1
+	tc_check_packets "dev $h1 egress" 101 10
+	check_err $? "didn't mirred redirect ICMP"
+	echo P2.2
+	tc_check_packets "dev $h1 ingress" 102 10
+	check_err $? "didn't drop mirred ICMP"
+	echo P2.3
+
+	echo P1
+
 	ip vrf exec v$h1 ncat --recv-only -w10 -l -p 12345 -o $mirred_e2i_tf2 &
 	local rpid=$!
+	sleep 0.2
+	echo P1.1
 	ip vrf exec v$h1 ncat -w1 --send-only 192.0.2.2 12345 <$mirred_e2i_tf1
+	echo P1.2
+	sleep 0.2
 	wait -n $rpid
 	cmp -s $mirred_e2i_tf1 $mirred_e2i_tf2
 	check_err $? "server output check failed"
 
-	$MZ $h1 -c 10 -p 64 -a $h1mac -b $h1mac -A 192.0.2.1 -B 192.0.2.1 \
-		-t icmp "ping,id=42,seq=5" -q
-	tc_check_packets "dev $h1 egress" 101 10
-	check_err $? "didn't mirred redirect ICMP"
-	tc_check_packets "dev $h1 ingress" 102 10
-	check_err $? "didn't drop mirred ICMP"
+	echo P3
 
 	tc filter del dev $h1 egress protocol ip pref 100 handle 100 flower
 	tc filter del dev $h1 egress protocol ip pref 101 handle 101 flower
@@ -359,4 +372,5 @@ else
 	tests_run
 fi
 
+dmesg
 exit $EXIT_STATUS
