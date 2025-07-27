@@ -4,6 +4,8 @@
 
 #include <linux/mm.h>
 
+#include <linux/huge_mm.h>
+
 extern unsigned int khugepaged_max_ptes_none __read_mostly;
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 extern struct attribute_group khugepaged_attr_group;
@@ -22,7 +24,15 @@ extern int collapse_pte_mapped_thp(struct mm_struct *mm, unsigned long addr,
 
 static inline void khugepaged_fork(struct mm_struct *mm, struct mm_struct *oldmm)
 {
-	if (mm_flags_test(MMF_VM_HUGEPAGE, oldmm))
+	/*
+	 * THP allocation policy can be dynamically modified via BPF. Even if a
+	 * task was allowed to allocate THPs, BPF can decide whether its forked
+	 * child can allocate THPs.
+	 *
+	 * The MMF_VM_HUGEPAGE flag will be cleared by khugepaged.
+	 */
+	if (mm_flags_test(MMF_VM_HUGEPAGE, oldmm) &&
+		get_suggested_order(mm, NULL, 0, -1, BIT(PMD_ORDER)))
 		__khugepaged_enter(mm);
 }
 
