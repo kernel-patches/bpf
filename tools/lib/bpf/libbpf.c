@@ -10911,6 +10911,7 @@ struct bpf_link *bpf_program__attach_perf_event_opts(const struct bpf_program *p
 	struct bpf_link_perf *link;
 	int prog_fd, link_fd = -1, err;
 	bool force_ioctl_attach;
+	bool no_ioctl_enable;
 
 	if (!OPTS_VALID(opts, bpf_perf_event_opts))
 		return libbpf_err_ptr(-EINVAL);
@@ -10965,11 +10966,14 @@ struct bpf_link *bpf_program__attach_perf_event_opts(const struct bpf_program *p
 		}
 		link->link.fd = pfd;
 	}
-	if (ioctl(pfd, PERF_EVENT_IOC_ENABLE, 0) < 0) {
-		err = -errno;
-		pr_warn("prog '%s': failed to enable perf_event FD %d: %s\n",
-			prog->name, pfd, errstr(err));
-		goto err_out;
+	no_ioctl_enable = OPTS_GET(opts, no_ioctl_enable, false);
+	if (!no_ioctl_enable) {
+		if (ioctl(pfd, PERF_EVENT_IOC_ENABLE, 0) < 0) {
+			err = -errno;
+			pr_warn("prog '%s': failed to enable perf_event FD %d: %s\n",
+				prog->name, pfd, errstr(err));
+			goto err_out;
+		}
 	}
 
 	return &link->link;
@@ -10982,7 +10986,10 @@ err_out:
 
 struct bpf_link *bpf_program__attach_perf_event(const struct bpf_program *prog, int pfd)
 {
-	return bpf_program__attach_perf_event_opts(prog, pfd, NULL);
+	DECLARE_LIBBPF_OPTS(bpf_perf_event_opts, pe_opts);
+
+	pe_opts.no_ioctl_enable = true;
+	return bpf_program__attach_perf_event_opts(prog, pfd, &pe_opts);
 }
 
 /*
