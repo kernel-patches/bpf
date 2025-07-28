@@ -449,5 +449,6 @@ LIBBPF_1.6.0 {
 
 LIBBPF_1.7.0 {
 	global:
+		bpf_program__attach_freplace_log;
 		probe_sys_bpf_extended;
 } LIBBPF_1.6.0;
