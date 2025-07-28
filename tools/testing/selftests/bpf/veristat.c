@@ -180,6 +180,16 @@ struct var_preset {
 	bool applied;
 };
 
+struct kernel_sym {
+	size_t address;
+	char name[256];
+};
+
+enum dump_mode {
+	DUMP_NONE = 0,
+	DUMP_XLATED,
+};
+
 static struct env {
 	char **filenames;
 	int filename_cnt;
@@ -226,6 +236,10 @@ static struct env {
 	char orig_cgroup[PATH_MAX];
 	char stat_cgroup[PATH_MAX];
 	int memory_peak_fd;
+	struct kernel_sym *kernel_syms;
+	int kernel_sym_cnt;
+	size_t kfunc_base_addr;
+	enum dump_mode dump_mode;
 } env;
 
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
@@ -294,6 +308,7 @@ static const struct argp_option opts[] = {
 	  "Force BPF verifier failure on register invariant violation (BPF_F_TEST_REG_INVARIANTS program flag)" },
 	{ "top-src-lines", 'S', "N", 0, "Emit N most frequent source code lines" },
 	{ "set-global-vars", 'G', "GLOBAL", 0, "Set global variables provided in the expression, for example \"var1 = 1\"" },
+	{ "dump", 'p', "DUMP_MODE", 0, "Print BPF program dump" },
 	{},
 };
 
@@ -424,6 +439,14 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		if (err) {
 			fprintf(stderr, "Failed to collect BPF object files: %d\n", err);
 			return err;
+		}
+		break;
+	case 'p':
+		if (strcmp(arg, "xlated") == 0) {
+			env.dump_mode = DUMP_XLATED;
+		} else {
+			fprintf(stderr, "Unrecognized dump mode '%s'\n", arg);
+			return -EINVAL;
 		}
 		break;
 	default:
@@ -888,6 +911,14 @@ static bool is_asc_sym(char c)
 static bool is_desc_sym(char c)
 {
 	return c == 'v' || c == 'V' || c == '.' || c == '!' || c == '_';
+}
+
+static const char *ltrim(const char *s)
+{
+	while (isspace(*s))
+		s++;
+
+	return s;
 }
 
 static char *rtrim(char *str)
@@ -1553,6 +1584,558 @@ static int parse_rvalue(const char *val, struct rvalue *rvalue)
 	return 0;
 }
 
+static int kernel_syms_cmp(const void *sym_a, const void *sym_b)
+{
+	return ((struct kernel_sym *)sym_a)->address -
+	       ((struct kernel_sym *)sym_b)->address;
+}
+
+static void kernel_syms_free(void)
+{
+	free(env.kernel_syms);
+	env.kernel_syms = NULL;
+	env.kernel_sym_cnt = 0;
+}
+
+static void kernel_syms_load(void)
+{
+	struct kernel_sym *sym;
+	char buff[256];
+	void *tmp, *address;
+	FILE *fp;
+
+	kernel_syms_free();
+
+	fp = fopen("/proc/kallsyms", "r");
+	if (!fp)
+		return;
+	while (fgets(buff, sizeof(buff), fp)) {
+		tmp = reallocarray(env.kernel_syms, env.kernel_sym_cnt + 1,
+				   sizeof(*env.kernel_syms));
+		if (!tmp)
+			goto failure;
+		env.kernel_syms = tmp;
+		sym = env.kernel_syms + env.kernel_sym_cnt;
+
+		if (sscanf(buff, "%p %*c %s", &address, sym->name) < 2)
+			continue;
+		sym->address = (unsigned long)address;
+		if (!strcmp(sym->name, "__bpf_call_base")) {
+			env.kfunc_base_addr = sym->address;
+			/* sysctl kernel.kptr_restrict was set */
+			if (!sym->address)
+				goto failure;
+		}
+		if (sym->address)
+			env.kernel_sym_cnt++;
+	}
+
+	fclose(fp);
+	qsort(env.kernel_syms, env.kernel_sym_cnt, sizeof(*env.kernel_syms), kernel_syms_cmp);
+	return;
+failure:
+	kernel_syms_free();
+	fclose(fp);
+}
+
+#define __stringify(x...) #x
+#define __BPF_FUNC_STR_FN(x) [BPF_FUNC_##x] = __stringify(bpf_##x)
+
+static const char *const func_id_str[] = { __BPF_FUNC_MAPPER(__BPF_FUNC_STR_FN) };
+
+#undef __BPF_FUNC_STR_FN
+
+static struct kernel_sym *kernel_syms_search(unsigned long key)
+{
+	struct kernel_sym sym = {
+		.address = key,
+	};
+
+	return env.kernel_syms ? bsearch(&sym, env.kernel_syms, env.kernel_sym_cnt,
+					 sizeof(*env.kernel_syms), kernel_syms_cmp) :
+				 NULL;
+}
+
+static const char *print_call(const struct bpf_insn *insn, struct bpf_prog_info *info, char *buff,
+			      size_t len)
+{
+	size_t address = env.kfunc_base_addr + insn->imm;
+	struct kernel_sym *sym;
+
+	if (insn->src_reg == BPF_PSEUDO_CALL) {
+		if ((__u32)insn->imm < info->nr_jited_ksyms && info->jited_ksyms) {
+			u64 *ptr = (void *)(size_t)info->jited_ksyms;
+
+			address = ptr[insn->imm];
+		}
+
+		sym = kernel_syms_search(address);
+		if (!info->jited_ksyms)
+			snprintf(buff, len, "%+d", insn->off);
+		else if (sym)
+			snprintf(buff, len, "%+d#%s", insn->off, sym->name);
+		else
+			snprintf(buff, len, "%+d#0x%lx", insn->off, address);
+	} else {
+		sym = kernel_syms_search(address);
+		if (sym)
+			snprintf(buff, len, "%s", sym->name);
+		else
+			snprintf(buff, len, "0x%lx", address);
+	}
+	return buff;
+}
+
+static const char *func_get_name(const struct bpf_insn *insn, struct bpf_prog_info *info,
+				 char *buff, size_t len)
+{
+	static_assert(ARRAY_SIZE(func_id_str) == __BPF_FUNC_MAX_ID, "func_id_str not initialized");
+
+	if (!insn->src_reg && insn->imm >= 0 && insn->imm < __BPF_FUNC_MAX_ID &&
+	    func_id_str[insn->imm])
+		return func_id_str[insn->imm];
+
+	return print_call(insn, info, buff, len);
+}
+
+static const char *func_imm_name(const struct bpf_insn *insn, u64 full_imm, char *buff, size_t len)
+{
+	switch (insn->src_reg) {
+	case BPF_PSEUDO_MAP_FD:
+		snprintf(buff, len, "map[id:%d]", insn->imm);
+		break;
+	case BPF_PSEUDO_MAP_VALUE:
+		snprintf(buff, len, "map[id:%d][0]+%d", insn->imm, (insn + 1)->imm);
+		break;
+	case BPF_PSEUDO_MAP_IDX_VALUE:
+		snprintf(buff, len, "map[idx:%d]+%d", insn->imm, (insn + 1)->imm);
+		break;
+	case BPF_PSEUDO_FUNC:
+		snprintf(buff, len, "subprog[%+d]", insn->imm);
+		break;
+	default:
+		snprintf(buff, len, "0x%llx", (unsigned long long)full_imm);
+	}
+	return buff;
+}
+
+const char *const bpf_class_string[8] = {
+	[BPF_LD]    = "ld",
+	[BPF_LDX]   = "ldx",
+	[BPF_ST]    = "st",
+	[BPF_STX]   = "stx",
+	[BPF_ALU]   = "alu",
+	[BPF_JMP]   = "jmp",
+	[BPF_JMP32] = "jmp32",
+	[BPF_ALU64] = "alu64",
+};
+
+const char *const bpf_alu_string[16] = {
+	[BPF_ADD >> 4]  = "+=",
+	[BPF_SUB >> 4]  = "-=",
+	[BPF_MUL >> 4]  = "*=",
+	[BPF_DIV >> 4]  = "/=",
+	[BPF_OR  >> 4]  = "|=",
+	[BPF_AND >> 4]  = "&=",
+	[BPF_LSH >> 4]  = "<<=",
+	[BPF_RSH >> 4]  = ">>=",
+	[BPF_NEG >> 4]  = "neg",
+	[BPF_MOD >> 4]  = "%=",
+	[BPF_XOR >> 4]  = "^=",
+	[BPF_MOV >> 4]  = "=",
+	[BPF_ARSH >> 4] = "s>>=",
+	[BPF_END >> 4]  = "endian",
+};
+
+static const char *const bpf_alu_sign_string[16] = {
+	[BPF_DIV >> 4]  = "s/=",
+	[BPF_MOD >> 4]  = "s%=",
+};
+
+static const char *const bpf_movsx_string[4] = {
+	[0] = "(s8)",
+	[1] = "(s16)",
+	[3] = "(s32)",
+};
+
+static const char *const bpf_atomic_alu_string[16] = {
+	[BPF_ADD >> 4]  = "add",
+	[BPF_AND >> 4]  = "and",
+	[BPF_OR >> 4]  = "or",
+	[BPF_XOR >> 4]  = "xor",
+};
+
+static const char *const bpf_ldst_string[] = {
+	[BPF_W >> 3]  = "u32",
+	[BPF_H >> 3]  = "u16",
+	[BPF_B >> 3]  = "u8",
+	[BPF_DW >> 3] = "u64",
+};
+
+static const char *const bpf_ldsx_string[] = {
+	[BPF_W >> 3]  = "s32",
+	[BPF_H >> 3]  = "s16",
+	[BPF_B >> 3]  = "s8",
+};
+
+static const char *const bpf_jmp_string[16] = {
+	[BPF_JA >> 4]   = "jmp",
+	[BPF_JEQ >> 4]  = "==",
+	[BPF_JGT >> 4]  = ">",
+	[BPF_JLT >> 4]  = "<",
+	[BPF_JGE >> 4]  = ">=",
+	[BPF_JLE >> 4]  = "<=",
+	[BPF_JSET >> 4] = "&",
+	[BPF_JNE >> 4]  = "!=",
+	[BPF_JSGT >> 4] = "s>",
+	[BPF_JSLT >> 4] = "s<",
+	[BPF_JSGE >> 4] = "s>=",
+	[BPF_JSLE >> 4] = "s<=",
+	[BPF_CALL >> 4] = "call",
+	[BPF_EXIT >> 4] = "exit",
+};
+
+static void print_bpf_end_insn(const struct bpf_insn *insn)
+{
+	printf("(%02x) r%d = %s%d r%d\n", insn->code, insn->dst_reg,
+	       BPF_SRC(insn->code) == BPF_TO_BE ? "be" : "le", insn->imm, insn->dst_reg);
+}
+
+static void print_bpf_bswap_insn(const struct bpf_insn *insn)
+{
+	printf("(%02x) r%d = bswap%d r%d\n", insn->code, insn->dst_reg, insn->imm, insn->dst_reg);
+}
+
+static bool is_sdiv_smod(const struct bpf_insn *insn)
+{
+	return (BPF_OP(insn->code) == BPF_DIV || BPF_OP(insn->code) == BPF_MOD) && insn->off == 1;
+}
+
+static bool is_movsx(const struct bpf_insn *insn)
+{
+	return BPF_OP(insn->code) == BPF_MOV &&
+	       (insn->off == 8 || insn->off == 16 || insn->off == 32);
+}
+
+static bool is_addr_space_cast(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) && insn->off == BPF_ADDR_SPACE_CAST;
+}
+
+static inline bool is_mov_percpu_addr(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) && insn->off == -1;
+}
+
+static void print_bpf_insn(const struct bpf_insn *insn, struct bpf_prog_info *info)
+{
+	u8 class = BPF_CLASS(insn->code);
+
+	switch (class) {
+	case BPF_ALU:
+	case BPF_ALU64: {
+		if (BPF_OP(insn->code) == BPF_END) {
+			if (class == BPF_ALU64)
+				print_bpf_bswap_insn(insn);
+			else
+				print_bpf_end_insn(insn);
+		} else if (BPF_OP(insn->code) == BPF_NEG) {
+			printf("(%02x) %c%d = -%c%d\n", insn->code, class == BPF_ALU ? 'w' : 'r',
+			       insn->dst_reg, class == BPF_ALU ? 'w' : 'r', insn->dst_reg);
+		} else if (is_addr_space_cast(insn)) {
+			printf("(%02x) r%d = addr_space_cast(r%d, %u, %u)\n", insn->code,
+			       insn->dst_reg, insn->src_reg, ((u32)insn->imm) >> 16,
+			       (u16)insn->imm);
+		} else if (is_mov_percpu_addr(insn)) {
+			printf("(%02x) r%d = &(void __percpu *)(r%d)\n", insn->code, insn->dst_reg,
+			       insn->src_reg);
+		} else if (BPF_SRC(insn->code) == BPF_X) {
+			printf("(%02x) %c%d %s %s%c%d\n", insn->code, class == BPF_ALU ? 'w' : 'r',
+			       insn->dst_reg,
+			       is_sdiv_smod(insn) ? bpf_alu_sign_string[BPF_OP(insn->code) >> 4] :
+						    bpf_alu_string[BPF_OP(insn->code) >> 4],
+			       is_movsx(insn) ? bpf_movsx_string[(insn->off >> 3) - 1] : "",
+			       class == BPF_ALU ? 'w' : 'r', insn->src_reg);
+		} else {
+			printf("(%02x) %c%d %s %d\n", insn->code, class == BPF_ALU ? 'w' : 'r',
+			       insn->dst_reg,
+			       is_sdiv_smod(insn) ? bpf_alu_sign_string[BPF_OP(insn->code) >> 4] :
+						    bpf_alu_string[BPF_OP(insn->code) >> 4],
+			       insn->imm);
+		}
+		break;
+	}
+	case BPF_STX:
+		if (BPF_MODE(insn->code) == BPF_MEM) {
+			printf("(%02x) *(%s *)(r%d %+d) = r%d\n", insn->code,
+			       bpf_ldst_string[BPF_SIZE(insn->code) >> 3], insn->dst_reg, insn->off,
+			       insn->src_reg);
+		} else if (BPF_MODE(insn->code) == BPF_ATOMIC &&
+			   (insn->imm == BPF_ADD || insn->imm == BPF_AND || insn->imm == BPF_OR ||
+			    insn->imm == BPF_XOR)) {
+			printf("(%02x) lock *(%s *)(r%d %+d) %s r%d\n", insn->code,
+			       bpf_ldst_string[BPF_SIZE(insn->code) >> 3], insn->dst_reg, insn->off,
+			       bpf_alu_string[BPF_OP(insn->imm) >> 4], insn->src_reg);
+		} else if (BPF_MODE(insn->code) == BPF_ATOMIC &&
+			   (insn->imm == (BPF_ADD | BPF_FETCH) ||
+			    insn->imm == (BPF_AND | BPF_FETCH) ||
+			    insn->imm == (BPF_OR | BPF_FETCH) ||
+			    insn->imm == (BPF_XOR | BPF_FETCH))) {
+			printf("(%02x) r%d = atomic%s_fetch_%s((%s *)(r%d %+d), r%d)\n", insn->code,
+			       insn->src_reg, BPF_SIZE(insn->code) == BPF_DW ? "64" : "",
+			       bpf_atomic_alu_string[BPF_OP(insn->imm) >> 4],
+			       bpf_ldst_string[BPF_SIZE(insn->code) >> 3], insn->dst_reg, insn->off,
+			       insn->src_reg);
+		} else if (BPF_MODE(insn->code) == BPF_ATOMIC && insn->imm == BPF_CMPXCHG) {
+			printf("(%02x) r0 = atomic%s_cmpxchg((%s *)(r%d %+d), r0, r%d)\n",
+			       insn->code, BPF_SIZE(insn->code) == BPF_DW ? "64" : "",
+			       bpf_ldst_string[BPF_SIZE(insn->code) >> 3], insn->dst_reg, insn->off,
+			       insn->src_reg);
+		} else if (BPF_MODE(insn->code) == BPF_ATOMIC && insn->imm == BPF_XCHG) {
+			printf("(%02x) r%d = atomic%s_xchg((%s *)(r%d %+d), r%d)\n", insn->code,
+			       insn->src_reg, BPF_SIZE(insn->code) == BPF_DW ? "64" : "",
+			       bpf_ldst_string[BPF_SIZE(insn->code) >> 3], insn->dst_reg, insn->off,
+			       insn->src_reg);
+		} else if (BPF_MODE(insn->code) == BPF_ATOMIC && insn->imm == BPF_LOAD_ACQ) {
+			printf("(%02x) r%d = load_acquire((%s *)(r%d %+d))\n", insn->code,
+			       insn->dst_reg, bpf_ldst_string[BPF_SIZE(insn->code) >> 3],
+			       insn->src_reg, insn->off);
+		} else if (BPF_MODE(insn->code) == BPF_ATOMIC && insn->imm == BPF_STORE_REL) {
+			printf("(%02x) store_release((%s *)(r%d %+d), r%d)\n", insn->code,
+			       bpf_ldst_string[BPF_SIZE(insn->code) >> 3], insn->dst_reg, insn->off,
+			       insn->src_reg);
+		} else {
+			printf("BUG_%02x\n", insn->code);
+		}
+		break;
+	case BPF_ST:
+		if (BPF_MODE(insn->code) == BPF_MEM) {
+			printf("(%02x) *(%s *)(r%d %+d) = %d\n", insn->code,
+			       bpf_ldst_string[BPF_SIZE(insn->code) >> 3], insn->dst_reg, insn->off,
+			       insn->imm);
+		} else if (BPF_MODE(insn->code) == 0xc0 /* BPF_NOSPEC, no UAPI */) {
+			printf("(%02x) nospec\n", insn->code);
+		} else {
+			printf("BUG_st_%02x\n", insn->code);
+		}
+		break;
+	case BPF_LDX:
+		if (BPF_MODE(insn->code) != BPF_MEM && BPF_MODE(insn->code) != BPF_MEMSX) {
+			printf("BUG_ldx_%02x\n", insn->code);
+			return;
+		}
+		printf("(%02x) r%d = *(%s *)(r%d %+d)\n", insn->code, insn->dst_reg,
+		       BPF_MODE(insn->code) == BPF_MEM ?
+			       bpf_ldst_string[BPF_SIZE(insn->code) >> 3] :
+			       bpf_ldsx_string[BPF_SIZE(insn->code) >> 3],
+		       insn->src_reg, insn->off);
+		break;
+	case BPF_LD:
+		if (BPF_MODE(insn->code) == BPF_ABS) {
+			printf("(%02x) r0 = *(%s *)skb[%d]\n", insn->code,
+			       bpf_ldst_string[BPF_SIZE(insn->code) >> 3], insn->imm);
+		} else if (BPF_MODE(insn->code) == BPF_IND) {
+			printf("(%02x) r0 = *(%s *)skb[r%d + %d]\n", insn->code,
+			       bpf_ldst_string[BPF_SIZE(insn->code) >> 3], insn->src_reg,
+			       insn->imm);
+		} else if (BPF_MODE(insn->code) == BPF_IMM && BPF_SIZE(insn->code) == BPF_DW) {
+			/* At this point, we already made sure that the second
+			 * part of the ldimm64 insn is accessible.
+			 */
+			u64 imm = ((u64)(insn + 1)->imm << 32) | (u32)insn->imm;
+			char tmp[64];
+
+			printf("(%02x) r%d = %s\n", insn->code, insn->dst_reg,
+			       func_imm_name(insn, imm, tmp, sizeof(tmp)));
+		} else {
+			printf("BUG_ld_%02x\n", insn->code);
+			return;
+		}
+		break;
+	case BPF_JMP32:
+	case BPF_JMP: {
+		u8 opcode = BPF_OP(insn->code);
+
+		if (opcode == BPF_CALL) {
+			char tmp[64];
+
+			if (insn->src_reg == BPF_PSEUDO_CALL) {
+				printf("(%02x) call pc%s\n", insn->code,
+				       func_get_name(insn, info, tmp, sizeof(tmp)));
+			} else {
+				strcpy(tmp, "unknown");
+				printf("(%02x) call %s#%d\n", insn->code,
+				       func_get_name(insn, info, tmp, sizeof(tmp)), insn->imm);
+			}
+		} else if (insn->code == (BPF_JMP | BPF_JA)) {
+			printf("(%02x) goto pc%+d\n", insn->code, insn->off);
+		} else if (insn->code == (BPF_JMP | BPF_JCOND) && insn->src_reg == BPF_MAY_GOTO) {
+			printf("(%02x) may_goto pc%+d\n", insn->code, insn->off);
+		} else if (insn->code == (BPF_JMP32 | BPF_JA)) {
+			printf("(%02x) gotol pc%+d\n", insn->code, insn->imm);
+		} else if (insn->code == (BPF_JMP | BPF_EXIT)) {
+			printf("(%02x) exit\n", insn->code);
+		} else if (BPF_SRC(insn->code) == BPF_X) {
+			printf("(%02x) if %c%d %s %c%d goto pc%+d\n", insn->code,
+			       class == BPF_JMP32 ? 'w' : 'r', insn->dst_reg,
+			       bpf_jmp_string[BPF_OP(insn->code) >> 4],
+			       class == BPF_JMP32 ? 'w' : 'r', insn->src_reg, insn->off);
+		} else {
+			printf("(%02x) if %c%d %s 0x%x goto pc%+d\n", insn->code,
+			       class == BPF_JMP32 ? 'w' : 'r', insn->dst_reg,
+			       bpf_jmp_string[BPF_OP(insn->code) >> 4], (u32)insn->imm, insn->off);
+		}
+		break;
+	}
+	default:
+		printf("(%02x) %s\n", insn->code, bpf_class_string[class]);
+	}
+}
+
+static void func_printf(void *ctx, const char *fmt, va_list args)
+{
+	vprintf(fmt, args);
+}
+
+static int prep_prog_info(struct bpf_prog_info *info)
+{
+	struct bpf_prog_info holder = {};
+	size_t needed = 0;
+	void *ptr;
+
+	holder.xlated_prog_len = info->xlated_prog_len;
+	needed += info->xlated_prog_len;
+
+	holder.nr_jited_ksyms = info->nr_jited_ksyms;
+	needed += info->nr_jited_ksyms * sizeof(__u64);
+
+	holder.nr_jited_func_lens = info->nr_jited_func_lens;
+	needed += info->nr_jited_func_lens * sizeof(__u32);
+
+	holder.nr_func_info = info->nr_func_info;
+	holder.func_info_rec_size = info->func_info_rec_size;
+	needed += info->nr_func_info * info->func_info_rec_size;
+
+	holder.nr_line_info = info->nr_line_info;
+	holder.line_info_rec_size = info->line_info_rec_size;
+	needed += info->nr_line_info * info->line_info_rec_size;
+
+	holder.nr_jited_line_info = info->nr_jited_line_info;
+	holder.jited_line_info_rec_size = info->jited_line_info_rec_size;
+	needed += info->nr_jited_line_info * info->jited_line_info_rec_size;
+	ptr = malloc(needed);
+	if (!ptr)
+		return -ENOMEM;
+
+	holder.xlated_prog_insns = (unsigned long)(ptr);
+	ptr += holder.xlated_prog_len;
+
+	holder.jited_ksyms = (unsigned long)(ptr);
+	ptr += holder.nr_jited_ksyms * sizeof(__u64);
+
+	holder.jited_func_lens = (unsigned long)(ptr);
+	ptr += holder.nr_jited_func_lens * sizeof(__u32);
+
+	holder.func_info = (unsigned long)(ptr);
+	ptr += holder.nr_func_info * holder.func_info_rec_size;
+
+	holder.line_info = (unsigned long)(ptr);
+	ptr += holder.nr_line_info * holder.line_info_rec_size;
+
+	holder.jited_line_info = (unsigned long)(ptr);
+	ptr += holder.nr_jited_line_info * holder.jited_line_info_rec_size;
+
+	*info = holder;
+	return 0;
+}
+
+static void emit_line_info(const struct btf *btf, const struct bpf_line_info *linfo)
+{
+	const char *line = btf__name_by_offset(btf, linfo->line_off);
+
+	if (!line)
+		return;
+	line = ltrim(line);
+	printf("; %s\n", line);
+}
+
+static void emit_func_info(struct btf_dump *d, const struct btf *btf,
+			   const struct bpf_func_info *finfo)
+{
+	LIBBPF_OPTS(btf_dump_emit_type_decl_opts, emit_opts);
+	const struct btf_type *t;
+	u32 name_off;
+
+	name_off = btf__type_by_id(btf, finfo->type_id)->name_off;
+	emit_opts.field_name = btf__name_by_offset(btf, name_off);
+	if (!emit_opts.field_name) /* field_name can't be NULL */
+		emit_opts.field_name = "N/A";
+	t = btf__type_by_id(btf, finfo->type_id);
+	btf_dump__emit_type_decl(d, t->type, &emit_opts);
+	printf(":\n");
+}
+
+static void dump_xlated(const struct btf *btf, struct bpf_program *prog, struct bpf_prog_info *info)
+{
+	const struct bpf_insn *insn;
+	const struct bpf_func_info *finfo;
+	const struct bpf_line_info *linfo;
+	const struct bpf_prog_linfo *prog_linfo;
+	struct btf_dump *d;
+	u32 nr_skip = 0, i, n;
+	bool double_insn = false;
+	LIBBPF_OPTS(btf_dump_opts, dump_opts);
+	LIBBPF_OPTS(btf_dump_emit_type_decl_opts, emit_opts);
+
+	prog_linfo = bpf_prog_linfo__new(info);
+	insn = (struct bpf_insn *)info->xlated_prog_insns;
+	finfo = (struct bpf_func_info *)info->func_info;
+	d = btf_dump__new(btf, func_printf, NULL, &dump_opts);
+	n = info->xlated_prog_len / sizeof(*insn);
+
+	for (i = 0; i < n; i += double_insn ? 2 : 1) {
+		if (d && finfo && finfo->insn_off == i) {
+			emit_func_info(d, btf, finfo);
+			finfo++;
+		}
+
+		if (prog_linfo) {
+			linfo = bpf_prog_linfo__lfind(prog_linfo, i, nr_skip);
+			if (linfo) {
+				emit_line_info(btf, linfo);
+				nr_skip++;
+			}
+		}
+		printf("%4u: ", i);
+		print_bpf_insn(insn + i, info);
+		double_insn = insn[i].code == (BPF_LD | BPF_IMM | BPF_DW);
+	}
+
+	btf_dump__free(d);
+}
+
+static void dump(const struct btf *btf, struct bpf_program *prog, struct bpf_prog_info *info,
+		 int prog_fd)
+{
+	int err;
+	u32 info_len = sizeof(*info);
+
+	if (env.dump_mode == DUMP_NONE || prog_fd <= 0)
+		return;
+
+	err = prep_prog_info(info);
+	if (err)
+		return;
+
+	if (bpf_prog_get_info_by_fd(prog_fd, info, &info_len) != 0)
+		return;
+
+	/* reload symbols, as prog load could have added items */
+	kernel_syms_load();
+	if (env.dump_mode == DUMP_XLATED)
+		dump_xlated(btf, prog, info);
+}
+
 static int process_prog(const char *filename, struct bpf_object *obj, struct bpf_program *prog)
 {
 	const char *base_filename = basename(strdupa(filename));
@@ -1633,6 +2216,7 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 		stats->stats[JITED_SIZE] = info.jited_prog_len;
 
 	parse_verif_log(buf, buf_sz, stats);
+	dump(bpf_object__btf(obj), prog, &info, fd);
 
 	if (env.verbose) {
 		printf("PROCESSING %s/%s, DURATION US: %ld, VERDICT: %s, VERIFIER LOG:\n%s\n",
@@ -3325,5 +3909,6 @@ int main(int argc, char **argv)
 		free(env.presets[i].atoms);
 	}
 	free(env.presets);
+	kernel_syms_free();
 	return -err;
 }
