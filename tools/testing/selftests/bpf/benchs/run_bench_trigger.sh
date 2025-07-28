@@ -6,7 +6,7 @@ def_tests=( \
 	usermode-count kernel-count syscall-count \
 	fentry fexit fmodret \
 	rawtp tp \
-	kprobe kprobe-multi \
+	kprobe kprobe-multi kprobe-multi-all \
 	kretprobe kretprobe-multi \
 )
 
