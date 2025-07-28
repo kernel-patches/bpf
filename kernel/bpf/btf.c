@@ -6763,9 +6763,12 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		return false;
 	}
 
-	if (size != sizeof(u64)) {
-		bpf_log(log, "func '%s' size %d must be 8\n",
-			tname, size);
+	/* check for invalid pointer size on either 64-bit/32-bit system */
+	if (size != sizeof(__u64) && size != sizeof(long)) {
+		char *exp = sizeof(long) == sizeof(__u64) ? "8" : "8 or 4";
+
+		bpf_log(log, "func '%s' size %d must be %s\n",
+			tname, size, exp);
 		return false;
 	}
 

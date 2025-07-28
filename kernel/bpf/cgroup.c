@@ -2577,17 +2577,17 @@ static bool cg_sockopt_is_valid_access(int off, int size,
 
 	switch (off) {
 	case bpf_ctx_range_ptr(struct bpf_sockopt, sk):
-		if (size != sizeof(__u64))
+		if (size != sizeof(__u64) && size != sizeof(long))
 			return false;
 		info->reg_type = PTR_TO_SOCKET;
 		break;
 	case bpf_ctx_range_ptr(struct bpf_sockopt, optval):
-		if (size != sizeof(__u64))
+		if (size != sizeof(__u64) && size != sizeof(long))
 			return false;
 		info->reg_type = PTR_TO_PACKET;
 		break;
 	case bpf_ctx_range_ptr(struct bpf_sockopt, optval_end):
-		if (size != sizeof(__u64))
+		if (size != sizeof(__u64) && size != sizeof(long))
 			return false;
 		info->reg_type = PTR_TO_PACKET_END;
 		break;
