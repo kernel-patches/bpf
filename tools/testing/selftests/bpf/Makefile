@@ -178,6 +178,7 @@ endif
 
 ifneq ($(SKIP_LLVM),1)
 ifeq ($(feature-llvm),1)
+  $(info Debug: feature is $(feature-llvm) skip:  $(SKIP_LLVM))
   LLVM_CFLAGS  += -DHAVE_LLVM_SUPPORT
   LLVM_CONFIG_LIB_COMPONENTS := mcdisassembler all-targets
   # both llvm-config and lib.mk add -D_GNU_SOURCE, which ends up as conflict
@@ -845,11 +846,11 @@ $(OUTPUT)/bench: $(OUTPUT)/bench.o \
 #
 #   char a[PATH_MAX], b[PATH_MAX];
 #   snprintf(a, "%s/foo", b);      // triggers -Wformat-truncation
-$(OUTPUT)/veristat.o: CFLAGS += -Wno-format-truncation
+$(OUTPUT)/veristat.o: CFLAGS += -Wno-format-truncation $(LLVM_CFLAGS) $(LLVM_LDLIBS) $(LDFLAGS) $(LLVM_LDFLAGS)
 $(OUTPUT)/veristat.o: $(BPFOBJ)
 $(OUTPUT)/veristat: $(OUTPUT)/veristat.o
 	$(call msg,BINARY,,$@)
-	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(filter %.a %.o,$^) $(LDLIBS) -o $@
+	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(filter %.a %.o,$^) $(LDLIBS) $(LLVM_CFLAGS) $(LLVM_LDLIBS) $(LDFLAGS) $(LLVM_LDFLAGS) -o $@
 
 # Linking uprobe_multi can fail due to relocation overflows on mips.
 $(OUTPUT)/uprobe_multi: CFLAGS += $(if $(filter mips, $(ARCH)),-mxgot)

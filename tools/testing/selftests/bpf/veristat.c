@@ -24,6 +24,13 @@
 #include <math.h>
 #include <limits.h>
 
+#ifdef HAVE_LLVM_SUPPORT
+#include <llvm-c/Core.h>
+#include <llvm-c/Disassembler.h>
+#include <llvm-c/Target.h>
+#include <llvm-c/TargetMachine.h>
+#endif
+
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #endif
@@ -34,6 +41,10 @@
 
 #ifndef min
 #define min(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
+#ifndef __maybe_unused
+# define __maybe_unused	__attribute__((unused))
 #endif
 
 enum stat_id {
@@ -188,6 +199,7 @@ struct kernel_sym {
 enum dump_mode {
 	DUMP_NONE = 0,
 	DUMP_XLATED,
+	DUMP_JITED,
 };
 
 static struct env {
@@ -444,6 +456,10 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 	case 'p':
 		if (strcmp(arg, "xlated") == 0) {
 			env.dump_mode = DUMP_XLATED;
+#ifdef HAVE_LLVM_SUPPORT
+		} else if (strcmp(arg, "jited") == 0) {
+			env.dump_mode = DUMP_JITED;
+#endif
 		} else {
 			fprintf(stderr, "Unrecognized dump mode '%s'\n", arg);
 			return -EINVAL;
@@ -2003,8 +2019,13 @@ static int prep_prog_info(struct bpf_prog_info *info)
 	size_t needed = 0;
 	void *ptr;
 
-	holder.xlated_prog_len = info->xlated_prog_len;
-	needed += info->xlated_prog_len;
+	if (env.dump_mode == DUMP_XLATED) {
+		holder.xlated_prog_len = info->xlated_prog_len;
+		needed += info->xlated_prog_len;
+	} else if (env.dump_mode == DUMP_JITED) {
+		holder.jited_prog_len = info->jited_prog_len;
+		needed += info->jited_prog_len;
+	}
 
 	holder.nr_jited_ksyms = info->nr_jited_ksyms;
 	needed += info->nr_jited_ksyms * sizeof(__u64);
@@ -2026,9 +2047,13 @@ static int prep_prog_info(struct bpf_prog_info *info)
 	ptr = malloc(needed);
 	if (!ptr)
 		return -ENOMEM;
-
-	holder.xlated_prog_insns = (unsigned long)(ptr);
-	ptr += holder.xlated_prog_len;
+	if (env.dump_mode == DUMP_XLATED) {
+		holder.xlated_prog_insns = (unsigned long)(ptr);
+		ptr += holder.xlated_prog_len;
+	} else if (env.dump_mode == DUMP_JITED) {
+		holder.jited_prog_insns = (unsigned long)(ptr);
+		ptr += holder.jited_prog_len;
+	}
 
 	holder.jited_ksyms = (unsigned long)(ptr);
 	ptr += holder.nr_jited_ksyms * sizeof(__u64);
@@ -2114,6 +2139,139 @@ static void dump_xlated(const struct btf *btf, struct bpf_program *prog, struct 
 	btf_dump__free(d);
 }
 
+#ifdef HAVE_LLVM_SUPPORT
+
+static const char *symbol_lookup_callback(__maybe_unused void *disasm_info,
+					  __maybe_unused u64 ref_value,
+					  u64 *ref_type,
+					  __maybe_unused u64 ref_PC,
+					  __maybe_unused const char **ref_name)
+{
+	*ref_type = LLVMDisassembler_ReferenceType_InOut_None;
+	return NULL;
+}
+
+static int init_context(LLVMDisasmContextRef *ctx)
+{
+	char *triple;
+
+	triple = LLVMGetDefaultTargetTriple();
+	if (!triple) {
+		fprintf(stderr, "Failed to retrieve triple");
+		return -1;
+	}
+	*ctx = LLVMCreateDisasm(triple, NULL, 0, NULL, symbol_lookup_callback);
+	LLVMDisposeMessage(triple);
+
+	if (!*ctx) {
+		fprintf(stderr, "Failed to create disassembler");
+		return -1;
+	}
+
+	return 0;
+}
+
+static void destroy_context(LLVMDisasmContextRef *ctx)
+{
+	LLVMDisposeMessage(*ctx);
+}
+
+static int disasm_init(void)
+{
+	LLVMInitializeAllTargetInfos();
+	LLVMInitializeAllTargetMCs();
+	LLVMInitializeAllDisassemblers();
+	return 0;
+}
+
+static int print_jited_insn(LLVMDisasmContextRef *ctx, unsigned char *image, ssize_t len, u32 pc,
+			    u64 func_ksym)
+{
+	char buf[1024];
+	int count;
+
+	count = LLVMDisasmInstruction(*ctx, image + pc, len - pc, func_ksym + pc, buf, sizeof(buf));
+	if (count)
+		printf("%s", buf);
+	return count;
+}
+
+static int print_jited_func(u8 *image, ssize_t len, const struct btf *btf,
+			    const struct bpf_prog_linfo *prog_linfo, u64 func_ksym, u32 func_idx)
+{
+	const struct bpf_line_info *linfo = NULL;
+	u32 nr_skip = 0, pc = 0;
+	int count;
+	LLVMDisasmContextRef ctx;
+
+	if (!len)
+		return -1;
+
+	if (init_context(&ctx))
+		return -1;
+
+	for (pc = 0; pc < len; pc += count) {
+		if (prog_linfo) {
+			linfo = bpf_prog_linfo__lfind_addr_func(prog_linfo, func_ksym + pc,
+								func_idx, nr_skip);
+			if (linfo) {
+				nr_skip++;
+				emit_line_info(btf, linfo);
+			}
+		}
+
+		printf("%4x:", pc);
+		count = print_jited_insn(&ctx, image, len, pc, func_ksym);
+		printf("\n");
+		if (!count)
+			break;
+	}
+
+	destroy_context(&ctx);
+
+	return 0;
+}
+
+static void dump_jited(const struct btf *btf, struct bpf_program *prog, struct bpf_prog_info *info)
+{
+	const struct bpf_prog_linfo *linfo;
+	struct btf_dump *d;
+	struct bpf_func_info *finfo;
+	u64 *ksyms = NULL;
+	u32 *lens, i;
+	u8 *img;
+	int err = 0;
+	LIBBPF_OPTS(btf_dump_opts, dump_opts);
+	LIBBPF_OPTS(btf_dump_emit_type_decl_opts, emit_opts);
+
+	img = (u8 *)(size_t)info->jited_prog_insns;
+	finfo = (struct bpf_func_info *)(size_t)info->func_info;
+	ksyms = (u64 *)(size_t)info->jited_ksyms;
+	lens = (u32 *)(size_t)info->jited_func_lens;
+	linfo = bpf_prog_linfo__new(info);
+	d = btf_dump__new(btf, func_printf, NULL, &dump_opts);
+
+	for (i = 0; i < info->nr_jited_func_lens; i++) {
+		if (finfo) {
+			emit_func_info(d, btf, finfo);
+			finfo++;
+		}
+
+		if (ksyms)
+			err = print_jited_func(img, lens[i], btf, linfo, ksyms[i], i);
+		else
+			err = print_jited_func(img, lens[i], btf, NULL, 0, 0);
+		if (err)
+			goto out;
+
+		img += lens[i];
+	}
+
+out:
+	btf_dump__free(d);
+}
+#endif /* HAVE_LLVM_SUPPORT */
+
 static void dump(const struct btf *btf, struct bpf_program *prog, struct bpf_prog_info *info,
 		 int prog_fd)
 {
@@ -2134,6 +2292,10 @@ static void dump(const struct btf *btf, struct bpf_program *prog, struct bpf_pro
 	kernel_syms_load();
 	if (env.dump_mode == DUMP_XLATED)
 		dump_xlated(btf, prog, info);
+#ifdef HAVE_LLVM_SUPPORT
+	else if (env.dump_mode == DUMP_JITED)
+		dump_jited(btf, prog, info);
+#endif
 }
 
 static int process_prog(const char *filename, struct bpf_object *obj, struct bpf_program *prog)
@@ -3844,6 +4006,11 @@ int main(int argc, char **argv)
 		printf("%s\n", argp_program_version);
 		return 0;
 	}
+
+#ifdef HAVE_LLVM_SUPPORT
+	if (env.dump_mode != DUMP_NONE)
+		disasm_init();
+#endif
 
 	if (env.verbose && env.quiet) {
 		fprintf(stderr, "Verbose and quiet modes are incompatible, please specify just one or neither!\n\n");
