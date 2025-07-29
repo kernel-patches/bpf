@@ -475,7 +475,8 @@ void khugepaged_enter_vma(struct vm_area_struct *vma,
 	if (!test_bit(MMF_VM_HUGEPAGE, &vma->vm_mm->flags) &&
 	    hugepage_pmd_enabled()) {
 		if (thp_vma_allowable_order(vma, vm_flags, TVA_ENFORCE_SYSFS,
-					    PMD_ORDER))
+					    PMD_ORDER) &&
+		    get_suggested_order(vma->vm_mm, 0, PMD_ORDER) == PMD_ORDER)
 			__khugepaged_enter(vma->vm_mm);
 	}
 }
@@ -1448,6 +1449,11 @@ static void collect_mm_slot(struct khugepaged_mm_slot *mm_slot)
 		/* khugepaged_mm_lock actually not necessary for the below */
 		mm_slot_free(mm_slot_cache, mm_slot);
 		mmdrop(mm);
+	} else if (get_suggested_order(mm, 0, PMD_ORDER) != PMD_ORDER) {
+		hash_del(&slot->hash);
+		list_del(&slot->mm_node);
+		clear_bit(MMF_VM_HUGEPAGE, &mm->flags);
+		mm_slot_free(mm_slot_cache, mm_slot);
 	}
 }
 
@@ -2390,6 +2396,10 @@ static unsigned int khugepaged_scan_mm_slot(unsigned int pages, int *result,
 	 * the next mm on the list.
 	 */
 	vma = NULL;
+
+	/* If this mm is not suitable for the scan list, we should remove it. */
+	if (get_suggested_order(mm, 0, PMD_ORDER) != PMD_ORDER)
+		goto breakouterloop_mmap_lock;
 	if (unlikely(!mmap_read_trylock(mm)))
 		goto breakouterloop_mmap_lock;
 
@@ -2407,7 +2417,8 @@ static unsigned int khugepaged_scan_mm_slot(unsigned int pages, int *result,
 			break;
 		}
 		if (!thp_vma_allowable_order(vma, vma->vm_flags,
-					TVA_ENFORCE_SYSFS, PMD_ORDER)) {
+					TVA_ENFORCE_SYSFS, PMD_ORDER) ||
+		    get_suggested_order(vma->vm_mm, 0, PMD_ORDER) != PMD_ORDER) {
 skip:
 			progress++;
 			continue;
@@ -2744,6 +2755,9 @@ int madvise_collapse(struct vm_area_struct *vma, struct vm_area_struct **prev,
 	*prev = vma;
 
 	if (!thp_vma_allowable_order(vma, vma->vm_flags, 0, PMD_ORDER))
+		return -EINVAL;
+
+	if (get_suggested_order(vma->vm_mm, 0, PMD_ORDER) != PMD_ORDER)
 		return -EINVAL;
 
 	cc = kmalloc(sizeof(*cc), GFP_KERNEL);
