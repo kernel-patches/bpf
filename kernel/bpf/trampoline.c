@@ -175,16 +175,6 @@ static struct bpf_trampoline *bpf_trampoline_lookup(u64 key, unsigned long ip)
 	tr = kzalloc(sizeof(*tr), GFP_KERNEL);
 	if (!tr)
 		goto out;
-#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
-	tr->fops = kzalloc(sizeof(struct ftrace_ops), GFP_KERNEL);
-	if (!tr->fops) {
-		kfree(tr);
-		tr = NULL;
-		goto out;
-	}
-	tr->fops->private = tr;
-	tr->fops->ops_func = bpf_tramp_ftrace_ops_func;
-#endif
 
 	tr->key = key;
 	tr->ip = ip;
@@ -202,13 +192,19 @@ out:
 	return tr;
 }
 
+struct ftrace_ops direct_ops = {
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+       .ops_func = bpf_tramp_ftrace_ops_func,
+#endif
+};
+
 static int unregister_fentry(struct bpf_trampoline *tr, void *old_addr)
 {
 	void *ip = tr->func.addr;
 	int ret;
 
 	if (tr->func.ftrace_managed)
-		ret = unregister_ftrace_direct(tr->fops, (unsigned long) ip, (long)old_addr, false);
+		ret = unregister_ftrace_direct(&direct_ops, (unsigned long) ip, (long)old_addr, false);
 	else
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, NULL);
 
@@ -222,7 +218,7 @@ static int modify_fentry(struct bpf_trampoline *tr, void *old_addr, void *new_ad
 	int ret;
 
 	if (tr->func.ftrace_managed) {
-		ret = modify_ftrace_direct(tr->fops, (unsigned long) ip, (long)new_addr, lock_direct_mutex);
+		ret = modify_ftrace_direct(&direct_ops, (unsigned long) ip, (long)new_addr, lock_direct_mutex);
 	} else {
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, new_addr);
 	}
@@ -237,14 +233,11 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 	int ret;
 
 	faddr = ftrace_location((unsigned long)ip);
-	if (faddr) {
-		if (!tr->fops)
-			return -ENOTSUPP;
+	if (faddr)
 		tr->func.ftrace_managed = true;
-	}
 
 	if (tr->func.ftrace_managed) {
-		ret = register_ftrace_direct(tr->fops, (unsigned long)ip, (long)new_addr);
+		ret = register_ftrace_direct(&direct_ops, (unsigned long)ip, (long)new_addr);
 	} else {
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, NULL, new_addr);
 	}
@@ -502,9 +495,6 @@ again:
 		 * BPF_TRAMP_F_SHARE_IPMODIFY is set, we can generate the
 		 * trampoline again, and retry register.
 		 */
-		/* reset fops->func and fops->trampoline for re-register */
-		tr->fops->func = NULL;
-		tr->fops->trampoline = 0;
 
 		/* free im memory and reallocate later */
 		bpf_tramp_image_free(im);
@@ -885,10 +875,6 @@ void bpf_trampoline_put(struct bpf_trampoline *tr)
 	 */
 	hlist_del(&tr->hlist_key);
 	hlist_del(&tr->hlist_ip);
-	if (tr->fops) {
-		ftrace_free_filter(tr->fops);
-		kfree(tr->fops);
-	}
 	kfree(tr);
 out:
 	mutex_unlock(&trampoline_mutex);
