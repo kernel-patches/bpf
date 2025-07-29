@@ -230,7 +230,7 @@ static long __bpf_get_stackid(struct bpf_map *map,
 	struct bpf_stack_map *smap = container_of(map, struct bpf_stack_map, map);
 	struct stack_map_bucket *bucket, *new_bucket, *old_bucket;
 	u32 skip = flags & BPF_F_SKIP_FIELD_MASK;
-	u32 hash, id, trace_nr, trace_len, i;
+	u32 hash, id, trace_nr, trace_len, i, max_depth;
 	bool user = flags & BPF_F_USER_STACK;
 	u64 *ips;
 	bool hash_matches;
@@ -241,6 +241,19 @@ static long __bpf_get_stackid(struct bpf_map *map,
 
 	trace_nr = trace->nr - skip;
 	trace_len = trace_nr * sizeof(u64);
+
+	/* Clamp the trace to max allowed depth */
+	if (stack_map_use_build_id(map))
+		max_depth = smap->map.value_size / sizeof(struct bpf_stack_build_id);
+	else
+		max_depth = smap->map.value_size / sizeof(u64);
+
+	if (trace_nr > max_depth)
+		trace_nr = max_depth;
+
+ 	ips = trace->ip + skip;
+
+
 	ips = trace->ip + skip;
 	hash = jhash2((u32 *)ips, trace_len / sizeof(u32), 0);
 	id = hash & (smap->n_buckets - 1);
