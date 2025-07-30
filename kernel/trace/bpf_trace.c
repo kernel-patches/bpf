@@ -1242,9 +1242,11 @@ static const struct bpf_func_proto bpf_get_func_arg_cnt_proto = {
 };
 
 #ifdef CONFIG_KEYS
+/* BTF requires this even if it serves no purpose */
 struct bpf_key {
-	struct key *key;
 };
+/* conventional value to replace zero return which would become NULL */
+const u64 BUILTIN_KEY = -1LL;
 
 __bpf_kfunc_start_defs();
 
@@ -1276,7 +1278,6 @@ __bpf_kfunc_start_defs();
 __bpf_kfunc struct bpf_key *bpf_lookup_user_key(s32 serial, u64 flags)
 {
 	key_ref_t key_ref;
-	struct bpf_key *bkey;
 
 	if (flags & ~KEY_LOOKUP_ALL)
 		return NULL;
@@ -1289,15 +1290,7 @@ __bpf_kfunc struct bpf_key *bpf_lookup_user_key(s32 serial, u64 flags)
 	if (IS_ERR(key_ref))
 		return NULL;
 
-	bkey = kmalloc(sizeof(*bkey), GFP_KERNEL);
-	if (!bkey) {
-		key_put(key_ref_to_ptr(key_ref));
-		return NULL;
-	}
-
-	bkey->key = key_ref_to_ptr(key_ref);
-
-	return bkey;
+	return (struct bpf_key *)key_ref_to_ptr(key_ref);
 }
 
 /**
@@ -1323,18 +1316,10 @@ __bpf_kfunc struct bpf_key *bpf_lookup_user_key(s32 serial, u64 flags)
  */
 __bpf_kfunc struct bpf_key *bpf_lookup_system_key(u64 id)
 {
-	struct bpf_key *bkey;
-
 	if (system_keyring_id_check(id) < 0)
 		return NULL;
 
-	bkey = kmalloc(sizeof(*bkey), GFP_ATOMIC);
-	if (!bkey)
-		return NULL;
-
-	bkey->key = (struct key *)(unsigned long)id;
-
-	return bkey;
+	return (struct bpf_key *)(unsigned long)(id ? id : BUILTIN_KEY);
 }
 
 /**
@@ -1346,10 +1331,11 @@ __bpf_kfunc struct bpf_key *bpf_lookup_system_key(u64 id)
  */
 __bpf_kfunc void bpf_key_put(struct bpf_key *bkey)
 {
-	if (system_keyring_id_check((unsigned long)bkey->key) < 0)
-		key_put(bkey->key);
+	struct key *key = (struct key *)bkey;
 
-	kfree(bkey);
+	if (system_keyring_id_check((unsigned long)key) < 0 &&
+	    (unsigned long)key != BUILTIN_KEY)
+		key_put(key);
 }
 
 #ifdef CONFIG_SYSTEM_DATA_VERIFICATION
@@ -1370,11 +1356,15 @@ __bpf_kfunc int bpf_verify_pkcs7_signature(struct bpf_dynptr *data_p,
 {
 	struct bpf_dynptr_kern *data_ptr = (struct bpf_dynptr_kern *)data_p;
 	struct bpf_dynptr_kern *sig_ptr = (struct bpf_dynptr_kern *)sig_p;
+	struct key *key = (struct key *)trusted_keyring;
 	const void *data, *sig;
 	u32 data_len, sig_len;
 	int ret;
 
-	if (system_keyring_id_check((unsigned long)trusted_keyring->key) < 0) {
+	if ((unsigned long)key == BUILTIN_KEY)
+		key = NULL;
+
+	if (system_keyring_id_check((unsigned long)key) < 0) {
 		/*
 		 * Do the permission check deferred in bpf_lookup_user_key().
 		 * See bpf_lookup_user_key() for more details.
@@ -1383,7 +1373,7 @@ __bpf_kfunc int bpf_verify_pkcs7_signature(struct bpf_dynptr *data_p,
 		 * it is already done by keyring_search() called by
 		 * find_asymmetric_key().
 		 */
-		ret = key_validate(trusted_keyring->key);
+		ret = key_validate(key);
 		if (ret < 0)
 			return ret;
 	}
@@ -1393,8 +1383,7 @@ __bpf_kfunc int bpf_verify_pkcs7_signature(struct bpf_dynptr *data_p,
 	sig_len = __bpf_dynptr_size(sig_ptr);
 	sig = __bpf_dynptr_data(sig_ptr, sig_len);
 
-	return verify_pkcs7_signature(data, data_len, sig, sig_len,
-				      trusted_keyring->key,
+	return verify_pkcs7_signature(data, data_len, sig, sig_len, key,
 				      VERIFYING_UNSPECIFIED_SIGNATURE, NULL,
 				      NULL);
 }
