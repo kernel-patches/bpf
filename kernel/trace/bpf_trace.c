@@ -1244,7 +1244,6 @@ static const struct bpf_func_proto bpf_get_func_arg_cnt_proto = {
 #ifdef CONFIG_KEYS
 struct bpf_key {
 	struct key *key;
-	bool has_ref;
 };
 
 __bpf_kfunc_start_defs();
@@ -1297,7 +1296,6 @@ __bpf_kfunc struct bpf_key *bpf_lookup_user_key(s32 serial, u64 flags)
 	}
 
 	bkey->key = key_ref_to_ptr(key_ref);
-	bkey->has_ref = true;
 
 	return bkey;
 }
@@ -1335,7 +1333,6 @@ __bpf_kfunc struct bpf_key *bpf_lookup_system_key(u64 id)
 		return NULL;
 
 	bkey->key = (struct key *)(unsigned long)id;
-	bkey->has_ref = false;
 
 	return bkey;
 }
@@ -1349,7 +1346,7 @@ __bpf_kfunc struct bpf_key *bpf_lookup_system_key(u64 id)
  */
 __bpf_kfunc void bpf_key_put(struct bpf_key *bkey)
 {
-	if (bkey->has_ref)
+	if (system_keyring_id_check((unsigned long)bkey->key) < 0)
 		key_put(bkey->key);
 
 	kfree(bkey);
@@ -1377,7 +1374,7 @@ __bpf_kfunc int bpf_verify_pkcs7_signature(struct bpf_dynptr *data_p,
 	u32 data_len, sig_len;
 	int ret;
 
-	if (trusted_keyring->has_ref) {
+	if (system_keyring_id_check((unsigned long)trusted_keyring->key) < 0) {
 		/*
 		 * Do the permission check deferred in bpf_lookup_user_key().
 		 * See bpf_lookup_user_key() for more details.
