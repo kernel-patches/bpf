@@ -11,7 +11,7 @@ char _license[] SEC("license") = "GPL";
 
 struct kmem_cache_result {
 	char name[SLAB_NAME_MAX];
-	long obj_size;
+	unsigned int obj_size;
 };
 
 struct {

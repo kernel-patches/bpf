@@ -10,7 +10,7 @@
 
 struct kmem_cache_result {
 	char name[SLAB_NAME_MAX];
-	long obj_size;
+	unsigned int obj_size;
 };
 
 static void subtest_kmem_cache_iter_check_task_struct(struct kmem_cache_iter *skel)
@@ -32,7 +32,7 @@ static void subtest_kmem_cache_iter_check_slabinfo(struct kmem_cache_iter *skel)
 	FILE *fp;
 	int map_fd;
 	char name[SLAB_NAME_MAX];
-	unsigned long objsize;
+	unsigned int objsize;
 	char rest_of_line[1000];
 	struct kmem_cache_result r;
 	int seen = 0;
@@ -50,7 +50,7 @@ static void subtest_kmem_cache_iter_check_slabinfo(struct kmem_cache_iter *skel)
 	fscanf(fp, "# %*s %*s %*s %*s %*s %*s : %[^\n]\n", rest_of_line);
 
 	/* Compare name and objsize only - others can be changes frequently */
-	while (fscanf(fp, "%s %*u %*u %lu %*u %*u : %[^\n]\n",
+	while (fscanf(fp, "%s %*u %*u %u %*u %*u : %[^\n]\n",
 		      name, &objsize, rest_of_line) == 3) {
 		int ret = bpf_map_lookup_elem(map_fd, &seen, &r);
 
