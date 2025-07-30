@@ -3703,7 +3703,52 @@ __bpf_kfunc int bpf_strstr(const char *s1__ign, const char *s2__ign)
 	return bpf_strnstr(s1__ign, s2__ign, XATTR_SIZE_MAX);
 }
 
+typedef void (*bpf_task_work_callback_t)(struct bpf_map *, void *, void *);
+
+/**
+ * bpf_task_work_schedule_signal - Schedule BPF callback using task_work_add with TWA_SIGNAL mode
+ * @task: Task struct for which callback should be scheduled
+ * @tw: Pointer to the bpf_task_work struct, to use by kernel internally for bookkeeping
+ * @map__map: bpf_map which contains bpf_task_work in one of the values
+ * @callback: pointer to BPF subprogram to call
+ * @aux__prog: user should pass NULL
+ *
+ * Return: 0 if task work has been scheduled successfully, negative error code otherwise
+ */
+__bpf_kfunc int bpf_task_work_schedule_signal(struct task_struct *task,
+					      struct bpf_task_work *tw,
+					      struct bpf_map *map__map,
+					      bpf_task_work_callback_t callback,
+					      void *aux__prog)
+{
+	return 0;
+}
+
+/**
+ * bpf_task_work_schedule_resume - Schedule BPF callback using task_work_add with TWA_RESUME or
+ * TWA_NMI_CURRENT mode if scheduling for the current task in the NMI
+ * @task: Task struct for which callback should be scheduled
+ * @tw: Pointer to the bpf_task_work struct, to use by kernel internally for bookkeeping
+ * @map__map: bpf_map which contains bpf_task_work in one of the values
+ * @callback: pointer to BPF subprogram to call
+ * @aux__prog: user should pass NULL
+ *
+ * Return: 0 if task work has been scheduled successfully, negative error code otherwise
+ */
+__bpf_kfunc int bpf_task_work_schedule_resume(struct task_struct *task,
+					      struct bpf_task_work *tw,
+					      struct bpf_map *map__map,
+					      bpf_task_work_callback_t callback,
+					      void *aux__prog)
+{
+	return 0;
+}
+
 __bpf_kfunc_end_defs();
+
+void bpf_task_work_cancel_and_free(void *val)
+{
+}
 
 BTF_KFUNCS_START(generic_btf_ids)
 #ifdef CONFIG_CRASH_DUMP
