@@ -1242,6 +1242,11 @@ static const struct bpf_func_proto bpf_get_func_arg_cnt_proto = {
 };
 
 #ifdef CONFIG_KEYS
+struct bpf_key {
+	struct key *key;
+	bool has_ref;
+};
+
 __bpf_kfunc_start_defs();
 
 /**
