@@ -225,7 +225,7 @@ __naked void null_check_8_null_bind(void)
 	__naked void invalid_narrow_load##ctx##field(void)		\
 	{								\
 		asm volatile ("						\
-		r1 = *(u32 *)(r1 + %[off]);				\
+		r1 = *(u16 *)(r1 + %[off]);				\
 		r0 = 0;							\
 		exit;"							\
 		:							\
