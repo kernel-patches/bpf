@@ -26,6 +26,8 @@ struct {
 	__uint(value_size, META_SIZE);
 } test_result SEC(".maps");
 
+bool test_pass;
+
 SEC("tc")
 int ing_cls(struct __sk_buff *ctx)
 {
@@ -40,6 +42,56 @@ int ing_cls(struct __sk_buff *ctx)
 
 	bpf_map_update_elem(&test_result, &key, data_meta, BPF_ANY);
 
+	return TC_ACT_SHOT;
+}
+
+/* Check that skb->data_meta..skb->data is empty */
+SEC("tc")
+int ing_cls_data_meta_empty(struct __sk_buff *ctx)
+{
+	struct ethhdr *eth = ctx_ptr(ctx, data);
+
+	if (eth + 1 > ctx_ptr(ctx, data_end))
+		goto out;
+	/* Ignore non-test packets */
+	if (eth->h_proto != 0)
+		goto out;
+	/* Packet write to trigger unclone in prologue */
+	eth->h_proto = 42;
+
+	/* Expect no metadata */
+	if (ctx->data_meta < ctx->data)
+		goto out;
+
+	test_pass = true;
+out:
+	return TC_ACT_SHOT;
+}
+
+/* Check that skb_meta dynptr is empty */
+SEC("tc")
+int ing_cls_dynptr_empty(struct __sk_buff *ctx)
+{
+	struct bpf_dynptr data, meta;
+	struct ethhdr *eth;
+
+	bpf_dynptr_from_skb(ctx, 0, &data);
+	eth = bpf_dynptr_slice_rdwr(&data, 0, NULL, sizeof(*eth));
+	if (!eth)
+		goto out;
+	/* Ignore non-test packets */
+	if (eth->h_proto != 0)
+		goto out;
+	/* Packet write to trigger unclone in prologue */
+	eth->h_proto = 42;
+
+	/* Expect no metadata */
+	bpf_dynptr_from_skb_meta(ctx, 0, &meta);
+	if (bpf_dynptr_size(&meta) > 0)
+		goto out;
+
+	test_pass = true;
+out:
 	return TC_ACT_SHOT;
 }
 
