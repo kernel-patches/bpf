@@ -1948,7 +1948,7 @@ struct bpf_struct_ops_common_value {
 		__register_bpf_struct_ops(st_ops);			\
 	})
 #define BPF_MODULE_OWNER ((void *)((0xeB9FUL << 2) + POISON_POINTER_DELTA))
-bool bpf_struct_ops_get(const void *kdata);
+struct bpf_map *bpf_struct_ops_get(const void *kdata);
 void bpf_struct_ops_put(const void *kdata);
 int bpf_struct_ops_supported(const struct bpf_struct_ops *st_ops, u32 moff);
 int bpf_struct_ops_map_sys_lookup_elem(struct bpf_map *map, void *key,
@@ -1963,7 +1963,7 @@ void bpf_struct_ops_image_free(void *image);
 static inline bool bpf_try_module_get(const void *data, struct module *owner)
 {
 	if (owner == BPF_MODULE_OWNER)
-		return bpf_struct_ops_get(data);
+		return !IS_ERR(bpf_struct_ops_get(data));
 	else
 		return try_module_get(owner);
 }

@@ -1150,7 +1150,7 @@ const struct bpf_map_ops bpf_struct_ops_map_ops = {
 /* "const void *" because some subsystem is
  * passing a const (e.g. const struct tcp_congestion_ops *)
  */
-bool bpf_struct_ops_get(const void *kdata)
+struct bpf_map *bpf_struct_ops_get(const void *kdata)
 {
 	struct bpf_struct_ops_value *kvalue;
 	struct bpf_struct_ops_map *st_map;
@@ -1159,9 +1159,9 @@ bool bpf_struct_ops_get(const void *kdata)
 	kvalue = container_of(kdata, struct bpf_struct_ops_value, data);
 	st_map = container_of(kvalue, struct bpf_struct_ops_map, kvalue);
 
-	map = __bpf_map_inc_not_zero(&st_map->map, false);
-	return !IS_ERR(map);
+	return __bpf_map_inc_not_zero(&st_map->map, false);
 }
+EXPORT_SYMBOL_GPL(bpf_struct_ops_get);
 
 void bpf_struct_ops_put(const void *kdata)
 {
@@ -1173,6 +1173,7 @@ void bpf_struct_ops_put(const void *kdata)
 
 	bpf_map_put(&st_map->map);
 }
+EXPORT_SYMBOL_GPL(bpf_struct_ops_put);
 
 static bool bpf_struct_ops_valid_to_reg(struct bpf_map *map)
 {
