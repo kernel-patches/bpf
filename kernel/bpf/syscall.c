@@ -3740,6 +3740,12 @@ static void bpf_perf_link_release(struct bpf_link *link)
 	fput(perf_link->perf_file);
 }
 
+static int bpf_perf_link_detach(struct bpf_link *link)
+{
+	bpf_perf_link_release(link);
+	return 0;
+}
+
 static void bpf_perf_link_dealloc(struct bpf_link *link)
 {
 	struct bpf_perf_link *perf_link = container_of(link, struct bpf_perf_link, link);
@@ -4034,6 +4040,7 @@ static void bpf_perf_link_show_fdinfo(const struct bpf_link *link,
 
 static const struct bpf_link_ops bpf_perf_link_lops = {
 	.release = bpf_perf_link_release,
+	.detach = bpf_perf_link_detach,
 	.dealloc = bpf_perf_link_dealloc,
 	.fill_link_info = bpf_perf_link_fill_link_info,
 	.show_fdinfo = bpf_perf_link_show_fdinfo,

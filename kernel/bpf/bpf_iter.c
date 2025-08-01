@@ -397,6 +397,12 @@ static void bpf_iter_link_release(struct bpf_link *link)
 		iter_link->tinfo->reg_info->detach_target(&iter_link->aux);
 }
 
+static int bpf_iter_link_detach(struct bpf_link *link)
+{
+	bpf_iter_link_release(link);
+	return 0;
+}
+
 static void bpf_iter_link_dealloc(struct bpf_link *link)
 {
 	struct bpf_iter_link *iter_link =
@@ -490,6 +496,7 @@ static int bpf_iter_link_fill_link_info(const struct bpf_link *link,
 
 static const struct bpf_link_ops bpf_iter_link_lops = {
 	.release = bpf_iter_link_release,
+	.detach = bpf_iter_link_detach,
 	.dealloc = bpf_iter_link_dealloc,
 	.update_prog = bpf_iter_link_replace,
 	.show_fdinfo = bpf_iter_link_show_fdinfo,
