@@ -303,13 +303,13 @@ static bool nf_is_valid_access(int off, int size, enum bpf_access_type type,
 		return false;
 
 	switch (off) {
-	case bpf_ctx_range(struct bpf_nf_ctx, skb):
-		if (size != sizeof_field(struct bpf_nf_ctx, skb))
+	case bpf_ctx_range_ptr(struct bpf_nf_ctx, skb):
+		if (size != sizeof(__u64) && size != sizeof(long))
 			return false;
 
 		return nf_ptr_to_btf_id(info, "sk_buff");
-	case bpf_ctx_range(struct bpf_nf_ctx, state):
-		if (size != sizeof_field(struct bpf_nf_ctx, state))
+	case bpf_ctx_range_ptr(struct bpf_nf_ctx, state):
+		if (size != sizeof(__u64) && size != sizeof(long))
 			return false;
 
 		return nf_ptr_to_btf_id(info, "nf_hook_state");
@@ -320,6 +320,31 @@ static bool nf_is_valid_access(int off, int size, enum bpf_access_type type,
 	return false;
 }
 
+static u32 nf_convert_ctx_access(enum bpf_access_type type,
+				 const struct bpf_insn *si,
+				 struct bpf_insn *insn_buf,
+				 struct bpf_prog *prog, u32 *target_size)
+{
+	struct bpf_insn *insn = insn_buf;
+
+	switch (si->off) {
+	case offsetof(struct bpf_nf_ctx, state):
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_nf_ctx, state),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct bpf_nf_ctx, state));
+		break;
+	case offsetof(struct bpf_nf_ctx, skb):
+		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct bpf_nf_ctx, skb),
+				      si->dst_reg, si->src_reg,
+				      offsetof(struct bpf_nf_ctx, skb));
+		break;
+	default:
+		return false;
+	}
+
+	return insn - insn_buf;
+}
+
 static const struct bpf_func_proto *
 bpf_nf_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -328,5 +353,6 @@ bpf_nf_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 
 const struct bpf_verifier_ops netfilter_verifier_ops = {
 	.is_valid_access	= nf_is_valid_access,
+	.convert_ctx_access	= nf_convert_ctx_access,
 	.get_func_proto		= bpf_nf_func_proto,
 };
