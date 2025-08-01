@@ -14,6 +14,15 @@
 
 struct bpf_sk_buff_ptr;
 
+extern void bpf_qdisc_skb_drop(struct sk_buff *skb,
+			       struct bpf_sk_buff_ptr *to_free_list) __ksym;
+extern void bpf_qdisc_bstats_update(struct Qdisc *sch,
+				    const struct sk_buff *skb) __ksym;
+extern void bpf_kfree_skb(struct sk_buff *skb) __ksym;
+extern u32 bpf_skb_get_hash(struct sk_buff *skb) __ksym;
+extern void bpf_qdisc_watchdog_schedule(struct Qdisc *sch, u64 expire,
+					u64 delta_ns) __ksym;
+
 static struct qdisc_skb_cb *qdisc_skb_cb(const struct sk_buff *skb)
 {
 	return (struct qdisc_skb_cb *)skb->cb;
