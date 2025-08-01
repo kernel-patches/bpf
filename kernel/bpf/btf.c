@@ -3806,7 +3806,7 @@ static int btf_parse_kptr(const struct btf *btf, struct btf_field *field,
 	/* If a matching btf type is found in kernel or module BTFs, kptr_ref
 	 * is that BTF, otherwise it's program BTF
 	 */
-	struct btf *kptr_btf;
+	struct btf *kptr_btf __free(btf_put) = NULL;
 	int ret;
 	s32 id;
 
@@ -3845,23 +3845,17 @@ static int btf_parse_kptr(const struct btf *btf, struct btf_field *field,
 		 * the same time.
 		 */
 		dtor_btf_id = btf_find_dtor_kfunc(kptr_btf, id);
-		if (dtor_btf_id < 0) {
-			ret = dtor_btf_id;
-			goto end_btf;
-		}
+		if (dtor_btf_id < 0)
+			return dtor_btf_id;
 
 		dtor_func = btf_type_by_id(kptr_btf, dtor_btf_id);
-		if (!dtor_func) {
-			ret = -ENOENT;
-			goto end_btf;
-		}
+		if (!dtor_func)
+			return -ENOENT;
 
 		if (btf_is_module(kptr_btf)) {
 			mod = btf_try_get_module(kptr_btf);
-			if (!mod) {
-				ret = -ENXIO;
-				goto end_btf;
-			}
+			if (!mod)
+				return -ENXIO;
 		}
 
 		/* We already verified dtor_func to be btf_type_is_func
@@ -3878,13 +3872,11 @@ static int btf_parse_kptr(const struct btf *btf, struct btf_field *field,
 
 found_dtor:
 	field->kptr.btf_id = id;
-	field->kptr.btf = kptr_btf;
+	field->kptr.btf = no_free_ptr(kptr_btf);
 	field->kptr.module = mod;
 	return 0;
 end_mod:
 	module_put(mod);
-end_btf:
-	btf_put(kptr_btf);
 	return ret;
 }
 
@@ -8757,7 +8749,7 @@ u32 *btf_kfunc_is_modify_return(const struct btf *btf, u32 kfunc_btf_id,
 static int __register_btf_kfunc_id_set(enum btf_kfunc_hook hook,
 				       const struct btf_kfunc_id_set *kset)
 {
-	struct btf *btf;
+	struct btf *btf __free(btf_put) = NULL;
 	int ret, i;
 
 	btf = btf_get_module_btf(kset->owner);
@@ -8770,14 +8762,10 @@ static int __register_btf_kfunc_id_set(enum btf_kfunc_hook hook,
 		ret = btf_check_kfunc_protos(btf, btf_relocate_id(btf, kset->set->pairs[i].id),
 					     kset->set->pairs[i].flags);
 		if (ret)
-			goto err_out;
+			return ret;
 	}
 
-	ret = btf_populate_kfunc_set(btf, hook, kset);
-
-err_out:
-	btf_put(btf);
-	return ret;
+	return btf_populate_kfunc_set(btf, hook, kset);
 }
 
 /* This function must be invoked only from initcalls/module init functions */
@@ -8865,7 +8853,7 @@ int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dtors, u32 add_c
 				struct module *owner)
 {
 	struct btf_id_dtor_kfunc_tab *tab;
-	struct btf *btf;
+	struct btf *btf __free(btf_put) = NULL;
 	u32 tab_cnt, i;
 	int ret;
 
@@ -8931,7 +8919,6 @@ int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dtors, u32 add_c
 end:
 	if (ret)
 		btf_free_dtor_kfunc_tab(btf);
-	btf_put(btf);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(register_btf_id_dtor_kfuncs);
@@ -9542,9 +9529,8 @@ bpf_struct_ops_find(struct btf *btf, u32 type_id)
 
 int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops)
 {
-	struct bpf_verifier_log *log;
-	struct btf *btf;
-	int err = 0;
+	struct bpf_verifier_log *log __free(kfree) = NULL;
+	struct btf *btf __free(btf_put) = NULL;
 
 	btf = btf_get_module_btf(st_ops->owner);
 	if (!btf)
@@ -9553,20 +9539,12 @@ int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops)
 		return PTR_ERR(btf);
 
 	log = kzalloc(sizeof(*log), GFP_KERNEL | __GFP_NOWARN);
-	if (!log) {
-		err = -ENOMEM;
-		goto errout;
-	}
+	if (!log)
+		return -ENOMEM;
 
 	log->level = BPF_LOG_KERNEL;
 
-	err = btf_add_struct_ops(btf, st_ops, log);
-
-errout:
-	kfree(log);
-	btf_put(btf);
-
-	return err;
+	return btf_add_struct_ops(btf, st_ops, log);
 }
 EXPORT_SYMBOL_GPL(__register_bpf_struct_ops);
 #endif

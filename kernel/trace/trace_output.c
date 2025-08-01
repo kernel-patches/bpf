@@ -698,7 +698,7 @@ void print_function_args(struct trace_seq *s, unsigned long *args,
 	const char *param_name;
 	char name[KSYM_NAME_LEN];
 	unsigned long arg;
-	struct btf *btf;
+	struct btf *btf __free(btf_put) = NULL;
 	s32 tid, nr = 0;
 	int a, p, x;
 
@@ -716,7 +716,7 @@ void print_function_args(struct trace_seq *s, unsigned long *args,
 
 	param = btf_get_func_param(t, &nr);
 	if (!param)
-		goto out_put;
+		goto out;
 
 	for (a = 0, p = 0; p < nr; a++, p++) {
 		if (p)
@@ -756,7 +756,7 @@ void print_function_args(struct trace_seq *s, unsigned long *args,
 				trace_seq_putc(s, ':');
 				if (++a == FTRACE_REGS_MAX_ARGS) {
 					trace_seq_puts(s, "...]");
-					goto out_put;
+					goto out;
 				}
 				trace_seq_printf(s, "0x%lx", args[a]);
 			}
@@ -764,8 +764,6 @@ void print_function_args(struct trace_seq *s, unsigned long *args,
 			break;
 		}
 	}
-out_put:
-	btf_put(btf);
 out:
 	trace_seq_printf(s, ")");
 }

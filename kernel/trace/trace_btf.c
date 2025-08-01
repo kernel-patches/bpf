@@ -13,26 +13,25 @@
 const struct btf_type *btf_find_func_proto(const char *func_name, struct btf **btf_p)
 {
 	const struct btf_type *t;
+	struct btf *btf __free(btf_put) = NULL;
 	s32 id;
 
-	id = bpf_find_btf_id(func_name, BTF_KIND_FUNC, btf_p);
+	id = bpf_find_btf_id(func_name, BTF_KIND_FUNC, &btf);
 	if (id < 0)
 		return NULL;
 
 	/* Get BTF_KIND_FUNC type */
-	t = btf_type_by_id(*btf_p, id);
+	t = btf_type_by_id(btf, id);
 	if (!t || !btf_type_is_func(t))
-		goto err;
+		return NULL;
 
 	/* The type of BTF_KIND_FUNC is BTF_KIND_FUNC_PROTO */
-	t = btf_type_by_id(*btf_p, t->type);
+	t = btf_type_by_id(btf, t->type);
 	if (!t || !btf_type_is_func_proto(t))
-		goto err;
+		return NULL;
 
+	*btf_p = no_free_ptr(btf);
 	return t;
-err:
-	btf_put(*btf_p);
-	return NULL;
 }
 
 /*
