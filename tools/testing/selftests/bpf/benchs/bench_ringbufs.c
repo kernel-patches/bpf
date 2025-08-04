@@ -19,6 +19,7 @@ static struct {
 	int ringbuf_sz; /* per-ringbuf, in bytes */
 	bool ringbuf_use_output; /* use slower output API */
 	int perfbuf_sz; /* per-CPU size, in pages */
+	bool overwrite_mode;
 } args = {
 	.back2back = false,
 	.batch_cnt = 500,
@@ -27,6 +28,7 @@ static struct {
 	.ringbuf_sz = 512 * 1024,
 	.ringbuf_use_output = false,
 	.perfbuf_sz = 128,
+	.overwrite_mode = false,
 };
 
 enum {
@@ -35,6 +37,7 @@ enum {
 	ARG_RB_BATCH_CNT = 2002,
 	ARG_RB_SAMPLED = 2003,
 	ARG_RB_SAMPLE_RATE = 2004,
+	ARG_RB_OVERWRITE = 2005,
 };
 
 static const struct argp_option opts[] = {
@@ -43,6 +46,7 @@ static const struct argp_option opts[] = {
 	{ "rb-batch-cnt", ARG_RB_BATCH_CNT, "CNT", 0, "Set BPF-side record batch count"},
 	{ "rb-sampled", ARG_RB_SAMPLED, NULL, 0, "Notification sampling"},
 	{ "rb-sample-rate", ARG_RB_SAMPLE_RATE, "RATE", 0, "Notification sample rate"},
+	{ "rb-overwrite", ARG_RB_OVERWRITE, NULL, 0, "overwrite mode"},
 	{},
 };
 
@@ -71,6 +75,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 			fprintf(stderr, "Invalid perfbuf sample rate.");
 			argp_usage(state);
 		}
+		break;
+	case ARG_RB_OVERWRITE:
+		args.overwrite_mode = true;
 		break;
 	default:
 		return ARGP_ERR_UNKNOWN;
@@ -104,6 +111,11 @@ static void bufs_validate(void)
 		fprintf(stderr, "back-to-back mode makes sense only for single-producer case!\n");
 		exit(1);
 	}
+
+	if (args.overwrite_mode && strcmp(env.bench_name, "rb-libbpf") != 0) {
+		fprintf(stderr, "rb-overwrite mode only supports rb-libbpf!\n");
+		exit(1);
+	}
 }
 
 static void *bufs_sample_producer(void *input)
@@ -134,6 +146,8 @@ static void ringbuf_libbpf_measure(struct bench_res *res)
 
 static struct ringbuf_bench *ringbuf_setup_skeleton(void)
 {
+	__u32 flags;
+	struct bpf_map *ringbuf;
 	struct ringbuf_bench *skel;
 
 	setup_libbpf();
@@ -151,7 +165,13 @@ static struct ringbuf_bench *ringbuf_setup_skeleton(void)
 		/* record data + header take 16 bytes */
 		skel->rodata->wakeup_data_size = args.sample_rate * 16;
 
-	bpf_map__set_max_entries(skel->maps.ringbuf, args.ringbuf_sz);
+	ringbuf = skel->maps.ringbuf;
+	if (args.overwrite_mode) {
+		flags = bpf_map__map_flags(ringbuf) | BPF_F_OVERWRITE;
+		bpf_map__set_map_flags(ringbuf,  flags);
+	}
+
+	bpf_map__set_max_entries(ringbuf, args.ringbuf_sz);
 
 	if (ringbuf_bench__load(skel)) {
 		fprintf(stderr, "failed to load skeleton\n");
