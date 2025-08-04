@@ -1024,14 +1024,35 @@ static struct uprobe *alloc_uprobe(struct inode *inode, loff_t offset,
 	return uprobe;
 }
 
-static void consumer_add(struct uprobe *uprobe, struct uprobe_consumer *uc)
+static bool consumer_can_add(struct list_head *head, struct uprobe_consumer *uc)
+{
+	/* Uprobe has no consumer, we can add any. */
+	if (list_empty(head))
+		return true;
+	/* Uprobe has consumer/s, we can't add unique one. */
+	if (uc->is_unique)
+		return false;
+	/*
+	 * Uprobe has consumer/s, we can add nother consumer only if the
+	 * current consumer is not unique.
+	 **/
+	return !list_first_entry(head, struct uprobe_consumer, cons_node)->is_unique;
+}
+
+static int consumer_add(struct uprobe *uprobe, struct uprobe_consumer *uc)
 {
 	static atomic64_t id;
+	int ret = -EBUSY;
 
 	down_write(&uprobe->consumer_rwsem);
+	if (!consumer_can_add(&uprobe->consumers, uc))
+		goto unlock;
 	list_add_rcu(&uc->cons_node, &uprobe->consumers);
 	uc->id = (__u64) atomic64_inc_return(&id);
+	ret = 0;
+unlock:
 	up_write(&uprobe->consumer_rwsem);
+	return ret;
 }
 
 /*
@@ -1420,7 +1441,12 @@ struct uprobe *uprobe_register(struct inode *inode,
 		return uprobe;
 
 	down_write(&uprobe->register_rwsem);
-	consumer_add(uprobe, uc);
+	ret = consumer_add(uprobe, uc);
+	if (ret) {
+		put_uprobe(uprobe);
+		up_write(&uprobe->register_rwsem);
+		return ERR_PTR(ret);
+	}
 	ret = register_for_each_vma(uprobe, uc);
 	up_write(&uprobe->register_rwsem);
 

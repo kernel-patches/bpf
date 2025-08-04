@@ -60,6 +60,7 @@ struct uprobe_consumer {
 	struct list_head cons_node;
 
 	__u64 id;	/* set when uprobe_consumer is registered */
+	bool is_unique; /* the only consumer on uprobe */
 };
 
 #ifdef CONFIG_UPROBES
