@@ -27,10 +27,13 @@ struct ring {
 	ring_buffer_sample_fn sample_cb;
 	void *ctx;
 	void *data;
+	void *read_buffer;
 	unsigned long *consumer_pos;
 	unsigned long *producer_pos;
+	unsigned long *overwrite_pos;
 	unsigned long mask;
 	int map_fd;
+	bool overwrite_mode;
 };
 
 struct ring_buffer {
@@ -68,6 +71,9 @@ static void ringbuf_free_ring(struct ring_buffer *rb, struct ring *r)
 		munmap(r->producer_pos, rb->page_size + 2 * (r->mask + 1));
 		r->producer_pos = NULL;
 	}
+
+	if (r->read_buffer)
+		free(r->read_buffer);
 
 	free(r);
 }
@@ -119,6 +125,14 @@ int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 	r->sample_cb = sample_cb;
 	r->ctx = ctx;
 	r->mask = info.max_entries - 1;
+	r->overwrite_mode = info.map_flags & BPF_F_OVERWRITE;
+	if (unlikely(r->overwrite_mode)) {
+		r->read_buffer = malloc(info.max_entries);
+		if (!r->read_buffer) {
+			err = -ENOMEM;
+			goto err_out;
+		}
+	}
 
 	/* Map writable consumer page */
 	tmp = mmap(NULL, rb->page_size, PROT_READ | PROT_WRITE, MAP_SHARED, map_fd, 0);
@@ -148,6 +162,7 @@ int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 		goto err_out;
 	}
 	r->producer_pos = tmp;
+	r->overwrite_pos = r->producer_pos + 1; /* overwrite_pos is next to producer_pos */
 	r->data = tmp + rb->page_size;
 
 	e = &rb->events[rb->ring_cnt];
@@ -232,7 +247,7 @@ static inline int roundup_len(__u32 len)
 	return (len + 7) / 8 * 8;
 }
 
-static int64_t ringbuf_process_ring(struct ring *r, size_t n)
+static int64_t ringbuf_process_normal_ring(struct ring *r, size_t n)
 {
 	int *len_ptr, len, err;
 	/* 64-bit to avoid overflow in case of extreme application behavior */
@@ -276,6 +291,92 @@ static int64_t ringbuf_process_ring(struct ring *r, size_t n)
 	} while (got_new_data);
 done:
 	return cnt;
+}
+
+static int64_t ringbuf_process_overwrite_ring(struct ring *r, size_t n)
+{
+
+	int err;
+	uint32_t *len_ptr, len;
+	/* 64-bit to avoid overflow in case of extreme application behavior */
+	int64_t cnt = 0;
+	size_t size, offset;
+	unsigned long cons_pos, prod_pos, over_pos, tmp_pos;
+	bool got_new_data;
+	void *sample;
+	bool copied;
+
+	size = r->mask + 1;
+
+	cons_pos = smp_load_acquire(r->consumer_pos);
+	do {
+		got_new_data = false;
+
+		/* grab a copy of data */
+		prod_pos = smp_load_acquire(r->producer_pos);
+		do {
+			over_pos = READ_ONCE(*r->overwrite_pos);
+			/* prod_pos may be outdated now */
+			if (over_pos < prod_pos) {
+				tmp_pos = max(cons_pos, over_pos);
+				/* smp_load_acquire(r->producer_pos) before
+				 * READ_ONCE(*r->overwrite_pos) ensures that
+				 * over_pos + r->mask < prod_pos never occurs,
+				 * so size is never larger than r->mask
+				 */
+				size = prod_pos - tmp_pos;
+				if (!size)
+					goto done;
+				memcpy(r->read_buffer,
+				       r->data + (tmp_pos & r->mask), size);
+				copied = true;
+			} else {
+				copied = false;
+			}
+			prod_pos = smp_load_acquire(r->producer_pos);
+		/* retry if data is overwritten by producer */
+		} while (!copied || prod_pos - tmp_pos > r->mask);
+
+		cons_pos = tmp_pos;
+
+		for (offset = 0; offset < size; offset += roundup_len(len)) {
+			len_ptr = r->read_buffer + (offset & r->mask);
+			len = *len_ptr;
+
+			if (len & BPF_RINGBUF_BUSY_BIT)
+				goto done;
+
+			got_new_data = true;
+			cons_pos += roundup_len(len);
+
+			if ((len & BPF_RINGBUF_DISCARD_BIT) == 0) {
+				sample = (void *)len_ptr + BPF_RINGBUF_HDR_SZ;
+				err = r->sample_cb(r->ctx, sample, len);
+				if (err < 0) {
+					/* update consumer pos and bail out */
+					smp_store_release(r->consumer_pos,
+							  cons_pos);
+					return err;
+				}
+				cnt++;
+			}
+
+			if (cnt >= n)
+				goto done;
+		}
+	} while (got_new_data);
+
+done:
+	smp_store_release(r->consumer_pos, cons_pos);
+	return cnt;
+}
+
+static int64_t ringbuf_process_ring(struct ring *r, size_t n)
+{
+	if (likely(!r->overwrite_mode))
+		return ringbuf_process_normal_ring(r, n);
+	else
+		return ringbuf_process_overwrite_ring(r, n);
 }
 
 /* Consume available ring buffer(s) data without event polling, up to n
