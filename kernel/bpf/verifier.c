@@ -6920,6 +6920,20 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 	if (size >= 8)
 		return;
 
+	if (tnum_is_const(reg->var_off)) {
+		s64 v = reg->var_off.value;
+		if (size == 1)      v = (s8)v;
+		else if (size == 2) v = (s16)v;
+		else                v = (s32)v;
+
+		reg->var_off      = tnum_const((u64)v);
+		reg->smin_value   = reg->smax_value   = v;
+		reg->umin_value   = reg->umax_value   = (u64)v;
+		reg->s32_min_value= reg->s32_max_value= (s32)v;
+		reg->u32_min_value= reg->u32_max_value= (u32)v;
+		return;
+	}
+
 	reg->var_off = tnum_scast(reg->var_off, size);
 
 	switch (size) {
@@ -6927,14 +6941,13 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 	case 2: smin = S16_MIN; smax = S16_MAX; break;
 	default: /* size == 4 */ smin = S32_MIN; smax = S32_MAX; break;
 	}
-
 	reg->smin_value    = smin;
 	reg->smax_value    = smax;
-	reg->s32_min_value = (s32)smin;
-	reg->s32_max_value = (s32)smax;
 
 	reg->umin_value = 0;
 	reg->umax_value = U64_MAX;
+	reg->s32_min_value = S32_MIN;
+	reg->s32_max_value = S32_MAX;
 	reg->u32_min_value = 0;
 	reg->u32_max_value = U32_MAX;
 
@@ -6943,25 +6956,42 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 
 static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
+	s32 s32_min, s32_max;
 	struct tnum v32;
+
+	if (tnum_is_const(reg->var_off)) {
+		s32 v = reg->var_off.value;
+		if (size == 1)      v = (s8)v;
+		else                v = (s16)v;
+
+		reg->var_off      = tnum_const((u32)v);
+		__update_reg_bounds(reg);
+		return;
+	}
 
 	v32 = tnum_subreg(reg->var_off);
 	v32 = tnum_scast(v32, size);
 	reg->var_off = tnum_subreg(v32);
 
-	reg->s32_min_value = S32_MIN;
-	reg->s32_max_value = S32_MAX;
-	reg->u32_min_value = 0;
-	reg->u32_max_value = U32_MAX;
-	__update_reg32_bounds(reg);
+	if (size == 1) {
+		s32_min = S8_MIN;
+		s32_max = S8_MAX;
+	} else {
+		s32_min = S16_MIN;
+		s32_max = S16_MAX;
+	}
+	reg->s32_min_value = s32_min;
+	reg->s32_max_value = s32_max;
 
 	reg->smin_value = S64_MIN;
 	reg->smax_value = S64_MAX;
 	reg->umin_value = 0;
 	reg->umax_value = U64_MAX;
-	__update_reg64_bounds(reg);
-}
+	reg->u32_min_value = 0;
+	reg->u32_max_value = U32_MAX;
 
+	__update_reg_bounds(reg);
+}
 
 static void set_sext32_default_val(struct bpf_reg_state *reg, int size)
 {
