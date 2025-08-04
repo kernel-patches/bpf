@@ -10593,8 +10593,10 @@ bpf_object__find_map_fd_by_name(const struct bpf_object *obj, const char *name)
 }
 
 static int validate_map_op(const struct bpf_map *map, size_t key_sz,
-			   size_t value_sz, bool check_value_sz)
+			   size_t value_sz, bool check_value_sz, __u64 flags)
 {
+	__u32 cpu;
+
 	if (!map_is_created(map)) /* map is not yet created */
 		return -ENOENT;
 
@@ -10611,6 +10613,20 @@ static int validate_map_op(const struct bpf_map *map, size_t key_sz,
 
 	if (!check_value_sz)
 		return 0;
+
+	if (flags & BPF_F_CPU) {
+		if (map->def.type != BPF_MAP_TYPE_PERCPU_ARRAY)
+			return -EINVAL;
+		cpu = flags >> 32;
+		if (cpu != BPF_ALL_CPUS && cpu >= libbpf_num_possible_cpus())
+			return -ERANGE;
+		if (map->def.value_size != value_sz) {
+			pr_warn("map '%s': unexpected value size %zu provided, expected %u\n",
+				map->name, value_sz, map->def.value_size);
+			return -EINVAL;
+		}
+		return 0;
+	}
 
 	switch (map->def.type) {
 	case BPF_MAP_TYPE_PERCPU_ARRAY:
@@ -10644,7 +10660,7 @@ int bpf_map__lookup_elem(const struct bpf_map *map,
 {
 	int err;
 
-	err = validate_map_op(map, key_sz, value_sz, true);
+	err = validate_map_op(map, key_sz, value_sz, true, flags);
 	if (err)
 		return libbpf_err(err);
 
@@ -10657,7 +10673,7 @@ int bpf_map__update_elem(const struct bpf_map *map,
 {
 	int err;
 
-	err = validate_map_op(map, key_sz, value_sz, true);
+	err = validate_map_op(map, key_sz, value_sz, true, flags);
 	if (err)
 		return libbpf_err(err);
 
@@ -10669,7 +10685,7 @@ int bpf_map__delete_elem(const struct bpf_map *map,
 {
 	int err;
 
-	err = validate_map_op(map, key_sz, 0, false /* check_value_sz */);
+	err = validate_map_op(map, key_sz, 0, false /* check_value_sz */, 0);
 	if (err)
 		return libbpf_err(err);
 
@@ -10682,7 +10698,7 @@ int bpf_map__lookup_and_delete_elem(const struct bpf_map *map,
 {
 	int err;
 
-	err = validate_map_op(map, key_sz, value_sz, true);
+	err = validate_map_op(map, key_sz, value_sz, true, 0);
 	if (err)
 		return libbpf_err(err);
 
@@ -10694,7 +10710,7 @@ int bpf_map__get_next_key(const struct bpf_map *map,
 {
 	int err;
 
-	err = validate_map_op(map, key_sz, 0, false /* check_value_sz */);
+	err = validate_map_op(map, key_sz, 0, false /* check_value_sz */, 0);
 	if (err)
 		return libbpf_err(err);
 

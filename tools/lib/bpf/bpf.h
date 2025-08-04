@@ -286,6 +286,11 @@ LIBBPF_API int bpf_map_lookup_and_delete_batch(int fd, void *in_batch,
  *    Update spin_lock-ed map elements. This must be
  *    specified if the map value contains a spinlock.
  *
+ * **BPF_F_CPU**
+ *    As for percpu map, the cpu info is embedded into the high 32 bits of
+ *    **opts->elem_flags**. Update value across all CPUs if cpu is (__u32)~0,
+ *    or on specified CPU otherwise.
+ *
  * @param fd BPF map file descriptor
  * @param keys pointer to an array of *count* keys
  * @param values pointer to an array of *count* values
