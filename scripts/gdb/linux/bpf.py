@@ -16,7 +16,7 @@ if constants.LX_CONFIG_BPF_SYSCALL:
 
 
 def get_ksym_name(ksym):
-    name = ksym["name"].bytes
+    name = bytes(ksym["name"].string(), 'utf-8')
     end = name.find(b"\x00")
     if end != -1:
         name = name[:end]
@@ -210,9 +210,10 @@ def generate_debug_obj(ksym, prog):
     name = get_ksym_name(ksym)
     # Avoid read_memory(); it throws bogus gdb.MemoryError in some contexts.
     start = ksym["start"]
+    length = int(ksym["end"]) - int(start)
     code = start.cast(gdb.lookup_type("unsigned char")
-                      .array(int(ksym["end"]) - int(start))
-                      .pointer()).dereference().bytes
+                      .array(length)
+                      .pointer()).dereference()
     linfo_iter = LInfoIter(prog)
 
     result = tempfile.NamedTemporaryFile(suffix=".o", mode="wb")
@@ -227,7 +228,8 @@ def generate_debug_obj(ksym, prog):
             src.write(".globl {}\n".format(name))
             src.write(".type {},@function\n".format(name))
             src.write("{}:\n".format(name))
-            for code_off, code_byte in enumerate(code):
+            for code_off in range(length):
+                code_byte = code[code_off]
                 if linfo_iter.get_code_off() == code_off:
                     fileno, file_name = linfo_iter.get_fileno()
                     if file_name is not None:
@@ -237,8 +239,8 @@ def generate_debug_obj(ksym, prog):
                     src.write(".loc {} {} {}\n".format(fileno, line, col))
                     src.write("0:\n")
                     linfo_iter.advance()
-                src.write(".byte {}\n".format(code_byte))
-            src.write(".size {},{}\n".format(name, len(code)))
+                src.write(".byte {}\n".format(hex(code_byte)))
+            src.write(".size {},{}\n".format(name, length))
             src.flush()
 
             try:
