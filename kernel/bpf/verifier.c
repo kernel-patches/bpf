@@ -6913,9 +6913,9 @@ static void set_sext64_default_val(struct bpf_reg_state *reg, int size)
 	reg->var_off = tnum_unknown;
 }
 
-/* 64-bit sign-cast of a smaller width (rX = (s8|s16|s32) rX). */
 static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
+	int bits = size * 8;
 	s64 smin, smax;
 
 	if (size >= 8)
@@ -6923,30 +6923,18 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 
 	reg->var_off = tnum_scast(reg->var_off, size);
 
-	switch (size) {
-	case 1:  smin = S8_MIN;   smax = S8_MAX;   break;
-	case 2:  smin = S16_MIN;  smax = S16_MAX;  break;
-	default:
-		 smin = S32_MIN;  smax = S32_MAX;  break;
-	}
+	smin = -(1LL << (bits - 1));
+	smax =  (1LL << (bits - 1)) - 1;
 
 	reg->smin_value    = smin;
 	reg->smax_value    = smax;
 	reg->s32_min_value = (s32)smin;
 	reg->s32_max_value = (s32)smax;
 
-	if (smax <= 0) {
-		reg->umin_value = (u64)smin;
-		reg->umax_value = (u64)smax;
-	} else if (smin >= 0) {
-		reg->umin_value = (u64)smin;
-		reg->umax_value = (u64)smax;
-	} else {
-		reg->umin_value = 0;
-		reg->umax_value = U64_MAX;
-	}
-	reg->u32_min_value = (u32)reg->umin_value;
-	reg->u32_max_value = (u32)reg->umax_value;
+	reg->umin_value = 0;
+	reg->umax_value = U64_MAX;
+	reg->u32_min_value = 0;
+	reg->u32_max_value = U32_MAX;
 
 	__update_reg_bounds(reg);
 }
@@ -6954,25 +6942,30 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
 	struct tnum v32;
+	u32 umax32;
+
+	if (size >= 4)
+		return;
 
 	v32 = tnum_subreg(reg->var_off);
 	v32 = tnum_scast(v32, size);
+
 	reg->var_off = tnum_subreg(v32);
 
-	reg->s32_min_value = S32_MIN;
-	reg->s32_max_value = S32_MAX;
-	reg->u32_min_value = 0;
-	reg->u32_max_value = U32_MAX;
-	__update_reg32_bounds(reg);
+	umax32 = (1U << (size * 8)) - 1;
 
-	reg->umin_value = reg->u32_min_value;
-	reg->umax_value = reg->u32_max_value;
-	reg->smin_value = (s64)reg->u32_min_value;
-	reg->smax_value = (s64)reg->u32_max_value;
+	reg->s32_min_value = 0;
+	reg->s32_max_value = (s32)umax32;
+	reg->u32_min_value = 0;
+	reg->u32_max_value = umax32;
+
+	reg->smin_value = 0;
+	reg->smax_value = (s64)umax32;
+	reg->umin_value = 0;
+	reg->umax_value = (u64)umax32;
 
 	__update_reg_bounds(reg);
 }
-
 
 static void set_sext32_default_val(struct bpf_reg_state *reg, int size)
 {
