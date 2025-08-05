@@ -2734,14 +2734,19 @@ kprobe_multi_link_prog_run(struct bpf_kprobe_multi_link *link,
 		goto out;
 	}
 
-	migrate_disable();
+	/*
+	 * bpf program should run under migration disabled, kprobe_multi_link_prog_run
+	 * called all the way from graph tracer, which disables preemption in
+	 * function_graph_enter_regs, so there is no need to use migrate_disable.
+	 * Accessing the above percpu data bpf_prog_active is also safe for the same
+	 * reason.
+	 */
 	rcu_read_lock();
 	regs = ftrace_partial_regs(fregs, bpf_kprobe_multi_pt_regs_ptr());
 	old_run_ctx = bpf_set_run_ctx(&run_ctx.session_ctx.run_ctx);
 	err = bpf_prog_run(link->link.prog, regs);
 	bpf_reset_run_ctx(old_run_ctx);
 	rcu_read_unlock();
-	migrate_enable();
 
  out:
 	__this_cpu_dec(bpf_prog_active);
