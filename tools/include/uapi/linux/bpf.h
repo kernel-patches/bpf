@@ -1372,6 +1372,12 @@ enum {
 	BPF_NOEXIST	= 1, /* create new element if it didn't exist */
 	BPF_EXIST	= 2, /* update existing element */
 	BPF_F_LOCK	= 4, /* spin_lock-ed map_lookup/map_update */
+	BPF_F_CPU	= 8, /* map_update for percpu_array */
+};
+
+enum {
+	/* indicate updating value across all CPUs for percpu maps. */
+	BPF_ALL_CPUS	= (__u32)~0,
 };
 
 /* flags for BPF_MAP_CREATE command */
