@@ -11344,6 +11344,13 @@ static bool can_elide_value_nullness(enum bpf_map_type type)
 	}
 }
 
+static bool is_valid_proto(const struct bpf_func_proto *fn)
+{
+	if (fn == &bpf_tail_call_proto)
+		return true;
+	return fn && fn->func;
+}
+
 static int get_helper_proto(struct bpf_verifier_env *env, int func_id,
 			    const struct bpf_func_proto **ptr)
 {
@@ -11354,7 +11361,7 @@ static int get_helper_proto(struct bpf_verifier_env *env, int func_id,
 		return -EINVAL;
 
 	*ptr = env->ops->get_func_proto(func_id, env->prog);
-	return *ptr ? 0 : -EINVAL;
+	return is_valid_proto(*ptr) ? 0 : -EINVAL;
 }
 
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
