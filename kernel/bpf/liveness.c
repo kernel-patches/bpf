@@ -199,6 +199,9 @@ static struct func_instance *__lookup_instance(struct bpf_verifier_env *env,
 	memcpy(&result->callchain, callchain, sizeof(*callchain));
 	result->insn_cnt = subprog_sz;
 	hash_add(liveness->func_instances, &result->hl_node, key);
+	env->num_liveness_allocs++;
+	env->total_liveness_mem += size;
+	env->total_liveness_mem += sizeof(*result->must_write_set) * subprog_sz;
 	return result;
 }
 
@@ -267,6 +270,8 @@ static struct per_frame_masks *alloc_frame_masks(struct bpf_verifier_env *env,
 		instance->frames[frame] = arr;
 		if (!arr)
 			return ERR_PTR(-ENOMEM);
+		env->num_liveness_allocs++;
+		env->total_liveness_mem += instance->insn_cnt * sizeof(*arr);
 	}
 	return get_frame_masks(instance, frame, insn_idx);
 }
