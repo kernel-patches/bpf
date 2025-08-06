@@ -8,6 +8,7 @@
 #include <linux/netdevice.h>
 #include <linux/filter.h>
 #include <linux/if_vlan.h>
+#include <linux/bitfield.h>
 #include <linux/bpf.h>
 #include <linux/memory.h>
 #include <linux/sort.h>
@@ -1388,16 +1389,67 @@ static int emit_atomic_ld_st_index(u8 **pprog, u32 atomic_op, u32 size,
 	return 0;
 }
 
+/*
+ * Metadata encoding for exception handling in JITed code.
+ *
+ * Format of `fixup` and `data` fields in `struct exception_table_entry`:
+ *
+ * Bit layout of `fixup` (32-bit):
+ *
+ * +-----------+--------+-----------+---------+----------+
+ * | 31        | 30-24  |   23-16   |   15-8  |    7-0   |
+ * |           |        |           |         |          |
+ * | ARENA_ACC | Unused | ARENA_REG | DST_REG | INSN_LEN |
+ * +-----------+--------+-----------+---------+----------+
+ *
+ * - INSN_LEN (8 bits): Length of faulting insn (max x86 insn = 15 bytes (fits in 8 bits)).
+ * - DST_REG  (8 bits): Offset of dst_reg from reg2pt_regs[] (max offset = 112 (fits in 8 bits)).
+ *                      This is set to DONT_CLEAR if the insn is a store.
+ * - ARENA_REG (8 bits): Offset of the register that is used to calculate the
+ *                       address for load/store when accessing the arena region.
+ * - ARENA_ACCESS (1 bit): This bit is set when the faulting instruction accessed the arena region.
+ *
+ * Bit layout of `data` (32-bit):
+ *
+ * +--------------+--------+--------------+
+ * |	31-16	  |  15-8  |     7-0      |
+ * |              |	   |              |
+ * | ARENA_OFFSET | Unused |  EX_TYPE_BPF |
+ * +--------------+--------+--------------+
+ *
+ * - ARENA_OFFSET (16 bits): Offset used to calculate the address for load/store when
+ *                           accessing the arena region.
+ */
+
 #define DONT_CLEAR 1
+#define FIXUP_OFFSET_MASK	GENMASK(7, 0)
+#define FIXUP_REG_MASK		GENMASK(15, 8)
+#define FIXUP_ARENA_REG_MASK	GENMASK(23, 16)
+#define FIXUP_ARENA_ACCESS	BIT(31)
+#define DATA_ARENA_OFFSET_MASK	GENMASK(31, 16)
 
 bool ex_handler_bpf(const struct exception_table_entry *x, struct pt_regs *regs)
 {
-	u32 reg = x->fixup >> 8;
+	u32 reg = FIELD_GET(FIXUP_REG_MASK, x->fixup);
+	off_t offset = FIELD_GET(FIXUP_OFFSET_MASK, x->fixup);
+	bool is_arena = !!(x->fixup & FIXUP_ARENA_ACCESS);
+	bool is_write = (reg == DONT_CLEAR);
+	unsigned long addr;
+	s16 arena_offset;
+	u32 arena_reg;
 
 	/* jump over faulting load and clear dest register */
 	if (reg != DONT_CLEAR)
 		*(unsigned long *)((void *)regs + reg) = 0;
-	regs->ip += x->fixup & 0xff;
+	regs->ip += offset;
+
+	if (is_arena) {
+		arena_reg = FIELD_GET(FIXUP_ARENA_REG_MASK, x->data);
+		arena_offset = FIELD_GET(DATA_ARENA_OFFSET_MASK, x->data);
+		addr = *(unsigned long *)((void *)regs + arena_reg) + arena_offset;
+		bpf_prog_report_arena_violation(is_write, addr);
+	}
+
 	return true;
 }
 
@@ -2070,6 +2122,9 @@ populate_extable:
 			{
 				struct exception_table_entry *ex;
 				u8 *_insn = image + proglen + (start_of_ldx - temp);
+				bool is_arena;
+				u32 fixup_reg;
+				u32 arena_reg;
 				s64 delta;
 
 				if (!bpf_prog->aux->extable)
@@ -2089,8 +2144,25 @@ populate_extable:
 
 				ex->data = EX_TYPE_BPF;
 
-				ex->fixup = (prog - start_of_ldx) |
-					((BPF_CLASS(insn->code) == BPF_LDX ? reg2pt_regs[dst_reg] : DONT_CLEAR) << 8);
+				is_arena = (BPF_MODE(insn->code) == BPF_PROBE_MEM32) ||
+					   (BPF_MODE(insn->code) == BPF_PROBE_ATOMIC);
+
+				fixup_reg = (BPF_CLASS(insn->code) == BPF_LDX) ?
+					    reg2pt_regs[dst_reg] : DONT_CLEAR;
+
+				ex->fixup = FIELD_PREP(FIXUP_OFFSET_MASK, prog - start_of_ldx) |
+					    FIELD_PREP(FIXUP_REG_MASK, fixup_reg);
+
+				if (is_arena) {
+					ex->fixup |= FIXUP_ARENA_ACCESS;
+					if (BPF_CLASS(insn->code) == BPF_LDX)
+						arena_reg = reg2pt_regs[src_reg];
+					else
+						arena_reg = reg2pt_regs[dst_reg];
+
+					ex->fixup |= FIELD_PREP(FIXUP_ARENA_REG_MASK, arena_reg);
+					ex->data |= FIELD_PREP(DATA_ARENA_OFFSET_MASK, insn->off);
+				}
 			}
 			break;
 

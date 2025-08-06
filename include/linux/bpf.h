@@ -3654,6 +3654,7 @@ int bpf_stream_stage_printk(struct bpf_stream_stage *ss, const char *fmt, ...);
 int bpf_stream_stage_commit(struct bpf_stream_stage *ss, struct bpf_prog *prog,
 			    enum bpf_stream_id stream_id);
 int bpf_stream_stage_dump_stack(struct bpf_stream_stage *ss);
+void bpf_prog_report_arena_violation(bool write, unsigned long addr);
 
 #define bpf_stream_printk(ss, ...) bpf_stream_stage_printk(&ss, __VA_ARGS__)
 #define bpf_stream_dump_stack(ss) bpf_stream_stage_dump_stack(&ss)
