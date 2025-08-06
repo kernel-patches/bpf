@@ -6,6 +6,7 @@
 #include <sys/syscall.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <asm/ptrace.h>
 #include <test_progs.h>
 #include <network_helpers.h>
 #include <bpf/btf.h>
