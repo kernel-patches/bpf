@@ -6920,9 +6920,18 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 
 	reg->var_off = tnum_scast(reg->var_off, size);
 
-	__mark_reg_unbounded(reg);
+	reg->smin_value = S64_MIN;
+	reg->smax_value = S64_MAX;
 
-	reg_bounds_sync(reg);
+	reg->umin_value = 0;
+	reg->umax_value = U64_MAX;
+
+	__update_reg64_bounds(reg);
+
+	reg->s32_min_value = (s32)smin_value;
+	reg->s32_max_value = (s32)smax_value;
+	reg->u32_min_value = (u32)reg->umin_value;
+	reg->u32_max_value = (u32)umax_value;
 }
 
 static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
