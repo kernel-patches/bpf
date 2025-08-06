@@ -6915,57 +6915,54 @@ static void set_sext64_default_val(struct bpf_reg_state *reg, int size)
 
 static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
-	int bits = size * 8;
-	s64 smin, smax;
-
 	if (size >= 8)
 		return;
 
 	reg->var_off = tnum_scast(reg->var_off, size);
 
-	smin = -(1LL << (bits - 1));
-	smax =  (1LL << (bits - 1)) - 1;
-
-	reg->smin_value    = smin;
-	reg->smax_value    = smax;
-	reg->s32_min_value = (s32)smin;
-	reg->s32_max_value = (s32)smax;
-
+	reg->smin_value = S64_MIN;
+	reg->smax_value = S64_MAX;
 	reg->umin_value = 0;
 	reg->umax_value = U64_MAX;
-	reg->u32_min_value = 0;
-	reg->u32_max_value = U32_MAX;
 
-	__update_reg_bounds(reg);
+	__update_reg64_bounds(reg);
+
+	reg->s32_min_value = (s32)reg->smin_value;
+	reg->s32_max_value = (s32)reg->smax_value;
+	reg->u32_min_value = (u32)reg->umin_value;
+	reg->u32_max_value = (u32)reg->umax_value;
 }
 
 static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
-	struct tnum v32;
-	u32 umax32;
+	u32 s = size * 8 - 1;
+	u32 sign_mask = 1U << s;
+	s32 smin_value, smax_value;
+	u32 umax_value;
 
 	if (size >= 4)
 		return;
 
-	v32 = tnum_subreg(reg->var_off);
-	v32 = tnum_scast(v32, size);
+	reg->var_off = tnum_scast(reg->var_off, size);
 
-	reg->var_off = tnum_subreg(v32);
+	if (reg->var_off.mask & sign_mask) {
+		smin_value = -(1 << s);
+		smax_value = (1 << s) - 1;
+	} else {
+		smin_value = (s32)(reg->var_off.value);
+		smax_value = (s32)(reg->var_off.value | reg->var_off.mask);
+	}
 
-	umax32 = (1U << (size * 8)) - 1;
+	reg->s32_min_value = smin_value;
+	reg->s32_max_value = smax_value;
 
-	reg->s32_min_value = 0;
-	reg->s32_max_value = (s32)umax32;
-	reg->u32_min_value = 0;
-	reg->u32_max_value = umax32;
+	reg->u32_min_value = reg->var_off.value;
+	umax_value = reg->var_off.value | reg->var_off.mask;
+	reg->u32_max_value = umax_value;
 
-	reg->smin_value = 0;
-	reg->smax_value = (s64)umax32;
-	reg->umin_value = 0;
-	reg->umax_value = (u64)umax32;
-
-	__update_reg_bounds(reg);
+	reg->var_off = tnum_subreg(reg->var_off);
 }
+
 
 static void set_sext32_default_val(struct bpf_reg_state *reg, int size)
 {
