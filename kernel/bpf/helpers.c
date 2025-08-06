@@ -25,6 +25,8 @@
 #include <linux/kasan.h>
 #include <linux/bpf_verifier.h>
 #include <linux/uaccess.h>
+#include <linux/task_work.h>
+#include <linux/irq_work.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -3702,6 +3704,160 @@ __bpf_kfunc int bpf_strstr(const char *s1__ign, const char *s2__ign)
 
 typedef void (*bpf_task_work_callback_t)(struct bpf_map *, void *, void *);
 
+enum bpf_task_work_state {
+	/* bpf_task_work is ready to be used */
+	BPF_TW_STANDBY = 0,
+	/* bpf_task_work is getting scheduled into irq_work */
+	BPF_TW_PENDING,
+	/* bpf_task_work is in irq_work and getting scheduled into task_work */
+	BPF_TW_SCHEDULING,
+	/* bpf_task_work is scheduled into task_work successfully */
+	BPF_TW_SCHEDULED,
+	/* callback is running */
+	BPF_TW_RUNNING,
+	/* BPF map value storing this bpf_task_work is deleted */
+	BPF_TW_FREED,
+};
+
+struct bpf_task_work_context {
+	/* map that contains this structure in a value */
+	struct bpf_map *map;
+	/* bpf_task_work_state value, representing the state */
+	atomic_t state;
+	/* bpf_prog that schedules task work */
+	struct bpf_prog *prog;
+	/* task for which callback is scheduled */
+	struct task_struct *task;
+	/* notification mode for task work scheduling */
+	enum task_work_notify_mode mode;
+	/* callback to call from task work */
+	bpf_task_work_callback_t callback_fn;
+	struct callback_head work;
+	struct irq_work irq_work;
+} __aligned(8);
+
+static bool task_work_match(struct callback_head *head, void *data)
+{
+	struct bpf_task_work_context *ctx = container_of(head, struct bpf_task_work_context, work);
+
+	return ctx == data;
+}
+
+static void bpf_reset_task_work_context(struct bpf_task_work_context *ctx)
+{
+	bpf_prog_put(ctx->prog);
+	bpf_task_release(ctx->task);
+	rcu_assign_pointer(ctx->map, NULL);
+}
+
+static void bpf_task_work_callback(struct callback_head *cb)
+{
+	enum bpf_task_work_state state;
+	struct bpf_task_work_context *ctx;
+	struct bpf_map *map;
+	u32 idx;
+	void *key;
+	void *value;
+
+	rcu_read_lock_trace();
+	ctx = container_of(cb, struct bpf_task_work_context, work);
+
+	state = atomic_cmpxchg_acquire(&ctx->state, BPF_TW_SCHEDULING, BPF_TW_RUNNING);
+	if (state == BPF_TW_SCHEDULED)
+		state = atomic_cmpxchg_acquire(&ctx->state, BPF_TW_SCHEDULED, BPF_TW_RUNNING);
+	if (state == BPF_TW_FREED)
+		goto out;
+
+	map = rcu_dereference(ctx->map);
+	if (!map)
+		goto out;
+
+	value = (void *)ctx - map->record->task_work_off;
+	key = (void *)map_key_from_value(map, value, &idx);
+
+	migrate_disable();
+	ctx->callback_fn(map, key, value);
+	migrate_enable();
+
+	/* State is running or freed, either way reset. */
+	bpf_reset_task_work_context(ctx);
+	atomic_cmpxchg_release(&ctx->state, BPF_TW_RUNNING, BPF_TW_STANDBY);
+out:
+	rcu_read_unlock_trace();
+}
+
+static void bpf_task_work_irq(struct irq_work *irq_work)
+{
+	struct bpf_task_work_context *ctx;
+	enum bpf_task_work_state state;
+	int err;
+
+	ctx = container_of(irq_work, struct bpf_task_work_context, irq_work);
+
+	rcu_read_lock_trace();
+	state = atomic_cmpxchg_release(&ctx->state, BPF_TW_PENDING, BPF_TW_SCHEDULING);
+	if (state == BPF_TW_FREED) {
+		bpf_reset_task_work_context(ctx);
+		goto out;
+	}
+
+	err = task_work_add(ctx->task, &ctx->work, ctx->mode);
+	if (err) {
+		state = atomic_cmpxchg_acquire(&ctx->state, BPF_TW_SCHEDULING, BPF_TW_PENDING);
+		if (state == BPF_TW_SCHEDULING) {
+			bpf_reset_task_work_context(ctx);
+			atomic_cmpxchg_release(&ctx->state, BPF_TW_PENDING, BPF_TW_STANDBY);
+		}
+		goto out;
+	}
+	state = atomic_cmpxchg_release(&ctx->state, BPF_TW_SCHEDULING, BPF_TW_SCHEDULED);
+	if (state == BPF_TW_FREED)
+		task_work_cancel_match(ctx->task, task_work_match, ctx);
+out:
+	rcu_read_unlock_trace();
+}
+
+static int bpf_task_work_schedule(struct task_struct *task, struct bpf_task_work_context *ctx,
+				  struct bpf_map *map, bpf_task_work_callback_t callback_fn,
+				  struct bpf_prog_aux *aux, enum task_work_notify_mode mode)
+{
+	struct bpf_prog *prog;
+
+	BTF_TYPE_EMIT(struct bpf_task_work);
+
+	prog = bpf_prog_inc_not_zero(aux->prog);
+	if (IS_ERR(prog))
+		return -EPERM;
+
+	if (!atomic64_read(&map->usercnt)) {
+		bpf_prog_put(prog);
+		return -EPERM;
+	}
+	task = bpf_task_acquire(task);
+	if (!task) {
+		bpf_prog_put(prog);
+		return -EPERM;
+	}
+
+	if (atomic_cmpxchg_acquire(&ctx->state, BPF_TW_STANDBY, BPF_TW_PENDING) != BPF_TW_STANDBY) {
+		bpf_task_release(task);
+		bpf_prog_put(prog);
+		return -EBUSY;
+	}
+
+	ctx->task = task;
+	ctx->callback_fn = callback_fn;
+	ctx->prog = prog;
+	ctx->mode = mode;
+	init_irq_work(&ctx->irq_work, bpf_task_work_irq);
+	init_task_work(&ctx->work, bpf_task_work_callback);
+	rcu_assign_pointer(ctx->map, map);
+
+	irq_work_queue(&ctx->irq_work);
+
+	return 0;
+}
+
 /**
  * bpf_task_work_schedule_signal - Schedule BPF callback using task_work_add with TWA_SIGNAL mode
  * @task: Task struct for which callback should be scheduled
@@ -3718,7 +3874,8 @@ __bpf_kfunc int bpf_task_work_schedule_signal(struct task_struct *task,
 					      bpf_task_work_callback_t callback,
 					      void *aux__prog)
 {
-	return 0;
+	return bpf_task_work_schedule(task, (struct bpf_task_work_context *)tw, map__map,
+				      callback, aux__prog, TWA_SIGNAL);
 }
 
 /**
@@ -3738,13 +3895,38 @@ __bpf_kfunc int bpf_task_work_schedule_resume(struct task_struct *task,
 					      bpf_task_work_callback_t callback,
 					      void *aux__prog)
 {
-	return 0;
+	enum task_work_notify_mode mode;
+
+	mode = task == current && in_nmi() ? TWA_NMI_CURRENT : TWA_RESUME;
+	return bpf_task_work_schedule(task, (struct bpf_task_work_context *)tw, map__map,
+				      callback, aux__prog, mode);
 }
 
 __bpf_kfunc_end_defs();
 
 void bpf_task_work_cancel_and_free(void *val)
 {
+	struct bpf_task_work_context *ctx = val;
+	enum bpf_task_work_state state;
+
+	state = atomic_xchg(&ctx->state, BPF_TW_FREED);
+	switch (state) {
+	case BPF_TW_SCHEDULED:
+		task_work_cancel_match(ctx->task, task_work_match, ctx);
+		fallthrough;
+	/* Scheduling codepath is trying to schedule task work, reset context here. */
+	case BPF_TW_SCHEDULING:
+		bpf_reset_task_work_context(ctx);
+		break;
+	/* work is not initialized, mark as freed and exit */
+	case BPF_TW_STANDBY:
+	/* The context is in interim state, scheduling logic should cleanup. */
+	case BPF_TW_PENDING:
+	/* Callback is already running, it should reset context upon finishing. */
+	case BPF_TW_RUNNING:
+	default:
+		break;
+	}
 }
 
 BTF_KFUNCS_START(generic_btf_ids)
@@ -3770,6 +3952,8 @@ BTF_ID_FLAGS(func, bpf_rbtree_first, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_rbtree_root, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_rbtree_left, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_rbtree_right, KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_task_work_schedule_signal, KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_task_work_schedule_resume, KF_TRUSTED_ARGS)
 
 #ifdef CONFIG_CGROUPS
 BTF_ID_FLAGS(func, bpf_cgroup_acquire, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
