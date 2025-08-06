@@ -29,11 +29,32 @@ static bool bpf_verifier_log_attr_valid(const struct bpf_verifier_log *log)
 }
 
 int bpf_vlog_init(struct bpf_verifier_log *log, u32 log_level,
-		  char __user *log_buf, u32 log_size)
+		  char __user *log_buf, u32 log_size, const struct bpf_common_attr *common_attrs)
 {
+	u32 log_true_size;
+	int err;
+
 	log->level = log_level;
 	log->ubuf = log_buf;
 	log->len_total = log_size;
+
+	if (log_buf && common_attrs && common_attrs->log_buf &&
+	    ((u64) log_buf != common_attrs->log_buf || log_level != common_attrs->log_level ||
+	     log_size != common_attrs->log_size)) {
+		if (!bpf_verifier_log_attr_valid(log))
+			return -EINVAL;
+		bpf_log(log, "Conflict log configs between bpf_attr and common_attr.\n");
+		err = bpf_vlog_finalize(log, &log_true_size);
+		if (err)
+			return err;
+		return -EINVAL;
+	}
+
+	if (!log_buf && common_attrs && common_attrs->log_buf) {
+		log->level = common_attrs->log_level;
+		log->ubuf = u64_to_user_ptr(common_attrs->log_buf);
+		log->len_total = common_attrs->log_size;
+	}
 
 	/* log attributes have to be sane */
 	if (!bpf_verifier_log_attr_valid(log))
