@@ -6918,6 +6918,23 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 	if (size >= 8)
 		return;
 
+	if (tnum_is_const(reg->var_off)) {
+		u64_cval = reg->var_off.value;
+		if (size == 1)
+			reg->var_off = tnum_const((s8)u64_cval);
+		else if (size == 2)
+			reg->var_off = tnum_const((s16)u64_cval);
+		else
+			reg->var_off = tnum_const((s32)u64_cval);
+
+		u64_cval = reg->var_off.value;
+		reg->smax_value = reg->smin_value = u64_cval;
+		reg->umax_value = reg->umin_value = u64_cval;
+		reg->s32_max_value = reg->s32_min_value = u64_cval;
+		reg->u32_max_value = reg->u32_min_value = u64_cval;
+		return;
+	}
+
 	reg->var_off = tnum_scast(reg->var_off, size);
 
 	set_sext64_default_val(reg, size);
