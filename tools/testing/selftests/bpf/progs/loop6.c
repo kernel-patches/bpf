@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-#include <linux/ptrace.h>
-#include <stddef.h>
-#include <linux/bpf.h>
+#include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include "bpf_misc.h"
@@ -25,12 +23,6 @@ char _license[] SEC("license") = "GPL";
 
 #define SG_CHAIN	0x01UL
 #define SG_END		0x02UL
-
-struct scatterlist {
-	unsigned long   page_link;
-	unsigned int    offset;
-	unsigned int    length;
-};
 
 #define sg_is_chain(sg)		((sg)->page_link & SG_CHAIN)
 #define sg_is_last(sg)		((sg)->page_link & SG_END)
