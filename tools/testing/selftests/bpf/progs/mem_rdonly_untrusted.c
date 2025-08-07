@@ -218,7 +218,7 @@ int null_check(void *ctx)
 	int *p;
 
 	p = bpf_rdonly_cast(0, 0);
-	if (p == 0)
+	if (!p)
 		/* make this a function call to avoid compiler
 		 * moving r0 assignment before check.
 		 */
