@@ -21,10 +21,7 @@
 
 static int get_next_cpu(int cpu)
 {
-	cpu = cpumask_next(cpu, cpu_possible_mask);
-	if (cpu >= nr_cpu_ids)
-		cpu = cpumask_first(cpu_possible_mask);
-	return cpu;
+	return cpumask_next_wrap(cpu, cpu_possible_mask);
 }
 
 /* Local list helpers */
