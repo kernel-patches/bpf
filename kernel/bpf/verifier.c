@@ -6915,6 +6915,8 @@ static void set_sext64_default_val(struct bpf_reg_state *reg, int size)
 
 static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
+	s64 u64_cval;
+
 	if (size >= 8)
 		return;
 
