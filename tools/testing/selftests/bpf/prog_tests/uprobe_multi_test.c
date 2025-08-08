@@ -1437,10 +1437,52 @@ cleanup:
 	uprobe_multi__destroy(skel);
 }
 
+static unsigned long uprobe_regs_change_ip_1(void)
+{
+	return 0xc0ffee;
+}
+
+static unsigned long uprobe_regs_change_ip_2(void)
+{
+	return 0xdeadbeef;
+}
+
+static void unique_regs_ip(void)
+{
+	LIBBPF_OPTS(bpf_uprobe_multi_opts, opts,
+		.unique = true,
+	);
+	struct uprobe_multi *skel;
+	int ret;
+
+	skel = uprobe_multi__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open"))
+		return;
+
+	skel->bss->pid = getpid();
+	skel->bss->ip = (unsigned long) uprobe_regs_change_ip_2;
+
+	skel->links.uprobe_change_ip = bpf_program__attach_uprobe_multi(
+						skel->progs.uprobe_change_ip,
+						-1, "/proc/self/exe",
+						"uprobe_regs_change_ip_1",
+						&opts);
+	if (!ASSERT_OK_PTR(skel->links.uprobe_change_ip, "bpf_program__attach_uprobe_multi"))
+		goto cleanup;
+
+	ret = uprobe_regs_change_ip_1();
+	ASSERT_EQ(ret, 0xdeadbeef, "ret");
+
+cleanup:
+	uprobe_multi__destroy(skel);
+}
+
 static void test_unique(void)
 {
 	if (test__start_subtest("unique_regs_common"))
 		unique_regs_common();
+	if (test__start_subtest("unique_regs_ip"))
+		unique_regs_ip();
 }
 #else
 static void test_unique(void) { }
