@@ -3709,4 +3709,32 @@ int bpf_prog_get_file_line(struct bpf_prog *prog, unsigned long ip, const char *
 			   const char **linep, int *nump);
 struct bpf_prog *bpf_prog_find_from_stack(void);
 
+static inline int bpf_map_check_op_flags(struct bpf_map *map, u64 flags, u64 extra_flags_mask)
+{
+	if (extra_flags_mask && (flags & extra_flags_mask))
+		return -EINVAL;
+
+	if ((flags & BPF_F_LOCK) && !btf_record_has_field(map->record, BPF_SPIN_LOCK))
+		return -EINVAL;
+
+	return 0;
+}
+
+static inline int bpf_map_check_update_flags(struct bpf_map *map, u64 flags)
+{
+	return bpf_map_check_op_flags(map, flags, 0);
+}
+
+#define BPF_MAP_LOOKUP_ELEM_EXTRA_FLAGS_MASK (~BPF_F_LOCK)
+
+static inline int bpf_map_check_lookup_flags(struct bpf_map *map, u64 flags)
+{
+	return bpf_map_check_op_flags(map, flags, BPF_MAP_LOOKUP_ELEM_EXTRA_FLAGS_MASK);
+}
+
+static inline int bpf_map_check_batch_flags(struct bpf_map *map, u64 flags)
+{
+	return bpf_map_check_op_flags(map, flags, BPF_MAP_LOOKUP_ELEM_EXTRA_FLAGS_MASK);
+}
+
 #endif /* _LINUX_BPF_H */
