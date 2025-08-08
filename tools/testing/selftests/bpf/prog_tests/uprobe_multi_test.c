@@ -14,6 +14,7 @@
 #include "uprobe_multi_session_cookie.skel.h"
 #include "uprobe_multi_session_recursive.skel.h"
 #include "uprobe_multi_verifier.skel.h"
+#include "uprobe_multi_unique.skel.h"
 #include "bpf/libbpf_internal.h"
 #include "testing_helpers.h"
 #include "../sdt.h"
@@ -1477,12 +1478,110 @@ cleanup:
 	uprobe_multi__destroy(skel);
 }
 
+static void unique_attach(void)
+{
+	LIBBPF_OPTS(bpf_uprobe_multi_opts, opts,
+		.unique = true,
+	);
+	struct bpf_link *link_1, *link_2 = NULL;
+	struct bpf_program *prog_1, *prog_2;
+	struct uprobe_multi_unique *skel;
+
+	skel = uprobe_multi_unique__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_multi_unique__open_and_load"))
+		return;
+
+	skel->bss->my_pid = getpid();
+
+	prog_1 = skel->progs.test1;
+	prog_2 = skel->progs.test2;
+
+	/* not-unique and unique */
+	link_1 = bpf_program__attach_uprobe_multi(prog_1, -1, "/proc/self/exe",
+					"uprobe_multi_func_1",
+					NULL);
+	if (!ASSERT_OK_PTR(link_1, "bpf_program__attach_uprobe_multi"))
+		goto cleanup;
+
+	link_2 = bpf_program__attach_uprobe_multi(prog_2, -1, "/proc/self/exe",
+					"uprobe_multi_func_1",
+					&opts);
+	if (!ASSERT_ERR_PTR(link_2, "bpf_program__attach_uprobe_multi")) {
+		bpf_link__destroy(link_2);
+		goto cleanup;
+	}
+
+	bpf_link__destroy(link_1);
+
+	/* unique and unique */
+	link_1 = bpf_program__attach_uprobe_multi(prog_1, -1, "/proc/self/exe",
+					"uprobe_multi_func_1",
+					&opts);
+	if (!ASSERT_OK_PTR(link_1, "bpf_program__attach_uprobe_multi"))
+		goto cleanup;
+
+	link_2 = bpf_program__attach_uprobe_multi(prog_2, -1, "/proc/self/exe",
+					"uprobe_multi_func_1",
+					&opts);
+	if (!ASSERT_ERR_PTR(link_2, "bpf_program__attach_uprobe_multi")) {
+		bpf_link__destroy(link_2);
+		goto cleanup;
+	}
+
+	bpf_link__destroy(link_1);
+
+	/* unique and not-unique */
+	link_1 = bpf_program__attach_uprobe_multi(prog_1, -1, "/proc/self/exe",
+					"uprobe_multi_func_1",
+					&opts);
+	if (!ASSERT_OK_PTR(link_1, "bpf_program__attach_uprobe_multi"))
+		goto cleanup;
+
+	link_2 = bpf_program__attach_uprobe_multi(prog_2, -1, "/proc/self/exe",
+					"uprobe_multi_func_1",
+					NULL);
+	if (!ASSERT_ERR_PTR(link_2, "bpf_program__attach_uprobe_multi")) {
+		bpf_link__destroy(link_2);
+		goto cleanup;
+	}
+
+	bpf_link__destroy(link_1);
+
+	/* not-unique and not-unique */
+	link_1 = bpf_program__attach_uprobe_multi(prog_1, -1, "/proc/self/exe",
+					"uprobe_multi_func_1",
+					NULL);
+	if (!ASSERT_OK_PTR(link_1, "bpf_program__attach_uprobe_multi"))
+		goto cleanup;
+
+	link_2 = bpf_program__attach_uprobe_multi(prog_2, -1, "/proc/self/exe",
+					"uprobe_multi_func_1",
+					NULL);
+	if (!ASSERT_OK_PTR(link_2, "bpf_program__attach_uprobe_multi")) {
+		bpf_link__destroy(link_1);
+		goto cleanup;
+	}
+
+	uprobe_multi_func_1();
+
+	ASSERT_EQ(skel->bss->test1_result, 1, "test1_result");
+	ASSERT_EQ(skel->bss->test2_result, 1, "test2_result");
+
+	bpf_link__destroy(link_1);
+	bpf_link__destroy(link_2);
+
+cleanup:
+	uprobe_multi_unique__destroy(skel);
+}
+
 static void test_unique(void)
 {
 	if (test__start_subtest("unique_regs_common"))
 		unique_regs_common();
 	if (test__start_subtest("unique_regs_ip"))
 		unique_regs_ip();
+	if (test__start_subtest("unique_attach"))
+		unique_attach();
 }
 #else
 static void test_unique(void) { }
