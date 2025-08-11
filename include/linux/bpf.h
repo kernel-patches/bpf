@@ -3733,12 +3733,13 @@ static inline int bpf_map_check_cpu_flags(u64 flags, bool check_all_cpus)
 	return 0;
 }
 
-static inline bool bpf_map_support_cpu_flags(enum bpf_map_type map_type)
+static inline bool bpf_map_is_percpu(enum bpf_map_type map_type)
 {
 	switch (map_type) {
 	case BPF_MAP_TYPE_PERCPU_ARRAY:
 	case BPF_MAP_TYPE_PERCPU_HASH:
 	case BPF_MAP_TYPE_LRU_PERCPU_HASH:
+	case BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE:
 		return true;
 	default:
 		return false;
@@ -3756,7 +3757,7 @@ static inline int bpf_map_check_flags(struct bpf_map *map, u64 flags, bool check
 	if (!(flags & BPF_F_CPU) && flags >> 32)
 		return -EINVAL;
 
-	if ((flags & (BPF_F_CPU | BPF_F_ALL_CPUS)) && !bpf_map_support_cpu_flags(map->map_type))
+	if ((flags & (BPF_F_CPU | BPF_F_ALL_CPUS)) && !bpf_map_is_percpu(map->map_type))
 		return -EINVAL;
 
 	return 0;
