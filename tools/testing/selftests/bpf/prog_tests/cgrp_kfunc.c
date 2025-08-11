@@ -4,6 +4,7 @@
 #define _GNU_SOURCE
 #include <cgroup_helpers.h>
 #include <test_progs.h>
+#include <sched.h>
 
 #include "cgrp_kfunc_failure.skel.h"
 #include "cgrp_kfunc_success.skel.h"
@@ -87,6 +88,50 @@ static const char * const success_tests[] = {
 	"test_cgrp_from_id",
 };
 
+static void test_cgrp_from_id_ns(void)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, opts);
+	struct cgrp_kfunc_success *skel;
+	struct bpf_program *prog;
+	int fd, ret;
+
+	skel = open_load_cgrp_kfunc_skel();
+	if (!ASSERT_OK_PTR(skel, "open_load_skel"))
+		return;
+
+	if (!ASSERT_OK(skel->bss->err, "pre_mkdir_err"))
+		goto cleanup;
+
+	prog = bpf_object__find_program_by_name(skel->obj, "test_cgrp_from_id_ns");
+	if (!ASSERT_OK_PTR(prog, "bpf_object__find_program_by_name"))
+		goto cleanup;
+
+	fd = create_and_get_cgroup("cgrp_from_id_ns");
+	if (!ASSERT_GE(fd, 0, "cgrp_fd"))
+		goto cleanup;
+
+	if (!ASSERT_OK(join_cgroup("cgrp_from_id_ns"), "join cgrp"))
+		goto fd_cleanup;
+
+	if (!ASSERT_OK(unshare(CLONE_NEWCGROUP), "unshare cgns"))
+		goto fd_cleanup;
+
+	ret = bpf_prog_test_run_opts(bpf_program__fd(prog), &opts);
+	if (!ASSERT_OK(ret, "test run ret"))
+		goto fd_cleanup;
+
+	if (!ASSERT_OK(opts.retval, "test run retval"))
+		goto fd_cleanup;
+
+	remove_cgroup("cgrp_from_id_ns");
+
+fd_cleanup:
+	close(fd);
+cleanup:
+	cgrp_kfunc_success__destroy(skel);
+
+}
+
 void test_cgrp_kfunc(void)
 {
 	int i, err;
@@ -101,6 +146,9 @@ void test_cgrp_kfunc(void)
 
 		run_success_test(success_tests[i]);
 	}
+
+	if (test__start_subtest("test_cgrp_from_id_ns"))
+		test_cgrp_from_id_ns();
 
 	RUN_TESTS(cgrp_kfunc_failure);
 
