@@ -133,14 +133,9 @@ bool bpf_map_write_active(const struct bpf_map *map)
 
 static u32 bpf_map_value_size(const struct bpf_map *map, u64 flags)
 {
-	if (bpf_map_support_cpu_flags(map->map_type) &&
-	    (flags & (BPF_F_CPU | BPF_F_ALL_CPUS)))
-		return round_up(map->value_size, 8);
-	else if (map->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
-	    map->map_type == BPF_MAP_TYPE_LRU_PERCPU_HASH ||
-	    map->map_type == BPF_MAP_TYPE_PERCPU_ARRAY ||
-	    map->map_type == BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE)
-		return round_up(map->value_size, 8) * num_possible_cpus();
+	if (bpf_map_is_percpu(map->map_type))
+		return flags & (BPF_F_CPU | BPF_F_ALL_CPUS) ? round_up(map->value_size, 8) :
+			round_up(map->value_size, 8) * num_possible_cpus();
 	else if (IS_FD_MAP(map))
 		return sizeof(u32);
 	else
@@ -319,7 +314,7 @@ static int bpf_map_copy_value(struct bpf_map *map, void *key, void *value,
 	} else if (map->map_type == BPF_MAP_TYPE_PERCPU_ARRAY) {
 		err = bpf_percpu_array_copy(map, key, value, flags);
 	} else if (map->map_type == BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE) {
-		err = bpf_percpu_cgroup_storage_copy(map, key, value);
+		err = bpf_percpu_cgroup_storage_copy(map, key, value, flags);
 	} else if (map->map_type == BPF_MAP_TYPE_STACK_TRACE) {
 		err = bpf_stackmap_copy(map, key, value);
 	} else if (IS_FD_ARRAY(map) || IS_FD_PROG_ARRAY(map)) {
