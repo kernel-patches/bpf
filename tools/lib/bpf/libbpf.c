@@ -5081,6 +5081,7 @@ static bool map_is_reuse_compat(const struct bpf_map *map, int map_fd)
 {
 	struct bpf_map_info map_info;
 	__u32 map_info_len = sizeof(map_info);
+	__u32 map_flags_for_check = map->def.map_flags;
 	int err;
 
 	memset(&map_info, 0, map_info_len);
@@ -5093,11 +5094,20 @@ static bool map_is_reuse_compat(const struct bpf_map *map, int map_fd)
 		return false;
 	}
 
+	/* get_map_info on a DEVMAP will always return flags with
+	 * BPF_F_RDONLY_PROG set, but it will never be set on a map
+	 * being created.
+	 * Thus, match the BPF_F_RDONLY_PROG flag being set on the new
+	 * map when checking for compatibility with an existing DEVMAP
+	 */
+	if (map->def.type == BPF_MAP_TYPE_DEVMAP || map->def.type == BPF_MAP_TYPE_DEVMAP_HASH)
+		map_flags_for_check |= BPF_F_RDONLY_PROG;
+
 	return (map_info.type == map->def.type &&
 		map_info.key_size == map->def.key_size &&
 		map_info.value_size == map->def.value_size &&
 		map_info.max_entries == map->def.max_entries &&
-		map_info.map_flags == map->def.map_flags &&
+		map_info.map_flags == map_flags_for_check &&
 		map_info.map_extra == map->map_extra);
 }
 
