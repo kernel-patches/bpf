@@ -4,6 +4,7 @@
 #define _GNU_SOURCE
 #include <cgroup_helpers.h>
 #include <test_progs.h>
+#include <sched.h>
 
 #include "cgrp_kfunc_failure.skel.h"
 #include "cgrp_kfunc_success.skel.h"
@@ -87,6 +88,78 @@ static const char * const success_tests[] = {
 	"test_cgrp_from_id",
 };
 
+static void test_cgrp_from_id_ns(void)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, opts);
+	struct cgrp_kfunc_success *skel;
+	struct bpf_program *prog;
+	int fd, pid, pipe_fd[2];
+
+	skel = open_load_cgrp_kfunc_skel();
+	if (!ASSERT_OK_PTR(skel, "open_load_skel"))
+		return;
+
+	if (!ASSERT_OK(skel->bss->err, "pre_mkdir_err"))
+		goto cleanup;
+
+	prog = bpf_object__find_program_by_name(skel->obj, "test_cgrp_from_id_ns");
+	if (!ASSERT_OK_PTR(prog, "bpf_object__find_program_by_name"))
+		goto cleanup;
+
+	if (!ASSERT_OK(pipe(pipe_fd), "pipe"))
+		goto cleanup;
+
+	pid = fork();
+	if (!ASSERT_GE(pid, 0, "fork result"))
+		goto pipe_cleanup;
+
+	if (pid == 0) {
+		int ret = 1;
+
+		close(pipe_fd[0]);
+		fd = create_and_get_cgroup("cgrp_from_id_ns");
+		if (!ASSERT_GE(fd, 0, "cgrp_fd"))
+			_exit(1);
+
+		if (!ASSERT_OK(join_cgroup("cgrp_from_id_ns"), "join cgrp"))
+			goto fail;
+
+		if (!ASSERT_OK(unshare(CLONE_NEWCGROUP), "unshare cgns"))
+			goto fail;
+
+		ret = bpf_prog_test_run_opts(bpf_program__fd(prog), &opts);
+		if (!ASSERT_OK(ret, "test run ret"))
+			goto fail;
+
+		remove_cgroup("cgrp_from_id_ns");
+
+		if (!ASSERT_OK(opts.retval, "test run retval"))
+			_exit(1);
+		ret = 0;
+		close(fd);
+		if (!ASSERT_EQ(write(pipe_fd[1], &ret, sizeof(ret)), sizeof(ret), "write pipe"))
+			_exit(1);
+
+		_exit(0);
+fail:
+		remove_cgroup("cgrp_from_id_ns");
+		_exit(1);
+	} else {
+		int res;
+
+		close(pipe_fd[1]);
+		if (!ASSERT_EQ(read(pipe_fd[0], &res, sizeof(res)), sizeof(res), "read res"))
+			goto pipe_cleanup;
+		if (!ASSERT_OK(res, "result from run"))
+			goto pipe_cleanup;
+	}
+
+pipe_cleanup:
+	close(pipe_fd[1]);
+cleanup:
+	cgrp_kfunc_success__destroy(skel);
+}
+
 void test_cgrp_kfunc(void)
 {
 	int i, err;
@@ -101,6 +174,9 @@ void test_cgrp_kfunc(void)
 
 		run_success_test(success_tests[i]);
 	}
+
+	if (test__start_subtest("test_cgrp_from_id_ns"))
+		test_cgrp_from_id_ns();
 
 	RUN_TESTS(cgrp_kfunc_failure);
 
