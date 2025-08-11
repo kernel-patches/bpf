@@ -6345,10 +6345,11 @@ void cgroup_path_from_kernfs_id(u64 id, char *buf, size_t buflen)
 /*
  * cgroup_get_from_id : get the cgroup associated with cgroup id
  * @id: cgroup id
+ * @root_cgns: Select root cgroup namespace instead of current's.
  * On success return the cgrp or ERR_PTR on failure
  * Only cgroups within current task's cgroup NS are valid.
  */
-struct cgroup *cgroup_get_from_id(u64 id)
+struct cgroup *cgroup_get_from_id(u64 id, bool root_cgns)
 {
 	struct kernfs_node *kn;
 	struct cgroup *cgrp, *root_cgrp;
@@ -6373,6 +6374,10 @@ struct cgroup *cgroup_get_from_id(u64 id)
 
 	if (!cgrp)
 		return ERR_PTR(-ENOENT);
+
+	/* We don't need to namespace this operation against current. */
+	if (root_cgns)
+		return cgrp;
 
 	root_cgrp = current_cgns_cgroup_dfl();
 	if (!cgroup_is_descendant(cgrp, root_cgrp)) {

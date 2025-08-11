@@ -3626,7 +3626,7 @@ struct mem_cgroup *mem_cgroup_get_from_ino(unsigned long ino)
 	struct cgroup_subsys_state *css;
 	struct mem_cgroup *memcg;
 
-	cgrp = cgroup_get_from_id(ino);
+	cgrp = cgroup_get_from_id(ino, false);
 	if (IS_ERR(cgrp))
 		return ERR_CAST(cgrp);
 
