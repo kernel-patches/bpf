@@ -2691,7 +2691,7 @@ int map_set_for_each_callback_args(struct bpf_verifier_env *env,
 				   struct bpf_func_state *caller,
 				   struct bpf_func_state *callee);
 
-int bpf_percpu_hash_copy(struct bpf_map *map, void *key, void *value);
+int bpf_percpu_hash_copy(struct bpf_map *map, void *key, void *value, u64 flags);
 int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value,
 			  u64 flags);
 int bpf_percpu_hash_update(struct bpf_map *map, void *key, void *value,
@@ -3704,5 +3704,57 @@ static inline bool bpf_is_subprog(const struct bpf_prog *prog)
 int bpf_prog_get_file_line(struct bpf_prog *prog, unsigned long ip, const char **filep,
 			   const char **linep, int *nump);
 struct bpf_prog *bpf_prog_find_from_stack(void);
+
+static inline int bpf_map_check_cpu_flags(u64 flags, bool check_all_cpus)
+{
+	const u64 cpu_flags = BPF_F_CPU | BPF_F_ALL_CPUS;
+	u32 cpu;
+
+	if (check_all_cpus) {
+		if (unlikely((u32)flags > BPF_F_ALL_CPUS))
+			/* unknown flags */
+			return -EINVAL;
+		if (unlikely((flags & cpu_flags) == cpu_flags))
+			return -EINVAL;
+	} else {
+		if (unlikely((u32)flags & ~BPF_F_CPU))
+			return -EINVAL;
+	}
+
+	cpu = flags >> 32;
+	if (unlikely((flags & BPF_F_CPU) && cpu >= num_possible_cpus()))
+		return -ERANGE;
+
+	return 0;
+}
+
+static inline bool bpf_map_support_cpu_flags(enum bpf_map_type map_type)
+{
+	switch (map_type) {
+	case BPF_MAP_TYPE_PERCPU_ARRAY:
+	case BPF_MAP_TYPE_PERCPU_HASH:
+	case BPF_MAP_TYPE_LRU_PERCPU_HASH:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static inline int bpf_map_check_flags(struct bpf_map *map, u64 flags, bool check_flag)
+{
+	if (check_flag && ((u32)flags & ~(BPF_F_LOCK | BPF_F_CPU | BPF_F_ALL_CPUS)))
+		return -EINVAL;
+
+	if ((flags & BPF_F_LOCK) && !btf_record_has_field(map->record, BPF_SPIN_LOCK))
+		return -EINVAL;
+
+	if (!(flags & BPF_F_CPU) && flags >> 32)
+		return -EINVAL;
+
+	if ((flags & (BPF_F_CPU | BPF_F_ALL_CPUS)) && !bpf_map_support_cpu_flags(map->map_type))
+		return -EINVAL;
+
+	return 0;
+}
 
 #endif /* _LINUX_BPF_H */
