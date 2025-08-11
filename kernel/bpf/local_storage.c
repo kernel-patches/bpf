@@ -180,18 +180,22 @@ static long cgroup_storage_update_elem(struct bpf_map *map, void *key,
 }
 
 int bpf_percpu_cgroup_storage_copy(struct bpf_map *_map, void *key,
-				   void *value)
+				   void *value, u64 map_flags)
 {
 	struct bpf_cgroup_storage_map *map = map_to_storage(_map);
 	struct bpf_cgroup_storage *storage;
-	int cpu, off = 0;
 	u32 size;
+	int err;
+
+	err = bpf_map_check_cpu_flags(map_flags, false);
+	if (err)
+		return err;
 
 	rcu_read_lock();
 	storage = cgroup_storage_lookup(map, key, false);
 	if (!storage) {
-		rcu_read_unlock();
-		return -ENOENT;
+		err = -ENOENT;
+		goto unlock;
 	}
 
 	/* per_cpu areas are zero-filled and bpf programs can only
@@ -199,13 +203,10 @@ int bpf_percpu_cgroup_storage_copy(struct bpf_map *_map, void *key,
 	 * will not leak any kernel data
 	 */
 	size = round_up(_map->value_size, 8);
-	for_each_possible_cpu(cpu) {
-		bpf_long_memcpy(value + off,
-				per_cpu_ptr(storage->percpu_buf, cpu), size);
-		off += size;
-	}
+	bpf_percpu_copy_to_user(_map, storage->percpu_buf, value, size, map_flags);
+unlock:
 	rcu_read_unlock();
-	return 0;
+	return err;
 }
 
 int bpf_percpu_cgroup_storage_update(struct bpf_map *_map, void *key,
@@ -213,17 +214,21 @@ int bpf_percpu_cgroup_storage_update(struct bpf_map *_map, void *key,
 {
 	struct bpf_cgroup_storage_map *map = map_to_storage(_map);
 	struct bpf_cgroup_storage *storage;
-	int cpu, off = 0;
 	u32 size;
+	int err;
 
-	if (map_flags != BPF_ANY && map_flags != BPF_EXIST)
+	if ((u32)map_flags & ~(BPF_ANY | BPF_EXIST | BPF_F_CPU | BPF_F_ALL_CPUS))
 		return -EINVAL;
+
+	err = bpf_map_check_cpu_flags(map_flags, true);
+	if (err)
+		return err;
 
 	rcu_read_lock();
 	storage = cgroup_storage_lookup(map, key, false);
 	if (!storage) {
-		rcu_read_unlock();
-		return -ENOENT;
+		err = -ENOENT;
+		goto unlock;
 	}
 
 	/* the user space will provide round_up(value_size, 8) bytes that
@@ -233,13 +238,10 @@ int bpf_percpu_cgroup_storage_update(struct bpf_map *_map, void *key,
 	 * so no kernel data leaks possible
 	 */
 	size = round_up(_map->value_size, 8);
-	for_each_possible_cpu(cpu) {
-		bpf_long_memcpy(per_cpu_ptr(storage->percpu_buf, cpu),
-				value + off, size);
-		off += size;
-	}
+	bpf_percpu_copy_from_user(_map, storage->percpu_buf, value, size, map_flags);
+unlock:
 	rcu_read_unlock();
-	return 0;
+	return err;
 }
 
 static int cgroup_storage_get_next_key(struct bpf_map *_map, void *key,
