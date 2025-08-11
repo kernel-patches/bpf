@@ -25,6 +25,8 @@
 #include <limits.h>
 #include <assert.h>
 
+#include "disasm.h"
+
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #endif
@@ -181,6 +183,11 @@ struct var_preset {
 	bool applied;
 };
 
+struct kernel_sym {
+	size_t address;
+	char name[256];
+};
+
 static struct env {
 	char **filenames;
 	int filename_cnt;
@@ -227,6 +234,7 @@ static struct env {
 	char orig_cgroup[PATH_MAX];
 	char stat_cgroup[PATH_MAX];
 	int memory_peak_fd;
+	bool dump;
 } env;
 
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
@@ -295,6 +303,7 @@ static const struct argp_option opts[] = {
 	  "Force BPF verifier failure on register invariant violation (BPF_F_TEST_REG_INVARIANTS program flag)" },
 	{ "top-src-lines", 'S', "N", 0, "Emit N most frequent source code lines" },
 	{ "set-global-vars", 'G', "GLOBAL", 0, "Set global variables provided in the expression, for example \"var1 = 1\"" },
+	{ "dump", 'p', NULL, 0, "Print BPF program dump" },
 	{},
 };
 
@@ -426,6 +435,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 			fprintf(stderr, "Failed to collect BPF object files: %d\n", err);
 			return err;
 		}
+		break;
+	case 'p':
+		env.dump = true;
 		break;
 	default:
 		return ARGP_ERR_UNKNOWN;
@@ -889,6 +901,14 @@ static bool is_asc_sym(char c)
 static bool is_desc_sym(char c)
 {
 	return c == 'v' || c == 'V' || c == '.' || c == '!' || c == '_';
+}
+
+static const char *ltrim(const char *s)
+{
+	while (isspace(*s))
+		s++;
+
+	return s;
 }
 
 static char *rtrim(char *str)
@@ -1554,6 +1574,304 @@ static int parse_rvalue(const char *val, struct rvalue *rvalue)
 	return 0;
 }
 
+static int kernel_syms_cmp(const void *sym_a, const void *sym_b)
+{
+	return ((struct kernel_sym *)sym_a)->address -
+	       ((struct kernel_sym *)sym_b)->address;
+}
+
+struct dump_context {
+	struct bpf_prog_info *info;
+	struct kernel_sym *kernel_syms;
+	int kernel_sym_cnt;
+	size_t kfunc_base_addr;
+	char scratch_buf[512];
+};
+
+static void kernel_syms_free(struct dump_context *ctx)
+{
+	free(ctx->kernel_syms);
+	ctx->kernel_syms = NULL;
+	ctx->kernel_sym_cnt = 0;
+}
+
+static void kernel_syms_load(struct dump_context *ctx)
+{
+	struct kernel_sym *sym;
+	char buff[256];
+	void *tmp, *address;
+	FILE *fp;
+
+	fp = fopen("/proc/kallsyms", "r");
+	if (!fp)
+		return;
+	while (fgets(buff, sizeof(buff), fp)) {
+		tmp = reallocarray(ctx->kernel_syms, ctx->kernel_sym_cnt + 1,
+				   sizeof(*ctx->kernel_syms));
+		if (!tmp)
+			goto failure;
+		ctx->kernel_syms = tmp;
+		sym = ctx->kernel_syms + ctx->kernel_sym_cnt;
+
+		if (sscanf(buff, "%p %*c %s", &address, sym->name) < 2)
+			continue;
+		sym->address = (unsigned long)address;
+		if (!strcmp(sym->name, "__bpf_call_base")) {
+			ctx->kfunc_base_addr = sym->address;
+			/* sysctl kernel.kptr_restrict was set */
+			if (!sym->address)
+				goto failure;
+		}
+		if (sym->address)
+			ctx->kernel_sym_cnt++;
+	}
+
+	fclose(fp);
+	qsort(ctx->kernel_syms, ctx->kernel_sym_cnt, sizeof(*ctx->kernel_syms), kernel_syms_cmp);
+	return;
+failure:
+	kernel_syms_free(ctx);
+	fclose(fp);
+}
+
+__attribute__((format(printf, 2, 3)))
+static void print_insn(void *private_data, const char *fmt, ...)
+{
+	va_list args;
+
+	va_start(args, fmt);
+	vprintf(fmt, args);
+	va_end(args);
+}
+
+static struct kernel_sym *kernel_syms_search(unsigned long key, struct dump_context *ctx)
+{
+	struct kernel_sym sym = {
+		.address = key,
+	};
+
+	return ctx->kernel_syms ? bsearch(&sym, ctx->kernel_syms, ctx->kernel_sym_cnt,
+					  sizeof(*ctx->kernel_syms), kernel_syms_cmp) :
+				  NULL;
+}
+
+static const char *print_call(void *private_data, const struct bpf_insn *insn)
+{
+	struct kernel_sym *sym;
+	struct dump_context *ctx = (struct dump_context *)private_data;
+	size_t address = ctx->kfunc_base_addr + insn->imm;
+	struct bpf_prog_info *info = ctx->info;
+
+	if (insn->src_reg == BPF_PSEUDO_CALL) {
+		if ((__u32)insn->imm < info->nr_jited_ksyms && info->jited_ksyms) {
+			__u64 *ptr = (void *)(size_t)info->jited_ksyms;
+
+			address = ptr[insn->imm];
+		}
+
+		sym = kernel_syms_search(address, ctx);
+		if (!info->jited_ksyms)
+			snprintf(ctx->scratch_buf, sizeof(ctx->scratch_buf), "%+d", insn->off);
+		else if (sym)
+			snprintf(ctx->scratch_buf, sizeof(ctx->scratch_buf), "%+d#%s", insn->off,
+				 sym->name);
+		else
+			snprintf(ctx->scratch_buf, sizeof(ctx->scratch_buf), "%+d#0x%lx", insn->off,
+				 address);
+	} else {
+		sym = kernel_syms_search(address, ctx);
+		if (sym)
+			snprintf(ctx->scratch_buf, sizeof(ctx->scratch_buf), "%s", sym->name);
+		else
+			snprintf(ctx->scratch_buf, sizeof(ctx->scratch_buf), "0x%lx", address);
+	}
+	return ctx->scratch_buf;
+}
+
+static const char *print_imm(void *private_data, const struct bpf_insn *insn, __u64 full_imm)
+{
+	struct dump_context *ctx = (struct dump_context *)private_data;
+
+	switch (insn->src_reg) {
+	case BPF_PSEUDO_MAP_FD:
+		snprintf(ctx->scratch_buf, sizeof(ctx->scratch_buf), "map[id:%d]", insn->imm);
+		break;
+	case BPF_PSEUDO_MAP_VALUE:
+		snprintf(ctx->scratch_buf, sizeof(ctx->scratch_buf), "map[id:%d][0]+%d", insn->imm,
+			 insn[1].imm);
+		break;
+	case BPF_PSEUDO_MAP_IDX_VALUE:
+		snprintf(ctx->scratch_buf, sizeof(ctx->scratch_buf), "map[idx:%d]+%d", insn->imm,
+			 insn[1].imm);
+		break;
+	case BPF_PSEUDO_FUNC:
+		snprintf(ctx->scratch_buf, sizeof(ctx->scratch_buf), "subprog[%+d]", insn->imm);
+		break;
+	default:
+		snprintf(ctx->scratch_buf, sizeof(ctx->scratch_buf), "0x%llx",
+			 (unsigned long long)full_imm);
+	}
+	return ctx->scratch_buf;
+}
+
+static void func_printf(void *ctx, const char *fmt, va_list args)
+{
+	vprintf(fmt, args);
+}
+
+static int prep_prog_info(struct bpf_prog_info *info)
+{
+	struct bpf_prog_info holder = {};
+	size_t needed = 0;
+	void *ptr;
+
+	holder.xlated_prog_len = info->xlated_prog_len;
+	needed += info->xlated_prog_len;
+
+	holder.nr_jited_ksyms = info->nr_jited_ksyms;
+	needed += info->nr_jited_ksyms * sizeof(__u64);
+
+	holder.nr_jited_func_lens = info->nr_jited_func_lens;
+	needed += info->nr_jited_func_lens * sizeof(__u32);
+
+	holder.nr_func_info = info->nr_func_info;
+	holder.func_info_rec_size = info->func_info_rec_size;
+	needed += info->nr_func_info * info->func_info_rec_size;
+
+	holder.nr_line_info = info->nr_line_info;
+	holder.line_info_rec_size = info->line_info_rec_size;
+	needed += info->nr_line_info * info->line_info_rec_size;
+
+	holder.nr_jited_line_info = info->nr_jited_line_info;
+	holder.jited_line_info_rec_size = info->jited_line_info_rec_size;
+	needed += info->nr_jited_line_info * info->jited_line_info_rec_size;
+	ptr = malloc(needed);
+	if (!ptr)
+		return -ENOMEM;
+
+	holder.xlated_prog_insns = (unsigned long)(ptr);
+	ptr += holder.xlated_prog_len;
+
+	holder.jited_ksyms = (unsigned long)(ptr);
+	ptr += holder.nr_jited_ksyms * sizeof(__u64);
+
+	holder.jited_func_lens = (unsigned long)(ptr);
+	ptr += holder.nr_jited_func_lens * sizeof(__u32);
+
+	holder.func_info = (unsigned long)(ptr);
+	ptr += holder.nr_func_info * holder.func_info_rec_size;
+
+	holder.line_info = (unsigned long)(ptr);
+	ptr += holder.nr_line_info * holder.line_info_rec_size;
+
+	holder.jited_line_info = (unsigned long)(ptr);
+	ptr += holder.nr_jited_line_info * holder.jited_line_info_rec_size;
+
+	*info = holder;
+	return 0;
+}
+
+static void emit_line_info(const struct btf *btf, const struct bpf_line_info *linfo)
+{
+	const char *line = btf__name_by_offset(btf, linfo->line_off);
+
+	if (!line)
+		return;
+	line = ltrim(line);
+	printf("; %s\n", line);
+}
+
+static void emit_func_info(struct btf_dump *d, const struct btf *btf,
+			   const struct bpf_func_info *finfo)
+{
+	LIBBPF_OPTS(btf_dump_emit_type_decl_opts, emit_opts);
+	const struct btf_type *t;
+	__u32 name_off;
+
+	name_off = btf__type_by_id(btf, finfo->type_id)->name_off;
+	emit_opts.field_name = btf__name_by_offset(btf, name_off);
+	if (!emit_opts.field_name) /* field_name can't be NULL */
+		emit_opts.field_name = "N/A";
+	t = btf__type_by_id(btf, finfo->type_id);
+	btf_dump__emit_type_decl(d, t->type, &emit_opts);
+	printf(":\n");
+}
+
+static void dump_xlated(const struct btf *btf, struct bpf_program *prog, struct bpf_prog_info *info)
+{
+	const struct bpf_insn *insn;
+	const struct bpf_func_info *finfo;
+	const struct bpf_line_info *linfo;
+	const struct bpf_prog_linfo *prog_linfo;
+	struct btf_dump *d;
+	__u32 nr_skip = 0, i, n;
+	bool double_insn = false;
+	LIBBPF_OPTS(btf_dump_opts, dump_opts);
+	LIBBPF_OPTS(btf_dump_emit_type_decl_opts, emit_opts);
+	struct dump_context ctx = {
+		.info = info,
+		.kernel_syms = NULL,
+		.kernel_sym_cnt = 0,
+		.kfunc_base_addr = 0
+	};
+	struct bpf_insn_cbs cbs = {
+		.cb_print = print_insn,
+		.cb_call = print_call,
+		.cb_imm = print_imm,
+		.private_data = &ctx,
+	};
+
+	/* load symbols for each prog, as prog load could have added new items */
+	kernel_syms_load(&ctx);
+
+	prog_linfo = bpf_prog_linfo__new(info);
+	insn = (struct bpf_insn *)info->xlated_prog_insns;
+	finfo = (struct bpf_func_info *)info->func_info;
+	d = btf_dump__new(btf, func_printf, NULL, &dump_opts);
+	n = info->xlated_prog_len / sizeof(*insn);
+
+	for (i = 0; i < n; i += double_insn ? 2 : 1) {
+		if (d && finfo && finfo->insn_off == i) {
+			emit_func_info(d, btf, finfo);
+			finfo++;
+		}
+
+		if (prog_linfo) {
+			linfo = bpf_prog_linfo__lfind(prog_linfo, i, nr_skip);
+			if (linfo) {
+				emit_line_info(btf, linfo);
+				nr_skip++;
+			}
+		}
+		printf("%4u: ", i);
+		print_bpf_insn(&cbs, insn + i, false);
+		double_insn = insn[i].code == (BPF_LD | BPF_IMM | BPF_DW);
+	}
+
+	kernel_syms_free(&ctx);
+	btf_dump__free(d);
+}
+
+static void dump(const struct btf *btf, struct bpf_program *prog, struct bpf_prog_info *info,
+		 int prog_fd)
+{
+	int err;
+	__u32 info_len = sizeof(*info);
+
+	if (!env.dump || prog_fd <= 0)
+		return;
+
+	err = prep_prog_info(info);
+	if (err)
+		return;
+
+	if (bpf_prog_get_info_by_fd(prog_fd, info, &info_len) != 0)
+		goto cleanup;
+	dump_xlated(btf, prog, info);
+cleanup:
+	free((void *)(unsigned long)info->xlated_prog_insns);
+}
+
 static int process_prog(const char *filename, struct bpf_object *obj, struct bpf_program *prog)
 {
 	const char *base_filename = basename(strdupa(filename));
@@ -1634,6 +1952,7 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 		stats->stats[JITED_SIZE] = info.jited_prog_len;
 
 	parse_verif_log(buf, buf_sz, stats);
+	dump(bpf_object__btf(obj), prog, &info, fd);
 
 	if (env.verbose) {
 		printf("PROCESSING %s/%s, DURATION US: %ld, VERDICT: %s, VERIFIER LOG:\n%s\n",

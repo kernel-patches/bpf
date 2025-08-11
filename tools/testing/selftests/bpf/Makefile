@@ -847,7 +847,7 @@ $(OUTPUT)/bench: $(OUTPUT)/bench.o \
 #   snprintf(a, "%s/foo", b);      // triggers -Wformat-truncation
 $(OUTPUT)/veristat.o: CFLAGS += -Wno-format-truncation
 $(OUTPUT)/veristat.o: $(BPFOBJ)
-$(OUTPUT)/veristat: $(OUTPUT)/veristat.o
+$(OUTPUT)/veristat: $(OUTPUT)/veristat.o $(OUTPUT)/disasm.o
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $(filter %.a %.o,$^) $(LDLIBS) -o $@
 
