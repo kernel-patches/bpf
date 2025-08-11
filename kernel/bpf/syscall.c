@@ -133,7 +133,7 @@ bool bpf_map_write_active(const struct bpf_map *map)
 
 static u32 bpf_map_value_size(const struct bpf_map *map, u64 flags)
 {
-	if (map->map_type == BPF_MAP_TYPE_PERCPU_ARRAY && (flags & (BPF_F_CPU | BPF_F_ALL_CPUS)))
+	if (bpf_map_support_cpu_flags(map->map_type) && (flags & (BPF_F_CPU | BPF_F_ALL_CPUS)))
 		return round_up(map->value_size, 8);
 	else if (map->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
 	    map->map_type == BPF_MAP_TYPE_LRU_PERCPU_HASH ||
@@ -314,7 +314,7 @@ static int bpf_map_copy_value(struct bpf_map *map, void *key, void *value,
 	bpf_disable_instrumentation();
 	if (map->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
 	    map->map_type == BPF_MAP_TYPE_LRU_PERCPU_HASH) {
-		err = bpf_percpu_hash_copy(map, key, value);
+		err = bpf_percpu_hash_copy(map, key, value, flags);
 	} else if (map->map_type == BPF_MAP_TYPE_PERCPU_ARRAY) {
 		err = bpf_percpu_array_copy(map, key, value, flags);
 	} else if (map->map_type == BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE) {
@@ -1656,24 +1656,6 @@ static void *___bpf_copy_key(bpfptr_t ukey, u64 key_size)
 	return NULL;
 }
 
-static int check_map_flags(struct bpf_map *map, u64 flags, bool check_flag)
-{
-	if (check_flag && ((u32)flags & ~(BPF_F_LOCK | BPF_F_CPU | BPF_F_ALL_CPUS)))
-		return -EINVAL;
-
-	if ((flags & BPF_F_LOCK) && !btf_record_has_field(map->record, BPF_SPIN_LOCK))
-		return -EINVAL;
-
-	if (!(flags & BPF_F_CPU) && flags >> 32)
-		return -EINVAL;
-
-	if ((flags & (BPF_F_CPU | BPF_F_ALL_CPUS)) &&
-		map->map_type != BPF_MAP_TYPE_PERCPU_ARRAY)
-		return -EINVAL;
-
-	return 0;
-}
-
 /* last field in 'union bpf_attr' used by this command */
 #define BPF_MAP_LOOKUP_ELEM_LAST_FIELD flags
 
@@ -1696,7 +1678,7 @@ static int map_lookup_elem(union bpf_attr *attr)
 	if (!(map_get_sys_perms(map, f) & FMODE_CAN_READ))
 		return -EPERM;
 
-	err = check_map_flags(map, attr->flags, true);
+	err = bpf_map_check_flags(map, attr->flags, true);
 	if (err)
 		return err;
 
@@ -1761,7 +1743,7 @@ static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 		goto err_put;
 	}
 
-	err = check_map_flags(map, attr->flags, false);
+	err = bpf_map_check_flags(map, attr->flags, false);
 	if (err)
 		goto err_put;
 
@@ -1967,7 +1949,7 @@ int generic_map_update_batch(struct bpf_map *map, struct file *map_file,
 	void *key, *value;
 	int err = 0;
 
-	err = check_map_flags(map, attr->batch.elem_flags, true);
+	err = bpf_map_check_flags(map, attr->batch.elem_flags, true);
 	if (err)
 		return err;
 
@@ -2026,7 +2008,7 @@ int generic_map_lookup_batch(struct bpf_map *map,
 	u32 value_size, cp, max_count;
 	int err;
 
-	err = check_map_flags(map, attr->batch.elem_flags, true);
+	err = bpf_map_check_flags(map, attr->batch.elem_flags, true);
 	if (err)
 		return err;
 

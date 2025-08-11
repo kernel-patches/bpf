@@ -300,18 +300,15 @@ int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value, u64 flags
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	u32 index = *(u32 *)key;
 	void __percpu *pptr;
+	int off = 0, err;
 	u32 size, cpu;
-	int off = 0;
 
 	if (unlikely(index >= array->map.max_entries))
 		return -ENOENT;
 
-	if (unlikely((u32)flags & ~BPF_F_CPU))
-		return -EINVAL;
-
-	cpu = flags >> 32;
-	if (unlikely((flags & BPF_F_CPU) && cpu >= num_possible_cpus()))
-		return -ERANGE;
+	err = bpf_map_check_cpu_flags(flags, false);
+	if (unlikely(err))
+		return err;
 
 	/* per_cpu areas are zero-filled and bpf programs can only
 	 * access 'value_size' of them, so copying rounded areas
@@ -321,6 +318,7 @@ int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value, u64 flags
 	rcu_read_lock();
 	pptr = array->pptrs[index & array->index_mask];
 	if (flags & BPF_F_CPU) {
+		cpu = flags >> 32;
 		copy_map_value_long(map, value, per_cpu_ptr(pptr, cpu));
 		check_and_init_map_value(map, value);
 	} else {
@@ -397,22 +395,14 @@ int bpf_percpu_array_update(struct bpf_map *map, void *key, void *value,
 			    u64 map_flags)
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
-	const u64 cpu_flags = BPF_F_CPU | BPF_F_ALL_CPUS;
 	u32 index = *(u32 *)key;
 	void __percpu *pptr;
+	int off = 0, err;
 	u32 size, cpu;
-	int off = 0;
 
-	if (unlikely((u32)map_flags > BPF_F_ALL_CPUS))
-		/* unknown flags */
-		return -EINVAL;
-	if (unlikely((map_flags & cpu_flags) == cpu_flags))
-		return -EINVAL;
-
-	cpu = map_flags >> 32;
-	if (unlikely((map_flags & BPF_F_CPU) && cpu >= num_possible_cpus()))
-		/* invalid cpu */
-		return -ERANGE;
+	err = bpf_map_check_cpu_flags(map_flags, true);
+	if (unlikely(err))
+		return err;
 
 	if (unlikely(index >= array->map.max_entries))
 		/* all elements were pre-allocated, cannot insert a new one */
@@ -432,6 +422,7 @@ int bpf_percpu_array_update(struct bpf_map *map, void *key, void *value,
 	rcu_read_lock();
 	pptr = array->pptrs[index & array->index_mask];
 	if (map_flags & BPF_F_CPU) {
+		cpu = map_flags >> 32;
 		copy_map_value_long(map, per_cpu_ptr(pptr, cpu), value);
 		bpf_obj_free_fields(array->map.record, per_cpu_ptr(pptr, cpu));
 	} else {
