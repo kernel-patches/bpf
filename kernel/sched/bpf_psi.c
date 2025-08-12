@@ -8,6 +8,7 @@
 #include <linux/bpf_psi.h>
 #include <linux/cgroup-defs.h>
 
+struct bpf_struct_ops bpf_psi_bpf_ops;
 static struct workqueue_struct *bpf_psi_wq;
 
 static DEFINE_MUTEX(bpf_psi_lock);
@@ -182,6 +183,92 @@ static const struct bpf_verifier_ops bpf_psi_verifier_ops = {
 	.is_valid_access = bpf_psi_ops_is_valid_access,
 };
 
+__bpf_kfunc_start_defs();
+
+/**
+ * bpf_psi_create_trigger - Create a PSI trigger
+ * @bpf_psi: bpf_psi struct to attach the trigger to
+ * @cgroup_id: cgroup Id to attach the trigger; 0 for system-wide scope
+ * @resource: resource to monitor (PSI_MEM, PSI_IO, etc) and the full bit.
+ * @threshold_us: threshold in us
+ * @window_us: window in us
+ *
+ * Creates a PSI trigger and attached is to bpf_psi. The trigger will be
+ * active unless bpf struct ops is unloaded or the corresponding cgroup
+ * is deleted.
+ *
+ * Resource's most significant bit encodes whether "some" or "full"
+ * PSI state should be tracked.
+ *
+ * Returns 0 on success and the error code on failure.
+ */
+__bpf_kfunc int bpf_psi_create_trigger(struct bpf_psi *bpf_psi,
+				       u64 cgroup_id, u32 resource,
+				       u32 threshold_us, u32 window_us)
+{
+	enum psi_res res = resource & ~BPF_PSI_FULL;
+	bool full = resource & BPF_PSI_FULL;
+	struct psi_trigger_params params;
+	struct cgroup *cgroup __maybe_unused = NULL;
+	struct psi_group *group;
+	struct psi_trigger *t;
+	int ret = 0;
+
+	if (res >= NR_PSI_RESOURCES)
+		return -EINVAL;
+
+	if (IS_ENABLED(CONFIG_CGROUPS) && cgroup_id) {
+		cgroup = cgroup_get_from_id(cgroup_id);
+		if (IS_ERR_OR_NULL(cgroup))
+			return PTR_ERR(cgroup);
+
+		group = cgroup_psi(cgroup);
+	} else {
+		group = &psi_system;
+	}
+
+	params.type = PSI_BPF;
+	params.bpf_psi = bpf_psi;
+	params.privileged = capable(CAP_SYS_RESOURCE);
+	params.res = res;
+	params.full = full;
+	params.threshold_us = threshold_us;
+	params.window_us = window_us;
+
+	t = psi_trigger_create(group, &params);
+	if (IS_ERR(t))
+		ret = PTR_ERR(t);
+	else
+		t->cgroup_id = cgroup_id;
+
+#ifdef CONFIG_CGROUPS
+	if (cgroup)
+		cgroup_put(cgroup);
+#endif
+
+	return ret;
+}
+__bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(bpf_psi_kfuncs)
+BTF_ID_FLAGS(func, bpf_psi_create_trigger, KF_TRUSTED_ARGS)
+BTF_KFUNCS_END(bpf_psi_kfuncs)
+
+static int bpf_psi_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	if (btf_id_set8_contains(&bpf_psi_kfuncs, kfunc_id) &&
+	    prog->aux->st_ops != &bpf_psi_bpf_ops)
+		return -EACCES;
+
+	return 0;
+}
+
+static const struct btf_kfunc_id_set bpf_psi_kfunc_set = {
+	.owner          = THIS_MODULE,
+	.set            = &bpf_psi_kfuncs,
+	.filter         = bpf_psi_kfunc_filter,
+};
+
 static int bpf_psi_ops_reg(void *kdata, struct bpf_link *link)
 {
 	struct bpf_psi_ops *ops = kdata;
@@ -282,6 +369,13 @@ static int __init bpf_psi_struct_ops_init(void)
 	bpf_psi_wq = alloc_workqueue("bpf_psi_wq", wq_flags, 0);
 	if (!bpf_psi_wq)
 		return -ENOMEM;
+
+	err = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+					&bpf_psi_kfunc_set);
+	if (err) {
+		pr_warn("error while registering bpf psi kfuncs: %d", err);
+		goto err;
+	}
 
 	err = register_bpf_struct_ops(&bpf_psi_bpf_ops, bpf_psi_ops);
 	if (err) {
