@@ -15,6 +15,7 @@
 #include <linux/bpf.h>
 #include <linux/bpf-cgroup.h>
 #include <linux/bpf_lsm.h>
+#include <linux/bpf_psi.h>
 #include <linux/bpf_verifier.h>
 #include <net/sock.h>
 #include <net/bpf_sk_storage.h>
@@ -557,9 +558,11 @@ static int cgroup_bpf_lifetime_notify(struct notifier_block *nb,
 
 	switch (action) {
 	case CGROUP_LIFETIME_ONLINE:
+		bpf_psi_cgroup_online(cgrp);
 		ret = cgroup_bpf_inherit(cgrp);
 		break;
 	case CGROUP_LIFETIME_OFFLINE:
+		bpf_psi_cgroup_offline(cgrp);
 		cgroup_bpf_offline(cgrp);
 		break;
 	}
