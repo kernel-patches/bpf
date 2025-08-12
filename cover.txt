@@ -1,0 +1,82 @@
+mm: BPF OOM
+
+This patchset adds an ability to customize the out of memory
+handling using bpf.
+
+It focuses on two parts:
+1) OOM handling policy,
+2) PSI-based OOM invocation.
+
+The idea to use bpf for customizing the OOM handling is not new, but
+unlike the previous proposal [1], which augmented the existing task
+ranking policy, this one tries to be as generic as possible and
+leverage the full power of the modern bpf.
+
+It provides a generic interface which is called before the existing OOM
+killer code and allows implementing any policy, e.g. picking a victim
+task or memory cgroup or potentially even releasing memory in other
+ways, e.g. deleting tmpfs files (the last one might require some
+additional but relatively simple changes).
+
+The past attempt to implement memory-cgroup aware policy [2] showed
+that there are multiple opinions on what the best policy is.  As it's
+highly workload-dependent and specific to a concrete way of organizing
+workloads, the structure of the cgroup tree etc, a customizable
+bpf-based implementation is preferable over an in-kernel implementation
+with a dozen of sysctls.
+
+The second part is related to the fundamental question on when to
+declare the OOM event. It's a trade-off between the risk of
+unnecessary OOM kills and associated work losses and the risk of
+infinite trashing and effective soft lockups.  In the last few years
+several PSI-based userspace solutions were developed (e.g. OOMd [3] or
+systemd-OOMd [4]). The common idea was to use userspace daemons to
+implement custom OOM logic as well as rely on PSI monitoring to avoid
+stalls. In this scenario the userspace daemon was supposed to handle
+the majority of OOMs, while the in-kernel OOM killer worked as the
+last resort measure to guarantee that the system would never deadlock
+on the memory. But this approach creates additional infrastructure
+churn: userspace OOM daemon is a separate entity which needs to be
+deployed, updated, monitored. A completely different pipeline needs to
+be built to monitor both types of OOM events and collect associated
+logs. A userspace daemon is more restricted in terms on what data is
+available to it. Implementing a daemon which can work reliably under a
+heavy memory pressure in the system is also tricky.
+
+This patchset includes the code, tests and many ideas from the patchset
+of JP Kobryn, which implemented bpf kfuncs to provide a faster method
+to access memcg data [5].
+
+[1]: https://lwn.net/ml/linux-kernel/20230810081319.65668-1-zhouchuyi@bytedance.com/
+[2]: https://lore.kernel.org/lkml/20171130152824.1591-1-guro@fb.com/
+[3]: https://github.com/facebookincubator/oomd
+[4]: https://www.freedesktop.org/software/systemd/man/latest/systemd-oomd.service.html
+[5]: https://lkml.org/lkml/2025/10/15/1554
+
+----
+v2:
+  1) A single bpf_oom can be attached system-wide and a single bpf_oom per memcg.
+     (by Alexei Starovoitov)
+  2) Initial support for attaching struct ops to cgroups (Martin KaFai Lau,
+     Andrii Nakryiko and others)
+  3) bpf memcontrol kfuncs enhancements and tests (co-developed by JP Kobryn)
+  4) Many mall-ish fixes and cleanups (suggested by Andrew Morton, Suren Baghdasaryan,
+     Andrii Nakryiko and Kumar Kartikeya Dwivedi)
+  5) bpf_out_of_memory() is taking u64 flags instead of bool wait_on_oom_lock
+     (suggested by Kumar Kartikeya Dwivedi)
+  6) bpf_get_mem_cgroup() got KF_RCU flag (suggested by Kumar Kartikeya Dwivedi)
+  7) cgroup online and offline callbacks for bpf_psi, cgroup offline for bpf_oom
+
+v1:
+  1) Both OOM and PSI parts are now implemented using bpf struct ops,
+     providing a path the future extensions (suggested by Kumar Kartikeya Dwivedi,
+     Song Liu and Matt Bobrowski)
+  2) It's possible to create PSI triggers from BPF, no need for an additional
+     userspace agent. (suggested by Suren Baghdasaryan)
+     Also there is now a callback for the cgroup release event.
+  3) Added an ability to block on oom_lock instead of bailing out (suggested by Michal Hocko)
+  4) Added bpf_task_is_oom_victim (suggested by Michal Hocko)
+  5) PSI callbacks are scheduled using a separate workqueue (suggested by Suren Baghdasaryan)
+
+RFC:
+  https://lwn.net/ml/all/20250428033617.3797686-1-roman.gushchin@linux.dev/
