@@ -29,6 +29,7 @@ struct obj_cgroup;
 struct page;
 struct mm_struct;
 struct kmem_cache;
+struct bpf_oom_ops;
 
 /* Cgroup-specific page state, on top of universal node page state */
 enum memcg_stat_item {
@@ -225,6 +226,10 @@ struct mem_cgroup {
 	 * Should the OOM killer kill all belonging tasks, had it kill one?
 	 */
 	bool oom_group;
+
+#ifdef CONFIG_BPF_SYSCALL
+	struct bpf_oom_ops *bpf_oom;
+#endif
 
 	int swappiness;
 

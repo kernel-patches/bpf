@@ -51,6 +51,14 @@ struct oom_control {
 
 	/* Used to print the constraint info. */
 	enum oom_constraint constraint;
+
+#ifdef CONFIG_BPF_SYSCALL
+	/* Used by the bpf oom implementation to mark the forward progress */
+	bool bpf_memory_freed;
+
+	/* Policy name */
+	const char *bpf_policy_name;
+#endif
 };
 
 extern struct mutex oom_lock;
