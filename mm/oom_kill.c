@@ -240,13 +240,6 @@ long oom_badness(struct task_struct *p, unsigned long totalpages)
 	return points;
 }
 
-static const char * const oom_constraint_text[] = {
-	[CONSTRAINT_NONE] = "CONSTRAINT_NONE",
-	[CONSTRAINT_CPUSET] = "CONSTRAINT_CPUSET",
-	[CONSTRAINT_MEMORY_POLICY] = "CONSTRAINT_MEMORY_POLICY",
-	[CONSTRAINT_MEMCG] = "CONSTRAINT_MEMCG",
-};
-
 static const char *oom_policy_name(struct oom_control *oc)
 {
 #ifdef CONFIG_BPF_SYSCALL
@@ -254,6 +247,27 @@ static const char *oom_policy_name(struct oom_control *oc)
 		return oc->bpf_policy_name;
 #endif
 	return "default";
+}
+
+static const char *oom_constraint_text(struct oom_control *oc)
+{
+	switch (oc->constraint) {
+	case CONSTRAINT_NONE:
+		return "CONSTRAINT_NONE";
+	case CONSTRAINT_CPUSET:
+		return "CONSTRAINT_CPUSET";
+	case CONSTRAINT_MEMORY_POLICY:
+		return "CONSTRAINT_MEMORY_POLICY";
+	case CONSTRAINT_MEMCG:
+		return "CONSTRAINT_MEMCG";
+#ifdef CONFIG_BPF_SYSCALL
+	case CONSTRAINT_BPF:
+		return oc->bpf_constraint ? : "CONSTRAINT_BPF";
+#endif
+	default:
+		WARN_ON_ONCE(1);
+		return "";
+	}
 }
 
 /*
@@ -266,6 +280,9 @@ static enum oom_constraint constrained_alloc(struct oom_control *oc)
 	enum zone_type highest_zoneidx = gfp_zone(oc->gfp_mask);
 	bool cpuset_limited = false;
 	int nid;
+
+	if (oc->constraint == CONSTRAINT_BPF)
+		return CONSTRAINT_BPF;
 
 	if (is_memcg_oom(oc)) {
 		oc->totalpages = mem_cgroup_get_max(oc->memcg) ?: 1;
@@ -458,7 +475,7 @@ static void dump_oom_victim(struct oom_control *oc, struct task_struct *victim)
 {
 	/* one line summary of the oom killer context. */
 	pr_info("oom-kill:constraint=%s,nodemask=%*pbl",
-			oom_constraint_text[oc->constraint],
+			oom_constraint_text(oc),
 			nodemask_pr_args(oc->nodemask));
 	cpuset_print_current_mems_allowed();
 	mem_cgroup_print_oom_context(oc->memcg, victim);
@@ -1350,11 +1367,14 @@ __bpf_kfunc int bpf_oom_kill_process(struct oom_control *oc,
  * Returns a negative value if an error occurred.
  */
 __bpf_kfunc int bpf_out_of_memory(struct mem_cgroup *memcg__nullable,
-				  int order, u64 flags)
+				  int order, u64 flags,
+				  const char *constraint_text__nullable)
 {
 	struct oom_control oc = {
 		.memcg = memcg__nullable,
 		.order = order,
+		.constraint = CONSTRAINT_BPF,
+		.bpf_constraint = constraint_text__nullable,
 	};
 	int ret;
 
