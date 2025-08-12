@@ -119,7 +119,38 @@ struct psi_window {
 	u64 prev_growth;
 };
 
+enum psi_trigger_type {
+	PSI_SYSTEM,
+	PSI_CGROUP,
+};
+
+struct psi_trigger_params {
+	/* Trigger type */
+	enum psi_trigger_type type;
+
+	/* Resource to be monitored */
+	enum psi_res res;
+
+	/* True if all threads should be stalled to trigger */
+	bool full;
+
+	/* Threshold in us */
+	u32 threshold_us;
+
+	/* Window in us */
+	u32 window_us;
+
+	/* Privileged triggers are treated differently */
+	bool privileged;
+
+	/* Link to kernfs open file, only for PSI_CGROUP */
+	struct kernfs_open_file *of;
+};
+
 struct psi_trigger {
+	/* Trigger type */
+	enum psi_trigger_type type;
+
 	/* PSI state being monitored by the trigger */
 	enum psi_states state;
 
@@ -135,7 +166,7 @@ struct psi_trigger {
 	/* Wait queue for polling */
 	wait_queue_head_t event_wait;
 
-	/* Kernfs file for cgroup triggers */
+	/* Kernfs file for PSI_CGROUP triggers */
 	struct kernfs_open_file *of;
 
 	/* Pending event flag */

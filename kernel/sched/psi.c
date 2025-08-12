@@ -511,7 +511,7 @@ static void update_triggers(struct psi_group *group, u64 now,
 
 		/* Generate an event */
 		if (cmpxchg(&t->event, 0, 1) == 0) {
-			if (t->of)
+			if (t->type == PSI_CGROUP)
 				kernfs_notify(t->of->kn);
 			else
 				wake_up_interruptible(&t->event_wait);
@@ -1292,74 +1292,88 @@ int psi_show(struct seq_file *m, struct psi_group *group, enum psi_res res)
 	return 0;
 }
 
-struct psi_trigger *psi_trigger_create(struct psi_group *group, char *buf,
-				       enum psi_res res, struct file *file,
-				       struct kernfs_open_file *of)
+int psi_trigger_parse(struct psi_trigger_params *params, const char *buf)
+{
+	u32 threshold_us, window_us;
+
+	if (static_branch_likely(&psi_disabled))
+		return -EOPNOTSUPP;
+
+	if (sscanf(buf, "some %u %u", &threshold_us, &window_us) == 2)
+		params->full = false;
+	else if (sscanf(buf, "full %u %u", &threshold_us, &window_us) == 2)
+		params->full = true;
+	else
+		return -EINVAL;
+
+	params->threshold_us = threshold_us;
+	params->window_us = window_us;
+	return 0;
+}
+
+struct psi_trigger *psi_trigger_create(struct psi_group *group,
+				       const struct psi_trigger_params *params)
 {
 	struct psi_trigger *t;
 	enum psi_states state;
-	u32 threshold_us;
-	bool privileged;
-	u32 window_us;
 
 	if (static_branch_likely(&psi_disabled))
 		return ERR_PTR(-EOPNOTSUPP);
 
-	/*
-	 * Checking the privilege here on file->f_cred implies that a privileged user
-	 * could open the file and delegate the write to an unprivileged one.
-	 */
-	privileged = cap_raised(file->f_cred->cap_effective, CAP_SYS_RESOURCE);
-
-	if (sscanf(buf, "some %u %u", &threshold_us, &window_us) == 2)
-		state = PSI_IO_SOME + res * 2;
-	else if (sscanf(buf, "full %u %u", &threshold_us, &window_us) == 2)
-		state = PSI_IO_FULL + res * 2;
-	else
-		return ERR_PTR(-EINVAL);
+	state = params->full ? PSI_IO_FULL : PSI_IO_SOME;
+	state += params->res * 2;
 
 #ifdef CONFIG_IRQ_TIME_ACCOUNTING
-	if (res == PSI_IRQ && --state != PSI_IRQ_FULL)
+	if (params->res == PSI_IRQ && --state != PSI_IRQ_FULL)
 		return ERR_PTR(-EINVAL);
 #endif
 
 	if (state >= PSI_NONIDLE)
 		return ERR_PTR(-EINVAL);
 
-	if (window_us == 0 || window_us > WINDOW_MAX_US)
+	if (params->window_us == 0 || params->window_us > WINDOW_MAX_US)
 		return ERR_PTR(-EINVAL);
 
 	/*
 	 * Unprivileged users can only use 2s windows so that averages aggregation
 	 * work is used, and no RT threads need to be spawned.
 	 */
-	if (!privileged && window_us % 2000000)
+	if (!params->privileged && params->window_us % 2000000)
 		return ERR_PTR(-EINVAL);
 
 	/* Check threshold */
-	if (threshold_us == 0 || threshold_us > window_us)
+	if (params->threshold_us == 0 || params->threshold_us > params->window_us)
 		return ERR_PTR(-EINVAL);
 
 	t = kmalloc(sizeof(*t), GFP_KERNEL);
 	if (!t)
 		return ERR_PTR(-ENOMEM);
 
+	t->type = params->type;
 	t->group = group;
 	t->state = state;
-	t->threshold = threshold_us * NSEC_PER_USEC;
-	t->win.size = window_us * NSEC_PER_USEC;
+	t->threshold = params->threshold_us * NSEC_PER_USEC;
+	t->win.size = params->window_us * NSEC_PER_USEC;
 	window_reset(&t->win, sched_clock(),
 			group->total[PSI_POLL][t->state], 0);
 
 	t->event = 0;
 	t->last_event_time = 0;
-	t->of = of;
-	if (!of)
-		init_waitqueue_head(&t->event_wait);
-	t->pending_event = false;
-	t->aggregator = privileged ? PSI_POLL : PSI_AVGS;
 
-	if (privileged) {
+	switch (params->type) {
+	case PSI_SYSTEM:
+		init_waitqueue_head(&t->event_wait);
+		t->of = NULL;
+		break;
+	case PSI_CGROUP:
+		t->of = params->of;
+		break;
+	}
+
+	t->pending_event = false;
+	t->aggregator = params->privileged ? PSI_POLL : PSI_AVGS;
+
+	if (params->privileged) {
 		mutex_lock(&group->rtpoll_trigger_lock);
 
 		if (!rcu_access_pointer(group->rtpoll_task)) {
@@ -1412,7 +1426,7 @@ void psi_trigger_destroy(struct psi_trigger *t)
 	 * being accessed later. Can happen if cgroup is deleted from under a
 	 * polling process.
 	 */
-	if (t->of)
+	if (t->type == PSI_CGROUP)
 		kernfs_notify(t->of->kn);
 	else
 		wake_up_interruptible(&t->event_wait);
@@ -1492,7 +1506,7 @@ __poll_t psi_trigger_poll(void **trigger_ptr,
 	if (!t)
 		return DEFAULT_POLLMASK | EPOLLERR | EPOLLPRI;
 
-	if (t->of)
+	if (t->type == PSI_CGROUP)
 		kernfs_generic_poll(t->of, wait);
 	else
 		poll_wait(file, &t->event_wait, wait);
@@ -1541,6 +1555,8 @@ static ssize_t psi_write(struct file *file, const char __user *user_buf,
 	size_t buf_size;
 	struct seq_file *seq;
 	struct psi_trigger *new;
+	struct psi_trigger_params params;
+	int err;
 
 	if (static_branch_likely(&psi_disabled))
 		return -EOPNOTSUPP;
@@ -1554,6 +1570,10 @@ static ssize_t psi_write(struct file *file, const char __user *user_buf,
 
 	buf[buf_size - 1] = '\0';
 
+	err = psi_trigger_parse(&params, buf);
+	if (err)
+		return err;
+
 	seq = file->private_data;
 
 	/* Take seq->lock to protect seq->private from concurrent writes */
@@ -1565,7 +1585,11 @@ static ssize_t psi_write(struct file *file, const char __user *user_buf,
 		return -EBUSY;
 	}
 
-	new = psi_trigger_create(&psi_system, buf, res, file, NULL);
+	params.type = PSI_SYSTEM;
+	params.res = res;
+	params.privileged = psi_file_privileged(file);
+
+	new = psi_trigger_create(&psi_system, &params);
 	if (IS_ERR(new)) {
 		mutex_unlock(&seq->lock);
 		return PTR_ERR(new);
