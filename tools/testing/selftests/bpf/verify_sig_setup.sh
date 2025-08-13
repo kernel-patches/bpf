@@ -32,7 +32,7 @@ usage()
 	exit 1
 }
 
-setup()
+genkey()
 {
 	local tmp_dir="$1"
 
@@ -46,8 +46,15 @@ setup()
 	openssl x509 -in ${tmp_dir}/signing_key.pem -out \
 		${tmp_dir}/signing_key.der -outform der
 
-	key_id=$(cat ${tmp_dir}/signing_key.der | keyctl padd asymmetric ebpf_testing_key @s)
+}
 
+setup()
+{
+	local tmp_dir="$1"
+
+	genkey "${tmp_dir}"
+
+	key_id=$(cat ${tmp_dir}/signing_key.der | keyctl padd asymmetric ebpf_testing_key @s)
 	keyring_id=$(keyctl newring ebpf_testing_keyring @s)
 	keyctl link $key_id $keyring_id
 }
@@ -105,6 +112,8 @@ main()
 
 	if [[ "${action}" == "setup" ]]; then
 		setup "${tmp_dir}"
+	elif [[ "${action}" == "genkey" ]]; then
+		genkey "${tmp_dir}"
 	elif [[ "${action}" == "cleanup" ]]; then
 		cleanup "${tmp_dir}"
 	elif [[ "${action}" == "fsverity-create-sign" ]]; then
