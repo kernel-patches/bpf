@@ -1872,9 +1872,9 @@ next_batch:
 
 	rcu_read_unlock();
 	bpf_enable_instrumentation();
-	if (bucket_cnt && (copy_to_user(ukeys + total * key_size, keys,
+	if (bucket_cnt && (ukeys && copy_to_user(ukeys + total * key_size, keys,
 	    key_size * bucket_cnt) ||
-	    copy_to_user(uvalues + total * value_size, values,
+	    uvalues && copy_to_user(uvalues + total * value_size, values,
 	    value_size * bucket_cnt))) {
 		ret = -EFAULT;
 		goto after_loop;
