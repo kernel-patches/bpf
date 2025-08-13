@@ -12,7 +12,7 @@
 
 #include "test_tc_link.skel.h"
 #include "netlink_helpers.h"
-#include "tc_helpers.h"
+#include "tcx_helpers.h"
 
 #define NETKIT_HEADROOM	32
 #define NETKIT_TAILROOM	8
@@ -252,7 +252,7 @@ void serial_test_tc_netkit_basic(void)
 	ASSERT_EQ(optq.prog_ids[1], 0, "prog_ids[1]");
 	ASSERT_EQ(optq.link_ids[1], 0, "link_ids[1]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_EQ(send_icmp(), 0, "icmp_pkt");
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -285,7 +285,7 @@ void serial_test_tc_netkit_basic(void)
 	ASSERT_EQ(optq.prog_ids[1], 0, "prog_ids[1]");
 	ASSERT_EQ(optq.link_ids[1], 0, "link_ids[1]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_EQ(send_icmp(), 0, "icmp_pkt");
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -366,7 +366,7 @@ static void serial_test_tc_netkit_multi_links_target(int mode, int target)
 	ASSERT_EQ(optq.prog_ids[1], 0, "prog_ids[1]");
 	ASSERT_EQ(optq.link_ids[1], 0, "link_ids[1]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_EQ(send_icmp(), 0, "icmp_pkt");
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -406,7 +406,7 @@ static void serial_test_tc_netkit_multi_links_target(int mode, int target)
 	ASSERT_EQ(optq.prog_ids[2], 0, "prog_ids[2]");
 	ASSERT_EQ(optq.link_ids[2], 0, "link_ids[2]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_EQ(send_icmp(), 0, "icmp_pkt");
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -481,7 +481,7 @@ static void serial_test_tc_netkit_multi_opts_target(int mode, int target)
 	ASSERT_EQ(optq.prog_ids[0], pid1, "prog_ids[0]");
 	ASSERT_EQ(optq.prog_ids[1], 0, "prog_ids[1]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_EQ(send_icmp(), 0, "icmp_pkt");
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -512,7 +512,7 @@ static void serial_test_tc_netkit_multi_opts_target(int mode, int target)
 	ASSERT_EQ(optq.prog_ids[1], pid1, "prog_ids[1]");
 	ASSERT_EQ(optq.prog_ids[2], 0, "prog_ids[2]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_EQ(send_icmp(), 0, "icmp_pkt");
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -616,7 +616,7 @@ void serial_test_tc_netkit_device(void)
 	ASSERT_EQ(optq.prog_ids[1], 0, "prog_ids[1]");
 	ASSERT_EQ(optq.link_ids[1], 0, "link_ids[1]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_EQ(send_icmp(), 0, "icmp_pkt");
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -716,7 +716,7 @@ static void serial_test_tc_netkit_neigh_links_target(int mode, int target)
 	ASSERT_EQ(optq.prog_ids[1], 0, "prog_ids[1]");
 	ASSERT_EQ(optq.link_ids[1], 0, "link_ids[1]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_EQ(__send_icmp(ping_addr_noneigh), 0, "icmp_pkt");
 
 	ASSERT_EQ(skel->bss->seen_tc1, true /* L2: ARP */, "seen_tc1");
@@ -787,7 +787,7 @@ static void serial_test_tc_netkit_pkt_type_mode(int mode)
 
 	move_netkit();
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	skel->bss->set_type = true;
 	ASSERT_EQ(send_icmp(), 0, "icmp_pkt");
 
@@ -847,7 +847,7 @@ static void serial_test_tc_netkit_scrub_type(int scrub, bool room)
 	assert_mprog_count_ifindex(ifindex, BPF_NETKIT_PRIMARY, 1);
 	assert_mprog_count_ifindex(ifindex, BPF_NETKIT_PEER, 0);
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_EQ(send_icmp(), 0, "icmp_pkt");
 
 	ASSERT_EQ(skel->bss->seen_tc8, true, "seen_tc8");
