@@ -8,7 +8,7 @@
 #define ping_cmd "ping -q -c1 -w1 127.0.0.1 > /dev/null"
 
 #include "test_tc_link.skel.h"
-#include "tc_helpers.h"
+#include "tcx_helpers.h"
 
 void test_ns_tc_opts_basic(void)
 {
@@ -59,7 +59,7 @@ void test_ns_tc_opts_basic(void)
 	ASSERT_EQ(optq.prog_ids[0], id1, "prog_ids[0]");
 	ASSERT_EQ(optq.prog_ids[1], 0, "prog_ids[1]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -84,7 +84,7 @@ void test_ns_tc_opts_basic(void)
 	ASSERT_EQ(optq.prog_ids[0], id2, "prog_ids[0]");
 	ASSERT_EQ(optq.prog_ids[1], 0, "prog_ids[1]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -165,7 +165,7 @@ static void test_tc_opts_before_target(int target)
 	ASSERT_EQ(optq.prog_ids[1], id2, "prog_ids[1]");
 	ASSERT_EQ(optq.prog_ids[2], 0, "prog_ids[2]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -222,7 +222,7 @@ static void test_tc_opts_before_target(int target)
 	ASSERT_EQ(optq.prog_ids[3], id2, "prog_ids[3]");
 	ASSERT_EQ(optq.prog_ids[4], 0, "prog_ids[4]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -317,7 +317,7 @@ static void test_tc_opts_after_target(int target)
 	ASSERT_EQ(optq.prog_ids[1], id2, "prog_ids[1]");
 	ASSERT_EQ(optq.prog_ids[2], 0, "prog_ids[2]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -374,7 +374,7 @@ static void test_tc_opts_after_target(int target)
 	ASSERT_EQ(optq.prog_ids[3], id4, "prog_ids[3]");
 	ASSERT_EQ(optq.prog_ids[4], 0, "prog_ids[4]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -520,7 +520,7 @@ static void test_tc_opts_revision_target(int target)
 	ASSERT_EQ(optq.prog_ids[1], id2, "prog_ids[1]");
 	ASSERT_EQ(optq.prog_ids[2], 0, "prog_ids[2]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -615,7 +615,7 @@ static void test_tc_chain_classic(int target, bool chain_tc_old)
 
 	assert_mprog_count(target, 2);
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -628,7 +628,7 @@ static void test_tc_chain_classic(int target, bool chain_tc_old)
 
 	assert_mprog_count(target, 1);
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -735,7 +735,7 @@ static void test_tc_opts_replace_target(int target)
 	ASSERT_EQ(optq.prog_attach_flags[1], 0, "prog_flags[1]");
 	ASSERT_EQ(optq.prog_attach_flags[2], 0, "prog_flags[2]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -769,7 +769,7 @@ static void test_tc_opts_replace_target(int target)
 	ASSERT_EQ(optq.prog_ids[1], id1, "prog_ids[1]");
 	ASSERT_EQ(optq.prog_ids[2], 0, "prog_ids[2]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -804,7 +804,7 @@ static void test_tc_opts_replace_target(int target)
 	ASSERT_EQ(optq.prog_ids[1], id1, "prog_ids[1]");
 	ASSERT_EQ(optq.prog_ids[2], 0, "prog_ids[2]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -1084,7 +1084,7 @@ static void test_tc_opts_prepend_target(int target)
 	ASSERT_EQ(optq.prog_ids[1], id1, "prog_ids[1]");
 	ASSERT_EQ(optq.prog_ids[2], 0, "prog_ids[2]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -1125,7 +1125,7 @@ static void test_tc_opts_prepend_target(int target)
 	ASSERT_EQ(optq.prog_ids[3], id1, "prog_ids[3]");
 	ASSERT_EQ(optq.prog_ids[4], 0, "prog_ids[4]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -1224,7 +1224,7 @@ static void test_tc_opts_append_target(int target)
 	ASSERT_EQ(optq.prog_ids[1], id2, "prog_ids[1]");
 	ASSERT_EQ(optq.prog_ids[2], 0, "prog_ids[2]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -1265,7 +1265,7 @@ static void test_tc_opts_append_target(int target)
 	ASSERT_EQ(optq.prog_ids[3], id4, "prog_ids[3]");
 	ASSERT_EQ(optq.prog_ids[4], 0, "prog_ids[4]");
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc1, true, "seen_tc1");
@@ -2320,7 +2320,7 @@ static void test_tc_chain_mixed(int target)
 
 	assert_mprog_count(target, 1);
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc4, false, "seen_tc4");
@@ -2340,7 +2340,7 @@ static void test_tc_chain_mixed(int target)
 
 	assert_mprog_count(target, 1);
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc4, true, "seen_tc4");
@@ -2352,7 +2352,7 @@ cleanup_opts:
 	ASSERT_OK(err, "prog_detach");
 	assert_mprog_count(target, 0);
 
-	tc_skel_reset_all_seen(skel);
+	tcx_skel_reset_all_seen(skel);
 	ASSERT_OK(system(ping_cmd), ping_cmd);
 
 	ASSERT_EQ(skel->bss->seen_tc4, false, "seen_tc4");
