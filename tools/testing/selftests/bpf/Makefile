@@ -887,6 +887,15 @@ $(OUTPUT)/uprobe_multi: uprobe_multi.c uprobe_multi.ld
 	$(Q)$(CC) $(CFLAGS) -Wl,-T,uprobe_multi.ld -O0 $(LDFLAGS) 	\
 		$(filter-out %.ld,$^) $(LDLIBS) -o $@
 
+# Avoid THUMB insns in uprobe testing since not supported
+$(OUTPUT)/attach_probe.test.o						\
+$(OUTPUT)/bpf_cookie.test.o						\
+$(OUTPUT)/fill_link_info.test.o						\
+$(OUTPUT)/task_pt_regs.test.o						\
+$(OUTPUT)/uprobe_autoattach.test.o					\
+$(OUTPUT)/usdt.test.o							\
+$(OUTPUT)/uprobe_multi:	CFLAGS += $(if $(filter arm, $(ARCH)),-marm)
+
 EXTRA_CLEAN := $(SCRATCH_DIR) $(HOST_SCRATCH_DIR)			\
 	prog_tests/tests.h map_tests/tests.h verifier/tests.h		\
 	feature bpftool $(TEST_KMOD_TARGETS)				\
