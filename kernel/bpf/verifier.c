@@ -15891,6 +15891,8 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 			return 0;
 		if (smin1 > smax2 || smax1 < smin2)
 			return 0;
+		if (!tnum_agree(t1, t2))
+			return 0;
 		if (!is_jmp32) {
 			/* if 64-bit ranges are inconclusive, see if we can
 			 * utilize 32-bit subrange knowledge to eliminate
@@ -15914,6 +15916,8 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 		if (umin1 > umax2 || umax1 < umin2)
 			return 1;
 		if (smin1 > smax2 || smax1 < smin2)
+			return 1;
+		if (!tnum_agree(t1, t2))
 			return 1;
 		if (!is_jmp32) {
 			/* if 64-bit ranges are inconclusive, see if we can
