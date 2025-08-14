@@ -229,8 +229,24 @@ static void __build_epilogue(struct jit_ctx *ctx, bool is_tail_call)
 	emit_insn(ctx, addid, LOONGARCH_GPR_SP, LOONGARCH_GPR_SP, stack_adjust);
 
 	if (!is_tail_call) {
-		/* Set return value */
+		/*
+		 *  Set return value
+		 *  Check if the 64th bit in regmap[BPF_REG_0] is 1. If it is,
+		 *  the value in regmap[BPF_REG_0] is a kernel-space address.
+		 *
+		 *  t1 = regmap[BPF_REG_0] >> 63
+		 *  t2 = 1
+		 *  if(t2 == t1)
+		 *	move a0 <- regmap[BPF_REG_0]
+		 *  else
+		 *	addiw a0 <- regmap[BPF_REG_0] + 0
+		 */
+		emit_insn(ctx, srlid, LOONGARCH_GPR_T1, regmap[BPF_REG_0], 63);
+		emit_insn(ctx, addid, LOONGARCH_GPR_T2, LOONGARCH_GPR_ZERO, 0x1);
+		emit_cond_jmp(ctx, BPF_JEQ, LOONGARCH_GPR_T1, LOONGARCH_GPR_T2, 3);
 		emit_insn(ctx, addiw, LOONGARCH_GPR_A0, regmap[BPF_REG_0], 0);
+		emit_uncond_jmp(ctx, 2);
+		move_reg(ctx, LOONGARCH_GPR_A0, regmap[BPF_REG_0]);
 		/* Return to the caller */
 		emit_insn(ctx, jirl, LOONGARCH_GPR_ZERO, LOONGARCH_GPR_RA, 0);
 	} else {
