@@ -502,7 +502,7 @@ static int do_btf_read(struct bpf_iter_task_btf *skel)
 		goto free_link;
 
 	ASSERT_HAS_SUBSTR(taskbuf, "(struct task_struct)",
-	      "check for btf representation of task_struct in iter data");
+	      "check_task_btf");
 free_link:
 	if (iter_fd > 0)
 		close(iter_fd);
@@ -526,11 +526,8 @@ static void test_task_btf(void)
 	if (ret)
 		goto cleanup;
 
-	if (!ASSERT_NEQ(bss->tasks, 0, "no task iteration, did BPF program run?"))
-		goto cleanup;
-
-	ASSERT_EQ(bss->seq_err, 0, "check for unexpected err");
-
+	ASSERT_EQ(bss->seq_err, 0, "iter_seq_err");
+	ASSERT_GT(bss->tasks, 0, "task_iterations");
 cleanup:
 	bpf_iter_task_btf__destroy(skel);
 }
