@@ -15,11 +15,19 @@ __attribute__((optimize("O2")))
 int lets_test_this(int);
 static volatile __u64 array[1] = {test_value};
 
-static __always_inline void trigger_func(void)
+static noinline void trigger_func(void)
 {
+#if defined(__x86_64__) || defined(__i386__)
 	/* Base address + offset + (index * scale) */
-	for (volatile int i = 0; i <= 0; i++)
-		STAP_PROBE1(test, usdt1, array[i]);
+	/* Force SIB addressing with inline assembly */
+	const __u64 *base;
+	__u32 idx;
+	/* binding base to %rdx and idx to %rax */
+	asm volatile("" : "=d"(base), "=a"(idx) : "0"(array), "1"((__u32)0) : "memory");
+	STAP_PROBE1(test, usdt1, base[idx]);
+#else
+	STAP_PROBE1(test, usdt1, array[0]);
+#endif
 }
 
 static void basic_sib_usdt(void)
@@ -61,9 +69,11 @@ cleanup:
 	test_usdt_o2__destroy(skel);
 }
 
-
-
 void test_usdt_o2(void)
 {
+#if !defined(__x86_64__) && !defined(__i386__)
+	test__skip();
+	return;
+#endif
 	basic_sib_usdt();
 }
