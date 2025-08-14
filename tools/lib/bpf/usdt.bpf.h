@@ -34,13 +34,31 @@ enum __bpf_usdt_arg_type {
 	BPF_USDT_ARG_CONST,
 	BPF_USDT_ARG_REG,
 	BPF_USDT_ARG_REG_DEREF,
+	BPF_USDT_ARG_SIB,
 };
 
+/*
+ * To preserve overall layout and avoid growing this struct while adding SIB
+ * extras, we keep 4 bytes worth of space after val_off:
+ *
+ *  - arg_type is stored as a single byte (values from enum below)
+ *  - idx_packed is a 16-bit field packing idx_reg_off (high 12 bits)
+ *    and scale shift (low 4 bits, i.e., scale = 1 << shift)
+ *  - reserved is one spare byte for future use
+ *
+ * This keeps the offset of reg_off identical to the historical layout
+ * (val_off:8 + 4 bytes here), ensuring backwards/forwards compatibility for
+ * non-SIB modes that only rely on val_off/arg_type/reg_off/... offsets.
+ */
 struct __bpf_usdt_arg_spec {
 	/* u64 scalar interpreted depending on arg_type, see below */
 	__u64 val_off;
 	/* arg location case, see bpf_usdt_arg() for details */
-	enum __bpf_usdt_arg_type arg_type;
+	__u8 arg_type;
+	/* packed: [15:4] idx_reg_off, [3:0] scale_shift */
+	__u16 idx_packed;
+	/* reserved for future use, keeps reg_off offset stable */
+	__u8 reserved;
 	/* offset of referenced register within struct pt_regs */
 	short reg_off;
 	/* whether arg should be interpreted as signed value */
@@ -51,6 +69,10 @@ struct __bpf_usdt_arg_spec {
 	 */
 	char arg_bitshift;
 };
+
+/* Helpers to (un)pack SIB extras from idx_packed without relying on bitfields. */
+#define USDT_IDX_OFF(packed)         ((packed) >> 4)
+#define USDT_IDX_SCALE_SHIFT(packed) ((packed) & 0x000f)
 
 /* should match USDT_MAX_ARG_CNT in usdt.c exactly */
 #define BPF_USDT_MAX_ARG_CNT 12
@@ -149,8 +171,9 @@ int bpf_usdt_arg(struct pt_regs *ctx, __u64 arg_num, long *res)
 {
 	struct __bpf_usdt_spec *spec;
 	struct __bpf_usdt_arg_spec *arg_spec;
-	unsigned long val;
+	unsigned long val, idx;
 	int err, spec_id;
+	int idx_off = 0, scale = 0;
 
 	*res = 0;
 
@@ -198,6 +221,34 @@ int bpf_usdt_arg(struct pt_regs *ctx, __u64 arg_num, long *res)
 		if (err)
 			return err;
 		err = bpf_probe_read_user(&val, sizeof(val), (void *)val + arg_spec->val_off);
+		if (err)
+			return err;
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+		val >>= arg_spec->arg_bitshift;
+#endif
+		break;
+	case BPF_USDT_ARG_SIB:
+		/* Arg is in memory addressed by SIB (Scale-Index-Base) mode
+		 * (e.g., "-1@-96(%rbp,%rax,8)" in USDT arg spec). Register
+		 * is identified like with BPF_USDT_ARG_SIB case, the offset
+		 * is in arg_spec->val_off, the scale factor is in arg_spec->scale.
+		 * Firstly, we fetch the base register contents and the index
+		 * register contents from pt_regs. Secondly, we multiply the
+		 * index register contents by the scale factor, then add the
+		 * base address and the offset to get the final address. Finally,
+		 * we do another user-space probe read to fetch argument value
+		 * itself.
+		 */
+		idx_off = USDT_IDX_OFF(arg_spec->idx_packed);
+		scale = 1UL << USDT_IDX_SCALE_SHIFT(arg_spec->idx_packed);
+		err = bpf_probe_read_kernel(&val, sizeof(val), (void *)ctx + arg_spec->reg_off);
+		if (err)
+			return err;
+		err = bpf_probe_read_kernel(&idx, sizeof(idx), (void *)ctx + idx_off);
+		if (err)
+			return err;
+		err = bpf_probe_read_user(&val, sizeof(val),
+								 (void *)val + idx * scale + arg_spec->val_off);
 		if (err)
 			return err;
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
