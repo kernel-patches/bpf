@@ -116,31 +116,47 @@ struct tnum tnum_xor(struct tnum a, struct tnum b)
 	return TNUM(v & ~mu, mu);
 }
 
-/* Generate partial products by multiplying each bit in the multiplier (tnum a)
- * with the multiplicand (tnum b), and add the partial products after
- * appropriately bit-shifting them. Instead of directly performing tnum addition
- * on the generated partial products, equivalenty, decompose each partial
- * product into two tnums, consisting of the value-sum (acc_v) and the
- * mask-sum (acc_m) and then perform tnum addition on them. The following paper
- * explains the algorithm in more detail: https://arxiv.org/abs/2105.05398.
+/* Perform long multiplication, iterating through the trits in a. A small trick
+ * inside the loop finds two possible partial products and takes their union,
+ * improving the precision significantly.
+ * A comment inside refers to a paper by Harishankar et al.:
+ * https://arxiv.org/abs/2105.05398
  */
 struct tnum tnum_mul(struct tnum a, struct tnum b)
 {
-	u64 acc_v = a.value * b.value;
-	struct tnum acc_m = TNUM(0, 0);
+	struct tnum acc = TNUM(0, 0);
 
 	while (a.value || a.mask) {
 		/* LSB of tnum a is a certain 1 */
-		if (a.value & 1)
-			acc_m = tnum_add(acc_m, TNUM(0, b.mask));
+		if (a.value & 1) {
+			acc = tnum_add(acc, b);
+		}
 		/* LSB of tnum a is uncertain */
-		else if (a.mask & 1)
-			acc_m = tnum_add(acc_m, TNUM(0, b.value | b.mask));
+		else if (a.mask & 1) {
+			/* Simply multiplying b with LSB(a)'s uncertainty results in decreased
+			 * precision, as explained in an open question ("How can we incorporate
+			 * correlation in unknown bits across partial products?") left by
+			 * Harishankar et al. However, we know for sure that LSB(a) is either
+			 * 0 or 1, from which we could find two possible partial products and
+			 * take a union. This improves the precision in a significant number of
+			 * cases.
+			 *
+			 * The first partial product (acc_0) is for the case LSB(a) = 0;
+			 * but acc_0 = acc + 0 * b = acc.
+			 */
+
+			/* In case LSB(a) is 1 */
+			u64 itermask = b.value | b.mask;
+			struct tnum iterprod = TNUM(b.value & ~itermask, itermask);
+			struct tnum acc_1 = tnum_add(acc, iterprod);
+
+			acc = tnum_union(acc, acc_1);
+		}
 		/* Note: no case for LSB is certain 0 */
 		a = tnum_rshift(a, 1);
 		b = tnum_lshift(b, 1);
 	}
-	return tnum_add(TNUM(acc_v, 0), acc_m);
+	return acc;
 }
 
 /* Note that if a and b disagree - i.e. one has a 'known 1' where the other has
@@ -152,6 +168,14 @@ struct tnum tnum_intersect(struct tnum a, struct tnum b)
 
 	v = a.value | b.value;
 	mu = a.mask & b.mask;
+	return TNUM(v & ~mu, mu);
+}
+
+struct tnum tnum_union(struct tnum a, struct tnum b)
+{
+	u64 v = a.value & b.value;
+	u64 mu = (a.value ^ b.value) | a.mask | b.mask;
+
 	return TNUM(v & ~mu, mu);
 }
 
