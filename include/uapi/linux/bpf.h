@@ -7521,7 +7521,7 @@ struct bpf_sk_lookup {
  * Display flags - BTF_F_* - are passed to bpf_snprintf_btf separately.
  */
 struct btf_ptr {
-	void *ptr;
+	__bpf_md_ptr(void *, ptr);
 	__u32 type_id;
 	__u32 flags;		/* BTF ptr flags; unused at present. */
 };
