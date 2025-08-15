@@ -70,7 +70,7 @@ void bpf_task_storage_free(struct task_struct *task)
 {
 	struct bpf_local_storage *local_storage;
 
-	migrate_disable();
+	rcu_migrate_disable();
 	rcu_read_lock();
 
 	local_storage = rcu_dereference(task->bpf_storage);
@@ -82,7 +82,7 @@ void bpf_task_storage_free(struct task_struct *task)
 	bpf_task_storage_unlock();
 out:
 	rcu_read_unlock();
-	migrate_enable();
+	rcu_migrate_enable();
 }
 
 static void *bpf_pid_task_storage_lookup_elem(struct bpf_map *map, void *key)
