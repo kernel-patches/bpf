@@ -92,6 +92,8 @@ enum reg2i6_op {
 };
 
 enum reg2i12_op {
+	slti_op         = 0x08,
+	sltui_op        = 0x09,
 	addiw_op	= 0x0a,
 	addid_op	= 0x0b,
 	lu52id_op	= 0x0c,
@@ -148,6 +150,8 @@ enum reg3_op {
 	addd_op		= 0x21,
 	subw_op		= 0x22,
 	subd_op		= 0x23,
+	slt_op          = 0x24,
+	sltu_op         = 0x25,
 	nor_op		= 0x28,
 	and_op		= 0x29,
 	or_op		= 0x2a,
@@ -629,6 +633,8 @@ static inline void emit_##NAME(union loongarch_instruction *insn,	\
 	insn->reg2i12_format.rj = rj;					\
 }
 
+DEF_EMIT_REG2I12_FORMAT(slti, slti_op)
+DEF_EMIT_REG2I12_FORMAT(sltui, sltui_op)
 DEF_EMIT_REG2I12_FORMAT(addiw, addiw_op)
 DEF_EMIT_REG2I12_FORMAT(addid, addid_op)
 DEF_EMIT_REG2I12_FORMAT(lu52id, lu52id_op)
@@ -729,6 +735,8 @@ static inline void emit_##NAME(union loongarch_instruction *insn,	\
 DEF_EMIT_REG3_FORMAT(addw, addw_op)
 DEF_EMIT_REG3_FORMAT(addd, addd_op)
 DEF_EMIT_REG3_FORMAT(subd, subd_op)
+DEF_EMIT_REG3_FORMAT(slt, slt_op)
+DEF_EMIT_REG3_FORMAT(sltu, sltu_op)
 DEF_EMIT_REG3_FORMAT(muld, muld_op)
 DEF_EMIT_REG3_FORMAT(divd, divd_op)
 DEF_EMIT_REG3_FORMAT(modd, modd_op)
