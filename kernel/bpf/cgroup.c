@@ -71,7 +71,7 @@ bpf_prog_run_array_cg(const struct cgroup_bpf *cgrp,
 	u32 func_ret;
 
 	run_ctx.retval = retval;
-	migrate_disable();
+	rcu_migrate_disable();
 	rcu_read_lock();
 	array = rcu_dereference(cgrp->effective[atype]);
 	item = &array->items[0];
@@ -89,7 +89,7 @@ bpf_prog_run_array_cg(const struct cgroup_bpf *cgrp,
 	}
 	bpf_reset_run_ctx(old_run_ctx);
 	rcu_read_unlock();
-	migrate_enable();
+	rcu_migrate_enable();
 	return run_ctx.retval;
 }
 
