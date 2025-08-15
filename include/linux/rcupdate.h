@@ -72,6 +72,16 @@ static inline bool same_state_synchronize_rcu(unsigned long oldstate1, unsigned 
 void __rcu_read_lock(void);
 void __rcu_read_unlock(void);
 
+static inline void rcu_migrate_enable(void)
+{
+	migrate_enable();
+}
+
+static inline void rcu_migrate_disable(void)
+{
+	migrate_disable();
+}
+
 /*
  * Defined as a macro as it is a very low level header included from
  * areas that don't even know about current.  This gives the rcu_read_lock()
@@ -103,6 +113,14 @@ static inline void __rcu_read_unlock(void)
 static inline int rcu_preempt_depth(void)
 {
 	return 0;
+}
+
+static inline void rcu_migrate_enable(void)
+{
+}
+
+static inline void rcu_migrate_disable(void)
+{
 }
 
 #endif /* #else #ifdef CONFIG_PREEMPT_RCU */
