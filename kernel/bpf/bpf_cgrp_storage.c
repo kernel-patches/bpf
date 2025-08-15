@@ -45,7 +45,7 @@ void bpf_cgrp_storage_free(struct cgroup *cgroup)
 {
 	struct bpf_local_storage *local_storage;
 
-	migrate_disable();
+	rcu_migrate_disable();
 	rcu_read_lock();
 	local_storage = rcu_dereference(cgroup->bpf_cgrp_storage);
 	if (!local_storage)
@@ -56,7 +56,7 @@ void bpf_cgrp_storage_free(struct cgroup *cgroup)
 	bpf_cgrp_storage_unlock();
 out:
 	rcu_read_unlock();
-	migrate_enable();
+	rcu_migrate_enable();
 }
 
 static struct bpf_local_storage_data *
