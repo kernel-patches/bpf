@@ -1340,12 +1340,13 @@ static bool bpf_net_capable(void)
 
 #define BPF_MAP_CREATE_LAST_FIELD map_token_fd
 /* called via syscall */
-static int map_create(union bpf_attr *attr, bool kernel)
+static int map_create(union bpf_attr *attr, bool kernel, struct bpf_common_attr *common_attrs)
 {
+	u32 map_type = attr->map_type, log_true_size;
+	struct bpf_verifier_log *log = NULL;
 	const struct bpf_map_ops *ops;
 	struct bpf_token *token = NULL;
 	int numa_node = bpf_map_attr_numa_node(attr);
-	u32 map_type = attr->map_type;
 	struct bpf_map *map;
 	bool token_flag;
 	int f_flags;
@@ -1355,6 +1356,18 @@ static int map_create(union bpf_attr *attr, bool kernel)
 	if (err)
 		return -EINVAL;
 
+	if (common_attrs->log_buf) {
+		log = kvzalloc(sizeof(*log), GFP_KERNEL);
+		if (!log)
+			return -ENOMEM;
+		err = bpf_vlog_init(log, BPF_LOG_FIXED, u64_to_user_ptr(common_attrs->log_buf),
+				    common_attrs->log_size, NULL);
+		if (err) {
+			kvfree(log);
+			return err;
+		}
+	}
+
 	/* check BPF_F_TOKEN_FD flag, remember if it's set, and then clear it
 	 * to avoid per-map type checks tripping on unknown flag
 	 */
@@ -1363,16 +1376,24 @@ static int map_create(union bpf_attr *attr, bool kernel)
 
 	if (attr->btf_vmlinux_value_type_id) {
 		if (attr->map_type != BPF_MAP_TYPE_STRUCT_OPS ||
-		    attr->btf_key_type_id || attr->btf_value_type_id)
-			return -EINVAL;
+		    attr->btf_key_type_id || attr->btf_value_type_id) {
+			bpf_log(log, "Invalid use of btf_vmlinux_value_type_id.\n");
+			err = -EINVAL;
+			goto put_token;
+		}
 	} else if (attr->btf_key_type_id && !attr->btf_value_type_id) {
-		return -EINVAL;
+		bpf_log(log, "Invalid btf_value_type_id.\n");
+		err = -EINVAL;
+		goto put_token;
 	}
 
 	if (attr->map_type != BPF_MAP_TYPE_BLOOM_FILTER &&
 	    attr->map_type != BPF_MAP_TYPE_ARENA &&
-	    attr->map_extra != 0)
-		return -EINVAL;
+	    attr->map_extra != 0) {
+		bpf_log(log, "Invalid map_extra.\n");
+		err = -EINVAL;
+		goto put_token;
+	}
 
 	f_flags = bpf_get_file_flag(attr->map_flags);
 	if (f_flags < 0)
@@ -1380,17 +1401,26 @@ static int map_create(union bpf_attr *attr, bool kernel)
 
 	if (numa_node != NUMA_NO_NODE &&
 	    ((unsigned int)numa_node >= nr_node_ids ||
-	     !node_online(numa_node)))
-		return -EINVAL;
+	     !node_online(numa_node))) {
+		bpf_log(log, "Invalid or offline numa_node.\n");
+		err = -EINVAL;
+		goto put_token;
+	}
 
 	/* find map type and init map: hashtable vs rbtree vs bloom vs ... */
 	map_type = attr->map_type;
-	if (map_type >= ARRAY_SIZE(bpf_map_types))
-		return -EINVAL;
+	if (map_type >= ARRAY_SIZE(bpf_map_types)) {
+		bpf_log(log, "Invalid map_type.\n");
+		err = -EINVAL;
+		goto put_token;
+	}
 	map_type = array_index_nospec(map_type, ARRAY_SIZE(bpf_map_types));
 	ops = bpf_map_types[map_type];
-	if (!ops)
-		return -EINVAL;
+	if (!ops) {
+		bpf_log(log, "Invalid map_type.\n");
+		err = -EINVAL;
+		goto put_token;
+	}
 
 	if (ops->map_alloc_check) {
 		err = ops->map_alloc_check(attr);
@@ -1399,13 +1429,20 @@ static int map_create(union bpf_attr *attr, bool kernel)
 	}
 	if (attr->map_ifindex)
 		ops = &bpf_map_offload_ops;
-	if (!ops->map_mem_usage)
-		return -EINVAL;
+	if (!ops->map_mem_usage) {
+		bpf_log(log, "map_mem_usage is required.\n");
+		err = -EINVAL;
+		goto put_token;
+	}
 
 	if (token_flag) {
 		token = bpf_token_get_from_fd(attr->map_token_fd);
-		if (IS_ERR(token))
-			return PTR_ERR(token);
+		if (IS_ERR(token)) {
+			bpf_log(log, "Invalid map_token_fd.\n");
+			err = PTR_ERR(token);
+			token = NULL;
+			goto put_token;
+		}
 
 		/* if current token doesn't grant map creation permissions,
 		 * then we can't use this token, so ignore it and rely on
@@ -1487,8 +1524,10 @@ static int map_create(union bpf_attr *attr, bool kernel)
 
 	err = bpf_obj_name_cpy(map->name, attr->map_name,
 			       sizeof(attr->map_name));
-	if (err < 0)
+	if (err < 0) {
+		bpf_log(log, "Invalid map_name.\n");
 		goto free_map;
+	}
 
 	preempt_disable();
 	map->cookie = gen_cookie_next(&bpf_map_cookie);
@@ -1511,6 +1550,7 @@ static int map_create(union bpf_attr *attr, bool kernel)
 
 		btf = btf_get_by_fd(attr->btf_fd);
 		if (IS_ERR(btf)) {
+			bpf_log(log, "Invalid btf_fd.\n");
 			err = PTR_ERR(btf);
 			goto free_map;
 		}
@@ -1565,6 +1605,10 @@ free_map:
 	bpf_map_free(map);
 put_token:
 	bpf_token_put(token);
+	if (err && log)
+		(void) bpf_vlog_finalize(log, &log_true_size);
+	if (log)
+		kvfree(log);
 	return err;
 }
 
@@ -6020,7 +6064,7 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size,
 
 	switch (cmd) {
 	case BPF_MAP_CREATE:
-		err = map_create(&attr, uattr.is_kernel);
+		err = map_create(&attr, uattr.is_kernel, &common_attrs);
 		break;
 	case BPF_MAP_LOOKUP_ELEM:
 		err = map_lookup_elem(&attr);
