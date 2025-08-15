@@ -218,7 +218,9 @@ int bpf_map_create(enum bpf_map_type map_type,
 		   const struct bpf_map_create_opts *opts)
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, map_token_fd);
+	struct bpf_common_attr common_attrs;
 	union bpf_attr attr;
+	__u64 log_buf;
 	int fd;
 
 	bump_rlimit_memlock();
@@ -249,7 +251,19 @@ int bpf_map_create(enum bpf_map_type map_type,
 
 	attr.map_token_fd = OPTS_GET(opts, token_fd, 0);
 
-	fd = sys_bpf_fd(BPF_MAP_CREATE, &attr, attr_sz);
+	log_buf = (__u64) OPTS_GET(opts, log_buf, NULL);
+	if (log_buf) {
+		if (!feat_supported(NULL, FEAT_EXTENDED_SYSCALL))
+			return libbpf_err(-EOPNOTSUPP);
+
+		memset(&common_attrs, 0, sizeof(common_attrs));
+		common_attrs.log_buf = log_buf;
+		common_attrs.log_size = OPTS_GET(opts, log_size, 0);
+		fd = sys_bpf_extended(BPF_MAP_CREATE, &attr, attr_sz, &common_attrs,
+				      sizeof(common_attrs));
+	} else {
+		fd = sys_bpf_fd(BPF_MAP_CREATE, &attr, attr_sz);
+	}
 	return libbpf_err_errno(fd);
 }
 
