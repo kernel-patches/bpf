@@ -77,7 +77,15 @@ struct bpf_reg_state {
 			 * the map_uid is non-zero for registers
 			 * pointing to inner maps.
 			 */
-			u32 map_uid;
+			union {
+				u32 map_uid;
+
+				/* Used to track boundaries of a PTR_TO_INSN */
+				struct {
+					u32 min_index;
+					u32 max_index;
+				};
+			};
 		};
 
 		/* for PTR_TO_BTF_ID */
@@ -542,6 +550,11 @@ struct bpf_insn_aux_data {
 		struct {
 			u32 map_index;		/* index into used_maps[] */
 			u32 map_off;		/* offset from value base address */
+
+			struct jt {		/* jump table for gotox instruction */
+				u32 *off;
+				int off_cnt;
+			} jt;
 		};
 		struct {
 			enum bpf_reg_type reg_type;	/* type of pseudo_btf_id */
@@ -585,6 +598,9 @@ struct bpf_insn_aux_data {
 	 */
 	u8 fastcall_spills_num:3;
 	u8 arg_prog:4;
+
+	/* true if jt->off was allocated */
+	bool jt_allocated;
 
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */
