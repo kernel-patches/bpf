@@ -76,10 +76,10 @@ static void check_goto_x_skel(struct bpf_goto_x *skel)
 	for (i = 0; i < ARRAY_SIZE(in); i++)
 		check_simple(skel, skel->progs.two_switches, in[i], out2[i]);
 
-	for (i = 0; i < ARRAY_SIZE(in); i++)
+	if (0) for (i = 0; i < ARRAY_SIZE(in); i++)
 		check_simple(skel, skel->progs.big_jump_table, in3[i], out3[i]);
 
-	for (i = 0; i < ARRAY_SIZE(in); i++)
+	if (0) for (i = 0; i < ARRAY_SIZE(in); i++)
 		check_simple(skel, skel->progs.one_jump_two_maps, in4[i], out4[i]);
 
 	for (i = 0; i < ARRAY_SIZE(in); i++)

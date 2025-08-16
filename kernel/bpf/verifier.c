@@ -20906,8 +20906,10 @@ static int add_used_map(struct bpf_verifier_env *env, int fd)
 	CLASS(fd, f)(fd);
 
 	map = __bpf_map_get(f);
-	if (IS_ERR(map))
+	if (IS_ERR(map)) {
+		verbose(env, "fd %d is not pointing to valid bpf_map\n", fd);
 		return PTR_ERR(map);
+	}
 
 	return __add_used_map(env, map);
 }
@@ -21005,7 +21007,7 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 
 			map_idx = add_used_map(env, fd);
 			if (map_idx < 0) {
-				verbose(env, "failed to convert fd %d to a bpf_map\n", fd);
+				// verbose(env, "failed to convert fd %d to a bpf_map\n", fd);
 				return map_idx;
 			}
 			map = env->used_maps[map_idx];

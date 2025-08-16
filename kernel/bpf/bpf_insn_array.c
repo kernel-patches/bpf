@@ -110,7 +110,7 @@ static long insn_array_update_elem(struct bpf_map *map, void *key, void *value, 
 	struct bpf_insn_array *insn_array = cast_insn_array(map);
 	u32 index = *(u32 *)key;
 	struct bpf_insn_array_value val = {};
-	guard(mutex)(&insn_array->state_mutex);
+	int err = 0;
 
 	if (unlikely((map_flags & ~BPF_F_LOCK) > BPF_EXIST))
 		return -EINVAL;
@@ -122,17 +122,26 @@ static long insn_array_update_elem(struct bpf_map *map, void *key, void *value, 
 		return -EEXIST;
 
 	/* No updates for maps in use */
-	if (insn_array->state != INSN_ARRAY_STATE_FREE)
+	if (!mutex_trylock(&insn_array->state_mutex))
 		return -EBUSY;
 
+	if (insn_array->state != INSN_ARRAY_STATE_FREE) {
+		err = -EBUSY;
+		goto unlock;
+	}
+
 	copy_map_value(map, &val, value);
-	if (val.jitted_off || val.xlated_off == INSN_DELETED)
-		return -EINVAL;
+	if (val.jitted_off || val.xlated_off == INSN_DELETED) {
+		err = -EINVAL;
+		goto unlock;
+	}
 
 	insn_array->ptrs[index].orig_xlated_off = val.xlated_off;
 	insn_array->ptrs[index].user_value.xlated_off = val.xlated_off;
 
-	return 0;
+unlock:
+	mutex_unlock(&insn_array->state_mutex);
+	return err;
 }
 
 static long insn_array_delete_elem(struct bpf_map *map, void *key)
