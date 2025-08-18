@@ -2605,6 +2605,50 @@ bpf_task_get_cgroup1(struct task_struct *task, int hierarchy_id)
 		return NULL;
 	return cgrp;
 }
+
+#define BPF_CGROUP_MAX_WRITE	((1UL << 24) - 1)
+
+/**
+ * bpf_cgroup_write_interface - Writes to a cgroup interface file.
+ * @cgrp: The target cgroup
+ * @name__str: name of the cgroup core interface file
+ * @value_p: value to write
+ * @off: offset
+ *
+ * Return: number of bytes written on success, a negative value on error.
+ */
+__bpf_kfunc int
+bpf_cgroup_write_interface(struct cgroup *cgrp, const char *name__str,
+			   const struct bpf_dynptr *value_p, loff_t off)
+{
+	struct bpf_dynptr_kern *value_ptr = (struct bpf_dynptr_kern *)value_p;
+	struct kernfs_node *kn;
+	const void *value;
+	u32 value_len;
+	int ret;
+
+	value_len = __bpf_dynptr_size(value_ptr);
+	if (!value_len)
+		return 0;
+
+	if (value_len > BPF_CGROUP_MAX_WRITE)
+		return -E2BIG;
+
+	value = __bpf_dynptr_data(value_ptr, value_len);
+	if (!value)
+		return -EINVAL;
+
+	rcu_read_lock();
+	kn = cgrp->kn;
+	rcu_read_unlock();
+
+	kernfs_get(kn);
+	ret = cgroup_kn_interface_write(kn, name__str, value, value_len, off);
+	kernfs_put(kn);
+
+	return ret;
+}
+
 #endif /* CONFIG_CGROUPS */
 
 /**
@@ -3736,6 +3780,7 @@ BTF_ID_FLAGS(func, bpf_cgroup_ancestor, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_cgroup_from_id, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_under_cgroup, KF_RCU)
 BTF_ID_FLAGS(func, bpf_task_get_cgroup1, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_cgroup_write_interface, KF_TRUSTED_ARGS | KF_SLEEPABLE)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_from_vpid, KF_ACQUIRE | KF_RET_NULL)
