@@ -122,6 +122,7 @@ struct psi_window {
 enum psi_trigger_type {
 	PSI_SYSTEM,
 	PSI_CGROUP,
+	PSI_BPF,
 };
 
 struct psi_trigger_params {
@@ -143,8 +144,15 @@ struct psi_trigger_params {
 	/* Privileged triggers are treated differently */
 	bool privileged;
 
-	/* Link to kernfs open file, only for PSI_CGROUP */
-	struct kernfs_open_file *of;
+	union {
+		/* Link to kernfs open file, only for PSI_CGROUP */
+		struct kernfs_open_file *of;
+
+#ifdef CONFIG_BPF_SYSCALL
+		/* Link to bpf_psi structure, only for BPF_PSI */
+		struct bpf_psi *bpf_psi;
+#endif
+	};
 };
 
 struct psi_trigger {
@@ -186,6 +194,31 @@ struct psi_trigger {
 
 	/* Trigger type - PSI_AVGS for unprivileged, PSI_POLL for RT */
 	enum psi_aggregators aggregator;
+
+#ifdef CONFIG_BPF_SYSCALL
+	/* Fields specific to PSI_BPF triggers */
+
+	/* Bpf psi structure for events handling */
+	struct bpf_psi *bpf_psi;
+
+	/* List node inside bpf_psi->triggers list */
+	struct list_head bpf_psi_node;
+
+	/* List node inside group->bpf_triggers list */
+	struct list_head bpf_group_node;
+
+	/* Work structure, used to execute event handlers */
+	struct work_struct bpf_work;
+
+	/*
+	 * Whether the trigger is being pinned in memory.
+	 * Protected by group->bpf_triggers_lock.
+	 */
+	bool pinned;
+
+	/* Cgroup Id */
+	u64 cgroup_id;
+#endif
 };
 
 struct psi_group {
@@ -234,6 +267,12 @@ struct psi_group {
 	u64 rtpoll_total[NR_PSI_STATES - 1];
 	u64 rtpoll_next_update;
 	u64 rtpoll_until;
+
+#ifdef CONFIG_BPF_SYSCALL
+	/* List of triggers owned by bpf and corresponding lock */
+	spinlock_t bpf_triggers_lock;
+	struct list_head bpf_triggers;
+#endif
 };
 
 #else /* CONFIG_PSI */

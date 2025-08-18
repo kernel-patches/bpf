@@ -19,6 +19,7 @@
 #include <linux/sched/rseq_api.h>
 #include <linux/sched/task_stack.h>
 
+#include <linux/bpf_psi.h>
 #include <linux/cpufreq.h>
 #include <linux/cpumask_api.h>
 #include <linux/cpuset.h>
@@ -91,6 +92,9 @@
 
 #ifdef CONFIG_PSI
 # include "psi.c"
+# ifdef CONFIG_BPF_SYSCALL
+#  include "bpf_psi.c"
+# endif
 #endif
 
 #ifdef CONFIG_MEMBARRIER
