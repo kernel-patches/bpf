@@ -3877,6 +3877,12 @@ static ssize_t pressure_write(struct kernfs_open_file *of, char *buf,
 	struct psi_trigger *new;
 	struct cgroup *cgrp;
 	struct psi_group *psi;
+	struct psi_trigger_params params;
+	int err;
+
+	err = psi_trigger_parse(&params, buf);
+	if (err)
+		return err;
 
 	cgrp = cgroup_kn_lock_live(of->kn, false);
 	if (!cgrp)
@@ -3892,7 +3898,13 @@ static ssize_t pressure_write(struct kernfs_open_file *of, char *buf,
 	}
 
 	psi = cgroup_psi(cgrp);
-	new = psi_trigger_create(psi, buf, res, of->file, of);
+
+	params.type = PSI_CGROUP;
+	params.res = res;
+	params.privileged = psi_file_privileged(of->file);
+	params.of = of;
+
+	new = psi_trigger_create(psi, &params);
 	if (IS_ERR(new)) {
 		cgroup_put(cgrp);
 		return PTR_ERR(new);
