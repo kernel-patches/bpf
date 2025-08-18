@@ -125,6 +125,9 @@ int cgroup_rm_cftypes(struct cftype *cfts);
 void cgroup_file_notify(struct cgroup_file *cfile);
 void cgroup_file_show(struct cgroup_file *cfile, bool show);
 
+ssize_t cgroup_kn_interface_write(struct kernfs_node *kn, const char *name__str,
+				  const char *buf, size_t nbytes, loff_t off);
+
 int cgroupstats_build(struct cgroupstats *stats, struct dentry *dentry);
 int proc_cgroup_show(struct seq_file *m, struct pid_namespace *ns,
 		     struct pid *pid, struct task_struct *tsk);

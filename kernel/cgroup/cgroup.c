@@ -229,6 +229,24 @@ static struct file_system_type cgroup2_fs_type;
 static struct cftype cgroup_base_files[];
 static struct cftype cgroup_psi_files[];
 
+struct cgroup_kn_cftype {
+	char name[MAX_CFTYPE_NAME];
+	unsigned int namelen;
+
+	/*
+	 * write() is the write operation on a kernfs node.
+	 */
+	ssize_t (*write)(struct kernfs_node *kn, const char *buf, size_t nbytes,
+			 loff_t off, bool revalidate);
+};
+
+#define CGROUP_PREFIX "cgroup."
+#define CGROUP_CORE_INTERFACE_FREEZE_SUFFIX "freeze"
+#define CGROUP_CORE_INTERFACE_FREEZE (CGROUP_PREFIX CGROUP_CORE_INTERFACE_FREEZE_SUFFIX)
+#define CGROUP_CORE_INTERFACE_FREEZE_LEN (sizeof(CGROUP_CORE_INTERFACE_FREEZE) - 1)
+
+static struct cgroup_kn_cftype kn_cfts[];
+
 /* cgroup optional features */
 enum cgroup_opt_features {
 #ifdef CONFIG_PSI
@@ -4030,29 +4048,58 @@ static int cgroup_freeze_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static ssize_t cgroup_freeze_write(struct kernfs_open_file *of,
-				   char *buf, size_t nbytes, loff_t off)
+static bool cgroup_kn_revalidate(struct cgroup *cgrp)
+{
+	if (!cgroup_on_dfl(cgrp) || !cgroup_parent(cgrp))
+		return false;
+
+	return true;
+}
+
+static ssize_t cgroup_kn_freeze(struct kernfs_node *kn,
+				const char *buf, size_t nbytes, loff_t off,
+				bool revalidate)
 {
 	struct cgroup *cgrp;
 	ssize_t ret;
 	int freeze;
+	char b[4] = {0};
 
-	ret = kstrtoint(strstrip(buf), 0, &freeze);
+	/* Handle userspace writes +(0|1)\n and fail otherwise */
+	ret = strscpy(b, buf, sizeof(b));
+	if (ret < 0)
+		return ret;
+
+	nbytes = ret;
+	ret = kstrtoint(strstrip(b), 0, &freeze);
 	if (ret)
 		return ret;
 
 	if (freeze < 0 || freeze > 1)
 		return -ERANGE;
 
-	cgrp = cgroup_kn_lock_live(of->kn, false);
+	cgrp = cgroup_kn_lock_live(kn, false);
 	if (!cgrp)
 		return -ENOENT;
 
+	if (revalidate && !cgroup_kn_revalidate(cgrp)) {
+		ret = -EOPNOTSUPP;
+		goto out;
+	}
+
 	cgroup_freeze(cgrp, freeze);
 
-	cgroup_kn_unlock(of->kn);
+	ret = nbytes;
 
-	return nbytes;
+out:
+	cgroup_kn_unlock(kn);
+	return ret;
+}
+
+static ssize_t cgroup_freeze_write(struct kernfs_open_file *of,
+				   char *buf, size_t nbytes, loff_t off)
+{
+	return cgroup_kn_freeze(of->kn, buf, nbytes, off, false);
 }
 
 static void __cgroup_kill(struct cgroup *cgrp)
@@ -4599,6 +4646,49 @@ void cgroup_file_show(struct cgroup_file *cfile, bool show)
 		kernfs_show(kn, show);
 
 	kernfs_put(kn);
+}
+
+static struct cgroup_kn_cftype kn_cfts[] = {
+	{
+		.name = CGROUP_CORE_INTERFACE_FREEZE,
+		.namelen = CGROUP_CORE_INTERFACE_FREEZE_LEN,
+		.write = cgroup_kn_freeze,
+	},
+	{ },
+};
+
+static const struct cgroup_kn_cftype *cgroup_kn_cft(const char *name__str)
+{
+	struct cgroup_kn_cftype *kn_cft;
+
+	for (kn_cft = kn_cfts; kn_cft && kn_cft->name[0] != '\0'; kn_cft++) {
+		if (!strncmp(name__str, kn_cft->name, kn_cft->namelen))
+			return kn_cft;
+	}
+
+	return ERR_PTR(-EOPNOTSUPP);
+}
+
+ssize_t cgroup_kn_interface_write(struct kernfs_node *kn, const char *name__str,
+				  const char *buf, size_t nbytes, loff_t off)
+{
+	const struct cgroup_kn_cftype *kn_cft;
+
+	/* empty, do not remove */
+	if (!nbytes)
+		return 0;
+
+	if (kernfs_type(kn) != KERNFS_DIR)
+		return -ENOTDIR;
+
+	kn_cft = cgroup_kn_cft(name__str);
+	if (IS_ERR(kn_cft))
+		return PTR_ERR(kn_cft);
+
+	if (unlikely(!kn_cft->write))
+		return -EOPNOTSUPP;
+
+	return kn_cft->write(kn, buf, nbytes, off, true);
 }
 
 /**
