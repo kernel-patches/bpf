@@ -19,6 +19,7 @@ enum oom_constraint {
 	CONSTRAINT_CPUSET,
 	CONSTRAINT_MEMORY_POLICY,
 	CONSTRAINT_MEMCG,
+	CONSTRAINT_BPF,
 };
 
 /*
@@ -58,6 +59,9 @@ struct oom_control {
 
 	/* Policy name */
 	const char *bpf_policy_name;
+
+	/* BPF-specific constraint name */
+	const char *bpf_constraint;
 #endif
 };
 
