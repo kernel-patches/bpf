@@ -195,6 +195,19 @@ struct pt_regs___s390 {
  * https://github.com/ARM-software/abi-aa/blob/main/aapcs32/aapcs32.rst#machine-registers
  */
 
+/*
+ * Normal 'struct pt_regs' for arm uses 'unsigned long' elems whose size
+ * varies between kernel space and BPF VM, causing various problems with
+ * casting, BPF_CORE_READ(), tests, etc. Address by defining a shadow
+ * struct with explicitly sized elems and using this for casting, etc.
+ */
+struct pt_regs___arm {
+	unsigned int uregs[18];
+};
+#define __PT_REGS_CAST(x) ((const struct pt_regs___arm *)(x))
+
+/* arm does not select ARCH_HAS_SYSCALL_WRAPPER. */
+#define PT_REGS_SYSCALL_REGS(ctx) ctx
 #define __PT_PARM1_REG uregs[0]
 #define __PT_PARM2_REG uregs[1]
 #define __PT_PARM3_REG uregs[2]
