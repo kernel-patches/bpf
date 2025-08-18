@@ -32,24 +32,33 @@ const volatile pid_t filter_pid = 0;
 SEC("kprobe/" SYS_PREFIX "sys_prctl")
 int BPF_KPROBE(handle_sys_prctl)
 {
-	struct pt_regs *real_regs;
-	pid_t pid = bpf_get_current_pid_tgid() >> 32;
-	unsigned long tmp = 0;
+	struct pt_regs *real_regs = PT_REGS_SYSCALL_REGS(ctx);
+	/* Declare tmp vars of pt_regs elem type w/o const qualifier. Blech.*/
+	typeof(__builtin_choose_expr(
+		      __builtin_types_compatible_p(
+			      typeof(PT_REGS_PARM1(real_regs)),
+			      __u32),
+		      (__u32)0,
+		      (__u64)0)) tmp1, tmp2, tmp3, tmp4, tmp4_cx, tmp5;
+	pid_t pid;
 
+	pid = bpf_get_current_pid_tgid() >> 32;
 	if (pid != filter_pid)
 		return 0;
 
-	real_regs = PT_REGS_SYSCALL_REGS(ctx);
-
 	/* test for PT_REGS_PARM */
-
-	bpf_probe_read_kernel(&tmp, sizeof(tmp), &PT_REGS_PARM1_SYSCALL(real_regs));
-	arg1 = tmp;
-	bpf_probe_read_kernel(&arg2, sizeof(arg2), &PT_REGS_PARM2_SYSCALL(real_regs));
-	bpf_probe_read_kernel(&arg3, sizeof(arg3), &PT_REGS_PARM3_SYSCALL(real_regs));
-	bpf_probe_read_kernel(&arg4_cx, sizeof(arg4_cx), &PT_REGS_PARM4(real_regs));
-	bpf_probe_read_kernel(&arg4, sizeof(arg4), &PT_REGS_PARM4_SYSCALL(real_regs));
-	bpf_probe_read_kernel(&arg5, sizeof(arg5), &PT_REGS_PARM5_SYSCALL(real_regs));
+	bpf_probe_read_kernel(&tmp1, sizeof(tmp1),&PT_REGS_PARM1_SYSCALL(real_regs));
+	bpf_probe_read_kernel(&tmp2, sizeof(tmp2), &PT_REGS_PARM2_SYSCALL(real_regs));
+	bpf_probe_read_kernel(&tmp3, sizeof(tmp3), &PT_REGS_PARM3_SYSCALL(real_regs));
+	bpf_probe_read_kernel(&tmp4_cx, sizeof(tmp4_cx), &PT_REGS_PARM4(real_regs));
+	bpf_probe_read_kernel(&tmp4, sizeof(tmp4), &PT_REGS_PARM4_SYSCALL(real_regs));
+	bpf_probe_read_kernel(&tmp5, sizeof(tmp5), &PT_REGS_PARM5_SYSCALL(real_regs));
+	arg1 = tmp1;
+	arg2 = tmp2;
+	arg3 = tmp3;
+	arg4 = tmp4;
+	arg4_cx = tmp4_cx;
+	arg5 = tmp5;
 
 	/* test for the CORE variant of PT_REGS_PARM */
 	arg1_core = PT_REGS_PARM1_CORE_SYSCALL(real_regs);
