@@ -23,6 +23,10 @@
 #include <uapi/linux/kexec.h>
 #include <linux/verification.h>
 
+#if defined(CONFIG_ARCH_SUPPORTS_KEXEC_PURGATORY) || defined(CONFIG_KEXEC_PE_IMAGE)
+#include <linux/module.h>
+#endif
+
 extern note_buf_t __percpu *crash_notes;
 
 #ifdef CONFIG_CRASH_DUMP
@@ -548,6 +552,10 @@ static inline void kimage_unmap_segment(void *buffer) { }
 void set_kexec_sig_enforced(void);
 #else
 static inline void set_kexec_sig_enforced(void) {}
+#endif
+
+#if defined(CONFIG_ARCH_SUPPORTS_KEXEC_PURGATORY) || defined(CONFIG_KEXEC_PE_IMAGE)
+const Elf_Sym *elf_find_symbol(const Elf_Ehdr *ehdr, const char *name);
 #endif
 
 #endif /* !defined(__ASSEBMLY__) */
