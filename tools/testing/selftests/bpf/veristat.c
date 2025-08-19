@@ -181,6 +181,12 @@ struct var_preset {
 	bool applied;
 };
 
+enum dump_mode {
+	NO_DUMP = 0,
+	XLATED,
+	JITED,
+};
+
 static struct env {
 	char **filenames;
 	int filename_cnt;
@@ -227,6 +233,7 @@ static struct env {
 	char orig_cgroup[PATH_MAX];
 	char stat_cgroup[PATH_MAX];
 	int memory_peak_fd;
+	enum dump_mode dump_mode;
 } env;
 
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
@@ -295,6 +302,7 @@ static const struct argp_option opts[] = {
 	  "Force BPF verifier failure on register invariant violation (BPF_F_TEST_REG_INVARIANTS program flag)" },
 	{ "top-src-lines", 'S', "N", 0, "Emit N most frequent source code lines" },
 	{ "set-global-vars", 'G', "GLOBAL", 0, "Set global variables provided in the expression, for example \"var1 = 1\"" },
+	{ "dump", 'p', "DUMP_MODE", 0, "Print BPF program dump (xlated, jited)" },
 	{},
 };
 
@@ -425,6 +433,16 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		if (err) {
 			fprintf(stderr, "Failed to collect BPF object files: %d\n", err);
 			return err;
+		}
+		break;
+	case 'p':
+		if (strcmp(arg, "jited") == 0) {
+			env.dump_mode = JITED;
+		} else if (strcmp(arg, "xlated") == 0) {
+			env.dump_mode = XLATED;
+		} else {
+			fprintf(stderr, "Unrecognized dump mode '%s'\n", arg);
+			return -EINVAL;
 		}
 		break;
 	default:
@@ -1554,6 +1572,17 @@ static int parse_rvalue(const char *val, struct rvalue *rvalue)
 	return 0;
 }
 
+static void dump(__u32 prog_id, const char *prog_name)
+{
+	char command[64];
+
+	snprintf(command, sizeof(command), "bpftool prog dump %s id %u",
+		 env.dump_mode == JITED ? "jited" : "xlated", prog_id);
+	printf("Prog's '%s' dump:\n", prog_name);
+	system(command);
+	printf("\n");
+}
+
 static int process_prog(const char *filename, struct bpf_object *obj, struct bpf_program *prog)
 {
 	const char *base_filename = basename(strdupa(filename));
@@ -1630,8 +1659,11 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 
 	memset(&info, 0, info_len);
 	fd = bpf_program__fd(prog);
-	if (fd > 0 && bpf_prog_get_info_by_fd(fd, &info, &info_len) == 0)
+	if (fd > 0 && bpf_prog_get_info_by_fd(fd, &info, &info_len) == 0) {
 		stats->stats[JITED_SIZE] = info.jited_prog_len;
+		if (env.dump_mode != NO_DUMP)
+			dump(info.id, prog_name);
+	}
 
 	parse_verif_log(buf, buf_sz, stats);
 
