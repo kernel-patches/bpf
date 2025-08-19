@@ -13,6 +13,7 @@
 #include <linux/kernel.h>
 #include <linux/vmalloc.h>
 #include <linux/kexec.h>
+#include <linux/elf.h>
 #include <linux/pe.h>
 #include <linux/string.h>
 #include <linux/bpf.h>
@@ -21,6 +22,7 @@
 #include <asm/image.h>
 #include <asm/memory.h>
 
+#include "kexec_bpf/kexec_pe_parser_bpf.lskel.h"
 
 #define KEXEC_RES_KERNEL_NAME "kexec:kernel"
 #define KEXEC_RES_INITRD_NAME "kexec:initrd"
@@ -159,14 +161,60 @@ static bool pe_has_bpf_section(const char *file_buf, unsigned long pe_sz)
 	return true;
 }
 
+static struct kexec_pe_parser_bpf *pe_parser;
+
+static void *get_symbol_from_elf(const char *elf_data, size_t elf_size,
+		const char *symbol_name, unsigned int *symbol_size)
+{
+	Elf_Ehdr *ehdr = (Elf_Ehdr *)elf_data;
+	Elf_Shdr *shdr, *dst_shdr;
+	const Elf_Sym *sym;
+	void *symbol_data;
+
+	if (memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) {
+		pr_err("Not a valid ELF file\n");
+		return NULL;
+	}
+
+	sym = elf_find_symbol(ehdr, symbol_name);
+	if (!sym)
+		return NULL;
+	shdr = (struct elf_shdr *)(elf_data + ehdr->e_shoff);
+	dst_shdr = &shdr[sym->st_shndx];
+	symbol_data = (void *)(elf_data + dst_shdr->sh_offset + sym->st_value);
+	*symbol_size = sym->st_size;
+
+	return symbol_data;
+}
+
 /* Load a ELF */
 static int arm_bpf_prog(char *bpf_elf, unsigned long sz)
 {
+	opts_data = get_symbol_from_elf(bpf_elf, sz, "opts_data", &opts_data_sz);
+	opts_insn = get_symbol_from_elf(bpf_elf, sz, "opts_insn", &opts_insn_sz);
+	if (!opts_data || !opts_insn)
+		return -1;
+	/*
+	 * When light skeleton generates opts_data[] and opts_insn[], it appends a
+	 * NULL terminator at the end of string
+	 */
+	opts_data_sz = opts_data_sz - 1;
+	opts_insn_sz = opts_insn_sz - 1;
+
+	pe_parser = kexec_pe_parser_bpf__open_and_load();
+	if (!pe_parser)
+		return -1;
+	kexec_pe_parser_bpf__attach(pe_parser);
+
 	return 0;
 }
 
 static void disarm_bpf_prog(void)
 {
+	kexec_pe_parser_bpf__destroy(pe_parser);
+	pe_parser = NULL;
+	opts_data = NULL;
+	opts_insn = NULL;
 }
 
 struct kexec_context {
