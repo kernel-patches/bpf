@@ -81,6 +81,7 @@
 	 */
 	.errstr = "!read_ok",
 },
+#define BPF_PTR_SZ (sizeof(void *) == 4 ? BPF_W : BPF_DW)
 {
 	"Can't use ATM_FETCH_ADD on kernel memory",
 	.insns = {
@@ -93,7 +94,7 @@
 		 * because it's kernel memory.
 		 */
 		BPF_MOV64_IMM(BPF_REG_3, 1),
-		BPF_ATOMIC_OP(BPF_DW, BPF_ADD | BPF_FETCH, BPF_REG_2, BPF_REG_3, 0),
+		BPF_ATOMIC_OP(BPF_PTR_SZ, BPF_ADD | BPF_FETCH, BPF_REG_2, BPF_REG_3, 0),
 		/* Done */
 		BPF_MOV64_IMM(BPF_REG_0, 0),
 		BPF_EXIT_INSN(),
@@ -104,3 +105,4 @@
 	.result = REJECT,
 	.errstr = "only read is supported",
 },
+#undef BPF_PTR_SZ
