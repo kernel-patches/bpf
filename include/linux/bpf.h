@@ -3709,4 +3709,46 @@ int bpf_prog_get_file_line(struct bpf_prog *prog, unsigned long ip, const char *
 			   const char **linep, int *nump);
 struct bpf_prog *bpf_prog_find_from_stack(void);
 
+enum alloc_type {
+	TYPE_KALLOC,
+	TYPE_VMALLOC,
+	TYPE_VMAP,
+};
+
+struct mem_range_result {
+	struct kref ref;
+	char *buf;
+	uint32_t buf_sz;
+	uint32_t data_sz;
+	/* kmalloc-ed, vmalloc-ed, or vmap-ed */
+	enum alloc_type alloc_type;
+	/* Valid if vmap-ed */
+	struct page **pages;
+	unsigned int pg_cnt;
+	int status;
+	struct mem_cgroup *memcg;
+};
+
+struct mem_range_result *mem_range_result_alloc(void);
+void mem_range_result_get(struct mem_range_result *r);
+void mem_range_result_put(struct mem_range_result *r);
+
+__bpf_kfunc int bpf_mem_range_result_put(struct mem_range_result *result);
+__bpf_kfunc int bpf_copy_to_kernel(const char *name, char *buf, int size);
+
+typedef int (*resource_handler)(const char *name, struct mem_range_result *r);
+
+struct carrier_listener {
+	struct hlist_node node;
+	char *name;
+	resource_handler handler;
+	/*
+	 * bpf_copy_to_kernel() knows the size in advance, so vmap-ed is not
+	 * supported.
+	 */
+	enum alloc_type alloc_type;
+};
+
+int register_carrier_listener(struct carrier_listener *listener);
+int unregister_carrier_listener(char *str);
 #endif /* _LINUX_BPF_H */
