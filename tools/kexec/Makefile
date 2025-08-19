@@ -27,7 +27,7 @@ BPFTOOL = bpftool
 
 # List of generated target files
 HEADERS = vmlinux.h bpf_helper_defs.h image_size.h
-ZBOOT_TARGETS = bytecode.c zboot_parser_bpf.o bytecode.o
+ZBOOT_TARGETS = bytecode.c zboot_parser_bpf.o bytecode.o zboot_image_builder zboot.efi
 
 
 # Targets
@@ -74,6 +74,14 @@ bytecode.c: zboot_parser_bpf.o
 
 bytecode.o: bytecode.c
 	@$(CC) -c $< -o $@
+
+# Rule to build zboot_image_builder executable
+zboot_image_builder: zboot_image_builder.c
+	@$(CC) $(CFLAGS) $< -o $@
+
+zboot.efi: zboot_image_builder bytecode.o
+	@chmod +x zboot_image_builder
+	@./zboot_image_builder $(EFI_IMAGE) bytecode.o $@
 
 # Clean up generated files
 clean:
