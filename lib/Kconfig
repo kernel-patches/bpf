@@ -165,6 +165,9 @@ config RANDOM32_SELFTEST
 #
 # compression support is select'ed if needed
 #
+config KEEP_DECOMPRESSOR
+	bool
+
 config 842_COMPRESS
 	select CRC32
 	tristate
