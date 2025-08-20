@@ -1361,7 +1361,8 @@ static void restore_args(struct jit_ctx *ctx, int nargs, int args_off)
 }
 
 static int invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_link *l,
-			   int args_off, int retval_off, int run_ctx_off, bool save_ret)
+			   const struct btf_func_model *m, int args_off,
+			   int retval_off, int run_ctx_off, bool save_ret)
 {
 	int ret;
 	u32 *branch;
@@ -1425,13 +1426,14 @@ static int invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_link *l,
 }
 
 static void invoke_bpf_mod_ret(struct jit_ctx *ctx, struct bpf_tramp_links *tl,
-			       int args_off, int retval_off, int run_ctx_off, u32 **branches)
+			       const struct btf_func_model *m, int args_off,
+			       int retval_off, int run_ctx_off, u32 **branches)
 {
 	int i;
 
 	emit_insn(ctx, std, LOONGARCH_GPR_ZERO, LOONGARCH_GPR_FP, -retval_off);
 	for (i = 0; i < tl->nr_links; i++) {
-		invoke_bpf_prog(ctx, tl->links[i], args_off, retval_off, run_ctx_off, true);
+		invoke_bpf_prog(ctx, tl->links[i], m, args_off, retval_off, run_ctx_off, true);
 		emit_insn(ctx, ldd, LOONGARCH_GPR_T1, LOONGARCH_GPR_FP, -retval_off);
 		branches[i] = (u32 *)ctx->image + ctx->idx;
 		emit_insn(ctx, nop);
@@ -1446,6 +1448,30 @@ void *arch_alloc_bpf_trampoline(unsigned int size)
 void arch_free_bpf_trampoline(void *image, unsigned int size)
 {
 	bpf_prog_pack_free(image, size);
+}
+
+/*
+ * Sign-extend the register if necessary
+ */
+static int sign_extend(struct jit_ctx *ctx, int r, u8 size)
+{
+	switch (size) {
+	case 1:
+		emit_insn(ctx, sllid, r, r, 56);
+		emit_insn(ctx, sraid, r, r, 56);
+		return 0;
+	case 2:
+		emit_insn(ctx, sllid, r, r, 48);
+		emit_insn(ctx, sraid, r, r, 48);
+		return 0;
+	case 4:
+		emit_insn(ctx, addiw, r, r, 0);
+		return 0;
+	case 8:
+		return 0;
+	default:
+		return -1;
+	}
 }
 
 static int __arch_prepare_bpf_trampoline(struct jit_ctx *ctx, struct bpf_tramp_image *im,
@@ -1602,8 +1628,8 @@ static int __arch_prepare_bpf_trampoline(struct jit_ctx *ctx, struct bpf_tramp_i
 	}
 
 	for (i = 0; i < fentry->nr_links; i++) {
-		ret = invoke_bpf_prog(ctx, fentry->links[i], args_off, retval_off,
-				      run_ctx_off, flags & BPF_TRAMP_F_RET_FENTRY_RET);
+		ret = invoke_bpf_prog(ctx, fentry->links[i], m, args_off, retval_off,
+			      run_ctx_off, flags & BPF_TRAMP_F_RET_FENTRY_RET);
 		if (ret)
 			return ret;
 	}
@@ -1612,7 +1638,7 @@ static int __arch_prepare_bpf_trampoline(struct jit_ctx *ctx, struct bpf_tramp_i
 		if (!branches)
 			return -ENOMEM;
 
-		invoke_bpf_mod_ret(ctx, fmod_ret, args_off, retval_off, run_ctx_off, branches);
+		invoke_bpf_mod_ret(ctx, fmod_ret, m, args_off, retval_off, run_ctx_off, branches);
 	}
 
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
@@ -1638,7 +1664,8 @@ static int __arch_prepare_bpf_trampoline(struct jit_ctx *ctx, struct bpf_tramp_i
 	}
 
 	for (i = 0; i < fexit->nr_links; i++) {
-		ret = invoke_bpf_prog(ctx, fexit->links[i], args_off, retval_off, run_ctx_off, false);
+		ret = invoke_bpf_prog(ctx, fexit->links[i], m, args_off,
+				      retval_off, run_ctx_off, false);
 		if (ret)
 			goto out;
 	}
@@ -1657,6 +1684,12 @@ static int __arch_prepare_bpf_trampoline(struct jit_ctx *ctx, struct bpf_tramp_i
 	if (save_ret) {
 		emit_insn(ctx, ldd, LOONGARCH_GPR_A0, LOONGARCH_GPR_FP, -retval_off);
 		emit_insn(ctx, ldd, regmap[BPF_REG_0], LOONGARCH_GPR_FP, -(retval_off - 8));
+		if (is_struct_ops) {
+			move_reg(ctx, LOONGARCH_GPR_A0, regmap[BPF_REG_0]);
+			ret = sign_extend(ctx, LOONGARCH_GPR_A0, m->ret_size);
+			if (ret)
+				goto out;
+		}
 	}
 
 	emit_insn(ctx, ldd, LOONGARCH_GPR_S1, LOONGARCH_GPR_FP, -sreg_off);
