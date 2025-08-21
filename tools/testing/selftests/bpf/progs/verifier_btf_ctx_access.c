@@ -31,7 +31,7 @@ __naked void ctx_access_u32_pointer_accept(void)
 
 SEC("fentry/bpf_fentry_test9")
 __description("btf_ctx_access u32 pointer reject u32")
-__failure __msg("size 4 must be 8")
+__failure __msg("size 4 must be 8") __word_size_64
 __naked void ctx_access_u32_pointer_reject_32(void)
 {
 	asm volatile ("					\
