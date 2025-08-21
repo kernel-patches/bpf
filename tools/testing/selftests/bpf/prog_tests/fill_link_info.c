@@ -34,7 +34,7 @@ static noinline void uprobe_func(void)
 
 #define PERF_EVENT_COOKIE 0xdeadbeef
 
-static int verify_perf_link_info(int fd, enum bpf_perf_event_type type, long addr,
+static int verify_perf_link_info(int fd, enum bpf_perf_event_type type, unsigned long addr,
 				 ssize_t offset, ssize_t entry_offset)
 {
 	ssize_t ref_ctr_offset = entry_offset /* ref_ctr_offset for uprobes */;
