@@ -25,6 +25,10 @@ unsigned short test_usdt0_semaphore SEC(".probes");
 unsigned short test_usdt3_semaphore SEC(".probes");
 unsigned short test_usdt12_semaphore SEC(".probes");
 
+#if defined(__x86_64__) || defined(__i386__)
+unsigned short test_usdt_sib_semaphore SEC(".probes");
+#endif
+
 static void __always_inline trigger_func(int x) {
 	long y = 42;
 
@@ -39,6 +43,22 @@ static void __always_inline trigger_func(int x) {
 			     nums[idx], t1.y);
 	}
 }
+
+#if defined(__x86_64__) || defined(__i386__)
+static __attribute__((optimize("O1"))) void trigger_sib_spec(void)
+{
+	/* Base address + offset + (index * scale) */
+	/* Force SIB addressing with inline assembly */
+	asm volatile(
+		"# probe point with memory access\n"
+		STAP_PROBE_ASM(test, usdt_sib, -2@(%%rdx,%%rax,2))
+		"# end probe point"
+		:
+		: "d"(nums), "a"(0)
+		: "memory"
+	);
+}
+#endif
 
 static void subtest_basic_usdt(void)
 {
@@ -155,6 +175,16 @@ static void subtest_basic_usdt(void)
 	ASSERT_EQ(bss->usdt3_args[0], 3, "usdt3_arg1");
 	ASSERT_EQ(bss->usdt3_args[1], 42, "usdt3_arg2");
 	ASSERT_EQ(bss->usdt3_args[2], (uintptr_t)&bla, "usdt3_arg3");
+
+	#if defined(__x86_64__) || defined(__i386__)
+	trigger_sib_spec();
+	ASSERT_EQ(bss->usdt_sib_called, 1, "usdt_sib_called");
+	ASSERT_EQ(bss->usdt_sib_cookie, 0, "usdt_sib_cookie");
+	ASSERT_EQ(bss->usdt_sib_arg_cnt, 1, "usdt_sib_arg_cnt");
+	ASSERT_EQ(bss->usdt_sib_arg, nums[0], "usdt_sib_arg");
+	ASSERT_EQ(bss->usdt_sib_arg_ret, 0, "usdt_sib_arg_ret");
+	ASSERT_EQ(bss->usdt_sib_arg_size, sizeof(nums[0]), "usdt_sib_arg_size");
+	#endif
 
 cleanup:
 	test_usdt__destroy(skel);
