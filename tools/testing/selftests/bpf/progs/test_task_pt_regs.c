@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include "vmlinux.h"
-#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
 
 #define PT_REGS_SIZE sizeof(struct pt_regs)
@@ -19,12 +19,14 @@ int handle_uprobe(struct pt_regs *ctx)
 {
 	struct task_struct *current;
 	struct pt_regs *regs;
+	int regs_size;
 
 	current = bpf_get_current_task_btf();
 	regs = (struct pt_regs *) bpf_task_pt_regs(current);
-	if (bpf_probe_read_kernel(current_regs, PT_REGS_SIZE, regs))
+	regs_size = bpf_core_type_size(struct pt_regs);
+	if (bpf_probe_read_kernel(current_regs, regs_size, regs))
 		return 0;
-	if (bpf_probe_read_kernel(ctx_regs, PT_REGS_SIZE, ctx))
+	if (bpf_probe_read_kernel(ctx_regs, regs_size, ctx))
 		return 0;
 
 	/* Prove that uprobe was run */
