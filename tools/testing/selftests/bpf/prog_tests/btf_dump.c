@@ -283,12 +283,13 @@ static void test_btf_dump_type_tags(void)
 {
 	struct test_ctx t = {};
 	struct btf *btf;
-	int id, err;
+	int id, err, sz;
 
 	if (test_ctx__init(&t))
 		return;
 
 	btf = t.btf;
+	sz = btf__pointer_size(btf);
 
 	/* Generate BTF corresponding to the following C code:
 	 *
@@ -309,11 +310,11 @@ static void test_btf_dump_type_tags(void)
 	id = btf__add_ptr(btf, id);
 	ASSERT_EQ(id, 4, "void_ptr_id2");
 
-	id = btf__add_struct(btf, "s", 8);
+	id = btf__add_struct(btf, "s", sz * 2);
 	ASSERT_EQ(id, 5, "struct_id");
 	err = btf__add_field(btf, "p1", 2, 0, 0);
 	ASSERT_OK(err, "field_ok1");
-	err = btf__add_field(btf, "p2", 4, 0, 0);
+	err = btf__add_field(btf, "p2", 4, sz * 8, 0);
 	ASSERT_OK(err, "field_ok2");
 
 	test_ctx__dump_and_compare(&t,
