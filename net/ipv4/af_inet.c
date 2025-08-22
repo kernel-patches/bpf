@@ -763,6 +763,8 @@ void __inet_accept(struct socket *sock, struct socket *newsock, struct sock *new
 		kmem_cache_charge(newsk, gfp);
 	}
 
+	BPF_CGROUP_RUN_PROG_INET_SOCK_ACCEPT(newsk);
+
 	if (mem_cgroup_sk_enabled(newsk)) {
 		int amt;
 
