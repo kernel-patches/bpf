@@ -721,9 +721,15 @@ static void test_btf_dump_struct_data(struct btf *btf, struct btf_dump *d,
 		ret = btf_dump__dump_type_data(d, type_id, fops, type_sz, &opts);
 		ASSERT_EQ(ret, type_sz,
 			  "unexpected return value dumping file_operations");
+
+		/* account for host word-size in expected string*/
 		cmpstr =
 "(struct file_operations){\n"
+#if __SIZEOF_LONG__ == 8
 "	.owner = (struct module *)0xffffffffffffffff,\n"
+#else
+"	.owner = (struct module *)0xffffffff,\n"
+#endif
 "	.fop_flags = (fop_flags_t)4294967295,";
 
 		ASSERT_STRNEQ(str, cmpstr, strlen(cmpstr), "file_operations");
