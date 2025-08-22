@@ -5267,6 +5267,31 @@ static int sk_bpf_set_get_cb_flags(struct sock *sk, char *optval, bool getopt)
 	return 0;
 }
 
+static int sk_bpf_set_get_memcg_flags(struct sock *sk, int *optval, bool getopt)
+{
+	if (!mem_cgroup_sk_enabled(sk))
+		return -EOPNOTSUPP;
+
+	if (getopt) {
+		*optval = mem_cgroup_sk_get_flags(sk);
+		return 0;
+	}
+
+	/* Don't allow once sk has been published to userspace.
+	 * INET_CREATE is called without lock_sock() but with sk_socket
+	 * INET_ACCEPT is called with lock_sock() but without sk_socket
+	 */
+	if (sock_owned_by_user_nocheck(sk) && sk->sk_socket)
+		return -EBUSY;
+
+	if (*optval <= 0 || *optval >= SK_BPF_MEMCG_FLAG_MAX)
+		return -EINVAL;
+
+	mem_cgroup_sk_set_flags(sk, *optval);
+
+	return 0;
+}
+
 static int sol_socket_sockopt(struct sock *sk, int optname,
 			      char *optval, int *optlen,
 			      bool getopt)
@@ -5284,6 +5309,7 @@ static int sol_socket_sockopt(struct sock *sk, int optname,
 	case SO_BINDTOIFINDEX:
 	case SO_TXREHASH:
 	case SK_BPF_CB_FLAGS:
+	case SK_BPF_MEMCG_FLAGS:
 		if (*optlen != sizeof(int))
 			return -EINVAL;
 		break;
@@ -5293,8 +5319,12 @@ static int sol_socket_sockopt(struct sock *sk, int optname,
 		return -EINVAL;
 	}
 
-	if (optname == SK_BPF_CB_FLAGS)
+	switch (optname) {
+	case SK_BPF_CB_FLAGS:
 		return sk_bpf_set_get_cb_flags(sk, optval, getopt);
+	case SK_BPF_MEMCG_FLAGS:
+		return sk_bpf_set_get_memcg_flags(sk, (int *)optval, getopt);
+	}
 
 	if (getopt) {
 		if (optname == SO_BINDTODEVICE)
