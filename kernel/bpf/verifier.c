@@ -12259,6 +12259,7 @@ enum special_kfunc_type {
 	KF_bpf_res_spin_lock_irqsave,
 	KF_bpf_res_spin_unlock_irqrestore,
 	KF___bpf_trap,
+	KF_bpf_in_interrupt,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12327,6 +12328,7 @@ BTF_ID(func, bpf_res_spin_unlock)
 BTF_ID(func, bpf_res_spin_lock_irqsave)
 BTF_ID(func, bpf_res_spin_unlock_irqrestore)
 BTF_ID(func, __bpf_trap)
+BTF_ID(func, bpf_in_interrupt)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
 {
@@ -21973,6 +21975,15 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		   desc->func_id == special_kfunc_list[KF_bpf_rdonly_cast]) {
 		insn_buf[0] = BPF_MOV64_REG(BPF_REG_0, BPF_REG_1);
 		*cnt = 1;
+	} else if (desc->func_id == special_kfunc_list[KF_bpf_in_interrupt]) {
+#ifdef CONFIG_X86_64
+		insn_buf[0] = BPF_MOV64_IMM(BPF_REG_0, (u32)(unsigned long)&__preempt_count);
+		insn_buf[1] = BPF_MOV64_PERCPU_REG(BPF_REG_0, BPF_REG_0);
+		insn_buf[2] = BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_0, 0);
+		insn_buf[3] = BPF_ALU32_IMM(BPF_AND, BPF_REG_0, NMI_MASK | HARDIRQ_MASK |
+					    (IS_ENABLED(CONFIG_PREEMPT_RT) ? 0 : SOFTIRQ_MASK));
+		*cnt = 4;
+#endif
 	}
 
 	if (env->insn_aux_data[insn_idx].arg_prog) {
