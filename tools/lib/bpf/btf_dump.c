@@ -2272,7 +2272,7 @@ static int btf_dump_enum_data(struct btf_dump *d,
 			return 0;
 		}
 
-		btf_dump_type_values(d, is_signed ? "%d" : "%u", value);
+		btf_dump_type_values(d, is_signed ? "%lld" : "%llu", value);
 	} else {
 		const struct btf_enum64 *e;
 
