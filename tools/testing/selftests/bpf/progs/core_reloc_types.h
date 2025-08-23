@@ -818,8 +818,8 @@ struct core_reloc_size {
 	struct { int x; } struct_field;
 	union { int x; } union_field;
 	int arr_field[4];
-	void *ptr_field;
-	enum { VALUE = 123 } enum_field;
+	void *ptr_field __bpf_aligned;
+	enum { VALUE = 123 } enum_field __bpf_aligned;
 	float float_field;
 };
 
@@ -828,16 +828,16 @@ struct core_reloc_size___diff_sz {
 	struct { int x; int y; int z; } struct_field;
 	union { int x; char bla[123]; } union_field;
 	char arr_field[10];
-	void *ptr_field;
-	enum { OTHER_VALUE = 0xFFFFFFFFFFFFFFFF } enum_field;
+	void *ptr_field __bpf_aligned;
+	enum { OTHER_VALUE = 0xFFFFFFFFFFFFFFFF } enum_field __bpf_aligned;
 	double float_field;
 };
 
 struct core_reloc_size___diff_offs {
 	float float_field;
 	enum { YET_OTHER_VALUE = 123 } enum_field;
-	void *ptr_field;
-	int arr_field[4];
+	void * ptr_field __bpf_aligned;
+	int arr_field[4] __bpf_aligned;
 	union { int x; } union_field;
 	struct { int x; } struct_field;
 	int int_field;
@@ -1041,8 +1041,8 @@ struct core_reloc_type_based___diff {
 
 /* different type sizes, extra modifiers, anon vs named enums, etc */
 struct a_struct___diff_sz {
-	long x;
-	int y;
+	long x __bpf_aligned;
+	int y __bpf_aligned;
 	char z;
 };
 
@@ -1053,7 +1053,11 @@ union a_union___diff_sz {
 
 typedef struct a_struct___diff_sz named_struct_typedef___diff_sz;
 
-typedef struct { long xx, yy, zzz; } anon_struct_typedef___diff_sz;
+typedef struct {
+	long xx __bpf_aligned;
+	long yy __bpf_aligned;
+	long zz __bpf_aligned;
+} anon_struct_typedef___diff_sz;
 
 typedef struct {
 	char aa[1], bb[2], cc[3];
@@ -1064,7 +1068,7 @@ enum an_enum___diff_sz {
 	AN_ENUM_VAL2___diff_sz = 2,
 };
 
-typedef unsigned long int_typedef___diff_sz;
+typedef unsigned int int_typedef___diff_sz;
 
 typedef enum an_enum___diff_sz enum_typedef___diff_sz;
 

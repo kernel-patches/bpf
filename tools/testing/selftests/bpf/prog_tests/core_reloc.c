@@ -790,11 +790,11 @@ static const struct core_reloc_test_case test_cases[] = {
 		.enum_sz = sizeof(enum an_enum),
 		.typedef_named_struct_sz = sizeof(named_struct_typedef),
 		.typedef_anon_struct_sz = sizeof(anon_struct_typedef),
-		.typedef_struct_ptr_sz = sizeof(struct_ptr_typedef),
+		.typedef_struct_ptr_sz = 8, /* always 8-byte pointer for BPF */
 		.typedef_int_sz = sizeof(int_typedef),
 		.typedef_enum_sz = sizeof(enum_typedef),
-		.typedef_void_ptr_sz = sizeof(void_ptr_typedef),
-		.typedef_func_proto_sz = sizeof(func_proto_typedef),
+		.typedef_void_ptr_sz = 8,   /* always 8-byte pointer for BPF */
+		.typedef_func_proto_sz = 8, /* always 8-byte pointer for BPF */
 		.typedef_arr_sz = sizeof(arr_typedef),
 	}),
 	TYPE_BASED_CASE(type_based___all_missing, {
@@ -832,11 +832,11 @@ static const struct core_reloc_test_case test_cases[] = {
 		.enum_sz = sizeof(enum an_enum___diff),
 		.typedef_named_struct_sz = sizeof(named_struct_typedef___diff),
 		.typedef_anon_struct_sz = sizeof(anon_struct_typedef___diff),
-		.typedef_struct_ptr_sz = sizeof(struct_ptr_typedef___diff),
+		.typedef_struct_ptr_sz = 8, /* always 8-byte pointer for BPF */
 		.typedef_int_sz = sizeof(int_typedef___diff),
 		.typedef_enum_sz = sizeof(enum_typedef___diff),
-		.typedef_void_ptr_sz = sizeof(void_ptr_typedef___diff),
-		.typedef_func_proto_sz = sizeof(func_proto_typedef___diff),
+		.typedef_void_ptr_sz = 8,   /* always 8-byte pointer for BPF */
+		.typedef_func_proto_sz = 8, /* always 8-byte pointer for BPF */
 		.typedef_arr_sz = sizeof(arr_typedef___diff),
 	}),
 	TYPE_BASED_CASE(type_based___diff_sz, {
@@ -869,11 +869,11 @@ static const struct core_reloc_test_case test_cases[] = {
 		.enum_sz = sizeof(enum an_enum___diff_sz),
 		.typedef_named_struct_sz = sizeof(named_struct_typedef___diff_sz),
 		.typedef_anon_struct_sz = sizeof(anon_struct_typedef___diff_sz),
-		.typedef_struct_ptr_sz = sizeof(struct_ptr_typedef___diff_sz),
+		.typedef_struct_ptr_sz = 8, /* always 8-byte pointer for BPF */
 		.typedef_int_sz = sizeof(int_typedef___diff_sz),
 		.typedef_enum_sz = sizeof(enum_typedef___diff_sz),
-		.typedef_void_ptr_sz = sizeof(void_ptr_typedef___diff_sz),
-		.typedef_func_proto_sz = sizeof(func_proto_typedef___diff_sz),
+		.typedef_void_ptr_sz = 8,   /* always 8-byte pointer for BPF */
+		.typedef_func_proto_sz = 8, /* always 8-byte pointer for BPF */
 		.typedef_arr_sz = sizeof(arr_typedef___diff_sz),
 	}),
 	TYPE_BASED_CASE(type_based___incompat, {
