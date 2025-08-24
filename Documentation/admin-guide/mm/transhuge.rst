@@ -698,3 +698,50 @@ support enabled just fine as always. No difference can be noted in
 hugetlbfs other than there will be less overall fragmentation. All
 usual features belonging to hugetlbfs are preserved and
 unaffected. libhugetlbfs will also work fine as usual.
+
+BPF-based THP adjustment
+========================
+
+Overview
+--------
+
+When the system is configured with "always" or "madvise" THP mode, a BPF program
+can be used to adjust THP allocation policies dynamically. This enables
+fine-grained control over THP decisions based on various factors including
+workload identity, allocation context, and system memory pressure.
+
+Program Interface
+-----------------
+
+This feature implements a struct_ops BPF program with the following interface::
+
+  int (*get_suggested_order)(struct mm_struct *mm,
+                             struct vm_area_struct *vma__nullable,
+                             u64 vma_flags, enum tva_type tva_flags, int orders)
+
+Parameters::
+
+  @mm:  mm_struct associated with the THP allocation
+  @vma__nullable: vm_area_struct associated with the THP allocation (may be NULL)
+                  When NULL, the decision should be based on @mm (i.e., when
+                  triggered from an mm-scope hook rather than a VMA-specific
+                  context)
+                  Must belong to @mm (guaranteed by the caller).
+  @vma_flags: use these vm_flags instead of @vma->vm_flags (0 if @vma is NULL)
+  @tva_flags: TVA flags for current @vma (-1 if @vma is NULL)
+  @orders: Bitmask of requested THP orders for this allocation
+           - PMD-mapped allocation if PMD_ORDER is set
+           - mTHP allocation otherwise
+
+Return value::
+
+  Bitmask of suggested THP orders for allocation. The highest suggested order
+  will not exceed the highest requested order in @orders.
+
+Implementation Notes
+--------------------
+
+This is currently an experimental feature.
+CONFIG_EXPERIMENTAL_BPF_ORDER_SELECTION must be enabled to use it.
+Only one BPF program can be attached at a time, but the program can be updated
+dynamically to adjust policies without requiring affected tasks to be restarted.
