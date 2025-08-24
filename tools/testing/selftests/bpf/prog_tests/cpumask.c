@@ -31,6 +31,12 @@ static const char * const cpumask_success_testcases[] = {
 	"test_populate",
 };
 
+/* Some tests require nr_cpus > 1 */
+static const char * const cpumask_mp_testcases[] = {
+	"test_and_or_xor",
+	"test_intersects_subset",
+};
+
 static void verify_success(const char *prog_name)
 {
 	struct cpumask_success *skel;
@@ -71,15 +77,30 @@ cleanup:
 	cpumask_success__destroy(skel);
 }
 
+static bool should_skip(const char *test, int nr_cpus)
+{
+	int i;
+
+	if (nr_cpus > 1 )
+		return false;
+	for (i = 0; i < ARRAY_SIZE(cpumask_mp_testcases); i++)
+		if (!strcmp(test, cpumask_mp_testcases[i]))
+			return true;
+	return false;
+}
 void test_cpumask(void)
 {
+	int nr_cpus = libbpf_num_possible_cpus();
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(cpumask_success_testcases); i++) {
 		if (!test__start_subtest(cpumask_success_testcases[i]))
 			continue;
 
-		verify_success(cpumask_success_testcases[i]);
+		if (should_skip(cpumask_success_testcases[i], nr_cpus))
+			test__skip();
+		else
+			verify_success(cpumask_success_testcases[i]);
 	}
 
 	RUN_TESTS(cpumask_failure);
