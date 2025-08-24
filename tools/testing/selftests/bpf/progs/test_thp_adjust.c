@@ -6,6 +6,7 @@
 
 char _license[] SEC("license") = "GPL";
 
+int ppid, fork_fail, fork_succeed, parent_succeed;
 int pf_alloc, pf_disallow, khugepaged_disallow;
 struct mm_struct *target_mm;
 int pmd_order, cgrp_id;
@@ -73,4 +74,42 @@ int BPF_PROG(alloc_in_khugepaged, struct mm_struct *mm, struct vm_area_struct *v
 SEC(".struct_ops.link")
 struct bpf_thp_ops khugepaged = {
 	.get_suggested_order = (void *)alloc_in_khugepaged,
+};
+
+
+SEC("struct_ops/get_suggested_order")
+int BPF_PROG(fork_test, struct mm_struct *mm, struct vm_area_struct *vma__nullable,
+	     u64 vma_flags, enum tva_type tva_flags, int orders)
+{
+	struct task_struct *p = bpf_get_current_task_btf();
+	struct mem_cgroup *memcg;
+	int suggested_orders = 0;
+
+	/* Only works when CONFIG_MEMCG is enabled. */
+	memcg = bpf_mm_get_mem_cgroup(mm);
+	if (!memcg)
+		return 0;
+
+	/* The tasks under this specific cgroup are allowed to alloc THP */
+	if (memcg->css.cgroup->kn->id == cgrp_id)
+		suggested_orders = orders;
+
+	if (p->parent->pid == ppid) {
+		/* The child is forked into root cgrp, so it can't alloc THP */
+		if (suggested_orders)
+			fork_fail++;
+		else
+			fork_succeed++;
+	} else if (p->pid == ppid) {
+		/* The parent can alloc THP */
+		if (suggested_orders)
+			parent_succeed++;
+	}
+	bpf_put_mem_cgroup(memcg);
+	return suggested_orders;
+}
+
+SEC(".struct_ops.link")
+struct bpf_thp_ops fork = {
+	.get_suggested_order = (void *)fork_test,
 };
