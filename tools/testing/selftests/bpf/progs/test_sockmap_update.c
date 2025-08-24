@@ -77,6 +77,7 @@ int insert_sock(struct bpf_sock_ops *skops)
 
 	switch (skops->op) {
 	case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB:
+	case BPF_SOCK_OPS_UDP_CONNECTED_CB:
 		bpf_sock_hash_update(skops, &sock_hash, &key, BPF_NOEXIST);
 		bpf_sock_map_update(skops, &sock_map, &count, BPF_NOEXIST);
 		count++;
