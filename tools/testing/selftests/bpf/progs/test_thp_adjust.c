@@ -98,3 +98,17 @@ SEC(".struct_ops.link")
 struct bpf_thp_ops khugepaged_ops = {
 	.thp_get_order = (void *)alloc_in_khugepaged,
 };
+
+SEC("struct_ops/thp_get_order")
+int BPF_PROG(alloc_not_in_swap, struct vm_area_struct *vma, enum bpf_thp_vma_type vma_type,
+	     enum tva_type tva_type, unsigned long orders)
+{
+	if (tva_type == TVA_SWAP)
+		return 0;
+	return -1;
+}
+
+SEC(".struct_ops.link")
+struct bpf_thp_ops swap_ops = {
+	.thp_get_order = (void *)alloc_not_in_swap,
+};
