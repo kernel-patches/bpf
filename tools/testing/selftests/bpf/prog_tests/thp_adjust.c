@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#define _GNU_SOURCE
+#include <sched.h>
+#include <sys/wait.h>
+#include <sys/syscall.h>
+#include <linux/sched.h>
+
 #include <math.h>
 #include <sys/mman.h>
 #include <test_progs.h>
@@ -170,6 +176,55 @@ detach_ops:
 	bpf_link__destroy(ops_link);
 }
 
+/*
+ * In this test case, we clone the child process directly into the root cgroup.
+ * Consequently, the child process is not permitted to alloc THP.
+ */
+static void subtest_thp_fork(void)
+{
+	struct clone_args args = {
+		.flags = CLONE_INTO_CGROUP,
+		.exit_signal = SIGCHLD,
+	};
+	struct bpf_link *ops_link;
+	int status, err;
+	pid_t pid;
+
+	skel->bss->ppid = getpid();
+	if (!ASSERT_GT(skel->bss->ppid, 0, "getpid"))
+		return;
+	args.cgroup = get_root_cgroup();
+	if (!ASSERT_GE(args.cgroup, 0, "get_root_cgrp_fd"))
+		return;
+
+	ops_link = bpf_map__attach_struct_ops(skel->maps.thp_fork_ops);
+	if (!ASSERT_OK_PTR(ops_link, "attach struct_ops"))
+		return;
+
+	pid = syscall(__NR_clone3, &args, sizeof(args));
+	if (!ASSERT_GE(pid, 0, "clone3"))
+		goto detach_ops;
+
+	if (pid == 0) {
+		/* child */
+		if (!ASSERT_NEQ(thp_alloc(), -1, "THP alloc"))
+			return;
+		thp_free();
+		exit(0);
+	}
+
+	if (!ASSERT_NEQ(thp_alloc(), -1, "THP alloc"))
+		goto detach_ops;
+	thp_free();
+	err = waitpid(pid, &status, 0);
+	ASSERT_EQ(err, pid, "waitpid");
+	ASSERT_EQ(skel->bss->fork_fail, 0, "fork_fail");
+	ASSERT_GT(skel->bss->fork_succeed, 0, "fork_succeed");
+	ASSERT_GT(skel->bss->parent_succeed, 0, "parent_succeed");
+detach_ops:
+	bpf_link__destroy(ops_link);
+}
+
 static int thp_adjust_setup(void)
 {
 	int err, cgrp_fd, cgrp_id, pmd_order;
@@ -249,6 +304,8 @@ void test_thp_adjust(void)
 
 	if (test__start_subtest("alloc_in_khugepaged"))
 		subtest_thp_policy();
+	if (test__start_subtest("khugepaged_fork"))
+		subtest_thp_fork();
 
 	thp_adjust_destroy();
 }
