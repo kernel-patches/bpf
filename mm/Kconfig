@@ -1391,6 +1391,8 @@ config BPF_THP
 	  Enable dynamic THP policy adjustment using BPF programs. This feature
 	  is currently experimental.
 
+	  See Documentation/admin-guide/mm/transhuge.rst for more information.
+
 	  WARNING: This feature is unstable and may change in future kernel
 endif # BPF_MM
 
