@@ -1725,16 +1725,17 @@ mlx5e_skb_from_cqe_nonlinear(struct mlx5e_rq *rq, struct mlx5e_wqe_frag_info *wi
 			     struct mlx5_cqe64 *cqe, u32 cqe_bcnt)
 {
 	struct mlx5e_rq_frag_info *frag_info = &rq->wqe.info.arr[0];
+	struct mlx5e_wqe_frag_info *pwi, *head_wi = wi;
 	struct mlx5e_xdp_buff *mxbuf = &rq->mxbuf;
-	struct mlx5e_wqe_frag_info *head_wi = wi;
 	u16 rx_headroom = rq->buff.headroom;
 	struct mlx5e_frag_page *frag_page;
 	struct skb_shared_info *sinfo;
-	u32 frag_consumed_bytes;
+	u32 frag_consumed_bytes, i;
 	struct bpf_prog *prog;
 	struct sk_buff *skb;
 	dma_addr_t addr;
 	u32 truesize;
+	u8 nr_frags;
 	void *va;
 
 	frag_page = wi->frag_page;
@@ -1775,12 +1776,24 @@ mlx5e_skb_from_cqe_nonlinear(struct mlx5e_rq *rq, struct mlx5e_wqe_frag_info *wi
 	prog = rcu_dereference(rq->xdp_prog);
 	if (prog && mlx5e_xdp_handle(rq, prog, mxbuf)) {
 		if (__test_and_clear_bit(MLX5E_RQ_FLAG_XDP_XMIT, rq->flags)) {
-			struct mlx5e_wqe_frag_info *pwi;
+			pwi = head_wi;
+			while (pwi->frag_page->netmem != sinfo->frags[0].netmem && pwi < wi)
+				pwi++;
 
-			for (pwi = head_wi; pwi < wi; pwi++)
+			for (i = 0; i < sinfo->nr_frags; i++, pwi++)
 				pwi->frag_page->frags++;
 		}
 		return NULL; /* page/packet was consumed by XDP */
+	}
+
+	nr_frags = sinfo->nr_frags;
+	pwi = head_wi + 1;
+
+	if (prog) {
+		truesize = sinfo->nr_frags * frag_info->frag_stride;
+
+		while (pwi->frag_page->netmem != sinfo->frags[0].netmem && pwi < wi)
+			pwi++;
 	}
 
 	skb = mlx5e_build_linear_skb(
@@ -1796,12 +1809,12 @@ mlx5e_skb_from_cqe_nonlinear(struct mlx5e_rq *rq, struct mlx5e_wqe_frag_info *wi
 
 	if (xdp_buff_has_frags(&mxbuf->xdp)) {
 		/* sinfo->nr_frags is reset by build_skb, calculate again. */
-		xdp_update_skb_shared_info(skb, wi - head_wi - 1,
+		xdp_update_skb_shared_info(skb, nr_frags,
 					   sinfo->xdp_frags_size, truesize,
 					   xdp_buff_is_frag_pfmemalloc(
 						&mxbuf->xdp));
 
-		for (struct mlx5e_wqe_frag_info *pwi = head_wi + 1; pwi < wi; pwi++)
+		for (i = 0; i < nr_frags; i++, pwi++)
 			pwi->frag_page->frags++;
 	}
 
@@ -2073,12 +2086,18 @@ mlx5e_skb_from_cqe_mpwrq_nonlinear(struct mlx5e_rq *rq, struct mlx5e_mpw_info *w
 	}
 
 	if (prog) {
+		u8 nr_frags;
+		u32 len, i;
+
 		if (mlx5e_xdp_handle(rq, prog, mxbuf)) {
 			if (__test_and_clear_bit(MLX5E_RQ_FLAG_XDP_XMIT, rq->flags)) {
-				struct mlx5e_frag_page *pfp;
+				struct mlx5e_frag_page *pagep = head_page;
 
-				for (pfp = head_page; pfp < frag_page; pfp++)
-					pfp->frags++;
+				while (pagep->netmem != sinfo->frags[0].netmem && pagep < frag_page)
+					pagep++;
+
+				for (i = 0; i < sinfo->nr_frags; i++)
+					pagep->frags++;
 
 				wi->linear_page.frags++;
 			}
@@ -2087,9 +2106,12 @@ mlx5e_skb_from_cqe_mpwrq_nonlinear(struct mlx5e_rq *rq, struct mlx5e_mpw_info *w
 			return NULL; /* page/packet was consumed by XDP */
 		}
 
+		len = mxbuf->xdp.data_end - mxbuf->xdp.data;
+		nr_frags = sinfo->nr_frags;
+
 		skb = mlx5e_build_linear_skb(
 			rq, mxbuf->xdp.data_hard_start, linear_frame_sz,
-			mxbuf->xdp.data - mxbuf->xdp.data_hard_start, 0,
+			mxbuf->xdp.data - mxbuf->xdp.data_hard_start, len,
 			mxbuf->xdp.data - mxbuf->xdp.data_meta);
 		if (unlikely(!skb)) {
 			mlx5e_page_release_fragmented(rq->page_pool,
@@ -2102,20 +2124,25 @@ mlx5e_skb_from_cqe_mpwrq_nonlinear(struct mlx5e_rq *rq, struct mlx5e_mpw_info *w
 		mlx5e_page_release_fragmented(rq->page_pool, &wi->linear_page);
 
 		if (xdp_buff_has_frags(&mxbuf->xdp)) {
-			struct mlx5e_frag_page *pagep;
+			struct mlx5e_frag_page *pagep = head_page;
+
+			truesize = nr_frags * PAGE_SIZE;
 
 			/* sinfo->nr_frags is reset by build_skb, calculate again. */
-			xdp_update_skb_shared_info(skb, frag_page - head_page,
+			xdp_update_skb_shared_info(skb, nr_frags,
 						   sinfo->xdp_frags_size, truesize,
 						   xdp_buff_is_frag_pfmemalloc(
 							&mxbuf->xdp));
 
-			pagep = head_page;
-			do
+			while (pagep->netmem != sinfo->frags[0].netmem && pagep < frag_page)
+				pagep++;
+
+			for (i = 0; i < nr_frags; i++, pagep++)
 				pagep->frags++;
-			while (++pagep < frag_page);
+
+			headlen = min_t(u16, MLX5E_RX_MAX_HEAD - len, sinfo->xdp_frags_size);
+			__pskb_pull_tail(skb, headlen);
 		}
-		__pskb_pull_tail(skb, headlen);
 	} else {
 		dma_addr_t addr;
 
