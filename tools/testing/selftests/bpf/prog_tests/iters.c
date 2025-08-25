@@ -134,12 +134,18 @@ static void subtest_task_vma_iters(void)
 
 	seen = 0;
 	while (fscanf(f, "%lx-%lx %[^\n]\n", &start, &end, rest_of_line) == 3) {
+#if defined(__arm__)
+		/* [vectors] is the terminal special VMA on ARM32 */
+		if (strstr(rest_of_line, "[vectors]"))
+			continue;
+#else
 		/* [vsyscall] vma isn't _really_ part of task->mm vmas.
 		 * /proc/PID/maps returns it when out of vmas - see get_gate_vma
 		 * calls in fs/proc/task_mmu.c
 		 */
 		if (strstr(rest_of_line, "[vsyscall]"))
 			continue;
+#endif
 
 		bpf_iter_start = skel->bss->vm_ranges[seen].vm_start;
 		bpf_iter_end = skel->bss->vm_ranges[seen].vm_end;
