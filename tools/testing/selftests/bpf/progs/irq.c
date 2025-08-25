@@ -563,4 +563,11 @@ int irq_wrong_kfunc_class_2(struct __sk_buff *ctx)
 	return 0;
 }
 
+SEC("?tc")
+__success
+int in_interrupt(struct __sk_buff *ctx)
+{
+	return bpf_in_interrupt();
+}
+
 char _license[] SEC("license") = "GPL";
