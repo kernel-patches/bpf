@@ -547,6 +547,56 @@ static inline void copy_map_value_long(struct bpf_map *map, void *dst, void *src
 	bpf_obj_memcpy(map->record, dst, src, map->value_size, true);
 }
 
+#ifdef CONFIG_BPF_SYSCALL
+static inline void bpf_percpu_copy_to_user(struct bpf_map *map, void __percpu *pptr, void *value,
+					   u32 size, u64 flags)
+{
+	int current_cpu = raw_smp_processor_id();
+	int cpu, off = 0;
+
+	if (flags & BPF_F_CPU) {
+		cpu = flags >> 32;
+		copy_map_value_long(map, value, cpu != current_cpu ? per_cpu_ptr(pptr, cpu) :
+				    this_cpu_ptr(pptr));
+		check_and_init_map_value(map, value);
+	} else {
+		for_each_possible_cpu(cpu) {
+			copy_map_value_long(map, value + off, per_cpu_ptr(pptr, cpu));
+			check_and_init_map_value(map, value + off);
+			off += size;
+		}
+	}
+}
+
+void bpf_obj_free_fields(const struct btf_record *rec, void *obj);
+
+static inline void bpf_percpu_copy_from_user(struct bpf_map *map, void __percpu *pptr, void *value,
+					     u32 size, u64 flags)
+{
+	int current_cpu = raw_smp_processor_id();
+	int cpu, off = 0;
+	void *ptr;
+
+	if (flags & BPF_F_CPU) {
+		cpu = flags >> 32;
+		ptr = cpu == current_cpu ? this_cpu_ptr(pptr) : per_cpu_ptr(pptr, cpu);
+		copy_map_value_long(map, ptr, value);
+		bpf_obj_free_fields(map->record, ptr);
+	} else {
+		for_each_possible_cpu(cpu) {
+			copy_map_value_long(map, per_cpu_ptr(pptr, cpu), value + off);
+			/* same user-provided value is used if
+			 * BPF_F_ALL_CPUS is specified, otherwise value is
+			 * an array of per-cpu values.
+			 */
+			if (!(flags & BPF_F_ALL_CPUS))
+				off += size;
+			bpf_obj_free_fields(map->record, per_cpu_ptr(pptr, cpu));
+		}
+	}
+}
+#endif
+
 static inline void bpf_obj_swap_uptrs(const struct btf_record *rec, void *dst, void *src)
 {
 	unsigned long *src_uptr, *dst_uptr;
@@ -2417,7 +2467,6 @@ struct btf_record *btf_record_dup(const struct btf_record *rec);
 bool btf_record_equal(const struct btf_record *rec_a, const struct btf_record *rec_b);
 void bpf_obj_free_timer(const struct btf_record *rec, void *obj);
 void bpf_obj_free_workqueue(const struct btf_record *rec, void *obj);
-void bpf_obj_free_fields(const struct btf_record *rec, void *obj);
 void __bpf_obj_drop_impl(void *p, const struct btf_record *rec, bool percpu);
 
 struct bpf_map *bpf_map_get(u32 ufd);
@@ -3709,12 +3758,23 @@ int bpf_prog_get_file_line(struct bpf_prog *prog, unsigned long ip, const char *
 			   const char **linep, int *nump);
 struct bpf_prog *bpf_prog_find_from_stack(void);
 
+static inline bool bpf_map_supports_cpu_flags(enum bpf_map_type map_type)
+{
+	return false;
+}
+
 static inline int bpf_map_check_op_flags(struct bpf_map *map, u64 flags, u64 extra_flags_mask)
 {
-	if (extra_flags_mask && (flags & extra_flags_mask))
+	if (extra_flags_mask && ((u32)flags & extra_flags_mask))
 		return -EINVAL;
 
 	if ((flags & BPF_F_LOCK) && !btf_record_has_field(map->record, BPF_SPIN_LOCK))
+		return -EINVAL;
+
+	if (!(flags & BPF_F_CPU) && flags >> 32)
+		return -EINVAL;
+
+	if ((flags & (BPF_F_CPU | BPF_F_ALL_CPUS)) && !bpf_map_supports_cpu_flags(map->map_type))
 		return -EINVAL;
 
 	return 0;
@@ -3725,7 +3785,7 @@ static inline int bpf_map_check_update_flags(struct bpf_map *map, u64 flags)
 	return bpf_map_check_op_flags(map, flags, 0);
 }
 
-#define BPF_MAP_LOOKUP_ELEM_EXTRA_FLAGS_MASK (~BPF_F_LOCK)
+#define BPF_MAP_LOOKUP_ELEM_EXTRA_FLAGS_MASK (~(BPF_F_LOCK | BPF_F_CPU | BPF_F_ALL_CPUS))
 
 static inline int bpf_map_check_lookup_flags(struct bpf_map *map, u64 flags)
 {
@@ -3735,6 +3795,29 @@ static inline int bpf_map_check_lookup_flags(struct bpf_map *map, u64 flags)
 static inline int bpf_map_check_batch_flags(struct bpf_map *map, u64 flags)
 {
 	return bpf_map_check_op_flags(map, flags, BPF_MAP_LOOKUP_ELEM_EXTRA_FLAGS_MASK);
+}
+
+static inline int bpf_map_check_cpu_flags(u64 flags, bool check_all_cpus_flag)
+{
+	const u64 cpu_flags = BPF_F_CPU | BPF_F_ALL_CPUS;
+	u32 cpu;
+
+	if (check_all_cpus_flag) {
+		if (unlikely((u32)flags > BPF_F_ALL_CPUS))
+			/* unknown flags */
+			return -EINVAL;
+		if (unlikely((flags & cpu_flags) == cpu_flags))
+			return -EINVAL;
+	} else {
+		if (unlikely((u32)flags & ~BPF_F_CPU))
+			return -EINVAL;
+	}
+
+	cpu = flags >> 32;
+	if (unlikely((flags & BPF_F_CPU) && cpu >= num_possible_cpus()))
+		return -ERANGE;
+
+	return 0;
 }
 
 #endif /* _LINUX_BPF_H */
