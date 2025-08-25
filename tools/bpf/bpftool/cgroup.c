@@ -48,7 +48,8 @@ static const int cgroup_attach_types[] = {
 	BPF_CGROUP_SYSCTL,
 	BPF_CGROUP_GETSOCKOPT,
 	BPF_CGROUP_SETSOCKOPT,
-	BPF_LSM_CGROUP
+	BPF_LSM_CGROUP,
+	BPF_CGROUP_INET_SOCK_ACCEPT,
 };
 
 #define HELP_SPEC_ATTACH_FLAGS						\
@@ -68,7 +69,8 @@ static const int cgroup_attach_types[] = {
 	"                        cgroup_unix_sendmsg | cgroup_udp4_recvmsg |\n" \
 	"                        cgroup_udp6_recvmsg | cgroup_unix_recvmsg |\n" \
 	"                        cgroup_sysctl | cgroup_getsockopt |\n" \
-	"                        cgroup_setsockopt | cgroup_inet_sock_release }"
+	"                        cgroup_setsockopt | cgroup_inet_sock_release |\n" \
+	"                        cgroup_inet_sock_accept }"
 
 static unsigned int query_flags;
 static struct btf *btf_vmlinux;
