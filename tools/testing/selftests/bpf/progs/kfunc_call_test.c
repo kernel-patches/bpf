@@ -8,7 +8,7 @@ SEC("tc")
 int kfunc_call_test4(struct __sk_buff *skb)
 {
 	struct bpf_sock *sk = skb->sk;
-	long tmp;
+	s64 tmp;
 
 	if (!sk)
 		return -1;

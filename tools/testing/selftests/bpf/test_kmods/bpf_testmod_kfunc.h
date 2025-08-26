@@ -109,7 +109,7 @@ __u64 bpf_kfunc_call_test1(struct sock *sk, __u32 a, __u64 b,
 				__u32 c, __u64 d) __ksym;
 int bpf_kfunc_call_test2(struct sock *sk, __u32 a, __u32 b) __ksym;
 struct sock *bpf_kfunc_call_test3(struct sock *sk) __ksym;
-long bpf_kfunc_call_test4(signed char a, short b, int c, long d) __ksym;
+s64 bpf_kfunc_call_test4(signed char a, short b, int c, s64 d) __ksym;
 
 void bpf_kfunc_call_test_pass_ctx(struct __sk_buff *skb) __ksym;
 void bpf_kfunc_call_test_pass1(struct prog_test_pass1 *p) __ksym;

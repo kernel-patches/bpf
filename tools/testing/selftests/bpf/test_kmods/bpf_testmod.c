@@ -696,12 +696,12 @@ __bpf_kfunc struct sock *bpf_kfunc_call_test3(struct sock *sk)
 	return sk;
 }
 
-__bpf_kfunc long noinline bpf_kfunc_call_test4(signed char a, short b, int c, long d)
+__bpf_kfunc s64 noinline bpf_kfunc_call_test4(signed char a, short b, int c, s64 d)
 {
 	/* Provoke the compiler to assume that the caller has sign-extended a,
 	 * b and c on platforms where this is required (e.g. s390x).
 	 */
-	return (long)a + (long)b + (long)c + d;
+	return (s64)a + (s64)b + (s64)c + d;
 }
 
 static struct prog_test_ref_kfunc prog_test_struct = {
