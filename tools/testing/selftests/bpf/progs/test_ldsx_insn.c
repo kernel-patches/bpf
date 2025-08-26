@@ -5,10 +5,10 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
-#if (defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_x86) || \
-     (defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64) ||       \
-     defined(__TARGET_ARCH_s390) || defined(__TARGET_ARCH_loongarch)) && \
-     __clang_major__ >= 18
+#if (defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_arm) ||	\
+     (defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64) ||		\
+     defined(__TARGET_ARCH_s390) || defined(__TARGET_ARCH_loongarch) ||	\
+     defined(__TARGET_ARCH_x86)) &&  __clang_major__ >= 18
 const volatile int skip = 0;
 #else
 const volatile int skip = 1;
