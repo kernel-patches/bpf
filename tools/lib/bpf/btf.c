@@ -642,7 +642,8 @@ const struct btf_type *btf__type_by_id(const struct btf *btf, __u32 type_id)
 	return btf_type_by_id((struct btf *)btf, type_id);
 }
 
-static int determine_ptr_size(const struct btf *btf)
+/* internal helper returns type id of pointer-sized equivalent */
+int btf_ptr_sz_type_id(const struct btf *btf)
 {
 	static const char * const long_aliases[] = {
 		"long",
@@ -661,9 +662,6 @@ static int determine_ptr_size(const struct btf *btf)
 	const char *name;
 	int i, j, n;
 
-	if (btf->base_btf && btf->base_btf->ptr_sz > 0)
-		return btf->base_btf->ptr_sz;
-
 	n = btf__type_cnt(btf);
 	for (i = 1; i < n; i++) {
 		t = btf__type_by_id(btf, i);
@@ -679,11 +677,22 @@ static int determine_ptr_size(const struct btf *btf)
 
 		for (j = 0; j < ARRAY_SIZE(long_aliases); j++) {
 			if (strcmp(name, long_aliases[j]) == 0)
-				return t->size;
+				return i;
 		}
 	}
 
 	return -1;
+}
+
+static inline int determine_ptr_size(const struct btf *btf)
+{
+	int tid;
+
+	if (btf->base_btf && btf->base_btf->ptr_sz > 0)
+		return btf->base_btf->ptr_sz;
+
+	tid = btf_ptr_sz_type_id(btf);
+	return tid < 0 ? tid : btf__type_by_id(btf, tid)->size;
 }
 
 static size_t btf_ptr_sz(const struct btf *btf)

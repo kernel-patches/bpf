@@ -233,6 +233,7 @@ struct btf;
 struct btf_type;
 
 struct btf_type *btf_type_by_id(const struct btf *btf, __u32 type_id);
+int btf_ptr_sz_type_id(const struct btf *btf);
 const char *btf_kind_str(const struct btf_type *t);
 const struct btf_type *skip_mods_and_typedefs(const struct btf *btf, __u32 id, __u32 *res_id);
 const struct btf_header *btf_header(const struct btf *btf);

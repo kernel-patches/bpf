@@ -2022,6 +2022,7 @@ static int btf_save_raw(const struct btf *btf, const char *path)
 struct btfgen_info {
 	struct btf *src_btf;
 	struct btf *marked_btf; /* btf structure used to mark used types */
+	bool is_ptr_marked;	/* will a ptr type be output? */
 };
 
 static size_t btfgen_hash_fn(long key, void *ctx)
@@ -2114,6 +2115,7 @@ btfgen_mark_type(struct btfgen_info *info, unsigned int type_id, bool follow_poi
 	case BTF_KIND_UNION:
 		break;
 	case BTF_KIND_PTR:
+		info->is_ptr_marked = true;
 		if (follow_pointers) {
 			err = btfgen_mark_type(info, btf_type->type, follow_pointers);
 			if (err)
@@ -2272,6 +2274,7 @@ static int btfgen_mark_type_match(struct btfgen_info *info, __u32 type_id, bool 
 	case BTF_KIND_VOLATILE:
 		return btfgen_mark_type_match(info, btf_type->type, behind_ptr);
 	case BTF_KIND_PTR:
+		info->is_ptr_marked = true;
 		return btfgen_mark_type_match(info, btf_type->type, true);
 	case BTF_KIND_ARRAY: {
 		struct btf_array *array;
@@ -2492,7 +2495,7 @@ static struct btf *btfgen_get_btf(struct btfgen_info *info)
 {
 	struct btf *btf_new = NULL;
 	unsigned int *ids = NULL;
-	unsigned int i, n = btf__type_cnt(info->marked_btf);
+	unsigned int i, n;
 	int err = 0;
 
 	btf_new = btf__new_empty();
@@ -2501,6 +2504,14 @@ static struct btf *btfgen_get_btf(struct btfgen_info *info)
 		goto err_out;
 	}
 
+	/* ensure size accompanies any pointer usage */
+	if (info->is_ptr_marked) {
+		i = btf_ptr_sz_type_id(info->src_btf);
+		if (i > 0)
+			btfgen_mark_type(info, i, false);
+	}
+
+	n = btf__type_cnt(info->marked_btf);
 	ids = calloc(n, sizeof(*ids));
 	if (!ids) {
 		err = -errno;
