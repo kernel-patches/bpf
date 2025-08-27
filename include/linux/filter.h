@@ -1779,6 +1779,20 @@ void *bpf_xdp_pointer(struct xdp_buff *xdp, u32 offset, u32 len);
 void bpf_xdp_copy_buf(struct xdp_buff *xdp, unsigned long off,
 		      void *buf, unsigned long len, bool flush);
 void *bpf_skb_meta_pointer(struct sk_buff *skb, u32 offset);
+
+static inline int __bpf_skb_meta_load_bytes(struct sk_buff *skb,
+					    u32 offset, void *to, u32 len)
+{
+	memmove(to, bpf_skb_meta_pointer(skb, offset), len);
+	return 0;
+}
+
+static inline int __bpf_skb_meta_store_bytes(struct sk_buff *skb, u32 offset,
+					     const void *from, u32 len)
+{
+	memmove(bpf_skb_meta_pointer(skb, offset), from, len);
+	return 0;
+}
 #else /* CONFIG_NET */
 static inline int __bpf_skb_load_bytes(const struct sk_buff *skb, u32 offset,
 				       void *to, u32 len)
@@ -1817,6 +1831,18 @@ static inline void bpf_xdp_copy_buf(struct xdp_buff *xdp, unsigned long off, voi
 static inline void *bpf_skb_meta_pointer(struct sk_buff *skb, u32 offset)
 {
 	return NULL;
+}
+
+static inline int __bpf_skb_meta_load_bytes(struct sk_buff *skb, u32 offset,
+					    void *to, u32 len)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int __bpf_skb_meta_store_bytes(struct sk_buff *skb, u32 offset,
+					     const void *from, u32 len)
+{
+	return -EOPNOTSUPP;
 }
 #endif /* CONFIG_NET */
 
