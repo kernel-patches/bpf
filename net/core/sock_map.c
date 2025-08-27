@@ -860,6 +860,7 @@ const struct bpf_map_ops sock_map_ops = {
 struct bpf_shtab_elem {
 	struct rcu_head rcu;
 	u32 hash;
+	u32 bucket_hash;
 	struct sock *sk;
 	struct hlist_node node;
 	refcount_t ref;
@@ -878,11 +879,14 @@ struct bpf_shtab {
 	u32 elem_size;
 	struct sk_psock_progs progs;
 	atomic_t count;
+	u32 hash_len;
 };
 
-static inline u32 sock_hash_bucket_hash(const void *key, u32 len)
+static inline void sock_hash_elem_hash(const void *key, u32 *bucket_hash,
+				       u32 *hash, u32 hash_len, u32 key_size)
 {
-	return jhash(key, len, 0);
+	*bucket_hash = jhash(key, hash_len, 0);
+	*hash = hash_len == key_size ? *bucket_hash : jhash(key, key_size, 0);
 }
 
 static struct bpf_shtab_bucket *sock_hash_select_bucket(struct bpf_shtab *htab,
@@ -909,14 +913,15 @@ sock_hash_lookup_elem_raw(struct hlist_head *head, u32 hash, void *key,
 static struct sock *__sock_hash_lookup_elem(struct bpf_map *map, void *key)
 {
 	struct bpf_shtab *htab = container_of(map, struct bpf_shtab, map);
-	u32 key_size = map->key_size, hash;
+	u32 key_size = map->key_size, bucket_hash, hash;
 	struct bpf_shtab_bucket *bucket;
 	struct bpf_shtab_elem *elem;
 
 	WARN_ON_ONCE(!rcu_read_lock_held());
 
-	hash = sock_hash_bucket_hash(key, key_size);
-	bucket = sock_hash_select_bucket(htab, hash);
+	sock_hash_elem_hash(key, &bucket_hash, &hash, htab->hash_len,
+			    map->key_size);
+	bucket = sock_hash_select_bucket(htab, bucket_hash);
 	elem = sock_hash_lookup_elem_raw(&bucket->head, hash, key, key_size);
 
 	return elem ? elem->sk : NULL;
@@ -972,7 +977,7 @@ static void sock_hash_delete_from_link(struct bpf_map *map, struct sock *sk,
 	struct bpf_shtab_bucket *bucket;
 
 	WARN_ON_ONCE(!rcu_read_lock_held());
-	bucket = sock_hash_select_bucket(htab, elem->hash);
+	bucket = sock_hash_select_bucket(htab, elem->bucket_hash);
 
 	/* elem may be deleted in parallel from the map, but access here
 	 * is okay since it's going away only after RCU grace period.
@@ -989,13 +994,14 @@ static void sock_hash_delete_from_link(struct bpf_map *map, struct sock *sk,
 static long sock_hash_delete_elem(struct bpf_map *map, void *key)
 {
 	struct bpf_shtab *htab = container_of(map, struct bpf_shtab, map);
-	u32 hash, key_size = map->key_size;
+	u32 bucket_hash, hash, key_size = map->key_size;
 	struct bpf_shtab_bucket *bucket;
 	struct bpf_shtab_elem *elem;
 	int ret = -ENOENT;
 
-	hash = sock_hash_bucket_hash(key, key_size);
-	bucket = sock_hash_select_bucket(htab, hash);
+	sock_hash_elem_hash(key, &bucket_hash, &hash, htab->hash_len,
+			    map->key_size);
+	bucket = sock_hash_select_bucket(htab, bucket_hash);
 
 	spin_lock_bh(&bucket->lock);
 	elem = sock_hash_lookup_elem_raw(&bucket->head, hash, key, key_size);
@@ -1009,7 +1015,8 @@ static long sock_hash_delete_elem(struct bpf_map *map, void *key)
 
 static struct bpf_shtab_elem *sock_hash_alloc_elem(struct bpf_shtab *htab,
 						   void *key, u32 key_size,
-						   u32 hash, struct sock *sk,
+						   u32 bucket_hash, u32 hash,
+						   struct sock *sk,
 						   struct bpf_shtab_elem *old)
 {
 	struct bpf_shtab_elem *new;
@@ -1031,6 +1038,7 @@ static struct bpf_shtab_elem *sock_hash_alloc_elem(struct bpf_shtab *htab,
 	memcpy(new->key, key, key_size);
 	new->sk = sk;
 	new->hash = hash;
+	new->bucket_hash = bucket_hash;
 	refcount_set(&new->ref, 1);
 	/* Matches sock_put() in sock_hash_free_elem(). Ensure that sk is not
 	 * freed until elem is.
@@ -1043,7 +1051,7 @@ static int sock_hash_update_common(struct bpf_map *map, void *key,
 				   struct sock *sk, u64 flags)
 {
 	struct bpf_shtab *htab = container_of(map, struct bpf_shtab, map);
-	u32 key_size = map->key_size, hash;
+	u32 key_size = map->key_size, bucket_hash, hash;
 	struct bpf_shtab_elem *elem, *elem_new;
 	struct bpf_shtab_bucket *bucket;
 	struct sk_psock_link *link;
@@ -1065,8 +1073,9 @@ static int sock_hash_update_common(struct bpf_map *map, void *key,
 	psock = sk_psock(sk);
 	WARN_ON_ONCE(!psock);
 
-	hash = sock_hash_bucket_hash(key, key_size);
-	bucket = sock_hash_select_bucket(htab, hash);
+	sock_hash_elem_hash(key, &bucket_hash, &hash, htab->hash_len,
+			    map->key_size);
+	bucket = sock_hash_select_bucket(htab, bucket_hash);
 
 	spin_lock_bh(&bucket->lock);
 	elem = sock_hash_lookup_elem_raw(&bucket->head, hash, key, key_size);
@@ -1078,7 +1087,8 @@ static int sock_hash_update_common(struct bpf_map *map, void *key,
 		goto out_unlock;
 	}
 
-	elem_new = sock_hash_alloc_elem(htab, key, key_size, hash, sk, elem);
+	elem_new = sock_hash_alloc_elem(htab, key, key_size, bucket_hash, hash,
+					sk, elem);
 	if (IS_ERR(elem_new)) {
 		ret = PTR_ERR(elem_new);
 		goto out_unlock;
@@ -1105,15 +1115,16 @@ static int sock_hash_get_next_key(struct bpf_map *map, void *key,
 				  void *key_next)
 {
 	struct bpf_shtab *htab = container_of(map, struct bpf_shtab, map);
+	u32 bucket_hash, hash, key_size = map->key_size;
 	struct bpf_shtab_elem *elem, *elem_next;
-	u32 hash, key_size = map->key_size;
 	struct hlist_head *head;
 	int i = 0;
 
 	if (!key)
 		goto find_first_elem;
-	hash = sock_hash_bucket_hash(key, key_size);
-	head = &sock_hash_select_bucket(htab, hash)->head;
+	sock_hash_elem_hash(key, &bucket_hash, &hash, htab->hash_len,
+			    map->key_size);
+	head = &sock_hash_select_bucket(htab, bucket_hash)->head;
 	elem = sock_hash_lookup_elem_raw(head, hash, key, key_size);
 	if (!elem)
 		goto find_first_elem;
@@ -1125,7 +1136,7 @@ static int sock_hash_get_next_key(struct bpf_map *map, void *key,
 		return 0;
 	}
 
-	i = hash & (htab->buckets_num - 1);
+	i = bucket_hash & (htab->buckets_num - 1);
 	i++;
 find_first_elem:
 	for (; i < htab->buckets_num; i++) {
@@ -1150,7 +1161,11 @@ static struct bpf_map *sock_hash_alloc(union bpf_attr *attr)
 	    attr->key_size    == 0 ||
 	    (attr->value_size != sizeof(u32) &&
 	     attr->value_size != sizeof(u64)) ||
-	    attr->map_flags & ~SOCK_CREATE_FLAG_MASK)
+	    attr->map_flags & ~SOCK_CREATE_FLAG_MASK ||
+	    /* The lower 32 bits of map_extra specify the number of bytes in
+	     * the key to hash.
+	     */
+	    attr->map_extra & ~U32_MAX)
 		return ERR_PTR(-EINVAL);
 	if (attr->key_size > MAX_BPF_STACK)
 		return ERR_PTR(-E2BIG);
@@ -1164,8 +1179,10 @@ static struct bpf_map *sock_hash_alloc(union bpf_attr *attr)
 	htab->buckets_num = roundup_pow_of_two(htab->map.max_entries);
 	htab->elem_size = sizeof(struct bpf_shtab_elem) +
 			  round_up(htab->map.key_size, 8);
+	htab->hash_len = attr->map_extra ?: attr->key_size;
 	if (htab->buckets_num == 0 ||
-	    htab->buckets_num > U32_MAX / sizeof(struct bpf_shtab_bucket)) {
+	    htab->buckets_num > U32_MAX / sizeof(struct bpf_shtab_bucket) ||
+	    htab->hash_len > attr->key_size) {
 		err = -EINVAL;
 		goto free_htab;
 	}
