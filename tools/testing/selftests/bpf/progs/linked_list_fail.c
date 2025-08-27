@@ -212,14 +212,14 @@ int map_compat_raw_tp_w(void *ctx)
 SEC("?tc")
 int obj_type_id_oor(void *ctx)
 {
-	bpf_obj_new_impl(~0UL, NULL);
+	(void)bpf_obj_new_impl(~0UL, NULL);
 	return 0;
 }
 
 SEC("?tc")
 int obj_new_no_composite(void *ctx)
 {
-	bpf_obj_new_impl(bpf_core_type_id_local(int), (void *)42);
+	(void)bpf_obj_new_impl(bpf_core_type_id_local(int), (void *)42);
 	return 0;
 }
 
@@ -227,7 +227,7 @@ SEC("?tc")
 int obj_new_no_struct(void *ctx)
 {
 
-	bpf_obj_new(union { int data; unsigned udata; });
+	(void)bpf_obj_new(union { int data; unsigned udata; });
 	return 0;
 }
 
@@ -252,7 +252,7 @@ int new_null_ret(void *ctx)
 SEC("?tc")
 int obj_new_acq(void *ctx)
 {
-	bpf_obj_new(struct foo);
+	(void)bpf_obj_new(struct foo);
 	return 0;
 }
 

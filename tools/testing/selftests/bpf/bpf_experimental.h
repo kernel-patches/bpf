@@ -20,7 +20,7 @@
  *	A pointer to an object of the type corresponding to the passed in
  *	'local_type_id', or NULL on failure.
  */
-extern void *bpf_obj_new_impl(__u64 local_type_id, void *meta) __ksym;
+extern __must_check void *bpf_obj_new_impl(__u64 local_type_id, void *meta) __ksym;
 
 /* Convenience macro to wrap over bpf_obj_new_impl */
 #define bpf_obj_new(type) ((type *)bpf_obj_new_impl(bpf_core_type_id_local(type), NULL))
