@@ -8,6 +8,10 @@
 
 #define __contains(name, node) __attribute__((btf_decl_tag("contains:" #name ":" #node)))
 
+#ifndef __must_check
+#define __must_check __attribute__((__warn_unused_result__))
+#endif
+
 /* Description
  *	Allocates an object of the type represented by 'local_type_id' in
  *	program BTF. User may use the bpf_core_type_id_local macro to pass the
@@ -20,7 +24,7 @@
  *	A pointer to an object of the type corresponding to the passed in
  *	'local_type_id', or NULL on failure.
  */
-extern void *bpf_obj_new_impl(__u64 local_type_id, void *meta) __ksym;
+extern __must_check void *bpf_obj_new_impl(__u64 local_type_id, void *meta) __ksym;
 
 /* Convenience macro to wrap over bpf_obj_new_impl */
 #define bpf_obj_new(type) ((type *)bpf_obj_new_impl(bpf_core_type_id_local(type), NULL))
