@@ -3681,6 +3681,8 @@ __bpf_kfunc int bpf_strnstr(const char *s1__ign, const char *s2__ign, size_t len
 				return -ENOENT;
 			if (c1 != c2)
 				break;
+			if (j == len - 1)
+				return i;
 		}
 		if (j == XATTR_SIZE_MAX)
 			return -E2BIG;
