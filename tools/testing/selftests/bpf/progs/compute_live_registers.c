@@ -240,6 +240,7 @@ __naked void if2(void)
 		::: __clobber_all);
 }
 
+#if __clang_major__ >= 18
 /* Verifier misses that r2 is alive if jset is not handled properly */
 SEC("socket")
 __log_level(2)
@@ -255,6 +256,7 @@ __naked void if3_jset_bug(void)
 		"exit;"
 		::: __clobber_all);
 }
+#endif
 
 SEC("socket")
 __log_level(2)
