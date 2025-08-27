@@ -2013,6 +2013,7 @@ int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 			     struct bpf_verifier_log *log);
 void bpf_map_struct_ops_info_fill(struct bpf_map_info *info, struct bpf_map *map);
 void bpf_struct_ops_desc_release(struct bpf_struct_ops_desc *st_ops_desc);
+void bpf_prog_report_arena_violation(bool write, unsigned long addr);
 #else
 #define register_bpf_struct_ops(st_ops, type) ({ (void *)(st_ops); 0; })
 static inline bool bpf_try_module_get(const void *data, struct module *owner)
@@ -2042,6 +2043,10 @@ static inline void bpf_map_struct_ops_info_fill(struct bpf_map_info *info, struc
 }
 
 static inline void bpf_struct_ops_desc_release(struct bpf_struct_ops_desc *st_ops_desc)
+{
+}
+
+static inline void bpf_prog_report_arena_violation(bool write, unsigned long addr)
 {
 }
 
