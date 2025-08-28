@@ -2632,6 +2632,10 @@ struct bpf_iter_aux_info {
 		enum bpf_iter_task_type	type;
 		u32 pid;
 	} task;
+	struct {
+		void *key_prefix;
+		u32 key_prefix_len;
+	} sockhash;
 };
 
 typedef int (*bpf_iter_attach_target_t)(struct bpf_prog *prog,
