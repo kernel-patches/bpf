@@ -249,11 +249,13 @@ __naked void if3_jset_bug(void)
 	asm volatile (
 		"r0 = 1;"
 		"r2 = 2;"
-		"if r1 & 0x7 goto +1;"
+		".8byte %[jset];" /* same as 'if r1 & 0x7 goto +1;' */
 		"exit;"
 		"r0 = r2;"
 		"exit;"
-		::: __clobber_all);
+		:
+		: __imm_insn(jset, BPF_JMP_IMM(BPF_JSET, BPF_REG_1, 0x7, 1))
+		: __clobber_all);
 }
 
 SEC("socket")
