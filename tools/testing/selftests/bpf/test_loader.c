@@ -1087,8 +1087,8 @@ void run_subtest(struct test_loader *tester,
 			}
 			link = bpf_map__attach_struct_ops(map);
 			if (!link) {
-				PRINT_FAIL("bpf_map__attach_struct_ops failed for map %s: err=%d\n",
-					   bpf_map__name(map), err);
+				PRINT_FAIL("bpf_map__attach_struct_ops failed for map %s: %s\n",
+					   bpf_map__name(map), strerror(errno));
 				goto tobj_cleanup;
 			}
 			links[links_cnt++] = link;
