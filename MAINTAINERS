@@ -4525,6 +4525,7 @@ BPF [CORE]
 M:	Alexei Starovoitov <ast@kernel.org>
 M:	Daniel Borkmann <daniel@iogearbox.net>
 R:	John Fastabend <john.fastabend@gmail.com>
+R:	Shung-Hsi Yu <shung-hsi.yu@suse.com>
 L:	bpf@vger.kernel.org
 S:	Maintained
 F:	include/linux/bpf*
