@@ -130,4 +130,35 @@ int iter_udp_soreuse(struct bpf_iter__udp *ctx)
 	return 0;
 }
 
+struct sock_hash_key {
+	__u32 bucket_key;
+	__u32 id;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_SOCKHASH);
+	__uint(max_entries, 16);
+	__ulong(map_extra, offsetof(struct sock_hash_key, id));
+	__type(key, sizeof(struct sock_hash_key));
+	__type(value, __u64);
+} sockets SEC(".maps");
+
+SEC("iter/sockmap")
+int iter_sockmap(struct bpf_iter__sockmap *ctx)
+{
+	struct sock *sk = ctx->sk;
+	__u32 *key = ctx->key;
+	__u64 sock_cookie;
+	int idx = 0;
+
+	if (!key || !sk)
+		return 0;
+
+	sock_cookie = bpf_get_socket_cookie(sk);
+	bpf_seq_write(ctx->meta->seq, &idx, sizeof(idx));
+	bpf_seq_write(ctx->meta->seq, &sock_cookie, sizeof(sock_cookie));
+
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
