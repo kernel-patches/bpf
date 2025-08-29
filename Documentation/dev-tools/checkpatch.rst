@@ -247,7 +247,7 @@ Allocation style
     number of elements.  sizeof() as the first argument is generally
     wrong.
 
-    See: https://www.kernel.org/doc/html/latest/core-api/memory-allocation.html
+    See: Documentation/core-api/memory-allocation.rst
 
   **ALLOC_SIZEOF_STRUCT**
     The allocation style is bad.  In general for family of
@@ -260,13 +260,14 @@ Allocation style
 
       p = alloc(sizeof(*p), ...)
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#allocating-memory
+    See: :ref:`"Allocating memory" section on Documentation/process/coding-style.rst
+    <memory-allocation-style>`.
 
   **ALLOC_WITH_MULTIPLY**
     Prefer kmalloc_array/kcalloc over kmalloc/kzalloc with a
     sizeof multiply.
 
-    See: https://www.kernel.org/doc/html/latest/core-api/memory-allocation.html
+    See: Documentation/core-api/memory-allocation.rst
 
 
 API usage
@@ -287,7 +288,8 @@ API usage
     Use WARN() and WARN_ON() instead, and handle the "impossible"
     error condition as gracefully as possible.
 
-    See: https://www.kernel.org/doc/html/latest/process/deprecated.html#bug-and-bug-on
+    See: :ref:`"BUG() and BUG_ON()" section on
+    Documentation/process/deprecated.rst <bug-macros-deprecated>`
 
   **CONSIDER_KSTRTO**
     The simple_strtol(), simple_strtoll(), simple_strtoul(), and
@@ -296,7 +298,9 @@ API usage
     kstrtoll(), kstrtoul(), and kstrtoull() functions tend to be the
     correct replacements.
 
-    See: https://www.kernel.org/doc/html/latest/process/deprecated.html#simple-strtol-simple-strtoll-simple-strtoul-simple-strtoull
+    See: :ref:`"simple_strtol(), simple_strtoll(), simple_strtoul(),
+    simple_strtoull() section" on Documentation/process/deprecated.rst
+    <simple-strtol-family-deprecated>`
 
   **CONSTANT_CONVERSION**
     Use of __constant_<foo> form is discouraged for the following functions::
@@ -340,7 +344,8 @@ API usage
 
     The full list of available RCU APIs can be viewed from the kernel docs.
 
-    See: https://www.kernel.org/doc/html/latest/RCU/whatisRCU.html#full-list-of-rcu-apis
+    See: :ref:`"Full list of RCU APIs" section on
+    Documentation/RCU/whatisRCU.rst <8_whatisRCU>`
 
   **DEVICE_ATTR_FUNCTIONS**
     The function names used in DEVICE_ATTR is unusual.
@@ -354,7 +359,8 @@ API usage
 
     The function names should preferably follow the above pattern.
 
-    See: https://www.kernel.org/doc/html/latest/driver-api/driver-model/device.html#attributes
+    See: :ref:`"Attributes" section on
+    Documentation/driver-api/driver-model/device.rst <device-attributes>`
 
   **DEVICE_ATTR_RO**
     The DEVICE_ATTR_RO(name) helper macro can be used instead of
@@ -363,7 +369,8 @@ API usage
     Note that the macro automatically appends _show to the named
     attribute variable of the device for the show method.
 
-    See: https://www.kernel.org/doc/html/latest/driver-api/driver-model/device.html#attributes
+    See: :ref:`"Attributes" section on
+    Documentation/driver-api/driver-model/device.rst <device-attributes>`
 
   **DEVICE_ATTR_RW**
     The DEVICE_ATTR_RW(name) helper macro can be used instead of
@@ -372,7 +379,8 @@ API usage
     Note that the macro automatically appends _show and _store to the
     named attribute variable of the device for the show and store methods.
 
-    See: https://www.kernel.org/doc/html/latest/driver-api/driver-model/device.html#attributes
+    See: :ref:`"Attributes" section on
+    Documentation/driver-api/driver-model/device.rst <device-attributes>`
 
   **DEVICE_ATTR_WO**
     The DEVICE_AATR_WO(name) helper macro can be used instead of
@@ -381,7 +389,8 @@ API usage
     Note that the macro automatically appends _store to the
     named attribute variable of the device for the store method.
 
-    See: https://www.kernel.org/doc/html/latest/driver-api/driver-model/device.html#attributes
+    See: :ref:`"Attributes" section on
+    Documentation/driver-api/driver-model/device.rst <device-attributes>`
 
   **DUPLICATED_SYSCTL_CONST**
     Commit d91bff3011cf ("proc/sysctl: add shared variables for range
@@ -443,7 +452,8 @@ API usage
     lockdep_assert_held() annotations should be preferred over
     assertions based on spin_is_locked()
 
-    See: https://www.kernel.org/doc/html/latest/locking/lockdep-design.html#annotations
+    See: :ref:`"Annotations" section on
+    Documentation/locking/lockdep-design.rst <lockdep-annotations>`
 
   **UAPI_INCLUDE**
     No #include statements in include/uapi should use a uapi/ path.
@@ -472,13 +482,15 @@ Comments
       * for files in net/ and drivers/net/
       */
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#commenting
+    See: :ref:`Commenting section on Documentation/process/coding-style.rst
+    <comments-style>`
 
   **C99_COMMENTS**
     C99 style single line comments (//) should not be used.
     Prefer the block comment style instead.
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#commenting
+    See: :ref:`Commenting section on Documentation/process/coding-style.rst
+    <comments-style>`
 
   **DATA_RACE**
     Applications of data_race() should have a comment so as to document the
@@ -512,7 +524,8 @@ Commit message
     The signed-off-by line does not fall in line with the standards
     specified by the community.
 
-    See: https://www.kernel.org/doc/html/latest/process/submitting-patches.html#developer-s-certificate-of-origin-1-1
+    See: :ref:`Developer's Certificate of Origin 1.1 text on
+    Documentation/process/submitting-patches.rst <dco-text>`
 
   **BAD_STABLE_ADDRESS_STYLE**
     The email format for stable is incorrect.
@@ -534,14 +547,16 @@ Commit message
     The patch is missing a commit description.  A brief
     description of the changes made by the patch should be added.
 
-    See: https://www.kernel.org/doc/html/latest/process/submitting-patches.html#describe-your-changes
+    See: :ref:`"Describe your changes" section on
+    Documentation/process/submitting-patches.rst <describe_changes>`
 
   **EMAIL_SUBJECT**
     Naming the tool that found the issue is not very useful in the
     subject line.  A good subject line summarizes the change that
     the patch brings.
 
-    See: https://www.kernel.org/doc/html/latest/process/submitting-patches.html#describe-your-changes
+    See: :ref:`"Describe your changes" section on
+    Documentation/process/submitting-patches.rst <describe_changes>`
 
   **FROM_SIGN_OFF_MISMATCH**
     The author's email does not match with that in the Signed-off-by:
@@ -560,7 +575,8 @@ Commit message
     line should be added according to Developer's certificate of
     Origin.
 
-    See: https://www.kernel.org/doc/html/latest/process/submitting-patches.html#sign-your-work-the-developer-s-certificate-of-origin
+    See: :ref:`"Sign your work - the Developer's Certificate of Origin"
+    section on Documentation/process/submitting-patches.rst <dco-signoff>`
 
   **NO_AUTHOR_SIGN_OFF**
     The author of the patch has not signed off the patch.  It is
@@ -569,7 +585,8 @@ Commit message
     written it or otherwise has the rights to pass it on as an open
     source patch.
 
-    See: https://www.kernel.org/doc/html/latest/process/submitting-patches.html#sign-your-work-the-developer-s-certificate-of-origin
+    See: :ref:`"Sign your work - the Developer's Certificate of Origin"
+    section on Documentation/process/submitting-patches.rst <dco-signoff>`
 
   **DIFF_IN_COMMIT_MSG**
     Avoid having diff content in commit message.
@@ -599,14 +616,16 @@ Commit message
       platform_set_drvdata(), but left the variable "dev" unused,
       delete it.
 
-    See: https://www.kernel.org/doc/html/latest/process/submitting-patches.html#describe-your-changes
+    See: :ref:`"Describe your changes" section on
+    Documentation/process/submitting-patches.rst <describe_changes>`
 
   **BAD_FIXES_TAG**
     The Fixes: tag is malformed or does not follow the community conventions.
     This can occur if the tag have been split into multiple lines (e.g., when
     pasted in an email program with word wrapping enabled).
 
-    See: https://www.kernel.org/doc/html/latest/process/submitting-patches.html#describe-your-changes
+    See: :ref:`"Describe your changes" section on
+    Documentation/process/submitting-patches.rst <describe_changes>`
 
 
 Comparison style
@@ -646,7 +665,8 @@ Indentation and Line Breaks
     Outside of comments, documentation and Kconfig,
     spaces are never used for indentation.
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#indentation
+    See: :ref:`"Indentation" section on Documentation/process/coding-style.rst
+    <indentation-style>`
 
   **DEEP_INDENTATION**
     Indentation with 6 or more tabs usually indicate overly indented
@@ -678,7 +698,8 @@ Indentation and Line Breaks
               break;
       }
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#indentation
+    See: :ref:`"Indentation" section on Documentation/process/coding-style.rst
+    <indentation-style>`
 
   **LONG_LINE**
     The line has exceeded the specified maximum length.
@@ -690,21 +711,24 @@ Indentation and Line Breaks
     limit to 100 columns.  This is not a hard limit either and it's
     preferable to stay within 80 columns whenever possible.
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#breaking-long-lines-and-strings
+    See: :ref:`"Breaking long lines and strings" section on
+    Documentation/process/coding-style.rst <long-line-break>`
 
   **LONG_LINE_STRING**
     A string starts before but extends beyond the maximum line length.
     To use a different maximum line length, the --max-line-length=n option
     may be added while invoking checkpatch.
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#breaking-long-lines-and-strings
+    See: :ref:`"Breaking long lines and strings" section on
+    Documentation/process/coding-style.rst <long-line-break>`
 
   **LONG_LINE_COMMENT**
     A comment starts before but extends beyond the maximum line length.
     To use a different maximum line length, the --max-line-length=n option
     may be added while invoking checkpatch.
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#breaking-long-lines-and-strings
+    See: :ref:`"Breaking long lines and strings" section on
+    Documentation/process/coding-style.rst <long-line-break>`
 
   **SPLIT_STRING**
     Quoted strings that appear as messages in userspace and can be
@@ -803,7 +827,8 @@ Macros, Attributes and Symbols
     and enables warnings if they are used as they can lead to
     non-deterministic builds.
 
-    See: https://www.kernel.org/doc/html/latest/kbuild/reproducible-builds.html#timestamps
+    See: :ref:`"Timestamps" section on
+    Documentation/kbuild/reproducible-builds.rst <kernel-timestamps>`
 
   **DEFINE_ARCH_HAS**
     The ARCH_HAS_xyz and ARCH_HAVE_xyz patterns are wrong.
@@ -868,7 +893,8 @@ Macros, Attributes and Symbols
                         do_this(b, c);          \
         } while (0)
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#macros-enums-and-rtl
+    See: :ref:`"Macros, Enums and RTL" section on
+    Documentation/process/coding-style.rst <macros-style>`
 
   **PREFER_FALLTHROUGH**
     Use the `fallthrough;` pseudo keyword instead of
@@ -907,7 +933,8 @@ Macros, Attributes and Symbols
 
       WARNING: Argument 'a' is not used in function-like macro.
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#macros-enums-and-rtl
+    See: :ref:`"Macros, Enums and RTL" section on
+    Documentation/process/coding-style.rst <macros-style>`
 
   **SINGLE_STATEMENT_DO_WHILE_MACRO**
     For the multi-statement macros, it is necessary to use the do-while
@@ -931,7 +958,8 @@ Functions and Variables
   **CAMELCASE**
     Avoid CamelCase Identifiers.
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#naming
+    See: :ref:`"Naming" section on Documentation/process/coding-style.rst
+    <naming-convention>`
 
   **CONST_CONST**
     Using `const <type> const *` is generally meant to be
@@ -1018,7 +1046,8 @@ Permissions
     Typically only three permissions are used - 0644 (RW), 0444 (RO)
     and 0200 (WO).
 
-    See: https://www.kernel.org/doc/html/latest/filesystems/sysfs.html#attributes
+    See: :ref:`"Attributes" section on Documentation/filesystems/sysfs.rst
+    <sysfs-attributes>`
 
   **EXECUTE_PERMISSIONS**
     There is no reason for source files to be executable.  The executable
@@ -1074,7 +1103,8 @@ Spacing and Brackets
               body of function
       }
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#placing-braces-and-spaces
+    See: :ref:`"Placing Braces and Spaces" section on
+    Documentation/process/coding-style.rst <braces-placement>`
 
   **BRACKET_SPACE**
     Whitespace before opening bracket '[' is prohibited.
@@ -1105,20 +1135,23 @@ Spacing and Brackets
   **ELSE_AFTER_BRACE**
     `else {` should follow the closing block `}` on the same line.
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#placing-braces-and-spaces
+    See: :ref:`"Placing Braces and Spaces" section on
+    Documentation/process/coding-style.rst <braces-placement>`
 
   **LINE_SPACING**
     Vertical space is wasted given the limited number of lines an
     editor window can display when multiple blank lines are used.
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#spaces
+    See: :ref:`"Spaces" subsection on Documentation/process/coding-style.rst
+    <spaces-usage>`
 
   **OPEN_BRACE**
     The opening brace should be following the function definitions on the
     next line.  For any non-functional block it should be on the same line
     as the last construct.
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#placing-braces-and-spaces
+    See: :ref:`"Placing Braces and Spaces" section on
+    Documentation/process/coding-style.rst <braces-placement>`
 
   **POINTER_LOCATION**
     When using pointer data or a function that returns a pointer type,
@@ -1130,19 +1163,22 @@ Spacing and Brackets
       unsigned long long memparse(char *ptr, char **retptr);
       char *match_strdup(substring_t *s);
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#spaces
+    See: :ref:`"Spaces" subsection on Documentation/process/coding-style.rst
+    <spaces-usage>`
 
   **SPACING**
     Whitespace style used in the kernel sources is described in kernel docs.
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#spaces
+    See: :ref:`"Spaces" subsection on Documentation/process/coding-style.rst
+    <spaces-usage>`
 
   **TRAILING_WHITESPACE**
     Trailing whitespace should always be removed.
     Some editors highlight the trailing whitespace and cause visual
     distractions when editing files.
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#spaces
+    See: :ref:`"Spaces" subsection on Documentation/process/coding-style.rst
+    <spaces-usage>`
 
   **UNNECESSARY_PARENTHESES**
     Parentheses are not required in the following cases:
@@ -1182,7 +1218,8 @@ Spacing and Brackets
               ...
       } while(something);
 
-    See: https://www.kernel.org/doc/html/latest/process/coding-style.html#placing-braces-and-spaces
+    See: :ref:`"Placing Braces and Spaces" section on
+    Documentation/process/coding-style.rst <braces-placement>`
 
 
 Others
@@ -1216,7 +1253,7 @@ Others
     DT bindings moved to a json-schema based format instead of
     freeform text.
 
-    See: https://www.kernel.org/doc/html/latest/devicetree/bindings/writing-schema.html
+    See: Documentation/devicetree/bindings/writing-schema.rst
 
   **DT_SPLIT_BINDING_PATCH**
     Devicetree bindings should be their own patch.  This is because
@@ -1225,7 +1262,9 @@ Others
     are applied via the same tree), and it makes for a cleaner history in the
     DT only tree created with git-filter-branch.
 
-    See: https://www.kernel.org/doc/html/latest/devicetree/bindings/submitting-patches.html#i-for-patch-submitters
+    See: :ref:`"For patch submitters" section on
+    Documentation/devicetree/bindings/submitting-patches.rst
+    <submitting-dt-patches>`
 
   **EMBEDDED_FILENAME**
     Embedding the complete filename path inside the file isn't particularly
@@ -1253,7 +1292,7 @@ Others
     The Linux kernel requires the precise SPDX identifier in all source files,
     and it is thoroughly documented in the kernel docs.
 
-    See: https://www.kernel.org/doc/html/latest/process/license-rules.html
+    See: Documentation/process/license-rules.rst
 
   **TYPO_SPELLING**
     Some words may have been misspelled.  Consider reviewing them.

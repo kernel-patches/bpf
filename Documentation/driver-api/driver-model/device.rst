@@ -35,6 +35,8 @@ A driver can access the lock in the device structure using::
   void unlock_device(struct device * dev);
 
 
+.. _device-attributes:
+
 Attributes
 ~~~~~~~~~~
 

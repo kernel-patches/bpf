@@ -4,6 +4,8 @@
 Submitting Devicetree (DT) binding patches
 ==========================================
 
+.. _submitting-dt-patches:
+
 I. For patch submitters
 =======================
 
