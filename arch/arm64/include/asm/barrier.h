@@ -219,6 +219,28 @@ do {									\
 	(typeof(*ptr))VAL;						\
 })
 
+extern bool arch_timer_evtstrm_available(void);
+
+#define smp_cond_load_relaxed_timewait(ptr, cond_expr, time_check_expr)	\
+({									\
+	typeof(ptr) __PTR = (ptr);					\
+	__unqual_scalar_typeof(*ptr) VAL;				\
+	bool __wfe = arch_timer_evtstrm_available();			\
+									\
+	for (;;) {							\
+		VAL = READ_ONCE(*__PTR);				\
+		if (cond_expr)						\
+			break;						\
+		if (time_check_expr)					\
+			break;						\
+		if (likely(__wfe))					\
+			__cmpwait_relaxed(__PTR, VAL);			\
+		else							\
+			cpu_relax();					\
+	}								\
+	(typeof(*ptr)) VAL;						\
+})
+
 #include <asm-generic/barrier.h>
 
 #endif	/* __ASSEMBLY__ */
