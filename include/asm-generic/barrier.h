@@ -273,6 +273,41 @@ do {									\
 })
 #endif
 
+#ifndef SMP_TIMEWAIT_SPIN_COUNT
+#define SMP_TIMEWAIT_SPIN_COUNT		200
+#endif
+
+/**
+ * smp_cond_load_relaxed_timewait() - (Spin) wait for cond with no ordering
+ * guarantees until a timeout expires.
+ * @ptr: pointer to the variable to wait on
+ * @cond: boolean expression to wait for
+ * @time_check_expr: expression to decide when to bail out
+ *
+ * Equivalent to using READ_ONCE() on the condition variable.
+ */
+#ifndef smp_cond_load_relaxed_timewait
+#define smp_cond_load_relaxed_timewait(ptr, cond_expr, time_check_expr)	\
+({									\
+	typeof(ptr) __PTR = (ptr);					\
+	__unqual_scalar_typeof(*ptr) VAL;				\
+	u32 __n = 0, __spin = SMP_TIMEWAIT_SPIN_COUNT;			\
+									\
+	for (;;) {							\
+		VAL = READ_ONCE(*__PTR);				\
+		if (cond_expr)						\
+			break;						\
+		cpu_relax();						\
+		if (++__n < __spin)					\
+			continue;					\
+		if (time_check_expr)					\
+			break;						\
+		__n = 0;						\
+	}								\
+	(typeof(*ptr))VAL;						\
+})
+#endif
+
 /*
  * pmem_wmb() ensures that all stores for which the modification
  * are written to persistent storage by preceding instructions have
