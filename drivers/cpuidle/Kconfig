@@ -44,6 +44,18 @@ config CPU_IDLE_GOV_HALTPOLL
 
 	  Some virtualized workloads benefit from using it.
 
+config CPU_IDLE_GOV_EXT
+    bool "bpf cpuidle ext governor"
+	depends on BPF_SYSCALL && BPF_JIT && DEBUG_INFO_BTF
+	default y
+	help
+	  This governor implements a simple cpuidle ext governor,
+	  which can be customized by a BPF program without modifying
+	  kernel code.
+
+	  Some scenarios benefit where CPUidle policy needs
+	  to be customized based on user-space requirements.
+
 config DT_IDLE_STATES
 	bool
 
