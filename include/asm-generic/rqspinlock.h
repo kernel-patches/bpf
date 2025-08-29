@@ -247,4 +247,8 @@ unlock:
 
 #define raw_res_spin_unlock_irqrestore(lock, flags) ({ raw_res_spin_unlock(lock); local_irq_restore(flags); })
 
+#ifndef res_smp_cond_load_acquire_waiting
+#define res_smp_cond_load_acquire_waiting()	0
+#endif
+
 #endif /* __ASM_GENERIC_RQSPINLOCK_H */
