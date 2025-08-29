@@ -5267,6 +5267,35 @@ static int sk_bpf_set_get_cb_flags(struct sock *sk, char *optval, bool getopt)
 	return 0;
 }
 
+static int sk_bpf_get_memcg_flags(struct sock *sk, char *optval)
+{
+	if (!sk_has_account(sk))
+		return -EOPNOTSUPP;
+
+	*(u32 *)optval = mem_cgroup_sk_get_flags(sk);
+
+	return 0;
+}
+
+static int sk_bpf_set_memcg_flags(struct sock *sk, char *optval, int optlen)
+{
+	u32 flags;
+
+	if (optlen != sizeof(u32))
+		return -EINVAL;
+
+	if (!sk_has_account(sk))
+		return -EOPNOTSUPP;
+
+	flags = *(u32 *)optval;
+	if (flags >= SK_BPF_MEMCG_FLAG_MAX)
+		return -EINVAL;
+
+	mem_cgroup_sk_set_flags(sk, flags);
+
+	return 0;
+}
+
 static int sol_socket_sockopt(struct sock *sk, int optname,
 			      char *optval, int *optlen,
 			      bool getopt)
@@ -5284,6 +5313,7 @@ static int sol_socket_sockopt(struct sock *sk, int optname,
 	case SO_BINDTOIFINDEX:
 	case SO_TXREHASH:
 	case SK_BPF_CB_FLAGS:
+	case SK_BPF_MEMCG_FLAGS:
 		if (*optlen != sizeof(int))
 			return -EINVAL;
 		break;
@@ -5293,8 +5323,15 @@ static int sol_socket_sockopt(struct sock *sk, int optname,
 		return -EINVAL;
 	}
 
-	if (optname == SK_BPF_CB_FLAGS)
+	switch (optname) {
+	case SK_BPF_CB_FLAGS:
 		return sk_bpf_set_get_cb_flags(sk, optval, getopt);
+	case SK_BPF_MEMCG_FLAGS:
+		if (!IS_ENABLED(CONFIG_MEMCG) || !getopt)
+			return -EOPNOTSUPP;
+
+		return sk_bpf_get_memcg_flags(sk, optval);
+	}
 
 	if (getopt) {
 		if (optname == SO_BINDTODEVICE)
@@ -5726,6 +5763,10 @@ static const struct bpf_func_proto bpf_sock_addr_getsockopt_proto = {
 BPF_CALL_5(bpf_unlocked_sock_setsockopt, struct sock *, sk, int, level,
 	   int, optname, char *, optval, int, optlen)
 {
+	if (IS_ENABLED(CONFIG_MEMCG) &&
+	    level == SOL_SOCKET && optname == SK_BPF_MEMCG_FLAGS)
+		return sk_bpf_set_memcg_flags(sk, optval, optlen);
+
 	return __bpf_setsockopt(sk, level, optname, optval, optlen);
 }
 
