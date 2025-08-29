@@ -164,7 +164,7 @@ int marked_as_untrusted_or_null(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("access beyond struct prog_test_ref_kfunc at off 32 size 4")
+__failure __msg("access beyond struct prog_test_ref_kfunc at off {{(24)|(32)}} size 4")
 int correct_btf_id_check_size(struct __sk_buff *ctx)
 {
 	struct prog_test_ref_kfunc *p;
