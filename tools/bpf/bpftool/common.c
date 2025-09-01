@@ -466,7 +466,7 @@ int get_fd_type(int fd)
 		p_err("can't read link type: %s", strerror(errno));
 		return -1;
 	}
-	if (n == sizeof(buf)) {
+	if (n >= sizeof(buf)) {
 		p_err("can't read link type: path too long!");
 		return -1;
 	}
