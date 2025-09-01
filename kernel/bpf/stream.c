@@ -343,7 +343,7 @@ int bpf_prog_stream_read(struct bpf_prog *prog, enum bpf_stream_id stream_id, vo
 {
 	struct bpf_stream *stream;
 
-	stream = bpf_stream_get(stream_id, prog->aux);
+	stream = bpf_stream_get(stream_id, prog->aux->main_prog_aux);
 	if (!stream)
 		return -ENOENT;
 	return bpf_stream_read(stream, buf, len);
@@ -367,7 +367,7 @@ __bpf_kfunc int bpf_stream_vprintk(int stream_id, const char *fmt__str, const vo
 	u32 data_len = len__sz;
 	int ret, num_args;
 
-	stream = bpf_stream_get(stream_id, aux);
+	stream = bpf_stream_get(stream_id, aux->main_prog_aux);
 	if (!stream)
 		return -ENOENT;
 
@@ -457,7 +457,7 @@ int bpf_stream_stage_commit(struct bpf_stream_stage *ss, struct bpf_prog *prog,
 	struct bpf_stream *stream;
 	int ret;
 
-	stream = bpf_stream_get(stream_id, prog->aux);
+	stream = bpf_stream_get(stream_id, prog->aux->main_prog_aux);
 	if (!stream)
 		return -EINVAL;
 
