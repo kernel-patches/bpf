@@ -877,7 +877,7 @@ extern int bpf_get_kprobe_info(const struct perf_event *event,
 #endif
 #ifdef CONFIG_UPROBE_EVENTS
 extern int  perf_uprobe_init(struct perf_event *event,
-			     unsigned long ref_ctr_offset, bool is_retprobe);
+			     unsigned long ref_ctr_offset, bool is_retprobe, bool is_unique);
 extern void perf_uprobe_destroy(struct perf_event *event);
 extern int bpf_get_uprobe_info(const struct perf_event *event,
 			       u32 *fd_type, const char **filename,

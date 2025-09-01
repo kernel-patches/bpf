@@ -11046,11 +11046,13 @@ EXPORT_SYMBOL_GPL(perf_tp_event);
  */
 enum perf_probe_config {
 	PERF_PROBE_CONFIG_IS_RETPROBE = 1U << 0,  /* [k,u]retprobe */
+	PERF_PROBE_CONFIG_IS_UNIQUE   = 1U << 1,  /* unique uprobe */
 	PERF_UPROBE_REF_CTR_OFFSET_BITS = 32,
 	PERF_UPROBE_REF_CTR_OFFSET_SHIFT = 64 - PERF_UPROBE_REF_CTR_OFFSET_BITS,
 };
 
 PMU_FORMAT_ATTR(retprobe, "config:0");
+PMU_FORMAT_ATTR(unique, "config:1");
 #endif
 
 #ifdef CONFIG_KPROBE_EVENTS
@@ -11114,6 +11116,7 @@ PMU_FORMAT_ATTR(ref_ctr_offset, "config:32-63");
 
 static struct attribute *uprobe_attrs[] = {
 	&format_attr_retprobe.attr,
+	&format_attr_unique.attr,
 	&format_attr_ref_ctr_offset.attr,
 	NULL,
 };
@@ -11144,7 +11147,7 @@ static int perf_uprobe_event_init(struct perf_event *event)
 {
 	int err;
 	unsigned long ref_ctr_offset;
-	bool is_retprobe;
+	bool is_retprobe, is_unique;
 
 	if (event->attr.type != perf_uprobe.type)
 		return -ENOENT;
@@ -11159,8 +11162,9 @@ static int perf_uprobe_event_init(struct perf_event *event)
 		return -EOPNOTSUPP;
 
 	is_retprobe = event->attr.config & PERF_PROBE_CONFIG_IS_RETPROBE;
+	is_unique = event->attr.config & PERF_PROBE_CONFIG_IS_UNIQUE;
 	ref_ctr_offset = event->attr.config >> PERF_UPROBE_REF_CTR_OFFSET_SHIFT;
-	err = perf_uprobe_init(event, ref_ctr_offset, is_retprobe);
+	err = perf_uprobe_init(event, ref_ctr_offset, is_retprobe, is_unique);
 	if (err)
 		return err;
 

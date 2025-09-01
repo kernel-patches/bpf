@@ -296,7 +296,7 @@ void perf_kprobe_destroy(struct perf_event *p_event)
 
 #ifdef CONFIG_UPROBE_EVENTS
 int perf_uprobe_init(struct perf_event *p_event,
-		     unsigned long ref_ctr_offset, bool is_retprobe)
+		     unsigned long ref_ctr_offset, bool is_retprobe, bool is_unique)
 {
 	int ret;
 	char *path = NULL;
@@ -317,7 +317,7 @@ int perf_uprobe_init(struct perf_event *p_event,
 	}
 
 	tp_event = create_local_trace_uprobe(path, p_event->attr.probe_offset,
-					     ref_ctr_offset, is_retprobe);
+					     ref_ctr_offset, is_retprobe, is_unique);
 	if (IS_ERR(tp_event)) {
 		ret = PTR_ERR(tp_event);
 		goto out;

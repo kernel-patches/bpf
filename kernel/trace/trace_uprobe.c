@@ -333,7 +333,7 @@ trace_uprobe_primary_from_call(struct trace_event_call *call)
  * Allocate new trace_uprobe and initialize it (including uprobes).
  */
 static struct trace_uprobe *
-alloc_trace_uprobe(const char *group, const char *event, int nargs, bool is_ret)
+alloc_trace_uprobe(const char *group, const char *event, int nargs, bool is_ret, bool is_unique)
 {
 	struct trace_uprobe *tu;
 	int ret;
@@ -356,6 +356,7 @@ alloc_trace_uprobe(const char *group, const char *event, int nargs, bool is_ret)
 	tu->consumer.handler = uprobe_dispatcher;
 	if (is_ret)
 		tu->consumer.ret_handler = uretprobe_dispatcher;
+	tu->consumer.is_unique = is_unique;
 	init_trace_uprobe_filter(tu->tp.event->filter);
 	return tu;
 
@@ -688,7 +689,7 @@ static int __trace_uprobe_create(int argc, const char **argv)
 	argc -= 2;
 	argv += 2;
 
-	tu = alloc_trace_uprobe(group, event, argc, is_return);
+	tu = alloc_trace_uprobe(group, event, argc, is_return, false /* not supported */);
 	if (IS_ERR(tu)) {
 		ret = PTR_ERR(tu);
 		/* This must return -ENOMEM otherwise there is a bug */
@@ -1636,7 +1637,7 @@ static int unregister_uprobe_event(struct trace_uprobe *tu)
 #ifdef CONFIG_PERF_EVENTS
 struct trace_event_call *
 create_local_trace_uprobe(char *name, unsigned long offs,
-			  unsigned long ref_ctr_offset, bool is_return)
+			  unsigned long ref_ctr_offset, bool is_return, bool is_unique)
 {
 	enum probe_print_type ptype;
 	struct trace_uprobe *tu;
@@ -1658,7 +1659,7 @@ create_local_trace_uprobe(char *name, unsigned long offs,
 	 * duplicated name "DUMMY_EVENT" here.
 	 */
 	tu = alloc_trace_uprobe(UPROBE_EVENT_SYSTEM, "DUMMY_EVENT", 0,
-				is_return);
+				is_return, is_unique);
 
 	if (IS_ERR(tu)) {
 		pr_info("Failed to allocate trace_uprobe.(%d)\n",
