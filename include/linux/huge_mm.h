@@ -56,6 +56,7 @@ enum transparent_hugepage_flag {
 	TRANSPARENT_HUGEPAGE_DEFRAG_REQ_MADV_FLAG,
 	TRANSPARENT_HUGEPAGE_DEFRAG_KHUGEPAGED_FLAG,
 	TRANSPARENT_HUGEPAGE_USE_ZERO_PAGE_FLAG,
+	TRANSPARENT_HUGEPAGE_BPF_ATTACHED,      /* BPF prog is attached */
 };
 
 struct kobject;
@@ -270,6 +271,19 @@ unsigned long __thp_vma_allowable_orders(struct vm_area_struct *vma,
 					 enum tva_type type,
 					 unsigned long orders);
 
+#ifdef CONFIG_BPF_GET_THP_ORDER
+unsigned long
+bpf_hook_thp_get_orders(struct vm_area_struct *vma, vm_flags_t vma_flags,
+			enum tva_type type, unsigned long orders);
+#else
+static inline unsigned long
+bpf_hook_thp_get_orders(struct vm_area_struct *vma, vm_flags_t vma_flags,
+			enum tva_type tva_flags, unsigned long orders)
+{
+	return orders;
+}
+#endif
+
 /**
  * thp_vma_allowable_orders - determine hugepage orders that are allowed for vma
  * @vma:  the vm area to check
@@ -291,6 +305,12 @@ unsigned long thp_vma_allowable_orders(struct vm_area_struct *vma,
 				       enum tva_type type,
 				       unsigned long orders)
 {
+	unsigned long bpf_orders;
+
+	bpf_orders = bpf_hook_thp_get_orders(vma, vm_flags, type, orders);
+	if (!bpf_orders)
+		return 0;
+
 	/*
 	 * Optimization to check if required orders are enabled early. Only
 	 * forced collapse ignores sysfs configs.
@@ -304,12 +324,12 @@ unsigned long thp_vma_allowable_orders(struct vm_area_struct *vma,
 		    ((vm_flags & VM_HUGEPAGE) && hugepage_global_enabled()))
 			mask |= READ_ONCE(huge_anon_orders_inherit);
 
-		orders &= mask;
-		if (!orders)
+		bpf_orders &= mask;
+		if (!bpf_orders)
 			return 0;
 	}
 
-	return __thp_vma_allowable_orders(vma, vm_flags, type, orders);
+	return __thp_vma_allowable_orders(vma, vm_flags, type, bpf_orders);
 }
 
 struct thpsize {
