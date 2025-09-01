@@ -33,7 +33,7 @@ static int urand_trigger(FILE **urand_pipe)
 	return exit_code;
 }
 
-void test_uprobe(void)
+static void test_uprobe_urandlib(void)
 {
 	LIBBPF_OPTS(bpf_uprobe_opts, uprobe_opts);
 	struct test_uprobe *skel;
@@ -92,4 +92,113 @@ cleanup:
 	if (urand_pipe)
 		pclose(urand_pipe);
 	test_uprobe__destroy(skel);
+}
+
+static noinline void uprobe_unique_trigger(void)
+{
+        asm volatile ("");
+}
+
+static void test_uprobe_unique(void)
+{
+	LIBBPF_OPTS(bpf_uprobe_opts, uprobe_opts,
+		.func_name = "uprobe_unique_trigger",
+	);
+	struct bpf_link *link_1, *link_2 = NULL;
+	struct bpf_program *prog_1, *prog_2;
+	struct test_uprobe *skel;
+
+	skel = test_uprobe__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_uprobe__open_and_load"))
+		return;
+
+	skel->bss->my_pid = getpid();
+
+	prog_1 = skel->progs.test1;
+	prog_2 = skel->progs.test2;
+
+	/* not-unique and unique */
+	uprobe_opts.unique = false;
+	link_1 = bpf_program__attach_uprobe_opts(prog_1, -1, "/proc/self/exe",
+						 0 /* offset */, &uprobe_opts);
+	if (!ASSERT_OK_PTR(link_1, "bpf_program__attach_uprobe_opts_1"))
+		goto cleanup;
+
+	uprobe_opts.unique = true;
+	link_2 = bpf_program__attach_uprobe_opts(prog_2, -1, "/proc/self/exe",
+						 0 /* offset */, &uprobe_opts);
+	if (!ASSERT_ERR_PTR(link_2, "bpf_program__attach_uprobe_opts_2")) {
+		bpf_link__destroy(link_2);
+		goto cleanup;
+	}
+
+	bpf_link__destroy(link_1);
+
+	/* unique and unique */
+	uprobe_opts.unique = true;
+	link_1 = bpf_program__attach_uprobe_opts(prog_1, -1, "/proc/self/exe",
+						 0 /* offset */, &uprobe_opts);
+	if (!ASSERT_OK_PTR(link_1, "bpf_program__attach_uprobe_opts_1"))
+		goto cleanup;
+
+	uprobe_opts.unique = true;
+	link_2 = bpf_program__attach_uprobe_opts(prog_2, -1, "/proc/self/exe",
+						 0 /* offset */, &uprobe_opts);
+	if (!ASSERT_ERR_PTR(link_2, "bpf_program__attach_uprobe_opts_2")) {
+		bpf_link__destroy(link_2);
+		goto cleanup;
+	}
+
+	bpf_link__destroy(link_1);
+
+	/* unique and not-unique */
+	uprobe_opts.unique = true;
+	link_1 = bpf_program__attach_uprobe_opts(prog_1, -1, "/proc/self/exe",
+						 0 /* offset */, &uprobe_opts);
+	if (!ASSERT_OK_PTR(link_1, "bpf_program__attach_uprobe_opts_1"))
+		goto cleanup;
+
+	uprobe_opts.unique = false;
+	link_2 = bpf_program__attach_uprobe_opts(prog_2, -1, "/proc/self/exe",
+						 0 /* offset */, &uprobe_opts);
+	if (!ASSERT_ERR_PTR(link_2, "bpf_program__attach_uprobe_opts_2")) {
+		bpf_link__destroy(link_2);
+		goto cleanup;
+	}
+
+	bpf_link__destroy(link_1);
+
+	/* not-unique and not-unique */
+	uprobe_opts.unique = false;
+	link_1 = bpf_program__attach_uprobe_opts(prog_1, -1, "/proc/self/exe",
+						 0 /* offset */, &uprobe_opts);
+	if (!ASSERT_OK_PTR(link_1, "bpf_program__attach_uprobe_opts_1"))
+		goto cleanup;
+
+	uprobe_opts.unique = false;
+	link_2 = bpf_program__attach_uprobe_opts(prog_2, -1, "/proc/self/exe",
+						 0 /* offset */, &uprobe_opts);
+	if (!ASSERT_OK_PTR(link_2, "bpf_program__attach_uprobe_opts_2")) {
+		bpf_link__destroy(link_1);
+		goto cleanup;
+	}
+
+	uprobe_unique_trigger();
+
+	ASSERT_EQ(skel->bss->test1_result, 1, "test1_result");
+	ASSERT_EQ(skel->bss->test2_result, 1, "test2_result");
+
+	bpf_link__destroy(link_1);
+	bpf_link__destroy(link_2);
+
+cleanup:
+	test_uprobe__destroy(skel);
+}
+
+void test_uprobe(void)
+{
+	if (test__start_subtest("urandlib"))
+		test_uprobe_urandlib();
+	if (test__start_subtest("unique"))
+		test_uprobe_unique();
 }
