@@ -5,6 +5,7 @@
 #include <bpf/bpf_helpers.h>
 #include "bpf_misc.h"
 #include "bpf_experimental.h"
+#include "bpf_arena_common.h"
 
 struct arr_elem {
 	struct bpf_res_spin_lock lock;
@@ -17,10 +18,17 @@ struct {
 	__type(value, struct arr_elem);
 } arrmap SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARENA);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__uint(max_entries, 1); /* number of pages */
+} arena SEC(".maps");
+
 #define ENOSPC 28
 #define _STR "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 int size;
+u64 fault_addr;
 
 SEC("syscall")
 __success __retval(0)
@@ -73,6 +81,59 @@ __success __retval(0)
 int stream_syscall(void *ctx)
 {
 	bpf_stream_printk(BPF_STDOUT, "foo");
+	return 0;
+}
+
+SEC("syscall")
+__success __retval(0)
+int stream_arena_write_fault(void *ctx)
+{
+	struct bpf_arena *ptr = (void *)&arena;
+	u64 user_vm_start;
+
+	/* Prevent GCC bounds warning: casting &arena to struct bpf_arena *
+	 * triggers bounds checking since the map definition is smaller than struct
+	 * bpf_arena. barrier_var() makes the pointer opaque to GCC, preventing the
+	 * bounds analysis
+	 */
+	barrier_var(ptr);
+	user_vm_start =  ptr->user_vm_start;
+	fault_addr = user_vm_start + 0x7fff;
+	bpf_addr_space_cast(user_vm_start, 0, 1);
+	asm volatile (
+		"r1 = %0;"
+		"r2 = 1;"
+		"*(u32 *)(r1 + 0x7fff) = r2;"
+		:
+		: "r" (user_vm_start)
+		: "r1", "r2"
+	);
+	return 0;
+}
+
+SEC("syscall")
+__success __retval(0)
+int stream_arena_read_fault(void *ctx)
+{
+	struct bpf_arena *ptr = (void *)&arena;
+	u64 user_vm_start;
+
+	/* Prevent GCC bounds warning: casting &arena to struct bpf_arena *
+	 * triggers bounds checking since the map definition is smaller than struct
+	 * bpf_arena. barrier_var() makes the pointer opaque to GCC, preventing the
+	 * bounds analysis
+	 */
+	barrier_var(ptr);
+	user_vm_start = ptr->user_vm_start;
+	fault_addr = user_vm_start + 0x7fff;
+	bpf_addr_space_cast(user_vm_start, 0, 1);
+	asm volatile (
+		"r1 = %0;"
+		"r1 = *(u32 *)(r1 + 0x7fff);"
+		:
+		: "r" (user_vm_start)
+		: "r1"
+	);
 	return 0;
 }
 
