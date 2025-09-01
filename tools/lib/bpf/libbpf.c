@@ -11055,11 +11055,19 @@ static int determine_uprobe_retprobe_bit(void)
 	return parse_uint_from_file(file, "config:%d\n");
 }
 
+static int determine_uprobe_unique_bit(void)
+{
+	const char *file = "/sys/bus/event_source/devices/uprobe/format/unique";
+
+	return parse_uint_from_file(file, "config:%d\n");
+}
+
 #define PERF_UPROBE_REF_CTR_OFFSET_BITS 32
 #define PERF_UPROBE_REF_CTR_OFFSET_SHIFT 32
 
 static int perf_event_open_probe(bool uprobe, bool retprobe, const char *name,
-				 uint64_t offset, int pid, size_t ref_ctr_off)
+				 uint64_t offset, int pid, size_t ref_ctr_off,
+				 bool unique)
 {
 	const size_t attr_sz = sizeof(struct perf_event_attr);
 	struct perf_event_attr attr;
@@ -11085,6 +11093,16 @@ static int perf_event_open_probe(bool uprobe, bool retprobe, const char *name,
 		if (bit < 0) {
 			pr_warn("failed to determine %s retprobe bit: %s\n",
 				uprobe ? "uprobe" : "kprobe",
+				errstr(bit));
+			return bit;
+		}
+		attr.config |= 1 << bit;
+	}
+	if (uprobe && unique) {
+		int bit = determine_uprobe_unique_bit();
+
+		if (bit < 0) {
+			pr_warn("failed to determine uprobe unique bit: %s\n",
 				errstr(bit));
 			return bit;
 		}
@@ -11296,7 +11314,7 @@ int probe_kern_syscall_wrapper(int token_fd)
 	if (determine_kprobe_perf_type() >= 0) {
 		int pfd;
 
-		pfd = perf_event_open_probe(false, false, syscall_name, 0, getpid(), 0);
+		pfd = perf_event_open_probe(false, false, syscall_name, 0, getpid(), 0, false);
 		if (pfd >= 0)
 			close(pfd);
 
@@ -11358,7 +11376,7 @@ bpf_program__attach_kprobe_opts(const struct bpf_program *prog,
 	if (!legacy) {
 		pfd = perf_event_open_probe(false /* uprobe */, retprobe,
 					    func_name, offset,
-					    -1 /* pid */, 0 /* ref_ctr_off */);
+					    -1 /* pid */, 0 /* ref_ctr_off */, false /* unique */);
 	} else {
 		char probe_name[MAX_EVENT_NAME_LEN];
 
@@ -12264,7 +12282,7 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	struct bpf_link *link;
 	size_t ref_ctr_off;
 	int pfd, err;
-	bool retprobe, legacy;
+	bool retprobe, legacy, unique;
 	const char *func_name;
 
 	if (!OPTS_VALID(opts, bpf_uprobe_opts))
@@ -12274,6 +12292,7 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	retprobe = OPTS_GET(opts, retprobe, false);
 	ref_ctr_off = OPTS_GET(opts, ref_ctr_offset, 0);
 	pe_opts.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0);
+	unique = OPTS_GET(opts, unique, false);
 
 	if (!binary_path)
 		return libbpf_err_ptr(-EINVAL);
@@ -12334,7 +12353,7 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 
 	if (!legacy) {
 		pfd = perf_event_open_probe(true /* uprobe */, retprobe, binary_path,
-					    func_offset, pid, ref_ctr_off);
+					    func_offset, pid, ref_ctr_off, unique);
 	} else {
 		char probe_name[MAX_EVENT_NAME_LEN];
 

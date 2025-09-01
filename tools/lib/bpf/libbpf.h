@@ -726,9 +726,11 @@ struct bpf_uprobe_opts {
 	const char *func_name;
 	/* uprobe attach mode */
 	enum probe_attach_mode attach_mode;
+	/* create unique uprobe */
+	bool unique;
 	size_t :0;
 };
-#define bpf_uprobe_opts__last_field attach_mode
+#define bpf_uprobe_opts__last_field unique
 
 /**
  * @brief **bpf_program__attach_uprobe()** attaches a BPF program
