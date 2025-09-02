@@ -1300,7 +1300,8 @@ enum {
  * BPF_TRACE_UPROBE_MULTI attach type to create return probe.
  */
 enum {
-	BPF_F_UPROBE_MULTI_RETURN = (1U << 0)
+	BPF_F_UPROBE_MULTI_RETURN = (1U << 0),
+	BPF_F_UPROBE_MULTI_UNIQUE = (1U << 1),
 };
 
 /* link_create.netfilter.flags used in LINK_CREATE command for
