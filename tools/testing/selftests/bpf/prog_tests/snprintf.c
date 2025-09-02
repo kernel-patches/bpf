@@ -15,9 +15,9 @@
 #define EXP_SYM_OUT  "schedule schedule+0x0/"
 #define MIN_SYM_RET  sizeof(EXP_SYM_OUT)
 
-/* The third specifier, %p, is a hashed pointer which changes on every reboot */
-#define EXP_ADDR_OUT "0000000000000000 ffff00000add4e55 "
-#define EXP_ADDR_RET sizeof(EXP_ADDR_OUT "unknownhashedptr")
+/* Expected %p specifier values cast to native size */
+#define EXP_ADDR1 0x0UL
+#define EXP_ADDR2 (unsigned long)0xFFFF00000ADD4E55ULL
 
 #define EXP_STR_OUT  "str1         a  b c      d e longstr"
 #define EXP_STR_RET  sizeof(EXP_STR_OUT)
@@ -35,9 +35,12 @@
 
 static void test_snprintf_positive(void)
 {
-	char exp_addr_out[] = EXP_ADDR_OUT;
 	char exp_sym_out[]  = EXP_SYM_OUT;
 	struct test_snprintf *skel;
+	char exp_addr_out[64];
+	int exp_addr_cmp;
+	int exp_addr_ret;
+	int ptr_width;
 
 	skel = test_snprintf__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "skel_open"))
@@ -61,9 +64,16 @@ static void test_snprintf_positive(void)
 			 sizeof(exp_sym_out) - 1), "sym_out");
 	ASSERT_LT(MIN_SYM_RET, skel->bss->sym_ret, "sym_ret");
 
-	ASSERT_OK(memcmp(skel->bss->addr_out, exp_addr_out,
-			 sizeof(exp_addr_out) - 1), "addr_out");
-	ASSERT_EQ(skel->bss->addr_ret, EXP_ADDR_RET, "addr_ret");
+	/* Build expected string of three %p specifiers, with field widths
+	 * tailored to native pointer size. Avoid matching on the last field
+	 * (a random hashed pointer) by extracting length of only first two
+	 * fields for comparison.
+	 */
+	ptr_width = 2 * sizeof(void *);
+	exp_addr_ret = sprintf(exp_addr_out, "%1$0*3$lx %2$0*3$lx%4$n %2$0*3$lx\n",
+			       EXP_ADDR1, EXP_ADDR2, ptr_width, &exp_addr_cmp);
+	ASSERT_OK(memcmp(skel->bss->addr_out, exp_addr_out, exp_addr_cmp), "addr_out");
+	ASSERT_EQ(skel->bss->addr_ret, exp_addr_ret, "addr_ret");
 
 	ASSERT_STREQ(skel->bss->str_out, EXP_STR_OUT, "str_out");
 	ASSERT_EQ(skel->bss->str_ret, EXP_STR_RET, "str_ret");
