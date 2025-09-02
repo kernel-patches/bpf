@@ -621,10 +621,12 @@ struct bpf_uprobe_multi_opts {
 	bool retprobe;
 	/* create session kprobes */
 	bool session;
+	/* create unique uprobe */
+	bool unique;
 	size_t :0;
 };
 
-#define bpf_uprobe_multi_opts__last_field session
+#define bpf_uprobe_multi_opts__last_field unique
 
 /**
  * @brief **bpf_program__attach_uprobe_multi()** attaches a BPF program
