@@ -1262,7 +1262,8 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 				    map->map_type != BPF_MAP_TYPE_SK_STORAGE &&
 				    map->map_type != BPF_MAP_TYPE_INODE_STORAGE &&
 				    map->map_type != BPF_MAP_TYPE_TASK_STORAGE &&
-				    map->map_type != BPF_MAP_TYPE_CGRP_STORAGE) {
+				    map->map_type != BPF_MAP_TYPE_CGRP_STORAGE &&
+				    map->map_type != BPF_MAP_TYPE_CRED_STORAGE) {
 					ret = -EOPNOTSUPP;
 					goto free_map_tab;
 				}
@@ -1289,13 +1290,15 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 				    map->map_type != BPF_MAP_TYPE_SK_STORAGE &&
 				    map->map_type != BPF_MAP_TYPE_INODE_STORAGE &&
 				    map->map_type != BPF_MAP_TYPE_TASK_STORAGE &&
-				    map->map_type != BPF_MAP_TYPE_CGRP_STORAGE) {
+				    map->map_type != BPF_MAP_TYPE_CGRP_STORAGE &&
+				    map->map_type != BPF_MAP_TYPE_CRED_STORAGE) {
 					ret = -EOPNOTSUPP;
 					goto free_map_tab;
 				}
 				break;
 			case BPF_UPTR:
-				if (map->map_type != BPF_MAP_TYPE_TASK_STORAGE) {
+				if (map->map_type != BPF_MAP_TYPE_TASK_STORAGE &&
+			    map->map_type != BPF_MAP_TYPE_CRED_STORAGE) {
 					ret = -EOPNOTSUPP;
 					goto free_map_tab;
 				}
@@ -1449,6 +1452,7 @@ static int map_create(union bpf_attr *attr, bool kernel)
 	case BPF_MAP_TYPE_SK_STORAGE:
 	case BPF_MAP_TYPE_INODE_STORAGE:
 	case BPF_MAP_TYPE_TASK_STORAGE:
+	case BPF_MAP_TYPE_CRED_STORAGE:
 	case BPF_MAP_TYPE_CGRP_STORAGE:
 	case BPF_MAP_TYPE_BLOOM_FILTER:
 	case BPF_MAP_TYPE_LPM_TRIE:
