@@ -184,7 +184,7 @@ int bpf_percpu_cgroup_storage_copy(struct bpf_map *_map, void *key,
 {
 	struct bpf_cgroup_storage_map *map = map_to_storage(_map);
 	struct bpf_cgroup_storage *storage;
-	int cpu, off = 0;
+	void __percpu *pptr;
 	u32 size;
 
 	rcu_read_lock();
@@ -199,11 +199,8 @@ int bpf_percpu_cgroup_storage_copy(struct bpf_map *_map, void *key,
 	 * will not leak any kernel data
 	 */
 	size = round_up(_map->value_size, 8);
-	for_each_possible_cpu(cpu) {
-		bpf_long_memcpy(value + off,
-				per_cpu_ptr(storage->percpu_buf, cpu), size);
-		off += size;
-	}
+	pptr = storage->percpu_buf;
+	bpf_percpu_copy_data(_map, pptr, value, size);
 	rcu_read_unlock();
 	return 0;
 }
@@ -213,7 +210,7 @@ int bpf_percpu_cgroup_storage_update(struct bpf_map *_map, void *key,
 {
 	struct bpf_cgroup_storage_map *map = map_to_storage(_map);
 	struct bpf_cgroup_storage *storage;
-	int cpu, off = 0;
+	void __percpu *pptr;
 	u32 size;
 
 	if (map_flags != BPF_ANY && map_flags != BPF_EXIST)
@@ -233,11 +230,8 @@ int bpf_percpu_cgroup_storage_update(struct bpf_map *_map, void *key,
 	 * so no kernel data leaks possible
 	 */
 	size = round_up(_map->value_size, 8);
-	for_each_possible_cpu(cpu) {
-		bpf_long_memcpy(per_cpu_ptr(storage->percpu_buf, cpu),
-				value + off, size);
-		off += size;
-	}
+	pptr = storage->percpu_buf;
+	bpf_percpu_update_data(_map, pptr, value, size);
 	rcu_read_unlock();
 	return 0;
 }
