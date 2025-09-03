@@ -547,6 +547,34 @@ static inline void copy_map_value_long(struct bpf_map *map, void *dst, void *src
 	bpf_obj_memcpy(map->record, dst, src, map->value_size, true);
 }
 
+#ifdef CONFIG_BPF_SYSCALL
+static inline void bpf_percpu_copy_to_user(struct bpf_map *map, void __percpu *pptr, void *value,
+					   u32 size)
+{
+	int cpu, off = 0;
+
+	for_each_possible_cpu(cpu) {
+		copy_map_value_long(map, value + off, per_cpu_ptr(pptr, cpu));
+		check_and_init_map_value(map, value + off);
+		off += size;
+	}
+}
+
+void bpf_obj_free_fields(const struct btf_record *rec, void *obj);
+
+static inline void bpf_percpu_copy_from_user(struct bpf_map *map, void __percpu *pptr, void *value,
+					     u32 size)
+{
+	int cpu, off = 0;
+
+	for_each_possible_cpu(cpu) {
+		copy_map_value_long(map, per_cpu_ptr(pptr, cpu), value + off);
+		bpf_obj_free_fields(map->record, per_cpu_ptr(pptr, cpu));
+		off += size;
+	}
+}
+#endif
+
 static inline void bpf_obj_swap_uptrs(const struct btf_record *rec, void *dst, void *src)
 {
 	unsigned long *src_uptr, *dst_uptr;
@@ -2417,7 +2445,6 @@ struct btf_record *btf_record_dup(const struct btf_record *rec);
 bool btf_record_equal(const struct btf_record *rec_a, const struct btf_record *rec_b);
 void bpf_obj_free_timer(const struct btf_record *rec, void *obj);
 void bpf_obj_free_workqueue(const struct btf_record *rec, void *obj);
-void bpf_obj_free_fields(const struct btf_record *rec, void *obj);
 void __bpf_obj_drop_impl(void *p, const struct btf_record *rec, bool percpu);
 
 struct bpf_map *bpf_map_get(u32 ufd);

@@ -944,12 +944,8 @@ static void pcpu_copy_value(struct bpf_htab *htab, void __percpu *pptr,
 		copy_map_value(&htab->map, this_cpu_ptr(pptr), value);
 	} else {
 		u32 size = round_up(htab->map.value_size, 8);
-		int off = 0, cpu;
 
-		for_each_possible_cpu(cpu) {
-			copy_map_value_long(&htab->map, per_cpu_ptr(pptr, cpu), value + off);
-			off += size;
-		}
+		bpf_percpu_copy_from_user(&htab->map, pptr, value, size);
 	}
 }
 
@@ -1802,15 +1798,10 @@ again_nocopy:
 		memcpy(dst_key, l->key, key_size);
 
 		if (is_percpu) {
-			int off = 0, cpu;
 			void __percpu *pptr;
 
 			pptr = htab_elem_get_ptr(l, map->key_size);
-			for_each_possible_cpu(cpu) {
-				copy_map_value_long(&htab->map, dst_val + off, per_cpu_ptr(pptr, cpu));
-				check_and_init_map_value(&htab->map, dst_val + off);
-				off += size;
-			}
+			bpf_percpu_copy_to_user(&htab->map, pptr, dst_val, size);
 		} else {
 			value = htab_elem_value(l, key_size);
 			if (is_fd_htab(htab)) {
@@ -2370,7 +2361,6 @@ int bpf_percpu_hash_copy(struct bpf_map *map, void *key, void *value)
 	struct htab_elem *l;
 	void __percpu *pptr;
 	int ret = -ENOENT;
-	int cpu, off = 0;
 	u32 size;
 
 	/* per_cpu areas are zero-filled and bpf programs can only
@@ -2386,11 +2376,7 @@ int bpf_percpu_hash_copy(struct bpf_map *map, void *key, void *value)
 	 * eviction heuristics when user space does a map walk.
 	 */
 	pptr = htab_elem_get_ptr(l, map->key_size);
-	for_each_possible_cpu(cpu) {
-		copy_map_value_long(map, value + off, per_cpu_ptr(pptr, cpu));
-		check_and_init_map_value(map, value + off);
-		off += size;
-	}
+	bpf_percpu_copy_to_user(map, pptr, value, size);
 	ret = 0;
 out:
 	rcu_read_unlock();
