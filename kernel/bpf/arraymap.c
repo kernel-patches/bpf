@@ -300,7 +300,6 @@ int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value)
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	u32 index = *(u32 *)key;
 	void __percpu *pptr;
-	int cpu, off = 0;
 	u32 size;
 
 	if (unlikely(index >= array->map.max_entries))
@@ -313,11 +312,7 @@ int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value)
 	size = array->elem_size;
 	rcu_read_lock();
 	pptr = array->pptrs[index & array->index_mask];
-	for_each_possible_cpu(cpu) {
-		copy_map_value_long(map, value + off, per_cpu_ptr(pptr, cpu));
-		check_and_init_map_value(map, value + off);
-		off += size;
-	}
+	bpf_percpu_copy_to_user(map, pptr, value, size);
 	rcu_read_unlock();
 	return 0;
 }
@@ -387,7 +382,6 @@ int bpf_percpu_array_update(struct bpf_map *map, void *key, void *value,
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	u32 index = *(u32 *)key;
 	void __percpu *pptr;
-	int cpu, off = 0;
 	u32 size;
 
 	if (unlikely(map_flags > BPF_EXIST))
@@ -411,11 +405,7 @@ int bpf_percpu_array_update(struct bpf_map *map, void *key, void *value,
 	size = array->elem_size;
 	rcu_read_lock();
 	pptr = array->pptrs[index & array->index_mask];
-	for_each_possible_cpu(cpu) {
-		copy_map_value_long(map, per_cpu_ptr(pptr, cpu), value + off);
-		bpf_obj_free_fields(array->map.record, per_cpu_ptr(pptr, cpu));
-		off += size;
-	}
+	bpf_percpu_copy_from_user(map, pptr, value, size);
 	rcu_read_unlock();
 	return 0;
 }
