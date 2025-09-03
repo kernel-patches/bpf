@@ -944,12 +944,8 @@ static void pcpu_copy_value(struct bpf_htab *htab, void __percpu *pptr,
 		copy_map_value(&htab->map, this_cpu_ptr(pptr), value);
 	} else {
 		u32 size = round_up(htab->map.value_size, 8);
-		int off = 0, cpu;
 
-		for_each_possible_cpu(cpu) {
-			copy_map_value_long(&htab->map, per_cpu_ptr(pptr, cpu), value + off);
-			off += size;
-		}
+		bpf_percpu_update_data(&htab->map, pptr, value, size);
 	}
 }
 
@@ -1610,14 +1606,9 @@ static int __htab_map_lookup_and_delete_elem(struct bpf_map *map, void *key,
 	if (is_percpu) {
 		u32 roundup_value_size = round_up(map->value_size, 8);
 		void __percpu *pptr;
-		int off = 0, cpu;
 
 		pptr = htab_elem_get_ptr(l, key_size);
-		for_each_possible_cpu(cpu) {
-			copy_map_value_long(&htab->map, value + off, per_cpu_ptr(pptr, cpu));
-			check_and_init_map_value(&htab->map, value + off);
-			off += roundup_value_size;
-		}
+		bpf_percpu_copy_data(&htab->map, pptr, value, roundup_value_size);
 	} else {
 		void *src = htab_elem_value(l, map->key_size);
 
@@ -1802,15 +1793,10 @@ again_nocopy:
 		memcpy(dst_key, l->key, key_size);
 
 		if (is_percpu) {
-			int off = 0, cpu;
 			void __percpu *pptr;
 
 			pptr = htab_elem_get_ptr(l, map->key_size);
-			for_each_possible_cpu(cpu) {
-				copy_map_value_long(&htab->map, dst_val + off, per_cpu_ptr(pptr, cpu));
-				check_and_init_map_value(&htab->map, dst_val + off);
-				off += size;
-			}
+			bpf_percpu_copy_data(&htab->map, pptr, dst_val, size);
 		} else {
 			value = htab_elem_value(l, key_size);
 			if (is_fd_htab(htab)) {
@@ -2370,7 +2356,6 @@ int bpf_percpu_hash_copy(struct bpf_map *map, void *key, void *value)
 	struct htab_elem *l;
 	void __percpu *pptr;
 	int ret = -ENOENT;
-	int cpu, off = 0;
 	u32 size;
 
 	/* per_cpu areas are zero-filled and bpf programs can only
@@ -2386,11 +2371,7 @@ int bpf_percpu_hash_copy(struct bpf_map *map, void *key, void *value)
 	 * eviction heuristics when user space does a map walk.
 	 */
 	pptr = htab_elem_get_ptr(l, map->key_size);
-	for_each_possible_cpu(cpu) {
-		copy_map_value_long(map, value + off, per_cpu_ptr(pptr, cpu));
-		check_and_init_map_value(map, value + off);
-		off += size;
-	}
+	bpf_percpu_copy_data(map, pptr, value, size);
 	ret = 0;
 out:
 	rcu_read_unlock();
