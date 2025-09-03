@@ -6607,45 +6607,230 @@ struct sk_reuseport_md {
 
 #define BPF_TAG_SIZE	8
 
+/**
+ * struct bpf_prog_info - Information about a BPF program.
+ *
+ * This structure is used by the bpf(BPF_OBJ_GET_INFO_BY_FD) syscall to retrieve
+ * metadata about a loaded BPF program. When values like the jited_prog_insns
+ * are desired typically two syscalls will be made, the first to determine the
+ * length of the buffers and the second with buffers for the syscall to fill
+ * in. The variables within the struct are ordered to minimize padding.
+ */
 struct bpf_prog_info {
+	/**
+	 * @type: The type of the BPF program (e.g.,
+	 * BPF_PROG_TYPE_SOCKET_FILTER, BPF_PROG_TYPE_KPROBE). This defines
+	 * where the program can be attached.
+	 */
 	__u32 type;
+	/**
+	 * @id: A unique, kernel-assigned ID for the loaded BPF program.
+	 */
 	__u32 id;
+	/**
+	 * @tag: A user-defined tag for the program, often a hash of the
+	 * object file it came from. Size is BPF_TAG_SIZE (8 bytes).
+	 */
 	__u8  tag[BPF_TAG_SIZE];
+	/**
+	 * @jited_prog_len: As an in argument this is the length of the
+	 * jited_prog_insns buffer. As an out argument, the length of the
+	 * JIT-compiled (native machine code) program image in bytes.
+	 */
 	__u32 jited_prog_len;
+	/**
+	 * @xlated_prog_len: As an in argument this is the length of the
+	 * xlated_prog_insns buffer. As an out argument, the length of the
+	 * translated BPF bytecode in bytes, after the verifier has potentially
+	 * modified it. 'xlated' is short for 'translated'.
+	 */
 	__u32 xlated_prog_len;
+	/**
+	 * @jited_prog_insns: When 0 (NULL) this is ignored by the kernel. When
+	 * non-zero a pointer to a buffer is expected and the kernel will write
+	 * jited_prog_len(s) worth of JIT-compiled machine code instructions into
+	 * the buffer.
+	 */
 	__aligned_u64 jited_prog_insns;
+	/**
+	 * @xlated_prog_insns: When 0 (NULL) this is ignored by the kernel. When
+	 * non-zero a pointer to a buffer is expected and the kernel will write
+	 * xlated_prog_len(s) worth of translated, after BPF verification, BPF
+	 * bytecode into the buffer.
+	 */
 	__aligned_u64 xlated_prog_insns;
-	__u64 load_time;	/* ns since boottime */
+	/**
+	 * @load_time: The timestamp (in nanoseconds since boot time) when the
+	 * program was loaded into the kernel.
+	 */
+	__u64 load_time;
+	/**
+	 * @created_by_uid: The user ID of the process that loaded this program.
+	 */
 	__u32 created_by_uid;
+	/**
+	 * @nr_map_ids: As an in argument this is the length of the map_ids
+	 * buffer in sizes of u32 (4 bytes). As an out argument, the number of
+	 * BPF maps used by this BPF program.
+	 */
 	__u32 nr_map_ids;
+	/**
+	 * @map_ids: When 0 (NULL) this is ignored by the kernel. When non-zero
+	 * a pointer to a buffer is expected and the kernel will write
+	 * nr_map_ids(s) worth of u32 kernel allocated BPF map id values into the
+	 * buffer.
+	 */
 	__aligned_u64 map_ids;
+	/**
+	 * @name: The name of the program, as specified in the ELF object file.
+	 * The max length is BPF_OBJ_NAME_LEN (16 characters).
+	 */
 	char name[BPF_OBJ_NAME_LEN];
+	/**
+	 * @ifindex: If the program is attached to a network device (netdev),
+	 * this field holds the interface index.
+	 */
 	__u32 ifindex;
+	/**
+	 * @gpl_compatible: A flag indicating if the program is compatible with
+	 * a GPL license. This is important for using certain GPL-only helpers.
+	 */
 	__u32 gpl_compatible:1;
 	__u32 :31; /* alignment pad */
+	/**
+	 * @netns_dev: The device identifier of the network namespace the
+	 * program is attached to.
+	 */
 	__u64 netns_dev;
+	/**
+	 * @netns_ino: The inode number of the network namespace the program is
+	 * attached to.
+	 */
 	__u64 netns_ino;
+	/**
+	 * @nr_jited_ksyms: As an in argument this is the length of the
+	 * jited_ksyms buffer in sizes of u64 (8 bytes). As an out argument, the
+	 * number of kernel symbols that the BPF program calls.
+	 */
 	__u32 nr_jited_ksyms;
+	/**
+	 * @nr_jited_func_lens: As an in argument this is the length of the
+	 * jited_func_lens buffer in sizes of u32 (4 bytes). As an out argument,
+	 * the number of distinct functions within the JIT-ed program.
+	 */
 	__u32 nr_jited_func_lens;
+	/**
+	 * @jited_ksyms: When 0 (NULL) this is ignored by the kernel. When
+	 * non-zero a pointer to a buffer is expected and the kernel will write
+	 * nr_jited_ksyms(s) worth of addresses of kernel symbols into the u64
+	 * buffer.
+	 */
 	__aligned_u64 jited_ksyms;
+	/**
+	 * @jited_func_lens: When 0 (NULL) this is ignored by the kernel. When
+	 * non-zero a pointer to a buffer is expected and the kernel will write
+	 * nr_jited_func_lens(s) worth of lengths into the u32 buffer.
+	 */
 	__aligned_u64 jited_func_lens;
+	/**
+	 * @btf_id: The ID of the BTF (BPF Type Format) object associated with
+	 * this program, which contains type information for debugging and
+	 * introspection.
+	 */
 	__u32 btf_id;
+	/**
+	 * @func_info_rec_size: The size in bytes of a single `bpf_func_info`
+	 * record.
+	 */
 	__u32 func_info_rec_size;
+	/**
+	 * @func_info: When 0 (NULL) this is ignored by the kernel. When
+	 * non-zero a pointer to a buffer is expected and the kernel will write
+	 * nr_func_info(s) worth of func_info_rec_size values.
+	 */
 	__aligned_u64 func_info;
+	/**
+	 * @nr_func_info: As an in argument this is the length of the func_info
+	 * buffer in sizes of func_info_rec_size. As an out argument, the number
+	 * of `bpf_func_info` records available.
+	 */
 	__u32 nr_func_info;
+	/**
+	 * @nr_line_info: As an in argument this is the length of the line_info
+	 * buffer in sizes of line_info_rec_size. As an out argument, the number
+	 * of `bpf_line_info` records, which map BPF instructions to source code
+	 * lines.
+	 */
 	__u32 nr_line_info;
+	/**
+	 * @line_info: When 0 (NULL) this is ignored by the kernel. When
+	 * non-zero a pointer to a buffer is expected and the kernel will write
+	 * nr_line_info(s) worth of line_info_rec_size values.
+	 */
 	__aligned_u64 line_info;
+	/**
+	 * @jited_line_info: When 0 (NULL) this is ignored by the kernel. When
+	 * non-zero a pointer to a buffer is expected and the kernel will write
+	 * nr_jited_line_info(s) worth of jited_line_info_rec_size values.
+	 */
 	__aligned_u64 jited_line_info;
+	/**
+	 * @nr_line_info: As an in argument this is the length of the
+	 * jited_line_info buffer in sizes of jited_line_info_rec_size. As an
+	 * out argument, the number of `bpf_line_info` records, which map JIT-ed
+	 * instructions to source code lines.
+	 */
 	__u32 nr_jited_line_info;
+	/**
+	 * @line_info_rec_size: The size in bytes of a `bpf_line_info` record.
+	 */
 	__u32 line_info_rec_size;
+	/**
+	 * @jited_line_info_rec_size: The size in bytes of a `bpf_line_info`
+	 * record for JIT-ed code.
+	 */
 	__u32 jited_line_info_rec_size;
+	/**
+	 * @nr_prog_tags: As an in argument this is the length of the prog_tags
+	 * buffer in sizes of BPF_TAG_SIZE (8 bytes). As an out argument, the
+	 * number of program tags, which are hashes of programs that this
+	 * program can tail-call.
+	 */
 	__u32 nr_prog_tags;
+	/**
+	 * @prog_tags: When 0 (NULL) this is ignored by the kernel. When
+	 * non-zero a pointer to a buffer is expected and the kernel will write
+	 * nr_prog_tags(s) worth of BPF_TAG_SIZE values.
+	 */
 	__aligned_u64 prog_tags;
+	/**
+	 * @run_time_ns: The total accumulated execution time of the program in
+	 * nanoseconds.
+	 */
 	__u64 run_time_ns;
+	/**
+	 * @run_cnt: The total number of times the program has been executed.
+	 */
 	__u64 run_cnt;
+	/**
+	 * @recursion_misses: The number of failed tail calls due to reaching
+	 * the recursion limit.
+	 */
 	__u64 recursion_misses;
+	/**
+	 * @verified_insns: The number of instructions processed by the
+	 * verifier.
+	 */
 	__u32 verified_insns;
+	/**
+	 * @attach_btf_obj_id: If attached via BTF (e.g., fentry/fexit), this is
+	 * the BTF object ID of the target object (e.g., kernel vmlinux).
+	 */
 	__u32 attach_btf_obj_id;
+	/**
+	 * @attach_btf_id: The BTF type ID of the function or tracepoint this
+	 * program is attached to.
+	 */
 	__u32 attach_btf_id;
 } __attribute__((aligned(8)));
 
