@@ -301,6 +301,11 @@ int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value, u64 map_f
 	u32 index = *(u32 *)key;
 	void __percpu *pptr;
 	u32 size;
+	int err;
+
+	err = bpf_map_check_cpu_flags(map_flags, false);
+	if (unlikely(err))
+		return err;
 
 	if (unlikely(index >= array->map.max_entries))
 		return -ENOENT;
@@ -383,10 +388,11 @@ int bpf_percpu_array_update(struct bpf_map *map, void *key, void *value,
 	u32 index = *(u32 *)key;
 	void __percpu *pptr;
 	u32 size;
+	int err;
 
-	if (unlikely(map_flags > BPF_EXIST))
-		/* unknown flags */
-		return -EINVAL;
+	err = bpf_map_check_cpu_flags(map_flags, true);
+	if (unlikely(err))
+		return err;
 
 	if (unlikely(index >= array->map.max_entries))
 		/* all elements were pre-allocated, cannot insert a new one */
