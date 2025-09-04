@@ -3735,12 +3735,23 @@ int bpf_prog_get_file_line(struct bpf_prog *prog, unsigned long ip, const char *
 			   const char **linep, int *nump);
 struct bpf_prog *bpf_prog_find_from_stack(void);
 
+static inline bool bpf_map_supports_cpu_flags(enum bpf_map_type map_type)
+{
+	return false;
+}
+
 static inline int bpf_map_check_op_flags(struct bpf_map *map, u64 flags, u64 allowed_flags)
 {
-	if (flags & ~allowed_flags)
+	if ((u32)flags & ~allowed_flags)
 		return -EINVAL;
 
 	if ((flags & BPF_F_LOCK) && !btf_record_has_field(map->record, BPF_SPIN_LOCK))
+		return -EINVAL;
+
+	if (!(flags & BPF_F_CPU) && flags >> 32)
+		return -EINVAL;
+
+	if ((flags & (BPF_F_CPU | BPF_F_ALL_CPUS)) && !bpf_map_supports_cpu_flags(map->map_type))
 		return -EINVAL;
 
 	return 0;
@@ -3748,7 +3759,7 @@ static inline int bpf_map_check_op_flags(struct bpf_map *map, u64 flags, u64 all
 
 static inline int bpf_map_check_lookup_flags(struct bpf_map *map, u64 flags)
 {
-	return bpf_map_check_op_flags(map, flags, BPF_F_LOCK);
+	return bpf_map_check_op_flags(map, flags, BPF_F_LOCK | BPF_F_CPU);
 }
 
 static inline int bpf_map_check_update_flags(struct bpf_map *map, u64 flags)
@@ -3763,7 +3774,29 @@ static inline int bpf_map_check_lookup_batch_flags(struct bpf_map *map, u64 flag
 
 static inline int bpf_map_check_update_batch_flags(struct bpf_map *map, u64 flags)
 {
-	return bpf_map_check_op_flags(map, flags, BPF_F_LOCK);
+	return bpf_map_check_op_flags(map, flags, BPF_F_LOCK | BPF_F_CPU | BPF_F_ALL_CPUS);
+}
+
+static inline int bpf_map_check_cpu_flags(u64 flags, bool check_all_cpus_flag)
+{
+	const u64 cpu_flags = BPF_F_CPU | BPF_F_ALL_CPUS;
+	u32 cpu;
+
+	if (check_all_cpus_flag) {
+		if (unlikely((u32)flags > BPF_F_ALL_CPUS))
+			return -EINVAL;
+		if (unlikely((flags & cpu_flags) == cpu_flags))
+			return -EINVAL;
+	} else {
+		if (unlikely((u32)flags & ~BPF_F_CPU))
+			return -EINVAL;
+	}
+
+	cpu = flags >> 32;
+	if (unlikely((flags & BPF_F_CPU) && cpu >= num_possible_cpus()))
+		return -ERANGE;
+
+	return 0;
 }
 
 #endif /* _LINUX_BPF_H */
