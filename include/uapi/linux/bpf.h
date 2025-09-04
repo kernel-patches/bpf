@@ -7122,6 +7122,9 @@ enum {
 					 * sendmsg timestamp with corresponding
 					 * tskey.
 					 */
+	BPF_SOCK_OPS_UDP_CONNECTED_CB,	/* Called on connect() for UDP sockets
+					 * right after the socket is hashed.
+					 */
 };
 
 /* List of TCP states. There is a build check in net/ipv4/tcp.c to detect
