@@ -91,6 +91,7 @@ struct test_spec {
 	const char *btf_custom_path;
 	int log_level;
 	int prog_flags;
+	int run_flags;
 	int mode_mask;
 	int arch_mask;
 	int load_mask;
@@ -554,6 +555,8 @@ static int parse_test_spec(struct test_loader *tester,
 				update_flags(&spec->prog_flags, BPF_F_XDP_HAS_FRAGS, clear);
 			} else if (strcmp(val, "BPF_F_TEST_REG_INVARIANTS") == 0) {
 				update_flags(&spec->prog_flags, BPF_F_TEST_REG_INVARIANTS, clear);
+			} else if (strcmp(val, "BPF_F_TEST_SKB_NON_LINEAR") == 0) {
+				update_flags(&spec->run_flags, BPF_F_TEST_SKB_NON_LINEAR, clear);
 			} else /* assume numeric value */ {
 				err = parse_int(val, &flags, "test prog flags");
 				if (err)
@@ -854,7 +857,7 @@ static bool is_unpriv_capable_map(struct bpf_map *map)
 	}
 }
 
-static int do_prog_test_run(int fd_prog, int *retval, bool empty_opts)
+static int do_prog_test_run(int fd_prog, int *retval, bool empty_opts, int run_flags)
 {
 	__u8 tmp_out[TEST_DATA_LEN << 2] = {};
 	__u8 tmp_in[TEST_DATA_LEN] = {};
@@ -864,6 +867,7 @@ static int do_prog_test_run(int fd_prog, int *retval, bool empty_opts)
 		.data_size_in = sizeof(tmp_in),
 		.data_out = tmp_out,
 		.data_size_out = sizeof(tmp_out),
+		.flags = run_flags,
 		.repeat = 1,
 	);
 
@@ -1103,7 +1107,8 @@ void run_subtest(struct test_loader *tester,
 		}
 
 		err = do_prog_test_run(bpf_program__fd(tprog), &retval,
-				       bpf_program__type(tprog) == BPF_PROG_TYPE_SYSCALL ? true : false);
+				       bpf_program__type(tprog) == BPF_PROG_TYPE_SYSCALL ? true : false,
+				       spec->run_flags);
 		if (!err && retval != subspec->retval && subspec->retval != POINTER_VALUE) {
 			PRINT_FAIL("Unexpected retval: %d != %d\n", retval, subspec->retval);
 			goto tobj_cleanup;
