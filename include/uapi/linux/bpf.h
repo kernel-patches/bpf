@@ -1448,6 +1448,8 @@ enum {
 #define BPF_F_TEST_XDP_LIVE_FRAMES	(1U << 1)
 /* If set, apply CHECKSUM_COMPLETE to skb and validate the checksum */
 #define BPF_F_TEST_SKB_CHECKSUM_COMPLETE	(1U << 2)
+/* If set, skb will be non-linear */
+#define BPF_F_TEST_SKB_NON_LINEAR	(1U << 3)
 
 /* type for BPF_ENABLE_STATS */
 enum bpf_stats_type {
