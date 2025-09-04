@@ -180,7 +180,7 @@ static long cgroup_storage_update_elem(struct bpf_map *map, void *key,
 }
 
 int bpf_percpu_cgroup_storage_copy(struct bpf_map *_map, void *key,
-				   void *value)
+				   void *value, u64 map_flags)
 {
 	struct bpf_cgroup_storage_map *map = map_to_storage(_map);
 	struct bpf_cgroup_storage *storage;
@@ -200,7 +200,7 @@ int bpf_percpu_cgroup_storage_copy(struct bpf_map *_map, void *key,
 	 */
 	size = round_up(_map->value_size, 8);
 	pptr = storage->percpu_buf;
-	bpf_percpu_copy_data(_map, pptr, value, size);
+	bpf_percpu_copy_data(_map, pptr, value, size, map_flags);
 	rcu_read_unlock();
 	return 0;
 }
@@ -231,7 +231,7 @@ int bpf_percpu_cgroup_storage_update(struct bpf_map *_map, void *key,
 	 */
 	size = round_up(_map->value_size, 8);
 	pptr = storage->percpu_buf;
-	bpf_percpu_update_data(_map, pptr, value, size);
+	bpf_percpu_update_data(_map, pptr, value, size, map_flags);
 	rcu_read_unlock();
 	return 0;
 }
