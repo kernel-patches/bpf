@@ -186,6 +186,11 @@ int bpf_percpu_cgroup_storage_copy(struct bpf_map *_map, void *key,
 	struct bpf_cgroup_storage *storage;
 	void __percpu *pptr;
 	u32 size;
+	int err;
+
+	err = bpf_map_check_cpu_flags(map_flags, false);
+	if (err)
+		return err;
 
 	rcu_read_lock();
 	storage = cgroup_storage_lookup(map, key, false);
@@ -212,9 +217,14 @@ int bpf_percpu_cgroup_storage_update(struct bpf_map *_map, void *key,
 	struct bpf_cgroup_storage *storage;
 	void __percpu *pptr;
 	u32 size;
+	int err;
 
-	if (map_flags != BPF_ANY && map_flags != BPF_EXIST)
+	if ((u32)map_flags & ~(BPF_ANY | BPF_EXIST | BPF_F_CPU | BPF_F_ALL_CPUS))
 		return -EINVAL;
+
+	err = bpf_map_check_cpu_flags(map_flags, true);
+	if (err)
+		return err;
 
 	rcu_read_lock();
 	storage = cgroup_storage_lookup(map, key, false);
