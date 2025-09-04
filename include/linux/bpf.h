@@ -549,9 +549,15 @@ static inline void copy_map_value_long(struct bpf_map *map, void *dst, void *src
 
 #ifdef CONFIG_BPF_SYSCALL
 static inline void bpf_percpu_copy_data(struct bpf_map *map, void __percpu *pptr, void *value,
-					u32 size)
+					u32 size, u64 flags)
 {
 	int cpu, off = 0;
+
+	if (flags & BPF_F_CPU) {
+		cpu = flags >> 32;
+		copy_map_value_long(map, value, per_cpu_ptr(pptr, cpu));
+		return;
+	}
 
 	for_each_possible_cpu(cpu) {
 		copy_map_value_long(map, value + off, per_cpu_ptr(pptr, cpu));
@@ -562,14 +568,25 @@ static inline void bpf_percpu_copy_data(struct bpf_map *map, void __percpu *pptr
 void bpf_obj_free_fields(const struct btf_record *rec, void *obj);
 
 static inline void bpf_percpu_update_data(struct bpf_map *map, void __percpu *pptr, void *value,
-					  u32 size)
+					  u32 size, u64 flags)
 {
 	int cpu, off = 0;
+
+	if (flags & BPF_F_CPU) {
+		cpu = flags >> 32;
+		bpf_obj_free_fields(map->record, per_cpu_ptr(pptr, cpu));
+		bpf_long_memcpy(per_cpu_ptr(pptr, cpu), value, size);
+		return;
+	}
 
 	for_each_possible_cpu(cpu) {
 		bpf_obj_free_fields(map->record, per_cpu_ptr(pptr, cpu));
 		bpf_long_memcpy(per_cpu_ptr(pptr, cpu), value + off, size);
-		off += size;
+		/* same user-provided value is used if BPF_F_ALL_CPUS is
+		 * specified, otherwise value is an array of per-cpu values.
+		 */
+		if (!(flags & BPF_F_ALL_CPUS))
+			off += size;
 	}
 }
 #endif
@@ -2722,8 +2739,8 @@ int map_set_for_each_callback_args(struct bpf_verifier_env *env,
 				   struct bpf_func_state *caller,
 				   struct bpf_func_state *callee);
 
-int bpf_percpu_hash_copy(struct bpf_map *map, void *key, void *value);
-int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value);
+int bpf_percpu_hash_copy(struct bpf_map *map, void *key, void *value, u64 flags);
+int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value, u64 flags);
 int bpf_percpu_hash_update(struct bpf_map *map, void *key, void *value,
 			   u64 flags);
 int bpf_percpu_array_update(struct bpf_map *map, void *key, void *value,
