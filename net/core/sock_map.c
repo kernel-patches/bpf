@@ -1343,23 +1343,69 @@ const struct bpf_func_proto bpf_msg_redirect_hash_proto = {
 struct sock_hash_seq_info {
 	struct bpf_map *map;
 	struct bpf_shtab *htab;
+	struct bpf_shtab_elem *next_elem;
 	u32 bucket_id;
 };
+
+static inline bool bpf_shtab_elem_unhashed(struct bpf_shtab_elem *elem)
+{
+	return READ_ONCE(elem->node.pprev) == LIST_POISON2;
+}
+
+static struct bpf_shtab_elem *sock_hash_seq_hold_next(struct bpf_shtab_elem *elem)
+{
+	hlist_for_each_entry_from_rcu(elem, node)
+		/* It's possible that the first element or its descendants were
+		 * unlinked from the bucket's list. Skip any unlinked elements
+		 * until we get back to the main list.
+		 */
+		if (!bpf_shtab_elem_unhashed(elem) &&
+		    sock_hash_hold_elem(elem))
+			return elem;
+
+	return NULL;
+}
 
 static void *sock_hash_seq_find_next(struct sock_hash_seq_info *info,
 				     struct bpf_shtab_elem *prev_elem)
 {
 	const struct bpf_shtab *htab = info->htab;
+	struct bpf_shtab_elem *elem = NULL;
 	struct bpf_shtab_bucket *bucket;
-	struct bpf_shtab_elem *elem;
 	struct hlist_node *node;
 
+	/* RCU is important here. It's possible that a parallel update operation
+	 * unlinks an element while we're handling it. Without rcu_read_lock(),
+	 * this sequence could occur:
+	 *
+	 * 1. sock_hash_seq_find_next() gets to elem but hasn't yet taken a
+	 *    reference to it.
+	 * 2. elem is unlinked and sock_hash_put_elem() schedules
+	 *    sock_hash_free_elem():
+	 *        call_rcu(&elem->rcu, sock_hash_free_elem);
+	 * 3. sock_hash_free_elem() runs, freeing elem.
+	 * 4. sock_hash_seq_find_next() continues and tries to read elem
+	 *    creating a use-after-free.
+	 *
+	 * rcu_read_lock() guarantees that elem won't be freed out from under
+	 * us, and if a parallel update unlinks it then either:
+	 *
+	 * (i)  We will take a reference to it before sock_hash_put_elem()
+	 *      decrements the reference count thus preventing it from calling
+	 *      call_rcu.
+	 * (ii) We will fail to take a reference to it and simply proceed to the
+	 *      next element in the list until we find an element that isn't
+	 *      currently being removed from the list or reach the end of the
+	 *      list.
+	 */
+	rcu_read_lock();
 	/* try to find next elem in the same bucket */
 	if (prev_elem) {
 		node = rcu_dereference(hlist_next_rcu(&prev_elem->node));
 		elem = hlist_entry_safe(node, struct bpf_shtab_elem, node);
+		elem = sock_hash_seq_hold_next(elem);
 		if (elem)
-			return elem;
+			goto unlock;
 
 		/* no more elements, continue in the next bucket */
 		info->bucket_id++;
@@ -1369,28 +1415,47 @@ static void *sock_hash_seq_find_next(struct sock_hash_seq_info *info,
 		bucket = &htab->buckets[info->bucket_id];
 		node = rcu_dereference(hlist_first_rcu(&bucket->head));
 		elem = hlist_entry_safe(node, struct bpf_shtab_elem, node);
+		elem = sock_hash_seq_hold_next(elem);
 		if (elem)
-			return elem;
+			goto unlock;
 	}
-
-	return NULL;
+unlock:
+	/* sock_hash_put_elem() will free all elements up until the
+	 * point that either:
+	 *
+	 * (i)  It hits elem
+	 * (ii) It hits an unlinked element between prev_elem and elem
+	 *      to which another iterator holds a reference.
+	 *
+	 * In case (i), this iterator is responsible for freeing all the
+	 * unlinked but as yet unfreed elements in this chain. In case (ii), it
+	 * is the other iterator's responsibility to free remaining elements
+	 * after that point. The last one out "shuts the door".
+	 */
+	if (prev_elem)
+		sock_hash_put_elem(prev_elem);
+	rcu_read_unlock();
+	return elem;
 }
 
 static void *sock_hash_seq_start(struct seq_file *seq, loff_t *pos)
-	__acquires(rcu)
 {
 	struct sock_hash_seq_info *info = seq->private;
 
 	if (*pos == 0)
 		++*pos;
 
-	/* pairs with sock_hash_seq_stop */
-	rcu_read_lock();
-	return sock_hash_seq_find_next(info, NULL);
+	/* info->next_elem may have become unhashed between read()s. If so, skip
+	 * it to avoid inconsistencies where, e.g., an element is deleted from
+	 * the map then appears in the next call to read().
+	 */
+	if (!info->next_elem || bpf_shtab_elem_unhashed(info->next_elem))
+		return sock_hash_seq_find_next(info, info->next_elem);
+
+	return info->next_elem;
 }
 
 static void *sock_hash_seq_next(struct seq_file *seq, void *v, loff_t *pos)
-	__must_hold(rcu)
 {
 	struct sock_hash_seq_info *info = seq->private;
 
@@ -1399,13 +1464,13 @@ static void *sock_hash_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 }
 
 static int sock_hash_seq_show(struct seq_file *seq, void *v)
-	__must_hold(rcu)
 {
 	struct sock_hash_seq_info *info = seq->private;
 	struct bpf_iter__sockmap ctx = {};
 	struct bpf_shtab_elem *elem = v;
 	struct bpf_iter_meta meta;
 	struct bpf_prog *prog;
+	int ret;
 
 	meta.seq = seq;
 	prog = bpf_iter_get_info(&meta, !elem);
@@ -1419,17 +1484,21 @@ static int sock_hash_seq_show(struct seq_file *seq, void *v)
 		ctx.sk = elem->sk;
 	}
 
-	return bpf_iter_run_prog(prog, &ctx);
+	if (elem)
+		lock_sock(elem->sk);
+	ret = bpf_iter_run_prog(prog, &ctx);
+	if (elem)
+		release_sock(elem->sk);
+	return ret;
 }
 
 static void sock_hash_seq_stop(struct seq_file *seq, void *v)
-	__releases(rcu)
 {
+	struct sock_hash_seq_info *info = seq->private;
+
 	if (!v)
 		(void)sock_hash_seq_show(seq, NULL);
-
-	/* pairs with sock_hash_seq_start */
-	rcu_read_unlock();
+	info->next_elem = v;
 }
 
 static const struct seq_operations sock_hash_seq_ops = {
@@ -1454,6 +1523,8 @@ static void sock_hash_fini_seq_private(void *priv_data)
 {
 	struct sock_hash_seq_info *info = priv_data;
 
+	if (info->next_elem)
+		sock_hash_put_elem(info->next_elem);
 	bpf_map_put_with_uref(info->map);
 }
 
