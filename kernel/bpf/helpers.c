@@ -1274,8 +1274,14 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		goto out;
 	}
 
-	/* allocate hrtimer via map_kmalloc to use memcg accounting */
-	cb = bpf_map_kmalloc_node(map, size, GFP_ATOMIC, map->numa_node);
+	/* Allocate via bpf_map_kmalloc_node() for memcg accounting. Use
+	 * __GFP_HIGH instead of GFP_ATOMIC to avoid calling
+	 * cgroup_file_notify() if an MEMCG_MAX event is raised by
+	 * try_charge_memcg(). This prevents various locking issues, including
+	 * double-acquiring locks that may already be held here (e.g.,
+	 * cgroup_file_kn_lock, rq_lock).
+	 */
+	cb = bpf_map_kmalloc_node(map, size, __GFP_HIGH, map->numa_node);
 	if (!cb) {
 		ret = -ENOMEM;
 		goto out;
