@@ -8520,41 +8520,50 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 	return 0;
 }
 
-static int process_timer_func(struct bpf_verifier_env *env, int regno,
-			      struct bpf_call_arg_meta *meta)
+static int process_async_func(struct bpf_verifier_env *env, int regno, struct bpf_map **map_ptr,
+			      int *map_uid, u32 rec_off, enum btf_field_type field_type,
+			      const char *struct_name)
 {
 	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
 	bool is_const = tnum_is_const(reg->var_off);
 	struct bpf_map *map = reg->map_ptr;
 	u64 val = reg->var_off.value;
+	int *struct_off = (void *)map->record + rec_off;
 
 	if (!is_const) {
 		verbose(env,
-			"R%d doesn't have constant offset. bpf_timer has to be at the constant offset\n",
-			regno);
+			"R%d doesn't have constant offset. %s has to be at the constant offset\n",
+			regno, struct_name);
 		return -EINVAL;
 	}
 	if (!map->btf) {
-		verbose(env, "map '%s' has to have BTF in order to use bpf_timer\n",
-			map->name);
+		verbose(env, "map '%s' has to have BTF in order to use %s\n", map->name,
+			struct_name);
 		return -EINVAL;
 	}
-	if (!btf_record_has_field(map->record, BPF_TIMER)) {
-		verbose(env, "map '%s' has no valid bpf_timer\n", map->name);
+	if (!btf_record_has_field(map->record, field_type)) {
+		verbose(env, "map '%s' has no valid %s\n", map->name, struct_name);
 		return -EINVAL;
 	}
-	if (map->record->timer_off != val + reg->off) {
-		verbose(env, "off %lld doesn't point to 'struct bpf_timer' that is at %d\n",
-			val + reg->off, map->record->timer_off);
+	if (*struct_off != val + reg->off) {
+		verbose(env, "off %lld doesn't point to 'struct %s' that is at %d\n",
+			val + reg->off, struct_name, *struct_off);
 		return -EINVAL;
 	}
-	if (meta->map_ptr) {
-		verifier_bug(env, "Two map pointers in a timer helper");
+	if (*map_ptr) {
+		verifier_bug(env, "Two map pointers in a %s helper", struct_name);
 		return -EFAULT;
 	}
-	meta->map_uid = reg->map_uid;
-	meta->map_ptr = map;
+	*map_uid = reg->map_uid;
+	*map_ptr = map;
 	return 0;
+}
+
+static int process_timer_func(struct bpf_verifier_env *env, int regno,
+			      struct bpf_call_arg_meta *meta)
+{
+	return process_async_func(env, regno, &meta->map_ptr, &meta->map_uid,
+				  offsetof(struct btf_record, timer_off), BPF_TIMER, "bpf_timer");
 }
 
 static int process_wq_func(struct bpf_verifier_env *env, int regno,
