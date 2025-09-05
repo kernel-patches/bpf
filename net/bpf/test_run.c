@@ -574,6 +574,16 @@ noinline int bpf_fentry_test10(const void *a)
 	return (long)a;
 }
 
+typedef union {
+	void *arg0;
+	int *arg1;
+} union_test_t;
+
+noinline int bpf_fentry_test11(union_test_t t)
+{
+	return (int)(long)t.arg0;
+}
+
 noinline void bpf_fentry_test_sinfo(struct skb_shared_info *sinfo)
 {
 }
@@ -688,6 +698,7 @@ int bpf_prog_test_run_tracing(struct bpf_prog *prog,
 	struct bpf_fentry_test_t arg = {};
 	u16 side_effect = 0, ret = 0;
 	int b = 2, err = -EFAULT;
+	union_test_t utt = {};
 	u32 retval = 0;
 
 	if (kattr->test.flags || kattr->test.cpu || kattr->test.batch_size)
@@ -705,7 +716,8 @@ int bpf_prog_test_run_tracing(struct bpf_prog *prog,
 		    bpf_fentry_test7((struct bpf_fentry_test_t *)0) != 0 ||
 		    bpf_fentry_test8(&arg) != 0 ||
 		    bpf_fentry_test9(&retval) != 0 ||
-		    bpf_fentry_test10((void *)0) != 0)
+		    bpf_fentry_test10((void *)0) != 0 ||
+		    bpf_fentry_test11(utt) != 0)
 			goto out;
 		break;
 	case BPF_MODIFY_RETURN:

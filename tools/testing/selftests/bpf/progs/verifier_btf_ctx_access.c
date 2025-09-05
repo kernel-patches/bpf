@@ -77,4 +77,16 @@ __naked void ctx_access_const_void_pointer_accept(void)
 "	::: __clobber_all);
 }
 
+SEC("fentry/bpf_fentry_test11")
+__description("btf_ctx_access union arg accept")
+__success __retval(0)
+__naked void ctx_access_union_arg_accept(void)
+{
+	asm volatile ("					\
+	r2 = *(u64 *)(r1 + 0);		/* load 1st argument value (union) */\
+	r0 = 0;						\
+	exit;						\
+"	::: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
