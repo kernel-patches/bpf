@@ -19,6 +19,7 @@ static struct {
 	int ringbuf_sz; /* per-ringbuf, in bytes */
 	bool ringbuf_use_output; /* use slower output API */
 	int perfbuf_sz; /* per-CPU size, in pages */
+	bool overwrite;
 } args = {
 	.back2back = false,
 	.batch_cnt = 500,
@@ -27,6 +28,7 @@ static struct {
 	.ringbuf_sz = 512 * 1024,
 	.ringbuf_use_output = false,
 	.perfbuf_sz = 128,
+	.overwrite = false,
 };
 
 enum {
@@ -35,6 +37,7 @@ enum {
 	ARG_RB_BATCH_CNT = 2002,
 	ARG_RB_SAMPLED = 2003,
 	ARG_RB_SAMPLE_RATE = 2004,
+	ARG_RB_OVERWRITE = 2005,
 };
 
 static const struct argp_option opts[] = {
@@ -43,6 +46,7 @@ static const struct argp_option opts[] = {
 	{ "rb-batch-cnt", ARG_RB_BATCH_CNT, "CNT", 0, "Set BPF-side record batch count"},
 	{ "rb-sampled", ARG_RB_SAMPLED, NULL, 0, "Notification sampling"},
 	{ "rb-sample-rate", ARG_RB_SAMPLE_RATE, "RATE", 0, "Notification sample rate"},
+	{ "rb-overwrite", ARG_RB_OVERWRITE, NULL, 0, "Overwrite mode"},
 	{},
 };
 
@@ -72,6 +76,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 			argp_usage(state);
 		}
 		break;
+	case ARG_RB_OVERWRITE:
+		args.overwrite = true;
+		break;
 	default:
 		return ARGP_ERR_UNKNOWN;
 	}
@@ -95,8 +102,30 @@ static inline void bufs_trigger_batch(void)
 
 static void bufs_validate(void)
 {
-	if (env.consumer_cnt != 1) {
-		fprintf(stderr, "rb-libbpf benchmark needs one consumer!\n");
+	bool bench_prod = !strcmp(env.bench_name, "rb-prod");
+
+	if (args.overwrite && !bench_prod) {
+		fprintf(stderr, "overwite mode only works with benchmakr rb-prod!\n");
+		exit(1);
+	}
+
+	if (bench_prod && env.consumer_cnt != 0) {
+		fprintf(stderr, "rb-prod benchmark does not need consumer!\n");
+		exit(1);
+	}
+
+	if (bench_prod && args.back2back) {
+		fprintf(stderr, "back-to-back mode makes no sense for rb-prod!\n");
+		exit(1);
+	}
+
+	if (bench_prod && args.sampled) {
+		fprintf(stderr, "sampling mode makes no sense for rb-prod!\n");
+		exit(1);
+	}
+
+	if (!bench_prod && env.consumer_cnt != 1) {
+		fprintf(stderr, "benchmarks excluding rb-prod need one consumer!\n");
 		exit(1);
 	}
 
@@ -132,8 +161,10 @@ static void ringbuf_libbpf_measure(struct bench_res *res)
 	res->drops = atomic_swap(&ctx->skel->bss->dropped, 0);
 }
 
-static struct ringbuf_bench *ringbuf_setup_skeleton(void)
+static struct ringbuf_bench *ringbuf_setup_skeleton(int bench_prod)
 {
+	__u32 flags;
+	struct bpf_map *ringbuf;
 	struct ringbuf_bench *skel;
 
 	setup_libbpf();
@@ -146,12 +177,19 @@ static struct ringbuf_bench *ringbuf_setup_skeleton(void)
 
 	skel->rodata->batch_cnt = args.batch_cnt;
 	skel->rodata->use_output = args.ringbuf_use_output ? 1 : 0;
+	skel->rodata->bench_prod = bench_prod;
 
 	if (args.sampled)
 		/* record data + header take 16 bytes */
 		skel->rodata->wakeup_data_size = args.sample_rate * 16;
 
-	bpf_map__set_max_entries(skel->maps.ringbuf, args.ringbuf_sz);
+	ringbuf = skel->maps.ringbuf;
+	if (args.overwrite) {
+		flags = bpf_map__map_flags(ringbuf) | BPF_F_OVERWRITE;
+		bpf_map__set_map_flags(ringbuf, flags);
+	}
+
+	bpf_map__set_max_entries(ringbuf, args.ringbuf_sz);
 
 	if (ringbuf_bench__load(skel)) {
 		fprintf(stderr, "failed to load skeleton\n");
@@ -171,10 +209,13 @@ static void ringbuf_libbpf_setup(void)
 {
 	struct ringbuf_libbpf_ctx *ctx = &ringbuf_libbpf_ctx;
 	struct bpf_link *link;
+	int map_fd;
 
-	ctx->skel = ringbuf_setup_skeleton();
-	ctx->ringbuf = ring_buffer__new(bpf_map__fd(ctx->skel->maps.ringbuf),
-					buf_process_sample, NULL, NULL);
+	ctx->skel = ringbuf_setup_skeleton(0);
+
+	map_fd = bpf_map__fd(ctx->skel->maps.ringbuf);
+	ctx->ringbuf = ring_buffer__new(map_fd, buf_process_sample,
+					NULL, NULL);
 	if (!ctx->ringbuf) {
 		fprintf(stderr, "failed to create ringbuf\n");
 		exit(1);
@@ -232,7 +273,7 @@ static void ringbuf_custom_setup(void)
 	void *tmp;
 	int err;
 
-	ctx->skel = ringbuf_setup_skeleton();
+	ctx->skel = ringbuf_setup_skeleton(0);
 
 	ctx->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
 	if (ctx->epoll_fd < 0) {
@@ -273,6 +314,33 @@ static void ringbuf_custom_setup(void)
 	link = bpf_program__attach(ctx->skel->progs.bench_ringbuf);
 	if (!link) {
 		fprintf(stderr, "failed to attach program\n");
+		exit(1);
+	}
+}
+
+/* RINGBUF-PRODUCER benchmark */
+static struct ringbuf_prod_ctx {
+	struct ringbuf_bench *skel;
+} ringbuf_prod_ctx;
+
+static void ringbuf_prod_measure(struct bench_res *res)
+{
+	struct ringbuf_prod_ctx *ctx = &ringbuf_prod_ctx;
+
+	res->hits = atomic_swap(&ctx->skel->bss->hits, 0);
+	res->drops = atomic_swap(&ctx->skel->bss->dropped, 0);
+}
+
+static void ringbuf_prod_setup(void)
+{
+	struct ringbuf_prod_ctx *ctx = &ringbuf_prod_ctx;
+	struct bpf_link *link;
+
+	ctx->skel = ringbuf_setup_skeleton(1);
+
+	link = bpf_program__attach(ctx->skel->progs.bench_ringbuf);
+	if (!link) {
+		fprintf(stderr, "failed to attach program!\n");
 		exit(1);
 	}
 }
@@ -536,6 +604,17 @@ const struct bench bench_rb_custom = {
 	.producer_thread = bufs_sample_producer,
 	.consumer_thread = ringbuf_custom_consumer,
 	.measure = ringbuf_custom_measure,
+	.report_progress = hits_drops_report_progress,
+	.report_final = hits_drops_report_final,
+};
+
+const struct bench bench_rb_prod = {
+	.name = "rb-prod",
+	.argp = &bench_ringbufs_argp,
+	.validate = bufs_validate,
+	.setup = ringbuf_prod_setup,
+	.producer_thread = bufs_sample_producer,
+	.measure = ringbuf_prod_measure,
 	.report_progress = hits_drops_report_progress,
 	.report_final = hits_drops_report_final,
 };
