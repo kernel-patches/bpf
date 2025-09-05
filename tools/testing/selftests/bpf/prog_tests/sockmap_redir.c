@@ -144,17 +144,14 @@ static void get_redir_params(struct redir_spec *redir,
 		*redirect_flags = 0;
 }
 
-static void try_recv(const char *prefix, int fd, int flags, bool expect_success)
+static void fail_recv(const char *prefix, int fd, int more_flags)
 {
 	ssize_t n;
 	char buf;
 
-	errno = 0;
-	n = recv(fd, &buf, 1, flags);
-	if (n < 0 && expect_success)
-		FAIL_ERRNO("%s: unexpected failure: retval=%zd", prefix, n);
-	if (!n && !expect_success)
-		FAIL("%s: expected failure: retval=%zd", prefix, n);
+	n = recv(fd, &buf, 1, MSG_DONTWAIT | more_flags);
+	if (n >= 0)
+		FAIL("%s: unexpected success: retval=%zd", prefix, n);
 }
 
 static void handle_unsupported(int sd_send, int sd_peer, int sd_in, int sd_out,
@@ -188,13 +185,13 @@ get_verdict:
 	}
 
 	/* Ensure queues are empty */
-	try_recv("bpf.recv(sd_send)", sd_send, MSG_DONTWAIT, false);
+	fail_recv("bpf.recv(sd_send)", sd_send, 0);
 	if (sd_in != sd_send)
-		try_recv("bpf.recv(sd_in)", sd_in, MSG_DONTWAIT, false);
+		fail_recv("bpf.recv(sd_in)", sd_in, 0);
 
-	try_recv("bpf.recv(sd_out)", sd_out, MSG_DONTWAIT, false);
+	fail_recv("bpf.recv(sd_out)", sd_out, 0);
 	if (sd_recv != sd_out)
-		try_recv("bpf.recv(sd_recv)", sd_recv, MSG_DONTWAIT, false);
+		fail_recv("bpf.recv(sd_recv)", sd_recv, 0);
 }
 
 static void test_send_redir_recv(int sd_send, int send_flags, int sd_peer,
@@ -257,15 +254,13 @@ static void test_send_redir_recv(int sd_send, int send_flags, int sd_peer,
 
 	if (send_flags & MSG_OOB) {
 		/* Fail reading OOB while in sockmap */
-		try_recv("bpf.recv(sd_out, MSG_OOB)", sd_out,
-			 MSG_OOB | MSG_DONTWAIT, false);
+		fail_recv("bpf.recv(sd_out, MSG_OOB)", sd_out, MSG_OOB);
 
 		/* Remove sd_out from sockmap */
 		xbpf_map_delete_elem(maps->out, &u32(0));
 
 		/* Check that OOB was dropped on redirect */
-		try_recv("recv(sd_out, MSG_OOB)", sd_out,
-			 MSG_OOB | MSG_DONTWAIT, false);
+		fail_recv("recv(sd_out, MSG_OOB)", sd_out, MSG_OOB);
 
 		goto del_in;
 	}
