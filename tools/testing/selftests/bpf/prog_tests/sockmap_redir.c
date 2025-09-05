@@ -18,6 +18,10 @@
  * AF_UNIX, SOCK_DGRAM
  * AF_VSOCK, SOCK_STREAM
  * AF_VSOCK, SOCK_SEQPACKET
+ *	x
+ * SK_REDIRECT
+ * SK_DROP
+ * SK_PASS
  */
 
 #include <errno.h>
@@ -64,6 +68,10 @@
  * map again.
  */
 #define UNSUPPORTED_RACY_VERD	_BITUL(1)
+
+/* Mark for an immediate SK_DROP/SK_PASS, i.e. BPF program will not redirect.
+ */
+#define NO_REDIRECT		_BITUL(2)
 
 enum prog_type {
 	SK_MSG_EGRESS,
@@ -154,8 +162,9 @@ static void fail_recv(const char *prefix, int fd, int more_flags)
 		FAIL("%s: unexpected success: retval=%zd", prefix, n);
 }
 
-static void handle_unsupported(int sd_send, int sd_peer, int sd_in, int sd_out,
-			       int sd_recv, int map_verd, int status)
+static void handle_unsupported(int sd_send, int send_flags, int sd_peer,
+			       int sd_in, int sd_out, int sd_recv,
+			       int map_verd, int status)
 {
 	unsigned int drop, pass;
 	char recv_buf;
@@ -171,7 +180,7 @@ get_verdict:
 		goto get_verdict;
 	}
 
-	if (pass != 0) {
+	if (pass && !(status & NO_REDIRECT)) {
 		FAIL("unsupported: wanted verdict pass 0, have %u", pass);
 		return;
 	}
@@ -237,14 +246,14 @@ static void test_send_recv(int sd_send, int send_flags, int sd_peer, int sd_in,
 		FAIL("incomplete send");
 	if (n < 0) {
 		/* sk_msg redirect combo not supported? */
-		if (status & SUPPORTED || errno != EACCES)
+		if (errno != EACCES)
 			FAIL_ERRNO("send");
 		goto out;
 	}
 
-	if (!(status & SUPPORTED)) {
-		handle_unsupported(sd_send, sd_peer, sd_in, sd_out, sd_recv,
-				   maps->verd, status);
+	if (!(status & SUPPORTED) || (status & NO_REDIRECT)) {
+		handle_unsupported(sd_send, send_flags, sd_peer, sd_in, sd_out,
+				   sd_recv, maps->verd, status);
 		goto out;
 	}
 
@@ -326,9 +335,10 @@ static int is_redir_supported(enum prog_type type, const char *in,
 static int get_support_status(enum prog_type type, const char *in,
 			      const char *out)
 {
-	int status = is_redir_supported(type, in, out);
+	int status = in ? is_redir_supported(type, in, out) : 0;
 
-	if (type == SK_SKB_INGRESS && strstarts(out, "v_"))
+	if ((type == SK_SKB_INGRESS || type == SK_SKB_EGRESS) &&
+	    strstarts(out, "v_"))
 		status |= UNSUPPORTED_RACY_VERD;
 
 	return status;
@@ -362,6 +372,41 @@ static void test_redir(enum bpf_map_type type, struct redir_spec *redir,
 		 status & SUPPORTED ? "→" : " ",
 		 out_str,
 		 (flags & MSG_OOB) ? "(OOB)" : "");
+
+	if (!test__start_subtest(s))
+		return;
+
+	test_send_recv(fd_send, flags, fd_peer, fd_in, fd_out, fd_recv, maps,
+		       status);
+}
+
+static void test_verdict(enum bpf_map_type type, struct redir_spec *redir,
+			 struct maps *maps, struct socket_spec *s_in,
+			 enum sk_action action)
+{
+	int fd_in, fd_out, fd_send, fd_peer, fd_recv, flags, status;
+	char s[MAX_TEST_NAME];
+	const char *s_str;
+
+	fd_in = s_in->in[0];
+	fd_out = s_in->in[1];
+	fd_send = s_in->in[redir->idx_send];
+	fd_peer = s_in->in[redir->idx_send ^ 1];
+	fd_recv = s_in->in[redir->idx_send ^ 1];
+	flags = s_in->send_flags;
+
+	s_str = socket_kind_to_str(fd_in);
+	status = get_support_status(redir->prog_type, NULL, s_str);
+	status |= NO_REDIRECT;
+
+	snprintf(s, sizeof(s),
+		 "%-4s %-17s %-7s %-5s%6s",
+		 /* hash sk_skb-to-ingress u_str pass (OOB) */
+		 type == BPF_MAP_TYPE_SOCKMAP ? "map" : "hash",
+		 redir->name,
+		 s_str,
+		 action == SK_PASS ? "pass" : "drop",
+		 flags & MSG_OOB ? "(OOB)" : "");
 
 	if (!test__start_subtest(s))
 		return;
@@ -413,6 +458,17 @@ static void test_sockets(enum bpf_map_type type, struct redir_spec *redir,
 			test_redir(type, redir, maps, in, out);
 		}
 	}
+
+	/* No redirect: SK_DROP */
+	*skel_redir_type = __MAX_BPF_MAP_TYPE + SK_DROP;
+	for (s = sockets; s < sockets + ARRAY_SIZE(sockets); s++)
+		test_verdict(type, redir, maps, s, SK_DROP);
+
+	/* No redirect: SK_PASS */
+	*skel_redir_type = __MAX_BPF_MAP_TYPE + SK_PASS;
+	for (s = sockets; s < sockets + ARRAY_SIZE(sockets); s++)
+		test_verdict(type, redir, maps, s, SK_PASS);
+
 out:
 	while (--s >= sockets)
 		socket_spec_close(s);
