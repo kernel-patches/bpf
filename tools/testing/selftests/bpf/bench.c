@@ -541,6 +541,7 @@ extern const struct bench bench_trig_uretprobe_multi_nop5;
 
 extern const struct bench bench_rb_libbpf;
 extern const struct bench bench_rb_custom;
+extern const struct bench bench_rb_prod;
 extern const struct bench bench_pb_libbpf;
 extern const struct bench bench_pb_custom;
 extern const struct bench bench_bloom_lookup;
@@ -617,6 +618,7 @@ static const struct bench *benchs[] = {
 	/* ringbuf/perfbuf benchmarks */
 	&bench_rb_libbpf,
 	&bench_rb_custom,
+	&bench_rb_prod,
 	&bench_pb_libbpf,
 	&bench_pb_custom,
 	&bench_bloom_lookup,

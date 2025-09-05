@@ -14,15 +14,20 @@ struct {
 
 const volatile int batch_cnt = 0;
 const volatile long use_output = 0;
+const volatile long bench_prod = 0;
 
 long sample_val = 42;
 long dropped __attribute__((aligned(128))) = 0;
+long hits __attribute__((aligned(128))) = 0;
 
 const volatile long wakeup_data_size = 0;
 
 static __always_inline long get_flags()
 {
 	long sz;
+
+	if (bench_prod)
+		return BPF_RB_NO_WAKEUP;
 
 	if (!wakeup_data_size)
 		return 0;
@@ -47,6 +52,8 @@ int bench_ringbuf(void *ctx)
 				*sample = sample_val;
 				flags = get_flags();
 				bpf_ringbuf_submit(sample, flags);
+				if (bench_prod)
+					__sync_add_and_fetch(&hits, 1);
 			}
 		}
 	} else {
@@ -55,6 +62,9 @@ int bench_ringbuf(void *ctx)
 			if (bpf_ringbuf_output(&ringbuf, &sample_val,
 					       sizeof(sample_val), flags))
 				__sync_add_and_fetch(&dropped, 1);
+			else if (bench_prod)
+				__sync_add_and_fetch(&hits, 1);
+
 		}
 	}
 	return 0;
