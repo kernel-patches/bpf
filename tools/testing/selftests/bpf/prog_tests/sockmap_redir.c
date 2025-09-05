@@ -210,9 +210,8 @@ get_verdict:
 	fail_recv("recv(sd_out, OOB)", sd_out, MSG_OOB);
 }
 
-static void test_send_redir_recv(int sd_send, int send_flags, int sd_peer,
-				 int sd_in, int sd_out, int sd_recv,
-				 struct maps *maps, int status)
+static void test_send_recv(int sd_send, int send_flags, int sd_peer, int sd_in,
+			   int sd_out, int sd_recv, struct maps *maps, int status)
 {
 	unsigned int drop, pass;
 	char *send_buf = "ab";
@@ -335,9 +334,9 @@ static int get_support_status(enum prog_type type, const char *in,
 	return status;
 }
 
-static void test_socket(enum bpf_map_type type, struct redir_spec *redir,
-			struct maps *maps, struct socket_spec *s_in,
-			struct socket_spec *s_out)
+static void test_redir(enum bpf_map_type type, struct redir_spec *redir,
+		       struct maps *maps, struct socket_spec *s_in,
+		       struct socket_spec *s_out)
 {
 	int fd_in, fd_out, fd_send, fd_peer, fd_recv, flags, status;
 	const char *in_str, *out_str;
@@ -367,12 +366,12 @@ static void test_socket(enum bpf_map_type type, struct redir_spec *redir,
 	if (!test__start_subtest(s))
 		return;
 
-	test_send_redir_recv(fd_send, flags, fd_peer, fd_in, fd_out, fd_recv,
-			     maps, status);
+	test_send_recv(fd_send, flags, fd_peer, fd_in, fd_out, fd_recv, maps,
+		       status);
 }
 
-static void test_redir(enum bpf_map_type type, struct redir_spec *redir,
-		       struct maps *maps)
+static void test_sockets(enum bpf_map_type type, struct redir_spec *redir,
+			 struct maps *maps)
 {
 	struct socket_spec *s, sockets[] = {
 		{ AF_INET, SOCK_STREAM },
@@ -395,7 +394,7 @@ static void test_redir(enum bpf_map_type type, struct redir_spec *redir,
 
 	/* Intra-proto */
 	for (s = sockets; s < sockets + ARRAY_SIZE(sockets); s++)
-		test_socket(type, redir, maps, s, s);
+		test_redir(type, redir, maps, s, s);
 
 	/* Cross-proto */
 	for (int i = 0; i < ARRAY_SIZE(sockets); i++) {
@@ -409,7 +408,7 @@ static void test_redir(enum bpf_map_type type, struct redir_spec *redir,
 			     in->sotype == out->sotype))
 				continue;
 
-			test_socket(type, redir, maps, in, out);
+			test_redir(type, redir, maps, in, out);
 		}
 	}
 out:
@@ -460,7 +459,7 @@ static void test_map(enum bpf_map_type type)
 		if (xbpf_prog_attach(prog_fd, maps.in, attach_type, 0))
 			return;
 
-		test_redir(type, r, &maps);
+		test_sockets(type, r, &maps);
 
 		if (xbpf_prog_detach2(prog_fd, maps.in, attach_type))
 			return;
