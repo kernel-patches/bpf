@@ -371,7 +371,7 @@ static void test_redir(enum bpf_map_type type, struct redir_spec *redir,
 }
 
 static void test_sockets(enum bpf_map_type type, struct redir_spec *redir,
-			 struct maps *maps)
+			 struct maps *maps, int *skel_redir_type)
 {
 	struct socket_spec *s, sockets[] = {
 		{ AF_INET, SOCK_STREAM },
@@ -391,6 +391,8 @@ static void test_sockets(enum bpf_map_type type, struct redir_spec *redir,
 	for (s = sockets; s < sockets + ARRAY_SIZE(sockets); s++)
 		if (socket_spec_pairs(s))
 			goto out;
+
+	*skel_redir_type = type;
 
 	/* Intra-proto */
 	for (s = sockets; s < sockets + ARRAY_SIZE(sockets); s++)
@@ -451,7 +453,6 @@ static void test_map(enum bpf_map_type type)
 			return;
 		}
 
-		skel->bss->redirect_type = type;
 		maps.verd = bpf_map__fd(skel->maps.verdict_map);
 		get_redir_params(r, skel, &prog_fd, &attach_type,
 				 &skel->bss->redirect_flags);
@@ -459,7 +460,7 @@ static void test_map(enum bpf_map_type type)
 		if (xbpf_prog_attach(prog_fd, maps.in, attach_type, 0))
 			return;
 
-		test_sockets(type, r, &maps);
+		test_sockets(type, r, &maps, &skel->bss->redirect_type);
 
 		if (xbpf_prog_detach2(prog_fd, maps.in, attach_type))
 			return;
