@@ -1089,10 +1089,7 @@ struct bpf_async_cb {
 	struct bpf_prog *prog;
 	void __rcu *callback_fn;
 	void *value;
-	union {
-		struct rcu_head rcu;
-		struct work_struct delete_work;
-	};
+	struct work_struct delete_work;
 	u64 flags;
 };
 
@@ -1225,7 +1222,7 @@ static void bpf_wq_delete_work(struct work_struct *work)
 
 	cancel_work_sync(&w->work);
 
-	kfree_rcu(w, cb.rcu);
+	bpf_mem_free_rcu(&bpf_global_ma, w);
 }
 
 static void bpf_timer_delete_work(struct work_struct *work)
@@ -1234,13 +1231,13 @@ static void bpf_timer_delete_work(struct work_struct *work)
 
 	/* Cancel the timer and wait for callback to complete if it was running.
 	 * If hrtimer_cancel() can be safely called it's safe to call
-	 * kfree_rcu(t) right after for both preallocated and non-preallocated
+	 * bpf_mem_free_rcu(t) right after for both preallocated and non-preallocated
 	 * maps.  The async->cb = NULL was already done and no code path can see
 	 * address 't' anymore. Timer if armed for existing bpf_hrtimer before
 	 * bpf_timer_cancel_and_free will have been cancelled.
 	 */
 	hrtimer_cancel(&t->timer);
-	kfree_rcu(t, cb.rcu);
+	bpf_mem_free_rcu(&bpf_global_ma, t);
 }
 
 static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u64 flags,
@@ -1274,8 +1271,7 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		goto out;
 	}
 
-	/* allocate hrtimer via map_kmalloc to use memcg accounting */
-	cb = bpf_map_kmalloc_node(map, size, GFP_ATOMIC, map->numa_node);
+	cb = bpf_mem_alloc(&bpf_global_ma, size);
 	if (!cb) {
 		ret = -ENOMEM;
 		goto out;
@@ -1571,7 +1567,7 @@ void bpf_timer_cancel_and_free(void *val)
 	 * callback_fn. In such case we don't call hrtimer_cancel() (since it
 	 * will deadlock) and don't call hrtimer_try_to_cancel() (since it will
 	 * just return -1). Though callback_fn is still running on this cpu it's
-	 * safe to do kfree(t) because bpf_timer_cb() read everything it needed
+	 * safe to free 't' because bpf_timer_cb() read everything it needed
 	 * from 't'. The bpf subprog callback_fn won't be able to access 't',
 	 * since async->cb = NULL was already done. The timer will be
 	 * effectively cancelled because bpf_timer_cb() will return
@@ -1581,7 +1577,7 @@ void bpf_timer_cancel_and_free(void *val)
 	 * timer _before_ calling us, such that failing to cancel it here will
 	 * cause it to possibly use struct hrtimer after freeing bpf_hrtimer.
 	 * Therefore, we _need_ to cancel any outstanding timers before we do
-	 * kfree_rcu, even though no more timers can be armed.
+	 * bpf_mem_free_rcu(), even though no more timers can be armed.
 	 *
 	 * Moreover, we need to schedule work even if timer does not belong to
 	 * the calling callback_fn, as on two different CPUs, we can end up in a
@@ -1608,7 +1604,7 @@ void bpf_timer_cancel_and_free(void *val)
 		 * completion.
 		 */
 		if (hrtimer_try_to_cancel(&t->timer) >= 0)
-			kfree_rcu(t, cb.rcu);
+			bpf_mem_free_rcu(&bpf_global_ma, t);
 		else
 			queue_work(system_unbound_wq, &t->cb.delete_work);
 	} else {
