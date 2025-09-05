@@ -184,6 +184,19 @@ get_verdict:
 			FAIL_ERRNO("unsupported: packet missing, retval=%zd", n);
 	}
 
+	/* af_unix send("ab", MSG_OOB) spits out 2 packets, but only the latter
+	 * ("b") is designated OOB. If the peer is in a sockmap, the OOB packet
+	 * will be silently dropped. Otherwise OOB stays in the queue and should
+	 * be taken care of.
+	 */
+	if ((send_flags & MSG_OOB) && !pass && !drop) {
+		errno = 0;
+		n = recv_timeout(sd_peer, &recv_buf, 1, MSG_OOB, IO_TIMEOUT_SEC);
+		/* Ignore unsupported sk_msg error */
+		if (n != 1 && errno != EOPNOTSUPP)
+			FAIL_ERRNO("recv(OOB): retval=%zd", n);
+	}
+
 	/* Ensure queues are empty */
 	fail_recv("bpf.recv(sd_send)", sd_send, 0);
 	if (sd_in != sd_send)
@@ -192,6 +205,9 @@ get_verdict:
 	fail_recv("bpf.recv(sd_out)", sd_out, 0);
 	if (sd_recv != sd_out)
 		fail_recv("bpf.recv(sd_recv)", sd_recv, 0);
+
+	fail_recv("recv(sd_peer, OOB)", sd_peer, MSG_OOB);
+	fail_recv("recv(sd_out, OOB)", sd_out, MSG_OOB);
 }
 
 static void test_send_redir_recv(int sd_send, int send_flags, int sd_peer,
