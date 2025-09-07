@@ -3733,6 +3733,15 @@ out_image:
 	}
 
 	if (!image || !prog->is_func || extra_pass) {
+		
+		if (addrs) {
+			struct bpf_term_patch_call_sites *patch_call_sites = prog->term_states->patch_call_sites;
+			for (int i = 0; i < patch_call_sites->call_sites_cnt; i++) {
+				struct call_aux_states *call_states = patch_call_sites->call_states + i;
+				call_states->jit_call_idx = addrs[call_states->call_bpf_insn_idx];
+			}
+		}
+		
 		if (image)
 			bpf_prog_fill_jited_linfo(prog, addrs + 1);
 out_addrs:
