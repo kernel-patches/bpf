@@ -8,6 +8,7 @@
 #include <linux/export.h>
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
+#include <linux/khugepaged.h>
 #include <linux/utsname.h>
 #include <linux/mman.h>
 #include <linux/reboot.h>
@@ -2493,6 +2494,11 @@ static int prctl_set_thp_disable(bool thp_disable, unsigned long flags,
 		mm_flags_clear(MMF_DISABLE_THP_COMPLETELY, mm);
 		mm_flags_clear(MMF_DISABLE_THP_EXCEPT_ADVISED, mm);
 	}
+
+	if (!mm_flags_test(MMF_DISABLE_THP_COMPLETELY, mm) &&
+	    !mm_flags_test(MMF_VM_HUGEPAGE, mm) &&
+	    hugepage_pmd_enabled())
+		__khugepaged_enter(mm);
 	mmap_write_unlock(current->mm);
 	return 0;
 }
