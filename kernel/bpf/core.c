@@ -41,6 +41,7 @@
 #include <linux/execmem.h>
 
 #include <asm/barrier.h>
+#include <asm/unwind.h>
 #include <linux/unaligned.h>
 
 /* Registers */
@@ -95,6 +96,37 @@ enum page_size_enum {
 	__PAGE_SIZE = PAGE_SIZE
 };
 
+void *bpf_termination_null_func(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5)
+{
+	return NULL;
+}
+
+int bpf_loop_term_callback(u64 reg_loop_cnt, u64 *reg_loop_ctx)
+{
+	return 1;
+}
+
+
+void __weak in_place_patch_bpf_prog(struct bpf_prog *prog)
+{
+	return;
+}
+
+void __weak bpf_die(struct bpf_prog *prog)
+{
+	return;
+}
+
+void __weak bpf_prog_termination_deferred(struct work_struct *work)
+{
+	return;
+}
+
+void __weak bpf_softlockup(u32 dur_s)
+{
+	return;
+}
+
 struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flags)
 {
 	gfp_t gfp_flags = bpf_memcg_flags(GFP_KERNEL | __GFP_ZERO | gfp_extra_flags);
@@ -134,11 +166,12 @@ struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flag
 	fp->jit_requested = ebpf_jit_enabled();
 	fp->blinding_requested = bpf_jit_blinding_enabled(fp);
 	fp->term_states = term_states;
+	atomic_set(&fp->term_states->bpf_die_in_progress, 0);
 	fp->term_states->patch_call_sites = patch_call_sites;
 	fp->term_states->patch_call_sites->call_sites_cnt = 0;
 	fp->term_states->patch_call_sites->call_states = NULL;
 	fp->term_states->prog = fp;
-
+	INIT_WORK(&fp->term_states->work, bpf_prog_termination_deferred);
 #ifdef CONFIG_CGROUP_BPF
 	aux->cgroup_atype = CGROUP_BPF_ATTACH_TYPE_INVALID;
 #endif

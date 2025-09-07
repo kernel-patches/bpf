@@ -2606,6 +2606,10 @@ emit_jmp:
 				if (arena_vm_start)
 					pop_r12(&prog);
 			}
+			/* emiting 5 byte nop for non-inline bpf_loop callback */
+			if (bpf_is_subprog(bpf_prog) && bpf_prog->aux->is_bpf_loop_cb_non_inline) {
+				emit_nops(&prog, X86_PATCH_SIZE);
+			}
 			EMIT1(0xC9);         /* leave */
 			emit_return(&prog, image + addrs[i - 1] + (prog - temp));
 			break;
@@ -3833,6 +3837,8 @@ bool bpf_jit_supports_private_stack(void)
 	return true;
 }
 
+
+
 void arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp), void *cookie)
 {
 #if defined(CONFIG_UNWINDER_ORC)
@@ -3847,6 +3853,132 @@ void arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp
 	}
 	return;
 #endif
+}
+
+void in_place_patch_bpf_prog(struct bpf_prog *prog)
+{
+	struct call_aux_states *call_states;
+	unsigned long new_target;
+	unsigned char *addr;
+	u8 ret_jmp_size = 1;
+	if (cpu_wants_rethunk()) {
+		ret_jmp_size = 5;
+	}
+	call_states = prog->term_states->patch_call_sites->call_states;
+	for (int i = 0; i < prog->term_states->patch_call_sites->call_sites_cnt; i++) {
+		
+		new_target = (unsigned long) bpf_termination_null_func;
+		if (call_states[i].is_bpf_loop_cb_inline) {
+			new_target = (unsigned long) bpf_loop_term_callback;	
+		}
+		char new_insn[5];
+
+		addr = (unsigned char *)prog->bpf_func + call_states->jit_call_idx;
+
+		unsigned long new_rel = (unsigned long)(new_target - (unsigned long)(addr + 5));
+		new_insn[0] = 0xE8;
+		new_insn[1] = (new_rel >> 0) & 0xFF;
+		new_insn[2] = (new_rel >> 8) & 0xFF;
+		new_insn[3] = (new_rel >> 16) & 0xFF;
+		new_insn[4] = (new_rel >> 24) & 0xFF;
+
+		smp_text_poke_batch_add(addr, new_insn, 5 /* call instruction len */, NULL);
+	}
+
+	if (prog->aux->is_bpf_loop_cb_non_inline) {
+		
+		char new_insn[5] = { 0xB8, 0x01, 0x00, 0x00, 0x00 };
+		char old_insn[5] = { 0x0F, 0x1F, 0x44, 0x00, 0x00 };
+		smp_text_poke_batch_add(prog->bpf_func + prog->jited_len - 
+				(1 + ret_jmp_size) /* leave, jmp/ ret */ - 5 /* nop size */, new_insn, 5 /* mov eax, 1 */, old_insn);
+	}
+
+
+	/* flush all text poke calls */
+	smp_text_poke_batch_finish();
+}
+
+void bpf_die(struct bpf_prog *prog)
+{
+	u8 ret_jmp_size = 1;
+	if (cpu_wants_rethunk()) {
+		ret_jmp_size = 5;
+	}
+
+	/*
+	 * Replacing 5 byte nop in prologue with jmp instruction to ret
+	 */
+	unsigned long jmp_offset = prog->jited_len - (4 /* First endbr is 4 bytes */ 
+					+ 5 /* noop is 5 bytes */ 
+					+ ret_jmp_size /* 5 bytes of jmp return_thunk or 1 byte ret*/);
+
+	char new_insn[5];
+	new_insn[0] = 0xE9;
+	new_insn[1] = (jmp_offset >> 0) & 0xFF;
+	new_insn[2] = (jmp_offset >> 8) & 0xFF;
+	new_insn[3] = (jmp_offset >> 16) & 0xFF;
+	new_insn[4] = (jmp_offset >> 24) & 0xFF;
+
+	smp_text_poke_batch_add(prog->bpf_func + 4, new_insn, 5, NULL);
+
+	if (prog->aux->func_cnt) {
+		for (int i = 0; i < prog->aux->func_cnt; i++) {
+			in_place_patch_bpf_prog(prog->aux->func[i]);
+		}
+	} else {
+		in_place_patch_bpf_prog(prog);
+	}
+
+}
+
+void bpf_prog_termination_deferred(struct work_struct *work)
+{
+	struct bpf_term_aux_states *term_states = container_of(work, struct bpf_term_aux_states,
+						 work);
+	struct bpf_prog *prog = term_states->prog;
+
+	bpf_die(prog);
+}
+
+static struct workqueue_struct *bpf_termination_wq;
+
+void bpf_softlockup(u32 dur_s)
+{
+	unsigned long addr;
+	struct unwind_state state;
+	struct bpf_prog *prog;
+
+	for (unwind_start(&state, current, NULL, NULL); !unwind_done(&state);
+	     unwind_next_frame(&state)) {
+		addr = unwind_get_return_address(&state);
+		if (!addr)
+			break;
+
+		if (!is_bpf_text_address(addr))
+			continue;
+
+		rcu_read_lock();
+		prog = bpf_prog_ksym_find(addr);
+		rcu_read_unlock();
+		if (bpf_is_subprog(prog))
+			continue;
+
+		if (atomic_cmpxchg(&prog->term_states->bpf_die_in_progress, 0, 1))
+			break;
+	
+		bpf_termination_wq = alloc_workqueue("bpf_termination_wq", WQ_UNBOUND, 1);
+		if (!bpf_termination_wq)
+			pr_err("Failed to alloc workqueue for bpf termination.\n");
+
+		queue_work(bpf_termination_wq, &prog->term_states->work);
+
+		/* Currently nested programs are not terminated together.
+		 * Removing this break will result in BPF trampolines being
+		 * identified as is_bpf_text_address resulting in NULL ptr
+		 * deref in next step.
+		 */
+		break;
+	}
 }
 
 void bpf_arch_poke_desc_update(struct bpf_jit_poke_descriptor *poke,

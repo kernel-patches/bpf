@@ -1123,6 +1123,8 @@ int sk_get_filter(struct sock *sk, sockptr_t optval, unsigned int len);
 bool sk_filter_charge(struct sock *sk, struct sk_filter *fp);
 void sk_filter_uncharge(struct sock *sk, struct sk_filter *fp);
 
+void *bpf_termination_null_func(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
+int bpf_loop_term_callback(u64 reg_loop_cnt, u64 *reg_loop_ctx);
 u64 __bpf_call_base(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
 #define __bpf_call_base_args \
 	((u64 (*)(u64, u64, u64, u64, u64, const struct bpf_insn *)) \
@@ -1257,6 +1259,10 @@ bpf_jit_binary_pack_hdr(const struct bpf_prog *fp);
 
 void *bpf_prog_pack_alloc(u32 size, bpf_jit_fill_hole_t bpf_fill_ill_insns);
 void bpf_prog_pack_free(void *ptr, u32 size);
+void bpf_softlockup(u32 dur_s);
+void bpf_prog_termination_deferred(struct work_struct *work);
+void bpf_die(struct bpf_prog *prog);
+void in_place_patch_bpf_prog(struct bpf_prog *prog);
 
 static inline bool bpf_prog_kallsyms_verify_off(const struct bpf_prog *fp)
 {
