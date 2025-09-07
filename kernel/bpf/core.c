@@ -100,6 +100,8 @@ struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flag
 	gfp_t gfp_flags = bpf_memcg_flags(GFP_KERNEL | __GFP_ZERO | gfp_extra_flags);
 	struct bpf_prog_aux *aux;
 	struct bpf_prog *fp;
+	struct bpf_term_aux_states *term_states = NULL;
+	struct bpf_term_patch_call_sites *patch_call_sites = NULL;
 
 	size = round_up(size, __PAGE_SIZE);
 	fp = __vmalloc(size, gfp_flags);
@@ -118,11 +120,24 @@ struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flag
 		return NULL;
 	}
 
+	term_states = kzalloc(sizeof(*term_states), bpf_memcg_flags(GFP_KERNEL | gfp_extra_flags));
+	if (!term_states)
+		goto free_alloc_percpu;
+
+	patch_call_sites = kzalloc(sizeof(*patch_call_sites), bpf_memcg_flags(GFP_KERNEL | gfp_extra_flags));
+	if (!patch_call_sites)
+		goto free_bpf_term_states;
+
 	fp->pages = size / PAGE_SIZE;
 	fp->aux = aux;
 	fp->aux->prog = fp;
 	fp->jit_requested = ebpf_jit_enabled();
 	fp->blinding_requested = bpf_jit_blinding_enabled(fp);
+	fp->term_states = term_states;
+	fp->term_states->patch_call_sites = patch_call_sites;
+	fp->term_states->patch_call_sites->call_sites_cnt = 0;
+	fp->term_states->prog = fp;
+
 #ifdef CONFIG_CGROUP_BPF
 	aux->cgroup_atype = CGROUP_BPF_ATTACH_TYPE_INVALID;
 #endif
@@ -140,6 +155,15 @@ struct bpf_prog *bpf_prog_alloc_no_stats(unsigned int size, gfp_t gfp_extra_flag
 #endif
 
 	return fp;
+
+free_bpf_term_states:
+	kfree(term_states);
+free_alloc_percpu:
+	free_percpu(fp->active);
+	kfree(aux);
+	vfree(fp);
+
+	return NULL;
 }
 
 struct bpf_prog *bpf_prog_alloc(unsigned int size, gfp_t gfp_extra_flags)
@@ -266,6 +290,7 @@ struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
 		memcpy(fp, fp_old, fp_old->pages * PAGE_SIZE);
 		fp->pages = pages;
 		fp->aux->prog = fp;
+		fp->term_states->prog = fp;
 
 		/* We keep fp->aux from fp_old around in the new
 		 * reallocated structure.
@@ -273,6 +298,7 @@ struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
 		fp_old->aux = NULL;
 		fp_old->stats = NULL;
 		fp_old->active = NULL;
+		fp_old->term_states = NULL;
 		__bpf_prog_free(fp_old);
 	}
 
@@ -286,6 +312,11 @@ void __bpf_prog_free(struct bpf_prog *fp)
 		mutex_destroy(&fp->aux->dst_mutex);
 		kfree(fp->aux->poke_tab);
 		kfree(fp->aux);
+	}
+	if (fp->term_states) {
+		if (fp->term_states->patch_call_sites)
+			kfree(fp->term_states->patch_call_sites);
+		kfree(fp->term_states);
 	}
 	free_percpu(fp->stats);
 	free_percpu(fp->active);

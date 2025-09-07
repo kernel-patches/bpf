@@ -1584,6 +1584,25 @@ struct bpf_stream_stage {
 	int len;
 };
 
+struct call_aux_states {
+	int call_bpf_insn_idx;
+	int jit_call_idx;
+	u8 is_helper_kfunc;
+	u8 is_bpf_loop;
+	u8 is_bpf_loop_cb_inline;
+};
+
+struct bpf_term_patch_call_sites {
+	u32 call_sites_cnt;
+	struct call_aux_states *call_states;
+};
+
+struct bpf_term_aux_states {
+	struct bpf_prog *prog;
+	struct work_struct work;
+	struct bpf_term_patch_call_sites *patch_call_sites;
+};
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1618,6 +1637,7 @@ struct bpf_prog_aux {
 	bool tail_call_reachable;
 	bool xdp_has_frags;
 	bool exception_cb;
+	bool is_bpf_loop_cb_non_inline;
 	bool exception_boundary;
 	bool is_extended; /* true if extended by freplace program */
 	bool jits_use_priv_stack;
@@ -1696,33 +1716,34 @@ struct bpf_prog_aux {
 };
 
 struct bpf_prog {
-	u16			pages;		/* Number of allocated pages */
-	u16			jited:1,	/* Is our filter JIT'ed? */
-				jit_requested:1,/* archs need to JIT the prog */
-				gpl_compatible:1, /* Is filter GPL compatible? */
-				cb_access:1,	/* Is control block accessed? */
-				dst_needed:1,	/* Do we need dst entry? */
-				blinding_requested:1, /* needs constant blinding */
-				blinded:1,	/* Was blinded */
-				is_func:1,	/* program is a bpf function */
-				kprobe_override:1, /* Do we override a kprobe? */
-				has_callchain_buf:1, /* callchain buffer allocated? */
-				enforce_expected_attach_type:1, /* Enforce expected_attach_type checking at attach time */
-				call_get_stack:1, /* Do we call bpf_get_stack() or bpf_get_stackid() */
-				call_get_func_ip:1, /* Do we call get_func_ip() */
-				tstamp_type_access:1, /* Accessed __sk_buff->tstamp_type */
-				sleepable:1;	/* BPF program is sleepable */
-	enum bpf_prog_type	type;		/* Type of BPF program */
-	enum bpf_attach_type	expected_attach_type; /* For some prog types */
-	u32			len;		/* Number of filter blocks */
-	u32			jited_len;	/* Size of jited insns in bytes */
-	u8			tag[BPF_TAG_SIZE];
-	struct bpf_prog_stats __percpu *stats;
-	int __percpu		*active;
-	unsigned int		(*bpf_func)(const void *ctx,
-					    const struct bpf_insn *insn);
-	struct bpf_prog_aux	*aux;		/* Auxiliary fields */
-	struct sock_fprog_kern	*orig_prog;	/* Original BPF program */
+	u16				pages;		/* Number of allocated pages */
+	u16				jited:1,	/* Is our filter JIT'ed? */
+					jit_requested:1,/* archs need to JIT the prog */
+					gpl_compatible:1, /* Is filter GPL compatible? */
+					cb_access:1,	/* Is control block accessed? */
+					dst_needed:1,	/* Do we need dst entry? */
+					blinding_requested:1, /* needs constant blinding */
+					blinded:1,	/* Was blinded */
+					is_func:1,	/* program is a bpf function */
+					kprobe_override:1, /* Do we override a kprobe? */
+					has_callchain_buf:1, /* callchain buffer allocated? */
+					enforce_expected_attach_type:1, /* Enforce expected_attach_type checking at attach time */
+					call_get_stack:1, /* Do we call bpf_get_stack() or bpf_get_stackid() */
+					call_get_func_ip:1, /* Do we call get_func_ip() */
+					tstamp_type_access:1, /* Accessed __sk_buff->tstamp_type */
+					sleepable:1;	/* BPF program is sleepable */
+	enum bpf_prog_type		type;		/* Type of BPF program */
+	enum bpf_attach_type		expected_attach_type; /* For some prog types */
+	u32				len;		/* Number of filter blocks */
+	u32				jited_len;	/* Size of jited insns in bytes */
+	u8				tag[BPF_TAG_SIZE];
+	struct bpf_prog_stats __percpu	*stats;
+	int __percpu			*active;
+	unsigned int			(*bpf_func)(const void *ctx,
+						    const struct bpf_insn *insn);
+	struct bpf_prog_aux		*aux;		/* Auxiliary fields */
+	struct sock_fprog_kern		*orig_prog;	/* Original BPF program */
+	struct bpf_term_aux_states	*term_states;
 	/* Instructions for interpreter */
 	union {
 		DECLARE_FLEX_ARRAY(struct sock_filter, insns);
