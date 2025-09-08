@@ -295,7 +295,7 @@ static void *percpu_array_map_lookup_percpu_elem(struct bpf_map *map, void *key,
 	return per_cpu_ptr(array->pptrs[index & array->index_mask], cpu);
 }
 
-int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value)
+int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value, u64 map_flags)
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	u32 index = *(u32 *)key;
@@ -312,7 +312,7 @@ int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value)
 	size = array->elem_size;
 	rcu_read_lock();
 	pptr = array->pptrs[index & array->index_mask];
-	bpf_percpu_copy_data(map, pptr, value, size);
+	bpf_percpu_copy_data(map, pptr, value, size, map_flags);
 	rcu_read_unlock();
 	return 0;
 }
@@ -405,7 +405,7 @@ int bpf_percpu_array_update(struct bpf_map *map, void *key, void *value,
 	size = array->elem_size;
 	rcu_read_lock();
 	pptr = array->pptrs[index & array->index_mask];
-	bpf_percpu_update_data(map, pptr, value, size);
+	bpf_percpu_update_data(map, pptr, value, size, map_flags);
 	rcu_read_unlock();
 	return 0;
 }
