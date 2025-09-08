@@ -38,6 +38,13 @@ struct {
 	__type(value, stack_trace_t);
 } stack_amap SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} stack_key_map SEC(".maps");
+
 /* taken from /sys/kernel/tracing/events/sched/sched_switch/format */
 struct sched_switch_args {
 	unsigned long long pad;
@@ -54,7 +61,7 @@ SEC("tracepoint/sched/sched_switch")
 int oncpu(struct sched_switch_args *ctx)
 {
 	__u32 max_len = PERF_MAX_STACK_DEPTH * sizeof(__u64);
-	__u32 key = 0, val = 0, *value_p;
+	__u32 key = 0, val = 0, *value_p, stackmap_key = 0;
 	void *stack_p;
 
 	value_p = bpf_map_lookup_elem(&control_map, &key);
@@ -64,6 +71,9 @@ int oncpu(struct sched_switch_args *ctx)
 	/* The size of stackmap and stackid_hmap should be the same */
 	key = bpf_get_stackid(ctx, &stackmap, 0);
 	if ((int)key >= 0) {
+		val = key;
+		bpf_map_update_elem(&stack_key_map, &stackmap_key, &val, 0);
+		val = 0;
 		bpf_map_update_elem(&stackid_hmap, &key, &val, 0);
 		stack_p = bpf_map_lookup_elem(&stack_amap, &key);
 		if (stack_p)
