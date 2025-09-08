@@ -87,6 +87,10 @@ void serial_test_timer(void)
 	int err;
 
 	timer_skel = timer__open_and_load();
+	if (!timer_skel && errno == EOPNOTSUPP) {
+		test__skip();
+		return;
+	}
 	if (!ASSERT_OK_PTR(timer_skel, "timer_skel_load"))
 		return;
 
@@ -104,6 +108,10 @@ void test_timer_interrupt(void)
 	LIBBPF_OPTS(bpf_test_run_opts, opts);
 
 	skel = timer_interrupt__open_and_load();
+	if (!skel && errno == EOPNOTSUPP) {
+		test__skip();
+		return;
+	}
 	if (!ASSERT_OK_PTR(skel, "timer_interrupt__open_and_load"))
 		return;
 
