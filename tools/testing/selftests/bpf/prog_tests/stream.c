@@ -18,29 +18,9 @@ void test_stream_success(void)
 	return;
 }
 
-struct {
-	int prog_off;
-	const char *errstr;
-} stream_error_arr[] = {
-	{
-		offsetof(struct stream, progs.stream_cond_break),
-		"ERROR: Timeout detected for may_goto instruction\n"
-		"CPU: [0-9]+ UID: 0 PID: [0-9]+ Comm: .*\n"
-		"Call trace:\n"
-		"([a-zA-Z_][a-zA-Z0-9_]*\\+0x[0-9a-fA-F]+/0x[0-9a-fA-F]+\n"
-		"|[ \t]+[^\n]+\n)*",
-	},
-	{
-		offsetof(struct stream, progs.stream_deadlock),
-		"ERROR: AA or ABBA deadlock detected for bpf_res_spin_lock\n"
-		"Attempted lock   = (0x[0-9a-fA-F]+)\n"
-		"Total held locks = 1\n"
-		"Held lock\\[ 0\\] = \\1\n"  // Lock address must match
-		"CPU: [0-9]+ UID: 0 PID: [0-9]+ Comm: .*\n"
-		"Call trace:\n"
-		"([a-zA-Z_][a-zA-Z0-9_]*\\+0x[0-9a-fA-F]+/0x[0-9a-fA-F]+\n"
-		"|[ \t]+[^\n]+\n)*",
-	},
+int prog_off[] = {
+	offsetof(struct stream, progs.stream_arena_read_fault),
+	offsetof(struct stream, progs.stream_arena_write_fault),
 };
 
 static int match_regex(const char *pattern, const char *string)
@@ -56,34 +36,33 @@ static int match_regex(const char *pattern, const char *string)
 	return rc == 0 ? 1 : 0;
 }
 
-void test_stream_errors(void)
+void test_stream_arena_fault_address(void)
 {
 	LIBBPF_OPTS(bpf_test_run_opts, opts);
 	LIBBPF_OPTS(bpf_prog_stream_read_opts, ropts);
 	struct stream *skel;
 	int ret, prog_fd;
 	char buf[1024];
+	char fault_addr[64];
 
 	skel = stream__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "stream__open_and_load"))
 		return;
 
-	for (int i = 0; i < ARRAY_SIZE(stream_error_arr); i++) {
+	for (int i = 0; i < ARRAY_SIZE(prog_off); i++) {
 		struct bpf_program **prog;
 
-		prog = (struct bpf_program **)(((char *)skel) + stream_error_arr[i].prog_off);
+		prog = (struct bpf_program **)(((char *)skel) + prog_off[i]);
 		prog_fd = bpf_program__fd(*prog);
 		ret = bpf_prog_test_run_opts(prog_fd, &opts);
 		ASSERT_OK(ret, "ret");
 		ASSERT_OK(opts.retval, "retval");
 
-#if !defined(__x86_64__) && !defined(__s390x__) && !defined(__aarch64__)
-		ASSERT_TRUE(1, "Timed may_goto unsupported, skip.");
-		if (i == 0) {
-			ret = bpf_prog_stream_read(prog_fd, 2, buf, sizeof(buf), &ropts);
-			ASSERT_EQ(ret, 0, "stream read");
-			continue;
-		}
+#if !defined(__x86_64__) && !defined(__aarch64__)
+		ASSERT_TRUE(1, "Arena fault reporting unsupported, skip.");
+		ret = bpf_prog_stream_read(prog_fd, 2, buf, sizeof(buf), &ropts);
+		ASSERT_EQ(ret, 0, "stream read");
+		continue;
 #endif
 
 		ret = bpf_prog_stream_read(prog_fd, BPF_STREAM_STDERR, buf, sizeof(buf), &ropts);
@@ -91,9 +70,13 @@ void test_stream_errors(void)
 		ASSERT_LE(ret, 1023, "len for buf");
 		buf[ret] = '\0';
 
-		ret = match_regex(stream_error_arr[i].errstr, buf);
-		if (!ASSERT_TRUE(ret == 1, "regex match"))
+		sprintf(fault_addr, "0x%lx", skel->bss->fault_addr);
+		ret = match_regex(fault_addr, buf);
+
+		if (!ASSERT_TRUE(ret == 1, "regex match")) {
 			fprintf(stderr, "Output from stream:\n%s\n", buf);
+			fprintf(stderr, "Fault Addr: 0x%lx\n", skel->bss->fault_addr);
+		}
 	}
 
 	stream__destroy(skel);
