@@ -440,10 +440,13 @@ static void test_sockmap_insert_sockops_and_destroy(void)
 	__u32 key_prefix = htonl((__u32)port0);
 	int accept_serv[4] = {-1, -1, -1, -1};
 	int tcp_clien[4] = {-1, -1, -1, -1};
+	int udp_clien[4] = {-1, -1, -1, -1};
 	union bpf_iter_link_info linfo = {};
 	int tcp_serv[4] = {-1, -1, -1, -1};
+	int udp_serv[4] = {-1, -1, -1, -1};
 	struct nstoken *nstoken = NULL;
 	int tcp_clien_cookies[4] = {};
+	int udp_clien_cookies[4] = {};
 	struct bpf_link *link = NULL;
 	char buf[64];
 	int len;
@@ -494,6 +497,22 @@ static void test_sockmap_insert_sockops_and_destroy(void)
 	if (!ASSERT_OK_FD(tcp_serv[3], "start_server"))
 		goto cleanup;
 
+	udp_serv[0] = start_server(AF_INET, SOCK_DGRAM, "127.0.0.1", port0, 0);
+	if (!ASSERT_OK_FD(udp_serv[0], "start_server"))
+		goto cleanup;
+
+	udp_serv[1] = start_server(AF_INET6, SOCK_DGRAM, "::1", port0, 0);
+	if (!ASSERT_OK_FD(udp_serv[1], "start_server"))
+		goto cleanup;
+
+	udp_serv[2] = start_server(AF_INET, SOCK_DGRAM, "127.0.0.1", port1, 0);
+	if (!ASSERT_OK_FD(udp_serv[2], "start_server"))
+		goto cleanup;
+
+	udp_serv[3] = start_server(AF_INET6, SOCK_DGRAM, "::1", port1, 0);
+	if (!ASSERT_OK_FD(udp_serv[3], "start_server"))
+		goto cleanup;
+
 	for (i = 0; i < ARRAY_SIZE(tcp_serv); i++) {
 		tcp_clien[i] = connect_to_fd(tcp_serv[i], 0);
 		if (!ASSERT_OK_FD(tcp_clien[i], "connect_to_fd"))
@@ -504,9 +523,19 @@ static void test_sockmap_insert_sockops_and_destroy(void)
 			goto cleanup;
 	}
 
+	for (i = 0; i < ARRAY_SIZE(udp_serv); i++) {
+		udp_clien[i] = connect_to_fd(udp_serv[i], 0);
+		if (!ASSERT_OK_FD(udp_clien[i], "connect_to_fd"))
+			goto cleanup;
+	}
+
 	/* Ensure that sockets are connected. */
 	for (i = 0; i < ARRAY_SIZE(tcp_clien); i++)
 		if (!ASSERT_EQ(send(tcp_clien[i], "a", 1, 0), 1, "send"))
+			goto cleanup;
+
+	for (i = 0; i < ARRAY_SIZE(udp_clien); i++)
+		if (!ASSERT_EQ(send(udp_clien[i], "a", 1, 0), 1, "send"))
 			goto cleanup;
 
 	/* Ensure that client sockets exist in the map and the hash. */
@@ -518,6 +547,9 @@ static void test_sockmap_insert_sockops_and_destroy(void)
 	for (i = 0; i < ARRAY_SIZE(tcp_clien); i++)
 		tcp_clien_cookies[i] = socket_cookie(tcp_clien[i]);
 
+	for (i = 0; i < ARRAY_SIZE(udp_clien); i++)
+		udp_clien_cookies[i] = socket_cookie(udp_clien[i]);
+
 	for (i = 0; i < ARRAY_SIZE(tcp_clien); i++) {
 		if (!ASSERT_TRUE(has_socket(update_skel->maps.sock_map,
 					    tcp_clien_cookies[i],
@@ -527,6 +559,20 @@ static void test_sockmap_insert_sockops_and_destroy(void)
 
 		if (!ASSERT_TRUE(has_socket(update_skel->maps.sock_hash,
 					    tcp_clien_cookies[i],
+					    sizeof(struct sock_hash_key)),
+				 "has_socket"))
+			goto cleanup;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(udp_clien); i++) {
+		if (!ASSERT_TRUE(has_socket(update_skel->maps.sock_map,
+					    udp_clien_cookies[i],
+					    sizeof(__u32)),
+				 "has_socket"))
+			goto cleanup;
+
+		if (!ASSERT_TRUE(has_socket(update_skel->maps.sock_hash,
+					    udp_clien_cookies[i],
 					    sizeof(struct sock_hash_key)),
 				 "has_socket"))
 			goto cleanup;
@@ -568,9 +614,23 @@ static void test_sockmap_insert_sockops_and_destroy(void)
 	if (!ASSERT_EQ(send(tcp_clien[3], "a", 1, 0), 1, "send"))
 		goto cleanup;
 
+	if (!ASSERT_LT(send(udp_clien[0], "a", 1, 0), 0, "send"))
+		goto cleanup;
+
+	if (!ASSERT_LT(send(udp_clien[1], "a", 1, 0), 0, "send"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(send(udp_clien[2], "a", 1, 0), 1, "send"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(send(udp_clien[3], "a", 1, 0), 1, "send"))
+		goto cleanup;
+
 	/* Close and ensure that sockets are removed from maps. */
 	close(tcp_clien[0]);
 	close(tcp_clien[1]);
+	close(udp_clien[0]);
+	close(udp_clien[1]);
 
 	/* Ensure that the sockets connected to port0 were removed from the
 	 * maps.
@@ -622,10 +682,60 @@ static void test_sockmap_insert_sockops_and_destroy(void)
 				    sizeof(struct sock_hash_key)),
 			 "has_socket"))
 		goto cleanup;
+
+	if (!ASSERT_FALSE(has_socket(update_skel->maps.sock_map,
+				     udp_clien_cookies[0],
+				     sizeof(__u32)),
+			 "has_socket"))
+		goto cleanup;
+
+	if (!ASSERT_FALSE(has_socket(update_skel->maps.sock_map,
+				     udp_clien_cookies[1],
+				     sizeof(__u32)),
+			 "has_socket"))
+		goto cleanup;
+
+	if (!ASSERT_TRUE(has_socket(update_skel->maps.sock_map,
+				    udp_clien_cookies[2],
+				    sizeof(__u32)),
+			 "has_socket"))
+		goto cleanup;
+
+	if (!ASSERT_TRUE(has_socket(update_skel->maps.sock_map,
+				    udp_clien_cookies[3],
+				    sizeof(__u32)),
+			 "has_socket"))
+		goto cleanup;
+
+	if (!ASSERT_FALSE(has_socket(update_skel->maps.sock_hash,
+				     udp_clien_cookies[0],
+				     sizeof(struct sock_hash_key)),
+			 "has_socket"))
+		goto cleanup;
+
+	if (!ASSERT_FALSE(has_socket(update_skel->maps.sock_hash,
+				     udp_clien_cookies[1],
+				     sizeof(struct sock_hash_key)),
+			 "has_socket"))
+		goto cleanup;
+
+	if (!ASSERT_TRUE(has_socket(update_skel->maps.sock_hash,
+				    udp_clien_cookies[2],
+				    sizeof(struct sock_hash_key)),
+			 "has_socket"))
+		goto cleanup;
+
+	if (!ASSERT_TRUE(has_socket(update_skel->maps.sock_hash,
+				    udp_clien_cookies[3],
+				    sizeof(struct sock_hash_key)),
+			 "has_socket"))
+		goto cleanup;
 cleanup:
 	close_fds(accept_serv, ARRAY_SIZE(accept_serv));
 	close_fds(tcp_clien, ARRAY_SIZE(tcp_clien));
+	close_fds(udp_clien, ARRAY_SIZE(udp_clien));
 	close_fds(tcp_serv, ARRAY_SIZE(tcp_serv));
+	close_fds(udp_serv, ARRAY_SIZE(udp_serv));
 	if (prog_fd >= 0)
 		bpf_prog_detach(cg_fd, BPF_CGROUP_SOCK_OPS);
 	if (cg_fd >= 0)
