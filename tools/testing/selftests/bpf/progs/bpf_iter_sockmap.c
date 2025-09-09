@@ -57,3 +57,17 @@ int copy(struct bpf_iter__sockmap *ctx)
 	ret = bpf_map_delete_elem(&dst, &tmp);
 	return ret && ret != -ENOENT;
 }
+
+SEC("iter/sockmap")
+int destroy(struct bpf_iter__sockmap *ctx)
+{
+	struct sock *sk = ctx->sk;
+	void *key = ctx->key;
+
+	if (!key || !sk)
+		return 0;
+
+	bpf_sock_destroy((struct sock_common *)sk);
+
+	return 0;
+}
