@@ -76,6 +76,12 @@ sk_msg_buff *msg``.
 
 All these helpers will be described in more detail below.
 
+Hashing behavior is configurable for ``BPF_MAP_TYPE_SOCKHASH`` using the lower
+32 bits of ``map_extra``. When provided, ``map_extra`` specifies the number of
+bytes from a key to use when calculating its bucket hash. This may be used
+to force keys sharing a common prefix, e.g. an (address, port) tuple, into the
+same bucket for efficient iteration.
+
 Usage
 =====
 Kernel BPF

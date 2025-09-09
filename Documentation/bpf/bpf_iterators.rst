@@ -587,3 +587,14 @@ A BPF task iterator with *pid* includes all tasks (threads) of a process. The
 BPF program receives these tasks one after another. You can specify a BPF task
 iterator with *tid* parameter to include only the tasks that match the given
 *tid*.
+
+---------------------------------------------
+Parametrizing BPF_MAP_TYPE_SOCKHASH Iterators
+---------------------------------------------
+
+An iterator for a ``BPF_MAP_TYPE_SOCKHASH`` can limit results to only sockets
+whose keys share a common prefix by using a key prefix filter. The key prefix
+length must match the value of ``map_extra`` if ``map_extra`` is used in the
+``BPF_MAP_TYPE_SOCKHASH`` definition; otherwise, it must match the map key
+length. This guarantees that the iterator only visits a single hash bucket,
+ensuring efficient iteration over a subset of map elements.
