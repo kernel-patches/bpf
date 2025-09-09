@@ -522,7 +522,8 @@ static bool sock_map_op_okay(const struct bpf_sock_ops_kern *ops)
 {
 	return ops->op == BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB ||
 	       ops->op == BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB ||
-	       ops->op == BPF_SOCK_OPS_TCP_LISTEN_CB;
+	       ops->op == BPF_SOCK_OPS_TCP_LISTEN_CB ||
+	       ops->op == BPF_SOCK_OPS_UDP_CONNECTED_CB;
 }
 
 static bool sock_map_redirect_allowed(const struct sock *sk)
