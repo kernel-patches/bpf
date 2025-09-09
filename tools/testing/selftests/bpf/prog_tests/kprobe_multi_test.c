@@ -560,7 +560,7 @@ static void test_attach_write_ctx(void)
 #else
 static void test_attach_write_ctx(void)
 {
-	test__skip()
+	test__skip();
 }
 #endif
 
