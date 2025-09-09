@@ -463,7 +463,7 @@ static void remove_all_established(int family, int sock_type, const char *addr,
 	for (i = 0; i < established_socks_len - 1; i++) {
 		close_idx[i] = get_nth_socket(established_socks,
 					      established_socks_len, link,
-					      listen_socks_len + i);
+					      listen_socks_len + i + 1);
 		if (!ASSERT_GE(close_idx[i], 0, "close_idx"))
 			return;
 	}
