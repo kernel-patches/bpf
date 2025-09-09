@@ -723,30 +723,39 @@ static void *sock_map_seq_lookup_elem(struct sock_map_seq_info *info)
 	if (unlikely(info->index >= info->map->max_entries))
 		return NULL;
 
+	rcu_read_lock();
 	info->sk = __sock_map_lookup_elem(info->map, info->index);
+	if (info->sk)
+		sock_hold(info->sk);
+	rcu_read_unlock();
 
 	/* can't return sk directly, since that might be NULL */
 	return info;
 }
 
+static void sock_map_seq_put_elem(struct sock_map_seq_info *info)
+{
+	if (info->sk) {
+		sock_put(info->sk);
+		info->sk = NULL;
+	}
+}
+
 static void *sock_map_seq_start(struct seq_file *seq, loff_t *pos)
-	__acquires(rcu)
 {
 	struct sock_map_seq_info *info = seq->private;
 
 	if (*pos == 0)
 		++*pos;
 
-	/* pairs with sock_map_seq_stop */
-	rcu_read_lock();
 	return sock_map_seq_lookup_elem(info);
 }
 
 static void *sock_map_seq_next(struct seq_file *seq, void *v, loff_t *pos)
-	__must_hold(rcu)
 {
 	struct sock_map_seq_info *info = seq->private;
 
+	sock_map_seq_put_elem(info);
 	++*pos;
 	++info->index;
 
@@ -754,12 +763,12 @@ static void *sock_map_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 }
 
 static int sock_map_seq_show(struct seq_file *seq, void *v)
-	__must_hold(rcu)
 {
 	struct sock_map_seq_info *info = seq->private;
 	struct bpf_iter__sockmap ctx = {};
 	struct bpf_iter_meta meta;
 	struct bpf_prog *prog;
+	int ret;
 
 	meta.seq = seq;
 	prog = bpf_iter_get_info(&meta, !v);
@@ -773,17 +782,23 @@ static int sock_map_seq_show(struct seq_file *seq, void *v)
 		ctx.sk = info->sk;
 	}
 
-	return bpf_iter_run_prog(prog, &ctx);
+	if (ctx.sk)
+		lock_sock(ctx.sk);
+	ret = bpf_iter_run_prog(prog, &ctx);
+	if (ctx.sk)
+		release_sock(ctx.sk);
+
+	return ret;
 }
 
 static void sock_map_seq_stop(struct seq_file *seq, void *v)
-	__releases(rcu)
 {
+	struct sock_map_seq_info *info = seq->private;
+
 	if (!v)
 		(void)sock_map_seq_show(seq, NULL);
 
-	/* pairs with sock_map_seq_start */
-	rcu_read_unlock();
+	sock_map_seq_put_elem(info);
 }
 
 static const struct seq_operations sock_map_seq_ops = {
