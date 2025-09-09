@@ -124,6 +124,13 @@ enum bpf_cgroup_iter_order {
 union bpf_iter_link_info {
 	struct {
 		__u32	map_fd;
+		union {
+			/* Parameters for socket hash iterators. */
+			struct {
+				__aligned_u64	key_prefix;	/* key prefix filter */
+				__u32		key_prefix_len; /* key_prefix length */
+			} sock_hash;
+		};
 	} map;
 	struct {
 		enum bpf_cgroup_iter_order order;
