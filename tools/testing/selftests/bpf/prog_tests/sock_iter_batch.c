@@ -10,6 +10,7 @@
 #define TEST_CHILD_NS "sock_iter_batch_child_netns"
 
 static const int init_batch_size = 16;
+static const __u32 key_prefix = 1;
 static const int nr_soreuse = 4;
 
 struct iter_out {
@@ -253,6 +254,31 @@ error:
 	free_fds(established_socks, i);
 	free(server_poll_fds);
 	return NULL;
+}
+
+static int insert_sockets_hash(struct bpf_map *sock_map, __u32 first_id,
+			       int *sock_fds, int sock_fds_len)
+{
+	int map_fd = bpf_map__fd(sock_map);
+	struct {
+		__u32 bucket_key;
+		__u32 id;
+	} key = {
+		.bucket_key = key_prefix,
+	};
+	__s64 sfd;
+	int ret;
+	__u32 i;
+
+	for (i = 0; i < sock_fds_len; i++) {
+		sfd = sock_fds[i];
+		key.id = first_id + i;
+		ret = bpf_map_update_elem(map_fd, &key, &sfd, BPF_NOEXIST);
+		if (!ASSERT_OK(ret, "map_update"))
+			return -1;
+	}
+
+	return 0;
 }
 
 static void remove_seen(int family, int sock_type, const char *addr, __u16 port,
@@ -609,6 +635,7 @@ struct test_case {
 	int init_socks;
 	int max_socks;
 	int sock_type;
+	bool fill_map;
 	int family;
 };
 
@@ -659,6 +686,33 @@ static struct test_case resume_tests[] = {
 		 */
 		.family = AF_INET6,
 		.test = force_realloc,
+	},
+	{
+		.description = "sockhash: udp: resume after removing a seen socket",
+		.init_socks = nr_soreuse,
+		.max_socks = nr_soreuse,
+		.sock_type = SOCK_DGRAM,
+		.family = AF_INET6,
+		.test = remove_seen,
+		.fill_map = true,
+	},
+	{
+		.description = "sockhash: udp: resume after removing one unseen socket",
+		.init_socks = nr_soreuse,
+		.max_socks = nr_soreuse,
+		.sock_type = SOCK_DGRAM,
+		.family = AF_INET6,
+		.test = remove_unseen,
+		.fill_map = true,
+	},
+	{
+		.description = "sockhash: udp: resume after removing all unseen sockets",
+		.init_socks = nr_soreuse,
+		.max_socks = nr_soreuse,
+		.sock_type = SOCK_DGRAM,
+		.family = AF_INET6,
+		.test = remove_all,
+		.fill_map = true,
 	},
 	{
 		.description = "tcp: resume after removing a seen socket (listening)",
@@ -770,13 +824,49 @@ static struct test_case resume_tests[] = {
 		.family = AF_INET6,
 		.test = force_realloc_established,
 	},
+	{
+		.description = "sockhash: tcp: resume after removing a seen socket",
+		.connections = nr_soreuse,
+		.init_socks = nr_soreuse,
+		/* Room for connect()ed and accept()ed sockets */
+		.max_socks = nr_soreuse * 3,
+		.sock_type = SOCK_STREAM,
+		.family = AF_INET6,
+		.test = remove_seen_established,
+		.fill_map = true,
+	},
+	{
+		.description = "sockhash: tcp: resume after removing one unseen socket",
+		.connections = nr_soreuse,
+		.init_socks = nr_soreuse,
+		/* Room for connect()ed and accept()ed sockets */
+		.max_socks = nr_soreuse * 3,
+		.sock_type = SOCK_STREAM,
+		.family = AF_INET6,
+		.test = remove_unseen_established,
+		.fill_map = true,
+	},
+	{
+		.description = "sockhash: tcp: resume after removing all unseen sockets",
+		.connections = nr_soreuse,
+		.init_socks = nr_soreuse,
+		/* Room for connect()ed and accept()ed sockets */
+		.max_socks = nr_soreuse * 3,
+		.sock_type = SOCK_STREAM,
+		.family = AF_INET6,
+		.test = remove_all_established,
+		.fill_map = true,
+	},
 };
 
 static void do_resume_test(struct test_case *tc)
 {
+	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
+	union bpf_iter_link_info linfo = {};
 	struct sock_iter_batch *skel = NULL;
 	struct sock_count *counts = NULL;
 	static const __u16 port = 10001;
+	struct bpf_program *prog = NULL;
 	struct nstoken *nstoken = NULL;
 	struct bpf_link *link = NULL;
 	int *established_fds = NULL;
@@ -825,10 +915,33 @@ static void do_resume_test(struct test_case *tc)
 	if (!ASSERT_OK(err, "sock_iter_batch__load"))
 		goto done;
 
-	link = bpf_program__attach_iter(tc->sock_type == SOCK_STREAM ?
+	if (tc->fill_map) {
+		/* Established sockets must be inserted first so that all
+		 * listening sockets will be seen first during iteration.
+		 */
+		if (!ASSERT_OK(insert_sockets_hash(skel->maps.sockets, 0,
+						   established_fds,
+						   tc->connections*2),
+			       "insert_sockets_hash"))
+			goto done;
+		if (!ASSERT_OK(insert_sockets_hash(skel->maps.sockets,
+						   tc->connections*2, fds,
+						   tc->init_socks),
+			       "insert_sockets_hash"))
+			goto done;
+		linfo.map.map_fd = bpf_map__fd(skel->maps.sockets);
+		linfo.map.sock_hash.key_prefix = (__u64)(void *)&key_prefix;
+		linfo.map.sock_hash.key_prefix_len = sizeof(key_prefix);
+		opts.link_info = &linfo;
+		opts.link_info_len = sizeof(linfo);
+		prog = skel->progs.iter_sockmap;
+	} else {
+		prog = tc->sock_type == SOCK_STREAM ?
 					skel->progs.iter_tcp_soreuse :
-					skel->progs.iter_udp_soreuse,
-					NULL);
+					skel->progs.iter_udp_soreuse;
+	}
+
+	link = bpf_program__attach_iter(prog, &opts);
 	if (!ASSERT_OK_PTR(link, "bpf_program__attach_iter"))
 		goto done;
 
