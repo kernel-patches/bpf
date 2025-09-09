@@ -24,6 +24,20 @@ struct {
 	__type(value, __u64);
 } udp_conn_sockets SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_SOCKMAP);
+	__uint(max_entries, 5);
+	__type(key, __u32);
+	__type(value, __u64);
+} sock_map SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_SOCKHASH);
+	__uint(max_entries, 5);
+	__type(key, __u32);
+	__type(value, __u64);
+} sock_hash SEC(".maps");
+
 SEC("cgroup/connect6")
 int sock_connect(struct bpf_sock_addr *ctx)
 {
@@ -139,6 +153,55 @@ int iter_udp6_server(struct bpf_iter__udp *ctx)
 	if (srcp == serv_port)
 		bpf_sock_destroy((struct sock_common *)sk);
 
+	return 0;
+}
+
+SEC("iter/sockmap")
+int iter_sockmap_client(struct bpf_iter__sockmap *ctx)
+{
+	__u64 sock_cookie = 0, *val;
+	struct sock *sk = ctx->sk;
+	__u32 *key = ctx->key;
+	__u32 zero = 0;
+
+	if (!key || !sk)
+		return 0;
+
+	sock_cookie  = bpf_get_socket_cookie(sk);
+	val = bpf_map_lookup_elem(&udp_conn_sockets, &zero);
+	if (val && *val == sock_cookie)
+		goto destroy;
+	val = bpf_map_lookup_elem(&tcp_conn_sockets, &zero);
+	if (val && *val == sock_cookie)
+		goto destroy;
+	goto out;
+destroy:
+	bpf_sock_destroy((struct sock_common *)sk);
+out:
+	return 0;
+}
+
+SEC("iter/sockmap")
+int iter_sockmap_server(struct bpf_iter__sockmap *ctx)
+{
+	struct sock *sk = ctx->sk;
+	struct tcp6_sock *tcp_sk;
+	struct udp6_sock *udp_sk;
+	__u32 *key = ctx->key;
+
+	if (!key || !sk)
+		return 0;
+
+	tcp_sk = bpf_skc_to_tcp6_sock(sk);
+	if (tcp_sk && tcp_sk->tcp.inet_conn.icsk_inet.inet_sport == serv_port)
+		goto destroy;
+	udp_sk = bpf_skc_to_udp6_sock(sk);
+	if (udp_sk && udp_sk->udp.inet.inet_sport == serv_port)
+		goto destroy;
+	goto out;
+destroy:
+	bpf_sock_destroy((struct sock_common *)sk);
+out:
 	return 0;
 }
 
