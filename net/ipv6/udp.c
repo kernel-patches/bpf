@@ -1310,6 +1310,7 @@ static int udpv6_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	res = __ip6_datagram_connect(sk, uaddr, addr_len);
 	if (!res)
 		udp6_hash4(sk);
+	udp_call_bpf(sk, BPF_SOCK_OPS_UDP_CONNECTED_CB);
 	release_sock(sk);
 	return res;
 }
