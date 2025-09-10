@@ -676,6 +676,8 @@ static enum bpf_dynptr_type arg_to_dynptr_type(enum bpf_arg_type arg_type)
 		return BPF_DYNPTR_TYPE_XDP;
 	case DYNPTR_TYPE_SKB_META:
 		return BPF_DYNPTR_TYPE_SKB_META;
+	case DYNPTR_TYPE_FILE:
+		return BPF_DYNPTR_TYPE_FILE;
 	default:
 		return BPF_DYNPTR_TYPE_INVALID;
 	}
@@ -694,6 +696,8 @@ static enum bpf_type_flag get_dynptr_type_flag(enum bpf_dynptr_type type)
 		return DYNPTR_TYPE_XDP;
 	case BPF_DYNPTR_TYPE_SKB_META:
 		return DYNPTR_TYPE_SKB_META;
+	case BPF_DYNPTR_TYPE_FILE:
+		return DYNPTR_TYPE_FILE;
 	default:
 		return 0;
 	}
@@ -701,7 +705,7 @@ static enum bpf_type_flag get_dynptr_type_flag(enum bpf_dynptr_type type)
 
 static bool dynptr_type_refcounted(enum bpf_dynptr_type type)
 {
-	return type == BPF_DYNPTR_TYPE_RINGBUF;
+	return type == BPF_DYNPTR_TYPE_RINGBUF || type == BPF_DYNPTR_TYPE_FILE;
 }
 
 static void __mark_dynptr_reg(struct bpf_reg_state *reg,
@@ -2280,6 +2284,11 @@ static bool reg_is_dynptr_slice_pkt(const struct bpf_reg_state *reg)
 	return base_type(reg->type) == PTR_TO_MEM &&
 	       (reg->type &
 		(DYNPTR_TYPE_SKB | DYNPTR_TYPE_XDP | DYNPTR_TYPE_SKB_META));
+}
+
+static bool reg_is_dynptr_slice_file(const struct bpf_reg_state *reg)
+{
+	return base_type(reg->type) == PTR_TO_MEM && (reg->type & DYNPTR_TYPE_FILE);
 }
 
 /* Unmodified PTR_TO_PACKET[_META,_END] register from ctx access. */
@@ -10310,6 +10319,17 @@ static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
 	}));
 }
 
+static void clear_file_pointers(struct bpf_verifier_env *env, int dynptr_id)
+{
+	struct bpf_func_state *state;
+	struct bpf_reg_state *reg;
+
+	bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
+		if (reg_is_dynptr_slice_file(reg) && reg->dynptr_id == dynptr_id)
+			mark_reg_invalid(env, reg);
+	}));
+}
+
 enum {
 	AT_PKT_END = -1,
 	BEYOND_PKT_END = -2,
@@ -12258,6 +12278,8 @@ enum special_kfunc_type {
 	KF_bpf_res_spin_unlock,
 	KF_bpf_res_spin_lock_irqsave,
 	KF_bpf_res_spin_unlock_irqrestore,
+	KF_bpf_dynptr_from_file,
+	KF_bpf_dynptr_file_discard,
 	KF___bpf_trap,
 };
 
@@ -12326,6 +12348,8 @@ BTF_ID(func, bpf_res_spin_lock)
 BTF_ID(func, bpf_res_spin_unlock)
 BTF_ID(func, bpf_res_spin_lock_irqsave)
 BTF_ID(func, bpf_res_spin_unlock_irqrestore)
+BTF_ID(func, bpf_dynptr_from_file)
+BTF_ID(func, bpf_dynptr_file_discard)
 BTF_ID(func, __bpf_trap)
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
@@ -13264,6 +13288,10 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				dynptr_arg_type |= DYNPTR_TYPE_XDP;
 			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb_meta]) {
 				dynptr_arg_type |= DYNPTR_TYPE_SKB_META;
+			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_file]) {
+				dynptr_arg_type |= DYNPTR_TYPE_FILE;
+			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_file_discard]) {
+				dynptr_arg_type |= OBJ_RELEASE | DYNPTR_TYPE_FILE;
 			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_clone] &&
 				   (dynptr_arg_type & MEM_UNINIT)) {
 				enum bpf_dynptr_type parent_type = meta->initialized_dynptr.type;
@@ -13713,6 +13741,14 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_ca
 		   meta->func_id == special_kfunc_list[KF_bpf_dynptr_slice_rdwr]) {
 		enum bpf_type_flag type_flag = get_dynptr_type_flag(meta->initialized_dynptr.type);
 
+		if (!meta->initialized_dynptr.id) {
+			verifier_bug(env, "no dynptr id");
+			return -EFAULT;
+		}
+
+		if (type_flag & DYNPTR_TYPE_FILE) /* Invalidate existing file slices */
+			clear_file_pointers(env, meta->initialized_dynptr.id);
+
 		mark_reg_known_zero(env, regs, BPF_REG_0);
 
 		if (!meta->arg_constant.found) {
@@ -13735,10 +13771,6 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_ca
 			}
 		}
 
-		if (!meta->initialized_dynptr.id) {
-			verifier_bug(env, "no dynptr id");
-			return -EFAULT;
-		}
 		regs[BPF_REG_0].dynptr_id = meta->initialized_dynptr.id;
 
 		/* we don't need to set BPF_REG_0's ref obj id
@@ -13937,6 +13969,22 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			return err;
 		}
 
+		err = release_reference(env, release_ref_obj_id);
+		if (err) {
+			verbose(env, "kfunc %s#%d reference has not been acquired before\n",
+				func_name, meta.func_id);
+			return err;
+		}
+	}
+
+	if (meta.func_id == special_kfunc_list[KF_bpf_dynptr_file_discard]) {
+		release_ref_obj_id = meta.initialized_dynptr.ref_obj_id;;
+		err = ref_convert_owning_non_owning(env, release_ref_obj_id);
+		if (err) {
+			verbose(env, "kfunc %s#%d conversion of owning ref to non-owning failed\n",
+				func_name, meta.func_id);
+			return err;
+		}
 		err = release_reference(env, release_ref_obj_id);
 		if (err) {
 			verbose(env, "kfunc %s#%d reference has not been acquired before\n",
