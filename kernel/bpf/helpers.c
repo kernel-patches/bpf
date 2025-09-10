@@ -25,7 +25,7 @@
 #include <linux/kasan.h>
 #include <linux/bpf_verifier.h>
 #include <linux/uaccess.h>
-
+#include <linux/freader.h>
 #include "../../lib/kstrtox.h"
 
 /* If kernel subsystem is allowing eBPF programs to call this function,
@@ -1685,7 +1685,15 @@ static enum bpf_dynptr_type bpf_dynptr_get_type(const struct bpf_dynptr_kern *pt
 
 u32 __bpf_dynptr_size(const struct bpf_dynptr_kern *ptr)
 {
-	return ptr->size & DYNPTR_SIZE_MASK;
+	enum bpf_dynptr_type type;
+	struct freader *r;
+
+	type = bpf_dynptr_get_type(ptr);
+	if (type != BPF_DYNPTR_TYPE_FILE)
+		return ptr->size & DYNPTR_SIZE_MASK;
+
+	r = ptr->data;
+	return r->file_size;
 }
 
 static void bpf_dynptr_set_size(struct bpf_dynptr_kern *ptr, u32 new_size)
@@ -1749,6 +1757,18 @@ static const struct bpf_func_proto bpf_dynptr_from_mem_proto = {
 	.arg4_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_LOCAL | MEM_UNINIT | MEM_WRITE,
 };
 
+static int __bpf_file_load_bytes(struct freader *r, u32 offset, void *buf, u32 len)
+{
+	const void *res;
+
+	r->buf = buf;
+	r->buf_sz = len;
+	res = freader_fetch(r, offset, len);
+	if (res != buf)
+		memcpy(buf, res, len);
+	return 0;
+}
+
 static int __bpf_dynptr_read(void *dst, u32 len, const struct bpf_dynptr_kern *src,
 			     u32 offset, u64 flags)
 {
@@ -1780,6 +1800,8 @@ static int __bpf_dynptr_read(void *dst, u32 len, const struct bpf_dynptr_kern *s
 	case BPF_DYNPTR_TYPE_SKB_META:
 		memmove(dst, bpf_skb_meta_pointer(src->data, src->offset + offset), len);
 		return 0;
+	case BPF_DYNPTR_TYPE_FILE:
+		return __bpf_file_load_bytes(src->data, src->offset + offset, dst, len);
 	default:
 		WARN_ONCE(true, "bpf_dynptr_read: unknown dynptr type %d\n", type);
 		return -EFAULT;
@@ -2718,6 +2740,13 @@ __bpf_kfunc void *bpf_dynptr_slice(const struct bpf_dynptr *p, u32 offset,
 	}
 	case BPF_DYNPTR_TYPE_SKB_META:
 		return bpf_skb_meta_pointer(ptr->data, ptr->offset + offset);
+	case BPF_DYNPTR_TYPE_FILE: {
+		struct freader *r = (struct freader *)ptr->data;
+
+		r->buf = buffer__opt;
+		r->buf_sz = buffer__szk;
+		return (void *)freader_fetch(r, ptr->offset + offset, len);
+	}
 	default:
 		WARN_ONCE(true, "unknown dynptr type %d\n", type);
 		return NULL;
@@ -3741,11 +3770,40 @@ __bpf_kfunc int bpf_strstr(const char *s1__ign, const char *s2__ign)
 __bpf_kfunc int bpf_dynptr_from_file(struct file *file, void *buf, u32 buf__sz, u32 flags,
 				     struct bpf_dynptr *ptr__uninit)
 {
+	struct freader *r;
+	struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)ptr__uninit;
+
+	/* flags is currently unsupported */
+	if (flags) {
+		bpf_dynptr_set_null(ptr);
+		return -EINVAL;
+	}
+
+	r = bpf_mem_alloc(&bpf_global_ma, sizeof(struct freader));
+	if (!r) {
+		bpf_dynptr_set_null(ptr);
+		return -ENOMEM;
+	}
+	freader_init_from_file(r, buf, buf__sz, file, true);
+	bpf_dynptr_init(ptr, r, BPF_DYNPTR_TYPE_FILE, 0, r->file_size);
+	bpf_dynptr_set_rdonly(ptr);
 	return 0;
 }
 
 __bpf_kfunc int bpf_dynptr_file_discard(struct bpf_dynptr *dynptr)
 {
+	struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)dynptr;
+	enum bpf_dynptr_type type;
+	struct freader *r;
+
+	type = bpf_dynptr_get_type(ptr);
+	if (type != BPF_DYNPTR_TYPE_FILE)
+		return -EINVAL;
+
+	r = ptr->data;
+	freader_cleanup(r);
+	bpf_mem_free(&bpf_global_ma, ptr->data);
+
 	return 0;
 }
 
@@ -3774,6 +3832,8 @@ BTF_ID_FLAGS(func, bpf_rbtree_first, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_rbtree_root, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_rbtree_left, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_rbtree_right, KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_dynptr_from_file)
+BTF_ID_FLAGS(func, bpf_dynptr_file_discard)
 
 #ifdef CONFIG_CGROUPS
 BTF_ID_FLAGS(func, bpf_cgroup_acquire, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
