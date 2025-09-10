@@ -51,6 +51,8 @@ With the current sysfs implementation the kobject reference count is
 only modified directly by the function sysfs_schedule_callback().
 
 
+.. _sysfs-attributes:
+
 Attributes
 ~~~~~~~~~~
 

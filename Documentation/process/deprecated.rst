@@ -29,6 +29,8 @@ a header file, it isn't the full solution. Such interfaces must either
 be fully removed from the kernel, or added to this file to discourage
 others from using them in the future.
 
+.. _bug-macros-deprecated:
+
 BUG() and BUG_ON()
 ------------------
 Use WARN() and WARN_ON() instead, and handle the "impossible"
@@ -108,6 +110,8 @@ Instead, use the helpers::
 For more details, also see array3_size() and flex_array_size(),
 as well as the related check_mul_overflow(), check_add_overflow(),
 check_sub_overflow(), and check_shl_overflow() family of functions.
+
+.. _simple-strtol-family-deprecated:
 
 simple_strtol(), simple_strtoll(), simple_strtoul(), simple_strtoull()
 ----------------------------------------------------------------------

@@ -393,6 +393,8 @@ e-mail discussions.
 ``git send-email`` will do this for you automatically.
 
 
+.. _dco-signoff:
+
 Sign your work - the Developer's Certificate of Origin
 ------------------------------------------------------
 
@@ -405,6 +407,8 @@ The sign-off is a simple line at the end of the explanation for the
 patch, which certifies that you wrote it or otherwise have the right to
 pass it on as an open-source patch.  The rules are pretty simple: if you
 can certify the below:
+
+.. _dco-text:
 
 Developer's Certificate of Origin 1.1
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -13,6 +13,8 @@ The `Reproducible Builds project`_ has more information about this
 general topic.  This document covers the various reasons why building
 the kernel may be unreproducible, and how to avoid them.
 
+.. _kernel-timestamps:
+
 Timestamps
 ----------
 

@@ -15,6 +15,8 @@ and NOT read it.  Burn them, it's a great symbolic gesture.
 Anyway, here goes:
 
 
+.. _indentation-style:
+
 1) Indentation
 --------------
 
@@ -95,6 +97,8 @@ used for indentation, and the above example is deliberately broken.
 Get a decent editor and don't leave whitespace at the end of lines.
 
 
+.. _long-line-break:
+
 2) Breaking long lines and strings
 ----------------------------------
 
@@ -116,6 +120,8 @@ These same rules are applied to function headers with a long argument list.
 However, never break user-visible strings such as printk messages because
 that breaks the ability to grep for them.
 
+
+.. _braces-placement:
 
 3) Placing Braces and Spaces
 ----------------------------
@@ -231,6 +237,8 @@ Also, use braces when a loop contains more than a single simple statement:
 			do_something();
 	}
 
+.. _spaces-usage:
+
 3.1) Spaces
 ***********
 
@@ -302,6 +310,8 @@ optionally strip the trailing whitespace for you; however, if applying a series
 of patches, this may make later patches in the series fail by changing their
 context lines.
 
+
+.. _naming-convention:
 
 4) Naming
 ---------
@@ -594,6 +604,7 @@ fix for this is to split it up into two error labels ``err_free_bar:`` and
 
 Ideally you should simulate errors to test all exit paths.
 
+.. _comments-style:
 
 8) Commenting
 -------------
@@ -792,6 +803,8 @@ Remember: if another thread can find your data structure, and you don't
 have a reference count on it, you almost certainly have a bug.
 
 
+.. _macros-style:
+
 12) Macros, Enums and RTL
 -------------------------
 
@@ -931,6 +944,8 @@ when a debug message should be unconditionally printed, such as if it is
 already inside a debug-related #ifdef section, printk(KERN_DEBUG ...) can be
 used.
 
+
+.. _memory-allocation-style:
 
 14) Allocating memory
 ---------------------

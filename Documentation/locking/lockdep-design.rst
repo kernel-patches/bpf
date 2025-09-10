@@ -231,6 +231,8 @@ Note: When changing code to use the _nested() primitives, be careful and
 check really thoroughly that the hierarchy is correctly mapped; otherwise
 you can get false positives or false negatives.
 
+.. _lockdep-annotations:
+
 Annotations
 -----------
 
