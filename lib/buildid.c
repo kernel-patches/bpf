@@ -6,154 +6,11 @@
 #include <linux/kernel.h>
 #include <linux/pagemap.h>
 #include <linux/secretmem.h>
+#include <linux/freader.h>
 
 #define BUILD_ID 3
 
 #define MAX_PHDR_CNT 256
-
-struct freader {
-	void *buf;
-	u32 buf_sz;
-	int err;
-	union {
-		struct {
-			struct file *file;
-			struct folio *folio;
-			void *addr;
-			loff_t folio_off;
-			bool may_fault;
-		};
-		struct {
-			const char *data;
-			u64 data_sz;
-		};
-	};
-};
-
-static void freader_init_from_file(struct freader *r, void *buf, u32 buf_sz,
-				   struct file *file, bool may_fault)
-{
-	memset(r, 0, sizeof(*r));
-	r->buf = buf;
-	r->buf_sz = buf_sz;
-	r->file = file;
-	r->may_fault = may_fault;
-}
-
-static void freader_init_from_mem(struct freader *r, const char *data, u64 data_sz)
-{
-	memset(r, 0, sizeof(*r));
-	r->data = data;
-	r->data_sz = data_sz;
-}
-
-static void freader_put_folio(struct freader *r)
-{
-	if (!r->folio)
-		return;
-	kunmap_local(r->addr);
-	folio_put(r->folio);
-	r->folio = NULL;
-}
-
-static int freader_get_folio(struct freader *r, loff_t file_off)
-{
-	/* check if we can just reuse current folio */
-	if (r->folio && file_off >= r->folio_off &&
-	    file_off < r->folio_off + folio_size(r->folio))
-		return 0;
-
-	freader_put_folio(r);
-
-	/* reject secretmem folios created with memfd_secret() */
-	if (secretmem_mapping(r->file->f_mapping))
-		return -EFAULT;
-
-	r->folio = filemap_get_folio(r->file->f_mapping, file_off >> PAGE_SHIFT);
-
-	/* if sleeping is allowed, wait for the page, if necessary */
-	if (r->may_fault && (IS_ERR(r->folio) || !folio_test_uptodate(r->folio))) {
-		filemap_invalidate_lock_shared(r->file->f_mapping);
-		r->folio = read_cache_folio(r->file->f_mapping, file_off >> PAGE_SHIFT,
-					    NULL, r->file);
-		filemap_invalidate_unlock_shared(r->file->f_mapping);
-	}
-
-	if (IS_ERR(r->folio) || !folio_test_uptodate(r->folio)) {
-		if (!IS_ERR(r->folio))
-			folio_put(r->folio);
-		r->folio = NULL;
-		return -EFAULT;
-	}
-
-	r->folio_off = folio_pos(r->folio);
-	r->addr = kmap_local_folio(r->folio, 0);
-
-	return 0;
-}
-
-static const void *freader_fetch(struct freader *r, loff_t file_off, size_t sz)
-{
-	size_t folio_sz;
-
-	/* provided internal temporary buffer should be sized correctly */
-	if (WARN_ON(r->buf && sz > r->buf_sz)) {
-		r->err = -E2BIG;
-		return NULL;
-	}
-
-	if (unlikely(file_off + sz < file_off)) {
-		r->err = -EOVERFLOW;
-		return NULL;
-	}
-
-	/* working with memory buffer is much more straightforward */
-	if (!r->buf) {
-		if (file_off + sz > r->data_sz) {
-			r->err = -ERANGE;
-			return NULL;
-		}
-		return r->data + file_off;
-	}
-
-	/* fetch or reuse folio for given file offset */
-	r->err = freader_get_folio(r, file_off);
-	if (r->err)
-		return NULL;
-
-	/* if requested data is crossing folio boundaries, we have to copy
-	 * everything into our local buffer to keep a simple linear memory
-	 * access interface
-	 */
-	folio_sz = folio_size(r->folio);
-	if (file_off + sz > r->folio_off + folio_sz) {
-		int part_sz = r->folio_off + folio_sz - file_off;
-
-		/* copy the part that resides in the current folio */
-		memcpy(r->buf, r->addr + (file_off - r->folio_off), part_sz);
-
-		/* fetch next folio */
-		r->err = freader_get_folio(r, r->folio_off + folio_sz);
-		if (r->err)
-			return NULL;
-
-		/* copy the rest of requested data */
-		memcpy(r->buf + part_sz, r->addr, sz - part_sz);
-
-		return r->buf;
-	}
-
-	/* if data fits in a single folio, just return direct pointer */
-	return r->addr + (file_off - r->folio_off);
-}
-
-static void freader_cleanup(struct freader *r)
-{
-	if (!r->buf)
-		return; /* non-file-backed mode */
-
-	freader_put_folio(r);
-}
 
 /*
  * Parse build id from the note segment. This logic can be shared between
@@ -175,7 +32,7 @@ static int parse_build_id(struct freader *r, unsigned char *build_id, __u32 *siz
 	while (note_end - note_off > sizeof(Elf32_Nhdr) + note_name_sz) {
 		nhdr = freader_fetch(r, note_off, sizeof(Elf32_Nhdr) + note_name_sz);
 		if (!nhdr)
-			return r->err;
+			return freader_err(r);
 
 		name_sz = READ_ONCE(nhdr->n_namesz);
 		desc_sz = READ_ONCE(nhdr->n_descsz);
@@ -195,7 +52,7 @@ static int parse_build_id(struct freader *r, unsigned char *build_id, __u32 *siz
 			/* freader_fetch() will invalidate nhdr pointer */
 			data = freader_fetch(r, build_id_off, desc_sz);
 			if (!data)
-				return r->err;
+				return freader_err(r);
 
 			memcpy(build_id, data, desc_sz);
 			memset(build_id + desc_sz, 0, BUILD_ID_SIZE_MAX - desc_sz);
@@ -219,7 +76,7 @@ static int get_build_id_32(struct freader *r, unsigned char *build_id, __u32 *si
 
 	ehdr = freader_fetch(r, 0, sizeof(Elf32_Ehdr));
 	if (!ehdr)
-		return r->err;
+		return freader_err(r);
 
 	/* subsequent freader_fetch() calls invalidate pointers, so remember locally */
 	phnum = READ_ONCE(ehdr->e_phnum);
@@ -236,7 +93,7 @@ static int get_build_id_32(struct freader *r, unsigned char *build_id, __u32 *si
 	for (i = 0; i < phnum; ++i) {
 		phdr = freader_fetch(r, phoff + i * sizeof(Elf32_Phdr), sizeof(Elf32_Phdr));
 		if (!phdr)
-			return r->err;
+			return freader_err(r);
 
 		if (phdr->p_type == PT_NOTE &&
 		    !parse_build_id(r, build_id, size, READ_ONCE(phdr->p_offset),
@@ -256,7 +113,7 @@ static int get_build_id_64(struct freader *r, unsigned char *build_id, __u32 *si
 
 	ehdr = freader_fetch(r, 0, sizeof(Elf64_Ehdr));
 	if (!ehdr)
-		return r->err;
+		return freader_err(r);
 
 	/* subsequent freader_fetch() calls invalidate pointers, so remember locally */
 	phnum = READ_ONCE(ehdr->e_phnum);
@@ -273,7 +130,7 @@ static int get_build_id_64(struct freader *r, unsigned char *build_id, __u32 *si
 	for (i = 0; i < phnum; ++i) {
 		phdr = freader_fetch(r, phoff + i * sizeof(Elf64_Phdr), sizeof(Elf64_Phdr));
 		if (!phdr)
-			return r->err;
+			return freader_err(r);
 
 		if (phdr->p_type == PT_NOTE &&
 		    !parse_build_id(r, build_id, size, READ_ONCE(phdr->p_offset),
@@ -304,7 +161,7 @@ static int __build_id_parse(struct vm_area_struct *vma, unsigned char *build_id,
 	/* fetch first 18 bytes of ELF header for checks */
 	ehdr = freader_fetch(&r, 0, offsetofend(Elf32_Ehdr, e_type));
 	if (!ehdr) {
-		ret = r.err;
+		ret = freader_err(&r);
 		goto out;
 	}
 
