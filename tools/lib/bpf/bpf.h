@@ -35,6 +35,7 @@
 extern "C" {
 #endif
 
+LIBBPF_API int probe_sys_bpf_extended(int token_fd);
 LIBBPF_API int libbpf_set_memlock_rlim(size_t memlock_bytes);
 
 struct bpf_map_create_opts {
