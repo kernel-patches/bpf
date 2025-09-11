@@ -24588,7 +24588,8 @@ exit:
 	return err;
 }
 
-int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u32 uattr_size)
+int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u32 uattr_size,
+	      struct bpf_common_attr *common_attrs)
 {
 	u64 start_time = ktime_get_ns();
 	struct bpf_verifier_env *env;
@@ -24637,9 +24638,8 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	/* user could have requested verbose verifier output
 	 * and supplied buffer to store the verification trace
 	 */
-	ret = bpf_vlog_init(&env->log, attr->log_level,
-			    (char __user *) (unsigned long) attr->log_buf,
-			    attr->log_size);
+	ret = bpf_vlog_init(&env->log, attr->log_level, u64_to_user_ptr(attr->log_buf),
+			    attr->log_size, common_attrs);
 	if (ret)
 		goto err_unlock;
 
