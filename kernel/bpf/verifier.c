@@ -5,6 +5,7 @@
  */
 #include <uapi/linux/btf.h>
 #include <linux/bpf-cgroup.h>
+#include "linux/debugfs.h"
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/slab.h>
@@ -20147,6 +20148,7 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 
 		spi = i / BPF_REG_SIZE;
 
+		env->states_equal_log.spi = spi;
 		if (exact == EXACT &&
 		    (i >= cur->allocated_stack ||
 		     old->stack[spi].slot_type[i % BPF_REG_SIZE] !=
@@ -20348,14 +20350,17 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 		/* Not equal, if cur has less alive regs than old. */
 		if (i >= cur->regs_cnt)
 			return false;
+		env->states_equal_log.reg = i;
 		if (!regsafe(env, &old->regs[i], &cur->regs[i],
 			     &env->idmap_scratch, exact))
 			return false;
 	}
 
+	env->states_equal_log.reg = -1;
 	if (!stacksafe(env, old, cur, &env->idmap_scratch, exact))
 		return false;
 
+	env->states_equal_log.spi = -1;
 	return true;
 }
 
@@ -20374,6 +20379,10 @@ static bool states_equal(struct bpf_verifier_env *env,
 {
 	u32 insn_idx;
 	int i;
+
+	env->states_equal_log.spi = -1;
+	env->states_equal_log.reg = -1;
+	env->states_equal_log.frame = -1;
 
 	if (old->curframe != cur->curframe)
 		return false;
@@ -20396,6 +20405,7 @@ static bool states_equal(struct bpf_verifier_env *env,
 	 * and all frame states need to be equivalent
 	 */
 	for (i = 0; i <= old->curframe; i++) {
+		env->states_equal_log.frame = i;
 		insn_idx = frame_insn_idx(old, i);
 		if (old->frame[i]->callsite != cur->frame[i]->callsite)
 			return false;
@@ -20625,6 +20635,37 @@ static bool iter_active_depths_differ(struct bpf_verifier_state *old, struct bpf
 	return false;
 }
 
+static void print_full_verifier_state(struct bpf_verifier_env *env,
+				      const char *pfx,
+				      struct bpf_verifier_state *st)
+{
+	int fr;
+
+	for (fr = 0; fr <= st->curframe; fr++) {
+		verbose(env, "%s", pfx);
+		print_verifier_state(env, st, fr, true);
+	}
+}
+
+static u32 debugfs_interesting_insn;
+
+static __init int init_bpf_debugfs(void)
+{
+	struct dentry *bpf_dir;
+
+	bpf_dir = debugfs_create_dir("bpf", NULL);
+	debugfs_create_u32("interesting_insn", 0644, bpf_dir, &debugfs_interesting_insn);
+	return 0;
+}
+
+late_initcall(init_bpf_debugfs);
+
+static bool is_interesting_state(struct bpf_verifier_env *env)
+{
+	return debugfs_interesting_insn != 0 &&
+	       env->insn_idx == debugfs_interesting_insn;
+}
+
 static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 {
 	struct bpf_verifier_state_list *new_sl;
@@ -20792,6 +20833,14 @@ skip_inf_loop_check:
 hit:
 			sl->hit_cnt++;
 
+			if (env->log.level & BPF_LOG_LEVEL2) {
+				verbose(env, "checkpoint hit: %d\n", env->insn_idx);
+				if (is_interesting_state(env)) {
+					print_full_verifier_state(env, "  cur: ", cur);
+					print_full_verifier_state(env, "  old: ", &sl->state);
+				}
+			}
+
 			/* if previous state reached the exit with precision and
 			 * current state is equivalent to it (except precision marks)
 			 * the precision needs to be propagated back in
@@ -20894,6 +20943,17 @@ hit:
 			return 1;
 		}
 miss:
+		if (env->log.level & BPF_LOG_LEVEL2) {
+			verbose(env, "checkpoint miss: %d (f%d,r%d,s%d)\n",
+				env->insn_idx,
+				env->states_equal_log.frame,
+				env->states_equal_log.reg,
+				env->states_equal_log.spi >= 0 ? (env->states_equal_log.spi + 1) * -8 : -1);
+			if (is_interesting_state(env)) {
+				print_full_verifier_state(env, "  cur: ", cur);
+				print_full_verifier_state(env, "  old: ", &sl->state);
+			}
+		}
 		/* when new state is not going to be added do not increase miss count.
 		 * Otherwise several loop iterations will remove the state
 		 * recorded earlier. The goal of these heuristics is to have
