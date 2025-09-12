@@ -54,6 +54,9 @@ int stream_cond_break(void *ctx)
 }
 
 SEC("syscall")
+__arch_x86_64
+__arch_arm64
+__arch_s390x
 __success __retval(0)
 __stderr("ERROR: AA or ABBA deadlock detected for bpf_res_spin_lock")
 __stderr("{{Attempted lock   = (0x[0-9a-fA-F]+)\n"
