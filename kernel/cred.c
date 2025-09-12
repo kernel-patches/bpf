@@ -38,6 +38,10 @@ static struct kmem_cache *cred_jar;
 /* init to 2 - one for init_task, one to ensure it is never freed */
 static struct group_info init_groups = { .usage = REFCOUNT_INIT(2) };
 
+#ifdef CONFIG_BPF_LSM
+#include <linux/bpf_lsm.h>
+#endif
+
 /*
  * The initial credentials for the initial task
  */
@@ -76,6 +80,9 @@ static void put_cred_rcu(struct rcu_head *rcu)
 		      cred, atomic_long_read(&cred->usage));
 
 	security_cred_free(cred);
+#ifdef CONFIG_BPF_LSM
+	bpf_cred_storage_free(cred);
+#endif
 	key_put(cred->session_keyring);
 	key_put(cred->process_keyring);
 	key_put(cred->thread_keyring);

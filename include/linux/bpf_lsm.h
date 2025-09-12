@@ -40,9 +40,26 @@ static inline struct bpf_storage_blob *bpf_inode(
 	return inode->i_security + bpf_lsm_blob_sizes.lbs_inode;
 }
 
+static inline struct bpf_storage_blob *bpf_cred(
+	const struct cred *cred)
+{
+	if (unlikely(!cred->security))
+		return NULL;
+
+	return cred->security + bpf_lsm_blob_sizes.lbs_cred;
+}
+
 extern const struct bpf_func_proto bpf_inode_storage_get_proto;
 extern const struct bpf_func_proto bpf_inode_storage_delete_proto;
 void bpf_inode_storage_free(struct inode *inode);
+
+void bpf_cred_storage_free(struct cred *cred);
+struct bpf_local_storage_data *bpf_cred_storage_get(struct bpf_map *map,
+						    struct cred *cred,
+						    void *init,
+						    int init__sz,
+						    u64 flags);
+int bpf_cred_storage_delete(struct bpf_map *map, struct cred *cred);
 
 void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog, bpf_func_t *bpf_func);
 
@@ -79,6 +96,24 @@ static inline struct bpf_storage_blob *bpf_inode(
 
 static inline void bpf_inode_storage_free(struct inode *inode)
 {
+}
+
+static inline void bpf_cred_storage_free(struct cred *cred)
+{
+}
+
+static inline struct bpf_local_storage_data *bpf_cred_storage_get(struct bpf_map *map,
+								  struct cred *cred,
+								  void *init,
+								  int init__sz,
+								  u64 flags)
+{
+	return NULL;
+}
+
+static inline int bpf_cred_storage_delete(struct bpf_map *map, struct cred *cred)
+{
+	return -EOPNOTSUPP;
 }
 
 static inline void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog,
