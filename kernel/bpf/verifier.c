@@ -16318,6 +16318,19 @@ static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state
 	}
 }
 
+/* Ensure that a register's min/max bounds are sane.
+ * If any of the unsigned/signed bounds are inconsistent, mark the
+ * register as unbounded to prevent verifier invariant violations.
+ */
+static void __maybe_normalize_reg(struct bpf_reg_state *reg)
+{
+	if (reg->umin_value > reg->umax_value ||
+		reg->smin_value > reg->smax_value ||
+		reg->u32_min_value > reg->u32_max_value ||
+		reg->s32_min_value > reg->s32_max_value)
+			__mark_reg_unbounded(reg);
+}
+
 /* Adjusts the register min/max values in the case that the dst_reg and
  * src_reg are both SCALAR_VALUE registers (or we are simply doing a BPF_K
  * check, in which case we have a fake SCALAR_VALUE representing insn->imm).
@@ -16344,11 +16357,15 @@ static int reg_set_min_max(struct bpf_verifier_env *env,
 	regs_refine_cond_op(false_reg1, false_reg2, rev_opcode(opcode), is_jmp32);
 	reg_bounds_sync(false_reg1);
 	reg_bounds_sync(false_reg2);
+	__maybe_normalize_reg(false_reg1);
+	__maybe_normalize_reg(false_reg2);
 
 	/* jump (TRUE) branch */
 	regs_refine_cond_op(true_reg1, true_reg2, opcode, is_jmp32);
 	reg_bounds_sync(true_reg1);
 	reg_bounds_sync(true_reg2);
+	__maybe_normalize_reg(true_reg1);
+	__maybe_normalize_reg(true_reg2);
 
 	err = reg_bounds_sanity_check(env, true_reg1, "true_reg1");
 	err = err ?: reg_bounds_sanity_check(env, true_reg2, "true_reg2");
