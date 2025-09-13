@@ -674,6 +674,8 @@ static enum bpf_dynptr_type arg_to_dynptr_type(enum bpf_arg_type arg_type)
 		return BPF_DYNPTR_TYPE_SKB;
 	case DYNPTR_TYPE_XDP:
 		return BPF_DYNPTR_TYPE_XDP;
+	case DYNPTR_TYPE_SKB_META:
+		return BPF_DYNPTR_TYPE_SKB_META;
 	default:
 		return BPF_DYNPTR_TYPE_INVALID;
 	}
@@ -690,6 +692,8 @@ static enum bpf_type_flag get_dynptr_type_flag(enum bpf_dynptr_type type)
 		return DYNPTR_TYPE_SKB;
 	case BPF_DYNPTR_TYPE_XDP:
 		return DYNPTR_TYPE_XDP;
+	case BPF_DYNPTR_TYPE_SKB_META:
+		return DYNPTR_TYPE_SKB_META;
 	default:
 		return 0;
 	}
@@ -2017,7 +2021,7 @@ static void free_backedges(struct bpf_scc_visit *visit)
 	for (backedge = visit->backedges; backedge; backedge = next) {
 		free_verifier_state(&backedge->state, false);
 		next = backedge->next;
-		kvfree(backedge);
+		kfree(backedge);
 	}
 	visit->backedges = NULL;
 }
@@ -2274,7 +2278,8 @@ static bool reg_is_pkt_pointer_any(const struct bpf_reg_state *reg)
 static bool reg_is_dynptr_slice_pkt(const struct bpf_reg_state *reg)
 {
 	return base_type(reg->type) == PTR_TO_MEM &&
-		(reg->type & DYNPTR_TYPE_SKB || reg->type & DYNPTR_TYPE_XDP);
+	       (reg->type &
+		(DYNPTR_TYPE_SKB | DYNPTR_TYPE_XDP | DYNPTR_TYPE_SKB_META));
 }
 
 /* Unmodified PTR_TO_PACKET[_META,_END] register from ctx access. */
@@ -8547,6 +8552,10 @@ static int process_timer_func(struct bpf_verifier_env *env, int regno,
 		verifier_bug(env, "Two map pointers in a timer helper");
 		return -EFAULT;
 	}
+	if (IS_ENABLED(CONFIG_PREEMPT_RT)) {
+		verbose(env, "bpf_timer cannot be used for PREEMPT_RT.\n");
+		return -EOPNOTSUPP;
+	}
 	meta->map_uid = reg->map_uid;
 	meta->map_ptr = map;
 	return 0;
@@ -11354,7 +11363,7 @@ static int get_helper_proto(struct bpf_verifier_env *env, int func_id,
 		return -EINVAL;
 
 	*ptr = env->ops->get_func_proto(func_id, env->prog);
-	return *ptr ? 0 : -EINVAL;
+	return *ptr && (*ptr)->func ? 0 : -EINVAL;
 }
 
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
@@ -11641,7 +11650,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		if (dynptr_type == BPF_DYNPTR_TYPE_INVALID)
 			return -EFAULT;
 
-		if (dynptr_type == BPF_DYNPTR_TYPE_SKB)
+		if (dynptr_type == BPF_DYNPTR_TYPE_SKB ||
+		    dynptr_type == BPF_DYNPTR_TYPE_SKB_META)
 			/* this will trigger clear_all_pkt_pointers(), which will
 			 * invalidate all dynptr slices associated with the skb
 			 */
@@ -12228,6 +12238,7 @@ enum special_kfunc_type {
 	KF_bpf_rbtree_right,
 	KF_bpf_dynptr_from_skb,
 	KF_bpf_dynptr_from_xdp,
+	KF_bpf_dynptr_from_skb_meta,
 	KF_bpf_dynptr_slice,
 	KF_bpf_dynptr_slice_rdwr,
 	KF_bpf_dynptr_clone,
@@ -12277,7 +12288,9 @@ BTF_ID(func, bpf_rbtree_right)
 #ifdef CONFIG_NET
 BTF_ID(func, bpf_dynptr_from_skb)
 BTF_ID(func, bpf_dynptr_from_xdp)
+BTF_ID(func, bpf_dynptr_from_skb_meta)
 #else
+BTF_ID_UNUSED
 BTF_ID_UNUSED
 BTF_ID_UNUSED
 #endif
@@ -13253,6 +13266,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				dynptr_arg_type |= DYNPTR_TYPE_SKB;
 			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_xdp]) {
 				dynptr_arg_type |= DYNPTR_TYPE_XDP;
+			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb_meta]) {
+				dynptr_arg_type |= DYNPTR_TYPE_SKB_META;
 			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_clone] &&
 				   (dynptr_arg_type & MEM_UNINIT)) {
 				enum bpf_dynptr_type parent_type = meta->initialized_dynptr.type;
@@ -15886,6 +15901,8 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 		 */
 		if (tnum_is_const(t1) && tnum_is_const(t2))
 			return t1.value == t2.value;
+		if (!tnum_overlap(t1, t2))
+			return 0;
 		/* non-overlapping ranges */
 		if (umin1 > umax2 || umax1 < umin2)
 			return 0;
@@ -15910,6 +15927,8 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 		 */
 		if (tnum_is_const(t1) && tnum_is_const(t2))
 			return t1.value != t2.value;
+		if (!tnum_overlap(t1, t2))
+			return 1;
 		/* non-overlapping ranges */
 		if (umin1 > umax2 || umax1 < umin2)
 			return 1;
@@ -19636,7 +19655,7 @@ miss:
 	err = maybe_enter_scc(env, new);
 	if (err) {
 		free_verifier_state(new, false);
-		kvfree(new_sl);
+		kfree(new_sl);
 		return err;
 	}
 
@@ -20193,8 +20212,11 @@ static int __add_used_btf(struct bpf_verifier_env *env, struct btf *btf)
 		if (env->used_btfs[i].btf == btf)
 			return i;
 
-	if (env->used_btf_cnt >= MAX_USED_BTFS)
+	if (env->used_btf_cnt >= MAX_USED_BTFS) {
+		verbose(env, "The total number of btfs per program has reached the limit of %u\n",
+			MAX_USED_BTFS);
 		return -E2BIG;
+	}
 
 	btf_get(btf);
 
@@ -21579,6 +21601,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->func_info_cnt = prog->aux->func_info_cnt;
 		func[i]->aux->poke_tab = prog->aux->poke_tab;
 		func[i]->aux->size_poke_tab = prog->aux->size_poke_tab;
+		func[i]->aux->main_prog_aux = prog->aux;
 
 		for (j = 0; j < prog->aux->size_poke_tab; j++) {
 			struct bpf_jit_poke_descriptor *poke;
