@@ -801,4 +801,57 @@ l0_%=:	/* exit(0) */					\
 	: __clobber_all);
 }
 
+#define access_test_non_linear(name, desc, retval, linear_sz)				\
+	SEC("tc")									\
+	__description("direct packet access: " #name " (non-linear, " desc ")")		\
+	__success __retval(retval)							\
+	__linear_size(linear_sz)							\
+	__naked void access_##name(void)						\
+	{										\
+		asm volatile ("								\
+		r2 = *(u32*)(r1 + %[skb_data]);						\
+		r3 = *(u32*)(r1 + %[skb_data_end]);					\
+		r0 = r2;								\
+		r0 += 22;								\
+		if r0 > r3 goto l0_%=;							\
+		r0 = *(u8*)(r0 - 1);							\
+		exit;									\
+	l0_%=:	r0 = 1;									\
+		exit;									\
+	"	:									\
+		: __imm_const(skb_data, offsetof(struct __sk_buff, data)),		\
+		  __imm_const(skb_data_end, offsetof(struct __sk_buff, data_end))	\
+		: __clobber_all);							\
+	}
+
+access_test_non_linear(test31, "too short", 1, ETH_HLEN);
+access_test_non_linear(test32, "too short", 1, 1);
+access_test_non_linear(test33, "long enough", 0, 22);
+
+SEC("tc")
+__description("direct packet access: test34 (non-linear, linearized)")
+__success __retval(0)
+__linear_size(ETH_HLEN)
+__naked void access_test34_non_linear_linearized(void)
+{
+	asm volatile ("					\
+	r6 = r1;					\
+	r2 = 22;					\
+	call %[bpf_skb_pull_data];			\
+	r2 = *(u32*)(r6 + %[skb_data]);			\
+	r3 = *(u32*)(r6 + %[skb_data_end]);		\
+	r0 = r2;					\
+	r0 += 22;					\
+	if r0 > r3 goto l0_%=;				\
+	r0 = *(u8*)(r0 - 1);				\
+	exit;						\
+l0_%=:	r0 = 1;						\
+	exit;						\
+"	:
+	: __imm(bpf_skb_pull_data),
+	  __imm_const(skb_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(skb_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
