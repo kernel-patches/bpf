@@ -346,10 +346,19 @@ arguments are at least RCU protected pointers. This may transitively imply that
 RCU protection is ensured, but it does not work in cases of kfuncs which require
 RCU protection but do not take RCU protected arguments.
 
+2.4.9 KF_RET_RCU flag
+---------------------
+
+The KF_RET_RCU flag is used for kfuncs which return pointers to RCU protected
+objects. Since this only works when the invocation of the kfunc is made in an
+active RCU critical section, the usage of this flag implies ``KF_RCU_PROTECTED``
+flag automatically. This flag may be combined with other return value modifiers,
+such as ``KF_RET_NULL``.
+
 .. _KF_deprecated_flag:
 
-2.4.9 KF_DEPRECATED flag
-------------------------
+2.4.10 KF_DEPRECATED flag
+-------------------------
 
 The KF_DEPRECATED flag is used for kfuncs which are scheduled to be
 changed or removed in a subsequent kernel release. A kfunc that is
