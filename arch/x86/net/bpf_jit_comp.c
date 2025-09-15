@@ -3164,7 +3164,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 
 	/* extra registers for struct arguments */
 	for (i = 0; i < m->nr_args; i++) {
-		if (m->arg_flags[i] & BTF_FMODEL_STRUCT_ARG)
+		if (m->arg_flags[i] & (BTF_FMODEL_STRUCT_ARG | BTF_FMODEL_UNION_ARG))
 			nr_regs += (m->arg_size[i] + 7) / 8 - 1;
 	}
 
