@@ -123,3 +123,26 @@ out:
 	bpf_iter_num_destroy(&num_it);
 	return 0;
 }
+
+SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
+__failure __msg("kernel func bpf_kfunc_ret_rcu_test requires RCU critical section protection")
+int iter_ret_rcu_test_protected(const void *ctx)
+{
+	struct task_struct *p;
+
+	p = bpf_kfunc_ret_rcu_test();
+	return p->pid;
+}
+
+SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
+__failure __msg("R1 type=rcu_ptr_or_null_ expected=")
+int iter_ret_rcu_test_type(const void *ctx)
+{
+	struct task_struct *p;
+
+	bpf_rcu_read_lock();
+	p = bpf_kfunc_ret_rcu_test();
+	bpf_this_cpu_ptr(p);
+	bpf_rcu_read_unlock();
+	return 0;
+}
