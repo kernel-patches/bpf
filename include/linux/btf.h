@@ -404,6 +404,11 @@ static inline bool btf_type_is_struct(const struct btf_type *t)
 	return kind == BTF_KIND_STRUCT || kind == BTF_KIND_UNION;
 }
 
+static inline bool __btf_type_is_union(const struct btf_type *t)
+{
+	return BTF_INFO_KIND(t->info) == BTF_KIND_UNION;
+}
+
 static inline bool __btf_type_is_struct(const struct btf_type *t)
 {
 	return BTF_INFO_KIND(t->info) == BTF_KIND_STRUCT;
