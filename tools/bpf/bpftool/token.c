@@ -28,6 +28,12 @@ static bool has_delegate_options(const char *mnt_ops)
 	       strstr(mnt_ops, "delegate_attachs");
 }
 
+static void free_delegate_value(char *value)
+{
+	if (value)
+		free(value);
+}
+
 static char *get_delegate_value(const char *opts, const char *key)
 {
 	char *token, *rest, *ret = NULL;
@@ -40,7 +46,7 @@ static char *get_delegate_value(const char *opts, const char *key)
 			token = strtok_r(NULL, ",", &rest)) {
 		if (strncmp(token, key, strlen(key)) == 0 &&
 		    token[strlen(key)] == '=') {
-			ret = token + strlen(key) + 1;
+			ret = strdup(token + strlen(key) + 1);
 			break;
 		}
 	}
@@ -73,28 +79,29 @@ static void print_items_per_line(const char *input, int items_per_line)
 	free(strs);
 }
 
+#define PRINT_DELEGATE_OPT(opt_name) do {				\
+	char *value = get_delegate_value(mntent->mnt_opts, opt_name);	\
+	print_items_per_line(value, ITEMS_PER_LINE);			\
+	free_delegate_value(value);					\
+} while (0)
+
 #define ITEMS_PER_LINE 4
 static void show_token_info_plain(struct mntent *mntent)
 {
-	char *value;
 
 	printf("token_info  %s", mntent->mnt_dir);
 
 	printf("\n\tallowed_cmds:");
-	value = get_delegate_value(mntent->mnt_opts, "delegate_cmds");
-	print_items_per_line(value, ITEMS_PER_LINE);
+	PRINT_DELEGATE_OPT("delegate_cmds");
 
 	printf("\n\tallowed_maps:");
-	value = get_delegate_value(mntent->mnt_opts, "delegate_maps");
-	print_items_per_line(value, ITEMS_PER_LINE);
+	PRINT_DELEGATE_OPT("delegate_maps");
 
 	printf("\n\tallowed_progs:");
-	value = get_delegate_value(mntent->mnt_opts, "delegate_progs");
-	print_items_per_line(value, ITEMS_PER_LINE);
+	PRINT_DELEGATE_OPT("delegate_progs");
 
 	printf("\n\tallowed_attachs:");
-	value = get_delegate_value(mntent->mnt_opts, "delegate_attachs");
-	print_items_per_line(value, ITEMS_PER_LINE);
+	PRINT_DELEGATE_OPT("delegate_attachs");
 	printf("\n");
 }
 
@@ -122,29 +129,29 @@ static void split_json_array_str(const char *input)
 	free(strs);
 }
 
+#define PRINT_DELEGATE_OPT_JSON(opt_name) do {				\
+	char *value = get_delegate_value(mntent->mnt_opts, opt_name);	\
+	split_json_array_str(value);					\
+	free_delegate_value(value);					\
+} while (0)
+
 static void show_token_info_json(struct mntent *mntent)
 {
-	char *value;
-
 	jsonw_start_object(json_wtr);
 
 	jsonw_string_field(json_wtr, "token_info", mntent->mnt_dir);
 
 	jsonw_name(json_wtr, "allowed_cmds");
-	value = get_delegate_value(mntent->mnt_opts, "delegate_cmds");
-	split_json_array_str(value);
+	PRINT_DELEGATE_OPT_JSON("delegate_cmds");
 
 	jsonw_name(json_wtr, "allowed_maps");
-	value = get_delegate_value(mntent->mnt_opts, "delegate_maps");
-	split_json_array_str(value);
+	PRINT_DELEGATE_OPT_JSON("delegate_maps");
 
 	jsonw_name(json_wtr, "allowed_progs");
-	value = get_delegate_value(mntent->mnt_opts, "delegate_progs");
-	split_json_array_str(value);
+	PRINT_DELEGATE_OPT_JSON("delegate_progs");
 
 	jsonw_name(json_wtr, "allowed_attachs");
-	value = get_delegate_value(mntent->mnt_opts, "delegate_attachs");
-	split_json_array_str(value);
+	PRINT_DELEGATE_OPT_JSON("delegate_attachs");
 
 	jsonw_end_object(json_wtr);
 }
