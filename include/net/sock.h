@@ -584,26 +584,37 @@ enum sk_pacing {
 	SK_PACING_FQ		= 2,
 };
 
-/* flag bits in sk_user_data
+/* Flag values encoded in LSBs of sk->sk_user_data:
+ *
+ * - SK_USER_DATA_NONE:        Pointer with no special meaning.
  *
  * - SK_USER_DATA_NOCOPY:      Pointer stored in sk_user_data might
  *   not be suitable for copying when cloning the socket. For instance,
- *   it can point to a reference counted object. sk_user_data bottom
- *   bit is set if pointer must not be copied.
+ *   it can point to a reference counted object.
  *
  * - SK_USER_DATA_BPF:         Mark whether sk_user_data field is
- *   managed/owned by a BPF reuseport array. This bit should be set
- *   when sk_user_data's sk is added to the bpf's reuseport_array.
+ *   managed/owned by a BPF reuseport array. This also implies
+ *   SK_USER_DATA_NOCOPY, and should be set when sk_user_data's sk
+ *   is added to the bpf's reuseport_array.
  *
  * - SK_USER_DATA_PSOCK:       Mark whether pointer stored in
- *   sk_user_data points to psock type. This bit should be set
- *   when sk_user_data is assigned to a psock object.
+ *   sk_user_data points to psock type. This also implies
+ *   SK_USER_DATA_NOCOPY, and should be set when sk_user_data is
+ *   is assigned to a psock object.
+ *
+ * NOTE: Further values *must not* be added to the enum below, as they
+ * already span lower 2 bits of sk_user_data field, and more entries
+ * would first break 32-bit and then 64-bit pointers.
  */
-#define SK_USER_DATA_NOCOPY	1UL
-#define SK_USER_DATA_BPF	2UL
-#define SK_USER_DATA_PSOCK	4UL
-#define SK_USER_DATA_PTRMASK	~(SK_USER_DATA_NOCOPY | SK_USER_DATA_BPF |\
-				  SK_USER_DATA_PSOCK)
+
+enum sk_user_data {
+	SK_USER_DATA_NONE	= 0,
+	SK_USER_DATA_NOCOPY	= 1,
+	SK_USER_DATA_BPF	= 2,
+	SK_USER_DATA_PSOCK	= 3,
+};
+
+#define SK_USER_DATA_PTRMASK	~(SK_USER_DATA_PSOCK)
 
 /**
  * sk_user_data_is_nocopy - Test if sk_user_data pointer must not be copied
@@ -611,70 +622,70 @@ enum sk_pacing {
  */
 static inline bool sk_user_data_is_nocopy(const struct sock *sk)
 {
-	return ((uintptr_t)sk->sk_user_data & SK_USER_DATA_NOCOPY);
+	return ((uintptr_t)sk->sk_user_data & ~SK_USER_DATA_PTRMASK);
 }
 
 #define __sk_user_data(sk) ((*((void __rcu **)&(sk)->sk_user_data)))
 
 /**
- * __locked_read_sk_user_data_with_flags - return the pointer
- * only if argument flags all has been set in sk_user_data. Otherwise
+ * __locked_read_sk_user_data_with_flag - return the pointer only
+ * if argument flag matches that set in sk_user_data. Otherwise
  * return NULL
  *
  * @sk: socket
- * @flags: flag bits
+ * @flag: enum value
  *
  * The caller must be holding sk->sk_callback_lock.
  */
 static inline void *
-__locked_read_sk_user_data_with_flags(const struct sock *sk,
-				      uintptr_t flags)
+__locked_read_sk_user_data_with_flag(const struct sock *sk,
+				     enum sk_user_data flag)
 {
 	uintptr_t sk_user_data =
 		(uintptr_t)rcu_dereference_check(__sk_user_data(sk),
 						 lockdep_is_held(&sk->sk_callback_lock));
 
-	WARN_ON_ONCE(flags & SK_USER_DATA_PTRMASK);
+	WARN_ON_ONCE(flag & SK_USER_DATA_PTRMASK);
 
-	if ((sk_user_data & flags) == flags)
+	if ((sk_user_data & ~SK_USER_DATA_PTRMASK) == flag)
 		return (void *)(sk_user_data & SK_USER_DATA_PTRMASK);
 	return NULL;
 }
 
 /**
- * __rcu_dereference_sk_user_data_with_flags - return the pointer
- * only if argument flags all has been set in sk_user_data. Otherwise
+ * __rcu_dereference_sk_user_data_with_flag - return the pointer only
+ * if argument flag matches that set in sk_user_data. Otherwise
  * return NULL
  *
  * @sk: socket
- * @flags: flag bits
+ * @flag: enum value
  */
 static inline void *
-__rcu_dereference_sk_user_data_with_flags(const struct sock *sk,
-					  uintptr_t flags)
+__rcu_dereference_sk_user_data_with_flag(const struct sock *sk,
+					 enum sk_user_data flag)
 {
 	uintptr_t sk_user_data = (uintptr_t)rcu_dereference(__sk_user_data(sk));
 
-	WARN_ON_ONCE(flags & SK_USER_DATA_PTRMASK);
+	WARN_ON_ONCE(flag & SK_USER_DATA_PTRMASK);
 
-	if ((sk_user_data & flags) == flags)
+	if ((sk_user_data & ~SK_USER_DATA_PTRMASK) == flag)
 		return (void *)(sk_user_data & SK_USER_DATA_PTRMASK);
 	return NULL;
 }
 
 #define rcu_dereference_sk_user_data(sk)				\
-	__rcu_dereference_sk_user_data_with_flags(sk, 0)
-#define __rcu_assign_sk_user_data_with_flags(sk, ptr, flags)		\
+	__rcu_dereference_sk_user_data_with_flag(sk, 0)
+#define __rcu_assign_sk_user_data_with_flag(sk, ptr, flag)		\
 ({									\
 	uintptr_t __tmp1 = (uintptr_t)(ptr),				\
-		  __tmp2 = (uintptr_t)(flags);				\
+		  __tmp2 = (uintptr_t)(flag);				\
 	WARN_ON_ONCE(__tmp1 & ~SK_USER_DATA_PTRMASK);			\
 	WARN_ON_ONCE(__tmp2 & SK_USER_DATA_PTRMASK);			\
 	rcu_assign_pointer(__sk_user_data((sk)),			\
 			   __tmp1 | __tmp2);				\
 })
 #define rcu_assign_sk_user_data(sk, ptr)				\
-	__rcu_assign_sk_user_data_with_flags(sk, ptr, 0)
+	__rcu_assign_sk_user_data_with_flag(sk, ptr, 0)
 
 static inline
 struct net *sock_net(const struct sock *sk)
