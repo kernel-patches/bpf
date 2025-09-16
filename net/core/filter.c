@@ -9284,13 +9284,19 @@ static bool sock_addr_is_valid_access(int off, int size,
 			return false;
 		info->reg_type = PTR_TO_SOCKET;
 		break;
-	default:
+	case bpf_ctx_range(struct bpf_sock_addr, user_family):
+	case bpf_ctx_range(struct bpf_sock_addr, family):
+	case bpf_ctx_range(struct bpf_sock_addr, type):
+	case bpf_ctx_range(struct bpf_sock_addr, protocol):
 		if (type == BPF_READ) {
 			if (size != size_default)
 				return false;
 		} else {
 			return false;
 		}
+		break;
+	default:
+		return false;
 	}
 
 	return true;
