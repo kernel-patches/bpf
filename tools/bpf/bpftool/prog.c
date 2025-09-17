@@ -2262,7 +2262,9 @@ static void profile_print_readings(void)
 
 static char *profile_target_name(int tgt_fd)
 {
-	struct bpf_func_info func_info;
+	/* Initialize func_info to silence -Wuninitialized-const-pointer
+	 * warning in clang >= 21. */
+	struct bpf_func_info func_info = {};
 	struct bpf_prog_info info = {};
 	__u32 info_len = sizeof(info);
 	const struct btf_type *t;
