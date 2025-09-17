@@ -1071,6 +1071,7 @@ enum bpf_prog_type {
 	BPF_PROG_TYPE_SK_LOOKUP,
 	BPF_PROG_TYPE_SYSCALL, /* a program that can execute syscalls */
 	BPF_PROG_TYPE_NETFILTER,
+	BPF_PROG_TYPE_RAW_TRACEPOINT_OVERRIDE,
 	__MAX_BPF_PROG_TYPE
 };
 
@@ -1707,6 +1708,7 @@ union bpf_attr {
 		__u32		prog_fd;
 		__u32		:32;
 		__aligned_u64	cookie;
+		__aligned_u64	probe_name;
 	} raw_tracepoint;
 
 	struct { /* anonymous struct for BPF_BTF_LOAD */

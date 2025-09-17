@@ -4092,14 +4092,16 @@ static int bpf_perf_link_attach(const union bpf_attr *attr, struct bpf_prog *pro
 #endif /* CONFIG_PERF_EVENTS */
 
 static int bpf_raw_tp_link_attach(struct bpf_prog *prog,
-				  const char __user *user_tp_name, u64 cookie,
+				  const char __user *user_tp_name,
+				  const char __user *user_probe_name,
+				  u64 cookie,
 				  enum bpf_attach_type attach_type)
 {
 	struct bpf_link_primer link_primer;
 	struct bpf_raw_tp_link *link;
 	struct bpf_raw_event_map *btp;
-	const char *tp_name;
-	char buf[128];
+	const char *tp_name, *probe_name;
+	char buf[128], probe[128];
 	int err;
 
 	switch (prog->type) {
@@ -4123,6 +4125,17 @@ static int bpf_raw_tp_link_attach(struct bpf_prog *prog,
 			return -EFAULT;
 		buf[sizeof(buf) - 1] = 0;
 		tp_name = buf;
+		break;
+	case BPF_PROG_TYPE_RAW_TRACEPOINT_OVERRIDE:
+		if (strncpy_from_user(buf, user_tp_name, sizeof(buf) - 1) < 0)
+			return -EFAULT;
+		buf[sizeof(buf) - 1] = 0;
+		tp_name = buf;
+
+		if (strncpy_from_user(probe, user_probe_name, sizeof(probe) - 1) < 0)
+			return -EFAULT;
+		probe[sizeof(probe) - 1] = 0;
+		probe_name = probe;
 		break;
 	default:
 		return -EINVAL;
@@ -4149,7 +4162,10 @@ static int bpf_raw_tp_link_attach(struct bpf_prog *prog,
 		goto out_put_btp;
 	}
 
-	err = bpf_probe_register(link->btp, link);
+	if (prog->type == BPF_PROG_TYPE_RAW_TRACEPOINT_OVERRIDE)
+		err = bpf_probe_override(link->btp, link, probe_name);
+	else
+		err = bpf_probe_register(link->btp, link);
 	if (err) {
 		bpf_link_cleanup(&link_primer);
 		goto out_put_btp;
@@ -4162,12 +4178,12 @@ out_put_btp:
 	return err;
 }
 
-#define BPF_RAW_TRACEPOINT_OPEN_LAST_FIELD raw_tracepoint.cookie
+#define BPF_RAW_TRACEPOINT_OPEN_LAST_FIELD raw_tracepoint.probe_name
 
 static int bpf_raw_tracepoint_open(const union bpf_attr *attr)
 {
 	struct bpf_prog *prog;
-	void __user *tp_name;
+	void __user *tp_name, *probe_name;
 	__u64 cookie;
 	int fd;
 
@@ -4180,7 +4196,9 @@ static int bpf_raw_tracepoint_open(const union bpf_attr *attr)
 
 	tp_name = u64_to_user_ptr(attr->raw_tracepoint.name);
 	cookie = attr->raw_tracepoint.cookie;
-	fd = bpf_raw_tp_link_attach(prog, tp_name, cookie, prog->expected_attach_type);
+	probe_name = u64_to_user_ptr(attr->raw_tracepoint.probe_name);
+	fd = bpf_raw_tp_link_attach(prog, tp_name, probe_name,
+				    cookie, prog->expected_attach_type);
 	if (fd < 0)
 		bpf_prog_put(prog);
 	return fd;
@@ -5565,7 +5583,8 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 			goto out;
 		}
 		if (prog->expected_attach_type == BPF_TRACE_RAW_TP)
-			ret = bpf_raw_tp_link_attach(prog, NULL, attr->link_create.tracing.cookie,
+			ret = bpf_raw_tp_link_attach(prog, NULL, NULL,
+						     attr->link_create.tracing.cookie,
 						     attr->link_create.attach_type);
 		else if (prog->expected_attach_type == BPF_TRACE_ITER)
 			ret = bpf_iter_link_attach(attr, uattr, prog);

@@ -50,6 +50,9 @@ tracepoint_probe_register_may_exist(struct tracepoint *tp, void *probe,
 	return tracepoint_probe_register_prio_may_exist(tp, probe, data,
 							TRACEPOINT_DEFAULT_PRIO);
 }
+extern int
+tracepoint_probe_override(struct tracepoint *tp, void *probe, void *data,
+			  const char *func_replaced);
 extern void
 for_each_kernel_tracepoint(void (*fct)(struct tracepoint *tp, void *priv),
 		void *priv);

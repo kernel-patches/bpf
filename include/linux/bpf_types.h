@@ -48,6 +48,8 @@ BPF_PROG_TYPE(BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE, raw_tracepoint_writable,
 	      struct bpf_raw_tracepoint_args, u64)
 BPF_PROG_TYPE(BPF_PROG_TYPE_TRACING, tracing,
 	      void *, void *)
+BPF_PROG_TYPE(BPF_PROG_TYPE_RAW_TRACEPOINT_OVERRIDE, raw_tracepoint_override,
+	      struct bpf_raw_tracepoint_args, u64)
 #endif
 #ifdef CONFIG_CGROUP_BPF
 BPF_PROG_TYPE(BPF_PROG_TYPE_CGROUP_DEVICE, cg_dev,

@@ -29,6 +29,11 @@ struct tracepoint_func {
 	int prio;
 };
 
+struct tracepoint_func_snapshot {
+	struct tracepoint_func orig;
+	struct tracepoint_func override;
+};
+
 struct tracepoint_ext {
 	int (*regfunc)(void);
 	void (*unregfunc)(void);
@@ -45,6 +50,7 @@ struct tracepoint {
 	void *probestub;
 	struct tracepoint_func __rcu *funcs;
 	struct tracepoint_ext *ext;
+	struct tracepoint_func_snapshot *snapshot;
 };
 
 #ifdef CONFIG_HAVE_ARCH_PREL32_RELOCATIONS

@@ -768,6 +768,9 @@ int perf_event_query_prog_array(struct perf_event *event, void __user *info);
 struct bpf_raw_tp_link;
 int bpf_probe_register(struct bpf_raw_event_map *btp, struct bpf_raw_tp_link *link);
 int bpf_probe_unregister(struct bpf_raw_event_map *btp, struct bpf_raw_tp_link *link);
+int bpf_probe_override(struct bpf_raw_event_map *btp,
+		       struct bpf_raw_tp_link *link,
+		       const char *probe_name);
 
 struct bpf_raw_event_map *bpf_get_raw_tracepoint(const char *name);
 void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp);
@@ -802,6 +805,12 @@ static inline int bpf_probe_register(struct bpf_raw_event_map *btp, struct bpf_r
 	return -EOPNOTSUPP;
 }
 static inline int bpf_probe_unregister(struct bpf_raw_event_map *btp, struct bpf_raw_tp_link *link)
+{
+	return -EOPNOTSUPP;
+}
+static inline int bpf_probe_override(struct bpf_raw_event_map *btp,
+				     struct bpf_raw_tp_link *link,
+				     const char *probe_name)
 {
 	return -EOPNOTSUPP;
 }

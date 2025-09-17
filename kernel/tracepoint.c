@@ -14,6 +14,7 @@
 #include <linux/sched/signal.h>
 #include <linux/sched/task.h>
 #include <linux/static_key.h>
+#include <linux/kallsyms.h>
 
 enum tp_func_state {
 	TP_FUNC_0,
@@ -128,6 +129,121 @@ static void debug_print_probes(struct tracepoint_func *funcs)
 
 	for (i = 0; funcs[i].func; i++)
 		printk(KERN_DEBUG "Probe %d : %pSb\n", i, funcs[i].func);
+}
+
+static struct tracepoint_func *
+find_func_to_override(struct tracepoint_func *funcs,
+		      unsigned long probe_addr)
+{
+	int iter;
+
+	if (!funcs)
+		return NULL;
+
+	for (iter = 0; funcs[iter].func; iter++) {
+		if ((unsigned long)funcs[iter].func == probe_addr)
+			return &(funcs[iter]);
+	}
+
+	return NULL;
+}
+
+static struct tracepoint_func_snapshot *
+find_func_snapshot(struct tracepoint_func_snapshot **ss,
+		   struct tracepoint_func *func,
+		   bool *is_override)
+{
+	int iter;
+	struct tracepoint_func_snapshot *shots;
+
+	shots = *ss;
+	if (!shots)
+		return NULL;
+
+	for (iter = 0; shots[iter].override.func; iter++) {
+		if (shots[iter].override.func == func->func &&
+		   shots[iter].override.data == func->data) {
+			*is_override = true;
+			return &(shots[iter]);
+		}
+
+		if (shots[iter].orig.func == func->func &&
+		   shots[iter].orig.data == func->data) {
+			*is_override = false;
+			return &(shots[iter]);
+		}
+	}
+
+	return NULL;
+}
+
+static void drop_func_snapshot(struct tracepoint_func_snapshot **ss,
+			       struct tracepoint_func_snapshot *drop)
+{
+	struct tracepoint_func_snapshot *old, *new;
+	int nr_snapshots;	/* Counter for snapshots */
+	int iter;		/* Iterate over old snapshots */
+	int idx = 0;		/* Index of snapshot to drop */
+
+	old = *ss;
+	if (!old)
+		return;
+
+	for (nr_snapshots = 0; old[nr_snapshots].override.func; nr_snapshots++) {
+		if (&(old[nr_snapshots]) == drop)
+			idx = nr_snapshots;
+	}
+
+	if (nr_snapshots == 0) {
+		kfree(old);
+		*ss = NULL;
+		return;
+	}
+
+	new = kmalloc_array(nr_snapshots, sizeof(struct tracepoint_func_snapshot), GFP_KERNEL);
+	if (!new) {
+		for (iter = idx; iter < nr_snapshots - 1; iter++)
+			old[iter] = old[iter + 1];
+		memset(&(old[nr_snapshots - 1]), 0, sizeof(struct tracepoint_func_snapshot));
+	} else {
+		int j = 0;
+
+		for (iter = 0; iter < nr_snapshots; iter++) {
+			if (iter != idx)
+				new[j++] = old[iter];
+		}
+		kfree(old);
+		*ss = new;
+	}
+}
+
+static int save_func_snapshot(struct tracepoint_func_snapshot **ss,
+			      struct tracepoint_func *new_func,
+			      struct tracepoint_func *old_func)
+{
+	struct tracepoint_func_snapshot *old, *new;
+	int nr_shots = 0;	/* Counter for old snapshots */
+	int total;		/* Total count of new snapshots */
+
+	old = *ss;
+	if (old)
+		while (old[nr_shots].override.func)
+			nr_shots++;
+
+	/* + 2 : one for new snapshot, one for NULL snapshot */
+	total = nr_shots + 2;
+	new = kmalloc_array(total, sizeof(struct tracepoint_func_snapshot), GFP_KERNEL);
+	if (!new)
+		return -ENOMEM;
+
+	memcpy(new, old, nr_shots * sizeof(struct tracepoint_func_snapshot));
+	new[nr_shots].orig = *old_func;
+	new[nr_shots].override = *new_func;
+	new[nr_shots + 1].override.func = NULL;
+
+	*ss = new;
+	kfree(old);
+	return 0;
 }
 
 static struct tracepoint_func *
@@ -412,6 +528,52 @@ static int tracepoint_remove_func(struct tracepoint *tp,
 	return 0;
 }
 
+static int tracepoint_override_func(struct tracepoint *tp,
+				    struct tracepoint_func *func,
+				    struct tracepoint_func *func_override)
+{
+	int ret = tracepoint_remove_func(tp, func);
+
+	return ret ? : tracepoint_add_func(tp, func_override,
+					   func_override->prio, false);
+}
+
+static int tracepoint_restore_func(struct tracepoint *tp,
+				   struct tracepoint_func *func,
+				   struct tracepoint_func *func_restore)
+{
+	int ret = tracepoint_remove_func(tp, func);
+
+	return ret ? : tracepoint_add_func(tp, func_restore,
+					   func_restore->prio, false);
+}
+
+int tracepoint_probe_override(struct tracepoint *tp, void *probe,
+			      void *data, const char *probe_name)
+{
+	struct tracepoint_func tp_func;
+	struct tracepoint_func *target_func;
+	unsigned long probe_addr;
+	int ret;
+
+	probe_addr = kallsyms_lookup_name(probe_name);
+	mutex_lock(&tracepoints_mutex);
+	target_func = find_func_to_override(tp->funcs, probe_addr);
+	if (!target_func)
+		return -ESRCH;
+	tp_func.func = probe;
+	tp_func.data = data;
+	tp_func.prio = target_func->prio;
+	ret = save_func_snapshot(&(tp->snapshot), &tp_func, target_func);
+	if (ret)
+		goto unlock;
+
+	ret = tracepoint_override_func(tp, target_func, &tp_func);
+unlock:
+	mutex_unlock(&tracepoints_mutex);
+	return ret;
+}
+
 /**
  * tracepoint_probe_register_prio_may_exist -  Connect a probe to a tracepoint with priority
  * @tp: tracepoint
@@ -496,12 +658,38 @@ EXPORT_SYMBOL_GPL(tracepoint_probe_register);
 int tracepoint_probe_unregister(struct tracepoint *tp, void *probe, void *data)
 {
 	struct tracepoint_func tp_func;
+	struct tracepoint_func_snapshot *shot;
 	int ret;
+	bool is_override;	/* whether probe is an overriding func */
 
 	mutex_lock(&tracepoints_mutex);
 	tp_func.func = probe;
 	tp_func.data = data;
-	ret = tracepoint_remove_func(tp, &tp_func);
+
+	shot = find_func_snapshot(&(tp->snapshot), &tp_func, &is_override);
+	if (!shot) {
+		ret = tracepoint_remove_func(tp, &tp_func);
+	} else {
+		/* unregister probe rengistered by raw_tracepoint_open,
+		 * restore to original tp_func.
+		 *
+		 * 1. restore orig func from snapshot.
+		 * 2. remove snapshot.
+		 */
+		if (is_override)
+			ret = tracepoint_restore_func(tp, &tp_func, &(shot->orig));
+		/* unregister orig probe registered by register_trace_*.
+		 *
+		 * 1. remove curr probe func(registered by raw_tracepoint_open)
+		 *    from tp->funcs.
+		 * 2. remove snapshot.
+		 */
+		else
+			ret = tracepoint_remove_func(tp, &(shot->override));
+		if (!ret)
+			drop_func_snapshot(&(tp->snapshot), shot);
+	}
+
 	mutex_unlock(&tracepoints_mutex);
 	return ret;
 }
