@@ -2291,6 +2291,8 @@ static char *profile_target_name(int tgt_fd)
 	memset(&info, 0, sizeof(info));
 	info.nr_func_info = 1;
 	info.func_info_rec_size = func_info_rec_size;
+	/* Silence -Wuninitialized-const-pointer warning in clang >= 21. */
+	memset(&func_info,  0, sizeof(func_info));
 	info.func_info = ptr_to_u64(&func_info);
 
 	err = bpf_prog_get_info_by_fd(tgt_fd, &info, &info_len);

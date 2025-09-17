@@ -68,6 +68,8 @@ static int dump_prog_id_as_func_ptr(const struct btf_dumper *d,
 	memset(&info, 0, sizeof(info));
 	info.nr_func_info = 1;
 	info.func_info_rec_size = finfo_rec_size;
+	/* Silence -Wuninitialized-const-pointer warning in clang >= 21. */
+	memset(&finfo,  0, sizeof(finfo));
 	info.func_info = ptr_to_u64(&finfo);
 
 	err = bpf_prog_get_info_by_fd(prog_fd, &info, &info_len);
