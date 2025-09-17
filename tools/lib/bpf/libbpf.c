@@ -11300,7 +11300,7 @@ int probe_kern_syscall_wrapper(int token_fd)
 
 		return pfd >= 0 ? 1 : 0;
 	} else { /* legacy mode */
-		char probe_name[MAX_EVENT_NAME_LEN];
+		char probe_name[MAX_EVENT_NAME_LEN * 2];
 
 		gen_probe_legacy_event_name(probe_name, sizeof(probe_name), syscall_name, 0);
 		if (add_kprobe_event_legacy(probe_name, false, syscall_name, 0) < 0)
