@@ -153,9 +153,9 @@ void test_lwt_seg6local(void)
 		       "build target addr"))
 		goto close_client;
 
-	bytes = sendto(cfd, foobar, sizeof(foobar), 0,
+	bytes = sendto(cfd, foobar, strlen(foobar) + 1, 0,
 		       (struct sockaddr *)&server_addr, sizeof(server_addr));
-	if (!ASSERT_EQ(bytes, sizeof(foobar), "send packet"))
+	if (!ASSERT_EQ(bytes, strlen(foobar) + 1, "send packet"))
 		goto close_client;
 
 	/* Verify we received all expected bytes */
