@@ -630,9 +630,10 @@ struct bpf_raw_tp_opts {
 	size_t sz; /* size of this struct for forward/backward compatibility */
 	const char *tp_name;
 	__u64 cookie;
+	const char *probe_name;
 	size_t :0;
 };
-#define bpf_raw_tp_opts__last_field cookie
+#define bpf_raw_tp_opts__last_field probe_name
 
 LIBBPF_API int bpf_raw_tracepoint_open_opts(int prog_fd, struct bpf_raw_tp_opts *opts);
 LIBBPF_API int bpf_raw_tracepoint_open(const char *name, int prog_fd);

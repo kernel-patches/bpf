@@ -1235,6 +1235,7 @@ int bpf_raw_tracepoint_open_opts(int prog_fd, struct bpf_raw_tp_opts *opts)
 	attr.raw_tracepoint.prog_fd = prog_fd;
 	attr.raw_tracepoint.name = ptr_to_u64(OPTS_GET(opts, tp_name, NULL));
 	attr.raw_tracepoint.cookie = OPTS_GET(opts, cookie, 0);
+	attr.raw_tracepoint.probe_name = ptr_to_u64(OPTS_GET(opts, probe_name, NULL));
 
 	fd = sys_bpf_fd(BPF_RAW_TRACEPOINT_OPEN, &attr, attr_sz);
 	return libbpf_err_errno(fd);

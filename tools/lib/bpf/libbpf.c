@@ -9557,6 +9557,8 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("raw_tp+",		RAW_TRACEPOINT, 0, SEC_NONE, attach_raw_tp),
 	SEC_DEF("raw_tracepoint.w+",	RAW_TRACEPOINT_WRITABLE, 0, SEC_NONE, attach_raw_tp),
 	SEC_DEF("raw_tp.w+",		RAW_TRACEPOINT_WRITABLE, 0, SEC_NONE, attach_raw_tp),
+	SEC_DEF("raw_tracepoint.o+",	RAW_TRACEPOINT_OVERRIDE, 0, SEC_NONE, attach_raw_tp),
+	SEC_DEF("raw_tp.o+",		RAW_TRACEPOINT_OVERRIDE, 0, SEC_NONE, attach_raw_tp),
 	SEC_DEF("tp_btf+",		TRACING, BPF_TRACE_RAW_TP, SEC_ATTACH_BTF, attach_trace),
 	SEC_DEF("fentry+",		TRACING, BPF_TRACE_FENTRY, SEC_ATTACH_BTF, attach_trace),
 	SEC_DEF("fmod_ret+",		TRACING, BPF_MODIFY_RETURN, SEC_ATTACH_BTF, attach_trace),
@@ -12684,6 +12686,7 @@ bpf_program__attach_raw_tracepoint_opts(const struct bpf_program *prog,
 
 	raw_opts.tp_name = tp_name;
 	raw_opts.cookie = OPTS_GET(opts, cookie, 0);
+	raw_opts.probe_name = OPTS_GET(opts, probe_name, NULL);
 	pfd = bpf_raw_tracepoint_open_opts(prog_fd, &raw_opts);
 	if (pfd < 0) {
 		pfd = -errno;
@@ -12704,14 +12707,18 @@ struct bpf_link *bpf_program__attach_raw_tracepoint(const struct bpf_program *pr
 
 static int attach_raw_tp(const struct bpf_program *prog, long cookie, struct bpf_link **link)
 {
+	LIBBPF_OPTS(bpf_raw_tracepoint_opts, raw_opts);
 	static const char *const prefixes[] = {
 		"raw_tp",
 		"raw_tracepoint",
 		"raw_tp.w",
 		"raw_tracepoint.w",
+		"raw_tp.o",
+		"raw_tracepoint.o",
 	};
 	size_t i;
 	const char *tp_name = NULL;
+	char *dup = NULL, *sep = NULL;
 
 	*link = NULL;
 
@@ -12739,7 +12746,25 @@ static int attach_raw_tp(const struct bpf_program *prog, long cookie, struct bpf
 		return -EINVAL;
 	}
 
-	*link = bpf_program__attach_raw_tracepoint(prog, tp_name);
+	if (prog->type == BPF_PROG_TYPE_RAW_TRACEPOINT_OVERRIDE) {
+		dup = strdup(tp_name);
+		if (!dup)
+			return -ENOMEM;
+
+		sep = strchr(dup, ':');
+		if (!sep) {
+			free(dup);
+			return -EINVAL;
+		}
+		*sep = '\0';
+
+		tp_name = dup;
+		raw_opts.probe_name = sep + 1,
+		*link = bpf_program__attach_raw_tracepoint_opts(prog, tp_name, &raw_opts);
+		free(dup);
+	} else {
+		*link = bpf_program__attach_raw_tracepoint(prog, tp_name);
+	}
 	return libbpf_get_error(*link);
 }
 
