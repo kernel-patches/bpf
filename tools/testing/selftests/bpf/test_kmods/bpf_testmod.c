@@ -1628,6 +1628,11 @@ static struct bpf_testmod_multi_st_ops multi_st_ops_cfi_stubs = {
 	.test_1 = bpf_testmod_multi_st_ops__test_1,
 };
 
+static void raw_tp_override_probe(void *ignored, struct task_struct *task,
+				  struct bpf_testmod_test_write_ctx *ctx)
+{
+}
+
 struct bpf_struct_ops testmod_multi_st_ops = {
 	.verifier_ops = &bpf_testmod_verifier_ops,
 	.init = multi_st_ops_init,
@@ -1665,6 +1670,7 @@ static int bpf_testmod_init(void)
 	ret = ret ?: register_btf_id_dtor_kfuncs(bpf_testmod_dtors,
 						 ARRAY_SIZE(bpf_testmod_dtors),
 						 THIS_MODULE);
+	ret = ret ?: register_trace_bpf_testmod_test_write_bare_tp(raw_tp_override_probe, NULL);
 	if (ret < 0)
 		return ret;
 	if (bpf_fentry_test1(0) < 0)
@@ -1701,6 +1707,7 @@ static void bpf_testmod_exit(void)
 	bpf_kfunc_close_sock();
 	sysfs_remove_bin_file(kernel_kobj, &bin_attr_bpf_testmod_file);
 	unregister_bpf_testmod_uprobe();
+	unregister_trace_bpf_testmod_test_write_bare_tp(raw_tp_override_probe, NULL);
 }
 
 module_init(bpf_testmod_init);
