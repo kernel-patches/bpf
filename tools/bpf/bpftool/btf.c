@@ -51,6 +51,9 @@ static const char * const btf_kind_str[NR_BTF_KINDS] = {
 	[BTF_KIND_DECL_TAG]	= "DECL_TAG",
 	[BTF_KIND_TYPE_TAG]	= "TYPE_TAG",
 	[BTF_KIND_ENUM64]	= "ENUM64",
+	[BTF_KIND_LOC_PARAM]	= "LOC_PARAM",
+	[BTF_KIND_LOC_PROTO]	= "LOC_PROTO",
+	[BTF_KIND_LOCSEC]	= "LOCSEC",
 };
 
 struct sort_datum {
@@ -413,6 +416,88 @@ static int dump_btf_type(const struct btf *btf, __u32 id,
 		} else {
 			printf(" type_id=%u component_idx=%d", t->type, tag->component_idx);
 		}
+		break;
+	}
+	case BTF_KIND_LOC_PARAM: {
+		const struct btf_loc_param *p = btf_loc_param(t);
+		__u32 *v = (__u32 *)(p + 1);
+		__u32 i, vlen = btf_vlen(t);
+
+		if (json_output) {
+			jsonw_uint_field(w, "size", t->size);
+			jsonw_uint_field(w, "flags", p->flags);
+			jsonw_uint_field(w, "vlen", vlen);
+			jsonw_name(w, "values");
+			jsonw_start_array(w);
+		} else {
+			printf(" size=%u flags=0x%x vlen=%u", t->size, p->flags, vlen);
+		}
+		for (i = 0; i < vlen; i++, v++) {
+			if (json_output) {
+				jsonw_start_object(w);
+				jsonw_uint_field(w, "value", *v);
+				jsonw_end_object(w);
+			} else {
+				printf("\n\t value=%u", *v);
+			}
+		}
+		if (json_output)
+			jsonw_end_array(w);
+		break;
+	}
+	case BTF_KIND_LOC_PROTO: {
+		__u32 *params = btf_loc_proto_params(t);
+		__u16 vlen = btf_vlen(t);
+		int i;
+
+		if (json_output) {
+			jsonw_uint_field(w, "vlen", vlen);
+			jsonw_name(w, "params");
+			jsonw_start_array(w);
+		} else {
+			printf(" vlen=%u", vlen);
+		}
+
+		for (i = 0; i < vlen; i++, params++) {
+			if (json_output) {
+				jsonw_start_object(w);
+				jsonw_uint_field(w, "type_id", *params);
+				jsonw_end_object(w);
+			} else {
+				printf("\n\t type_id=%u", *params);
+			}
+		}
+		if (json_output)
+			jsonw_end_array(w);
+		break;
+	}
+
+	case BTF_KIND_LOCSEC: {
+		struct btf_loc *locs = btf_locsec_locs(t);
+		__u32 i, vlen = btf_vlen(t);
+
+		if (json_output) {
+			jsonw_uint_field(w, "vlen", vlen);
+			jsonw_name(w, "locs");
+			jsonw_start_array(w);
+		} else {
+			printf(" vlen=%u", vlen);
+		}
+
+		for (i = 0; i < vlen; i++, locs++) {
+			if (json_output) {
+				jsonw_start_object(w);
+				jsonw_uint_field(w, "func_type_id", locs->func);
+				jsonw_uint_field(w, "loc_proto_type_id", locs->loc_proto);
+				jsonw_uint_field(w, "offset", locs->offset);
+				jsonw_end_object(w);
+			} else {
+				printf("\n\t func_type_id=%u loc_proto_type_id=%u offset=%u",
+				       locs->func, locs->loc_proto, locs->offset);
+			}
+		}
+		if (json_output)
+			jsonw_end_array(w);
 		break;
 	}
 	default:
