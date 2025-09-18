@@ -512,7 +512,8 @@ static int propagate_to_outer_instance(struct bpf_verifier_env *env,
 	struct callchain *callchain = &instance->callchain;
 	u32 this_subprog_start, callsite, frame;
 	struct func_instance *outer_instance;
-	struct per_frame_masks *insn;
+	struct per_frame_masks *insn, *outer;
+	u64 old_mask, new_mask;
 	int err;
 
 	this_subprog_start = callchain_subprog_start(callchain);
@@ -528,6 +529,16 @@ static int propagate_to_outer_instance(struct bpf_verifier_env *env,
 		err = mark_stack_read(env, outer_instance, frame, callsite, insn->live_before);
 		if (err)
 			return err;
+		outer = get_frame_masks(outer_instance, frame, callsite);
+		old_mask = outer ? outer->must_write : 0;
+		new_mask = outer_instance->must_write_set[relative_idx(outer_instance, callsite)]
+			   ? old_mask & insn->must_write_acc
+			   : insn->must_write_acc;
+		if (new_mask != old_mask)
+			env->cs_must_writes++;
+		if (env->log.level & BPF_LOG_LEVEL2)
+			log_mask_change(env, &outer_instance->callchain, "cs-written",
+					frame, callsite, old_mask, new_mask);
 	}
 	commit_stack_write_marks(env, outer_instance);
 	return 0;

@@ -43,6 +43,7 @@ enum stat_id {
 	TOTAL_INSNS,
 	TOTAL_STATES,
 	PEAK_STATES,
+	CS_MUST_WRITES,
 	MAX_STATES_PER_INSN,
 	MARK_READ_MAX_LEN,
 	SIZE,
@@ -789,13 +790,13 @@ cleanup:
 }
 
 static const struct stat_specs default_csv_output_spec = {
-	.spec_cnt = 15,
+	.spec_cnt = 16,
 	.ids = {
 		FILE_NAME, PROG_NAME, VERDICT, DURATION,
 		TOTAL_INSNS, TOTAL_STATES, PEAK_STATES,
 		MAX_STATES_PER_INSN, MARK_READ_MAX_LEN,
 		SIZE, JITED_SIZE, PROG_TYPE, ATTACH_TYPE,
-		STACK, MEMORY_PEAK,
+		STACK, MEMORY_PEAK, CS_MUST_WRITES,
 	},
 };
 
@@ -837,6 +838,7 @@ static struct stat_def {
 	[PROG_TYPE] = { "Program type", {"prog_type"}, },
 	[ATTACH_TYPE] = { "Attach type", {"attach_type", }, },
 	[MEMORY_PEAK] = { "Peak memory (MiB)", {"mem_peak", }, },
+	[CS_MUST_WRITES] = { "cs_must_writes", { "cs_must_writes" }},
 };
 
 static bool parse_stat_id_var(const char *name, size_t len, int *id,
@@ -1015,12 +1017,13 @@ static int parse_verif_log(char * const buf, size_t buf_sz, struct verif_stats *
 
 		if (1 == sscanf(cur, "verification time %ld usec\n", &s->stats[DURATION]))
 			continue;
-		if (5 == sscanf(cur, "processed %ld insns (limit %*d) max_states_per_insn %ld total_states %ld peak_states %ld mark_read %ld",
+		if (6 == sscanf(cur, "processed %ld insns (limit %*d) max_states_per_insn %ld total_states %ld peak_states %ld mark_read %ld cs_must_writes %ld",
 				&s->stats[TOTAL_INSNS],
 				&s->stats[MAX_STATES_PER_INSN],
 				&s->stats[TOTAL_STATES],
 				&s->stats[PEAK_STATES],
-				&s->stats[MARK_READ_MAX_LEN]))
+				&s->stats[MARK_READ_MAX_LEN],
+				&s->stats[CS_MUST_WRITES]))
 			continue;
 
 		if (1 == sscanf(cur, "stack depth %511s", stack))
@@ -2297,6 +2300,7 @@ static int cmp_stat(const struct verif_stats *s1, const struct verif_stats *s2,
 	case TOTAL_INSNS:
 	case TOTAL_STATES:
 	case PEAK_STATES:
+	case CS_MUST_WRITES:
 	case MAX_STATES_PER_INSN:
 	case MEMORY_PEAK:
 	case MARK_READ_MAX_LEN: {
@@ -2523,6 +2527,7 @@ static void prepare_value(const struct verif_stats *s, enum stat_id id,
 	case TOTAL_INSNS:
 	case TOTAL_STATES:
 	case PEAK_STATES:
+	case CS_MUST_WRITES:
 	case MAX_STATES_PER_INSN:
 	case MARK_READ_MAX_LEN:
 	case STACK:
@@ -2611,6 +2616,7 @@ static int parse_stat_value(const char *str, enum stat_id id, struct verif_stats
 	case TOTAL_INSNS:
 	case TOTAL_STATES:
 	case PEAK_STATES:
+	case CS_MUST_WRITES:
 	case MAX_STATES_PER_INSN:
 	case MARK_READ_MAX_LEN:
 	case SIZE:
