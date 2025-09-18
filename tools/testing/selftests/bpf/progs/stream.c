@@ -1,11 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2025 Meta Platforms, Inc. and affiliates. */
+
+#define BPF_NO_KFUNC_PROTOTYPES
 #include <vmlinux.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_helpers.h>
 #include "bpf_misc.h"
 #include "bpf_experimental.h"
 #include "bpf_arena_common.h"
+
+/*
+ * Declare kfuncs here, as BPF_NO_KFUNC_PROTOTYPES is used
+ * to exclude improper arena kfuncs declarations
+ */
+extern int bpf_res_spin_lock(struct bpf_res_spin_lock *lock) __weak __ksym;
+extern void bpf_res_spin_unlock(struct bpf_res_spin_lock *lock) __weak __ksym;
 
 struct arr_elem {
 	struct bpf_res_spin_lock lock;
