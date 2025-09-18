@@ -660,21 +660,30 @@ BTF_ID_FLAGS(func, bpf_kfunc_call_memb_release, KF_RELEASE)
 BTF_KFUNCS_END(test_sk_check_kfunc_ids)
 
 static void *bpf_test_init(const union bpf_attr *kattr, u32 user_size,
-			   u32 size, u32 headroom, u32 tailroom)
+			   u32 size, u32 headroom, u32 tailroom, bool nonlinear)
 {
 	void __user *data_in = u64_to_user_ptr(kattr->test.data_in);
-	void *data;
+	void *data, *dst;
 
 	if (user_size < ETH_HLEN || user_size > PAGE_SIZE - headroom - tailroom)
 		return ERR_PTR(-EINVAL);
 
-	size = SKB_DATA_ALIGN(size);
-	data = kzalloc(size + headroom + tailroom, GFP_USER);
+	/* In non-linear case, data_in is copied to the paged data */
+	if (nonlinear) {
+		data = alloc_page(GFP_USER);
+	} else {
+		size = SKB_DATA_ALIGN(size);
+		data = kzalloc(size + headroom + tailroom, GFP_USER);
+	}
 	if (!data)
 		return ERR_PTR(-ENOMEM);
 
-	if (copy_from_user(data + headroom, data_in, user_size)) {
-		kfree(data);
+	if (nonlinear)
+		dst = page_address(data);
+	else
+		dst = data + headroom;
+	if (copy_from_user(dst, data_in, user_size)) {
+		nonlinear ? __free_page(data) : kfree(data);
 		return ERR_PTR(-EFAULT);
 	}
 
@@ -910,6 +919,12 @@ static int convert___skb_to_skb(struct sk_buff *skb, struct __sk_buff *__skb)
 	/* cb is allowed */
 
 	if (!range_is_zero(__skb, offsetofend(struct __sk_buff, cb),
+			   offsetof(struct __sk_buff, data_end)))
+		return -EINVAL;
+
+	/* data_end is allowed, but not copied to skb */
+
+	if (!range_is_zero(__skb, offsetofend(struct __sk_buff, data_end),
 			   offsetof(struct __sk_buff, tstamp)))
 		return -EINVAL;
 
@@ -984,7 +999,8 @@ static struct proto bpf_dummy_proto = {
 int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 			  union bpf_attr __user *uattr)
 {
-	bool is_l2 = false, is_direct_pkt_access = false;
+	bool is_l2 = false, is_direct_pkt_access = false, is_nonlinear = false;
+	int hh_len = ETH_HLEN, linear_size = ETH_HLEN;
 	struct net *net = current->nsproxy->net_ns;
 	struct net_device *dev = net->loopback_dev;
 	u32 size = kattr->test.data_size_in;
@@ -993,7 +1009,6 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 	struct sk_buff *skb = NULL;
 	struct sock *sk = NULL;
 	u32 retval, duration;
-	int hh_len = ETH_HLEN;
 	void *data;
 	int ret;
 
@@ -1020,9 +1035,19 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 	if (IS_ERR(ctx))
 		return PTR_ERR(ctx);
 
+	if (ctx && ctx->data_end && ctx->data_end < kattr->test.data_size_in) {
+		if (!is_l2) {
+			ret = -EINVAL;
+			goto out;
+		}
+		linear_size = max(ETH_HLEN, ctx->data_end);
+		is_nonlinear = true;
+	}
+
 	data = bpf_test_init(kattr, kattr->test.data_size_in,
 			     size, NET_SKB_PAD + NET_IP_ALIGN,
-			     SKB_DATA_ALIGN(sizeof(struct skb_shared_info)));
+			     SKB_DATA_ALIGN(sizeof(struct skb_shared_info)),
+			     is_nonlinear);
 	if (IS_ERR(data)) {
 		ret = PTR_ERR(data);
 		data = NULL;
@@ -1036,15 +1061,32 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 	}
 	sock_init_data(NULL, sk);
 
-	skb = slab_build_skb(data);
+	if (is_nonlinear)
+		skb = alloc_skb(NET_SKB_PAD + NET_IP_ALIGN + size +
+				SKB_DATA_ALIGN(sizeof(struct skb_shared_info)),
+				GFP_USER);
+	else
+		skb = slab_build_skb(data);
 	if (!skb) {
 		ret = -ENOMEM;
 		goto out;
 	}
+
 	skb->sk = sk;
 
 	skb_reserve(skb, NET_SKB_PAD + NET_IP_ALIGN);
-	__skb_put(skb, size);
+
+	if (is_nonlinear) {
+		skb_fill_page_desc(skb, 0, data, 0, size);
+		skb->truesize += PAGE_SIZE;
+		skb->data_len = size;
+		skb->len = size;
+
+		/* eth_type_trans expects the Ethernet header in the linear area. */
+		__pskb_pull_tail(skb, linear_size);
+	} else {
+		__skb_put(skb, size);
+	}
 
 	data = NULL; /* data released via kfree_skb */
 
@@ -1127,9 +1169,11 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 	convert_skb_to___skb(skb, ctx);
 
 	size = skb->len;
-	/* bpf program can never convert linear skb to non-linear */
-	if (WARN_ON_ONCE(skb_is_nonlinear(skb)))
+	if (skb_is_nonlinear(skb)) {
+		/* bpf program can never convert linear skb to non-linear */
+		WARN_ON_ONCE(!is_nonlinear);
 		size = skb_headlen(skb);
+	}
 	ret = bpf_test_finish(kattr, uattr, skb->data, NULL, size, retval,
 			      duration);
 	if (!ret)
@@ -1139,7 +1183,10 @@ out:
 	if (dev && dev != net->loopback_dev)
 		dev_put(dev);
 	kfree_skb(skb);
-	kfree(data);
+	if (!is_nonlinear)
+		kfree(data);
+	else if (data)
+		__free_page(data);
 	if (sk)
 		sk_free(sk);
 	kfree(ctx);
@@ -1265,7 +1312,7 @@ int bpf_prog_test_run_xdp(struct bpf_prog *prog, const union bpf_attr *kattr,
 		size = max_data_sz;
 	}
 
-	data = bpf_test_init(kattr, size, max_data_sz, headroom, tailroom);
+	data = bpf_test_init(kattr, size, max_data_sz, headroom, tailroom, false);
 	if (IS_ERR(data)) {
 		ret = PTR_ERR(data);
 		goto free_ctx;
@@ -1388,7 +1435,7 @@ int bpf_prog_test_run_flow_dissector(struct bpf_prog *prog,
 	if (size < ETH_HLEN)
 		return -EINVAL;
 
-	data = bpf_test_init(kattr, kattr->test.data_size_in, size, 0, 0);
+	data = bpf_test_init(kattr, kattr->test.data_size_in, size, 0, 0, false);
 	if (IS_ERR(data))
 		return PTR_ERR(data);
 
@@ -1661,7 +1708,8 @@ int bpf_prog_test_run_nf(struct bpf_prog *prog,
 
 	data = bpf_test_init(kattr, kattr->test.data_size_in, size,
 			     NET_SKB_PAD + NET_IP_ALIGN,
-			     SKB_DATA_ALIGN(sizeof(struct skb_shared_info)));
+			     SKB_DATA_ALIGN(sizeof(struct skb_shared_info)),
+			     false);
 	if (IS_ERR(data))
 		return PTR_ERR(data);
 
