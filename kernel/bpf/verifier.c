@@ -2297,6 +2297,33 @@ static bool reg_is_dynptr_slice_pkt(const struct bpf_reg_state *reg)
 		(DYNPTR_TYPE_SKB | DYNPTR_TYPE_XDP | DYNPTR_TYPE_SKB_META));
 }
 
+#define ALL_DYNPTR_MASK (KF_DYNPTR_SKB | KF_DYNPTR_XDP | KF_DYNPTR_SKB_META)
+
+static u64 dynptr_type_from_kfunc_flags(struct bpf_verifier_env *env,
+					const struct bpf_kfunc_call_arg_meta *meta)
+{
+	static const struct {
+		u64 mask;
+		enum bpf_type_flag type;
+	} type_flags[] = {
+		{ KF_DYNPTR_SKB, DYNPTR_TYPE_SKB },
+		{ KF_DYNPTR_XDP, DYNPTR_TYPE_XDP },
+		{ KF_DYNPTR_SKB_META, DYNPTR_TYPE_SKB_META },
+	};
+	int i;
+
+	if (hweight32(meta->kfunc_flags & ALL_DYNPTR_MASK) > 1) {
+		verifier_bug(env, "multiple dynptr types declared for kfunc %s", meta->func_name);
+		return 0;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(type_flags); ++i) {
+		if (type_flags[i].mask & meta->kfunc_flags)
+			return type_flags[i].type;
+	}
+	return 0;
+}
+
 /* Unmodified PTR_TO_PACKET[_META,_END] register from ctx access. */
 static bool reg_is_init_pkt_pointer(const struct bpf_reg_state *reg,
 				    enum bpf_reg_type which)
@@ -13277,14 +13304,11 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			if (is_kfunc_arg_uninit(btf, &args[i]))
 				dynptr_arg_type |= MEM_UNINIT;
 
-			if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb]) {
-				dynptr_arg_type |= DYNPTR_TYPE_SKB;
-			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_xdp]) {
-				dynptr_arg_type |= DYNPTR_TYPE_XDP;
-			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb_meta]) {
-				dynptr_arg_type |= DYNPTR_TYPE_SKB_META;
-			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_clone] &&
-				   (dynptr_arg_type & MEM_UNINIT)) {
+			if (meta->kfunc_flags & ALL_DYNPTR_MASK)
+				dynptr_arg_type |= dynptr_type_from_kfunc_flags(env, meta);
+
+			if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_clone] &&
+			    (dynptr_arg_type & MEM_UNINIT)) {
 				enum bpf_dynptr_type parent_type = meta->initialized_dynptr.type;
 
 				if (parent_type == BPF_DYNPTR_TYPE_INVALID) {
