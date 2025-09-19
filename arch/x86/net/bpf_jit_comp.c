@@ -643,10 +643,12 @@ out:
 int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
 		       void *old_addr, void *new_addr)
 {
-	if (!is_kernel_text((long)ip) &&
-	    !is_bpf_text_address((long)ip))
-		/* BPF poking in modules is not supported */
-		return -EINVAL;
+	if (!is_bpf_text_address((long)ip))
+		/* Only poking bpf text is supported. Since kernel function
+		 * entry is set up by ftrace, we reply on ftrace to poke kernel
+		 * functions. BPF poking in modules is not supported.
+		 */
+		return -ENOTSUPP;
 
 	/*
 	 * See emit_prologue(), for IBT builds the trampoline hook is preceded
