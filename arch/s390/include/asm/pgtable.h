@@ -97,16 +97,6 @@ extern unsigned long MODULES_END;
 #define MODULES_END	MODULES_END
 #define MODULES_LEN	(1UL << 31)
 
-static inline int is_module_addr(void *addr)
-{
-	BUILD_BUG_ON(MODULES_LEN > (1UL << 31));
-	if (addr < (void *)MODULES_VADDR)
-		return 0;
-	if (addr > (void *)MODULES_END)
-		return 0;
-	return 1;
-}
-
 #ifdef CONFIG_KMSAN
 #define KMSAN_VMALLOC_SIZE (VMALLOC_END - VMALLOC_START)
 #define KMSAN_VMALLOC_SHADOW_START VMALLOC_END
