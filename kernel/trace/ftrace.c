@@ -2592,8 +2592,13 @@ unsigned long ftrace_find_rec_direct(unsigned long ip)
 static void call_direct_funcs(unsigned long ip, unsigned long pip,
 			      struct ftrace_ops *ops, struct ftrace_regs *fregs)
 {
-	unsigned long addr = READ_ONCE(ops->direct_call);
+	unsigned long addr;
 
+#ifdef CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS
+	addr = ftrace_find_rec_direct(ip);
+#else
+	addr = READ_ONCE(ops->direct_call);
+#endif
 	if (!addr)
 		return;
 
@@ -5986,6 +5991,10 @@ int register_ftrace_direct(struct ftrace_ops *ops, unsigned long ip, unsigned lo
 	if (!hash)
 		return -ENOMEM;
 
+#ifndef CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS
+	ops->direct_call = addr;
+#endif
+
 	err = update_ftrace_direct_add(ops, hash);
 	free_ftrace_hash(hash);
 	return err;
@@ -6050,6 +6059,10 @@ int modify_ftrace_direct(struct ftrace_ops *ops, unsigned long ip, unsigned long
 		return -ENOMEM;
 
 	err = update_ftrace_direct_mod(ops, hash, lock_direct_mutex);
+#ifndef CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS
+	if (!err)
+		ops->direct_call = addr;
+#endif
 	free_ftrace_hash(hash);
 	return err;
 }
