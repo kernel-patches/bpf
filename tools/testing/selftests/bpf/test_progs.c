@@ -698,9 +698,14 @@ int compare_map_keys(int map1_fd, int map2_fd)
 
 int compare_stack_ips(int smap_fd, int amap_fd, int stack_trace_len)
 {
+	return compare_stack_ips_skip(smap_fd, amap_fd, stack_trace_len, 0);
+}
+
+int compare_stack_ips_skip(int smap_fd, int amap_fd, int stack_trace_len, int skip)
+{
 	__u32 key, next_key, *cur_key_p, *next_key_p;
-	char *val_buf1, *val_buf2;
-	int i, err = 0;
+	__u64 *val_buf1, *val_buf2;
+	int i, err = 0, do_skip;
 
 	val_buf1 = malloc(stack_trace_len);
 	val_buf2 = malloc(stack_trace_len);
@@ -713,11 +718,16 @@ int compare_stack_ips(int smap_fd, int amap_fd, int stack_trace_len)
 		err = bpf_map_lookup_elem(amap_fd, next_key_p, val_buf2);
 		if (err)
 			goto out;
-		for (i = 0; i < stack_trace_len; i++) {
-			if (val_buf1[i] != val_buf2[i]) {
-				err = -1;
-				goto out;
-			}
+		do_skip = skip;
+		for (i = 0; i < stack_trace_len/sizeof(u64); i++) {
+			fprintf(stderr, "KRAVA %d %lx %lx\n", i, (unsigned long) val_buf1[i], (unsigned long) val_buf2[i]);
+                        if (!do_skip && val_buf1[i] != val_buf2[i]) {
+                               err = -1;
+                               goto out;
+                        }
+			if (do_skip)
+				do_skip--;
+
 		}
 		key = *next_key_p;
 		cur_key_p = &key;
