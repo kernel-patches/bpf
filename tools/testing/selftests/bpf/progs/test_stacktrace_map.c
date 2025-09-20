@@ -3,6 +3,7 @@
 
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 
 #ifndef PERF_MAX_STACK_DEPTH
 #define PERF_MAX_STACK_DEPTH         127
@@ -50,8 +51,7 @@ struct sched_switch_args {
 	int next_prio;
 };
 
-SEC("tracepoint/sched/sched_switch")
-int oncpu(struct sched_switch_args *ctx)
+static inline void test_stackmap(void *ctx)
 {
 	__u32 max_len = PERF_MAX_STACK_DEPTH * sizeof(__u64);
 	__u32 key = 0, val = 0, *value_p;
@@ -59,7 +59,7 @@ int oncpu(struct sched_switch_args *ctx)
 
 	value_p = bpf_map_lookup_elem(&control_map, &key);
 	if (value_p && *value_p)
-		return 0; /* skip if non-zero *value_p */
+		return; /* skip if non-zero *value_p */
 
 	/* The size of stackmap and stackid_hmap should be the same */
 	key = bpf_get_stackid(ctx, &stackmap, 0);
@@ -69,7 +69,29 @@ int oncpu(struct sched_switch_args *ctx)
 		if (stack_p)
 			bpf_get_stack(ctx, stack_p, max_len, 0);
 	}
+}
 
+SEC("tracepoint/sched/sched_switch")
+int oncpu(struct sched_switch_args *ctx)
+{
+	test_stackmap(ctx);
+	return 0;
+}
+
+/*
+ * No tests in here, just to trigger 'bpf_fentry_test*'
+ * through tracing test_run
+ */
+SEC("fentry/bpf_modify_return_test")
+int BPF_PROG(trigger)
+{
+	return 0;
+}
+
+SEC("kprobe.multi")
+int kprobe(struct pt_regs *ctx)
+{
+	test_stackmap(ctx);
 	return 0;
 }
 

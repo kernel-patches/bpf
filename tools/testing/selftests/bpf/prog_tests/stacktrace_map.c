@@ -1,13 +1,44 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <test_progs.h>
+#include "test_stacktrace_map.skel.h"
 
-void test_stacktrace_map(void)
+static void check_stackmap(int control_map_fd, int stackid_hmap_fd,
+			   int stackmap_fd, int stack_amap_fd)
+{
+	__u32 key, val, duration = 0;
+	int err, stack_trace_len;
+
+	/* disable stack trace collection */
+	key = 0;
+	val = 1;
+	bpf_map_update_elem(control_map_fd, &key, &val, 0);
+
+	/* for every element in stackid_hmap, we can find a corresponding one
+	 * in stackmap, and vice versa.
+	 */
+	err = compare_map_keys(stackid_hmap_fd, stackmap_fd);
+	if (CHECK(err, "compare_map_keys stackid_hmap vs. stackmap",
+		  "err %d errno %d\n", err, errno))
+		return;
+
+	err = compare_map_keys(stackmap_fd, stackid_hmap_fd);
+	if (CHECK(err, "compare_map_keys stackmap vs. stackid_hmap",
+		  "err %d errno %d\n", err, errno))
+		return;
+
+	stack_trace_len = PERF_MAX_STACK_DEPTH * sizeof(__u64);
+	err = compare_stack_ips(stackmap_fd, stack_amap_fd, stack_trace_len);
+	CHECK(err, "compare_stack_ips stackmap vs. stack_amap",
+		"err %d errno %d\n", err, errno);
+}
+
+static void test_stacktrace_map_tp(void)
 {
 	int control_map_fd, stackid_hmap_fd, stackmap_fd, stack_amap_fd;
 	const char *prog_name = "oncpu";
-	int err, prog_fd, stack_trace_len;
+	int err, prog_fd;
 	const char *file = "./test_stacktrace_map.bpf.o";
-	__u32 key, val, duration = 0;
+	__u32 duration = 0;
 	struct bpf_program *prog;
 	struct bpf_object *obj;
 	struct bpf_link *link;
@@ -44,32 +75,51 @@ void test_stacktrace_map(void)
 	/* give some time for bpf program run */
 	sleep(1);
 
-	/* disable stack trace collection */
-	key = 0;
-	val = 1;
-	bpf_map_update_elem(control_map_fd, &key, &val, 0);
-
-	/* for every element in stackid_hmap, we can find a corresponding one
-	 * in stackmap, and vice versa.
-	 */
-	err = compare_map_keys(stackid_hmap_fd, stackmap_fd);
-	if (CHECK(err, "compare_map_keys stackid_hmap vs. stackmap",
-		  "err %d errno %d\n", err, errno))
-		goto disable_pmu;
-
-	err = compare_map_keys(stackmap_fd, stackid_hmap_fd);
-	if (CHECK(err, "compare_map_keys stackmap vs. stackid_hmap",
-		  "err %d errno %d\n", err, errno))
-		goto disable_pmu;
-
-	stack_trace_len = PERF_MAX_STACK_DEPTH * sizeof(__u64);
-	err = compare_stack_ips(stackmap_fd, stack_amap_fd, stack_trace_len);
-	if (CHECK(err, "compare_stack_ips stackmap vs. stack_amap",
-		  "err %d errno %d\n", err, errno))
-		goto disable_pmu;
+	check_stackmap(control_map_fd, stackid_hmap_fd, stackmap_fd, stack_amap_fd);
 
 disable_pmu:
 	bpf_link__destroy(link);
 close_prog:
 	bpf_object__close(obj);
+}
+
+static void test_stacktrace_map_kprobe_multi(void)
+{
+	int control_map_fd, stackid_hmap_fd, stackmap_fd, stack_amap_fd;
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	struct test_stacktrace_map *skel;
+	struct bpf_link *link;
+	int prog_fd, err;
+
+	skel = test_stacktrace_map__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_stacktrace_map__open_and_load"))
+		return;
+
+	link = bpf_program__attach_kprobe_multi_opts(skel->progs.kprobe,
+						     "bpf_fentry_test1", NULL);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_kprobe_multi_opts"))
+		goto cleanup;
+
+	prog_fd = bpf_program__fd(skel->progs.trigger);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run");
+	ASSERT_EQ(topts.retval, 0, "test_run");
+
+	control_map_fd = bpf_map__fd(skel->maps.control_map);
+	stackid_hmap_fd = bpf_map__fd(skel->maps.stackid_hmap);
+	stackmap_fd = bpf_map__fd(skel->maps.stackmap);
+	stack_amap_fd = bpf_map__fd(skel->maps.stack_amap);
+
+	check_stackmap(control_map_fd, stackid_hmap_fd, stackmap_fd, stack_amap_fd);
+
+cleanup:
+	test_stacktrace_map__destroy(skel);
+}
+
+void test_stacktrace_map(void)
+{
+	if (test__start_subtest("tp"))
+		test_stacktrace_map_tp();
+	if (test__start_subtest("kprobe_multi"))
+		test_stacktrace_map_kprobe_multi();
 }
