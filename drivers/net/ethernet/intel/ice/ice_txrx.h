@@ -260,6 +260,7 @@ enum ice_rx_dtype {
 struct ice_pkt_ctx {
 	u64 cached_phctime;
 	__be16 vlan_proto;
+	u8 rxq_flags;
 };
 
 struct ice_xdp_buff {
