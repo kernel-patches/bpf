@@ -3788,6 +3788,14 @@ static bool ignore_elf_section(Elf64_Shdr *hdr, const char *name)
 	if (is_sec_name_dwarf(name))
 		return true;
 
+	/* .comment section */
+	if (strcmp(name, ".comment") == 0)
+		return true;
+
+	/* .note.GNU-stack section */
+	if (strcmp(name, ".note.GNU-stack") == 0)
+		return true;
+
 	if (str_has_pfx(name, ".rel")) {
 		name += sizeof(".rel") - 1;
 		/* DWARF section relocations */
