@@ -30,6 +30,11 @@ enum xdp_meta_field {
 	XDP_META_FIELD_VLAN_TAG	= BIT(2),
 };
 
+#define CHECKSUM_NONE		0
+#define CHECKSUM_UNNECESSARY	1
+#define CHECKSUM_COMPLETE	2
+#define CHECKSUM_PARTIAL	3
+
 struct xdp_meta {
 	union {
 		__u64 rx_timestamp;
@@ -47,6 +52,10 @@ struct xdp_meta {
 			__u16 rx_vlan_tci;
 		};
 		__s32 rx_vlan_tag_err;
+	};
+	struct {
+		__u8 ip_summed;
+		__u32 cksum_meta;
 	};
 	enum xdp_meta_field hint_valid;
 };
