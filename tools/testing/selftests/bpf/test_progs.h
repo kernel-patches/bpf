@@ -491,6 +491,7 @@ static inline __u32 id_from_link_fd(int fd)
 int bpf_find_map(const char *test, struct bpf_object *obj, const char *name);
 int compare_map_keys(int map1_fd, int map2_fd);
 int compare_stack_ips(int smap_fd, int amap_fd, int stack_trace_len);
+int compare_stack_ips_skip(int smap_fd, int amap_fd, int stack_trace_len, int skip);
 int trigger_module_test_read(int read_sz);
 int trigger_module_test_write(int write_sz);
 int write_sysctl(const char *sysctl, const char *value);

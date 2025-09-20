@@ -95,4 +95,11 @@ int kprobe(struct pt_regs *ctx)
 	return 0;
 }
 
+SEC("fentry/bpf_fentry_test1")
+int BPF_PROG(fentry, int a)
+{
+	test_stackmap(ctx);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
