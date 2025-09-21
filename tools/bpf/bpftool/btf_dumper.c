@@ -11,6 +11,8 @@
 #include <linux/err.h>
 #include <bpf/btf.h>
 #include <bpf/bpf.h>
+#include <errno.h>
+#include <arpa/inet.h>
 
 #include "json_writer.h"
 #include "main.h"
@@ -130,18 +132,6 @@ print_ptr_value:
 		jsonw_printf(d->jw, "\"%p\"", (void *)value);
 	else
 		jsonw_printf(d->jw, "%lu", value);
-}
-
-static int btf_dumper_modifier(const struct btf_dumper *d, __u32 type_id,
-			       __u8 bit_offset, const void *data)
-{
-	int actual_type_id;
-
-	actual_type_id = btf__resolve_type(d->btf, type_id);
-	if (actual_type_id < 0)
-		return actual_type_id;
-
-	return btf_dumper_do_type(d, actual_type_id, bit_offset, data);
 }
 
 static int btf_dumper_enum(const struct btf_dumper *d,
@@ -556,6 +546,36 @@ static int btf_dumper_do_type(const struct btf_dumper *d, __u32 type_id,
 			      __u8 bit_offset, const void *data)
 {
 	const struct btf_type *t = btf__type_by_id(d->btf, type_id);
+	char addr[INET6_ADDRSTRLEN];
+
+	if (!t)
+		return -errno;
+
+	switch ((bit_offset == 0 && d->fmt_tags) ? d->fmt_tags[type_id] :
+						   BTF_FMT_DEFAULT) {
+	case BTF_FMT_BE16:
+		jsonw_printf(d->jw, "\"%d\"",
+			     be16_to_cpu(*(const __be16 *)data));
+		return 0;
+	case BTF_FMT_BE32:
+		jsonw_printf(d->jw, "\"%u\"",
+			     be32_to_cpu(*(const __be32 *)data));
+		return 0;
+	case BTF_FMT_BE64:
+		jsonw_printf(d->jw, "\"%lu\"",
+			     be64_to_cpu(*(const __be64 *)data));
+		return 0;
+	case BTF_FMT_IP4:
+		jsonw_string(d->jw,
+			     inet_ntop(AF_INET, data, addr, sizeof(addr)));
+		return 0;
+	case BTF_FMT_IP6:
+		jsonw_string(d->jw,
+			     inet_ntop(AF_INET6, data, addr, sizeof(addr)));
+		return 0;
+	default:
+		break;
+	}
 
 	switch (BTF_INFO_KIND(t->info)) {
 	case BTF_KIND_INT:
@@ -584,7 +604,7 @@ static int btf_dumper_do_type(const struct btf_dumper *d, __u32 type_id,
 	case BTF_KIND_VOLATILE:
 	case BTF_KIND_CONST:
 	case BTF_KIND_RESTRICT:
-		return btf_dumper_modifier(d, type_id, bit_offset, data);
+		return btf_dumper_do_type(d, t->type, bit_offset, data);
 	case BTF_KIND_VAR:
 		return btf_dumper_var(d, type_id, bit_offset, data);
 	case BTF_KIND_DATASEC:
@@ -593,6 +613,79 @@ static int btf_dumper_do_type(const struct btf_dumper *d, __u32 type_id,
 		jsonw_printf(d->jw, "(unsupported-kind");
 		return -EINVAL;
 	}
+}
+
+enum btf_fmt_tag *btf_fmt_tags_get(const struct btf *btf)
+{
+	int n = btf__type_cnt(btf);
+	enum btf_fmt_tag *tags = calloc(n, sizeof(tags[0]));
+
+	if (!tags)
+		return NULL;
+
+	for (int i = 1; i < n; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+		const struct btf_decl_tag *tag;
+		const char *name;
+		__s64 size;
+
+		if (!t)
+			goto err_free;
+		if (btf_kind(t) != BTF_KIND_DECL_TAG)
+			continue;
+
+		tag = (const void *)(t + 1);
+		if (tag->component_idx != -1)
+			continue;
+
+		name = btf__name_by_offset(btf, t->name_off);
+		if (!name)
+			goto err_free;
+
+#define BTF_FMT_TAG_PREFIX "user:fmt:"
+		if (strncmp(name, BTF_FMT_TAG_PREFIX,
+			    sizeof(BTF_FMT_TAG_PREFIX) - 1))
+			continue;
+
+		size = btf__resolve_size(btf, t->type);
+		if (size < 0)
+			continue; // could be a forward decl
+
+		if (btf_kind(btf__type_by_id(btf, t->type)) == BTF_KIND_VAR)
+			continue;
+
+		name += sizeof(BTF_FMT_TAG_PREFIX) - 1;
+		if (!strcmp(name, "be")) {
+			switch (size) {
+			case 2:
+				tags[t->type] = BTF_FMT_BE16;
+				break;
+			case 4:
+				tags[t->type] = BTF_FMT_BE32;
+				break;
+			case 8:
+				tags[t->type] = BTF_FMT_BE64;
+				break;
+			default:
+				break;
+			}
+		} else if (!strcmp(name, "ip")) {
+			switch (size) {
+			case 4:
+				tags[t->type] = BTF_FMT_IP4;
+				break;
+			case 16:
+				tags[t->type] = BTF_FMT_IP6;
+				break;
+			default:
+				break;
+			}
+		}
+	}
+	return tags;
+err_free:
+	free(tags);
+	return NULL;
 }
 
 int btf_dumper_type(const struct btf_dumper *d, __u32 type_id,

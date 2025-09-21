@@ -219,8 +219,20 @@ unsigned int get_possible_cpus(void);
 const char *
 ifindex_to_arch(__u32 ifindex, __u64 ns_dev, __u64 ns_ino, const char **opt);
 
+enum btf_fmt_tag {
+	BTF_FMT_DEFAULT = 0,
+	BTF_FMT_BE16,
+	BTF_FMT_BE32,
+	BTF_FMT_BE64,
+	BTF_FMT_IP4,
+	BTF_FMT_IP6,
+};
+
+enum btf_fmt_tag *btf_fmt_tags_get(const struct btf *btf);
+
 struct btf_dumper {
 	const struct btf *btf;
+	const enum btf_fmt_tag *fmt_tags;
 	json_writer_t *jw;
 	bool is_plain_text;
 	bool prog_id_as_func_ptr;

@@ -744,6 +744,7 @@ static int do_show(int argc, char **argv)
 
 static int dump_map_elem(int fd, void *key, void *value,
 			 struct bpf_map_info *map_info, struct btf *btf,
+			 const enum btf_fmt_tag *fmt_tags,
 			 json_writer_t *btf_wtr)
 {
 	if (bpf_map_lookup_elem(fd, key, value)) {
@@ -756,6 +757,7 @@ static int dump_map_elem(int fd, void *key, void *value,
 	} else if (btf) {
 		struct btf_dumper d = {
 			.btf = btf,
+			.fmt_tags = fmt_tags,
 			.jw = btf_wtr,
 			.is_plain_text = true,
 		};
@@ -829,6 +831,7 @@ map_dump(int fd, struct bpf_map_info *info, json_writer_t *wtr,
 	void *key, *value, *prev_key;
 	unsigned int num_elems = 0;
 	struct btf *btf = NULL;
+	enum btf_fmt_tag *fmt_tags = NULL;
 	int err;
 
 	key = malloc(info->key_size);
@@ -846,6 +849,7 @@ map_dump(int fd, struct bpf_map_info *info, json_writer_t *wtr,
 		if (err) {
 			goto exit_free;
 		}
+		fmt_tags = btf_fmt_tags_get(btf);
 
 		if (show_header) {
 			jsonw_start_object(wtr);	/* map object */
@@ -872,7 +876,7 @@ map_dump(int fd, struct bpf_map_info *info, json_writer_t *wtr,
 				err = 0;
 			break;
 		}
-		if (!dump_map_elem(fd, key, value, info, btf, wtr))
+		if (!dump_map_elem(fd, key, value, info, btf, fmt_tags, wtr))
 			num_elems++;
 		prev_key = key;
 	}
@@ -891,6 +895,7 @@ exit_free:
 	free(value);
 	close(fd);
 	free_map_kv_btf(btf);
+	free(fmt_tags);
 
 	return err;
 }
