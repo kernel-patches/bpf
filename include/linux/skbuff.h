@@ -4514,6 +4514,66 @@ static inline void skb_metadata_clear(struct sk_buff *skb)
 	skb_metadata_set(skb, 0);
 }
 
+/**
+ * skb_data_move - Move packet data following an skb_push() or skb_pull().
+ * @skb: packet which data to operate on
+ * @data_off: change in &sk_buff->len due to push/pull
+ * @move_len: number of bytes to memmove() from &sk_buff->data before push/pull
+ *
+ * Moves the packet metadata along with @move_len bytes of packet data.
+ *
+ * Assumes that the packet metadata was located in front of the &sk_buff->data
+ * before the skb_push() or skb_pull(), and that there exists sufficient
+ * headroom to fit the metadata after an skb_push(). Otherwise clears the
+ * metadata and issues a one-time warning.
+ *
+ * Prefer skb_postpull_data_move() or skb_postpush_data_move() instead of
+ * calling skb_data_move() directly.
+ */
+static inline void skb_data_move(struct sk_buff *skb, const int data_off,
+				 const unsigned int move_len)
+{
+	const u8 meta_len = skb_metadata_len(skb);
+	u8 *meta, *meta_end;
+
+	if (!data_off || (!move_len && !meta_len))
+		return;
+
+	if (!meta_len)
+		goto no_metadata;
+
+	meta_end = skb_metadata_end(skb);
+	meta = meta_end - meta_len;
+
+	if (WARN_ON_ONCE(meta_end + data_off != skb->data ||
+			 meta + data_off < skb->head)) {
+		skb_metadata_clear(skb);
+		goto no_metadata;
+	}
+
+	memmove(meta + data_off, meta, meta_len + move_len);
+	return;
+
+no_metadata:
+	memmove(skb->data, skb->data - data_off, move_len);
+}
+
+static inline void skb_postpull_data_move(struct sk_buff *skb,
+					  const unsigned int pull_len,
+					  const unsigned int move_len)
+{
+	DEBUG_NET_WARN_ON_ONCE(pull_len > INT_MAX);
+	skb_data_move(skb, pull_len, move_len);
+}
+
+static inline void skb_postpush_data_move(struct sk_buff *skb,
+					  const unsigned int push_len,
+					  const unsigned int move_len)
+{
+	DEBUG_NET_WARN_ON_ONCE(push_len > INT_MAX);
+	skb_data_move(skb, -push_len, move_len);
+}
+
 struct sk_buff *skb_clone_sk(struct sk_buff *skb);
 
 #ifdef CONFIG_NETWORK_PHY_TIMESTAMPING
