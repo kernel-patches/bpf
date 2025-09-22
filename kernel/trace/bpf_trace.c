@@ -2269,7 +2269,6 @@ fs_initcall(bpf_event_init);
 
 struct bpf_session_run_ctx {
 	struct bpf_run_ctx run_ctx;
-	bool is_return;
 	void *data;
 };
 
@@ -2535,8 +2534,7 @@ kprobe_multi_link_prog_run(struct bpf_kprobe_multi_link *link,
 {
 	struct bpf_kprobe_multi_run_ctx run_ctx = {
 		.session_ctx = {
-			.is_return = is_return,
-			.data = data,
+			.data = (void *)((unsigned long)data | !!is_return),
 		},
 		.link = link,
 		.entry_ip = entry_ip,
@@ -3058,8 +3056,7 @@ static int uprobe_prog_run(struct bpf_uprobe *uprobe,
 	struct bpf_uprobe_multi_link *link = uprobe->link;
 	struct bpf_uprobe_multi_run_ctx run_ctx = {
 		.session_ctx = {
-			.is_return = is_return,
-			.data = data,
+			.data = (void *)((unsigned long)data | !!is_return),
 		},
 		.entry_ip = entry_ip,
 		.uprobe = uprobe,
@@ -3316,7 +3313,7 @@ __bpf_kfunc bool bpf_session_is_return(void)
 	struct bpf_session_run_ctx *session_ctx;
 
 	session_ctx = container_of(current->bpf_ctx, struct bpf_session_run_ctx, run_ctx);
-	return session_ctx->is_return;
+	return (unsigned long)session_ctx->data & 1;
 }
 
 __bpf_kfunc __u64 *bpf_session_cookie(void)
@@ -3324,7 +3321,7 @@ __bpf_kfunc __u64 *bpf_session_cookie(void)
 	struct bpf_session_run_ctx *session_ctx;
 
 	session_ctx = container_of(current->bpf_ctx, struct bpf_session_run_ctx, run_ctx);
-	return session_ctx->data;
+	return (__u64 *)((unsigned long)session_ctx->data & ~1);
 }
 
 __bpf_kfunc_end_defs();
