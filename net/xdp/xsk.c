@@ -723,10 +723,48 @@ static struct sk_buff *xsk_build_skb_zerocopy(struct xdp_sock *xs,
 	return skb;
 }
 
+static int xsk_skb_metadata(struct sk_buff *skb, void *buffer,
+			    struct xdp_desc *desc, struct xsk_buff_pool *pool,
+			    u32 hr)
+{
+	struct xsk_tx_metadata *meta = NULL;
+
+	if (unlikely(pool->tx_metadata_len == 0))
+		return -EINVAL;
+
+	meta = buffer - pool->tx_metadata_len;
+	if (unlikely(!xsk_buff_valid_tx_metadata(meta)))
+		return -EINVAL;
+
+	if (meta->flags & XDP_TXMD_FLAGS_CHECKSUM) {
+		if (unlikely(meta->request.csum_start +
+			     meta->request.csum_offset +
+			     sizeof(__sum16) > desc->len))
+			return -EINVAL;
+
+		skb->csum_start = hr + meta->request.csum_start;
+		skb->csum_offset = meta->request.csum_offset;
+		skb->ip_summed = CHECKSUM_PARTIAL;
+
+		if (unlikely(pool->tx_sw_csum)) {
+			int err;
+
+			err = skb_checksum_help(skb);
+			if (err)
+				return err;
+		}
+	}
+
+	if (meta->flags & XDP_TXMD_FLAGS_LAUNCH_TIME)
+		skb->skb_mstamp_ns = meta->request.launch_time;
+	xsk_tx_metadata_to_compl(meta, &skb_shinfo(skb)->xsk_meta);
+
+	return 0;
+}
+
 static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 				     struct xdp_desc *desc)
 {
-	struct xsk_tx_metadata *meta = NULL;
 	struct net_device *dev = xs->dev;
 	struct sk_buff *skb = xs->skb;
 	int err;
@@ -764,6 +802,13 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 			skb->priority = READ_ONCE(xs->sk.sk_priority);
 			skb->mark = READ_ONCE(xs->sk.sk_mark);
 			skb->destructor = xsk_destruct_skb;
+
+			if (desc->options & XDP_TX_METADATA) {
+				err = xsk_skb_metadata(skb, buffer, desc,
+						       xs->pool, hr);
+				if (unlikely(err))
+					goto free_err;
+			}
 		} else {
 			int nr_frags = skb_shinfo(skb)->nr_frags;
 			struct xsk_addr_node *xsk_addr;
@@ -797,42 +842,6 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 
 			xsk_addr->addr = desc->addr;
 			list_add_tail(&xsk_addr->addr_node, &XSKCB(skb)->addrs_list);
-		}
-
-		if (!xsk_get_num_desc(skb) && desc->options & XDP_TX_METADATA) {
-			if (unlikely(xs->pool->tx_metadata_len == 0)) {
-				err = -EINVAL;
-				goto free_err;
-			}
-
-			meta = buffer - xs->pool->tx_metadata_len;
-			if (unlikely(!xsk_buff_valid_tx_metadata(meta))) {
-				err = -EINVAL;
-				goto free_err;
-			}
-
-			if (meta->flags & XDP_TXMD_FLAGS_CHECKSUM) {
-				if (unlikely(meta->request.csum_start +
-					     meta->request.csum_offset +
-					     sizeof(__sum16) > len)) {
-					err = -EINVAL;
-					goto free_err;
-				}
-
-				skb->csum_start = hr + meta->request.csum_start;
-				skb->csum_offset = meta->request.csum_offset;
-				skb->ip_summed = CHECKSUM_PARTIAL;
-
-				if (unlikely(xs->pool->tx_sw_csum)) {
-					err = skb_checksum_help(skb);
-					if (err)
-						goto free_err;
-				}
-			}
-
-			if (meta->flags & XDP_TXMD_FLAGS_LAUNCH_TIME)
-				skb->skb_mstamp_ns = meta->request.launch_time;
-			xsk_tx_metadata_to_compl(meta, &skb_shinfo(skb)->xsk_meta);
 		}
 	}
 
