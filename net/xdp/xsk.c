@@ -605,6 +605,13 @@ static u32 xsk_get_num_desc(struct sk_buff *skb)
 	return XSKCB(skb)->num_descs;
 }
 
+static void xsk_init_cb(struct sk_buff *skb)
+{
+	BUILD_BUG_ON(sizeof(struct xsk_addr_head) > sizeof(skb->cb));
+	INIT_LIST_HEAD(&XSKCB(skb)->addrs_list);
+	XSKCB(skb)->num_descs = 0;
+}
+
 static void xsk_destruct_skb(struct sk_buff *skb)
 {
 	struct xsk_tx_metadata_compl *compl = &skb_shinfo(skb)->xsk_meta;
@@ -620,9 +627,6 @@ static void xsk_destruct_skb(struct sk_buff *skb)
 
 static void xsk_set_destructor_arg(struct sk_buff *skb, u64 addr)
 {
-	BUILD_BUG_ON(sizeof(struct xsk_addr_head) > sizeof(skb->cb));
-	INIT_LIST_HEAD(&XSKCB(skb)->addrs_list);
-	XSKCB(skb)->num_descs = 0;
 	skb_shinfo(skb)->destructor_arg = (void *)(uintptr_t)addr;
 }
 
@@ -672,7 +676,7 @@ static struct sk_buff *xsk_build_skb_zerocopy(struct xdp_sock *xs,
 			return ERR_PTR(err);
 
 		skb_reserve(skb, hr);
-
+		xsk_init_cb(skb);
 		xsk_set_destructor_arg(skb, desc->addr);
 	} else {
 		xsk_addr = kmem_cache_zalloc(xsk_tx_generic_cache, GFP_KERNEL);
@@ -725,7 +729,6 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 	struct xsk_tx_metadata *meta = NULL;
 	struct net_device *dev = xs->dev;
 	struct sk_buff *skb = xs->skb;
-	bool first_frag = false;
 	int err;
 
 	if (dev->priv_flags & IFF_TX_SKB_NO_LINEAR) {
@@ -742,8 +745,6 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 		len = desc->len;
 
 		if (!skb) {
-			first_frag = true;
-
 			hr = max(NET_SKB_PAD, L1_CACHE_ALIGN(dev->needed_headroom));
 			tr = dev->needed_tailroom;
 			skb = sock_alloc_send_skb(&xs->sk, hr + len + tr, 1, &err);
@@ -752,6 +753,7 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 
 			skb_reserve(skb, hr);
 			skb_put(skb, len);
+			xsk_init_cb(skb);
 
 			err = skb_store_bits(skb, 0, buffer, len);
 			if (unlikely(err))
@@ -797,7 +799,7 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 			list_add_tail(&xsk_addr->addr_node, &XSKCB(skb)->addrs_list);
 		}
 
-		if (first_frag && desc->options & XDP_TX_METADATA) {
+		if (!xsk_get_num_desc(skb) && desc->options & XDP_TX_METADATA) {
 			if (unlikely(xs->pool->tx_metadata_len == 0)) {
 				err = -EINVAL;
 				goto free_err;
@@ -839,7 +841,7 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 	return skb;
 
 free_err:
-	if (first_frag && skb)
+	if (skb && !xsk_get_num_desc(skb))
 		kfree_skb(skb);
 
 	if (err == -EOVERFLOW) {
