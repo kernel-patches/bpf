@@ -1388,11 +1388,18 @@ static int run_shell_loop(FILE *fin, FILE *fout)
 int main(int argc, char **argv)
 {
 	FILE *fin = NULL, *fout = NULL;
+	int result;
 
 	if (argc >= 2)
 		fin = fopen(argv[1], "r");
 	if (argc >= 3)
 		fout = fopen(argv[2], "w");
 
-	return run_shell_loop(fin ? : stdin, fout ? : stdout);
+	result = run_shell_loop(fin ? : stdin, fout ? : stdout);
+
+	if (fin && fin != stdin)
+		fclose(fin);
+	if (fout && fout != stdout)
+		fclose(fout);
+	return result;
 }
