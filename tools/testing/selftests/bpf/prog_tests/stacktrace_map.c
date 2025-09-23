@@ -7,7 +7,8 @@ void test_stacktrace_map(void)
 	struct stacktrace_map *skel;
 	int stackid_hmap_fd, stackmap_fd, stack_amap_fd;
 	int err, stack_trace_len;
-	__u32 duration = 0;
+	__u32 stack_id, duration = 0;
+	__u64 val[PERF_MAX_STACK_DEPTH];
 
 	skel = stacktrace_map__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "skel_open_and_load"))
@@ -54,6 +55,14 @@ void test_stacktrace_map(void)
 		  "err %d errno %d\n", err, errno))
 		goto out;
 
+	stack_id = skel->bss->stack_id;
+	err = bpf_map_lookup_and_delete_elem(stackmap_fd, &stack_id,  val);
+	if (!ASSERT_OK(err, "lookup and delete target stack_id"))
+		goto out;
+
+	err = bpf_map_lookup_elem(stackmap_fd, &stack_id, val);
+	if (!ASSERT_EQ(err, -ENOENT, "lookup deleted stack_id"))
+		goto out;
 out:
 	stacktrace_map__destroy(skel);
 }
