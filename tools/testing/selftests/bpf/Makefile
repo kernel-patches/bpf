@@ -70,6 +70,10 @@ ifneq ($(shell $(CLANG) --target=bpf -mcpu=help 2>&1 | grep 'v4'),)
 CLANG_CPUV4 := 1
 endif
 
+# Enable arena verifier tests only if supported
+ENABLE_ARENA_TESTS := $(filter $(SRCARCH),x86 riscv s390 arm64)
+CFLAGS += $(if $(ENABLE_ARENA_TESTS),-DENABLE_ARENA_TESTS)
+
 # Order correspond to 'make run_tests' order
 TEST_GEN_PROGS = test_verifier test_tag test_maps test_lru_map test_progs \
 	test_sockmap \
@@ -540,13 +544,16 @@ define DEFINE_TEST_RUNNER
 LSKEL_SIGN := -S -k $(PRIVATE_KEY) -i $(VERIFICATION_CERT)
 TRUNNER_OUTPUT := $(OUTPUT)$(if $2,/)$2
 TRUNNER_BINARY := $1$(if $2,-)$2
+TRUNNER_TEST_SRCS := $$(filter-out $(TRUNNER_ARENA_FILTER), $$(notdir	\
+				   $$(wildcard $(TRUNNER_TESTS_DIR)/*.c)))
 TRUNNER_TEST_OBJS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.test.o,	\
-				 $$(notdir $$(wildcard $(TRUNNER_TESTS_DIR)/*.c)))
+				 $$(TRUNNER_TEST_SRCS))
 TRUNNER_EXTRA_OBJS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.o,		\
 				 $$(filter %.c,$(TRUNNER_EXTRA_SOURCES)))
 TRUNNER_EXTRA_HDRS := $$(filter %.h,$(TRUNNER_EXTRA_SOURCES))
 TRUNNER_TESTS_HDR := $(TRUNNER_TESTS_DIR)/tests.h
-TRUNNER_BPF_SRCS := $$(notdir $$(wildcard $(TRUNNER_BPF_PROGS_DIR)/*.c))
+TRUNNER_BPF_SRCS := $$(filter-out $(TRUNNER_ARENA_FILTER), $$(notdir	\
+				  $$(wildcard $(TRUNNER_BPF_PROGS_DIR)/*.c)))
 TRUNNER_BPF_OBJS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.bpf.o, $$(TRUNNER_BPF_SRCS))
 TRUNNER_BPF_SKELS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.skel.h,	\
 				 $$(filter-out $(SKEL_BLACKLIST) $(LINKED_BPF_SRCS),\
@@ -649,7 +656,9 @@ $(TRUNNER_TESTS_HDR): $(TRUNNER_TESTS_DIR)/*.c
 	$$(call msg,TEST-HDR,$(TRUNNER_BINARY),$$@)
 	$$(shell (echo '/* Generated header, do not edit */';					\
 		  sed -n -E 's/^void (serial_)?test_([a-zA-Z0-9_]+)\((void)?\).*/DEFINE_TEST(\2)/p'	\
-			$(TRUNNER_TESTS_DIR)/*.c | sort ;	\
+			$(TRUNNER_TESTS_DIR)/*.c			\
+			$$(if $(ENABLE_ARENA_TESTS),,| grep -v 'arena')	\
+			| sort ;	\
 		 ) > $$@)
 endif
 
@@ -756,6 +765,10 @@ TRUNNER_EXTRA_FILES := $(OUTPUT)/urandom_read				\
 		       $(VERIFY_SIG_SETUP)				\
 		       $(wildcard progs/btf_dump_test_case_*.c)		\
 		       $(wildcard progs/*.bpf.o)
+ifeq ($(ENABLE_ARENA_TESTS),)
+TRUNNER_ARENA_FILTER := $(notdir $(wildcard prog_tests/*arena*.c)	\
+				 $(wildcard progs/*arena*.c))
+endif
 TRUNNER_BPF_BUILD_RULE := CLANG_BPF_BUILD_RULE
 TRUNNER_BPF_CFLAGS := $(BPF_CFLAGS) $(CLANG_CFLAGS) -DENABLE_ATOMICS_TESTS
 $(eval $(call DEFINE_TEST_RUNNER,test_progs))
