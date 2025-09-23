@@ -79,6 +79,9 @@
 #define KF_ARENA_RET    (1 << 13) /* kfunc returns an arena pointer */
 #define KF_ARENA_ARG1   (1 << 14) /* kfunc takes an arena pointer as its first argument */
 #define KF_ARENA_ARG2   (1 << 15) /* kfunc takes an arena pointer as its second argument */
+/* kfunc takes a pointer to struct bpf_prog_aux as the last argument,
+ * passed implicitly in BPF */
+#define KF_IMPLICIT_PROG_AUX_ARG (1 << 16)
 
 /*
  * Tag marking a kernel function as a kfunc. This is meant to minimize the
