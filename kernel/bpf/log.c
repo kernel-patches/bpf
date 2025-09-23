@@ -705,11 +705,12 @@ static void print_reg_state(struct bpf_verifier_env *env,
 	if (type_is_non_owning_ref(reg->type))
 		verbose_a("%s", "non_own_ref");
 	if (type_is_map_ptr(t)) {
-		if (reg->map_ptr->name[0])
+		if (reg->map_ptr != NULL && reg->map_ptr->name[0] != '\0')
 			verbose_a("map=%s", reg->map_ptr->name);
-		verbose_a("ks=%d,vs=%d",
-			  reg->map_ptr->key_size,
-			  reg->map_ptr->value_size);
+		if (reg->map_ptr != NULL)
+			verbose_a("ks=%d,vs=%d",
+					reg->map_ptr->key_size,
+					reg->map_ptr->value_size);
 	}
 	if (t != SCALAR_VALUE && reg->off) {
 		verbose_a("off=");
