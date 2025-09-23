@@ -11980,6 +11980,11 @@ static bool is_kfunc_rcu_protected(struct bpf_kfunc_call_arg_meta *meta)
 	return meta->kfunc_flags & KF_RCU_PROTECTED;
 }
 
+static bool is_kfunc_with_implicit_prog_aux_arg(struct bpf_kfunc_call_arg_meta *meta)
+{
+	return meta->kfunc_flags & KF_IMPLICIT_PROG_AUX_ARG;
+}
+
 static bool is_kfunc_arg_mem_size(const struct btf *btf,
 				  const struct btf_param *arg,
 				  const struct bpf_reg_state *reg)
@@ -12059,6 +12064,18 @@ static bool is_kfunc_arg_irq_flag(const struct btf *btf, const struct btf_param 
 static bool is_kfunc_arg_prog(const struct btf *btf, const struct btf_param *arg)
 {
 	return btf_param_match_suffix(btf, arg, "__prog");
+}
+
+static int set_kfunc_arg_prog_regno(struct bpf_verifier_env *env, struct bpf_kfunc_call_arg_meta *meta, u32 regno)
+{
+	if (meta->arg_prog) {
+		verifier_bug(env, "Only 1 prog->aux argument supported per-kfunc");
+		return -EFAULT;
+	}
+	meta->arg_prog = true;
+	cur_aux(env)->arg_prog = regno;
+
+	return 0;
 }
 
 static bool is_kfunc_arg_scalar_with_name(const struct btf *btf,
@@ -13082,6 +13099,21 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		return -EINVAL;
 	}
 
+	/* KF_IMPLICIT_PROG_AUX_ARG means that the kfunc has one less argument in BTF,
+	 * so we have to set_kfunc_arg_prog_regno() outside the arg check loop.
+	 */
+	if (is_kfunc_with_implicit_prog_aux_arg(meta)) {
+		if (nargs + 1 > MAX_BPF_FUNC_REG_ARGS) {
+			verifier_bug(env, "A kfunc with KF_IMPLICIT_PROG_AUX_ARG flag has %d > %d args",
+				     nargs + 1, MAX_BPF_FUNC_REG_ARGS);
+			return -EFAULT;
+		}
+		u32 regno = nargs + 1;
+		ret = set_kfunc_arg_prog_regno(env, meta, regno);
+		if (ret)
+			return ret;
+	}
+
 	/* Check that BTF function arguments match actual types that the
 	 * verifier sees.
 	 */
@@ -13098,14 +13130,11 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		if (is_kfunc_arg_ignore(btf, &args[i]))
 			continue;
 
+		/* __prog annotation check for backward compatibility */
 		if (is_kfunc_arg_prog(btf, &args[i])) {
-			/* Used to reject repeated use of __prog. */
-			if (meta->arg_prog) {
-				verifier_bug(env, "Only 1 prog->aux argument supported per-kfunc");
-				return -EFAULT;
-			}
-			meta->arg_prog = true;
-			cur_aux(env)->arg_prog = regno;
+			ret = set_kfunc_arg_prog_regno(env, meta, regno);
+			if (ret)
+				return ret;
 			continue;
 		}
 
