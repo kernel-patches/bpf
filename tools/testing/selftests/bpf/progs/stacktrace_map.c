@@ -9,13 +9,6 @@
 #endif
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 1);
-	__type(key, __u32);
-	__type(value, __u32);
-} control_map SEC(".maps");
-
-struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 16384);
 	__type(key, __u32);
@@ -50,16 +43,16 @@ struct sched_switch_args {
 	int next_prio;
 };
 
+int control = 0;
 SEC("tracepoint/sched/sched_switch")
 int oncpu(struct sched_switch_args *ctx)
 {
 	__u32 max_len = PERF_MAX_STACK_DEPTH * sizeof(__u64);
-	__u32 key = 0, val = 0, *value_p;
+	__u32 key = 0, val = 0;
 	void *stack_p;
 
-	value_p = bpf_map_lookup_elem(&control_map, &key);
-	if (value_p && *value_p)
-		return 0; /* skip if non-zero *value_p */
+	if (control)
+		return 0;
 
 	/* The size of stackmap and stackid_hmap should be the same */
 	key = bpf_get_stackid(ctx, &stackmap, 0);
