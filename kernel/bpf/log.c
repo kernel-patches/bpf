@@ -704,7 +704,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		verbose_a("ref_obj_id=%d", reg->ref_obj_id);
 	if (type_is_non_owning_ref(reg->type))
 		verbose_a("%s", "non_own_ref");
-	if (type_is_map_ptr(t)) {
+	if (type_is_map_ptr(t) && reg->map_ptr) {
 		if (reg->map_ptr->name[0])
 			verbose_a("map=%s", reg->map_ptr->name);
 		verbose_a("ks=%d,vs=%d",
