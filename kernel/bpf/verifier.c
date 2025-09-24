@@ -12261,6 +12261,7 @@ enum special_kfunc_type {
 	KF___bpf_trap,
 	KF_bpf_task_work_schedule_signal,
 	KF_bpf_task_work_schedule_resume,
+	KF_bpf_copy_branch_snapshot,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12333,6 +12334,7 @@ BTF_ID(func, bpf_res_spin_unlock_irqrestore)
 BTF_ID(func, __bpf_trap)
 BTF_ID(func, bpf_task_work_schedule_signal)
 BTF_ID(func, bpf_task_work_schedule_resume)
+BTF_ID(func, bpf_copy_branch_snapshot)
 
 static bool is_task_work_add_kfunc(u32 func_id)
 {
@@ -14014,6 +14016,20 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			if (err < 0)
 				return err;
 		}
+	}
+
+	if (meta.func_id == special_kfunc_list[KF_bpf_copy_branch_snapshot]) {
+		if (env->prog->type != BPF_PROG_TYPE_TRACING ||
+		    (env->prog->expected_attach_type != BPF_TRACE_FENTRY &&
+		     env->prog->expected_attach_type != BPF_TRACE_FEXIT)) {
+			verbose(env, "only fentry and fexit programs support bpf_copy_branch_snapshot kfunc.\n");
+			return -EINVAL;
+		}
+
+		if (env->prog->expected_attach_type == BPF_TRACE_FENTRY)
+			env->prog->aux->dst_trampoline->flags |= BPF_TRAMP_F_LBR_ENTRY;
+		else
+			env->prog->aux->dst_trampoline->flags |= BPF_TRAMP_F_LBR_EXIT;
 	}
 
 	for (i = 0; i < CALLER_SAVED_REGS; i++)

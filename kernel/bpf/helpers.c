@@ -5,6 +5,7 @@
 #include <linux/btf.h>
 #include <linux/bpf-cgroup.h>
 #include <linux/cgroup.h>
+#include <linux/perf_event.h>
 #include <linux/rcupdate.h>
 #include <linux/random.h>
 #include <linux/smp.h>
@@ -4199,6 +4200,32 @@ __bpf_kfunc int bpf_task_work_schedule_resume(struct task_struct *task, struct b
 	return bpf_task_work_schedule(task, tw, map__map, callback, aux__prog, TWA_RESUME);
 }
 
+__bpf_kfunc int bpf_copy_branch_snapshot(void *ctx, void *buf, u32 size, u64 flags)
+{
+	const u32 br_entry_size = sizeof(struct perf_branch_entry);
+	const struct bpf_tramp_branch_entries __percpu *pptr;
+	const struct bpf_tramp_branch_entries *br;
+	u32 tflags;
+	int idx;
+
+	if (unlikely(flags))
+		return -EINVAL;
+
+	if (unlikely(!size || size % br_entry_size))
+		return -EINVAL;
+
+	tflags = ((u32 *) ctx)[-1];
+	idx = (IS_ENABLED(CONFIG_X86_64) && (tflags & BPF_TRAMP_F_IP_ARG)) ? -3 : -2;
+	pptr = ((typeof(pptr))(const uintptr_t) (((u64 *) ctx)[idx]));
+	br = this_cpu_ptr(pptr);
+	if (br->cnt > 0) {
+		size = min(size, br->cnt * br_entry_size);
+		memcpy(buf, (void *) br->entries, size);
+		return size;
+	}
+	return br->cnt;
+}
+
 __bpf_kfunc_end_defs();
 
 static void bpf_task_work_cancel_scheduled(struct irq_work *irq_work)
@@ -4276,6 +4303,7 @@ BTF_ID_FLAGS(func, bpf_key_put, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_verify_pkcs7_signature, KF_SLEEPABLE)
 #endif
 #endif
+BTF_ID_FLAGS(func, bpf_copy_branch_snapshot)
 BTF_KFUNCS_END(generic_btf_ids)
 
 static const struct btf_kfunc_id_set generic_kfunc_set = {
