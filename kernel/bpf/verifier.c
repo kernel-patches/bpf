@@ -514,7 +514,7 @@ static bool is_async_callback_calling_kfunc(u32 btf_id);
 static bool is_callback_calling_kfunc(u32 btf_id);
 static bool is_bpf_throw_kfunc(struct bpf_insn *insn);
 
-static bool is_bpf_wq_set_callback_impl_kfunc(u32 btf_id);
+static bool is_bpf_wq_set_callback_kfunc(u32 btf_id);
 
 static bool is_sync_callback_calling_function(enum bpf_func_id func_id)
 {
@@ -10586,7 +10586,7 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 		env->subprog_info[subprog].is_async_cb = true;
 		async_cb = push_async_cb(env, env->subprog_info[subprog].start,
 					 insn_idx, subprog,
-					 is_bpf_wq_set_callback_impl_kfunc(insn->imm) ||
+					 is_bpf_wq_set_callback_kfunc(insn->imm) ||
 					 is_task_work_add_kfunc(insn->imm));
 		if (!async_cb)
 			return -EFAULT;
@@ -12278,6 +12278,7 @@ enum special_kfunc_type {
 	KF___bpf_trap,
 	KF_bpf_task_work_schedule_signal,
 	KF_bpf_task_work_schedule_resume,
+	KF_bpf_wq_set_callback,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12350,6 +12351,7 @@ BTF_ID(func, bpf_res_spin_unlock_irqrestore)
 BTF_ID(func, __bpf_trap)
 BTF_ID(func, bpf_task_work_schedule_signal)
 BTF_ID(func, bpf_task_work_schedule_resume)
+BTF_ID(func, bpf_wq_set_callback)
 
 static bool is_task_work_add_kfunc(u32 func_id)
 {
@@ -12797,7 +12799,7 @@ static bool is_sync_callback_calling_kfunc(u32 btf_id)
 
 static bool is_async_callback_calling_kfunc(u32 btf_id)
 {
-	return btf_id == special_kfunc_list[KF_bpf_wq_set_callback_impl] ||
+	return is_bpf_wq_set_callback_kfunc(btf_id) ||
 	       is_task_work_add_kfunc(btf_id);
 }
 
@@ -12807,9 +12809,10 @@ static bool is_bpf_throw_kfunc(struct bpf_insn *insn)
 	       insn->imm == special_kfunc_list[KF_bpf_throw];
 }
 
-static bool is_bpf_wq_set_callback_impl_kfunc(u32 btf_id)
+static bool is_bpf_wq_set_callback_kfunc(u32 btf_id)
 {
-	return btf_id == special_kfunc_list[KF_bpf_wq_set_callback_impl];
+	return btf_id == special_kfunc_list[KF_bpf_wq_set_callback_impl] ||
+	       btf_id == special_kfunc_list[KF_bpf_wq_set_callback];
 }
 
 static bool is_callback_calling_kfunc(u32 btf_id)
@@ -13910,7 +13913,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		meta.r0_rdonly = false;
 	}
 
-	if (is_bpf_wq_set_callback_impl_kfunc(meta.func_id)) {
+	if (is_bpf_wq_set_callback_kfunc(meta.func_id)) {
 		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
 					 set_timer_callback_state);
 		if (err) {
