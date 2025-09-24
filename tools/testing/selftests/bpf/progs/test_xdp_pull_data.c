@@ -2,6 +2,7 @@
 
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_core_read.h>
 
 int xdpf_sz;
 int sinfo_sz;
@@ -13,7 +14,7 @@ int pull_len;
 SEC("xdp.frags")
 int xdp_find_sizes(struct xdp_md *ctx)
 {
-	xdpf_sz = sizeof(struct xdp_frame);
+	xdpf_sz = bpf_core_type_size(struct xdp_frame);
 	sinfo_sz = __PAGE_SIZE - XDP_PACKET_HEADROOM -
 		   (ctx->data_end - ctx->data);
 
