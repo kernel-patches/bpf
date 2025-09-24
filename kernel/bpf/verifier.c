@@ -22675,7 +22675,11 @@ patch_map_ops_generic:
 		if (prog_type == BPF_PROG_TYPE_TRACING &&
 		    insn->imm == BPF_FUNC_get_func_arg) {
 			/* Load nr_args from ctx - 8 */
+#ifdef CONFIG_X86_64
+			insn_buf[0] = BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1, -8);
+#else
 			insn_buf[0] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1, -8);
+#endif
 			insn_buf[1] = BPF_JMP32_REG(BPF_JGE, BPF_REG_2, BPF_REG_0, 6);
 			insn_buf[2] = BPF_ALU64_IMM(BPF_LSH, BPF_REG_2, 3);
 			insn_buf[3] = BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_1);
@@ -22702,7 +22706,11 @@ patch_map_ops_generic:
 			if (eatype == BPF_TRACE_FEXIT ||
 			    eatype == BPF_MODIFY_RETURN) {
 				/* Load nr_args from ctx - 8 */
+#ifdef CONFIG_X86_64
+				insn_buf[0] = BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1, -8);
+#else
 				insn_buf[0] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1, -8);
+#endif
 				insn_buf[1] = BPF_ALU64_IMM(BPF_LSH, BPF_REG_0, 3);
 				insn_buf[2] = BPF_ALU64_REG(BPF_ADD, BPF_REG_0, BPF_REG_1);
 				insn_buf[3] = BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_0, 0);
@@ -22728,7 +22736,11 @@ patch_map_ops_generic:
 		if (prog_type == BPF_PROG_TYPE_TRACING &&
 		    insn->imm == BPF_FUNC_get_func_arg_cnt) {
 			/* Load nr_args from ctx - 8 */
+#ifdef CONFIG_X86_64
+			insn_buf[0] = BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1, -8);
+#else
 			insn_buf[0] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1, -8);
+#endif
 
 			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, 1);
 			if (!new_prog)
