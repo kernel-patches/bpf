@@ -73,7 +73,7 @@ static void close_perf_events(void)
 	free(pfd_array);
 }
 
-void serial_test_get_branch_snapshot(void)
+static void test_branch_snapshot(int flags)
 {
 	struct get_branch_snapshot *skel = NULL;
 	int err;
@@ -89,8 +89,14 @@ void serial_test_get_branch_snapshot(void)
 		goto cleanup;
 	}
 
-	skel = get_branch_snapshot__open_and_load();
-	if (!ASSERT_OK_PTR(skel, "get_branch_snapshot__open_and_load"))
+	skel = get_branch_snapshot__open();
+	if (!ASSERT_OK_PTR(skel, "get_branch_snapshot__open"))
+		goto cleanup;
+
+	skel->rodata->flags = flags;
+
+	err = get_branch_snapshot__load(skel);
+	if (!ASSERT_OK(err, "get_branch_snapshot__load"))
 		goto cleanup;
 
 	err = kallsyms_find("bpf_testmod_loop_test", &skel->bss->address_low);
@@ -127,4 +133,18 @@ void serial_test_get_branch_snapshot(void)
 cleanup:
 	get_branch_snapshot__destroy(skel);
 	close_perf_events();
+}
+
+void serial_test_get_branch_snapshot(void)
+{
+	test_branch_snapshot(0);
+}
+
+enum {
+	BPF_BRANCH_SNAPSHOT_F_COPY	= 1,	/* Copy branch snapshot from bpf_branch_snapshot. */
+};
+
+void serial_test_copy_branch_snapshot(void)
+{
+	test_branch_snapshot(BPF_BRANCH_SNAPSHOT_F_COPY);
 }

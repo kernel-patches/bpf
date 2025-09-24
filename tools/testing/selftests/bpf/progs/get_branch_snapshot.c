@@ -6,6 +6,7 @@
 
 char _license[] SEC("license") = "GPL";
 
+volatile const int flags = 0;
 __u64 test1_hits = 0;
 __u64 address_low = 0;
 __u64 address_high = 0;
@@ -25,7 +26,7 @@ int BPF_PROG(test1, int n, int ret)
 {
 	long i;
 
-	total_entries = bpf_get_branch_snapshot(entries, sizeof(entries), 0);
+	total_entries = bpf_get_branch_snapshot(entries, sizeof(entries), flags);
 	total_entries /= sizeof(struct perf_branch_entry);
 
 	for (i = 0; i < ENTRY_CNT; i++) {
