@@ -207,6 +207,9 @@ int bpf_map_create(enum bpf_map_type map_type,
 		   const struct bpf_map_create_opts *opts)
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, excl_prog_hash_size);
+	const size_t common_attr_sz = sizeof(struct bpf_common_attr);
+	struct bpf_syscall_common_attr_opts *common_attr_opts;
+	struct bpf_common_attr common_attr;
 	union bpf_attr attr;
 	int fd;
 
@@ -240,7 +243,17 @@ int bpf_map_create(enum bpf_map_type map_type,
 	attr.excl_prog_hash = ptr_to_u64(OPTS_GET(opts, excl_prog_hash, NULL));
 	attr.excl_prog_hash_size = OPTS_GET(opts, excl_prog_hash_size, 0);
 
-	fd = sys_bpf_fd(BPF_MAP_CREATE, &attr, attr_sz);
+	common_attr_opts = OPTS_GET(opts, common_attr_opts, NULL);
+	if (common_attr_opts && feat_supported(NULL, FEAT_EXTENDED_SYSCALL)) {
+		memset(&common_attr, 0, common_attr_sz);
+		common_attr.log_buf = ptr_to_u64(OPTS_GET(common_attr_opts, log_buf, NULL));
+		common_attr.log_size = OPTS_GET(common_attr_opts, log_size, 0);
+		common_attr.log_level = OPTS_GET(common_attr_opts, log_level, 0);
+		fd = sys_bpf_ext_fd(BPF_MAP_CREATE, &attr, attr_sz, &common_attr, common_attr_sz);
+		OPTS_SET(common_attr_opts, log_true_size, common_attr.log_true_size);
+	} else {
+		fd = sys_bpf_fd(BPF_MAP_CREATE, &attr, attr_sz);
+	}
 	return libbpf_err_errno(fd);
 }
 
