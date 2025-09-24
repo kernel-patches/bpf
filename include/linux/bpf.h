@@ -6,6 +6,7 @@
 
 #include <uapi/linux/bpf.h>
 #include <uapi/linux/filter.h>
+#include <uapi/linux/perf_event.h>
 
 #include <crypto/sha2.h>
 #include <linux/workqueue.h>
@@ -1236,6 +1237,18 @@ struct bpf_tramp_links {
 
 struct bpf_tramp_run_ctx;
 
+#ifdef CONFIG_X86_64
+/* Same as MAX_LBR_ENTRIES in arch/x86/events/perf_event.h */
+#define MAX_BRANCH_ENTRIES		32
+
+struct bpf_tramp_branch_entries {
+	int cnt;
+	struct perf_branch_entry entries[MAX_BRANCH_ENTRIES];
+};
+
+DECLARE_PER_CPU(struct bpf_tramp_branch_entries, bpf_branch_snapshot);
+#endif
+
 /* Different use cases for BPF trampoline:
  * 1. replace nop at the function entry (kprobe equivalent)
  *    flags = BPF_TRAMP_F_RESTORE_REGS
@@ -1780,7 +1793,8 @@ struct bpf_prog {
 				call_get_stack:1, /* Do we call bpf_get_stack() or bpf_get_stackid() */
 				call_get_func_ip:1, /* Do we call get_func_ip() */
 				tstamp_type_access:1, /* Accessed __sk_buff->tstamp_type */
-				sleepable:1;	/* BPF program is sleepable */
+				sleepable:1,	/* BPF program is sleepable */
+				copy_branch_snapshot:1; /* Copy branch snapshot from prefetched buffer */
 	enum bpf_prog_type	type;		/* Type of BPF program */
 	enum bpf_attach_type	expected_attach_type; /* For some prog types */
 	u32			len;		/* Number of filter blocks */
