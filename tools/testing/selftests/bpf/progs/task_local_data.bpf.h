@@ -181,7 +181,7 @@ static int __tld_fetch_key(struct tld_object *tld_obj, const char *name, int i_s
 	metadata = tld_obj->data_map->meta->metadata;
 
 	bpf_for(i, 0, cnt) {
-		if (i >= TLD_MAX_DATA_CNT)
+		if ((__u32)i >= TLD_MAX_DATA_CNT)
 			break;
 
 		if (i >= i_start && !bpf_strncmp(metadata[i].name, TLD_NAME_LEN, name))
@@ -214,7 +214,7 @@ static int __tld_fetch_key(struct tld_object *tld_obj, const char *name, int i_s
 		if (likely(_data)) {							\
 			if (likely(off > 0)) {						\
 				barrier_var(off);					\
-				if (likely(off < __PAGE_SIZE - size))			\
+				if (likely((size_t)off < __PAGE_SIZE - size))			\
 					data = _data + off;				\
 			} else {							\
 				cnt = -(off);						\
@@ -223,7 +223,7 @@ static int __tld_fetch_key(struct tld_object *tld_obj, const char *name, int i_s
 					off = __tld_fetch_key(tld_obj, name, cnt);	\
 					(tld_obj)->key_map->key.off = off;		\
 											\
-					if (likely(off < __PAGE_SIZE - size)) {		\
+					if (likely((size_t)off < __PAGE_SIZE - size)) {		\
 						barrier_var(off);			\
 						if (off > 0)				\
 							data = _data + off;		\
