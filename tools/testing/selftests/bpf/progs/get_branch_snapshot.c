@@ -9,6 +9,7 @@ char _license[] SEC("license") = "GPL";
 __u64 test1_hits = 0;
 __u64 address_low = 0;
 __u64 address_high = 0;
+int copy_branch_snapshot = 0;
 int wasted_entries = 0;
 long total_entries = 0;
 
@@ -25,7 +26,10 @@ int BPF_PROG(test1, int n, int ret)
 {
 	long i;
 
-	total_entries = bpf_get_branch_snapshot(entries, sizeof(entries), 0);
+	if (copy_branch_snapshot)
+		total_entries = bpf_copy_branch_snapshot(ctx, entries, sizeof(entries), 0);
+	else
+		total_entries = bpf_get_branch_snapshot(entries, sizeof(entries), 0);
 	total_entries /= sizeof(struct perf_branch_entry);
 
 	for (i = 0; i < ENTRY_CNT; i++) {
