@@ -169,6 +169,104 @@ __bpf_kfunc int bpf_get_file_xattr(struct file *file, const char *name__str,
 	return bpf_get_dentry_xattr(dentry, name__str, value_p);
 }
 
+/**
+ * bpf_dget - get a reference on a dentry
+ * @dentry: dentry to get a reference on
+ *
+ * Get a reference on the supplied *dentry*. The referenced dentry pointer
+ * acquired by this BPF kfunc must be released using bpf_dput().
+ *
+ * This BPF kfunc may only be called from BPF LSM programs.
+ *
+ * Return: A referenced dentry pointer. On error, NULL is returned.
+ */
+__bpf_kfunc struct dentry *bpf_dget(struct dentry *dentry)
+{
+	return dget(dentry);
+}
+
+/**
+ * bpf_dput - put a reference on a dentry
+ * @dentry: dentry to put a reference on
+ *
+ * Put a reference on the supplied *dentry*.
+ *
+ * This BPF kfunc may only be called from BPF LSM programs.
+ */
+__bpf_kfunc void bpf_dput(struct dentry *dentry)
+{
+	dput(dentry);
+}
+
+/**
+ * bpf_dget_parent - get a reference on the parent dentry
+ * @dentry: dentry to get the parent of
+ *
+ * Get a reference on the parent of the supplied *dentry*. The referenced
+ * dentry pointer acquired by this BPF kfunc must be released using bpf_dput().
+ *
+ * This BPF kfunc may only be called from BPF LSM programs.
+ *
+ * Return: A referenced parent dentry pointer. On error, NULL is returned.
+ */
+__bpf_kfunc struct dentry *bpf_dget_parent(struct dentry *dentry)
+{
+	return dget_parent(dentry);
+}
+
+/**
+ * bpf_d_find_alias - find an alias dentry for an inode
+ * @inode: inode to find an alias for
+ *
+ * Find an alias dentry for the supplied *inode*. The referenced dentry pointer
+ * acquired by this BPF kfunc must be released using bpf_dput().
+ *
+ * This BPF kfunc may only be called from BPF LSM programs.
+ *
+ * Return: A referenced alias dentry pointer. On error, NULL is returned.
+ */
+__bpf_kfunc struct dentry *bpf_d_find_alias(struct inode *inode)
+{
+	return d_find_alias(inode);
+}
+
+/**
+ * bpf_file_dentry - get the dentry associated with a file
+ * @file: file to get the dentry from
+ *
+ * Get the dentry associated with the supplied *file*. This is a trusted
+ * accessor that allows BPF programs to safely obtain a dentry pointer
+ * from a file structure. The returned pointer is borrowed and does not
+ * require bpf_dput().
+ *
+ * This BPF kfunc may only be called from BPF LSM programs.
+ *
+ * Return: A dentry pointer. On error, NULL is returned.
+ */
+__bpf_kfunc struct dentry *bpf_file_dentry(struct file *file)
+{
+	return file_dentry(file);
+}
+
+/**
+ * bpf_file_vfsmount - get the vfsmount associated with a file
+ * @file: file to get the vfsmount from
+ *
+ * Get the vfsmount associated with the supplied *file*. This is a trusted
+ * accessor that allows BPF programs to safely obtain a vfsmount pointer
+ * from a file structure. The returned pointer is borrowed and does not
+ * require any release function.
+ *
+ * This BPF kfunc may only be called from BPF LSM programs.
+ *
+ * Return: A vfsmount pointer. On error, NULL is returned.
+ */
+__bpf_kfunc struct vfsmount *bpf_file_vfsmount(struct file *file)
+{
+	return file->f_path.mnt;
+}
+
+
 __bpf_kfunc_end_defs();
 
 static int bpf_xattr_write_permission(const char *name, struct inode *inode)
@@ -367,6 +465,12 @@ BTF_ID_FLAGS(func, bpf_get_dentry_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_set_dentry_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_remove_dentry_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_dget, KF_ACQUIRE | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_dput, KF_RELEASE)
+BTF_ID_FLAGS(func, bpf_dget_parent, KF_ACQUIRE | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_d_find_alias, KF_ACQUIRE | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_file_dentry, KF_TRUSTED_ARGS | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_file_vfsmount, KF_TRUSTED_ARGS | KF_RET_NULL)
 BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
 
 static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
