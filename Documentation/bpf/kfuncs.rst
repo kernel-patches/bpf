@@ -160,7 +160,7 @@ Or::
                 ...
         }
 
-2.2.6 __prog Annotation
+2.2.6 __prog Annotation (deprecated, use KF_IMPLICIT_PROG_AUX_ARG instead)
 ---------------------------
 This annotation is used to indicate that the argument needs to be fixed up to
 the bpf_prog_aux of the caller BPF program. Any value passed into this argument
@@ -373,6 +373,43 @@ prevent it from being added in the first place. As described in
 encouraged to make their use-cases known as early as possible, and participate
 in upstream discussions regarding whether to keep, change, deprecate, or remove
 those kfuncs if and when such discussions occur.
+
+2.4.10 KF_IMPLICIT_PROG_AUX_ARG flag
+------------------------------------
+
+The KF_IMPLICIT_PROG_AUX_ARG flag is used to indicate that the last
+argument of a BPF kfunc is a pointer to struct bpf_prog_aux of the
+caller BPF program, implicitly set by the verifier.
+
+If a kfunc is marked with this flag, the function declaration in the
+kernel must have ``struct bpf_prog_aux *`` as the last argument.
+However in the kernel BTF (produced by pahole) this argument will be
+omitted, making it invisible to BPF programs calling the kfunc.
+
+Note that the implicit argument is an actual BPF argument passed
+through a register, reducing the number of the available function
+arguments.
+
+Example declaration:
+
+.. code-block:: c
+
+	__bpf_kfunc int bpf_task_work_schedule_resume(struct task_struct *task, struct bpf_task_work *tw,
+						void *map__map, bpf_task_work_callback_t callback,
+						struct bpf_prog_aux *aux)
+	{
+		return bpf_task_work_schedule(task, tw, map__map, callback, aux, TWA_RESUME);
+	}
+
+	BTF_ID_FLAGS(func, bpf_task_work_schedule_resume, KF_TRUSTED_ARGS | KF_IMPLICIT_PROG_AUX_ARG)
+
+Example usage:
+
+.. code-block:: c
+
+	/* note the last argument is ommitted */
+	bpf_task_work_schedule_resume(task, &tw, &hmap, process_work);
+
 
 2.5 Registering the kfuncs
 --------------------------
