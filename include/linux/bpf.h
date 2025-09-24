@@ -6,6 +6,7 @@
 
 #include <uapi/linux/bpf.h>
 #include <uapi/linux/filter.h>
+#include <uapi/linux/perf_event.h>
 
 #include <crypto/sha2.h>
 #include <linux/workqueue.h>
@@ -1188,6 +1189,11 @@ struct btf_func_model {
  */
 #define BPF_TRAMP_F_INDIRECT		BIT(8)
 
+/* Indicate the trampoline should capture branch snapshot for fentry progs. */
+#define BPF_TRAMP_F_LBR_ENTRY		BIT(9)
+/* Indicate the trampoline should capture branch snapshot for fexit progs. */
+#define BPF_TRAMP_F_LBR_EXIT		BIT(10)
+
 /* Each call __bpf_prog_enter + call bpf_func + call __bpf_prog_exit is ~50
  * bytes on x86.
  */
@@ -1205,6 +1211,14 @@ struct bpf_tramp_links {
 };
 
 struct bpf_tramp_run_ctx;
+
+/* Same as MAX_LBR_ENTRIES in arch/x86/events/perf_event.h */
+#define MAX_BRANCH_ENTRIES		32
+
+struct bpf_tramp_branch_entries {
+	int cnt;
+	struct perf_branch_entry entries[MAX_BRANCH_ENTRIES];
+};
 
 /* Different use cases for BPF trampoline:
  * 1. replace nop at the function entry (kprobe equivalent)
@@ -1272,6 +1286,7 @@ struct bpf_tramp_image {
 	int size;
 	struct bpf_ksym ksym;
 	struct percpu_ref pcref;
+	struct bpf_tramp_branch_entries __percpu *br;
 	void *ip_after_call;
 	void *ip_epilogue;
 	union {

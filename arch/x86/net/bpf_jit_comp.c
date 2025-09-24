@@ -12,6 +12,7 @@
 #include <linux/bpf.h>
 #include <linux/memory.h>
 #include <linux/sort.h>
+#include <linux/perf_event.h>
 #include <asm/extable.h>
 #include <asm/ftrace.h>
 #include <asm/set_memory.h>
@@ -19,6 +20,7 @@
 #include <asm/text-patching.h>
 #include <asm/unwind.h>
 #include <asm/cfi.h>
+#include "../events/perf_event.h"
 
 static bool all_callee_regs_used[4] = {true, true, true, true};
 
@@ -3108,6 +3110,41 @@ static int invoke_bpf_mod_ret(const struct btf_func_model *m, u8 **pprog,
 	return 0;
 }
 
+static int invoke_branch_snapshot(u8 **pprog, struct bpf_tramp_image *im, void *image,
+				  void *rw_image)
+{
+	u8 *prog = *pprog;
+
+	/*
+	 * Emit:
+	 *
+	 * struct bpf_tramp_branch_entries *br = this_cpu_ptr(im->br);
+	 * br->cnt = static_call(perf_snapshot_branch_stack)(br->entries, x86_pmu.lbr_nr);
+	 */
+
+	/* mov rbx, im->br */
+	emit_mov_imm64(&prog, BPF_REG_6, (long) im->br >> 32, (u32)(long) im->br);
+#ifdef CONFIG_SMP
+	/* add rbx, gs:[<off>] */
+	EMIT2(0x65, 0x48);
+	EMIT3(0x03, 0x1C, 0x25);
+	EMIT((u32)(unsigned long)&this_cpu_off, 4);
+#endif
+	/* mov esi, x86_pmu.lbr_nr */
+	EMIT1_off32(0xBE, x86_pmu.lbr_nr);
+	/* lea rdi, [rbx + offsetof(struct bpf_tramp_branch_entries, entries)] */
+	EMIT4(0x48, 0x8D, 0x7B, offsetof(struct bpf_tramp_branch_entries, entries));
+	/* call static_call_query(perf_snapshot_branch_stack) */
+	if (emit_rsb_call(&prog, static_call_query(perf_snapshot_branch_stack),
+			  image + (prog - (u8 *)rw_image)))
+		return -EINVAL;
+	/* mov dword ptr [rbx], eax */
+	EMIT2(0x89, 0x03);
+
+	*pprog = prog;
+	return 0;
+}
+
 /* mov rax, qword ptr [rbp - rounded_stack_depth - 8] */
 #define LOAD_TRAMP_TAIL_CALL_CNT_PTR(stack)	\
 	__LOAD_TCC_PTR(-round_up(stack, 8) - 8)
@@ -3179,7 +3216,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 					 void *func_addr)
 {
 	int i, ret, nr_regs = m->nr_args, stack_size = 0;
-	int regs_off, nregs_off, ip_off, run_ctx_off, arg_stack_off, rbx_off;
+	int regs_off, nregs_off, ip_off, run_ctx_off, arg_stack_off, rbx_off, lbr_off;
 	struct bpf_tramp_links *fentry = &tlinks[BPF_TRAMP_FENTRY];
 	struct bpf_tramp_links *fexit = &tlinks[BPF_TRAMP_FEXIT];
 	struct bpf_tramp_links *fmod_ret = &tlinks[BPF_TRAMP_MODIFY_RETURN];
@@ -3224,6 +3261,8 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	 *
 	 * RBP - ip_off    [ traced function ]  BPF_TRAMP_F_IP_ARG flag
 	 *
+	 * RBP - lbr_off   [ im->br          ]  BPF_TRAMP_F_LBR_ENTRY | BPF_TRAMP_F_LBR_EXIT
+	 *
 	 * RBP - rbx_off   [ rbx value       ]  always
 	 *
 	 * RBP - run_ctx_off [ bpf_tramp_run_ctx ]
@@ -3251,6 +3290,11 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		stack_size += 8; /* room for IP address argument */
 
 	ip_off = stack_size;
+
+	if (flags & (BPF_TRAMP_F_LBR_ENTRY | BPF_TRAMP_F_LBR_EXIT))
+		stack_size += 8;
+
+	lbr_off = stack_size;
 
 	stack_size += 8;
 	rbx_off = stack_size;
@@ -3327,7 +3371,22 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -ip_off);
 	}
 
+	if (flags & (BPF_TRAMP_F_LBR_ENTRY | BPF_TRAMP_F_LBR_EXIT)) {
+		/*
+		 * Store im->br on the stack, which will be accessed by
+		 * bpf_copy_branch_snapshot kfunc.
+		 */
+		/* mov rax, im->br */
+		emit_mov_imm64(&prog, BPF_REG_0, (long) im->br >> 32, (u32)(long) im->br);
+		/* mov QWORD PTR [rbp - lbr_off], rax */
+		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -lbr_off);
+	}
+
 	save_args(m, &prog, regs_off, false);
+
+	if (fentry->nr_links && (flags & BPF_TRAMP_F_LBR_ENTRY))
+		/* Get branch snapshot asap. */
+		invoke_branch_snapshot(&prog, im, image, rw_image);
 
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
 		/* arg1: mov rdi, im */
@@ -3384,6 +3443,10 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		im->ip_after_call = image + (prog - (u8 *)rw_image);
 		emit_nops(&prog, X86_PATCH_SIZE);
 	}
+
+	if (fexit->nr_links && (flags & BPF_TRAMP_F_LBR_EXIT))
+		/* Get branch snapshot asap. */
+		invoke_branch_snapshot(&prog, im, image, rw_image);
 
 	if (fmod_ret->nr_links) {
 		/* From Intel 64 and IA-32 Architectures Optimization

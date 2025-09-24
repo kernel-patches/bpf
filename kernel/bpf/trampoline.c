@@ -262,6 +262,8 @@ static void bpf_tramp_image_free(struct bpf_tramp_image *im)
 	bpf_jit_uncharge_modmem(im->size);
 	percpu_ref_exit(&im->pcref);
 	kfree_rcu(im, rcu);
+	if (im->br)
+		free_percpu(im->br);
 }
 
 static void __bpf_tramp_image_put_deferred(struct work_struct *work)
@@ -353,7 +355,7 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 	call_rcu_tasks_trace(&im->rcu, __bpf_tramp_image_put_rcu_tasks);
 }
 
-static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size)
+static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size, u32 flags)
 {
 	struct bpf_tramp_image *im;
 	struct bpf_ksym *ksym;
@@ -377,6 +379,14 @@ static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size)
 	err = percpu_ref_init(&im->pcref, __bpf_tramp_image_release, 0, GFP_KERNEL);
 	if (err)
 		goto out_free_image;
+
+	if (flags & (BPF_TRAMP_F_LBR_ENTRY | BPF_TRAMP_F_LBR_EXIT)) {
+		im->br = alloc_percpu_gfp(struct bpf_tramp_branch_entries, GFP_KERNEL);
+		if (!im->br) {
+			err = -ENOMEM;
+			goto out_free_image;
+		}
+	}
 
 	ksym = &im->ksym;
 	INIT_LIST_HEAD_RCU(&ksym->lnode);
@@ -414,8 +424,9 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mut
 		goto out;
 	}
 
-	/* clear all bits except SHARE_IPMODIFY and TAIL_CALL_CTX */
-	tr->flags &= (BPF_TRAMP_F_SHARE_IPMODIFY | BPF_TRAMP_F_TAIL_CALL_CTX);
+	/* clear all bits except SHARE_IPMODIFY, TAIL_CALL_CTX, LBR_ENTRY and LBR_EXIT */
+	tr->flags &= (BPF_TRAMP_F_SHARE_IPMODIFY | BPF_TRAMP_F_TAIL_CALL_CTX |
+		      BPF_TRAMP_F_LBR_ENTRY | BPF_TRAMP_F_LBR_EXIT);
 
 	if (tlinks[BPF_TRAMP_FEXIT].nr_links ||
 	    tlinks[BPF_TRAMP_MODIFY_RETURN].nr_links) {
@@ -449,7 +460,7 @@ again:
 		goto out;
 	}
 
-	im = bpf_tramp_image_alloc(tr->key, size);
+	im = bpf_tramp_image_alloc(tr->key, size, tr->flags);
 	if (IS_ERR(im)) {
 		err = PTR_ERR(im);
 		goto out;
