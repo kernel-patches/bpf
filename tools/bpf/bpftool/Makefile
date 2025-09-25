@@ -64,11 +64,21 @@ $(LIBBPF_BOOTSTRAP)-clean: FORCE | $(LIBBPF_BOOTSTRAP_OUTPUT)
 prefix ?= /usr/local
 bash_compdir ?= /usr/share/bash-completion/completions
 
+try-run = $(shell set -e;		\
+	if ($(1)) >/dev/null 2>&1;	\
+	then echo "$(2)";		\
+	else echo "$(3)";		\
+	fi)
+
+__cc-option = $(call try-run,\
+	$(1) -Werror $(2) -c -x c /dev/null -o /dev/null,$(2),)
+cc-option = $(call __cc-option, $(CC),$(1))
+
 CFLAGS += -O2
 CFLAGS += -W
 CFLAGS += -Wall
 CFLAGS += -Wextra
-CFLAGS += -Wformat-signedness
+CFLAGS += $(call cc-option,-Wformat-signedness)
 CFLAGS += -Wno-unused-parameter
 CFLAGS += -Wno-missing-field-initializers
 CFLAGS += $(filter-out -Wswitch-enum -Wnested-externs,$(EXTRA_WARNINGS))
