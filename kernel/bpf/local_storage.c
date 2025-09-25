@@ -180,7 +180,7 @@ static long cgroup_storage_update_elem(struct bpf_map *map, void *key,
 }
 
 int bpf_percpu_cgroup_storage_copy(struct bpf_map *_map, void *key,
-				   void *value)
+				   void *value, u64 map_flags)
 {
 	struct bpf_cgroup_storage_map *map = map_to_storage(_map);
 	struct bpf_cgroup_storage *storage;
@@ -198,12 +198,18 @@ int bpf_percpu_cgroup_storage_copy(struct bpf_map *_map, void *key,
 	 * access 'value_size' of them, so copying rounded areas
 	 * will not leak any kernel data
 	 */
+	if (map_flags & BPF_F_CPU) {
+		cpu = map_flags >> 32;
+		memcpy(value, per_cpu_ptr(storage->percpu_buf, cpu), _map->value_size);
+		goto unlock;
+	}
 	size = round_up(_map->value_size, 8);
 	for_each_possible_cpu(cpu) {
 		bpf_long_memcpy(value + off,
 				per_cpu_ptr(storage->percpu_buf, cpu), size);
 		off += size;
 	}
+unlock:
 	rcu_read_unlock();
 	return 0;
 }
@@ -213,10 +219,11 @@ int bpf_percpu_cgroup_storage_update(struct bpf_map *_map, void *key,
 {
 	struct bpf_cgroup_storage_map *map = map_to_storage(_map);
 	struct bpf_cgroup_storage *storage;
-	int cpu, off = 0;
+	void *ptr;
 	u32 size;
+	int cpu;
 
-	if (map_flags != BPF_ANY && map_flags != BPF_EXIST)
+	if ((u32)map_flags & ~(BPF_ANY | BPF_EXIST | BPF_F_CPU | BPF_F_ALL_CPUS))
 		return -EINVAL;
 
 	rcu_read_lock();
@@ -232,12 +239,18 @@ int bpf_percpu_cgroup_storage_update(struct bpf_map *_map, void *key,
 	 * returned or zeros which were zero-filled by percpu_alloc,
 	 * so no kernel data leaks possible
 	 */
-	size = round_up(_map->value_size, 8);
-	for_each_possible_cpu(cpu) {
-		bpf_long_memcpy(per_cpu_ptr(storage->percpu_buf, cpu),
-				value + off, size);
-		off += size;
+	size = (map_flags & (BPF_F_CPU | BPF_F_ALL_CPUS)) ? _map->value_size :
+		round_up(_map->value_size, 8);
+	if (map_flags & BPF_F_CPU) {
+		cpu = map_flags >> 32;
+		memcpy(per_cpu_ptr(storage->percpu_buf, cpu), value, size);
+		goto unlock;
 	}
+	for_each_possible_cpu(cpu) {
+		ptr = (map_flags & BPF_F_ALL_CPUS) ? value : value + size * cpu;
+		memcpy(per_cpu_ptr(storage->percpu_buf, cpu), ptr, size);
+	}
+unlock:
 	rcu_read_unlock();
 	return 0;
 }
