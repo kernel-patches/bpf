@@ -99,3 +99,21 @@ configuration paths for cross building:
 In this case, the variable PKG_CONFIG_SYSROOT_DIR can be used alongside the
 variable PKG_CONFIG_LIBDIR or PKG_CONFIG_PATH to prepend the sysroot path to
 the library paths for cross compilation.
+
+5) Build with clang
+===================
+By default, the makefile uses GCC as compiler. With specifying environment
+variables HOSTCC, CC and CXX, it allows to build perf with clang.
+
+Using clang for native build:
+
+  $ HOSTCC=clang CC=clang CXX=clang++ make -C tools/perf
+
+Using clang for cross compilation:
+
+  $ HOSTCC=clang CC=clang CXX=clang++ \
+    make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -C tools/perf \
+    NO_LIBELF=1 NO_LIBTRACEEVENT=1 NO_JEVENTS=1
+
+In the example above, due to lack libelf, python and libtraceevent for
+cross comiplation, disable the features accordingly.
