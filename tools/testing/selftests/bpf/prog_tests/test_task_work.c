@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2025 Meta Platforms, Inc. and affiliates. */
 #include <test_progs.h>
-#include <string.h>
 #include <stdio.h>
 #include "task_work.skel.h"
 #include "task_work_fail.skel.h"
