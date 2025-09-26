@@ -2,7 +2,7 @@
 #include <test_progs.h>
 #include "stacktrace_map.skel.h"
 
-void test_stacktrace_map(void)
+static void test_stacktrace_map_tp(bool raw_tp)
 {
 	struct stacktrace_map *skel;
 	int control_map_fd, stackid_hmap_fd, stackmap_fd, stack_amap_fd;
@@ -19,8 +19,13 @@ void test_stacktrace_map(void)
 	stackmap_fd = bpf_map__fd(skel->maps.stackmap);
 	stack_amap_fd = bpf_map__fd(skel->maps.stack_amap);
 
-	err = stacktrace_map__attach(skel);
-	if (!ASSERT_OK(err, "skel_attach"))
+	if (raw_tp) {
+		skel->links.tp = bpf_program__attach_raw_tracepoint(skel->progs.raw_tp, "sched_switch");
+	} else {
+		skel->links.tp = bpf_program__attach_tracepoint(skel->progs.tp, "sched", "sched_switch");
+	}
+
+	if (!ASSERT_OK_PTR(skel->links.tp, "attach"))
 		goto out;
 	/* give some time for bpf program run */
 	sleep(1);
@@ -59,4 +64,12 @@ void test_stacktrace_map(void)
 		goto out;
 out:
 	stacktrace_map__destroy(skel);
+}
+
+void test_stacktrace_map(void)
+{
+	if (test__start_subtest("tp"))
+		test_stacktrace_map_tp(false);
+	if (test__start_subtest("raw_tp"))
+		test_stacktrace_map_tp(true);
 }

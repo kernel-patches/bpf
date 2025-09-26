@@ -51,8 +51,7 @@ struct sched_switch_args {
 };
 
 __u32 stack_id;
-SEC("tracepoint/sched/sched_switch")
-int oncpu(struct sched_switch_args *ctx)
+static inline void test_stackmap(void *ctx, int skip)
 {
 	__u32 max_len = PERF_MAX_STACK_DEPTH * sizeof(__u64);
 	__u32 key = 0, val = 0, *value_p;
@@ -60,18 +59,30 @@ int oncpu(struct sched_switch_args *ctx)
 
 	value_p = bpf_map_lookup_elem(&control_map, &key);
 	if (value_p && *value_p)
-		return 0; /* skip if non-zero *value_p */
+		return; /* skip if non-zero *value_p */
 
 	/* The size of stackmap and stackid_hmap should be the same */
-	key = bpf_get_stackid(ctx, &stackmap, 0);
+	key = bpf_get_stackid(ctx, &stackmap, (u64) skip);
 	if ((int)key >= 0) {
 		stack_id = key;
 		bpf_map_update_elem(&stackid_hmap, &key, &val, 0);
 		stack_p = bpf_map_lookup_elem(&stack_amap, &key);
 		if (stack_p)
-			bpf_get_stack(ctx, stack_p, max_len, 0);
+			bpf_get_stack(ctx, stack_p, max_len, (u64) skip);
 	}
+}
 
+SEC("tracepoint/sched/sched_switch")
+int tp(struct sched_switch_args *ctx)
+{
+	test_stackmap(ctx, 0);
+	return 0;
+}
+
+SEC("raw_tp/sched/sched_switch")
+int raw_tp(struct sched_switch_args *ctx)
+{
+	test_stackmap(ctx, 1);
 	return 0;
 }
 
