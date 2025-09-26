@@ -6211,14 +6211,35 @@ static int copy_prog_load_log_true_size(union bpf_attr *attr, bpfptr_t uattr, un
 					      &attr->log_true_size);
 }
 
-static int copy_btf_load_log_true_size(union bpf_attr *attr, bpfptr_t uattr, unsigned int size)
+static int check_btf_load_log_attrs(union bpf_attr *attr, struct bpf_common_attr *common_attrs)
+{
+	int err;
+
+	err = check_log_attrs(attr->btf_log_buf, attr->btf_log_size, attr->btf_log_level,
+			      common_attrs);
+	if (err)
+		return err;
+
+	if (!attr->btf_log_buf && common_attrs->log_buf) {
+		attr->btf_log_buf = common_attrs->log_buf;
+		attr->btf_log_size = common_attrs->log_size;
+		attr->btf_log_level = common_attrs->log_level;
+	}
+
+	return 0;
+}
+
+static int copy_btf_load_log_true_size(union bpf_attr *attr, bpfptr_t uattr, unsigned int size,
+				       struct bpf_common_attr *common_attrs, bpfptr_t uattr_common,
+				       unsigned int size_common)
 {
 	if (size >= offsetofend(union bpf_attr, btf_log_true_size) &&
 	    copy_to_bpfptr_offset(uattr, offsetof(union bpf_attr, btf_log_true_size),
 				  &attr->btf_log_true_size, sizeof(attr->btf_log_true_size)))
 		return -EFAULT;
 
-	return 0;
+	return copy_common_attr_log_true_size(uattr_common, size_common,
+					      &attr->btf_log_true_size);
 }
 
 static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size,
@@ -6328,9 +6349,13 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size,
 		err = bpf_raw_tracepoint_open(&attr);
 		break;
 	case BPF_BTF_LOAD:
+		err = check_btf_load_log_attrs(&attr, &common_attrs);
+		if (err)
+			break;
 		attr.btf_log_true_size = 0;
 		err = bpf_btf_load(&attr, uattr);
-		ret = copy_btf_load_log_true_size(&attr, uattr, size);
+		ret = copy_btf_load_log_true_size(&attr, uattr, size, &common_attrs, uattr_common,
+						  size_common);
 		err = ret ? ret : err;
 		break;
 	case BPF_BTF_GET_FD_BY_ID:
