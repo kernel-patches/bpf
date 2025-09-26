@@ -74,6 +74,8 @@ struct bpf_load_and_run_opts {
 	__s32 keyring_id;
 	void *excl_prog_hash;
 	__u32 excl_prog_hash_sz;
+	const int *signature_maps;
+	__u32 signature_maps_sz;
 };
 
 long kern_sys_bpf(__u32 cmd, void *attr, __u32 attr_size);
@@ -352,7 +354,7 @@ static inline int skel_map_freeze(int fd)
 
 static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 {
-	const size_t prog_load_attr_sz = offsetofend(union bpf_attr, keyring_id);
+	const size_t prog_load_attr_sz = offsetofend(union bpf_attr, signature_maps_size);
 	const size_t test_run_attr_sz = offsetofend(union bpf_attr, test);
 	int map_fd = -1, prog_fd = -1, key = 0, err;
 	union bpf_attr attr;
@@ -395,6 +397,8 @@ static inline int bpf_load_and_run(struct bpf_load_and_run_opts *opts)
 #ifndef __KERNEL__
 	attr.signature = (long) opts->signature;
 	attr.signature_size = opts->signature_sz;
+	attr.signature_maps = (long) opts->signature_maps;
+	attr.signature_maps_size = opts->signature_maps_sz;
 #else
 	if (opts->signature || opts->signature_sz)
 		pr_warn("signatures are not supported from bpf_preload\n");

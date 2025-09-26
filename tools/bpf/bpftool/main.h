@@ -92,6 +92,7 @@ extern bool use_loader;
 extern struct btf *base_btf;
 extern struct hashmap *refs_table;
 extern bool sign_progs;
+extern bool sign_maps;
 extern const char *private_key_path;
 extern const char *cert_path;
 

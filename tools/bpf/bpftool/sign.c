@@ -23,6 +23,7 @@
 #include <errno.h>
 
 #include <bpf/skel_internal.h>
+#include <bpf/libbpf_internal.h>
 
 #include "main.h"
 
@@ -130,8 +131,18 @@ int bpftool_prog_sign(struct bpf_load_and_run_opts *opts)
 	long actual_sig_len = 0;
 	X509 *x509 = NULL;
 	int err = 0;
+	unsigned char hash[SHA256_DIGEST_LENGTH  * 2];
+	unsigned char term[SHA256_DIGEST_LENGTH];
 
-	bd_in = BIO_new_mem_buf(opts->insns, opts->insns_sz);
+	if (sign_maps) {
+		libbpf_sha256(opts->insns, opts->insns_sz, hash, SHA256_DIGEST_LENGTH);
+		libbpf_sha256(opts->data, opts->data_sz, hash + SHA256_DIGEST_LENGTH,
+			      SHA256_DIGEST_LENGTH);
+		libbpf_sha256(hash, sizeof(hash), term, sizeof(term));
+		bd_in = BIO_new_mem_buf(term, sizeof(term));
+	} else {
+		bd_in = BIO_new_mem_buf(opts->insns, opts->insns_sz);
+	}
 	if (!bd_in) {
 		err = -ENOMEM;
 		goto cleanup;
@@ -172,7 +183,7 @@ int bpftool_prog_sign(struct bpf_load_and_run_opts *opts)
 	EVP_Digest(opts->insns, opts->insns_sz, opts->excl_prog_hash,
 		   &opts->excl_prog_hash_sz, EVP_sha256(), NULL);
 
-		bd_out = BIO_new(BIO_s_mem());
+	bd_out = BIO_new(BIO_s_mem());
 	if (!bd_out) {
 		err = -ENOMEM;
 		goto cleanup;
