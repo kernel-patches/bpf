@@ -1470,6 +1470,8 @@ bool ex_handler_bpf(const struct exception_table_entry *x, struct pt_regs *regs)
 		off = FIELD_GET(DATA_ARENA_OFFSET_MASK, x->data);
 		addr = *(unsigned long *)((void *)regs + arena_reg) + off;
 		bpf_prog_report_arena_violation(is_write, addr, regs->ip);
+	} else {
+		bpf_prog_report_probe_violation(is_write, regs->ip);
 	}
 
 	/* jump over faulting load and clear dest register */
