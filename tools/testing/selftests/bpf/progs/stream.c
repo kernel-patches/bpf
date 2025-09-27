@@ -7,6 +7,8 @@
 #include "bpf_experimental.h"
 #include "bpf_arena_common.h"
 
+#define READ_ONCE(x) (*(volatile typeof(x) *)&(x))
+
 struct arr_elem {
 	struct bpf_res_spin_lock lock;
 };
@@ -231,6 +233,25 @@ int stream_arena_callback_fault(void *ctx)
 	bpf_timer_init(arr_timer, &array, 1);
 	bpf_timer_set_callback(arr_timer, timer_cb);
 	bpf_timer_start(arr_timer, 0, 0);
+	return 0;
+}
+
+SEC("syscall")
+__arch_x86_64
+__success __retval(0)
+__stderr("ERROR: Probe READ access faule, insn=0x[0-9a-fA-F]+")
+__stderr("CPU: {{[0-9]+}} UID: 0 PID: {{[0-9]+}} Comm: {{.*}}")
+__stderr("Call trace:\n"
+"{{([a-zA-Z_][a-zA-Z0-9_]*\\+0x[0-9a-fA-F]+/0x[0-9a-fA-F]+\n"
+"|[ \t]+[^\n]+\n)*}}")
+int stream_probe_read_fault(void *ctx)
+{
+	struct sk_buff *skb = bpf_core_cast((void *)0xFFFFFFFF00000000,
+					    struct sk_buff);
+
+	/* do the memory read */
+	READ_ONCE(skb->network_header);
+
 	return 0;
 }
 

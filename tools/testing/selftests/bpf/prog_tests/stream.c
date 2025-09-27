@@ -72,7 +72,8 @@ static void test_address(struct bpf_program *prog, unsigned long *fault_addr_p)
 	ASSERT_OK(ret, "ret");
 	ASSERT_OK(opts.retval, "retval");
 
-	sprintf(fault_addr, "0x%lx", *fault_addr_p);
+	if (fault_addr_p)
+		sprintf(fault_addr, "0x%lx", *fault_addr_p);
 
 	ret = bpf_prog_stream_read(prog_fd, BPF_STREAM_STDERR, buf, sizeof(buf), &ropts);
 	ASSERT_GT(ret, 0, "stream read");
@@ -103,6 +104,25 @@ void test_stream_arena_fault_address(void)
 		test_address(skel->progs.stream_arena_read_fault, &skel->bss->fault_addr);
 	if (test__start_subtest("write_fault"))
 		test_address(skel->progs.stream_arena_write_fault, &skel->bss->fault_addr);
+
+	stream__destroy(skel);
+}
+
+void test_stream_probe_read_fault(void)
+{
+	struct stream *skel;
+
+#if !defined(__x86_64__)
+	printf("%s:SKIP: probe fault reporting not supported\n", __func__);
+	test__skip();
+	return;
+#endif
+
+	skel = stream__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "stream__open_and_load"))
+		return;
+
+	test_address(skel->progs.stream_probe_read_fault, NULL);
 
 	stream__destroy(skel);
 }
