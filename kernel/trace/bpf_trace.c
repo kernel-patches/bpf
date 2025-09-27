@@ -2055,6 +2055,24 @@ void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp)
 	module_put(mod);
 }
 
+void bpf_prog_report_probe_violation(bool write, unsigned long fault_ip)
+{
+	struct bpf_stream_stage ss;
+	struct bpf_prog *prog;
+
+	rcu_read_lock();
+	prog = bpf_prog_ksym_find(fault_ip);
+	rcu_read_unlock();
+	if (!prog)
+		return;
+
+	bpf_stream_stage(ss, prog, BPF_STDERR, ({
+		bpf_stream_printk(ss, "ERROR: Probe %s access faule, insn=0x%lx\n",
+				  write ? "WRITE" : "READ", fault_ip);
+		bpf_stream_dump_stack(ss);
+	}));
+}
+
 static __always_inline
 void __bpf_trace_run(struct bpf_raw_tp_link *link, u64 *args)
 {
