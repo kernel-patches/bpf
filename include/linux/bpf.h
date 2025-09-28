@@ -3789,4 +3789,40 @@ int bpf_prog_get_file_line(struct bpf_prog *prog, unsigned long ip, const char *
 			   const char **linep, int *nump);
 struct bpf_prog *bpf_prog_find_from_stack(void);
 
+int bpf_insn_array_init(struct bpf_map *map, const struct bpf_prog *prog);
+int bpf_insn_array_ready(struct bpf_map *map);
+void bpf_insn_array_release(struct bpf_map *map);
+void bpf_insn_array_adjust(struct bpf_map *map, u32 off, u32 len);
+void bpf_insn_array_adjust_after_remove(struct bpf_map *map, u32 off, u32 len);
+
+/*
+ * The struct bpf_insn_ptr structure describes a pointer to a
+ * particular instruction in a loaded BPF program. Initially
+ * it is initialised from userspace via user_value.xlated_off.
+ * During the program verification all other fields are populated
+ * accordingly:
+ *
+ *   jitted_ip:       address of the instruction in the jitted image
+ *   user_value:      user-visible original, xlated, and jitted offsets
+ */
+struct bpf_insn_ptr {
+	void *jitted_ip;
+	struct bpf_insn_array_value user_value;
+};
+
+#ifdef CONFIG_BPF_SYSCALL
+void bpf_prog_update_insn_ptr(struct bpf_prog *prog,
+			      u32 xlated_off,
+			      u32 jitted_off,
+			      void *jitted_ip);
+#else
+static inline void
+bpf_prog_update_insn_ptr(struct bpf_prog *prog,
+			 u32 xlated_off,
+			 u32 jitted_off,
+			 void *jitted_ip)
+{
+}
+#endif
+
 #endif /* _LINUX_BPF_H */

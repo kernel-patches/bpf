@@ -1691,6 +1691,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	prog = temp;
 
 	for (i = 1; i <= insn_cnt; i++, insn++) {
+		u32 abs_xlated_off = bpf_prog->aux->subprog_start + i - 1;
 		const s32 imm32 = insn->imm;
 		u32 dst_reg = insn->dst_reg;
 		u32 src_reg = insn->src_reg;
@@ -2751,6 +2752,13 @@ emit_jmp:
 				return -EFAULT;
 			}
 			memcpy(rw_image + proglen, temp, ilen);
+
+			/*
+			 * Instruction arrays need to know how xlated code
+			 * maps to jitted code
+			 */
+			bpf_prog_update_insn_ptr(bpf_prog, abs_xlated_off, proglen,
+						 image + proglen);
 		}
 		proglen += ilen;
 		addrs[i] = proglen;
