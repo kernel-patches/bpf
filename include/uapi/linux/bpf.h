@@ -1621,6 +1621,12 @@ union bpf_attr {
 		 * verification.
 		 */
 		__s32		keyring_id;
+		/* Pointer to a buffer containing the maps used in the signature
+		 * hash chain of the BPF program.
+		 */
+		__aligned_u64   signature_maps;
+		/* Size of the signature maps buffer. */
+		__u32		signature_maps_size;
 	};
 
 	struct { /* anonymous struct used by BPF_OBJ_* commands */
