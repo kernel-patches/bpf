@@ -1858,9 +1858,10 @@ struct gen_loader_opts {
 	__u32 data_sz;
 	__u32 insns_sz;
 	bool gen_hash;
+	bool sign_maps;
 };
 
-#define gen_loader_opts__last_field gen_hash
+#define gen_loader_opts__last_field sign_maps
 LIBBPF_API int bpf_object__gen_loader(struct bpf_object *obj,
 				      struct gen_loader_opts *opts);
 

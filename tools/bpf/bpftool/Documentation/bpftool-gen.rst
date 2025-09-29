@@ -16,7 +16,7 @@ SYNOPSIS
 
 **bpftool** [*OPTIONS*] **gen** *COMMAND*
 
-*OPTIONS* := { |COMMON_OPTIONS| | { **-L** | **--use-loader** } | [ { **-S** | **--sign** } {**-k** <private_key.pem>} **-i** <certificate.x509> ] }
+*OPTIONS* := { |COMMON_OPTIONS| | { **-L** | **--use-loader** } | [ { **-S** | **--sign** } { **-M** | **--sign-maps** } {**-k** <private_key.pem>} **-i** <certificate.x509> ] }
 
 *COMMAND* := { **object** | **skeleton** | **help** }
 
@@ -189,6 +189,11 @@ OPTIONS
 -S, --sign
     For skeletons, generate a signed skeleton. This option must be used with
     **-k** and **-i**. Using this flag implicitly enables **--use-loader**.
+
+-M --sign-maps
+    For skeletons, generate a signed skeleton that includes a hash chain for the
+    skeletons maps. This option must be used with **-k** and **-i**. Using this
+    flag implicitly enables **--use-loader** and **--sign**.
 
 -k <private_key.pem>
     Path to the private key file in PEM format, required for signing.
