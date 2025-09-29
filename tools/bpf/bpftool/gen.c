@@ -699,6 +699,9 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 	if (sign_progs)
 		opts.gen_hash = true;
 
+	if (sign_maps)
+		opts.sign_maps = true;
+
 	err = bpf_object__gen_loader(obj, &opts);
 	if (err)
 		return err;
@@ -793,6 +796,8 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 	if (sign_progs) {
 		sopts.insns = opts.insns;
 		sopts.insns_sz = opts.insns_sz;
+		sopts.data = opts.data;
+		sopts.data_sz = opts.data_sz;
 		sopts.excl_prog_hash = prog_sha;
 		sopts.excl_prog_hash_sz = sizeof(prog_sha);
 		sopts.signature = sig_buf;
@@ -822,6 +827,13 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 		\n\
 		\";\n");
 
+		if (sign_maps) {
+			codegen("\
+			\n\
+				static const int opts_signature_maps[1] __attribute__((__aligned__(8))) = {0}; \n\
+			");
+		}
+
 		codegen("\
 		\n\
 			opts.signature = (void *)opts_sig;			\n\
@@ -830,6 +842,19 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 			opts.excl_prog_hash_sz = sizeof(opts_excl_hash) - 1;	\n\
 			opts.keyring_id = skel->keyring_id;			\n\
 		");
+		if (sign_maps) {
+			codegen("\
+			\n\
+				opts.signature_maps = (void *)opts_signature_maps;	\n\
+				opts.signature_maps_sz = 1; 				\n\
+			");
+		} else {
+			codegen("\
+			\n\
+				opts.signature_maps = (void *)NULL;		\n\
+				opts.signature_maps_sz = 0;			\n\
+			");
+		}
 	}
 
 	codegen("\
@@ -1990,7 +2015,7 @@ static int do_help(int argc, char **argv)
 		"       %1$s %2$s help\n"
 		"\n"
 		"       " HELP_SPEC_OPTIONS " |\n"
-		"                    {-L|--use-loader} | [ {-S|--sign } {-k} <private_key.pem> {-i} <certificate.x509> ]}\n"
+		"                    {-L|--use-loader} | [ {-S|--sign } {-M|--sign-maps } {-k} <private_key.pem> {-i} <certificate.x509> ]}\n"
 		"",
 		bin_name, "gen");
 

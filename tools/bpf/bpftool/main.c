@@ -34,6 +34,7 @@ bool use_loader;
 struct btf *base_btf;
 struct hashmap *refs_table;
 bool sign_progs;
+bool sign_maps;
 const char *private_key_path;
 const char *cert_path;
 
@@ -452,6 +453,7 @@ int main(int argc, char **argv)
 		{ "debug",	no_argument,	NULL,	'd' },
 		{ "use-loader",	no_argument,	NULL,	'L' },
 		{ "sign",	no_argument,	NULL,	'S' },
+		{ "sign-maps",	no_argument,	NULL,	'M' },
 		{ "base-btf",	required_argument, NULL, 'B' },
 		{ 0 }
 	};
@@ -478,7 +480,7 @@ int main(int argc, char **argv)
 	bin_name = "bpftool";
 
 	opterr = 0;
-	while ((opt = getopt_long(argc, argv, "VhpjfLmndSi:k:B:l",
+	while ((opt = getopt_long(argc, argv, "VhpjfLmndSMi:k:B:l",
 				  options, NULL)) >= 0) {
 		switch (opt) {
 		case 'V':
@@ -525,6 +527,11 @@ int main(int argc, char **argv)
 			use_loader = true;
 			break;
 		case 'S':
+			sign_progs = true;
+			use_loader = true;
+			break;
+		case 'M':
+			sign_maps = true;
 			sign_progs = true;
 			use_loader = true;
 			break;
