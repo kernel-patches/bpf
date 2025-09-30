@@ -1394,6 +1394,41 @@ err_out:
 	return err;
 }
 
+int bpf_struct_ops_assoc_prog(union bpf_attr *attr)
+{
+	struct bpf_struct_ops_map *st_map = NULL;
+	struct bpf_prog *prog;
+	struct bpf_map *map;
+	int ret = 0;
+
+	prog = bpf_prog_get(attr->struct_ops_assoc_prog.prog_fd);
+	if (IS_ERR(prog))
+		return PTR_ERR(prog);
+
+	map = bpf_map_get(attr->struct_ops_assoc_prog.map_fd);
+	if (IS_ERR(map)) {
+		ret = PTR_ERR(map);
+		goto out_prog_put;
+	}
+	st_map = (struct bpf_struct_ops_map *)map;
+
+	mutex_lock(&prog->aux->st_ops_assoc_mutex);
+	if (prog->aux->st_ops_assoc) {
+		ret = -EEXIST;
+		goto out_unlock;
+	}
+
+	prog->aux->st_ops_assoc = &st_map->kvalue.data;
+
+out_unlock:
+	mutex_unlock(&prog->aux->st_ops_assoc_mutex);
+	if (st_map)
+		bpf_map_put(map);
+out_prog_put:
+	bpf_prog_put(prog);
+	return ret;
+}
+
 void bpf_map_struct_ops_info_fill(struct bpf_map_info *info, struct bpf_map *map)
 {
 	struct bpf_struct_ops_map *st_map = (struct bpf_struct_ops_map *)map;

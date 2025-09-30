@@ -1710,6 +1710,8 @@ struct bpf_prog_aux {
 		struct rcu_head	rcu;
 	};
 	struct bpf_stream stream[2];
+	struct mutex st_ops_assoc_mutex;
+	void *st_ops_assoc;
 };
 
 struct bpf_prog {
@@ -2010,6 +2012,7 @@ static inline void bpf_module_put(const void *data, struct module *owner)
 		module_put(owner);
 }
 int bpf_struct_ops_link_create(union bpf_attr *attr);
+int bpf_struct_ops_assoc_prog(union bpf_attr *attr);
 u32 bpf_struct_ops_id(const void *kdata);
 
 #ifdef CONFIG_NET
@@ -2054,6 +2057,10 @@ static inline int bpf_struct_ops_map_sys_lookup_elem(struct bpf_map *map,
 	return -EINVAL;
 }
 static inline int bpf_struct_ops_link_create(union bpf_attr *attr)
+{
+	return -EOPNOTSUPP;
+}
+static inline void bpf_struct_ops_assoc_prog(union bpf_attr *attr)
 {
 	return -EOPNOTSUPP;
 }
