@@ -733,6 +733,25 @@ struct bpf_prog_stream_read_opts {
 LIBBPF_API int bpf_prog_stream_read(int prog_fd, __u32 stream_id, void *buf, __u32 buf_len,
 				    struct bpf_prog_stream_read_opts *opts);
 
+struct bpf_struct_ops_associate_prog_opts {
+	size_t sz;
+	size_t :0;
+};
+#define bpf_struct_ops_associate_prog_opts__last_field sz
+/**
+ * @brief **bpf_struct_ops_associate_prog** associate a BPF program with a
+ * struct_ops map.
+ *
+ * @param map_fd FD for the struct_ops map to be associated with a BPF progam
+ * @param prog_fd FD for the BPF program
+ * @param opts optional options, can be NULL
+ *
+ * @return 0 on success; negative error code, otherwise (errno is also set to
+ * the error code)
+ */
+LIBBPF_API int bpf_struct_ops_associate_prog(int map_fd, int prog_fd,
+					     struct bpf_struct_ops_associate_prog_opts *opts);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
