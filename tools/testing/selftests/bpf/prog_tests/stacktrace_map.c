@@ -2,33 +2,17 @@
 #include <test_progs.h>
 #include "stacktrace_map.skel.h"
 
-static void test_stacktrace_map_tp(bool raw_tp)
+static void check_stackmap(struct stacktrace_map *skel)
 {
-	struct stacktrace_map *skel;
 	int control_map_fd, stackid_hmap_fd, stackmap_fd, stack_amap_fd;
 	int err, stack_trace_len;
 	__u32 key, val, stack_id, duration = 0;
 	__u64 stack[PERF_MAX_STACK_DEPTH];
 
-	skel = stacktrace_map__open_and_load();
-	if (!ASSERT_OK_PTR(skel, "skel_open_and_load"))
-		return;
-
 	control_map_fd = bpf_map__fd(skel->maps.control_map);
 	stackid_hmap_fd = bpf_map__fd(skel->maps.stackid_hmap);
 	stackmap_fd = bpf_map__fd(skel->maps.stackmap);
 	stack_amap_fd = bpf_map__fd(skel->maps.stack_amap);
-
-	if (raw_tp) {
-		skel->links.tp = bpf_program__attach_raw_tracepoint(skel->progs.raw_tp, "sched_switch");
-	} else {
-		skel->links.tp = bpf_program__attach_tracepoint(skel->progs.tp, "sched", "sched_switch");
-	}
-
-	if (!ASSERT_OK_PTR(skel->links.tp, "attach"))
-		goto out;
-	/* give some time for bpf program run */
-	sleep(1);
 
 	/* disable stack trace collection */
 	key = 0;
@@ -41,27 +25,50 @@ static void test_stacktrace_map_tp(bool raw_tp)
 	err = compare_map_keys(stackid_hmap_fd, stackmap_fd);
 	if (CHECK(err, "compare_map_keys stackid_hmap vs. stackmap",
 		  "err %d errno %d\n", err, errno))
-		goto out;
+		return;
 
 	err = compare_map_keys(stackmap_fd, stackid_hmap_fd);
 	if (CHECK(err, "compare_map_keys stackmap vs. stackid_hmap",
 		  "err %d errno %d\n", err, errno))
-		goto out;
+		return;
 
 	stack_trace_len = PERF_MAX_STACK_DEPTH * sizeof(__u64);
 	err = compare_stack_ips(stackmap_fd, stack_amap_fd, stack_trace_len);
 	if (CHECK(err, "compare_stack_ips stackmap vs. stack_amap",
 		  "err %d errno %d\n", err, errno))
-		goto out;
+		return;
 
 	stack_id = skel->bss->stack_id;
 	err = bpf_map_lookup_and_delete_elem(stackmap_fd, &stack_id,  stack);
 	if (!ASSERT_OK(err, "lookup and delete target stack_id"))
-		goto out;
+		return;
 
 	err = bpf_map_lookup_elem(stackmap_fd, &stack_id, stack);
-	if (!ASSERT_EQ(err, -ENOENT, "lookup deleted stack_id"))
+	ASSERT_EQ(err, -ENOENT, "lookup deleted stack_id");
+}
+
+static void test_stacktrace_map_tp(bool raw_tp)
+{
+	struct stacktrace_map *skel;
+
+	skel = stacktrace_map__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open_and_load"))
+		return;
+
+	if (raw_tp) {
+		skel->links.tp = bpf_program__attach_raw_tracepoint(skel->progs.raw_tp, "sched_switch");
+	} else {
+		skel->links.tp = bpf_program__attach_tracepoint(skel->progs.tp, "sched", "sched_switch");
+	}
+
+	if (!ASSERT_OK_PTR(skel->links.tp, "attach"))
 		goto out;
+
+	/* give some time for bpf program run */
+	sleep(1);
+
+	check_stackmap(skel);
+
 out:
 	stacktrace_map__destroy(skel);
 }
