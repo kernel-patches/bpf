@@ -512,7 +512,7 @@ static u32 dev_map_bpf_prog_run_skb(struct sk_buff *skb, struct bpf_dtab_netdev 
 	__skb_pull(skb, skb->mac_len);
 	xdp.txq = &txq;
 
-	act = bpf_prog_run_generic_xdp(skb, &xdp, dst->xdp_prog);
+	act = bpf_prog_run_generic_xdp(skb, &xdp, dst->xdp_prog, NULL);
 	switch (act) {
 	case XDP_PASS:
 		__skb_push(skb, skb->mac_len);
