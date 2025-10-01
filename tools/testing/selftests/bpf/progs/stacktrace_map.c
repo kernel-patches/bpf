@@ -121,4 +121,18 @@ int kprobe_test(struct pt_regs *ctx)
 	return 0;
 }
 
+SEC("fentry/bpf_fentry_test1")
+int BPF_PROG(fentry)
+{
+	test_stackmap(ctx, 1);
+	return 0;
+}
+
+SEC("fexit/bpf_fentry_test1")
+int BPF_PROG(fexit)
+{
+	test_stackmap(ctx, 1);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

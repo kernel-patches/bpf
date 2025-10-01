@@ -136,6 +136,34 @@ cleanup:
 	stacktrace_map__destroy(skel);
 }
 
+static void test_stacktrace_map_tracing(bool exit)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	struct stacktrace_map *skel;
+	struct bpf_program *prog;
+	int prog_fd, err;
+
+	skel = stacktrace_map__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "stacktrace_map__open_and_load"))
+		return;
+
+	prog = exit ? skel->progs.fexit : skel->progs.fentry;
+
+	skel->links.fentry = bpf_program__attach_trace(prog);
+	if (!ASSERT_OK_PTR(skel->links.fentry, "bpf_program__attach_trace"))
+		goto cleanup;
+
+	prog_fd = bpf_program__fd(skel->progs.trigger);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run");
+	ASSERT_EQ(topts.retval, 0, "test_run");
+
+	check_stackmap(skel);
+
+cleanup:
+	stacktrace_map__destroy(skel);
+}
+
 void test_stacktrace_map(void)
 {
 	if (test__start_subtest("tp"))
@@ -150,4 +178,8 @@ void test_stacktrace_map(void)
 		test_stacktrace_map_kprobe_multi(false);
 	if (test__start_subtest("kretprobe_multi"))
 		test_stacktrace_map_kprobe_multi(true);
+	if (test__start_subtest("fentry"))
+		test_stacktrace_map_tracing(false);
+	if (test__start_subtest("fexit"))
+		test_stacktrace_map_tracing(true);
 }
