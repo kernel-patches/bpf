@@ -515,7 +515,8 @@ int main(int argc, char **argv)
 			verifier_logs = true;
 			break;
 		case 'B':
-			base_btf = btf__parse(optarg, NULL);
+			/* handle multi-split BTF */
+			base_btf = btf__parse_split(optarg, base_btf);
 			if (!base_btf) {
 				p_err("failed to parse base BTF at '%s': %d\n",
 				      optarg, -errno);
