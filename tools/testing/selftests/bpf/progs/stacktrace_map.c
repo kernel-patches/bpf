@@ -3,10 +3,21 @@
 
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 
 #ifndef PERF_MAX_STACK_DEPTH
 #define PERF_MAX_STACK_DEPTH         127
 #endif
+
+extern bool CONFIG_UNWINDER_ORC __kconfig __weak;
+
+/* This function is here to have CONFIG_X86_KERNEL_IBT
+ * used and added to object BTF.
+ */
+int unused(void)
+{
+	return CONFIG_UNWINDER_ORC ? 0 : 1;
+}
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -72,6 +83,16 @@ static inline void test_stackmap(void *ctx, int skip)
 	}
 }
 
+/*
+ * No tests in here, just to trigger 'bpf_fentry_test*'
+ * through tracing test_run.
+ */
+SEC("fentry/bpf_modify_return_test")
+int BPF_PROG(trigger)
+{
+	return 0;
+}
+
 SEC("tracepoint/sched/sched_switch")
 int tp(struct sched_switch_args *ctx)
 {
@@ -81,6 +102,20 @@ int tp(struct sched_switch_args *ctx)
 
 SEC("raw_tp/sched/sched_switch")
 int raw_tp(struct sched_switch_args *ctx)
+{
+	test_stackmap(ctx, 1);
+	return 0;
+}
+
+SEC("kprobe.multi")
+int kprobe_multi_test(struct pt_regs *ctx)
+{
+	test_stackmap(ctx, 1);
+	return 0;
+}
+
+SEC("kprobe")
+int kprobe_test(struct pt_regs *ctx)
 {
 	test_stackmap(ctx, 1);
 	return 0;

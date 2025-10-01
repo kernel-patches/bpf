@@ -73,10 +73,81 @@ out:
 	stacktrace_map__destroy(skel);
 }
 
+static void test_stacktrace_map_kprobe(bool retprobe)
+{
+	LIBBPF_OPTS(bpf_kprobe_opts, opts,
+		.retprobe = retprobe
+	);
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	struct stacktrace_map *skel;
+	int prog_fd, err;
+
+	skel = stacktrace_map__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "stacktrace_map__open_and_load"))
+		return;
+
+	skel->links.kprobe_test = bpf_program__attach_kprobe_opts(skel->progs.kprobe_test,
+					       "bpf_fentry_test1", &opts);
+	if (!ASSERT_OK_PTR(skel->links.kprobe_test, "bpf_program__attach_kprobe_opts"))
+		goto cleanup;
+
+	prog_fd = bpf_program__fd(skel->progs.trigger);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run");
+	ASSERT_EQ(topts.retval, 0, "test_run");
+
+	check_stackmap(skel);
+
+cleanup:
+	stacktrace_map__destroy(skel);
+}
+
+static void test_stacktrace_map_kprobe_multi(bool retprobe)
+{
+	LIBBPF_OPTS(bpf_kprobe_multi_opts, opts,
+		.retprobe = retprobe
+	);
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	struct stacktrace_map *skel;
+	int prog_fd, err;
+
+	skel = stacktrace_map__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "stacktrace_map__open_and_load"))
+		return;
+
+	if (retprobe && skel->kconfig->CONFIG_UNWINDER_ORC) {
+		test__skip();
+		goto cleanup;
+	}
+
+	skel->links.kprobe_multi_test = bpf_program__attach_kprobe_multi_opts(skel->progs.kprobe_multi_test,
+						     "bpf_fentry_test1", &opts);
+	if (!ASSERT_OK_PTR(skel->links.kprobe_multi_test, "bpf_program__attach_kprobe_multi_opts"))
+		goto cleanup;
+
+	prog_fd = bpf_program__fd(skel->progs.trigger);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run");
+	ASSERT_EQ(topts.retval, 0, "test_run");
+
+	check_stackmap(skel);
+
+cleanup:
+	stacktrace_map__destroy(skel);
+}
+
 void test_stacktrace_map(void)
 {
 	if (test__start_subtest("tp"))
 		test_stacktrace_map_tp(false);
 	if (test__start_subtest("raw_tp"))
 		test_stacktrace_map_tp(true);
+	if (test__start_subtest("kprobe"))
+		test_stacktrace_map_kprobe(false);
+	if (test__start_subtest("kretprobe"))
+		test_stacktrace_map_kprobe(true);
+	if (test__start_subtest("kprobe_multi"))
+		test_stacktrace_map_kprobe_multi(false);
+	if (test__start_subtest("kretprobe_multi"))
+		test_stacktrace_map_kprobe_multi(true);
 }
