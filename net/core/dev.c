@@ -5318,10 +5318,10 @@ static struct netdev_rx_queue *netif_get_rxqueue(struct sk_buff *skb)
 }
 
 u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
-			     const struct bpf_prog *xdp_prog,
-			     struct xdp_rxq_info *rxq)
+			     const struct bpf_prog *xdp_prog)
 {
 	void *orig_data, *orig_data_end, *hard_start;
+	struct netdev_rx_queue *rxqueue;
 	bool orig_bcast, orig_host;
 	u32 mac_len, frame_sz;
 	__be16 orig_eth_type;
@@ -5339,9 +5339,8 @@ u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 	frame_sz = (void *)skb_end_pointer(skb) - hard_start;
 	frame_sz += SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 
-	if (!rxq)
-		rxq = &netif_get_rxqueue(skb)->xdp_rxq;
-	xdp_init_buff(xdp, frame_sz, rxq);
+	rxqueue = netif_get_rxqueue(skb);
+	xdp_init_buff(xdp, frame_sz, &rxqueue->xdp_rxq);
 	xdp_prepare_buff(xdp, hard_start, skb_headroom(skb) - mac_len,
 			 skb_headlen(skb) + mac_len, true);
 	if (skb_is_nonlinear(skb)) {
@@ -5420,23 +5419,17 @@ u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 	return act;
 }
 
-static int netif_skb_check_for_xdp(struct sk_buff **pskb,
-				   const struct bpf_prog *prog,
-				   struct xdp_rxq_info *rxq)
+static int
+netif_skb_check_for_xdp(struct sk_buff **pskb, const struct bpf_prog *prog)
 {
 	struct sk_buff *skb = *pskb;
 	int err, hroom, troom;
-	struct page_pool *pool;
 
-	pool = this_cpu_read(system_page_pool.pool);
 	local_lock_nested_bh(&system_page_pool.bh_lock);
-	err = skb_cow_data_for_xdp(pool, pskb, prog);
+	err = skb_cow_data_for_xdp(this_cpu_read(system_page_pool.pool), pskb, prog);
 	local_unlock_nested_bh(&system_page_pool.bh_lock);
-	if (!err) {
-		rxq->mem.type = MEM_TYPE_PAGE_POOL;
-		rxq->mem.id = pool->xdp_mem_id;
+	if (!err)
 		return 0;
-	}
 
 	/* In case we have to go down the path and also linearize,
 	 * then lets do the pskb_expand_head() work just once here.
@@ -5474,13 +5467,13 @@ static u32 netif_receive_generic_xdp(struct sk_buff **pskb,
 
 	if (skb_cloned(skb) || skb_is_nonlinear(skb) ||
 	    skb_headroom(skb) < XDP_PACKET_HEADROOM) {
-		if (netif_skb_check_for_xdp(pskb, xdp_prog, xdp->rxq))
+		if (netif_skb_check_for_xdp(pskb, xdp_prog))
 			goto do_drop;
 	}
 
 	__skb_pull(*pskb, mac_len);
 
-	act = bpf_prog_run_generic_xdp(*pskb, xdp, xdp_prog, xdp->rxq);
+	act = bpf_prog_run_generic_xdp(*pskb, xdp, xdp_prog);
 	switch (act) {
 	case XDP_REDIRECT:
 	case XDP_TX:
@@ -5537,10 +5530,7 @@ int do_xdp_generic(const struct bpf_prog *xdp_prog, struct sk_buff **pskb)
 	struct bpf_net_context __bpf_net_ctx, *bpf_net_ctx;
 
 	if (xdp_prog) {
-		struct xdp_rxq_info rxq = {};
-		struct xdp_buff xdp = {
-			.rxq = &rxq,
-		};
+		struct xdp_buff xdp;
 		u32 act;
 		int err;
 

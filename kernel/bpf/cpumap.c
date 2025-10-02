@@ -145,7 +145,7 @@ static u32 cpu_map_bpf_prog_run_skb(struct bpf_cpu_map_entry *rcpu,
 	for (u32 i = 0; i < skb_n; i++) {
 		struct sk_buff *skb = skbs[i];
 
-		act = bpf_prog_run_generic_xdp(skb, &xdp, rcpu->prog, NULL);
+		act = bpf_prog_run_generic_xdp(skb, &xdp, rcpu->prog);
 		switch (act) {
 		case XDP_PASS:
 			skbs[pass++] = skb;

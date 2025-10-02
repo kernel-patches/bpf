@@ -78,7 +78,6 @@ struct udp_tunnel_nic_info;
 struct udp_tunnel_nic;
 struct bpf_prog;
 struct xdp_buff;
-struct xdp_rxq_info;
 struct xdp_frame;
 struct xdp_metadata_ops;
 struct xdp_md;
@@ -4176,8 +4175,7 @@ static inline void dev_consume_skb_any(struct sk_buff *skb)
 }
 
 u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
-			     const struct bpf_prog *xdp_prog,
-			     struct xdp_rxq_info *rxq);
+			     const struct bpf_prog *xdp_prog);
 void generic_xdp_tx(struct sk_buff *skb, const struct bpf_prog *xdp_prog);
 int do_xdp_generic(const struct bpf_prog *xdp_prog, struct sk_buff **pskb);
 int netif_rx(struct sk_buff *skb);
