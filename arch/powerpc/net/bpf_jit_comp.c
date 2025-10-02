@@ -19,6 +19,7 @@
 
 #include <asm/kprobes.h>
 #include <asm/text-patching.h>
+#include <asm/livepatch.h>
 
 #include "bpf_jit.h"
 
@@ -652,14 +653,16 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 					 struct bpf_tramp_links *tlinks,
 					 void *func_addr)
 {
-	int regs_off, nregs_off, ip_off, run_ctx_off, retval_off, nvr_off, alt_lr_off, r4_off = 0;
 	int i, ret, nr_regs, bpf_frame_size = 0, bpf_dummy_frame_size = 0, func_frame_offset;
 	struct bpf_tramp_links *fmod_ret = &tlinks[BPF_TRAMP_MODIFY_RETURN];
+	int regs_off, nregs_off, ip_off, run_ctx_off, retval_off, nvr_off;
 	struct bpf_tramp_links *fentry = &tlinks[BPF_TRAMP_FENTRY];
 	struct bpf_tramp_links *fexit = &tlinks[BPF_TRAMP_FEXIT];
+	int alt_lr_off, r4_off = 0, livepatch_sp_off = 0;
 	struct codegen_context codegen_ctx, *ctx;
 	u32 *image = (u32 *)rw_image;
 	ppc_inst_t branch_insn;
+	bool handle_lp = false;
 	u32 *branches = NULL;
 	bool save_ret;
 
@@ -690,6 +693,8 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	 * dummy frame for unwind       [ back chain 1      ] --
 	 *                              [ padding           ] align stack frame
 	 *       r4_off                 [ r4 (tailcallcnt)  ] optional - 32-bit powerpc
+	 *                              [ *current.TI.lp_sp ]
+	 *    livepatch_sp_off          [ current.TI.lp_sp  ] optional - livepatch stack info
 	 *       alt_lr_off             [ real lr (ool stub)] optional - actual lr
 	 *                              [ r26               ]
 	 *       nvr_off                [ r25               ] nvr save area
@@ -754,10 +759,20 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	nvr_off = bpf_frame_size;
 	bpf_frame_size += 2 * SZL;
 
+
 	/* Optional save area for actual LR in case of ool ftrace */
 	if (IS_ENABLED(CONFIG_PPC_FTRACE_OUT_OF_LINE)) {
 		alt_lr_off = bpf_frame_size;
 		bpf_frame_size += SZL;
+		if (IS_ENABLED(CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS)) {
+			handle_lp = (func_ptr_is_kernel_text(func_addr) && fmod_ret->nr_links &&
+				     (flags & BPF_TRAMP_F_CALL_ORIG));
+		}
+	}
+
+	if (handle_lp) {
+		livepatch_sp_off = bpf_frame_size;
+		bpf_frame_size += 2 * SZL;
 	}
 
 	if (IS_ENABLED(CONFIG_PPC32)) {
@@ -795,6 +810,30 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	/* 32-bit: save tail call count in r4 */
 	if (IS_ENABLED(CONFIG_PPC32) && nr_regs < 2)
 		EMIT(PPC_RAW_STL(_R4, _R1, r4_off));
+
+	/* Save expected livepatch stack state on the trampoline stack */
+	if (handle_lp) {
+		/*
+		 * The caller is expected to set cr0.eq bit, if livepatch was active on it.
+		 *
+		 * If livepatch is active, save address & the expected value of
+		 * livepatch stack pointer on the trampoline stack.
+		 * Else, set both of them to 0.
+		 */
+		PPC_BCC_SHORT(COND_EQ, (ctx->idx + 5) * 4);
+		EMIT(PPC_RAW_LI(_R12, 0));
+		EMIT(PPC_RAW_STL(_R12, _R1, livepatch_sp_off));
+		EMIT(PPC_RAW_STL(_R12, _R1, livepatch_sp_off + SZL));
+		PPC_JMP((ctx->idx + 7) * 4);
+
+		EMIT(PPC_RAW_LL(_R12, _R13, offsetof(struct paca_struct, __current) +
+					    offsetof(struct task_struct, thread_info)));
+		EMIT(PPC_RAW_ADDI(_R12, _R12, offsetof(struct thread_info, livepatch_sp)));
+		EMIT(PPC_RAW_STL(_R12, _R1, livepatch_sp_off));
+		EMIT(PPC_RAW_LL(_R12, _R12, 0));
+		EMIT(PPC_RAW_ADDI(_R12, _R12, -LIVEPATCH_STACK_FRAME_SIZE));
+		EMIT(PPC_RAW_STL(_R12, _R1, livepatch_sp_off + SZL));
+	}
 
 	bpf_trampoline_save_args(image, ctx, func_frame_offset, nr_regs, regs_off);
 
@@ -904,6 +943,36 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		}
 
 		image[branches[i]] = ppc_inst_val(branch_insn);
+	}
+
+	/*
+	 * Restore livepatch stack state if livepatch was active & an attached
+	 * fmod_ret program failed.
+	 */
+	if (handle_lp) {
+		EMIT(PPC_RAW_LL(_R12, _R1, livepatch_sp_off + SZL));
+		EMIT(PPC_RAW_CMPLI(_R12, 0));
+
+		/*
+		 * If expected value (_R12) of livepatch stack pointer saved on the
+		 * trampoline stack is 0, livepatch was not active. Skip the rest.
+		 */
+		PPC_BCC_SHORT(COND_EQ, (ctx->idx + 7) * 4);
+
+		EMIT(PPC_RAW_LL(_R25, _R1, livepatch_sp_off));
+		EMIT(PPC_RAW_LL(_R25, _R25, 0));
+
+		/*
+		 * If the expected value (_R12) of livepatch stack pointer saved on the
+		 * trampoline stack is not the same as actual value (_R25), it implies
+		 * fmod_ret program failed and skipped calling the traced/livepatch'ed
+		 * function. The livepatch'ed function did not get a chance to tear down
+		 * the livepatch stack it setup. Take care of that here in do_fexit.
+		 */
+		EMIT(PPC_RAW_CMPD(_R12, _R25));
+		PPC_BCC_SHORT(COND_EQ, (ctx->idx + 3) * 4);
+		EMIT(PPC_RAW_LL(_R25, _R1, livepatch_sp_off));
+		EMIT(PPC_RAW_STL(_R12, _R25, 0));
 	}
 
 	for (i = 0; i < fexit->nr_links; i++)
