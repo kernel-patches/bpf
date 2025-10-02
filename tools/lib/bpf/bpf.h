@@ -57,16 +57,21 @@ struct bpf_map_create_opts {
 
 	const void *excl_prog_hash;
 	__u32 excl_prog_hash_size;
+
+	const char *log_buf;
+	__u32 log_size;
+	__u32 log_level;
+	__u32 log_true_size;
 	size_t :0;
 };
-#define bpf_map_create_opts__last_field excl_prog_hash_size
+#define bpf_map_create_opts__last_field log_true_size
 
 LIBBPF_API int bpf_map_create(enum bpf_map_type map_type,
 			      const char *map_name,
 			      __u32 key_size,
 			      __u32 value_size,
 			      __u32 max_entries,
-			      const struct bpf_map_create_opts *opts);
+			      struct bpf_map_create_opts *opts);
 
 struct bpf_prog_load_opts {
 	size_t sz; /* size of this struct for forward/backward compatibility */
