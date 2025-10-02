@@ -508,6 +508,7 @@ static int alloc_list(struct net_device *dev)
 	for (i = 0; i < RX_RING_SIZE; i++) {
 		/* Allocated fixed size of skbuff */
 		struct sk_buff *skb;
+		dma_addr_t addr;
 
 		skb = netdev_alloc_skb_ip_align(dev, np->rx_buf_sz);
 		np->rx_skbuff[i] = skb;
@@ -516,13 +517,19 @@ static int alloc_list(struct net_device *dev)
 			return -ENOMEM;
 		}
 
+		addr = dma_map_single(&np->pdev->dev, skb->data,
+				      np->rx_buf_sz, DMA_FROM_DEVICE);
+		if (dma_mapping_error(&np->pdev->dev, addr)) {
+			dev_kfree_skb(skb);
+			np->rx_skbuff[i] = NULL;
+			free_list(dev);
+			return -ENOMEM;
+		}
 		np->rx_ring[i].next_desc = cpu_to_le64(np->rx_ring_dma +
 						((i + 1) % RX_RING_SIZE) *
 						sizeof(struct netdev_desc));
 		/* Rubicon now supports 40 bits of addressing space. */
-		np->rx_ring[i].fraginfo =
-		    cpu_to_le64(dma_map_single(&np->pdev->dev, skb->data,
-					       np->rx_buf_sz, DMA_FROM_DEVICE));
+		np->rx_ring[i].fraginfo = cpu_to_le64(addr);
 		np->rx_ring[i].fraginfo |= cpu_to_le64((u64)np->rx_buf_sz << 48);
 	}
 
@@ -674,6 +681,7 @@ rio_timer (struct timer_list *t)
 		/* Re-allocate skbuffs to fill the descriptor ring */
 		for (; np->cur_rx - np->old_rx > 0; np->old_rx++) {
 			struct sk_buff *skb;
+			dma_addr_t addr;
 			entry = np->old_rx % RX_RING_SIZE;
 			/* Dropped packets don't need to re-allocate */
 			if (np->rx_skbuff[entry] == NULL) {
@@ -686,10 +694,16 @@ rio_timer (struct timer_list *t)
 						dev->name, entry);
 					break;
 				}
+				addr = dma_map_single(&np->pdev->dev, skb->data,
+						      np->rx_buf_sz,
+						      DMA_FROM_DEVICE);
+				if (dma_mapping_error(&np->pdev->dev, addr)) {
+					dev_kfree_skb_irq(skb);
+					np->rx_ring[entry].fraginfo = 0;
+					break;
+				}
 				np->rx_skbuff[entry] = skb;
-				np->rx_ring[entry].fraginfo =
-				    cpu_to_le64 (dma_map_single(&np->pdev->dev, skb->data,
-								np->rx_buf_sz, DMA_FROM_DEVICE));
+				np->rx_ring[entry].fraginfo = cpu_to_le64(addr);
 			}
 			np->rx_ring[entry].fraginfo |=
 			    cpu_to_le64((u64)np->rx_buf_sz << 48);
@@ -720,6 +734,7 @@ start_xmit (struct sk_buff *skb, struct net_device *dev)
 	struct netdev_private *np = netdev_priv(dev);
 	void __iomem *ioaddr = np->ioaddr;
 	struct netdev_desc *txdesc;
+	dma_addr_t addr;
 	unsigned entry;
 	u64 tfc_vlan_tag = 0;
 
@@ -743,8 +758,14 @@ start_xmit (struct sk_buff *skb, struct net_device *dev)
 		    ((u64)np->vlan << 32) |
 		    ((u64)skb->priority << 45);
 	}
-	txdesc->fraginfo = cpu_to_le64 (dma_map_single(&np->pdev->dev, skb->data,
-						       skb->len, DMA_TO_DEVICE));
+	addr = dma_map_single(&np->pdev->dev, skb->data, skb->len,
+			      DMA_TO_DEVICE);
+	if (dma_mapping_error(&np->pdev->dev, addr)) {
+		dev_kfree_skb_any(skb);
+		np->tx_skbuff[entry] = NULL;
+		return NETDEV_TX_OK;
+	}
+	txdesc->fraginfo = cpu_to_le64(addr);
 	txdesc->fraginfo |= cpu_to_le64((u64)skb->len << 48);
 
 	/* DL2K bug: DMA fails to get next descriptor ptr in 10Mbps mode
@@ -1007,6 +1028,7 @@ receive_packet (struct net_device *dev)
 	entry = np->old_rx;
 	while (entry != np->cur_rx) {
 		struct sk_buff *skb;
+		dma_addr_t addr;
 		/* Dropped packets don't need to re-allocate */
 		if (np->rx_skbuff[entry] == NULL) {
 			skb = netdev_alloc_skb_ip_align(dev, np->rx_buf_sz);
@@ -1018,10 +1040,15 @@ receive_packet (struct net_device *dev)
 					dev->name, entry);
 				break;
 			}
+			addr = dma_map_single(&np->pdev->dev, skb->data,
+					      np->rx_buf_sz, DMA_FROM_DEVICE);
+			if (dma_mapping_error(&np->pdev->dev, addr)) {
+				dev_kfree_skb_irq(skb);
+				np->rx_ring[entry].fraginfo = 0;
+				break;
+			}
 			np->rx_skbuff[entry] = skb;
-			np->rx_ring[entry].fraginfo =
-			    cpu_to_le64(dma_map_single(&np->pdev->dev, skb->data,
-						       np->rx_buf_sz, DMA_FROM_DEVICE));
+			np->rx_ring[entry].fraginfo = cpu_to_le64(addr);
 		}
 		np->rx_ring[entry].fraginfo |=
 		    cpu_to_le64((u64)np->rx_buf_sz << 48);
