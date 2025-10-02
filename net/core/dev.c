@@ -5537,7 +5537,9 @@ int do_xdp_generic(const struct bpf_prog *xdp_prog, struct sk_buff **pskb)
 	struct bpf_net_context __bpf_net_ctx, *bpf_net_ctx;
 
 	if (xdp_prog) {
-		struct xdp_rxq_info rxq = {};
+		struct xdp_rxq_info rxq = {
+			.dev = (*pskb)->dev,
+		};
 		struct xdp_buff xdp = {
 			.rxq = &rxq,
 		};
