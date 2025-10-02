@@ -339,7 +339,9 @@ static void ppp_cp_event(struct net_device *dev, u16 pid, u16 event, u8 code,
 		ppp_tx_cp(dev, pid, CP_CODE_REJ, ++ppp->seq, len, data);
 
 	if (old_state != OPENED && proto->state == OPENED) {
-		netdev_info(dev, "%s up\n", proto_name(pid));
+		const char *pname = proto_name(pid);
+
+		netdev_info(dev, "%s up\n", pname ? pname : "unknown");
 		if (pid == PID_LCP) {
 			netif_dormant_off(dev);
 			ppp_cp_event(dev, PID_IPCP, START, 0, 0, 0, NULL);
@@ -350,7 +352,9 @@ static void ppp_cp_event(struct net_device *dev, u16 pid, u16 event, u8 code,
 		}
 	}
 	if (old_state == OPENED && proto->state != OPENED) {
-		netdev_info(dev, "%s down\n", proto_name(pid));
+		const char *pname = proto_name(pid);
+
+		netdev_info(dev, "%s down\n", pname ? pname : "unknown");
 		if (pid == PID_LCP) {
 			netif_dormant_on(dev);
 			ppp_cp_event(dev, PID_IPCP, STOP, 0, 0, 0, NULL);
