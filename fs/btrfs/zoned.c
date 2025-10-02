@@ -514,6 +514,11 @@ int btrfs_get_dev_zone_info(struct btrfs_device *device, bool populate_cache)
 
 	if (max_active_zones) {
 		if (nactive > max_active_zones) {
+			if (bdev_max_active_zones(bdev) == 0) {
+				max_active_zones = 0;
+				zone_info->max_active_zones = 0;
+				goto validate;
+			}
 			btrfs_err(device->fs_info,
 			"zoned: %u active zones on %s exceeds max_active_zones %u",
 					 nactive, rcu_dereference(device->name),
@@ -526,6 +531,7 @@ int btrfs_get_dev_zone_info(struct btrfs_device *device, bool populate_cache)
 		set_bit(BTRFS_FS_ACTIVE_ZONE_TRACKING, &fs_info->flags);
 	}
 
+validate:
 	/* Validate superblock log */
 	nr_zones = BTRFS_NR_SB_LOG_ZONES;
 	for (i = 0; i < BTRFS_SUPER_MIRROR_MAX; i++) {
@@ -2582,9 +2588,9 @@ again:
 			spin_lock(&space_info->lock);
 			space_info->total_bytes -= bg->length;
 			space_info->disk_total -= bg->length * factor;
+			space_info->disk_total -= bg->zone_unusable;
 			/* There is no allocation ever happened. */
 			ASSERT(bg->used == 0);
-			ASSERT(bg->zone_unusable == 0);
 			/* No super block in a block group on the zoned setup. */
 			ASSERT(bg->bytes_super == 0);
 			spin_unlock(&space_info->lock);

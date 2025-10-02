@@ -21,7 +21,6 @@ config FIREWIRE
 config FIREWIRE_KUNIT_UAPI_TEST
 	tristate "KUnit tests for layout of structure in UAPI" if !KUNIT_ALL_TESTS
 	depends on FIREWIRE && KUNIT
-	default KUNIT_ALL_TESTS
 	help
 	  This builds the KUnit tests whether structures exposed to user
 	  space have expected layout.
@@ -37,7 +36,6 @@ config FIREWIRE_KUNIT_UAPI_TEST
 config FIREWIRE_KUNIT_DEVICE_ATTRIBUTE_TEST
 	tristate "KUnit tests for device attributes" if !KUNIT_ALL_TESTS
 	depends on FIREWIRE && KUNIT
-	default KUNIT_ALL_TESTS
 	help
 	  This builds the KUnit tests for device attribute for node and
 	  unit.
@@ -53,7 +51,6 @@ config FIREWIRE_KUNIT_DEVICE_ATTRIBUTE_TEST
 config FIREWIRE_KUNIT_PACKET_SERDES_TEST
 	tristate "KUnit tests for packet serialization/deserialization" if !KUNIT_ALL_TESTS
 	depends on FIREWIRE && KUNIT
-	default KUNIT_ALL_TESTS
 	help
 	  This builds the KUnit tests for packet serialization and
 	  deserialization.
@@ -69,7 +66,6 @@ config FIREWIRE_KUNIT_PACKET_SERDES_TEST
 config FIREWIRE_KUNIT_SELF_ID_SEQUENCE_HELPER_TEST
 	tristate "KUnit tests for helpers of self ID sequence" if !KUNIT_ALL_TESTS
 	depends on FIREWIRE && KUNIT
-	default KUNIT_ALL_TESTS
 	help
 	  This builds the KUnit tests for helpers of self ID sequence.
 
@@ -95,7 +91,6 @@ config FIREWIRE_OHCI
 config FIREWIRE_KUNIT_OHCI_SERDES_TEST
 	tristate "KUnit tests for serialization/deserialization of data in buffers/registers" if !KUNIT_ALL_TESTS
 	depends on FIREWIRE && KUNIT
-	default KUNIT_ALL_TESTS
 	help
 	  This builds the KUnit tests to check serialization and deserialization
 	  of data in buffers and registers defined in 1394 OHCI specification.
