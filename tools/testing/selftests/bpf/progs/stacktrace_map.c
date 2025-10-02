@@ -62,7 +62,7 @@ struct sched_switch_args {
 };
 
 __u32 stack_id;
-static inline void test_stackmap(void *ctx, int skip)
+static inline void test_stackmap_flags(void *ctx, __u64 flags)
 {
 	__u32 max_len = PERF_MAX_STACK_DEPTH * sizeof(__u64);
 	__u32 key = 0, val = 0, *value_p;
@@ -73,14 +73,26 @@ static inline void test_stackmap(void *ctx, int skip)
 		return; /* skip if non-zero *value_p */
 
 	/* The size of stackmap and stackid_hmap should be the same */
-	key = bpf_get_stackid(ctx, &stackmap, (u64) skip);
+	key = bpf_get_stackid(ctx, &stackmap, flags);
 	if ((int)key >= 0) {
 		stack_id = key;
 		bpf_map_update_elem(&stackid_hmap, &key, &val, 0);
 		stack_p = bpf_map_lookup_elem(&stack_amap, &key);
 		if (stack_p)
-			bpf_get_stack(ctx, stack_p, max_len, (u64) skip);
+			bpf_get_stack(ctx, stack_p, max_len, flags);
 	}
+}
+
+static inline void test_stackmap(void *ctx, int skip)
+{
+	test_stackmap_flags(ctx, (__u64) skip);
+}
+
+static inline void test_stackmap_user(void *ctx, int skip)
+{
+	__u64 flags = (__u64) skip | BPF_F_USER_STACK;
+
+	test_stackmap_flags(ctx, flags);
 }
 
 /*
@@ -132,6 +144,20 @@ SEC("fexit/bpf_fentry_test1")
 int BPF_PROG(fexit)
 {
 	test_stackmap(ctx, 1);
+	return 0;
+}
+
+SEC("uprobe.multi")
+int uprobe_multi_test(struct pt_regs *ctx)
+{
+	test_stackmap_user(ctx, 0);
+	return 0;
+}
+
+SEC("uprobe")
+int uprobe_test(struct pt_regs *ctx)
+{
+	test_stackmap_user(ctx, 0);
 	return 0;
 }
 

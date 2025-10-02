@@ -164,6 +164,62 @@ cleanup:
 	stacktrace_map__destroy(skel);
 }
 
+noinline void stacktrace_map_uprobe_trigger(void)
+{
+        asm volatile ("");
+}
+
+static void test_stacktrace_map_uprobe(bool retprobe)
+{
+	LIBBPF_OPTS(bpf_uprobe_opts, opts,
+		.retprobe  = retprobe,
+		.func_name = "stacktrace_map_uprobe_trigger",
+	);
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	struct stacktrace_map *skel;
+
+	skel = stacktrace_map__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "stacktrace_map__open_and_load"))
+		return;
+
+	skel->links.uprobe_test = bpf_program__attach_uprobe_opts(skel->progs.uprobe_test,
+					       -1 /* pid */, "/proc/self/exe", 0 /* offset */,
+					       &opts);
+	if (!ASSERT_OK_PTR(skel->links.uprobe_test, "bpf_program__attach_uprobe_opts"))
+		goto cleanup;
+
+	stacktrace_map_uprobe_trigger();
+	check_stackmap(skel);
+
+cleanup:
+	stacktrace_map__destroy(skel);
+}
+
+static void test_stacktrace_map_uprobe_multi(bool retprobe)
+{
+	LIBBPF_OPTS(bpf_uprobe_multi_opts, opts,
+		.retprobe = retprobe
+	);
+	struct stacktrace_map *skel;
+
+	skel = stacktrace_map__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "stacktrace_map__open_and_load"))
+		return;
+
+	skel->links.uprobe_multi_test = bpf_program__attach_uprobe_multi(skel->progs.uprobe_multi_test,
+						-1 /* pid */, "/proc/self/exe",
+						"stacktrace_map_uprobe_trigger",
+						&opts);
+	if (!ASSERT_OK_PTR(skel->links.uprobe_multi_test, "bpf_program__attach_uprobe_multi"))
+		goto cleanup;
+
+	stacktrace_map_uprobe_trigger();
+	check_stackmap(skel);
+
+cleanup:
+	stacktrace_map__destroy(skel);
+}
+
 void test_stacktrace_map(void)
 {
 	if (test__start_subtest("tp"))
@@ -182,4 +238,12 @@ void test_stacktrace_map(void)
 		test_stacktrace_map_tracing(false);
 	if (test__start_subtest("fexit"))
 		test_stacktrace_map_tracing(true);
+	if (test__start_subtest("uprobe"))
+		test_stacktrace_map_uprobe(false);
+	if (test__start_subtest("uretprobe"))
+		test_stacktrace_map_uprobe(true);
+	if (test__start_subtest("uprobe_multi"))
+		test_stacktrace_map_uprobe_multi(false);
+	if (test__start_subtest("uretprobe_multi"))
+		test_stacktrace_map_uprobe_multi(true);
 }
