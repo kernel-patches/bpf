@@ -1406,7 +1406,7 @@ static int map_create(union bpf_attr *attr, bpfptr_t uattr)
 		return -EINVAL;
 	map_type = array_index_nospec(map_type, ARRAY_SIZE(bpf_map_types));
 	ops = bpf_map_types[map_type];
-	if (!ops)
+	if (WARN_ON_ONCE(!ops))
 		return -EINVAL;
 
 	if (ops->map_alloc_check) {
@@ -1416,7 +1416,7 @@ static int map_create(union bpf_attr *attr, bpfptr_t uattr)
 	}
 	if (attr->map_ifindex)
 		ops = &bpf_map_offload_ops;
-	if (!ops->map_mem_usage)
+	if (WARN_ON_ONCE(!ops->map_mem_usage))
 		return -EINVAL;
 
 	if (token_flag) {
