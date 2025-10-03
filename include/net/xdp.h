@@ -370,6 +370,13 @@ xdp_update_skb_frags_info(struct sk_buff *skb, u8 nr_frags,
 	skb->unreadable |= !!(xdp_flags & XDP_FLAGS_FRAGS_UNREADABLE);
 }
 
+static inline void
+xdp_update_mem_type(struct xdp_buff *xdp)
+{
+	xdp->rxq->mem.type = page_pool_page_is_pp(virt_to_page(xdp->data)) ?
+		MEM_TYPE_PAGE_POOL : MEM_TYPE_PAGE_SHARED;
+}
+
 /* Avoids inlining WARN macro in fast-path */
 void xdp_warn(const char *msg, const char *func, const int line);
 #define XDP_WARN(msg) xdp_warn(msg, __func__, __LINE__)
