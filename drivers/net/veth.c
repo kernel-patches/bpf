@@ -814,6 +814,8 @@ static struct sk_buff *veth_xdp_rcv_skb(struct veth_rq *rq,
 	orig_data = xdp->data;
 	orig_data_end = xdp->data_end;
 
+	xdp_update_mem_type(xdp);
+
 	act = bpf_prog_run_xdp(xdp_prog, xdp);
 
 	switch (act) {
