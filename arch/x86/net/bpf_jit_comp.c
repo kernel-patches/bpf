@@ -20,6 +20,12 @@
 #include <asm/unwind.h>
 #include <asm/cfi.h>
 
+bool bpf_jit_bypass_spec_v1(void)
+{
+	/* Emulate LoongArch/PowerPC behavior for testing purposes. */
+	return true;
+}
+
 static bool all_callee_regs_used[4] = {true, true, true, true};
 
 static u8 *emit_code(u8 *ptr, u32 bytes, unsigned int len)
