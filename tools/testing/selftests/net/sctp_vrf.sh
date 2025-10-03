@@ -77,17 +77,40 @@ wait_server() {
 	done
 }
 
+dbg() {
+    if [ -e /tmp/sctp_server.log ]; then
+	echo ""
+	echo " == Server Log =="
+	cat /tmp/sctp_server.log
+	echo " < EOF < "
+    else
+	echo " == No server log =="
+    fi
+
+    if [ -e /tmp/sctp_client.log ]; then
+	echo ""
+	echo " == Client Log =="
+	cat /tmp/sctp_client.log
+	echo " < EOF < "
+    else
+	echo " == No client log =="
+    fi
+}
+
 do_test() {
 	local CLIENT_NS=$1
 	local IFACE=$2
 
+	rm -f /tmp/sctp_server.log /tmp/sctp_client.log
+
 	ip netns exec $SERVER_NS pkill sctp_hello 2>&1 >/dev/null
 	ip netns exec $SERVER_NS ./sctp_hello server $AF $SERVER_IP \
-		$SERVER_PORT $IFACE 2>&1 >/dev/null &
+	   $SERVER_PORT $IFACE 2>&1 > /tmp/sctp_server.log &
 	disown
 	wait_server $IFACE || return $RET
 	timeout 3 ip netns exec $CLIENT_NS ./sctp_hello client $AF \
-		$SERVER_IP $SERVER_PORT $CLIENT_IP $CLIENT_PORT 2>&1 >/dev/null
+		$SERVER_IP $SERVER_PORT $CLIENT_IP $CLIENT_PORT 2>&1 \
+		> /tmp/sctp_client.log
 	RET=$?
 	return $RET
 }
@@ -116,52 +139,52 @@ do_testx() {
 testup() {
 	ip netns exec $SERVER_NS sysctl -w net.sctp.l3mdev_accept=1 2>&1 >/dev/null
 	echo -n "TEST 01: nobind, connect from client 1, l3mdev_accept=1, Y "
-	do_test $CLIENT_NS1 || { echo "[FAIL]"; return $RET; }
+	do_test $CLIENT_NS1 || { echo "[FAIL]"; dbg; return $RET; }
 	echo "[PASS]"
 
 	echo -n "TEST 02: nobind, connect from client 2, l3mdev_accept=1, N "
-	do_test $CLIENT_NS2 && { echo "[FAIL]"; return $RET; }
+	do_test $CLIENT_NS2 && { echo "[FAIL]"; dbg; return $RET; }
 	echo "[PASS]"
 
 	ip netns exec $SERVER_NS sysctl -w net.sctp.l3mdev_accept=0 2>&1 >/dev/null
 	echo -n "TEST 03: nobind, connect from client 1, l3mdev_accept=0, N "
-	do_test $CLIENT_NS1 && { echo "[FAIL]"; return $RET; }
+	do_test $CLIENT_NS1 && { echo "[FAIL]"; dbg; return $RET; }
 	echo "[PASS]"
 
 	echo -n "TEST 04: nobind, connect from client 2, l3mdev_accept=0, N "
-	do_test $CLIENT_NS2 && { echo "[FAIL]"; return $RET; }
+	do_test $CLIENT_NS2 && { echo "[FAIL]"; dbg; return $RET; }
 	echo "[PASS]"
 
 	echo -n "TEST 05: bind veth2 in server, connect from client 1, N "
-	do_test $CLIENT_NS1 veth2 && { echo "[FAIL]"; return $RET; }
+	do_test $CLIENT_NS1 veth2 && { echo "[FAIL]"; dbg; return $RET; }
 	echo "[PASS]"
 
 	echo -n "TEST 06: bind veth1 in server, connect from client 1, Y "
-	do_test $CLIENT_NS1 veth1 || { echo "[FAIL]"; return $RET; }
+	do_test $CLIENT_NS1 veth1 || { echo "[FAIL]"; dbg; return $RET; }
 	echo "[PASS]"
 
 	echo -n "TEST 07: bind vrf-1 in server, connect from client 1, Y "
-	do_test $CLIENT_NS1 vrf-1 || { echo "[FAIL]"; return $RET; }
+	do_test $CLIENT_NS1 vrf-1 || { echo "[FAIL]"; dbg; return $RET; }
 	echo "[PASS]"
 
 	echo -n "TEST 08: bind vrf-2 in server, connect from client 1, N "
-	do_test $CLIENT_NS1 vrf-2 && { echo "[FAIL]"; return $RET; }
+	do_test $CLIENT_NS1 vrf-2 && { echo "[FAIL]"; dbg; return $RET; }
 	echo "[PASS]"
 
 	echo -n "TEST 09: bind vrf-2 in server, connect from client 2, Y "
-	do_test $CLIENT_NS2 vrf-2 || { echo "[FAIL]"; return $RET; }
+	do_test $CLIENT_NS2 vrf-2 || { echo "[FAIL]"; dbg; return $RET; }
 	echo "[PASS]"
 
 	echo -n "TEST 10: bind vrf-1 in server, connect from client 2, N "
-	do_test $CLIENT_NS2 vrf-1 && { echo "[FAIL]"; return $RET; }
+	do_test $CLIENT_NS2 vrf-1 && { echo "[FAIL]"; dbg; return $RET; }
 	echo "[PASS]"
 
 	echo -n "TEST 11: bind vrf-1 & 2 in server, connect from client 1 & 2, Y "
-	do_testx vrf-1 vrf-2 || { echo "[FAIL]"; return $RET; }
+	do_testx vrf-1 vrf-2 || { echo "[FAIL]"; dbg; return $RET; }
 	echo "[PASS]"
 
 	echo -n "TEST 12: bind vrf-2 & 1 in server, connect from client 1 & 2, N "
-	do_testx vrf-2 vrf-1 || { echo "[FAIL]"; return $RET; }
+	do_testx vrf-2 vrf-1 || { echo "[FAIL]"; dbg; return $RET; }
 	echo "[PASS]"
 }
 

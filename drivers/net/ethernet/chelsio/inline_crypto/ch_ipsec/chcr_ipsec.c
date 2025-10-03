@@ -35,6 +35,8 @@
  *	Atul Gupta (atul.gupta@chelsio.com)
  */
 
+#include "asm-generic/errno-base.h"
+#include "linux/compiler.h"
 #define pr_fmt(fmt) "ch_ipsec: " fmt
 
 #include <linux/kernel.h>
@@ -301,7 +303,8 @@ static int ch_ipsec_xfrm_add_state(struct net_device *dev,
 		sa_entry->esn = 1;
 	ch_ipsec_setkey(x, sa_entry);
 	x->xso.offload_handle = (unsigned long)sa_entry;
-	try_module_get(THIS_MODULE);
+	if (unlikely(!try_module_get(THIS_MODULE)))
+		res = -ENODEV;
 out:
 	return res;
 }
