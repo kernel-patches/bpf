@@ -133,7 +133,7 @@ static inline const char *proto_name(u16 pid)
 	case PID_IPV6CP:
 		return "IPV6CP";
 	default:
-		return NULL;
+		return "LCP";
 	}
 }
 
