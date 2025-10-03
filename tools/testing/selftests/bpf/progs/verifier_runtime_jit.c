@@ -252,7 +252,10 @@ l1_%=:	call %[bpf_tail_call];				\
 
 SEC("socket")
 __description("runtime/jit: tail_call within bounds, different maps, first branch")
-__success __failure_unpriv __msg_unpriv("tail_call abusing map_ptr")
+__success
+#ifdef SPEC_V1
+__failure_unpriv __msg_unpriv("tail_call abusing map_ptr")
+#endif
 __retval(1)
 __naked void bounds_different_maps_first_branch(void)
 {
@@ -279,7 +282,10 @@ l1_%=:	call %[bpf_tail_call];				\
 
 SEC("socket")
 __description("runtime/jit: tail_call within bounds, different maps, second branch")
-__success __failure_unpriv __msg_unpriv("tail_call abusing map_ptr")
+__success
+#ifdef SPEC_V1
+__failure_unpriv __msg_unpriv("tail_call abusing map_ptr")
+#endif
 __retval(42)
 __naked void bounds_different_maps_second_branch(void)
 {
@@ -341,8 +347,10 @@ __naked void negative_index_to_tail_call(void)
 SEC("socket")
 __description("runtime/jit: pass > 32bit index to tail_call")
 __success __success_unpriv __retval(42)
+#ifdef SPEC_V1
 /* Verifier rewrite for unpriv skips tail call here. */
 __retval_unpriv(2)
+#endif
 __naked void _32bit_index_to_tail_call(void)
 {
 	asm volatile ("					\

@@ -40,7 +40,9 @@ __naked void with_32_bit_wraparound_test2(void)
 SEC("socket")
 __description("direct stack access with 32-bit wraparound. test3")
 __failure __msg("fp pointer offset 1073741822")
+#ifdef SPEC_V1
 __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __naked void with_32_bit_wraparound_test3(void)
 {
 	asm volatile ("					\
