@@ -379,8 +379,10 @@ l2_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: value_ptr -= known scalar from different maps")
-__success __failure_unpriv
-__msg_unpriv("R0 min value is outside of the allowed memory range")
+__success
+#ifdef SPEC_V1
+__failure_unpriv __msg_unpriv("R0 min value is outside of the allowed memory range")
+#endif
 __retval(1)
 __naked void known_scalar_from_different_maps(void)
 {
@@ -669,8 +671,11 @@ __naked void alu_with_different_scalars_3(void)
 
 SEC("socket")
 __description("map access: value_ptr += known scalar, upper oob arith, test 1")
-__success __failure_unpriv
+__success 
+#ifdef SPEC_V1
+__failure_unpriv
 __msg_unpriv("R0 pointer arithmetic of map value goes out of range")
+#endif
 __retval(1)
 __naked void upper_oob_arith_test_1(void)
 {
@@ -696,8 +701,11 @@ l0_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: value_ptr += known scalar, upper oob arith, test 2")
-__success __failure_unpriv
+__success 
+#ifdef SPEC_V1
+__failure_unpriv
 __msg_unpriv("R0 pointer arithmetic of map value goes out of range")
+#endif
 __retval(1)
 __naked void upper_oob_arith_test_2(void)
 {
@@ -749,8 +757,10 @@ l0_%=:	r0 = 1;						\
 SEC("socket")
 __description("map access: value_ptr -= known scalar, lower oob arith, test 1")
 __failure __msg("R0 min value is outside of the allowed memory range")
+#ifdef SPEC_V1
 __failure_unpriv
 __msg_unpriv("R0 pointer arithmetic of map value goes out of range")
+#endif
 __naked void lower_oob_arith_test_1(void)
 {
 	asm volatile ("					\
@@ -776,8 +786,11 @@ l0_%=:	r0 = 1;						\
 
 SEC("socket")
 __description("map access: value_ptr -= known scalar, lower oob arith, test 2")
-__success __failure_unpriv
+__success
+#ifdef SPEC_V1
+__failure_unpriv
 __msg_unpriv("R0 pointer arithmetic of map value goes out of range")
+#endif
 __retval(1)
 __naked void lower_oob_arith_test_2(void)
 {
@@ -1084,8 +1097,11 @@ l0_%=:	exit;						\
 
 SEC("socket")
 __description("map access: unknown scalar += value_ptr, 3")
-__success __failure_unpriv
+__success
+#ifdef SPEC_V1
+__failure_unpriv
 __msg_unpriv("R0 pointer arithmetic of map value goes out of range")
+#endif
 __retval(0xabcdef12) __flag(BPF_F_ANY_ALIGNMENT)
 __naked void unknown_scalar_value_ptr_3(void)
 {
@@ -1115,7 +1131,9 @@ l0_%=:	exit;						\
 SEC("socket")
 __description("map access: unknown scalar += value_ptr, 4")
 __failure __msg("R1 max value is outside of the allowed memory range")
+#ifdef SPEC_V1
 __msg_unpriv("R1 pointer arithmetic of map value goes out of range")
+#endif
 __flag(BPF_F_ANY_ALIGNMENT)
 __naked void unknown_scalar_value_ptr_4(void)
 {

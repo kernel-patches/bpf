@@ -48,7 +48,9 @@ SEC("socket")
 __description("subtraction bounds (map value) variant 2")
 __failure
 __msg("R0 min value is negative, either use unsigned index or do a if (index >=0) check.")
+#ifdef SPEC_V1
 __msg_unpriv("R0 pointer arithmetic of map value goes out of range, prohibited for !root")
+#endif
 __naked void bounds_map_value_variant_2(void)
 {
 	/* unpriv: nospec inserted to prevent "R1 has unknown scalar with mixed
@@ -545,7 +547,9 @@ l1_%=:	exit;						\
 SEC("socket")
 __description("bounds check map access with off+size signed 32bit overflow. test2")
 __failure __msg("pointer offset 1073741822")
+#ifdef SPEC_V1
 __msg_unpriv("R0 pointer arithmetic of map value goes out of range")
+#endif
 __naked void size_signed_32bit_overflow_test2(void)
 {
 	asm volatile ("					\
@@ -572,7 +576,9 @@ l1_%=:	exit;						\
 SEC("socket")
 __description("bounds check map access with off+size signed 32bit overflow. test3")
 __failure __msg("pointer offset -1073741822")
+#ifdef SPEC_V1
 __msg_unpriv("R0 pointer arithmetic of map value goes out of range")
+#endif
 __naked void size_signed_32bit_overflow_test3(void)
 {
 	asm volatile ("					\

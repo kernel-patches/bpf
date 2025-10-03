@@ -699,8 +699,10 @@ l0_%=:	r0 = 0;						\
 
 SEC("socket")
 __description("unpriv: adding of fp, reg")
-__success __failure_unpriv
-__msg_unpriv("R1 stack pointer arithmetic goes out of range")
+__success
+#ifdef SPEC_V1
+__failure_unpriv __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __retval(0)
 __naked void unpriv_adding_of_fp_reg(void)
 {
@@ -715,8 +717,10 @@ __naked void unpriv_adding_of_fp_reg(void)
 
 SEC("socket")
 __description("unpriv: adding of fp, imm")
-__success __failure_unpriv
-__msg_unpriv("R1 stack pointer arithmetic goes out of range")
+__success
+#ifdef SPEC_V1
+__failure_unpriv __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __retval(0)
 __naked void unpriv_adding_of_fp_imm(void)
 {
