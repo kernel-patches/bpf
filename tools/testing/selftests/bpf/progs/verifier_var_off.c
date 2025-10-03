@@ -34,8 +34,10 @@ __naked void variable_offset_ctx_access(void)
 
 SEC("cgroup/skb")
 __description("variable-offset stack read, priv vs unpriv")
-__success __failure_unpriv
-__msg_unpriv("R2 variable stack access prohibited for !root")
+__success
+#ifdef SPEC_V1
+__failure_unpriv __msg_unpriv("R2 variable stack access prohibited for !root")
+#endif
 __retval(0)
 __naked void stack_read_priv_vs_unpriv(void)
 {
@@ -62,7 +64,9 @@ __naked void stack_read_priv_vs_unpriv(void)
 SEC("cgroup/skb")
 __description("variable-offset stack read, uninitialized")
 __success
+#ifdef SPEC_V1
 __failure_unpriv __msg_unpriv("R2 variable stack access prohibited for !root")
+#endif
 __naked void variable_offset_stack_read_uninitialized(void)
 {
 	asm volatile ("					\
@@ -89,10 +93,13 @@ __success
  * maximum possible variable offset.
  */
 __log_level(4) __msg("stack depth 16")
+#ifdef SPEC_V1
 __failure_unpriv
-/* Variable stack access is rejected for unprivileged.
+/* Variable stack access is rejected for unprivileged due to Spectre v1
+ * mitigations.
  */
 __msg_unpriv("R2 variable stack access prohibited for !root")
+#endif
 __retval(0)
 __naked void stack_write_priv_vs_unpriv(void)
 {
@@ -129,8 +136,10 @@ __success
  * maximum possible variable offset.
  */
 __log_level(4) __msg("stack depth 16")
+#ifdef SPEC_V1
 __failure_unpriv
 __msg_unpriv("R2 variable stack access prohibited for !root")
+#endif
 __retval(0)
 __naked void stack_write_followed_by_read(void)
 {
@@ -163,11 +172,13 @@ __failure
  * of the spilled register when we analyze the write).
  */
 __msg("R2 invalid mem access 'scalar'")
+#ifdef SPEC_V1
 __failure_unpriv
 /* The unprivileged case is not too interesting; variable
  * stack access is rejected.
  */
 __msg_unpriv("R2 variable stack access prohibited for !root")
+#endif
 __naked void stack_write_clobbers_spilled_regs(void)
 {
 	asm volatile ("					\
@@ -324,7 +335,9 @@ __naked void access_min_out_of_bound(void)
 SEC("cgroup/skb")
 __description("indirect variable-offset stack access, min_off < min_initialized")
 __success
+#ifdef SPEC_V1
 __failure_unpriv __msg_unpriv("R2 variable stack access prohibited for !root")
+#endif
 __naked void access_min_off_min_initialized(void)
 {
 	asm volatile ("					\
@@ -353,8 +366,10 @@ __naked void access_min_off_min_initialized(void)
 
 SEC("cgroup/skb")
 __description("indirect variable-offset stack access, priv vs unpriv")
-__success __failure_unpriv
-__msg_unpriv("R2 variable stack access prohibited for !root")
+__success
+#ifdef SPEC_V1
+__failure_unpriv __msg_unpriv("R2 variable stack access prohibited for !root")
+#endif
 __retval(0)
 __naked void stack_access_priv_vs_unpriv(void)
 {
