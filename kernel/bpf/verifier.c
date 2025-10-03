@@ -3105,7 +3105,8 @@ struct bpf_kfunc_btf_tab {
 
 static unsigned long kfunc_call_imm(unsigned long func_addr, u32 func_id);
 
-static void specialize_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_desc *desc);
+static void specialize_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_desc *desc,
+			     int insn_idx);
 
 static int kfunc_desc_cmp_by_id_off(const void *a, const void *b)
 {
@@ -13833,6 +13834,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	insn_aux = &env->insn_aux_data[insn_idx];
 
 	insn_aux->is_iter_next = is_iter_next_kfunc(&meta);
+	insn_aux->kfunc_in_sleepable_ctx = in_sleepable(env);
 
 	if (!insn->off &&
 	    (insn->imm == special_kfunc_list[KF_bpf_res_spin_lock] ||
@@ -21832,7 +21834,8 @@ static unsigned long kfunc_call_imm(unsigned long func_addr, u32 func_id)
 }
 
 /* replace a generic kfunc with a specialized version if necessary */
-static void specialize_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_desc *desc)
+static void specialize_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_desc *desc,
+			     int insn_idx)
 {
 	struct bpf_prog_aux *prog_aux = env->prog->aux;
 	struct bpf_kfunc_desc_tab *tab = prog_aux->kfunc_tab;
@@ -21872,6 +21875,9 @@ static void specialize_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_desc
 	} else if (func_id == special_kfunc_list[KF_bpf_remove_dentry_xattr]) {
 		if (bpf_lsm_has_d_inode_locked(prog))
 			addr = (unsigned long)bpf_remove_dentry_xattr_locked;
+	} else if (func_id == special_kfunc_list[KF_bpf_dynptr_from_file]) {
+		if (env->insn_aux_data[insn_idx].kfunc_in_sleepable_ctx)
+			addr = (unsigned long)bpf_dynptr_from_file_sleepable;
 	}
 
 	if (!addr) /* Nothing to patch with */
@@ -21924,7 +21930,7 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return -EFAULT;
 	}
 
-	specialize_kfunc(env, desc);
+	specialize_kfunc(env, desc, insn_idx);
 
 	if (!bpf_jit_supports_far_kfunc_call())
 		insn->imm = BPF_CALL_IMM(desc->addr);
