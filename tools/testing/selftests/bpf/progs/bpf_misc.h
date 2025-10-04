@@ -258,11 +258,15 @@
 #define CAN_USE_LOAD_ACQ_STORE_REL
 #endif
 
-#if defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_x86)
+/* Add architectures that always set bpf_jit_bypass_spec_v1/v4 here. If the
+ * value is determined at runtime, it is best to skip unpriv tests by adding a
+ * case for your architecture in get_mitigations_off().
+ */
+#if !defined(__TARGET_ARCH_loongarch)
 #define SPEC_V1
 #endif
 
-#if defined(__TARGET_ARCH_x86)
+#if !defined(__TARGET_ARCH_arm64) && !defined(__TARGET_ARCH_loongarch)
 #define SPEC_V4
 #endif
 

@@ -100,6 +100,12 @@ out:
 
 static int get_mitigations_off(void)
 {
+#if defined(__TARGET_ARCH_powerpc)
+	/* Unknown, depends on return value of PowerPC's
+	 * bpf_jit_bypass_spec_v1/v4(). For simplicity, skip unpriv tests.
+	 */
+	return -1;
+#else
 	int enabled_in_config;
 
 	if (cmdline_contains("mitigations=off"))
@@ -108,6 +114,7 @@ static int get_mitigations_off(void)
 	if (enabled_in_config < 0)
 		return -1;
 	return !enabled_in_config;
+#endif
 }
 
 bool get_unpriv_disabled(void)
