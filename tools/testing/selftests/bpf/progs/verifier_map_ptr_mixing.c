@@ -218,7 +218,10 @@ void lookup_hash_map_in_map__2(void)
 
 SEC("socket")
 __description("cond: two branches returning different map pointers for lookup (tail, tail)")
-__success __failure_unpriv __msg_unpriv("tail_call abusing map_ptr")
+__success
+#ifdef SPEC_V1
+__failure_unpriv __msg_unpriv("tail_call abusing map_ptr")
+#endif
 __retval(42)
 __naked void pointers_for_lookup_tail_tail_1(void)
 {

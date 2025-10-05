@@ -70,7 +70,9 @@ __naked void load_bad_alignment_on_reg(void)
 SEC("socket")
 __description("PTR_TO_STACK store/load - out of bounds low")
 __failure __msg("invalid write to stack R1 off=-79992 size=8")
+#ifdef SPEC_V1
 __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __naked void load_out_of_bounds_low(void)
 {
 	asm volatile ("					\
@@ -130,8 +132,10 @@ __naked void to_stack_check_high_2(void)
 
 SEC("socket")
 __description("PTR_TO_STACK check high 3")
-__success __failure_unpriv
-__msg_unpriv("R1 stack pointer arithmetic goes out of range")
+__success
+#ifdef SPEC_V1
+__failure_unpriv __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __retval(42)
 __naked void to_stack_check_high_3(void)
 {
@@ -148,7 +152,9 @@ __naked void to_stack_check_high_3(void)
 SEC("socket")
 __description("PTR_TO_STACK check high 4")
 __failure __msg("invalid write to stack R1 off=0 size=1")
+#ifdef SPEC_V1
 __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __naked void to_stack_check_high_4(void)
 {
 	asm volatile ("					\
@@ -164,7 +170,9 @@ __naked void to_stack_check_high_4(void)
 SEC("socket")
 __description("PTR_TO_STACK check high 5")
 __failure __msg("invalid write to stack R1")
+#ifdef SPEC_V1
 __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __naked void to_stack_check_high_5(void)
 {
 	asm volatile ("					\
@@ -182,7 +190,9 @@ __naked void to_stack_check_high_5(void)
 SEC("socket")
 __description("PTR_TO_STACK check high 6")
 __failure __msg("invalid write to stack")
+#ifdef SPEC_V1
 __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __naked void to_stack_check_high_6(void)
 {
 	asm volatile ("					\
@@ -201,7 +211,9 @@ __naked void to_stack_check_high_6(void)
 SEC("socket")
 __description("PTR_TO_STACK check high 7")
 __failure __msg("fp pointer offset")
+#ifdef SPEC_V1
 __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __naked void to_stack_check_high_7(void)
 {
 	asm volatile ("					\
@@ -235,8 +247,10 @@ __naked void to_stack_check_low_1(void)
 
 SEC("socket")
 __description("PTR_TO_STACK check low 2")
-__success __failure_unpriv
-__msg_unpriv("R1 stack pointer arithmetic goes out of range")
+__success
+#ifdef SPEC_V1
+__failure_unpriv __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __retval(42)
 __naked void to_stack_check_low_2(void)
 {
@@ -253,7 +267,9 @@ __naked void to_stack_check_low_2(void)
 SEC("socket")
 __description("PTR_TO_STACK check low 3")
 __failure __msg("invalid write to stack R1 off=-513 size=1")
+#ifdef SPEC_V1
 __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __naked void to_stack_check_low_3(void)
 {
 	asm volatile ("					\
@@ -287,7 +303,9 @@ __naked void to_stack_check_low_4(void)
 SEC("socket")
 __description("PTR_TO_STACK check low 5")
 __failure __msg("invalid write to stack")
+#ifdef SPEC_V1
 __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __naked void to_stack_check_low_5(void)
 {
 	asm volatile ("					\
@@ -305,7 +323,9 @@ __naked void to_stack_check_low_5(void)
 SEC("socket")
 __description("PTR_TO_STACK check low 6")
 __failure __msg("invalid write to stack")
+#ifdef SPEC_V1
 __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __naked void to_stack_check_low_6(void)
 {
 	asm volatile ("					\
@@ -324,7 +344,9 @@ __naked void to_stack_check_low_6(void)
 SEC("socket")
 __description("PTR_TO_STACK check low 7")
 __failure __msg("fp pointer offset")
+#ifdef SPEC_V1
 __msg_unpriv("R1 stack pointer arithmetic goes out of range")
+#endif
 __naked void to_stack_check_low_7(void)
 {
 	asm volatile ("					\
