@@ -134,7 +134,7 @@ bool get_unpriv_disabled(void)
 	 * If mitigations are off or status can't be determined
 	 * assume that unpriv tests are disabled.
 	 */
-#if defined(__TARGET_ARCH_powerpc) || defined(__TARGET_ARCH_loongarch)
+#if defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_x86)
 	/* If arch. may set bpf_jit_bypass_spec_v1, we can not easily determine
 	 * if mitigations are on/off.
 	 */
