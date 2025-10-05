@@ -134,6 +134,12 @@ bool get_unpriv_disabled(void)
 	 * If mitigations are off or status can't be determined
 	 * assume that unpriv tests are disabled.
 	 */
+#if defined(__TARGET_ARCH_powerpc) || defined(__TARGET_ARCH_loongarch)
+	/* If arch. may set bpf_jit_bypass_spec_v1, we can not easily determine
+	 * if mitigations are on/off.
+	 */
+	return true;
+#else
 	mitigations_off = get_mitigations_off();
 	if (mitigations_off < 0) {
 		fprintf(stderr,
@@ -141,4 +147,5 @@ bool get_unpriv_disabled(void)
 		return true;
 	}
 	return mitigations_off;
+#endif
 }
