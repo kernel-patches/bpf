@@ -95,6 +95,12 @@ static inline void test_stackmap_user(void *ctx, int skip)
 	test_stackmap_flags(ctx, flags);
 }
 
+#if defined(__TARGET_ARCH_x86)
+#define TRACING_SKIP 1
+#else
+#define TRACING_SKIP 2
+#endif
+
 /*
  * No tests in here, just to trigger 'bpf_fentry_test*'
  * through tracing test_run.
@@ -115,7 +121,7 @@ int tp(struct sched_switch_args *ctx)
 SEC("raw_tp/sched/sched_switch")
 int raw_tp(struct sched_switch_args *ctx)
 {
-	test_stackmap(ctx, 1);
+	test_stackmap(ctx, TRACING_SKIP);
 	return 0;
 }
 
@@ -136,14 +142,14 @@ int kprobe_test(struct pt_regs *ctx)
 SEC("fentry/bpf_fentry_test1")
 int BPF_PROG(fentry)
 {
-	test_stackmap(ctx, 1);
+	test_stackmap(ctx, TRACING_SKIP);
 	return 0;
 }
 
 SEC("fexit/bpf_fentry_test1")
 int BPF_PROG(fexit)
 {
-	test_stackmap(ctx, 1);
+	test_stackmap(ctx, TRACING_SKIP);
 	return 0;
 }
 

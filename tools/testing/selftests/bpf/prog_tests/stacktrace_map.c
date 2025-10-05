@@ -111,6 +111,13 @@ static void test_stacktrace_map_kprobe_multi(bool retprobe)
 	struct stacktrace_map *skel;
 	int prog_fd, err;
 
+#if defined(__s390x__)
+	if (retprobe) {
+		test__skip();
+		return;
+	}
+#endif
+
 	skel = stacktrace_map__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "stacktrace_map__open_and_load"))
 		return;
