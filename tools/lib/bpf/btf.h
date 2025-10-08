@@ -265,9 +265,12 @@ struct btf_dedup_opts {
 	struct btf_ext *btf_ext;
 	/* force hash collisions (used for testing) */
 	bool force_collisions;
+	/* return dedup mapping array (from original -> new id) */
+	__u32 **dedup_map;
+	size_t *dedup_map_sz;
 	size_t :0;
 };
-#define btf_dedup_opts__last_field force_collisions
+#define btf_dedup_opts__last_field dedup_map_sz
 
 LIBBPF_API int btf__dedup(struct btf *btf, const struct btf_dedup_opts *opts);
 

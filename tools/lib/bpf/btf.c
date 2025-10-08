@@ -3650,6 +3650,8 @@ static int btf_dedup_ref_types(struct btf_dedup *d);
 static int btf_dedup_resolve_fwds(struct btf_dedup *d);
 static int btf_dedup_compact_types(struct btf_dedup *d);
 static int btf_dedup_remap_types(struct btf_dedup *d);
+static int btf_dedup_remap_type_id(__u32 *type_id, void *ctx);
+static int btf_dedup_save_map(struct btf_dedup *d, __u32 **save_map);
 
 /*
  * Deduplicate BTF types and strings.
@@ -3850,6 +3852,15 @@ int btf__dedup(struct btf *btf, const struct btf_dedup_opts *opts)
 	}
 
 done:
+	if (!err) {
+		if (opts && opts->dedup_map && opts->dedup_map_sz) {
+			err = btf_dedup_save_map(d, opts->dedup_map);
+			if (err >= 0) {
+				*opts->dedup_map_sz = err;
+				err = 0;
+			}
+		}
+	}
 	btf_dedup_free(d);
 	return libbpf_err(err);
 }
@@ -3880,6 +3891,7 @@ struct btf_dedup {
 	__u32 *hypot_list;
 	size_t hypot_cnt;
 	size_t hypot_cap;
+	size_t hypot_map_cnt;
 	/* Whether hypothetical mapping, if successful, would need to adjust
 	 * already canonicalized types (due to a new forward declaration to
 	 * concrete type resolution). In such case, during split BTF dedup
@@ -4010,6 +4022,7 @@ static struct btf_dedup *btf_dedup_new(struct btf *btf, const struct btf_dedup_o
 		err = -ENOMEM;
 		goto done;
 	}
+	d->hypot_map_cnt = type_cnt;
 	for (i = 0; i < type_cnt; i++)
 		d->hypot_map[i] = BTF_UNPROCESSED_ID;
 
@@ -5628,7 +5641,6 @@ static int btf_dedup_remap_type_id(__u32 *type_id, void *ctx)
 	new_type_id = d->hypot_map[resolved_type_id];
 	if (new_type_id > BTF_MAX_NR_TYPES)
 		return -EINVAL;
-
 	*type_id = new_type_id;
 	return 0;
 }
@@ -5676,6 +5688,27 @@ static int btf_dedup_remap_types(struct btf_dedup *d)
 		return r;
 
 	return 0;
+}
+
+/* retrieve a copy of map and avoid it being freed during btf_dedup_free(). */
+static int btf_dedup_save_map(struct btf_dedup *d, __u32 **save_map)
+{
+	__u32 i, resolved_id;
+
+	/* only existing references in BTF that needed to be adjusted are
+	 * mapped in the hypot map; fill in the rest.
+	 */
+	for (i = 0; i < d->hypot_map_cnt; i++) {
+		if (d->hypot_map[i] <= BTF_MAX_NR_TYPES)
+			continue;
+		resolved_id = resolve_type_id(d, i);
+		d->hypot_map[i] = d->hypot_map[resolved_id];
+	}
+	*save_map = d->hypot_map;
+	/* ensure btf_dedup_free() will not free hypot map; it belongs to caller */
+	d->hypot_map = NULL;
+
+	return d->hypot_map_cnt;
 }
 
 /*
