@@ -247,6 +247,18 @@ LIBBPF_API int btf__add_decl_tag(struct btf *btf, const char *value, int ref_typ
 LIBBPF_API int btf__add_decl_attr(struct btf *btf, const char *value, int ref_type_id,
 				  int component_idx);
 
+LIBBPF_API int btf__add_loc_param(struct btf *btf, __s32 size, bool is_value, __u64 value,
+				  __u16 reg, __u16 flags, __s32 offset);
+
+LIBBPF_API int btf__add_loc_proto(struct btf *btf);
+
+LIBBPF_API int btf__add_loc_proto_param(struct btf *btf, __u32 id);
+
+LIBBPF_API int btf__add_locsec(struct btf *btf, const char *name);
+
+LIBBPF_API int btf__add_locsec_loc(struct btf *btf, const char *name, __u32 func_proto,
+				   __u32 loc_proto, __u32 offset);
+
 struct btf_dedup_opts {
 	size_t sz;
 	/* optional .BTF.ext info to dedup along the main BTF info */
@@ -359,6 +371,42 @@ btf_dump__dump_type_data(struct btf_dump *d, __u32 id,
 #define BTF_KIND_DECL_TAG	17	/* Decl Tag */
 #define BTF_KIND_TYPE_TAG	18	/* Type Tag */
 #define BTF_KIND_ENUM64		19	/* Enum for up-to 64bit values */
+
+#ifndef BTF_KIND_LOC_UAPI_DEFINED
+#define BTF_KIND_LOC_LIBBPF_DEFINED
+#define BTF_KIND_LOC_PARAM	20
+#define BTF_KIND_LOC_PROTO	21
+#define BTF_KIND_LOCSEC		22
+
+#define BTF_TYPE_LOC_PARAM_SIZE(t)	((__s32)((t)->size))
+#define BTF_LOC_FLAG_DEREF		0x1
+#define BTF_LOC_FLAG_CONTINUE		0x2
+
+struct btf_loc_param {
+	union {
+		struct {
+			__u16 reg;	/* register number */
+			__u16 flags;	/* register dereference */
+			__s32 offset;	/* offset from register-stored address */
+		};
+		struct {
+			__u32 val_lo32;	/* lo 32 bits of 64-bit value */
+			__u32 val_hi32;	/* hi 32 bits of 64-bit value */
+		};
+	};
+};
+
+struct btf_loc {
+	__u32 name_off;
+	__u32 func_proto;
+	__u32 loc_proto;
+	__u32 offset;
+};
+
+#else
+struct btf_loc_param;
+struct btf_loc;
+#endif
 
 static inline __u16 btf_kind(const struct btf_type *t)
 {
@@ -497,6 +545,21 @@ static inline bool btf_is_any_enum(const struct btf_type *t)
 	return btf_is_enum(t) || btf_is_enum64(t);
 }
 
+static inline bool btf_is_loc_param(const struct btf_type *t)
+{
+	return btf_kind(t) == BTF_KIND_LOC_PARAM;
+}
+
+static inline bool btf_is_loc_proto(const struct btf_type *t)
+{
+	return btf_kind(t) == BTF_KIND_LOC_PROTO;
+}
+
+static inline bool btf_is_locsec(const struct btf_type *t)
+{
+	return btf_kind(t) == BTF_KIND_LOCSEC;
+}
+
 static inline bool btf_kind_core_compat(const struct btf_type *t1,
 					const struct btf_type *t2)
 {
@@ -609,6 +672,33 @@ struct btf_decl_tag;
 static inline struct btf_decl_tag *btf_decl_tag(const struct btf_type *t)
 {
 	return (struct btf_decl_tag *)(t + 1);
+}
+
+static inline struct btf_loc_param *btf_loc_param(const struct btf_type *t)
+{
+	return (struct btf_loc_param *)(t + 1);
+}
+
+static inline __s32 btf_loc_param_size(const struct btf_type *t)
+{
+	return (__s32)t->size;
+}
+
+static inline __u64 btf_loc_param_value(const struct btf_type *t)
+{
+	struct btf_loc_param *p = btf_loc_param(t);
+
+	return p->val_lo32 | (((__u64)(p->val_hi32)) << 32);
+}
+
+static inline __u32 *btf_loc_proto_params(const struct btf_type *t)
+{
+	return (__u32 *)(t + 1);
+}
+
+static inline struct btf_loc *btf_locsec_locs(const struct btf_type *t)
+{
+	return (struct btf_loc *)(t + 1);
 }
 
 #ifdef __cplusplus

@@ -451,4 +451,9 @@ LIBBPF_1.7.0 {
 	global:
 		bpf_map__set_exclusive_program;
 		bpf_map__exclusive_program;
+		btf__add_loc_param;
+		btf__add_loc_proto;
+		btf__add_loc_proto_param;
+		btf__add_locsec;
+		btf__add_locsec_loc;
 } LIBBPF_1.6.0;

@@ -328,6 +328,9 @@ static int btf_dump_mark_referenced(struct btf_dump *d)
 		case BTF_KIND_ENUM64:
 		case BTF_KIND_FWD:
 		case BTF_KIND_FLOAT:
+		case BTF_KIND_LOC_PARAM:
+		case BTF_KIND_LOC_PROTO:
+		case BTF_KIND_LOCSEC:
 			break;
 
 		case BTF_KIND_VOLATILE:
@@ -339,7 +342,6 @@ static int btf_dump_mark_referenced(struct btf_dump *d)
 		case BTF_KIND_VAR:
 		case BTF_KIND_DECL_TAG:
 		case BTF_KIND_TYPE_TAG:
-			d->type_states[t->type].referenced = 1;
 			break;
 
 		case BTF_KIND_ARRAY: {
@@ -609,6 +611,9 @@ static int btf_dump_order_type(struct btf_dump *d, __u32 id, bool through_ptr)
 	case BTF_KIND_VAR:
 	case BTF_KIND_DATASEC:
 	case BTF_KIND_DECL_TAG:
+	case BTF_KIND_LOC_PARAM:
+	case BTF_KIND_LOC_PROTO:
+	case BTF_KIND_LOCSEC:
 		d->type_states[id].order_state = ORDERED;
 		return 0;
 
@@ -2516,6 +2521,9 @@ static int btf_dump_dump_type_data(struct btf_dump *d,
 	case BTF_KIND_FUNC:
 	case BTF_KIND_FUNC_PROTO:
 	case BTF_KIND_DECL_TAG:
+	case BTF_KIND_LOC_PARAM:
+	case BTF_KIND_LOC_PROTO:
+	case BTF_KIND_LOCSEC:
 		err = btf_dump_unsupported_data(d, t, id);
 		break;
 	case BTF_KIND_INT:
