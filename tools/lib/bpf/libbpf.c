@@ -407,6 +407,7 @@ enum sec_def_flags {
 	SEC_XDP_FRAGS = 16,
 	/* Setup proper attach type for usdt probes. */
 	SEC_USDT = 32,
+	SEC_LOC = 33,
 };
 
 struct bpf_sec_def {
@@ -671,6 +672,8 @@ struct elf_state {
 
 struct usdt_manager;
 
+struct loc_manager;
+
 enum bpf_object_state {
 	OBJ_OPEN,
 	OBJ_PREPARED,
@@ -733,6 +736,7 @@ struct bpf_object {
 	size_t fd_array_cnt;
 
 	struct usdt_manager *usdt_man;
+	struct loc_manager *loc_man;
 
 	int arena_map_idx;
 	void *arena_data;
@@ -9190,6 +9194,8 @@ void bpf_object__close(struct bpf_object *obj)
 
 	usdt_manager_free(obj->usdt_man);
 	obj->usdt_man = NULL;
+	loc_manager_free(obj->loc_man);
+	obj->loc_man = NULL;
 
 	bpf_gen__free(obj->gen_loader);
 	bpf_object__elf_finish(obj);
@@ -9561,6 +9567,7 @@ static int attach_kprobe_session(const struct bpf_program *prog, long cookie, st
 static int attach_uprobe_multi(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_lsm(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 static int attach_iter(const struct bpf_program *prog, long cookie, struct bpf_link **link);
+static int attach_kloc(const struct bpf_program *prog, long cookie, struct bpf_link **link);
 
 static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("socket",		SOCKET_FILTER, 0, SEC_NONE),
@@ -9666,6 +9673,7 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("struct_ops.s+",	STRUCT_OPS, 0, SEC_SLEEPABLE),
 	SEC_DEF("sk_lookup",		SK_LOOKUP, BPF_SK_LOOKUP, SEC_ATTACHABLE),
 	SEC_DEF("netfilter",		NETFILTER, BPF_NETFILTER, SEC_NONE),
+	SEC_DEF("kloc+",		KPROBE, 0, SEC_NONE, attach_kloc),
 };
 
 int libbpf_register_prog_handler(const char *sec,
@@ -11155,7 +11163,7 @@ static int perf_event_open_probe(bool uprobe, bool retprobe, const char *name,
 	attr.size = attr_sz;
 	attr.type = type;
 	attr.config |= (__u64)ref_ctr_off << PERF_UPROBE_REF_CTR_OFFSET_SHIFT;
-	attr.config1 = ptr_to_u64(name); /* kprobe_func or uprobe_path */
+	attr.config1 = name ? ptr_to_u64(name) : 0; /* kprobe_func or uprobe_path */
 	attr.config2 = offset;		 /* kprobe_addr or probe_offset */
 
 	/* pid filter is meaningful only for uprobes */
@@ -12597,6 +12605,72 @@ static int attach_usdt(const struct bpf_program *prog, long cookie, struct bpf_l
 	}
 	free(path);
 	free(provider);
+	free(name);
+	return err;
+}
+
+struct bpf_link *bpf_program__attach_kloc(const struct bpf_program *prog,
+					 const char *module, const char *name,
+					 const struct bpf_kloc_opts *opts)
+{
+	struct bpf_object *obj = prog->obj;
+	struct bpf_link *link;
+	__u64 loc_cookie;
+	int err;
+
+	if (!OPTS_VALID(opts, bpf_kloc_opts))
+		return libbpf_err_ptr(-EINVAL);
+
+	if (bpf_program__fd(prog) < 0) {
+		pr_warn("prog '%s': can't attach BPF program without FD (was it loaded?)\n",
+			prog->name);
+		return libbpf_err_ptr(-EINVAL);
+	}
+	if (!module || !name)
+		return libbpf_err_ptr(-EINVAL);
+
+	/* loc manager is instantiated lazily on first loc attach. It will
+	 * be destroyed together with BPF object in bpf_object__close().
+	 */
+	if (IS_ERR(obj->loc_man))
+		return libbpf_ptr(obj->loc_man);
+	if (!obj->loc_man) {
+		obj->loc_man = loc_manager_new(obj);
+		if (IS_ERR(obj->loc_man))
+			return libbpf_ptr(obj->loc_man);
+	}
+
+	loc_cookie = OPTS_GET(opts, loc_cookie, 0);
+	link = loc_manager_attach_kloc(obj->loc_man, prog, module, name, loc_cookie);
+	err = libbpf_get_error(link);
+	if (err)
+		return libbpf_err_ptr(err);
+	return link;
+}
+
+static int attach_kloc(const struct bpf_program *prog, long cookie, struct bpf_link **link)
+{
+	char *module = NULL, *name = NULL;
+	const char *sec_name;
+	int n, err;
+
+	sec_name = bpf_program__section_name(prog);
+	if (strcmp(sec_name, "kloc") == 0) {
+		/* no auto-attach for just SEC("kloc") */
+		*link = NULL;
+		return 0;
+	}
+
+	n = sscanf(sec_name, "kloc/%m[^:]:%m[^:]", &module, &name);
+	if (n != 2) {
+		pr_warn("invalid section '%s', expected SEC(\"kloc/<module>:<name>\")\n",
+			sec_name);
+		err = -EINVAL;
+	} else {
+		*link = bpf_program__attach_kloc(prog, module, name, NULL);
+		err = libbpf_get_error(*link);
+	}
+	free(module);
 	free(name);
 	return err;
 }

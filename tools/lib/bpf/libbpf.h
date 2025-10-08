@@ -799,6 +799,33 @@ bpf_program__attach_usdt(const struct bpf_program *prog,
 			 const char *usdt_provider, const char *usdt_name,
 			 const struct bpf_usdt_opts *opts);
 
+struct bpf_kloc_opts {
+	/* size of this struct, for forward/backward compatibility */
+	size_t sz;
+	/* custom user-provided value fetchable through loc_cookie() */
+	__u64 loc_cookie;
+	size_t:0;
+};
+#define bpf_kloc_opts__last_field loc_cookie
+
+/**
+ * @brief **bpf_program__attach_kloc()** attaches to the location
+ * named *name* in *module* (which can be "vmlinux" or a module name).
+ * Attaches to all locations associated with *name*.
+ *
+ * @param prog BPF program to attach
+ * @param module name
+ * @param name Location name
+ * @param opts Options for altering program attachment
+ * @return Reference to the newly created BPF link: or NULL is returned on error
+ *
+ * error code is stored in errno
+ */
+LIBBPF_API struct bpf_link *
+bpf_program__attach_kloc(const struct bpf_program *prog,
+			 const char *module, const char *name,
+			 const struct bpf_kloc_opts *opts);
+
 struct bpf_tracepoint_opts {
 	/* size of this struct, for forward/backward compatibility */
 	size_t sz;

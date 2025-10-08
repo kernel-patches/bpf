@@ -457,4 +457,5 @@ LIBBPF_1.7.0 {
 		btf__add_locsec;
 		btf__add_locsec_loc;
 		btf__load_btf_extra;
+		bpf_program__attach_kloc;
 } LIBBPF_1.6.0;
