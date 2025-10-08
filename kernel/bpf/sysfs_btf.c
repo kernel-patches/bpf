@@ -49,7 +49,15 @@ static struct bin_attribute bin_attr_btf_vmlinux __ro_after_init = {
 	.mmap = btf_sysfs_vmlinux_mmap,
 };
 
-struct kobject *btf_kobj;
+struct kobject *btf_kobj, *btf_extra_kobj;
+
+#if IS_BUILTIN(CONFIG_DEBUG_INFO_BTF_EXTRA)
+/* See scripts/link-vmlinux.sh, gen_btf() func for details */
+extern char __start_BTF_extra[];
+extern char __stop_BTF_extra[];
+
+struct bin_attribute *extra_attr;
+#endif
 
 static int __init btf_vmlinux_init(void)
 {
@@ -62,6 +70,17 @@ static int __init btf_vmlinux_init(void)
 	btf_kobj = kobject_create_and_add("btf", kernel_kobj);
 	if (!btf_kobj)
 		return -ENOMEM;
+	if (IS_ENABLED(CONFIG_DEBUG_INFO_BTF_EXTRA)) {
+		btf_extra_kobj = kobject_create_and_add("btf_extra", kernel_kobj);
+		if (!btf_extra_kobj)
+			return -ENOMEM;
+#if IS_BUILTIN(CONFIG_DEBUG_INFO_BTF_EXTRA)
+		extra_attr = sysfs_btf_add(btf_extra_kobj, "vmlinux", __start_BTF_extra,
+					   __stop_BTF_extra - __start_BTF_extra);
+		if (IS_ERR(extra_attr))
+			return PTR_ERR(extra_attr);
+#endif
+	}
 
 	return sysfs_create_bin_file(btf_kobj, &bin_attr_btf_vmlinux);
 }

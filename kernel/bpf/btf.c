@@ -8323,12 +8323,42 @@ enum {
 	BTF_MODULE_F_LIVE = (1 << 0),
 };
 
+#if IS_ENABLED(CONFIG_SYSFS)
+struct bin_attribute *sysfs_btf_add(struct kobject *kobj, const char *name,
+				    void *data, size_t data_size)
+{
+	struct bin_attribute *attr = kzalloc(sizeof(*attr), GFP_KERNEL);
+	int err;
+
+	if (!attr)
+		return ERR_PTR(-ENOMEM);
+
+	sysfs_bin_attr_init(attr);
+	attr->attr.name = name;
+	attr->attr.mode = 0444;
+	attr->size = data_size;
+	attr->private = data;
+	attr->read = sysfs_bin_attr_simple_read;
+
+	err = sysfs_create_bin_file(kobj, attr);
+	if (err) {
+		pr_warn("failed to register module [%s] BTF in sysfs : %d\n", name, err);
+		kfree(attr);
+		return ERR_PTR(err);
+	}
+	return attr;
+}
+
+#endif
+
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
 struct btf_module {
 	struct list_head list;
 	struct module *module;
 	struct btf *btf;
 	struct bin_attribute *sysfs_attr;
+	void *btf_extra_data;
+	struct bin_attribute *sysfs_extra_attr;
 	int flags;
 };
 
@@ -8342,12 +8372,12 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 {
 	struct btf_module *btf_mod, *tmp;
 	struct module *mod = module;
-	struct btf *btf;
+	struct bin_attribute *attr;
+	struct btf *btf = NULL;
 	int err = 0;
 
-	if (mod->btf_data_size == 0 ||
-	    (op != MODULE_STATE_COMING && op != MODULE_STATE_LIVE &&
-	     op != MODULE_STATE_GOING))
+	if (op != MODULE_STATE_COMING && op != MODULE_STATE_LIVE &&
+	     op != MODULE_STATE_GOING)
 		goto out;
 
 	switch (op) {
@@ -8357,8 +8387,10 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			err = -ENOMEM;
 			goto out;
 		}
-		btf = btf_parse_module(mod->name, mod->btf_data, mod->btf_data_size,
-				       mod->btf_base_data, mod->btf_base_data_size);
+		if (mod->btf_data_size > 0) {
+			btf = btf_parse_module(mod->name, mod->btf_data, mod->btf_data_size,
+					       mod->btf_base_data, mod->btf_base_data_size);
+		}
 		if (IS_ERR(btf)) {
 			kfree(btf_mod);
 			if (!IS_ENABLED(CONFIG_MODULE_ALLOW_BTF_MISMATCH)) {
@@ -8370,7 +8402,8 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			}
 			goto out;
 		}
-		err = btf_alloc_id(btf);
+		if (btf)
+			err = btf_alloc_id(btf);
 		if (err) {
 			btf_free(btf);
 			kfree(btf_mod);
@@ -8384,32 +8417,45 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 		list_add(&btf_mod->list, &btf_modules);
 		mutex_unlock(&btf_module_mutex);
 
-		if (IS_ENABLED(CONFIG_SYSFS)) {
-			struct bin_attribute *attr;
-
-			attr = kzalloc(sizeof(*attr), GFP_KERNEL);
-			if (!attr)
-				goto out;
-
-			sysfs_bin_attr_init(attr);
-			attr->attr.name = btf->name;
-			attr->attr.mode = 0444;
-			attr->size = btf->data_size;
-			attr->private = btf->data;
-			attr->read = sysfs_bin_attr_simple_read;
-
-			err = sysfs_create_bin_file(btf_kobj, attr);
-			if (err) {
-				pr_warn("failed to register module [%s] BTF in sysfs: %d\n",
-					mod->name, err);
-				kfree(attr);
-				err = 0;
+		if (IS_ENABLED(CONFIG_SYSFS) && btf) {
+			attr = sysfs_btf_add(btf_kobj, btf->name, btf->data, btf->data_size);
+			if (IS_ERR(attr)) {
+				err = PTR_ERR(attr);
 				goto out;
 			}
-
 			btf_mod->sysfs_attr = attr;
 		}
+#if IS_ENABLED(CONFIG_DEBUG_INFO_BTF_EXTRA)
+		if (mod->btf_extra_data_size > 0) {
+			const char *name = mod->name;
+			void *data;
 
+			/* vmlinux .BTF.extra is SHF_ALLOC; other modules
+			 * are not, so for them we need to kvmemdup() the data.
+			 */
+			if (strcmp(mod->name, "btf_extra") == 0) {
+				name = "vmlinux";
+				data = mod->btf_extra_data;
+			} else {
+				data = kvmemdup(mod->btf_extra_data, mod->btf_extra_data_size,
+						GFP_KERNEL | __GFP_NOWARN);
+				if (!data) {
+					err = -ENOMEM;
+					goto out;
+				}
+				btf_mod->btf_extra_data = data;
+			}
+			attr = sysfs_btf_add(btf_extra_kobj, name, data,
+					     mod->btf_extra_data_size);
+			if (IS_ERR(attr)) {
+				err = PTR_ERR(attr);
+				kfree(btf_mod->sysfs_attr);
+				kvfree(btf_mod->btf_extra_data);
+				goto out;
+			}
+			btf_mod->sysfs_extra_attr = attr;
+		}
+#endif
 		break;
 	case MODULE_STATE_LIVE:
 		mutex_lock(&btf_module_mutex);
@@ -8431,9 +8477,15 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			list_del(&btf_mod->list);
 			if (btf_mod->sysfs_attr)
 				sysfs_remove_bin_file(btf_kobj, btf_mod->sysfs_attr);
-			purge_cand_cache(btf_mod->btf);
-			btf_put(btf_mod->btf);
-			kfree(btf_mod->sysfs_attr);
+			if (btf_mod->btf_extra_data)
+				kvfree(btf_mod->btf_extra_data);
+			if (btf_mod->sysfs_extra_attr)
+				sysfs_remove_bin_file(btf_extra_kobj, btf_mod->sysfs_extra_attr);
+			if (btf_mod->btf) {
+				purge_cand_cache(btf_mod->btf);
+				btf_put(btf_mod->btf);
+				kfree(btf_mod->sysfs_attr);
+			}
 			kfree(btf_mod);
 			break;
 		}

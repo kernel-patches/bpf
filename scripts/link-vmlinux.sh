@@ -137,6 +137,12 @@ gen_btf()
 	fi
 	printf "${et_rel}" | dd of="${btf_data}" conv=notrunc bs=1 seek=16 status=none
 
+	if [ "$BTF_EXTRA" = "m" ]; then
+		# vmlinux BTF extra will be delivered via the btf_extra.ko
+		# module; ensure it is not linked into vmlinux.
+		$OBJCOPY -O binary --only-section=.BTF.extra ${btf_data} ${VMLINUX_BTF_EXTRA}
+		$OBJCOPY --remove-section=.BTF.extra ${btf_data}
+	fi
 	btf_vmlinux_bin_o=${btf_data}
 }
 

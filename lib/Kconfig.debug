@@ -434,7 +434,7 @@ config MODULE_ALLOW_BTF_MISMATCH
 	  it when a mismatch is found.
 
 config DEBUG_INFO_BTF_EXTRA
-	bool "Provide extra information about inline sites in BTF"
+	tristate "Provide extra information about inline sites in BTF"
 	default n
 	depends on DEBUG_INFO_BTF && PAHOLE_HAS_INLINE
 	help
