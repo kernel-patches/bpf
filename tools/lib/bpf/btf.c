@@ -5783,6 +5783,14 @@ struct btf *btf__load_module_btf(const char *module_name, struct btf *vmlinux_bt
 	return btf__parse_split(path, vmlinux_btf);
 }
 
+struct btf *btf__load_btf_extra(const char *name, struct btf *base)
+{
+	char path[80];
+
+	snprintf(path, sizeof(path), "/sys/kernel/btf_extra/%s", name);
+	return btf__parse_split(path, base);
+}
+
 int btf_ext_visit_type_ids(struct btf_ext *btf_ext, type_id_visit_fn visit, void *ctx)
 {
 	const struct btf_ext_info *seg;

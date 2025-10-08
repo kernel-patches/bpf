@@ -456,4 +456,5 @@ LIBBPF_1.7.0 {
 		btf__add_loc_proto_param;
 		btf__add_locsec;
 		btf__add_locsec_loc;
+		btf__load_btf_extra;
 } LIBBPF_1.6.0;
