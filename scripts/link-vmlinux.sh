@@ -105,22 +105,29 @@ vmlinux_link()
 		${kallsymso} ${btf_vmlinux_bin_o} ${arch_vmlinux_o} ${ldlibs}
 }
 
-# generate .BTF typeinfo from DWARF debuginfo
+# generate .BTF typeinfo from DWARF debuginfo.  Optionally add .BTF.extra
+# section if BTF_EXTRA is set.
 # ${1} - vmlinux image
 gen_btf()
 {
 	local btf_data=${1}.btf.o
+	local btf_extra_flags=
 
 	info BTF "${btf_data}"
 	LLVM_OBJCOPY="${OBJCOPY}" ${PAHOLE} -J ${PAHOLE_FLAGS} ${1}
 
-	# Create ${btf_data} which contains just .BTF section but no symbols. Add
+
+	if [ -n "${BTF_EXTRA}" ]; then
+		btf_extra_flags="--only-section=.BTF.extra --set-section-flags .BTF.extra=alloc,readonly"
+	fi
+
+	# Create ${btf_data} which contains just .BTF sections but no symbols. Add
 	# SHF_ALLOC because .BTF will be part of the vmlinux image. --strip-all
 	# deletes all symbols including __start_BTF and __stop_BTF, which will
 	# be redefined in the linker script. Add 2>/dev/null to suppress GNU
 	# objcopy warnings: "empty loadable segment detected at ..."
 	${OBJCOPY} --only-section=.BTF --set-section-flags .BTF=alloc,readonly \
-		--strip-all ${1} "${btf_data}" 2>/dev/null
+		${btf_extra_flags} --strip-all ${1} "${btf_data}" 2>/dev/null
 	# Change e_type to ET_REL so that it can be used to link final vmlinux.
 	# GNU ld 2.35+ and lld do not allow an ET_EXEC input.
 	if is_enabled CONFIG_CPU_BIG_ENDIAN; then

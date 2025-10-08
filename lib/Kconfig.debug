@@ -409,6 +409,13 @@ config PAHOLE_HAS_LANG_EXCLUDE
 	  otherwise it would emit malformed kernel and module binaries when
 	  using DEBUG_INFO_BTF_MODULES.
 
+config PAHOLE_HAS_INLINE
+	def_bool PAHOLE_VERSION >= 130
+	help
+	   Support for the "inline" feature in BTF is available; it supports
+	   encoding information about inline sites in BTF; their location
+	   and information to help retrieve their associated parameters.
+
 config DEBUG_INFO_BTF_MODULES
 	bool "Generate BTF type information for kernel modules"
 	default y
@@ -425,6 +432,17 @@ config MODULE_ALLOW_BTF_MISMATCH
 	  module BTF enabled is to reject modules with such mismatches;
 	  this option will still load module BTF where possible but ignore
 	  it when a mismatch is found.
+
+config DEBUG_INFO_BTF_EXTRA
+	bool "Provide extra information about inline sites in BTF"
+	default n
+	depends on DEBUG_INFO_BTF && PAHOLE_HAS_INLINE
+	help
+	   Generate information about inline sites in .BTF.extra sections
+	   which consist of split BTF relative to kernel/module BTF;
+	   this BTF is made available to the user in /sys/kernel/btf.extra
+	   where the filename corresponds to the kernel (vmlinux) or the
+	   module the inline info refers to.
 
 config GDB_SCRIPTS
 	bool "Provide GDB scripts for kernel debugging"

@@ -675,6 +675,10 @@ defined(CONFIG_AUTOFDO_CLANG) || defined(CONFIG_PROPELLER_CLANG)
 	. = ALIGN(PAGE_SIZE);						\
 	.BTF_ids : AT(ADDR(.BTF_ids) - LOAD_OFFSET) {			\
 		*(.BTF_ids)						\
+	}								\
+	. = ALIGN(PAGE_SIZE);						\
+	.BTF.extra : AT(ADDR(.BTF.extra) - LOAD_OFFSET) {		\
+		BOUNDED_SECTION_BY(.BTF.extra, _BTF_extra)		\
 	}
 #else
 #define BTF
