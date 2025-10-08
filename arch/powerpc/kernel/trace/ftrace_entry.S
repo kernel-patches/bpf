@@ -8,6 +8,7 @@
 #include <asm/ppc_asm.h>
 #include <asm/asm-offsets.h>
 #include <asm/ftrace.h>
+#include <asm/livepatch.h>
 #include <asm/ppc-opcode.h>
 #include <asm/thread_info.h>
 #include <asm/bug.h>
@@ -244,6 +245,8 @@
 	/* jump after _mcount site */
 #ifdef CONFIG_PPC_FTRACE_OUT_OF_LINE
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	/* For direct_call, set cr0.eq bit only if livepatch is active */
+	crclr	4*cr0+eq
 	bnectr	cr1
 #endif
 	/*
@@ -306,10 +309,14 @@ ftrace_no_trace:
 	mtctr	r12
 	REST_GPRS(11, 12, r1)
 	addi	r1, r1, SWITCH_FRAME_SIZE+STACK_FRAME_MIN_SIZE
+	/* For direct_call, set cr0.eq bit only if livepatch is active */
+	crclr	4*cr0+eq
 	bctr
 .Lftrace_direct_call:
 	mtctr	r12
 	addi	r1, r1, SWITCH_FRAME_SIZE+STACK_FRAME_MIN_SIZE
+	/* For direct_call, set cr0.eq bit only if livepatch is active */
+	crclr	4*cr0+eq
 	bctr
 SYM_FUNC_START(ftrace_stub_direct_tramp)
 	blr
@@ -340,25 +347,72 @@ SYM_FUNC_END(ftrace_stub_direct_tramp)
 livepatch_handler:
 	ld	r12, PACA_THREAD_INFO(r13)
 
-	/* Allocate 3 x 8 bytes */
 	ld	r11, TI_livepatch_sp(r12)
-	addi	r11, r11, 24
+	/* Allocate stack to save LR, TOC & optionally NIP (in case of direct_call) */
+	addi	r11, r11, LIVEPATCH_STACK_FRAME_SIZE
 	std	r11, TI_livepatch_sp(r12)
 
 	/* Store stack end marker */
 	lis     r12, STACK_END_MAGIC@h
 	ori     r12, r12, STACK_END_MAGIC@l
-	std	r12, -8(r11)
+	std	r12, -LIVEPATCH_STACK_MAGIC_OFFSET(r11)
 
 	/* Save toc & real LR on livepatch stack */
-	std	r2,  -24(r11)
+	std	r2,  -LIVEPATCH_STACK_TOC_OFFSET(r11)
 #ifndef CONFIG_PPC_FTRACE_OUT_OF_LINE
 	mflr	r12
-	std	r12, -16(r11)
+	std	r12, -LIVEPATCH_STACK_LR_OFFSET(r11)
 	mfctr	r12
 #else
-	std	r0, -16(r11)
+	std	r0, -LIVEPATCH_STACK_LR_OFFSET(r11)
 	mflr	r12
+
+	/* Also, save new NIP on livepatch stack before the direct_call */
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	std	r12, -LIVEPATCH_STACK_NIP_OFFSET(r11)
+
+	/* For direct_call, set cr0.eq bit to indicate livepatch is active */
+	crset	4*cr0+eq
+	/* Jump to the direct_call */
+	bnectrl	cr1
+
+	/*
+	 * The address to jump after direct call is deduced based on ftrace OOL stub sequence.
+	 * The seemingly insignificant couple of instructions below is to mimic that here to
+	 * jump back to the livepatch handler code below.
+	 */
+	nop
+	b	1f
+
+	/*
+	 * Restore the state for livepatching from the livepatch stack.
+	 * Before that, check if livepatch stack is intact. Use r0 for it.
+	 */
+1:	mtctr	r0
+	ld	r12, PACA_THREAD_INFO(r13)
+	ld	r11, TI_livepatch_sp(r12)
+	lis     r0,  STACK_END_MAGIC@h
+	ori     r0,  r0, STACK_END_MAGIC@l
+	ld	r12, -LIVEPATCH_STACK_MAGIC_OFFSET(r11)
+1:	tdne	r12, r0
+	EMIT_BUG_ENTRY 1b, __FILE__, __LINE__ - 1, 0
+	mfctr	r0
+
+	/*
+	 * A change in r0 implies the direct_call is not done yet. The direct_call
+	 * will take care of calling the original LR. Update r0 in livepatch stack
+	 * with the new LR in the direct_call.
+	 */
+	ld	r12, -LIVEPATCH_STACK_LR_OFFSET(r11)
+	cmpd	r12, r0
+	beq	1f
+	mflr	r0
+	std	r0, -LIVEPATCH_STACK_LR_OFFSET(r11)
+
+	/* Put new NIP back in r12 to proceed with livepatch handling */
+1:	ld	r12, -LIVEPATCH_STACK_NIP_OFFSET(r11)
+#endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS */
+
 	/* Put ctr in r12 for global entry and branch there */
 	mtctr	r12
 #endif
@@ -377,18 +431,18 @@ livepatch_handler:
 	/* Check stack marker hasn't been trashed */
 	lis     r2,  STACK_END_MAGIC@h
 	ori     r2,  r2, STACK_END_MAGIC@l
-	ld	r12, -8(r11)
+	ld	r12, -LIVEPATCH_STACK_MAGIC_OFFSET(r11)
 1:	tdne	r12, r2
 	EMIT_BUG_ENTRY 1b, __FILE__, __LINE__ - 1, 0
 
 	/* Restore LR & toc from livepatch stack */
-	ld	r12, -16(r11)
+	ld	r12, -LIVEPATCH_STACK_LR_OFFSET(r11)
 	mtlr	r12
-	ld	r2,  -24(r11)
+	ld	r2,  -LIVEPATCH_STACK_TOC_OFFSET(r11)
 
 	/* Pop livepatch stack frame */
 	ld	r12, PACA_THREAD_INFO(r13)
-	subi	r11, r11, 24
+	subi	r11, r11, LIVEPATCH_STACK_FRAME_SIZE
 	std	r11, TI_livepatch_sp(r12)
 
 	/* Return to original caller of live patched function */
