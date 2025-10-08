@@ -27,11 +27,14 @@ static const char * const btf_kind_str_mapping[] = {
 	[BTF_KIND_DECL_TAG]	= "DECL_TAG",
 	[BTF_KIND_TYPE_TAG]	= "TYPE_TAG",
 	[BTF_KIND_ENUM64]	= "ENUM64",
+	[BTF_KIND_LOC_PARAM]	= "LOC_PARAM",
+	[BTF_KIND_LOC_PROTO]	= "LOC_PROTO",
+	[BTF_KIND_LOCSEC]	= "LOCSEC",
 };
 
 static const char *btf_kind_str(__u16 kind)
 {
-	if (kind > BTF_KIND_ENUM64)
+	if (kind > BTF_KIND_LOCSEC)
 		return "UNKNOWN";
 	return btf_kind_str_mapping[kind];
 }
@@ -203,6 +206,44 @@ int fprintf_btf_type_raw(FILE *out, const struct btf *btf, __u32 id)
 		fprintf(out, " type_id=%u component_idx=%d",
 			t->type, btf_decl_tag(t)->component_idx);
 		break;
+	case BTF_KIND_LOC_PARAM: {
+		struct btf_loc_param *p = btf_loc_param(t);
+		__s32 sz = (__s32)t->size;
+
+		if (btf_kflag(t)) {
+			__u64 uval = btf_loc_param_value(t);
+
+			if (sz >= 0) {
+				fprintf(out, " size=%d value=%llu", sz, uval);
+			} else {
+				__s64 sval = (__s64)uval;
+
+				fprintf(out, " size=%d value=%lld", sz, sval);
+			}
+		} else {
+			fprintf(out, " size=%d reg=%u flags=0x%x offset=%d",
+				sz, p->reg, p->flags, p->offset);
+		}
+		break;
+	}
+	case BTF_KIND_LOC_PROTO: {
+		const __u32 *p = btf_loc_proto_params(t);
+
+		fprintf(out, " vlen=%u", vlen);
+		for (i = 0; i < vlen; i++, p++)
+			fprintf(out, "\n\ttype_id=%u", *p);
+		break;
+	}
+	case BTF_KIND_LOCSEC: {
+		const struct btf_loc *l = btf_locsec_locs(t);
+
+		fprintf(out, " vlen=%u", vlen);
+		for (i = 0; i < vlen; i++, l++) {
+			fprintf(out, "\n\t'%s' func_proto_type_id=%u loc_proto_type_id=%u offset=%d",
+				btf_str(btf, l->name_off), l->func_proto, l->loc_proto, l->offset);
+		}
+		break;
+	}
 	default:
 		break;
 	}

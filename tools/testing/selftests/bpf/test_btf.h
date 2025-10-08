@@ -84,4 +84,19 @@
 #define BTF_TYPE_TAG_ENC(value, type)	\
 	BTF_TYPE_ENC(value, BTF_INFO_ENC(BTF_KIND_TYPE_TAG, 0, 0), type)
 
+#define BTF_LOC_PARAM_ENC(sz, kflag, value) \
+	BTF_TYPE_ENC(0, BTF_INFO_ENC(BTF_KIND_LOC, kflag, 0), (__u32)sz), \
+	(value >> 32), (value & 0xffffffff)
+
+#define BTF_LOC_PROTO_ENC(nargs) \
+	BTF_TYPE_ENC(0, BTF_INFO_ENC(BTF_KIND_LOC_PROTO, 0, nargs), 0)
+
+#define BTF_LOC_PROTO_PARAM_ENCODE(param) (param)
+
+#define BTF_LOCSEC_ENC(name, nlocs) \
+	BTF_TYPE_ENC(name, BTF_INFO_ENC(BTF_KIND_LOCSEC, 0, nlocs), 0)
+
+#define BTF_LOCSEC_LOC_ENCODE(name, func_proto, loc_proto, offset) \
+	(name), (func_proto), (loc_proto), (offset)
+
 #endif /* _TEST_BTF_H */
