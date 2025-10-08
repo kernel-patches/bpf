@@ -37,14 +37,16 @@ struct btf_type {
 	 * bits 29-30: unused
 	 * bit     31: kind_flag, currently used by
 	 *             struct, union, enum, fwd, enum64,
-	 *             decl_tag and type_tag
+	 *             decl_tag, type_tag and loc
 	 */
 	__u32 info;
-	/* "size" is used by INT, ENUM, STRUCT, UNION, DATASEC and ENUM64.
+	/* "size" is used by INT, ENUM, STRUCT, UNION, DATASEC, ENUM64
+	 * and LOC.
+	 *
 	 * "size" tells the size of the type it is describing.
 	 *
 	 * "type" is used by PTR, TYPEDEF, VOLATILE, CONST, RESTRICT,
-	 * FUNC, FUNC_PROTO, VAR, DECL_TAG and TYPE_TAG.
+	 * FUNC, FUNC_PROTO, VAR, DECL_TAG, TYPE_TAG and LOC_PROTO.
 	 * "type" is a type_id referring to another type.
 	 */
 	union {
@@ -78,6 +80,9 @@ enum {
 	BTF_KIND_DECL_TAG	= 17,	/* Decl Tag */
 	BTF_KIND_TYPE_TAG	= 18,	/* Type Tag */
 	BTF_KIND_ENUM64		= 19,	/* Enumeration up to 64-bit values */
+	BTF_KIND_LOC_PARAM	= 20,	/* Location parameter information */
+	BTF_KIND_LOC_PROTO	= 21,	/* Location prototype for site */
+	BTF_KIND_LOCSEC		= 22,	/* Location section */
 
 	NR_BTF_KINDS,
 	BTF_KIND_MAX		= NR_BTF_KINDS - 1,
@@ -197,5 +202,79 @@ struct btf_enum64 {
 	__u32	val_lo32;
 	__u32	val_hi32;
 };
+
+/* BTF_KIND_LOC_PARAM consists a btf_type specifying a vlen of 0, name_off is 0
+ * and is followed by a singular "struct btf_loc_param". type/size specifies
+ * the size of the associated location value.  The size value should be
+ * cast to a __s32 as negative sizes can be specified; -8 to indicate a signed
+ * 8 byte value for example.
+ *
+ * If kind_flag is 1 the btf_loc is a constant value, otherwise it represents
+ * a register, possibly dereferencing it with the specified offset.
+ *
+ * "struct btf_type" is followed by a "struct btf_loc_param" which consists
+ * of either the 64-bit value or the register number, offset etc.
+ * Interpretation depends on whether the kind_flag is set as described above.
+ */
+
+/* BTF_KIND_LOC_PARAM specifies a signed size; negative values represent signed
+ * values of the specific size, for example -8 is an 8-byte signed value.
+ */
+#define BTF_TYPE_LOC_PARAM_SIZE(t)	((__s32)((t)->size))
+
+/* location param specified by reg + offset is a dereference */
+#define BTF_LOC_FLAG_REG_DEREF		0x1
+/* next location param is needed to specify parameter location also; for example
+ * when two registers are used to store a 16-byte struct by value.
+ */
+#define BTF_LOC_FLAG_CONTINUE		0x2
+
+struct btf_loc_param {
+	union {
+		struct {
+			__u16	reg;		/* register number */
+			__u16	flags;		/* register dereference */
+			__s32	offset;		/* offset from register-stored address */
+		};
+		struct {
+			__u32 val_lo32;		/* lo 32 bits of 64-bit value */
+			__u32 val_hi32;		/* hi 32 bits of 64-bit value */
+		};
+	};
+};
+
+/* BTF_KIND_LOC_PROTO specifies location prototypes; i.e. how locations relate
+ * to parameters; a struct btf_type of BTF_KIND_LOC_PROTO is followed by a
+ * a vlen-specified number of __u32 which specify the associated
+ * BTF_KIND_LOC_PARAM for each function parameter associated with the
+ * location.  The type should either be 0 (no location info) or point at
+ * a BTF_KIND_LOC_PARAM.  Multiple BTF_KIND_LOC_PARAMs can be used to
+ * represent a single function parameter; in such a case each should specify
+ * BTF_LOC_FLAG_CONTINUE.
+ *
+ * The type field in the associated "struct btf_type" should point at an
+ * associated BTF_KIND_FUNC_PROTO.
+ */
+
+/* BTF_KIND_LOCSEC consists of vlen-specified number of "struct btf_loc"
+ * containing location site-specific information;
+ *
+ * - name associated with the location (name_off)
+ * - function prototype type id (func_proto)
+ * - location prototype type id (loc_proto)
+ * - address offset (offset)
+ */
+
+struct btf_loc {
+	__u32 name_off;
+	__u32 func_proto;
+	__u32 loc_proto;
+	__u32 offset;
+};
+
+/* helps libbpf know that location declarations are present; libbpf
+ * can then work around absence if this value is not set.
+ */
+#define BTF_KIND_LOC_UAPI_DEFINED 1
 
 #endif /* _UAPI__LINUX_BTF_H__ */

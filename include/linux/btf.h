@@ -487,6 +487,33 @@ static inline struct btf_enum64 *btf_enum64(const struct btf_type *t)
 	return (struct btf_enum64 *)(t + 1);
 }
 
+static inline struct btf_loc_param *btf_loc_param(const struct btf_type *t)
+{
+	return (struct btf_loc_param *)(t + 1);
+}
+
+static inline __s32 btf_loc_param_size(const struct btf_type *t)
+{
+	return (__s32)t->size;
+}
+
+static inline __u64 btf_loc_param_value(const struct btf_type *t)
+{
+	__u32 *v = (__u32 *)(t + 1);
+
+	return *v + ((__u64)(*(v + 1)) << 32);
+}
+
+static inline __u32 *btf_loc_params(const struct btf_type *t)
+{
+	return (__u32 *)(t + 1);
+}
+
+static inline struct btf_loc *btf_type_loc_secinfo(const struct btf_type *t)
+{
+	return (struct btf_loc *)(t + 1);
+}
+
 static inline const struct btf_var_secinfo *btf_type_var_secinfo(
 		const struct btf_type *t)
 {
@@ -552,7 +579,7 @@ struct btf_field_desc {
 	/* member struct size, or zero, if no members */
 	int m_sz;
 	/* repeated per-member offsets */
-	int m_off_cnt, m_offs[1];
+	int m_off_cnt, m_offs[2];
 };
 
 struct btf_field_iter {
