@@ -539,6 +539,97 @@ cleanup:
 	btf__free(vmlinux_btf);
 }
 
+static void test_split_loc(void)
+{
+	//const struct btf_type *t;
+	struct btf *btf1, *btf2;
+	int err;
+
+	btf1 = btf__new_empty();
+	if (!ASSERT_OK_PTR(btf1, "empty_main_btf"))
+		return;
+
+	btf__set_pointer_size(btf1, 8); /* enforce 64-bit arch */
+
+
+	btf__add_int(btf1, "long", 8, BTF_INT_SIGNED);  /* [1] long */
+	btf__add_ptr(btf1, 1);                          /* [2] ptr to long */
+	btf__add_func_proto(btf1, 1);			/* [3] long (*)(long, long *); */
+	btf__add_func_param(btf1, "p1", 1);
+	btf__add_func_param(btf1, "p2", 2);
+	btf__add_loc_param(btf1, -8, true, -9223372036854775807, 0, 0, 0);
+							/* [4] loc value */
+	btf__add_loc_param(btf1, 8, false, 0, 1, 0, 0);	/* [5] loc reg 1 */
+	btf__add_loc_proto(btf1);			/* [6] loc proto */
+	btf__add_loc_proto_param(btf1, 4);		/*  param value */
+	btf__add_loc_proto_param(btf1, 5);		/*  param reg 1 */
+
+	VALIDATE_RAW_BTF(
+		btf1,
+		"[1] INT 'long' size=8 bits_offset=0 nr_bits=64 encoding=SIGNED",
+		"[2] PTR '(anon)' type_id=1",
+		"[3] FUNC_PROTO '(anon)' ret_type_id=1 vlen=2\n"
+		"\t'p1' type_id=1\n"
+		"\t'p2' type_id=2",
+		"[4] LOC_PARAM '(anon)' size=-8 value=-9223372036854775807",
+		"[5] LOC_PARAM '(anon)' size=8 reg=1 flags=0x0 offset=0",
+		"[6] LOC_PROTO '(anon)' vlen=2\n"
+		"\ttype_id=4\n"
+		"\ttype_id=5");
+
+	btf2 = btf__new_empty_split(btf1);
+	if (!ASSERT_OK_PTR(btf2, "empty_split_btf"))
+		goto cleanup;
+	btf__add_loc_param(btf2, 8, false, 0, 1, 0, 0); /* [7] loc reg 1 */
+	btf__add_loc_proto(btf2);			/* [8] loc proto */
+	btf__add_loc_proto_param(btf2, 4);		/* param value */
+	btf__add_loc_proto_param(btf2, 7);		/* param reg 1 */
+	btf__add_locsec(btf2, ".locs");			/* [9] locsec ".locs" */
+	btf__add_locsec_loc(btf2, "foo", 3, 8, 128);
+
+	VALIDATE_RAW_BTF(
+		btf2,
+		"[1] INT 'long' size=8 bits_offset=0 nr_bits=64 encoding=SIGNED",
+		"[2] PTR '(anon)' type_id=1",
+		"[3] FUNC_PROTO '(anon)' ret_type_id=1 vlen=2\n"
+		"\t'p1' type_id=1\n"
+		"\t'p2' type_id=2",
+		"[4] LOC_PARAM '(anon)' size=-8 value=-9223372036854775807",
+		"[5] LOC_PARAM '(anon)' size=8 reg=1 flags=0x0 offset=0",
+		"[6] LOC_PROTO '(anon)' vlen=2\n"
+		"\ttype_id=4\n"
+		"\ttype_id=5",
+		"[7] LOC_PARAM '(anon)' size=8 reg=1 flags=0x0 offset=0",
+		"[8] LOC_PROTO '(anon)' vlen=2\n"
+		"\ttype_id=4\n"
+		"\ttype_id=7",
+		"[9] LOCSEC '.locs' vlen=1\n"
+		"\t'foo' func_proto_type_id=3 loc_proto_type_id=8 offset=128");
+
+	err = btf__dedup(btf2, NULL);
+	if (!ASSERT_OK(err, "btf_dedup"))
+		goto cleanup;
+
+	VALIDATE_RAW_BTF(
+		btf2,
+		"[1] INT 'long' size=8 bits_offset=0 nr_bits=64 encoding=SIGNED",
+		"[2] PTR '(anon)' type_id=1",
+		"[3] FUNC_PROTO '(anon)' ret_type_id=1 vlen=2\n"
+		"\t'p1' type_id=1\n"
+		"\t'p2' type_id=2",
+		"[4] LOC_PARAM '(anon)' size=-8 value=-9223372036854775807",
+		"[5] LOC_PARAM '(anon)' size=8 reg=1 flags=0x0 offset=0",
+		"[6] LOC_PROTO '(anon)' vlen=2\n"
+		"\ttype_id=4\n"
+		"\ttype_id=5",
+		"[7] LOCSEC '.locs' vlen=1\n"
+		"\t'foo' func_proto_type_id=3 loc_proto_type_id=6 offset=128");
+
+cleanup:
+	btf__free(btf2);
+	btf__free(btf1);
+}
+
 void test_btf_dedup_split()
 {
 	if (test__start_subtest("split_simple"))
@@ -551,4 +642,6 @@ void test_btf_dedup_split()
 		test_split_dup_struct_in_cu();
 	if (test__start_subtest("split_module"))
 		test_split_module();
+	if (test__start_subtest("split_loc"))
+		test_split_loc();
 }
