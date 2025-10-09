@@ -21768,7 +21768,6 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 	struct bpf_prog *new_prog;
 	enum bpf_access_type type;
 	bool is_narrower_load;
-	bool seen_direct_write;
 	int epilogue_idx = 0;
 
 	if (ops->gen_epilogue) {
@@ -21796,13 +21795,12 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 		}
 	}
 
-	seen_direct_write = env->seen_packet_access & PA_F_DIRECT_WRITE;
-	if (ops->gen_prologue || seen_direct_write) {
+	if (ops->gen_prologue || (env->seen_packet_access & PA_F_DIRECT_WRITE)) {
 		if (!ops->gen_prologue) {
 			verifier_bug(env, "gen_prologue is null");
 			return -EFAULT;
 		}
-		cnt = ops->gen_prologue(insn_buf, seen_direct_write, env->prog);
+		cnt = ops->gen_prologue(insn_buf, env->seen_packet_access, env->prog);
 		if (cnt >= INSN_BUF_SIZE) {
 			verifier_bug(env, "prologue is too long");
 			return -EFAULT;
