@@ -156,8 +156,7 @@ static void maybe_wait_bpf_programs(struct bpf_map *map)
 	 * time can be very long and userspace may think it will hang forever,
 	 * so don't handle sleepable BPF programs now.
 	 */
-	if (map->map_type == BPF_MAP_TYPE_HASH_OF_MAPS ||
-	    map->map_type == BPF_MAP_TYPE_ARRAY_OF_MAPS)
+	if (IS_FD_HASH(map) || map->map_type == BPF_MAP_TYPE_ARRAY_OF_MAPS)
 		synchronize_rcu();
 }
 
@@ -276,7 +275,7 @@ static int bpf_map_update_value(struct bpf_map *map, struct file *map_file,
 	} else if (IS_FD_ARRAY(map)) {
 		err = bpf_fd_array_map_update_elem(map, map_file, key, value,
 						   flags);
-	} else if (map->map_type == BPF_MAP_TYPE_HASH_OF_MAPS) {
+	} else if (IS_FD_HASH(map)) {
 		err = bpf_fd_htab_map_update_elem(map, map_file, key, value,
 						  flags);
 	} else if (map->map_type == BPF_MAP_TYPE_REUSEPORT_SOCKARRAY) {
