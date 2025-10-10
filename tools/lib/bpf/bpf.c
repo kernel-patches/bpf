@@ -1397,3 +1397,21 @@ int bpf_prog_stream_read(int prog_fd, __u32 stream_id, void *buf, __u32 buf_len,
 	err = sys_bpf(BPF_PROG_STREAM_READ_BY_FD, &attr, attr_sz);
 	return libbpf_err_errno(err);
 }
+
+int bpf_struct_ops_associate_prog(int map_fd, int prog_fd,
+				  struct bpf_struct_ops_associate_prog_opts *opts)
+{
+	const size_t attr_sz = offsetofend(union bpf_attr, struct_ops_assoc_prog);
+	union bpf_attr attr;
+	int err;
+
+	if (!OPTS_VALID(opts, bpf_struct_ops_associate_prog_opts))
+		return libbpf_err(-EINVAL);
+
+	memset(&attr, 0, attr_sz);
+	attr.struct_ops_assoc_prog.map_fd = map_fd;
+	attr.struct_ops_assoc_prog.prog_fd = prog_fd;
+
+	err = sys_bpf(BPF_STRUCT_OPS_ASSOCIATE_PROG, &attr, attr_sz);
+	return libbpf_err_errno(err);
+}
