@@ -23433,6 +23433,22 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 	return 0;
 }
 
+static int bump_stack_depth(struct bpf_verifier_env *env,
+			    struct bpf_subprog_info *subprog,
+			    int stack_depth_extra)
+{
+	int stack_depth;
+
+	subprog->stack_depth += stack_depth_extra;
+	stack_depth = subprog->stack_depth;
+	if (stack_depth > MAX_BPF_STACK && !env->prog->jit_requested) {
+		verbose(env, "stack size %d(extra %d) is too large\n",
+			stack_depth, stack_depth_extra);
+		return -EINVAL;
+	}
+	return 0;
+}
+
 /* Do various post-verification rewrites in a single program pass.
  * These rewrites simplify JIT and interpreter implementations.
  */
@@ -24315,15 +24331,10 @@ patch_call_imm:
 		insn->imm = fn->func - __bpf_call_base;
 next_insn:
 		if (subprogs[cur_subprog + 1].start == i + delta + 1) {
-			subprogs[cur_subprog].stack_depth += stack_depth_extra;
+			ret = bump_stack_depth(env, &subprogs[cur_subprog], stack_depth_extra);
+			if (ret)
+				return ret;
 			subprogs[cur_subprog].stack_extra = stack_depth_extra;
-
-			stack_depth = subprogs[cur_subprog].stack_depth;
-			if (stack_depth > MAX_BPF_STACK && !prog->jit_requested) {
-				verbose(env, "stack size %d(extra %d) is too large\n",
-					stack_depth, stack_depth_extra);
-				return -EINVAL;
-			}
 			cur_subprog++;
 			stack_depth = subprogs[cur_subprog].stack_depth;
 			stack_depth_extra = 0;
