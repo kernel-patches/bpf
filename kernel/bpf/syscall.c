@@ -6092,6 +6092,41 @@ static int prog_stream_read(union bpf_attr *attr)
 	return ret;
 }
 
+#define BPF_STRUCT_OPS_ASSOCIATE_PROG_LAST_FIELD struct_ops_assoc_prog.prog_fd
+
+static int struct_ops_assoc_prog(union bpf_attr *attr)
+{
+	struct bpf_prog *prog;
+	struct bpf_map *map;
+	int ret;
+
+	if (CHECK_ATTR(BPF_STRUCT_OPS_ASSOCIATE_PROG))
+		return -EINVAL;
+
+	prog = bpf_prog_get(attr->struct_ops_assoc_prog.prog_fd);
+	if (IS_ERR(prog))
+		return PTR_ERR(prog);
+
+	map = bpf_map_get(attr->struct_ops_assoc_prog.map_fd);
+	if (IS_ERR(map)) {
+		ret = PTR_ERR(map);
+		goto out;
+	}
+
+	if (map->map_type != BPF_MAP_TYPE_STRUCT_OPS ||
+	    prog->type == BPF_PROG_TYPE_STRUCT_OPS) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = bpf_struct_ops_assoc_prog(map, prog);
+out:
+	if (ret && !IS_ERR(map))
+		bpf_map_put(map);
+	bpf_prog_put(prog);
+	return ret;
+}
+
 static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
 {
 	union bpf_attr attr;
@@ -6230,6 +6265,9 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size)
 		break;
 	case BPF_PROG_STREAM_READ_BY_FD:
 		err = prog_stream_read(&attr);
+		break;
+	case BPF_STRUCT_OPS_ASSOCIATE_PROG:
+		err = struct_ops_assoc_prog(&attr);
 		break;
 	default:
 		err = -EINVAL;

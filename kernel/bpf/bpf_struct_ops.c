@@ -528,6 +528,7 @@ static void bpf_struct_ops_map_put_progs(struct bpf_struct_ops_map *st_map)
 	for (i = 0; i < st_map->funcs_cnt; i++) {
 		if (!st_map->links[i])
 			break;
+		bpf_struct_ops_disassoc_prog(st_map->links[i]->prog);
 		bpf_link_put(st_map->links[i]);
 		st_map->links[i] = NULL;
 	}
@@ -800,6 +801,11 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 			err = -EINVAL;
 			goto reset_unlock;
 		}
+
+		/* Don't stop a program from being reused. prog->aux->st_ops_assoc
+		 * will point to the first struct_ops kdata.
+		 */
+		bpf_struct_ops_assoc_prog(&st_map->map, prog);
 
 		link = kzalloc(sizeof(*link), GFP_USER);
 		if (!link) {
@@ -1392,6 +1398,32 @@ err_out:
 	bpf_map_put(map);
 	kfree(link);
 	return err;
+}
+
+int bpf_struct_ops_assoc_prog(struct bpf_map *map, struct bpf_prog *prog)
+{
+	struct bpf_struct_ops_map *st_map = (struct bpf_struct_ops_map *)map;
+	void *kdata = &st_map->kvalue.data;
+	int ret = 0;
+
+	mutex_lock(&prog->aux->st_ops_assoc_mutex);
+
+	if (prog->aux->st_ops_assoc && prog->aux->st_ops_assoc != kdata) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	prog->aux->st_ops_assoc = kdata;
+out:
+	mutex_unlock(&prog->aux->st_ops_assoc_mutex);
+	return ret;
+}
+
+void bpf_struct_ops_disassoc_prog(struct bpf_prog *prog)
+{
+	mutex_lock(&prog->aux->st_ops_assoc_mutex);
+	prog->aux->st_ops_assoc = NULL;
+	mutex_unlock(&prog->aux->st_ops_assoc_mutex);
 }
 
 void bpf_map_struct_ops_info_fill(struct bpf_map_info *info, struct bpf_map *map)
