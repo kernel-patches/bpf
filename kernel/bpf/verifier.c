@@ -1670,11 +1670,35 @@ static void update_peak_states(struct bpf_verifier_env *env)
 	env->peak_states = max(env->peak_states, cur_states);
 }
 
+static struct bpf_func_state *__alloc_func_state(int regs_cnt)
+{
+	struct bpf_func_state *st;
+
+	st = kzalloc(sizeof(struct bpf_func_state), GFP_KERNEL_ACCOUNT);
+	if (!st)
+		return NULL;
+
+	st->regs_cnt = regs_cnt;
+	st->regs = kcalloc(regs_cnt, sizeof(*st->regs), GFP_KERNEL_ACCOUNT);
+	if (!st->regs) {
+		kfree(st);
+		return NULL;
+	}
+
+	return st;
+}
+
+static struct bpf_func_state *alloc_func_state(void)
+{
+	return __alloc_func_state(MAX_BPF_REG);
+}
+
 static void free_func_state(struct bpf_func_state *state)
 {
 	if (!state)
 		return;
 	kfree(state->stack);
+	kfree(state->regs);
 	kfree(state);
 }
 
@@ -1731,14 +1755,34 @@ static void maybe_free_verifier_state(struct bpf_verifier_env *env,
 	env->free_list_size--;
 }
 
+static int copy_regs_state(struct bpf_func_state *dst,
+			   const struct bpf_func_state *src)
+{
+	void *tmp;
+
+	tmp = realloc_array(dst->regs, dst->regs_cnt, src->regs_cnt, sizeof(*src->regs));
+	if (!tmp)
+		return -ENOMEM;
+
+	dst->regs = tmp;
+	dst->regs_cnt = src->regs_cnt;
+	memcpy(dst->regs, src->regs, sizeof(*src->regs) * src->regs_cnt);
+	return 0;
+}
+
 /* copy verifier state from src to dst growing dst stack space
  * when necessary to accommodate larger src stack
  */
 static int copy_func_state(struct bpf_func_state *dst,
 			   const struct bpf_func_state *src)
 {
+	int err;
+
 	memcpy(dst, src, offsetof(struct bpf_func_state, stack));
-	return copy_stack_state(dst, src);
+	err = copy_stack_state(dst, src);
+	if (err)
+		return err;
+	return copy_regs_state(dst, src);
 }
 
 static int copy_verifier_state(struct bpf_verifier_state *dst_state,
@@ -1778,8 +1822,9 @@ static int copy_verifier_state(struct bpf_verifier_state *dst_state,
 	dst_state->equal_state = src->equal_state;
 	for (i = 0; i <= src->curframe; i++) {
 		dst = dst_state->frame[i];
+		dst_state->frame[i] = dst;
 		if (!dst) {
-			dst = kzalloc(sizeof(*dst), GFP_KERNEL_ACCOUNT);
+			dst = __alloc_func_state(src->frame[i]->regs_cnt);
 			if (!dst)
 				return -ENOMEM;
 			dst_state->frame[i] = dst;
@@ -2972,7 +3017,7 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 	 */
 	elem->st.branches = 1;
 	elem->st.in_sleepable = is_sleepable;
-	frame = kzalloc(sizeof(*frame), GFP_KERNEL_ACCOUNT);
+	frame = alloc_func_state();
 	if (!frame)
 		return ERR_PTR(-ENOMEM);
 	init_func_state(env, frame,
@@ -9040,7 +9085,7 @@ static int widen_imprecise_scalars(struct bpf_verifier_env *env,
 		fold = old->frame[fr];
 		fcur = cur->frame[fr];
 
-		for (i = 0; i < MAX_BPF_REG; i++)
+		for (i = 0; i < fold->regs_cnt; i++)
 			maybe_widen_reg(env,
 					&fold->regs[i],
 					&fcur->regs[i]);
@@ -10580,7 +10625,7 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	}
 
 	caller = state->frame[state->curframe];
-	callee = kzalloc(sizeof(*callee), GFP_KERNEL_ACCOUNT);
+	callee = alloc_func_state();
 	if (!callee)
 		return -ENOMEM;
 	state->frame[state->curframe + 1] = callee;
@@ -20107,11 +20152,17 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 	if (old->callback_depth > cur->callback_depth)
 		return false;
 
-	for (i = 0; i < MAX_BPF_REG; i++)
-		if (((1 << i) & live_regs) &&
-		    !regsafe(env, &old->regs[i], &cur->regs[i],
+	for (i = 0; i < old->regs_cnt; i++) {
+		/* Ignore dead registers. */
+		if (!(BIT(i) & live_regs))
+			continue;
+		/* Not equal, if cur has less alive regs than old. */
+		if (i >= cur->regs_cnt)
+			return false;
+		if (!regsafe(env, &old->regs[i], &cur->regs[i],
 			     &env->idmap_scratch, exact))
 			return false;
+	}
 
 	if (!stacksafe(env, old, cur, &env->idmap_scratch, exact))
 		return false;
@@ -20272,7 +20323,10 @@ static bool states_maybe_looping(struct bpf_verifier_state *old,
 
 	fold = old->frame[fr];
 	fcur = cur->frame[fr];
-	for (i = 0; i < MAX_BPF_REG; i++)
+	if (fold->regs_cnt != fcur->regs_cnt)
+		return false;
+
+	for (i = 0; i < fold->regs_cnt; i++)
 		if (memcmp(&fold->regs[i], &fcur->regs[i],
 			   offsetof(struct bpf_reg_state, frameno)))
 			return false;
@@ -24475,7 +24529,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 	state->speculative = false;
 	state->branches = 1;
 	state->in_sleepable = env->prog->sleepable;
-	state->frame[0] = kzalloc(sizeof(struct bpf_func_state), GFP_KERNEL_ACCOUNT);
+	state->frame[0] = alloc_func_state();
 	if (!state->frame[0]) {
 		kfree(state);
 		return -ENOMEM;

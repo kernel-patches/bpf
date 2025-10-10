@@ -272,7 +272,6 @@ struct bpf_retval_range {
  * type of all registers and stack info
  */
 struct bpf_func_state {
-	struct bpf_reg_state regs[MAX_BPF_REG];
 	/* index of call instruction that called into this func */
 	int callsite;
 	/* stack frame number of this function state from pov of
@@ -315,10 +314,12 @@ struct bpf_func_state {
 	 * stack[allocated_stack/8 - 1] represents [*(r10-allocated_stack)..*(r10-allocated_stack+7)]
 	 */
 	struct bpf_stack_state *stack;
+	struct bpf_reg_state *regs;
 	/* Size of the current stack, in bytes. The stack state is tracked below, in
 	 * `stack`. allocated_stack is always a multiple of BPF_REG_SIZE.
 	 */
 	int allocated_stack;
+	int regs_cnt;
 };
 
 #define MAX_CALL_FRAMES 8
@@ -464,7 +465,7 @@ struct bpf_verifier_state {
 			struct bpf_reg_state *___regs;                   \
 			__state = ___vstate->frame[___i];                \
 			___regs = __state->regs;                         \
-			for (___j = 0; ___j < MAX_BPF_REG; ___j++) {     \
+			for (___j = 0; ___j < __state->regs_cnt; ___j++) { \
 				__reg = &___regs[___j];                  \
 				(void)(__expr);                          \
 			}                                                \
