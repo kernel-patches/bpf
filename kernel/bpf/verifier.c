@@ -7972,6 +7972,91 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	return err;
 }
 
+#define EXT_REGS_NUM 64
+
+static int ensure_func_regs_cnt(struct bpf_func_state *func, int cnt)
+{
+	void *tmp;
+
+
+	if (cnt <= func->regs_cnt)
+		return 0;
+
+	tmp = realloc_array(func->regs, func->regs_cnt, cnt, sizeof(*func->regs));
+	if (!tmp)
+		return -ENOMEM;
+
+	func->regs = tmp;
+	func->regs_cnt = cnt;
+	return 0;
+}
+
+static int check_spill_base_fields(struct bpf_verifier_env *env, struct bpf_insn *insn, int *regno)
+{
+	if (BPF_MODE(insn->code) != BPF_MEM || insn->imm != 0) {
+		verbose(env, "spill base access uses reserved fields\n");
+		return -EINVAL;
+	}
+
+	if (BPF_SIZE(insn->code) != BPF_DW) {
+		verbose(env, "invalid spill base access operand size\n");
+		return -EINVAL;
+	}
+
+	if (insn->off >= 0 || insn->off <= -(EXT_REGS_NUM * BPF_REG_SIZE) ||
+	    (insn->off % BPF_REG_SIZE)) {
+		verbose(env, "invalid spill base offset\n");
+		return -EINVAL;
+	}
+
+	*regno = MAX_BPF_REG - insn->off / BPF_REG_SIZE - 1;
+	return 0;
+}
+
+static int check_spill_base_load(struct bpf_verifier_env *env, struct bpf_insn *insn)
+{
+	struct bpf_func_state *func = cur_func(env);
+	int err, ext_regno;
+
+	err = check_spill_base_fields(env, insn, &ext_regno);
+	if (err)
+		return err;
+
+	err = check_reg_arg(env, insn->dst_reg, DST_OP_NO_MARK);
+	if (err)
+		return err;
+
+	if (ext_regno >= func->regs_cnt) {
+		verbose(env, "invalid spill base access operand size\n");
+		return -EINVAL;
+	}
+
+	copy_register_state(&func->regs[insn->dst_reg], &func->regs[ext_regno]);
+	return 0;
+}
+
+static int check_spill_base_store(struct bpf_verifier_env *env, struct bpf_insn *insn)
+{
+	struct bpf_func_state *func = cur_func(env);
+	int err, ext_regno;
+
+	err = check_spill_base_fields(env, insn, &ext_regno);
+	if (err)
+		return err;
+
+	err = check_reg_arg(env, insn->src_reg, SRC_OP);
+	if (err)
+		return err;
+
+	err = ensure_func_regs_cnt(func, ext_regno + 1);
+	if (err)
+		return err;
+
+	copy_register_state(&func->regs[ext_regno], &func->regs[insn->src_reg]);
+	mark_reg_scratched(env, ext_regno);
+	return 0;
+}
+
 static int check_store_reg(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			   bool strict_alignment_once)
 {
@@ -21032,6 +21117,14 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 	} else if (class == BPF_LDX) {
 		bool is_ldsx = BPF_MODE(insn->code) == BPF_MEMSX;
 
+		if (insn->src_reg == BPF_REG_SB) {
+			err = check_spill_base_load(env, insn);
+			if (err)
+				return err;
+			env->insn_idx++;
+			return 0;
+		}
+
 		/* Check for reserved fields is already done in
 		 * resolve_pseudo_ldimm64().
 		 */
@@ -21041,6 +21134,14 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 	} else if (class == BPF_STX) {
 		if (BPF_MODE(insn->code) == BPF_ATOMIC) {
 			err = check_atomic(env, insn);
+			if (err)
+				return err;
+			env->insn_idx++;
+			return 0;
+		}
+
+		if (insn->dst_reg == BPF_REG_SB) {
+			err = check_spill_base_store(env, insn);
 			if (err)
 				return err;
 			env->insn_idx++;

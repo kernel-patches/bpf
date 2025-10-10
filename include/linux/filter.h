@@ -50,6 +50,7 @@ struct ctl_table_header;
 #define BPF_REG_ARG5	BPF_REG_5
 #define BPF_REG_CTX	BPF_REG_6
 #define BPF_REG_FP	BPF_REG_10
+#define BPF_REG_SB	BPF_REG_10 + 1
 
 /* Additional register mappings for converted user programs. */
 #define BPF_REG_A	BPF_REG_0
