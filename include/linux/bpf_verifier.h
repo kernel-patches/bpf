@@ -688,6 +688,7 @@ struct backtrack_state {
 	u32 frame;
 	u32 reg_masks[MAX_CALL_FRAMES];
 	u64 stack_masks[MAX_CALL_FRAMES];
+	u64 spill_masks[MAX_CALL_FRAMES];
 };
 
 struct bpf_id_pair {

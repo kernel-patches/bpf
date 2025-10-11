@@ -3963,6 +3963,11 @@ static int check_reg_arg(struct bpf_verifier_env *env, u32 regno,
 	return __check_reg_arg(env, state->regs, regno, t);
 }
 
+static u32 spill_base_idx(struct bpf_insn *insn)
+{
+	return -insn->off / BPF_REG_SIZE - 1;
+}
+
 static bool is_spill_base_ldx(struct bpf_insn *insn)
 {
 	return BPF_CLASS(insn->code) == BPF_LDX &&
@@ -4211,7 +4216,7 @@ static inline u32 bt_empty(struct backtrack_state *bt)
 	int i;
 
 	for (i = 0; i <= bt->frame; i++)
-		mask |= bt->reg_masks[i] | bt->stack_masks[i];
+		mask |= bt->reg_masks[i] | bt->stack_masks[i] | bt->spill_masks[i];
 
 	return mask == 0;
 }
@@ -4299,6 +4304,35 @@ static inline bool bt_is_frame_reg_set(struct backtrack_state *bt, u32 frame, u3
 static inline bool bt_is_frame_slot_set(struct backtrack_state *bt, u32 frame, u32 slot)
 {
 	return bt->stack_masks[frame] & (1ull << slot);
+}
+static inline void bt_set_spill(struct backtrack_state *bt, u32 reg)
+{
+	bt->spill_masks[bt->frame] |= 1 << reg;
+}
+
+static inline void bt_clear_frame_spill(struct backtrack_state *bt, u32 frame, u32 reg)
+{
+	bt->spill_masks[frame] &= ~(1 << reg);
+}
+
+static inline void bt_clear_spill(struct backtrack_state *bt, u32 reg)
+{
+	bt_clear_frame_spill(bt, bt->frame, reg);
+}
+
+static inline u64 bt_spill_mask(struct backtrack_state *bt)
+{
+	return bt->spill_masks[bt->frame];
+}
+
+static inline u64 bt_frame_spill_mask(struct backtrack_state *bt, u32 frame)
+{
+	return bt->spill_masks[frame];
+}
+
+static inline bool bt_is_spill_set(struct backtrack_state *bt, u32 reg)
+{
+	return bt->spill_masks[bt->frame] & (1 << reg);
 }
 
 /* format registers bitmask, e.g., "r0,r2,r4" for 0x15 mask */
@@ -4394,6 +4428,7 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 	u8 mode = BPF_MODE(insn->code);
 	u32 dreg = insn->dst_reg;
 	u32 sreg = insn->src_reg;
+	u32 spill = spill_base_idx(insn);
 	u32 spi, i, fr;
 
 	if (insn->code == 0)
@@ -4403,8 +4438,12 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 		verbose(env, "mark_precise: frame%d: regs=%s ",
 			bt->frame, env->tmp_str_buf);
 		bpf_fmt_stack_mask(env->tmp_str_buf, TMP_STR_BUF_LEN, bt_stack_mask(bt));
-		verbose(env, "stack=%s before ", env->tmp_str_buf);
-		verbose(env, "%d: ", idx);
+		verbose(env, "stack=%s", env->tmp_str_buf);
+		if (bt_spill_mask(bt)) {
+			bpf_fmt_stack_mask(env->tmp_str_buf, TMP_STR_BUF_LEN, bt_spill_mask(bt));
+			verbose(env, " spill=%s", env->tmp_str_buf);
+		}
+		verbose(env, " before %d: ", idx);
 		verbose_insn(env, insn);
 	}
 
@@ -4452,6 +4491,11 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			   * dreg still needs precision before this insn
 			   */
 		}
+	} else if (is_spill_base_ldx(insn)) {
+		if (!bt_is_reg_set(bt, dreg))
+			return 0;
+		bt_clear_reg(bt, dreg);
+		bt_set_spill(bt, spill);
 	} else if (class == BPF_LDX || is_atomic_load_insn(insn)) {
 		if (!bt_is_reg_set(bt, dreg))
 			return 0;
@@ -4472,6 +4516,11 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 		spi = insn_stack_access_spi(hist->flags);
 		fr = insn_stack_access_frameno(hist->flags);
 		bt_set_frame_slot(bt, fr, spi);
+	} else if (is_spill_base_stx(insn)) {
+		if (!bt_is_spill_set(bt, spill))
+			return 0;
+		bt_clear_spill(bt, spill);
+		bt_set_reg(bt, sreg);
 	} else if (class == BPF_STX || class == BPF_ST) {
 		if (bt_is_reg_set(bt, dreg))
 			/* stx & st shouldn't be using _scalar_ dst_reg
@@ -4751,7 +4800,7 @@ static void mark_all_scalars_precise(struct bpf_verifier_env *env,
 	for (st = st->parent; st; st = st->parent) {
 		for (i = 0; i <= st->curframe; i++) {
 			func = st->frame[i];
-			for (j = 0; j < BPF_REG_FP; j++) {
+			for (j = 0; j < func->regs_cnt; j++) {
 				reg = &func->regs[j];
 				if (reg->type != SCALAR_VALUE || reg->precise)
 					continue;
@@ -4785,7 +4834,7 @@ static void mark_all_scalars_imprecise(struct bpf_verifier_env *env, struct bpf_
 
 	for (i = 0; i <= st->curframe; i++) {
 		func = st->frame[i];
-		for (j = 0; j < BPF_REG_FP; j++) {
+		for (j = 0; j < func->regs_cnt; j++) {
 			reg = &func->regs[j];
 			if (reg->type != SCALAR_VALUE)
 				continue;
@@ -5023,6 +5072,26 @@ static int __mark_chain_precision(struct bpf_verifier_env *env,
 				}
 			}
 
+			bitmap_from_u64(mask, bt_frame_spill_mask(bt, fr));
+			for_each_set_bit(i, mask, 64) {
+				if (verifier_bug_if(i >= func->regs_cnt,
+						    env, "spill slot %d, total slots %d",
+						    i, func->regs_cnt))
+					return -EFAULT;
+
+				reg = &func->regs[MAX_BPF_REG + i];
+				if (reg->type != SCALAR_VALUE) {
+					bt_clear_frame_spill(bt, fr, i);
+					continue;
+				}
+				if (reg->precise) {
+					bt_clear_frame_spill(bt, fr, i);
+				} else {
+					reg->precise = true;
+					*changed = true;
+				}
+			}
+
 			bitmap_from_u64(mask, bt_frame_stack_mask(bt, fr));
 			for_each_set_bit(i, mask, 64) {
 				if (verifier_bug_if(i >= func->allocated_stack / BPF_REG_SIZE,
@@ -5049,7 +5118,13 @@ static int __mark_chain_precision(struct bpf_verifier_env *env,
 					fr, env->tmp_str_buf);
 				bpf_fmt_stack_mask(env->tmp_str_buf, TMP_STR_BUF_LEN,
 					       bt_frame_stack_mask(bt, fr));
-				verbose(env, "stack=%s: ", env->tmp_str_buf);
+				verbose(env, "stack=%s", env->tmp_str_buf);
+				if (bt_frame_spill_mask(bt, fr)) {
+					bpf_fmt_stack_mask(env->tmp_str_buf, TMP_STR_BUF_LEN,
+							   bt_frame_spill_mask(bt, fr));
+					verbose(env, " spill=%s", env->tmp_str_buf);
+				}
+				verbose(env, ": ");
 				print_verifier_state(env, st, fr, true);
 			}
 		}
@@ -20325,7 +20400,7 @@ static int propagate_precision(struct bpf_verifier_env *env,
 {
 	struct bpf_reg_state *state_reg;
 	struct bpf_func_state *state;
-	int i, err = 0, fr;
+	int i, err = 0, fr, off;
 	bool first;
 
 	for (fr = old->curframe; fr >= 0; fr--) {
@@ -20343,6 +20418,22 @@ static int propagate_precision(struct bpf_verifier_env *env,
 					verbose(env, ",r%d", i);
 			}
 			bt_set_frame_reg(&env->bt, fr, i);
+			first = false;
+		}
+
+		state_reg = &state->regs[MAX_BPF_REG];
+		for (i = MAX_BPF_REG; i < state->regs_cnt; i++, state_reg++) {
+			if (state_reg->type != SCALAR_VALUE ||
+			    !state_reg->precise)
+				continue;
+			if (env->log.level & BPF_LOG_LEVEL2) {
+				off = (i - MAX_BPF_REG + 1) * -8;
+				if (first)
+					verbose(env, "frame %d: propagating sp%d", fr, off);
+				else
+					verbose(env, ",sp%d", off);
+			}
+			bt_set_frame_spill(&env->bt, fr, i - MAX_BPF_REG);
 			first = false;
 		}
 
