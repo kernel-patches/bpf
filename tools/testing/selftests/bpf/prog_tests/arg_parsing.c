@@ -36,6 +36,9 @@ static void test_parse_test_list(void)
 	if (!ASSERT_OK_PTR(set.tests, "test filters initialized"))
 		goto error;
 	ASSERT_EQ(set.tests[0].subtest_cnt, 0, "subtest filters count");
+	if (!ASSERT_OK_PTR((set.tests[0].name), "subtest name"))
+		goto error;
+	fprintf(env.stderr_saved,"%s %ld\n", set.tests[0].name, strlen(set.tests[0].name));
 	ASSERT_OK(strcmp("arg_parsing", set.tests[0].name), "subtest name");
 	free_test_filter_set(&set);
 
