@@ -250,6 +250,11 @@ struct btf_struct_ops_tab {
 	struct bpf_struct_ops_desc ops[];
 };
 
+struct btf_sorted_ids {
+	u32 cnt;
+	u32 ids[];
+};
+
 struct btf {
 	void *data;
 	struct btf_type **types;
@@ -268,6 +273,9 @@ struct btf {
 	struct btf_id_dtor_kfunc_tab *dtor_kfunc_tab;
 	struct btf_struct_metas *struct_meta_tab;
 	struct btf_struct_ops_tab *struct_ops_tab;
+#ifdef CONFIG_BPF_SORT_BTF_BY_NAME_KIND
+	struct btf_sorted_ids *sorted_ids;
+#endif
 
 	/* split BTF support */
 	struct btf *base_btf;
@@ -470,6 +478,9 @@ static int btf_resolve(struct btf_verifier_env *env,
 static int btf_func_check(struct btf_verifier_env *env,
 			  const struct btf_type *t);
 
+static int cmp_name_kind(const char *sa, u8 ka,
+			 const char *sb, u8 kb);
+
 static bool btf_type_is_modifier(const struct btf_type *t)
 {
 	/* Some of them is not strictly a C modifier
@@ -544,22 +555,59 @@ u32 btf_nr_types(const struct btf *btf)
 	return total;
 }
 
+u32 btf_type_cnt(const struct btf *btf)
+{
+	return btf->start_id + btf->nr_types;
+}
+
 s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind)
 {
 	const struct btf_type *t;
+	struct btf_sorted_ids *sorted_ids = NULL;
 	const char *tname;
 	u32 i, total;
 
-	total = btf_nr_types(btf);
-	for (i = 1; i < total; i++) {
-		t = btf_type_by_id(btf, i);
-		if (BTF_INFO_KIND(t->info) != kind)
-			continue;
+	do {
+#ifdef CONFIG_BPF_SORT_BTF_BY_NAME_KIND
+		sorted_ids = btf->sorted_ids;
+#endif
+		if (sorted_ids) {
+			/* binary search */
+			u32 start, end, mid;
+			u32 *ids = sorted_ids->ids;
+			int ret;
 
-		tname = btf_name_by_offset(btf, t->name_off);
-		if (!strcmp(tname, name))
-			return i;
-	}
+			start = 0;
+			end = sorted_ids->cnt - 1;
+			while (start <= end) {
+				mid = start + (end - start) / 2;
+				t = btf_type_by_id(btf, ids[mid]);
+				tname = btf_name_by_offset(btf, t->name_off);
+				ret = cmp_name_kind(tname, BTF_INFO_KIND(t->info),
+						    name, kind);
+				if (ret < 0)
+					start = mid + 1;
+				else if (ret > 0)
+					end = mid - 1;
+				else
+					return ids[mid];
+			}
+		} else {
+			/* linear search */
+			total = btf_type_cnt(btf);
+			for (i = btf->start_id; i < total; i++) {
+				t = btf_type_by_id(btf, i);
+				if (BTF_INFO_KIND(t->info) != kind)
+					continue;
+
+				tname = btf_name_by_offset(btf, t->name_off);
+				if (!strcmp(tname, name))
+					return i;
+			}
+		}
+
+		btf = btf->base_btf;
+	} while (btf);
 
 	return -ENOENT;
 }
@@ -1737,12 +1785,29 @@ static void btf_free_struct_ops_tab(struct btf *btf)
 	btf->struct_ops_tab = NULL;
 }
 
+#ifdef CONFIG_BPF_SORT_BTF_BY_NAME_KIND
+static void btf_free_sorted_ids(struct btf *btf)
+{
+	struct btf_sorted_ids *sorted_ids = btf->sorted_ids;
+
+	if (!sorted_ids)
+		return;
+
+	kvfree(sorted_ids);
+	btf->sorted_ids = NULL;
+}
+#else
+static void btf_free_sorted_ids(struct btf *btf)
+{}
+#endif
+
 static void btf_free(struct btf *btf)
 {
 	btf_free_struct_meta_tab(btf);
 	btf_free_dtor_kfunc_tab(btf);
 	btf_free_kfunc_set_tab(btf);
 	btf_free_struct_ops_tab(btf);
+	btf_free_sorted_ids(btf);
 	kvfree(btf->types);
 	kvfree(btf->resolved_sizes);
 	kvfree(btf->resolved_ids);
@@ -6189,6 +6254,81 @@ int get_kern_ctx_btf_id(struct bpf_verifier_log *log, enum bpf_prog_type prog_ty
 	return kctx_type_id;
 }
 
+#ifdef CONFIG_BPF_SORT_BTF_BY_NAME_KIND
+static int cmp_name_kind(const char *sa, u8 ka, const char *sb, u8 kb)
+{
+	return strcmp(sa, sb) ?: (ka - kb);
+}
+
+static int btf_compare_name_kind(const void *a, const void *b, const void *priv)
+{
+	const struct btf *btf = priv;
+	const struct btf_type *ba, *bb;
+	u32 ia = *(const u32 *)a;
+	u32 ib = *(const u32 *)b;
+
+	ba = btf_type_by_id(btf, ia);
+	bb = btf_type_by_id(btf, ib);
+
+	return cmp_name_kind(btf_name_by_offset(btf, ba->name_off),
+			     BTF_INFO_KIND(ba->info),
+			     btf_name_by_offset(btf, bb->name_off),
+			     BTF_INFO_KIND(bb->info));
+}
+
+static void btf_sort_by_name_kind(struct btf *btf)
+{
+	const struct btf_type *t;
+	struct btf_sorted_ids *sorted_ids;
+	const char *name;
+	u32 *ids;
+	u32 total, cnt = 0;
+	u32 i, j = 0;
+
+	total = btf_type_cnt(btf);
+	for (i = btf->start_id; i < total; i++) {
+		t = btf_type_by_id(btf, i);
+		name = btf_name_by_offset(btf, t->name_off);
+		if (str_is_empty(name))
+			continue;
+		cnt++;
+	}
+
+	/* Use linear search when the number is below the threshold */
+	if (cnt < 8)
+		return;
+
+	sorted_ids = kvmalloc(struct_size(sorted_ids, ids, cnt), GFP_KERNEL);
+	if (!sorted_ids) {
+		pr_warn("Failed to allocate memory for sorted_ids\n");
+		return;
+	}
+
+	ids = sorted_ids->ids;
+	for (i = btf->start_id; i < total; i++) {
+		t = btf_type_by_id(btf, i);
+		name = btf_name_by_offset(btf, t->name_off);
+		if (str_is_empty(name))
+			continue;
+		ids[j++] = i;
+	}
+
+	sort_r(ids, cnt, sizeof(ids[0]), btf_compare_name_kind, NULL, btf);
+
+	sorted_ids->cnt = cnt;
+	btf->sorted_ids = sorted_ids;
+}
+#else
+static int cmp_name_kind(const char *sa, u8 ka, const char *sb, u8 kb)
+{
+	return 0;
+}
+
+static void btf_sort_by_name_kind(struct btf *btf)
+{
+}
+#endif
+
 BTF_ID_LIST_SINGLE(bpf_ctx_convert_btf_id, struct, bpf_ctx_convert)
 
 static struct btf *btf_parse_base(struct btf_verifier_env *env, const char *name,
@@ -6230,6 +6370,7 @@ static struct btf *btf_parse_base(struct btf_verifier_env *env, const char *name
 	if (err)
 		goto errout;
 
+	btf_sort_by_name_kind(btf);
 	refcount_set(&btf->refcnt, 1);
 
 	return btf;
@@ -6362,6 +6503,7 @@ static struct btf *btf_parse_module(const char *module_name, const void *data,
 		base_btf = vmlinux_btf;
 	}
 
+	btf_sort_by_name_kind(btf);
 	btf_verifier_env_free(env);
 	refcount_set(&btf->refcnt, 1);
 	return btf;

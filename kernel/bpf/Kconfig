@@ -101,4 +101,17 @@ config BPF_LSM
 
 	  If you are unsure how to answer this question, answer N.
 
+config BPF_SORT_BTF_BY_NAME_KIND
+	bool "Sort BTF type by name and kind"
+	depends on DEBUG_INFO_BTF
+	default n
+	help
+	  Sort BTF types by name and kind to enable binary search, improving
+	  the performance of btf_find_by_name_kind. Currently applies to
+	  vmlinux and kernel module BTFs. Note that this option introduces
+	  extra memory and boot-time overhead.
+
+	  For instance, a BTF file with 80,000 named btf_types consumes
+	  approximately 312 KB of additional memory.
+
 endmenu # "BPF subsystem"
