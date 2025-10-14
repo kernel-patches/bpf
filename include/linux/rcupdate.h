@@ -988,18 +988,32 @@ static inline notrace void rcu_read_unlock_sched_notrace(void)
 	preempt_enable_notrace();
 }
 
-static __always_inline void rcu_read_lock_dont_migrate(void)
+/* This can only be used with rcu_read_lock held */
+static inline void migrate_enable_rcu(void)
 {
+	WARN_ON_ONCE(!rcu_read_lock_held());
+	if (IS_ENABLED(CONFIG_PREEMPT_RCU))
+		migrate_enable();
+}
+
+/* This can only be used with rcu_read_lock held */
+static inline void migrate_disable_rcu(void)
+{
+	WARN_ON_ONCE(!rcu_read_lock_held());
 	if (IS_ENABLED(CONFIG_PREEMPT_RCU))
 		migrate_disable();
+}
+
+static __always_inline void rcu_read_lock_dont_migrate(void)
+{
 	rcu_read_lock();
+	migrate_disable_rcu();
 }
 
 static inline void rcu_read_unlock_migrate(void)
 {
+	migrate_enable_rcu();
 	rcu_read_unlock();
-	if (IS_ENABLED(CONFIG_PREEMPT_RCU))
-		migrate_enable();
 }
 
 /**
