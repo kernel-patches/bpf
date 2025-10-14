@@ -1642,7 +1642,7 @@ out:
 	release_sock(&smc->sk);
 }
 
-int smc_connect(struct socket *sock, struct sockaddr *addr,
+int smc_connect(struct socket *sock, struct sockaddr_unspec *addr,
 		int alen, int flags)
 {
 	struct sock *sk = sock->sk;
@@ -1694,7 +1694,7 @@ int smc_connect(struct socket *sock, struct sockaddr *addr,
 		rc = -EALREADY;
 		goto out;
 	}
-	rc = kernel_connect(smc->clcsock, addr, alen, flags);
+	rc = kernel_connect(smc->clcsock, (struct sockaddr_unspec *)addr, alen, flags);
 	if (rc && rc != -EINPROGRESS)
 		goto out;
 
