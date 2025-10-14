@@ -908,7 +908,7 @@ int sk_psock_msg_verdict(struct sock *sk, struct sk_psock *psock,
 
 	sk_msg_compute_data_pointers(msg);
 	msg->sk = sk;
-	ret = bpf_prog_run_pin_on_cpu(prog, msg);
+	ret = bpf_prog_run_pin_on_cpu_rcu(prog, msg);
 	ret = sk_psock_map_verd(ret, msg->sk_redir);
 	psock->apply_bytes = msg->apply_bytes;
 	if (ret == __SK_REDIRECT) {
@@ -993,7 +993,7 @@ int sk_psock_tls_strp_read(struct sk_psock *psock, struct sk_buff *skb)
 		skb->sk = psock->sk;
 		skb_dst_drop(skb);
 		skb_bpf_redirect_clear(skb);
-		ret = bpf_prog_run_pin_on_cpu(prog, skb);
+		ret = bpf_prog_run_pin_on_cpu_rcu(prog, skb);
 		ret = sk_psock_map_verd(ret, skb_bpf_redirect_fetch(skb));
 		skb->sk = NULL;
 	}
@@ -1101,7 +1101,7 @@ static void sk_psock_strp_read(struct strparser *strp, struct sk_buff *skb)
 		skb->sk = sk;
 		skb_dst_drop(skb);
 		skb_bpf_redirect_clear(skb);
-		ret = bpf_prog_run_pin_on_cpu(prog, skb);
+		ret = bpf_prog_run_pin_on_cpu_rcu(prog, skb);
 		skb_bpf_set_strparser(skb);
 		ret = sk_psock_map_verd(ret, skb_bpf_redirect_fetch(skb));
 		skb->sk = NULL;
@@ -1126,7 +1126,7 @@ static int sk_psock_strp_parse(struct strparser *strp, struct sk_buff *skb)
 	prog = READ_ONCE(psock->progs.stream_parser);
 	if (likely(prog)) {
 		skb->sk = psock->sk;
-		ret = bpf_prog_run_pin_on_cpu(prog, skb);
+		ret = bpf_prog_run_pin_on_cpu_rcu(prog, skb);
 		skb->sk = NULL;
 	}
 	rcu_read_unlock();
@@ -1230,7 +1230,7 @@ static int sk_psock_verdict_recv(struct sock *sk, struct sk_buff *skb)
 	if (likely(prog)) {
 		skb_dst_drop(skb);
 		skb_bpf_redirect_clear(skb);
-		ret = bpf_prog_run_pin_on_cpu(prog, skb);
+		ret = bpf_prog_run_pin_on_cpu_rcu(prog, skb);
 		ret = sk_psock_map_verd(ret, skb_bpf_redirect_fetch(skb));
 	}
 	ret = sk_psock_verdict_apply(psock, skb, ret);
