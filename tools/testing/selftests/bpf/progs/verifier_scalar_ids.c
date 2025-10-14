@@ -349,14 +349,14 @@ __naked void precision_two_ids(void)
 SEC("socket")
 __success __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-/* check that r0 and r6 have different IDs after 'if',
- * collect_linked_regs() can't tie more than 6 registers for a single insn.
+/* check that r0 and r5 have different IDs after 'if',
+ * collect_linked_regs() can't tie more than 5 registers for a single insn.
  */
-__msg("8: (25) if r0 > 0x7 goto pc+0         ; R0=scalar(id=1")
-__msg("9: (bf) r6 = r6                       ; R6=scalar(id=2")
-/* check that r{0-5} are marked precise after 'if' */
-__msg("frame0: regs=r0 stack= before 8: (25) if r0 > 0x7 goto pc+0")
-__msg("frame0: parent state regs=r0,r1,r2,r3,r4,r5 stack=:")
+__msg("7: (25) if r0 > 0x7 goto pc+0         ; R0=scalar(id=1")
+__msg("8: (bf) r5 = r5                       ; R5=scalar(id=2")
+/* check that r{0-4} are marked precise after 'if' */
+__msg("frame0: regs=r0 stack= before 7: (25) if r0 > 0x7 goto pc+0")
+__msg("frame0: parent state regs=r0,r1,r2,r3,r4 stack=:")
 __naked void linked_regs_too_many_regs(void)
 {
 	asm volatile (
@@ -369,11 +369,10 @@ __naked void linked_regs_too_many_regs(void)
 	"r3 = r0;"
 	"r4 = r0;"
 	"r5 = r0;"
-	"r6 = r0;"
-	/* propagate range for r{0-6} */
+	/* propagate range for r{0-5} */
 	"if r0 > 7 goto +0;"
 	/* make r6 appear in the log */
-	"r6 = r6;"
+	"r5 = r5;"
 	/* force r0 to be precise,
 	 * this would cause r{0-4} to be precise because of shared IDs
 	 */

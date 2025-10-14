@@ -4008,7 +4008,7 @@ static bool is_jmp_point(struct bpf_verifier_env *env, int insn_idx)
 }
 
 #define LR_FRAMENO_BITS	3
-#define LR_SPI_BITS	6
+#define LR_SPI_BITS	7
 #define LR_ENTRY_BITS	(LR_SPI_BITS + LR_FRAMENO_BITS + 1)
 #define LR_SIZE_BITS	4
 #define LR_FRAMENO_MASK	((1ull << LR_FRAMENO_BITS) - 1)
@@ -4016,7 +4016,7 @@ static bool is_jmp_point(struct bpf_verifier_env *env, int insn_idx)
 #define LR_SIZE_MASK	((1ull << LR_SIZE_BITS)    - 1)
 #define LR_SPI_OFF	LR_FRAMENO_BITS
 #define LR_IS_REG_OFF	(LR_SPI_BITS + LR_FRAMENO_BITS)
-#define LINKED_REGS_MAX	6
+#define LINKED_REGS_MAX	5
 
 struct linked_reg {
 	u8 frameno;
@@ -4044,7 +4044,7 @@ static struct linked_reg *linked_regs_push(struct linked_regs *s)
  * number of elements currently in stack.
  * Pack one history entry for linked registers as 10 bits in the following format:
  * - 3-bits frameno
- * - 6-bits spi_or_reg
+ * - 7-bits spi_or_reg
  * - 1-bit  is_reg
  */
 static u64 linked_regs_pack(struct linked_regs *s)
@@ -4310,6 +4310,11 @@ static inline void bt_set_spill(struct backtrack_state *bt, u32 reg)
 	bt->spill_masks[bt->frame] |= 1 << reg;
 }
 
+static inline void bt_set_frame_spill(struct backtrack_state *bt, u32 frame, u32 reg)
+{
+	bt->spill_masks[frame] |= 1 << reg;
+}
+
 static inline void bt_clear_frame_spill(struct backtrack_state *bt, u32 frame, u32 reg)
 {
 	bt->spill_masks[frame] &= ~(1 << reg);
@@ -4403,8 +4408,10 @@ static void bt_sync_linked_regs(struct backtrack_state *bt, struct bpf_jmp_histo
 	for (i = 0; i < linked_regs.cnt; ++i) {
 		struct linked_reg *e = &linked_regs.entries[i];
 
-		if (e->is_reg)
+		if (e->is_reg && e->regno < MAX_BPF_REG)
 			bt_set_frame_reg(bt, e->frameno, e->regno);
+		else if (e->is_reg)
+			bt_set_frame_spill(bt, e->frameno, e->regno - MAX_BPF_REG);
 		else
 			bt_set_frame_slot(bt, e->frameno, e->spi);
 	}
@@ -8141,6 +8148,7 @@ static int check_spill_base_store(struct bpf_verifier_env *env, struct bpf_insn 
 	if (err)
 		return err;
 
+	assign_scalar_id_before_mov(env, &func->regs[insn->src_reg]);
 	copy_register_state(&func->regs[ext_regno], &func->regs[insn->src_reg]);
 	mark_reg_scratched(env, ext_regno);
 	return 0;
@@ -17534,7 +17542,7 @@ static void collect_linked_regs(struct bpf_verifier_state *vstate, u32 id,
 	id = id & ~BPF_ADD_CONST;
 	for (i = vstate->curframe; i >= 0; i--) {
 		func = vstate->frame[i];
-		for (j = 0; j < BPF_REG_FP; j++) {
+		for (j = 0; j < func->regs_cnt; j++) {
 			reg = &func->regs[j];
 			__collect_linked_regs(linked_regs, reg, id, i, j, true);
 		}
