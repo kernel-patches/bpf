@@ -995,7 +995,7 @@ static inline u32 bpf_prog_run_clear_cb(const struct bpf_prog *prog,
 	if (unlikely(prog->cb_access))
 		memset(cb_data, 0, BPF_SKB_CB_LEN);
 
-	res = bpf_prog_run_pin_on_cpu(prog, skb);
+	res = bpf_prog_run_pin_on_cpu_rcu(prog, skb);
 	return res;
 }
 
