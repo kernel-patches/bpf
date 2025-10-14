@@ -747,6 +747,18 @@ static inline u32 bpf_prog_run_pin_on_cpu(const struct bpf_prog *prog,
 	return ret;
 }
 
+/* The same as bpf_prog_run_pin_on_cpu, except rcu_read_lock should be held */
+static inline u32 bpf_prog_run_pin_on_cpu_rcu(const struct bpf_prog *prog,
+					      const void *ctx)
+{
+	u32 ret;
+
+	migrate_disable_rcu();
+	ret = bpf_prog_run(prog, ctx);
+	migrate_enable_rcu();
+	return ret;
+}
+
 #define BPF_SKB_CB_LEN QDISC_CB_PRIV_LEN
 
 struct bpf_skb_data_end {
