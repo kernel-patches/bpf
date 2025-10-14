@@ -140,6 +140,7 @@ static void test_parse_test_list_file(void)
 	fprintf(fp, "testA/subtest2\n");
 	fprintf(fp, "testC_no_eof_newline");
 	fflush(fp);
+	fsync(fd);
 
 	if (!ASSERT_OK(ferror(fp), "prepare tmp"))
 		goto out_fclose;
