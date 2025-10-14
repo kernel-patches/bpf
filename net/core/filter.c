@@ -12089,6 +12089,7 @@ __bpf_kfunc int bpf_sock_addr_set_sun_path(struct bpf_sock_addr_kern *sa_kern,
 					   const u8 *sun_path, u32 sun_path__sz)
 {
 	struct sockaddr_un *un;
+	size_t required_size;
 
 	if (sa_kern->sk->sk_family != AF_UNIX)
 		return -EINVAL;
@@ -12099,9 +12100,14 @@ __bpf_kfunc int bpf_sock_addr_set_sun_path(struct bpf_sock_addr_kern *sa_kern,
 	if (sun_path__sz == 0 || sun_path__sz > UNIX_PATH_MAX)
 		return -EINVAL;
 
+	/* Validate that the buffer is large enough for sockaddr_un + path */
+	required_size = offsetof(struct sockaddr_un, sun_path) + sun_path__sz;
+	if (sa_kern->uaddrlen < required_size)
+		return -EINVAL;
+
 	un = (struct sockaddr_un *)sa_kern->uaddr;
 	memcpy(un->sun_path, sun_path, sun_path__sz);
-	sa_kern->uaddrlen = offsetof(struct sockaddr_un, sun_path) + sun_path__sz;
+	sa_kern->uaddrlen = required_size;
 
 	return 0;
 }
