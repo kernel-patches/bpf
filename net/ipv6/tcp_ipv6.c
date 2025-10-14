@@ -119,7 +119,7 @@ static u32 tcp_v6_init_ts_off(const struct net *net, const struct sk_buff *skb)
 				   ipv6_hdr(skb)->saddr.s6_addr32);
 }
 
-static int tcp_v6_pre_connect(struct sock *sk, struct sockaddr *uaddr,
+static int tcp_v6_pre_connect(struct sock *sk, struct sockaddr_unspec *uaddr,
 			      int addr_len)
 {
 	/* This check is replicated from tcp_v6_connect() and intended to
@@ -134,7 +134,7 @@ static int tcp_v6_pre_connect(struct sock *sk, struct sockaddr *uaddr,
 	return BPF_CGROUP_RUN_PROG_INET6_CONNECT(sk, uaddr, &addr_len);
 }
 
-static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
+static int tcp_v6_connect(struct sock *sk, struct sockaddr_unspec *uaddr,
 			  int addr_len)
 {
 	struct sockaddr_in6 *usin = (struct sockaddr_in6 *) uaddr;
@@ -239,7 +239,7 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
 		tp->af_specific = &tcp_sock_ipv6_mapped_specific;
 #endif
 
-		err = tcp_v4_connect(sk, (struct sockaddr *)&sin, sizeof(sin));
+		err = tcp_v4_connect(sk, (struct sockaddr_unspec *)&sin, sizeof(sin));
 
 		if (err) {
 			icsk->icsk_ext_hdr_len = exthdrlen;
