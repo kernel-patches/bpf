@@ -755,13 +755,16 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 
 	if (state->frameno)
 		verbose(env, " frame%d:", state->frameno);
-	for (i = 0; i < MAX_BPF_REG; i++) {
+	for (i = 0; i < state->regs_cnt; i++) {
 		reg = &state->regs[i];
 		if (reg->type == NOT_INIT)
 			continue;
 		if (!print_all && !reg_scratched(env, i))
 			continue;
-		verbose(env, " R%d", i);
+		if (i < MAX_BPF_REG)
+			verbose(env, " R%d", i);
+		else
+			verbose(env, " sp%d", (MAX_BPF_REG - i - 1) * 8);
 		verbose(env, "=");
 		print_reg_state(env, state, reg);
 	}

@@ -833,7 +833,7 @@ struct bpf_verifier_env {
 	/* bit mask to keep track of whether a register has been accessed
 	 * since the last time the function state was printed
 	 */
-	u32 scratched_regs;
+	u8 scratched_regs[10];
 	/* Same as scratched_regs but for stack slots */
 	u64 scratched_stack_slots;
 	u64 prev_log_pos, prev_insn_print_pos;
@@ -1017,7 +1017,9 @@ static inline bool type_may_be_null(u32 type)
 
 static inline void mark_reg_scratched(struct bpf_verifier_env *env, u32 regno)
 {
-	env->scratched_regs |= 1U << regno;
+	const u32 eltsz = sizeof(*env->scratched_regs) * 8;
+
+	env->scratched_regs[regno / eltsz] |= BIT(regno % eltsz);
 }
 
 static inline void mark_stack_slot_scratched(struct bpf_verifier_env *env, u32 spi)
@@ -1027,7 +1029,9 @@ static inline void mark_stack_slot_scratched(struct bpf_verifier_env *env, u32 s
 
 static inline bool reg_scratched(const struct bpf_verifier_env *env, u32 regno)
 {
-	return (env->scratched_regs >> regno) & 1;
+	const u32 eltsz = sizeof(*env->scratched_regs) * 8;
+
+	return (env->scratched_regs[regno / eltsz]) & BIT(regno % eltsz);
 }
 
 static inline bool stack_slot_scratched(const struct bpf_verifier_env *env, u64 regno)
@@ -1037,19 +1041,24 @@ static inline bool stack_slot_scratched(const struct bpf_verifier_env *env, u64 
 
 static inline bool verifier_state_scratched(const struct bpf_verifier_env *env)
 {
-	return env->scratched_regs || env->scratched_stack_slots;
+	u32 i;
+
+	for  (i = 0; i < ARRAY_SIZE(env->scratched_regs); i++)
+		if (env->scratched_regs[i])
+			return true;
+	return env->scratched_stack_slots;
 }
 
 static inline void mark_verifier_state_clean(struct bpf_verifier_env *env)
 {
-	env->scratched_regs = 0U;
+	memset(env->scratched_regs, 0, sizeof(env->scratched_regs));
 	env->scratched_stack_slots = 0ULL;
 }
 
 /* Used for printing the entire verifier state. */
 static inline void mark_verifier_state_scratched(struct bpf_verifier_env *env)
 {
-	env->scratched_regs = ~0U;
+	memset(env->scratched_regs, ~0U, sizeof(env->scratched_regs));
 	env->scratched_stack_slots = ~0ULL;
 }
 
