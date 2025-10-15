@@ -72,6 +72,10 @@ ifneq ($(shell $(CLANG) --target=bpf -mcpu=help 2>&1 | grep 'v4'),)
 CLANG_CPUV4 := 1
 endif
 
+ifneq ($(shell $(CLANG) --target=bpf -mcpu=help 2>&1 | grep 'v5'),)
+CLANG_CPUV5 := 1
+endif
+
 # Order correspond to 'make run_tests' order
 TEST_GEN_PROGS = test_verifier test_tag test_maps test_lru_map test_progs \
 	test_sockmap \
@@ -98,6 +102,11 @@ endif
 ifneq ($(CLANG_CPUV4),)
 TEST_GEN_PROGS += test_progs-cpuv4
 TEST_INST_SUBDIRS += cpuv4
+endif
+
+ifneq ($(CLANG_CPUV5),)
+TEST_GEN_PROGS += test_progs-cpuv5
+TEST_INST_SUBDIRS += cpuv5
 endif
 
 TEST_FILES = xsk_prereqs.sh $(wildcard progs/btf_dump_test_case_*.c)
@@ -470,6 +479,11 @@ define CLANG_CPUV4_BPF_BUILD_RULE
 	$(call msg,CLNG-BPF,$4,$2)
 	$(Q)$(CLANG) $3 -O2 $(BPF_TARGET_ENDIAN) -c $1 -mcpu=v4 -o $2
 endef
+# Similar to CLANG_BPF_BUILD_RULE, but with cpu-v5
+define CLANG_CPUV5_BPF_BUILD_RULE
+	$(call msg,CLNG-BPF,$4,$2)
+	$(Q)$(CLANG) $3 -O2 $(BPF_TARGET_ENDIAN) -c $1 -mcpu=v5 -o $2
+endef
 # Build BPF object using GCC
 define GCC_BPF_BUILD_RULE
 	$(call msg,GCC-BPF,$4,$2)
@@ -777,6 +791,13 @@ TRUNNER_BPF_CFLAGS := $(BPF_CFLAGS) $(CLANG_CFLAGS) -DENABLE_ATOMICS_TESTS
 $(eval $(call DEFINE_TEST_RUNNER,test_progs,cpuv4))
 endif
 
+# Define test_progs-cpuv5 test runner.
+ifneq ($(CLANG_CPUV5),)
+TRUNNER_BPF_BUILD_RULE := CLANG_CPUV5_BPF_BUILD_RULE
+TRUNNER_BPF_CFLAGS := $(BPF_CFLAGS) $(CLANG_CFLAGS) -DENABLE_ATOMICS_TESTS
+$(eval $(call DEFINE_TEST_RUNNER,test_progs,cpuv5))
+endif
+
 # Define test_progs BPF-GCC-flavored test runner.
 ifneq ($(BPF_GCC),)
 TRUNNER_BPF_BUILD_RULE := GCC_BPF_BUILD_RULE
@@ -899,7 +920,7 @@ EXTRA_CLEAN := $(SCRATCH_DIR) $(HOST_SCRATCH_DIR)			\
 	feature bpftool $(TEST_KMOD_TARGETS)				\
 	$(addprefix $(OUTPUT)/,*.o *.d *.skel.h *.lskel.h *.subskel.h	\
 			       *.BTF *.BTF_ids *.BTF.base		\
-			       no_alu32 cpuv4 bpf_gcc			\
+			       no_alu32 cpuv4 cpuv5 bpf_gcc		\
 			       liburandom_read.so)			\
 	$(OUTPUT)/FEATURE-DUMP.selftests
 
