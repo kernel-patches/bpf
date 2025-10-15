@@ -7,6 +7,7 @@
 #include <bpf/bpf_core_read.h>
 #include "bpf_misc.h"
 #include "bpf_experimental.h"
+#include "bpf_tracing_net.h"
 
 extern void bpf_rcu_read_lock(void) __ksym;
 extern void bpf_rcu_read_unlock(void) __ksym;
@@ -565,6 +566,165 @@ err_out:
 	/* No explicit bpf_rcu_read_unlock */
 	if (m)
 		bpf_obj_drop(m);
+	return 0;
+}
+
+private(leak) u64 ref;
+
+static u32 probe_read_refcount(void)
+{
+	u32 refcnt;
+
+	bpf_probe_read_kernel(&refcnt, sizeof(refcnt), (void *) ref);
+	return refcnt;
+}
+
+static int __insert_in_list(struct bpf_list_head *head, struct bpf_spin_lock *lock,
+			    struct node_data __kptr **node)
+{
+	struct node_data *n, *m;
+
+	n = bpf_obj_new(typeof(*n));
+	if (!n)
+		return -1;
+
+	m = bpf_refcount_acquire(n);
+	n = bpf_kptr_xchg(node, n);
+	if (n) {
+		bpf_obj_drop(n);
+		bpf_obj_drop(m);
+		return -2;
+	}
+
+	bpf_spin_lock(lock);
+	bpf_list_push_front(head, &m->l);
+	ref = (u64)(void *) &m->ref;
+	bpf_spin_unlock(lock);
+	return probe_read_refcount();
+}
+
+static void *__lookup_map(void *map)
+{
+	int key = 0;
+
+	return bpf_map_lookup_elem(map, &key);
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+	__type(key, int);
+	__type(value, struct map_value);
+	__uint(max_entries, 1);
+} pcpu_hash SEC(".maps");
+
+SEC("tc")
+int pcpu_hash_refcount_leak(void *ctx)
+{
+	struct map_value *v;
+
+	v = __lookup_map(&pcpu_hash);
+	if (!v)
+		return 0;
+
+	return __insert_in_list(&head, &lock, &v->node);
+}
+
+SEC("tc")
+int check_pcpu_hash_refcount(void *ctx)
+{
+	return probe_read_refcount();
+}
+
+struct lock_map_value {
+	struct node_data __kptr *node;
+	struct bpf_spin_lock lock;
+	int value;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__type(key, int);
+	__type(value, struct lock_map_value);
+	__uint(max_entries, 1);
+} lock_hash SEC(".maps");
+
+SEC("tc")
+int hash_lock_refcount_leak(void *ctx)
+{
+	struct lock_map_value *v;
+
+	v = __lookup_map(&lock_hash);
+	if (!v)
+		return 0;
+
+	bpf_spin_lock(&v->lock);
+	v->value = 42;
+	bpf_spin_unlock(&v->lock);
+	return __insert_in_list(&head, &lock, &v->node);
+}
+
+SEC("tc")
+int check_hash_lock_refcount(void *ctx)
+{
+	return probe_read_refcount();
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_CGRP_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, int);
+	__type(value, struct lock_map_value);
+} cgrp_strg SEC(".maps");
+
+SEC("cgroup/connect6")
+int cgroup_storage_refcount_leak(struct bpf_sock_addr *ctx)
+{
+	struct lock_map_value *v;
+	struct tcp_sock *tsk;
+	struct bpf_sock *sk;
+	u32 refcnt;
+
+	if (ctx->family != AF_INET6 || ctx->user_family != AF_INET6)
+		return 1;
+
+	sk = ctx->sk;
+	if (!sk)
+		return 1;
+
+	tsk = bpf_skc_to_tcp_sock(sk);
+	if (!tsk)
+		return 1;
+
+	v = bpf_cgrp_storage_get(&cgrp_strg, tsk->inet_conn.icsk_inet.sk.sk_cgrp_data.cgroup, 0,
+				 BPF_LOCAL_STORAGE_GET_F_CREATE);
+	if (!v)
+		return 1;
+
+	refcnt = __insert_in_list(&head, &lock, &v->node);
+	bpf_spin_lock(&v->lock);
+	v->value = refcnt;
+	bpf_spin_unlock(&v->lock);
+	return 1;
+}
+
+SEC("fexit/inet_stream_connect")
+int BPF_PROG(check_cgroup_storage_refcount, struct socket *sock, struct sockaddr *uaddr, int addr_len,
+	     int flags)
+{
+	struct lock_map_value *v;
+	u32 refcnt;
+
+	if (uaddr->sa_family != AF_INET6)
+		return 0;
+
+	v = bpf_cgrp_storage_get(&cgrp_strg, sock->sk->sk_cgrp_data.cgroup, 0, 0);
+	if (!v)
+		return 0;
+
+	refcnt = probe_read_refcount();
+	bpf_spin_lock(&v->lock);
+	v->value = refcnt;
+	bpf_spin_unlock(&v->lock);
 	return 0;
 }
 
