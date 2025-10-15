@@ -568,4 +568,133 @@ err_out:
 	return 0;
 }
 
+private(kptr_ref) u64 ref;
+u32 kptr_refcount;
+
+static int probe_read_refcount(void)
+{
+	bpf_probe_read_kernel(&kptr_refcount, sizeof(kptr_refcount), (void *) ref);
+	return 0;
+}
+
+static int __insert_in_list(struct bpf_list_head *head, struct bpf_spin_lock *lock,
+			    struct node_data __kptr **node)
+{
+	struct node_data *n, *m;
+
+	n = bpf_obj_new(typeof(*n));
+	if (!n)
+		return 0;
+
+	m = bpf_refcount_acquire(n);
+	n = bpf_kptr_xchg(node, n);
+	if (n) {
+		bpf_obj_drop(n);
+		bpf_obj_drop(m);
+		return 0;
+	}
+
+	bpf_spin_lock(lock);
+	bpf_list_push_front(head, &m->l);
+	ref = (u64)(void *) &m->ref;
+	bpf_spin_unlock(lock);
+	return probe_read_refcount();
+}
+
+static void *__lookup_map(void *map)
+{
+	int key = 0;
+
+	return bpf_map_lookup_elem(map, &key);
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+	__type(key, int);
+	__type(value, struct map_value);
+	__uint(max_entries, 1);
+} pcpu_hash SEC(".maps");
+
+SEC("tc")
+int pcpu_hash_refcount_leak(void *ctx)
+{
+	struct map_value *v;
+
+	v = __lookup_map(&pcpu_hash);
+	if (!v)
+		return 0;
+
+	return __insert_in_list(&head, &lock, &v->node);
+}
+
+SEC("tc")
+int check_pcpu_hash_refcount(void *ctx)
+{
+	return probe_read_refcount();
+}
+
+struct lock_map_value {
+	struct node_data __kptr *node;
+	struct bpf_spin_lock lock;
+	int value;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__type(key, int);
+	__type(value, struct lock_map_value);
+	__uint(max_entries, 1);
+} lock_hash SEC(".maps");
+
+SEC("tc")
+int hash_lock_refcount_leak(void *ctx)
+{
+	struct lock_map_value *v;
+
+	v = __lookup_map(&lock_hash);
+	if (!v)
+		return 0;
+
+	bpf_spin_lock(&v->lock);
+	v->value = 42;
+	bpf_spin_unlock(&v->lock);
+	return __insert_in_list(&head, &lock, &v->node);
+}
+
+SEC("tc")
+int check_hash_lock_refcount(void *ctx)
+{
+	return probe_read_refcount();
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_CGRP_STORAGE);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, int);
+	__type(value, struct lock_map_value);
+} cgrp_strg SEC(".maps");
+
+SEC("syscall")
+int BPF_PROG(cgroup_storage_lock_refcount_leak)
+{
+	struct lock_map_value *v;
+	struct task_struct *task;
+
+	task = bpf_get_current_task_btf();
+	bpf_rcu_read_lock();
+	v = bpf_cgrp_storage_get(&cgrp_strg, task->cgroups->dfl_cgrp, 0,
+				 BPF_LOCAL_STORAGE_GET_F_CREATE);
+	bpf_rcu_read_unlock();
+	if (!v)
+		return 0;
+
+	return __insert_in_list(&head, &lock, &v->node);
+}
+
+SEC("syscall")
+int BPF_PROG(check_cgroup_storage_lock_refcount)
+{
+	return probe_read_refcount();
+}
+
 char _license[] SEC("license") = "GPL";
