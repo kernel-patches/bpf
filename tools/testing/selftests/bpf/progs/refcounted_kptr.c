@@ -568,4 +568,74 @@ err_out:
 	return 0;
 }
 
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+	__type(key, int);
+	__type(value, struct map_value);
+	__uint(max_entries, 1);
+} pcpu_hash SEC(".maps");
+
+private(leak) u64 ref_ptr;
+
+static u32 __probe_read_refcount(void)
+{
+	u32 refcnt;
+
+	bpf_probe_read_kernel(&refcnt, sizeof(refcnt), (void *) ref_ptr);
+	return refcnt;
+}
+
+static long __insert_in__list(struct bpf_list_head *head,
+			      struct bpf_spin_lock *lock,
+			      struct map_value *v)
+{
+	struct node_data *n, *m;
+	void *ref;
+
+	n = bpf_obj_new(typeof(*n));
+	if (!n)
+		return -1;
+
+	m = bpf_refcount_acquire(n);
+	n = bpf_kptr_xchg(&v->node, n);
+	if (n) {
+		bpf_obj_drop(n);
+		bpf_obj_drop(m);
+		return -2;
+	}
+
+	bpf_spin_lock(lock);
+	bpf_list_push_front(head, &m->l);
+	ref = (void *) &m->ref;
+	bpf_spin_unlock(lock);
+
+	ref_ptr = (u64) ref;
+	return __probe_read_refcount();
+}
+
+SEC("tc")
+long list_refcounted_node_ref_leak(void *ctx)
+{
+	struct map_value *v;
+	int key = 0;
+
+	v = bpf_map_lookup_elem(&pcpu_hash, &key);
+	if (!v)
+		return 0;
+
+	return __insert_in__list(&head, &lock, v);
+}
+
+SEC("tc")
+long check_list_refcounted_node_ref_leak(void *ctx)
+{
+	struct map_value *v;
+	int key = 0;
+
+	v = bpf_map_lookup_elem(&pcpu_hash, &key);
+	if (v && v->node == NULL)
+		return __probe_read_refcount();
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
