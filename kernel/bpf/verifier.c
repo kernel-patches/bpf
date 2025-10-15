@@ -19773,6 +19773,7 @@ static void clean_func_state(struct bpf_verifier_env *env,
 			     u32 ip)
 {
 	u16 live_regs = env->insn_aux_data[ip].live_regs_before;
+	u64 live_spills = env->insn_aux_data[ip].live_spills_before;
 	int i, j;
 
 	for (i = 0; i < BPF_REG_FP; i++) {
@@ -19783,6 +19784,10 @@ static void clean_func_state(struct bpf_verifier_env *env,
 			 */
 			__mark_reg_not_init(env, &st->regs[i]);
 	}
+
+	for (i = MAX_BPF_REG; i < st->regs_cnt; i++)
+		if (!(live_spills & BIT(i - MAX_BPF_REG)))
+			__mark_reg_not_init(env, &st->regs[i]);
 
 	for (i = 0; i < st->allocated_stack / BPF_REG_SIZE; i++) {
 		if (!bpf_stack_slot_alive(env, st->frameno, i)) {
@@ -20329,6 +20334,7 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 			      struct bpf_func_state *cur, u32 insn_idx, enum exact_level exact)
 {
 	u16 live_regs = env->insn_aux_data[insn_idx].live_regs_before;
+	u16 live_spills = env->insn_aux_data[insn_idx].live_spills_before;
 	u16 i;
 
 	if (old->callback_depth > cur->callback_depth)
@@ -20336,7 +20342,8 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 
 	for (i = 0; i < old->regs_cnt; i++) {
 		/* Ignore dead registers. */
-		if (!(BIT(i) & live_regs))
+		if ((i <  MAX_BPF_REG && !(BIT(i) & live_regs)) ||
+		    (i >= MAX_BPF_REG && !(BIT(i - MAX_BPF_REG) & live_spills)))
 			continue;
 		/* Not equal, if cur has less alive regs than old. */
 		if (i >= cur->regs_cnt)
@@ -25734,6 +25741,10 @@ struct insn_live_regs {
 	u16 def;	/* registers written by instruction */
 	u16 in;		/* registers that may be alive before instruction */
 	u16 out;	/* registers that may be alive after instruction */
+	u64 spill_use;
+	u64 spill_def;
+	u64 spill_in;
+	u64 spill_out;
 };
 
 /* Bitmask with 1s for all caller saved registers */
@@ -25770,6 +25781,11 @@ static void compute_insn_live_regs(struct bpf_verifier_env *env,
 		}
 		break;
 	case BPF_LDX:
+		if (is_spill_base_ldx(insn)) {
+			info->def = dst;
+			info->spill_use = BIT(spill_base_idx(insn));
+			return;
+		}
 		switch (mode) {
 		case BPF_MEM:
 		case BPF_MEMSX:
@@ -25787,6 +25803,11 @@ static void compute_insn_live_regs(struct bpf_verifier_env *env,
 		}
 		break;
 	case BPF_STX:
+		if (is_spill_base_stx(insn)) {
+			info->use = src;
+			info->spill_def = BIT(spill_base_idx(insn));
+			return;
+		}
 		switch (mode) {
 		case BPF_MEM:
 			def = 0;
@@ -25891,6 +25912,7 @@ static int compute_live_registers(struct bpf_verifier_env *env)
 	int insn_cnt = env->prog->len;
 	int err = 0, i, j;
 	bool changed;
+	bool spills;
 
 	/* Use the following algorithm:
 	 * - define the following:
@@ -25929,21 +25951,33 @@ static int compute_live_registers(struct bpf_verifier_env *env)
 			struct bpf_iarray *succ;
 			u16 new_out = 0;
 			u16 new_in = 0;
+			u64 new_spill_out = 0;
+			u64 new_spill_in = 0;
 
 			succ = bpf_insn_successors(env, insn_idx);
-			for (int s = 0; s < succ->cnt; ++s)
+			for (int s = 0; s < succ->cnt; ++s) {
 				new_out |= state[succ->items[s]].in;
+				new_spill_out |= state[succ->items[s]].spill_in;
+			}
 			new_in = (new_out & ~live->def) | live->use;
-			if (new_out != live->out || new_in != live->in) {
+			new_spill_in = (new_spill_out & ~live->spill_def) | live->spill_use;
+			if (new_out != live->out || new_in != live->in ||
+			    new_spill_out != live->spill_out || new_spill_in != live->spill_in) {
 				live->in = new_in;
 				live->out = new_out;
+				live->spill_in = new_spill_in;
+				live->spill_out = new_spill_out;
 				changed = true;
 			}
 		}
 	}
 
-	for (i = 0; i < insn_cnt; ++i)
+	spills = false;
+	for (i = 0; i < insn_cnt; ++i) {
 		insn_aux[i].live_regs_before = state[i].in;
+		insn_aux[i].live_spills_before = state[i].spill_in;
+		spills |= !!state[i].spill_in;
+	}
 
 	if (env->log.level & BPF_LOG_LEVEL2) {
 		verbose(env, "Live regs before insn:\n");
@@ -25959,6 +25993,8 @@ static int compute_live_registers(struct bpf_verifier_env *env)
 				else
 					verbose(env, ".");
 			verbose(env, " ");
+			if (spills)
+				verbose(env, "%016llx ", insn_aux[i].live_spills_before);
 			verbose_insn(env, &insns[i]);
 			if (bpf_is_ldimm64(&insns[i]))
 				i++;
