@@ -219,6 +219,19 @@ do {									\
 	(typeof(*ptr))VAL;						\
 })
 
+#define SMP_TIMEOUT_POLL_COUNT	1
+
+/* Re-declared here to avoid include dependency. */
+extern bool arch_timer_evtstrm_available(void);
+
+#define cpu_poll_relax(ptr, val)					\
+do {									\
+	if (arch_timer_evtstrm_available())				\
+		__cmpwait_relaxed(ptr, val);				\
+	else								\
+		cpu_relax();						\
+} while (0)
+
 #include <asm-generic/barrier.h>
 
 #endif	/* __ASSEMBLY__ */
