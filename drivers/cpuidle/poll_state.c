@@ -8,36 +8,23 @@
 #include <linux/sched/clock.h>
 #include <linux/sched/idle.h>
 
-#define POLL_IDLE_RELAX_COUNT	200
-
 static int __cpuidle poll_idle(struct cpuidle_device *dev,
 			       struct cpuidle_driver *drv, int index)
 {
-	u64 time_start;
-
-	time_start = local_clock_noinstr();
+	u64 time_end;
+	u32 flags = 0;
 
 	dev->poll_time_limit = false;
 
+	time_end = local_clock_noinstr() + cpuidle_poll_time(drv, dev);
+
 	raw_local_irq_enable();
-	if (!current_set_polling_and_test()) {
-		unsigned int loop_count = 0;
-		u64 limit;
+	if (!current_set_polling_and_test())
+		flags = smp_cond_load_relaxed_timeout(&current_thread_info()->flags,
+						      (VAL & _TIF_NEED_RESCHED),
+						      (local_clock_noinstr() >= time_end));
+	dev->poll_time_limit = !(flags & _TIF_NEED_RESCHED);
 
-		limit = cpuidle_poll_time(drv, dev);
-
-		while (!need_resched()) {
-			cpu_relax();
-			if (loop_count++ < POLL_IDLE_RELAX_COUNT)
-				continue;
-
-			loop_count = 0;
-			if (local_clock_noinstr() - time_start > limit) {
-				dev->poll_time_limit = true;
-				break;
-			}
-		}
-	}
 	raw_local_irq_disable();
 
 	current_clr_polling();
