@@ -423,7 +423,8 @@ cleanup:
 
 static void burn_cpu(void)
 {
-	volatile int j = 0;
+	/* To avoid a -Wunused-but-set-variable warning. */
+	__maybe_unused volatile int j = 0;
 	cpu_set_t cpu_set;
 	int i, err;
 

@@ -49,7 +49,8 @@ static bool find_vma_pe_condition(struct find_vma *skel)
 static void test_find_vma_pe(struct find_vma *skel)
 {
 	struct bpf_link *link = NULL;
-	volatile int j = 0;
+	/* To avoid a -Wunused-but-set-variable warning. */
+	__maybe_unused volatile int j = 0;
 	int pfd, i;
 	const int one_bn = 1000000000;
 

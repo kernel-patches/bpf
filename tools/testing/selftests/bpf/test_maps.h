@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <linux/compiler.h>
 
 #define CHECK(condition, tag, format...) ({				\
 	int __ret = !!(condition);					\

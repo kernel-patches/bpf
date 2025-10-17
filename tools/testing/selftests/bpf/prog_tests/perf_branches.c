@@ -64,7 +64,8 @@ static void test_perf_branches_common(int perf_fd,
 	int err, i, duration = 0;
 	bool detached = false;
 	struct bpf_link *link;
-	volatile int j = 0;
+	/* To avoid a -Wunused-but-set-variable warning. */
+	__maybe_unused volatile int j = 0;
 	cpu_set_t cpu_set;
 
 	skel = test_perf_branches__open_and_load();

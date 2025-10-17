@@ -16,6 +16,7 @@
 #include <linux/types.h>
 typedef __u16 __sum16;
 #include <arpa/inet.h>
+#include <linux/compiler.h>
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
 #include <linux/ip.h>
