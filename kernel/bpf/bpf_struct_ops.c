@@ -528,6 +528,7 @@ static void bpf_struct_ops_map_put_progs(struct bpf_struct_ops_map *st_map)
 	for (i = 0; i < st_map->funcs_cnt; i++) {
 		if (!st_map->links[i])
 			break;
+		bpf_prog_disassoc_struct_ops(st_map->links[i]->prog);
 		bpf_link_put(st_map->links[i]);
 		st_map->links[i] = NULL;
 	}
@@ -798,6 +799,12 @@ static long bpf_struct_ops_map_update_elem(struct bpf_map *map, void *key,
 		    prog->expected_attach_type != i) {
 			bpf_prog_put(prog);
 			err = -EINVAL;
+			goto reset_unlock;
+		}
+
+		err = bpf_prog_assoc_struct_ops(prog, &st_map->map);
+		if (err) {
+			bpf_prog_put(prog);
 			goto reset_unlock;
 		}
 
@@ -1393,6 +1400,69 @@ err_out:
 	kfree(link);
 	return err;
 }
+
+int bpf_prog_assoc_struct_ops(struct bpf_prog *prog, struct bpf_map *map)
+{
+	guard(mutex)(&prog->aux->st_ops_assoc_mutex);
+
+	if (prog->aux->st_ops_assoc && prog->aux->st_ops_assoc != map) {
+		if (prog->type == BPF_PROG_TYPE_STRUCT_OPS) {
+			WRITE_ONCE(prog->aux->st_ops_assoc, BPF_PTR_POISON);
+			return 0;
+		}
+
+		return -EBUSY;
+	}
+
+	if (prog->type != BPF_PROG_TYPE_STRUCT_OPS)
+		bpf_map_inc(map);
+
+	WRITE_ONCE(prog->aux->st_ops_assoc, map);
+	return 0;
+}
+
+void bpf_prog_disassoc_struct_ops(struct bpf_prog *prog)
+{
+	struct bpf_map *map;
+
+	guard(mutex)(&prog->aux->st_ops_assoc_mutex);
+
+	map = READ_ONCE(prog->aux->st_ops_assoc);
+	if (!map || map == BPF_PTR_POISON)
+		return;
+
+	if (prog->type != BPF_PROG_TYPE_STRUCT_OPS)
+		bpf_map_put(map);
+
+	WRITE_ONCE(prog->aux->st_ops_assoc, NULL);
+}
+
+/*
+ * Get a pointer to the struct_ops struct (i.e., kdata) associated with a
+ * program.
+ *
+ * If the returned pointer is not NULL, it must points to a valid and
+ * initialized struct_ops. The struct_ops may or may not be attached.
+ * Kernel struct_ops implementers are responsible for tracking and checking
+ * the state of the struct_ops if the use case requires an attached struct_ops.
+ */
+void *bpf_prog_get_assoc_struct_ops(const struct bpf_prog_aux *aux)
+{
+	struct bpf_struct_ops_map *st_map;
+	struct bpf_map *map;
+
+	map = READ_ONCE(aux->st_ops_assoc);
+	if (!map || map == BPF_PTR_POISON)
+		return NULL;
+
+	st_map = (struct bpf_struct_ops_map *)map;
+
+	if (smp_load_acquire(&st_map->kvalue.common.state) == BPF_STRUCT_OPS_STATE_INIT)
+		return NULL;
+
+	return &st_map->kvalue.data;
+}
+EXPORT_SYMBOL_GPL(bpf_prog_get_assoc_struct_ops);
 
 void bpf_map_struct_ops_info_fill(struct bpf_map_info *info, struct bpf_map *map)
 {
