@@ -609,6 +609,7 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 		if (old_sdata && selem_linked_to_storage_lockless(SELEM(old_sdata))) {
 			copy_map_value_locked(&smap->map, old_sdata->data,
 					      value, false);
+			bpf_obj_free_fields(smap->map.record, old_sdata->data);
 			return old_sdata;
 		}
 	}
@@ -641,6 +642,7 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 	if (old_sdata && (map_flags & BPF_F_LOCK)) {
 		copy_map_value_locked(&smap->map, old_sdata->data, value,
 				      false);
+		bpf_obj_free_fields(smap->map.record, old_sdata->data);
 		selem = SELEM(old_sdata);
 		goto unlock;
 	}
@@ -654,6 +656,7 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 
 	/* Third, remove old selem, SELEM(old_sdata) */
 	if (old_sdata) {
+		bpf_obj_free_fields(smap->map.record, old_sdata->data);
 		bpf_selem_unlink_map(SELEM(old_sdata));
 		bpf_selem_unlink_storage_nolock(local_storage, SELEM(old_sdata),
 						true, &old_selem_free_list);
