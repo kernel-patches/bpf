@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /* Copyright (c) 2023 Isovalent */
-#ifndef TC_HELPERS
-#define TC_HELPERS
+#ifndef TCX_HELPERS
+#define TCX_HELPERS
 #include <test_progs.h>
 
 #ifndef loopback
@@ -42,7 +42,7 @@ static inline void assert_mprog_count_ifindex(int ifindex, int target, int expec
 	__assert_mprog_count(target, expected, ifindex);
 }
 
-static inline void tc_skel_reset_all_seen(struct test_tc_link *skel)
+static inline void tcx_skel_reset_all_seen(struct test_tc_link *skel)
 {
 	memset(skel->bss, 0, sizeof(*skel->bss));
 }
