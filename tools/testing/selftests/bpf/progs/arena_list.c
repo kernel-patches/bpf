@@ -76,7 +76,7 @@ int arena_list_del(void *ctx)
 		sum += n->value;
 		arena_sum += n->value;
 		list_del(&n->node);
-		bpf_free(n);
+		//bpf_free(n);
 	}
 	list_sum = sum;
 #else
