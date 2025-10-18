@@ -3109,6 +3109,148 @@ static int invoke_bpf_mod_ret(const struct btf_func_model *m, u8 **pprog,
 	return 0;
 }
 
+static int invoke_bpf_session_entry(const struct btf_func_model *m, u8 **pprog,
+				    struct bpf_tramp_links *tl, int stack_size,
+				    int run_ctx_off, int ret_off, int sflags_off,
+				    int cookies_off, void *image, void *rw_image)
+{
+	int i, j = 0, cur_cookie_off;
+	u64 session_flags;
+	u8 *prog = *pprog;
+	u8 *jmp_insn;
+
+	/* clear the session flags:
+	 *   xor rax, rax
+	 *   mov QWORD PTR [rbp - sflags_off], rax
+	 */
+	EMIT3(0x48, 0x31, 0xC0);
+	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -sflags_off);
+	/*
+	 * clear the return value to make sure bpf_get_func_ret() always
+	 * get 0 in fentry:
+	 *   mov QWORD PTR [rbp - 0x8], rax
+	 */
+	emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -ret_off);
+	/* clear all the cookies in the cookie array */
+	for (i = 0; i < tl->nr_links; i++) {
+		if (tl->links[i]->link.prog->call_session_cookie) {
+			cur_cookie_off = -cookies_off + j * 8;
+			/* mov QWORD PTR [rbp - sflags_off], rax */
+			emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0,
+				 cur_cookie_off);
+			j++;
+		}
+	}
+
+	j = 0;
+	for (i = 0; i < tl->nr_links; i++) {
+		if (tl->links[i]->link.prog->call_session_cookie) {
+			cur_cookie_off = -cookies_off + j * 8;
+			/*
+			 * save the cookie address to rbp - sflags_off + 8:
+			 *   lea rax, [rbp - cur_cookie_off]
+			 *   mov QWORD PTR [rbp - sflags_off + 8], rax
+			 */
+			if (!is_imm8(cur_cookie_off))
+				EMIT3_off32(0x48, 0x8D, 0x85, cur_cookie_off);
+			else
+				EMIT4(0x48, 0x8D, 0x45, cur_cookie_off);
+			emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -sflags_off + 8);
+			j++;
+		}
+		if (invoke_bpf_prog(m, &prog, tl->links[i], stack_size, run_ctx_off, true,
+				    ret_off, image, rw_image))
+			return -EINVAL;
+
+		/* fentry prog stored return value into [rbp - 8]. Emit:
+		 * if (*(u64 *)(rbp - ret_off) !=  0) {
+		 *	*(u64 *)(rbp - sflags_off) |= (1 << (i + 1));
+		 *	*(u64 *)(rbp - ret_off) = 0;
+		 * }
+		 */
+		/* cmp QWORD PTR [rbp - ret_off], 0x0 */
+		EMIT4(0x48, 0x83, 0x7d, -ret_off); EMIT1(0x00);
+		/* emit 2 nops that will be replaced with JE insn */
+		jmp_insn = prog;
+		emit_nops(&prog, 2);
+
+		session_flags = (1ULL << (i + 1));
+		/* mov rax, $session_flags */
+		emit_mov_imm64(&prog, BPF_REG_0, session_flags >> 32, (u32) session_flags);
+		/* or QWORD PTR [rbp - sflags_off], rax */
+		EMIT2(0x48, 0x09);
+		emit_insn_suffix(&prog, BPF_REG_FP, BPF_REG_0, -sflags_off);
+
+		/* mov QWORD PTR [rbp - ret_off], 0x0 */
+		EMIT4(0x48, 0xC7, 0x45, -ret_off); EMIT4(0x00, 0x00, 0x00, 0x00);
+
+		jmp_insn[0] = X86_JE;
+		jmp_insn[1] = prog - jmp_insn - 2;
+	}
+
+	*pprog = prog;
+	return 0;
+}
+
+static int invoke_bpf_session_exit(const struct btf_func_model *m, u8 **pprog,
+				   struct bpf_tramp_links *tl, int stack_size,
+				   int run_ctx_off, int ret_off, int sflags_off,
+				   int cookies_off, void *image, void *rw_image)
+{
+	int i, j = 0, cur_cookie_off;
+	u64 session_flags;
+	u8 *prog = *pprog;
+	u8 *jmp_insn;
+
+	/*
+	 * set the bpf_trace_is_exit flag to the session flags:
+	 *   mov rax, 1
+	 *   or QWORD PTR [rbp - sflags_off], rax
+	 */
+	emit_mov_imm32(&prog, false, BPF_REG_0, 1);
+	EMIT2(0x48, 0x09);
+	emit_insn_suffix(&prog, BPF_REG_FP, BPF_REG_0, -sflags_off);
+
+	for (i = 0; i < tl->nr_links; i++) {
+		if (tl->links[i]->link.prog->call_session_cookie) {
+			cur_cookie_off = -cookies_off + j * 8;
+			/*
+			 * save the cookie address to rbp - sflags_off + 8:
+			 *   lea rax, [rbp - cur_cookie_off]
+			 *   mov QWORD PTR [rbp - sflags_off + 8], rax
+			 */
+			if (!is_imm8(cur_cookie_off))
+				EMIT3_off32(0x48, 0x8D, 0x85, cur_cookie_off);
+			else
+				EMIT4(0x48, 0x8D, 0x45, cur_cookie_off);
+			emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -sflags_off + 8);
+			j++;
+		}
+		/* check if (1 << (i+1)) is set in the session flags, and
+		 * skip the execution of the fexit program if it is.
+		 */
+		session_flags = 1ULL << (i + 1);
+		/* mov rax, $session_flags */
+		emit_mov_imm64(&prog, BPF_REG_0, session_flags >> 32, (u32) session_flags);
+		/* test QWORD PTR [rbp - sflags_off], rax */
+		EMIT2(0x48, 0x85);
+		emit_insn_suffix(&prog, BPF_REG_FP, BPF_REG_0, -sflags_off);
+		/* emit 2 nops that will be replaced with JE insn */
+		jmp_insn = prog;
+		emit_nops(&prog, 2);
+
+		if (invoke_bpf_prog(m, &prog, tl->links[i], stack_size, run_ctx_off, false,
+				    ret_off, image, rw_image))
+			return -EINVAL;
+
+		jmp_insn[0] = X86_JNE;
+		jmp_insn[1] = prog - jmp_insn - 2;
+	}
+
+	*pprog = prog;
+	return 0;
+}
+
 /* mov rax, qword ptr [rbp - rounded_stack_depth - 8] */
 #define LOAD_TRAMP_TAIL_CALL_CNT_PTR(stack)	\
 	__LOAD_TCC_PTR(-round_up(stack, 8) - 8)
@@ -3181,8 +3323,9 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 {
 	int i, ret, nr_regs = m->nr_args, stack_size = 0;
 	int ret_off, regs_off, nregs_off, ip_off, run_ctx_off, arg_stack_off,
-	    rbx_off;
+	    rbx_off, sflags_off = 0, cookies_off;
 	struct bpf_tramp_links *fentry = &tlinks[BPF_TRAMP_FENTRY];
+	struct bpf_tramp_links *session = &tlinks[BPF_TRAMP_SESSION];
 	struct bpf_tramp_links *fexit = &tlinks[BPF_TRAMP_FEXIT];
 	struct bpf_tramp_links *fmod_ret = &tlinks[BPF_TRAMP_MODIFY_RETURN];
 	void *orig_call = func_addr;
@@ -3215,6 +3358,9 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	 * RBP + 8         [ return address  ]
 	 * RBP + 0         [ RBP             ]
 	 *
+	 *                  [ cookie ptr ] tracing session
+	 * RBP - sflags_off [ session flags ] tracing session
+	 *
 	 * RBP - ret_off   [ return value    ]  BPF_TRAMP_F_CALL_ORIG or
 	 *                                      BPF_TRAMP_F_RET_FENTRY_RET flags
 	 *
@@ -3230,12 +3376,22 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	 *
 	 * RBP - run_ctx_off [ bpf_tramp_run_ctx ]
 	 *
+	 *                   [ session cookieN ]
+	 *                   [ ... ]
+	 * RBP - cookies_off [ session cookie1 ] tracing session
+	 *
 	 *                     [ stack_argN ]  BPF_TRAMP_F_CALL_ORIG
 	 *                     [ ...        ]
 	 *                     [ stack_arg2 ]
 	 * RBP - arg_stack_off [ stack_arg1 ]
 	 * RSP                 [ tail_call_cnt_ptr ] BPF_TRAMP_F_TAIL_CALL_CTX
 	 */
+
+	/* room for session flags and cookie ptr */
+	if (session->nr_links) {
+		stack_size += 8 + 8;
+		sflags_off = stack_size;
+	}
 
 	/* room for return value of orig_call or fentry prog */
 	save_ret = flags & (BPF_TRAMP_F_CALL_ORIG | BPF_TRAMP_F_RET_FENTRY_RET);
@@ -3260,6 +3416,14 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 
 	stack_size += (sizeof(struct bpf_tramp_run_ctx) + 7) & ~0x7;
 	run_ctx_off = stack_size;
+
+	if (session->nr_links) {
+		for (i = 0; i < session->nr_links; i++) {
+			if (session->links[i]->link.prog->call_session_cookie)
+				stack_size += 8;
+		}
+	}
+	cookies_off = stack_size;
 
 	if (nr_regs > 6 && (flags & BPF_TRAMP_F_CALL_ORIG)) {
 		/* the space that used to pass arguments on-stack */
@@ -3349,6 +3513,13 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 			return -EINVAL;
 	}
 
+	if (session->nr_links) {
+		if (invoke_bpf_session_entry(m, &prog, session, regs_off,
+					     run_ctx_off, ret_off, sflags_off,
+					     cookies_off, image, rw_image))
+			return -EINVAL;
+	}
+
 	if (fmod_ret->nr_links) {
 		branches = kcalloc(fmod_ret->nr_links, sizeof(u8 *),
 				   GFP_KERNEL);
@@ -3409,6 +3580,15 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	if (fexit->nr_links) {
 		if (invoke_bpf(m, &prog, fexit, regs_off, run_ctx_off,
 			       false, ret_off, image, rw_image)) {
+			ret = -EINVAL;
+			goto cleanup;
+		}
+	}
+
+	if (session->nr_links) {
+		if (invoke_bpf_session_exit(m, &prog, session, regs_off,
+					    run_ctx_off, ret_off, sflags_off,
+					    cookies_off, image, rw_image)) {
 			ret = -EINVAL;
 			goto cleanup;
 		}
@@ -3482,9 +3662,6 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 	void *rw_image, *tmp;
 	int ret;
 	u32 size = image_end - image;
-
-	if (tlinks[BPF_TRAMP_SESSION].nr_links)
-		return -EOPNOTSUPP;
 
 	/* rw_image doesn't need to be in module memory range, so we can
 	 * use kvmalloc.
