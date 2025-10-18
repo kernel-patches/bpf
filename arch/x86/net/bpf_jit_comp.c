@@ -3082,12 +3082,17 @@ static int emit_cond_near_jump(u8 **pprog, void *func, void *ip, u8 jmp_cond)
 static int invoke_bpf(const struct btf_func_model *m, u8 **pprog,
 		      struct bpf_tramp_links *tl, int stack_size,
 		      int run_ctx_off, bool save_ret, int ret_off,
-		      void *image, void *rw_image)
+		      void *image, void *rw_image, u64 nr_regs)
 {
-	int i;
+	int i, j = (nr_regs & 0xFF) + 1;
 	u8 *prog = *pprog;
 
 	for (i = 0; i < tl->nr_links; i++) {
+		if (tl->links[i]->link.prog->call_session_cookie) {
+			emit_st_r0_imm64(&prog, nr_regs + (j << BPF_TRAMP_M_COOKIE),
+					 stack_size + 8);
+			j++;
+		}
 		if (invoke_bpf_prog(m, &prog, tl->links[i], stack_size,
 				    run_ctx_off, save_ret, ret_off, image,
 				    rw_image))
@@ -3263,6 +3268,8 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	 * RSP                 [ tail_call_cnt_ptr ] BPF_TRAMP_F_TAIL_CALL_CTX
 	 */
 
+	/* room for session cookies, which follow the return value */
+	stack_size += bpf_fsession_cookie_cnt(tlinks) * 8;
 	/* room for return value of orig_call or fentry prog */
 	save_ret = flags & (BPF_TRAMP_F_CALL_ORIG | BPF_TRAMP_F_RET_FENTRY_RET);
 	if (save_ret)
@@ -3366,10 +3373,13 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		}
 	}
 
+	if (bpf_fsession_cnt(tlinks))
+		emit_st_r0_imm64(&prog, 0, ret_off);
+
 	if (fentry->nr_links) {
 		if (invoke_bpf(m, &prog, fentry, regs_off, run_ctx_off,
 			       flags & BPF_TRAMP_F_RET_FENTRY_RET, ret_off,
-			       image, rw_image))
+			       image, rw_image, nr_regs))
 			return -EINVAL;
 	}
 
@@ -3430,9 +3440,14 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		}
 	}
 
+	if (bpf_fsession_cnt(tlinks))
+		emit_st_r0_imm64(&prog, nr_regs + (1 << BPF_TRAMP_M_IS_RETURN),
+				 nregs_off);
+
 	if (fexit->nr_links) {
 		if (invoke_bpf(m, &prog, fexit, regs_off, run_ctx_off,
-			       false, ret_off, image, rw_image)) {
+			       false, ret_off, image, rw_image,
+			       nr_regs + (1 << BPF_TRAMP_M_IS_RETURN))) {
 			ret = -EINVAL;
 			goto cleanup;
 		}
