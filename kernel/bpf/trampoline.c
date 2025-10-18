@@ -111,7 +111,7 @@ bool bpf_prog_has_trampoline(const struct bpf_prog *prog)
 
 	return (ptype == BPF_PROG_TYPE_TRACING &&
 		(eatype == BPF_TRACE_FENTRY || eatype == BPF_TRACE_FEXIT ||
-		 eatype == BPF_MODIFY_RETURN)) ||
+		 eatype == BPF_MODIFY_RETURN || eatype == BPF_TRACE_SESSION)) ||
 		(ptype == BPF_PROG_TYPE_LSM && eatype == BPF_LSM_MAC);
 }
 
@@ -512,6 +512,8 @@ static enum bpf_tramp_prog_type bpf_attach_type_to_tramp(struct bpf_prog *prog)
 		return BPF_TRAMP_MODIFY_RETURN;
 	case BPF_TRACE_FEXIT:
 		return BPF_TRAMP_FEXIT;
+	case BPF_TRACE_SESSION:
+		return BPF_TRAMP_SESSION;
 	case BPF_LSM_MAC:
 		if (!prog->aux->attach_func_proto->type)
 			/* The function returns void, we cannot modify its
@@ -547,8 +549,9 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 				      struct bpf_trampoline *tr,
 				      struct bpf_prog *tgt_prog)
 {
-	enum bpf_tramp_prog_type kind;
+	enum bpf_tramp_prog_type kind, orig_kind;
 	struct bpf_tramp_link *link_exiting;
+	struct bpf_fsession_link *session_link;
 	int err = 0;
 	int cnt = 0, i;
 
@@ -573,24 +576,51 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 		return bpf_arch_text_poke(tr->func.addr, BPF_MOD_JUMP, NULL,
 					  link->link.prog->bpf_func);
 	}
+	orig_kind = kind;
+	if (orig_kind == BPF_TRAMP_SESSION)
+		cnt++;
 	if (cnt >= BPF_MAX_TRAMP_LINKS)
 		return -E2BIG;
 	if (!hlist_unhashed(&link->tramp_hlist))
 		/* prog already linked */
 		return -EBUSY;
+	if (orig_kind == BPF_TRAMP_SESSION)
+		kind = BPF_TRAMP_FENTRY;
+again:
 	hlist_for_each_entry(link_exiting, &tr->progs_hlist[kind], tramp_hlist) {
 		if (link_exiting->link.prog != link->link.prog)
 			continue;
 		/* prog already linked */
 		return -EBUSY;
 	}
+	if (orig_kind == BPF_TRAMP_SESSION && kind == BPF_TRAMP_FENTRY) {
+		kind = BPF_TRAMP_FEXIT;
+		goto again;
+	}
 
-	hlist_add_head(&link->tramp_hlist, &tr->progs_hlist[kind]);
-	tr->progs_cnt[kind]++;
+	if (orig_kind == BPF_TRAMP_SESSION) {
+		session_link = (void *)link;
+		hlist_add_head(&session_link->fentry.tramp_hlist,
+			       &tr->progs_hlist[BPF_TRAMP_FENTRY]);
+		hlist_add_head(&session_link->fexit.tramp_hlist,
+			       &tr->progs_hlist[BPF_TRAMP_FEXIT]);
+		tr->progs_cnt[BPF_TRAMP_FENTRY]++;
+		tr->progs_cnt[BPF_TRAMP_FEXIT]++;
+	} else {
+		hlist_add_head(&link->tramp_hlist, &tr->progs_hlist[kind]);
+		tr->progs_cnt[kind]++;
+	}
 	err = bpf_trampoline_update(tr, true /* lock_direct_mutex */);
 	if (err) {
-		hlist_del_init(&link->tramp_hlist);
-		tr->progs_cnt[kind]--;
+		if (orig_kind == BPF_TRAMP_SESSION) {
+			hlist_del_init(&session_link->fentry.tramp_hlist);
+			hlist_del_init(&session_link->fexit.tramp_hlist);
+			tr->progs_cnt[BPF_TRAMP_FENTRY]--;
+			tr->progs_cnt[BPF_TRAMP_FEXIT]--;
+		} else {
+			hlist_del_init(&link->tramp_hlist);
+			tr->progs_cnt[kind]--;
+		}
 	}
 	return err;
 }
@@ -624,8 +654,17 @@ static int __bpf_trampoline_unlink_prog(struct bpf_tramp_link *link,
 		tgt_prog->aux->is_extended = false;
 		return err;
 	}
-	hlist_del_init(&link->tramp_hlist);
-	tr->progs_cnt[kind]--;
+	if (kind == BPF_TRAMP_SESSION) {
+		hlist_del_init(&((struct bpf_fsession_link *)link)->fentry.tramp_hlist);
+		hlist_del_init(&((struct bpf_fsession_link *)link)->fexit.tramp_hlist);
+		tr->progs_cnt[BPF_TRAMP_FENTRY]--;
+		tr->progs_cnt[BPF_TRAMP_FEXIT]--;
+		if (link->link.prog->call_session_cookie)
+			tr->cookie_cnt--;
+	} else {
+		hlist_del_init(&link->tramp_hlist);
+		tr->progs_cnt[kind]--;
+	}
 	return bpf_trampoline_update(tr, true /* lock_direct_mutex */);
 }
 

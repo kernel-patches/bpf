@@ -1279,6 +1279,7 @@ enum bpf_tramp_prog_type {
 	BPF_TRAMP_MODIFY_RETURN,
 	BPF_TRAMP_MAX,
 	BPF_TRAMP_REPLACE, /* more than MAX */
+	BPF_TRAMP_SESSION,
 };
 
 struct bpf_tramp_image {
@@ -1829,13 +1830,21 @@ struct bpf_tramp_link {
 	u64 cookie;
 };
 
+struct bpf_fsession_link {
+	struct bpf_tramp_link fentry;
+	struct bpf_tramp_link fexit;
+};
+
 struct bpf_shim_tramp_link {
 	struct bpf_tramp_link link;
 	struct bpf_trampoline *trampoline;
 };
 
 struct bpf_tracing_link {
-	struct bpf_tramp_link link;
+	union {
+		struct bpf_tramp_link link;
+		struct bpf_fsession_link session_link;
+	};
 	struct bpf_trampoline *trampoline;
 	struct bpf_prog *tgt_prog;
 };
@@ -2083,6 +2092,20 @@ static inline void bpf_struct_ops_desc_release(struct bpf_struct_ops_desc *st_op
 }
 
 #endif
+
+static inline int bpf_fsession_cnt(struct bpf_tramp_links *links)
+{
+	struct bpf_tramp_links fentries = links[BPF_TRAMP_FENTRY];
+	int cnt = 0;
+
+	for (int i = 0; i < links[BPF_TRAMP_FENTRY].nr_links; i++) {
+		if (fentries.links[i]->link.prog->expected_attach_type ==
+		    BPF_TRACE_SESSION)
+			cnt++;
+	}
+
+	return cnt;
+}
 
 int bpf_prog_ctx_arg_info_init(struct bpf_prog *prog,
 			       const struct bpf_ctx_arg_aux *info, u32 cnt);

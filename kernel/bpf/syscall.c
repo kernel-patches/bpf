@@ -3587,6 +3587,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	case BPF_PROG_TYPE_TRACING:
 		if (prog->expected_attach_type != BPF_TRACE_FENTRY &&
 		    prog->expected_attach_type != BPF_TRACE_FEXIT &&
+		    prog->expected_attach_type != BPF_TRACE_SESSION &&
 		    prog->expected_attach_type != BPF_MODIFY_RETURN) {
 			err = -EINVAL;
 			goto out_put_prog;
@@ -3643,8 +3644,13 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	}
 	bpf_link_init(&link->link.link, BPF_LINK_TYPE_TRACING,
 		      &bpf_tracing_link_lops, prog, attach_type);
-
 	link->link.cookie = bpf_cookie;
+
+	if (prog->expected_attach_type == BPF_TRACE_SESSION) {
+		bpf_link_init(&link->session_link.fexit.link, BPF_LINK_TYPE_TRACING,
+			      &bpf_tracing_link_lops, prog, attach_type);
+		link->session_link.fexit.cookie = bpf_cookie;
+	}
 
 	mutex_lock(&prog->aux->dst_mutex);
 
@@ -4360,6 +4366,7 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 	case BPF_TRACE_RAW_TP:
 	case BPF_TRACE_FENTRY:
 	case BPF_TRACE_FEXIT:
+	case BPF_TRACE_SESSION:
 	case BPF_MODIFY_RETURN:
 		return BPF_PROG_TYPE_TRACING;
 	case BPF_LSM_MAC:
