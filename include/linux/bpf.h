@@ -1213,6 +1213,10 @@ enum {
 #endif
 };
 
+#define BPF_TRAMP_M_RET		0
+#define BPF_TRAMP_M_IS_RETURN	8
+#define BPF_TRAMP_M_COOKIE	9
+
 struct bpf_tramp_links {
 	struct bpf_tramp_link *links[BPF_MAX_TRAMP_LINKS];
 	int nr_links;
