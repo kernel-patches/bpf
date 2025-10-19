@@ -3,6 +3,7 @@
 #include <bpf/bpf.h>
 #include <test_progs.h>
 
+#ifdef __x86_64__
 static int map_create(__u32 map_type, __u32 max_entries)
 {
 	const char *map_name = "insn_array";
@@ -490,3 +491,9 @@ void test_bpf_insn_array(void)
 	if (test__start_subtest("bpf-side-ops"))
 		check_bpf_side();
 }
+#else
+void test_bpf_insn_array(void)
+{
+
+}
+#endif
