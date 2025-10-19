@@ -3789,4 +3789,23 @@ int bpf_prog_get_file_line(struct bpf_prog *prog, unsigned long ip, const char *
 			   const char **linep, int *nump);
 struct bpf_prog *bpf_prog_find_from_stack(void);
 
+int bpf_insn_array_init(struct bpf_map *map, const struct bpf_prog *prog);
+int bpf_insn_array_ready(struct bpf_map *map);
+void bpf_insn_array_release(struct bpf_map *map);
+void bpf_insn_array_adjust(struct bpf_map *map, u32 off, u32 len);
+void bpf_insn_array_adjust_after_remove(struct bpf_map *map, u32 off, u32 len);
+
+typedef void (*update_insn_ptr_func_t)(void *jit_priv, u32 xlated_off, u32 *jitted_off, long *ip);
+
+#ifdef CONFIG_BPF_SYSCALL
+void bpf_prog_update_insn_ptrs(struct bpf_prog *prog, void *jit_priv,
+			       update_insn_ptr_func_t update_insn_ptr);
+#else
+static inline void
+bpf_prog_update_insn_ptrs(struct bpf_prog *prog, void *jit_priv,
+			  update_insn_ptr_func_t update_insn_ptr);
+{
+}
+#endif
+
 #endif /* _LINUX_BPF_H */
