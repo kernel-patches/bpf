@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
 /* Copyright (c) 2018 Facebook */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <byteswap.h>
 #include <endian.h>
 #include <stdio.h>
@@ -92,6 +95,9 @@ struct btf {
 	 *   - for split BTF counts number of types added on top of base BTF.
 	 */
 	__u32 nr_types;
+	/* number of named types in this BTF instance for binary search
+	 */
+	__u32 nr_sorted_types;
 	/* if not NULL, points to the base BTF on top of which the current
 	 * split BTF is based
 	 */
@@ -619,6 +625,21 @@ __u32 btf__type_cnt(const struct btf *btf)
 	return btf->start_id + btf->nr_types;
 }
 
+__u32 btf__start_id(const struct btf *btf)
+{
+	return btf->start_id;
+}
+
+__u32 btf__nr_sorted_types(const struct btf *btf)
+{
+	return btf->nr_sorted_types;
+}
+
+void btf__set_nr_sorted_types(struct btf *btf, __u32 nr)
+{
+	btf->nr_sorted_types = nr;
+}
+
 const struct btf *btf__base_btf(const struct btf *btf)
 {
 	return btf->base_btf;
@@ -915,38 +936,16 @@ __s32 btf__find_by_name(const struct btf *btf, const char *type_name)
 	return libbpf_err(-ENOENT);
 }
 
-static __s32 btf_find_by_name_kind(const struct btf *btf, int start_id,
-				   const char *type_name, __u32 kind)
-{
-	__u32 i, nr_types = btf__type_cnt(btf);
-
-	if (kind == BTF_KIND_UNKN || !strcmp(type_name, "void"))
-		return 0;
-
-	for (i = start_id; i < nr_types; i++) {
-		const struct btf_type *t = btf__type_by_id(btf, i);
-		const char *name;
-
-		if (btf_kind(t) != kind)
-			continue;
-		name = btf__name_by_offset(btf, t->name_off);
-		if (name && !strcmp(type_name, name))
-			return i;
-	}
-
-	return libbpf_err(-ENOENT);
-}
-
 __s32 btf__find_by_name_kind_own(const struct btf *btf, const char *type_name,
 				 __u32 kind)
 {
-	return btf_find_by_name_kind(btf, btf->start_id, type_name, kind);
+	return find_btf_by_name_kind(btf, btf->start_id, type_name, kind);
 }
 
 __s32 btf__find_by_name_kind(const struct btf *btf, const char *type_name,
 			     __u32 kind)
 {
-	return btf_find_by_name_kind(btf, 1, type_name, kind);
+	return find_btf_by_name_kind(btf, 1, type_name, kind);
 }
 
 static bool btf_is_modifiable(const struct btf *btf)
@@ -3411,6 +3410,7 @@ static int btf_dedup_struct_types(struct btf_dedup *d);
 static int btf_dedup_ref_types(struct btf_dedup *d);
 static int btf_dedup_resolve_fwds(struct btf_dedup *d);
 static int btf_dedup_compact_types(struct btf_dedup *d);
+static int btf_dedup_compact_and_sort_types(struct btf_dedup *d);
 static int btf_dedup_remap_types(struct btf_dedup *d);
 
 /*
@@ -3600,7 +3600,7 @@ int btf__dedup(struct btf *btf, const struct btf_dedup_opts *opts)
 		pr_debug("btf_dedup_ref_types failed: %s\n", errstr(err));
 		goto done;
 	}
-	err = btf_dedup_compact_types(d);
+	err = btf_dedup_compact_and_sort_types(d);
 	if (err < 0) {
 		pr_debug("btf_dedup_compact_types failed: %s\n", errstr(err));
 		goto done;
@@ -3649,6 +3649,8 @@ struct btf_dedup {
 	 * BTF is considered to be immutable.
 	 */
 	bool hypot_adjust_canon;
+	/* Sort btf_types by kind and time */
+	bool sort_by_kind_name;
 	/* Various option modifying behavior of algorithm */
 	struct btf_dedup_opts opts;
 	/* temporary strings deduplication state */
@@ -3741,6 +3743,7 @@ static struct btf_dedup *btf_dedup_new(struct btf *btf, const struct btf_dedup_o
 
 	d->btf = btf;
 	d->btf_ext = OPTS_GET(opts, btf_ext, NULL);
+	d->sort_by_kind_name = OPTS_GET(opts, sort_by_kind_name, false);
 
 	d->dedup_table = hashmap__new(hash_fn, btf_dedup_equal_fn, NULL);
 	if (IS_ERR(d->dedup_table)) {
@@ -5286,6 +5289,116 @@ static int btf_dedup_compact_types(struct btf_dedup *d)
 	d->btf->hdr->str_off = d->btf->hdr->type_len;
 	d->btf->raw_size = d->btf->hdr->hdr_len + d->btf->hdr->type_len + d->btf->hdr->str_len;
 	return 0;
+}
+
+static __u32 *get_sorted_canon_types(struct btf_dedup *d, __u32 *cnt)
+{
+	int i, j, id, types_cnt = 0;
+	__u32 *sorted_ids;
+
+	for (i = 0, id = d->btf->start_id; i < d->btf->nr_types; i++, id++)
+		if (d->map[id] == id)
+			++types_cnt;
+
+	sorted_ids = calloc(types_cnt, sizeof(*sorted_ids));
+	if (!sorted_ids)
+		return NULL;
+
+	for (j = 0, i = 0, id = d->btf->start_id; i < d->btf->nr_types; i++, id++)
+		if (d->map[id] == id)
+			sorted_ids[j++] = id;
+
+	qsort_r(sorted_ids, types_cnt, sizeof(*sorted_ids),
+		btf_compare_type_kinds_names, d->btf);
+
+	*cnt = types_cnt;
+
+	return sorted_ids;
+}
+
+/*
+ * Compact and sort BTF types.
+ *
+ * Similar to btf_dedup_compact_types, but additionally sorts the btf_types.
+ */
+static int btf__dedup_compact_and_sort_types(struct btf_dedup *d)
+{
+	__u32 canon_types_cnt = 0, canon_types_len = 0;
+	__u32 *new_offs = NULL, *canon_types = NULL;
+	const struct btf_type *t;
+	void *p, *new_types = NULL;
+	int i, id, len, err;
+
+	/* we are going to reuse hypot_map to store compaction remapping */
+	d->hypot_map[0] = 0;
+	/* base BTF types are not renumbered */
+	for (id = 1; id < d->btf->start_id; id++)
+		d->hypot_map[id] = id;
+	for (i = 0, id = d->btf->start_id; i < d->btf->nr_types; i++, id++)
+		d->hypot_map[id] = BTF_UNPROCESSED_ID;
+
+	canon_types = get_sorted_canon_types(d, &canon_types_cnt);
+	if (!canon_types) {
+		err = -ENOMEM;
+		goto out_err;
+	}
+
+	for (i = 0; i < canon_types_cnt; i++) {
+		id = canon_types[i];
+		t = btf__type_by_id(d->btf, id);
+		len = btf_type_size(t);
+		if (len < 0) {
+			err = len;
+			goto out_err;
+		}
+		canon_types_len += len;
+	}
+
+	new_offs = calloc(canon_types_cnt, sizeof(*new_offs));
+	new_types = calloc(canon_types_len, 1);
+	if (!new_types || !new_offs) {
+		err = -ENOMEM;
+		goto out_err;
+	}
+
+	p = new_types;
+
+	for (i = 0; i < canon_types_cnt; i++) {
+		id = canon_types[i];
+		t = btf__type_by_id(d->btf, id);
+		len = btf_type_size(t);
+		memcpy(p, t, len);
+		d->hypot_map[id] = d->btf->start_id + i;
+		new_offs[i] = p - new_types;
+		p += len;
+	}
+
+	/* shrink struct btf's internal types index and update btf_header */
+	free(d->btf->types_data);
+	free(d->btf->type_offs);
+	d->btf->types_data = new_types;
+	d->btf->type_offs = new_offs;
+	d->btf->types_data_cap = canon_types_len;
+	d->btf->type_offs_cap = canon_types_cnt;
+	d->btf->nr_types = canon_types_cnt;
+	d->btf->hdr->type_len = canon_types_len;
+	d->btf->hdr->str_off = d->btf->hdr->type_len;
+	d->btf->raw_size = d->btf->hdr->hdr_len + d->btf->hdr->type_len + d->btf->hdr->str_len;
+	free(canon_types);
+	return 0;
+
+out_err:
+	free(canon_types);
+	free(new_types);
+	free(new_offs);
+	return err;
+}
+
+static int btf_dedup_compact_and_sort_types(struct btf_dedup *d)
+{
+	if (d->sort_by_kind_name)
+		return btf__dedup_compact_and_sort_types(d);
+	return btf_dedup_compact_types(d);
 }
 
 /*

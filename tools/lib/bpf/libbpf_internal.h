@@ -248,6 +248,12 @@ const struct btf_type *skip_mods_and_typedefs(const struct btf *btf, __u32 id, _
 const struct btf_header *btf_header(const struct btf *btf);
 void btf_set_base_btf(struct btf *btf, const struct btf *base_btf);
 int btf_relocate(struct btf *btf, const struct btf *base_btf, __u32 **id_map);
+int btf_compare_type_kinds_names(const void *a, const void *b, void *priv);
+__s32 find_btf_by_name_kind(const struct btf *btf, int start_id, const char *type_name, __u32 kind);
+void btf_check_sorted(struct btf *btf, int start_id);
+__u32 btf__start_id(const struct btf *btf);
+__u32 btf__nr_sorted_types(const struct btf *btf);
+void btf__set_nr_sorted_types(struct btf *btf, __u32 nr);
 
 static inline enum btf_func_linkage btf_func_linkage(const struct btf_type *t)
 {

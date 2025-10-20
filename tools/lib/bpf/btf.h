@@ -251,6 +251,8 @@ struct btf_dedup_opts {
 	size_t sz;
 	/* optional .BTF.ext info to dedup along the main BTF info */
 	struct btf_ext *btf_ext;
+	/* Sort btf_types by kind and name */
+	bool sort_by_kind_name;
 	/* force hash collisions (used for testing) */
 	bool force_collisions;
 	size_t :0;

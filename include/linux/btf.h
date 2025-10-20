@@ -221,7 +221,10 @@ bool btf_is_vmlinux(const struct btf *btf);
 struct module *btf_try_get_module(const struct btf *btf);
 u32 btf_nr_types(const struct btf *btf);
 u32 btf_type_cnt(const struct btf *btf);
-struct btf *btf_base_btf(const struct btf *btf);
+u32 btf_start_id(const struct btf *btf);
+u32 btf_nr_sorted_types(const struct btf *btf);
+void btf_set_nr_sorted_types(struct btf *btf, u32 nr);
+struct btf* btf_base_btf(const struct btf *btf);
 bool btf_type_is_i32(const struct btf_type *t);
 bool btf_type_is_i64(const struct btf_type *t);
 bool btf_type_is_primitive(const struct btf_type *t);
@@ -595,6 +598,10 @@ int get_kern_ctx_btf_id(struct bpf_verifier_log *log, enum bpf_prog_type prog_ty
 bool btf_types_are_same(const struct btf *btf1, u32 id1,
 			const struct btf *btf2, u32 id2);
 int btf_check_iter_arg(struct btf *btf, const struct btf_type *func, int arg_idx);
+int btf_compare_type_kinds_names(const void *a, const void *b, void *priv);
+s32 find_btf_by_name_kind(const struct btf *btf, int start_id, const char *type_name,
+			  u32 kind);
+void btf_check_sorted(struct btf *btf, int start_id);
 
 static inline bool btf_type_is_struct_ptr(struct btf *btf, const struct btf_type *t)
 {
@@ -683,5 +690,16 @@ static inline int btf_check_iter_arg(struct btf *btf, const struct btf_type *fun
 {
 	return -EOPNOTSUPP;
 }
+static inline int btf_compare_type_kinds_names(const void *a, const void *b, void *priv)
+{
+	return -EOPNOTSUPP;
+}
+static inline s32 find_btf_by_name_kind(const struct btf *btf, int start_id, const char *type_name,
+			  u32 kind)
+{
+	return -EOPNOTSUPP;
+}
+static inline void btf_check_sorted(struct btf *btf, int start_id);
+{}
 #endif
 #endif

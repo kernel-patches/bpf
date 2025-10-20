@@ -259,6 +259,7 @@ struct btf {
 	void *nohdr_data;
 	struct btf_header hdr;
 	u32 nr_types; /* includes VOID for base BTF */
+	u32 nr_sorted_types;
 	u32 types_size;
 	u32 data_size;
 	refcount_t refcnt;
@@ -544,6 +545,21 @@ u32 btf_nr_types(const struct btf *btf)
 	return total;
 }
 
+u32 btf_start_id(const struct btf *btf)
+{
+	return btf->start_id;
+}
+
+u32 btf_nr_sorted_types(const struct btf *btf)
+{
+	return btf->nr_sorted_types;
+}
+
+void btf_set_nr_sorted_types(struct btf *btf, u32 nr)
+{
+	btf->nr_sorted_types = nr;
+}
+
 u32 btf_type_cnt(const struct btf *btf)
 {
 	return btf->start_id + btf->nr_types;
@@ -551,26 +567,7 @@ u32 btf_type_cnt(const struct btf *btf)
 
 s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind)
 {
-	const struct btf_type *t;
-	const char *tname;
-	u32 i, total;
-
-	do {
-		total = btf_type_cnt(btf);
-		for (i = btf->start_id; i < total; i++) {
-			t = btf_type_by_id(btf, i);
-			if (BTF_INFO_KIND(t->info) != kind)
-				continue;
-
-			tname = btf_name_by_offset(btf, t->name_off);
-			if (!strcmp(tname, name))
-				return i;
-		}
-
-		btf = btf->base_btf;
-	} while (btf);
-
-	return -ENOENT;
+	return find_btf_by_name_kind(btf, 1, name, kind);
 }
 
 s32 bpf_find_btf_id(const char *name, u32 kind, struct btf **btf_p)
@@ -6239,6 +6236,7 @@ static struct btf *btf_parse_base(struct btf_verifier_env *env, const char *name
 	if (err)
 		goto errout;
 
+	btf_check_sorted(btf, 1);
 	refcount_set(&btf->refcnt, 1);
 
 	return btf;
@@ -6371,6 +6369,7 @@ static struct btf *btf_parse_module(const char *module_name, const void *data,
 		base_btf = vmlinux_btf;
 	}
 
+	btf_check_sorted(btf, btf_nr_types(base_btf));
 	btf_verifier_env_free(env);
 	refcount_set(&btf->refcnt, 1);
 	return btf;
