@@ -1091,6 +1091,8 @@ static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf, b
 	if (err)
 		goto done;
 
+	btf_check_sorted(btf, btf->start_id);
+
 done:
 	if (err) {
 		btf__free(btf);
@@ -1714,6 +1716,7 @@ static void btf_invalidate_raw_data(struct btf *btf)
 		free(btf->raw_data_swapped);
 		btf->raw_data_swapped = NULL;
 	}
+	btf->nr_sorted_types = 0;
 }
 
 /* Ensure BTF is ready to be modified (by splitting into a three memory
@@ -5455,6 +5458,9 @@ static int btf_dedup_remap_types(struct btf_dedup *d)
 			*type_id = new_id;
 		}
 	}
+
+	if (d->sort_by_kind_name)
+		btf_check_sorted(d->btf, d->btf->start_id);
 
 	if (!d->btf_ext)
 		return 0;
