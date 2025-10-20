@@ -792,6 +792,7 @@ const struct bpf_func_proto bpf_find_vma_proto = {
 	.arg3_type	= ARG_PTR_TO_FUNC,
 	.arg4_type	= ARG_PTR_TO_STACK_OR_NULL,
 	.arg5_type	= ARG_ANYTHING,
+	.must_not_sleep = false,
 };
 
 struct bpf_iter_task_vma_kern_data {

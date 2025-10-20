@@ -940,6 +940,7 @@ struct bpf_func_proto {
 	};
 	int *ret_btf_id; /* return value btf_id */
 	bool (*allowed)(const struct bpf_prog *prog);
+	bool must_not_sleep;
 };
 
 /* bpf_context is intentionally undefined structure. Pointer to bpf_context is
