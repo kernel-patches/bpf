@@ -8022,6 +8022,177 @@ static struct btf_dedup_test dedup_tests[] = {
 		BTF_STR_SEC("\0foo\0x\0y\0foo_ptr"),
 	},
 },
+{
+	.descr = "dedup_sort: strings deduplication",
+	.input = {
+		.raw_types = {
+			BTF_TYPE_INT_ENC(NAME_NTH(1), BTF_INT_SIGNED, 0, 32, 4),
+			BTF_TYPE_INT_ENC(NAME_NTH(2), BTF_INT_SIGNED, 0, 64, 8),
+			BTF_TYPE_INT_ENC(NAME_NTH(3), BTF_INT_SIGNED, 0, 32, 4),
+			BTF_TYPE_INT_ENC(NAME_NTH(4), BTF_INT_SIGNED, 0, 64, 8),
+			BTF_TYPE_INT_ENC(NAME_NTH(5), BTF_INT_SIGNED, 0, 32, 4),
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0int\0long int\0int\0long int\0int"),
+	},
+	.expect = {
+		.raw_types = {
+			BTF_TYPE_INT_ENC(NAME_NTH(1), BTF_INT_SIGNED, 0, 32, 4),
+			BTF_TYPE_INT_ENC(NAME_NTH(2), BTF_INT_SIGNED, 0, 64, 8),
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0int\0long int"),
+	},
+	.opts = {
+		.sort_by_kind_name = true,
+	},
+},
+{
+	.descr = "dedup_sort: func/func_arg/var tags",
+	.input = {
+		.raw_types = {
+			/* int */
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+			/* static int t */
+			BTF_VAR_ENC(NAME_NTH(1), 1, 0),			/* [2] */
+			/* void f(int a1, int a2) */
+			BTF_FUNC_PROTO_ENC(0, 2),			/* [3] */
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(2), 1),
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(3), 1),
+			BTF_FUNC_ENC(NAME_NTH(4), 3),			/* [4] */
+			/* tag -> t */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 2, -1),		/* [5] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 2, -1),		/* [6] */
+			/* tag -> func */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 4, -1),		/* [7] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 4, -1),		/* [8] */
+			/* tag -> func arg a1 */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 4, 1),		/* [9] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 4, 1),		/* [10] */
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0t\0a1\0a2\0f\0tag"),
+	},
+	.expect = {
+		.raw_types = {
+			BTF_FUNC_ENC(NAME_NTH(4), 7),			/* [1] */
+			BTF_VAR_ENC(NAME_NTH(1), 6, 0),			/* [2] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 2, -1),		/* [3] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 1, -1),		/* [4] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 1, 1),		/* [5] */
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [6] */
+			BTF_FUNC_PROTO_ENC(0, 2),			/* [7] */
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(2), 6),
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(3), 6),
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0t\0a1\0a2\0f\0tag"),
+	},
+	.opts = {
+		.sort_by_kind_name = true,
+	},
+},
+{
+	.descr = "dedup_sort: func/func_param tags",
+	.input = {
+		.raw_types = {
+			/* int */
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+			/* void f(int a1, int a2) */
+			BTF_FUNC_PROTO_ENC(0, 2),			/* [2] */
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(1), 1),
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(2), 1),
+			BTF_FUNC_ENC(NAME_NTH(3), 2),			/* [3] */
+			/* void f(int a1, int a2) */
+			BTF_FUNC_PROTO_ENC(0, 2),			/* [4] */
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(1), 1),
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(2), 1),
+			BTF_FUNC_ENC(NAME_NTH(3), 4),			/* [5] */
+			/* tag -> f: tag1, tag2 */
+			BTF_DECL_TAG_ENC(NAME_NTH(4), 3, -1),		/* [6] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 3, -1),		/* [7] */
+			/* tag -> f/a2: tag1, tag2 */
+			BTF_DECL_TAG_ENC(NAME_NTH(4), 3, 1),		/* [8] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 3, 1),		/* [9] */
+			/* tag -> f: tag1, tag3 */
+			BTF_DECL_TAG_ENC(NAME_NTH(4), 5, -1),		/* [10] */
+			BTF_DECL_TAG_ENC(NAME_NTH(6), 5, -1),		/* [11] */
+			/* tag -> f/a2: tag1, tag3 */
+			BTF_DECL_TAG_ENC(NAME_NTH(4), 5, 1),		/* [12] */
+			BTF_DECL_TAG_ENC(NAME_NTH(6), 5, 1),		/* [13] */
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0a1\0a2\0f\0tag1\0tag2\0tag3"),
+	},
+	.expect = {
+		.raw_types = {
+			BTF_FUNC_ENC(NAME_NTH(3), 9),			/* [1] */
+			BTF_DECL_TAG_ENC(NAME_NTH(4), 1, -1),		/* [2] */
+			BTF_DECL_TAG_ENC(NAME_NTH(4), 1, 1),		/* [3] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 1, -1),		/* [4] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 1, 1),		/* [5] */
+			BTF_DECL_TAG_ENC(NAME_NTH(6), 1, -1),		/* [6] */
+			BTF_DECL_TAG_ENC(NAME_NTH(6), 1, 1),		/* [7] */
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [8] */
+			BTF_FUNC_PROTO_ENC(0, 2),			/* [9] */
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(1), 8),
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(2), 8),
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0a1\0a2\0f\0tag1\0tag2\0tag3"),
+	},
+	.opts = {
+		.sort_by_kind_name = true,
+	},
+},
+{
+	.descr = "dedup_sort: struct/struct_member tags",
+	.input = {
+		.raw_types = {
+			/* int */
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+			BTF_STRUCT_ENC(NAME_NTH(1), 2, 8),		/* [2] */
+				BTF_MEMBER_ENC(NAME_NTH(2), 1, 0),
+				BTF_MEMBER_ENC(NAME_NTH(3), 1, 32),
+			BTF_STRUCT_ENC(NAME_NTH(1), 2, 8),		/* [3] */
+				BTF_MEMBER_ENC(NAME_NTH(2), 1, 0),
+				BTF_MEMBER_ENC(NAME_NTH(3), 1, 32),
+			/* tag -> t: tag1, tag2 */
+			BTF_DECL_TAG_ENC(NAME_NTH(4), 2, -1),		/* [4] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 2, -1),		/* [5] */
+			/* tag -> t/m2: tag1, tag2 */
+			BTF_DECL_TAG_ENC(NAME_NTH(4), 2, 1),		/* [6] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 2, 1),		/* [7] */
+			/* tag -> t: tag1, tag3 */
+			BTF_DECL_TAG_ENC(NAME_NTH(4), 3, -1),		/* [8] */
+			BTF_DECL_TAG_ENC(NAME_NTH(6), 3, -1),		/* [9] */
+			/* tag -> t/m2: tag1, tag3 */
+			BTF_DECL_TAG_ENC(NAME_NTH(4), 3, 1),		/* [10] */
+			BTF_DECL_TAG_ENC(NAME_NTH(6), 3, 1),		/* [11] */
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0t\0m1\0m2\0tag1\0tag2\0tag3"),
+	},
+	.expect = {
+		.raw_types = {
+			BTF_STRUCT_ENC(NAME_NTH(1), 2, 8),		/* [1] */
+				BTF_MEMBER_ENC(NAME_NTH(2), 8, 0),
+				BTF_MEMBER_ENC(NAME_NTH(3), 8, 32),
+			BTF_DECL_TAG_ENC(NAME_NTH(4), 1, -1),		/* [2] */
+			BTF_DECL_TAG_ENC(NAME_NTH(4), 1, 1),		/* [3] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 1, -1),		/* [4] */
+			BTF_DECL_TAG_ENC(NAME_NTH(5), 1, 1),		/* [5] */
+			BTF_DECL_TAG_ENC(NAME_NTH(6), 1, -1),		/* [6] */
+			BTF_DECL_TAG_ENC(NAME_NTH(6), 1, 1),		/* [7] */
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [8] */
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0t\0m1\0m2\0tag1\0tag2\0tag3"),
+	},
+	.opts = {
+		.sort_by_kind_name = true,
+	},
+},
 };
 
 static int btf_type_size(const struct btf_type *t)
