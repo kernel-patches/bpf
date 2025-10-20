@@ -533,7 +533,7 @@ out:
 
 }
 
-static int rds_connect(struct socket *sock, struct sockaddr *uaddr,
+static int rds_connect(struct socket *sock, struct sockaddr_unspec *uaddr,
 		       int addr_len, int flags)
 {
 	struct sock *sk = sock->sk;

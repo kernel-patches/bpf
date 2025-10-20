@@ -153,7 +153,7 @@ out:
 	return error;
 }
 
-static int svc_connect(struct socket *sock, struct sockaddr *sockaddr,
+static int svc_connect(struct socket *sock, struct sockaddr_unspec *sockaddr,
 		       int sockaddr_len, int flags)
 {
 	DEFINE_WAIT(wait);

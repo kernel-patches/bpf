@@ -855,7 +855,7 @@ out:
 
 static int unix_release(struct socket *);
 static int unix_bind(struct socket *, struct sockaddr_unspec *, int);
-static int unix_stream_connect(struct socket *, struct sockaddr *,
+static int unix_stream_connect(struct socket *, struct sockaddr_unspec *,
 			       int addr_len, int flags);
 static int unix_socketpair(struct socket *, struct socket *);
 static int unix_accept(struct socket *, struct socket *, struct proto_accept_arg *arg);
@@ -877,7 +877,7 @@ static int unix_dgram_sendmsg(struct socket *, struct msghdr *, size_t);
 static int unix_dgram_recvmsg(struct socket *, struct msghdr *, size_t, int);
 static int unix_read_skb(struct sock *sk, skb_read_actor_t recv_actor);
 static int unix_stream_read_skb(struct sock *sk, skb_read_actor_t recv_actor);
-static int unix_dgram_connect(struct socket *, struct sockaddr *,
+static int unix_dgram_connect(struct socket *, struct sockaddr_unspec *,
 			      int, int);
 static int unix_seqpacket_sendmsg(struct socket *, struct msghdr *, size_t);
 static int unix_seqpacket_recvmsg(struct socket *, struct msghdr *, size_t,
@@ -1523,7 +1523,7 @@ static void unix_state_double_unlock(struct sock *sk1, struct sock *sk2)
 	unix_state_unlock(sk2);
 }
 
-static int unix_dgram_connect(struct socket *sock, struct sockaddr *addr,
+static int unix_dgram_connect(struct socket *sock, struct sockaddr_unspec *addr,
 			      int alen, int flags)
 {
 	struct sockaddr_un *sunaddr = (struct sockaddr_un *)addr;
@@ -1642,7 +1642,7 @@ static long unix_wait_for_peer(struct sock *other, long timeo)
 	return timeo;
 }
 
-static int unix_stream_connect(struct socket *sock, struct sockaddr *uaddr,
+static int unix_stream_connect(struct socket *sock, struct sockaddr_unspec *uaddr,
 			       int addr_len, int flags)
 {
 	struct sockaddr_un *sunaddr = (struct sockaddr_un *)uaddr;

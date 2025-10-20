@@ -535,7 +535,7 @@ static int j1939_sk_bind(struct socket *sock, struct sockaddr_unspec *uaddr, int
 	return ret;
 }
 
-static int j1939_sk_connect(struct socket *sock, struct sockaddr *uaddr,
+static int j1939_sk_connect(struct socket *sock, struct sockaddr_unspec *uaddr,
 			    int len, int flags)
 {
 	struct sockaddr_can *addr = (struct sockaddr_can *)uaddr;

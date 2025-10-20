@@ -3426,7 +3426,7 @@ int sock_no_bind(struct socket *sock, struct sockaddr_unspec *saddr, int len)
 }
 EXPORT_SYMBOL(sock_no_bind);
 
-int sock_no_connect(struct socket *sock, struct sockaddr *saddr,
+int sock_no_connect(struct socket *sock, struct sockaddr_unspec *saddr,
 		    int len, int flags)
 {
 	return -EOPNOTSUPP;

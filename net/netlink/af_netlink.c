@@ -1056,7 +1056,7 @@ unlock:
 	return err;
 }
 
-static int netlink_connect(struct socket *sock, struct sockaddr *addr,
+static int netlink_connect(struct socket *sock, struct sockaddr_unspec *addr,
 			   int alen, int flags)
 {
 	int err = 0;

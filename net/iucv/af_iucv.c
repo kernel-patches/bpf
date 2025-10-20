@@ -667,7 +667,7 @@ static int iucv_sock_autobind(struct sock *sk)
 	return err;
 }
 
-static int afiucv_path_connect(struct socket *sock, struct sockaddr *addr)
+static int afiucv_path_connect(struct socket *sock, struct sockaddr_unspec *addr)
 {
 	DECLARE_SOCKADDR(struct sockaddr_iucv *, sa, addr);
 	struct sock *sk = sock->sk;
@@ -713,7 +713,7 @@ done:
 }
 
 /* Connect an unconnected socket */
-static int iucv_sock_connect(struct socket *sock, struct sockaddr *addr,
+static int iucv_sock_connect(struct socket *sock, struct sockaddr_unspec *addr,
 			     int alen, int flags)
 {
 	DECLARE_SOCKADDR(struct sockaddr_iucv *, sa, addr);
