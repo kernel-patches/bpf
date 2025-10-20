@@ -535,6 +535,13 @@ struct l2tp_connect_info {
 static int pppol2tp_sockaddr_get_info(const void *sa, int sa_len,
 				      struct l2tp_connect_info *info)
 {
+	const struct sockaddr_unspec *sockaddr = sa;
+
+	if (sa_len < offsetofend(struct sockaddr, sa_family))
+		return -EINVAL;
+	if (sockaddr->sa_family != AF_PPPOX)
+		return -EAFNOSUPPORT;
+
 	switch (sa_len) {
 	case sizeof(struct sockaddr_pppol2tp):
 	{
