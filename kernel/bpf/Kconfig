@@ -101,4 +101,12 @@ config BPF_LSM
 
 	  If you are unsure how to answer this question, answer N.
 
+config BPF_SORT_BTF_BY_KIND_NAME
+	bool "Sort BTF types by kind and name"
+	depends on BPF_SYSCALL
+	help
+	  This option sorts BTF types in vmlinux and kernel modules by their
+	  kind and name, enabling binary search for btf_find_by_name_kind()
+	  and significantly improving its lookup performance.
+
 endmenu # "BPF subsystem"
