@@ -3,7 +3,9 @@
 #include <linux/bpf.h>
 #include <linux/btf.h>
 #include <linux/err.h>
+#include <linux/irq_work.h>
 #include "linux/filter.h"
+#include <linux/llist.h>
 #include <linux/btf_ids.h>
 #include <linux/vmalloc.h>
 #include <linux/pagemap.h>
@@ -50,6 +52,21 @@ struct bpf_arena {
 	struct range_tree rt;
 	struct list_head vma_list;
 	struct mutex lock;
+	struct irq_work     free_irq;
+	struct work_struct  free_work;
+	struct llist_head   free_spans;
+	struct llist_head   __percpu *free_span_pool;
+	refcount_t          free_refs;
+};
+
+static void arena_free_worker(struct work_struct *work);
+static void arena_free_irq(struct irq_work *iw);
+
+struct arena_free_span {
+	struct llist_node node;
+	unsigned long uaddr;
+	u32 page_cnt;
+	int cpu;
 };
 
 u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena)
@@ -156,6 +173,7 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 	struct bpf_arena *arena;
 	u64 vm_range;
 	int err = -ENOMEM;
+	int cpu;
 
 	if (!bpf_jit_supports_arena())
 		return ERR_PTR(-EOPNOTSUPP);
@@ -193,6 +211,10 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 		arena->user_vm_end = arena->user_vm_start + vm_range;
 
 	INIT_LIST_HEAD(&arena->vma_list);
+	init_llist_head(&arena->free_spans);
+	init_irq_work(&arena->free_irq, arena_free_irq);
+	INIT_WORK(&arena->free_work, arena_free_worker);
+	refcount_set(&arena->free_refs, 1);
 	bpf_map_init_from_attr(&arena->map, attr);
 	range_tree_init(&arena->rt);
 	err = range_tree_set(&arena->rt, 0, attr->max_entries);
@@ -204,6 +226,23 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 	err = populate_pgtable_except_pte(arena);
 	if (err)
 		goto err;
+
+	/* Pre-allocate some spans */
+	arena->free_span_pool = alloc_percpu(struct llist_head);
+	for_each_possible_cpu(cpu) {
+		struct llist_head *local = per_cpu_ptr(arena->free_span_pool, cpu);
+		init_llist_head(local);
+
+		for (int i = 0; i < 16; i++) {
+			struct arena_free_span *s = kmalloc(sizeof(*s), GFP_KERNEL);
+			if (!s)
+				break;
+			s->cpu = cpu;
+			s->page_cnt = 0;
+			s->uaddr = 0;
+			llist_add(&s->node, local);
+		}
+	}
 
 	return &arena->map;
 err:
@@ -234,6 +273,7 @@ static int existing_page_cb(pte_t *ptep, unsigned long addr, void *data)
 static void arena_map_free(struct bpf_map *map)
 {
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+	int cpu;
 
 	/*
 	 * Check that user vma-s are not around when bpf map is freed.
@@ -243,6 +283,21 @@ static void arena_map_free(struct bpf_map *map)
 	 */
 	if (WARN_ON_ONCE(!list_empty(&arena->vma_list)))
 		return;
+
+	/* Ensure no pending deferred frees */
+	flush_work(&arena->free_work);
+	while (!refcount_dec_and_test(&arena->free_refs))
+		cpu_relax();
+
+	for_each_possible_cpu(cpu) {
+		struct llist_head *local = per_cpu_ptr(arena->free_span_pool, cpu);
+		struct llist_node *n;
+		while ((n = llist_del_first(local))) {
+			struct arena_free_span *s = llist_entry(n, struct arena_free_span, node);
+			kfree(s);
+		}
+	}
+	free_percpu(arena->free_span_pool);
 
 	/*
 	 * free_vm_area() calls remove_vm_area() that calls free_unmap_vmap_area().
@@ -572,8 +627,7 @@ static void zap_pages(struct bpf_arena *arena, long uaddr, long page_cnt)
 static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt)
 {
 	u64 full_uaddr, uaddr_end;
-	long kaddr, pgoff, i;
-	struct page *page;
+	struct arena_free_span *s;
 
 	/* only aligned lower 32-bit are relevant */
 	uaddr = (u32)uaddr;
@@ -583,33 +637,22 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt)
 	if (full_uaddr >= uaddr_end)
 		return;
 
-	page_cnt = (uaddr_end - full_uaddr) >> PAGE_SHIFT;
-
-	guard(mutex)(&arena->lock);
-
-	pgoff = compute_pgoff(arena, uaddr);
-	/* clear range */
-	range_tree_set(&arena->rt, pgoff, page_cnt);
-
-	if (page_cnt > 1)
-		/* bulk zap if multiple pages being freed */
-		zap_pages(arena, full_uaddr, page_cnt);
-
-	kaddr = bpf_arena_get_kern_vm_start(arena) + uaddr;
-	for (i = 0; i < page_cnt; i++, kaddr += PAGE_SIZE, full_uaddr += PAGE_SIZE) {
-		page = vmalloc_to_page((void *)kaddr);
-		if (!page)
-			continue;
-		if (page_cnt == 1 && page_mapped(page)) /* mapped by some user process */
-			/* Optimization for the common case of page_cnt==1:
-			 * If page wasn't mapped into some user vma there
-			 * is no need to call zap_pages which is slow. When
-			 * page_cnt is big it's faster to do the batched zap.
-			 */
-			zap_pages(arena, full_uaddr, 1);
-		apply_to_existing_page_range(&init_mm, kaddr, page_cnt << PAGE_SHIFT,
-					     apply_range_clear_cb, NULL);
+	s = kmalloc_nolock(sizeof(struct arena_free_span), __GFP_ZERO, 0);
+	if (s) {
+		s->cpu = -1;
+	} else {
+		struct llist_head *local = this_cpu_ptr(arena->free_span_pool);
+		struct llist_node *n = llist_del_first(local);
+		if (!n)
+			return;
+		s = llist_entry(n, struct arena_free_span, node);
 	}
+
+	s->page_cnt = page_cnt;
+	s->uaddr = uaddr;
+	refcount_inc(&arena->free_refs);
+	llist_add(&s->node, &arena->free_spans);
+	irq_work_queue(&arena->free_irq);
 }
 
 /*
@@ -638,6 +681,48 @@ static int arena_reserve_pages(struct bpf_arena *arena, long uaddr, u32 page_cnt
 
 	/* "Allocate" the region to prevent it from being allocated. */
 	return range_tree_clear(&arena->rt, pgoff, page_cnt);
+}
+
+static void arena_free_worker(struct work_struct *work)
+{
+	struct bpf_arena *arena = container_of(work, struct bpf_arena, free_work);
+	struct llist_node *pos, *t;
+	struct arena_free_span *s;
+	unsigned long full_uaddr;
+	long kaddr, page_cnt, pgoff;
+
+	guard(mutex)(&arena->lock);
+
+	llist_for_each_safe(pos, t, llist_del_all(&arena->free_spans)) {
+		s = llist_entry(pos, struct arena_free_span, node);
+		page_cnt = s->page_cnt;
+		full_uaddr = clear_lo32(arena->user_vm_start) + s->uaddr;
+		kaddr = bpf_arena_get_kern_vm_start(arena) + s->uaddr;
+
+		zap_pages(arena, full_uaddr, page_cnt);
+
+		apply_to_existing_page_range(&init_mm, kaddr, page_cnt << PAGE_SHIFT,
+					     apply_range_clear_cb, NULL);
+
+		pgoff = compute_pgoff(arena, s->uaddr);
+		range_tree_set(&arena->rt, pgoff, page_cnt);
+
+		refcount_dec(&arena->free_refs);
+
+		/* If the span from the pool, return it, otherwise free it */
+		if (s->cpu >= 0) {
+			struct llist_head *target = per_cpu_ptr(arena->free_span_pool, s->cpu);
+			llist_add(&s->node, target);
+		} else {
+			kfree_nolock(s);
+		}
+        }
+}
+
+static void arena_free_irq(struct irq_work *iw)
+{
+	struct bpf_arena *arena = container_of(iw, struct bpf_arena, free_irq);
+	schedule_work(&arena->free_work);
 }
 
 __bpf_kfunc_start_defs();
