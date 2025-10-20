@@ -195,7 +195,10 @@ static int cpu_map_bpf_prog_run_xdp(struct bpf_cpu_map_entry *rcpu,
 
 		rxq.dev = xdpf->dev_rx;
 		rxq.mem.type = xdpf->mem_type;
-		/* TODO: report queue_index to xdp_rxq_info */
+		/* The NIC RX queue_index is lost after the frame redirection
+		 * but in case of need, it can be passed as a custom XDP
+		 * metadata via xdp_md struct to the remote XDP program
+		 */
 
 		xdp_convert_frame_to_buff(xdpf, &xdp);
 
