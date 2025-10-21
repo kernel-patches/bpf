@@ -506,8 +506,7 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 			return 0;
 	}
 
-	/* zeroing is needed, since alloc_pages_bulk() only fills in non-zero entries */
-	pages = kvcalloc(page_cnt, sizeof(struct page *), GFP_KERNEL);
+	pages = kmalloc_nolock(page_cnt * sizeof(struct page *), __GFP_ZERO, -1);
 	if (!pages)
 		return 0;
 
@@ -543,15 +542,15 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 				  page_cnt << PAGE_SHIFT, apply_range_set_cb, &data);
 	if (ret) {
 		for (i = 0; i < page_cnt; i++)
-			__free_page(pages[i]);
+			free_pages_nolock(pages[i], 0);
 		goto out;
 	}
-	kvfree(pages);
+	kfree_nolock(pages);
 	return clear_lo32(arena->user_vm_start) + uaddr32;
 out:
 	range_tree_set(&arena->rt, pgoff, page_cnt);
 out_free_pages:
-	kvfree(pages);
+	kfree_nolock(pages);
 	return 0;
 }
 
