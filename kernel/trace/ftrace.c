@@ -6048,6 +6048,8 @@ int register_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 	ops->direct_call = addr;
 
 	err = register_ftrace_function_nolock(ops);
+	if (err)
+		remove_direct_functions_hash(hash, addr);
 
  out_unlock:
 	mutex_unlock(&direct_mutex);
