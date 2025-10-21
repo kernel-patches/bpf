@@ -79,9 +79,7 @@
 #define KF_ARENA_RET    (1 << 13) /* kfunc returns an arena pointer */
 #define KF_ARENA_ARG1   (1 << 14) /* kfunc takes an arena pointer as its first argument */
 #define KF_ARENA_ARG2   (1 << 15) /* kfunc takes an arena pointer as its second argument */
-/* kfunc takes a pointer to struct bpf_prog_aux as the last argument,
- * passed implicitly in BPF */
-#define KF_IMPLICIT_PROG_AUX_ARG (1 << 16)
+#define KF_MAGIC_ARGS   (1 << 16) /* kfunc in-kernel signature is different from kfunc BPF signature */
 
 /*
  * Tag marking a kernel function as a kfunc. This is meant to minimize the
@@ -303,6 +301,15 @@ static inline bool btf_kind_core_compat(const struct btf_type *t1,
 static inline bool str_is_empty(const char *s)
 {
 	return !s || !s[0];
+}
+
+static inline bool str_match_suffix(const char *str, const char *suffix)
+{
+	int len = strlen(str), suffix_len = strlen(suffix);
+
+	if (len <= suffix_len)
+		return false;
+	return !strncmp(str + len - suffix_len, suffix, suffix_len);
 }
 
 static inline u16 btf_kind(const struct btf_type *t)
