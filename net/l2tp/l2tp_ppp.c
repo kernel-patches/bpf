@@ -535,6 +535,13 @@ struct l2tp_connect_info {
 static int pppol2tp_sockaddr_get_info(const void *sa, int sa_len,
 				      struct l2tp_connect_info *info)
 {
+	const struct sockaddr_unspec *sockaddr = sa;
+
+	if (sa_len < offsetofend(struct sockaddr, sa_family))
+		return -EINVAL;
+	if (sockaddr->sa_family != AF_PPPOX)
+		return -EAFNOSUPPORT;
+
 	switch (sa_len) {
 	case sizeof(struct sockaddr_pppol2tp):
 	{
@@ -684,7 +691,7 @@ static struct l2tp_tunnel *pppol2tp_tunnel_get(struct net *net,
 
 /* connect() handler. Attach a PPPoX socket to a tunnel UDP socket
  */
-static int pppol2tp_connect(struct socket *sock, struct sockaddr *uservaddr,
+static int pppol2tp_connect(struct socket *sock, struct sockaddr_unspec *uservaddr,
 			    int sockaddr_len, int flags)
 {
 	struct sock *sk = sock->sk;

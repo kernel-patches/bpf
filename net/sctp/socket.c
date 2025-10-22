@@ -306,7 +306,8 @@ static struct sctp_transport *sctp_addr_id2transport(struct sock *sk,
  *             sockaddr_in6 [RFC 2553]),
  *   addr_len - the size of the address structure.
  */
-static int sctp_bind(struct sock *sk, struct sockaddr *addr, int addr_len)
+static int sctp_bind(struct sock *sk, struct sockaddr_unspec *addr,
+		     int addr_len)
 {
 	int retval = 0;
 
@@ -1053,13 +1054,13 @@ static int sctp_setsockopt_bindx(struct sock *sk, struct sockaddr *addrs,
 	}
 }
 
-static int sctp_bind_add(struct sock *sk, struct sockaddr *addrs,
-		int addrlen)
+static int sctp_bind_add(struct sock *sk, struct sockaddr_unspec *addrs,
+			 int addrlen)
 {
 	int err;
 
 	lock_sock(sk);
-	err = sctp_setsockopt_bindx(sk, addrs, addrlen, SCTP_BINDX_ADD_ADDR);
+	err = sctp_setsockopt_bindx(sk, (struct sockaddr *)addrs, addrlen, SCTP_BINDX_ADD_ADDR);
 	release_sock(sk);
 	return err;
 }
@@ -4822,7 +4823,7 @@ static int sctp_connect(struct sock *sk, struct sockaddr *addr,
 	return err;
 }
 
-int sctp_inet_connect(struct socket *sock, struct sockaddr *uaddr,
+int sctp_inet_connect(struct socket *sock, struct sockaddr_unspec *uaddr,
 		      int addr_len, int flags)
 {
 	if (addr_len < sizeof(uaddr->sa_family))
@@ -4831,7 +4832,7 @@ int sctp_inet_connect(struct socket *sock, struct sockaddr *uaddr,
 	if (uaddr->sa_family == AF_UNSPEC)
 		return -EOPNOTSUPP;
 
-	return sctp_connect(sock->sk, uaddr, addr_len, flags);
+	return sctp_connect(sock->sk, (struct sockaddr *)uaddr, addr_len, flags);
 }
 
 /* Only called when shutdown a listening SCTP socket. */
