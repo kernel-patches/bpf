@@ -103,3 +103,17 @@ int BPF_URETPROBE(test8, int ret)
 	test8_result = (const void *) addr == (const void *) uprobe_trigger;
 	return 0;
 }
+
+__u64 test9_result1 = 0;
+__u64 test9_result2 = 0;
+SEC("fsession/bpf_fentry_test1")
+int BPF_PROG(test9, int a)
+{
+	__u64 addr = bpf_get_func_ip(ctx);
+
+	if (bpf_tracing_is_exit(ctx))
+		test9_result1 = (const void *) addr == &bpf_fentry_test1;
+	else
+		test9_result2 = (const void *) addr == &bpf_fentry_test1;
+	return 0;
+}
