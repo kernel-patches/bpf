@@ -263,6 +263,7 @@ __naked void ldsx_ctx_8(void)
 	: __clobber_all);
 }
 
+#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 SEC("syscall")
 __description("Arena LDSX Disasm")
 __success
@@ -425,6 +426,7 @@ __naked void arena_ldsx_s32(void *ctx)
 	:  __clobber_all
 	);
 }
+#endif
 
 /* to retain debug info for BTF generation */
 void kfunc_root(void)
