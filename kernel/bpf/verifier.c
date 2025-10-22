@@ -556,7 +556,7 @@ static bool is_async_cb_sleepable(struct bpf_verifier_env *env, struct bpf_insn 
 
 	/* bpf_wq and bpf_task_work callbacks are always sleepable. */
 	if (bpf_pseudo_kfunc_call(insn) && insn->off == 0 &&
-	    (is_bpf_wq_set_callback_impl_kfunc(insn->imm) || is_task_work_add_kfunc(insn->imm)))
+	    (is_bpf_wq_set_callback_kfunc(insn->imm) || is_task_work_add_kfunc(insn->imm)))
 		return true;
 
 	verifier_bug(env, "unhandled async callback in is_async_cb_sleepable");
@@ -3090,7 +3090,6 @@ struct bpf_kfunc_desc {
 	s32 imm;
 	u16 offset;
 	unsigned long addr;
-	u32 flags;
 };
 
 struct bpf_kfunc_btf {
@@ -3251,98 +3250,30 @@ static struct btf *find_kfunc_desc_btf(struct bpf_verifier_env *env, s16 offset)
 }
 
 #define KF_IMPL_SUFFIX "_impl"
-#define KF_IMPL_SUFFIX_LEN 5
 
-// static unsigned long lookup_kfunc_addr_by_name(const char *func_name)
-// {
-// 	char tmp[KSYM_SYMBOL_LEN];
-// 	unsigned long addr;
-// 	int i;
-
-// 	addr = kallsyms_lookup_name(func_name);
-// 	if (addr)
-// 		return addr;
-
-// 	if (str_match_suffix(func_name, KF_IMPL_SUFFIX)) {
-// 		i = strlen(func_name) - strlen(KF_IMPL_SUFFIX);
-// 		strncpy(tmp, func_name, i);
-// 		tmp[i] = '\0';
-// 		addr = kallsyms_lookup_name(tmp);
-// 	}
-
-// 	return addr;
-// }
-
-// static unsigned long lookup_impl_kfunc_addr(struct bpf_verifier_env *env, struct btf *desc_btf, const char *func_name)
-// {
-// 	char tmp[KSYM_SYMBOL_LEN];
-// 	u32 flags, func_id;
-// 	int i;
-
-// 	if (!str_match_suffix(func_name, KF_IMPL_SUFFIX))
-// 		goto out_not_found;
-
-// 	/* A kfunc with _impl suffix is potentially an ephemeral kfunc
-// 	 * that exists only in BTF. To verify that, lookup the BTF ID
-// 	 * wihout _impl suffix and check that the counterpart kfunc
-// 	 * is flagged with KF_MAGIC_ARGS
-// 	 */
-// 	i = strlen(func_name) - strlen(KF_IMPL_SUFFIX);
-// 	strncpy(tmp, func_name, i);
-// 	tmp[i] = '\0';
-
-// 	func_id = btf_find_by_name_kind(desc_btf, tmp, BTF_KIND_FUNC);
-// 	if (func_id < 0)
-// 		goto out_not_found;
-
-// 	flags = *btf_kfunc_id_set_contains(desc_btf, func_id, env->prog);
-
-// 	if (KF_MAGIC_ARGS & flags)
-// 		return kallsyms_lookup_name(tmp);
-
-// out_not_found:
-// 	return 0;
-// }
-
-static int resolve_magic_impl_kfunc(struct bpf_verifier_env *env, struct btf *desc_btf, const char *impl_name, struct bpf_kfunc_desc *desc)
+static s32 lookup_magic_kfunc_by_impl(struct btf *desc_btf, const char *impl_name, const struct bpf_prog *prog)
 {
 	char name[KSYM_SYMBOL_LEN];
-	u32 *flags, func_id;
-	unsigned long addr;
+	s32 func_id;
+	u32 *flags;
 	int i;
 
-	i = strlen(impl_name) - KF_IMPL_SUFFIX_LEN;
+	if (!str_match_suffix(impl_name, KF_IMPL_SUFFIX))
+		return -ENOENT;
+
+	i = strlen(impl_name) - strlen(KF_IMPL_SUFFIX);
 	strncpy(name, impl_name, i);
 	name[i] = '\0';
 
 	func_id = btf_find_by_name_kind(desc_btf, name, BTF_KIND_FUNC);
-	if (func_id < 0) {
-		verbose(env, "cannot find BTF id for kernel function %s\n", name);
-		return -EINVAL;
-	}
+	if (func_id < 0)
+		return func_id;
 
-	flags = btf_kfunc_id_set_contains(desc_btf, func_id, env->prog);
-	if (!flags) {
-		verbose(env, "calling kernel function %s is not allowed\n", name);
-		return -EACCES;
-	}
+	flags = btf_kfunc_id_set_contains(desc_btf, func_id, prog);
+	if (flags && KF_MAGIC_ARGS & *flags)
+		return func_id;
 
-	if (!(KF_MAGIC_ARGS & *flags)) {
-		verbose(env, "expected kernel function %s to have KF_MAGIC_ARGS flag\n", name);
-		return -EACCES;
-	}
-
-	addr = kallsyms_lookup_name(name);
-	if (!addr) {
-		verbose(env, "cannot find address for kernel function %s\n",
-			name);
-		return -EINVAL;
-	}
-
-	desc->addr = addr;
-	desc->flags = *flags & ~KF_MAGIC_ARGS;
-
-	return 0;
+	return -ENOENT;
 }
 
 static const struct btf_type *find_magic_kfunc_proto(struct btf *desc_btf, const char *func_name)
@@ -3352,9 +3283,11 @@ static const struct btf_type *find_magic_kfunc_proto(struct btf *desc_btf, const
 	u32 impl_func_id;
 
 	strncpy(impl_name, func_name, strlen(func_name));
-	strncat(impl_name, KF_IMPL_SUFFIX, KF_IMPL_SUFFIX_LEN);
+	strncat(impl_name, KF_IMPL_SUFFIX, strlen(KF_IMPL_SUFFIX));
 
 	impl_func_id = btf_find_by_name_kind(desc_btf, impl_name, BTF_KIND_FUNC);
+	if (impl_func_id < 0)
+		return NULL;
 
 	impl_func = btf_type_by_id(desc_btf, impl_func_id);
 	if (!impl_func || !btf_type_is_func(impl_func))
@@ -3370,17 +3303,18 @@ static const struct btf_type *find_magic_kfunc_proto(struct btf *desc_btf, const
 
 static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 {
-	const struct btf_type *func, *func_proto;
+	const struct btf_type *func, *tmp_func, *func_proto;
 	struct bpf_kfunc_btf_tab *btf_tab;
 	struct bpf_kfunc_desc_tab *tab;
 	struct bpf_prog_aux *prog_aux;
 	struct bpf_kfunc_desc *desc;
-	const char *func_name;
+	const char *func_name, *tmp_name;
 	struct btf *desc_btf;
 	unsigned long call_imm;
 	unsigned long addr;
 	int err = 0;
 	u32 *kfunc_flags;
+	s32 tmp_func_id;
 
 	prog_aux = env->prog->aux;
 	tab = prog_aux->kfunc_tab;
@@ -3463,29 +3397,26 @@ static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 
 	kfunc_flags = btf_kfunc_id_set_contains(desc_btf, func_id, env->prog);
 	func_name = btf_name_by_offset(desc_btf, func->name_off);
-	desc = &tab->descs[tab->nr_descs++];
 
 	addr = kallsyms_lookup_name(func_name);
 
 	/* This may be an _impl kfunc with KF_MAGIC_ARGS counterpart */
-	if (unlikely(!addr && !kfunc_flags && str_match_suffix(func_name, KF_IMPL_SUFFIX))) {
-		err = resolve_magic_impl_kfunc(env, desc_btf, func_name, desc);
-		if (err)
-			return err;
-		goto distill_proto;
+	if (unlikely(!addr && !kfunc_flags)) {
+		tmp_func_id = lookup_magic_kfunc_by_impl(desc_btf, func_name, env->prog);
+		if (tmp_func_id < 0)
+			return -EACCES;
+		tmp_func = btf_type_by_id(desc_btf, tmp_func_id);
+		if (!tmp_func || !btf_type_is_func(tmp_func))
+			return -EACCES;
+		tmp_name = btf_name_by_offset(desc_btf, tmp_func->name_off);
+		addr = kallsyms_lookup_name(tmp_name);
+		goto addr_check;
 	}
 
 	if (!kfunc_flags) {
 		verbose(env, "calling kernel function %s is not allowed\n", func_name);
 		return -EACCES;
 	}
-
-	if (!addr) {
-		verbose(env, "cannot find address for kernel function %s\n",
-			func_name);
-		return -EINVAL;
-	}
-	specialize_kfunc(env, func_id, offset, &addr);
 
 	if (unlikely(KF_MAGIC_ARGS & *kfunc_flags)) {
 		func_proto = find_magic_kfunc_proto(desc_btf, func_name);
@@ -3496,15 +3427,13 @@ static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 		}
 	}
 
-	desc->addr = addr;
-	desc->flags = *kfunc_flags;
-
-distill_proto:
-	err = btf_distill_func_proto(&env->log, desc_btf,
-				     func_proto, func_name,
-				     &desc->func_model);
-	if (err)
-		return err;
+addr_check:
+	if (!addr) {
+		verbose(env, "cannot find address for kernel function %s\n",
+			func_name);
+		return -EINVAL;
+	}
+	specialize_kfunc(env, func_id, offset, &addr);
 
 	if (bpf_jit_supports_far_kfunc_call()) {
 		call_imm = func_id;
@@ -3518,9 +3447,17 @@ distill_proto:
 		}
 	}
 
+	desc = &tab->descs[tab->nr_descs++];
+	desc->addr = addr;
 	desc->func_id = func_id;
 	desc->imm = call_imm;
 	desc->offset = offset;
+	err = btf_distill_func_proto(&env->log, desc_btf,
+				     func_proto, func_name,
+				     &desc->func_model);
+	if (err)
+		return err;
+
 	sort(tab->descs, tab->nr_descs, sizeof(tab->descs[0]),
 		kfunc_desc_cmp_by_id_off, NULL);
 
@@ -13796,8 +13733,7 @@ static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 			    const char **kfunc_name)
 {
 	const struct btf_type *func, *func_proto;
-	const struct bpf_kfunc_desc *desc;
-	u32 func_id;
+	u32 func_id, tmp_func_id, *kfunc_flags;
 	const char *func_name;
 	struct btf *desc_btf;
 
@@ -13817,14 +13753,25 @@ static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 	if (kfunc_name)
 		*kfunc_name = func_name;
 
-	desc = find_kfunc_desc(env->prog, func_id, insn->off);
-	if (!desc)
-		return -EACCES;
+	kfunc_flags = btf_kfunc_id_set_contains(desc_btf, func_id, env->prog);
+	func_proto = btf_type_by_id(desc_btf, func->type);
 
-	if (unlikely(KF_MAGIC_ARGS & desc->flags))
+	if (unlikely(!kfunc_flags)) {
+		/* An _impl kfunc with KF_MAGIC_ARGS counterpart
+		 * does not have its own kfunc flags.
+		 */
+		tmp_func_id = lookup_magic_kfunc_by_impl(desc_btf, func_name, env->prog);
+		if (func_id < 0)
+			return -EACCES;
+		kfunc_flags = btf_kfunc_id_set_contains(desc_btf, tmp_func_id, env->prog);
+		if (!kfunc_flags)
+			return -EACCES;
+	} else if (unlikely(KF_MAGIC_ARGS & *kfunc_flags)) {
+		/* An actual func_proto of a kfunc with KF_MAGIC_ARGS flag
+		 * can be found through the corresponding _impl kfunc.
+		 */
 		func_proto = find_magic_kfunc_proto(desc_btf, func_name);
-	else
-		func_proto = btf_type_by_id(desc_btf, func->type);
+	}
 
 	if (!func_proto)
 		return -EACCES;
@@ -13832,7 +13779,7 @@ static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 	memset(meta, 0, sizeof(*meta));
 	meta->btf = desc_btf;
 	meta->func_id = func_id;
-	meta->kfunc_flags = desc->flags;
+	meta->kfunc_flags = *kfunc_flags;
 	meta->func_proto = func_proto;
 	meta->func_name = func_name;
 
@@ -14114,7 +14061,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		meta.r0_rdonly = false;
 	}
 
-	if (is_bpf_wq_set_callback_impl_kfunc(meta.func_id)) {
+	if (is_bpf_wq_set_callback_kfunc(meta.func_id)) {
 		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
 					 set_timer_callback_state);
 		if (err) {
