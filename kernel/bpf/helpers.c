@@ -4252,6 +4252,47 @@ __bpf_kfunc int bpf_task_work_schedule_resume(struct task_struct *task, struct b
 	return bpf_task_work_schedule(task, tw, map__map, callback, aux__prog, TWA_RESUME);
 }
 
+/**
+ * bpf_in_nmi_context - Check whether we are serving NMI
+ *
+ * Return: true if we are serving NMI
+ */
+__bpf_kfunc bool bpf_in_nmi_context(void)
+{
+	return in_nmi();
+}
+
+/**
+ * bpf_in_hardirq_context - Check whether we are serving hard irq
+ *
+ * Return: true if we are serving hard irq
+ */
+__bpf_kfunc bool bpf_in_hardirq_context(void)
+{
+	return in_hardirq();
+}
+
+/**
+ * bpf_in_softirq_context - Check whether we are serving soft irq
+ *
+ * Return: true if we are serving soft irq
+ */
+__bpf_kfunc bool bpf_in_softirq_context(void)
+{
+	/* in_softirq() has been deprecated */
+	return in_serving_softirq();
+}
+
+/**
+ * bpf_in_task_context - Check whether we are in task context
+ *
+ * Return: true if we are in task context
+ */
+__bpf_kfunc bool bpf_in_task_context(void)
+{
+	return in_task();
+}
+
 __bpf_kfunc_end_defs();
 
 static void bpf_task_work_cancel_scheduled(struct irq_work *irq_work)
@@ -4429,6 +4470,10 @@ BTF_ID_FLAGS(func, bpf_cgroup_read_xattr, KF_RCU)
 BTF_ID_FLAGS(func, bpf_stream_vprintk, KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_task_work_schedule_signal, KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_task_work_schedule_resume, KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_in_softirq_context)
+BTF_ID_FLAGS(func, bpf_in_hardirq_context)
+BTF_ID_FLAGS(func, bpf_in_task_context)
+BTF_ID_FLAGS(func, bpf_in_nmi_context)
 BTF_KFUNCS_END(common_btf_ids)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
