@@ -3,6 +3,7 @@
 #include <test_progs.h>
 #include "fsession_test.skel.h"
 #include "fsession_cookie.skel.h"
+#include "fsession_mixed.skel.h"
 
 static int check_result(struct fsession_test *skel)
 {
@@ -114,6 +115,35 @@ cleanup:
 	fsession_cookie__destroy(skel);
 }
 
+static void test_fsession_mixed(void)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	struct fsession_mixed *skel = NULL;
+	int err, prog_fd;
+
+	skel = fsession_mixed__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "fsession_mixed__open_and_load"))
+		goto cleanup;
+
+	err = fsession_mixed__attach(skel);
+	if (!ASSERT_OK(err, "fsession_mixed_attach"))
+		goto cleanup;
+
+	prog_fd = bpf_program__fd(skel->progs.test1);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	if (!ASSERT_OK(err, "test_run_opts err"))
+		goto cleanup;
+	if (!ASSERT_OK(topts.retval, "test_run_opts retval"))
+		goto cleanup;
+
+	for (int i = 0; i < sizeof(*skel->bss) / sizeof(__u64); i++) {
+		if (!ASSERT_EQ(((__u64 *)skel->bss)[i], 1, "test_result"))
+			goto cleanup;
+	}
+cleanup:
+	fsession_mixed__destroy(skel);
+}
+
 void test_fsession_test(void)
 {
 #if !defined(__x86_64__)
@@ -126,4 +156,6 @@ void test_fsession_test(void)
 		test_fsession_reattach();
 	if (test__start_subtest("fsession_cookie"))
 		test_fsession_cookie();
+	if (test__start_subtest("fsession_mixed"))
+		test_fsession_mixed();
 }
