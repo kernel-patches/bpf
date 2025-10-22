@@ -385,6 +385,33 @@ struct sk_buff *xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 struct xdp_frame *xdpf_clone(struct xdp_frame *xdpf);
 
 static inline
+void xdp_convert_skb_to_buff(struct sk_buff *skb, struct xdp_buff *xdp,
+			     struct xdp_rxq_info *xdp_rxq)
+{
+	u32 frame_sz, pkt_len;
+
+	/* SKB "head" area always have tailroom for skb_shared_info */
+	frame_sz = skb_end_pointer(skb) - skb->head;
+	frame_sz += SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
+
+	DEBUG_NET_WARN_ON_ONCE(!skb_mac_header_was_set(skb));
+	pkt_len =  skb->tail - skb->mac_header;
+
+	xdp_init_buff(xdp, frame_sz, xdp_rxq);
+	xdp_prepare_buff(xdp, skb->head, skb->mac_header, pkt_len, true);
+
+	if (skb_is_nonlinear(skb)) {
+		skb_shinfo(skb)->xdp_frags_size = skb->data_len;
+		xdp_buff_set_frags_flag(xdp);
+	} else {
+		xdp_buff_clear_frags_flag(xdp);
+	}
+
+	xdp->rxq->mem.type = page_pool_page_is_pp(virt_to_head_page(xdp->data)) ?
+				MEM_TYPE_PAGE_POOL : MEM_TYPE_PAGE_SHARED;
+}
+
+static inline
 void xdp_convert_frame_to_buff(const struct xdp_frame *frame,
 			       struct xdp_buff *xdp)
 {
