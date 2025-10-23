@@ -206,7 +206,7 @@ jobs:
           llvm-version: ${{ inputs.llvm_version }}
       - name: Tar artifacts
         id: tar-artifacts
-        uses: libbpf/ci/tar-artifacts@v3
+        uses: liu-song-6/ci/tar-artifacts
         env:
           ARCHIVE_BPF_SELFTESTS: 'true'
           ARCHIVE_MAKE_HELPERS: 'true'
