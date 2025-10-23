@@ -27,6 +27,7 @@ void bpf_cgrp_storage_free(struct cgroup *cgroup)
 	if (!local_storage)
 		goto out;
 
+	RCU_INIT_POINTER(cgroup->bpf_cgrp_storage, NULL);
 	bpf_local_storage_destroy(local_storage);
 out:
 	rcu_read_unlock();
@@ -89,7 +90,7 @@ static int cgroup_storage_delete(struct cgroup *cgroup, struct bpf_map *map)
 	if (!sdata)
 		return -ENOENT;
 
-	return bpf_selem_unlink(SELEM(sdata), false);
+	return bpf_selem_unlink(SELEM(sdata));
 }
 
 static long bpf_cgrp_storage_delete_elem(struct bpf_map *map, void *key)
