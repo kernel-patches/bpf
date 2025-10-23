@@ -28,6 +28,7 @@ void bpf_cgrp_storage_free(struct cgroup *cgroup)
 		goto out;
 
 	bpf_local_storage_destroy(local_storage);
+	RCU_INIT_POINTER(cgroup->bpf_cgrp_storage, NULL);
 out:
 	rcu_read_unlock();
 }

@@ -54,6 +54,7 @@ void bpf_task_storage_free(struct task_struct *task)
 		goto out;
 
 	bpf_local_storage_destroy(local_storage);
+	RCU_INIT_POINTER(task->bpf_storage, NULL);
 out:
 	rcu_read_unlock();
 }
