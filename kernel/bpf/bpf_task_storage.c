@@ -53,6 +53,7 @@ void bpf_task_storage_free(struct task_struct *task)
 	if (!local_storage)
 		goto out;
 
+	RCU_INIT_POINTER(task->bpf_storage, NULL);
 	bpf_local_storage_destroy(local_storage);
 out:
 	rcu_read_unlock();
@@ -134,7 +135,7 @@ static int task_storage_delete(struct task_struct *task, struct bpf_map *map)
 	if (!sdata)
 		return -ENOENT;
 
-	return bpf_selem_unlink(SELEM(sdata), false);
+	return bpf_selem_unlink(SELEM(sdata));
 }
 
 static long bpf_pid_task_storage_delete_elem(struct bpf_map *map, void *key)
