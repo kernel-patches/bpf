@@ -2988,15 +2988,15 @@ static int bpf_object__init_user_btf_maps(struct bpf_object *obj, bool strict,
 	int nr_types, i, vlen, err;
 	const struct btf_type *t;
 	const char *name;
-	Elf_Data *data;
+	Elf_Data *scn_data;
 	Elf_Scn *scn;
 
 	if (obj->efile.btf_maps_shndx < 0)
 		return 0;
 
 	scn = elf_sec_by_idx(obj, obj->efile.btf_maps_shndx);
-	data = elf_sec_data(obj, scn);
-	if (!scn || !data) {
+	scn_data = elf_sec_data(obj, scn);
+	if (!scn_data) {
 		pr_warn("elf: failed to get %s map definitions for %s\n",
 			MAPS_ELF_SEC, obj->path);
 		return -EINVAL;
