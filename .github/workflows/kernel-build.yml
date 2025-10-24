@@ -150,7 +150,8 @@ jobs:
           arch: ${{ inputs.arch }}
           gcc-version: ${{ inputs.gcc_version }}
           llvm-version: ${{ inputs.llvm_version }}
-          pahole: master
+          pahole-origin: 'https://github.com/theihor/dwarves.git'
+          pahole: magic-args.draft
 
         # We have to setup qemu+binfmt in order to enable cross-compation of selftests.
         # During selftests build, freshly built bpftool is executed.
