@@ -1966,3 +1966,8 @@ bool bpf_jit_supports_subprog_tailcalls(void)
 {
 	return true;
 }
+
+int arch_bpf_get_func_reg_count(const struct btf_func_model *m)
+{
+	return m->nr_args;
+}

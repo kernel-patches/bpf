@@ -2599,6 +2599,22 @@ static int alloc_stack(struct bpf_tramp_jit *tjit, size_t size)
 /* -mfentry generates a 6-byte nop on s390x. */
 #define S390X_PATCH_SIZE 6
 
+int arch_bpf_get_func_reg_count(const struct btf_func_model *m)
+{
+	int nr_bpf_args = 0, i;
+
+	for (i = 0; i < m->nr_args; i++) {
+		if (m->arg_size[i] <= 8)
+			nr_bpf_args += 1;
+		else if (m->arg_size[i] <= 16)
+			nr_bpf_args += 2;
+		else
+			return -ENOTSUPP;
+	}
+
+	return nr_bpf_args;
+}
+
 static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 					 struct bpf_tramp_jit *tjit,
 					 const struct btf_func_model *m,
@@ -2633,15 +2649,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	 * a register; larger arguments are passed via pointers.
 	 * We need to deal with this difference.
 	 */
-	nr_bpf_args = 0;
-	for (i = 0; i < m->nr_args; i++) {
-		if (m->arg_size[i] <= 8)
-			nr_bpf_args += 1;
-		else if (m->arg_size[i] <= 16)
-			nr_bpf_args += 2;
-		else
-			return -ENOTSUPP;
-	}
+	nr_bpf_args = arch_bpf_get_func_reg_count(m);
 
 	/*
 	 * Calculate the stack layout.

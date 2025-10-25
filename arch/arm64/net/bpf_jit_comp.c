@@ -2778,6 +2778,18 @@ int arch_protect_bpf_trampoline(void *image, unsigned int size)
 	return 0;
 }
 
+int arch_bpf_get_func_reg_count(const struct btf_func_model *m)
+{
+	struct arg_aux aaux;
+	int ret;
+
+	ret = calc_arg_aux(m, &aaux);
+	if (ret < 0)
+		return ret;
+
+	return aaux.regs_for_args + aaux.bstack_for_args / 8;
+}
+
 int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *ro_image,
 				void *ro_image_end, const struct btf_func_model *m,
 				u32 flags, struct bpf_tramp_links *tlinks,

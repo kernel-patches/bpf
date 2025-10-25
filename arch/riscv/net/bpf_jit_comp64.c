@@ -987,6 +987,16 @@ static int invoke_bpf_prog(struct bpf_tramp_link *l, int args_off, int retval_of
 	return ret;
 }
 
+int arch_bpf_get_func_reg_count(const struct btf_func_model *m)
+{
+	int nr_arg_slots = 0, i;
+
+	for (i = 0; i < m->nr_args; i++)
+		nr_arg_slots += round_up(m->arg_size[i], 8) / 8;
+
+	return nr_arg_slots;
+}
+
 static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 					 const struct btf_func_model *m,
 					 struct bpf_tramp_links *tlinks,
@@ -1054,8 +1064,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	if (m->nr_args > MAX_BPF_FUNC_ARGS)
 		return -ENOTSUPP;
 
-	for (i = 0; i < m->nr_args; i++)
-		nr_arg_slots += round_up(m->arg_size[i], 8) / 8;
+	nr_arg_slots = arch_bpf_get_func_reg_count(m);
 
 	/* room of trampoline frame to store return address and frame pointer */
 	stack_size += 16;

@@ -672,6 +672,18 @@ static void bpf_trampoline_restore_args_stack(u32 *image, struct codegen_context
 	bpf_trampoline_restore_args_regs(image, ctx, nr_regs, regs_off);
 }
 
+int arch_bpf_get_func_reg_count(const struct btf_func_model *m)
+{
+	int nr_regs = m->nr_args, i;
+
+	for (i = 0; i < m->nr_args; i++) {
+		if (m->arg_size[i] > SZL)
+			nr_regs += round_up(m->arg_size[i], SZL) / SZL - 1;
+	}
+	
+	return nr_regs;
+}
+
 static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_image,
 					 void *rw_image_end, void *ro_image,
 					 const struct btf_func_model *m, u32 flags,
@@ -692,12 +704,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	if (IS_ENABLED(CONFIG_PPC32))
 		return -EOPNOTSUPP;
 
-	nr_regs = m->nr_args;
-	/* Extra registers for struct arguments */
-	for (i = 0; i < m->nr_args; i++)
-		if (m->arg_size[i] > SZL)
-			nr_regs += round_up(m->arg_size[i], SZL) / SZL - 1;
-
+	nr_regs = arch_bpf_get_func_reg_count(m);
 	if (nr_regs > MAX_BPF_FUNC_ARGS)
 		return -EOPNOTSUPP;
 
