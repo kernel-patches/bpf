@@ -37,7 +37,6 @@
 #include <linux/lsm/selinux.h>
 #include <linux/lsm/smack.h>
 #include <linux/lsm/apparmor.h>
-#include <linux/lsm/bpf.h>
 
 struct linux_binprm;
 struct cred;
@@ -163,7 +162,6 @@ struct lsm_prop {
 	struct lsm_prop_selinux selinux;
 	struct lsm_prop_smack smack;
 	struct lsm_prop_apparmor apparmor;
-	struct lsm_prop_bpf bpf;
 };
 
 extern const char *const lockdown_reasons[LOCKDOWN_CONFIDENTIALITY_MAX+1];
