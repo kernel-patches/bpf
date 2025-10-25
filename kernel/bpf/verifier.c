@@ -22755,14 +22755,26 @@ patch_map_ops_generic:
 		    insn->imm == BPF_FUNC_get_func_ret) {
 			if (eatype == BPF_TRACE_FEXIT ||
 			    eatype == BPF_MODIFY_RETURN) {
-				/* Load nr_args from ctx - 8 */
-				insn_buf[0] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1, -8);
-				insn_buf[1] = BPF_ALU64_IMM(BPF_LSH, BPF_REG_0, 3);
-				insn_buf[2] = BPF_ALU64_REG(BPF_ADD, BPF_REG_0, BPF_REG_1);
-				insn_buf[3] = BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_0, 0);
-				insn_buf[4] = BPF_STX_MEM(BPF_DW, BPF_REG_2, BPF_REG_3, 0);
-				insn_buf[5] = BPF_MOV64_IMM(BPF_REG_0, 0);
-				cnt = 6;
+				struct btf_func_model fmodel;
+				struct btf *btf = prog->aux->attach_btf;
+				const struct btf_type *t;
+				const char *tname;
+				int nr_regs;
+
+				t = prog->aux->attach_func_proto;
+				if (!t || !btf_type_is_func_proto(t))
+					return -EINVAL;
+				if (btf_distill_func_proto(&env->log, btf, t, tname, &fmodel))
+					return -EINVAL;
+				nr_regs = arch_bpf_get_func_reg_count(&fmodel);
+				if (nr_regs < 0)
+					return -EINVAL;
+				/* Use JIT-time computed nr_regs */
+				insn_buf[0] = BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, nr_regs * 8);
+				insn_buf[1] = BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_1, 0);
+				insn_buf[2] = BPF_STX_MEM(BPF_DW, BPF_REG_2, BPF_REG_3, 0);
+				insn_buf[3] = BPF_MOV64_IMM(BPF_REG_0, 0);
+				cnt = 4;
 			} else {
 				insn_buf[0] = BPF_MOV64_IMM(BPF_REG_0, -EOPNOTSUPP);
 				cnt = 1;
