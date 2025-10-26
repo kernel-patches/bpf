@@ -3827,6 +3827,9 @@ out_image:
 			jit_data->header = header;
 			jit_data->rw_header = rw_header;
 		}
+
+		bpf_prog_update_insn_ptrs(prog, addrs, image);
+
 		/*
 		 * ctx.prog_offset is used when CFI preambles put code *before*
 		 * the function. See emit_cfi(). For FineIBT specifically this code
