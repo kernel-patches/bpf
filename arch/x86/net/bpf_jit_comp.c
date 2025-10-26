@@ -3478,6 +3478,9 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 	int ret;
 	u32 size = image_end - image;
 
+	if (tlinks[BPF_TRAMP_SESSION].nr_links)
+		return -EOPNOTSUPP;
+
 	/* rw_image doesn't need to be in module memory range, so we can
 	 * use kvmalloc.
 	 */
