@@ -228,3 +228,37 @@ int BPF_PROG(test12, int a)
 		test12_exit_ok = *cookie == 0x1111222233334444ull;
 	return 0;
 }
+
+__u64 test13_entry_result = 0;
+__u64 test13_exit_result = 0;
+
+SEC("fsession/bpf_fentry_test1")
+int BPF_PROG(test13, int a, int ret)
+{
+	__u64 *cookie = bpf_fsession_cookie(ctx);
+
+	if (!bpf_tracing_is_exit(ctx)) {
+		test13_entry_result = a == 1 && ret == 0;
+		*cookie = 0x123456ULL;
+		return 0;
+	}
+
+	test13_exit_result = a == 1 && ret == 2 && *cookie == 0x123456ULL;
+	return 0;
+}
+
+__u64 test14_result = 0;
+SEC("fexit/bpf_fentry_test1")
+int BPF_PROG(test14, int a, int ret)
+{
+	test14_result = a == 1 && ret == 2;
+	return 0;
+}
+
+__u64 test15_result = 0;
+SEC("fentry/bpf_fentry_test1")
+int BPF_PROG(test15, int a)
+{
+	test15_result = a == 1;
+	return 0;
+}
