@@ -3648,6 +3648,22 @@ struct x64_jit_data {
 	struct jit_context ctx;
 };
 
+struct insn_ptrs_data {
+	int *addrs;
+	u8 *image;
+};
+
+static void update_insn_ptr(void *jit_priv, u32 xlated_off, u32 *jitted_off, long *ip)
+{
+	struct insn_ptrs_data *data = jit_priv;
+
+	if (!data->addrs || !data->image || !jitted_off || !ip)
+		return;
+
+	*jitted_off = data->addrs[xlated_off];
+	*ip = (long)(data->image + *jitted_off);
+}
+
 #define MAX_PASSES 20
 #define PADDING_PASSES (MAX_PASSES - 5)
 
@@ -3658,6 +3674,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	struct bpf_prog *tmp, *orig_prog = prog;
 	void __percpu *priv_stack_ptr = NULL;
 	struct x64_jit_data *jit_data;
+	struct insn_ptrs_data insn_ptrs_data;
 	int priv_stack_alloc_sz;
 	int proglen, oldproglen = 0;
 	struct jit_context ctx = {};
@@ -3827,6 +3844,12 @@ out_image:
 			jit_data->header = header;
 			jit_data->rw_header = rw_header;
 		}
+
+		/* jit_data may not contain proper info, copy the required fields */
+		insn_ptrs_data.addrs = addrs;
+		insn_ptrs_data.image = image;
+		bpf_prog_update_insn_ptrs(prog, &insn_ptrs_data, update_insn_ptr);
+
 		/*
 		 * ctx.prog_offset is used when CFI preambles put code *before*
 		 * the function. See emit_cfi(). For FineIBT specifically this code
