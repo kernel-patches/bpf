@@ -127,7 +127,7 @@ cleanup:
 	shm_unlink("/tmp_shmem");
 }
 
-#define NR_PIPES 2
+#define NR_PIPES 64
 static void test_kmem(struct bpf_link *link, struct memcg_query *memcg_query)
 {
 	int fds[NR_PIPES][2], i;
