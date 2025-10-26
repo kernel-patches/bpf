@@ -491,9 +491,4 @@ void test_bpf_insn_array(void)
 	if (test__start_subtest("bpf-side-ops"))
 		check_bpf_side();
 }
-#else
-static void test_bpf_insn_array(void)
-{
-
-}
 #endif

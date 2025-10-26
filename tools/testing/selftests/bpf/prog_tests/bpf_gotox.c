@@ -179,7 +179,7 @@ void test_bpf_gotox(void)
 	bpf_gotox__destroy(skel);
 }
 #else
-static void test_bpf_gotox(void)
+void test_bpf_gotox(void)
 {
 }
 #endif
