@@ -28,6 +28,12 @@ __naked void invalid_map_for_tail_call(void)
 	: __clobber_all);
 }
 
+struct {
+	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} prog_array SEC(".maps");
 
 SEC("xdp")
 __description("XDP pkt read allowed after tail call")
@@ -40,7 +46,7 @@ __naked void xdp_legal_after_tail_call(void)
         r9 = r2;                                        \
 	r9 += 8;                                        \
         if r9 > r3 goto l0_%=;                          \
-	r2 = %[map_array] ll;	                        \
+	r2 = %[prog_array] ll;	                        \
 	r3 = 0;				                \
 	call %[bpf_tail_call];                          \
         r0 = *(u64*)(r9 - 8);                           \
@@ -50,7 +56,7 @@ l0_%=:  r0 = 0;                                         \
         : __imm_const(xdp_md_data, offsetof(struct xdp_md, data)),
           __imm_const(xdp_md_data_end, offsetof(struct xdp_md, data_end)),
 	  __imm(bpf_tail_call),
-	  __imm_addr(map_array)
+	  __imm_addr(prog_array)
         : __clobber_all);
 }
 
