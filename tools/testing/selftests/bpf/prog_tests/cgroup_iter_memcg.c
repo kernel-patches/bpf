@@ -44,7 +44,7 @@ static void test_anon(struct bpf_link *link, struct memcg_query *memcg_query)
 	 * Increase memcg anon usage by mapping and writing
 	 * to a new anon region.
 	 */
-	map = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+	map = mmap(NULL, len, PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 	if (!ASSERT_NEQ(map, MAP_FAILED, "mmap anon"))
 		return;
 
@@ -79,7 +79,7 @@ static void test_file(struct bpf_link *link, struct memcg_query *memcg_query)
 	if (!ASSERT_OK(ftruncate(fd, len), "ftruncate"))
 		goto cleanup_fd;
 
-	map = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	map = mmap(NULL, len, PROT_WRITE, MAP_SHARED, fd, 0);
 	if (!ASSERT_NEQ(map, MAP_FAILED, "mmap file"))
 		goto cleanup_fd;
 
@@ -160,8 +160,7 @@ static void test_pgfault(struct bpf_link *link, struct memcg_query *memcg_query)
 	len = sysconf(_SC_PAGESIZE) * 1024;
 
 	/* Create region to use for triggering a page fault. */
-	map = mmap(NULL, len, PROT_READ | PROT_WRITE,
-			MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+	map = mmap(NULL, len, PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 	if (!ASSERT_NEQ(map, MAP_FAILED, "mmap anon"))
 		return;
 
