@@ -1429,6 +1429,9 @@ static int bpf_oom_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
 	if (!btf_id_set_contains(&bpf_oom_declare_oom_kfuncs, kfunc_id))
 		return 0;
 
+	if (IS_ENABLED(CONFIG_PSI) && prog->aux->st_ops == &bpf_psi_bpf_ops)
+		return 0;
+
 	return -EACCES;
 }
 

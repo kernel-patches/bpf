@@ -223,6 +223,10 @@ static void group_init(struct psi_group *group)
 	init_waitqueue_head(&group->rtpoll_wait);
 	timer_setup(&group->rtpoll_timer, poll_timer_fn, 0);
 	rcu_assign_pointer(group->rtpoll_task, NULL);
+#ifdef CONFIG_BPF_SYSCALL
+	spin_lock_init(&group->bpf_triggers_lock);
+	INIT_LIST_HEAD(&group->bpf_triggers);
+#endif
 }
 
 void __init psi_init(void)
@@ -511,10 +515,17 @@ static void update_triggers(struct psi_group *group, u64 now,
 
 		/* Generate an event */
 		if (cmpxchg(&t->event, 0, 1) == 0) {
-			if (t->type == PSI_CGROUP)
-				kernfs_notify(t->of->kn);
-			else
+			switch (t->type) {
+			case PSI_SYSTEM:
 				wake_up_interruptible(&t->event_wait);
+				break;
+			case PSI_CGROUP:
+				kernfs_notify(t->of->kn);
+				break;
+			case PSI_BPF:
+				bpf_psi_handle_event(t);
+				break;
+			}
 		}
 		t->last_event_time = now;
 		/* Reset threshold breach flag once event got generated */
@@ -1368,6 +1379,9 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 	case PSI_CGROUP:
 		t->of = params->of;
 		break;
+	case PSI_BPF:
+		bpf_psi_add_trigger(t, params);
+		break;
 	}
 
 	t->pending_event = false;
@@ -1381,8 +1395,10 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group,
 
 			task = kthread_create(psi_rtpoll_worker, group, "psimon");
 			if (IS_ERR(task)) {
-				kfree(t);
 				mutex_unlock(&group->rtpoll_trigger_lock);
+				if (t->type == PSI_BPF)
+					bpf_psi_remove_trigger(t);
+				kfree(t);
 				return ERR_CAST(task);
 			}
 			atomic_set(&group->rtpoll_wakeup, 0);
@@ -1426,10 +1442,16 @@ void psi_trigger_destroy(struct psi_trigger *t)
 	 * being accessed later. Can happen if cgroup is deleted from under a
 	 * polling process.
 	 */
-	if (t->type == PSI_CGROUP)
-		kernfs_notify(t->of->kn);
-	else
+	switch (t->type) {
+	case PSI_SYSTEM:
 		wake_up_interruptible(&t->event_wait);
+		break;
+	case PSI_CGROUP:
+		kernfs_notify(t->of->kn);
+		break;
+	case PSI_BPF:
+		break;
+	}
 
 	if (t->aggregator == PSI_AVGS) {
 		mutex_lock(&group->avgs_lock);
@@ -1506,10 +1528,16 @@ __poll_t psi_trigger_poll(void **trigger_ptr,
 	if (!t)
 		return DEFAULT_POLLMASK | EPOLLERR | EPOLLPRI;
 
-	if (t->type == PSI_CGROUP)
-		kernfs_generic_poll(t->of, wait);
-	else
+	switch (t->type) {
+	case PSI_SYSTEM:
 		poll_wait(file, &t->event_wait, wait);
+		break;
+	case PSI_CGROUP:
+		kernfs_generic_poll(t->of, wait);
+		break;
+	case PSI_BPF:
+		break;
+	}
 
 	if (cmpxchg(&t->event, 1, 0) == 1)
 		ret |= EPOLLPRI;
