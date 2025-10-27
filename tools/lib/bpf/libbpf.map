@@ -452,3 +452,9 @@ LIBBPF_1.7.0 {
 		bpf_map__set_exclusive_program;
 		bpf_map__exclusive_program;
 } LIBBPF_1.6.0;
+
+LIBBPF_1.8.0 {
+	global:
+		btf__start_id;
+		btf__permute;
+} LIBBPF_1.7.0;

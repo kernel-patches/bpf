@@ -23,6 +23,7 @@
 #include "libbpf_internal.h"
 #include "hashmap.h"
 #include "strset.h"
+#include "btf_sort.h"
 
 #define BTF_MAX_NR_TYPES 0x7fffffffU
 #define BTF_MAX_STR_OFFSET 0x7fffffffU
@@ -92,6 +93,12 @@ struct btf {
 	 *   - for split BTF counts number of types added on top of base BTF.
 	 */
 	__u32 nr_types;
+	/* number of sorted and named types in this BTF instance:
+	 *   - doesn't include special [0] void type;
+	 *   - for split BTF counts number of sorted and named types added on
+	 *     top of base BTF.
+	 */
+	__u32 nr_sorted_types;
 	/* if not NULL, points to the base BTF on top of which the current
 	 * split BTF is based
 	 */
@@ -624,6 +631,11 @@ const struct btf *btf__base_btf(const struct btf *btf)
 	return btf->base_btf;
 }
 
+__u32 btf__start_id(const struct btf *btf)
+{
+	return btf->start_id;
+}
+
 /* internal helper returning non-const pointer to a type */
 struct btf_type *btf_type_by_id(const struct btf *btf, __u32 type_id)
 {
@@ -915,38 +927,16 @@ __s32 btf__find_by_name(const struct btf *btf, const char *type_name)
 	return libbpf_err(-ENOENT);
 }
 
-static __s32 btf_find_by_name_kind(const struct btf *btf, int start_id,
-				   const char *type_name, __u32 kind)
-{
-	__u32 i, nr_types = btf__type_cnt(btf);
-
-	if (kind == BTF_KIND_UNKN || !strcmp(type_name, "void"))
-		return 0;
-
-	for (i = start_id; i < nr_types; i++) {
-		const struct btf_type *t = btf__type_by_id(btf, i);
-		const char *name;
-
-		if (btf_kind(t) != kind)
-			continue;
-		name = btf__name_by_offset(btf, t->name_off);
-		if (name && !strcmp(type_name, name))
-			return i;
-	}
-
-	return libbpf_err(-ENOENT);
-}
-
 __s32 btf__find_by_name_kind_own(const struct btf *btf, const char *type_name,
 				 __u32 kind)
 {
-	return btf_find_by_name_kind(btf, btf->start_id, type_name, kind);
+	return _btf_find_by_name_kind(btf, btf->start_id, type_name, kind);
 }
 
 __s32 btf__find_by_name_kind(const struct btf *btf, const char *type_name,
 			     __u32 kind)
 {
-	return btf_find_by_name_kind(btf, 1, type_name, kind);
+	return _btf_find_by_name_kind(btf, 1, type_name, kind);
 }
 
 static bool btf_is_modifiable(const struct btf *btf)
@@ -1091,6 +1081,7 @@ static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf, b
 	err = err ?: btf_sanity_check(btf);
 	if (err)
 		goto done;
+	btf_check_sorted(btf, btf->start_id);
 
 done:
 	if (err) {
@@ -1715,6 +1706,8 @@ static void btf_invalidate_raw_data(struct btf *btf)
 		free(btf->raw_data_swapped);
 		btf->raw_data_swapped = NULL;
 	}
+	if (btf->nr_sorted_types)
+		btf->nr_sorted_types = 0;
 }
 
 /* Ensure BTF is ready to be modified (by splitting into a three memory
@@ -5829,3 +5822,224 @@ int btf__relocate(struct btf *btf, const struct btf *base_btf)
 		btf->owns_base = false;
 	return libbpf_err(err);
 }
+
+struct btf_permute;
+
+static struct btf_permute *btf_permute_new(struct btf *btf, const struct btf_permute_opts *opts);
+static void btf_permute_free(struct btf_permute *p);
+static int btf_permute_shuffle_types(struct btf_permute *p);
+static int btf_permute_remap_types(struct btf_permute *p);
+static int btf_permute_remap_type_id(__u32 *type_id, void *ctx);
+
+/*
+ * Permute BTF types in-place using the ID mapping from btf_permute_opts->ids.
+ * After permutation, all type ID references are updated to reflect the new
+ * ordering. If a struct btf_ext (representing '.BTF.ext' section) is provided,
+ * type ID references within the BTF extension data are also updated.
+ */
+int btf__permute(struct btf *btf, const struct btf_permute_opts *opts)
+{
+	struct btf_permute *p;
+	int err = 0;
+
+	if (!OPTS_VALID(opts, btf_permute_opts))
+		return libbpf_err(-EINVAL);
+
+	p = btf_permute_new(btf, opts);
+	if (!p) {
+		pr_debug("btf_permute_new failed: %ld\n", PTR_ERR(p));
+		return libbpf_err(-EINVAL);
+	}
+
+	if (btf_ensure_modifiable(btf)) {
+		err = -ENOMEM;
+		goto done;
+	}
+
+	err = btf_permute_shuffle_types(p);
+	if (err < 0) {
+		pr_debug("btf_permute_shuffle_types failed: %s\n", errstr(err));
+		goto done;
+	}
+	err = btf_permute_remap_types(p);
+	if (err) {
+		pr_debug("btf_permute_remap_types failed: %s\n", errstr(err));
+		goto done;
+	}
+
+done:
+	btf_permute_free(p);
+	return libbpf_err(err);
+}
+
+struct btf_permute {
+	/* .BTF section to be permuted in-place */
+	struct btf *btf;
+	struct btf_ext *btf_ext;
+	/* Array of type IDs used for permutation. The array length must equal
+	 * the number of types in the BTF being permuted, excluding the special
+	 * void type at ID 0. For split BTF, the length corresponds to the
+	 * number of types added on top of the base BTF.
+	 */
+	__u32 *ids;
+	/* Array of type IDs used to map from original type ID to a new permuted
+	 * type ID, its length equals to the above ids */
+	__u32 *map;
+};
+
+static struct btf_permute *btf_permute_new(struct btf *btf, const struct btf_permute_opts *opts)
+{
+	struct btf_permute *p = calloc(1, sizeof(struct btf_permute));
+	__u32 *map;
+	int err = 0;
+
+	if (!p)
+		return ERR_PTR(-ENOMEM);
+
+	p->btf = btf;
+	p->btf_ext = OPTS_GET(opts, btf_ext, NULL);
+	p->ids = OPTS_GET(opts, ids, NULL);
+	if (!p->ids) {
+		err = -EINVAL;
+		goto done;
+	}
+
+	map = calloc(btf->nr_types, sizeof(*map));
+	if (!map) {
+		err = -ENOMEM;
+		goto done;
+	}
+	p->map = map;
+
+done:
+	if (err) {
+		btf_permute_free(p);
+		return ERR_PTR(err);
+	}
+
+	return p;
+}
+
+static void btf_permute_free(struct btf_permute *p)
+{
+	if (p->map) {
+		free(p->map);
+		p->map = NULL;
+	}
+	free(p);
+}
+
+/*
+ * Shuffle BTF types.
+ *
+ * Rearranges types according to the permutation map in p->ids. The p->map
+ * array stores the mapping from original type IDs to new shuffled IDs,
+ * which is used in the next phase to update type references.
+ */
+static int btf_permute_shuffle_types(struct btf_permute *p)
+{
+	struct btf *btf = p->btf;
+	const struct btf_type *t;
+	__u32 *new_offs = NULL;
+	void *l, *new_types = NULL;
+	int i, id, len, err;
+
+	new_offs = calloc(btf->nr_types, sizeof(*new_offs));
+	new_types = calloc(btf->hdr->type_len, 1);
+	if (!new_types || !new_offs) {
+		err = -ENOMEM;
+		goto out_err;
+	}
+
+	l = new_types;
+	for (i = 0; i < btf->nr_types; i++) {
+		id = p->ids[i];
+		t = btf__type_by_id(btf, id);
+		len = btf_type_size(t);
+		memcpy(l, t, len);
+		new_offs[i] = l - new_types;
+		p->map[id - btf->start_id] = btf->start_id + i;
+		l += len;
+	}
+
+	free(btf->types_data);
+	free(btf->type_offs);
+	btf->types_data = new_types;
+	btf->type_offs = new_offs;
+	return 0;
+
+out_err:
+	return err;
+}
+
+/*
+ * Remap referenced type IDs into permuted type IDs.
+ *
+ * After BTF types are permuted, their final type IDs may differ from original
+ * ones. The map from original to a corresponding permuted type ID is stored
+ * in btf_permute->map and is populated during shuffle phase. During remapping
+ * phase we are rewriting all type IDs  referenced from any BTF type (e.g.,
+ * struct fields, func proto args, etc) to their final deduped type IDs.
+ */
+static int btf_permute_remap_types(struct btf_permute *p)
+{
+	struct btf *btf = p->btf;
+	int i, r;
+
+	for (i = 0; i < btf->nr_types; i++) {
+		struct btf_type *t = btf_type_by_id(btf, btf->start_id + i);
+		struct btf_field_iter it;
+		__u32 *type_id;
+
+		r = btf_field_iter_init(&it, t, BTF_FIELD_ITER_IDS);
+		if (r)
+			return r;
+
+		while ((type_id = btf_field_iter_next(&it))) {
+			__u32 new_id = *type_id;
+
+			/* skip references that point into the base BTF */
+			if (new_id < btf->start_id)
+				continue;
+
+			new_id = p->map[new_id - btf->start_id];
+			if (new_id > BTF_MAX_NR_TYPES)
+				return -EINVAL;
+
+			*type_id = new_id;
+		}
+	}
+
+	if (!p->btf_ext)
+		return 0;
+
+	r = btf_ext_visit_type_ids(p->btf_ext, btf_permute_remap_type_id, p);
+	if (r)
+		return r;
+
+	return 0;
+}
+
+static int btf_permute_remap_type_id(__u32 *type_id, void *ctx)
+{
+	struct btf_permute *p = ctx;
+	__u32 new_type_id = *type_id;
+
+	/* skip references that point into the base BTF */
+	if (new_type_id < p->btf->start_id)
+		return 0;
+
+	new_type_id = p->map[*type_id - p->btf->start_id];
+	if (new_type_id > BTF_MAX_NR_TYPES)
+		return -EINVAL;
+
+	*type_id = new_type_id;
+	return 0;
+}
+
+/*
+ * btf_sort.c is included directly to avoid function call overhead
+ * when accessing BTF private data, as this file is shared between
+ * libbpf and kernel and may be called frequently.
+ */
+#include "./btf_sort.c"

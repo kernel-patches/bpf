@@ -149,6 +149,7 @@ LIBBPF_API __s32 btf__find_by_name_kind(const struct btf *btf,
 					const char *type_name, __u32 kind);
 LIBBPF_API __u32 btf__type_cnt(const struct btf *btf);
 LIBBPF_API const struct btf *btf__base_btf(const struct btf *btf);
+LIBBPF_API __u32 btf__start_id(const struct btf *btf);
 LIBBPF_API const struct btf_type *btf__type_by_id(const struct btf *btf,
 						  __u32 id);
 LIBBPF_API size_t btf__pointer_size(const struct btf *btf);
@@ -272,6 +273,22 @@ LIBBPF_API int btf__dedup(struct btf *btf, const struct btf_dedup_opts *opts);
  * is set to the error code as well.
  */
 LIBBPF_API int btf__relocate(struct btf *btf, const struct btf *base_btf);
+
+struct btf_permute_opts {
+	size_t sz;
+	/* optional .BTF.ext info along the main BTF info */
+	struct btf_ext *btf_ext;
+	/* Array of type IDs used for permutation. The array length must equal
+	 * the number of types in the BTF being permuted, excluding the special
+	 * void type at ID 0. For split BTF, the length corresponds to the
+	 * number of types added on top of the base BTF.
+	 */
+	__u32 *ids;
+	size_t :0;
+};
+#define btf_permute_opts__last_field ids
+
+LIBBPF_API int btf__permute(struct btf *btf, const struct btf_permute_opts *opts);
 
 struct btf_dump;
 
