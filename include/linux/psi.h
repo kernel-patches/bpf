@@ -50,6 +50,12 @@ int psi_cgroup_alloc(struct cgroup *cgrp);
 void psi_cgroup_free(struct cgroup *cgrp);
 void cgroup_move_task(struct task_struct *p, struct css_set *to);
 void psi_cgroup_restart(struct psi_group *group);
+
+#else
+static inline struct psi_group *cgroup_psi(struct cgroup *cgrp)
+{
+	return &psi_system;
+}
 #endif
 
 #else /* CONFIG_PSI */
