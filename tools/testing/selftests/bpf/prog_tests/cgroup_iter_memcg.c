@@ -63,19 +63,17 @@ static void test_file(struct bpf_link *link, struct memcg_query *memcg_query)
 {
 	void *map;
 	size_t len;
-	FILE *f;
+	char *path;
 	int fd;
 
 	len = sysconf(_SC_PAGESIZE) * 1024;
+	path = "/tmp/test_cgroup_iter_memcg";
 
 	/*
 	 * Increase memcg file usage by creating and writing
-	 * to a temoprary mapped file.
+	 * to a mapped file.
 	 */
-	f = tmpfile();
-	if (!ASSERT_OK_PTR(f, "tmpfile"))
-		return;
-	fd = fileno(f);
+	fd = open(path, O_CREAT | O_WRONLY);
 	if (!ASSERT_OK_FD(fd, "open fd"))
 		return;
 	if (!ASSERT_OK(ftruncate(fd, len), "ftruncate"))
@@ -97,6 +95,7 @@ cleanup_map:
 	munmap(map, len);
 cleanup_fd:
 	close(fd);
+	unlink(path);
 }
 
 static void test_shmem(struct bpf_link *link, struct memcg_query *memcg_query)
