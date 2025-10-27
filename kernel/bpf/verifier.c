@@ -12136,9 +12136,12 @@ static bool is_kfunc_arg_magic(const struct btf *btf, const struct btf_param *ar
 	return btf_param_match_suffix(btf, arg, "__magic");
 }
 
+static bool is_kfunc_arg_prog_aux(const struct btf *btf, const struct btf_param *arg);
+
 static bool is_kfunc_arg_prog(const struct btf *btf, const struct btf_param *arg)
 {
-	return btf_param_match_suffix(btf, arg, "__prog");
+	return btf_param_match_suffix(btf, arg, "__prog") ||
+	       (is_kfunc_arg_magic(btf, arg) && is_kfunc_arg_prog_aux(btf, arg));
 }
 
 static bool is_kfunc_arg_scalar_with_name(const struct btf *btf,
@@ -12169,6 +12172,7 @@ enum {
 	KF_ARG_WORKQUEUE_ID,
 	KF_ARG_RES_SPIN_LOCK_ID,
 	KF_ARG_TASK_WORK_ID,
+	KF_ARG_PROG_AUX_ID
 };
 
 BTF_ID_LIST(kf_arg_btf_ids)
@@ -12180,6 +12184,7 @@ BTF_ID(struct, bpf_rb_node)
 BTF_ID(struct, bpf_wq)
 BTF_ID(struct, bpf_res_spin_lock)
 BTF_ID(struct, bpf_task_work)
+BTF_ID(struct, bpf_prog_aux)
 
 static bool __is_kfunc_ptr_arg_type(const struct btf *btf,
 				    const struct btf_param *arg, int type)
@@ -12258,6 +12263,11 @@ static bool is_kfunc_arg_callback(struct bpf_verifier_env *env, const struct btf
 		return false;
 
 	return true;
+}
+
+static bool is_kfunc_arg_prog_aux(const struct btf *btf, const struct btf_param *arg)
+{
+	return __is_kfunc_ptr_arg_type(btf, arg, KF_ARG_PROG_AUX_ID);
 }
 
 /* Returns true if struct is composed of scalars, 4 levels of nesting allowed */
