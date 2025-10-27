@@ -163,6 +163,8 @@ bool tnum_overlap(struct tnum a, struct tnum b)
 {
 	u64 mu;
 
+	if (a.mask && b.mask && (a.mask & b.mask) == 0)
+		return false;
 	mu = ~a.mask & ~b.mask;
 	return (a.value & mu) == (b.value & mu);
 }
