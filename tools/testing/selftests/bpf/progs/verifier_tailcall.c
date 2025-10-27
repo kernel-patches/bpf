@@ -35,14 +35,15 @@ __success __retval(0) __flag(BPF_F_ANY_ALIGNMENT)
 __naked void xdp_legal_after_tail_call(void)
 {
         asm volatile ("                                 \
-        r2 = *(u32*)(r1 + %[xdp_md_data_meta]);         \
-        r3 = *(u32*)(r1 + %[xdp_md_data]);              \
+        r2 = *(u32*)(r1 + %[xdp_md_data]);              \
+        r3 = *(u32*)(r1 + %[xdp_md_data_end]);          \
         r9 = r2;                                        \
-        if r3 <= r9 goto l0_%=;                         \
+	r9 += 8;                                        \
+        if r9 > r3 goto l0_%=;                          \
 	r2 = %[map_array] ll;	                        \
 	r3 = 0;				                \
 	call %[bpf_tail_call];                          \
-        r0 = *(u64*)(r9);                               \
+        r0 = *(u64*)(r9 - 8);                           \
 l0_%=:  r0 = 0;                                         \
         exit;                                           \
 "       :
