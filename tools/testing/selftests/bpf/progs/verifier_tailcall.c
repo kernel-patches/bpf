@@ -48,7 +48,7 @@ l0_%=:  r0 = 0;                                         \
         exit;                                           \
 "       :
         : __imm_const(xdp_md_data, offsetof(struct xdp_md, data)),
-          __imm_const(xdp_md_data_meta, offsetof(struct xdp_md, data_meta)),
+          __imm_const(xdp_md_data_end, offsetof(struct xdp_md, data_end)),
 	  __imm(bpf_tail_call),
 	  __imm_addr(map_array)
         : __clobber_all);
