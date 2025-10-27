@@ -6935,14 +6935,18 @@ struct btf_raw_data {
 	__u32 str_sec_size;
 };
 
-struct btf_dedup_test {
+struct btf_dedup_permute_test {
 	const char *descr;
 	struct btf_raw_data input;
 	struct btf_raw_data expect;
-	struct btf_dedup_opts opts;
+	bool permute;
+	struct btf_dedup_opts dedup_opts;
+	struct btf_permute_opts permute_opts;
 };
 
-static struct btf_dedup_test dedup_tests[] = {
+static __u32 permute_ids_sort_by_kind_name[] = {3, 4, 5, 8, 11, 14, 6, 9, 12, 15, 7, 10, 13, 16, 1, 2};
+
+static struct btf_dedup_permute_test dedup_permute_tests[] = {
 
 {
 	.descr = "dedup: unused strings filtering",
@@ -7105,7 +7109,7 @@ static struct btf_dedup_test dedup_tests[] = {
 		},
 		BTF_STR_SEC("\0s\0x"),
 	},
-	.opts = {
+	.dedup_opts = {
 		.force_collisions = true, /* force hash collisions */
 	},
 },
@@ -7151,7 +7155,7 @@ static struct btf_dedup_test dedup_tests[] = {
 		},
 		BTF_STR_SEC("\0s\0x"),
 	},
-	.opts = {
+	.dedup_opts = {
 		.force_collisions = true, /* force hash collisions */
 	},
 },
@@ -7354,7 +7358,7 @@ static struct btf_dedup_test dedup_tests[] = {
 		},
 		BTF_STR_SEC("\0.bss\0t"),
 	},
-	.opts = {
+	.dedup_opts = {
 		.force_collisions = true
 	},
 },
@@ -8022,6 +8026,72 @@ static struct btf_dedup_test dedup_tests[] = {
 		BTF_STR_SEC("\0foo\0x\0y\0foo_ptr"),
 	},
 },
+{
+	.descr = "permute: func/func_param/struct/struct_member tags",
+	.input = {
+		.raw_types = {
+			/* int */
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+			/* void f(int a1, int a2) */
+			BTF_FUNC_PROTO_ENC(0, 2),			/* [2] */
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(1), 1),
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(2), 1),
+			BTF_FUNC_ENC(NAME_NTH(3), 2),			/* [3] */
+			/* struct t {int m1; int m2;} */
+			BTF_STRUCT_ENC(NAME_NTH(4), 2, 8),		/* [4] */
+				BTF_MEMBER_ENC(NAME_NTH(5), 1, 0),
+				BTF_MEMBER_ENC(NAME_NTH(6), 1, 32),
+			/* tag -> f: tag1, tag2, tag3 */
+			BTF_DECL_TAG_ENC(NAME_NTH(7), 3, -1),		/* [5] */
+			BTF_DECL_TAG_ENC(NAME_NTH(8), 3, -1),		/* [6] */
+			BTF_DECL_TAG_ENC(NAME_NTH(9), 3, -1),		/* [7] */
+			/* tag -> f/a2: tag1, tag2, tag3 */
+			BTF_DECL_TAG_ENC(NAME_NTH(7), 3, 1),		/* [8] */
+			BTF_DECL_TAG_ENC(NAME_NTH(8), 3, 1),		/* [9] */
+			BTF_DECL_TAG_ENC(NAME_NTH(9), 3, 1),		/* [10] */
+			/* tag -> t: tag1, tag2, tag3 */
+			BTF_DECL_TAG_ENC(NAME_NTH(7), 4, -1),		/* [11] */
+			BTF_DECL_TAG_ENC(NAME_NTH(8), 4, -1),		/* [12] */
+			BTF_DECL_TAG_ENC(NAME_NTH(9), 4, -1),		/* [13] */
+			/* tag -> t/m2: tag1, tag3 */
+			BTF_DECL_TAG_ENC(NAME_NTH(7), 4, 1),		/* [14] */
+			BTF_DECL_TAG_ENC(NAME_NTH(8), 4, 1),		/* [15] */
+			BTF_DECL_TAG_ENC(NAME_NTH(9), 4, 1),		/* [16] */
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0a1\0a2\0f\0t\0m1\0m2\0tag1\0tag2\0tag3"),
+	},
+	.expect = {
+		.raw_types = {
+			BTF_FUNC_ENC(NAME_NTH(3), 16),			/* [1] */
+			BTF_STRUCT_ENC(NAME_NTH(4), 2, 8),		/* [2] */
+				BTF_MEMBER_ENC(NAME_NTH(5), 15, 0),
+				BTF_MEMBER_ENC(NAME_NTH(6), 15, 32),
+			BTF_DECL_TAG_ENC(NAME_NTH(7), 1, -1),		/* [3] */
+			BTF_DECL_TAG_ENC(NAME_NTH(7), 1,  1),		/* [4] */
+			BTF_DECL_TAG_ENC(NAME_NTH(7), 2, -1),		/* [5] */
+			BTF_DECL_TAG_ENC(NAME_NTH(7), 2,  1),		/* [6] */
+			BTF_DECL_TAG_ENC(NAME_NTH(8), 1, -1),		/* [7] */
+			BTF_DECL_TAG_ENC(NAME_NTH(8), 1,  1),		/* [8] */
+			BTF_DECL_TAG_ENC(NAME_NTH(8), 2, -1),		/* [9] */
+			BTF_DECL_TAG_ENC(NAME_NTH(8), 2,  1),		/* [10] */
+			BTF_DECL_TAG_ENC(NAME_NTH(9), 1, -1),		/* [11] */
+			BTF_DECL_TAG_ENC(NAME_NTH(9), 1,  1),		/* [12] */
+			BTF_DECL_TAG_ENC(NAME_NTH(9), 2, -1),		/* [13] */
+			BTF_DECL_TAG_ENC(NAME_NTH(9), 2,  1),		/* [14] */
+			BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [15] */
+			BTF_FUNC_PROTO_ENC(0, 2),			/* [16] */
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(1), 15),
+				BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(2), 15),
+			BTF_END_RAW,
+		},
+		BTF_STR_SEC("\0a1\0a2\0f\0t\0m1\0m2\0tag1\0tag2\0tag3"),
+	},
+	.permute = true,
+	.permute_opts = {
+		.ids = permute_ids_sort_by_kind_name,
+	},
+},
 };
 
 static int btf_type_size(const struct btf_type *t)
@@ -8078,9 +8148,9 @@ static void dump_btf_strings(const char *strs, __u32 len)
 	}
 }
 
-static void do_test_dedup(unsigned int test_num)
+static void do_test_dedup_permute(unsigned int test_num)
 {
-	struct btf_dedup_test *test = &dedup_tests[test_num - 1];
+	struct btf_dedup_permute_test *test = &dedup_permute_tests[test_num - 1];
 	__u32 test_nr_types, expect_nr_types, test_btf_size, expect_btf_size;
 	const struct btf_header *test_hdr, *expect_hdr;
 	struct btf *test_btf = NULL, *expect_btf = NULL;
@@ -8124,11 +8194,20 @@ static void do_test_dedup(unsigned int test_num)
 		goto done;
 	}
 
-	test->opts.sz = sizeof(test->opts);
-	err = btf__dedup(test_btf, &test->opts);
-	if (CHECK(err, "btf_dedup failed errno:%d", err)) {
-		err = -1;
-		goto done;
+	if (test->permute) {
+		test->permute_opts.sz = sizeof(test->permute_opts);
+		err = btf__permute(test_btf, &test->permute_opts);
+		if (CHECK(err, "btf_permute failed errno:%d", err)) {
+			err = -1;
+			goto done;
+		}
+	} else {
+		test->dedup_opts.sz = sizeof(test->dedup_opts);
+		err = btf__dedup(test_btf, &test->dedup_opts);
+		if (CHECK(err, "btf_dedup failed errno:%d", err)) {
+			err = -1;
+			goto done;
+		}
 	}
 
 	test_btf_data = btf__raw_data(test_btf, &test_btf_size);
@@ -8249,7 +8328,7 @@ void test_btf(void)
 		do_test_file(i);
 	for (i = 1; i <= ARRAY_SIZE(info_raw_tests); i++)
 		do_test_info_raw(i);
-	for (i = 1; i <= ARRAY_SIZE(dedup_tests); i++)
-		do_test_dedup(i);
+	for (i = 1; i <= ARRAY_SIZE(dedup_permute_tests); i++)
+		do_test_dedup_permute(i);
 	test_pprint();
 }
