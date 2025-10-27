@@ -33,6 +33,7 @@
 #include <net/sock.h>
 #include <net/xdp.h>
 #include "../tools/lib/bpf/relo_core.h"
+#include "../tools/lib/bpf/btf_sort.h"
 
 /* BTF (BPF Type Format) is the meta data format which describes
  * the data types of BPF program/map.  Hence, it basically focus
@@ -259,6 +260,7 @@ struct btf {
 	void *nohdr_data;
 	struct btf_header hdr;
 	u32 nr_types; /* includes VOID for base BTF */
+	u32 nr_sorted_types; /* All named types in the sorted BTF instance */
 	u32 types_size;
 	u32 data_size;
 	refcount_t refcnt;
@@ -527,6 +529,11 @@ static bool btf_type_is_decl_tag_target(const struct btf_type *t)
 	       btf_type_is_var(t) || btf_type_is_typedef(t);
 }
 
+static u32 btf_start_id(const struct btf *btf)
+{
+	return btf->start_id + (btf->base_btf ? 0 : 1);
+}
+
 bool btf_is_vmlinux(const struct btf *btf)
 {
 	return btf->kernel_btf && !btf->base_btf;
@@ -546,22 +553,7 @@ u32 btf_nr_types(const struct btf *btf)
 
 s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind)
 {
-	const struct btf_type *t;
-	const char *tname;
-	u32 i, total;
-
-	total = btf_nr_types(btf);
-	for (i = 1; i < total; i++) {
-		t = btf_type_by_id(btf, i);
-		if (BTF_INFO_KIND(t->info) != kind)
-			continue;
-
-		tname = btf_name_by_offset(btf, t->name_off);
-		if (!strcmp(tname, name))
-			return i;
-	}
-
-	return -ENOENT;
+	return _btf_find_by_name_kind(btf, 1, name, kind);
 }
 
 s32 bpf_find_btf_id(const char *name, u32 kind, struct btf **btf_p)
@@ -6230,6 +6222,7 @@ static struct btf *btf_parse_base(struct btf_verifier_env *env, const char *name
 	if (err)
 		goto errout;
 
+	btf_check_sorted(btf, 1);
 	refcount_set(&btf->refcnt, 1);
 
 	return btf;
@@ -6362,6 +6355,7 @@ static struct btf *btf_parse_module(const char *module_name, const void *data,
 		base_btf = vmlinux_btf;
 	}
 
+	btf_check_sorted(btf, btf_nr_types(base_btf));
 	btf_verifier_env_free(env);
 	refcount_set(&btf->refcnt, 1);
 	return btf;
@@ -9577,3 +9571,11 @@ bool btf_param_match_suffix(const struct btf *btf,
 	param_name += len - suffix_len;
 	return !strncmp(param_name, suffix, suffix_len);
 }
+
+/*
+ * btf_sort.c is included directly to avoid function call overhead
+ * when accessing BTF private data, as this file is shared between
+ * libbpf and kernel and may be called frequently (especially when
+ * funcgraph-args or func-args tracing options are enabled).
+ */
+#include "../../tools/lib/bpf/btf_sort.c"
