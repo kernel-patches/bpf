@@ -73,7 +73,7 @@ static void test_file(struct bpf_link *link, struct memcg_query *memcg_query)
 	 * Increase memcg file usage by creating and writing
 	 * to a mapped file.
 	 */
-	fd = open(path, O_CREAT | O_WRONLY);
+	fd = open(path, O_CREAT | O_RDWR, 0644);
 	if (!ASSERT_OK_FD(fd, "open fd"))
 		return;
 	if (!ASSERT_OK(ftruncate(fd, len), "ftruncate"))
