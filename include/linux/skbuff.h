@@ -4911,6 +4911,9 @@ enum skb_ext_id {
 #if IS_ENABLED(CONFIG_INET_PSP)
 	SKB_EXT_PSP,
 #endif
+#if IS_ENABLED(CONFIG_XDP_SOCKETS)
+	SKB_EXT_XDP,
+#endif
 	SKB_EXT_NUM, /* must be last */
 };
 

@@ -81,6 +81,7 @@
 #include <net/page_pool/helpers.h>
 #include <net/psp/types.h>
 #include <net/dropreason.h>
+#include <net/xdp_sock.h>
 
 #include <linux/uaccess.h>
 #include <trace/events/skb.h>
@@ -5065,6 +5066,9 @@ static const u8 skb_ext_type_len[] = {
 #endif
 #if IS_ENABLED(CONFIG_INET_PSP)
 	[SKB_EXT_PSP] = SKB_EXT_CHUNKSIZEOF(struct psp_skb_ext),
+#endif
+#if IS_ENABLED(CONFIG_XDP_SOCKETS)
+	[SKB_EXT_XDP] = SKB_EXT_CHUNKSIZEOF(struct xdp_skb_ext),
 #endif
 };
 
