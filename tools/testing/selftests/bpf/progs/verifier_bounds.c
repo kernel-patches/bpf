@@ -1550,6 +1550,29 @@ l0_%=:	r0 = 0;				\
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("dead branch on jeq, does not result in invariants violation error")
+__success __log_level(2)
+__retval(0) __flag(BPF_F_TEST_REG_INVARIANTS)
+__naked void jeq_range_analysis(void)
+{
+	asm volatile ("			\
+	call %[bpf_get_prandom_u32];	\
+	r6 = r0;			\
+	r6 &= 0xFFFFFFFFFFFFFFF0;	\
+	r7 = r0;			\
+	r7 &= 0x07;			\
+	r7 -= 0xFF;			\
+	if r6 == r7 goto l1_%=;		\
+l0_%=:  r0 = 0;				\
+	exit;				\
+l1_%=:  r0 = 1;				\
+	exit;				\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 /* This test covers the bounds deduction on 64bits when the s64 and u64 ranges
  * overlap on the negative side. At instruction 7, the ranges look as follows:
  *
