@@ -1251,6 +1251,8 @@ static int do_create(int argc, char **argv)
 	LIBBPF_OPTS(bpf_map_create_opts, attr);
 	enum bpf_map_type map_type = BPF_MAP_TYPE_UNSPEC;
 	__u32 key_size = 0, value_size = 0, max_entries = 0;
+	struct bpf_map_info map_info = {};
+	__u32 map_info_len = sizeof(map_info);
 	const char *map_name = NULL;
 	const char *pinfile;
 	int err = -1, fd;
@@ -1353,13 +1355,27 @@ offload_dev:
 	}
 
 	err = do_pin_fd(fd, pinfile);
-	close(fd);
-	if (err)
+	if (err) {
+		close(fd);
 		goto exit;
+	}
 
-	if (json_output)
-		jsonw_null(json_wtr);
+	err = bpf_obj_get_info_by_fd(fd, &map_info, &map_info_len);
+	if (err) {
+		p_err("Failed to fetch map info: %s\n", strerror(errno));
+		close(fd);
+		goto exit;
+	}
 
+	close(fd);
+
+	if (json_output) {
+		jsonw_start_object(json_wtr);
+		jsonw_int_field(json_wtr, "id", map_info.id);
+		jsonw_end_object(json_wtr);
+	} else {
+		printf("Map successfully created with ID: %u\n", map_info.id);
+	}
 exit:
 	if (attr.inner_map_fd > 0)
 		close(attr.inner_map_fd);
