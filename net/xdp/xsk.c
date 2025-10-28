@@ -41,14 +41,7 @@ struct xsk_addr_node {
 	struct list_head addr_node;
 };
 
-struct xsk_addr_head {
-	u32 num_descs;
-	struct list_head addrs_list;
-};
-
 static struct kmem_cache *xsk_tx_generic_cache;
-
-#define XSKCB(skb) ((struct xsk_addr_head *)((skb)->cb))
 
 void xsk_set_rx_need_wakeup(struct xsk_buff_pool *pool)
 {
@@ -562,6 +555,7 @@ static void xsk_cq_submit_addr_locked(struct xsk_buff_pool *pool,
 				      struct sk_buff *skb)
 {
 	struct xsk_addr_node *pos, *tmp;
+	struct xdp_skb_ext *ext;
 	u32 descs_processed = 0;
 	unsigned long flags;
 	u32 idx;
@@ -573,14 +567,16 @@ static void xsk_cq_submit_addr_locked(struct xsk_buff_pool *pool,
 			     (u64)(uintptr_t)skb_shinfo(skb)->destructor_arg);
 	descs_processed++;
 
-	if (unlikely(XSKCB(skb)->num_descs > 1)) {
-		list_for_each_entry_safe(pos, tmp, &XSKCB(skb)->addrs_list, addr_node) {
+	ext = skb_ext_find(skb, SKB_EXT_XDP);
+	if (unlikely(ext)) {
+		list_for_each_entry_safe(pos, tmp, &ext->addrs_list, addr_node) {
 			xskq_prod_write_addr(pool->cq, idx + descs_processed,
 					     pos->addr);
 			descs_processed++;
 			list_del(&pos->addr_node);
 			kmem_cache_free(xsk_tx_generic_cache, pos);
 		}
+		skb_ext_del(skb, SKB_EXT_XDP);
 	}
 	xskq_prod_submit_n(pool->cq, descs_processed);
 	spin_unlock_irqrestore(&pool->cq_lock, flags);
@@ -597,12 +593,19 @@ static void xsk_cq_cancel_locked(struct xsk_buff_pool *pool, u32 n)
 
 static void xsk_inc_num_desc(struct sk_buff *skb)
 {
-	XSKCB(skb)->num_descs++;
+	struct xdp_skb_ext *ext;
+
+	ext = skb_ext_find(skb, SKB_EXT_XDP);
+	if (ext)
+		ext->num_descs++;
 }
 
 static u32 xsk_get_num_desc(struct sk_buff *skb)
 {
-	return XSKCB(skb)->num_descs;
+	struct xdp_skb_ext *ext;
+
+	ext = skb_ext_find(skb, SKB_EXT_XDP);
+	return ext ? ext->num_descs : 1;
 }
 
 static void xsk_destruct_skb(struct sk_buff *skb)
@@ -621,12 +624,9 @@ static void xsk_destruct_skb(struct sk_buff *skb)
 static void xsk_skb_init_misc(struct sk_buff *skb, struct xdp_sock *xs,
 			      u64 addr)
 {
-	BUILD_BUG_ON(sizeof(struct xsk_addr_head) > sizeof(skb->cb));
-	INIT_LIST_HEAD(&XSKCB(skb)->addrs_list);
 	skb->dev = xs->dev;
 	skb->priority = READ_ONCE(xs->sk.sk_priority);
 	skb->mark = READ_ONCE(xs->sk.sk_mark);
-	XSKCB(skb)->num_descs = 0;
 	skb->destructor = xsk_destruct_skb;
 	skb_shinfo(skb)->destructor_arg = (void *)(uintptr_t)addr;
 }
@@ -636,12 +636,15 @@ static void xsk_consume_skb(struct sk_buff *skb)
 	struct xdp_sock *xs = xdp_sk(skb->sk);
 	u32 num_descs = xsk_get_num_desc(skb);
 	struct xsk_addr_node *pos, *tmp;
+	struct xdp_skb_ext *ext;
 
-	if (unlikely(num_descs > 1)) {
-		list_for_each_entry_safe(pos, tmp, &XSKCB(skb)->addrs_list, addr_node) {
+	ext = skb_ext_find(skb, SKB_EXT_XDP);
+	if (unlikely(ext)) {
+		list_for_each_entry_safe(pos, tmp, &ext->addrs_list, addr_node) {
 			list_del(&pos->addr_node);
 			kmem_cache_free(xsk_tx_generic_cache, pos);
 		}
+		skb_ext_del(skb, SKB_EXT_XDP);
 	}
 
 	skb->destructor = sock_wfree;
@@ -727,6 +730,18 @@ static struct sk_buff *xsk_build_skb_zerocopy(struct xdp_sock *xs,
 				return ERR_PTR(err);
 		}
 	} else {
+		struct xdp_skb_ext *ext;
+
+		ext = skb_ext_find(skb, SKB_EXT_XDP);
+		if (!ext) {
+			ext = skb_ext_add(skb, SKB_EXT_XDP);
+			if (!ext)
+				return ERR_PTR(-ENOMEM);
+			memset(ext, 0, sizeof(*ext));
+			INIT_LIST_HEAD(&ext->addrs_list);
+			ext->num_descs = 1;
+		}
+
 		xsk_addr = kmem_cache_zalloc(xsk_tx_generic_cache, GFP_KERNEL);
 		if (!xsk_addr)
 			return ERR_PTR(-ENOMEM);
@@ -736,7 +751,8 @@ static struct sk_buff *xsk_build_skb_zerocopy(struct xdp_sock *xs,
 		 * would be dropped, which implies freeing all list elements
 		 */
 		xsk_addr->addr = desc->addr;
-		list_add_tail(&xsk_addr->addr_node, &XSKCB(skb)->addrs_list);
+		list_add_tail(&xsk_addr->addr_node, &ext->addrs_list);
+		xsk_inc_num_desc(skb);
 	}
 
 	len = desc->len;
@@ -814,6 +830,7 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 		} else {
 			int nr_frags = skb_shinfo(skb)->nr_frags;
 			struct xsk_addr_node *xsk_addr;
+			struct xdp_skb_ext *ext;
 			struct page *page;
 			u8 *vaddr;
 
@@ -826,6 +843,19 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 			if (unlikely(!page)) {
 				err = -EAGAIN;
 				goto free_err;
+			}
+
+			ext = skb_ext_find(skb, SKB_EXT_XDP);
+			if (!ext) {
+				ext = skb_ext_add(skb, SKB_EXT_XDP);
+				if (!ext) {
+					__free_page(page);
+					err = -ENOMEM;
+					goto free_err;
+				}
+				memset(ext, 0, sizeof(*ext));
+				INIT_LIST_HEAD(&ext->addrs_list);
+				ext->num_descs = 1;
 			}
 
 			xsk_addr = kmem_cache_zalloc(xsk_tx_generic_cache, GFP_KERNEL);
@@ -843,11 +873,10 @@ static struct sk_buff *xsk_build_skb(struct xdp_sock *xs,
 			refcount_add(PAGE_SIZE, &xs->sk.sk_wmem_alloc);
 
 			xsk_addr->addr = desc->addr;
-			list_add_tail(&xsk_addr->addr_node, &XSKCB(skb)->addrs_list);
+			list_add_tail(&xsk_addr->addr_node, &ext->addrs_list);
+			xsk_inc_num_desc(skb);
 		}
 	}
-
-	xsk_inc_num_desc(skb);
 
 	return skb;
 
@@ -857,7 +886,6 @@ free_err:
 
 	if (err == -EOVERFLOW) {
 		/* Drop the packet */
-		xsk_inc_num_desc(xs->skb);
 		xsk_drop_skb(xs->skb);
 		xskq_cons_release(xs->tx);
 	} else {
