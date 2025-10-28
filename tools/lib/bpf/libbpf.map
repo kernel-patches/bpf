@@ -462,4 +462,6 @@ LIBBPF_1.8.0 {
 		bpf_program__clone;
 		btf__find_by_name_kind_own;
 		btf__new_empty_opts;
+		bpf_program__load_type;
+		bpf_program__set_load_type;
 } LIBBPF_1.7.0;
