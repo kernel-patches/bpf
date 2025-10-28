@@ -8218,7 +8218,7 @@ perf_callchain(struct perf_event *event, struct pt_regs *regs)
 		return &__empty_callchain;
 
 	callchain = get_perf_callchain(regs, kernel, user,
-				       max_stack, crosstask, true);
+				       max_stack, crosstask);
 	return callchain ?: &__empty_callchain;
 }
 
