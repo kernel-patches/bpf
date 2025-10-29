@@ -97,6 +97,16 @@ asm(							\
 __BTF_ID_LIST(name, local)				\
 extern u32 name[];
 
+/*
+ * The BTF_ID_LIST_END macro may be used to denote an end
+ * of a BTF_ID_LIST. This enables calculation of the list
+ * size with BTF_ID_LIST_SIZE.
+ */
+#define BTF_ID_LIST_END(name) \
+BTF_ID_LIST(name##__end)
+#define BTF_ID_LIST_SIZE(name) \
+(name##__end - name)
+
 #define BTF_ID_LIST_GLOBAL(name, n)			\
 __BTF_ID_LIST(name, globl)
 
