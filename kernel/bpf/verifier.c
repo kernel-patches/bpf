@@ -15995,6 +15995,8 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 
 	switch (opcode) {
 	case BPF_JEQ:
+		if (reg1 == reg2)
+			return 1;
 		/* constants, umin/umax and smin/smax checks would be
 		 * redundant in this case because they all should match
 		 */
@@ -16021,6 +16023,8 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 		}
 		break;
 	case BPF_JNE:
+		if (reg1 == reg2)
+			return 0;
 		/* constants, umin/umax and smin/smax checks would be
 		 * redundant in this case because they all should match
 		 */
@@ -16047,6 +16051,12 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 		}
 		break;
 	case BPF_JSET:
+		if (reg1 == reg2) {
+			if (tnum_is_const(t1))
+				return t1.value != 0;
+			else
+				return (smin1 <= 0 && smax1 >= 0) ? -1 : 1;
+		}
 		if (!is_reg_const(reg2, is_jmp32)) {
 			swap(reg1, reg2);
 			swap(t1, t2);
@@ -16059,48 +16069,64 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 			return 0;
 		break;
 	case BPF_JGT:
+		if (reg1 == reg2)
+			return 0;
 		if (umin1 > umax2)
 			return 1;
 		else if (umax1 <= umin2)
 			return 0;
 		break;
 	case BPF_JSGT:
+		if (reg1 == reg2)
+			return 0;
 		if (smin1 > smax2)
 			return 1;
 		else if (smax1 <= smin2)
 			return 0;
 		break;
 	case BPF_JLT:
+		if (reg1 == reg2)
+			return 0;
 		if (umax1 < umin2)
 			return 1;
 		else if (umin1 >= umax2)
 			return 0;
 		break;
 	case BPF_JSLT:
+		if (reg1 == reg2)
+			return 0;
 		if (smax1 < smin2)
 			return 1;
 		else if (smin1 >= smax2)
 			return 0;
 		break;
 	case BPF_JGE:
+		if (reg1 == reg2)
+			return 1;
 		if (umin1 >= umax2)
 			return 1;
 		else if (umax1 < umin2)
 			return 0;
 		break;
 	case BPF_JSGE:
+		if (reg1 == reg2)
+			return 1;
 		if (smin1 >= smax2)
 			return 1;
 		else if (smax1 < smin2)
 			return 0;
 		break;
 	case BPF_JLE:
+		if (reg1 == reg2)
+			return 1;
 		if (umax1 <= umin2)
 			return 1;
 		else if (umin1 > umax2)
 			return 0;
 		break;
 	case BPF_JSLE:
+		if (reg1 == reg2)
+			return 1;
 		if (smax1 <= smin2)
 			return 1;
 		else if (smin1 > smax2)
@@ -16437,6 +16463,13 @@ static int reg_set_min_max(struct bpf_verifier_env *env,
 	 * the same object, but we don't bother with that).
 	 */
 	if (false_reg1->type != SCALAR_VALUE || false_reg2->type != SCALAR_VALUE)
+		return 0;
+
+	/* We compute branch direction for same SCALAR_VALUE registers in 
+	 * is_scalar_branch_taken(). For unknown branch directions (e.g., BPF_JSET)
+	 * on the same registers, we don't need to adjusts the min/max values.
+	 */
+	if (false_reg1 == false_reg2)
 		return 0;
 
 	/* fallthrough (FALSE) branch */
