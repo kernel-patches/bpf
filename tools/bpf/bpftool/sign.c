@@ -3,6 +3,7 @@
  * Copyright (C) 2025 Google LLC.
  */
 
+#ifdef USE_CRYPTO
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -209,3 +210,4 @@ cleanup:
 	DISPLAY_OSSL_ERR(err < 0);
 	return err;
 }
+#endif /* USE_CRYPTO */

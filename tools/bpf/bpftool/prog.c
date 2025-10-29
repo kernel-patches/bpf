@@ -1931,12 +1931,10 @@ static int try_loader(struct gen_loader_opts *gen)
 {
 	struct bpf_load_and_run_opts opts = {};
 	struct bpf_loader_ctx *ctx;
-	char sig_buf[MAX_SIG_SIZE];
-	__u8 prog_sha[SHA256_DIGEST_LENGTH];
 	int ctx_sz = sizeof(*ctx) + 64 * max(sizeof(struct bpf_map_desc),
 					     sizeof(struct bpf_prog_desc));
 	int log_buf_sz = (1u << 24) - 1;
-	int err, fds_before, fd_delta;
+	int err = 0, fds_before, fd_delta;
 	char *log_buf = NULL;
 
 	ctx = alloca(ctx_sz);
@@ -1947,7 +1945,7 @@ static int try_loader(struct gen_loader_opts *gen)
 		ctx->log_size = log_buf_sz;
 		log_buf = malloc(log_buf_sz);
 		if (!log_buf)
-			return -ENOMEM;
+			goto out;
 		ctx->log_buf = (long) log_buf;
 	}
 	opts.ctx = ctx;
@@ -1956,8 +1954,11 @@ static int try_loader(struct gen_loader_opts *gen)
 	opts.insns = gen->insns;
 	opts.insns_sz = gen->insns_sz;
 	fds_before = count_open_fds();
-
+#ifdef USE_CRYPTO
 	if (sign_progs) {
+		char sig_buf[MAX_SIG_SIZE];
+		__u8 prog_sha[SHA256_DIGEST_LENGTH];
+
 		opts.excl_prog_hash = prog_sha;
 		opts.excl_prog_hash_sz = sizeof(prog_sha);
 		opts.signature = sig_buf;
@@ -1976,6 +1977,7 @@ static int try_loader(struct gen_loader_opts *gen)
 			goto out;
 		}
 	}
+#endif
 	err = bpf_load_and_run(&opts);
 	fd_delta = count_open_fds() - fds_before;
 	if (err < 0 || verifier_logs) {

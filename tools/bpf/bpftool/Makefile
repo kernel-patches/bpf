@@ -101,6 +101,7 @@ FEATURE_TESTS := clang-bpf-co-re
 FEATURE_TESTS += llvm
 FEATURE_TESTS += libcap
 FEATURE_TESTS += libbfd
+FEATURE_TESTS += libcrypto
 FEATURE_TESTS += libbfd-liberty
 FEATURE_TESTS += libbfd-liberty-z
 FEATURE_TESTS += disassembler-four-args
@@ -110,6 +111,7 @@ FEATURE_TESTS += libelf-zstd
 FEATURE_DISPLAY := clang-bpf-co-re
 FEATURE_DISPLAY += llvm
 FEATURE_DISPLAY += libcap
+FEATURE_DISPLAY += libcrypto
 FEATURE_DISPLAY += libbfd
 FEATURE_DISPLAY += libbfd-liberty
 FEATURE_DISPLAY += libbfd-liberty-z
@@ -130,8 +132,14 @@ include $(FEATURES_DUMP)
 endif
 endif
 
-LIBS = $(LIBBPF) -lelf -lz -lcrypto
-LIBS_BOOTSTRAP = $(LIBBPF_BOOTSTRAP) -lelf -lz -lcrypto
+LIBS = $(LIBBPF) -lelf -lz
+LIBS_BOOTSTRAP = $(LIBBPF_BOOTSTRAP) -lelf -lz
+
+ifeq ($(feature-libcrypto),1)
+CFLAGS += -DUSE_CRYPTO
+LIBS += -lcrypto
+LIBS_BOOTSTRAP += -lcrypto
+endif
 
 ifeq ($(feature-libelf-zstd),1)
 LIBS += -lzstd
@@ -194,7 +202,10 @@ endif
 
 BPFTOOL_BOOTSTRAP := $(BOOTSTRAP_OUTPUT)bpftool
 
-BOOTSTRAP_OBJS = $(addprefix $(BOOTSTRAP_OUTPUT),main.o common.o json_writer.o gen.o btf.o sign.o)
+BOOTSTRAP_OBJS = $(addprefix $(BOOTSTRAP_OUTPUT),main.o common.o json_writer.o gen.o btf.o)
+ifeq ($(feature-libcrypto),1)
+BOOTSTRAP_OBJS += $(addprefix $(BOOTSTRAP_OUTPUT),sign.o)
+endif
 $(BOOTSTRAP_OBJS): $(LIBBPF_BOOTSTRAP)
 
 OBJS = $(patsubst %.c,$(OUTPUT)%.o,$(SRCS)) $(OUTPUT)disasm.o

@@ -688,16 +688,15 @@ static void codegen_destroy(struct bpf_object *obj, const char *obj_name)
 static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *header_guard)
 {
 	DECLARE_LIBBPF_OPTS(gen_loader_opts, opts);
-	struct bpf_load_and_run_opts sopts = {};
-	char sig_buf[MAX_SIG_SIZE];
-	__u8 prog_sha[SHA256_DIGEST_LENGTH];
 	struct bpf_map *map;
 
 	char ident[256];
 	int err = 0;
 
+#ifdef USE_CRYPTO
 	if (sign_progs)
 		opts.gen_hash = true;
+#endif
 
 	err = bpf_object__gen_loader(obj, &opts);
 	if (err)
@@ -790,7 +789,12 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 		\n\
 		\";\n");
 
+#ifdef USE_CRYPTO
 	if (sign_progs) {
+		struct bpf_load_and_run_opts sopts = {};
+		char sig_buf[MAX_SIG_SIZE];
+		__u8 prog_sha[SHA256_DIGEST_LENGTH];
+
 		sopts.insns = opts.insns;
 		sopts.insns_sz = opts.insns_sz;
 		sopts.excl_prog_hash = prog_sha;
@@ -831,7 +835,7 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 			opts.keyring_id = skel->keyring_id;			\n\
 		");
 	}
-
+#endif /* USE_CRYPTO */
 	codegen("\
 		\n\
 			opts.ctx = (struct bpf_loader_ctx *)skel;	    \n\
@@ -1406,13 +1410,14 @@ static int do_skeleton(int argc, char **argv)
 
 		printf("\t} links;\n");
 	}
-
+#ifdef USE_CRYPTO
 	if (sign_progs) {
 		codegen("\
 		\n\
 			__s32 keyring_id;				   \n\
 		");
 	}
+#endif /* USE_CRYPTO */
 
 	if (btf) {
 		err = codegen_datasecs(obj, obj_name);
@@ -1990,7 +1995,9 @@ static int do_help(int argc, char **argv)
 		"       %1$s %2$s help\n"
 		"\n"
 		"       " HELP_SPEC_OPTIONS " |\n"
+#ifdef USE_CRYPTO
 		"                    {-L|--use-loader} | [ {-S|--sign } {-k} <private_key.pem> {-i} <certificate.x509> ]}\n"
+#endif
 		"",
 		bin_name, "gen");
 
