@@ -160,7 +160,7 @@ Or::
                 ...
         }
 
-2.2.6 __prog Annotation
+2.2.6 __prog Annotation (deprecated, use __magic instead)
 ---------------------------
 This annotation is used to indicate that the argument needs to be fixed up to
 the bpf_prog_aux of the caller BPF program. Any value passed into this argument
@@ -176,6 +176,37 @@ An example is given below::
                 struct bpf_prog_aux *aux = aux__prog;
                 ...
          }
+
+.. _magic_annotation:
+
+2.2.7 __magic Annotation
+---------------------------
+This annotation is used in kfuncs with KF_MAGIC_ARGS flag to indicate the
+arguments that are omitted in the BPF signature of the kfunc. The actual
+values for __magic arguments are set by the verifier at load time, and
+depend on the argument type.
+
+Currently only ``struct bpf_prog_aux *`` type is supported.
+
+Example declaration:
+
+.. code-block:: c
+
+	__bpf_kfunc int bpf_wq_set_callback(struct bpf_wq *wq,
+					    int (callback_fn)(void *map, int *key, void *value),
+					    unsigned int flags,
+					    struct bpf_prog_aux *aux__magic)
+	{
+		...
+	}
+
+Example usage:
+
+.. code-block:: c
+
+	/* note the last argument is omitted */
+	if (bpf_wq_set_callback(wq, callback_fn, 0))
+		return -1;
 
 .. _BPF_kfunc_nodef:
 
@@ -373,6 +404,22 @@ prevent it from being added in the first place. As described in
 encouraged to make their use-cases known as early as possible, and participate
 in upstream discussions regarding whether to keep, change, deprecate, or remove
 those kfuncs if and when such discussions occur.
+
+2.4.10 KF_MAGIC_ARGS flag
+------------------------------------
+
+The KF_MAGIC_ARGS flag is used to indicate that the BPF signature of the kfunc
+is different from it's kernel signature, and the values for arguments annotated
+with __magic suffix are provided at load time by the verifier.
+
+A kfunc with KF_MAGIC_ARGS flag therefore has two types in BTF: one function
+matching the kernel declaration (with _impl suffix by convention), and another
+matching the intended BPF API.
+
+Verifier allows calls to both _impl and non-_impl versions of a magic kfunc.
+
+Note that only arguments of particular types can be __magic.
+See :ref:`magic_annotation`.
 
 2.5 Registering the kfuncs
 --------------------------
