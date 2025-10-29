@@ -3273,6 +3273,8 @@ BTF_ID(func, bpf_task_work_schedule_signal)
 BTF_ID(func, bpf_task_work_schedule_signal_impl)
 BTF_ID(func, bpf_task_work_schedule_resume)
 BTF_ID(func, bpf_task_work_schedule_resume_impl)
+BTF_ID(func, bpf_stream_vprintk)
+BTF_ID(func, bpf_stream_vprintk_impl)
 BTF_ID_LIST_END(magic_kfuncs)
 
 static s32 magic_kfunc_by_impl(s32 impl_func_id)
