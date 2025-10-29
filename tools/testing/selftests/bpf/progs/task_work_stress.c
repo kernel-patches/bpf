@@ -52,7 +52,7 @@ int schedule_task_work(void *ctx)
 			return 0;
 	}
 	err = bpf_task_work_schedule_signal(bpf_get_current_task_btf(), &work->tw, &hmap,
-					    process_work, NULL);
+					    process_work);
 	if (err)
 		__sync_fetch_and_add(&schedule_error, 1);
 	else
