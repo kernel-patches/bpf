@@ -361,6 +361,40 @@ test_map_access_with_btf_list() {
 	fi
 }
 
+# Function to test map ID printing
+# Parameters:
+#   $1: bpftool path
+#   $2: BPF_DIR
+test_map_id_printing() {
+	local bpftool_path="$1"
+	local bpf_dir="$2"
+	local test_map_name="test_map_id"
+	local test_map_path="$bpf_dir/$test_map_name"
+
+	local output
+	output=$("$bpftool_path" map create "$test_map_path" type hash key 4 \
+		value 8 entries 128 name "$test_map_name")
+	if echo "$output" | grep -q "Map successfully created with ID:"; then
+		echo "PASS: Map ID printed in plain text output."
+	else
+		echo "FAIL: Map ID not printed in plain text output."
+		exit 1
+	fi
+
+	rm -f "$test_map_path"
+
+	output=$("$bpftool_path" map create "$test_map_path" type hash key 4 \
+		value 8 entries 128 name "$test_map_name" --json)
+	if echo "$output" | jq -e 'has("id")' >/dev/null 2>&1; then
+		echo "PASS: Map ID printed in JSON output."
+	else
+		echo "FAIL: Map ID not printed in JSON output."
+		exit 1
+	fi
+
+	rm -f "$test_map_path"
+}
+
 set -eu
 
 trap cleanup_skip EXIT
@@ -394,5 +428,7 @@ test_map_access "$NOT_PROTECTED_MAP_NAME" "$BPFTOOL_PATH" "$BPF_DIR" "true" \
 test_map_creation_and_map_of_maps "$BPFTOOL_PATH" "$BPF_DIR"
 
 test_map_access_with_btf_list "$BPFTOOL_PATH"
+
+test_map_id_printing "$BPFTOOL_PATH" "$BPF_DIR"
 
 exit 0
