@@ -17,14 +17,19 @@
 #include <linux/btf_ids.h>
 #include <asm/rqspinlock.h>
 #include <linux/bpf_mem_alloc.h>
+#include <linux/math.h>
 
 /* Intermediate node */
 #define LPM_TREE_NODE_FLAG_IM BIT(0)
 
+/* Compare STRIDE bit prefix */
+#define LPM_TREE_STRIDE (4)
+#define LPM_TREE_NUM_CHILDREN BIT(LPM_TREE_STRIDE)
+
 struct lpm_trie_node;
 
 struct lpm_trie_node {
-	struct lpm_trie_node __rcu	*child[2];
+	struct lpm_trie_node __rcu	*child[LPM_TREE_NUM_CHILDREN];
 	u32				prefixlen;
 	u32				flags;
 	u8				data[];
@@ -153,7 +158,10 @@ struct lpm_trie {
 
 static inline int extract_bit(const u8 *data, size_t index)
 {
-	return !!(data[index / 8] & (1 << (7 - (index % 8))));
+	u8 mask = (1 << LPM_TREE_STRIDE) - 1;
+	u8 shift = (8 - LPM_TREE_STRIDE) - (index % 8);
+
+	return ((data[index / 8] & (mask << shift)) >> shift);
 }
 
 /**
@@ -184,7 +192,7 @@ size_t __longest_prefix_match(const struct lpm_trie *trie,
 		u64 diff = be64_to_cpu(*(__be64 *)node->data ^
 				       *(__be64 *)key->data);
 
-		prefixlen = 64 - fls64(diff);
+		prefixlen = round_down(64 - fls64(diff), LPM_TREE_STRIDE);
 		if (prefixlen >= limit)
 			return limit;
 		if (diff)
@@ -197,7 +205,7 @@ size_t __longest_prefix_match(const struct lpm_trie *trie,
 		u32 diff = be32_to_cpu(*(__be32 *)&node->data[i] ^
 				       *(__be32 *)&key->data[i]);
 
-		prefixlen += 32 - fls(diff);
+		prefixlen += round_down(32 - fls64(diff), LPM_TREE_STRIDE);
 		if (prefixlen >= limit)
 			return limit;
 		if (diff)
@@ -209,7 +217,7 @@ size_t __longest_prefix_match(const struct lpm_trie *trie,
 		u16 diff = be16_to_cpu(*(__be16 *)&node->data[i] ^
 				       *(__be16 *)&key->data[i]);
 
-		prefixlen += 16 - fls(diff);
+		prefixlen += round_down(16 - fls64(diff), LPM_TREE_STRIDE);
 		if (prefixlen >= limit)
 			return limit;
 		if (diff)
@@ -218,7 +226,9 @@ size_t __longest_prefix_match(const struct lpm_trie *trie,
 	}
 
 	if (trie->data_size >= i + 1) {
-		prefixlen += 8 - fls(node->data[i] ^ key->data[i]);
+		u8 diff = node->data[i] ^ key->data[i];
+
+		prefixlen += round_down(8 - fls(diff), LPM_TREE_STRIDE);
 
 		if (prefixlen >= limit)
 			return limit;
@@ -331,6 +341,7 @@ static long trie_update_elem(struct bpf_map *map,
 	unsigned int next_bit;
 	size_t matchlen = 0;
 	int ret = 0;
+	int i;
 
 	if (unlikely(flags > BPF_EXIST))
 		return -EINVAL;
@@ -348,8 +359,10 @@ static long trie_update_elem(struct bpf_map *map,
 		goto out_free;
 
 	new_node->prefixlen = key->prefixlen;
-	RCU_INIT_POINTER(new_node->child[0], NULL);
-	RCU_INIT_POINTER(new_node->child[1], NULL);
+
+	for (i = 0; i < LPM_TREE_NUM_CHILDREN; i++)
+		RCU_INIT_POINTER(new_node->child[i], NULL);
+
 	memcpy(new_node->data, key->data, trie->data_size);
 
 	/* Now find a slot to attach the new node. To do that, walk the tree
@@ -397,8 +410,8 @@ static long trie_update_elem(struct bpf_map *map,
 				goto out;
 		}
 
-		new_node->child[0] = node->child[0];
-		new_node->child[1] = node->child[1];
+		for (i = 0; i < LPM_TREE_NUM_CHILDREN; i++)
+			new_node->child[i] = node->child[i];
 
 		rcu_assign_pointer(*slot, new_node);
 		free_node = node;
@@ -432,13 +445,11 @@ static long trie_update_elem(struct bpf_map *map,
 	memcpy(im_node->data, node->data, trie->data_size);
 
 	/* Now determine which child to install in which slot */
-	if (extract_bit(key->data, matchlen)) {
-		rcu_assign_pointer(im_node->child[0], node);
-		rcu_assign_pointer(im_node->child[1], new_node);
-	} else {
-		rcu_assign_pointer(im_node->child[0], new_node);
-		rcu_assign_pointer(im_node->child[1], node);
-	}
+	next_bit = extract_bit(key->data, matchlen);
+	rcu_assign_pointer(im_node->child[next_bit], new_node);
+
+	next_bit = extract_bit(node->data, matchlen);
+	rcu_assign_pointer(im_node->child[next_bit], node);
 
 	/* Finally, assign the intermediate node to the determined slot */
 	rcu_assign_pointer(*slot, im_node);
@@ -460,11 +471,12 @@ static long trie_delete_elem(struct bpf_map *map, void *_key)
 	struct lpm_trie_node *free_node = NULL, *free_parent = NULL;
 	struct bpf_lpm_trie_key_u8 *key = _key;
 	struct lpm_trie_node __rcu **trim, **trim2;
-	struct lpm_trie_node *node, *parent;
+	struct lpm_trie_node *child, *node, *parent;
 	unsigned long irq_flags;
 	unsigned int next_bit;
 	size_t matchlen = 0;
-	int ret = 0;
+	int num_children = 0, ret = 0;
+	int i;
 
 	if (key->prefixlen > trie->max_prefixlen)
 		return -EINVAL;
@@ -504,43 +516,57 @@ static long trie_delete_elem(struct bpf_map *map, void *_key)
 
 	trie->n_entries--;
 
-	/* If the node we are removing has two children, simply mark it
+	/* Find a child to promote back up */
+	child = NULL;
+	for (i = 0; i < LPM_TREE_NUM_CHILDREN; i++) {
+		num_children += !!rcu_access_pointer(node->child[i]);
+		if (!child && node->child[i])
+			child = rcu_dereference(node->child[i]);
+	}
+
+	/* If the node we are removing has more than one child, simply mark it
 	 * as intermediate and we are done.
 	 */
-	if (rcu_access_pointer(node->child[0]) &&
-	    rcu_access_pointer(node->child[1])) {
+	if (num_children > 1) {
 		node->flags |= LPM_TREE_NODE_FLAG_IM;
 		goto out;
 	}
 
 	/* If the parent of the node we are about to delete is an intermediate
 	 * node, and the deleted node doesn't have any children, we can delete
-	 * the intermediate parent as well and promote its other child
-	 * up the tree.  Doing this maintains the invariant that all
-	 * intermediate nodes have exactly 2 children and that there are no
-	 * unnecessary intermediate nodes in the tree.
+	 * the intermediate parent as well and promote its last child
+	 * up the tree. That there are no unnecessary intermediate nodes in
+	 * the tree.
 	 */
-	if (parent && (parent->flags & LPM_TREE_NODE_FLAG_IM) &&
-	    !node->child[0] && !node->child[1]) {
-		if (node == rcu_access_pointer(parent->child[0]))
+	if (parent && (parent->flags & LPM_TREE_NODE_FLAG_IM) && !child) {
+		int sibling, sibling_cnt = 0;
+
+		for (i = 0; i < LPM_TREE_NUM_CHILDREN; i++) {
+			/* deleted node's position */
+			if (next_bit == i)
+				continue;
+
+			if (parent->child[i]) {
+				sibling = i;
+				sibling_cnt++;
+			}
+		}
+
+		if (sibling_cnt == 1) {
 			rcu_assign_pointer(
-				*trim2, rcu_access_pointer(parent->child[1]));
-		else
-			rcu_assign_pointer(
-				*trim2, rcu_access_pointer(parent->child[0]));
-		free_parent = parent;
-		free_node = node;
-		goto out;
+				*trim2, parent->child[sibling]);
+			free_parent = parent;
+			free_node = node;
+			goto out;
+		}
 	}
 
 	/* The node we are removing has either zero or one child. If there
 	 * is a child, move it into the removed node's slot then delete
 	 * the node.  Otherwise just clear the slot and delete the node.
 	 */
-	if (node->child[0])
-		rcu_assign_pointer(*trim, rcu_access_pointer(node->child[0]));
-	else if (node->child[1])
-		rcu_assign_pointer(*trim, rcu_access_pointer(node->child[1]));
+	if (child)
+		rcu_assign_pointer(*trim, child);
 	else
 		RCU_INIT_POINTER(*trim, NULL);
 	free_node = node;
@@ -615,6 +641,7 @@ static void trie_free(struct bpf_map *map)
 	struct lpm_trie *trie = container_of(map, struct lpm_trie, map);
 	struct lpm_trie_node __rcu **slot;
 	struct lpm_trie_node *node;
+	int i;
 
 	/* Always start at the root and walk down to a node that has no
 	 * children. Then free that node, nullify its reference in the parent
@@ -624,19 +651,17 @@ static void trie_free(struct bpf_map *map)
 	for (;;) {
 		slot = &trie->root;
 
+next:
 		for (;;) {
 			node = rcu_dereference_protected(*slot, 1);
 			if (!node)
 				goto out;
 
-			if (rcu_access_pointer(node->child[0])) {
-				slot = &node->child[0];
-				continue;
-			}
-
-			if (rcu_access_pointer(node->child[1])) {
-				slot = &node->child[1];
-				continue;
+			for (i = 0; i < LPM_TREE_NUM_CHILDREN; i++) {
+				if (rcu_access_pointer(node->child[i])) {
+					slot = &node->child[i];
+					goto next;
+				}
 			}
 
 			/* No bpf program may access the map, so freeing the
@@ -662,6 +687,7 @@ static int trie_get_next_key(struct bpf_map *map, void *_key, void *_next_key)
 	int err = 0, stack_ptr = -1;
 	unsigned int next_bit;
 	size_t matchlen = 0;
+	int i;
 
 	/* The get_next_key follows postorder. For the 4 node example in
 	 * the top of this file, the trie_get_next_key() returns the following
@@ -710,11 +736,14 @@ static int trie_get_next_key(struct bpf_map *map, void *_key, void *_next_key)
 	node = node_stack[stack_ptr];
 	while (stack_ptr > 0) {
 		parent = node_stack[stack_ptr - 1];
-		if (rcu_dereference(parent->child[0]) == node) {
-			search_root = rcu_dereference(parent->child[1]);
+		next_bit = extract_bit(node->data, parent->prefixlen);
+
+		for (i = next_bit + 1; i < LPM_TREE_NUM_CHILDREN; i++) {
+			search_root = rcu_dereference(parent->child[i]);
 			if (search_root)
 				goto find_leftmost;
 		}
+
 		if (!(parent->flags & LPM_TREE_NODE_FLAG_IM)) {
 			next_node = parent;
 			goto do_copy;
@@ -733,13 +762,13 @@ find_leftmost:
 	 * have exact two children, so this function will never return NULL.
 	 */
 	for (node = search_root; node;) {
-		if (node->flags & LPM_TREE_NODE_FLAG_IM) {
-			node = rcu_dereference(node->child[0]);
-		} else {
-			next_node = node;
-			node = rcu_dereference(node->child[0]);
-			if (!node)
-				node = rcu_dereference(next_node->child[1]);
+		next_node = node;
+		node = NULL;
+		for (i = 0; i < LPM_TREE_NUM_CHILDREN; i++) {
+			if (rcu_access_pointer(next_node->child[i])) {
+				node = rcu_dereference(next_node->child[i]);
+				break;
+			}
 		}
 	}
 do_copy:
