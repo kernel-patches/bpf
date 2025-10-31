@@ -175,6 +175,7 @@ static int setup(struct test_tc_edt *skel)
 	SYS(fail_close_client_ns, "ip -4 addr add " IP4_ADDR_VETH1 "/24 dev veth1");
 	SYS(fail_close_client_ns, "ip link set veth1 up");
 	SYS(fail_close_client_ns, "tc qdisc add dev veth1 root fq");
+	skel->bss->target_rate = TARGET_RATE_MBPS * 1000 * 1000;
 	ret = tc_prog_attach("veth1", -1, bpf_program__fd(skel->progs.tc_prog));
 	if (!ASSERT_OK(ret, "attach bpf prog"))
 		goto fail_close_client_ns;
