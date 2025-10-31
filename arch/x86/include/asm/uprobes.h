@@ -44,6 +44,11 @@ struct arch_uprobe_xol {
 			u8	reg_offset;	/* to the start of pt_regs */
 			u8	ilen;
 		}			push;
+		struct {
+			u16	src;	/* to the start of pt_regs */
+			u16	dst;    /* to the start of pt_regs */
+			u8	ilen;
+		}			mov;
 	};
 };
 

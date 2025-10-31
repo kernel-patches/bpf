@@ -19,6 +19,7 @@
 #include <asm/insn.h>
 #include <asm/mmu_context.h>
 #include <asm/nops.h>
+#include <asm/insn-eval.h>
 
 /* Post-execution fixups. */
 
@@ -1414,6 +1415,19 @@ static void branch_clear_offset(struct arch_uprobe *auprobe, struct insn *insn)
 		0, insn->immediate.nbytes);
 }
 
+static bool mov_emulate_op(struct arch_uprobe *auprobe, struct arch_uprobe_xol *xol,
+			   struct pt_regs *regs)
+{
+	unsigned long *dst, *src;
+
+	dst = (void *) regs + xol->mov.dst;
+	src = (void *) regs + xol->mov.src;
+	*dst = *src;
+
+	regs->ip += xol->mov.ilen;
+	return true;
+}
+
 static const struct uprobe_xol_ops branch_xol_ops = {
 	.emulate  = branch_emulate_op,
 	.post_xol = branch_post_xol_op,
@@ -1421,6 +1435,10 @@ static const struct uprobe_xol_ops branch_xol_ops = {
 
 static const struct uprobe_xol_ops push_xol_ops = {
 	.emulate  = push_emulate_op,
+};
+
+static const struct uprobe_xol_ops mov_xol_ops = {
+	.emulate  = mov_emulate_op,
 };
 
 /* Returns -ENOSYS if branch_xol_ops doesn't handle this insn */
@@ -1560,6 +1578,45 @@ static int push_setup_xol_ops(struct arch_uprobe_xol *xol, struct insn *insn)
 	return 0;
 }
 
+#ifdef CONFIG_X86_64
+/* Returns -ENOSYS if mov_xol_ops doesn't handle this insn */
+static int mov_setup_xol_ops(struct arch_uprobe_xol *xol, struct insn *insn)
+{
+	u8 opc1 = OPCODE1(insn);
+	int off_src, off_dst;
+
+	/* validate opcode */
+	if (opc1 != 0x89)
+		return -ENOSYS;
+	if (insn->rex_prefix.nbytes != 1 ||
+	    insn->rex_prefix.bytes[0] != 0x48)
+		return -ENOSYS;
+
+	/* only register operands */
+	if (X86_MODRM_MOD(insn->modrm.value) != 3)
+		return -ENOSYS;
+
+	/* get registers offset */
+	off_src = insn_get_modrm_reg_off(insn);
+	if (off_src < 0)
+		return off_src;
+	off_dst = insn_get_modrm_rm_off(insn);
+	if (off_dst < 0)
+		return off_dst;
+
+	xol->mov.src = off_src;
+	xol->mov.dst = off_dst;
+	xol->mov.ilen = insn->length;
+	xol->ops = &mov_xol_ops;
+	return 0;
+}
+#else
+static int mov_setup_xol_ops(struct arch_uprobe_xol *xol, struct insn *insn)
+{
+	return -ENOSYS;
+}
+#endif
+
 /**
  * arch_uprobe_analyze_insn - instruction analysis including validity and fixups.
  * @auprobe: the probepoint information.
@@ -1585,6 +1642,10 @@ int arch_uprobe_analyze_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, 
 		return ret;
 
 	ret = push_setup_xol_ops(&auprobe->xol, &insn);
+	if (ret != -ENOSYS)
+		return ret;
+
+	ret = mov_setup_xol_ops(&auprobe->xol, &insn);
 	if (ret != -ENOSYS)
 		return ret;
 
