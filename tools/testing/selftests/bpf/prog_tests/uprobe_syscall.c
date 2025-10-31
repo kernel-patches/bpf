@@ -765,6 +765,54 @@ static void test_uprobe_error(void)
 	ASSERT_EQ(errno, ENXIO, "errno");
 }
 
+__attribute__((aligned(16)))
+__nocf_check __weak __naked unsigned long emulate_mov_trigger(void)
+{
+	asm volatile (
+		"pushq %rbp\n"
+		"movq  %rsp,%rbp\n"
+		"subq  $0xb0,%rsp\n"
+		"addq  $0xb0,%rsp\n"
+		"pop %rbp\n"
+		"ret\n"
+	);
+}
+
+static void test_emulate(void)
+{
+	struct uprobe_syscall *skel = NULL;
+	unsigned long offset;
+
+	offset = get_uprobe_offset(&emulate_mov_trigger);
+	if (!ASSERT_GE(offset, 0, "get_uprobe_offset"))
+		return;
+
+	skel = uprobe_syscall__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_syscall__open_and_load"))
+		goto cleanup;
+
+	/* mov */
+	skel->links.probe = bpf_program__attach_uprobe_opts(skel->progs.probe,
+				0, "/proc/self/exe", offset + 1, NULL);
+	if (!ASSERT_OK_PTR(skel->links.probe, "bpf_program__attach_uprobe_opts"))
+		goto cleanup;
+
+	emulate_mov_trigger();
+
+	bpf_link__destroy(skel->links.probe);
+
+	/* sub */
+	skel->links.probe = bpf_program__attach_uprobe_opts(skel->progs.probe,
+				0, "/proc/self/exe", offset + 4, NULL);
+	if (!ASSERT_OK_PTR(skel->links.probe, "bpf_program__attach_uprobe_opts"))
+		goto cleanup;
+
+	emulate_mov_trigger();
+
+cleanup:
+	uprobe_syscall__destroy(skel);
+}
+
 static void __test_uprobe_syscall(void)
 {
 	if (test__start_subtest("uretprobe_regs_equal"))
@@ -789,6 +837,8 @@ static void __test_uprobe_syscall(void)
 		test_uprobe_regs_equal(false);
 	if (test__start_subtest("regs_change"))
 		test_regs_change();
+	if (test__start_subtest("emulate_mov"))
+		test_emulate();
 }
 #else
 static void __test_uprobe_syscall(void)
