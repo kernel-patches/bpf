@@ -1351,10 +1351,34 @@ static const struct bpf_func_proto bpf_timer_init_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
+static int bpf_async_swap_prog(struct bpf_async_cb *cb, struct bpf_prog *prog)
+{
+	struct bpf_prog *prev;
+
+	prev = cb->prog;
+	if (prev == prog)
+		return 0;
+
+	if (prog) {
+		/*
+		 * Bump prog refcnt once. Every bpf_timer_set_callback()
+		 * can pick different callback_fn-s within the same prog.
+		 */
+		prog = bpf_prog_inc_not_zero(prog);
+		if (IS_ERR(prog))
+			return PTR_ERR(prog);
+	}
+	if (prev)
+		/* Drop prev prog refcnt when swapping with new prog */
+		bpf_prog_put(prev);
+
+	cb->prog = prog;
+	return 0;
+}
+
 static int bpf_async_update_callback(struct bpf_async_kern *async, void *callback_fn,
 				     struct bpf_prog *prog)
 {
-	struct bpf_prog *prev;
 	struct bpf_async_cb *cb;
 	int err = 0;
 
@@ -1374,22 +1398,9 @@ static int bpf_async_update_callback(struct bpf_async_kern *async, void *callbac
 		goto out;
 	}
 
-	prev = cb->prog;
-	if (prev != prog) {
-		/* Bump prog refcnt once. Every bpf_timer_set_callback()
-		 * can pick different callback_fn-s within the same prog.
-		 */
-		prog = bpf_prog_inc_not_zero(prog);
-		if (IS_ERR(prog)) {
-			err = PTR_ERR(prog);
-			goto out;
-		}
-		if (prev)
-			/* Drop prev prog refcnt when swapping with new prog */
-			bpf_prog_put(prev);
-		cb->prog = prog;
-	}
-	rcu_assign_pointer(cb->callback_fn, callback_fn);
+	err = bpf_async_swap_prog(cb, prog);
+	if (!err)
+		rcu_assign_pointer(cb->callback_fn, callback_fn);
 out:
 	__bpf_spin_unlock_irqrestore(&async->lock);
 	return err;
