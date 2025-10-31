@@ -64,90 +64,90 @@ struct lpm_trie {
  * stick to IP-address notation for readability though.
  *
  * As the trie is empty initially, the new node (1) will be places as root
- * node, denoted as (R) in the example below. As there are no other node, both
+ * node, denoted as (R) in the example below. As there are no other node, all
  * child pointers are %NULL.
  *
- *              +----------------+
- *              |       (1)  (R) |
- *              | 192.168.0.0/16 |
- *              |    value: 1    |
- *              |   [0]    [1]   |
- *              +----------------+
+ *              +-----------------+
+ *              |       (1)  (R)  |
+ *              | 192.168.0.0/16  |
+ *              |    value: 1     |
+ *              |   [0]    [1..N] |
+ *              +-----------------+
  *
  * Next, let's add a new node (2) matching 192.168.0.0/24. As there is already
  * a node with the same data and a smaller prefix (ie, a less specific one),
  * node (2) will become a child of (1). In child index depends on the next bit
- * that is outside of what (1) matches, and that bit is 0, so (2) will be
+ * stride that is outside of what (1) matches, and that bit is 0, so (2) will be
  * child[0] of (1):
  *
- *              +----------------+
- *              |       (1)  (R) |
- *              | 192.168.0.0/16 |
- *              |    value: 1    |
- *              |   [0]    [1]   |
- *              +----------------+
+ *              +-----------------+
+ *              |       (1)  (R)  |
+ *              | 192.168.0.0/16  |
+ *              |    value: 1     |
+ *              |   [0]    [1..N] |
+ *              +-----------------+
  *                   |
- *    +----------------+
- *    |       (2)      |
- *    | 192.168.0.0/24 |
- *    |    value: 2    |
- *    |   [0]    [1]   |
- *    +----------------+
+ *    +-----------------+
+ *    |       (2)       |
+ *    | 192.168.0.0/24  |
+ *    |    value: 2     |
+ *    |   [0]    [1..N] |
+ *    +-----------------+
  *
  * The child[1] slot of (1) could be filled with another node which has bit #17
- * (the next bit after the ones that (1) matches on) set to 1. For instance,
+ * (the next bit after the ones that (1) matches on) set to 8. For instance,
  * 192.168.128.0/24:
  *
- *              +----------------+
- *              |       (1)  (R) |
- *              | 192.168.0.0/16 |
- *              |    value: 1    |
- *              |   [0]    [1]   |
- *              +----------------+
+ *              +-----------------+
+ *              |       (1)  (R)  |
+ *              | 192.168.0.0/16  |
+ *              |    value: 1     |
+ *              |   [0]    [8..N] |
+ *              +-----------------+
  *                   |      |
- *    +----------------+  +------------------+
- *    |       (2)      |  |        (3)       |
- *    | 192.168.0.0/24 |  | 192.168.128.0/24 |
- *    |    value: 2    |  |     value: 3     |
- *    |   [0]    [1]   |  |    [0]    [1]    |
- *    +----------------+  +------------------+
+ *    +-----------------+  +------------------+
+ *    |       (2)       |  |        (3)       |
+ *    | 192.168.0.0/24  |  | 192.168.128.0/24 |
+ *    |    value: 2     |  |     value: 3     |
+ *    |   [0]    [1..N] |  |    [0]    [1..N] |
+ *    +-----------------+  +------------------+
  *
  * Let's add another node (4) to the game for 192.168.1.0/24. In order to place
  * it, node (1) is looked at first, and because (4) of the semantics laid out
- * above (bit #17 is 0), it would normally be attached to (1) as child[0].
+ * above (bit #17 is 0), it would normally be attached to (1) as child[8].
  * However, that slot is already allocated, so a new node is needed in between.
  * That node does not have a value attached to it and it will never be
  * returned to users as result of a lookup. It is only there to differentiate
  * the traversal further. It will get a prefix as wide as necessary to
- * distinguish its two children:
+ * distinguish its children:
  *
- *                      +----------------+
- *                      |       (1)  (R) |
- *                      | 192.168.0.0/16 |
- *                      |    value: 1    |
- *                      |   [0]    [1]   |
- *                      +----------------+
+ *                      +-----------------+
+ *                      |       (1)  (R)  |
+ *                      | 192.168.0.0/16  |
+ *                      |    value: 1     |
+ *                      |   [0]    [8..N] |
+ *                      +-----------------+
  *                           |      |
- *            +----------------+  +------------------+
- *            |       (4)  (I) |  |        (3)       |
- *            | 192.168.0.0/23 |  | 192.168.128.0/24 |
- *            |    value: ---  |  |     value: 3     |
- *            |   [0]    [1]   |  |    [0]    [1]    |
- *            +----------------+  +------------------+
+ *            +-----------------+  +-------------------+
+ *            |       (4)  (I)  |  |        (3)        |
+ *            | 192.168.0.0/20  |  | 192.168.128.0/24  |
+ *            |    value: ---   |  |     value: 3      |
+ *            |   [0]    [1..N] |  |    [0]    [1..N]  |
+ *            +-----------------+  +-------------------+
  *                 |      |
- *  +----------------+  +----------------+
- *  |       (2)      |  |       (5)      |
- *  | 192.168.0.0/24 |  | 192.168.1.0/24 |
- *  |    value: 2    |  |     value: 5   |
- *  |   [0]    [1]   |  |   [0]    [1]   |
- *  +----------------+  +----------------+
+ *  +-----------------+  +-----------------+
+ *  |       (2)       |  |       (5)       |
+ *  | 192.168.0.0/24  |  | 192.168.1.0/24  |
+ *  |    value: 2     |  |     value: 5    |
+ *  |   [0]    [1..N] |  |   [0]    [1..N] |
+ *  +-----------------+  +-----------------+
  *
  * 192.168.1.1/32 would be a child of (5) etc.
  *
  * An intermediate node will be turned into a 'real' node on demand. In the
- * example above, (4) would be re-used if 192.168.0.0/23 is added to the trie.
+ * example above, (4) would be re-used if 192.168.0.0/20 is added to the trie.
  *
- * A fully populated trie would have a height of 32 nodes, as the trie was
+ * A fully populated trie would have a height of 8 nodes, as the trie was
  * created with a prefix length of 32.
  *
  * The lookup starts at the root node. If the current node matches and if there
