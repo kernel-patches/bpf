@@ -1092,9 +1092,14 @@ static void *map_key_from_value(struct bpf_map *map, void *value, u32 *arr_idx)
 	return (void *)value - round_up(map->key_size, 8);
 }
 
+struct bpf_async_res {
+	struct bpf_prog *prog;
+	struct bpf_map *st_ops_assoc;
+};
+
 struct bpf_async_cb {
 	struct bpf_map *map;
-	struct bpf_prog *prog;
+	struct bpf_async_res res;
 	void __rcu *callback_fn;
 	void *value;
 	union {
@@ -1299,8 +1304,8 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		break;
 	}
 	cb->map = map;
-	cb->prog = NULL;
 	cb->flags = flags;
+	memset(&cb->res, 0, sizeof(cb->res));
 	rcu_assign_pointer(cb->callback_fn, NULL);
 
 	WRITE_ONCE(async->cb, cb);
@@ -1351,11 +1356,47 @@ static const struct bpf_func_proto bpf_timer_init_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
+static void bpf_async_res_put(struct bpf_async_res *res)
+{
+	bpf_prog_put(res->prog);
+
+	if (res->st_ops_assoc)
+		bpf_map_put(res->st_ops_assoc);
+}
+
+static int bpf_async_res_get(struct bpf_async_res *res, struct bpf_prog *prog)
+{
+	struct bpf_map *st_ops_assoc = NULL;
+	int err;
+
+	prog = bpf_prog_inc_not_zero(prog);
+	if (IS_ERR(prog))
+		return PTR_ERR(prog);
+
+	st_ops_assoc = READ_ONCE(prog->aux->st_ops_assoc);
+	if (prog->type == BPF_PROG_TYPE_STRUCT_OPS &&
+	    st_ops_assoc && st_ops_assoc != BPF_PTR_POISON) {
+		st_ops_assoc = bpf_map_inc_not_zero(st_ops_assoc);
+		if (IS_ERR(st_ops_assoc)) {
+			err = PTR_ERR(st_ops_assoc);
+			goto put_prog;
+		}
+	}
+
+	res->prog = prog;
+	res->st_ops_assoc = st_ops_assoc;
+	return 0;
+put_prog:
+	bpf_prog_put(prog);
+	return err;
+}
+
 static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback_fn,
 				    struct bpf_prog_aux *aux, unsigned int flags,
 				    enum bpf_async_type type)
 {
 	struct bpf_prog *prev, *prog = aux->prog;
+	struct bpf_async_res res;
 	struct bpf_async_cb *cb;
 	int ret = 0;
 
@@ -1376,20 +1417,18 @@ static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback
 		ret = -EPERM;
 		goto out;
 	}
-	prev = cb->prog;
+	prev = cb->res.prog;
 	if (prev != prog) {
-		/* Bump prog refcnt once. Every bpf_timer_set_callback()
+		/* Get prog and related resources once. Every bpf_timer_set_callback()
 		 * can pick different callback_fn-s within the same prog.
 		 */
-		prog = bpf_prog_inc_not_zero(prog);
-		if (IS_ERR(prog)) {
-			ret = PTR_ERR(prog);
+		ret = bpf_async_res_get(&res, prog);
+		if (ret)
 			goto out;
-		}
 		if (prev)
-			/* Drop prev prog refcnt when swapping with new prog */
-			bpf_prog_put(prev);
-		cb->prog = prog;
+			/* Put prev prog and related resources when swapping with new prog */
+			bpf_async_res_put(&cb->res);
+		cb->res = res;
 	}
 	rcu_assign_pointer(cb->callback_fn, callback_fn);
 out:
@@ -1423,7 +1462,7 @@ BPF_CALL_3(bpf_timer_start, struct bpf_async_kern *, timer, u64, nsecs, u64, fla
 		return -EINVAL;
 	__bpf_spin_lock_irqsave(&timer->lock);
 	t = timer->timer;
-	if (!t || !t->cb.prog) {
+	if (!t || !t->cb.res.prog) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -1451,14 +1490,14 @@ static const struct bpf_func_proto bpf_timer_start_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
-static void drop_prog_refcnt(struct bpf_async_cb *async)
+static void bpf_async_cb_reset(struct bpf_async_cb *cb)
 {
-	struct bpf_prog *prog = async->prog;
+	struct bpf_prog *prog = cb->res.prog;
 
 	if (prog) {
-		bpf_prog_put(prog);
-		async->prog = NULL;
-		rcu_assign_pointer(async->callback_fn, NULL);
+		bpf_async_res_put(&cb->res);
+		memset(&cb->res, 0, sizeof(cb->res));
+		rcu_assign_pointer(cb->callback_fn, NULL);
 	}
 }
 
@@ -1512,7 +1551,7 @@ BPF_CALL_1(bpf_timer_cancel, struct bpf_async_kern *, timer)
 		goto out;
 	}
 drop:
-	drop_prog_refcnt(&t->cb);
+	bpf_async_cb_reset(&t->cb);
 out:
 	__bpf_spin_unlock_irqrestore(&timer->lock);
 	/* Cancel the timer and wait for associated callback to finish
@@ -1545,7 +1584,7 @@ static struct bpf_async_cb *__bpf_async_cancel_and_free(struct bpf_async_kern *a
 	cb = async->cb;
 	if (!cb)
 		goto out;
-	drop_prog_refcnt(cb);
+	bpf_async_cb_reset(cb);
 	/* The subsequent bpf_timer_start/cancel() helpers won't be able to use
 	 * this timer, since it won't be initialized.
 	 */
@@ -3112,7 +3151,7 @@ __bpf_kfunc int bpf_wq_start(struct bpf_wq *wq, unsigned int flags)
 	if (flags)
 		return -EINVAL;
 	w = READ_ONCE(async->work);
-	if (!w || !READ_ONCE(w->cb.prog))
+	if (!w || !READ_ONCE(w->cb.res.prog))
 		return -EINVAL;
 
 	schedule_work(&w->work);
@@ -4034,8 +4073,8 @@ struct bpf_task_work_ctx {
 	refcount_t refcnt;
 	struct callback_head work;
 	struct irq_work irq_work;
-	/* bpf_prog that schedules task work */
-	struct bpf_prog *prog;
+	/* bpf_prog that schedules task work and related resources */
+	struct bpf_async_res res;
 	/* task for which callback is scheduled */
 	struct task_struct *task;
 	/* the map and map value associated with this context */
@@ -4053,9 +4092,9 @@ struct bpf_task_work_kern {
 
 static void bpf_task_work_ctx_reset(struct bpf_task_work_ctx *ctx)
 {
-	if (ctx->prog) {
-		bpf_prog_put(ctx->prog);
-		ctx->prog = NULL;
+	if (ctx->res.prog) {
+		bpf_async_res_put(&ctx->res);
+		memset(&ctx->res, 0, sizeof(ctx->res));
 	}
 	if (ctx->task) {
 		bpf_task_release(ctx->task);
@@ -4233,19 +4272,19 @@ static int bpf_task_work_schedule(struct task_struct *task, struct bpf_task_work
 				  struct bpf_map *map, bpf_task_work_callback_t callback_fn,
 				  struct bpf_prog_aux *aux, enum task_work_notify_mode mode)
 {
-	struct bpf_prog *prog;
 	struct bpf_task_work_ctx *ctx;
+	struct bpf_async_res res;
 	int err;
 
 	BTF_TYPE_EMIT(struct bpf_task_work);
 
-	prog = bpf_prog_inc_not_zero(aux->prog);
-	if (IS_ERR(prog))
-		return -EBADF;
+	err = bpf_async_res_get(&res, aux->prog);
+	if (err)
+		return err;
 	task = bpf_task_acquire(task);
 	if (!task) {
 		err = -EBADF;
-		goto release_prog;
+		goto release_res;
 	}
 
 	ctx = bpf_task_work_acquire_ctx(tw, map);
@@ -4256,7 +4295,7 @@ static int bpf_task_work_schedule(struct task_struct *task, struct bpf_task_work
 
 	ctx->task = task;
 	ctx->callback_fn = callback_fn;
-	ctx->prog = prog;
+	ctx->res = res;
 	ctx->mode = mode;
 	ctx->map = map;
 	ctx->map_val = (void *)tw - map->record->task_work_off;
@@ -4268,8 +4307,8 @@ static int bpf_task_work_schedule(struct task_struct *task, struct bpf_task_work
 
 release_all:
 	bpf_task_release(task);
-release_prog:
-	bpf_prog_put(prog);
+release_res:
+	bpf_async_res_put(&res);
 	return err;
 }
 
