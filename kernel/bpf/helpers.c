@@ -1102,6 +1102,7 @@ struct bpf_async_cb {
 		struct work_struct delete_work;
 	};
 	u64 flags;
+	refcount_t refcnt;
 };
 
 /* BPF map elements can contain 'struct bpf_timer'.
@@ -1154,6 +1155,33 @@ enum bpf_async_type {
 static DEFINE_PER_CPU(struct bpf_hrtimer *, hrtimer_running);
 
 static void bpf_timer_delete(struct bpf_hrtimer *t);
+
+static bool bpf_async_tryget(struct bpf_async_cb *cb)
+{
+	return refcount_inc_not_zero(&cb->refcnt);
+}
+
+static void bpf_async_put(struct bpf_async_cb *cb, enum bpf_async_type type)
+{
+	if (!refcount_dec_and_test(&cb->refcnt))
+		return;
+
+	switch (type) {
+	case BPF_ASYNC_TYPE_TIMER:
+		bpf_timer_delete((struct bpf_hrtimer *)cb);
+		break;
+	case BPF_ASYNC_TYPE_WQ: {
+		struct bpf_work *work = (void *)cb;
+		/* Trigger cancel of the sleepable work, but *do not* wait for
+		 * it to finish if it was running as we might not be in a
+		 * sleepable context.
+		 * kfree will be called once the work has finished.
+		 */
+		schedule_work(&work->delete_work);
+		break;
+	}
+	}
+}
 
 static enum hrtimer_restart bpf_timer_cb(struct hrtimer *hrtimer)
 {
