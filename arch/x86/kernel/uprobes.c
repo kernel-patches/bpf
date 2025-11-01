@@ -560,14 +560,14 @@ static void riprel_analyze(struct arch_uprobe *auprobe, struct insn *insn)
 	 */
 	if (reg != 6 && reg2 != 6) {
 		reg2 = 6;
-		auprobe->defparam.fixups |= UPROBE_FIX_RIP_SI;
+		auprobe->xol.defparam.fixups |= UPROBE_FIX_RIP_SI;
 	} else if (reg != 7 && reg2 != 7) {
 		reg2 = 7;
-		auprobe->defparam.fixups |= UPROBE_FIX_RIP_DI;
+		auprobe->xol.defparam.fixups |= UPROBE_FIX_RIP_DI;
 		/* TODO (paranoia): force maskmovq to not use di */
 	} else {
 		reg2 = 3;
-		auprobe->defparam.fixups |= UPROBE_FIX_RIP_BX;
+		auprobe->xol.defparam.fixups |= UPROBE_FIX_RIP_BX;
 	}
 	/*
 	 * Point cursor at the modrm byte.  The next 4 bytes are the
@@ -586,9 +586,9 @@ static void riprel_analyze(struct arch_uprobe *auprobe, struct insn *insn)
 static inline unsigned long *
 scratch_reg(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
-	if (auprobe->defparam.fixups & UPROBE_FIX_RIP_SI)
+	if (auprobe->xol.defparam.fixups & UPROBE_FIX_RIP_SI)
 		return &regs->si;
-	if (auprobe->defparam.fixups & UPROBE_FIX_RIP_DI)
+	if (auprobe->xol.defparam.fixups & UPROBE_FIX_RIP_DI)
 		return &regs->di;
 	return &regs->bx;
 }
@@ -599,18 +599,18 @@ scratch_reg(struct arch_uprobe *auprobe, struct pt_regs *regs)
  */
 static void riprel_pre_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
-	if (auprobe->defparam.fixups & UPROBE_FIX_RIP_MASK) {
+	if (auprobe->xol.defparam.fixups & UPROBE_FIX_RIP_MASK) {
 		struct uprobe_task *utask = current->utask;
 		unsigned long *sr = scratch_reg(auprobe, regs);
 
 		utask->autask.saved_scratch_register = *sr;
-		*sr = utask->vaddr + auprobe->defparam.ilen;
+		*sr = utask->vaddr + auprobe->xol.defparam.ilen;
 	}
 }
 
 static void riprel_post_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
-	if (auprobe->defparam.fixups & UPROBE_FIX_RIP_MASK) {
+	if (auprobe->xol.defparam.fixups & UPROBE_FIX_RIP_MASK) {
 		struct uprobe_task *utask = current->utask;
 		unsigned long *sr = scratch_reg(auprobe, regs);
 
@@ -1265,16 +1265,16 @@ static int default_post_xol_op(struct arch_uprobe *auprobe, struct pt_regs *regs
 	struct uprobe_task *utask = current->utask;
 
 	riprel_post_xol(auprobe, regs);
-	if (auprobe->defparam.fixups & UPROBE_FIX_IP) {
+	if (auprobe->xol.defparam.fixups & UPROBE_FIX_IP) {
 		long correction = utask->vaddr - utask->xol_vaddr;
 		regs->ip += correction;
-	} else if (auprobe->defparam.fixups & UPROBE_FIX_CALL) {
+	} else if (auprobe->xol.defparam.fixups & UPROBE_FIX_CALL) {
 		regs->sp += sizeof_long(regs); /* Pop incorrect return address */
-		if (emulate_push_stack(regs, utask->vaddr + auprobe->defparam.ilen))
+		if (emulate_push_stack(regs, utask->vaddr + auprobe->xol.defparam.ilen))
 			return -ERESTART;
 	}
 	/* popf; tell the caller to not touch TF */
-	if (auprobe->defparam.fixups & UPROBE_FIX_SETF)
+	if (auprobe->xol.defparam.fixups & UPROBE_FIX_SETF)
 		utask->autask.saved_tf = true;
 
 	return 0;
@@ -1293,7 +1293,7 @@ static const struct uprobe_xol_ops default_xol_ops = {
 
 static bool branch_is_call(struct arch_uprobe *auprobe)
 {
-	return auprobe->branch.opc1 == 0xe8;
+	return auprobe->xol.branch.opc1 == 0xe8;
 }
 
 #define CASE_COND					\
@@ -1329,7 +1329,7 @@ static bool check_jmp_cond(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
 	unsigned long flags = regs->flags;
 
-	switch (auprobe->branch.opc1) {
+	switch (auprobe->xol.branch.opc1) {
 	#define DO(expr)	\
 		return expr;
 	CASE_COND
@@ -1346,8 +1346,8 @@ static bool check_jmp_cond(struct arch_uprobe *auprobe, struct pt_regs *regs)
 
 static bool branch_emulate_op(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
-	unsigned long new_ip = regs->ip += auprobe->branch.ilen;
-	unsigned long offs = (long)auprobe->branch.offs;
+	unsigned long new_ip = regs->ip += auprobe->xol.branch.ilen;
+	unsigned long offs = (long)auprobe->xol.branch.offs;
 
 	if (branch_is_call(auprobe)) {
 		/*
@@ -1371,11 +1371,11 @@ static bool branch_emulate_op(struct arch_uprobe *auprobe, struct pt_regs *regs)
 
 static bool push_emulate_op(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
-	unsigned long *src_ptr = (void *)regs + auprobe->push.reg_offset;
+	unsigned long *src_ptr = (void *)regs + auprobe->xol.push.reg_offset;
 
 	if (emulate_push_stack(regs, *src_ptr))
 		return false;
-	regs->ip += auprobe->push.ilen;
+	regs->ip += auprobe->xol.push.ilen;
 	return true;
 }
 
@@ -1469,16 +1469,16 @@ static int branch_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn)
 	}
 
 setup:
-	auprobe->branch.opc1 = opc1;
-	auprobe->branch.ilen = insn->length;
-	auprobe->branch.offs = insn->immediate.value;
+	auprobe->xol.branch.opc1 = opc1;
+	auprobe->xol.branch.ilen = insn->length;
+	auprobe->xol.branch.offs = insn->immediate.value;
 
-	auprobe->ops = &branch_xol_ops;
+	auprobe->xol.ops = &branch_xol_ops;
 	return 0;
 }
 
 /* Returns -ENOSYS if push_xol_ops doesn't handle this insn */
-static int push_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn)
+static int push_setup_xol_ops(struct arch_uprobe_xol *xol, struct insn *insn)
 {
 	u8 opc1 = OPCODE1(insn), reg_offset = 0;
 
@@ -1552,9 +1552,9 @@ static int push_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn)
 		}
 	}
 
-	auprobe->push.reg_offset = reg_offset;
-	auprobe->push.ilen = insn->length;
-	auprobe->ops = &push_xol_ops;
+	xol->push.reg_offset = reg_offset;
+	xol->push.ilen = insn->length;
+	xol->ops = &push_xol_ops;
 	return 0;
 }
 
@@ -1582,7 +1582,7 @@ int arch_uprobe_analyze_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, 
 	if (ret != -ENOSYS)
 		return ret;
 
-	ret = push_setup_xol_ops(auprobe, &insn);
+	ret = push_setup_xol_ops(&auprobe->xol, &insn);
 	if (ret != -ENOSYS)
 		return ret;
 
@@ -1592,7 +1592,7 @@ int arch_uprobe_analyze_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, 
 	 */
 	switch (OPCODE1(&insn)) {
 	case 0x9d:		/* popf */
-		auprobe->defparam.fixups |= UPROBE_FIX_SETF;
+		auprobe->xol.defparam.fixups |= UPROBE_FIX_SETF;
 		break;
 	case 0xc3:		/* ret or lret -- ip is correct */
 	case 0xcb:
@@ -1618,10 +1618,10 @@ int arch_uprobe_analyze_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, 
 		riprel_analyze(auprobe, &insn);
 	}
 
-	auprobe->defparam.ilen = insn.length;
-	auprobe->defparam.fixups |= fix_ip_or_call;
+	auprobe->xol.defparam.ilen = insn.length;
+	auprobe->xol.defparam.fixups |= fix_ip_or_call;
 
-	auprobe->ops = &default_xol_ops;
+	auprobe->xol.ops = &default_xol_ops;
 	return 0;
 }
 
@@ -1634,8 +1634,8 @@ int arch_uprobe_pre_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
 	struct uprobe_task *utask = current->utask;
 
-	if (auprobe->ops->pre_xol) {
-		int err = auprobe->ops->pre_xol(auprobe, regs);
+	if (auprobe->xol.ops->pre_xol) {
+		int err = auprobe->xol.ops->pre_xol(auprobe, regs);
 		if (err)
 			return err;
 	}
@@ -1686,8 +1686,8 @@ int arch_uprobe_post_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 	WARN_ON_ONCE(current->thread.trap_nr != UPROBE_TRAP_NR);
 	current->thread.trap_nr = utask->autask.saved_trap_nr;
 
-	if (auprobe->ops->post_xol) {
-		err = auprobe->ops->post_xol(auprobe, regs);
+	if (auprobe->xol.ops->post_xol) {
+		err = auprobe->xol.ops->post_xol(auprobe, regs);
 		if (err) {
 			/*
 			 * Restore ->ip for restart or post mortem analysis.
@@ -1754,8 +1754,8 @@ void arch_uprobe_abort_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
 	struct uprobe_task *utask = current->utask;
 
-	if (auprobe->ops->abort)
-		auprobe->ops->abort(auprobe, regs);
+	if (auprobe->xol.ops->abort)
+		auprobe->xol.ops->abort(auprobe, regs);
 
 	current->thread.trap_nr = utask->autask.saved_trap_nr;
 	regs->ip = utask->vaddr;
@@ -1766,8 +1766,8 @@ void arch_uprobe_abort_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 
 static bool __skip_sstep(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
-	if (auprobe->ops->emulate)
-		return auprobe->ops->emulate(auprobe, regs);
+	if (auprobe->xol.ops->emulate)
+		return auprobe->xol.ops->emulate(auprobe, regs);
 	return false;
 }
 

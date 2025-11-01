@@ -27,12 +27,7 @@ enum {
 
 struct uprobe_xol_ops;
 
-struct arch_uprobe {
-	union {
-		u8			insn[MAX_UINSN_BYTES];
-		u8			ixol[MAX_UINSN_BYTES];
-	};
-
+struct arch_uprobe_xol {
 	const struct uprobe_xol_ops	*ops;
 
 	union {
@@ -50,6 +45,15 @@ struct arch_uprobe {
 			u8	ilen;
 		}			push;
 	};
+};
+
+struct arch_uprobe {
+	union {
+		u8			insn[MAX_UINSN_BYTES];
+		u8			ixol[MAX_UINSN_BYTES];
+	};
+
+	struct arch_uprobe_xol		xol;
 
 	unsigned long flags;
 };
