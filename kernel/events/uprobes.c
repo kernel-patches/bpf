@@ -2701,6 +2701,10 @@ void __weak arch_uprobe_optimize(struct arch_uprobe *auprobe, unsigned long vadd
 {
 }
 
+void __weak arch_uprobe_optimized_emulate(struct arch_uprobe *auprobe, struct pt_regs *regs)
+{
+}
+
 /*
  * Run handler and ask thread to singlestep.
  * Ensure all non-fatal signals cannot interrupt thread while it singlesteps.
@@ -2801,6 +2805,8 @@ void handle_syscall_uprobe(struct pt_regs *regs, unsigned long bp_vaddr)
 	if (arch_uprobe_ignore(&uprobe->arch, regs))
 		return;
 	handler_chain(uprobe, regs);
+
+	arch_uprobe_optimized_emulate(&uprobe->arch, regs);
 }
 
 /*

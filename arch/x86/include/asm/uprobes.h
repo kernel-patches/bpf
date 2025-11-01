@@ -21,8 +21,9 @@ typedef u8 uprobe_opcode_t;
 #define UPROBE_SWBP_INSN_SIZE		   1
 
 enum {
-	ARCH_UPROBE_FLAG_CAN_OPTIMIZE   = 0,
-	ARCH_UPROBE_FLAG_OPTIMIZE_FAIL  = 1,
+	ARCH_UPROBE_FLAG_CAN_OPTIMIZE     = 0,
+	ARCH_UPROBE_FLAG_OPTIMIZE_FAIL    = 1,
+	ARCH_UPROBE_FLAG_OPTIMIZE_EMULATE = 2,
 };
 
 struct uprobe_xol_ops;
@@ -59,11 +60,15 @@ struct arch_uprobe_xol {
 
 struct arch_uprobe {
 	union {
-		u8			insn[MAX_UINSN_BYTES];
+		u8			insn[5*MAX_UINSN_BYTES];
 		u8			ixol[MAX_UINSN_BYTES];
 	};
 
-	struct arch_uprobe_xol		xol;
+	struct arch_uprobe_xol	xol;
+	struct {
+		struct arch_uprobe_xol	xol[5];
+		int			cnt;
+	} opt;
 
 	unsigned long flags;
 };

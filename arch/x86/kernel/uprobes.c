@@ -277,13 +277,14 @@ static bool is_prefix_bad(struct insn *insn)
 	return false;
 }
 
-static int uprobe_init_insn(struct arch_uprobe *auprobe, struct insn *insn, bool x86_64)
+static int uprobe_init_insn_offset(struct arch_uprobe *auprobe, unsigned long offset,
+				   struct insn *insn, bool x86_64)
 {
 	enum insn_mode m = x86_64 ? INSN_MODE_64 : INSN_MODE_32;
 	u32 volatile *good_insns;
 	int ret;
 
-	ret = insn_decode(insn, auprobe->insn, sizeof(auprobe->insn), m);
+	ret = insn_decode(insn, auprobe->insn + offset, sizeof(auprobe->insn) - offset, m);
 	if (ret < 0)
 		return -ENOEXEC;
 
@@ -308,6 +309,11 @@ static int uprobe_init_insn(struct arch_uprobe *auprobe, struct insn *insn, bool
 	}
 
 	return -ENOTSUPP;
+}
+
+static int uprobe_init_insn(struct arch_uprobe *auprobe, struct insn *insn, bool x86_64)
+{
+	return uprobe_init_insn_offset(auprobe, 0, insn, x86_64);
 }
 
 #ifdef CONFIG_X86_64
@@ -1462,6 +1468,23 @@ static bool sub_emulate_op(struct arch_uprobe *auprobe, struct arch_uprobe_xol *
 
 #undef EFLAGS_MASK
 
+static bool optimized_emulate(struct arch_uprobe *auprobe, struct arch_uprobe_xol *xol,
+			      struct pt_regs *regs)
+{
+	int i;
+
+	for (i = 0; i < auprobe->opt.cnt; i++) {
+		WARN_ON(!auprobe->opt.xol[i].ops->emulate(auprobe, &auprobe->opt.xol[i], regs));
+	}
+	return true;
+}
+
+void arch_uprobe_optimized_emulate(struct arch_uprobe *auprobe, struct pt_regs *regs)
+{
+	if (test_bit(ARCH_UPROBE_FLAG_OPTIMIZE_EMULATE, &auprobe->flags))
+		optimized_emulate(auprobe, NULL, regs);
+}
+
 static const struct uprobe_xol_ops branch_xol_ops = {
 	.emulate  = branch_emulate_op,
 	.post_xol = branch_post_xol_op,
@@ -1477,6 +1500,10 @@ static const struct uprobe_xol_ops mov_xol_ops = {
 
 static const struct uprobe_xol_ops sub_xol_ops = {
 	.emulate  = sub_emulate_op,
+};
+
+static const struct uprobe_xol_ops opt_xol_ops = {
+	.emulate  = optimized_emulate,
 };
 
 /* Returns -ENOSYS if branch_xol_ops doesn't handle this insn */
@@ -1675,12 +1702,83 @@ static int sub_setup_xol_ops(struct arch_uprobe_xol *xol, struct insn *insn)
 	xol->ops = &sub_xol_ops;
 	return 0;
 }
+
+static int opt_setup_xol_insns(struct arch_uprobe *auprobe, struct arch_uprobe_xol *xol,
+			       struct insn *insn)
+{
+	int ret;
+
+	/*
+	 * TODO somehow separate nop emulation out of branch_xol_ops,
+	 * so we could emulate nop instructions in here.
+	 */
+	ret = push_setup_xol_ops(xol, insn);
+	if (ret != -ENOSYS)
+		return ret;
+	ret = mov_setup_xol_ops(xol, insn);
+	if (ret != -ENOSYS)
+		return ret;
+	ret = sub_setup_xol_ops(xol, insn);
+	if (ret != -ENOSYS)
+		return ret;
+
+	return -1;
+}
+
+static int opt_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn)
+{
+	unsigned long offset = insn->length;
+	struct insn insnX;
+	int i, ret;
+
+	if (test_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags))
+		return -ENOSYS;
+
+	ret = opt_setup_xol_insns(auprobe, &auprobe->opt.xol[0], insn);
+	if (ret)
+		return -ENOSYS;
+
+	auprobe->opt.cnt = 1;
+	if (offset >= 5)
+		goto optimize;
+
+	for (i = 1; i < 5; i++) {
+		ret = uprobe_init_insn_offset(auprobe, offset, &insnX, true);
+		if (ret)
+			break;
+		ret = opt_setup_xol_insns(auprobe, &auprobe->opt.xol[i], &insnX);
+		if (ret)
+			break;
+		offset += insnX.length;
+		auprobe->opt.cnt++;
+		if (offset >= 5)
+			goto optimize;
+	}
+
+	return -ENOSYS;
+
+optimize:
+	set_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags);
+	set_bit(ARCH_UPROBE_FLAG_OPTIMIZE_EMULATE, &auprobe->flags);
+	auprobe->xol.ops = &opt_xol_ops;
+
+	/*
+	 * TODO perhaps we could 'emulate' nop, so there would be no need for
+	 * ARCH_UPROBE_FLAG_OPTIMIZE_EMULATE flag, because we would emulate
+	 * allways.
+	 */
+	return 0;
+}
 #else
 static int mov_setup_xol_ops(struct arch_uprobe_xol *xol, struct insn *insn)
 {
 	return -ENOSYS;
 }
 static int sub_setup_xol_ops(struct arch_uprobe_xol *xol, struct insn *insn)
+{
+	return -ENOSYS;
+}
+static int opt_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn)
 {
 	return -ENOSYS;
 }
@@ -1705,6 +1803,10 @@ int arch_uprobe_analyze_insn(struct arch_uprobe *auprobe, struct mm_struct *mm, 
 
 	if (can_optimize(&insn, addr))
 		set_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags);
+
+	ret = opt_setup_xol_ops(auprobe, &insn);
+	if (ret != -ENOSYS)
+		return ret;
 
 	ret = branch_setup_xol_ops(auprobe, &insn);
 	if (ret != -ENOSYS)
