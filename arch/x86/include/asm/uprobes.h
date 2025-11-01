@@ -49,6 +49,11 @@ struct arch_uprobe_xol {
 			u16	dst;    /* to the start of pt_regs */
 			u8	ilen;
 		}			mov;
+		struct {
+			s32	val;
+			u16	reg;	/* to the start of pt_regs */
+			u8	ilen;
+		}			sub;
 	};
 };
 
