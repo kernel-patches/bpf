@@ -40,6 +40,7 @@
 #include <net/tcp.h>
 #include <net/tcp_ecn.h>
 #include <net/mptcp.h>
+#include <net/smc.h>
 #include <net/proto_memory.h>
 #include <net/psp.h>
 
@@ -802,34 +803,41 @@ static void tcp_options_write(struct tcphdr *th, struct tcp_sock *tp,
 	mptcp_options_write(th, ptr, tp, opts);
 }
 
-static void smc_set_option(const struct tcp_sock *tp,
+static void smc_set_option(struct tcp_sock *tp,
 			   struct tcp_out_options *opts,
 			   unsigned int *remaining)
 {
 #if IS_ENABLED(CONFIG_SMC)
-	if (static_branch_unlikely(&tcp_have_smc)) {
-		if (tp->syn_smc) {
-			if (*remaining >= TCPOLEN_EXP_SMC_BASE_ALIGNED) {
-				opts->options |= OPTION_SMC;
-				*remaining -= TCPOLEN_EXP_SMC_BASE_ALIGNED;
-			}
+	struct sock *sk = &tp->inet_conn.icsk_inet.sk;
+
+	if (static_branch_unlikely(&tcp_have_smc) && tp->syn_smc) {
+		tp->syn_smc = !!smc_call_hsbpf(1, sk, syn_option, tp);
+		/* re-check syn_smc */
+		if (tp->syn_smc &&
+		    *remaining >= TCPOLEN_EXP_SMC_BASE_ALIGNED) {
+			opts->options |= OPTION_SMC;
+			*remaining -= TCPOLEN_EXP_SMC_BASE_ALIGNED;
 		}
 	}
 #endif
 }
 
 static void smc_set_option_cond(const struct tcp_sock *tp,
-				const struct inet_request_sock *ireq,
+				struct inet_request_sock *ireq,
 				struct tcp_out_options *opts,
 				unsigned int *remaining)
 {
 #if IS_ENABLED(CONFIG_SMC)
-	if (static_branch_unlikely(&tcp_have_smc)) {
-		if (tp->syn_smc && ireq->smc_ok) {
-			if (*remaining >= TCPOLEN_EXP_SMC_BASE_ALIGNED) {
-				opts->options |= OPTION_SMC;
-				*remaining -= TCPOLEN_EXP_SMC_BASE_ALIGNED;
-			}
+	const struct sock *sk = &tp->inet_conn.icsk_inet.sk;
+
+	if (static_branch_unlikely(&tcp_have_smc) && tp->syn_smc && ireq->smc_ok) {
+		ireq->smc_ok = !!smc_call_hsbpf(1, sk, synack_option,
+						tp, ireq);
+		/* re-check smc_ok */
+		if (ireq->smc_ok &&
+		    *remaining >= TCPOLEN_EXP_SMC_BASE_ALIGNED) {
+			opts->options |= OPTION_SMC;
+			*remaining -= TCPOLEN_EXP_SMC_BASE_ALIGNED;
 		}
 	}
 #endif
