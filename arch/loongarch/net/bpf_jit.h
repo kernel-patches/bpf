@@ -122,7 +122,8 @@ static inline void move_imm(struct jit_ctx *ctx, enum loongarch_gpr rd, long imm
 	/* addiw rd, $zero, imm_11_0 */
 	if (is_signed_imm12(imm)) {
 		emit_insn(ctx, addiw, rd, LOONGARCH_GPR_ZERO, imm);
-		goto zext;
+		emit_sext_32(ctx, rd, is32);
+		return;
 	}
 
 	/* ori rd, $zero, imm_11_0 */
