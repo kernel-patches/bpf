@@ -1212,7 +1212,7 @@ static bool can_optimize(struct insn *insn, unsigned long vaddr)
 #endif /* CONFIG_X86_64 */
 
 struct uprobe_xol_ops {
-	bool	(*emulate)(struct arch_uprobe *, struct pt_regs *);
+	bool	(*emulate)(struct arch_uprobe*, struct arch_uprobe_xol *, struct pt_regs *);
 	int	(*pre_xol)(struct arch_uprobe *, struct pt_regs *);
 	int	(*post_xol)(struct arch_uprobe *, struct pt_regs *);
 	void	(*abort)(struct arch_uprobe *, struct pt_regs *);
@@ -1291,9 +1291,9 @@ static const struct uprobe_xol_ops default_xol_ops = {
 	.abort	  = default_abort_op,
 };
 
-static bool branch_is_call(struct arch_uprobe *auprobe)
+static bool branch_is_call(struct arch_uprobe_xol *xol)
 {
-	return auprobe->xol.branch.opc1 == 0xe8;
+	return xol->branch.opc1 == 0xe8;
 }
 
 #define CASE_COND					\
@@ -1325,11 +1325,11 @@ static bool is_cond_jmp_opcode(u8 opcode)
 	}
 }
 
-static bool check_jmp_cond(struct arch_uprobe *auprobe, struct pt_regs *regs)
+static bool check_jmp_cond(struct arch_uprobe_xol *xol, struct pt_regs *regs)
 {
 	unsigned long flags = regs->flags;
 
-	switch (auprobe->xol.branch.opc1) {
+	switch (xol->branch.opc1) {
 	#define DO(expr)	\
 		return expr;
 	CASE_COND
@@ -1344,12 +1344,13 @@ static bool check_jmp_cond(struct arch_uprobe *auprobe, struct pt_regs *regs)
 #undef	COND
 #undef	CASE_COND
 
-static bool branch_emulate_op(struct arch_uprobe *auprobe, struct pt_regs *regs)
+static bool branch_emulate_op(struct arch_uprobe *auprobe, struct arch_uprobe_xol *xol,
+			      struct pt_regs *regs)
 {
-	unsigned long new_ip = regs->ip += auprobe->xol.branch.ilen;
-	unsigned long offs = (long)auprobe->xol.branch.offs;
+	unsigned long new_ip = regs->ip += xol->branch.ilen;
+	unsigned long offs = (long)xol->branch.offs;
 
-	if (branch_is_call(auprobe)) {
+	if (branch_is_call(xol)) {
 		/*
 		 * If it fails we execute this (mangled, see the comment in
 		 * branch_clear_offset) insn out-of-line. In the likely case
@@ -1361,7 +1362,7 @@ static bool branch_emulate_op(struct arch_uprobe *auprobe, struct pt_regs *regs)
 		 */
 		if (emulate_push_stack(regs, new_ip))
 			return false;
-	} else if (!check_jmp_cond(auprobe, regs)) {
+	} else if (!check_jmp_cond(xol, regs)) {
 		offs = 0;
 	}
 
@@ -1369,19 +1370,20 @@ static bool branch_emulate_op(struct arch_uprobe *auprobe, struct pt_regs *regs)
 	return true;
 }
 
-static bool push_emulate_op(struct arch_uprobe *auprobe, struct pt_regs *regs)
+static bool push_emulate_op(struct arch_uprobe *auprobe, struct arch_uprobe_xol *xol,
+			    struct pt_regs *regs)
 {
-	unsigned long *src_ptr = (void *)regs + auprobe->xol.push.reg_offset;
+	unsigned long *src_ptr = (void *)regs + xol->push.reg_offset;
 
 	if (emulate_push_stack(regs, *src_ptr))
 		return false;
-	regs->ip += auprobe->xol.push.ilen;
+	regs->ip += xol->push.ilen;
 	return true;
 }
 
 static int branch_post_xol_op(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
-	BUG_ON(!branch_is_call(auprobe));
+	BUG_ON(!branch_is_call(&auprobe->xol));
 	/*
 	 * We can only get here if branch_emulate_op() failed to push the ret
 	 * address _and_ another thread expanded our stack before the (mangled)
@@ -1767,7 +1769,7 @@ void arch_uprobe_abort_xol(struct arch_uprobe *auprobe, struct pt_regs *regs)
 static bool __skip_sstep(struct arch_uprobe *auprobe, struct pt_regs *regs)
 {
 	if (auprobe->xol.ops->emulate)
-		return auprobe->xol.ops->emulate(auprobe, regs);
+		return auprobe->xol.ops->emulate(auprobe, &auprobe->xol, regs);
 	return false;
 }
 
