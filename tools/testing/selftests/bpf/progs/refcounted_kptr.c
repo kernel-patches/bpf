@@ -568,4 +568,64 @@ err_out:
 	return 0;
 }
 
+private(kptr_ref) u64 ref;
+
+static int probe_read_refcount(void)
+{
+	u32 refcount;
+
+	bpf_probe_read_kernel(&refcount, sizeof(refcount), (void *) ref);
+	return refcount;
+}
+
+static int __insert_in_list(struct bpf_list_head *head, struct bpf_spin_lock *lock,
+			    struct node_data __kptr **node)
+{
+	struct node_data *n, *m;
+
+	n = bpf_obj_new(typeof(*n));
+	if (!n)
+		return -1;
+
+	m = bpf_refcount_acquire(n);
+	n = bpf_kptr_xchg(node, n);
+	if (n) {
+		bpf_obj_drop(n);
+		bpf_obj_drop(m);
+		return -2;
+	}
+
+	bpf_spin_lock(lock);
+	bpf_list_push_front(head, &m->l);
+	ref = (u64)(void *) &m->ref;
+	bpf_spin_unlock(lock);
+	return probe_read_refcount();
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_HASH);
+	__type(key, int);
+	__type(value, struct map_value);
+	__uint(max_entries, 1);
+} percpu_hash SEC(".maps");
+
+SEC("tc")
+int percpu_hash_refcount_leak(void *ctx)
+{
+	struct map_value *v;
+	int key = 0;
+
+	v = bpf_map_lookup_elem(&percpu_hash, &key);
+	if (!v)
+		return 0;
+
+	return __insert_in_list(&head, &lock, &v->node);
+}
+
+SEC("tc")
+int check_percpu_hash_refcount(void *ctx)
+{
+	return probe_read_refcount();
+}
+
 char _license[] SEC("license") = "GPL";
