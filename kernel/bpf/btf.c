@@ -259,6 +259,7 @@ struct btf {
 	void *nohdr_data;
 	struct btf_header hdr;
 	u32 nr_types; /* includes VOID for base BTF */
+	u32 nr_sorted_types; /* exclude VOID for base BTF */
 	u32 types_size;
 	u32 data_size;
 	refcount_t refcnt;
@@ -494,6 +495,11 @@ static bool btf_type_is_modifier(const struct btf_type *t)
 	return false;
 }
 
+static int btf_start_id(const struct btf *btf)
+{
+	return btf->start_id + (btf->base_btf ? 0 : 1);
+}
+
 bool btf_type_is_void(const struct btf_type *t)
 {
 	return t == &btf_void;
@@ -544,24 +550,109 @@ u32 btf_nr_types(const struct btf *btf)
 	return total;
 }
 
-s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind)
+/* Find BTF types with matching names within the [left, right] index range.
+ * On success, updates *left and *right to the boundaries of the matching range
+ * and returns the leftmost matching index.
+ */
+static s32 btf_find_by_name_kind_bsearch(const struct btf *btf, const char *name,
+						s32 *left, s32 *right)
 {
 	const struct btf_type *t;
 	const char *tname;
-	u32 i, total;
+	s32 l, r, m, lmost, rmost;
+	int ret;
 
-	total = btf_nr_types(btf);
-	for (i = 1; i < total; i++) {
-		t = btf_type_by_id(btf, i);
-		if (BTF_INFO_KIND(t->info) != kind)
-			continue;
-
+	/* found the leftmost btf_type that matches */
+	l = *left;
+	r = *right;
+	lmost = -1;
+	while (l <= r) {
+		m = l + (r - l) / 2;
+		t = btf_type_by_id(btf, m);
 		tname = btf_name_by_offset(btf, t->name_off);
-		if (!strcmp(tname, name))
-			return i;
+		ret = strcmp(tname, name);
+		if (ret < 0) {
+			l = m + 1;
+		} else {
+			if (ret == 0)
+				lmost = m;
+			r = m - 1;
+		}
 	}
 
-	return -ENOENT;
+	if (lmost == -1)
+		return -ENOENT;
+
+	/* found the rightmost btf_type that matches */
+	l = lmost;
+	r = *right;
+	rmost = -1;
+	while (l <= r) {
+		m = l + (r - l) / 2;
+		t = btf_type_by_id(btf, m);
+		tname = btf_name_by_offset(btf, t->name_off);
+		ret = strcmp(tname, name);
+		if (ret <= 0) {
+			if (ret == 0)
+				rmost = m;
+			l = m + 1;
+		} else {
+			r = m - 1;
+		}
+	}
+
+	*left = lmost;
+	*right = rmost;
+	return lmost;
+}
+
+s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind)
+{
+	const struct btf *base_btf = btf_base_btf(btf);;
+	const struct btf_type *t;
+	const char *tname;
+	int err = -ENOENT;
+
+	if (base_btf)
+		err = btf_find_by_name_kind(base_btf, name, kind);
+
+	if (err == -ENOENT) {
+		if (btf->nr_sorted_types) {
+			/* binary search */
+			s32 l, r;
+			int ret;
+
+			l = btf_start_id(btf);
+			r = l + btf->nr_sorted_types - 1;
+			ret = btf_find_by_name_kind_bsearch(btf, name, &l, &r);
+			if (ret < 0)
+				goto out;
+			/* found the leftmost btf_type that matches */
+			while (l <= r) {
+				t = btf_type_by_id(btf, l);
+				if (BTF_INFO_KIND(t->info) == kind)
+					return l;
+				l++;
+			}
+		} else {
+			/* linear search */
+			u32 i, total;
+
+			total = btf_nr_types(btf);
+			for (i = btf_start_id(btf); i < total; i++) {
+				t = btf_type_by_id(btf, i);
+				if (BTF_INFO_KIND(t->info) != kind)
+					continue;
+
+				tname = btf_name_by_offset(btf, t->name_off);
+				if (!strcmp(tname, name))
+					return i;
+			}
+		}
+	}
+
+out:
+	return err;
 }
 
 s32 bpf_find_btf_id(const char *name, u32 kind, struct btf **btf_p)
