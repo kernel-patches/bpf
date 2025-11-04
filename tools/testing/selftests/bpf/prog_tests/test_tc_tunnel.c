@@ -69,7 +69,7 @@ struct subtest_cfg {
 	int client_egress_prog_fd;
 	int server_ingress_prog_fd;
 	char extra_decap_mod_args[TUNNEL_ARGS_MAX_LEN];
-	int *server_fd;
+	int server_fd;
 };
 
 struct connection {
@@ -135,16 +135,18 @@ static int run_server(struct subtest_cfg *cfg)
 {
 	int family = cfg->ipproto == 6 ? AF_INET6 : AF_INET;
 	struct nstoken *nstoken;
+	struct network_helper_opts opts = {
+		.timeout_ms = TIMEOUT_MS
+	};
 
 	nstoken = open_netns(SERVER_NS);
 	if (!ASSERT_OK_PTR(nstoken, "open server ns"))
 		return -1;
 
-	cfg->server_fd = start_reuseport_server(family, SOCK_STREAM,
-						cfg->server_addr, TEST_PORT,
-						TIMEOUT_MS, 1);
+	cfg->server_fd = start_server_str(family, SOCK_STREAM, cfg->server_addr,
+					  TEST_PORT, &opts);
 	close_netns(nstoken);
-	if (!ASSERT_OK_PTR(cfg->server_fd, "start server"))
+	if (!ASSERT_OK_FD(cfg->server_fd, "start server"))
 		return -1;
 
 	return 0;
@@ -152,7 +154,7 @@ static int run_server(struct subtest_cfg *cfg)
 
 static void stop_server(struct subtest_cfg *cfg)
 {
-	free_fds(cfg->server_fd, 1);
+	close(cfg->server_fd);
 }
 
 static int check_server_rx_data(struct subtest_cfg *cfg,
@@ -188,7 +190,7 @@ static struct connection *connect_client_to_server(struct subtest_cfg *cfg)
 		return NULL;
 	}
 
-	server_fd = accept(*cfg->server_fd, NULL, NULL);
+	server_fd = accept(cfg->server_fd, NULL, NULL);
 	if (server_fd < 0) {
 		close(client_fd);
 		free(conn);
@@ -394,29 +396,30 @@ static void run_test(struct subtest_cfg *cfg)
 
 	/* Basic communication must work */
 	if (!ASSERT_OK(send_and_test_data(cfg, true), "connect without any encap"))
-		goto fail;
+		goto fail_close_server;
 
 	/* Attach encapsulation program to client */
 	if (!ASSERT_OK(configure_encapsulation(cfg), "configure encapsulation"))
-		goto fail;
+		goto fail_close_server;
 
 	/* If supported, insert kernel decap module, connection must succeed */
 	if (!cfg->expect_kern_decap_failure) {
 		if (!ASSERT_OK(configure_kernel_decapsulation(cfg),
 					"configure kernel decapsulation"))
-			goto fail;
+			goto fail_close_server;
 		if (!ASSERT_OK(send_and_test_data(cfg, true),
 			       "connect with encap prog and kern decap"))
-			goto fail;
+			goto fail_close_server;
 	}
 
 	/* Replace kernel decapsulation with BPF decapsulation, test must pass */
 	if (!ASSERT_OK(configure_ebpf_decapsulation(cfg), "configure ebpf decapsulation"))
-		goto fail;
+		goto fail_close_server;
 	ASSERT_OK(send_and_test_data(cfg, true), "connect with encap and decap progs");
 
 fail:
 	stop_server(cfg);
+fail_close_server:
 	close_netns(nstoken);
 }
 
