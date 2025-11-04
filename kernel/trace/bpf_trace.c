@@ -2059,14 +2059,18 @@ static __always_inline
 void __bpf_trace_run(struct bpf_raw_tp_link *link, u64 *args)
 {
 	struct bpf_prog *prog = link->link.prog;
+	u8 rctx = interrupt_context_level();
 	struct bpf_run_ctx *old_run_ctx;
 	struct bpf_trace_run_ctx run_ctx;
+	u8 *active;
 
 	cant_sleep();
-	if (unlikely(this_cpu_inc_return(*(prog->active)) != 1)) {
+	active = this_cpu_ptr(prog->active);
+	if (unlikely(active[rctx])) {
 		bpf_prog_inc_misses_counter(prog);
-		goto out;
+		return;
 	}
+	active[rctx]++;
 
 	run_ctx.bpf_cookie = link->cookie;
 	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
@@ -2076,8 +2080,7 @@ void __bpf_trace_run(struct bpf_raw_tp_link *link, u64 *args)
 	rcu_read_unlock();
 
 	bpf_reset_run_ctx(old_run_ctx);
-out:
-	this_cpu_dec(*(prog->active));
+	active[rctx]--;
 }
 
 #define UNPACK(...)			__VA_ARGS__
