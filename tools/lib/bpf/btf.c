@@ -5830,3 +5830,164 @@ int btf__relocate(struct btf *btf, const struct btf *base_btf)
 		btf->owns_base = false;
 	return libbpf_err(err);
 }
+
+struct btf_permute {
+	/* .BTF section to be permuted in-place */
+	struct btf *btf;
+	struct btf_ext *btf_ext;
+	/* Array of type IDs used for permutation. The array length must equal
+	 * the number of types in the BTF being permuted, excluding the special
+	 * void type at ID 0. For split BTF, the length corresponds to the
+	 * number of types added on top of the base BTF.
+	 */
+	__u32 *ids;
+	/* Array of type IDs used to map from original type ID to a new permuted
+	 * type ID, its length equals to the above ids */
+	__u32 *map;
+};
+
+static int btf_permute_shuffle_types(struct btf_permute *p);
+static int btf_permute_remap_types(struct btf_permute *p);
+static int btf_permute_remap_type_id(__u32 *type_id, void *ctx);
+
+int btf__permute(struct btf *btf, __u32 *ids, const struct btf_permute_opts *opts)
+{
+	struct btf_permute p;
+	int i, err = 0;
+	__u32 *map = NULL;
+
+	if (!OPTS_VALID(opts, btf_permute_opts) || !ids)
+		return libbpf_err(-EINVAL);
+
+	map = calloc(btf->nr_types, sizeof(*map));
+	if (!map) {
+		err = -ENOMEM;
+		goto done;
+	}
+
+	for (i = 0; i < btf->nr_types; i++)
+		map[i] = BTF_UNPROCESSED_ID;
+
+	p.btf = btf;
+	p.btf_ext = OPTS_GET(opts, btf_ext, NULL);
+	p.ids = ids;
+	p.map = map;
+
+	if (btf_ensure_modifiable(btf)) {
+		err = -ENOMEM;
+		goto done;
+	}
+	err = btf_permute_shuffle_types(&p);
+	if (err < 0) {
+		pr_debug("btf_permute_shuffle_types failed: %s\n", errstr(err));
+		goto done;
+	}
+	err = btf_permute_remap_types(&p);
+	if (err < 0) {
+		pr_debug("btf_permute_remap_types failed: %s\n", errstr(err));
+		goto done;
+	}
+
+done:
+	free(map);
+	return libbpf_err(err);
+}
+
+/* Shuffle BTF types.
+ *
+ * Rearranges types according to the permutation map in p->ids. The p->map
+ * array stores the mapping from original type IDs to new shuffled IDs,
+ * which is used in the next phase to update type references.
+ *
+ * Validates that all IDs in the permutation array are valid and unique.
+ */
+static int btf_permute_shuffle_types(struct btf_permute *p)
+{
+	struct btf *btf = p->btf;
+	const struct btf_type *t;
+	__u32 *new_offs = NULL, *map;
+	void *nt, *new_types = NULL;
+	int i, id, len, err;
+
+	new_offs = calloc(btf->nr_types, sizeof(*new_offs));
+	new_types = calloc(btf->hdr->type_len, 1);
+	if (!new_offs || !new_types) {
+		err = -ENOMEM;
+		goto out_err;
+	}
+
+	nt = new_types;
+	for (i = 0; i < btf->nr_types; i++) {
+		id = p->ids[i];
+		/* type IDs from base_btf and the VOID type are not allowed */
+		if (id < btf->start_id) {
+			err = -EINVAL;
+			goto out_err;
+		}
+		/* must be a valid type ID */
+		t = btf__type_by_id(btf, id);
+		if (!t) {
+			err = -EINVAL;
+			goto out_err;
+		}
+		map = &p->map[id - btf->start_id];
+		/* duplicate type IDs are not allowed */
+		if (*map != BTF_UNPROCESSED_ID) {
+			err = -EINVAL;
+			goto out_err;
+		}
+		len = btf_type_size(t);
+		memcpy(nt, t, len);
+		new_offs[i] = nt - new_types;
+		*map = btf->start_id + i;
+		nt += len;
+	}
+
+	free(btf->types_data);
+	free(btf->type_offs);
+	btf->types_data = new_types;
+	btf->type_offs = new_offs;
+	return 0;
+
+out_err:
+	free(new_offs);
+	free(new_types);
+	return err;
+}
+
+/* Callback function to remap individual type ID references
+ *
+ * This callback is invoked by btf_remap_types() for each type ID reference
+ * found in the BTF data. It updates the reference to point to the new
+ * permuted type ID using the mapping table.
+ */
+static int btf_permute_remap_type_id(__u32 *type_id, void *ctx)
+{
+	struct btf_permute *p = ctx;
+	__u32 new_type_id = *type_id;
+
+	/* skip references that point into the base BTF */
+	if (new_type_id < p->btf->start_id)
+		return 0;
+
+	new_type_id = p->map[*type_id - p->btf->start_id];
+	if (new_type_id > BTF_MAX_NR_TYPES)
+		return -EINVAL;
+
+	*type_id = new_type_id;
+	return 0;
+}
+
+/* Remap referenced type IDs into permuted type IDs.
+ *
+ * After BTF types are permuted, their final type IDs may differ from original
+ * ones. The map from original to a corresponding permuted type ID is stored
+ * in btf_permute->map and is populated during shuffle phase. During remapping
+ * phase we are rewriting all type IDs  referenced from any BTF type (e.g.,
+ * struct fields, func proto args, etc) to their final deduped type IDs.
+ */
+static int btf_permute_remap_types(struct btf_permute *p)
+{
+	return btf_remap_types(p->btf, p->btf_ext, btf_permute_remap_type_id, p);
+}
+

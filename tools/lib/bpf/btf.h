@@ -273,6 +273,40 @@ LIBBPF_API int btf__dedup(struct btf *btf, const struct btf_dedup_opts *opts);
  */
 LIBBPF_API int btf__relocate(struct btf *btf, const struct btf *base_btf);
 
+struct btf_permute_opts {
+	size_t sz;
+	/* optional .BTF.ext info along the main BTF info */
+	struct btf_ext *btf_ext;
+	size_t :0;
+};
+#define btf_permute_opts__last_field btf_ext
+
+/**
+ * @brief **btf__permute()** rearranges BTF types in-place according to specified mapping
+ * @param btf BTF object to permute
+ * @param ids Array defining new type order. Must contain exactly btf->nr_types elements,
+ *        each being a valid type ID in range [btf->start_id, btf->start_id + btf->nr_types - 1]
+ * @param opts Optional parameters, including BTF extension data for reference updates
+ * @return 0 on success, negative error code on failure
+ *
+ * **btf__permute()** performs an in-place permutation of BTF types, rearranging them
+ * according to the order specified in @p ids array. After reordering, all type references
+ * within the BTF data and optional BTF extension are updated to maintain consistency.
+ *
+ * The permutation process consists of two phases:
+ * 1. Type shuffling: Physical reordering of type data in memory
+ * 2. Reference remapping: Updating all type ID references to new locations
+ *
+ * This is particularly useful for optimizing type locality after BTF deduplication
+ * or for meeting specific layout requirements in specialized use cases.
+ *
+ * On error, negative error code is returned and errno is set appropriately.
+ * Common error codes include:
+ *   - -EINVAL: Invalid parameters or invalid ID mapping (e.g., duplicate IDs, out-of-range IDs)
+ *   - -ENOMEM: Memory allocation failure during permutation process
+ */
+LIBBPF_API int btf__permute(struct btf *btf, __u32 *ids, const struct btf_permute_opts *opts);
+
 struct btf_dump;
 
 struct btf_dump_opts {
