@@ -3185,6 +3185,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	struct bpf_tramp_links *fmod_ret = &tlinks[BPF_TRAMP_MODIFY_RETURN];
 	void *orig_call = func_addr;
 	u8 **branches = NULL;
+	u8 *rsb_pos;
 	u8 *prog;
 	bool save_ret;
 
@@ -3431,17 +3432,42 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		LOAD_TRAMP_TAIL_CALL_CNT_PTR(stack_size);
 	}
 
+	if (flags & BPF_TRAMP_F_SKIP_FRAME) {
+		u64 ret_addr = (u64)(image + (prog - (u8 *)rw_image));
+
+		rsb_pos = prog;
+		/*
+		 * reserve the room to save the return address to rax:
+		 *   movabs rax, imm64
+		 *
+		 * this is used to do the RSB balance. For the SKIP_FRAME
+		 * case, we do the "call" twice, but only have one "ret",
+		 * which can break the RSB.
+		 *
+		 * Therefore, instead of skipping the "rip", we make it as
+		 * a pseudo return: modify the "rip" in the stack to the
+		 * second "ret" address that we build bellow.
+		 */
+		emit_mov_imm64(&prog, BPF_REG_0, ret_addr >> 32, (u32)ret_addr);
+		/* mov [rbp + 8], rax */
+		EMIT4(0x48, 0x89, 0x45, 0x08);
+	}
+
 	/* restore return value of orig_call or fentry prog back into RAX */
 	if (save_ret)
 		emit_ldx(&prog, BPF_DW, BPF_REG_0, BPF_REG_FP, -8);
 
 	emit_ldx(&prog, BPF_DW, BPF_REG_6, BPF_REG_FP, -rbx_off);
 	EMIT1(0xC9); /* leave */
-	if (flags & BPF_TRAMP_F_SKIP_FRAME) {
-		/* skip our return address and return to parent */
-		EMIT4(0x48, 0x83, 0xC4, 8); /* add rsp, 8 */
-	}
 	emit_return(&prog, image + (prog - (u8 *)rw_image));
+	if (flags & BPF_TRAMP_F_SKIP_FRAME) {
+		u64 ret_addr = (u64)(image + (prog - (u8 *)rw_image));
+
+		/* fix the return address to second return address */
+		emit_mov_imm64(&rsb_pos, BPF_REG_0, ret_addr >> 32, (u32)ret_addr);
+		/* this is the second(real) return */
+		emit_return(&prog, image + (prog - (u8 *)rw_image));
+	}
 	/* Make sure the trampoline generation logic doesn't overflow */
 	if (WARN_ON_ONCE(prog > (u8 *)rw_image_end - BPF_INSN_SAFETY)) {
 		ret = -EFAULT;
