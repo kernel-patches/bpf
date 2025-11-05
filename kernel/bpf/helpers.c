@@ -1351,20 +1351,17 @@ static const struct bpf_func_proto bpf_timer_init_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
-static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback_fn,
-				    struct bpf_prog_aux *aux, unsigned int flags,
-				    enum bpf_async_type type)
+static int bpf_async_update_callback(struct bpf_async_kern *async, void *callback_fn,
+				     struct bpf_prog *prog)
 {
-	struct bpf_prog *prev, *prog = aux->prog;
+	struct bpf_prog *prev;
 	struct bpf_async_cb *cb;
-	int ret = 0;
+	int err = 0;
 
-	if (in_nmi())
-		return -EOPNOTSUPP;
 	__bpf_spin_lock_irqsave(&async->lock);
 	cb = async->cb;
 	if (!cb) {
-		ret = -EINVAL;
+		err = -EINVAL;
 		goto out;
 	}
 	if (!atomic64_read(&cb->map->usercnt)) {
@@ -1373,9 +1370,10 @@ static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback
 		 * running even when bpf prog is detached and user space
 		 * is gone, since map_release_uref won't ever be called.
 		 */
-		ret = -EPERM;
+		err = -EPERM;
 		goto out;
 	}
+
 	prev = cb->prog;
 	if (prev != prog) {
 		/* Bump prog refcnt once. Every bpf_timer_set_callback()
@@ -1383,7 +1381,7 @@ static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback
 		 */
 		prog = bpf_prog_inc_not_zero(prog);
 		if (IS_ERR(prog)) {
-			ret = PTR_ERR(prog);
+			err = PTR_ERR(prog);
 			goto out;
 		}
 		if (prev)
@@ -1394,7 +1392,19 @@ static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback
 	rcu_assign_pointer(cb->callback_fn, callback_fn);
 out:
 	__bpf_spin_unlock_irqrestore(&async->lock);
-	return ret;
+	return err;
+}
+
+static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback_fn,
+				    struct bpf_prog_aux *aux, unsigned int flags,
+				    enum bpf_async_type type)
+{
+	struct bpf_prog *prog = aux->prog;
+
+	if (in_nmi())
+		return -EOPNOTSUPP;
+
+	return bpf_async_update_callback(async, callback_fn, prog);
 }
 
 BPF_CALL_3(bpf_timer_set_callback, struct bpf_async_kern *, timer, void *, callback_fn,
