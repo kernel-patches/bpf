@@ -1102,6 +1102,7 @@ struct bpf_async_cb {
 		struct work_struct delete_work;
 	};
 	u64 flags;
+	refcount_t refcnt;
 };
 
 /* BPF map elements can contain 'struct bpf_timer'.
@@ -1154,6 +1155,33 @@ enum bpf_async_type {
 static DEFINE_PER_CPU(struct bpf_hrtimer *, hrtimer_running);
 
 static void bpf_timer_delete(struct bpf_hrtimer *t);
+
+static bool bpf_async_tryget(struct bpf_async_cb *cb)
+{
+	return refcount_inc_not_zero(&cb->refcnt);
+}
+
+static void bpf_async_put(struct bpf_async_cb *cb, enum bpf_async_type type)
+{
+	if (!refcount_dec_and_test(&cb->refcnt))
+		return;
+
+	switch (type) {
+	case BPF_ASYNC_TYPE_TIMER:
+		bpf_timer_delete((struct bpf_hrtimer *)cb);
+		break;
+	case BPF_ASYNC_TYPE_WQ: {
+		struct bpf_work *work = (void *)cb;
+		/* Trigger cancel of the sleepable work, but *do not* wait for
+		 * it to finish if it was running as we might not be in a
+		 * sleepable context.
+		 * kfree will be called once the work has finished.
+		 */
+		schedule_work(&work->delete_work);
+		break;
+	}
+	}
+}
 
 static enum hrtimer_restart bpf_timer_cb(struct hrtimer *hrtimer)
 {
@@ -1304,6 +1332,7 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 	cb->prog = NULL;
 	cb->flags = flags;
 	rcu_assign_pointer(cb->callback_fn, NULL);
+	refcount_set(&cb->refcnt, 1); /* map's own ref */
 
 	WRITE_ONCE(async->cb, cb);
 	/* Guarantee the order between async->cb and map->usercnt. So
@@ -1642,7 +1671,7 @@ void bpf_timer_cancel_and_free(void *val)
 	if (!t)
 		return;
 
-	bpf_timer_delete(t);
+	bpf_async_put(&t->cb, BPF_ASYNC_TYPE_TIMER); /* Put map's own reference */
 }
 
 /* This function is called by map_delete/update_elem for individual element and
@@ -1657,12 +1686,8 @@ void bpf_wq_cancel_and_free(void *val)
 	work = (struct bpf_work *)__bpf_async_cancel_and_free(val);
 	if (!work)
 		return;
-	/* Trigger cancel of the sleepable work, but *do not* wait for
-	 * it to finish if it was running as we might not be in a
-	 * sleepable context.
-	 * kfree will be called once the work has finished.
-	 */
-	schedule_work(&work->delete_work);
+
+	bpf_async_put(&work->cb, BPF_ASYNC_TYPE_WQ); /* Put map's own reference */
 }
 
 BPF_CALL_2(bpf_kptr_xchg, void *, dst, void *, ptr)
