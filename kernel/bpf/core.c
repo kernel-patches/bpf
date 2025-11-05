@@ -2536,13 +2536,12 @@ static unsigned int __bpf_prog_ret1(const void *ctx,
 	return 1;
 }
 
-static struct bpf_prog_dummy {
-	struct bpf_prog prog;
-} dummy_bpf_prog = {
+struct bpf_prog_dummy dummy_bpf_prog = {
 	.prog = {
 		.bpf_func = __bpf_prog_ret1,
 	},
 };
+EXPORT_SYMBOL(dummy_bpf_prog);
 
 struct bpf_empty_prog_array bpf_empty_prog_array = {
 	.null_prog = NULL,

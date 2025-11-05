@@ -77,7 +77,9 @@ bpf_prog_run_array_cg(const struct cgroup_bpf *cgrp,
 	item = &array->items[0];
 	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
 	while ((prog = READ_ONCE(item->prog))) {
-		run_ctx.prog_item = item;
+		run_ctx.prog_item = item++;
+		if (prog == &dummy_bpf_prog.prog)
+			continue;
 		func_ret = run_prog(prog, ctx);
 		if (ret_flags) {
 			*(ret_flags) |= (func_ret >> 1);
@@ -85,7 +87,6 @@ bpf_prog_run_array_cg(const struct cgroup_bpf *cgrp,
 		}
 		if (!func_ret && !IS_ERR_VALUE((long)run_ctx.retval))
 			run_ctx.retval = -EPERM;
-		item++;
 	}
 	bpf_reset_run_ctx(old_run_ctx);
 	rcu_read_unlock_migrate();

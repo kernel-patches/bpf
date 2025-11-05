@@ -2212,6 +2212,12 @@ struct bpf_prog_array {
 	struct bpf_prog_array_item items[];
 };
 
+struct bpf_prog_dummy {
+	struct bpf_prog prog;
+};
+
+extern struct bpf_prog_dummy dummy_bpf_prog;
+
 struct bpf_empty_prog_array {
 	struct bpf_prog_array hdr;
 	struct bpf_prog *null_prog;
