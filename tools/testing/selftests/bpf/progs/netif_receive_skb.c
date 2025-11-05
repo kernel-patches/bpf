@@ -31,19 +31,6 @@ struct {
 	__type(value, char[STRSIZE]);
 } strdata SEC(".maps");
 
-static int __strncmp(const void *m1, const void *m2, size_t len)
-{
-	const unsigned char *s1 = m1;
-	const unsigned char *s2 = m2;
-	int i, delta = 0;
-
-	for (i = 0; i < len; i++) {
-		delta = s1[i] - s2[i];
-		if (delta || s1[i] == 0 || s2[i] == 0)
-			break;
-	}
-	return delta;
-}
 
 #if __has_builtin(__builtin_btf_type_id)
 #define	TEST_BTF(_str, _type, _flags, _expected, ...)			\
@@ -69,7 +56,7 @@ static int __strncmp(const void *m1, const void *m2, size_t len)
 				       &_ptr, sizeof(_ptr), _hflags);	\
 		if (ret)						\
 			break;						\
-		_cmp = __strncmp(_str, _expectedval, EXPECTED_STRSIZE);	\
+		_cmp = bpf_strncmp(_str, EXPECTED_STRSIZE, _expectedval); \
 		if (_cmp != 0) {					\
 			bpf_printk("(%d) got %s", _cmp, _str);		\
 			bpf_printk("(%d) expected %s", _cmp,		\
