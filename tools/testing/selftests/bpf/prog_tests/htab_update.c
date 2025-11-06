@@ -40,7 +40,7 @@ static void test_reenter_update(void)
 	if (!ASSERT_OK(err, "add element"))
 		goto out;
 
-	ASSERT_EQ(skel->bss->update_err, -EBUSY, "no reentrancy");
+	ASSERT_EQ(skel->bss->update_err, -EDEADLK, "no reentrancy");
 out:
 	htab_update__destroy(skel);
 }
