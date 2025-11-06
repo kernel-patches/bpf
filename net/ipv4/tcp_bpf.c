@@ -676,9 +676,11 @@ int tcp_bpf_strp_read_sock(struct strparser *strp, read_descriptor_t *desc,
 	 * For SK_REDIRECT, we need to ack the frame immediately but for
 	 * SK_PASS, we want to delay the ack until tcp_bpf_recvmsg_parser().
 	 */
-	tp->copied_seq = psock->copied_seq - psock->ingress_bytes;
-	tcp_rcv_space_adjust(sk);
-	__tcp_cleanup_rbuf(sk, copied - psock->ingress_bytes);
+	if (!psock->ingress_bytes) {
+		tp->copied_seq += copied;
+		tcp_rcv_space_adjust(sk);
+		__tcp_cleanup_rbuf(sk, copied);
+	}
 out:
 	rcu_read_unlock();
 	return copied;
