@@ -26,6 +26,10 @@
 
 #define BTF_MAX_NR_TYPES 0x7fffffffU
 #define BTF_MAX_STR_OFFSET 0x7fffffffU
+/*
+ * sort verification occurs lazily upon first btf_find_type_by_name_kind() call
+ */
+#define BTF_NEED_SORT_CHECK ((__u32)-1)
 
 static struct btf_type btf_void;
 
@@ -92,6 +96,16 @@ struct btf {
 	 *   - for split BTF counts number of types added on top of base BTF.
 	 */
 	__u32 nr_types;
+	/* number of sorted and named types in this BTF instance:
+	 *   - doesn't include special [0] void type;
+	 *   - for split BTF counts number of sorted and named types added on
+	 *     top of base BTF.
+	 *   - BTF_NEED_SORT_CHECK value indicates sort validation will be performed
+	 *     on first call to btf_find_type_by_name_kind.
+	 *   - zero value indicates applied sorting check with unsorted BTF or no
+	 *     named types.
+	 */
+	__u32 nr_sorted_types;
 	/* if not NULL, points to the base BTF on top of which the current
 	 * split BTF is based
 	 */
@@ -897,44 +911,126 @@ int btf__resolve_type(const struct btf *btf, __u32 type_id)
 	return type_id;
 }
 
-__s32 btf__find_by_name(const struct btf *btf, const char *type_name)
+/* Performs binary search within specified type ID range to find the leftmost
+ * BTF type matching the given name. The search assumes types are sorted by
+ * name in lexicographical order within the specified range.
+ *
+ * Return: Type ID of leftmost matching type, or -ENOENT if not found
+ */
+static __s32 btf_find_type_by_name_bsearch(const struct btf *btf, const char *name,
+						__s32 start_id, __s32 end_id)
 {
-	__u32 i, nr_types = btf__type_cnt(btf);
+	const struct btf_type *t;
+	const char *tname;
+	__s32 l, r, m, lmost = -ENOENT;
+	int ret;
 
-	if (!strcmp(type_name, "void"))
-		return 0;
-
-	for (i = 1; i < nr_types; i++) {
-		const struct btf_type *t = btf__type_by_id(btf, i);
-		const char *name = btf__name_by_offset(btf, t->name_off);
-
-		if (name && !strcmp(type_name, name))
-			return i;
+	l = start_id;
+	r = end_id;
+	while (l <= r) {
+		m = l + (r - l) / 2;
+		t = btf_type_by_id(btf, m);
+		tname = btf__str_by_offset(btf, t->name_off);
+		ret = strcmp(tname, name);
+		if (ret < 0) {
+			l = m + 1;
+		} else {
+			if (ret == 0)
+				lmost = m;
+			r = m - 1;
+		}
 	}
 
-	return libbpf_err(-ENOENT);
+	return lmost;
+}
+
+/* Searches for a BTF type by name and optionally by kind. The function first
+ * checks if the search should start from the base BTF (if @start_id is before
+ * current BTF's start_id). If types are sorted, it uses binary search to find
+ * the leftmost matching type and then verifies the kind. For unsorted types,
+ * it falls back to linear search through all types.
+ *
+ * The function handles split BTF scenarios by recursively searching in base
+ * BTFs when necessary. When @kind is -1, only the name matching is performed.
+ *
+ * Return: Type ID of matching type on success, -ENOENT if not found
+ */
+static __s32 btf_find_type_by_name_kind(const struct btf *btf, int start_id,
+				   const char *type_name, __u32 kind)
+{
+	const struct btf_type *t;
+	const char *tname;
+	int err = -ENOENT;
+
+	if (start_id < btf->start_id) {
+		err = btf_find_type_by_name_kind(btf->base_btf, start_id,
+			type_name, kind);
+		if (err > 0)
+			goto out;
+		start_id = btf->start_id;
+	}
+
+	if (btf->nr_sorted_types != BTF_NEED_SORT_CHECK) {
+		/* binary search */
+		__s32 end_id;
+		bool skip_first;
+		int ret;
+
+		end_id = btf->start_id + btf->nr_sorted_types - 1;
+		ret = btf_find_type_by_name_bsearch(btf, type_name, start_id, end_id);
+		if (ret < 0)
+			goto out;
+		if (kind == -1)
+			return ret;
+		skip_first = true;
+		do {
+			t = btf_type_by_id(btf, ret);
+			if (BTF_INFO_KIND(t->info) != kind) {
+				if (skip_first) {
+					skip_first = false;
+					continue;
+				}
+			} else if (skip_first) {
+				return ret;
+			}
+			tname = btf__str_by_offset(btf, t->name_off);
+			if (!strcmp(tname, type_name))
+				return ret;
+			else
+				break;
+		} while (++ret <= end_id);
+	} else {
+		/* linear search */
+		__u32 i, total;
+
+		total = btf__type_cnt(btf);
+		for (i = start_id; i < total; i++) {
+			t = btf_type_by_id(btf, i);
+			if (kind != -1 && btf_kind(t) != kind)
+				continue;
+			tname = btf__str_by_offset(btf, t->name_off);
+			if (tname && !strcmp(tname, type_name))
+				return i;
+		}
+	}
+
+out:
+	return err;
 }
 
 static __s32 btf_find_by_name_kind(const struct btf *btf, int start_id,
 				   const char *type_name, __u32 kind)
 {
-	__u32 i, nr_types = btf__type_cnt(btf);
-
 	if (kind == BTF_KIND_UNKN || !strcmp(type_name, "void"))
 		return 0;
 
-	for (i = start_id; i < nr_types; i++) {
-		const struct btf_type *t = btf__type_by_id(btf, i);
-		const char *name;
+	return libbpf_err(btf_find_type_by_name_kind(btf, start_id, type_name, kind));
+}
 
-		if (btf_kind(t) != kind)
-			continue;
-		name = btf__name_by_offset(btf, t->name_off);
-		if (name && !strcmp(type_name, name))
-			return i;
-	}
-
-	return libbpf_err(-ENOENT);
+/* the kind value of -1 indicates that kind matching should be skipped */
+__s32 btf__find_by_name(const struct btf *btf, const char *type_name)
+{
+	return btf_find_by_name_kind(btf, btf->start_id, type_name, -1);
 }
 
 __s32 btf__find_by_name_kind_own(const struct btf *btf, const char *type_name,
@@ -1006,6 +1102,7 @@ static struct btf *btf_new_empty(struct btf *base_btf)
 	btf->fd = -1;
 	btf->ptr_sz = sizeof(void *);
 	btf->swapped_endian = false;
+	btf->nr_sorted_types = BTF_NEED_SORT_CHECK;
 
 	if (base_btf) {
 		btf->base_btf = base_btf;
@@ -1057,6 +1154,7 @@ static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf, b
 	btf->start_id = 1;
 	btf->start_str_off = 0;
 	btf->fd = -1;
+	btf->nr_sorted_types = BTF_NEED_SORT_CHECK;
 
 	if (base_btf) {
 		btf->base_btf = base_btf;
@@ -1715,6 +1813,7 @@ static void btf_invalidate_raw_data(struct btf *btf)
 		free(btf->raw_data_swapped);
 		btf->raw_data_swapped = NULL;
 	}
+	btf->nr_sorted_types = BTF_NEED_SORT_CHECK;
 }
 
 /* Ensure BTF is ready to be modified (by splitting into a three memory
