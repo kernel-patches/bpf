@@ -3400,6 +3400,37 @@ int btf_ext__set_endianness(struct btf_ext *btf_ext, enum btf_endianness endian)
 	return 0;
 }
 
+static int btf_remap_types(struct btf *btf, struct btf_ext *btf_ext,
+			   type_id_visit_fn visit, void *ctx)
+{
+	int i, r;
+
+	for (i = 0; i < btf->nr_types; i++) {
+		struct btf_type *t = btf_type_by_id(btf, btf->start_id + i);
+		struct btf_field_iter it;
+		__u32 *type_id;
+
+		r = btf_field_iter_init(&it, t, BTF_FIELD_ITER_IDS);
+		if (r)
+			return r;
+
+		while ((type_id = btf_field_iter_next(&it))) {
+			r = visit(type_id, ctx);
+			if (r)
+				return r;
+		}
+	}
+
+	if (!btf_ext)
+		return 0;
+
+	r = btf_ext_visit_type_ids(btf_ext, visit, ctx);
+	if (r)
+		return r;
+
+	return 0;
+}
+
 struct btf_dedup;
 
 static struct btf_dedup *btf_dedup_new(struct btf *btf, const struct btf_dedup_opts *opts);
@@ -5320,37 +5351,7 @@ static int btf_dedup_remap_type_id(__u32 *type_id, void *ctx)
  */
 static int btf_dedup_remap_types(struct btf_dedup *d)
 {
-	int i, r;
-
-	for (i = 0; i < d->btf->nr_types; i++) {
-		struct btf_type *t = btf_type_by_id(d->btf, d->btf->start_id + i);
-		struct btf_field_iter it;
-		__u32 *type_id;
-
-		r = btf_field_iter_init(&it, t, BTF_FIELD_ITER_IDS);
-		if (r)
-			return r;
-
-		while ((type_id = btf_field_iter_next(&it))) {
-			__u32 resolved_id, new_id;
-
-			resolved_id = resolve_type_id(d, *type_id);
-			new_id = d->hypot_map[resolved_id];
-			if (new_id > BTF_MAX_NR_TYPES)
-				return -EINVAL;
-
-			*type_id = new_id;
-		}
-	}
-
-	if (!d->btf_ext)
-		return 0;
-
-	r = btf_ext_visit_type_ids(d->btf_ext, btf_dedup_remap_type_id, d);
-	if (r)
-		return r;
-
-	return 0;
+	return btf_remap_types(d->btf, d->btf_ext, btf_dedup_remap_type_id, d);
 }
 
 /*
