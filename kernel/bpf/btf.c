@@ -552,6 +552,70 @@ u32 btf_nr_types(const struct btf *btf)
 	return total;
 }
 
+/* Anonymous types (with empty names) are considered greater than named types
+ * and are sorted after them. Two anonymous types are considered equal. Named
+ * types are compared lexicographically.
+ */
+static int btf_compare_type_names(const void *a, const void *b, void *priv)
+{
+	struct btf *btf = (struct btf *)priv;
+	const struct btf_type *ta = btf_type_by_id(btf, *(__u32 *)a);
+	const struct btf_type *tb = btf_type_by_id(btf, *(__u32 *)b);
+	const char *na, *nb;
+
+	if (!ta->name_off && tb->name_off)
+		return 1;
+	if (ta->name_off && !tb->name_off)
+		return -1;
+	if (!ta->name_off && !tb->name_off)
+		return 0;
+
+	na = btf_name_by_offset(btf, ta->name_off);
+	nb = btf_name_by_offset(btf, tb->name_off);
+	return strcmp(na, nb);
+}
+
+/* Verifies that BTF types are sorted in ascending order according to their
+ * names, with named types appearing before anonymous types. If the ordering
+ * is correct, counts the number of named types and updates the BTF object's
+ * nr_sorted_types field.
+ *
+ * Return: true if types are properly sorted, false otherwise
+ */
+static bool btf_check_sorted(struct btf *btf)
+{
+	const struct btf_type *t;
+	int i, n, k = 0, nr_sorted_types;
+
+	if (likely(btf->nr_sorted_types != BTF_NEED_SORT_CHECK))
+		goto out;
+	btf->nr_sorted_types = 0;
+
+	if (btf->nr_types < 2)
+		goto out;
+
+	nr_sorted_types = 0;
+	n = btf_nr_types(btf) - 1;
+	for (i = btf_start_id(btf); i < n; i++) {
+		k = i + 1;
+		if (btf_compare_type_names(&i, &k, btf) > 0)
+			goto out;
+
+		t = btf_type_by_id(btf, i);
+		if (t->name_off)
+			nr_sorted_types++;
+	}
+
+	t = btf_type_by_id(btf, k);
+	if (t->name_off)
+		nr_sorted_types++;
+	if (nr_sorted_types)
+		btf->nr_sorted_types = nr_sorted_types;
+
+out:
+	return btf->nr_sorted_types > 0;
+}
+
 /* Performs binary search within specified type ID range to find the leftmost
  * BTF type matching the given name. The search assumes types are sorted by
  * name in lexicographical order within the specified range.
@@ -610,7 +674,7 @@ s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind)
 			goto out;
 	}
 
-	if (btf->nr_sorted_types != BTF_NEED_SORT_CHECK) {
+	if (btf_check_sorted((struct btf *)btf)) {
 		/* binary search */
 		bool skip_first;
 		s32 start_id, end_id;;
