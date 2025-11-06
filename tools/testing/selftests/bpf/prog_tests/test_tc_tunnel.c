@@ -514,13 +514,13 @@ static void subtest_cleanup(struct subtest_cfg *cfg)
 	struct nstoken *nstoken;
 
 	nstoken = open_netns(CLIENT_NS);
-	if (ASSERT_OK_PTR(nstoken, "open clien ns")) {
+	if (ASSERT_OK_PTR(nstoken, "open client ns")) {
 		SYS_NOFAIL("tc qdisc delete dev veth1 parent ffff:fff1");
 		SYS_NOFAIL("ip a flush veth1");
 		close_netns(nstoken);
 	}
 	nstoken = open_netns(SERVER_NS);
-	if (ASSERT_OK_PTR(nstoken, "open clien ns")) {
+	if (ASSERT_OK_PTR(nstoken, "open client ns")) {
 		SYS_NOFAIL("tc qdisc delete dev veth2 parent ffff:fff1");
 		SYS_NOFAIL("ip a flush veth2");
 		if (!cfg->expect_kern_decap_failure)
