@@ -2199,7 +2199,7 @@ out:
 static u64 htab_map_mem_usage(const struct bpf_map *map)
 {
 	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
-	u32 value_size = round_up(htab->map.value_size, 8);
+	u64 value_size = round_up(htab->map.value_size, 8);
 	bool prealloc = htab_is_prealloc(htab);
 	bool percpu = htab_is_percpu(htab);
 	bool lru = htab_is_lru(htab);
