@@ -103,6 +103,8 @@ bpf_selem_alloc(struct bpf_local_storage_map *smap, void *owner,
 			if (swap_uptrs)
 				bpf_obj_swap_uptrs(smap->map.record, SDATA(selem)->data, value);
 		}
+		selem->size = smap->elem_size;
+		selem->bpf_ma = smap->bpf_ma;
 		return selem;
 	}
 
@@ -230,7 +232,7 @@ void bpf_selem_free(struct bpf_local_storage_elem *selem,
 		    struct bpf_local_storage_map *smap,
 		    bool reuse_now)
 {
-	if (!smap->bpf_ma) {
+	if (!selem->bpf_ma) {
 		/* Only task storage has uptrs and task storage
 		 * has moved to bpf_mem_alloc. Meaning smap->bpf_ma == true
 		 * for task storage, so this bpf_obj_free_fields() won't unpin
