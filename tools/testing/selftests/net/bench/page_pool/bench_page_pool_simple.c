@@ -9,12 +9,15 @@
 #include <linux/limits.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/netdevice.h>
 #include <net/page_pool/helpers.h>
 
 #include "time_bench.h"
 
 static int verbose = 1;
 #define MY_POOL_SIZE 1024
+
+DEFINE_MUTEX(wait_for_tasklet);
 
 /* Makes tests selectable. Useful for perf-record to analyze a single test.
  * Hint: Bash shells support writing binary number like: $((2#101010)
@@ -31,6 +34,10 @@ enum benchmark_bit {
 	bit_run_bench_no_softirq01,
 	bit_run_bench_no_softirq02,
 	bit_run_bench_no_softirq03,
+	bit_run_bench_tasklet01,
+	bit_run_bench_tasklet02,
+	bit_run_bench_tasklet03,
+	bit_run_bench_tasklet04,
 };
 
 #define bit(b)		(1 << (b))
@@ -120,7 +127,12 @@ static void pp_fill_ptr_ring(struct page_pool *pp, int elems)
 	kfree(array);
 }
 
-enum test_type { type_fast_path, type_ptr_ring, type_page_allocator };
+enum test_type {
+	type_fast_path,
+	type_napi_aware,
+	type_ptr_ring,
+	type_page_allocator,
+};
 
 /* Depends on compile optimizing this function */
 static int time_bench_page_pool(struct time_bench_record *rec, void *data,
@@ -132,6 +144,7 @@ static int time_bench_page_pool(struct time_bench_record *rec, void *data,
 
 	struct page_pool *pp;
 	struct page *page;
+	struct napi_struct napi = {0};
 
 	struct page_pool_params pp_params = {
 		.order = 0,
@@ -141,6 +154,7 @@ static int time_bench_page_pool(struct time_bench_record *rec, void *data,
 		.dev = NULL, /* Only use for DMA mapping */
 		.dma_dir = DMA_BIDIRECTIONAL,
 	};
+	struct page_pool_stats stats = {0};
 
 	pp = page_pool_create(&pp_params);
 	if (IS_ERR(pp)) {
@@ -154,6 +168,11 @@ static int time_bench_page_pool(struct time_bench_record *rec, void *data,
 		pr_warn("%s(): in_serving_softirq fast-path\n", func);
 	else
 		pr_warn("%s(): Cannot use page_pool fast-path\n", func);
+
+	if (type == type_napi_aware) {
+		napi.list_owner = smp_processor_id();
+		page_pool_enable_direct_recycling(pp, &napi);
+	}
 
 	time_bench_start(rec);
 	/** Loop to measure **/
@@ -173,7 +192,13 @@ static int time_bench_page_pool(struct time_bench_record *rec, void *data,
 			page_pool_recycle_direct(pp, page);
 
 		} else if (type == type_ptr_ring) {
-			/* Normal return path */
+			/* Normal return path, either direct or via ptr_ring */
+			page_pool_put_page(pp, page, -1, false);
+
+		} else if (type == type_napi_aware) {
+			/* NAPI-aware recycling: uses fast-path recycling if
+			 * possible.
+			 */
 			page_pool_put_page(pp, page, -1, false);
 
 		} else if (type == type_page_allocator) {
@@ -188,6 +213,14 @@ static int time_bench_page_pool(struct time_bench_record *rec, void *data,
 		}
 	}
 	time_bench_stop(rec, loops_cnt);
+
+	if (type == type_napi_aware) {
+		page_pool_get_stats(pp, &stats);
+		if (stats.recycle_stats.cached < rec->loops)
+			pr_warn("%s(): NAPI-aware recycling wasn't used\n",
+				func);
+	}
+
 out:
 	page_pool_destroy(pp);
 	return loops_cnt;
@@ -209,6 +242,54 @@ static int time_bench_page_pool03_slow(struct time_bench_record *rec,
 				       void *data)
 {
 	return time_bench_page_pool(rec, data, type_page_allocator, __func__);
+}
+
+static int time_bench_page_pool04_napi_aware(struct time_bench_record *rec,
+					     void *data)
+{
+	return time_bench_page_pool(rec, data, type_napi_aware, __func__);
+}
+
+/* Testing page_pool requires running under softirq.
+ *
+ * Running under a tasklet satisfy this, as tasklets are built on top of
+ * softirq.
+ */
+static void pp_tasklet_handler(struct tasklet_struct *t)
+{
+	uint32_t nr_loops = loops;
+
+	if (in_serving_softirq())
+		pr_warn("%s(): in_serving_softirq fast-path\n",
+			__func__); // True
+	else
+		pr_warn("%s(): Cannot use page_pool fast-path\n", __func__);
+
+	if (enabled(bit_run_bench_tasklet01))
+		time_bench_loop(nr_loops, 0, "tasklet_page_pool01_fast_path",
+				NULL, time_bench_page_pool01_fast_path);
+
+	if (enabled(bit_run_bench_tasklet02))
+		time_bench_loop(nr_loops, 0, "tasklet_page_pool02_ptr_ring",
+				NULL, time_bench_page_pool02_ptr_ring);
+
+	if (enabled(bit_run_bench_tasklet03))
+		time_bench_loop(nr_loops, 0, "tasklet_page_pool03_slow", NULL,
+				time_bench_page_pool03_slow);
+
+	if (enabled(bit_run_bench_tasklet04))
+		time_bench_loop(nr_loops, 0, "tasklet_page_pool04_napi_aware",
+				NULL, time_bench_page_pool04_napi_aware);
+
+	mutex_unlock(&wait_for_tasklet); /* Module __init waiting on unlock */
+}
+DECLARE_TASKLET_DISABLED(pp_tasklet, pp_tasklet_handler);
+
+static void run_tasklet_tests(void)
+{
+	tasklet_enable(&pp_tasklet);
+	/* "Async" schedule tasklet, which runs on the CPU that schedule it */
+	tasklet_schedule(&pp_tasklet);
 }
 
 static int run_benchmark_tests(void)
@@ -251,12 +332,19 @@ static int __init bench_page_pool_simple_module_init(void)
 
 	run_benchmark_tests();
 
+	mutex_lock(&wait_for_tasklet);
+	run_tasklet_tests();
+	/* Sleep on mutex, waiting for tasklet to release */
+	mutex_lock(&wait_for_tasklet);
+
 	return 0;
 }
 module_init(bench_page_pool_simple_module_init);
 
 static void __exit bench_page_pool_simple_module_exit(void)
 {
+	tasklet_kill(&pp_tasklet);
+
 	if (verbose)
 		pr_info("Unloaded\n");
 }
