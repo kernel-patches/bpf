@@ -3408,6 +3408,7 @@ static int btf_dedup_prep(struct btf_dedup *d);
 static int btf_dedup_strings(struct btf_dedup *d);
 static int btf_dedup_prim_types(struct btf_dedup *d);
 static int btf_dedup_struct_types(struct btf_dedup *d);
+static int btf_dedup_typedef_types(struct btf_dedup *d);
 static int btf_dedup_ref_types(struct btf_dedup *d);
 static int btf_dedup_resolve_fwds(struct btf_dedup *d);
 static int btf_dedup_compact_types(struct btf_dedup *d);
@@ -3588,6 +3589,11 @@ int btf__dedup(struct btf *btf, const struct btf_dedup_opts *opts)
 	err = btf_dedup_struct_types(d);
 	if (err < 0) {
 		pr_debug("btf_dedup_struct_types failed: %s\n", errstr(err));
+		goto done;
+	}
+	err = btf_dedup_typedef_types(d);
+	if (err < 0) {
+		pr_debug("btf_dedup_typedef_types failed: %s\n", errstr(err));
 		goto done;
 	}
 	err = btf_dedup_resolve_fwds(d);
@@ -3901,6 +3907,20 @@ err_out:
 	return err;
 }
 
+/*
+ * Calculate type signature hash of TYPEDEF, ignoring referenced type IDs,
+ * as referenced type IDs equivalence is established separately during type
+ * graph equivalence check algorithm.
+ */
+static long btf_hash_typedef(struct btf_type *t)
+{
+	long h;
+
+	h = hash_combine(0, t->name_off);
+	h = hash_combine(h, t->info);
+	return h;
+}
+
 static long btf_hash_common(struct btf_type *t)
 {
 	long h;
@@ -3916,6 +3936,13 @@ static bool btf_equal_common(struct btf_type *t1, struct btf_type *t2)
 	return t1->name_off == t2->name_off &&
 	       t1->info == t2->info &&
 	       t1->size == t2->size;
+}
+
+/* Check structural compatibility of two TYPEDEF. */
+static bool btf_equal_typedef(struct btf_type *t1, struct btf_type *t2)
+{
+	return t1->name_off == t2->name_off &&
+	       t1->info == t2->info;
 }
 
 /* Calculate type signature hash of INT or TAG. */
@@ -4937,9 +4964,76 @@ static int btf_dedup_struct_types(struct btf_dedup *d)
 }
 
 /*
+ * Deduplicate typedef types.
+ *
+ * Similar as for struct/union types, for each typedef type its type
+ * signature hash is calculated, taking into account type's name
+ * and its size, but ignoring type ID's referenced from fields,
+ * because they might not be deduped completely until after
+ * reference types deduplication phase.
+ */
+static int btf_dedup_typedef_type(struct btf_dedup *d, __u32 type_id)
+{
+	struct btf_type *cand_type, *t;
+	struct hashmap_entry *hash_entry;
+	/* if we don't find equivalent type, then we are canonical */
+	__u32 new_id = type_id;
+	__u16 kind;
+	long h;
+
+	if (d->map[type_id] <= BTF_MAX_NR_TYPES)
+		return 0;
+
+	t = btf_type_by_id(d->btf, type_id);
+	kind = btf_kind(t);
+
+	if (kind != BTF_KIND_TYPEDEF)
+		return 0;
+	h = btf_hash_typedef(t);
+	for_each_dedup_cand(d, hash_entry, h) {
+		__u32 cand_id = hash_entry->value;
+		int eq;
+
+		cand_type = btf_type_by_id(d->btf, cand_id);
+		if (!btf_equal_typedef(t, cand_type))
+			continue;
+
+		btf_dedup_clear_hypot_map(d);
+		eq = btf_dedup_is_equiv(d, type_id, cand_id);
+		if (eq < 0)
+			return eq;
+		if (!eq)
+			continue;
+		btf_dedup_merge_hypot_map(d);
+		if (d->hypot_adjust_canon) /* not really equivalent */
+			continue;
+		new_id = cand_id;
+		break;
+	}
+
+	d->map[type_id] = new_id;
+	if (type_id == new_id && btf_dedup_table_add(d, h, type_id))
+		return -ENOMEM;
+
+	return 0;
+}
+
+static int btf_dedup_typedef_types(struct btf_dedup *d)
+{
+	int i, err;
+
+	for (i = 0; i < d->btf->nr_types; i++) {
+		err = btf_dedup_typedef_type(d, d->btf->start_id + i);
+		if (err)
+			return err;
+	}
+	return 0;
+}
+
+/*
  * Deduplicate reference type.
  *
- * Once all primitive and struct/union types got deduplicated, we can easily
+ * Once all primitive, struct/union and typedef types got deduplicated, we can easily
  * deduplicate all other (reference) BTF types. This is done in two steps:
  *
  * 1. Resolve all referenced type IDs into their canonical type IDs. This
@@ -4982,7 +5076,6 @@ static int btf_dedup_ref_type(struct btf_dedup *d, __u32 type_id)
 	case BTF_KIND_VOLATILE:
 	case BTF_KIND_RESTRICT:
 	case BTF_KIND_PTR:
-	case BTF_KIND_TYPEDEF:
 	case BTF_KIND_FUNC:
 	case BTF_KIND_TYPE_TAG:
 		ref_type_id = btf_dedup_ref_type(d, t->type);
