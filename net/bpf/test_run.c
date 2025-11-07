@@ -289,7 +289,6 @@ static int xdp_test_run_batch(struct xdp_test_data *xdp, struct bpf_prog *prog,
 	local_bh_disable();
 	bpf_net_ctx = bpf_net_ctx_set(&__bpf_net_ctx);
 	ri = bpf_net_ctx_get_ri();
-	xdp_set_return_frame_no_direct();
 
 	for (i = 0; i < batch_sz; i++) {
 		page = page_pool_dev_alloc_pages(xdp->pp);
@@ -352,7 +351,6 @@ out:
 			err = ret;
 	}
 
-	xdp_clear_return_frame_no_direct();
 	bpf_net_ctx_clear(bpf_net_ctx);
 	local_bh_enable();
 	return err;

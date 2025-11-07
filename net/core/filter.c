@@ -4195,7 +4195,7 @@ static bool bpf_xdp_shrink_data(struct xdp_buff *xdp, skb_frag_t *frag,
 	}
 
 	if (release) {
-		__xdp_return(netmem, mem_type, false, zc_frag);
+		__xdp_return(netmem, mem_type, zc_frag);
 	} else {
 		if (!tail)
 			skb_frag_off_add(frag, shrink);

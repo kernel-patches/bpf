@@ -431,18 +431,18 @@ EXPORT_SYMBOL_GPL(xdp_rxq_info_attach_page_pool);
  * of xdp_frames/pages in those cases.
  */
 void __xdp_return(netmem_ref netmem, enum xdp_mem_type mem_type,
-		  bool napi_direct, struct xdp_buff *xdp)
+		  struct xdp_buff *xdp)
 {
 	switch (mem_type) {
 	case MEM_TYPE_PAGE_POOL:
 		netmem = netmem_compound_head(netmem);
-		if (napi_direct && xdp_return_frame_no_direct())
-			napi_direct = false;
+
 		/* No need to check netmem_is_pp() as mem->type knows this a
 		 * page_pool page
+		 *
+		 * page_pool can detect direct recycle.
 		 */
-		page_pool_put_full_netmem(netmem_get_pp(netmem), netmem,
-					  napi_direct);
+		page_pool_put_full_netmem(netmem_get_pp(netmem), netmem, false);
 		break;
 	case MEM_TYPE_PAGE_SHARED:
 		page_frag_free(__netmem_address(netmem));
@@ -471,10 +471,10 @@ void xdp_return_frame(struct xdp_frame *xdpf)
 	sinfo = xdp_get_shared_info_from_frame(xdpf);
 	for (u32 i = 0; i < sinfo->nr_frags; i++)
 		__xdp_return(skb_frag_netmem(&sinfo->frags[i]), xdpf->mem_type,
-			     false, NULL);
+			     NULL);
 
 out:
-	__xdp_return(virt_to_netmem(xdpf->data), xdpf->mem_type, false, NULL);
+	__xdp_return(virt_to_netmem(xdpf->data), xdpf->mem_type, NULL);
 }
 EXPORT_SYMBOL_GPL(xdp_return_frame);
 
@@ -488,10 +488,10 @@ void xdp_return_frame_rx_napi(struct xdp_frame *xdpf)
 	sinfo = xdp_get_shared_info_from_frame(xdpf);
 	for (u32 i = 0; i < sinfo->nr_frags; i++)
 		__xdp_return(skb_frag_netmem(&sinfo->frags[i]), xdpf->mem_type,
-			     true, NULL);
+			     NULL);
 
 out:
-	__xdp_return(virt_to_netmem(xdpf->data), xdpf->mem_type, true, NULL);
+	__xdp_return(virt_to_netmem(xdpf->data), xdpf->mem_type, NULL);
 }
 EXPORT_SYMBOL_GPL(xdp_return_frame_rx_napi);
 
@@ -542,7 +542,7 @@ EXPORT_SYMBOL_GPL(xdp_return_frame_bulk);
  */
 void xdp_return_frag(netmem_ref netmem, const struct xdp_buff *xdp)
 {
-	__xdp_return(netmem, xdp->rxq->mem.type, true, NULL);
+	__xdp_return(netmem, xdp->rxq->mem.type, NULL);
 }
 EXPORT_SYMBOL_GPL(xdp_return_frag);
 
@@ -556,10 +556,10 @@ void xdp_return_buff(struct xdp_buff *xdp)
 	sinfo = xdp_get_shared_info_from_buff(xdp);
 	for (u32 i = 0; i < sinfo->nr_frags; i++)
 		__xdp_return(skb_frag_netmem(&sinfo->frags[i]),
-			     xdp->rxq->mem.type, true, xdp);
+			     xdp->rxq->mem.type, xdp);
 
 out:
-	__xdp_return(virt_to_netmem(xdp->data), xdp->rxq->mem.type, true, xdp);
+	__xdp_return(virt_to_netmem(xdp->data), xdp->rxq->mem.type, xdp);
 }
 EXPORT_SYMBOL_GPL(xdp_return_buff);
 

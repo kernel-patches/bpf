@@ -975,7 +975,6 @@ static int veth_poll(struct napi_struct *napi, int budget)
 
 	bq.count = 0;
 
-	xdp_set_return_frame_no_direct();
 	done = veth_xdp_rcv(rq, budget, &bq, &stats);
 
 	if (stats.xdp_redirect > 0)
@@ -994,7 +993,6 @@ static int veth_poll(struct napi_struct *napi, int budget)
 
 	if (stats.xdp_tx > 0)
 		veth_xdp_flush(rq, &bq);
-	xdp_clear_return_frame_no_direct();
 
 	return done;
 }

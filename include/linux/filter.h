@@ -764,7 +764,6 @@ struct bpf_nh_params {
 };
 
 /* flags for bpf_redirect_info kern_flags */
-#define BPF_RI_F_RF_NO_DIRECT	BIT(0)	/* no napi_direct on return_frame */
 #define BPF_RI_F_RI_INIT	BIT(1)
 #define BPF_RI_F_CPU_MAP_INIT	BIT(2)
 #define BPF_RI_F_DEV_MAP_INIT	BIT(3)
@@ -1162,27 +1161,6 @@ static inline bool bpf_dump_raw_ok(const struct cred *cred)
 struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 				       const struct bpf_insn *patch, u32 len);
 int bpf_remove_insns(struct bpf_prog *prog, u32 off, u32 cnt);
-
-static inline bool xdp_return_frame_no_direct(void)
-{
-	struct bpf_redirect_info *ri = bpf_net_ctx_get_ri();
-
-	return ri->kern_flags & BPF_RI_F_RF_NO_DIRECT;
-}
-
-static inline void xdp_set_return_frame_no_direct(void)
-{
-	struct bpf_redirect_info *ri = bpf_net_ctx_get_ri();
-
-	ri->kern_flags |= BPF_RI_F_RF_NO_DIRECT;
-}
-
-static inline void xdp_clear_return_frame_no_direct(void)
-{
-	struct bpf_redirect_info *ri = bpf_net_ctx_get_ri();
-
-	ri->kern_flags &= ~BPF_RI_F_RF_NO_DIRECT;
-}
 
 static inline int xdp_ok_fwd_dev(const struct net_device *fwd,
 				 unsigned int pktlen)
