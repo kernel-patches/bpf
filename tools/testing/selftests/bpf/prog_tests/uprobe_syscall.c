@@ -654,10 +654,11 @@ static USDT_DEFINE_SEMA(race);
 
 static void *worker_trigger(void *arg)
 {
+	trigger_t trigger = (trigger_t) arg;
 	unsigned long rounds = 0;
 
 	while (!race_stop) {
-		uprobe_test();
+		trigger();
 		rounds++;
 	}
 
@@ -667,6 +668,7 @@ static void *worker_trigger(void *arg)
 
 static void *worker_attach(void *arg)
 {
+	trigger_t trigger = (trigger_t) arg;
 	LIBBPF_OPTS(bpf_uprobe_opts, opts);
 	struct uprobe_syscall_executed *skel;
 	unsigned long rounds = 0, offset;
@@ -677,7 +679,7 @@ static void *worker_attach(void *arg)
 	unsigned long *ref;
 	int err;
 
-	offset = get_uprobe_offset(&uprobe_test);
+	offset = get_uprobe_offset(trigger);
 	if (!ASSERT_GE(offset, 0, "get_uprobe_offset"))
 		return NULL;
 
@@ -722,7 +724,7 @@ static useconds_t race_msec(void)
 	return 500;
 }
 
-static void test_uprobe_race(void)
+static void test_uprobe_race(trigger_t trigger)
 {
 	int err, i, nr_threads;
 	pthread_t *threads;
@@ -738,7 +740,7 @@ static void test_uprobe_race(void)
 
 	for (i = 0; i < nr_threads; i++) {
 		err = pthread_create(&threads[i], NULL, i % 2 ? worker_trigger : worker_attach,
-				     NULL);
+				     trigger);
 		if (!ASSERT_OK(err, "pthread_create"))
 			goto cleanup;
 	}
@@ -870,8 +872,10 @@ static void __test_uprobe_syscall(void)
 		test_uprobe_session();
 	if (test__start_subtest("uprobe_usdt"))
 		test_uprobe_usdt();
-	if (test__start_subtest("uprobe_race"))
-		test_uprobe_race();
+	if (test__start_subtest("uprobe_race_nop5"))
+		test_uprobe_race(uprobe_test);
+	if (test__start_subtest("uprobe_race_prologue"))
+		test_uprobe_race(prologue_trigger);
 	if (test__start_subtest("uprobe_error"))
 		test_uprobe_error();
 	if (test__start_subtest("uprobe_regs_equal"))
