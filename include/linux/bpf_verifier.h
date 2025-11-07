@@ -650,6 +650,11 @@ struct bpf_iarray {
 	u32 items[];
 };
 
+#define iarray_for_each(item, arr)						\
+	for (int ___idx = 0;							\
+	     ___idx < (arr)->cnt && ({ item = (arr)->items[___idx]; 1; });	\
+	     ___idx++)
+
 struct bpf_insn_aux_data {
 	union {
 		enum bpf_reg_type ptr_type;	/* pointer type for load/store insns */
@@ -1112,6 +1117,7 @@ struct bpf_verifier_env {
 	u32 scc_cnt;
 	struct bpf_iarray *succ;
 	struct bpf_iarray *gotox_tmp_buf;
+	int *idoms;
 };
 
 static inline struct bpf_func_info_aux *subprog_aux(struct bpf_verifier_env *env, int subprog)
@@ -1882,5 +1888,7 @@ int bpf_insn_def32(struct bpf_prog *prog, struct bpf_insn *insn);
 
 int bpf_flip_opcode(u32 opcode);
 u8 bpf_rev_opcode(u8 opcode);
+
+int bpf_compute_idoms(struct bpf_verifier_env *env);
 
 #endif /* _LINUX_BPF_VERIFIER_H */
