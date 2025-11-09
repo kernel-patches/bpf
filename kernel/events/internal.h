@@ -214,11 +214,8 @@ static inline int get_recursion_context(u8 *recursion)
 {
 	unsigned char rctx = interrupt_context_level();
 
-	if (recursion[rctx])
+	if (cmpxchg(&recursion[rctx], 0, 1) != 0)
 		return -1;
-
-	recursion[rctx]++;
-	barrier();
 
 	return rctx;
 }
