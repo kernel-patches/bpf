@@ -1,0 +1,103 @@
+name: Testing GCC BPF compiler
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        required: true
+        type: string
+      arch:
+        required: true
+        type: string
+      gcc_version:
+        required: true
+        type: string
+      llvm_version:
+        required: true
+        type: string
+      toolchain:
+        required: true
+        type: string
+      toolchain_full:
+        required: true
+        type: string
+      download_sources:
+        required: true
+        type: boolean
+
+jobs:
+  test:
+    name: GCC BPF
+    runs-on: >-
+      ${{
+          contains(fromJSON(inputs.runs_on), 'codebuild')
+          && format('codebuild-bpf-ci-{0}-{1}', github.run_id, github.run_attempt)
+          || fromJSON(inputs.runs_on)
+      }}
+    env:
+      ARCH: ${{ inputs.arch }}
+      BPF_NEXT_BASE_BRANCH: 'master'
+      GCC_BPF_INSTALL_DIR: ${{ github.workspace }}/gcc-bpf
+      GCC_BPF_RELEASE_REPO: 'theihor/gcc-bpf'
+      KBUILD_OUTPUT: ${{ github.workspace }}/src/kbuild-output
+      REPO_ROOT: ${{ github.workspace }}/src
+
+    steps:
+
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            ci
+
+      - if: ${{ inputs.download_sources }}
+        name: Download bpf-next tree
+        uses: libbpf/ci/get-linux-source@v3
+        with:
+          dest: ${{ env.REPO_ROOT }}
+          rev: ${{ env.BPF_NEXT_BASE_BRANCH }}
+
+      - if: ${{ ! inputs.download_sources }}
+        name: Checkout ${{ github.repository }} to ./src
+        uses: actions/checkout@v4
+        with:
+          path: 'src'
+
+      - uses:  libbpf/ci/patch-kernel@v3
+        with:
+          patches-root: '${{ github.workspace }}/ci/diffs'
+          repo-root: ${{ env.REPO_ROOT }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: vmlinux-${{ inputs.arch }}-${{ inputs.toolchain_full }}
+          path: ${{ env.REPO_ROOT }}
+
+      - name: Untar artifacts
+        working-directory: ${{ env.REPO_ROOT }}
+        run: zstd -d -T0 vmlinux-${{ inputs.arch }}-${{ inputs.toolchain_full }}.tar.zst --stdout | tar -xf -
+
+      - name: Setup build environment
+        uses: libbpf/ci/setup-build-env@v3
+        with:
+          arch: ${{ inputs.arch }}
+          gcc-version: ${{ inputs.gcc_version }}
+          llvm-version: ${{ inputs.llvm_version }}
+
+      - name: Download GCC BPF compiler
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/download-gcc-bpf.sh ${{ env.GCC_BPF_RELEASE_REPO }} ${{ env.GCC_BPF_INSTALL_DIR }}
+
+      - name: Build selftests/bpf/test_progs-bpf_gcc
+        uses: libbpf/ci/build-selftests@v3
+        env:
+          BPF_GCC: ${{ env.GCC_BPF_INSTALL_DIR }}
+          MAX_MAKE_JOBS: 32
+          SELFTESTS_BPF_TARGETS: 'test_progs-bpf_gcc'
+        with:
+          arch: ${{ inputs.arch }}
+          kernel-root: ${{ env.REPO_ROOT }}
+          llvm-version: ${{ inputs.llvm_version }}
+          toolchain: ${{ inputs.toolchain }}
