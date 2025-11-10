@@ -500,6 +500,10 @@ bpf_insn_successors(struct bpf_verifier_env *env, u32 idx)
 	if (opcode_info->can_jump)
 		succ->items[succ->cnt++] = idx + bpf_jmp_offset(insn) + 1;
 
+	if (unlikely(insn->code == (BPF_JMP | BPF_CALL) && insn->src_reg == 0
+		     && insn->imm == BPF_FUNC_tail_call))
+		succ->items[succ->cnt++] = idx;
+
 	return succ;
 }
 
