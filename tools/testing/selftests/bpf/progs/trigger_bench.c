@@ -39,26 +39,19 @@ int bench_trigger_uprobe_multi(void *ctx)
 	return 0;
 }
 
+const volatile int kernel_count = 0;
 const volatile int batch_iters = 0;
-
-SEC("?raw_tp")
-int trigger_count(void *ctx)
-{
-	int i;
-
-	for (i = 0; i < batch_iters; i++)
-		inc_counter();
-
-	return 0;
-}
 
 SEC("?raw_tp")
 int trigger_driver(void *ctx)
 {
 	int i;
 
-	for (i = 0; i < batch_iters; i++)
+	for (i = 0; i < batch_iters; i++) {
 		(void)bpf_get_numa_node_id(); /* attach point for benchmarking */
+		if (kernel_count)
+			inc_counter();
+	}
 
 	return 0;
 }
