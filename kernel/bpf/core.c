@@ -2536,11 +2536,14 @@ static unsigned int __bpf_prog_ret1(const void *ctx,
 	return 1;
 }
 
+static DEFINE_PER_CPU(struct bpf_prog_stats, __dummy_stats);
+
 static struct bpf_prog_dummy {
 	struct bpf_prog prog;
 } dummy_bpf_prog = {
 	.prog = {
 		.bpf_func = __bpf_prog_ret1,
+		.stats = &__dummy_stats,
 	},
 };
 
