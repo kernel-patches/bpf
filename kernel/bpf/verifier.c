@@ -3371,6 +3371,7 @@ static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 
 	desc = &tab->descs[tab->nr_descs++];
 	desc->func_id = func_id;
+	desc->imm = func_id;
 	desc->offset = offset;
 	desc->addr = addr;
 	desc->func_model = func_model;
