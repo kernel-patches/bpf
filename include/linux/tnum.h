@@ -50,6 +50,14 @@ struct tnum tnum_or(struct tnum a, struct tnum b);
 struct tnum tnum_xor(struct tnum a, struct tnum b);
 /* Multiply two tnums, return @a * @b */
 struct tnum tnum_mul(struct tnum a, struct tnum b);
+/* Unsigned division, return @a / @b */
+struct tnum tnum_udiv(struct tnum a, struct tnum b);
+/* Signed division, return @a / @b */
+struct tnum tnum_sdiv(struct tnum a, struct tnum b);
+/* Unsigned modulo, return @a % @b */
+struct tnum tnum_umod(struct tnum a, struct tnum b);
+/* Signed modulo, return @a % @b */
+struct tnum tnum_smod(struct tnum a, struct tnum b);
 
 /* Return true if the known bits of both tnums have the same value */
 bool tnum_overlap(struct tnum a, struct tnum b);

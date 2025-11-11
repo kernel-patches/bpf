@@ -12,6 +12,13 @@
 #define TNUM(_v, _m)	(struct tnum){.value = _v, .mask = _m}
 /* A completely unknown value */
 const struct tnum tnum_unknown = { .value = 0, .mask = -1 };
+/* Tnum bottom */
+const struct tnum tnum_bottom = { .value = -1, .mask = -1 };
+
+static bool __tnum_eqb(struct tnum a, struct tnum b)
+{
+	return a.value == b.value && a.mask == b.mask;
+}
 
 struct tnum tnum_const(u64 value)
 {
@@ -167,6 +174,205 @@ bool tnum_overlap(struct tnum a, struct tnum b)
 	return (a.value & mu) == (b.value & mu);
 }
 
+static u64 __get_mask(u64 x)
+{
+	int width = 0;
+
+	if (x > 0)
+		width = 64 - __builtin_clzll(x);
+	if (width == 0)
+		return 0;
+	else if (width == 64)
+		return U64_MAX;
+	else
+		return (1ULL << width) - 1;
+}
+
+struct tnum tnum_udiv(struct tnum a, struct tnum b)
+{
+	/* BPF div specification: x / 0 = 0 */
+	if (tnum_equals_const(b, 0))
+		return TNUM(0, 0);
+	if (b.value == 0)
+		return tnum_unknown;
+	if (tnum_is_const(a) && tnum_is_const(b))
+		return TNUM(a.value / b.value, 0);
+
+	u64 a_max = a.value + a.mask;
+	u64 b_min = b.value;
+	u64 max_res = a_max / b_min;
+	return TNUM(0, __get_mask(max_res));
+}
+
+static u64 __msb(u64 x)
+{
+	return x & (1ULL << 63);
+}
+
+static struct tnum __tnum_get_positive(struct tnum x)
+{
+	if (__msb(x.value))
+		return tnum_bottom;
+	if (__msb(x.mask))
+		return TNUM(x.value, x.mask & ~(1ULL << 63));
+	return x;
+}
+
+static struct tnum __tnum_get_negative(struct tnum x)
+{
+	if (__msb(x.value))
+		return x;
+	if (__msb(x.mask))
+		return TNUM(x.value | (1ULL << 63), x.mask & ~(1ULL << 63));
+	return tnum_bottom;
+}
+
+static struct tnum __tnum_abs(struct tnum x)
+{
+	if (__msb(x.value))
+		return tnum_neg(x);
+	else
+		return x;
+}
+
+/* __tnum_sdiv, a helper for tnum_sdiv.
+ * @a: tnum a, a's sign is fixed, __msb(a.mask) == 0
+ * @b: tnum b, b's sign is fixed, __msb(b.mask) == 0
+ *
+ * This function reuses tnum_udiv by operating on the absolute values of a and b,
+ * and then adjusting the sign of the result based on C's division rules.
+ * Here we don't need to specially handle the case of [S64_MIN / -1],
+ * because after __tnum_abs, S64_MIN becomes (S64_MAX + 1), and
+ * the behavior of unsigned [(S64_MAX + 1) / 1] is normal.
+ */
+static struct tnum __tnum_sdiv(struct tnum a, struct tnum b)
+{
+	if (__tnum_eqb(a, tnum_bottom) || __tnum_eqb(b, tnum_bottom))
+		return tnum_bottom;
+
+	struct tnum a_abs = __tnum_abs(a);
+	struct tnum b_abs = __tnum_abs(b);
+	struct tnum res_abs = tnum_udiv(a_abs, b_abs);
+
+	if (__msb(a.value) == __msb(b.value))
+		return res_abs;
+	else
+		return tnum_neg(res_abs);
+}
+
+struct tnum tnum_sdiv(struct tnum a, struct tnum b)
+{
+	/* BPF div specification: x / 0 = 0 */
+	if (tnum_equals_const(b, 0))
+		return TNUM(0, 0);
+	if (b.value == 0)
+		return tnum_unknown;
+	if (tnum_is_const(a) && tnum_is_const(b)) {
+		/* BPF div specification: S64_MIN / -1 = S64_MIN */
+		if (a.value == S64_MIN && b.value == -1)
+			return TNUM((u64)S64_MIN, 0);
+		s64 sval = (s64)a.value / (s64)b.value;
+		return TNUM((u64)sval, 0);
+	}
+
+	struct tnum a_pos = __tnum_get_positive(a);
+	struct tnum a_neg = __tnum_get_negative(a);
+	struct tnum b_pos = __tnum_get_positive(b);
+	struct tnum b_neg = __tnum_get_negative(b);
+
+	struct tnum res_pos = __tnum_sdiv(a_pos, b_pos);
+	struct tnum res_neg = __tnum_sdiv(a_neg, b_neg);
+	struct tnum res_mix1 = __tnum_sdiv(a_pos, b_neg);
+	struct tnum res_mix2 = __tnum_sdiv(a_neg, b_pos);
+
+	return tnum_union(tnum_union(res_pos, res_neg),
+					tnum_union(res_mix1, res_mix2));
+}
+
+static struct tnum __mod_get_low_bits(struct tnum a, struct tnum b)
+{
+	if (b.value % 2 == 1 || b.mask % 2 == 1)
+		return tnum_unknown;
+
+	u64 b_max = b.value + b.mask;
+	u64 lowbits = (b_max & -b_max) - 1;
+	return TNUM(a.value & lowbits, (a.mask & lowbits) | ~lowbits);
+}
+
+struct tnum tnum_umod(struct tnum a, struct tnum b)
+{
+	/* BPF mod specification: x % 0 = x */
+	if (tnum_equals_const(b, 0))
+		return a;
+	if (b.value == 0)
+		return tnum_unknown;
+	if (tnum_is_const(a) && tnum_is_const(b))
+		return TNUM(a.value % b.value, 0);
+	if (tnum_is_const(b) && is_power_of_2(b.value)) {
+		u64 lowbits = b.value - 1;
+		return TNUM(a.value & lowbits, a.mask & lowbits);
+	}
+	struct tnum res = __mod_get_low_bits(a, b);
+	u64 a_max = a.value + a.mask;
+	u64 b_max = b.value + b.mask;
+	u64 mask = __get_mask(min(a_max, b_max));
+	return TNUM(res.value & mask, res.mask & mask);
+}
+
+/* __tnum_smod, a helper for tnum_smod.
+ * @a: tnum a, a's sign is fixed, __msb(a.mask) == 0
+ * @b: tnum b, b's sign is fixed, __msb(a.mask) == 0
+ *
+ * This function reuses tnum_umod by operating on the absolute values of a and b,
+ * and then adjusting the sign of the result based on C's modulo rules.
+ * Here we don't need to specially handle the case of [S64_MIN % -1], because
+ * after __tnum_abs, S64_MIN becomes (S64_MAX + 1), and the behavior of
+ * unsigned [(S64_MAX + 1) % 1] is normal.
+ */
+static struct tnum __tnum_smod(struct tnum a, struct tnum b)
+{
+	if (__tnum_eqb(a, tnum_bottom) || __tnum_eqb(b, tnum_bottom))
+		return tnum_bottom;
+
+	struct tnum a_abs = __tnum_abs(a);
+	struct tnum b_abs = __tnum_abs(b);
+	struct tnum res_abs = tnum_umod(a_abs, b_abs);
+
+	if (__msb(a.value))
+		return tnum_neg(res_abs);
+	else
+		return res_abs;
+}
+
+struct tnum tnum_smod(struct tnum a, struct tnum b)
+{
+	/* BPF mod specification: x % 0 = x */
+	if (tnum_equals_const(b, 0))
+		return a;
+	if (b.value == 0)
+		return tnum_unknown;
+	if (tnum_is_const(a) && tnum_is_const(b)) {
+		/* BPF mod specification: S64_MIN % -1 = 0 */
+		if (a.value == S64_MIN && b.value == -1)
+			return TNUM(0, 0);
+		s64 sval = (s64)a.value % (s64)b.value;
+		return TNUM((u64)sval, 0);
+	}
+
+	struct tnum a_pos = __tnum_get_positive(a);
+	struct tnum a_neg = __tnum_get_negative(a);
+	struct tnum b_pos = __tnum_get_positive(b);
+	struct tnum b_neg = __tnum_get_negative(b);
+
+	struct tnum res_pos = __tnum_smod(a_pos, b_pos);
+	struct tnum res_neg = __tnum_smod(a_neg, b_neg);
+	struct tnum res_mix1 = __tnum_smod(a_pos, b_neg);
+	struct tnum res_mix2 = __tnum_smod(a_neg, b_pos);
+
+	return tnum_union(tnum_union(res_pos, res_neg),
+					tnum_union(res_mix1, res_mix2));
+}
+
 /* Note that if a and b disagree - i.e. one has a 'known 1' where the other has
  * a 'known 0' - this will return a 'known 1' for that bit.
  */
@@ -186,6 +392,10 @@ struct tnum tnum_intersect(struct tnum a, struct tnum b)
  */
 struct tnum tnum_union(struct tnum a, struct tnum b)
 {
+	if (__tnum_eqb(a, tnum_bottom))
+		return b;
+	if (__tnum_eqb(b, tnum_bottom))
+		return a;
 	u64 v = a.value & b.value;
 	u64 mu = (a.value ^ b.value) | a.mask | b.mask;
 
