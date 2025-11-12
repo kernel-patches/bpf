@@ -146,7 +146,7 @@ static long bpf_pid_task_storage_update_elem(struct bpf_map *map, void *key,
 	bpf_task_storage_lock();
 	sdata = bpf_local_storage_update(
 		task, (struct bpf_local_storage_map *)map, value, map_flags,
-		true, GFP_ATOMIC);
+		true);
 	bpf_task_storage_unlock();
 
 	err = PTR_ERR_OR_ZERO(sdata);
@@ -205,7 +205,7 @@ out:
 /* Called by bpf_task_storage_get*() helpers */
 static void *__bpf_task_storage_get(struct bpf_map *map,
 				    struct task_struct *task, void *value,
-				    u64 flags, gfp_t gfp_flags, bool nobusy)
+				    u64 flags, bool nobusy)
 {
 	struct bpf_local_storage_data *sdata;
 
@@ -218,16 +218,15 @@ static void *__bpf_task_storage_get(struct bpf_map *map,
 	    (flags & BPF_LOCAL_STORAGE_GET_F_CREATE) && nobusy) {
 		sdata = bpf_local_storage_update(
 			task, (struct bpf_local_storage_map *)map, value,
-			BPF_NOEXIST, false, gfp_flags);
+			BPF_NOEXIST, false);
 		return IS_ERR(sdata) ? NULL : sdata->data;
 	}
 
 	return NULL;
 }
 
-/* *gfp_flags* is a hidden argument provided by the verifier */
-BPF_CALL_5(bpf_task_storage_get_recur, struct bpf_map *, map, struct task_struct *,
-	   task, void *, value, u64, flags, gfp_t, gfp_flags)
+BPF_CALL_4(bpf_task_storage_get_recur, struct bpf_map *, map, struct task_struct *,
+	   task, void *, value, u64, flags)
 {
 	bool nobusy;
 	void *data;
@@ -237,16 +236,14 @@ BPF_CALL_5(bpf_task_storage_get_recur, struct bpf_map *, map, struct task_struct
 		return (unsigned long)NULL;
 
 	nobusy = bpf_task_storage_trylock();
-	data = __bpf_task_storage_get(map, task, value, flags,
-				      gfp_flags, nobusy);
+	data = __bpf_task_storage_get(map, task, value, flags, nobusy);
 	if (nobusy)
 		bpf_task_storage_unlock();
 	return (unsigned long)data;
 }
 
-/* *gfp_flags* is a hidden argument provided by the verifier */
-BPF_CALL_5(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
-	   task, void *, value, u64, flags, gfp_t, gfp_flags)
+BPF_CALL_4(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
+	   task, void *, value, u64, flags)
 {
 	void *data;
 
@@ -255,8 +252,7 @@ BPF_CALL_5(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
 		return (unsigned long)NULL;
 
 	bpf_task_storage_lock();
-	data = __bpf_task_storage_get(map, task, value, flags,
-				      gfp_flags, true);
+	data = __bpf_task_storage_get(map, task, value, flags, true);
 	bpf_task_storage_unlock();
 	return (unsigned long)data;
 }
