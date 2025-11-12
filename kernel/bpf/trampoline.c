@@ -230,7 +230,10 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 }
 
 static struct bpf_tramp_links *
-bpf_trampoline_get_progs(const struct bpf_trampoline *tr, int *total, bool *ip_arg)
+bpf_trampoline_get_progs(const struct bpf_trampoline *tr,
+			 struct bpf_tramp_link *update_link,
+			 struct bpf_prog *update_prog,
+			 int *total, bool *ip_arg)
 {
 	struct bpf_tramp_link *link;
 	struct bpf_tramp_links *tlinks;
@@ -250,6 +253,11 @@ bpf_trampoline_get_progs(const struct bpf_trampoline *tr, int *total, bool *ip_a
 		hlist_for_each_entry(link, &tr->progs_hlist[kind], tramp_hlist) {
 			*ip_arg |= link->link.prog->call_get_func_ip;
 			*links++ = link;
+			if (link == update_link) {
+				*ip_arg |= update_prog->call_get_func_ip;
+				tlinks[kind].update_link = update_link;
+				tlinks[kind].update_prog = update_prog;
+			}
 		}
 	}
 	return tlinks;
@@ -395,7 +403,10 @@ out:
 	return ERR_PTR(err);
 }
 
-static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mutex)
+static int __bpf_trampoline_update(struct bpf_trampoline *tr,
+				   struct bpf_tramp_link *update_link,
+				   struct bpf_prog *update_prog,
+				   bool lock_direct_mutex)
 {
 	struct bpf_tramp_image *im;
 	struct bpf_tramp_links *tlinks;
@@ -403,7 +414,11 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mut
 	bool ip_arg = false;
 	int err, total, size;
 
-	tlinks = bpf_trampoline_get_progs(tr, &total, &ip_arg);
+	if (update_link && !bpf_trampoline_supports_update_prog())
+		return -ENOTSUPP;
+
+	tlinks = bpf_trampoline_get_progs(tr, update_link, update_prog,
+					  &total, &ip_arg);
 	if (IS_ERR(tlinks))
 		return PTR_ERR(tlinks);
 
@@ -504,6 +519,11 @@ out:
 out_free:
 	bpf_tramp_image_free(im);
 	goto out;
+}
+
+static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mutex)
+{
+	return __bpf_trampoline_update(tr, NULL, NULL, lock_direct_mutex);
 }
 
 static enum bpf_tramp_prog_type bpf_attach_type_to_tramp(struct bpf_prog *prog)
@@ -629,7 +649,7 @@ static int __bpf_trampoline_update_prog(struct bpf_tramp_link *link,
 		return 0;
 	}
 
-	return -ENOTSUPP;
+	return __bpf_trampoline_update(tr, link, new_prog, true);
 }
 
 int bpf_trampoline_update_prog(struct bpf_tramp_link *link,
@@ -1137,6 +1157,11 @@ arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *image
 			    void *func_addr)
 {
 	return -ENOTSUPP;
+}
+
+bool __weak bpf_trampoline_supports_update_prog(void)
+{
+	return false;
 }
 
 void * __weak arch_alloc_bpf_trampoline(unsigned int size)
