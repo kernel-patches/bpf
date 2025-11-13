@@ -5,6 +5,9 @@
 #define _SDT_HAS_SEMAPHORES 1
 #include "../sdt.h"
 
+#include <linux/compiler.h>
+#include "usdt.h"
+
 #include "test_usdt.skel.h"
 #include "test_urandom_usdt.skel.h"
 
@@ -246,6 +249,62 @@ cleanup:
 	test_usdt__destroy(skel);
 #undef TRIGGER
 }
+
+#ifdef __x86_64
+static unsigned char nop15[6] = { 0x90, 0x0f, 0x1f, 0x44, 0x00, 0x00 };
+
+static void *find_nop15(void *fn)
+{
+	int i;
+
+	for (i = 0; i < 10; i++) {
+		if (!memcmp(nop15, fn + i, 5))
+			return fn + i;
+	}
+	return NULL;
+}
+
+__attribute__((aligned(16)))
+__weak void optimized_attach_trigger(void)
+{
+	USDT(optimized_attach, empty);
+}
+
+static void subtest_optimized_attach(void)
+{
+	struct __arch_relative_insn {
+		__u8 op;
+		__s32 raddr;
+	} __packed *call;
+	struct test_usdt *skel;
+	void *addr;
+
+	addr = find_nop15(optimized_attach_trigger);
+	if (!ASSERT_OK_PTR(addr, "find_nop15"))
+		return;
+
+	skel = test_usdt__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_usdt__open_and_load"))
+		return;
+
+	skel->links.usdt_empty = bpf_program__attach_usdt(skel->progs.usdt_empty,
+						     0 /*self*/, "/proc/self/exe",
+						     "optimized_attach", "empty", NULL);
+	if (!ASSERT_OK_PTR(skel->links.usdt_empty, "bpf_program__attach_usdt"))
+		goto cleanup;
+
+	/* Uprobe gets optimized after first trigger, so let's press twice. */
+	optimized_attach_trigger();
+	optimized_attach_trigger();
+
+	/* .. and check the trampoline is as expected. */
+	call = (struct __arch_relative_insn *) (addr + 1);
+	ASSERT_EQ(call->op, 0xe8, "call");
+
+cleanup:
+	test_usdt__destroy(skel);
+}
+#endif
 
 unsigned short test_usdt_100_semaphore SEC(".probes");
 unsigned short test_usdt_300_semaphore SEC(".probes");
@@ -516,6 +575,8 @@ void test_usdt(void)
 #ifdef __x86_64__
 	if (test__start_subtest("basic_optimized"))
 		subtest_basic_usdt(true);
+	if (test__start_subtest("optimized_attach"))
+		subtest_optimized_attach();
 #endif
 	if (test__start_subtest("multispec"))
 		subtest_multispec_usdt();

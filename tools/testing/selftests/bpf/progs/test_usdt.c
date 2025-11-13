@@ -138,4 +138,10 @@ int usdt_sib(struct pt_regs *ctx)
 	return 0;
 }
 
+SEC("usdt")
+int usdt_empty(struct pt_regs *ctx)
+{
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
