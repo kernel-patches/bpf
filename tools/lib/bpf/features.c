@@ -506,6 +506,25 @@ static int probe_kern_arg_ctx_tag(int token_fd)
 	return probe_fd(prog_fd);
 }
 
+#ifdef __x86_64__
+#ifndef __NR_uprobe
+#define __NR_uprobe 336
+#endif
+static int probe_uprobe_syscall(int token_fd)
+{
+	/*
+	 * When not executed from executed kernel provided trampoline,
+	 * the uprobe syscall returns ENXIO error.
+	 */
+	return syscall(__NR_uprobe) == -1 && errno == ENXIO;
+}
+#else
+static int probe_uprobe_syscall(int token_fd)
+{
+	return 0;
+}
+#endif
+
 typedef int (*feature_probe_fn)(int /* token_fd */);
 
 static struct kern_feature_cache feature_cache;
@@ -580,6 +599,9 @@ static struct kern_feature_desc {
 	},
 	[FEAT_BTF_QMARK_DATASEC] = {
 		"BTF DATASEC names starting from '?'", probe_kern_btf_qmark_datasec,
+	},
+	[FEAT_UPROBE_SYSCALL] = {
+		"Kernel supports uprobe syscall", probe_uprobe_syscall,
 	},
 };
 
