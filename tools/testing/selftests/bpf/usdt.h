@@ -312,6 +312,9 @@ struct usdt_sema { volatile unsigned short active; };
 #ifndef USDT_NOP
 #if defined(__ia64__) || defined(__s390__) || defined(__s390x__)
 #define USDT_NOP			nop 0
+#elif defined(__x86_64__)
+#define USDT_NOP			.byte 0x90, 0x0f, 0x1f, 0x44, 0x00, 0x0 /* nop, nop5 */
+#define __has_combo
 #else
 #define USDT_NOP			nop
 #endif
@@ -403,6 +406,15 @@ struct usdt_sema { volatile unsigned short active; };
 	__asm__ __volatile__ ("" :: "m" (sema));
 #endif
 
+#ifdef __has_combo
+#define __usdt_asm_combo									\
+	__usdt_asm3(		.pushsection .stapsdt.combo, "", "progbits")			\
+	__usdt_asm1(		__usdt_asm_addr 990b)						\
+	__usdt_asm1(		.popsection)
+#else
+#define __usdt_asm_combo
+#endif
+
 /* main USDT definition (nop and .note.stapsdt metadata) */
 #define __usdt_probe(group, name, sema_def, sema, ...) do {					\
 	sema_def(sema)										\
@@ -431,6 +443,7 @@ struct usdt_sema { volatile unsigned short active; };
 	__usdt_asm2(		.size _.stapsdt.base, 1)					\
 	__usdt_asm1(		.popsection)							\
 	__usdt_asm1(.endif)									\
+	__usdt_asm_combo									\
 	:: __usdt_asm_ops(__VA_ARGS__)								\
 	);											\
 } while (0)
