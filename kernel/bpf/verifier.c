@@ -3273,7 +3273,7 @@ static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 	struct bpf_kfunc_desc *desc;
 	const char *func_name;
 	struct btf *desc_btf;
-	unsigned long addr;
+	unsigned long addr, call_imm;
 	int err;
 
 	prog_aux = env->prog->aux;
@@ -3369,8 +3369,20 @@ static int add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, s16 offset)
 	if (err)
 		return err;
 
+	if (bpf_jit_supports_far_kfunc_call()) {
+		call_imm = func_id;
+	} else {
+		call_imm = BPF_CALL_IMM(addr);
+		/* Check whether the relative offset overflows desc->imm */
+		if ((unsigned long)(s32)call_imm != call_imm) {
+			verbose(env, "address of kernel func_id %u is out of range\n", func_id);
+			return -EINVAL;
+		}
+	}
+
 	desc = &tab->descs[tab->nr_descs++];
 	desc->func_id = func_id;
+	desc->imm = call_imm;
 	desc->offset = offset;
 	desc->addr = addr;
 	desc->func_model = func_model;
@@ -22356,17 +22368,15 @@ static int specialize_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_desc 
 	}
 
 set_imm:
-	if (bpf_jit_supports_far_kfunc_call()) {
-		call_imm = func_id;
-	} else {
+	if (!bpf_jit_supports_far_kfunc_call()) {
 		call_imm = BPF_CALL_IMM(addr);
 		/* Check whether the relative offset overflows desc->imm */
 		if ((unsigned long)(s32)call_imm != call_imm) {
 			verbose(env, "address of kernel func_id %u is out of range\n", func_id);
 			return -EINVAL;
 		}
+		desc->imm = call_imm;
 	}
-	desc->imm = call_imm;
 	desc->addr = addr;
 	return 0;
 }
