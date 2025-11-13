@@ -45,3 +45,5 @@ xdp_synproxy
 xdp_hw_metadata
 xdp_features
 verification_cert.h
+usdt_1
+usdt_2

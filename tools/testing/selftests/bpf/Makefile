@@ -723,6 +723,10 @@ $(VERIFICATION_CERT) $(PRIVATE_KEY): $(VERIFY_SIG_SETUP)
 $(VERIFY_SIG_HDR): $(VERIFICATION_CERT)
 	$(Q)xxd -i -n test_progs_verification_cert $< > $@
 
+ifeq ($(SRCARCH),$(filter $(SRCARCH),x86))
+USDTX := usdt_1.c usdt_2.c
+endif
+
 # Define test_progs test runner.
 TRUNNER_TESTS_DIR := prog_tests
 TRUNNER_BPF_PROGS_DIR := progs
@@ -744,7 +748,8 @@ TRUNNER_EXTRA_SOURCES := test_progs.c		\
 			 json_writer.c 		\
 			 $(VERIFY_SIG_HDR)		\
 			 flow_dissector_load.h	\
-			 ip_check_defrag_frags.h
+			 ip_check_defrag_frags.h \
+			 $(USDTX)
 TRUNNER_EXTRA_FILES := $(OUTPUT)/urandom_read				\
 		       $(OUTPUT)/liburandom_read.so			\
 		       $(OUTPUT)/xdp_synproxy				\
