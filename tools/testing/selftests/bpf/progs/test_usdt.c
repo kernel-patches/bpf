@@ -138,4 +138,13 @@ int usdt_sib(struct pt_regs *ctx)
 	return 0;
 }
 
+int executed;
+
+SEC("usdt")
+int usdt_executed(struct pt_regs *ctx)
+{
+	executed++;
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
