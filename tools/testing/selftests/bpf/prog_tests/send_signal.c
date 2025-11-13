@@ -110,8 +110,10 @@ static void test_send_signal_common(struct perf_event_attr *attr,
 	close(pipe_p2c[0]); /* close read */
 
 	skel = test_send_signal_kern__open_and_load();
-	if (!ASSERT_OK_PTR(skel, "skel_open_and_load"))
+	if (!ASSERT_OK_PTR(skel, "skel_open_and_load")) {
+		kill(pid, SIGKILL);
 		goto skel_open_load_failure;
+	}
 
 	/* boost with a high priority so we got a higher chance
 	 * that if an interrupt happens, the underlying task
