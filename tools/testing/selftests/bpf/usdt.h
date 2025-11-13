@@ -312,9 +312,16 @@ struct usdt_sema { volatile unsigned short active; };
 #ifndef USDT_NOP
 #if defined(__ia64__) || defined(__s390__) || defined(__s390x__)
 #define USDT_NOP			nop 0
+#elif defined(__x86_64__)
+#define USDT_NOP			.byte 0x90, 0x0f, 0x1f, 0x44, 0x00, 0x0 /* nop, nop5 */
 #else
 #define USDT_NOP			nop
 #endif
+#else
+/*
+ * User define its own nop instruction, do not emit extra note data.
+ */
+#define __usdt_asm_extra
 #endif /* USDT_NOP */
 
 /*
@@ -403,6 +410,15 @@ struct usdt_sema { volatile unsigned short active; };
 	__asm__ __volatile__ ("" :: "m" (sema));
 #endif
 
+#ifndef __usdt_asm_extra
+#ifdef __x86_64__
+#define __usdt_asm_extra									\
+	__usdt_asm1(            .ascii "\0")
+#else
+#define __usdt_asm_extra
+#endif
+#endif
+
 /* main USDT definition (nop and .note.stapsdt metadata) */
 #define __usdt_probe(group, name, sema_def, sema, ...) do {					\
 	sema_def(sema)										\
@@ -420,6 +436,7 @@ struct usdt_sema { volatile unsigned short active; };
 	__usdt_asm_strz(name)									\
 	__usdt_asm_args(__VA_ARGS__)								\
 	__usdt_asm1(		.ascii "\0")							\
+	__usdt_asm_extra									\
 	__usdt_asm1(994:	.balign 4)							\
 	__usdt_asm1(		.popsection)							\
 	__usdt_asm1(.ifndef _.stapsdt.base)							\
