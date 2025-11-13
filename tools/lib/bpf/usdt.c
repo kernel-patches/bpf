@@ -189,6 +189,7 @@
  */
 
 #define USDT_BASE_SEC ".stapsdt.base"
+#define USDT_COMBO_SEC ".stapsdt.combo"
 #define USDT_SEMA_SEC ".probes"
 #define USDT_NOTE_SEC  ".note.stapsdt"
 #define USDT_NOTE_TYPE 3
@@ -262,6 +263,7 @@ struct usdt_manager {
 	bool has_bpf_cookie;
 	bool has_sema_refcnt;
 	bool has_uprobe_multi;
+	bool has_uprobe_syscall;
 };
 
 struct usdt_manager *usdt_manager_new(struct bpf_object *obj)
@@ -301,6 +303,13 @@ struct usdt_manager *usdt_manager_new(struct bpf_object *obj)
 	 * usdt probes.
 	 */
 	man->has_uprobe_multi = kernel_supports(obj, FEAT_UPROBE_MULTI_LINK);
+
+	/*
+	 * Detect kernel support for uprobe() syscall, it's presence means we can
+	 * take advantage of faster nop5 uprobe handling.
+	 * Added in: 56101b69c919 ("uprobes/x86: Add uprobe syscall to speed up uprobe")
+	 */
+	man->has_uprobe_syscall = kernel_supports(obj, FEAT_UPROBE_SYSCALL);
 	return man;
 }
 
@@ -458,6 +467,80 @@ static int parse_elf_segs(Elf *elf, const char *path, struct elf_seg **segs, siz
 	return 0;
 }
 
+#if defined(__x86_64__)
+static int cmp_elf_combos(const void *_a, const void *_b)
+{
+	const unsigned long *a = _a;
+	const unsigned long *b = _b;
+
+	if (*a == *b)
+		return 0;
+	return *a < *b ? -1 : 1;
+}
+
+static bool verify_nop_combo(int fd, long off)
+{
+	static unsigned char nop_combo[6] = { 0x90, 0x0f, 0x1f, 0x44, 0x00, 0x00 };
+	unsigned char buf[6] = {};
+	bool ret = false;
+
+	/*
+	 * We are using file descriptor that backs Elf object,
+	 * let's dup it to be on the safe side.
+	 */
+	fd = dup(fd);
+	if (fd < 0)
+		return false;
+	if (lseek(fd, off, SEEK_SET) == off && (6 == read(fd, buf, 6)))
+		ret = memcmp(buf, nop_combo, 6) == 0;
+	close(fd);
+	return ret;
+}
+
+static int has_combo(unsigned long loc, unsigned long *combos, size_t combo_cnt)
+{
+	if (!combos)
+		return 0;
+	return bsearch(&loc, combos, combo_cnt, sizeof(loc), cmp_elf_combos) ? 1 : 0;
+}
+
+static int parse_elf_combos(Elf *elf, unsigned long **combos, size_t *combo_cnt)
+{
+	Elf_Data *data;
+	GElf_Shdr shdr;
+	Elf_Scn *scn;
+
+	*combo_cnt = 0;
+	*combos = NULL;
+
+	/* There's no combo section, no error. */
+	if (find_elf_sec_by_name(elf, USDT_COMBO_SEC, &shdr, &scn))
+		return 0;
+
+	data = elf_getdata(scn, 0);
+	if (!data)
+		return -1;
+
+	/* Wrong data allignment, should be array of 8 byte values.  */
+	if (data->d_size % sizeof(unsigned long) != 0)
+		return -1;
+
+	*combos = malloc(data->d_size);
+	if (!*combos)
+		return -1;
+	memcpy(*combos, data->d_buf, data->d_size);
+	*combo_cnt = data->d_size / sizeof(unsigned long);
+
+	qsort(*combos, *combo_cnt, sizeof(**combos), cmp_elf_combos);
+	return 0;
+}
+#else
+static int parse_elf_combos(Elf *elf, unsigned long **combos, size_t *combo_cnt)
+{
+	return 0;
+}
+#endif
+
 static int parse_vma_segs(int pid, const char *lib_path, struct elf_seg **segs, size_t *seg_cnt)
 {
 	char path[PATH_MAX], line[PATH_MAX], mode[16];
@@ -585,13 +668,16 @@ static int parse_usdt_note(GElf_Nhdr *nhdr, const char *data, size_t name_off,
 
 static int parse_usdt_spec(struct usdt_spec *spec, const struct usdt_note *note, __u64 usdt_cookie);
 
-static int collect_usdt_targets(struct usdt_manager *man, Elf *elf, const char *path, pid_t pid,
-				const char *usdt_provider, const char *usdt_name, __u64 usdt_cookie,
-				struct usdt_target **out_targets, size_t *out_target_cnt)
+static int collect_usdt_targets(struct usdt_manager *man, struct elf_fd *elf_fd, const char *path,
+				pid_t pid, const char *usdt_provider, const char *usdt_name,
+				__u64 usdt_cookie, struct usdt_target **out_targets,
+				size_t *out_target_cnt)
 {
-	size_t off, name_off, desc_off, seg_cnt = 0, vma_seg_cnt = 0, target_cnt = 0;
+	size_t off, name_off, desc_off, seg_cnt = 0, vma_seg_cnt = 0, target_cnt = 0, combo_cnt = 0;
 	struct elf_seg *segs = NULL, *vma_segs = NULL;
 	struct usdt_target *targets = NULL, *target;
+	unsigned long *combos = NULL;
+	Elf *elf = elf_fd->elf;
 	long base_addr = 0;
 	Elf_Scn *notes_scn, *base_scn;
 	GElf_Shdr base_shdr, notes_shdr;
@@ -617,6 +703,13 @@ static int collect_usdt_targets(struct usdt_manager *man, Elf *elf, const char *
 	err = parse_elf_segs(elf, path, &segs, &seg_cnt);
 	if (err) {
 		pr_warn("usdt: failed to process ELF program segments for '%s': %s\n",
+			path, errstr(err));
+		goto err_out;
+	}
+
+	err = parse_elf_combos(elf, &combos, &combo_cnt);
+	if (err) {
+		pr_warn("usdt: failed to process combo section for '%s': %s\n",
 			path, errstr(err));
 		goto err_out;
 	}
@@ -784,6 +877,23 @@ static int collect_usdt_targets(struct usdt_manager *man, Elf *elf, const char *
 		target = &targets[target_cnt];
 		memset(target, 0, sizeof(*target));
 
+#ifdef __x86_64__
+		/*
+		 * We have usdt with nop,nop5 instruction and we detected uprobe syscall,
+		 * so we can place the uprobe directly on nop5 (+1) to get it optimized.
+		 */
+		if (man->has_uprobe_syscall &&
+		    has_combo(note.loc_addr, combos, combo_cnt)) {
+
+			/* Make sure there really are nop1,nop5 instructions in the code. */
+			if (!verify_nop_combo(elf_fd->fd, usdt_rel_ip))
+				goto err_out;
+
+			usdt_abs_ip++;
+			usdt_rel_ip++;
+		}
+#endif
+
 		target->abs_ip = usdt_abs_ip;
 		target->rel_ip = usdt_rel_ip;
 		target->sema_off = usdt_sema_off;
@@ -805,6 +915,7 @@ static int collect_usdt_targets(struct usdt_manager *man, Elf *elf, const char *
 	err = target_cnt;
 
 err_out:
+	free(combos);
 	free(segs);
 	free(vma_segs);
 	if (err < 0)
@@ -998,7 +1109,7 @@ struct bpf_link *usdt_manager_attach_usdt(struct usdt_manager *man, const struct
 	/* discover USDT in given binary, optionally limiting
 	 * activations to a given PID, if pid > 0
 	 */
-	err = collect_usdt_targets(man, elf_fd.elf, path, pid, usdt_provider, usdt_name,
+	err = collect_usdt_targets(man, &elf_fd, path, pid, usdt_provider, usdt_name,
 				   usdt_cookie, &targets, &target_cnt);
 	if (err <= 0) {
 		err = (err == 0) ? -ENOENT : err;
