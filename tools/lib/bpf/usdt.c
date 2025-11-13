@@ -241,6 +241,7 @@ struct usdt_note {
 	long loc_addr;
 	long base_addr;
 	long sema_addr;
+	bool nop_combo;
 };
 
 struct usdt_target {
@@ -262,6 +263,7 @@ struct usdt_manager {
 	bool has_bpf_cookie;
 	bool has_sema_refcnt;
 	bool has_uprobe_multi;
+	bool has_uprobe_syscall;
 };
 
 struct usdt_manager *usdt_manager_new(struct bpf_object *obj)
@@ -301,6 +303,11 @@ struct usdt_manager *usdt_manager_new(struct bpf_object *obj)
 	 * usdt probes.
 	 */
 	man->has_uprobe_multi = kernel_supports(obj, FEAT_UPROBE_MULTI_LINK);
+
+	/*
+	 * Detect kernel support for uprobe syscall to be used to pick usdt attach point.
+	 */
+	man->has_uprobe_syscall = kernel_supports(obj, FEAT_UPROBE_SYSCALL);
 	return man;
 }
 
@@ -784,6 +791,15 @@ static int collect_usdt_targets(struct usdt_manager *man, Elf *elf, const char *
 		target = &targets[target_cnt];
 		memset(target, 0, sizeof(*target));
 
+		if (note.nop_combo && man->has_uprobe_syscall) {
+			/*
+			 * We have usdt with nop/nop5 instruction and we detected uprobe syscall,
+			 * so we can place the uprobe directly on nop5 to get it optimized.
+			 */
+			usdt_abs_ip++;
+			usdt_rel_ip++;
+		}
+
 		target->abs_ip = usdt_abs_ip;
 		target->rel_ip = usdt_rel_ip;
 		target->sema_off = usdt_sema_off;
@@ -1144,7 +1160,7 @@ err_out:
 static int parse_usdt_note(GElf_Nhdr *nhdr, const char *data, size_t name_off, size_t desc_off,
 			   struct usdt_note *note)
 {
-	const char *provider, *name, *args;
+	const char *provider, *name, *args, *end;
 	long addrs[3];
 	size_t len;
 
@@ -1181,6 +1197,10 @@ static int parse_usdt_note(GElf_Nhdr *nhdr, const char *data, size_t name_off, s
 	++args;
 	if (args >= data + len) /* missing arguments spec */
 		return -EINVAL;
+
+	/* we have nop1,nop5 instructions combo */
+	end = data + len - 1;
+	note->nop_combo = *end == 0 && *(end - 1) == 0;
 
 	note->provider = provider;
 	note->name = name;
