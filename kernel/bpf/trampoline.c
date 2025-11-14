@@ -614,6 +614,21 @@ static int __bpf_trampoline_update_prog(struct bpf_tramp_link *link,
 					struct bpf_prog *new_prog,
 					struct bpf_trampoline *tr)
 {
+	enum bpf_tramp_prog_type kind;
+	int err = 0;
+
+	kind = bpf_attach_type_to_tramp(link->link.prog);
+	if (kind == BPF_TRAMP_REPLACE) {
+		WARN_ON_ONCE(!tr->extension_prog);
+		err = bpf_arch_text_poke(tr->func.addr, BPF_MOD_JUMP,
+					 tr->extension_prog->bpf_func,
+					 new_prog->bpf_func);
+		if (err)
+			return err;
+		tr->extension_prog = new_prog;
+		return 0;
+	}
+
 	return -ENOTSUPP;
 }
 
