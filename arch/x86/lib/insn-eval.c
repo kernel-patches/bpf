@@ -520,8 +520,7 @@ static int get_regno(struct insn *insn, enum reg_type type)
 	return regno;
 }
 
-static int get_reg_offset(struct insn *insn, struct pt_regs *regs,
-			  enum reg_type type)
+static int get_reg_offset(struct insn *insn, enum reg_type type)
 {
 	int regno = get_regno(insn, type);
 
@@ -862,7 +861,7 @@ int insn_get_code_seg_params(struct pt_regs *regs)
  */
 int insn_get_modrm_rm_off(struct insn *insn, struct pt_regs *regs)
 {
-	return get_reg_offset(insn, regs, REG_TYPE_RM);
+	return get_reg_offset(insn, REG_TYPE_RM);
 }
 
 /**
@@ -877,7 +876,7 @@ int insn_get_modrm_rm_off(struct insn *insn, struct pt_regs *regs)
  */
 int insn_get_modrm_reg_off(struct insn *insn, struct pt_regs *regs)
 {
-	return get_reg_offset(insn, regs, REG_TYPE_REG);
+	return get_reg_offset(insn, REG_TYPE_REG);
 }
 
 /**
@@ -983,7 +982,7 @@ static int get_eff_addr_reg(struct insn *insn, struct pt_regs *regs,
 	if (X86_MODRM_MOD(insn->modrm.value) != 3)
 		return -EINVAL;
 
-	*regoff = get_reg_offset(insn, regs, REG_TYPE_RM);
+	*regoff = get_reg_offset(insn, REG_TYPE_RM);
 	if (*regoff < 0)
 		return -EINVAL;
 
@@ -1036,7 +1035,7 @@ static int get_eff_addr_modrm(struct insn *insn, struct pt_regs *regs,
 	if (X86_MODRM_MOD(insn->modrm.value) > 2)
 		return -EINVAL;
 
-	*regoff = get_reg_offset(insn, regs, REG_TYPE_RM);
+	*regoff = get_reg_offset(insn, REG_TYPE_RM);
 
 	/*
 	 * -EDOM means that we must ignore the address_offset. In such a case,
@@ -1182,8 +1181,8 @@ static int get_eff_addr_sib(struct insn *insn, struct pt_regs *regs,
 	if (!insn->sib.nbytes)
 		return -EINVAL;
 
-	*base_offset = get_reg_offset(insn, regs, REG_TYPE_BASE);
-	indx_offset = get_reg_offset(insn, regs, REG_TYPE_INDEX);
+	*base_offset = get_reg_offset(insn, REG_TYPE_BASE);
+	indx_offset = get_reg_offset(insn, REG_TYPE_INDEX);
 
 	/*
 	 * Negative values in the base and index offset means an error when
