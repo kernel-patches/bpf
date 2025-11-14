@@ -533,7 +533,6 @@ static int get_reg_offset(struct insn *insn, enum reg_type type)
 /**
  * get_reg_offset_16() - Obtain offset of register indicated by instruction
  * @insn:	Instruction containing ModRM byte
- * @regs:	Register values as seen when entering kernel mode
  * @offs1:	Offset of the first operand register
  * @offs2:	Offset of the second operand register, if applicable
  *
@@ -547,8 +546,7 @@ static int get_reg_offset(struct insn *insn, enum reg_type type)
  *
  * 0 on success, -EINVAL on error.
  */
-static int get_reg_offset_16(struct insn *insn, struct pt_regs *regs,
-			     int *offs1, int *offs2)
+static int get_reg_offset_16(struct insn *insn, int *offs1, int *offs2)
 {
 	/*
 	 * 16-bit addressing can use one or two registers. Specifics of
@@ -1101,7 +1099,7 @@ static int get_eff_addr_modrm_16(struct insn *insn, struct pt_regs *regs,
 	if (X86_MODRM_MOD(insn->modrm.value) > 2)
 		return -EINVAL;
 
-	ret = get_reg_offset_16(insn, regs, &addr_offset1, &addr_offset2);
+	ret = get_reg_offset_16(insn, &addr_offset1, &addr_offset2);
 	if (ret < 0)
 		return -EINVAL;
 
