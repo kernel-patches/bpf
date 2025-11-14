@@ -15,7 +15,7 @@
 
 static inline unsigned long *pt_regs_nr(struct pt_regs *regs, int nr)
 {
-	int reg_offset = pt_regs_offset(regs, nr);
+	int reg_offset = pt_regs_offset(nr);
 	static unsigned long __dummy;
 
 	if (WARN_ON_ONCE(reg_offset < 0))

@@ -438,7 +438,7 @@ static const int pt_regoff[] = {
 #endif
 };
 
-int pt_regs_offset(struct pt_regs *regs, int regno)
+int pt_regs_offset(int regno)
 {
 	if ((unsigned)regno < ARRAY_SIZE(pt_regoff))
 		return pt_regoff[regno];
@@ -528,7 +528,7 @@ static int get_reg_offset(struct insn *insn, struct pt_regs *regs,
 	if (regno < 0)
 		return regno;
 
-	return pt_regs_offset(regs, regno);
+	return pt_regs_offset(regno);
 }
 
 /**
