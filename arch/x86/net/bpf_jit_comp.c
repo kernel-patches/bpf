@@ -597,8 +597,9 @@ static int emit_jump(u8 **pprog, void *func, void *ip)
 	return emit_patch(pprog, func, ip, 0xE9);
 }
 
-static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
-				void *old_addr, void *new_addr)
+static int ___bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
+				 enum bpf_text_poke_type new_t,
+				 void *old_addr, void *new_addr)
 {
 	const u8 *nop_insn = x86_nops[5];
 	u8 old_insn[X86_PATCH_SIZE];
@@ -609,7 +610,7 @@ static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
 	memcpy(old_insn, nop_insn, X86_PATCH_SIZE);
 	if (old_addr) {
 		prog = old_insn;
-		ret = t == BPF_MOD_CALL ?
+		ret = old_t == BPF_MOD_CALL ?
 		      emit_call(&prog, old_addr, ip) :
 		      emit_jump(&prog, old_addr, ip);
 		if (ret)
@@ -619,7 +620,7 @@ static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
 	memcpy(new_insn, nop_insn, X86_PATCH_SIZE);
 	if (new_addr) {
 		prog = new_insn;
-		ret = t == BPF_MOD_CALL ?
+		ret = new_t == BPF_MOD_CALL ?
 		      emit_call(&prog, new_addr, ip) :
 		      emit_jump(&prog, new_addr, ip);
 		if (ret)
@@ -640,8 +641,15 @@ out:
 	return ret;
 }
 
-int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
-		       void *old_addr, void *new_addr)
+static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
+				 void *old_addr, void *new_addr)
+{
+	return ___bpf_arch_text_poke(ip, t, t, old_addr, new_addr);
+}
+
+int bpf_arch_text_poke_type(void *ip, enum bpf_text_poke_type old_t,
+			    enum bpf_text_poke_type new_t, void *old_addr,
+			    void *new_addr)
 {
 	if (!is_kernel_text((long)ip) &&
 	    !is_bpf_text_address((long)ip))
@@ -655,7 +663,13 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
 	if (is_endbr(ip))
 		ip += ENDBR_INSN_SIZE;
 
-	return __bpf_arch_text_poke(ip, t, old_addr, new_addr);
+	return ___bpf_arch_text_poke(ip, old_t, new_t, old_addr, new_addr);
+}
+
+int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
+		       void *old_addr, void *new_addr)
+{
+	return bpf_arch_text_poke_type(ip, t, t, old_addr, new_addr);
 }
 
 #define EMIT_LFENCE()	EMIT3(0x0F, 0xAE, 0xE8)
