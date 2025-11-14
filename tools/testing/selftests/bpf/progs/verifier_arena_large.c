@@ -270,5 +270,29 @@ int big_alloc2(void *ctx)
 		return 9;
 	return 0;
 }
+
+SEC("socket")
+__success __retval(0)
+int big_alloc3(void *ctx)
+{
+#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
+	char __arena *pages;
+	u64 i;
+
+	/* Allocate 2051 pages (more than 1024) at once to test the limit of kmalloc_nolock() */
+	pages = bpf_arena_alloc_pages(&arena, NULL, 2051, NUMA_NO_NODE, 0);
+	if (!pages)
+		return -1;
+
+	bpf_for(i, 0, 2051)
+		        pages[i * PAGE_SIZE] = 123;
+	bpf_for(i, 0, 2051)
+		        if (pages[i * PAGE_SIZE] != 123)
+				return i;
+
+	bpf_arena_free_pages(&arena, pages, 1025);
+#endif
+	return 0;
+}
 #endif
 char _license[] SEC("license") = "GPL";
