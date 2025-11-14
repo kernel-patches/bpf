@@ -866,14 +866,13 @@ int insn_get_modrm_rm_off(struct insn *insn)
 /**
  * insn_get_modrm_reg_off() - Obtain register in reg part of the ModRM byte
  * @insn:	Instruction containing the ModRM byte
- * @regs:	Register values as seen when entering kernel mode
  *
  * Returns:
  *
  * The register indicated by the reg part of the ModRM byte. The
  * register is obtained as an offset from the base of pt_regs.
  */
-int insn_get_modrm_reg_off(struct insn *insn, struct pt_regs *regs)
+int insn_get_modrm_reg_off(struct insn *insn)
 {
 	return get_reg_offset(insn, REG_TYPE_REG);
 }
@@ -892,7 +891,7 @@ unsigned long *insn_get_modrm_reg_ptr(struct insn *insn, struct pt_regs *regs)
 {
 	int offset;
 
-	offset = insn_get_modrm_reg_off(insn, regs);
+	offset = insn_get_modrm_reg_off(insn);
 	if (offset < 0)
 		return NULL;
 	return (void *)regs + offset;
