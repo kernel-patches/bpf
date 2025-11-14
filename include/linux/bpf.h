@@ -1202,6 +1202,12 @@ struct btf_func_model {
  */
 #define BPF_TRAMP_F_INDIRECT		BIT(8)
 
+/*
+ * Indicate that the trampoline is using "jmp" instead of "call". This flag
+ * is only used in the !ftrace_managed case.
+ */
+#define BPF_TRAMP_F_JMPED		BIT(9)
+
 /* Each call __bpf_prog_enter + call bpf_func + call __bpf_prog_exit is ~50
  * bytes on x86.
  */

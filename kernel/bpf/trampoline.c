@@ -175,15 +175,37 @@ out:
 	return tr;
 }
 
+static int bpf_text_poke(struct bpf_trampoline *tr, void *old_addr,
+			 void *new_addr)
+{
+	enum bpf_text_poke_type new_t = BPF_MOD_CALL, old_t = BPF_MOD_CALL;
+	void *ip = tr->func.addr;
+	int ret;
+
+	if (bpf_trampoline_need_jmp(tr->flags))
+		new_t = BPF_MOD_JUMP;
+	if (tr->flags & BPF_TRAMP_F_JMPED)
+		old_t = BPF_MOD_JUMP;
+
+	ret = bpf_arch_text_poke_type(ip, old_t, new_t, old_addr, new_addr);
+	if (!ret) {
+		if (new_t == BPF_MOD_JUMP)
+			tr->flags |= BPF_TRAMP_F_JMPED;
+		else
+			tr->flags &= ~BPF_TRAMP_F_JMPED;
+	}
+
+	return ret;
+}
+
 static int unregister_fentry(struct bpf_trampoline *tr, void *old_addr)
 {
-	void *ip = tr->func.addr;
 	int ret;
 
 	if (tr->func.ftrace_managed)
 		ret = unregister_ftrace_direct(tr->fops, (long)old_addr, false);
 	else
-		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, NULL);
+		ret = bpf_text_poke(tr, old_addr, NULL);
 
 	return ret;
 }
@@ -191,7 +213,6 @@ static int unregister_fentry(struct bpf_trampoline *tr, void *old_addr)
 static int modify_fentry(struct bpf_trampoline *tr, void *old_addr, void *new_addr,
 			 bool lock_direct_mutex)
 {
-	void *ip = tr->func.addr;
 	int ret;
 
 	if (tr->func.ftrace_managed) {
@@ -200,7 +221,7 @@ static int modify_fentry(struct bpf_trampoline *tr, void *old_addr, void *new_ad
 		else
 			ret = modify_ftrace_direct_nolock(tr->fops, (long)new_addr);
 	} else {
-		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, new_addr);
+		ret = bpf_text_poke(tr, old_addr, new_addr);
 	}
 	return ret;
 }
@@ -223,7 +244,7 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 		ftrace_set_filter_ip(tr->fops, (unsigned long)ip, 0, 1);
 		ret = register_ftrace_direct(tr->fops, (long)new_addr);
 	} else {
-		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, NULL, new_addr);
+		ret = bpf_text_poke(tr, NULL, new_addr);
 	}
 
 	return ret;
@@ -415,7 +436,8 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mut
 	}
 
 	/* clear all bits except SHARE_IPMODIFY and TAIL_CALL_CTX */
-	tr->flags &= (BPF_TRAMP_F_SHARE_IPMODIFY | BPF_TRAMP_F_TAIL_CALL_CTX);
+	tr->flags &= (BPF_TRAMP_F_SHARE_IPMODIFY | BPF_TRAMP_F_TAIL_CALL_CTX |
+		      BPF_TRAMP_F_JMPED);
 
 	if (tlinks[BPF_TRAMP_FEXIT].nr_links ||
 	    tlinks[BPF_TRAMP_MODIFY_RETURN].nr_links) {
@@ -432,9 +454,17 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mut
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
 again:
-	if ((tr->flags & BPF_TRAMP_F_SHARE_IPMODIFY) &&
-	    (tr->flags & BPF_TRAMP_F_CALL_ORIG))
-		tr->flags |= BPF_TRAMP_F_ORIG_STACK;
+	if (tr->flags & BPF_TRAMP_F_CALL_ORIG) {
+		if (tr->flags & BPF_TRAMP_F_SHARE_IPMODIFY) {
+			tr->flags |= BPF_TRAMP_F_ORIG_STACK;
+		} else if (IS_ENABLED(CONFIG_DYNAMIC_FTRACE_WITH_JMP)) {
+			/* Use "jmp" instead of "call" for the trampoline
+			 * in the origin call case, and we don't need to
+			 * skip the frame.
+			 */
+			tr->flags &= ~BPF_TRAMP_F_SKIP_FRAME;
+		}
+	}
 #endif
 
 	size = arch_bpf_trampoline_size(&tr->func.model, tr->flags,
@@ -464,6 +494,11 @@ again:
 	err = arch_protect_bpf_trampoline(im->image, im->size);
 	if (err)
 		goto out_free;
+
+	if (bpf_trampoline_need_jmp(tr->flags))
+		tr->fops->flags |= FTRACE_OPS_FL_JMP;
+	else
+		tr->fops->flags &= ~FTRACE_OPS_FL_JMP;
 
 	WARN_ON(tr->cur_image && total == 0);
 	if (tr->cur_image)
