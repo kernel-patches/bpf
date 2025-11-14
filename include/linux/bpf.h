@@ -3712,6 +3712,10 @@ enum bpf_text_poke_type {
 	BPF_MOD_JUMP,
 };
 
+int bpf_arch_text_poke_type(void *ip, enum bpf_text_poke_type old_t,
+			    enum bpf_text_poke_type new_t, void *addr1,
+			    void *addr2);
+
 int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
 		       void *addr1, void *addr2);
 

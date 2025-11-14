@@ -3156,6 +3156,16 @@ int __weak bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
 	return -ENOTSUPP;
 }
 
+int __weak bpf_arch_text_poke_type(void *ip, enum bpf_text_poke_type old_t,
+				   enum bpf_text_poke_type new_t, void *old_addr,
+				   void *new_addr)
+{
+	if (old_t == new_t)
+		return bpf_arch_text_poke(ip, old_t, old_addr, new_addr);
+
+	return -EOPNOTSUPP;
+}
+
 void * __weak bpf_arch_text_copy(void *dst, void *src, size_t len)
 {
 	return ERR_PTR(-ENOTSUPP);
