@@ -23,6 +23,10 @@ enum __sk_action {
 	__SK_NONE,
 };
 
+enum {
+	SK_MSG_F_INGRESS_SELF	= (1ULL << 0)
+};
+
 struct sk_msg_sg {
 	u32				start;
 	u32				curr;
@@ -46,7 +50,11 @@ struct sk_msg {
 	void				*data_end;
 	u32				apply_bytes;
 	u32				cork_bytes;
-	u32				flags;
+	union {
+		u32			flags;
+		/* rx_flags used for rx/skb path */
+		u32			rx_flags;
+	};
 	struct sk_buff			*skb;
 	struct sock			*sk_redir;
 	struct sock			*sk;
@@ -142,7 +150,19 @@ int sk_msg_memcopy_from_iter(struct sock *sk, struct iov_iter *from,
 			     struct sk_msg *msg, u32 bytes);
 int sk_msg_recvmsg(struct sock *sk, struct sk_psock *psock, struct msghdr *msg,
 		   int len, int flags);
+int __sk_msg_recvmsg(struct sock *sk, struct sk_psock *psock, struct msghdr *msg,
+		     int len, int flags, int *from_self_copied);
 bool sk_msg_is_readable(struct sock *sk);
+
+static inline bool sk_msg_check_to_self(struct sk_msg *msg)
+{
+	return msg->rx_flags & SK_MSG_F_INGRESS_SELF;
+}
+
+static inline void sk_msg_set_to_self(struct sk_msg *msg)
+{
+	msg->rx_flags |= SK_MSG_F_INGRESS_SELF;
+}
 
 static inline void sk_msg_check_to_free(struct sk_msg *msg, u32 i, u32 bytes)
 {
