@@ -468,7 +468,7 @@ static long *vc_insn_get_rm(struct es_em_ctxt *ctxt)
 	int offset;
 
 	reg_array = (long *)ctxt->regs;
-	offset    = insn_get_modrm_rm_off(&ctxt->insn, ctxt->regs);
+	offset    = insn_get_modrm_rm_off(&ctxt->insn);
 
 	if (offset < 0)
 		return NULL;

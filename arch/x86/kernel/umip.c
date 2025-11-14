@@ -388,7 +388,7 @@ bool fixup_umip_exception(struct pt_regs *regs)
 	 * register.
 	 */
 	if (X86_MODRM_MOD(insn.modrm.value) == 3) {
-		reg_offset = insn_get_modrm_rm_off(&insn, regs);
+		reg_offset = insn_get_modrm_rm_off(&insn);
 
 		/*
 		 * Negative values are usually errors. In memory addressing,

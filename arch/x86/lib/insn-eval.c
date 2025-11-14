@@ -582,7 +582,7 @@ static int get_reg_offset_16(struct insn *insn, struct pt_regs *regs,
 
 	/* Operand is a register, use the generic function. */
 	if (X86_MODRM_MOD(insn->modrm.value) == 3) {
-		*offs1 = insn_get_modrm_rm_off(insn, regs);
+		*offs1 = insn_get_modrm_rm_off(insn);
 		*offs2 = -EDOM;
 		return 0;
 	}
@@ -850,7 +850,6 @@ int insn_get_code_seg_params(struct pt_regs *regs)
 /**
  * insn_get_modrm_rm_off() - Obtain register in r/m part of the ModRM byte
  * @insn:	Instruction containing the ModRM byte
- * @regs:	Register values as seen when entering kernel mode
  *
  * Returns:
  *
@@ -859,7 +858,7 @@ int insn_get_code_seg_params(struct pt_regs *regs)
  * cases, the returned value can be -EDOM to indicate that the particular value
  * of ModRM does not refer to a register and shall be ignored.
  */
-int insn_get_modrm_rm_off(struct insn *insn, struct pt_regs *regs)
+int insn_get_modrm_rm_off(struct insn *insn)
 {
 	return get_reg_offset(insn, REG_TYPE_RM);
 }

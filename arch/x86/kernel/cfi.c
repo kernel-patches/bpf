@@ -52,7 +52,7 @@ static bool decode_cfi_insn(struct pt_regs *regs, unsigned long *target,
 		return false;
 
 	/* Read the target address from the register. */
-	offset = insn_get_modrm_rm_off(&insn, regs);
+	offset = insn_get_modrm_rm_off(&insn);
 	if (offset < 0)
 		return false;
 
