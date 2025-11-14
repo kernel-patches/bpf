@@ -5829,3 +5829,189 @@ int btf__relocate(struct btf *btf, const struct btf *base_btf)
 		btf->owns_base = false;
 	return libbpf_err(err);
 }
+
+struct btf_permute {
+	struct btf *btf;
+	__u32 *id_map;
+	__u32 offs;
+};
+
+/* Callback function to remap individual type ID references */
+static int btf_permute_remap_type_id(__u32 *type_id, void *ctx)
+{
+	struct btf_permute *p = ctx;
+	__u32 new_type_id = *type_id;
+
+	/* skip references that point into the base BTF */
+	if (new_type_id < p->btf->start_id)
+		return 0;
+
+	/* invalid reference id */
+	if (new_type_id >= btf__type_cnt(p->btf))
+		return -EINVAL;
+
+	new_type_id = p->id_map[new_type_id - p->offs];
+	/* reference a dropped type is not allowed */
+	if (new_type_id == 0)
+		return -EINVAL;
+
+	*type_id = new_type_id;
+	return 0;
+}
+
+int btf__permute(struct btf *btf, __u32 *id_map, __u32 id_map_cnt,
+		 const struct btf_permute_opts *opts)
+{
+	struct btf_permute p;
+	struct btf_ext *btf_ext;
+	void *next_type, *end_type;
+	void *nt, *new_types = NULL;
+	int err = 0, n, i, new_type_len;
+	__u32 *order_map = NULL;
+	__u32 offs, id, new_nr_types = 0;
+
+	if (btf__base_btf(btf)) {
+		/*
+		 * For split BTF, the number of types added on the
+		 * top of base BTF
+		 */
+		n = btf->nr_types;
+		offs = btf->start_id;
+	} else if (id_map[0] != 0) {
+		/* id_map[0] must be 0 for base BTF */
+		err = -EINVAL;
+		goto done;
+	} else {
+		/* include VOID type 0 for base BTF */
+		n = btf__type_cnt(btf);
+		offs = 0;
+	}
+
+	if (!OPTS_VALID(opts, btf_permute_opts) || (id_map_cnt != n))
+		return libbpf_err(-EINVAL);
+
+	/* used to record the storage sequence of types */
+	order_map = calloc(n, sizeof(*id_map));
+	if (!order_map) {
+		err = -ENOMEM;
+		goto done;
+	}
+
+	new_types = calloc(btf->hdr->type_len, 1);
+	if (!new_types) {
+		err = -ENOMEM;
+		goto done;
+	}
+
+	if (btf_ensure_modifiable(btf)) {
+		err = -ENOMEM;
+		goto done;
+	}
+
+	for (i = 0; i < id_map_cnt; i++) {
+		id = id_map[i];
+		/*
+		 * 0: Drop the specified type (exclude base BTF type 0).
+		 * For base BTF, type 0 is always preserved.
+		 */
+		if (id == 0)
+			continue;
+		/* Invalid id  */
+		if (id < btf->start_id || id >= btf__type_cnt(btf)) {
+			err = -EINVAL;
+			goto done;
+		}
+		id -= offs;
+		/* Multiple types cannot be mapped to the same ID */
+		if (order_map[id]) {
+			err = -EINVAL;
+			goto done;
+		}
+		order_map[id] = i + offs;
+		new_nr_types = max(id + 1, new_nr_types);
+	}
+
+	/* Check for missing IDs */
+	for (i = offs ? 0 : 1; i < new_nr_types; i++) {
+		if (order_map[i] == 0) {
+			err = -EINVAL;
+			goto done;
+		}
+	}
+
+	p.btf = btf;
+	p.id_map = id_map;
+	p.offs = offs;
+	nt = new_types;
+	for (i = offs ? 0 : 1; i < new_nr_types; i++) {
+		struct btf_field_iter it;
+		const struct btf_type *t;
+		__u32 *type_id;
+		int type_size;
+
+		id = order_map[i];
+		/* must be a valid type ID */
+		t = btf__type_by_id(btf, id);
+		if (!t) {
+			err = -EINVAL;
+			goto done;
+		}
+		type_size = btf_type_size(t);
+		memcpy(nt, t, type_size);
+
+		/* Fix up referenced IDs for BTF */
+		err = btf_field_iter_init(&it, nt, BTF_FIELD_ITER_IDS);
+		if (err)
+			goto done;
+		while ((type_id = btf_field_iter_next(&it))) {
+			err = btf_permute_remap_type_id(type_id, &p);
+			if (err)
+				goto done;
+		}
+
+		nt += type_size;
+	}
+
+	/* Fix up referenced IDs for btf_ext */
+	btf_ext = OPTS_GET(opts, btf_ext, NULL);
+	if (btf_ext) {
+		err = btf_ext_visit_type_ids(btf_ext, btf_permute_remap_type_id, &p);
+		if (err)
+			goto done;
+	}
+
+	new_type_len = nt - new_types;
+	next_type = new_types;
+	end_type = next_type + new_type_len;
+	i = 0;
+	while (next_type + sizeof(struct btf_type) <= end_type) {
+		btf->type_offs[i++] = next_type - new_types;
+		next_type += btf_type_size(next_type);
+	}
+
+	/* Resize */
+	if (new_type_len < btf->hdr->type_len) {
+		void *tmp_types;
+
+		tmp_types = realloc(new_types, new_type_len);
+		if (new_type_len && !tmp_types) {
+			err = -ENOMEM;
+			goto done;
+		}
+		new_types = tmp_types;
+		btf->nr_types = new_nr_types - (offs ? 0 : 1);
+		btf->type_offs_cap = btf->nr_types;
+		btf->types_data_cap = new_type_len;
+		btf->hdr->type_len = new_type_len;
+		btf->hdr->str_off = new_type_len;
+		btf->raw_size = btf->hdr->hdr_len + btf->hdr->type_len + btf->hdr->str_len;
+	}
+	free(btf->types_data);
+	btf->types_data = new_types;
+	return 0;
+
+done:
+	free(order_map);
+	free(new_types);
+	return libbpf_err(err);
+}
