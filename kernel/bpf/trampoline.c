@@ -610,6 +610,35 @@ int bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 	return err;
 }
 
+static int __bpf_trampoline_update_prog(struct bpf_tramp_link *link,
+					struct bpf_prog *new_prog,
+					struct bpf_trampoline *tr)
+{
+	return -ENOTSUPP;
+}
+
+int bpf_trampoline_update_prog(struct bpf_tramp_link *link,
+			       struct bpf_prog *new_prog,
+			       struct bpf_trampoline *tr)
+{
+	struct bpf_prog *old_prog;
+	int err;
+
+	mutex_lock(&tr->mutex);
+	err = __bpf_trampoline_update_prog(link, new_prog, tr);
+	if (!err) {
+		/* If a program update was successful, switch the program
+		 * in the link before releasing tr->mutex; otherwise, another
+		 * operation could come along and update the trampoline with
+		 * the link still pointing at the old program.
+		 */
+		old_prog = xchg(&link->link.prog, new_prog);
+		bpf_prog_put(old_prog);
+	}
+	mutex_unlock(&tr->mutex);
+	return err;
+}
+
 static int __bpf_trampoline_unlink_prog(struct bpf_tramp_link *link,
 					struct bpf_trampoline *tr,
 					struct bpf_prog *tgt_prog)

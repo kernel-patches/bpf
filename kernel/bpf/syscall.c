@@ -63,6 +63,8 @@ static DEFINE_IDR(map_idr);
 static DEFINE_SPINLOCK(map_idr_lock);
 static DEFINE_IDR(link_idr);
 static DEFINE_SPINLOCK(link_idr_lock);
+/* Synchronizes access to prog between link update operations. */
+static DEFINE_MUTEX(trace_link_mutex);
 
 int sysctl_unprivileged_bpf_disabled __read_mostly =
 	IS_BUILTIN(CONFIG_BPF_UNPRIV_DEFAULT_OFF) ? 2 : 0;
@@ -3562,11 +3564,77 @@ static int bpf_tracing_link_fill_link_info(const struct bpf_link *link,
 	return 0;
 }
 
+static int bpf_tracing_link_update_prog(struct bpf_link *link,
+					struct bpf_prog *new_prog,
+					struct bpf_prog *old_prog)
+{
+	struct bpf_tracing_link *tr_link =
+		container_of(link, struct bpf_tracing_link, link.link);
+	struct bpf_attach_target_info tgt_info = {0};
+	int err = 0;
+	u32 btf_id;
+
+	mutex_lock(&trace_link_mutex);
+
+	if (old_prog && link->prog != old_prog) {
+		err = -EPERM;
+		goto out;
+	}
+	old_prog = link->prog;
+	if (old_prog->type != new_prog->type ||
+	    old_prog->expected_attach_type != new_prog->expected_attach_type) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	mutex_lock(&new_prog->aux->dst_mutex);
+
+	if (!new_prog->aux->dst_trampoline ||
+	    new_prog->aux->dst_trampoline->key != tr_link->trampoline->key) {
+		bpf_trampoline_unpack_key(tr_link->trampoline->key, NULL,
+					  &btf_id);
+		/* If there is no saved target, or the target associated with
+		 * this link is different from the destination specified at
+		 * load time, we need to check for compatibility.
+		 */
+		err = bpf_check_attach_target(NULL, new_prog, tr_link->tgt_prog,
+					      btf_id, &tgt_info);
+		if (err)
+			goto out_unlock;
+	}
+
+	err = bpf_trampoline_update_prog(&tr_link->link, new_prog,
+					 tr_link->trampoline);
+	if (err)
+		goto out_unlock;
+
+	/* Clear the trampoline, mod, and target prog from new_prog->aux to make
+	 * sure the original attach destination is not kept alive after a
+	 * program is (re-)attached to another target.
+	 */
+	if (new_prog->aux->dst_prog)
+		bpf_prog_put(new_prog->aux->dst_prog);
+	bpf_trampoline_put(new_prog->aux->dst_trampoline);
+	module_put(new_prog->aux->mod);
+
+	new_prog->aux->dst_prog = NULL;
+	new_prog->aux->dst_trampoline = NULL;
+	new_prog->aux->mod = tgt_info.tgt_mod;
+	tgt_info.tgt_mod = NULL; /* Make module_put() below do nothing. */
+out_unlock:
+	mutex_unlock(&new_prog->aux->dst_mutex);
+out:
+	mutex_unlock(&trace_link_mutex);
+	module_put(tgt_info.tgt_mod);
+	return err;
+}
+
 static const struct bpf_link_ops bpf_tracing_link_lops = {
 	.release = bpf_tracing_link_release,
 	.dealloc = bpf_tracing_link_dealloc,
 	.show_fdinfo = bpf_tracing_link_show_fdinfo,
 	.fill_link_info = bpf_tracing_link_fill_link_info,
+	.update_prog = bpf_tracing_link_update_prog,
 };
 
 static int bpf_tracing_prog_attach(struct bpf_prog *prog,
