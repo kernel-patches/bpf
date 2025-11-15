@@ -634,6 +634,10 @@ static bool is_ignored_sec(struct src_sec *sec)
 		if (strcmp(name, BTF_ELF_SEC) == 0 ||
 		    strcmp(name, BTF_EXT_ELF_SEC) == 0)
 			return true;
+
+		/* .jumptables don't need relocations */
+		if (strcmp(name, JUMPTABLES_SEC) == 0)
+			return true;
 	}
 
 	return false;
