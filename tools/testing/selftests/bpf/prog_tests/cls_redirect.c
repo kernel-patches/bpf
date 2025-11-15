@@ -22,79 +22,42 @@
 
 static int duration = 0;
 
-struct addr_port {
-	in_port_t port;
-	union {
-		struct in_addr in_addr;
-		struct in6_addr in6_addr;
-	};
-};
-
 struct tuple {
 	int family;
-	struct addr_port src;
-	struct addr_port dst;
+	struct sockaddr_storage src;
+	struct sockaddr_storage dst;
 };
 
-static bool fill_addr_port(const struct sockaddr *sa, struct addr_port *ap)
-{
-	const struct sockaddr_in6 *in6;
-	const struct sockaddr_in *in;
 
-	switch (sa->sa_family) {
-	case AF_INET:
-		in = (const struct sockaddr_in *)sa;
-		ap->in_addr = in->sin_addr;
-		ap->port = in->sin_port;
-		return true;
-
-	case AF_INET6:
-		in6 = (const struct sockaddr_in6 *)sa;
-		ap->in6_addr = in6->sin6_addr;
-		ap->port = in6->sin6_port;
-		return true;
-
-	default:
-		return false;
-	}
-}
-
-static bool set_up_conn(const struct sockaddr *addr, socklen_t len, int type,
+static bool set_up_conn(const struct sockaddr_storage *addr, socklen_t len, int type,
 			int *server, int *conn, struct tuple *tuple)
 {
 	struct sockaddr_storage ss;
 	socklen_t slen = sizeof(ss);
-	struct sockaddr *sa = (struct sockaddr *)&ss;
 
-	*server = start_server_addr(type, (struct sockaddr_storage *)addr, len, NULL);
+	*server = start_server_addr(type, addr, len, NULL);
 	if (*server < 0)
 		return false;
 
-	if (CHECK_FAIL(getsockname(*server, sa, &slen)))
+	if (CHECK_FAIL(getsockname(*server, (struct sockaddr *)&ss, &slen)))
 		goto close_server;
 
-	*conn = connect_to_addr(type, (struct sockaddr_storage *)sa, slen, NULL);
+	*conn = connect_to_addr(type, &ss, slen, NULL);
 	if (*conn < 0)
 		goto close_server;
 
 	/* We want to simulate packets arriving at conn, so we have to
 	 * swap src and dst.
 	 */
-	slen = sizeof(ss);
-	if (CHECK_FAIL(getsockname(*conn, sa, &slen)))
+	slen = sizeof(tuple->dst);
+	if (CHECK_FAIL(getsockname(*conn, (struct sockaddr *)&tuple->dst, &slen)))
 		goto close_conn;
 
-	if (CHECK_FAIL(!fill_addr_port(sa, &tuple->dst)))
+	slen = sizeof(tuple->src);
+	if (CHECK_FAIL(getpeername(*conn, (struct sockaddr *)&tuple->src, &slen)))
 		goto close_conn;
 
-	slen = sizeof(ss);
-	if (CHECK_FAIL(getpeername(*conn, sa, &slen)))
-		goto close_conn;
-
-	if (CHECK_FAIL(!fill_addr_port(sa, &tuple->src)))
-		goto close_conn;
-
-	tuple->family = ss.ss_family;
+	tuple->family = tuple->dst.ss_family;
 	return true;
 
 close_conn:
@@ -110,17 +73,16 @@ static socklen_t prepare_addr(struct sockaddr_storage *addr, int family)
 {
 	struct sockaddr_in *addr4;
 	struct sockaddr_in6 *addr6;
+	memset(addr, 0, sizeof(*addr));
 
 	switch (family) {
 	case AF_INET:
 		addr4 = (struct sockaddr_in *)addr;
-		memset(addr4, 0, sizeof(*addr4));
 		addr4->sin_family = family;
 		addr4->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 		return sizeof(*addr4);
 	case AF_INET6:
 		addr6 = (struct sockaddr_in6 *)addr;
-		memset(addr6, 0, sizeof(*addr6));
 		addr6->sin6_family = family;
 		addr6->sin6_addr = in6addr_loopback;
 		return sizeof(*addr6);
@@ -244,7 +206,11 @@ static void encap_init(encap_headers_t *encap, uint8_t hop_count, uint8_t proto)
 static size_t build_input(const struct test_cfg *test, void *const buf,
 			  const struct tuple *tuple)
 {
-	in_port_t sport = tuple->src.port;
+	struct sockaddr_in6 *src_in6 = (struct sockaddr_in6 *)&tuple->src;
+	struct sockaddr_in6 *dst_in6 = (struct sockaddr_in6 *)&tuple->dst;
+	struct sockaddr_in *src_in = (struct sockaddr_in *)&tuple->src;
+	struct sockaddr_in *dst_in = (struct sockaddr_in *)&tuple->dst;
+	in_port_t sport, dport;
 	encap_headers_t encap;
 	struct iphdr ip;
 	struct ipv6hdr ipv6;
@@ -253,6 +219,9 @@ static size_t build_input(const struct test_cfg *test, void *const buf,
 	struct in_addr next_hop;
 	uint8_t *p = buf;
 	int proto;
+
+	sport = (tuple->family == AF_INET) ? src_in->sin_port : src_in6->sin6_port;
+	dport = (tuple->family == AF_INET) ? dst_in->sin_port : dst_in6->sin6_port;
 
 	proto = IPPROTO_IPIP;
 	if (tuple->family == AF_INET6)
@@ -277,8 +246,8 @@ static size_t build_input(const struct test_cfg *test, void *const buf,
 			.version = 4,
 			.ttl = IPDEFTTL,
 			.protocol = proto,
-			.saddr = tuple->src.in_addr.s_addr,
-			.daddr = tuple->dst.in_addr.s_addr,
+			.saddr = src_in->sin_addr.s_addr,
+			.daddr = dst_in->sin_addr.s_addr,
 		};
 		p = mempcpy(p, &ip, sizeof(ip));
 		break;
@@ -287,8 +256,8 @@ static size_t build_input(const struct test_cfg *test, void *const buf,
 			.version = 6,
 			.hop_limit = IPDEFTTL,
 			.nexthdr = proto,
-			.saddr = tuple->src.in6_addr,
-			.daddr = tuple->dst.in6_addr,
+			.saddr = src_in6->sin6_addr,
+			.daddr = dst_in6->sin6_addr,
 		};
 		p = mempcpy(p, &ipv6, sizeof(ipv6));
 		break;
@@ -303,18 +272,16 @@ static size_t build_input(const struct test_cfg *test, void *const buf,
 	case TCP:
 		tcp = (struct tcphdr){
 			.source = sport,
-			.dest = tuple->dst.port,
+			.dest = dport,
+			.syn = (test->flags == SYN),
+			.ack = (test->flags == ACK),
 		};
-		if (test->flags == SYN)
-			tcp.syn = true;
-		if (test->flags == ACK)
-			tcp.ack = true;
 		p = mempcpy(p, &tcp, sizeof(tcp));
 		break;
 	case UDP:
 		udp = (struct udphdr){
 			.source = sport,
-			.dest = tuple->dst.port,
+			.dest = dport,
 		};
 		p = mempcpy(p, &udp, sizeof(udp));
 		break;
@@ -339,25 +306,23 @@ static void test_cls_redirect_common(struct bpf_program *prog)
 	LIBBPF_OPTS(bpf_test_run_opts, tattr);
 	int families[] = { AF_INET, AF_INET6 };
 	struct sockaddr_storage ss;
-	struct sockaddr *addr;
 	socklen_t slen;
 	int i, j, err, prog_fd;
 	int servers[__NR_KIND][ARRAY_SIZE(families)] = {};
 	int conns[__NR_KIND][ARRAY_SIZE(families)] = {};
 	struct tuple tuples[__NR_KIND][ARRAY_SIZE(families)];
 
-	addr = (struct sockaddr *)&ss;
 	for (i = 0; i < ARRAY_SIZE(families); i++) {
 		slen = prepare_addr(&ss, families[i]);
 		if (CHECK_FAIL(!slen))
 			goto cleanup;
 
-		if (CHECK_FAIL(!set_up_conn(addr, slen, SOCK_DGRAM,
+		if (CHECK_FAIL(!set_up_conn(&ss, slen, SOCK_DGRAM,
 					    &servers[UDP][i], &conns[UDP][i],
 					    &tuples[UDP][i])))
 			goto cleanup;
 
-		if (CHECK_FAIL(!set_up_conn(addr, slen, SOCK_STREAM,
+		if (CHECK_FAIL(!set_up_conn(&ss, slen, SOCK_STREAM,
 					    &servers[TCP][i], &conns[TCP][i],
 					    &tuples[TCP][i])))
 			goto cleanup;
