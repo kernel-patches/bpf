@@ -545,6 +545,8 @@ static int bpf_freplace_check_tgt_prog(struct bpf_prog *tgt_prog)
 	return 0;
 }
 
+#define BPF_TRAMP_MAX_COOKIES 4
+
 static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 				      struct bpf_trampoline *tr,
 				      struct bpf_prog *tgt_prog)
@@ -552,7 +554,7 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 	enum bpf_tramp_prog_type kind, orig_kind;
 	struct bpf_tramp_link *link_exiting;
 	struct bpf_fsession_link *session_link;
-	int err = 0;
+	int err = 0, cookie_cnt;
 	int cnt = 0, i;
 
 	kind = bpf_attach_type_to_tramp(link->link.prog);
@@ -584,8 +586,15 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 	if (!hlist_unhashed(&link->tramp_hlist))
 		/* prog already linked */
 		return -EBUSY;
-	if (orig_kind == BPF_TRAMP_SESSION)
+	cookie_cnt = tr->cookie_cnt;
+	if (orig_kind == BPF_TRAMP_SESSION) {
+		if (link->link.prog->call_session_cookie) {
+			if (cookie_cnt >= BPF_TRAMP_MAX_COOKIES)
+				return -E2BIG;
+			cookie_cnt++;
+		}
 		kind = BPF_TRAMP_FENTRY;
+	}
 again:
 	hlist_for_each_entry(link_exiting, &tr->progs_hlist[kind], tramp_hlist) {
 		if (link_exiting->link.prog != link->link.prog)
@@ -621,6 +630,8 @@ again:
 			hlist_del_init(&link->tramp_hlist);
 			tr->progs_cnt[kind]--;
 		}
+	} else {
+		tr->cookie_cnt = cookie_cnt;
 	}
 	return err;
 }
