@@ -23,6 +23,17 @@ enum __sk_action {
 	__SK_NONE,
 };
 
+/* The BPF program sets BPF_F_INGRESS on sk_msg to indicate data needs to be
+ * redirected to the ingress queue of a specified socket. Since BPF_F_INGRESS is
+ * defined in UAPI so that we can't extend this enum for our internal flags. We
+ * define some internal flags here while inheriting BPF_F_INGRESS.
+ */
+enum {
+	SK_MSG_F_INGRESS	= BPF_F_INGRESS, /* (1ULL << 0) */
+	/* internal flag */
+	SK_MSG_F_INGRESS_SELF	= (1ULL << 1)
+};
+
 struct sk_msg_sg {
 	u32				start;
 	u32				curr;
@@ -141,7 +152,19 @@ int sk_msg_memcopy_from_iter(struct sock *sk, struct iov_iter *from,
 			     struct sk_msg *msg, u32 bytes);
 int sk_msg_recvmsg(struct sock *sk, struct sk_psock *psock, struct msghdr *msg,
 		   int len, int flags);
+int __sk_msg_recvmsg(struct sock *sk, struct sk_psock *psock, struct msghdr *msg,
+		     int len, int flags, int *from_self_copied);
 bool sk_msg_is_readable(struct sock *sk);
+
+static inline bool sk_msg_is_to_self(struct sk_msg *msg)
+{
+	return msg->flags & SK_MSG_F_INGRESS_SELF;
+}
+
+static inline void sk_msg_set_to_self(struct sk_msg *msg)
+{
+	msg->flags |= SK_MSG_F_INGRESS_SELF;
+}
 
 static inline void sk_msg_check_to_free(struct sk_msg *msg, u32 i, u32 bytes)
 {
@@ -235,7 +258,7 @@ static inline struct page *sk_msg_page(struct sk_msg *msg, int which)
 
 static inline bool sk_msg_to_ingress(const struct sk_msg *msg)
 {
-	return msg->flags & BPF_F_INGRESS;
+	return msg->flags & SK_MSG_F_INGRESS;
 }
 
 static inline void sk_msg_compute_data_pointers(struct sk_msg *msg)
