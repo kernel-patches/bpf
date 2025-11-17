@@ -8,7 +8,8 @@
 #include <linux/filter.h>
 #include <linux/scatterlist.h>
 #include <linux/skbuff.h>
-#include <crypto/skcipher.h>
+#include <crypto/sha2.h>
+#include <crypto/sig.h>
 
 struct bpf_crypto_type_list {
 	const struct bpf_crypto_type *type;
@@ -343,6 +344,122 @@ __bpf_kfunc int bpf_crypto_encrypt(struct bpf_crypto_ctx *ctx,
 	return bpf_crypto_crypt(ctx, src_kern, dst_kern, siv_kern, false);
 }
 
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_SHA256)
+/**
+ * bpf_sha256_hash() - Compute SHA-256 hash using kernel crypto library
+ * @data: bpf_dynptr to the input data to hash. Must be a trusted pointer.
+ * @out: bpf_dynptr to the output buffer (must be at least 32 bytes). Must be a trusted pointer.
+ *
+ * Computes SHA-256 hash of the input data. Uses bpf_dynptr to ensure safe memory access
+ * without risk of page faults.
+ */
+__bpf_kfunc int bpf_sha256_hash(const struct bpf_dynptr *data, const struct bpf_dynptr *out)
+{
+	const struct bpf_dynptr_kern *data_kern = (struct bpf_dynptr_kern *)data;
+	const struct bpf_dynptr_kern *out_kern = (struct bpf_dynptr_kern *)out;
+	u32 data_len, out_len;
+	const u8 *data_ptr;
+	u8 *out_ptr;
+
+	if (__bpf_dynptr_is_rdonly(out_kern))
+		return -EINVAL;
+
+	data_len = __bpf_dynptr_size(data_kern);
+	out_len = __bpf_dynptr_size(out_kern);
+
+	if (data_len == 0 || out_len < 32)
+		return -EINVAL;
+
+	data_ptr = __bpf_dynptr_data(data_kern, data_len);
+	if (!data_ptr)
+		return -EINVAL;
+
+	out_ptr = __bpf_dynptr_data_rw(out_kern, out_len);
+	if (!out_ptr)
+		return -EINVAL;
+
+	sha256(data_ptr, data_len, out_ptr);
+
+	return 0;
+}
+
+/**
+ * bpf_sha384_hash() - Compute SHA-384 hash using kernel crypto library
+ * @data: bpf_dynptr to the input data to hash. Must be a trusted pointer.
+ * @out: bpf_dynptr to the output buffer (must be at least 48 bytes). Must be a trusted pointer.
+ *
+ * Computes SHA-384 hash of the input data. Uses bpf_dynptr to ensure safe memory access
+ * without risk of page faults.
+ */
+__bpf_kfunc int bpf_sha384_hash(const struct bpf_dynptr *data, const struct bpf_dynptr *out)
+{
+	const struct bpf_dynptr_kern *data_kern = (struct bpf_dynptr_kern *)data;
+	const struct bpf_dynptr_kern *out_kern = (struct bpf_dynptr_kern *)out;
+	u32 data_len, out_len;
+	const u8 *data_ptr;
+	u8 *out_ptr;
+
+	if (__bpf_dynptr_is_rdonly(out_kern))
+		return -EINVAL;
+
+	data_len = __bpf_dynptr_size(data_kern);
+	out_len = __bpf_dynptr_size(out_kern);
+
+	if (data_len == 0 || out_len < 48)
+		return -EINVAL;
+
+	data_ptr = __bpf_dynptr_data(data_kern, data_len);
+	if (!data_ptr)
+		return -EINVAL;
+
+	out_ptr = __bpf_dynptr_data_rw(out_kern, out_len);
+	if (!out_ptr)
+		return -EINVAL;
+
+	sha384(data_ptr, data_len, out_ptr);
+
+	return 0;
+}
+
+/**
+ * bpf_sha512_hash() - Compute SHA-512 hash using kernel crypto library
+ * @data: bpf_dynptr to the input data to hash. Must be a trusted pointer.
+ * @out: bpf_dynptr to the output buffer (must be at least 64 bytes). Must be a trusted pointer.
+ *
+ * Computes SHA-512 hash of the input data. Uses bpf_dynptr to ensure safe memory access
+ * without risk of page faults.
+ */
+__bpf_kfunc int bpf_sha512_hash(const struct bpf_dynptr *data, const struct bpf_dynptr *out)
+{
+	const struct bpf_dynptr_kern *data_kern = (struct bpf_dynptr_kern *)data;
+	const struct bpf_dynptr_kern *out_kern = (struct bpf_dynptr_kern *)out;
+	u32 data_len, out_len;
+	const u8 *data_ptr;
+	u8 *out_ptr;
+
+	if (__bpf_dynptr_is_rdonly(out_kern))
+		return -EINVAL;
+
+	data_len = __bpf_dynptr_size(data_kern);
+	out_len = __bpf_dynptr_size(out_kern);
+
+	if (data_len == 0 || out_len < 64)
+		return -EINVAL;
+
+	data_ptr = __bpf_dynptr_data(data_kern, data_len);
+	if (!data_ptr)
+		return -EINVAL;
+
+	out_ptr = __bpf_dynptr_data_rw(out_kern, out_len);
+	if (!out_ptr)
+		return -EINVAL;
+
+	sha512(data_ptr, data_len, out_ptr);
+
+	return 0;
+}
+#endif /* CONFIG_CRYPTO_LIB_SHA256 */
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(crypt_init_kfunc_btf_ids)
@@ -359,6 +476,11 @@ static const struct btf_kfunc_id_set crypt_init_kfunc_set = {
 BTF_KFUNCS_START(crypt_kfunc_btf_ids)
 BTF_ID_FLAGS(func, bpf_crypto_decrypt, KF_RCU)
 BTF_ID_FLAGS(func, bpf_crypto_encrypt, KF_RCU)
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_SHA256)
+BTF_ID_FLAGS(func, bpf_sha256_hash, 0)
+BTF_ID_FLAGS(func, bpf_sha384_hash, 0)
+BTF_ID_FLAGS(func, bpf_sha512_hash, 0)
+#endif
 BTF_KFUNCS_END(crypt_kfunc_btf_ids)
 
 static const struct btf_kfunc_id_set crypt_kfunc_set = {
@@ -383,6 +505,7 @@ static int __init crypto_kfunc_init(void)
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &crypt_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_ACT, &crypt_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &crypt_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &crypt_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
 					       &crypt_init_kfunc_set);
 	return  ret ?: register_btf_id_dtor_kfuncs(bpf_crypto_dtors,
