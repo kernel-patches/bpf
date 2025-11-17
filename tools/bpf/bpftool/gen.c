@@ -148,7 +148,8 @@ static int codegen_datasec_def(struct bpf_object *obj,
 			       struct btf *btf,
 			       struct btf_dump *d,
 			       const struct btf_type *sec,
-			       const char *obj_name)
+			       const char *obj_name,
+			       int var_off)
 {
 	const char *sec_name = btf__name_by_offset(btf, sec->name_off);
 	const struct btf_var_secinfo *sec_var = btf_var_secinfos(sec);
@@ -163,6 +164,17 @@ static int codegen_datasec_def(struct bpf_object *obj,
 		strip_mods = true;
 
 	printf("	struct %s__%s {\n", obj_name, sec_ident);
+
+	/*
+	 * Arena variables may be placed in an offset within the section.
+	 * Represent this in the skeleton using a padding struct.
+	 */
+	if (var_off > 0) {
+		printf("\t\tchar __pad%d[%d];\n",
+			pad_cnt, var_off);
+		pad_cnt++;
+	}
+
 	for (i = 0; i < vlen; i++, sec_var++) {
 		const struct btf_type *var = btf__type_by_id(btf, sec_var->type);
 		const char *var_name = btf__name_by_offset(btf, var->name_off);
@@ -279,6 +291,7 @@ static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
 	struct bpf_map *map;
 	const struct btf_type *sec;
 	char map_ident[256];
+	int var_off;
 	int err = 0;
 
 	d = btf_dump__new(btf, codegen_btf_dump_printf, NULL, NULL);
@@ -303,7 +316,13 @@ static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
 			printf("	struct %s__%s {\n", obj_name, map_ident);
 			printf("	} *%s;\n", map_ident);
 		} else {
-			err = codegen_datasec_def(obj, btf, d, sec, obj_name);
+			var_off = bpf_map__data_offset(map);
+			if (var_off < 0)  {
+				p_err("bpf_map__data_offset called on unmapped map\n");
+				err = var_off;
+				goto out;
+			}
+			err = codegen_datasec_def(obj, btf, d, sec, obj_name, var_off);
 			if (err)
 				goto out;
 		}
