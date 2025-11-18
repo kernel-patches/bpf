@@ -367,6 +367,19 @@ int BPF_PROG(task_kfunc_acquire_trusted_walked, struct task_struct *task, u64 cl
 	return 0;
 }
 
+SEC("lsm.s/task_alloc")
+int BPF_PROG(test_get_task_cmdline, struct task_struct *task)
+{
+	char buf[64];
+	int ret;
+
+	ret = bpf_get_task_cmdline(task, buf, sizeof(buf));
+	if (ret < 0)
+		err = 1;
+
+	return 0;
+}
+
 SEC("syscall")
 int test_task_from_vpid_current(const void *ctx)
 {

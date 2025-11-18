@@ -156,6 +156,10 @@ static const char * const vpid_success_tests[] = {
 	"test_task_from_vpid_invalid",
 };
 
+static const char * const cmdline_success_tests[] = {
+	"test_get_task_cmdline",
+};
+
 void test_task_kfunc(void)
 {
 	int i;
@@ -172,6 +176,13 @@ void test_task_kfunc(void)
 			continue;
 
 		run_vpid_success_test(vpid_success_tests[i]);
+	}
+
+	for (i = 0; i < ARRAY_SIZE(cmdline_success_tests); i++) {
+		if (!test__start_subtest(cmdline_success_tests[i]))
+			continue;
+
+		run_success_test(cmdline_success_tests[i]);
 	}
 
 	RUN_TESTS(task_kfunc_failure);
