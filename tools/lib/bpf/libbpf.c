@@ -757,6 +757,7 @@ struct bpf_object {
 	int arena_map_idx;
 	void *arena_data;
 	size_t arena_data_sz;
+	__u32 arena_data_off;
 
 	void *jumptables_data;
 	size_t jumptables_data_sz;
@@ -2991,10 +2992,14 @@ static int init_arena_map_data(struct bpf_object *obj, struct bpf_map *map,
 			       void *data, size_t data_sz)
 {
 	const long page_sz = sysconf(_SC_PAGE_SIZE);
+	const size_t data_alloc_sz = roundup(data_sz, page_sz);
+	/* default offset into the arena, may be resized */
+	const long max_off_pages = 16;
 	size_t mmap_sz;
+	long off_pages;
 
 	mmap_sz = bpf_map_mmap_sz(map);
-	if (roundup(data_sz, page_sz) > mmap_sz) {
+	if (data_alloc_sz > mmap_sz) {
 		pr_warn("elf: sec '%s': declared ARENA map size (%zu) is too small to hold global __arena variables of size %zu\n",
 			sec_name, mmap_sz, data_sz);
 		return -E2BIG;
@@ -3005,6 +3010,17 @@ static int init_arena_map_data(struct bpf_object *obj, struct bpf_map *map,
 		return -ENOMEM;
 	memcpy(obj->arena_data, data, data_sz);
 	obj->arena_data_sz = data_sz;
+
+	/*
+	 * find the largest offset for global arena variables
+	 * where they still fit in the arena
+	 */
+	for (off_pages = max_off_pages; off_pages > 0; off_pages >>= 1) {
+		if (off_pages * page_sz + data_alloc_sz <= mmap_sz)
+			break;
+	}
+
+	obj->arena_data_off = off_pages * page_sz;
 
 	/* make bpf_map__init_value() work for ARENA maps */
 	map->mmaped = obj->arena_data;
@@ -4663,7 +4679,7 @@ static int bpf_program__record_reloc(struct bpf_program *prog,
 		reloc_desc->type = RELO_DATA;
 		reloc_desc->insn_idx = insn_idx;
 		reloc_desc->map_idx = obj->arena_map_idx;
-		reloc_desc->sym_off = sym->st_value;
+		reloc_desc->sym_off = sym->st_value + obj->arena_data_off;
 
 		map = &obj->maps[obj->arena_map_idx];
 		pr_debug("prog '%s': found arena map %d (%s, sec %d, off %zu) for insn %u\n",
@@ -5624,7 +5640,8 @@ retry:
 					return err;
 				}
 				if (obj->arena_data) {
-					memcpy(map->mmaped, obj->arena_data, obj->arena_data_sz);
+					memcpy(map->mmaped + obj->arena_data_off, obj->arena_data,
+						obj->arena_data_sz);
 					zfree(&obj->arena_data);
 				}
 			}
@@ -10557,8 +10574,11 @@ int bpf_map__data_offset(const struct bpf_map *map)
 	if (!map->mmaped)
 		return -EINVAL;
 
-	/* No offsetting for now. */
-	return 0;
+	/* Only arenas have offsetting. */
+	if (map->def.type != BPF_MAP_TYPE_ARENA)
+		return 0;
+
+	return map->obj->arena_data_off;
 }
 
 

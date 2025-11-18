@@ -10,6 +10,7 @@
 #include "bpf_arena_common.h"
 
 #define ARENA_SIZE (1ull << 32)
+#define GLOBAL_PGOFF (16)
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARENA);
@@ -31,8 +32,7 @@ int big_alloc1(void *ctx)
 	if (!page1)
 		return 1;
 
-	/* Account for global arena data. */
-	if ((u64)page1 != base + PAGE_SIZE)
+	if ((u64)page1 != base)
 		return 15;
 
 	*page1 = 1;
@@ -215,6 +215,16 @@ int big_alloc2(void *ctx)
 {
 	__u8 __arena *pg;
 	int i, err;
+
+	/*
+	 * The global data is placed in a page with global offset 16.
+	 * This test is about page allocation contiguity, so avoid
+	 * accounting for the stray allocation by also allocating
+	 * all pages before it. We never use the page range, so leak it.
+	 */
+	pg = bpf_arena_alloc_pages(&arena, NULL, GLOBAL_PGOFF, NUMA_NO_NODE, 0);
+	if (!pg)
+		return 10;
 
 	base = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
 	if (!base)
