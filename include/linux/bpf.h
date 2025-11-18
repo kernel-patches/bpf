@@ -1215,6 +1215,8 @@ enum {
 
 struct bpf_tramp_links {
 	struct bpf_tramp_link *links[BPF_MAX_TRAMP_LINKS];
+	struct bpf_tramp_link *update_link;
+	struct bpf_prog *update_prog;
 	int nr_links;
 };
 
@@ -1245,6 +1247,7 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image, void *i
 				const struct btf_func_model *m, u32 flags,
 				struct bpf_tramp_links *tlinks,
 				void *func_addr);
+bool bpf_trampoline_supports_update_prog(void);
 void *arch_alloc_bpf_trampoline(unsigned int size);
 void arch_free_bpf_trampoline(void *image, unsigned int size);
 int __must_check arch_protect_bpf_trampoline(void *image, unsigned int size);
@@ -1839,6 +1842,13 @@ struct bpf_tramp_link {
 	struct hlist_node tramp_hlist;
 	u64 cookie;
 };
+
+static inline struct bpf_prog *
+bpf_tramp_links_prog(struct bpf_tramp_links *tl, int i)
+{
+	return tl->links[i] == tl->update_link ? tl->update_prog :
+						 tl->links[i]->link.prog;
+}
 
 struct bpf_shim_tramp_link {
 	struct bpf_tramp_link link;
