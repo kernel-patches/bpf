@@ -2688,6 +2688,27 @@ __bpf_kfunc struct task_struct *bpf_task_from_pid(s32 pid)
 	return p;
 }
 
+/*
+ * bpf_get_task_cmdline - Get the cmdline to a buffer
+ *
+ * @task: The task whose cmdline to get.
+ * @buffer: The buffer to save cmdline info.
+ * @len: The length of the buffer.
+ *
+ * Return: the size of the cmdline field copied. Note that the copy does
+ * not guarantee an ending NULL byte. A negative error code on failure.
+ */
+__bpf_kfunc int bpf_get_task_cmdline(struct task_struct *task, char *buffer, size_t len)
+{
+	int ret;
+
+	ret = get_cmdline(task, buffer, len);
+	if (ret < 0)
+		memset(buffer, 0, len);
+
+	return ret;
+}
+
 /**
  * bpf_task_from_vpid - Find a struct task_struct from its vpid by looking it up
  * in the pid namespace of the current task. If a task is returned, it must
@@ -4428,6 +4449,7 @@ BTF_ID_FLAGS(func, bpf_task_get_cgroup1, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_from_vpid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_throw)
+BTF_ID_FLAGS(func, bpf_get_task_cmdline, KF_SLEEPABLE | KF_TRUSTED_ARGS)
 #ifdef CONFIG_BPF_EVENTS
 BTF_ID_FLAGS(func, bpf_send_signal_task, KF_TRUSTED_ARGS)
 #endif
