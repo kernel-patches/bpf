@@ -2508,20 +2508,19 @@ static void load_imm64(struct bpf_jit *jit, int dst_reg, u64 val)
 
 static int invoke_bpf_prog(struct bpf_tramp_jit *tjit,
 			   const struct btf_func_model *m,
-			   struct bpf_tramp_link *tlink, bool save_ret)
+			   struct bpf_prog *p, u64 cookie, bool save_ret)
 {
 	struct bpf_jit *jit = &tjit->common;
 	int cookie_off = tjit->run_ctx_off +
 			 offsetof(struct bpf_tramp_run_ctx, bpf_cookie);
-	struct bpf_prog *p = tlink->link.prog;
 	int patch;
 
 	/*
-	 * run_ctx.cookie = tlink->cookie;
+	 * run_ctx.cookie = cookie;
 	 */
 
-	/* %r0 = tlink->cookie */
-	load_imm64(jit, REG_W0, tlink->cookie);
+	/* %r0 = cookie */
+	load_imm64(jit, REG_W0, cookie);
 	/* stg %r0,cookie_off(%r15) */
 	EMIT6_DISP_LH(0xe3000000, 0x0024, REG_W0, REG_0, REG_15, cookie_off);
 
@@ -2768,7 +2767,8 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	}
 
 	for (i = 0; i < fentry->nr_links; i++)
-		if (invoke_bpf_prog(tjit, m, fentry->links[i],
+		if (invoke_bpf_prog(tjit, m, bpf_tramp_links_prog(fentry, i),
+				    fentry->links[i]->cookie,
 				    flags & BPF_TRAMP_F_RET_FENTRY_RET))
 			return -EINVAL;
 
@@ -2782,7 +2782,9 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 		       0xf000 | tjit->retval_off);
 
 		for (i = 0; i < fmod_ret->nr_links; i++) {
-			if (invoke_bpf_prog(tjit, m, fmod_ret->links[i], true))
+			if (invoke_bpf_prog(tjit, m,
+					    bpf_tramp_links_prog(fmod_ret, i),
+					    fmod_ret->links[i]->cookie, true))
 				return -EINVAL;
 
 			/*
@@ -2850,7 +2852,8 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	/* do_fexit: */
 	tjit->do_fexit = jit->prg;
 	for (i = 0; i < fexit->nr_links; i++)
-		if (invoke_bpf_prog(tjit, m, fexit->links[i], false))
+		if (invoke_bpf_prog(tjit, m, bpf_tramp_links_prog(fexit, i),
+				    fexit->links[i]->cookie, false))
 			return -EINVAL;
 
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
@@ -2944,6 +2947,11 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image,
 					    tlinks, func_addr);
 
 	return ret < 0 ? ret : tjit.common.prg;
+}
+
+bool bpf_trampoline_supports_update_prog(void)
+{
+	return true;
 }
 
 bool bpf_jit_supports_subprog_tailcalls(void)
