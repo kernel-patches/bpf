@@ -10552,6 +10552,16 @@ const char *bpf_map__name(const struct bpf_map *map)
 	return map->name;
 }
 
+int bpf_map__data_offset(const struct bpf_map *map)
+{
+	if (!map->mmaped)
+		return -EINVAL;
+
+	/* No offsetting for now. */
+	return 0;
+}
+
+
 enum bpf_map_type bpf_map__type(const struct bpf_map *map)
 {
 	return map->def.type;

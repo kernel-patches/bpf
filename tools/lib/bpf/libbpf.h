@@ -1314,6 +1314,15 @@ LIBBPF_API int bpf_map__set_exclusive_program(struct bpf_map *map, struct bpf_pr
  */
 LIBBPF_API struct bpf_program *bpf_map__exclusive_program(struct bpf_map *map);
 
+/*
+ * @brief **bpf_map__data_offset** returns the offset of the map's data
+ * within the address mapping.
+ * @param BPF map whose variable offset we are looking into.
+ * @return the offset >= 0 of the map's contents within its mapping; negative
+ * error code, otherwise.
+ */
+LIBBPF_API int bpf_map__data_offset(const struct bpf_map *map);
+
 struct bpf_xdp_set_link_opts {
 	size_t sz;
 	int old_fd;
