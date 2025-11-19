@@ -2346,12 +2346,12 @@ static void __update_reg32_bounds(struct bpf_reg_state *reg)
 	struct tnum var32_off = tnum_subreg(reg->var_off);
 
 	/* min signed is max(sign bit) | min(other bits) */
-	reg->s32_min_value = max_t(s32, reg->s32_min_value,
-			var32_off.value | (var32_off.mask & S32_MIN));
+	reg->s32_min_value = max(reg->s32_min_value,
+			(s32)(var32_off.value | (var32_off.mask & S32_MIN)));
 	/* max signed is min(sign bit) | max(other bits) */
-	reg->s32_max_value = min_t(s32, reg->s32_max_value,
-			var32_off.value | (var32_off.mask & S32_MAX));
-	reg->u32_min_value = max_t(u32, reg->u32_min_value, (u32)var32_off.value);
+	reg->s32_max_value = min(reg->s32_max_value,
+			(s32)(var32_off.value | (var32_off.mask & S32_MAX)));
+	reg->u32_min_value = max(reg->u32_min_value, (u32)var32_off.value);
 	reg->u32_max_value = min(reg->u32_max_value,
 				 (u32)(var32_off.value | var32_off.mask));
 }
@@ -2359,11 +2359,11 @@ static void __update_reg32_bounds(struct bpf_reg_state *reg)
 static void __update_reg64_bounds(struct bpf_reg_state *reg)
 {
 	/* min signed is max(sign bit) | min(other bits) */
-	reg->smin_value = max_t(s64, reg->smin_value,
-				reg->var_off.value | (reg->var_off.mask & S64_MIN));
+	reg->smin_value = max(reg->smin_value,
+				(s64)(reg->var_off.value | (reg->var_off.mask & S64_MIN)));
 	/* max signed is min(sign bit) | max(other bits) */
-	reg->smax_value = min_t(s64, reg->smax_value,
-				reg->var_off.value | (reg->var_off.mask & S64_MAX));
+	reg->smax_value = min(reg->smax_value,
+				(s64)(reg->var_off.value | (reg->var_off.mask & S64_MAX)));
 	reg->umin_value = max(reg->umin_value, reg->var_off.value);
 	reg->umax_value = min(reg->umax_value,
 			      reg->var_off.value | reg->var_off.mask);
@@ -6185,15 +6185,8 @@ static int check_packet_access(struct bpf_verifier_env *env, u32 regno, int off,
 		return err;
 	}
 
-	/* __check_mem_access has made sure "off + size - 1" is within u16.
-	 * reg->umax_value can't be bigger than MAX_PACKET_OFF which is 0xffff,
-	 * otherwise find_good_pkt_pointers would have refused to set range info
-	 * that __check_mem_access would have rejected this pkt access.
-	 * Therefore, "off + reg->umax_value + size - 1" won't overflow u32.
-	 */
-	env->prog->aux->max_pkt_offset =
-		max_t(u32, env->prog->aux->max_pkt_offset,
-		      off + reg->umax_value + size - 1);
+	env->prog->aux->max_pkt_offset = max(env->prog->aux->max_pkt_offset,
+					     off + reg->umax_value + size - 1);
 
 	return err;
 }
