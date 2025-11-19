@@ -1023,9 +1023,8 @@ u32 bpf_flow_dissect(struct bpf_prog *prog, struct bpf_flow_dissector *ctx,
 
 	result = bpf_prog_run_pin_on_cpu(prog, ctx);
 
-	flow_keys->nhoff = clamp_t(u16, flow_keys->nhoff, nhoff, hlen);
-	flow_keys->thoff = clamp_t(u16, flow_keys->thoff,
-				   flow_keys->nhoff, hlen);
+	flow_keys->nhoff = clamp(flow_keys->nhoff, nhoff, hlen);
+	flow_keys->thoff = clamp(flow_keys->thoff, flow_keys->nhoff, hlen);
 
 	return result;
 }
@@ -1687,7 +1686,7 @@ out_good:
 	ret = true;
 
 out:
-	key_control->thoff = min_t(u16, nhoff, skb ? skb->len : hlen);
+	key_control->thoff = umin(nhoff, skb ? skb->len : hlen);
 	key_basic->n_proto = proto;
 	key_basic->ip_proto = ip_proto;
 
