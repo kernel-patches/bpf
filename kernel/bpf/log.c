@@ -79,7 +79,7 @@ void bpf_verifier_vlog(struct bpf_verifier_log *log, const char *fmt,
 		/* check if we have at least something to put into user buf */
 		new_n = 0;
 		if (log->end_pos < log->len_total) {
-			new_n = min_t(u32, log->len_total - log->end_pos, n);
+			new_n = min(log->len_total - log->end_pos, n);
 			log->kbuf[new_n - 1] = '\0';
 		}
 

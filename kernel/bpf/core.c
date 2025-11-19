@@ -1081,7 +1081,7 @@ bpf_jit_binary_alloc(unsigned int proglen, u8 **image_ptr,
 	bpf_fill_ill_insns(hdr, size);
 
 	hdr->size = size;
-	hole = min_t(unsigned int, size - (proglen + sizeof(*hdr)),
+	hole = min(size - (proglen + sizeof(*hdr)),
 		     PAGE_SIZE - sizeof(*hdr));
 	start = get_random_u32_below(hole) & ~(alignment - 1);
 
@@ -1142,7 +1142,7 @@ bpf_jit_binary_pack_alloc(unsigned int proglen, u8 **image_ptr,
 	bpf_fill_ill_insns(*rw_header, size);
 	(*rw_header)->size = size;
 
-	hole = min_t(unsigned int, size - (proglen + sizeof(*ro_header)),
+	hole = min(size - (proglen + sizeof(*ro_header)),
 		     BPF_PROG_CHUNK_SIZE - sizeof(*ro_header));
 	start = get_random_u32_below(hole) & ~(alignment - 1);
 
