@@ -1515,7 +1515,7 @@ BPF_CALL_4(bpf_read_branch_records, struct bpf_perf_event_data_kern *, ctx,
 	if (!buf || (size % br_entry_size != 0))
 		return -EINVAL;
 
-	to_copy = min_t(u32, br_stack->nr * br_entry_size, size);
+	to_copy = min(br_stack->nr * br_entry_size, size);
 	memcpy(buf, br_stack->entries, to_copy);
 
 	return to_copy;
