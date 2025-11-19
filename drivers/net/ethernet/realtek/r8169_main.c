@@ -4238,8 +4238,7 @@ static unsigned int rtl8125_quirk_udp_padto(struct rtl8169_private *tp,
 		}
 
 		if (trans_data_len < sizeof(struct udphdr))
-			padto = max_t(unsigned int, padto,
-				      len + sizeof(struct udphdr) - trans_data_len);
+			padto = max(padto, len + sizeof(struct udphdr) - trans_data_len);
 	}
 
 	return padto;
