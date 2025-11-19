@@ -710,7 +710,7 @@ static unsigned char update_suffix(struct key_vector *tn)
 	 * tn->pos + tn->bits, the second highest node will have a suffix
 	 * length at most of tn->pos + tn->bits - 1
 	 */
-	slen_max = min_t(unsigned char, tn->pos + tn->bits - 1, tn->slen);
+	slen_max = min(tn->pos + tn->bits - 1, tn->slen);
 
 	/* search though the list of children looking for nodes that might
 	 * have a suffix greater than the one we currently have.  This is

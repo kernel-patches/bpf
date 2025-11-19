@@ -985,8 +985,7 @@ static int netdev_rx_queue_set_rps_mask(struct netdev_rx_queue *queue,
 	struct rps_map *old_map, *map;
 	int cpu, i;
 
-	map = kzalloc(max_t(unsigned int,
-			    RPS_MAP_SIZE(cpumask_weight(mask)), L1_CACHE_BYTES),
+	map = kzalloc(max(RPS_MAP_SIZE(cpumask_weight(mask)), L1_CACHE_BYTES),
 		      GFP_KERNEL);
 	if (!map)
 		return -ENOMEM;

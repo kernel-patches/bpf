@@ -2448,7 +2448,7 @@ static int unix_stream_sendmsg(struct socket *sock, struct msghdr *msg,
 			/* allow fallback to order-0 allocations */
 			size = min_t(int, size, SKB_MAX_HEAD(0) + UNIX_SKB_FRAGS_SZ);
 
-			data_len = max_t(int, 0, size - SKB_MAX_HEAD(0));
+			data_len = max(0, size - (int)SKB_MAX_HEAD(0));
 
 			data_len = min_t(size_t, size, PAGE_ALIGN(data_len));
 
@@ -3054,7 +3054,7 @@ unlock:
 			sunaddr = NULL;
 		}
 
-		chunk = min_t(unsigned int, unix_skb_len(skb) - skip, size);
+		chunk = min(unix_skb_len(skb) - skip, size);
 		chunk = state->recv_actor(skb, skip, chunk, state);
 		if (chunk < 0) {
 			if (copied == 0)

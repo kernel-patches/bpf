@@ -1422,11 +1422,11 @@ retry:
 	if_public_preferred_lft = ifp->prefered_lft;
 
 	memset(&cfg, 0, sizeof(cfg));
-	cfg.valid_lft = min_t(__u32, ifp->valid_lft,
-			      READ_ONCE(idev->cnf.temp_valid_lft) + age);
+	cfg.valid_lft = min(ifp->valid_lft,
+			    READ_ONCE(idev->cnf.temp_valid_lft) + age);
 	cfg.preferred_lft = cnf_temp_preferred_lft + age - idev->desync_factor;
-	cfg.preferred_lft = min_t(__u32, if_public_preferred_lft, cfg.preferred_lft);
-	cfg.preferred_lft = min_t(__u32, cfg.valid_lft, cfg.preferred_lft);
+	cfg.preferred_lft = min(if_public_preferred_lft, cfg.preferred_lft);
+	cfg.preferred_lft = min(cfg.valid_lft, cfg.preferred_lft);
 
 	cfg.plen = ifp->prefix_len;
 	tmp_tstamp = ifp->tstamp;

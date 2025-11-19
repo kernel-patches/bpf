@@ -2870,7 +2870,7 @@ static void tcp_mtup_probe_success(struct sock *sk)
 	val = (u64)tcp_snd_cwnd(tp) * tcp_mss_to_mtu(sk, tp->mss_cache);
 	do_div(val, icsk->icsk_mtup.probe_size);
 	DEBUG_NET_WARN_ON_ONCE((u32)val != val);
-	tcp_snd_cwnd_set(tp, max_t(u32, 1U, val));
+	tcp_snd_cwnd_set(tp, max(1, val));
 
 	tp->snd_cwnd_cnt = 0;
 	tp->snd_cwnd_stamp = tcp_jiffies32;
@@ -3323,7 +3323,7 @@ void tcp_rearm_rto(struct sock *sk)
 			/* delta_us may not be positive if the socket is locked
 			 * when the retrans timer fires and is rescheduled.
 			 */
-			rto = usecs_to_jiffies(max_t(int, delta_us, 1));
+			rto = usecs_to_jiffies(max(delta_us, 1));
 		}
 		tcp_reset_xmit_timer(sk, ICSK_TIME_RETRANS, rto, true);
 	}

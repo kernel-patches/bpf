@@ -3076,7 +3076,7 @@ bool tcp_schedule_loss_probe(struct sock *sk, bool advancing_rto)
 			jiffies_to_usecs(inet_csk(sk)->icsk_rto) :
 			tcp_rto_delta_us(sk);  /* How far in future is RTO? */
 	if (rto_delta_us > 0)
-		timeout = min_t(u32, timeout, usecs_to_jiffies(rto_delta_us));
+		timeout = min(timeout, usecs_to_jiffies(rto_delta_us));
 
 	tcp_reset_xmit_timer(sk, ICSK_TIME_LOSS_PROBE, timeout, true);
 	return true;
@@ -4382,8 +4382,7 @@ void tcp_send_delayed_ack(struct sock *sk)
 		 * directly.
 		 */
 		if (tp->srtt_us) {
-			int rtt = max_t(int, usecs_to_jiffies(tp->srtt_us >> 3),
-					TCP_DELACK_MIN);
+			int rtt = max(usecs_to_jiffies(tp->srtt_us >> 3), TCP_DELACK_MIN);
 
 			if (rtt < max_ato)
 				max_ato = rtt;

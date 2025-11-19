@@ -43,7 +43,7 @@ static u32 tcp_clamp_rto_to_user_timeout(const struct sock *sk)
 	if (remaining <= 0)
 		return 1; /* user timeout has passed; fire ASAP */
 
-	return min_t(u32, icsk->icsk_rto, msecs_to_jiffies(remaining));
+	return min(icsk->icsk_rto, msecs_to_jiffies(remaining));
 }
 
 u32 tcp_clamp_probe0_to_user_timeout(const struct sock *sk, u32 when)
@@ -504,7 +504,7 @@ static bool tcp_rtx_probe0_timed_out(const struct sock *sk,
 		 */
 		if (rtx_delta > user_timeout)
 			return true;
-		timeout = min_t(u32, timeout, msecs_to_jiffies(user_timeout));
+		timeout = umin(timeout, msecs_to_jiffies(user_timeout));
 	}
 	/* Note: timer interrupt might have been delayed by at least one jiffy,
 	 * and tp->rcv_tstamp might very well have been written recently.
