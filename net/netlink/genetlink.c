@@ -395,10 +395,11 @@ static unsigned int genl_op_iter_idx(struct genl_op_iter *iter)
 	return iter->cmd_idx;
 }
 
-static int genl_allocate_reserve_groups(int n_groups, int *first_id)
+static noinline_for_stack int genl_allocate_reserve_groups(int n_groups, int *first_id)
 {
 	unsigned long *new_groups;
 	int start = 0;
+	int limit;
 	int i;
 	int id;
 	bool fits;
@@ -414,10 +415,8 @@ static int genl_allocate_reserve_groups(int n_groups, int *first_id)
 						start);
 
 		fits = true;
-		for (i = id;
-		     i < min_t(int, id + n_groups,
-			       mc_groups_longs * BITS_PER_LONG);
-		     i++) {
+		limit = umin(id + n_groups, mc_groups_longs * BITS_PER_LONG);
+		for (i = id; i < limit; i++) {
 			if (test_bit(i, mc_groups)) {
 				start = i;
 				fits = false;
