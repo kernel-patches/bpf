@@ -6357,6 +6357,8 @@ F:	mm/memcontrol_bpf.h
 F:	mm/page_counter.c
 F:	mm/swap_cgroup.c
 F:	samples/cgroup/*
+F:	samples/memcg_printk.bpf.c
+F:	samples/memcg_printk.c
 F:	tools/testing/selftests/bpf/*/memcg_ops.c
 F:	tools/testing/selftests/cgroup/memcg_protection.m
 F:	tools/testing/selftests/cgroup/test_hugetlb_memcg.c
