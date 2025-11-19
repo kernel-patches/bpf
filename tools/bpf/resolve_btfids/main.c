@@ -768,6 +768,195 @@ static int symbols_patch(struct object *obj)
 	return err < 0 ? -1 : 0;
 }
 
+/* Anonymous types (with empty names) are considered greater than named types
+ * and are sorted after them. Two anonymous types are considered equal. Named
+ * types are compared lexicographically.
+ */
+static int cmp_type_names(const void *a, const void *b, void *priv)
+{
+	struct btf *btf = (struct btf *)priv;
+	const struct btf_type *ta = btf__type_by_id(btf, *(__u32 *)a);
+	const struct btf_type *tb = btf__type_by_id(btf, *(__u32 *)b);
+	const char *na, *nb;
+
+	if (!ta->name_off && tb->name_off)
+		return 1;
+	if (ta->name_off && !tb->name_off)
+		return -1;
+	if (!ta->name_off && !tb->name_off)
+		return 0;
+
+	na = btf__str_by_offset(btf, ta->name_off);
+	nb = btf__str_by_offset(btf, tb->name_off);
+	return strcmp(na, nb);
+}
+
+static int update_btf_section(const char *path, const struct btf *btf,
+				  const char *btf_secname)
+{
+	GElf_Shdr shdr_mem, *shdr;
+	Elf_Data *btf_data = NULL;
+	Elf_Scn *scn = NULL;
+	Elf *elf = NULL;
+	const void *raw_btf_data;
+	uint32_t raw_btf_size;
+	int fd, err = -1;
+	size_t strndx;
+
+	fd = open(path, O_RDWR);
+	if (fd < 0) {
+		pr_err("FAILED to open %s\n", path);
+		return -1;
+	}
+
+	if (elf_version(EV_CURRENT) == EV_NONE) {
+		pr_err("FAILED to set libelf version");
+		goto out;
+	}
+
+	elf = elf_begin(fd, ELF_C_RDWR, NULL);
+	if (elf == NULL) {
+		pr_err("FAILED to update ELF file");
+		goto out;
+	}
+
+	elf_flagelf(elf, ELF_C_SET, ELF_F_LAYOUT);
+
+	elf_getshdrstrndx(elf, &strndx);
+	while ((scn = elf_nextscn(elf, scn)) != NULL) {
+		char *secname;
+
+		shdr = gelf_getshdr(scn, &shdr_mem);
+		if (shdr == NULL)
+			continue;
+		secname = elf_strptr(elf, strndx, shdr->sh_name);
+		if (strcmp(secname, btf_secname) == 0) {
+			btf_data = elf_getdata(scn, btf_data);
+			break;
+		}
+	}
+
+	raw_btf_data = btf__raw_data(btf, &raw_btf_size);
+
+	if (btf_data) {
+		if (raw_btf_size != btf_data->d_size) {
+			pr_err("FAILED: size mismatch");
+			goto out;
+		}
+
+		btf_data->d_buf = (void *)raw_btf_data;
+		btf_data->d_type = ELF_T_WORD;
+		elf_flagdata(btf_data, ELF_C_SET, ELF_F_DIRTY);
+
+		if (elf_update(elf, ELF_C_WRITE) >= 0)
+			err = 0;
+	}
+
+out:
+	if (fd != -1)
+		close(fd);
+	if (elf)
+		elf_end(elf);
+	return err;
+}
+
+static int sort_update_btf(struct object *obj, bool distilled_base)
+{
+	struct btf *base_btf = NULL;
+	struct btf *btf = NULL;
+	int start_id = 1, nr_types, id;
+	int err = 0, i;
+	__u32 *permute_ids = NULL, *id_map = NULL, btf_size;
+	const void *btf_data;
+	int fd;
+
+	if (obj->base_btf_path) {
+		base_btf = btf__parse(obj->base_btf_path, NULL);
+		err = libbpf_get_error(base_btf);
+		if (err) {
+			pr_err("FAILED: load base BTF from %s: %s\n",
+			       obj->base_btf_path, strerror(-err));
+			return -1;
+		}
+	}
+
+	btf = btf__parse_elf_split(obj->path, base_btf);
+	err = libbpf_get_error(btf);
+	if (err) {
+		pr_err("FAILED: load BTF from %s: %s\n", obj->path, strerror(-err));
+		goto out;
+	}
+
+	if (base_btf)
+		start_id = btf__type_cnt(base_btf);
+	nr_types = btf__type_cnt(btf) - start_id;
+	if (nr_types < 2)
+		goto out;
+
+	permute_ids = calloc(nr_types, sizeof(*permute_ids));
+	if (!permute_ids) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	id_map = calloc(nr_types, sizeof(*id_map));
+	if (!id_map) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	for (i = 0, id = start_id; i < nr_types; i++, id++)
+		permute_ids[i] = id;
+
+	qsort_r(permute_ids, nr_types, sizeof(*permute_ids), cmp_type_names, btf);
+
+	for (i = 0; i < nr_types; i++) {
+		id = permute_ids[i] - start_id;
+		id_map[id] = i + start_id;
+	}
+
+	err = btf__permute(btf, id_map, nr_types, NULL);
+	if (err) {
+		pr_err("FAILED: btf permute: %s\n", strerror(-err));
+		goto out;
+	}
+
+	if (distilled_base) {
+		struct btf *new_btf = NULL, *distilled_base = NULL;
+
+		if (btf__distill_base(btf, &distilled_base, &new_btf) < 0) {
+			pr_err("FAILED to generate distilled base BTF: %s\n",
+				strerror(errno));
+			goto out;
+		}
+
+		err = update_btf_section(obj->path, new_btf, BTF_ELF_SEC);
+		if (!err) {
+			err = update_btf_section(obj->path, distilled_base, BTF_BASE_ELF_SEC);
+			if (err < 0)
+				pr_err("FAILED to update '%s'\n", BTF_BASE_ELF_SEC);
+		} else {
+			pr_err("FAILED to update '%s'\n", BTF_ELF_SEC);
+		}
+
+		btf__free(new_btf);
+		btf__free(distilled_base);
+	} else {
+		err = update_btf_section(obj->path, btf, BTF_ELF_SEC);
+		if (err < 0) {
+			pr_err("FAILED to update '%s'\n", BTF_ELF_SEC);
+			goto out;
+		}
+	}
+
+out:
+	free(permute_ids);
+	free(id_map);
+	btf__free(base_btf);
+	btf__free(btf);
+	return err;
+}
+
 static const char * const resolve_btfids_usage[] = {
 	"resolve_btfids [<options>] <ELF object>",
 	NULL
@@ -787,6 +976,8 @@ int main(int argc, const char **argv)
 		.sets     = RB_ROOT,
 	};
 	bool fatal_warnings = false;
+	bool btf_sort = false;
+	bool distilled_base = false;
 	struct option btfid_options[] = {
 		OPT_INCR('v', "verbose", &verbose,
 			 "be more verbose (show errors, etc)"),
@@ -796,6 +987,10 @@ int main(int argc, const char **argv)
 			   "path of file providing base BTF"),
 		OPT_BOOLEAN(0, "fatal_warnings", &fatal_warnings,
 			    "turn warnings into errors"),
+		OPT_BOOLEAN(0, "btf_sort", &btf_sort,
+			    "sort BTF by name in ascending order"),
+		OPT_BOOLEAN(0, "distilled_base", &distilled_base,
+			    "distill base"),
 		OPT_END()
 	};
 	int err = -1;
@@ -806,6 +1001,11 @@ int main(int argc, const char **argv)
 		usage_with_options(resolve_btfids_usage, btfid_options);
 
 	obj.path = argv[0];
+
+	if (btf_sort) {
+		err = sort_update_btf(&obj, distilled_base);
+		goto out;
+	}
 
 	if (elf_collect(&obj))
 		goto out;
