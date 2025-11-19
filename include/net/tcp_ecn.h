@@ -196,7 +196,7 @@ static inline void tcp_accecn_opt_demand_min(struct sock *sk,
 	struct tcp_sock *tp = tcp_sk(sk);
 	u8 opt_demand;
 
-	opt_demand = max_t(u8, opt_demand_min, tp->accecn_opt_demand);
+	opt_demand = max(opt_demand_min, tp->accecn_opt_demand + 0);
 	tp->accecn_opt_demand = opt_demand;
 }
 
@@ -303,8 +303,7 @@ static inline void tcp_ecn_received_counters(struct sock *sk,
 			u32 bytes_mask = GENMASK_U32(31, 22);
 
 			tp->received_ecn_bytes[ecnfield - 1] += len;
-			tp->accecn_minlen = max_t(u8, tp->accecn_minlen,
-						  minlen);
+			tp->accecn_minlen = max(tp->accecn_minlen + 0, minlen);
 
 			/* Send AccECN option at least once per 2^22-byte
 			 * increase in any ECN byte counter.
