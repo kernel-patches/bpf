@@ -664,8 +664,8 @@ int zerocopy_fill_skb_from_iter(struct sk_buff *skb,
 		head = compound_head(pages[n]);
 		order = compound_order(head);
 
-		for (refs = 0; copied != 0; start = 0) {
-			int size = min_t(int, copied, PAGE_SIZE - start);
+		for (refs = 0; copied > 0; start = 0) {
+			int size = min(copied, PAGE_SIZE - start);
 
 			if (pages[n] - head > (1UL << order) - 1) {
 				head = compound_head(pages[n]);
@@ -783,7 +783,7 @@ EXPORT_SYMBOL(__zerocopy_sg_from_iter);
  */
 int zerocopy_sg_from_iter(struct sk_buff *skb, struct iov_iter *from)
 {
-	int copy = min_t(int, skb_headlen(skb), iov_iter_count(from));
+	int copy = min(skb_headlen(skb), iov_iter_count(from));
 
 	/* copy up to skb headlen */
 	if (skb_copy_datagram_from_iter(skb, 0, from, copy))

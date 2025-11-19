@@ -335,8 +335,8 @@ int sk_msg_zerocopy_from_iter(struct sock *sk, struct iov_iter *from,
 		bytes -= copied;
 		msg->sg.size += copied;
 
-		while (copied) {
-			use = min_t(int, copied, PAGE_SIZE - offset);
+		while (copied > 0) {
+			use = min(copied, PAGE_SIZE - offset);
 			sg_set_page(&msg->sg.data[msg->sg.end],
 				    pages[i], use, offset);
 			sg_unmark_end(&msg->sg.data[msg->sg.end]);
