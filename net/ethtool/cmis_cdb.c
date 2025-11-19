@@ -573,12 +573,11 @@ ethtool_cmis_cdb_execute_epl_cmd(struct net_device *dev,
 		while (offset <= CMIS_CDB_EPL_FW_BLOCK_OFFSET_END &&
 		       bytes_written < epl_len) {
 			u32 bytes_left = epl_len - bytes_written;
-			u16 space_left, bytes_to_write;
+			u32 space_left, bytes_to_write;
 
 			space_left = CMIS_CDB_EPL_FW_BLOCK_OFFSET_END - offset + 1;
-			bytes_to_write = min_t(u16, bytes_left,
-					       min_t(u16, space_left,
-						     args->read_write_len_ext));
+			bytes_to_write = min3(bytes_left, space_left,
+					      args->read_write_len_ext);
 
 			err = __ethtool_cmis_cdb_execute_cmd(dev, page_data,
 							     page, offset,
