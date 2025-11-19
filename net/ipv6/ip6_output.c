@@ -1440,7 +1440,7 @@ static int __ip6_append_data(struct sock *sk,
 	struct sk_buff *skb, *skb_prev = NULL;
 	struct inet_cork *cork = &cork_full->base;
 	struct flowi6 *fl6 = &cork_full->fl.u.ip6;
-	unsigned int maxfraglen, fragheaderlen, mtu, orig_mtu, pmtu;
+	unsigned int maxfraglen, fragheaderlen, mtu, orig_mtu;
 	struct ubuf_info *uarg = NULL;
 	int exthdrlen = 0;
 	int dst_exthdrlen = 0;
@@ -1504,9 +1504,10 @@ static int __ip6_append_data(struct sock *sk,
 		maxnonfragsize = mtu;
 
 	if (cork->length + length > maxnonfragsize - headersize) {
+		int pmtu;
 emsgsize:
-		pmtu = max_t(int, mtu - headersize + sizeof(struct ipv6hdr), 0);
-		ipv6_local_error(sk, EMSGSIZE, fl6, pmtu);
+		pmtu = mtu - headersize + (int)sizeof(struct ipv6hdr);
+		ipv6_local_error(sk, EMSGSIZE, fl6, max(pmtu, 0));
 		return -EMSGSIZE;
 	}
 
