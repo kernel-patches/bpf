@@ -1063,6 +1063,44 @@ config MEMCG_V1
 
 	  Say N if unsure.
 
+config MEMCG_BPF
+	bool "Memory controller eBPF support"
+	depends on MEMCG
+	depends on BPF_SYSCALL
+	default n
+	help
+	  This option enables eBPF support for the memory controller,
+	  allowing eBPF programs to hook into memory charging
+	  operations and implement custom memory management policies
+	  at runtime.
+
+	  With this feature enabled, administrators can load eBPF
+	  programs to monitor and adjust memory charging behavior
+	  without recompiling the kernel. This enables:
+
+	  - Custom memory reclamation strategies for specialized
+	    workloads
+	  - Dynamic memory pressure telemetry and monitoring
+	  - Memory accounting adjustments based on runtime conditions
+	  - Integration with container orchestration systems
+	  - Experimentation with novel memory management algorithms
+
+	  The eBPF handler is invoked during memory charge attempts
+	  and can inspect memory cgroup context and optionally modify
+	  parameters like reclamation size.
+
+	  When this feature is disabled or no eBPF program is loaded,
+	  there is zero performance overhead. When enabled with an
+	  active program, overhead is minimal (one indirect function
+	  call per charge attempt). The eBPF verifier ensures memory
+	  safety of loaded programs.
+
+	  Only one eBPF program can be active at a time. Loading a
+	  new program requires appropriate BPF permissions
+	  (CAP_PERFMON or CAP_SYS_ADMIN).
+
+	  Say N if unsure.
+
 config BLK_CGROUP
 	bool "IO controller"
 	depends on BLOCK

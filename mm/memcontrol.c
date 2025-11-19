@@ -68,6 +68,7 @@
 #include <net/ip.h>
 #include "slab.h"
 #include "memcontrol-v1.h"
+#include "memcontrol_bpf.h"
 
 #include <linux/uaccess.h>
 
@@ -2301,13 +2302,14 @@ static int try_charge_memcg(struct mem_cgroup *memcg, gfp_t gfp_mask,
 	int nr_retries = MAX_RECLAIM_RETRIES;
 	struct mem_cgroup *mem_over_limit;
 	struct page_counter *counter;
-	unsigned long nr_reclaimed;
+	unsigned long nr_reclaime, nr_reclaimed;
 	bool passed_oom = false;
 	unsigned int reclaim_options = MEMCG_RECLAIM_MAY_SWAP;
 	bool drained = false;
 	bool raised_max_event = false;
 	unsigned long pflags;
 	bool allow_spinning = gfpflags_allow_spinning(gfp_mask);
+	bool charge_done = false;
 
 retry:
 	if (consume_stock(memcg, nr_pages))
@@ -2320,19 +2322,29 @@ retry:
 	if (!do_memsw_account() ||
 	    page_counter_try_charge(&memcg->memsw, batch, &counter)) {
 		if (page_counter_try_charge(&memcg->memory, batch, &counter))
-			goto done_restock;
-		if (do_memsw_account())
-			page_counter_uncharge(&memcg->memsw, batch);
-		mem_over_limit = mem_cgroup_from_counter(counter, memory);
+			charge_done = true;
+		else {
+			if (do_memsw_account())
+				page_counter_uncharge(&memcg->memsw, batch);
+			mem_over_limit = mem_cgroup_from_counter(counter, memory);
+		}
 	} else {
 		mem_over_limit = mem_cgroup_from_counter(counter, memsw);
 		reclaim_options &= ~MEMCG_RECLAIM_MAY_SWAP;
 	}
 
-	if (batch > nr_pages) {
+	if (!charge_done && batch > nr_pages) {
 		batch = nr_pages;
 		goto retry;
 	}
+
+	nr_reclaime = bpf_try_charge_memcg(memcg, gfp_mask, nr_pages,
+					   mem_over_limit,
+					   reclaim_options,
+					   charge_done);
+
+	if (charge_done)
+		goto done_restock;
 
 	/*
 	 * Prevent unbounded recursion when reclaim operations need to
@@ -2353,7 +2365,7 @@ retry:
 	raised_max_event = true;
 
 	psi_memstall_enter(&pflags);
-	nr_reclaimed = try_to_free_mem_cgroup_pages(mem_over_limit, nr_pages,
+	nr_reclaimed = try_to_free_mem_cgroup_pages(mem_over_limit, nr_reclaime,
 						    gfp_mask, reclaim_options, NULL);
 	psi_memstall_leave(&pflags);
 
