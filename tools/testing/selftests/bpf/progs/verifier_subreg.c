@@ -532,6 +532,74 @@ __naked void arsh32_imm_zero_extend_check(void)
 }
 
 SEC("socket")
+__description("arsh32 imm sign positive extend check")
+__success __success_unpriv __retval(0)
+__naked void arsh32_imm_sign_extend_positive_check(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r6 &= 0xfff;					\
+	r6 <<= 32;					\
+	r6 s>>= 32;					\
+	r0 = 0;						\
+	if w6 s>= 0 goto l0_%=;			\
+	r0 /= 0;					\
+l0_%=:  if w6 s<= 4096 goto l1_%=;				\
+	r0 /= 0;					\
+l1_%=:	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("arsh32 imm sign negative extend check")
+__success __success_unpriv __retval(0)
+__naked void arsh32_imm_sign_extend_negative_check(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r6 &= 0xfff;					\
+	r6 -= 0xfff;					\
+	r6 <<= 32;					\
+	r6 s>>= 32;					\
+	r0 = 0;						\
+	if w6 s>= -4095 goto l0_%=;			\
+	r0 /= 0;					\
+l0_%=:  if w6 s<= 0 goto l1_%=;				\
+	r0 /= 0;					\
+l1_%=:	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("arsh32 imm sign extend check")
+__success __success_unpriv __retval(0)
+__naked void arsh32_imm_sign_extend_check(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r6 &= 0xfff;					\
+	r6 -= 0x7ff;					\
+	r6 <<= 32;					\
+	r6 s>>= 32;					\
+	r0 = 0;						\
+	if w6 s>= -2049 goto l0_%=;			\
+	r0 /= 0;					\
+l0_%=:  if w6 s<= 2048 goto l1_%=;				\
+	r0 /= 0;					\
+l1_%=:	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
 __description("end16 (to_le) reg zero extend check")
 __success __success_unpriv __retval(0)
 __naked void le_reg_zero_extend_check_1(void)
