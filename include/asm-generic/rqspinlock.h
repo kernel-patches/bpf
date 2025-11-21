@@ -171,7 +171,7 @@ dec:
  * * -EDEADLK	- Lock acquisition failed because of AA/ABBA deadlock.
  * * -ETIMEDOUT - Lock acquisition failed because of timeout.
  */
-static __always_inline int res_spin_lock(rqspinlock_t *lock)
+static __always_inline __must_check int res_spin_lock(rqspinlock_t *lock)
 {
 	int val = 0;
 
@@ -223,27 +223,36 @@ unlock:
 #define raw_res_spin_lock_init(lock) ({ *(lock) = (rqspinlock_t){0}; })
 #endif
 
-#define raw_res_spin_lock(lock)                    \
-	({                                         \
-		int __ret;                         \
-		preempt_disable();                 \
-		__ret = res_spin_lock(lock);	   \
-		if (__ret)                         \
-			preempt_enable();          \
-		__ret;                             \
-	})
+static __always_inline __must_check int raw_res_spin_lock(rqspinlock_t *lock)
+{
+	int ret;
+
+	preempt_disable();
+	ret = res_spin_lock(lock);
+	if (ret)
+		preempt_enable();
+
+	return ret;
+}
 
 #define raw_res_spin_unlock(lock) ({ res_spin_unlock(lock); preempt_enable(); })
 
-#define raw_res_spin_lock_irqsave(lock, flags)    \
-	({                                        \
-		int __ret;                        \
-		local_irq_save(flags);            \
-		__ret = raw_res_spin_lock(lock);  \
-		if (__ret)                        \
-			local_irq_restore(flags); \
-		__ret;                            \
-	})
+static __always_inline __must_check int
+__raw_res_spin_lock_irqsave(rqspinlock_t *lock, unsigned long *flags)
+{
+	unsigned long __flags;
+	int ret;
+
+	local_irq_save(__flags);
+	ret = raw_res_spin_lock(lock);
+	if (ret)
+		local_irq_restore(__flags);
+
+	*flags = __flags;
+	return ret;
+}
+
+#define raw_res_spin_lock_irqsave(lock, flags) __raw_res_spin_lock_irqsave(lock, &flags)
 
 #define raw_res_spin_unlock_irqrestore(lock, flags) ({ raw_res_spin_unlock(lock); local_irq_restore(flags); })
 
