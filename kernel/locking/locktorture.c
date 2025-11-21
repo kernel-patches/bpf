@@ -369,8 +369,7 @@ static rqspinlock_t rqspinlock;
 
 static int torture_raw_res_spin_write_lock(int tid __maybe_unused)
 {
-	raw_res_spin_lock(&rqspinlock);
-	return 0;
+	return raw_res_spin_lock(&rqspinlock);
 }
 
 static void torture_raw_res_spin_write_unlock(int tid __maybe_unused)
@@ -392,8 +391,12 @@ static struct lock_torture_ops raw_res_spin_lock_ops = {
 static int torture_raw_res_spin_write_lock_irq(int tid __maybe_unused)
 {
 	unsigned long flags;
+	int err;
 
-	raw_res_spin_lock_irqsave(&rqspinlock, flags);
+	err = raw_res_spin_lock_irqsave(&rqspinlock, flags);
+	if (err)
+		return err;
+
 	cxt.cur_ops->flags = flags;
 	return 0;
 }
