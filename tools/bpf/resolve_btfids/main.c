@@ -71,9 +71,11 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <linux/btf_ids.h>
+#include <linux/kallsyms.h>
 #include <linux/rbtree.h>
 #include <linux/zalloc.h>
 #include <linux/err.h>
+#include <linux/limits.h>
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 #include <subcmd/parse-options.h>
@@ -124,6 +126,7 @@ struct object {
 
 	struct btf *btf;
 	struct btf *base_btf;
+	bool distilled_base;
 
 	struct {
 		int		 fd;
@@ -308,42 +311,16 @@ static struct btf_id *add_symbol(struct rb_root *root, char *name, size_t size)
 	return btf_id;
 }
 
-/* Older libelf.h and glibc elf.h might not yet define the ELF compression types. */
-#ifndef SHF_COMPRESSED
-#define SHF_COMPRESSED (1 << 11) /* Section with compressed data. */
-#endif
-
-/*
- * The data of compressed section should be aligned to 4
- * (for 32bit) or 8 (for 64 bit) bytes. The binutils ld
- * sets sh_addralign to 1, which makes libelf fail with
- * misaligned section error during the update:
- *    FAILED elf_update(WRITE): invalid section alignment
- *
- * While waiting for ld fix, we fix the compressed sections
- * sh_addralign value manualy.
- */
-static int compressed_section_fix(Elf *elf, Elf_Scn *scn, GElf_Shdr *sh)
+static void bswap_32_data(void *data, u32 nr_bytes)
 {
-	int expected = gelf_getclass(elf) == ELFCLASS32 ? 4 : 8;
+	u32 cnt, i;
+	u32 *ptr;
 
-	if (!(sh->sh_flags & SHF_COMPRESSED))
-		return 0;
+	cnt = nr_bytes / sizeof(u32);
+	ptr = data;
 
-	if (sh->sh_addralign == expected)
-		return 0;
-
-	pr_debug2(" - fixing wrong alignment sh_addralign %u, expected %u\n",
-		  sh->sh_addralign, expected);
-
-	sh->sh_addralign = expected;
-
-	if (gelf_update_shdr(scn, sh) == 0) {
-		pr_err("FAILED cannot update section header: %s\n",
-			elf_errmsg(-1));
-		return -1;
-	}
-	return 0;
+	for (i = 0; i < cnt; i++)
+		ptr[i] = bswap_32(ptr[i]);
 }
 
 static int elf_collect(struct object *obj)
@@ -364,7 +341,7 @@ static int elf_collect(struct object *obj)
 
 	elf_version(EV_CURRENT);
 
-	elf = elf_begin(fd, ELF_C_RDWR_MMAP, NULL);
+	elf = elf_begin(fd, ELF_C_READ_MMAP_PRIVATE, NULL);
 	if (!elf) {
 		close(fd);
 		pr_err("FAILED cannot create ELF descriptor: %s\n",
@@ -427,21 +404,20 @@ static int elf_collect(struct object *obj)
 			obj->efile.symbols_shndx = idx;
 			obj->efile.strtabidx     = sh.sh_link;
 		} else if (!strcmp(name, BTF_IDS_SECTION)) {
+			/*
+			 * If target endianness differs from host, we need to bswap32
+			 * the .BTF_ids section data on load, because .BTF_ids has
+			 * Elf_Type = ELF_T_BYTE, and so libelf returns data buffer in
+			 * the target endiannes. We repeat this on dump.
+			 */
+			if (obj->efile.encoding != ELFDATANATIVE) {
+				pr_debug("bswap_32 .BTF_ids data from target to host endianness\n");
+				bswap_32_data(data->d_buf, data->d_size);
+			}
 			obj->efile.idlist       = data;
 			obj->efile.idlist_shndx = idx;
 			obj->efile.idlist_addr  = sh.sh_addr;
-		} else if (!strcmp(name, BTF_BASE_ELF_SEC)) {
-			/* If a .BTF.base section is found, do not resolve
-			 * BTF ids relative to vmlinux; resolve relative
-			 * to the .BTF.base section instead.  btf__parse_split()
-			 * will take care of this once the base BTF it is
-			 * passed is NULL.
-			 */
-			obj->base_btf_path = NULL;
 		}
-
-		if (compressed_section_fix(elf, scn, &sh))
-			return -1;
 	}
 
 	return 0;
@@ -545,6 +521,13 @@ static int symbols_collect(struct object *obj)
 	return 0;
 }
 
+static inline bool is_envvar_set(const char *var_name)
+{
+	const char *value = getenv(var_name);
+
+	return value && value[0] != '\0';
+}
+
 static int load_btf(struct object *obj)
 {
 	struct btf *base_btf = NULL, *btf = NULL;
@@ -570,6 +553,20 @@ static int load_btf(struct object *obj)
 
 	obj->base_btf = base_btf;
 	obj->btf = btf;
+
+	if (obj->base_btf && is_envvar_set("KBUILD_EXTMOD")) {
+		err = btf__distill_base(obj->btf, &base_btf, &btf);
+		if (err) {
+			pr_err("FAILED to distill base BTF: %s\n", strerror(errno));
+			goto out_err;
+		}
+
+		btf__free(obj->btf);
+		btf__free(obj->base_btf);
+		obj->btf = btf;
+		obj->base_btf = base_btf;
+		obj->distilled_base = true;
+	}
 
 	return 0;
 
@@ -744,24 +741,6 @@ static int sets_patch(struct object *obj)
 			 */
 			BUILD_BUG_ON((u32 *)set8->pairs != &set8->pairs[0].id);
 			qsort(set8->pairs, set8->cnt, sizeof(set8->pairs[0]), cmp_id);
-
-			/*
-			 * When ELF endianness does not match endianness of the
-			 * host, libelf will do the translation when updating
-			 * the ELF. This, however, corrupts SET8 flags which are
-			 * already in the target endianness. So, let's bswap
-			 * them to the host endianness and libelf will then
-			 * correctly translate everything.
-			 */
-			if (obj->efile.encoding != ELFDATANATIVE) {
-				int i;
-
-				set8->flags = bswap_32(set8->flags);
-				for (i = 0; i < set8->cnt; i++) {
-					set8->pairs[i].flags =
-						bswap_32(set8->pairs[i].flags);
-				}
-			}
 			break;
 		case BTF_ID_KIND_SYM:
 		default:
@@ -778,8 +757,6 @@ static int sets_patch(struct object *obj)
 
 static int symbols_patch(struct object *obj)
 {
-	off_t err;
-
 	if (__symbols_patch(obj, &obj->structs)  ||
 	    __symbols_patch(obj, &obj->unions)   ||
 	    __symbols_patch(obj, &obj->typedefs) ||
@@ -790,20 +767,77 @@ static int symbols_patch(struct object *obj)
 	if (sets_patch(obj))
 		return -1;
 
-	/* Set type to ensure endian translation occurs. */
-	obj->efile.idlist->d_type = ELF_T_WORD;
+	return 0;
+}
 
-	elf_flagdata(obj->efile.idlist, ELF_C_SET, ELF_F_DIRTY);
+static int dump_raw_data(const char *out_path, const void *data, u32 size)
+{
+	int fd, ret;
 
-	err = elf_update(obj->efile.elf, ELF_C_WRITE);
-	if (err < 0) {
-		pr_err("FAILED elf_update(WRITE): %s\n",
-			elf_errmsg(-1));
+	fd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0640);
+	if (fd < 0) {
+		pr_err("Couldn't open %s for writing\n", out_path);
+		return fd;
 	}
 
-	pr_debug("update %s for %s\n",
-		 err >= 0 ? "ok" : "failed", obj->path);
-	return err < 0 ? -1 : 0;
+	ret = write(fd, data, size);
+	if (ret < 0 || ret != size) {
+		pr_err("Failed to write data to %s\n", out_path);
+		close(fd);
+		unlink(out_path);
+		return -1;
+	}
+
+	close(fd);
+	pr_debug("Dumped %lu bytes of data to %s\n", size, out_path);
+
+	return 0;
+}
+
+static int dump_raw_btf_ids(struct object *obj, const char *out_path)
+{
+	Elf_Data *data = obj->efile.idlist;
+	int fd, err;
+
+	if (!data || !data->d_buf) {
+		pr_debug("%s has no BTF_ids data to dump\n", obj->path);
+		return 0;
+	}
+
+	/*
+	 * If target endianness differs from host, we need to bswap32 the
+	 * .BTF_ids section data before dumping so that the output is in
+	 * target endianness.
+	 */
+	if (obj->efile.encoding != ELFDATANATIVE) {
+		pr_debug("bswap_32 .BTF_ids data from host to target endianness\n");
+		bswap_32_data(data->d_buf, data->d_size);
+	}
+
+	err = dump_raw_data(out_path, data->d_buf, data->d_size);
+	if (err)
+		return -1;
+
+	return 0;
+}
+
+static int dump_raw_btf(struct btf *btf, const char *out_path)
+{
+	const void *raw_btf_data;
+	u32 raw_btf_size;
+	int fd, err;
+
+	raw_btf_data = btf__raw_data(btf, &raw_btf_size);
+	if (raw_btf_data == NULL) {
+		pr_err("btf__raw_data() failed\n");
+		return -1;
+	}
+
+	err = dump_raw_data(out_path, raw_btf_data, raw_btf_size);
+	if (err)
+		return -1;
+
+	return 0;
 }
 
 static const char * const resolve_btfids_usage[] = {
@@ -824,6 +858,7 @@ int main(int argc, const char **argv)
 		.funcs    = RB_ROOT,
 		.sets     = RB_ROOT,
 	};
+	char out_path[PATH_MAX];
 	bool fatal_warnings = false;
 	struct option btfid_options[] = {
 		OPT_INCR('v', "verbose", &verbose,
@@ -836,7 +871,7 @@ int main(int argc, const char **argv)
 			    "turn warnings into errors"),
 		OPT_END()
 	};
-	int err = -1;
+	int err = -1, path_len;
 
 	argc = parse_options(argc, argv, btfid_options, resolve_btfids_usage,
 			     PARSE_OPT_STOP_AT_NON_OPTION);
@@ -844,6 +879,11 @@ int main(int argc, const char **argv)
 		usage_with_options(resolve_btfids_usage, btfid_options);
 
 	obj.path = argv[0];
+	strcpy(out_path, obj.path);
+	path_len = strlen(out_path);
+
+	if (load_btf(&obj))
+		goto out;
 
 	if (elf_collect(&obj))
 		goto out;
@@ -854,15 +894,11 @@ int main(int argc, const char **argv)
 	 */
 	if (obj.efile.idlist_shndx == -1 ||
 	    obj.efile.symbols_shndx == -1) {
-		pr_debug("Cannot find .BTF_ids or symbols sections, nothing to do\n");
-		err = 0;
-		goto out;
+		pr_debug("Cannot find .BTF_ids or symbols sections, skip symbols resolution\n");
+		goto dump_btf;
 	}
 
 	if (symbols_collect(&obj))
-		goto out;
-
-	if (load_btf(&obj))
 		goto out;
 
 	if (symbols_resolve(&obj))
@@ -870,6 +906,24 @@ int main(int argc, const char **argv)
 
 	if (symbols_patch(&obj))
 		goto out;
+
+	out_path[path_len] = '\0';
+	strcat(out_path, ".btf_ids");
+	if (dump_raw_btf_ids(&obj, out_path))
+		goto out;
+
+dump_btf:
+	out_path[path_len] = '\0';
+	strcat(out_path, ".btf");
+	if (dump_raw_btf(obj.btf, out_path))
+		goto out;
+
+	if (obj.base_btf && obj.distilled_base) {
+		out_path[path_len] = '\0';
+		strcat(out_path, ".distilled_base.btf");
+		if (dump_raw_btf(obj.base_btf, out_path))
+			goto out;
+	}
 
 	if (!(fatal_warnings && warnings))
 		err = 0;
