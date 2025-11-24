@@ -391,16 +391,16 @@ __naked void mov32sx_s8_bounds(void)
 }
 
 SEC("socket")
-__description("MOV64SX, S8, preserve known bits")
+__description("MOV64SX, S8, range > 255 with same s8 value")
 __log_level(2)
-__msg("var_off=(0x10; 0xffffffffffffffef)")
+__msg("R1={{P?}}scalar(smin=smin32=0,smax=smax32=0")
 __success __success_unpriv __retval(0)
-__naked void mov64sx_s8_preserve_bits(void)
+__naked void mov64sx_s8_truncated_range(void)
 {
 	asm volatile ("                                      \
 	call %[bpf_get_prandom_u32];                         \
 	r1 = r0;                                             \
-	r1 |= 0x10;                                          \
+	r1 &= 0x100;                                         \
 	r1 = (s8)r1;                                         \
 	r0 = 0;                                              \
 	exit;                                                \
