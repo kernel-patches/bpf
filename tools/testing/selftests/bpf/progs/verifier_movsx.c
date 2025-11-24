@@ -339,6 +339,61 @@ label_%=: 	                                        \
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("MOV64SX, S8, unknown value, check bounds")
+__log_level(2)
+__msg("R1_w=scalar(smin=smin32=-128,smax=smax32=127")
+__success __success_unpriv __retval(0)
+__naked void mov64sx_s8_bounds(void)
+{
+	asm volatile ("                                      \
+	call %[bpf_get_prandom_u32];                         \
+	r1 = (s8)r0;                                         \
+	r0 = 0;                                              \
+	exit;                                                \
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("MOV64SX, S16, unknown value, check bounds")
+__log_level(2)
+__msg("R1_w=scalar(smin=smin32=-32768,smax=smax32=32767")
+__success __success_unpriv __retval(0)
+__naked void mov64sx_s16_bounds(void)
+{
+	asm volatile ("                                      \
+	call %[bpf_get_prandom_u32];                         \
+	r1 = (s16)r0;                                        \
+	r0 = 0;                                              \
+	exit;                                                \
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("MOV32SX, S8, unknown value, check bounds")
+__log_level(2)
+/* For 32-bit subreg write, upper 32-bits are zeroed.
+ * smin32/smax32 should be S8 range.
+ * smin/smax should equal umin/umax because high bits are 0.
+ */
+__msg("R1_w=scalar(smin=0,smax=umax=0xffffffff,smin32=-128,smax32=127")
+__success __success_unpriv __retval(0)
+__naked void mov32sx_s8_bounds(void)
+{
+	asm volatile ("                                      \
+	call %[bpf_get_prandom_u32];                         \
+	w1 = (s8)w0;                                         \
+	r0 = 0;                                              \
+	exit;                                                \
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 #else
 
 SEC("socket")
