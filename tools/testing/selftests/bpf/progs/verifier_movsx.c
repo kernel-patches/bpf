@@ -393,7 +393,7 @@ __naked void mov32sx_s8_bounds(void)
 SEC("socket")
 __description("MOV64SX, S8, range > 255 with same s8 value")
 __log_level(2)
-__msg("R1={{P?}}scalar(smin=smin32=0,smax=smax32=0")
+__msg("R1={{P?}}0")
 __success __success_unpriv __retval(0)
 __naked void mov64sx_s8_truncated_range(void)
 {
