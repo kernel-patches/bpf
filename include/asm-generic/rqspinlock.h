@@ -217,11 +217,56 @@ unlock:
 	this_cpu_dec(rqspinlock_held_locks.cnt);
 }
 
+/**
+ * res_spin_trylock - try to acquire a queued spinlock
+ * @lock: Pointer to queued spinlock structure
+ *
+ * Attempts to acquire the lock without blocking. This function should be used
+ * in contexts where blocking is not allowed (e.g., NMI handlers).
+ *
+ * Return:
+ * * 1    - Lock was acquired successfully.
+ * * 0    - Lock acquisition failed.
+ */
+static __must_check __always_inline int res_spin_trylock(rqspinlock_t *lock)
+{
+	int val = atomic_read(&lock->val);
+	int ret;
+
+	if (unlikely(val))
+		return 0;
+
+	ret = likely(atomic_try_cmpxchg_acquire(&lock->val, &val, 1));
+	if (ret)
+		grab_held_lock_entry(lock);
+	return ret;
+}
+
 #ifdef CONFIG_QUEUED_SPINLOCKS
 #define raw_res_spin_lock_init(lock) ({ *(lock) = (rqspinlock_t)__ARCH_SPIN_LOCK_UNLOCKED; })
 #else
 #define raw_res_spin_lock_init(lock) ({ *(lock) = (rqspinlock_t){0}; })
 #endif
+
+#define raw_res_spin_trylock(lock)              \
+	({                                      \
+		int __ret;                      \
+		preempt_disable();              \
+		__ret = res_spin_trylock(lock); \
+		if (!__ret)                     \
+			preempt_enable();       \
+		__ret;                          \
+	})
+
+#define raw_res_spin_trylock_irqsave(lock, flags)   \
+	({                                          \
+		int __ret;                          \
+		local_irq_save(flags);              \
+		__ret = raw_res_spin_trylock(lock); \
+		if (!__ret)                         \
+			local_irq_restore(flags);   \
+		__ret;                              \
+	})
 
 #define raw_res_spin_lock(lock)                    \
 	({                                         \
