@@ -6876,25 +6876,6 @@ static void coerce_reg_to_size(struct bpf_reg_state *reg, int size)
 	reg_bounds_sync(reg);
 }
 
-static void set_sext64_default_val(struct bpf_reg_state *reg, int size)
-{
-	if (size == 1) {
-		reg->smin_value = reg->s32_min_value = S8_MIN;
-		reg->smax_value = reg->s32_max_value = S8_MAX;
-	} else if (size == 2) {
-		reg->smin_value = reg->s32_min_value = S16_MIN;
-		reg->smax_value = reg->s32_max_value = S16_MAX;
-	} else {
-		/* size == 4 */
-		reg->smin_value = reg->s32_min_value = S32_MIN;
-		reg->smax_value = reg->s32_max_value = S32_MAX;
-	}
-	reg->umin_value = reg->u32_min_value = 0;
-	reg->umax_value = U64_MAX;
-	reg->u32_max_value = U32_MAX;
-	reg->var_off = tnum_unknown;
-}
-
 static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
 	s64 smin_value, smax_value;
@@ -6919,21 +6900,6 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 	reg->u32_max_value = U32_MAX;
 
 	__update_reg_bounds(reg);
-}
-
-static void set_sext32_default_val(struct bpf_reg_state *reg, int size)
-{
-	if (size == 1) {
-		reg->s32_min_value = S8_MIN;
-		reg->s32_max_value = S8_MAX;
-	} else {
-		/* size == 2 */
-		reg->s32_min_value = S16_MIN;
-		reg->s32_max_value = S16_MAX;
-	}
-	reg->u32_min_value = 0;
-	reg->u32_max_value = U32_MAX;
-	reg->var_off = tnum_subreg(tnum_unknown);
 }
 
 static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
