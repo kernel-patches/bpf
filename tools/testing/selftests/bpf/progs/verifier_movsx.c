@@ -409,6 +409,28 @@ __naked void mov64sx_s8_truncated_range(void)
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("MOV32SX, S8, check 64-bit signed consistency")
+__log_level(2)
+__success __success_unpriv __retval(0)
+__naked void mov32sx_s64_consistency(void)
+{
+	asm volatile ("                                      \
+	r1 = 0xFF;                                           \
+	/* w1 = (s8)w1 -> w1 0xFFFFFFFF */           \
+	w1 = (s8)w1;                                         \
+	/* Should be positive? */ \
+	if r1 s< 0 goto l0_%=;                               \
+	r0 = 0;                                              \
+	exit;                                                \
+l0_%=:                                                   \
+	r0 = 1;                                              \
+	exit;                                                \
+"	:
+	:
+	: __clobber_all);
+}
+
 #else
 
 SEC("socket")
