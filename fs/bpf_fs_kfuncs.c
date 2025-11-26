@@ -11,6 +11,7 @@
 #include <linux/file.h>
 #include <linux/kernfs.h>
 #include <linux/mm.h>
+#include <linux/namei.h>
 #include <linux/xattr.h>
 
 __bpf_kfunc_start_defs();
@@ -94,6 +95,61 @@ __bpf_kfunc int bpf_path_d_path(const struct path *path, char *buf, size_t buf__
 	len = buf + buf__sz - ret;
 	memmove(buf, ret, len);
 	return len;
+}
+
+/**
+ * bpf_kern_path - resolve a pathname to a struct path
+ * @pathname__str: pathname to resolve
+ * @flags: lookup flags (e.g., LOOKUP_FOLLOW)
+ *
+ * Resolve the pathname for the supplied *pathname__str* and return a pointer
+ * to a struct path. This is a wrapper around kern_path() that allocates and
+ * returns a struct path pointer on success.
+ *
+ * The returned struct path pointer must be released using bpf_path_put().
+ * Failing to call bpf_path_put() on the returned struct path pointer will
+ * result in the BPF program being rejected by the BPF verifier.
+ *
+ * This BPF kfunc may only be called from BPF LSM programs.
+ *
+ * Return: A pointer to an allocated struct path on success, NULL on error.
+ */
+__bpf_kfunc struct path *bpf_kern_path(const char *pathname__str, unsigned int flags)
+{
+	struct path *path;
+	int ret;
+
+	path = kmalloc(sizeof(*path), GFP_KERNEL);
+	if (!path)
+		return NULL;
+
+	ret = kern_path(pathname__str, flags, path);
+	if (ret) {
+		kfree(path);
+		return NULL;
+	}
+
+	return path;
+}
+
+/**
+ * bpf_path_put - release a struct path reference
+ * @path: struct path pointer to release
+ *
+ * Release the struct path pointer that was acquired by bpf_kern_path().
+ * This BPF kfunc calls path_put() on the supplied *path* and then frees
+ * the allocated memory.
+ *
+ * Only struct path pointers acquired by bpf_kern_path() may be passed to
+ * this BPF kfunc. Attempting to pass any other pointer will result in the
+ * BPF program being rejected by the BPF verifier.
+ *
+ * This BPF kfunc may only be called from BPF LSM programs.
+ */
+__bpf_kfunc void bpf_path_put(struct path *path)
+{
+	path_put(path);
+	kfree(path);
 }
 
 static bool match_security_bpf_prefix(const char *name__str)
@@ -363,6 +419,8 @@ BTF_ID_FLAGS(func, bpf_get_task_exe_file,
 	     KF_ACQUIRE | KF_TRUSTED_ARGS | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_put_file, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_path_d_path, KF_TRUSTED_ARGS)
+BTF_ID_FLAGS(func, bpf_kern_path, KF_TRUSTED_ARGS | KF_ACQUIRE | KF_SLEEPABLE | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_path_put, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_get_dentry_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
 BTF_ID_FLAGS(func, bpf_set_dentry_xattr, KF_SLEEPABLE | KF_TRUSTED_ARGS)
