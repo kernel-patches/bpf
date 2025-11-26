@@ -221,6 +221,10 @@ extern void bpf_put_file(struct file *file) __ksym;
  */
 extern int bpf_path_d_path(const struct path *path, char *buf, size_t buf__sz) __ksym;
 
+extern struct path *bpf_kern_path(const char *pathname, unsigned int flags) __ksym;
+extern void bpf_path_put(struct path *path) __ksym;
+extern int bpf_path_d_path(const struct path *path, char *buf, size_t buf__sz) __ksym;
+
 /* This macro must be used to mark the exception callback corresponding to the
  * main program. For example:
  *
