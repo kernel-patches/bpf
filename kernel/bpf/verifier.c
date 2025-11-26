@@ -9598,17 +9598,18 @@ static enum bpf_dynptr_type dynptr_get_type(struct bpf_verifier_env *env,
 	return state->stack[spi].spilled_ptr.dynptr.type;
 }
 
-static int check_reg_const_str(struct bpf_verifier_env *env,
-			       struct bpf_reg_state *reg, u32 regno)
+/*
+ * Check for const string saved in a bpf map. The caller is responsible
+ * to check reg->type == PTR_TO_MAP_VALUE.
+ */
+static int check_reg_const_str_in_map(struct bpf_verifier_env *env,
+				      struct bpf_reg_state *reg, u32 regno)
 {
 	struct bpf_map *map = reg->map_ptr;
 	int err;
 	int map_off;
 	u64 map_addr;
 	char *str_ptr;
-
-	if (reg->type != PTR_TO_MAP_VALUE)
-		return -EINVAL;
 
 	if (!bpf_map_is_rdonly(map)) {
 		verbose(env, "R%d does not point to a readonly map'\n", regno);
@@ -9644,6 +9645,26 @@ static int check_reg_const_str(struct bpf_verifier_env *env,
 		return -EINVAL;
 	}
 	return 0;
+}
+
+/* Check for const string passed in as input to the bpf program. */
+static int check_reg_const_str_arg(struct bpf_reg_state *reg)
+{
+	const struct btf *btf;
+	const struct btf_type *t;
+	const char *tname;
+
+	if (base_type(reg->type) != PTR_TO_BTF_ID)
+		return -EINVAL;
+
+	btf = reg->btf;
+	t = btf_type_by_id(btf, reg->btf_id);
+	if (!t)
+		return -EINVAL;
+
+	if (btf_type_is_const_char_ptr(btf, t))
+		return 0;
+	return -EINVAL;
 }
 
 /* Returns constant key value in `value` if possible, else negative error */
@@ -9964,7 +9985,9 @@ skip_type_check:
 		break;
 	case ARG_PTR_TO_CONST_STR:
 	{
-		err = check_reg_const_str(env, reg, regno);
+		if (reg->type != PTR_TO_MAP_VALUE)
+			return -EINVAL;
+		err = check_reg_const_str_in_map(env, reg, regno);
 		if (err)
 			return err;
 		break;
@@ -13626,13 +13649,17 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			meta->arg_btf_id = reg->btf_id;
 			break;
 		case KF_ARG_PTR_TO_CONST_STR:
-			if (reg->type != PTR_TO_MAP_VALUE) {
-				verbose(env, "arg#%d doesn't point to a const string\n", i);
-				return -EINVAL;
+			if (reg->type == PTR_TO_MAP_VALUE) {
+				ret = check_reg_const_str_in_map(env, reg, regno);
+				if (ret)
+					return ret;
+			} else {
+				ret = check_reg_const_str_arg(reg);
+				if (ret) {
+					verbose(env, "arg#%d doesn't point to a const string\n", i);
+					return ret;
+				}
 			}
-			ret = check_reg_const_str(env, reg, regno);
-			if (ret)
-				return ret;
 			break;
 		case KF_ARG_PTR_TO_WORKQUEUE:
 			if (reg->type != PTR_TO_MAP_VALUE) {
