@@ -1,0 +1,103 @@
+name: veristat_kernel
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+        description: The architecture to build against, e.g x86_64, aarch64, s390x...
+      toolchain_full:
+        required: true
+        type: string
+        description: Toolchain identifier, such as llvm-20
+      runs_on:
+        required: true
+        type: string
+        description: The runners to run the test on. This is a json string representing an array of labels.
+      llvm_version:
+        required: true
+        type: string
+
+jobs:
+
+  build-scheds:
+    name: build sched-ext/scx
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    env:
+      LLVM_VERSION: ${{ inputs.llvm_version }}
+      SCX_BUILD_OUTPUT: ${{ github.workspace }}/scx-build-output
+      SCX_PROGS: ${{ github.workspace }}/scx-progs
+      SCX_REVISION: 5c4575195fe1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            ci
+      - uses: libbpf/ci/build-scx-scheds@v3
+        with:
+          output-dir: ${{ env.SCX_BUILD_OUTPUT }}
+      - name: Collect scx progs
+        run: ${{ github.workspace }}/.github/scripts/collect-scx-bpf-progs.sh ${{ env.SCX_PROGS }}
+      - name: Upload scx progs
+        uses: actions/upload-artifact@v4
+        with:
+          name: scx-progs-${{ inputs.arch }}-${{ inputs.toolchain_full }}
+          if-no-files-found: error
+          path: ${{ env.SCX_PROGS }}
+
+  veristat:
+    name: veristat-scx
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    needs: [build-scheds]
+    permissions:
+        id-token: write
+        contents: read
+    env:
+      KERNEL: LATEST
+      REPO_ROOT: ${{ github.workspace }}
+      REPO_PATH: ""
+      KBUILD_OUTPUT: kbuild-output/
+      ARCH_AND_TOOL: ${{ inputs.arch }}-${{ inputs.toolchain_full }}
+      VERISTAT_DUMP_LOG_ON_FAILURE: 'true'
+      VERISTAT_TARGET: scx
+      SCX_PROGS: ${{ github.workspace }}/scx-progs
+
+    steps:
+
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            ci
+
+      - name: Download kernel build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: vmlinux-${{ env.ARCH_AND_TOOL }}
+          path: .
+
+      - name: Untar kernel build artifacts
+        run: zstd -d -T0  vmlinux-${{ env.ARCH_AND_TOOL }}.tar.zst --stdout | tar -xf -
+
+      - name: Download scx progs
+        uses: actions/download-artifact@v4
+        with:
+          name: scx-progs-${{ inputs.arch }}-${{ inputs.toolchain_full }}
+          path: ${{ env.SCX_PROGS }}
+
+      - name: Run veristat
+        uses: libbpf/ci/run-vmtest@v3
+        with:
+          arch: x86_64
+          vmlinuz: '${{ github.workspace }}/vmlinuz'
+          kernel-root: '.'
+          kernel-test: 'run_veristat'
+          output-dir: '${{ github.workspace }}'
+
+      - name: Compare and save veristat.scx.csv
+        uses: ./.github/actions/veristat_baseline_compare
+        with:
+          veristat_output: veristat-scx
+          baseline_name: ${{ env.ARCH_AND_TOOL}}-baseline-veristat-scx
