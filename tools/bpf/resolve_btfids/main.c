@@ -71,9 +71,11 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <linux/btf_ids.h>
+#include <linux/kallsyms.h>
 #include <linux/rbtree.h>
 #include <linux/zalloc.h>
 #include <linux/err.h>
+#include <linux/limits.h>
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 #include <subcmd/parse-options.h>
@@ -429,14 +431,6 @@ static int elf_collect(struct object *obj)
 			obj->efile.idlist       = data;
 			obj->efile.idlist_shndx = idx;
 			obj->efile.idlist_addr  = sh.sh_addr;
-		} else if (!strcmp(name, BTF_BASE_ELF_SEC)) {
-			/* If a .BTF.base section is found, do not resolve
-			 * BTF ids relative to vmlinux; resolve relative
-			 * to the .BTF.base section instead.  btf__parse_split()
-			 * will take care of this once the base BTF it is
-			 * passed is NULL.
-			 */
-			obj->base_btf_path = NULL;
 		}
 
 		if (compressed_section_fix(elf, scn, &sh))
@@ -569,6 +563,19 @@ static int load_btf(struct object *obj)
 
 	obj->base_btf = base_btf;
 	obj->btf = btf;
+
+	if (obj->base_btf) {
+		err = btf__distill_base(obj->btf, &base_btf, &btf);
+		if (err) {
+			pr_err("FAILED to distill base BTF: %s\n", strerror(errno));
+			goto out_err;
+		}
+
+		btf__free(obj->btf);
+		btf__free(obj->base_btf);
+		obj->btf = btf;
+		obj->base_btf = base_btf;
+	}
 
 	return 0;
 
@@ -777,8 +784,6 @@ static int sets_patch(struct object *obj)
 
 static int symbols_patch(struct object *obj)
 {
-	off_t err;
-
 	if (__symbols_patch(obj, &obj->structs)  ||
 	    __symbols_patch(obj, &obj->unions)   ||
 	    __symbols_patch(obj, &obj->typedefs) ||
@@ -789,20 +794,67 @@ static int symbols_patch(struct object *obj)
 	if (sets_patch(obj))
 		return -1;
 
-	/* Set type to ensure endian translation occurs. */
-	obj->efile.idlist->d_type = ELF_T_WORD;
+	return 0;
+}
 
-	elf_flagdata(obj->efile.idlist, ELF_C_SET, ELF_F_DIRTY);
+static int dump_raw_data(const char *out_path, const void *data, u32 size)
+{
+	int fd, ret;
 
-	err = elf_update(obj->efile.elf, ELF_C_WRITE);
-	if (err < 0) {
-		pr_err("FAILED elf_update(WRITE): %s\n",
-			elf_errmsg(-1));
+	fd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0640);
+	if (fd < 0) {
+		pr_err("Couldn't open %s for writing\n", out_path);
+		return fd;
 	}
 
-	pr_debug("update %s for %s\n",
-		 err >= 0 ? "ok" : "failed", obj->path);
-	return err < 0 ? -1 : 0;
+	ret = write(fd, data, size);
+	if (ret < 0 || ret != size) {
+		pr_err("Failed to write data to %s\n", out_path);
+		close(fd);
+		unlink(out_path);
+		return -1;
+	}
+
+	close(fd);
+	pr_debug("Dumped %lu bytes of data to %s\n", size, out_path);
+
+	return 0;
+}
+
+static int dump_raw_btf_ids(struct object *obj, const char *out_path)
+{
+	Elf_Data *data = obj->efile.idlist;
+	int fd, err;
+
+	if (!data || !data->d_buf) {
+		pr_debug("%s has no BTF_ids data to dump\n", obj->path);
+		return 0;
+	}
+
+	err = dump_raw_data(out_path, data->d_buf, data->d_size);
+	if (err)
+		return -1;
+
+	return 0;
+}
+
+static int dump_raw_btf(struct btf *btf, const char *out_path)
+{
+	const void *raw_btf_data;
+	u32 raw_btf_size;
+	int fd, err;
+
+	raw_btf_data = btf__raw_data(btf, &raw_btf_size);
+	if (raw_btf_data == NULL) {
+		pr_err("btf__raw_data() failed\n");
+		return -1;
+	}
+
+	err = dump_raw_data(out_path, raw_btf_data, raw_btf_size);
+	if (err)
+		return -1;
+
+	return 0;
 }
 
 static const char * const resolve_btfids_usage[] = {
@@ -823,12 +875,13 @@ int main(int argc, const char **argv)
 		.funcs    = RB_ROOT,
 		.sets     = RB_ROOT,
 	};
+	char out_path[PATH_MAX];
 	bool fatal_warnings = false;
 	struct option btfid_options[] = {
 		OPT_INCR('v', "verbose", &verbose,
 			 "be more verbose (show errors, etc)"),
 		OPT_STRING(0, "btf", &obj.btf_path, "BTF data",
-			   "BTF data"),
+			   "input BTF data"),
 		OPT_STRING('b', "btf_base", &obj.base_btf_path, "file",
 			   "path of file providing base BTF"),
 		OPT_BOOLEAN(0, "fatal_warnings", &fatal_warnings,
@@ -844,6 +897,9 @@ int main(int argc, const char **argv)
 
 	obj.path = argv[0];
 
+	if (load_btf(&obj))
+		goto out;
+
 	if (elf_collect(&obj))
 		goto out;
 
@@ -853,15 +909,11 @@ int main(int argc, const char **argv)
 	 */
 	if (obj.efile.idlist_shndx == -1 ||
 	    obj.efile.symbols_shndx == -1) {
-		pr_debug("Cannot find .BTF_ids or symbols sections, nothing to do\n");
-		err = 0;
-		goto out;
+		pr_debug("Cannot find .BTF_ids or symbols sections, skip symbols resolution\n");
+		goto dump_btf;
 	}
 
 	if (symbols_collect(&obj))
-		goto out;
-
-	if (load_btf(&obj))
 		goto out;
 
 	if (symbols_resolve(&obj))
@@ -869,6 +921,24 @@ int main(int argc, const char **argv)
 
 	if (symbols_patch(&obj))
 		goto out;
+
+	strcpy(out_path, obj.path);
+	strcat(out_path, ".btf_ids");
+	if (dump_raw_btf_ids(&obj, out_path))
+		goto out;
+
+dump_btf:
+	strcpy(out_path, obj.path);
+	strcat(out_path, ".btf");
+	if (dump_raw_btf(obj.btf, out_path))
+		goto out;
+
+	if (obj.base_btf) {
+		strcpy(out_path, obj.path);
+		strcat(out_path, ".distilled_base.btf");
+		if (dump_raw_btf(obj.base_btf, out_path))
+			goto out;
+	}
 
 	if (!(fatal_warnings && warnings))
 		err = 0;
