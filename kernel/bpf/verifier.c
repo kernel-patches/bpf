@@ -6925,8 +6925,11 @@ static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 	reg->umin_value = reg->u32_min_value;
 	reg->umax_value = reg->u32_max_value;
 	
-	reg->smin_value = reg->umin_value;
-	reg->smax_value = reg->umax_value;
+	//reg->smin_value = reg->umin_value;
+	//reg->smax_value = reg->umax_value;
+
+	reg->smin_value = reg->s32_min_value;
+	reg->smax_value = reg->s32_max_value;
 }
 
 static bool bpf_map_is_rdonly(const struct bpf_map *map)
