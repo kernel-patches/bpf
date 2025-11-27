@@ -3838,9 +3838,21 @@ void bpf_insn_array_adjust_after_remove(struct bpf_map *map, u32 off, u32 len);
 
 #ifdef CONFIG_BPF_SYSCALL
 void bpf_prog_update_insn_ptrs(struct bpf_prog *prog, u32 *offsets, void *image);
+void bpf_prog_collect_indirect_targets(const struct bpf_prog *prog, unsigned long *bitmap);
+bool bpf_prog_has_insn_array(const struct bpf_prog *prog);
 #else
 static inline void
 bpf_prog_update_insn_ptrs(struct bpf_prog *prog, u32 *offsets, void *image)
+{
+}
+
+static inline bool bpf_prog_has_insn_array(const struct bpf_prog *prog)
+{
+	return false;
+}
+
+static inline void
+bpf_prog_collect_indirect_targets(const struct bpf_prog *prog, unsigned long *bitmap)
 {
 }
 #endif

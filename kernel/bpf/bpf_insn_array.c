@@ -302,3 +302,46 @@ void bpf_prog_update_insn_ptrs(struct bpf_prog *prog, u32 *offsets, void *image)
 		}
 	}
 }
+
+bool bpf_prog_has_insn_array(const struct bpf_prog *prog)
+{
+	int i;
+
+	for (i = 0; i < prog->aux->used_map_cnt; i++) {
+		if (is_insn_array(prog->aux->used_maps[i]))
+			return true;
+	}
+	return false;
+}
+
+/*
+ * This function collects possible indirect jump targets in a BPF program. Since indirect jump
+ * targets can only be read from instruction arrays, it traverses all instruction arrays used
+ * by @prog. For each instruction in the arrays, it sets the corresponding bit in @bitmap.
+ */
+void bpf_prog_collect_indirect_targets(const struct bpf_prog *prog, unsigned long *bitmap)
+{
+	struct bpf_insn_array *insn_array;
+	struct bpf_map *map;
+	u32 xlated_off;
+	int i, j;
+
+	for (i = 0; i < prog->aux->used_map_cnt; i++) {
+		map = prog->aux->used_maps[i];
+		if (!is_insn_array(map))
+			continue;
+
+		insn_array = cast_insn_array(map);
+		for (j = 0; j < map->max_entries; j++) {
+			xlated_off = insn_array->values[j].xlated_off;
+			if (xlated_off == INSN_DELETED)
+				continue;
+			if (xlated_off < prog->aux->subprog_start)
+				continue;
+			xlated_off -= prog->aux->subprog_start;
+			if (xlated_off >= prog->len)
+				continue;
+			__set_bit(xlated_off, bitmap);
+		}
+	}
+}
