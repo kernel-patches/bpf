@@ -897,6 +897,25 @@ bool btf_type_is_primitive(const struct btf_type *t)
 	       btf_is_any_enum(t);
 }
 
+bool btf_type_is_const_char_ptr(const struct btf *btf, const struct btf_type *t)
+{
+	const char *tname;
+
+	/* The type chain has to be PTR->CONST->CHAR */
+	if (BTF_INFO_KIND(t->info) != BTF_KIND_PTR)
+		return false;
+
+	t = btf_type_by_id(btf, t->type);
+	if (BTF_INFO_KIND(t->info) != BTF_KIND_CONST)
+		return false;
+
+	t = btf_type_by_id(btf, t->type);
+	tname = btf_name_by_offset(btf, t->name_off);
+	if (tname && strcmp(tname, "char") == 0)
+		return true;
+	return false;
+}
+
 /*
  * Check that given struct member is a regular int with expected
  * offset and size.
@@ -6746,6 +6765,20 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			/* Default prog with MAX_BPF_FUNC_REG_ARGS args */
 			return true;
 		t = btf_type_by_id(btf, args[arg].type);
+
+		/*
+		 * For const string, we need to match "const char *"
+		 * exactly. Therefore, do the check before the skipping
+		 * modifiers.
+		 */
+		if (btf_type_is_const_char_ptr(btf, t)) {
+			info->reg_type = PTR_TO_BTF_ID;
+			if (prog_args_trusted(prog))
+				info->reg_type |= PTR_TRUSTED;
+			info->btf = btf;
+			info->btf_id = args[arg].type;
+			return true;
+		}
 	}
 
 	/* skip modifiers */
