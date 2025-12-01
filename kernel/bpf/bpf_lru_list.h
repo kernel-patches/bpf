@@ -69,6 +69,13 @@ static inline void bpf_lru_node_set_ref(struct bpf_lru_node *node)
 		WRITE_ONCE(node->ref, 1);
 }
 
+static inline void bpf_lru_node_init(struct bpf_lru_node *node)
+{
+	node->ref = 0;
+	node->type = BPF_LRU_LIST_T_FREE;
+	INIT_LIST_HEAD(&node->list);
+}
+
 int bpf_lru_init(struct bpf_lru *lru, bool percpu, u32 hash_offset,
 		 del_from_htab_func del_from_htab, void *delete_arg);
 void bpf_lru_populate(struct bpf_lru *lru, void *buf, u32 node_offset,
@@ -76,5 +83,7 @@ void bpf_lru_populate(struct bpf_lru *lru, void *buf, u32 node_offset,
 void bpf_lru_destroy(struct bpf_lru *lru);
 struct bpf_lru_node *bpf_lru_pop_free(struct bpf_lru *lru, u32 hash);
 void bpf_lru_push_free(struct bpf_lru *lru, struct bpf_lru_node *node);
+void bpf_lru_node_replace(struct bpf_lru *lru, struct bpf_lru_node *old_node,
+			  struct bpf_lru_node *new_node);
 
 #endif

@@ -694,3 +694,46 @@ void bpf_lru_destroy(struct bpf_lru *lru)
 	else
 		free_percpu(lru->common_lru.local_list);
 }
+
+void bpf_lru_node_replace(struct bpf_lru *lru, struct bpf_lru_node *old_node,
+			  struct bpf_lru_node *new_node)
+{
+	enum bpf_lru_list_type new_type = BPF_LRU_LIST_T_ACTIVE;
+	unsigned long flags;
+
+	new_node->cpu = old_node->cpu;
+	new_node->type = new_type;
+	bpf_lru_node_set_ref(new_node);
+
+	if (!lru->percpu && IS_LOCAL_LIST_TYPE(old_node->type)) {
+		struct bpf_lru_locallist *loc_l;
+		struct bpf_lru_list *l;
+
+		loc_l = per_cpu_ptr(lru->common_lru.local_list, old_node->cpu);
+		l = &lru->common_lru.lru_list;
+
+		raw_spin_lock_irqsave(&loc_l->lock, flags);
+		list_del_init(&old_node->list);
+		raw_spin_unlock_irqrestore(&loc_l->lock, flags);
+
+		raw_spin_lock_irqsave(&l->lock, flags);
+		bpf_lru_list_count_inc(l, new_type);
+		list_add(&new_node->list, &l->lists[new_type]);
+		raw_spin_unlock_irqrestore(&l->lock, flags);
+	} else {
+		struct bpf_lru_list *l;
+
+		if (lru->percpu)
+			l = per_cpu_ptr(lru->percpu_lru, old_node->cpu);
+		else
+			l = &lru->common_lru.lru_list;
+		raw_spin_lock_irqsave(&l->lock, flags);
+		bpf_lru_list_count_inc(l, new_type);
+		list_add(&new_node->list, &l->lists[new_type]);
+		bpf_lru_list_count_dec(l, old_node->type);
+		list_del_init(&old_node->list);
+		raw_spin_unlock_irqrestore(&l->lock, flags);
+	}
+
+	bpf_lru_node_clear_ref(old_node);
+}
