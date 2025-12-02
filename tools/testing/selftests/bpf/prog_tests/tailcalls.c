@@ -8,6 +8,8 @@
 #include "tailcall_freplace.skel.h"
 #include "tc_bpf2bpf.skel.h"
 #include "tailcall_fail.skel.h"
+#include "tailcall_cgrp_storage_owner.skel.h"
+#include "tailcall_cgrp_storage.skel.h"
 
 /* test_tailcall_1 checks basic functionality by patching multiple locations
  * in a single program for a single tail call slot with nop->jmp, jmp->nop
@@ -1648,6 +1650,52 @@ out:
 	tc_bpf2bpf__destroy(tc_skel);
 }
 
+/*
+ * test_tail_call_cgrp_storage makes sure that callee programs cannot
+ * use cgroup storage
+ */
+static void test_tailcall_cgrp_storage(void)
+{
+	int err, prog_fd, prog_array_fd, storage_map_fd, key = 0;
+	struct tailcall_cgrp_storage_owner *owner_skel;
+	struct tailcall_cgrp_storage *skel;
+
+	/*
+	 * The first program loaded tailcalling into prog_array map becomes the
+	 * owner. This is needed to allow prog map compatibility check to pass
+	 * later during map_update.
+	 */
+	owner_skel = tailcall_cgrp_storage_owner__open_and_load();
+	if (!ASSERT_OK_PTR(owner_skel, "tailcall_cgrp_storage_owner__open"))
+		return;
+
+	prog_array_fd = bpf_map__fd(owner_skel->maps.prog_array);
+	storage_map_fd = bpf_map__fd(owner_skel->maps.storage_map);
+
+	skel = tailcall_cgrp_storage__open();
+	if (!ASSERT_OK_PTR(skel, "tailcall_cgrp_storage__open")) {
+		tailcall_cgrp_storage_owner__destroy(owner_skel);
+		return;
+	}
+
+	err = bpf_map__reuse_fd(skel->maps.prog_array, prog_array_fd);
+	ASSERT_OK(err, "bpf_map__reuse_fd(prog_array)");
+
+	err = bpf_map__reuse_fd(skel->maps.storage_map, storage_map_fd);
+	ASSERT_OK(err, "bpf_map__reuse_fd(storage_map)");
+
+	err = bpf_object__load(skel->obj);
+	ASSERT_OK(err, "bpf_object__load");
+
+	prog_fd = bpf_program__fd(skel->progs.callee_prog);
+	prog_array_fd = bpf_map__fd(skel->maps.prog_array);
+
+	err = bpf_map_update_elem(prog_array_fd, &key, &prog_fd, BPF_ANY);
+	ASSERT_ERR(err, "bpf_map_update_elem");
+
+	tailcall_cgrp_storage__destroy(skel);
+}
+
 static void test_tailcall_failure()
 {
 	RUN_TESTS(tailcall_fail);
@@ -1705,6 +1753,8 @@ void test_tailcalls(void)
 		test_tailcall_freplace();
 	if (test__start_subtest("tailcall_bpf2bpf_freplace"))
 		test_tailcall_bpf2bpf_freplace();
+	if (test__start_subtest("tailcall_cgrp_storage"))
+		test_tailcall_cgrp_storage();
 	if (test__start_subtest("tailcall_failure"))
 		test_tailcall_failure();
 }
