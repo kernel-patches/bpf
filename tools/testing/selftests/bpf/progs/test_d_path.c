@@ -17,6 +17,8 @@ int rets_close[MAX_FILES] = {};
 
 int called_stat = 0;
 int called_close = 0;
+int called_lsm = 0;
+int lsm_match = 0;
 
 SEC("fentry/security_inode_getattr")
 int BPF_PROG(prog_stat, struct path *path, struct kstat *stat,
@@ -59,6 +61,37 @@ int BPF_PROG(prog_close, struct file *file, void *id)
 
 	rets_close[cnt] = ret;
 	cnt_close++;
+	return 0;
+}
+
+SEC("lsm/bprm_check_security")
+int BPF_PROG(prog_lsm, struct linux_binprm *bprm)
+{
+	pid_t pid = bpf_get_current_pid_tgid() >> 32;
+	char path[MAX_PATH_LEN] = {};
+	int ret;
+
+	if (pid != my_pid)
+		return 0;
+
+	called_lsm = 1;
+	ret = bpf_d_path(&bprm->file->f_path, path, MAX_PATH_LEN);
+	if (ret < 0)
+		return 0;
+
+	{
+		static const char target_dir[] = "/tmp/";
+
+#pragma unroll
+		for (int i = 0; i < sizeof(target_dir) - 1; i++) {
+			if (path[i] != target_dir[i]) {
+				lsm_match = -1; /* mismatch */
+				return 0;
+			}
+		}
+	}
+
+	lsm_match = 1; /* prefix match */
 	return 0;
 }
 
