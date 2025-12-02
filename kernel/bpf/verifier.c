@@ -6876,7 +6876,7 @@ static void coerce_reg_to_size(struct bpf_reg_state *reg, int size)
 	reg_bounds_sync(reg);
 }
 
-static void coerce_reg_to_size_sx_new(struct bpf_reg_state *reg, int size)
+static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
 	s64 smin_value, smax_value;
 	u64 num_bits = size * 8;
