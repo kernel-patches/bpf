@@ -195,6 +195,68 @@ static void test_d_path_check_types(void)
 	test_d_path_check_types__destroy(skel);
 }
 
+static void test_d_path_lsm(void)
+{
+	struct test_d_path *skel;
+	int err;
+	int pipefd[2];
+	pid_t pid;
+
+	skel = test_d_path__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "d_path skeleton failed"))
+		return;
+
+	err = test_d_path__attach(skel);
+	if (!ASSERT_OK(err, "attach failed"))
+		goto cleanup;
+
+	/* Prepare the test binary */
+	system("cp /bin/true /tmp/bpf_d_path_test 2>/dev/null || :");
+
+	if (!ASSERT_OK(pipe(pipefd), "pipe failed"))
+		goto cleanup;
+
+	pid = fork();
+	if (!ASSERT_GE(pid, 0, "fork failed")) {
+		close(pipefd[0]);
+		close(pipefd[1]);
+		goto cleanup;
+	}
+
+	if (pid == 0) {
+		/* Child */
+		char buf;
+
+		close(pipefd[1]);
+		/* Wait for parent to set PID in BPF map */
+		if (read(pipefd[0], &buf, 1) != 1)
+			exit(1);
+		close(pipefd[0]);
+		execl("/tmp/bpf_d_path_test", "/tmp/bpf_d_path_test", NULL);
+		exit(1);
+	}
+
+	/* Parent */
+	close(pipefd[0]);
+
+	/* Update BPF map with child PID */
+	skel->bss->my_pid = pid;
+
+	/* Signal child to proceed */
+	write(pipefd[1], "G", 1);
+	close(pipefd[1]);
+
+	/* Wait for child */
+	waitpid(pid, NULL, 0);
+
+	ASSERT_EQ(skel->bss->called_lsm, 1, "lsm hook called");
+	ASSERT_EQ(skel->bss->lsm_match, 1, "lsm match");
+
+cleanup:
+	unlink("/tmp/bpf_d_path_test");
+	test_d_path__destroy(skel);
+}
+
 void test_d_path(void)
 {
 	if (test__start_subtest("basic"))
@@ -205,4 +267,7 @@ void test_d_path(void)
 
 	if (test__start_subtest("check_alloc_mem"))
 		test_d_path_check_types();
+
+	if (test__start_subtest("lsm"))
+		test_d_path_lsm();
 }
