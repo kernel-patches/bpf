@@ -892,8 +892,9 @@ int bpf_fd_array_map_update_elem(struct bpf_map *map, struct file *map_file,
 				 void *key, void *value, u64 map_flags)
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
+	u32 i, index = *(u32 *)key, ufd;
 	void *new_ptr, *old_ptr;
-	u32 index = *(u32 *)key, ufd;
+	struct bpf_prog *prog;
 
 	if (map_flags != BPF_ANY)
 		return -EINVAL;
@@ -905,6 +906,14 @@ int bpf_fd_array_map_update_elem(struct bpf_map *map, struct file *map_file,
 	new_ptr = map->ops->map_fd_get_ptr(map, map_file, ufd);
 	if (IS_ERR(new_ptr))
 		return PTR_ERR(new_ptr);
+
+	if (map->map_type == BPF_MAP_TYPE_PROG_ARRAY) {
+		prog = (struct bpf_prog *)new_ptr;
+
+		for_each_cgroup_storage_type(i)
+			if (prog->aux->cgroup_storage[i])
+				return -EINVAL;
+	}
 
 	if (map->ops->map_poke_run) {
 		mutex_lock(&array->aux->poke_mutex);
