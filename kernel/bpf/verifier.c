@@ -6876,26 +6876,44 @@ static void coerce_reg_to_size(struct bpf_reg_state *reg, int size)
 	reg_bounds_sync(reg);
 }
 
-static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
+static void coerce_reg_to_size_sx_new(struct bpf_reg_state *reg, int size)
 {
 	s64 smin_value, smax_value;
+	u64 num_bits = size * 8;
+	u64 top_smax_value, top_smin_value;
 
 	if (size >= 8)
 		return;
 
 	reg->var_off = tnum_scast(reg->var_off, size);
 
-	smin_value = -(1LL << (size * 8 - 1));
-	smax_value = (1LL << (size * 8 - 1)) - 1;
+	top_smax_value = ((u64)reg->smax_value >> num_bits) << num_bits;
+	top_smin_value = ((u64)reg->smin_value >> num_bits) << num_bits;
+
+	if (top_smax_value == top_smin_value) {
+		if (size == 1) {
+			smin_value = (s8)reg->smin_value;
+			smax_value = (s8)reg->smax_value;
+		} else if (size == 2) {
+			smin_value = (s16)reg->smin_value;
+			smax_value = (s16)reg->smax_value;
+		} else {
+			smin_value = (s32)reg->smin_value;
+			smax_value = (s32)reg->smax_value;
+		}
+	} else {
+		smin_value = -(1LL << (num_bits - 1));
+		smax_value = (1LL << (num_bits - 1)) - 1;
+	}
 
 	reg->smin_value = smin_value;
 	reg->smax_value = smax_value;
 
-	reg->s32_min_value = (s32)smin_value;
-	reg->s32_max_value = (s32)smax_value;
-
 	reg->umin_value = 0;
 	reg->umax_value = U64_MAX;
+
+	reg->s32_min_value = (s32)smin_value;
+	reg->s32_max_value = (s32)smax_value;
 	reg->u32_min_value = 0;
 	reg->u32_max_value = U32_MAX;
 
@@ -6905,18 +6923,32 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
 	s32 smin_value, smax_value;
+	u32 num_bits = size * 8;
+	u32 top_smax_value, top_smin_value;
 
 	if (size >= 4)
 		return;
 
 	reg->var_off = tnum_subreg(tnum_scast(reg->var_off, size));
 
-	smin_value = -(1 << (size * 8 - 1));
-	smax_value = (1 << (size * 8 - 1)) - 1;
+	top_smax_value = ((u32)reg->s32_max_value >> num_bits) << num_bits;
+	top_smin_value = ((u32)reg->s32_min_value >> num_bits) << num_bits;
+
+	if (top_smax_value == top_smin_value) {
+		if (size == 1) {
+			smin_value = (s8)reg->s32_min_value;
+			smax_value = (s8)reg->s32_max_value;
+		} else {
+			smin_value = (s16)reg->s32_min_value;
+			smax_value = (s16)reg->s32_max_value;
+		}
+	} else {
+		smin_value = -(1 << (num_bits - 1));
+		smax_value = (1 << (num_bits - 1)) - 1;
+	}
 
 	reg->s32_min_value = smin_value;
 	reg->s32_max_value = smax_value;
-
 	reg->u32_min_value = 0;
 	reg->u32_max_value = U32_MAX;
 
@@ -6924,12 +6956,8 @@ static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 
 	reg->umin_value = reg->u32_min_value;
 	reg->umax_value = reg->u32_max_value;
-	
-	//reg->smin_value = reg->umin_value;
-	//reg->smax_value = reg->umax_value;
-
-	reg->smin_value = reg->s32_min_value;
-	reg->smax_value = reg->s32_max_value;
+	reg->smin_value = reg->umin_value;
+	reg->smax_value = reg->umax_value;
 }
 
 static bool bpf_map_is_rdonly(const struct bpf_map *map)
