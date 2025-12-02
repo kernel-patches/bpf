@@ -1358,6 +1358,28 @@ static long __htab_lru_percpu_map_update_elem(struct bpf_map *map, void *key,
 	b = __select_bucket(htab, hash);
 	head = &b->head;
 
+	ret = htab_lock_bucket(b, &flags);
+	if (ret)
+		goto err_lock_bucket;
+
+	l_old = lookup_elem_raw(head, hash, key, key_size);
+
+	ret = check_flags(htab, l_old, map_flags);
+	if (ret)
+		goto err;
+
+	if (l_old) {
+		bpf_lru_node_set_ref(&l_old->lru_node);
+		/* per-cpu hash map can update value in-place */
+		pcpu_copy_value(htab, htab_elem_get_ptr(l_old, key_size),
+				value, onallcpus);
+	}
+
+	htab_unlock_bucket(b, flags);
+
+	if (l_old)
+		return 0;
+
 	/* For LRU, we need to alloc before taking bucket's
 	 * spinlock because LRU's elem alloc may need
 	 * to remove older elem from htab and this removal
