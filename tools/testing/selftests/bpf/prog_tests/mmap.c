@@ -89,14 +89,14 @@ void test_mmap(void)
 	bss_data = bss_mmaped;
 	map_data = map_mmaped;
 
-	CHECK_FAIL(bss_data->in_val);
-	CHECK_FAIL(bss_data->out_val);
-	CHECK_FAIL(skel->bss->in_val);
-	CHECK_FAIL(skel->bss->out_val);
-	CHECK_FAIL(map_data->val[0]);
-	CHECK_FAIL(map_data->val[1]);
-	CHECK_FAIL(map_data->val[2]);
-	CHECK_FAIL(map_data->val[far]);
+	ASSERT_EQ(bss_data->in_val, 0, "bss_data->in_val");
+	ASSERT_EQ(bss_data->out_val, 0, "bss_data->out_val");
+	ASSERT_EQ(skel->bss->in_val, 0, "skel->bss->in_val");
+	ASSERT_EQ(skel->bss->out_val, 0, "skel->bss->out_val");
+	ASSERT_EQ(map_data->val[0], 0, "map_data->val[0]");
+	ASSERT_EQ(map_data->val[1], 0, "map_data->val[1]");
+	ASSERT_EQ(map_data->val[2], 0, "map_data->val[2]");
+	ASSERT_EQ(map_data->val[far], 0, "map_data->val[far]");
 
 	err = test_mmap__attach(skel);
 	if (CHECK(err, "attach_raw_tp", "err %d\n", err))
@@ -104,27 +104,27 @@ void test_mmap(void)
 
 	bss_data->in_val = 123;
 	val = 111;
-	CHECK_FAIL(bpf_map_update_elem(data_map_fd, &zero, &val, 0));
+	ASSERT_OK(bpf_map_update_elem(data_map_fd, &zero, &val, 0), "map_update_elem");
 
 	usleep(1);
 
-	CHECK_FAIL(bss_data->in_val != 123);
-	CHECK_FAIL(bss_data->out_val != 123);
-	CHECK_FAIL(skel->bss->in_val != 123);
-	CHECK_FAIL(skel->bss->out_val != 123);
-	CHECK_FAIL(map_data->val[0] != 111);
-	CHECK_FAIL(map_data->val[1] != 222);
-	CHECK_FAIL(map_data->val[2] != 123);
-	CHECK_FAIL(map_data->val[far] != 3 * 123);
+	ASSERT_EQ(bss_data->in_val, 123, "bss_data->in_val");
+	ASSERT_EQ(bss_data->out_val, 123, "bss_data->out_val");
+	ASSERT_EQ(skel->bss->in_val, 123, "skel->bss->in_val");
+	ASSERT_EQ(skel->bss->out_val, 123, "skel->bss->out_val");
+	ASSERT_EQ(map_data->val[0], 111, "map_data->val[0]");
+	ASSERT_EQ(map_data->val[1], 222, "map_data->val[1]");
+	ASSERT_EQ(map_data->val[2], 123, "map_data->val[2]");
+	ASSERT_EQ(map_data->val[far], 3 * 123, "map_data->val[far]");
 
-	CHECK_FAIL(bpf_map_lookup_elem(data_map_fd, &zero, &val));
-	CHECK_FAIL(val != 111);
-	CHECK_FAIL(bpf_map_lookup_elem(data_map_fd, &one, &val));
-	CHECK_FAIL(val != 222);
-	CHECK_FAIL(bpf_map_lookup_elem(data_map_fd, &two, &val));
-	CHECK_FAIL(val != 123);
-	CHECK_FAIL(bpf_map_lookup_elem(data_map_fd, &far, &val));
-	CHECK_FAIL(val != 3 * 123);
+	ASSERT_OK(bpf_map_lookup_elem(data_map_fd, &zero, &val), "map_lookup_elem zero");
+	ASSERT_EQ(val, 111, "val after lookup zero");
+	ASSERT_OK(bpf_map_lookup_elem(data_map_fd, &one, &val), "map_lookup_elem one");
+	ASSERT_EQ(val, 222, "val after lookup one");
+	ASSERT_OK(bpf_map_lookup_elem(data_map_fd, &two, &val), "map_lookup_elem two");
+	ASSERT_EQ(val, 123, "val after lookup two");
+	ASSERT_OK(bpf_map_lookup_elem(data_map_fd, &far, &val), "map_lookup_elem far");
+	ASSERT_EQ(val, 3 * 123, "val after lookup far");
 
 	/* data_map freeze should fail due to R/W mmap() */
 	err = bpf_map_freeze(data_map_fd);
@@ -163,10 +163,10 @@ void test_mmap(void)
 		void *p;
 
 		p = mmap(NULL, map_sz, flags, MAP_SHARED, data_map_fd, 0);
-		if (CHECK_FAIL(p == MAP_FAILED))
+		if (!ASSERT_NEQ(p, MAP_FAILED, "mmap in loop"))
 			goto cleanup;
 		err = munmap(p, map_sz);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "munmap in loop"))
 			goto cleanup;
 	}
 
@@ -186,14 +186,14 @@ void test_mmap(void)
 
 	bss_data->in_val = 321;
 	usleep(1);
-	CHECK_FAIL(bss_data->in_val != 321);
-	CHECK_FAIL(bss_data->out_val != 321);
-	CHECK_FAIL(skel->bss->in_val != 321);
-	CHECK_FAIL(skel->bss->out_val != 321);
-	CHECK_FAIL(map_data->val[0] != 111);
-	CHECK_FAIL(map_data->val[1] != 222);
-	CHECK_FAIL(map_data->val[2] != 321);
-	CHECK_FAIL(map_data->val[far] != 3 * 321);
+	ASSERT_EQ(bss_data->in_val, 321, "bss_data->in_val");
+	ASSERT_EQ(bss_data->out_val, 321, "bss_data->out_val");
+	ASSERT_EQ(skel->bss->in_val, 321, "skel->bss->in_val");
+	ASSERT_EQ(skel->bss->out_val, 321, "skel->bss->out_val");
+	ASSERT_EQ(map_data->val[0], 111, "map_data->val[0]");
+	ASSERT_EQ(map_data->val[1], 222, "map_data->val[1]");
+	ASSERT_EQ(map_data->val[2], 321, "map_data->val[2]");
+	ASSERT_EQ(map_data->val[far], 3 * 321, "map_data->val[far]");
 
 	/* check some more advanced mmap() manipulations */
 
@@ -238,14 +238,14 @@ void test_mmap(void)
 	CHECK(tmp1 != tmp2, "adv_mmap6", "tmp1: %p, tmp2: %p\n", tmp1, tmp2);
 
 	map_data = tmp2;
-	CHECK_FAIL(bss_data->in_val != 321);
-	CHECK_FAIL(bss_data->out_val != 321);
-	CHECK_FAIL(skel->bss->in_val != 321);
-	CHECK_FAIL(skel->bss->out_val != 321);
-	CHECK_FAIL(map_data->val[0] != 111);
-	CHECK_FAIL(map_data->val[1] != 222);
-	CHECK_FAIL(map_data->val[2] != 321);
-	CHECK_FAIL(map_data->val[far] != 3 * 321);
+	ASSERT_EQ(bss_data->in_val, 321, "bss_data->in_val");
+	ASSERT_EQ(bss_data->out_val, 321, "bss_data->out_val");
+	ASSERT_EQ(skel->bss->in_val, 321, "skel->bss->in_val");
+	ASSERT_EQ(skel->bss->out_val, 321, "skel->bss->out_val");
+	ASSERT_EQ(map_data->val[0], 111, "map_data->val[0]");
+	ASSERT_EQ(map_data->val[1], 222, "map_data->val[1]");
+	ASSERT_EQ(map_data->val[2], 321, "map_data->val[2]");
+	ASSERT_EQ(map_data->val[far], 3 * 321, "map_data->val[far]");
 
 	munmap(tmp2, 4 * page_size);
 
@@ -263,9 +263,9 @@ void test_mmap(void)
 
 	test_mmap__destroy(skel);
 	skel = NULL;
-	CHECK_FAIL(munmap(bss_mmaped, bss_sz));
+	ASSERT_OK(munmap(bss_mmaped, bss_sz), "munmap bss_mmaped");
 	bss_mmaped = NULL;
-	CHECK_FAIL(munmap(map_mmaped, map_sz));
+	ASSERT_OK(munmap(map_mmaped, map_sz), "munmap map_mmaped");
 	map_mmaped = NULL;
 
 	/* map should be still held by active mmap */
@@ -297,8 +297,8 @@ void test_mmap(void)
 
 cleanup:
 	if (bss_mmaped)
-		CHECK_FAIL(munmap(bss_mmaped, bss_sz));
+		ASSERT_OK(munmap(bss_mmaped, bss_sz), "cleanup munmap bss_mmaped");
 	if (map_mmaped)
-		CHECK_FAIL(munmap(map_mmaped, map_sz));
+		ASSERT_OK(munmap(map_mmaped, map_sz), "cleanup munmap map_mmaped");
 	test_mmap__destroy(skel);
 }
