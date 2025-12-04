@@ -2065,7 +2065,11 @@ int bpf_struct_ops_desc_init(struct bpf_struct_ops_desc *st_ops_desc,
 void bpf_map_struct_ops_info_fill(struct bpf_map_info *info, struct bpf_map *map);
 void bpf_struct_ops_desc_release(struct bpf_struct_ops_desc *st_ops_desc);
 #else
-#define register_bpf_struct_ops(st_ops, type) ({ (void *)(st_ops); 0; })
+static inline int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops)
+{
+	return 0;
+}
+#define register_bpf_struct_ops(st_ops, type) __register_bpf_struct_ops(st_ops)
 static inline bool bpf_try_module_get(const void *data, struct module *owner)
 {
 	return try_module_get(owner);
