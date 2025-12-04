@@ -448,6 +448,8 @@ void hexdump(const char *prefix, const void *buf, size_t len);
 		system(cmd);						\
 	})
 
+#define PERROR(name) PRINT_FAIL("%s: %s\n", (name), strerror(errno))
+
 int start_libbpf_log_capture(void);
 char *stop_libbpf_log_capture(void);
 
