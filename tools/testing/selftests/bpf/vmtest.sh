@@ -23,8 +23,8 @@ x86_64)
 	QEMU_CONSOLE="ttyS0,115200"
 	HOST_FLAGS=(-cpu host -enable-kvm -smp 8)
 	CROSS_FLAGS=(-smp 8)
-	BZIMAGE="arch/x86/boot/bzImage"
-	ARCH="x86"
+	BZIMAGE="arch/x86_64/boot/bzImage"
+	ARCH="x86_64"
 	;;
 aarch64)
 	QEMU_BINARY=qemu-system-aarch64
@@ -62,7 +62,9 @@ MOUNT_DIR="mnt"
 LOCAL_ROOTFS_IMAGE=""
 ROOTFS_IMAGE="root.img"
 OUTPUT_DIR="$HOME/.bpf_selftests"
-KCONFIG_REL_PATHS=("tools/testing/selftests/bpf/config"
+KCONFIG_REL_PATHS=("arch/x86/configs/${PLATFORM}_defconfig"
+	"kernel/configs/kvm_guest.config"
+	"tools/testing/selftests/bpf/config"
 	"tools/testing/selftests/bpf/config.vm"
 	"tools/testing/selftests/bpf/config.${PLATFORM}")
 INDEX_URL="https://raw.githubusercontent.com/libbpf/ci/master/INDEX"
@@ -181,8 +183,8 @@ recompile_kernel()
 
 	cd "${kernel_checkout}"
 
-	${make_command} olddefconfig
-	${make_command}
+	eval "${make_command} olddefconfig"
+	eval "${make_command}"
 }
 
 mount_image()
@@ -206,7 +208,7 @@ update_selftests()
 	local selftests_dir="${kernel_checkout}/tools/testing/selftests/bpf"
 
 	cd "${selftests_dir}"
-	${make_command}
+	eval "${make_command}"
 
 	# Mount the image and copy the selftests to the image.
 	mount_image
@@ -395,6 +397,7 @@ main()
 	local update_image="no"
 	local exit_command="poweroff -f"
 	local debug_shell="no"
+	local LOCAL_ROOTFS_IMAGE="${kernel_checkout}/../libbpf-vmtest-rootfs-2024.08.22-noble-amd64.tar.zst"
 
 	while getopts ':hsl:id:j:' opt; do
 		case ${opt} in
@@ -455,9 +458,10 @@ main()
 		command=$(printf '%q ' "$@")
 	fi
 
-	local kconfig_file="${OUTPUT_DIR}/latest.config"
-	local make_command="make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} \
-			    -j ${NUM_COMPILE_JOBS} KCONFIG_CONFIG=${kconfig_file}"
+	local kconfig_file="${kernel_checkout}/.config"
+	local make_command="make LLVM=1 LLVM_IAS=1 CC='ccache clang' \
+				ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} \
+				-j ${NUM_COMPILE_JOBS} KCONFIG_CONFIG=${kconfig_file}"
 
 	# Figure out where the kernel is being built.
 	# O takes precedence over KBUILD_OUTPUT.
