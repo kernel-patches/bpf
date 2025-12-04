@@ -364,8 +364,8 @@ void hexdump(const char *prefix, const void *buf, size_t len);
 	static int duration = 0;					\
 	long long ___res = (res);					\
 	bool ___ok = ___res == 0;					\
-	CHECK(!___ok, (name), "unexpected error: %lld (errno %d)\n",	\
-	      ___res, errno);						\
+	CHECK(!___ok, (name), "unexpected error: %lld (errno %s)\n",	\
+	      ___res, strerror(errno));					\
 	___ok;								\
 })
 
@@ -407,8 +407,8 @@ void hexdump(const char *prefix, const void *buf, size_t len);
 	static int duration = 0;					\
 	int ___fd = (fd);						\
 	bool ___ok = ___fd >= 0;					\
-	CHECK(!___ok, (name), "unexpected fd: %d (errno %d)\n",		\
-	      ___fd, errno);						\
+	CHECK(!___ok, (name), "unexpected fd: %d (errno %s)\n",		\
+	      ___fd, strerror(errno));					\
 	___ok;								\
 })
 
