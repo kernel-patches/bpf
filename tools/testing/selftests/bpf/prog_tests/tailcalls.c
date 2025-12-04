@@ -29,38 +29,38 @@ static void test_tailcall_1(void)
 
 	err = bpf_prog_test_load("tailcall1.bpf.o", BPF_PROG_TYPE_SCHED_CLS, &obj,
 				 &prog_fd);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load tailcall1.bpf.o"))
 		return;
 
 	prog = bpf_object__find_program_by_name(obj, "entry");
-	if (CHECK_FAIL(!prog))
+	if (!ASSERT_OK_PTR(prog, "find entry prog"))
 		goto out;
 
 	main_fd = bpf_program__fd(prog);
-	if (CHECK_FAIL(main_fd < 0))
+	if (!ASSERT_OK_FD(main_fd, "entry prog fd"))
 		goto out;
 
 	prog_array = bpf_object__find_map_by_name(obj, "jmp_table");
-	if (CHECK_FAIL(!prog_array))
+	if (!ASSERT_OK_PTR(prog_array, "find jmp_table map"))
 		goto out;
 
 	map_fd = bpf_map__fd(prog_array);
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "jmp_table map fd"))
 		goto out;
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		snprintf(prog_name, sizeof(prog_name), "classifier_%d", i);
 
 		prog = bpf_object__find_program_by_name(obj, prog_name);
-		if (CHECK_FAIL(!prog))
+		if (!ASSERT_OK_PTR(prog, "find classifier prog"))
 			goto out;
 
 		prog_fd = bpf_program__fd(prog);
-		if (CHECK_FAIL(prog_fd < 0))
+		if (!ASSERT_OK_FD(prog_fd, "get classifier_* fd"))
 			goto out;
 
 		err = bpf_map_update_elem(map_fd, &i, &prog_fd, BPF_ANY);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "update jmp_table"))
 			goto out;
 	}
 
@@ -70,7 +70,7 @@ static void test_tailcall_1(void)
 		ASSERT_EQ(topts.retval, i, "tailcall retval");
 
 		err = bpf_map_delete_elem(map_fd, &i);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "delete from jmp_table"))
 			goto out;
 	}
 
@@ -82,15 +82,15 @@ static void test_tailcall_1(void)
 		snprintf(prog_name, sizeof(prog_name), "classifier_%d", i);
 
 		prog = bpf_object__find_program_by_name(obj, prog_name);
-		if (CHECK_FAIL(!prog))
+		if (!ASSERT_OK_PTR(prog, "find classifier prog"))
 			goto out;
 
 		prog_fd = bpf_program__fd(prog);
-		if (CHECK_FAIL(prog_fd < 0))
+		if (!ASSERT_OK_FD(prog_fd, "get classifier_* fd"))
 			goto out;
 
 		err = bpf_map_update_elem(map_fd, &i, &prog_fd, BPF_ANY);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "update jmp_table"))
 			goto out;
 	}
 
@@ -103,15 +103,15 @@ static void test_tailcall_1(void)
 		snprintf(prog_name, sizeof(prog_name), "classifier_%d", j);
 
 		prog = bpf_object__find_program_by_name(obj, prog_name);
-		if (CHECK_FAIL(!prog))
+		if (!ASSERT_OK_PTR(prog, "find classifier prog"))
 			goto out;
 
 		prog_fd = bpf_program__fd(prog);
-		if (CHECK_FAIL(prog_fd < 0))
+		if (!ASSERT_OK_FD(prog_fd, "get classifier_* fd"))
 			goto out;
 
 		err = bpf_map_update_elem(map_fd, &i, &prog_fd, BPF_ANY);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "update jmp_table"))
 			goto out;
 	}
 
@@ -123,7 +123,7 @@ static void test_tailcall_1(void)
 		ASSERT_EQ(topts.retval, j, "tailcall retval");
 
 		err = bpf_map_delete_elem(map_fd, &i);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "delete from jmp_table"))
 			goto out;
 	}
 
@@ -133,8 +133,11 @@ static void test_tailcall_1(void)
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		err = bpf_map_delete_elem(map_fd, &i);
-		if (CHECK_FAIL(err >= 0 || errno != ENOENT))
+		if (err >= 0 || errno != ENOENT) {
+			PRINT_FAIL("jmp_table entry %i should not exist, err=%d, errno=%s",
+				   i, err, strerror(errno));
 			goto out;
+		}
 
 		err = bpf_prog_test_run_opts(main_fd, &topts);
 		ASSERT_OK(err, "tailcall");
@@ -165,38 +168,38 @@ static void test_tailcall_2(void)
 
 	err = bpf_prog_test_load("tailcall2.bpf.o", BPF_PROG_TYPE_SCHED_CLS, &obj,
 				 &prog_fd);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load tailcall2.bpf.o"))
 		return;
 
 	prog = bpf_object__find_program_by_name(obj, "entry");
-	if (CHECK_FAIL(!prog))
+	if (!ASSERT_OK_PTR(prog, "find entry prog"))
 		goto out;
 
 	main_fd = bpf_program__fd(prog);
-	if (CHECK_FAIL(main_fd < 0))
+	if (!ASSERT_OK_FD(main_fd, "entry prog fd"))
 		goto out;
 
 	prog_array = bpf_object__find_map_by_name(obj, "jmp_table");
-	if (CHECK_FAIL(!prog_array))
+	if (!ASSERT_OK_PTR(prog_array, "find jmp_table map"))
 		goto out;
 
 	map_fd = bpf_map__fd(prog_array);
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "jmp_table map fd"))
 		goto out;
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		snprintf(prog_name, sizeof(prog_name), "classifier_%d", i);
 
 		prog = bpf_object__find_program_by_name(obj, prog_name);
-		if (CHECK_FAIL(!prog))
+		if (!ASSERT_OK_PTR(prog, "find classifier prog"))
 			goto out;
 
 		prog_fd = bpf_program__fd(prog);
-		if (CHECK_FAIL(prog_fd < 0))
+		if (!ASSERT_OK_FD(prog_fd, "classifier_* fd"))
 			goto out;
 
 		err = bpf_map_update_elem(map_fd, &i, &prog_fd, BPF_ANY);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "update jmp_table"))
 			goto out;
 	}
 
@@ -206,7 +209,7 @@ static void test_tailcall_2(void)
 
 	i = 2;
 	err = bpf_map_delete_elem(map_fd, &i);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "delete from jmp_table"))
 		goto out;
 
 	err = bpf_prog_test_run_opts(main_fd, &topts);
@@ -215,7 +218,7 @@ static void test_tailcall_2(void)
 
 	i = 0;
 	err = bpf_map_delete_elem(map_fd, &i);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "delete from jmp_table"))
 		goto out;
 
 	err = bpf_prog_test_run_opts(main_fd, &topts);
@@ -242,36 +245,36 @@ static void test_tailcall_count(const char *which, bool test_fentry,
 
 	err = bpf_prog_test_load(which, BPF_PROG_TYPE_SCHED_CLS, &obj,
 			    &prog_fd);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load BPF object"))
 		return;
 
 	prog = bpf_object__find_program_by_name(obj, "entry");
-	if (CHECK_FAIL(!prog))
+	if (!ASSERT_OK_PTR(prog, "find entry prog"))
 		goto out;
 
 	main_fd = bpf_program__fd(prog);
-	if (CHECK_FAIL(main_fd < 0))
+	if (!ASSERT_OK_FD(main_fd, "entry prog fd"))
 		goto out;
 
 	prog_array = bpf_object__find_map_by_name(obj, "jmp_table");
-	if (CHECK_FAIL(!prog_array))
+	if (!ASSERT_OK_PTR(prog_array, "find jmp_table map"))
 		goto out;
 
 	map_fd = bpf_map__fd(prog_array);
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "jmp_table map fd"))
 		goto out;
 
 	prog = bpf_object__find_program_by_name(obj, "classifier_0");
-	if (CHECK_FAIL(!prog))
+	if (!ASSERT_OK_PTR(prog, "find classifier_0 prog"))
 		goto out;
 
 	prog_fd = bpf_program__fd(prog);
-	if (CHECK_FAIL(prog_fd < 0))
+	if (!ASSERT_OK_FD(prog_fd, "classifier_0 fd"))
 		goto out;
 
 	i = 0;
 	err = bpf_map_update_elem(map_fd, &i, &prog_fd, BPF_ANY);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "update jmp_table"))
 		goto out;
 
 	if (test_fentry) {
@@ -327,11 +330,13 @@ static void test_tailcall_count(const char *which, bool test_fentry,
 	ASSERT_EQ(topts.retval, 1, "tailcall retval");
 
 	data_map = bpf_object__find_map_by_name(obj, "tailcall.bss");
-	if (CHECK_FAIL(!data_map || !bpf_map__is_internal(data_map)))
+	if (!ASSERT_OK_PTR(data_map, "find tailcall.bss map"))
+		goto out;
+	if (!ASSERT_TRUE(bpf_map__is_internal(data_map), "tailcall.bss is internal"))
 		goto out;
 
 	data_fd = bpf_map__fd(data_map);
-	if (CHECK_FAIL(data_fd < 0))
+	if (!ASSERT_OK_FD(data_fd, "tailcall.bss fd"))
 		goto out;
 
 	i = 0;
@@ -375,7 +380,7 @@ static void test_tailcall_count(const char *which, bool test_fentry,
 
 	i = 0;
 	err = bpf_map_delete_elem(map_fd, &i);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "delete from jmp_table"))
 		goto out;
 
 	err = bpf_prog_test_run_opts(main_fd, &topts);
@@ -426,52 +431,54 @@ static void test_tailcall_4(void)
 
 	err = bpf_prog_test_load("tailcall4.bpf.o", BPF_PROG_TYPE_SCHED_CLS, &obj,
 				 &prog_fd);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load tailcall4.bpf.o"))
 		return;
 
 	prog = bpf_object__find_program_by_name(obj, "entry");
-	if (CHECK_FAIL(!prog))
+	if (!ASSERT_OK_PTR(prog, "find entry prog"))
 		goto out;
 
 	main_fd = bpf_program__fd(prog);
-	if (CHECK_FAIL(main_fd < 0))
+	if (!ASSERT_OK_FD(main_fd, "entry prog fd"))
 		goto out;
 
 	prog_array = bpf_object__find_map_by_name(obj, "jmp_table");
-	if (CHECK_FAIL(!prog_array))
+	if (!ASSERT_OK_PTR(prog_array, "find jmp_table map"))
 		goto out;
 
 	map_fd = bpf_map__fd(prog_array);
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "jmp_table map fd"))
 		goto out;
 
 	data_map = bpf_object__find_map_by_name(obj, "tailcall.bss");
-	if (CHECK_FAIL(!data_map || !bpf_map__is_internal(data_map)))
+	if (!ASSERT_OK_PTR(data_map, "find tailcall.bss map"))
+		goto out;
+	if (!ASSERT_TRUE(bpf_map__is_internal(data_map), "tailcall.bss is internal"))
 		goto out;
 
 	data_fd = bpf_map__fd(data_map);
-	if (CHECK_FAIL(data_fd < 0))
+	if (!ASSERT_OK_FD(data_fd, "tailcall.bss fd"))
 		goto out;
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		snprintf(prog_name, sizeof(prog_name), "classifier_%d", i);
 
 		prog = bpf_object__find_program_by_name(obj, prog_name);
-		if (CHECK_FAIL(!prog))
+		if (!ASSERT_OK_PTR(prog, "find classifier prog"))
 			goto out;
 
 		prog_fd = bpf_program__fd(prog);
-		if (CHECK_FAIL(prog_fd < 0))
+		if (!ASSERT_OK_FD(prog_fd, "classifier_* fd"))
 			goto out;
 
 		err = bpf_map_update_elem(map_fd, &i, &prog_fd, BPF_ANY);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "update jmp_table"))
 			goto out;
 	}
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		err = bpf_map_update_elem(data_fd, &zero, &i, BPF_ANY);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "update data_map"))
 			goto out;
 
 		err = bpf_prog_test_run_opts(main_fd, &topts);
@@ -481,11 +488,11 @@ static void test_tailcall_4(void)
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		err = bpf_map_update_elem(data_fd, &zero, &i, BPF_ANY);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "update data_map"))
 			goto out;
 
 		err = bpf_map_delete_elem(map_fd, &i);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "delete from jmp_table"))
 			goto out;
 
 		err = bpf_prog_test_run_opts(main_fd, &topts);
@@ -516,52 +523,54 @@ static void test_tailcall_5(void)
 
 	err = bpf_prog_test_load("tailcall5.bpf.o", BPF_PROG_TYPE_SCHED_CLS, &obj,
 				 &prog_fd);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load tailcall5.bpf.o"))
 		return;
 
 	prog = bpf_object__find_program_by_name(obj, "entry");
-	if (CHECK_FAIL(!prog))
+	if (!ASSERT_OK_PTR(prog, "find entry prog"))
 		goto out;
 
 	main_fd = bpf_program__fd(prog);
-	if (CHECK_FAIL(main_fd < 0))
+	if (!ASSERT_OK_FD(main_fd, "entry prog fd"))
 		goto out;
 
 	prog_array = bpf_object__find_map_by_name(obj, "jmp_table");
-	if (CHECK_FAIL(!prog_array))
+	if (!ASSERT_OK_PTR(prog_array, "find jmp_table map"))
 		goto out;
 
 	map_fd = bpf_map__fd(prog_array);
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "jmp_table map fd"))
 		goto out;
 
 	data_map = bpf_object__find_map_by_name(obj, "tailcall.bss");
-	if (CHECK_FAIL(!data_map || !bpf_map__is_internal(data_map)))
+	if (!ASSERT_OK_PTR(data_map, "find tailcall.bss map"))
+		goto out;
+	if (!ASSERT_TRUE(bpf_map__is_internal(data_map), "tailcall.bss is internal"))
 		goto out;
 
 	data_fd = bpf_map__fd(data_map);
-	if (CHECK_FAIL(data_fd < 0))
+	if (!ASSERT_OK_FD(data_fd, "tailcall.bss fd"))
 		goto out;
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		snprintf(prog_name, sizeof(prog_name), "classifier_%d", i);
 
 		prog = bpf_object__find_program_by_name(obj, prog_name);
-		if (CHECK_FAIL(!prog))
+		if (!ASSERT_OK_PTR(prog, "find classifier prog"))
 			goto out;
 
 		prog_fd = bpf_program__fd(prog);
-		if (CHECK_FAIL(prog_fd < 0))
+		if (!ASSERT_OK_FD(prog_fd, "classifier_ fd"))
 			goto out;
 
 		err = bpf_map_update_elem(map_fd, &i, &prog_fd, BPF_ANY);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "update jmp_table"))
 			goto out;
 	}
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		err = bpf_map_update_elem(data_fd, &zero, &key[i], BPF_ANY);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "update tailcall.bss"))
 			goto out;
 
 		err = bpf_prog_test_run_opts(main_fd, &topts);
@@ -571,11 +580,11 @@ static void test_tailcall_5(void)
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		err = bpf_map_update_elem(data_fd, &zero, &key[i], BPF_ANY);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "update tailcall.bss"))
 			goto out;
 
 		err = bpf_map_delete_elem(map_fd, &i);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "delete from jmp_table"))
 			goto out;
 
 		err = bpf_prog_test_run_opts(main_fd, &topts);
@@ -604,23 +613,23 @@ static void test_tailcall_bpf2bpf_1(void)
 
 	err = bpf_prog_test_load("tailcall_bpf2bpf1.bpf.o", BPF_PROG_TYPE_SCHED_CLS,
 				 &obj, &prog_fd);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load tailcall_bpf2bpf1.bpf.o"))
 		return;
 
 	prog = bpf_object__find_program_by_name(obj, "entry");
-	if (CHECK_FAIL(!prog))
+	if (!ASSERT_OK_PTR(prog, "find entry prog"))
 		goto out;
 
 	main_fd = bpf_program__fd(prog);
-	if (CHECK_FAIL(main_fd < 0))
+	if (!ASSERT_OK_FD(main_fd, "entry prog fd"))
 		goto out;
 
 	prog_array = bpf_object__find_map_by_name(obj, "jmp_table");
-	if (CHECK_FAIL(!prog_array))
+	if (!ASSERT_OK_PTR(prog_array, "find jmp_table map"))
 		goto out;
 
 	map_fd = bpf_map__fd(prog_array);
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "jmp_table map fd"))
 		goto out;
 
 	/* nop -> jmp */
@@ -628,15 +637,15 @@ static void test_tailcall_bpf2bpf_1(void)
 		snprintf(prog_name, sizeof(prog_name), "classifier_%d", i);
 
 		prog = bpf_object__find_program_by_name(obj, prog_name);
-		if (CHECK_FAIL(!prog))
+		if (!ASSERT_OK_PTR(prog, "find classifier prog"))
 			goto out;
 
 		prog_fd = bpf_program__fd(prog);
-		if (CHECK_FAIL(prog_fd < 0))
+		if (!ASSERT_OK_FD(prog_fd, "classifier_* fd"))
 			goto out;
 
 		err = bpf_map_update_elem(map_fd, &i, &prog_fd, BPF_ANY);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "update jmp_table"))
 			goto out;
 	}
 
@@ -647,7 +656,7 @@ static void test_tailcall_bpf2bpf_1(void)
 	/* jmp -> nop, call subprog that will do tailcall */
 	i = 1;
 	err = bpf_map_delete_elem(map_fd, &i);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "delete from jmp_table"))
 		goto out;
 
 	err = bpf_prog_test_run_opts(main_fd, &topts);
@@ -659,7 +668,7 @@ static void test_tailcall_bpf2bpf_1(void)
 	 */
 	i = 0;
 	err = bpf_map_delete_elem(map_fd, &i);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "delete from jmp_table"))
 		goto out;
 
 	err = bpf_prog_test_run_opts(main_fd, &topts);
@@ -688,36 +697,36 @@ static void test_tailcall_bpf2bpf_2(void)
 
 	err = bpf_prog_test_load("tailcall_bpf2bpf2.bpf.o", BPF_PROG_TYPE_SCHED_CLS,
 				 &obj, &prog_fd);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load tailcall_bpf2bpf2.bpf.o"))
 		return;
 
 	prog = bpf_object__find_program_by_name(obj, "entry");
-	if (CHECK_FAIL(!prog))
+	if (!ASSERT_OK_PTR(prog, "find entry prog"))
 		goto out;
 
 	main_fd = bpf_program__fd(prog);
-	if (CHECK_FAIL(main_fd < 0))
+	if (!ASSERT_OK_FD(main_fd, "entry prog fd"))
 		goto out;
 
 	prog_array = bpf_object__find_map_by_name(obj, "jmp_table");
-	if (CHECK_FAIL(!prog_array))
+	if (!ASSERT_OK_PTR(prog_array, "find jmp_table map"))
 		goto out;
 
 	map_fd = bpf_map__fd(prog_array);
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "jmp_table map fd"))
 		goto out;
 
 	prog = bpf_object__find_program_by_name(obj, "classifier_0");
-	if (CHECK_FAIL(!prog))
+	if (!ASSERT_OK_PTR(prog, "find classifier_0 prog"))
 		goto out;
 
 	prog_fd = bpf_program__fd(prog);
-	if (CHECK_FAIL(prog_fd < 0))
+	if (!ASSERT_OK_FD(prog_fd, "classifier_0 fd"))
 		goto out;
 
 	i = 0;
 	err = bpf_map_update_elem(map_fd, &i, &prog_fd, BPF_ANY);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "update jmp_table"))
 		goto out;
 
 	err = bpf_prog_test_run_opts(main_fd, &topts);
@@ -725,11 +734,13 @@ static void test_tailcall_bpf2bpf_2(void)
 	ASSERT_EQ(topts.retval, 1, "tailcall retval");
 
 	data_map = bpf_object__find_map_by_name(obj, "tailcall.bss");
-	if (CHECK_FAIL(!data_map || !bpf_map__is_internal(data_map)))
+	if (!ASSERT_OK_PTR(data_map, "find tailcall.bss map"))
+		goto out;
+	if (!ASSERT_TRUE(bpf_map__is_internal(data_map), "tailcall.bss is internal"))
 		goto out;
 
 	data_fd = bpf_map__fd(data_map);
-	if (CHECK_FAIL(data_fd < 0))
+	if (!ASSERT_OK_FD(data_fd, "tailcall.bss fd"))
 		goto out;
 
 	i = 0;
@@ -739,7 +750,7 @@ static void test_tailcall_bpf2bpf_2(void)
 
 	i = 0;
 	err = bpf_map_delete_elem(map_fd, &i);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "delete from jmp_table"))
 		goto out;
 
 	err = bpf_prog_test_run_opts(main_fd, &topts);
@@ -768,38 +779,38 @@ static void test_tailcall_bpf2bpf_3(void)
 
 	err = bpf_prog_test_load("tailcall_bpf2bpf3.bpf.o", BPF_PROG_TYPE_SCHED_CLS,
 				 &obj, &prog_fd);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load tailcall_bpf2bpf3.bpf.o"))
 		return;
 
 	prog = bpf_object__find_program_by_name(obj, "entry");
-	if (CHECK_FAIL(!prog))
+	if (!ASSERT_OK_PTR(prog, "find entry prog"))
 		goto out;
 
 	main_fd = bpf_program__fd(prog);
-	if (CHECK_FAIL(main_fd < 0))
+	if (!ASSERT_OK_FD(main_fd, "entry prog fd"))
 		goto out;
 
 	prog_array = bpf_object__find_map_by_name(obj, "jmp_table");
-	if (CHECK_FAIL(!prog_array))
+	if (!ASSERT_OK_PTR(prog_array, "find jmp_table map"))
 		goto out;
 
 	map_fd = bpf_map__fd(prog_array);
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "jmp_table map fd"))
 		goto out;
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		snprintf(prog_name, sizeof(prog_name), "classifier_%d", i);
 
 		prog = bpf_object__find_program_by_name(obj, prog_name);
-		if (CHECK_FAIL(!prog))
+		if (!ASSERT_OK_PTR(prog, "find classifier prog"))
 			goto out;
 
 		prog_fd = bpf_program__fd(prog);
-		if (CHECK_FAIL(prog_fd < 0))
+		if (!ASSERT_OK_FD(prog_fd, "classifier_* fd"))
 			goto out;
 
 		err = bpf_map_update_elem(map_fd, &i, &prog_fd, BPF_ANY);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "update jmp_table"))
 			goto out;
 	}
 
@@ -809,7 +820,7 @@ static void test_tailcall_bpf2bpf_3(void)
 
 	i = 1;
 	err = bpf_map_delete_elem(map_fd, &i);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "delete from jmp_table"))
 		goto out;
 
 	err = bpf_prog_test_run_opts(main_fd, &topts);
@@ -818,7 +829,7 @@ static void test_tailcall_bpf2bpf_3(void)
 
 	i = 0;
 	err = bpf_map_delete_elem(map_fd, &i);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "delete from jmp_table"))
 		goto out;
 
 	err = bpf_prog_test_run_opts(main_fd, &topts);
@@ -863,54 +874,56 @@ static void test_tailcall_bpf2bpf_4(bool noise)
 
 	err = bpf_prog_test_load("tailcall_bpf2bpf4.bpf.o", BPF_PROG_TYPE_SCHED_CLS,
 				 &obj, &prog_fd);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load tailcall_bpf2bpf4.bpf.o"))
 		return;
 
 	prog = bpf_object__find_program_by_name(obj, "entry");
-	if (CHECK_FAIL(!prog))
+	if (!ASSERT_OK_PTR(prog, "find entry prog"))
 		goto out;
 
 	main_fd = bpf_program__fd(prog);
-	if (CHECK_FAIL(main_fd < 0))
+	if (!ASSERT_OK_FD(main_fd, "entry prog fd"))
 		goto out;
 
 	prog_array = bpf_object__find_map_by_name(obj, "jmp_table");
-	if (CHECK_FAIL(!prog_array))
+	if (!ASSERT_OK_PTR(prog_array, "find jmp_table map"))
 		goto out;
 
 	map_fd = bpf_map__fd(prog_array);
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "jmp_table map fd"))
 		goto out;
 
 	for (i = 0; i < bpf_map__max_entries(prog_array); i++) {
 		snprintf(prog_name, sizeof(prog_name), "classifier_%d", i);
 
 		prog = bpf_object__find_program_by_name(obj, prog_name);
-		if (CHECK_FAIL(!prog))
+		if (!ASSERT_OK_PTR(prog, "find classifier prog"))
 			goto out;
 
 		prog_fd = bpf_program__fd(prog);
-		if (CHECK_FAIL(prog_fd < 0))
+		if (!ASSERT_OK_FD(prog_fd, "classifier_* fd"))
 			goto out;
 
 		err = bpf_map_update_elem(map_fd, &i, &prog_fd, BPF_ANY);
-		if (CHECK_FAIL(err))
+		if (!ASSERT_OK(err, "update jmp_table"))
 			goto out;
 	}
 
 	data_map = bpf_object__find_map_by_name(obj, "tailcall.bss");
-	if (CHECK_FAIL(!data_map || !bpf_map__is_internal(data_map)))
+	if (!ASSERT_OK_PTR(data_map, "find tailcall.bss map"))
+		goto out;
+	if (!ASSERT_TRUE(bpf_map__is_internal(data_map), "tailcall.bss is internal"))
 		goto out;
 
 	data_fd = bpf_map__fd(data_map);
-	if (CHECK_FAIL(data_fd < 0))
+	if (!ASSERT_OK_FD(data_fd, "tailcall.bss fd"))
 		goto out;
 
 	i = 0;
 	val.noise = noise;
 	val.count = 0;
 	err = bpf_map_update_elem(data_fd, &i, &val, BPF_ANY);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "update tailcall.bss"))
 		goto out;
 
 	err = bpf_prog_test_run_opts(main_fd, &topts);
