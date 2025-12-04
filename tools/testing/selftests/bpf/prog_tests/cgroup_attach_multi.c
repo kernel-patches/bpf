@@ -91,26 +91,26 @@ void serial_test_cgroup_attach_multi(void)
 			goto err;
 	}
 
-	if (CHECK_FAIL(setup_cgroup_environment()))
+	if (!ASSERT_OK(setup_cgroup_environment(), "setup_cgroup_environment"))
 		goto err;
 
 	cg1 = create_and_get_cgroup("/cg1");
-	if (CHECK_FAIL(cg1 < 0))
+	if (!ASSERT_OK_FD(cg1, "create_and_get_cgroup cg1"))
 		goto err;
 	cg2 = create_and_get_cgroup("/cg1/cg2");
-	if (CHECK_FAIL(cg2 < 0))
+	if (!ASSERT_OK_FD(cg2, "create_and_get_cgroup cg2"))
 		goto err;
 	cg3 = create_and_get_cgroup("/cg1/cg2/cg3");
-	if (CHECK_FAIL(cg3 < 0))
+	if (!ASSERT_OK_FD(cg3, "create_and_get_cgroup cg3"))
 		goto err;
 	cg4 = create_and_get_cgroup("/cg1/cg2/cg3/cg4");
-	if (CHECK_FAIL(cg4 < 0))
+	if (!ASSERT_OK_FD(cg4, "create_and_get_cgroup cg4"))
 		goto err;
 	cg5 = create_and_get_cgroup("/cg1/cg2/cg3/cg4/cg5");
-	if (CHECK_FAIL(cg5 < 0))
+	if (!ASSERT_OK_FD(cg5, "create_and_get_cgroup cg5"))
 		goto err;
 
-	if (CHECK_FAIL(join_cgroup("/cg1/cg2/cg3/cg4/cg5")))
+	if (!ASSERT_OK(join_cgroup("/cg1/cg2/cg3/cg4/cg5"), "join_cgroup cg5"))
 		goto err;
 
 	if (CHECK(bpf_prog_attach(allow_prog[0], cg1, BPF_CGROUP_INET_EGRESS,
@@ -147,37 +147,41 @@ void serial_test_cgroup_attach_multi(void)
 		  "prog5_attach_to_cg5_none", "errno=%d\n", errno))
 		goto err;
 
-	CHECK_FAIL(system(PING_CMD));
-	CHECK_FAIL(bpf_map_lookup_elem(map_fd, &key, &value));
-	CHECK_FAIL(value != 1 + 2 + 8 + 32);
+	ASSERT_OK(system(PING_CMD), "ping");
+	ASSERT_OK(bpf_map_lookup_elem(map_fd, &key, &value), "map lookup 1 + 2 + 8 + 32");
+	ASSERT_EQ(value, 1 + 2 + 8 + 32, "value matches");
 
 	/* query the number of effective progs in cg5 */
-	CHECK_FAIL(bpf_prog_query(cg5, BPF_CGROUP_INET_EGRESS,
-				  BPF_F_QUERY_EFFECTIVE, NULL, NULL, &prog_cnt));
-	CHECK_FAIL(prog_cnt != 4);
+	ASSERT_OK(bpf_prog_query(cg5, BPF_CGROUP_INET_EGRESS,
+				 BPF_F_QUERY_EFFECTIVE, NULL, NULL, &prog_cnt),
+		  "prog_query #1");
+	ASSERT_EQ(prog_cnt, 4, "prog_cnt is 4");
 	/* retrieve prog_ids of effective progs in cg5 */
-	CHECK_FAIL(bpf_prog_query(cg5, BPF_CGROUP_INET_EGRESS,
-				  BPF_F_QUERY_EFFECTIVE, &attach_flags,
-				  prog_ids, &prog_cnt));
-	CHECK_FAIL(prog_cnt != 4);
-	CHECK_FAIL(attach_flags != 0);
+	ASSERT_OK(bpf_prog_query(cg5, BPF_CGROUP_INET_EGRESS,
+				 BPF_F_QUERY_EFFECTIVE, &attach_flags,
+				 prog_ids, &prog_cnt),
+		  "prog_query #2");
+	ASSERT_EQ(prog_cnt, 4, "prog_cnt is 4");
+	ASSERT_EQ(attach_flags, 0, "attach_flags is 0");
 	saved_prog_id = prog_ids[0];
 	/* check enospc handling */
 	prog_ids[0] = 0;
 	prog_cnt = 2;
-	CHECK_FAIL(bpf_prog_query(cg5, BPF_CGROUP_INET_EGRESS,
-				  BPF_F_QUERY_EFFECTIVE, &attach_flags,
-				  prog_ids, &prog_cnt) >= 0);
-	CHECK_FAIL(errno != ENOSPC);
-	CHECK_FAIL(prog_cnt != 4);
+	ASSERT_TRUE(bpf_prog_query(cg5, BPF_CGROUP_INET_EGRESS,
+				   BPF_F_QUERY_EFFECTIVE, &attach_flags,
+				   prog_ids, &prog_cnt) < 0,
+		    "prog_query #3");
+	if (errno != ENOSPC)
+		PERROR("expecting ENOSPC when querying cg5");
+	ASSERT_EQ(prog_cnt, 4, "prog_cnt is 4");
 	/* check that prog_ids are returned even when buffer is too small */
-	CHECK_FAIL(prog_ids[0] != saved_prog_id);
+	ASSERT_EQ(prog_ids[0], saved_prog_id, "prog_ids[0] matches #1");
 	/* retrieve prog_id of single attached prog in cg5 */
 	prog_ids[0] = 0;
-	CHECK_FAIL(bpf_prog_query(cg5, BPF_CGROUP_INET_EGRESS, 0, NULL,
-				  prog_ids, &prog_cnt));
-	CHECK_FAIL(prog_cnt != 1);
-	CHECK_FAIL(prog_ids[0] != saved_prog_id);
+	ASSERT_OK(bpf_prog_query(cg5, BPF_CGROUP_INET_EGRESS, 0, NULL, prog_ids, &prog_cnt),
+		  "prog_query #4");
+	ASSERT_EQ(prog_cnt, 1, "prog_cnt is 1");
+	ASSERT_EQ(prog_ids[0], saved_prog_id, "prog_ids[0] matches #2");
 
 	/* detach bottom program and ping again */
 	if (CHECK(bpf_prog_detach2(-1, cg5, BPF_CGROUP_INET_EGRESS),
@@ -185,10 +189,10 @@ void serial_test_cgroup_attach_multi(void)
 		goto err;
 
 	value = 0;
-	CHECK_FAIL(bpf_map_update_elem(map_fd, &key, &value, 0));
-	CHECK_FAIL(system(PING_CMD));
-	CHECK_FAIL(bpf_map_lookup_elem(map_fd, &key, &value));
-	CHECK_FAIL(value != 1 + 2 + 8 + 16);
+	ASSERT_OK(bpf_map_update_elem(map_fd, &key, &value, 0), "map update 1 + 2 + 8 + 16");
+	ASSERT_OK(system(PING_CMD), "ping");
+	ASSERT_OK(bpf_map_lookup_elem(map_fd, &key, &value), "map lookup");
+	ASSERT_EQ(value, 1 + 2 + 8 + 16, "value matches");
 
 	/* test replace */
 
@@ -198,14 +202,16 @@ void serial_test_cgroup_attach_multi(void)
 					 BPF_CGROUP_INET_EGRESS, &attach_opts),
 		  "fail_prog_replace_override", "unexpected success\n"))
 		goto err;
-	CHECK_FAIL(errno != EINVAL);
+	if (errno != EINVAL)
+		PERROR("expecting EINVAL for BPF_F_ALLOW_OVERRIDE | BPF_F_REPLACE");
 
 	attach_opts.flags = BPF_F_REPLACE;
 	if (CHECK(!bpf_prog_attach_opts(allow_prog[6], cg1,
 					 BPF_CGROUP_INET_EGRESS, &attach_opts),
 		  "fail_prog_replace_no_multi", "unexpected success\n"))
 		goto err;
-	CHECK_FAIL(errno != EINVAL);
+	if (errno != EINVAL)
+		PERROR("expecting EINVAL for BPF_F_REPLACE");
 
 	attach_opts.flags = BPF_F_ALLOW_MULTI | BPF_F_REPLACE;
 	attach_opts.replace_prog_fd = -1;
@@ -213,7 +219,8 @@ void serial_test_cgroup_attach_multi(void)
 					 BPF_CGROUP_INET_EGRESS, &attach_opts),
 		  "fail_prog_replace_bad_fd", "unexpected success\n"))
 		goto err;
-	CHECK_FAIL(errno != EBADF);
+	if (errno != EBADF)
+		PERROR("expecting EBADF for replace_prog_fd = -1");
 
 	/* replacing a program that is not attached to cgroup should fail  */
 	attach_opts.replace_prog_fd = allow_prog[3];
@@ -221,7 +228,8 @@ void serial_test_cgroup_attach_multi(void)
 					 BPF_CGROUP_INET_EGRESS, &attach_opts),
 		  "fail_prog_replace_no_ent", "unexpected success\n"))
 		goto err;
-	CHECK_FAIL(errno != ENOENT);
+	if (errno != ENOENT)
+		PERROR("expecting ENOENT for replace_prog_fd = allow_prog[3]");
 
 	/* replace 1st from the top program */
 	attach_opts.replace_prog_fd = allow_prog[0];
@@ -238,10 +246,10 @@ void serial_test_cgroup_attach_multi(void)
 		goto err;
 
 	value = 0;
-	CHECK_FAIL(bpf_map_update_elem(map_fd, &key, &value, 0));
-	CHECK_FAIL(system(PING_CMD));
-	CHECK_FAIL(bpf_map_lookup_elem(map_fd, &key, &value));
-	CHECK_FAIL(value != 64 + 2 + 8 + 16);
+	ASSERT_OK(bpf_map_update_elem(map_fd, &key, &value, 0), "map update 64 + 2 + 8 + 16");
+	ASSERT_OK(system(PING_CMD), "ping");
+	ASSERT_OK(bpf_map_lookup_elem(map_fd, &key, &value), "map lookup");
+	ASSERT_EQ(value, 64 + 2 + 8 + 16, "value matches");
 
 	/* detach 3rd from bottom program and ping again */
 	if (CHECK(!bpf_prog_detach2(0, cg3, BPF_CGROUP_INET_EGRESS),
@@ -253,10 +261,10 @@ void serial_test_cgroup_attach_multi(void)
 		goto err;
 
 	value = 0;
-	CHECK_FAIL(bpf_map_update_elem(map_fd, &key, &value, 0));
-	CHECK_FAIL(system(PING_CMD));
-	CHECK_FAIL(bpf_map_lookup_elem(map_fd, &key, &value));
-	CHECK_FAIL(value != 64 + 2 + 16);
+	ASSERT_OK(bpf_map_update_elem(map_fd, &key, &value, 0), "map update 64 + 2 + 16");
+	ASSERT_OK(system(PING_CMD), "ping");
+	ASSERT_OK(bpf_map_lookup_elem(map_fd, &key, &value), "map lookup");
+	ASSERT_EQ(value, 64 + 2 + 16, "value matches");
 
 	/* detach 2nd from bottom program and ping again */
 	if (CHECK(bpf_prog_detach2(-1, cg4, BPF_CGROUP_INET_EGRESS),
@@ -264,20 +272,21 @@ void serial_test_cgroup_attach_multi(void)
 		goto err;
 
 	value = 0;
-	CHECK_FAIL(bpf_map_update_elem(map_fd, &key, &value, 0));
-	CHECK_FAIL(system(PING_CMD));
-	CHECK_FAIL(bpf_map_lookup_elem(map_fd, &key, &value));
-	CHECK_FAIL(value != 64 + 2 + 4);
+	ASSERT_OK(bpf_map_update_elem(map_fd, &key, &value, 0), "map update 64 + 2 + 4");
+	ASSERT_OK(system(PING_CMD), "ping");
+	ASSERT_OK(bpf_map_lookup_elem(map_fd, &key, &value), "map lookup");
+	ASSERT_EQ(value, 64 + 2 + 4, "value matches");
 
 	prog_cnt = 4;
-	CHECK_FAIL(bpf_prog_query(cg5, BPF_CGROUP_INET_EGRESS,
-				  BPF_F_QUERY_EFFECTIVE, &attach_flags,
-				  prog_ids, &prog_cnt));
-	CHECK_FAIL(prog_cnt != 3);
-	CHECK_FAIL(attach_flags != 0);
-	CHECK_FAIL(bpf_prog_query(cg5, BPF_CGROUP_INET_EGRESS, 0, NULL,
-				  prog_ids, &prog_cnt));
-	CHECK_FAIL(prog_cnt != 0);
+	ASSERT_OK(bpf_prog_query(cg5, BPF_CGROUP_INET_EGRESS,
+				 BPF_F_QUERY_EFFECTIVE, &attach_flags,
+				 prog_ids, &prog_cnt),
+		  "prog_query #5");
+	ASSERT_EQ(prog_cnt, 3, "prog_cnt is 3");
+	ASSERT_EQ(attach_flags, 0, "attach_flags is 0");
+	ASSERT_OK(bpf_prog_query(cg5, BPF_CGROUP_INET_EGRESS, 0, NULL, prog_ids, &prog_cnt),
+		  "prog_query #6");
+	ASSERT_EQ(prog_cnt, 0, "prog_cnt is 0");
 
 err:
 	for (i = 0; i < ARRAY_SIZE(allow_prog); i++)
