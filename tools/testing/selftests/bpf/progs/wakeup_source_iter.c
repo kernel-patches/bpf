@@ -9,6 +9,13 @@
 
 char _license[] SEC("license") = "GPL";
 
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(key_size, WAKEUP_SOURCE_NAME_LEN);
+	__type(value, bool);
+	__uint(max_entries, 5);
+} test_ws_hash SEC(".maps");
+
 SEC("iter/wakeup_source")
 int wakeup_source_collector(struct bpf_iter__wakeup_source *ctx)
 {
@@ -66,5 +73,45 @@ int wakeup_source_collector(struct bpf_iter__wakeup_source *ctx)
 		       prevent_sleep_time / NSEC_PER_MS,
 		       total_time / NSEC_PER_MS,
 		       wakeup_count);
+	return 0;
+}
+
+SEC("syscall")
+int iter_ws_for_each(const void *ctx)
+{
+	struct wakeup_source *ws;
+
+	bpf_for_each(wakeup_source, ws) {
+		char name[WAKEUP_SOURCE_NAME_LEN];
+		const char *pname;
+		bool *found;
+		long len;
+		int i;
+
+		if (bpf_core_read(&pname, sizeof(pname), &ws->name))
+			return 1;
+
+		if (!pname)
+			continue;
+
+		len = bpf_probe_read_kernel_str(name, sizeof(name), pname);
+		if (len < 0)
+			return 1;
+
+		/*
+		 * Clear the remainder of the buffer to ensure a stable key for
+		 * the map lookup.
+		 */
+		bpf_for(i, len, WAKEUP_SOURCE_NAME_LEN)
+			name[i] = 0;
+
+		found = bpf_map_lookup_elem(&test_ws_hash, name);
+		if (found) {
+			bool t = true;
+
+			bpf_map_update_elem(&test_ws_hash, name, &t, BPF_EXIST);
+		}
+	}
+
 	return 0;
 }
