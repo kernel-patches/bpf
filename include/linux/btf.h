@@ -535,6 +535,11 @@ int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops);
 const struct bpf_struct_ops_desc *bpf_struct_ops_find_value(struct btf *btf, u32 value_id);
 const struct bpf_struct_ops_desc *bpf_struct_ops_find(struct btf *btf, u32 type_id);
 #else
+struct bpf_struct_ops;
+static inline int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops)
+{
+	return 0;
+}
 static inline const struct bpf_struct_ops_desc *bpf_struct_ops_find(struct btf *btf, u32 type_id)
 {
 	return NULL;
