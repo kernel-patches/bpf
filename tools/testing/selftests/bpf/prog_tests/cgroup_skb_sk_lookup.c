@@ -82,7 +82,7 @@ void test_cgroup_skb_sk_lookup(void)
 	 * testing cgroup won't change cgroup id of an already created socket.
 	 */
 	out_sk = socket(AF_INET6, SOCK_STREAM, 0);
-	if (CHECK_FAIL(out_sk < 0))
+	if (!ASSERT_OK_FD(out_sk, "create socket"))
 		return;
 
 	run_cgroup_bpf_test(cg_path, out_sk);
