@@ -69,7 +69,7 @@ void test_test_overhead(void)
 	int err, duration = 0;
 	char comm[16] = {};
 
-	if (CHECK_FAIL(prctl(PR_GET_NAME, comm, 0L, 0L, 0L)))
+	if (!ASSERT_OK(prctl(PR_GET_NAME, comm, 0L, 0L, 0L), "get process name"))
 		return;
 
 	obj = bpf_object__open_file("./test_overhead.bpf.o", NULL);
