@@ -135,31 +135,31 @@ void test_connect_force_port(void)
 	int server_fd, cgroup_fd;
 
 	cgroup_fd = test__join_cgroup("/connect_force_port");
-	if (CHECK_FAIL(cgroup_fd < 0))
+	if (!ASSERT_OK_FD(cgroup_fd, "join cgroup"))
 		return;
 
 	server_fd = start_server(AF_INET, SOCK_STREAM, NULL, 60123, 0);
-	if (CHECK_FAIL(server_fd < 0))
+	if (!ASSERT_OK_FD(server_fd, "start IPv4 TCP server"))
 		goto close_cgroup_fd;
-	CHECK_FAIL(run_test(cgroup_fd, server_fd, AF_INET, SOCK_STREAM));
+	ASSERT_OK(run_test(cgroup_fd, server_fd, AF_INET, SOCK_STREAM), "IPv4 TCP test");
 	close(server_fd);
 
 	server_fd = start_server(AF_INET6, SOCK_STREAM, NULL, 60124, 0);
-	if (CHECK_FAIL(server_fd < 0))
+	if (!ASSERT_OK_FD(server_fd, "start IPv6 TCP server"))
 		goto close_cgroup_fd;
-	CHECK_FAIL(run_test(cgroup_fd, server_fd, AF_INET6, SOCK_STREAM));
+	ASSERT_OK(run_test(cgroup_fd, server_fd, AF_INET6, SOCK_STREAM), "IPv6 TCP test");
 	close(server_fd);
 
 	server_fd = start_server(AF_INET, SOCK_DGRAM, NULL, 60123, 0);
-	if (CHECK_FAIL(server_fd < 0))
+	if (!ASSERT_OK_FD(server_fd, "start IPv4 UDP server"))
 		goto close_cgroup_fd;
-	CHECK_FAIL(run_test(cgroup_fd, server_fd, AF_INET, SOCK_DGRAM));
+	ASSERT_OK(run_test(cgroup_fd, server_fd, AF_INET, SOCK_DGRAM), "IPv4 UDP test");
 	close(server_fd);
 
 	server_fd = start_server(AF_INET6, SOCK_DGRAM, NULL, 60124, 0);
-	if (CHECK_FAIL(server_fd < 0))
+	if (!ASSERT_OK_FD(server_fd, "start IPv6 UDP server"))
 		goto close_cgroup_fd;
-	CHECK_FAIL(run_test(cgroup_fd, server_fd, AF_INET6, SOCK_DGRAM));
+	ASSERT_OK(run_test(cgroup_fd, server_fd, AF_INET6, SOCK_DGRAM), "IPv6 UDP test");
 	close(server_fd);
 
 close_cgroup_fd:
