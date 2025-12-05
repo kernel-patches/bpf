@@ -29,15 +29,14 @@ static bool
 configure_stack(void)
 {
 	char tc_version[128];
-	char tc_cmd[BUFSIZ];
 	char *prog;
 	FILE *tc;
 
 	/* Check whether tc is built with libbpf. */
 	tc = popen("tc -V", "r");
-	if (CHECK_FAIL(!tc))
+	if (!ASSERT_OK_PTR(tc, "popen tc -V"))
 		return false;
-	if (CHECK_FAIL(!fgets(tc_version, sizeof(tc_version), tc))) {
+	if (!ASSERT_OK_PTR(fgets(tc_version, sizeof(tc_version), tc), "fgets tc")) {
 		pclose(tc);
 		return false;
 	}
@@ -45,30 +44,29 @@ configure_stack(void)
 		prog = "test_sk_assign_libbpf.bpf.o";
 	else
 		prog = "test_sk_assign.bpf.o";
-	if (CHECK_FAIL(pclose(tc)))
+	if (!ASSERT_OK(pclose(tc), "pclose"))
 		return false;
 
 	/* Move to a new networking namespace */
-	if (CHECK_FAIL(unshare(CLONE_NEWNET)))
+	if (!ASSERT_OK(unshare(CLONE_NEWNET), "unshare"))
 		return false;
 
 	/* Configure necessary links, routes */
-	if (CHECK_FAIL(system("ip link set dev lo up")))
+	if (!ASSERT_SYS("ip link set dev lo up"))
 		return false;
-	if (CHECK_FAIL(system("ip route add local default dev lo")))
+	if (!ASSERT_SYS("ip route add local default dev lo"))
 		return false;
-	if (CHECK_FAIL(system("ip -6 route add local default dev lo")))
+	if (!ASSERT_SYS("ip -6 route add local default dev lo"))
 		return false;
 
 	/* Load qdisc, BPF program */
-	if (CHECK_FAIL(system("tc qdisc add dev lo clsact")))
+	if (!ASSERT_SYS("tc qdisc add dev lo clsact"))
 		return false;
-	sprintf(tc_cmd, "%s %s %s %s %s", "tc filter add dev lo ingress bpf",
-		       "direct-action object-file", prog,
-		       "section tc",
-		       (env.verbosity < VERBOSE_VERY) ? " 2>/dev/null" : "verbose");
-	if (CHECK(system(tc_cmd), "BPF load failed;",
-		  "run with -vv for more info\n"))
+
+	if (!ASSERT_SYS("%s %s %s %s %s", "tc filter add dev lo ingress bpf",
+			"direct-action object-file", prog,
+			"section tc",
+			(env.verbosity < VERBOSE_VERY) ? " 2>/dev/null" : "verbose"))
 		return false;
 
 	return true;
@@ -81,7 +79,7 @@ get_port(int fd)
 	socklen_t slen = sizeof(ss);
 	in_port_t port = 0;
 
-	if (CHECK_FAIL(getsockname(fd, (struct sockaddr *)&ss, &slen)))
+	if (!ASSERT_OK(getsockname(fd, (struct sockaddr *)&ss, &slen), "getsockname"))
 		return port;
 
 	switch (ss.ss_family) {
@@ -124,24 +122,22 @@ run_test(int server_fd, const struct sockaddr *addr, socklen_t len, int type)
 
 	if (type == SOCK_STREAM) {
 		srv_client = accept(server_fd, NULL, NULL);
-		if (CHECK_FAIL(srv_client == -1)) {
-			perror("Can't accept connection");
+		if (!ASSERT_OK_FD(srv_client, "accept"))
 			goto out;
-		}
 	} else {
 		srv_client = server_fd;
 	}
-	if (CHECK_FAIL(write(client, buf, sizeof(buf)) != sizeof(buf))) {
+	if (!ASSERT_EQ(write(client, buf, sizeof(buf)), sizeof(buf), "write")) {
 		perror("Can't write on client");
 		goto out;
 	}
-	if (CHECK_FAIL(rcv_msg(srv_client, type) != sizeof(buf))) {
+	if (!ASSERT_EQ(rcv_msg(srv_client, type), sizeof(buf), "rcv_msg")) {
 		perror("Can't read on server");
 		goto out;
 	}
 
 	port = get_port(srv_client);
-	if (CHECK_FAIL(!port))
+	if (!ASSERT_NEQ(port, 0, "valid port"))
 		goto out;
 	/* SOCK_STREAM is connected via accept(), so the server's local address
 	 * will be the CONNECT_PORT rather than the BIND port that corresponds
@@ -239,7 +235,7 @@ void test_sk_assign(void)
 	int i;
 
 	self_net = open(NS_SELF, O_RDONLY);
-	if (CHECK_FAIL(self_net < 0)) {
+	if (!ASSERT_OK_FD(self_net, "open NS_SELF")) {
 		perror("Unable to open "NS_SELF);
 		return;
 	}
@@ -250,7 +246,7 @@ void test_sk_assign(void)
 	}
 
 	server_map = bpf_obj_get(SERVER_MAP_PATH);
-	if (CHECK_FAIL(server_map < 0)) {
+	if (!ASSERT_OK_FD(server_map, "bpf_obj_get SERVER_MAP_PATH")) {
 		perror("Unable to open " SERVER_MAP_PATH);
 		goto cleanup;
 	}
@@ -272,7 +268,7 @@ void test_sk_assign(void)
 			goto close;
 
 		err = bpf_map_update_elem(server_map, &zero, &server, BPF_ANY);
-		if (CHECK_FAIL(err)) {
+		if (!ASSERT_OK(err, "bpf_map_update_elem")) {
 			perror("Unable to update server_map");
 			goto close;
 		}
@@ -291,9 +287,9 @@ close:
 	close(server);
 	close(server_map);
 cleanup:
-	if (CHECK_FAIL(unlink(SERVER_MAP_PATH)))
+	if (!ASSERT_OK(unlink(SERVER_MAP_PATH), "unlink SERVER_MAP_PATH"))
 		perror("Unable to unlink " SERVER_MAP_PATH);
-	if (CHECK_FAIL(setns(self_net, CLONE_NEWNET)))
+	if (!ASSERT_OK(setns(self_net, CLONE_NEWNET), "setns"))
 		perror("Failed to setns("NS_SELF")");
 	close(self_net);
 }
