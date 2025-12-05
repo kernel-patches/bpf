@@ -43,7 +43,11 @@ static void display_openssl_errors(int l)
 	int flags;
 	int line;
 
+#if OPENSSL_VERSION_MAJOR >= 3
 	while ((e = ERR_get_error_all(&file, &line, NULL, &data, &flags))) {
+#else
+	while ((e = ERR_get_error_line_data(&file, &line, &data, &flags))) {
+#endif
 		ERR_error_string_n(e, buf, sizeof(buf));
 		if (data && (flags & ERR_TXT_STRING)) {
 			p_err("OpenSSL %s: %s:%d: %s", buf, file, line, data);
