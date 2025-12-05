@@ -280,7 +280,7 @@ static void test(void)
 	/* Prepare listen_fd */
 	listen_fd = start_server(AF_INET6, SOCK_STREAM, "::1", 0xcafe, 0);
 	/* start_server() has logged the error details */
-	if (CHECK_FAIL(listen_fd == -1))
+	if (!ASSERT_OK_FD(listen_fd, "start server"))
 		goto done;
 
 	err = getsockname(listen_fd, (struct sockaddr *)&srv_sa6, &addrlen);
@@ -290,7 +290,7 @@ static void test(void)
 	memcpy(&skel->bss->srv_sa6, &srv_sa6, sizeof(srv_sa6));
 
 	cli_fd = connect_to_fd(listen_fd, 0);
-	if (CHECK_FAIL(cli_fd == -1))
+	if (!ASSERT_OK_FD(cli_fd, "connect to server"))
 		goto done;
 
 	err = getsockname(cli_fd, (struct sockaddr *)&cli_sa6, &addrlen);
@@ -355,17 +355,17 @@ void serial_test_sock_fields(void)
 
 	/* Create a cgroup, get fd, and join it */
 	parent_cg_fd = test__join_cgroup(PARENT_CGROUP);
-	if (CHECK_FAIL(parent_cg_fd < 0))
+	if (!ASSERT_OK_FD(parent_cg_fd, "join parent cgroup"))
 		return;
 	parent_cg_id = get_cgroup_id(PARENT_CGROUP);
-	if (CHECK_FAIL(!parent_cg_id))
+	if (!ASSERT_GT(parent_cg_id, 0, "get parent cgroup id"))
 		goto done;
 
 	child_cg_fd = test__join_cgroup(CHILD_CGROUP);
-	if (CHECK_FAIL(child_cg_fd < 0))
+	if (!ASSERT_OK_FD(child_cg_fd, "join child cgroup"))
 		goto done;
 	child_cg_id = get_cgroup_id(CHILD_CGROUP);
-	if (CHECK_FAIL(!child_cg_id))
+	if (!ASSERT_GT(child_cg_id, 0, "get child cgroup id"))
 		goto done;
 
 	skel = test_sock_fields__open_and_load();
