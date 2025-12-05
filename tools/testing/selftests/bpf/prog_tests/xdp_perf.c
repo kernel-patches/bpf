@@ -16,7 +16,7 @@ void test_xdp_perf(void)
 	);
 
 	err = bpf_prog_test_load(file, BPF_PROG_TYPE_XDP, &obj, &prog_fd);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load BPF program"))
 		return;
 
 	err = bpf_prog_test_run_opts(prog_fd, &topts);
