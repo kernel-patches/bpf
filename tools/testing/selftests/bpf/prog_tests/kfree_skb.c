@@ -120,7 +120,8 @@ void serial_test_kfree_skb(void)
 		  "failed to get output data: %d\n", err))
 		goto close_prog;
 
-	CHECK_FAIL(!test_ok[0] || !test_ok[1]);
+	ASSERT_TRUE(test_ok[0], "test_ok[0]");
+	ASSERT_TRUE(test_ok[1], "test_ok[1]");
 close_prog:
 	perf_buffer__free(pb);
 	bpf_object__close(obj);
