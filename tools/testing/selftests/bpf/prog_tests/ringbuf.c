@@ -21,8 +21,6 @@
 
 #define EDONE 7777
 
-static int duration = 0;
-
 struct sample {
 	int pid;
 	int seq;
@@ -50,12 +48,10 @@ static int process_sample(void *ctx, void *data, size_t len)
 
 	switch (s->seq) {
 	case 0:
-		CHECK(s->value != 333, "sample1_value", "exp %ld, got %ld\n",
-		      333L, s->value);
+		ASSERT_EQ(s->value, 333, "sample1_value");
 		return 0;
 	case 1:
-		CHECK(s->value != 777, "sample2_value", "exp %ld, got %ld\n",
-		      777L, s->value);
+		ASSERT_EQ(s->value, 777, "sample2_value");
 		return -EDONE;
 	default:
 		/* we don't care about the rest */
@@ -152,13 +148,13 @@ static void ringbuf_subtest(void)
 	unsigned long avail_data, ring_size, cons_pos, prod_pos;
 
 	skel = test_ringbuf_lskel__open();
-	if (CHECK(!skel, "skel_open", "skeleton open failed\n"))
+	if (!ASSERT_OK_PTR(skel, "skel_open"))
 		return;
 
 	skel->maps.ringbuf.max_entries = page_size;
 
 	err = test_ringbuf_lskel__load(skel);
-	if (CHECK(err != 0, "skel_load", "skeleton load failed\n"))
+	if (!ASSERT_OK(err, "skel_load"))
 		goto cleanup;
 
 	rb_fd = skel->maps.ringbuf.map_fd;
@@ -212,11 +208,11 @@ static void ringbuf_subtest(void)
 
 	ringbuf = ring_buffer__new(skel->maps.ringbuf.map_fd,
 				   process_sample, NULL, NULL);
-	if (CHECK(!ringbuf, "ringbuf_create", "failed to create ringbuf\n"))
+	if (!ASSERT_OK_PTR(ringbuf, "ringbuf_create"))
 		goto cleanup;
 
 	err = test_ringbuf_lskel__attach(skel);
-	if (CHECK(err, "skel_attach", "skeleton attachment failed: %d\n", err))
+	if (!ASSERT_OK(err, "skel_attach"))
 		goto cleanup;
 
 	trigger_samples();
@@ -229,18 +225,10 @@ static void ringbuf_subtest(void)
 	ASSERT_EQ(map_fd, skel->maps.ringbuf.map_fd, "ring_map_fd");
 
 	/* 2 submitted + 1 discarded records */
-	CHECK(skel->bss->avail_data != 3 * rec_sz,
-	      "err_avail_size", "exp %ld, got %ld\n",
-	      3L * rec_sz, skel->bss->avail_data);
-	CHECK(skel->bss->ring_size != page_size,
-	      "err_ring_size", "exp %ld, got %ld\n",
-	      (long)page_size, skel->bss->ring_size);
-	CHECK(skel->bss->cons_pos != 0,
-	      "err_cons_pos", "exp %ld, got %ld\n",
-	      0L, skel->bss->cons_pos);
-	CHECK(skel->bss->prod_pos != 3 * rec_sz,
-	      "err_prod_pos", "exp %ld, got %ld\n",
-	      3L * rec_sz, skel->bss->prod_pos);
+	ASSERT_EQ(skel->bss->avail_data, 3 * rec_sz, "err_avail_size");
+	ASSERT_EQ(skel->bss->ring_size, page_size, "err_ring_size");
+	ASSERT_EQ(skel->bss->cons_pos, 0, "err_cons_pos");
+	ASSERT_EQ(skel->bss->prod_pos, 3 * rec_sz, "err_prod_pos");
 
 	/* verify getting this data directly via the ring object yields the same
 	 * results
@@ -258,38 +246,33 @@ static void ringbuf_subtest(void)
 	err = ring_buffer__poll(ringbuf, -1);
 
 	/* -EDONE is used as an indicator that we are done */
-	if (CHECK(err != -EDONE, "err_done", "done err: %d\n", err))
+	if (!ASSERT_EQ(err, -EDONE, "err_done"))
 		goto cleanup;
 	cnt = atomic_xchg(&sample_cnt, 0);
-	CHECK(cnt != 2, "cnt", "exp %d samples, got %d\n", 2, cnt);
+	ASSERT_EQ(cnt, 2, "cnt");
 
 	/* we expect extra polling to return nothing */
 	err = ring_buffer__poll(ringbuf, 0);
-	if (CHECK(err != 0, "extra_samples", "poll result: %d\n", err))
+	if (!ASSERT_EQ(err, 0, "extra_samples"))
 		goto cleanup;
 	cnt = atomic_xchg(&sample_cnt, 0);
-	CHECK(cnt != 0, "cnt", "exp %d samples, got %d\n", 0, cnt);
+	ASSERT_EQ(cnt, 0, "cnt");
 
-	CHECK(skel->bss->dropped != 0, "err_dropped", "exp %ld, got %ld\n",
-	      0L, skel->bss->dropped);
-	CHECK(skel->bss->total != 2, "err_total", "exp %ld, got %ld\n",
-	      2L, skel->bss->total);
-	CHECK(skel->bss->discarded != 1, "err_discarded", "exp %ld, got %ld\n",
-	      1L, skel->bss->discarded);
+	ASSERT_EQ(skel->bss->dropped, 0, "err_dropped");
+	ASSERT_EQ(skel->bss->total, 2, "err_total");
+	ASSERT_EQ(skel->bss->discarded, 1, "err_discarded");
 
 	/* now validate consumer position is updated and returned */
 	trigger_samples();
-	CHECK(skel->bss->cons_pos != 3 * rec_sz,
-	      "err_cons_pos", "exp %ld, got %ld\n",
-	      3L * rec_sz, skel->bss->cons_pos);
+	ASSERT_EQ(skel->bss->cons_pos, 3 * rec_sz, "err_cons_pos");
 	err = ring_buffer__poll(ringbuf, -1);
-	CHECK(err <= 0, "poll_err", "err %d\n", err);
+	ASSERT_GT(err, 0, "poll_err");
 	cnt = atomic_xchg(&sample_cnt, 0);
-	CHECK(cnt != 2, "cnt", "exp %d samples, got %d\n", 2, cnt);
+	ASSERT_EQ(cnt, 2, "cnt");
 
 	/* start poll in background w/ long timeout */
 	err = pthread_create(&thread, NULL, poll_thread, (void *)(long)10000);
-	if (CHECK(err, "bg_poll", "pthread_create failed: %d\n", err))
+	if (!ASSERT_OK(err, "bg_poll"))
 		goto cleanup;
 
 	/* turn off notifications now */
@@ -304,18 +287,15 @@ static void ringbuf_subtest(void)
 	usleep(50000);
 	/* background poll should still be blocked */
 	err = pthread_tryjoin_np(thread, (void **)&bg_ret);
-	if (CHECK(err != EBUSY, "try_join", "err %d\n", err))
+	if (!ASSERT_EQ(err, EBUSY, "try_join"))
 		goto cleanup;
 
 	/* BPF side did everything right */
-	CHECK(skel->bss->dropped != 0, "err_dropped", "exp %ld, got %ld\n",
-	      0L, skel->bss->dropped);
-	CHECK(skel->bss->total != 2, "err_total", "exp %ld, got %ld\n",
-	      2L, skel->bss->total);
-	CHECK(skel->bss->discarded != 1, "err_discarded", "exp %ld, got %ld\n",
-	      1L, skel->bss->discarded);
+	ASSERT_EQ(skel->bss->dropped, 0, "err_dropped");
+	ASSERT_EQ(skel->bss->total, 2, "err_total");
+	ASSERT_EQ(skel->bss->discarded, 1, "err_discarded");
 	cnt = atomic_xchg(&sample_cnt, 0);
-	CHECK(cnt != 0, "cnt", "exp %d samples, got %d\n", 0, cnt);
+	ASSERT_EQ(cnt, 0, "cnt");
 
 	/* clear flags to return to "adaptive" notification mode */
 	skel->bss->flags = 0;
@@ -327,12 +307,12 @@ static void ringbuf_subtest(void)
 
 	/* background poll should still be blocked */
 	err = pthread_tryjoin_np(thread, (void **)&bg_ret);
-	if (CHECK(err != EBUSY, "try_join", "err %d\n", err))
+	if (!ASSERT_EQ(err, EBUSY, "try_join"))
 		goto cleanup;
 
 	/* still no samples, because consumer is behind */
 	cnt = atomic_xchg(&sample_cnt, 0);
-	CHECK(cnt != 0, "cnt", "exp %d samples, got %d\n", 0, cnt);
+	ASSERT_EQ(cnt, 0, "cnt");
 
 	skel->bss->dropped = 0;
 	skel->bss->total = 0;
@@ -348,17 +328,17 @@ static void ringbuf_subtest(void)
 	/* now we should get a pending notification */
 	usleep(50000);
 	err = pthread_tryjoin_np(thread, (void **)&bg_ret);
-	if (CHECK(err, "join_bg", "err %d\n", err))
+	if (!ASSERT_OK(err, "join_bg"))
 		goto cleanup;
 
-	if (CHECK(bg_ret <= 0, "bg_ret", "epoll_wait result: %ld", bg_ret))
+	if (!ASSERT_GT(bg_ret, 0, "bg_ret"))
 		goto cleanup;
 
 	/* due to timing variations, there could still be non-notified
 	 * samples, so consume them here to collect all the samples
 	 */
 	err = ring_buffer__consume(ringbuf);
-	CHECK(err < 0, "rb_consume", "failed: %d\b", err);
+	ASSERT_GE(err, 0, "rb_consume");
 
 	/* also consume using ring__consume to make sure it works the same */
 	err = ring__consume(ring);
@@ -366,15 +346,12 @@ static void ringbuf_subtest(void)
 
 	/* 3 rounds, 2 samples each */
 	cnt = atomic_xchg(&sample_cnt, 0);
-	CHECK(cnt != 6, "cnt", "exp %d samples, got %d\n", 6, cnt);
+	ASSERT_EQ(cnt, 6, "cnt");
 
 	/* BPF side did everything right */
-	CHECK(skel->bss->dropped != 0, "err_dropped", "exp %ld, got %ld\n",
-	      0L, skel->bss->dropped);
-	CHECK(skel->bss->total != 2, "err_total", "exp %ld, got %ld\n",
-	      2L, skel->bss->total);
-	CHECK(skel->bss->discarded != 1, "err_discarded", "exp %ld, got %ld\n",
-	      1L, skel->bss->discarded);
+	ASSERT_EQ(skel->bss->dropped, 0, "err_dropped");
+	ASSERT_EQ(skel->bss->total, 2, "err_total");
+	ASSERT_EQ(skel->bss->discarded, 1, "err_discarded");
 
 	test_ringbuf_lskel__detach(skel);
 cleanup:
