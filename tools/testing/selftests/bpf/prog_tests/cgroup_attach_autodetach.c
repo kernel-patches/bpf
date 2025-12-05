@@ -37,15 +37,15 @@ void serial_test_cgroup_attach_autodetach(void)
 			goto err;
 	}
 
-	if (CHECK_FAIL(setup_cgroup_environment()))
+	if (!ASSERT_OK(setup_cgroup_environment(), "setup_cgroup_environment"))
 		goto err;
 
 	/* create a cgroup, attach two programs and remember their ids */
 	cg = create_and_get_cgroup("/cg_autodetach");
-	if (CHECK_FAIL(cg < 0))
+	if (!ASSERT_OK_FD(cg, "create_and_get_cgroup"))
 		goto err;
 
-	if (CHECK_FAIL(join_cgroup("/cg_autodetach")))
+	if (!ASSERT_OK(join_cgroup("/cg_autodetach"), "join_cgroup"))
 		goto err;
 
 	for (i = 0; i < ARRAY_SIZE(allow_prog); i++)
@@ -60,12 +60,12 @@ void serial_test_cgroup_attach_autodetach(void)
 				 prog_ids, &prog_cnt),
 		  "prog_query", "errno=%d\n", errno))
 		goto err;
-	if (CHECK_FAIL(system(PING_CMD)))
+	if (!ASSERT_SYS(PING_CMD))
 		goto err;
 
 	/* allocate some memory (4Mb) to pin the original cgroup */
 	ptr = malloc(4 * (1 << 20));
-	if (CHECK_FAIL(!ptr))
+	if (!ASSERT_OK_PTR(ptr, "malloc"))
 		goto err;
 
 	/* close programs and cgroup fd */
@@ -93,8 +93,10 @@ void serial_test_cgroup_attach_autodetach(void)
 			/* don't leave the fd open */
 			close(fd);
 
-			if (CHECK_FAIL(!attempts))
+			if (attempts == 0) {
+				PRINT_FAIL("auto-detach timeout");
 				goto err;
+			}
 
 			sleep(1);
 		}
