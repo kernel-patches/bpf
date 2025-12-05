@@ -420,13 +420,15 @@ void hexdump(const char *prefix, const void *buf, size_t len);
 	___ok;								\
 })
 
-#define SYS(goto_label, fmt, ...)					\
+#define ASSERT_SYS(fmt, ...)						\
 	({								\
 		char cmd[1024];						\
 		snprintf(cmd, sizeof(cmd), fmt, ##__VA_ARGS__);		\
-		if (!ASSERT_OK(system(cmd), cmd))			\
-			goto goto_label;				\
+		ASSERT_OK(system(cmd), cmd);				\
 	})
+
+#define SYS(goto_label, fmt, ...)					\
+	({ if (!ASSERT_SYS(fmt, ##__VA_ARGS__)) goto goto_label; })
 
 #define SYS_FAIL(goto_label, fmt, ...)					\
 	({								\
