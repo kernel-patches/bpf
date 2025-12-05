@@ -1092,6 +1092,28 @@ static void *map_key_from_value(struct bpf_map *map, void *value, u32 *arr_idx)
 	return (void *)value - round_up(map->key_size, 8);
 }
 
+enum bpf_async_type {
+	BPF_ASYNC_TYPE_TIMER = 0,
+	BPF_ASYNC_TYPE_WQ,
+};
+
+enum bpf_async_op {
+	BPF_ASYNC_START,
+	BPF_ASYNC_CANCEL,
+	BPF_ASYNC_CANCEL_AND_FREE,
+};
+
+enum bpf_timer_ctl {
+	BPF_TIMER_ABS = 1ULL << 63,
+	BPF_TIMER_PINNED = 1ULL << 62,
+	BPF_TIMER_CTL = BPF_TIMER_ABS | BPF_TIMER_PINNED,
+};
+
+enum bpf_async_ctl {
+	BPF_ASYNC_IRQ_SCHEDULED = 1,
+	BPF_ASYNC_FREED = 1 << 1,
+};
+
 struct bpf_async_cb {
 	struct bpf_map *map;
 	struct bpf_prog *prog;
@@ -1102,6 +1124,13 @@ struct bpf_async_cb {
 		struct work_struct delete_work;
 	};
 	u64 flags;
+	struct irq_work worker;
+	u64 timer_nsec;
+	u32 timer_mode;
+	u32 op;
+	atomic_t ctl; /* stores bpf_async_ctl */
+	atomic_t seq;
+	enum bpf_async_type type;
 };
 
 /* BPF map elements can contain 'struct bpf_timer'.
@@ -1139,17 +1168,7 @@ struct bpf_async_kern {
 		struct bpf_hrtimer *timer;
 		struct bpf_work *work;
 	};
-	/* bpf_spin_lock is used here instead of spinlock_t to make
-	 * sure that it always fits into space reserved by struct bpf_timer
-	 * regardless of LOCKDEP and spinlock debug flags.
-	 */
-	struct bpf_spin_lock lock;
 } __attribute__((aligned(8)));
-
-enum bpf_async_type {
-	BPF_ASYNC_TYPE_TIMER = 0,
-	BPF_ASYNC_TYPE_WQ,
-};
 
 static DEFINE_PER_CPU(struct bpf_hrtimer *, hrtimer_running);
 
@@ -1216,6 +1235,13 @@ static void bpf_async_cb_rcu_free(struct rcu_head *rcu)
 {
 	struct bpf_async_cb *cb = container_of(rcu, struct bpf_async_cb, rcu);
 
+	/*
+	 * Drop the last reference to prog only after RCU GP, as set_callback()
+	 * may race with cancel_and_free()
+	 */
+	if (cb->prog)
+		bpf_prog_put(cb->prog);
+
 	kfree_nolock(cb);
 }
 
@@ -1243,18 +1269,17 @@ static void bpf_timer_delete_work(struct work_struct *work)
 	call_rcu(&t->cb.rcu, bpf_async_cb_rcu_free);
 }
 
+static void __bpf_async_cancel_and_free(struct bpf_async_kern *async);
+static void bpf_async_irq_worker(struct irq_work *work);
+
 static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u64 flags,
 			    enum bpf_async_type type)
 {
-	struct bpf_async_cb *cb;
+	struct bpf_async_cb *cb, *old_cb;
 	struct bpf_hrtimer *t;
 	struct bpf_work *w;
 	clockid_t clockid;
 	size_t size;
-	int ret = 0;
-
-	if (in_nmi())
-		return -EOPNOTSUPP;
 
 	switch (type) {
 	case BPF_ASYNC_TYPE_TIMER:
@@ -1267,18 +1292,13 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		return -EINVAL;
 	}
 
-	__bpf_spin_lock_irqsave(&async->lock);
 	t = async->timer;
-	if (t) {
-		ret = -EBUSY;
-		goto out;
-	}
+	if (t)
+		return -EBUSY;
 
 	cb = bpf_map_kmalloc_nolock(map, size, 0, map->numa_node);
-	if (!cb) {
-		ret = -ENOMEM;
-		goto out;
-	}
+	if (!cb)
+		return -ENOMEM;
 
 	switch (type) {
 	case BPF_ASYNC_TYPE_TIMER:
@@ -1287,6 +1307,7 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 
 		atomic_set(&t->cancelling, 0);
 		INIT_WORK(&t->cb.delete_work, bpf_timer_delete_work);
+		/* TODO: this is not NMI safe because of debug_setup() */
 		hrtimer_setup(&t->timer, bpf_timer_cb, clockid, HRTIMER_MODE_REL_SOFT);
 		cb->value = (void *)async - map->record->timer_off;
 		break;
@@ -1301,9 +1322,21 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 	cb->map = map;
 	cb->prog = NULL;
 	cb->flags = flags;
+	cb->worker = IRQ_WORK_INIT(bpf_async_irq_worker);
+	cb->timer_nsec = 0;
+	cb->timer_mode = 0;
+	cb->op = 0;
+	atomic_set(&cb->seq, 0);
+	atomic_set(&cb->ctl, 0);
+	cb->type = type;
 	rcu_assign_pointer(cb->callback_fn, NULL);
 
-	WRITE_ONCE(async->cb, cb);
+	old_cb = cmpxchg(&async->cb, NULL, cb);
+	if (old_cb) {
+		/* Lost the race to initialize this bpf_async_kern, drop the allocated object */
+		kfree_nolock(cb);
+		return -EBUSY;
+	}
 	/* Guarantee the order between async->cb and map->usercnt. So
 	 * when there are concurrent uref release and bpf timer init, either
 	 * bpf_timer_cancel_and_free() called by uref release reads a no-NULL
@@ -1314,13 +1347,11 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		/* maps with timers must be either held by user space
 		 * or pinned in bpffs.
 		 */
-		WRITE_ONCE(async->cb, NULL);
-		kfree_nolock(cb);
-		ret = -EPERM;
+		__bpf_async_cancel_and_free(async);
+		return -EPERM;
 	}
-out:
-	__bpf_spin_unlock_irqrestore(&async->lock);
-	return ret;
+
+	return 0;
 }
 
 BPF_CALL_3(bpf_timer_init, struct bpf_async_kern *, timer, struct bpf_map *, map,
@@ -1350,6 +1381,58 @@ static const struct bpf_func_proto bpf_timer_init_proto = {
 	.arg2_type	= ARG_CONST_MAP_PTR,
 	.arg3_type	= ARG_ANYTHING,
 };
+
+static int bpf_async_schedule_op(struct bpf_async_cb *cb, u32 op, u64 nsec, u32 timer_mode)
+{
+	unsigned long flags;
+
+	/* Another writer is active, consider we lost the race */
+	if (atomic_read(&cb->seq) & 1)
+		return -EBUSY;
+	/*
+	 * Make sure irq_work readers won't happen between first and second seq increments.
+	 * That results in deadlock, as reader expects seq to be even eventually.
+	 */
+	local_irq_save(flags);
+
+	atomic_add(1, &cb->seq);
+
+	WRITE_ONCE(cb->timer_nsec, nsec);
+	WRITE_ONCE(cb->timer_mode, timer_mode);
+	WRITE_ONCE(cb->op, op);
+
+	atomic_fetch_add_release(1, &cb->seq);
+
+	local_irq_restore(flags);
+
+	/* Check if irq_work is scheduled, schedule if not yet */
+	if (atomic_fetch_or(BPF_ASYNC_IRQ_SCHEDULED, &cb->ctl) == 0)
+		irq_work_queue(&cb->worker);
+
+	return 0;
+}
+
+static u32 bpf_async_read_op(struct bpf_async_cb *cb, enum bpf_async_op *op,
+			     u64 *nsec, u32 *flags)
+{
+	u32 seq_start, seq_end;
+
+	do {
+		seq_start = atomic_read_acquire(&cb->seq);
+
+		*flags = READ_ONCE(cb->timer_mode);
+		*nsec = READ_ONCE(cb->timer_nsec);
+		*op = READ_ONCE(cb->op);
+
+		/* Make sure ctl and op reads take place before the seq_end read */
+		smp_mb__before_atomic();
+
+		seq_end = atomic_read(&cb->seq);
+	} while (seq_start != seq_end || (seq_end & 1));
+
+	return seq_start;
+
+}
 
 static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback_fn,
 				    struct bpf_prog *prog)
@@ -1392,22 +1475,19 @@ static const struct bpf_func_proto bpf_timer_set_callback_proto = {
 	.arg2_type	= ARG_PTR_TO_FUNC,
 };
 
-BPF_CALL_3(bpf_timer_start, struct bpf_async_kern *, timer, u64, nsecs, u64, flags)
+BPF_CALL_3(bpf_timer_start, struct bpf_async_kern *, async, u64, nsecs, u64, flags)
 {
 	struct bpf_hrtimer *t;
-	int ret = 0;
-	enum hrtimer_mode mode;
+	u32 mode;
 
-	if (in_nmi())
-		return -EOPNOTSUPP;
 	if (flags & ~(BPF_F_TIMER_ABS | BPF_F_TIMER_CPU_PIN))
 		return -EINVAL;
-	__bpf_spin_lock_irqsave(&timer->lock);
-	t = timer->timer;
-	if (!t || !t->cb.prog) {
-		ret = -EINVAL;
-		goto out;
-	}
+
+	guard(rcu)();
+
+	t = async->timer;
+	if (!t || !READ_ONCE(t->cb.prog))
+		return -EINVAL;
 
 	if (flags & BPF_F_TIMER_ABS)
 		mode = HRTIMER_MODE_ABS_SOFT;
@@ -1417,10 +1497,7 @@ BPF_CALL_3(bpf_timer_start, struct bpf_async_kern *, timer, u64, nsecs, u64, fla
 	if (flags & BPF_F_TIMER_CPU_PIN)
 		mode |= HRTIMER_MODE_PINNED;
 
-	hrtimer_start(&t->timer, ns_to_ktime(nsecs), mode);
-out:
-	__bpf_spin_unlock_irqrestore(&timer->lock);
-	return ret;
+	return bpf_async_schedule_op(&t->cb, BPF_ASYNC_START, nsecs, mode);
 }
 
 static const struct bpf_func_proto bpf_timer_start_proto = {
@@ -1431,17 +1508,6 @@ static const struct bpf_func_proto bpf_timer_start_proto = {
 	.arg2_type	= ARG_ANYTHING,
 	.arg3_type	= ARG_ANYTHING,
 };
-
-static void drop_prog_refcnt(struct bpf_async_cb *async)
-{
-	struct bpf_prog *prog = async->prog;
-
-	if (prog) {
-		bpf_prog_put(prog);
-		async->prog = NULL;
-		rcu_assign_pointer(async->callback_fn, NULL);
-	}
-}
 
 BPF_CALL_1(bpf_timer_cancel, struct bpf_async_kern *, async)
 {
@@ -1511,27 +1577,16 @@ static const struct bpf_func_proto bpf_timer_cancel_proto = {
 	.arg1_type	= ARG_PTR_TO_TIMER,
 };
 
-static struct bpf_async_cb *__bpf_async_cancel_and_free(struct bpf_async_kern *async)
+static void __bpf_async_cancel_and_free(struct bpf_async_kern *async)
 {
 	struct bpf_async_cb *cb;
 
-	/* Performance optimization: read async->cb without lock first. */
-	if (!READ_ONCE(async->cb))
-		return NULL;
-
-	__bpf_spin_lock_irqsave(&async->lock);
-	/* re-read it under lock */
-	cb = async->cb;
+	cb = xchg(&async->cb, NULL);
 	if (!cb)
-		goto out;
-	drop_prog_refcnt(cb);
-	/* The subsequent bpf_timer_start/cancel() helpers won't be able to use
-	 * this timer, since it won't be initialized.
-	 */
-	WRITE_ONCE(async->cb, NULL);
-out:
-	__bpf_spin_unlock_irqrestore(&async->lock);
-	return cb;
+		return;
+
+	if (atomic_fetch_or(BPF_ASYNC_FREED | BPF_ASYNC_IRQ_SCHEDULED, &cb->ctl) == 0)
+		irq_work_queue(&cb->worker);
 }
 
 static void bpf_timer_delete(struct bpf_hrtimer *t)
@@ -1586,19 +1641,99 @@ static void bpf_timer_delete(struct bpf_hrtimer *t)
 	}
 }
 
+static void bpf_async_process_op(struct bpf_async_cb *cb, u32 op,
+				 u64 timer_nsec, u32 timer_mode)
+{
+	switch (cb->type) {
+	case BPF_ASYNC_TYPE_TIMER: {
+		struct bpf_hrtimer *t = container_of(cb, struct bpf_hrtimer, cb);
+
+		switch (op) {
+		case BPF_ASYNC_START:
+			hrtimer_start(&t->timer, ns_to_ktime(timer_nsec), timer_mode);
+			break;
+		case BPF_ASYNC_CANCEL:
+			hrtimer_try_to_cancel(&t->timer);
+			break;
+		case BPF_ASYNC_CANCEL_AND_FREE:
+			bpf_timer_delete(t);
+			break;
+		default:
+			break;
+		}
+		break;
+	}
+	case BPF_ASYNC_TYPE_WQ: {
+		struct bpf_work *w = container_of(cb, struct bpf_work, cb);
+
+		switch (op) {
+		case BPF_ASYNC_START:
+			schedule_work(&w->work);
+			break;
+		case BPF_ASYNC_CANCEL_AND_FREE:
+			/*
+			 * Trigger cancel of the sleepable work, but *do not* wait for
+			 * it to finish.
+			 * kfree will be called once the work has finished.
+			 */
+			schedule_work(&w->delete_work);
+			break;
+		default:
+			break;
+		}
+		break;
+	}
+	}
+}
+
+static void bpf_async_irq_worker(struct irq_work *work)
+{
+	struct bpf_async_cb *cb = container_of(work, struct bpf_async_cb, worker);
+	u32 op, seq, prev_ctl, timer_mode;
+	u64 nsec;
+
+	if (atomic_read(&cb->ctl) & BPF_ASYNC_FREED)
+		goto cancel_and_free;
+
+	do {
+		seq = bpf_async_read_op(cb, &op, &nsec, &timer_mode);
+		bpf_async_process_op(cb, op, nsec, timer_mode);
+
+		/*
+		 * Now after processing the latest operation, try to release IRQ_SCHEDULED bit and
+		 * re-read seq, if seq has not changed, there is nothing to do.
+		 * If seq has changed, we should try to re-acquire IRQ_SCHEDULED bit, because
+		 * new scheduler could have missed setting IRQ_SCHEDULED.
+		 */
+		/* try to release IRQ_SCHEDULED bit */
+		prev_ctl = atomic_cmpxchg(&cb->ctl, BPF_ASYNC_IRQ_SCHEDULED, 0);
+		if (prev_ctl & BPF_ASYNC_FREED)
+			goto cancel_and_free;
+
+		/* if seq has not changed after we released IRQ_SCHEDULED bit -> return */
+		if (atomic_read(&cb->seq) == seq)
+			return;
+
+		/* seq changed, try to re-acquire IRQ_SCHEDULED bit again and run the op */
+		prev_ctl = atomic_fetch_or(BPF_ASYNC_IRQ_SCHEDULED, &cb->ctl);
+		if (prev_ctl & BPF_ASYNC_FREED)
+			goto cancel_and_free;
+
+	} while (prev_ctl != BPF_ASYNC_IRQ_SCHEDULED);
+
+	return;
+
+cancel_and_free:
+	bpf_async_process_op(cb, BPF_ASYNC_CANCEL_AND_FREE, 0, 0);
+}
+
 /*
  * This function is called by map_delete/update_elem for individual element and
  * by ops->map_release_uref when the user space reference to a map reaches zero.
  */
 void bpf_timer_cancel_and_free(void *val)
 {
-	struct bpf_hrtimer *t;
-
-	t = (struct bpf_hrtimer *)__bpf_async_cancel_and_free(val);
-	if (!t)
-		return;
-
-	bpf_timer_delete(t);
+	__bpf_async_cancel_and_free(val);
 }
 
 /* This function is called by map_delete/update_elem for individual element and
@@ -1606,19 +1741,7 @@ void bpf_timer_cancel_and_free(void *val)
  */
 void bpf_wq_cancel_and_free(void *val)
 {
-	struct bpf_work *work;
-
-	BTF_TYPE_EMIT(struct bpf_wq);
-
-	work = (struct bpf_work *)__bpf_async_cancel_and_free(val);
-	if (!work)
-		return;
-	/* Trigger cancel of the sleepable work, but *do not* wait for
-	 * it to finish if it was running as we might not be in a
-	 * sleepable context.
-	 * kfree will be called once the work has finished.
-	 */
-	schedule_work(&work->delete_work);
+	__bpf_async_cancel_and_free(val);
 }
 
 BPF_CALL_2(bpf_kptr_xchg, void *, dst, void *, ptr)
@@ -3093,15 +3216,14 @@ __bpf_kfunc int bpf_wq_start(struct bpf_wq *wq, unsigned int flags)
 	struct bpf_async_kern *async = (struct bpf_async_kern *)wq;
 	struct bpf_work *w;
 
-	if (in_nmi())
-		return -EOPNOTSUPP;
 	if (flags)
 		return -EINVAL;
 	w = READ_ONCE(async->work);
 	if (!w || !READ_ONCE(w->cb.prog))
 		return -EINVAL;
 
-	schedule_work(&w->work);
+	bpf_async_schedule_op(&w->cb, BPF_ASYNC_START, 0, 0);
+
 	return 0;
 }
 
