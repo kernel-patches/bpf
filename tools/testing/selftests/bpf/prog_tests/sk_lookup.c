@@ -80,8 +80,6 @@ struct cb_opts {
 	bool reuseport;
 };
 
-static __u32 duration;		/* for CHECK macro */
-
 static bool is_ipv6(const char *ip)
 {
 	return !!strchr(ip, ':');
@@ -115,7 +113,7 @@ static int setsockopts(int fd, void *opts)
 	if (co->sotype == SOCK_DGRAM) {
 		err = setsockopt(fd, SOL_IP, IP_RECVORIGDSTADDR, &one,
 				 sizeof(one));
-		if (CHECK(err, "setsockopt(IP_RECVORIGDSTADDR)", "failed\n")) {
+		if (!ASSERT_OK(err, "setsockopt(IP_RECVORIGDSTADDR)")) {
 			log_err("failed to enable IP_RECVORIGDSTADDR");
 			goto fail;
 		}
@@ -124,7 +122,7 @@ static int setsockopts(int fd, void *opts)
 	if (co->sotype == SOCK_DGRAM && co->family == AF_INET6) {
 		err = setsockopt(fd, SOL_IPV6, IPV6_RECVORIGDSTADDR, &one,
 				 sizeof(one));
-		if (CHECK(err, "setsockopt(IPV6_RECVORIGDSTADDR)", "failed\n")) {
+		if (!ASSERT_OK(err, "setsockopt(IPV6_RECVORIGDSTADDR)")) {
 			log_err("failed to enable IPV6_RECVORIGDSTADDR");
 			goto fail;
 		}
@@ -133,7 +131,7 @@ static int setsockopts(int fd, void *opts)
 	if (co->sotype == SOCK_STREAM) {
 		err = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one,
 				 sizeof(one));
-		if (CHECK(err, "setsockopt(SO_REUSEADDR)", "failed\n")) {
+		if (!ASSERT_OK(err, "setsockopt(SO_REUSEADDR)")) {
 			log_err("failed to enable SO_REUSEADDR");
 			goto fail;
 		}
@@ -142,7 +140,7 @@ static int setsockopts(int fd, void *opts)
 	if (co->reuseport) {
 		err = setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one,
 				 sizeof(one));
-		if (CHECK(err, "setsockopt(SO_REUSEPORT)", "failed\n")) {
+		if (!ASSERT_OK(err, "setsockopt(SO_REUSEPORT)")) {
 			log_err("failed to enable SO_REUSEPORT");
 			goto fail;
 		}
@@ -174,7 +172,7 @@ static int make_server(int sotype, const char *ip, int port,
 	/* Late attach reuseport prog so we can have one init path */
 	if (reuseport_prog) {
 		err = attach_reuseport(fd, reuseport_prog);
-		if (CHECK(err, "attach_reuseport", "failed\n")) {
+		if (!ASSERT_OK(err, "attach_reuseport")) {
 			log_err("failed to attach reuseport prog");
 			goto fail;
 		}
@@ -191,8 +189,8 @@ static __u64 socket_cookie(int fd)
 	__u64 cookie;
 	socklen_t cookie_len = sizeof(cookie);
 
-	if (CHECK(getsockopt(fd, SOL_SOCKET, SO_COOKIE, &cookie, &cookie_len) < 0,
-		  "getsockopt(SO_COOKIE)", "%s\n", strerror(errno)))
+	if (!ASSERT_GE(getsockopt(fd, SOL_SOCKET, SO_COOKIE, &cookie, &cookie_len), 0,
+		       "getsockopt(SO_COOKIE)"))
 		return 0;
 	return cookie;
 }
@@ -218,11 +216,11 @@ static int fill_sk_lookup_ctx(struct bpf_sk_lookup *ctx, const char *local_ip, _
 	}
 
 	err = inet_pton(ctx->family, local_ip, local);
-	if (CHECK(err != 1, "inet_pton", "local_ip failed\n"))
+	if (!ASSERT_EQ(err, 1, "inet_pton"))
 		return 1;
 
 	err = inet_pton(ctx->family, remote_ip, remote);
-	if (CHECK(err != 1, "inet_pton", "remote_ip failed\n"))
+	if (!ASSERT_EQ(err, 1, "inet_pton"))
 		return 1;
 
 	return 0;
@@ -234,7 +232,7 @@ static int send_byte(int fd)
 
 	errno = 0;
 	n = send(fd, "a", 1, 0);
-	if (CHECK(n <= 0, "send_byte", "send")) {
+	if (!ASSERT_GT(n, 0, "send_byte")) {
 		log_err("failed/partial send");
 		return -1;
 	}
@@ -247,7 +245,7 @@ static int recv_byte(int fd)
 	ssize_t n;
 
 	n = recv(fd, buf, sizeof(buf), 0);
-	if (CHECK(n <= 0, "recv_byte", "recv")) {
+	if (!ASSERT_GT(n, 0, "recv_byte")) {
 		log_err("failed/partial recv");
 		return -1;
 	}
@@ -261,20 +259,20 @@ static int tcp_recv_send(int server_fd)
 	ssize_t n;
 
 	fd = accept(server_fd, NULL, NULL);
-	if (CHECK(fd < 0, "accept", "failed\n")) {
+	if (!ASSERT_OK_FD(fd, "accept")) {
 		log_err("failed to accept");
 		return -1;
 	}
 
 	n = recv(fd, buf, sizeof(buf), 0);
-	if (CHECK(n <= 0, "recv", "failed\n")) {
+	if (!ASSERT_GT(n, 0, "recv")) {
 		log_err("failed/partial recv");
 		ret = -1;
 		goto close;
 	}
 
 	n = send(fd, buf, n, 0);
-	if (CHECK(n <= 0, "send", "failed\n")) {
+	if (!ASSERT_GT(n, 0, "send")) {
 		log_err("failed/partial send");
 		ret = -1;
 		goto close;
@@ -324,11 +322,11 @@ static int udp_recv_send(int server_fd)
 
 	errno = 0;
 	n = recvmsg(server_fd, &msg, 0);
-	if (CHECK(n <= 0, "recvmsg", "failed\n")) {
+	if (!ASSERT_GT(n, 0, "recvmsg")) {
 		log_err("failed to receive");
 		return -1;
 	}
-	if (CHECK(msg.msg_flags & MSG_CTRUNC, "recvmsg", "truncated cmsg\n"))
+	if (!ASSERT_FALSE(msg.msg_flags & MSG_CTRUNC, "truncated cmsg"))
 		return -1;
 
 	for (cm = CMSG_FIRSTHDR(&msg); cm; cm = CMSG_NXTHDR(&msg, cm)) {
@@ -342,7 +340,7 @@ static int udp_recv_send(int server_fd)
 		log_err("warning: ignored cmsg at level %d type %d",
 			cm->cmsg_level, cm->cmsg_type);
 	}
-	if (CHECK(!dst_addr, "recvmsg", "missing ORIGDSTADDR\n"))
+	if (!ASSERT_TRUE(dst_addr, "recvmsg missing ORIGDSTADDR\n"))
 		return -1;
 
 	/* Server socket bound to IPv4-mapped IPv6 address */
@@ -361,7 +359,7 @@ static int udp_recv_send(int server_fd)
 	msg.msg_control = NULL;
 	msg.msg_controllen = 0;
 	n = sendmsg(fd, &msg, 0);
-	if (CHECK(n <= 0, "sendmsg", "failed\n")) {
+	if (!ASSERT_GT(n, 0, "sendmsg")) {
 		log_err("failed to send echo reply");
 		ret = -1;
 		goto out;
@@ -413,7 +411,7 @@ static struct bpf_link *attach_lookup_prog(struct bpf_program *prog)
 	int net_fd;
 
 	net_fd = open("/proc/self/ns/net", O_RDONLY);
-	if (CHECK(net_fd < 0, "open", "failed\n")) {
+	if (!ASSERT_OK_FD(net_fd, "open")) {
 		log_err("failed to open /proc/self/ns/net");
 		return NULL;
 	}
@@ -436,7 +434,7 @@ static int update_lookup_map(struct bpf_map *map, int index, int sock_fd)
 	uint64_t value;
 
 	map_fd = bpf_map__fd(map);
-	if (CHECK(map_fd < 0, "bpf_map__fd", "failed\n")) {
+	if (!ASSERT_OK_FD(map_fd, "bpf_map__fd")) {
 		errno = -map_fd;
 		log_err("failed to get map FD");
 		return -1;
@@ -444,7 +442,7 @@ static int update_lookup_map(struct bpf_map *map, int index, int sock_fd)
 
 	value = (uint64_t)sock_fd;
 	err = bpf_map_update_elem(map_fd, &index, &value, BPF_NOEXIST);
-	if (CHECK(err, "bpf_map_update_elem", "failed\n")) {
+	if (!ASSERT_OK(err, "bpf_map_update_elem")) {
 		log_err("failed to update redir_map @ %d", index);
 		return -1;
 	}
@@ -464,7 +462,7 @@ static void query_lookup_prog(struct test_sk_lookup *skel)
 	int err;
 
 	net_fd = open("/proc/self/ns/net", O_RDONLY);
-	if (CHECK(net_fd < 0, "open", "failed\n")) {
+	if (!ASSERT_OK_FD(net_fd, "open")) {
 		log_err("failed to open /proc/self/ns/net");
 		return;
 	}
@@ -481,48 +479,32 @@ static void query_lookup_prog(struct test_sk_lookup *skel)
 
 	err = bpf_prog_query(net_fd, BPF_SK_LOOKUP, 0 /* query flags */,
 			     &attach_flags, prog_ids, &prog_cnt);
-	if (CHECK(err, "bpf_prog_query", "failed\n")) {
+	if (!ASSERT_OK(err, "bpf_prog_query")) {
 		log_err("failed to query lookup prog");
 		goto detach;
 	}
 
 	errno = 0;
-	if (CHECK(attach_flags != 0, "bpf_prog_query",
-		  "wrong attach_flags on query: %u", attach_flags))
-		goto detach;
-	if (CHECK(prog_cnt != 3, "bpf_prog_query",
-		  "wrong program count on query: %u", prog_cnt))
-		goto detach;
+	ASSERT_EQ(attach_flags, 0, "bpf_prog_query attach_flags");
+	ASSERT_EQ(prog_cnt, 3, "bpf_prog_query prog_cnt");
 	prog_id = link_info_prog_id(link[0], &info);
-	CHECK(prog_ids[0] != prog_id, "bpf_prog_query",
-	      "invalid program #0 id on query: %u != %u\n",
-	      prog_ids[0], prog_id);
-	CHECK(info.netns.netns_ino == 0, "netns_ino",
-	      "unexpected netns_ino: %u\n", info.netns.netns_ino);
+	ASSERT_EQ(prog_ids[0], prog_id, "bpf_prog_query program #0 id");
+	ASSERT_NEQ(info.netns.netns_ino, 0, "netns_ino");
 	prog_id = link_info_prog_id(link[1], &info);
-	CHECK(prog_ids[1] != prog_id, "bpf_prog_query",
-	      "invalid program #1 id on query: %u != %u\n",
-	      prog_ids[1], prog_id);
-	CHECK(info.netns.netns_ino == 0, "netns_ino",
-	      "unexpected netns_ino: %u\n", info.netns.netns_ino);
+	ASSERT_EQ(prog_ids[1], prog_id, "bpf_prog_query program #1 id");
+	ASSERT_NEQ(info.netns.netns_ino, 0, "netns_ino");
 	prog_id = link_info_prog_id(link[2], &info);
-	CHECK(prog_ids[2] != prog_id, "bpf_prog_query",
-	      "invalid program #2 id on query: %u != %u\n",
-	      prog_ids[2], prog_id);
-	CHECK(info.netns.netns_ino == 0, "netns_ino",
-	      "unexpected netns_ino: %u\n", info.netns.netns_ino);
+	ASSERT_EQ(prog_ids[2], prog_id, "bpf_prog_query program #2 id");
+	ASSERT_NEQ(info.netns.netns_ino, 0, "netns_ino");
 
 	err = bpf_link__detach(link[0]);
-	if (CHECK(err, "link_detach", "failed %d\n", err))
+	if (!ASSERT_OK(err, "link_detach"))
 		goto detach;
 
 	/* prog id is still there, but netns_ino is zeroed out */
 	prog_id = link_info_prog_id(link[0], &info);
-	CHECK(prog_ids[0] != prog_id, "bpf_prog_query",
-	      "invalid program #0 id on query: %u != %u\n",
-	      prog_ids[0], prog_id);
-	CHECK(info.netns.netns_ino != 0, "netns_ino",
-	      "unexpected netns_ino: %u\n", info.netns.netns_ino);
+	ASSERT_EQ(prog_ids[0], prog_id, "bpf_prog_query program #0 id");
+	ASSERT_EQ(info.netns.netns_ino, 0, "netns_ino");
 
 detach:
 	if (link[2])
@@ -832,9 +814,10 @@ static void drop_on_lookup(const struct test *t)
 		n = recv(client_fd, NULL, 0, 0);
 		err = n == -1;
 	}
-	if (CHECK(!err || errno != ECONNREFUSED, "connect",
-		  "unexpected success or error\n"))
+	if (!err || errno != ECONNREFUSED) {
+		PRINT_FAIL("unexpected success or error\n");
 		log_err("expected ECONNREFUSED on connect");
+	}
 
 close_all:
 	close(client_fd);
@@ -960,9 +943,10 @@ static void drop_on_reuseport(const struct test *t)
 		n = recv(client, NULL, 0, 0);
 		err = n == -1;
 	}
-	if (CHECK(!err || errno != ECONNREFUSED, "connect",
-		  "unexpected success or error\n"))
+	if (!err || errno != ECONNREFUSED) {
+		PRINT_FAIL("unexpected success or error\n");
 		log_err("expected ECONNREFUSED on connect");
+	}
 
 close_all:
 	close(client);
@@ -1059,14 +1043,11 @@ static void run_sk_assign(struct test_sk_lookup *skel,
 		return;
 
 	err = bpf_prog_test_run_opts(bpf_program__fd(lookup_prog), &opts);
-	if (CHECK(err, "test_run", "failed with error %d\n", errno))
+	if (!ASSERT_OK(err, "test_run"))
 		goto close_servers;
 
-	if (CHECK(ctx.cookie == 0, "ctx.cookie", "no socket selected\n"))
-		goto close_servers;
-
-	CHECK(ctx.cookie != server_cookie, "ctx.cookie",
-	      "selected sk %llu instead of %llu\n", ctx.cookie, server_cookie);
+	ASSERT_NEQ(ctx.cookie, 0, "ctx.cookie");
+	ASSERT_EQ(ctx.cookie, server_cookie, "ctx.cookie");
 
 close_servers:
 	for (i = 0; i < ARRAY_SIZE(server_fds); i++) {
@@ -1171,11 +1152,11 @@ static void run_multi_prog_lookup(const struct test_multi_prog *t)
 	done = 0;
 	prog_idx = PROG1;
 	err = bpf_map_update_elem(map_fd, &prog_idx, &done, BPF_ANY);
-	if (CHECK(err, "bpf_map_update_elem", "failed\n"))
+	if (!ASSERT_OK(err, "bpf_map_update_elem"))
 		return;
 	prog_idx = PROG2;
 	err = bpf_map_update_elem(map_fd, &prog_idx, &done, BPF_ANY);
-	if (CHECK(err, "bpf_map_update_elem", "failed\n"))
+	if (!ASSERT_OK(err, "bpf_map_update_elem"))
 		return;
 
 	link1 = attach_lookup_prog(t->prog1);
@@ -1202,24 +1183,26 @@ static void run_multi_prog_lookup(const struct test_multi_prog *t)
 	if (!ASSERT_OK(err, "make_sockaddr"))
 		goto out_close_client;
 	err = connect(client_fd, (void *)&dst, len);
-	if (CHECK(err && !t->expect_errno, "connect",
-		  "unexpected error %d\n", errno))
+	if (err && !t->expect_errno) {
+		PRINT_FAIL("unexpected error %d\n", errno);
 		goto out_close_client;
-	if (CHECK(err && t->expect_errno && errno != t->expect_errno,
-		  "connect", "unexpected error %d\n", errno))
+	}
+	if (err && t->expect_errno && errno != t->expect_errno) {
+		PRINT_FAIL("unexpected error %d\n", errno);
 		goto out_close_client;
+	}
 
 	done = 0;
 	prog_idx = PROG1;
 	err = bpf_map_lookup_elem(map_fd, &prog_idx, &done);
-	CHECK(err, "bpf_map_lookup_elem", "failed\n");
-	CHECK(!done, "bpf_map_lookup_elem", "PROG1 !done\n");
+	ASSERT_OK(err, "bpf_map_lookup_elem");
+	ASSERT_TRUE(done, "bpf_map_lookup_elem");
 
 	done = 0;
 	prog_idx = PROG2;
 	err = bpf_map_lookup_elem(map_fd, &prog_idx, &done);
-	CHECK(err, "bpf_map_lookup_elem", "failed\n");
-	CHECK(!done, "bpf_map_lookup_elem", "PROG2 !done\n");
+	ASSERT_OK(err, "bpf_map_lookup_elem");
+	ASSERT_TRUE(done, "bpf_map_lookup_elem PROG2");
 
 out_close_client:
 	close(client_fd);
@@ -1325,14 +1308,14 @@ static int switch_netns(void)
 	int err;
 
 	err = unshare(CLONE_NEWNET);
-	if (CHECK(err, "unshare", "failed\n")) {
+	if (!ASSERT_OK(err, "unshare")) {
 		log_err("unshare(CLONE_NEWNET)");
 		return -1;
 	}
 
 	for (cmd = setup_script; *cmd; cmd++) {
 		err = system(*cmd);
-		if (CHECK(err, "system", "failed\n")) {
+		if (!ASSERT_OK(err, "system")) {
 			log_err("system(%s)", *cmd);
 			return -1;
 		}
@@ -1351,7 +1334,7 @@ void test_sk_lookup(void)
 		return;
 
 	skel = test_sk_lookup__open_and_load();
-	if (CHECK(!skel, "skel open_and_load", "failed\n"))
+	if (!ASSERT_OK_PTR(skel, "skel open_and_load"))
 		return;
 
 	run_tests(skel);
