@@ -56,9 +56,9 @@ retry:
 	stackid_hmap_fd = bpf_map__fd(skel->maps.stackid_hmap);
 	stackmap_fd = bpf_map__fd(skel->maps.stackmap);
 
-	if (CHECK_FAIL(system("dd if=/dev/urandom of=/dev/zero count=4 2> /dev/null")))
+	if (!ASSERT_SYS("dd if=/dev/urandom of=/dev/zero count=4 2> /dev/null"))
 		goto cleanup;
-	if (CHECK_FAIL(system("taskset 0x1 ./urandom_read 100000")))
+	if (!ASSERT_SYS("taskset 0x1 ./urandom_read 100000"))
 		goto cleanup;
 	/* disable stack trace collection */
 	key = 0;
