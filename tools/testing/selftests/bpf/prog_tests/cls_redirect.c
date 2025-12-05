@@ -35,7 +35,7 @@ static bool set_up_conn(const struct sockaddr_storage *addr, socklen_t len, int 
 	if (*server < 0)
 		return false;
 
-	if (CHECK_FAIL(getsockname(*server, (struct sockaddr *)&ss, &slen)))
+	if (!ASSERT_OK(getsockname(*server, (struct sockaddr *)&ss, &slen), "getsockname"))
 		goto close_server;
 
 	*conn = connect_to_addr(type, &ss, slen, NULL);
@@ -46,11 +46,11 @@ static bool set_up_conn(const struct sockaddr_storage *addr, socklen_t len, int 
 	 * swap src and dst.
 	 */
 	slen = sizeof(*dst);
-	if (CHECK_FAIL(getsockname(*conn, (struct sockaddr *)dst, &slen)))
+	if (!ASSERT_OK(getsockname(*conn, (struct sockaddr *)dst, &slen), "getsockname"))
 		goto close_conn;
 
 	slen = sizeof(*src);
-	if (CHECK_FAIL(getpeername(*conn, (struct sockaddr *)src, &slen)))
+	if (!ASSERT_OK(getpeername(*conn, (struct sockaddr *)src, &slen), "getpeername"))
 		goto close_conn;
 
 	return true;
@@ -312,17 +312,19 @@ static void test_cls_redirect_common(struct bpf_program *prog)
 
 	for (i = 0; i < ARRAY_SIZE(families); i++) {
 		slen = prepare_addr(&ss, families[i]);
-		if (CHECK_FAIL(!slen))
+		if (!ASSERT_GT(slen, 0, "prepare_addr"))
 			goto cleanup;
 
-		if (CHECK_FAIL(!set_up_conn(&ss, slen, SOCK_DGRAM,
-					    &servers[UDP][i], &conns[UDP][i],
-					    &srcs[UDP][i], &dsts[UDP][i])))
+		if (!ASSERT_TRUE(set_up_conn(&ss, slen, SOCK_DGRAM,
+					     &servers[UDP][i], &conns[UDP][i],
+					     &srcs[UDP][i], &dsts[UDP][i]),
+				     "set_up_conn for UDP"))
 			goto cleanup;
 
-		if (CHECK_FAIL(!set_up_conn(&ss, slen, SOCK_STREAM,
-					    &servers[TCP][i], &conns[TCP][i],
-					    &srcs[TCP][i], &dsts[TCP][i])))
+		if (!ASSERT_TRUE(set_up_conn(&ss, slen, SOCK_STREAM,
+					     &servers[TCP][i], &conns[TCP][i],
+					     &srcs[TCP][i], &dsts[TCP][i]),
+				     "set_up_conn for TCP"))
 			goto cleanup;
 	}
 
@@ -345,11 +347,11 @@ static void test_cls_redirect_common(struct bpf_program *prog)
 
 			tattr.data_in = input;
 			tattr.data_size_in = build_input(test, input, src, dst);
-			if (CHECK_FAIL(!tattr.data_size_in))
+			if (!ASSERT_GT(tattr.data_size_in, 0, "build_input"))
 				continue;
 
 			err = bpf_prog_test_run_opts(prog_fd, &tattr);
-			if (CHECK_FAIL(err))
+			if (!ASSERT_OK(err, "bpf_prog_test_run_opts"))
 				continue;
 
 			if (tattr.retval != TC_ACT_REDIRECT) {
@@ -360,11 +362,11 @@ static void test_cls_redirect_common(struct bpf_program *prog)
 
 			switch (test->result) {
 			case ACCEPT:
-				if (CHECK_FAIL(!was_decapsulated(&tattr)))
+				if (!ASSERT_TRUE(was_decapsulated(&tattr), "was_decapsulated #1"))
 					continue;
 				break;
 			case FORWARD:
-				if (CHECK_FAIL(was_decapsulated(&tattr)))
+				if (!ASSERT_FALSE(was_decapsulated(&tattr), "was_decapsulated #2"))
 					continue;
 				break;
 			default:
