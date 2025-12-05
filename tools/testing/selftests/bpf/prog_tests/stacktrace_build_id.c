@@ -29,9 +29,9 @@ retry:
 	stackmap_fd = bpf_map__fd(skel->maps.stackmap);
 	stack_amap_fd = bpf_map__fd(skel->maps.stack_amap);
 
-	if (CHECK_FAIL(system("dd if=/dev/urandom of=/dev/zero count=4 2> /dev/null")))
+	if (!ASSERT_SYS("dd if=/dev/urandom of=/dev/zero count=4 2> /dev/null"))
 		goto cleanup;
-	if (CHECK_FAIL(system("./urandom_read")))
+	if (!ASSERT_SYS("./urandom_read"))
 		goto cleanup;
 	/* disable stack trace collection */
 	key = 0;
