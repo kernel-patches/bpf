@@ -1,0 +1,3 @@
+[submodule ".vscode"]
+	path = .vscode
+	url = git@git.zju.edu.cn:22521212/linux-kernel-vscode.git
