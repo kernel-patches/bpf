@@ -9,8 +9,6 @@
 #include "bpf/hashmap.h"
 #include <stddef.h>
 
-static int duration = 0;
-
 static size_t hash_fn(long k, void *ctx)
 {
 	return k;
@@ -57,35 +55,36 @@ static void test_hashmap_generic(void)
 		long oldv, v = 1024 + i;
 
 		err = hashmap__update(map, k, v, &oldk, &oldv);
-		if (CHECK(err != -ENOENT, "hashmap__update",
-			  "unexpected result: %d\n", err))
+		if (!ASSERT_EQ(err, -ENOENT, "hashmap__update"))
 			goto cleanup;
 
 		if (i % 2) {
 			err = hashmap__add(map, k, v);
 		} else {
 			err = hashmap__set(map, k, v, &oldk, &oldv);
-			if (CHECK(oldk != 0 || oldv != 0, "check_kv",
-				  "unexpected k/v: %ld=%ld\n", oldk, oldv))
+			if (oldk != 0 || oldv != 0) {
+				PRINT_FAIL("unexpected k/v: %ld=%ld\n", oldk, oldv);
 				goto cleanup;
+			}
 		}
 
-		if (CHECK(err, "elem_add", "failed to add k/v %ld = %ld: %d\n", k, v, err))
+		if (err) {
+			PRINT_FAIL("failed to add k/v %ld = %ld: %d\n", k, v, err);
 			goto cleanup;
+		}
 
-		if (CHECK(!hashmap__find(map, k, &oldv), "elem_find",
-			  "failed to find key %ld\n", k))
+		if (!hashmap__find(map, k, &oldv)) {
+			PRINT_FAIL("failed to find key %ld\n", k);
 			goto cleanup;
-		if (CHECK(oldv != v, "elem_val", "found value is wrong: %ld\n", oldv))
+		}
+		if (!ASSERT_EQ(oldv, v, "elem_val"))
 			goto cleanup;
 	}
 
-	if (CHECK(hashmap__size(map) != ELEM_CNT, "hashmap__size",
-		  "invalid map size: %zu\n", hashmap__size(map)))
+	if (!ASSERT_EQ(hashmap__size(map), ELEM_CNT, "hashmap__size"))
 		goto cleanup;
-	if (CHECK(hashmap__capacity(map) != exp_cap(hashmap__size(map)),
-		  "hashmap_cap",
-		  "unexpected map capacity: %zu\n", hashmap__capacity(map)))
+	if (!ASSERT_EQ(hashmap__capacity(map), exp_cap(hashmap__size(map)),
+		       "hashmap_cap"))
 		goto cleanup;
 
 	found_msk = 0;
@@ -94,12 +93,12 @@ static void test_hashmap_generic(void)
 		long v = entry->value;
 
 		found_msk |= 1ULL << k;
-		if (CHECK(v - k != 1024, "check_kv",
-			  "invalid k/v pair: %ld = %ld\n", k, v))
+		if (!ASSERT_EQ(v - k, 1024, "check_kv")) {
+			printf("invalid k/v pair: %ld = %ld\n", k, v);
 			goto cleanup;
+		}
 	}
-	if (CHECK(found_msk != (1ULL << ELEM_CNT) - 1, "elem_cnt",
-		  "not all keys iterated: %llx\n", found_msk))
+	if (!ASSERT_EQ(found_msk, (1ULL << ELEM_CNT) - 1, "elem_cnt"))
 		goto cleanup;
 
 	for (i = 0; i < ELEM_CNT; i++) {
@@ -107,8 +106,7 @@ static void test_hashmap_generic(void)
 		long oldv, v = 256 + i;
 
 		err = hashmap__add(map, k, v);
-		if (CHECK(err != -EEXIST, "hashmap__add",
-			  "unexpected add result: %d\n", err))
+		if (!ASSERT_EQ(err, -EEXIST, "hashmap__add"))
 			goto cleanup;
 
 		if (i % 2)
@@ -116,24 +114,22 @@ static void test_hashmap_generic(void)
 		else
 			err = hashmap__set(map, k, v, &oldk, &oldv);
 
-		if (CHECK(err, "elem_upd",
-			  "failed to update k/v %ld = %ld: %d\n",
-			  k, v, err))
+		if (err) {
+			PRINT_FAIL("failed to update k/v %ld = %ld: %d\n", k, v, err);
 			goto cleanup;
-		if (CHECK(!hashmap__find(map, k, &oldv), "elem_find",
-			  "failed to find key %ld\n", k))
+		}
+		if (!hashmap__find(map, k, &oldv)) {
+			PRINT_FAIL("failed to find key %ld\n", k);
 			goto cleanup;
-		if (CHECK(oldv != v, "elem_val",
-			  "found value is wrong: %ld\n", oldv))
+		}
+		if (!ASSERT_EQ(oldv, v, "elem_val"))
 			goto cleanup;
 	}
 
-	if (CHECK(hashmap__size(map) != ELEM_CNT, "hashmap__size",
-		  "invalid updated map size: %zu\n", hashmap__size(map)))
+	if (!ASSERT_EQ(hashmap__size(map), ELEM_CNT, "hashmap__size"))
 		goto cleanup;
-	if (CHECK(hashmap__capacity(map) != exp_cap(hashmap__size(map)),
-		  "hashmap__capacity",
-		  "unexpected map capacity: %zu\n", hashmap__capacity(map)))
+	if (!ASSERT_EQ(hashmap__capacity(map), exp_cap(hashmap__size(map)),
+		       "hashmap__capacity"))
 		goto cleanup;
 
 	found_msk = 0;
@@ -142,21 +138,20 @@ static void test_hashmap_generic(void)
 		long v = entry->value;
 
 		found_msk |= 1ULL << k;
-		if (CHECK(v - k != 256, "elem_check",
-			  "invalid updated k/v pair: %ld = %ld\n", k, v))
+		if (!ASSERT_EQ(v - k, 256, "elem_check")) {
+			printf("invalid updated k/v pair: %ld = %ld\n", k, v);
 			goto cleanup;
+		}
 	}
-	if (CHECK(found_msk != (1ULL << ELEM_CNT) - 1, "elem_cnt",
-		  "not all keys iterated after update: %llx\n", found_msk))
+	if (!ASSERT_EQ(found_msk, (1ULL << ELEM_CNT) - 1, "elem_cnt"))
 		goto cleanup;
 
 	found_cnt = 0;
 	hashmap__for_each_key_entry(map, entry, 0) {
 		found_cnt++;
 	}
-	if (CHECK(!found_cnt, "found_cnt",
-		  "didn't find any entries for key 0\n"))
-		goto cleanup;
+	if (!found_cnt)
+		PRINT_FAIL("didn't find any entries for key 0\n");
 
 	found_msk = 0;
 	found_cnt = 0;
@@ -170,28 +165,27 @@ static void test_hashmap_generic(void)
 		found_cnt++;
 		found_msk |= 1ULL << k;
 
-		if (CHECK(!hashmap__delete(map, k, &oldk, &oldv), "elem_del",
-			  "failed to delete k/v %ld = %ld\n", k, v))
+		if (!hashmap__delete(map, k, &oldk, &oldv)) {
+			PRINT_FAIL("failed to delete k/v %ld = %ld\n", k, v);
 			goto cleanup;
-		if (CHECK(oldk != k || oldv != v, "check_old",
-			  "invalid deleted k/v: expected %ld = %ld, got %ld = %ld\n",
-			  k, v, oldk, oldv))
+		}
+		if (oldk != k || oldv != v) {
+			PRINT_FAIL("invalid deleted k/v: expected %ld = %ld, got %ld = %ld\n",
+				   k, v, oldk, oldv);
 			goto cleanup;
-		if (CHECK(hashmap__delete(map, k, &oldk, &oldv), "elem_del",
-			  "unexpectedly deleted k/v %ld = %ld\n", oldk, oldv))
+		}
+		if (hashmap__delete(map, k, &oldk, &oldv)) {
+			PRINT_FAIL("unexpectedly deleted k/v %ld = %ld\n", oldk, oldv);
 			goto cleanup;
+		}
 	}
 
-	if (CHECK(!found_cnt || !found_msk, "found_entries",
-		  "didn't delete any key entries\n"))
+	if (!found_cnt || !found_msk)
+		PRINT_FAIL("didn't delete any key entries\n");
+	if (!ASSERT_EQ(hashmap__size(map), ELEM_CNT - found_cnt, "elem_cnt"))
 		goto cleanup;
-	if (CHECK(hashmap__size(map) != ELEM_CNT - found_cnt, "elem_cnt",
-		  "invalid updated map size (already deleted: %d): %zu\n",
-		  found_cnt, hashmap__size(map)))
-		goto cleanup;
-	if (CHECK(hashmap__capacity(map) != exp_cap(hashmap__size(map)),
-		  "hashmap__capacity",
-		  "unexpected map capacity: %zu\n", hashmap__capacity(map)))
+	if (!ASSERT_EQ(hashmap__capacity(map), exp_cap(hashmap__size(map)),
+		       "hashmap__capacity"))
 		goto cleanup;
 
 	hashmap__for_each_entry_safe(map, entry, tmp, bkt) {
@@ -204,26 +198,27 @@ static void test_hashmap_generic(void)
 		found_cnt++;
 		found_msk |= 1ULL << k;
 
-		if (CHECK(!hashmap__delete(map, k, &oldk, &oldv), "elem_del",
-			  "failed to delete k/v %ld = %ld\n", k, v))
+		if (!hashmap__delete(map, k, &oldk, &oldv)) {
+			PRINT_FAIL("failed to delete k/v %ld = %ld\n", k, v);
 			goto cleanup;
-		if (CHECK(oldk != k || oldv != v, "elem_check",
-			  "invalid old k/v: expect %ld = %ld, got %ld = %ld\n",
-			  k, v, oldk, oldv))
+		}
+		if (oldk != k || oldv != v) {
+			PRINT_FAIL("invalid old k/v: expect %ld = %ld, got %ld = %ld\n",
+				   k, v, oldk, oldv);
 			goto cleanup;
-		if (CHECK(hashmap__delete(map, k, &oldk, &oldv), "elem_del",
-			  "unexpectedly deleted k/v %ld = %ld\n", k, v))
+		}
+		if (hashmap__delete(map, k, &oldk, &oldv)) {
+			PRINT_FAIL("unexpectedly deleted k/v %ld = %ld\n", k, v);
 			goto cleanup;
+		}
 	}
 
-	if (CHECK(found_cnt != ELEM_CNT || found_msk != (1ULL << ELEM_CNT) - 1,
-		  "found_cnt",
-		  "not all keys were deleted: found_cnt:%d, found_msk:%llx\n",
-		  found_cnt, found_msk))
+	if (found_cnt != ELEM_CNT || found_msk != (1ULL << ELEM_CNT) - 1) {
+		PRINT_FAIL("not all keys were deleted: found_cnt:%d, found_msk:%llx\n",
+			   found_cnt, found_msk);
 		goto cleanup;
-	if (CHECK(hashmap__size(map) != 0, "hashmap__size",
-		  "invalid updated map size (already deleted: %d): %zu\n",
-		  found_cnt, hashmap__size(map)))
+	}
+	if (!ASSERT_EQ(hashmap__size(map), 0, "hashmap__size"))
 		goto cleanup;
 
 	found_cnt = 0;
@@ -261,60 +256,66 @@ static void test_hashmap_ptr_iface(void)
 	int err, i, bkt;
 
 	map = hashmap__new(str_hash_fn, str_equal_fn, NULL);
-	if (CHECK(!map, "hashmap__new", "can't allocate hashmap\n"))
+	if (!ASSERT_OK_PTR(map, "hashmap__new"))
 		goto cleanup;
 
 #define CHECK_STR(fn, var, expected)					\
-	CHECK(strcmp(var, (expected)), (fn),				\
-	      "wrong value of " #var ": '%s' instead of '%s'\n", var, (expected))
+	if (strcmp(var, (expected)))					\
+		PRINT_FAIL("wrong value of " #var ": '%s' instead of '%s'\n", \
+			   var, (expected))
 
 	err = hashmap__insert(map, "a", "apricot", HASHMAP_ADD, NULL, NULL);
-	if (CHECK(err, "hashmap__insert", "unexpected error: %d\n", err))
+	if (!ASSERT_OK(err, "hashmap__insert"))
 		goto cleanup;
 
 	err = hashmap__insert(map, "a", "apple", HASHMAP_SET, &old_key, &old_value);
-	if (CHECK(err, "hashmap__insert", "unexpected error: %d\n", err))
+	if (!ASSERT_OK(err, "hashmap__insert"))
 		goto cleanup;
 	CHECK_STR("hashmap__update", old_key, "a");
 	CHECK_STR("hashmap__update", old_value, "apricot");
 
 	err = hashmap__add(map, "b", "banana");
-	if (CHECK(err, "hashmap__add", "unexpected error: %d\n", err))
+	if (!ASSERT_OK(err, "hashmap__add"))
 		goto cleanup;
 
 	err = hashmap__set(map, "b", "breadfruit", &old_key, &old_value);
-	if (CHECK(err, "hashmap__set", "unexpected error: %d\n", err))
+	if (!ASSERT_OK(err, "hashmap__set"))
 		goto cleanup;
 	CHECK_STR("hashmap__set", old_key, "b");
 	CHECK_STR("hashmap__set", old_value, "banana");
 
 	err = hashmap__update(map, "b", "blueberry", &old_key, &old_value);
-	if (CHECK(err, "hashmap__update", "unexpected error: %d\n", err))
+	if (!ASSERT_OK(err, "hashmap__update"))
 		goto cleanup;
 	CHECK_STR("hashmap__update", old_key, "b");
 	CHECK_STR("hashmap__update", old_value, "breadfruit");
 
 	err = hashmap__append(map, "c", "cherry");
-	if (CHECK(err, "hashmap__append", "unexpected error: %d\n", err))
+	if (!ASSERT_OK(err, "hashmap__append"))
 		goto cleanup;
 
-	if (CHECK(!hashmap__delete(map, "c", &old_key, &old_value),
-		  "hashmap__delete", "expected to have entry for 'c'\n"))
+	if (!hashmap__delete(map, "c", &old_key, &old_value)) {
+		PRINT_FAIL("expected to have entry for 'c'\n");
 		goto cleanup;
+	}
 	CHECK_STR("hashmap__delete", old_key, "c");
 	CHECK_STR("hashmap__delete", old_value, "cherry");
 
-	CHECK(!hashmap__find(map, "b", &value), "hashmap__find", "can't find value for 'b'\n");
+	if (!hashmap__find(map, "b", &value))
+		PRINT_FAIL("can't find value for 'b'\n");
 	CHECK_STR("hashmap__find", value, "blueberry");
 
-	if (CHECK(!hashmap__delete(map, "b", NULL, NULL),
-		  "hashmap__delete", "expected to have entry for 'b'\n"))
+	if (!hashmap__delete(map, "b", NULL, NULL)) {
+		PRINT_FAIL("expected to have entry for 'b'\n");
 		goto cleanup;
+	}
 
 	i = 0;
 	hashmap__for_each_entry(map, cur, bkt) {
-		if (CHECK(i != 0, "hashmap__for_each_entry", "too many entries"))
+		if (i != 0) {
+			PRINT_FAIL("too many entries\n");
 			goto cleanup;
+		}
 		key = cur->pkey;
 		value = cur->pvalue;
 		CHECK_STR("entry", key, "a");
@@ -350,27 +351,26 @@ static void test_hashmap_multimap(void)
 	 * [1] -> 8, 16, 32;
 	 */
 	err = hashmap__append(map, k1, 1);
-	if (CHECK(err, "elem_add", "failed to add k/v: %d\n", err))
+	if (!ASSERT_OK(err, "elem_add"))
 		goto cleanup;
 	err = hashmap__append(map, k1, 2);
-	if (CHECK(err, "elem_add", "failed to add k/v: %d\n", err))
+	if (!ASSERT_OK(err, "elem_add"))
 		goto cleanup;
 	err = hashmap__append(map, k1, 4);
-	if (CHECK(err, "elem_add", "failed to add k/v: %d\n", err))
+	if (!ASSERT_OK(err, "elem_add"))
 		goto cleanup;
 
 	err = hashmap__append(map, k2, 8);
-	if (CHECK(err, "elem_add", "failed to add k/v: %d\n", err))
+	if (!ASSERT_OK(err, "elem_add"))
 		goto cleanup;
 	err = hashmap__append(map, k2, 16);
-	if (CHECK(err, "elem_add", "failed to add k/v: %d\n", err))
+	if (!ASSERT_OK(err, "elem_add"))
 		goto cleanup;
 	err = hashmap__append(map, k2, 32);
-	if (CHECK(err, "elem_add", "failed to add k/v: %d\n", err))
+	if (!ASSERT_OK(err, "elem_add"))
 		goto cleanup;
 
-	if (CHECK(hashmap__size(map) != 6, "hashmap_size",
-		  "invalid map size: %zu\n", hashmap__size(map)))
+	if (!ASSERT_EQ(hashmap__size(map), 6, "hashmap_size"))
 		goto cleanup;
 
 	/* verify global iteration still works and sees all values */
@@ -378,8 +378,7 @@ static void test_hashmap_multimap(void)
 	hashmap__for_each_entry(map, entry, bkt) {
 		found_msk |= entry->value;
 	}
-	if (CHECK(found_msk != (1 << 6) - 1, "found_msk",
-		  "not all keys iterated: %lx\n", found_msk))
+	if (!ASSERT_EQ(found_msk, (1 << 6) - 1, "found_msk"))
 		goto cleanup;
 
 	/* iterate values for key 1 */
@@ -387,8 +386,7 @@ static void test_hashmap_multimap(void)
 	hashmap__for_each_key_entry(map, entry, k1) {
 		found_msk |= entry->value;
 	}
-	if (CHECK(found_msk != (1 | 2 | 4), "found_msk",
-		  "invalid k1 values: %lx\n", found_msk))
+	if (!ASSERT_EQ(found_msk, (1 | 2 | 4), "found_msk"))
 		goto cleanup;
 
 	/* iterate values for key 2 */
@@ -396,8 +394,7 @@ static void test_hashmap_multimap(void)
 	hashmap__for_each_key_entry(map, entry, k2) {
 		found_msk |= entry->value;
 	}
-	if (CHECK(found_msk != (8 | 16 | 32), "found_msk",
-		  "invalid k2 values: %lx\n", found_msk))
+	if (!ASSERT_EQ(found_msk, (8 | 16 | 32), "found_msk"))
 		goto cleanup;
 
 cleanup:
@@ -416,18 +413,14 @@ static void test_hashmap_empty()
 	if (!ASSERT_OK_PTR(map, "hashmap__new"))
 		goto cleanup;
 
-	if (CHECK(hashmap__size(map) != 0, "hashmap__size",
-		  "invalid map size: %zu\n", hashmap__size(map)))
+	if (!ASSERT_EQ(hashmap__size(map), 0, "hashmap__size"))
 		goto cleanup;
-	if (CHECK(hashmap__capacity(map) != 0, "hashmap__capacity",
-		  "invalid map capacity: %zu\n", hashmap__capacity(map)))
+	if (!ASSERT_EQ(hashmap__capacity(map), 0, "hashmap__capacity"))
 		goto cleanup;
-	if (CHECK(hashmap__find(map, k, NULL), "elem_find",
-		  "unexpected find\n"))
-		goto cleanup;
-	if (CHECK(hashmap__delete(map, k, NULL, NULL), "elem_del",
-		  "unexpected delete\n"))
-		goto cleanup;
+	if (hashmap__find(map, k, NULL))
+		PRINT_FAIL("unexpected find\n");
+	if (hashmap__delete(map, k, NULL, NULL))
+		PRINT_FAIL("unexpected delete\n");
 
 	hashmap__for_each_entry(map, entry, bkt) {
 		PRINT_FAIL("unexpected iterated entry: entry->value=%ld\n", entry->value);
