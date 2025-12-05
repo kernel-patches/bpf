@@ -14,7 +14,7 @@ int ping_and_check(int exp_calls, int exp_alt_calls)
 {
 	skel->bss->calls = 0;
 	skel->bss->alt_calls = 0;
-	CHECK_FAIL(system(PING_CMD));
+	ASSERT_SYS(PING_CMD);
 	if (CHECK(skel->bss->calls != exp_calls, "call_cnt",
 		  "exp %d, got %d\n", exp_calls, skel->bss->calls))
 		return -EINVAL;
@@ -74,8 +74,8 @@ void serial_test_cgroup_link(void)
 	/* query the number of attached progs and attach flags in root cg */
 	err = bpf_prog_query(cgs[0].fd, BPF_CGROUP_INET_EGRESS,
 			     0, &attach_flags, NULL, &prog_cnt);
-	CHECK_FAIL(err);
-	CHECK_FAIL(attach_flags != BPF_F_ALLOW_MULTI);
+	ASSERT_OK(err, "query prog count and attach flags");
+	ASSERT_EQ(attach_flags, BPF_F_ALLOW_MULTI, "attach flags");
 	if (CHECK(prog_cnt != 1, "effect_cnt", "exp %d, got %d\n", 1, prog_cnt))
 		goto cleanup;
 
@@ -83,7 +83,7 @@ void serial_test_cgroup_link(void)
 	err = bpf_prog_query(cgs[last_cg].fd, BPF_CGROUP_INET_EGRESS,
 			     BPF_F_QUERY_EFFECTIVE, NULL, NULL,
 			     &prog_cnt);
-	CHECK_FAIL(err);
+	ASSERT_OK(err, "query effective prog count");
 	if (CHECK(prog_cnt != cg_nr, "effect_cnt", "exp %d, got %d\n",
 		  cg_nr, prog_cnt))
 		goto cleanup;
@@ -92,7 +92,7 @@ void serial_test_cgroup_link(void)
 	err = bpf_prog_query(cgs[last_cg].fd, BPF_CGROUP_INET_EGRESS,
 			     BPF_F_QUERY_EFFECTIVE, NULL, prog_ids,
 			     &prog_cnt);
-	CHECK_FAIL(err);
+	ASSERT_OK(err, "query effective prog IDs");
 	if (CHECK(prog_cnt != cg_nr, "effect_cnt", "exp %d, got %d\n",
 		  cg_nr, prog_cnt))
 		goto cleanup;
