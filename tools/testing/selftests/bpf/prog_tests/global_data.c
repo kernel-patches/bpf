@@ -8,7 +8,7 @@ static void test_global_data_number(struct bpf_object *obj, __u32 duration)
 	__u64 num;
 
 	map_fd = bpf_find_map(__func__, obj, "result_number");
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "find result_number map"))
 		return;
 
 	struct {
@@ -43,7 +43,7 @@ static void test_global_data_string(struct bpf_object *obj, __u32 duration)
 	char str[32];
 
 	map_fd = bpf_find_map(__func__, obj, "result_string");
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "find result_string map"))
 		return;
 
 	struct {
@@ -78,7 +78,7 @@ static void test_global_data_struct(struct bpf_object *obj, __u32 duration)
 	struct foo val;
 
 	map_fd = bpf_find_map(__func__, obj, "result_struct");
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "find result_struct map"))
 		return;
 
 	struct {
@@ -118,7 +118,7 @@ static void test_global_data_rdonly(struct bpf_object *obj, __u32 duration)
 		return;
 
 	map_fd = bpf_map__fd(map);
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "bpf_map__fd"))
 		return;
 
 	buff = malloc(bpf_map__value_size(map));
