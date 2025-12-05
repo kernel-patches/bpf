@@ -16,25 +16,25 @@ static void test_xdp_attach(const char *file)
 	len = sizeof(info);
 
 	err = bpf_prog_test_load(file, BPF_PROG_TYPE_XDP, &obj1, &fd1);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load first BPF program"))
 		return;
 	err = bpf_prog_get_info_by_fd(fd1, &info, &len);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "get first prog info"))
 		goto out_1;
 	id1 = info.id;
 
 	err = bpf_prog_test_load(file, BPF_PROG_TYPE_XDP, &obj2, &fd2);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load second BPF program"))
 		goto out_1;
 
 	memset(&info, 0, sizeof(info));
 	err = bpf_prog_get_info_by_fd(fd2, &info, &len);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "get second prog info"))
 		goto out_2;
 	id2 = info.id;
 
 	err = bpf_prog_test_load(file, BPF_PROG_TYPE_XDP, &obj3, &fd3);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load third BPF program"))
 		goto out_2;
 
 	err = bpf_xdp_attach(IFINDEX_LO, fd1, XDP_FLAGS_REPLACE, &opts);
