@@ -20,20 +20,20 @@ void test_load_bytes_relative(void)
 	__u32 map_value = 0;
 
 	cgroup_fd = test__join_cgroup("/load_bytes_relative");
-	if (CHECK_FAIL(cgroup_fd < 0))
+	if (!ASSERT_OK_FD(cgroup_fd, "join cgroup"))
 		return;
 
 	server_fd = start_server(AF_INET, SOCK_STREAM, NULL, 0, 0);
-	if (CHECK_FAIL(server_fd < 0))
+	if (!ASSERT_OK_FD(server_fd, "start server"))
 		goto close_cgroup_fd;
 
 	err = bpf_prog_test_load("./load_bytes_relative.bpf.o", BPF_PROG_TYPE_CGROUP_SKB,
 				 &obj, &prog_fd);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load BPF program"))
 		goto close_server_fd;
 
 	test_result = bpf_object__find_map_by_name(obj, "test_result");
-	if (CHECK_FAIL(!test_result))
+	if (!ASSERT_OK_PTR(test_result, "find test_result map"))
 		goto close_bpf_object;
 
 	map_fd = bpf_map__fd(test_result);
@@ -41,21 +41,21 @@ void test_load_bytes_relative(void)
 		goto close_bpf_object;
 
 	prog = bpf_object__find_program_by_name(obj, "load_bytes_relative");
-	if (CHECK_FAIL(!prog))
+	if (!ASSERT_OK_PTR(prog, "find load_bytes_relative program"))
 		goto close_bpf_object;
 
 	err = bpf_prog_attach(prog_fd, cgroup_fd, BPF_CGROUP_INET_EGRESS,
 			      BPF_F_ALLOW_MULTI);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "attach BPF program"))
 		goto close_bpf_object;
 
 	client_fd = connect_to_fd(server_fd, 0);
-	if (CHECK_FAIL(client_fd < 0))
+	if (!ASSERT_OK_FD(client_fd, "connect to server"))
 		goto close_bpf_object;
 	close(client_fd);
 
 	err = bpf_map_lookup_elem(map_fd, &map_key, &map_value);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "lookup test_result map"))
 		goto close_bpf_object;
 
 	CHECK(map_value != 1, "bpf", "bpf program returned failure");
