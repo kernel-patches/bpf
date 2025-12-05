@@ -127,24 +127,24 @@ static void test_lsm_tailcall(void)
 		goto close_prog;
 
 	map_fd = bpf_map__fd(skel->maps.jmp_table);
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "get jmp_table map fd"))
 		goto close_prog;
 
 	prog_fd = bpf_program__fd(skel->progs.lsm_file_permission_prog);
-	if (CHECK_FAIL(prog_fd < 0))
+	if (!ASSERT_OK_FD(prog_fd, "get lsm_file_permission_prog fd"))
 		goto close_prog;
 
 	key = 0;
 	err = bpf_map_update_elem(map_fd, &key, &prog_fd, BPF_ANY);
-	if (CHECK_FAIL(!err))
+	if (ASSERT_ERR(err, "update #1 should fail"))
 		goto close_prog;
 
 	prog_fd = bpf_program__fd(skel->progs.lsm_kernfs_init_security_prog);
-	if (CHECK_FAIL(prog_fd < 0))
+	if (!ASSERT_OK_FD(prog_fd, "get kernfs_init_security_prog fd"))
 		goto close_prog;
 
 	err = bpf_map_update_elem(map_fd, &key, &prog_fd, BPF_ANY);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "update #2 should succeed"))
 		goto close_prog;
 
 close_prog:
