@@ -127,6 +127,9 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 			array_size += (u64) max_entries * elem_size;
 		}
 	}
+	if (attr->map_type == BPF_MAP_TYPE_PROG_ARRAY && bpf_arch_tail_call_prologue_offset())
+		/* Store tailcall targets */
+		array_size += (u64) max_entries * sizeof(void *);
 
 	/* allocate all map elements and zero-initialize them */
 	if (attr->map_flags & BPF_F_MMAPABLE) {
@@ -1087,15 +1090,37 @@ void __weak bpf_arch_poke_desc_update(struct bpf_jit_poke_descriptor *poke,
 	WARN_ON_ONCE(1);
 }
 
+int __weak bpf_arch_tail_call_prologue_offset(void)
+{
+	return 0;
+}
+EXPORT_SYMBOL_GPL(bpf_arch_tail_call_prologue_offset);
+
+static void bpf_tail_call_target_update(struct bpf_array *array, u32 key, struct bpf_prog *new)
+{
+	int offset = bpf_arch_tail_call_prologue_offset();
+	void *target;
+
+	if (!offset)
+		return;
+
+	target = new ? (void *) new->bpf_func + offset : 0;
+	xchg(array->ptrs + array->map.max_entries + key, target);
+}
+
 static void prog_array_map_poke_run(struct bpf_map *map, u32 key,
 				    struct bpf_prog *old,
 				    struct bpf_prog *new)
 {
 	struct prog_poke_elem *elem;
 	struct bpf_array_aux *aux;
+	struct bpf_array *array;
 
-	aux = container_of(map, struct bpf_array, map)->aux;
+	array = container_of(map, struct bpf_array, map);
+	aux = array->aux;
 	WARN_ON_ONCE(!mutex_is_locked(&aux->poke_mutex));
+
+	bpf_tail_call_target_update(array, key, new);
 
 	list_for_each_entry(elem, &aux->poke_progs, list) {
 		struct bpf_jit_poke_descriptor *poke;
