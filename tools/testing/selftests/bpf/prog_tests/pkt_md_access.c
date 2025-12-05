@@ -14,7 +14,7 @@ void test_pkt_md_access(void)
 	);
 
 	err = bpf_prog_test_load(file, BPF_PROG_TYPE_SCHED_CLS, &obj, &prog_fd);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load BPF program"))
 		return;
 
 	err = bpf_prog_test_run_opts(prog_fd, &topts);
