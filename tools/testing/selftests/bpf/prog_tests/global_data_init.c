@@ -13,16 +13,17 @@ void test_global_data_init(void)
 
 	obj = bpf_object__open_file(file, NULL);
 	err = libbpf_get_error(obj);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "open BPF object"))
 		return;
 
 	map = bpf_object__find_map_by_name(obj, ".rodata");
-	if (CHECK_FAIL(!map || !bpf_map__is_internal(map)))
+	if (!ASSERT_OK_PTR(map, "find .rodata map") ||
+	    !ASSERT_TRUE(bpf_map__is_internal(map), "map is internal"))
 		goto out;
 
 	sz = bpf_map__value_size(map);
 	newval = malloc(sz);
-	if (CHECK_FAIL(!newval))
+	if (!ASSERT_OK_PTR(newval, "allocate newval"))
 		goto out;
 
 	memset(newval, 0, sz);
@@ -36,11 +37,11 @@ void test_global_data_init(void)
 		goto out;
 
 	err = bpf_object__load(obj);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load BPF object"))
 		goto out;
 
 	map_fd = bpf_map__fd(map);
-	if (CHECK_FAIL(map_fd < 0))
+	if (!ASSERT_OK_FD(map_fd, "bpf_map__fd"))
 		goto out;
 
 	buff = malloc(sz);
