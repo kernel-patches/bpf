@@ -63,7 +63,7 @@ static void test_exit_creds(void)
 		goto out;
 
 	/* trigger at least one exit_creds() */
-	if (CHECK_FAIL(system("ls > /dev/null")))
+	if (!ASSERT_SYS("ls > /dev/null"))
 		goto out;
 
 	/* kern_sync_rcu is not enough on its own as the read section we want
