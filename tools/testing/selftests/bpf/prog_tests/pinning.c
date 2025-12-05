@@ -86,7 +86,7 @@ void test_pinning(void)
 	bpf_object__close(obj);
 
 	obj = bpf_object__open_file(file, NULL);
-	if (CHECK_FAIL(libbpf_get_error(obj))) {
+	if (!ASSERT_OK(libbpf_get_error(obj), "open BPF object")) {
 		obj = NULL;
 		goto out;
 	}
@@ -208,7 +208,7 @@ void test_pinning(void)
 
 	/* test auto-pinning at custom path with open opt */
 	obj = bpf_object__open_file(file, &opts);
-	if (CHECK_FAIL(libbpf_get_error(obj))) {
+	if (!ASSERT_OK(libbpf_get_error(obj), "open BPF object with opts")) {
 		obj = NULL;
 		goto out;
 	}
