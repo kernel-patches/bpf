@@ -44,15 +44,15 @@ static int epfd;
 static struct sockaddr_storage srv_sa;
 
 #define RET_IF(condition, tag, format...) ({				\
-	if (CHECK_FAIL(condition)) {					\
-		printf(tag " " format);					\
+	if (condition) {						\
+		PRINT_FAIL(tag " " format);				\
 		return;							\
 	}								\
 })
 
 #define RET_ERR(condition, tag, format...) ({				\
-	if (CHECK_FAIL(condition)) {					\
-		printf(tag " " format);					\
+	if (condition) {						\
+		PRINT_FAIL(tag " " format);				\
 		return -1;						\
 	}								\
 })
@@ -360,7 +360,7 @@ static void check_results(void)
 	printf("mismatch on %s (bpf_prog_linum:%ld)\n", result_to_str(broken),
 	       get_linum());
 
-	CHECK_FAIL(true);
+	test__fail();
 }
 
 static int send_data(int type, sa_family_t family, void *data, size_t len,
@@ -804,9 +804,9 @@ static void test_config(int sotype, sa_family_t family, bool inany)
 		if (!ASSERT_OK_PTR(netns, "netns_new"))
 			continue;
 
-		if (CHECK_FAIL(enable_fastopen()))
+		if (!ASSERT_OK(enable_fastopen(), "enable fastopen"))
 			goto out;
-		if (CHECK_FAIL(disable_syncookie()))
+		if (!ASSERT_OK(disable_syncookie(), "disable syncookie"))
 			goto out;
 
 		setup_per_test(sotype, family, inany, t->no_inner_map);
