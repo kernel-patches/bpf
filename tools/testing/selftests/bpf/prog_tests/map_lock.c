@@ -25,21 +25,20 @@ static void *parallel_map_access(void *arg)
 
 	for (i = 0; i < 10000; i++) {
 		err = bpf_map_lookup_elem_flags(map_fd, &key, vars, BPF_F_LOCK);
-		if (CHECK_FAIL(err)) {
-			printf("lookup failed\n");
+		if (err) {
+			PERROR("bpf_map_lookup_elem_flags");
 			goto out;
 		}
-		if (CHECK_FAIL(vars[0] != 0)) {
-			printf("lookup #%d var[0]=%d\n", i, vars[0]);
+		if (vars[0]) {
+			PRINT_FAIL("lookup #%d var[0]=%d\n", i, vars[0]);
 			goto out;
 		}
 		rnd = vars[1];
 		for (j = 2; j < 17; j++) {
 			if (vars[j] == rnd)
 				continue;
-			printf("lookup #%d var[1]=%d var[%d]=%d\n",
-			       i, rnd, j, vars[j]);
-			CHECK_FAIL(vars[j] != rnd);
+			PRINT_FAIL("lookup #%d var[1]=%d var[%d]=%d\n",
+				   i, rnd, j, vars[j]);
 			goto out;
 		}
 	}
@@ -57,35 +56,32 @@ void test_map_lock(void)
 	void *ret;
 
 	err = bpf_prog_test_load(file, BPF_PROG_TYPE_CGROUP_SKB, &obj, &prog_fd);
-	if (CHECK_FAIL(err)) {
-		printf("test_map_lock:bpf_prog_test_load errno %d\n", errno);
+	if (!ASSERT_OK(err, "bpf_prog_test_load"))
 		goto close_prog;
-	}
 	map_fd[0] = bpf_find_map(__func__, obj, "hash_map");
-	if (CHECK_FAIL(map_fd[0] < 0))
+	if (!ASSERT_OK_FD(map_fd[0], "bpf_find_map hash_map"))
 		goto close_prog;
 	map_fd[1] = bpf_find_map(__func__, obj, "array_map");
-	if (CHECK_FAIL(map_fd[1] < 0))
+	if (!ASSERT_OK_FD(map_fd[1], "bpf_find_map array_map"))
 		goto close_prog;
 
 	bpf_map_update_elem(map_fd[0], &key, vars, BPF_F_LOCK);
 
 	for (i = 0; i < 4; i++)
-		if (CHECK_FAIL(pthread_create(&thread_id[i], NULL,
-					      &spin_lock_thread, &prog_fd)))
+		if (!ASSERT_OK(pthread_create(&thread_id[i], NULL, &spin_lock_thread, &prog_fd),
+			       "pthread_create spin_lock_thread"))
 			goto close_prog;
 	for (i = 4; i < 6; i++)
-		if (CHECK_FAIL(pthread_create(&thread_id[i], NULL,
-					      &parallel_map_access,
-					      &map_fd[i - 4])))
+		if (!ASSERT_OK(pthread_create(&thread_id[i], NULL, &parallel_map_access, &map_fd[i - 4]),
+			       "pthread_create parallel_map_access"))
 			goto close_prog;
 	for (i = 0; i < 4; i++)
-		if (CHECK_FAIL(pthread_join(thread_id[i], &ret) ||
-			       ret != (void *)&prog_fd))
+		if (!ASSERT_OK(pthread_join(thread_id[i], &ret), "pthread_join") ||
+		    !ASSERT_EQ(ret, (void *)&prog_fd, "return value"))
 			goto close_prog;
 	for (i = 4; i < 6; i++)
-		if (CHECK_FAIL(pthread_join(thread_id[i], &ret) ||
-			       ret != (void *)&map_fd[i - 4]))
+		if (!ASSERT_OK(pthread_join(thread_id[i], &ret), "pthread_join") ||
+		    !ASSERT_EQ(ret, (void *)&map_fd[i - 4], "return value"))
 			goto close_prog;
 close_prog:
 	bpf_object__close(obj);
