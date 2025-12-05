@@ -248,30 +248,38 @@ static void test_task_local_data_race(void)
 			 */
 			err = pthread_create(&thread[i], NULL, test_task_local_data_race_thread,
 					     (void *)(intptr_t)(i + 3));
-			if (CHECK_FAIL(err))
+			if (err) {
+				PERROR("create thread");
 				break;
+			}
 		}
 
 		/* Wait for all tld_create_key() to return */
 		for (i = 0; i < TEST_RACE_THREAD_NUM; i++) {
 			pthread_join(thread[i], &ret);
-			if (CHECK_FAIL(ret))
+			if (ret) {
+				PRINT_FAIL("thread return value: %p\n", ret);
 				break;
+			}
 		}
 
 		/* Write a unique number to each TLD */
 		for (i = 0; i < TLD_MAX_DATA_CNT; i++) {
 			data = tld_get_data(fd, tld_keys[i]);
-			if (CHECK_FAIL(!data))
+			if (!data) {
+				PRINT_FAIL("tld_get_data(%d) returned NULL\n", i);
 				break;
+			}
 			*data = i;
 		}
 
 		/* Read TLDs and check the value to see if any address collides with another */
 		for (i = 0; i < TLD_MAX_DATA_CNT; i++) {
 			data = tld_get_data(fd, tld_keys[i]);
-			if (CHECK_FAIL(*data != i))
+			if (*data != i) {
+				PRINT_FAIL("tld_get_data(%d): *data %d, expecting %d\n", i, *data, i);
 				break;
+			}
 		}
 
 		/* Run task_main to make sure no invalid TLDs are added */
