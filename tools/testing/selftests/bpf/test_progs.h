@@ -210,17 +210,6 @@ void hexdump(const char *prefix, const void *buf, size_t len);
 	__ret;								\
 })
 
-#define CHECK_FAIL(condition) ({					\
-	int __ret = !!(condition);					\
-	int __save_errno = errno;					\
-	if (__ret) {							\
-		test__fail();						\
-		fprintf(stdout, "%s:FAIL:%d\n", __func__, __LINE__);	\
-	}								\
-	errno = __save_errno;						\
-	__ret;								\
-})
-
 #define CHECK(condition, tag, format...) \
 	_CHECK(condition, tag, duration, format)
 #define CHECK_ATTR(condition, tag, format...) \
