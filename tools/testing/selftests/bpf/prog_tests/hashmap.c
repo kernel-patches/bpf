@@ -228,17 +228,13 @@ static void test_hashmap_generic(void)
 
 	found_cnt = 0;
 	hashmap__for_each_entry(map, entry, bkt) {
-		CHECK(false, "elem_exists",
-		      "unexpected map entries left: %ld = %ld\n",
-		      entry->key, entry->value);
+		PRINT_FAIL("unexpected map entries left: %ld = %ld\n", entry->key, entry->value);
 		goto cleanup;
 	}
 
 	hashmap__clear(map);
 	hashmap__for_each_entry(map, entry, bkt) {
-		CHECK(false, "elem_exists",
-		      "unexpected map entries left: %ld = %ld\n",
-		      entry->key, entry->value);
+		PRINT_FAIL("unexpected map entries left: %ld = %ld\n", entry->key, entry->value);
 		goto cleanup;
 	}
 
@@ -434,11 +430,11 @@ static void test_hashmap_empty()
 		goto cleanup;
 
 	hashmap__for_each_entry(map, entry, bkt) {
-		CHECK(false, "elem_found", "unexpected iterated entry\n");
+		PRINT_FAIL("unexpected iterated entry: entry->value=%ld\n", entry->value);
 		goto cleanup;
 	}
 	hashmap__for_each_key_entry(map, entry, k) {
-		CHECK(false, "key_found", "unexpected key entry\n");
+		PRINT_FAIL("unexpected key entry k=%ld\n", k);
 		goto cleanup;
 	}
 
