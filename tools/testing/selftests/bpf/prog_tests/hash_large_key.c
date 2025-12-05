@@ -36,7 +36,7 @@ void test_hash_large_key(void)
 	if (CHECK(err, "bpf_map_lookup_elem", "errno=%d\n", errno))
 		goto cleanup;
 
-	CHECK_FAIL(value != 42);
+	ASSERT_EQ(value, 42, "map value");
 
 cleanup:
 	test_hash_large_key__destroy(skel);
