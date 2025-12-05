@@ -125,7 +125,7 @@ static void test_link_create_link_create(int netns, int prog1, int prog2)
 	int link1, link2;
 
 	link1 = bpf_link_create(prog1, netns, BPF_FLOW_DISSECTOR, &opts);
-	if (CHECK_FAIL(link < 0)) {
+	if (CHECK_FAIL(link1 < 0)) {
 		perror("bpf_link_create(prog1)");
 		return;
 	}
