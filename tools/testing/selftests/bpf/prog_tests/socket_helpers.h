@@ -33,7 +33,7 @@
 #define _FAIL(errnum, fmt...)                                                  \
 	({                                                                     \
 		error_at_line(0, (errnum), __func__, __LINE__, fmt);           \
-		CHECK_FAIL(true);                                              \
+		test__fail();                                                  \
 	})
 #define FAIL(fmt...) _FAIL(0, fmt)
 #define FAIL_ERRNO(fmt...) _FAIL(errno, fmt)
