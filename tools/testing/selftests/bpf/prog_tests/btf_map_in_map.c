@@ -80,18 +80,18 @@ static void test_lookup_update(void)
 	for (i = 0; i < 5; i++) {
 		val = i % 2 ? map1_fd : map2_fd;
 		err = bpf_map_update_elem(outer_hash_fd, &key, &val, 0);
-		if (CHECK_FAIL(err)) {
+		if (!ASSERT_OK(err, "update outer_hash_fd")) {
 			printf("failed to update hash_of_maps on iter #%d\n", i);
 			goto cleanup;
 		}
 		err = bpf_map_update_elem(outer_arr_fd, &key, &val, 0);
-		if (CHECK_FAIL(err)) {
+		if (!ASSERT_OK(err, "update outer_arr_fd")) {
 			printf("failed to update array_of_maps on iter #%d\n", i);
 			goto cleanup;
 		}
 		val = i % 2 ? map4_fd : map5_fd;
 		err = bpf_map_update_elem(outer_arr_dyn_fd, &key, &val, 0);
-		if (CHECK_FAIL(err)) {
+		if (!ASSERT_OK(err, "update outer_arr_dyn_fd")) {
 			printf("failed to update array_of_maps (dyn) on iter #%d\n", i);
 			goto cleanup;
 		}
