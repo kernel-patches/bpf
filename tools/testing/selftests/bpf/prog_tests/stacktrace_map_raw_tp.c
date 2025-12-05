@@ -26,15 +26,15 @@ void test_stacktrace_map_raw_tp(void)
 
 	/* find map fds */
 	control_map_fd = bpf_find_map(__func__, obj, "control_map");
-	if (CHECK_FAIL(control_map_fd < 0))
+	if (!ASSERT_OK_FD(control_map_fd, "find control_map"))
 		goto close_prog;
 
 	stackid_hmap_fd = bpf_find_map(__func__, obj, "stackid_hmap");
-	if (CHECK_FAIL(stackid_hmap_fd < 0))
+	if (!ASSERT_OK_FD(stackid_hmap_fd, "find stackid_hmap"))
 		goto close_prog;
 
 	stackmap_fd = bpf_find_map(__func__, obj, "stackmap");
-	if (CHECK_FAIL(stackmap_fd < 0))
+	if (!ASSERT_OK_FD(stackmap_fd, "find stackmap"))
 		goto close_prog;
 
 	/* give some time for bpf program run */
