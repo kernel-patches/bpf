@@ -1136,7 +1136,7 @@ static void run_core_reloc_tests(bool use_btfgen)
 
 cleanup:
 		if (mmap_data) {
-			CHECK_FAIL(munmap(mmap_data, mmap_sz));
+			ASSERT_OK(munmap(mmap_data, mmap_sz), "munmap mmap_data");
 			mmap_data = NULL;
 		}
 		if (use_btfgen)
