@@ -23,7 +23,7 @@ void test_xdp(void)
 	);
 
 	err = bpf_prog_test_load(file, BPF_PROG_TYPE_XDP, &obj, &prog_fd);
-	if (CHECK_FAIL(err))
+	if (!ASSERT_OK(err, "load BPF program"))
 		return;
 
 	map_fd = bpf_find_map(__func__, obj, "vip2tnl");
