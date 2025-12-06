@@ -732,12 +732,13 @@ static void emit_return(u8 **pprog, u8 *ip)
  *   goto *(prog->bpf_func + prologue_size);
  * out:
  */
-static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
+static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog, u32 map_index,
 					u8 **pprog, bool *callee_regs_used,
 					u32 stack_depth, u8 *ip,
 					struct jit_context *ctx)
 {
 	int tcc_ptr_off = BPF_TAIL_CALL_CNT_PTR_STACK_OFF(stack_depth);
+	struct bpf_map *map = bpf_prog->aux->used_maps[map_index];
 	u8 *prog = *pprog, *start = *pprog;
 	int offset;
 
@@ -748,15 +749,14 @@ static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
 	 */
 
 	/*
-	 * if (index >= array->map.max_entries)
+	 * if (index >= map->max_entries)
 	 *	goto out;
 	 */
 	EMIT2(0x89, 0xD2);                        /* mov edx, edx */
-	EMIT3(0x39, 0x56,                         /* cmp dword ptr [rsi + 16], edx */
-	      offsetof(struct bpf_array, map.max_entries));
+	EMIT2_off32(0x81, 0xFA, map->max_entries); /* cmp edx, imm32 (map->max_entries) */
 
 	offset = ctx->tail_call_indirect_label - (prog + 2 - start);
-	EMIT2(X86_JBE, offset);                   /* jbe out */
+	EMIT2(X86_JAE, offset);                   /* jae out */
 
 	/*
 	 * if ((*tcc_ptr)++ >= MAX_TAIL_CALL_CNT)
@@ -2455,15 +2455,18 @@ populate_extable:
 		}
 
 		case BPF_JMP | BPF_TAIL_CALL:
-			if (imm32)
+			const s32 imm16 = imm32 >> 16;
+
+			if (imm16)
 				emit_bpf_tail_call_direct(bpf_prog,
-							  &bpf_prog->aux->poke_tab[imm32 - 1],
+							  &bpf_prog->aux->poke_tab[imm16 - 1],
 							  &prog, image + addrs[i - 1],
 							  callee_regs_used,
 							  stack_depth,
 							  ctx);
 			else
 				emit_bpf_tail_call_indirect(bpf_prog,
+							    imm32,
 							    &prog,
 							    callee_regs_used,
 							    stack_depth,

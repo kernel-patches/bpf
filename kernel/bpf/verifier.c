@@ -22597,6 +22597,18 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 	return 0;
 }
 
+static int tail_call_find_map_index(struct bpf_verifier_env *env, struct bpf_map *map)
+{
+	int i;
+
+	for (i = 0; i < env->used_map_cnt; i++) {
+		if (env->used_maps[i] == map)
+			return i;
+	}
+
+	return -ENOENT;
+}
+
 /* Do various post-verification rewrites in a single program pass.
  * These rewrites simplify JIT and interpreter implementations.
  */
@@ -23010,8 +23022,14 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 					return ret;
 				}
 
-				insn->imm = ret + 1;
+				insn->imm = (ret + 1) << 16;
 				goto next_insn;
+			}
+
+			insn->imm = tail_call_find_map_index(env, aux->map_ptr_state.map_ptr);
+			if (insn->imm < 0) {
+				verifier_bug(env, "index not found for prog array map\n");
+				return -EINVAL;
 			}
 
 			if (!bpf_map_ptr_unpriv(aux))
