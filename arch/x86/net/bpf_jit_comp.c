@@ -726,10 +726,10 @@ static void emit_return(u8 **pprog, u8 *ip)
  *     goto out;
  *   if ((*tcc_ptr)++ >= MAX_TAIL_CALL_CNT)
  *     goto out;
- *   prog = array->ptrs[index];
- *   if (prog == NULL)
+ *   tgt = array->ptrs[max_entries + index];
+ *   if (tgt == 0)
  *     goto out;
- *   goto *(prog->bpf_func + prologue_size);
+ *   goto *tgt;
  * out:
  */
 static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog, u32 map_index,
@@ -768,12 +768,12 @@ static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog, u32 map_index
 	offset = ctx->tail_call_indirect_label - (prog + 2 - start);
 	EMIT2(X86_JAE, offset);                   /* jae out */
 
-	/* prog = array->ptrs[index]; */
-	EMIT4_off32(0x48, 0x8B, 0x8C, 0xD6,       /* mov rcx, [rsi + rdx * 8 + offsetof(...)] */
-		    offsetof(struct bpf_array, ptrs));
+	/* tgt = array->ptrs[max_entries + index]; */
+	EMIT4_off32(0x48, 0x8B, 0x8C, 0xD6,       /* mov rcx, [rsi + rdx * 8 + imm32] */
+		    offsetof(struct bpf_array, ptrs) + map->max_entries * sizeof(void *));
 
 	/*
-	 * if (prog == NULL)
+	 * if (tgt == 0)
 	 *	goto out;
 	 */
 	EMIT3(0x48, 0x85, 0xC9);                  /* test rcx,rcx */
@@ -803,15 +803,10 @@ static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog, u32 map_index
 		EMIT3_off32(0x48, 0x81, 0xC4,     /* add rsp, sd */
 			    round_up(stack_depth, 8));
 
-	/* goto *(prog->bpf_func + X86_TAIL_CALL_OFFSET); */
-	EMIT4(0x48, 0x8B, 0x49,                   /* mov rcx, qword ptr [rcx + 32] */
-	      offsetof(struct bpf_prog, bpf_func));
-	EMIT4(0x48, 0x83, 0xC1,                   /* add rcx, X86_TAIL_CALL_OFFSET */
-	      X86_TAIL_CALL_OFFSET);
 	/*
 	 * Now we're ready to jump into next BPF program
 	 * rdi == ctx (1st arg)
-	 * rcx == prog->bpf_func + X86_TAIL_CALL_OFFSET
+	 * rcx == cached tail call target (prog->bpf_func + X86_TAIL_CALL_OFFSET)
 	 */
 	emit_indirect_jump(&prog, BPF_REG_4 /* R4 -> rcx */, ip + (prog - start));
 
@@ -4033,6 +4028,11 @@ void bpf_arch_poke_desc_update(struct bpf_jit_poke_descriptor *poke,
 					   t, BPF_MOD_NOP, old_addr, NULL);
 		BUG_ON(ret < 0);
 	}
+}
+
+int bpf_arch_tail_call_prologue_offset(void)
+{
+	return X86_TAIL_CALL_OFFSET;
 }
 
 bool bpf_jit_supports_arena(void)
