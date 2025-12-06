@@ -22602,6 +22602,18 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 	return 0;
 }
 
+static int tail_call_find_map_index(struct bpf_verifier_env *env, struct bpf_map *map)
+{
+	int i;
+
+	for (i = 0; i < env->used_map_cnt; i++) {
+		if (env->used_maps[i] == map)
+			return i;
+	}
+
+	return -ENOENT;
+}
+
 /* Do various post-verification rewrites in a single program pass.
  * These rewrites simplify JIT and interpreter implementations.
  */
@@ -22993,10 +23005,24 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			 * call and to prevent accidental JITing by JIT compiler
 			 * that doesn't support bpf_tail_call yet
 			 */
-			insn->imm = 0;
 			insn->code = BPF_JMP | BPF_TAIL_CALL;
 
+			/*
+			 * insn->imm contains 3 fields:
+			 *   map index(8 bits):   6 bits are enough, 63 max
+			 *   poisoned(8 bits):    1 bit is enough
+			 *   poke index(16 bits): 1023 max
+			 */
+
 			aux = &env->insn_aux_data[i + delta];
+			insn->imm = tail_call_find_map_index(env, aux->map_ptr_state.map_ptr);
+			if (insn->imm < 0) {
+				verifier_bug(env, "index not found for prog array map\n");
+				return -EINVAL;
+			}
+
+			insn->imm |= bpf_map_ptr_poisoned(aux) << 8;
+
 			if (env->bpf_capable && !prog->blinding_requested &&
 			    prog->jit_requested &&
 			    !bpf_map_key_poisoned(aux) &&
@@ -23015,7 +23041,7 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 					return ret;
 				}
 
-				insn->imm = ret + 1;
+				insn->imm |= (ret + 1) << 16;
 				goto next_insn;
 			}
 
