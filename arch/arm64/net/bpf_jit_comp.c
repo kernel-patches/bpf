@@ -620,8 +620,10 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf)
 	return 0;
 }
 
-static int emit_bpf_tail_call(struct jit_ctx *ctx)
+static int emit_bpf_tail_call(struct jit_ctx *ctx, u32 map_index)
 {
+	struct bpf_map *map = ctx->prog->aux->used_maps[map_index];
+
 	/* bpf_tail_call(void *prog_ctx, struct bpf_array *array, u64 index) */
 	const u8 r2 = bpf2a64[BPF_REG_2];
 	const u8 r3 = bpf2a64[BPF_REG_3];
@@ -638,9 +640,7 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	/* if (index >= array->map.max_entries)
 	 *     goto out;
 	 */
-	off = offsetof(struct bpf_array, map.max_entries);
-	emit_a64_mov_i64(tmp, off, ctx);
-	emit(A64_LDR32(tmp, r2, tmp), ctx);
+	emit_a64_mov_i64(tmp, map->max_entries, ctx);
 	emit(A64_MOV(0, r3, r3), ctx);
 	emit(A64_CMP(0, r3, tmp), ctx);
 	branch1 = ctx->image + ctx->idx;
@@ -1617,7 +1617,7 @@ emit_cond_jmp:
 	}
 	/* tail call */
 	case BPF_JMP | BPF_TAIL_CALL:
-		if (emit_bpf_tail_call(ctx))
+		if (emit_bpf_tail_call(ctx, insn->imm))
 			return -EFAULT;
 		break;
 	/* function return */
