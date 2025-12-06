@@ -620,8 +620,10 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf)
 	return 0;
 }
 
-static int emit_bpf_tail_call(struct jit_ctx *ctx)
+static int emit_bpf_tail_call(struct jit_ctx *ctx, u32 map_index, bool dyn_array)
 {
+	struct bpf_map *map = ctx->prog->aux->used_maps[map_index];
+
 	/* bpf_tail_call(void *prog_ctx, struct bpf_array *array, u64 index) */
 	const u8 r2 = bpf2a64[BPF_REG_2];
 	const u8 r3 = bpf2a64[BPF_REG_3];
@@ -638,9 +640,13 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	/* if (index >= array->map.max_entries)
 	 *     goto out;
 	 */
-	off = offsetof(struct bpf_array, map.max_entries);
-	emit_a64_mov_i64(tmp, off, ctx);
-	emit(A64_LDR32(tmp, r2, tmp), ctx);
+	if (dyn_array) {
+		off = offsetof(struct bpf_array, map.max_entries);
+		emit_a64_mov_i64(tmp, off, ctx);
+		emit(A64_LDR32(tmp, r2, tmp), ctx);
+	} else {
+		emit_a64_mov_i64(tmp, map->max_entries, ctx);
+	}
 	emit(A64_MOV(0, r3, r3), ctx);
 	emit(A64_CMP(0, r3, tmp), ctx);
 	branch1 = ctx->image + ctx->idx;
@@ -659,15 +665,26 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	/* (*tail_call_cnt_ptr)++; */
 	emit(A64_ADD_I(1, tcc, tcc, 1), ctx);
 
-	/* prog = array->ptrs[index];
-	 * if (prog == NULL)
-	 *     goto out;
-	 */
-	off = offsetof(struct bpf_array, ptrs);
-	emit_a64_mov_i64(tmp, off, ctx);
-	emit(A64_ADD(1, tmp, r2, tmp), ctx);
-	emit(A64_LSL(1, prg, r3, 3), ctx);
-	emit(A64_LDR64(prg, tmp, prg), ctx);
+	if (dyn_array) {
+		/* prog = array->ptrs[index];
+		 * if (prog == NULL)
+		 *     goto out;
+		 */
+		off = offsetof(struct bpf_array, ptrs);
+		emit_a64_mov_i64(tmp, off, ctx);
+		emit(A64_ADD(1, tmp, r2, tmp), ctx);
+		emit(A64_LSL(1, prg, r3, 3), ctx);
+		emit(A64_LDR64(prg, tmp, prg), ctx);
+	} else {
+		/* tgt = array->ptrs[max_entries + index];
+		 * if (tgt == 0)
+		 *     goto out;
+		 */
+		emit(A64_LSL(1, prg, r3, 3), ctx);
+		off = offsetof(struct bpf_array, ptrs) + map->max_entries * sizeof(void *);
+		emit_a64_add_i(1, prg, prg, tmp, off, ctx);
+		emit(A64_LDR64(prg, r2, prg), ctx);
+	}
 	branch3 = ctx->image + ctx->idx;
 	emit(A64_NOP, ctx);
 
@@ -680,12 +697,17 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 
 	pop_callee_regs(ctx);
 
-	/* goto *(prog->bpf_func + prologue_offset); */
-	off = offsetof(struct bpf_prog, bpf_func);
-	emit_a64_mov_i64(tmp, off, ctx);
-	emit(A64_LDR64(tmp, prg, tmp), ctx);
-	emit(A64_ADD_I(1, tmp, tmp, sizeof(u32) * PROLOGUE_OFFSET), ctx);
-	emit(A64_BR(tmp), ctx);
+	if (dyn_array) {
+		/* goto *(prog->bpf_func + prologue_offset); */
+		off = offsetof(struct bpf_prog, bpf_func);
+		emit_a64_mov_i64(tmp, off, ctx);
+		emit(A64_LDR64(tmp, prg, tmp), ctx);
+		emit(A64_ADD_I(1, tmp, tmp, sizeof(u32) * PROLOGUE_OFFSET), ctx);
+		emit(A64_BR(tmp), ctx);
+	} else {
+		/* goto *tgt; */
+		emit(A64_BR(prg), ctx);
+	}
 
 	if (ctx->image) {
 		off = &ctx->image[ctx->idx] - branch1;
@@ -699,6 +721,12 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	}
 
 	return 0;
+}
+
+int bpf_arch_tail_call_prologue_offset(void)
+{
+	/* offset is in instructions, convert to bytes */
+	return PROLOGUE_OFFSET * 4;
 }
 
 static int emit_atomic_ld_st(const struct bpf_insn *insn, struct jit_ctx *ctx)
@@ -1617,7 +1645,10 @@ emit_cond_jmp:
 	}
 	/* tail call */
 	case BPF_JMP | BPF_TAIL_CALL:
-		if (emit_bpf_tail_call(ctx))
+		bool dynamic_array = (insn->imm >> 8) & 0xFF;
+		u32 map_index = insn->imm & 0xFF;
+
+		if (emit_bpf_tail_call(ctx, map_index, dynamic_array))
 			return -EFAULT;
 		break;
 	/* function return */
