@@ -199,6 +199,19 @@ struct tnum tnum_cast(struct tnum a, u8 size)
 	return a;
 }
 
+struct tnum tnum_scast(struct tnum a, u8 size)
+{
+	u8 s = 64 - size * 8;
+	u64 value, mask;
+
+	if (size >= 8)
+		return a;
+
+	value = ((s64)a.value << s) >> s;
+	mask = ((s64)a.mask << s) >> s;
+	return TNUM(value, mask);
+}
+
 bool tnum_is_aligned(struct tnum a, u64 size)
 {
 	if (!size)

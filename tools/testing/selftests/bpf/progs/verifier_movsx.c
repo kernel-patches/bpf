@@ -339,6 +339,25 @@ label_%=: 	                                        \
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("MOV64SX, S8, upper bits truncation")
+__log_level(2)
+__msg("R1={{P?}}0")
+__success __success_unpriv __retval(0)
+__naked void mov64sx_s8_truncated_range(void)
+{
+	asm volatile ("                                      \
+	call %[bpf_get_prandom_u32];                         \
+	r1 = r0;                                             \
+	r1 &= 0x100;                                         \
+	r1 = (s8)r1;                                         \
+	r0 = 0;                                              \
+	exit;                                                \
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 #else
 
 SEC("socket")
