@@ -733,11 +733,13 @@ static void emit_return(u8 **pprog, u8 *ip)
  * out:
  */
 static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
+					u32 map_index, bool dyn_array,
 					u8 **pprog, bool *callee_regs_used,
 					u32 stack_depth, u8 *ip,
 					struct jit_context *ctx)
 {
 	int tcc_ptr_off = BPF_TAIL_CALL_CNT_PTR_STACK_OFF(stack_depth);
+	struct bpf_map *map = bpf_prog->aux->used_maps[map_index];
 	u8 *prog = *pprog, *start = *pprog;
 	int offset;
 
@@ -752,11 +754,14 @@ static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
 	 *	goto out;
 	 */
 	EMIT2(0x89, 0xD2);                        /* mov edx, edx */
-	EMIT3(0x39, 0x56,                         /* cmp dword ptr [rsi + 16], edx */
-	      offsetof(struct bpf_array, map.max_entries));
+	if (dyn_array)
+		EMIT3(0x3B, 0x56,                 /* cmp edx, dword ptr [rsi + 16] */
+		      offsetof(struct bpf_array, map.max_entries));
+	else
+		EMIT2_off32(0x81, 0xFA, map->max_entries); /* cmp edx, imm32 (map->max_entries) */
 
 	offset = ctx->tail_call_indirect_label - (prog + 2 - start);
-	EMIT2(X86_JBE, offset);                   /* jbe out */
+	EMIT2(X86_JAE, offset);                   /* jae out */
 
 	/*
 	 * if ((*tcc_ptr)++ >= MAX_TAIL_CALL_CNT)
@@ -768,9 +773,15 @@ static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
 	offset = ctx->tail_call_indirect_label - (prog + 2 - start);
 	EMIT2(X86_JAE, offset);                   /* jae out */
 
-	/* prog = array->ptrs[index]; */
-	EMIT4_off32(0x48, 0x8B, 0x8C, 0xD6,       /* mov rcx, [rsi + rdx * 8 + offsetof(...)] */
-		    offsetof(struct bpf_array, ptrs));
+	/*
+	 * if (dyn_array)
+	 *	prog = array->ptrs[index];
+	 * else
+	 *	tgt = array->ptrs[max_entries + index];
+	 */
+	offset = offsetof(struct bpf_array, ptrs);
+	offset += dyn_array ? 0 : map->max_entries * sizeof(void *);
+	EMIT4_off32(0x48, 0x8B, 0x8C, 0xD6, offset); /* mov rcx, [rsi + rdx * 8 + offset] */
 
 	/*
 	 * if (prog == NULL)
@@ -803,11 +814,14 @@ static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
 		EMIT3_off32(0x48, 0x81, 0xC4,     /* add rsp, sd */
 			    round_up(stack_depth, 8));
 
-	/* goto *(prog->bpf_func + X86_TAIL_CALL_OFFSET); */
-	EMIT4(0x48, 0x8B, 0x49,                   /* mov rcx, qword ptr [rcx + 32] */
-	      offsetof(struct bpf_prog, bpf_func));
-	EMIT4(0x48, 0x83, 0xC1,                   /* add rcx, X86_TAIL_CALL_OFFSET */
-	      X86_TAIL_CALL_OFFSET);
+	if (dyn_array) {
+		/* goto *(prog->bpf_func + X86_TAIL_CALL_OFFSET); */
+		EMIT4(0x48, 0x8B, 0x49,           /* mov rcx, qword ptr [rcx + 32] */
+		      offsetof(struct bpf_prog, bpf_func));
+		EMIT4(0x48, 0x83, 0xC1,           /* add rcx, X86_TAIL_CALL_OFFSET */
+		      X86_TAIL_CALL_OFFSET);
+	}
+
 	/*
 	 * Now we're ready to jump into next BPF program
 	 * rdi == ctx (1st arg)
@@ -2461,15 +2475,21 @@ populate_extable:
 		}
 
 		case BPF_JMP | BPF_TAIL_CALL:
-			if (imm32)
+			bool dynamic_array = (imm32 >> 8) & 0xFF;
+			u32 map_index = imm32 & 0xFF;
+			s32 imm16 = imm32 >> 16;
+
+			if (imm16)
 				emit_bpf_tail_call_direct(bpf_prog,
-							  &bpf_prog->aux->poke_tab[imm32 - 1],
+							  &bpf_prog->aux->poke_tab[imm16 - 1],
 							  &prog, image + addrs[i - 1],
 							  callee_regs_used,
 							  stack_depth,
 							  ctx);
 			else
 				emit_bpf_tail_call_indirect(bpf_prog,
+							    map_index,
+							    dynamic_array,
 							    &prog,
 							    callee_regs_used,
 							    stack_depth,
@@ -4045,6 +4065,11 @@ void bpf_arch_poke_desc_update(struct bpf_jit_poke_descriptor *poke,
 					   t, BPF_MOD_NOP, old_addr, NULL);
 		BUG_ON(ret < 0);
 	}
+}
+
+int bpf_arch_tail_call_prologue_offset(void)
+{
+	return X86_TAIL_CALL_OFFSET;
 }
 
 bool bpf_jit_supports_arena(void)
