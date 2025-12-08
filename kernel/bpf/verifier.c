@@ -20505,9 +20505,11 @@ static int do_check(struct bpf_verifier_env *env)
 		state->insn_idx = env->insn_idx;
 
 		if (is_prune_point(env, env->insn_idx)) {
+#ifdef CONFIG_BPF_ORACLE
 			err = save_state_in_oracle(env, env->insn_idx);
 			if (err < 0)
 				return err;
+#endif
 
 			err = is_state_visited(env, env->insn_idx);
 			if (err < 0)
@@ -22641,6 +22643,7 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 	}
 
 	for (i = 0; i < insn_cnt;) {
+#ifdef CONFIG_BPF_ORACLE
 		if (is_prune_point(env, i + delta)) {
 			new_prog = patch_oracle_check_insn(env, insn, i + delta, &cnt);
 			if (IS_ERR(new_prog))
@@ -22650,6 +22653,7 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 			env->prog = prog = new_prog;
 			insn      = new_prog->insnsi + i + delta;
 		}
+#endif
 
 		if (insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) && insn->imm) {
 			if ((insn->off == BPF_ADDR_SPACE_CAST && insn->imm == 1) ||
@@ -25303,8 +25307,10 @@ skip_full_check:
 	if (ret == 0)
 		ret = do_misc_fixups(env);
 
+#ifdef CONFIG_BPF_ORACLE
 	if (ret == 0)
 		ret = create_and_populate_oracle_map(env);
+#endif
 
 	/* do 32-bit optimization after insn patching has done so those patched
 	 * insns could be handled correctly.

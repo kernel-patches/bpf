@@ -101,4 +101,18 @@ config BPF_LSM
 
 	  If you are unsure how to answer this question, answer N.
 
+config BPF_ORACLE
+	bool "Enable BPF test oracle"
+	depends on BPF_SYSCALL
+	depends on DEBUG_KERNEL
+	depends on !BPF_JIT_ALWAYS_ON
+	default n
+	help
+	  Enable the BPF test oracle to compare concrete runtime values of
+	  registers with their verification-time bounds. This will throw a kernel
+	  warning if the runtime values don't match the expected bounds from the
+	  verifier.
+
+	  If you are unsure how to answer this question, answer N.
+
 endmenu # "BPF subsystem"

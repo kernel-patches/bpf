@@ -1851,11 +1851,13 @@ select_insn:
 	LD_IMM_DW: {
 		u64 address = (u64)(u32)insn[0].imm | ((u64)(u32)insn[1].imm) << 32;
 
+#ifdef CONFIG_BPF_ORACLE
 		if (insn[0].src_reg == BPF_PSEUDO_MAP_ORACLE) {
 			oracle_test((struct bpf_map *)address, regs);
 			insn++;
 			CONT;
 		}
+#endif
 		DST = address;
 		insn++;
 		CONT;
