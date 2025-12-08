@@ -61,3 +61,39 @@ int save_state_in_oracle(struct bpf_verifier_env *env, int insn_idx)
 
 	return 0;
 }
+
+struct bpf_prog *patch_oracle_check_insn(struct bpf_verifier_env *env, struct bpf_insn *insn,
+					 int i, int *cnt)
+{
+	struct bpf_insn ld_addrs[2] = {
+		BPF_LD_IMM64_RAW(0, BPF_PSEUDO_MAP_ORACLE, 0),
+	};
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[i];
+	struct list_head *head = aux->oracle_states;
+	struct bpf_insn *insn_buf = env->insn_buf;
+	struct bpf_prog *new_prog = env->prog;
+	int num_oracle_states;
+
+	if (env->subprog_cnt > 1)
+		/* Skip the oracle if subprogs are used. */
+		goto noop;
+
+	num_oracle_states = list_count_nodes(head);
+	if (!num_oracle_states)
+		goto noop;
+
+	insn_buf[0] = ld_addrs[0];
+	insn_buf[1] = ld_addrs[1];
+	insn_buf[2] = *insn;
+	*cnt = 3;
+
+	new_prog = bpf_patch_insn_data(env, i, insn_buf, *cnt);
+	if (!new_prog)
+		return ERR_PTR(-ENOMEM);
+
+	return new_prog;
+
+noop:
+	*cnt = 1;
+	return new_prog;
+}

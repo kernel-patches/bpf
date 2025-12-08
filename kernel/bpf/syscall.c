@@ -4863,7 +4863,8 @@ static const struct bpf_map *bpf_map_from_imm(const struct bpf_prog *prog,
 	for (i = 0, *off = 0; i < prog->aux->used_map_cnt; i++) {
 		map = prog->aux->used_maps[i];
 		if (map == (void *)addr) {
-			*type = BPF_PSEUDO_MAP_FD;
+			if (*type != BPF_PSEUDO_MAP_ORACLE)
+				*type = BPF_PSEUDO_MAP_FD;
 			goto out;
 		}
 		if (!map->ops->map_direct_value_meta)
@@ -4925,6 +4926,7 @@ static struct bpf_insn *bpf_insn_prepare_dump(const struct bpf_prog *prog,
 		if (code != (BPF_LD | BPF_IMM | BPF_DW))
 			continue;
 
+		type = insns[i].src_reg;
 		imm = ((u64)insns[i + 1].imm << 32) | (u32)insns[i].imm;
 		map = bpf_map_from_imm(prog, imm, &off, &type);
 		if (map) {

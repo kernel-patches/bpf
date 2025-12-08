@@ -21202,7 +21202,7 @@ static void convert_pseudo_ld_imm64(struct bpf_verifier_env *env)
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		if (insn->code != (BPF_LD | BPF_IMM | BPF_DW))
 			continue;
-		if (insn->src_reg == BPF_PSEUDO_FUNC)
+		if (insn->src_reg == BPF_PSEUDO_FUNC || insn->src_reg == BPF_PSEUDO_MAP_ORACLE)
 			continue;
 		insn->src_reg = 0;
 	}
@@ -21296,8 +21296,8 @@ static void adjust_poke_descs(struct bpf_prog *prog, u32 off, u32 len)
 	}
 }
 
-static struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
-					    const struct bpf_insn *patch, u32 len)
+struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
+				     const struct bpf_insn *patch, u32 len)
 {
 	struct bpf_prog *new_prog;
 	struct bpf_insn_aux_data *new_data = NULL;
@@ -22639,6 +22639,16 @@ static int do_misc_fixups(struct bpf_verifier_env *env)
 	}
 
 	for (i = 0; i < insn_cnt;) {
+		if (is_prune_point(env, i + delta)) {
+			new_prog = patch_oracle_check_insn(env, insn, i + delta, &cnt);
+			if (IS_ERR(new_prog))
+				return PTR_ERR(new_prog);
+
+			delta    += cnt - 1;
+			env->prog = prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
+		}
+
 		if (insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) && insn->imm) {
 			if ((insn->off == BPF_ADDR_SPACE_CAST && insn->imm == 1) ||
 			    (((struct bpf_map *)env->prog->aux->arena)->map_flags & BPF_F_NO_USER_CONV)) {
