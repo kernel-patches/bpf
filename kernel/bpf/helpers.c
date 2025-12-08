@@ -1046,7 +1046,7 @@ out:
 	return err;
 }
 
-BPF_CALL_5(bpf_snprintf, char *, str, u32, str_size, char *, fmt,
+PRINTF_BPF_CALL_5(3, bpf_snprintf, char *, str, u32, str_size, char *, fmt,
 	   const void *, args, u32, data_len)
 {
 	struct bpf_bprintf_data data = {
