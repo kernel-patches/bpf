@@ -394,7 +394,7 @@ static void verbose_invalid_scalar(struct bpf_verifier_env *env,
 	verbose(env, " should have been in [%d, %d]\n", range.minval, range.maxval);
 }
 
-static bool reg_not_null(const struct bpf_reg_state *reg)
+bool reg_not_null(const struct bpf_reg_state *reg)
 {
 	enum bpf_reg_type type;
 
@@ -11398,11 +11398,6 @@ static int check_get_func_ip(struct bpf_verifier_env *env)
 	return -ENOTSUPP;
 }
 
-static struct bpf_insn_aux_data *cur_aux(const struct bpf_verifier_env *env)
-{
-	return &env->insn_aux_data[env->insn_idx];
-}
-
 static bool loop_flag_is_zero(struct bpf_verifier_env *env)
 {
 	struct bpf_reg_state *regs = cur_regs(env);
@@ -20508,6 +20503,10 @@ static int do_check(struct bpf_verifier_env *env)
 		state->insn_idx = env->insn_idx;
 
 		if (is_prune_point(env, env->insn_idx)) {
+			err = save_state_in_oracle(env, env->insn_idx);
+			if (err < 0)
+				return err;
+
 			err = is_state_visited(env, env->insn_idx);
 			if (err < 0)
 				return err;

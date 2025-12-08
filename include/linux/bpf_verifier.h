@@ -485,6 +485,30 @@ struct bpf_verifier_state_list {
 	u32 in_free_list:1;
 };
 
+struct bpf_reg_oracle_state {
+	bool scalar;
+	bool ptr_not_null;
+
+	struct tnum var_off;
+	s64 smin_value;
+	s64 smax_value;
+	u64 umin_value;
+	u64 umax_value;
+	s32 s32_min_value;
+	s32 s32_max_value;
+	u32 u32_min_value;
+	u32 u32_max_value;
+};
+
+struct bpf_oracle_state {
+	struct bpf_reg_oracle_state regs[MAX_BPF_REG - 1];
+};
+
+struct bpf_oracle_state_list {
+	struct bpf_oracle_state state;
+	struct list_head node;
+};
+
 struct bpf_loop_inline_state {
 	unsigned int initialized:1; /* set to true upon first entry */
 	unsigned int fit_for_inline:1; /* true if callback function is the same
@@ -551,6 +575,7 @@ struct bpf_insn_aux_data {
 	};
 	struct bpf_iarray *jt;	/* jump table for gotox or bpf_tailcall call instruction */
 	struct btf_struct_meta *kptr_struct_meta;
+	struct list_head *oracle_states;
 	u64 map_key_state; /* constant (32 bit) key tracking for maps */
 	int ctx_field_size; /* the ctx field size for load insn, maybe 0 */
 	u32 seen; /* this insn was processed by the verifier at env->pass_cnt */
@@ -1060,10 +1085,17 @@ static inline bool insn_is_gotox(struct bpf_insn *insn)
 	       BPF_SRC(insn->code) == BPF_X;
 }
 
+static inline struct bpf_insn_aux_data *cur_aux(const struct bpf_verifier_env *env)
+{
+	return &env->insn_aux_data[env->insn_idx];
+}
+
 const char *reg_type_str(struct bpf_verifier_env *env, enum bpf_reg_type type);
 const char *dynptr_type_str(enum bpf_dynptr_type type);
 const char *iter_type_str(const struct btf *btf, u32 btf_id);
 const char *iter_state_str(enum bpf_iter_state state);
+
+bool reg_not_null(const struct bpf_reg_state *reg);
 
 void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifier_state *vstate,
 			  u32 frameno, bool print_all);
@@ -1086,5 +1118,7 @@ int bpf_commit_stack_write_marks(struct bpf_verifier_env *env);
 int bpf_live_stack_query_init(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 bool bpf_stack_slot_alive(struct bpf_verifier_env *env, u32 frameno, u32 spi);
 void bpf_reset_live_stack_callchain(struct bpf_verifier_env *env);
+
+int save_state_in_oracle(struct bpf_verifier_env *env, int insn_idx);
 
 #endif /* _LINUX_BPF_VERIFIER_H */
