@@ -441,7 +441,7 @@ void bpf_map_init_from_attr(struct bpf_map *map, union bpf_attr *attr)
 	map->map_extra = attr->map_extra;
 }
 
-static int bpf_map_alloc_id(struct bpf_map *map)
+int bpf_map_alloc_id(struct bpf_map *map)
 {
 	int id;
 
@@ -480,7 +480,7 @@ void bpf_map_free_id(struct bpf_map *map)
 }
 
 #ifdef CONFIG_MEMCG
-static void bpf_map_save_memcg(struct bpf_map *map)
+void bpf_map_save_memcg(struct bpf_map *map)
 {
 	/* Currently if a map is created by a process belonging to the root
 	 * memory cgroup, get_obj_cgroup_from_current() will return NULL.
@@ -580,7 +580,7 @@ void __percpu *bpf_map_alloc_percpu(const struct bpf_map *map, size_t size,
 }
 
 #else
-static void bpf_map_save_memcg(struct bpf_map *map)
+void bpf_map_save_memcg(struct bpf_map *map)
 {
 }
 
@@ -880,7 +880,7 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 	}
 }
 
-static void bpf_map_free(struct bpf_map *map)
+void bpf_map_free(struct bpf_map *map)
 {
 	struct btf_record *rec = map->record;
 	struct btf *btf = map->btf;

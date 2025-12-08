@@ -20969,7 +20969,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 	return 0;
 }
 
-static int __add_used_map(struct bpf_verifier_env *env, struct bpf_map *map)
+int __add_used_map(struct bpf_verifier_env *env, struct bpf_map *map)
 {
 	int i, err;
 

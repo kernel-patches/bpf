@@ -617,6 +617,9 @@ void bpf_rb_root_free(const struct btf_field *field, void *rb_root,
 u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena);
 u64 bpf_arena_get_user_vm_start(struct bpf_arena *arena);
 int bpf_obj_name_cpy(char *dst, const char *src, unsigned int size);
+int bpf_map_alloc_id(struct bpf_map *map);
+void bpf_map_save_memcg(struct bpf_map *map);
+void bpf_map_free(struct bpf_map *map);
 
 struct bpf_offload_dev;
 struct bpf_offloaded_map;
