@@ -1345,6 +1345,16 @@ enum {
 #define BPF_PSEUDO_MAP_VALUE		2
 #define BPF_PSEUDO_MAP_IDX_VALUE	6
 
+/* Internal only.
+ * insn[0].dst_reg:  0
+ * insn[0].src_reg:  BPF_PSEUDO_MAP_ORACLE
+ * insn[0].imm:      address of oracle state list
+ * insn[1].imm:      address of oracle state list
+ * insn[0].off:      0
+ * insn[1].off:      0
+ */
+#define BPF_PSEUDO_MAP_ORACLE 7
+
 /* insn[0].src_reg:  BPF_PSEUDO_BTF_ID
  * insn[0].imm:      kernel btd id of VAR
  * insn[1].imm:      0

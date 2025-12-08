@@ -166,6 +166,7 @@ int do_btf(int argc, char **argv);
 /* non-bootstrap only commands */
 int do_prog(int argc, char **arg) __weak;
 int do_map(int argc, char **arg) __weak;
+int do_oracle(int argc, char **arg) __weak;
 int do_link(int argc, char **arg) __weak;
 int do_event_pipe(int argc, char **argv) __weak;
 int do_cgroup(int argc, char **arg) __weak;
