@@ -65,7 +65,6 @@ struct bpf_reg_state {
 
 		struct { /* for PTR_TO_MEM | PTR_TO_MEM_OR_NULL */
 			u32 mem_size;
-			u32 dynptr_id; /* for dynptr slices */
 		};
 
 		/* For dynptr stack slots */
@@ -707,6 +706,11 @@ struct bpf_idset {
 	} entries[BPF_ID_MAP_SIZE];
 };
 
+struct bpf_idstack {
+	int cnt;
+	u32 ids[BPF_ID_MAP_SIZE];
+};
+
 /* see verifier.c:compute_scc_callchain() */
 struct bpf_scc_callchain {
 	/* call sites from bpf_verifier_state->frame[*]->callsite leading to this SCC */
@@ -789,6 +793,7 @@ struct bpf_verifier_env {
 	union {
 		struct bpf_idmap idmap_scratch;
 		struct bpf_idset idset_scratch;
+		struct bpf_idstack idstack_scratch;
 	};
 	struct {
 		int *insn_state;
