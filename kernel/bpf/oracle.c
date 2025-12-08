@@ -190,3 +190,133 @@ noop:
 	*cnt = 1;
 	return new_prog;
 }
+
+static int populate_oracle_map(struct bpf_verifier_env *env, struct bpf_map *oracle_map)
+{
+	struct bpf_insn_aux_data *aux;
+	int i, err;
+
+	/* Oracle checks are always before pruning points, so they cannot be the last
+	 * instruction.
+	 */
+	for (i = 0; i < env->prog->len - 1; i++) {
+		aux = &env->insn_aux_data[i];
+		if (!aux->oracle_inner_map || !aux->oracle_inner_map->max_entries)
+			continue;
+
+		bpf_map_inc(aux->oracle_inner_map);
+
+		rcu_read_lock();
+		err = htab_map_update_elem_in_place(oracle_map, &i, &aux->oracle_inner_map,
+						    BPF_NOEXIST, false, false);
+		rcu_read_unlock();
+		if (err) {
+			bpf_map_put(aux->oracle_inner_map);
+			return err;
+		}
+	}
+
+	return 0;
+}
+
+static struct bpf_map *alloc_oracle_inner_map_meta(void)
+{
+	struct bpf_array *inner_array_meta;
+	struct bpf_map *inner_map_meta;
+
+	inner_map_meta = kzalloc(sizeof(*inner_map_meta), GFP_USER);
+	if (!inner_map_meta)
+		return ERR_PTR(-ENOMEM);
+
+	inner_map_meta->map_type = BPF_MAP_TYPE_ARRAY;
+	inner_map_meta->key_size = sizeof(__u32);
+	inner_map_meta->value_size = sizeof(struct bpf_oracle_state);
+	inner_map_meta->map_flags = BPF_F_INNER_MAP;
+	inner_map_meta->max_entries = 1;
+
+	inner_map_meta->ops = &array_map_ops;
+
+	inner_array_meta = container_of(inner_map_meta, struct bpf_array, map);
+	inner_array_meta->index_mask = 0;
+	inner_array_meta->elem_size = round_up(inner_map_meta->value_size, 8);
+	inner_map_meta->bypass_spec_v1 = true;
+
+	return inner_map_meta;
+}
+
+static struct bpf_map *create_oracle_map(struct bpf_verifier_env *env)
+{
+	struct bpf_map *map = NULL, *inner_map;
+	int err;
+
+	union bpf_attr map_attr = {
+		.map_type = BPF_MAP_TYPE_HASH_OF_MAPS,
+		.key_size = sizeof(__u32),
+		.value_size = sizeof(__u32),
+		.max_entries = env->num_prune_points,
+		.map_flags = BPF_F_RDONLY,
+		.map_name = "oracle_map",
+	};
+	/* We don't want to use htab_of_maps_map_ops here because it expects map_attr.inner_map_fd
+	 * to be set to the fd of inner_map_meta, which we don't have. Instead we can allocate and
+	 * set inner_map_meta ourselves.
+	 */
+	map = htab_map_ops.map_alloc(&map_attr);
+	if (IS_ERR(map))
+		return map;
+
+	map->ops = &htab_of_maps_map_ops;
+	map->map_type = BPF_MAP_TYPE_HASH_OF_MAPS;
+
+	inner_map = alloc_oracle_inner_map_meta();
+	if (IS_ERR(inner_map)) {
+		err = PTR_ERR(inner_map);
+		goto free_map;
+	}
+	map->inner_map_meta = inner_map;
+
+	err = bpf_obj_name_cpy(map->name, map_attr.map_name,
+			       sizeof(map_attr.map_name));
+	if (err < 0)
+		goto free_map;
+
+	mutex_init(&map->freeze_mutex);
+	spin_lock_init(&map->owner_lock);
+
+	err = security_bpf_map_create(map, &map_attr, NULL, false);
+	if (err)
+		goto free_map_sec;
+
+	err = bpf_map_alloc_id(map);
+	if (err)
+		goto free_map_sec;
+
+	bpf_map_save_memcg(map);
+
+	return map;
+
+free_map_sec:
+	security_bpf_map_free(map);
+free_map:
+	bpf_map_free(map);
+	return ERR_PTR(err);
+}
+
+int create_and_populate_oracle_map(struct bpf_verifier_env *env)
+{
+	struct bpf_map *oracle_map;
+	int err;
+
+	if (env->num_prune_points == 0 || env->subprog_cnt > 1)
+		return 0;
+
+	oracle_map = create_oracle_map(env);
+	if (IS_ERR(oracle_map))
+		return PTR_ERR(oracle_map);
+
+	err = __add_used_map(env, oracle_map);
+	if (err < 0)
+		return err;
+
+	return populate_oracle_map(env, oracle_map);
+}

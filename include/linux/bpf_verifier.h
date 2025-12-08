@@ -846,6 +846,7 @@ struct bpf_verifier_env {
 	u32 longest_mark_read_walk;
 	u32 free_list_size;
 	u32 explored_states_size;
+	u32 num_prune_points;
 	u32 num_backedges;
 	bpfptr_t fd_array;
 
@@ -1128,5 +1129,6 @@ void bpf_reset_live_stack_callchain(struct bpf_verifier_env *env);
 int save_state_in_oracle(struct bpf_verifier_env *env, int insn_idx);
 struct bpf_prog *patch_oracle_check_insn(struct bpf_verifier_env *env, struct bpf_insn *insn,
 					 int i, int *cnt);
+int create_and_populate_oracle_map(struct bpf_verifier_env *env);
 
 #endif /* _LINUX_BPF_VERIFIER_H */

@@ -1249,9 +1249,9 @@ err_lock_bucket:
 	return ret;
 }
 
-static long htab_map_update_elem_in_place(struct bpf_map *map, void *key,
-					  void *value, u64 map_flags,
-					  bool percpu, bool onallcpus)
+long htab_map_update_elem_in_place(struct bpf_map *map, void *key,
+				   void *value, u64 map_flags,
+				   bool percpu, bool onallcpus)
 {
 	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
 	struct htab_elem *l_new, *l_old;

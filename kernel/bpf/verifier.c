@@ -17560,6 +17560,8 @@ enum {
 
 static void mark_prune_point(struct bpf_verifier_env *env, int idx)
 {
+	if (!env->insn_aux_data[idx].prune_point)
+		env->num_prune_points++;
 	env->insn_aux_data[idx].prune_point = true;
 }
 
@@ -25300,6 +25302,9 @@ skip_full_check:
 
 	if (ret == 0)
 		ret = do_misc_fixups(env);
+
+	if (ret == 0)
+		ret = create_and_populate_oracle_map(env);
 
 	/* do 32-bit optimization after insn patching has done so those patched
 	 * insns could be handled correctly.

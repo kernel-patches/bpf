@@ -2794,6 +2794,9 @@ int bpf_fd_array_map_update_elem(struct bpf_map *map, struct file *map_file,
 int bpf_fd_array_map_lookup_elem(struct bpf_map *map, void *key, u32 *value);
 int bpf_fd_htab_map_update_elem(struct bpf_map *map, struct file *map_file,
 				void *key, void *value, u64 map_flags);
+long htab_map_update_elem_in_place(struct bpf_map *map, void *key,
+				   void *value, u64 map_flags,
+				   bool percpu, bool onallcpus);
 int bpf_fd_htab_map_lookup_elem(struct bpf_map *map, void *key, u32 *value);
 
 int bpf_get_file_flag(int flags);
