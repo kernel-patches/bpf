@@ -167,6 +167,11 @@ bool tnum_overlap(struct tnum a, struct tnum b)
 	return (a.value & mu) == (b.value & mu);
 }
 
+bool tnum_match(struct tnum a, u64 b)
+{
+	return (a.value & ~a.mask) == (b & ~a.mask);
+}
+
 /* Note that if a and b disagree - i.e. one has a 'known 1' where the other has
  * a 'known 0' - this will return a 'known 1' for that bit.
  */

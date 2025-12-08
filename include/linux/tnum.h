@@ -54,6 +54,9 @@ struct tnum tnum_mul(struct tnum a, struct tnum b);
 /* Return true if the known bits of both tnums have the same value */
 bool tnum_overlap(struct tnum a, struct tnum b);
 
+/* Return true if tnum a matches value b. */
+bool tnum_match(struct tnum a, u64 b);
+
 /* Return a tnum representing numbers satisfying both @a and @b */
 struct tnum tnum_intersect(struct tnum a, struct tnum b);
 

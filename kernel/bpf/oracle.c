@@ -8,6 +8,8 @@
 
 #include <linux/bpf_verifier.h>
 
+#define REGS_FMT_BUF_LEN 221
+
 static void convert_oracle_state(struct bpf_verifier_state *istate, struct bpf_oracle_state *ostate)
 {
 	struct bpf_func_state *frame = istate->frame[istate->curframe];
@@ -319,4 +321,67 @@ int create_and_populate_oracle_map(struct bpf_verifier_env *env)
 		return err;
 
 	return populate_oracle_map(env, oracle_map);
+}
+
+static bool oracle_test_reg(struct bpf_reg_oracle_state *exp, u64 reg)
+{
+	if (exp->scalar) {
+		if (reg < exp->umin_value || reg > exp->umax_value ||
+		    (s64)reg < exp->smin_value || (s64)reg > exp->smax_value ||
+		    (u32)reg < exp->u32_min_value || (u32)reg > exp->u32_max_value ||
+		    (s32)reg < exp->s32_min_value || (s32)reg > exp->s32_max_value ||
+		    !tnum_match(exp->var_off, reg))
+			return true;
+	} else if (exp->ptr_not_null && !reg) {
+		return true;
+	}
+	return false;
+}
+
+static bool oracle_test_state(struct bpf_oracle_state *state, u64 *regs, u32 *non_match_regs)
+{
+	int i;
+
+	for (i = 0; i < MAX_BPF_REG - 1; i++) {
+		if (oracle_test_reg(&state->regs[i], regs[i])) {
+			*non_match_regs |= 1 << i;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static void format_non_match_regs(u32 non_match_regs, u64 *regs, char *buf)
+{
+	int i, delta = 0;
+
+	for (i = 0; i < MAX_BPF_REG - 1; i++) {
+		if (non_match_regs & (1 << i)) {
+			delta += snprintf(buf + delta, REGS_FMT_BUF_LEN - delta, "r%d=%#llx ",
+					  i, regs[i]);
+		}
+	}
+}
+
+void oracle_test(struct bpf_map *oracle_states, u64 *regs)
+{
+	struct bpf_oracle_state *state;
+	u32 non_match_regs = 0;
+	char regs_fmt[REGS_FMT_BUF_LEN];
+	bool expected = false;
+	int i;
+
+	for (i = 0; i < oracle_states->max_entries; i++) {
+		state = oracle_states->ops->map_lookup_elem(oracle_states, &i);
+		if (!oracle_test_state(state, regs, &non_match_regs)) {
+			expected = true;
+			break;
+		}
+	}
+	if (!expected) {
+		format_non_match_regs(non_match_regs, regs, regs_fmt);
+		BPF_WARN_ONCE(1, "oracle caught invalid states in oracle_map[id:%d]: %s\n",
+			      oracle_states->id, regs_fmt);
+	}
 }
