@@ -212,6 +212,7 @@ __bpf_kfunc_start_defs();
  * Avoid using enum bpf_stream_id so that kfunc users don't have to pull in the
  * enum in headers.
  */
+__printf(2, 0)
 __bpf_kfunc int bpf_stream_vprintk_impl(int stream_id, const char *fmt__str, const void *args,
 					u32 len__sz, void *aux__prog)
 {
