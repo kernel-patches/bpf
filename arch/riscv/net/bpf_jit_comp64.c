@@ -228,7 +228,10 @@ static void emit_imm(u8 rd, s64 val, struct rv_jit_context *ctx)
 		emit_addi(rd, rd, lower, ctx);
 }
 
-static void __build_epilogue(bool is_tail_call, struct rv_jit_context *ctx)
+/* Prologue offset: kcfi + fentry + TCC init */
+#define RV_TAIL_CALL_OFFSET	((RV_KCFI_NINSNS + RV_FENTRY_NINSNS + 1) * 4)
+
+static void __build_epilogue(bool is_tail_call, bool tail_call_dyn_array, struct rv_jit_context *ctx)
 {
 	int stack_adjust = ctx->stack_size, store_offset = stack_adjust - 8;
 
@@ -272,9 +275,7 @@ static void __build_epilogue(bool is_tail_call, struct rv_jit_context *ctx)
 	if (!is_tail_call)
 		emit_addiw(RV_REG_A0, RV_REG_A5, 0, ctx);
 	emit_jalr(RV_REG_ZERO, is_tail_call ? RV_REG_T3 : RV_REG_RA,
-		  /* kcfi, fentry and TCC init insns will be skipped on tailcall */
-		  is_tail_call ? (RV_KCFI_NINSNS + RV_FENTRY_NINSNS + 1) * 4 : 0,
-		  ctx);
+		  tail_call_dyn_array ? RV_TAIL_CALL_OFFSET : 0, ctx);
 }
 
 static void emit_bcc(u8 cond, u8 rd, u8 rs, int rvoff,
@@ -352,8 +353,14 @@ static void emit_branch(u8 cond, u8 rd, u8 rs, int rvoff,
 	emit(rv_jalr(RV_REG_ZERO, RV_REG_T1, lower), ctx);
 }
 
-static int emit_bpf_tail_call(int insn, struct rv_jit_context *ctx)
+int bpf_arch_tail_call_prologue_offset(void)
 {
+	return RV_TAIL_CALL_OFFSET;
+}
+
+static int emit_bpf_tail_call(int insn, u32 map_index, bool dyn_array, struct rv_jit_context *ctx)
+{
+	struct bpf_map *map = ctx->prog->aux->used_maps[map_index];
 	int tc_ninsn, off, start_insn = ctx->ninsns;
 	u8 tcc = rv_tail_call_reg(ctx);
 
@@ -368,10 +375,14 @@ static int emit_bpf_tail_call(int insn, struct rv_jit_context *ctx)
 		   ctx->offset[0];
 	emit_zextw(RV_REG_A2, RV_REG_A2, ctx);
 
-	off = offsetof(struct bpf_array, map.max_entries);
-	if (is_12b_check(off, insn))
-		return -1;
-	emit(rv_lwu(RV_REG_T1, off, RV_REG_A1), ctx);
+	if (dyn_array) {
+		off = offsetof(struct bpf_array, map.max_entries);
+		if (is_12b_check(off, insn))
+			return -1;
+		emit(rv_lwu(RV_REG_T1, off, RV_REG_A1), ctx);
+	} else {
+		emit_imm(RV_REG_T1, map->max_entries, ctx);
+	}
 	off = ninsns_rvoff(tc_ninsn - (ctx->ninsns - start_insn));
 	emit_branch(BPF_JGE, RV_REG_A2, RV_REG_T1, off, ctx);
 
@@ -381,6 +392,28 @@ static int emit_bpf_tail_call(int insn, struct rv_jit_context *ctx)
 	emit_addi(RV_REG_TCC, tcc, -1, ctx);
 	off = ninsns_rvoff(tc_ninsn - (ctx->ninsns - start_insn));
 	emit_branch(BPF_JSLT, RV_REG_TCC, RV_REG_ZERO, off, ctx);
+
+	if (!dyn_array) {
+		/* tgt = array->ptrs[max_entries + index];
+		 * if (!tgt)
+		 *     goto out;
+		 */
+		emit_sh3add(RV_REG_T2, RV_REG_A2, RV_REG_A1, ctx);
+		off = offsetof(struct bpf_array, ptrs) + map->max_entries * sizeof(void *);
+		if (!is_12b_check(off, insn)) {
+			emit_ld(RV_REG_T3, off, RV_REG_T2, ctx);
+		} else {
+			emit_imm(RV_REG_T3, off, ctx);
+			emit_add(RV_REG_T3, RV_REG_T3, RV_REG_T2, ctx);
+			emit_ld(RV_REG_T3, 0, RV_REG_T3, ctx);
+		}
+		off = ninsns_rvoff(tc_ninsn - (ctx->ninsns - start_insn));
+		emit_branch(BPF_JEQ, RV_REG_T3, RV_REG_ZERO, off, ctx);
+
+		/* goto *tgt; */
+		__build_epilogue(true, false, ctx);
+		return 0;
+	}
 
 	/* prog = array->ptrs[index];
 	 * if (!prog)
@@ -399,7 +432,7 @@ static int emit_bpf_tail_call(int insn, struct rv_jit_context *ctx)
 	if (is_12b_check(off, insn))
 		return -1;
 	emit_ld(RV_REG_T3, off, RV_REG_T2, ctx);
-	__build_epilogue(true, ctx);
+	__build_epilogue(true, true, ctx);
 	return 0;
 }
 
@@ -1790,7 +1823,10 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 	}
 	/* tail call */
 	case BPF_JMP | BPF_TAIL_CALL:
-		if (emit_bpf_tail_call(i, ctx))
+		bool dynamic_array = (imm >> 8) & 0xFF;
+		u32 map_index = imm & 0xFF;
+
+		if (emit_bpf_tail_call(i, map_index, dynamic_array, ctx))
 			return -1;
 		break;
 
@@ -2042,7 +2078,7 @@ void bpf_jit_build_prologue(struct rv_jit_context *ctx, bool is_subprog)
 
 void bpf_jit_build_epilogue(struct rv_jit_context *ctx)
 {
-	__build_epilogue(false, ctx);
+	__build_epilogue(false, false, ctx);
 }
 
 bool bpf_jit_supports_kfunc_call(void)
