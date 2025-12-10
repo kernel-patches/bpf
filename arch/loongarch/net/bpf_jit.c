@@ -16,6 +16,10 @@
 #define LOONGARCH_FENTRY_NBYTES (LOONGARCH_FENTRY_NINSNS * 4)
 #define LOONGARCH_BPF_FENTRY_NBYTES (LOONGARCH_LONG_JUMP_NINSNS * 4)
 
+/* Prologue offset: 5 NOPs for fentry + 1 TCC init */
+#define LOONGARCH_TAIL_CALL_OFFSET_NINSNS 6
+#define LOONGARCH_TAIL_CALL_OFFSET_NBYTES (LOONGARCH_TAIL_CALL_OFFSET_NINSNS * 4)
+
 #define REG_TCC		LOONGARCH_GPR_A6
 #define BPF_TAIL_CALL_CNT_PTR_STACK_OFF(stack) (round_up(stack, 16) - 80)
 
@@ -187,7 +191,7 @@ static void build_prologue(struct jit_ctx *ctx)
 	ctx->stack_size = stack_adjust;
 }
 
-static void __build_epilogue(struct jit_ctx *ctx, bool is_tail_call)
+static void __build_epilogue(struct jit_ctx *ctx, bool is_tail_call, bool tail_call_dyn_array)
 {
 	int stack_adjust = ctx->stack_size;
 	int load_offset;
@@ -234,17 +238,15 @@ static void __build_epilogue(struct jit_ctx *ctx, bool is_tail_call)
 		/* Return to the caller */
 		emit_insn(ctx, jirl, LOONGARCH_GPR_ZERO, LOONGARCH_GPR_RA, 0);
 	} else {
-		/*
-		 * Call the next bpf prog and skip the first instruction
-		 * of TCC initialization.
-		 */
-		emit_insn(ctx, jirl, LOONGARCH_GPR_ZERO, LOONGARCH_GPR_T3, 6);
+		/* goto *t3; */
+		emit_insn(ctx, jirl, LOONGARCH_GPR_ZERO, LOONGARCH_GPR_T3,
+			  tail_call_dyn_array ? LOONGARCH_TAIL_CALL_OFFSET_NINSNS : 0);
 	}
 }
 
 static void build_epilogue(struct jit_ctx *ctx)
 {
-	__build_epilogue(ctx, false);
+	__build_epilogue(ctx, false, false);
 }
 
 bool bpf_jit_supports_kfunc_call(void)
@@ -257,8 +259,14 @@ bool bpf_jit_supports_far_kfunc_call(void)
 	return true;
 }
 
-static int emit_bpf_tail_call(struct jit_ctx *ctx, int insn)
+int bpf_arch_tail_call_prologue_offset(void)
 {
+	return LOONGARCH_TAIL_CALL_OFFSET_NBYTES;
+}
+
+static int emit_bpf_tail_call(struct jit_ctx *ctx, u32 map_index, bool dyn_array, int insn)
+{
+	struct bpf_map *map = ctx->prog->aux->used_maps[map_index];
 	int off, tc_ninsn = 0;
 	int tcc_ptr_off = BPF_TAIL_CALL_CNT_PTR_STACK_OFF(ctx->stack_size);
 	u8 a1 = LOONGARCH_GPR_A1;
@@ -280,8 +288,12 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx, int insn)
 	 *	 goto out;
 	 */
 	tc_ninsn = insn ? ctx->offset[insn+1] - ctx->offset[insn] : ctx->offset[0];
-	off = offsetof(struct bpf_array, map.max_entries);
-	emit_insn(ctx, ldwu, t1, a1, off);
+	if (dyn_array) {
+		off = offsetof(struct bpf_array, map.max_entries);
+		emit_insn(ctx, ldwu, t1, a1, off);
+	} else {
+		move_imm(ctx, t1, map->max_entries, false);
+	}
 	/* bgeu $a2, $t1, jmp_offset */
 	if (emit_tailcall_jmp(ctx, BPF_JGE, a2, t1, jmp_offset) < 0)
 		goto toofar;
@@ -298,22 +310,45 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx, int insn)
 	if (emit_tailcall_jmp(ctx, BPF_JSGT, t3, t2, jmp_offset) < 0)
 		goto toofar;
 
-	/*
-	 * prog = array->ptrs[index];
-	 * if (!prog)
-	 *	 goto out;
-	 */
-	emit_insn(ctx, alsld, t2, a2, a1, 2);
-	off = offsetof(struct bpf_array, ptrs);
-	emit_insn(ctx, ldd, t2, t2, off);
-	/* beq $t2, $zero, jmp_offset */
-	if (emit_tailcall_jmp(ctx, BPF_JEQ, t2, LOONGARCH_GPR_ZERO, jmp_offset) < 0)
-		goto toofar;
+	if (dyn_array) {
+		/*
+		 * prog = array->ptrs[index];
+		 * if (!prog)
+		 *	 goto out;
+		 */
+		emit_insn(ctx, alsld, t2, a2, a1, 2);
+		off = offsetof(struct bpf_array, ptrs);
+		emit_insn(ctx, ldd, t2, t2, off);
+		/* beq $t2, $zero, jmp_offset */
+		if (emit_tailcall_jmp(ctx, BPF_JEQ, t2, LOONGARCH_GPR_ZERO, jmp_offset) < 0)
+			goto toofar;
 
-	/* goto *(prog->bpf_func + 4); */
-	off = offsetof(struct bpf_prog, bpf_func);
-	emit_insn(ctx, ldd, t3, t2, off);
-	__build_epilogue(ctx, true);
+		/* goto *(prog->bpf_func + 4); */
+		off = offsetof(struct bpf_prog, bpf_func);
+		emit_insn(ctx, ldd, t3, t2, off);
+		__build_epilogue(ctx, true, true);
+	} else {
+		/*
+		 * tgt = array->ptrs[max_entries + index];
+		 * if (!tgt)
+		 *	 goto out;
+		 */
+		emit_insn(ctx, alsld, t2, a2, a1, 2);
+		off = offsetof(struct bpf_array, ptrs) + map->max_entries * sizeof(void *);
+		if (is_signed_imm12(off)) {
+			emit_insn(ctx, ldd, t3, t2, off);
+		} else {
+			move_imm(ctx, t3, off, false);
+			emit_insn(ctx, addd, t3, t3, t2);
+			emit_insn(ctx, ldd, t3, t3, 0);
+		}
+		/* beq $t3, $zero, jmp_offset */
+		if (emit_tailcall_jmp(ctx, BPF_JEQ, t3, LOONGARCH_GPR_ZERO, jmp_offset) < 0)
+			goto toofar;
+
+		/* goto *tgt; */
+		__build_epilogue(ctx, true, false);
+	}
 
 	return 0;
 
@@ -960,7 +995,10 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 
 	/* tail call */
 	case BPF_JMP | BPF_TAIL_CALL:
-		if (emit_bpf_tail_call(ctx, i) < 0)
+		bool dynamic_array = (imm >> 8) & 0xFF;
+		u32 map_index = imm & 0xFF;
+
+		if (emit_bpf_tail_call(ctx, map_index, dynamic_array, i) < 0)
 			return -EINVAL;
 		break;
 
