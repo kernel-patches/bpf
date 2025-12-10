@@ -378,11 +378,11 @@ static int kallsyms_lookup_buildid(unsigned long addr,
 				    modname, modbuildid, namebuf);
 	if (!ret)
 		ret = bpf_address_lookup(addr, symbolsize,
-					 offset, modname, namebuf);
+					 offset, modname, modbuildid, namebuf);
 
 	if (!ret)
 		ret = ftrace_mod_address_lookup(addr, symbolsize,
-						offset, modname, namebuf);
+						offset, modname, modbuildid, namebuf);
 
 	return ret;
 }
