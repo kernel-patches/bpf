@@ -15448,26 +15448,45 @@ static void __init destroy_tail_call_tests(struct bpf_array *progs)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(tail_call_tests); i++)
-		if (progs->ptrs[i])
-			bpf_prog_free(progs->ptrs[i]);
+	for (i = 0; i < ARRAY_SIZE(tail_call_tests); i++) {
+		struct bpf_prog *fp = progs->ptrs[i];
+
+		if (!fp)
+			continue;
+
+		/*
+		 * The used_maps points to fake maps that don't have
+		 * proper ops, so clear it before bpf_prog_free to avoid
+		 * bpf_free_used_maps trying to process it.
+		 */
+		kfree(fp->aux->used_maps);
+		fp->aux->used_maps = NULL;
+		fp->aux->used_map_cnt = 0;
+		bpf_prog_free(fp);
+	}
 	kfree(progs);
 }
 
 static __init int prepare_tail_call_tests(struct bpf_array **pprogs)
 {
+	int prologue_offset = bpf_arch_tail_call_prologue_offset();
 	int ntests = ARRAY_SIZE(tail_call_tests);
+	u32 max_entries = ntests + 1;
 	struct bpf_array *progs;
 	int which, err;
 
 	/* Allocate the table of programs to be used for tail calls */
-	progs = kzalloc(struct_size(progs, ptrs, ntests + 1), GFP_KERNEL);
+	progs = kzalloc(struct_size(progs, ptrs, max_entries * 2), GFP_KERNEL);
 	if (!progs)
 		goto out_nomem;
+
+	/* Set max_entries before JIT, as it's used in JIT */
+	progs->map.max_entries = max_entries;
 
 	/* Create all eBPF programs and populate the table */
 	for (which = 0; which < ntests; which++) {
 		struct tail_call_test *test = &tail_call_tests[which];
+		struct bpf_map *map = &progs->map;
 		struct bpf_prog *fp;
 		int len, i;
 
@@ -15487,10 +15506,16 @@ static __init int prepare_tail_call_tests(struct bpf_array **pprogs)
 		if (!fp)
 			goto out_nomem;
 
+		fp->aux->used_maps = kmalloc_array(1, sizeof(map), GFP_KERNEL);
+		if (!fp->aux->used_maps)
+			goto out_nomem;
+
 		fp->len = len;
 		fp->type = BPF_PROG_TYPE_SOCKET_FILTER;
 		fp->aux->stack_depth = test->stack_depth;
 		fp->aux->tail_call_reachable = test->has_tail_call;
+		fp->aux->used_maps[0] = map;
+		fp->aux->used_map_cnt = 1;
 		memcpy(fp->insnsi, test->insns, len * sizeof(struct bpf_insn));
 
 		/* Relocate runtime tail call offsets and addresses */
@@ -15548,6 +15573,10 @@ static __init int prepare_tail_call_tests(struct bpf_array **pprogs)
 				if ((long)__bpf_call_base + insn->imm != addr)
 					*insn = BPF_JMP_A(0); /* Skip: NOP */
 				break;
+
+			case BPF_JMP | BPF_TAIL_CALL:
+				insn->imm = 0;
+				break;
 			}
 		}
 
@@ -15555,11 +15584,11 @@ static __init int prepare_tail_call_tests(struct bpf_array **pprogs)
 		if (err)
 			goto out_err;
 
+		progs->ptrs[max_entries + which] = (void *) fp->bpf_func + prologue_offset;
 		progs->ptrs[which] = fp;
 	}
 
 	/* The last entry contains a NULL program pointer */
-	progs->map.max_entries = ntests + 1;
 	*pprogs = progs;
 	return 0;
 
