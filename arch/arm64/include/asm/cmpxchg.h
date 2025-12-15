@@ -12,6 +12,7 @@
 
 #include <asm/barrier.h>
 #include <asm/lse.h>
+#include <asm/delay-const.h>
 
 /*
  * We need separate acquire parameters for ll/sc and lse, since the full
@@ -208,22 +209,41 @@ __CMPXCHG_GEN(_mb)
 	__cmpxchg128((ptr), (o), (n));						\
 })
 
-#define __CMPWAIT_CASE(w, sfx, sz)					\
-static inline void __cmpwait_case_##sz(volatile void *ptr,		\
-				       unsigned long val)		\
-{									\
-	unsigned long tmp;						\
-									\
-	asm volatile(							\
-	"	sevl\n"							\
-	"	wfe\n"							\
-	"	ldxr" #sfx "\t%" #w "[tmp], %[v]\n"			\
-	"	eor	%" #w "[tmp], %" #w "[tmp], %" #w "[val]\n"	\
-	"	cbnz	%" #w "[tmp], 1f\n"				\
-	"	wfe\n"							\
-	"1:"								\
-	: [tmp] "=&r" (tmp), [v] "+Q" (*(u##sz *)ptr)			\
-	: [val] "r" (val));						\
+/* Re-declared here to avoid include dependency. */
+extern u64 (*arch_timer_read_counter)(void);
+
+#define __CMPWAIT_CASE(w, sfx, sz)						\
+static inline void __cmpwait_case_##sz(volatile void *ptr,			\
+				       unsigned long val,			\
+				       s64 timeout_ns)				\
+{										\
+	unsigned long tmp;							\
+										\
+	if (!alternative_has_cap_unlikely(ARM64_HAS_WFXT) || timeout_ns <= 0) {	\
+		asm volatile(							\
+		"	sevl\n"							\
+		"	wfe\n"							\
+		"	ldxr" #sfx "\t%" #w "[tmp], %[v]\n"			\
+		"	eor	%" #w "[tmp], %" #w "[tmp], %" #w "[val]\n"	\
+		"	cbnz	%" #w "[tmp], 1f\n"				\
+		"	wfe\n"							\
+		"1:"								\
+		: [tmp] "=&r" (tmp), [v] "+Q" (*(u##sz *)ptr)			\
+		: [val] "r" (val));						\
+	} else {								\
+		u64 ecycles = arch_timer_read_counter() +			\
+				NSECS_TO_CYCLES(timeout_ns);			\
+		asm volatile(							\
+		"	sevl\n"							\
+		"	wfe\n"							\
+		"	ldxr" #sfx "\t%" #w "[tmp], %[v]\n"			\
+		"	eor	%" #w "[tmp], %" #w "[tmp], %" #w "[val]\n"	\
+		"	cbnz	%" #w "[tmp], 2f\n"				\
+		"	msr s0_3_c1_c0_0, %[ecycles]\n"				\
+		"2:"								\
+		: [tmp] "=&r" (tmp), [v] "+Q" (*(u##sz *)ptr)			\
+		: [val] "r" (val), [ecycles] "r" (ecycles));			\
+	}									\
 }
 
 __CMPWAIT_CASE(w, b, 8);
@@ -236,17 +256,22 @@ __CMPWAIT_CASE( ,  , 64);
 #define __CMPWAIT_GEN(sfx)						\
 static __always_inline void __cmpwait##sfx(volatile void *ptr,		\
 				  unsigned long val,			\
+				  s64 timeout_ns,			\
 				  int size)				\
 {									\
 	switch (size) {							\
 	case 1:								\
-		return __cmpwait_case##sfx##_8(ptr, (u8)val);		\
+		return __cmpwait_case##sfx##_8(ptr, (u8)val,		\
+					       timeout_ns);		\
 	case 2:								\
-		return __cmpwait_case##sfx##_16(ptr, (u16)val);		\
+		return __cmpwait_case##sfx##_16(ptr, (u16)val,		\
+					       timeout_ns);		\
 	case 4:								\
-		return __cmpwait_case##sfx##_32(ptr, val);		\
+		return __cmpwait_case##sfx##_32(ptr, val,		\
+					       timeout_ns);		\
 	case 8:								\
-		return __cmpwait_case##sfx##_64(ptr, val);		\
+		return __cmpwait_case##sfx##_64(ptr, val,		\
+					       timeout_ns);		\
 	default:							\
 		BUILD_BUG();						\
 	}								\
@@ -258,7 +283,10 @@ __CMPWAIT_GEN()
 
 #undef __CMPWAIT_GEN
 
-#define __cmpwait_relaxed(ptr, val) \
-	__cmpwait((ptr), (unsigned long)(val), sizeof(*(ptr)))
+#define __cmpwait_relaxed_timeout(ptr, val, timeout_ns)			\
+	__cmpwait((ptr), (unsigned long)(val), timeout_ns, sizeof(*(ptr)))
+
+#define __cmpwait_relaxed(ptr, val)					\
+	__cmpwait_relaxed_timeout(ptr, val, 0)
 
 #endif	/* __ASM_CMPXCHG_H */
