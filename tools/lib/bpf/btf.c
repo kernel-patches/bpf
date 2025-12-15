@@ -29,6 +29,35 @@
 
 static struct btf_type btf_void;
 
+/* Describe how kinds are laid out; some have a singular element following the "struct btf_type",
+ * some have BTF_INFO_VLEN(t->info) elements.  Specify sizes for both.  Flags are currently unused.
+ * Kind layout can be optionally added to the BTF representation in a dedicated section to
+ * facilitate parsing.  New kinds must be added here.
+ */
+struct btf_kind_layout kind_layouts[NR_BTF_KINDS] = {
+/*	singular element size		vlen element(s) size */
+{	0,				0				}, /* _UNKN */
+{	sizeof(__u32),			0				}, /* _INT */
+{	0,				0				}, /* _PTR */
+{	sizeof(struct btf_array),	0				}, /* _ARRAY */
+{	0,				sizeof(struct btf_member)	}, /* _STRUCT */
+{	0,				sizeof(struct btf_member)	}, /* _UNION */
+{	0,				sizeof(struct btf_enum)		}, /* _ENUM */
+{	0,				0				}, /* _FWD */
+{	0,				0				}, /* _TYPEDEF */
+{	0,				0				}, /* _VOLATILE */
+{	0,				0				}, /* _CONST */
+{	0,				0				}, /* _RESTRICT */
+{	0,				0				}, /* _FUNC */
+{	0,				sizeof(struct btf_param)	}, /* _FUNC_PROTO */
+{	sizeof(struct btf_var),		0				}, /* _VAR */
+{	0,				sizeof(struct btf_var_secinfo)	}, /* _DATASEC */
+{	0,				0				}, /* _FLOAT */
+{	sizeof(struct btf_decl_tag),	0				}, /* _DECL_TAG */
+{	0,				0				}, /* _TYPE_TAG */
+{	0,				sizeof(struct btf_enum64)	}, /* _ENUM64 */
+};
+
 struct btf {
 	/* raw BTF data in native endianness */
 	void *raw_data;
@@ -1081,8 +1110,10 @@ void btf__free(struct btf *btf)
 	free(btf);
 }
 
-static struct btf *btf_new_empty(struct btf *base_btf)
+static struct btf *btf_new_empty(struct btf_new_opts *opts)
 {
+	bool add_kind_layout = OPTS_GET(opts, add_kind_layout, false);
+	struct btf *base_btf = OPTS_GET(opts, base_btf, NULL);
 	struct btf_header *hdr;
 	struct btf *btf;
 
@@ -1106,6 +1137,8 @@ static struct btf *btf_new_empty(struct btf *base_btf)
 
 	/* +1 for empty string at offset 0 */
 	btf->raw_size = sizeof(struct btf_header) + (base_btf ? 0 : 1);
+	if (add_kind_layout)
+		btf->raw_size = roundup(btf->raw_size, 4) + sizeof(kind_layouts);
 	btf->raw_data = calloc(1, btf->raw_size);
 	if (!btf->raw_data) {
 		free(btf);
@@ -1126,6 +1159,13 @@ static struct btf *btf_new_empty(struct btf *base_btf)
 		free(btf);
 		return ERR_PTR(-ENOMEM);
 	}
+
+	if (add_kind_layout) {
+		hdr->kind_layout_len = sizeof(kind_layouts);
+		hdr->kind_layout_off = roundup(hdr->str_len, 4);
+		btf->kind_layout = btf->raw_data + hdr->hdr_len + hdr->kind_layout_off;
+		memcpy(btf->kind_layout, kind_layouts, sizeof(kind_layouts));
+	}
 	memcpy(btf->hdr, hdr, sizeof(*hdr));
 
 	return btf;
@@ -1133,12 +1173,26 @@ static struct btf *btf_new_empty(struct btf *base_btf)
 
 struct btf *btf__new_empty(void)
 {
-	return libbpf_ptr(btf_new_empty(NULL));
+	LIBBPF_OPTS(btf_new_opts, opts);
+
+	return libbpf_ptr(btf_new_empty(&opts));
 }
 
 struct btf *btf__new_empty_split(struct btf *base_btf)
 {
-	return libbpf_ptr(btf_new_empty(base_btf));
+	LIBBPF_OPTS(btf_new_opts, opts);
+
+	opts.base_btf = base_btf;
+
+	return libbpf_ptr(btf_new_empty(&opts));
+}
+
+struct btf *btf__new_empty_opts(struct btf_new_opts *opts)
+{
+	if (!OPTS_VALID(opts, btf_new_opts))
+		return libbpf_err_ptr(-EINVAL);
+
+	return libbpf_ptr(btf_new_empty(opts));
 }
 
 static struct btf *btf_new(const void *data, __u32 size, struct btf *base_btf, bool is_mmap)
