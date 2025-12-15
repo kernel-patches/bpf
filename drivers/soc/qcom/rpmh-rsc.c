@@ -26,6 +26,7 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/wait.h>
+#include <asm/delay-const.h>
 
 #include <clocksource/arm_arch_timer.h>
 #include <soc/qcom/cmd-db.h>
@@ -145,14 +146,6 @@ enum {
  *  |                      ......                       |
  *  +---------------------------------------------------+
  */
-
-#define USECS_TO_CYCLES(time_usecs)			\
-	xloops_to_cycles((time_usecs) * 0x10C7UL)
-
-static inline unsigned long xloops_to_cycles(u64 xloops)
-{
-	return (xloops * loops_per_jiffy * HZ) >> 32;
-}
 
 static u32 rpmh_rsc_reg_offset_ver_2_7[] = {
 	[RSC_DRV_TCS_OFFSET]		= 672,
