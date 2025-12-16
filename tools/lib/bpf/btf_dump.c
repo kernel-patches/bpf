@@ -54,6 +54,8 @@ struct btf_dump_type_aux_state {
 	__u8 name_resolved: 1;
 	/* whether type is referenced from any other type */
 	__u8 referenced: 1;
+	/* whether named type should be anonymized */
+	__u8 anonymize: 1;
 };
 
 /* indent string length; one indent string is added for each indent level */
@@ -84,6 +86,7 @@ struct btf_dump {
 	int ptr_sz;
 	bool strip_mods;
 	bool skip_anon_defs;
+	bool force_anon_struct_members;
 	int last_id;
 
 	/* per-type auxiliary state */
@@ -164,6 +167,7 @@ struct btf_dump *btf_dump__new(const struct btf *btf,
 	if (!d)
 		return libbpf_err_ptr(-ENOMEM);
 
+	d->force_anon_struct_members = OPTS_GET(opts, force_anon_struct_members, false);
 	d->btf = btf;
 	d->printf_fn = printf_fn;
 	d->cb_ctx = ctx;
@@ -1417,6 +1421,8 @@ static void btf_dump_emit_name(const struct btf_dump *d,
 	btf_dump_printf(d, "%s%s", separate ? " " : "", name);
 }
 
+static void btf_dump_set_anon_type(struct btf_dump *d, __u32 id, bool anon);
+
 static void btf_dump_emit_type_chain(struct btf_dump *d,
 				     struct id_stack *decls,
 				     const char *fname, int lvl)
@@ -1460,10 +1466,16 @@ static void btf_dump_emit_type_chain(struct btf_dump *d,
 		case BTF_KIND_UNION:
 			btf_dump_emit_mods(d, decls);
 			/* inline anonymous struct/union */
-			if (t->name_off == 0 && !d->skip_anon_defs)
+			if (t->name_off == 0 && !d->skip_anon_defs) {
 				btf_dump_emit_struct_def(d, id, t, lvl);
-			else
+			} else if (decls->cnt == 0 && !fname[0] && d->force_anon_struct_members) {
+				/* anonymize nested struct and emit it */
+				btf_dump_set_anon_type(d, id, true);
+				btf_dump_emit_struct_def(d, id, t, lvl);
+				btf_dump_set_anon_type(d, id, false);
+			} else {
 				btf_dump_emit_struct_fwd(d, id, t);
+			}
 			break;
 		case BTF_KIND_ENUM:
 		case BTF_KIND_ENUM64:
@@ -1661,6 +1673,13 @@ static size_t btf_dump_name_dups(struct btf_dump *d, struct hashmap *name_map,
 	return dup_cnt;
 }
 
+static void btf_dump_set_anon_type(struct btf_dump *d, __u32 id, bool anon)
+{
+	struct btf_dump_type_aux_state *s = &d->type_states[id];
+
+	s->anonymize = anon;
+}
+
 static const char *btf_dump_resolve_name(struct btf_dump *d, __u32 id,
 					 struct hashmap *name_map)
 {
@@ -1670,7 +1689,7 @@ static const char *btf_dump_resolve_name(struct btf_dump *d, __u32 id,
 	const char **cached_name = &d->cached_names[id];
 	size_t dup_cnt;
 
-	if (t->name_off == 0)
+	if (t->name_off == 0 || s->anonymize)
 		return "";
 
 	if (s->name_resolved)

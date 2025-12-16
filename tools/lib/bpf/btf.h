@@ -285,8 +285,31 @@ struct btf_dump;
 
 struct btf_dump_opts {
 	size_t sz;
+	/* when a struct declares another struct within it without a
+	 * member name, force it to be an anonymous nested struct;
+	 * for example instead of
+	 *
+	 * struct bar {
+	 *	int baz;
+	 * };
+	 * struct foo {
+	 *	struct bar;
+	 *	...
+	 * };
+	 *
+	 * use
+	 *
+	 * struct foo {
+	 *	struct {
+	 *		int baz;
+	 *	};
+	 * };
+	 *
+	 * This is needed for compilation without -fms-extension .
+	 */
+	bool force_anon_struct_members;
 };
-#define btf_dump_opts__last_field sz
+#define btf_dump_opts__last_field force_anon_struct_members
 
 typedef void (*btf_dump_printf_fn_t)(void *ctx, const char *fmt, va_list args);
 
