@@ -771,11 +771,13 @@ static struct sort_datum *sort_btf_c(const struct btf *btf)
 static int dump_btf_c(const struct btf *btf,
 		      __u32 *root_type_ids, int root_type_cnt, bool sort_dump)
 {
+	DECLARE_LIBBPF_OPTS(btf_dump_opts, opts,
+			    .force_anon_struct_members = true);
 	struct sort_datum *datums = NULL;
 	struct btf_dump *d;
 	int err = 0, i;
 
-	d = btf_dump__new(btf, btf_dump_printf, NULL, NULL);
+	d = btf_dump__new(btf, btf_dump_printf, NULL, &opts);
 	if (!d)
 		return -errno;
 
