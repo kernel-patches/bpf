@@ -450,6 +450,7 @@ __cpu_map_entry_alloc(struct bpf_map *map, struct bpf_cpumap_val *value,
 
 	for_each_possible_cpu(i) {
 		bq = per_cpu_ptr(rcpu->bulkq, i);
+		INIT_LIST_HEAD(&bq->flush_node);
 		bq->obj = rcpu;
 	}
 
@@ -742,7 +743,8 @@ static void bq_flush_to_queue(struct xdp_bulk_queue *bq)
 	bq->count = 0;
 	spin_unlock(&q->producer_lock);
 
-	__list_del_clearprev(&bq->flush_node);
+	if (bq->flush_node.prev)
+		__list_del_clearprev(&bq->flush_node);
 
 	/* Feedback loop via tracepoints */
 	trace_xdp_cpumap_enqueue(rcpu->map_id, processed, drops, to_cpu);

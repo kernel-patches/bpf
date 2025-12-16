@@ -428,7 +428,8 @@ void __dev_flush(struct list_head *flush_list)
 		bq_xmit_all(bq, XDP_XMIT_FLUSH);
 		bq->dev_rx = NULL;
 		bq->xdp_prog = NULL;
-		__list_del_clearprev(&bq->flush_node);
+		if (bq->flush_node.prev)
+			__list_del_clearprev(&bq->flush_node);
 	}
 }
 
