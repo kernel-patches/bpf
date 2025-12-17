@@ -64,7 +64,7 @@ static noinline int nft_socket_cgroup_subtree_level(void)
 	if (IS_ERR(cgrp))
 		return PTR_ERR(cgrp);
 
-	level = cgrp->level;
+	level = cgroup_level(cgrp);
 
 	cgroup_put(cgrp);
 

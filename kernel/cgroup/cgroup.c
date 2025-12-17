@@ -5843,7 +5843,7 @@ static struct cgroup *cgroup_create(struct cgroup *parent, const char *name,
 	struct cgroup_root *root = parent->root;
 	struct cgroup *cgrp, *tcgrp;
 	struct kernfs_node *kn;
-	int i, level = parent->level + 1;
+	int i, level = cgroup_level(parent) + 1;
 	int ret;
 
 	/* allocate the cgroup and its ID, 0 is reserved for the root */
@@ -5884,7 +5884,7 @@ static struct cgroup *cgroup_create(struct cgroup *parent, const char *name,
 		goto out_stat_exit;
 
 	for (tcgrp = cgrp; tcgrp; tcgrp = cgroup_parent(tcgrp))
-		cgrp->ancestors[tcgrp->level] = tcgrp;
+		cgrp->ancestors[cgroup_level(tcgrp)] = tcgrp;
 
 	/*
 	 * New cgroup inherits effective freeze counter, and

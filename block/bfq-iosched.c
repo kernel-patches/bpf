@@ -601,7 +601,7 @@ retry:
 		goto out;
 
 	/* +1 for bfqq entity, root cgroup not included */
-	depth = bfqg_to_blkg(bfqq_group(bfqq))->blkcg->css.cgroup->level + 1;
+	depth = cgroup_level(bfqg_to_blkg(bfqq_group(bfqq))->blkcg->css.cgroup) + 1;
 	if (depth > alloc_depth) {
 		spin_unlock_irq(&bfqd->lock);
 		if (entities != inline_entities)

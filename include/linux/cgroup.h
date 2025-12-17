@@ -526,6 +526,18 @@ static inline struct cgroup *cgroup_parent(struct cgroup *cgrp)
 }
 
 /**
+ * cgroup_level - cgroup depth
+ * @cgrp: cgroup
+ *
+ * The depth this cgroup is at.  The root is at depth zero and each step down
+ * the hierarchy increments the level.
+ */
+static inline int cgroup_level(struct cgroup *cgrp)
+{
+	return cgrp->level;
+}
+
+/**
  * cgroup_is_descendant - test ancestry
  * @cgrp: the cgroup to be tested
  * @ancestor: possible ancestor of @cgrp
@@ -537,9 +549,9 @@ static inline struct cgroup *cgroup_parent(struct cgroup *cgrp)
 static inline bool cgroup_is_descendant(struct cgroup *cgrp,
 					struct cgroup *ancestor)
 {
-	if (cgrp->root != ancestor->root || cgrp->level < ancestor->level)
+	if (cgrp->root != ancestor->root || cgroup_level(cgrp) < cgroup_level(ancestor))
 		return false;
-	return cgrp->ancestors[ancestor->level] == ancestor;
+	return cgrp->ancestors[cgroup_level(ancestor)] == ancestor;
 }
 
 /**
@@ -556,7 +568,7 @@ static inline bool cgroup_is_descendant(struct cgroup *cgrp,
 static inline struct cgroup *cgroup_ancestor(struct cgroup *cgrp,
 					     int ancestor_level)
 {
-	if (ancestor_level < 0 || ancestor_level > cgrp->level)
+	if (ancestor_level < 0 || ancestor_level > cgroup_level(cgrp))
 		return NULL;
 	return cgrp->ancestors[ancestor_level];
 }

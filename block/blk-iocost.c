@@ -2962,7 +2962,7 @@ static void ioc_cpd_free(struct blkcg_policy_data *cpd)
 static struct blkg_policy_data *ioc_pd_alloc(struct gendisk *disk,
 		struct blkcg *blkcg, gfp_t gfp)
 {
-	int levels = blkcg->css.cgroup->level + 1;
+	int levels = cgroup_level(blkcg->css.cgroup) + 1;
 	struct ioc_gq *iocg;
 
 	iocg = kzalloc_node(struct_size(iocg, ancestors, levels), gfp,
@@ -3003,7 +3003,7 @@ static void ioc_pd_init(struct blkg_policy_data *pd)
 	init_waitqueue_head(&iocg->waitq);
 	hrtimer_setup(&iocg->waitq_timer, iocg_waitq_timer_fn, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
 
-	iocg->level = blkg->blkcg->css.cgroup->level;
+	iocg->level = cgroup_level(blkg->blkcg->css.cgroup)
 
 	for (tblkg = blkg; tblkg; tblkg = tblkg->parent) {
 		struct ioc_gq *tiocg = blkg_to_iocg(tblkg);

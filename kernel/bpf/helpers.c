@@ -2577,7 +2577,7 @@ __bpf_kfunc struct cgroup *bpf_cgroup_ancestor(struct cgroup *cgrp, int level)
 {
 	struct cgroup *ancestor;
 
-	if (level > cgrp->level || level < 0)
+	if (level > cgroup_level(cgrp) || level < 0)
 		return NULL;
 
 	/* cgrp's refcnt could be 0 here, but ancestors can still be accessed */
