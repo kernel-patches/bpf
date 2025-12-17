@@ -3524,6 +3524,9 @@ static int __init smc_init(void)
 		goto out_pernet_subsys_stat;
 	smc_clc_init();
 
+	INIT_HLIST_HEAD(&smc_v4_hashinfo.ht);
+	INIT_HLIST_HEAD(&smc_v6_hashinfo.ht);
+
 	rc = smc_nl_init();
 	if (rc)
 		goto out_ism;
@@ -3581,8 +3584,6 @@ static int __init smc_init(void)
 		pr_err("%s: sock_register fails with %d\n", __func__, rc);
 		goto out_proto6;
 	}
-	INIT_HLIST_HEAD(&smc_v4_hashinfo.ht);
-	INIT_HLIST_HEAD(&smc_v6_hashinfo.ht);
 
 	rc = smc_ib_register_client();
 	if (rc) {
