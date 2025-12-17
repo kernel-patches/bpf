@@ -592,6 +592,8 @@ static int bpf_freplace_check_tgt_prog(struct bpf_prog *tgt_prog)
 	return 0;
 }
 
+#define BPF_TRAMP_MAX_COOKIES 4
+
 static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 				      struct bpf_trampoline *tr,
 				      struct bpf_prog *tgt_prog)
@@ -599,7 +601,7 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 	enum bpf_tramp_prog_type kind, okind;
 	struct bpf_tramp_link *link_existing;
 	struct bpf_fsession_link *fslink;
-	int err = 0;
+	int err = 0, cookie_cnt;
 	int cnt = 0, i;
 
 	okind = kind = bpf_attach_type_to_tramp(link->link.prog);
@@ -640,6 +642,12 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 		/* prog already linked */
 		return -EBUSY;
 	}
+	cookie_cnt = tr->cookie_cnt;
+	if (link->link.prog->call_session_cookie) {
+		if (cookie_cnt >= BPF_TRAMP_MAX_COOKIES)
+			return -E2BIG;
+		cookie_cnt++;
+	}
 
 	hlist_add_head(&link->tramp_hlist, &tr->progs_hlist[kind]);
 	tr->progs_cnt[kind]++;
@@ -657,6 +665,8 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 		}
 		hlist_del_init(&link->tramp_hlist);
 		tr->progs_cnt[kind]--;
+	} else {
+		tr->cookie_cnt = cookie_cnt;
 	}
 	return err;
 }
@@ -696,6 +706,8 @@ static int __bpf_trampoline_unlink_prog(struct bpf_tramp_link *link,
 		hlist_del_init(&fslink->fexit.tramp_hlist);
 		tr->progs_cnt[BPF_TRAMP_FEXIT]--;
 		kind = BPF_TRAMP_FENTRY;
+		if (link->link.prog->call_session_cookie)
+			tr->cookie_cnt--;
 	}
 	hlist_del_init(&link->tramp_hlist);
 	tr->progs_cnt[kind]--;
