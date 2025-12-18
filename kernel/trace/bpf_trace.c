@@ -2291,79 +2291,12 @@ struct bpf_kprobe_multi_run_ctx {
 	unsigned long entry_ip;
 };
 
-struct user_syms {
-	const char **syms;
-	char *buf;
-};
-
-#ifndef CONFIG_HAVE_FTRACE_REGS_HAVING_PT_REGS
-static DEFINE_PER_CPU(struct pt_regs, bpf_kprobe_multi_pt_regs);
-#define bpf_kprobe_multi_pt_regs_ptr()	this_cpu_ptr(&bpf_kprobe_multi_pt_regs)
-#else
-#define bpf_kprobe_multi_pt_regs_ptr()	(NULL)
-#endif
-
-static unsigned long ftrace_get_entry_ip(unsigned long fentry_ip)
-{
-	unsigned long ip = ftrace_get_symaddr(fentry_ip);
-
-	return ip ? : fentry_ip;
-}
-
-static int copy_user_syms(struct user_syms *us, unsigned long __user *usyms, u32 cnt)
-{
-	unsigned long __user usymbol;
-	const char **syms = NULL;
-	char *buf = NULL, *p;
-	int err = -ENOMEM;
-	unsigned int i;
-
-	syms = kvmalloc_array(cnt, sizeof(*syms), GFP_KERNEL);
-	if (!syms)
-		goto error;
-
-	buf = kvmalloc_array(cnt, KSYM_NAME_LEN, GFP_KERNEL);
-	if (!buf)
-		goto error;
-
-	for (p = buf, i = 0; i < cnt; i++) {
-		if (__get_user(usymbol, usyms + i)) {
-			err = -EFAULT;
-			goto error;
-		}
-		err = strncpy_from_user(p, (const char __user *) usymbol, KSYM_NAME_LEN);
-		if (err == KSYM_NAME_LEN)
-			err = -E2BIG;
-		if (err < 0)
-			goto error;
-		syms[i] = p;
-		p += err + 1;
-	}
-
-	us->syms = syms;
-	us->buf = buf;
-	return 0;
-
-error:
-	if (err) {
-		kvfree(syms);
-		kvfree(buf);
-	}
-	return err;
-}
-
 static void kprobe_multi_put_modules(struct module **mods, u32 cnt)
 {
 	u32 i;
 
 	for (i = 0; i < cnt; i++)
 		module_put(mods[i]);
-}
-
-static void free_user_syms(struct user_syms *us)
-{
-	kvfree(us->syms);
-	kvfree(us->buf);
 }
 
 static void bpf_kprobe_multi_link_release(struct bpf_link *link)
@@ -2469,57 +2402,6 @@ static const struct bpf_link_ops bpf_kprobe_multi_link_lops = {
 #endif
 };
 
-static void bpf_kprobe_multi_cookie_swap(void *a, void *b, int size, const void *priv)
-{
-	const struct bpf_kprobe_multi_link *link = priv;
-	unsigned long *addr_a = a, *addr_b = b;
-	u64 *cookie_a, *cookie_b;
-
-	cookie_a = link->cookies + (addr_a - link->addrs);
-	cookie_b = link->cookies + (addr_b - link->addrs);
-
-	/* swap addr_a/addr_b and cookie_a/cookie_b values */
-	swap(*addr_a, *addr_b);
-	swap(*cookie_a, *cookie_b);
-}
-
-static int bpf_kprobe_multi_addrs_cmp(const void *a, const void *b)
-{
-	const unsigned long *addr_a = a, *addr_b = b;
-
-	if (*addr_a == *addr_b)
-		return 0;
-	return *addr_a < *addr_b ? -1 : 1;
-}
-
-static int bpf_kprobe_multi_cookie_cmp(const void *a, const void *b, const void *priv)
-{
-	return bpf_kprobe_multi_addrs_cmp(a, b);
-}
-
-static u64 bpf_kprobe_multi_cookie(struct bpf_run_ctx *ctx)
-{
-	struct bpf_kprobe_multi_run_ctx *run_ctx;
-	struct bpf_kprobe_multi_link *link;
-	u64 *cookie, entry_ip;
-	unsigned long *addr;
-
-	if (WARN_ON_ONCE(!ctx))
-		return 0;
-	run_ctx = container_of(current->bpf_ctx, struct bpf_kprobe_multi_run_ctx,
-			       session_ctx.run_ctx);
-	link = run_ctx->link;
-	if (!link->cookies)
-		return 0;
-	entry_ip = run_ctx->entry_ip;
-	addr = bsearch(&entry_ip, link->addrs, link->cnt, sizeof(entry_ip),
-		       bpf_kprobe_multi_addrs_cmp);
-	if (!addr)
-		return 0;
-	cookie = link->cookies + (addr - link->addrs);
-	return *cookie;
-}
-
 static u64 bpf_kprobe_multi_entry_ip(struct bpf_run_ctx *ctx)
 {
 	struct bpf_kprobe_multi_run_ctx *run_ctx;
@@ -2527,104 +2409,6 @@ static u64 bpf_kprobe_multi_entry_ip(struct bpf_run_ctx *ctx)
 	run_ctx = container_of(current->bpf_ctx, struct bpf_kprobe_multi_run_ctx,
 			       session_ctx.run_ctx);
 	return run_ctx->entry_ip;
-}
-
-static __always_inline int
-kprobe_multi_link_prog_run(struct bpf_kprobe_multi_link *link,
-			   unsigned long entry_ip, struct ftrace_regs *fregs,
-			   bool is_return, void *data)
-{
-	struct bpf_kprobe_multi_run_ctx run_ctx = {
-		.session_ctx = {
-			.is_return = is_return,
-			.data = data,
-		},
-		.link = link,
-		.entry_ip = entry_ip,
-	};
-	struct bpf_run_ctx *old_run_ctx;
-	struct pt_regs *regs;
-	int err;
-
-	/*
-	 * graph tracer framework ensures we won't migrate, so there is no need
-	 * to use migrate_disable for bpf_prog_run again. The check here just for
-	 * __this_cpu_inc_return.
-	 */
-	cant_sleep();
-
-	if (unlikely(__this_cpu_inc_return(bpf_prog_active) != 1)) {
-		bpf_prog_inc_misses_counter(link->link.prog);
-		err = 1;
-		goto out;
-	}
-
-	rcu_read_lock();
-	regs = ftrace_partial_regs(fregs, bpf_kprobe_multi_pt_regs_ptr());
-	old_run_ctx = bpf_set_run_ctx(&run_ctx.session_ctx.run_ctx);
-	err = bpf_prog_run(link->link.prog, regs);
-	bpf_reset_run_ctx(old_run_ctx);
-	rcu_read_unlock();
-
- out:
-	__this_cpu_dec(bpf_prog_active);
-	return err;
-}
-
-static int
-kprobe_multi_link_handler(struct fprobe *fp, unsigned long fentry_ip,
-			  unsigned long ret_ip, struct ftrace_regs *fregs,
-			  void *data)
-{
-	struct bpf_kprobe_multi_link *link;
-	int err;
-
-	link = container_of(fp, struct bpf_kprobe_multi_link, fp);
-	err = kprobe_multi_link_prog_run(link, ftrace_get_entry_ip(fentry_ip),
-					 fregs, false, data);
-	return is_kprobe_session(link->link.prog) ? err : 0;
-}
-
-static void
-kprobe_multi_link_exit_handler(struct fprobe *fp, unsigned long fentry_ip,
-			       unsigned long ret_ip, struct ftrace_regs *fregs,
-			       void *data)
-{
-	struct bpf_kprobe_multi_link *link;
-
-	link = container_of(fp, struct bpf_kprobe_multi_link, fp);
-	kprobe_multi_link_prog_run(link, ftrace_get_entry_ip(fentry_ip),
-				   fregs, true, data);
-}
-
-static int symbols_cmp_r(const void *a, const void *b, const void *priv)
-{
-	const char **str_a = (const char **) a;
-	const char **str_b = (const char **) b;
-
-	return strcmp(*str_a, *str_b);
-}
-
-struct multi_symbols_sort {
-	const char **funcs;
-	u64 *cookies;
-};
-
-static void symbols_swap_r(void *a, void *b, int size, const void *priv)
-{
-	const struct multi_symbols_sort *data = priv;
-	const char **name_a = a, **name_b = b;
-
-	swap(*name_a, *name_b);
-
-	/* If defined, swap also related cookies. */
-	if (data->cookies) {
-		u64 *cookie_a, *cookie_b;
-
-		cookie_a = data->cookies + (name_a - data->funcs);
-		cookie_b = data->cookies + (name_b - data->funcs);
-		swap(*cookie_a, *cookie_b);
-	}
 }
 
 struct modules_array {
@@ -2701,6 +2485,222 @@ static int get_modules_for_addrs(struct module ***mods, unsigned long *addrs, u3
 	/* or number of modules found if everything is ok. */
 	*mods = arr.mods;
 	return arr.mods_cnt;
+}
+
+struct user_syms {
+	const char **syms;
+	char *buf;
+};
+
+#ifndef CONFIG_HAVE_FTRACE_REGS_HAVING_PT_REGS
+static DEFINE_PER_CPU(struct pt_regs, bpf_kprobe_multi_pt_regs);
+#define bpf_kprobe_multi_pt_regs_ptr()	this_cpu_ptr(&bpf_kprobe_multi_pt_regs)
+#else
+#define bpf_kprobe_multi_pt_regs_ptr()	(NULL)
+#endif
+
+static unsigned long ftrace_get_entry_ip(unsigned long fentry_ip)
+{
+	unsigned long ip = ftrace_get_symaddr(fentry_ip);
+
+	return ip ? : fentry_ip;
+}
+
+static int copy_user_syms(struct user_syms *us, unsigned long __user *usyms, u32 cnt)
+{
+	unsigned long __user usymbol;
+	const char **syms = NULL;
+	char *buf = NULL, *p;
+	int err = -ENOMEM;
+	unsigned int i;
+
+	syms = kvmalloc_array(cnt, sizeof(*syms), GFP_KERNEL);
+	if (!syms)
+		goto error;
+
+	buf = kvmalloc_array(cnt, KSYM_NAME_LEN, GFP_KERNEL);
+	if (!buf)
+		goto error;
+
+	for (p = buf, i = 0; i < cnt; i++) {
+		if (__get_user(usymbol, usyms + i)) {
+			err = -EFAULT;
+			goto error;
+		}
+		err = strncpy_from_user(p, (const char __user *) usymbol, KSYM_NAME_LEN);
+		if (err == KSYM_NAME_LEN)
+			err = -E2BIG;
+		if (err < 0)
+			goto error;
+		syms[i] = p;
+		p += err + 1;
+	}
+
+	us->syms = syms;
+	us->buf = buf;
+	return 0;
+
+error:
+	if (err) {
+		kvfree(syms);
+		kvfree(buf);
+	}
+	return err;
+}
+
+static void bpf_kprobe_multi_cookie_swap(void *a, void *b, int size, const void *priv)
+{
+	const struct bpf_kprobe_multi_link *link = priv;
+	unsigned long *addr_a = a, *addr_b = b;
+	u64 *cookie_a, *cookie_b;
+
+	cookie_a = link->cookies + (addr_a - link->addrs);
+	cookie_b = link->cookies + (addr_b - link->addrs);
+
+	/* swap addr_a/addr_b and cookie_a/cookie_b values */
+	swap(*addr_a, *addr_b);
+	swap(*cookie_a, *cookie_b);
+}
+
+static int bpf_kprobe_multi_addrs_cmp(const void *a, const void *b)
+{
+	const unsigned long *addr_a = a, *addr_b = b;
+
+	if (*addr_a == *addr_b)
+		return 0;
+	return *addr_a < *addr_b ? -1 : 1;
+}
+
+static int bpf_kprobe_multi_cookie_cmp(const void *a, const void *b, const void *priv)
+{
+	return bpf_kprobe_multi_addrs_cmp(a, b);
+}
+
+static u64 bpf_kprobe_multi_cookie(struct bpf_run_ctx *ctx)
+{
+	struct bpf_kprobe_multi_run_ctx *run_ctx;
+	struct bpf_kprobe_multi_link *link;
+	u64 *cookie, entry_ip;
+	unsigned long *addr;
+
+	if (WARN_ON_ONCE(!ctx))
+		return 0;
+	run_ctx = container_of(current->bpf_ctx, struct bpf_kprobe_multi_run_ctx,
+			       session_ctx.run_ctx);
+	link = run_ctx->link;
+	if (!link->cookies)
+		return 0;
+	entry_ip = run_ctx->entry_ip;
+	addr = bsearch(&entry_ip, link->addrs, link->cnt, sizeof(entry_ip),
+		       bpf_kprobe_multi_addrs_cmp);
+	if (!addr)
+		return 0;
+	cookie = link->cookies + (addr - link->addrs);
+	return *cookie;
+}
+
+static __always_inline int
+kprobe_multi_link_prog_run(struct bpf_kprobe_multi_link *link,
+			   unsigned long entry_ip, struct ftrace_regs *fregs,
+			   bool is_return, void *data)
+{
+	struct bpf_kprobe_multi_run_ctx run_ctx = {
+		.session_ctx = {
+			.is_return = is_return,
+			.data = data,
+		},
+		.link = link,
+		.entry_ip = entry_ip,
+	};
+	struct bpf_run_ctx *old_run_ctx;
+	struct pt_regs *regs;
+	int err;
+
+	/*
+	 * graph tracer framework ensures we won't migrate, so there is no need
+	 * to use migrate_disable for bpf_prog_run again. The check here just for
+	 * __this_cpu_inc_return.
+	 */
+	cant_sleep();
+
+	if (unlikely(__this_cpu_inc_return(bpf_prog_active) != 1)) {
+		bpf_prog_inc_misses_counter(link->link.prog);
+		err = 1;
+		goto out;
+	}
+
+	rcu_read_lock();
+	regs = ftrace_partial_regs(fregs, bpf_kprobe_multi_pt_regs_ptr());
+	old_run_ctx = bpf_set_run_ctx(&run_ctx.session_ctx.run_ctx);
+	err = bpf_prog_run(link->link.prog, regs);
+	bpf_reset_run_ctx(old_run_ctx);
+	rcu_read_unlock();
+
+ out:
+	__this_cpu_dec(bpf_prog_active);
+	return err;
+}
+
+static int
+kprobe_multi_link_handler(struct fprobe *fp, unsigned long fentry_ip,
+			  unsigned long ret_ip, struct ftrace_regs *fregs,
+			  void *data)
+{
+	struct bpf_kprobe_multi_link *link;
+	int err;
+
+	link = container_of(fp, struct bpf_kprobe_multi_link, fp);
+	err = kprobe_multi_link_prog_run(link, ftrace_get_entry_ip(fentry_ip),
+					 fregs, false, data);
+	return is_kprobe_session(link->link.prog) ? err : 0;
+}
+
+static void
+kprobe_multi_link_exit_handler(struct fprobe *fp, unsigned long fentry_ip,
+			       unsigned long ret_ip, struct ftrace_regs *fregs,
+			       void *data)
+{
+	struct bpf_kprobe_multi_link *link;
+
+	link = container_of(fp, struct bpf_kprobe_multi_link, fp);
+	kprobe_multi_link_prog_run(link, ftrace_get_entry_ip(fentry_ip),
+				   fregs, true, data);
+}
+
+static void free_user_syms(struct user_syms *us)
+{
+	kvfree(us->syms);
+	kvfree(us->buf);
+}
+
+static int symbols_cmp_r(const void *a, const void *b, const void *priv)
+{
+	const char **str_a = (const char **) a;
+	const char **str_b = (const char **) b;
+
+	return strcmp(*str_a, *str_b);
+}
+
+struct multi_symbols_sort {
+	const char **funcs;
+	u64 *cookies;
+};
+
+static void symbols_swap_r(void *a, void *b, int size, const void *priv)
+{
+	const struct multi_symbols_sort *data = priv;
+	const char **name_a = a, **name_b = b;
+
+	swap(*name_a, *name_b);
+
+	/* If defined, swap also related cookies. */
+	if (data->cookies) {
+		u64 *cookie_a, *cookie_b;
+
+		cookie_a = data->cookies + (name_a - data->funcs);
+		cookie_b = data->cookies + (name_b - data->funcs);
+		swap(*cookie_a, *cookie_b);
+	}
 }
 
 static int addrs_check_error_injection_list(unsigned long *addrs, u32 cnt)
