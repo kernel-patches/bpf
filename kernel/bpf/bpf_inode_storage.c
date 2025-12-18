@@ -69,6 +69,7 @@ void bpf_inode_storage_free(struct inode *inode)
 		goto out;
 
 	bpf_local_storage_destroy(local_storage);
+	RCU_INIT_POINTER(bsb->storage, NULL);
 out:
 	rcu_read_unlock_migrate();
 }

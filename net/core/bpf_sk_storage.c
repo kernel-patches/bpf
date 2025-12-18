@@ -47,13 +47,18 @@ static int bpf_sk_storage_del(struct sock *sk, struct bpf_map *map)
 void bpf_sk_storage_free(struct sock *sk)
 {
 	struct bpf_local_storage *sk_storage;
+	u32 uncharge;
 
 	rcu_read_lock_dont_migrate();
 	sk_storage = rcu_dereference(sk->sk_bpf_storage);
 	if (!sk_storage)
 		goto out;
 
-	bpf_local_storage_destroy(sk_storage);
+	uncharge = bpf_local_storage_destroy(sk_storage);
+	if (uncharge)
+		atomic_sub(uncharge, &sk->sk_omem_alloc);
+
+	RCU_INIT_POINTER(sk->sk_bpf_storage, NULL);
 out:
 	rcu_read_unlock_migrate();
 }
