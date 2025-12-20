@@ -1384,12 +1384,14 @@ struct bpf_prog *bpf_prog_ksym_find(unsigned long addr);
 
 static inline int
 bpf_address_lookup(unsigned long addr, unsigned long *size,
-		   unsigned long *off, char **modname, char *sym)
+		   unsigned long *off, char **modname, const unsigned char **modbuildid, char *sym)
 {
 	int ret = __bpf_address_lookup(addr, size, off, sym);
 
 	if (ret && modname)
 		*modname = NULL;
+	if (ret && modbuildid)
+		*modbuildid = NULL;
 	return ret;
 }
 
@@ -1455,7 +1457,7 @@ static inline struct bpf_prog *bpf_prog_ksym_find(unsigned long addr)
 
 static inline int
 bpf_address_lookup(unsigned long addr, unsigned long *size,
-		   unsigned long *off, char **modname, char *sym)
+		   unsigned long *off, char **modname, const unsigned char **modbuildid, char *sym)
 {
 	return 0;
 }
