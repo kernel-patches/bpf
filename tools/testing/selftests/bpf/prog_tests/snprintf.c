@@ -33,6 +33,9 @@
 
 #define EXP_NO_BUF_RET 29
 
+#define EXP_STACK_OUT  "stack_out"
+#define EXP_STACK_RET  sizeof(EXP_STACK_OUT)
+
 static void test_snprintf_positive(void)
 {
 	char exp_addr_out[] = EXP_ADDR_OUT;
@@ -78,6 +81,9 @@ static void test_snprintf_positive(void)
 	ASSERT_EQ(skel->bss->noarg_ret, EXP_NO_ARG_RET, "no_arg_ret");
 
 	ASSERT_EQ(skel->bss->nobuf_ret, EXP_NO_BUF_RET, "no_buf_ret");
+
+	ASSERT_EQ(skel->bss->stack_ret, EXP_STACK_RET, "stack_ret");
+	ASSERT_STREQ(skel->bss->stack_out, EXP_STACK_OUT, "stack_out");
 
 cleanup:
 	test_snprintf__destroy(skel);

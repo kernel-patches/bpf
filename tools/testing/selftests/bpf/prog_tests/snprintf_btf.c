@@ -55,6 +55,9 @@ void serial_test_snprintf_btf(void)
 		  bss->ran_subtests))
 		goto cleanup;
 
+	if (!ASSERT_EQ(bss->stack_out_test_passed, 1, "stack output test failed"))
+		goto cleanup;
+
 cleanup:
 	netif_receive_skb__destroy(skel);
 }

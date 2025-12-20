@@ -32,6 +32,9 @@ long noarg_ret = 0;
 
 long nobuf_ret = 0;
 
+char stack_out[64] = {};
+long stack_ret = 0;
+
 extern const void schedule __ksym;
 
 SEC("raw_tp/sys_enter")
@@ -42,6 +45,7 @@ int handler(const void *ctx)
 	const __u8 ex_ipv6[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
 	static const char str1[] = "str1";
 	static const char longstr[] = "longstr";
+	char buf[64] = {};
 
 	if ((int)bpf_get_current_pid_tgid() != pid)
 		return 0;
@@ -70,6 +74,14 @@ int handler(const void *ctx)
 	noarg_ret = BPF_SNPRINTF(noarg_out, sizeof(noarg_out), "simple case");
 	/* No buffer */
 	nobuf_ret = BPF_SNPRINTF(NULL, 0, "only interested in length %d", 60);
+
+	/* Write to a buffer on the stack */
+	stack_ret = BPF_SNPRINTF(buf, sizeof(buf), "stack_out");
+    /* The condition is necessary to check if the verifier
+     * correctly marks the stack memory as written.
+     */
+	if (buf[0] != '\0')
+		__builtin_memcpy(stack_out, buf, 64);
 
 	return 0;
 }

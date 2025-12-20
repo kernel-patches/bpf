@@ -12,9 +12,11 @@
 long ret = 0;
 int num_subtests = 0;
 int ran_subtests = 0;
+int stack_out_test_passed = 0;
 bool skip = false;
 
-#define STRSIZE			2048
+#define STRSIZE 2048
+#define STACK_STRSIZE 64
 #define EXPECTED_STRSIZE	256
 
 #if defined(bpf_target_s390)
@@ -98,6 +100,7 @@ int BPF_PROG(trace_netif_receive_skb, struct sk_buff *skb)
 	__u32 key = 0;
 	int i, __ret;
 	char *str;
+	char stack_out[STACK_STRSIZE] = { };
 
 #if __has_builtin(__builtin_btf_type_id)
 	str = bpf_map_lookup_elem(&strdata, &key);
@@ -123,6 +126,13 @@ int BPF_PROG(trace_netif_receive_skb, struct sk_buff *skb)
 			   (unsigned long long)BADPTR, __ret);
 		ret = -ERANGE;
 	}
+
+	/* Check when writing to a buffer on the stack */
+	p.type_id = bpf_core_type_id_kernel(struct sk_buff);
+	p.ptr = skb;
+	ret = bpf_snprintf_btf(stack_out, STACK_STRSIZE, &p, sizeof(p), 0);
+	if (ret >= 0 && stack_out[0] != '\0')
+		stack_out_test_passed = 1;
 
 	/* Verify type display for various types. */
 
@@ -242,6 +252,7 @@ int BPF_PROG(trace_netif_receive_skb, struct sk_buff *skb)
 	TEST_BTF(str, struct bpf_insn, BTF_F_NONAME, "{1,0x2,0x3,4,5,}",
 		 {.code = 1, .dst_reg = 0x2, .src_reg = 0x3, .off = 4,
 		  .imm = 5,});
+
 #else
 	skip = true;
 #endif

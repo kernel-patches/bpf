@@ -87,13 +87,13 @@ void test_get_stack_raw_tp(void)
 	const char *file = "./test_get_stack_rawtp.bpf.o";
 	const char *file_err = "./test_get_stack_rawtp_err.bpf.o";
 	const char *prog_name = "bpf_prog1";
-	int i, err, prog_fd, exp_cnt = MAX_CNT_RAWTP;
+	int i, err, prog_fd, exp_cnt = MAX_CNT_RAWTP, key = 0, valid_top_stack = 0;
 	struct perf_buffer *pb = NULL;
 	struct bpf_link *link = NULL;
 	struct timespec tv = {0, 10};
 	struct bpf_program *prog;
 	struct bpf_object *obj;
-	struct bpf_map *map;
+	struct bpf_map *map, *bss_map;
 	cpu_set_t cpu_set;
 
 	err = bpf_prog_test_load(file_err, BPF_PROG_TYPE_RAW_TRACEPOINT, &obj, &prog_fd);
@@ -134,6 +134,17 @@ void test_get_stack_raw_tp(void)
 	/* trigger some syscall action */
 	for (i = 0; i < MAX_CNT_RAWTP; i++)
 		nanosleep(&tv, NULL);
+
+	bss_map = bpf_object__find_map_by_name(obj, ".bss");
+	if (CHECK(!bss_map, "find .bss map", "not found\n"))
+		goto close_prog;
+
+	err = bpf_map_lookup_elem(bpf_map__fd(bss_map), &key, &valid_top_stack);
+	if (CHECK(err, "lookup .bss", "err %d errno %d\n", err, errno))
+		goto close_prog;
+
+	if (!ASSERT_EQ(valid_top_stack, 1, "valid_top_stack"))
+		goto close_prog;
 
 	while (exp_cnt > 0) {
 		err = perf_buffer__poll(pb, 100);

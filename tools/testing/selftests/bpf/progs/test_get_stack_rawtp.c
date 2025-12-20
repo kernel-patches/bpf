@@ -54,14 +54,17 @@ struct {
 	__type(value, __u64[2 * MAX_STACK_RAWTP]);
 } rawdata_map SEC(".maps");
 
+int valid_top_stack = 0;
+
 SEC("raw_tracepoint/sys_enter")
 int bpf_prog1(void *ctx)
 {
 	int max_len, max_buildid_len, total_size;
 	struct stack_trace_t *data;
-	long usize, ksize;
+	long usize, ksize, top_usize;
 	void *raw_data;
 	__u32 key = 0;
+	__u64 top_user_stack = 0;
 
 	data = bpf_map_lookup_elem(&stackdata_map, &key);
 	if (!data)
@@ -87,6 +90,12 @@ int bpf_prog1(void *ctx)
 	usize = bpf_get_stack(ctx, raw_data, max_len, BPF_F_USER_STACK);
 	if (usize < 0)
 		return 0;
+
+	/* checks if the verifier correctly marks the stack variable as written. */
+	top_usize = bpf_get_stack(ctx, &top_user_stack, sizeof(__u64),
+				   BPF_F_USER_STACK);
+	if (top_usize > 0 && top_user_stack != 0)
+		valid_top_stack = 1;
 
 	ksize = bpf_get_stack(ctx, raw_data + usize, max_len - usize, 0);
 	if (ksize < 0)
