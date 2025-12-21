@@ -15076,6 +15076,218 @@ static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
 	}
 }
 
+static void __scalar32_min_max_join(s32 *res_min, s32 *res_max, s32 x_min, s32 x_max)
+{
+	*res_min = min(*res_min, x_min);
+	*res_max = max(*res_max, x_max);
+}
+
+static void __scalar_min_max_join(s64 *res_min, s64 *res_max, s64 x_min, s64 x_max)
+{
+	*res_min = min(*res_min, x_min);
+	*res_max = max(*res_max, x_max);
+}
+
+static void scalar32_min_max_udiv(struct bpf_reg_state *dst_reg,
+				struct bpf_reg_state *src_reg)
+{
+	u32 *dst_umin = &dst_reg->u32_min_value;
+	u32 *dst_umax = &dst_reg->u32_max_value;
+	u32 umin_val = src_reg->u32_min_value;
+	u32 umax_val = src_reg->u32_max_value;
+
+	if (umin_val == 0) {
+		/* BPF div specification: x / 0 = 0
+		 * 1. If umin_val == umax_val == 0, i.e. divisor is certainly 0,
+		 * then the result must be 0, [a,b] / [0,0] = [0,0].
+		 * 2. If umin_val == 0 && umax_val != 0, then dst_umin = x / 0 = 0,
+		 * dst_umax = dst_umax / 1, remains unchanged, [a,b] / [0,x] = [0,b].
+		 */
+		*dst_umin = 0;
+		if (umax_val == 0)
+			*dst_umax = 0;
+	} else {
+		*dst_umin = *dst_umin / umax_val;
+		*dst_umax = *dst_umax / umin_val;
+	}
+
+	/* Reset signed interval to TOP. */
+	dst_reg->s32_min_value = S32_MIN;
+	dst_reg->s32_max_value = S32_MAX;
+}
+
+static void scalar_min_max_udiv(struct bpf_reg_state *dst_reg,
+				struct bpf_reg_state *src_reg)
+{
+	u64 *dst_umin = &dst_reg->umin_value;
+	u64 *dst_umax = &dst_reg->umax_value;
+	u64 umin_val = src_reg->umin_value;
+	u64 umax_val = src_reg->umax_value;
+
+	if (umin_val == 0) {
+		/* BPF div specification: x / 0 = 0
+		 * 1. If umin_val == umax_val == 0, i.e. divisor is certainly 0,
+		 * then the result must be 0, [a,b] / [0,0] = [0,0].
+		 * 2. If umin_val == 0 && umax_val != 0, then dst_umin = x / 0 = 0,
+		 * dst_umax = dst_umax / 1, remains unchanged, [a,b] / [0,x] = [0,b].
+		 */
+		*dst_umin = 0;
+		if (umax_val == 0)
+			*dst_umax = 0;
+	} else {
+		*dst_umin = *dst_umin / umax_val;
+		*dst_umax = *dst_umax / umin_val;
+	}
+
+	/* Reset signed interval to TOP. */
+	dst_reg->smin_value = S64_MIN;
+	dst_reg->smax_value = S64_MAX;
+}
+
+static s32 __bpf_sdiv32(s32 a, s32 b)
+{
+	/* BPF div specification: x / 0 = 0 */
+	if (unlikely(b == 0))
+		return 0;
+	/* BPF mod specification: S32_MIN / -1 = S32_MIN */
+	if (unlikely(a == S32_MIN && b == -1))
+		return S32_MIN;
+	return a / b;
+}
+
+/* The divisor interval does not cross 0,
+ * i.e. src_min and src_max have same sign.
+ */
+static void __sdiv32_range(s32 dst_min, s32 dst_max, s32 src_min, s32 src_max,
+				s32 *res_min, s32 *res_max)
+{
+	s32 tmp_res[4] = {
+		__bpf_sdiv32(dst_min, src_min),
+		__bpf_sdiv32(dst_min, src_max),
+		__bpf_sdiv32(dst_max, src_min),
+		__bpf_sdiv32(dst_max, src_max)
+	};
+
+	*res_min = min_array(tmp_res, 4);
+	*res_max = max_array(tmp_res, 4);
+}
+
+static void scalar32_min_max_sdiv(struct bpf_reg_state *dst_reg,
+				struct bpf_reg_state *src_reg)
+{
+	u32 *dst_smin = &dst_reg->s32_min_value;
+	u32 *dst_smax = &dst_reg->s32_max_value;
+	u32 smin_val = src_reg->s32_min_value;
+	u32 smax_val = src_reg->s32_max_value;
+	s32 res_min, res_max, tmp_min, tmp_max;
+
+	if (smin_val <= 0 && smax_val >= 0) {
+		/* BPF div specification: x / 0 = 0
+		 * Set initial result to 0, as 0 is in divisor interval.
+		 */
+		res_min = 0;
+		res_max = 0;
+		/* negative divisor interval: [a_min,a_max] / [b_min,-1] */
+		if (smin_val < 0) {
+			__sdiv32_range(*dst_smin, *dst_smax, smin_val, -1,
+					&tmp_min, &tmp_max);
+			__scalar32_min_max_join(&res_min, &res_max, tmp_min, tmp_max);
+		}
+		/* positive divisor interval: [a_min,a_max] / [1,b_max] */
+		if (smax_val > 0) {
+			__sdiv32_range(*dst_smin, *dst_smax, 1, smax_val,
+					&tmp_min, &tmp_max);
+			__scalar32_min_max_join(&res_min, &res_max, tmp_min, tmp_max);
+		}
+	} else {
+		__sdiv32_range(*dst_smin, *dst_smax, smin_val, smax_val,
+			&res_min, &res_max);
+	}
+
+	/* BPF mod specification: S32_MIN / -1 = S32_MIN */
+	if (*dst_smin == S32_MIN && smin_val <= -1 && smax_val >= -1)
+		res_min = S32_MIN;
+
+	*dst_smin = res_min;
+	*dst_smax = res_max;
+
+	/* Reset unsigned interval to TOP. */
+	dst_reg->u32_min_value = 0;
+	dst_reg->u32_max_value = U32_MAX;
+}
+
+static s64 __bpf_sdiv(s64 a, s64 b)
+{
+	/* BPF div specification: x / 0 = 0 */
+	if (unlikely(b == 0))
+		return 0;
+	/* BPF div specification: S64_MIN / -1 = S64_MIN */
+	if (unlikely(a == S64_MIN && b == -1))
+		return S64_MIN;
+	return a / b;
+}
+
+/* The divisor interval does not cross 0,
+ * i.e. src_min and src_max have same sign.
+ */
+static void __sdiv_range(s64 dst_min, s64 dst_max, s64 src_min, s64 src_max,
+				s64 *res_min, s64 *res_max)
+{
+	s64 tmp_res[4] = {
+		__bpf_sdiv(dst_min, src_min),
+		__bpf_sdiv(dst_min, src_max),
+		__bpf_sdiv(dst_max, src_min),
+		__bpf_sdiv(dst_max, src_max)
+	};
+
+	*res_min = min_array(tmp_res, 4);
+	*res_max = max_array(tmp_res, 4);
+}
+
+static void scalar_min_max_sdiv(struct bpf_reg_state *dst_reg,
+				struct bpf_reg_state *src_reg)
+{
+	s64 *dst_smin = &dst_reg->smin_value;
+	s64 *dst_smax = &dst_reg->smax_value;
+	s64 smin_val = src_reg->smin_value;
+	s64 smax_val = src_reg->smax_value;
+	s64 res_min, res_max, tmp_min, tmp_max;
+
+	if (smin_val <= 0 && smax_val >= 0) {
+		/* BPF div specification: x / 0 = 0
+		 * Set initial result to 0, as 0 is in divisor interval.
+		 */
+		res_min = 0;
+		res_max = 0;
+		/* negative divisor interval: [a_min,a_max] / [b_min,-1] */
+		if (smin_val < 0) {
+			__sdiv_range(*dst_smin, *dst_smax, smin_val, -1,
+					&tmp_min, &tmp_max);
+			__scalar_min_max_join(&res_min, &res_max, tmp_min, tmp_max);
+		}
+		/* positive divisor interval: [a_min,a_max] / [1,b_max] */
+		if (smax_val > 0) {
+			__sdiv_range(*dst_smin, *dst_smax, 1, smax_val,
+					&tmp_min, &tmp_max);
+			__scalar_min_max_join(&res_min, &res_max, tmp_min, tmp_max);
+		}
+	} else {
+		__sdiv_range(*dst_smin, *dst_smax, smin_val, smax_val,
+			&res_min, &res_max);
+	}
+
+	/* BPF mod specification: S64_MIN / -1 = S64_MIN */
+	if (*dst_smin == S64_MIN && smin_val <= -1 && smax_val >= -1)
+		res_min = S64_MIN;
+
+	*dst_smin = res_min;
+	*dst_smax = res_max;
+
+	/* Reset unsigned interval to TOP. */
+	dst_reg->umin_value = 0;
+	dst_reg->umax_value = U64_MAX;
+}
+
 static void scalar32_min_max_and(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
@@ -15479,6 +15691,7 @@ static bool is_safe_to_compute_dst_reg_range(struct bpf_insn *insn,
 	case BPF_XOR:
 	case BPF_OR:
 	case BPF_MUL:
+	case BPF_DIV:
 		return true;
 
 	/* Shift operators range is only computable if shift dimension operand
@@ -15504,6 +15717,7 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 				      struct bpf_reg_state src_reg)
 {
 	u8 opcode = BPF_OP(insn->code);
+	s16 off = insn->off;
 	bool alu32 = (BPF_CLASS(insn->code) != BPF_ALU64);
 	int ret;
 
@@ -15554,6 +15768,17 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		dst_reg->var_off = tnum_mul(dst_reg->var_off, src_reg.var_off);
 		scalar32_min_max_mul(dst_reg, &src_reg);
 		scalar_min_max_mul(dst_reg, &src_reg);
+		break;
+	case BPF_DIV:
+		if (off == 1) {
+			dst_reg->var_off = tnum_sdiv(dst_reg->var_off, src_reg.var_off, alu32);
+			scalar32_min_max_sdiv(dst_reg, &src_reg);
+			scalar_min_max_sdiv(dst_reg, &src_reg);
+		} else {
+			dst_reg->var_off = tnum_udiv(dst_reg->var_off, src_reg.var_off);
+			scalar32_min_max_udiv(dst_reg, &src_reg);
+			scalar_min_max_udiv(dst_reg, &src_reg);
+		}
 		break;
 	case BPF_AND:
 		dst_reg->var_off = tnum_and(dst_reg->var_off, src_reg.var_off);
