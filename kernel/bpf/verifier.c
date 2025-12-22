@@ -24892,7 +24892,7 @@ static int compute_live_registers(struct bpf_verifier_env *env)
 		insn_aux[i].live_regs_before = state[i].in;
 
 	if (env->log.level & BPF_LOG_LEVEL2) {
-		verbose(env, "Live regs before insn:\n");
+		verbose(env, "Live regs before insn, pruning points (p), and force checkpoints (P):\n");
 		for (i = 0; i < insn_cnt; ++i) {
 			if (env->insn_aux_data[i].scc)
 				verbose(env, "%3d ", env->insn_aux_data[i].scc);
@@ -24904,7 +24904,12 @@ static int compute_live_registers(struct bpf_verifier_env *env)
 					verbose(env, "%d", j);
 				else
 					verbose(env, ".");
-			verbose(env, " ");
+			if (is_force_checkpoint(env, i))
+				verbose(env, " P ");
+			else if (is_prune_point(env, i))
+				verbose(env, " p ");
+			else
+				verbose(env, "   ");
 			verbose_insn(env, &insns[i]);
 			if (bpf_is_ldimm64(&insns[i]))
 				i++;

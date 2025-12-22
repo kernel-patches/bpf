@@ -136,12 +136,12 @@ static __used __naked void write_first_param(void)
 SEC("socket")
 __log_level(2)
 /* caller_stack_read() function */
-__msg("2: .12345.... (85) call pc+4")
-__msg("5: .12345.... (85) call pc+1")
-__msg("6: 0......... (95) exit")
+__msg("2: .12345.... p (85) call pc+4")
+__msg("5: .12345.... p (85) call pc+1")
+__msg("6: 0......... p (95) exit")
 /* read_first_param() function */
-__msg("7: .1........ (79) r0 = *(u64 *)(r1 +0)")
-__msg("8: 0......... (95) exit")
+__msg("7: .1........ p (79) r0 = *(u64 *)(r1 +0)")
+__msg("8: 0.........   (95) exit")
 /* update for callsite at (2) */
 __msg("(2,7) frame 0 insn 7 +live -8")
 __msg("(2,7) live stack update done in 2 iterations")
@@ -177,10 +177,10 @@ SEC("socket")
 __flag(BPF_F_TEST_STATE_FREQ)
 __log_level(2)
 /* read_first_param2() function */
-__msg(" 9: .1........ (79) r0 = *(u64 *)(r1 +0)")
-__msg("10: .......... (b7) r0 = 0")
-__msg("11: 0......... (05) goto pc+0")
-__msg("12: 0......... (95) exit")
+__msg(" 9: .1........ p (79) r0 = *(u64 *)(r1 +0)")
+__msg("10: ..........   (b7) r0 = 0")
+__msg("11: 0.........   (05) goto pc+0")
+__msg("12: 0......... p (95) exit")
 /*
  * The purpose of the test is to check that checkpoint in
  * read_first_param2() stops path traversal. This will only happen if
