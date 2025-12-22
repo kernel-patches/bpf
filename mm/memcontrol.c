@@ -663,6 +663,11 @@ unsigned long memcg_page_state(struct mem_cgroup *memcg, int idx)
 	return x;
 }
 
+bool memcg_stat_item_valid(int idx)
+{
+	return !BAD_STAT_IDX(memcg_stats_index(idx));
+}
+
 static int memcg_page_state_unit(int item);
 
 /*
@@ -858,6 +863,11 @@ unsigned long memcg_events(struct mem_cgroup *memcg, int event)
 		return 0;
 
 	return READ_ONCE(memcg->vmstats->events[i]);
+}
+
+bool memcg_vm_event_item_valid(enum vm_event_item idx)
+{
+	return !BAD_STAT_IDX(memcg_events_index(idx));
 }
 
 #ifdef CONFIG_MEMCG_V1
