@@ -4338,15 +4338,17 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 
 	if (insn->code == 0)
 		return 0;
-	if (env->log.level & BPF_LOG_LEVEL2) {
-		fmt_reg_mask(env->tmp_str_buf, TMP_STR_BUF_LEN, bt_reg_mask(bt));
-		verbose(env, "mark_precise: frame%d: regs=%s ",
-			bt->frame, env->tmp_str_buf);
-		bpf_fmt_stack_mask(env->tmp_str_buf, TMP_STR_BUF_LEN, bt_stack_mask(bt));
-		verbose(env, "stack=%s before ", env->tmp_str_buf);
-		verbose(env, "%d: ", idx);
-		verbose_insn(env, insn);
-	}
+	/*
+	 * if (env->log.level & BPF_LOG_LEVEL2) {
+	 * 	fmt_reg_mask(env->tmp_str_buf, TMP_STR_BUF_LEN, bt_reg_mask(bt));
+	 * 	verbose(env, "mark_precise: frame%d: regs=%s ",
+	 * 		bt->frame, env->tmp_str_buf);
+	 * 	bpf_fmt_stack_mask(env->tmp_str_buf, TMP_STR_BUF_LEN, bt_stack_mask(bt));
+	 * 	verbose(env, "stack=%s before ", env->tmp_str_buf);
+	 * 	verbose(env, "%d: ", idx);
+	 * 	verbose_insn(env, insn);
+	 * }
+	 */
 
 	/* If there is a history record that some registers gained range at this insn,
 	 * propagate precision marks to those registers, so that bt_is_reg_set()
@@ -19714,6 +19716,8 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 
 		spi = i / BPF_REG_SIZE;
 
+		env->cache_miss_spi = spi;
+
 		if (exact == EXACT &&
 		    (i >= cur->allocated_stack ||
 		     old->stack[spi].slot_type[i % BPF_REG_SIZE] !=
@@ -19821,6 +19825,7 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			return false;
 		}
 	}
+	env->cache_miss_spi = -1;
 	return true;
 }
 
@@ -19903,14 +19908,19 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 	u16 live_regs = env->insn_aux_data[insn_idx].live_regs_before;
 	u16 i;
 
-	if (old->callback_depth > cur->callback_depth)
+	if (old->callback_depth > cur->callback_depth){
+		env->cache_miss_cb_depth = 1;
 		return false;
+	}
 
-	for (i = 0; i < MAX_BPF_REG; i++)
+	for (i = 0; i < MAX_BPF_REG; i++) {
 		if (((1 << i) & live_regs) &&
 		    !regsafe(env, &old->regs[i], &cur->regs[i],
-			     &env->idmap_scratch, exact))
+			     &env->idmap_scratch, exact)) {
+			env->cache_miss_reg = i;
 			return false;
+		}
+	}
 
 	if (!stacksafe(env, old, cur, &env->idmap_scratch, exact))
 		return false;
@@ -19934,6 +19944,13 @@ static bool states_equal(struct bpf_verifier_env *env,
 	u32 insn_idx;
 	int i;
 
+	env->cache_miss_frame = -1;
+	env->cache_miss_reg = -1;
+	env->cache_miss_spi = -1;
+	env->cache_miss_refsafe = -1;
+	env->cache_miss_cb_depth = -1;
+	env->cache_miss_in_sleepable = -1;
+
 	if (old->curframe != cur->curframe)
 		return false;
 
@@ -19945,11 +19962,15 @@ static bool states_equal(struct bpf_verifier_env *env,
 	if (old->speculative && !cur->speculative)
 		return false;
 
-	if (old->in_sleepable != cur->in_sleepable)
+	if (old->in_sleepable != cur->in_sleepable) {
+		env->cache_miss_in_sleepable = 1;
 		return false;
+	}
 
-	if (!refsafe(old, cur, &env->idmap_scratch))
+	if (!refsafe(old, cur, &env->idmap_scratch)) {
+		env->cache_miss_refsafe = 1;
 		return false;
+	}
 
 	/* for states to be equal callsites have to be the same
 	 * and all frame states need to be equivalent
@@ -19958,8 +19979,10 @@ static bool states_equal(struct bpf_verifier_env *env,
 		insn_idx = frame_insn_idx(old, i);
 		if (old->frame[i]->callsite != cur->frame[i]->callsite)
 			return false;
-		if (!func_states_equal(env, old->frame[i], cur->frame[i], insn_idx, exact))
+		if (!func_states_equal(env, old->frame[i], cur->frame[i], insn_idx, exact)) {
+			env->cache_miss_frame = i;
 			return false;
+		}
 	}
 	return true;
 }
@@ -20165,6 +20188,32 @@ static bool iter_active_depths_differ(struct bpf_verifier_state *old, struct bpf
 	return false;
 }
 
+static void log_callchain(struct bpf_verifier_env *env, struct bpf_verifier_state *st)
+{
+	int i;
+
+	verbose(env, "(");
+	for (i = 0; i <= st->curframe; i++)
+		verbose(env, "%s%d", i ? ", " : "", frame_insn_idx(st, i));
+	verbose(env, ")");
+}
+
+static void log_miss_reg(struct bpf_verifier_env *env, struct bpf_verifier_state *st)
+{
+	int frame = env->cache_miss_frame;
+	int reg = env->cache_miss_reg;
+	int spi = env->cache_miss_spi;
+
+	if (frame < 0 || frame > st->curframe) {
+		verbose(env, "<bad miss frame>");
+		return;
+	}
+	if (reg >= 0)
+		bpf_print_reg_state(env, st->frame[frame], &st->frame[frame]->regs[reg]);
+	if (spi >= 0 && spi < st->frame[frame]->allocated_stack / BPF_REG_SIZE)
+		bpf_print_stack_state(env, st->frame[frame], &st->frame[frame]->stack[spi], spi);
+}
+
 static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 {
 	struct bpf_verifier_state_list *new_sl;
@@ -20173,6 +20222,7 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 	bool force_new_state, add_new_state, loop;
 	int n, err, states_cnt = 0;
 	struct list_head *pos, *tmp, *head;
+	bool log_miss = true;
 
 	force_new_state = env->test_state_freq || is_force_checkpoint(env, insn_idx) ||
 			  /* Avoid accumulating infinitely long jmp history */
@@ -20320,6 +20370,7 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 			 * at the end of the loop are likely to be useful in pruning.
 			 */
 skip_inf_loop_check:
+			log_miss = false;
 			if (!force_new_state &&
 			    env->jmps_processed - env->prev_jmps_processed < 20 &&
 			    env->insn_processed - env->prev_insn_processed < 100)
@@ -20331,6 +20382,10 @@ skip_inf_loop_check:
 		if (states_equal(env, &sl->state, cur, loop ? RANGE_WITHIN : NOT_EXACT)) {
 hit:
 			sl->hit_cnt++;
+
+			verbose(env, "cache hit at ");
+			log_callchain(env, cur);
+			verbose(env, ": loop=%d\n", loop);
 
 			/* if previous state reached the exit with precision and
 			 * current state is equivalent to it (except precision marks)
@@ -20434,6 +20489,26 @@ hit:
 			return 1;
 		}
 miss:
+		if ((env->log.level & BPF_LOG_LEVEL2) && log_miss && same_callsites(cur, &sl->state)) {
+			verbose(env, "cache miss at ");
+			log_callchain(env, cur);
+			verbose(env, ":");
+			if (env->cache_miss_frame >= 0)	verbose(env, " fr=%d", env->cache_miss_frame);
+			if (env->cache_miss_reg >= 0)	verbose(env, " reg=%d", env->cache_miss_reg);
+			if (env->cache_miss_spi >= 0)	verbose(env, " spi=%d", env->cache_miss_spi);
+			if (env->cache_miss_refsafe >= 0)	verbose(env, " refsafe=%d", env->cache_miss_refsafe);
+			if (env->cache_miss_cb_depth >= 0)	verbose(env, " cb_depth=%d", env->cache_miss_cb_depth);
+			if (env->cache_miss_in_sleepable >= 0)	verbose(env, " in_sleepable=%d", env->cache_miss_in_sleepable);
+			if (loop) verbose(env, "loop");
+			if (env->cache_miss_reg >= 0 || env->cache_miss_spi >= 0) {
+				verbose(env, " (cur: ");
+				log_miss_reg(env, cur);
+				verbose(env, ") vs (old: ");
+				log_miss_reg(env, &sl->state);
+				verbose(env, ")");
+			}
+			verbose(env, "\n");
+		}
 		/* when new state is not going to be added do not increase miss count.
 		 * Otherwise several loop iterations will remove the state
 		 * recorded earlier. The goal of these heuristics is to have
@@ -25438,6 +25513,7 @@ static int compute_live_registers(struct bpf_verifier_env *env)
 	if (env->log.level & BPF_LOG_LEVEL2) {
 		verbose(env, "Live regs before insn:\n");
 		for (i = 0; i < insn_cnt; ++i) {
+			verbose_linfo(env, i, "    ; ");
 			if (env->insn_aux_data[i].scc)
 				verbose(env, "%3d ", env->insn_aux_data[i].scc);
 			else
