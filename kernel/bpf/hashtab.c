@@ -9,6 +9,7 @@
 #include <linux/rculist_nulls.h>
 #include <linux/rcupdate_wait.h>
 #include <linux/random.h>
+#include <linux/rhashtable.h>
 #include <uapi/linux/btf.h>
 #include <linux/rcupdate_trace.h>
 #include <linux/btf_ids.h>
@@ -416,6 +417,7 @@ static int htab_map_alloc_check(union bpf_attr *attr)
 	bool percpu_lru = (attr->map_flags & BPF_F_NO_COMMON_LRU);
 	bool prealloc = !(attr->map_flags & BPF_F_NO_PREALLOC);
 	bool zero_seed = (attr->map_flags & BPF_F_ZERO_SEED);
+	bool resizable = attr->map_type == BPF_MAP_TYPE_RHASH;
 	int numa_node = bpf_map_attr_numa_node(attr);
 
 	BUILD_BUG_ON(offsetof(struct htab_elem, fnode.next) !=
@@ -456,6 +458,9 @@ static int htab_map_alloc_check(union bpf_attr *attr)
 	/* percpu map value size is bound by PCPU_MIN_UNIT_SIZE */
 	if (percpu && round_up(attr->value_size, 8) > PCPU_MIN_UNIT_SIZE)
 		return -E2BIG;
+
+	if (resizable && percpu_lru)
+		return -EINVAL;
 
 	return 0;
 }
@@ -2617,4 +2622,479 @@ const struct bpf_map_ops htab_of_maps_map_ops = {
 	.map_mem_usage = htab_map_mem_usage,
 	BATCH_OPS(htab),
 	.map_btf_id = &htab_map_btf_ids[0],
+};
+
+struct rhtab_elem  {
+	struct rhash_head node;
+	u32 key_len;
+	/* key bytes, then value bytes follow */
+	u8 data[] __aligned(8);
+};
+
+struct bpf_rhtab {
+	struct bpf_map map;
+	struct rhashtable ht;
+	struct rhashtable_params params;
+	struct bpf_mem_alloc ma;
+	u32 elem_size;
+};
+
+static inline void *rhtab_elem_value(struct rhtab_elem *l)
+{
+	return l->data + round_up(l->key_len, 8);
+}
+
+static u32 bpf_rhtab_hash_obj(const void *obj, u32 len, u32 seed)
+{
+	const struct rhtab_elem *e = obj;
+
+	return jhash(e->data, e->key_len, seed);
+}
+
+static u32 bpf_rhtab_hash_key(const void *obj, u32 len, u32 seed)
+{
+	return jhash(obj, len, seed);
+}
+
+static int bpf_rhtab_cmp(struct rhashtable_compare_arg *arg, const void *obj)
+{
+	const struct rhtab_elem *e = obj;
+
+	return memcmp(e->data, arg->key, e->key_len);
+}
+
+/* Helper to get next element, handling -EAGAIN during resize */
+static struct rhtab_elem *rhtab_iter_next(struct rhashtable_iter *iter)
+{
+	struct rhtab_elem *elem;
+
+	while ((elem = rhashtable_walk_next(iter))) {
+		if (IS_ERR(elem)) {
+			if (PTR_ERR(elem) == -EAGAIN)
+				continue;
+			return NULL;
+		}
+		return elem;
+	}
+
+	return NULL;
+}
+
+static int rhtab_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
+{
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct rhashtable_iter iter;
+	struct rhtab_elem *elem;
+	int err = 0;
+
+	rhashtable_walk_enter(&rhtab->ht, &iter);
+	rhashtable_walk_start(&iter);
+
+	if (key) {
+		/* Find current key, then get next */
+		while ((elem = rhtab_iter_next(&iter))) {
+			if (memcmp(elem->data, key, map->key_size) == 0) {
+				/* Found current key, get next */
+				elem = rhtab_iter_next(&iter);
+				break;
+			}
+		}
+		err = -ENOENT;
+	} else {
+		/* No key provided, get first element */
+		elem = rhtab_iter_next(&iter);
+	}
+
+	if (!elem)
+		goto out;
+
+	memcpy(next_key, elem->data, map->key_size);
+out:
+	rhashtable_walk_stop(&iter);
+	rhashtable_walk_exit(&iter);
+	return err;
+}
+
+static struct bpf_map *rhtab_map_alloc(union bpf_attr *attr)
+{
+	struct bpf_rhtab *rhtab;
+	int err = 0;
+
+	rhtab = bpf_map_area_alloc(sizeof(*rhtab), NUMA_NO_NODE);
+	if (!rhtab)
+		return ERR_PTR(-ENOMEM);
+
+	bpf_map_init_from_attr(&rhtab->map, attr);
+
+	if (rhtab->map.max_entries > 1UL << 31) {
+		err = -E2BIG;
+		goto free_rhtab;
+	}
+
+	rhtab->elem_size = sizeof(struct rhtab_elem) +
+			  round_up(rhtab->map.key_size, 8) + round_up(rhtab->map.value_size, 8);
+
+	rhtab->params.head_offset = offsetof(struct rhtab_elem, node);
+	rhtab->params.hashfn = bpf_rhtab_hash_key;
+	rhtab->params.obj_hashfn = bpf_rhtab_hash_obj;
+	rhtab->params.obj_cmpfn	= bpf_rhtab_cmp;
+	rhtab->params.key_len = rhtab->map.key_size;
+	rhtab->ht.max_elems = rhtab->map.max_entries;
+
+	err = rhashtable_init(&rhtab->ht, &rhtab->params);
+	if (err)
+		goto free_rhtab;
+
+	err = bpf_mem_alloc_init(&rhtab->ma, rhtab->elem_size, false);
+	if (err)
+		goto destroy_rhtab;
+
+	return &rhtab->map;
+
+destroy_rhtab:
+	rhashtable_destroy(&rhtab->ht);
+free_rhtab:
+	bpf_map_area_free(rhtab);
+	return ERR_PTR(err);
+}
+
+static void rhtab_free_elem(void *ptr, void *arg)
+{
+	struct bpf_mem_alloc *ma = arg;
+
+	bpf_mem_cache_free_rcu(ma, ptr);
+}
+
+static void rhtab_map_free(struct bpf_map *map)
+{
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct bpf_mem_alloc *ma = &rhtab->ma;
+
+	rhashtable_free_and_destroy(&rhtab->ht, rhtab_free_elem, ma);
+	bpf_mem_alloc_destroy(ma);
+	bpf_map_area_free(rhtab);
+}
+
+static void *__rhtab_map_lookup_elem(struct bpf_map *map, void *key)
+{
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+
+	return rhashtable_lookup_fast(&rhtab->ht, key, rhtab->params);
+}
+
+static void *rhtab_map_lookup_elem(struct bpf_map *map, void *key)
+	__must_hold(RCU)
+{
+	struct rhtab_elem *l;
+
+	l = __rhtab_map_lookup_elem(map, key);
+	if (l)
+		return rhtab_elem_value(l);
+
+	return NULL;
+}
+
+static int rhtab_map_alloc_check(union bpf_attr *attr)
+{
+	if (!(attr->map_flags & BPF_F_NO_PREALLOC))
+		return -EINVAL;
+
+	return htab_map_alloc_check(attr);
+}
+
+static void rhtab_map_free_internal_structs(struct bpf_map *map)
+{
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct rhashtable_iter iter;
+	struct rhtab_elem *l;
+
+	/* We only free internal structs on uref dropping to zero */
+	if (!bpf_map_has_internal_structs(map))
+		return;
+
+	rhashtable_walk_enter(&rhtab->ht, &iter);
+	rhashtable_walk_start(&iter);
+
+	while ((l = rhashtable_walk_next(&iter))) {
+		if (IS_ERR(l)) {
+			/* -EAGAIN means resize, just continue */
+			if (PTR_ERR(l) == -EAGAIN)
+				continue;
+			break;
+		}
+		bpf_map_free_internal_structs(map, rhtab_elem_value(l));
+	}
+
+	rhashtable_walk_stop(&iter);
+	rhashtable_walk_exit(&iter);
+
+	return;
+}
+
+static int rhtab_map_lookup_and_delete_elem(struct bpf_map *map, void *key,
+					    void *value, u64 flags)
+{
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct rhtab_elem *l;
+	void *found_val;
+	int err;
+
+	/* Make sure element is not deleted between lookup and copy */
+	guard(rcu)();
+
+	l = __rhtab_map_lookup_elem(map, key);
+	if (!l)
+		return -ENOENT;
+
+	found_val = rhtab_elem_value(l);
+	memcpy(value, found_val, map->value_size);
+
+	err = rhashtable_remove_fast(&rhtab->ht, &l->node, rhtab->params);
+	if (!err)
+		bpf_mem_cache_free_rcu(&rhtab->ma, l);
+
+	return err;
+}
+
+static long rhtab_map_update_existing(struct rhtab_elem *elem, void *value,
+				      u32 value_size, u64 map_flags)
+{
+	if (map_flags & BPF_NOEXIST)
+		return -EEXIST;
+
+	/* Concurrent users should synchronize externally */
+	memcpy(rhtab_elem_value(elem), value, value_size);
+	return 0;
+}
+
+static long rhtab_map_update_elem(struct bpf_map *map, void *key, void *value,
+				 u64 map_flags)
+{
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct rhtab_elem *elem, *tmp;
+
+	if (unlikely((map_flags & ~BPF_F_LOCK) > BPF_EXIST))
+		return -EINVAL;
+
+	guard(rcu)();
+	elem = __rhtab_map_lookup_elem(map, key);
+	if (elem)
+		return rhtab_map_update_existing(elem, value, map->value_size, map_flags);
+
+	if (map_flags & BPF_EXIST)
+		return -ENOENT;
+
+	/* Check max_entries limit before inserting new element */
+	if (atomic_read(&rhtab->ht.nelems) >= map->max_entries)
+		return -E2BIG;
+
+	elem = bpf_mem_cache_alloc(&rhtab->ma);
+	if (!elem)
+		return -ENOMEM;
+
+	elem->key_len = map->key_size;
+	memcpy(elem->data, key, map->key_size);
+	memcpy(rhtab_elem_value(elem), value, map->value_size);
+
+	tmp = rhashtable_lookup_get_insert_key(&rhtab->ht, key, &elem->node,
+					       rhtab->params);
+	if (tmp) {
+		bpf_mem_cache_free(&rhtab->ma, elem);
+		if (IS_ERR(tmp))
+			return PTR_ERR(tmp);
+
+		return rhtab_map_update_existing(tmp, value, map->value_size,
+						 map_flags);
+	}
+
+	return 0;
+}
+
+static long rhtab_map_delete_elem(struct bpf_map *map, void *key)
+{
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct rhtab_elem *l;
+	int err;
+
+	guard(rcu)();
+	l = __rhtab_map_lookup_elem(map, key);
+	if (!l)
+		return -ENOENT;
+
+	err = rhashtable_remove_fast(&rhtab->ht, &l->node, rhtab->params);
+	if (!err)
+		bpf_mem_cache_free_rcu(&rhtab->ma, l);
+
+	return err;
+}
+
+static int rhtab_map_gen_lookup(struct bpf_map *map, struct bpf_insn *insn_buf)
+{
+	struct bpf_insn *insn = insn_buf;
+	const int ret = BPF_REG_0;
+
+	BUILD_BUG_ON(!__same_type(&__rhtab_map_lookup_elem,
+		     (void *(*)(struct bpf_map *map, void *key))NULL));
+	*insn++ = BPF_EMIT_CALL(__rhtab_map_lookup_elem);
+	*insn++ = BPF_JMP_IMM(BPF_JEQ, ret, 0, 1);
+	*insn++ = BPF_ALU64_IMM(BPF_ADD, ret,
+				offsetof(struct rhtab_elem, data) +
+				round_up(map->key_size, 8));
+
+	return insn - insn_buf;
+}
+
+static void rhtab_map_seq_show_elem(struct bpf_map *map, void *key,
+				   struct seq_file *m)
+{
+	void *value;
+
+	/* Guarantee that hashtab value is not freed */
+	guard(rcu)();
+
+	value = rhtab_map_lookup_elem(map, key);
+	if (!value)
+		return;
+
+	btf_type_seq_show(map->btf, map->btf_key_type_id, key, m);
+	seq_puts(m, ": ");
+	btf_type_seq_show(map->btf, map->btf_value_type_id, value, m);
+	seq_putc(m, '\n');
+}
+
+static long bpf_for_each_rhash_elem(struct bpf_map *map,
+				    bpf_callback_t callback_fn,
+				    void *callback_ctx, u64 flags)
+{
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct rhashtable_iter iter;
+	struct rhtab_elem *l;
+	void *key, *val;
+	int ret;
+
+	cant_migrate();
+
+	if (flags)
+		return -EINVAL;
+
+	rhashtable_walk_enter(&rhtab->ht, &iter);
+	rhashtable_walk_start(&iter);
+
+	while ((l = rhashtable_walk_next(&iter))) {
+		if (IS_ERR(l)) {
+			/* -EAGAIN means resize, just continue */
+			if (PTR_ERR(l) == -EAGAIN)
+				continue;
+			break;
+		}
+		key = l->data;
+		val = rhtab_elem_value(l);
+		ret = callback_fn((u64)(long)map, (u64)(long)key,
+				  (u64)(long)val, (u64)(long)callback_ctx, 0);
+		if (ret)
+			break;
+	}
+	rhashtable_walk_stop(&iter);
+	rhashtable_walk_exit(&iter);
+	return 0;
+}
+
+static u64 rhtab_map_mem_usage(const struct bpf_map *map)
+{
+	return 0;
+}
+
+static int rhtab_map_lookup_batch(struct bpf_map *map,
+				  const union bpf_attr *attr,
+				  union bpf_attr __user *uattr)
+{
+	return 0;
+}
+
+static int rhtab_map_lookup_and_delete_batch(struct bpf_map *map,
+					     const union bpf_attr *attr,
+					     union bpf_attr __user *uattr)
+{
+	return 0;
+}
+
+struct bpf_iter_seq_rhash_map_info {
+	struct bpf_map *map;
+	struct bpf_rhtab *rhtab;
+	void *percpu_value_buf; // non-zero means percpu hash
+	u32 bucket_id;
+	u32 skip_elems;
+};
+
+static struct htab_elem *
+bpf_rhash_map_seq_find_next(struct bpf_iter_seq_hash_map_info *info,
+			    struct htab_elem *prev_elem)
+{
+	return NULL;
+}
+
+static void *bpf_rhash_map_seq_start(struct seq_file *seq, loff_t *pos)
+{
+	return NULL;
+}
+
+static void *bpf_rhash_map_seq_next(struct seq_file *seq, void *v,
+				    loff_t *pos) /*  */
+{
+	return NULL;
+}
+
+static int bpf_rhash_map_seq_show(struct seq_file *seq, void *v)
+{
+	return 0;
+}
+
+static void bpf_rhash_map_seq_stop(struct seq_file *seq, void *v)
+{
+}
+
+static int bpf_iter_init_rhash_map(void *priv_data,
+				   struct bpf_iter_aux_info *aux)
+{
+	return 0;
+}
+
+static void bpf_iter_fini_rhash_map(void *priv_data)
+{
+}
+
+static const struct seq_operations bpf_rhash_map_seq_ops = {
+	.start = bpf_rhash_map_seq_start,
+	.next = bpf_rhash_map_seq_next,
+	.stop = bpf_rhash_map_seq_stop,
+	.show = bpf_rhash_map_seq_show,
+};
+
+static const struct bpf_iter_seq_info rhash_iter_seq_info = {
+	.seq_ops = &bpf_rhash_map_seq_ops,
+	.init_seq_private = bpf_iter_init_rhash_map,
+	.fini_seq_private = bpf_iter_fini_rhash_map,
+	.seq_priv_size = sizeof(struct bpf_iter_seq_rhash_map_info),
+};
+
+BTF_ID_LIST_SINGLE(rhtab_map_btf_ids, struct, bpf_rhtab)
+const struct bpf_map_ops rhtab_map_ops = {
+	.map_meta_equal = bpf_map_meta_equal,
+	.map_alloc_check = rhtab_map_alloc_check,
+	.map_alloc = rhtab_map_alloc,
+	.map_free = rhtab_map_free,
+	.map_get_next_key = rhtab_map_get_next_key,
+	.map_release_uref = rhtab_map_free_internal_structs,
+	.map_lookup_elem = rhtab_map_lookup_elem,
+	.map_lookup_and_delete_elem = rhtab_map_lookup_and_delete_elem,
+	.map_update_elem = rhtab_map_update_elem,
+	.map_delete_elem = rhtab_map_delete_elem,
+	.map_gen_lookup = rhtab_map_gen_lookup,
+	.map_seq_show_elem = rhtab_map_seq_show_elem,
+	.map_set_for_each_callback_args = map_set_for_each_callback_args,
+	.map_for_each_callback = bpf_for_each_rhash_elem,
+	.map_mem_usage = rhtab_map_mem_usage,
+	BATCH_OPS(rhtab),
+	.map_btf_id = &rhtab_map_btf_ids[0],
+	.iter_seq_info = &rhash_iter_seq_info,
 };
