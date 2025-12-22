@@ -1055,6 +1055,11 @@ static int netem_change(struct Qdisc *sch, struct nlattr *opt,
 		q->loss_model = CLG_RANDOM;
 	}
 
+	ret = check_netem_in_tree(sch, qopt->duplicate, extack);
+	if (ret)
+		goto unlock;
+	q->duplicate = qopt->duplicate;
+
 	if (delay_dist)
 		swap(q->delay_dist, delay_dist);
 	if (slot_dist)
@@ -1067,12 +1072,6 @@ static int netem_change(struct Qdisc *sch, struct nlattr *opt,
 	q->gap = qopt->gap;
 	q->counter = 0;
 	q->loss = qopt->loss;
-
-	ret = check_netem_in_tree(sch, qopt->duplicate, extack);
-	if (ret)
-		goto unlock;
-
-	q->duplicate = qopt->duplicate;
 
 	/* for compatibility with earlier versions.
 	 * if gap is set, need to assume 100% probability
