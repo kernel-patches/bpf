@@ -41,6 +41,12 @@ static void bpf_lru_node_clear_ref(struct bpf_lru_node *node)
 	WRITE_ONCE(node->ref, 0);
 }
 
+static void bpf_lru_node_reset_state(struct bpf_lru_node *node, enum bpf_lru_list_type type)
+{
+	node->type = type;
+	bpf_lru_node_clear_ref(node);
+}
+
 static void bpf_lru_list_count_inc(struct bpf_lru_list *l,
 				   enum bpf_lru_list_type type)
 {
@@ -85,8 +91,7 @@ static void __bpf_lru_node_move_in(struct bpf_lru_list *l,
 		return;
 
 	bpf_lru_list_count_inc(l, tgt_type);
-	node->type = tgt_type;
-	bpf_lru_node_clear_ref(node);
+	bpf_lru_node_reset_state(node, tgt_type);
 	list_move(&node->list, &l->lists[tgt_type]);
 }
 
@@ -347,8 +352,7 @@ static void __local_list_add_pending(struct bpf_lru *lru,
 				     struct bpf_lru_node *node)
 {
 	node->cpu = cpu;
-	node->type = BPF_LRU_LOCAL_LIST_T_PENDING;
-	bpf_lru_node_clear_ref(node);
+	bpf_lru_node_reset_state(node, BPF_LRU_LOCAL_LIST_T_PENDING);
 	list_add(&node->list, local_pending_list(loc_l));
 }
 
@@ -513,8 +517,7 @@ static void bpf_common_lru_push_free(struct bpf_lru *lru,
 			goto check_lru_list;
 		}
 
-		node->type = BPF_LRU_LOCAL_LIST_T_FREE;
-		bpf_lru_node_clear_ref(node);
+		bpf_lru_node_reset_state(node, BPF_LRU_LOCAL_LIST_T_FREE);
 		list_move(&node->list, local_free_list(loc_l));
 
 		raw_spin_unlock_irqrestore(&loc_l->lock, flags);
@@ -559,8 +562,7 @@ static void bpf_common_lru_populate(struct bpf_lru *lru, void *buf,
 		struct bpf_lru_node *node;
 
 		node = (struct bpf_lru_node *)(buf + node_offset);
-		node->type = BPF_LRU_LIST_T_FREE;
-		bpf_lru_node_clear_ref(node);
+		bpf_lru_node_reset_state(node, BPF_LRU_LIST_T_FREE);
 		list_add(&node->list, &l->lists[BPF_LRU_LIST_T_FREE]);
 		buf += elem_size;
 	}
@@ -588,8 +590,7 @@ static void bpf_percpu_lru_populate(struct bpf_lru *lru, void *buf,
 again:
 		node = (struct bpf_lru_node *)(buf + node_offset);
 		node->cpu = cpu;
-		node->type = BPF_LRU_LIST_T_FREE;
-		bpf_lru_node_clear_ref(node);
+		bpf_lru_node_reset_state(node, BPF_LRU_LIST_T_FREE);
 		list_add(&node->list, &l->lists[BPF_LRU_LIST_T_FREE]);
 		i++;
 		buf += elem_size;
