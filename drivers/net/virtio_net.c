@@ -3208,16 +3208,31 @@ static int virtnet_open(struct net_device *dev)
 	int i, err;
 
 	for (i = 0; i < vi->max_queue_pairs; i++) {
+		bool schedule_refill = false;
+
+		/* - We must call try_fill_recv before enabling napi of the same
+		 * receive queue so that it doesn't race with the call in
+		 * virtnet_receive.
+		 * - We must enable and schedule delayed refill work only when
+		 * we have enabled all the receive queue's napi. Otherwise, in
+		 * refill_work, we have a deadlock when calling napi_disable on
+		 * an already disabled napi.
+		 */
 		if (i < vi->curr_queue_pairs) {
-			enable_delayed_refill(&vi->rq[i]);
 			/* Make sure we have some buffers: if oom use wq. */
 			if (!try_fill_recv(vi, &vi->rq[i], GFP_KERNEL))
-				schedule_delayed_work(&vi->rq[i].refill, 0);
+				schedule_refill = true;
 		}
 
 		err = virtnet_enable_queue_pair(vi, i);
 		if (err < 0)
 			goto err_enable_qp;
+
+		if (i < vi->curr_queue_pairs) {
+			enable_delayed_refill(&vi->rq[i]);
+			if (schedule_refill)
+				schedule_delayed_work(&vi->rq[i].refill, 0);
+		}
 	}
 
 	if (virtio_has_feature(vi->vdev, VIRTIO_NET_F_STATUS)) {
@@ -3456,11 +3471,16 @@ static void __virtnet_rx_resume(struct virtnet_info *vi,
 	bool running = netif_running(vi->dev);
 	bool schedule_refill = false;
 
+	/* See the comment in virtnet_open for the ordering rule
+	 * of try_fill_recv, receive queue napi_enable and delayed
+	 * refill enable/schedule.
+	 */
 	if (refill && !try_fill_recv(vi, rq, GFP_KERNEL))
 		schedule_refill = true;
 	if (running)
 		virtnet_napi_enable(rq);
 
+	enable_delayed_refill(rq);
 	if (schedule_refill)
 		schedule_delayed_work(&rq->refill, 0);
 }
@@ -3470,18 +3490,15 @@ static void virtnet_rx_resume_all(struct virtnet_info *vi)
 	int i;
 
 	for (i = 0; i < vi->max_queue_pairs; i++) {
-		if (i < vi->curr_queue_pairs) {
-			enable_delayed_refill(&vi->rq[i]);
+		if (i < vi->curr_queue_pairs)
 			__virtnet_rx_resume(vi, &vi->rq[i], true);
-		} else {
+		else
 			__virtnet_rx_resume(vi, &vi->rq[i], false);
-		}
 	}
 }
 
 static void virtnet_rx_resume(struct virtnet_info *vi, struct receive_queue *rq)
 {
-	enable_delayed_refill(rq);
 	__virtnet_rx_resume(vi, rq, true);
 }
 
