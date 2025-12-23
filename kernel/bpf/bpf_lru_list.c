@@ -698,14 +698,16 @@ void bpf_lru_destroy(struct bpf_lru *lru)
 void bpf_lru_node_replace(struct bpf_lru *lru, struct bpf_lru_node *old_node,
 			  struct bpf_lru_node *new_node)
 {
+	enum bpf_lru_list_type old_type = READ_ONCE(old_node->type);
 	enum bpf_lru_list_type new_type = BPF_LRU_LIST_T_ACTIVE;
 	unsigned long flags;
 
 	new_node->cpu = old_node->cpu;
 	new_node->type = new_type;
 	bpf_lru_node_set_ref(new_node);
+	bpf_lru_node_set_ref(old_node);
 
-	if (!lru->percpu && IS_LOCAL_LIST_TYPE(old_node->type)) {
+	if (!lru->percpu && IS_LOCAL_LIST_TYPE(old_type)) {
 		struct bpf_lru_locallist *loc_l;
 		struct bpf_lru_list *l;
 
@@ -730,7 +732,7 @@ void bpf_lru_node_replace(struct bpf_lru *lru, struct bpf_lru_node *old_node,
 		raw_spin_lock_irqsave(&l->lock, flags);
 		bpf_lru_list_count_inc(l, new_type);
 		list_add(&new_node->list, &l->lists[new_type]);
-		bpf_lru_list_count_dec(l, old_node->type);
+		bpf_lru_list_count_dec(l, old_type);
 		list_del_init(&old_node->list);
 		raw_spin_unlock_irqrestore(&l->lock, flags);
 	}

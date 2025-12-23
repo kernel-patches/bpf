@@ -785,6 +785,21 @@ static void check_and_free_fields(struct bpf_htab *htab,
 	}
 }
 
+static bool __htab_lru_map_delete_node(struct bpf_htab *htab, struct htab_elem *tgt_l,
+				       struct hlist_nulls_head *head)
+{
+	struct hlist_nulls_node *n;
+	struct htab_elem *l = NULL;
+
+	hlist_nulls_for_each_entry_rcu(l, n, head, hash_node)
+		if (l == tgt_l) {
+			hlist_nulls_del_rcu(&l->hash_node);
+			return true;
+		}
+
+	return false;
+}
+
 /* It is called from the bpf_lru_list when the LRU needs to delete
  * older elements from the htab.
  */
@@ -793,7 +808,6 @@ static bool htab_lru_map_delete_node(void *arg, struct bpf_lru_node *node)
 	struct bpf_htab *htab = arg;
 	struct htab_elem *l = NULL, *tgt_l;
 	struct hlist_nulls_head *head;
-	struct hlist_nulls_node *n;
 	unsigned long flags;
 	struct bucket *b;
 	int ret;
@@ -806,12 +820,8 @@ static bool htab_lru_map_delete_node(void *arg, struct bpf_lru_node *node)
 	if (ret)
 		return false;
 
-	hlist_nulls_for_each_entry_rcu(l, n, head, hash_node)
-		if (l == tgt_l) {
-			hlist_nulls_del_rcu(&l->hash_node);
-			bpf_map_dec_elem_count(&htab->map);
-			break;
-		}
+	if (__htab_lru_map_delete_node(htab, tgt_l, head))
+		bpf_map_dec_elem_count(&htab->map);
 
 	htab_unlock_bucket(b, flags);
 
@@ -1199,7 +1209,7 @@ static int htab_lru_map_update_elem_in_place(struct bpf_htab *htab, void *key, v
 					     struct hlist_nulls_head *head, u32 hash,
 					     bool percpu, bool onallcpus)
 {
-	struct htab_elem *l_new, **p_elem, *l_old = NULL;
+	struct htab_elem *l_new, *l_old = NULL, **p_elem;
 	struct bpf_map *map = &htab->map;
 	u32 key_size = map->key_size;
 	unsigned long flags;
@@ -1216,36 +1226,43 @@ static int htab_lru_map_update_elem_in_place(struct bpf_htab *htab, void *key, v
 		goto err;
 
 	l_old = lookup_elem_raw(head, hash, key, key_size);
-
 	ret = check_flags(htab, l_old, map_flags);
-	if (ret) {
-		htab_unlock_bucket(b, flags);
+	htab_unlock_bucket(b, flags);
+	if (ret)
+		goto err;
+
+	if (!l_old) {
+		ret = -ENOENT;
 		goto err;
 	}
 
-	if (l_old) {
-		memcpy(l_new->key, key, key_size);
-		l_new->hash = hash;
-		if (percpu) {
-			pcpu_copy_value(htab, htab_elem_get_ptr(l_new, key_size), value, onallcpus);
-		} else {
-			copy_map_value(map, htab_elem_value(l_new, key_size), value);
-			check_and_free_fields(htab, l_new);
-		}
-		hlist_nulls_add_head_rcu(&l_new->hash_node, head);
-		hlist_nulls_del_rcu(&l_old->hash_node);
-	}
+	/* Drop l_old from the LRU list before dropping it from the hash
+table.
+	 * Ensure that l_old won't be rotated back in by another CPU
+	 * between the time we remove it from the hash table and add
+	 * l_new in LRU list.  Otherwise, we might end up with deadlock.
+	 */
 
+	bpf_lru_node_replace(&htab->lru, &l_old->lru_node, &l_new->lru_node);
+
+	htab_lock_bucket(b, &flags);
+	memcpy(l_new->key, key, key_size);
+	l_new->hash = hash;
+	if (percpu) {
+		pcpu_copy_value(htab, htab_elem_get_ptr(l_new, key_size), value, onallcpus);
+	} else {
+		copy_map_value(map, htab_elem_value(l_new, key_size), value);
+		check_and_free_fields(htab, l_new);
+	}
+	hlist_nulls_add_head_rcu(&l_new->hash_node, head);
+	if (!__htab_lru_map_delete_node(htab, l_old, head))
+		bpf_map_inc_elem_count(map);
 	htab_unlock_bucket(b, flags);
 
-	if (l_old) {
-		bpf_lru_node_replace(&htab->lru, &l_old->lru_node, &l_new->lru_node);
-		check_and_free_fields(htab, l_old);
-		*p_elem = l_old;
-		return 0;
-	}
+	check_and_free_fields(htab, l_old);
+	*p_elem = l_old;
+	return 0;
 
-	ret = -ENOENT;
 err:
 	*p_elem = l_new;
 	return ret;
