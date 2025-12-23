@@ -58,7 +58,7 @@ static int nci_core_conn_credits_ntf_packet(struct nci_dev *ndev,
 	struct nci_conn_info *conn_info;
 	int i;
 
-	if (skb->len < sizeof(struct nci_core_conn_credit_ntf))
+	if (skb->len < offsetofend(struct nci_core_conn_credit_ntf, num_entries))
 		return -EINVAL;
 
 	ntf = (struct nci_core_conn_credit_ntf *)skb->data;
@@ -67,6 +67,10 @@ static int nci_core_conn_credits_ntf_packet(struct nci_dev *ndev,
 
 	if (ntf->num_entries > NCI_MAX_NUM_CONN)
 		ntf->num_entries = NCI_MAX_NUM_CONN;
+
+	if (skb->len < offsetofend(struct nci_core_conn_credit_ntf, num_entries) +
+			ntf->num_entries * sizeof(struct conn_credit_entry))
+		return -EINVAL;
 
 	/* update the credits */
 	for (i = 0; i < ntf->num_entries; i++) {
@@ -364,7 +368,7 @@ static int nci_rf_discover_ntf_packet(struct nci_dev *ndev,
 	const __u8 *data;
 	bool add_target = true;
 
-	if (skb->len < sizeof(struct nci_rf_discover_ntf))
+	if (skb->len < offsetofend(struct nci_rf_discover_ntf, rf_tech_specific_params_len))
 		return -EINVAL;
 
 	data = skb->data;
@@ -379,6 +383,10 @@ static int nci_rf_discover_ntf_packet(struct nci_dev *ndev,
 	pr_debug("rf_tech_and_mode 0x%x\n", ntf.rf_tech_and_mode);
 	pr_debug("rf_tech_specific_params_len %d\n",
 		 ntf.rf_tech_specific_params_len);
+
+	if (skb->len < (data - skb->data) +
+			ntf.rf_tech_specific_params_len + sizeof(ntf.ntf_type))
+		return -EINVAL;
 
 	if (ntf.rf_tech_specific_params_len > 0) {
 		switch (ntf.rf_tech_and_mode) {
@@ -596,7 +604,7 @@ static int nci_rf_intf_activated_ntf_packet(struct nci_dev *ndev,
 	const __u8 *data;
 	int err = NCI_STATUS_OK;
 
-	if (skb->len < sizeof(struct nci_rf_intf_activated_ntf))
+	if (skb->len < offsetofend(struct nci_rf_intf_activated_ntf, rf_tech_specific_params_len))
 		return -EINVAL;
 
 	data = skb->data;
@@ -627,6 +635,9 @@ static int nci_rf_intf_activated_ntf_packet(struct nci_dev *ndev,
 	 */
 	if (ntf.rf_interface == NCI_RF_INTERFACE_NFCEE_DIRECT)
 		goto listen;
+
+	if (skb->len < (data - skb->data) + ntf.rf_tech_specific_params_len)
+		return -EINVAL;
 
 	if (ntf.rf_tech_specific_params_len > 0) {
 		switch (ntf.activation_rf_tech_and_mode) {
@@ -668,6 +679,13 @@ static int nci_rf_intf_activated_ntf_packet(struct nci_dev *ndev,
 		}
 	}
 
+	if (skb->len < (data - skb->data) +
+			sizeof(ntf.data_exch_rf_tech_and_mode) +
+			sizeof(ntf.data_exch_tx_bit_rate) +
+			sizeof(ntf.data_exch_rx_bit_rate) +
+			sizeof(ntf.activation_params_len))
+		return -EINVAL;
+
 	ntf.data_exch_rf_tech_and_mode = *data++;
 	ntf.data_exch_tx_bit_rate = *data++;
 	ntf.data_exch_rx_bit_rate = *data++;
@@ -678,6 +696,9 @@ static int nci_rf_intf_activated_ntf_packet(struct nci_dev *ndev,
 	pr_debug("data_exch_tx_bit_rate 0x%x\n", ntf.data_exch_tx_bit_rate);
 	pr_debug("data_exch_rx_bit_rate 0x%x\n", ntf.data_exch_rx_bit_rate);
 	pr_debug("activation_params_len %d\n", ntf.activation_params_len);
+
+	if (skb->len < (data - skb->data) + ntf.activation_params_len)
+		return -EINVAL;
 
 	if (ntf.activation_params_len > 0) {
 		switch (ntf.rf_interface) {
