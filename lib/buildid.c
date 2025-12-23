@@ -280,7 +280,10 @@ static int __build_id_parse(struct vm_area_struct *vma, unsigned char *build_id,
 	int ret;
 
 	/* only works for page backed storage  */
-	if (!vma->vm_file)
+	if (!vma->vm_file ||
+	    !S_ISREG(file_inode(vma->vm_file)->i_mode) ||
+	    !vma->vm_file->f_mapping->a_ops ||
+	    !vma->vm_file->f_mapping->a_ops->read_folio)
 		return -EINVAL;
 
 	freader_init_from_file(&r, buf, sizeof(buf), vma->vm_file, may_fault);
