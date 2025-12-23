@@ -383,6 +383,9 @@ struct receive_queue {
 	/* Is delayed refill enabled? */
 	bool refill_enabled;
 
+	/* A refill work needs to be scheduled when delayed refill is enabled */
+	bool refill_pending;
+
 	/* The lock to synchronize the access to refill_enabled */
 	spinlock_t refill_lock;
 
@@ -720,10 +723,13 @@ static void virtnet_rq_free_buf(struct virtnet_info *vi,
 		put_page(virt_to_head_page(buf));
 }
 
-static void enable_delayed_refill(struct receive_queue *rq)
+static void enable_delayed_refill(struct receive_queue *rq,
+				  bool schedule_refill)
 {
 	spin_lock_bh(&rq->refill_lock);
 	rq->refill_enabled = true;
+	if (rq->refill_pending || schedule_refill)
+		schedule_delayed_work(&rq->refill, 0);
 	spin_unlock_bh(&rq->refill_lock);
 }
 
@@ -3032,6 +3038,8 @@ static int virtnet_receive(struct receive_queue *rq, int budget,
 			spin_lock(&rq->refill_lock);
 			if (rq->refill_enabled)
 				schedule_delayed_work(&rq->refill, 0);
+			else
+				rq->refill_pending = true;
 			spin_unlock(&rq->refill_lock);
 		}
 	}
@@ -3228,11 +3236,8 @@ static int virtnet_open(struct net_device *dev)
 		if (err < 0)
 			goto err_enable_qp;
 
-		if (i < vi->curr_queue_pairs) {
-			enable_delayed_refill(&vi->rq[i]);
-			if (schedule_refill)
-				schedule_delayed_work(&vi->rq[i].refill, 0);
-		}
+		if (i < vi->curr_queue_pairs)
+			enable_delayed_refill(&vi->rq[i], schedule_refill);
 	}
 
 	if (virtio_has_feature(vi->vdev, VIRTIO_NET_F_STATUS)) {
@@ -3480,9 +3485,7 @@ static void __virtnet_rx_resume(struct virtnet_info *vi,
 	if (running)
 		virtnet_napi_enable(rq);
 
-	enable_delayed_refill(rq);
-	if (schedule_refill)
-		schedule_delayed_work(&rq->refill, 0);
+	enable_delayed_refill(rq, schedule_refill);
 }
 
 static void virtnet_rx_resume_all(struct virtnet_info *vi)
