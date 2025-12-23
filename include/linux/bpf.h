@@ -3891,12 +3891,31 @@ void bpf_insn_array_release(struct bpf_map *map);
 void bpf_insn_array_adjust(struct bpf_map *map, u32 off, u32 len);
 void bpf_insn_array_adjust_after_remove(struct bpf_map *map, u32 off, u32 len);
 
+enum bpf_insn_array_type {
+	BPF_INSN_ARRAY_VOID,
+	BPF_INSN_ARRAY_JUMP_TABLE,
+};
+
 #ifdef CONFIG_BPF_SYSCALL
 void bpf_prog_update_insn_ptrs(struct bpf_prog *prog, u32 *offsets, void *image);
+void bpf_prog_collect_indirect_targets(const struct bpf_prog *prog, unsigned long *bitmap);
+void bpf_prog_set_insn_array_type(struct bpf_map *map, int type);
+bool bpf_prog_has_jump_table(const struct bpf_prog *prog);
 #else
 static inline void
 bpf_prog_update_insn_ptrs(struct bpf_prog *prog, u32 *offsets, void *image)
 {
+}
+static inline void
+bpf_prog_collect_indirect_targets(const struct bpf_prog *prog, unsigned long *bitmap)
+{
+}
+static inline void bpf_prog_set_insn_array_type(struct bpf_map *map, int type)
+{
+}
+static inline bool bpf_prog_has_jump_table(const struct bpf_prog *prog)
+{
+	return false;
 }
 #endif
 

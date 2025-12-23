@@ -78,6 +78,7 @@ static const int bpf2a64[] = {
 
 struct jit_ctx {
 	const struct bpf_prog *prog;
+	unsigned long *indirect_targets;
 	int idx;
 	int epilogue_offset;
 	int *offset;
@@ -1199,6 +1200,11 @@ static int add_exception_handler(const struct bpf_insn *insn,
 	return 0;
 }
 
+static bool is_indirect_target(int insn_off, unsigned long *targets_bitmap)
+{
+	return targets_bitmap && test_bit(insn_off, targets_bitmap);
+}
+
 /* JITs an eBPF instruction.
  * Returns:
  * 0  - successfully JITed an 8-byte eBPF instruction.
@@ -1230,6 +1236,9 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 	int off_adj;
 	int ret;
 	bool sign_extend;
+
+	if (is_indirect_target(i, ctx->indirect_targets))
+		emit_bti(A64_BTI_J, ctx);
 
 	switch (code) {
 	/* dst = src */
@@ -2085,6 +2094,16 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.prog = prog;
 
+	if (IS_ENABLED(CONFIG_ARM64_BTI_KERNEL) && bpf_prog_has_jump_table(prog)) {
+		ctx.indirect_targets = kvcalloc(BITS_TO_LONGS(prog->len), sizeof(unsigned long),
+						GFP_KERNEL);
+		if (ctx.indirect_targets == NULL) {
+			prog = orig_prog;
+			goto out_off;
+		}
+		bpf_prog_collect_indirect_targets(prog, ctx.indirect_targets);
+	}
+
 	ctx.offset = kvcalloc(prog->len + 1, sizeof(int), GFP_KERNEL);
 	if (ctx.offset == NULL) {
 		prog = orig_prog;
@@ -2248,6 +2267,7 @@ out_off:
 			prog->aux->priv_stack_ptr = NULL;
 		}
 		kvfree(ctx.offset);
+		kvfree(ctx.indirect_targets);
 out_priv_stack:
 		kfree(jit_data);
 		prog->aux->jit_data = NULL;
