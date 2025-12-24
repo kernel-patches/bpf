@@ -1089,6 +1089,7 @@ static void nfc_llcp_recv_hdlc(struct nfc_llcp_local *local,
 	if (sk->sk_state == LLCP_CLOSED) {
 		release_sock(sk);
 		nfc_llcp_sock_put(llcp_sock);
+		return;
 	}
 
 	/* Pass the payload upstream */
@@ -1176,11 +1177,6 @@ static void nfc_llcp_recv_disc(struct nfc_llcp_local *local,
 	lock_sock(sk);
 
 	nfc_llcp_socket_purge(llcp_sock);
-
-	if (sk->sk_state == LLCP_CLOSED) {
-		release_sock(sk);
-		nfc_llcp_sock_put(llcp_sock);
-	}
 
 	if (sk->sk_state == LLCP_CONNECTED) {
 		nfc_put_device(local->dev);

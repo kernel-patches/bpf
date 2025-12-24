@@ -218,6 +218,9 @@ static void fbnic_service_task(struct work_struct *work)
 
 	fbnic_fw_check_heartbeat(fbd);
 
+	if (!netif_carrier_ok(netdev))
+		netif_carrier_on(fbd->netdev);
+
 	fbnic_health_check(fbd);
 
 	fbnic_bmc_rpc_check(fbd);

@@ -590,7 +590,8 @@ static void rio_hw_init(struct net_device *dev)
 
 	set_multicast (dev);
 	if (np->coalesce) {
-		dw32(RxDMAIntCtrl, np->rx_coalesce | np->rx_timeout << 16);
+		dw32(RxDMAIntCtrl, ((u32)np->rx_coalesce & 0x0000ffff) |
+				   (((u32)np->rx_timeout & 0x0000ffff) << 16));
 	}
 	/* Set RIO to poll every N*320nsec. */
 	dw8(RxDMAPollPeriod, 0x20);
