@@ -241,25 +241,23 @@ both are orthogonal to each other.
 The KF_RELEASE flag is used to indicate that the kfunc releases the pointer
 passed in to it. There can be only one referenced pointer that can be passed
 in. All copies of the pointer being released are invalidated as a result of
-invoking kfunc with this flag. KF_RELEASE kfuncs automatically receive the
-protection afforded by the KF_TRUSTED_ARGS flag described below.
+invoking kfunc with this flag.
 
-2.4.4 KF_TRUSTED_ARGS flag
---------------------------
+2.4.4 KF_TRUSTED_ARGS (default behavior)
+-----------------------------------------
 
-The KF_TRUSTED_ARGS flag is used for kfuncs taking pointer arguments. It
-indicates that the all pointer arguments are valid, and that all pointers to
-BTF objects have been passed in their unmodified form (that is, at a zero
-offset, and without having been obtained from walking another pointer, with one
-exception described below).
+All kfuncs now require trusted arguments by default. This means that all
+pointer arguments must be valid, and all pointers to BTF objects must be
+passed in their unmodified form (at a zero offset, and without having been
+obtained from walking another pointer, with exceptions described below).
 
-There are two types of pointers to kernel objects which are considered "valid":
+There are two types of pointers to kernel objects which are considered "trusted":
 
 1. Pointers which are passed as tracepoint or struct_ops callback arguments.
 2. Pointers which were returned from a KF_ACQUIRE kfunc.
 
 Pointers to non-BTF objects (e.g. scalar pointers) may also be passed to
-KF_TRUSTED_ARGS kfuncs, and may have a non-zero offset.
+kfuncs, and may have a non-zero offset.
 
 The definition of "valid" pointers is subject to change at any time, and has
 absolutely no ABI stability guarantees.
@@ -327,13 +325,14 @@ added later.
 2.4.7 KF_RCU flag
 -----------------
 
-The KF_RCU flag is a weaker version of KF_TRUSTED_ARGS. The kfuncs marked with
-KF_RCU expect either PTR_TRUSTED or MEM_RCU arguments. The verifier guarantees
-that the objects are valid and there is no use-after-free. The pointers are not
-NULL, but the object's refcount could have reached zero. The kfuncs need to
-consider doing refcnt != 0 check, especially when returning a KF_ACQUIRE
-pointer. Note as well that a KF_ACQUIRE kfunc that is KF_RCU should very likely
-also be KF_RET_NULL.
+The KF_RCU flag allows kfuncs to opt out of the default trusted args
+requirement and accept RCU pointers with weaker guarantees. The kfuncs marked
+with KF_RCU expect either PTR_TRUSTED or MEM_RCU arguments. The verifier
+guarantees that the objects are valid and there is no use-after-free. The
+pointers are not NULL, but the object's refcount could have reached zero. The
+kfuncs need to consider doing refcnt != 0 check, especially when returning a
+KF_ACQUIRE pointer. Note as well that a KF_ACQUIRE kfunc that is KF_RCU should
+very likely also be KF_RET_NULL.
 
 2.4.8 KF_RCU_PROTECTED flag
 ---------------------------
