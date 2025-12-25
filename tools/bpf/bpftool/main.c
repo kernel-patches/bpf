@@ -66,6 +66,7 @@ static int do_help(int argc, char **argv)
 		"\n"
 		"       OBJECT := { prog | map | link | cgroup | perf | net | feature | btf | gen | struct_ops | iter | token }\n"
 		"       " HELP_SPEC_OPTIONS " |\n"
+		"                    { {-S|--sign {-k|--private_key_path} {-i|--cert_path} } |\n"
 		"                    {-V|--version} }\n"
 		"",
 		bin_name, bin_name, bin_name);
@@ -452,6 +453,8 @@ int main(int argc, char **argv)
 		{ "debug",	no_argument,	NULL,	'd' },
 		{ "use-loader",	no_argument,	NULL,	'L' },
 		{ "sign",	no_argument,	NULL,	'S' },
+		{ "private_key_path",	required_argument,	NULL,	'k' },
+		{ "cert_path",	required_argument,	NULL,	'i' },
 		{ "base-btf",	required_argument, NULL, 'B' },
 		{ 0 }
 	};
