@@ -1300,6 +1300,19 @@ static void emit_st_r12(u8 **pprog, u32 size, u32 dst_reg, int off, int imm)
 	emit_st_index(pprog, size, dst_reg, X86_REG_R12, off, imm);
 }
 
+static void emit_ldx_percpu_r0(u8 **pprog, const void __percpu *ptr)
+{
+	u8 *prog = *pprog;
+
+	/* mov rax, gs:[offset] */
+	EMIT2(0x65, 0x48);
+	EMIT2(0x8B, 0x04);
+	EMIT1(0x25);
+	EMIT((u32)(unsigned long)ptr, 4);
+
+	*pprog = prog;
+}
+
 static int emit_atomic_rmw(u8 **pprog, u32 atomic_op,
 			   u32 dst_reg, u32 src_reg, s16 off, u8 bpf_size)
 {
@@ -2440,6 +2453,15 @@ populate_extable:
 			/* call */
 		case BPF_JMP | BPF_CALL: {
 			u8 *ip = image + addrs[i - 1];
+
+			if (insn->src_reg == 0 && (insn->imm == BPF_FUNC_get_current_task ||
+						   insn->imm == BPF_FUNC_get_current_task_btf)) {
+				if (IS_ENABLED(CONFIG_USE_X86_SEG_SUPPORT))
+					emit_ldx_percpu_r0(&prog, &const_current_task);
+				else
+					emit_ldx_percpu_r0(&prog, &current_task);
+				break;
+			}
 
 			func = (u8 *) __bpf_call_base + imm32;
 			if (src_reg == BPF_PSEUDO_CALL && tail_call_reachable) {
@@ -4081,4 +4103,15 @@ u64 bpf_arch_uaddress_limit(void)
 bool bpf_jit_supports_timed_may_goto(void)
 {
 	return true;
+}
+
+bool bpf_jit_inlines_helper_call(s32 imm)
+{
+	switch (imm) {
+	case BPF_FUNC_get_current_task:
+	case BPF_FUNC_get_current_task_btf:
+		return true;
+	default:
+		return false;
+	}
 }
