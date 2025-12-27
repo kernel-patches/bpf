@@ -6,6 +6,7 @@
 struct bpf_insn_array {
 	struct bpf_map map;
 	atomic_t used;
+	bool is_jump_table;
 	long *ips;
 	DECLARE_FLEX_ARRAY(struct bpf_insn_array_value, values);
 };
@@ -299,6 +300,68 @@ void bpf_prog_update_insn_ptrs(struct bpf_prog *prog, u32 *offsets, void *image)
 
 			insn_array->values[j].jitted_off = offsets[xlated_off];
 			insn_array->ips[j] = (long)(image + offsets[xlated_off]);
+		}
+	}
+}
+
+void bpf_prog_mark_jump_table(struct bpf_map *map)
+{
+	struct bpf_insn_array *insn_array = cast_insn_array(map);
+
+	insn_array->is_jump_table = true;
+}
+
+static bool is_jump_table(const struct bpf_map *map)
+{
+	struct bpf_insn_array *insn_array;
+
+	if (!is_insn_array(map))
+		return false;
+
+	insn_array = cast_insn_array(map);
+	return insn_array->is_jump_table;
+}
+
+bool bpf_prog_has_jump_table(const struct bpf_prog *prog)
+{
+	int i;
+
+	for (i = 0; i < prog->aux->used_map_cnt; i++) {
+		if (is_jump_table(prog->aux->used_maps[i]))
+			return true;
+	}
+	return false;
+}
+
+/*
+ * This function collects possible indirect jump targets in a BPF program. Since indirect jump
+ * targets can only be read from indirect arrays used as jump table, it traverses all jump
+ * tables used by @prog. For each instruction found in the jump tables, it sets the corresponding
+ * bit in @bitmap.
+ */
+void bpf_prog_collect_indirect_targets(const struct bpf_prog *prog, unsigned long *bitmap)
+{
+	struct bpf_insn_array *insn_array;
+	struct bpf_map *map;
+	u32 xlated_off;
+	int i, j;
+
+	for (i = 0; i < prog->aux->used_map_cnt; i++) {
+		map = prog->aux->used_maps[i];
+		if (!is_jump_table(map))
+			continue;
+
+		insn_array = cast_insn_array(map);
+		for (j = 0; j < map->max_entries; j++) {
+			xlated_off = insn_array->values[j].xlated_off;
+			if (xlated_off == INSN_DELETED)
+				continue;
+			if (xlated_off < prog->aux->subprog_start)
+				continue;
+			xlated_off -= prog->aux->subprog_start;
+			if (xlated_off >= prog->len)
+				continue;
+			__set_bit(xlated_off, bitmap);
 		}
 	}
 }

@@ -20292,6 +20292,12 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 		return -EINVAL;
 	}
 
+	/*
+	 * Explicitly mark this map as a jump table such that it can be
+	 * distinguished later from other instruction arrays
+	 */
+	bpf_prog_mark_jump_table(map);
+
 	for (i = 0; i < n - 1; i++) {
 		other_branch = push_stack(env, env->gotox_tmp_buf->items[i],
 					  env->insn_idx, env->cur_state->speculative);
