@@ -619,6 +619,16 @@ static inline void emit_fence_rw_rw(struct rv_jit_context *ctx)
 	emit(rv_fence(0x3, 0x3), ctx);
 }
 
+static inline u32 rv_fence_i(void)
+{
+	return rv_i_insn(0, 0, 1, 0, 0x0f);
+}
+
+static inline void emit_fence_i(struct rv_jit_context *ctx)
+{
+	emit(rv_fence_i(), ctx);
+}
+
 static inline u32 rv_nop(void)
 {
 	return rv_i_insn(0, 0, 0, 0, 0x13);

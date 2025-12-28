@@ -1248,8 +1248,12 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 			return -1;
 		break;
 
-	/* speculation barrier */
+	/*
+	 * Speculation barrier using fence.i for pipeline serialization.
+	 * RISC-V lacks a dedicated speculation barrier instruction.
+	 */
 	case BPF_ST | BPF_NOSPEC:
+		emit_fence_i(ctx);
 		break;
 
 	case BPF_ST | BPF_MEM | BPF_B:
