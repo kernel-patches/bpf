@@ -124,6 +124,41 @@ static void __bpf_lru_node_move(struct bpf_lru_list *l,
 	list_move(&node->list, &l->lists[tgt_type]);
 }
 
+static struct bpf_lru_node *__bpf_lru_node_move_from_extra(struct bpf_lru_list *l,
+							   enum bpf_lru_list_type tgt_type)
+{
+	struct bpf_lru_node *node;
+
+	node = list_first_entry_or_null(&l->extra, struct bpf_lru_node, list);
+	if (!node)
+		return NULL;
+
+	if (WARN_ON_ONCE(IS_LOCAL_LIST_TYPE(tgt_type)))
+		return NULL;
+
+	bpf_lru_list_count_inc(l, tgt_type);
+	bpf_lru_node_reset_state(node, tgt_type);
+	list_move(&node->list, &l->lists[tgt_type]);
+	return node;
+}
+
+static bool __bpf_lru_node_move_to_extra(struct bpf_lru_list *l,
+					 struct bpf_lru_node *node)
+{
+	if (!list_empty(&l->extra))
+		return false;
+
+	if (WARN_ON_ONCE(IS_LOCAL_LIST_TYPE(node->type)))
+		return false;
+
+	bpf_lru_move_next_inactive_rotation(l, node);
+
+	bpf_lru_list_count_dec(l, node->type);
+	bpf_lru_node_reset_state(node, BPF_LRU_LIST_T_FREE);
+	list_move(&node->list, &l->extra);
+	return true;
+}
+
 static bool bpf_lru_list_inactive_low(const struct bpf_lru_list *l)
 {
 	return l->counts[BPF_LRU_LIST_T_INACTIVE] <
@@ -303,6 +338,69 @@ static void __local_list_flush(struct bpf_lru_list *l,
 			__bpf_lru_node_move_in(l, node,
 					       BPF_LRU_LIST_T_INACTIVE);
 	}
+}
+
+static struct bpf_lru_node *bpf_percpu_lru_pop_extra(struct bpf_lru *lru)
+{
+	int cpu = raw_smp_processor_id();
+	struct bpf_lru_node *node;
+	struct bpf_lru_list *l;
+	unsigned long flags;
+
+	l = per_cpu_ptr(lru->percpu_lru, cpu);
+
+	raw_spin_lock_irqsave(&l->lock, flags);
+
+	node = __bpf_lru_node_move_from_extra(l, BPF_LRU_LIST_T_ACTIVE);
+
+	raw_spin_unlock_irqrestore(&l->lock, flags);
+
+	return node;
+}
+
+static struct bpf_lru_node *bpf_lru_locallist_extra_pop(struct bpf_lru_locallist *l)
+{
+	struct bpf_lru_node *node;
+
+	node = list_first_entry_or_null(&l->extra, struct bpf_lru_node, list);
+	if (node)
+		list_del(&node->list);
+
+	return node;
+}
+
+static void __local_list_add_pending(struct bpf_lru *lru,
+				     struct bpf_lru_locallist *loc_l,
+				     int cpu,
+				     struct bpf_lru_node *node);
+
+static struct bpf_lru_node *bpf_common_lru_pop_extra(struct bpf_lru *lru)
+{
+	struct bpf_common_lru *clru = &lru->common_lru;
+	int cpu = raw_smp_processor_id();
+	struct bpf_lru_locallist *loc_l;
+	struct bpf_lru_node *node;
+	unsigned long flags;
+
+	loc_l = per_cpu_ptr(clru->local_list, cpu);
+
+	raw_spin_lock_irqsave(&loc_l->lock, flags);
+
+	node = bpf_lru_locallist_extra_pop(loc_l);
+	if (node)
+		__local_list_add_pending(lru, loc_l, cpu, node);
+
+	raw_spin_unlock_irqrestore(&loc_l->lock, flags);
+
+	return node;
+}
+
+struct bpf_lru_node *bpf_lru_pop_extra(struct bpf_lru *lru)
+{
+	if (lru->percpu)
+		return bpf_percpu_lru_pop_extra(lru);
+	else
+		return bpf_common_lru_pop_extra(lru);
 }
 
 static void bpf_lru_list_push_free(struct bpf_lru_list *l,
@@ -496,6 +594,16 @@ struct bpf_lru_node *bpf_lru_pop_free(struct bpf_lru *lru)
 		return bpf_common_lru_pop_free(lru);
 }
 
+static bool bpf_lru_locallist_extra_push(struct bpf_lru_locallist *loc_l, struct bpf_lru_node *node)
+{
+	if (!list_empty(&loc_l->extra))
+		return false;
+
+	bpf_lru_node_reset_state(node, BPF_LRU_LIST_T_FREE);
+	list_move(&node->list, &loc_l->extra);
+	return true;
+}
+
 static void bpf_common_lru_push_free(struct bpf_lru *lru,
 				     struct bpf_lru_node *node)
 {
@@ -518,8 +626,10 @@ static void bpf_common_lru_push_free(struct bpf_lru *lru,
 			goto check_lru_list;
 		}
 
-		bpf_lru_node_reset_state(node, BPF_LRU_LOCAL_LIST_T_FREE);
-		list_move(&node->list, local_free_list(loc_l));
+		if (!bpf_lru_locallist_extra_push(loc_l, node)) {
+			bpf_lru_node_reset_state(node, BPF_LRU_LOCAL_LIST_T_FREE);
+			list_move(&node->list, local_free_list(loc_l));
+		}
 
 		raw_spin_unlock_irqrestore(&loc_l->lock, flags);
 		return;
@@ -539,7 +649,8 @@ static void bpf_percpu_lru_push_free(struct bpf_lru *lru,
 
 	raw_spin_lock_irqsave(&l->lock, flags);
 
-	__bpf_lru_node_move(l, node, BPF_LRU_LIST_T_FREE);
+	if (!__bpf_lru_node_move_to_extra(l, node))
+		__bpf_lru_node_move(l, node, BPF_LRU_LIST_T_FREE);
 
 	raw_spin_unlock_irqrestore(&l->lock, flags);
 }
@@ -554,9 +665,11 @@ void bpf_lru_push_free(struct bpf_lru *lru, struct bpf_lru_node *node)
 
 static void bpf_common_lru_populate(struct bpf_lru *lru, void *buf,
 				    u32 node_offset, u32 elem_size,
-				    u32 nr_elems)
+				    u32 nr_elems, u32 nr_extra_elems)
 {
-	struct bpf_lru_list *l = &lru->common_lru.lru_list;
+	struct bpf_common_lru *clru = &lru->common_lru;
+	struct bpf_lru_list *l = &clru->lru_list;
+	int cpu;
 	u32 i;
 
 	for (i = 0; i < nr_elems; i++) {
@@ -570,11 +683,26 @@ static void bpf_common_lru_populate(struct bpf_lru *lru, void *buf,
 
 	lru->target_free = clamp((nr_elems / num_possible_cpus()) / 2,
 				 1, LOCAL_FREE_TARGET);
+
+	if (WARN_ON_ONCE(nr_extra_elems != num_possible_cpus()))
+		return;
+
+	for_each_possible_cpu(cpu) {
+		struct bpf_lru_locallist *loc_l;
+		struct bpf_lru_node *node;
+
+		loc_l = per_cpu_ptr(clru->local_list, cpu);
+		node = (struct bpf_lru_node *)(buf + node_offset);
+		node->cpu = cpu;
+		bpf_lru_node_reset_state(node, BPF_LRU_LIST_T_FREE);
+		list_add(&node->list, &loc_l->extra);
+		buf += elem_size;
+	}
 }
 
 static void bpf_percpu_lru_populate(struct bpf_lru *lru, void *buf,
 				    u32 node_offset, u32 elem_size,
-				    u32 nr_elems)
+				    u32 nr_elems, u32 nr_extra_elems)
 {
 	u32 i, pcpu_entries;
 	int cpu;
@@ -600,17 +728,31 @@ again:
 		if (i % pcpu_entries)
 			goto again;
 	}
+
+	if (WARN_ON_ONCE(nr_extra_elems != num_possible_cpus()))
+		return;
+
+	for_each_possible_cpu(cpu) {
+		struct bpf_lru_node *node;
+
+		l = per_cpu_ptr(lru->percpu_lru, cpu);
+		node = (struct bpf_lru_node *)(buf + node_offset);
+		node->cpu = cpu;
+		bpf_lru_node_reset_state(node, BPF_LRU_LIST_T_FREE);
+		list_add(&node->list, &l->extra);
+		buf += elem_size;
+	}
 }
 
 void bpf_lru_populate(struct bpf_lru *lru, void *buf, u32 node_offset,
-		      u32 elem_size, u32 nr_elems)
+		      u32 elem_size, u32 nr_elems, u32 nr_extra_elems)
 {
 	if (lru->percpu)
 		bpf_percpu_lru_populate(lru, buf, node_offset, elem_size,
-					nr_elems);
+					nr_elems, nr_extra_elems);
 	else
 		bpf_common_lru_populate(lru, buf, node_offset, elem_size,
-					nr_elems);
+					nr_elems, nr_extra_elems);
 }
 
 static void bpf_lru_locallist_init(struct bpf_lru_locallist *loc_l, int cpu)
@@ -619,6 +761,8 @@ static void bpf_lru_locallist_init(struct bpf_lru_locallist *loc_l, int cpu)
 
 	for (i = 0; i < NR_BPF_LRU_LOCAL_LIST_T; i++)
 		INIT_LIST_HEAD(&loc_l->lists[i]);
+
+	INIT_LIST_HEAD(&loc_l->extra);
 
 	loc_l->next_steal = cpu;
 
@@ -636,6 +780,8 @@ static void bpf_lru_list_init(struct bpf_lru_list *l)
 		l->counts[i] = 0;
 
 	l->next_inactive_rotation = &l->lists[BPF_LRU_LIST_T_INACTIVE];
+
+	INIT_LIST_HEAD(&l->extra);
 
 	raw_spin_lock_init(&l->lock);
 }

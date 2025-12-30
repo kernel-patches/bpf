@@ -207,12 +207,12 @@ static struct htab_elem *get_htab_elem(struct bpf_htab *htab, int i)
 }
 
 /* Both percpu and fd htab support in-place update, so no need for
- * extra elem. LRU itself can remove the least used element, so
- * there is no need for an extra elem during map_update.
+ * extra elem. LRU requires extra elems to avoid unintended eviction when
+ * updating the existing elems.
  */
 static bool htab_has_extra_elems(struct bpf_htab *htab)
 {
-	return !htab_is_percpu(htab) && !htab_is_lru(htab) && !is_fd_htab(htab);
+	return htab_is_lru(htab) || (!htab_is_percpu(htab) && !is_fd_htab(htab));
 }
 
 static void htab_free_prealloced_internal_structs(struct bpf_htab *htab)
@@ -313,6 +313,7 @@ static struct htab_elem *prealloc_lru_pop(struct bpf_htab *htab, void *key,
 static int prealloc_init(struct bpf_htab *htab)
 {
 	u32 num_entries = htab->map.max_entries;
+	u32 lru_num_entries = num_entries;
 	int err = -ENOMEM, i;
 
 	if (htab_has_extra_elems(htab))
@@ -354,7 +355,8 @@ skip_percpu_elems:
 	if (htab_is_lru(htab))
 		bpf_lru_populate(&htab->lru, htab->elems,
 				 offsetof(struct htab_elem, lru_node),
-				 htab->elem_size, num_entries);
+				 htab->elem_size, lru_num_entries,
+				 num_entries - lru_num_entries);
 	else
 		pcpu_freelist_populate(&htab->freelist,
 				       htab->elems + offsetof(struct htab_elem, fnode),
@@ -557,7 +559,7 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 		if (err)
 			goto free_map_locked;
 
-		if (htab_has_extra_elems(htab)) {
+		if (htab_has_extra_elems(htab) && !htab_is_lru(htab)) {
 			err = alloc_extra_elems(htab);
 			if (err)
 				goto free_prealloc;
@@ -1182,6 +1184,69 @@ static void htab_lru_push_free(struct bpf_htab *htab, struct htab_elem *elem)
 	bpf_lru_push_free(&htab->lru, &elem->lru_node);
 }
 
+static int htab_lru_map_update_elem_in_place(struct bpf_htab *htab, void *key, void *value,
+					     u64 map_flags, struct bucket *b,
+					     struct hlist_nulls_head *head, u32 hash,
+					     bool percpu, bool onallcpus)
+{
+	struct htab_elem *l_new, *l_old, *l_free;
+	struct bpf_map *map = &htab->map;
+	u32 key_size = map->key_size;
+	struct bpf_lru_node *node;
+	unsigned long flags;
+	void *l_val;
+	int ret;
+
+	node = bpf_lru_pop_extra(&htab->lru);
+	if (!node)
+		return -ENOENT;
+
+	l_new = container_of(node, struct htab_elem, lru_node);
+	l_new->hash = hash;
+	memcpy(l_new->key, key, key_size);
+	if (!percpu) {
+		l_val = htab_elem_value(l_new, map->key_size);
+		copy_map_value(map, l_val, value);
+		bpf_obj_free_fields(map->record, l_val);
+	}
+
+	ret = htab_lock_bucket(b, &flags);
+	if (ret)
+		goto err_lock_bucket;
+
+	l_old = lookup_elem_raw(head, hash, key, key_size);
+
+	ret = check_flags(htab, l_old, map_flags);
+	if (ret)
+		goto err;
+
+	if (l_old) {
+		bpf_lru_node_set_ref(&l_new->lru_node);
+		if (percpu) {
+			/* per-cpu hash map can update value in-place.
+			 * Keep the same logic in __htab_lru_percpu_map_update_elem().
+			 */
+			pcpu_copy_value(htab, htab_elem_get_ptr(l_old, key_size),
+					value, onallcpus);
+			l_free = l_new;
+		} else {
+			hlist_nulls_add_head_rcu(&l_new->hash_node, head);
+			hlist_nulls_del_rcu(&l_old->hash_node);
+			l_free = l_old;
+		}
+	} else {
+		ret = -ENOENT;
+	}
+
+err:
+	htab_unlock_bucket(b, flags);
+
+err_lock_bucket:
+	bpf_lru_push_free(&htab->lru, ret ? node : &l_free->lru_node);
+
+	return ret;
+}
+
 static long htab_lru_map_update_elem(struct bpf_map *map, void *key, void *value,
 				     u64 map_flags)
 {
@@ -1205,6 +1270,11 @@ static long htab_lru_map_update_elem(struct bpf_map *map, void *key, void *value
 
 	b = __select_bucket(htab, hash);
 	head = &b->head;
+
+	ret = htab_lru_map_update_elem_in_place(htab, key, value, map_flags, b, head, hash, false,
+						false);
+	if (!ret)
+		return 0;
 
 	/* For LRU, we need to alloc before taking bucket's
 	 * spinlock because getting free nodes from LRU may need
@@ -1335,6 +1405,11 @@ static long __htab_lru_percpu_map_update_elem(struct bpf_map *map, void *key,
 
 	b = __select_bucket(htab, hash);
 	head = &b->head;
+
+	ret = htab_lru_map_update_elem_in_place(htab, key, value, map_flags, b, head, hash, true,
+						onallcpus);
+	if (!ret)
+		return 0;
 
 	/* For LRU, we need to alloc before taking bucket's
 	 * spinlock because LRU's elem alloc may need
