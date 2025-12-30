@@ -33,12 +33,14 @@ struct bpf_lru_list {
 	unsigned int counts[NR_BPF_LRU_LIST_COUNT];
 	/* The next inactive list rotation starts from here */
 	struct list_head *next_inactive_rotation;
+	struct list_head extra; /* for percpu lru */
 
 	raw_spinlock_t lock ____cacheline_aligned_in_smp;
 };
 
 struct bpf_lru_locallist {
 	struct list_head lists[NR_BPF_LRU_LOCAL_LIST_T];
+	struct list_head extra; /* for common lru */
 	u16 next_steal;
 	raw_spinlock_t lock;
 };
@@ -71,9 +73,10 @@ static inline void bpf_lru_node_set_ref(struct bpf_lru_node *node)
 int bpf_lru_init(struct bpf_lru *lru, bool percpu,
 		 del_from_htab_func del_from_htab, void *delete_arg);
 void bpf_lru_populate(struct bpf_lru *lru, void *buf, u32 node_offset,
-		      u32 elem_size, u32 nr_elems);
+		      u32 elem_size, u32 nr_elems, u32 nr_extra_elems);
 void bpf_lru_destroy(struct bpf_lru *lru);
 struct bpf_lru_node *bpf_lru_pop_free(struct bpf_lru *lru);
 void bpf_lru_push_free(struct bpf_lru *lru, struct bpf_lru_node *node);
+struct bpf_lru_node *bpf_lru_pop_extra(struct bpf_lru *lru);
 
 #endif
