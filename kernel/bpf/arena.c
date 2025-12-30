@@ -360,6 +360,7 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 {
 	struct bpf_map *map = vmf->vma->vm_file->private_data;
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+	struct mem_cgroup *memcg, *old_memcg;
 	struct page *page;
 	long kbase, kaddr;
 	unsigned long flags;
@@ -376,6 +377,8 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	if (page)
 		/* already have a page vmap-ed */
 		goto out;
+
+	old_memcg = bpf_map_memcg_enter(map, &memcg);
 
 	if (arena->map.map_flags & BPF_F_SEGV_ON_FAULT)
 		/* User space requested to segfault when page is not allocated by bpf prog */
@@ -400,12 +403,14 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 		goto out_unlock_sigsegv;
 	}
 	flush_vmap_cache(kaddr, PAGE_SIZE);
+	bpf_map_memcg_exit(old_memcg, memcg);
 out:
 	page_ref_add(page, 1);
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 	vmf->page = page;
 	return 0;
 out_unlock_sigsegv:
+	bpf_map_memcg_exit(old_memcg, memcg);
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 	return VM_FAULT_SIGSEGV;
 }
@@ -557,7 +562,7 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 
 	/* Cap allocation size to KMALLOC_MAX_CACHE_SIZE so kmalloc_nolock() can succeed. */
 	alloc_pages = min(page_cnt, KMALLOC_MAX_CACHE_SIZE / sizeof(struct page *));
-	pages = kmalloc_nolock(alloc_pages * sizeof(struct page *), 0, NUMA_NO_NODE);
+	pages = kmalloc_nolock(alloc_pages * sizeof(struct page *), __GFP_ACCOUNT, NUMA_NO_NODE);
 	if (!pages)
 		return 0;
 	data.pages = pages;
@@ -713,7 +718,7 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 	return;
 
 defer:
-	s = kmalloc_nolock(sizeof(struct arena_free_span), 0, -1);
+	s = kmalloc_nolock(sizeof(struct arena_free_span), __GFP_ACCOUNT, -1);
 	if (!s)
 		/*
 		 * If allocation fails in non-sleepable context, pages are intentionally left
@@ -834,49 +839,69 @@ __bpf_kfunc_start_defs();
 __bpf_kfunc void *bpf_arena_alloc_pages(void *p__map, void *addr__ign, u32 page_cnt,
 					int node_id, u64 flags)
 {
+	void *ret;
 	struct bpf_map *map = p__map;
+	struct mem_cgroup *memcg, *old_memcg;
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 
 	if (map->map_type != BPF_MAP_TYPE_ARENA || flags || !page_cnt)
 		return NULL;
 
-	return (void *)arena_alloc_pages(arena, (long)addr__ign, page_cnt, node_id, true);
+	old_memcg = bpf_map_memcg_enter(map, &memcg);
+	ret = (void *)arena_alloc_pages(arena, (long)addr__ign, page_cnt, node_id, true);
+	bpf_map_memcg_exit(old_memcg, memcg);
+
+	return ret;
 }
 
 void *bpf_arena_alloc_pages_non_sleepable(void *p__map, void *addr__ign, u32 page_cnt,
 					  int node_id, u64 flags)
 {
+	void *ret;
 	struct bpf_map *map = p__map;
+	struct mem_cgroup *memcg, *old_memcg;
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 
 	if (map->map_type != BPF_MAP_TYPE_ARENA || flags || !page_cnt)
 		return NULL;
 
-	return (void *)arena_alloc_pages(arena, (long)addr__ign, page_cnt, node_id, false);
+	old_memcg = bpf_map_memcg_enter(map, &memcg);
+	ret = (void *)arena_alloc_pages(arena, (long)addr__ign, page_cnt, node_id, false);
+	bpf_map_memcg_exit(old_memcg, memcg);
+
+	return ret;
 }
 __bpf_kfunc void bpf_arena_free_pages(void *p__map, void *ptr__ign, u32 page_cnt)
 {
 	struct bpf_map *map = p__map;
+	struct mem_cgroup *memcg, *old_memcg;
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 
 	if (map->map_type != BPF_MAP_TYPE_ARENA || !page_cnt || !ptr__ign)
 		return;
+	old_memcg = bpf_map_memcg_enter(map, &memcg);
 	arena_free_pages(arena, (long)ptr__ign, page_cnt, true);
+	bpf_map_memcg_exit(old_memcg, memcg);
 }
 
 void bpf_arena_free_pages_non_sleepable(void *p__map, void *ptr__ign, u32 page_cnt)
 {
 	struct bpf_map *map = p__map;
+	struct mem_cgroup *memcg, *old_memcg;
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 
 	if (map->map_type != BPF_MAP_TYPE_ARENA || !page_cnt || !ptr__ign)
 		return;
+	old_memcg = bpf_map_memcg_enter(map, &memcg);
 	arena_free_pages(arena, (long)ptr__ign, page_cnt, false);
+	bpf_map_memcg_exit(old_memcg, memcg);
 }
 
 __bpf_kfunc int bpf_arena_reserve_pages(void *p__map, void *ptr__ign, u32 page_cnt)
 {
+	int ret;
 	struct bpf_map *map = p__map;
+	struct mem_cgroup *memcg, *old_memcg;
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 
 	if (map->map_type != BPF_MAP_TYPE_ARENA)
@@ -885,7 +910,11 @@ __bpf_kfunc int bpf_arena_reserve_pages(void *p__map, void *ptr__ign, u32 page_c
 	if (!page_cnt)
 		return 0;
 
-	return arena_reserve_pages(arena, (long)ptr__ign, page_cnt);
+	old_memcg = bpf_map_memcg_enter(map, &memcg);
+	ret = arena_reserve_pages(arena, (long)ptr__ign, page_cnt);
+	bpf_map_memcg_exit(old_memcg, memcg);
+
+	return ret;
 }
 __bpf_kfunc_end_defs();
 
