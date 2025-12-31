@@ -3,6 +3,9 @@
 #ifndef _BPF_QDISC_COMMON_H
 #define _BPF_QDISC_COMMON_H
 
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+
 #define NET_XMIT_SUCCESS        0x00
 #define NET_XMIT_DROP           0x01    /* skb dropped                  */
 #define NET_XMIT_CN             0x02    /* congestion notification      */
@@ -13,6 +16,20 @@
 #define private(name) SEC(".data." #name) __hidden __attribute__((aligned(8)))
 
 struct bpf_sk_buff_ptr;
+
+/* kfunc declarations provided via vmlinux BTF */
+extern void bpf_qdisc_skb_drop(struct sk_buff *skb,
+			       struct bpf_sk_buff_ptr *to_free) __ksym;
+
+extern void bpf_qdisc_bstats_update(struct Qdisc *sch,
+				    const struct sk_buff *skb) __ksym;
+
+extern void bpf_qdisc_watchdog_schedule(struct Qdisc *sch,
+					u64 expire, u64 delta_ns) __ksym;
+
+extern __u32 bpf_skb_get_hash(struct sk_buff *skb) __ksym;
+
+extern void bpf_kfree_skb(struct sk_buff *skb) __ksym;
 
 static struct qdisc_skb_cb *qdisc_skb_cb(const struct sk_buff *skb)
 {
