@@ -61,6 +61,15 @@ static void bpf_lru_list_count_dec(struct bpf_lru_list *l,
 		l->counts[type]--;
 }
 
+static void bpf_lru_move_next_inactive_rotation(struct bpf_lru_list *l, struct bpf_lru_node *node)
+{
+	/* If the removing node is the next_inactive_rotation candidate,
+	 * move the next_inactive_rotation pointer also.
+	 */
+	if (&node->list == l->next_inactive_rotation)
+		l->next_inactive_rotation = l->next_inactive_rotation->prev;
+}
+
 static void __bpf_lru_node_move_to_free(struct bpf_lru_list *l,
 					struct bpf_lru_node *node,
 					struct list_head *free_list,
@@ -69,11 +78,7 @@ static void __bpf_lru_node_move_to_free(struct bpf_lru_list *l,
 	if (WARN_ON_ONCE(IS_LOCAL_LIST_TYPE(node->type)))
 		return;
 
-	/* If the removing node is the next_inactive_rotation candidate,
-	 * move the next_inactive_rotation pointer also.
-	 */
-	if (&node->list == l->next_inactive_rotation)
-		l->next_inactive_rotation = l->next_inactive_rotation->prev;
+	bpf_lru_move_next_inactive_rotation(l, node);
 
 	bpf_lru_list_count_dec(l, node->type);
 
@@ -114,11 +119,7 @@ static void __bpf_lru_node_move(struct bpf_lru_list *l,
 	}
 	bpf_lru_node_clear_ref(node);
 
-	/* If the moving node is the next_inactive_rotation candidate,
-	 * move the next_inactive_rotation pointer also.
-	 */
-	if (&node->list == l->next_inactive_rotation)
-		l->next_inactive_rotation = l->next_inactive_rotation->prev;
+	bpf_lru_move_next_inactive_rotation(l, node);
 
 	list_move(&node->list, &l->lists[tgt_type]);
 }
