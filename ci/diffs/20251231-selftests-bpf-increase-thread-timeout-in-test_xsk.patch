@@ -1,0 +1,26 @@
+From 18839e3a16d1fd37bae386a4f11316c5f67775fe Mon Sep 17 00:00:00 2001
+From: Ihor Solodrai <ihor.solodrai@linux.dev>
+Date: Wed, 31 Dec 2025 10:06:39 -0800
+Subject: [PATCH] selftests/bpf: increase thread timeout in test_xsk
+
+Signed-off-by: Ihor Solodrai <ihor.solodrai@linux.dev>
+---
+ tools/testing/selftests/bpf/prog_tests/test_xsk.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/testing/selftests/bpf/prog_tests/test_xsk.c b/tools/testing/selftests/bpf/prog_tests/test_xsk.c
+index 5af28f359cfd..8dcb60bbfc89 100644
+--- a/tools/testing/selftests/bpf/prog_tests/test_xsk.c
++++ b/tools/testing/selftests/bpf/prog_tests/test_xsk.c
+@@ -29,7 +29,7 @@
+ /* Just to align the data in the packet */
+ #define PKT_HDR_SIZE			(sizeof(struct ethhdr) + 2)
+ #define POLL_TMOUT			1000
+-#define THREAD_TMOUT			3
++#define THREAD_TMOUT			16
+ #define UMEM_HEADROOM_TEST_SIZE		128
+ #define XSK_DESC__INVALID_OPTION	(0xffff)
+ #define XSK_UMEM__INVALID_FRAME_SIZE	(MAX_ETH_JUMBO_SIZE + 1)
+-- 
+2.52.0
+
