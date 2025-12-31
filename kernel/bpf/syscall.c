@@ -67,6 +67,8 @@ static DEFINE_SPINLOCK(link_idr_lock);
 int sysctl_unprivileged_bpf_disabled __read_mostly =
 	IS_BUILTIN(CONFIG_BPF_UNPRIV_DEFAULT_OFF) ? 2 : 0;
 
+int sysctl_disable_bpf_prog_load = 0;
+
 static const struct bpf_map_ops * const bpf_map_types[] = {
 #define BPF_PROG_TYPE(_id, _name, prog_ctx_type, kern_ctx_type)
 #define BPF_MAP_TYPE(_id, _ops) \
@@ -2890,6 +2892,9 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 				 BPF_F_TEST_REG_INVARIANTS |
 				 BPF_F_TOKEN_FD))
 		return -EINVAL;
+
+	if (sysctl_disable_bpf_prog_load)
+		return -EUNATCH;
 
 	bpf_prog_load_fixup_attach_type(attr);
 
@@ -6510,6 +6515,15 @@ static const struct ctl_table bpf_syscall_table[] = {
 		.proc_handler	= bpf_unpriv_handler,
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_TWO,
+	},
+	{
+		.procname	= "disable_bpf_prog_load",
+		.data		= &sysctl_disable_bpf_prog_load,
+		.maxlen		= sizeof(sysctl_disable_bpf_prog_load),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ONE,
+		.extra2		= SYSCTL_ONE,
 	},
 	{
 		.procname	= "bpf_stats_enabled",

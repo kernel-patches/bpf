@@ -1675,6 +1675,15 @@ entry will default to 2 instead of 0.
 = =============================================================
 
 
+disable_bpf_prog_load
+=====================
+
+Writing 1 to this entry will cause all future invocations of
+``bpf(BPF_PROG_LOAD, ...)`` to fail with -EUNATCH, thus effectively
+permanently disabling the instantiation of new eBPF programs.
+Once set to 1, this cannot be reset back to 0.
+
+
 warn_limit
 ==========
 
