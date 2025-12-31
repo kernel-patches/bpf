@@ -62,7 +62,7 @@ static int __smc_bpf_stub_set_tcp_option_cond(const struct tcp_sock *tp,
 	return 1;
 }
 
-static struct smc_hs_ctrl __smc_bpf_hs_ctrl = {
+static const struct smc_hs_ctrl __smc_bpf_hs_ctrl = {
 	.syn_option	= __smc_bpf_stub_set_tcp_option,
 	.synack_option	= __smc_bpf_stub_set_tcp_option_cond,
 };

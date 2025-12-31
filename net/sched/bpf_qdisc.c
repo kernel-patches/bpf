@@ -429,7 +429,7 @@ static void Qdisc_ops__destroy(struct Qdisc *sch)
 {
 }
 
-static struct Qdisc_ops __bpf_ops_qdisc_ops = {
+static const struct Qdisc_ops __bpf_ops_qdisc_ops = {
 	.enqueue = Qdisc_ops__enqueue,
 	.dequeue = Qdisc_ops__dequeue,
 	.init = Qdisc_ops__init,
