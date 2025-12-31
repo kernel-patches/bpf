@@ -1,0 +1,4 @@
+arena_spin_lock
+map_kptr/success-map
+ns_xsk_skb/SEND_RECEIVE_SINGLE_PKT
+res_spin_lock_stress
