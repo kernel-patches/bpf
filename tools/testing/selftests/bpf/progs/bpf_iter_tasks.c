@@ -4,6 +4,11 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+extern int bpf_copy_from_user_task_str(void *dst, u32 dst__sz,
+				       const void *unsafe_ptr,
+				       struct task_struct *task,
+				       u64 flags);
+
 char _license[] SEC("license") = "GPL";
 
 uint32_t tid = 0;
