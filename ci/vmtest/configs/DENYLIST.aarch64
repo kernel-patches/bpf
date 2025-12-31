@@ -1,0 +1,10 @@
+map_kptr/success-map
+ns_xsk_skb/TX_QUEUE_CONSUMER
+ns_xsk_skb/XDP_SHARED_UMEM
+send_signal/send_signal_perf
+send_signal/send_signal_perf_thread
+send_signal/send_signal_perf_remote
+send_signal/send_signal_nmi_remote
+send_signal/send_signal_perf_thread_remote
+send_signal/send_signal_nmi_thread_remote
+unpriv_bpf_disabled
