@@ -144,7 +144,7 @@ ftrace_regs_get_return_address(const struct ftrace_regs *fregs)
 }
 
 static __always_inline struct pt_regs *
-ftrace_partial_regs(const struct ftrace_regs *fregs, struct pt_regs *regs)
+ftrace_partial_regs_begin(const struct ftrace_regs *fregs, struct pt_regs *regs)
 {
 	struct __arch_ftrace_regs *afregs = arch_ftrace_regs(fregs);
 
@@ -155,6 +155,17 @@ ftrace_partial_regs(const struct ftrace_regs *fregs, struct pt_regs *regs)
 	regs->regs[30] = afregs->lr;
 	regs->pstate = PSR_MODE_EL1h;
 	return regs;
+}
+
+static __always_inline void
+ftrace_partial_regs_end(const struct ftrace_regs *fregs, struct pt_regs *regs)
+{
+	struct __arch_ftrace_regs *afregs = arch_ftrace_regs(fregs);
+
+	if (afregs->pc != regs->pc) {
+		afregs->pc = regs->pc;
+		afregs->regs[0] = regs->regs[0];
+	}
 }
 
 #define arch_ftrace_fill_perf_regs(fregs, _regs) do {		\

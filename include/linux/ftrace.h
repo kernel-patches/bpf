@@ -198,7 +198,7 @@ static __always_inline struct pt_regs *ftrace_get_regs(struct ftrace_regs *fregs
 #endif
 
 static __always_inline struct pt_regs *
-ftrace_partial_regs(struct ftrace_regs *fregs, struct pt_regs *regs)
+ftrace_partial_regs_begin(struct ftrace_regs *fregs, struct pt_regs *regs)
 {
 	/*
 	 * If CONFIG_HAVE_FTRACE_REGS_HAVING_PT_REGS=y, ftrace_regs memory
@@ -212,6 +212,9 @@ ftrace_partial_regs(struct ftrace_regs *fregs, struct pt_regs *regs)
 	arch_ftrace_partial_regs(regs);
 	return regs;
 }
+
+static __always_inline void
+ftrace_partial_regs_end(struct ftrace_regs *fregs, struct pt_regs *regs) { }
 
 #endif /* !CONFIG_HAVE_DYNAMIC_FTRACE_WITH_ARGS || CONFIG_HAVE_FTRACE_REGS_HAVING_PT_REGS */
 
