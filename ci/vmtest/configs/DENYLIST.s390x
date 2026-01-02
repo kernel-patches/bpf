@@ -1,0 +1,4 @@
+arena_spin_lock
+map_kptr/success-map
+res_spin_lock_stress
+tc_edt
