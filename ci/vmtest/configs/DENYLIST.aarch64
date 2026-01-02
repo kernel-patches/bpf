@@ -1,0 +1,3 @@
+map_kptr/success-map
+send_signal
+unpriv_bpf_disabled
