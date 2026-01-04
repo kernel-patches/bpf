@@ -17,4 +17,10 @@ int xdp_context(struct xdp_md *xdp)
 	return ret;
 }
 
+SEC("xdp")
+int xdp_pass(struct xdp_md *xdp)
+{
+	return XDP_PASS;
+}
+
 char _license[] SEC("license") = "GPL";
