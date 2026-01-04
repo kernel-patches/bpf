@@ -90,11 +90,9 @@ reset:
 struct xdp_page_head {
 	struct xdp_buff orig_ctx;
 	struct xdp_buff ctx;
-	union {
-		/* ::data_hard_start starts here */
-		DECLARE_FLEX_ARRAY(struct xdp_frame, frame);
-		DECLARE_FLEX_ARRAY(u8, data);
-	};
+	/* ::data_hard_start starts here */
+	struct xdp_frame frame;
+	DECLARE_FLEX_ARRAY(u8, data);
 };
 
 struct xdp_test_data {
@@ -131,10 +129,11 @@ static void xdp_test_run_init_page(netmem_ref netmem, void *arg)
 	frm_len = orig_ctx->data_end - orig_ctx->data_meta;
 	meta_len = orig_ctx->data - orig_ctx->data_meta;
 	headroom -= meta_len;
+	headroom += sizeof(head->frame);
 
 	new_ctx = &head->ctx;
-	frm = head->frame;
-	data = head->data;
+	frm = &head->frame;
+	data = frm;
 	memcpy(data + headroom, orig_ctx->data_meta, frm_len);
 
 	xdp_init_buff(new_ctx, TEST_XDP_FRAME_SIZE, &xdp->rxq);
@@ -215,8 +214,8 @@ static bool frame_was_changed(const struct xdp_page_head *head)
 	 * i.e. has the highest chances to be overwritten. If those two are
 	 * untouched, it's most likely safe to skip the context reset.
 	 */
-	return head->frame->data != head->orig_ctx.data ||
-	       head->frame->flags != head->orig_ctx.flags;
+	return head->frame.data != head->orig_ctx.data ||
+	       head->frame.flags != head->orig_ctx.flags;
 }
 
 static bool ctx_was_changed(struct xdp_page_head *head)
@@ -234,8 +233,8 @@ static void reset_ctx(struct xdp_page_head *head)
 	head->ctx.data = head->orig_ctx.data;
 	head->ctx.data_meta = head->orig_ctx.data_meta;
 	head->ctx.data_end = head->orig_ctx.data_end;
-	xdp_update_frame_from_buff(&head->ctx, head->frame);
-	head->frame->mem_type = head->orig_ctx.rxq->mem.type;
+	xdp_update_frame_from_buff(&head->ctx, &head->frame);
+	head->frame.mem_type = head->orig_ctx.rxq->mem.type;
 }
 
 static int xdp_recv_frames(struct xdp_frame **frames, int nframes,
@@ -301,7 +300,7 @@ static int xdp_test_run_batch(struct xdp_test_data *xdp, struct bpf_prog *prog,
 		head = phys_to_virt(page_to_phys(page));
 		reset_ctx(head);
 		ctx = &head->ctx;
-		frm = head->frame;
+		frm = &head->frame;
 		xdp->frame_cnt++;
 
 		act = bpf_prog_run_xdp(prog, ctx);
