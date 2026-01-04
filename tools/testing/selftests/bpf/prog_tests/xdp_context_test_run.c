@@ -45,6 +45,7 @@ void test_xdp_context_error(int prog_fd, struct bpf_test_run_opts opts,
 void test_xdp_context_test_run(void)
 {
 	struct test_xdp_context_test_run *skel = NULL;
+	char data_xdp[sizeof(pkt_v4) + XDP_PACKET_HEADROOM];
 	char data[sizeof(pkt_v4) + sizeof(__u32)];
 	char bad_ctx[sizeof(struct xdp_md) + 1];
 	struct xdp_md ctx_in, ctx_out;
@@ -53,6 +54,12 @@ void test_xdp_context_test_run(void)
 			    .data_size_in = sizeof(data),
 			    .ctx_out = &ctx_out,
 			    .ctx_size_out = sizeof(ctx_out),
+			    .repeat = 1,
+		);
+	DECLARE_LIBBPF_OPTS(bpf_test_run_opts, opts_xdp,
+			    .data_in = &data_xdp,
+			    .data_size_in = sizeof(data_xdp),
+			    .flags = BPF_F_TEST_XDP_LIVE_FRAMES,
 			    .repeat = 1,
 		);
 	int err, prog_fd;
@@ -69,6 +76,18 @@ void test_xdp_context_test_run(void)
 	err = bpf_prog_test_run_opts(prog_fd, &opts);
 	ASSERT_EQ(errno, E2BIG, "extradata-errno");
 	ASSERT_ERR(err, "bpf_prog_test_run(extradata)");
+
+	memset(&ctx_in, 0, sizeof(ctx_in));
+	ctx_in.data_meta = 0;
+	ctx_in.data = 0xf4;
+	ctx_in.data_end = sizeof(data_xdp);
+	opts_xdp.ctx_in = &ctx_in;
+	opts_xdp.ctx_size_in = sizeof(ctx_in);
+	*(__u32 *)(data_xdp + 0) = 0x28d6a0b5;
+	*(__u32 *)(data_xdp + 4) = 0xf273eea3;
+	*(struct ipv4_packet *)(data_xdp + ctx_in.data) = pkt_v4;
+	err = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.xdp_pass), &opts_xdp);
+	ASSERT_OK(err, "bpf_prog_test_run(valid meta)");
 
 	*(__u32 *)data = XDP_PASS;
 	*(struct ipv4_packet *)(data + sizeof(__u32)) = pkt_v4;
