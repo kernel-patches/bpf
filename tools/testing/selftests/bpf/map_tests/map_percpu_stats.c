@@ -188,7 +188,8 @@ static void *patch_map_thread(void *arg)
 						   40, retry_for_nomem_fn);
 		else
 			ret = bpf_map_update_elem(opts->map_fd, &i, val_ptr, 0);
-		CHECK(ret < 0, "bpf_map_update_elem", "key=%d error: %s\n", i, strerror(errno));
+		CHECK(ret < 0 && (!is_lru(opts->map_type) || ret != -ENOMEM),
+		      "bpf_map_update_elem", "key=%d error: %s\n", i, strerror(errno));
 
 		if (opts->map_type == BPF_MAP_TYPE_HASH_OF_MAPS)
 			close(val);
