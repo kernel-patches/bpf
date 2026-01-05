@@ -119,6 +119,39 @@ void test_xdp_context_test_run(void)
 	test_xdp_context_test_run__destroy(skel);
 }
 
+void test_xdp_context_live_frames(void)
+{
+	struct test_xdp_context_test_run *skel = NULL;
+	char data[sizeof(pkt_v4) + XDP_PACKET_HEADROOM];
+	DECLARE_LIBBPF_OPTS(bpf_test_run_opts, opts,
+			    .data_in = &data,
+			    .data_size_in = sizeof(data),
+			    .flags = BPF_F_TEST_XDP_LIVE_FRAMES,
+			    .repeat = 1,
+		);
+	struct xdp_md ctx_in;
+	int err, prog_fd;
+
+	skel = test_xdp_context_test_run__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel"))
+		return;
+	prog_fd = bpf_program__fd(skel->progs.xdp_pass);
+
+	memset(&ctx_in, 0, sizeof(ctx_in));
+	ctx_in.data_meta = 0;
+	ctx_in.data = 0xf4;
+	ctx_in.data_end = sizeof(data);
+	opts.ctx_in = &ctx_in;
+	opts.ctx_size_in = sizeof(ctx_in);
+	*(__u32 *)(data + 0) = 0x28d6a0b5;
+	*(__u32 *)(data + 4) = 0xf273eea3;
+	*(struct ipv4_packet *)(data + ctx_in.data) = pkt_v4;
+	err = bpf_prog_test_run_opts(prog_fd, &opts);
+	ASSERT_OK(err, "bpf_prog_test_run(valid live_frames)");
+
+	test_xdp_context_test_run__destroy(skel);
+}
+
 static int send_test_packet(int ifindex)
 {
 	int n, sock = -1;
