@@ -1106,7 +1106,7 @@ struct bpf_verifier_ops {
 	bool (*is_valid_access)(int off, int size, enum bpf_access_type type,
 				const struct bpf_prog *prog,
 				struct bpf_insn_access_aux *info);
-	int (*gen_prologue)(struct bpf_insn *insn, bool direct_write,
+	int (*gen_prologue)(struct bpf_insn *insn, u32 pkt_access_flags,
 			    const struct bpf_prog *prog);
 	int (*gen_epilogue)(struct bpf_insn *insn, const struct bpf_prog *prog,
 			    s16 ctx_stack_off);
