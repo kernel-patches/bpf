@@ -730,6 +730,7 @@ $(VERIFY_SIG_HDR): $(VERIFICATION_CERT)
 TRUNNER_TESTS_DIR := prog_tests
 TRUNNER_BPF_PROGS_DIR := progs
 TRUNNER_EXTRA_SOURCES := btf_helpers.c			\
+			 bpftool_helpers.c 		\
 			 cap_helpers.c			\
 			 cgroup_helpers.c		\
 			 disasm.c			\
