@@ -512,7 +512,7 @@ static int invoke_bpf_prog(u32 *image, u32 *ro_image, struct codegen_context *ct
 
 	/* __bpf_prog_enter(p, &bpf_tramp_run_ctx) */
 	PPC_LI_ADDR(_R3, p);
-	EMIT(PPC_RAW_MR(_R25, _R3));
+	EMIT(PPC_RAW_MR(_R26, _R3));
 	EMIT(PPC_RAW_ADDI(_R4, _R1, run_ctx_off));
 	ret = bpf_jit_emit_func_call_rel(image, ro_image, ctx,
 					 (unsigned long)bpf_trampoline_enter(p));
@@ -520,7 +520,7 @@ static int invoke_bpf_prog(u32 *image, u32 *ro_image, struct codegen_context *ct
 		return ret;
 
 	/* Remember prog start time returned by __bpf_prog_enter */
-	EMIT(PPC_RAW_MR(_R26, _R3));
+	EMIT(PPC_RAW_MR(_R27, _R3));
 
 	/*
 	 * if (__bpf_prog_enter(p) == 0)
@@ -543,7 +543,7 @@ static int invoke_bpf_prog(u32 *image, u32 *ro_image, struct codegen_context *ct
 		image[ctx->idx] = ppc_inst_val(branch_insn);
 		ctx->idx++;
 	} else {
-		EMIT(PPC_RAW_LL(_R12, _R25, offsetof(struct bpf_prog, bpf_func)));
+		EMIT(PPC_RAW_LL(_R12, _R26, offsetof(struct bpf_prog, bpf_func)));
 		EMIT(PPC_RAW_MTCTR(_R12));
 		EMIT(PPC_RAW_BCTRL());
 	}
@@ -560,8 +560,8 @@ static int invoke_bpf_prog(u32 *image, u32 *ro_image, struct codegen_context *ct
 	}
 
 	/* __bpf_prog_exit(p, start_time, &bpf_tramp_run_ctx) */
-	EMIT(PPC_RAW_MR(_R3, _R25));
-	EMIT(PPC_RAW_MR(_R4, _R26));
+	EMIT(PPC_RAW_MR(_R3, _R26));
+	EMIT(PPC_RAW_MR(_R4, _R27));
 	EMIT(PPC_RAW_ADDI(_R5, _R1, run_ctx_off));
 	ret = bpf_jit_emit_func_call_rel(image, ro_image, ctx,
 					 (unsigned long)bpf_trampoline_exit(p));
@@ -748,12 +748,10 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	 *                              [ r0 save (32-bit)  ]   |
 	 * dummy frame for unwind       [ back chain 1      ] --
 	 *                              [ padding           ] align stack frame
-	 *                              [ r26..r31          ] nvr save : BPF_PPC_STACK_SAVE
+	 *       nvr_off                [ r26..r31          ] nvr save : BPF_PPC_STACK_SAVE
 	 *                              [ tail_call_info    ] non optional - 64-bit powerpc
 	 *       r4_off                 [ r4 (tailcallcnt)  ] optional - 32-bit powerpc
 	 *       alt_lr_off             [ real lr (ool stub)] optional - actual lr
-	 *                              [ r26               ]
-	 *       nvr_off                [ r25               ] nvr save area
 	 *       retval_off             [ return value      ]
 	 *                              [ reg argN          ]
 	 *                              [ ...               ]
@@ -811,10 +809,6 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	if (save_ret)
 		bpf_frame_size += SZL;
 
-	/* Room for nvr save area */
-	nvr_off = bpf_frame_size;
-	bpf_frame_size += 2 * SZL;
-
 	/* Optional save area for actual LR in case of ool ftrace */
 	if (IS_ENABLED(CONFIG_PPC_FTRACE_OUT_OF_LINE)) {
 		alt_lr_off = bpf_frame_size;
@@ -834,6 +828,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	bpf_frame_size += SZL;
 
 	/* Room for nvr save area */
+	nvr_off = bpf_frame_size;
 	bpf_frame_size += BPF_PPC_STACK_SAVE;
 
 	/* Padding to align stack frame, if any */
@@ -897,8 +892,8 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	EMIT(PPC_RAW_STL(_R3, _R1, nregs_off));
 
 	/* Save nv regs */
-	EMIT(PPC_RAW_STL(_R25, _R1, nvr_off));
-	EMIT(PPC_RAW_STL(_R26, _R1, nvr_off + SZL));
+	EMIT(PPC_RAW_STL(_R26, _R1, nvr_off));
+	EMIT(PPC_RAW_STL(_R27, _R1, nvr_off + SZL));
 
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
 		PPC_LI_ADDR(_R3, (unsigned long)im);
@@ -999,8 +994,8 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		EMIT(PPC_RAW_LL(_R3, _R1, retval_off));
 
 	/* Restore nv regs */
-	EMIT(PPC_RAW_LL(_R26, _R1, nvr_off + SZL));
-	EMIT(PPC_RAW_LL(_R25, _R1, nvr_off));
+	EMIT(PPC_RAW_LL(_R27, _R1, nvr_off + SZL));
+	EMIT(PPC_RAW_LL(_R26, _R1, nvr_off));
 
 	/* Epilogue */
 	if (IS_ENABLED(CONFIG_PPC64_ELF_ABI_V2) && !IS_ENABLED(CONFIG_PPC_KERNEL_PCREL))
