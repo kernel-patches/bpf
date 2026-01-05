@@ -296,12 +296,13 @@ free_elems:
 static struct htab_elem *prealloc_lru_pop(struct bpf_htab *htab, void *key,
 					  u32 hash)
 {
-	struct bpf_lru_node *node = bpf_lru_pop_free(&htab->lru, hash);
+	struct bpf_lru_node *node = bpf_lru_pop_free(&htab->lru);
 	struct htab_elem *l;
 
 	if (node) {
 		bpf_map_inc_elem_count(&htab->map);
 		l = container_of(node, struct htab_elem, lru_node);
+		l->hash = hash;
 		memcpy(l->key, key, htab->map.key_size);
 		return l;
 	}
@@ -342,8 +343,6 @@ skip_percpu_elems:
 	if (htab_is_lru(htab))
 		err = bpf_lru_init(&htab->lru,
 				   htab->map.map_flags & BPF_F_NO_COMMON_LRU,
-				   offsetof(struct htab_elem, hash) -
-				   offsetof(struct htab_elem, lru_node),
 				   htab_lru_map_delete_node,
 				   htab);
 	else
