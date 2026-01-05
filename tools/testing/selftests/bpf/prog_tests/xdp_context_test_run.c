@@ -8,9 +8,14 @@
 #define TX_NAME "veth1"
 #define TX_NETNS "xdp_context_tx"
 #define RX_NETNS "xdp_context_rx"
+#define RX_MAC "02:00:00:00:00:01"
+#define TX_MAC "02:00:00:00:00:02"
 #define TAP_NAME "tap0"
 #define DUMMY_NAME "dum0"
 #define TAP_NETNS "xdp_context_tuntap"
+#define ENCAP_DEV "encap"
+#define DECAP_RX_NETNS "xdp_context_decap_rx"
+#define DECAP_TX_NETNS "xdp_context_decap_tx"
 
 #define TEST_PAYLOAD_LEN 32
 static const __u8 test_payload[TEST_PAYLOAD_LEN] = {
@@ -127,6 +132,7 @@ static int send_test_packet(int ifindex)
 	/* We use the Ethernet header only to identify the test packet */
 	struct ethhdr eth = {
 		.h_source = { 0x12, 0x34, 0xDE, 0xAD, 0xBE, 0xEF },
+		.h_proto = htons(ETH_P_IP),
 	};
 
 	memcpy(packet, &eth, sizeof(eth));
@@ -144,6 +150,34 @@ static int send_test_packet(int ifindex)
 	n = sendto(sock, packet, sizeof(packet), 0, (struct sockaddr *)&saddr,
 		   sizeof(saddr));
 	if (!ASSERT_EQ(n, sizeof(packet), "sendto"))
+		goto err;
+
+	close(sock);
+	return 0;
+
+err:
+	if (sock >= 0)
+		close(sock);
+	return -1;
+}
+
+static int send_routed_packet(int af, const char *ip)
+{
+	struct sockaddr_storage addr;
+	socklen_t alen;
+	int r, sock = -1;
+
+	r = make_sockaddr(af, ip, 42, &addr, &alen);
+	if (!ASSERT_OK(r, "make_sockaddr"))
+		goto err;
+
+	sock = socket(af, SOCK_DGRAM, 0);
+	if (!ASSERT_OK_FD(sock, "socket"))
+		goto err;
+
+	r = sendto(sock, test_payload, sizeof(test_payload), 0,
+		   (struct sockaddr *)&addr, alen);
+	if (!ASSERT_EQ(r, sizeof(test_payload), "sendto"))
 		goto err;
 
 	close(sock);
@@ -507,6 +541,264 @@ void test_xdp_context_tuntap(void)
 			    skel->progs.helper_skb_change_proto,
 			    NULL, /* tc prio 2 */
 			    &skel->bss->test_pass);
+
+	test_xdp_meta__destroy(skel);
+}
+
+enum l2_encap_type {
+	GRE4_ENCAP,
+	GRE6_ENCAP,
+	VXLAN_ENCAP,
+	GENEVE_ENCAP,
+	L2TPV3_ENCAP,
+	VLAN_ENCAP,
+	QINQ_ENCAP,
+	MPLS_ENCAP,
+};
+
+static bool l2_encap_uses_ipv6(enum l2_encap_type encap_type)
+{
+	return encap_type == GRE6_ENCAP;
+}
+
+static bool l2_encap_uses_routing(enum l2_encap_type encap_type)
+{
+	return encap_type == MPLS_ENCAP;
+}
+
+static bool setup_l2_encap_dev(enum l2_encap_type encap_type,
+			       const char *encap_dev, const char *lower_dev,
+			       const char *net_prefix, const char *local_addr,
+			       const char *remote_addr)
+{
+	switch (encap_type) {
+	case GRE4_ENCAP:
+		SYS(fail, "ip link add %s type gretap local %s remote %s",
+		    encap_dev, local_addr, remote_addr);
+		return true;
+
+	case GRE6_ENCAP:
+		SYS(fail, "ip link add %s type ip6gretap local %s remote %s",
+		    encap_dev, local_addr, remote_addr);
+		return true;
+
+	case VXLAN_ENCAP:
+		SYS(fail,
+		    "ip link add %s type vxlan id 42 local %s remote %s dstport 4789",
+		    encap_dev, local_addr, remote_addr);
+		return true;
+
+	case GENEVE_ENCAP:
+		SYS(fail,
+		    "ip link add %s type geneve id 42 remote %s",
+		    encap_dev, remote_addr);
+		return true;
+
+	case L2TPV3_ENCAP:
+		SYS(fail,
+		    "ip l2tp add tunnel tunnel_id 42 peer_tunnel_id 42 encap ip local %s remote %s",
+		    local_addr, remote_addr);
+		SYS(fail,
+		    "ip l2tp add session name %s tunnel_id 42 session_id 42 peer_session_id 42",
+		    encap_dev);
+		return true;
+
+	case VLAN_ENCAP:
+		SYS(fail, "ip link set dev %s down", lower_dev);
+		SYS(fail, "ethtool -K %s rx-vlan-hw-parse off", lower_dev);
+		SYS(fail, "ethtool -K %s tx-vlan-hw-insert off", lower_dev);
+		SYS(fail, "ip link set dev %s up", lower_dev);
+		SYS(fail, "ip link add %s link %s type vlan id 42", encap_dev,
+		    lower_dev);
+		return true;
+
+	case QINQ_ENCAP:
+		SYS(fail, "ip link set dev %s down", lower_dev);
+		SYS(fail, "ethtool -K %s rx-vlan-hw-parse off", lower_dev);
+		SYS(fail, "ethtool -K %s tx-vlan-hw-insert off", lower_dev);
+		SYS(fail, "ethtool -K %s rx-vlan-stag-hw-parse off", lower_dev);
+		SYS(fail, "ethtool -K %s tx-vlan-stag-hw-insert off", lower_dev);
+		SYS(fail, "ip link set dev %s up", lower_dev);
+		SYS(fail, "ip link add vlan.100 link %s type vlan proto 802.1ad id 100", lower_dev);
+		SYS(fail, "ip link set dev vlan.100 up");
+		SYS(fail, "ip link add %s link vlan.100 type vlan id 42", encap_dev);
+		return true;
+
+	case MPLS_ENCAP:
+		SYS(fail, "sysctl -wq net.mpls.platform_labels=65535");
+		SYS(fail, "sysctl -wq net.mpls.conf.%s.input=1", lower_dev);
+		SYS(fail, "ip route change %s encap mpls 42 via %s", net_prefix, remote_addr);
+		SYS(fail, "ip -f mpls route add 42 dev lo");
+		SYS(fail, "ip link set dev lo name %s", encap_dev);
+
+		return true;
+	}
+fail:
+	return false;
+}
+
+static void test_l2_decap(enum l2_encap_type encap_type,
+			  struct bpf_program *xdp_prog,
+			  struct bpf_program *tc_prog, bool *test_pass)
+{
+	LIBBPF_OPTS(bpf_tc_hook, tc_hook, .attach_point = BPF_TC_INGRESS);
+	LIBBPF_OPTS(bpf_tc_opts, tc_opts, .handle = 1, .priority = 1);
+	const char *net, *rx_ip, *tx_ip, *addr_opts;
+	int af, plen;
+	struct netns_obj *rx_ns = NULL, *tx_ns = NULL;
+	struct nstoken *nstoken = NULL;
+	int lower_ifindex, upper_ifindex;
+	int ret;
+
+	if (l2_encap_uses_ipv6(encap_type)) {
+		af = AF_INET6;
+		net = "fd00::/64";
+		rx_ip = "fd00::1";
+		tx_ip = "fd00::2";
+		plen = 64;
+		addr_opts = "nodad";
+	} else {
+		af = AF_INET;
+		net = "192.0.2.0/24";
+		rx_ip = "192.0.2.1";
+		tx_ip = "192.0.2.2";
+		plen = 24;
+		addr_opts = "";
+	}
+
+	*test_pass = false;
+
+	rx_ns = netns_new(DECAP_RX_NETNS, false);
+	if (!ASSERT_OK_PTR(rx_ns, "create rx_ns"))
+		return;
+
+	tx_ns = netns_new(DECAP_TX_NETNS, false);
+	if (!ASSERT_OK_PTR(tx_ns, "create tx_ns"))
+		goto close;
+
+	SYS(close, "ip link add " RX_NAME " address " RX_MAC " netns " DECAP_RX_NETNS
+		   " type veth peer name " TX_NAME " address " TX_MAC " netns " DECAP_TX_NETNS);
+
+	nstoken = open_netns(DECAP_RX_NETNS);
+	if (!ASSERT_OK_PTR(nstoken, "setns rx_ns"))
+		goto close;
+
+	SYS(close, "ip addr add %s/%u dev %s %s", rx_ip, plen, RX_NAME, addr_opts);
+	SYS(close, "ip link set dev %s up", RX_NAME);
+
+	if (!setup_l2_encap_dev(encap_type, ENCAP_DEV, RX_NAME, net, rx_ip, tx_ip))
+		goto close;
+	SYS(close, "ip link set dev %s up", ENCAP_DEV);
+
+	lower_ifindex = if_nametoindex(RX_NAME);
+	if (!ASSERT_GE(lower_ifindex, 0, "if_nametoindex lower"))
+		goto close;
+
+	upper_ifindex = if_nametoindex(ENCAP_DEV);
+	if (!ASSERT_GE(upper_ifindex, 0, "if_nametoindex upper"))
+		goto close;
+
+	ret = bpf_xdp_attach(lower_ifindex, bpf_program__fd(xdp_prog), 0, NULL);
+	if (!ASSERT_GE(ret, 0, "bpf_xdp_attach"))
+		goto close;
+
+	tc_hook.ifindex = upper_ifindex;
+	ret = bpf_tc_hook_create(&tc_hook);
+	if (!ASSERT_OK(ret, "bpf_tc_hook_create"))
+		goto close;
+
+	tc_opts.prog_fd = bpf_program__fd(tc_prog);
+	ret = bpf_tc_attach(&tc_hook, &tc_opts);
+	if (!ASSERT_OK(ret, "bpf_tc_attach"))
+		goto close;
+
+	close_netns(nstoken);
+
+	nstoken = open_netns(DECAP_TX_NETNS);
+	if (!ASSERT_OK_PTR(nstoken, "setns tx_ns"))
+		goto close;
+
+	SYS(close, "ip addr add %s/%u dev %s %s", tx_ip, plen, TX_NAME, addr_opts);
+	SYS(close, "ip neigh add %s lladdr %s nud permanent dev %s", rx_ip, RX_MAC, TX_NAME);
+	SYS(close, "ip link set dev %s up", TX_NAME);
+
+	if (!setup_l2_encap_dev(encap_type, ENCAP_DEV, TX_NAME, net, tx_ip, rx_ip))
+		goto close;
+	SYS(close, "ip link set dev %s up", ENCAP_DEV);
+
+	upper_ifindex = if_nametoindex(ENCAP_DEV);
+	if (!ASSERT_GE(upper_ifindex, 0, "if_nametoindex upper"))
+		goto close;
+
+	if (l2_encap_uses_routing(encap_type))
+		ret = send_routed_packet(af, rx_ip);
+	else
+		ret = send_test_packet(upper_ifindex);
+	if (!ASSERT_OK(ret, "send packet"))
+		goto close;
+
+	if (!ASSERT_TRUE(*test_pass, "test_pass"))
+		dump_err_stream(tc_prog);
+
+close:
+	close_netns(nstoken);
+	netns_free(rx_ns);
+	netns_free(tx_ns);
+}
+
+__printf(1, 2) static bool start_subtest(const char *fmt, ...)
+{
+	char *subtest_name;
+	va_list ap;
+	int r;
+
+	va_start(ap, fmt);
+	r = vasprintf(&subtest_name, fmt, ap);
+	va_end(ap);
+	if (!ASSERT_GE(r, 0, "format string"))
+		return false;
+
+	r = test__start_subtest(subtest_name);
+	free(subtest_name);
+	return r;
+}
+
+void test_xdp_context_l2_decap(void)
+{
+	const struct test {
+		enum l2_encap_type encap_type;
+		const char *encap_name;
+	} tests[] = {
+		{ GRE4_ENCAP, "gre4" },
+		{ GRE6_ENCAP, "gre6" },
+		{ VXLAN_ENCAP, "vxlan" },
+		{ GENEVE_ENCAP, "geneve" },
+		{ L2TPV3_ENCAP, "l2tpv3" },
+		{ VLAN_ENCAP, "vlan" },
+		{ QINQ_ENCAP, "qinq" },
+		{ MPLS_ENCAP, "mpls" },
+	};
+	struct test_xdp_meta *skel;
+	const struct test *t;
+
+	skel = test_xdp_meta__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open and load skeleton"))
+		return;
+
+	for (t = tests; t < tests + ARRAY_SIZE(tests); t++) {
+		if (start_subtest("%s_direct_access", t->encap_name))
+			test_l2_decap(t->encap_type, skel->progs.ing_xdp,
+				      skel->progs.ing_cls,
+				      &skel->bss->test_pass);
+		if (start_subtest("%s_dynptr_read", t->encap_name))
+			test_l2_decap(t->encap_type, skel->progs.ing_xdp,
+				      skel->progs.ing_cls_dynptr_read,
+				      &skel->bss->test_pass);
+		if (start_subtest("%s_helper_adjust_room", t->encap_name))
+			test_l2_decap(t->encap_type, skel->progs.ing_xdp,
+				      skel->progs.helper_skb_adjust_room,
+				      &skel->bss->test_pass);
+	}
 
 	test_xdp_meta__destroy(skel);
 }
