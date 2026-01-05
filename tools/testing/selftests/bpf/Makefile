@@ -76,7 +76,8 @@ endif
 TEST_GEN_PROGS = test_verifier test_tag test_maps test_lru_map test_progs \
 	test_sockmap \
 	test_tcpnotify_user \
-	test_progs-no_alu32
+	test_progs-no_alu32 \
+	test_bpftool
 TEST_INST_SUBDIRS := no_alu32
 
 # Also test bpf-gcc, if present
@@ -791,6 +792,17 @@ TRUNNER_EXTRA_FILES :=
 TRUNNER_BPF_BUILD_RULE := $$(error no BPF objects should be built)
 TRUNNER_BPF_CFLAGS :=
 $(eval $(call DEFINE_TEST_RUNNER,test_maps))
+
+# Define bpftool test runner.
+TRUNNER_TESTS_DIR := bpftool_tests
+TRUNNER_BPF_PROGS_DIR := progs
+TRUNNER_EXTRA_SOURCES := test_bpftool.c \
+			 bpftool_helpers.c
+TRUNNER_LIB_SOURCES :=
+TRUNNER_EXTRA_FILES :=
+TRUNNER_BPF_BUILD_RULE := CLANG_BPF_BUILD_RULE
+TRUNNER_BPF_CFLAGS :=
+$(eval $(call DEFINE_TEST_RUNNER,test_bpftool))
 
 # Define test_verifier test runner.
 # It is much simpler than test_maps/test_progs and sufficiently different from

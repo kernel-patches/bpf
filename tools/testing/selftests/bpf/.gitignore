@@ -2,6 +2,7 @@
 bpftool
 bpf-helpers*
 bpf-syscall*
+test_bpftool
 test_verifier
 test_maps
 test_lru_map
