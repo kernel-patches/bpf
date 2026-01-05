@@ -1875,7 +1875,7 @@ static bool check_io_qos(struct bt_iso_io_qos *qos)
 	if (qos->latency && (qos->latency < 0x05 || qos->latency > 0xfa0))
 		return false;
 
-	if (qos->phys > BT_ISO_PHY_ANY)
+	if (qos->phys & ~(BT_ISO_PHY_ANY | BT_ISO_PHY_HDT))
 		return false;
 
 	return true;

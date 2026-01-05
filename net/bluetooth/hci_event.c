@@ -2995,6 +2995,7 @@ static void hci_cs_le_set_phy(struct hci_dev *hdev, u8 status)
 	if (conn) {
 		conn->le_tx_def_phys = cp->tx_phys;
 		conn->le_rx_def_phys = cp->rx_phys;
+		conn->le_phy_opts = __le16_to_cpu(cp->phy_opts);
 	}
 
 	hci_dev_unlock(hdev);
@@ -3942,6 +3943,35 @@ static inline void handle_cmd_cnt_and_timer(struct hci_dev *hdev, u8 ncmd)
 	rcu_read_unlock();
 }
 
+static u8 hci_cc_le_read_def_data_len_v2(struct hci_dev *hdev, void *data,
+					 struct sk_buff *skb)
+{
+	struct hci_rp_le_read_def_data_len_v2 *rp = data;
+	struct hci_cp_le_read_def_data_len_v2 *cp;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", rp->status);
+
+	if (rp->status)
+		return rp->status;
+
+	cp = hci_sent_cmd_data(hdev, HCI_OP_LE_READ_DEF_DATA_LEN_V2);
+	if (!cp)
+		return rp->status;
+
+	switch (cp->phys) {
+	case 0x00: /* All GFSK PHYs */
+		hdev->le_def_tx_len = le16_to_cpu(rp->tx_len);
+		hdev->le_def_tx_time = le16_to_cpu(rp->tx_time);
+		break;
+	case 0x01: /* HDT PHY */
+		hdev->hdt_def_tx_len = le16_to_cpu(rp->tx_len);
+		hdev->hdt_def_tx_time = le16_to_cpu(rp->tx_time);
+		break;
+	}
+
+	return rp->status;
+}
+
 static u8 hci_cc_le_read_buffer_size_v2(struct hci_dev *hdev, void *data,
 					struct sk_buff *skb)
 {
@@ -3965,6 +3995,78 @@ static u8 hci_cc_le_read_buffer_size_v2(struct hci_dev *hdev, void *data,
 
 	if (hdev->le_mtu && hdev->le_mtu < HCI_MIN_LE_MTU)
 		return HCI_ERROR_INVALID_PARAMETERS;
+
+	return rp->status;
+}
+
+static u8 hci_cc_le_read_max_data_len_v2(struct hci_dev *hdev, void *data,
+					 struct sk_buff *skb)
+{
+	struct hci_rp_le_read_max_data_len_v2 *rp = data;
+	struct hci_cp_le_read_max_data_len_v2 *cp;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", rp->status);
+
+	if (rp->status)
+		return rp->status;
+
+	cp = hci_sent_cmd_data(hdev, HCI_OP_LE_READ_MAX_DATA_LEN_V2);
+	if (!cp)
+		return rp->status;
+
+	switch (cp->phy) {
+	case 0x00:
+	case 0x01:
+	case 0x02:
+	case 0x03:
+		hdev->le_max_tx_len = le16_to_cpu(rp->tx_len);
+		hdev->le_max_tx_time = le16_to_cpu(rp->tx_time);
+		hdev->le_max_rx_len = le16_to_cpu(rp->rx_len);
+		hdev->le_max_rx_time = le16_to_cpu(rp->rx_time);
+		break;
+	case 0x05:
+		hdev->hdt_max_tx_len = le16_to_cpu(rp->tx_len);
+		hdev->hdt_max_tx_time = le16_to_cpu(rp->tx_time);
+		hdev->hdt_max_rx_len = le16_to_cpu(rp->rx_len);
+		hdev->hdt_max_rx_time = le16_to_cpu(rp->rx_time);
+		hdev->hdt_max_tx_win = rp->tx_win;
+		hdev->hdt_max_rx_win = rp->rx_win;
+		hdev->hdt_max_rx_packet = le16_to_cpu(rp->rx_packet);
+		break;
+	}
+
+	return rp->status;
+}
+
+static u8 hci_cc_le_write_def_data_len_v2(struct hci_dev *hdev, void *data,
+					  struct sk_buff *skb)
+{
+	struct hci_cp_le_write_def_data_len_v2 *sent;
+	struct hci_ev_status *rp = data;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", rp->status);
+
+	if (rp->status)
+		return rp->status;
+
+	sent = hci_sent_cmd_data(hdev, HCI_OP_LE_WRITE_DEF_DATA_LEN_V2);
+	if (!sent)
+		return rp->status;
+
+	hci_dev_lock(hdev);
+
+	switch (sent->phys) {
+	case 0x00:
+		hdev->le_def_tx_len = le16_to_cpu(sent->tx_len);
+		hdev->le_def_tx_time = le16_to_cpu(sent->tx_time);
+		break;
+	case 0x01:
+		hdev->hdt_def_tx_len = le16_to_cpu(sent->tx_len);
+		hdev->hdt_def_tx_time = le16_to_cpu(sent->tx_time);
+		break;
+	}
+
+	hci_dev_unlock(hdev);
 
 	return rp->status;
 }
@@ -4119,6 +4221,81 @@ static u8 hci_cc_le_read_all_local_features(struct hci_dev *hdev, void *data,
 	memcpy(hdev->le_features, rp->features, 248);
 
 	return rp->status;
+}
+
+static u8 hci_cc_le_set_cig_params_v2(struct hci_dev *hdev, void *data,
+				      struct sk_buff *skb)
+{
+	struct hci_rp_le_set_cig_params_v2 *rp = data;
+	struct hci_cp_le_set_cig_params_v2 *cp;
+	struct hci_conn *conn;
+	u8 status = rp->status;
+	bool pending = false;
+	size_t len;
+	int i;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", rp->status);
+
+	cp = hci_sent_cmd_data_len(hdev, HCI_OP_LE_SET_CIG_PARAMS_V2, &len);
+	if (!rp->status &&
+	    (!cp || len < sizeof(*cp) ||
+	     len < struct_size(cp, cis, cp->num_cis) ||
+	     rp->num_handles != cp->num_cis ||
+	     rp->cig_id != cp->cig_id ||
+	     skb->len < array_size(rp->num_handles, sizeof(*rp->handle)))) {
+		bt_dev_err(hdev,
+			   "unexpected Set CIG Parameters v2 response data");
+		status = HCI_ERROR_UNSPECIFIED;
+	}
+
+	hci_dev_lock(hdev);
+
+	/* BLUETOOTH CORE SPECIFICATION Version 5.4 | Vol 4, Part E page 2554
+	 *
+	 * If the Status return parameter is non-zero, then the state of the CIG
+	 * and its CIS configurations shall not be changed by the command. If
+	 * the CIG did not already exist, it shall not be created.
+	 */
+	if (status) {
+		/* Keep current configuration, fail only the unbound CIS of the
+		 * CIG the command was sent for.
+		 */
+		hci_unbound_cis_failed(hdev, cp && len >= sizeof(*cp) ?
+				       cp->cig_id : rp->cig_id, status);
+		goto unlock;
+	}
+
+	/* BLUETOOTH CORE SPECIFICATION Version 5.3 | Vol 4, Part E page 2553
+	 *
+	 * If the Status return parameter is zero, then the Controller shall
+	 * set the Connection_Handle arrayed return parameter to the connection
+	 * handle(s) corresponding to the CIS configurations specified in
+	 * the CIS_IDs command parameter, in the same order.
+	 */
+	for (i = 0; i < rp->num_handles; ++i) {
+		conn = hci_conn_hash_lookup_cis(hdev, NULL, 0, rp->cig_id,
+						cp->cis[i].cis_id);
+		if (!conn || !bacmp(&conn->dst, BDADDR_ANY))
+			continue;
+
+		if (conn->state != BT_BOUND && conn->state != BT_CONNECT)
+			continue;
+
+		if (hci_conn_set_handle(conn, __le16_to_cpu(rp->handle[i])))
+			continue;
+
+		if (conn->state == BT_CONNECT)
+			pending = true;
+	}
+
+unlock:
+	if (pending)
+		hci_le_create_cis_pending(hdev);
+
+	hci_dev_unlock(hdev);
+
+	/* A response that doesn't match the command fails it */
+	return status;
 }
 
 static void hci_cs_le_create_big(struct hci_dev *hdev, u8 status)
@@ -4409,8 +4586,14 @@ static const struct hci_cc {
 	HCI_CC(HCI_OP_LE_READ_TRANSMIT_POWER, hci_cc_le_read_transmit_power,
 	       sizeof(struct hci_rp_le_read_transmit_power)),
 	HCI_CC_STATUS(HCI_OP_LE_SET_PRIVACY_MODE, hci_cc_le_set_privacy_mode),
+	HCI_CC(HCI_OP_LE_READ_DEF_DATA_LEN_V2, hci_cc_le_read_def_data_len_v2,
+	       sizeof(struct hci_rp_le_read_def_data_len_v2)),
 	HCI_CC(HCI_OP_LE_READ_BUFFER_SIZE_V2, hci_cc_le_read_buffer_size_v2,
 	       sizeof(struct hci_rp_le_read_buffer_size_v2)),
+	HCI_CC(HCI_OP_LE_READ_MAX_DATA_LEN_V2, hci_cc_le_read_max_data_len_v2,
+	       sizeof(struct hci_rp_le_read_max_data_len_v2)),
+	HCI_CC_STATUS(HCI_OP_LE_WRITE_DEF_DATA_LEN_V2,
+		      hci_cc_le_write_def_data_len_v2),
 	HCI_CC_VL(HCI_OP_LE_SET_CIG_PARAMS, hci_cc_le_set_cig_params,
 		  sizeof(struct hci_rp_le_set_cig_params), HCI_MAX_CC_PLEN),
 	HCI_CC(HCI_OP_LE_SETUP_ISO_PATH, hci_cc_le_setup_iso_path,
@@ -4418,6 +4601,9 @@ static const struct hci_cc {
 	HCI_CC(HCI_OP_LE_READ_ALL_LOCAL_FEATURES,
 	       hci_cc_le_read_all_local_features,
 	       sizeof(struct hci_rp_le_read_all_local_features)),
+	HCI_CC_VL(HCI_OP_LE_SET_CIG_PARAMS_V2, hci_cc_le_set_cig_params_v2,
+		  sizeof(struct hci_rp_le_set_cig_params_v2),
+		  HCI_MAX_CC_PLEN),
 };
 
 static u8 hci_cc_func(struct hci_dev *hdev, const struct hci_cc *cc,
@@ -6965,6 +7151,12 @@ static void hci_le_remote_feat_complete_evt(struct hci_dev *hdev, void *data,
 				conn->le_tx_def_phys &= ~HCI_LE_SET_PHY_CODED;
 				conn->le_rx_def_phys &= ~HCI_LE_SET_PHY_CODED;
 			}
+
+			/* HDT is a feature of page 1, which this event doesn't
+			 * report, so it can't be assumed.
+			 */
+			conn->le_tx_def_phys &= ~HCI_LE_SET_PHY_HDT;
+			conn->le_rx_def_phys &= ~HCI_LE_SET_PHY_HDT;
 		}
 
 		if (conn->state == BT_CONFIG) {
@@ -7205,6 +7397,8 @@ static u8 le_phy_qos(u8 phy)
 		return HCI_LE_SET_PHY_2M;
 	case 0x03:
 		return HCI_LE_SET_PHY_CODED;
+	case 0x05:
+		return HCI_LE_SET_PHY_HDT;
 	}
 
 	return 0;
@@ -7388,51 +7582,45 @@ static int hci_iso_term_big_sync(struct hci_dev *hdev, void *data)
 					 HCI_ERROR_LOCAL_HOST_TERM);
 }
 
-static void hci_le_create_big_complete_evt(struct hci_dev *hdev, void *data,
-					   struct sk_buff *skb)
+static void hci_le_create_big_complete(struct hci_dev *hdev, u8 status,
+				       u8 handle, u8 num_bis,
+				       const __le16 *bis_handle)
 {
-	struct hci_evt_le_create_big_complete *ev = data;
 	struct hci_conn *conn;
 	__u8 i = 0;
-
-	BT_DBG("%s status 0x%2.2x", hdev->name, ev->status);
-
-	if (!hci_le_ev_skb_pull(hdev, skb, HCI_EVT_LE_CREATE_BIG_COMPLETE,
-				flex_array_size(ev, bis_handle, ev->num_bis)))
-		return;
 
 	hci_dev_lock(hdev);
 
 	/* Connect all BISes that are bound to the BIG */
-	while ((conn = hci_conn_hash_lookup_big_state(hdev, ev->handle,
+	while ((conn = hci_conn_hash_lookup_big_state(hdev, handle,
 						      BT_BOUND,
 						      HCI_ROLE_MASTER))) {
-		if (ev->status) {
-			hci_connect_cfm(conn, ev->status);
+		if (status) {
+			hci_connect_cfm(conn, status);
 			hci_conn_del(conn);
 			continue;
 		}
 
-		if (ev->num_bis <= i) {
+		if (num_bis <= i) {
 			bt_dev_err(hdev,
 				   "Not enough BIS handles for BIG 0x%2.2x",
-				   ev->handle);
-			ev->status = HCI_ERROR_UNSPECIFIED;
-			hci_connect_cfm(conn, ev->status);
+				   handle);
+			status = HCI_ERROR_UNSPECIFIED;
+			hci_connect_cfm(conn, status);
 			hci_conn_del(conn);
 			continue;
 		}
 
 		if (hci_conn_set_handle(conn,
-					__le16_to_cpu(ev->bis_handle[i++]))) {
+					__le16_to_cpu(bis_handle[i++]))) {
 			bt_dev_err(hdev,
 				   "Failed to set BIS handle for BIG 0x%2.2x",
-				   ev->handle);
+				   handle);
 			/* Force error so BIG gets terminated as not all BIS
 			 * could be connected.
 			 */
-			ev->status = HCI_ERROR_UNSPECIFIED;
-			hci_connect_cfm(conn, ev->status);
+			status = HCI_ERROR_UNSPECIFIED;
+			hci_connect_cfm(conn, status);
 			hci_conn_del(conn);
 			continue;
 		}
@@ -7447,16 +7635,31 @@ static void hci_le_create_big_complete_evt(struct hci_dev *hdev, void *data,
 	/* If there is an unexpected error or if no BISes have been connected
 	 * for the BIG, terminate it.
 	 */
-	if (ev->status == HCI_ERROR_UNSPECIFIED || (!ev->status && !i))
+	if (status == HCI_ERROR_UNSPECIFIED || (!status && !i))
 		/* If no BISes have been connected for the BIG,
 		 * terminate. This is in case all bound connections
 		 * have been closed before the BIG creation
 		 * has completed.
 		 */
 		hci_cmd_sync_queue(hdev, hci_iso_term_big_sync,
-				   UINT_PTR(ev->handle), NULL);
+				   UINT_PTR(handle), NULL);
 
 	hci_dev_unlock(hdev);
+}
+
+static void hci_le_create_big_complete_evt(struct hci_dev *hdev, void *data,
+					   struct sk_buff *skb)
+{
+	struct hci_evt_le_create_big_complete *ev = data;
+
+	BT_DBG("%s status 0x%2.2x", hdev->name, ev->status);
+
+	if (!hci_le_ev_skb_pull(hdev, skb, HCI_EVT_LE_CREATE_BIG_COMPLETE,
+				flex_array_size(ev, bis_handle, ev->num_bis)))
+		return;
+
+	hci_le_create_big_complete(hdev, ev->status, ev->handle, ev->num_bis,
+				   ev->bis_handle);
 }
 
 static void hci_le_big_sync_established_evt(struct hci_dev *hdev, void *data,
@@ -7643,6 +7846,11 @@ static void hci_le_read_all_remote_features_evt(struct hci_dev *hdev,
 			conn->le_tx_def_phys &= ~HCI_LE_SET_PHY_CODED;
 			conn->le_rx_def_phys &= ~HCI_LE_SET_PHY_CODED;
 		}
+
+		if (!hdt_capable(conn)) {
+			conn->le_tx_def_phys &= ~HCI_LE_SET_PHY_HDT;
+			conn->le_rx_def_phys &= ~HCI_LE_SET_PHY_HDT;
+		}
 	}
 
 	if (conn->state == BT_CONFIG) {
@@ -7700,6 +7908,109 @@ static void hci_le_conn_rate_change_evt(struct hci_dev *hdev, void *data,
 	}
 
 	hci_dev_unlock(hdev);
+}
+
+static void hci_le_cis_established_evt_v3(struct hci_dev *hdev, void *data,
+					  struct sk_buff *skb)
+{
+	struct hci_evt_le_cis_established_v3 *ev = data;
+	struct hci_conn *conn;
+	struct bt_iso_qos *qos;
+	bool pending = false;
+	u16 handle = __le16_to_cpu(ev->handle);
+	u32 c_sdu_interval, p_sdu_interval;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", ev->status);
+
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_handle(hdev, handle);
+	if (!conn) {
+		bt_dev_err(hdev,
+			   "Unable to find connection with handle 0x%4.4x",
+			   handle);
+		goto unlock;
+	}
+
+	if (conn->type != CIS_LINK) {
+		bt_dev_err(hdev,
+			   "Invalid connection link type handle 0x%4.4x",
+			   handle);
+		goto unlock;
+	}
+
+	qos = &conn->iso_qos;
+
+	pending = test_and_clear_bit(HCI_CONN_CREATE_CIS, conn->flags);
+
+	c_sdu_interval = get_unaligned_le24(ev->c_sdu_interval);
+	p_sdu_interval = get_unaligned_le24(ev->p_sdu_interval);
+
+	switch (conn->role) {
+	case HCI_ROLE_SLAVE:
+		qos->ucast.in.interval = c_sdu_interval;
+		qos->ucast.out.interval = p_sdu_interval;
+		/* Convert Transport Latency (us) to Latency (msec) */
+		qos->ucast.in.latency =
+			DIV_ROUND_CLOSEST(get_unaligned_le24(ev->c_latency),
+					  1000);
+		qos->ucast.out.latency =
+			DIV_ROUND_CLOSEST(get_unaligned_le24(ev->p_latency),
+					  1000);
+		qos->ucast.in.sdu = ev->c_bn ? le16_to_cpu(ev->c_sdu) : 0;
+		qos->ucast.out.sdu = ev->p_bn ? le16_to_cpu(ev->p_sdu) : 0;
+		qos->ucast.in.phys = le_phy_qos(ev->c_phy);
+		qos->ucast.out.phys = le_phy_qos(ev->p_phy);
+		break;
+	case HCI_ROLE_MASTER:
+		qos->ucast.in.interval = p_sdu_interval;
+		qos->ucast.out.interval = c_sdu_interval;
+		/* Convert Transport Latency (us) to Latency (msec) */
+		qos->ucast.out.latency =
+			DIV_ROUND_CLOSEST(get_unaligned_le24(ev->c_latency),
+					  1000);
+		qos->ucast.in.latency =
+			DIV_ROUND_CLOSEST(get_unaligned_le24(ev->p_latency),
+					  1000);
+		qos->ucast.out.sdu = ev->c_bn ? le16_to_cpu(ev->c_sdu) : 0;
+		qos->ucast.in.sdu = ev->p_bn ? le16_to_cpu(ev->p_sdu) : 0;
+		qos->ucast.out.phys = le_phy_qos(ev->c_phy);
+		qos->ucast.in.phys = le_phy_qos(ev->p_phy);
+		break;
+	}
+
+	if (!ev->status) {
+		conn->state = BT_CONNECTED;
+		hci_debugfs_create_conn(conn);
+		hci_conn_add_sysfs(conn);
+		hci_iso_setup_path(conn);
+		goto unlock;
+	}
+
+	conn->state = BT_CLOSED;
+	hci_connect_cfm(conn, ev->status);
+	hci_conn_del(conn);
+
+unlock:
+	if (pending)
+		hci_le_create_cis_pending(hdev);
+
+	hci_dev_unlock(hdev);
+}
+
+static void hci_le_create_big_complete_v2_evt(struct hci_dev *hdev, void *data,
+					      struct sk_buff *skb)
+{
+	struct hci_evt_le_create_big_complete_v2 *ev = data;
+
+	BT_DBG("%s status 0x%2.2x", hdev->name, ev->status);
+
+	if (!hci_le_ev_skb_pull(hdev, skb, HCI_EVT_LE_CREATE_BIG_COMPLETE_V2,
+				flex_array_size(ev, bis_handle, ev->num_bis)))
+		return;
+
+	hci_le_create_big_complete(hdev, ev->status, ev->handle, ev->num_bis,
+				   ev->bis_handle);
 }
 
 #define HCI_LE_EV_VL(_op, _func, _min_len, _max_len) \
@@ -7819,6 +8130,14 @@ static const struct hci_le_ev {
 	/* [0x37 = HCI_EVT_LE_CONN_RATE_CHANGE] */
 	HCI_LE_EV(HCI_EVT_LE_CONN_RATE_CHANGE, hci_le_conn_rate_change_evt,
 		  sizeof(struct hci_evt_le_conn_rate_change)),
+	/* [0x3a = HCI_EVT_LE_CIS_ESTABLISHED_V3] */
+	HCI_LE_EV(HCI_EVT_LE_CIS_ESTABLISHED_V3, hci_le_cis_established_evt_v3,
+		  sizeof(struct hci_evt_le_cis_established_v3)),
+	/* [0x3b = HCI_EVT_LE_CREATE_BIG_COMPLETE_V2] */
+	HCI_LE_EV_VL(HCI_EVT_LE_CREATE_BIG_COMPLETE_V2,
+		     hci_le_create_big_complete_v2_evt,
+		     sizeof(struct hci_evt_le_create_big_complete_v2),
+		     HCI_MAX_LE_SUBEVT_PLEN),
 };
 
 static void hci_le_meta_evt(struct hci_dev *hdev, void *data,

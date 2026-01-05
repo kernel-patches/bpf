@@ -4793,6 +4793,23 @@ static int hci_le_set_event_mask_sync(struct hci_dev *hdev)
 	if (le_sci_capable(hdev))
 		events[6] |= 0x40;	/* LE Connection Rate Change event */
 
+	/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 4, Part E,
+	 * Section 4.8.2:
+	 *
+	 * If an event has more than one version and the event is
+	 * generated, then the Controller shall use the latest version that
+	 * is both supported and enabled ("unmasked") in the relevant event
+	 * mask.
+	 *
+	 * So with these unmasked the older versions aren't reported.
+	 */
+	if (hdt_capable(hdev)) {
+		if (cis_capable(hdev))
+			events[7] |= BIT(1);	/* LE CIS Established v3 */
+		if (bis_capable(hdev))
+			events[7] |= BIT(2);	/* LE Create BIG Complete v2 */
+	}
+
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_EVENT_MASK,
 				     sizeof(events), events, HCI_CMD_TIMEOUT);
 }
@@ -4870,14 +4887,51 @@ static int hci_le_set_rpa_timeout_sync(struct hci_dev *hdev)
 				     HCI_CMD_TIMEOUT);
 }
 
+/* Read LE Maximum Data Length V2 */
+static int hci_le_read_max_data_len_v2_sync(struct hci_dev *hdev, u8 phy)
+{
+	struct hci_cp_le_read_max_data_len_v2 cp;
+
+	memset(&cp, 0, sizeof(cp));
+	cp.phy = phy;
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_READ_MAX_DATA_LEN_V2,
+				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+}
+
 /* Read LE Maximum Data Length */
 static int hci_le_read_max_data_len_sync(struct hci_dev *hdev)
 {
 	if (!(hdev->le_features[0] & HCI_LE_DATA_LEN_EXT))
 		return 0;
 
+	/* Check if HDT PHY and HCI_OP_LE_READ_MAX_DATA_LEN_V2 are supported */
+	if (hdt_capable(hdev) && hdev->commands[50] & BIT(5)) {
+		int err;
+
+		/* Read max data length for non-hdt PHYs (use 0x01 for LE 1M) */
+		err = hci_le_read_max_data_len_v2_sync(hdev, 0x01);
+		if (err)
+			return err;
+
+		/* Read max data length for HDT (0x05) */
+		return hci_le_read_max_data_len_v2_sync(hdev, 0x05);
+	}
+
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_READ_MAX_DATA_LEN, 0, NULL,
 				     HCI_CMD_TIMEOUT);
+}
+
+/* Read LE Suggested Default Data Length V2 */
+static int hci_le_read_def_data_len_v2_sync(struct hci_dev *hdev, u8 phys)
+{
+	struct hci_cp_le_read_def_data_len_v2 cp;
+
+	memset(&cp, 0, sizeof(cp));
+	cp.phys = phys;
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_READ_DEF_DATA_LEN_V2,
+				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
 }
 
 /* Read LE Suggested Default Data Length */
@@ -4885,6 +4939,18 @@ static int hci_le_read_def_data_len_sync(struct hci_dev *hdev)
 {
 	if (!(hdev->le_features[0] & HCI_LE_DATA_LEN_EXT))
 		return 0;
+
+	if (hdt_capable(hdev) && hdev->commands[50] & BIT(6)) {
+		int err;
+
+		/* All GFSK PHYs */
+		err = hci_le_read_def_data_len_v2_sync(hdev, 0x00);
+		if (err)
+			return err;
+
+		/* HDT PHY */
+		return hci_le_read_def_data_len_v2_sync(hdev, 0x01);
+	}
 
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_READ_DEF_DATA_LEN, 0, NULL,
 				     HCI_CMD_TIMEOUT);
@@ -5309,6 +5375,41 @@ static const struct hci_init_stage hci_init4[] = {
 	{}
 };
 
+/* Write Suggested Default Data Length V2 */
+static int hci_le_write_def_data_len_v2_sync(struct hci_dev *hdev, u8 phys)
+{
+	struct hci_cp_le_write_def_data_len_v2 cp;
+
+	switch (phys) {
+	case 0x00:
+		/* If already set to max skip */
+		if (hdev->le_def_tx_len == hdev->le_max_tx_len &&
+		    hdev->le_def_tx_time == hdev->le_max_tx_time)
+			return 0;
+
+		memset(&cp, 0, sizeof(cp));
+		/* All GFSK PHYs */
+		cp.tx_len = cpu_to_le16(hdev->le_max_tx_len);
+		cp.tx_time = cpu_to_le16(hdev->le_max_tx_time);
+		break;
+	case 0x01:
+		/* If already set to max skip */
+		if (hdev->hdt_def_tx_len == hdev->hdt_max_tx_len &&
+		    hdev->hdt_def_tx_time == hdev->hdt_max_tx_time)
+			return 0;
+
+		memset(&cp, 0, sizeof(cp));
+		/* HDT PHY */
+		cp.phys = 0x01;
+		cp.tx_len = cpu_to_le16(hdev->hdt_max_tx_len);
+		cp.tx_time = cpu_to_le16(hdev->hdt_max_tx_time);
+		break;
+	}
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_WRITE_DEF_DATA_LEN_V2,
+				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+}
+
 /* Set Suggested Default Data Length to maximum if supported */
 static int hci_le_set_write_def_data_len_sync(struct hci_dev *hdev)
 {
@@ -5317,12 +5418,74 @@ static int hci_le_set_write_def_data_len_sync(struct hci_dev *hdev)
 	if (!(hdev->le_features[0] & HCI_LE_DATA_LEN_EXT))
 		return 0;
 
+	/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 6, Part B,
+	 * Section 4.5.10, Table 4.11: Valid ranges for data PDU length
+	 * management parameters on the GFSK PHYs, at most 251 octets and
+	 * 17040 microseconds, so clamp what the controller reports to them.
+	 */
+	if (hdev->le_max_tx_len > 0x00fb)
+		hdev->le_max_tx_len = 0x00fb;
+
+	if (hdev->le_max_tx_time > 0x4290)
+		hdev->le_max_tx_time = 0x4290;
+
+	/* If controller is HDT check if it support V2 then use it */
+	if (hdt_capable(hdev) && hdev->commands[50] & BIT(7)) {
+		int err;
+
+		/* All GFSK PHYs */
+		err = hci_le_write_def_data_len_v2_sync(hdev, 0x00);
+		if (err)
+			return err;
+
+		return hci_le_write_def_data_len_v2_sync(hdev, 0x01);
+	}
+
+	/* If already set to max skip */
+	if (hdev->le_def_tx_len == hdev->le_max_tx_len &&
+	    hdev->le_def_tx_time == hdev->le_max_tx_time)
+		return 0;
+
 	memset(&cp, 0, sizeof(cp));
+
 	cp.tx_len = cpu_to_le16(hdev->le_max_tx_len);
 	cp.tx_time = cpu_to_le16(hdev->le_max_tx_time);
 
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_WRITE_DEF_DATA_LEN,
 				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+}
+
+/* HDT rates the controller supports in each direction.
+ *
+ * BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 6, Part A, Section 1:
+ *
+ * If the LE HDT PHY is supported, then HDT2, HDT3, and HDT4 shall be
+ * supported. HDT6 and HDT7.5 are optional
+ */
+static u16 hci_hdt_tx_rates(struct hci_dev *hdev)
+{
+	u16 rates = HCI_HDT_RATE_2M | HCI_HDT_RATE_3M | HCI_HDT_RATE_4M;
+
+	if (hdt_6_tx_capable(hdev))
+		rates |= HCI_HDT_RATE_6M;
+
+	if (hdt_7_5_tx_capable(hdev))
+		rates |= HCI_HDT_RATE_7_5M;
+
+	return rates;
+}
+
+static u16 hci_hdt_rx_rates(struct hci_dev *hdev)
+{
+	u16 rates = HCI_HDT_RATE_2M | HCI_HDT_RATE_3M | HCI_HDT_RATE_4M;
+
+	if (hdt_6_rx_capable(hdev))
+		rates |= HCI_HDT_RATE_6M;
+
+	if (hdt_7_5_rx_capable(hdev))
+		rates |= HCI_HDT_RATE_7_5M;
+
+	return rates;
 }
 
 /* Set Default PHY parameters if command is supported, enables all supported
@@ -5356,6 +5519,12 @@ static int hci_le_set_default_phy_sync(struct hci_dev *hdev)
 	if (le_coded_capable(hdev)) {
 		cp.tx_phys |= HCI_LE_SET_PHY_CODED;
 		cp.rx_phys |= HCI_LE_SET_PHY_CODED;
+	}
+
+	/* Enables HDT PHY if supported */
+	if (hdt_capable(hdev)) {
+		cp.tx_phys |= HCI_LE_SET_PHY_HDT;
+		cp.rx_phys |= HCI_LE_SET_PHY_HDT;
 	}
 
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_DEFAULT_PHY,
@@ -7329,10 +7498,15 @@ done:
 	if (!aux_num_cis)
 		return 0;
 
-	/* Wait for HCI_LE_CIS_Established */
+	/* Wait for HCI_LE_CIS_Established, which HDT capable controllers
+	 * report with the v3 event since it is the one unmasked, see
+	 * hci_le_set_event_mask_sync().
+	 */
 	return __hci_cmd_sync_status_sk(hdev, HCI_OP_LE_CREATE_CIS,
 					struct_size(cmd, cis, cmd->num_cis),
-					cmd, HCI_EVT_LE_CIS_ESTABLISHED,
+					cmd, hdt_capable(hdev) ?
+					HCI_EVT_LE_CIS_ESTABLISHED_V3 :
+					HCI_EVT_LE_CIS_ESTABLISHED,
 					timeout, NULL);
 }
 
@@ -8301,7 +8475,7 @@ static int hci_le_set_phy_sync(struct hci_dev *hdev, void *data)
 					HCI_CMD_TIMEOUT, NULL);
 }
 
-int hci_le_set_phy(struct hci_conn *conn, u8 tx_phys, u8 rx_phys)
+int hci_le_set_phy(struct hci_conn *conn, u8 tx_phys, u8 rx_phys, u16 phy_opts)
 {
 	struct hci_dev *hdev = conn->hdev;
 	struct hci_cp_le_set_phy *cp;
@@ -8315,6 +8489,7 @@ int hci_le_set_phy(struct hci_conn *conn, u8 tx_phys, u8 rx_phys)
 	cp->handle = cpu_to_le16(conn->handle);
 	cp->tx_phys = tx_phys;
 	cp->rx_phys = rx_phys;
+	cp->phy_opts = cpu_to_le16(phy_opts);
 
 	err = hci_cmd_sync_queue_once(hdev, hci_le_set_phy_sync, cp,
 				      le_phy_update_complete);
@@ -8322,4 +8497,197 @@ int hci_le_set_phy(struct hci_conn *conn, u8 tx_phys, u8 rx_phys)
 		kfree(cp);
 
 	return (err == -EEXIST) ? 0 : err;
+}
+
+/* LE Set CIG Params v2 */
+static int hci_le_set_cig_params_v2_sync(struct hci_dev *hdev, u8 cig_id)
+{
+	DEFINE_FLEX(struct hci_cp_le_set_cig_params_v2, pdu, cis, num_cis,
+		    HCI_LE_CIG_PARAMS_V2_MAX_CIS);
+	struct hci_conn *conn;
+	struct bt_iso_qos *qos;
+	u8 aux_num_cis = 0;
+	u8 cis_id;
+
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_cig(hdev, cig_id);
+	if (!conn) {
+		hci_dev_unlock(hdev);
+		return 0;
+	}
+
+	qos = &conn->iso_qos;
+	pdu->cig_id = cig_id;
+	hci_cpu_to_le24(qos->ucast.out.interval, pdu->c_interval);
+	hci_cpu_to_le24(qos->ucast.in.interval, pdu->p_interval);
+	pdu->sca = qos->ucast.sca;
+	pdu->packing = qos->ucast.packing;
+	pdu->framing = qos->ucast.framing;
+	pdu->c_latency = cpu_to_le16(qos->ucast.out.latency);
+	pdu->p_latency = cpu_to_le16(qos->ucast.in.latency);
+
+	/* Reprogram all CIS(s) with the same CIG, valid range are:
+	 * num_cis: 0x00 to 0x1F
+	 * cis_id: 0x00 to 0xEF
+	 */
+	for (cis_id = 0x00; cis_id < 0xf0 &&
+	     aux_num_cis < pdu->num_cis; cis_id++) {
+		struct hci_cis_params_v2 *cis;
+
+		conn = hci_conn_hash_lookup_cis(hdev, NULL, 0, cig_id, cis_id);
+		if (!conn)
+			continue;
+
+		qos = &conn->iso_qos;
+
+		cis = &pdu->cis[aux_num_cis++];
+		cis->cis_id = cis_id;
+		cis->c_sdu  = cpu_to_le16(conn->iso_qos.ucast.out.sdu);
+		cis->p_sdu  = cpu_to_le16(conn->iso_qos.ucast.in.sdu);
+		cis->c_phys = qos->ucast.out.phys ? qos->ucast.out.phys :
+			      qos->ucast.in.phys;
+		cis->p_phys = qos->ucast.in.phys ? qos->ucast.in.phys :
+			      qos->ucast.out.phys;
+		cis->c_rtn  = qos->ucast.out.rtn;
+		cis->p_rtn  = qos->ucast.in.rtn;
+
+		if (cis->c_phys & HCI_LE_SET_PHY_HDT)
+			cis->c_hdt_rates = cpu_to_le16(hci_hdt_tx_rates(hdev));
+
+		if (cis->p_phys & HCI_LE_SET_PHY_HDT)
+			cis->p_hdt_rates = cpu_to_le16(hci_hdt_rx_rates(hdev));
+	}
+	pdu->num_cis = aux_num_cis;
+
+	hci_dev_unlock(hdev);
+
+	if (!pdu->num_cis)
+		return 0;
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_CIG_PARAMS_V2,
+				     struct_size(pdu, cis, pdu->num_cis),
+				     pdu, HCI_CMD_TIMEOUT);
+}
+
+/* LE Set CIG Params */
+int hci_le_set_cig_params_sync(struct hci_dev *hdev, u8 cig_id)
+{
+	DEFINE_FLEX(struct hci_cp_le_set_cig_params, pdu, cis, num_cis, 0x1f);
+	struct hci_conn *conn;
+	struct bt_iso_qos *qos;
+	u8 aux_num_cis = 0;
+	u8 cis_id;
+
+	if (le_set_cig_params_v2_capable(hdev))
+		return hci_le_set_cig_params_v2_sync(hdev, cig_id);
+
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_cig(hdev, cig_id);
+	if (!conn) {
+		hci_dev_unlock(hdev);
+		return 0;
+	}
+
+	qos = &conn->iso_qos;
+	pdu->cig_id = cig_id;
+	hci_cpu_to_le24(qos->ucast.out.interval, pdu->c_interval);
+	hci_cpu_to_le24(qos->ucast.in.interval, pdu->p_interval);
+	pdu->sca = qos->ucast.sca;
+	pdu->packing = qos->ucast.packing;
+	pdu->framing = qos->ucast.framing;
+	pdu->c_latency = cpu_to_le16(qos->ucast.out.latency);
+	pdu->p_latency = cpu_to_le16(qos->ucast.in.latency);
+
+	/* Reprogram all CIS(s) with the same CIG, valid range are:
+	 * num_cis: 0x00 to 0x1F
+	 * cis_id: 0x00 to 0xEF
+	 */
+	for (cis_id = 0x00; cis_id < 0xf0 &&
+	     aux_num_cis < pdu->num_cis; cis_id++) {
+		struct hci_cis_params *cis;
+
+		conn = hci_conn_hash_lookup_cis(hdev, NULL, 0, cig_id, cis_id);
+		if (!conn)
+			continue;
+
+		qos = &conn->iso_qos;
+
+		cis = &pdu->cis[aux_num_cis++];
+		cis->cis_id = cis_id;
+		cis->c_sdu  = cpu_to_le16(conn->iso_qos.ucast.out.sdu);
+		cis->p_sdu  = cpu_to_le16(conn->iso_qos.ucast.in.sdu);
+		cis->c_phys = qos->ucast.out.phys ? qos->ucast.out.phys :
+			      qos->ucast.in.phys;
+		cis->p_phys = qos->ucast.in.phys ? qos->ucast.in.phys :
+			      qos->ucast.out.phys;
+		cis->c_rtn  = qos->ucast.out.rtn;
+		cis->p_rtn  = qos->ucast.in.rtn;
+	}
+	pdu->num_cis = aux_num_cis;
+
+	hci_dev_unlock(hdev);
+
+	if (!pdu->num_cis)
+		return 0;
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_CIG_PARAMS,
+				     struct_size(pdu, cis, pdu->num_cis),
+				     pdu, HCI_CMD_TIMEOUT);
+}
+
+static int hci_le_create_big_v2_sync(struct hci_conn *conn,
+				     struct bt_iso_qos *qos, u8 num_bis)
+{
+	struct hci_dev *hdev = conn->hdev;
+	struct hci_cp_le_create_big_v2 cp;
+
+	memset(&cp, 0, sizeof(cp));
+	cp.handle = qos->bcast.big;
+	cp.adv_handle = qos->bcast.bis;
+	cp.num_bis  = num_bis;
+	hci_cpu_to_le24(qos->bcast.out.interval, cp.bis.sdu_interval);
+	cp.bis.sdu = cpu_to_le16(qos->bcast.out.sdu);
+	cp.bis.latency = cpu_to_le16(qos->bcast.out.latency);
+	cp.bis.rtn = qos->bcast.out.rtn;
+	cp.bis.phys = qos->bcast.out.phys;
+	cp.bis.packing = qos->bcast.packing;
+	cp.bis.framing = qos->bcast.framing;
+	cp.bis.encryption = qos->bcast.encryption;
+	memcpy(cp.bis.bcode, qos->bcast.bcode, sizeof(cp.bis.bcode));
+
+	/* Check if HDT PHY is set then enable HDT supported rates */
+	if (cp.bis.phys & HCI_LE_SET_PHY_HDT)
+		cp.bis.hdt_rates = cpu_to_le16(hci_hdt_tx_rates(hdev));
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_CREATE_BIG_V2,
+				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
+}
+
+int hci_le_create_big_sync(struct hci_conn *conn, struct bt_iso_qos *qos,
+			   u8 num_bis)
+{
+	struct hci_dev *hdev = conn->hdev;
+	struct hci_cp_le_create_big cp;
+
+	if (hdt_capable(hdev) && hdev->commands[51] & BIT(3))
+		return hci_le_create_big_v2_sync(conn, qos, num_bis);
+
+	memset(&cp, 0, sizeof(cp));
+	cp.handle = qos->bcast.big;
+	cp.adv_handle = qos->bcast.bis;
+	cp.num_bis  = num_bis;
+	hci_cpu_to_le24(qos->bcast.out.interval, cp.bis.sdu_interval);
+	cp.bis.sdu = cpu_to_le16(qos->bcast.out.sdu);
+	cp.bis.latency =  cpu_to_le16(qos->bcast.out.latency);
+	cp.bis.rtn  = qos->bcast.out.rtn;
+	cp.bis.phys = qos->bcast.out.phys;
+	cp.bis.packing = qos->bcast.packing;
+	cp.bis.framing = qos->bcast.framing;
+	cp.bis.encryption = qos->bcast.encryption;
+	memcpy(cp.bis.bcode, qos->bcast.bcode, sizeof(cp.bis.bcode));
+
+	return __hci_cmd_sync_status(hdev, HCI_OP_LE_CREATE_BIG,
+				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
 }

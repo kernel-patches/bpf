@@ -142,6 +142,16 @@ struct bt_voice {
 #define BT_PHY_LE_2M_RX		BIT(12)
 #define BT_PHY_LE_CODED_TX	BIT(13)
 #define BT_PHY_LE_CODED_RX	BIT(14)
+#define BT_PHY_HDT_2M_TX	BIT(15)
+#define BT_PHY_HDT_2M_RX	BIT(16)
+#define BT_PHY_HDT_3M_TX	BIT(17)
+#define BT_PHY_HDT_3M_RX	BIT(18)
+#define BT_PHY_HDT_4M_TX	BIT(19)
+#define BT_PHY_HDT_4M_RX	BIT(20)
+#define BT_PHY_HDT_6M_TX	BIT(21)
+#define BT_PHY_HDT_6M_RX	BIT(22)
+#define BT_PHY_HDT_7_5M_TX	BIT(23)
+#define BT_PHY_HDT_7_5M_RX	BIT(24)
 
 #define BT_PHY_BREDR_MASK	(BT_PHY_BR_1M_1SLOT | BT_PHY_BR_1M_3SLOT | \
 				 BT_PHY_BR_1M_5SLOT | BT_PHY_EDR_2M_1SLOT | \
@@ -151,6 +161,13 @@ struct bt_voice {
 #define BT_PHY_LE_MASK		(BT_PHY_LE_1M_TX | BT_PHY_LE_1M_RX | \
 				 BT_PHY_LE_2M_TX | BT_PHY_LE_2M_RX | \
 				 BT_PHY_LE_CODED_TX | BT_PHY_LE_CODED_RX)
+#define BT_PHY_HDT_TX_MASK	(BT_PHY_HDT_2M_TX | BT_PHY_HDT_3M_TX | \
+				 BT_PHY_HDT_4M_TX | BT_PHY_HDT_6M_TX | \
+				 BT_PHY_HDT_7_5M_TX)
+#define BT_PHY_HDT_RX_MASK	(BT_PHY_HDT_2M_RX | BT_PHY_HDT_3M_RX | \
+				 BT_PHY_HDT_4M_RX | BT_PHY_HDT_6M_RX | \
+				 BT_PHY_HDT_7_5M_RX)
+#define BT_PHY_HDT_MASK		(BT_PHY_HDT_TX_MASK | BT_PHY_HDT_RX_MASK)
 
 #define BT_MODE			15
 
@@ -221,6 +238,7 @@ struct bt_iso_qos {
 #define BT_ISO_PHY_1M		BIT(0)
 #define BT_ISO_PHY_2M		BIT(1)
 #define BT_ISO_PHY_CODED	BIT(2)
+#define BT_ISO_PHY_HDT		BIT(4)
 #define BT_ISO_PHY_ANY		(BT_ISO_PHY_1M | BT_ISO_PHY_2M | \
 				 BT_ISO_PHY_CODED)
 

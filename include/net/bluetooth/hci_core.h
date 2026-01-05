@@ -424,6 +424,15 @@ struct hci_dev {
 	__u16		le_max_tx_time;
 	__u16		le_max_rx_len;
 	__u16		le_max_rx_time;
+	__u16		hdt_def_tx_len;
+	__u16		hdt_def_tx_time;
+	__u16		hdt_max_tx_len;
+	__u16		hdt_max_tx_time;
+	__u16		hdt_max_rx_len;
+	__u16		hdt_max_rx_time;
+	__u8		hdt_max_tx_win;
+	__u8		hdt_max_rx_win;
+	__u16		hdt_max_rx_packet;
 	__u8		le_max_key_size;
 	__u8		le_min_key_size;
 	__u16		discov_interleaved_timeout;
@@ -784,6 +793,7 @@ struct hci_conn {
 	__u8		le_rx_def_phys;
 	__u8		le_tx_phy;
 	__u8		le_rx_phy;
+	__u16		le_phy_opts;
 	__s8		rssi;
 	__s8		tx_power;
 	__s8		max_tx_power;
@@ -2149,6 +2159,25 @@ void hci_conn_del_sysfs(struct hci_conn *conn);
 	(past_sender_enabled(dev) || past_receiver_enabled(dev))
 #define ll_ext_feature_capable(dev) \
 	((dev)->le_features[7] & HCI_LE_LL_EXT_FEATURE)
+#define le_feature(dev, page, byte) \
+	(page ? ((dev)->le_features[(page - 1) * 24 + 8 + byte]) : \
+	((dev)->le_features[byte]))
+#define hdt_capable(dev) \
+	(le_feature(dev, 1, 1) & HCI_LE_HDT_FEATURE)
+#define le_set_cig_params_v2_capable(dev) \
+	(hdt_capable(dev) && ((dev)->commands[51] & BIT(0)))
+#define hdt_enabled(dev) \
+	(le_enabled(dev) && hdt_capable(dev))
+#define hdt_6_rx_capable(dev) \
+	(le_feature(dev, 1, 1) & HCI_LE_HDT_6_RX_FEATURE)
+#define hdt_6_tx_capable(dev) \
+	(le_feature(dev, 1, 1) & HCI_LE_HDT_6_TX_FEATURE)
+#define hdt_7_5_rx_capable(dev) \
+	(le_feature(dev, 1, 2) & HCI_LE_HDT_7_5_RX_FEATURE)
+#define hdt_7_5_tx_capable(dev) \
+	(le_feature(dev, 1, 2) & HCI_LE_HDT_7_5_TX_FEATURE)
+#define hdt_pf1_capable(dev) \
+	(le_feature(dev, 1, 2) & HCI_LE_HDT_PF_1)
 
 /* Channel sounding support */
 #define le_cs_capable(dev) \
