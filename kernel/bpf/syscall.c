@@ -6160,14 +6160,55 @@ put_prog:
 	return ret;
 }
 
-static int copy_prog_load_log_true_size(union bpf_attr *attr, bpfptr_t uattr, unsigned int size)
+static int check_log_attrs(u64 log_buf, u32 log_size, u32 log_level,
+			   struct bpf_common_attr *common_attrs)
+{
+	if (log_buf && common_attrs->log_buf && (log_buf != common_attrs->log_buf ||
+						 log_size != common_attrs->log_size ||
+						 log_level != common_attrs->log_level))
+		return -EUSERS;
+
+	return 0;
+}
+
+static int check_prog_load_log_attrs(union bpf_attr *attr, struct bpf_common_attr *common_attrs)
+{
+	int err;
+
+	err = check_log_attrs(attr->log_buf, attr->log_size, attr->log_level, common_attrs);
+	if (err)
+		return err;
+
+	if (!attr->log_buf && common_attrs->log_buf) {
+		attr->log_buf = common_attrs->log_buf;
+		attr->log_size = common_attrs->log_size;
+		attr->log_level = common_attrs->log_level;
+	}
+
+	return 0;
+}
+
+static int copy_common_attr_log_true_size(bpfptr_t uattr, unsigned int size, u32 *log_true_size)
+{
+	if (size >= offsetofend(struct bpf_common_attr, log_true_size) &&
+	    copy_to_bpfptr_offset(uattr, offsetof(struct bpf_common_attr, log_true_size),
+				  log_true_size, sizeof(*log_true_size)))
+		return -EFAULT;
+
+	return 0;
+}
+
+static int copy_prog_load_log_true_size(union bpf_attr *attr, bpfptr_t uattr, unsigned int size,
+					struct bpf_common_attr *common_attrs, bpfptr_t uattr_common,
+					unsigned int size_common)
 {
 	if (size >= offsetofend(union bpf_attr, log_true_size) &&
 	    copy_to_bpfptr_offset(uattr, offsetof(union bpf_attr, log_true_size),
 				  &attr->log_true_size, sizeof(attr->log_true_size)))
 		return -EFAULT;
 
-	return 0;
+	return copy_common_attr_log_true_size(uattr_common, size_common,
+					      &attr->log_true_size);
 }
 
 static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size,
@@ -6225,9 +6266,13 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size,
 		err = map_freeze(&attr);
 		break;
 	case BPF_PROG_LOAD:
+		err = check_prog_load_log_attrs(&attr, &common_attrs);
+		if (err)
+			break;
 		attr.log_true_size = 0;
 		err = bpf_prog_load(&attr, uattr);
-		ret = copy_prog_load_log_true_size(&attr, uattr, size);
+		ret = copy_prog_load_log_true_size(&attr, uattr, size, &common_attrs, uattr_common,
+						   size_common);
 		err = ret ? ret : err;
 		break;
 	case BPF_OBJ_PIN:
