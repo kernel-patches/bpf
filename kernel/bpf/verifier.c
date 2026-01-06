@@ -21816,6 +21816,14 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			env->prog = new_prog;
 			delta += cnt - 1;
 
+			/* gen_prologue emits function calls with target address
+			 * relative to __bpf_call_base. Skip patch_call_imm fixup.
+			 */
+			for (i = 0; i < cnt - 1; i++) {
+				if (bpf_helper_call(&env->prog->insnsi[i]))
+					env->insn_aux_data[i].finalized_call = true;
+			}
+
 			ret = add_kfunc_in_insns(env, insn_buf, cnt - 1);
 			if (ret < 0)
 				return ret;
@@ -23422,6 +23430,9 @@ patch_map_ops_generic:
 			goto next_insn;
 		}
 patch_call_imm:
+		if (env->insn_aux_data[i + delta].finalized_call)
+			goto next_insn;
+
 		fn = env->ops->get_func_proto(insn->imm, env->prog);
 		/* all functions that have prototype and verifier allowed
 		 * programs to call them, must be real in-kernel functions
@@ -23433,6 +23444,7 @@ patch_call_imm:
 			return -EFAULT;
 		}
 		insn->imm = fn->func - __bpf_call_base;
+		env->insn_aux_data[i + delta].finalized_call = true;
 next_insn:
 		if (subprogs[cur_subprog + 1].start == i + delta + 1) {
 			subprogs[cur_subprog].stack_depth += stack_depth_extra;
