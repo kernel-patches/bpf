@@ -827,7 +827,7 @@ int bpf_bprintf_prepare(const char *fmt, u32 fmt_size, const u64 *raw_args,
 	char fmt_ptype, cur_ip[16], ip_spec[] = "%pXX";
 
 	fmt_end = strnchr(fmt, fmt_size, 0);
-	if (!fmt_end)
+	if (!fmt_end || fmt_end == fmt)
 		return -EINVAL;
 	fmt_size = fmt_end - fmt;
 
