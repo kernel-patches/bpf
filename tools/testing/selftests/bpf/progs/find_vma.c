@@ -61,8 +61,8 @@ int handle_pe(void)
 
 	find_addr_ret = bpf_find_vma(task, addr, check_vma, &data, 0);
 
-	/* In NMI, this should return -EBUSY, as the previous call is using
-	 * the irq_work.
+	/* With per-VMA locks, multiple calls work in NMI context.
+	 * This returns -ENOENT (no VMA at address 0).
 	 */
 	find_zero_ret = bpf_find_vma(task, 0, check_vma, &data, 0);
 	return 0;

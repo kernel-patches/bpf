@@ -71,7 +71,7 @@ static void test_find_vma_pe(struct find_vma *skel)
 	for (i = 0; i < one_bn && find_vma_pe_condition(skel); ++i)
 		++j;
 
-	test_and_reset_skel(skel, -EBUSY /* in nmi, irq_work is busy */, i == one_bn);
+	test_and_reset_skel(skel, -ENOENT /* per-VMA locks work in NMI */, i == one_bn);
 cleanup:
 	bpf_link__destroy(link);
 	close(pfd);

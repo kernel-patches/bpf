@@ -411,6 +411,7 @@ struct bpf_iter_seq_task_vma_info {
 	struct task_struct *task;
 	struct mm_struct *mm;
 	struct vm_area_struct *vma;
+	struct vm_area_struct *ref_vma;  /* VMA with extra refcount */
 	u32 tid;
 	unsigned long prev_vm_start;
 	unsigned long prev_vm_end;
@@ -429,68 +430,24 @@ task_vma_seq_get_next(struct bpf_iter_seq_task_vma_info *info)
 	struct vm_area_struct *curr_vma;
 	struct task_struct *curr_task;
 	struct mm_struct *curr_mm;
+	struct vma_iterator vmi;
 	u32 saved_tid = info->tid;
 
-	/* If this function returns a non-NULL vma, it holds a reference to
-	 * the task_struct, holds a refcount on mm->mm_users, and holds
-	 * read lock on vma->mm->mmap_lock.
-	 * If this function returns NULL, it does not hold any reference or
-	 * lock.
-	 */
+	/* Release reference from previous iteration */
+	if (info->ref_vma) {
+		vma_refcount_put_unlocked(info->ref_vma);
+		info->ref_vma = NULL;
+	}
+
 	if (info->task) {
 		curr_task = info->task;
 		curr_vma = info->vma;
 		curr_mm = info->mm;
-		/* In case of lock contention, drop mmap_lock to unblock
-		 * the writer.
-		 *
-		 * After relock, call find(mm, prev_vm_end - 1) to find
-		 * new vma to process.
-		 *
-		 *   +------+------+-----------+
-		 *   | VMA1 | VMA2 | VMA3      |
-		 *   +------+------+-----------+
-		 *   |      |      |           |
-		 *  4k     8k     16k         400k
-		 *
-		 * For example, curr_vma == VMA2. Before unlock, we set
-		 *
-		 *    prev_vm_start = 8k
-		 *    prev_vm_end   = 16k
-		 *
-		 * There are a few cases:
-		 *
-		 * 1) VMA2 is freed, but VMA3 exists.
-		 *
-		 *    find_vma() will return VMA3, just process VMA3.
-		 *
-		 * 2) VMA2 still exists.
-		 *
-		 *    find_vma() will return VMA2, process VMA2->next.
-		 *
-		 * 3) no more vma in this mm.
-		 *
-		 *    Process the next task.
-		 *
-		 * 4) find_vma() returns a different vma, VMA2'.
-		 *
-		 *    4.1) If VMA2 covers same range as VMA2', skip VMA2',
-		 *         because we already covered the range;
-		 *    4.2) VMA2 and VMA2' covers different ranges, process
-		 *         VMA2'.
-		 */
-		if (mmap_lock_is_contended(curr_mm)) {
-			info->prev_vm_start = curr_vma->vm_start;
-			info->prev_vm_end = curr_vma->vm_end;
-			op = task_vma_iter_find_vma;
-			mmap_read_unlock(curr_mm);
-			if (mmap_read_lock_killable(curr_mm)) {
-				mmput(curr_mm);
-				goto finish;
-			}
-		} else {
-			op = task_vma_iter_next_vma;
-		}
+
+		info->prev_vm_start = curr_vma->vm_start;
+		info->prev_vm_end = curr_vma->vm_end;
+
+		op = task_vma_iter_find_vma;
 	} else {
 again:
 		curr_task = task_seq_get_next(&info->common, &info->tid, true);
@@ -499,57 +456,101 @@ again:
 			goto finish;
 		}
 
-		if (saved_tid != info->tid) {
-			/* new task, process the first vma */
+		if (saved_tid != info->tid)
 			op = task_vma_iter_first_vma;
-		} else {
-			/* Found the same tid, which means the user space
-			 * finished data in previous buffer and read more.
-			 * We dropped mmap_lock before returning to user
-			 * space, so it is necessary to use find_vma() to
-			 * find the next vma to process.
-			 */
+		else
 			op = task_vma_iter_find_vma;
-		}
 
 		curr_mm = get_task_mm(curr_task);
 		if (!curr_mm)
 			goto next_task;
+	}
 
-		if (mmap_read_lock_killable(curr_mm)) {
+	/* Find and validate VMA using per-VMA locks */
+	{
+		unsigned long addr, vm_start;
+		struct vm_area_struct *locked_vma;
+
+		switch (op) {
+		case task_vma_iter_first_vma:
+			addr = 0;
+			break;
+		case task_vma_iter_find_vma:
+			addr = info->prev_vm_end - 1;
+			break;
+		case task_vma_iter_next_vma:
+			WARN_ON_ONCE(1);
 			mmput(curr_mm);
-			goto finish;
+			goto next_task;
 		}
-	}
 
-	switch (op) {
-	case task_vma_iter_first_vma:
-		curr_vma = find_vma(curr_mm, 0);
-		break;
-	case task_vma_iter_next_vma:
-		curr_vma = find_vma(curr_mm, curr_vma->vm_end);
-		break;
-	case task_vma_iter_find_vma:
-		/* We dropped mmap_lock so it is necessary to use find_vma
-		 * to find the next vma. This is similar to the  mechanism
-		 * in show_smaps_rollup().
+		/* Find VMA under RCU, validate with per-VMA lock.
+		 * Per mm/memory.c: VMA fields can be read reliably when vm_refcnt > 1.
+		 * We take an extra reference and release the lock to avoid both
+		 * circular locking dependency and recursive mmap_lock acquisition.
 		 */
-		curr_vma = find_vma(curr_mm, info->prev_vm_end - 1);
-		/* case 1) and 4.2) above just use curr_vma */
+		rcu_read_lock();
+		vma_iter_init(&vmi, curr_mm, addr);
+		curr_vma = vma_next(&vmi);
+		if (!curr_vma) {
+			rcu_read_unlock();
+			mmput(curr_mm);
+			goto next_task;
+		}
+		vm_start = curr_vma->vm_start;
+		rcu_read_unlock();
 
-		/* check for case 2) or case 4.1) above */
-		if (curr_vma &&
-		    curr_vma->vm_start == info->prev_vm_start &&
-		    curr_vma->vm_end == info->prev_vm_end)
-			curr_vma = find_vma(curr_mm, curr_vma->vm_end);
-		break;
+		/* Validate VMA with per-VMA lock */
+		locked_vma = lock_vma_under_rcu(curr_mm, vm_start);
+		if (!locked_vma) {
+			mmput(curr_mm);
+			goto next_task;
+		}
+
+		/* Check for duplicate VMA */
+		if (op == task_vma_iter_find_vma &&
+		    locked_vma->vm_start == info->prev_vm_start &&
+		    locked_vma->vm_end == info->prev_vm_end) {
+			unsigned long next_start;
+
+			/* Skip duplicate - find next VMA */
+			next_start = locked_vma->vm_end;
+			vma_end_read(locked_vma);
+
+			rcu_read_lock();
+			vma_iter_set(&vmi, next_start);
+			curr_vma = vma_next(&vmi);
+			if (!curr_vma) {
+				rcu_read_unlock();
+				mmput(curr_mm);
+				goto next_task;
+			}
+			vm_start = curr_vma->vm_start;
+			rcu_read_unlock();
+
+			locked_vma = lock_vma_under_rcu(curr_mm, vm_start);
+			if (!locked_vma) {
+				mmput(curr_mm);
+				goto next_task;
+			}
+		}
+
+		/* VMA validated - take extra reference for BPF, release lock.
+		 * VMA fields remain stable (vm_refcnt > 1) but no lock held.
+		 */
+		curr_vma = locked_vma;
+		rcu_read_lock();
+		if (!vma_refcount_try_get(curr_vma)) {
+			rcu_read_unlock();
+			vma_end_read(locked_vma);
+			mmput(curr_mm);
+			goto next_task;
+		}
+		rcu_read_unlock();
+		vma_end_read(locked_vma);
+		info->ref_vma = curr_vma;
 	}
-	if (!curr_vma) {
-		/* case 3) above, or case 2) 4.1) with vma->next == NULL */
-		mmap_read_unlock(curr_mm);
-		mmput(curr_mm);
-		goto next_task;
-	}
+
 	info->task = curr_task;
 	info->vma = curr_vma;
 	info->mm = curr_mm;
@@ -632,6 +633,11 @@ static void task_vma_seq_stop(struct seq_file *seq, void *v)
 
 	if (!v) {
 		(void)__task_vma_seq_show(seq, true);
+		/* Release VMA reference after BPF execution */
+		if (info->ref_vma) {
+			vma_refcount_put_unlocked(info->ref_vma);
+			info->ref_vma = NULL;
+		}
 	} else {
 		/* info->vma has not been seen by the BPF program. If the
 		 * user space reads more, task_vma_seq_get_next should
@@ -642,7 +648,13 @@ static void task_vma_seq_stop(struct seq_file *seq, void *v)
 		 */
 		info->prev_vm_start = ~0UL;
 		info->prev_vm_end = info->vma->vm_end;
-		mmap_read_unlock(info->mm);
+
+		/* Release VMA reference since it wasn't shown to BPF */
+		if (info->ref_vma) {
+			vma_refcount_put_unlocked(info->ref_vma);
+			info->ref_vma = NULL;
+		}
+
 		mmput(info->mm);
 		info->mm = NULL;
 		put_task_struct(info->task);
@@ -751,9 +763,7 @@ static struct bpf_iter_reg task_vma_reg_info = {
 BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
 	   bpf_callback_t, callback_fn, void *, callback_ctx, u64, flags)
 {
-	struct mmap_unlock_irq_work *work = NULL;
 	struct vm_area_struct *vma;
-	bool irq_work_busy = false;
 	struct mm_struct *mm;
 	int ret = -ENOENT;
 
@@ -767,19 +777,50 @@ BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
 	if (!mm)
 		return -ENOENT;
 
-	irq_work_busy = bpf_mmap_unlock_get_irq_work(&work);
+	/* Find and validate VMA using per-VMA lock.
+	 * Per mm_types.h: VMA fields can be read reliably when vm_refcnt > 1.
+	 * We take an extra reference and release the lock to avoid both
+	 * circular locking dependency and recursive mmap_lock acquisition.
+	 */
+	rcu_read_lock();
+	vma = lock_vma_under_rcu(mm, start);
+	if (!vma) {
+		/* lock_vma_under_rcu failed - determine if VMA exists */
+		MA_STATE(mas, &mm->mm_mt, start, start);
+		struct vm_area_struct *vma_check;
 
-	if (irq_work_busy || !mmap_read_trylock(mm))
-		return -EBUSY;
+		vma_check = mas_walk(&mas);
+		rcu_read_unlock();
 
-	vma = find_vma(mm, start);
+		/* Return -ENOENT if no VMA, -EBUSY if lock failed */
+		return vma_check ? -EBUSY : -ENOENT;
+	}
 
-	if (vma && vma->vm_start <= start && vma->vm_end > start) {
+	/* Validate VMA covers the address */
+	if (vma->vm_start <= start && vma->vm_end > start) {
+		/* Take extra reference for callback, release lock */
+		if (!vma_refcount_try_get(vma)) {
+			/* Refcount limit hit - similar to lock busy */
+			vma_end_read(vma);
+			rcu_read_unlock();
+			return -EBUSY;
+		}
+		vma_end_read(vma);
+
+		/* Call callback without locks - VMA fields remain stable
+		 * (vm_refcnt > 1) but no lock held.
+		 */
 		callback_fn((u64)(long)task, (u64)(long)vma,
 			    (u64)(long)callback_ctx, 0, 0);
+
+		/* Release reference after callback */
+		vma_refcount_put_unlocked(vma);
 		ret = 0;
+	} else {
+		vma_end_read(vma);
 	}
-	bpf_mmap_unlock_mm(work, mm);
+	rcu_read_unlock();
+
 	return ret;
 }
 
@@ -797,8 +838,9 @@ const struct bpf_func_proto bpf_find_vma_proto = {
 struct bpf_iter_task_vma_kern_data {
 	struct task_struct *task;
 	struct mm_struct *mm;
-	struct mmap_unlock_irq_work *work;
 	struct vma_iterator vmi;
+	struct vm_area_struct *ref_vma;  /* VMA with extra refcount */
+	unsigned long prev_vm_end;
 };
 
 struct bpf_iter_task_vma {
@@ -819,16 +861,11 @@ __bpf_kfunc int bpf_iter_task_vma_new(struct bpf_iter_task_vma *it,
 				      struct task_struct *task, u64 addr)
 {
 	struct bpf_iter_task_vma_kern *kit = (void *)it;
-	bool irq_work_busy = false;
 	int err;
 
 	BUILD_BUG_ON(sizeof(struct bpf_iter_task_vma_kern) != sizeof(struct bpf_iter_task_vma));
 	BUILD_BUG_ON(__alignof__(struct bpf_iter_task_vma_kern) != __alignof__(struct bpf_iter_task_vma));
 
-	/* is_iter_reg_valid_uninit guarantees that kit hasn't been initialized
-	 * before, so non-NULL kit->data doesn't point to previously
-	 * bpf_mem_alloc'd bpf_iter_task_vma_kern_data
-	 */
 	kit->data = bpf_mem_alloc(&bpf_global_ma, sizeof(struct bpf_iter_task_vma_kern_data));
 	if (!kit->data)
 		return -ENOMEM;
@@ -840,21 +877,16 @@ __bpf_kfunc int bpf_iter_task_vma_new(struct bpf_iter_task_vma *it,
 		goto err_cleanup_iter;
 	}
 
-	/* kit->data->work == NULL is valid after bpf_mmap_unlock_get_irq_work */
-	irq_work_busy = bpf_mmap_unlock_get_irq_work(&kit->data->work);
-	if (irq_work_busy || !mmap_read_trylock(kit->data->mm)) {
-		err = -EBUSY;
-		goto err_cleanup_iter;
-	}
-
 	vma_iter_init(&kit->data->vmi, kit->data->mm, addr);
+	kit->data->prev_vm_end = addr;
+	kit->data->ref_vma = NULL;
+
 	return 0;
 
 err_cleanup_iter:
 	if (kit->data->task)
 		put_task_struct(kit->data->task);
 	bpf_mem_free(&bpf_global_ma, kit->data);
-	/* NULL kit->data signals failed bpf_iter_task_vma initialization */
 	kit->data = NULL;
 	return err;
 }
@@ -862,10 +894,54 @@ err_cleanup_iter:
 __bpf_kfunc struct vm_area_struct *bpf_iter_task_vma_next(struct bpf_iter_task_vma *it)
 {
 	struct bpf_iter_task_vma_kern *kit = (void *)it;
+	struct vm_area_struct *vma;
+	unsigned long vm_start;
 
-	if (!kit->data) /* bpf_iter_task_vma_new failed */
+	if (!kit->data)
 		return NULL;
-	return vma_next(&kit->data->vmi);
+
+	/* Release reference from previous iteration */
+	if (kit->data->ref_vma) {
+		vma_refcount_put_unlocked(kit->data->ref_vma);
+		kit->data->ref_vma = NULL;
+	}
+
+	/* Find next VMA under RCU, validate with per-VMA lock.
+	 * Per mm/memory.c: VMA fields can be read reliably when vm_refcnt > 1.
+	 * We take an extra reference and release the lock to avoid both
+	 * circular locking dependency and recursive mmap_lock acquisition.
+	 */
+	rcu_read_lock();
+	vma_iter_set(&kit->data->vmi, kit->data->prev_vm_end);
+	vma = vma_next(&kit->data->vmi);
+	if (!vma) {
+		rcu_read_unlock();
+		return NULL;
+	}
+	vm_start = vma->vm_start;
+	rcu_read_unlock();
+
+	/* Validate and lock the VMA */
+	vma = lock_vma_under_rcu(kit->data->mm, vm_start);
+	if (!vma)
+		return NULL;
+
+	/* Take extra reference, release lock */
+	rcu_read_lock();
+	if (!vma_refcount_try_get(vma)) {
+		rcu_read_unlock();
+		vma_end_read(vma);
+		return NULL;
+	}
+	rcu_read_unlock();
+
+	/* Save end address for next iteration */
+	kit->data->prev_vm_end = vma->vm_end;
+	kit->data->ref_vma = vma;
+	vma_end_read(vma);
+
+	/* Return VMA with refcount > 1 but no lock - fields remain stable */
+	return vma;
 }
 
 __bpf_kfunc void bpf_iter_task_vma_destroy(struct bpf_iter_task_vma *it)
@@ -873,7 +949,9 @@ __bpf_kfunc void bpf_iter_task_vma_destroy(struct bpf_iter_task_vma *it)
 	struct bpf_iter_task_vma_kern *kit = (void *)it;
 
 	if (kit->data) {
-		bpf_mmap_unlock_mm(kit->data->work, kit->data->mm);
+		/* Release VMA reference if we still hold it */
+		if (kit->data->ref_vma)
+			vma_refcount_put_unlocked(kit->data->ref_vma);
 		put_task_struct(kit->data->task);
 		bpf_mem_free(&bpf_global_ma, kit->data);
 	}
