@@ -143,3 +143,132 @@ void test_htab_update(void)
 	if (test__start_subtest("concurrent_update"))
 		test_concurrent_update();
 }
+
+static void __setaffinity(cpu_set_t *cpus, int cpu)
+{
+	CPU_ZERO(cpus);
+	CPU_SET(cpu, cpus);
+	pthread_setaffinity_np(pthread_self(), sizeof(*cpus), cpus);
+}
+
+static void test_lru_hash_map_update_elem(enum bpf_map_type map_type, u64 map_flags)
+{
+	bool percpu = map_type == BPF_MAP_TYPE_LRU_PERCPU_HASH;
+	int err, map_fd, i, key, nr_cpus, max_entries = 128;
+	u64 *values, value = 0xDEADC0DE;
+	cpu_set_t cpus;
+	LIBBPF_OPTS(bpf_map_create_opts, opts,
+		    .map_flags = map_flags,
+	);
+
+	nr_cpus = libbpf_num_possible_cpus();
+	if (!ASSERT_GT(nr_cpus, 0, "libbpf_num_possible_cpus"))
+		return;
+
+	values = calloc(nr_cpus, sizeof(u64));
+	if (!ASSERT_OK_PTR(values, "calloc values"))
+		return;
+	for (i = 0; i < nr_cpus; i++)
+		values[i] = value;
+
+	map_fd = bpf_map_create(map_type, "test_lru", sizeof(int), sizeof(u64), max_entries, &opts);
+	if (!ASSERT_GE(map_fd, 0, "bpf_map_create")) {
+		free(values);
+		return;
+	}
+
+	/* populate all slots */
+	for (key = 0; key < max_entries; key++) {
+		__setaffinity(&cpus, key%nr_cpus);
+		err = bpf_map_update_elem(map_fd, &key, values, 0);
+		if (!ASSERT_OK(err, "bpf_map_update_elem"))
+			goto out;
+	}
+
+	/* LRU eviction should not happen */
+
+#define CHECK_OTHER_CPUS_VALUES(__val)							\
+	do {										\
+		if (!percpu)								\
+			break;								\
+		for (i = 1; i < nr_cpus; i++)						\
+			if (!ASSERT_EQ(values[i], __val, "bpf_map_lookup_elem value"))	\
+				goto out;						\
+	} while (0)
+
+	__setaffinity(&cpus, 0);
+	key = 0;
+	memset(values, 0, nr_cpus * sizeof(u64));
+	err = bpf_map_update_elem(map_fd, &key, values, 0);
+	if (!ASSERT_OK(err, "bpf_map_update_elem"))
+		goto out;
+
+	err = bpf_map_lookup_elem(map_fd, &key, values);
+	if (!ASSERT_OK(err, "bpf_map_lookup_elem"))
+		goto out;
+	if (!ASSERT_EQ(*values, 0, "bpf_map_lookup_elem value"))
+		goto out;
+	CHECK_OTHER_CPUS_VALUES(0);
+
+	for (key = 1; key < max_entries; key++) {
+		err = bpf_map_lookup_elem(map_fd, &key, values);
+		if (!ASSERT_OK(err, "bpf_map_lookup_elem"))
+			goto out;
+		if (!ASSERT_EQ(*values, value, "bpf_map_lookup_elem value"))
+			goto out;
+		CHECK_OTHER_CPUS_VALUES(value);
+	}
+
+	for (i = 0; i < nr_cpus; i++)
+		values[i] = value;
+
+	key = max_entries;
+	err = bpf_map_update_elem(map_fd, &key, values, 0);
+	if (!ASSERT_OK(err, "bpf_map_update_elem"))
+		goto out;
+
+	err = bpf_map_lookup_elem(map_fd, &key, values);
+	if (!ASSERT_OK(err, "bpf_map_lookup_elem"))
+		goto out;
+	if (!ASSERT_EQ(*values, value, "bpf_map_lookup_elem value"))
+		goto out;
+	CHECK_OTHER_CPUS_VALUES(value);
+
+#undef CHECK_OTHER_CPUS_VALUES
+
+out:
+	close(map_fd);
+	free(values);
+}
+
+static void test_update_lru_hash_map_common_lru(void)
+{
+	test_lru_hash_map_update_elem(BPF_MAP_TYPE_LRU_HASH, 0);
+}
+
+static void test_update_lru_hash_map_percpu_lru(void)
+{
+	test_lru_hash_map_update_elem(BPF_MAP_TYPE_LRU_HASH, BPF_F_NO_COMMON_LRU);
+}
+
+static void test_update_lru_percpu_hash_map_common_lru(void)
+{
+	test_lru_hash_map_update_elem(BPF_MAP_TYPE_LRU_PERCPU_HASH, 0);
+}
+
+static void test_update_lru_percpu_hash_map_percpu_lru(void)
+{
+	test_lru_hash_map_update_elem(BPF_MAP_TYPE_LRU_PERCPU_HASH, BPF_F_NO_COMMON_LRU);
+}
+
+void test_update_lru_hash_maps(void)
+{
+	if (test__start_subtest("lru_hash/common_lru"))
+		test_update_lru_hash_map_common_lru();
+	if (test__start_subtest("lru_hash/percpu_lru"))
+		test_update_lru_hash_map_percpu_lru();
+	if (test__start_subtest("lru_percpu_hash/common_lru"))
+		test_update_lru_percpu_hash_map_common_lru();
+	if (test__start_subtest("lru_percpu_hash/percpu_lru"))
+		test_update_lru_percpu_hash_map_percpu_lru();
+}
