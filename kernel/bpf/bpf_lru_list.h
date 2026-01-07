@@ -57,7 +57,6 @@ struct bpf_lru {
 	};
 	del_from_htab_func del_from_htab;
 	void *del_arg;
-	unsigned int hash_offset;
 	unsigned int target_free;
 	unsigned int nr_scans;
 	bool percpu;
@@ -69,12 +68,12 @@ static inline void bpf_lru_node_set_ref(struct bpf_lru_node *node)
 		WRITE_ONCE(node->ref, 1);
 }
 
-int bpf_lru_init(struct bpf_lru *lru, bool percpu, u32 hash_offset,
+int bpf_lru_init(struct bpf_lru *lru, bool percpu,
 		 del_from_htab_func del_from_htab, void *delete_arg);
 void bpf_lru_populate(struct bpf_lru *lru, void *buf, u32 node_offset,
 		      u32 elem_size, u32 nr_elems);
 void bpf_lru_destroy(struct bpf_lru *lru);
-struct bpf_lru_node *bpf_lru_pop_free(struct bpf_lru *lru, u32 hash);
+struct bpf_lru_node *bpf_lru_pop_free(struct bpf_lru *lru);
 void bpf_lru_push_free(struct bpf_lru *lru, struct bpf_lru_node *node);
 
 #endif
