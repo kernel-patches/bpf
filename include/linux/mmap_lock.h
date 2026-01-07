@@ -133,6 +133,56 @@ static inline bool is_vma_writer_only(int refcnt)
 	return (refcnt & VMA_LOCK_OFFSET) && refcnt <= VMA_LOCK_OFFSET + 1;
 }
 
+/*
+ * Try to increment VMA refcount without acquiring the lock bit.
+ * This is used when we need to keep a VMA stable (prevent it from being
+ * freed and reused due to SLAB_TYPESAFE_BY_RCU) while avoiding lock
+ * ordering issues that would occur if we held vm_lock.
+ *
+ * Unlike vma_start_read_locked(), this does NOT acquire the lock bit,
+ * so it doesn't need lockdep annotation and can be used in contexts
+ * where holding vm_lock would create circular dependencies.
+ *
+ * Per mm_types.h, vm_lock_seq can be read reliably when vm_refcnt > 1.
+ * By extension, keeping vm_refcnt > 1 prevents the VMA from being
+ * write-locked and modified, providing stable reads of VMA fields.
+ *
+ * Must be paired with vma_refcount_put_unlocked().
+ * Caller must hold either vm_lock or RCU read lock to ensure VMA stability.
+ * Typical usage: called after lock_vma_under_rcu() which holds vm_lock.
+ *
+ * Returns true on success, false if refcount limit is reached.
+ */
+static inline bool vma_refcount_try_get(struct vm_area_struct *vma)
+{
+	int oldcnt;
+
+	/* Increment refcount without lock bit */
+	if (unlikely(!__refcount_inc_not_zero_limited_acquire(&vma->vm_refcnt,
+							      &oldcnt,
+							      VMA_REF_LIMIT)))
+		return false;
+	return true;
+}
+
+/*
+ * Decrement VMA refcount taken by vma_refcount_try_get().
+ * Unlike vma_refcount_put(), this does NOT call rwsem_release() since
+ * vma_refcount_try_get() didn't acquire the lock.
+ */
+static inline void vma_refcount_put_unlocked(struct vm_area_struct *vma)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	int oldcnt;
+
+	/* Decrement refcount without lockdep release */
+	if (!__refcount_dec_and_test(&vma->vm_refcnt, &oldcnt)) {
+		/* Wake up writers if we were the last reader */
+		if (is_vma_writer_only(oldcnt - 1))
+			rcuwait_wake_up(&mm->vma_writer_wait);
+	}
+}
+
 static inline void vma_refcount_put(struct vm_area_struct *vma)
 {
 	/* Use a copy of vm_mm in case vma is freed after we drop vm_refcnt */
