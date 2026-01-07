@@ -465,7 +465,6 @@ static long __bpf_get_stack(struct pt_regs *regs, struct task_struct *task,
 
 	if (trace_in) {
 		trace = trace_in;
-		trace->nr = min_t(u32, trace->nr, max_depth);
 	} else if (kernel && task) {
 		trace = get_callchain_entry_for_task(task, max_depth);
 	} else {
@@ -473,13 +472,15 @@ static long __bpf_get_stack(struct pt_regs *regs, struct task_struct *task,
 					   crosstask, false, 0);
 	}
 
-	if (unlikely(!trace) || trace->nr < skip) {
+	trace_nr = min(trace->nr, max_depth);
+
+	if (unlikely(!trace) || trace_nr < skip) {
 		if (may_fault)
 			rcu_read_unlock();
 		goto err_fault;
 	}
 
-	trace_nr = trace->nr - skip;
+	trace_nr = trace_nr - skip;
 	copy_len = trace_nr * elem_size;
 
 	ips = trace->ip + skip;
