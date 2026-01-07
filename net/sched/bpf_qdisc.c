@@ -132,7 +132,8 @@ static int bpf_qdisc_btf_struct_access(struct bpf_verifier_log *log,
 
 BTF_ID_LIST_SINGLE(bpf_qdisc_init_prologue_ids, func, bpf_qdisc_init_prologue)
 
-static int bpf_qdisc_gen_prologue(struct bpf_insn *insn_buf, bool direct_write,
+static int bpf_qdisc_gen_prologue(struct bpf_insn *insn_buf,
+				  u32 direct_access_flags,
 				  const struct bpf_prog *prog)
 {
 	struct bpf_insn *insn = insn_buf;

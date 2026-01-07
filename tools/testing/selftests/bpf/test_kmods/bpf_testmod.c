@@ -1397,7 +1397,7 @@ static int bpf_test_mod_st_ops__test_pro_epilogue(struct st_ops_args *args)
 static int bpf_cgroup_from_id_id;
 static int bpf_cgroup_release_id;
 
-static int st_ops_gen_prologue_with_kfunc(struct bpf_insn *insn_buf, bool direct_write,
+static int st_ops_gen_prologue_with_kfunc(struct bpf_insn *insn_buf,
 					  const struct bpf_prog *prog)
 {
 	struct bpf_insn *insn = insn_buf;
@@ -1473,7 +1473,7 @@ static int st_ops_gen_epilogue_with_kfunc(struct bpf_insn *insn_buf, const struc
 }
 
 #define KFUNC_PRO_EPI_PREFIX "test_kfunc_"
-static int st_ops_gen_prologue(struct bpf_insn *insn_buf, bool direct_write,
+static int st_ops_gen_prologue(struct bpf_insn *insn_buf, u32 pkt_access_flags,
 			       const struct bpf_prog *prog)
 {
 	struct bpf_insn *insn = insn_buf;
@@ -1483,7 +1483,7 @@ static int st_ops_gen_prologue(struct bpf_insn *insn_buf, bool direct_write,
 		return 0;
 
 	if (!strncmp(prog->aux->name, KFUNC_PRO_EPI_PREFIX, strlen(KFUNC_PRO_EPI_PREFIX)))
-		return st_ops_gen_prologue_with_kfunc(insn_buf, direct_write, prog);
+		return st_ops_gen_prologue_with_kfunc(insn_buf, prog);
 
 	/* r6 = r1[0]; // r6 will be "struct st_ops *args". r1 is "u64 *ctx".
 	 * r7 = r6->a;

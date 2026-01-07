@@ -9052,7 +9052,7 @@ static bool sock_filter_is_valid_access(int off, int size,
 					       prog->expected_attach_type);
 }
 
-static int bpf_noop_prologue(struct bpf_insn *insn_buf, bool direct_write,
+static int bpf_noop_prologue(struct bpf_insn *insn_buf, u32 pkt_access_flags,
 			     const struct bpf_prog *prog)
 {
 	/* Neither direct read nor direct write requires any preliminary
@@ -9061,12 +9061,12 @@ static int bpf_noop_prologue(struct bpf_insn *insn_buf, bool direct_write,
 	return 0;
 }
 
-static int bpf_unclone_prologue(struct bpf_insn *insn_buf, bool direct_write,
+static int bpf_unclone_prologue(struct bpf_insn *insn_buf, u32 pkt_access_flags,
 				const struct bpf_prog *prog, int drop_verdict)
 {
 	struct bpf_insn *insn = insn_buf;
 
-	if (!direct_write)
+	if (!(pkt_access_flags & PA_F_DIRECT_WRITE))
 		return 0;
 
 	/* if (!skb->cloned)
@@ -9135,10 +9135,11 @@ static int bpf_gen_ld_abs(const struct bpf_insn *orig,
 	return insn - insn_buf;
 }
 
-static int tc_cls_act_prologue(struct bpf_insn *insn_buf, bool direct_write,
+static int tc_cls_act_prologue(struct bpf_insn *insn_buf, u32 pkt_access_flags,
 			       const struct bpf_prog *prog)
 {
-	return bpf_unclone_prologue(insn_buf, direct_write, prog, TC_ACT_SHOT);
+	return bpf_unclone_prologue(insn_buf, pkt_access_flags, prog,
+				    TC_ACT_SHOT);
 }
 
 static bool tc_cls_act_is_valid_access(int off, int size,
@@ -9476,10 +9477,10 @@ static bool sock_ops_is_valid_access(int off, int size,
 	return true;
 }
 
-static int sk_skb_prologue(struct bpf_insn *insn_buf, bool direct_write,
+static int sk_skb_prologue(struct bpf_insn *insn_buf, u32 pkt_access_flags,
 			   const struct bpf_prog *prog)
 {
-	return bpf_unclone_prologue(insn_buf, direct_write, prog, SK_DROP);
+	return bpf_unclone_prologue(insn_buf, pkt_access_flags, prog, SK_DROP);
 }
 
 static bool sk_skb_is_valid_access(int off, int size,
