@@ -9080,10 +9080,11 @@ static int bpf_unclone_prologue(struct bpf_insn *insn_buf, u32 pkt_access_flags,
 	*insn++ = BPF_JMP_IMM(BPF_JEQ, BPF_REG_6, 0, 7);
 
 	/* ret = bpf_skb_pull_data(skb, 0); */
+	BUILD_BUG_ON(!__same_type(btf_bpf_skb_pull_data,
+				  (u64 (*)(struct sk_buff *, u32))NULL));
 	*insn++ = BPF_MOV64_REG(BPF_REG_6, BPF_REG_1);
 	*insn++ = BPF_ALU64_REG(BPF_XOR, BPF_REG_2, BPF_REG_2);
-	*insn++ = BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, 0, 0,
-			       BPF_FUNC_skb_pull_data);
+	*insn++ = BPF_EMIT_CALL(bpf_skb_pull_data);
 	/* if (!ret)
 	 *      goto restore;
 	 * return TC_ACT_SHOT;
