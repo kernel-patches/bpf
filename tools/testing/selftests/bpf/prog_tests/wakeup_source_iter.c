@@ -241,9 +241,37 @@ static void subtest_ws_iter_check_no_infinite_reads(
 	close(iter_fd);
 }
 
+static void subtest_ws_iter_check_open_coded(struct wakeup_source_iter *skel,
+					     int map_fd)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	char key[WAKEUP_SOURCE_NAME_LEN] = {0};
+	int err, fd;
+	bool found = false;
+
+	fd = bpf_program__fd(skel->progs.iter_ws_for_each);
+
+	err = bpf_prog_test_run_opts(fd, &topts);
+	if (!ASSERT_OK(err, "test_run_opts err"))
+		return;
+	if (!ASSERT_OK(topts.retval, "test_run_opts retval"))
+		return;
+
+	strncpy(key, test_ws_name, WAKEUP_SOURCE_NAME_LEN - 1);
+
+	if (!ASSERT_OK(bpf_map_lookup_elem(map_fd, key, &found),
+		       "lookup test_ws_name"))
+		return;
+
+	ASSERT_TRUE(found, "found test ws via bpf_for_each");
+}
+
 void test_wakeup_source_iter(void)
 {
 	struct wakeup_source_iter *skel = NULL;
+	int map_fd;
+	const bool found_val = false;
+	char key[WAKEUP_SOURCE_NAME_LEN] = {0};
 
 	if (geteuid() != 0) {
 		fprintf(stderr,
@@ -255,6 +283,17 @@ void test_wakeup_source_iter(void)
 	skel = wakeup_source_iter__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "wakeup_source_iter__open_and_load"))
 		return;
+
+	map_fd = bpf_map__fd(skel->maps.test_ws_hash);
+	if (!ASSERT_OK_FD(map_fd, "map_fd"))
+		goto destroy_skel;
+
+	/* Copy test name to key buffer, ensuring it's zero-padded */
+	strncpy(key, test_ws_name, WAKEUP_SOURCE_NAME_LEN - 1);
+
+	if (!ASSERT_OK(bpf_map_update_elem(map_fd, key, &found_val, BPF_ANY),
+		       "insert test_ws_name"))
+		goto destroy_skel;
 
 	if (!ASSERT_OK(setup_test_ws(), "setup_test_ws"))
 		goto destroy;
@@ -274,8 +313,11 @@ void test_wakeup_source_iter(void)
 		subtest_ws_iter_check_sleep_times(skel);
 	if (test__start_subtest("no_infinite_reads"))
 		subtest_ws_iter_check_no_infinite_reads(skel);
+	if (test__start_subtest("open_coded"))
+		subtest_ws_iter_check_open_coded(skel, map_fd);
 
 destroy:
 	teardown_test_ws();
+destroy_skel:
 	wakeup_source_iter__destroy(skel);
 }
