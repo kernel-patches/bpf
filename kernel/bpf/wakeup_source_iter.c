@@ -90,6 +90,40 @@ static struct bpf_iter_reg bpf_wakeup_source_reg_info = {
 	.seq_info		= &wakeup_source_iter_seq_info,
 };
 
+struct bpf_iter_wakeup_source {
+	struct wakeup_source *ws;
+	int srcuidx;
+};
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_iter_wakeup_source_new(struct bpf_iter_wakeup_source *it)
+{
+	it->srcuidx = wakeup_sources_read_lock();
+	it->ws = wakeup_sources_walk_start();
+
+	return 0;
+}
+
+__bpf_kfunc struct wakeup_source *bpf_iter_wakeup_source_next(struct bpf_iter_wakeup_source *it)
+{
+	struct wakeup_source *prev = it->ws;
+
+	if (!prev)
+		return NULL;
+
+	it->ws = wakeup_sources_walk_next(it->ws);
+
+	return prev;
+}
+
+__bpf_kfunc void bpf_iter_wakeup_source_destroy(struct bpf_iter_wakeup_source *it)
+{
+	wakeup_sources_read_unlock(it->srcuidx);
+}
+
+__bpf_kfunc_end_defs();
+
 DEFINE_BPF_ITER_FUNC(wakeup_source, struct bpf_iter_meta *meta,
 		     struct wakeup_source *wakeup_source)
 BTF_ID_LIST_SINGLE(bpf_wakeup_source_btf_id, struct, wakeup_source)
