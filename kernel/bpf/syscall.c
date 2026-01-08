@@ -5436,12 +5436,20 @@ static int bpf_obj_get_info_by_fd(const union bpf_attr *attr,
 static int bpf_btf_load(const union bpf_attr *attr, bpfptr_t uattr, __u32 uattr_size)
 {
 	struct bpf_token *token = NULL;
+	struct bpf_log_attr log_attr;
+	struct bpf_attrs attrs;
+	int err;
 
 	if (CHECK_ATTR(BPF_BTF_LOAD))
 		return -EINVAL;
 
 	if (attr->btf_flags & ~BPF_F_TOKEN_FD)
 		return -EINVAL;
+
+	bpf_attrs_init(&attrs, attr, uattr, uattr_size);
+	err = bpf_btf_load_log_attr_init(&log_attr, &attrs);
+	if (err)
+		return err;
 
 	if (attr->btf_flags & BPF_F_TOKEN_FD) {
 		token = bpf_token_get_from_fd(attr->btf_token_fd);
@@ -5460,7 +5468,7 @@ static int bpf_btf_load(const union bpf_attr *attr, bpfptr_t uattr, __u32 uattr_
 
 	bpf_token_put(token);
 
-	return btf_new_fd(attr, uattr, uattr_size);
+	return btf_new_fd(attr, uattr, &log_attr);
 }
 
 #define BPF_BTF_GET_FD_BY_ID_LAST_FIELD fd_by_id_token_fd
