@@ -176,6 +176,7 @@ class BuildConfig:
             "test_progs_no_alu32",
             "test_progs_no_alu32_parallel",
             "test_verifier",
+            "test_bpftool",
         ]
 
         if self.arch.value != "s390x":
