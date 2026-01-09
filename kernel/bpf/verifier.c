@@ -3271,6 +3271,38 @@ static struct btf *find_kfunc_desc_btf(struct bpf_verifier_env *env, s16 offset)
 	return btf_vmlinux ?: ERR_PTR(-ENOENT);
 }
 
+#define KF_IMPL_SUFFIX "_impl"
+
+static const struct btf_type *find_kfunc_impl_proto(struct bpf_verifier_env *env,
+						    struct btf *btf,
+						    const char *func_name)
+{
+	char impl_name[KSYM_SYMBOL_LEN];
+	const struct btf_type *func;
+	s32 impl_id;
+	int len;
+
+	len = snprintf(impl_name, sizeof(impl_name), "%s%s", func_name, KF_IMPL_SUFFIX);
+	if (len < 0 || len >= sizeof(impl_name)) {
+		verbose(env, "function name %s%s is too long\n", func_name, KF_IMPL_SUFFIX);
+		return NULL;
+	}
+
+	impl_id = btf_find_by_name_kind(btf, impl_name, BTF_KIND_FUNC);
+	if (impl_id <= 0) {
+		verbose(env, "cannot find function %s in BTF\n", impl_name);
+		return NULL;
+	}
+
+	func = btf_type_by_id(btf, impl_id);
+	if (!func || !btf_type_is_func(func)) {
+		verbose(env, "%s (btf_id %d) is not a function\n", impl_name, impl_id);
+		return NULL;
+	}
+
+	return btf_type_by_id(btf, func->type);
+}
+
 static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 			    s32 func_id,
 			    s16 offset,
@@ -3308,7 +3340,16 @@ static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 	}
 
 	func_name = btf_name_by_offset(btf, func->name_off);
-	func_proto = btf_type_by_id(btf, func->type);
+
+	/*
+	 * An actual prototype of a kfunc with KF_IMPLICIT_ARGS flag
+	 * can be found through the counterpart _impl kfunc.
+	 */
+	if (unlikely(kfunc_flags && KF_IMPLICIT_ARGS & *kfunc_flags))
+		func_proto = find_kfunc_impl_proto(env, btf, func_name);
+	else
+		func_proto = btf_type_by_id(btf, func->type);
+
 	if (!func_proto || !btf_type_is_func_proto(func_proto)) {
 		verbose(env, "kernel function btf_id %d does not have a valid func_proto\n",
 			func_id);
@@ -12173,9 +12214,16 @@ static bool is_kfunc_arg_irq_flag(const struct btf *btf, const struct btf_param 
 	return btf_param_match_suffix(btf, arg, "__irq_flag");
 }
 
+static bool is_kfunc_arg_prog_aux(const struct btf *btf, const struct btf_param *arg);
+
 static bool is_kfunc_arg_prog(const struct btf *btf, const struct btf_param *arg)
 {
-	return btf_param_match_suffix(btf, arg, "__prog");
+	return btf_param_match_suffix(btf, arg, "__prog") || is_kfunc_arg_prog_aux(btf, arg);
+}
+
+static bool is_kfunc_arg_implicit(const struct btf *btf, const struct btf_param *arg)
+{
+	return is_kfunc_arg_prog(btf, arg);
 }
 
 static bool is_kfunc_arg_scalar_with_name(const struct btf *btf,
@@ -12206,6 +12254,7 @@ enum {
 	KF_ARG_WORKQUEUE_ID,
 	KF_ARG_RES_SPIN_LOCK_ID,
 	KF_ARG_TASK_WORK_ID,
+	KF_ARG_PROG_AUX_ID
 };
 
 BTF_ID_LIST(kf_arg_btf_ids)
@@ -12217,6 +12266,7 @@ BTF_ID(struct, bpf_rb_node)
 BTF_ID(struct, bpf_wq)
 BTF_ID(struct, bpf_res_spin_lock)
 BTF_ID(struct, bpf_task_work)
+BTF_ID(struct, bpf_prog_aux)
 
 static bool __is_kfunc_ptr_arg_type(const struct btf *btf,
 				    const struct btf_param *arg, int type)
@@ -12295,6 +12345,11 @@ static bool is_kfunc_arg_callback(struct bpf_verifier_env *env, const struct btf
 		return false;
 
 	return true;
+}
+
+static bool is_kfunc_arg_prog_aux(const struct btf *btf, const struct btf_param *arg)
+{
+	return __is_kfunc_ptr_arg_type(btf, arg, KF_ARG_PROG_AUX_ID);
 }
 
 /* Returns true if struct is composed of scalars, 4 levels of nesting allowed */
@@ -14302,6 +14357,17 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	args = (const struct btf_param *)(meta.func_proto + 1);
 	for (i = 0; i < nargs; i++) {
 		u32 regno = i + 1;
+
+		/*
+		 * Implicit kfunc arguments are set after main verification pass.
+		 * For correct tracking of zero-extensions we have to reset subreg_def for such
+		 * args. Otherwise mark_btf_func_reg_size() will be inspecting subreg_def of regs
+		 * from an earlier (irrelevant) point in the program, which may lead to an error
+		 * in opt_subreg_zext_lo32_rnd_hi32().
+		 */
+		if (unlikely(KF_IMPLICIT_ARGS & meta.kfunc_flags
+				&& is_kfunc_arg_implicit(desc_btf, &args[i])))
+			regs[regno].subreg_def = DEF_NOT_SUBREG;
 
 		t = btf_type_skip_modifiers(desc_btf, args[i].type, NULL);
 		if (btf_type_is_ptr(t))
