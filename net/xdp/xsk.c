@@ -23,6 +23,7 @@
 #include <linux/netdevice.h>
 #include <linux/rculist.h>
 #include <linux/vmalloc.h>
+#include <linux/slab.h>
 #include <net/xdp_sock_drv.h>
 #include <net/busy_poll.h>
 #include <net/netdev_lock.h>
@@ -1922,13 +1923,9 @@ static int __init xsk_init(void)
 	if (err)
 		goto out;
 
-	err = sock_register(&xsk_family_ops);
-	if (err)
-		goto out_proto;
-
 	err = register_pernet_subsys(&xsk_net_ops);
 	if (err)
-		goto out_sk;
+		goto out_proto;
 
 	err = register_netdevice_notifier(&xsk_netdev_notifier);
 	if (err)
@@ -1939,17 +1936,21 @@ static int __init xsk_init(void)
 						 0, SLAB_HWCACHE_ALIGN, NULL);
 	if (!xsk_tx_generic_cache) {
 		err = -ENOMEM;
-		goto out_unreg_notif;
+		goto out_notifier;
 	}
+
+	err = sock_register(&xsk_family_ops);
+	if (err)
+		goto out_cache;
 
 	return 0;
 
-out_unreg_notif:
+out_cache:
+	kmem_cache_destroy(xsk_tx_generic_cache);
+out_notifier:
 	unregister_netdevice_notifier(&xsk_netdev_notifier);
 out_pernet:
 	unregister_pernet_subsys(&xsk_net_ops);
-out_sk:
-	sock_unregister(PF_XDP);
 out_proto:
 	proto_unregister(&xsk_proto);
 out:
