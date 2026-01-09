@@ -65,7 +65,7 @@ jobs:
         run: zstd -d -T0  vmlinux-${{ inputs.arch }}-${{ inputs.toolchain_full }}.tar.zst --stdout | tar -xf -
 
       - name: Run selftests
-        uses: libbpf/ci/run-vmtest@v3
+        uses: Tropicao/libbpf-ci/run-vmtest@2e315497b267b11571d139098dcaa23e73e5ca23
         # https://github.com/actions/runner/issues/1483#issuecomment-1031671517
         # booleans are weird in GH.
         continue-on-error: ${{ fromJSON(env.CONTINUE_ON_ERROR) }}
