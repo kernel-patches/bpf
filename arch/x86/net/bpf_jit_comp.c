@@ -12,6 +12,7 @@
 #include <linux/bpf.h>
 #include <linux/memory.h>
 #include <linux/sort.h>
+#include <linux/perf_event.h>
 #include <asm/extable.h>
 #include <asm/ftrace.h>
 #include <asm/set_memory.h>
@@ -19,6 +20,7 @@
 #include <asm/text-patching.h>
 #include <asm/unwind.h>
 #include <asm/cfi.h>
+#include "../events/perf_event.h"
 
 static bool all_callee_regs_used[4] = {true, true, true, true};
 
@@ -3137,6 +3139,54 @@ static int invoke_bpf_mod_ret(const struct btf_func_model *m, u8 **pprog,
 	return 0;
 }
 
+DEFINE_PER_CPU(struct bpf_tramp_branch_entries, bpf_branch_snapshot);
+
+static int invoke_branch_snapshot(u8 **pprog, void *image, void *rw_image)
+{
+	struct bpf_tramp_branch_entries __percpu *pptr = &bpf_branch_snapshot;
+	u8 *prog = *pprog;
+
+	/*
+	 * Emit:
+	 *
+	 * struct bpf_tramp_branch_entries *br = this_cpu_ptr(&bpf_branch_snapshot);
+	 * br->cnt = static_call(perf_snapshot_branch_stack)(br->entries, x86_pmu.lbr_nr);
+	 */
+
+	/* mov rbx, &bpf_branch_snapshot */
+	emit_mov_imm64(&prog, BPF_REG_6, (long) pptr >> 32, (u32)(long) pptr);
+#ifdef CONFIG_SMP
+	/* add rbx, gs:[<off>] */
+	EMIT2(0x65, 0x48);
+	EMIT3(0x03, 0x1C, 0x25);
+	EMIT((u32)(unsigned long)&this_cpu_off, 4);
+#endif
+	/* mov esi, x86_pmu.lbr_nr */
+	EMIT1_off32(0xBE, x86_pmu.lbr_nr);
+	/* lea rdi, [rbx + offsetof(struct bpf_tramp_branch_entries, entries)] */
+	EMIT4(0x48, 0x8D, 0x7B, offsetof(struct bpf_tramp_branch_entries, entries));
+	/* call static_call_query(perf_snapshot_branch_stack) */
+	if (emit_rsb_call(&prog, static_call_query(perf_snapshot_branch_stack),
+			  image + (prog - (u8 *)rw_image)))
+		return -EINVAL;
+	/* mov dword ptr [rbx], eax */
+	EMIT2(0x89, 0x03);
+
+	*pprog = prog;
+	return 0;
+}
+
+static bool bpf_prog_copy_branch_snapshot(struct bpf_tramp_links *tl)
+{
+	bool copy = false;
+	int i;
+
+	for (i = 0; i < tl->nr_links; i++)
+		copy = copy || tl->links[i]->link.prog->copy_branch_snapshot;
+
+	return copy;
+}
+
 /* mov rax, qword ptr [rbp - rounded_stack_depth - 8] */
 #define LOAD_TRAMP_TAIL_CALL_CNT_PTR(stack)	\
 	__LOAD_TCC_PTR(-round_up(stack, 8) - 8)
@@ -3366,6 +3416,14 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 
 	save_args(m, &prog, regs_off, false, flags);
 
+	if (bpf_prog_copy_branch_snapshot(fentry)) {
+		/* Get branch snapshot asap. */
+		if (invoke_branch_snapshot(&prog, image, rw_image)) {
+			ret = -EINVAL;
+			goto cleanup;
+		}
+	}
+
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
 		/* arg1: mov rdi, im */
 		emit_mov_imm64(&prog, BPF_REG_1, (long) im >> 32, (u32) (long) im);
@@ -3420,6 +3478,14 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_0, -8);
 		im->ip_after_call = image + (prog - (u8 *)rw_image);
 		emit_nops(&prog, X86_PATCH_SIZE);
+	}
+
+	if (bpf_prog_copy_branch_snapshot(fexit)) {
+		/* Get branch snapshot asap. */
+		if (invoke_branch_snapshot(&prog, image, rw_image)) {
+			ret = -EINVAL;
+			goto cleanup;
+		}
 	}
 
 	if (fmod_ret->nr_links) {
