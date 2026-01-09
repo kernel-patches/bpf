@@ -1172,10 +1172,20 @@ BPF_CALL_3(bpf_get_branch_snapshot, void *, buf, u32, size, u64, flags)
 	static const u32 br_entry_size = sizeof(struct perf_branch_entry);
 	u32 entry_cnt = size / br_entry_size;
 
-	entry_cnt = static_call(perf_snapshot_branch_stack)(buf, entry_cnt);
+	if (likely(!flags)) {
+		entry_cnt = static_call(perf_snapshot_branch_stack)(buf, entry_cnt);
+#ifdef CONFIG_X86_64
+	} else if (flags & BPF_BRANCH_SNAPSHOT_F_COPY) {
+		struct bpf_tramp_branch_entries *br;
 
-	if (unlikely(flags))
+		br = this_cpu_ptr(&bpf_branch_snapshot);
+		entry_cnt = min_t(u32, entry_cnt, br->cnt);
+		if (entry_cnt)
+			memcpy(buf, (void *) br->entries, entry_cnt * br_entry_size);
+#endif
+	} else {
 		return -EINVAL;
+	}
 
 	if (!entry_cnt)
 		return -ENOENT;
@@ -1189,6 +1199,7 @@ const struct bpf_func_proto bpf_get_branch_snapshot_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
+	.arg3_type	= ARG_ANYTHING,
 };
 
 BPF_CALL_3(get_func_arg, void *, ctx, u32, n, u64 *, value)

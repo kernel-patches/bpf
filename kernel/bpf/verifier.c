@@ -11772,6 +11772,33 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
 					 set_user_ringbuf_callback_state);
 		break;
+	case BPF_FUNC_get_branch_snapshot:
+	{
+		u64 flags;
+
+		if (!is_reg_const(&regs[BPF_REG_3], false)) {
+			verbose(env, "Flags in bpf_get_branch_snapshot helper must be const.\n");
+			return -EINVAL;
+		}
+		flags = reg_const_value(&regs[BPF_REG_3], false);
+		if (flags & ~BPF_BRANCH_SNAPSHOT_F_COPY) {
+			verbose(env, "Invalid flags in bpf_get_branch_snapshot helper.\n");
+			return -EINVAL;
+		}
+
+		if (flags & BPF_BRANCH_SNAPSHOT_F_COPY) {
+			if (env->prog->type != BPF_PROG_TYPE_TRACING ||
+			    (env->prog->expected_attach_type != BPF_TRACE_FENTRY &&
+			     env->prog->expected_attach_type != BPF_TRACE_FEXIT)) {
+				verbose(env, "Only fentry and fexit programs support BPF_BRANCH_SNAPSHOT_F_COPY.\n");
+				return -EINVAL;
+			}
+
+			env->insn_aux_data[insn_idx].copy_branch_snapshot = true;
+			env->prog->copy_branch_snapshot = true;
+		}
+		break;
+	}
 	}
 
 	if (err)
@@ -23369,6 +23396,9 @@ patch_map_ops_generic:
 			 * ever grow or shrink
 			 */
 			BUILD_BUG_ON(br_entry_size != 24);
+
+			if (env->insn_aux_data[i + delta].copy_branch_snapshot)
+				goto patch_call_imm;
 
 			/* if (unlikely(flags)) return -EINVAL */
 			insn_buf[0] = BPF_JMP_IMM(BPF_JNE, BPF_REG_3, 0, 7);
