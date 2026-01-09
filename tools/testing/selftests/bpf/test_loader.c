@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <test_progs.h>
 #include <bpf/btf.h>
+#include <gelf.h>
+#include <zlib.h>
+#include <sys/utsname.h>
 
 #include "autoconf_helper.h"
 #include "disasm_helpers.h"
@@ -44,6 +47,7 @@
 #define TEST_TAG_EXPECT_STDOUT_PFX "comment:test_expect_stdout="
 #define TEST_TAG_EXPECT_STDOUT_PFX_UNPRIV "comment:test_expect_stdout_unpriv="
 #define TEST_TAG_LINEAR_SIZE "comment:test_linear_size="
+#define TEST_TAG_KCONFIG_CHECK "comment:test_kconfig="
 
 /* Warning: duplicated in bpf_misc.h */
 #define POINTER_VALUE	0xbadcafe
@@ -93,6 +97,7 @@ struct test_spec {
 	int linear_sz;
 	bool auxiliary;
 	bool valid;
+	bool skip;
 };
 
 static int tester_init(struct test_loader *tester)
@@ -394,6 +399,41 @@ static int get_current_arch(void)
 	return ARCH_UNKNOWN;
 }
 
+static int kconfig_check(const char *kconfig)
+{
+	int len, err = -ENOENT;
+	char buf[PATH_MAX];
+	struct utsname uts;
+	gzFile file;
+
+	uname(&uts);
+	len = snprintf(buf, PATH_MAX, "/boot/config-%s", uts.release);
+	if (len < 0)
+		return -EINVAL;
+	else if (len >= PATH_MAX)
+		return -ENAMETOOLONG;
+
+	/* gzopen also accepts uncompressed files. */
+	file = gzopen(buf, "re");
+	if (!file)
+		file = gzopen("/proc/config.gz", "re");
+
+	if (!file) {
+		fprintf(stderr, "failed to open system Kconfig\n");
+		return -ENOENT;
+	}
+
+	while (gzgets(file, buf, sizeof(buf))) {
+		if (strstr(buf, kconfig)) {
+			err = 0;
+			break;
+		}
+	}
+
+	gzclose(file);
+	return err;
+}
+
 /* Uses btf_decl_tag attributes to describe the expected test
  * behavior, see bpf_misc.h for detailed description of each attribute
  * and attribute combinations.
@@ -650,6 +690,10 @@ static int parse_test_spec(struct test_loader *tester,
 				err = -EINVAL;
 				goto cleanup;
 			}
+		} else if (str_has_pfx(s, TEST_TAG_KCONFIG_CHECK)) {
+			val = s + sizeof(TEST_TAG_KCONFIG_CHECK) - 1;
+			if (kconfig_check(val))
+				spec->skip = true;
 		}
 	}
 
@@ -1151,7 +1195,7 @@ void run_subtest(struct test_loader *tester,
 	if (!test__start_subtest(subspec->name))
 		return;
 
-	if ((get_current_arch() & spec->arch_mask) == 0) {
+	if ((get_current_arch() & spec->arch_mask) == 0 || spec->skip) {
 		test__skip();
 		return;
 	}
