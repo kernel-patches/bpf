@@ -368,13 +368,16 @@ SYM_CODE_START(return_to_handler)
 	subq $8, %rsp
 	UNWIND_HINT_FUNC
 
+	movq %rsp, %rdi
+	addq $8, %rdi
+
 	/* Save ftrace_regs for function exit context  */
 	subq $(FRAME_SIZE), %rsp
 
 	movq %rax, RAX(%rsp)
 	movq %rdx, RDX(%rsp)
 	movq %rbp, RBP(%rsp)
-	movq %rsp, RSP(%rsp)
+	movq %rdi, RSP(%rsp)
 	movq %rsp, %rdi
 
 	call ftrace_return_to_handler
