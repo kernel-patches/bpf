@@ -2128,7 +2128,7 @@ int btf__add_int(struct btf *btf, const char *name, size_t byte_sz, int encoding
 	int sz, name_off;
 
 	/* non-empty name */
-	if (!name || !name[0])
+	if (str_is_empty(name))
 		return libbpf_err(-EINVAL);
 	/* byte_sz must be power of 2 */
 	if (!byte_sz || (byte_sz & (byte_sz - 1)) || byte_sz > 16)
@@ -2176,7 +2176,7 @@ int btf__add_float(struct btf *btf, const char *name, size_t byte_sz)
 	int sz, name_off;
 
 	/* non-empty name */
-	if (!name || !name[0])
+	if (str_is_empty(name))
 		return libbpf_err(-EINVAL);
 
 	/* byte_sz must be one of the explicitly allowed values */
@@ -2231,7 +2231,7 @@ static int btf_add_ref_kind(struct btf *btf, int kind, const char *name, int ref
 	if (!t)
 		return libbpf_err(-ENOMEM);
 
-	if (name && name[0]) {
+	if (!str_is_empty(name)) {
 		name_off = btf__add_str(btf, name);
 		if (name_off < 0)
 			return name_off;
@@ -2308,7 +2308,7 @@ static int btf_add_composite(struct btf *btf, int kind, const char *name, __u32 
 	if (!t)
 		return libbpf_err(-ENOMEM);
 
-	if (name && name[0]) {
+	if (!str_is_empty(name)) {
 		name_off = btf__add_str(btf, name);
 		if (name_off < 0)
 			return name_off;
@@ -2409,7 +2409,7 @@ int btf__add_field(struct btf *btf, const char *name, int type_id,
 	if (!m)
 		return libbpf_err(-ENOMEM);
 
-	if (name && name[0]) {
+	if (!str_is_empty(name)) {
 		name_off = btf__add_str(btf, name);
 		if (name_off < 0)
 			return name_off;
@@ -2447,7 +2447,7 @@ static int btf_add_enum_common(struct btf *btf, const char *name, __u32 byte_sz,
 	if (!t)
 		return libbpf_err(-ENOMEM);
 
-	if (name && name[0]) {
+	if (!str_is_empty(name)) {
 		name_off = btf__add_str(btf, name);
 		if (name_off < 0)
 			return name_off;
@@ -2505,7 +2505,7 @@ int btf__add_enum_value(struct btf *btf, const char *name, __s64 value)
 		return libbpf_err(-EINVAL);
 
 	/* non-empty name */
-	if (!name || !name[0])
+	if (str_is_empty(name))
 		return libbpf_err(-EINVAL);
 	if (value < INT_MIN || value > UINT_MAX)
 		return libbpf_err(-E2BIG);
@@ -2582,7 +2582,7 @@ int btf__add_enum64_value(struct btf *btf, const char *name, __u64 value)
 		return libbpf_err(-EINVAL);
 
 	/* non-empty name */
-	if (!name || !name[0])
+	if (str_is_empty(name))
 		return libbpf_err(-EINVAL);
 
 	/* decompose and invalidate raw data */
@@ -2622,7 +2622,7 @@ int btf__add_enum64_value(struct btf *btf, const char *name, __u64 value)
  */
 int btf__add_fwd(struct btf *btf, const char *name, enum btf_fwd_kind fwd_kind)
 {
-	if (!name || !name[0])
+	if (str_is_empty(name))
 		return libbpf_err(-EINVAL);
 
 	switch (fwd_kind) {
@@ -2658,7 +2658,7 @@ int btf__add_fwd(struct btf *btf, const char *name, enum btf_fwd_kind fwd_kind)
  */
 int btf__add_typedef(struct btf *btf, const char *name, int ref_type_id)
 {
-	if (!name || !name[0])
+	if (str_is_empty(name))
 		return libbpf_err(-EINVAL);
 
 	return btf_add_ref_kind(btf, BTF_KIND_TYPEDEF, name, ref_type_id, 0);
@@ -2710,7 +2710,7 @@ int btf__add_restrict(struct btf *btf, int ref_type_id)
  */
 int btf__add_type_tag(struct btf *btf, const char *value, int ref_type_id)
 {
-	if (!value || !value[0])
+	if (str_is_empty(value))
 		return libbpf_err(-EINVAL);
 
 	return btf_add_ref_kind(btf, BTF_KIND_TYPE_TAG, value, ref_type_id, 0);
@@ -2727,7 +2727,7 @@ int btf__add_type_tag(struct btf *btf, const char *value, int ref_type_id)
  */
 int btf__add_type_attr(struct btf *btf, const char *value, int ref_type_id)
 {
-	if (!value || !value[0])
+	if (str_is_empty(value))
 		return libbpf_err(-EINVAL);
 
 	return btf_add_ref_kind(btf, BTF_KIND_TYPE_TAG, value, ref_type_id, 1);
@@ -2746,7 +2746,7 @@ int btf__add_func(struct btf *btf, const char *name,
 {
 	int id;
 
-	if (!name || !name[0])
+	if (str_is_empty(name))
 		return libbpf_err(-EINVAL);
 	if (linkage != BTF_FUNC_STATIC && linkage != BTF_FUNC_GLOBAL &&
 	    linkage != BTF_FUNC_EXTERN)
@@ -2832,7 +2832,7 @@ int btf__add_func_param(struct btf *btf, const char *name, int type_id)
 	if (!p)
 		return libbpf_err(-ENOMEM);
 
-	if (name && name[0]) {
+	if (!str_is_empty(name)) {
 		name_off = btf__add_str(btf, name);
 		if (name_off < 0)
 			return name_off;
@@ -2867,7 +2867,7 @@ int btf__add_var(struct btf *btf, const char *name, int linkage, int type_id)
 	int sz, name_off;
 
 	/* non-empty name */
-	if (!name || !name[0])
+	if (str_is_empty(name))
 		return libbpf_err(-EINVAL);
 	if (linkage != BTF_VAR_STATIC && linkage != BTF_VAR_GLOBAL_ALLOCATED &&
 	    linkage != BTF_VAR_GLOBAL_EXTERN)
@@ -2916,7 +2916,7 @@ int btf__add_datasec(struct btf *btf, const char *name, __u32 byte_sz)
 	int sz, name_off;
 
 	/* non-empty name */
-	if (!name || !name[0])
+	if (str_is_empty(name))
 		return libbpf_err(-EINVAL);
 
 	if (btf_ensure_modifiable(btf))
@@ -2993,7 +2993,7 @@ static int btf_add_decl_tag(struct btf *btf, const char *value, int ref_type_id,
 	struct btf_type *t;
 	int sz, value_off;
 
-	if (!value || !value[0] || component_idx < -1)
+	if (str_is_empty(value) || component_idx < -1)
 		return libbpf_err(-EINVAL);
 
 	if (validate_type_id(ref_type_id))
