@@ -107,7 +107,7 @@ static int test_hmap_elem_callback(void *map, int *key,
 	if (bpf_wq_init(wq, map, 0) != 0)
 		return -3;
 
-	if (bpf_wq_set_callback(wq, callback_fn, 0))
+	if (bpf_wq_set_callback_impl(wq, callback_fn, 0, NULL))
 		return -4;
 
 	if (bpf_wq_start(wq, 0))
