@@ -152,6 +152,18 @@ struct object {
 	int nr_typedefs;
 };
 
+#define KF_IMPLICIT_ARGS (1 << 16)
+#define KF_IMPL_SUFFIX "_impl"
+#define MAX_BPF_FUNC_REG_ARGS 5
+#define MAX_KFUNCS 256
+#define MAX_DECL_TAGS (MAX_KFUNCS * 4)
+
+struct btf2btf_context {
+	struct btf *btf;
+	u32 nr_decl_tags;
+	s32 decl_tags[MAX_DECL_TAGS];
+};
+
 static int verbose;
 static int warnings;
 
@@ -972,6 +984,273 @@ out:
 	return err;
 }
 
+static s64 collect_kfunc_ids_by_flags(struct object *obj,
+				      u32 flags,
+				      s32 kfunc_ids[],
+				      const u32 kfunc_ids_sz)
+{
+	Elf_Data *data = obj->efile.idlist;
+	struct rb_node *next;
+	s64 nr_kfuncs = 0;
+	int i;
+
+	next = rb_first(&obj->sets);
+	while (next) {
+		struct btf_id_set8 *set8 = NULL;
+		unsigned long addr, off;
+		struct btf_id *id;
+
+		id = rb_entry(next, struct btf_id, rb_node);
+
+		if (id->kind != BTF_ID_KIND_SET8)
+			goto skip;
+
+		addr = id->addr[0];
+		off = addr - obj->efile.idlist_addr;
+		set8 = data->d_buf + off;
+
+		for (i = 0; i < set8->cnt; i++) {
+			if (set8->pairs[i].flags & flags) {
+				if (nr_kfuncs >= kfunc_ids_sz) {
+					pr_err("ERROR: resolve_btfids: too many kfuncs with flags %u - limit %d\n",
+					       flags, kfunc_ids_sz);
+					return -E2BIG;
+				}
+				kfunc_ids[nr_kfuncs++] = set8->pairs[i].id;
+			}
+		}
+skip:
+		next = rb_next(next);
+	}
+
+	return nr_kfuncs;
+}
+
+static const struct btf_type *btf__unqualified_type_by_id(const struct btf *btf, s32 type_id)
+{
+	const struct btf_type *t = btf__type_by_id(btf, type_id);
+
+	while (btf_is_mod(t))
+		t = btf__type_by_id(btf, t->type);
+
+	return t;
+}
+
+/* Implicit BPF kfunc arguments can only be of particular types */
+static bool btf__is_kf_implicit_arg(const struct btf *btf, const struct btf_param *p)
+{
+	static const char *const kf_implicit_arg_types[] = {
+		"bpf_prog_aux",
+	};
+	const struct btf_type *t;
+	const char *name;
+
+	t = btf__unqualified_type_by_id(btf, p->type);
+	if (!btf_is_ptr(t))
+		return false;
+
+	t = btf__unqualified_type_by_id(btf, t->type);
+	if (!btf_is_struct(t))
+		return false;
+
+	name = btf__name_by_offset(btf, t->name_off);
+	if (!name)
+		return false;
+
+	for (int i = 0; i < ARRAY_SIZE(kf_implicit_arg_types); i++)
+		if (strcmp(name, kf_implicit_arg_types[i]) == 0)
+			return true;
+
+	return false;
+}
+
+/*
+ * For a kfunc with KF_IMPLICIT_ARGS we do the following:
+ *   1. Add a new function with _impl suffix in the name, with the prototype
+ *      of the original kfunc.
+ *   2. Add all decl tags except "bpf_kfunc" for the _impl func.
+ *   3. Add a new function prototype with modified list of arguments:
+ *      omitting implicit args.
+ *   4. Change the prototype of the original kfunc to the new one.
+ *
+ * This way we transform the BTF associated with the kfunc from
+ *	__bpf_kfunc bpf_foo(int arg1, void *implicit_arg);
+ * into
+ *	bpf_foo_impl(int arg1, void *implicit_arg);
+ *	__bpf_kfunc bpf_foo(int arg1);
+ *
+ * If a kfunc with KF_IMPLICIT_ARGS already has an _impl counterpart
+ * in BTF, then it's a legacy case: an _impl function is declared in the
+ * source code. In this case, we can skip adding an _impl function, but we
+ * still have to add a func prototype that omits implicit args.
+ */
+static s64 process_kfunc_with_implicit_args(struct btf2btf_context *ctx, s32 kfunc_id)
+{
+	struct btf_param new_params[MAX_BPF_FUNC_REG_ARGS];
+	const char *kfunc_name, *param_name, *tag_name;
+	s32 proto_id, new_proto_id, new_func_id;
+	int err, len, name_len, nr_params;
+	const struct btf_param *params;
+	enum btf_func_linkage linkage;
+	char tmp_name[KSYM_NAME_LEN];
+	struct btf *btf = ctx->btf;
+	struct btf_type *t;
+
+	t = (struct btf_type *)btf__type_by_id(btf, kfunc_id);
+	if (!t || !btf_is_func(t)) {
+		pr_err("WARN: resolve_btfids: btf id %d is not a function\n", kfunc_id);
+		return -EINVAL;
+	}
+
+	kfunc_name = btf__name_by_offset(btf, t->name_off);
+	name_len = strlen(kfunc_name);
+	linkage = btf_vlen(t);
+
+	proto_id = t->type;
+	t = (struct btf_type *)btf__type_by_id(btf, proto_id);
+	if (!t || !btf_is_func_proto(t)) {
+		pr_err("ERROR: resolve_btfids: btf id %d is not a function prototype\n", proto_id);
+		return -EINVAL;
+	}
+
+	len = snprintf(tmp_name, sizeof(tmp_name), "%s%s", kfunc_name, KF_IMPL_SUFFIX);
+	if (len < 0 || len >= sizeof(tmp_name)) {
+		pr_err("ERROR: function name is too long: %s%s\n", kfunc_name, KF_IMPL_SUFFIX);
+		return -E2BIG;
+	}
+
+	if (btf__find_by_name_kind(btf, tmp_name, BTF_KIND_FUNC) > 0) {
+		pr_debug("resolve_btfids: function %s already exists in BTF\n", tmp_name);
+		goto add_new_proto;
+	}
+
+	/* Add a new function with _impl suffix and original prototype */
+	new_func_id = btf__add_func(btf, tmp_name, linkage, proto_id);
+	if (new_func_id < 0) {
+		pr_err("ERROR: resolve_btfids: failed to add func %s to BTF\n", tmp_name);
+		return new_func_id;
+	}
+
+	/* Copy all decl tags except "bpf_kfunc" from the original kfunc to the new one */
+	for (int i = 0; i < ctx->nr_decl_tags; i++) {
+		t = (struct btf_type *)btf__type_by_id(btf, ctx->decl_tags[i]);
+		if (t->type != kfunc_id)
+			continue;
+
+		tag_name = btf__name_by_offset(btf, t->name_off);
+		if (strcmp(tag_name, "bpf_kfunc") == 0)
+			continue;
+
+		err = btf__add_decl_tag(btf, tag_name, new_func_id, -1);
+		if (err < 0) {
+			pr_err("ERROR: resolve_btfids: failed to add decl tag %s for %s\n",
+			       tag_name, tmp_name);
+			return -EINVAL;
+		}
+	}
+
+add_new_proto:
+	/*
+	 * Drop the _impl suffix and point kfunc_name to the local buffer for later use.
+	 * When BTF is modified the original pointer is invalidated.
+	 */
+	tmp_name[name_len] = '\0';
+	kfunc_name = tmp_name;
+
+	/* Load non-implicit args from the original prototype */
+	t = (struct btf_type *)btf__type_by_id(btf, proto_id);
+	params = btf_params(t);
+	nr_params = 0;
+	for (int i = 0; i < btf_vlen(t); i++) {
+		if (btf__is_kf_implicit_arg(btf, &params[i]))
+			break;
+		new_params[nr_params++] = params[i];
+	}
+
+	new_proto_id = btf__add_func_proto(btf, t->type);
+	if (new_proto_id < 0) {
+		pr_err("ERROR: resolve_btfids: failed to add func proto for %s\n", kfunc_name);
+		return new_proto_id;
+	}
+
+	/* Add non-implicit args to the new prototype */
+	for (int i = 0; i < nr_params; i++) {
+		param_name = btf__name_by_offset(btf, new_params[i].name_off);
+		err = btf__add_func_param(btf, param_name, new_params[i].type);
+		if (err < 0) {
+			pr_err("ERROR: resolve_btfids: failed to add param %s for %s\n",
+			       param_name, kfunc_name);
+			return err;
+		}
+	}
+
+	/* Finally change the prototype of the original kfunc to the new one */
+	t = (struct btf_type *)btf__type_by_id(btf, kfunc_id);
+	t->type = new_proto_id;
+
+	pr_debug("resolve_btfids: updated BTF for kfunc with implicit args %s\n", kfunc_name);
+
+	return 0;
+}
+
+static s64 btf__collect_decl_tags(const struct btf *btf, s32 *decl_tags, u32 decl_tags_sz)
+{
+	const u32 type_cnt = btf__type_cnt(btf);
+	const struct btf_type *t;
+	s64 nr_decl_tags = 0;
+
+	for (u32 id = 1; id < type_cnt; id++) {
+		t = btf__type_by_id(btf, id);
+		if (!btf_is_decl_tag(t))
+			continue;
+		if (nr_decl_tags >= decl_tags_sz) {
+			pr_err("ERROR: resolve_btfids: too many decl tags in BTF - limit %s\n",
+				decl_tags_sz);
+			return -E2BIG;
+		}
+		decl_tags[nr_decl_tags++] = id;
+	}
+
+	return nr_decl_tags;
+}
+
+static s64 build_btf2btf_context(struct object *obj, struct btf2btf_context *ctx)
+{
+	s64 nr_decl_tags;
+
+	nr_decl_tags = btf__collect_decl_tags(obj->btf, ctx->decl_tags, ARRAY_SIZE(ctx->decl_tags));
+	if (nr_decl_tags < 0)
+		return nr_decl_tags;
+
+	ctx->btf = obj->btf;
+	ctx->nr_decl_tags = nr_decl_tags;
+
+	return 0;
+}
+
+static s64 finalize_btf(struct object *obj)
+{
+	struct btf2btf_context ctx = {};
+	s32 kfuncs[MAX_KFUNCS];
+	s64 err, nr_kfuncs;
+
+	err = build_btf2btf_context(obj, &ctx);
+	if (err < 0)
+		return err;
+
+	nr_kfuncs = collect_kfunc_ids_by_flags(obj, KF_IMPLICIT_ARGS, kfuncs, ARRAY_SIZE(kfuncs));
+	if (nr_kfuncs < 0)
+		return nr_kfuncs;
+
+	for (u32 i = 0; i < nr_kfuncs; i++) {
+		err = process_kfunc_with_implicit_args(&ctx, kfuncs[i]);
+		if (err < 0)
+			return err;
+	}
+
+	return 0;
+}
+
 static const char * const resolve_btfids_usage[] = {
 	"resolve_btfids [<options>] <ELF object>",
 	"resolve_btfids --patch_btfids <.BTF_ids file> <ELF object>",
@@ -1045,6 +1324,9 @@ int main(int argc, const char **argv)
 		goto out;
 
 	if (symbols_patch(&obj))
+		goto out;
+
+	if (finalize_btf(&obj))
 		goto out;
 
 	err = make_out_path(out_path, sizeof(out_path), obj.path, BTF_IDS_SECTION);
