@@ -25,6 +25,23 @@ static __always_inline void inc_counter(void)
 	__sync_add_and_fetch(&hits[cpu & CPU_MASK].value, 1);
 }
 
+volatile const int stacktrace;
+
+typedef __u64 stack_trace_t[128];
+
+struct {
+	__uint(type, BPF_MAP_TYPE_STACK_TRACE);
+	__uint(max_entries, 16384);
+	__type(key, __u32);
+	__type(value, stack_trace_t);
+} stackmap SEC(".maps");
+
+static __always_inline void do_stacktrace(void *ctx)
+{
+	if (stacktrace)
+		bpf_get_stackid(ctx, &stackmap, 0);
+}
+
 SEC("?uprobe")
 int bench_trigger_uprobe(void *ctx)
 {
@@ -96,6 +113,7 @@ SEC("?kprobe.multi/bpf_get_numa_node_id")
 int bench_trigger_kprobe_multi(void *ctx)
 {
 	inc_counter();
+	do_stacktrace(ctx);
 	return 0;
 }
 
