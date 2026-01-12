@@ -2867,8 +2867,25 @@ int bpf_get_file_flag(int flags);
 int bpf_check_uarg_tail_zero(bpfptr_t uaddr, size_t expected_size,
 			     size_t actual_size);
 
+struct bpf_attrs {
+	const void *attr;
+	bpfptr_t uattr;
+	u32 size;
+};
+
+static inline void bpf_attrs_init(struct bpf_attrs *attrs, const void *attr, bpfptr_t uattr,
+				  u32 size)
+{
+	memset(attrs, 0, sizeof(*attrs));
+	attrs->attr = attr;
+	attrs->uattr = uattr;
+	attrs->size = size;
+}
+
 /* verify correctness of eBPF program */
-int bpf_check(struct bpf_prog **fp, union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size);
+struct bpf_log_attr;
+int bpf_check(struct bpf_prog **fp, union bpf_attr *attr, bpfptr_t uattr,
+	      struct bpf_log_attr *log_attr);
 
 #ifndef CONFIG_BPF_JIT_ALWAYS_ON
 void bpf_patch_call_args(struct bpf_insn *insn, u32 stack_depth);
