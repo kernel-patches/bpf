@@ -825,7 +825,7 @@ __ftrace_return_to_handler(struct ftrace_regs *fregs, unsigned long frame_pointe
 	}
 
 	if (fregs)
-		ftrace_regs_set_instruction_pointer(fregs, ret);
+		ftrace_regs_set_instruction_pointer(fregs, trace.func);
 
 	bit = ftrace_test_recursion_trylock(trace.func, ret);
 	/*
