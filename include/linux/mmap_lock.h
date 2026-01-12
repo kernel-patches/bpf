@@ -133,18 +133,38 @@ static inline bool is_vma_writer_only(int refcnt)
 	return (refcnt & VMA_LOCK_OFFSET) && refcnt <= VMA_LOCK_OFFSET + 1;
 }
 
-static inline void vma_refcount_put(struct vm_area_struct *vma)
+/*
+ * Take VMA refcount unless it has dropped to zero already.
+ *
+ * Note: Callers should use the locking APIs if VMA manipulation is desired.
+ *
+ * Returns true on success, false if refcount limit is reached.
+ */
+static inline bool vma_refcount_try_get(struct vm_area_struct *vma)
+{
+	if (unlikely(!__refcount_inc_not_zero_limited_acquire(&vma->vm_refcnt, NULL,
+							      VMA_REF_LIMIT)))
+		return false;
+
+	return true;
+}
+
+static inline void __vma_refcount_put(struct vm_area_struct *vma)
 {
 	/* Use a copy of vm_mm in case vma is freed after we drop vm_refcnt */
 	struct mm_struct *mm = vma->vm_mm;
 	int oldcnt;
 
-	rwsem_release(&vma->vmlock_dep_map, _RET_IP_);
 	if (!__refcount_dec_and_test(&vma->vm_refcnt, &oldcnt)) {
-
 		if (is_vma_writer_only(oldcnt - 1))
 			rcuwait_wake_up(&mm->vma_writer_wait);
 	}
+}
+
+static inline void vma_refcount_put(struct vm_area_struct *vma)
+{
+	rwsem_release(&vma->vmlock_dep_map, _RET_IP_);
+	__vma_refcount_put(vma);
 }
 
 /*
