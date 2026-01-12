@@ -986,6 +986,7 @@ enum bpf_cmd {
 	BPF_PROG_STREAM_READ_BY_FD,
 	BPF_PROG_ASSOC_STRUCT_OPS,
 	__MAX_BPF_CMD,
+	BPF_COMMON_ATTRS = 1 << 16, /* Indicate carrying syscall common attrs. */
 };
 
 enum bpf_map_type {
@@ -1489,6 +1490,13 @@ struct bpf_stack_build_id {
 		__u64	offset;
 		__u64	ip;
 	};
+};
+
+struct bpf_common_attr {
+	__u64 log_buf;
+	__u32 log_size;
+	__u32 log_level;
+	__u32 log_true_size;
 };
 
 #define BPF_OBJ_NAME_LEN 16U
