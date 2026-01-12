@@ -2871,6 +2871,8 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	struct bpf_prog *prog, *dst_prog = NULL;
 	struct btf *attach_btf = NULL;
 	struct bpf_token *token = NULL;
+	struct bpf_log_attr log_attr;
+	struct bpf_attrs attrs;
 	bool bpf_cap;
 	int err;
 	char license[128];
@@ -3082,8 +3084,13 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	if (err)
 		goto free_prog_sec;
 
+	bpf_attrs_init(&attrs, attr, uattr, uattr_size);
+	err = bpf_prog_load_log_attr_init(&log_attr, &attrs);
+	if (err < 0)
+		goto free_used_maps;
+
 	/* run eBPF verifier */
-	err = bpf_check(&prog, attr, uattr, uattr_size);
+	err = bpf_check(&prog, attr, uattr, &log_attr);
 	if (err < 0)
 		goto free_used_maps;
 
