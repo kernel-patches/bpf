@@ -74,7 +74,8 @@ static void test_stacktrace_ips_kprobe_multi(bool retprobe)
 
 	load_kallsyms();
 
-	check_stacktrace_ips(bpf_map__fd(skel->maps.stackmap), skel->bss->stack_key, 4,
+	check_stacktrace_ips(bpf_map__fd(skel->maps.stackmap), skel->bss->stack_key, 5,
+			     ksym_get_addr("bpf_testmod_stacktrace_test"),
 			     ksym_get_addr("bpf_testmod_stacktrace_test_3"),
 			     ksym_get_addr("bpf_testmod_stacktrace_test_2"),
 			     ksym_get_addr("bpf_testmod_stacktrace_test_1"),
