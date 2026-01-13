@@ -1,0 +1,33 @@
+From 423112d2e9b591999efa4ad74000f8f6f3f381ea Mon Sep 17 00:00:00 2001
+From: Xing Guo <higuoxing@gmail.com>
+Date: Tue, 14 Oct 2025 16:03:23 +0800
+Subject: [PATCH 20251015/20251015] selftests: arg_parsing: Ensure data is
+ flushed to disk before reading.
+
+Recently, I noticed a selftest failure in my local environment. The
+test_parse_test_list_file writes some data to
+/tmp/bpf_arg_parsing_test.XXXXXX and parse_test_list_file() will read
+the data back.  However, after writing data to that file, we forget to
+call fsync() and it's causing testing failure in my laptop.  This patch
+helps fix it by adding the missing fsync() call.
+
+Signed-off-by: Xing Guo <higuoxing@gmail.com>
+---
+ tools/testing/selftests/bpf/prog_tests/arg_parsing.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/tools/testing/selftests/bpf/prog_tests/arg_parsing.c b/tools/testing/selftests/bpf/prog_tests/arg_parsing.c
+index fbf0d9c2f58b..d9fcbfb72aaa 100644
+--- a/tools/testing/selftests/bpf/prog_tests/arg_parsing.c
++++ b/tools/testing/selftests/bpf/prog_tests/arg_parsing.c
+@@ -140,6 +140,7 @@ static void test_parse_test_list_file(void)
+ 	fprintf(fp, "testA/subtest2\n");
+ 	fprintf(fp, "testC_no_eof_newline");
+ 	fflush(fp);
++	fsync(fd);
+ 
+ 	if (!ASSERT_OK(ferror(fp), "prepare tmp"))
+ 		goto out_fclose;
+-- 
+2.51.0
+
