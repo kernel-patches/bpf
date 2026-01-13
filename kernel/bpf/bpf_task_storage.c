@@ -125,9 +125,6 @@ static long bpf_pid_task_storage_update_elem(struct bpf_map *map, void *key,
 	struct pid *pid;
 	int fd, err;
 
-	if ((map_flags & BPF_F_LOCK) && btf_record_has_field(map->record, BPF_UPTR))
-		return -EOPNOTSUPP;
-
 	fd = *(int *)key;
 	pid = pidfd_get_pid(fd, &f_flags);
 	if (IS_ERR(pid))

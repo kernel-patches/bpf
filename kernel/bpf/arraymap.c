@@ -366,10 +366,7 @@ static long array_map_update_elem(struct bpf_map *map, void *key, void *value,
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	u32 index = *(u32 *)key;
 	char *val;
-
-	if (unlikely((map_flags & ~BPF_F_LOCK) > BPF_EXIST))
-		/* unknown flags */
-		return -EINVAL;
+	int err;
 
 	if (unlikely(index >= array->map.max_entries))
 		/* all elements were pre-allocated, cannot insert a new one */
@@ -379,9 +376,9 @@ static long array_map_update_elem(struct bpf_map *map, void *key, void *value,
 		/* all elements already exist */
 		return -EEXIST;
 
-	if (unlikely((map_flags & BPF_F_LOCK) &&
-		     !btf_record_has_field(map->record, BPF_SPIN_LOCK)))
-		return -EINVAL;
+	err = bpf_map_check_op_flags(map, map_flags, BPF_EXIST | BPF_F_LOCK);
+	if (unlikely(err))
+		return err;
 
 	if (array->map.map_type == BPF_MAP_TYPE_PERCPU_ARRAY) {
 		val = this_cpu_ptr(array->pptrs[index & array->index_mask]);

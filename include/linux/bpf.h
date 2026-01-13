@@ -3935,8 +3935,15 @@ static inline int bpf_map_check_op_flags(struct bpf_map *map, u64 flags, u64 all
 	if ((u32)flags & ~allowed_flags)
 		return -EINVAL;
 
+	/* BPF_NOEXIST and BPF_EXIST are mutually exclusive. */
+	if ((flags & (BPF_NOEXIST | BPF_EXIST)) == (BPF_NOEXIST | BPF_EXIST))
+		return -EINVAL;
+
 	if ((flags & BPF_F_LOCK) && !btf_record_has_field(map->record, BPF_SPIN_LOCK))
 		return -EINVAL;
+
+	if ((flags & BPF_F_LOCK) && btf_record_has_field(map->record, ~BPF_SPIN_LOCK))
+		return -EOPNOTSUPP;
 
 	if (!(flags & BPF_F_CPU) && flags >> 32)
 		return -EINVAL;
