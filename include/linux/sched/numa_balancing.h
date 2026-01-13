@@ -8,6 +8,7 @@
  */
 
 #include <linux/sched.h>
+#include <linux/sched/sysctl.h>
 
 #define TNF_MIGRATED	0x01
 #define TNF_NO_GROUP	0x02
@@ -32,6 +33,28 @@ extern void set_numabalancing_state(bool enabled);
 extern void task_numa_free(struct task_struct *p, bool final);
 bool should_numa_migrate_memory(struct task_struct *p, struct folio *folio,
 				int src_nid, int dst_cpu);
+
+extern struct static_key_false sched_numa_balancing;
+static inline bool task_numab_enabled(struct task_struct *p)
+{
+	if (static_branch_unlikely(&sched_numa_balancing))
+		return true;
+	return false;
+}
+
+static inline bool task_numab_mode_normal(void)
+{
+	if (sysctl_numa_balancing_mode & NUMA_BALANCING_NORMAL)
+		return true;
+	return false;
+}
+
+static inline bool task_numab_mode_tiering(void)
+{
+	if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING)
+		return true;
+	return false;
+}
 #else
 static inline void task_numa_fault(int last_node, int node, int pages,
 				   int flags)
@@ -51,6 +74,10 @@ static inline bool should_numa_migrate_memory(struct task_struct *p,
 				struct folio *folio, int src_nid, int dst_cpu)
 {
 	return true;
+}
+static inline bool task_numab_enabled(struct task_struct *p)
+{
+	return false;
 }
 #endif
 
