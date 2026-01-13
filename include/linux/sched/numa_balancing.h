@@ -35,16 +35,24 @@ bool should_numa_migrate_memory(struct task_struct *p, struct folio *folio,
 				int src_nid, int dst_cpu);
 
 extern struct static_key_false sched_numa_balancing;
+extern struct static_key_false bpf_numab_enabled_key;
+int bpf_numab_hook(struct task_struct *p);
 static inline bool task_numab_enabled(struct task_struct *p)
 {
 	if (static_branch_unlikely(&sched_numa_balancing))
 		return true;
-	return false;
+	if (!static_branch_unlikely(&bpf_numab_enabled_key))
+		return false;
+
+	/* A BPF prog is attached. */
+	return bpf_numab_hook(p);
 }
 
 static inline bool task_numab_mode_normal(void)
 {
 	if (sysctl_numa_balancing_mode & NUMA_BALANCING_NORMAL)
+		return true;
+	if (static_branch_unlikely(&bpf_numab_enabled_key))
 		return true;
 	return false;
 }

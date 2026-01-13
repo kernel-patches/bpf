@@ -29,6 +29,7 @@ struct obj_cgroup;
 struct page;
 struct mm_struct;
 struct kmem_cache;
+struct bpf_numab_ops;
 
 /* Cgroup-specific page state, on top of universal node page state */
 enum memcg_stat_item {
@@ -282,6 +283,11 @@ struct mem_cgroup {
 #ifdef CONFIG_LRU_GEN_WALKS_MMU
 	/* per-memcg mm_struct list */
 	struct lru_gen_mm_list mm_list;
+#endif
+
+#ifdef CONFIG_BPF
+	/* per cgroup NUMA balancing control */
+	struct bpf_numab_ops __rcu *bpf_numab;
 #endif
 
 #ifdef CONFIG_MEMCG_V1

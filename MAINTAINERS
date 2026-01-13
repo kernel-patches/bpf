@@ -4807,6 +4807,7 @@ L:	bpf@vger.kernel.org
 L:	linux-mm@kvack.org
 S:	Maintained
 F:	mm/bpf_memcontrol.c
+F:	mm/bpf_numa_balancing.c
 
 BPF [MISC]
 L:	bpf@vger.kernel.org
