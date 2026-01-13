@@ -2800,7 +2800,6 @@ static void __mark_reg_unknown_imprecise(struct bpf_reg_state *reg)
 	reg->var_off = tnum_unknown;
 	reg->frameno = 0;
 	reg->precise = false;
-	reg->subreg_def = DEF_NOT_SUBREG;
 	__mark_reg_unbounded(reg);
 }
 
@@ -14238,8 +14237,11 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 	}
 
-	for (i = 0; i < CALLER_SAVED_REGS; i++)
-		mark_reg_not_init(env, regs, caller_saved[i]);
+	for (i = 0; i < CALLER_SAVED_REGS; i++) {
+		u32 regno = caller_saved[i];
+		mark_reg_not_init(env, regs, regno);
+		regs[regno].subreg_def = DEF_NOT_SUBREG;
+	}
 
 	/* Check return type */
 	t = btf_type_skip_modifiers(desc_btf, meta.func_proto->type, NULL);
