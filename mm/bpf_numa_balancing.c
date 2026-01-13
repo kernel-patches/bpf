@@ -9,6 +9,7 @@ typedef int numab_fn_t(struct task_struct *p);
 
 struct bpf_numab_ops {
 	numab_fn_t *numab_hook;
+	unsigned int hot_thresh;
 
 	/* TODO:
 	 * The cgroup_id embedded in this struct is set at compile time
@@ -47,6 +48,30 @@ int bpf_numab_hook(struct task_struct *p)
 
 	ret = bpf_numab->numab_hook(p);
 
+out:
+	rcu_read_unlock();
+	return ret;
+}
+
+unsigned int bpf_numab_hot_thresh(struct task_struct *p)
+{
+	unsigned int ret = sysctl_numa_balancing_hot_threshold;
+	struct bpf_numab_ops *bpf_numab;
+	struct mem_cgroup *task_memcg;
+
+	if (unlikely(!p->mm))
+		return ret;
+
+	rcu_read_lock();
+	task_memcg = mem_cgroup_from_task(rcu_dereference(p->mm->owner));
+	if (!task_memcg)
+		goto out;
+
+	bpf_numab = rcu_dereference(task_memcg->bpf_numab);
+	if (!bpf_numab || !bpf_numab->hot_thresh)
+		goto out;
+
+	ret = bpf_numab->hot_thresh;
 out:
 	rcu_read_unlock();
 	return ret;
@@ -104,6 +129,9 @@ static int bpf_numab_init_member(const struct btf_type *t,
 		 * Return 1 to bypass the default handler.
 		 */
 		kbpf_numab->cgroup_id = ubpf_numab->cgroup_id;
+		return 1;
+	case offsetof(struct bpf_numab_ops, hot_thresh):
+		kbpf_numab->hot_thresh = ubpf_numab->hot_thresh;
 		return 1;
 	}
 	return 0;

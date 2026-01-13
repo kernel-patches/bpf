@@ -36,7 +36,9 @@ bool should_numa_migrate_memory(struct task_struct *p, struct folio *folio,
 
 extern struct static_key_false sched_numa_balancing;
 extern struct static_key_false bpf_numab_enabled_key;
+extern unsigned int sysctl_numa_balancing_hot_threshold;
 int bpf_numab_hook(struct task_struct *p);
+unsigned int bpf_numab_hot_thresh(struct task_struct *p);
 static inline bool task_numab_enabled(struct task_struct *p)
 {
 	if (static_branch_unlikely(&sched_numa_balancing))
@@ -62,6 +64,13 @@ static inline bool task_numab_mode_tiering(void)
 	if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING)
 		return true;
 	return false;
+}
+
+static inline unsigned int task_numab_hot_thresh(struct task_struct *p)
+{
+	if (!static_branch_unlikely(&bpf_numab_enabled_key))
+		return sysctl_numa_balancing_hot_threshold;
+	return bpf_numab_hot_thresh(p);
 }
 #else
 static inline void task_numa_fault(int last_node, int node, int pages,
