@@ -2784,6 +2784,8 @@ static void __reg_assign_32_into_64(struct bpf_reg_state *reg)
 	}
 }
 
+#define DEF_NOT_SUBREG	(0)
+
 /* Mark a register as having a completely unknown (scalar) value. */
 static void __mark_reg_unknown_imprecise(struct bpf_reg_state *reg)
 {
@@ -2798,6 +2800,7 @@ static void __mark_reg_unknown_imprecise(struct bpf_reg_state *reg)
 	reg->var_off = tnum_unknown;
 	reg->frameno = 0;
 	reg->precise = false;
+	reg->subreg_def = DEF_NOT_SUBREG;
 	__mark_reg_unbounded(reg);
 }
 
@@ -2892,7 +2895,6 @@ static int mark_btf_ld_reg(struct bpf_verifier_env *env,
 	}
 }
 
-#define DEF_NOT_SUBREG	(0)
 static void init_reg_state(struct bpf_verifier_env *env,
 			   struct bpf_func_state *state)
 {
@@ -14362,17 +14364,6 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	args = (const struct btf_param *)(meta.func_proto + 1);
 	for (i = 0; i < nargs; i++) {
 		u32 regno = i + 1;
-
-		/*
-		 * Implicit kfunc arguments are set after main verification pass.
-		 * For correct tracking of zero-extensions we have to reset subreg_def for such
-		 * args. Otherwise mark_btf_func_reg_size() will be inspecting subreg_def of regs
-		 * from an earlier (irrelevant) point in the program, which may lead to an error
-		 * in opt_subreg_zext_lo32_rnd_hi32().
-		 */
-		if (unlikely(KF_IMPLICIT_ARGS & meta.kfunc_flags
-				&& is_kfunc_arg_implicit(desc_btf, &args[i])))
-			regs[regno].subreg_def = DEF_NOT_SUBREG;
 
 		t = btf_type_skip_modifiers(desc_btf, args[i].type, NULL);
 		if (btf_type_is_ptr(t))
