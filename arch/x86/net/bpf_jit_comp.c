@@ -1733,6 +1733,9 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 				dst_reg = X86_REG_R9;
 		}
 
+		if (bpf_insn_is_indirect_target(bpf_prog, i - 1))
+			EMIT_ENDBR();
+
 		switch (insn->code) {
 			/* ALU */
 		case BPF_ALU | BPF_ADD | BPF_X:
@@ -2439,7 +2442,7 @@ populate_extable:
 
 			/* call */
 		case BPF_JMP | BPF_CALL: {
-			u8 *ip = image + addrs[i - 1];
+			u8 *ip = image + addrs[i - 1] + (prog - temp);
 
 			func = (u8 *) __bpf_call_base + imm32;
 			if (src_reg == BPF_PSEUDO_CALL && tail_call_reachable) {
@@ -2464,7 +2467,8 @@ populate_extable:
 			if (imm32)
 				emit_bpf_tail_call_direct(bpf_prog,
 							  &bpf_prog->aux->poke_tab[imm32 - 1],
-							  &prog, image + addrs[i - 1],
+							  &prog,
+							  image + addrs[i - 1] + (prog - temp),
 							  callee_regs_used,
 							  stack_depth,
 							  ctx);
@@ -2473,7 +2477,7 @@ populate_extable:
 							    &prog,
 							    callee_regs_used,
 							    stack_depth,
-							    image + addrs[i - 1],
+							    image + addrs[i - 1] + (prog - temp),
 							    ctx);
 			break;
 
@@ -2638,7 +2642,8 @@ emit_cond_jmp:		/* Convert BPF opcode to x86 */
 			break;
 
 		case BPF_JMP | BPF_JA | BPF_X:
-			emit_indirect_jump(&prog, insn->dst_reg, image + addrs[i - 1]);
+			emit_indirect_jump(&prog, insn->dst_reg,
+					   image + addrs[i - 1] + (prog - temp));
 			break;
 		case BPF_JMP | BPF_JA:
 		case BPF_JMP32 | BPF_JA:
@@ -2728,7 +2733,7 @@ emit_jmp:
 			ctx->cleanup_addr = proglen;
 			if (bpf_prog_was_classic(bpf_prog) &&
 			    !ns_capable_noaudit(&init_user_ns, CAP_SYS_ADMIN)) {
-				u8 *ip = image + addrs[i - 1];
+				u8 *ip = image + addrs[i - 1] + (prog - temp);
 
 				if (emit_spectre_bhb_barrier(&prog, ip, bpf_prog))
 					return -EINVAL;
