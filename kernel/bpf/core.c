@@ -1486,6 +1486,35 @@ static void adjust_insn_arrays(struct bpf_prog *prog, u32 off, u32 len)
 #endif
 }
 
+static int adjust_insn_aux(struct bpf_prog *prog, int off, int cnt)
+{
+	size_t size;
+	struct bpf_insn_aux_data *new_aux;
+
+	if (cnt == 1)
+		return 0;
+
+	/* prog->len already accounts for the cnt - 1 newly inserted instructions */
+	size = array_size(prog->len, sizeof(struct bpf_insn_aux_data));
+	new_aux = vrealloc(prog->aux->insn_aux, size, GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+	if (!new_aux)
+		return -ENOMEM;
+
+	/* follow the same behavior as adjust_insn_array(): leave [0, off] unchanged and shift
+	 * [off + 1, end) to [off + cnt, end). Otherwise, the JIT would emit landing pads at
+	 * wrong locations, as the actual indirect jump target remains at off.
+	 */
+	size = array_size(prog->len - off - cnt, sizeof(struct bpf_insn_aux_data));
+	memmove(new_aux + off + cnt, new_aux + off + 1, size);
+
+	size = array_size(cnt - 1, sizeof(struct bpf_insn_aux_data));
+	memset(new_aux + off + 1, 0, size);
+
+	prog->aux->insn_aux = new_aux;
+
+	return 0;
+}
+
 struct bpf_prog *bpf_jit_blind_constants(struct bpf_prog *prog)
 {
 	struct bpf_insn insn_buff[16], aux[2];
@@ -1541,6 +1570,11 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_prog *prog)
 		clone = tmp;
 		insn_delta = rewritten - 1;
 
+		if (adjust_insn_aux(clone, i, rewritten)) {
+			bpf_jit_prog_release_other(prog, clone);
+			return ERR_PTR(-ENOMEM);
+		}
+
 		/* Instructions arrays must be updated using absolute xlated offsets */
 		adjust_insn_arrays(clone, prog->aux->subprog_start + i, rewritten);
 
@@ -1552,6 +1586,11 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_prog *prog)
 
 	clone->blinded = 1;
 	return clone;
+}
+
+bool bpf_insn_is_indirect_target(const struct bpf_prog *prog, int idx)
+{
+	return prog->aux->insn_aux && prog->aux->insn_aux[idx].indirect_target;
 }
 #endif /* CONFIG_BPF_JIT */
 
@@ -2540,24 +2579,24 @@ struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
 	if (!bpf_prog_is_offloaded(fp->aux)) {
 		*err = bpf_prog_alloc_jited_linfo(fp);
 		if (*err)
-			return fp;
+			goto free_insn_aux;
 
 		fp = bpf_int_jit_compile(fp);
 		bpf_prog_jit_attempt_done(fp);
 		if (!fp->jited && jit_needed) {
 			*err = -ENOTSUPP;
-			return fp;
+			goto free_insn_aux;
 		}
 	} else {
 		*err = bpf_prog_offload_compile(fp);
 		if (*err)
-			return fp;
+			goto free_insn_aux;
 	}
 
 finalize:
 	*err = bpf_prog_lock_ro(fp);
 	if (*err)
-		return fp;
+		goto free_insn_aux;
 
 	/* The tail call compatibility check can only be done at
 	 * this late stage as we need to determine, if we deal
@@ -2565,6 +2604,10 @@ finalize:
 	 * all eBPF JITs might immediately support all features.
 	 */
 	*err = bpf_check_tail_call(fp);
+
+free_insn_aux:
+	vfree(fp->aux->insn_aux);
+	fp->aux->insn_aux = NULL;
 
 	return fp;
 }

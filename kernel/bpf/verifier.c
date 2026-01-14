@@ -3852,6 +3852,11 @@ static bool is_jmp_point(struct bpf_verifier_env *env, int insn_idx)
 	return env->insn_aux_data[insn_idx].jmp_point;
 }
 
+static void mark_indirect_target(struct bpf_verifier_env *env, int idx)
+{
+	env->insn_aux_data[idx].indirect_target = true;
+}
+
 #define LR_FRAMENO_BITS	3
 #define LR_SPI_BITS	6
 #define LR_ENTRY_BITS	(LR_SPI_BITS + LR_FRAMENO_BITS + 1)
@@ -20337,6 +20342,7 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 	}
 
 	for (i = 0; i < n; i++) {
+		mark_indirect_target(env, env->gotox_tmp_buf->items[i]);
 		other_branch = push_stack(env, env->gotox_tmp_buf->items[i],
 					  env->insn_idx, env->cur_state->speculative);
 		if (IS_ERR(other_branch))
@@ -21241,6 +21247,37 @@ static void convert_pseudo_ld_imm64(struct bpf_verifier_env *env)
 			continue;
 		insn->src_reg = 0;
 	}
+}
+
+static int clone_insn_aux_data(struct bpf_prog *prog, struct bpf_verifier_env *env, u32 off)
+{
+	u32 i;
+	size_t size;
+	bool has_indirect_target = false;
+	struct bpf_insn_aux_data *insn_aux;
+
+	for (i = 0; i < prog->len; i++) {
+		if (env->insn_aux_data[off + i].indirect_target) {
+			has_indirect_target = true;
+			break;
+		}
+	}
+
+	/* insn_aux is copied into bpf_prog so the JIT can check whether an instruction is an
+	 * indirect jump target. If no indirect jump targets exist, copying is unnecessary.
+	 */
+	if (!has_indirect_target)
+		return 0;
+
+	size = array_size(sizeof(struct bpf_insn_aux_data), prog->len);
+	insn_aux = vzalloc(size);
+	if (!insn_aux)
+		return -ENOMEM;
+
+	memcpy(insn_aux, env->insn_aux_data + off, size);
+	prog->aux->insn_aux = insn_aux;
+
+	return 0;
 }
 
 /* single env->prog->insni[off] instruction was replaced with the range
@@ -22239,6 +22276,10 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		if (!i)
 			func[i]->aux->exception_boundary = env->seen_exception;
 
+		err = clone_insn_aux_data(func[i], env, subprog_start);
+		if (err < 0)
+			goto out_free;
+
 		/*
 		 * To properly pass the absolute subprog start to jit
 		 * all instruction adjustments should be accumulated
@@ -22306,6 +22347,8 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	for (i = 0; i < env->subprog_cnt; i++) {
 		func[i]->aux->used_maps = NULL;
 		func[i]->aux->used_map_cnt = 0;
+		vfree(func[i]->aux->insn_aux);
+		func[i]->aux->insn_aux = NULL;
 	}
 
 	/* finally lock prog and jit images for all functions and
@@ -22367,6 +22410,7 @@ out_free:
 	for (i = 0; i < env->subprog_cnt; i++) {
 		if (!func[i])
 			continue;
+		vfree(func[i]->aux->insn_aux);
 		func[i]->aux->poke_tab = NULL;
 		bpf_jit_free(func[i]);
 	}
@@ -25350,6 +25394,7 @@ skip_full_check:
 	env->verification_time = ktime_get_ns() - start_time;
 	print_verification_stats(env);
 	env->prog->aux->verified_insns = env->insn_processed;
+	env->prog->aux->insn_aux = env->insn_aux_data;
 
 	/* preserve original error even if log finalization is successful */
 	err = bpf_vlog_finalize(&env->log, &log_true_size);
@@ -25428,7 +25473,11 @@ err_unlock:
 	if (!is_priv)
 		mutex_unlock(&bpf_verifier_lock);
 	clear_insn_aux_data(env, 0, env->prog->len);
-	vfree(env->insn_aux_data);
+	/* on success, insn_aux_data will be freed by bpf_prog_select_runtime */
+	if (ret) {
+		vfree(env->insn_aux_data);
+		env->prog->aux->insn_aux = NULL;
+	}
 err_free_env:
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.insn_postorder);
