@@ -72,6 +72,10 @@
 	} } while (0)
 
 #ifdef CONFIG_PPC64
+
+/* for tailcall counter */
+#define BPF_PPC_TAILCALL        8
+
 /* If dummy pass (!image), account for maximum possible instructions */
 #define PPC_LI64(d, i)		do {					      \
 	if (!image)							      \
