@@ -4658,20 +4658,15 @@ static int btf_dedup_is_equiv(struct btf_dedup *d, __u32 cand_id,
 		return 0;
 	}
 
-	if (btf_dedup_hypot_map_add(d, canon_id, cand_id))
-		return -ENOMEM;
-
 	cand_type = btf_type_by_id(d->btf, cand_id);
 	canon_type = btf_type_by_id(d->btf, canon_id);
 	cand_kind = btf_kind(cand_type);
 	canon_kind = btf_kind(canon_type);
 
-	if (cand_type->name_off != canon_type->name_off)
-		return 0;
-
 	/* FWD <--> STRUCT/UNION equivalence check, if enabled */
-	if ((cand_kind == BTF_KIND_FWD || canon_kind == BTF_KIND_FWD)
-	    && cand_kind != canon_kind) {
+	if ((cand_kind == BTF_KIND_FWD || canon_kind == BTF_KIND_FWD) &&
+	    cand_type->name_off == canon_type->name_off &&
+	    cand_kind != canon_kind) {
 		__u16 real_kind;
 		__u16 fwd_kind;
 
@@ -4685,11 +4680,33 @@ static int btf_dedup_is_equiv(struct btf_dedup *d, __u32 cand_id,
 			if (fwd_kind == real_kind && canon_id < d->btf->start_id)
 				d->hypot_adjust_canon = true;
 		}
+		if (btf_dedup_hypot_map_add(d, canon_id, cand_id))
+			return -ENOMEM;
 		return fwd_kind == real_kind;
 	}
 
-	if (cand_kind != canon_kind)
+	/*
+	 * Types are considered equivalent if modifiers (const, volatile,
+	 * restrict) are present for one but not the other.
+	 */
+	if (cand_kind != canon_kind) {
+		__u32 next_cand_id = cand_id;
+		__u32 next_canon_id = canon_id;
+
+		if (btf_is_mod(cand_type) && !btf_is_type_tag(cand_type))
+			next_cand_id = cand_type->type;
+		if (btf_is_mod(canon_type) && !btf_is_type_tag(canon_type))
+			next_canon_id = canon_type->type;
+		if (cand_id == next_cand_id && canon_id == next_canon_id)
+			return 0;
+		return btf_dedup_is_equiv(d, next_cand_id, next_canon_id);
+	}
+
+	if (cand_type->name_off != canon_type->name_off)
 		return 0;
+
+	if (btf_dedup_hypot_map_add(d, canon_id, cand_id))
+		return -ENOMEM;
 
 	switch (cand_kind) {
 	case BTF_KIND_INT:
