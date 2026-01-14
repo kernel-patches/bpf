@@ -539,6 +539,77 @@ cleanup:
 	btf__free(vmlinux_btf);
 }
 
+static void test_modifier(bool split)
+{
+	struct btf *btf1 = NULL, *btf2 = NULL;
+	int err;
+
+	btf1 = btf__new_empty();
+	if (!ASSERT_OK_PTR(btf1, "empty_main_btf"))
+		return;
+
+	btf__set_pointer_size(btf1, 8); /* enforce 64-bit arch */
+
+	btf__add_int(btf1, "int", 4, BTF_INT_SIGNED);   /* [1] int */
+	btf__add_volatile(btf1, 1);                     /* [2] volatile int */
+	btf__add_const(btf1, 2);			/* [3] const volatile int */
+	btf__add_struct(btf1, "s1", 8);                 /* [3] struct s1 { */
+	btf__add_field(btf1, "f1", 3, 0, 0);            /*      const volatile int f1; */
+	btf__add_field(btf1, "f2", 1, 0, 0);		/*	int f2; */
+							/* } */
+
+	if (split) {
+		btf2 = btf__new_empty_split(btf1);
+		if (!ASSERT_OK_PTR(btf2, "empty_split_btf"))
+			goto cleanup;
+	} else {
+		btf2 = btf1;
+	}
+
+	btf__add_struct(btf2, "s1", 8);                 /* [4] struct s1 { */
+	btf__add_field(btf2, "f1", 1, 0, 0);            /*      int f1; */
+	btf__add_field(btf2, "f2", 2, 0, 0);		/*	volatile int f2; */
+							/* } */
+	btf__add_struct(btf2, "s1", 8);                 /* [5] struct s1 { */
+	btf__add_field(btf2, "f1", 2, 0, 0);            /*      volatile int f1; */
+	btf__add_field(btf2, "f2", 3, 0, 0);		/*	const int f2; */
+							/* } */
+
+	VALIDATE_RAW_BTF(
+		btf2,
+		"[1] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+		"[2] VOLATILE '(anon)' type_id=1",
+		"[3] CONST '(anon)' type_id=2",
+		"[4] STRUCT 's1' size=8 vlen=2\n"
+		"\t'f1' type_id=3 bits_offset=0\n"
+		"\t'f2' type_id=1 bits_offset=0",
+		"[5] STRUCT 's1' size=8 vlen=2\n"
+		"\t'f1' type_id=1 bits_offset=0\n"
+		"\t'f2' type_id=2 bits_offset=0",
+		"[6] STRUCT 's1' size=8 vlen=2\n"
+		"\t'f1' type_id=2 bits_offset=0\n"
+		"\t'f2' type_id=3 bits_offset=0"
+	);
+
+	err = btf__dedup(btf2, NULL);
+	if (!ASSERT_OK(err, "btf_dedup"))
+		goto cleanup;
+
+	VALIDATE_RAW_BTF(
+		btf2,
+		"[1] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+		"[2] VOLATILE '(anon)' type_id=1",
+		"[3] CONST '(anon)' type_id=2",
+		"[4] STRUCT 's1' size=8 vlen=2\n"
+		"\t'f1' type_id=3 bits_offset=0\n"
+		"\t'f2' type_id=1 bits_offset=0"
+	);
+cleanup:
+	if (btf1 != btf2)
+		btf__free(btf2);
+	btf__free(btf1);
+}
+
 void test_btf_dedup_split()
 {
 	if (test__start_subtest("split_simple"))
@@ -551,4 +622,8 @@ void test_btf_dedup_split()
 		test_split_dup_struct_in_cu();
 	if (test__start_subtest("split_module"))
 		test_split_module();
+	if (test__start_subtest("modifier"))
+		test_modifier(false);
+	if (test__start_subtest("split_modifier"))
+		test_modifier(true);
 }
