@@ -85,8 +85,9 @@ struct sk_psock {
 	struct sock			*sk_redir;
 	u32				apply_bytes;
 	u32				cork_bytes;
-	u32				eval;
+	u8				eval;
 	bool				redir_ingress; /* undefined if sk_redir is null */
+	refcount_t			refcnt;
 	struct sk_msg			*cork;
 	struct sk_psock_progs		progs;
 #if IS_ENABLED(CONFIG_BPF_STREAM_PARSER)
@@ -100,7 +101,6 @@ struct sk_psock {
 	unsigned long			state;
 	struct list_head		link;
 	spinlock_t			link_lock;
-	refcount_t			refcnt;
 	void (*saved_unhash)(struct sock *sk);
 	void (*saved_destroy)(struct sock *sk);
 	void (*saved_close)(struct sock *sk, long timeout);
