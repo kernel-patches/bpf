@@ -38,7 +38,7 @@ static int bpf_tcp_ingress(struct sock *sk, struct sk_psock *psock,
 	struct sk_msg *tmp;
 	int i, ret = 0;
 
-	tmp = kzalloc(sizeof(*tmp), __GFP_NOWARN | GFP_KERNEL);
+	tmp = sk_msg_alloc(GFP_KERNEL);
 	if (unlikely(!tmp))
 		return -ENOMEM;
 
@@ -80,7 +80,7 @@ static int bpf_tcp_ingress(struct sock *sk, struct sk_psock *psock,
 		sk_psock_data_ready(sk, psock);
 	} else {
 		sk_msg_free(sk, tmp);
-		kfree(tmp);
+		kfree_sk_msg(tmp);
 	}
 
 	release_sock(sk);
@@ -406,8 +406,7 @@ more_data:
 	    msg->cork_bytes > msg->sg.size && !enospc) {
 		psock->cork_bytes = msg->cork_bytes - msg->sg.size;
 		if (!psock->cork) {
-			psock->cork = kzalloc(sizeof(*psock->cork),
-					      GFP_ATOMIC | __GFP_NOWARN);
+			psock->cork = sk_msg_alloc(GFP_ATOMIC);
 			if (!psock->cork) {
 				sk_msg_free(sk, msg);
 				*copied = 0;
@@ -466,7 +465,7 @@ more_data:
 		}
 		if (cork) {
 			sk_msg_free(sk, msg);
-			kfree(msg);
+			kfree_sk_msg(msg);
 			msg = NULL;
 			ret = 0;
 		}
