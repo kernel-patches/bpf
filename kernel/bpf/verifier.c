@@ -4926,6 +4926,14 @@ static int __mark_chain_precision(struct bpf_verifier_env *env,
 
 int mark_chain_precision(struct bpf_verifier_env *env, int regno)
 {
+	struct bpf_reg_state *reg;
+
+	if (regno >= 0) {
+		reg = &env->cur_state->frame[env->cur_state->curframe]->regs[regno];
+		if (reg->precise)
+			return 0;
+	}
+
 	return __mark_chain_precision(env, env->cur_state, regno, NULL);
 }
 
@@ -19562,18 +19570,22 @@ static int propagate_precision(struct bpf_verifier_env *env,
 			       struct bpf_verifier_state *cur,
 			       bool *changed)
 {
-	struct bpf_reg_state *state_reg;
-	struct bpf_func_state *state;
+	struct bpf_reg_state *state_reg, *cur_reg;
+	struct bpf_func_state *state, *cur_state;
 	int i, err = 0, fr;
 	bool first;
 
 	for (fr = old->curframe; fr >= 0; fr--) {
 		state = old->frame[fr];
+		cur_state = cur->frame[fr];
 		state_reg = state->regs;
 		first = true;
 		for (i = 0; i < BPF_REG_FP; i++, state_reg++) {
 			if (state_reg->type != SCALAR_VALUE ||
 			    !state_reg->precise)
+				continue;
+			cur_reg = &cur_state->regs[i];
+			if (cur_reg->precise)
 				continue;
 			if (env->log.level & BPF_LOG_LEVEL2) {
 				if (first)
@@ -19591,6 +19603,9 @@ static int propagate_precision(struct bpf_verifier_env *env,
 			state_reg = &state->stack[i].spilled_ptr;
 			if (state_reg->type != SCALAR_VALUE ||
 			    !state_reg->precise)
+				continue;
+			cur_reg = &cur_state->stack[i].spilled_ptr;
+			if (cur_reg->precise)
 				continue;
 			if (env->log.level & BPF_LOG_LEVEL2) {
 				if (first)
