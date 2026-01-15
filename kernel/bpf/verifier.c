@@ -18997,6 +18997,7 @@ static bool check_ids(u32 old_id, u32 cur_id, struct bpf_idmap *idmap)
 			/* Reached an empty slot; haven't seen this id before */
 			map[i].old = old_id;
 			map[i].cur = cur_id;
+			idmap->map_cnt = i + 1;
 			return true;
 		}
 		if (map[i].old == old_id)
@@ -19512,8 +19513,13 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 
 static void reset_idmap_scratch(struct bpf_verifier_env *env)
 {
-	env->idmap_scratch.tmp_id_gen = env->id_gen;
-	memset(&env->idmap_scratch.map, 0, sizeof(env->idmap_scratch.map));
+	struct bpf_idmap *idmap = &env->idmap_scratch;
+
+	idmap->tmp_id_gen = env->id_gen;
+	if (idmap->map_cnt) {
+		memset(idmap->map, 0, idmap->map_cnt * sizeof(struct bpf_id_pair));
+		idmap->map_cnt = 0;
+	}
 }
 
 static bool states_equal(struct bpf_verifier_env *env,
