@@ -196,14 +196,14 @@ struct bpf_reg_state {
 	 * is used which is an index in bpf_verifier_state->frame[] array
 	 * pointing to bpf_func_state.
 	 */
-	u32 frameno;
+	u32 frameno:4;
 	/* Tracks subreg definition. The stored value is the insn_idx of the
 	 * writing insn. This is safe because subreg_def is used before any insn
 	 * patching which only happens after main verification finished.
 	 */
-	s32 subreg_def;
+	s32 subreg_def:27;
 	/* if (!precise && SCALAR_VALUE) min/max/tnum don't affect safety */
-	bool precise;
+	bool precise:1;
 };
 
 enum bpf_stack_slot_type {

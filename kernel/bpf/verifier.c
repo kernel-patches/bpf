@@ -19663,10 +19663,12 @@ static bool states_maybe_looping(struct bpf_verifier_state *old,
 
 	fold = old->frame[fr];
 	fcur = cur->frame[fr];
-	for (i = 0; i < MAX_BPF_REG; i++)
+	for (i = 0; i < MAX_BPF_REG; i++) {
 		if (memcmp(&fold->regs[i], &fcur->regs[i],
-			   offsetof(struct bpf_reg_state, frameno)))
+			   offsetof(struct bpf_reg_state, ref_obj_id) +
+			   sizeof(fold->regs[i].ref_obj_id)))
 			return false;
+	}
 	return true;
 }
 
