@@ -148,10 +148,14 @@ void serial_test_map_kptr(void)
 
 		ASSERT_OK(kern_sync_rcu_tasks_trace(skel), "sync rcu_tasks_trace");
 		ASSERT_OK(kern_sync_rcu(), "sync rcu");
+		ASSERT_OK(kern_sync_rcu(), "sync rcu");
+		ASSERT_OK(kern_sync_rcu(), "sync rcu");
 		/* Observe refcount dropping to 1 on bpf_map_free_deferred */
 		test_map_kptr_success(false);
 
 		ASSERT_OK(kern_sync_rcu_tasks_trace(skel), "sync rcu_tasks_trace");
+		ASSERT_OK(kern_sync_rcu(), "sync rcu");
+		ASSERT_OK(kern_sync_rcu(), "sync rcu");
 		ASSERT_OK(kern_sync_rcu(), "sync rcu");
 		/* Observe refcount dropping to 1 on synchronous delete elem */
 		test_map_kptr_success(true);
