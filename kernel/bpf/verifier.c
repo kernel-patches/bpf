@@ -52,6 +52,7 @@ enum bpf_features {
 
 struct bpf_mem_alloc bpf_global_percpu_ma;
 static bool bpf_global_percpu_ma_set;
+static struct kmem_cache *bpf_verifier_state_list_cachep;
 
 /* bpf_check() is a static code analyzer that walks eBPF program
  * instruction by instruction and updates register/stack state.
@@ -1718,7 +1719,7 @@ static void maybe_free_verifier_state(struct bpf_verifier_env *env,
 		return;
 	list_del(&sl->node);
 	free_verifier_state(&sl->state, false);
-	kfree(sl);
+	kmem_cache_free(bpf_verifier_state_list_cachep, sl);
 	env->free_list_size--;
 }
 
@@ -20074,7 +20075,7 @@ miss:
 	 * When looping the sl->state.branches will be > 0 and this state
 	 * will not be considered for equivalence until branches == 0.
 	 */
-	new_sl = kzalloc(sizeof(struct bpf_verifier_state_list), GFP_KERNEL_ACCOUNT);
+	new_sl = kmem_cache_zalloc(bpf_verifier_state_list_cachep, GFP_KERNEL_ACCOUNT);
 	if (!new_sl)
 		return -ENOMEM;
 	env->total_states++;
@@ -20092,7 +20093,7 @@ miss:
 	err = copy_verifier_state(new, cur);
 	if (err) {
 		free_verifier_state(new, false);
-		kfree(new_sl);
+		kmem_cache_free(bpf_verifier_state_list_cachep, new_sl);
 		return err;
 	}
 	new->insn_idx = insn_idx;
@@ -20102,7 +20103,7 @@ miss:
 	err = maybe_enter_scc(env, new);
 	if (err) {
 		free_verifier_state(new, false);
-		kfree(new_sl);
+		kmem_cache_free(bpf_verifier_state_list_cachep, new_sl);
 		return err;
 	}
 
@@ -23757,7 +23758,7 @@ static void free_states(struct bpf_verifier_env *env)
 	list_for_each_safe(pos, tmp, &env->free_list) {
 		sl = container_of(pos, struct bpf_verifier_state_list, node);
 		free_verifier_state(&sl->state, false);
-		kfree(sl);
+		kmem_cache_free(bpf_verifier_state_list_cachep, sl);
 	}
 	INIT_LIST_HEAD(&env->free_list);
 
@@ -23780,7 +23781,7 @@ static void free_states(struct bpf_verifier_env *env)
 		list_for_each_safe(pos, tmp, head) {
 			sl = container_of(pos, struct bpf_verifier_state_list, node);
 			free_verifier_state(&sl->state, false);
-			kfree(sl);
+			kmem_cache_free(bpf_verifier_state_list_cachep, sl);
 		}
 		INIT_LIST_HEAD(&env->explored_states[i]);
 	}
@@ -25451,3 +25452,12 @@ err_free_env:
 	kvfree(env);
 	return ret;
 }
+
+static int __init bpf_verifier_init(void)
+{
+	bpf_verifier_state_list_cachep = kmem_cache_create("bpf_verifier_state_list",
+							   sizeof(struct bpf_verifier_state_list),
+							   0, SLAB_PANIC, NULL);
+	return 0;
+}
+late_initcall(bpf_verifier_init);
