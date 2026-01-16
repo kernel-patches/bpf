@@ -1,0 +1,5 @@
+map_kptr/success-map
+ns_xsk_drv
+ns_xsk_skb
+send_signal
+unpriv_bpf_disabled
