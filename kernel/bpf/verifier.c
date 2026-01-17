@@ -4765,14 +4765,37 @@ static int __mark_chain_precision(struct bpf_verifier_env *env,
 	 * slot, but don't set precise flag in current state, as precision
 	 * tracking in the current state is unnecessary.
 	 */
-	func = st->frame[bt->frame];
 	if (regno >= 0) {
-		reg = &func->regs[regno];
+		reg = &st->frame[bt->frame]->regs[regno];
 		if (reg->type != SCALAR_VALUE) {
 			verifier_bug(env, "backtracking misuse");
 			return -EFAULT;
 		}
+		if (reg->precise)
+			return 0;
 		bt_set_reg(bt, regno);
+	} else {
+		for (fr = bt->frame; fr >= 0; fr--) {
+			u32 reg_mask = bt_frame_reg_mask(bt, fr);
+			u64 stack_mask = bt_frame_stack_mask(bt, fr);
+			DECLARE_BITMAP(mask, 64);
+
+			func = st->frame[fr];
+			if (reg_mask) {
+				bitmap_from_u64(mask, reg_mask);
+				for_each_set_bit(i, mask, 32) {
+					if (func->regs[i].precise)
+						bt_clear_frame_reg(bt, fr, i);
+				}
+			}
+			if (stack_mask) {
+				bitmap_from_u64(mask, stack_mask);
+				for_each_set_bit(i, mask, 64) {
+					if (func->stack[i].spilled_ptr.precise)
+						bt_clear_frame_slot(bt, fr, i);
+				}
+			}
+		}
 	}
 
 	if (bt_empty(bt))
