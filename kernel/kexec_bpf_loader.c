@@ -82,6 +82,7 @@ static int __init kexec_bpf_prog_run_init(void)
 late_initcall(kexec_bpf_prog_run_init);
 
 #define KEXEC_BPF_CMD_DECOMPRESS	0x1
+#define KEXEC_BPF_CMD_COPY		0x2
 
 #define KEXEC_BPF_SUBCMD_KERNEL		0x1
 #define KEXEC_BPF_SUBCMD_INITRD		0x2
@@ -279,6 +280,32 @@ static int kexec_buff_parser(struct bpf_parser_context *parser)
 			default:
 				break;
 			}
+		}
+		break;
+	case KEXEC_BPF_CMD_COPY:
+		p = __vmalloc(cmd->payload_len, GFP_KERNEL | __GFP_ACCOUNT);
+		if (!p)
+			return -ENOMEM;
+		memcpy(p, buf, cmd->payload_len);
+		switch (cmd->subcmd) {
+		case KEXEC_BPF_SUBCMD_KERNEL:
+			vfree(ctx->kernel);
+			ctx->kernel = p;
+			ctx->kernel_sz = cmd->payload_len;
+			break;
+		case KEXEC_BPF_SUBCMD_INITRD:
+			vfree(ctx->initrd);
+			ctx->initrd = p;
+			ctx->initrd_sz = cmd->payload_len;
+			break;
+		case KEXEC_BPF_SUBCMD_CMDLINE:
+			vfree(ctx->cmdline);
+			ctx->cmdline = p;
+			ctx->cmdline_sz = cmd->payload_len;
+			break;
+		default:
+			vfree(p);
+			break;
 		}
 		break;
 	default:
