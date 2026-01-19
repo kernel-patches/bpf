@@ -22201,6 +22201,19 @@ apply_patch_buffer:
 	return 0;
 }
 
+/* Mark helper calls within prog->insns[off ... off+cnt-1] range as resolved,
+ * meaning imm contains the helper offset. Used for prologue & epilogue.
+ */
+static void mark_helper_calls_finalized(struct bpf_verifier_env *env, int off, int cnt)
+{
+	int i;
+
+	for (i = 0; i < cnt; i++) {
+		if (bpf_helper_call(&env->prog->insnsi[i + off]))
+			env->insn_aux_data[i + off].finalized_call = true;
+	}
+}
+
 /* convert load instructions that access fields of a context type into a
  * sequence of instructions that access fields of the underlying structure:
  *     struct __sk_buff    -> struct sk_buff
@@ -22267,6 +22280,8 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			ret = add_kfunc_in_insns(env, insn_buf, cnt - 1);
 			if (ret < 0)
 				return ret;
+
+			mark_helper_calls_finalized(env, 0, cnt - 1);
 		}
 	}
 
@@ -22280,6 +22295,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		bpf_convert_ctx_access_t convert_ctx_access;
+		bool is_epilogue = false;
 		u8 mode;
 
 		if (env->insn_aux_data[i + delta].nospec) {
@@ -22346,6 +22362,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 				 * epilogue.
 				 */
 				epilogue_idx = i + delta;
+				is_epilogue = true;
 			}
 			goto patch_insn_buf;
 		} else {
@@ -22501,6 +22518,9 @@ patch_insn_buf:
 		/* keep walking new program and skip insns we just inserted */
 		env->prog = new_prog;
 		insn      = new_prog->insnsi + i + delta;
+
+		if (is_epilogue)
+			mark_helper_calls_finalized(env, epilogue_idx, cnt - 1);
 	}
 
 	return 0;
@@ -23895,6 +23915,9 @@ patch_map_ops_generic:
 			goto next_insn;
 		}
 patch_call_imm:
+		if (env->insn_aux_data[i + delta].finalized_call)
+			goto next_insn;
+
 		fn = env->ops->get_func_proto(insn->imm, env->prog);
 		/* all functions that have prototype and verifier allowed
 		 * programs to call them, must be real in-kernel functions
@@ -23906,6 +23929,7 @@ patch_call_imm:
 			return -EFAULT;
 		}
 		insn->imm = fn->func - __bpf_call_base;
+		env->insn_aux_data[i + delta].finalized_call = true;
 next_insn:
 		if (subprogs[cur_subprog + 1].start == i + delta + 1) {
 			subprogs[cur_subprog].stack_depth += stack_depth_extra;
