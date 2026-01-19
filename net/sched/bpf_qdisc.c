@@ -130,7 +130,30 @@ static int bpf_qdisc_btf_struct_access(struct bpf_verifier_log *log,
 	return 0;
 }
 
-BTF_ID_LIST_SINGLE(bpf_qdisc_init_prologue_ids, func, bpf_qdisc_init_prologue)
+/* bpf_qdisc_init_prologue - Called in prologue of .init. */
+BPF_CALL_2(bpf_qdisc_init_prologue, struct Qdisc *, sch,
+	   struct netlink_ext_ack *, extack)
+{
+	struct bpf_sched_data *q = qdisc_priv(sch);
+	struct net_device *dev = qdisc_dev(sch);
+	struct Qdisc *p;
+
+	qdisc_watchdog_init(&q->watchdog, sch);
+
+	if (sch->parent != TC_H_ROOT) {
+		/* If qdisc_lookup() returns NULL, it means .init is called by
+		 * qdisc_create_dflt() in mq/mqprio_init and the parent qdisc
+		 * has not been added to qdisc_hash yet.
+		 */
+		p = qdisc_lookup(dev, TC_H_MAJ(sch->parent));
+		if (p && !(p->flags & TCQ_F_MQROOT)) {
+			NL_SET_ERR_MSG(extack, "BPF qdisc only supported on root or mq");
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
 
 static int bpf_qdisc_gen_prologue(struct bpf_insn *insn_buf, bool direct_write,
 				  const struct bpf_prog *prog)
@@ -151,7 +174,7 @@ static int bpf_qdisc_gen_prologue(struct bpf_insn *insn_buf, bool direct_write,
 	*insn++ = BPF_MOV64_REG(BPF_REG_6, BPF_REG_1);
 	*insn++ = BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, 16);
 	*insn++ = BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, 0);
-	*insn++ = BPF_CALL_KFUNC(0, bpf_qdisc_init_prologue_ids[0]);
+	*insn++ = BPF_EMIT_CALL(bpf_qdisc_init_prologue);
 	*insn++ = BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 1);
 	*insn++ = BPF_EXIT_INSN();
 	*insn++ = BPF_MOV64_REG(BPF_REG_1, BPF_REG_6);
@@ -160,7 +183,15 @@ static int bpf_qdisc_gen_prologue(struct bpf_insn *insn_buf, bool direct_write,
 	return insn - insn_buf;
 }
 
-BTF_ID_LIST_SINGLE(bpf_qdisc_reset_destroy_epilogue_ids, func, bpf_qdisc_reset_destroy_epilogue)
+/* bpf_qdisc_reset_destroy_epilogue - Called in epilogue of .reset and .destroy */
+BPF_CALL_1(bpf_qdisc_reset_destroy_epilogue, struct Qdisc *, sch)
+{
+	struct bpf_sched_data *q = qdisc_priv(sch);
+
+	qdisc_watchdog_cancel(&q->watchdog);
+
+	return 0;
+}
 
 static int bpf_qdisc_gen_epilogue(struct bpf_insn *insn_buf, const struct bpf_prog *prog,
 				  s16 ctx_stack_off)
@@ -178,7 +209,7 @@ static int bpf_qdisc_gen_epilogue(struct bpf_insn *insn_buf, const struct bpf_pr
 	 */
 	*insn++ = BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_FP, ctx_stack_off);
 	*insn++ = BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, 0);
-	*insn++ = BPF_CALL_KFUNC(0, bpf_qdisc_reset_destroy_epilogue_ids[0]);
+	*insn++ = BPF_EMIT_CALL(bpf_qdisc_reset_destroy_epilogue);
 	*insn++ = BPF_EXIT_INSN();
 
 	return insn - insn_buf;
@@ -230,41 +261,6 @@ __bpf_kfunc void bpf_qdisc_watchdog_schedule(struct Qdisc *sch, u64 expire, u64 
 	qdisc_watchdog_schedule_range_ns(&q->watchdog, expire, delta_ns);
 }
 
-/* bpf_qdisc_init_prologue - Hidden kfunc called in prologue of .init. */
-__bpf_kfunc int bpf_qdisc_init_prologue(struct Qdisc *sch,
-					struct netlink_ext_ack *extack)
-{
-	struct bpf_sched_data *q = qdisc_priv(sch);
-	struct net_device *dev = qdisc_dev(sch);
-	struct Qdisc *p;
-
-	qdisc_watchdog_init(&q->watchdog, sch);
-
-	if (sch->parent != TC_H_ROOT) {
-		/* If qdisc_lookup() returns NULL, it means .init is called by
-		 * qdisc_create_dflt() in mq/mqprio_init and the parent qdisc
-		 * has not been added to qdisc_hash yet.
-		 */
-		p = qdisc_lookup(dev, TC_H_MAJ(sch->parent));
-		if (p && !(p->flags & TCQ_F_MQROOT)) {
-			NL_SET_ERR_MSG(extack, "BPF qdisc only supported on root or mq");
-			return -EINVAL;
-		}
-	}
-
-	return 0;
-}
-
-/* bpf_qdisc_reset_destroy_epilogue - Hidden kfunc called in epilogue of .reset
- * and .destroy
- */
-__bpf_kfunc void bpf_qdisc_reset_destroy_epilogue(struct Qdisc *sch)
-{
-	struct bpf_sched_data *q = qdisc_priv(sch);
-
-	qdisc_watchdog_cancel(&q->watchdog);
-}
-
 /* bpf_qdisc_bstats_update - Update Qdisc basic statistics
  * @sch: The qdisc from which an skb is dequeued.
  * @skb: The skb to be dequeued.
@@ -282,8 +278,6 @@ BTF_ID_FLAGS(func, bpf_kfree_skb, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_qdisc_skb_drop, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_dynptr_from_skb)
 BTF_ID_FLAGS(func, bpf_qdisc_watchdog_schedule)
-BTF_ID_FLAGS(func, bpf_qdisc_init_prologue)
-BTF_ID_FLAGS(func, bpf_qdisc_reset_destroy_epilogue)
 BTF_ID_FLAGS(func, bpf_qdisc_bstats_update)
 BTF_KFUNCS_END(qdisc_kfunc_ids)
 
