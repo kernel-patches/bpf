@@ -49,7 +49,7 @@ config KEXEC_FILE
 config KEXEC_BPF
 	bool "Enable bpf-prog to parse the kexec image"
 	depends on KEXEC_FILE
-	depends on DEBUG_INFO_BTF && BPF_SYSCALL
+	depends on DEBUG_INFO_BTF && BPF_SYSCALL && KEEP_DECOMPRESSOR
 	help
 	  This is a feature to run bpf section inside a kexec image file, which
 	  parses the image properly and help kernel set up kexec boot protocol
