@@ -228,6 +228,23 @@ __bpf_kfunc void bpf_kfunc_nested_release_test(struct sk_buff *ptr)
 {
 }
 
+__bpf_kfunc struct prog_test_member *bpf_kfunc_get_default_trusted_ptr_test(void)
+{
+	static struct prog_test_member trusted_ptr;
+
+	return &trusted_ptr;
+}
+
+__bpf_kfunc void
+bpf_kfunc_put_default_trusted_ptr_test(const struct prog_test_member *trusted_ptr)
+{
+	/*
+	 * This BPF kfunc doesn't actually have any put/KF_ACQUIRE
+	 * semantics. We're simply wanting to simulate a BPF kfunc that takes a
+	 * struct prog_test_member pointer as an argument.
+	 */
+}
+
 __bpf_kfunc void bpf_kfunc_trusted_vma_test(struct vm_area_struct *ptr)
 {
 }
@@ -699,6 +716,8 @@ BTF_ID_FLAGS(func, bpf_kfunc_dynptr_test)
 BTF_ID_FLAGS(func, bpf_kfunc_nested_acquire_nonzero_offset_test, KF_ACQUIRE)
 BTF_ID_FLAGS(func, bpf_kfunc_nested_acquire_zero_offset_test, KF_ACQUIRE)
 BTF_ID_FLAGS(func, bpf_kfunc_nested_release_test, KF_RELEASE)
+BTF_ID_FLAGS(func, bpf_kfunc_get_default_trusted_ptr)
+BTF_ID_FLAGS(func, bpf_kfunc_put_default_trusted_ptr)
 BTF_ID_FLAGS(func, bpf_kfunc_trusted_vma_test)
 BTF_ID_FLAGS(func, bpf_kfunc_trusted_task_test)
 BTF_ID_FLAGS(func, bpf_kfunc_trusted_num_test)

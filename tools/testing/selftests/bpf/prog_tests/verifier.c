@@ -30,6 +30,7 @@
 #include "verifier_ctx.skel.h"
 #include "verifier_ctx_sk_msg.skel.h"
 #include "verifier_d_path.skel.h"
+#include "verifier_default_trusted_ptr.skel.h"
 #include "verifier_direct_packet_access.skel.h"
 #include "verifier_direct_stack_access_wraparound.skel.h"
 #include "verifier_div0.skel.h"
@@ -251,6 +252,15 @@ void test_verifier_bits_iter(void) { RUN(verifier_bits_iter); }
 void test_verifier_lsm(void)                  { RUN(verifier_lsm); }
 void test_irq(void)			      { RUN(irq); }
 void test_verifier_mtu(void)		      { RUN(verifier_mtu); }
+void test_verifier_default_trusted_ptr(void)
+{
+	if (!env.has_testmod) {
+		test__skip();
+		return;
+	}
+
+	RUN(verifier_default_trusted_ptr);
+}
 
 static int init_test_val_map(struct bpf_object *obj, char *map_name)
 {
