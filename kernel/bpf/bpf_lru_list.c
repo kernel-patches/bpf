@@ -341,13 +341,27 @@ static void bpf_lru_list_pop_free_to_local(struct bpf_lru *lru,
 	raw_spin_unlock(&l->lock);
 }
 
+/*
+ * The hash field is consumed by the 'del_from_htab' callback rather than
+ * the LRU list itself. Initialize it while holding the LRU lock to avoid
+ * a race where a popped LRU node is evicted and removed from the hash map
+ * with an uninitialized hash value, if defer the hash setting to
+ * hashtab.c::prealloc_lru_pop().
+ */
+static void bpf_lru_node_set_hash(struct bpf_lru *lru,
+				  struct bpf_lru_node *node,
+				  u32 hash)
+{
+	*(u32 *)((void *)node + lru->hash_offset) = hash;
+}
+
 static void __local_list_add_pending(struct bpf_lru *lru,
 				     struct bpf_lru_locallist *loc_l,
 				     int cpu,
 				     struct bpf_lru_node *node,
 				     u32 hash)
 {
-	*(u32 *)((void *)node + lru->hash_offset) = hash;
+	bpf_lru_node_set_hash(lru, node, hash);
 	node->cpu = cpu;
 	node->type = BPF_LRU_LOCAL_LIST_T_PENDING;
 	bpf_lru_node_clear_ref(node);
@@ -415,7 +429,7 @@ static struct bpf_lru_node *bpf_percpu_lru_pop_free(struct bpf_lru *lru,
 
 	if (!list_empty(free_list)) {
 		node = list_first_entry(free_list, struct bpf_lru_node, list);
-		*(u32 *)((void *)node + lru->hash_offset) = hash;
+		bpf_lru_node_set_hash(lru, node, hash);
 		bpf_lru_node_clear_ref(node);
 		__bpf_lru_node_move(l, node, BPF_LRU_LIST_T_INACTIVE);
 	}
