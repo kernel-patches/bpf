@@ -30,14 +30,50 @@ int skips;
 
 static struct bpf_map_create_opts map_opts = { .sz = sizeof(map_opts) };
 
-static void test_hashmap(unsigned int task, void *data)
+/* Configuration for hash-like map types that share the same test logic */
+struct hash_test_config {
+	enum bpf_map_type map_type;
+	const char *name;
+	__u32 required_flags;  /* Flags that must be set (e.g., BPF_F_NO_PREALLOC for rhash) */
+};
+
+static const struct hash_test_config hash_configs[] = {
+	{ BPF_MAP_TYPE_HASH, "hash", 0 },
+	{ BPF_MAP_TYPE_RHASH, "rhash", BPF_F_NO_PREALLOC },
+};
+
+#define NUM_HASH_CONFIGS (sizeof(hash_configs) / sizeof(hash_configs[0]))
+
+/* Check if a hash config can run with current map_opts.map_flags */
+static bool hash_config_can_run(const struct hash_test_config *cfg)
+{
+	/* If the config requires certain flags (like NO_PREALLOC), check they're set */
+	if (cfg->required_flags && !(map_opts.map_flags & cfg->required_flags))
+		return false;
+	return true;
+}
+
+/* Create a hash-like map with the appropriate flags for the given config */
+static int create_hash_map(const struct hash_test_config *cfg, int key_size,
+			   int value_size, int max_entries)
+{
+	struct bpf_map_create_opts opts = { .sz = sizeof(opts) };
+
+	/* Combine global map_opts flags with required flags for this map type */
+	opts.map_flags = map_opts.map_flags | cfg->required_flags;
+
+	return bpf_map_create(cfg->map_type, NULL, key_size, value_size,
+			      max_entries, &opts);
+}
+
+static void __test_hashmap(const struct hash_test_config *cfg)
 {
 	long long key, next_key, first_key, value;
 	int fd;
 
-	fd = bpf_map_create(BPF_MAP_TYPE_HASH, NULL, sizeof(key), sizeof(value), 2, &map_opts);
+	fd = create_hash_map(cfg, sizeof(key), sizeof(value), 2);
 	if (fd < 0) {
-		printf("Failed to create hashmap '%s'!\n", strerror(errno));
+		printf("Failed to create %s map '%s'!\n", cfg->name, strerror(errno));
 		exit(1);
 	}
 
@@ -124,6 +160,31 @@ static void test_hashmap(unsigned int task, void *data)
 	       errno == ENOENT);
 
 	close(fd);
+}
+
+static void test_hashmap(unsigned int task, void *data)
+{
+	__test_hashmap(&hash_configs[0]);  /* BPF_MAP_TYPE_HASH */
+}
+
+/* Test all hash-like map types with current map_opts settings */
+static void test_all_hashmaps(void)
+{
+	int i;
+
+	for (i = 0; i < NUM_HASH_CONFIGS; i++) {
+		const struct hash_test_config *cfg = &hash_configs[i];
+
+		if (!hash_config_can_run(cfg)) {
+			printf("Skipping %s map test (requires flags 0x%x)\n",
+			       cfg->name, cfg->required_flags);
+			skips++;
+			continue;
+		}
+
+		printf("Testing %s map...\n", cfg->name);
+		__test_hashmap(cfg);
+	}
 }
 
 static void test_hashmap_sizes(unsigned int task, void *data)
@@ -261,13 +322,12 @@ static void test_hashmap_percpu(unsigned int task, void *data)
 }
 
 #define VALUE_SIZE 3
-static int helper_fill_hashmap(int max_entries)
+static int __helper_fill_hashmap(const struct hash_test_config *cfg, int max_entries)
 {
 	int i, fd, ret;
 	long long key, value[VALUE_SIZE] = {};
 
-	fd = bpf_map_create(BPF_MAP_TYPE_HASH, NULL, sizeof(key), sizeof(value),
-			    max_entries, &map_opts);
+	fd = create_hash_map(cfg, sizeof(key), sizeof(value), max_entries);
 	CHECK(fd < 0,
 	      "failed to create hashmap",
 	      "err: %s, flags: 0x%x\n", strerror(errno), map_opts.map_flags);
@@ -283,13 +343,18 @@ static int helper_fill_hashmap(int max_entries)
 	return fd;
 }
 
-static void test_hashmap_walk(unsigned int task, void *data)
+static int helper_fill_hashmap(int max_entries)
+{
+	return __helper_fill_hashmap(&hash_configs[0], max_entries);
+}
+
+static void __test_hashmap_walk(const struct hash_test_config *cfg)
 {
 	int fd, i, max_entries = 10000;
 	long long key, value[VALUE_SIZE], next_key;
 	bool next_key_valid = true;
 
-	fd = helper_fill_hashmap(max_entries);
+	fd = __helper_fill_hashmap(cfg, max_entries);
 
 	for (i = 0; bpf_map_get_next_key(fd, !i ? NULL : &key,
 					 &next_key) == 0; i++) {
@@ -319,6 +384,31 @@ static void test_hashmap_walk(unsigned int task, void *data)
 
 	assert(i == max_entries);
 	close(fd);
+}
+
+static void test_hashmap_walk(unsigned int task, void *data)
+{
+	__test_hashmap_walk(&hash_configs[0]);  /* BPF_MAP_TYPE_HASH */
+}
+
+/* Test hashmap walk for all hash-like map types with current map_opts settings */
+static void test_all_hashmap_walks(void)
+{
+	int i;
+
+	for (i = 0; i < NUM_HASH_CONFIGS; i++) {
+		const struct hash_test_config *cfg = &hash_configs[i];
+
+		if (!hash_config_can_run(cfg)) {
+			printf("Skipping %s map walk test (requires flags 0x%x)\n",
+			       cfg->name, cfg->required_flags);
+			skips++;
+			continue;
+		}
+
+		printf("Testing %s map walk...\n", cfg->name);
+		__test_hashmap_walk(cfg);
+	}
 }
 
 static void test_hashmap_zero_seed(void)
@@ -1883,9 +1973,10 @@ static void test_reuseport_array(void)
 
 static void run_all_tests(void)
 {
-	test_hashmap(0, NULL);
+	/* Test all hash-like map types (HASH, RHASH, etc.) */
+	test_all_hashmaps();
 	test_hashmap_percpu(0, NULL);
-	test_hashmap_walk(0, NULL);
+	test_all_hashmap_walks();
 	test_hashmap_zero_seed();
 
 	test_arraymap(0, NULL);
