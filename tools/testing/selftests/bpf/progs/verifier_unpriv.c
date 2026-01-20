@@ -972,4 +972,27 @@ l0_%=:	exit;						\
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("unpriv: nospec after stack write in helper")
+__success __success_unpriv
+__retval(0)
+#ifdef SPEC_V4
+__xlated_unpriv("call unknown")
+__xlated_unpriv("nospec")
+#endif
+__naked void unpriv_helper_stack_write_nospec_result(void)
+{
+	asm volatile ("					\
+	r2 = 0;						\
+	r3 = r10;					\
+	r3 += -16;					\
+	r4 = 4;						\
+	r5 = 0;						\
+	call %[bpf_skb_load_bytes_relative];		\
+	exit;						\
+"	:
+	: __imm(bpf_skb_load_bytes_relative)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
