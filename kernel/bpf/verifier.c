@@ -21346,6 +21346,12 @@ static struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 of
 	struct bpf_prog *new_prog;
 	struct bpf_insn_aux_data *new_data = NULL;
 
+	if (verifier_bug_if(bpf_is_ldimm64(env->prog->insnsi + off) &&
+			    !bpf_is_ldimm64(patch + len - 1) , env,
+			    "patch would break 16-byte instruction (ldimm64)")) {
+		return NULL;
+	}
+
 	if (len > 1) {
 		new_data = vrealloc(env->insn_aux_data,
 				    array_size(env->prog->len + len - 1,
@@ -21930,7 +21936,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			   env->insn_aux_data[i + delta].ptr_type == PTR_TO_ARENA) {
 			insn->code = BPF_STX | BPF_PROBE_ATOMIC | BPF_SIZE(insn->code);
 			env->prog->aux->num_exentries++;
-			continue;
+			goto keep_insn;
 		} else if (insn->code == (BPF_JMP | BPF_EXIT) &&
 			   epilogue_cnt &&
 			   i + delta < subprogs[1].start) {
@@ -21951,33 +21957,13 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 			}
 			goto patch_insn_buf;
 		} else {
-			continue;
-		}
-
-		if (type == BPF_WRITE &&
-		    env->insn_aux_data[i + delta].nospec_result) {
-			/* nospec_result is only used to mitigate Spectre v4 and
-			 * to limit verification-time for Spectre v1.
-			 */
-			struct bpf_insn *patch = insn_buf;
-
-			*patch++ = *insn;
-			*patch++ = BPF_ST_NOSPEC();
-			cnt = patch - insn_buf;
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
-			if (!new_prog)
-				return -ENOMEM;
-
-			delta    += cnt - 1;
-			env->prog = new_prog;
-			insn      = new_prog->insnsi + i + delta;
-			continue;
+			goto keep_insn;
 		}
 
 		switch ((int)env->insn_aux_data[i + delta].ptr_type) {
 		case PTR_TO_CTX:
 			if (!ops->convert_ctx_access)
-				continue;
+				goto keep_insn;
 			convert_ctx_access = ops->convert_ctx_access;
 			break;
 		case PTR_TO_SOCKET:
@@ -22009,7 +21995,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 						     BPF_SIZE((insn)->code);
 				env->prog->aux->num_exentries++;
 			}
-			continue;
+			goto keep_insn;
 		case PTR_TO_ARENA:
 			if (BPF_MODE(insn->code) == BPF_MEMSX) {
 				if (!bpf_jit_supports_insn(insn, true)) {
@@ -22021,9 +22007,9 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 				insn->code = BPF_CLASS(insn->code) | BPF_PROBE_MEM32 | BPF_SIZE(insn->code);
 			}
 			env->prog->aux->num_exentries++;
-			continue;
+			goto keep_insn;
 		default:
-			continue;
+			goto keep_insn;
 		}
 
 		ctx_field_size = env->insn_aux_data[i + delta].ctx_field_size;
@@ -22093,7 +22079,14 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 						       insn->dst_reg, insn->dst_reg,
 						       size * 8, 0);
 
+		goto patch_insn_buf;
+keep_insn:
+		cnt = 0;
+		insn_buf[cnt++] = *insn;
 patch_insn_buf:
+		if (env->insn_aux_data[i + delta].nospec_result)
+			insn_buf[cnt++] = BPF_ST_NOSPEC();
+
 		new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
 		if (!new_prog)
 			return -ENOMEM;
