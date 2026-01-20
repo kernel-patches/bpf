@@ -23,6 +23,8 @@ struct bpf_crypto_type {
 	unsigned int (*ivsize)(void *tfm);
 	unsigned int (*statesize)(void *tfm);
 	unsigned int (*digestsize)(void *tfm);
+	unsigned int (*keysize)(void *tfm);
+	unsigned int (*maxsize)(void *tfm);
 	u32 (*get_flags)(void *tfm);
 	struct module *owner;
 	enum bpf_crypto_type_id type_id;

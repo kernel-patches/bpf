@@ -37,6 +37,25 @@ static int bpf_crypto_sig_verify(void *tfm, const u8 *sig, unsigned int sig_len,
 	return crypto_sig_verify(tfm, sig, sig_len, msg, msg_len);
 }
 
+static unsigned int bpf_crypto_sig_keysize(void *tfm)
+{
+	return crypto_sig_keysize(tfm);
+}
+
+static unsigned int bpf_crypto_sig_digestsize(void *tfm)
+{
+	struct sig_alg *alg = crypto_sig_alg(tfm);
+
+	return alg->digest_size ? alg->digest_size(tfm) : 0;
+}
+
+static unsigned int bpf_crypto_sig_maxsize(void *tfm)
+{
+	struct sig_alg *alg = crypto_sig_alg(tfm);
+
+	return alg->max_size ? alg->max_size(tfm) : 0;
+}
+
 static const struct bpf_crypto_type bpf_crypto_sig_type = {
 	.alloc_tfm	= bpf_crypto_sig_alloc_tfm,
 	.free_tfm	= bpf_crypto_sig_free_tfm,
@@ -44,6 +63,9 @@ static const struct bpf_crypto_type bpf_crypto_sig_type = {
 	.get_flags	= bpf_crypto_sig_get_flags,
 	.setkey		= bpf_crypto_sig_setkey,
 	.verify		= bpf_crypto_sig_verify,
+	.keysize	= bpf_crypto_sig_keysize,
+	.digestsize	= bpf_crypto_sig_digestsize,
+	.maxsize	= bpf_crypto_sig_maxsize,
 	.owner		= THIS_MODULE,
 	.type_id	= BPF_CRYPTO_TYPE_SIG,
 	.name		= "sig",

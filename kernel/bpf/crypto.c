@@ -413,6 +413,117 @@ __bpf_kfunc int bpf_crypto_hash(struct bpf_crypto_ctx *ctx,
 }
 #endif /* CONFIG_CRYPTO_HASH2 */
 
+#if IS_ENABLED(CONFIG_CRYPTO_SIG2)
+/**
+ * bpf_sig_verify() - Verify digital signature using configured context
+ * @ctx:	The crypto context being used. The ctx must be a trusted pointer.
+ * @message:	bpf_dynptr to the message hash to verify. Must be a trusted pointer.
+ * @signature:	bpf_dynptr to the signature. Must be a trusted pointer.
+ *
+ * Verifies a digital signature over a message hash using the public key
+ * configured in the crypto context. Supports any signature algorithm
+ * registered with the crypto subsystem (e.g., ECDSA, RSA).
+ *
+ * Return: 0 on success (valid signature), negative error code on failure.
+ */
+__bpf_kfunc int bpf_sig_verify(struct bpf_crypto_ctx *ctx,
+				 const struct bpf_dynptr *message,
+				 const struct bpf_dynptr *signature)
+{
+	const struct bpf_dynptr_kern *msg_kern = (struct bpf_dynptr_kern *)message;
+	const struct bpf_dynptr_kern *sig_kern = (struct bpf_dynptr_kern *)signature;
+	u64 msg_len, sig_len;
+	const u8 *msg_ptr, *sig_ptr;
+
+	if (ctx->type->type_id != BPF_CRYPTO_TYPE_SIG)
+		return -EINVAL;
+
+	if (!ctx->type->verify)
+		return -EOPNOTSUPP;
+
+	msg_len = __bpf_dynptr_size(msg_kern);
+	sig_len = __bpf_dynptr_size(sig_kern);
+
+	if (msg_len == 0 || msg_len > UINT_MAX)
+		return -EINVAL;
+	if (sig_len == 0 || sig_len > UINT_MAX)
+		return -EINVAL;
+
+	msg_ptr = __bpf_dynptr_data(msg_kern, msg_len);
+	if (!msg_ptr)
+		return -EINVAL;
+
+	sig_ptr = __bpf_dynptr_data(sig_kern, sig_len);
+	if (!sig_ptr)
+		return -EINVAL;
+
+	return ctx->type->verify(ctx->tfm, sig_ptr, sig_len, msg_ptr, msg_len);
+}
+
+/**
+ * bpf_sig_keysize() - Get the key size for signature context
+ * @ctx:	The crypto context being used. The ctx must be a trusted pointer.
+ *
+ * Return: The key size in bytes, or negative error code on failure.
+ */
+__bpf_kfunc int bpf_sig_keysize(struct bpf_crypto_ctx *ctx)
+{
+	if (ctx->type->type_id != BPF_CRYPTO_TYPE_SIG)
+		return -EINVAL;
+
+	if (!ctx->type->keysize)
+		return -EOPNOTSUPP;
+
+	return ctx->type->keysize(ctx->tfm);
+}
+
+/**
+ * bpf_sig_digestsize() - Get the digest size for signature context
+ * @ctx:	The crypto context being used. The ctx must be a trusted pointer.
+ *
+ * Return: The digest size in bytes, or negative error code on failure.
+ */
+__bpf_kfunc int bpf_sig_digestsize(struct bpf_crypto_ctx *ctx)
+{
+	unsigned int size;
+
+	if (ctx->type->type_id != BPF_CRYPTO_TYPE_SIG)
+		return -EINVAL;
+
+	if (!ctx->type->digestsize)
+		return -EOPNOTSUPP;
+
+	size = ctx->type->digestsize(ctx->tfm);
+	if (!size)
+		return -EOPNOTSUPP;
+
+	return size;
+}
+
+/**
+ * bpf_sig_maxsize() - Get the maximum signature size for signature context
+ * @ctx:	The crypto context being used. The ctx must be a trusted pointer.
+ *
+ * Return: The maximum signature size in bytes, or negative error code on failure.
+ */
+__bpf_kfunc int bpf_sig_maxsize(struct bpf_crypto_ctx *ctx)
+{
+	unsigned int size;
+
+	if (ctx->type->type_id != BPF_CRYPTO_TYPE_SIG)
+		return -EINVAL;
+
+	if (!ctx->type->maxsize)
+		return -EOPNOTSUPP;
+
+	size = ctx->type->maxsize(ctx->tfm);
+	if (!size)
+		return -EOPNOTSUPP;
+
+	return size;
+}
+#endif /* CONFIG_CRYPTO_SIG2 */
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(crypt_init_kfunc_btf_ids)
@@ -431,6 +542,12 @@ BTF_ID_FLAGS(func, bpf_crypto_decrypt, KF_RCU)
 BTF_ID_FLAGS(func, bpf_crypto_encrypt, KF_RCU)
 #if IS_ENABLED(CONFIG_CRYPTO_HASH2)
 BTF_ID_FLAGS(func, bpf_crypto_hash, KF_RCU)
+#endif
+#if IS_ENABLED(CONFIG_CRYPTO_SIG2)
+BTF_ID_FLAGS(func, bpf_sig_verify, KF_RCU)
+BTF_ID_FLAGS(func, bpf_sig_keysize)
+BTF_ID_FLAGS(func, bpf_sig_digestsize)
+BTF_ID_FLAGS(func, bpf_sig_maxsize)
 #endif
 BTF_KFUNCS_END(crypt_kfunc_btf_ids)
 
