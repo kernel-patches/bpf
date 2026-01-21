@@ -127,4 +127,13 @@ config BPF_JIT_KASAN
 	  automatically enabled if the needed set of KASAN and BPF
 	  configuration options is enabled.
 
+config BPF_VMLINUX_H
+	bool "Generate vmlinux.h"
+	depends on DEBUG_INFO_BTF
+	help
+	  Generate a vmlinux.h based on BTF debug information.
+	  This can be used for CO:RE.
+
+	  If you are unsure how to answer this question, answer N.
+
 endmenu # "BPF subsystem"

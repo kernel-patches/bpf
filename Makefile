@@ -1794,7 +1794,7 @@ CLEAN_FILES += vmlinux.symvers modules-only.symvers \
 	       vmlinux.BTF.inline \
 	       vmlinux.thinlto-index builtin.order \
 	       compile_commands.json rust/test \
-	       rust-project.json .vmlinux.objs .vmlinux.export.c \
+	       rust-project.json .vmlinux.objs .vmlinux.export.c vmlinux.h \
 	       .builtin-dtbs-list .builtin-dtbs.S sbom-*.spdx.json
 
 # Directories & files removed with 'make mrproper'
