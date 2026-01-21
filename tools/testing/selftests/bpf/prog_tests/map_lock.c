@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <test_progs.h>
 #include <network_helpers.h>
+#include "test_map_lock.skel.h"
 
 static void *spin_lock_thread(void *arg)
 {
@@ -89,4 +90,73 @@ void test_map_lock(void)
 			goto close_prog;
 close_prog:
 	bpf_object__close(obj);
+}
+
+struct map_value {
+	struct bpf_spin_lock lock;
+	struct bpf_timer timer;
+	__u64 payload;
+};
+
+static void test_map_lock_update_elem(enum bpf_map_type map_type, int err_exist)
+{
+	struct map_value val = {};
+	struct test_map_lock *skel;
+	int prog_fd, err;
+	u32 key = 0;
+	char buff[128] = {};
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		    .data_in = buff,
+		    .data_size_in = sizeof(buff),
+		    .repeat = 1,
+	);
+
+	skel = test_map_lock__open();
+	if (!ASSERT_OK_PTR(skel, "test_map_lock__open"))
+		return;
+
+	bpf_map__set_type(skel->maps.map, map_type);
+
+	err = test_map_lock__load(skel);
+	if (!ASSERT_OK(err, "test_map_lock__load"))
+		goto out;
+
+	err = bpf_map__update_elem(skel->maps.map, &key, sizeof(key), &val, sizeof(val),
+				   BPF_NOEXIST | BPF_EXIST);
+	if (!ASSERT_EQ(err, -EINVAL, "err_exist"))
+		goto out;
+
+	err = bpf_map__update_elem(skel->maps.map, &key, sizeof(key), &val, sizeof(val),
+				   BPF_F_LOCK);
+	if (!ASSERT_EQ(err, -EOPNOTSUPP, "err_lock"))
+		goto out;
+
+	prog_fd = bpf_program__fd(skel->progs.map_update);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	if (!ASSERT_OK(err, "bpf_prog_test_run_opts"))
+		goto out;
+
+	ASSERT_EQ(skel->bss->err_exist, err_exist, "err_exist");
+	ASSERT_EQ(skel->bss->err_lock, -EOPNOTSUPP, "err_lock");
+
+out:
+	test_map_lock__destroy(skel);
+}
+
+static void test_array_map_lock_update_elem(void)
+{
+	test_map_lock_update_elem(BPF_MAP_TYPE_ARRAY, -EEXIST);
+}
+
+static void test_hash_map_lock_update_elem(void)
+{
+	test_map_lock_update_elem(BPF_MAP_TYPE_HASH, -EINVAL);
+}
+
+void test_map_lock_flag(void)
+{
+	if (test__start_subtest("array_map"))
+		test_array_map_lock_update_elem();
+	if (test__start_subtest("hash_map"))
+		test_hash_map_lock_update_elem();
 }
