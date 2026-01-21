@@ -99,6 +99,11 @@ _package-headers() {
 	cp System.map "${builddir}/System.map"
 	cp .config "${builddir}/.config"
 
+	if _is_enabled CONFIG_BPF_VMLINUX_H; then
+		echo "Installing vmlinux.h..."
+		cp vmlinux.h "${builddir}/vmlinux.h"
+	fi
+
 	echo "Adding symlink..."
 	mkdir -p "${pkgdir}/usr/src"
 	ln -sr "${builddir}" "${pkgdir}/usr/src/${pkgbase}"
