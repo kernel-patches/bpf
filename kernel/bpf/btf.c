@@ -8615,11 +8615,22 @@ static int btf_check_iter_kfuncs(struct btf *btf, const char *func_name,
 	return 0;
 }
 
-static int btf_check_kfunc_protos(struct btf *btf, u32 func_id, u32 func_flags)
+static int btf_check_kfunc_protos(struct btf *btf, u32 func_id, u32 func_flags,
+			const struct module *module)
 {
 	const struct btf_type *func;
 	const char *func_name;
 	int err;
+
+	/* check if there is any duplicated kfunc in vmlinux */
+	if (module) {
+		func = btf_type_by_id(btf_vmlinux, func_id);
+		if (func) {
+			pr_err("kfunc %s is already present in vmlinux\n",
+						btf_name_by_offset(btf_vmlinux, func->name_off));
+			return -EINVAL;
+		}
+	}
 
 	/* any kfunc should be FUNC -> FUNC_PROTO */
 	func = btf_type_by_id(btf, func_id);
@@ -8911,7 +8922,7 @@ static int __register_btf_kfunc_id_set(enum btf_kfunc_hook hook,
 
 	for (i = 0; i < kset->set->cnt; i++) {
 		ret = btf_check_kfunc_protos(btf, btf_relocate_id(btf, kset->set->pairs[i].id),
-					     kset->set->pairs[i].flags);
+					     kset->set->pairs[i].flags, kset->owner);
 		if (ret)
 			goto err_out;
 	}
