@@ -74,10 +74,11 @@ static void map_batch_verify(int *visited, __u32 max_entries,
 	}
 }
 
-void __test_map_lookup_and_delete_batch(bool is_pcpu)
+void __test_map_lookup_and_delete_batch(enum bpf_map_type map_type)
 {
 	__u32 batch, count, total, total_success;
 	typedef BPF_DECLARE_PERCPU(int, value);
+	bool is_pcpu = (map_type == BPF_MAP_TYPE_PERCPU_HASH);
 	int map_fd, *keys, *visited, key;
 	const __u32 max_entries = 10;
 	value pcpu_values[max_entries];
@@ -88,9 +89,13 @@ void __test_map_lookup_and_delete_batch(bool is_pcpu)
 		.elem_flags = 0,
 		.flags = 0,
 	);
+	struct bpf_map_create_opts map_opts = {
+		.sz = sizeof(map_opts),
+		.map_flags = (map_type == BPF_MAP_TYPE_RHASH) ? BPF_F_NO_PREALLOC : 0,
+	};
 
-	map_fd = bpf_map_create(is_pcpu ? BPF_MAP_TYPE_PERCPU_HASH : BPF_MAP_TYPE_HASH,
-				"hash_map", sizeof(int), sizeof(int), max_entries, NULL);
+	map_fd = bpf_map_create(map_type, "hash_map", sizeof(int), sizeof(int),
+				max_entries, &map_opts);
 	CHECK(map_fd == -1,
 	      "bpf_map_create()", "error:%s\n", strerror(errno));
 
@@ -261,13 +266,19 @@ void __test_map_lookup_and_delete_batch(bool is_pcpu)
 
 void htab_map_batch_ops(void)
 {
-	__test_map_lookup_and_delete_batch(false);
+	__test_map_lookup_and_delete_batch(BPF_MAP_TYPE_HASH);
 	printf("test_%s:PASS\n", __func__);
 }
 
 void htab_percpu_map_batch_ops(void)
 {
-	__test_map_lookup_and_delete_batch(true);
+	__test_map_lookup_and_delete_batch(BPF_MAP_TYPE_PERCPU_HASH);
+	printf("test_%s:PASS\n", __func__);
+}
+
+void rhtab_map_batch_ops(void)
+{
+	__test_map_lookup_and_delete_batch(BPF_MAP_TYPE_RHASH);
 	printf("test_%s:PASS\n", __func__);
 }
 
@@ -275,4 +286,5 @@ void test_htab_map_batch_ops(void)
 {
 	htab_map_batch_ops();
 	htab_percpu_map_batch_ops();
+	rhtab_map_batch_ops();
 }
