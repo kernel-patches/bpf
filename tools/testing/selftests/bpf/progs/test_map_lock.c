@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2019 Facebook
-#include <linux/bpf.h>
+#include "vmlinux.h"
 #include <linux/version.h>
 #include <bpf/bpf_helpers.h>
 
@@ -59,4 +59,33 @@ int bpf_map_lock_test(struct __sk_buff *skb)
 err:
 	return err;
 }
+
+int err_exist;
+int err_lock;
+
+struct map_value {
+	struct bpf_spin_lock lock;
+	struct bpf_timer timer;
+	__u64 payload;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__type(key, u32);
+	__type(value, struct map_value);
+	__uint(max_entries, 1);
+} map SEC(".maps");
+
+SEC("tc")
+int map_update(struct __sk_buff *skb)
+{
+	struct map_value val = {};
+	u32 key = 0;
+
+	val.payload = 0xDEADBEEF;
+	err_exist = bpf_map_update_elem(&map, &key, &val, BPF_NOEXIST | BPF_EXIST);
+	err_lock = bpf_map_update_elem(&map, &key, &val, BPF_F_LOCK);
+	return BPF_OK;
+}
+
 char _license[] SEC("license") = "GPL";
