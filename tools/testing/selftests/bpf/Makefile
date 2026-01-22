@@ -917,7 +917,19 @@ override define INSTALL_RULE
 endef
 
 test_libarena: $(INCLUDE_DIR)/vmlinux.h $(BPFOBJ)
-	+$(MAKE) -C libarena all \
+	+$(MAKE) -C libarena $@ \
+		BPFTOOL="$(BPFTOOL)" \
+		INCLUDE_DIR="$(HOST_INCLUDE_DIR)" \
+		LIBBPF_INCLUDE="$(HOST_INCLUDE_DIR)" \
+		BPFOBJ="$(BPFOBJ)" \
+		LDLIBS="$(LDLIBS)" \
+		CLANG="$(CLANG)" \
+		BPF_CFLAGS="$(BPF_CFLAGS) $(CLANG_CFLAGS)" \
+		BPF_TARGET_ENDIAN="$(BPF_TARGET_ENDIAN)" \
+		Q="$(Q)"
+
+test_libarena_asan: $(INCLUDE_DIR)/vmlinux.h $(BPFOBJ)
+	+$(MAKE) -C libarena $@ \
 		BPFTOOL="$(BPFTOOL)" \
 		INCLUDE_DIR="$(HOST_INCLUDE_DIR)" \
 		LIBBPF_INCLUDE="$(HOST_INCLUDE_DIR)" \

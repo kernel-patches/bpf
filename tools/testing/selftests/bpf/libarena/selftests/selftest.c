@@ -22,8 +22,20 @@
 
 #include "selftest.h"
 
+#include <asan.h>
+
+#ifdef BPF_ARENA_ASAN
+#include "../selftest_asan.skel.h"
+typedef struct selftest_asan selftest;
+#define selftest__open selftest_asan__open
+#define selftest__open_and_load selftest_asan__open_and_load
+#define selftest__load selftest_asan__load
+#define selftest__attach selftest_asan__attach
+#define selftest__destroy selftest_asan__destroy
+#else
 #include "../selftest.skel.h"
 typedef struct selftest selftest;
+#endif
 
 static bool verbose = false;
 static int testno = 1;
@@ -155,6 +167,48 @@ selftest_globals_pages(selftest *skel, size_t arena_all_pages, u64 *globals_page
 	return 0;
 }
 
+#if BPF_ARENA_ASAN
+static int
+selftest_asan_init(selftest *skel)
+{
+	struct bpf_test_run_opts opts;
+	size_t arena_all_pages = 1ULL << 20;
+	struct asan_init_args args;
+	u64 globals_pages;
+	int prog_fd;
+	int ret;
+
+	ret = selftest_globals_pages(skel, arena_all_pages, &globals_pages);
+	if (ret)
+		return ret;
+
+	/* Taken from the arena map header. */
+	args = (struct asan_init_args) {
+		.arena_all_pages = arena_all_pages,
+		.arena_globals_pages = globals_pages,
+	};
+
+	opts = (struct bpf_test_run_opts) {
+		.sz = sizeof(opts),
+		.ctx_in = &args,
+		.ctx_size_in = sizeof(args),
+	};
+
+	prog_fd = bpf_program__fd(skel->progs.asan_init);
+	assert(prog_fd >= 0 && "no program found");
+	return selftest_fd(prog_fd, &opts);
+}
+
+#else /* BPF_ARENA_ASAN */
+
+static int
+selftest_asan_init(selftest *skel)
+{
+	return 0;
+}
+
+#endif /* BPF_ARENA_ASAN */
+
 static int libbpf_print_fn(enum libbpf_print_level level,
 		const char *format, va_list args)
 {
@@ -169,6 +223,10 @@ int run_test(selftest *skel, const struct bpf_program *prog)
 	int ret;
 
 	ret = selftest_arena_alloc_reserve(skel);
+	if (ret)
+		return ret;
+
+	ret = selftest_asan_init(skel);
 	if (ret)
 		return ret;
 
@@ -211,8 +269,17 @@ static void
 banner(const char *progpath)
 {
 	char *name = basename(progpath);
+	bool is_asan;
 
-	printf("=== %s ===\n", "libarena selftests");
+	/* 
+	 * Check if our BPF programs are ASAN-capable by inspecting the prog name.
+	 * Command line arguments are guaranteed to be NULL-terminated, use strlen. 
+	 * Calculate the hardcoded name's length at compile time.
+	 */
+	printf("%s\n", name);
+	is_asan = strlen(name) > (sizeof("selftest") - 1);
+
+	printf("=== %s %s===\n", "libarena selftests", is_asan ? "(asan) " : "");
 }
 
 int main(int argc, char *argv[])
