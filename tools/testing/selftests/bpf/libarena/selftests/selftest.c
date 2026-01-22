@@ -269,6 +269,7 @@ TEST(bump_selftest);
 
 #ifdef BPF_ARENA_ASAN
 TEST(asan_test_bump);
+TEST(asan_test_stack);
 #endif
 
 static void
@@ -316,6 +317,7 @@ int main(int argc, char *argv[])
 
 #ifdef BPF_ARENA_ASAN
 	run_asan_test_bump();
+	run_asan_test_stack();
 #endif
 
 	return 0;
