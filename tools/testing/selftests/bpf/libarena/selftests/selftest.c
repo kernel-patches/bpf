@@ -266,10 +266,12 @@ error:							\
 }
 
 TEST(bump_selftest);
+TEST(buddy_selftest);
 
 #ifdef BPF_ARENA_ASAN
 TEST(asan_test_bump);
 TEST(asan_test_stack);
+TEST(asan_test_buddy);
 #endif
 
 static void
@@ -314,10 +316,12 @@ int main(int argc, char *argv[])
 	libbpf_set_print(libbpf_print_fn);
 
 	run_bump_selftest();
+	run_buddy_selftest();
 
 #ifdef BPF_ARENA_ASAN
 	run_asan_test_bump();
 	run_asan_test_stack();
+	run_asan_test_buddy();
 #endif
 
 	return 0;
