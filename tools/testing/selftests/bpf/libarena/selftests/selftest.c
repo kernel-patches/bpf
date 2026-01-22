@@ -265,6 +265,12 @@ error:							\
 	return ret;					\
 }
 
+TEST(bump_selftest);
+
+#ifdef BPF_ARENA_ASAN
+TEST(asan_test_bump);
+#endif
+
 static void
 banner(const char *progpath)
 {
@@ -305,6 +311,12 @@ int main(int argc, char *argv[])
 	}
 
 	libbpf_set_print(libbpf_print_fn);
+
+	run_bump_selftest();
+
+#ifdef BPF_ARENA_ASAN
+	run_asan_test_bump();
+#endif
 
 	return 0;
 }
