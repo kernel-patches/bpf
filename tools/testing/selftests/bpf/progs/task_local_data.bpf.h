@@ -80,8 +80,8 @@ struct tld_metadata {
 };
 
 struct tld_meta_u {
-	__u8 cnt;
-	__u16 size;
+	__u16 cnt;
+	__u32 size;
 	struct tld_metadata metadata[TLD_MAX_DATA_CNT];
 };
 
