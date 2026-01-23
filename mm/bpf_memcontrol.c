@@ -213,6 +213,7 @@ void memcontrol_bpf_online(struct mem_cgroup *memcg)
 		goto out;
 
 	WRITE_ONCE(memcg->bpf_ops, ops);
+	memcg->bpf_ops_flags = parent_memcg->bpf_ops_flags;
 
 	/*
 	 * If the BPF program implements it, call the online handler to
@@ -340,29 +341,6 @@ static int bpf_memcg_ops_init_member(const struct btf_type *t,
 	return 0;
 }
 
-/**
- * clean_memcg_bpf_ops - Detach BPF programs from a cgroup hierarchy.
- * @memcg: The root of the cgroup hierarchy to clean.
- * @ops:   The specific ops struct to detach. If NULL, detach any ops.
- *
- * Iterates through all descendant cgroups of @memcg (including itself)
- * and clears their bpf_ops pointer. This is used when a BPF program
- * is detached or if attachment fails midway.
- */
-static void clean_memcg_bpf_ops(struct mem_cgroup *memcg,
-				struct memcg_bpf_ops *ops)
-{
-	struct mem_cgroup *iter = NULL;
-
-	while ((iter = mem_cgroup_iter(memcg, iter, NULL))) {
-		if (ops) {
-			if (!WARN_ON(READ_ONCE(memcg->bpf_ops) != ops))
-				WRITE_ONCE(memcg->bpf_ops, NULL);
-		} else
-			WRITE_ONCE(iter->bpf_ops, NULL);
-	}
-}
-
 static int bpf_memcg_ops_reg(void *kdata, struct bpf_link *link)
 {
 	struct bpf_struct_ops_link *ops_link
@@ -371,21 +349,44 @@ static int bpf_memcg_ops_reg(void *kdata, struct bpf_link *link)
 	struct mem_cgroup *memcg, *iter = NULL;
 	int err = 0;
 
+	if (ops_link->flags & ~BPF_F_ALLOW_OVERRIDE) {
+		pr_err("attach only support BPF_F_ALLOW_OVERRIDE\n");
+		return -EOPNOTSUPP;
+	}
+
 	memcg = mem_cgroup_get_from_ino(ops_link->cgroup_id);
 	if (IS_ERR_OR_NULL(memcg))
 		return PTR_ERR(memcg);
 
 	cgroup_lock();
+
+	if (READ_ONCE(memcg->bpf_ops)) {
+		/* Check if bpf_ops of the parent is BPF_F_ALLOW_OVERRIDE. */
+		if (memcg->bpf_ops_flags & BPF_F_ALLOW_OVERRIDE) {
+			iter = parent_mem_cgroup(memcg);
+
+			if (!iter)
+				goto busy_out;
+			if (READ_ONCE(iter->bpf_ops) !=
+			    READ_ONCE(memcg->bpf_ops))
+				goto busy_out;
+		} else {
+busy_out:
+			err = -EBUSY;
+			goto unlock_out;
+		}
+	}
+
 	while ((iter = mem_cgroup_iter(memcg, iter, NULL))) {
 		if (READ_ONCE(iter->bpf_ops)) {
-			mem_cgroup_iter_break(memcg, iter);
-			err = -EBUSY;
-			break;
+			/* cannot override existing bpf_ops of sub-cgroup. */
+			continue;
 		}
 		WRITE_ONCE(iter->bpf_ops, ops);
+		iter->bpf_ops_flags = ops_link->flags;
 	}
-	if (err)
-		clean_memcg_bpf_ops(memcg, NULL);
+
+unlock_out:
 	cgroup_unlock();
 
 	mem_cgroup_put(memcg);
@@ -399,13 +400,31 @@ static void bpf_memcg_ops_unreg(void *kdata, struct bpf_link *link)
 		= container_of(link, struct bpf_struct_ops_link, link);
 	struct memcg_bpf_ops *ops = kdata;
 	struct mem_cgroup *memcg;
+	struct mem_cgroup *iter;
+	struct memcg_bpf_ops *parent_bpf_ops = NULL;
+	u32 parent_bpf_ops_flags = 0;
 
 	memcg = mem_cgroup_get_from_ino(ops_link->cgroup_id);
 	if (IS_ERR_OR_NULL(memcg))
 		goto out;
 
 	cgroup_lock();
-	clean_memcg_bpf_ops(memcg, ops);
+
+	/* Get the parent bpf_ops and bpf_ops_flags */
+	iter = parent_mem_cgroup(memcg);
+	if (iter) {
+		parent_bpf_ops = READ_ONCE(iter->bpf_ops);
+		parent_bpf_ops_flags = iter->bpf_ops_flags;
+	}
+
+	iter = NULL;
+	while ((iter = mem_cgroup_iter(memcg, iter, NULL))) {
+		if (READ_ONCE(iter->bpf_ops) == ops) {
+			WRITE_ONCE(iter->bpf_ops, parent_bpf_ops);
+			iter->bpf_ops_flags = parent_bpf_ops_flags;
+		}
+	}
+
 	cgroup_unlock();
 
 	mem_cgroup_put(memcg);
