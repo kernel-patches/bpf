@@ -3770,6 +3770,7 @@ static void mark_insn_zext(struct bpf_verifier_env *env,
 	if (def_idx == DEF_NOT_SUBREG)
 		return;
 
+	/* TODO: why -1? */
 	env->insn_aux_data[def_idx - 1].zext_dst = true;
 	/* The dst will be zero extended, so won't be sub-register anymore. */
 	reg->subreg_def = DEF_NOT_SUBREG;
@@ -7642,6 +7643,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		struct bpf_insn_access_aux info = {
 			.reg_type = SCALAR_VALUE,
 			.is_ldsx = is_ldsx,
+			// TODO: does patch_data drop aux for that insn?
 			.log = &env->log,
 		};
 
@@ -15678,6 +15680,8 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 			 * 64-bit operations need to be converted to 32.
 			 */
 			aux->needs_zext = true;
+		/* BUG: this might set needs_zext buf *_patch_data() does not
+		 * set it again for this same insn if insn is rewritten. */
 
 		/* Any arithmetic operations are allowed on arena pointers */
 		return 0;
@@ -22083,13 +22087,49 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 keep_insn:
 		cnt = 0;
 		insn_buf[cnt++] = *insn;
+		/* BUG: This breaks sign extension of ldsx (cpuv4) on big endian
+		 * (s390x). */
 patch_insn_buf:
 		if (env->insn_aux_data[i + delta].nospec_result)
 			insn_buf[cnt++] = BPF_ST_NOSPEC();
 
+		/* TODO: We have to avoid nop rewrites usign
+		 * bpf_patch_insn_data() to set zext_dst in many cases when it
+		 * is not actually required. */
+
+		struct bpf_insn oi = *insn;
+		struct bpf_insn_aux_data oa = env->insn_aux_data[i + delta];
+
+		if (verifier_bug_if(cnt == 1 &&
+				    memcmp(&oi, insn_buf, sizeof(oi)) == 0 &&
+				    memcmp(&oa, &env->insn_aux_data[i + delta], sizeof(oa)) != 0,
+				    env, "check wrong"))
+			return -EFAULT;
+
+
+
 		new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
 		if (!new_prog)
 			return -ENOMEM;
+
+		if (cnt == 1 && memcmp(&oi, insn_buf, sizeof(oi)) == 0) {
+			if (verifier_bug_if(oa.ctx_field_size != env->insn_aux_data[i + delta].ctx_field_size,
+					    env, "patch broke cfs"))
+				return -EFAULT;
+			if (verifier_bug_if(oa.nospec_result != env->insn_aux_data[i + delta].nospec_result,
+					    env, "patch broke nospec_result"))
+				return -EFAULT;
+			if (verifier_bug_if(oa.zext_dst &&
+					    !env->insn_aux_data[i + delta].zext_dst,
+					    env, "patch broke zext_dst %d -> %d (cfs %d -> %d)",
+					    oa.zext_dst, env->insn_aux_data[i + delta].zext_dst,
+					    oa.ctx_field_size, env->insn_aux_data[i + delta].ctx_field_size))
+				return -EFAULT;
+			oa.zext_dst = env->insn_aux_data[i + delta].zext_dst;
+			if (verifier_bug_if(memcmp(&oa, &env->insn_aux_data[i + delta], sizeof(oa)) != 0,
+					    env, "patch broke aux"))
+				return -EFAULT;
+		}
 
 		delta += cnt - 1;
 

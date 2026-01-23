@@ -444,4 +444,20 @@ int dummy_test(void)
 
 #endif
 
+/* Disassembly of section ?fentry/bpf_testmod_test_arg_ptr_to_struct: */
+
+/* 0000000000000000 <test_ptr_struct_arg>: */
+/*    0:	79 11 00 00 00 00 00 00 	ldxdw %r1,[%r1+0] */
+
+/*    8:	61 11 00 00 00 00 00 00 	ldxw %r1,[%r1+0] */
+/*   10:	67 01 00 00 20 00 00 00 	lsh %r1,32 */
+/*   18:	c7 01 00 00 20 00 00 00 	arsh %r1,32 */
+// == ldsxw %r1,[%r1+0]
+/*   20:	18 02 00 00 00 00 00 00 	lddw %r2,0 */
+/*   28:	00 00 00 00 00 00 00 00  */
+/*   30:	7b 12 00 00 00 00 00 00 	stxdw [%r2+0],%r1 */
+/*   38:	b4 00 00 00 00 00 00 00 	mov32 %r0,0 */
+/*   40:	95 00 00 00 00 00 00 00 	exit */
+/* SEC("?fentry/bpf_testmod_test_arg_ptr_to_struct") */
+
 char _license[] SEC("license") = "GPL";
