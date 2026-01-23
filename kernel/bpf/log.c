@@ -863,3 +863,43 @@ void print_insn_state(struct bpf_verifier_env *env, const struct bpf_verifier_st
 	}
 	print_verifier_state(env, vstate, frameno, false);
 }
+
+static int bpf_log_attr_init(struct bpf_log_attr *log_attr, struct bpf_attrs *attrs, u64 log_buf,
+			     u32 log_size, u32 log_level, int offsetof_log_true_size)
+{
+	memset(log_attr, 0, sizeof(*log_attr));
+	log_attr->log_buf = log_buf;
+	log_attr->log_size = log_size;
+	log_attr->log_level = log_level;
+	log_attr->attrs = attrs;
+	log_attr->offsetof_log_true_size = offsetof_log_true_size;
+	return 0;
+}
+
+int bpf_prog_load_log_attr_init(struct bpf_log_attr *log_attr, struct bpf_attrs *attrs)
+{
+	const union bpf_attr *attr = attrs->attr;
+
+	return bpf_log_attr_init(log_attr, attrs, attr->log_buf, attr->log_size, attr->log_level,
+				 offsetof(union bpf_attr, log_true_size));
+}
+
+int bpf_log_attr_finalize(struct bpf_log_attr *log_attr, struct bpf_verifier_log *log)
+{
+	u32 log_true_size, off;
+	size_t size;
+	int err;
+
+	if (!log)
+		return 0;
+
+	err = bpf_vlog_finalize(log, &log_true_size);
+
+	size = sizeof(log_true_size);
+	off = log_attr->offsetof_log_true_size;
+	if (log_attr->attrs && log_attr->attrs->size >= off + size &&
+	    copy_to_bpfptr_offset(log_attr->attrs->uattr, off, &log_true_size, size))
+		err = -EFAULT;
+
+	return err;
+}
