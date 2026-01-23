@@ -181,6 +181,37 @@ struct obj_cgroup {
 	};
 };
 
+#ifdef CONFIG_BPF_SYSCALL
+/**
+ * struct memcg_bpf_ops - BPF callbacks for memory cgroup operations
+ * @handle_cgroup_online: Called when a cgroup comes online
+ * @handle_cgroup_offline: Called when a cgroup goes offline
+ * @below_low: Override memory.low protection check. If this callback returns
+ *             true, mem_cgroup_below_low() will return true immediately without
+ *             performing the standard comparison. If it returns false, the
+ *             original memory.low threshold comparison will proceed normally.
+ * @below_min: Override memory.min protection check. If this callback returns
+ *             true, mem_cgroup_below_min() will return true immediately without
+ *             performing the standard comparison. If it returns false, the
+ *             original memory.min threshold comparison will proceed normally.
+ * @get_high_delay_ms: Return custom throttle delay in milliseconds
+ *
+ * This structure defines the interface for BPF programs to customize
+ * memory cgroup behavior through struct_ops programs.
+ */
+struct memcg_bpf_ops {
+	void (*handle_cgroup_online)(struct mem_cgroup *memcg);
+
+	void (*handle_cgroup_offline)(struct mem_cgroup *memcg);
+
+	bool (*below_low)(struct mem_cgroup *memcg);
+
+	bool (*below_min)(struct mem_cgroup *memcg);
+
+	unsigned int (*get_high_delay_ms)(struct mem_cgroup *memcg);
+};
+#endif /* CONFIG_BPF_SYSCALL */
+
 /*
  * The memory controller data structure. The memory controller controls both
  * page cache and RSS per cgroup. We would eventually like to provide
@@ -320,6 +351,10 @@ struct mem_cgroup {
 	struct list_head event_list;
 	spinlock_t event_list_lock;
 #endif /* CONFIG_MEMCG_V1 */
+
+#ifdef CONFIG_BPF_SYSCALL
+	struct memcg_bpf_ops *bpf_ops;
+#endif
 
 	struct mem_cgroup_per_node *nodeinfo[];
 };
@@ -554,6 +589,66 @@ static inline bool mem_cgroup_disabled(void)
 	return !cgroup_subsys_enabled(memory_cgrp_subsys);
 }
 
+#ifdef CONFIG_BPF_SYSCALL
+
+/* SRCU for protecting concurrent access to memcg->bpf_ops */
+extern struct srcu_struct memcg_bpf_srcu;
+
+/**
+ * BPF_MEMCG_CALL - Safely invoke a BPF memcg callback
+ * @memcg: The memory cgroup
+ * @op: The operation name (struct member)
+ * @default_val: Default return value if no BPF program attached
+ *
+ * This macro safely calls a BPF callback under SRCU protection.
+ */
+#define BPF_MEMCG_CALL(memcg, op, default_val) ({		\
+	typeof(default_val) __ret = (default_val);		\
+	struct memcg_bpf_ops *__ops;				\
+	int __idx;						\
+								\
+	__idx = srcu_read_lock(&memcg_bpf_srcu);		\
+	__ops = READ_ONCE((memcg)->bpf_ops);			\
+	if (__ops && __ops->op)					\
+		__ret = __ops->op(memcg);			\
+	srcu_read_unlock(&memcg_bpf_srcu, __idx);		\
+	__ret;							\
+})
+
+static inline bool bpf_memcg_below_low(struct mem_cgroup *memcg)
+{
+	return BPF_MEMCG_CALL(memcg, below_low, false);
+}
+
+static inline bool bpf_memcg_below_min(struct mem_cgroup *memcg)
+{
+	return BPF_MEMCG_CALL(memcg, below_min, false);
+}
+
+static inline unsigned long bpf_memcg_get_high_delay(struct mem_cgroup *memcg)
+{
+	unsigned int ret;
+
+	ret = BPF_MEMCG_CALL(memcg, get_high_delay_ms, 0U);
+	return msecs_to_jiffies(ret);
+}
+
+#undef BPF_MEMCG_CALL
+
+extern void memcontrol_bpf_online(struct mem_cgroup *memcg);
+extern void memcontrol_bpf_offline(struct mem_cgroup *memcg);
+
+#else /* CONFIG_BPF_SYSCALL */
+
+static inline unsigned long
+bpf_memcg_get_high_delay(struct mem_cgroup *memcg) { return 0 }
+static inline bpf_memcg_below_low(struct mem_cgroup *memcg) { return false }
+static inline bpf_memcg_below_min(struct mem_cgroup *memcg) { return false }
+static inline void memcontrol_bpf_online(struct mem_cgroup *memcg) { }
+static inline void memcontrol_bpf_offline(struct mem_cgroup *memcg) { }
+
+#endif /* CONFIG_BPF_SYSCALL */
+
 static inline void mem_cgroup_protection(struct mem_cgroup *root,
 					 struct mem_cgroup *memcg,
 					 unsigned long *min,
@@ -625,6 +720,9 @@ static inline bool mem_cgroup_below_low(struct mem_cgroup *target,
 	if (mem_cgroup_unprotected(target, memcg))
 		return false;
 
+	if (bpf_memcg_below_low(memcg))
+		return true;
+
 	return READ_ONCE(memcg->memory.elow) >=
 		page_counter_read(&memcg->memory);
 }
@@ -634,6 +732,9 @@ static inline bool mem_cgroup_below_min(struct mem_cgroup *target,
 {
 	if (mem_cgroup_unprotected(target, memcg))
 		return false;
+
+	if (bpf_memcg_below_min(memcg))
+		return true;
 
 	return READ_ONCE(memcg->memory.emin) >=
 		page_counter_read(&memcg->memory);
@@ -909,12 +1010,13 @@ unsigned long mem_cgroup_get_zone_lru_size(struct lruvec *lruvec,
 	return READ_ONCE(mz->lru_zone_size[zone_idx][lru]);
 }
 
-void __mem_cgroup_handle_over_high(gfp_t gfp_mask);
+void __mem_cgroup_handle_over_high(gfp_t gfp_mask,
+				   unsigned long bpf_high_delay);
 
 static inline void mem_cgroup_handle_over_high(gfp_t gfp_mask)
 {
 	if (unlikely(current->memcg_nr_pages_over_high))
-		__mem_cgroup_handle_over_high(gfp_mask);
+		__mem_cgroup_handle_over_high(gfp_mask, 0);
 }
 
 unsigned long mem_cgroup_get_max(struct mem_cgroup *memcg);
