@@ -60,6 +60,15 @@
 		__ret;                                                         \
 	})
 
+#define xpthread_cancel(thread)                                                \
+	({                                                                     \
+		int __ret = pthread_cancel((thread));                          \
+		errno = __ret;                                                 \
+		if (__ret)                                                     \
+			FAIL_ERRNO("pthread_cancel");                          \
+		__ret;                                                         \
+	})
+
 #define xpthread_join(thread, retval)                                          \
 	({                                                                     \
 		int __ret = pthread_join((thread), (retval));                  \
