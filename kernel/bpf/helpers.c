@@ -4384,6 +4384,46 @@ __bpf_kfunc int bpf_dynptr_file_discard(struct bpf_dynptr *dynptr)
 	return 0;
 }
 
+/**
+ * bpf_in_nmi - Test if the current execution context is in NMI context.
+ *
+ * Return: true if we are in NMI context, false otherwise.
+ */
+__bpf_kfunc bool bpf_in_nmi(void)
+{
+	return in_nmi();
+}
+
+/**
+ * bpf_in_hardirq - Test if the current execution context is in hard IRQ context.
+ *
+ * Return: true if we are in hard IRQ context, false otherwise.
+ */
+__bpf_kfunc bool bpf_in_hardirq(void)
+{
+	return in_hardirq();
+}
+
+/**
+ * bpf_in_serving_softirq - Test if the current execution context is in softirq context.
+ *
+ * Return: true if we are in softirq context, false otherwise.
+ */
+__bpf_kfunc bool bpf_in_serving_softirq(void)
+{
+	return in_serving_softirq();
+}
+
+/**
+ * bpf_in_task - Test if the current execution context is in task context.
+ *
+ * Return: true if we are in task context, false otherwise.
+ */
+__bpf_kfunc bool bpf_in_task(void)
+{
+	return in_task();
+}
+
 __bpf_kfunc_end_defs();
 
 static void bpf_task_work_cancel_scheduled(struct irq_work *irq_work)
@@ -4566,6 +4606,10 @@ BTF_ID_FLAGS(func, bpf_task_work_schedule_signal, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_task_work_schedule_resume, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_dynptr_from_file)
 BTF_ID_FLAGS(func, bpf_dynptr_file_discard)
+BTF_ID_FLAGS(func, bpf_in_nmi)
+BTF_ID_FLAGS(func, bpf_in_hardirq)
+BTF_ID_FLAGS(func, bpf_in_serving_softirq)
+BTF_ID_FLAGS(func, bpf_in_task)
 BTF_KFUNCS_END(common_btf_ids)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
