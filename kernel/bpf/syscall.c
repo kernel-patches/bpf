@@ -1780,6 +1780,7 @@ static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 	bpfptr_t uvalue = make_bpfptr(attr->value, uattr.is_kernel);
 	struct bpf_map *map;
 	void *key, *value;
+	u64 allowed_flags;
 	u32 value_size;
 	int err;
 
@@ -1796,7 +1797,8 @@ static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 		goto err_put;
 	}
 
-	err = bpf_map_check_op_flags(map, attr->flags, ~0);
+	allowed_flags = BPF_NOEXIST | BPF_EXIST | BPF_F_LOCK | BPF_F_CPU | BPF_F_ALL_CPUS;
+	err = bpf_map_check_op_flags(map, attr->flags, allowed_flags);
 	if (err)
 		goto err_put;
 
