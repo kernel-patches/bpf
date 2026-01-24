@@ -4717,6 +4717,8 @@ F:	crypto/bpf_crypto_shash.c
 F:	crypto/bpf_crypto_skcipher.c
 F:	include/linux/bpf_crypto.h
 F:	kernel/bpf/crypto.c
+F:	tools/testing/selftests/bpf/prog_tests/crypto_hash.c
+F:	tools/testing/selftests/bpf/progs/crypto_hash.c
 
 BPF [DOCUMENTATION] (Related to Standardization)
 R:	David Vernet <void@manifault.com>
