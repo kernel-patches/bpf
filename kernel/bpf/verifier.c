@@ -21900,6 +21900,7 @@ static int convert_ctx_accesses(struct bpf_verifier_env *env)
 
 			*patch++ = BPF_ST_NOSPEC();
 			*patch++ = *insn;
+			/* BUG: this drops aux for this insn */
 			cnt = patch - insn_buf;
 			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
 			if (!new_prog)
