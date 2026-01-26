@@ -1819,9 +1819,9 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 		u8 b2 = 0, b3 = 0;
 		u8 *start_of_ldx;
 		s64 jmp_offset;
+		u8 *func, *ip;
 		s16 insn_off;
 		u8 jmp_cond;
-		u8 *func;
 		int nops;
 
 		if (priv_frame_ptr) {
@@ -2235,8 +2235,9 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 			goto st;
 		case BPF_ST | BPF_MEM | BPF_DW:
 			EMIT2(add_1mod(0x48, dst_reg), 0xC7);
-
-st:			if (is_imm8(insn->off))
+st:
+			/* Emit opcode based on size */
+			if (is_imm8(insn->off))
 				EMIT2(add_1reg(0x40, dst_reg), insn->off);
 			else
 				EMIT1_off32(add_1reg(0x80, dst_reg), insn->off);
@@ -2249,6 +2250,11 @@ st:			if (is_imm8(insn->off))
 		case BPF_STX | BPF_MEM | BPF_H:
 		case BPF_STX | BPF_MEM | BPF_W:
 		case BPF_STX | BPF_MEM | BPF_DW:
+			err = emit_kasan_check(&prog, dst_reg, insn->off,
+					BPF_SIZE(insn->code), true,
+					image, image + addrs[i - 1]);
+			if (err)
+				return err;
 			emit_stx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn->off);
 			break;
 
@@ -2348,6 +2354,7 @@ populate_extable:
 		case BPF_LDX | BPF_PROBE_MEMSX | BPF_H:
 		case BPF_LDX | BPF_PROBE_MEMSX | BPF_W:
 			insn_off = insn->off;
+			ip = image + addrs[i - 1];
 
 			if (BPF_MODE(insn->code) == BPF_PROBE_MEM ||
 			    BPF_MODE(insn->code) == BPF_PROBE_MEMSX) {
@@ -2397,6 +2404,12 @@ populate_extable:
 				/* populate jmp_offset for JAE above to jump to start_of_ldx */
 				start_of_ldx = prog;
 				end_of_jmp[-1] = start_of_ldx - end_of_jmp;
+			} else {
+				err = emit_kasan_check(&prog, src_reg, insn_off,
+						BPF_SIZE(insn->code), false,
+						image, image + addrs[i - 1]);
+				if (err)
+					return err;
 			}
 			if (BPF_MODE(insn->code) == BPF_PROBE_MEMSX ||
 			    BPF_MODE(insn->code) == BPF_MEMSX)
@@ -2459,6 +2472,11 @@ populate_extable:
 			fallthrough;
 		case BPF_STX | BPF_ATOMIC | BPF_W:
 		case BPF_STX | BPF_ATOMIC | BPF_DW:
+			err = emit_kasan_check(&prog, dst_reg, insn->off,
+					BPF_SIZE(insn->code), true,
+					image, image + addrs[i - 1]);
+			if (err)
+				return err;
 			if (insn->imm == (BPF_AND | BPF_FETCH) ||
 			    insn->imm == (BPF_OR | BPF_FETCH) ||
 			    insn->imm == (BPF_XOR | BPF_FETCH)) {
@@ -2529,8 +2547,12 @@ populate_extable:
 			fallthrough;
 		case BPF_STX | BPF_PROBE_ATOMIC | BPF_W:
 		case BPF_STX | BPF_PROBE_ATOMIC | BPF_DW:
+			err = emit_kasan_check(&prog, dst_reg, insn->off,
+					BPF_SIZE(insn->code), true,
+					image, image + addrs[i - 1]);
+			if (err)
+				return err;
 			start_of_ldx = prog;
-
 			if (bpf_atomic_is_load_store(insn))
 				err = emit_atomic_ld_st_index(&prog, insn->imm,
 							      BPF_SIZE(insn->code), dst_reg,
