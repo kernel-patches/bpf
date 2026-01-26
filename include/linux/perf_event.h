@@ -57,6 +57,7 @@
 #include <asm/local.h>
 
 struct perf_callchain_entry {
+	int				rctx;
 	u64				nr;
 	u64				ip[]; /* /proc/sys/kernel/perf_event_max_stack */
 };
@@ -1723,8 +1724,8 @@ get_perf_callchain(struct pt_regs *regs, bool kernel, bool user,
 		   u32 max_stack, bool crosstask, bool add_mark, u64 defer_cookie);
 extern int get_callchain_buffers(int max_stack);
 extern void put_callchain_buffers(void);
-extern struct perf_callchain_entry *get_callchain_entry(int *rctx);
-extern void put_callchain_entry(int rctx);
+extern struct perf_callchain_entry *get_callchain_entry(void);
+extern void put_callchain_entry(struct perf_callchain_entry *entry);
 
 extern int sysctl_perf_event_max_stack;
 extern int sysctl_perf_event_max_contexts_per_stack;

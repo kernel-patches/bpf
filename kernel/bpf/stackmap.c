@@ -214,9 +214,8 @@ get_callchain_entry_for_task(struct task_struct *task, u32 max_depth)
 {
 #ifdef CONFIG_STACKTRACE
 	struct perf_callchain_entry *entry;
-	int rctx;
 
-	entry = get_callchain_entry(&rctx);
+	entry = get_callchain_entry();
 
 	if (!entry)
 		return NULL;
@@ -238,7 +237,7 @@ get_callchain_entry_for_task(struct task_struct *task, u32 max_depth)
 			to[i] = (u64)(from[i]);
 	}
 
-	put_callchain_entry(rctx);
+	put_callchain_entry(entry);
 
 	return entry;
 #else /* CONFIG_STACKTRACE */

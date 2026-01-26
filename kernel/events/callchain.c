@@ -151,31 +151,36 @@ void put_callchain_buffers(void)
 	}
 }
 
-struct perf_callchain_entry *get_callchain_entry(int *rctx)
+struct perf_callchain_entry *get_callchain_entry(void)
 {
 	int cpu;
+	int rctx;
 	struct callchain_cpus_entries *entries;
+	struct perf_callchain_entry *entry;
 
-	*rctx = get_recursion_context(this_cpu_ptr(callchain_recursion));
-	if (*rctx == -1)
+	rctx = get_recursion_context(this_cpu_ptr(callchain_recursion));
+	if (rctx == -1)
 		return NULL;
 
 	entries = rcu_dereference(callchain_cpus_entries);
 	if (!entries) {
-		put_recursion_context(this_cpu_ptr(callchain_recursion), *rctx);
+		put_recursion_context(this_cpu_ptr(callchain_recursion), rctx);
 		return NULL;
 	}
 
 	cpu = smp_processor_id();
 
-	return (((void *)entries->cpu_entries[cpu]) +
-		(*rctx * perf_callchain_entry__sizeof()));
+	entry = ((void *)entries->cpu_entries[cpu]) +
+		(rctx * perf_callchain_entry__sizeof());
+	entry->rctx = rctx;
+
+	return entry;
 }
 
 void
-put_callchain_entry(int rctx)
+put_callchain_entry(struct perf_callchain_entry *entry)
 {
-	put_recursion_context(this_cpu_ptr(callchain_recursion), rctx);
+	put_recursion_context(this_cpu_ptr(callchain_recursion), entry->rctx);
 }
 
 static void fixup_uretprobe_trampoline_entries(struct perf_callchain_entry *entry,
@@ -222,13 +227,13 @@ get_perf_callchain(struct pt_regs *regs, bool kernel, bool user,
 {
 	struct perf_callchain_entry *entry;
 	struct perf_callchain_entry_ctx ctx;
-	int rctx, start_entry_idx;
+	int start_entry_idx;
 
 	/* crosstask is not supported for user stacks */
 	if (crosstask && user && !kernel)
 		return NULL;
 
-	entry = get_callchain_entry(&rctx);
+	entry = get_callchain_entry();
 	if (!entry)
 		return NULL;
 
@@ -272,7 +277,7 @@ get_perf_callchain(struct pt_regs *regs, bool kernel, bool user,
 	}
 
 exit_put:
-	put_callchain_entry(rctx);
+	put_callchain_entry(entry);
 
 	return entry;
 }
