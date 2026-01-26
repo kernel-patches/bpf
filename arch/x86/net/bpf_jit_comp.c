@@ -2237,6 +2237,12 @@ st:			if (is_imm8(insn->off))
 		case BPF_STX | BPF_MEM | BPF_H:
 		case BPF_STX | BPF_MEM | BPF_W:
 		case BPF_STX | BPF_MEM | BPF_DW:
+			if (!bpf_insn_accesses_stack(env, bpf_prog, i)) {
+				err = emit_kasan_check(&prog, dst_reg, insn, i,
+						image + addrs[i - 1]);
+				if (err)
+					return err;
+			}
 			emit_stx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn->off);
 			break;
 
@@ -2385,6 +2391,14 @@ populate_extable:
 				/* populate jmp_offset for JAE above to jump to start_of_ldx */
 				start_of_ldx = prog;
 				end_of_jmp[-1] = start_of_ldx - end_of_jmp;
+			} else {
+				if (!bpf_insn_accesses_stack(env, bpf_prog, i)) {
+					err = emit_kasan_check(
+						&prog, src_reg, insn, i,
+						image + addrs[i - 1]);
+					if (err)
+						return err;
+				}
 			}
 			if (BPF_MODE(insn->code) == BPF_PROBE_MEMSX ||
 			    BPF_MODE(insn->code) == BPF_MEMSX)
@@ -2447,6 +2461,12 @@ populate_extable:
 			fallthrough;
 		case BPF_STX | BPF_ATOMIC | BPF_W:
 		case BPF_STX | BPF_ATOMIC | BPF_DW:
+			if (!bpf_insn_accesses_stack(env, bpf_prog, i)) {
+				err = emit_kasan_check(&prog, dst_reg, insn, i,
+						       image + addrs[i - 1]);
+				if (err)
+					return err;
+			}
 			if (insn->imm == (BPF_AND | BPF_FETCH) ||
 			    insn->imm == (BPF_OR | BPF_FETCH) ||
 			    insn->imm == (BPF_XOR | BPF_FETCH)) {
@@ -2518,7 +2538,6 @@ populate_extable:
 		case BPF_STX | BPF_PROBE_ATOMIC | BPF_W:
 		case BPF_STX | BPF_PROBE_ATOMIC | BPF_DW:
 			start_of_ldx = prog;
-
 			if (bpf_atomic_is_load_store(insn))
 				err = emit_atomic_ld_st_index(&prog, insn->imm,
 							      BPF_SIZE(insn->code), dst_reg,
