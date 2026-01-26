@@ -221,21 +221,15 @@ static void fixup_uretprobe_trampoline_entries(struct perf_callchain_entry *entr
 #endif
 }
 
-struct perf_callchain_entry *
-get_perf_callchain(struct pt_regs *regs, bool kernel, bool user,
-		   u32 max_stack, bool crosstask, bool add_mark, u64 defer_cookie)
+int __get_perf_callchain(struct perf_callchain_entry *entry, struct pt_regs *regs, bool kernel,
+			 bool user, u32 max_stack, bool crosstask, bool add_mark, u64 defer_cookie)
 {
-	struct perf_callchain_entry *entry;
 	struct perf_callchain_entry_ctx ctx;
 	int start_entry_idx;
 
 	/* crosstask is not supported for user stacks */
 	if (crosstask && user && !kernel)
-		return NULL;
-
-	entry = get_callchain_entry();
-	if (!entry)
-		return NULL;
+		return -EINVAL;
 
 	ctx.entry		= entry;
 	ctx.max_stack		= max_stack;
@@ -252,7 +246,7 @@ get_perf_callchain(struct pt_regs *regs, bool kernel, bool user,
 	if (user && !crosstask) {
 		if (!user_mode(regs)) {
 			if (current->flags & (PF_KTHREAD | PF_USER_WORKER))
-				goto exit_put;
+				return 0;
 			regs = task_pt_regs(current);
 		}
 
@@ -265,7 +259,7 @@ get_perf_callchain(struct pt_regs *regs, bool kernel, bool user,
 			 */
 			perf_callchain_store_context(&ctx, PERF_CONTEXT_USER_DEFERRED);
 			perf_callchain_store_context(&ctx, defer_cookie);
-			goto exit_put;
+			return 0;
 		}
 
 		if (add_mark)
@@ -275,9 +269,25 @@ get_perf_callchain(struct pt_regs *regs, bool kernel, bool user,
 		perf_callchain_user(&ctx, regs);
 		fixup_uretprobe_trampoline_entries(entry, start_entry_idx);
 	}
+	return 0;
+}
 
-exit_put:
+struct perf_callchain_entry *
+get_perf_callchain(struct pt_regs *regs, bool kernel, bool user,
+		   u32 max_stack, bool crosstask, bool add_mark, u64 defer_cookie)
+{
+	struct perf_callchain_entry *entry;
+	int ret;
+
+	entry = get_callchain_entry();
+	if (!entry)
+		return NULL;
+
+	ret = __get_perf_callchain(entry, regs, kernel, user, max_stack, crosstask, add_mark,
+				   defer_cookie);
 	put_callchain_entry(entry);
+	if (ret)
+		entry = NULL;
 
 	return entry;
 }
