@@ -423,6 +423,11 @@ int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
 int cgroup_bpf_prog_query(const union bpf_attr *attr,
 			  union bpf_attr __user *uattr);
 
+int cgroup_bpf_attach_struct_ops(struct cgroup *cgrp,
+				 struct bpf_struct_ops_link *link);
+void cgroup_bpf_detach_struct_ops(struct cgroup *cgrp,
+				  struct bpf_struct_ops_link *link);
+
 const struct bpf_func_proto *
 cgroup_common_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog);
 #else
@@ -449,6 +454,17 @@ static inline int cgroup_bpf_link_attach(const union bpf_attr *attr,
 					 struct bpf_prog *prog)
 {
 	return -EINVAL;
+}
+
+static inline int cgroup_bpf_attach_struct_ops(struct cgroup *cgrp,
+					       struct bpf_struct_ops_link *link)
+{
+	return -EINVAL;
+}
+
+static inline void cgroup_bpf_detach_struct_ops(struct cgroup *cgrp,
+						struct bpf_struct_ops_link *link)
+{
 }
 
 static inline int cgroup_bpf_prog_query(const union bpf_attr *attr,
