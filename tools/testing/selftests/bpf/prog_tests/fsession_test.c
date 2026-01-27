@@ -111,7 +111,7 @@ cleanup:
 
 void test_fsession_test(void)
 {
-#if !defined(__x86_64__)
+#if !defined(__x86_64__) && !defined(__aarch64__)
 	test__skip();
 	return;
 #endif
