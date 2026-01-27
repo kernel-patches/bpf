@@ -245,6 +245,19 @@ __bpf_kfunc int bpf_stream_vprintk(int stream_id, const char *fmt__str, const vo
 	return ret;
 }
 
+/* Directly trigger a stack dump from the program. */
+__bpf_kfunc void bpf_stream_print_stack(struct bpf_prog_aux *aux)
+{
+	struct bpf_stream_stage ss;
+	struct bpf_prog *prog;
+
+	prog = aux->main_prog_aux->prog;
+
+	bpf_stream_stage(ss, prog, BPF_STDERR, ({
+		bpf_stream_dump_stack(ss);
+	}));
+}
+
 __bpf_kfunc_end_defs();
 
 /* Added kfunc to common_btf_ids */

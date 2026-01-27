@@ -343,6 +343,8 @@ extern int bpf_stream_vprintk(int stream_id, const char *fmt__str, const void *a
 /* Helper macro to print out debug messages */
 #define bpf_printk(fmt, args...) ___bpf_pick_printk(args)(fmt, ##args)
 
+extern void bpf_stream_print_stack(void) __weak __ksym;
+
 struct bpf_iter_num;
 
 extern int bpf_iter_num_new(struct bpf_iter_num *it, int start, int end) __weak __ksym;
