@@ -864,14 +864,43 @@ void print_insn_state(struct bpf_verifier_env *env, const struct bpf_verifier_st
 	print_verifier_state(env, vstate, frameno, false);
 }
 
-int bpf_log_attr_init(struct bpf_log_attr *log, u64 log_buf, u32 log_size, u32 log_level,
-		      u32 __user *log_true_size)
+static bool bpf_log_attrs_set(u64 log_buf, u32 log_size, u32 log_level)
 {
+	return log_buf && log_size && log_level;
+}
+
+static bool bpf_log_attrs_diff(struct bpf_common_attr *common, u64 log_buf, u32 log_size,
+			       u32 log_level)
+{
+	return bpf_log_attrs_set(log_buf, log_size, log_level) &&
+		bpf_log_attrs_set(common->log_buf, common->log_size, common->log_level) &&
+		(log_buf != common->log_buf || log_size != common->log_size ||
+		 log_level != common->log_level);
+}
+
+int bpf_log_attr_init(struct bpf_log_attr *log, u64 log_buf, u32 log_size, u32 log_level,
+		      u32 __user *log_true_size, struct bpf_common_attr *common, bpfptr_t uattr,
+		      u32 size)
+{
+	if (bpf_log_attrs_diff(common, log_buf, log_size, log_level))
+		return -EINVAL;
+
 	memset(log, 0, sizeof(*log));
 	log->log_buf = u64_to_user_ptr(log_buf);
 	log->log_size = log_size;
 	log->log_level = log_level;
 	log->log_true_size = log_true_size;
+
+	if (!log_buf && common->log_buf) {
+		log->log_buf = u64_to_user_ptr(common->log_buf);
+		log->log_size = common->log_size;
+		log->log_level = common->log_level;
+		if (size >= offsetofend(struct bpf_common_attr, log_true_size))
+			log->log_true_size = uattr.user +
+				offsetof(struct bpf_common_attr, log_true_size);
+		else
+			log->log_true_size = NULL;
+	}
 	return 0;
 }
 
