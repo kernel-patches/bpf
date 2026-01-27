@@ -1421,6 +1421,13 @@ BTF_KFUNCS_START(bpf_declare_oom_kfuncs)
 BTF_ID_FLAGS(func, bpf_out_of_memory, KF_SLEEPABLE)
 BTF_KFUNCS_END(bpf_declare_oom_kfuncs)
 
+BTF_ID_LIST(bpf_oom_trace_ids)
+#ifdef CONFIG_PSI
+BTF_ID(typedef, btf_trace_psi_avgs_work)
+#else
+BTF_ID_UNUSED
+#endif
+
 static int bpf_declare_oom_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
 	if (!btf_id_set8_contains(&bpf_declare_oom_kfuncs, kfunc_id))
@@ -1430,7 +1437,8 @@ static int bpf_declare_oom_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_i
 	    prog->aux->attach_btf_id == bpf_oom_ops_ids[0])
 		return -EACCES;
 
-	if (prog->type == BPF_PROG_TYPE_TRACING)
+	if (prog->type == BPF_PROG_TYPE_TRACING &&
+	    prog->aux->attach_btf_id != bpf_oom_trace_ids[0])
 		return -EACCES;
 
 	return 0;
