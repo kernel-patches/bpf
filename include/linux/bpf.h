@@ -2623,6 +2623,11 @@ static inline bool bpf_bypass_spec_v4(const struct bpf_token *token)
 		bpf_token_capable(token, CAP_PERFMON);
 }
 
+static inline bool bpf_net_capable(void)
+{
+	return capable(CAP_NET_ADMIN) || capable(CAP_SYS_ADMIN);
+}
+
 int bpf_map_new_fd(struct bpf_map *map, int flags);
 int bpf_prog_new_fd(struct bpf_prog *prog);
 

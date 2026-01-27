@@ -340,4 +340,16 @@ static inline bool bpf_mprog_supported(enum bpf_prog_type type)
 		return false;
 	}
 }
+
+#ifdef CONFIG_BPF_SYSCALL
+static inline bool bpf_mprog_detach_empty(enum bpf_prog_type type)
+{
+	switch (type) {
+	case BPF_PROG_TYPE_SCHED_CLS:
+		return bpf_net_capable();
+	default:
+		return false;
+	}
+}
+#endif /* CONFIG_BPF_SYSCALL */
 #endif /* __BPF_MPROG_H */
