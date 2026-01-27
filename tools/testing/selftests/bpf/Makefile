@@ -31,6 +31,7 @@ SAN_CFLAGS	?=
 SAN_LDFLAGS	?= $(SAN_CFLAGS)
 RELEASE		?=
 OPT_FLAGS	?= $(if $(RELEASE),-O2,-O0)
+XXD 		?= $(shell command -v xxd;)
 
 LIBELF_CFLAGS	:= $(shell $(PKG_CONFIG) libelf --cflags 2>/dev/null)
 LIBELF_LIBS	:= $(shell $(PKG_CONFIG) libelf --libs 2>/dev/null || echo -lelf)
@@ -720,9 +721,19 @@ $(VERIFICATION_CERT) $(PRIVATE_KEY): $(VERIFY_SIG_SETUP)
 	$(Q)mkdir -p $(BUILD_DIR)
 	$(Q)$(VERIFY_SIG_SETUP) genkey $(BUILD_DIR)
 
+ifneq ($(XXD),)
 $(VERIFY_SIG_HDR): $(VERIFICATION_CERT)
 	$(Q)ln -fs $< test_progs_verification_cert && \
-	xxd -i test_progs_verification_cert > $@
+	$(XXD) -i test_progs_verification_cert > $@
+else
+# Fallback when xxd is not available: use hexdump to generate C array
+$(VERIFY_SIG_HDR): $(VERIFICATION_CERT)
+	$(Q)ln -fs $< test_progs_verification_cert && \
+	(echo "unsigned char test_progs_verification_cert[] = {"; \
+	 hexdump -v -e '12/1 "  0x%02x," "\n"' test_progs_verification_cert | sed 's/0x  ,//g; $$s/,$$//'; \
+	 echo "};"; \
+	 echo "unsigned int test_progs_verification_cert_len = $$(wc -c < test_progs_verification_cert);") > $@
+endif
 
 # Define test_progs test runner.
 TRUNNER_TESTS_DIR := prog_tests
