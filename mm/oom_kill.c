@@ -45,6 +45,7 @@
 #include <linux/mmu_notifier.h>
 #include <linux/cred.h>
 #include <linux/nmi.h>
+#include <linux/bpf_oom.h>
 
 #include <asm/tlb.h>
 #include "internal.h"
@@ -245,6 +246,15 @@ static const char * const oom_constraint_text[] = {
 	[CONSTRAINT_MEMORY_POLICY] = "CONSTRAINT_MEMORY_POLICY",
 	[CONSTRAINT_MEMCG] = "CONSTRAINT_MEMCG",
 };
+
+static const char *oom_handler_name(struct oom_control *oc)
+{
+#ifdef CONFIG_BPF_SYSCALL
+	if (oc->bpf_handler_name)
+		return oc->bpf_handler_name;
+#endif
+	return NULL;
+}
 
 /*
  * Determine the type of allocation constraint.
@@ -461,6 +471,8 @@ static void dump_header(struct oom_control *oc)
 	pr_warn("%s invoked oom-killer: gfp_mask=%#x(%pGg), order=%d, oom_score_adj=%hd\n",
 		current->comm, oc->gfp_mask, &oc->gfp_mask, oc->order,
 			current->signal->oom_score_adj);
+	if (oom_handler_name(oc))
+		pr_warn("oom bpf handler: %s\n", oom_handler_name(oc));
 	if (!IS_ENABLED(CONFIG_COMPACTION) && oc->order)
 		pr_warn("COMPACTION is disabled!!!\n");
 
@@ -1167,6 +1179,13 @@ bool out_of_memory(struct oom_control *oc)
 		oom_kill_process(oc, "Out of memory (oom_kill_allocating_task)");
 		return true;
 	}
+
+	/*
+	 * Let bpf handle the OOM first. If it was able to free up some memory,
+	 * bail out. Otherwise fall back to the kernel OOM killer.
+	 */
+	if (bpf_handle_oom(oc))
+		return true;
 
 	select_bad_process(oc);
 	/* Found nothing?!?! */

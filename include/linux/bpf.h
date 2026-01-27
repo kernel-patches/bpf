@@ -3944,6 +3944,7 @@ static inline bool bpf_is_subprog(const struct bpf_prog *prog)
 int bpf_prog_get_file_line(struct bpf_prog *prog, unsigned long ip, const char **filep,
 			   const char **linep, int *nump);
 struct bpf_prog *bpf_prog_find_from_stack(void);
+void *bpf_struct_ops_data(struct bpf_map *map);
 
 int bpf_insn_array_init(struct bpf_map *map, const struct bpf_prog *prog);
 int bpf_insn_array_ready(struct bpf_map *map);

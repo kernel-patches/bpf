@@ -4807,7 +4807,9 @@ M:	Shakeel Butt <shakeel.butt@linux.dev>
 L:	bpf@vger.kernel.org
 L:	linux-mm@kvack.org
 S:	Maintained
+F:	include/linux/bpf_oom.h
 F:	mm/bpf_memcontrol.c
+F:	mm/bpf_oom.c
 
 BPF [MISC]
 L:	bpf@vger.kernel.org
