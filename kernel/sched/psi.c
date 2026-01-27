@@ -1124,6 +1124,7 @@ int psi_cgroup_alloc(struct cgroup *cgroup)
 	if (!cgroup->psi)
 		return -ENOMEM;
 
+	cgroup->psi->cgroup_id = cgroup_id(cgroup);
 	cgroup->psi->pcpu = alloc_percpu(struct psi_group_cpu);
 	if (!cgroup->psi->pcpu) {
 		kfree(cgroup->psi);

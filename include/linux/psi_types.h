@@ -159,6 +159,10 @@ struct psi_trigger {
 
 struct psi_group {
 	struct psi_group *parent;
+
+	/* Cgroup id for cgroup PSI, 0 for system PSI */
+	u64 cgroup_id;
+
 	bool enabled;
 
 	/* Protects data used by the aggregator */
