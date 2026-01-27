@@ -49,3 +49,4 @@ verification_cert.h
 *.BTF_ids
 *.BTF.base
 libarena/test_libarena
+libarena/test_libarena_asan
