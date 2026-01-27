@@ -141,6 +141,10 @@
 #include <linux/psi.h>
 #include "sched.h"
 
+#define CREATE_TRACE_POINTS
+#include <trace/events/psi.h>
+#undef CREATE_TRACE_POINTS
+
 static int psi_bug __read_mostly;
 
 DEFINE_STATIC_KEY_FALSE(psi_disabled);
@@ -606,6 +610,8 @@ static void psi_avgs_work(struct work_struct *work)
 		schedule_delayed_work(dwork, nsecs_to_jiffies(
 				group->avg_next_update - now) + 1);
 	}
+
+	trace_psi_avgs_work(group);
 
 	mutex_unlock(&group->avgs_lock);
 }
