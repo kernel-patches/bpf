@@ -921,6 +921,31 @@ int bpf_btf_load_log_attr_init(struct bpf_log_attr *attr_log, union bpf_attr *at
 	return 0;
 }
 
+struct bpf_verifier_log *bpf_log_attr_create_vlog(struct bpf_log_attr *attr_log,
+						  struct bpf_common_attr *common, bpfptr_t uattr,
+						  u32 size)
+{
+	struct bpf_verifier_log *log;
+	int err;
+
+	if (!common->log_buf)
+		return NULL;
+
+	log = kzalloc(sizeof(*log), GFP_KERNEL);
+	if (!log)
+		return ERR_PTR(-ENOMEM);
+
+	err = bpf_vlog_init(log, common->log_level, u64_to_user_ptr(common->log_buf),
+			    common->log_size);
+	if (err) {
+		kfree(log);
+		return ERR_PTR(err);
+	}
+
+	bpf_log_attr_init(attr_log, offsetof(struct bpf_common_attr, log_true_size), uattr, size);
+	return log;
+}
+
 int bpf_log_attr_finalize(struct bpf_log_attr *attr, struct bpf_verifier_log *log)
 {
 	u32 log_true_size;
