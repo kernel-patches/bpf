@@ -8265,6 +8265,22 @@ static int bpf_object_init_progs(struct bpf_object *obj, const struct bpf_object
 		prog->type = prog->sec_def->prog_type;
 		prog->expected_attach_type = prog->sec_def->expected_attach_type;
 
+		/* set BPF_TRACE_UPROBE_MULTI if sec_name matches "u[ret]probe"
+		 * otherwise, leave alone.
+		 */
+		if (kernel_supports(obj, FEAT_UPROBE_MULTI_LINK)) {
+			char *probe_type = NULL;
+			int n;
+
+			n = sscanf(prog->sec_name, "%m[^/]", &probe_type);
+			if (n >= 1)
+				if (!strcmp(probe_type, "uprobe") ||
+				    !strcmp(probe_type, "uretprobe"))
+					prog->expected_attach_type = BPF_TRACE_UPROBE_MULTI;
+
+			free(probe_type);
+		}
+
 		/* sec_def can have custom callback which should be called
 		 * after bpf_program is initialized to adjust its properties
 		 */
@@ -9822,9 +9838,11 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("kprobe+",		KPROBE,	0, SEC_NONE, attach_kprobe),
 	SEC_DEF("uprobe+",		KPROBE,	0, SEC_NONE, attach_uprobe),
 	SEC_DEF("uprobe.s+",		KPROBE,	0, SEC_SLEEPABLE, attach_uprobe),
+	SEC_DEF("uprobe.single+",	KPROBE,	0, SEC_NONE, attach_uprobe),
 	SEC_DEF("kretprobe+",		KPROBE, 0, SEC_NONE, attach_kprobe),
 	SEC_DEF("uretprobe+",		KPROBE, 0, SEC_NONE, attach_uprobe),
 	SEC_DEF("uretprobe.s+",		KPROBE, 0, SEC_SLEEPABLE, attach_uprobe),
+	SEC_DEF("uretprobe.single+",	KPROBE,	0, SEC_NONE, attach_uprobe),
 	SEC_DEF("kprobe.multi+",	KPROBE,	BPF_TRACE_KPROBE_MULTI, SEC_NONE, attach_kprobe_multi),
 	SEC_DEF("kretprobe.multi+",	KPROBE,	BPF_TRACE_KPROBE_MULTI, SEC_NONE, attach_kprobe_multi),
 	SEC_DEF("kprobe.session+",	KPROBE,	BPF_TRACE_KPROBE_SESSION, SEC_NONE, attach_kprobe_session),
@@ -12722,10 +12740,10 @@ err_out:
  */
 static int attach_uprobe(const struct bpf_program *prog, long cookie, struct bpf_link **link)
 {
-	DECLARE_LIBBPF_OPTS(bpf_uprobe_opts, opts);
 	char *probe_type = NULL, *binary_path = NULL, *func_name = NULL, *func_off;
 	int n, c, ret = -EINVAL;
 	long offset = 0;
+	bool is_retprobe;
 
 	*link = NULL;
 
@@ -12752,15 +12770,27 @@ static int attach_uprobe(const struct bpf_program *prog, long cookie, struct bpf
 			else
 				offset = 0;
 		}
-		opts.retprobe = strcmp(probe_type, "uretprobe") == 0 ||
-				strcmp(probe_type, "uretprobe.s") == 0;
-		if (opts.retprobe && offset != 0) {
+		is_retprobe = strcmp(probe_type, "uretprobe") == 0 ||
+			      strcmp(probe_type, "uretprobe.s") == 0;
+		if (is_retprobe && offset != 0) {
 			pr_warn("prog '%s': uretprobes do not support offset specification\n",
 				prog->name);
 			break;
 		}
-		opts.func_name = func_name;
-		*link = bpf_program__attach_uprobe_opts(prog, -1, binary_path, offset, &opts);
+		if (prog->expected_attach_type == BPF_TRACE_UPROBE_MULTI) {
+			DECLARE_LIBBPF_OPTS(bpf_uprobe_multi_opts, opts);
+
+			opts.retprobe = is_retprobe;
+			*link = bpf_program__attach_uprobe_multi(prog, -1, binary_path,
+								 func_name, &opts);
+		} else {
+			DECLARE_LIBBPF_OPTS(bpf_uprobe_opts, opts);
+
+			opts.retprobe = is_retprobe;
+			opts.func_name = func_name;
+			*link = bpf_program__attach_uprobe_opts(prog, -1, binary_path,
+								offset, &opts);
+		}
 		ret = libbpf_get_error(*link);
 		break;
 	default:
