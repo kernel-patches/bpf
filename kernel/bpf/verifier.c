@@ -443,6 +443,29 @@ static bool subprog_is_global(const struct bpf_verifier_env *env, int subprog)
 	return aux && aux[subprog].linkage == BTF_FUNC_GLOBAL;
 }
 
+static bool subprog_is_void(struct bpf_verifier_env *env, int subprog)
+{
+	const struct btf_type *type, *func, *func_proto;
+	const struct btf *btf = env->prog->aux->btf;
+	u32 btf_id;
+
+	btf_id = env->prog->aux->func_info[subprog].type_id;
+
+	func = btf_type_by_id(btf, btf_id);
+	if (verifier_bug_if(!func, env, "btf_id %u not found", btf_id))
+		return false;
+
+	func_proto = btf_type_by_id(btf, func->type);
+	if (verifier_bug_if(!func_proto, env, "btf_id %u not found", func->type))
+		return false;
+
+	type = btf_type_skip_modifiers(btf, func_proto->type, NULL);
+	if (verifier_bug_if(!type, env, "btf_id %u not found", func_proto->type))
+		return false;
+
+	return btf_type_is_void(type);
+}
+
 static const char *subprog_name(const struct bpf_verifier_env *env, int subprog)
 {
 	struct bpf_func_info *info;
@@ -10875,7 +10898,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		subprog_aux(env, subprog)->called = true;
 		clear_caller_saved_regs(env, caller->regs);
 
-		/* All global functions return a 64-bit SCALAR_VALUE */
+		/* All non-void global functions return a 64-bit SCALAR_VALUE. */
 		mark_reg_unknown(env, caller->regs, BPF_REG_0);
 		caller->regs[BPF_REG_0].subreg_def = DEF_NOT_SUBREG;
 
@@ -17786,6 +17809,10 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 		default:
 			break;
 		}
+	} else {
+		/* If this is a void global subprog, there is no return value. */
+		if (subprog_is_global(env, frame->subprogno) && subprog_is_void(env, frame->subprogno))
+			return 0;
 	}
 
 	/* eBPF calling convention is such that R0 is used
