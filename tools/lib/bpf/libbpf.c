@@ -8248,6 +8248,19 @@ static int bpf_object_prepare_progs(struct bpf_object *obj)
 
 	for (i = 0; i < obj->nr_programs; i++) {
 		prog = &obj->programs[i];
+
+		if (kernel_supports(obj, FEAT_UPROBE_MULTI_LINK)) {
+			const char *sec_name = prog->sec_name;
+			/* Here, we filter out for u[ret]probe or "u[ret]probe/" but we leave out anything with an '@'
+			 * in it as uprobe_multi does not support versioned symbols yet, so we don't upgrade.
+			 */
+			if (((strncmp(sec_name, "uprobe", 6) == 0 && (sec_name[6] == '/' || sec_name[6] == '\0')) ||
+			     (strncmp(sec_name, "uretprobe", 9) == 0 && (sec_name[9] == '/' || sec_name[9] == '\0'))) &&
+			    !strchr(sec_name, '@')) {
+				prog->expected_attach_type = BPF_TRACE_UPROBE_MULTI;
+			}
+		}
+
 		err = bpf_object__sanitize_prog(obj, prog);
 		if (err)
 			return err;
@@ -9831,9 +9844,11 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("kprobe+",		KPROBE,	0, SEC_NONE, attach_kprobe),
 	SEC_DEF("uprobe+",		KPROBE,	0, SEC_NONE, attach_uprobe),
 	SEC_DEF("uprobe.s+",		KPROBE,	0, SEC_SLEEPABLE, attach_uprobe),
+	SEC_DEF("uprobe.single+",	KPROBE,	0, SEC_NONE, attach_uprobe),
 	SEC_DEF("kretprobe+",		KPROBE, 0, SEC_NONE, attach_kprobe),
 	SEC_DEF("uretprobe+",		KPROBE, 0, SEC_NONE, attach_uprobe),
 	SEC_DEF("uretprobe.s+",		KPROBE, 0, SEC_SLEEPABLE, attach_uprobe),
+	SEC_DEF("uretprobe.single+",	KPROBE,	0, SEC_NONE, attach_uprobe),
 	SEC_DEF("kprobe.multi+",	KPROBE,	BPF_TRACE_KPROBE_MULTI, SEC_NONE, attach_kprobe_multi),
 	SEC_DEF("kretprobe.multi+",	KPROBE,	BPF_TRACE_KPROBE_MULTI, SEC_NONE, attach_kprobe_multi),
 	SEC_DEF("kprobe.session+",	KPROBE,	BPF_TRACE_KPROBE_SESSION, SEC_NONE, attach_kprobe_session),
@@ -12618,6 +12633,46 @@ bpf_program__attach_uprobe_opts(const struct bpf_program *prog, pid_t pid,
 	if (!OPTS_VALID(opts, bpf_uprobe_opts))
 		return libbpf_err_ptr(-EINVAL);
 
+	/* This provides backwards compatibility to programs using uprobe, but
+	 * have been auto-upgraded to multi uprobe.
+	 */
+	if (prog->expected_attach_type == BPF_TRACE_UPROBE_MULTI) {
+		LIBBPF_OPTS(bpf_uprobe_multi_opts, multi_opts);
+		unsigned long offsets[1] = {func_offset};
+		size_t ref_ctr_off_internal;
+		__u64 bpf_cookie;
+		const char *func_name_internal;
+
+		func_name_internal = OPTS_GET(opts, func_name, NULL);
+		if (func_name_internal) {
+			long sym_off;
+
+			sym_off = elf_find_func_offset_from_file(binary_path, func_name_internal);
+			if (sym_off < 0)
+				return libbpf_err_ptr(sym_off);
+			offsets[0] += sym_off;
+		}
+
+		multi_opts.retprobe = OPTS_GET(opts, retprobe, false);
+		if (offsets[0] || func_name_internal) {
+			multi_opts.offsets = offsets;
+			multi_opts.cnt = 1;
+		}
+		ref_ctr_off_internal = OPTS_GET(opts, ref_ctr_offset, 0);
+		if (ref_ctr_off_internal) {
+			multi_opts.ref_ctr_offsets = &ref_ctr_off_internal;
+			multi_opts.cnt = 1;
+		}
+		bpf_cookie = OPTS_GET(opts, bpf_cookie, 0);
+		if (bpf_cookie) {
+			multi_opts.cookies = &bpf_cookie;
+			multi_opts.cnt = 1;
+		}
+
+		return bpf_program__attach_uprobe_multi(prog, pid, binary_path,
+							NULL, &multi_opts);
+	}
+
 	attach_mode = OPTS_GET(opts, attach_mode, PROBE_ATTACH_MODE_DEFAULT);
 	retprobe = OPTS_GET(opts, retprobe, false);
 	ref_ctr_off = OPTS_GET(opts, ref_ctr_offset, 0);
@@ -12748,10 +12803,10 @@ err_out:
  */
 static int attach_uprobe(const struct bpf_program *prog, long cookie, struct bpf_link **link)
 {
-	DECLARE_LIBBPF_OPTS(bpf_uprobe_opts, opts);
 	char *probe_type = NULL, *binary_path = NULL, *func_name = NULL, *func_off;
 	int n, c, ret = -EINVAL;
 	long offset = 0;
+	bool is_retprobe;
 
 	*link = NULL;
 
@@ -12778,15 +12833,27 @@ static int attach_uprobe(const struct bpf_program *prog, long cookie, struct bpf
 			else
 				offset = 0;
 		}
-		opts.retprobe = strcmp(probe_type, "uretprobe") == 0 ||
-				strcmp(probe_type, "uretprobe.s") == 0;
-		if (opts.retprobe && offset != 0) {
+		is_retprobe = strcmp(probe_type, "uretprobe") == 0 ||
+			      strcmp(probe_type, "uretprobe.s") == 0;
+		if (is_retprobe && offset != 0) {
 			pr_warn("prog '%s': uretprobes do not support offset specification\n",
 				prog->name);
 			break;
 		}
-		opts.func_name = func_name;
-		*link = bpf_program__attach_uprobe_opts(prog, -1, binary_path, offset, &opts);
+		if (prog->expected_attach_type == BPF_TRACE_UPROBE_MULTI) {
+			LIBBPF_OPTS(bpf_uprobe_multi_opts, opts);
+
+			opts.retprobe = is_retprobe;
+			*link = bpf_program__attach_uprobe_multi(prog, -1, binary_path,
+								 func_name, &opts);
+		} else {
+			LIBBPF_OPTS(bpf_uprobe_opts, opts);
+
+			opts.retprobe = is_retprobe;
+			opts.func_name = func_name;
+			*link = bpf_program__attach_uprobe_opts(prog, -1, binary_path,
+								offset, &opts);
+		}
 		ret = libbpf_get_error(*link);
 		break;
 	default:
