@@ -1334,6 +1334,53 @@ __bpf_kfunc int bpf_oom_kill_process(struct oom_control *oc,
 	return 0;
 }
 
+/**
+ * bpf_out_of_memory - declare Out Of Memory state and invoke OOM killer
+ * @memcg__nullable: memcg or NULL for system-wide OOMs
+ * @order: order of page which wasn't allocated
+ * @flags: flags
+ *
+ * Declares the Out Of Memory state and invokes the OOM killer.
+ *
+ * OOM handlers are synchronized using the oom_lock mutex. If wait_on_oom_lock
+ * is true, the function will wait on it. Otherwise it bails out with -EBUSY
+ * if oom_lock is contended.
+ *
+ * Generally it's advised to pass wait_on_oom_lock=false for global OOMs
+ * and wait_on_oom_lock=true for memcg-scoped OOMs.
+ *
+ * Returns 1 if the forward progress was achieved and some memory was freed.
+ * Returns a negative value if an error occurred.
+ */
+__bpf_kfunc int bpf_out_of_memory(struct mem_cgroup *memcg__nullable,
+				  int order, u64 flags)
+{
+	struct oom_control oc = {
+		.memcg = memcg__nullable,
+		.gfp_mask = GFP_KERNEL,
+		.order = order,
+	};
+	int ret;
+
+	if (flags & ~(BPF_OOM_FLAGS_LAST - 1))
+		return -EINVAL;
+
+	if (oc.order < 0 || oc.order > MAX_PAGE_ORDER)
+		return -EINVAL;
+
+	if (flags & BPF_OOM_FLAGS_WAIT_ON_OOM_LOCK) {
+		ret = mutex_lock_killable(&oom_lock);
+		if (ret)
+			return ret;
+	} else if (!mutex_trylock(&oom_lock))
+		return -EBUSY;
+
+	ret = out_of_memory(&oc);
+
+	mutex_unlock(&oom_lock);
+	return ret;
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(bpf_oom_kfuncs)
@@ -1356,14 +1403,48 @@ static const struct btf_kfunc_id_set bpf_oom_kfunc_set = {
 	.filter         = bpf_oom_kfunc_filter,
 };
 
+BTF_KFUNCS_START(bpf_declare_oom_kfuncs)
+BTF_ID_FLAGS(func, bpf_out_of_memory, KF_SLEEPABLE)
+BTF_KFUNCS_END(bpf_declare_oom_kfuncs)
+
+static int bpf_declare_oom_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	if (!btf_id_set8_contains(&bpf_declare_oom_kfuncs, kfunc_id))
+		return 0;
+
+	if (prog->type == BPF_PROG_TYPE_STRUCT_OPS &&
+	    prog->aux->attach_btf_id == bpf_oom_ops_ids[0])
+		return -EACCES;
+
+	if (prog->type == BPF_PROG_TYPE_TRACING)
+		return -EACCES;
+
+	return 0;
+}
+
+static const struct btf_kfunc_id_set bpf_declare_oom_kfunc_set = {
+	.owner          = THIS_MODULE,
+	.set            = &bpf_declare_oom_kfuncs,
+	.filter         = bpf_declare_oom_kfunc_filter,
+};
+
 static int __init bpf_oom_init(void)
 {
 	int err;
 
 	err = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
 					&bpf_oom_kfunc_set);
-	if (err)
-		pr_warn("error while registering bpf oom kfuncs: %d", err);
+	if (err) {
+		pr_warn("error while registering struct_ops bpf oom kfuncs: %d", err);
+		return err;
+	}
+
+	err = register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC,
+					&bpf_declare_oom_kfunc_set);
+	if (err) {
+		pr_warn("error while registering unspec bpf oom kfuncs: %d", err);
+		return err;
+	}
 
 	return err;
 }
