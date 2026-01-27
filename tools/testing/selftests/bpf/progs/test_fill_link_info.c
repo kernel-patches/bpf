@@ -28,7 +28,7 @@ int BPF_PROG(kprobe_run)
 	return 0;
 }
 
-SEC("uprobe")
+SEC("uprobe.single")
 int BPF_PROG(uprobe_run)
 {
 	return 0;
