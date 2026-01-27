@@ -638,7 +638,8 @@ struct bpf_log_attr {
 };
 
 int bpf_prog_load_log_attr_init(struct bpf_log_attr *attr_log, union bpf_attr *attr,
-				bpfptr_t uattr, u32 size);
+				bpfptr_t uattr, u32 size, struct bpf_common_attr *attr_common,
+				bpfptr_t uattr_common, u32 size_common);
 int bpf_log_attr_finalize(struct bpf_log_attr *attr, struct bpf_verifier_log *log);
 
 #define BPF_MAX_SUBPROGS 256
