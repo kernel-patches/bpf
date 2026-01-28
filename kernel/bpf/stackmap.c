@@ -460,9 +460,6 @@ static long __bpf_get_stack(struct pt_regs *regs, struct task_struct *task,
 
 	max_depth = stack_map_calculate_max_depth(size, elem_size, flags);
 
-	if (may_fault)
-		rcu_read_lock(); /* need RCU for perf's callchain below */
-
 	if (trace_in) {
 		trace = trace_in;
 		trace->nr = min_t(u32, trace->nr, max_depth);
@@ -473,11 +470,8 @@ static long __bpf_get_stack(struct pt_regs *regs, struct task_struct *task,
 					   crosstask, false, 0);
 	}
 
-	if (unlikely(!trace) || trace->nr < skip) {
-		if (may_fault)
-			rcu_read_unlock();
+	if (unlikely(!trace) || trace->nr < skip)
 		goto err_fault;
-	}
 
 	trace_nr = trace->nr - skip;
 	copy_len = trace_nr * elem_size;
@@ -492,10 +486,6 @@ static long __bpf_get_stack(struct pt_regs *regs, struct task_struct *task,
 	} else {
 		memcpy(buf, ips, copy_len);
 	}
-
-	/* trace/ips should not be dereferenced after this point */
-	if (may_fault)
-		rcu_read_unlock();
 
 	if (user_build_id)
 		stack_map_get_build_id_offset(buf, trace_nr, user, may_fault);
