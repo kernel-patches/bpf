@@ -5564,6 +5564,11 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 			}
 		} else if (dst_regno >= 0) {
 			/* restore register state from stack */
+			if (env->bpf_capable)
+				/* Ensure stack slot has an ID to build a relation
+				 * with the destination register on fill.
+				 */
+				assign_scalar_id_before_mov(env, reg);
 			copy_register_state(&state->regs[dst_regno], reg);
 			/* mark reg as written since spilled pointer state likely
 			 * has its liveness marks cleared by is_state_visited()
