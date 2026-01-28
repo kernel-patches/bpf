@@ -1,0 +1,28 @@
+From 2a4dffd83945d770fbfbef022f25c3c9ce71b6a5 Mon Sep 17 00:00:00 2001
+From: Ihor Solodrai <ihor.solodrai@linux.dev>
+Date: Tue, 27 Jan 2026 12:27:30 -0800
+Subject: [PATCH] Fix static build of bpftool
+
+Signed-off-by: Ihor Solodrai <ihor.solodrai@linux.dev>
+---
+ tools/bpf/bpftool/Makefile | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/bpf/bpftool/Makefile b/tools/bpf/bpftool/Makefile
+index 5442073a2e42..519ea5cb8ab1 100644
+--- a/tools/bpf/bpftool/Makefile
++++ b/tools/bpf/bpftool/Makefile
+@@ -130,8 +130,8 @@ include $(FEATURES_DUMP)
+ endif
+ endif
+ 
+-LIBS = $(LIBBPF) -lelf -lz -lcrypto
+-LIBS_BOOTSTRAP = $(LIBBPF_BOOTSTRAP) -lelf -lz -lcrypto
++LIBS = $(LIBBPF) -lelf -lcrypto -lz
++LIBS_BOOTSTRAP = $(LIBBPF_BOOTSTRAP) -lelf -lcrypto -lz
+ 
+ ifeq ($(feature-libelf-zstd),1)
+ LIBS += -lzstd
+-- 
+2.52.0
+
