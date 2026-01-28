@@ -97,6 +97,11 @@ RM ?= rm -f
 
 FEATURE_USER = .bpftool
 
+# Set SKIP_LLVM=1 to build bpftool without LLVM dependency. When set,
+# bpftool will fall back to libbfd for JIT disassembly (if available),
+# or build without disassembly support.
+SKIP_LLVM ?=
+
 FEATURE_TESTS := clang-bpf-co-re
 FEATURE_TESTS += llvm
 FEATURE_TESTS += libcap
@@ -150,7 +155,12 @@ all: $(OUTPUT)bpftool
 SRCS := $(wildcard *.c)
 
 ifeq ($(feature-llvm),1)
-  # If LLVM is available, use it for JIT disassembly
+ifneq ($(SKIP_LLVM),1)
+HAS_LLVM := 1
+endif
+endif
+
+ifeq ($(HAS_LLVM),1)
   CFLAGS  += -DHAVE_LLVM_SUPPORT
   LLVM_CONFIG_LIB_COMPONENTS := mcdisassembler all-targets
   # llvm-config always adds -D_GNU_SOURCE, however, it may already be in CFLAGS
