@@ -432,6 +432,44 @@ static const char *btf_type_name(const struct btf *btf, u32 id)
 	return btf_name_by_offset(btf, btf_type_by_id(btf, id)->name_off);
 }
 
+static const char *dynptr_reg_type(enum bpf_reg_type type)
+{
+	if (type & DYNPTR_TYPE_LOCAL)
+		return "dynptr_local_";
+	if (type & DYNPTR_TYPE_RINGBUF)
+		return "dynptr_ringbuf_";
+	if (type & DYNPTR_TYPE_SKB)
+		return "dynptr_skb_";
+	if (type & DYNPTR_TYPE_XDP)
+		return "dynptr_xdp_";
+	if (type & DYNPTR_TYPE_SKB_META)
+		return "dynptr_skb_meta_";
+	if (type & DYNPTR_TYPE_FILE)
+		return "dynptr_file_";
+
+	return "";
+}
+
+static const char *trusted_reg_type(enum bpf_reg_type type)
+{
+	if (type & PTR_TRUSTED)
+		return "trusted_";
+	if (type & PTR_UNTRUSTED)
+		return "untrusted_";
+
+	return "";
+}
+
+static const char *rw_reg_type(enum bpf_reg_type type)
+{
+	if (type & MEM_RDONLY)
+		return "rdonly_";
+	if (type & MEM_WRITE)
+		return "write_";
+
+	return "";
+}
+
 /* string representation of 'enum bpf_reg_type'
  *
  * Note that reg_type_str() can not appear more than once in a single verbose()
@@ -439,7 +477,7 @@ static const char *btf_type_name(const struct btf *btf, u32 id)
  */
 const char *reg_type_str(struct bpf_verifier_env *env, enum bpf_reg_type type)
 {
-	char postfix[16] = {0}, prefix[64] = {0};
+	char postfix[16] = {0}, prefix[128] = {0};
 	static const char * const str[] = {
 		[NOT_INIT]		= "?",
 		[SCALAR_VALUE]		= "scalar",
@@ -473,14 +511,19 @@ const char *reg_type_str(struct bpf_verifier_env *env, enum bpf_reg_type type)
 			strscpy(postfix, "_or_null");
 	}
 
-	snprintf(prefix, sizeof(prefix), "%s%s%s%s%s%s%s",
-		 type & MEM_RDONLY ? "rdonly_" : "",
+	snprintf(prefix, sizeof(prefix), "%s%s%s%s%s%s%s%s%s%s%s%s",
+		 rw_reg_type(type),
+		 trusted_reg_type(type),
+		 dynptr_reg_type(type),
 		 type & MEM_RINGBUF ? "ringbuf_" : "",
 		 type & MEM_USER ? "user_" : "",
 		 type & MEM_PERCPU ? "percpu_" : "",
 		 type & MEM_RCU ? "rcu_" : "",
-		 type & PTR_UNTRUSTED ? "untrusted_" : "",
-		 type & PTR_TRUSTED ? "trusted_" : ""
+		 type & MEM_UNINIT ? "uninit_" : "",
+		 type & MEM_FIXED_SIZE ? "fixed_size_" : "",
+		 type & MEM_ALLOC ? "alloc_" : "",
+		 type & NON_OWN_REF ? "non_own_ref_" : "",
+		 type & MEM_ALIGNED ? "aligned_" : ""
 	);
 
 	snprintf(env->tmp_str_buf, TMP_STR_BUF_LEN, "%s%s%s",
