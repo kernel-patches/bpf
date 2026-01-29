@@ -628,7 +628,7 @@ static inline int get_preempt_count(void)
 #elif defined(bpf_target_arm64)
 	return bpf_get_current_task_btf()->thread_info.preempt.count;
 #endif
-	return 0;
+	return -1;
 }
 
 /* Description
