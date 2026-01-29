@@ -627,6 +627,8 @@ static inline int get_preempt_count(void)
 	return *(int *) bpf_this_cpu_ptr(&__preempt_count);
 #elif defined(bpf_target_arm64)
 	return bpf_get_current_task_btf()->thread_info.preempt.count;
+#elif defined(bpf_target_powerpc)
+	return bpf_get_current_task_btf()->thread_info.preempt_count;
 #endif
 	return 0;
 }
