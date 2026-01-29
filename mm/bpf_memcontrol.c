@@ -186,7 +186,8 @@ static int __init bpf_memcontrol_init(void)
 	err = register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC,
 					&bpf_memcontrol_kfunc_set);
 	if (err)
-		pr_warn("error while registering bpf memcontrol kfuncs: %d", err);
+		pr_warn("error while registering bpf memcontrol kfuncs: %d\n",
+			err);
 
 	return err;
 }
