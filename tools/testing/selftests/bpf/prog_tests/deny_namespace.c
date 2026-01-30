@@ -5,6 +5,7 @@
 #include <sched.h>
 #include "cap_helpers.h"
 #include <stdio.h>
+#include <string.h>
 
 static int wait_for_pid(pid_t pid)
 {
@@ -44,6 +45,36 @@ static int create_user_ns(void)
 	}
 
 	return wait_for_pid(pid);
+}
+
+static bool bpf_lsm_enabled(void)
+{
+	FILE *f;
+	char buf[512];
+	bool enabled = false;
+
+	f = fopen("/sys/kernel/security/lsm", "r");
+	if (!f)
+		return false;
+
+	if (!fgets(buf, sizeof(buf), f)) {
+		fclose(f);
+		return false;
+	}
+	fclose(f);
+
+	buf[strcspn(buf, "\n")] = '\0';
+
+	for (char *saveptr = NULL, *tok = strtok_r(buf, ",", &saveptr);
+		tok;
+		tok = strtok_r(NULL, ",", &saveptr)) {
+		if (!strcmp(tok, "bpf")) {
+			enabled = true;
+			break;
+		}
+	}
+
+	return enabled;
 }
 
 static void test_userns_create_bpf(void)
@@ -87,6 +118,13 @@ void test_deny_namespace(void)
 	skel = test_deny_namespace__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "skel load"))
 		goto close_prog;
+
+	if (!bpf_lsm_enabled()) {
+		printf("%s:SKIP:bpf LSM not enabled (boot with lsm=...,bpf)\n",
+		       __func__);
+		test__skip();
+		goto close_prog;
+	}
 
 	err = test_deny_namespace__attach(skel);
 	if (!ASSERT_OK(err, "attach"))
