@@ -825,6 +825,52 @@ int bpf_get_kallsym(unsigned int symnum, unsigned long *value, char *type,
 	return ret;
 }
 
+int bpf_get_all_kallsyms(struct bpf_ksym_cache_entry **cache_ptr,
+			 unsigned int *count_ptr)
+{
+	struct bpf_ksym_cache_entry *cache;
+	struct bpf_ksym *ksym;
+	unsigned int count = 0;
+	unsigned int i = 0;
+
+	if (!bpf_jit_kallsyms_enabled()) {
+		*cache_ptr = NULL;
+		*count_ptr = 0;
+		return 0;
+	}
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(ksym, &bpf_kallsyms, lnode)
+		count++;
+	rcu_read_unlock();
+
+	if (count == 0) {
+		*cache_ptr = NULL;
+		*count_ptr = 0;
+		return 0;
+	}
+
+	cache = kvmalloc_array(count, sizeof(*cache), GFP_KERNEL);
+	if (!cache)
+		return -ENOMEM;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(ksym, &bpf_kallsyms, lnode) {
+		if (i >= count) {
+			/* List grew since we counted, oh well */
+			break;
+		}
+		strscpy(cache[i].name, ksym->name, KSYM_NAME_LEN);
+		cache[i].value = ksym->start;
+		i++;
+	}
+	rcu_read_unlock();
+
+	*cache_ptr = cache;
+	*count_ptr = i;
+	return 0;
+}
+
 int bpf_jit_add_poke_descriptor(struct bpf_prog *prog,
 				struct bpf_jit_poke_descriptor *poke)
 {

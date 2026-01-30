@@ -566,6 +566,8 @@ struct kallsym_iter {
 	char module_name[MODULE_NAME_LEN];
 	int exported;
 	int show_value;
+	struct bpf_ksym_cache_entry *bpf_cache;
+	unsigned int bpf_cache_count;
 };
 
 static int get_ksymbol_mod(struct kallsym_iter *iter)
@@ -603,11 +605,27 @@ static int get_ksymbol_ftrace_mod(struct kallsym_iter *iter)
 
 static int get_ksymbol_bpf(struct kallsym_iter *iter)
 {
+	unsigned int index = iter->pos - iter->pos_ftrace_mod_end;
 	int ret;
+
+	if (iter->bpf_cache) {
+		if (index >= iter->bpf_cache_count) {
+			iter->pos_bpf_end = iter->pos;
+			return 0;
+		}
+
+		strscpy(iter->module_name, "bpf", MODULE_NAME_LEN);
+		iter->exported = 0;
+		strscpy(iter->name, iter->bpf_cache[index].name, KSYM_NAME_LEN);
+		iter->value = iter->bpf_cache[index].value;
+		iter->type = BPF_SYM_ELF_TYPE;
+
+		return 1;
+	}
 
 	strscpy(iter->module_name, "bpf", MODULE_NAME_LEN);
 	iter->exported = 0;
-	ret = bpf_get_kallsym(iter->pos - iter->pos_ftrace_mod_end,
+	ret = bpf_get_kallsym(index,
 			      &iter->value, &iter->type,
 			      iter->name);
 	if (ret < 0) {
@@ -862,7 +880,19 @@ static int kallsyms_open(struct inode *inode, struct file *file)
 	 * the result here at open time.
 	 */
 	iter->show_value = kallsyms_show_value(file->f_cred);
+
+	bpf_get_all_kallsyms(&iter->bpf_cache, &iter->bpf_cache_count);
+
 	return 0;
+}
+
+static int kallsyms_release(struct inode *inode, struct file *file)
+{
+	struct seq_file *m = file->private_data;
+	struct kallsym_iter *iter = m->private;
+
+	kvfree(iter->bpf_cache);
+	return seq_release_private(inode, file);
 }
 
 #ifdef	CONFIG_KGDB_KDB
@@ -889,7 +919,7 @@ static const struct proc_ops kallsyms_proc_ops = {
 	.proc_open	= kallsyms_open,
 	.proc_read	= seq_read,
 	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release_private,
+	.proc_release	= kallsyms_release,
 };
 
 static int __init kallsyms_init(void)

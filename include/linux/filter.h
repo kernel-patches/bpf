@@ -648,6 +648,11 @@ static inline bool insn_is_cast_user(const struct bpf_insn *insn)
 		offsetof(TYPE, MEMBER);						\
 	})
 
+struct bpf_ksym_cache_entry {
+	unsigned long value;
+	char name[KSYM_NAME_LEN];
+};
+
 /* A struct sock_filter is architecture independent. */
 struct compat_sock_fprog {
 	u16		len;
@@ -1381,6 +1386,9 @@ int __bpf_address_lookup(unsigned long addr, unsigned long *size,
 bool is_bpf_text_address(unsigned long addr);
 int bpf_get_kallsym(unsigned int symnum, unsigned long *value, char *type,
 		    char *sym);
+
+int bpf_get_all_kallsyms(struct bpf_ksym_cache_entry **cache_ptr,
+			 unsigned int *count_ptr);
 struct bpf_prog *bpf_prog_ksym_find(unsigned long addr);
 
 static inline int
@@ -1447,6 +1455,14 @@ static inline int bpf_get_kallsym(unsigned int symnum, unsigned long *value,
 				  char *type, char *sym)
 {
 	return -ERANGE;
+}
+
+static inline int bpf_get_all_kallsyms(struct bpf_ksym_cache_entry **cache_ptr,
+				       unsigned int *count_ptr)
+{
+	*cache_ptr = NULL;
+	*count_ptr = 0;
+	return 0;
 }
 
 static inline struct bpf_prog *bpf_prog_ksym_find(unsigned long addr)
