@@ -100,7 +100,7 @@ long test_##op##_spinlock_##dolock(void *ctx)			\
 	return !!jiffies;					\
 }
 
-#define MSG "call bpf_list_{{(front|back).+}}; R0{{(_w)?}}=ptr_or_null_node_data(id={{[0-9]+}},non_own_ref"
+#define MSG "call bpf_list_{{(front|back).+}}; R0{{(_w)?}}=alloc_non_own_ref_ptr_or_null_node_data(id={{[0-9]+}},non_own_ref"
 TEST_FB(front, true)
 TEST_FB(back, true)
 #undef MSG

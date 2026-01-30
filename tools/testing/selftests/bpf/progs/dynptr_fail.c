@@ -1090,7 +1090,7 @@ int dynptr_read_into_slot(void *ctx)
 
 /* bpf_dynptr_slice()s are read-only and cannot be written to */
 SEC("?tc")
-__failure __msg("R{{[0-9]+}} cannot write into rdonly_mem")
+__failure __msg("R{{[0-9]+}} cannot write into rdonly_dynptr_skb_mem")
 int skb_invalid_slice_write(struct __sk_buff *skb)
 {
 	struct bpf_dynptr ptr;
@@ -1111,7 +1111,7 @@ int skb_invalid_slice_write(struct __sk_buff *skb)
 
 /* bpf_dynptr_slice()s are read-only and cannot be written to */
 SEC("?tc")
-__failure __msg("R{{[0-9]+}} cannot write into rdonly_mem")
+__failure __msg("R{{[0-9]+}} cannot write into rdonly_dynptr_skb_meta_mem")
 int skb_meta_invalid_slice_write(struct __sk_buff *skb)
 {
 	struct bpf_dynptr meta;
