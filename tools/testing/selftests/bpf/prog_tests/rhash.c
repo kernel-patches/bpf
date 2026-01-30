@@ -134,6 +134,181 @@ cleanup:
 	rhash__destroy(skel);
 }
 
+struct iter_thread_args {
+	int map_fd;
+	int stop;
+	int error;
+};
+
+static void *get_next_key_thread(void *arg)
+{
+	struct iter_thread_args *args = arg;
+	int key, next_key;
+	int i = 0;
+
+	for (i = 0; i < 1000; i++) {
+		if (READ_ONCE(args->stop))
+			break;
+
+		if (bpf_map_get_next_key(args->map_fd, NULL, &next_key) != 0) {
+			WRITE_ONCE(args->error, 1);
+			continue;
+		}
+
+		key = next_key;
+		while (bpf_map_get_next_key(args->map_fd, &key, &next_key) == 0)
+			key = next_key;
+	}
+
+	return (void *)0;
+}
+
+static void *modifier_thread(void *arg)
+{
+	struct iter_thread_args *args = arg;
+	int key, value;
+	int i;
+
+	for (i = 0; i < 10000; i++) {
+		if (READ_ONCE(args->stop))
+			break;
+
+		key = i;
+		value = i;
+		if (bpf_map_update_elem(args->map_fd, &key, &value, BPF_ANY))
+			WRITE_ONCE(args->error, 1);
+	}
+
+	return (void *)0;
+}
+
+static void rhash_get_next_key_stress_test(void)
+{
+	struct iter_thread_args args = {};
+	struct rhash *skel;
+	pthread_t iter_threads[2];
+	pthread_t mod_threads[2];
+	int key, value;
+	int err, i;
+	void *ret;
+
+	skel = rhash__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "rhash__open_and_load"))
+		return;
+
+	args.map_fd = bpf_map__fd(skel->maps.rhmap_iter);
+	args.stop = 0;
+	args.error = 0;
+
+	/* Pre-populate map */
+	for (i = 0; i < 50; i++) {
+		key = i;
+		value = i;
+		err = bpf_map_update_elem(args.map_fd, &key, &value, BPF_NOEXIST);
+		if (!ASSERT_OK(err, "initial insert"))
+			goto cleanup;
+	}
+
+	/* Iterator threads */
+	for (i = 0; i < 2; i++)
+		if (!ASSERT_OK(pthread_create(&iter_threads[i], NULL,
+					      &get_next_key_thread, &args),
+			       "pthread_create iter"))
+			goto cleanup;
+
+	/* Modifier threads */
+	for (i = 0; i < 2; i++)
+		if (!ASSERT_OK(pthread_create(&mod_threads[i], NULL,
+					      &modifier_thread, &args),
+			       "pthread_create mod"))
+			goto cleanup;
+
+	/* Wait for modifier threads to finish */
+	for (i = 0; i < 2; i++)
+		pthread_join(mod_threads[i], &ret);
+
+	/* Signal iterator threads to stop */
+	WRITE_ONCE(args.stop, 1);
+
+	/* Wait for iterator threads */
+	for (i = 0; i < 2; i++)
+		if (!ASSERT_OK(pthread_join(iter_threads[i], &ret), "pthread_join iter") ||
+		    !ASSERT_OK((long)ret, "iter thread ret"))
+			goto cleanup;
+
+	ASSERT_EQ(args.error, 0, "no infinite loop");
+
+cleanup:
+	rhash__destroy(skel);
+}
+
+static void iterate_all(int map_fd, int num_elems)
+{
+	int *visited, key, next_key, i, err;
+
+	visited = calloc(num_elems, sizeof(int));
+	if (!ASSERT_TRUE(visited, "calloc"))
+		return;
+	memset(visited, 0, num_elems * sizeof(int));
+
+	for (err = bpf_map_get_next_key(map_fd, NULL, &next_key); err == 0;
+	     err = bpf_map_get_next_key(map_fd, &key, &next_key)) {
+		key = next_key;
+		if (ASSERT_TRUE(key >= 0 && key < num_elems, "key valid"))
+			visited[key] += 1;
+	}
+
+	for (i = 0; i < num_elems; i++)
+		ASSERT_EQ(visited[i], 1, "element visited");
+
+	free(visited);
+}
+
+static void rhash_get_next_key_resize_test(void)
+{
+	struct rhash *skel;
+	int key, next_key, value;
+	int map_fd;
+	int err, i;
+
+	skel = rhash__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "rhash__open_and_load"))
+		return;
+
+	map_fd = bpf_map__fd(skel->maps.rhmap_iter);
+
+	/* Phase 1: small table, no resize - verify completeness */
+	for (i = 0; i < 4; i++) {
+		key = i;
+		value = i;
+		err = bpf_map_update_elem(map_fd, &key, &value, BPF_NOEXIST);
+		if (!ASSERT_OK(err, "insert small"))
+			goto cleanup;
+	}
+	iterate_all(map_fd, 4);
+
+	/* Phase 2: trigger resize by inserting more elements */
+	for (i = 4; i < 100; i++) {
+		key = i;
+		value = i;
+		err = bpf_map_update_elem(map_fd, &key, &value, BPF_NOEXIST);
+		if (!ASSERT_OK(err, "insert resize"))
+			goto cleanup;
+
+		/* Full iteration during resize - verify all code paths are safe */
+		for (err = bpf_map_get_next_key(map_fd, NULL, &next_key); err == 0;
+		     err = bpf_map_get_next_key(map_fd, &key, &next_key)) {
+			key = next_key;
+		}
+	}
+
+	/* Phase 3: after resize settled - verify completeness */
+	iterate_all(map_fd, 100);
+
+cleanup:
+	rhash__destroy(skel);
+}
+
 void test_rhash(void)
 {
 	if (test__start_subtest("test_rhash_lookup_update"))
@@ -159,5 +334,11 @@ void test_rhash(void)
 
 	if (test__start_subtest("test_rhash_spin_lock"))
 		rhash_spin_lock_test();
+
+	if (test__start_subtest("test_rhash_get_next_key_resize"))
+		rhash_get_next_key_resize_test();
+
+	if (test__start_subtest("test_rhash_get_next_key_stress"))
+		rhash_get_next_key_stress_test();
 }
 
