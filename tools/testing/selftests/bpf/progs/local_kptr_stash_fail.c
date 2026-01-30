@@ -40,7 +40,7 @@ struct {
 } some_nodes SEC(".maps");
 
 SEC("tc")
-__failure __msg("invalid kptr access, R2 type=ptr_node_data2 expected=ptr_node_data")
+__failure __msg("invalid kptr access, R2 type=alloc_ptr_node_data2 expected=ptr_node_data")
 long stash_rb_nodes(void *ctx)
 {
 	struct map_value *mapval;

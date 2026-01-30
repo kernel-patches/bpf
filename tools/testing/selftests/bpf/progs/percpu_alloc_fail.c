@@ -60,7 +60,7 @@ int BPF_PROG(test_array_map_1)
 }
 
 SEC("?fentry/bpf_fentry_test1")
-__failure __msg("invalid kptr access, R2 type=percpu_ptr_val2_t expected=ptr_val_t")
+__failure __msg("invalid kptr access, R2 type=percpu_alloc_ptr_val2_t expected=ptr_val_t")
 int BPF_PROG(test_array_map_2)
 {
 	struct val2_t __percpu_kptr *p2;
@@ -84,7 +84,7 @@ int BPF_PROG(test_array_map_2)
 }
 
 SEC("?fentry.s/bpf_fentry_test1")
-__failure __msg("R1 type=scalar expected=percpu_ptr_, percpu_rcu_ptr_, percpu_trusted_ptr_")
+__failure __msg("R1 type=scalar expected=percpu_ptr_, percpu_rcu_ptr_, trusted_percpu_ptr_")
 int BPF_PROG(test_array_map_3)
 {
 	struct val_t __percpu_kptr *p, *p1;
