@@ -8,6 +8,9 @@
 #include "bpf_qdisc_fifo.skel.h"
 #include "bpf_qdisc_fq.skel.h"
 #include "bpf_qdisc_fail__incompl_ops.skel.h"
+#include "bpf_qdisc_fail__invalid_dynptr.skel.h"
+#include "bpf_qdisc_fail__invalid_dynptr_slice.skel.h"
+#include "bpf_qdisc_fail__invalid_dynptr_cross_frame.skel.h"
 
 #define LO_IFINDEX 1
 
@@ -156,6 +159,33 @@ static void test_incompl_ops(void)
 	bpf_qdisc_fail__incompl_ops__destroy(skel);
 }
 
+static void test_invalid_dynptr(void)
+{
+	struct bpf_qdisc_fail__invalid_dynptr *skel;
+
+	skel = bpf_qdisc_fail__invalid_dynptr__open_and_load();
+	if (!ASSERT_ERR_PTR(skel, "bpf_qdisc_fail__invalid_dynptr__open_and_load"))
+		bpf_qdisc_fail__invalid_dynptr__destroy(skel);
+}
+
+static void test_invalid_dynptr_slice(void)
+{
+	struct bpf_qdisc_fail__invalid_dynptr_slice *skel;
+
+	skel = bpf_qdisc_fail__invalid_dynptr_slice__open_and_load();
+	if (!ASSERT_ERR_PTR(skel, "bpf_qdisc_fail__invalid_dynptr_slice__open_and_load"))
+		bpf_qdisc_fail__invalid_dynptr_slice__destroy(skel);
+}
+
+static void test_invalid_dynptr_cross_frame(void)
+{
+	struct bpf_qdisc_fail__invalid_dynptr_cross_frame *skel;
+
+	skel = bpf_qdisc_fail__invalid_dynptr_cross_frame__open_and_load();
+	if (!ASSERT_ERR_PTR(skel, "bpf_qdisc_fail__invalid_dynptr_cross_frame__open_and_load"))
+		bpf_qdisc_fail__invalid_dynptr_cross_frame__destroy(skel);
+}
+
 static int get_default_qdisc(char *qdisc_name)
 {
 	FILE *f;
@@ -223,6 +253,12 @@ void test_ns_bpf_qdisc(void)
 		test_qdisc_attach_to_non_root();
 	if (test__start_subtest("incompl_ops"))
 		test_incompl_ops();
+	if (test__start_subtest("invalid_dynptr"))
+		test_invalid_dynptr();
+	if (test__start_subtest("invalid_dynptr_slice"))
+		test_invalid_dynptr_slice();
+	if (test__start_subtest("invalid_dynptr_cross_frame"))
+		test_invalid_dynptr_cross_frame();
 }
 
 void serial_test_bpf_qdisc_default(void)
