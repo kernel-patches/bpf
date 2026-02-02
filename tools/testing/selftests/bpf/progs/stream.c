@@ -127,12 +127,6 @@ int stream_arena_write_fault(void *ctx)
 	struct bpf_arena *ptr = (void *)&arena;
 	u64 user_vm_start;
 
-	/* Prevent GCC bounds warning: casting &arena to struct bpf_arena *
-	 * triggers bounds checking since the map definition is smaller than struct
-	 * bpf_arena. barrier_var() makes the pointer opaque to GCC, preventing the
-	 * bounds analysis
-	 */
-	barrier_var(ptr);
 	user_vm_start = ptr->user_vm_start;
 	fault_addr = user_vm_start + 0x7fff;
 	bpf_addr_space_cast(user_vm_start, 0, 1);
@@ -161,12 +155,6 @@ int stream_arena_read_fault(void *ctx)
 	struct bpf_arena *ptr = (void *)&arena;
 	u64 user_vm_start;
 
-	/* Prevent GCC bounds warning: casting &arena to struct bpf_arena *
-	 * triggers bounds checking since the map definition is smaller than struct
-	 * bpf_arena. barrier_var() makes the pointer opaque to GCC, preventing the
-	 * bounds analysis
-	 */
-	barrier_var(ptr);
 	user_vm_start = ptr->user_vm_start;
 	fault_addr = user_vm_start + 0x7fff;
 	bpf_addr_space_cast(user_vm_start, 0, 1);

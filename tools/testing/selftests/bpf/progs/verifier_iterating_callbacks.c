@@ -463,7 +463,6 @@ int cond_break1(const void *ctx)
 	for (i = zero; i < ARR_SZ && can_loop; i++)
 		sum += i;
 	for (i = zero; i < ARR_SZ; i++) {
-		barrier_var(i);
 		sum += i + arr[i];
 		cond_break;
 	}
@@ -627,7 +626,6 @@ int test2(const void *ctx)
 	__u64 i;
 
 	for (i = zero; i < ARR_LONG_SZ && can_loop; i++) {
-		barrier_var(i);
 		arr_long[i] = i;
 	}
 	return 0;
@@ -646,7 +644,6 @@ int test3(const void *ctx)
 	__u64 i;
 
 	for (i = zero; i < ARR_LONG_SZ && can_loop; i++) {
-		barrier_var(i);
 		arr_foo[i].a = i;
 		arr_foo[i].b = i;
 	}
@@ -660,7 +657,6 @@ int test4(const void *ctx)
 	long i;
 
 	for (i = zero + ARR_LONG_SZ - 1; i < ARR_LONG_SZ && i >= 0 && can_loop; i--) {
-		barrier_var(i);
 		arr_foo[i].a = i;
 		arr_foo[i].b = i;
 	}

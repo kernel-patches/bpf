@@ -468,10 +468,9 @@ struct read_var_ctx {
 static int read_var_callback(__u64 index, struct read_var_ctx *ctx)
 {
 	/* lose precision info for ctx->payload_off, verifier won't track
-	 * double xor, barrier_var() is needed to force clang keep both xors.
+	 * double xor.
 	 */
 	ctx->payload_off ^= index;
-	barrier_var(ctx->payload_off);
 	ctx->payload_off ^= index;
 	switch (ctx->type) {
 	case READ_INT_VAR:

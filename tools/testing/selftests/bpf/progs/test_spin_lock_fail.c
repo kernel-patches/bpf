@@ -204,7 +204,7 @@ CHECK(innermapval_mapval, &iv->lock, &v->lock);
 __noinline
 int global_subprog(struct __sk_buff *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	if (ctx->protocol)
 		ret += ctx->protocol;
@@ -214,7 +214,7 @@ int global_subprog(struct __sk_buff *ctx)
 __noinline
 static int static_subprog_call_global(struct __sk_buff *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	if (ctx->protocol)
 		return ret;

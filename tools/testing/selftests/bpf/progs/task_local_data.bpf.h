@@ -213,7 +213,6 @@ static int __tld_fetch_key(struct tld_object *tld_obj, const char *name, int i_s
 											\
 		if (likely(_data)) {							\
 			if (likely(off > 0)) {						\
-				barrier_var(off);					\
 				if (likely(off < __PAGE_SIZE - size))			\
 					data = _data + off;				\
 			} else {							\
@@ -224,7 +223,6 @@ static int __tld_fetch_key(struct tld_object *tld_obj, const char *name, int i_s
 					(tld_obj)->key_map->key.off = off;		\
 											\
 					if (likely(off < __PAGE_SIZE - size)) {		\
-						barrier_var(off);			\
 						if (off > 0)				\
 							data = _data + off;		\
 					}						\

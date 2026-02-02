@@ -28,7 +28,7 @@ __success __retval(0)
 int basic_alloc1_nosleep(void *ctx)
 {
 #if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
-	volatile int __arena *page1, *page2, *no_page;
+	int __arena *page1, *page2, *no_page;
 
 	page1 = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
 	if (!page1)
@@ -59,7 +59,7 @@ __success __retval(0)
 int basic_alloc1(void *ctx)
 {
 #if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
-	volatile int __arena *page1, *page2, *no_page, *page3;
+	int __arena *page1, *page2, *no_page, *page3;
 
 	page1 = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
 	if (!page1)
@@ -98,7 +98,7 @@ __success __retval(0)
 int basic_alloc2_nosleep(void *ctx)
 {
 #if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
-	volatile char __arena *page1, *page2, *page3, *page4;
+	char __arena *page1, *page2, *page3, *page4;
 
 	page1 = bpf_arena_alloc_pages(&arena, NULL, 2, NUMA_NO_NODE, 0);
 	if (!page1)
@@ -136,7 +136,7 @@ __success __retval(0)
 int basic_alloc2(void *ctx)
 {
 #if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
-	volatile char __arena *page1, *page2, *page3, *page4;
+	char __arena *page1, *page2, *page3, *page4;
 
 	page1 = bpf_arena_alloc_pages(&arena, NULL, 2, NUMA_NO_NODE, 0);
 	if (!page1)
@@ -178,7 +178,7 @@ __success __retval(0) __log_level(2)
 int basic_alloc3_nosleep(void *ctx)
 {
 	struct bpf_arena___l *ar = (struct bpf_arena___l *)&arena;
-	volatile char __arena *pages;
+	char __arena *pages;
 
 	pages = bpf_arena_alloc_pages(&ar->map, NULL, ar->map.max_entries, NUMA_NO_NODE, 0);
 	if (!pages)
@@ -191,7 +191,7 @@ __success __retval(0) __log_level(2)
 int basic_alloc3(void *ctx)
 {
 	struct bpf_arena___l *ar = (struct bpf_arena___l *)&arena;
-	volatile char __arena *pages;
+	char __arena *pages;
 
 	pages = bpf_arena_alloc_pages(&ar->map, NULL, ar->map.max_entries, NUMA_NO_NODE, 0);
 	if (!pages)

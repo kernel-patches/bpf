@@ -130,7 +130,7 @@ int handle_downsize(void *ctx)
 #else
 #define bpf_core_read_int(dst, sz, src) ({ \
 	/* Prevent "subtraction from stack pointer prohibited" */ \
-	volatile long __off = sizeof(*dst) - (sz); \
+	long __off = sizeof(*dst) - (sz); \
 	bpf_core_read((char *)(dst) + __off, sz, src); \
 })
 #endif

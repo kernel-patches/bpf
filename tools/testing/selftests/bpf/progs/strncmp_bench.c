@@ -37,7 +37,6 @@ int strncmp_no_helper(void *ctx)
 {
 	const char *target_str = target;
 
-	barrier_var(target_str);
 	if (local_strncmp(str, cmp_str_len + 1, target_str) < 0)
 		__sync_add_and_fetch(&hits, 1);
 	return 0;

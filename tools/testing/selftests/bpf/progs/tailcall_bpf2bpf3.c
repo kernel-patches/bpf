@@ -14,7 +14,7 @@ struct {
 __noinline
 int subprog_tail2(struct __sk_buff *skb)
 {
-	volatile char arr[64] = {};
+	char arr[64] = {};
 
 	if (load_word(skb, 0) || load_half(skb, 0))
 		bpf_tail_call_static(skb, &jmp_table, 10);
@@ -29,7 +29,7 @@ int subprog_tail2(struct __sk_buff *skb)
 static __noinline
 int subprog_tail(struct __sk_buff *skb)
 {
-	volatile char arr[64] = {};
+	char arr[64] = {};
 
 	bpf_tail_call_static(skb, &jmp_table, 0);
 
@@ -41,7 +41,7 @@ int subprog_tail(struct __sk_buff *skb)
 SEC("tc")
 int classifier_0(struct __sk_buff *skb)
 {
-	volatile char arr[128] = {};
+	char arr[128] = {};
 
 	__sink(arr[sizeof(arr) - 1]);
 
@@ -51,7 +51,7 @@ int classifier_0(struct __sk_buff *skb)
 SEC("tc")
 int classifier_1(struct __sk_buff *skb)
 {
-	volatile char arr[128] = {};
+	char arr[128] = {};
 
 	__sink(arr[sizeof(arr) - 1]);
 
@@ -61,7 +61,7 @@ int classifier_1(struct __sk_buff *skb)
 SEC("tc")
 int entry(struct __sk_buff *skb)
 {
-	volatile char arr[128] = {};
+	char arr[128] = {};
 
 	__sink(arr[sizeof(arr) - 1]);
 

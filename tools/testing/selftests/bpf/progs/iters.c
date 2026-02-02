@@ -345,7 +345,6 @@ int iter_search_loop(const void *ctx)
 		if (*v == 2) {
 			found = true;
 			elem = v;
-			barrier_var(elem);
 		}
 	}
 

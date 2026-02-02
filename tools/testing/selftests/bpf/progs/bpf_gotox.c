@@ -252,7 +252,7 @@ int one_jump_two_maps(struct simple_ctx *ctx __attribute__((unused)))
 	void *jt2[2] = { &&l3, &&l4 };
 	unsigned int a = ctx->x % 2;
 	unsigned int b = (ctx->x / 2) % 2;
-	volatile int ret = 0;
+	int ret = 0;
 
 	if (!(a < 2 && b < 2))
 		return 19;
@@ -278,7 +278,7 @@ int one_map_two_jumps(struct simple_ctx *ctx __attribute__((unused)))
 	void *jt[3] = { &&l1, &&l2, &&l3 };
 	unsigned int a = (ctx->x >> 2) & 1;
 	unsigned int b = (ctx->x >> 3) & 1;
-	volatile int ret = 0;
+	int ret = 0;
 
 	if (ctx->x % 2)
 		goto *jt[a];

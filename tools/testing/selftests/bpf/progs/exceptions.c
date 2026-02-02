@@ -95,7 +95,7 @@ int exception_tail_call_target(struct __sk_buff *ctx)
 static __noinline
 int exception_tail_call_subprog(struct __sk_buff *ctx)
 {
-	volatile int ret = 10;
+	int ret = 10;
 
 	bpf_tail_call_static(ctx, &jmp_table, 0);
 	return ret;
@@ -103,7 +103,7 @@ int exception_tail_call_subprog(struct __sk_buff *ctx)
 
 SEC("tc")
 int exception_tail_call(struct __sk_buff *ctx) {
-	volatile int ret = 0;
+	int ret = 0;
 
 	ret = exception_tail_call_subprog(ctx);
 	return ret + 8;
@@ -111,7 +111,7 @@ int exception_tail_call(struct __sk_buff *ctx) {
 
 __noinline int exception_ext_global(struct __sk_buff *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	return ret;
 }
@@ -129,7 +129,7 @@ int exception_ext(struct __sk_buff *ctx)
 
 __noinline int exception_cb_mod_global(u64 cookie)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	return ret;
 }
@@ -200,7 +200,7 @@ int exception_throw_subprog(struct __sk_buff *ctx)
 
 __noinline int assert_nz_gfunc(u64 c)
 {
-	volatile u64 cookie = c;
+	u64 cookie = c;
 
 	bpf_assert(cookie != 0);
 	return 0;
@@ -208,7 +208,7 @@ __noinline int assert_nz_gfunc(u64 c)
 
 __noinline int assert_zero_gfunc(u64 c)
 {
-	volatile u64 cookie = c;
+	u64 cookie = c;
 
 	bpf_assert(bpf_cmp_unlikely(cookie, ==, 0));
 	return 0;
@@ -216,7 +216,7 @@ __noinline int assert_zero_gfunc(u64 c)
 
 __noinline int assert_neg_gfunc(s64 c)
 {
-	volatile s64 cookie = c;
+	s64 cookie = c;
 
 	bpf_assert(bpf_cmp_unlikely(cookie, <, 0));
 	return 0;
@@ -224,7 +224,7 @@ __noinline int assert_neg_gfunc(s64 c)
 
 __noinline int assert_pos_gfunc(s64 c)
 {
-	volatile s64 cookie = c;
+	s64 cookie = c;
 
 	bpf_assert(bpf_cmp_unlikely(cookie, >, 0));
 	return 0;
@@ -232,7 +232,7 @@ __noinline int assert_pos_gfunc(s64 c)
 
 __noinline int assert_negeq_gfunc(s64 c)
 {
-	volatile s64 cookie = c;
+	s64 cookie = c;
 
 	bpf_assert(bpf_cmp_unlikely(cookie, <=, -1));
 	return 0;
@@ -240,7 +240,7 @@ __noinline int assert_negeq_gfunc(s64 c)
 
 __noinline int assert_poseq_gfunc(s64 c)
 {
-	volatile s64 cookie = c;
+	s64 cookie = c;
 
 	bpf_assert(bpf_cmp_unlikely(cookie, >=, 1));
 	return 0;
@@ -248,7 +248,7 @@ __noinline int assert_poseq_gfunc(s64 c)
 
 __noinline int assert_nz_gfunc_with(u64 c)
 {
-	volatile u64 cookie = c;
+	u64 cookie = c;
 
 	bpf_assert_with(cookie != 0, cookie + 100);
 	return 0;
@@ -256,7 +256,7 @@ __noinline int assert_nz_gfunc_with(u64 c)
 
 __noinline int assert_zero_gfunc_with(u64 c)
 {
-	volatile u64 cookie = c;
+	u64 cookie = c;
 
 	bpf_assert_with(bpf_cmp_unlikely(cookie, ==, 0), cookie + 100);
 	return 0;
@@ -264,7 +264,7 @@ __noinline int assert_zero_gfunc_with(u64 c)
 
 __noinline int assert_neg_gfunc_with(s64 c)
 {
-	volatile s64 cookie = c;
+	s64 cookie = c;
 
 	bpf_assert_with(bpf_cmp_unlikely(cookie, <, 0), cookie + 100);
 	return 0;
@@ -272,7 +272,7 @@ __noinline int assert_neg_gfunc_with(s64 c)
 
 __noinline int assert_pos_gfunc_with(s64 c)
 {
-	volatile s64 cookie = c;
+	s64 cookie = c;
 
 	bpf_assert_with(bpf_cmp_unlikely(cookie, >, 0), cookie + 100);
 	return 0;
@@ -280,7 +280,7 @@ __noinline int assert_pos_gfunc_with(s64 c)
 
 __noinline int assert_negeq_gfunc_with(s64 c)
 {
-	volatile s64 cookie = c;
+	s64 cookie = c;
 
 	bpf_assert_with(bpf_cmp_unlikely(cookie, <=, -1), cookie + 100);
 	return 0;
@@ -288,7 +288,7 @@ __noinline int assert_negeq_gfunc_with(s64 c)
 
 __noinline int assert_poseq_gfunc_with(s64 c)
 {
-	volatile s64 cookie = c;
+	s64 cookie = c;
 
 	bpf_assert_with(bpf_cmp_unlikely(cookie, >=, 1), cookie + 100);
 	return 0;

@@ -233,10 +233,8 @@ static ino_t get_inode_from_kernfs(struct kernfs_node* node)
 	struct kernfs_node___52* node52 = (void*)node;
 
 	if (bpf_core_field_exists(node52->id.ino)) {
-		barrier_var(node52);
 		return BPF_CORE_READ(node52, id.ino);
 	} else {
-		barrier_var(node);
 		return (u64)BPF_CORE_READ(node, id);
 	}
 }

@@ -25,7 +25,7 @@ static __noinline
 int subprog_tail(struct __sk_buff *skb)
 {
 	/* Don't propagate the constant to the caller */
-	volatile int ret = 1;
+	int ret = 1;
 
 	bpf_tail_call_static(skb, &jmp_table, 0);
 	return ret;
@@ -35,7 +35,7 @@ SEC("tc")
 int entry(struct __sk_buff *skb)
 {
 	/* Have data on stack which size is not a multiple of 8 */
-	volatile char arr[1] = {};
+	char arr[1] = {};
 
 	__sink(arr[0]);
 

@@ -13,9 +13,7 @@
  *
  * Starting with GCC 16 -Wunused-but-set-variable=2 can be used to
  * mimic clang's behavior.  */
-#if !defined(__clang__) && __GNUC__ > 15
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
-#endif
 
 char _license[] SEC("license") = "GPL";
 
@@ -375,7 +373,7 @@ int cross_rcu_region(void *ctx)
 __noinline
 static int static_subprog(void *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	if (bpf_get_prandom_u32())
 		return ret + 42;
@@ -385,7 +383,7 @@ static int static_subprog(void *ctx)
 __noinline
 int global_subprog(u64 a)
 {
-	volatile int ret = a;
+	int ret = a;
 
 	return ret + static_subprog(NULL);
 }
@@ -393,7 +391,7 @@ int global_subprog(u64 a)
 __noinline
 static int static_subprog_lock(void *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	bpf_rcu_read_lock();
 	if (bpf_get_prandom_u32())
@@ -404,7 +402,7 @@ static int static_subprog_lock(void *ctx)
 __noinline
 int global_subprog_lock(u64 a)
 {
-	volatile int ret = a;
+	int ret = a;
 
 	return ret + static_subprog_lock(NULL);
 }
@@ -412,7 +410,7 @@ int global_subprog_lock(u64 a)
 __noinline
 static int static_subprog_unlock(void *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	bpf_rcu_read_unlock();
 	if (bpf_get_prandom_u32())
@@ -423,7 +421,7 @@ static int static_subprog_unlock(void *ctx)
 __noinline
 int global_subprog_unlock(u64 a)
 {
-	volatile int ret = a;
+	int ret = a;
 
 	return ret + static_subprog_unlock(NULL);
 }
@@ -431,7 +429,7 @@ int global_subprog_unlock(u64 a)
 SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
 int rcu_read_lock_subprog(void *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	bpf_rcu_read_lock();
 	if (bpf_get_prandom_u32())
@@ -443,7 +441,7 @@ int rcu_read_lock_subprog(void *ctx)
 SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
 int rcu_read_lock_global_subprog(void *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	bpf_rcu_read_lock();
 	if (bpf_get_prandom_u32())
@@ -455,7 +453,7 @@ int rcu_read_lock_global_subprog(void *ctx)
 SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
 int rcu_read_lock_subprog_lock(void *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	ret += static_subprog_lock(ctx);
 	bpf_rcu_read_unlock();
@@ -465,7 +463,7 @@ int rcu_read_lock_subprog_lock(void *ctx)
 SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
 int rcu_read_lock_global_subprog_lock(void *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	ret += global_subprog_lock(ret);
 	bpf_rcu_read_unlock();
@@ -475,7 +473,7 @@ int rcu_read_lock_global_subprog_lock(void *ctx)
 SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
 int rcu_read_lock_subprog_unlock(void *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	bpf_rcu_read_lock();
 	ret += static_subprog_unlock(ctx);
@@ -485,7 +483,7 @@ int rcu_read_lock_subprog_unlock(void *ctx)
 SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
 int rcu_read_lock_global_subprog_unlock(void *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	bpf_rcu_read_lock();
 	ret += global_subprog_unlock(ret);
@@ -520,7 +518,7 @@ global_subprog_calling_sleepable_global(int i)
 SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
 int rcu_read_lock_sleepable_helper_global_subprog(void *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	bpf_rcu_read_lock();
 	ret += global_sleepable_helper_subprog(ret);
@@ -531,7 +529,7 @@ int rcu_read_lock_sleepable_helper_global_subprog(void *ctx)
 SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
 int rcu_read_lock_sleepable_kfunc_global_subprog(void *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	bpf_rcu_read_lock();
 	ret += global_sleepable_kfunc_subprog(ret);
@@ -542,7 +540,7 @@ int rcu_read_lock_sleepable_kfunc_global_subprog(void *ctx)
 SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
 int rcu_read_lock_sleepable_global_subprog_indirect(void *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	bpf_rcu_read_lock();
 	ret += global_subprog_calling_sleepable_global(ret);

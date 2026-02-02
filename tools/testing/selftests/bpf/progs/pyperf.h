@@ -199,7 +199,6 @@ static int process_frame_callback(__u32 i, struct process_frame_ctx *ctx)
 		if (*symbol_id == new_symbol_id)
 			(*symbol_counter)++;
 
-		barrier_var(i);
 		if (i >= STACK_MAX_LEN)
 			return 1;
 

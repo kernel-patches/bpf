@@ -49,7 +49,7 @@ struct {
 SEC("cgroup_skb/ingress")
 int bpf_spin_lock_test(struct __sk_buff *skb)
 {
-	volatile int credit = 0, max_credit = 100, pkt_len = 64;
+	int credit = 0, max_credit = 100, pkt_len = 64;
 	struct hmap_elem zero = {}, *val;
 	unsigned long long curtime;
 	struct bpf_vqueue *q;
@@ -107,7 +107,7 @@ struct bpf_spin_lock lockA __hidden SEC(".data.A");
 __noinline
 static int static_subprog(struct __sk_buff *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	if (ctx->protocol)
 		return ret;
@@ -117,7 +117,7 @@ static int static_subprog(struct __sk_buff *ctx)
 __noinline
 static int static_subprog_lock(struct __sk_buff *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	ret = static_subprog(ctx);
 	bpf_spin_lock(&lockA);
@@ -127,7 +127,7 @@ static int static_subprog_lock(struct __sk_buff *ctx)
 __noinline
 static int static_subprog_unlock(struct __sk_buff *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	ret = static_subprog(ctx);
 	bpf_spin_unlock(&lockA);

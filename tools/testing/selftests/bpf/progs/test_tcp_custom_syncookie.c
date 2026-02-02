@@ -125,10 +125,7 @@ err:
 
 static int tcp_reload_headers(struct tcp_syncookie *ctx)
 {
-	/* Without volatile,
-	 * R3 32-bit pointer arithmetic prohibited
-	 */
-	volatile u64 data_len = ctx->skb->data_end - ctx->skb->data;
+	u64 data_len = ctx->skb->data_end - ctx->skb->data;
 
 	if (ctx->tcp->doff < sizeof(*ctx->tcp) / 4)
 		goto err;
@@ -209,7 +206,6 @@ static __always_inline void *next(struct tcp_syncookie *ctx, __u32 sz)
 		return NULL;
 
 	data = ctx->data + off;
-	barrier_var(data);
 	if (data + sz >= ctx->data_end)
 		return NULL;
 

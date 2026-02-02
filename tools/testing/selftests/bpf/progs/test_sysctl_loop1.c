@@ -46,7 +46,7 @@ int sysctl_tcp_mem(struct bpf_sysctl *ctx)
 	/* a workaround to prevent compiler from generating
 	 * codes verifier cannot handle yet.
 	 */
-	volatile int ret;
+	int ret;
 
 	if (ctx->write)
 		return 0;

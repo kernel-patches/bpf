@@ -13,9 +13,7 @@
  *
  * Starting with GCC 16 -Wunused-but-set-variable=2 can be used to
  * mimic clang's behavior.  */
-#if !defined(__clang__) && __GNUC__ > 15
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
-#endif
 
 struct map_value {
 	struct bpf_timer timer;
@@ -30,7 +28,7 @@ struct {
 
 static int timer_cb(void *map, void *key, struct map_value *value)
 {
-	volatile int sum = 0;
+	int sum = 0;
 	int i;
 
 	bpf_for(i, 0, 1024 * 1024) sum += i;

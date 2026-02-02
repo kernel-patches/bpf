@@ -18,14 +18,14 @@ struct {
 __attribute__((noinline))
 static int timer_cb(void *map, int *key, struct bpf_timer *timer)
 {
-	volatile char buf[256] = {};
+	char buf[256] = {};
 	return buf[69];
 }
 
 __attribute__((noinline))
 static int bad_timer_cb(void *map, int *key, struct bpf_timer *timer)
 {
-	volatile char buf[300] = {};
+	char buf[300] = {};
 	return buf[255] + timer_cb(NULL, NULL, NULL);
 }
 
@@ -34,7 +34,7 @@ __failure __msg("combined stack size of 2 calls is")
 int pseudo_call_check(struct __sk_buff *ctx)
 {
 	struct hmap_elem *elem;
-	volatile char buf[256] = {};
+	char buf[256] = {};
 
 	elem = bpf_map_lookup_elem(&hmap, &(int){0});
 	if (!elem)
@@ -49,7 +49,7 @@ __failure __msg("combined stack size of 2 calls is")
 int async_call_root_check(struct __sk_buff *ctx)
 {
 	struct hmap_elem *elem;
-	volatile char buf[256] = {};
+	char buf[256] = {};
 
 	elem = bpf_map_lookup_elem(&hmap, &(int){0});
 	if (!elem)

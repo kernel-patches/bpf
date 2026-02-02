@@ -179,7 +179,7 @@ __description("max words")
 __success __retval(4)
 int max_words(void)
 {
-	volatile int nr = 0;
+	int nr = 0;
 	int *bit;
 
 	bits_array[0] = (1ULL << 63) | 1U;
@@ -202,7 +202,7 @@ int bad_words(void)
 {
 	void *bad_addr = (void *)-4095;
 	struct bpf_iter_bits iter;
-	volatile int nr;
+	int nr;
 	int *bit;
 	int err;
 

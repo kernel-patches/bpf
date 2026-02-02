@@ -106,7 +106,7 @@ int reject_async_callback_throw(struct __sk_buff *ctx)
 
 __noinline static int subprog_lock(struct __sk_buff *ctx)
 {
-	volatile int ret = 0;
+	int ret = 0;
 
 	bpf_spin_lock(&lock);
 	if (ctx->len)

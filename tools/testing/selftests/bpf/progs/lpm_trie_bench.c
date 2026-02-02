@@ -13,7 +13,7 @@
 #define BPF_OBJ_NAME_LEN 16U
 #define MAX_ENTRIES 100000000
 #define NR_LOOPS 10000
-
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 char _license[] SEC("license") = "GPL";
 
 /* Filled by userspace. See fill_map() in bench_lpm_trie_map.c */
@@ -101,7 +101,6 @@ static int baseline(__u32 index, __u32 *unused)
 
 	generate_key(&key);
 	/* Avoid compiler optimizing out the modulo */
-	barrier_var(blackbox);
 	blackbox = READ_ONCE(key.data);
 
 	return 0;

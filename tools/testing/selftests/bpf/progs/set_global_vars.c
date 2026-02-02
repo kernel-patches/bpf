@@ -79,7 +79,7 @@ const volatile union Union union1 = {.var_u16 = -1};
 SEC("socket")
 int test_set_globals(void *ctx)
 {
-	volatile __s8 a;
+	__s8 a;
 
 	a = var_s64;
 	a = var_u64;

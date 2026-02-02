@@ -206,7 +206,6 @@ static __always_inline u8 *next(struct tcpopt_context *ctx, __u32 sz)
 		return NULL;
 
 	data = ctx->data + off;
-	barrier_var(data);
 	if (data + sz >= ctx->data_end)
 		return NULL;
 
@@ -772,10 +771,7 @@ static __always_inline int syncookie_part1(void *ctx, void *data, void *data_end
 		if (bpf_xdp_adjust_tail(ctx, TCP_MAXLEN - hdr->tcp_len))
 			return XDP_ABORTED;
 	} else {
-		/* Without volatile the verifier throws this error:
-		 * R9 32-bit pointer arithmetic prohibited
-		 */
-		volatile u64 old_len = data_end - data;
+		u64 old_len = data_end - data;
 
 		if (bpf_skb_change_tail(ctx, old_len + TCP_MAXLEN - hdr->tcp_len, 0))
 			return XDP_ABORTED;
