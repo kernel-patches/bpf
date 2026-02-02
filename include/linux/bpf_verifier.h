@@ -317,25 +317,25 @@ struct bpf_func_state {
 	int allocated_stack;
 };
 
-#define MAX_CALL_FRAMES 8
+#define MAX_CALL_FRAMES 16
 
 /* instruction history flags, used in bpf_jmp_history_entry.flags field */
 enum {
 	/* instruction references stack slot through PTR_TO_STACK register;
-	 * we also store stack's frame number in lower 3 bits (MAX_CALL_FRAMES is 8)
+	 * we also store stack's frame number in lower 4 bits (MAX_CALL_FRAMES is 16)
 	 * and accessed stack slot's index in next 6 bits (MAX_BPF_STACK is 512,
 	 * 8 bytes per slot, so slot index (spi) is [0, 63])
 	 */
-	INSN_F_FRAMENO_MASK = 0x7, /* 3 bits */
+	INSN_F_FRAMENO_MASK = 0xf, /* 4 bits */
 
 	INSN_F_SPI_MASK = 0x3f, /* 6 bits */
-	INSN_F_SPI_SHIFT = 3, /* shifted 3 bits to the left */
+	INSN_F_SPI_SHIFT = 4, /* shifted 4 bits to the left */
 
-	INSN_F_STACK_ACCESS = BIT(9),
+	INSN_F_STACK_ACCESS = BIT(10),
 
-	INSN_F_DST_REG_STACK = BIT(10), /* dst_reg is PTR_TO_STACK */
-	INSN_F_SRC_REG_STACK = BIT(11), /* src_reg is PTR_TO_STACK */
-	/* total 12 bits are used now. */
+	INSN_F_DST_REG_STACK = BIT(11), /* dst_reg is PTR_TO_STACK */
+	INSN_F_SRC_REG_STACK = BIT(12), /* src_reg is PTR_TO_STACK */
+	/* total 13 bits are used now. */
 };
 
 static_assert(INSN_F_FRAMENO_MASK + 1 >= MAX_CALL_FRAMES);
@@ -346,7 +346,7 @@ struct bpf_jmp_history_entry {
 	/* insn idx can't be bigger than 1 million */
 	u32 prev_idx : 20;
 	/* special INSN_F_xxx flags */
-	u32 flags : 12;
+	u32 flags : 13;
 	/* additional registers that need precision tracking when this
 	 * jump is backtracked, vector of six 10-bit records
 	 */
