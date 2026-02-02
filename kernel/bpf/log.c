@@ -901,9 +901,23 @@ int bpf_prog_load_log_attr_init(struct bpf_log_attr *attr_log, union bpf_attr *a
 }
 
 int bpf_btf_load_log_attr_init(struct bpf_log_attr *attr_log, union bpf_attr *attr,
-			       bpfptr_t uattr, u32 size)
+			       bpfptr_t uattr, u32 size, struct bpf_common_attr *attr_common,
+			       bpfptr_t uattr_common, u32 size_common)
 {
-	bpf_log_attr_init(attr_log, offsetof(union bpf_attr, btf_log_true_size), uattr, size);
+	if (bpf_log_attrs_diff(attr_common, attr->btf_log_buf, attr->btf_log_size,
+			       attr->btf_log_level))
+		return -EINVAL;
+
+	if (!attr->btf_log_buf && attr_common->log_buf) {
+		attr->btf_log_buf = attr_common->log_buf;
+		attr->btf_log_size = attr_common->log_size;
+		attr->btf_log_level = attr_common->log_level;
+		bpf_log_attr_init(attr_log, offsetof(struct bpf_common_attr, log_true_size),
+				  uattr_common, size_common);
+	} else {
+		bpf_log_attr_init(attr_log, offsetof(union bpf_attr, btf_log_true_size), uattr,
+				  size);
+	}
 	return 0;
 }
 
