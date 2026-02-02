@@ -1687,7 +1687,7 @@ static void calculate_summary_and_print_errors(struct test_env *env)
 	 * verbose mode is not enabled. Otherwise, results may be inconsistent.
 	 *
 	 */
-	if (!verbose() && fail_cnt) {
+	if (0 && !verbose() && fail_cnt) {
 		printf("\nAll error logs:\n");
 
 		/* print error logs again */
