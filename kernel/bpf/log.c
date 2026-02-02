@@ -873,10 +873,30 @@ static void bpf_log_attr_init(struct bpf_log_attr *attr_log, int offsetof_true_s
 	attr_log->uattr = uattr;
 }
 
-int bpf_prog_load_log_attr_init(struct bpf_log_attr *attr_log, union bpf_attr *attr,
-				bpfptr_t uattr, u32 size)
+static bool bpf_log_attrs_diff(struct bpf_common_attr *common, u64 log_buf, u32 log_size,
+			       u32 log_level)
 {
-	bpf_log_attr_init(attr_log, offsetof(union bpf_attr, log_true_size), uattr, size);
+	return log_buf && common->log_buf && (log_buf != common->log_buf ||
+					      log_size != common->log_size ||
+					      log_level != common->log_level);
+}
+
+int bpf_prog_load_log_attr_init(struct bpf_log_attr *attr_log, union bpf_attr *attr,
+				bpfptr_t uattr, u32 size, struct bpf_common_attr *attr_common,
+				bpfptr_t uattr_common, u32 size_common)
+{
+	if (bpf_log_attrs_diff(attr_common, attr->log_buf, attr->log_size, attr->log_level))
+		return -EINVAL;
+
+	if (!attr->log_buf && attr_common->log_buf) {
+		attr->log_buf = attr_common->log_buf;
+		attr->log_size = attr_common->log_size;
+		attr->log_level = attr_common->log_level;
+		bpf_log_attr_init(attr_log, offsetof(struct bpf_common_attr, log_true_size),
+				  uattr_common, size_common);
+	} else {
+		bpf_log_attr_init(attr_log, offsetof(union bpf_attr, log_true_size), uattr, size);
+	}
 	return 0;
 }
 
