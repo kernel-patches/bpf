@@ -255,6 +255,16 @@ const char *btf_type_str(const struct btf_type *t);
 	     i < btf_type_vlen(datasec_type);			\
 	     i++, member++)
 
+#define for_each_enum(i, enum_type, member)			\
+	for (i = 0, member = btf_enum(enum_type);		\
+	     i < btf_type_vlen(enum_type);			\
+	     i++, member++)
+
+#define for_each_enum64(i, enum_type, member)			\
+	for (i = 0, member = btf_enum64(enum_type);		\
+	     i < btf_type_vlen(enum_type);			\
+	     i++, member++)
+
 static inline bool btf_type_is_ptr(const struct btf_type *t)
 {
 	return BTF_INFO_KIND(t->info) == BTF_KIND_PTR;
