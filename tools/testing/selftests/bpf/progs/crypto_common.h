@@ -17,6 +17,12 @@ int bpf_crypto_decrypt(struct bpf_crypto_ctx *ctx, const struct bpf_dynptr *src,
 		       const struct bpf_dynptr *dst, const struct bpf_dynptr *iv) __ksym;
 int bpf_crypto_hash(struct bpf_crypto_ctx *ctx, const struct bpf_dynptr *data,
 		    const struct bpf_dynptr *out) __ksym;
+int bpf_sig_verify(struct bpf_crypto_ctx *ctx,
+		     const struct bpf_dynptr *message,
+		     const struct bpf_dynptr *signature) __ksym;
+int bpf_sig_keysize(struct bpf_crypto_ctx *ctx) __ksym;
+int bpf_sig_digestsize(struct bpf_crypto_ctx *ctx) __ksym;
+int bpf_sig_maxsize(struct bpf_crypto_ctx *ctx) __ksym;
 
 struct __crypto_ctx_value {
 	struct bpf_crypto_ctx __kptr * ctx;
