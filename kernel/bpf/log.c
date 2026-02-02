@@ -808,8 +808,6 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 				verbose_a("id=%d", reg->id);
 			if (reg->ref_obj_id)
 				verbose_a("ref_id=%d", reg->ref_obj_id);
-			if (reg->dynptr_id)
-				verbose_a("dynptr_id=%d", reg->dynptr_id);
 			verbose(env, ")");
 			break;
 		case STACK_ITER:
