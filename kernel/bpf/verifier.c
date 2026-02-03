@@ -6362,7 +6362,8 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 			if (tnum_is_const(reg->var_off) &&
 			    bpf_map_is_rdonly(map) &&
 			    map->ops->map_direct_value_addr &&
-			    map->map_type != BPF_MAP_TYPE_INSN_ARRAY) {
+			    map->map_type != BPF_MAP_TYPE_INSN_ARRAY &&
+			    map->map_type != BPF_MAP_TYPE_PERCPU_ARRAY) {
 				int map_off = off + reg->var_off.value;
 				u64 val = 0;
 
@@ -8355,6 +8356,12 @@ static int check_reg_const_str(struct bpf_verifier_env *env,
 
 	if (map->map_type == BPF_MAP_TYPE_INSN_ARRAY) {
 		verbose(env, "R%d points to insn_array map which cannot be used as const string\n", regno);
+		return -EACCES;
+	}
+
+	if (map->map_type == BPF_MAP_TYPE_PERCPU_ARRAY) {
+		verbose(env, "R%d points to percpu_array map which cannot be used as const string\n",
+			regno);
 		return -EACCES;
 	}
 
