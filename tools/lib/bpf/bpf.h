@@ -454,6 +454,10 @@ struct bpf_link_create_opts {
 			__u32 relative_id;
 			__u64 expected_revision;
 		} cgroup;
+		struct {
+			__u32 *btf_ids;
+			__u32  btf_ids_cnt;
+		} tracing_multi;
 	};
 	size_t :0;
 };

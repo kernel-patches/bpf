@@ -790,6 +790,13 @@ int bpf_link_create(int prog_fd, int target_fd,
 		if (!OPTS_ZEROED(opts, uprobe_multi))
 			return libbpf_err(-EINVAL);
 		break;
+	case BPF_TRACE_FENTRY_MULTI:
+	case BPF_TRACE_FEXIT_MULTI:
+		attr.link_create.tracing_multi.btf_ids = (__u64) OPTS_GET(opts, tracing_multi.btf_ids, 0);
+		attr.link_create.tracing_multi.btf_ids_cnt = OPTS_GET(opts, tracing_multi.btf_ids_cnt, 0);
+		if (!OPTS_ZEROED(opts, tracing_multi))
+			return libbpf_err(-EINVAL);
+		break;
 	case BPF_TRACE_RAW_TP:
 	case BPF_TRACE_FENTRY:
 	case BPF_TRACE_FEXIT:
