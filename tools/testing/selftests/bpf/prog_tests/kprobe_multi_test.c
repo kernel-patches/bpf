@@ -9,6 +9,7 @@
 #include "kprobe_multi_session.skel.h"
 #include "kprobe_multi_session_cookie.skel.h"
 #include "kprobe_multi_verifier.skel.h"
+#include "kprobe_multi_session_syms.skel.h"
 #include "kprobe_write_ctx.skel.h"
 #include "bpf/libbpf_internal.h"
 #include "bpf/hashmap.h"
@@ -400,6 +401,35 @@ cleanup:
 	kprobe_multi_session_cookie__destroy(skel);
 }
 
+static void test_session_syms_skel_api(void)
+{
+	struct kprobe_multi_session_syms *skel = NULL;
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	int err, prog_fd;
+
+	skel = kprobe_multi_session_syms__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "kprobe_multi_session_syms__open_and_load"))
+		return;
+
+	skel->bss->pid = getpid();
+
+	err = kprobe_multi_session_syms__attach(skel);
+	if (!ASSERT_OK(err, "kprobe_multi_session_syms__attach"))
+		goto cleanup;
+
+	prog_fd = bpf_program__fd(skel->progs.trigger);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run");
+	ASSERT_EQ(topts.retval, 0, "test_run");
+
+	/* Test 1: Both entry and return should fire */
+	ASSERT_EQ(skel->bss->test1_count, 2, "test1_count");
+	ASSERT_TRUE(skel->bss->test1_return, "test1_return");
+
+cleanup:
+	kprobe_multi_session_syms__destroy(skel);
+}
+
 static void test_unique_match(void)
 {
 	LIBBPF_OPTS(bpf_kprobe_multi_opts, opts);
@@ -644,6 +674,8 @@ void test_kprobe_multi_test(void)
 	if (test__start_subtest("session"))
 		test_session_skel_api();
 	if (test__start_subtest("session_cookie"))
+	if (test__start_subtest("session_syms"))
+		test_session_syms_skel_api();
 		test_session_cookie_skel_api();
 	if (test__start_subtest("unique_match"))
 		test_unique_match();
