@@ -6284,7 +6284,7 @@ int modify_ftrace_direct(struct ftrace_ops *ops, unsigned long addr)
 }
 EXPORT_SYMBOL_GPL(modify_ftrace_direct);
 
-static unsigned long hash_count(struct ftrace_hash *hash)
+unsigned long ftrace_hash_count(struct ftrace_hash *hash)
 {
 	return hash ? hash->count : 0;
 }
@@ -6302,7 +6302,7 @@ static struct ftrace_hash *hash_add(struct ftrace_hash *a, struct ftrace_hash *b
 	struct ftrace_hash *add;
 	int size;
 
-	size = hash_count(a) + hash_count(b);
+	size = ftrace_hash_count(a) + ftrace_hash_count(b);
 	if (size > 32)
 		size = 32;
 
@@ -6345,7 +6345,7 @@ int update_ftrace_direct_add(struct ftrace_ops *ops, struct ftrace_hash *hash)
 	int size;
 	bool reg;
 
-	if (!hash_count(hash))
+	if (!ftrace_hash_count(hash))
 		return -EINVAL;
 
 	mutex_lock(&direct_mutex);
@@ -6362,7 +6362,7 @@ int update_ftrace_direct_add(struct ftrace_ops *ops, struct ftrace_hash *hash)
 	old_filter_hash = ops->func_hash ? ops->func_hash->filter_hash : NULL;
 
 	/* If there's nothing in filter_hash we need to register the ops. */
-	reg = hash_count(old_filter_hash) == 0;
+	reg = ftrace_hash_count(old_filter_hash) == 0;
 	if (reg) {
 		if (ops->func || ops->trampoline)
 			goto out_unlock;
@@ -6480,7 +6480,7 @@ int update_ftrace_direct_del(struct ftrace_ops *ops, struct ftrace_hash *hash)
 	unsigned long size;
 	int err = -EINVAL;
 
-	if (!hash_count(hash))
+	if (!ftrace_hash_count(hash))
 		return -EINVAL;
 	if (check_direct_multi(ops))
 		return -EINVAL;
@@ -6493,7 +6493,7 @@ int update_ftrace_direct_del(struct ftrace_ops *ops, struct ftrace_hash *hash)
 
 	old_filter_hash = ops->func_hash ? ops->func_hash->filter_hash : NULL;
 
-	if (!hash_count(old_filter_hash))
+	if (!ftrace_hash_count(old_filter_hash))
 		goto out_unlock;
 
 	/* Make sure requested entries are already registered. */
@@ -6580,7 +6580,7 @@ int update_ftrace_direct_mod(struct ftrace_ops *ops, struct ftrace_hash *hash, b
 	unsigned long size, i;
 	int err = -EINVAL;
 
-	if (!hash_count(hash))
+	if (!ftrace_hash_count(hash))
 		return -EINVAL;
 	if (check_direct_multi(ops))
 		return -EINVAL;
