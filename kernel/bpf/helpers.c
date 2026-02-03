@@ -1046,6 +1046,7 @@ out:
 	return err;
 }
 
+__printf(3, 0)
 BPF_CALL_5(bpf_snprintf, char *, str, u32, str_size, char *, fmt,
 	   const void *, args, u32, data_len)
 {
