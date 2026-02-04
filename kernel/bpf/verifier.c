@@ -15858,6 +15858,7 @@ static bool is_safe_to_compute_dst_reg_range(struct bpf_insn *insn,
 	case BPF_XOR:
 	case BPF_OR:
 	case BPF_MUL:
+	case BPF_END:
 		return true;
 
 	/*
@@ -16047,12 +16048,50 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		else
 			scalar_min_max_arsh(dst_reg, &src_reg);
 		break;
+	case BPF_END: {
+		/* Byte swap operation - update var_off using tnum_bswap.
+		 * Three cases:
+		 * 1. bswap* (ALU64 + TO_LE): unconditional swap
+		 * 2. to_le* (ALU + TO_LE): swap on big-endian, zero
+		 *    extension or no-op on little-endian
+		 * 3. to_be* (ALU + TO_BE): swap on little-endian, zero
+		 *    extension or no-op on big-endian
+		 */
+
+		bool to_le = BPF_SRC(insn->code) == BPF_TO_LE;
+		bool is_big_endian;
+#ifdef CONFIG_CPU_BIG_ENDIAN
+		is_big_endian = true;
+#else
+		is_big_endian = false;
+#endif
+		/* Apply bswap if alu64 or switch between large and small end machines*/
+		bool need_bswap = (!alu32) || (to_le ? is_big_endian : !is_big_endian);
+
+		if (need_bswap) {
+			/* Apply byte swap to var_off */
+			if (insn->imm == 16)
+				dst_reg->var_off = tnum_bswap16(dst_reg->var_off);
+			else if (insn->imm == 32)
+				dst_reg->var_off = tnum_bswap32(dst_reg->var_off);
+			else if (insn->imm == 64)
+				dst_reg->var_off = tnum_bswap64(dst_reg->var_off);
+
+			/* Reset bounds so they can be re-derived from new var_off */
+			__mark_reg_unbounded(dst_reg);
+		}
+		/* For bswap16/32, coerce dst register to match the swapped size */
+		if (insn->imm == 16 || insn->imm == 32)
+			coerce_reg_to_size(dst_reg, insn->imm / 8);
+		break;
+	}
 	default:
 		break;
 	}
 
 	/* ALU32 ops are zero extended into 64bit register */
-	if (alu32)
+	/* BPF_END is already handled above, no need for additional zero extension */
+	if (alu32 && opcode != BPF_END)
 		zext_32_to_64(dst_reg);
 	reg_bounds_sync(dst_reg);
 	return 0;
@@ -16232,7 +16271,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 		}
 
 		/* check dest operand */
-		if (opcode == BPF_NEG &&
+		if ((opcode == BPF_NEG || opcode == BPF_END) &&
 		    regs[insn->dst_reg].type == SCALAR_VALUE) {
 			err = check_reg_arg(env, insn->dst_reg, DST_OP_NO_MARK);
 			err = err ?: adjust_scalar_min_max_vals(env, insn,

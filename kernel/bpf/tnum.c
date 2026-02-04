@@ -8,6 +8,7 @@
  */
 #include <linux/kernel.h>
 #include <linux/tnum.h>
+#include <linux/swab.h>
 
 #define TNUM(_v, _m)	(struct tnum){.value = _v, .mask = _m}
 /* A completely unknown value */
@@ -252,4 +253,43 @@ struct tnum tnum_with_subreg(struct tnum reg, struct tnum subreg)
 struct tnum tnum_const_subreg(struct tnum a, u32 value)
 {
 	return tnum_with_subreg(a, tnum_const(value));
+}
+
+struct tnum tnum_bswap16(struct tnum a)
+{
+	u64 low16_value, low16_mask;
+	u64 swapped_value, swapped_mask;
+
+	low16_value = a.value & 0xFFFF;
+	low16_mask = a.mask & 0xFFFF;
+
+	swapped_value = __builtin_bswap16(low16_value);
+	swapped_mask = __builtin_bswap16(low16_mask);
+
+	return TNUM(swapped_value, swapped_mask);
+}
+
+struct tnum tnum_bswap32(struct tnum a)
+{
+	u64 low32_value, low32_mask;
+	u64 swapped_value, swapped_mask;
+
+	low32_value = a.value & 0xFFFFFFFF;
+	low32_mask = a.mask & 0xFFFFFFFF;
+
+	swapped_value = __builtin_bswap32(low32_value);
+
+	swapped_mask = __builtin_bswap32(low32_mask);
+
+	return TNUM(swapped_value, swapped_mask);
+}
+
+struct tnum tnum_bswap64(struct tnum a)
+{
+	u64 swapped_value, swapped_mask;
+
+	swapped_value = __builtin_bswap64(a.value);
+	swapped_mask = __builtin_bswap64(a.mask);
+
+	return TNUM(swapped_value, swapped_mask);
 }
