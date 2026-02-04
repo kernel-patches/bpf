@@ -204,10 +204,11 @@ void memcontrol_bpf_online(struct mem_cgroup *memcg)
 
 	/*
 	 * Because only functions bpf_memcg_ops_reg and bpf_memcg_ops_unreg
-	 * write to memcg->bpf_ops under the protection of cgroup_mutex,
-	 * ensuring that cgroup_mutex is already locked here allows safe
-	 * reading and writing of memcg->bpf_ops without needing to acquire
-	 * a lock on memcg_bpf_srcu.
+	 * write to memcg->bpf_ops and memcg->bpf_ops_flags under the
+	 * protection of cgroup_mutex, ensuring that cgroup_mutex is already
+	 * locked here allows safe reading and writing of memcg->bpf_ops and
+	 * memcg->bpf_ops_flags without needing to acquire a lock on
+	 * memcg_bpf_srcu.
 	 */
 	lockdep_assert_held(&cgroup_mutex);
 
@@ -218,6 +219,7 @@ void memcontrol_bpf_online(struct mem_cgroup *memcg)
 	if (!ops)
 		return;
 	WRITE_ONCE(memcg->bpf_ops, ops);
+	memcg->bpf_ops_flags = parent_memcg->bpf_ops_flags;
 
 	/*
 	 * If the BPF program implements it, call the online handler to
@@ -239,7 +241,7 @@ void memcontrol_bpf_offline(struct mem_cgroup *memcg)
 {
 	struct memcg_bpf_ops *ops;
 
-	/* Same with function memcontrol_bpf_online. */
+	/* Same locking rules as memcontrol_bpf_online(). */
 	lockdep_assert_held(&cgroup_mutex);
 
 	ops = READ_ONCE(memcg->bpf_ops);
@@ -335,48 +337,62 @@ static int bpf_memcg_ops_init_member(const struct btf_type *t,
 	return 0;
 }
 
-/**
- * clean_memcg_bpf_ops - Clear BPF ops from a memory cgroup hierarchy
- * @memcg: Root memory cgroup to start from
- * @ops: The specific BPF ops to remove
- *
- * Walks the cgroup hierarchy and clears bpf_ops for any cgroup that
- * matches @ops.
- */
-static void clean_memcg_bpf_ops(struct mem_cgroup *memcg,
-				struct memcg_bpf_ops *ops)
-{
-	struct mem_cgroup *iter = NULL;
-
-	while ((iter = mem_cgroup_iter(memcg, iter, NULL))) {
-		if (READ_ONCE(iter->bpf_ops) == ops)
-			WRITE_ONCE(iter->bpf_ops, NULL);
-	}
-}
-
 static int bpf_memcg_ops_reg(void *kdata, struct bpf_link *link)
 {
 	struct bpf_struct_ops_link *ops_link
 		= container_of(link, struct bpf_struct_ops_link, link);
-	struct memcg_bpf_ops *ops = kdata;
-	struct mem_cgroup *memcg, *iter = NULL;
+	struct memcg_bpf_ops *ops = kdata, *old_ops;
+	struct mem_cgroup *memcg, *iter;
 	int err = 0;
+
+	if (ops_link->flags & ~BPF_F_ALLOW_OVERRIDE) {
+		pr_err("only BPF_F_ALLOW_OVERRIDE supported for struct_ops\n");
+		return -EOPNOTSUPP;
+	}
 
 	memcg = mem_cgroup_get_from_ino(ops_link->cgroup_id);
 	if (IS_ERR(memcg))
 		return PTR_ERR(memcg);
 
 	cgroup_lock();
+
+	/*
+	 * Check if memcg has bpf_ops and whether it is inherited from
+	 * parent.
+	 * If inherited and BPF_F_ALLOW_OVERRIDE is set, allow override.
+	 */
+	old_ops = READ_ONCE(memcg->bpf_ops);
+	if (old_ops) {
+		struct mem_cgroup *parent_memcg = parent_mem_cgroup(memcg);
+
+		if (!parent_memcg ||
+		    !(memcg->bpf_ops_flags & BPF_F_ALLOW_OVERRIDE) ||
+		    READ_ONCE(parent_memcg->bpf_ops) != old_ops) {
+			err = -EBUSY;
+			goto unlock_out;
+		}
+	}
+
+	/* Check for incompatible bpf_ops in descendants. */
+	iter = NULL;
 	while ((iter = mem_cgroup_iter(memcg, iter, NULL))) {
-		if (READ_ONCE(iter->bpf_ops)) {
+		struct memcg_bpf_ops *iter_ops = READ_ONCE(iter->bpf_ops);
+
+		if (iter_ops && iter_ops != old_ops) {
+			/* cannot override existing bpf_ops of sub-cgroup. */
 			mem_cgroup_iter_break(memcg, iter);
 			err = -EBUSY;
-			break;
+			goto unlock_out;
 		}
-		WRITE_ONCE(iter->bpf_ops, ops);
 	}
-	if (err)
-		clean_memcg_bpf_ops(memcg, ops);
+
+	iter = NULL;
+	while ((iter = mem_cgroup_iter(memcg, iter, NULL))) {
+		WRITE_ONCE(iter->bpf_ops, ops);
+		iter->bpf_ops_flags = ops_link->flags;
+	}
+
+unlock_out:
 	cgroup_unlock();
 
 	mem_cgroup_put(memcg);
@@ -390,13 +406,31 @@ static void bpf_memcg_ops_unreg(void *kdata, struct bpf_link *link)
 		= container_of(link, struct bpf_struct_ops_link, link);
 	struct memcg_bpf_ops *ops = kdata;
 	struct mem_cgroup *memcg;
+	struct mem_cgroup *iter;
+	struct memcg_bpf_ops *parent_bpf_ops = NULL;
+	u32 parent_bpf_ops_flags = 0;
 
 	memcg = mem_cgroup_get_from_ino(ops_link->cgroup_id);
 	if (IS_ERR_OR_NULL(memcg))
 		goto out;
 
 	cgroup_lock();
-	clean_memcg_bpf_ops(memcg, ops);
+
+	/* Get the parent bpf_ops and bpf_ops_flags */
+	iter = parent_mem_cgroup(memcg);
+	if (iter) {
+		parent_bpf_ops = READ_ONCE(iter->bpf_ops);
+		parent_bpf_ops_flags = iter->bpf_ops_flags;
+	}
+
+	iter = NULL;
+	while ((iter = mem_cgroup_iter(memcg, iter, NULL))) {
+		if (READ_ONCE(iter->bpf_ops) == ops) {
+			WRITE_ONCE(iter->bpf_ops, parent_bpf_ops);
+			iter->bpf_ops_flags = parent_bpf_ops_flags;
+		}
+	}
+
 	cgroup_unlock();
 
 	mem_cgroup_put(memcg);
