@@ -230,7 +230,7 @@ cleanup:
 	stacktrace_ips__destroy(skel);
 }
 
-static void __test_stacktrace_ips(void)
+static void arch_test_stacktrace_ips(void)
 {
 	if (test__start_subtest("kprobe_multi"))
 		test_stacktrace_ips_kprobe_multi(false);
@@ -248,13 +248,84 @@ static void __test_stacktrace_ips(void)
 		test_stacktrace_ips_trampoline(true);
 }
 #else
-static void __test_stacktrace_ips(void)
+static void arch_test_stacktrace_ips(void)
 {
 	test__skip();
 }
 #endif
 
+noinline void stacktrace_ips_uprobe_trigger(void)
+{
+        asm volatile ("");
+}
+
+static void test_stacktrace_ips_uprobe(bool retprobe)
+{
+	LIBBPF_OPTS(bpf_uprobe_opts, opts,
+		.retprobe  = retprobe,
+		.func_name = "stacktrace_ips_uprobe_trigger",
+	);
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	struct stacktrace_ips *skel;
+
+	skel = stacktrace_ips__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "stacktrace_ips__open_and_load"))
+		return;
+
+	skel->links.uprobe_test = bpf_program__attach_uprobe_opts(skel->progs.uprobe_test,
+					       -1 /* pid */, "/proc/self/exe", 0 /* offset */,
+					       &opts);
+	if (!ASSERT_OK_PTR(skel->links.uprobe_test, "bpf_program__attach_uprobe_opts"))
+		goto cleanup;
+
+	stacktrace_ips_uprobe_trigger();
+
+	ASSERT_EQ((int) skel->bss->stack_key, -ENOENT, "bpf_get_stack_ENOENT");
+	ASSERT_EQ((int) skel->bss->stack_len, -ENOENT, "bpf_get_stack_ENOENT");
+	ASSERT_EQ((int) skel->bss->stack_task_len, -ENOENT, "bpf_get_task_stack_ENOENT");
+
+cleanup:
+	stacktrace_ips__destroy(skel);
+}
+
+static void test_stacktrace_ips_uprobe_multi(bool retprobe)
+{
+	LIBBPF_OPTS(bpf_uprobe_multi_opts, opts,
+		.retprobe = retprobe
+	);
+	struct stacktrace_ips *skel;
+
+	skel = stacktrace_ips__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "stacktrace_ips__open_and_load"))
+		return;
+
+	skel->links.uprobe_multi_test = bpf_program__attach_uprobe_multi(skel->progs.uprobe_multi_test,
+						-1 /* pid */, "/proc/self/exe",
+						"stacktrace_ips_uprobe_trigger",
+						&opts);
+	if (!ASSERT_OK_PTR(skel->links.uprobe_multi_test, "bpf_program__attach_uprobe_multi"))
+		goto cleanup;
+
+	stacktrace_ips_uprobe_trigger();
+
+	ASSERT_EQ((int) skel->bss->stack_key, -ENOENT, "bpf_get_stack_ENOENT");
+	ASSERT_EQ((int) skel->bss->stack_len, -ENOENT, "bpf_get_stack_ENOENT");
+	ASSERT_EQ((int) skel->bss->stack_task_len, -ENOENT, "bpf_get_task_stack_ENOENT");
+
+cleanup:
+	stacktrace_ips__destroy(skel);
+}
+
 void test_stacktrace_ips(void)
 {
-	__test_stacktrace_ips();
+	arch_test_stacktrace_ips();
+
+	if (test__start_subtest("uprobe"))
+		test_stacktrace_ips_uprobe(false);
+	if (test__start_subtest("uretprobe"))
+		test_stacktrace_ips_uprobe(true);
+	if (test__start_subtest("uprobe_multi"))
+		test_stacktrace_ips_uprobe_multi(false);
+	if (test__start_subtest("uretprobe_multi"))
+		test_stacktrace_ips_uprobe_multi(true);
 }

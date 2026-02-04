@@ -30,6 +30,8 @@ int unused(void)
 }
 
 __u32 stack_key;
+__u32 stack_len;
+__u32 stack_task_len;
 
 SEC("kprobe")
 int kprobe_test(struct pt_regs *ctx)
@@ -70,6 +72,26 @@ int fexit_test(struct pt_regs *ctx)
 {
 	/* Skip 2 bpf_program/trampoline stack entries, check fentry_test. */
 	stack_key = bpf_get_stackid(ctx, &stackmap, 2);
+	return 0;
+}
+
+static __u64 stack_heap[128] = {};
+
+SEC("uprobe.multi")
+int uprobe_multi_test(struct pt_regs *ctx)
+{
+	stack_key = bpf_get_stackid(ctx, &stackmap, 0);
+	stack_len = bpf_get_stack(ctx, &stack_heap, 128, 0);
+	stack_task_len = bpf_get_task_stack(bpf_get_current_task_btf(), &stack_heap, 128, 0);
+	return 0;
+}
+
+SEC("uprobe")
+int uprobe_test(struct pt_regs *ctx)
+{
+	stack_key = bpf_get_stackid(ctx, &stackmap, 0);
+	stack_len = bpf_get_task_stack(bpf_get_current_task_btf(), &stack_heap, 128, 0);
+	stack_task_len = bpf_get_task_stack(bpf_get_current_task_btf(), &stack_heap, 128, 0);
 	return 0;
 }
 
