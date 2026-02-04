@@ -1,0 +1,105 @@
+From 4544e9c4ec9a5955a37fdd8204a3d98106f97ab7 Mon Sep 17 00:00:00 2001
+From: Tejun Heo <tj@kernel.org>
+Date: Mon, 2 Feb 2026 09:40:22 -1000
+Subject: [PATCH] selftests/sched_ext: Fix init_enable_count flakiness
+
+The init_enable_count test is flaky. The test forks 1024 children before
+attaching the scheduler to verify that existing tasks get ops.init_task()
+called. The children were using sleep(1) before exiting.
+
+7900aa699c34 ("sched_ext: Fix cgroup exit ordering by moving sched_ext_free()
+to finish_task_switch()") changed when tasks are removed from scx_tasks -
+previously when the task_struct was freed, now immediately in
+finish_task_switch() when the task dies.
+
+Before the commit, pre-forked children would linger on scx_tasks until freed
+regardless of when they exited, so the scheduler would always see them during
+iteration. The sleep(1) was unnecessary. After the commit, children are
+removed as soon as they die. The sleep(1) masks the problem in most cases but
+the test becomes flaky depending on timing.
+
+Fix by synchronizing properly using a pipe. All children block on read() and
+the parent signals them to exit by closing the write end after attaching the
+scheduler. The children are auto-reaped so there's no need to wait on them.
+
+Reported-by: Ihor Solodrai <ihor.solodrai@linux.dev>
+Cc: David Vernet <void@manifault.com>
+Cc: Andrea Righi <arighi@nvidia.com>
+Cc: Changwoo Min <changwoo@igalia.com>
+Cc: Emil Tsalapatis <emil@etsalapatis.com>
+Signed-off-by: Tejun Heo <tj@kernel.org>
+---
+ .../selftests/sched_ext/init_enable_count.c   | 34 +++++++++++++------
+ 1 file changed, 23 insertions(+), 11 deletions(-)
+
+diff --git a/tools/testing/selftests/sched_ext/init_enable_count.c b/tools/testing/selftests/sched_ext/init_enable_count.c
+index eddf9e0e26e7..82c71653977b 100644
+--- a/tools/testing/selftests/sched_ext/init_enable_count.c
++++ b/tools/testing/selftests/sched_ext/init_enable_count.c
+@@ -4,6 +4,7 @@
+  * Copyright (c) 2023 David Vernet <dvernet@meta.com>
+  * Copyright (c) 2023 Tejun Heo <tj@kernel.org>
+  */
++#include <signal.h>
+ #include <stdio.h>
+ #include <unistd.h>
+ #include <sched.h>
+@@ -23,6 +24,9 @@ static enum scx_test_status run_test(bool global)
+ 	int ret, i, status;
+ 	struct sched_param param = {};
+ 	pid_t pids[num_pre_forks];
++	int pipe_fds[2];
++
++	SCX_FAIL_IF(pipe(pipe_fds) < 0, "Failed to create pipe");
+ 
+ 	skel = init_enable_count__open();
+ 	SCX_FAIL_IF(!skel, "Failed to open");
+@@ -38,26 +42,34 @@ static enum scx_test_status run_test(bool global)
+ 	 * ensure (at least in practical terms) that there are more tasks that
+ 	 * transition from SCHED_OTHER -> SCHED_EXT than there are tasks that
+ 	 * take the fork() path either below or in other processes.
++	 *
++	 * All children will block on read() on the pipe until the parent closes
++	 * the write end after attaching the scheduler, which signals all of
++	 * them to exit simultaneously. Auto-reap so we don't have to wait on
++	 * them.
+ 	 */
++	signal(SIGCHLD, SIG_IGN);
+ 	for (i = 0; i < num_pre_forks; i++) {
+-		pids[i] = fork();
+-		SCX_FAIL_IF(pids[i] < 0, "Failed to fork child");
+-		if (pids[i] == 0) {
+-			sleep(1);
++		pid_t pid = fork();
++
++		SCX_FAIL_IF(pid < 0, "Failed to fork child");
++		if (pid == 0) {
++			char buf;
++
++			close(pipe_fds[1]);
++			read(pipe_fds[0], &buf, 1);
++			close(pipe_fds[0]);
+ 			exit(0);
+ 		}
+ 	}
++	close(pipe_fds[0]);
+ 
+ 	link = bpf_map__attach_struct_ops(skel->maps.init_enable_count_ops);
+ 	SCX_FAIL_IF(!link, "Failed to attach struct_ops");
+ 
+-	for (i = 0; i < num_pre_forks; i++) {
+-		SCX_FAIL_IF(waitpid(pids[i], &status, 0) != pids[i],
+-			    "Failed to wait for pre-forked child\n");
+-
+-		SCX_FAIL_IF(status != 0, "Pre-forked child %d exited with status %d\n", i,
+-			    status);
+-	}
++	/* Signal all pre-forked children to exit. */
++	close(pipe_fds[1]);
++	signal(SIGCHLD, SIG_DFL);
+ 
+ 	bpf_link__destroy(link);
+ 	SCX_GE(skel->bss->init_task_cnt, num_pre_forks);
+-- 
+2.52.0
+
