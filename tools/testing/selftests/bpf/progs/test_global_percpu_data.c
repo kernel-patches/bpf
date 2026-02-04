@@ -1,0 +1,74 @@
+// SPDX-License-Identifier: GPL-2.0
+#include <vmlinux.h>
+#include <bpf/bpf_helpers.h>
+#include "bpf_misc.h"
+
+int data SEC(".percpu") = -1;
+int nums[7] SEC(".percpu");
+char run SEC(".percpu") = 0;
+struct {
+	char set;
+	int i;
+	int nums[7];
+} struct_data SEC(".percpu") = {
+	.set = 0,
+	.i = -1,
+};
+
+SEC("raw_tp/task_rename")
+__auxiliary
+__arch_x86_64
+__arch_arm64
+int update_percpu_data(void *ctx)
+{
+	struct_data.nums[6] = 0xc0de;
+	struct_data.set = 1;
+	struct_data.i = 1;
+	nums[6] = 0xc0de;
+	data = 1;
+	run = 1;
+	return 0;
+}
+
+static const char fmt[] SEC(".percpu.fmt") = "data %d\n";
+
+SEC("?kprobe")
+__arch_x86_64
+__arch_arm64
+__failure __msg("R{{[0-9]+}} points to percpu_array map which cannot be used as const string")
+int verifier_strncmp(void *ctx)
+{
+	return bpf_strncmp("test", 5, fmt);
+}
+
+SEC("?kprobe")
+__arch_x86_64
+__arch_arm64
+__failure __msg("R{{[0-9]+}} points to percpu_array map which cannot be used as const string")
+int verifier_snprintf(void *ctx)
+{
+	u64 args[] = { data };
+	char buf[128];
+	int len;
+
+	len = bpf_snprintf(buf, sizeof(buf), fmt, args, 1);
+	if (len > 0)
+		bpf_printk("snprintf: %s\n", buf);
+	return 0;
+}
+
+static volatile const char fmt2[] SEC(".percpu.fmt") = "data %d\n";
+
+SEC("?kprobe")
+__success
+__arch_x86_64
+__arch_arm64
+__xlated("r{{[0-9]+}} = &(void __percpu *)(r{{[0-9]+}})")
+int verifier_percpu_read(void *ctx)
+{
+	char c = fmt2[0];
+
+	return c == 'd';
+}
+
+char _license[] SEC("license") = "GPL";
