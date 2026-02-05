@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "rhash.skel.h"
+#include "bpf_iter_bpf_rhash_map.skel.h"
 #include <linux/bpf.h>
 #include <linux/perf_event.h>
 #include <sys/syscall.h>
@@ -282,6 +283,167 @@ cleanup:
 	rhash__destroy(skel);
 }
 
+static void rhash_iter_test(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
+	struct bpf_iter_bpf_rhash_map *skel;
+	int err, i, len, map_fd, iter_fd;
+	union bpf_iter_link_info linfo;
+	u32 expected_key_sum = 0, key;
+	struct bpf_link *link;
+	u64 val = 0;
+	char buf[64];
+
+	skel = bpf_iter_bpf_rhash_map__open();
+	if (!ASSERT_OK_PTR(skel, "bpf_iter_bpf_rhash_map__open"))
+		return;
+
+	err = bpf_iter_bpf_rhash_map__load(skel);
+	if (!ASSERT_OK(err, "bpf_iter_bpf_rhash_map__load"))
+		goto out;
+
+	map_fd = bpf_map__fd(skel->maps.rhashmap);
+
+	/* Populate map with test data */
+	for (i = 0; i < 64; i++) {
+		key = i + 1;
+		expected_key_sum += key;
+
+		err = bpf_map_update_elem(map_fd, &key, &val, BPF_NOEXIST);
+		if (!ASSERT_OK(err, "map_update"))
+			goto out;
+	}
+
+	memset(&linfo, 0, sizeof(linfo));
+	linfo.map.map_fd = map_fd;
+	opts.link_info = &linfo;
+	opts.link_info_len = sizeof(linfo);
+
+	link = bpf_program__attach_iter(skel->progs.dump_bpf_rhash_map, &opts);
+	if (!ASSERT_OK_PTR(link, "attach_iter"))
+		goto out;
+
+	iter_fd = bpf_iter_create(bpf_link__fd(link));
+	if (!ASSERT_GE(iter_fd, 0, "create_iter"))
+		goto free_link;
+
+	do {
+		len = read(iter_fd, buf, sizeof(buf));
+	} while (len > 0);
+
+	ASSERT_EQ(skel->bss->key_sum, expected_key_sum, "key_sum");
+	ASSERT_EQ(skel->bss->elem_count, 64, "elem_count");
+
+	close(iter_fd);
+
+free_link:
+	bpf_link__destroy(link);
+out:
+	bpf_iter_bpf_rhash_map__destroy(skel);
+}
+
+static void rhash_iter_overflow_test(void)
+{
+	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
+	struct bpf_iter_bpf_rhash_map *skel;
+	u32 total_read_len, expected_read_len, write_len, num_elems = 64;
+	u64 seen_values = 0;
+	int err, i, j, len, map_fd, iter_fd;
+	union bpf_iter_link_info linfo;
+	struct bpf_link *link;
+	char *buf;
+
+	skel = bpf_iter_bpf_rhash_map__open();
+	if (!ASSERT_OK_PTR(skel, "bpf_iter_bpf_rhash_map__open"))
+		return;
+
+	/*
+	 * Configure print_count so that output for each element almost fills
+	 * the seq_file buffer (8 pages). With multiple elements, this will
+	 * trigger buffer overflow and restart.
+	 */
+	write_len = sysconf(_SC_PAGE_SIZE) * 8;
+	skel->bss->print_count = (write_len - 8) / 8;
+	expected_read_len = num_elems * (write_len - 8);
+
+	err = bpf_iter_bpf_rhash_map__load(skel);
+	if (!ASSERT_OK(err, "bpf_iter_bpf_rhash_map__load"))
+		goto out;
+
+	map_fd = bpf_map__fd(skel->maps.rhashmap);
+
+	/* Populate map with test data */
+	for (i = 0; i < num_elems; i++) {
+		__u64 val = i;
+
+		err = bpf_map_update_elem(map_fd, &i, &val, BPF_NOEXIST);
+		if (!ASSERT_OK(err, "map_update"))
+			goto out;
+	}
+
+	memset(&linfo, 0, sizeof(linfo));
+	linfo.map.map_fd = map_fd;
+	opts.link_info = &linfo;
+	opts.link_info_len = sizeof(linfo);
+
+	link = bpf_program__attach_iter(skel->progs.dump_bpf_rhash_map_overflow, &opts);
+	if (!ASSERT_OK_PTR(link, "attach_iter"))
+		goto out;
+
+	iter_fd = bpf_iter_create(bpf_link__fd(link));
+	if (!ASSERT_GE(iter_fd, 0, "create_iter"))
+		goto free_link;
+
+	buf = malloc(expected_read_len);
+	if (!ASSERT_OK_PTR(buf, "malloc"))
+		goto close_iter;
+
+	/* Read all data - this should trigger multiple overflows/restarts */
+	total_read_len = 0;
+	while ((len = read(iter_fd, buf + total_read_len, expected_read_len - total_read_len)) > 0)
+		total_read_len += len;
+
+	ASSERT_OK(err, "err");
+	ASSERT_EQ(total_read_len, expected_read_len, "total_read_len");
+	ASSERT_EQ(skel->bss->unique_elem_count, num_elems, "unique_elem_count");
+
+	/*
+	 * Verify overflow actually happened: if total_visits > unique_elem_count,
+	 * some elements were visited multiple times due to seq_file restart.
+	 */
+	ASSERT_GT(skel->bss->total_visits, skel->bss->unique_elem_count, "overflow_occurred");
+
+	/*
+	 * Verify:
+	 * 1. Each chunk of print_count size has same values
+	 * 2. All values 0 to num_elems-1 appear exactly once
+	 */
+	for (i = 0; i < num_elems; i++) {
+		__u64 *val = ((__u64 *)buf) + i * skel->bss->print_count;
+
+		ASSERT_GE(val[0], 0, "value_greater_or_eq_zero");
+		ASSERT_LT(val[0], num_elems, "value_in_range");
+
+		/* Verify all copies in this chunk are consistent */
+		for (j = 1; j < skel->bss->print_count; j++)
+			ASSERT_EQ(val[0], val[j], "consistent_value");
+
+		/* Track which values we've seen */
+		seen_values |= (1ULL << val[0]);
+	}
+
+	/* Verify all values 0 to num_elems-1 were present */
+	ASSERT_EQ(seen_values, ~0ULL, "all_values_seen");
+
+	free(buf);
+close_iter:
+	close(iter_fd);
+free_link:
+	bpf_link__destroy(link);
+out:
+	bpf_iter_bpf_rhash_map__destroy(skel);
+}
+
 void test_rhash(void)
 {
 	if (test__start_subtest("test_rhash_lookup_update"))
@@ -313,5 +475,11 @@ void test_rhash(void)
 
 	if (test__start_subtest("test_rhash_get_next_key_stress"))
 		rhash_get_next_key_stress_test();
+
+	if (test__start_subtest("test_rhash_iter"))
+		rhash_iter_test();
+
+	if (test__start_subtest("test_rhash_iter_overflow"))
+		rhash_iter_overflow_test();
 }
 
