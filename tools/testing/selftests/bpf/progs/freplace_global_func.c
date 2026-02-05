@@ -5,7 +5,7 @@
 __noinline
 int test_ctx_global_func(struct __sk_buff *skb)
 {
-	volatile int retval = 1;
+	int retval = 1;
 	return retval;
 }
 

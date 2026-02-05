@@ -43,10 +43,7 @@ int sysctl_tcp_mem(struct bpf_sysctl *ctx)
 	unsigned long tcp_mem[TCP_MEM_LOOPS] = {};
 	char value[MAX_VALUE_STR_LEN];
 	unsigned char i, off = 0;
-	/* a workaround to prevent compiler from generating
-	 * codes verifier cannot handle yet.
-	 */
-	volatile int ret;
+	int ret;
 
 	if (ctx->write)
 		return 0;

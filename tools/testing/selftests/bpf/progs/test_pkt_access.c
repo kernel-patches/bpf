@@ -50,7 +50,7 @@ int test_pkt_access_subprog2(int val, volatile struct __sk_buff *skb)
 __attribute__ ((noinline))
 int get_skb_len(struct __sk_buff *skb)
 {
-	volatile char buf[MAX_STACK] = {};
+	char buf[MAX_STACK] = {};
 
 	__sink(buf[MAX_STACK - 1]);
 
@@ -74,7 +74,7 @@ int test_pkt_access_subprog3(int val, struct __sk_buff *skb)
 __attribute__ ((noinline))
 int get_skb_ifindex(int val, struct __sk_buff *skb, int var)
 {
-	volatile char buf[MAX_STACK] = {};
+	char buf[MAX_STACK] = {};
 
 	__sink(buf[MAX_STACK - 1]);
 
