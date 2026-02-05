@@ -202,7 +202,7 @@ l0_%=:	/* exit */					\
 
 SEC("tc")
 __description("bounds check based on reg_off + var_off + insn_off. test1")
-__failure __msg("value_size=8 off=1073741825")
+__failure __msg("map_value pointer offset 1073741822 is not allowed")
 __naked void var_off_insn_off_test1(void)
 {
 	asm volatile ("					\
