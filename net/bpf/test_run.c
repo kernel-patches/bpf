@@ -982,6 +982,7 @@ static struct proto bpf_dummy_proto = {
 	.obj_size = sizeof(struct sock),
 };
 
+struct dst_entry bpf_test_run_lwt_xmit_dst;
 int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 			  union bpf_attr __user *uattr)
 {
@@ -1156,7 +1157,13 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 		skb->ip_summed = CHECKSUM_COMPLETE;
 	}
 
+	if (prog->type == BPF_PROG_TYPE_LWT_XMIT) {
+		bpf_test_run_lwt_xmit_dst.dev = dev;
+		skb_dst_set(skb, &bpf_test_run_lwt_xmit_dst);
+	}
 	ret = bpf_test_run(prog, skb, repeat, &retval, &duration, false);
+	if (prog->type == BPF_PROG_TYPE_LWT_XMIT)
+		skb_dst_set(skb, NULL);
 	if (ret)
 		goto out;
 	if (!is_l2) {
