@@ -581,6 +581,8 @@ int tnum_strn(char *str, size_t size, struct tnum a)
 	if (a.mask == 0) {
 		if (is_unum_decimal(a.value))
 			return snprintf(str, size, "%llu", a.value);
+		if (is_snum_decimal(a.value))
+			return snprintf(str, size, "%lld", a.value);
 		else
 			return snprintf(str, size, "%#llx", a.value);
 	}

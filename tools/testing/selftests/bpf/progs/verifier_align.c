@@ -131,7 +131,7 @@ LBL ":"							\
 SEC("tc")
 __success __log_level(2)
 __flag(BPF_F_ANY_ALIGNMENT)
-__msg("6: R0=pkt(off=8,r=8)")
+__msg("6: R0=pkt(r=8,imm=8)")
 __msg("6: {{.*}} R3={{[^)]*}}var_off=(0x0; 0xff)")
 __msg("7: {{.*}} R3={{[^)]*}}var_off=(0x0; 0x1fe)")
 __msg("8: {{.*}} R3={{[^)]*}}var_off=(0x0; 0x3fc)")
@@ -203,10 +203,10 @@ __naked void unknown_mul(void)
 SEC("tc")
 __success __log_level(2)
 __msg("2: {{.*}} R5=pkt(r=0)")
-__msg("4: {{.*}} R5=pkt(off=14,r=0)")
-__msg("5: {{.*}} R4=pkt(off=14,r=0)")
+__msg("4: {{.*}} R5=pkt(r=0,imm=14)")
+__msg("5: {{.*}} R4=pkt(r=0,imm=14)")
 __msg("9: {{.*}} R2=pkt(r=18)")
-__msg("10: {{.*}} R4={{[^)]*}}var_off=(0x0; 0xff){{.*}} R5=pkt(off=14,r=18)")
+__msg("10: {{.*}} R4={{[^)]*}}var_off=(0x0; 0xff){{.*}} R5=pkt(r=18,imm=14)")
 __msg("13: {{.*}} R4={{[^)]*}}var_off=(0x0; 0xffff)")
 __msg("14: {{.*}} R4={{[^)]*}}var_off=(0x0; 0xffff)")
 __naked void packet_const_offset(void)
@@ -247,14 +247,14 @@ __msg("7: {{.*}} R6={{[^)]*}}var_off=(0x0; 0x3fc)")
 /* Offset is added to packet pointer R5, resulting in
  * known fixed offset, and variable offset from R6.
  */
-__msg("11: {{.*}} R5=pkt(id=1,off=14,")
+__msg("11: {{.*}} R5=pkt(id=1,{{[^)]*}},var_off=(0x2; 0x7fc)")
 /* At the time the word size load is performed from R5,
  * it's total offset is NET_IP_ALIGN + reg->off (0) +
  * reg->aux_off (14) which is 16.  Then the variable
  * offset is considered using reg->aux_off_align which
  * is 4 and meets the load's requirements.
  */
-__msg("15: {{.*}} R4={{[^)]*}}var_off=(0x0; 0x3fc){{.*}} R5={{[^)]*}}var_off=(0x0; 0x3fc)")
+__msg("15: {{.*}} R4={{[^)]*}}var_off=(0x2; 0x7fc){{.*}} R5={{[^)]*}}var_off=(0x2; 0x7fc)")
 /* Variable offset is added to R5 packet pointer,
  * resulting in auxiliary alignment of 4. To avoid BPF
  * verifier's precision backtracking logging
@@ -266,37 +266,37 @@ __msg("18: {{.*}} R4={{[^)]*}}var_off=(0x0; 0x3fc){{.*}} R5={{[^)]*}}var_off=(0x
 /* Constant offset is added to R5, resulting in
  * reg->off of 14.
  */
-__msg("19: {{.*}} R5=pkt(id=2,off=14,")
+__msg("19: {{.*}} R5=pkt(id=2,{{[^)]*}}var_off=(0x2; 0x7fc)")
 /* At the time the word size load is performed from R5,
  * its total fixed offset is NET_IP_ALIGN + reg->off
  * (14) which is 16.  Then the variable offset is 4-byte
  * aligned, so the total offset is 4-byte aligned and
  * meets the load's requirements.
  */
-__msg("24: {{.*}} R4={{[^)]*}}var_off=(0x0; 0x3fc){{.*}} R5={{[^)]*}}var_off=(0x0; 0x3fc)")
+__msg("24: {{.*}} R4={{[^)]*}}var_off=(0x2; 0x7fc){{.*}} R5={{[^)]*}}var_off=(0x2; 0x7fc)")
 /* Constant offset is added to R5 packet pointer,
  * resulting in reg->off value of 14.
  */
-__msg("26: {{.*}} R5=pkt(off=14,r=8)")
+__msg("26: {{.*}} R5=pkt(r=8,imm=14)")
 /* Variable offset is added to R5, resulting in a
  * variable offset of (4n). See comment for insn #18
  * for R4 = R5 trick.
  */
-__msg("28: {{.*}} R4={{[^)]*}}var_off=(0x0; 0x3fc){{.*}} R5={{[^)]*}}var_off=(0x0; 0x3fc)")
+__msg("28: {{.*}} R4={{[^)]*}}var_off=(0x2; 0x7fc){{.*}} R5={{[^)]*}}var_off=(0x2; 0x7fc)")
 /* Constant is added to R5 again, setting reg->off to 18. */
-__msg("29: {{.*}} R5=pkt(id=3,off=18,")
+__msg("29: {{.*}} R5=pkt(id=3,{{[^)]*}}var_off=(0x2; 0x7fc)")
 /* And once more we add a variable; resulting {{[^)]*}}var_off
  * is still (4n), fixed offset is not changed.
  * Also, we create a new reg->id.
  */
-__msg("31: {{.*}} R4={{[^)]*}}var_off=(0x0; 0x7fc){{.*}} R5={{[^)]*}}var_off=(0x0; 0x7fc)")
+__msg("31: {{.*}} R4={{[^)]*}}var_off=(0x2; 0xffc){{.*}} R5={{[^)]*}}var_off=(0x2; 0xffc)")
 /* At the time the word size load is performed from R5,
  * its total fixed offset is NET_IP_ALIGN + reg->off (18)
  * which is 20.  Then the variable offset is (4n), so
  * the total offset is 4-byte aligned and meets the
  * load's requirements.
  */
-__msg("35: {{.*}} R4={{[^)]*}}var_off=(0x0; 0x7fc){{.*}} R5={{[^)]*}}var_off=(0x0; 0x7fc)")
+__msg("35: {{.*}} R4={{[^)]*}}var_off=(0x2; 0xffc){{.*}} R5={{[^)]*}}var_off=(0x2; 0xffc)")
 __naked void packet_variable_offset(void)
 {
 	asm volatile ("					\
@@ -430,16 +430,10 @@ __msg("6: {{.*}} R5={{[^)]*}}var_off=(0x2; 0xfffffffffffffffc)")
 /* Checked s>=0 */
 __msg("9: {{.*}} R5={{[^)]*}}var_off=(0x2; 0x7ffffffffffffffc)")
 /* packet pointer + nonnegative (4n+2) */
-__msg("11: {{.*}} R6={{[^)]*}}var_off=(0x2; 0x7ffffffffffffffc)")
-__msg("12: {{.*}} R4={{[^)]*}}var_off=(0x2; 0x7ffffffffffffffc)")
-/* NET_IP_ALIGN + (4n+2) == (4n), alignment is fine.
- * We checked the bounds, but it might have been able
- * to overflow if the packet pointer started in the
- * upper half of the address space.
- * So we did not get a 'range' on R6, and the access
- * attempt will fail.
- */
-__msg("15: {{.*}} R6={{[^)]*}}var_off=(0x2; 0x7ffffffffffffffc)")
+__msg("11: {{.*}} R4={{[^)]*}}var_off=(0x2; 0x7ffffffffffffffc){{.*}} R6={{[^)]*}}var_off=(0x2; 0x7ffffffffffffffc)")
+__msg("12: (07) r4 += 4")
+/* packet smax bound overflow */
+__msg("pkt pointer offset -9223372036854775808 is not allowed")
 __naked void dubious_pointer_arithmetic(void)
 {
 	asm volatile ("					\
