@@ -19,6 +19,7 @@
 #include <asm/text-patching.h>
 #include <asm/unwind.h>
 #include <asm/cfi.h>
+#include <asm/cpufeatures.h>
 
 static bool all_callee_regs_used[4] = {true, true, true, true};
 
@@ -1604,6 +1605,134 @@ static void emit_priv_frame_ptr(u8 **pprog, void __percpu *priv_frame_ptr)
 	*pprog = prog;
 }
 
+static int emit_bitops(u8 **pprog, u32 bitops)
+{
+	u8 *prog = *pprog;
+
+	/*
+	 * x86 Bit manipulation instruction set
+	 * https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set
+	 */
+
+	switch (bitops) {
+	case BPF_CLZ64:
+		/*
+		 * Intel® 64 and IA-32 Architectures Software Developer's Manual (June 2023)
+		 *
+		 *   LZCNT - Count the Number of Leading Zero Bits
+		 *
+		 *     Opcode/Instruction
+		 *     F3 REX.W 0F BD /r
+		 *     LZCNT r64, r/m64
+		 *
+		 *     Op/En
+		 *     RVM
+		 *
+		 *     64/32-bit Mode
+		 *     V/N.E.
+		 *
+		 *     CPUID Feature Flag
+		 *     LZCNT
+		 *
+		 *     Description
+		 *     Count the number of leading zero bits in r/m64, return
+		 *     result in r64.
+		 */
+		/* emit: x ? 64 - fls64(x) : 64 */
+		/* lzcnt rax, rdi */
+		EMIT5(0xF3, 0x48, 0x0F, 0xBD, 0xC7);
+		break;
+
+	case BPF_CTZ64:
+		/*
+		 * Intel® 64 and IA-32 Architectures Software Developer's Manual (June 2023)
+		 *
+		 *   TZCNT - Count the Number of Trailing Zero Bits
+		 *
+		 *     Opcode/Instruction
+		 *     F3 REX.W 0F BC /r
+		 *     TZCNT r64, r/m64
+		 *
+		 *     Op/En
+		 *     RVM
+		 *
+		 *     64/32-bit Mode
+		 *     V/N.E.
+		 *
+		 *     CPUID Feature Flag
+		 *     BMI1
+		 *
+		 *     Description
+		 *     Count the number of trailing zero bits in r/m64, return
+		 *     result in r64.
+		 */
+		/* emit: x ? __ffs64(x) : 64 */
+		/* tzcnt rax, rdi */
+		EMIT5(0xF3, 0x48, 0x0F, 0xBC, 0xC7);
+		break;
+
+	case BPF_FFS64:
+		/* emit: __ffs64(x), 'x == 0' was handled by verifier */
+		/* tzcnt rax, rdi */
+		EMIT5(0xF3, 0x48, 0x0F, 0xBC, 0xC7);
+		break;
+
+	case BPF_FLS64:
+		/* emit: fls64(x) */
+		/* lzcnt rax, rdi; neg rax; add rax, 64 */
+		EMIT5(0xF3, 0x48, 0x0F, 0xBD, 0xC7);
+		EMIT3(0x48, 0xF7, 0xD8);       /* neg rax */
+		EMIT4(0x48, 0x83, 0xC0, 0x40); /* add rax, 64 */
+		break;
+
+	case BPF_POPCNT64:
+		/*
+		 * Intel® 64 and IA-32 Architectures Software Developer's Manual (June 2023)
+		 *
+		 *   POPCNT - Return the Count of Number of Bits Set to 1
+		 *
+		 *     Opcode/Instruction
+		 *     F3 REX.W 0F B8 /r
+		 *     POPCNT r64, r/m64
+		 *
+		 *     Op/En
+		 *     RM
+		 *
+		 *     64 Mode
+		 *     Valid
+		 *
+		 *     Compat/Leg Mode
+		 *     N.E.
+		 *
+		 *     Description
+		 *     POPCNT on r/m64
+		 */
+		/* popcnt rax, rdi */
+		EMIT5(0xF3, 0x48, 0x0F, 0xB8, 0xC7);
+		break;
+
+	case BPF_ROL64:
+		/* emit: rol64(x, s) */
+		EMIT3(0x48, 0x89, 0xF1); /* mov rcx, rsi */
+		EMIT3(0x48, 0x89, 0xF8); /* mov rax, rdi */
+		EMIT3(0x48, 0xD3, 0xC0); /* rol rax, cl */
+		break;
+
+	case BPF_ROR64:
+		/* emit: ror64(x, s) */
+		EMIT3(0x48, 0x89, 0xF1); /* mov rcx, rsi */
+		EMIT3(0x48, 0x89, 0xF8); /* mov rax, rdi */
+		EMIT3(0x48, 0xD3, 0xC8); /* ror rax, cl */
+		break;
+
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	*pprog = prog;
+	return 0;
+}
+
 #define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
 
 #define __LOAD_TCC_PTR(off)			\
@@ -2111,6 +2240,12 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 				/* nop */
 				break;
 			}
+			break;
+
+		case BPF_ALU64 | BPF_BITOPS:
+			err = emit_bitops(&prog, insn->imm);
+			if (err)
+				return err;
 			break;
 
 			/* speculation barrier */
@@ -4116,4 +4251,22 @@ bool bpf_jit_supports_timed_may_goto(void)
 bool bpf_jit_supports_fsession(void)
 {
 	return true;
+}
+
+bool bpf_jit_inlines_bitops(s32 imm)
+{
+	switch (imm) {
+	case BPF_CLZ64:
+	case BPF_CTZ64:
+	case BPF_FFS64:
+	case BPF_FLS64:
+		return boot_cpu_has(X86_FEATURE_ABM);
+	case BPF_POPCNT64:
+		return boot_cpu_has(X86_FEATURE_POPCNT);
+	case BPF_ROL64:
+	case BPF_ROR64:
+		return true;
+	default:
+		return false;
+	}
 }
