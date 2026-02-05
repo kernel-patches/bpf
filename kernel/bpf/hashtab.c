@@ -3065,19 +3065,159 @@ retry:
 
 static u64 rhtab_map_mem_usage(const struct bpf_map *map)
 {
-	return 0;
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct bucket_table *tbl, *future_tbl;
+	u64 num_entries;
+	u64 usage = sizeof(struct bpf_rhtab);
+
+	num_entries = atomic_read(&rhtab->ht.nelems);
+	usage += rhtab->elem_size * num_entries;
+
+	/* Add rhashtable internal overhead: bucket_table + buckets array */
+	guard(rcu)();
+	tbl = rcu_dereference(rhtab->ht.tbl);
+	usage += sizeof(struct bucket_table) +
+		 sizeof(struct rhash_lock_head *) * tbl->size;
+
+	/* Account for future_tbl during resize */
+	future_tbl = rcu_dereference(tbl->future_tbl);
+	if (future_tbl)
+		usage += sizeof(struct bucket_table) +
+			 sizeof(struct rhash_lock_head *) * future_tbl->size;
+
+	return usage;
+}
+
+static int __rhtab_map_lookup_and_delete_batch(struct bpf_map *map,
+					       const union bpf_attr *attr,
+					       union bpf_attr __user *uattr,
+					       bool do_delete)
+{
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	void __user *uvalues = u64_to_user_ptr(attr->batch.values);
+	void __user *ukeys = u64_to_user_ptr(attr->batch.keys);
+	void __user *ubatch = u64_to_user_ptr(attr->batch.in_batch);
+	void *keys = NULL, *values = NULL, *dst_key, *dst_val;
+	struct rhtab_elem **del_elems = NULL;
+	u32 slot, max_count, total, key_size, value_size, i;
+	struct bucket_table *tbl;
+	struct rhtab_elem *elem;
+	struct rhash_head *he;
+	u64 elem_map_flags, map_flags;
+	int ret = 0;
+
+	elem_map_flags = attr->batch.elem_flags;
+	if ((elem_map_flags & ~BPF_F_LOCK) ||
+	    ((elem_map_flags & BPF_F_LOCK) &&
+	     !btf_record_has_field(map->record, BPF_SPIN_LOCK)))
+		return -EINVAL;
+
+	map_flags = attr->batch.flags;
+	if (map_flags)
+		return -EINVAL;
+
+	max_count = attr->batch.count;
+	if (!max_count)
+		return 0;
+
+	if (put_user(0, &uattr->batch.count))
+		return -EFAULT;
+
+	slot = 0;
+	if (ubatch && copy_from_user(&slot, ubatch, sizeof(slot)))
+		return -EFAULT;
+
+	key_size = map->key_size;
+	value_size = map->value_size;
+
+	keys = kvmalloc_array(max_count, key_size, GFP_USER | __GFP_NOWARN);
+	values = kvmalloc_array(max_count, value_size, GFP_USER | __GFP_NOWARN);
+	if (do_delete)
+		del_elems = kvmalloc_array(max_count, sizeof(void *), GFP_USER | __GFP_NOWARN);
+
+	if (!keys || !values || (do_delete && !del_elems)) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	dst_key = keys;
+	dst_val = values;
+	total = 0;
+
+	rcu_read_lock();
+	tbl = rht_dereference_rcu(rhtab->ht.tbl, &rhtab->ht);
+
+	if (slot >= tbl->size) {
+		rcu_read_unlock();
+		ret = -ENOENT;
+		goto out;
+	}
+
+	for (; slot < tbl->size; slot++) {
+		u32 bucket_start = total;
+
+		rht_for_each_rcu(he, tbl, slot) {
+			/*
+			 * If buffer is full mid-bucket, undo this partial bucket
+			 * so next call retries it. I this is the first bucket return -ENOSPC
+			 */
+			if (total >= max_count) {
+				if (bucket_start == 0)
+					ret = -ENOSPC;
+				dst_key -= (total - bucket_start) * key_size;
+				dst_val -= (total - bucket_start) * value_size;
+				total = bucket_start;
+				goto done;
+			}
+			elem = container_of(he, struct rhtab_elem, node);
+			memcpy(dst_key, elem->data, key_size);
+			rhtab_read_elem_value(map, dst_val, elem, elem_map_flags);
+			check_and_init_map_value(map, dst_val);
+
+			if (do_delete)
+				del_elems[total] = elem;
+
+			dst_key += key_size;
+			dst_val += value_size;
+			total++;
+		}
+	}
+done:
+
+	if (do_delete) {
+		for (i = 0; i < total; i++)
+			rhtab_delete_elem(rhtab, del_elems[i]);
+	}
+
+	rcu_read_unlock();
+
+	if (total == 0)
+		goto out;
+
+	ret = copy_to_user(ukeys, keys, total * key_size);
+	ret = ret ? : copy_to_user(uvalues, values, total * value_size);
+	ret = ret ? : put_user(total, &uattr->batch.count);
+	ret = ret ? : copy_to_user(u64_to_user_ptr(attr->batch.out_batch), &slot, sizeof(slot));
+	if (ret)
+		ret = -EFAULT;
+
+out:
+	kvfree(keys);
+	kvfree(values);
+	kvfree(del_elems);
+	return ret;
 }
 
 static int rhtab_map_lookup_batch(struct bpf_map *map, const union bpf_attr *attr,
 				  union bpf_attr __user *uattr)
 {
-	return 0;
+	return __rhtab_map_lookup_and_delete_batch(map, attr, uattr, false);
 }
 
 static int rhtab_map_lookup_and_delete_batch(struct bpf_map *map, const union bpf_attr *attr,
 					     union bpf_attr __user *uattr)
 {
-	return 0;
+	return __rhtab_map_lookup_and_delete_batch(map, attr, uattr, true);
 }
 
 struct bpf_iter_seq_rhash_map_info {
@@ -3090,30 +3230,105 @@ struct bpf_iter_seq_rhash_map_info {
 
 static void *bpf_rhash_map_seq_start(struct seq_file *seq, loff_t *pos)
 {
-	return NULL;
+	struct bpf_iter_seq_rhash_map_info *info = seq->private;
+	struct rhtab_elem *elem;
+	u32 skip = info->skip_elems;
+
+	rhashtable_walk_enter(&info->rhtab->ht, &info->iter);
+	rhashtable_walk_start(&info->iter);
+	info->iter_active = true;
+
+	/* Skip elements we've already processed in previous read calls */
+	while (skip > 0) {
+		elem = rhtab_iter_next(&info->iter);
+		if (!elem)
+			return NULL;
+		skip--;
+	}
+
+	elem = rhtab_iter_next(&info->iter);
+	if (!elem)
+		return NULL;
+	/*
+	 * if *pos is not 0, previously iteration failed on this elem,
+	 * so we are restarting it. That's why no need to increment *pos.
+	 */
+	if (*pos == 0)
+		++*pos;
+	return elem;
 }
 
 static void *bpf_rhash_map_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 {
-	return NULL;
+	struct bpf_iter_seq_rhash_map_info *info = seq->private;
+
+	++*pos;
+	++info->skip_elems;
+
+	return rhtab_iter_next(&info->iter);
+}
+
+static int __bpf_rhash_map_seq_show(struct seq_file *seq,
+				    struct rhtab_elem *elem)
+{
+	struct bpf_iter_seq_rhash_map_info *info = seq->private;
+	struct bpf_iter__bpf_map_elem ctx = {};
+	struct bpf_iter_meta meta;
+	struct bpf_prog *prog;
+	int ret = 0;
+
+	meta.seq = seq;
+	prog = bpf_iter_get_info(&meta, elem == NULL);
+	if (prog) {
+		ctx.meta = &meta;
+		ctx.map = info->map;
+		if (elem) {
+			ctx.key = elem->data;
+			ctx.value = rhtab_elem_value(elem);
+		}
+		ret = bpf_iter_run_prog(prog, &ctx);
+	}
+
+	return ret;
 }
 
 static int bpf_rhash_map_seq_show(struct seq_file *seq, void *v)
 {
-	return 0;
+	return __bpf_rhash_map_seq_show(seq, v);
 }
 
 static void bpf_rhash_map_seq_stop(struct seq_file *seq, void *v)
 {
+	struct bpf_iter_seq_rhash_map_info *info = seq->private;
+
+	if (!v)
+		(void)__bpf_rhash_map_seq_show(seq, NULL);
+
+	if (info->iter_active) {
+		rhashtable_walk_stop(&info->iter);
+		rhashtable_walk_exit(&info->iter);
+		info->iter_active = false;
+	}
 }
 
 static int bpf_iter_init_rhash_map(void *priv_data, struct bpf_iter_aux_info *aux)
 {
+	struct bpf_iter_seq_rhash_map_info *info = priv_data;
+	struct bpf_map *map = aux->map;
+
+	bpf_map_inc_with_uref(map);
+	info->map = map;
+	info->rhtab = container_of(map, struct bpf_rhtab, map);
+	info->skip_elems = 0;
+	info->iter_active = false;
 	return 0;
 }
 
 static void bpf_iter_fini_rhash_map(void *priv_data)
 {
+	struct bpf_iter_seq_rhash_map_info *info = priv_data;
+
+	bpf_map_put_with_uref(info->map);
 }
 
 static const struct seq_operations bpf_rhash_map_seq_ops = {
