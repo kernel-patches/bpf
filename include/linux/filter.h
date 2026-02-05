@@ -514,6 +514,25 @@ static inline bool insn_is_cast_user(const struct bpf_insn *insn)
 		.off   = 0,					\
 		.imm   = 0 })
 
+/* bitops */
+#define BPF_BITOPS	0xe0	/* opcode for alu64 */
+#define BPF_CLZ64	0x00	/* imm for clz64 */
+#define BPF_CTZ64	0x01	/* imm for ctz64 */
+#define BPF_FFS64	0x02	/* imm for ffs64 */
+#define BPF_FLS64	0x03	/* imm for fls64 */
+#define BPF_BITREV64	0x04	/* imm for bitrev64 */
+#define BPF_POPCNT64	0x05	/* imm for popcnt64 */
+#define BPF_ROL64	0x06	/* imm for rol64 */
+#define BPF_ROR64	0x07	/* imm for ror64 */
+
+#define BPF_BITOPS_INSN(IMM)					\
+	((struct bpf_insn) {					\
+		.code  = BPF_ALU64 | BPF_BITOPS,		\
+		.dst_reg = 0,					\
+		.src_reg = 0,					\
+		.off   = 0,					\
+		.imm   = IMM })
+
 /* Internal classic blocks for direct assignment */
 
 #define __BPF_STMT(CODE, K)					\
@@ -1157,6 +1176,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog);
 void bpf_jit_compile(struct bpf_prog *prog);
 bool bpf_jit_needs_zext(void);
 bool bpf_jit_inlines_helper_call(s32 imm);
+bool bpf_jit_inlines_bitops(s32 imm);
 bool bpf_jit_supports_subprog_tailcalls(void);
 bool bpf_jit_supports_percpu_insn(void);
 bool bpf_jit_supports_kfunc_call(void);

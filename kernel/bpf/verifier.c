@@ -12477,6 +12477,14 @@ enum special_kfunc_type {
 	KF_bpf_session_is_return,
 	KF_bpf_stream_vprintk,
 	KF_bpf_stream_print_stack,
+	KF_bpf_clz64,
+	KF_bpf_ctz64,
+	KF_bpf_ffs64,
+	KF_bpf_fls64,
+	KF_bpf_bitrev64,
+	KF_bpf_popcnt64,
+	KF_bpf_rol64,
+	KF_bpf_ror64,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12557,11 +12565,43 @@ BTF_ID(func, bpf_arena_reserve_pages)
 BTF_ID(func, bpf_session_is_return)
 BTF_ID(func, bpf_stream_vprintk)
 BTF_ID(func, bpf_stream_print_stack)
+BTF_ID(func, bpf_clz64)
+BTF_ID(func, bpf_ctz64)
+BTF_ID(func, bpf_ffs64)
+BTF_ID(func, bpf_fls64)
+BTF_ID(func, bpf_bitrev64)
+BTF_ID(func, bpf_popcnt64)
+BTF_ID(func, bpf_rol64)
+BTF_ID(func, bpf_ror64)
 
 static bool is_task_work_add_kfunc(u32 func_id)
 {
 	return func_id == special_kfunc_list[KF_bpf_task_work_schedule_signal] ||
 	       func_id == special_kfunc_list[KF_bpf_task_work_schedule_resume];
+}
+
+static bool get_bitops_insn_imm(u32 func_id, s32 *imm)
+{
+	if (func_id == special_kfunc_list[KF_bpf_clz64])
+		*imm = BPF_CLZ64;
+	else if (func_id == special_kfunc_list[KF_bpf_ctz64])
+		*imm = BPF_CTZ64;
+	else if (func_id == special_kfunc_list[KF_bpf_ffs64])
+		*imm = BPF_FFS64;
+	else if (func_id == special_kfunc_list[KF_bpf_fls64])
+		*imm = BPF_FLS64;
+	else if (func_id == special_kfunc_list[KF_bpf_bitrev64])
+		*imm = BPF_BITREV64;
+	else if (func_id == special_kfunc_list[KF_bpf_popcnt64])
+		*imm = BPF_POPCNT64;
+	else if (func_id == special_kfunc_list[KF_bpf_rol64])
+		*imm = BPF_ROL64;
+	else if (func_id == special_kfunc_list[KF_bpf_ror64])
+		*imm = BPF_ROR64;
+	else
+		return false;
+
+	return true;
 }
 
 static bool is_kfunc_ret_null(struct bpf_kfunc_call_arg_meta *meta)
@@ -14044,6 +14084,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	int err, insn_idx = *insn_idx_p;
 	const struct btf_param *args;
 	struct btf *desc_btf;
+	bool is_bitops_kfunc;
+	s32 insn_imm;
 
 	/* skip for now, but return error when we find this in fixup_kfunc_call */
 	if (!insn->imm)
@@ -14422,6 +14464,16 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 	if (meta.func_id == special_kfunc_list[KF_bpf_session_cookie])
 		env->prog->call_session_cookie = true;
+
+	is_bitops_kfunc = get_bitops_insn_imm(meta.func_id, &insn_imm);
+	if ((meta.kfunc_flags & KF_MUST_INLINE)) {
+		bool inlined = is_bitops_kfunc && bpf_jit_inlines_bitops(insn_imm);
+
+		if (!inlined) {
+			verbose(env, "JIT does not support inlining the kfunc %s.\n", func_name);
+			return -EOPNOTSUPP;
+		}
+	}
 
 	return 0;
 }
@@ -23236,6 +23288,19 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[4] = BPF_ALU64_REG(BPF_SUB, BPF_REG_0, BPF_REG_1);
 		insn_buf[5] = BPF_ALU64_IMM(BPF_NEG, BPF_REG_0, 0);
 		*cnt = 6;
+	} else if (get_bitops_insn_imm(desc->func_id, &insn_buf[0].imm)) {
+		s32 imm = insn_buf[0].imm;
+
+		if (imm == BPF_FFS64) {
+			insn_buf[0] = BPF_MOV64_IMM(BPF_REG_0, 0);
+			insn_buf[1] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, 0, 2);
+			insn_buf[2] = BPF_BITOPS_INSN(imm);
+			insn_buf[3] = BPF_ALU64_IMM(BPF_ADD, BPF_REG_0, 1);
+			*cnt = 4;
+		} else {
+			insn_buf[0] = BPF_BITOPS_INSN(imm);
+			*cnt = 1;
+		}
 	}
 
 	if (env->insn_aux_data[insn_idx].arg_prog) {
