@@ -344,8 +344,22 @@ BPF_CALL_3(bpf_get_stackid, struct pt_regs *, regs, struct bpf_map *, map,
 	return __bpf_get_stackid(map, trace, flags);
 }
 
+static bool uprobe_wants_kernel_stack(struct pt_regs *regs, u64 flags)
+{
+	return user_mode(regs) &&           /* uprobe */
+	       !(flags & BPF_F_USER_STACK); /* wants_kernel_stack */
+}
+
+BPF_CALL_3(bpf_get_stackid_kprobe, struct pt_regs *, regs, struct bpf_map *, map,
+	   u64, flags)
+{
+	if (uprobe_wants_kernel_stack(regs, flags))
+		return -ENOENT;
+	return bpf_get_stackid((unsigned long) regs, (unsigned long) map, flags, 0, 0);
+}
+
 const struct bpf_func_proto bpf_get_stackid_proto = {
-	.func		= bpf_get_stackid,
+	.func		= bpf_get_stackid_kprobe,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
@@ -514,6 +528,8 @@ clear:
 BPF_CALL_4(bpf_get_stack, struct pt_regs *, regs, void *, buf, u32, size,
 	   u64, flags)
 {
+	if (uprobe_wants_kernel_stack(regs, flags))
+		return -ENOENT;
 	return __bpf_get_stack(regs, NULL, NULL, buf, size, flags, false /* !may_fault */);
 }
 
@@ -530,6 +546,8 @@ const struct bpf_func_proto bpf_get_stack_proto = {
 BPF_CALL_4(bpf_get_stack_sleepable, struct pt_regs *, regs, void *, buf, u32, size,
 	   u64, flags)
 {
+	if (uprobe_wants_kernel_stack(regs, flags))
+		return -ENOENT;
 	return __bpf_get_stack(regs, NULL, NULL, buf, size, flags, true /* may_fault */);
 }
 
@@ -544,7 +562,7 @@ const struct bpf_func_proto bpf_get_stack_sleepable_proto = {
 };
 
 static long __bpf_get_task_stack(struct task_struct *task, void *buf, u32 size,
-				 u64 flags, bool may_fault)
+				 u64 flags, bool may_fault, bool kprobe)
 {
 	struct pt_regs *regs;
 	long res = -EINVAL;
@@ -553,17 +571,28 @@ static long __bpf_get_task_stack(struct task_struct *task, void *buf, u32 size,
 		return -EFAULT;
 
 	regs = task_pt_regs(task);
-	if (regs)
+	if (regs) {
+		/*
+		 * We do not know the state of the task != current,
+		 * so let's skip the uprobe/kernel_stack check.
+		 */
+		if (kprobe && task == current &&
+		    uprobe_wants_kernel_stack(regs, flags)) {
+			res = -ENOENT;
+			goto out;
+		}
 		res = __bpf_get_stack(regs, task, NULL, buf, size, flags, may_fault);
+	}
+out:
 	put_task_stack(task);
-
 	return res;
 }
 
 BPF_CALL_4(bpf_get_task_stack, struct task_struct *, task, void *, buf,
 	   u32, size, u64, flags)
 {
-	return __bpf_get_task_stack(task, buf, size, flags, false /* !may_fault */);
+	return __bpf_get_task_stack(task, buf, size, flags, false /* !may_fault */,
+				    false /* kprobe */);
 }
 
 const struct bpf_func_proto bpf_get_task_stack_proto = {
@@ -580,11 +609,48 @@ const struct bpf_func_proto bpf_get_task_stack_proto = {
 BPF_CALL_4(bpf_get_task_stack_sleepable, struct task_struct *, task, void *, buf,
 	   u32, size, u64, flags)
 {
-	return __bpf_get_task_stack(task, buf, size, flags, true /* !may_fault */);
+	return __bpf_get_task_stack(task, buf, size, flags, true /* !may_fault */,
+				    false /* kprobe */);
 }
 
 const struct bpf_func_proto bpf_get_task_stack_sleepable_proto = {
 	.func		= bpf_get_task_stack_sleepable,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &btf_tracing_ids[BTF_TRACING_TYPE_TASK],
+	.arg2_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_CONST_SIZE_OR_ZERO,
+	.arg4_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_4(bpf_get_task_stack_kprobe, struct task_struct *, task, void *, buf,
+	   u32, size, u64, flags)
+{
+	return __bpf_get_task_stack(task, buf, size, flags, false /* !may_fault */,
+				    true /* kprobe */);
+}
+
+const struct bpf_func_proto bpf_get_task_stack_kprobe_proto = {
+	.func		= bpf_get_task_stack_kprobe,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &btf_tracing_ids[BTF_TRACING_TYPE_TASK],
+	.arg2_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg3_type	= ARG_CONST_SIZE_OR_ZERO,
+	.arg4_type	= ARG_ANYTHING,
+};
+
+BPF_CALL_4(bpf_get_task_stack_kprobe_sleepable, struct task_struct *, task, void *, buf,
+	   u32, size, u64, flags)
+{
+	return __bpf_get_task_stack(task, buf, size, flags, true /* !may_fault */,
+				    true /* kprobe */);
+}
+
+const struct bpf_func_proto bpf_get_task_stack_kprobe_sleepable_proto = {
+	.func		= bpf_get_task_stack_kprobe_sleepable,
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_BTF_ID,
