@@ -246,33 +246,50 @@ get_callchain_entry_for_task(struct task_struct *task, u32 max_depth)
 #endif
 }
 
-static long __bpf_get_stackid(struct bpf_map *map,
-			      struct perf_callchain_entry *trace, u64 flags)
+static long __bpf_get_stackid(struct bpf_map *map, struct pt_regs *regs,
+			      struct perf_callchain_entry *trace_in, u64 flags)
 {
 	struct bpf_stack_map *smap = container_of(map, struct bpf_stack_map, map);
 	struct stack_map_bucket *bucket, *new_bucket, *old_bucket;
 	u32 hash, id, trace_nr, trace_len, i, max_depth;
 	u32 skip = flags & BPF_F_SKIP_FIELD_MASK;
 	bool user = flags & BPF_F_USER_STACK;
+	bool kernel = !user;
+	long ret;
 	u64 *ips;
 	bool hash_matches;
-
-	if (trace->nr <= skip)
-		/* skipping more than usable stack trace */
-		return -EFAULT;
+	struct perf_callchain_entry *trace;
 
 	max_depth = stack_map_calculate_max_depth(map->value_size, stack_map_data_size(map), flags);
+	if (trace_in) {
+		trace = trace_in;
+	} else {
+		preempt_disable();
+		trace = get_perf_callchain(regs, kernel, user, max_depth, false, false, 0);
+		if (unlikely(!trace)) {
+			ret = -EFAULT;
+			goto go_out;
+		}
+	}
+
+	if (trace->nr <= skip) {
+		/* skipping more than usable stack trace */
+		ret = -EFAULT;
+		goto go_out;
+	}
+
 	trace_nr = min_t(u32, trace->nr - skip, max_depth - skip);
 	trace_len = trace_nr * sizeof(u64);
 	ips = trace->ip + skip;
 	hash = jhash2((u32 *)ips, trace_len / sizeof(u32), 0);
 	id = hash & (smap->n_buckets - 1);
+	ret = id;
 	bucket = READ_ONCE(smap->buckets[id]);
 
 	hash_matches = bucket && bucket->hash == hash;
 	/* fast cmp */
 	if (hash_matches && flags & BPF_F_FAST_STACK_CMP)
-		return id;
+		goto go_out;
 
 	if (stack_map_use_build_id(map)) {
 		struct bpf_stack_build_id *id_offs;
@@ -280,12 +297,22 @@ static long __bpf_get_stackid(struct bpf_map *map,
 		/* for build_id+offset, pop a bucket before slow cmp */
 		new_bucket = (struct stack_map_bucket *)
 			pcpu_freelist_pop(&smap->freelist);
-		if (unlikely(!new_bucket))
-			return -ENOMEM;
+		if (unlikely(!new_bucket)) {
+			ret = -ENOMEM;
+			goto go_out;
+		}
 		new_bucket->nr = trace_nr;
 		id_offs = (struct bpf_stack_build_id *)new_bucket->data;
 		for (i = 0; i < trace_nr; i++)
 			id_offs[i].ip = ips[i];
+
+		/*
+		 * It is safe after perf callchain ips copied to bucket buffer
+		 * to reduce the length of preempt section, we can enable preempt here.
+		 */
+		if (!trace_in)
+			preempt_enable();
+
 		stack_map_get_build_id_offset(id_offs, trace_nr, user, false /* !may_fault */);
 		trace_len = trace_nr * sizeof(struct bpf_stack_build_id);
 		if (hash_matches && bucket->nr == trace_nr &&
@@ -300,14 +327,19 @@ static long __bpf_get_stackid(struct bpf_map *map,
 	} else {
 		if (hash_matches && bucket->nr == trace_nr &&
 		    memcmp(bucket->data, ips, trace_len) == 0)
-			return id;
-		if (bucket && !(flags & BPF_F_REUSE_STACKID))
-			return -EEXIST;
+			goto go_out;
+
+		if (bucket && !(flags & BPF_F_REUSE_STACKID)) {
+			ret = -EEXIST;
+			goto go_out;
+		}
 
 		new_bucket = (struct stack_map_bucket *)
 			pcpu_freelist_pop(&smap->freelist);
-		if (unlikely(!new_bucket))
-			return -ENOMEM;
+		if (unlikely(!new_bucket)) {
+			ret = -ENOMEM;
+			goto go_out;
+		}
 		memcpy(new_bucket->data, ips, trace_len);
 	}
 
@@ -317,31 +349,21 @@ static long __bpf_get_stackid(struct bpf_map *map,
 	old_bucket = xchg(&smap->buckets[id], new_bucket);
 	if (old_bucket)
 		pcpu_freelist_push(&smap->freelist, &old_bucket->fnode);
-	return id;
+
+go_out:
+	if (!trace_in)
+		preempt_enable();
+	return ret;
 }
 
 BPF_CALL_3(bpf_get_stackid, struct pt_regs *, regs, struct bpf_map *, map,
 	   u64, flags)
 {
-	u32 elem_size = stack_map_data_size(map);
-	bool user = flags & BPF_F_USER_STACK;
-	struct perf_callchain_entry *trace;
-	bool kernel = !user;
-	u32 max_depth;
-
 	if (unlikely(flags & ~(BPF_F_SKIP_FIELD_MASK | BPF_F_USER_STACK |
 			       BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID)))
 		return -EINVAL;
 
-	max_depth = stack_map_calculate_max_depth(map->value_size, elem_size, flags);
-	trace = get_perf_callchain(regs, kernel, user, max_depth,
-				   false, false, 0);
-
-	if (unlikely(!trace))
-		/* couldn't fetch the stack trace */
-		return -EFAULT;
-
-	return __bpf_get_stackid(map, trace, flags);
+	return __bpf_get_stackid(map, regs, NULL, flags);
 }
 
 const struct bpf_func_proto bpf_get_stackid_proto = {
@@ -395,7 +417,7 @@ BPF_CALL_3(bpf_get_stackid_pe, struct bpf_perf_event_data_kern *, ctx,
 
 	if (kernel) {
 		trace->nr = nr_kernel;
-		ret = __bpf_get_stackid(map, trace, flags);
+		ret = __bpf_get_stackid(map, NULL, trace, flags);
 	} else { /* user */
 		u64 skip = flags & BPF_F_SKIP_FIELD_MASK;
 
@@ -404,7 +426,7 @@ BPF_CALL_3(bpf_get_stackid_pe, struct bpf_perf_event_data_kern *, ctx,
 			return -EFAULT;
 
 		flags = (flags & ~BPF_F_SKIP_FIELD_MASK) | skip;
-		ret = __bpf_get_stackid(map, trace, flags);
+		ret = __bpf_get_stackid(map, NULL, trace, flags);
 	}
 
 	/* restore nr */
