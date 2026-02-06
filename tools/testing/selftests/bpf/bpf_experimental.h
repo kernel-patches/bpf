@@ -594,6 +594,15 @@ extern void bpf_iter_dmabuf_destroy(struct bpf_iter_dmabuf *it) __weak __ksym;
 extern int bpf_cgroup_read_xattr(struct cgroup *cgroup, const char *name__str,
 				 struct bpf_dynptr *value_p) __weak __ksym;
 
+extern __u64 bpf_clz64(__u64 x) __weak __ksym;
+extern __u64 bpf_ctz64(__u64 x) __weak __ksym;
+extern __u64 bpf_ffs64(__u64 x) __weak __ksym;
+extern __u64 bpf_fls64(__u64 x) __weak __ksym;
+extern __u64 bpf_bitrev64(__u64 x) __weak __ksym;
+extern __u64 bpf_popcnt64(__u64 x) __weak __ksym;
+extern __u64 bpf_rol64(__u64 x, __u64 s) __weak __ksym;
+extern __u64 bpf_ror64(__u64 x, __u64 s) __weak __ksym;
+
 #define PREEMPT_BITS	8
 #define SOFTIRQ_BITS	8
 #define HARDIRQ_BITS	4
