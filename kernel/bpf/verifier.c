@@ -20901,11 +20901,40 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 	return 0;
 }
 
+static int assert_no_ptr_off(struct bpf_verifier_env *env, char *label)
+{
+	struct bpf_func_state *fstate;
+	struct bpf_reg_state *reg;
+	u32 regno, spi;
+
+	bpf_for_each_reg_in_vstate(env->cur_state, fstate, reg, ({
+		if (reg->type == NOT_INIT || reg->type == SCALAR_VALUE)
+			continue;
+		if (reg->delta) {
+			regno = reg - fstate->regs;
+			spi = container_of(reg, struct bpf_stack_state, spilled_ptr) - fstate->stack;
+			verifier_bug(env, "%s insn %d: %s%d reg->off != 0 (%d)\n",
+				     label,
+				     env->insn_idx,
+				     regno < MAX_BPF_REG ? "r" : "fp",
+				     regno < MAX_BPF_REG ? regno : -spi,
+				     reg->delta);
+			return -EFAULT;
+		}
+	}));
+
+	return 0;
+}
+
 static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 {
 	int err;
 	struct bpf_insn *insn = &env->prog->insnsi[env->insn_idx];
 	u8 class = BPF_CLASS(insn->code);
+
+	err = assert_no_ptr_off(env, "before");
+	if (err)
+		return err;
 
 	if (class == BPF_ALU || class == BPF_ALU64) {
 		err = check_alu_op(env, insn);
@@ -21064,6 +21093,10 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 		verbose(env, "unknown insn class %d\n", class);
 		return -EINVAL;
 	}
+
+	err = assert_no_ptr_off(env, "after");
+	if (err)
+		return err;
 
 	env->insn_idx++;
 	return 0;
