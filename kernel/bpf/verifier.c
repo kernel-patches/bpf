@@ -24604,10 +24604,12 @@ static int convert_spill_base(struct bpf_verifier_env *env)
 		is_stx = is_spill_base_stx(insn);
 		if (is_ldx || is_stx) {
 			stack_depth_extra = max(stack_depth_extra, -insn->off);
+#if !defined CONFIG_ARM64
 			if (is_ldx)
 				insn->src_reg = BPF_REG_FP;
 			else
 				insn->dst_reg = BPF_REG_FP;
+#endif
 			insn->off -= stack_depth;
 		}
 		if ((cur_subprog + 1)->start == i + 1) {

@@ -187,16 +187,20 @@
 /* Rn - imm12; set condition flags */
 #define A64_CMP_I(sf, Rn, imm12) A64_SUBS_I(sf, A64_ZR, Rn, imm12)
 /* Rd = Rn */
-#define A64_MOV(sf, Rd, Rn) A64_ADD_I(sf, Rd, Rn, 0)
+#define A64_MOV(sf, Rd, Rn) \
+	(((Rd) == A64_SP || (Rn) == A64_SP) ? A64_ADD_I(sf, Rd, Rn, 0) : \
+	 aarch64_insn_gen_move_reg(Rd, Rn, A64_VARIANT(sf)))
 
 /* Bitfield move */
 #define A64_BITFIELD(sf, Rd, Rn, immr, imms, type) \
 	aarch64_insn_gen_bitfield(Rd, Rn, immr, imms, \
-		A64_VARIANT(sf), AARCH64_INSN_BITFIELD_MOVE_##type)
+		A64_VARIANT(sf), AARCH64_INSN_BITFIELD_##type)
+/* Leave other bits unchanged */
+#define A64_BFM(sf, Rd, Rn, ir, is)  A64_BITFIELD(sf, Rd, Rn, ir, is, MOVE)
 /* Signed, with sign replication to left and zeros to right */
-#define A64_SBFM(sf, Rd, Rn, ir, is) A64_BITFIELD(sf, Rd, Rn, ir, is, SIGNED)
+#define A64_SBFM(sf, Rd, Rn, ir, is) A64_BITFIELD(sf, Rd, Rn, ir, is, MOVE_SIGNED)
 /* Unsigned, with zeros to left and right */
-#define A64_UBFM(sf, Rd, Rn, ir, is) A64_BITFIELD(sf, Rd, Rn, ir, is, UNSIGNED)
+#define A64_UBFM(sf, Rd, Rn, ir, is) A64_BITFIELD(sf, Rd, Rn, ir, is, MOVE_UNSIGNED)
 
 /* Rd = Rn << shift */
 #define A64_LSL(sf, Rd, Rn, shift) ({	\

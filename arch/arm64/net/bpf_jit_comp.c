@@ -34,6 +34,9 @@
 #define PRIVATE_SP (MAX_BPF_JIT_REG + 4)
 #define ARENA_VM_START (MAX_BPF_JIT_REG + 5)
 
+/* Maximum number of callee-saved registers available for caching stack slots */
+#define MAX_CACHE_REGS 8
+
 #define check_imm(bits, imm) do {				\
 	if ((((imm) > 0) && ((imm) >> (bits))) ||		\
 	    (((imm) < 0) && (~(imm) >> (bits)))) {		\
@@ -83,7 +86,7 @@ struct jit_ctx {
 	int *offset;
 	int exentry_idx;
 	int nr_used_callee_reg;
-	u8 used_callee_reg[8]; /* r6~r9, fp, arena_vm_start */
+	u8 used_callee_reg[16]; /* r6~r9, fp, priv_sp, arena, cache regs */
 	__le32 *image;
 	__le32 *ro_image;
 	u32 stack_size;
@@ -92,6 +95,13 @@ struct jit_ctx {
 	bool fp_used;
 	bool priv_sp_used;
 	bool write;
+	u8 callee_used_mask;
+	bool use_stack_cache;
+	u8 nr_cache_regs;		/* Number of available cache registers */
+	u8 nr_used_cache_regs;		/* Number of cache registers in use */
+	u8 cache_reg[MAX_CACHE_REGS];	/* ARM64 register for each cache slot */
+#define NOT_CACHED 0xff
+	u8 stack_cache_slot[64];	/* Index in cache_reg or NOT_CACHED */
 };
 
 struct bpf_plt {
@@ -373,29 +383,8 @@ static void prepare_bpf_tail_call_cnt(struct jit_ctx *ctx)
 
 static void find_used_callee_regs(struct jit_ctx *ctx)
 {
-	int i;
-	const struct bpf_prog *prog = ctx->prog;
-	const struct bpf_insn *insn = &prog->insnsi[0];
-	int reg_used = 0;
-
-	for (i = 0; i < prog->len; i++, insn++) {
-		if (insn->dst_reg == BPF_REG_6 || insn->src_reg == BPF_REG_6)
-			reg_used |= 1;
-
-		if (insn->dst_reg == BPF_REG_7 || insn->src_reg == BPF_REG_7)
-			reg_used |= 2;
-
-		if (insn->dst_reg == BPF_REG_8 || insn->src_reg == BPF_REG_8)
-			reg_used |= 4;
-
-		if (insn->dst_reg == BPF_REG_9 || insn->src_reg == BPF_REG_9)
-			reg_used |= 8;
-
-		if (insn->dst_reg == BPF_REG_FP || insn->src_reg == BPF_REG_FP) {
-			ctx->fp_used = true;
-			reg_used |= 16;
-		}
-	}
+	u8 reg_used = ctx->callee_used_mask;
+	int i, j;
 
 	i = 0;
 	if (reg_used & 1)
@@ -410,7 +399,7 @@ static void find_used_callee_regs(struct jit_ctx *ctx)
 	if (reg_used & 8)
 		ctx->used_callee_reg[i++] = bpf2a64[BPF_REG_9];
 
-	if (reg_used & 16) {
+	if (ctx->fp_used) {
 		ctx->used_callee_reg[i++] = bpf2a64[BPF_REG_FP];
 		if (ctx->priv_sp_used)
 			ctx->used_callee_reg[i++] = bpf2a64[PRIVATE_SP];
@@ -418,6 +407,10 @@ static void find_used_callee_regs(struct jit_ctx *ctx)
 
 	if (ctx->arena_vm_start)
 		ctx->used_callee_reg[i++] = bpf2a64[ARENA_VM_START];
+
+	/* Add stack cache registers that are in use */
+	for (j = 0; j < ctx->nr_used_cache_regs; j++)
+		ctx->used_callee_reg[i++] = ctx->cache_reg[j];
 
 	ctx->nr_used_callee_reg = i;
 }
@@ -594,9 +587,6 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf)
 		 */
 		emit(A64_SUB_I(1, A64_SP, A64_FP, 96), ctx);
 	}
-
-	/* Stack must be multiples of 16B */
-	ctx->stack_size = round_up(prog->aux->stack_depth, 16);
 
 	if (ctx->fp_used) {
 		if (ctx->priv_sp_used) {
@@ -1199,6 +1189,175 @@ static int add_exception_handler(const struct bpf_insn *insn,
 	return 0;
 }
 
+static void find_callee_usage(struct jit_ctx *ctx)
+{
+	const struct bpf_prog *prog = ctx->prog;
+	const struct bpf_insn *insn = &prog->insnsi[0];
+	u8 class;
+	u8 reg_used = 0;
+	int i;
+
+	for (i = 0; i < prog->len; i++, insn++) {
+		class = BPF_CLASS(insn->code);
+
+		if (insn->dst_reg == BPF_REG_6 || insn->src_reg == BPF_REG_6)
+			reg_used |= 1;
+		if (insn->dst_reg == BPF_REG_7 || insn->src_reg == BPF_REG_7)
+			reg_used |= 2;
+		if (insn->dst_reg == BPF_REG_8 || insn->src_reg == BPF_REG_8)
+			reg_used |= 4;
+		if (insn->dst_reg == BPF_REG_9 || insn->src_reg == BPF_REG_9)
+			reg_used |= 8;
+		if (insn->dst_reg == BPF_REG_FP || insn->src_reg == BPF_REG_FP)
+			ctx->fp_used = true;
+		if (class == BPF_STX && insn->dst_reg == BPF_REG_SB ||
+		    class == BPF_LDX && insn->src_reg == BPF_REG_SB)
+			ctx->fp_used = true;
+	}
+
+	ctx->callee_used_mask = reg_used;
+}
+
+static int stack_group_from_off(s16 off)
+{
+	s16 base_off = off & ~7;
+	u32 neg_base = (u32)(-base_off);
+	u32 gidx;
+
+	if (off >= 0 || neg_base < 8)
+		return -1;
+	gidx = (neg_base >> 3) - 1;
+
+	if (gidx < 64)
+		return gidx;
+
+	return -1;
+}
+
+static int emit_stack_cache_read(const struct bpf_insn *insn, struct jit_ctx *ctx)
+{
+	u8 dst = bpf2a64[insn->dst_reg];
+	u8 src;
+	int gidx;
+	u8 slot;
+
+	if (!ctx->use_stack_cache)
+		return -1;
+
+	gidx = stack_group_from_off(insn->off);
+	if (gidx < 0 || gidx >= 64)
+		return -1;
+	slot = ctx->stack_cache_slot[gidx];
+	if (slot == NOT_CACHED)
+		return -1;
+	src = ctx->cache_reg[slot];
+
+	emit(A64_MOV(1, dst, src), ctx);
+	return 0;
+}
+
+static int emit_stack_cache_write(const struct bpf_insn *insn, struct jit_ctx *ctx)
+{
+	u8 src = bpf2a64[insn->src_reg];
+	u8 dst;
+	int gidx;
+	u8 slot;
+
+	if (!ctx->use_stack_cache)
+		return -1;
+
+	gidx = stack_group_from_off(insn->off);
+	if (gidx < 0 || gidx >= 64)
+		return -1;
+	slot = ctx->stack_cache_slot[gidx];
+	if (slot == NOT_CACHED)
+		return -1;
+	dst = ctx->cache_reg[slot];
+
+	emit(A64_MOV(1, dst, src), ctx);
+
+	return 0;
+}
+
+/*
+ * Build the pool of available cache registers.
+ *
+ * We start with two dedicated cache registers (r23, r24), then add any
+ * unused BPF callee-saved register slots (r19-r22 for BPF R6-R9).
+ *
+ * This allows programs that don't use all of R6-R9 to have more cache
+ * registers available, potentially up to 6 total.
+ */
+static void build_cache_reg_pool(struct jit_ctx *ctx)
+{
+	int nr = 0;
+
+	if (!(ctx->callee_used_mask & 1))
+		ctx->cache_reg[nr++] = A64_R(19);  /* BPF R6 -> r19 */
+	if (!(ctx->callee_used_mask & 2))
+		ctx->cache_reg[nr++] = A64_R(20);  /* BPF R7 -> r20 */
+	if (!(ctx->callee_used_mask & 4))
+		ctx->cache_reg[nr++] = A64_R(21);  /* BPF R8 -> r21 */
+	if (!(ctx->callee_used_mask & 8))
+		ctx->cache_reg[nr++] = A64_R(22);  /* BPF R9 -> r22 */
+
+	/* Always-available dedicated cache registers */
+	ctx->cache_reg[nr++] = A64_R(23);
+	ctx->cache_reg[nr++] = A64_R(24);
+
+	if (!ctx->priv_sp_used)
+		ctx->cache_reg[nr++] = A64_R(27);
+
+	if (!ctx->arena_vm_start)
+		ctx->cache_reg[nr++] = A64_R(28);
+
+	ctx->nr_cache_regs = nr;
+}
+
+static void find_cacheable_stack_slots(struct jit_ctx *ctx)
+{
+	const struct bpf_insn *insns = ctx->prog->insnsi;
+	u32 insn_cnt = ctx->prog->len;
+	u32 stack_size = ctx->stack_size;
+	u32 i;
+
+
+	if (!ctx->nr_cache_regs || !stack_size) {
+		ctx->use_stack_cache = false;
+		return;
+	}
+
+	memset(ctx->stack_cache_slot, NOT_CACHED, sizeof(ctx->stack_cache_slot));
+	for (i = 0; i < insn_cnt; i++) {
+		const struct bpf_insn *insn = &insns[i];
+		u8 class = BPF_CLASS(insn->code);
+		int gidx;
+
+		if (class != BPF_STX && class != BPF_LDX)
+			continue;
+
+		if (class == BPF_LDX && insn->src_reg != BPF_REG_SB)
+			continue;
+		if (class == BPF_STX && insn->dst_reg != BPF_REG_SB)
+			continue;
+
+		gidx = stack_group_from_off(insn->off);
+		if (gidx < 0 || gidx >= 64)
+			continue;
+
+		if (ctx->stack_cache_slot[gidx] != NOT_CACHED)
+			continue;
+
+		if (ctx->nr_used_cache_regs < ctx->nr_cache_regs)
+			ctx->stack_cache_slot[gidx] = ctx->nr_used_cache_regs++;
+		else
+			break;
+	}
+
+	if (ctx->nr_used_cache_regs)
+		ctx->use_stack_cache = true;
+}
+
 /* JITs an eBPF instruction.
  * Returns:
  * 0  - successfully JITed an 8-byte eBPF instruction.
@@ -1215,6 +1374,12 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 	const u8 tmp2 = bpf2a64[TMP_REG_2];
 	const u8 tmp3 = bpf2a64[TMP_REG_3];
 	const u8 fp = bpf2a64[BPF_REG_FP];
+
+	/* BPF_REG_SB is an alias for BPF_REG_FP */
+	if (BPF_CLASS(code) == BPF_STX && insn->dst_reg == BPF_REG_SB)
+		dst = fp;
+	if (BPF_CLASS(code) == BPF_LDX && insn->src_reg == BPF_REG_SB)
+		src = fp;
 	const u8 arena_vm_base = bpf2a64[ARENA_VM_START];
 	const u8 priv_sp = bpf2a64[PRIVATE_SP];
 	const s16 off = insn->off;
@@ -1674,6 +1839,10 @@ emit_cond_jmp:
 			emit(A64_ADD(1, tmp2, src, arena_vm_base), ctx);
 			src = tmp2;
 		}
+
+		if (src == fp && !emit_stack_cache_read(insn, ctx))
+			break;
+
 		if (src == fp) {
 			src_adj = ctx->priv_sp_used ? priv_sp : A64_SP;
 			off_adj = off + ctx->stack_size;
@@ -1765,6 +1934,7 @@ emit_cond_jmp:
 			emit(A64_ADD(1, tmp3, dst, arena_vm_base), ctx);
 			dst = tmp3;
 		}
+
 		if (dst == fp) {
 			dst_adj = ctx->priv_sp_used ? priv_sp : A64_SP;
 			off_adj = off + ctx->stack_size;
@@ -1827,6 +1997,10 @@ emit_cond_jmp:
 			emit(A64_ADD(1, tmp2, dst, arena_vm_base), ctx);
 			dst = tmp2;
 		}
+
+		if (dst == fp && !emit_stack_cache_write(insn, ctx))
+			break;
+
 		if (dst == fp) {
 			dst_adj = ctx->priv_sp_used ? priv_sp : A64_SP;
 			off_adj = off + ctx->stack_size;
@@ -2084,6 +2258,8 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	}
 	memset(&ctx, 0, sizeof(ctx));
 	ctx.prog = prog;
+	/* Stack must be multiples of 16B */
+	ctx.stack_size = round_up(prog->aux->stack_depth, 16);
 
 	ctx.offset = kvcalloc(prog->len + 1, sizeof(int), GFP_KERNEL);
 	if (ctx.offset == NULL) {
@@ -2096,6 +2272,10 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 
 	if (priv_stack_ptr)
 		ctx.priv_sp_used = true;
+
+	find_callee_usage(&ctx);
+	build_cache_reg_pool(&ctx);
+	find_cacheable_stack_slots(&ctx);
 
 	/* Pass 1: Estimate the maximum image size.
 	 *
