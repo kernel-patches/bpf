@@ -904,15 +904,23 @@ static void bpf_shim_tramp_link_release(struct bpf_link *link)
 		return;
 
 	WARN_ON_ONCE(bpf_trampoline_unlink_prog(&shim_link->link, shim_link->trampoline, NULL));
-	bpf_trampoline_put(shim_link->trampoline);
 }
 
 static void bpf_shim_tramp_link_dealloc(struct bpf_link *link)
 {
 	struct bpf_shim_tramp_link *shim_link =
 		container_of(link, struct bpf_shim_tramp_link, link.link);
+	struct bpf_trampoline *tr = shim_link->trampoline;
 
+	if (!tr) {
+		kfree(shim_link);
+		return;
+	}
+
+	mutex_lock(&tr->mutex);
 	kfree(shim_link);
+	mutex_unlock(&tr->mutex);
+	bpf_trampoline_put(tr);
 }
 
 static const struct bpf_link_ops bpf_shim_tramp_link_lops = {
@@ -1002,10 +1010,8 @@ int bpf_trampoline_link_cgroup_shim(struct bpf_prog *prog,
 	mutex_lock(&tr->mutex);
 
 	shim_link = cgroup_shim_find(tr, bpf_func);
-	if (shim_link) {
+	if (shim_link && atomic64_inc_not_zero(&shim_link->link.link.refcnt)) {
 		/* Reusing existing shim attached by the other program. */
-		bpf_link_inc(&shim_link->link.link);
-
 		mutex_unlock(&tr->mutex);
 		bpf_trampoline_put(tr); /* bpf_trampoline_get above */
 		return 0;
