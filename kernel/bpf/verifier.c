@@ -7076,6 +7076,7 @@ static int bpf_map_direct_read(struct bpf_map *map, int off, int size, u64 *val,
 #define BTF_TYPE_SAFE_RCU_OR_NULL(__type)  __PASTE(__type, __safe_rcu_or_null)
 #define BTF_TYPE_SAFE_TRUSTED(__type)  __PASTE(__type, __safe_trusted)
 #define BTF_TYPE_SAFE_TRUSTED_OR_NULL(__type)  __PASTE(__type, __safe_trusted_or_null)
+#define BTF_TYPE_SAFE_UNTRUSTED(__type)  __PASTE(__type, __safe_untrusted)
 
 /*
  * Allow list few fields as RCU trusted or full trusted.
@@ -7154,6 +7155,10 @@ BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct vm_area_struct) {
 	struct file *vm_file;
 };
 
+BTF_TYPE_SAFE_UNTRUSTED(struct unix_sock) {
+	struct sock *peer;
+};
+
 static bool type_is_rcu(struct bpf_verifier_env *env,
 			struct bpf_reg_state *reg,
 			const char *field_name, u32 btf_id)
@@ -7199,6 +7204,16 @@ static bool type_is_trusted_or_null(struct bpf_verifier_env *env,
 
 	return btf_nested_type_is_trusted(&env->log, reg, field_name, btf_id,
 					  "__safe_trusted_or_null");
+}
+
+static bool type_is_untrusted(struct bpf_verifier_env *env,
+			      struct bpf_reg_state *reg,
+			      const char *field_name, u32 btf_id)
+{
+	BTF_TYPE_EMIT(BTF_TYPE_SAFE_UNTRUSTED(struct unix_sock));
+
+	return btf_nested_type_is_trusted(&env->log, reg, field_name, btf_id,
+					  "__safe_untrusted");
 }
 
 static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
@@ -7343,6 +7358,9 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	} else {
 		/* Old compat. Deprecated */
 		clear_trusted_flags(&flag);
+
+		if (type_is_untrusted(env, reg, field_name, btf_id))
+			flag |= PTR_UNTRUSTED;
 	}
 
 	if (atype == BPF_READ && value_regno >= 0) {

@@ -3,6 +3,7 @@
 
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 #include "bpf_misc.h"
 
 struct {
@@ -1164,6 +1165,30 @@ int invalidate_pkt_pointers_by_tail_call(struct __sk_buff *sk)
 	bpf_tail_call_static(sk, &jmp_table, 0);
 	*p = 42; /* this is NOT unsafe: tail calls don't return */
 	return TCX_PASS;
+}
+
+SEC("fentry/unix_dgram_sendmsg")
+__failure __msg("R1 type=untrusted_ptr_ expected=sock_common, sock, tcp_sock, xdp_sock, ptr_, trusted_ptr_")
+int BPF_PROG(trace_unix_dgram_sendmsg, struct socket *sock, struct msghdr *msg,
+	     size_t len)
+{
+	struct unix_sock *u, *u_other;
+
+	if (!sock)
+		return 0;
+
+	u = bpf_skc_to_unix_sock(sock->sk);
+	if (!u)
+		return 0;
+
+	/* unix_dgram_connect() could clear u->peer
+	 * and the peer could be freed.
+	 */
+	u_other = bpf_skc_to_unix_sock(u->peer);
+	if (!u_other)
+		return 0;
+
+	return 0;
 }
 
 char _license[] SEC("license") = "GPL";
