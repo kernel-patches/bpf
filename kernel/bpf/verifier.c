@@ -7157,6 +7157,7 @@ BTF_TYPE_SAFE_TRUSTED_OR_NULL(struct vm_area_struct) {
 
 BTF_TYPE_SAFE_UNTRUSTED(struct unix_sock) {
 	struct sock *peer;
+	struct sock *listener;
 };
 
 static bool type_is_rcu(struct bpf_verifier_env *env,

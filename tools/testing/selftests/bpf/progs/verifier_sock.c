@@ -1191,4 +1191,28 @@ int BPF_PROG(trace_unix_dgram_sendmsg, struct socket *sock, struct msghdr *msg,
 	return 0;
 }
 
+SEC("fentry/unix_maybe_add_creds")
+__failure __msg("R1 type=untrusted_ptr_ expected=sock_common, sock, tcp_sock, xdp_sock, ptr_, trusted_ptr_")
+int BPF_PROG(trace_unix_maybe_add_creds, struct sk_buff *skb,
+	     const struct sock *sk, struct sock *other)
+{
+	struct unix_sock *u_other, *u_listener;
+
+	if (!other)
+		return 0;
+
+	u_other = bpf_skc_to_unix_sock(other);
+	if (!u_other)
+		return 0;
+
+	/* unix_accept() could clear u_other->listener
+	 * and the listener could be close()d.
+	 */
+	u_listener = bpf_skc_to_unix_sock(u_other->listener);
+	if (!u_listener)
+		return 0;
+
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
