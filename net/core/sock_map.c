@@ -12,6 +12,7 @@
 #include <linux/list.h>
 #include <linux/jhash.h>
 #include <linux/sock_diag.h>
+#include <net/af_unix.h>
 #include <net/udp.h>
 
 struct bpf_stab {
@@ -115,17 +116,49 @@ put_prog:
 }
 
 static void sock_map_sk_acquire(struct sock *sk)
-	__acquires(&sk->sk_lock.slock)
+	__acquires(sock_or_unix_lock)
 {
-	lock_sock(sk);
+	if (sk_is_unix(sk)) {
+		unix_state_lock(sk);
+		__release(sk); /* Silence sparse. */
+	} else {
+		lock_sock(sk);
+	}
+
 	rcu_read_lock();
 }
 
 static void sock_map_sk_release(struct sock *sk)
-	__releases(&sk->sk_lock.slock)
+	__releases(sock_or_unix_lock)
 {
 	rcu_read_unlock();
-	release_sock(sk);
+
+	if (sk_is_unix(sk)) {
+		unix_state_unlock(sk);
+		__acquire(sk); /* Silence sparse. */
+	} else {
+		release_sock(sk);
+	}
+}
+
+static inline void sock_map_sk_acquire_fast(struct sock *sk)
+{
+	local_bh_disable();
+
+	if (sk_is_unix(sk))
+		unix_state_lock(sk);
+	else
+		bh_lock_sock(sk);
+}
+
+static inline void sock_map_sk_release_fast(struct sock *sk)
+{
+	if (sk_is_unix(sk))
+		unix_state_unlock(sk);
+	else
+		bh_unlock_sock(sk);
+
+	local_bh_enable();
 }
 
 static void sock_map_add_link(struct sk_psock *psock,
@@ -604,16 +637,14 @@ static long sock_map_update_elem(struct bpf_map *map, void *key,
 	if (!sock_map_sk_is_suitable(sk))
 		return -EOPNOTSUPP;
 
-	local_bh_disable();
-	bh_lock_sock(sk);
+	sock_map_sk_acquire_fast(sk);
 	if (!sock_map_sk_state_allowed(sk))
 		ret = -EOPNOTSUPP;
 	else if (map->map_type == BPF_MAP_TYPE_SOCKMAP)
 		ret = sock_map_update_common(map, *(u32 *)key, sk, flags);
 	else
 		ret = sock_hash_update_common(map, key, sk, flags);
-	bh_unlock_sock(sk);
-	local_bh_enable();
+	sock_map_sk_release_fast(sk);
 	return ret;
 }
 
