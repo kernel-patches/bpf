@@ -21333,10 +21333,9 @@ static int find_btf_percpu_datasec(struct btf *btf)
 }
 
 /*
- * Add btf to the used_btfs array and return the index. (If the btf was
- * already added, then just return the index.) Upon successful insertion
- * increase btf refcnt, and, if present, also refcount the corresponding
- * kernel module.
+ * Add btf to the used_btfs array and return the index. If the btf was
+ * already added, then just return the index. If needed, refcount the
+ * corresponding kernel module.
  */
 static int __add_used_btf(struct bpf_verifier_env *env, struct btf *btf)
 {
@@ -21354,8 +21353,6 @@ static int __add_used_btf(struct bpf_verifier_env *env, struct btf *btf)
 		return -E2BIG;
 	}
 
-	btf_get(btf);
-
 	btf_mod = &env->used_btfs[env->used_btf_cnt];
 	btf_mod->btf = btf;
 	btf_mod->module = NULL;
@@ -21363,10 +21360,8 @@ static int __add_used_btf(struct bpf_verifier_env *env, struct btf *btf)
 	/* if we reference variables from kernel module, bump its refcount */
 	if (btf_is_module(btf)) {
 		btf_mod->module = btf_try_get_module(btf);
-		if (!btf_mod->module) {
-			btf_put(btf);
+		if (!btf_mod->module)
 			return -ENXIO;
-		}
 	}
 
 	return env->used_btf_cnt++;
@@ -21466,9 +21461,7 @@ static int check_pseudo_btf_id(struct bpf_verifier_env *env,
 
 	btf_fd = insn[1].imm;
 	if (btf_fd) {
-		CLASS(fd, f)(btf_fd);
-
-		btf = __btf_get_by_fd(f);
+		btf = btf_get_by_fd(btf_fd);
 		if (IS_ERR(btf)) {
 			verbose(env, "invalid module BTF object FD specified.\n");
 			return -EINVAL;
@@ -21478,17 +21471,23 @@ static int check_pseudo_btf_id(struct bpf_verifier_env *env,
 			verbose(env, "kernel is missing BTF, make sure CONFIG_DEBUG_INFO_BTF=y is specified in Kconfig.\n");
 			return -EINVAL;
 		}
+		btf_get(btf_vmlinux);
 		btf = btf_vmlinux;
 	}
 
 	err = __check_pseudo_btf_id(env, insn, aux, btf);
 	if (err)
-		return err;
+		goto err_put;
 
 	err = __add_used_btf(env, btf);
 	if (err < 0)
-		return err;
+		goto err_put;
+
 	return 0;
+
+err_put:
+	btf_put(btf);
+	return err;
 }
 
 static bool is_tracing_prog_type(enum bpf_prog_type type)
@@ -25368,11 +25367,13 @@ static int add_fd_from_fd_array(struct bpf_verifier_env *env, int fd)
 		return 0;
 	}
 
-	btf = __btf_get_by_fd(f);
+	btf = btf_get_by_fd(fd);
 	if (!IS_ERR(btf)) {
 		err = __add_used_btf(env, btf);
-		if (err < 0)
+		if (err < 0) {
+			btf_put(btf);
 			return err;
+		}
 		return 0;
 	}
 
