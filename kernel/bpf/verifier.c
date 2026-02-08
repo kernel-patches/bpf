@@ -17579,6 +17579,113 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 				 &linked_regs);
 	}
 
+	/* For JEQ/JNE with a known constant, fork the not-equal branch
+	 * into dst > const and dst < const for tighter range tracking.
+	 */
+	if ((opcode == BPF_JEQ || opcode == BPF_JNE) &&
+	    dst_reg->type == SCALAR_VALUE) {
+		struct bpf_verifier_state *neq_branch2, *neq_state;
+		struct bpf_reg_state *neq_regs, *neq2_regs;
+		struct bpf_reg_state fake_const;
+		bool can_fork = false;
+		s32 neq_target;
+		u64 val;
+
+		/* Determine which src is the constant */
+		if (BPF_SRC(insn->code) == BPF_K) {
+			val = (u64)(s64)insn->imm;
+			can_fork = true;
+		} else if (is_reg_const(src_reg, is_jmp32)) {
+			val = reg_const_value(src_reg, is_jmp32);
+			can_fork = true;
+		} else if (is_reg_const(dst_reg, is_jmp32)) {
+			/* dst is const — JNE/JEQ is symmetric for forking,
+			 * but we'd fork on src's range. Skip for now.
+			 */
+			can_fork = false;
+		}
+
+		if (can_fork) {
+			/* Identify the not-equal branch and check feasibility */
+			if (opcode == BPF_JEQ) {
+				neq_regs = regs; /* this_branch = fallthrough = != */
+				neq_target = *insn_idx + 1;
+				neq_state = this_branch;
+			} else {
+				neq_regs = other_branch_regs; /* other_branch = jump = != */
+				neq_target = *insn_idx + insn->off + 1;
+				neq_state = other_branch;
+			}
+
+			/* Check that the range spans across the constant.
+			 * Check both unsigned and signed ranges, because
+			 * reg_bounds_sync() may cross-propagate signed
+			 * bounds into unsigned after JGT/JLT refinement,
+			 * creating infeasible states if the signed range
+			 * doesn't also span the constant.
+			 */
+			if (is_jmp32) {
+				can_fork = neq_regs[insn->dst_reg].u32_min_value < (u32)val &&
+					   neq_regs[insn->dst_reg].u32_max_value > (u32)val &&
+					   neq_regs[insn->dst_reg].s32_min_value < (s32)val &&
+					   neq_regs[insn->dst_reg].s32_max_value > (s32)val;
+			} else {
+				can_fork = neq_regs[insn->dst_reg].umin_value < val &&
+					   neq_regs[insn->dst_reg].umax_value > val &&
+					   neq_regs[insn->dst_reg].smin_value < (s64)val &&
+					   neq_regs[insn->dst_reg].smax_value > (s64)val;
+			}
+		}
+
+		if (can_fork) {
+			/* Create a fake const register for regs_refine_cond_op */
+			memset(&fake_const, 0, sizeof(fake_const));
+			fake_const.type = SCALAR_VALUE;
+			__mark_reg_known(&fake_const, val);
+
+			/* Push second fork for the not-equal branch.
+			 * push_stack copies env->cur_state (this_branch).
+			 * For JNE this_branch is the equal branch, so we
+			 * must overwrite dst_reg with the not-equal copy.
+			 */
+			neq_branch2 = push_stack(env, neq_target, *insn_idx, false);
+			if (IS_ERR(neq_branch2))
+				return PTR_ERR(neq_branch2);
+			neq2_regs = neq_branch2->frame[neq_branch2->curframe]->regs;
+			neq2_regs[insn->dst_reg] = neq_regs[insn->dst_reg];
+
+			/* Fork 1 (existing not-equal branch): dst > const */
+			regs_refine_cond_op(&neq_regs[insn->dst_reg],
+					    &fake_const, BPF_JGT, is_jmp32);
+			reg_bounds_sync(&neq_regs[insn->dst_reg]);
+
+			/* Fork 2 (new state): dst < const */
+			memset(&fake_const, 0, sizeof(fake_const));
+			fake_const.type = SCALAR_VALUE;
+			__mark_reg_known(&fake_const, val);
+			regs_refine_cond_op(&neq2_regs[insn->dst_reg],
+					    &fake_const, BPF_JLT, is_jmp32);
+			reg_bounds_sync(&neq2_regs[insn->dst_reg]);
+
+			/* Propagate JGT/JLT bounds to linked registers */
+			if (neq_regs[insn->dst_reg].id) {
+				sync_linked_regs(env, neq_state,
+						 &neq_regs[insn->dst_reg],
+						 &linked_regs);
+				sync_linked_regs(env, neq_branch2,
+						 &neq2_regs[insn->dst_reg],
+						 &linked_regs);
+			}
+
+			err = reg_bounds_sanity_check(env,
+					&neq_regs[insn->dst_reg], "neq_gt");
+			err = err ?: reg_bounds_sanity_check(env,
+					&neq2_regs[insn->dst_reg], "neq_lt");
+			if (err)
+				return err;
+		}
+	}
+
 	/* if one pointer register is compared to another pointer
 	 * register check if PTR_MAYBE_NULL could be lifted.
 	 * E.g. register A - maybe null
