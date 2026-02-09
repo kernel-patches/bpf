@@ -29,6 +29,8 @@
 #include <linux/task_work.h>
 #include <linux/irq_work.h>
 #include <linux/buildid.h>
+#include <linux/bitops.h>
+#include <linux/bitrev.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -4501,6 +4503,46 @@ __bpf_kfunc int bpf_timer_cancel_async(struct bpf_timer *timer)
 	}
 }
 
+__bpf_kfunc u64 bpf_clz64(u64 x)
+{
+	return x ? 64 - fls64(x) : 64;
+}
+
+__bpf_kfunc u64 bpf_ctz64(u64 x)
+{
+	return x ? __ffs64(x) : 64;
+}
+
+__bpf_kfunc u64 bpf_ffs64(u64 x)
+{
+	return x ? __ffs64(x) + 1 : 0;
+}
+
+__bpf_kfunc u64 bpf_fls64(u64 x)
+{
+	return fls64(x);
+}
+
+__bpf_kfunc u64 bpf_popcnt64(u64 x)
+{
+	return hweight64(x);
+}
+
+__bpf_kfunc u64 bpf_bitrev64(u64 x)
+{
+	return ((u64)bitrev32(x & 0xFFFFFFFF) << 32) | bitrev32(x >> 32);
+}
+
+__bpf_kfunc u64 bpf_rol64(u64 x, u64 s)
+{
+	return rol64(x, s);
+}
+
+__bpf_kfunc u64 bpf_ror64(u64 x, u64 s)
+{
+	return ror64(x, s);
+}
+
 __bpf_kfunc_end_defs();
 
 static void bpf_task_work_cancel_scheduled(struct irq_work *irq_work)
@@ -4578,6 +4620,14 @@ BTF_ID_FLAGS(func, bpf_key_put, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_verify_pkcs7_signature, KF_SLEEPABLE)
 #endif
 #endif
+BTF_ID_FLAGS(func, bpf_clz64, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_ctz64, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_ffs64, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_fls64, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_popcnt64, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_bitrev64, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_rol64, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_ror64, KF_FASTCALL)
 BTF_KFUNCS_END(generic_btf_ids)
 
 static const struct btf_kfunc_id_set generic_kfunc_set = {

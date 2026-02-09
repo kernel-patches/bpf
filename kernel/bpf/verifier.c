@@ -12461,6 +12461,14 @@ enum special_kfunc_type {
 	KF_bpf_session_is_return,
 	KF_bpf_stream_vprintk,
 	KF_bpf_stream_print_stack,
+	KF_bpf_clz64,
+	KF_bpf_ctz64,
+	KF_bpf_ffs64,
+	KF_bpf_fls64,
+	KF_bpf_bitrev64,
+	KF_bpf_popcnt64,
+	KF_bpf_rol64,
+	KF_bpf_ror64,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12541,6 +12549,14 @@ BTF_ID(func, bpf_arena_reserve_pages)
 BTF_ID(func, bpf_session_is_return)
 BTF_ID(func, bpf_stream_vprintk)
 BTF_ID(func, bpf_stream_print_stack)
+BTF_ID(func, bpf_clz64)
+BTF_ID(func, bpf_ctz64)
+BTF_ID(func, bpf_ffs64)
+BTF_ID(func, bpf_fls64)
+BTF_ID(func, bpf_bitrev64)
+BTF_ID(func, bpf_popcnt64)
+BTF_ID(func, bpf_rol64)
+BTF_ID(func, bpf_ror64)
 
 static bool is_task_work_add_kfunc(u32 func_id)
 {
@@ -18204,6 +18220,34 @@ static bool verifier_inlines_helper_call(struct bpf_verifier_env *env, s32 imm)
 	}
 }
 
+static bool bpf_kfunc_is_fastcall(struct bpf_verifier_env *env, u32 func_id, u32 flags)
+{
+	if (!(flags & KF_FASTCALL))
+		return false;
+
+	if (!env->prog->jit_requested)
+		return true;
+
+	if (func_id == special_kfunc_list[KF_bpf_clz64])
+		return bpf_jit_inlines_kfunc_call(bpf_clz64);
+	if (func_id == special_kfunc_list[KF_bpf_ctz64])
+		return bpf_jit_inlines_kfunc_call(bpf_ctz64);
+	if (func_id == special_kfunc_list[KF_bpf_ffs64])
+		return bpf_jit_inlines_kfunc_call(bpf_ffs64);
+	if (func_id == special_kfunc_list[KF_bpf_fls64])
+		return bpf_jit_inlines_kfunc_call(bpf_fls64);
+	if (func_id == special_kfunc_list[KF_bpf_bitrev64])
+		return bpf_jit_inlines_kfunc_call(bpf_bitrev64);
+	if (func_id == special_kfunc_list[KF_bpf_popcnt64])
+		return bpf_jit_inlines_kfunc_call(bpf_popcnt64);
+	if (func_id == special_kfunc_list[KF_bpf_rol64])
+		return bpf_jit_inlines_kfunc_call(bpf_rol64);
+	if (func_id == special_kfunc_list[KF_bpf_ror64])
+		return bpf_jit_inlines_kfunc_call(bpf_ror64);
+
+	return true;
+}
+
 struct call_summary {
 	u8 num_params;
 	bool is_void;
@@ -18246,7 +18290,7 @@ static bool get_call_summary(struct bpf_verifier_env *env, struct bpf_insn *call
 			/* error would be reported later */
 			return false;
 		cs->num_params = btf_type_vlen(meta.func_proto);
-		cs->fastcall = meta.kfunc_flags & KF_FASTCALL;
+		cs->fastcall = bpf_kfunc_is_fastcall(env, meta.func_id, meta.kfunc_flags);
 		cs->is_void = btf_type_is_void(btf_type_by_id(meta.btf, meta.func_proto->type));
 		return true;
 	}
@@ -23186,6 +23230,13 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[4] = BPF_ALU64_REG(BPF_SUB, BPF_REG_0, BPF_REG_1);
 		insn_buf[5] = BPF_ALU64_IMM(BPF_NEG, BPF_REG_0, 0);
 		*cnt = 6;
+	} else if (desc->func_id == special_kfunc_list[KF_bpf_ffs64] &&
+		   bpf_jit_inlines_kfunc_call(bpf_ffs64)) {
+		insn_buf[0] = BPF_MOV64_IMM(BPF_REG_0, 0);
+		insn_buf[1] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_1, 0, 2);
+		insn_buf[2] = *insn;
+		insn_buf[3] = BPF_ALU64_IMM(BPF_ADD, BPF_REG_0, 1);
+		*cnt = 4;
 	}
 
 	if (env->insn_aux_data[insn_idx].arg_prog) {
