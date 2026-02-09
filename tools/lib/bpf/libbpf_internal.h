@@ -392,6 +392,8 @@ enum kern_feature_id {
 	FEAT_ARG_CTX_TAG,
 	/* Kernel supports '?' at the front of datasec names */
 	FEAT_BTF_QMARK_DATASEC,
+	/* Kernel supports relocating arena globals to end of the arena */
+	FEAT_ARENA_GLOBAL_RELOC,
 	__FEAT_CNT,
 };
 

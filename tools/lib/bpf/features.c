@@ -506,6 +506,95 @@ static int probe_kern_arg_ctx_tag(int token_fd)
 	return probe_fd(prog_fd);
 }
 
+static int probe_kern_arena_global_reloc(int token_fd)
+{
+	const size_t bufsz = 1024;
+	int btf_fd, prog_fd, map;
+	char log_buf[bufsz];
+	int ret;
+	static const char strs[] = "\0f\0";
+	const __u32 types[] = {
+		/* [1] FUNC_PROTO `void(void)` */
+		BTF_TYPE_ENC(0, BTF_INFO_ENC(BTF_KIND_FUNC_PROTO, 0, 0), 0),
+		/* [2] FUNC 'f' -> FUNC_PROTO (main prog) */
+		BTF_TYPE_ENC(1 /* "f" */, BTF_INFO_ENC(BTF_KIND_FUNC, 0, BTF_FUNC_GLOBAL), 1),
+	};
+	LIBBPF_OPTS(bpf_map_create_opts, map_opts,
+		.token_fd = token_fd,
+		.map_flags = token_fd ? BPF_F_TOKEN_FD : 0,
+	);
+	LIBBPF_OPTS(bpf_prog_load_opts, prog_opts,
+		.token_fd = token_fd,
+		.prog_flags = BPF_F_SLEEPABLE | (token_fd ? BPF_F_TOKEN_FD : 0),
+		.log_buf = log_buf,
+		.log_size = bufsz,
+	);
+	struct bpf_insn insns[] = {
+		BPF_LD_MAP_VALUE(BPF_REG_1, 0, 1UL << 30),
+		BPF_EXIT_INSN(),
+	};
+	const struct bpf_func_info_min func_infos[] = {
+		{ 0, 2 }, /* main prog -> FUNC 'f' */
+	};
+	int insn_cnt = ARRAY_SIZE(insns);
+
+	btf_fd = libbpf__load_raw_btf((char *)types, sizeof(types), strs, sizeof(strs), token_fd);
+	if (btf_fd < 0)
+		return 0; /* BTF not supported at all */
+
+	map = bpf_map_create(BPF_MAP_TYPE_ARRAY, "arr", sizeof(int), 1, 1, &map_opts);
+	if (map < 0) {
+		ret = -errno;
+		pr_warn("Error in %s(): %s. Couldn't create simple array map.\n",
+			__func__, errstr(ret));
+		close(btf_fd);
+		return ret;
+	}
+	insns[0].imm = map;
+
+	prog_opts.prog_btf_fd = btf_fd;
+	prog_opts.func_info = &func_infos;
+	prog_opts.func_info_cnt = ARRAY_SIZE(func_infos);
+	prog_opts.func_info_rec_size = sizeof(func_infos[0]);
+
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_SYSCALL, "global_reloc", "GPL", insns, insn_cnt, &prog_opts);
+
+	ret = -errno;
+	close(map);
+	close(btf_fd);
+
+	if (prog_fd >= 0) {
+		pr_warn("Error in %s(): Program loading unexpectedly succeeded.\n",
+			__func__);
+		close(prog_fd);
+		return -EINVAL;
+	}
+
+	/* Be conservative and NULL terminate the buffer to ensure strstr terminates. */
+	log_buf[bufsz - 1] = '\0';
+
+	/*
+	 * Feature is allowed if we're not failing with the error message "direct value
+	 * offset of %u is not allowed that was removed in 12a1fe6e12db
+	 * ("bpf/verifier: Do not limit maximum direct offset into arena map").
+	 * Instead, we should be failing with the message "invalid access to map value
+	 * pointer". Ensure we match with one of the two and we're not failing with a
+	 * different, unexpected message.
+	 */
+	if (strstr(log_buf, "direct value offset of"))
+		return 0;
+
+	if (strstr(log_buf, "invalid access to map value pointer") == NULL) {
+		pr_warn("Error in %s(): Program unexpectedly failed with message: %s.\n",
+			__func__, log_buf);
+		return ret;
+	}
+
+	/* Feature is on. */
+
+	return 1;
+}
+
 typedef int (*feature_probe_fn)(int /* token_fd */);
 
 static struct kern_feature_cache feature_cache;
@@ -580,6 +669,9 @@ static struct kern_feature_desc {
 	},
 	[FEAT_BTF_QMARK_DATASEC] = {
 		"BTF DATASEC names starting from '?'", probe_kern_btf_qmark_datasec,
+	},
+	[FEAT_ARENA_GLOBAL_RELOC] = {
+		"Relocatable arena globals support", probe_kern_arena_global_reloc,
 	},
 };
 
