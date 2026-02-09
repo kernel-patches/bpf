@@ -366,4 +366,14 @@
 		.off   = 0,					\
 		.imm   = 0 })
 
+/* Program address space cast from 1 -> 0 */
+
+#define BPF_ADDR_SPACE_CAST_TO_ARENA(REG)			\
+	((struct bpf_insn) {					\
+		.code  = BPF_ALU64 | BPF_MOV | BPF_X,		\
+		.dst_reg = REG,					\
+		.src_reg = REG,					\
+		.off   = BPF_ADDR_SPACE_CAST,			\
+		.imm   = 1U })
+
 #endif /* __TOOLS_LINUX_FILTER_H */
