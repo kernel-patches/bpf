@@ -989,6 +989,7 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 	u32 tailroom = SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 	struct net *net = current->nsproxy->net_ns;
 	struct net_device *dev = net->loopback_dev;
+	struct dst_entry bpf_test_run_lwt_xmit_dst;
 	u32 headroom = NET_SKB_PAD + NET_IP_ALIGN;
 	u32 linear_sz = kattr->test.data_size_in;
 	u32 repeat = kattr->test.repeat;
@@ -1156,6 +1157,14 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 		skb->ip_summed = CHECKSUM_COMPLETE;
 	}
 
+	if (prog->type == BPF_PROG_TYPE_LWT_XMIT) {
+		dst_init(&bpf_test_run_lwt_xmit_dst, NULL, NULL,
+			 DST_OBSOLETE_NONE, DST_NOCOUNT);
+		bpf_test_run_lwt_xmit_dst.dev = dev;
+		rcu_read_lock();
+		skb_dst_set_noref(skb, &bpf_test_run_lwt_xmit_dst);
+		rcu_read_unlock();
+	}
 	ret = bpf_test_run(prog, skb, repeat, &retval, &duration, false);
 	if (ret)
 		goto out;
