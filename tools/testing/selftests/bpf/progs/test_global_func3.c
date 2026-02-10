@@ -53,9 +53,57 @@ int f8(struct __sk_buff *skb)
 	return f7(skb);
 }
 
-SEC("tc")
-__failure __msg("the call stack of 8 frames")
-int global_func3(struct __sk_buff *skb)
+__attribute__ ((noinline))
+int f9(struct __sk_buff *skb)
 {
 	return f8(skb);
+}
+
+__attribute__ ((noinline))
+int f10(struct __sk_buff *skb)
+{
+	return f9(skb);
+}
+
+__attribute__ ((noinline))
+int f11(struct __sk_buff *skb)
+{
+	return f10(skb);
+}
+
+__attribute__ ((noinline))
+int f12(struct __sk_buff *skb)
+{
+	return f11(skb);
+}
+
+__attribute__ ((noinline))
+int f13(struct __sk_buff *skb)
+{
+	return f12(skb);
+}
+
+__attribute__ ((noinline))
+int f14(struct __sk_buff *skb)
+{
+	return f13(skb);
+}
+
+__attribute__ ((noinline))
+int f15(struct __sk_buff *skb)
+{
+	return f14(skb);
+}
+
+__attribute__ ((noinline))
+int f16(struct __sk_buff *skb)
+{
+	return f15(skb);
+}
+
+SEC("tc")
+__failure __msg("total call depth is 16 frames, too deep")
+int global_func3(struct __sk_buff *skb)
+{
+	return f16(skb);
 }

@@ -6643,17 +6643,17 @@ static int round_up_stack_depth(struct bpf_verifier_env *env, int stack_depth)
  * and recursively walk all callees that given function can call.
  * Ignore jump and exit insns.
  * Since recursion is prevented by check_cfg() this algorithm
- * only needs a local stack of MAX_CALL_FRAMES to remember callsites
+ * only needs a local stack of MAX_CALL_DEPTH to remember callsites
  */
 static int check_max_stack_depth_subprog(struct bpf_verifier_env *env, int idx,
 					 bool priv_stack_supported)
 {
 	struct bpf_subprog_info *subprog = env->subprog_info;
 	struct bpf_insn *insn = env->prog->insnsi;
-	int depth = 0, frame = 0, i, subprog_end, subprog_depth;
+	int depth = 0, frame = 0, calldepth = 0, i, subprog_end, subprog_depth;
 	bool tail_call_reachable = false;
-	int ret_insn[MAX_CALL_FRAMES];
-	int ret_prog[MAX_CALL_FRAMES];
+	int ret_insn[MAX_CALL_DEPTH];
+	int ret_prog[MAX_CALL_DEPTH];
 	int j;
 
 	i = subprog[idx].start;
@@ -6707,7 +6707,7 @@ process_func:
 		depth += subprog_depth;
 		if (depth > MAX_BPF_STACK) {
 			verbose(env, "combined stack size of %d calls is %d. Too large\n",
-				frame + 1, depth);
+				calldepth + 1, depth);
 			return -EACCES;
 		}
 	}
@@ -6723,7 +6723,7 @@ continue_func:
 				continue;
 			if (subprog[idx].is_cb)
 				err = true;
-			for (int c = 0; c < frame && !err; c++) {
+			for (int c = 0; c < calldepth && !err; c++) {
 				if (subprog[ret_prog[c]].is_cb) {
 					err = true;
 					break;
@@ -6740,8 +6740,8 @@ continue_func:
 		if (!bpf_pseudo_call(insn + i) && !bpf_pseudo_func(insn + i))
 			continue;
 		/* remember insn and function to return to */
-		ret_insn[frame] = i + 1;
-		ret_prog[frame] = idx;
+		ret_insn[calldepth] = i + 1;
+		ret_prog[calldepth] = idx;
 
 		/* find the callee */
 		next_insn = i + insn[i].imm + 1;
@@ -6769,7 +6769,17 @@ continue_func:
 		if (subprog[idx].has_tail_call)
 			tail_call_reachable = true;
 
-		frame++;
+		if (!subprog_is_global(env, sidx))
+			frame++;
+		calldepth++;
+		/* Total call depth including globals */
+		if (calldepth >= MAX_CALL_DEPTH) {
+			verbose(env, "total call depth is %d frames, too deep\n",
+				calldepth);
+			return -E2BIG;
+		}
+
+		/* Total stack frames in use (globals not included). */
 		if (frame >= MAX_CALL_FRAMES) {
 			verbose(env, "the call stack of %d frames is too deep !\n",
 				frame);
@@ -6783,7 +6793,7 @@ continue_func:
 	 * tail call counter throughout bpf2bpf calls combined with tailcalls
 	 */
 	if (tail_call_reachable)
-		for (j = 0; j < frame; j++) {
+		for (j = 0; j < calldepth; j++) {
 			if (subprog[ret_prog[j]].is_exception_cb) {
 				verbose(env, "cannot tail call within exception cb\n");
 				return -EINVAL;
@@ -6796,13 +6806,15 @@ continue_func:
 	/* end of for() loop means the last insn of the 'subprog'
 	 * was reached. Doesn't matter whether it was JA or EXIT
 	 */
-	if (frame == 0)
+	if (calldepth == 0)
 		return 0;
 	if (subprog[idx].priv_stack_mode != PRIV_STACK_ADAPTIVE)
 		depth -= round_up_stack_depth(env, subprog[idx].stack_depth);
-	frame--;
-	i = ret_insn[frame];
-	idx = ret_prog[frame];
+	if (!subprog_is_global(env, idx))
+		frame--;
+	calldepth--;
+	i = ret_insn[calldepth];
+	idx = ret_prog[calldepth];
 	goto continue_func;
 }
 

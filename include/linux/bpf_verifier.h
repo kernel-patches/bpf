@@ -320,7 +320,8 @@ struct bpf_func_state {
 	int allocated_stack;
 };
 
-#define MAX_CALL_FRAMES 8
+#define MAX_CALL_FRAMES 8 /* How many frames we can verify at the same time */
+#define MAX_CALL_DEPTH 16 /* How deep of a stack we can have at runtime */
 
 /* instruction history flags, used in bpf_jmp_history_entry.flags field */
 enum {
