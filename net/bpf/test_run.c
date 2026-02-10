@@ -33,23 +33,27 @@ struct bpf_test_timer {
 	u64 time_start, time_spent;
 };
 
-static void bpf_test_timer_enter(struct bpf_test_timer *t)
-	__acquires(rcu)
+static void __bpf_test_timer_enter(struct bpf_test_timer *t, bool trace)
 {
-	rcu_read_lock_dont_migrate();
+	if (trace)
+		rcu_read_lock_trace();
+	else
+		rcu_read_lock_dont_migrate();
 	t->time_start = ktime_get_ns();
 }
 
-static void bpf_test_timer_leave(struct bpf_test_timer *t)
-	__releases(rcu)
+static void __bpf_test_timer_leave(struct bpf_test_timer *t, bool trace)
 {
 	t->time_start = 0;
-	rcu_read_unlock_migrate();
+	if (trace)
+		rcu_read_unlock_trace();
+	else
+		rcu_read_unlock_migrate();
 }
 
-static bool bpf_test_timer_continue(struct bpf_test_timer *t, int iterations,
-				    u32 repeat, int *err, u32 *duration)
-	__must_hold(rcu)
+static bool __bpf_test_timer_continue(struct bpf_test_timer *t,
+				      int iterations, u32 repeat,
+				      int *err, u32 *duration, bool trace)
 {
 	t->i += iterations;
 	if (t->i >= repeat) {
@@ -70,9 +74,9 @@ static bool bpf_test_timer_continue(struct bpf_test_timer *t, int iterations,
 	if (need_resched()) {
 		/* During iteration: we need to reschedule between runs. */
 		t->time_spent += ktime_get_ns() - t->time_start;
-		bpf_test_timer_leave(t);
+		__bpf_test_timer_leave(t, trace);
 		cond_resched();
-		bpf_test_timer_enter(t);
+		__bpf_test_timer_enter(t, trace);
 	}
 
 	/* Do another round. */
@@ -81,6 +85,45 @@ static bool bpf_test_timer_continue(struct bpf_test_timer *t, int iterations,
 reset:
 	t->i = 0;
 	return false;
+}
+
+static void bpf_test_timer_enter(struct bpf_test_timer *t)
+	__acquires(rcu)
+{
+	__bpf_test_timer_enter(t, false);
+}
+
+static void bpf_test_timer_leave(struct bpf_test_timer *t)
+	__releases(rcu)
+{
+	__bpf_test_timer_leave(t, false);
+}
+
+static bool bpf_test_timer_continue(struct bpf_test_timer *t, int iterations,
+				    u32 repeat, int *err, u32 *duration)
+	__must_hold(rcu)
+{
+	return __bpf_test_timer_continue(t, iterations, repeat, err, duration, false);
+}
+
+static void bpf_test_timer_enter_trace(struct bpf_test_timer *t)
+	__acquires(rcu_trace)
+{
+	__bpf_test_timer_enter(t, true);
+}
+
+static void bpf_test_timer_leave_trace(struct bpf_test_timer *t)
+	__releases(rcu_trace)
+{
+	__bpf_test_timer_leave(t, true);
+}
+
+static bool bpf_test_timer_continue_trace(struct bpf_test_timer *t,
+					  int iterations, u32 repeat,
+					  int *err, u32 *duration)
+	__must_hold(rcu_trace)
+{
+	return __bpf_test_timer_continue(t, iterations, repeat, err, duration, true);
 }
 
 /* We put this struct at the head of each page with a context and frame
@@ -1615,14 +1658,14 @@ int bpf_prog_test_run_syscall(struct bpf_prog *prog,
 {
 	void __user *ctx_in = u64_to_user_ptr(kattr->test.ctx_in);
 	__u32 ctx_size_in = kattr->test.ctx_size_in;
+	struct bpf_test_timer t = {};
+	u32 retval, duration, repeat;
 	void *ctx = NULL;
-	u32 retval;
 	int err = 0;
 
-	/* doesn't support data_in/out, ctx_out, duration, or repeat or flags */
+	/* doesn't support data_in/out, ctx_out, or flags */
 	if (kattr->test.data_in || kattr->test.data_out ||
-	    kattr->test.ctx_out || kattr->test.duration ||
-	    kattr->test.repeat || kattr->test.flags ||
+	    kattr->test.ctx_out || kattr->test.flags ||
 	    kattr->test.batch_size)
 		return -EINVAL;
 
@@ -1636,11 +1679,24 @@ int bpf_prog_test_run_syscall(struct bpf_prog *prog,
 			return PTR_ERR(ctx);
 	}
 
-	rcu_read_lock_trace();
-	retval = bpf_prog_run_pin_on_cpu(prog, ctx);
-	rcu_read_unlock_trace();
+	repeat = kattr->test.repeat;
+	if (!repeat)
+		repeat = 1;
+
+	bpf_test_timer_enter_trace(&t);
+	do {
+		retval = bpf_prog_run_pin_on_cpu(prog, ctx);
+	} while (bpf_test_timer_continue_trace(&t, 1, repeat, &err, &duration));
+	bpf_test_timer_leave_trace(&t);
+
+	if (err)
+		goto out;
 
 	if (copy_to_user(&uattr->test.retval, &retval, sizeof(u32))) {
+		err = -EFAULT;
+		goto out;
+	}
+	if (copy_to_user(&uattr->test.duration, &duration, sizeof(duration))) {
 		err = -EFAULT;
 		goto out;
 	}
