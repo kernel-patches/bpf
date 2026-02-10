@@ -62,8 +62,10 @@ static void release_child(struct child *child)
 		return;
 	close(child->go[1]);
 	close(child->go[0]);
-	if (child->thread)
+	if (child->thread) {
 		pthread_join(child->thread, NULL);
+		child->thread = 0;
+	}
 	close(child->c2p[0]);
 	close(child->c2p[1]);
 	if (child->pid > 0)
