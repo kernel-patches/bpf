@@ -24,6 +24,7 @@
 #include <net/netdev_rx_queue.h>
 #include <net/xdp.h>
 #include <net/netfilter/nf_bpf_link.h>
+#include <net/ip6_route.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/bpf_test_run.h>
@@ -992,6 +993,7 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 	u32 headroom = NET_SKB_PAD + NET_IP_ALIGN;
 	u32 linear_sz = kattr->test.data_size_in;
 	u32 repeat = kattr->test.repeat;
+	struct dst_entry *dst = NULL;
 	struct __sk_buff *ctx = NULL;
 	struct sk_buff *skb = NULL;
 	struct sock *sk = NULL;
@@ -1156,6 +1158,51 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 		skb->ip_summed = CHECKSUM_COMPLETE;
 	}
 
+	if (prog->type == BPF_PROG_TYPE_LWT_XMIT && !skb_dst(skb)) {
+		struct flowi4 fl4 = {};
+		struct flowi6 fl6 = {};
+		struct rtable *rt;
+
+		switch (skb->protocol) {
+		case htons(ETH_P_IP):
+			if (sizeof(struct iphdr) <= skb_headlen(skb)) {
+				fl4.saddr = ip_hdr(skb)->saddr;
+				fl4.daddr = ip_hdr(skb)->daddr;
+			}
+
+			rt = ip_route_output_key(net, &fl4);
+			if (IS_ERR(rt)) {
+				ret = PTR_ERR(rt);
+				goto out;
+			}
+			dst = &rt->dst;
+			break;
+#if IS_ENABLED(CONFIG_IPV6)
+		case htons(ETH_P_IPV6):
+			if (sizeof(struct ipv6hdr) <= skb_headlen(skb)) {
+				fl6.saddr = ipv6_hdr(skb)->saddr;
+				fl6.daddr = ipv6_hdr(skb)->daddr;
+			}
+
+			dst = ip6_route_output(net, NULL, &fl6);
+			if (IS_ERR(dst)) {
+				ret = PTR_ERR(dst);
+				goto out;
+			}
+			break;
+#endif
+		default:
+			ret = -EINVAL;
+			goto out;
+		}
+
+		if (unlikely(dst->error)) {
+			ret = dst->error;
+			dst_release(dst);
+			goto out;
+		}
+		skb_dst_set(skb, dst);
+	}
 	ret = bpf_test_run(prog, skb, repeat, &retval, &duration, false);
 	if (ret)
 		goto out;
