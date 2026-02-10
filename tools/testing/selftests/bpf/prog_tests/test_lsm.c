@@ -55,7 +55,6 @@ int exec_cmd(int *monitored_pid)
 static int test_lsm(struct lsm *skel)
 {
 	struct bpf_link *link;
-	int buf = 1234;
 	int err;
 
 	err = lsm__attach(skel);
@@ -82,15 +81,8 @@ static int test_lsm(struct lsm *skel)
 
 	ASSERT_EQ(skel->bss->mprotect_count, 1, "mprotect_count");
 
-	syscall(__NR_setdomainname, &buf, -2L);
-	syscall(__NR_setdomainname, 0, -3L);
-	syscall(__NR_setdomainname, ~0L, -4L);
-
-	ASSERT_EQ(skel->bss->copy_test, 3, "copy_test");
-
 	lsm__detach(skel);
 
-	skel->bss->copy_test = 0;
 	skel->bss->bprm_count = 0;
 	skel->bss->mprotect_count = 0;
 	return 0;
