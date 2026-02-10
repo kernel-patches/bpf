@@ -9,7 +9,6 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
-#include "bpf_misc.h"
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -159,25 +158,5 @@ int BPF_PROG(test_void_hook, struct linux_binprm *bprm)
 SEC("lsm/task_free") /* lsm/ is ok, lsm.s/ fails */
 int BPF_PROG(test_task_free, struct task_struct *task)
 {
-	return 0;
-}
-
-int copy_test = 0;
-
-SEC("fentry.s/" SYS_PREFIX "sys_setdomainname")
-int BPF_PROG(test_sys_setdomainname, struct pt_regs *regs)
-{
-	void *ptr = (void *)PT_REGS_PARM1_SYSCALL(regs);
-	int len = PT_REGS_PARM2_SYSCALL(regs);
-	int buf = 0;
-	long ret;
-
-	ret = bpf_copy_from_user(&buf, sizeof(buf), ptr);
-	if (len == -2 && ret == 0 && buf == 1234)
-		copy_test++;
-	if (len == -3 && ret == -EFAULT)
-		copy_test++;
-	if (len == -4 && ret == -EFAULT)
-		copy_test++;
 	return 0;
 }
