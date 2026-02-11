@@ -40,7 +40,7 @@ struct bpf_reg_state {
 	/*
 	 * Constant delta between "linked" scalars with the same ID.
 	 */
-	s32 off;
+	s32 delta;
 	union {
 		/* valid when type == PTR_TO_PACKET */
 		int range;
