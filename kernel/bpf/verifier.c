@@ -21542,7 +21542,8 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 			return -EINVAL;
 		}
 
-		if (is_tracing_prog_type(prog_type)) {
+		if (is_tracing_prog_type(prog_type) &&
+		    btf_record_has_field(map->record, BPF_SPIN_LOCK)) {
 			verbose(env, "tracing progs cannot use bpf_spin_lock yet\n");
 			return -EINVAL;
 		}
