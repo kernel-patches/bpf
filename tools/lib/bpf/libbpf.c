@@ -8557,6 +8557,12 @@ static int find_ksym_btf_id(struct bpf_object *obj, const char *ksym_name,
 	return id;
 }
 
+static bool kfunc_skip_compat_check(const char *name)
+{
+	return name && (strcmp(name, "bpf_session_cookie") == 0 ||
+			strcmp(name, "bpf_session_is_return") == 0);
+}
+
 static int bpf_object__resolve_ksym_var_btf_id(struct bpf_object *obj,
 					       struct extern_desc *ext)
 {
@@ -8617,12 +8623,13 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 	struct module_btf *mod_btf = NULL;
 	const struct btf_type *kern_func;
 	struct btf *kern_btf = NULL;
+	const char *kfunc_name;
 	int ret;
 
 	local_func_proto_id = ext->ksym.type_id;
 
-	kfunc_id = find_ksym_btf_id(obj, ext->essent_name ?: ext->name, BTF_KIND_FUNC, &kern_btf,
-				    &mod_btf);
+	kfunc_name = ext->essent_name ?: ext->name;
+	kfunc_id = find_ksym_btf_id(obj, kfunc_name, BTF_KIND_FUNC, &kern_btf, &mod_btf);
 	if (kfunc_id < 0) {
 		if (kfunc_id == -ESRCH && ext->is_weak)
 			return 0;
@@ -8634,16 +8641,18 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 	kern_func = btf__type_by_id(kern_btf, kfunc_id);
 	kfunc_proto_id = kern_func->type;
 
-	ret = bpf_core_types_are_compat(obj->btf, local_func_proto_id,
-					kern_btf, kfunc_proto_id);
-	if (ret <= 0) {
-		if (ext->is_weak)
-			return 0;
+	if (!kfunc_skip_compat_check(kfunc_name)) {
+		ret = bpf_core_types_are_compat(obj->btf, local_func_proto_id,
+						kern_btf, kfunc_proto_id);
+		if (ret <= 0) {
+			if (ext->is_weak)
+				return 0;
 
-		pr_warn("extern (func ksym) '%s': func_proto [%d] incompatible with %s [%d]\n",
-			ext->name, local_func_proto_id,
-			mod_btf ? mod_btf->name : "vmlinux", kfunc_proto_id);
-		return -EINVAL;
+			pr_warn("extern (func ksym) '%s': func_proto [%d] incompatible with %s [%d]\n",
+				ext->name, local_func_proto_id,
+				mod_btf ? mod_btf->name : "vmlinux", kfunc_proto_id);
+			return -EINVAL;
+		}
 	}
 
 	/* set index for module BTF fd in fd_array, if unset */
