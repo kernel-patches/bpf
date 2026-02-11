@@ -634,6 +634,17 @@ static inline bool bpf_verifier_log_needed(const struct bpf_verifier_log *log)
 	return log && log->level;
 }
 
+struct bpf_log_attr {
+	char __user *log_buf;
+	u32 log_size;
+	u32 log_level;
+	u32 __user *log_true_size;
+};
+
+int bpf_log_attr_init(struct bpf_log_attr *log, u64 log_buf, u32 log_size, u32 log_level,
+		      u32 __user *log_true_size);
+int bpf_log_attr_finalize(struct bpf_log_attr *attr, struct bpf_verifier_log *log);
+
 #define BPF_MAX_SUBPROGS 256
 
 struct bpf_subprog_arg_info {
