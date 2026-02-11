@@ -6,6 +6,7 @@
 #include <bpf_experimental.h>
 
 #define EDEADLK		35
+#define EBUSY		16
 #define ETIMEDOUT	110
 #define CONCTEST_HIST_BUCKETS 28
 
@@ -184,7 +185,7 @@ static __always_inline void conctest_record(int stat_id, __s64 ret, bool ctx_adj
 
 	if (ret == 0) {
 		stats->success++;
-	} else if (ret == state->expect_ret) {
+	} else if (!state->expect_ret || ret == state->expect_ret) {
 		stats->failure++;
 	} else {
 		stats->failure++;
@@ -284,6 +285,233 @@ SEC("?perf_event")
 int conctest_rqspinlock_nmi_shift(void *ctx)
 {
 	return __conctest_rqspinlock_nmi(1);
+}
+
+#define CLOCK_MONOTONIC	    1
+#define BPF_F_TIMER_CPU_PIN (1ULL << 1)
+
+struct timer_elem {
+	struct bpf_timer timer;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, int);
+	__type(value, struct timer_elem);
+} timer_map SEC(".maps");
+
+static int timer_callback(void *map, int *key, struct timer_elem *val)
+{
+	bpf_timer_start(&val->timer, 0, BPF_F_TIMER_CPU_PIN);
+	return 0;
+}
+
+SEC("?syscall")
+int conctest_timer_init(void *ctx)
+{
+	struct timer_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&timer_map, &key);
+	if (!elem)
+		return -1;
+
+	ret = bpf_timer_init(&elem->timer, &timer_map, CLOCK_MONOTONIC);
+	if (ret && ret != -EBUSY)
+		return ret;
+
+	ret = bpf_timer_set_callback(&elem->timer, timer_callback);
+	if (ret)
+		return ret;
+
+	return bpf_timer_start(&elem->timer, 0, BPF_F_TIMER_CPU_PIN);
+}
+
+SEC("?syscall")
+int conctest_timer_task_reinit(void *ctx)
+{
+	struct timer_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&timer_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_timer_init(&elem->timer, &timer_map, CLOCK_MONOTONIC);
+	conctest_record(CONCTEST_STAT_SYSCALL, ret, true);
+	return 0;
+}
+
+SEC("?perf_event")
+int conctest_timer_nmi_reinit(void *ctx)
+{
+	struct timer_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&timer_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_timer_init(&elem->timer, &timer_map, CLOCK_MONOTONIC);
+	conctest_record(CONCTEST_STAT_NMI, ret, true);
+	return 0;
+}
+
+SEC("?syscall")
+int conctest_timer_task_start(void *ctx)
+{
+	struct timer_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&timer_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_timer_start(&elem->timer, 0, BPF_F_TIMER_CPU_PIN);
+	conctest_record(CONCTEST_STAT_SYSCALL, ret, true);
+	return 0;
+}
+
+SEC("?syscall")
+int conctest_timer_task_cancel(void *ctx)
+{
+	struct timer_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&timer_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_timer_cancel(&elem->timer);
+	conctest_record(CONCTEST_STAT_SYSCALL, ret, true);
+	return 0;
+}
+
+SEC("?syscall")
+int conctest_timer_task_cancel_async(void *ctx)
+{
+	struct timer_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&timer_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_timer_cancel_async(&elem->timer);
+	conctest_record(CONCTEST_STAT_SYSCALL, ret, true);
+	return 0;
+}
+
+SEC("?syscall")
+int conctest_timer_task_set_cb(void *ctx)
+{
+	struct timer_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&timer_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_timer_set_callback(&elem->timer, timer_callback);
+	conctest_record(CONCTEST_STAT_SYSCALL, ret, true);
+	return 0;
+}
+
+SEC("?syscall")
+int conctest_timer_task_delete(void *ctx)
+{
+	struct timer_elem *elem;
+	int key = 0, ret;
+
+	/* Delete the element (cancels + frees timer) */
+	conctest_begin();
+	ret = bpf_map_delete_elem(&timer_map, &key);
+	if (ret == 0) {
+		/* Re-init so subsequent ops still work */
+		elem = bpf_map_lookup_elem(&timer_map, &key);
+		if (elem) {
+			bpf_timer_init(&elem->timer, &timer_map, CLOCK_MONOTONIC);
+			bpf_timer_set_callback(&elem->timer, timer_callback);
+			bpf_timer_start(&elem->timer, 0, BPF_F_TIMER_CPU_PIN);
+		}
+	}
+	conctest_record(CONCTEST_STAT_SYSCALL, ret, true);
+	return 0;
+}
+
+SEC("?perf_event")
+int conctest_timer_nmi_start(void *ctx)
+{
+	struct timer_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&timer_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_timer_start(&elem->timer, 0, BPF_F_TIMER_CPU_PIN);
+	conctest_record(CONCTEST_STAT_NMI, ret, true);
+	return 0;
+}
+
+SEC("?perf_event")
+int conctest_timer_nmi_cancel_async(void *ctx)
+{
+	struct timer_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&timer_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_timer_cancel_async(&elem->timer);
+	conctest_record(CONCTEST_STAT_NMI, ret, true);
+	return 0;
+}
+
+SEC("?perf_event")
+int conctest_timer_nmi_set_cb(void *ctx)
+{
+	struct timer_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&timer_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_timer_set_callback(&elem->timer, timer_callback);
+	conctest_record(CONCTEST_STAT_NMI, ret, true);
+	return 0;
+}
+
+SEC("?perf_event")
+int conctest_timer_nmi_delete(void *ctx)
+{
+	struct timer_elem *elem;
+	int key = 0, ret;
+
+	conctest_begin();
+	ret = bpf_map_delete_elem(&timer_map, &key);
+	if (ret == 0) {
+		elem = bpf_map_lookup_elem(&timer_map, &key);
+		if (elem) {
+			bpf_timer_init(&elem->timer, &timer_map, CLOCK_MONOTONIC);
+			bpf_timer_set_callback(&elem->timer, timer_callback);
+			bpf_timer_start(&elem->timer, 0, BPF_F_TIMER_CPU_PIN);
+		}
+	}
+	conctest_record(CONCTEST_STAT_NMI, ret, true);
+	return 0;
 }
 
 char _license[] SEC("license") = "GPL";

@@ -300,92 +300,237 @@ struct conctest_cfg {
 	for (struct conctest_cfg *cfg = (arr); cfg->type != CT_INVALID; cfg++)
 
 struct conctest_test {
-	const char *name;
-	struct conctest_cfg *cfgs;
-	void (*init)(struct conctest *skel);
+	char name[128];
+	struct conctest_cfg cfgs[4];
+	void (*init)(struct conctest *skel, struct conctest_test *test);
+	const char **extra_progs;
 	int nr_cpus;
+	bool vertical;
 };
 
-struct conctest_cfg rqspinlock[] = {
-	{
-		.type = CT_TASK_PROG,
-		.task = { "conctest_rqspinlock_task" },
-	},
-	{
-		.type = CT_NMI_PROG,
-		.nmi = { "conctest_rqspinlock_nmi" },
-	},
-	{}
+static int find_prog_fd(struct conctest *skel, const char *prog_name);
+
+#define CTX_TASK_OK	(1 << 0)
+#define CTX_NMI_OK	(1 << 1)
+
+struct conctest_op {
+	const char *name;
+	const char *task_prog;
+	const char *nmi_prog;
+	unsigned int ctx_mask;
 };
 
-struct conctest_cfg rqspinlock_shift[] = {
-	{
-		.type = CT_TASK_PROG,
-		.task = { "conctest_rqspinlock_task" },
-	},
-	{
-		.type = CT_NMI_PROG,
-		.nmi = { "conctest_rqspinlock_nmi_shift" },
-	},
-	{}
+struct conctest_suite {
+	const char *name;
+	struct conctest_op *ops;
+	int nr_ops;
+	void (*init)(struct conctest *skel, struct conctest_test *test);
+	const char **extra_progs;
+	int max_cpus;
 };
 
-static void __rqspinlock_init(struct conctest *skel, int err, int delay)
+static struct conctest_op rqspinlock_ops[] = {
+	{ "lock",       "conctest_rqspinlock_task", "conctest_rqspinlock_nmi",       CTX_TASK_OK | CTX_NMI_OK },
+	{ "lock_shift", "conctest_rqspinlock_task", "conctest_rqspinlock_nmi_shift", CTX_TASK_OK | CTX_NMI_OK },
+	{},
+};
+
+static void rqspinlock_init(struct conctest *skel, struct conctest_test *test)
 {
 	struct conctest_op_state state;
-	int key;
+	bool same_lock, is_vert;
+	int key, nmi_err;
+
+	is_vert = test->vertical;
+
+	/*
+	 * Horizontal: don't set expectations.
+	 * Vertical, same lock: always -EDEADLK.
+	 * Vertical, different locks: -EDEADLK for <3 CPUs, -ETIMEDOUT for >=3.
+	 */
+	if (!is_vert) {
+		key = CONCTEST_STAT_SYSCALL;
+		memset(&state, 0, sizeof(state));
+		state.delay_thresh_ns = 10000000;
+		bpf_map__update_elem(skel->maps.state_map, &key, sizeof(key),
+				     &state, sizeof(state), 0);
+		return;
+	}
+
+	same_lock = (test->cfgs[0].task.prog_name == test->cfgs[1].nmi.prog_name) ||
+		    (strcmp(test->cfgs[0].task.prog_name, "conctest_rqspinlock_task") == 0 &&
+		     strcmp(test->cfgs[1].nmi.prog_name, "conctest_rqspinlock_nmi") == 0);
+
+	if (same_lock || test->nr_cpus < 3)
+		nmi_err = -EDEADLK;
+	else
+		nmi_err = -ETIMEDOUT;
 
 	key = CONCTEST_STAT_SYSCALL;
 	memset(&state, 0, sizeof(state));
 	state.expect_ret = 0;
-	state.delay_thresh_ns = 1000000 * delay;
-	bpf_map__update_elem(skel->maps.state_map, &key, sizeof(key), &state,
-			     sizeof(state), 0);
+	state.delay_thresh_ns = (test->nr_cpus >= 3) ? 300000000ULL : 10000000ULL;
+	bpf_map__update_elem(skel->maps.state_map, &key, sizeof(key),
+			     &state, sizeof(state), 0);
 
 	key = CONCTEST_STAT_NMI;
 	memset(&state, 0, sizeof(state));
-	state.expect_ret = err;
-	state.delay_thresh_ns = 1000000 * delay;
-	bpf_map__update_elem(skel->maps.state_map, &key, sizeof(key), &state,
-			     sizeof(state), 0);
+	state.expect_ret = nmi_err;
+	state.delay_thresh_ns = (test->nr_cpus >= 3) ? 300000000ULL : 10000000ULL;
+	bpf_map__update_elem(skel->maps.state_map, &key, sizeof(key),
+			     &state, sizeof(state), 0);
 }
 
-static void rqspinlock_init(struct conctest *skel)
+static struct conctest_suite rqspinlock_suite = {
+	.name = "rqspinlock",
+	.ops = rqspinlock_ops,
+	.nr_ops = 2,
+	.init = rqspinlock_init,
+	.max_cpus = 3,
+};
+
+static void timer_init(struct conctest *skel, struct conctest_test *test)
 {
-	return __rqspinlock_init(skel, -EDEADLK, 2);
+	LIBBPF_OPTS(bpf_test_run_opts, opts);
+	int fd;
+
+	fd = find_prog_fd(skel, "conctest_timer_init");
+	if (fd < 0)
+		return;
+	bpf_prog_test_run_opts(fd, &opts);
 }
 
-static void rqspinlock_init_delay(struct conctest *skel)
-{
-	return __rqspinlock_init(skel, -EDEADLK, 10);
-}
-
-static void rqspinlock_init_timeout(struct conctest *skel)
-{
-	return __rqspinlock_init(skel, -ETIMEDOUT, 300);
-}
-
-static struct conctest_test all_tests[] = {
-	{
-		.name = "rqspinlock:AA",
-		.cfgs = rqspinlock,
-		.init = rqspinlock_init,
-		.nr_cpus = 1
-	},
-	{
-		.name = "rqspinlock:ABBA",
-		.cfgs = rqspinlock_shift,
-		.init = rqspinlock_init_delay,
-		.nr_cpus = 2
-	},
-	{
-		.name = "rqspinlock:ABBCBA",
-		.cfgs = rqspinlock_shift,
-		.init = rqspinlock_init_timeout,
-		.nr_cpus = 3
-	},
+static struct conctest_op timer_ops[] = {
+	{ "init",         "conctest_timer_task_reinit",     "conctest_timer_nmi_reinit",     CTX_TASK_OK | CTX_NMI_OK },
+	{ "start",        "conctest_timer_task_start",      "conctest_timer_nmi_start",      CTX_TASK_OK | CTX_NMI_OK },
+	{ "cancel",       "conctest_timer_task_cancel",      NULL,                            CTX_TASK_OK },
+	{ "cancel_async", "conctest_timer_task_cancel_async","conctest_timer_nmi_cancel_async",CTX_TASK_OK | CTX_NMI_OK },
+	{ "set_cb",       "conctest_timer_task_set_cb",      "conctest_timer_nmi_set_cb",     CTX_TASK_OK | CTX_NMI_OK },
+	{ "delete",       "conctest_timer_task_delete",      "conctest_timer_nmi_delete",     CTX_TASK_OK | CTX_NMI_OK },
 	{},
 };
+
+static const char *timer_extra_progs[] = { "conctest_timer_init", NULL };
+
+static struct conctest_suite timer_suite = {
+	.name = "timer",
+	.ops = timer_ops,
+	.nr_ops = 6,
+	.init = timer_init,
+	.extra_progs = timer_extra_progs,
+	.max_cpus = 4,
+};
+
+static struct conctest_suite *suites[] = {
+	&rqspinlock_suite,
+	&timer_suite,
+	NULL,
+};
+
+#define MAX_GENERATED_TESTS 1024
+
+static struct conctest_test generated_tests[MAX_GENERATED_TESTS];
+static int nr_generated;
+
+static void add_test(const char *suite_name, const char *a_name, const char *b_name,
+		     const char *task_prog, const char *nmi_prog,
+		     const char *task_prog_b,
+		     void (*init)(struct conctest *skel, struct conctest_test *test),
+		     const char **extra_progs, int nr_cpus)
+{
+	struct conctest_test *t;
+
+	if (nr_generated >= MAX_GENERATED_TESTS)
+		return;
+
+	t = &generated_tests[nr_generated++];
+	if (nmi_prog)
+		snprintf(t->name, sizeof(t->name), "%s:%d:vert:%s_vs_%s",
+			 suite_name, nr_cpus, a_name, b_name);
+	else
+		snprintf(t->name, sizeof(t->name), "%s:%d:flat:%s_vs_%s",
+			 suite_name, nr_cpus, a_name, b_name);
+
+	t->init = init;
+	t->extra_progs = extra_progs;
+	t->nr_cpus = nr_cpus;
+	t->vertical = (nmi_prog != NULL);
+
+	t->cfgs[0].type = CT_TASK_PROG;
+	t->cfgs[0].task.prog_name = task_prog;
+
+	if (nmi_prog) {
+		t->cfgs[1].type = CT_NMI_PROG;
+		t->cfgs[1].nmi.prog_name = nmi_prog;
+		t->cfgs[2].type = CT_INVALID;
+	} else if (task_prog_b) {
+		t->cfgs[1].type = CT_TASK_PROG;
+		t->cfgs[1].task.prog_name = task_prog_b;
+		t->cfgs[2].type = CT_INVALID;
+	} else {
+		t->cfgs[1].type = CT_INVALID;
+	}
+}
+
+static void generate_suite_tests(struct conctest_suite *suite, int max_cpus)
+{
+	int i, j, cpus;
+
+	if (suite->max_cpus > max_cpus)
+		suite->max_cpus = max_cpus;
+
+	for (cpus = 1; cpus <= suite->max_cpus; cpus++) {
+		for (i = 0; i < suite->nr_ops; i++) {
+			struct conctest_op *a = &suite->ops[i];
+
+			if (!(a->ctx_mask & CTX_TASK_OK))
+				continue;
+
+			for (j = 0; j < suite->nr_ops; j++) {
+				struct conctest_op *b = &suite->ops[j];
+
+				if (!(b->ctx_mask & CTX_NMI_OK) || !b->nmi_prog)
+					continue;
+
+				add_test(suite->name, a->name, b->name,
+					 a->task_prog, b->nmi_prog, NULL,
+					 suite->init, suite->extra_progs, cpus);
+			}
+		}
+
+		/* Horizontal: task(a) vs task(b), needs at least 2 CPUs */
+		if (cpus < 2)
+			continue;
+
+		for (i = 0; i < suite->nr_ops; i++) {
+			struct conctest_op *a = &suite->ops[i];
+
+			if (!(a->ctx_mask & CTX_TASK_OK))
+				continue;
+
+			/* j = i to skip symmetric pairs (A vs B == B vs A) */
+			for (j = i; j < suite->nr_ops; j++) {
+				struct conctest_op *b = &suite->ops[j];
+
+				if (!(b->ctx_mask & CTX_TASK_OK) || !b->task_prog)
+					continue;
+
+				add_test(suite->name, a->name, b->name,
+					 a->task_prog, NULL, b->task_prog,
+					 suite->init, suite->extra_progs, cpus);
+			}
+		}
+	}
+}
+
+static void generate_all_tests(int max_cpus)
+{
+	int i;
+
+	nr_generated = 0;
+	for (i = 0; suites[i]; i++)
+		generate_suite_tests(suites[i], max_cpus);
+}
 
 struct task_ctx {
 	int prog_fd;
@@ -464,11 +609,6 @@ static struct conctest_ctx *alloc_ctx(int nr_cpus, struct conctest_cfg *cfgs)
 		default:
 			break;
 		}
-	}
-
-	if (nr_task > 1) {
-		fprintf(stderr, "Only one CT_TASK_PROG entry allowed\n");
-		return NULL;
 	}
 
 	if (nr_nmi > 1) {
@@ -603,7 +743,9 @@ static int run_test(struct conctest_test *test, int nr_cpus, int duration)
 	if (!ctx)
 		return -ENOMEM;
 
-	printf("Running test '%s' on %d CPU(s) for %d seconds\n", test->name, nr_cpus, duration);
+	if (verbose)
+		printf("Running test '%s' on %d CPU(s) for %d seconds\n", test->name, nr_cpus,
+		       duration);
 
 	skel = conctest__open();
 	if (!skel) {
@@ -639,6 +781,20 @@ static int run_test(struct conctest_test *test, int nr_cpus, int duration)
 		}
 	}
 
+	if (test->extra_progs) {
+		struct bpf_program *ep_prog;
+		const char **ep;
+
+		for (ep = test->extra_progs; *ep; ep++) {
+			ep_prog = bpf_object__find_program_by_name(skel->obj, *ep);
+			if (!ep_prog) {
+				fprintf(stderr, "Extra program '%s' not found\n", *ep);
+				goto out;
+			}
+			bpf_program__set_autoload(ep_prog, true);
+		}
+	}
+
 	err = conctest__load(skel);
 	if (err) {
 		fprintf(stderr, "Failed to load BPF skeleton: %d\n", err);
@@ -648,17 +804,30 @@ static int run_test(struct conctest_test *test, int nr_cpus, int duration)
 	stop = 0;
 
 	if (test->init)
-		test->init(skel);
+		test->init(skel, test);
 	/* Pass the test nr_cpus to rotate between objects, but use passed in nr_cpus otherwise. */
 	skel->bss->nr_cpus = test->nr_cpus;
 	skel->bss->delay_seed = delay_us;
 
 	for_each_conctest_cfg(cfg, test->cfgs) {
-		int cpu;
+		int cpu, nr_task_cfgs = 0, task_idx = 0;
+		int cpu_start, cpu_end;
+
+		for_each_conctest_cfg(c, test->cfgs)
+			if (c->type == CT_TASK_PROG)
+				nr_task_cfgs++;
 
 		switch (cfg->type) {
 		case CT_TASK_PROG:
-			for (cpu = 0; cpu < nr_cpus; cpu++) {
+			for_each_conctest_cfg(c, test->cfgs) {
+				if (c == cfg)
+					break;
+				if (c->type == CT_TASK_PROG)
+					task_idx++;
+			}
+			cpu_start = task_idx * nr_cpus / nr_task_cfgs;
+			cpu_end = (task_idx + 1) * nr_cpus / nr_task_cfgs;
+			for (cpu = cpu_start; cpu < cpu_end; cpu++) {
 				struct task_ctx *tc;
 				int prog_fd;
 
@@ -747,7 +916,8 @@ static int run_test(struct conctest_test *test, int nr_cpus, int duration)
 	}
 
 	sleep(duration);
-	printf("Test '%s' completed\n", test->name);
+	if (verbose)
+		printf("Test '%s' completed\n", test->name);
 	err = 0;
 out:
 	stop = 1;
@@ -814,7 +984,7 @@ int main(int argc, char **argv)
 	int max_cpus = libbpf_num_possible_cpus();
 	int duration = DEFAULT_DURATION;
 	int nr_cpus = DEFAULT_NR_CPUS;
-	int opt, ran = 0, failed = 0;
+	int opt, ran = 0, failed = 0, i;
 	struct conctest_test *test;
 
 	if (max_cpus < 0) {
@@ -870,14 +1040,19 @@ int main(int argc, char **argv)
 	delay_us = delay_seed % (delay_max_us + 1);
 	printf("Seed: %u, delay: %u us (max: %u us)\n", delay_seed, delay_us, delay_max_us);
 
-	for (test = all_tests; test->name; test++) {
+	generate_all_tests(max_cpus);
+	printf("Generated %d tests\n\n", nr_generated);
+
+	for (i = 0; i < nr_generated; i++) {
+		test = &generated_tests[i];
 		if (!test_selected(test->name))
 			continue;
 
 		ran++;
 		if (run_test(test, nr_cpus, duration))
 			failed++;
-		fprintf(stderr, "\n\n\n");
+		if (verbose)
+			printf("\n");
 	}
 
 	if (!ran)
