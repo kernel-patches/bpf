@@ -9793,6 +9793,145 @@ __u32 bpf_program__line_info_cnt(const struct bpf_program *prog)
 	return prog->line_info_cnt;
 }
 
+static bool map_type_contains_progs(enum bpf_map_type type)
+{
+	return type == BPF_MAP_TYPE_PROG_ARRAY ||
+	       type == BPF_MAP_TYPE_DEVMAP ||
+	       type == BPF_MAP_TYPE_CPUMAP;
+}
+
+/*
+ * Clone program-containing maps to avoid owner compatibility conflicts.
+ * PROG_ARRAY, DEVMAP, and CPUMAP maps track the owner program type; loading
+ * programs with different attributes (e.g. sleepable vs non-sleepable) against
+ * the same map fails. Create fresh maps and patch instruction references.
+ */
+static int clone_prog_maps(struct bpf_object *obj, struct bpf_insn *insns,
+			   size_t insns_cnt, int *temp_fds)
+{
+	int i, j, old_fd, new_fd, num_fds = 0;
+
+	for (i = 0; i < obj->nr_maps; i++) {
+		struct bpf_map *map = &obj->maps[i];
+
+		if (!map_type_contains_progs(map->def.type))
+			continue;
+
+		old_fd = map->fd;
+		if (old_fd < 0)
+			continue;
+
+		new_fd = bpf_map_create(map->def.type, map->name,
+					map->def.key_size, map->def.value_size,
+					map->def.max_entries, NULL);
+		if (new_fd < 0)
+			return -errno;
+
+		for (j = 0; j < insns_cnt; j++) {
+			if (insns[j].code != (BPF_LD | BPF_IMM | BPF_DW))
+				continue;
+			if (insns[j].src_reg != BPF_PSEUDO_MAP_FD &&
+			    insns[j].src_reg != BPF_PSEUDO_MAP_VALUE)
+				continue;
+			if (insns[j].imm == old_fd)
+				insns[j].imm = new_fd;
+		}
+
+		temp_fds[num_fds++] = new_fd;
+	}
+
+	return num_fds;
+}
+
+int bpf_prog_clone(struct bpf_program *prog, struct bpf_prog_load_opts *opts)
+{
+	LIBBPF_OPTS(bpf_prog_load_opts, local_opts);
+	struct bpf_insn *insns = NULL;
+	int temp_fds[256], num_fds;
+	struct bpf_object *obj;
+	int i, err, fd;
+
+	if (!prog)
+		return libbpf_err(-EINVAL);
+
+	obj = prog->obj;
+	if (!obj || obj->state < OBJ_PREPARED)
+		return libbpf_err(-EINVAL);
+
+	if (!opts)
+		opts = &local_opts;
+
+	/* Fill unset fields from prepared program/object */
+	if (!opts->expected_attach_type)
+		opts->expected_attach_type = prog->expected_attach_type;
+	if (!opts->attach_btf_id)
+		opts->attach_btf_id = prog->attach_btf_id;
+	if (!opts->attach_btf_obj_fd)
+		opts->attach_btf_obj_fd = prog->attach_btf_obj_fd;
+	if (!opts->attach_prog_fd)
+		opts->attach_prog_fd = prog->attach_prog_fd;
+	if (!opts->prog_flags)
+		opts->prog_flags = prog->prog_flags;
+	if (!opts->prog_ifindex)
+		opts->prog_ifindex = prog->prog_ifindex;
+	if (!opts->kern_version)
+		opts->kern_version = obj->kern_version;
+	if (!opts->fd_array)
+		opts->fd_array = obj->fd_array;
+	if (!opts->token_fd)
+		opts->token_fd = obj->token_fd;
+	if (opts->token_fd)
+		opts->prog_flags |= BPF_F_TOKEN_FD;
+
+	/* BTF func/line info */
+	if (obj->btf && btf__fd(obj->btf) >= 0) {
+		if (!opts->prog_btf_fd)
+			opts->prog_btf_fd = btf__fd(obj->btf);
+
+		if (!opts->func_info) {
+			opts->func_info = prog->func_info;
+			opts->func_info_cnt = prog->func_info_cnt;
+			opts->func_info_rec_size = prog->func_info_rec_size;
+		}
+		if (!opts->line_info) {
+			opts->line_info = prog->line_info;
+			opts->line_info_cnt = prog->line_info_cnt;
+			opts->line_info_rec_size = prog->line_info_rec_size;
+		}
+	}
+
+	/* Resolve BTF attach targets, set sleepable/XDP flags, etc. */
+	if (prog->sec_def && prog->sec_def->prog_prepare_load_fn) {
+		err = prog->sec_def->prog_prepare_load_fn(prog, opts,
+							   prog->sec_def->cookie);
+		if (err)
+			return libbpf_err(err);
+	}
+
+	/* Clone program-containing maps to avoid owner compatibility issues */
+	insns = malloc(prog->insns_cnt * sizeof(*insns));
+	if (!insns)
+		return libbpf_err(-ENOMEM);
+
+	memcpy(insns, prog->insns, prog->insns_cnt * sizeof(*insns));
+
+	num_fds = clone_prog_maps(obj, insns, prog->insns_cnt, temp_fds);
+	if (num_fds < 0) {
+		err = num_fds;
+		free(insns);
+		return libbpf_err(err);
+	}
+
+	fd = bpf_prog_load(prog->type, prog->name, obj->license,
+			   insns, prog->insns_cnt, opts);
+
+	for (i = 0; i < num_fds; i++)
+		close(temp_fds[i]);
+
+	free(insns);
+	return libbpf_err(fd);
+}
+
 #define SEC_DEF(sec_pfx, ptype, atype, flags, ...) {			    \
 	.sec = (char *)sec_pfx,						    \
 	.prog_type = BPF_PROG_TYPE_##ptype,				    \
