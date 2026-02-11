@@ -514,4 +514,245 @@ int conctest_timer_nmi_delete(void *ctx)
 	return 0;
 }
 
+struct wq_elem {
+	struct bpf_wq work;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, int);
+	__type(value, struct wq_elem);
+} wq_map SEC(".maps");
+
+static int wq_callback(void *map, int *key, void *val)
+{
+	return 0;
+}
+
+SEC("?syscall")
+int conctest_wq_init(void *ctx)
+{
+	struct wq_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&wq_map, &key);
+	if (!elem)
+		return -1;
+
+	ret = bpf_wq_init(&elem->work, &wq_map, 0);
+	if (ret)
+		return ret;
+
+	return bpf_wq_set_callback(&elem->work, wq_callback, 0);
+}
+
+SEC("?syscall")
+int conctest_wq_task_start(void *ctx)
+{
+	struct wq_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&wq_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_wq_start(&elem->work, 0);
+	conctest_record(CONCTEST_STAT_SYSCALL, ret, true);
+	return 0;
+}
+
+SEC("?syscall")
+int conctest_wq_task_set_cb(void *ctx)
+{
+	struct wq_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&wq_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_wq_set_callback(&elem->work, wq_callback, 0);
+	conctest_record(CONCTEST_STAT_SYSCALL, ret, true);
+	return 0;
+}
+
+SEC("?perf_event")
+int conctest_wq_nmi_start(void *ctx)
+{
+	struct wq_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&wq_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_wq_start(&elem->work, 0);
+	conctest_record(CONCTEST_STAT_NMI, ret, true);
+	return 0;
+}
+
+SEC("?perf_event")
+int conctest_wq_nmi_set_cb(void *ctx)
+{
+	struct wq_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&wq_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_wq_set_callback(&elem->work, wq_callback, 0);
+	conctest_record(CONCTEST_STAT_NMI, ret, true);
+	return 0;
+}
+
+SEC("?syscall")
+int conctest_wq_task_delete(void *ctx)
+{
+	struct wq_elem *elem;
+	int key = 0, ret;
+
+	conctest_begin();
+	ret = bpf_map_delete_elem(&wq_map, &key);
+	if (ret == 0) {
+		elem = bpf_map_lookup_elem(&wq_map, &key);
+		if (elem) {
+			bpf_wq_init(&elem->work, &wq_map, 0);
+			bpf_wq_set_callback(&elem->work, wq_callback, 0);
+		}
+	}
+	conctest_record(CONCTEST_STAT_SYSCALL, ret, true);
+	return 0;
+}
+
+SEC("?perf_event")
+int conctest_wq_nmi_delete(void *ctx)
+{
+	struct wq_elem *elem;
+	int key = 0, ret;
+
+	conctest_begin();
+	ret = bpf_map_delete_elem(&wq_map, &key);
+	if (ret == 0) {
+		elem = bpf_map_lookup_elem(&wq_map, &key);
+		if (elem) {
+			bpf_wq_init(&elem->work, &wq_map, 0);
+			bpf_wq_set_callback(&elem->work, wq_callback, 0);
+		}
+	}
+	conctest_record(CONCTEST_STAT_NMI, ret, true);
+	return 0;
+}
+
+struct tw_elem {
+	struct bpf_task_work tw;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, int);
+	__type(value, struct tw_elem);
+} tw_map SEC(".maps");
+
+static int tw_callback(struct bpf_map *map, void *key, void *value)
+{
+	return 0;
+}
+
+SEC("?syscall")
+int conctest_tw_task_signal(void *ctx)
+{
+	struct tw_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&tw_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_task_work_schedule_signal(bpf_get_current_task_btf(),
+					    &elem->tw, &tw_map, tw_callback);
+	conctest_record(CONCTEST_STAT_SYSCALL, ret, true);
+	return 0;
+}
+
+SEC("?syscall")
+int conctest_tw_task_resume(void *ctx)
+{
+	struct tw_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&tw_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_task_work_schedule_resume(bpf_get_current_task_btf(),
+					    &elem->tw, &tw_map, tw_callback);
+	conctest_record(CONCTEST_STAT_SYSCALL, ret, true);
+	return 0;
+}
+
+SEC("?perf_event")
+int conctest_tw_nmi_signal(void *ctx)
+{
+	struct tw_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&tw_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_task_work_schedule_signal(bpf_get_current_task_btf(),
+					    &elem->tw, &tw_map, tw_callback);
+	conctest_record(CONCTEST_STAT_NMI, ret, true);
+	return 0;
+}
+
+SEC("?perf_event")
+int conctest_tw_nmi_resume(void *ctx)
+{
+	struct tw_elem *elem;
+	int key = 0, ret;
+
+	elem = bpf_map_lookup_elem(&tw_map, &key);
+	if (!elem)
+		return 0;
+
+	conctest_begin();
+	ret = bpf_task_work_schedule_resume(bpf_get_current_task_btf(),
+					    &elem->tw, &tw_map, tw_callback);
+	conctest_record(CONCTEST_STAT_NMI, ret, true);
+	return 0;
+}
+
+SEC("?syscall")
+int conctest_tw_task_delete(void *ctx)
+{
+	int key = 0, ret;
+
+	conctest_begin();
+	ret = bpf_map_delete_elem(&tw_map, &key);
+	conctest_record(CONCTEST_STAT_SYSCALL, ret, true);
+	return 0;
+}
+
+SEC("?perf_event")
+int conctest_tw_nmi_delete(void *ctx)
+{
+	int key = 0, ret;
+
+	conctest_begin();
+	ret = bpf_map_delete_elem(&tw_map, &key);
+	conctest_record(CONCTEST_STAT_NMI, ret, true);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

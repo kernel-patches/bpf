@@ -421,9 +421,55 @@ static struct conctest_suite timer_suite = {
 	.max_cpus = 4,
 };
 
+static void wq_init(struct conctest *skel, struct conctest_test *test)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, opts);
+	int fd;
+
+	fd = find_prog_fd(skel, "conctest_wq_init");
+	if (fd < 0)
+		return;
+	bpf_prog_test_run_opts(fd, &opts);
+}
+
+static struct conctest_op wq_ops[] = {
+	{ "start",  "conctest_wq_task_start",  "conctest_wq_nmi_start",  CTX_TASK_OK | CTX_NMI_OK },
+	{ "set_cb", "conctest_wq_task_set_cb", "conctest_wq_nmi_set_cb", CTX_TASK_OK | CTX_NMI_OK },
+	{ "delete", "conctest_wq_task_delete", "conctest_wq_nmi_delete", CTX_TASK_OK | CTX_NMI_OK },
+	{},
+};
+
+static const char *wq_extra_progs[] = { "conctest_wq_init", NULL };
+
+static struct conctest_suite wq_suite = {
+	.name = "wq",
+	.ops = wq_ops,
+	.nr_ops = 3,
+	.init = wq_init,
+	.extra_progs = wq_extra_progs,
+	.max_cpus = 4,
+};
+
+static struct conctest_op tw_ops[] = {
+	{ "signal", "conctest_tw_task_signal", "conctest_tw_nmi_signal", CTX_TASK_OK | CTX_NMI_OK },
+	{ "resume", "conctest_tw_task_resume", "conctest_tw_nmi_resume", CTX_TASK_OK | CTX_NMI_OK },
+	{ "delete", "conctest_tw_task_delete", "conctest_tw_nmi_delete", CTX_TASK_OK | CTX_NMI_OK },
+	{},
+};
+
+static struct conctest_suite tw_suite = {
+	.name = "task_work",
+	.ops = tw_ops,
+	.nr_ops = 3,
+	.init = NULL,
+	.max_cpus = 4,
+};
+
 static struct conctest_suite *suites[] = {
 	&rqspinlock_suite,
 	&timer_suite,
+	&wq_suite,
+	&tw_suite,
 	NULL,
 };
 
