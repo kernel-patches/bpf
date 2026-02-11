@@ -4165,10 +4165,7 @@ static void bpf_task_work_ctx_free_rcu(struct rcu_head *rcu)
 	struct bpf_task_work_ctx *ctx = container_of(rcu, struct bpf_task_work_ctx, rcu);
 
 	bpf_task_work_ctx_reset(ctx);
-	/* bpf_mem_free expects migration to be disabled */
-	migrate_disable();
-	bpf_mem_free(&bpf_global_ma, ctx);
-	migrate_enable();
+	kfree_nolock(ctx);
 }
 
 static void bpf_task_work_ctx_free_rcu_tasks_trace(struct rcu_head *rcu)
@@ -4295,7 +4292,7 @@ static struct bpf_task_work_ctx *bpf_task_work_fetch_ctx(struct bpf_task_work *t
 	if (ctx)
 		return ctx;
 
-	ctx = bpf_mem_alloc(&bpf_global_ma, sizeof(struct bpf_task_work_ctx));
+	ctx = kmalloc_nolock(sizeof(struct bpf_task_work_ctx), 0, map->numa_node);
 	if (!ctx)
 		return ERR_PTR(-ENOMEM);
 
@@ -4309,7 +4306,7 @@ static struct bpf_task_work_ctx *bpf_task_work_fetch_ctx(struct bpf_task_work *t
 		 * tw->ctx is set by concurrent BPF program, release allocated
 		 * memory and try to reuse already set context.
 		 */
-		bpf_mem_free(&bpf_global_ma, ctx);
+		kfree_nolock(ctx);
 		return old_ctx;
 	}
 
