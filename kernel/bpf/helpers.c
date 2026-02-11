@@ -4160,6 +4160,31 @@ static void bpf_task_work_ctx_reset(struct bpf_task_work_ctx *ctx)
 	}
 }
 
+static void bpf_task_work_ctx_free_rcu(struct rcu_head *rcu)
+{
+	struct bpf_task_work_ctx *ctx = container_of(rcu, struct bpf_task_work_ctx, rcu);
+
+	bpf_task_work_ctx_reset(ctx);
+	/* bpf_mem_free expects migration to be disabled */
+	migrate_disable();
+	bpf_mem_free(&bpf_global_ma, ctx);
+	migrate_enable();
+}
+
+static void bpf_task_work_ctx_free_rcu_tasks_trace(struct rcu_head *rcu)
+{
+	struct bpf_task_work_ctx *ctx = container_of(rcu, struct bpf_task_work_ctx, rcu);
+
+	call_rcu(&ctx->rcu, bpf_task_work_ctx_free_rcu);
+}
+
+static void bpf_task_work_ctx_delete(struct irq_work *irq_work)
+{
+	struct bpf_task_work_ctx *ctx = container_of(irq_work, struct bpf_task_work_ctx, irq_work);
+
+	call_rcu_tasks_trace(&ctx->rcu, bpf_task_work_ctx_free_rcu_tasks_trace);
+}
+
 static bool bpf_task_work_ctx_tryget(struct bpf_task_work_ctx *ctx)
 {
 	return refcount_inc_not_zero(&ctx->refcnt);
@@ -4170,12 +4195,12 @@ static void bpf_task_work_ctx_put(struct bpf_task_work_ctx *ctx)
 	if (!refcount_dec_and_test(&ctx->refcnt))
 		return;
 
-	bpf_task_work_ctx_reset(ctx);
-
-	/* bpf_mem_free expects migration to be disabled */
-	migrate_disable();
-	bpf_mem_free(&bpf_global_ma, ctx);
-	migrate_enable();
+	if (irqs_disabled()) {
+		init_irq_work(&ctx->irq_work, bpf_task_work_ctx_delete);
+		irq_work_queue(&ctx->irq_work);
+	} else {
+		bpf_task_work_ctx_delete(&ctx->irq_work);
+	}
 }
 
 static void bpf_task_work_cancel(struct bpf_task_work_ctx *ctx)
