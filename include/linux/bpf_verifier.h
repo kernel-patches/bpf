@@ -38,8 +38,7 @@ struct bpf_reg_state {
 	/* Ordering of fields matters.  See states_equal() */
 	enum bpf_reg_type type;
 	/*
-	 * Fixed part of pointer offset, pointer types only.
-	 * Or constant delta between "linked" scalars with the same ID.
+	 * Constant delta between "linked" scalars with the same ID.
 	 */
 	s32 off;
 	union {

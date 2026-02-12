@@ -654,7 +654,7 @@ static int stack_slot_obj_get_spi(struct bpf_verifier_env *env, struct bpf_reg_s
 		return -EINVAL;
 	}
 
-	off = reg->off + reg->var_off.value;
+	off = reg->var_off.value;
 	if (off % BPF_REG_SIZE) {
 		verbose(env, "cannot pass in %s at an offset=%d\n", obj_kind, off);
 		return -EINVAL;
@@ -2281,11 +2281,10 @@ static void mark_ptr_not_null_reg(struct bpf_reg_state *reg)
 static void mark_reg_graph_node(struct bpf_reg_state *regs, u32 regno,
 				struct btf_field_graph_root *ds_head)
 {
-	__mark_reg_known_zero(&regs[regno]);
+	__mark_reg_known(&regs[regno], ds_head->node_offset);
 	regs[regno].type = PTR_TO_BTF_ID | MEM_ALLOC;
 	regs[regno].btf = ds_head->btf;
 	regs[regno].btf_id = ds_head->value_btf_id;
-	regs[regno].off = ds_head->node_offset;
 }
 
 static bool reg_is_pkt_pointer(const struct bpf_reg_state *reg)
@@ -2316,7 +2315,6 @@ static bool reg_is_init_pkt_pointer(const struct bpf_reg_state *reg,
 	 */
 	return reg->type == which &&
 	       reg->id == 0 &&
-	       reg->off == 0 &&
 	       tnum_equals_const(reg->var_off, 0);
 }
 
@@ -5302,7 +5300,6 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
  * tracks the effects of the write, considering that each stack slot in the
  * dynamic range is potentially written to.
  *
- * 'off' includes 'regno->off'.
  * 'value_regno' can be -1, meaning that an unknown value is being written to
  * the stack.
  *
@@ -5724,7 +5721,6 @@ static int check_stack_read(struct bpf_verifier_env *env,
  * check_stack_write_var_off.
  *
  * 'ptr_regno' is the register used as a pointer into the stack.
- * 'off' includes 'ptr_regno->off', but not its variable offset (if any).
  * 'value_regno' is the register whose value we're writing to the stack. It can
  * be -1, meaning that we're not writing from a register.
  *
@@ -5761,14 +5757,14 @@ static int check_map_access_type(struct bpf_verifier_env *env, u32 regno,
 	u32 cap = bpf_map_flags_to_cap(map);
 
 	if (type == BPF_WRITE && !(cap & BPF_MAP_CAN_WRITE)) {
-		verbose(env, "write into map forbidden, value_size=%d off=%d size=%d\n",
-			map->value_size, off, size);
+		verbose(env, "write into map forbidden, value_size=%d off=%lld size=%d\n",
+			map->value_size, reg->smin_value + off, size);
 		return -EACCES;
 	}
 
 	if (type == BPF_READ && !(cap & BPF_MAP_CAN_READ)) {
-		verbose(env, "read from map forbidden, value_size=%d off=%d size=%d\n",
-			map->value_size, off, size);
+		verbose(env, "read from map forbidden, value_size=%d off=%lld size=%d\n",
+			map->value_size, reg->smin_value + off, size);
 		return -EACCES;
 	}
 
@@ -5875,24 +5871,24 @@ static int __check_ptr_off_reg(struct bpf_verifier_env *env,
 	 * is only allowed in its original, unmodified form.
 	 */
 
-	if (reg->off < 0) {
-		verbose(env, "negative offset %s ptr R%d off=%d disallowed\n",
-			reg_type_str(env, reg->type), regno, reg->off);
-		return -EACCES;
-	}
-
-	if (!fixed_off_ok && reg->off) {
-		verbose(env, "dereference of modified %s ptr R%d off=%d disallowed\n",
-			reg_type_str(env, reg->type), regno, reg->off);
-		return -EACCES;
-	}
-
-	if (!tnum_is_const(reg->var_off) || reg->var_off.value) {
+	if (!tnum_is_const(reg->var_off)) {
 		char tn_buf[48];
 
 		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
 		verbose(env, "variable %s access var_off=%s disallowed\n",
 			reg_type_str(env, reg->type), tn_buf);
+		return -EACCES;
+	}
+
+	if (reg->smin_value < 0) {
+		verbose(env, "negative offset %s ptr R%d off=%lld disallowed\n",
+			reg_type_str(env, reg->type), regno, reg->var_off.value);
+		return -EACCES;
+	}
+
+	if (!fixed_off_ok && reg->var_off.value != 0) {
+		verbose(env, "dereference of modified %s ptr R%d off=%lld disallowed\n",
+			reg_type_str(env, reg->type), regno, reg->var_off.value);
 		return -EACCES;
 	}
 
@@ -5934,14 +5930,14 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 	/* For ref_ptr case, release function check should ensure we get one
 	 * referenced PTR_TO_BTF_ID, and that its fixed offset is 0. For the
 	 * normal store of unreferenced kptr, we must ensure var_off is zero.
-	 * Since ref_ptr cannot be accessed directly by BPF insns, checks for
-	 * reg->off and reg->ref_obj_id are not needed here.
+	 * Since ref_ptr cannot be accessed directly by BPF insns, check for
+	 * reg->ref_obj_id is not needed here.
 	 */
 	if (__check_ptr_off_reg(env, reg, regno, true))
 		return -EACCES;
 
 	/* A full type match is needed, as BTF can be vmlinux, module or prog BTF, and
-	 * we also need to take into account the reg->off.
+	 * we also need to take into account the reg->var_off.
 	 *
 	 * We want to support cases like:
 	 *
@@ -5952,19 +5948,19 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 	 *
 	 * struct foo *v;
 	 * v = func();	      // PTR_TO_BTF_ID
-	 * val->foo = v;      // reg->off is zero, btf and btf_id match type
-	 * val->bar = &v->br; // reg->off is still zero, but we need to retry with
+	 * val->foo = v;      // reg->var_off is zero, btf and btf_id match type
+	 * val->bar = &v->br; // reg->var_off is still zero, but we need to retry with
 	 *                    // first member type of struct after comparison fails
-	 * val->baz = &v->bz; // reg->off is non-zero, so struct needs to be walked
+	 * val->baz = &v->bz; // reg->var_off is non-zero, so struct needs to be walked
 	 *                    // to match type
 	 *
-	 * In the kptr_ref case, check_func_arg_reg_off already ensures reg->off
+	 * In the kptr_ref case, check_func_arg_reg_off already ensures reg->var_off
 	 * is zero. We must also ensure that btf_struct_ids_match does not walk
 	 * the struct to match type against first member of struct, i.e. reject
 	 * second case from above. Hence, when type is BPF_KPTR_REF, we set
 	 * strict mode to true for type match.
 	 */
-	if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->off,
+	if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->var_off.value,
 				  kptr_field->kptr.btf, kptr_field->kptr.btf_id,
 				  kptr_field->type != BPF_KPTR_UNREF))
 		goto bad_type;
@@ -6273,27 +6269,14 @@ static int check_packet_access(struct bpf_verifier_env *env, u32 regno, int off,
 	struct bpf_reg_state *reg = reg_state(env, regno);
 	int err;
 
-	/* We may have added a variable offset to the packet pointer; but any
-	 * reg->range we have comes after that.  We are only checking the fixed
-	 * offset.
-	 */
-
-	/* We don't allow negative numbers, because we aren't tracking enough
-	 * detail to prove they're safe.
-	 */
-	if (reg->smin_value < 0) {
-		verbose(env, "R%d min value is negative, either use unsigned index or do a if (index >=0) check.\n",
-			regno);
-		return -EACCES;
-	}
-
-	err = reg->range < 0 ? -EINVAL :
-	      __check_mem_access(env, regno, off, size, reg->range,
-				 zero_size_allowed);
-	if (err) {
+	if (reg->range < 0) {
 		verbose(env, "R%d offset is outside of the packet\n", regno);
-		return err;
+		return -EINVAL;
 	}
+
+	err = check_mem_region_access(env, regno, off, size, reg->range, zero_size_allowed);
+	if (err)
+		return err;
 
 	/* __check_mem_access has made sure "off + size - 1" is within u16.
 	 * reg->umax_value can't be bigger than MAX_PACKET_OFF which is 0xffff,
@@ -6305,7 +6288,7 @@ static int check_packet_access(struct bpf_verifier_env *env, u32 regno, int off,
 		max_t(u32, env->prog->aux->max_pkt_offset,
 		      off + reg->umax_value + size - 1);
 
-	return err;
+	return 0;
 }
 
 /* check access to 'struct bpf_context' fields.  Supports fixed offsets only */
@@ -6522,14 +6505,14 @@ static int check_pkt_ptr_alignment(struct bpf_verifier_env *env,
 	 */
 	ip_align = 2;
 
-	reg_off = tnum_add(reg->var_off, tnum_const(ip_align + reg->off + off));
+	reg_off = tnum_add(reg->var_off, tnum_const(ip_align + off));
 	if (!tnum_is_aligned(reg_off, size)) {
 		char tn_buf[48];
 
 		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
 		verbose(env,
-			"misaligned packet access off %d+%s+%d+%d size %d\n",
-			ip_align, tn_buf, reg->off, off, size);
+			"misaligned packet access off %d+%s+%d size %d\n",
+			ip_align, tn_buf, off, size);
 		return -EACCES;
 	}
 
@@ -6547,13 +6530,13 @@ static int check_generic_ptr_alignment(struct bpf_verifier_env *env,
 	if (!strict || size == 1)
 		return 0;
 
-	reg_off = tnum_add(reg->var_off, tnum_const(reg->off + off));
+	reg_off = tnum_add(reg->var_off, tnum_const(off));
 	if (!tnum_is_aligned(reg_off, size)) {
 		char tn_buf[48];
 
 		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
-		verbose(env, "misaligned %saccess off %s+%d+%d size %d\n",
-			pointer_desc, tn_buf, reg->off, off, size);
+		verbose(env, "misaligned %saccess off %s+%d size %d\n",
+			pointer_desc, tn_buf, off, size);
 		return -EACCES;
 	}
 
@@ -6891,7 +6874,7 @@ static int __check_buffer_access(struct bpf_verifier_env *env,
 			regno, buf_info, off, size);
 		return -EACCES;
 	}
-	if (!tnum_is_const(reg->var_off) || reg->var_off.value) {
+	if (!tnum_is_const(reg->var_off)) {
 		char tn_buf[48];
 
 		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
@@ -6914,8 +6897,8 @@ static int check_tp_buffer_access(struct bpf_verifier_env *env,
 	if (err)
 		return err;
 
-	if (off + size > env->prog->aux->max_tp_access)
-		env->prog->aux->max_tp_access = off + size;
+	env->prog->aux->max_tp_access = max(reg->var_off.value + off + size,
+					    env->prog->aux->max_tp_access);
 
 	return 0;
 }
@@ -6933,8 +6916,7 @@ static int check_buffer_access(struct bpf_verifier_env *env,
 	if (err)
 		return err;
 
-	if (off + size > *max_access)
-		*max_access = off + size;
+	*max_access = max(reg->var_off.value + off + size, *max_access);
 
 	return 0;
 }
@@ -7327,19 +7309,23 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 			tname);
 		return -EINVAL;
 	}
-	if (off < 0) {
-		verbose(env,
-			"R%d is ptr_%s invalid negative access: off=%d\n",
-			regno, tname, off);
-		return -EACCES;
-	}
-	if (!tnum_is_const(reg->var_off) || reg->var_off.value) {
+
+	if (!tnum_is_const(reg->var_off)) {
 		char tn_buf[48];
 
 		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
 		verbose(env,
 			"R%d is ptr_%s invalid variable offset: off=%d, var_off=%s\n",
 			regno, tname, off, tn_buf);
+		return -EACCES;
+	}
+
+	off += reg->var_off.value;
+
+	if (off < 0) {
+		verbose(env,
+			"R%d is ptr_%s invalid negative access: off=%d\n",
+			regno, tname, off);
 		return -EACCES;
 	}
 
@@ -7589,8 +7575,8 @@ static int check_stack_access_within_bounds(
 
 	if (err) {
 		if (tnum_is_const(reg->var_off)) {
-			verbose(env, "invalid%s stack R%d off=%d size=%d\n",
-				err_extra, regno, off, access_size);
+			verbose(env, "invalid%s stack R%d off=%lld size=%d\n",
+				err_extra, regno, min_off, access_size);
 		} else {
 			char tn_buf[48];
 
@@ -7636,13 +7622,9 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 	if (size < 0)
 		return size;
 
-	/* alignment checks will add in reg->off themselves */
 	err = check_ptr_alignment(env, reg, off, size, strict_alignment_once);
 	if (err)
 		return err;
-
-	/* for access checks, reg->off is just part of off */
-	off += reg->off;
 
 	if (reg->type == PTR_TO_MAP_KEY) {
 		if (t == BPF_WRITE) {
@@ -8122,8 +8104,6 @@ static int check_atomic(struct bpf_verifier_env *env, struct bpf_insn *insn)
  * on the access type and privileges, that all elements of the stack are
  * initialized.
  *
- * 'off' includes 'regno->off', but not its dynamic part (if any).
- *
  * All registers that have been spilled on the stack in the slots within the
  * read offsets are marked as read.
  */
@@ -8284,7 +8264,7 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 	switch (base_type(reg->type)) {
 	case PTR_TO_PACKET:
 	case PTR_TO_PACKET_META:
-		return check_packet_access(env, regno, reg->off, access_size,
+		return check_packet_access(env, regno, 0, access_size,
 					   zero_size_allowed);
 	case PTR_TO_MAP_KEY:
 		if (access_type == BPF_WRITE) {
@@ -8292,12 +8272,12 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 				reg_type_str(env, reg->type));
 			return -EACCES;
 		}
-		return check_mem_region_access(env, regno, reg->off, access_size,
+		return check_mem_region_access(env, regno, 0, access_size,
 					       reg->map_ptr->key_size, false);
 	case PTR_TO_MAP_VALUE:
-		if (check_map_access_type(env, regno, reg->off, access_size, access_type))
+		if (check_map_access_type(env, regno, 0, access_size, access_type))
 			return -EACCES;
-		return check_map_access(env, regno, reg->off, access_size,
+		return check_map_access(env, regno, 0, access_size,
 					zero_size_allowed, ACCESS_HELPER);
 	case PTR_TO_MEM:
 		if (type_is_rdonly_mem(reg->type)) {
@@ -8307,7 +8287,7 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 				return -EACCES;
 			}
 		}
-		return check_mem_region_access(env, regno, reg->off,
+		return check_mem_region_access(env, regno, 0,
 					       access_size, reg->mem_size,
 					       zero_size_allowed);
 	case PTR_TO_BUF:
@@ -8322,16 +8302,16 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
 		} else {
 			max_access = &env->prog->aux->max_rdwr_access;
 		}
-		return check_buffer_access(env, reg, regno, reg->off,
+		return check_buffer_access(env, reg, regno, 0,
 					   access_size, zero_size_allowed,
 					   max_access);
 	case PTR_TO_STACK:
 		return check_stack_range_initialized(
 				env,
-				regno, reg->off, access_size,
+				regno, 0, access_size,
 				zero_size_allowed, access_type, meta);
 	case PTR_TO_BTF_ID:
-		return check_ptr_to_btf_access(env, regs, regno, reg->off,
+		return check_ptr_to_btf_access(env, regs, regno, 0,
 					       access_size, BPF_READ, -1);
 	case PTR_TO_CTX:
 		/* in case the function doesn't know how to access the context,
@@ -8543,9 +8523,9 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 		return -EINVAL;
 	}
 	spin_lock_off = is_res_lock ? rec->res_spin_lock_off : rec->spin_lock_off;
-	if (spin_lock_off != val + reg->off) {
+	if (spin_lock_off != val) {
 		verbose(env, "off %lld doesn't point to 'struct %s_lock' that is at %d\n",
-			val + reg->off, lock_str, spin_lock_off);
+			val, lock_str, spin_lock_off);
 		return -EINVAL;
 	}
 	if (is_lock) {
@@ -8660,9 +8640,9 @@ static int check_map_field_pointer(struct bpf_verifier_env *env, u32 regno,
 		verifier_bug(env, "unsupported BTF field type: %s\n", struct_name);
 		return -EINVAL;
 	}
-	if (field_off != val + reg->off) {
+	if (field_off != val) {
 		verbose(env, "off %lld doesn't point to 'struct %s' that is at %d\n",
-			val + reg->off, struct_name, field_off);
+			val, struct_name, field_off);
 		return -EINVAL;
 	}
 	if (map_desc->ptr) {
@@ -8730,7 +8710,7 @@ static int process_kptr_func(struct bpf_verifier_env *env, int regno,
 		return -EINVAL;
 	}
 
-	kptr_off = reg->off + reg->var_off.value;
+	kptr_off = reg->var_off.value;
 	kptr_field = btf_record_find(rec, kptr_off, BPF_KPTR);
 	if (!kptr_field) {
 		verbose(env, "off=%d doesn't point to kptr\n", kptr_off);
@@ -9373,7 +9353,7 @@ static int check_reg_type(struct bpf_verifier_env *env, u32 regno,
 	struct bpf_reg_state *reg = reg_state(env, regno);
 	enum bpf_reg_type expected, type = reg->type;
 	const struct bpf_reg_types *compatible;
-	int i, j;
+	int i, j, err;
 
 	compatible = compatible_reg_types[base_type(arg_type)];
 	if (!compatible) {
@@ -9476,8 +9456,12 @@ found:
 				return -EACCES;
 			}
 
-			if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id, reg->off,
-						  btf_vmlinux, *arg_btf_id,
+			err = __check_ptr_off_reg(env, reg, regno, true);
+			if (err)
+				return err;
+
+			if (!btf_struct_ids_match(&env->log, reg->btf, reg->btf_id,
+						  reg->var_off.value, btf_vmlinux, *arg_btf_id,
 						  strict_type_match)) {
 				verbose(env, "R%d is of type %s but %s is expected\n",
 					regno, btf_type_name(reg->btf, reg->btf_id),
@@ -9555,12 +9539,11 @@ static int check_func_arg_reg_off(struct bpf_verifier_env *env,
 		 * because fixed_off_ok is false, but checking here allows us
 		 * to give the user a better error message.
 		 */
-		if (reg->off) {
+		if (!tnum_is_const(reg->var_off) || reg->var_off.value != 0) {
 			verbose(env, "R%d must have zero offset when passed to release func or trusted arg to kfunc\n",
 				regno);
 			return -EINVAL;
 		}
-		return __check_ptr_off_reg(env, reg, regno, false);
 	}
 
 	switch (type) {
@@ -9657,7 +9640,7 @@ static enum bpf_dynptr_type dynptr_get_type(struct bpf_verifier_env *env,
 	if (reg->type == CONST_PTR_TO_DYNPTR)
 		return reg->dynptr.type;
 
-	spi = __get_spi(reg->off);
+	spi = __get_spi(reg->var_off.value);
 	if (spi < 0) {
 		verbose(env, "verifier internal error: invalid spi when querying dynptr type\n");
 		return BPF_DYNPTR_TYPE_INVALID;
@@ -9698,13 +9681,13 @@ static int check_reg_const_str(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	err = check_map_access(env, regno, reg->off,
-			       map->value_size - reg->off, false,
+	err = check_map_access(env, regno, 0,
+			       map->value_size - reg->var_off.value, false,
 			       ACCESS_HELPER);
 	if (err)
 		return err;
 
-	map_off = reg->off + reg->var_off.value;
+	map_off = reg->var_off.value;
 	err = map->ops->map_direct_value_addr(map, &map_addr, map_off);
 	if (err) {
 		verbose(env, "direct value access on string failed\n");
@@ -9741,7 +9724,7 @@ static int get_constant_map_key(struct bpf_verifier_env *env,
 	if (!tnum_is_const(key->var_off))
 		return -EOPNOTSUPP;
 
-	stack_off = key->off + key->var_off.value;
+	stack_off = key->var_off.value;
 	slot = -stack_off - 1;
 	spi = slot / BPF_REG_SIZE;
 	off = slot % BPF_REG_SIZE;
@@ -11073,7 +11056,8 @@ static int set_rbtree_add_callback_state(struct bpf_verifier_env *env,
 	 */
 	struct btf_field *field;
 
-	field = reg_find_field_offset(&caller->regs[BPF_REG_1], caller->regs[BPF_REG_1].off,
+	field = reg_find_field_offset(&caller->regs[BPF_REG_1],
+				      caller->regs[BPF_REG_1].var_off.value,
 				      BPF_RB_ROOT);
 	if (!field || !field->graph_root.value_btf_id)
 		return -EFAULT;
@@ -11449,7 +11433,7 @@ static int check_bpf_snprintf_call(struct bpf_verifier_env *env,
 	/* fmt being ARG_PTR_TO_CONST_STR guarantees that var_off is const
 	 * and map_direct_value_addr is set.
 	 */
-	fmt_map_off = fmt_reg->off + fmt_reg->var_off.value;
+	fmt_map_off = fmt_reg->var_off.value;
 	err = fmt_map->ops->map_direct_value_addr(fmt_map, &fmt_addr,
 						  fmt_map_off);
 	if (err) {
@@ -12755,13 +12739,12 @@ static int process_kf_arg_ptr_to_btf_id(struct bpf_verifier_env *env,
 	    btf_type_ids_nocast_alias(&env->log, reg_btf, reg_ref_id, meta->btf, ref_id))
 		strict_type_match = true;
 
-	WARN_ON_ONCE(is_kfunc_release(meta) &&
-		     (reg->off || !tnum_is_const(reg->var_off) ||
-		      reg->var_off.value));
+	WARN_ON_ONCE(is_kfunc_release(meta) && !tnum_is_const(reg->var_off));
 
 	reg_ref_t = btf_type_skip_modifiers(reg_btf, reg_ref_id, &reg_ref_id);
 	reg_ref_tname = btf_name_by_offset(reg_btf, reg_ref_t->name_off);
-	struct_same = btf_struct_ids_match(&env->log, reg_btf, reg_ref_id, reg->off, meta->btf, ref_id, strict_type_match);
+	struct_same = btf_struct_ids_match(&env->log, reg_btf, reg_ref_id, reg->var_off.value,
+					   meta->btf, ref_id, strict_type_match);
 	/* If kfunc is accepting a projection type (ie. __sk_buff), it cannot
 	 * actually use it -- it must cast to the underlying type. So we allow
 	 * caller to pass in the underlying type.
@@ -13133,7 +13116,7 @@ __process_kf_arg_ptr_to_graph_root(struct bpf_verifier_env *env,
 	}
 
 	rec = reg_btf_record(reg);
-	head_off = reg->off + reg->var_off.value;
+	head_off = reg->var_off.value;
 	field = btf_record_find(rec, head_off, head_field_type);
 	if (!field) {
 		verbose(env, "%s not found at offset=%u\n", head_type_name, head_off);
@@ -13200,7 +13183,7 @@ __process_kf_arg_ptr_to_graph_node(struct bpf_verifier_env *env,
 		return -EINVAL;
 	}
 
-	node_off = reg->off + reg->var_off.value;
+	node_off = reg->var_off.value;
 	field = reg_find_field_offset(reg, node_off, node_field_type);
 	if (!field) {
 		verbose(env, "%s not found at offset=%u\n", node_type_name, node_off);
@@ -14228,7 +14211,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	    meta.func_id == special_kfunc_list[KF_bpf_list_push_back_impl] ||
 	    meta.func_id == special_kfunc_list[KF_bpf_rbtree_add_impl]) {
 		release_ref_obj_id = regs[BPF_REG_2].ref_obj_id;
-		insn_aux->insert_off = regs[BPF_REG_2].off;
+		insn_aux->insert_off = regs[BPF_REG_2].var_off.value;
 		insn_aux->kptr_struct_meta = btf_find_struct_meta(meta.arg_btf, meta.arg_btf_id);
 		err = ref_convert_owning_non_owning(env, release_ref_obj_id);
 		if (err) {
@@ -14459,11 +14442,13 @@ static bool check_reg_sane_offset_ptr(struct bpf_verifier_env *env,
 				      const struct bpf_reg_state *reg,
 				      enum bpf_reg_type type)
 {
+	bool known = tnum_is_const(reg->var_off);
+	s64 val = reg->var_off.value;
 	s64 smin = reg->smin_value;
 
-	if (reg->off >= BPF_MAX_VAR_OFF || reg->off <= -BPF_MAX_VAR_OFF) {
-		verbose(env, "%s pointer offset %d is not allowed\n",
-			reg_type_str(env, type), reg->off);
+	if (known && (val >= BPF_MAX_VAR_OFF || val <= -BPF_MAX_VAR_OFF)) {
+		verbose(env, "%s pointer offset %lld is not allowed\n",
+			reg_type_str(env, type), val);
 		return false;
 	}
 
@@ -14497,13 +14482,11 @@ static int retrieve_ptr_limit(const struct bpf_reg_state *ptr_reg,
 		 * currently prohibited for unprivileged.
 		 */
 		max = MAX_BPF_STACK + mask_to_left;
-		ptr_limit = -(ptr_reg->var_off.value + ptr_reg->off);
+		ptr_limit = -ptr_reg->var_off.value;
 		break;
 	case PTR_TO_MAP_VALUE:
 		max = ptr_reg->map_ptr->value_size;
-		ptr_limit = (mask_to_left ?
-			     ptr_reg->smin_value :
-			     ptr_reg->umax_value) + ptr_reg->off;
+		ptr_limit = mask_to_left ? ptr_reg->smin_value : ptr_reg->umax_value;
 		break;
 	default:
 		return REASON_TYPE;
@@ -14734,9 +14717,6 @@ static int sanitize_err(struct bpf_verifier_env *env,
  * Variable offset is prohibited for unprivileged mode for simplicity since it
  * requires corresponding support in Spectre masking for stack ALU.  See also
  * retrieve_ptr_limit().
- *
- *
- * 'off' includes 'reg->off'.
  */
 static int check_stack_access_for_ptr_arithmetic(
 				struct bpf_verifier_env *env,
@@ -14777,11 +14757,11 @@ static int sanitize_check_bounds(struct bpf_verifier_env *env,
 	switch (dst_reg->type) {
 	case PTR_TO_STACK:
 		if (check_stack_access_for_ptr_arithmetic(env, dst, dst_reg,
-					dst_reg->off + dst_reg->var_off.value))
+							  dst_reg->var_off.value))
 			return -EACCES;
 		break;
 	case PTR_TO_MAP_VALUE:
-		if (check_map_access(env, dst, dst_reg->off, 1, false, ACCESS_HELPER)) {
+		if (check_map_access(env, dst, 0, 1, false, ACCESS_HELPER)) {
 			verbose(env, "R%d pointer arithmetic of map value goes out of range, "
 				"prohibited for !root\n", dst);
 			return -EACCES;
@@ -14905,23 +14885,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 
 	switch (opcode) {
 	case BPF_ADD:
-		/* We can take a fixed offset as long as it doesn't overflow
-		 * the s32 'off' field
-		 */
-		if (known && (ptr_reg->off + smin_val ==
-			      (s64)(s32)(ptr_reg->off + smin_val))) {
-			/* pointer += K.  Accumulate it into fixed offset */
-			dst_reg->smin_value = smin_ptr;
-			dst_reg->smax_value = smax_ptr;
-			dst_reg->umin_value = umin_ptr;
-			dst_reg->umax_value = umax_ptr;
-			dst_reg->var_off = ptr_reg->var_off;
-			dst_reg->off = ptr_reg->off + smin_val;
-			dst_reg->raw = ptr_reg->raw;
-			break;
-		}
-		/* A new variable offset is created.  Note that off_reg->off
-		 * == 0, since it's a scalar.
+		/*
 		 * dst_reg gets the pointer type and since some positive
 		 * integer value was added to the pointer, give it a new 'id'
 		 * if it's a PTR_TO_PACKET.
@@ -14940,9 +14904,8 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 			dst_reg->umax_value = U64_MAX;
 		}
 		dst_reg->var_off = tnum_add(ptr_reg->var_off, off_reg->var_off);
-		dst_reg->off = ptr_reg->off;
 		dst_reg->raw = ptr_reg->raw;
-		if (reg_is_pkt_pointer(ptr_reg)) {
+		if (!known && reg_is_pkt_pointer(ptr_reg)) {
 			dst_reg->id = ++env->id_gen;
 			/* something was added to pkt_ptr, set range to zero */
 			memset(&dst_reg->raw, 0, sizeof(dst_reg->raw));
@@ -14964,19 +14927,6 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 				dst);
 			return -EACCES;
 		}
-		if (known && (ptr_reg->off - smin_val ==
-			      (s64)(s32)(ptr_reg->off - smin_val))) {
-			/* pointer -= K.  Subtract it from fixed offset */
-			dst_reg->smin_value = smin_ptr;
-			dst_reg->smax_value = smax_ptr;
-			dst_reg->umin_value = umin_ptr;
-			dst_reg->umax_value = umax_ptr;
-			dst_reg->var_off = ptr_reg->var_off;
-			dst_reg->id = ptr_reg->id;
-			dst_reg->off = ptr_reg->off - smin_val;
-			dst_reg->raw = ptr_reg->raw;
-			break;
-		}
 		/* A new variable offset is created.  If the subtrahend is known
 		 * nonnegative, then any reg->range we had before is still good.
 		 */
@@ -14996,9 +14946,8 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 			dst_reg->umax_value = umax_ptr - umin_val;
 		}
 		dst_reg->var_off = tnum_sub(ptr_reg->var_off, off_reg->var_off);
-		dst_reg->off = ptr_reg->off;
 		dst_reg->raw = ptr_reg->raw;
-		if (reg_is_pkt_pointer(ptr_reg)) {
+		if (!known && reg_is_pkt_pointer(ptr_reg)) {
 			dst_reg->id = ++env->id_gen;
 			/* something was added to pkt_ptr, set range to zero */
 			if (smin_val < 0)
@@ -16542,19 +16491,17 @@ static void find_good_pkt_pointers(struct bpf_verifier_state *vstate,
 	struct bpf_reg_state *reg;
 	int new_range;
 
-	if (dst_reg->off < 0 ||
-	    (dst_reg->off == 0 && range_right_open))
+	if (dst_reg->umax_value == 0 && range_right_open)
 		/* This doesn't give us any range */
 		return;
 
-	if (dst_reg->umax_value > MAX_PACKET_OFF ||
-	    dst_reg->umax_value + dst_reg->off > MAX_PACKET_OFF)
+	if (dst_reg->umax_value > MAX_PACKET_OFF)
 		/* Risk of overflow.  For instance, ptr + (1<<63) may be less
 		 * than pkt_end, but that's because it's also less than pkt.
 		 */
 		return;
 
-	new_range = dst_reg->off;
+	new_range = dst_reg->umax_value;
 	if (range_right_open)
 		new_range++;
 
@@ -16603,7 +16550,7 @@ static void find_good_pkt_pointers(struct bpf_verifier_state *vstate,
 	/* If our ids match, then we must have the same max_value.  And we
 	 * don't care about the other reg's fixed offset, since if it's too big
 	 * the range won't allow anything.
-	 * dst_reg->off is known < MAX_PACKET_OFF, therefore it fits in a u16.
+	 * dst_reg->umax_value is known < MAX_PACKET_OFF, therefore it fits in a u16.
 	 */
 	bpf_for_each_reg_in_vstate(vstate, state, reg, ({
 		if (reg->type == type && reg->id == dst_reg->id)
@@ -17129,29 +17076,24 @@ static void mark_ptr_or_null_reg(struct bpf_func_state *state,
 {
 	if (type_may_be_null(reg->type) && reg->id == id &&
 	    (is_rcu_reg(reg) || !WARN_ON_ONCE(!reg->id))) {
-		/* Old offset (both fixed and variable parts) should have been
-		 * known-zero, because we don't allow pointer arithmetic on
-		 * pointers that might be NULL. If we see this happening, don't
-		 * convert the register.
+		/* Old offset should have been known-zero, because we don't
+		 * allow pointer arithmetic on pointers that might be NULL.
+		 * If we see this happening, don't convert the register.
 		 *
 		 * But in some cases, some helpers that return local kptrs
-		 * advance offset for the returned pointer. In those cases, it
-		 * is fine to expect to see reg->off.
+		 * advance offset for the returned pointer. In those cases,
+		 * it is fine to expect to see reg->var_off.
 		 */
-		if (WARN_ON_ONCE(reg->smin_value || reg->smax_value || !tnum_equals_const(reg->var_off, 0)))
-			return;
 		if (!(type_is_ptr_alloc_obj(reg->type) || type_is_non_owning_ref(reg->type)) &&
-		    WARN_ON_ONCE(reg->off))
+		    WARN_ON_ONCE(!tnum_equals_const(reg->var_off, 0)))
 			return;
-
 		if (is_null) {
-			reg->type = SCALAR_VALUE;
 			/* We don't need id and ref_obj_id from this point
 			 * onwards anymore, thus we should better reset it,
 			 * so that state pruning has chances to take effect.
 			 */
-			reg->id = 0;
-			reg->ref_obj_id = 0;
+			__mark_reg_known_zero(reg);
+			reg->type = SCALAR_VALUE;
 
 			return;
 		}
@@ -17731,22 +17673,24 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	}
 
 	map = env->used_maps[aux->map_index];
-	dst_reg->map_ptr = map;
 
 	if (insn->src_reg == BPF_PSEUDO_MAP_VALUE ||
 	    insn->src_reg == BPF_PSEUDO_MAP_IDX_VALUE) {
 		if (map->map_type == BPF_MAP_TYPE_ARENA) {
 			__mark_reg_unknown(env, dst_reg);
+			dst_reg->map_ptr = map;
 			return 0;
 		}
+		__mark_reg_known(dst_reg, aux->map_off);
 		dst_reg->type = PTR_TO_MAP_VALUE;
-		dst_reg->off = aux->map_off;
+		dst_reg->map_ptr = map;
 		WARN_ON_ONCE(map->map_type != BPF_MAP_TYPE_INSN_ARRAY &&
 			     map->max_entries != 1);
 		/* We want reg->id to be same (0) as map_value is not distinct */
 	} else if (insn->src_reg == BPF_PSEUDO_MAP_FD ||
 		   insn->src_reg == BPF_PSEUDO_MAP_IDX) {
 		dst_reg->type = CONST_PTR_TO_MAP;
+		dst_reg->map_ptr = map;
 	} else {
 		verifier_bug(env, "unexpected src reg value for ldimm64");
 		return -EFAULT;
@@ -19852,11 +19796,6 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		 */
 		if (rold->range > rcur->range)
 			return false;
-		/* If the offsets don't match, we can't trust our alignment;
-		 * nor can we be sure that we won't fall out of range.
-		 */
-		if (rold->off != rcur->off)
-			return false;
 		/* id relations must be preserved */
 		if (!check_ids(rold->id, rcur->id, idmap))
 			return false;
@@ -19872,8 +19811,7 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		return true;
 	case PTR_TO_INSN:
 		return memcmp(rold, rcur, offsetof(struct bpf_reg_state, var_off)) == 0 &&
-			rold->off == rcur->off && range_within(rold, rcur) &&
-			tnum_in(rold->var_off, rcur->var_off);
+		       range_within(rold, rcur) && tnum_in(rold->var_off, rcur->var_off);
 	default:
 		return regs_exact(rold, rcur, idmap);
 	}
@@ -20486,7 +20424,7 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 					 * so we can assume valid iter and reg state,
 					 * no need for extra (re-)validations
 					 */
-					spi = __get_spi(iter_reg->off + iter_reg->var_off.value);
+					spi = __get_spi(iter_reg->var_off.value);
 					iter_state = &func(env, iter_reg)->stack[spi].spilled_ptr;
 					if (iter_state->iter.state == BPF_ITER_STATE_ACTIVE) {
 						loop = true;
@@ -20892,19 +20830,16 @@ static int indirect_jump_min_max_index(struct bpf_verifier_env *env,
 				       u32 *pmin_index, u32 *pmax_index)
 {
 	struct bpf_reg_state *reg = reg_state(env, regno);
-	u64 min_index, max_index;
+	u64 min_index = reg->umin_value;
+	u64 max_index = reg->umax_value;
 	const u32 size = 8;
 
-	if (check_add_overflow(reg->umin_value, reg->off, &min_index) ||
-		(min_index > (u64) U32_MAX * size)) {
-		verbose(env, "the sum of R%u umin_value %llu and off %u is too big\n",
-			     regno, reg->umin_value, reg->off);
+	if (min_index > (u64) U32_MAX * size) {
+		verbose(env, "the sum of R%u umin_value %llu is too big\n", regno, reg->umin_value);
 		return -ERANGE;
 	}
-	if (check_add_overflow(reg->umax_value, reg->off, &max_index) ||
-		(max_index > (u64) U32_MAX * size)) {
-		verbose(env, "the sum of R%u umax_value %llu and off %u is too big\n",
-			     regno, reg->umax_value, reg->off);
+	if (max_index > (u64) U32_MAX * size) {
+		verbose(env, "the sum of R%u umax_value %llu is too big\n", regno, reg->umax_value);
 		return -ERANGE;
 	}
 
