@@ -12,13 +12,21 @@
 static int detect_bpftool_path(char *buffer)
 {
 	char tmp[BPFTOOL_PATH_MAX_LEN];
+	const char *env_path;
+
+	/* First, check if BPFTOOL environment variable is set */
+	env_path = getenv("BPFTOOL");
+	if (env_path && access(env_path, X_OK) == 0) {
+		snprintf(buffer, BPFTOOL_PATH_MAX_LEN, "%s", env_path);
+		return 0;
+	}
 
 	/* Check default bpftool location (will work if we are running the
 	 * default flavor of test_progs)
 	 */
 	snprintf(tmp, BPFTOOL_PATH_MAX_LEN, "./%s", BPFTOOL_DEFAULT_PATH);
 	if (access(tmp, X_OK) == 0) {
-		strncpy(buffer, tmp, BPFTOOL_PATH_MAX_LEN);
+		snprintf(buffer, BPFTOOL_PATH_MAX_LEN, "%s", tmp);
 		return 0;
 	}
 
@@ -27,7 +35,7 @@ static int detect_bpftool_path(char *buffer)
 	 */
 	snprintf(tmp, BPFTOOL_PATH_MAX_LEN, "../%s", BPFTOOL_DEFAULT_PATH);
 	if (access(tmp, X_OK) == 0) {
-		strncpy(buffer, tmp, BPFTOOL_PATH_MAX_LEN);
+		snprintf(buffer, BPFTOOL_PATH_MAX_LEN, "%s", tmp);
 		return 0;
 	}
 
