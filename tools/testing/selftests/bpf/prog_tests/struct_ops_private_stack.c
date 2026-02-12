@@ -56,6 +56,7 @@ static void test_private_stack_fail(void)
 	err = struct_ops_private_stack_fail__load(skel);
 	if (!ASSERT_ERR(err, "struct_ops_private_stack_fail__load"))
 		goto cleanup;
+	struct_ops_private_stack_fail__destroy(skel);
 	return;
 
 cleanup:
