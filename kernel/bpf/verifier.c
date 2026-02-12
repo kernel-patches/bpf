@@ -5095,7 +5095,7 @@ static void assign_scalar_id_before_mov(struct bpf_verifier_env *env,
 		 * Cleared it, since multiple rX += const are not supported.
 		 */
 		src_reg->id = 0;
-		src_reg->off = 0;
+		src_reg->delta = 0;
 	}
 
 	if (!src_reg->id && !tnum_is_const(src_reg->var_off))
@@ -16219,14 +16219,14 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 			 * we cannot accumulate another val into rx->off.
 			 */
 clear_id:
-			dst_reg->off = 0;
+			dst_reg->delta = 0;
 			dst_reg->id = 0;
 		} else {
 			if (alu32)
 				dst_reg->id |= BPF_ADD_CONST32;
 			else
 				dst_reg->id |= BPF_ADD_CONST64;
-			dst_reg->off = off;
+			dst_reg->delta = off;
 		}
 	} else {
 		/*
@@ -17305,18 +17305,18 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 		if ((reg->id & ~BPF_ADD_CONST) != (known_reg->id & ~BPF_ADD_CONST))
 			continue;
 		if ((!(reg->id & BPF_ADD_CONST) && !(known_reg->id & BPF_ADD_CONST)) ||
-		    reg->off == known_reg->off) {
+		    reg->delta == known_reg->delta) {
 			s32 saved_subreg_def = reg->subreg_def;
 
 			copy_register_state(reg, known_reg);
 			reg->subreg_def = saved_subreg_def;
 		} else {
 			s32 saved_subreg_def = reg->subreg_def;
-			s32 saved_off = reg->off;
+			s32 saved_off = reg->delta;
 			u32 saved_id = reg->id;
 
 			fake_reg.type = SCALAR_VALUE;
-			__mark_reg_known(&fake_reg, (s64)reg->off - (s64)known_reg->off);
+			__mark_reg_known(&fake_reg, (s64)reg->delta - (s64)known_reg->delta);
 
 			/* reg = known_reg; reg += delta */
 			copy_register_state(reg, known_reg);
@@ -17324,7 +17324,7 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 			 * Must preserve off, id and subreg_def flag,
 			 * otherwise another sync_linked_regs() will be incorrect.
 			 */
-			reg->off = saved_off;
+			reg->delta = saved_off;
 			reg->id = saved_id;
 			reg->subreg_def = saved_subreg_def;
 
@@ -19629,7 +19629,7 @@ static void clear_singular_ids(struct bpf_verifier_env *env,
 			continue;
 		if (idset_cnt_get(idset, reg->id & ~BPF_ADD_CONST) == 1) {
 			reg->id = 0;
-			reg->off = 0;
+			reg->delta = 0;
 		}
 	}));
 }
@@ -19766,7 +19766,7 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 			return false;
 
 		/* Both have offset linkage: offsets must match */
-		if ((rold->id & BPF_ADD_CONST) && rold->off != rcur->off)
+		if ((rold->id & BPF_ADD_CONST) && rold->delta != rcur->delta)
 			return false;
 
 		if (!check_scalar_ids(rold->id, rcur->id, idmap))

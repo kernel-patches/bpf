@@ -40,7 +40,7 @@ struct bpf_reg_state {
 	/*
 	 * Constant delta between "linked" scalars with the same ID.
 	 */
-	s32 off;
+	s32 delta;
 	union {
 		/* valid when type == PTR_TO_PACKET */
 		int range;
@@ -145,9 +145,9 @@ struct bpf_reg_state {
 	 * Upper bit of ID is used to remember relationship between "linked"
 	 * registers. Example:
 	 * r1 = r2;    both will have r1->id == r2->id == N
-	 * r1 += 10;   r1->id == N | BPF_ADD_CONST and r1->off == 10
+	 * r1 += 10;   r1->id == N | BPF_ADD_CONST and r1->delta == 10
 	 * r3 = r2;    both will have r3->id == r2->id == N
-	 * w3 += 10;   r3->id == N | BPF_ADD_CONST32 and r3->off == 10
+	 * w3 += 10;   r3->id == N | BPF_ADD_CONST32 and r3->delta == 10
 	 */
 #define BPF_ADD_CONST64 (1U << 31)
 #define BPF_ADD_CONST32 (1U << 30)
