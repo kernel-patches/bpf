@@ -667,7 +667,8 @@ unsigned long memcg_page_state(struct mem_cgroup *memcg, int idx)
 
 bool memcg_stat_item_valid(int idx)
 {
-	if ((u32)idx >= MEMCG_NR_STAT)
+	if ((u32)idx >= MEMCG_NR_STAT ||
+	    (cgroup_memory_nokmem && (u32)idx == MEMCG_KMEM))
 		return false;
 
 	return !BAD_STAT_IDX(memcg_stats_index(idx));
