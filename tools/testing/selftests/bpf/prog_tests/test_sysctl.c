@@ -1459,7 +1459,8 @@ static int load_sysctl_prog_insns(struct sysctl_test *test,
 	return ret;
 }
 
-static int load_sysctl_prog_file(struct sysctl_test *test)
+static int load_sysctl_prog_file(struct sysctl_test *test,
+				 struct bpf_object **objp)
 {
 	struct bpf_object *obj;
 	int prog_fd;
@@ -1471,14 +1472,17 @@ static int load_sysctl_prog_file(struct sysctl_test *test)
 		return -1;
 	}
 
+	*objp = obj;
 	return prog_fd;
 }
 
-static int load_sysctl_prog(struct sysctl_test *test, const char *sysctl_path)
+static int load_sysctl_prog(struct sysctl_test *test, const char *sysctl_path,
+			    struct bpf_object **objp)
 {
-		return test->prog_file
-			? load_sysctl_prog_file(test)
-			: load_sysctl_prog_insns(test, sysctl_path);
+	if (test->prog_file)
+		return load_sysctl_prog_file(test, objp);
+	*objp = NULL;
+	return load_sysctl_prog_insns(test, sysctl_path);
 }
 
 static int access_sysctl(const char *sysctl_path,
@@ -1529,6 +1533,7 @@ out:
 static int run_test_case(int cgfd, struct sysctl_test *test)
 {
 	enum bpf_attach_type atype = test->attach_type;
+	struct bpf_object *obj = NULL;
 	char sysctl_path[128];
 	int progfd = -1;
 	int err = 0;
@@ -1538,7 +1543,7 @@ static int run_test_case(int cgfd, struct sysctl_test *test)
 	snprintf(sysctl_path, sizeof(sysctl_path), "/proc/sys/%s",
 		 test->sysctl);
 
-	progfd = load_sysctl_prog(test, sysctl_path);
+	progfd = load_sysctl_prog(test, sysctl_path, &obj);
 	if (progfd < 0) {
 		if (test->result == LOAD_REJECT)
 			goto out;
@@ -1573,7 +1578,10 @@ out:
 	/* Detaching w/o checking return code: best effort attempt. */
 	if (progfd != -1)
 		bpf_prog_detach(cgfd, atype);
-	close(progfd);
+	if (obj)
+		bpf_object__close(obj);
+	else if (progfd != -1)
+		close(progfd);
 	printf("[%s]\n", err ? "FAIL" : "PASS");
 	return err;
 }
