@@ -2,6 +2,7 @@
 
 #include <test_progs.h>
 #include "bitops.skel.h"
+#include "bitops_jit.skel.h"
 
 struct bitops_case {
 	__u64 x;
@@ -179,4 +180,9 @@ void test_bitops(void)
 		test_rol64();
 	if (test__start_subtest("ror64"))
 		test_ror64();
+}
+
+void test_bitops_jit(void)
+{
+	RUN_TESTS(bitops_jit);
 }
