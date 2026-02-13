@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <test_progs.h>
 #include <bpf/btf.h>
+#include <ctype.h>
 
 #include "autoconf_helper.h"
 #include "disasm_helpers.h"
@@ -44,6 +45,7 @@
 #define TEST_TAG_EXPECT_STDOUT_PFX "comment:test_expect_stdout="
 #define TEST_TAG_EXPECT_STDOUT_PFX_UNPRIV "comment:test_expect_stdout_unpriv="
 #define TEST_TAG_LINEAR_SIZE "comment:test_linear_size="
+#define TEST_TAG_CPU_FEATURE_PFX "comment:test_cpu_feature="
 
 /* Warning: duplicated in bpf_misc.h */
 #define POINTER_VALUE	0xbadcafe
@@ -65,6 +67,11 @@ enum mode {
 enum load_mode {
 	JITED		= 1 << 0,
 	NO_JITED	= 1 << 1,
+};
+
+struct cpu_feature_set {
+	char **names;
+	size_t cnt;
 };
 
 struct test_subspec {
@@ -93,6 +100,7 @@ struct test_spec {
 	int linear_sz;
 	bool auxiliary;
 	bool valid;
+	struct cpu_feature_set cpu_features;
 };
 
 static int tester_init(struct test_loader *tester)
@@ -145,6 +153,16 @@ static void free_test_spec(struct test_spec *spec)
 	free(spec->unpriv.name);
 	spec->priv.name = NULL;
 	spec->unpriv.name = NULL;
+
+	if (spec->cpu_features.names) {
+		size_t i;
+
+		for (i = 0; i < spec->cpu_features.cnt; i++)
+			free(spec->cpu_features.names[i]);
+		free(spec->cpu_features.names);
+		spec->cpu_features.names = NULL;
+		spec->cpu_features.cnt = 0;
+	}
 }
 
 /* Compiles regular expression matching pattern.
@@ -392,6 +410,122 @@ static int get_current_arch(void)
 	return ARCH_S390X;
 #endif
 	return ARCH_UNKNOWN;
+}
+
+static int cpu_feature_set_add(struct cpu_feature_set *set, const char *name)
+{
+	char **tmp, *norm;
+	size_t i, len;
+
+	if (!name || !name[0]) {
+		PRINT_FAIL("bad cpu feature spec: empty string");
+		return -EINVAL;
+	}
+
+	len = strlen(name);
+	norm = malloc(len + 1);
+	if (!norm)
+		return -ENOMEM;
+
+	for (i = 0; i < len; i++) {
+		if (isspace(name[i])) {
+			free(norm);
+			PRINT_FAIL("bad cpu feature spec: whitespace is not allowed in '%s'", name);
+			return -EINVAL;
+		}
+		norm[i] = tolower((unsigned char)name[i]);
+	}
+	norm[len] = '\0';
+
+	for (i = 0; i < set->cnt; i++) {
+		if (strcmp(set->names[i], norm) == 0) {
+			free(norm);
+			return 0;
+		}
+	}
+
+	tmp = realloc(set->names, (set->cnt + 1) * sizeof(*set->names));
+	if (!tmp) {
+		free(norm);
+		return -ENOMEM;
+	}
+	set->names = tmp;
+	set->names[set->cnt++] = norm;
+	return 0;
+}
+
+static bool cpu_feature_set_has(const struct cpu_feature_set *set, const char *name)
+{
+	size_t i;
+
+	for (i = 0; i < set->cnt; i++) {
+		if (strcmp(set->names[i], name) == 0)
+			return true;
+	}
+	return false;
+}
+
+static bool cpu_feature_set_includes(const struct cpu_feature_set *have,
+				     const struct cpu_feature_set *need)
+{
+	size_t i;
+
+	for (i = 0; i < need->cnt; i++) {
+		if (!cpu_feature_set_has(have, need->names[i]))
+			return false;
+	}
+	return true;
+}
+
+static const struct cpu_feature_set *get_current_cpu_features(void)
+{
+	static struct cpu_feature_set set;
+	static bool initialized;
+	char *line = NULL;
+	size_t len = 0;
+	FILE *fp;
+	int err;
+
+	if (initialized)
+		return &set;
+
+	initialized = true;
+	fp = fopen("/proc/cpuinfo", "r");
+	if (!fp)
+		return &set;
+
+	while (getline(&line, &len, fp) != -1) {
+		char *p = line, *colon, *tok;
+
+		while (*p && isspace(*p))
+			p++;
+		if (!str_has_pfx(p, "flags") &&
+		    !str_has_pfx(p, "Features") &&
+		    !str_has_pfx(p, "features"))
+			continue;
+
+		colon = strchr(p, ':');
+		if (!colon)
+			continue;
+
+		for (tok = strtok(colon + 1, " \t\n"); tok; tok = strtok(NULL, " \t\n")) {
+			err = cpu_feature_set_add(&set, tok);
+			if (err) {
+				PRINT_FAIL("failed to parse cpu feature from '/proc/cpuinfo': '%s'",
+					   tok);
+				break;
+			}
+		}
+	}
+
+	free(line);
+	fclose(fp);
+	return &set;
+}
+
+static int parse_cpu_feature(const char *name, struct cpu_feature_set *set)
+{
+	return cpu_feature_set_add(set, name);
 }
 
 /* Uses btf_decl_tag attributes to describe the expected test
@@ -650,7 +784,18 @@ static int parse_test_spec(struct test_loader *tester,
 				err = -EINVAL;
 				goto cleanup;
 			}
+		} else if (str_has_pfx(s, TEST_TAG_CPU_FEATURE_PFX)) {
+			val = s + sizeof(TEST_TAG_CPU_FEATURE_PFX) - 1;
+			err = parse_cpu_feature(val, &spec->cpu_features);
+			if (err)
+				goto cleanup;
 		}
+	}
+
+	if (spec->cpu_features.cnt && __builtin_popcount(arch_mask) != 1) {
+		PRINT_FAIL("__cpu_feature requires exactly one __arch_* tag");
+		err = -EINVAL;
+		goto cleanup;
 	}
 
 	spec->arch_mask = arch_mask ?: -1;
@@ -1157,6 +1302,11 @@ void run_subtest(struct test_loader *tester,
 	}
 
 	if ((current_runtime & spec->load_mask) == 0) {
+		test__skip();
+		return;
+	}
+
+	if (!cpu_feature_set_includes(get_current_cpu_features(), &spec->cpu_features)) {
 		test__skip();
 		return;
 	}

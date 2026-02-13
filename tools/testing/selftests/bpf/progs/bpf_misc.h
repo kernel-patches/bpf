@@ -126,6 +126,12 @@
  *                   Several __arch_* annotations could be specified at once.
  *                   When test case is not run on current arch it is marked as skipped.
  * __caps_unpriv     Specify the capabilities that should be set when running the test.
+ * __cpu_feature     Specify required CPU feature for test execution.
+ *                   Multiple __cpu_feature annotations could be specified.
+ *                   Value must match a CPU feature token exposed by
+ *                   /proc/cpuinfo (case-insensitive).
+ *                   Can't be used together with multiple __arch_* tags.
+ *                   If any required feature is not present, test case is skipped.
  *
  * __linear_size     Specify the size of the linear area of non-linear skbs, or
  *                   0 for linear skbs.
@@ -156,6 +162,7 @@
 #define __arch_riscv64		__arch("RISCV64")
 #define __arch_s390x		__arch("s390x")
 #define __caps_unpriv(caps)	__attribute__((btf_decl_tag("comment:test_caps_unpriv=" EXPAND_QUOTE(caps))))
+#define __cpu_feature(feat)	__attribute__((btf_decl_tag("comment:test_cpu_feature=" feat)))
 #define __load_if_JITed()	__attribute__((btf_decl_tag("comment:load_mode=jited")))
 #define __load_if_no_JITed()	__attribute__((btf_decl_tag("comment:load_mode=no_jited")))
 #define __stderr(msg)		__attribute__((btf_decl_tag("comment:test_expect_stderr=" XSTR(__COUNTER__) "=" msg)))
