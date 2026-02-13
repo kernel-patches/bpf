@@ -15,6 +15,8 @@ int cgroup_memcg_query(struct bpf_iter__cgroup *ctx)
 	struct cgroup *cgrp = ctx->cgroup;
 	struct cgroup_subsys_state *css;
 	struct mem_cgroup *memcg;
+	int ret = 1;
+	int idx;
 
 	if (!cgrp)
 		return 1;
@@ -26,14 +28,39 @@ int cgroup_memcg_query(struct bpf_iter__cgroup *ctx)
 
 	bpf_mem_cgroup_flush_stats(memcg);
 
-	memcg_query.nr_anon_mapped = bpf_mem_cgroup_page_state(memcg, NR_ANON_MAPPED);
-	memcg_query.nr_shmem = bpf_mem_cgroup_page_state(memcg, NR_SHMEM);
-	memcg_query.nr_file_pages = bpf_mem_cgroup_page_state(memcg, NR_FILE_PAGES);
-	memcg_query.nr_file_mapped = bpf_mem_cgroup_page_state(memcg, NR_FILE_MAPPED);
-	memcg_query.memcg_kmem = bpf_mem_cgroup_page_state(memcg, MEMCG_KMEM);
-	memcg_query.pgfault = bpf_mem_cgroup_vm_events(memcg, PGFAULT);
+	idx = bpf_core_enum_value(enum node_stat_item, NR_ANON_MAPPED);
+	if (idx == 0)
+		goto out;
+	memcg_query.nr_anon_mapped = bpf_mem_cgroup_page_state(memcg, idx);
 
+	idx = bpf_core_enum_value(enum node_stat_item, NR_SHMEM);
+	if (idx == 0)
+		goto out;
+	memcg_query.nr_shmem = bpf_mem_cgroup_page_state(memcg, idx);
+
+	idx = bpf_core_enum_value(enum node_stat_item, NR_FILE_PAGES);
+	if (idx == 0)
+		goto out;
+	memcg_query.nr_file_pages = bpf_mem_cgroup_page_state(memcg, idx);
+
+	idx = bpf_core_enum_value(enum node_stat_item, NR_FILE_MAPPED);
+	if (idx == 0)
+		goto out;
+	memcg_query.nr_file_mapped = bpf_mem_cgroup_page_state(memcg, idx);
+
+	idx = bpf_core_enum_value(enum memcg_stat_item, MEMCG_KMEM);
+	if (idx == 0)
+		goto out;
+	memcg_query.memcg_kmem = bpf_mem_cgroup_page_state(memcg, idx);
+
+	idx = bpf_core_enum_value(enum vm_event_item, PGFAULT);
+	if (idx == 0)
+		goto out;
+	memcg_query.pgfault = bpf_mem_cgroup_vm_events(memcg, idx);
+
+	ret = 0;
+out:
 	bpf_put_mem_cgroup(memcg);
 
-	return 0;
+	return ret;
 }
