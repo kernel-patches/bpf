@@ -300,6 +300,8 @@ static struct htab_elem *prealloc_lru_pop(struct bpf_htab *htab, void *key,
 		bpf_map_inc_elem_count(&htab->map);
 		l = container_of(node, struct htab_elem, lru_node);
 		memcpy(l->key, key, htab->map.key_size);
+		bpf_obj_init_special_fields(htab->map.record,
+					    htab_elem_value(l, htab->map.key_size));
 		return l;
 	}
 
@@ -1033,6 +1035,9 @@ static struct htab_elem *alloc_htab_elem(struct bpf_htab *htab, void *key,
 	}
 
 	memcpy(l_new->key, key, key_size);
+	/* Clear special fields poisoned by cancel_and_free() in recycled elements */
+	bpf_obj_init_special_fields(htab->map.record, htab_elem_value(l_new, key_size));
+
 	if (percpu) {
 		if (prealloc) {
 			pptr = htab_elem_get_ptr(l_new, key_size);

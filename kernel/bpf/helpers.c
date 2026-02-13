@@ -1477,7 +1477,7 @@ static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback
 	struct bpf_async_cb *cb;
 
 	cb = READ_ONCE(async->cb);
-	if (!cb)
+	if (!cb || cb == BPF_PTR_POISON)
 		return -EINVAL;
 
 	return bpf_async_update_prog_callback(cb, prog, callback_fn);
@@ -1511,7 +1511,7 @@ BPF_CALL_3(bpf_timer_start, struct bpf_async_kern *, async, u64, nsecs, u64, fla
 		return -EINVAL;
 
 	t = READ_ONCE(async->timer);
-	if (!t || !READ_ONCE(t->cb.prog))
+	if (!t || (void *)t == BPF_PTR_POISON || !READ_ONCE(t->cb.prog))
 		return -EINVAL;
 
 	if (flags & BPF_F_TIMER_ABS)
@@ -1557,7 +1557,7 @@ BPF_CALL_1(bpf_timer_cancel, struct bpf_async_kern *, async)
 		return -EOPNOTSUPP;
 
 	t = READ_ONCE(async->timer);
-	if (!t)
+	if (!t || (void *)t == BPF_PTR_POISON)
 		return -EINVAL;
 
 	cur_t = this_cpu_read(hrtimer_running);
@@ -1669,11 +1669,8 @@ static void bpf_async_cancel_and_free(struct bpf_async_kern *async)
 {
 	struct bpf_async_cb *cb;
 
-	if (!READ_ONCE(async->cb))
-		return;
-
-	cb = xchg(&async->cb, NULL);
-	if (!cb)
+	cb = xchg(&async->cb, BPF_PTR_POISON);
+	if (!cb || cb == BPF_PTR_POISON)
 		return;
 
 	bpf_async_update_prog_callback(cb, NULL, NULL);
@@ -3183,7 +3180,7 @@ __bpf_kfunc int bpf_wq_start(struct bpf_wq *wq, unsigned int flags)
 		return -EINVAL;
 
 	w = READ_ONCE(async->work);
-	if (!w || !READ_ONCE(w->cb.prog))
+	if (!w || (void *)w == BPF_PTR_POISON || !READ_ONCE(w->cb.prog))
 		return -EINVAL;
 
 	if (!refcount_inc_not_zero(&w->cb.refcnt))
@@ -4267,6 +4264,8 @@ static struct bpf_task_work_ctx *bpf_task_work_fetch_ctx(struct bpf_task_work *t
 	struct bpf_task_work_ctx *ctx, *old_ctx;
 
 	ctx = READ_ONCE(twk->ctx);
+	if (ctx == BPF_PTR_POISON)
+		return ERR_PTR(-EINVAL);
 	if (ctx)
 		return ctx;
 
@@ -4285,6 +4284,8 @@ static struct bpf_task_work_ctx *bpf_task_work_fetch_ctx(struct bpf_task_work *t
 		 * memory and try to reuse already set context.
 		 */
 		bpf_mem_free(&bpf_global_ma, ctx);
+		if (old_ctx == BPF_PTR_POISON)
+			return ERR_PTR(-EINVAL);
 		return old_ctx;
 	}
 
@@ -4476,7 +4477,7 @@ __bpf_kfunc int bpf_timer_cancel_async(struct bpf_timer *timer)
 	int ret;
 
 	cb = READ_ONCE(async->cb);
-	if (!cb)
+	if (!cb || cb == BPF_PTR_POISON)
 		return -EINVAL;
 
 	/*
@@ -4517,8 +4518,8 @@ void bpf_task_work_cancel_and_free(void *val)
 	struct bpf_task_work_ctx *ctx;
 	enum bpf_task_work_state state;
 
-	ctx = xchg(&twk->ctx, NULL);
-	if (!ctx)
+	ctx = xchg(&twk->ctx, BPF_PTR_POISON);
+	if (!ctx || ctx == BPF_PTR_POISON)
 		return;
 
 	state = xchg(&ctx->state, BPF_TW_FREED);
