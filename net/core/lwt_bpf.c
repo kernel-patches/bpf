@@ -616,11 +616,14 @@ int bpf_lwt_push_ip_encap(struct sk_buff *skb, void *hdr, u32 len, bool ingress)
 		return -EINVAL;
 	}
 
-	if (ingress)
+	if (ingress) {
 		err = skb_cow_head(skb, len + skb->mac_len);
-	else
+	} else {
+		if (unlikely(!skb_dst(skb)))
+			return -EINVAL;
 		err = skb_cow_head(skb,
 				   len + LL_RESERVED_SPACE(skb_dst(skb)->dev));
+	}
 	if (unlikely(err))
 		return err;
 
