@@ -508,7 +508,7 @@ static int probe_kern_arg_ctx_tag(int token_fd)
 
 static int probe_ldimm64_full_range_off(int token_fd)
 {
-	char log_buf[1024];
+	char log_buf[1024] = {};
 	int prog_fd, map_fd;
 	int ret;
 	LIBBPF_OPTS(bpf_map_create_opts, map_opts,
@@ -536,7 +536,7 @@ static int probe_ldimm64_full_range_off(int token_fd)
 	}
 	insns[0].imm = map_fd;
 
-	prog_fd = bpf_prog_load(BPF_PROG_TYPE_TRACEPOINT, "global_reloc", "GPL", insns, insn_cnt, &prog_opts);
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_SOCKET_FILTER, "global_reloc", "GPL", insns, insn_cnt, &prog_opts);
 	ret = -errno;
 
 	close(map_fd);
