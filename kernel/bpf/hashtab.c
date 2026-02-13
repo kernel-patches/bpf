@@ -279,6 +279,36 @@ free_elems:
 	bpf_map_area_free(htab->elems);
 }
 
+/*
+ * Clear special fields (timer/wq/task_work) poisoned by cancel_and_free()
+ * in recycled preallocated map elements.
+ *
+ * Uses WRITE_ONCE to match the READ_ONCE/xchg/cmpxchg used by concurrent
+ * readers on the underlying pointer (bpf_async_kern.cb / bpf_task_work_kern.ctx).
+ */
+static void bpf_obj_init_special_fields(const struct btf_record *rec, void *obj)
+{
+	void **p;
+
+	if (IS_ERR_OR_NULL(rec))
+		return;
+
+	if (rec->timer_off >= 0) {
+		p = obj + rec->timer_off;
+		WRITE_ONCE(*p, NULL);
+	}
+
+	if (rec->wq_off >= 0) {
+		p = obj + rec->wq_off;
+		WRITE_ONCE(*p, NULL);
+	}
+
+	if (rec->task_work_off >= 0) {
+		p = obj + rec->task_work_off;
+		WRITE_ONCE(*p, NULL);
+	}
+}
+
 /* The LRU list has a lock (lru_lock). Each htab bucket has a lock
  * (bucket_lock). If both locks need to be acquired together, the lock
  * order is always lru_lock -> bucket_lock and this only happens in
@@ -300,6 +330,8 @@ static struct htab_elem *prealloc_lru_pop(struct bpf_htab *htab, void *key,
 		bpf_map_inc_elem_count(&htab->map);
 		l = container_of(node, struct htab_elem, lru_node);
 		memcpy(l->key, key, htab->map.key_size);
+		bpf_obj_init_special_fields(htab->map.record,
+					    htab_elem_value(l, htab->map.key_size));
 		return l;
 	}
 
@@ -1033,6 +1065,13 @@ static struct htab_elem *alloc_htab_elem(struct bpf_htab *htab, void *key,
 	}
 
 	memcpy(l_new->key, key, key_size);
+	/*
+	 * Clear async fields poisoned by cancel_and_free() in recycled elements.
+	 * copy_map_value() skips special fields, so zeroed fields survive the copy.
+	 */
+	bpf_obj_init_special_fields(htab->map.record,
+				    htab_elem_value(l_new, key_size));
+
 	if (percpu) {
 		if (prealloc) {
 			pptr = htab_elem_get_ptr(l_new, key_size);
