@@ -304,6 +304,7 @@ struct bpf_map {
 	u32 key_size;
 	u32 value_size;
 	u32 max_entries;
+	u32 requested_max_entries; /* original max_entries before kernel adjustment */
 	u64 map_extra; /* any per-map-type extra fields */
 	u32 map_flags;
 	u32 id;

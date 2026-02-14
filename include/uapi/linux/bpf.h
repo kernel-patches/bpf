@@ -1405,6 +1405,12 @@ enum {
  * which can scale and perform better.
  * Note, the LRU nodes (including free nodes) cannot be moved
  * across different LRU lists.
+ *
+ * When this flag is set, the kernel rounds max_entries up to a multiple
+ * of num_possible_cpus() so that each per-CPU LRU list has at least one
+ * element. The actual (possibly adjusted) value is reported via
+ * bpf_map_info.max_entries, while the original requested value is
+ * preserved in bpf_map_info.requested_max_entries.
  */
 	BPF_F_NO_COMMON_LRU	= (1U << 1),
 /* Specify numa node during map creation */
@@ -6717,6 +6723,12 @@ struct bpf_map_info {
 	__u64 map_extra;
 	__aligned_u64 hash;
 	__u32 hash_size;
+	/* Original max_entries as requested by the caller. May differ from
+	 * max_entries if the kernel adjusted it (e.g., rounded up to a
+	 * multiple of num_possible_cpus() for per-CPU LRU hash maps when
+	 * BPF_F_NO_COMMON_LRU is set).
+	 */
+	__u32 requested_max_entries;
 } __attribute__((aligned(8)));
 
 struct bpf_btf_info {
