@@ -2690,7 +2690,7 @@ void sock_wfree(struct sk_buff *skb)
 		 * after sk_write_space() call
 		 */
 		WARN_ON(refcount_sub_and_test(len - 1, &sk->sk_wmem_alloc));
-		sk->sk_write_space(sk);
+		READ_ONCE(sk->sk_write_space)(sk);
 		len = 1;
 	}
 	/*
