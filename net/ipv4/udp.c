@@ -2039,6 +2039,15 @@ busy_check:
 }
 EXPORT_SYMBOL(__skb_recv_udp);
 
+void udp_sock_rfree(struct sk_buff *skb)
+{
+	struct sock *sk = skb->sk;
+
+	spin_lock_bh(&sk->sk_receive_queue.lock);
+	sock_rfree(skb);
+	spin_unlock_bh(&sk->sk_receive_queue.lock);
+}
+
 int udp_read_skb(struct sock *sk, skb_read_actor_t recv_actor)
 {
 	struct sk_buff *skb;
