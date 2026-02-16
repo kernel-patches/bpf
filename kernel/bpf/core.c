@@ -2388,6 +2388,7 @@ static void bpf_map_owner_enforcement_init(struct bpf_map_owner_enforcement *enf
 	enforcement->jited = fp->jited;
 	enforcement->xdp_has_frags = fp->aux->xdp_has_frags;
 	enforcement->sleepable = fp->sleepable;
+	enforcement->kprobe_write_ctx = fp->aux->kprobe_write_ctx;
 }
 
 static bool __bpf_prog_map_compatible(struct bpf_map *map,
