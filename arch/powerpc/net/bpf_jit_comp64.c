@@ -178,6 +178,20 @@ void bpf_jit_realloc_regs(struct codegen_context *ctx)
 {
 }
 
+static void emit_fp_priv_stack(u32 *image, struct codegen_context *ctx, void __percpu *ptr)
+{
+	/* Load percpu data offset */
+	EMIT(PPC_RAW_LD(bpf_to_ppc(TMP_REG_1), _R13,
+			offsetof(struct paca_struct, data_offset)));
+	PPC_LI64(bpf_to_ppc(BPF_REG_FP), (u64)ptr);
+	/*
+	 * Set frame pointer with percpu allocated
+	 * buffer for private stack.
+	 */
+	EMIT(PPC_RAW_ADD(bpf_to_ppc(BPF_REG_FP),
+			bpf_to_ppc(TMP_REG_1), bpf_to_ppc(BPF_REG_FP)));
+}
+
 /*
  * For exception boundary & exception_cb progs:
  *     return increased size to accommodate additional NVRs.
@@ -192,6 +206,12 @@ static int bpf_jit_stack_size(struct codegen_context *ctx)
 void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx)
 {
 	int i;
+	void __percpu *priv_frame_ptr = NULL;
+
+	if (ctx->priv_sp) {
+		priv_frame_ptr = (void*) ctx->priv_sp + PRIV_STACK_GUARD_SZ +
+					round_up(ctx->stack_size, 16);
+	}
 
 	/* Instruction for trampoline attach */
 	EMIT(PPC_RAW_NOP());
@@ -250,7 +270,7 @@ void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx)
 		}
 
 		EMIT(PPC_RAW_STDU(_R1, _R1,
-				-(bpf_jit_stack_size(ctx) + ctx->stack_size)));
+			-(bpf_jit_stack_size(ctx) + (ctx->priv_sp ? 0 : ctx->stack_size))));
 	}
 
 	/*
@@ -290,9 +310,16 @@ void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx)
 	 * Exception_cb not restricted from using stack area or arena.
 	 * Setup frame pointer to point to the bpf stack area
 	 */
-	if (bpf_is_seen_register(ctx, bpf_to_ppc(BPF_REG_FP)))
-		EMIT(PPC_RAW_ADDI(bpf_to_ppc(BPF_REG_FP), _R1,
-			STACK_FRAME_MIN_SIZE + ctx->stack_size));
+	if (bpf_is_seen_register(ctx, bpf_to_ppc(BPF_REG_FP))) {
+		if (ctx->priv_sp && priv_frame_ptr) {
+			/* Set up private stack pointer */
+			emit_fp_priv_stack(image, ctx, priv_frame_ptr);
+		} else {
+			/* Setup frame pointer to point to the bpf stack area */
+			EMIT(PPC_RAW_ADDI(bpf_to_ppc(BPF_REG_FP), _R1,
+				STACK_FRAME_MIN_SIZE + ctx->stack_size));
+		}
+	}
 
 	if (ctx->arena_vm_start)
 		PPC_LI64(bpf_to_ppc(ARENA_VM_START), ctx->arena_vm_start);
@@ -322,7 +349,8 @@ static void bpf_jit_emit_common_epilogue(u32 *image, struct codegen_context *ctx
 
 	/* Tear down our stack frame */
 	if (bpf_has_stack_frame(ctx)) {
-		EMIT(PPC_RAW_ADDI(_R1, _R1, bpf_jit_stack_size(ctx) + ctx->stack_size));
+		EMIT(PPC_RAW_ADDI(_R1, _R1,
+			bpf_jit_stack_size(ctx) + (ctx->priv_sp ? 0 : ctx->stack_size)));
 
 		if (ctx->seen & SEEN_FUNC || ctx->exception_cb) {
 			EMIT(PPC_RAW_LD(_R0, _R1, PPC_LR_STKOFF));
