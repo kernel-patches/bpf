@@ -220,8 +220,50 @@ static void test_attach_kprobe_write_ctx(void)
 
 	kprobe_write_ctx__destroy(skel);
 }
+
+static void test_kprobe_write_ctx_prog_array_compat(void)
+{
+	__u32 key = 0, read_prog_fd, write_prog_fd;
+	struct kprobe_write_ctx *skel = NULL;
+	int map_fd = -1, err;
+
+	skel = kprobe_write_ctx__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "kprobe_write_ctx__open_and_load"))
+		return;
+
+	map_fd = bpf_map_create(BPF_MAP_TYPE_PROG_ARRAY, NULL, sizeof(key),
+				sizeof(__u32), 1, NULL);
+	if (!ASSERT_GE(map_fd, 0, "bpf_map_create"))
+		goto cleanup;
+
+	read_prog_fd = bpf_program__fd(skel->progs.kprobe_read_ctx);
+	write_prog_fd = bpf_program__fd(skel->progs.kprobe_write_ctx);
+	if (!ASSERT_GE(read_prog_fd, 0, "read_prog_fd"))
+		goto cleanup;
+	if (!ASSERT_GE(write_prog_fd, 0, "write_prog_fd"))
+		goto cleanup;
+
+	err = bpf_map_update_elem(map_fd, &key, &read_prog_fd, BPF_ANY);
+	if (!ASSERT_OK(err, "bpf_map_update_elem success"))
+		goto cleanup;
+
+	err = bpf_map_update_elem(map_fd, &key, &write_prog_fd, BPF_ANY);
+	if (!ASSERT_ERR(err, "bpf_map_update_elem failure"))
+		goto cleanup;
+	ASSERT_EQ(errno, EINVAL, "bpf_map_update_elem errno");
+
+cleanup:
+	if (map_fd >= 0)
+		close(map_fd);
+	kprobe_write_ctx__destroy(skel);
+}
 #else
 static void test_attach_kprobe_write_ctx(void)
+{
+	test__skip();
+}
+
+static void test_kprobe_write_ctx_prog_array_compat(void)
 {
 	test__skip();
 }
@@ -434,6 +476,8 @@ void test_attach_probe(void)
 		test_attach_kprobe_long_event_name();
 	if (test__start_subtest("kprobe-write-ctx"))
 		test_attach_kprobe_write_ctx();
+	if (test__start_subtest("kprobe-write-ctx-prog-array-compat"))
+		test_kprobe_write_ctx_prog_array_compat();
 
 cleanup:
 	test_attach_probe__destroy(skel);
