@@ -139,3 +139,49 @@ void test_get_func_ip_test(void)
 	test_function_entry();
 	test_function_body();
 }
+
+static void test_prog_array_call_get_func_ip_compat(void)
+{
+	__u32 key = 0, with_get_func_ip_fd, without_get_func_ip_fd;
+	struct get_func_ip_test *skel = NULL;
+	int map_fd = -1, err;
+
+	skel = get_func_ip_test__open();
+	if (!ASSERT_OK_PTR(skel, "get_func_ip_test__open"))
+		return;
+
+	err = get_func_ip_test__load(skel);
+	if (!ASSERT_OK(err, "get_func_ip_test__load"))
+		goto cleanup;
+
+	with_get_func_ip_fd = bpf_program__fd(skel->progs.test1);
+	without_get_func_ip_fd = bpf_program__fd(skel->progs.test1_dummy);
+	if (!ASSERT_GE(with_get_func_ip_fd, 0, "with_get_func_ip_fd"))
+		goto cleanup;
+	if (!ASSERT_GE(without_get_func_ip_fd, 0, "without_get_func_ip_fd"))
+		goto cleanup;
+
+	map_fd = bpf_map_create(BPF_MAP_TYPE_PROG_ARRAY, NULL, sizeof(key),
+				sizeof(__u32), 1, NULL);
+	if (!ASSERT_GE(map_fd, 0, "bpf_map_create"))
+		goto cleanup;
+
+	err = bpf_map_update_elem(map_fd, &key, &without_get_func_ip_fd, BPF_ANY);
+	if (!ASSERT_OK(err, "bpf_map_update_elem success"))
+		goto cleanup;
+
+	err = bpf_map_update_elem(map_fd, &key, &with_get_func_ip_fd, BPF_ANY);
+	if (!ASSERT_ERR(err, "bpf_map_update_elem failure"))
+		goto cleanup;
+	ASSERT_EQ(errno, EINVAL, "bpf_map_update_elem errno");
+
+cleanup:
+	if (map_fd >= 0)
+		close(map_fd);
+	get_func_ip_test__destroy(skel);
+}
+
+void test_get_func_ip_test_prog_map_compatible(void)
+{
+	test_prog_array_call_get_func_ip_compat();
+}
