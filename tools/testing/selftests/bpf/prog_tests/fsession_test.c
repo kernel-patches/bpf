@@ -129,6 +129,66 @@ cleanup:
 	fsession_test__destroy(skel);
 }
 
+static void test_fsession_prog_array_session_kfunc_compat(void)
+{
+	struct fsession_test *skel = NULL;
+	__u32 key = 0, session_kfunc_prog_fd, no_session_kfunc_prog_fd;
+	int map_fd = -1, err;
+
+	skel = fsession_test__open();
+	if (!ASSERT_OK_PTR(skel, "fsession_test__open"))
+		goto cleanup;
+
+	err = fsession_test__load(skel);
+	if (err == -EOPNOTSUPP) {
+		test__skip();
+		goto cleanup;
+	}
+	if (!ASSERT_OK(err, "fsession_test__load"))
+		goto cleanup;
+
+	session_kfunc_prog_fd = bpf_program__fd(skel->progs.test9);
+	no_session_kfunc_prog_fd = bpf_program__fd(skel->progs.test12);
+	if (!ASSERT_GE(session_kfunc_prog_fd, 0, "session_kfunc_prog_fd"))
+		goto cleanup;
+	if (!ASSERT_GE(no_session_kfunc_prog_fd, 0, "no_session_kfunc_prog_fd"))
+		goto cleanup;
+
+	map_fd = bpf_map_create(BPF_MAP_TYPE_PROG_ARRAY, NULL, sizeof(key),
+				sizeof(__u32), 1, NULL);
+	if (!ASSERT_GE(map_fd, 0, "bpf_map_create"))
+		goto cleanup;
+
+	err = bpf_map_update_elem(map_fd, &key, &no_session_kfunc_prog_fd, BPF_ANY);
+	if (!ASSERT_OK(err, "update prog_array without session kfunc"))
+		goto cleanup;
+
+	err = bpf_map_update_elem(map_fd, &key, &session_kfunc_prog_fd, BPF_ANY);
+	if (!ASSERT_ERR(err, "mixed call_session_* update must fail"))
+		goto cleanup;
+	ASSERT_EQ(errno, EINVAL, "mixed call_session_* update errno");
+
+	close(map_fd);
+	map_fd = bpf_map_create(BPF_MAP_TYPE_PROG_ARRAY, NULL, sizeof(key),
+				sizeof(__u32), 1, NULL);
+	if (!ASSERT_GE(map_fd, 0, "bpf_map_create_2"))
+		goto cleanup;
+
+	err = bpf_map_update_elem(map_fd, &key, &session_kfunc_prog_fd, BPF_ANY);
+	if (!ASSERT_OK(err, "update prog_array with session kfunc"))
+		goto cleanup;
+
+	err = bpf_map_update_elem(map_fd, &key, &no_session_kfunc_prog_fd, BPF_ANY);
+	if (!ASSERT_ERR(err, "mixed reverse call_session_* update must fail"))
+		goto cleanup;
+	ASSERT_EQ(errno, EINVAL, "mixed reverse call_session_* update errno");
+
+cleanup:
+	if (map_fd >= 0)
+		close(map_fd);
+	fsession_test__destroy(skel);
+}
+
 void test_fsession_test(void)
 {
 	if (test__start_subtest("fsession_test"))
@@ -137,4 +197,6 @@ void test_fsession_test(void)
 		test_fsession_reattach();
 	if (test__start_subtest("fsession_cookie"))
 		test_fsession_cookie();
+	if (test__start_subtest("fsession_prog_array_session_kfunc_compat"))
+		test_fsession_prog_array_session_kfunc_compat();
 }

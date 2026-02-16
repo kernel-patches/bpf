@@ -177,3 +177,9 @@ int BPF_PROG(test11, int a)
 	test11_result = a == 1;
 	return 0;
 }
+
+SEC("fsession/bpf_fentry_test1")
+int BPF_PROG(test12, int a, int ret)
+{
+	return 0;
+}
