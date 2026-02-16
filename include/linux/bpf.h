@@ -284,7 +284,8 @@ struct bpf_map_owner_enforcement {
 			u32 jited:1,
 			    xdp_has_frags:1,
 			    sleepable:1,
-			    kprobe_write_ctx:1;
+			    kprobe_write_ctx:1,
+			    call_get_func_ip:1;
 		};
 		u32 enforcement;
 	};
