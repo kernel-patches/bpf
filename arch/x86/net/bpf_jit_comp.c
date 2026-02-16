@@ -3102,7 +3102,7 @@ static int invoke_bpf(const struct btf_func_model *m, u8 **pprog,
 	u8 *prog = *pprog;
 
 	for (i = 0; i < tl->nr_links; i++) {
-		if (tl->links[i]->link.prog->call_session_cookie) {
+		if (bpf_prog_calls_session_cookie(tl->links[i])) {
 			emit_store_stack_imm64(&prog, BPF_REG_0, -func_meta_off,
 				func_meta | (cur_cookie << BPF_TRAMP_COOKIE_INDEX_SHIFT));
 			cur_cookie--;

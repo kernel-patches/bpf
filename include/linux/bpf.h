@@ -285,7 +285,9 @@ struct bpf_map_owner_enforcement {
 			    xdp_has_frags:1,
 			    sleepable:1,
 			    kprobe_write_ctx:1,
-			    call_get_func_ip:1;
+			    call_get_func_ip:1,
+			    call_session_cookie:1,
+			    call_session_is_return:1;
 		};
 		u32 enforcement;
 	};
@@ -1707,6 +1709,8 @@ struct bpf_prog_aux {
 	bool changes_pkt_data;
 	bool might_sleep;
 	bool kprobe_write_ctx;
+	bool call_session_cookie; /* Do we call bpf_session_cookie() */
+	bool call_session_is_return; /* Do we call bpf_session_is_return() */
 	u64 prog_array_member_cnt; /* counts how many times as member of prog_array */
 	struct mutex ext_mutex; /* mutex for is_extended and prog_array_member_cnt */
 	struct bpf_arena *arena;
@@ -1798,7 +1802,6 @@ struct bpf_prog {
 				enforce_expected_attach_type:1, /* Enforce expected_attach_type checking at attach time */
 				call_get_stack:1, /* Do we call bpf_get_stack() or bpf_get_stackid() */
 				call_get_func_ip:1, /* Do we call get_func_ip() */
-				call_session_cookie:1, /* Do we call bpf_session_cookie() */
 				tstamp_type_access:1, /* Accessed __sk_buff->tstamp_type */
 				sleepable:1;	/* BPF program is sleepable */
 	enum bpf_prog_type	type;		/* Type of BPF program */
@@ -2209,7 +2212,7 @@ static inline int bpf_fsession_cnt(struct bpf_tramp_links *links)
 
 static inline bool bpf_prog_calls_session_cookie(struct bpf_tramp_link *link)
 {
-	return link->link.prog->call_session_cookie;
+	return link->link.prog->aux->call_session_cookie;
 }
 
 static inline int bpf_fsession_cookie_cnt(struct bpf_tramp_links *links)
