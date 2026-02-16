@@ -2381,10 +2381,20 @@ static unsigned int __bpf_prog_ret0_warn(const void *ctx,
 	return 0;
 }
 
+static void bpf_map_owner_enforcement_init(struct bpf_map_owner_enforcement *enforcement,
+					   const struct bpf_prog *fp)
+{
+	enforcement->enforcement = 0;
+	enforcement->jited = fp->jited;
+	enforcement->xdp_has_frags = fp->aux->xdp_has_frags;
+	enforcement->sleepable = fp->sleepable;
+}
+
 static bool __bpf_prog_map_compatible(struct bpf_map *map,
 				      const struct bpf_prog *fp)
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(fp);
+	struct bpf_map_owner_enforcement enforcement_fp;
 	struct bpf_prog_aux *aux = fp->aux;
 	enum bpf_cgroup_storage_type i;
 	bool ret = false;
@@ -2393,6 +2403,8 @@ static bool __bpf_prog_map_compatible(struct bpf_map *map,
 	if (fp->kprobe_override)
 		return ret;
 
+	bpf_map_owner_enforcement_init(&enforcement_fp, fp);
+
 	spin_lock(&map->owner_lock);
 	/* There's no owner yet where we could check for compatibility. */
 	if (!map->owner) {
@@ -2400,9 +2412,7 @@ static bool __bpf_prog_map_compatible(struct bpf_map *map,
 		if (!map->owner)
 			goto err;
 		map->owner->type  = prog_type;
-		map->owner->jited = fp->jited;
-		map->owner->xdp_has_frags = aux->xdp_has_frags;
-		map->owner->sleepable = fp->sleepable;
+		map->owner->enforcement = enforcement_fp;
 		map->owner->expected_attach_type = fp->expected_attach_type;
 		map->owner->attach_func_proto = aux->attach_func_proto;
 		for_each_cgroup_storage_type(i) {
@@ -2413,9 +2423,7 @@ static bool __bpf_prog_map_compatible(struct bpf_map *map,
 		ret = true;
 	} else {
 		ret = map->owner->type  == prog_type &&
-		      map->owner->jited == fp->jited &&
-		      map->owner->xdp_has_frags == aux->xdp_has_frags &&
-		      map->owner->sleepable == fp->sleepable;
+		      map->owner->enforcement.enforcement == enforcement_fp.enforcement;
 		if (ret &&
 		    map->map_type == BPF_MAP_TYPE_PROG_ARRAY &&
 		    map->owner->expected_attach_type != fp->expected_attach_type)

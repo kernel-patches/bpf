@@ -278,6 +278,17 @@ struct bpf_list_node_kern {
 	void *owner;
 } __attribute__((aligned(8)));
 
+struct bpf_map_owner_enforcement {
+	union {
+		struct {
+			u32 jited:1,
+			    xdp_has_frags:1,
+			    sleepable:1;
+		};
+		u32 enforcement;
+	};
+};
+
 /* 'Ownership' of program-containing map is claimed by the first program
  * that is going to use this map or by the first program which FD is
  * stored in the map to make sure that all callers and callees have the
@@ -285,9 +296,7 @@ struct bpf_list_node_kern {
  */
 struct bpf_map_owner {
 	enum bpf_prog_type type;
-	bool jited;
-	bool xdp_has_frags;
-	bool sleepable;
+	struct bpf_map_owner_enforcement enforcement;
 	u64 storage_cookie[MAX_BPF_CGROUP_STORAGE_TYPE];
 	const struct btf_type *attach_func_proto;
 	enum bpf_attach_type expected_attach_type;

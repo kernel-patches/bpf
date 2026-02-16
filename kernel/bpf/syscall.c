@@ -1013,7 +1013,7 @@ static void bpf_map_show_fdinfo(struct seq_file *m, struct file *filp)
 	spin_lock(&map->owner_lock);
 	if (map->owner) {
 		type  = map->owner->type;
-		jited = map->owner->jited;
+		jited = map->owner->enforcement.jited;
 	}
 	spin_unlock(&map->owner_lock);
 
