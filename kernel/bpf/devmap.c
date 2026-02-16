@@ -341,14 +341,15 @@ static int dev_map_bpf_prog_run(struct bpf_prog *xdp_prog,
 	struct xdp_buff xdp;
 	int i, nframes = 0;
 
+	xdp.txq = &txq;
+	xdp.rxq = &rxq;
+
 	for (i = 0; i < n; i++) {
 		struct xdp_frame *xdpf = frames[i];
 		u32 act;
 		int err;
 
 		xdp_convert_frame_to_buff(xdpf, &xdp);
-		xdp.txq = &txq;
-		xdp.rxq = &rxq;
 
 		act = bpf_prog_run_xdp(xdp_prog, &xdp);
 		switch (act) {
