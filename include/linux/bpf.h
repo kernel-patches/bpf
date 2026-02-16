@@ -671,6 +671,36 @@ static inline bool bpf_map_has_internal_structs(struct bpf_map *map)
 
 void bpf_map_free_internal_structs(struct bpf_map *map, void *obj);
 
+/*
+ * Clear special fields (timer/wq/task_work) poisoned by cancel_and_free()
+ * in recycled map elements.
+ *
+ * Uses WRITE_ONCE to match the READ_ONCE/xchg/cmpxchg used by concurrent
+ * readers on the underlying pointer (bpf_async_kern.cb / bpf_task_work_kern.ctx).
+ */
+static inline void bpf_obj_init_special_fields(const struct btf_record *rec, void *obj)
+{
+	void **p;
+
+	if (IS_ERR_OR_NULL(rec))
+		return;
+
+	if (rec->timer_off >= 0) {
+		p = obj + rec->timer_off;
+		WRITE_ONCE(*p, NULL);
+	}
+
+	if (rec->wq_off >= 0) {
+		p = obj + rec->wq_off;
+		WRITE_ONCE(*p, NULL);
+	}
+
+	if (rec->task_work_off >= 0) {
+		p = obj + rec->task_work_off;
+		WRITE_ONCE(*p, NULL);
+	}
+}
+
 int bpf_dynptr_from_file_sleepable(struct file *file, u32 flags,
 				   struct bpf_dynptr *ptr__uninit);
 
