@@ -285,9 +285,10 @@ struct bpf_list_node_kern {
  */
 struct bpf_map_owner {
 	enum bpf_prog_type type;
-	bool jited;
-	bool xdp_has_frags;
-	bool sleepable;
+	u32 jited:1,
+	    xdp_has_frags:1,
+	    sleepable:1,
+	    kprobe_write_ctx:1;
 	u64 storage_cookie[MAX_BPF_CGROUP_STORAGE_TYPE];
 	const struct btf_type *attach_func_proto;
 	enum bpf_attach_type expected_attach_type;
