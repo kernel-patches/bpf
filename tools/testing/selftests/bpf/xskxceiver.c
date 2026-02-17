@@ -247,9 +247,10 @@ static void parse_command_line(struct ifobject *ifobj_tx, struct ifobject *ifobj
 			opt_print_tests = true;
 			break;
 		case 't':
+			char *eptr;
 			errno = 0;
-			opt_run_test = strtol(optarg, NULL, 0);
-			if (errno)
+			opt_run_test = strtol(optarg, &eptr, 0);
+			if (errno || *eptr)
 				print_usage(argv);
 			break;
 		case 'h':
