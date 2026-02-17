@@ -529,6 +529,8 @@ const char *iter_state_str(enum bpf_iter_state state)
 		return "drained";
 	case BPF_ITER_STATE_INVALID:
 		return "<invalid>";
+	case BPF_ITER_STATE_ACTIVE_SLEEPABLE:
+		return "active_sleepable";
 	default:
 		WARN_ONCE(1, "unknown iter state %d\n", state);
 		return "<unknown>";

@@ -1071,6 +1071,7 @@ static int mark_stack_slots_iter(struct bpf_verifier_env *env,
 		st->iter.btf = btf;
 		st->iter.btf_id = btf_id;
 		st->iter.state = BPF_ITER_STATE_ACTIVE;
+		st->iter.nosleep = meta->kfunc_flags & KF_ITER_NOSLEEP;
 		st->iter.depth = 0;
 
 		for (j = 0; j < BPF_REG_SIZE; j++)
@@ -9139,13 +9140,15 @@ static int process_iter_next_call(struct bpf_verifier_env *env, int insn_idx,
 	cur_iter = get_iter_from_state(cur_st, meta);
 
 	if (cur_iter->iter.state != BPF_ITER_STATE_ACTIVE &&
-	    cur_iter->iter.state != BPF_ITER_STATE_DRAINED) {
+	    cur_iter->iter.state != BPF_ITER_STATE_DRAINED &&
+	    cur_iter->iter.state != BPF_ITER_STATE_ACTIVE_SLEEPABLE) {
 		verifier_bug(env, "unexpected iterator state %d (%s)",
 			     cur_iter->iter.state, iter_state_str(cur_iter->iter.state));
 		return -EFAULT;
 	}
 
-	if (cur_iter->iter.state == BPF_ITER_STATE_ACTIVE) {
+	if (cur_iter->iter.state == BPF_ITER_STATE_ACTIVE ||
+	    cur_iter->iter.state == BPF_ITER_STATE_ACTIVE_SLEEPABLE) {
 		/* Because iter_next() call is a checkpoint is_state_visitied()
 		 * should guarantee parent state with same call sites and insn_idx.
 		 */
@@ -11535,6 +11538,27 @@ static int get_helper_proto(struct bpf_verifier_env *env, int func_id,
 	return *ptr && (*ptr)->func ? 0 : -EINVAL;
 }
 
+static bool has_active_nosleep_iter(struct bpf_verifier_env *env)
+{
+	struct bpf_verifier_state *vstate = env->cur_state;
+	int i, j;
+
+	for (i = 0; i <= vstate->curframe; i++) {
+		struct bpf_func_state *frame = vstate->frame[i];
+
+		for (j = 0; j < frame->allocated_stack / BPF_REG_SIZE; j++) {
+			struct bpf_reg_state *reg;
+
+			if (frame->stack[j].slot_type[BPF_REG_SIZE - 1] != STACK_ITER)
+				continue;
+			reg = &frame->stack[j].spilled_ptr;
+			if (reg->iter.nosleep && reg->iter.state == BPF_ITER_STATE_ACTIVE)
+				return true;
+		}
+	}
+	return false;
+}
+
 /* Check if we're in a sleepable context. */
 static inline bool in_sleepable_context(struct bpf_verifier_env *env)
 {
@@ -11542,6 +11566,7 @@ static inline bool in_sleepable_context(struct bpf_verifier_env *env)
 	       !env->cur_state->active_preempt_locks &&
 	       !env->cur_state->active_locks &&
 	       !env->cur_state->active_irq_id &&
+	       !has_active_nosleep_iter(env) &&
 	       in_sleepable(env);
 }
 
@@ -11624,6 +11649,14 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	if (env->cur_state->active_irq_id) {
 		if (fn->might_sleep) {
 			verbose(env, "sleepable helper %s#%d in IRQ-disabled region\n",
+				func_id_name(func_id), func_id);
+			return -EINVAL;
+		}
+	}
+
+	if (has_active_nosleep_iter(env)) {
+		if (fn->might_sleep) {
+			verbose(env, "sleepable helper %s#%d in nosleep iterator region\n",
 				func_id_name(func_id), func_id);
 			return -EINVAL;
 		}
@@ -14181,6 +14214,11 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 	if (env->cur_state->active_irq_id && sleepable) {
 		verbose(env, "kernel func %s is sleepable within IRQ-disabled region\n", func_name);
+		return -EACCES;
+	}
+
+	if (has_active_nosleep_iter(env) && sleepable) {
+		verbose(env, "kernel func %s is sleepable within a nosleep iterator\n", func_name);
 		return -EACCES;
 	}
 
@@ -19853,6 +19891,12 @@ static struct bpf_reg_state *scalar_reg_for_stack(struct bpf_verifier_env *env,
 	return NULL;
 }
 
+static inline bool bpf_iter_state_is_active(enum bpf_iter_state state)
+{
+	return state == BPF_ITER_STATE_ACTIVE ||
+	       state == BPF_ITER_STATE_ACTIVE_SLEEPABLE;
+}
+
 static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		      struct bpf_func_state *cur, struct bpf_idmap *idmap,
 		      enum exact_level exact)
@@ -19954,7 +19998,9 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			 */
 			if (old_reg->iter.btf != cur_reg->iter.btf ||
 			    old_reg->iter.btf_id != cur_reg->iter.btf_id ||
-			    old_reg->iter.state != cur_reg->iter.state ||
+			    bpf_iter_state_is_active(old_reg->iter.state) !=
+				bpf_iter_state_is_active(cur_reg->iter.state) ||
+			    old_reg->iter.nosleep != cur_reg->iter.nosleep ||
 			    /* ignore {old_reg,cur_reg}->iter.depth, see above */
 			    !check_ids(old_reg->ref_obj_id, cur_reg->ref_obj_id, idmap))
 				return false;
@@ -20308,7 +20354,7 @@ static bool iter_active_depths_differ(struct bpf_verifier_state *old, struct bpf
 				continue;
 
 			slot = &state->stack[i].spilled_ptr;
-			if (slot->iter.state != BPF_ITER_STATE_ACTIVE)
+			if (!bpf_iter_state_is_active(slot->iter.state))
 				continue;
 
 			cur_slot = &cur->frame[fr]->stack[i].spilled_ptr;
@@ -20426,7 +20472,7 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 					 */
 					spi = __get_spi(iter_reg->var_off.value);
 					iter_state = &func(env, iter_reg)->stack[spi].spilled_ptr;
-					if (iter_state->iter.state == BPF_ITER_STATE_ACTIVE) {
+					if (bpf_iter_state_is_active(iter_state->iter.state)) {
 						loop = true;
 						goto hit;
 					}

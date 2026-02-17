@@ -32,6 +32,7 @@ enum bpf_iter_state {
 	BPF_ITER_STATE_INVALID, /* for non-first slot */
 	BPF_ITER_STATE_ACTIVE,
 	BPF_ITER_STATE_DRAINED,
+	BPF_ITER_STATE_ACTIVE_SLEEPABLE, /* active, nosleep resource released */
 };
 
 struct bpf_reg_state {
@@ -87,9 +88,10 @@ struct bpf_reg_state {
 			 */
 			struct btf *btf;
 			u32 btf_id;
-			/* packing following two fields to fit iter state into 16 bytes */
+			/* packing following fields to fit iter state into 16 bytes */
 			enum bpf_iter_state state:2;
-			int depth:30;
+			bool nosleep:1; /* iterator prevents sleeping while active */
+			int depth:29;
 		} iter;
 
 		/* For irq stack slots */
