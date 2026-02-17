@@ -271,6 +271,34 @@ __bpf_kfunc void bpf_kfunc_put_default_trusted_ptr_test(struct prog_test_member 
 	 */
 }
 
+struct dummy_struct_on_task {
+	u64 a;
+	u64 b;
+	u64 c;
+	u64 d;
+	u64 e;
+};
+
+__bpf_kfunc u8 *bpf_kfunc_kasan_uaf(void)
+{
+	u8 *p = kmalloc(64, GFP_ATOMIC);
+	if (!p)
+		return NULL;
+	memset(p, 0xAA, 64);
+	kfree(p);
+
+	return p;
+}
+
+__bpf_kfunc u8 *bpf_kfunc_kasan_oob(void)
+{
+	void *p = kmalloc(64, GFP_ATOMIC);
+	if (!p)
+		return NULL;
+
+	return p+64;
+}
+
 __bpf_kfunc struct bpf_testmod_ctx *
 bpf_testmod_ctx_create(int *err)
 {
@@ -737,8 +765,10 @@ BTF_ID_FLAGS(func, bpf_testmod_ctx_create, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_testmod_ctx_release, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_testmod_ops3_call_test_1)
 BTF_ID_FLAGS(func, bpf_testmod_ops3_call_test_2)
-BTF_ID_FLAGS(func, bpf_kfunc_get_default_trusted_ptr_test);
-BTF_ID_FLAGS(func, bpf_kfunc_put_default_trusted_ptr_test);
+BTF_ID_FLAGS(func, bpf_kfunc_get_default_trusted_ptr_test)
+BTF_ID_FLAGS(func, bpf_kfunc_put_default_trusted_ptr_test)
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_uaf)
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_oob)
 BTF_KFUNCS_END(bpf_testmod_common_kfunc_ids)
 
 BTF_ID_LIST(bpf_testmod_dtor_ids)
