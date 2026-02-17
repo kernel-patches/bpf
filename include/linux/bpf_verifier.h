@@ -260,6 +260,7 @@ struct bpf_reference_state {
 	 * it matches on unlock.
 	 */
 	void *ptr;
+	bool forbid_sleep;	/* ref prevents sleeping while held */
 };
 
 struct bpf_retval_range {
@@ -420,6 +421,7 @@ struct bpf_verifier_state {
 	u32 active_lock_id;
 	void *active_lock_ptr;
 	u32 active_rcu_locks;
+	u32 forbid_sleep_count;
 
 	bool speculative;
 	bool in_sleepable;
