@@ -1052,7 +1052,8 @@ struct bpf_insn_access_aux {
 			struct btf *btf;
 			u32 btf_id;
 			u32 ref_obj_id;
-		};
+		}; /* base type PTR_TO_BTF_ID */
+		u32 mem_size; /* base type PTR_TO_MEM */
 	};
 	struct bpf_verifier_log *log; /* for verbose logs */
 	bool is_retval; /* is accessing function return value ? */

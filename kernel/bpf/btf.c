@@ -760,6 +760,21 @@ const struct btf_type *btf_type_resolve_func_ptr(const struct btf *btf,
 	return NULL;
 }
 
+static bool is_multilevel_ptr(const struct btf *btf, const struct btf_type *t)
+{
+	u32 depth = 0;
+
+	if (!btf_type_is_ptr(t))
+		return false;
+
+	do {
+		depth += 1;
+		t = btf_type_skip_modifiers(btf, t->type, NULL);
+	} while (btf_type_is_ptr(t) && depth < 2);
+
+	return depth > 1;
+}
+
 /* Types that act only as a source, not sink or intermediate
  * type when resolving.
  */
@@ -6790,6 +6805,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	const char *tag_value;
 	u32 nr_args, arg;
 	int i, ret;
+	bool trusted, nullable;
 
 	if (off % 8) {
 		bpf_log(log, "func '%s' offset %d is not multiple of 8\n",
@@ -6927,12 +6943,8 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		}
 	}
 
-	info->reg_type = PTR_TO_BTF_ID;
-	if (prog_args_trusted(prog))
-		info->reg_type |= PTR_TRUSTED;
-
-	if (btf_param_match_suffix(btf, &args[arg], "__nullable"))
-		info->reg_type |= PTR_MAYBE_NULL;
+	trusted = prog_args_trusted(prog);
+	nullable = btf_param_match_suffix(btf, &args[arg], "__nullable");
 
 	if (prog->expected_attach_type == BPF_TRACE_RAW_TP) {
 		struct btf *btf = prog->aux->attach_btf;
@@ -6953,7 +6965,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 			if (strcmp(tname, raw_tp_null_args[i].func))
 				continue;
 			if (raw_tp_null_args[i].mask & (0x1ULL << (arg * 4)))
-				info->reg_type |= PTR_MAYBE_NULL;
+				nullable = true;
 			/* Is the current arg IS_ERR? */
 			if (raw_tp_null_args[i].mask & (0x2ULL << (arg * 4)))
 				ptr_err_raw_tp = true;
@@ -6964,8 +6976,34 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		 * argument as PTR_MAYBE_NULL.
 		 */
 		if (i == ARRAY_SIZE(raw_tp_null_args) && btf_is_module(btf))
-			info->reg_type |= PTR_MAYBE_NULL;
+			nullable = true;
 	}
+
+	if (is_multilevel_ptr(btf, t)) {
+		/* If it can be IS_ERR at runtime, mark as scalar. */
+		if (ptr_err_raw_tp) {
+			bpf_log(log, "marking func '%s' pointer arg%d as scalar as it may encode error",
+				tname, arg);
+			info->reg_type = SCALAR_VALUE;
+		} else {
+			info->reg_type = PTR_TO_MEM | MEM_RDONLY;
+			if (!trusted)
+				info->reg_type |= PTR_UNTRUSTED;
+			/* for return value be conservative and mark it nullable */
+			if (nullable || arg == nr_args)
+				info->reg_type |= PTR_MAYBE_NULL;
+			/* this is a pointer to another pointer */
+			info->mem_size = sizeof(void *);
+		}
+		return true;
+	}
+
+	info->reg_type = PTR_TO_BTF_ID;
+	if (trusted)
+		info->reg_type |= PTR_TRUSTED;
+
+	if (nullable)
+		info->reg_type |= PTR_MAYBE_NULL;
 
 	if (tgt_prog) {
 		enum bpf_prog_type tgt_type;
