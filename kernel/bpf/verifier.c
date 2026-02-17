@@ -11570,6 +11570,44 @@ static inline bool in_sleepable_context(struct bpf_verifier_env *env)
 	       in_sleepable(env);
 }
 
+/*
+ * Transition a nosleep iterator from ACTIVE to ACTIVE_SLEEPABLE,
+ * indicating that the nosleep resource has been released.
+ *
+ * Optionally invalidate all register pointers of a given BTF type.
+ * This is needed because the resource release (e.g., mmap_lock drop)
+ * makes the pointers returned by the iterator's _next() stale.
+ */
+static void mark_iter_active_sleepable(struct bpf_verifier_env *env,
+				       struct bpf_kfunc_call_arg_meta *meta,
+				       struct btf *inval_btf,
+				       u32 inval_btf_id)
+{
+	struct bpf_func_state *fstate;
+	struct bpf_reg_state *iter_reg;
+
+	fstate = env->cur_state->frame[meta->iter.frameno];
+	iter_reg = &fstate->stack[meta->iter.spi].spilled_ptr;
+
+	if (iter_reg->iter.state == BPF_ITER_STATE_ACTIVE)
+		iter_reg->iter.state = BPF_ITER_STATE_ACTIVE_SLEEPABLE;
+
+	/* Invalidate pointers that depend on the released resource */
+	if (inval_btf) {
+		struct bpf_func_state *state;
+		struct bpf_reg_state *reg;
+		u32 clear_mask = (1 << STACK_SPILL);
+
+		bpf_for_each_reg_in_vstate_mask(env->cur_state, state, reg,
+						clear_mask, ({
+			if (base_type(reg->type) == PTR_TO_BTF_ID &&
+			    reg->btf == inval_btf &&
+			    reg->btf_id == inval_btf_id)
+				mark_reg_invalid(env, reg);
+		}));
+	}
+}
+
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     int *insn_idx_p)
 {
@@ -12494,6 +12532,7 @@ enum special_kfunc_type {
 	KF_bpf_session_is_return,
 	KF_bpf_stream_vprintk,
 	KF_bpf_stream_print_stack,
+	KF_bpf_iter_task_vma_release,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12574,6 +12613,7 @@ BTF_ID(func, bpf_arena_reserve_pages)
 BTF_ID(func, bpf_session_is_return)
 BTF_ID(func, bpf_stream_vprintk)
 BTF_ID(func, bpf_stream_print_stack)
+BTF_ID(func, bpf_iter_task_vma_release)
 
 static bool is_task_work_add_kfunc(u32 func_id)
 {
@@ -14243,6 +14283,12 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 		if (err)
 			return err;
+	}
+
+	if (meta.func_id == special_kfunc_list[KF_bpf_iter_task_vma_release]) {
+		mark_iter_active_sleepable(env, &meta,
+					   btf_vmlinux,
+					   btf_tracing_ids[BTF_TRACING_TYPE_VMA]);
 	}
 
 	if (meta.func_id == special_kfunc_list[KF_bpf_list_push_front_impl] ||
