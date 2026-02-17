@@ -7,6 +7,7 @@
 
 #include <net/sock.h>
 #include <net/tcp.h>
+#include <net/udp.h>
 #include <net/tls.h>
 #include <trace/events/sock.h>
 
@@ -576,6 +577,7 @@ static int sk_psock_skb_ingress(struct sk_psock *psock, struct sk_buff *skb,
 				u32 off, u32 len, gfp_t gfp_flags, bool take_ref)
 {
 	struct sock *sk = psock->sk;
+	bool is_udp = sk_is_udp(sk);
 	struct sk_msg *msg;
 	int err = -EAGAIN;
 
@@ -583,12 +585,15 @@ static int sk_psock_skb_ingress(struct sk_psock *psock, struct sk_buff *skb,
 	if (!msg)
 		goto out;
 
-	if (skb->sk != sk) {
+	if (is_udp)
+		spin_lock_bh(&sk->sk_receive_queue.lock);
+
+	if (skb->sk != sk || is_udp) {
 		if (atomic_read(&sk->sk_rmem_alloc) > sk->sk_rcvbuf)
-			goto free;
+			goto unlock;
 
 		if (!sk_rmem_schedule(sk, skb, skb->truesize))
-			goto free;
+			goto unlock;
 	}
 
 	/* This is used in tcp_bpf_recvmsg_parser() to determine whether the
@@ -606,11 +611,20 @@ static int sk_psock_skb_ingress(struct sk_psock *psock, struct sk_buff *skb,
 	 */
 	skb_set_owner_r(skb, sk);
 
+	if (is_udp) {
+		skb->destructor = udp_sock_rfree;
+		spin_unlock_bh(&sk->sk_receive_queue.lock);
+	}
+
 	err = sk_psock_skb_ingress_enqueue(skb, off, len, psock, sk, msg, take_ref);
 	if (err < 0)
 		goto free;
 out:
 	return err;
+
+unlock:
+	if (is_udp)
+		spin_unlock_bh(&sk->sk_receive_queue.lock);
 free:
 	kfree(msg);
 	goto out;
