@@ -6311,7 +6311,7 @@ static int check_ctx_access(struct bpf_verifier_env *env, int insn_idx, int off,
 					off);
 				return -EACCES;
 			}
-		} else {
+		} else if (base_type(info->reg_type) != PTR_TO_MEM) {
 			env->insn_aux_data[insn_idx].ctx_field_size = info->ctx_field_size;
 		}
 		/* remember the offset of last byte accessed in ctx */
@@ -7771,6 +7771,8 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 					regs[value_regno].btf = info.btf;
 					regs[value_regno].btf_id = info.btf_id;
 					regs[value_regno].ref_obj_id = info.ref_obj_id;
+				} else if (base_type(info.reg_type) == PTR_TO_MEM) {
+					regs[value_regno].mem_size = info.mem_size;
 				}
 			}
 			regs[value_regno].type = info.reg_type;
