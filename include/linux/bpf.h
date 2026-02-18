@@ -290,7 +290,8 @@ struct bpf_map_owner {
 	    sleepable:1,
 	    kprobe_write_ctx:1,
 	    call_get_func_ip:1,
-	    call_session_cookie:1;
+	    call_session_cookie:1,
+	    call_session_is_return:1;
 	u64 storage_cookie[MAX_BPF_CGROUP_STORAGE_TYPE];
 	const struct btf_type *attach_func_proto;
 	enum bpf_attach_type expected_attach_type;
@@ -1699,6 +1700,7 @@ struct bpf_prog_aux {
 	bool changes_pkt_data;
 	bool might_sleep;
 	bool kprobe_write_ctx;
+	bool call_session_is_return; /* Do we call bpf_session_is_return */
 	u64 prog_array_member_cnt; /* counts how many times as member of prog_array */
 	struct mutex ext_mutex; /* mutex for is_extended and prog_array_member_cnt */
 	struct bpf_arena *arena;
