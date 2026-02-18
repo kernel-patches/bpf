@@ -27,6 +27,7 @@ struct sysctl_test {
 		OP_EPERM,
 		SUCCESS,
 	} result;
+	struct bpf_object *obj;
 };
 
 static struct sysctl_test tests[] = {
@@ -1471,14 +1472,16 @@ static int load_sysctl_prog_file(struct sysctl_test *test)
 		return -1;
 	}
 
+	test->obj = obj;
 	return prog_fd;
 }
 
 static int load_sysctl_prog(struct sysctl_test *test, const char *sysctl_path)
 {
-		return test->prog_file
-			? load_sysctl_prog_file(test)
-			: load_sysctl_prog_insns(test, sysctl_path);
+	if (test->prog_file)
+		return load_sysctl_prog_file(test);
+	test->obj = NULL;
+	return load_sysctl_prog_insns(test, sysctl_path);
 }
 
 static int access_sysctl(const char *sysctl_path,
@@ -1573,7 +1576,10 @@ out:
 	/* Detaching w/o checking return code: best effort attempt. */
 	if (progfd != -1)
 		bpf_prog_detach(cgfd, atype);
-	close(progfd);
+	if (test->obj)
+		bpf_object__close(test->obj);
+	else if (progfd != -1)
+		close(progfd);
 	printf("[%s]\n", err ? "FAIL" : "PASS");
 	return err;
 }
