@@ -2404,6 +2404,7 @@ static bool __bpf_prog_map_compatible(struct bpf_map *map,
 		map->owner->sleepable = fp->sleepable;
 		map->owner->kprobe_write_ctx = aux->kprobe_write_ctx;
 		map->owner->call_get_func_ip = fp->call_get_func_ip;
+		map->owner->call_session_cookie = fp->call_session_cookie;
 		map->owner->expected_attach_type = fp->expected_attach_type;
 		map->owner->attach_func_proto = aux->attach_func_proto;
 		for_each_cgroup_storage_type(i) {
@@ -2420,6 +2421,9 @@ static bool __bpf_prog_map_compatible(struct bpf_map *map,
 		if (ret && (!map->owner->kprobe_write_ctx && aux->kprobe_write_ctx))
 			ret = false;
 		if (ret && (!map->owner->call_get_func_ip && fp->call_get_func_ip &&
+			    prog_type == BPF_PROG_TYPE_TRACING))
+			ret = false;
+		if (ret && (!map->owner->call_session_cookie && fp->call_session_cookie &&
 			    prog_type == BPF_PROG_TYPE_TRACING))
 			ret = false;
 		if (ret &&
