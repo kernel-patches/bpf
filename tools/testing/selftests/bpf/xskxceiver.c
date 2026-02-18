@@ -200,6 +200,7 @@ static void parse_command_line(struct ifobject *ifobj_tx, struct ifobject *ifobj
 	struct ifobject *ifobj;
 	u32 interface_nb = 0;
 	int option_index, c;
+	char *eptr;
 
 	opterr = 0;
 
@@ -248,8 +249,8 @@ static void parse_command_line(struct ifobject *ifobj_tx, struct ifobject *ifobj
 			break;
 		case 't':
 			errno = 0;
-			opt_run_test = strtol(optarg, NULL, 0);
-			if (errno)
+			opt_run_test = strtol(optarg, &eptr, 0);
+			if (errno || *eptr)
 				print_usage(argv);
 			break;
 		case 'h':
