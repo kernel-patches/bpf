@@ -68,6 +68,7 @@ static void release_child(struct child *child)
 	close(child->c2p[1]);
 	if (child->pid > 0)
 		waitpid(child->pid, &child_status, 0);
+	memset(child, 0, sizeof(*child));
 }
 
 static void kick_child(struct child *child)
