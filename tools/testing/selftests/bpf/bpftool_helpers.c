@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "bpftool_helpers.h"
+#include <stdio.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdbool.h>
@@ -12,13 +13,24 @@
 static int detect_bpftool_path(char *buffer)
 {
 	char tmp[BPFTOOL_PATH_MAX_LEN];
+	const char *env_path;
+
+	/* First, check if BPFTOOL environment variable is set */
+	env_path = getenv("BPFTOOL");
+	if (env_path && access(env_path, X_OK) == 0) {
+		snprintf(buffer, BPFTOOL_PATH_MAX_LEN, "%s", env_path);
+		return 0;
+	} else if (env_path) {
+		fprintf(stderr, "bpftool '%s' doesn't exist or is not executable\n", env_path);
+		return 1;
+	}
 
 	/* Check default bpftool location (will work if we are running the
 	 * default flavor of test_progs)
 	 */
 	snprintf(tmp, BPFTOOL_PATH_MAX_LEN, "./%s", BPFTOOL_DEFAULT_PATH);
 	if (access(tmp, X_OK) == 0) {
-		strncpy(buffer, tmp, BPFTOOL_PATH_MAX_LEN);
+		snprintf(buffer, BPFTOOL_PATH_MAX_LEN, "%s", tmp);
 		return 0;
 	}
 
@@ -27,11 +39,11 @@ static int detect_bpftool_path(char *buffer)
 	 */
 	snprintf(tmp, BPFTOOL_PATH_MAX_LEN, "../%s", BPFTOOL_DEFAULT_PATH);
 	if (access(tmp, X_OK) == 0) {
-		strncpy(buffer, tmp, BPFTOOL_PATH_MAX_LEN);
+		snprintf(buffer, BPFTOOL_PATH_MAX_LEN, "%s", tmp);
 		return 0;
 	}
 
-	/* Failed to find bpftool binary */
+	fprintf(stderr, "Failed to detect bpftool path, use BPFTOOL env var to override\n");
 	return 1;
 }
 
@@ -71,4 +83,3 @@ int get_bpftool_command_output(char *args, char *output_buf, size_t output_max_l
 {
 	return run_command(args, output_buf, output_max_len);
 }
-
