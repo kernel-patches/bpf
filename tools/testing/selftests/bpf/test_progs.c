@@ -1944,13 +1944,15 @@ int main(int argc, char **argv)
 		.parser = parse_arg,
 		.doc = argp_program_doc,
 	};
+	int err, i;
+
+#ifndef __SANITIZE_ADDRESS__
 	struct sigaction sigact = {
 		.sa_handler = crash_handler,
 		.sa_flags = SA_RESETHAND,
-		};
-	int err, i;
-
+	};
 	sigaction(SIGSEGV, &sigact, NULL);
+#endif
 
 	env.stdout_saved = stdout;
 	env.stderr_saved = stderr;
