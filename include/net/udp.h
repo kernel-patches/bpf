@@ -455,6 +455,15 @@ struct sock *__udp6_lib_lookup(const struct net *net,
 			       struct sk_buff *skb);
 struct sock *udp6_lib_lookup_skb(const struct sk_buff *skb,
 				 __be16 sport, __be16 dport);
+
+#ifdef CONFIG_INET
+void udp_sock_rfree(struct sk_buff *skb);
+#else
+static inline void udp_sock_rfree(struct sk_buff *skb)
+{
+}
+#endif
+
 int udp_read_skb(struct sock *sk, skb_read_actor_t recv_actor);
 
 /* UDP uses skb->dev_scratch to cache as much information as possible and avoid
