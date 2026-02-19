@@ -1157,6 +1157,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog);
 void bpf_jit_compile(struct bpf_prog *prog);
 bool bpf_jit_needs_zext(void);
 bool bpf_jit_inlines_helper_call(s32 imm);
+bool bpf_jit_inlines_kfunc_call(void *func_addr);
 bool bpf_jit_supports_subprog_tailcalls(void);
 bool bpf_jit_supports_percpu_insn(void);
 bool bpf_jit_supports_kfunc_call(void);
@@ -1836,5 +1837,14 @@ static inline void *bpf_skb_meta_pointer(struct sk_buff *skb, u32 offset)
 	return ERR_PTR(-EOPNOTSUPP);
 }
 #endif /* CONFIG_NET */
+
+u64 bpf_clz64(u64 x);
+u64 bpf_ctz64(u64 x);
+u64 bpf_ffs64(u64 x);
+u64 bpf_fls64(u64 x);
+u64 bpf_popcnt64(u64 x);
+u64 bpf_bitrev64(u64 x);
+u64 bpf_rol64(u64 x, u64 s);
+u64 bpf_ror64(u64 x, u64 s);
 
 #endif /* __LINUX_FILTER_H__ */
