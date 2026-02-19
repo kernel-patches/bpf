@@ -1192,6 +1192,127 @@ static int add_exception_handler(const struct bpf_insn *insn,
 	return 0;
 }
 
+static inline u32 a64_clz64(u8 rd, u8 rn)
+{
+	/*
+	 * Arm Architecture Reference Manual for A-profile architecture
+	 * (Document number: ARM DDI 0487)
+	 *
+	 *   A64 Base Instruction Descriptions
+	 *   C6.2 Alphabetical list of A64 base instructions
+	 *
+	 *   C6.2.91 CLZ
+	 *
+	 *     Count leading zeros
+	 *
+	 *     This instruction counts the number of consecutive binary zero bits,
+	 *     starting from the most significant bit in the source register,
+	 *     and places the count in the destination register.
+	 */
+	/* CLZ Xd, Xn */
+	return 0xdac01000 | (rn << 5) | rd;
+}
+
+static inline u32 a64_ctz64(u8 rd, u8 rn)
+{
+	/*
+	 * Arm Architecture Reference Manual for A-profile architecture
+	 * (Document number: ARM DDI 0487)
+	 *
+	 *   A64 Base Instruction Descriptions
+	 *   C6.2 Alphabetical list of A64 base instructions
+	 *
+	 *   C6.2.144 CTZ
+	 *
+	 *     Count trailing zeros
+	 *
+	 *     This instruction counts the number of consecutive binary zero bits,
+	 *     starting from the least significant bit in the source register,
+	 *     and places the count in the destination register.
+	 *
+	 *     This instruction requires FEAT_CSSC.
+	 */
+	/* CTZ Xd, Xn */
+	return 0xdac01800 | (rn << 5) | rd;
+}
+
+static inline u32 a64_rbit64(u8 rd, u8 rn)
+{
+	/*
+	 * Arm Architecture Reference Manual for A-profile architecture
+	 * (Document number: ARM DDI 0487)
+	 *
+	 *   A64 Base Instruction Descriptions
+	 *   C6.2 Alphabetical list of A64 base instructions
+	 *
+	 *   C6.2.320 RBIT
+	 *
+	 *     Reverse bits
+	 *
+	 *     This instruction reverses the bit order in a register.
+	 */
+	/* RBIT Xd, Xn */
+	return 0xdac00000 | (rn << 5) | rd;
+}
+
+static inline bool boot_cpu_supports_cssc(void)
+{
+	/*
+	 * Documentation/arch/arm64/cpu-feature-registers.rst
+	 *
+	 *   ID_AA64ISAR2_EL1 - Instruction set attribute register 2
+	 *
+	 *     CSSC
+	 */
+	return cpuid_feature_extract_unsigned_field(read_sanitised_ftr_reg(SYS_ID_AA64ISAR2_EL1),
+						    ID_AA64ISAR2_EL1_CSSC_SHIFT);
+}
+
+static bool bpf_inlines_func_call(struct jit_ctx *ctx, void *func_addr)
+{
+	const u8 tmp = bpf2a64[TMP_REG_1];
+	const u8 r0 = bpf2a64[BPF_REG_0];
+	const u8 r1 = bpf2a64[BPF_REG_1];
+	const u8 r2 = bpf2a64[BPF_REG_2];
+	bool inlined = true;
+
+	if (func_addr == bpf_clz64) {
+		emit(a64_clz64(r0, r1), ctx);
+	} else if (func_addr == bpf_ctz64 || func_addr == bpf_ffs64) {
+		if (boot_cpu_supports_cssc()) {
+			emit(a64_ctz64(r0, r1), ctx);
+		} else {
+			emit(a64_rbit64(tmp, r1), ctx);
+			emit(a64_clz64(r0, tmp), ctx);
+		}
+	} else if (func_addr == bpf_fls64) {
+		emit(a64_clz64(tmp, r1), ctx);
+		emit(A64_NEG(1, tmp, tmp), ctx);
+		emit(A64_ADD_I(1, r0, tmp, 64), ctx);
+	} else if (func_addr == bpf_bitrev64) {
+		emit(a64_rbit64(r0, r1), ctx);
+	} else if (func_addr == bpf_rol64) {
+		emit(A64_NEG(1, tmp, r2), ctx);
+		emit(A64_DATA2(1, r0, r1, tmp, RORV), ctx);
+	} else if (func_addr == bpf_ror64) {
+		emit(A64_DATA2(1, r0, r1, r2, RORV), ctx);
+	} else {
+		inlined = false;
+	}
+
+	return inlined;
+}
+
+bool bpf_jit_inlines_kfunc_call(void *func_addr)
+{
+	if (func_addr == bpf_clz64 || func_addr == bpf_ctz64 ||
+	    func_addr == bpf_ffs64 || func_addr == bpf_fls64 ||
+	    func_addr == bpf_rol64 || func_addr == bpf_ror64 ||
+	    func_addr == bpf_bitrev64)
+		return true;
+	return false;
+}
+
 /* JITs an eBPF instruction.
  * Returns:
  * 0  - successfully JITed an 8-byte eBPF instruction.
@@ -1598,6 +1719,8 @@ emit_cond_jmp:
 					    &func_addr, &func_addr_fixed);
 		if (ret < 0)
 			return ret;
+		if (bpf_inlines_func_call(ctx, (void *) func_addr))
+			break;
 		emit_call(func_addr, ctx);
 		/*
 		 * Call to arch_bpf_timed_may_goto() is emitted by the
