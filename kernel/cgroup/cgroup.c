@@ -28,6 +28,7 @@
 #include "cgroup-internal.h"
 
 #include <linux/bpf-cgroup.h>
+#include <linux/bpf_lsm.h>
 #include <linux/cred.h>
 #include <linux/errno.h>
 #include <linux/init_task.h>
@@ -5334,7 +5335,8 @@ static int cgroup_procs_write_permission(struct cgroup *src_cgrp,
 	return 0;
 }
 
-static int cgroup_attach_permissions(struct cgroup *src_cgrp,
+static int cgroup_attach_permissions(struct task_struct *task,
+				     struct cgroup *src_cgrp,
 				     struct cgroup *dst_cgrp,
 				     struct super_block *sb, bool threadgroup,
 				     struct cgroup_namespace *ns)
@@ -5350,9 +5352,9 @@ static int cgroup_attach_permissions(struct cgroup *src_cgrp,
 		return ret;
 
 	if (!threadgroup && (src_cgrp->dom_cgrp != dst_cgrp->dom_cgrp))
-		ret = -EOPNOTSUPP;
+		return -EOPNOTSUPP;
 
-	return ret;
+	return bpf_lsm_cgroup_attach(task, src_cgrp, dst_cgrp, sb, threadgroup, ns);
 }
 
 static ssize_t __cgroup_procs_write(struct kernfs_open_file *of, char *buf,
@@ -5384,7 +5386,7 @@ static ssize_t __cgroup_procs_write(struct kernfs_open_file *of, char *buf,
 	 * inherited fd attacks.
 	 */
 	scoped_with_creds(of->file->f_cred)
-		ret = cgroup_attach_permissions(src_cgrp, dst_cgrp,
+		ret = cgroup_attach_permissions(task, src_cgrp, dst_cgrp,
 						of->file->f_path.dentry->d_sb,
 						threadgroup, ctx->ns);
 	if (ret)
@@ -6669,6 +6671,7 @@ static struct cgroup *cgroup_get_from_file(struct file *f)
 
 /**
  * cgroup_css_set_fork - find or create a css_set for a child process
+ * @task: the task to be attached
  * @kargs: the arguments passed to create the child process
  *
  * This functions finds or creates a new css_set which the child
@@ -6683,7 +6686,8 @@ static struct cgroup *cgroup_get_from_file(struct file *f)
  * before grabbing cgroup_threadgroup_rwsem and will hold a reference
  * to the target cgroup.
  */
-static int cgroup_css_set_fork(struct kernel_clone_args *kargs)
+static int cgroup_css_set_fork(struct task_struct *task,
+			       struct kernel_clone_args *kargs)
 	__acquires(&cgroup_mutex) __acquires(&cgroup_threadgroup_rwsem)
 {
 	int ret;
@@ -6752,7 +6756,7 @@ static int cgroup_css_set_fork(struct kernel_clone_args *kargs)
 	 * cgroup.procs of the cgroup indicated by @dfd_cgroup. This allows us
 	 * to always use the caller's credentials.
 	 */
-	ret = cgroup_attach_permissions(cset->dfl_cgrp, dst_cgrp, sb,
+	ret = cgroup_attach_permissions(task, cset->dfl_cgrp, dst_cgrp, sb,
 					!(kargs->flags & CLONE_THREAD),
 					current->nsproxy->cgroup_ns);
 	if (ret)
@@ -6824,7 +6828,7 @@ int cgroup_can_fork(struct task_struct *child, struct kernel_clone_args *kargs)
 	struct cgroup_subsys *ss;
 	int i, j, ret;
 
-	ret = cgroup_css_set_fork(kargs);
+	ret = cgroup_css_set_fork(child, kargs);
 	if (ret)
 		return ret;
 
