@@ -30,10 +30,32 @@ __weak noinline RET bpf_lsm_##NAME(__VA_ARGS__)	\
 #include <linux/lsm_hook_defs.h>
 #undef LSM_HOOK
 
+__bpf_hook_start();
+
+__weak noinline int bpf_lsm_namespace_alloc(struct ns_common *ns)
+{
+	return 0;
+}
+
+__weak noinline void bpf_lsm_namespace_free(struct ns_common *ns)
+{
+}
+
+__weak noinline int bpf_lsm_namespace_install(struct nsset *nsset,
+					  struct ns_common *ns)
+{
+	return 0;
+}
+
+__bpf_hook_end();
+
 #define LSM_HOOK(RET, DEFAULT, NAME, ...) BTF_ID(func, bpf_lsm_##NAME)
 BTF_SET_START(bpf_lsm_hooks)
 #include <linux/lsm_hook_defs.h>
 #undef LSM_HOOK
+BTF_ID(func, bpf_lsm_namespace_alloc)
+BTF_ID(func, bpf_lsm_namespace_free)
+BTF_ID(func, bpf_lsm_namespace_install)
 BTF_SET_END(bpf_lsm_hooks)
 
 BTF_SET_START(bpf_lsm_disabled_hooks)
@@ -383,6 +405,8 @@ BTF_ID(func, bpf_lsm_task_prctl)
 BTF_ID(func, bpf_lsm_task_setscheduler)
 BTF_ID(func, bpf_lsm_task_to_inode)
 BTF_ID(func, bpf_lsm_userns_create)
+BTF_ID(func, bpf_lsm_namespace_alloc)
+BTF_ID(func, bpf_lsm_namespace_install)
 BTF_SET_END(sleepable_lsm_hooks)
 
 BTF_SET_START(untrusted_lsm_hooks)
@@ -395,6 +419,7 @@ BTF_ID(func, bpf_lsm_sk_alloc_security)
 BTF_ID(func, bpf_lsm_sk_free_security)
 #endif /* CONFIG_SECURITY_NETWORK */
 BTF_ID(func, bpf_lsm_task_free)
+BTF_ID(func, bpf_lsm_namespace_free)
 BTF_SET_END(untrusted_lsm_hooks)
 
 bool bpf_lsm_is_sleepable_hook(u32 btf_id)

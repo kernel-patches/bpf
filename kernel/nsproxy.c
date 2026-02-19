@@ -9,6 +9,7 @@
  *             Pavel Emelianov <xemul@openvz.org>
  */
 
+#include <linux/bpf_lsm.h>
 #include <linux/slab.h>
 #include <linux/export.h>
 #include <linux/nsproxy.h>
@@ -379,6 +380,12 @@ out:
 
 static inline int validate_ns(struct nsset *nsset, struct ns_common *ns)
 {
+	int ret;
+
+	ret = bpf_lsm_namespace_install(nsset, ns);
+	if (ret)
+		return ret;
+
 	return ns->ops->install(nsset, ns);
 }
 
