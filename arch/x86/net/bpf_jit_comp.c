@@ -19,6 +19,7 @@
 #include <asm/text-patching.h>
 #include <asm/unwind.h>
 #include <asm/cfi.h>
+#include <asm/cpufeatures.h>
 
 static bool all_callee_regs_used[4] = {true, true, true, true};
 
@@ -1604,6 +1605,127 @@ static void emit_priv_frame_ptr(u8 **pprog, void __percpu *priv_frame_ptr)
 	*pprog = prog;
 }
 
+static bool bpf_inlines_func_call(u8 **pprog, void *func)
+{
+	bool has_popcnt = boot_cpu_has(X86_FEATURE_POPCNT);
+	bool has_bmi1 = boot_cpu_has(X86_FEATURE_BMI1);
+	bool has_abm = boot_cpu_has(X86_FEATURE_ABM);
+	bool inlined = true;
+	u8 *prog = *pprog;
+
+	/*
+	 * x86 Bit manipulation instruction set
+	 * https://en.wikipedia.org/wiki/X86_Bit_manipulation_instruction_set
+	 */
+
+	if (func == bpf_clz64 && has_abm) {
+		/*
+		 * Intel® 64 and IA-32 Architectures Software Developer's Manual (June 2023)
+		 *
+		 *   LZCNT - Count the Number of Leading Zero Bits
+		 *
+		 *     Opcode/Instruction
+		 *     F3 REX.W 0F BD /r
+		 *     LZCNT r64, r/m64
+		 *
+		 *     Op/En
+		 *     RVM
+		 *
+		 *     64/32-bit Mode
+		 *     V/N.E.
+		 *
+		 *     CPUID Feature Flag
+		 *     LZCNT
+		 *
+		 *     Description
+		 *     Count the number of leading zero bits in r/m64, return
+		 *     result in r64.
+		 */
+		/* emit: x ? 64 - fls64(x) : 64 */
+		/* lzcnt rax, rdi */
+		EMIT5(0xF3, 0x48, 0x0F, 0xBD, 0xC7);
+	} else if (func == bpf_ctz64 && has_bmi1) {
+		/*
+		 * Intel® 64 and IA-32 Architectures Software Developer's Manual (June 2023)
+		 *
+		 *   TZCNT - Count the Number of Trailing Zero Bits
+		 *
+		 *     Opcode/Instruction
+		 *     F3 REX.W 0F BC /r
+		 *     TZCNT r64, r/m64
+		 *
+		 *     Op/En
+		 *     RVM
+		 *
+		 *     64/32-bit Mode
+		 *     V/N.E.
+		 *
+		 *     CPUID Feature Flag
+		 *     BMI1
+		 *
+		 *     Description
+		 *     Count the number of trailing zero bits in r/m64, return
+		 *     result in r64.
+		 */
+		/* emit: x ? __ffs64(x) : 64 */
+		/* tzcnt rax, rdi */
+		EMIT5(0xF3, 0x48, 0x0F, 0xBC, 0xC7);
+	} else if (func == bpf_ffs64 && has_bmi1) {
+		/* emit: __ffs64(x); x == 0 has been handled in verifier */
+		/* tzcnt rax, rdi */
+		EMIT5(0xF3, 0x48, 0x0F, 0xBC, 0xC7);
+	} else if (func == bpf_fls64 && has_abm) {
+		/* emit: fls64(x) */
+		/* lzcnt rax, rdi */
+		EMIT5(0xF3, 0x48, 0x0F, 0xBD, 0xC7);
+		EMIT3(0x48, 0xF7, 0xD8);       /* neg rax */
+		EMIT4(0x48, 0x83, 0xC0, 0x40); /* add rax, 64 */
+	} else if (func == bpf_popcnt64 && has_popcnt) {
+		/*
+		 * Intel® 64 and IA-32 Architectures Software Developer's Manual (June 2023)
+		 *
+		 *   POPCNT - Return the Count of Number of Bits Set to 1
+		 *
+		 *     Opcode/Instruction
+		 *     F3 REX.W 0F B8 /r
+		 *     POPCNT r64, r/m64
+		 *
+		 *     Op/En
+		 *     RM
+		 *
+		 *     64 Mode
+		 *     Valid
+		 *
+		 *     Compat/Leg Mode
+		 *     N.E.
+		 *
+		 *     Description
+		 *     POPCNT on r/m64
+		 */
+		/* popcnt rax, rdi */
+		EMIT5(0xF3, 0x48, 0x0F, 0xB8, 0xC7);
+	} else if (func == bpf_rol64) {
+		EMIT1(0x51);             /* push rcx */
+		/* emit: rol64(x, s) */
+		EMIT3(0x48, 0x89, 0xF1); /* mov rcx, rsi */
+		EMIT3(0x48, 0x89, 0xF8); /* mov rax, rdi */
+		EMIT3(0x48, 0xD3, 0xC0); /* rol rax, cl */
+		EMIT1(0x59);             /* pop rcx */
+	} else if (func == bpf_ror64) {
+		EMIT1(0x51);             /* push rcx */
+		/* emit: ror64(x, s) */
+		EMIT3(0x48, 0x89, 0xF1); /* mov rcx, rsi */
+		EMIT3(0x48, 0x89, 0xF8); /* mov rax, rdi */
+		EMIT3(0x48, 0xD3, 0xC8); /* ror rax, cl */
+		EMIT1(0x59);             /* pop rcx */
+	} else {
+		inlined = false;
+	}
+
+	*pprog = prog;
+	return inlined;
+}
+
 #define INSN_SZ_DIFF (((addrs[i] - addrs[i - 1]) - (prog - temp)))
 
 #define __LOAD_TCC_PTR(off)			\
@@ -2452,6 +2574,8 @@ populate_extable:
 			u8 *ip = image + addrs[i - 1];
 
 			func = (u8 *) __bpf_call_base + imm32;
+			if (bpf_inlines_func_call(&prog, func))
+				break;
 			if (src_reg == BPF_PSEUDO_CALL && tail_call_reachable) {
 				LOAD_TAIL_CALL_CNT_PTR(stack_depth);
 				ip += 7;
@@ -4116,4 +4240,21 @@ bool bpf_jit_supports_timed_may_goto(void)
 bool bpf_jit_supports_fsession(void)
 {
 	return true;
+}
+
+bool bpf_jit_inlines_kfunc_call(void *func_addr)
+{
+	if (func_addr == bpf_ctz64 || func_addr == bpf_ffs64)
+		return boot_cpu_has(X86_FEATURE_BMI1);
+
+	if (func_addr == bpf_clz64 || func_addr == bpf_fls64)
+		return boot_cpu_has(X86_FEATURE_ABM);
+
+	if (func_addr == bpf_popcnt64)
+		return boot_cpu_has(X86_FEATURE_POPCNT);
+
+	if (func_addr == bpf_rol64 || func_addr == bpf_ror64)
+		return true;
+
+	return false;
 }
