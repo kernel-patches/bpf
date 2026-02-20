@@ -633,7 +633,7 @@ static int do_test_single(struct bpf_align_test *test)
 	} else {
 		ret = 0;
 		/* We make a local copy so that we can strtok() it */
-		strncpy(bpf_vlog_copy, bpf_vlog, sizeof(bpf_vlog_copy));
+		strscpy(bpf_vlog_copy, bpf_vlog);
 		start = strstr(bpf_vlog_copy, main_pass_start);
 		if (!start) {
 			ret = 1;
