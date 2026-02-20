@@ -12,8 +12,11 @@
 #include <linux/bpf_verifier.h>
 #include <linux/lsm_hooks.h>
 
+struct cgroup;
+struct cgroup_namespace;
 struct ns_common;
 struct nsset;
+struct super_block;
 
 #ifdef CONFIG_BPF_LSM
 
@@ -55,6 +58,9 @@ int bpf_lsm_get_retval_range(const struct bpf_prog *prog,
 int bpf_lsm_namespace_alloc(struct ns_common *ns);
 void bpf_lsm_namespace_free(struct ns_common *ns);
 int bpf_lsm_namespace_install(struct nsset *nsset, struct ns_common *ns);
+int bpf_lsm_cgroup_attach(struct task_struct *task, struct cgroup *src_cgrp,
+			   struct cgroup *dst_cgrp, struct super_block *sb,
+			   bool threadgroup, struct cgroup_namespace *ns);
 
 int bpf_set_dentry_xattr_locked(struct dentry *dentry, const char *name__str,
 				const struct bpf_dynptr *value_p, int flags);
@@ -122,6 +128,15 @@ static inline void bpf_lsm_namespace_free(struct ns_common *ns)
 }
 static inline int bpf_lsm_namespace_install(struct nsset *nsset,
 					    struct ns_common *ns)
+{
+	return 0;
+}
+static inline int bpf_lsm_cgroup_attach(struct task_struct *task,
+					 struct cgroup *src_cgrp,
+					 struct cgroup *dst_cgrp,
+					 struct super_block *sb,
+					 bool threadgroup,
+					 struct cgroup_namespace *ns)
 {
 	return 0;
 }

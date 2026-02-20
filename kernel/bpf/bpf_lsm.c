@@ -47,6 +47,16 @@ __weak noinline int bpf_lsm_namespace_install(struct nsset *nsset,
 	return 0;
 }
 
+__weak noinline int bpf_lsm_cgroup_attach(struct task_struct *task,
+					   struct cgroup *src_cgrp,
+					   struct cgroup *dst_cgrp,
+					   struct super_block *sb,
+					   bool threadgroup,
+					   struct cgroup_namespace *ns)
+{
+	return 0;
+}
+
 __bpf_hook_end();
 
 #define LSM_HOOK(RET, DEFAULT, NAME, ...) BTF_ID(func, bpf_lsm_##NAME)
@@ -56,6 +66,7 @@ BTF_SET_START(bpf_lsm_hooks)
 BTF_ID(func, bpf_lsm_namespace_alloc)
 BTF_ID(func, bpf_lsm_namespace_free)
 BTF_ID(func, bpf_lsm_namespace_install)
+BTF_ID(func, bpf_lsm_cgroup_attach)
 BTF_SET_END(bpf_lsm_hooks)
 
 BTF_SET_START(bpf_lsm_disabled_hooks)
@@ -407,6 +418,7 @@ BTF_ID(func, bpf_lsm_task_to_inode)
 BTF_ID(func, bpf_lsm_userns_create)
 BTF_ID(func, bpf_lsm_namespace_alloc)
 BTF_ID(func, bpf_lsm_namespace_install)
+BTF_ID(func, bpf_lsm_cgroup_attach)
 BTF_SET_END(sleepable_lsm_hooks)
 
 BTF_SET_START(untrusted_lsm_hooks)
