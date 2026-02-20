@@ -30,6 +30,45 @@ static struct hlist_head trampoline_ip_table[TRAMPOLINE_TABLE_SIZE];
 /* serializes access to trampoline tables */
 static DEFINE_MUTEX(trampoline_mutex);
 
+#define TRAMPOLINE_LOCKS_BITS 6
+#define TRAMPOLINE_LOCKS_TABLE_SIZE (1 << TRAMPOLINE_LOCKS_BITS)
+
+static struct {
+	struct mutex mutex;
+	struct lock_class_key key;
+} *trampoline_locks;
+
+static struct mutex *trampoline_locks_lookup(struct bpf_trampoline *tr)
+{
+	return &trampoline_locks[hash_64((u64) tr, TRAMPOLINE_LOCKS_BITS)].mutex;
+}
+
+static void trampoline_lock(struct bpf_trampoline *tr)
+{
+	mutex_lock(trampoline_locks_lookup(tr));
+}
+
+static void trampoline_unlock(struct bpf_trampoline *tr)
+{
+	mutex_unlock(trampoline_locks_lookup(tr));
+}
+
+static int __init trampoline_locks_init(void)
+{
+	int i;
+
+	trampoline_locks = kmalloc_array(TRAMPOLINE_LOCKS_TABLE_SIZE,
+					 sizeof(trampoline_locks[0]), GFP_KERNEL);
+	if (!trampoline_locks)
+		return -ENOMEM;
+
+	for (i = 0; i < TRAMPOLINE_LOCKS_TABLE_SIZE; i++) {
+		lockdep_register_key(&trampoline_locks[i].key);
+		mutex_init_with_key(&trampoline_locks[i].mutex, &trampoline_locks[i].key);
+	}
+	return 0;
+}
+
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
 static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mutex);
 
@@ -71,7 +110,7 @@ static int bpf_tramp_ftrace_ops_func(struct ftrace_ops *ops, unsigned long ip,
 		/* This is called inside register_ftrace_direct_multi(), so
 		 * tr->mutex is already locked.
 		 */
-		lockdep_assert_held_once(&tr->mutex);
+		lockdep_assert_held_once(trampoline_locks_lookup(tr));
 
 		/* Instead of updating the trampoline here, we propagate
 		 * -EAGAIN to register_ftrace_direct(). Then we can
@@ -102,7 +141,7 @@ static int bpf_tramp_ftrace_ops_func(struct ftrace_ops *ops, unsigned long ip,
 	 * mutex_trylock(&tr->mutex) to avoid deadlock in race condition
 	 * (something else is making changes to this same trampoline).
 	 */
-	if (!mutex_trylock(&tr->mutex)) {
+	if (!mutex_trylock(trampoline_locks_lookup(tr))) {
 		/* sleep 1 ms to make sure whatever holding tr->mutex makes
 		 * some progress.
 		 */
@@ -129,7 +168,7 @@ static int bpf_tramp_ftrace_ops_func(struct ftrace_ops *ops, unsigned long ip,
 		break;
 	}
 
-	mutex_unlock(&tr->mutex);
+	trampoline_unlock(tr);
 	return ret;
 }
 #endif
@@ -359,7 +398,6 @@ static struct bpf_trampoline *bpf_trampoline_lookup(u64 key, unsigned long ip)
 	head = &trampoline_ip_table[hash_64(tr->ip, TRAMPOLINE_HASH_BITS)];
 	hlist_add_head(&tr->hlist_ip, head);
 	refcount_set(&tr->refcnt, 1);
-	mutex_init(&tr->mutex);
 	for (i = 0; i < BPF_TRAMP_MAX; i++)
 		INIT_HLIST_HEAD(&tr->progs_hlist[i]);
 out:
@@ -844,9 +882,9 @@ int bpf_trampoline_link_prog(struct bpf_tramp_link *link,
 {
 	int err;
 
-	mutex_lock(&tr->mutex);
+	trampoline_lock(tr);
 	err = __bpf_trampoline_link_prog(link, tr, tgt_prog);
-	mutex_unlock(&tr->mutex);
+	trampoline_unlock(tr);
 	return err;
 }
 
@@ -887,9 +925,9 @@ int bpf_trampoline_unlink_prog(struct bpf_tramp_link *link,
 {
 	int err;
 
-	mutex_lock(&tr->mutex);
+	trampoline_lock(tr);
 	err = __bpf_trampoline_unlink_prog(link, tr, tgt_prog);
-	mutex_unlock(&tr->mutex);
+	trampoline_unlock(tr);
 	return err;
 }
 
@@ -999,14 +1037,15 @@ int bpf_trampoline_link_cgroup_shim(struct bpf_prog *prog,
 	if (!tr)
 		return  -ENOMEM;
 
-	mutex_lock(&tr->mutex);
+	trampoline_lock(tr);
 
 	shim_link = cgroup_shim_find(tr, bpf_func);
 	if (shim_link) {
 		/* Reusing existing shim attached by the other program. */
 		bpf_link_inc(&shim_link->link.link);
 
-		mutex_unlock(&tr->mutex);
+		trampoline_unlock(tr);
+
 		bpf_trampoline_put(tr); /* bpf_trampoline_get above */
 		return 0;
 	}
@@ -1026,11 +1065,11 @@ int bpf_trampoline_link_cgroup_shim(struct bpf_prog *prog,
 	shim_link->trampoline = tr;
 	/* note, we're still holding tr refcnt from above */
 
-	mutex_unlock(&tr->mutex);
+	trampoline_unlock(tr);
 
 	return 0;
 err:
-	mutex_unlock(&tr->mutex);
+	trampoline_unlock(tr);
 
 	if (shim_link)
 		bpf_link_put(&shim_link->link.link);
@@ -1056,9 +1095,9 @@ void bpf_trampoline_unlink_cgroup_shim(struct bpf_prog *prog)
 	if (WARN_ON_ONCE(!tr))
 		return;
 
-	mutex_lock(&tr->mutex);
+	trampoline_lock(tr);
 	shim_link = cgroup_shim_find(tr, bpf_func);
-	mutex_unlock(&tr->mutex);
+	trampoline_unlock(tr);
 
 	if (shim_link)
 		bpf_link_put(&shim_link->link.link);
@@ -1076,14 +1115,14 @@ struct bpf_trampoline *bpf_trampoline_get(u64 key,
 	if (!tr)
 		return NULL;
 
-	mutex_lock(&tr->mutex);
+	trampoline_lock(tr);
 	if (tr->func.addr)
 		goto out;
 
 	memcpy(&tr->func.model, &tgt_info->fmodel, sizeof(tgt_info->fmodel));
 	tr->func.addr = (void *)tgt_info->tgt_addr;
 out:
-	mutex_unlock(&tr->mutex);
+	trampoline_unlock(tr);
 	return tr;
 }
 
@@ -1096,7 +1135,6 @@ void bpf_trampoline_put(struct bpf_trampoline *tr)
 	mutex_lock(&trampoline_mutex);
 	if (!refcount_dec_and_test(&tr->refcnt))
 		goto out;
-	WARN_ON_ONCE(mutex_is_locked(&tr->mutex));
 
 	for (i = 0; i < BPF_TRAMP_MAX; i++)
 		if (WARN_ON_ONCE(!hlist_empty(&tr->progs_hlist[i])))
@@ -1382,6 +1420,6 @@ static int __init init_trampolines(void)
 		INIT_HLIST_HEAD(&trampoline_key_table[i]);
 	for (i = 0; i < TRAMPOLINE_TABLE_SIZE; i++)
 		INIT_HLIST_HEAD(&trampoline_ip_table[i]);
-	return 0;
+	return trampoline_locks_init();
 }
 late_initcall(init_trampolines);
