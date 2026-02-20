@@ -3611,6 +3611,7 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 		if (prog->expected_attach_type != BPF_TRACE_FENTRY &&
 		    prog->expected_attach_type != BPF_TRACE_FEXIT &&
 		    prog->expected_attach_type != BPF_TRACE_FSESSION &&
+		    prog->expected_attach_type != BPF_TRACE_FSESSION_MULTI &&
 		    prog->expected_attach_type != BPF_TRACE_FENTRY_MULTI &&
 		    prog->expected_attach_type != BPF_TRACE_FEXIT_MULTI &&
 		    prog->expected_attach_type != BPF_MODIFY_RETURN) {
@@ -4390,6 +4391,7 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 	case BPF_TRACE_FENTRY:
 	case BPF_TRACE_FEXIT:
 	case BPF_TRACE_FSESSION:
+	case BPF_TRACE_FSESSION_MULTI:
 	case BPF_TRACE_FENTRY_MULTI:
 	case BPF_TRACE_FEXIT_MULTI:
 	case BPF_MODIFY_RETURN:
