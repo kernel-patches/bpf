@@ -52,6 +52,34 @@ static inline ssize_t sized_strscpy(char *dest, const char *src, size_t count)
 #undef strscpy /* Redefine the placeholder from tools/include/linux/string.h */
 #define strscpy sized_strscpy
 
+/*
+ * strscpy() analogue that concatenates multiple strings into a buffer
+ */
+static inline ssize_t sized_strscpy_cat(char *dest, size_t dest_sz,
+					const char * const *srcs, size_t n)
+{
+	ssize_t pos = 0;
+
+	if (dest_sz == 0)
+		return -E2BIG;
+
+	for (size_t i = 0; i < n; i++) {
+		ssize_t res = strscpy(dest + pos, srcs[i], dest_sz - pos);
+
+		if (res < 0)
+			return res;
+		pos += res;
+	}
+
+	return pos;
+}
+
+#define strscpy_cat(dest, count, ...)					\
+	sized_strscpy_cat(dest, count,					\
+			  (const char * const[]){ __VA_ARGS__ },	\
+			  ARRAY_SIZE(((const char * const[]){ __VA_ARGS__ })))
+
+
 #define __bpf_percpu_val_align	__attribute__((__aligned__(8)))
 
 #define BPF_DECLARE_PERCPU(type, name)				\
