@@ -28,6 +28,7 @@
 #define FASTCALL_DECL_TAG	"bpf_fastcall"
 
 #define MAX_ROOT_IDS		16
+#define MAX_BTF_FILES		64
 
 static const char * const btf_kind_str[NR_BTF_KINDS] = {
 	[BTF_KIND_UNKN]		= "UNKNOWN",
@@ -958,20 +959,127 @@ static int do_dump(int argc, char **argv)
 		NEXT_ARG();
 	} else if (is_prefix(src, "file")) {
 		const char sysfs_prefix[] = "/sys/kernel/btf/";
+		const char *files[MAX_BTF_FILES];
+		int nr_files = 0;
 
-		if (!base_btf &&
-		    strncmp(*argv, sysfs_prefix, sizeof(sysfs_prefix) - 1) == 0 &&
-		    strcmp(*argv, sysfs_vmlinux) != 0)
-			base = get_vmlinux_btf_from_sysfs();
-
-		btf = btf__parse_split(*argv, base ?: base_btf);
-		if (!btf) {
-			err = -errno;
-			p_err("failed to load BTF from %s: %s",
-			      *argv, strerror(errno));
-			goto done;
-		}
+		files[nr_files++] = *argv;
 		NEXT_ARG();
+
+		/* Collect additional file arguments. Use strcmp (exact match)
+		 * to avoid ambiguity with file paths that are prefixes of
+		 * "file" (e.g., "./f").
+		 */
+		while (argc && strcmp(*argv, "file") == 0) {
+			NEXT_ARG();
+			if (!REQ_ARGS(1)) {
+				err = -EINVAL;
+				goto done;
+			}
+			if (nr_files >= MAX_BTF_FILES) {
+				p_err("too many BTF files (max %d)",
+				      MAX_BTF_FILES);
+				err = -E2BIG;
+				goto done;
+			}
+			files[nr_files++] = *argv;
+			NEXT_ARG();
+		}
+
+		if (nr_files == 1) {
+			/* Single file — preserve existing behavior exactly */
+			if (!base_btf &&
+			    strncmp(files[0], sysfs_prefix,
+				    sizeof(sysfs_prefix) - 1) == 0 &&
+			    strcmp(files[0], sysfs_vmlinux) != 0)
+				base = get_vmlinux_btf_from_sysfs();
+
+			btf = btf__parse_split(files[0], base ?: base_btf);
+			if (!btf) {
+				err = -errno;
+				p_err("failed to load BTF from %s: %s",
+				      files[0], strerror(errno));
+				goto done;
+			}
+		} else {
+			struct btf *vmlinux_base = base_btf;
+			struct btf *combined, *mod;
+			int j, ret;
+
+			/* Auto-detect vmlinux base from sysfs if needed */
+			if (!vmlinux_base) {
+				for (j = 0; j < nr_files; j++) {
+					if (strncmp(files[j], sysfs_prefix,
+						    sizeof(sysfs_prefix) - 1) == 0 &&
+					    strcmp(files[j], sysfs_vmlinux) != 0) {
+						base = get_vmlinux_btf_from_sysfs();
+						vmlinux_base = base;
+						break;
+					}
+				}
+			}
+			if (!vmlinux_base) {
+				p_err("base BTF is required when merging multiple BTF files; use -B/--base-btf or use sysfs paths");
+				err = -EINVAL;
+				goto done;
+			}
+
+			/* Filter out vmlinux from the file list */
+			for (j = 0; j < nr_files; j++) {
+				if (strcmp(files[j], sysfs_vmlinux) == 0) {
+					p_info("skipping %s (already loaded as base)",
+					       sysfs_vmlinux);
+					memmove(&files[j], &files[j + 1],
+						(nr_files - j - 1) * sizeof(files[0]));
+					nr_files--;
+					j--;
+				}
+			}
+			if (nr_files == 0) {
+				p_err("no module BTF files to merge (all paths were vmlinux)");
+				err = -EINVAL;
+				goto done;
+			}
+
+			combined = btf__new_empty_split(vmlinux_base);
+			if (!combined) {
+				err = -errno;
+				p_err("failed to create combined BTF: %s",
+				      strerror(-err));
+				goto done;
+			}
+
+			for (j = 0; j < nr_files; j++) {
+				mod = btf__parse_split(files[j], vmlinux_base);
+				if (!mod) {
+					err = -errno;
+					p_err("failed to load BTF from %s: %s",
+					      files[j], strerror(-err));
+					btf__free(combined);
+					goto done;
+				}
+
+				ret = btf__add_btf(combined, mod);
+				btf__free(mod);
+				if (ret < 0) {
+					p_err("failed to merge BTF from %s: %s",
+					      files[j], strerror(-ret));
+					btf__free(combined);
+					err = ret;
+					goto done;
+				}
+			}
+
+			ret = btf__dedup(combined, NULL);
+			if (ret) {
+				p_err("failed to dedup combined BTF: %s",
+				      strerror(-ret));
+				btf__free(combined);
+				err = ret;
+				goto done;
+			}
+
+			btf = combined;
+		}
 	} else {
 		err = -1;
 		p_err("unrecognized BTF source specifier: '%s'", src);
@@ -1445,7 +1553,8 @@ static int do_help(int argc, char **argv)
 		"       %1$s %2$s dump BTF_SRC [format FORMAT] [root_id ROOT_ID]\n"
 		"       %1$s %2$s help\n"
 		"\n"
-		"       BTF_SRC := { id BTF_ID | prog PROG | map MAP [{key | value | kv | all}] | file FILE }\n"
+		"       BTF_SRC := { id BTF_ID | prog PROG | map MAP [{key | value | kv | all}] |\n"
+		"                    file FILE [file FILE]... }\n"
 		"       FORMAT  := { raw | c [unsorted] }\n"
 		"       " HELP_SPEC_MAP "\n"
 		"       " HELP_SPEC_PROGRAM "\n"
