@@ -12097,8 +12097,11 @@ static void __mark_btf_func_reg_size(struct bpf_verifier_env *env, struct bpf_re
 		/* Function return value */
 		reg->subreg_def = reg_size == sizeof(u64) ?
 			DEF_NOT_SUBREG : env->insn_idx + 1;
-	} else if (reg_size == sizeof(u64)) {
-		/* Function argument */
+	} else {
+		/*
+		 * Be more conservative and do zero extension for all arguments,
+		 * as how these arguments get used in kernel is anybody's guess.
+		 */
 		mark_insn_zext(env, reg);
 	}
 }
