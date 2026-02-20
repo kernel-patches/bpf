@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2025 Christian Brauner <brauner@kernel.org> */
 
+#include <linux/bpf_lsm.h>
 #include <linux/ns_common.h>
 #include <linux/nstree.h>
 #include <linux/proc_ns.h>
@@ -77,6 +78,7 @@ int __ns_common_init(struct ns_common *ns, u32 ns_type, const struct proc_ns_ope
 		ret = proc_alloc_inum(&ns->inum);
 	if (ret)
 		return ret;
+
 	/*
 	 * Tree ref starts at 0. It's incremented when namespace enters
 	 * active use (installed in nsproxy) and decremented when all
@@ -86,11 +88,16 @@ int __ns_common_init(struct ns_common *ns, u32 ns_type, const struct proc_ns_ope
 		atomic_set(&ns->__ns_ref_active, 1);
 	else
 		atomic_set(&ns->__ns_ref_active, 0);
-	return 0;
+
+	ret = bpf_lsm_namespace_alloc(ns);
+	if (ret && !inum)
+		proc_free_inum(ns->inum);
+	return ret;
 }
 
 void __ns_common_free(struct ns_common *ns)
 {
+	bpf_lsm_namespace_free(ns);
 	proc_free_inum(ns->inum);
 }
 

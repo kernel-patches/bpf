@@ -12,6 +12,9 @@
 #include <linux/bpf_verifier.h>
 #include <linux/lsm_hooks.h>
 
+struct ns_common;
+struct nsset;
+
 #ifdef CONFIG_BPF_LSM
 
 #define LSM_HOOK(RET, DEFAULT, NAME, ...) \
@@ -48,6 +51,11 @@ void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog, bpf_func_t *bpf_func)
 
 int bpf_lsm_get_retval_range(const struct bpf_prog *prog,
 			     struct bpf_retval_range *range);
+
+int bpf_lsm_namespace_alloc(struct ns_common *ns);
+void bpf_lsm_namespace_free(struct ns_common *ns);
+int bpf_lsm_namespace_install(struct nsset *nsset, struct ns_common *ns);
+
 int bpf_set_dentry_xattr_locked(struct dentry *dentry, const char *name__str,
 				const struct bpf_dynptr *value_p, int flags);
 int bpf_remove_dentry_xattr_locked(struct dentry *dentry, const char *name__str);
@@ -103,6 +111,19 @@ static inline int bpf_remove_dentry_xattr_locked(struct dentry *dentry, const ch
 static inline bool bpf_lsm_has_d_inode_locked(const struct bpf_prog *prog)
 {
 	return false;
+}
+
+static inline int bpf_lsm_namespace_alloc(struct ns_common *ns)
+{
+	return 0;
+}
+static inline void bpf_lsm_namespace_free(struct ns_common *ns)
+{
+}
+static inline int bpf_lsm_namespace_install(struct nsset *nsset,
+					    struct ns_common *ns)
+{
+	return 0;
 }
 #endif /* CONFIG_BPF_LSM */
 
