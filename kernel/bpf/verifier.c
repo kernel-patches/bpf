@@ -2452,8 +2452,13 @@ static void __reg32_deduce_bounds(struct bpf_reg_state *reg)
 		/* u64 to u32 casting preserves validity of low 32 bits as
 		 * a range, if upper 32 bits are the same
 		 */
-		reg->u32_min_value = max_t(u32, reg->u32_min_value, (u32)reg->umin_value);
-		reg->u32_max_value = min_t(u32, reg->u32_max_value, (u32)reg->umax_value);
+		u32 u32_min = max_t(u32, reg->u32_min_value, (u32)reg->umin_value);
+		u32 u32_max = min_t(u32, reg->u32_max_value, (u32)reg->umax_value);
+
+		if (u32_min <= u32_max) {
+			reg->u32_min_value = u32_min;
+			reg->u32_max_value = u32_max;
+		}
 
 		if ((s32)reg->umin_value <= (s32)reg->umax_value) {
 			reg->s32_min_value = max_t(s32, reg->s32_min_value, (s32)reg->umin_value);
@@ -2463,8 +2468,13 @@ static void __reg32_deduce_bounds(struct bpf_reg_state *reg)
 	if ((reg->smin_value >> 32) == (reg->smax_value >> 32)) {
 		/* low 32 bits should form a proper u32 range */
 		if ((u32)reg->smin_value <= (u32)reg->smax_value) {
-			reg->u32_min_value = max_t(u32, reg->u32_min_value, (u32)reg->smin_value);
-			reg->u32_max_value = min_t(u32, reg->u32_max_value, (u32)reg->smax_value);
+			u32 u32_min = max_t(u32, reg->u32_min_value, (u32)reg->smin_value);
+			u32 u32_max = min_t(u32, reg->u32_max_value, (u32)reg->smax_value);
+
+			if (u32_min <= u32_max) {
+				reg->u32_min_value = u32_min;
+				reg->u32_max_value = u32_max;
+			}
 		}
 		/* low 32 bits should form a proper s32 range */
 		if ((s32)reg->smin_value <= (s32)reg->smax_value) {
@@ -2507,8 +2517,13 @@ static void __reg32_deduce_bounds(struct bpf_reg_state *reg)
 	 * -3 s<= x s<= -1 implies 0xf...fd u<= x u<= 0xf...ff.
 	 */
 	if ((u32)reg->s32_min_value <= (u32)reg->s32_max_value) {
-		reg->u32_min_value = max_t(u32, reg->s32_min_value, reg->u32_min_value);
-		reg->u32_max_value = min_t(u32, reg->s32_max_value, reg->u32_max_value);
+		u32 u32_min = max_t(u32, reg->s32_min_value, reg->u32_min_value);
+		u32 u32_max = min_t(u32, reg->s32_max_value, reg->u32_max_value);
+
+		if (u32_min <= u32_max) {
+			reg->u32_min_value = u32_min;
+			reg->u32_max_value = u32_max;
+		}
 	}
 }
 
