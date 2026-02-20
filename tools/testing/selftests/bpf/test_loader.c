@@ -673,18 +673,18 @@ static int parse_test_spec(struct test_loader *tester,
 
 	if (spec->mode_mask & UNPRIV) {
 		int descr_len = strlen(description);
-		const char *suffix = " @unpriv";
+		static const char suffix[] = " @unpriv";
+		int name_len = descr_len + sizeof(suffix) + 1;
 		char *name;
 
-		name = malloc(descr_len + strlen(suffix) + 1);
+		name = malloc(name_len);
 		if (!name) {
 			PRINT_FAIL("failed to allocate memory for unpriv.name\n");
 			err = -ENOMEM;
 			goto cleanup;
 		}
 
-		strcpy(name, description);
-		strcpy(&name[descr_len], suffix);
+		strscpy_cat(name, name_len, description, suffix);
 		spec->unpriv.name = name;
 	}
 
