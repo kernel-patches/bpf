@@ -12,6 +12,17 @@
 static int detect_bpftool_path(char *buffer)
 {
 	char tmp[BPFTOOL_PATH_MAX_LEN];
+	const char *env_path;
+
+	/* First, check if BPFTOOL environment variable is set */
+	env_path = getenv("BPFTOOL");
+	if (env_path && access(env_path, X_OK) == 0) {
+		strscpy(buffer, env_path, size);
+		return 0;
+	} else if (env_path) {
+		fprintf(stderr, "bpftool '%s' doesn't exist or is not executable\n", env_path);
+		return 1;
+	}
 
 	/* Check default bpftool location (will work if we are running the
 	 * default flavor of test_progs)
@@ -31,7 +42,7 @@ static int detect_bpftool_path(char *buffer)
 		return 0;
 	}
 
-	/* Failed to find bpftool binary */
+	fprintf(stderr, "Failed to detect bpftool path, use BPFTOOL env var to override\n");
 	return 1;
 }
 
