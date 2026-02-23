@@ -70,6 +70,15 @@ struct io_uring {
 #define write_barrier()	__sync_synchronize()
 #endif
 
+static inline int io_uring_register(unsigned int fd, unsigned int opcode,
+				    const void *arg, unsigned int nr_args)
+{
+	int ret;
+
+	ret = syscall(__NR_io_uring_register, fd, opcode, arg, nr_args);
+	return (ret < 0) ? -errno : ret;
+}
+
 static inline int io_uring_mmap(int fd, struct io_uring_params *p,
 				struct io_uring_sq *sq, struct io_uring_cq *cq)
 {
@@ -280,11 +289,8 @@ static inline int io_uring_register_buffers(struct io_uring *ring,
 					    const struct iovec *iovecs,
 					    unsigned int nr_iovecs)
 {
-	int ret;
-
-	ret = syscall(__NR_io_uring_register, ring->ring_fd,
-		      IORING_REGISTER_BUFFERS, iovecs, nr_iovecs);
-	return (ret < 0) ? -errno : ret;
+	return io_uring_register(ring->ring_fd, IORING_REGISTER_BUFFERS,
+				 iovecs, nr_iovecs);
 }
 
 static inline void io_uring_prep_send(struct io_uring_sqe *sqe, int sockfd,
