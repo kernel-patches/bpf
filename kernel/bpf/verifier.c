@@ -16580,6 +16580,170 @@ static void find_good_pkt_pointers(struct bpf_verifier_state *vstate,
 	}));
 }
 
+/* Check if a register state's bounds in all domains (u64, s64, u32, s32, tnum)
+ * have some intersection. If the intersection is empty (e.g. u64 does not have
+ * any values common with s64), return false.
+ */
+static bool u64_s64_intersection(u64 umin, u64 umax, s64 smin, s64 smax)
+{
+	if ((u64)smin <= (u64)smax)
+		return !(((u64)smax < umin) || (umax < (u64)smin));
+	else
+		return !(((u64)smin > umax) && ((u64)smax < umin));
+}
+
+static bool u64_tnum_intersection(u64 umin, u64 umax, struct tnum t)
+{
+	u64 tmin = t.value;
+	u64 tmax = t.value | t.mask;
+
+	return !((tmin > umax) || (tmax < umin));
+}
+
+static bool s64_tnum_intersection(s64 smin, s64 smax, struct tnum t)
+{
+	if ((u64)smin <= (u64)smax)
+		return u64_tnum_intersection((u64)smin, (u64)smax, t);
+
+	return (u64_tnum_intersection((u64)smin, U64_MAX, t) ||
+			u64_tnum_intersection(0, (u64)smax, t));
+}
+
+static bool u32_s32_intersection(u32 u32_min, u32 u32_max, s32 s32_min, s32 s32_max)
+{
+	if ((u32)s32_min <= (u32)s32_max)
+		return !(((u32)s32_max < u32_min) || (u32_max < (u32)s32_min));
+	else
+		return !(((u32)s32_min > u32_max) && ((u32)s32_max < u32_min));
+}
+
+static bool u32_tnum_intersection(u32 u32_min, u32 u32_max, struct tnum t)
+{
+	struct tnum t32 = tnum_subreg(t);
+	u32 t32_min = t32.value;
+	u32 t32_max = t32.value | t32.mask;
+
+	return !((t32_min > u32_max) || (t32_max < u32_min));
+}
+
+static bool s32_tnum_intersection(s32 s32_min, s32 s32_max, struct tnum t)
+{
+	if ((u32)s32_min <= (u32)s32_max)
+		return u32_tnum_intersection((u32)s32_min, (u32)s32_max, t);
+
+	return (u32_tnum_intersection((u32)s32_min, U32_MAX, t) ||
+			u32_tnum_intersection(0, (u32)s32_max, t));
+}
+
+/* Check if a register state's bounds in all domains (u64, s64, u32, s32, tnum)
+ * have some intersection. If the intersection is empty (e.g. u64 does not have
+ * any values common with s64), return false.
+ */
+static bool do_reg_bounds_intersect(struct bpf_reg_state *reg)
+{
+
+	/* If the min > max, then the range itself is ill-formed, so
+	 * there can be no intersection across abstract values.
+	 */
+	if (range_bounds_violation(reg))
+			return false;
+
+	/* If the var_off is ill-formed, there can be no intersection across
+	 * abstract values.
+	 */
+	if ((reg->var_off.value & reg->var_off.mask) != 0)
+		return false;
+
+
+	/* Check consistency between different abstract domains.
+	 * If any pair of domains has no intersection, return false;
+	 */
+	if (!u64_s64_intersection(reg->umin_value, reg->umax_value,
+					reg->smin_value, reg->smax_value))
+		return false;
+
+	if (!u64_tnum_intersection(reg->umin_value, reg->umax_value, reg->var_off))
+		return false;
+
+	if (!s64_tnum_intersection(reg->smin_value, reg->smax_value, reg->var_off))
+		return false;
+
+	if (!u32_s32_intersection(reg->u32_min_value, reg->u32_max_value,
+					reg->s32_min_value, reg->s32_max_value))
+		return false;
+
+	if (!u32_tnum_intersection(reg->u32_min_value, reg->u32_max_value, reg->var_off))
+		return false;
+
+	if (!s32_tnum_intersection(reg->s32_min_value, reg->s32_max_value, reg->var_off))
+		return false;
+
+	return true;
+
+}
+
+static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
+				u8 opcode, bool is_jmp32);
+static u8 rev_opcode(u8 opcode);
+
+/* Learn more information about live branches by simulating both branches being
+ * taken using regs_refine_cond_op(). Because regs_refine_cond_op() is sound
+ * when the branch is taken, if it produces register bounds that have no
+ * intersection, it must mean that the branch is dead.
+ */
+static int simulate_both_branches_taken(struct bpf_reg_state *false_reg1,
+					struct bpf_reg_state *false_reg2,
+					u8 opcode, bool is_jmp32)
+{
+
+	struct bpf_reg_state false_reg1_c, false_reg2_c, true_reg1_c, true_reg2_c;
+	bool t1, t2, t1s, t2s, f1, f2, f1s, f2s;
+
+	/* Create copies of reg states to simulate both branches because
+	 * regs_refine_cond_op() will modify the reg states passed in.
+	 */
+	memcpy(&false_reg1_c, false_reg1, sizeof(struct bpf_reg_state));
+	memcpy(&false_reg2_c, false_reg2, sizeof(struct bpf_reg_state));
+	memcpy(&true_reg1_c, false_reg1, sizeof(struct bpf_reg_state));
+	memcpy(&true_reg2_c, false_reg2, sizeof(struct bpf_reg_state));
+
+	/* fallthrough (FALSE) branch */
+	regs_refine_cond_op(&false_reg1_c, &false_reg2_c, rev_opcode(opcode), is_jmp32);
+	f1 = do_reg_bounds_intersect(&false_reg1_c);
+	f2 = do_reg_bounds_intersect(&false_reg2_c);
+	reg_bounds_sync(&false_reg1_c);
+	reg_bounds_sync(&false_reg2_c);
+	f1s = do_reg_bounds_intersect(&false_reg1_c);
+	f2s = do_reg_bounds_intersect(&false_reg2_c);
+	if (!f1 || !f2 || !f1s || !f2s) {
+		/* If there is no intersection among *any pair* of abstract values in
+		 * either reg_states in the FALSE branch (i.e. false_reg1, false_reg2),
+		 * the FALSE branch must be dead. Only TRUE branch will be taken.
+		 */
+		return 1;
+	}
+
+	/* jump (TRUE) branch */
+	regs_refine_cond_op(&true_reg1_c, &true_reg2_c, opcode, is_jmp32);
+	t1 = do_reg_bounds_intersect(&true_reg1_c);
+	t2 = do_reg_bounds_intersect(&true_reg2_c);
+	reg_bounds_sync(&true_reg1_c);
+	reg_bounds_sync(&true_reg2_c);
+	t1s = do_reg_bounds_intersect(&true_reg1_c);
+	t2s = do_reg_bounds_intersect(&true_reg2_c);
+	if (!t1 || !t2 || !t1s || !t2s) {
+		/* If there is no intersection among *any pair* of abstract values in
+		 * either reg_states in the TRUE branch (i.e. true_reg1_c, true_reg2_c),
+		 * the TRUE branch must be dead. Only FALSE branch will be taken.
+		 */
+		return 0;
+	}
+
+	/* Both branches are possible, we can't determine which one will be taken.
+	 */
+	return -1;
+}
+
 /*
  * <reg1> <op> <reg2>, currently assuming reg2 is a constant
  */
@@ -16736,7 +16900,7 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 		break;
 	}
 
-	return -1;
+	return simulate_both_branches_taken(reg1, reg2, opcode, is_jmp32);
 }
 
 static int flip_opcode(u32 opcode)
