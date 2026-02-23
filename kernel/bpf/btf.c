@@ -8644,6 +8644,9 @@ static int btf_check_kfunc_protos(struct btf *btf, u32 func_id, u32 func_flags)
 			return err;
 	}
 
+	if ((func_flags & KF_FORBID_SLEEP) && !(func_flags & KF_ACQUIRE))
+		return -EINVAL;
+
 	return 0;
 }
 
