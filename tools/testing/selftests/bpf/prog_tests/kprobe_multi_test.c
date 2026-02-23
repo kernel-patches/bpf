@@ -8,6 +8,8 @@
 #include "kprobe_multi_override.skel.h"
 #include "kprobe_multi_session.skel.h"
 #include "kprobe_multi_session_cookie.skel.h"
+#include "kprobe_multi_session_syms.skel.h"
+#include "kprobe_multi_session_errors.skel.h"
 #include "kprobe_multi_verifier.skel.h"
 #include "kprobe_write_ctx.skel.h"
 #include "bpf/libbpf_internal.h"
@@ -400,6 +402,76 @@ cleanup:
 	kprobe_multi_session_cookie__destroy(skel);
 }
 
+static void test_session_syms_skel_api(void)
+{
+	struct kprobe_multi_session_syms *skel = NULL;
+
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	int err, prog_fd;
+
+	skel = kprobe_multi_session_syms__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "kprobe_multi_session_syms__open_and_load"))
+		return;
+
+	skel->bss->pid = getpid();
+
+	err = kprobe_multi_session_syms__attach(skel);
+	if (!ASSERT_OK(err, "kprobe_multi_session_syms__attach"))
+		goto cleanup;
+
+	prog_fd = bpf_program__fd(skel->progs.trigger);
+	err = bpf_prog_test_run_opts(prog_fd, &topts);
+	ASSERT_OK(err, "test_run");
+	ASSERT_EQ(topts.retval, 0, "test_run");
+
+	/* Test 1: Both entry and return should fire */
+	ASSERT_EQ(skel->bss->test1_count, 2, "test1_count");
+	ASSERT_TRUE(skel->bss->test1_return, "test1_return");
+
+cleanup:
+	kprobe_multi_session_syms__destroy(skel);
+}
+
+static void test_session_errors(void)
+{
+	struct kprobe_multi_session_errors *skel = NULL;
+	struct bpf_link *link_wildcard = NULL;
+	struct bpf_link *link_exact = NULL;
+	int err_wildcard, err_exact;
+
+	skel = kprobe_multi_session_errors__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "kprobe_multi_session_errors__open_and_load"))
+		return;
+
+	/*
+	 * Test error code consistency: both wildcard (slow path) and exact name
+	 * (fast path) should return the same error code (ENOENT) for non-existent
+	 * functions. This protects against future kernel changes that might alter
+	 * error return values.
+	 */
+
+	/* Try to attach with non-existent wildcard pattern (slow path) */
+	link_wildcard = bpf_program__attach(skel->progs.test_nonexistent_wildcard);
+	err_wildcard = -errno;
+	ASSERT_ERR_PTR(link_wildcard, "attach_nonexistent_wildcard");
+	ASSERT_EQ(err_wildcard, -ENOENT, "wildcard_error_enoent");
+
+	/* Try to attach with non-existent exact name (fast path) */
+	link_exact = bpf_program__attach(skel->progs.test_nonexistent_exact);
+	err_exact = -errno;
+	ASSERT_ERR_PTR(link_exact, "attach_nonexistent_exact");
+	ASSERT_EQ(err_exact, -ENOENT, "exact_error_enoent");
+
+	/*
+	 * Verify both paths return identical error codes - this is critical for
+	 * API consistency and prevents user code from breaking when switching
+	 * between wildcard patterns and exact function names.
+	 */
+	ASSERT_EQ(err_wildcard, err_exact, "error_consistency");
+
+	kprobe_multi_session_errors__destroy(skel);
+}
+
 static void test_unique_match(void)
 {
 	LIBBPF_OPTS(bpf_kprobe_multi_opts, opts);
@@ -645,6 +717,10 @@ void test_kprobe_multi_test(void)
 		test_session_skel_api();
 	if (test__start_subtest("session_cookie"))
 		test_session_cookie_skel_api();
+	if (test__start_subtest("session_syms"))
+		test_session_syms_skel_api();
+	if (test__start_subtest("session_errors"))
+		test_session_errors();
 	if (test__start_subtest("unique_match"))
 		test_unique_match();
 	if (test__start_subtest("attach_write_ctx"))
