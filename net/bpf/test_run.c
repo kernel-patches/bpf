@@ -24,6 +24,9 @@
 #include <net/netdev_rx_queue.h>
 #include <net/xdp.h>
 #include <net/netfilter/nf_bpf_link.h>
+#include <linux/set_memory.h>
+#include <linux/string.h>
+#include <asm/tlbflush.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/bpf_test_run.h>
@@ -563,6 +566,42 @@ noinline int bpf_fentry_test10(const void *a)
 	return (long)a;
 }
 
+struct bpf_fentry_test_pptr_t {
+	u32 value1;
+	u32 value2;
+};
+
+noinline int bpf_fentry_test11_pptr_nullable(struct bpf_fentry_test_pptr_t **pptr__nullable)
+{
+	if (!pptr__nullable)
+		return -1;
+
+	return (*pptr__nullable)->value1;
+}
+
+noinline u32 **bpf_fentry_test12_pptr(u32 id, u32 **pptr)
+{
+	/* prevent DCE */
+	asm volatile("" : "+r"(id));
+	asm volatile("" : "+r"(pptr));
+	return pptr;
+}
+
+noinline u8 bpf_fentry_test13_pptr(void **pptr)
+{
+	void *ptr;
+
+	return copy_from_kernel_nofault(&ptr, pptr, sizeof(pptr)) == 0;
+}
+
+/* Test the verifier can handle multi-level pointer types with qualifiers. */
+noinline void ***bpf_fentry_test14_ppptr(void **volatile *const ppptr)
+{
+	/* prevent DCE */
+	asm volatile("" :: "r"(ppptr) : "memory");
+	return (void ***)ppptr;
+}
+
 noinline void bpf_fentry_test_sinfo(struct skb_shared_info *sinfo)
 {
 }
@@ -670,20 +709,110 @@ static void *bpf_test_init(const union bpf_attr *kattr, u32 user_size,
 	return data;
 }
 
+static void *create_bad_kaddr(void)
+{
+	/*
+	 * Try to get an address that passes kernel range checks but causes
+	 * a page fault handler invocation if accessed from a BPF program.
+	 */
+#if defined(CONFIG_ARCH_HAS_SET_MEMORY) && defined(CONFIG_X86)
+	void *addr = vmalloc(PAGE_SIZE);
+
+	if (!addr)
+		return NULL;
+	/* Make it non-present - any access will fault */
+	if (set_memory_np((unsigned long)addr, 1)) {
+		vfree(addr);
+		return NULL;
+	}
+	return addr;
+#elif defined(CONFIG_ARCH_HAS_SET_DIRECT_MAP)
+	struct page *page = alloc_page(GFP_KERNEL);
+
+	if (!page)
+		return NULL;
+	/* Remove from direct map - any access will fault */
+	if (set_direct_map_invalid_noflush(page)) {
+		__free_page(page);
+		return NULL;
+	}
+	flush_tlb_kernel_range((unsigned long)page_address(page),
+			       (unsigned long)page_address(page) + PAGE_SIZE);
+	return page_address(page);
+#endif
+	return NULL;
+}
+
+static void free_bad_kaddr(void *addr)
+{
+	if (!addr)
+		return;
+
+	/*
+	 * Free an invalid test address created by create_bad_kaddr().
+	 * Restores the page to present state before freeing.
+	 */
+#if defined(CONFIG_ARCH_HAS_SET_MEMORY) && defined(CONFIG_X86)
+	set_memory_p((unsigned long)addr, 1);
+	vfree(addr);
+#elif defined(CONFIG_ARCH_HAS_SET_DIRECT_MAP)
+	struct page *page = virt_to_page(addr);
+
+	set_direct_map_default_noflush(page);
+	flush_tlb_kernel_range((unsigned long)addr,
+			       (unsigned long)addr + PAGE_SIZE);
+	__free_page(page);
+#endif
+}
+
+#define CONSUME(val) do { \
+	typeof(val) __var = (val); \
+	__asm__ __volatile__("" : "+r" (__var)); \
+	(void)__var; \
+} while (0)
+
 int bpf_prog_test_run_tracing(struct bpf_prog *prog,
 			      const union bpf_attr *kattr,
 			      union bpf_attr __user *uattr)
 {
 	struct bpf_fentry_test_t arg = {};
+	struct bpf_fentry_test_pptr_t ts = { .value1 = 1979, .value2 = 2026 };
+	struct bpf_fentry_test_pptr_t *ptr = &ts;
+	void *kaddr = NULL;
+	u32 *u32_ptr = (u32 *)29;
 	u16 side_effect = 0, ret = 0;
 	int b = 2, err = -EFAULT;
 	u32 retval = 0;
+	const char *attach_name;
 
 	if (kattr->test.flags || kattr->test.cpu || kattr->test.batch_size)
 		return -EINVAL;
 
+	attach_name = prog->aux->attach_func_name;
+	if (!attach_name)
+		attach_name = "!";
+
 	switch (prog->expected_attach_type) {
 	case BPF_TRACE_FENTRY:
+		if (!strcmp(attach_name, "bpf_fentry_test11_pptr_nullable")) {
+			CONSUME(bpf_fentry_test11_pptr_nullable(&ptr));
+			break;
+		} else if (!strcmp(attach_name, "bpf_fentry_test12_pptr")) {
+			CONSUME(bpf_fentry_test12_pptr(0, &u32_ptr));
+			CONSUME(bpf_fentry_test12_pptr(1, (u32 **)17));
+			break;
+		} else if (!strcmp(attach_name, "bpf_fentry_test13_pptr")) {
+			/* If kaddr is NULL, the test handles this gracefully. */
+			kaddr = create_bad_kaddr();
+			CONSUME(bpf_fentry_test13_pptr(kaddr));
+			CONSUME(bpf_fentry_test13_pptr((void **)19));
+			CONSUME(bpf_fentry_test13_pptr(ERR_PTR(-ENOMEM)));
+			break;
+		} else if (!strcmp(attach_name, "bpf_fentry_test14_ppptr")) {
+			CONSUME(bpf_fentry_test14_ppptr(ERR_PTR(-ENOMEM)));
+			break;
+		}
+		fallthrough;
 	case BPF_TRACE_FEXIT:
 	case BPF_TRACE_FSESSION:
 		if (bpf_fentry_test1(1) != 2 ||
@@ -717,6 +846,7 @@ int bpf_prog_test_run_tracing(struct bpf_prog *prog,
 
 	err = 0;
 out:
+	free_bad_kaddr(kaddr);
 	trace_bpf_test_finish(&err);
 	return err;
 }
