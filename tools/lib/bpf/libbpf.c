@@ -12192,7 +12192,7 @@ static int attach_kprobe_session(const struct bpf_program *prog, long cookie,
 {
 	LIBBPF_OPTS(bpf_kprobe_multi_opts, opts, .session = true);
 	const char *spec;
-	char *pattern;
+	char *func_name;
 	int n;
 
 	*link = NULL;
@@ -12202,14 +12202,36 @@ static int attach_kprobe_session(const struct bpf_program *prog, long cookie,
 		return 0;
 
 	spec = prog->sec_name + sizeof("kprobe.session/") - 1;
-	n = sscanf(spec, "%m[a-zA-Z0-9_.*?]", &pattern);
+	n = sscanf(spec, "%m[a-zA-Z0-9_.*?]", &func_name);
 	if (n < 1) {
-		pr_warn("kprobe session pattern is invalid: %s\n", spec);
+		pr_warn("kprobe session function name is invalid: %s\n", spec);
 		return -EINVAL;
 	}
 
-	*link = bpf_program__attach_kprobe_multi_opts(prog, pattern, &opts);
-	free(pattern);
+	/* Check if pattern contains wildcards */
+	if (strpbrk(func_name, "*?")) {
+		/* Wildcard pattern - use pattern matching path with kallsyms parsing */
+		*link = bpf_program__attach_kprobe_multi_opts(prog, func_name, &opts);
+	} else {
+		/* Exact function name - use syms array path (fast, no kallsyms parsing) */
+		const char *syms[1];
+
+		syms[0] = func_name;
+		opts.syms = syms;
+		opts.cnt = 1;
+		*link = bpf_program__attach_kprobe_multi_opts(prog, NULL, &opts);
+		if (!*link && errno == ESRCH) {
+			/*
+			 * Normalize error code for API consistency: fast path returns ESRCH
+			 * from kernel's ftrace_lookup_symbols(), while slow path returns ENOENT
+			 * from userspace kallsyms parsing. Convert ESRCH to ENOENT so both paths
+			 * return the same error for "symbol not found".
+			 */
+			errno = ENOENT;
+		}
+	}
+
+	free(func_name);
 	return *link ? 0 : -errno;
 }
 
