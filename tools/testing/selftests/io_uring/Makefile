@@ -3,7 +3,7 @@ include ../../../build/Build.include
 include ../../../scripts/Makefile.arch
 include ../../../scripts/Makefile.include
 
-TEST_GEN_PROGS := nops_loop overflow
+TEST_GEN_PROGS := nops_loop overflow unreg
 
 # override lib.mk's default rules
 OVERRIDE_TARGETS := 1

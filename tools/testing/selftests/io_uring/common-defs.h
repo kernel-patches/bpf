@@ -24,4 +24,8 @@ struct nops_state {
 	int		reqs_left;
 };
 
+struct unreg_state {
+	unsigned	times_invoked;
+};
+
 #endif /* IOU_TOOLS_COMMON_DEFS_H */
