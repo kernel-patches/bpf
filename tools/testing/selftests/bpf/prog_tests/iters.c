@@ -21,6 +21,7 @@
 #include "iters_css_task.skel.h"
 #include "iters_css.skel.h"
 #include "iters_task_failure.skel.h"
+#include "iters_task_vma_nosleep.skel.h"
 
 static void subtest_num_iters(void)
 {
@@ -151,6 +152,17 @@ static void subtest_task_vma_iters(void)
 
 	if (!ASSERT_EQ(skel->bss->vmas_seen, seen, "vmas_seen_eq"))
 		goto cleanup;
+
+	/* Test release+sleepable: trigger the release_and_copy program */
+	skel->bss->release_vmas_seen = 0;
+	err = iters_task_vma__attach(skel);
+	if (!ASSERT_OK(err, "skel_reattach"))
+		goto cleanup;
+
+	getpgid(skel->bss->target_pid);
+	iters_task_vma__detach(skel);
+
+	ASSERT_GT(skel->bss->release_vmas_seen, 0, "release_vmas_seen_gt_zero");
 
 cleanup:
 	if (f)
@@ -322,4 +334,5 @@ void test_iters(void)
 	if (test__start_subtest("css"))
 		subtest_css_iters();
 	RUN_TESTS(iters_task_failure);
+	RUN_TESTS(iters_task_vma_nosleep);
 }
