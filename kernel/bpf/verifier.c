@@ -277,8 +277,15 @@ struct bpf_map_desc {
 	int uid;
 };
 
+struct bpf_dynptr_desc {
+	enum bpf_dynptr_type type;
+	u32 id;
+	u32 ref_obj_id;
+};
+
 struct bpf_call_arg_meta {
 	struct bpf_map_desc map;
+	struct bpf_dynptr_desc initialized_dynptr;
 	bool raw_mode;
 	bool pkt_access;
 	u8 release_regno;
@@ -287,7 +294,6 @@ struct bpf_call_arg_meta {
 	int mem_size;
 	u64 msize_max_value;
 	int ref_obj_id;
-	int dynptr_id;
 	int func_id;
 	struct btf *btf;
 	u32 btf_id;
@@ -347,15 +353,11 @@ struct bpf_kfunc_call_arg_meta {
 		struct btf_field *field;
 	} arg_rbtree_root;
 	struct {
-		enum bpf_dynptr_type type;
-		u32 id;
-		u32 ref_obj_id;
-	} initialized_dynptr;
-	struct {
 		u8 spi;
 		u8 frameno;
 	} iter;
 	struct bpf_map_desc map;
+	struct bpf_dynptr_desc initialized_dynptr;
 	u64 mem_size;
 };
 
@@ -11776,12 +11778,11 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		if (!reg)
 			return -EFAULT;
 
-
-		if (meta.dynptr_id) {
+		if (meta.initialized_dynptr.id) {
 			verifier_bug(env, "meta.dynptr_id already set");
 			return -EFAULT;
 		}
-		if (meta.ref_obj_id) {
+		if (meta.initialized_dynptr.ref_obj_id) {
 			verifier_bug(env, "meta.ref_obj_id already set");
 			return -EFAULT;
 		}
@@ -11798,8 +11799,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 			return ref_obj_id;
 		}
 
-		meta.dynptr_id = id;
-		meta.ref_obj_id = ref_obj_id;
+		meta.initialized_dynptr.id = id;
+		meta.initialized_dynptr.ref_obj_id = ref_obj_id;
 
 		break;
 	}
@@ -12003,10 +12004,10 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		return -EFAULT;
 	}
 
-	if (is_dynptr_ref_function(func_id))
-		regs[BPF_REG_0].dynptr_id = meta.dynptr_id;
-
-	if (is_ptr_cast_function(func_id) || is_dynptr_ref_function(func_id)) {
+	if (is_dynptr_ref_function(func_id)) {
+		regs[BPF_REG_0].dynptr_id = meta.initialized_dynptr.id;
+		regs[BPF_REG_0].ref_obj_id = meta.initialized_dynptr.ref_obj_id;
+	} else if (is_ptr_cast_function(func_id)) {
 		/* For release_reference() */
 		regs[BPF_REG_0].ref_obj_id = meta.ref_obj_id;
 	} else if (is_acquire_function(func_id, meta.map.ptr)) {
