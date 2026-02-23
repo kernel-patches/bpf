@@ -879,6 +879,16 @@ __bpf_kfunc struct vm_area_struct *bpf_iter_task_vma_next(struct bpf_iter_task_v
 	return vma;
 }
 
+__bpf_kfunc void bpf_iter_task_vma_release(struct bpf_iter_task_vma *it__iter)
+{
+	struct bpf_iter_task_vma_kern *kit = (void *)it__iter;
+
+	if (kit->data && kit->data->locked) {
+		bpf_mmap_unlock_mm(kit->data->work, kit->data->mm);
+		kit->data->locked = false;
+	}
+}
+
 __bpf_kfunc void bpf_iter_task_vma_destroy(struct bpf_iter_task_vma *it)
 {
 	struct bpf_iter_task_vma_kern *kit = (void *)it;
