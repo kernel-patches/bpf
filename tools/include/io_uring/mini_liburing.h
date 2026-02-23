@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 
+#ifndef IOU_TOOLS_MINI_LIBURING_H
+#define IOU_TOOLS_MINI_LIBURING_H
+
 #include <linux/io_uring.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
@@ -309,3 +312,5 @@ static inline void io_uring_cqe_seen(struct io_uring *ring)
 	*(&ring->cq)->khead += 1;
 	write_barrier();
 }
+
+#endif /* IOU_TOOLS_MINI_LIBURING_H */
