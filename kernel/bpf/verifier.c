@@ -1038,6 +1038,7 @@ static void __mark_reg_known_zero(struct bpf_reg_state *reg);
 static bool in_rcu_cs(struct bpf_verifier_env *env);
 
 static bool is_kfunc_rcu_protected(struct bpf_kfunc_call_arg_meta *meta);
+static bool is_kfunc_release(struct bpf_kfunc_call_arg_meta *meta);
 
 static int mark_stack_slots_iter(struct bpf_verifier_env *env,
 				 struct bpf_kfunc_call_arg_meta *meta,
@@ -1083,6 +1084,23 @@ static int mark_stack_slots_iter(struct bpf_verifier_env *env,
 	return 0;
 }
 
+/*
+ * Release the acquired reference tracked by iter_st->id, if any.
+ * Used during auto-release in _next, DRAINED handling, and _destroy.
+ */
+static int iter_release_acquired_ref(struct bpf_verifier_env *env,
+				     struct bpf_reg_state *iter_st)
+{
+	int err;
+
+	if (!iter_st->id)
+		return 0;
+	err = release_reference(env, iter_st->id);
+	if (!err)
+		iter_st->id = 0;
+	return err;
+}
+
 static int unmark_stack_slots_iter(struct bpf_verifier_env *env,
 				   struct bpf_reg_state *reg, int nr_slots)
 {
@@ -1097,8 +1115,14 @@ static int unmark_stack_slots_iter(struct bpf_verifier_env *env,
 		struct bpf_stack_state *slot = &state->stack[spi - i];
 		struct bpf_reg_state *st = &slot->spilled_ptr;
 
-		if (i == 0)
+		if (i == 0) {
+			/*
+			 * Release any outstanding acquired ref tracked by st->id
+			 * before releasing the iterator's own ref.
+			 */
+			WARN_ON_ONCE(iter_release_acquired_ref(env, st));
 			WARN_ON_ONCE(release_reference(env, st->ref_obj_id));
+		}
 
 		__mark_reg_not_init(env, st);
 
@@ -8943,6 +8967,8 @@ static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_id
 		/* remember meta->iter info for process_iter_next_call() */
 		meta->iter.spi = spi;
 		meta->iter.frameno = reg->frameno;
+		if (is_kfunc_release(meta))
+			meta->release_regno = regno;
 		meta->ref_obj_id = iter_ref_obj_id(env, reg, spi);
 
 		if (is_iter_destroy_kfunc(meta)) {
@@ -9178,8 +9204,11 @@ static int process_iter_next_call(struct bpf_verifier_env *env, int insn_idx,
 	/* mark current iter state as drained and assume returned NULL */
 	cur_iter->iter.state = BPF_ITER_STATE_DRAINED;
 	__mark_reg_const_zero(env, &cur_fr->regs[BPF_REG_0]);
-
-	return 0;
+	/*
+	 * If _next acquired a ref (KF_ACQUIRE), release it in the DRAINED branch since NULL
+	 * was returned.
+	 */
+	return iter_release_acquired_ref(env, cur_iter);
 }
 
 static bool arg_type_is_mem_size(enum bpf_arg_type type)
@@ -14197,6 +14226,17 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 		if (meta.initialized_dynptr.ref_obj_id) {
 			err = unmark_stack_slots_dynptr(env, reg);
+		} else if (base_type(reg->type) == PTR_TO_STACK) {
+			struct bpf_reg_state *iter_st;
+
+			iter_st = get_iter_from_state(env->cur_state, &meta);
+			if (!iter_st->id) {
+				verbose(env, "no acquired reference to release\n");
+				return -EINVAL;
+			}
+			err = release_reference(env, iter_st->id);
+			if (!err)
+				iter_st->id = 0;
 		} else {
 			err = release_reference(env, reg->ref_obj_id);
 			if (err)
@@ -14274,6 +14314,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			__mark_reg_const_zero(env, &regs[BPF_REG_0]);
 		mark_btf_func_reg_size(env, BPF_REG_0, t->size);
 	} else if (btf_type_is_ptr(t)) {
+		struct bpf_reg_state *iter_acquire_st = NULL;
+
 		ptr_type = btf_type_skip_modifiers(desc_btf, t->type, &ptr_type_id);
 		err = check_special_kfunc(env, &meta, regs, insn_aux, ptr_type, desc_btf);
 		if (err) {
@@ -14356,6 +14398,16 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			regs[BPF_REG_0].id = ++env->id_gen;
 		}
 		mark_btf_func_reg_size(env, BPF_REG_0, sizeof(void *));
+		/*
+		 * For iterators with KF_ACQUIRE, auto-release the previous iteration's ref before
+		 * acquiring a new one, and after acquisition track the new ref on the iter slot.
+		 */
+		if (is_iter_next_kfunc(&meta) && is_kfunc_acquire(&meta)) {
+			iter_acquire_st = get_iter_from_state(env->cur_state, &meta);
+			err = iter_release_acquired_ref(env, iter_acquire_st);
+			if (err)
+				return err;
+		}
 		if (is_kfunc_acquire(&meta)) {
 			int id = acquire_reference(env, insn_idx);
 
@@ -14367,6 +14419,9 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		} else if (is_rbtree_node_type(ptr_type) || is_list_node_type(ptr_type)) {
 			ref_set_non_owning(env, &regs[BPF_REG_0]);
 		}
+
+		if (iter_acquire_st)
+			iter_acquire_st->id = regs[BPF_REG_0].ref_obj_id;
 
 		if (reg_may_point_to_spin_lock(&regs[BPF_REG_0]) && !regs[BPF_REG_0].id)
 			regs[BPF_REG_0].id = ++env->id_gen;
