@@ -2480,8 +2480,8 @@ struct bpf_tramp_jit {
 	int ip_off;		/* For bpf_get_func_ip(), has to be at
 				 * (ctx - 16)
 				 */
-	int arg_cnt_off;	/* For bpf_get_func_arg_cnt(), has to be at
-				 * (ctx - 8)
+	int func_meta_off;	/* For bpf_get_func_arg_cnt()/fsession, has
+				 * to be at (ctx - 8)
 				 */
 	int bpf_args_off;	/* Offset of BPF_PROG context, which consists
 				 * of BPF arguments followed by return value
@@ -2585,6 +2585,28 @@ static int invoke_bpf_prog(struct bpf_tramp_jit *tjit,
 	return 0;
 }
 
+static int invoke_bpf(struct bpf_tramp_jit *tjit,
+		      const struct btf_func_model *m,
+		      struct bpf_tramp_links *tl, bool save_ret,
+		      u64 func_meta, int cookie_off)
+{
+	int i, cur_cookie = (tjit->bpf_args_off - cookie_off) / sizeof(u64);
+	struct bpf_jit *jit = &tjit->common;
+
+	for (i = 0; i < tl->nr_links; i++) {
+		if (bpf_prog_calls_session_cookie(tl->links[i])) {
+			u64 meta = func_meta | ((u64)cur_cookie << BPF_TRAMP_COOKIE_INDEX_SHIFT);
+
+			emit_store_stack_imm64(jit, REG_0, tjit->func_meta_off, meta);
+			cur_cookie--;
+		}
+		if (invoke_bpf_prog(tjit, m, tl->links[i], save_ret))
+			return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int alloc_stack(struct bpf_tramp_jit *tjit, size_t size)
 {
 	int stack_offset = tjit->stack_size;
@@ -2614,8 +2636,10 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	struct bpf_tramp_links *fentry = &tlinks[BPF_TRAMP_FENTRY];
 	struct bpf_tramp_links *fexit = &tlinks[BPF_TRAMP_FEXIT];
 	int nr_bpf_args, nr_reg_args, nr_stack_args;
+	int cookie_cnt, cookie_off, fsession_cnt;
 	struct bpf_jit *jit = &tjit->common;
 	int arg, bpf_arg_off;
+	u64 func_meta;
 	int i, j;
 
 	/* Support as many stack arguments as "mvc" instruction can handle. */
@@ -2647,6 +2671,9 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 			return -ENOTSUPP;
 	}
 
+	cookie_cnt = bpf_fsession_cookie_cnt(tlinks);
+	fsession_cnt = bpf_fsession_cnt(tlinks);
+
 	/*
 	 * Calculate the stack layout.
 	 */
@@ -2659,8 +2686,9 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	tjit->backchain_off = tjit->stack_size - sizeof(u64);
 	tjit->stack_args_off = alloc_stack(tjit, nr_stack_args * sizeof(u64));
 	tjit->reg_args_off = alloc_stack(tjit, nr_reg_args * sizeof(u64));
+	cookie_off = alloc_stack(tjit, cookie_cnt * sizeof(u64));
 	tjit->ip_off = alloc_stack(tjit, sizeof(u64));
-	tjit->arg_cnt_off = alloc_stack(tjit, sizeof(u64));
+	tjit->func_meta_off = alloc_stack(tjit, sizeof(u64));
 	tjit->bpf_args_off = alloc_stack(tjit, nr_bpf_args * sizeof(u64));
 	tjit->retval_off = alloc_stack(tjit, sizeof(u64));
 	tjit->r7_r8_off = alloc_stack(tjit, 2 * sizeof(u64));
@@ -2749,7 +2777,8 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 
 	if (flags & BPF_TRAMP_F_IP_ARG)
 		emit_store_stack_imm64(jit, REG_0, tjit->ip_off, (u64)func_addr);
-	emit_store_stack_imm64(jit, REG_0, tjit->arg_cnt_off, nr_bpf_args);
+	func_meta = nr_bpf_args;
+	emit_store_stack_imm64(jit, REG_0, tjit->func_meta_off, func_meta);
 
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
 		/*
@@ -2762,10 +2791,19 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 		EMIT6_PCREL_RILB_PTR(0xc0050000, REG_14, __bpf_tramp_enter);
 	}
 
-	for (i = 0; i < fentry->nr_links; i++)
-		if (invoke_bpf_prog(tjit, m, fentry->links[i],
-				    flags & BPF_TRAMP_F_RET_FENTRY_RET))
+	if (fsession_cnt) {
+		/* clear all the session cookies' value */
+		for (i = 0; i < cookie_cnt; i++)
+			emit_store_stack_imm64(jit, REG_0, cookie_off + 8 * i, 0);
+		/* clear the return value to make sure fentry always gets 0 */
+		emit_store_stack_imm64(jit, REG_0, tjit->retval_off, 0);
+	}
+
+	if (fentry->nr_links) {
+		if (invoke_bpf(tjit, m, fentry, flags & BPF_TRAMP_F_RET_FENTRY_RET,
+			       func_meta, cookie_off))
 			return -EINVAL;
+	}
 
 	if (fmod_ret->nr_links) {
 		/*
@@ -2842,11 +2880,18 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 		EMIT6_PCREL_RILC(0xc0040000, 0, (u64)im->ip_epilogue);
 	}
 
+	/* set the "is_return" flag for fsession */
+	func_meta |= (1ULL << BPF_TRAMP_IS_RETURN_SHIFT);
+	if (fsession_cnt)
+		emit_store_stack_imm64(jit, REG_W0, tjit->func_meta_off,
+				       func_meta);
+
 	/* do_fexit: */
 	tjit->do_fexit = jit->prg;
-	for (i = 0; i < fexit->nr_links; i++)
-		if (invoke_bpf_prog(tjit, m, fexit->links[i], false))
+	if (fexit->nr_links) {
+		if (invoke_bpf(tjit, m, fexit, false, func_meta, cookie_off))
 			return -EINVAL;
+	}
 
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
 		im->ip_epilogue = jit->prg_buf + jit->prg;
@@ -2947,6 +2992,11 @@ bool bpf_jit_supports_subprog_tailcalls(void)
 }
 
 bool bpf_jit_supports_arena(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_fsession(void)
 {
 	return true;
 }
