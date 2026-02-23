@@ -760,6 +760,21 @@ const struct btf_type *btf_type_resolve_func_ptr(const struct btf *btf,
 	return NULL;
 }
 
+static bool is_multilevel_ptr(const struct btf *btf, const struct btf_type *t)
+{
+	u32 depth = 0;
+
+	if (!btf_type_is_ptr(t))
+		return false;
+
+	do {
+		depth += 1;
+		t = btf_type_skip_modifiers(btf, t->type, NULL);
+	} while (btf_type_is_ptr(t) && depth < 2);
+
+	return depth > 1;
+}
+
 /* Types that act only as a source, not sink or intermediate
  * type when resolving.
  */
@@ -6905,8 +6920,11 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 	/*
 	 * If it's a pointer to void, it's the same as scalar from the verifier
 	 * safety POV. Either way, no futher pointer walking is allowed.
+	 * Multilevel pointers (e.g., int**, struct foo**, char***) of any type
+	 * are treated as scalars because the verifier lacks the context to infer
+	 * the size of their target memory regions.
 	 */
-	if (is_void_or_int_ptr(btf, t))
+	if (is_void_or_int_ptr(btf, t) || is_multilevel_ptr(btf, t))
 		return true;
 
 	/* this is a pointer to another type */
