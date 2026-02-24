@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": ["Bash", "Edit", "MultiEdit", "Write", "WebFetch", "mcp__semcode__*", "mcp__github_ci__*"],
+    "deny": ["mcp__github__*"],
+    "defaultMode": "acceptEdits"
+  }
+}
