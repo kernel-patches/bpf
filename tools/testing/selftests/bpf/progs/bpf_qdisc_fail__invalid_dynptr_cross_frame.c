@@ -8,7 +8,7 @@ char _license[] SEC("license") = "GPL";
 
 int proto;
 
-static int free_skb(struct sk_buff *skb)
+static __noinline int free_skb(struct sk_buff *skb)
 {
 	bpf_kfree_skb(skb);
 	return 0;
