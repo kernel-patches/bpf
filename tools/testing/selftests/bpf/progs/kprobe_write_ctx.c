@@ -13,6 +13,12 @@ int kprobe_write_ctx(struct pt_regs *ctx)
 	return 0;
 }
 
+SEC("kprobe")
+int kprobe_read_ctx(struct pt_regs *ctx)
+{
+	return 0;
+}
+
 SEC("kprobe.multi")
 int kprobe_multi_write_ctx(struct pt_regs *ctx)
 {
