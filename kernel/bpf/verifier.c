@@ -14409,6 +14409,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 	if (meta.func_id == special_kfunc_list[KF_bpf_session_cookie])
 		env->prog->call_session_cookie = true;
+	if (meta.func_id == special_kfunc_list[KF_bpf_session_is_return])
+		env->prog->aux->call_session_is_return = true;
 
 	return 0;
 }
