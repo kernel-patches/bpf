@@ -1,0 +1,140 @@
+name: Claude Code
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+  pull-requests: write
+
+on:
+  pull_request:
+    types: [opened, reopened, review_requested]
+
+
+jobs:
+  get-commits:
+    # This codition is an indicator that we are running in a context of PR owned by kernel-patches org
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      commits: ${{ steps.get-commits.outputs.commits }}
+    steps:
+
+      - name: Download Linux source tree
+        uses: libbpf/ci/get-linux-source@v3
+        with:
+          repo: ${{ github.event.pull_request.head.repo.clone_url }}
+          rev: ${{ github.event.pull_request.head.sha }}
+          dest: .kernel
+        env:
+          FETCH_DEPTH: 100
+
+      # Get the list of commits and trigger a review job for each separate commit
+      # As a safeguard, check no more than the first 50 commits
+      - name: Get PR commits
+        id: get-commits
+        run: |
+          cd .kernel
+          tmp=$(mktemp)
+          git rev-list ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | head -n 50 > pr_commits.txt
+          cat pr_commits.txt | jq -R -s -c 'split("\n")[:-1]' > $tmp
+          echo "commits=$(cat $tmp)" >> $GITHUB_OUTPUT
+
+  claude:
+    runs-on: ubuntu-latest
+    needs: get-commits
+    strategy:
+      matrix:
+        commit: ${{ fromJson(needs.get-commits.outputs.commits) }}
+      fail-fast: false
+    steps:
+      - name: Checkout CI code
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            .github
+            ci
+
+
+      - name: Download Linux source tree
+        uses: libbpf/ci/get-linux-source@v3
+        with:
+          repo: ${{ github.event.pull_request.head.repo.clone_url }}
+          rev: ${{ github.event.pull_request.head.sha }}
+          dest: .kernel
+        env:
+          FETCH_DEPTH: 100
+
+      # This manipulation is necessary to make sure that
+      # ${{ github.workspace }} is the root of the Linux git repo
+      - name: Move linux source in place
+        shell: bash
+        run: |
+          rm -rf .git .github ci
+          cd .kernel
+          mv -t .. $(ls -A)
+          cd ..
+          rmdir .kernel
+
+      - name: Checkout target commit
+        shell: bash
+        run: |
+          git checkout -b patch-series.local
+          git checkout ${{ matrix.commit }}
+
+      - name: Get patch subject
+        id: get-patch-subject
+        shell: bash
+        run: |
+          subject=$(git log -1 --pretty=format:"%s" ${{ matrix.commit }})
+          echo "subject=$subject" >> $GITHUB_OUTPUT
+
+      - name: Checkout prompts repo
+        uses: actions/checkout@v5
+        with:
+          repository: 'masoncl/review-prompts'
+          path: 'review'
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          show_full_output: true
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--max-turns 100 --model claude-opus-4-5-20251101'
+          prompt: |
+            Current directory is the root of a Linux Kernel git repository.
+
+            Read the prompt review/review-core.md
+
+            Using the prompt, do a deep dive regression analysis of the HEAD commit.
+
+            Use commit range ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} for the false-positive-guide.md section.
+
+      # If Claude produced review-inline.txt then it found something
+      # Post a comment on PR and fail the job
+      - name: Check review-inline.txt
+        id: check_review
+        shell: bash
+        run: |
+          review_file=$(find ${{ github.workspace }} -name review-inline.txt)
+          if [ -s "$review_file" ]; then
+              cat $review_file || true
+              echo "review_file=$review_file" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Comment on PR
+        if: steps.check_review.outputs.review_file != ''
+        uses: actions/github-script@v8
+        env:
+          REVIEW_FILE: ${{ steps.check_review.outputs.review_file }}
+          PATCH_SUBJECT: ${{ steps.get-patch-subject.outputs.subject }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const commentScript = require('./ci/claude/post-pr-comment.js');
+            await commentScript({github, context});
+
+      - name: Fail CI job if review file exists
+        if: steps.check_review.outputs.review_file != ''
+        run: |
+          echo "Review file found - failing the CI job"
+          exit 42
