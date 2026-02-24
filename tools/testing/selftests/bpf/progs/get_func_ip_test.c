@@ -32,6 +32,12 @@ int BPF_PROG(test1, int a)
 	return 0;
 }
 
+SEC("fentry/bpf_fentry_test1")
+int BPF_PROG(test1_dummy, int a)
+{
+	return 0;
+}
+
 __u64 test2_result = 0;
 SEC("fexit/bpf_fentry_test2")
 int BPF_PROG(test2, int a)
