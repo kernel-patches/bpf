@@ -1,0 +1,242 @@
+name: BPF CI Bot
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+  pull-requests: write
+  actions: read
+
+on:
+  schedule:
+    - cron: '0 12 * * 1,3,5'  # Mon/Wed/Fri at ~4am Pacific Time
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/ai-agent.yml
+      - ci/claude/bpf-ci-agent.md
+
+concurrency:
+  group: bpf-ci-bot
+  cancel-in-progress: false
+
+jobs:
+  agent-run:
+    if: ${{ github.repository == 'kernel-patches/vmtest' && vars.AWS_REGION }}
+    runs-on:
+      - ${{ format('codebuild-bpf-ci-{0}-{1}', github.run_id, github.run_attempt) }}
+      - image:custom-linux-ghcr.io/kernel-patches/runner:ai-review
+      - instance-size:large
+    env:
+      AWS_REGION: us-west-2
+    steps:
+
+      - name: Checkout CI code
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            .github/scripts
+            ci/claude
+
+      - name: Set up .claude/settings.json and the prompt
+        shell: bash
+        run: |
+          mkdir -p ~/.claude
+          cp ci/claude/settings.json ~/.claude/settings.json
+          cp ci/claude/bpf-ci-agent.md agent.md
+
+      - name: Checkout review-prompts
+        uses: actions/checkout@v6
+        with:
+          repository: 'masoncl/review-prompts'
+          path: 'github/masoncl/review-prompts'
+          ref: main
+
+      - name: Checkout libbpf/ci
+        uses: actions/checkout@v6
+        with:
+          repository: 'libbpf/ci'
+          path: 'github/libbpf/ci'
+          ref: main
+
+      - name: Checkout kernel-patches/vmtest
+        uses: actions/checkout@v6
+        with:
+          repository: 'kernel-patches/vmtest'
+          path: 'github/kernel-patches/vmtest'
+          ref: master
+
+      - name: Checkout kernel-patches/runner
+        uses: actions/checkout@v6
+        with:
+          repository: 'kernel-patches/runner'
+          path: 'github/kernel-patches/runner'
+          ref: main
+
+      - name: Checkout kernel-patches/kernel-patches-daemon
+        uses: actions/checkout@v6
+        with:
+          repository: 'kernel-patches/kernel-patches-daemon'
+          path: 'github/kernel-patches/kernel-patches-daemon'
+          ref: main
+
+      - name: Checkout danobi/vmtest
+        uses: actions/checkout@v6
+        with:
+          repository: 'danobi/vmtest'
+          path: 'github/danobi/vmtest'
+          ref: master
+
+      - name: Checkout facebookexperimental/semcode
+        uses: actions/checkout@v6
+        with:
+          repository: 'facebookexperimental/semcode'
+          path: 'github/facebookexperimental/semcode'
+          ref: main
+
+      - name: Checkout nojb/public-inbox
+        uses: actions/checkout@v6
+        with:
+          repository: 'nojb/public-inbox'
+          path: 'github/nojb/public-inbox'
+          ref: master
+
+      - name: Install misc tools
+        shell: bash
+        env:
+          GCC_VERSION: 14
+          LLVM_VERSION: 19
+        run: |
+          sudo apt-get update -y
+          ${{ github.workspace }}/.github/scripts/install-github-cli.sh
+          ${{ github.workspace }}/github/kernel-patches/runner/install-dependencies.sh all
+          sudo apt-get install -y python3 jq lei
+
+      - name: Download Linux source tree
+        uses: libbpf/ci/get-linux-source@v4
+        with:
+          repo: 'https://github.com/kernel-patches/bpf.git'
+          rev: 'bpf-next'
+          dest: linux
+        env:
+          REFERENCE_REPO_PATH: /libbpfci/mirrors/linux
+          FETCH_DEPTH: 0 # full clone
+
+      # This manipulation is necessary to make sure that
+      # ${{ github.workspace }} is the root of the Linux git repo
+      - name: Move linux source in place
+        shell: bash
+        run: |
+          rm -rf .git .github
+          cd linux
+          mv -t .. $(ls -A)
+          cd ..
+          rmdir linux
+
+      - name: semcode-index
+        shell: bash
+        run: |
+          git remote add torvalds https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
+          git fetch torvalds
+          MERGE_BASE=$(git merge-base v6.19 HEAD)
+          rm -rf /ci/.semcode.db/lore
+          ln -s /ci/.semcode.db .semcode.db
+          semcode-index --git "${MERGE_BASE}..HEAD"
+          semcode-index --lore bpf
+
+      - name: Restore NOTES.md
+        uses: actions/cache/restore@v5
+        with:
+          path: NOTES.md
+          key: notes-md-${{ github.repository }}
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.KP_REVIEW_BOT_APP_ID }}
+          private-key: ${{ secrets.KP_REVIEW_BOT_APP_PRIVATE_KEY }}
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_BEDROCK_ROLE }}
+          aws-region: us-west-2
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          show_full_output: true
+          github_token: ${{ steps.app-token.outputs.token }}
+          use_bedrock: "true"
+          claude_args: |
+            --max-turns 200
+            --mcp-config ci/claude/mcp.json
+            --model us.anthropic.claude-opus-4-6-v1
+          allowed_bots: "kernel-patches-daemon-bpf,kernel-patches-review-bot"
+          additional_permissions: |
+            actions: read
+          prompt: |
+            Read agent.md and follow the directions
+
+      - name: Copy NOTES.md to the output
+        shell: bash
+        run: |
+          mkdir -p output
+          cp NOTES.md output/NOTES.md
+
+      - name: Upload output artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: output
+          path: output/
+
+      - name: Save NOTES.md to cache
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: NOTES.md
+          key: notes-md-${{ github.repository }}
+
+  post-output:
+    needs: agent-run
+    if: always()
+    runs-on: ubuntu-slim
+    steps:
+      - name: Download output artifact
+        id: download
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: output
+          path: output/
+
+      - name: Generate GitHub App token
+        if: steps.download.outcome == 'success' && hashFiles('output/summary.md') != ''
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.KP_REVIEW_BOT_APP_ID }}
+          private-key: ${{ secrets.KP_REVIEW_BOT_APP_PRIVATE_KEY }}
+
+      - name: Post an issue
+        if: steps.download.outcome == 'success' && hashFiles('output/summary.md') != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # Create issue from summary.md
+          TITLE="[bpf-ci-bot] $(head -n 1 output/summary.md | sed 's/^#\+ *//')"
+          tail -n +2 output/summary.md > body.md
+          ISSUE_URL=$(gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "$TITLE" \
+            --body-file body.md)
+
+          # Post each .patch as a separate comment
+          for patch in output/*.patch; do
+            [ -f "$patch" ] || continue
+            FILENAME=$(basename "$patch")
+            printf '## %s\n\n```\n%s\n```' "$FILENAME" "$(cat "$patch")" > comment.md
+            gh issue comment "$ISSUE_URL" --body-file comment.md
+          done
