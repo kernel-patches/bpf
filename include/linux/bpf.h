@@ -288,7 +288,8 @@ struct bpf_map_owner {
 	u32 jited:1,
 	    xdp_has_frags:1,
 	    sleepable:1,
-	    kprobe_write_ctx:1;
+	    kprobe_write_ctx:1,
+	    call_get_func_ip:1;
 	u64 storage_cookie[MAX_BPF_CGROUP_STORAGE_TYPE];
 	const struct btf_type *attach_func_proto;
 	enum bpf_attach_type expected_attach_type;
