@@ -1736,7 +1736,10 @@ static const struct bpf_func_proto bpf_kptr_xchg_proto = {
 };
 
 struct bpf_dynptr_file_impl {
-	struct freader freader;
+	union {
+		struct freader freader;
+		struct rcu_head rcu;
+	};
 	/* 64 bit offset and size overriding 32 bit ones in bpf_dynptr_kern */
 	u64 offset;
 	u64 size;
@@ -4427,7 +4430,7 @@ static int make_file_dynptr(struct file *file, u32 flags, bool may_sleep,
 		return -EINVAL;
 	}
 
-	state = bpf_mem_alloc(&bpf_global_ma, sizeof(struct bpf_dynptr_file_impl));
+	state = kmalloc_nolock(sizeof(*state), 0, NUMA_NO_NODE);
 	if (!state) {
 		bpf_dynptr_set_null(ptr);
 		return -ENOMEM;
@@ -4459,7 +4462,7 @@ __bpf_kfunc int bpf_dynptr_file_discard(struct bpf_dynptr *dynptr)
 		return 0;
 
 	freader_cleanup(&df->freader);
-	bpf_mem_free(&bpf_global_ma, df);
+	kfree_rcu(df, rcu);
 	bpf_dynptr_set_null(ptr);
 	return 0;
 }
