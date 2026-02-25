@@ -15,6 +15,8 @@ int bpf_crypto_encrypt(struct bpf_crypto_ctx *ctx, const struct bpf_dynptr *src,
 		       const struct bpf_dynptr *dst, const struct bpf_dynptr *iv) __ksym;
 int bpf_crypto_decrypt(struct bpf_crypto_ctx *ctx, const struct bpf_dynptr *src,
 		       const struct bpf_dynptr *dst, const struct bpf_dynptr *iv) __ksym;
+int bpf_crypto_hash(struct bpf_crypto_ctx *ctx, const struct bpf_dynptr *data,
+		    const struct bpf_dynptr *out) __ksym;
 
 struct __crypto_ctx_value {
 	struct bpf_crypto_ctx __kptr * ctx;
