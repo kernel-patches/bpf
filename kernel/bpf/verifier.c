@@ -14016,7 +14016,8 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_ca
 	return 1;
 }
 
-static int check_return_code(struct bpf_verifier_env *env, int regno, const char *reg_name);
+static int check_throw_return_code(struct bpf_verifier_env *env);
+static int check_return_code(struct bpf_verifier_env *env);
 
 static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    int *insn_idx_p)
@@ -14244,7 +14245,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		 * to bpf_throw becomes the return value of the program.
 		 */
 		if (!env->exception_callback_subprog) {
-			err = check_return_code(env, BPF_REG_1, "R1");
+			err = check_throw_return_code(env);
 			if (err < 0)
 				return err;
 		}
@@ -17905,12 +17906,98 @@ static int return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_r
 	return 1;
 }
 
-static int check_return_code(struct bpf_verifier_env *env, int regno, const char *reg_name)
+static void
+maybe_enforce_expected_attach_type(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+{
+	struct tnum enforce_attach_type_range;
+	struct bpf_prog *prog = env->prog;
+	enum bpf_prog_type prog_type = resolve_prog_type(prog);
+
+	/* Throw or not throw, still limit the attach type. */
+	if (prog_type != BPF_PROG_TYPE_CGROUP_SKB || prog->expected_attach_type != BPF_CGROUP_INET_EGRESS)
+		return;
+
+	enforce_attach_type_range = tnum_range(2, 3);
+
+	if (tnum_in(enforce_attach_type_range, reg->var_off))
+		prog->enforce_expected_attach_type = 1;
+}
+
+static int
+check_retval_is_bounded(struct bpf_verifier_env *env, struct bpf_retval_range range, struct bpf_reg_state *reg,
+		const char *reg_name, bool return_32bit, bool is_subprog, const char *exit_ctx)
+{
+	const struct bpf_prog *prog = env->prog;
+	enum bpf_prog_type prog_type = resolve_prog_type(prog);
+
+	if (retval_range_within(range, reg, return_32bit))
+		return 0;
+
+	verbose_invalid_scalar(env, reg, range, exit_ctx, reg_name);
+	if (!is_subprog &&
+		prog->expected_attach_type == BPF_LSM_CGROUP &&
+		prog_type == BPF_PROG_TYPE_LSM &&
+		!prog->aux->attach_func_proto->type)
+		verbose(env, "Note, BPF_LSM_CGROUP that attach to void LSM hooks can't modify return value!\n");
+
+	return -EINVAL;
+}
+
+static int check_throw_return_code(struct bpf_verifier_env *env)
 {
 	const char *exit_ctx = "At program exit";
-	struct tnum enforce_attach_type_range = tnum_unknown;
 	const struct bpf_prog *prog = env->prog;
-	struct bpf_reg_state *reg = reg_state(env, regno);
+	struct bpf_reg_state *reg = reg_state(env, BPF_REG_1);
+	struct bpf_retval_range range = retval_range(0, 1);
+	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
+	struct bpf_func_state *frame = env->cur_state->frame[0];
+	const bool is_subprog = frame->subprogno;
+	bool return_32bit = false;
+	int err, ret;
+
+	/* 
+	 * BPF_LSM_CGROUP LSM programs must not modify the return value of a void program
+	 * (see the logic in return_retval_range()).
+	 */
+	if (prog_type == BPF_PROG_TYPE_LSM && prog->expected_attach_type != BPF_LSM_CGROUP &&
+			!prog->aux->attach_func_proto->type)
+		return 0;
+
+	ret = return_retval_range(env, &range, &return_32bit);
+	if (ret < 0)
+		return ret;
+
+	/* 
+	 * Specifically for STRUCT_OPS programs, we never need
+	 * to validate the cookie.
+	 */
+	if (prog_type == BPF_PROG_TYPE_STRUCT_OPS)
+		return 0;
+
+	/* Check if we even need to validate. */
+	if (!ret)
+		return ret;
+
+	err = mark_chain_precision(env, BPF_REG_1);
+	if (err)
+		return err;
+
+	err = check_retval_is_bounded(env, range, reg, "R1", 
+		return_32bit, is_subprog, exit_ctx);
+	if (err)
+		return err;
+
+	maybe_enforce_expected_attach_type(env, reg);
+
+	return 0;
+}
+
+static int check_return_code(struct bpf_verifier_env *env)
+{
+	const int regno = BPF_REG_0;
+	const char *exit_ctx = "At program exit";
+	const struct bpf_prog *prog = env->prog;
+	struct bpf_reg_state *reg = reg_state(env, BPF_REG_0);
 	struct bpf_retval_range range = retval_range(0, 1);
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
 	int ret, err;
@@ -17985,9 +18072,6 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 	if (prog_type == BPF_PROG_TYPE_STRUCT_OPS && !ret_type)
 		return 0;
 
-	if (prog_type == BPF_PROG_TYPE_CGROUP_SKB && (env->prog->expected_attach_type == BPF_CGROUP_INET_EGRESS))
-		enforce_attach_type_range = tnum_range(2, 3);
-
 	ret = return_retval_range(env, &range, &return_32bit);
 	if (ret < 0)
 		return ret;
@@ -18007,19 +18091,13 @@ enforce_retval:
 	if (err)
 		return err;
 
-	if (!retval_range_within(range, reg, return_32bit)) {
-		verbose_invalid_scalar(env, reg, range, exit_ctx, reg_name);
-		if (!is_subprog &&
-		    prog->expected_attach_type == BPF_LSM_CGROUP &&
-		    prog_type == BPF_PROG_TYPE_LSM &&
-		    !prog->aux->attach_func_proto->type)
-			verbose(env, "Note, BPF_LSM_CGROUP that attach to void LSM hooks can't modify return value!\n");
-		return -EINVAL;
-	}
+	err = check_retval_is_bounded(env, range, reg, "R0",
+		return_32bit, is_subprog, exit_ctx);
+	if (err)
+		return err;
 
-	if (!tnum_is_unknown(enforce_attach_type_range) &&
-	    tnum_in(enforce_attach_type_range, reg->var_off))
-		env->prog->enforce_expected_attach_type = 1;
+	maybe_enforce_expected_attach_type(env, reg);
+
 	return 0;
 }
 
@@ -20849,7 +20927,7 @@ static int process_bpf_exit_full(struct bpf_verifier_env *env,
 		return 0;
 	}
 
-	err = check_return_code(env, BPF_REG_0, "R0");
+	err = check_return_code(env);
 	if (err)
 		return err;
 	return PROCESS_BPF_EXIT;
