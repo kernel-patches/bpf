@@ -457,6 +457,32 @@ static int htab_map_alloc_check(union bpf_attr *attr)
 	return 0;
 }
 
+static void htab_mem_dtor(void *obj, void *ctx)
+{
+	struct bpf_htab *htab = ctx;
+	struct htab_elem *elem = obj;
+	void *map_value;
+
+	if (IS_ERR_OR_NULL(htab->map.record))
+		return;
+
+	map_value = htab_elem_value(elem, htab->map.key_size);
+	bpf_obj_free_fields(htab->map.record, map_value);
+}
+
+static void htab_pcpu_mem_dtor(void *obj, void *ctx)
+{
+	struct bpf_htab *htab = ctx;
+	void __percpu *pptr = *(void __percpu **)obj;
+	int cpu;
+
+	if (IS_ERR_OR_NULL(htab->map.record))
+		return;
+
+	for_each_possible_cpu(cpu)
+		bpf_obj_free_fields(htab->map.record, per_cpu_ptr(pptr, cpu));
+}
+
 static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 {
 	bool percpu = (attr->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
@@ -569,6 +595,17 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 						 round_up(htab->map.value_size, 8), true);
 			if (err)
 				goto free_map_locked;
+			/* See comment below */
+			bpf_mem_alloc_set_dtor(&htab->pcpu_ma, htab_pcpu_mem_dtor, htab);
+		} else {
+			/*
+			 * Register the dtor unconditionally.  map->record is
+			 * set by map_create() after map_alloc() returns, so it
+			 * is always NULL at this point.  The dtor checks
+			 * IS_ERR_OR_NULL(htab->map.record) and becomes a no-op
+			 * for maps without special fields.
+			 */
+			bpf_mem_alloc_set_dtor(&htab->ma, htab_mem_dtor, htab);
 		}
 	}
 

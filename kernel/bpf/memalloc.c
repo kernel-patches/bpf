@@ -102,6 +102,7 @@ struct bpf_mem_cache {
 	int percpu_size;
 	bool draining;
 	struct bpf_mem_cache *tgt;
+	struct bpf_mem_alloc *ma;
 
 	/* list of objects to be freed after RCU GP */
 	struct llist_head free_by_rcu;
@@ -260,12 +261,15 @@ static void free_one(void *obj, bool percpu)
 	kfree(obj);
 }
 
-static int free_all(struct llist_node *llnode, bool percpu)
+static int free_all(struct llist_node *llnode, bool percpu,
+		    struct bpf_mem_alloc *ma)
 {
 	struct llist_node *pos, *t;
 	int cnt = 0;
 
 	llist_for_each_safe(pos, t, llnode) {
+		if (ma->dtor)
+			ma->dtor((void *)pos + LLIST_NODE_SZ, ma->dtor_ctx);
 		free_one(pos, percpu);
 		cnt++;
 	}
@@ -276,7 +280,7 @@ static void __free_rcu(struct rcu_head *head)
 {
 	struct bpf_mem_cache *c = container_of(head, struct bpf_mem_cache, rcu_ttrace);
 
-	free_all(llist_del_all(&c->waiting_for_gp_ttrace), !!c->percpu_size);
+	free_all(llist_del_all(&c->waiting_for_gp_ttrace), !!c->percpu_size, c->ma);
 	atomic_set(&c->call_rcu_ttrace_in_progress, 0);
 }
 
@@ -308,7 +312,7 @@ static void do_call_rcu_ttrace(struct bpf_mem_cache *c)
 	if (atomic_xchg(&c->call_rcu_ttrace_in_progress, 1)) {
 		if (unlikely(READ_ONCE(c->draining))) {
 			llnode = llist_del_all(&c->free_by_rcu_ttrace);
-			free_all(llnode, !!c->percpu_size);
+			free_all(llnode, !!c->percpu_size, c->ma);
 		}
 		return;
 	}
@@ -417,7 +421,7 @@ static void check_free_by_rcu(struct bpf_mem_cache *c)
 	dec_active(c, &flags);
 
 	if (unlikely(READ_ONCE(c->draining))) {
-		free_all(llist_del_all(&c->waiting_for_gp), !!c->percpu_size);
+		free_all(llist_del_all(&c->waiting_for_gp), !!c->percpu_size, c->ma);
 		atomic_set(&c->call_rcu_in_progress, 0);
 	} else {
 		call_rcu_hurry(&c->rcu, __free_by_rcu);
@@ -542,6 +546,7 @@ int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu)
 			c->objcg = objcg;
 			c->percpu_size = percpu_size;
 			c->tgt = c;
+			c->ma = ma;
 			init_refill_work(c);
 			prefill_mem_cache(c, cpu);
 		}
@@ -564,6 +569,7 @@ int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu)
 			c->objcg = objcg;
 			c->percpu_size = percpu_size;
 			c->tgt = c;
+			c->ma = ma;
 
 			init_refill_work(c);
 			prefill_mem_cache(c, cpu);
@@ -616,6 +622,7 @@ int bpf_mem_alloc_percpu_unit_init(struct bpf_mem_alloc *ma, int size)
 		c->objcg = objcg;
 		c->percpu_size = percpu_size;
 		c->tgt = c;
+		c->ma = ma;
 
 		init_refill_work(c);
 		prefill_mem_cache(c, cpu);
@@ -624,7 +631,7 @@ int bpf_mem_alloc_percpu_unit_init(struct bpf_mem_alloc *ma, int size)
 	return 0;
 }
 
-static void drain_mem_cache(struct bpf_mem_cache *c)
+static void drain_mem_cache(struct bpf_mem_cache *c, struct bpf_mem_alloc *ma)
 {
 	bool percpu = !!c->percpu_size;
 
@@ -635,13 +642,13 @@ static void drain_mem_cache(struct bpf_mem_cache *c)
 	 * Except for waiting_for_gp_ttrace list, there are no concurrent operations
 	 * on these lists, so it is safe to use __llist_del_all().
 	 */
-	free_all(llist_del_all(&c->free_by_rcu_ttrace), percpu);
-	free_all(llist_del_all(&c->waiting_for_gp_ttrace), percpu);
-	free_all(__llist_del_all(&c->free_llist), percpu);
-	free_all(__llist_del_all(&c->free_llist_extra), percpu);
-	free_all(__llist_del_all(&c->free_by_rcu), percpu);
-	free_all(__llist_del_all(&c->free_llist_extra_rcu), percpu);
-	free_all(llist_del_all(&c->waiting_for_gp), percpu);
+	free_all(llist_del_all(&c->free_by_rcu_ttrace), percpu, ma);
+	free_all(llist_del_all(&c->waiting_for_gp_ttrace), percpu, ma);
+	free_all(__llist_del_all(&c->free_llist), percpu, ma);
+	free_all(__llist_del_all(&c->free_llist_extra), percpu, ma);
+	free_all(__llist_del_all(&c->free_by_rcu), percpu, ma);
+	free_all(__llist_del_all(&c->free_llist_extra_rcu), percpu, ma);
+	free_all(llist_del_all(&c->waiting_for_gp), percpu, ma);
 }
 
 static void check_mem_cache(struct bpf_mem_cache *c)
@@ -751,7 +758,7 @@ void bpf_mem_alloc_destroy(struct bpf_mem_alloc *ma)
 			c = per_cpu_ptr(ma->cache, cpu);
 			WRITE_ONCE(c->draining, true);
 			irq_work_sync(&c->refill_work);
-			drain_mem_cache(c);
+			drain_mem_cache(c, ma);
 			rcu_in_progress += atomic_read(&c->call_rcu_ttrace_in_progress);
 			rcu_in_progress += atomic_read(&c->call_rcu_in_progress);
 		}
@@ -766,7 +773,7 @@ void bpf_mem_alloc_destroy(struct bpf_mem_alloc *ma)
 				c = &cc->cache[i];
 				WRITE_ONCE(c->draining, true);
 				irq_work_sync(&c->refill_work);
-				drain_mem_cache(c);
+				drain_mem_cache(c, ma);
 				rcu_in_progress += atomic_read(&c->call_rcu_ttrace_in_progress);
 				rcu_in_progress += atomic_read(&c->call_rcu_in_progress);
 			}
@@ -1013,4 +1020,11 @@ int bpf_mem_alloc_check_size(bool percpu, size_t size)
 		return -E2BIG;
 
 	return 0;
+}
+
+void bpf_mem_alloc_set_dtor(struct bpf_mem_alloc *ma,
+			    void (*dtor)(void *obj, void *ctx), void *ctx)
+{
+	ma->dtor = dtor;
+	ma->dtor_ctx = ctx;
 }
