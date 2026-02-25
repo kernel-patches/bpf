@@ -51,7 +51,9 @@ asm (
 
 void bpf_jit_build_fentry_stubs(u32 *image, struct codegen_context *ctx)
 {
-	int ool_stub_idx, long_branch_stub_idx;
+	int ool_stub_idx, long_branch_stub_idx, tramp_load_offset;
+	bool tramp_needs_align;
+	u32 tramp_idx;
 
 	/*
 	 * Out-of-line stub:
@@ -70,26 +72,44 @@ void bpf_jit_build_fentry_stubs(u32 *image, struct codegen_context *ctx)
 
 	/*
 	 * Long branch stub:
-	 *	.long	<dummy_tramp_addr>
 	 *	mflr	r11
 	 *	bcl	20,31,$+4
-	 *	mflr	r12
-	 *	ld	r12, -8-SZL(r12)
+	 *	mflr	r12		// lr/r12 stores current pc
+	 *	ld	r12, 20(r12)	// offset(dummy_tramp_addr) from prev inst. is 20
 	 *	mtctr	r12
-	 *	mtlr	r11 // needed to retain ftrace ABI
+	 *	mtlr	r11		// needed to retain ftrace ABI
 	 *	bctr
+	 *	nop			// Optional, for mem alignment of dummy_tramp_addr
+	 *	.long	<dummy_tramp_addr>
 	 */
-	if (image)
-		*((unsigned long *)&image[ctx->idx]) = (unsigned long)dummy_tramp;
-	ctx->idx += SZL / 4;
 	long_branch_stub_idx = ctx->idx;
 	EMIT(PPC_RAW_MFLR(_R11));
 	EMIT(PPC_RAW_BCL4());
 	EMIT(PPC_RAW_MFLR(_R12));
-	EMIT(PPC_RAW_LL(_R12, _R12, -8-SZL));
+
+	/* Relative offset of dummy_tramp_addr wrt start of long branch stub */
+	tramp_idx = long_branch_stub_idx + 7;
+	/*
+	 * Image layout need not be considered 8-byte aligned.
+	 * Lower 3 bits must be clear for 8-bytes alignment.
+	 * Adjust offset for padding NOP before dummy_tramp_addr
+	 */
+	tramp_needs_align = (((unsigned long)&image[tramp_idx]) & 7) != 0;
+	tramp_load_offset = tramp_needs_align ? 24 : 20;
+
+	EMIT(PPC_RAW_LL(_R12, _R12, tramp_load_offset));
 	EMIT(PPC_RAW_MTCTR(_R12));
 	EMIT(PPC_RAW_MTLR(_R11));
 	EMIT(PPC_RAW_BCTR());
+
+	/* align dummy_tramp_addr to 8 bytes */
+	if (tramp_needs_align)
+		EMIT(PPC_RAW_NOP());
+
+	if (image)
+		*((unsigned long *)&image[ctx->idx]) = (unsigned long)dummy_tramp;
+
+	ctx->idx += SZL / 4;
 
 	if (!bpf_jit_ool_stub) {
 		bpf_jit_ool_stub = (ctx->idx - ool_stub_idx) * 4;
@@ -1153,7 +1173,6 @@ static void do_isync(void *info __maybe_unused)
  *	b	bpf_func + 4
  * 3. Long branch stub:
  * long_branch_stub:
- *	.long	<branch_addr>/<dummy_tramp>
  *	mflr	r11
  *	bcl	20,31,$+4
  *	mflr	r12
@@ -1161,6 +1180,8 @@ static void do_isync(void *info __maybe_unused)
  *	mtctr	r12
  *	mtlr	r11 // needed to retain ftrace ABI
  *	bctr
+ *	nop         // optinonal, mem align dummy_tramp field
+ *	.long	<branch_addr>/<dummy_tramp>
  *
  * dummy_tramp is used to reduce synchronization requirements.
  *
@@ -1262,10 +1283,12 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 	 * 1. Update the address in the long branch stub:
 	 * If new_addr is out of range, we will have to use the long branch stub, so patch new_addr
 	 * here. Otherwise, revert to dummy_tramp, but only if we had patched old_addr here.
+	 *
+	 * dummy_tramp_addr moved to bottom of long branch stub.
 	 */
 	if ((new_addr && !is_offset_in_branch_range(new_addr - ip)) ||
 	    (old_addr && !is_offset_in_branch_range(old_addr - ip)))
-		ret = patch_ulong((void *)(bpf_func_end - bpf_jit_long_branch_stub - SZL),
+		ret = patch_ulong((void *)(bpf_func_end - SZL), /* SZL: dummy_tramp_addr offset */
 				  (new_addr && !is_offset_in_branch_range(new_addr - ip)) ?
 				  (unsigned long)new_addr : (unsigned long)dummy_tramp);
 	if (ret)
