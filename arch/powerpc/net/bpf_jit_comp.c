@@ -318,6 +318,12 @@ out_addrs:
 		jit_data->hdr = hdr;
 	}
 
+	/*
+	 * The bpf_prog_update_insn_ptrs function expects addrs to
+	 * point to the first byte of the jitted instruction.
+	 */
+	bpf_prog_update_insn_ptrs(fp, addrs, fimage);
+
 out:
 	if (bpf_blinded)
 		bpf_jit_prog_release_other(fp, fp == org_fp ? tmp_fp : org_fp);
