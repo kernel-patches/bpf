@@ -2424,6 +2424,39 @@ __bpf_kfunc struct bpf_list_node *bpf_list_back(struct bpf_list_head *head)
 	return (struct bpf_list_node *)h->prev;
 }
 
+static int __bpf_list_add_after(struct bpf_list_node_kern *prev,
+				struct bpf_list_node_kern *node,
+				struct btf_record *rec, u64 off)
+{
+	struct bpf_list_head *head;
+	struct list_head *n = &node->list_head, *p = &prev->list_head;
+
+	head = READ_ONCE(prev->owner);
+	if (unlikely(!head))
+		goto fail;
+
+	if (cmpxchg(&node->owner, NULL, BPF_PTR_POISON))
+		goto fail;
+
+	list_add(n, p);
+	WRITE_ONCE(node->owner, head);
+	return 0;
+
+fail:
+	__bpf_obj_drop_impl((void *)n - off, rec, false);
+	return -EINVAL;
+}
+
+__bpf_kfunc int bpf_list_add_impl(struct bpf_list_node *prev,
+				  struct bpf_list_node *node,
+				  void *meta__ign, u64 off)
+{
+	struct bpf_list_node_kern *n = (void *)node, *p = (void *)prev;
+	struct btf_struct_meta *meta = meta__ign;
+
+	return __bpf_list_add_after(p, n, meta ? meta->record : NULL, off);
+}
+
 __bpf_kfunc struct bpf_rb_node *bpf_rbtree_remove(struct bpf_rb_root *root,
 						  struct bpf_rb_node *node)
 {
@@ -4423,6 +4456,7 @@ BTF_ID_FLAGS(func, bpf_list_pop_back, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_list_del, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_list_front, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_list_back, KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_list_add_impl)
 BTF_ID_FLAGS(func, bpf_task_acquire, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_release, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_rbtree_remove, KF_ACQUIRE | KF_RET_NULL)
