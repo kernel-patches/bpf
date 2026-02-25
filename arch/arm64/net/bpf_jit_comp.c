@@ -98,7 +98,7 @@ struct bpf_plt {
 	u32 insn_ldr; /* load target */
 	u32 insn_br;  /* branch to target */
 	u64 target;   /* target value */
-};
+} __packed;
 
 #define PLT_TARGET_SIZE   sizeof_field(struct bpf_plt, target)
 #define PLT_TARGET_OFFSET offsetof(struct bpf_plt, target)
