@@ -9,6 +9,7 @@
 #include "tc_bpf2bpf.skel.h"
 #include "tailcall_fail.skel.h"
 #include "tailcall_sleepable.skel.h"
+#include "tailcall_map_compatible.skel.h"
 
 /* test_tailcall_1 checks basic functionality by patching multiple locations
  * in a single program for a single tail call slot with nop->jmp, jmp->nop
@@ -1725,6 +1726,312 @@ out:
 	tailcall_sleepable__destroy(skel);
 }
 
+#ifdef __x86_64__
+/* uprobe attach point */
+static noinline int trigger_uprobe_fn(int a)
+{
+	asm volatile ("" : "+r"(a));
+	return a;
+}
+
+static void test_map_compatible_update_kprobe_write_ctx(void)
+{
+	struct bpf_program *dummy, *kprobe, *fsession;
+	struct tailcall_map_compatible *skel;
+	struct bpf_link *link = NULL;
+	int err, prog_fd, key = 0;
+	struct bpf_map *map;
+	LIBBPF_OPTS(bpf_kprobe_opts, kprobe_opts);
+	LIBBPF_OPTS(bpf_uprobe_opts, uprobe_opts);
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+
+	skel = tailcall_map_compatible__open();
+	if (!ASSERT_OK_PTR(skel, "tailcall_map_compatible__open"))
+		return;
+
+	dummy = skel->progs.dummy_kprobe;
+	bpf_program__set_autoload(dummy, true);
+
+	kprobe = skel->progs.kprobe;
+	bpf_program__set_autoload(kprobe, true);
+
+	fsession = skel->progs.fsession_tailcall;
+	bpf_program__set_autoload(fsession, true);
+
+	skel->bss->data = 0xdeadbeef;
+
+	err = tailcall_map_compatible__load(skel);
+	if (!ASSERT_OK(err, "tailcall_map_compatible__load"))
+		goto out;
+
+	prog_fd = bpf_program__fd(kprobe);
+	map = skel->maps.prog_array_dummy;
+	err = bpf_map_update_elem(bpf_map__fd(map), &key, &prog_fd, BPF_ANY);
+	ASSERT_ERR(err, "bpf_map_update_elem kprobe");
+
+	skel->links.dummy_kprobe = bpf_program__attach_kprobe_opts(dummy, "bpf_fentry_test1",
+								   &kprobe_opts);
+	if (!ASSERT_OK_PTR(skel->links.dummy_kprobe, "bpf_program__attach_kprobe_opts"))
+		goto out;
+
+	skel->links.fsession_tailcall = bpf_program__attach_trace(fsession);
+	if (!ASSERT_OK_PTR(skel->links.fsession_tailcall, "bpf_program__attach_trace"))
+		goto out;
+
+	err = bpf_prog_test_run_opts(bpf_program__fd(fsession), &topts);
+	ASSERT_OK(err, "bpf_prog_test_run_opts fsession");
+
+	ASSERT_EQ(topts.retval, 0, "dummy retval");
+	ASSERT_EQ(skel->bss->dummy_run, 1, "dummy_run");
+	ASSERT_EQ(skel->bss->data, 0xdeadbeef, "data");
+
+	err = bpf_map_delete_elem(bpf_map__fd(map), &key);
+	ASSERT_TRUE(!err || err == -ENOENT, "bpf_map_delete_elem");
+
+	uprobe_opts.func_name = "trigger_uprobe_fn";
+	link = bpf_program__attach_uprobe_opts(kprobe, 0, "/proc/self/exe", 0, &uprobe_opts);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_uprobe_opts"))
+		goto out;
+
+	prog_fd = bpf_program__fd(dummy);
+	map = skel->maps.prog_array_kprobe;
+	err = bpf_map_update_elem(bpf_map__fd(map), &key, &prog_fd, BPF_ANY);
+	ASSERT_OK(err, "bpf_map_update_elem dummy");
+
+	ASSERT_EQ(trigger_uprobe_fn(1), 0, "trigger_uprobe_fn retval"); /* modified by uprobe */
+
+	ASSERT_EQ(topts.retval, 0, "dummy retval");
+	ASSERT_EQ(skel->bss->dummy_run, 2, "dummy_run");
+	ASSERT_EQ(skel->bss->data, 0, "data");
+
+out:
+	bpf_link__destroy(link);
+	tailcall_map_compatible__destroy(skel);
+}
+#else
+static void test_map_compatible_update_kprobe_write_ctx(void)
+{
+	test__skip();
+}
+#endif
+
+static void test_map_compatible_update_get_func_ip(void)
+{
+	struct tailcall_map_compatible *skel;
+	struct bpf_program *dummy, *fentry;
+	struct bpf_link *link = NULL;
+	int err, prog_fd, key = 0;
+	struct bpf_map *map;
+	__u64 func_ip;
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+
+	skel = tailcall_map_compatible__open();
+	if (!ASSERT_OK_PTR(skel, "tailcall_map_compatible__open"))
+		return;
+
+	dummy = skel->progs.dummy_fentry;
+	bpf_program__set_autoload(dummy, true);
+
+	fentry = skel->progs.fentry;
+	bpf_program__set_autoload(fentry, true);
+
+	err = tailcall_map_compatible__load(skel);
+	if (!ASSERT_OK(err, "tailcall_map_compatible__load"))
+		goto out;
+
+	link = bpf_program__attach_trace(fentry);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_trace fentry"))
+		goto out;
+
+	err = bpf_prog_test_run_opts(bpf_program__fd(fentry), &topts);
+	if (!ASSERT_OK(err, "bpf_prog_test_run_opts fentry"))
+		goto out;
+
+	ASSERT_EQ(topts.retval, 0, "fentry retval");
+	ASSERT_EQ(skel->bss->dummy_run, 0, "dummy_run");
+	ASSERT_NEQ(skel->bss->data, 0, "data");
+	func_ip = skel->bss->data;
+
+	skel->bss->data = 0xdeadbeef;
+
+	err = bpf_link__destroy(link);
+	link = NULL;
+	if (!ASSERT_OK(err, "bpf_link__destroy"))
+		goto out;
+
+	prog_fd = bpf_program__fd(fentry);
+	map = skel->maps.prog_array_dummy;
+	err = bpf_map_update_elem(bpf_map__fd(map), &key, &prog_fd, BPF_ANY);
+	ASSERT_ERR(err, "bpf_map_update_elem fentry");
+
+	link = bpf_program__attach_trace(dummy);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_trace dummy"))
+		goto out;
+
+	err = bpf_prog_test_run_opts(bpf_program__fd(dummy), &topts);
+	if (!ASSERT_OK(err, "bpf_prog_test_run_opts dummy"))
+		goto out;
+
+	ASSERT_EQ(topts.retval, 0, "dummy retval");
+	ASSERT_EQ(skel->bss->dummy_run, 1, "dummy_run");
+	ASSERT_EQ(skel->bss->data, 0xdeadbeef, "data");
+	ASSERT_NEQ(skel->bss->data, func_ip, "data func_ip");
+
+	err = bpf_link__destroy(link);
+	link = NULL;
+	if (!ASSERT_OK(err, "bpf_link__destroy"))
+		goto out;
+
+	err = bpf_map_delete_elem(bpf_map__fd(map), &key);
+	ASSERT_TRUE(!err || err == -ENOENT, "bpf_map_delete_elem");
+
+	prog_fd = bpf_program__fd(dummy);
+	map = skel->maps.prog_array_tracing;
+	err = bpf_map_update_elem(bpf_map__fd(map), &key, &prog_fd, BPF_ANY);
+	ASSERT_OK(err, "bpf_map_update_elem dummy");
+
+	link = bpf_program__attach_trace(fentry);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_trace fentry"))
+		goto out;
+
+	err = bpf_prog_test_run_opts(bpf_program__fd(fentry), &topts);
+	if (!ASSERT_OK(err, "bpf_prog_test_run_opts fentry"))
+		goto out;
+
+	ASSERT_EQ(topts.retval, 0, "fentry retval");
+	ASSERT_EQ(skel->bss->dummy_run, 2, "dummy_run");
+	ASSERT_EQ(skel->bss->data, func_ip, "data");
+
+out:
+	bpf_link__destroy(link);
+	tailcall_map_compatible__destroy(skel);
+}
+
+static void test_map_compatible_update_session_cookie(void)
+{
+	struct tailcall_map_compatible *skel;
+	struct bpf_program *dummy, *fsession;
+	struct bpf_link *link = NULL;
+	int err, prog_fd, key = 0;
+	struct bpf_map *map;
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+
+	skel = tailcall_map_compatible__open();
+	if (!ASSERT_OK_PTR(skel, "tailcall_map_compatible__open"))
+		return;
+
+	dummy = skel->progs.dummy_fsession;
+	bpf_program__set_autoload(dummy, true);
+
+	fsession = skel->progs.fsession_cookie;
+	bpf_program__set_autoload(fsession, true);
+
+	skel->bss->data = 0xdeadbeef;
+
+	err = tailcall_map_compatible__load(skel);
+	if (err == -EOPNOTSUPP) {
+		test__skip();
+		goto out;
+	}
+	if (!ASSERT_OK(err, "tailcall_map_compatible__load"))
+		goto out;
+
+	prog_fd = bpf_program__fd(fsession);
+	map = skel->maps.prog_array_dummy;
+	err = bpf_map_update_elem(bpf_map__fd(map), &key, &prog_fd, BPF_ANY);
+	ASSERT_ERR(err, "bpf_map_update_elem fsession");
+
+	link = bpf_program__attach_trace(dummy);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_trace dummy"))
+		goto out;
+
+	err = bpf_prog_test_run_opts(bpf_program__fd(dummy), &topts);
+	ASSERT_OK(err, "bpf_prog_test_run_opts dummy");
+
+	ASSERT_EQ(topts.retval, 0, "dummy retval");
+	ASSERT_EQ(skel->bss->dummy_run, 2, "dummy_run");
+	ASSERT_EQ(skel->bss->data, 0xdeadbeef, "data");
+
+	err = bpf_link__destroy(link);
+	link = NULL;
+	if (!ASSERT_OK(err, "bpf_link__destroy"))
+		goto out;
+
+	err = bpf_map_delete_elem(bpf_map__fd(map), &key);
+	ASSERT_TRUE(!err || err == -ENOENT, "bpf_map_delete_elem");
+
+	prog_fd = bpf_program__fd(dummy);
+	map = skel->maps.prog_array_tracing;
+	err = bpf_map_update_elem(bpf_map__fd(map), &key, &prog_fd, BPF_ANY);
+	ASSERT_OK(err, "bpf_map_update_elem dummy");
+
+	link = bpf_program__attach_trace(fsession);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_trace fsession"))
+		goto out;
+
+	err = bpf_prog_test_run_opts(bpf_program__fd(fsession), &topts);
+	if (!ASSERT_OK(err, "bpf_prog_test_run_opts fsession"))
+		goto out;
+
+	ASSERT_EQ(topts.retval, 0, "fsession retval");
+	ASSERT_EQ(skel->bss->dummy_run, 4, "dummy_run");
+	ASSERT_EQ(skel->bss->data, 0, "data");
+
+out:
+	bpf_link__destroy(link);
+	tailcall_map_compatible__destroy(skel);
+}
+
+static void test_map_compatible_init(const char *prog1, const char *prog2)
+{
+	struct tailcall_map_compatible *skel;
+	struct bpf_program *p1, *p2;
+	int err;
+
+	skel = tailcall_map_compatible__open();
+	if (!ASSERT_OK_PTR(skel, "tailcall_map_compatible__open"))
+		return;
+
+	p1 = bpf_object__find_program_by_name(skel->obj, prog1);
+	if (!ASSERT_OK_PTR(p1, "bpf_object__find_program_by_name prog1"))
+		goto out;
+	bpf_program__set_autoload(p1, true);
+
+	p2 = bpf_object__find_program_by_name(skel->obj, prog2);
+	if (!ASSERT_OK_PTR(p2, "bpf_object__find_program_by_name prog2"))
+		goto out;
+	bpf_program__set_autoload(p2, true);
+
+	err = tailcall_map_compatible__load(skel);
+	if (err == -EOPNOTSUPP) {
+		test__skip();
+		goto out;
+	}
+	ASSERT_ERR(err, "tailcall_map_compatible__load");
+
+out:
+	tailcall_map_compatible__destroy(skel);
+}
+
+static void test_map_compatible_init_kprobe_write_ctx(void)
+{
+#ifdef __x86_64__
+	test_map_compatible_init("kprobe", "kprobe_tailcall");
+#else
+	test__skip();
+#endif
+}
+
+static void test_map_compatible_init_call_get_func_ip(void)
+{
+	test_map_compatible_init("fentry", "fentry_tailcall");
+}
+
+static void test_map_compatible_init_call_session_cookie(void)
+{
+	test_map_compatible_init("fsession_cookie", "fsession_tailcall");
+}
+
 void test_tailcalls(void)
 {
 	if (test__start_subtest("tailcall_1"))
@@ -1781,4 +2088,16 @@ void test_tailcalls(void)
 		test_tailcall_failure();
 	if (test__start_subtest("tailcall_sleepable"))
 		test_tailcall_sleepable();
+	if (test__start_subtest("map_compatible/update/kprobe_write_ctx"))
+		test_map_compatible_update_kprobe_write_ctx();
+	if (test__start_subtest("map_compatible/update/get_func_ip"))
+		test_map_compatible_update_get_func_ip();
+	if (test__start_subtest("map_compatible/update/session_cookie"))
+		test_map_compatible_update_session_cookie();
+	if (test__start_subtest("map_compatible/init/kprobe_write_ctx"))
+		test_map_compatible_init_kprobe_write_ctx();
+	if (test__start_subtest("map_compatible/init/call_get_func_ip"))
+		test_map_compatible_init_call_get_func_ip();
+	if (test__start_subtest("map_compatible/init/call_session_cookie"))
+		test_map_compatible_init_call_session_cookie();
 }
