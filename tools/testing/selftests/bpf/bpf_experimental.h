@@ -100,6 +100,16 @@ extern struct bpf_list_node *bpf_list_pop_front(struct bpf_list_head *head) __ks
 extern struct bpf_list_node *bpf_list_pop_back(struct bpf_list_head *head) __ksym;
 
 /* Description
+ *	Remove 'node' from the BPF linked list with head 'head'.
+ *	The node must be in the list. Caller receives ownership of the
+ *	removed node and must release it with bpf_obj_drop.
+ * Returns
+ *	Pointer to the removed bpf_list_node, or NULL if 'node' is NULL
+ *	or not in the list.
+ */
+extern struct bpf_list_node *bpf_list_del(struct bpf_list_node *node) __ksym;
+
+/* Description
  *	Remove 'node' from rbtree with root 'root'
  * Returns
  * 	Pointer to the removed node, or NULL if 'root' didn't contain 'node'
