@@ -6474,6 +6474,27 @@ static bool is_trusted_reg(const struct bpf_reg_state *reg)
 	       !bpf_type_has_unsafe_modifiers(reg->type);
 }
 
+static bool is_kern_ctx_ptr(struct bpf_verifier_env *env,
+			    const struct bpf_reg_state *reg)
+{
+	int kctx_id;
+
+	if (base_type(reg->type) != PTR_TO_BTF_ID)
+		return false;
+	if (!tnum_is_const(reg->var_off))
+		return false;
+	if (!is_trusted_reg(reg))
+		return false;
+
+	kctx_id = get_kern_ctx_btf_id(&env->log, resolve_prog_type(env->prog));
+	if (kctx_id < 0)
+		return false;
+
+	return btf_struct_ids_match(&env->log, reg->btf, reg->btf_id,
+				    reg->var_off.value, btf_vmlinux, kctx_id,
+				    true);
+}
+
 static bool is_rcu_reg(const struct bpf_reg_state *reg)
 {
 	return reg->type & MEM_RCU;
@@ -13499,7 +13520,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 
 		switch (kf_arg_type) {
 		case KF_ARG_PTR_TO_CTX:
-			if (reg->type != PTR_TO_CTX) {
+			if (reg->type != PTR_TO_CTX &&
+			    !is_kern_ctx_ptr(env, reg)) {
 				verbose(env, "arg#%d expected pointer to ctx, but got %s\n",
 					i, reg_type_str(env, reg->type));
 				return -EINVAL;
