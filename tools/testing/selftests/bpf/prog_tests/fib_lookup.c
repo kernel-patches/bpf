@@ -54,6 +54,7 @@ struct fib_lookup_test {
 	__u32 tbid;
 	__u8 dmac[6];
 	__u32 mark;
+	int ifindex;
 };
 
 static const struct fib_lookup_test tests[] = {
@@ -221,15 +222,14 @@ fail:
 }
 
 static int set_lookup_params(struct bpf_fib_lookup *params,
-			     const struct fib_lookup_test *test,
-			     int ifindex)
+			     const struct fib_lookup_test *test)
 {
 	int ret;
 
 	memset(params, 0, sizeof(*params));
 
 	params->l4_protocol = IPPROTO_TCP;
-	params->ifindex = ifindex;
+	params->ifindex = test->ifindex ? : IFINDEX_VETH1;
 	params->tbid = test->tbid;
 	params->mark = test->mark;
 
@@ -335,13 +335,12 @@ void test_fib_lookup(void)
 	if (setup_netns())
 		goto fail;
 
-	skb.ifindex = IFINDEX_VETH1;
 	fib_params = &skel->bss->fib_params;
 
 	for (i = 0; i < ARRAY_SIZE(tests); i++) {
 		printf("Testing %s ", tests[i].desc);
 
-		if (set_lookup_params(fib_params, &tests[i], skb.ifindex))
+		if (set_lookup_params(fib_params, &tests[i]))
 			continue;
 
 		skel->bss->fib_lookup_ret = -1;
