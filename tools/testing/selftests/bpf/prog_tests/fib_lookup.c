@@ -45,6 +45,8 @@
 #define IFINDEX_VETH2		10020
 #define IPV4_OUTPUT_NET		"192.0.2.0"
 #define IPV4_OUTPUT_DST		"192.0.2.1"
+#define IPV6_OUTPUT_NET		"2001:db8:1::"
+#define IPV6_OUTPUT_DST		"2001:db8:1::1"
 
 struct fib_lookup_test {
 	const char *desc;
@@ -177,6 +179,34 @@ static const struct fib_lookup_test tests[] = {
 	  .expected_ret = BPF_FIB_LKUP_RET_NOT_FWDED,
 	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT | BPF_FIB_LOOKUP_SKIP_NEIGH,
 	  .ifindex = IFINDEX_VETH2, },
+	{ .desc = "IPv6 output route, without source, via first device",
+	  .daddr = IPV6_OUTPUT_DST, .expected_ret = BPF_FIB_LKUP_RET_SUCCESS,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT | BPF_FIB_LOOKUP_SRC,
+	  .dmac = DMAC_INIT, .ifindex = IFINDEX_VETH1,
+	  .expected_ifindex = IFINDEX_VETH1, },
+	{ .desc = "IPv6 output route, without source, via second device",
+	  .daddr = IPV6_OUTPUT_DST, .expected_ret = BPF_FIB_LKUP_RET_SUCCESS,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT | BPF_FIB_LOOKUP_SRC,
+	  .dmac = DMAC_INIT2, .ifindex = IFINDEX_VETH2,
+	  .expected_ifindex = IFINDEX_VETH2, },
+	{ .desc = "IPv6 output route, with source, via first device",
+	  .daddr = IPV6_OUTPUT_DST, .expected_ret = BPF_FIB_LKUP_RET_SUCCESS,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT, .dmac = DMAC_INIT,
+	  .ifindex = IFINDEX_VETH1, .expected_ifindex = IFINDEX_VETH1, },
+	{ .desc = "IPv6 output route, with source, via second device",
+	  .daddr = IPV6_OUTPUT_DST, .expected_ret = BPF_FIB_LKUP_RET_SUCCESS,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT, .dmac = DMAC_INIT2,
+	  .ifindex = IFINDEX_VETH2, .expected_ifindex = IFINDEX_VETH2, },
+	{ .desc = "IPv6 output route, oif match",
+	  .daddr = IPV6_NUD_STALE_ADDR,
+	  .expected_ret = BPF_FIB_LKUP_RET_SUCCESS,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT | BPF_FIB_LOOKUP_SKIP_NEIGH,
+	  .ifindex = IFINDEX_VETH1, .expected_ifindex = IFINDEX_VETH1, },
+	{ .desc = "IPv6 output route, oif mismatch",
+	  .daddr = IPV6_NUD_STALE_ADDR,
+	  .expected_ret = BPF_FIB_LKUP_RET_NOT_FWDED,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT | BPF_FIB_LOOKUP_SKIP_NEIGH,
+	  .ifindex = IFINDEX_VETH2, },
 };
 
 static int setup_netns(void)
@@ -253,6 +283,11 @@ static int setup_netns(void)
 	SYS(fail, "ip route add %s/24 dev veth2 metric 200", IPV4_OUTPUT_NET);
 	SYS(fail, "ip neigh add %s dev veth1 lladdr %s nud perm", IPV4_OUTPUT_DST, DMAC);
 	SYS(fail, "ip neigh add %s dev veth2 lladdr %s nud perm", IPV4_OUTPUT_DST, DMAC2);
+
+	SYS(fail, "ip route add %s/64 dev veth1 metric 100", IPV6_OUTPUT_NET);
+	SYS(fail, "ip route add %s/64 dev veth2 metric 200", IPV6_OUTPUT_NET);
+	SYS(fail, "ip neigh add %s dev veth1 lladdr %s nud perm", IPV6_OUTPUT_DST, DMAC);
+	SYS(fail, "ip neigh add %s dev veth2 lladdr %s nud perm", IPV6_OUTPUT_DST, DMAC2);
 
 	return 0;
 fail:
