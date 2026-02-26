@@ -12042,6 +12042,20 @@ bpf_program__attach_kprobe_multi_opts(const struct bpf_program *prog,
 		return libbpf_err_ptr(-EINVAL);
 
 	if (pattern) {
+		/*
+		 * Exact function name (no wildcards): bypass kallsyms parsing
+		 * and pass the symbol directly to the kernel via syms[] array.
+		 * The kernel's ftrace_lookup_symbols() resolves it efficiently.
+		 */
+		if (!strpbrk(pattern, "*?")) {
+			const char *sym = pattern;
+
+			syms = &sym;
+			cnt = 1;
+			pattern = NULL;
+			goto attach;
+		}
+
 		if (has_available_filter_functions_addrs())
 			err = libbpf_available_kprobes_parse(&res);
 		else
@@ -12060,6 +12074,7 @@ bpf_program__attach_kprobe_multi_opts(const struct bpf_program *prog,
 		cnt = res.cnt;
 	}
 
+attach:
 	retprobe = OPTS_GET(opts, retprobe, false);
 	session  = OPTS_GET(opts, session, false);
 
@@ -12067,7 +12082,6 @@ bpf_program__attach_kprobe_multi_opts(const struct bpf_program *prog,
 		return libbpf_err_ptr(-EINVAL);
 
 	attach_type = session ? BPF_TRACE_KPROBE_SESSION : BPF_TRACE_KPROBE_MULTI;
-
 	lopts.kprobe_multi.syms = syms;
 	lopts.kprobe_multi.addrs = addrs;
 	lopts.kprobe_multi.cookies = cookies;
@@ -12084,6 +12098,14 @@ bpf_program__attach_kprobe_multi_opts(const struct bpf_program *prog,
 	link_fd = bpf_link_create(prog_fd, 0, attach_type, &lopts);
 	if (link_fd < 0) {
 		err = -errno;
+		/*
+		 * Normalize error code: when exact name bypasses kallsyms
+		 * parsing, kernel returns ESRCH from ftrace_lookup_symbols().
+		 * Convert to ENOENT for API consistency with the pattern
+		 * matching path which returns ENOENT from userspace.
+		 */
+		if (err == -ESRCH)
+			err = -ENOENT;
 		pr_warn("prog '%s': failed to attach: %s\n",
 			prog->name, errstr(err));
 		goto error;
@@ -12192,7 +12214,7 @@ static int attach_kprobe_session(const struct bpf_program *prog, long cookie,
 {
 	LIBBPF_OPTS(bpf_kprobe_multi_opts, opts, .session = true);
 	const char *spec;
-	char *pattern;
+	char *func_name;
 	int n;
 
 	*link = NULL;
@@ -12202,14 +12224,14 @@ static int attach_kprobe_session(const struct bpf_program *prog, long cookie,
 		return 0;
 
 	spec = prog->sec_name + sizeof("kprobe.session/") - 1;
-	n = sscanf(spec, "%m[a-zA-Z0-9_.*?]", &pattern);
+	n = sscanf(spec, "%m[a-zA-Z0-9_.*?]", &func_name);
 	if (n < 1) {
-		pr_warn("kprobe session pattern is invalid: %s\n", spec);
+		pr_warn("kprobe session function name is invalid: %s\n", spec);
 		return -EINVAL;
 	}
 
-	*link = bpf_program__attach_kprobe_multi_opts(prog, pattern, &opts);
-	free(pattern);
+	*link = bpf_program__attach_kprobe_multi_opts(prog, func_name, &opts);
+	free(func_name);
 	return *link ? 0 : -errno;
 }
 
