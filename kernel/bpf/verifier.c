@@ -202,7 +202,7 @@ struct bpf_verifier_stack_elem {
 
 #define BPF_PRIV_STACK_MIN_SIZE		64
 
-static int acquire_reference(struct bpf_verifier_env *env, int insn_idx);
+static int acquire_reference(struct bpf_verifier_env *env, int insn_idx, bool forbid_fault);
 static int release_reference_nomark(struct bpf_verifier_state *state, int ref_obj_id);
 static int release_reference(struct bpf_verifier_env *env, int ref_obj_id);
 static void invalidate_non_owning_refs(struct bpf_verifier_env *env);
@@ -807,7 +807,7 @@ static int mark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_
 		if (clone_ref_obj_id)
 			id = clone_ref_obj_id;
 		else
-			id = acquire_reference(env, insn_idx);
+			id = acquire_reference(env, insn_idx, false);
 
 		if (id < 0)
 			return id;
@@ -1055,7 +1055,7 @@ static int mark_stack_slots_iter(struct bpf_verifier_env *env,
 	if (spi < 0)
 		return spi;
 
-	id = acquire_reference(env, insn_idx);
+	id = acquire_reference(env, insn_idx, false);
 	if (id < 0)
 		return id;
 
@@ -1476,6 +1476,7 @@ static int copy_reference_state(struct bpf_verifier_state *dst, const struct bpf
 	dst->active_irq_id = src->active_irq_id;
 	dst->active_lock_id = src->active_lock_id;
 	dst->active_lock_ptr = src->active_lock_ptr;
+	dst->forbid_fault_count = src->forbid_fault_count;
 	return 0;
 }
 
@@ -1549,7 +1550,7 @@ static struct bpf_reference_state *acquire_reference_state(struct bpf_verifier_e
 	return &state->refs[new_ofs];
 }
 
-static int acquire_reference(struct bpf_verifier_env *env, int insn_idx)
+static int acquire_reference(struct bpf_verifier_env *env, int insn_idx, bool forbid_fault)
 {
 	struct bpf_reference_state *s;
 
@@ -1558,6 +1559,9 @@ static int acquire_reference(struct bpf_verifier_env *env, int insn_idx)
 		return -ENOMEM;
 	s->type = REF_TYPE_PTR;
 	s->id = ++env->id_gen;
+	s->forbid_fault = forbid_fault;
+	if (forbid_fault)
+		env->cur_state->forbid_fault_count++;
 	return s->id;
 }
 
@@ -1599,6 +1603,9 @@ static void release_reference_state(struct bpf_verifier_state *state, int idx)
 {
 	int last_idx;
 	size_t rem;
+
+	if (state->refs[idx].forbid_fault)
+		state->forbid_fault_count--;
 
 	/* IRQ state requires the relative ordering of elements remaining the
 	 * same, since it relies on the refs array to behave as a stack, so that
@@ -11589,6 +11596,7 @@ static inline bool in_sleepable_context(struct bpf_verifier_env *env)
 	       !env->cur_state->active_preempt_locks &&
 	       !env->cur_state->active_locks &&
 	       !env->cur_state->active_irq_id &&
+	       !env->cur_state->forbid_fault_count &&
 	       in_sleepable(env);
 }
 
@@ -11602,6 +11610,8 @@ static const char *non_sleepable_context_description(struct bpf_verifier_env *en
 		return "IRQ-disabled region";
 	if (env->cur_state->active_locks)
 		return "lock region";
+	if (env->cur_state->forbid_fault_count)
+		return "nofault region";
 	return "non-sleepable prog";
 }
 
@@ -12047,7 +12057,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		/* For release_reference() */
 		regs[BPF_REG_0].ref_obj_id = meta.ref_obj_id;
 	} else if (is_acquire_function(func_id, meta.map.ptr)) {
-		int id = acquire_reference(env, insn_idx);
+		int id = acquire_reference(env, insn_idx, false);
 
 		if (id < 0)
 			return id;
@@ -12150,6 +12160,11 @@ static bool is_kfunc_acquire(struct bpf_kfunc_call_arg_meta *meta)
 static bool is_kfunc_release(struct bpf_kfunc_call_arg_meta *meta)
 {
 	return meta->kfunc_flags & KF_RELEASE;
+}
+
+static bool is_kfunc_forbid_fault(struct bpf_kfunc_call_arg_meta *meta)
+{
+	return meta->kfunc_flags & KF_FORBID_FAULT;
 }
 
 static bool is_kfunc_sleepable(struct bpf_kfunc_call_arg_meta *meta)
@@ -14403,6 +14418,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 		mark_btf_func_reg_size(env, BPF_REG_0, sizeof(void *));
 		if (is_kfunc_acquire(&meta)) {
+			bool forbid_fault = is_kfunc_forbid_fault(&meta);
 			int id;
 
 			/*
@@ -14417,7 +14433,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 					return err;
 			}
 
-			id = acquire_reference(env, insn_idx);
+			id = acquire_reference(env, insn_idx, forbid_fault);
 
 			if (id < 0)
 				return id;
@@ -20091,6 +20107,9 @@ static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *c
 	if (old->active_rcu_locks != cur->active_rcu_locks)
 		return false;
 
+	if (old->forbid_fault_count != cur->forbid_fault_count)
+		return false;
+
 	if (!check_ids(old->active_irq_id, cur->active_irq_id, idmap))
 		return false;
 
@@ -20104,6 +20123,9 @@ static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *c
 			return false;
 		switch (old->refs[i].type) {
 		case REF_TYPE_PTR:
+			if (old->refs[i].forbid_fault != cur->refs[i].forbid_fault)
+				return false;
+			break;
 		case REF_TYPE_IRQ:
 			break;
 		case REF_TYPE_LOCK:
@@ -24629,7 +24651,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 	if (!subprog && env->prog->type == BPF_PROG_TYPE_STRUCT_OPS) {
 		for (i = 0; i < aux->ctx_arg_info_size; i++)
 			aux->ctx_arg_info[i].ref_obj_id = aux->ctx_arg_info[i].refcounted ?
-							  acquire_reference(env, 0) : 0;
+							  acquire_reference(env, 0, false) : 0;
 	}
 
 	ret = do_check(env);
