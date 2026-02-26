@@ -6255,6 +6255,7 @@ static int bpf_ipv6_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
 	if (flags & BPF_FIB_LOOKUP_OUTPUT) {
 		fl6.flowi6_iif = 1;
 		oif = fl6.flowi6_oif = params->ifindex;
+		strict = RT6_LOOKUP_F_IFACE;
 	} else {
 		oif = fl6.flowi6_iif = params->ifindex;
 		fl6.flowi6_oif = 0;
