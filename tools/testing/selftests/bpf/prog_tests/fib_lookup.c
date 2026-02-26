@@ -55,6 +55,7 @@ struct fib_lookup_test {
 	__u8 dmac[6];
 	__u32 mark;
 	int ifindex;
+	int expected_ifindex;
 };
 
 static const struct fib_lookup_test tests[] = {
@@ -358,6 +359,10 @@ void test_fib_lookup(void)
 
 		if (tests[i].expected_dst)
 			assert_dst_ip(fib_params, tests[i].expected_dst);
+
+		if (tests[i].expected_ifindex)
+			ASSERT_EQ(fib_params->ifindex, tests[i].expected_ifindex,
+				  "ifindex does not match");
 
 		ret = memcmp(tests[i].dmac, fib_params->dmac, sizeof(tests[i].dmac));
 		if (!ASSERT_EQ(ret, 0, "dmac not match")) {
