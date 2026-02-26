@@ -6241,8 +6241,15 @@ static int bpf_ipv6_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
 	u32 mtu = 0;
 
 	/* link local addresses are never forwarded */
-	if (rt6_need_strict(dst) || rt6_need_strict(src))
-		return BPF_FIB_LKUP_RET_NOT_FWDED;
+	if (rt6_need_strict(dst) || rt6_need_strict(src)) {
+		int rej_type = IPV6_ADDR_MULTICAST | IPV6_ADDR_LOOPBACK;
+
+		if (!(flags & BPF_FIB_LOOKUP_OUTPUT))
+			return BPF_FIB_LKUP_RET_NOT_FWDED;
+		if ((ipv6_addr_type(dst) & rej_type) ||
+		    (ipv6_addr_type(src) & rej_type))
+			return BPF_FIB_LKUP_RET_NOT_FWDED;
+	}
 
 	dev = dev_get_by_index_rcu(net, params->ifindex);
 	if (unlikely(!dev))
