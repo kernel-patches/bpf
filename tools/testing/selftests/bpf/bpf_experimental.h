@@ -8,50 +8,8 @@
 
 #define __contains(name, node) __attribute__((btf_decl_tag("contains:" #name ":" #node)))
 
-/* Description
- *	Allocates an object of the type represented by 'local_type_id' in
- *	program BTF. User may use the bpf_core_type_id_local macro to pass the
- *	type ID of a struct in program BTF.
- *
- *	The 'local_type_id' parameter must be a known constant.
- *	The 'meta' parameter is rewritten by the verifier, no need for BPF
- *	program to set it.
- * Returns
- *	A pointer to an object of the type corresponding to the passed in
- *	'local_type_id', or NULL on failure.
- */
-extern void *bpf_obj_new_impl(__u64 local_type_id, void *meta) __ksym;
-
-/* Convenience macro to wrap over bpf_obj_new_impl */
-#define bpf_obj_new(type) ((type *)bpf_obj_new_impl(bpf_core_type_id_local(type), NULL))
-
-/* Description
- *	Free an allocated object. All fields of the object that require
- *	destruction will be destructed before the storage is freed.
- *
- *	The 'meta' parameter is rewritten by the verifier, no need for BPF
- *	program to set it.
- * Returns
- *	Void.
- */
-extern void bpf_obj_drop_impl(void *kptr, void *meta) __ksym;
-
-/* Convenience macro to wrap over bpf_obj_drop_impl */
-#define bpf_obj_drop(kptr) bpf_obj_drop_impl(kptr, NULL)
-
-/* Description
- *	Increment the refcount on a refcounted local kptr, turning the
- *	non-owning reference input into an owning reference in the process.
- *
- *	The 'meta' parameter is rewritten by the verifier, no need for BPF
- *	program to set it.
- * Returns
- *	An owning reference to the object pointed to by 'kptr'
- */
-extern void *bpf_refcount_acquire_impl(void *kptr, void *meta) __ksym;
-
-/* Convenience macro to wrap over bpf_refcount_acquire_impl */
-#define bpf_refcount_acquire(kptr) bpf_refcount_acquire_impl(kptr, NULL)
+/* Convenience macro to wrap over bpf_obj_new */
+#define bpf_obj_new(type) ((type *)bpf_obj_new(bpf_core_type_id_local(type)))
 
 /* Description
  *	Add a new entry to the beginning of the BPF linked list.
