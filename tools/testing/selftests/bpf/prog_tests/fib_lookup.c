@@ -41,6 +41,8 @@
 #define DMAC_INIT { 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, }
 #define DMAC2			"01:01:01:01:01:01"
 #define DMAC_INIT2 { 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, }
+#define IFINDEX_VETH1		10010
+#define IFINDEX_VETH2		10020
 
 struct fib_lookup_test {
 	const char *desc;
@@ -148,7 +150,8 @@ static int setup_netns(void)
 {
 	int err;
 
-	SYS(fail, "ip link add veth1 type veth peer name veth2");
+	SYS(fail, "ip link add veth1 index %d type veth peer name veth2 index %d",
+	    IFINDEX_VETH1, IFINDEX_VETH2);
 	SYS(fail, "ip link set dev veth1 up");
 	SYS(fail, "ip link set dev veth2 up");
 
@@ -324,10 +327,7 @@ void test_fib_lookup(void)
 	if (setup_netns())
 		goto fail;
 
-	skb.ifindex = if_nametoindex("veth1");
-	if (!ASSERT_NEQ(skb.ifindex, 0, "if_nametoindex(veth1)"))
-		goto fail;
-
+	skb.ifindex = IFINDEX_VETH1;
 	fib_params = &skel->bss->fib_params;
 
 	for (i = 0; i < ARRAY_SIZE(tests); i++) {
