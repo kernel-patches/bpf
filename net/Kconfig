@@ -543,4 +543,14 @@ config NET_TEST
 
 	  If unsure, say N.
 
+config BPF_SKB_STORAGE
+	bool "BPF local storage for sk_buff"
+	depends on BPF_SYSCALL
+	select SKB_EXTENSIONS
+	help
+	  Enable an sk_buff extension for BPF local storage. This allows BPF
+	  programs to associate arbitrary data with individual packets as they
+	  traverse the network stack. The storage is automatically freed when
+	  the sk_buff is freed.
+
 endif   # if NET

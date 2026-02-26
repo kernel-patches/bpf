@@ -10211,6 +10211,10 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 		    func_id != BPF_FUNC_map_push_elem)
 			goto error;
 		break;
+	case BPF_MAP_TYPE_SKB_STORAGE:
+		if (func_id != BPF_FUNC_kptr_xchg)
+			goto error;
+		break;
 	case BPF_MAP_TYPE_INSN_ARRAY:
 		goto error;
 	default:
@@ -12465,6 +12469,8 @@ enum special_kfunc_type {
 	KF_bpf_session_is_return,
 	KF_bpf_stream_vprintk,
 	KF_bpf_stream_print_stack,
+	KF_bpf_skb_storage_get,
+	KF_bpf_skb_storage_delete,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -12545,6 +12551,13 @@ BTF_ID(func, bpf_arena_reserve_pages)
 BTF_ID(func, bpf_session_is_return)
 BTF_ID(func, bpf_stream_vprintk)
 BTF_ID(func, bpf_stream_print_stack)
+#ifdef CONFIG_BPF_SKB_STORAGE
+BTF_ID(func, bpf_skb_storage_get)
+BTF_ID(func, bpf_skb_storage_delete)
+#else
+BTF_ID_UNUSED
+BTF_ID_UNUSED
+#endif
 
 static bool is_task_work_add_kfunc(u32 func_id)
 {
@@ -13263,6 +13276,22 @@ static bool check_css_task_iter_allowlist(struct bpf_verifier_env *env)
 	}
 }
 
+static int check_kfunc_map_compatibility(struct bpf_verifier_env *env,
+					 struct bpf_kfunc_call_arg_meta *meta,
+					 struct bpf_map *map)
+{
+	if ((meta->func_id == special_kfunc_list[KF_bpf_skb_storage_get] ||
+	     meta->func_id == special_kfunc_list[KF_bpf_skb_storage_delete]) &&
+	    map->map_type != BPF_MAP_TYPE_SKB_STORAGE)
+		goto error;
+
+	return 0;
+error:
+	verbose(env, "cannot pass map_type %d into func %s#%d\n",
+		map->map_type, meta->func_name, meta->func_id);
+	return -EINVAL;
+}
+
 static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_arg_meta *meta,
 			    int insn_idx)
 {
@@ -13422,6 +13451,9 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			}
 			meta->map.ptr = reg->map_ptr;
 			meta->map.uid = reg->map_uid;
+			ret = check_kfunc_map_compatibility(env, meta, meta->map.ptr);
+			if (ret < 0)
+				return ret;
 			fallthrough;
 		case KF_ARG_PTR_TO_ALLOC_BTF_ID:
 		case KF_ARG_PTR_TO_BTF_ID:
@@ -14009,6 +14041,12 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_ca
 		 * because packet slices are not refcounted (see
 		 * dynptr_type_refcounted)
 		 */
+	} else if (meta->func_id == special_kfunc_list[KF_bpf_skb_storage_get]) {
+		mark_reg_known_zero(env, regs, BPF_REG_0);
+		regs[BPF_REG_0].type = PTR_TO_MAP_VALUE;
+		regs[BPF_REG_0].map_ptr = meta->map.ptr;
+		regs[BPF_REG_0].map_uid = meta->map.uid;
+		/* PTR_MAYBE_NULL will be added when is_kfunc_ret_null is checked */
 	} else {
 		return 0;
 	}

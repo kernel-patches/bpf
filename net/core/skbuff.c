@@ -83,6 +83,7 @@
 #include <net/psp/types.h>
 #include <net/dropreason.h>
 #include <net/xdp_sock.h>
+#include <net/bpf_skb_storage.h>
 
 #include <linux/uaccess.h>
 #include <trace/events/skb.h>
@@ -5143,6 +5144,9 @@ static const u8 skb_ext_type_len[] = {
 #if IS_ENABLED(CONFIG_CAN)
 	[SKB_EXT_CAN] = SKB_EXT_CHUNKSIZEOF(struct can_skb_ext),
 #endif
+#if IS_ENABLED(CONFIG_BPF_SKB_STORAGE)
+	[SKB_EXT_BPF_STORAGE] = SKB_EXT_CHUNKSIZEOF(struct bpf_skb_storage_ext),
+#endif
 };
 
 static __always_inline unsigned int skb_ext_total_length(void)
@@ -7100,6 +7104,13 @@ static struct skb_ext *skb_ext_maybe_cow(struct skb_ext *old,
 			refcount_inc(&flow->key->refs);
 	}
 #endif
+#ifdef CONFIG_BPF_SKB_STORAGE
+	if (old_active & (1 << SKB_EXT_BPF_STORAGE)) {
+		struct bpf_skb_storage_ext *ext = skb_ext_get_ptr(new, SKB_EXT_BPF_STORAGE);
+
+		RCU_INIT_POINTER(ext->storage, NULL);
+	}
+#endif
 	__skb_ext_put(old);
 	return new;
 }
@@ -7234,6 +7245,10 @@ free_now:
 #ifdef CONFIG_MCTP_FLOWS
 	if (__skb_ext_exist(ext, SKB_EXT_MCTP))
 		skb_ext_put_mctp(skb_ext_get_ptr(ext, SKB_EXT_MCTP));
+#endif
+#ifdef CONFIG_BPF_SKB_STORAGE
+	if (__skb_ext_exist(ext, SKB_EXT_BPF_STORAGE))
+		bpf_skb_storage_free(skb_ext_get_ptr(ext, SKB_EXT_BPF_STORAGE));
 #endif
 
 	kmem_cache_free(skbuff_ext_cache, ext);
