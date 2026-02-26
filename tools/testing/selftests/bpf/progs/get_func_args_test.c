@@ -167,7 +167,8 @@ int BPF_PROG(tp_test2)
 }
 
 __u64 test7_result = 0;
-#if defined(bpf_target_x86) || defined(bpf_target_arm64) || defined(bpf_target_riscv)
+#if defined(bpf_target_x86) || defined(bpf_target_arm64) || \
+    defined(bpf_target_riscv) || defined(bpf_target_loongarch)
 SEC("fsession/bpf_fentry_test1")
 int BPF_PROG(test7)
 {
