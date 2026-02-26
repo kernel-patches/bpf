@@ -43,6 +43,8 @@
 #define DMAC_INIT2 { 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, }
 #define IFINDEX_VETH1		10010
 #define IFINDEX_VETH2		10020
+#define IPV4_OUTPUT_NET		"192.0.2.0"
+#define IPV4_OUTPUT_DST		"192.0.2.1"
 
 struct fib_lookup_test {
 	const char *desc;
@@ -146,6 +148,35 @@ static const struct fib_lookup_test tests[] = {
 	  .expected_dst = IPV6_GW1,
 	  .lookup_flags = BPF_FIB_LOOKUP_SKIP_NEIGH,
 	  .mark = MARK, },
+	/* output routes */
+	{ .desc = "IPv4 output route, without source, via first device",
+	  .daddr = IPV4_OUTPUT_DST, .expected_ret = BPF_FIB_LKUP_RET_SUCCESS,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT | BPF_FIB_LOOKUP_SRC,
+	  .dmac = DMAC_INIT, .ifindex = IFINDEX_VETH1,
+	  .expected_ifindex = IFINDEX_VETH1, },
+	{ .desc = "IPv4 output route, without source, via second device",
+	  .daddr = IPV4_OUTPUT_DST, .expected_ret = BPF_FIB_LKUP_RET_SUCCESS,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT | BPF_FIB_LOOKUP_SRC,
+	  .dmac = DMAC_INIT2, .ifindex = IFINDEX_VETH2,
+	  .expected_ifindex = IFINDEX_VETH2, },
+	{ .desc = "IPv4 output route, with source, via first device",
+	  .daddr = IPV4_OUTPUT_DST, .expected_ret = BPF_FIB_LKUP_RET_SUCCESS,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT, .dmac = DMAC_INIT,
+	  .ifindex = IFINDEX_VETH1, .expected_ifindex = IFINDEX_VETH1, },
+	{ .desc = "IPv4 output route, with source, via second device",
+	  .daddr = IPV4_OUTPUT_DST, .expected_ret = BPF_FIB_LKUP_RET_SUCCESS,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT, .dmac = DMAC_INIT2,
+	  .ifindex = IFINDEX_VETH2, .expected_ifindex = IFINDEX_VETH2, },
+	{ .desc = "IPv4 output route, oif match",
+	  .daddr = IPV4_NUD_STALE_ADDR,
+	  .expected_ret = BPF_FIB_LKUP_RET_SUCCESS,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT | BPF_FIB_LOOKUP_SKIP_NEIGH,
+	  .ifindex = IFINDEX_VETH1, .expected_ifindex = IFINDEX_VETH1, },
+	{ .desc = "IPv4 output route, oif mismatch",
+	  .daddr = IPV4_NUD_STALE_ADDR,
+	  .expected_ret = BPF_FIB_LKUP_RET_NOT_FWDED,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT | BPF_FIB_LOOKUP_SKIP_NEIGH,
+	  .ifindex = IFINDEX_VETH2, },
 };
 
 static int setup_netns(void)
@@ -216,6 +247,12 @@ static int setup_netns(void)
 	SYS(fail, "ip -6 route add %s/128 via %s table %s", IPV6_REMOTE_DST, IPV6_GW2, MARK_TABLE);
 	SYS(fail, "ip rule add prio 2 fwmark %d lookup %s", MARK, MARK_TABLE);
 	SYS(fail, "ip -6 rule add prio 2 fwmark %d lookup %s", MARK, MARK_TABLE);
+
+	/* Setup for output route tests */
+	SYS(fail, "ip route add %s/24 dev veth1 metric 100", IPV4_OUTPUT_NET);
+	SYS(fail, "ip route add %s/24 dev veth2 metric 200", IPV4_OUTPUT_NET);
+	SYS(fail, "ip neigh add %s dev veth1 lladdr %s nud perm", IPV4_OUTPUT_DST, DMAC);
+	SYS(fail, "ip neigh add %s dev veth2 lladdr %s nud perm", IPV4_OUTPUT_DST, DMAC2);
 
 	return 0;
 fail:
