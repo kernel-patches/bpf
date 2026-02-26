@@ -193,8 +193,16 @@ static int setup_netns(void)
 	if (!ASSERT_OK(err, "write_sysctl(net.ipv4.conf.veth1.forwarding)"))
 		goto fail;
 
+	err = write_sysctl("/proc/sys/net/ipv4/conf/veth2/forwarding", "1");
+	if (!ASSERT_OK(err, "write_sysctl(net.ipv4.conf.veth2.forwarding)"))
+		goto fail;
+
 	err = write_sysctl("/proc/sys/net/ipv6/conf/veth1/forwarding", "1");
 	if (!ASSERT_OK(err, "write_sysctl(net.ipv6.conf.veth1.forwarding)"))
+		goto fail;
+
+	err = write_sysctl("/proc/sys/net/ipv6/conf/veth2/forwarding", "1");
+	if (!ASSERT_OK(err, "write_sysctl(net.ipv6.conf.veth2.forwarding)"))
 		goto fail;
 
 	/* Setup for policy routing tests */
