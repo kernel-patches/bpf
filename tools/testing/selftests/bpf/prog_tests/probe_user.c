@@ -13,13 +13,15 @@ void serial_test_probe_user(void)
 	enum { prog_count = ARRAY_SIZE(prog_names) };
 	const char *obj_file = "./test_probe_user.bpf.o";
 	DECLARE_LIBBPF_OPTS(bpf_object_open_opts, opts, );
-	int err, results_map_fd, sock_fd, duration = 0;
+	int err, results_map_fd, pid_map_fd, sock_fd, duration = 0;
 	struct sockaddr curr, orig, tmp;
 	struct sockaddr_in *in = (struct sockaddr_in *)&curr;
 	struct bpf_link *kprobe_links[prog_count] = {};
 	struct bpf_program *kprobe_progs[prog_count];
 	struct bpf_object *obj;
 	static const int zero = 0;
+	__u32 key = 0;
+	__u32 pid;
 	size_t i;
 
 	obj = bpf_object__open_file(obj_file, &opts);
@@ -36,6 +38,15 @@ void serial_test_probe_user(void)
 
 	err = bpf_object__load(obj);
 	if (CHECK(err, "obj_load", "err %d\n", err))
+		goto cleanup;
+
+	pid_map_fd = bpf_find_map(__func__, obj, "pid_map");
+	if (CHECK(pid_map_fd < 0, "find_pid_map", "err %d\n", pid_map_fd))
+		goto cleanup;
+
+	pid = getpid();
+	err = bpf_map_update_elem(pid_map_fd, &key, &pid, BPF_ANY);
+	if (CHECK(err, "update_pid_map", "err %d\n", err))
 		goto cleanup;
 
 	results_map_fd = bpf_find_map(__func__, obj, "test_pro.bss");
