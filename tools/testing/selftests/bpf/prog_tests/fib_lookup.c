@@ -47,6 +47,8 @@
 #define IPV4_OUTPUT_DST		"192.0.2.1"
 #define IPV6_OUTPUT_NET		"2001:db8:1::"
 #define IPV6_OUTPUT_DST		"2001:db8:1::1"
+#define IPV6_LL_ADDR		"fe80::1"
+#define IPV6_LL_DST		"fe80::2"
 
 struct fib_lookup_test {
 	const char *desc;
@@ -207,6 +209,14 @@ static const struct fib_lookup_test tests[] = {
 	  .expected_ret = BPF_FIB_LKUP_RET_NOT_FWDED,
 	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT | BPF_FIB_LOOKUP_SKIP_NEIGH,
 	  .ifindex = IFINDEX_VETH2, },
+	{ .desc = "IPv6 output route, link-local, via first device",
+	  .daddr = IPV6_LL_DST, .expected_ret = BPF_FIB_LKUP_RET_SUCCESS,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT, .dmac = DMAC_INIT,
+	  .ifindex = IFINDEX_VETH1, .expected_ifindex = IFINDEX_VETH1, },
+	{ .desc = "IPv6 output route, link-local, via second device",
+	  .daddr = IPV6_LL_DST, .expected_ret = BPF_FIB_LKUP_RET_SUCCESS,
+	  .lookup_flags = BPF_FIB_LOOKUP_OUTPUT, .dmac = DMAC_INIT2,
+	  .ifindex = IFINDEX_VETH2, .expected_ifindex = IFINDEX_VETH2, },
 };
 
 static int setup_netns(void)
@@ -288,6 +298,11 @@ static int setup_netns(void)
 	SYS(fail, "ip route add %s/64 dev veth2 metric 200", IPV6_OUTPUT_NET);
 	SYS(fail, "ip neigh add %s dev veth1 lladdr %s nud perm", IPV6_OUTPUT_DST, DMAC);
 	SYS(fail, "ip neigh add %s dev veth2 lladdr %s nud perm", IPV6_OUTPUT_DST, DMAC2);
+
+	SYS(fail, "ip addr add %s/64 dev veth1 nodad", IPV6_LL_ADDR);
+	SYS(fail, "ip addr add %s/64 dev veth2 nodad", IPV6_LL_ADDR);
+	SYS(fail, "ip neigh add %s dev veth1 lladdr %s nud perm", IPV6_LL_DST, DMAC);
+	SYS(fail, "ip neigh add %s dev veth2 lladdr %s nud perm", IPV6_LL_DST, DMAC2);
 
 	return 0;
 fail:
