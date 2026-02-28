@@ -981,6 +981,7 @@ int bpf_trampoline_link_cgroup_shim(struct bpf_prog *prog,
 	struct bpf_shim_tramp_link *shim_link = NULL;
 	struct bpf_attach_target_info tgt_info = {};
 	struct bpf_trampoline *tr;
+	struct bpf_link *link;
 	bpf_func_t bpf_func;
 	u64 key;
 	int err;
@@ -1003,12 +1004,13 @@ int bpf_trampoline_link_cgroup_shim(struct bpf_prog *prog,
 
 	shim_link = cgroup_shim_find(tr, bpf_func);
 	if (shim_link) {
-		/* Reusing existing shim attached by the other program. */
-		bpf_link_inc(&shim_link->link.link);
-
-		mutex_unlock(&tr->mutex);
-		bpf_trampoline_put(tr); /* bpf_trampoline_get above */
-		return 0;
+		link = &shim_link->link.link;
+		if (link == bpf_link_inc_not_zero(link)) {
+			/* Reusing existing shim attached by the other program. */
+			mutex_unlock(&tr->mutex);
+			bpf_trampoline_put(tr); /* bpf_trampoline_get above */
+			return 0;
+		}
 	}
 
 	/* Allocate and install new shim. */
