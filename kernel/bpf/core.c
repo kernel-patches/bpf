@@ -2380,14 +2380,66 @@ static unsigned int __bpf_prog_ret0_warn(const void *ctx,
 	return 0;
 }
 
+static void bpf_map_owner_init(struct bpf_map_owner *owner, const struct bpf_prog *fp,
+			       enum bpf_prog_type prog_type)
+{
+	struct bpf_prog_aux *aux = fp->aux;
+	enum bpf_cgroup_storage_type i;
+
+	owner->type  = prog_type;
+	owner->jited = fp->jited;
+	owner->xdp_has_frags = aux->xdp_has_frags;
+	owner->sleepable = fp->sleepable;
+	owner->expected_attach_type = fp->expected_attach_type;
+	owner->attach_func_proto = aux->attach_func_proto;
+	for_each_cgroup_storage_type(i)
+		owner->storage_cookie[i] = aux->cgroup_storage[i] ?
+			aux->cgroup_storage[i]->cookie : 0;
+}
+
+static bool bpf_map_owner_matches(const struct bpf_map *map, const struct bpf_prog *fp,
+				  enum bpf_prog_type prog_type)
+{
+	struct bpf_map_owner *owner = map->owner;
+	struct bpf_prog_aux *aux = fp->aux;
+	enum bpf_cgroup_storage_type i;
+	u64 cookie;
+
+	if (owner->type  != prog_type ||
+	    owner->jited != fp->jited ||
+	    owner->xdp_has_frags != aux->xdp_has_frags ||
+	    owner->sleepable != fp->sleepable)
+		return false;
+
+	if (map->map_type == BPF_MAP_TYPE_PROG_ARRAY &&
+	    owner->expected_attach_type != fp->expected_attach_type)
+		return false;
+
+	for_each_cgroup_storage_type(i) {
+		cookie = aux->cgroup_storage[i] ? aux->cgroup_storage[i]->cookie : 0;
+		if (cookie && cookie != owner->storage_cookie[i])
+			return false;
+	}
+
+	if (owner->attach_func_proto != aux->attach_func_proto) {
+		switch (prog_type) {
+		case BPF_PROG_TYPE_TRACING:
+		case BPF_PROG_TYPE_LSM:
+		case BPF_PROG_TYPE_EXT:
+		case BPF_PROG_TYPE_STRUCT_OPS:
+			return false;
+		default:
+			break;
+		}
+	}
+	return true;
+}
+
 static bool __bpf_prog_map_compatible(struct bpf_map *map,
 				      const struct bpf_prog *fp)
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(fp);
-	struct bpf_prog_aux *aux = fp->aux;
-	enum bpf_cgroup_storage_type i;
 	bool ret = false;
-	u64 cookie;
 
 	if (fp->kprobe_override)
 		return ret;
@@ -2398,48 +2450,10 @@ static bool __bpf_prog_map_compatible(struct bpf_map *map,
 		map->owner = bpf_map_owner_alloc(map);
 		if (!map->owner)
 			goto err;
-		map->owner->type  = prog_type;
-		map->owner->jited = fp->jited;
-		map->owner->xdp_has_frags = aux->xdp_has_frags;
-		map->owner->sleepable = fp->sleepable;
-		map->owner->expected_attach_type = fp->expected_attach_type;
-		map->owner->attach_func_proto = aux->attach_func_proto;
-		for_each_cgroup_storage_type(i) {
-			map->owner->storage_cookie[i] =
-				aux->cgroup_storage[i] ?
-				aux->cgroup_storage[i]->cookie : 0;
-		}
+		bpf_map_owner_init(map->owner, fp, prog_type);
 		ret = true;
 	} else {
-		ret = map->owner->type  == prog_type &&
-		      map->owner->jited == fp->jited &&
-		      map->owner->xdp_has_frags == aux->xdp_has_frags &&
-		      map->owner->sleepable == fp->sleepable;
-		if (ret &&
-		    map->map_type == BPF_MAP_TYPE_PROG_ARRAY &&
-		    map->owner->expected_attach_type != fp->expected_attach_type)
-			ret = false;
-		for_each_cgroup_storage_type(i) {
-			if (!ret)
-				break;
-			cookie = aux->cgroup_storage[i] ?
-				 aux->cgroup_storage[i]->cookie : 0;
-			ret = map->owner->storage_cookie[i] == cookie ||
-			      !cookie;
-		}
-		if (ret &&
-		    map->owner->attach_func_proto != aux->attach_func_proto) {
-			switch (prog_type) {
-			case BPF_PROG_TYPE_TRACING:
-			case BPF_PROG_TYPE_LSM:
-			case BPF_PROG_TYPE_EXT:
-			case BPF_PROG_TYPE_STRUCT_OPS:
-				ret = false;
-				break;
-			default:
-				break;
-			}
-		}
+		ret = bpf_map_owner_matches(map, fp, prog_type);
 	}
 err:
 	spin_unlock(&map->owner_lock);
