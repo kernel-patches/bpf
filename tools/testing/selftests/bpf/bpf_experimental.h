@@ -124,6 +124,21 @@ extern int bpf_list_add_impl(struct bpf_list_node *prev, struct bpf_list_node *n
 #define bpf_list_add(prev, node) bpf_list_add_impl(prev, node, NULL, 0)
 
 /* Description
+ *	Return true if 'node' is the first node in the list with head 'head'.
+ */
+extern bool bpf_list_is_first(struct bpf_list_head *head, struct bpf_list_node *node) __ksym;
+
+/* Description
+ *	Return true if 'node' is the last node in the list with head 'head'.
+ */
+extern bool bpf_list_is_last(struct bpf_list_head *head, struct bpf_list_node *node) __ksym;
+
+/* Description
+ *	Return true if the list with head 'head' has no entries.
+ */
+extern bool bpf_list_empty(struct bpf_list_head *head) __ksym;
+
+/* Description
  *	Remove 'node' from rbtree with root 'root'
  * Returns
  * 	Pointer to the removed node, or NULL if 'root' didn't contain 'node'
