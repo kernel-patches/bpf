@@ -22952,7 +22952,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		 * all instruction adjustments should be accumulated
 		 */
 		old_len = func[i]->len;
-		func[i] = bpf_int_jit_compile(func[i]);
+		func[i] = bpf_int_jit_compile(env, func[i]);
 		subprog_start_adjustment += func[i]->len - old_len;
 
 		if (!func[i]->jited) {
@@ -22998,7 +22998,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	}
 	for (i = 0; i < env->subprog_cnt; i++) {
 		old_bpf_func = func[i]->bpf_func;
-		tmp = bpf_int_jit_compile(func[i]);
+		tmp = bpf_int_jit_compile(env, func[i]);
 		if (tmp != func[i] || func[i]->bpf_func != old_bpf_func) {
 			verbose(env, "JIT doesn't support bpf-to-bpf calls\n");
 			err = -ENOTSUPP;
@@ -26205,7 +26205,7 @@ skip_full_check:
 	/* constants blinding in the JIT may increase prog->len */
 	len = env->prog->len;
 	if (env->subprog_cnt == 1)
-		env->prog = bpf_prog_select_jit(env->prog, &ret);
+		env->prog = bpf_prog_select_jit(env, env->prog, &ret);
 
 	adjust_btf_func(env);
 

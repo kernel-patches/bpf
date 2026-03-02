@@ -1909,7 +1909,7 @@ int arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
 	return ret < 0 ? ret : ret * LOONGARCH_INSN_SIZE;
 }
 
-struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
+struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 	bool tmp_blinded = false, extra_pass = false;
 	u8 *image_ptr, *ro_image_ptr;
@@ -1927,7 +1927,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	if (!prog->jit_requested)
 		return orig_prog;
 
-	tmp = bpf_jit_blind_constants(prog);
+	tmp = bpf_jit_blind_constants(env, prog);
 	/*
 	 * If blinding was requested and we failed during blinding,
 	 * we must fall back to the interpreter. Otherwise, we save

@@ -1477,7 +1477,7 @@ struct sparc64_jit_data {
 	struct jit_ctx ctx;
 };
 
-struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
+struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 	struct bpf_prog *tmp, *orig_prog = prog;
 	struct sparc64_jit_data *jit_data;
@@ -1492,7 +1492,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	if (!prog->jit_requested)
 		return orig_prog;
 
-	tmp = bpf_jit_blind_constants(prog);
+	tmp = bpf_jit_blind_constants(env, prog);
 	/* If blinding was requested and we failed during blinding,
 	 * we must fall back to the interpreter.
 	 */

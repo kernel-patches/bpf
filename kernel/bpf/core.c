@@ -1486,7 +1486,7 @@ static void adjust_insn_arrays(struct bpf_prog *prog, u32 off, u32 len)
 #endif
 }
 
-struct bpf_prog *bpf_jit_blind_constants(struct bpf_prog *prog)
+struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 	struct bpf_insn insn_buff[16], aux[2];
 	struct bpf_prog *clone, *tmp;
@@ -2505,13 +2505,13 @@ static bool bpf_prog_select_interpreter(struct bpf_prog *fp)
 	return select_interpreter;
 }
 
-struct bpf_prog *bpf_prog_select_jit(struct bpf_prog *fp, int *err)
+struct bpf_prog *bpf_prog_select_jit(struct bpf_verifier_env *env, struct bpf_prog *fp, int *err)
 {
 	*err = bpf_prog_alloc_jited_linfo(fp);
 	if (*err)
 		return fp;
 
-	fp = bpf_int_jit_compile(fp);
+	fp = bpf_int_jit_compile(env, fp);
 	bpf_prog_jit_attempt_done(fp);
 	return fp;
 }
@@ -2541,7 +2541,7 @@ struct bpf_prog *__bpf_prog_select_runtime(struct bpf_prog *fp, bool jit_attempt
 	 */
 	if (!bpf_prog_is_offloaded(fp->aux)) {
 		if (!jit_attempted) {
-			fp = bpf_prog_select_jit(fp, err);
+			fp = bpf_prog_select_jit(NULL, fp, err);
 			if (*err)
 				return fp;
 		}
@@ -3072,7 +3072,7 @@ const struct bpf_func_proto bpf_tail_call_proto = {
  * It is encouraged to implement bpf_int_jit_compile() instead, so that
  * eBPF and implicitly also cBPF can get JITed!
  */
-struct bpf_prog * __weak bpf_int_jit_compile(struct bpf_prog *prog)
+struct bpf_prog * __weak bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 	return prog;
 }

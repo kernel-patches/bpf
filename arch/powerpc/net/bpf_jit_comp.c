@@ -129,7 +129,7 @@ bool bpf_jit_needs_zext(void)
 	return true;
 }
 
-struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
+struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *fp)
 {
 	u32 proglen;
 	u32 alloclen;
@@ -154,7 +154,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 	if (!fp->jit_requested)
 		return org_fp;
 
-	tmp_fp = bpf_jit_blind_constants(org_fp);
+	tmp_fp = bpf_jit_blind_constants(env, org_fp);
 	if (IS_ERR(tmp_fp))
 		return org_fp;
 

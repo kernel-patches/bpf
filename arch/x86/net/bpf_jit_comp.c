@@ -3722,7 +3722,7 @@ struct x64_jit_data {
 #define MAX_PASSES 20
 #define PADDING_PASSES (MAX_PASSES - 5)
 
-struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
+struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 	struct bpf_binary_header *rw_header = NULL;
 	struct bpf_binary_header *header = NULL;
@@ -3744,7 +3744,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	if (!prog->jit_requested)
 		return orig_prog;
 
-	tmp = bpf_jit_blind_constants(prog);
+	tmp = bpf_jit_blind_constants(env, prog);
 	/*
 	 * If blinding was requested and we failed during blinding,
 	 * we must fall back to the interpreter.

@@ -157,14 +157,15 @@ static void jit_dump(const struct jit_context *ctx)
 }
 
 /* Initialise the context so there's no garbage. */
-static int jit_ctx_init(struct jit_context *ctx, struct bpf_prog *prog)
+static int jit_ctx_init(struct jit_context *ctx, struct bpf_verifier_env *env,
+			struct bpf_prog *prog)
 {
 	memset(ctx, 0, sizeof(*ctx));
 
 	ctx->orig_prog = prog;
 
 	/* If constant blinding was requested but failed, scram. */
-	ctx->prog = bpf_jit_blind_constants(prog);
+	ctx->prog = bpf_jit_blind_constants(env, prog);
 	if (IS_ERR(ctx->prog))
 		return PTR_ERR(ctx->prog);
 	ctx->blinded = (ctx->prog != ctx->orig_prog);
@@ -1335,7 +1336,7 @@ static int jit_patch_relocations(struct jit_context *ctx)
  * to get the necessary data for the real compilation phase,
  * jit_compile().
  */
-static struct bpf_prog *do_normal_pass(struct bpf_prog *prog)
+static struct bpf_prog *do_normal_pass(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 	struct jit_context ctx;
 
@@ -1343,7 +1344,7 @@ static struct bpf_prog *do_normal_pass(struct bpf_prog *prog)
 	if (!prog->jit_requested)
 		return prog;
 
-	if (jit_ctx_init(&ctx, prog)) {
+	if (jit_ctx_init(&ctx, env, prog)) {
 		jit_ctx_cleanup(&ctx);
 		return prog;
 	}
@@ -1374,7 +1375,7 @@ static struct bpf_prog *do_normal_pass(struct bpf_prog *prog)
  * again to get the newly translated addresses in order to resolve
  * the "call"s.
  */
-static struct bpf_prog *do_extra_pass(struct bpf_prog *prog)
+static struct bpf_prog *do_extra_pass(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 	struct jit_context ctx;
 
@@ -1382,7 +1383,7 @@ static struct bpf_prog *do_extra_pass(struct bpf_prog *prog)
 	if (check_jit_context(prog))
 		return prog;
 
-	if (jit_ctx_init(&ctx, prog)) {
+	if (jit_ctx_init(&ctx, env, prog)) {
 		jit_ctx_cleanup(&ctx);
 		return prog;
 	}
@@ -1411,15 +1412,15 @@ static struct bpf_prog *do_extra_pass(struct bpf_prog *prog)
  * (re)locations involved that their addresses are not known
  * during the first run.
  */
-struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
+struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 	vm_dump(prog);
 
 	/* Was this program already translated? */
 	if (!prog->jited)
-		return do_normal_pass(prog);
+		return do_normal_pass(env, prog);
 	else
-		return do_extra_pass(prog);
+		return do_extra_pass(env, prog);
 
 	return prog;
 }

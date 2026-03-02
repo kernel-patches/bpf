@@ -909,7 +909,7 @@ bool bpf_jit_needs_zext(void)
 	return true;
 }
 
-struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
+struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 	struct bpf_prog *tmp, *orig_prog = prog;
 	struct bpf_binary_header *header = NULL;
@@ -931,7 +931,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	 * then we must fall back to the interpreter. Otherwise, we save
 	 * the new JITed code.
 	 */
-	tmp = bpf_jit_blind_constants(prog);
+	tmp = bpf_jit_blind_constants(env, prog);
 	if (IS_ERR(tmp))
 		return orig_prog;
 	if (tmp != prog) {

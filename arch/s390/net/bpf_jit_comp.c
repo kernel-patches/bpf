@@ -2303,7 +2303,7 @@ static struct bpf_binary_header *bpf_jit_alloc(struct bpf_jit *jit,
 /*
  * Compile eBPF program "fp"
  */
-struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
+struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *fp)
 {
 	struct bpf_prog *tmp, *orig_fp = fp;
 	struct bpf_binary_header *header;
@@ -2316,7 +2316,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *fp)
 	if (!fp->jit_requested)
 		return orig_fp;
 
-	tmp = bpf_jit_blind_constants(fp);
+	tmp = bpf_jit_blind_constants(env, fp);
 	/*
 	 * If blinding was requested and we failed during blinding,
 	 * we must fall back to the interpreter.
