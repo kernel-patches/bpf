@@ -2392,6 +2392,7 @@ static void bpf_map_owner_init(struct bpf_map_owner *owner, const struct bpf_pro
 	owner->sleepable = fp->sleepable;
 	owner->kprobe_write_ctx = aux->kprobe_write_ctx;
 	owner->call_get_func_ip = fp->call_get_func_ip;
+	owner->call_session_cookie = fp->call_session_cookie;
 	owner->expected_attach_type = fp->expected_attach_type;
 	owner->attach_func_proto = aux->attach_func_proto;
 	for_each_cgroup_storage_type(i)
@@ -2425,6 +2426,8 @@ static bool bpf_map_owner_matches(const struct bpf_map *map, const struct bpf_pr
 			return false;
 		if (owner->call_get_func_ip != fp->call_get_func_ip)
 			return false;
+		if (owner->call_session_cookie != fp->call_session_cookie)
+			return false;
 		break;
 
 	case BPF_MAP_OWNER_MATCH_FOR_UPDATE:
@@ -2432,6 +2435,8 @@ static bool bpf_map_owner_matches(const struct bpf_map *map, const struct bpf_pr
 			return false;
 		if (bpf_prog_has_trampoline(fp)) {
 			if (!owner->call_get_func_ip && fp->call_get_func_ip)
+				return false;
+			if (!owner->call_session_cookie && fp->call_session_cookie)
 				return false;
 		}
 		break;
