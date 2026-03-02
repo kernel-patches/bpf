@@ -26202,6 +26202,11 @@ skip_full_check:
 		convert_pseudo_ld_imm64(env);
 	}
 
+	/* constants blinding in the JIT may increase prog->len */
+	len = env->prog->len;
+	if (env->subprog_cnt == 1)
+		env->prog = bpf_prog_select_jit(env->prog, &ret);
+
 	adjust_btf_func(env);
 
 err_release_maps:
@@ -26227,7 +26232,7 @@ err_release_maps:
 err_unlock:
 	if (!is_priv)
 		mutex_unlock(&bpf_verifier_lock);
-	clear_insn_aux_data(env, 0, env->prog->len);
+	clear_insn_aux_data(env, 0, len);
 	vfree(env->insn_aux_data);
 err_free_env:
 	bpf_stack_liveness_free(env);

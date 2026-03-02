@@ -2505,18 +2505,18 @@ static bool bpf_prog_select_interpreter(struct bpf_prog *fp)
 	return select_interpreter;
 }
 
-/**
- *	bpf_prog_select_runtime - select exec runtime for BPF program
- *	@fp: bpf_prog populated with BPF program
- *	@err: pointer to error variable
- *
- * Try to JIT eBPF program, if JIT is not available, use interpreter.
- * The BPF program will be executed via bpf_prog_run() function.
- *
- * Return: the &fp argument along with &err set to 0 for success or
- * a negative errno code on failure
- */
-struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
+struct bpf_prog *bpf_prog_select_jit(struct bpf_prog *fp, int *err)
+{
+	*err = bpf_prog_alloc_jited_linfo(fp);
+	if (*err)
+		return fp;
+
+	fp = bpf_int_jit_compile(fp);
+	bpf_prog_jit_attempt_done(fp);
+	return fp;
+}
+
+struct bpf_prog *__bpf_prog_select_runtime(struct bpf_prog *fp, bool jit_attempted, int *err)
 {
 	/* In case of BPF to BPF calls, verifier did all the prep
 	 * work with regards to JITing, etc.
@@ -2540,12 +2540,11 @@ struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
 	 * be JITed, but falls back to the interpreter.
 	 */
 	if (!bpf_prog_is_offloaded(fp->aux)) {
-		*err = bpf_prog_alloc_jited_linfo(fp);
-		if (*err)
-			return fp;
-
-		fp = bpf_int_jit_compile(fp);
-		bpf_prog_jit_attempt_done(fp);
+		if (!jit_attempted) {
+			fp = bpf_prog_select_jit(fp, err);
+			if (*err)
+				return fp;
+		}
 		if (!fp->jited && jit_needed) {
 			*err = -ENOTSUPP;
 			return fp;
@@ -2569,6 +2568,22 @@ finalize:
 	*err = bpf_check_tail_call(fp);
 
 	return fp;
+}
+
+/**
+ *	bpf_prog_select_runtime - select exec runtime for BPF program
+ *	@fp: bpf_prog populated with BPF program
+ *	@err: pointer to error variable
+ *
+ * Try to JIT eBPF program, if JIT is not available, use interpreter.
+ * The BPF program will be executed via bpf_prog_run() function.
+ *
+ * Return: the &fp argument along with &err set to 0 for success or
+ * a negative errno code on failure
+ */
+struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
+{
+	return __bpf_prog_select_runtime(fp, false, err);
 }
 EXPORT_SYMBOL_GPL(bpf_prog_select_runtime);
 
