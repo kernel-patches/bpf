@@ -3785,7 +3785,6 @@ static int btf_find_field_one(const struct btf *btf,
 	case BPF_RES_SPIN_LOCK:
 	case BPF_TIMER:
 	case BPF_WORKQUEUE:
-	case BPF_LIST_NODE:
 	case BPF_RB_NODE:
 	case BPF_REFCOUNT:
 	case BPF_TASK_WORK:
@@ -3793,6 +3792,27 @@ static int btf_find_field_one(const struct btf *btf,
 				      info_cnt ? &info[0] : &tmp);
 		if (ret < 0)
 			return ret;
+		break;
+	case BPF_LIST_NODE:
+		ret = btf_find_struct(btf, var_type, off, sz, field_type,
+				      info_cnt ? &info[0] : &tmp);
+		if (ret < 0)
+			return ret;
+		/* graph_root for verifier: container type and node member name */
+		if (info_cnt && var_idx >= 0 && (u32)var_idx < btf_type_vlen(var)) {
+			u32 id;
+			const struct btf_member *member;
+
+			for (id = 1; id < btf_nr_types(btf); id++) {
+				if (btf_type_by_id(btf, id) == var) {
+					info[0].graph_root.value_btf_id = id;
+					member = btf_type_member(var) + var_idx;
+					info[0].graph_root.node_name =
+						__btf_name_by_offset(btf, member->name_off);
+					break;
+				}
+			}
+		}
 		break;
 	case BPF_KPTR_UNREF:
 	case BPF_KPTR_REF:
@@ -4138,6 +4158,7 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 			if (ret < 0)
 				goto end;
 			break;
+		case BPF_LIST_NODE:
 		case BPF_LIST_HEAD:
 			ret = btf_parse_list_head(btf, &rec->fields[i], &info_arr[i]);
 			if (ret < 0)
@@ -4148,7 +4169,6 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 			if (ret < 0)
 				goto end;
 			break;
-		case BPF_LIST_NODE:
 		case BPF_RB_NODE:
 			break;
 		default:
@@ -4192,19 +4212,24 @@ int btf_check_and_fixup_fields(const struct btf *btf, struct btf_record *rec)
 	int i;
 
 	/* There are three types that signify ownership of some other type:
-	 *  kptr_ref, bpf_list_head, bpf_rb_root.
+	 *  kptr_ref, bpf_list_head/node, bpf_rb_root.
 	 * kptr_ref only supports storing kernel types, which can't store
 	 * references to program allocated local types.
 	 *
 	 * Hence we only need to ensure that bpf_{list_head,rb_root} ownership
 	 * does not form cycles.
 	 */
-	if (IS_ERR_OR_NULL(rec) || !(rec->field_mask & (BPF_GRAPH_ROOT | BPF_UPTR)))
+	if (IS_ERR_OR_NULL(rec) || !(rec->field_mask &
+	   (BPF_GRAPH_ROOT | BPF_GRAPH_NODE | BPF_UPTR)))
 		return 0;
+
 	for (i = 0; i < rec->cnt; i++) {
 		struct btf_struct_meta *meta;
 		const struct btf_type *t;
 		u32 btf_id;
+
+		if (rec->fields[i].type & BPF_GRAPH_NODE)
+			rec->fields[i].graph_root.value_rec = rec;
 
 		if (rec->fields[i].type == BPF_UPTR) {
 			/* The uptr only supports pinning one page and cannot

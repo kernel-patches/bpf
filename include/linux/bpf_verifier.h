@@ -261,6 +261,10 @@ struct bpf_reference_state {
 	 * it matches on unlock.
 	 */
 	void *ptr;
+	/* For REF_TYPE_LOCK_*: btf_record of the locked object, used for lock
+	 * checking in kfuncs such as bpf_list_del.
+	 */
+	struct btf_record *lock_rec;
 };
 
 struct bpf_retval_range {

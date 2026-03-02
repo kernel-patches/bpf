@@ -1536,7 +1536,7 @@ static int acquire_reference(struct bpf_verifier_env *env, int insn_idx)
 }
 
 static int acquire_lock_state(struct bpf_verifier_env *env, int insn_idx, enum ref_state_type type,
-			      int id, void *ptr)
+			      int id, void *ptr, struct btf_record *lock_rec)
 {
 	struct bpf_verifier_state *state = env->cur_state;
 	struct bpf_reference_state *s;
@@ -1547,6 +1547,7 @@ static int acquire_lock_state(struct bpf_verifier_env *env, int insn_idx, enum r
 	s->type = type;
 	s->id = id;
 	s->ptr = ptr;
+	s->lock_rec = lock_rec;
 
 	state->active_locks++;
 	state->active_lock_id = id;
@@ -1660,6 +1661,23 @@ static struct bpf_reference_state *find_lock_state(struct bpf_verifier_state *st
 			return s;
 	}
 	return NULL;
+}
+
+static bool rec_has_list_matching_node_type(struct bpf_verifier_env *env,
+					   const struct btf_record *rec,
+					   const struct btf *node_btf, u32 node_btf_id)
+{
+	u32 i;
+
+	for (i = 0; i < rec->cnt; i++) {
+		if (!(rec->fields[i].type & BPF_LIST_HEAD))
+			continue;
+		if (btf_struct_ids_match(&env->log, node_btf, node_btf_id, 0,
+					rec->fields[i].graph_root.btf,
+					rec->fields[i].graph_root.value_btf_id, true))
+			return true;
+	}
+	return false;
 }
 
 static void update_peak_states(struct bpf_verifier_env *env)
@@ -8576,7 +8594,8 @@ static int process_spin_lock(struct bpf_verifier_env *env, int regno, int flags)
 			type = REF_TYPE_RES_LOCK;
 		else
 			type = REF_TYPE_LOCK;
-		err = acquire_lock_state(env, env->insn_idx, type, reg->id, ptr);
+		err = acquire_lock_state(env, env->insn_idx, type, reg->id, ptr,
+					 reg_btf_record(reg));
 		if (err < 0) {
 			verbose(env, "Failed to acquire lock state\n");
 			return err;
@@ -12427,6 +12446,7 @@ enum special_kfunc_type {
 	KF_bpf_list_push_back_impl,
 	KF_bpf_list_pop_front,
 	KF_bpf_list_pop_back,
+	KF_bpf_list_del,
 	KF_bpf_list_front,
 	KF_bpf_list_back,
 	KF_bpf_cast_to_kern_ctx,
@@ -12487,6 +12507,7 @@ BTF_ID(func, bpf_list_push_front_impl)
 BTF_ID(func, bpf_list_push_back_impl)
 BTF_ID(func, bpf_list_pop_front)
 BTF_ID(func, bpf_list_pop_back)
+BTF_ID(func, bpf_list_del)
 BTF_ID(func, bpf_list_front)
 BTF_ID(func, bpf_list_back)
 BTF_ID(func, bpf_cast_to_kern_ctx)
@@ -12962,6 +12983,7 @@ static bool is_bpf_list_api_kfunc(u32 btf_id)
 	       btf_id == special_kfunc_list[KF_bpf_list_push_back_impl] ||
 	       btf_id == special_kfunc_list[KF_bpf_list_pop_front] ||
 	       btf_id == special_kfunc_list[KF_bpf_list_pop_back] ||
+	       btf_id == special_kfunc_list[KF_bpf_list_del] ||
 	       btf_id == special_kfunc_list[KF_bpf_list_front] ||
 	       btf_id == special_kfunc_list[KF_bpf_list_back];
 }
@@ -13084,7 +13106,8 @@ static bool check_kfunc_is_graph_node_api(struct bpf_verifier_env *env,
 	switch (node_field_type) {
 	case BPF_LIST_NODE:
 		ret = (kfunc_btf_id == special_kfunc_list[KF_bpf_list_push_front_impl] ||
-		       kfunc_btf_id == special_kfunc_list[KF_bpf_list_push_back_impl]);
+		       kfunc_btf_id == special_kfunc_list[KF_bpf_list_push_back_impl] ||
+		       kfunc_btf_id == special_kfunc_list[KF_bpf_list_del]);
 		break;
 	case BPF_RB_NODE:
 		ret = (kfunc_btf_id == special_kfunc_list[KF_bpf_rbtree_remove] ||
@@ -13207,6 +13230,9 @@ __process_kf_arg_ptr_to_graph_node(struct bpf_verifier_env *env,
 		return -EINVAL;
 	}
 
+	if (!*node_field)
+		*node_field = field;
+
 	field = *node_field;
 
 	et = btf_type_by_id(field->graph_root.btf, field->graph_root.value_btf_id);
@@ -13230,6 +13256,28 @@ __process_kf_arg_ptr_to_graph_node(struct bpf_verifier_env *env,
 			node_off, btf_field_type_name(node_field_type),
 			field->graph_root.node_offset,
 			btf_name_by_offset(field->graph_root.btf, et->name_off));
+		return -EINVAL;
+	}
+
+	/* bpf_list_del: require list head's lock. Use refs[] REF_TYPE_LOCK_MASK
+	 * only. At lock time we stored the locked object's btf_record in ref->
+	 * lock_rec, so we can get the list value type from the ref directly.
+	 */
+	if (node_field_type == BPF_LIST_NODE &&
+	    meta->func_id == special_kfunc_list[KF_bpf_list_del]) {
+		struct bpf_verifier_state *cur = env->cur_state;
+
+		for (int i = 0; i < cur->acquired_refs; i++) {
+			struct bpf_reference_state *s = &cur->refs[i];
+
+			if (!(s->type & REF_TYPE_LOCK_MASK) || !s->lock_rec)
+				continue;
+
+			if (rec_has_list_matching_node_type(env, s->lock_rec,
+							reg->btf, reg->btf_id))
+				return 0;
+		}
+		verbose(env, "bpf_spin_lock must be held for bpf_list_del\n");
 		return -EINVAL;
 	}
 
