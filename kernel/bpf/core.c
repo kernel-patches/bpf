@@ -2390,6 +2390,7 @@ static void bpf_map_owner_init(struct bpf_map_owner *owner, const struct bpf_pro
 	owner->jited = fp->jited;
 	owner->xdp_has_frags = aux->xdp_has_frags;
 	owner->sleepable = fp->sleepable;
+	owner->kprobe_write_ctx = aux->kprobe_write_ctx;
 	owner->expected_attach_type = fp->expected_attach_type;
 	owner->attach_func_proto = aux->attach_func_proto;
 	for_each_cgroup_storage_type(i)
@@ -2397,8 +2398,14 @@ static void bpf_map_owner_init(struct bpf_map_owner *owner, const struct bpf_pro
 			aux->cgroup_storage[i]->cookie : 0;
 }
 
+enum bpf_map_owner_match_type {
+	BPF_MAP_OWNER_MATCH_FOR_INIT,
+	BPF_MAP_OWNER_MATCH_FOR_UPDATE,
+};
+
 static bool bpf_map_owner_matches(const struct bpf_map *map, const struct bpf_prog *fp,
-				  enum bpf_prog_type prog_type)
+				  enum bpf_prog_type prog_type,
+				  enum bpf_map_owner_match_type match)
 {
 	struct bpf_map_owner *owner = map->owner;
 	struct bpf_prog_aux *aux = fp->aux;
@@ -2410,6 +2417,18 @@ static bool bpf_map_owner_matches(const struct bpf_map *map, const struct bpf_pr
 	    owner->xdp_has_frags != aux->xdp_has_frags ||
 	    owner->sleepable != fp->sleepable)
 		return false;
+
+	switch (match) {
+	case BPF_MAP_OWNER_MATCH_FOR_INIT:
+		if (owner->kprobe_write_ctx != aux->kprobe_write_ctx)
+			return false;
+		break;
+
+	case BPF_MAP_OWNER_MATCH_FOR_UPDATE:
+		if (!owner->kprobe_write_ctx && aux->kprobe_write_ctx)
+			return false;
+		break;
+	}
 
 	if (map->map_type == BPF_MAP_TYPE_PROG_ARRAY &&
 	    owner->expected_attach_type != fp->expected_attach_type)
@@ -2436,7 +2455,8 @@ static bool bpf_map_owner_matches(const struct bpf_map *map, const struct bpf_pr
 }
 
 static bool __bpf_prog_map_compatible(struct bpf_map *map,
-				      const struct bpf_prog *fp)
+				      const struct bpf_prog *fp,
+				      enum bpf_map_owner_match_type match)
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(fp);
 	bool ret = false;
@@ -2453,7 +2473,7 @@ static bool __bpf_prog_map_compatible(struct bpf_map *map,
 		bpf_map_owner_init(map->owner, fp, prog_type);
 		ret = true;
 	} else {
-		ret = bpf_map_owner_matches(map, fp, prog_type);
+		ret = bpf_map_owner_matches(map, fp, prog_type, match);
 	}
 err:
 	spin_unlock(&map->owner_lock);
@@ -2470,7 +2490,7 @@ bool bpf_prog_map_compatible(struct bpf_map *map, const struct bpf_prog *fp)
 	if (bpf_prog_is_dev_bound(fp->aux))
 		return false;
 
-	return __bpf_prog_map_compatible(map, fp);
+	return __bpf_prog_map_compatible(map, fp, BPF_MAP_OWNER_MATCH_FOR_UPDATE);
 }
 
 static int bpf_check_tail_call(const struct bpf_prog *fp)
@@ -2485,7 +2505,7 @@ static int bpf_check_tail_call(const struct bpf_prog *fp)
 		if (!map_type_contains_progs(map))
 			continue;
 
-		if (!__bpf_prog_map_compatible(map, fp)) {
+		if (!__bpf_prog_map_compatible(map, fp, BPF_MAP_OWNER_MATCH_FOR_INIT)) {
 			ret = -EINVAL;
 			goto out;
 		}
