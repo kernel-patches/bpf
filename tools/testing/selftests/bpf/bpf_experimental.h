@@ -110,6 +110,20 @@ extern struct bpf_list_node *bpf_list_pop_back(struct bpf_list_head *head) __ksy
 extern struct bpf_list_node *bpf_list_del(struct bpf_list_node *node) __ksym;
 
 /* Description
+ *	Insert 'node' after 'prev' in the BPF linked list. 'prev' must already
+ *	be in a list; 'node' must not be in any list. The 'meta' and 'off'
+ *	parameters are rewritten by the verifier, no need for BPF programs to
+ *	set them.
+ * Returns
+ *	0 on success, -EINVAL if prev is not in a list or node is already in a list.
+ */
+extern int bpf_list_add_impl(struct bpf_list_node *prev, struct bpf_list_node *node,
+			     void *meta, __u64 off) __ksym;
+
+/* Convenience macro to wrap over bpf_list_add_impl */
+#define bpf_list_add(prev, node) bpf_list_add_impl(prev, node, NULL, 0)
+
+/* Description
  *	Remove 'node' from rbtree with root 'root'
  * Returns
  * 	Pointer to the removed node, or NULL if 'root' didn't contain 'node'
