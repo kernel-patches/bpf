@@ -1486,13 +1486,41 @@ static void adjust_insn_arrays(struct bpf_prog *prog, u32 off, u32 len)
 #endif
 }
 
+static int bpf_insn_aux_cmp_by_insn_idx(const void *a, const void *b)
+{
+	int insn_idx = *(int *)a;
+	int final_idx = ((const struct bpf_insn_aux_data *)b)->final_idx;
+
+	return insn_idx - final_idx;
+}
+
+bool bpf_insn_is_indirect_target(const struct bpf_verifier_env *env, const struct bpf_prog *prog,
+				 int insn_idx)
+{
+	struct bpf_insn_aux_data *insn_aux;
+	int func_idx, subprog_start, subprog_end;
+
+	if (!env)
+		return false;
+
+	func_idx = prog->aux->func_idx;
+	subprog_start = env->subprog_info[func_idx].start;
+	subprog_end = env->subprog_info[func_idx + 1].start;
+
+	insn_aux = bsearch(&insn_idx, &env->insn_aux_data[subprog_start],
+			   subprog_end - subprog_start,
+			   sizeof(struct bpf_insn_aux_data), bpf_insn_aux_cmp_by_insn_idx);
+
+	return insn_aux && insn_aux->indirect_target;
+}
+
 struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 	struct bpf_insn insn_buff[16], aux[2];
 	struct bpf_prog *clone, *tmp;
-	int insn_delta, insn_cnt;
+	int insn_delta, insn_cnt, subprog_start;
 	struct bpf_insn *insn;
-	int i, rewritten;
+	int i, j, rewritten;
 
 	if (!prog->blinding_requested || prog->blinded)
 		return prog;
@@ -1503,8 +1531,10 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bp
 
 	insn_cnt = clone->len;
 	insn = clone->insnsi;
+	subprog_start = env->subprog_info[prog->aux->func_idx].start;
 
-	for (i = 0; i < insn_cnt; i++, insn++) {
+	for (i = 0, j = 0; i < insn_cnt; i++, j++, insn++) {
+		env->insn_aux_data[subprog_start + j].final_idx = i;
 		if (bpf_pseudo_func(insn)) {
 			/* ld_imm64 with an address of bpf subprog is not
 			 * a user controlled constant. Don't randomize it,
@@ -1512,6 +1542,8 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bp
 			 */
 			insn++;
 			i++;
+			j++;
+			env->insn_aux_data[subprog_start + j].final_idx = i;
 			continue;
 		}
 
