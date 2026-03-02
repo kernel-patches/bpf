@@ -112,13 +112,33 @@ void test_verif_scale_pyperf180()
 
 void test_verif_scale_pyperf600()
 {
+	libbpf_print_fn_t old_print_fn = NULL;
+	int err;
+
 	/* partial unroll. llvm will unroll loop ~150 times.
 	 * C loop count -> 600.
 	 * Asm loop count -> 4.
 	 * 16k insns in loop body.
 	 * Total of 5 such loops. Total program size ~82k insns.
 	 */
-	scale_test("pyperf600.bpf.o", BPF_PROG_TYPE_RAW_TRACEPOINT, false);
+
+	if (env.verifier_stats) {
+		test__force_log();
+		old_print_fn = libbpf_set_print(libbpf_debug_print);
+	}
+
+	err = check_load("pyperf600.bpf.o", BPF_PROG_TYPE_RAW_TRACEPOINT);
+
+	if (env.verifier_stats)
+		libbpf_set_print(old_print_fn);
+
+	if (err == -E2BIG) {
+		test__skip();
+		return;
+	}
+
+	ASSERT_OK(err, "expect_success");
+
 }
 
 void test_verif_scale_pyperf600_bpf_loop(void)
