@@ -16121,6 +16121,8 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 			scalar_min_max_arsh(dst_reg, &src_reg);
 		break;
 	case BPF_END:
+		/* manually reset register's id here to avoid mistaken register links */
+		dst_reg->id = 0;
 		scalar_byte_swap(dst_reg, insn);
 		break;
 	default:
