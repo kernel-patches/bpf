@@ -6709,9 +6709,11 @@ static int check_max_stack_depth_subprog(struct bpf_verifier_env *env, int idx,
 	struct bpf_insn *insn = env->prog->insnsi;
 	int depth = 0, frame = 0, i, subprog_end, subprog_depth;
 	bool tail_call_reachable = false;
-	int ret_insn[MAX_CALL_FRAMES];
-	int ret_prog[MAX_CALL_FRAMES];
-	int j;
+	int total;
+	int tmp;
+
+	/* no caller idx */
+	subprog[idx].cidx = -1;
 
 	i = subprog[idx].start;
 	if (!priv_stack_supported)
@@ -6763,8 +6765,11 @@ process_func:
 	} else {
 		depth += subprog_depth;
 		if (depth > MAX_BPF_STACK) {
+			for (total = 1; subprog[idx].cidx >= 0 ; total++)
+				idx = subprog[idx].cidx;
+
 			verbose(env, "combined stack size of %d calls is %d. Too large\n",
-				frame + 1, depth);
+				total, depth);
 			return -EACCES;
 		}
 	}
@@ -6780,8 +6785,8 @@ continue_func:
 				continue;
 			if (subprog[idx].is_cb)
 				err = true;
-			for (int c = 0; c < frame && !err; c++) {
-				if (subprog[ret_prog[c]].is_cb) {
+			for (tmp = idx; tmp >= 0 && !err; tmp = subprog[tmp].cidx) {
+				if (subprog[tmp].is_cb) {
 					err = true;
 					break;
 				}
@@ -6797,8 +6802,9 @@ continue_func:
 		if (!bpf_pseudo_call(insn + i) && !bpf_pseudo_func(insn + i))
 			continue;
 		/* remember insn and function to return to */
-		ret_insn[frame] = i + 1;
-		ret_prog[frame] = idx;
+
+		subprog[idx].frame = frame;
+		subprog[idx].ret_insn = i + 1;
 
 		/* find the callee */
 		next_insn = i + insn[i].imm + 1;
@@ -6819,6 +6825,9 @@ continue_func:
 			}
 		}
 		i = next_insn;
+
+		/* caller idx */
+		subprog[sidx].cidx = idx;
 		idx = sidx;
 		if (!priv_stack_supported)
 			subprog[idx].priv_stack_mode = NO_PRIV_STACK;
@@ -6826,7 +6835,7 @@ continue_func:
 		if (subprog[idx].has_tail_call)
 			tail_call_reachable = true;
 
-		frame++;
+		frame = subprog_is_global(env, idx) ? 0 : frame + 1;
 		if (frame >= MAX_CALL_FRAMES) {
 			verbose(env, "the call stack of %d frames is too deep !\n",
 				frame);
@@ -6840,12 +6849,12 @@ continue_func:
 	 * tail call counter throughout bpf2bpf calls combined with tailcalls
 	 */
 	if (tail_call_reachable)
-		for (j = 0; j < frame; j++) {
-			if (subprog[ret_prog[j]].is_exception_cb) {
+		for (tmp = idx; tmp >= 0; tmp = subprog[tmp].cidx) {
+			if (subprog[tmp].is_exception_cb) {
 				verbose(env, "cannot tail call within exception cb\n");
 				return -EINVAL;
 			}
-			subprog[ret_prog[j]].tail_call_reachable = true;
+			subprog[tmp].tail_call_reachable = true;
 		}
 	if (subprog[0].tail_call_reachable)
 		env->prog->aux->tail_call_reachable = true;
@@ -6853,13 +6862,15 @@ continue_func:
 	/* end of for() loop means the last insn of the 'subprog'
 	 * was reached. Doesn't matter whether it was JA or EXIT
 	 */
-	if (frame == 0)
+	if (frame == 0 && subprog[idx].cidx < 0)
 		return 0;
 	if (subprog[idx].priv_stack_mode != PRIV_STACK_ADAPTIVE)
 		depth -= round_up_stack_depth(env, subprog[idx].stack_depth);
-	frame--;
-	i = ret_insn[frame];
-	idx = ret_prog[frame];
+
+	idx = subprog[idx].cidx;
+	frame = subprog[idx].frame;
+	i = subprog[idx].ret_insn;
+
 	goto continue_func;
 }
 

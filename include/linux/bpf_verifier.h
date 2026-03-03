@@ -651,6 +651,8 @@ enum priv_stack_mode {
 	PRIV_STACK_ADAPTIVE,
 };
 
+struct bpf_subprog_info;
+
 struct bpf_subprog_info {
 	/* 'start' has to be the first field otherwise find_subprog() won't work */
 	u32 start; /* insn idx of function entry point */
@@ -678,6 +680,10 @@ struct bpf_subprog_info {
 
 	enum priv_stack_mode priv_stack_mode;
 	struct bpf_subprog_arg_info args[MAX_BPF_FUNC_REG_ARGS];
+
+	int ret_insn;
+	int frame;
+	int cidx;
 };
 
 struct bpf_verifier_env;
