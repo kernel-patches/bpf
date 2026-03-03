@@ -6508,11 +6508,30 @@ struct btf *bpf_prog_get_target_btf(const struct bpf_prog *prog)
 		return prog->aux->attach_btf;
 }
 
-static bool is_void_or_int_ptr(struct btf *btf, const struct btf_type *t)
+static bool is_ptr_treated_as_scalar(const struct btf *btf,
+	const struct btf_type *t)
 {
-	/* skip modifiers */
+	int depth = 1;
+
+	WARN_ON(!btf_type_is_ptr(t));
+
 	t = btf_type_skip_modifiers(btf, t->type, NULL);
-	return btf_type_is_void(t) || btf_type_is_int(t);
+	while (btf_type_is_ptr(t) && depth < MAX_RESOLVE_DEPTH) {
+		depth += 1;
+		t = btf_type_skip_modifiers(btf, t->type, NULL);
+	}
+
+	/*
+	 * If it's a single or multilevel pointer to void, int, enum,
+	 * or function, it's the same as scalar from the verifier
+	 * safety POV. Multilevel pointers to structures are treated as
+	 * scalars. The verifier lacks the context to infer the size of
+	 * their target memory regions. Either way, no further pointer
+	 * walking is allowed.
+	 */
+	return btf_type_is_void(t) || btf_type_is_int(t) ||
+		   btf_is_any_enum(t) || btf_type_is_func_proto(t) ||
+		   (btf_type_is_struct(t) && depth > 1);
 }
 
 u32 btf_ctx_arg_idx(struct btf *btf, const struct btf_type *func_proto,
@@ -6902,11 +6921,7 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 		}
 	}
 
-	/*
-	 * If it's a pointer to void, it's the same as scalar from the verifier
-	 * safety POV. Either way, no futher pointer walking is allowed.
-	 */
-	if (is_void_or_int_ptr(btf, t))
+	if (is_ptr_treated_as_scalar(btf, t))
 		return true;
 
 	/* this is a pointer to another type */
