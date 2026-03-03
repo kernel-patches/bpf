@@ -1156,6 +1156,23 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 		skb->ip_summed = CHECKSUM_COMPLETE;
 	}
 
+	if (prog->type == BPF_PROG_TYPE_LWT_XMIT) {
+		ret = -EOPNOTSUPP;
+
+#if IS_ENABLED(CONFIG_IPV6)
+		if (ipv6_bpf_stub) {
+			dst_hold(&net->ipv6.ip6_null_entry->dst);
+			skb_dst_set(skb, &net->ipv6.ip6_null_entry->dst);
+		} else {
+			pr_warn_once("Please test this program with the IPv6 module loaded\n");
+			goto out;
+		}
+#else
+		pr_warn_once("Please test this program with the IPv6 module enabled\n");
+		goto out;
+#endif
+	}
+
 	ret = bpf_test_run(prog, skb, repeat, &retval, &duration, false);
 	if (ret)
 		goto out;
