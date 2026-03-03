@@ -24,6 +24,8 @@
 #include <net/netdev_rx_queue.h>
 #include <net/xdp.h>
 #include <net/netfilter/nf_bpf_link.h>
+#include <linux/set_memory.h>
+#include <linux/string.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/bpf_test_run.h>
@@ -563,6 +565,96 @@ noinline int bpf_fentry_test10(const void *a)
 	return (long)a;
 }
 
+struct bpf_fentry_test_pptr_t {
+	u32 value1;
+	u32 value2;
+};
+
+noinline int bpf_fentry_test11_pptr_nullable(struct bpf_fentry_test_pptr_t **pptr__nullable)
+{
+	if (!pptr__nullable)
+		return -1;
+
+	return (*pptr__nullable)->value1;
+}
+
+noinline u32 **bpf_fentry_test12_pptr(u32 id, u32 **pptr)
+{
+	barrier_data(&id);
+	barrier_data(&pptr);
+	return pptr;
+}
+
+noinline u8 bpf_fentry_test13_pptr(void **pptr)
+{
+	void *ptr;
+
+	return copy_from_kernel_nofault(&ptr, pptr, sizeof(pptr)) == 0;
+}
+
+/* Test the verifier can handle multi-level pointer types with qualifiers. */
+noinline void ***bpf_fentry_test14_ppptr(void **volatile *const ppptr)
+{
+	barrier_data(&ppptr);
+	return (void ***)ppptr;
+}
+
+enum fentry_test_enum32;
+
+noinline void bpf_fentry_test15_penum32(enum fentry_test_enum32 *pe)
+{
+}
+
+enum fentry_test_enum64 {
+	TEST_ENUM64 = 0xffffffffFFFFFFFFULL
+};
+
+noinline void bpf_fentry_test15_penum64(enum fentry_test_enum64 *pe)
+{
+}
+
+noinline void bpf_fentry_test16_ppenum32(enum fentry_test_enum32 **ppe)
+{
+}
+
+noinline void bpf_fentry_test16_ppenum64(enum fentry_test_enum64 **ppe)
+{
+}
+
+noinline void bpf_fentry_test17_pfunc(void (*pf)(void))
+{
+}
+
+noinline void bpf_fentry_test18_ppfunc(void (**ppf)(void))
+{
+}
+
+noinline void bpf_fentry_test19_pfloat(float *pff)
+{
+}
+
+noinline void bpf_fentry_test20_ppfloat(float **ppff)
+{
+}
+
+noinline void bpf_fentry_test21_pchar(char *pc)
+{
+}
+
+noinline void bpf_fentry_test22_ppchar(char **ppc)
+{
+}
+
+noinline char **bpf_fentry_test23_ret_ppchar(void)
+{
+	return (char **)NULL;
+}
+
+noinline struct file **bpf_fentry_test24_ret_ppfile(void **a)
+{
+	return (struct file **)NULL;
+}
+
 noinline void bpf_fentry_test_sinfo(struct skb_shared_info *sinfo)
 {
 }
@@ -670,20 +762,58 @@ static void *bpf_test_init(const union bpf_attr *kattr, u32 user_size,
 	return data;
 }
 
+#define CONSUME(val) do { \
+	typeof(val) __var = (val); \
+	__asm__ __volatile__("" : "+r" (__var)); \
+	(void)__var; \
+} while (0)
+
 int bpf_prog_test_run_tracing(struct bpf_prog *prog,
 			      const union bpf_attr *kattr,
 			      union bpf_attr __user *uattr)
 {
 	struct bpf_fentry_test_t arg = {};
+	struct bpf_fentry_test_pptr_t ts = { .value1 = 1979, .value2 = 2026 };
+	struct bpf_fentry_test_pptr_t *ptr = &ts;
+	u32 *u32_ptr = (u32 *)29;
 	u16 side_effect = 0, ret = 0;
 	int b = 2, err = -EFAULT;
 	u32 retval = 0;
+	const char *attach_name;
 
 	if (kattr->test.flags || kattr->test.cpu || kattr->test.batch_size)
 		return -EINVAL;
 
+	attach_name = prog->aux->attach_func_name;
+	if (!attach_name)
+		attach_name = "!";
+
 	switch (prog->expected_attach_type) {
 	case BPF_TRACE_FENTRY:
+		if (!strcmp(attach_name, "bpf_fentry_test11_pptr_nullable")) {
+			/* valid kernel pointer, valid pointer after dereference */
+			CONSUME(bpf_fentry_test11_pptr_nullable(&ptr));
+			break;
+		} else if (!strcmp(attach_name, "bpf_fentry_test12_pptr")) {
+			/* valid kernel pointer, user pointer after dereference */
+			CONSUME(bpf_fentry_test12_pptr(0, &u32_ptr));
+			/* user address on most systems */
+			CONSUME(bpf_fentry_test12_pptr(1, (u32 **)17));
+			break;
+		} else if (!strcmp(attach_name, "bpf_fentry_test13_pptr")) {
+			/* should trigger extable on most systems */
+			CONSUME(bpf_fentry_test13_pptr((void **)~(1ull << 30)));
+			/* user address on most systems */
+			CONSUME(bpf_fentry_test13_pptr((void **)19));
+			/* kernel address at top 4KB, invalid */
+			CONSUME(bpf_fentry_test13_pptr(ERR_PTR(-ENOMEM)));
+			break;
+		} else if (!strcmp(attach_name, "bpf_fentry_test14_ppptr")) {
+			/* kernel address at top 4KB, invalid */
+			CONSUME(bpf_fentry_test14_ppptr(ERR_PTR(-ENOMEM)));
+			break;
+		}
+		fallthrough;
 	case BPF_TRACE_FEXIT:
 	case BPF_TRACE_FSESSION:
 		if (bpf_fentry_test1(1) != 2 ||
