@@ -5,6 +5,40 @@
 #include "../test_kmods/bpf_testmod_kfunc.h"
 
 SEC("tc")
+int kfunc_call_test5(struct __sk_buff *skb)
+{
+	struct bpf_sock *sk = skb->sk;
+	int ret;
+	u32 val32;
+	u16 val16;
+	u8 val8;
+
+	if (!sk)
+		return -1;
+
+	sk = bpf_sk_fullsock(sk);
+	if (!sk)
+		return -1;
+
+	ret = bpf_kfunc_call_test5(0xFF, 0xFFFF, 0xFFFFFFFF);
+	if (ret)
+		return ret;
+
+	val32 = bpf_get_prandom_u32();
+	val16 = val32 & 0xFFFF;
+	val8 = val32 & 0xFF;
+	ret = bpf_kfunc_call_test5(val8, val16, val32);
+	if (ret)
+		return ret;
+
+	ret = bpf_kfunc_call_test5(val8 * 0xFF, val16 * 0xFFFF, val32 * 0xFFFFFFFF);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+SEC("tc")
 int kfunc_call_test4(struct __sk_buff *skb)
 {
 	struct bpf_sock *sk = skb->sk;
