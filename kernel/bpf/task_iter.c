@@ -9,6 +9,7 @@
 #include <linux/bpf_mem_alloc.h>
 #include <linux/btf_ids.h>
 #include <linux/mm_types.h>
+#include <linux/mmap_lock.h>
 #include "mmap_unlock_work.h"
 
 static const char * const iter_task_type_names[] = {
@@ -797,8 +798,8 @@ const struct bpf_func_proto bpf_find_vma_proto = {
 struct bpf_iter_task_vma_kern_data {
 	struct task_struct *task;
 	struct mm_struct *mm;
-	struct mmap_unlock_irq_work *work;
-	struct vma_iterator vmi;
+	struct vm_area_struct *locked_vma;
+	u64 last_addr;
 };
 
 struct bpf_iter_task_vma {
@@ -868,11 +869,15 @@ __bpf_kfunc int bpf_iter_task_vma_new(struct bpf_iter_task_vma *it,
 				      struct task_struct *task, u64 addr)
 {
 	struct bpf_iter_task_vma_kern *kit = (void *)it;
-	bool irq_work_busy = false;
 	int err;
 
 	BUILD_BUG_ON(sizeof(struct bpf_iter_task_vma_kern) != sizeof(struct bpf_iter_task_vma));
 	BUILD_BUG_ON(__alignof__(struct bpf_iter_task_vma_kern) != __alignof__(struct bpf_iter_task_vma));
+
+	if (!IS_ENABLED(CONFIG_PER_VMA_LOCK)) {
+		kit->data = NULL;
+		return -EOPNOTSUPP;
+	}
 
 	/* is_iter_reg_valid_uninit guarantees that kit hasn't been initialized
 	 * before, so non-NULL kit->data doesn't point to previously
@@ -890,13 +895,10 @@ __bpf_kfunc int bpf_iter_task_vma_new(struct bpf_iter_task_vma *it,
 	}
 
 	/*
-	 * Check irq_work availability for both mmap_lock release and mmput.
-	 * Both use separate per-CPU irq_work slots, and both must be free
-	 * to guarantee _destroy() can complete from NMI context.
-	 * kit->data->work == NULL is valid after bpf_mmap_unlock_get_irq_work
+	 * Ensure the mmput irq_work slot is available so _destroy() can
+	 * safely drop the mm reference from NMI context.
 	 */
-	irq_work_busy = bpf_mmap_unlock_get_irq_work(&kit->data->work);
-	if (irq_work_busy || bpf_iter_mmput_busy()) {
+	if (bpf_iter_mmput_busy()) {
 		err = -EBUSY;
 		goto err_cleanup_iter;
 	}
@@ -906,16 +908,10 @@ __bpf_kfunc int bpf_iter_task_vma_new(struct bpf_iter_task_vma *it,
 		goto err_cleanup_iter;
 	}
 
-	if (!mmap_read_trylock(kit->data->mm)) {
-		err = -EBUSY;
-		goto err_cleanup_mmget;
-	}
-
-	vma_iter_init(&kit->data->vmi, kit->data->mm, addr);
+	kit->data->locked_vma = NULL;
+	kit->data->last_addr = addr;
 	return 0;
 
-err_cleanup_mmget:
-	bpf_iter_mmput(kit->data->mm);
 err_cleanup_iter:
 	put_task_struct(kit->data->task);
 	bpf_mem_free(&bpf_global_ma, kit->data);
@@ -927,10 +923,47 @@ err_cleanup_iter:
 __bpf_kfunc struct vm_area_struct *bpf_iter_task_vma_next(struct bpf_iter_task_vma *it)
 {
 	struct bpf_iter_task_vma_kern *kit = (void *)it;
+	struct vm_area_struct *vma;
+	struct vma_iterator vmi;
+	unsigned long next_addr, next_end;
 
 	if (!kit->data) /* bpf_iter_task_vma_new failed */
 		return NULL;
-	return vma_next(&kit->data->vmi);
+
+	if (kit->data->locked_vma)
+		vma_end_read(kit->data->locked_vma);
+
+retry:
+	rcu_read_lock();
+	vma_iter_init(&vmi, kit->data->mm, kit->data->last_addr);
+	vma = vma_next(&vmi);
+	if (!vma) {
+		rcu_read_unlock();
+		kit->data->locked_vma = NULL;
+		return NULL;
+	}
+	next_addr = vma->vm_start;
+	next_end = vma->vm_end;
+	rcu_read_unlock();
+
+	vma = lock_vma_under_rcu(kit->data->mm, next_addr);
+	if (!vma) {
+		if (next_end > kit->data->last_addr)
+			kit->data->last_addr = next_end;
+		else
+			kit->data->last_addr += PAGE_SIZE;
+		goto retry;
+	}
+
+	if (unlikely(kit->data->last_addr >= vma->vm_end)) {
+		kit->data->last_addr = vma->vm_end;
+		vma_end_read(vma);
+		goto retry;
+	}
+
+	kit->data->locked_vma = vma;
+	kit->data->last_addr = vma->vm_end;
+	return vma;
 }
 
 __bpf_kfunc void bpf_iter_task_vma_destroy(struct bpf_iter_task_vma *it)
@@ -938,7 +971,8 @@ __bpf_kfunc void bpf_iter_task_vma_destroy(struct bpf_iter_task_vma *it)
 	struct bpf_iter_task_vma_kern *kit = (void *)it;
 
 	if (kit->data) {
-		bpf_mmap_unlock_mm(kit->data->work, kit->data->mm);
+		if (kit->data->locked_vma)
+			vma_end_read(kit->data->locked_vma);
 		bpf_iter_mmput(kit->data->mm);
 		put_task_struct(kit->data->task);
 		bpf_mem_free(&bpf_global_ma, kit->data);
