@@ -25,7 +25,6 @@
 #include <linux/task_work.h>
 #include <linux/shmem_fs.h>
 #include <linux/khugepaged.h>
-#include <linux/rcupdate_trace.h>
 #include <linux/workqueue.h>
 #include <linux/srcu.h>
 #include <linux/oom.h>          /* check_stable_address_space */
@@ -53,8 +52,8 @@ static struct mutex uprobes_mmap_mutex[UPROBES_HASH_SZ];
 
 DEFINE_STATIC_PERCPU_RWSEM(dup_mmap_sem);
 
-/* Covers return_instance's uprobe lifetime. */
-DEFINE_STATIC_SRCU_FAST_UPDOWN(uretprobes_srcu);
+/* Covers uprobe struct, consumer list, and return_instance lifetime. */
+DEFINE_STATIC_SRCU_FAST_UPDOWN(uprobes_srcu);
 
 /* Have a copy of original instruction */
 #define UPROBE_COPY_INSN	0
@@ -656,18 +655,9 @@ static inline bool uprobe_is_active(struct uprobe *uprobe)
 	return !RB_EMPTY_NODE(&uprobe->rb_node);
 }
 
-static void uprobe_free_rcu_tasks_trace(struct rcu_head *rcu)
-{
-	struct uprobe *uprobe = container_of(rcu, struct uprobe, rcu);
-
-	kfree(uprobe);
-}
-
 static void uprobe_free_srcu(struct rcu_head *rcu)
 {
-	struct uprobe *uprobe = container_of(rcu, struct uprobe, rcu);
-
-	call_rcu_tasks_trace(&uprobe->rcu, uprobe_free_rcu_tasks_trace);
+	kfree(container_of(rcu, struct uprobe, rcu));
 }
 
 static void uprobe_free_deferred(struct work_struct *work)
@@ -693,8 +683,8 @@ static void uprobe_free_deferred(struct work_struct *work)
 	delayed_uprobe_remove(uprobe, NULL);
 	mutex_unlock(&delayed_uprobe_lock);
 
-	/* start srcu -> rcu_tasks_trace -> kfree chain */
-	call_srcu(&uretprobes_srcu, &uprobe->rcu, uprobe_free_srcu);
+	/* wait for uprobes_srcu grace period, then kfree */
+	call_srcu(&uprobes_srcu, &uprobe->rcu, uprobe_free_srcu);
 }
 
 static void put_uprobe(struct uprobe *uprobe)
@@ -757,7 +747,7 @@ static void hprobe_finalize(struct hprobe *hprobe, enum hprobe_state hstate)
 {
 	switch (hstate) {
 	case HPROBE_LEASED:
-		__srcu_read_unlock_fast_updown(&uretprobes_srcu, hprobe->srcu_ctr);
+		__srcu_read_unlock_fast_updown(&uprobes_srcu, hprobe->srcu_ctr);
 		break;
 	case HPROBE_STABLE:
 		put_uprobe(hprobe->uprobe);
@@ -799,7 +789,7 @@ static struct uprobe *hprobe_expire(struct hprobe *hprobe, bool get)
 	 * Underlying uprobe is itself protected from reuse by SRCU, so ensure
 	 * SRCU lock is held properly.
 	 */
-	lockdep_assert(srcu_read_lock_held(&uretprobes_srcu));
+	lockdep_assert(srcu_read_lock_held(&uprobes_srcu));
 
 	hstate = READ_ONCE(hprobe->state);
 	switch (hstate) {
@@ -829,7 +819,7 @@ static struct uprobe *hprobe_expire(struct hprobe *hprobe, bool get)
 		 */
 		if (try_cmpxchg(&hprobe->state, &hstate, uprobe ? HPROBE_STABLE : HPROBE_GONE)) {
 			/* We won the race, we are the ones to unlock SRCU */
-			__srcu_read_unlock_fast_updown(&uretprobes_srcu, hprobe->srcu_ctr);
+			__srcu_read_unlock_fast_updown(&uprobes_srcu, hprobe->srcu_ctr);
 			return get ? get_uprobe(uprobe) : uprobe;
 		}
 
@@ -907,7 +897,7 @@ static struct uprobe *find_uprobe_rcu(struct inode *inode, loff_t offset)
 	struct rb_node *node;
 	unsigned int seq;
 
-	lockdep_assert(rcu_read_lock_trace_held());
+	lockdep_assert(srcu_read_lock_held(&uprobes_srcu));
 
 	do {
 		seq = read_seqcount_begin(&uprobes_seqcount);
@@ -1357,15 +1347,14 @@ void uprobe_unregister_sync(void)
 {
 	/*
 	 * Now that handler_chain() and handle_uretprobe_chain() iterate over
-	 * uprobe->consumers list under RCU protection without holding
-	 * uprobe->register_rwsem, we need to wait for RCU grace period to
+	 * uprobe->consumers list under SRCU protection without holding
+	 * uprobe->register_rwsem, we need to wait for SRCU grace period to
 	 * make sure that we can't call into just unregistered
 	 * uprobe_consumer's callbacks anymore. If we don't do that, fast and
 	 * unlucky enough caller can free consumer's memory and cause
 	 * handler_chain() or handle_uretprobe_chain() to do an use-after-free.
 	 */
-	synchronize_rcu_tasks_trace();
-	synchronize_srcu(&uretprobes_srcu);
+	synchronize_srcu(&uprobes_srcu);
 }
 EXPORT_SYMBOL_GPL(uprobe_unregister_sync);
 
@@ -1448,19 +1437,21 @@ EXPORT_SYMBOL_GPL(uprobe_register);
  */
 int uprobe_apply(struct uprobe *uprobe, struct uprobe_consumer *uc, bool add)
 {
+	struct srcu_ctr __percpu *scp;
 	struct uprobe_consumer *con;
 	int ret = -ENOENT;
 
 	down_write(&uprobe->register_rwsem);
 
-	rcu_read_lock_trace();
-	list_for_each_entry_rcu(con, &uprobe->consumers, cons_node, rcu_read_lock_trace_held()) {
+	scp = srcu_read_lock_fast_updown(&uprobes_srcu);
+	list_for_each_entry_rcu(con, &uprobe->consumers, cons_node,
+				srcu_read_lock_held(&uprobes_srcu)) {
 		if (con == uc) {
 			ret = register_for_each_vma(uprobe, add ? uc : NULL);
 			break;
 		}
 	}
-	rcu_read_unlock_trace();
+	srcu_read_unlock_fast_updown(&uprobes_srcu, scp);
 
 	up_write(&uprobe->register_rwsem);
 
@@ -2045,7 +2036,7 @@ static void ri_timer(struct timer_list *timer)
 	struct return_instance *ri;
 
 	/* SRCU protects uprobe from reuse for the cmpxchg() inside hprobe_expire(). */
-	guard(srcu_fast_updown)(&uretprobes_srcu);
+	guard(srcu_fast_updown)(&uprobes_srcu);
 	/* RCU protects return_instance from freeing. */
 	guard(rcu)();
 
@@ -2142,7 +2133,7 @@ static int dup_utask(struct task_struct *t, struct uprobe_task *o_utask)
 	t->utask = n_utask;
 
 	/* protect uprobes from freeing, we'll need try_get_uprobe() them */
-	guard(srcu_fast_updown)(&uretprobes_srcu);
+	guard(srcu_fast_updown)(&uprobes_srcu);
 
 	p = &n_utask->return_instances;
 	for (o = o_utask->return_instances; o; o = o->next) {
@@ -2294,7 +2285,7 @@ static void prepare_uretprobe(struct uprobe *uprobe, struct pt_regs *regs,
 	}
 
 	/* raw SRCU lock because it survives switch to user space */
-	srcu_ctr = __srcu_read_lock_fast_updown(&uretprobes_srcu);
+	srcu_ctr = __srcu_read_lock_fast_updown(&uprobes_srcu);
 
 	ri->func = instruction_pointer(regs);
 	ri->stack = user_stack_pointer(regs);
@@ -2555,7 +2546,7 @@ static void handler_chain(struct uprobe *uprobe, struct pt_regs *regs)
 
 	utask->auprobe = &uprobe->arch;
 
-	list_for_each_entry_rcu(uc, &uprobe->consumers, cons_node, rcu_read_lock_trace_held()) {
+	list_for_each_entry_rcu(uc, &uprobe->consumers, cons_node, srcu_read_lock_held(&uprobes_srcu)) {
 		bool session = uc->handler && uc->ret_handler;
 		__u64 cookie = 0;
 		int rc = 0;
@@ -2599,6 +2590,7 @@ static void handler_chain(struct uprobe *uprobe, struct pt_regs *regs)
 static void
 handle_uretprobe_chain(struct return_instance *ri, struct uprobe *uprobe, struct pt_regs *regs)
 {
+	struct srcu_ctr __percpu *scp;
 	struct return_consumer *ric;
 	struct uprobe_consumer *uc;
 	int ric_idx = 0;
@@ -2607,8 +2599,8 @@ handle_uretprobe_chain(struct return_instance *ri, struct uprobe *uprobe, struct
 	if (unlikely(!uprobe))
 		return;
 
-	rcu_read_lock_trace();
-	list_for_each_entry_rcu(uc, &uprobe->consumers, cons_node, rcu_read_lock_trace_held()) {
+	scp = srcu_read_lock_fast_updown(&uprobes_srcu);
+	list_for_each_entry_rcu(uc, &uprobe->consumers, cons_node, srcu_read_lock_held(&uprobes_srcu)) {
 		bool session = uc->handler && uc->ret_handler;
 
 		if (uc->ret_handler) {
@@ -2617,7 +2609,7 @@ handle_uretprobe_chain(struct return_instance *ri, struct uprobe *uprobe, struct
 				uc->ret_handler(uc, ri->func, regs, ric ? &ric->cookie : NULL);
 		}
 	}
-	rcu_read_unlock_trace();
+	srcu_read_unlock_fast_updown(&uprobes_srcu, scp);
 }
 
 static struct return_instance *find_next_ret_chain(struct return_instance *ri)
@@ -2711,6 +2703,7 @@ void __weak arch_uprobe_optimize(struct arch_uprobe *auprobe, unsigned long vadd
  */
 static void handle_swbp(struct pt_regs *regs)
 {
+	struct srcu_ctr __percpu *scp;
 	struct uprobe *uprobe;
 	unsigned long bp_vaddr;
 	int is_swbp;
@@ -2719,7 +2712,7 @@ static void handle_swbp(struct pt_regs *regs)
 	if (bp_vaddr == uprobe_get_trampoline_vaddr())
 		return uprobe_handle_trampoline(regs);
 
-	rcu_read_lock_trace();
+	scp = srcu_read_lock_fast_updown(&uprobes_srcu);
 
 	uprobe = find_active_uprobe_rcu(bp_vaddr, &is_swbp);
 	if (!uprobe) {
@@ -2787,7 +2780,7 @@ static void handle_swbp(struct pt_regs *regs)
 
 out:
 	/* arch_uprobe_skip_sstep() succeeded, or restart if can't singlestep */
-	rcu_read_unlock_trace();
+	srcu_read_unlock_fast_updown(&uprobes_srcu, scp);
 }
 
 void handle_syscall_uprobe(struct pt_regs *regs, unsigned long bp_vaddr)
@@ -2795,7 +2788,7 @@ void handle_syscall_uprobe(struct pt_regs *regs, unsigned long bp_vaddr)
 	struct uprobe *uprobe;
 	int is_swbp;
 
-	guard(rcu_tasks_trace)();
+	guard(srcu_fast_updown)(&uprobes_srcu);
 
 	uprobe = find_active_uprobe_rcu(bp_vaddr, &is_swbp);
 	if (!uprobe)
