@@ -111,6 +111,16 @@
 /* Rt = Rn[0]; Rt2 = Rn[8]; Rn += 16; */
 #define A64_POP(Rt, Rt2, Rn)  A64_LS_PAIR(Rt, Rt2, Rn, 16, LOAD, POST_INDEX)
 
+/* Load/store register pair (signed offset, no writeback) */
+#define A64_LS_PAIR_OFF(Rt, Rt2, Rn, offset, ls) \
+	aarch64_insn_gen_load_store_pair(Rt, Rt2, Rn, offset, \
+		AARCH64_INSN_VARIANT_64BIT, \
+		AARCH64_INSN_LDST_##ls##_PAIR_OFFSET)
+/* Rn[offset] = Rt; Rn[offset+8] = Rt2; */
+#define A64_STP(Rt, Rt2, Rn, offset) A64_LS_PAIR_OFF(Rt, Rt2, Rn, offset, STORE)
+/* Rt = Rn[offset]; Rt2 = Rn[offset+8]; */
+#define A64_LDP(Rt, Rt2, Rn, offset) A64_LS_PAIR_OFF(Rt, Rt2, Rn, offset, LOAD)
+
 /* Load/store exclusive */
 #define A64_SIZE(sf) \
 	((sf) ? AARCH64_INSN_SIZE_64 : AARCH64_INSN_SIZE_32)

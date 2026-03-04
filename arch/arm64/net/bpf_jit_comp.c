@@ -426,31 +426,46 @@ static void find_used_callee_regs(struct jit_ctx *ctx)
 /* Save callee-saved registers */
 static void push_callee_regs(struct jit_ctx *ctx)
 {
-	int reg1, reg2, i;
+	int reg1, reg2, i, offset;
+	int total;
 
 	/*
 	 * Program acting as exception boundary should save all ARM64
 	 * Callee-saved registers as the exception callback needs to recover
 	 * all ARM64 Callee-saved registers in its epilogue.
+	 *
+	 * Use a single SUB SP followed by STP with signed-offset addressing
+	 * (no writeback) so all STPs are independent and can dispatch in
+	 * parallel, breaking the serial SP dependency chain that pre-index
+	 * STP (A64_PUSH) would create.
 	 */
 	if (ctx->prog->aux->exception_boundary) {
-		emit(A64_PUSH(A64_R(19), A64_R(20), A64_SP), ctx);
-		emit(A64_PUSH(A64_R(21), A64_R(22), A64_SP), ctx);
-		emit(A64_PUSH(A64_R(23), A64_R(24), A64_SP), ctx);
-		emit(A64_PUSH(A64_R(25), A64_R(26), A64_SP), ctx);
-		emit(A64_PUSH(A64_R(27), A64_R(28), A64_SP), ctx);
+		total = 80; /* 5 pairs * 16 bytes */
+		emit(A64_SUB_I(1, A64_SP, A64_SP, total), ctx);
+		emit(A64_STP(A64_R(19), A64_R(20), A64_SP, 0), ctx);
+		emit(A64_STP(A64_R(21), A64_R(22), A64_SP, 16), ctx);
+		emit(A64_STP(A64_R(23), A64_R(24), A64_SP, 32), ctx);
+		emit(A64_STP(A64_R(25), A64_R(26), A64_SP, 48), ctx);
+		emit(A64_STP(A64_R(27), A64_R(28), A64_SP, 64), ctx);
 		ctx->fp_used = true;
 	} else {
 		find_used_callee_regs(ctx);
+		/* Round up to 16-byte alignment */
+		total = ALIGN(ctx->nr_used_callee_reg, 2) * 8;
+		if (total == 0)
+			return;
+		emit(A64_SUB_I(1, A64_SP, A64_SP, total), ctx);
+		offset = 0;
 		for (i = 0; i + 1 < ctx->nr_used_callee_reg; i += 2) {
 			reg1 = ctx->used_callee_reg[i];
 			reg2 = ctx->used_callee_reg[i + 1];
-			emit(A64_PUSH(reg1, reg2, A64_SP), ctx);
+			emit(A64_STP(reg1, reg2, A64_SP, offset), ctx);
+			offset += 16;
 		}
 		if (i < ctx->nr_used_callee_reg) {
 			reg1 = ctx->used_callee_reg[i];
 			/* keep SP 16-byte aligned */
-			emit(A64_PUSH(reg1, A64_ZR, A64_SP), ctx);
+			emit(A64_STP(reg1, A64_ZR, A64_SP, offset), ctx);
 		}
 	}
 }
@@ -459,33 +474,45 @@ static void push_callee_regs(struct jit_ctx *ctx)
 static void pop_callee_regs(struct jit_ctx *ctx)
 {
 	struct bpf_prog_aux *aux = ctx->prog->aux;
-	int reg1, reg2, i;
+	int reg1, reg2, i, offset;
+	int total;
 
 	/*
 	 * Program acting as exception boundary pushes R23 and R24 in addition
 	 * to BPF callee-saved registers. Exception callback uses the boundary
 	 * program's stack frame, so recover these extra registers in the above
 	 * two cases.
+	 *
+	 * Use LDP with signed-offset addressing (no writeback) followed by a
+	 * single ADD SP, mirroring push_callee_regs() to break the serial SP
+	 * dependency chain.
 	 */
 	if (aux->exception_boundary || aux->exception_cb) {
-		emit(A64_POP(A64_R(27), A64_R(28), A64_SP), ctx);
-		emit(A64_POP(A64_R(25), A64_R(26), A64_SP), ctx);
-		emit(A64_POP(A64_R(23), A64_R(24), A64_SP), ctx);
-		emit(A64_POP(A64_R(21), A64_R(22), A64_SP), ctx);
-		emit(A64_POP(A64_R(19), A64_R(20), A64_SP), ctx);
+		total = 80; /* 5 pairs * 16 bytes */
+		emit(A64_LDP(A64_R(19), A64_R(20), A64_SP, 0), ctx);
+		emit(A64_LDP(A64_R(21), A64_R(22), A64_SP, 16), ctx);
+		emit(A64_LDP(A64_R(23), A64_R(24), A64_SP, 32), ctx);
+		emit(A64_LDP(A64_R(25), A64_R(26), A64_SP, 48), ctx);
+		emit(A64_LDP(A64_R(27), A64_R(28), A64_SP, 64), ctx);
+		emit(A64_ADD_I(1, A64_SP, A64_SP, total), ctx);
 	} else {
-		i = ctx->nr_used_callee_reg - 1;
-		if (ctx->nr_used_callee_reg % 2 != 0) {
+		total = ALIGN(ctx->nr_used_callee_reg, 2) * 8;
+		if (total == 0)
+			return;
+		offset = 0;
+		i = 0;
+		while (i + 1 < ctx->nr_used_callee_reg) {
 			reg1 = ctx->used_callee_reg[i];
-			emit(A64_POP(reg1, A64_ZR, A64_SP), ctx);
-			i--;
+			reg2 = ctx->used_callee_reg[i + 1];
+			emit(A64_LDP(reg1, reg2, A64_SP, offset), ctx);
+			offset += 16;
+			i += 2;
 		}
-		while (i > 0) {
-			reg1 = ctx->used_callee_reg[i - 1];
-			reg2 = ctx->used_callee_reg[i];
-			emit(A64_POP(reg1, reg2, A64_SP), ctx);
-			i -= 2;
+		if (i < ctx->nr_used_callee_reg) {
+			reg1 = ctx->used_callee_reg[i];
+			emit(A64_LDP(reg1, A64_ZR, A64_SP, offset), ctx);
 		}
+		emit(A64_ADD_I(1, A64_SP, A64_SP, total), ctx);
 	}
 }
 
