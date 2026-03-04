@@ -535,6 +535,12 @@ u32 aarch64_insn_gen_load_store_pair(enum aarch64_insn_register reg1,
 	case AARCH64_INSN_LDST_STORE_PAIR_POST_INDEX:
 		insn = aarch64_insn_get_stp_post_value();
 		break;
+	case AARCH64_INSN_LDST_LOAD_PAIR_OFFSET:
+		insn = aarch64_insn_get_ldp_value();
+		break;
+	case AARCH64_INSN_LDST_STORE_PAIR_OFFSET:
+		insn = aarch64_insn_get_stp_value();
+		break;
 	default:
 		pr_err("%s: unknown load/store encoding %d\n", __func__, type);
 		return AARCH64_BREAK_FAULT;
