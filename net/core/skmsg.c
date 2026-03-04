@@ -445,6 +445,16 @@ int sk_msg_read_core(struct sock *sk, struct sk_psock *psock,
 				copy = actor(actor_arg, page,
 					     sge->offset, copy);
 			if (!copy) {
+				/*
+				 * The loop processes msg_rx->sg entries
+				 * sequentially and prior entries may
+				 * already be consumed. Advance sg.start
+				 * so the next call resumes at the correct
+				 * entry, otherwise it would revisit
+				 * zero-length entries and return -EFAULT.
+				 */
+				if (!peek)
+					msg_rx->sg.start = i;
 				copied = copied ? copied : -EFAULT;
 				goto out;
 			}
