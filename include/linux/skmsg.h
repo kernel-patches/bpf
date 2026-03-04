@@ -143,8 +143,16 @@ int sk_msg_memcopy_from_iter(struct sock *sk, struct iov_iter *from,
 			     struct sk_msg *msg, u32 bytes);
 int sk_msg_recvmsg(struct sock *sk, struct sk_psock *psock, struct msghdr *msg,
 		   int len, int flags);
-int __sk_msg_recvmsg(struct sock *sk, struct sk_psock *psock, struct msghdr *msg,
-		     int len, int flags, int *copied_from_self);
+typedef int (*sk_msg_read_actor_t)(void *arg, struct page *page,
+				   unsigned int offset, size_t len);
+/* Core function for reading ingress_msg, dispatches to the given actor */
+int sk_msg_read_core(struct sock *sk, struct sk_psock *psock,
+		     size_t len, int flags,
+		     sk_msg_read_actor_t actor, void *actor_arg,
+		     int *copied_from_self);
+int sk_msg_recvmsg_actor(void *arg, struct page *page,
+			 unsigned int offset, size_t len);
+
 bool sk_msg_is_readable(struct sock *sk);
 
 static inline void sk_msg_check_to_free(struct sk_msg *msg, u32 i, u32 bytes)

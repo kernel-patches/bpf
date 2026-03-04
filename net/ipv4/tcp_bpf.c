@@ -218,31 +218,26 @@ static bool is_next_msg_fin(struct sk_psock *psock)
 	return false;
 }
 
-static int tcp_bpf_recvmsg_parser(struct sock *sk,
-				  struct msghdr *msg,
-				  size_t len,
-				  int flags,
-				  int *addr_len)
+/*
+ * __tcp_bpf_recvmsg_parser - inner recvmsg for strparser path
+ *
+ * Handles TCP seq tracking, pre-accept receive_queue draining, FIN detection,
+ * and receive window updates. The actual data read is delegated to @actor.
+ *
+ * Caller must hold a psock ref. Socket lock is acquired/released internally.
+ * Returns bytes read, or negative error.
+ */
+static int __tcp_bpf_recvmsg_parser(struct sock *sk, struct sk_psock *psock,
+				    sk_msg_read_actor_t actor, void *actor_arg,
+				    size_t len, int flags)
 {
 	int peek = flags & MSG_PEEK;
-	struct sk_psock *psock;
-	struct tcp_sock *tcp;
+	struct tcp_sock *tcp = tcp_sk(sk);
 	int copied_from_self = 0;
 	int copied = 0;
 	u32 seq;
 
-	if (unlikely(flags & MSG_ERRQUEUE))
-		return inet_recv_error(sk, msg, len, addr_len);
-
-	if (!len)
-		return 0;
-
-	psock = sk_psock_get(sk);
-	if (unlikely(!psock))
-		return tcp_recvmsg(sk, msg, len, flags, addr_len);
-
 	lock_sock(sk);
-	tcp = tcp_sk(sk);
 	seq = tcp->copied_seq;
 	/* We may have received data on the sk_receive_queue pre-accept and
 	 * then we can not use read_skb in this context because we haven't
@@ -264,7 +259,8 @@ static int tcp_bpf_recvmsg_parser(struct sock *sk,
 	}
 
 msg_bytes_ready:
-	copied = __sk_msg_recvmsg(sk, psock, msg, len, flags, &copied_from_self);
+	copied = sk_msg_read_core(sk, psock, len, flags,
+				  actor, actor_arg, &copied_from_self);
 	/* The typical case for EFAULT is the socket was gracefully
 	 * shutdown with a FIN pkt. So check here the other case is
 	 * some error on copy_page_to_iter which would be unexpected.
@@ -329,8 +325,32 @@ out:
 
 unlock:
 	release_sock(sk);
-	sk_psock_put(sk, psock);
 	return copied;
+}
+
+static int tcp_bpf_recvmsg_parser(struct sock *sk,
+				  struct msghdr *msg,
+				  size_t len,
+				  int flags,
+				  int *addr_len)
+{
+	struct sk_psock *psock;
+	int ret;
+
+	if (unlikely(flags & MSG_ERRQUEUE))
+		return inet_recv_error(sk, msg, len, addr_len);
+
+	if (!len)
+		return 0;
+
+	psock = sk_psock_get(sk);
+	if (unlikely(!psock))
+		return tcp_recvmsg(sk, msg, len, flags, addr_len);
+
+	ret = __tcp_bpf_recvmsg_parser(sk, psock,
+				       sk_msg_recvmsg_actor, msg, len, flags);
+	sk_psock_put(sk, psock);
+	return ret;
 }
 
 static int tcp_bpf_ioctl(struct sock *sk, int cmd, int *karg)
@@ -351,11 +371,55 @@ static int tcp_bpf_ioctl(struct sock *sk, int cmd, int *karg)
 	return 0;
 }
 
+/*
+ * __tcp_bpf_recvmsg - inner recvmsg for non-parser (verdict only) path
+ *
+ * No TCP seq tracking needed (tcp_eat_skb handles it at verdict time).
+ * Returns bytes read, 0 if caller should fall back to the normal TCP
+ * read path (data on receive_queue but not in psock), or negative error.
+ *
+ * Caller must hold a psock ref. Socket lock is acquired/released internally.
+ */
+static int __tcp_bpf_recvmsg(struct sock *sk, struct sk_psock *psock,
+			     sk_msg_read_actor_t actor, void *actor_arg,
+			     size_t len, int flags)
+{
+	int copied, ret;
+
+	lock_sock(sk);
+msg_bytes_ready:
+	copied = sk_msg_read_core(sk, psock, len, flags,
+				  actor, actor_arg, NULL);
+	if (!copied) {
+		long timeo;
+		int data;
+
+		timeo = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
+		data = tcp_msg_wait_data(sk, psock, timeo);
+		if (data < 0) {
+			ret = data;
+			goto unlock;
+		}
+		if (data) {
+			if (!sk_psock_queue_empty(psock))
+				goto msg_bytes_ready;
+			release_sock(sk);
+			return 0;
+		}
+		copied = -EAGAIN;
+	}
+	ret = copied;
+
+unlock:
+	release_sock(sk);
+	return ret;
+}
+
 static int tcp_bpf_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 			   int flags, int *addr_len)
 {
 	struct sk_psock *psock;
-	int copied, ret;
+	int ret;
 
 	if (unlikely(flags & MSG_ERRQUEUE))
 		return inet_recv_error(sk, msg, len, addr_len);
@@ -371,33 +435,12 @@ static int tcp_bpf_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 		sk_psock_put(sk, psock);
 		return tcp_recvmsg(sk, msg, len, flags, addr_len);
 	}
-	lock_sock(sk);
-msg_bytes_ready:
-	copied = sk_msg_recvmsg(sk, psock, msg, len, flags);
-	if (!copied) {
-		long timeo;
-		int data;
 
-		timeo = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
-		data = tcp_msg_wait_data(sk, psock, timeo);
-		if (data < 0) {
-			ret = data;
-			goto unlock;
-		}
-		if (data) {
-			if (!sk_psock_queue_empty(psock))
-				goto msg_bytes_ready;
-			release_sock(sk);
-			sk_psock_put(sk, psock);
-			return tcp_recvmsg(sk, msg, len, flags, addr_len);
-		}
-		copied = -EAGAIN;
-	}
-	ret = copied;
-
-unlock:
-	release_sock(sk);
+	ret = __tcp_bpf_recvmsg(sk, psock, sk_msg_recvmsg_actor, msg,
+				len, flags);
 	sk_psock_put(sk, psock);
+	if (!ret)
+		return tcp_recvmsg(sk, msg, len, flags, addr_len);
 	return ret;
 }
 

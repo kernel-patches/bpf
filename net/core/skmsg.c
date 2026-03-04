@@ -409,10 +409,12 @@ out:
 }
 EXPORT_SYMBOL_GPL(sk_msg_memcopy_from_iter);
 
-int __sk_msg_recvmsg(struct sock *sk, struct sk_psock *psock, struct msghdr *msg,
-		     int len, int flags, int *copied_from_self)
+/* Core function for reading ingress_msg, dispatches to the given actor */
+int sk_msg_read_core(struct sock *sk, struct sk_psock *psock,
+		     size_t len, int flags,
+		     sk_msg_read_actor_t actor, void *actor_arg,
+		     int *copied_from_self)
 {
-	struct iov_iter *iter = &msg->msg_iter;
 	int peek = flags & MSG_PEEK;
 	struct sk_msg *msg_rx;
 	int i, copied = 0;
@@ -440,7 +442,8 @@ int __sk_msg_recvmsg(struct sock *sk, struct sk_psock *psock, struct msghdr *msg
 			if (copied + copy > len)
 				copy = len - copied;
 			if (copy)
-				copy = copy_page_to_iter(page, sge->offset, copy, iter);
+				copy = actor(actor_arg, page,
+					     sge->offset, copy);
 			if (!copy) {
 				copied = copied ? copied : -EFAULT;
 				goto out;
@@ -495,12 +498,23 @@ int __sk_msg_recvmsg(struct sock *sk, struct sk_psock *psock, struct msghdr *msg
 out:
 	return copied;
 }
+EXPORT_SYMBOL_GPL(sk_msg_read_core);
+
+int sk_msg_recvmsg_actor(void *arg, struct page *page,
+			 unsigned int offset, size_t len)
+{
+	struct msghdr *msg = arg;
+
+	return copy_page_to_iter(page, offset, len, &msg->msg_iter);
+}
+EXPORT_SYMBOL_GPL(sk_msg_recvmsg_actor);
 
 /* Receive sk_msg from psock->ingress_msg to @msg. */
 int sk_msg_recvmsg(struct sock *sk, struct sk_psock *psock, struct msghdr *msg,
 		   int len, int flags)
 {
-	return __sk_msg_recvmsg(sk, psock, msg, len, flags, NULL);
+	return sk_msg_read_core(sk, psock, len, flags,
+				sk_msg_recvmsg_actor, msg, NULL);
 }
 EXPORT_SYMBOL_GPL(sk_msg_recvmsg);
 
