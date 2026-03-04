@@ -490,6 +490,47 @@ u32 aarch64_insn_gen_load_store_imm(enum aarch64_insn_register reg,
 	return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_12, insn, imm);
 }
 
+u32 aarch64_insn_gen_load_store_imm_unscaled(enum aarch64_insn_register reg,
+					     enum aarch64_insn_register base,
+					     int offset,
+					     enum aarch64_insn_size_type size,
+					     enum aarch64_insn_ldst_type type)
+{
+	u32 insn;
+
+	/* LDUR/STUR support signed 9-bit offset: -256 to +255 */
+	if (offset < -256 || offset > 255) {
+		pr_err("%s: offset out of range %d\n", __func__, offset);
+		return AARCH64_BREAK_FAULT;
+	}
+
+	switch (type) {
+	case AARCH64_INSN_LDST_LOAD_IMM_UNSCALED:
+		/* LDUR: size=xx, V=0, opc=01 */
+		insn = 0x38400000;
+		break;
+	case AARCH64_INSN_LDST_STORE_IMM_UNSCALED:
+		/* STUR: size=xx, V=0, opc=00 */
+		insn = 0x38000000;
+		break;
+	default:
+		pr_err("%s: unknown load/store encoding %d\n", __func__, type);
+		return AARCH64_BREAK_FAULT;
+	}
+
+	insn = aarch64_insn_encode_ldst_size(size, insn);
+
+	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RT, insn,
+					    reg);
+
+	insn = aarch64_insn_encode_register(AARCH64_INSN_REGTYPE_RN, insn,
+					    base);
+
+	/* Encode imm9 (bits 20:12) */
+	return aarch64_insn_encode_immediate(AARCH64_INSN_IMM_9, insn,
+					     offset & 0x1ff);
+}
+
 u32 aarch64_insn_gen_load_literal(unsigned long pc, unsigned long addr,
 				  enum aarch64_insn_register reg,
 				  bool is64bit)

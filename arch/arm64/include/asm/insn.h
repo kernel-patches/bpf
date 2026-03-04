@@ -200,6 +200,8 @@ enum aarch64_insn_ldst_type {
 	AARCH64_INSN_LDST_STORE_REL_EX,
 	AARCH64_INSN_LDST_SIGNED_LOAD_IMM_OFFSET,
 	AARCH64_INSN_LDST_SIGNED_LOAD_REG_OFFSET,
+	AARCH64_INSN_LDST_LOAD_IMM_UNSCALED,
+	AARCH64_INSN_LDST_STORE_IMM_UNSCALED,
 };
 
 enum aarch64_insn_adsb_type {
@@ -605,6 +607,11 @@ u32 aarch64_insn_gen_load_store_imm(enum aarch64_insn_register reg,
 				    unsigned int imm,
 				    enum aarch64_insn_size_type size,
 				    enum aarch64_insn_ldst_type type);
+u32 aarch64_insn_gen_load_store_imm_unscaled(enum aarch64_insn_register reg,
+					     enum aarch64_insn_register base,
+					     int offset,
+					     enum aarch64_insn_size_type size,
+					     enum aarch64_insn_ldst_type type);
 u32 aarch64_insn_gen_load_literal(unsigned long pc, unsigned long addr,
 				  enum aarch64_insn_register reg,
 				  bool is64bit);
