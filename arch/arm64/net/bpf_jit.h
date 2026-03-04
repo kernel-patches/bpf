@@ -26,6 +26,15 @@
 #define A64_CBZ(sf, Rt, imm19) A64_COMP_BRANCH(sf, Rt, (imm19) << 2, ZERO)
 #define A64_CBNZ(sf, Rt, imm19) A64_COMP_BRANCH(sf, Rt, (imm19) << 2, NONZERO)
 
+/* Test & branch (immediate) */
+#define A64_TEST_BRANCH(Rt, offset, bit, type) \
+	aarch64_insn_gen_test_branch_imm(0, offset, Rt, bit, \
+		AARCH64_INSN_BRANCH_##type)
+#define A64_TBZ(Rt, imm14, bit) \
+	A64_TEST_BRANCH(Rt, (imm14) << 2, bit, TEST_ZERO)
+#define A64_TBNZ(Rt, imm14, bit) \
+	A64_TEST_BRANCH(Rt, (imm14) << 2, bit, TEST_NONZERO)
+
 /* Conditional branch (immediate) */
 #define A64_COND_BRANCH(cond, offset) \
 	aarch64_insn_gen_cond_branch_imm(0, offset, cond)

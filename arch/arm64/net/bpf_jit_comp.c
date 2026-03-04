@@ -43,6 +43,7 @@
 	}							\
 } while (0)
 #define check_imm19(imm) check_imm(19, imm)
+#define check_imm14(imm) check_imm(14, imm)
 #define check_imm26(imm) check_imm(26, imm)
 
 /* Map BPF registers to A64 registers */
@@ -1557,6 +1558,12 @@ emit_cond_jmp:
 		goto emit_cond_jmp;
 	case BPF_JMP | BPF_JSET | BPF_K:
 	case BPF_JMP32 | BPF_JSET | BPF_K:
+		if (imm != 0 && (imm & (imm - 1)) == 0) {
+			jmp_offset = bpf2a64_offset(i, off, ctx);
+			check_imm14(jmp_offset);
+			emit(A64_TBNZ(dst, jmp_offset, fls((int)imm) - 1), ctx);
+			break;
+		}
 		a64_insn = A64_TST_I(is64, dst, imm);
 		if (a64_insn != AARCH64_BREAK_FAULT) {
 			emit(a64_insn, ctx);
