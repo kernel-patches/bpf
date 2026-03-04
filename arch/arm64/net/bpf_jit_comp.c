@@ -347,6 +347,12 @@ static bool is_lsi_offset(int offset, int scale)
 	return true;
 }
 
+/* LDUR/STUR support signed 9-bit immediate: -256 to +255 */
+static bool is_ldur_offset(int offset)
+{
+	return offset >= -256 && offset <= 255;
+}
+
 /* generated main prog prologue:
  *      bti c // if CONFIG_ARM64_BTI_KERNEL
  *      mov x9, lr
@@ -1739,6 +1745,8 @@ emit_cond_jmp:
 					emit(A64_LDRSWI(dst, src_adj, off_adj), ctx);
 				else
 					emit(A64_LDR32I(dst, src_adj, off_adj), ctx);
+			} else if (!sign_extend && is_ldur_offset(off_adj)) {
+				emit(A64_LDUR32(dst, src_adj, off_adj), ctx);
 			} else {
 				emit_a64_mov_i(1, tmp, off, ctx);
 				if (sign_extend)
@@ -1753,6 +1761,8 @@ emit_cond_jmp:
 					emit(A64_LDRSHI(dst, src_adj, off_adj), ctx);
 				else
 					emit(A64_LDRHI(dst, src_adj, off_adj), ctx);
+			} else if (!sign_extend && is_ldur_offset(off_adj)) {
+				emit(A64_LDURH(dst, src_adj, off_adj), ctx);
 			} else {
 				emit_a64_mov_i(1, tmp, off, ctx);
 				if (sign_extend)
@@ -1767,6 +1777,8 @@ emit_cond_jmp:
 					emit(A64_LDRSBI(dst, src_adj, off_adj), ctx);
 				else
 					emit(A64_LDRBI(dst, src_adj, off_adj), ctx);
+			} else if (!sign_extend && is_ldur_offset(off_adj)) {
+				emit(A64_LDURB(dst, src_adj, off_adj), ctx);
 			} else {
 				emit_a64_mov_i(1, tmp, off, ctx);
 				if (sign_extend)
@@ -1778,6 +1790,8 @@ emit_cond_jmp:
 		case BPF_DW:
 			if (is_lsi_offset(off_adj, 3)) {
 				emit(A64_LDR64I(dst, src_adj, off_adj), ctx);
+			} else if (is_ldur_offset(off_adj)) {
+				emit(A64_LDUR64(dst, src_adj, off_adj), ctx);
 			} else {
 				emit_a64_mov_i(1, tmp, off, ctx);
 				emit(A64_LDR64(dst, src, tmp), ctx);
@@ -1826,6 +1840,8 @@ emit_cond_jmp:
 		case BPF_W:
 			if (is_lsi_offset(off_adj, 2)) {
 				emit(A64_STR32I(tmp, dst_adj, off_adj), ctx);
+			} else if (is_ldur_offset(off_adj)) {
+				emit(A64_STUR32(tmp, dst_adj, off_adj), ctx);
 			} else {
 				emit_a64_mov_i(1, tmp2, off, ctx);
 				emit(A64_STR32(tmp, dst, tmp2), ctx);
@@ -1834,6 +1850,8 @@ emit_cond_jmp:
 		case BPF_H:
 			if (is_lsi_offset(off_adj, 1)) {
 				emit(A64_STRHI(tmp, dst_adj, off_adj), ctx);
+			} else if (is_ldur_offset(off_adj)) {
+				emit(A64_STURH(tmp, dst_adj, off_adj), ctx);
 			} else {
 				emit_a64_mov_i(1, tmp2, off, ctx);
 				emit(A64_STRH(tmp, dst, tmp2), ctx);
@@ -1842,6 +1860,8 @@ emit_cond_jmp:
 		case BPF_B:
 			if (is_lsi_offset(off_adj, 0)) {
 				emit(A64_STRBI(tmp, dst_adj, off_adj), ctx);
+			} else if (is_ldur_offset(off_adj)) {
+				emit(A64_STURB(tmp, dst_adj, off_adj), ctx);
 			} else {
 				emit_a64_mov_i(1, tmp2, off, ctx);
 				emit(A64_STRB(tmp, dst, tmp2), ctx);
@@ -1850,6 +1870,8 @@ emit_cond_jmp:
 		case BPF_DW:
 			if (is_lsi_offset(off_adj, 3)) {
 				emit(A64_STR64I(tmp, dst_adj, off_adj), ctx);
+			} else if (is_ldur_offset(off_adj)) {
+				emit(A64_STUR64(tmp, dst_adj, off_adj), ctx);
 			} else {
 				emit_a64_mov_i(1, tmp2, off, ctx);
 				emit(A64_STR64(tmp, dst, tmp2), ctx);
@@ -1886,6 +1908,8 @@ emit_cond_jmp:
 		case BPF_W:
 			if (is_lsi_offset(off_adj, 2)) {
 				emit(A64_STR32I(src, dst_adj, off_adj), ctx);
+			} else if (is_ldur_offset(off_adj)) {
+				emit(A64_STUR32(src, dst_adj, off_adj), ctx);
 			} else {
 				emit_a64_mov_i(1, tmp, off, ctx);
 				emit(A64_STR32(src, dst, tmp), ctx);
@@ -1894,6 +1918,8 @@ emit_cond_jmp:
 		case BPF_H:
 			if (is_lsi_offset(off_adj, 1)) {
 				emit(A64_STRHI(src, dst_adj, off_adj), ctx);
+			} else if (is_ldur_offset(off_adj)) {
+				emit(A64_STURH(src, dst_adj, off_adj), ctx);
 			} else {
 				emit_a64_mov_i(1, tmp, off, ctx);
 				emit(A64_STRH(src, dst, tmp), ctx);
@@ -1902,6 +1928,8 @@ emit_cond_jmp:
 		case BPF_B:
 			if (is_lsi_offset(off_adj, 0)) {
 				emit(A64_STRBI(src, dst_adj, off_adj), ctx);
+			} else if (is_ldur_offset(off_adj)) {
+				emit(A64_STURB(src, dst_adj, off_adj), ctx);
 			} else {
 				emit_a64_mov_i(1, tmp, off, ctx);
 				emit(A64_STRB(src, dst, tmp), ctx);
@@ -1910,6 +1938,8 @@ emit_cond_jmp:
 		case BPF_DW:
 			if (is_lsi_offset(off_adj, 3)) {
 				emit(A64_STR64I(src, dst_adj, off_adj), ctx);
+			} else if (is_ldur_offset(off_adj)) {
+				emit(A64_STUR64(src, dst_adj, off_adj), ctx);
 			} else {
 				emit_a64_mov_i(1, tmp, off, ctx);
 				emit(A64_STR64(src, dst, tmp), ctx);

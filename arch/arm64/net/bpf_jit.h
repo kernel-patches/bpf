@@ -95,6 +95,20 @@
 #define A64_STR64I(Xt, Xn, imm) A64_LS_IMM(Xt, Xn, imm, 64, STORE)
 #define A64_LDR64I(Xt, Xn, imm) A64_LS_IMM(Xt, Xn, imm, 64, LOAD)
 
+/* Load/store register (unscaled immediate offset) */
+#define A64_LS_UNSCALED(Rt, Rn, offset, size, type) \
+	aarch64_insn_gen_load_store_imm_unscaled(Rt, Rn, offset, \
+		AARCH64_INSN_SIZE_##size, \
+		AARCH64_INSN_LDST_##type##_IMM_UNSCALED)
+#define A64_STURB(Wt, Xn, offset)  A64_LS_UNSCALED(Wt, Xn, offset, 8, STORE)
+#define A64_LDURB(Wt, Xn, offset)  A64_LS_UNSCALED(Wt, Xn, offset, 8, LOAD)
+#define A64_STURH(Wt, Xn, offset)  A64_LS_UNSCALED(Wt, Xn, offset, 16, STORE)
+#define A64_LDURH(Wt, Xn, offset)  A64_LS_UNSCALED(Wt, Xn, offset, 16, LOAD)
+#define A64_STUR32(Wt, Xn, offset) A64_LS_UNSCALED(Wt, Xn, offset, 32, STORE)
+#define A64_LDUR32(Wt, Xn, offset) A64_LS_UNSCALED(Wt, Xn, offset, 32, LOAD)
+#define A64_STUR64(Xt, Xn, offset) A64_LS_UNSCALED(Xt, Xn, offset, 64, STORE)
+#define A64_LDUR64(Xt, Xn, offset) A64_LS_UNSCALED(Xt, Xn, offset, 64, LOAD)
+
 /* LDR (literal) */
 #define A64_LDR32LIT(Wt, offset) \
 	aarch64_insn_gen_load_literal(0, offset, Wt, false)
