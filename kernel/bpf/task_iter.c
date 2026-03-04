@@ -813,6 +813,55 @@ struct bpf_iter_task_vma_kern {
 	struct bpf_iter_task_vma_kern_data *data;
 } __attribute__((aligned(8)));
 
+/*
+ * Per-CPU irq_work for NMI-safe mmput.
+ *
+ * mmput_async() is safe from hardirq context but not from NMI, because
+ * schedule_work() -> queue_work_on() takes raw_spin_lock(&pool->lock)
+ * which can deadlock if the NMI interrupted code holding that lock.
+ *
+ * This dedicated irq_work defers mmput to hardirq context where
+ * mmput_async() is safe. BPF programs are non-preemptible, so one
+ * slot per CPU is sufficient.
+ */
+struct bpf_iter_mmput_irq_work {
+	struct irq_work irq_work;
+	struct mm_struct *mm;
+};
+
+static DEFINE_PER_CPU(struct bpf_iter_mmput_irq_work, bpf_iter_mmput_work);
+
+static void do_bpf_iter_mmput(struct irq_work *entry)
+{
+	struct bpf_iter_mmput_irq_work *work;
+
+	work = container_of(entry, struct bpf_iter_mmput_irq_work, irq_work);
+	if (work->mm) {
+		mmput_async(work->mm);
+		work->mm = NULL;
+	}
+}
+
+static void bpf_iter_mmput(struct mm_struct *mm)
+{
+	if (!in_nmi()) {
+		mmput_async(mm);
+	} else {
+		struct bpf_iter_mmput_irq_work *work;
+
+		work = this_cpu_ptr(&bpf_iter_mmput_work);
+		work->mm = mm;
+		irq_work_queue(&work->irq_work);
+	}
+}
+
+static bool bpf_iter_mmput_busy(void)
+{
+	if (!in_nmi())
+		return false;
+	return irq_work_is_busy(&this_cpu_ptr(&bpf_iter_mmput_work)->irq_work);
+}
+
 __bpf_kfunc_start_defs();
 
 __bpf_kfunc int bpf_iter_task_vma_new(struct bpf_iter_task_vma *it,
@@ -840,19 +889,35 @@ __bpf_kfunc int bpf_iter_task_vma_new(struct bpf_iter_task_vma *it,
 		goto err_cleanup_iter;
 	}
 
-	/* kit->data->work == NULL is valid after bpf_mmap_unlock_get_irq_work */
+	/*
+	 * Check irq_work availability for both mmap_lock release and mmput.
+	 * Both use separate per-CPU irq_work slots, and both must be free
+	 * to guarantee _destroy() can complete from NMI context.
+	 * kit->data->work == NULL is valid after bpf_mmap_unlock_get_irq_work
+	 */
 	irq_work_busy = bpf_mmap_unlock_get_irq_work(&kit->data->work);
-	if (irq_work_busy || !mmap_read_trylock(kit->data->mm)) {
+	if (irq_work_busy || bpf_iter_mmput_busy()) {
 		err = -EBUSY;
 		goto err_cleanup_iter;
+	}
+
+	if (!mmget_not_zero(kit->data->mm)) {
+		err = -ENOENT;
+		goto err_cleanup_iter;
+	}
+
+	if (!mmap_read_trylock(kit->data->mm)) {
+		err = -EBUSY;
+		goto err_cleanup_mmget;
 	}
 
 	vma_iter_init(&kit->data->vmi, kit->data->mm, addr);
 	return 0;
 
+err_cleanup_mmget:
+	bpf_iter_mmput(kit->data->mm);
 err_cleanup_iter:
-	if (kit->data->task)
-		put_task_struct(kit->data->task);
+	put_task_struct(kit->data->task);
 	bpf_mem_free(&bpf_global_ma, kit->data);
 	/* NULL kit->data signals failed bpf_iter_task_vma initialization */
 	kit->data = NULL;
@@ -874,6 +939,7 @@ __bpf_kfunc void bpf_iter_task_vma_destroy(struct bpf_iter_task_vma *it)
 
 	if (kit->data) {
 		bpf_mmap_unlock_mm(kit->data->work, kit->data->mm);
+		bpf_iter_mmput(kit->data->mm);
 		put_task_struct(kit->data->task);
 		bpf_mem_free(&bpf_global_ma, kit->data);
 	}
@@ -1044,12 +1110,15 @@ static void do_mmap_read_unlock(struct irq_work *entry)
 
 static int __init task_iter_init(void)
 {
+	struct bpf_iter_mmput_irq_work *mmput_work;
 	struct mmap_unlock_irq_work *work;
 	int ret, cpu;
 
 	for_each_possible_cpu(cpu) {
 		work = per_cpu_ptr(&mmap_unlock_work, cpu);
 		init_irq_work(&work->irq_work, do_mmap_read_unlock);
+		mmput_work = per_cpu_ptr(&bpf_iter_mmput_work, cpu);
+		init_irq_work(&mmput_work->irq_work, do_bpf_iter_mmput);
 	}
 
 	task_reg_info.ctx_arg_info[0].btf_id = btf_tracing_ids[BTF_TRACING_TYPE_TASK];
