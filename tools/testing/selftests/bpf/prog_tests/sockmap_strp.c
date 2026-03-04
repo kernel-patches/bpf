@@ -6,6 +6,23 @@
 #include "test_skmsg_load_helpers.skel.h"
 #include "test_sockmap_strp.skel.h"
 
+static bool use_splice;
+
+static bool __start_subtest(const char *name)
+{
+	if (!use_splice)
+		return (test__start_subtest)(name);
+
+	char buf[MAX_TEST_NAME];
+
+	snprintf(buf, sizeof(buf), "%s splice", name);
+	return (test__start_subtest)(buf);
+}
+
+#define test__start_subtest(name) __start_subtest(name)
+#define recv_timeout(fd, buf, len, flags, timeout) \
+	recv_timeout_with_splice(fd, buf, len, flags, timeout, use_splice)
+
 #define STRP_PKT_HEAD_LEN 4
 #define STRP_PKT_BODY_LEN 6
 #define STRP_PKT_FULL_LEN (STRP_PKT_HEAD_LEN + STRP_PKT_BODY_LEN)
@@ -431,7 +448,7 @@ out:
 	test_sockmap_strp__destroy(strp);
 }
 
-void test_sockmap_strp(void)
+static void __test_sockmap_strp(void)
 {
 	if (test__start_subtest("sockmap strp tcp pass"))
 		test_sockmap_strp_pass(AF_INET, SOCK_STREAM, false);
@@ -451,4 +468,13 @@ void test_sockmap_strp(void)
 		test_sockmap_strp_multiple_pkt(AF_INET, SOCK_STREAM);
 	if (test__start_subtest("sockmap strp tcp dispatch"))
 		test_sockmap_strp_dispatch_pkt(AF_INET, SOCK_STREAM);
+}
+
+void test_sockmap_strp(void)
+{
+	use_splice = false;
+	__test_sockmap_strp();
+
+	use_splice = true;
+	__test_sockmap_strp();
 }

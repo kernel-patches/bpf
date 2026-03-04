@@ -18,6 +18,23 @@
 
 #include "sockmap_helpers.h"
 
+static bool use_splice;
+
+static bool __start_subtest(const char *name)
+{
+	if (!use_splice)
+		return (test__start_subtest)(name);
+
+	char buf[MAX_TEST_NAME];
+
+	snprintf(buf, sizeof(buf), "%s splice", name);
+	return (test__start_subtest)(buf);
+}
+
+#define test__start_subtest(name) __start_subtest(name)
+#define recv_timeout(fd, buf, len, flags, timeout) \
+	recv_timeout_with_splice(fd, buf, len, flags, timeout, use_splice)
+
 #define TCP_REPAIR		19	/* TCP sock is under repair right now */
 
 #define TCP_REPAIR_ON		1
@@ -1314,7 +1331,7 @@ end:
 	test_sockmap_pass_prog__destroy(skel);
 }
 
-void test_sockmap_basic(void)
+static void __test_sockmap_basic(void)
 {
 	if (test__start_subtest("sockmap create_update_free"))
 		test_sockmap_create_update_free(BPF_MAP_TYPE_SOCKMAP);
@@ -1390,4 +1407,13 @@ void test_sockmap_basic(void)
 		test_sockmap_multi_channels(SOCK_STREAM);
 	if (test__start_subtest("sockmap udp multi channels"))
 		test_sockmap_multi_channels(SOCK_DGRAM);
+}
+
+void test_sockmap_basic(void)
+{
+	use_splice = false;
+	__test_sockmap_basic();
+
+	use_splice = true;
+	__test_sockmap_basic();
 }

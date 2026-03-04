@@ -80,4 +80,66 @@ static inline int add_to_sockmap(int mapfd, int fd1, int fd2)
 	return xbpf_map_update_elem(mapfd, &u32(1), &u64(fd2), BPF_NOEXIST);
 }
 
+static inline ssize_t recv_timeout_with_splice(int fd, void *buf, size_t len,
+					       int flags,
+					       unsigned int timeout_sec,
+					       bool do_splice)
+{
+	ssize_t total = 0;
+	int pipefd[2];
+	int fl;
+
+	int sotype, protocol;
+	socklen_t optlen = sizeof(sotype);
+
+	if (!do_splice || (flags & MSG_PEEK) ||
+	    getsockopt(fd, SOL_SOCKET, SO_TYPE, &sotype, &optlen) ||
+	    sotype != SOCK_STREAM ||
+	    getsockopt(fd, SOL_SOCKET, SO_PROTOCOL, &protocol, &optlen) ||
+	    protocol != IPPROTO_TCP)
+		return recv_timeout(fd, buf, len, flags, timeout_sec);
+
+	if (poll_read(fd, timeout_sec))
+		return -1;
+
+	if (pipe(pipefd) < 0)
+		return -1;
+
+	/*
+	 * tcp_splice_read() only checks sock->file->f_flags for
+	 * O_NONBLOCK, ignoring SPLICE_F_NONBLOCK for the socket
+	 * side timeout. Set O_NONBLOCK on the fd so the loop won't
+	 * block forever when no more data is available.
+	 */
+	fl = fcntl(fd, F_GETFL);
+	fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+
+	/*
+	 * Pipe has limited buffer slots (default 16), so a single
+	 * splice may not transfer all requested bytes. Loop until
+	 * we've read enough or no more data is available.
+	 */
+	while (total < (ssize_t)len) {
+		ssize_t spliced, n;
+
+		spliced = splice(fd, NULL, pipefd[1], NULL, len - total,
+				 SPLICE_F_NONBLOCK);
+		if (spliced <= 0)
+			break;
+
+		n = read(pipefd[0], buf + total, spliced);
+		if (n <= 0)
+			break;
+
+		total += n;
+	}
+
+	fcntl(fd, F_SETFL, fl);
+
+	close(pipefd[0]);
+	close(pipefd[1]);
+
+	return total > 0 ? total : -1;
+}
+
 #endif // __SOCKMAP_HELPERS__
