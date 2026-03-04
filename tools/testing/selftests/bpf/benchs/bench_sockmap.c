@@ -7,6 +7,9 @@
 #include <sys/sendfile.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <unistd.h>
+#include <sched.h>
+#include <sys/syscall.h>
 #include <argp.h>
 #include "bench.h"
 #include "bench_sockmap_prog.skel.h"
@@ -46,6 +49,8 @@ enum SOCKMAP_ARG_FLAG {
 	ARG_CTL_RX_STRP,
 	ARG_CONSUMER_DELAY_TIME,
 	ARG_PRODUCER_DURATION,
+	ARG_CTL_SPLICE,
+	ARG_CTL_VERIFY,
 };
 
 #define TXMODE_NORMAL()				\
@@ -110,6 +115,9 @@ static struct socmap_ctx {
 	int		delay_consumer;
 	int		prod_run_time;
 	int		strp_size;
+	bool		use_splice;
+	bool		verify;
+	int		pipefd[2];
 } ctx = {
 	.prod_send	= 0,
 	.user_read	= 0,
@@ -119,6 +127,9 @@ static struct socmap_ctx {
 	.delay_consumer = 0,
 	.prod_run_time	= 0,
 	.strp_size	= 0,
+	.use_splice	= false,
+	.verify		= false,
+	.pipefd		= {-1, -1},
 };
 
 static void bench_sockmap_prog_destroy(void)
@@ -129,6 +140,11 @@ static void bench_sockmap_prog_destroy(void)
 		if (ctx.fds[i] > 0)
 			close(ctx.fds[i]);
 	}
+
+	if (ctx.pipefd[0] >= 0)
+		close(ctx.pipefd[0]);
+	if (ctx.pipefd[1] >= 0)
+		close(ctx.pipefd[1]);
 
 	bench_sockmap_prog__destroy(ctx.skel);
 }
@@ -320,6 +336,7 @@ static int setup_tx_sockmap(void)
 
 static void setup(void)
 {
+	int rcvbuf = 16 * 1024 * 1024;
 	int err;
 
 	ctx.skel = bench_sockmap_prog__open_and_load();
@@ -350,6 +367,18 @@ static void setup(void)
 		goto err;
 	}
 
+	if (ctx.use_splice) {
+		if (pipe(ctx.pipefd)) {
+			fprintf(stderr, "pipe error:%d\n", errno);
+			goto err;
+		}
+	}
+
+	setsockopt(ctx.c2, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+
+	if (ctx.use_splice)
+		set_non_block(ctx.c2, true);
+
 	return;
 
 err:
@@ -368,6 +397,8 @@ static void measure(struct bench_res *res)
 
 static void verify_data(int *check_pos, char *buf, int rcv)
 {
+	if (!ctx.verify)
+		return;
 	for (int i = 0 ; i < rcv; i++) {
 		if (buf[i] != snd_data[(*check_pos) % DATA_REPEAT_SIZE]) {
 			fprintf(stderr, "verify data fail");
@@ -387,6 +418,9 @@ static void *consumer(void *input)
 	int recv_buf_size = FILE_SIZE;
 	char *buf = malloc(recv_buf_size);
 	int delay_read = ctx.delay_consumer;
+
+	printf("cons[%d] started, tid=%ld cpu=%d\n",
+	       tid, syscall(SYS_gettid), sched_getcpu());
 
 	if (!buf) {
 		fprintf(stderr, "fail to init read buffer");
@@ -419,7 +453,15 @@ static void *consumer(void *input)
 			}
 			/* read real endpoint by consumer 0 */
 			atomic_inc(&ctx.read_calls);
-			rcv = read(ctx.c2, buf, recv_buf_size);
+			if (ctx.use_splice) {
+				rcv = splice(ctx.c2, NULL, ctx.pipefd[1],
+					     NULL, recv_buf_size,
+					     SPLICE_F_NONBLOCK);
+				if (rcv > 0)
+					rcv = read(ctx.pipefd[0], buf, rcv);
+			} else {
+				rcv = read(ctx.c2, buf, recv_buf_size);
+			}
 			if (rcv < 0 && errno != EAGAIN) {
 				fprintf(stderr, "%s fail to read c2 %d\n", __func__, errno);
 				return NULL;
@@ -439,6 +481,9 @@ static void *producer(void *input)
 	struct timespec ts1, ts2;
 	int target;
 	FILE *file;
+
+	printf("prod started, tid=%ld cpu=%d\n",
+	       syscall(SYS_gettid), sched_getcpu());
 
 	file = tmpfile();
 	if (!file) {
@@ -554,6 +599,10 @@ static const struct argp_option opts[] = {
 		"delay consumer start"},
 	{ "producer-duration", ARG_PRODUCER_DURATION, "SEC", 0,
 		"producer duration"},
+	{ "splice", ARG_CTL_SPLICE, NULL, 0,
+		"use splice instead of read for consumer"},
+	{ "verify", ARG_CTL_VERIFY, NULL, 0,
+		"verify received data correctness"},
 	{},
 };
 
@@ -571,6 +620,12 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		break;
 	case ARG_CTL_RX_STRP:
 		ctx.strp_size = strtol(arg, NULL, 10);
+		break;
+	case ARG_CTL_SPLICE:
+		ctx.use_splice = true;
+		break;
+	case ARG_CTL_VERIFY:
+		ctx.verify = true;
 		break;
 	default:
 		return ARGP_ERR_UNKNOWN;
