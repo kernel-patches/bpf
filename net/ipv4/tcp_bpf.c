@@ -447,6 +447,7 @@ static int tcp_bpf_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 
 struct tcp_bpf_splice_ctx {
 	struct pipe_inode_info *pipe;
+	struct sock *sk;
 };
 
 static int sk_msg_splice_actor(void *arg, struct page *page,
@@ -458,13 +459,33 @@ static int sk_msg_splice_actor(void *arg, struct page *page,
 	};
 	ssize_t ret;
 
-	buf.page = alloc_page(GFP_KERNEL);
-	if (!buf.page)
-		return 0;
+	if (PageSlab(page)) {
+		/*
+		 * skb linear data is backed by slab memory where
+		 * get_page() is invalid. Copy to a page fragment from
+		 * the socket's page allocator, matching what
+		 * linear_to_page() does in the standard TCP splice
+		 * path (skb_splice_bits).
+		 */
+		struct page_frag *pfrag = sk_page_frag(ctx->sk);
 
-	memcpy(page_address(buf.page), page_address(page) + offset, len);
-	buf.offset = 0;
-	buf.len = len;
+		if (!sk_page_frag_refill(ctx->sk, pfrag))
+			return 0;
+
+		len = min_t(size_t, len, pfrag->size - pfrag->offset);
+		memcpy(page_address(pfrag->page) + pfrag->offset,
+		       page_address(page) + offset, len);
+		buf.page = pfrag->page;
+		buf.offset = pfrag->offset;
+		buf.len = len;
+		pfrag->offset += len;
+	} else {
+		buf.page = page;
+		buf.offset = offset;
+		buf.len = len;
+	}
+
+	get_page(buf.page);
 
 	/*
 	 * add_to_pipe() calls pipe_buf_release() on failure, which
@@ -481,9 +502,9 @@ static ssize_t tcp_bpf_splice_read(struct socket *sock, loff_t *ppos,
 				   struct pipe_inode_info *pipe, size_t len,
 				   unsigned int flags)
 {
-	struct tcp_bpf_splice_ctx ctx = { .pipe = pipe };
-	int bpf_flags = flags & SPLICE_F_NONBLOCK ? MSG_DONTWAIT : 0;
 	struct sock *sk = sock->sk;
+	struct tcp_bpf_splice_ctx ctx = { .pipe = pipe, .sk = sk };
+	int bpf_flags = flags & SPLICE_F_NONBLOCK ? MSG_DONTWAIT : 0;
 	struct sk_psock *psock;
 	int ret;
 
@@ -508,9 +529,9 @@ static ssize_t tcp_bpf_splice_read_parser(struct socket *sock, loff_t *ppos,
 					  struct pipe_inode_info *pipe,
 					  size_t len, unsigned int flags)
 {
-	struct tcp_bpf_splice_ctx ctx = { .pipe = pipe };
-	int bpf_flags = flags & SPLICE_F_NONBLOCK ? MSG_DONTWAIT : 0;
 	struct sock *sk = sock->sk;
+	struct tcp_bpf_splice_ctx ctx = { .pipe = pipe, .sk = sk };
+	int bpf_flags = flags & SPLICE_F_NONBLOCK ? MSG_DONTWAIT : 0;
 	struct sk_psock *psock;
 	int ret;
 
