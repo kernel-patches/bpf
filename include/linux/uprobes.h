@@ -20,6 +20,7 @@
 #include <linux/mutex.h>
 
 struct uprobe;
+struct srcu_ctr;
 struct vm_area_struct;
 struct mm_struct;
 struct inode;
@@ -106,7 +107,7 @@ enum hprobe_state {
  *     underlying uprobe is not guaranteed anymore. __UPROBE_DEAD is just an
  *     internal marker and is handled transparently by hprobe_fetch() helper.
  *
- * When uprobe is SRCU-protected, we also record srcu_idx value, necessary for
+ * When uprobe is SRCU-protected, we also record srcu_ctr value, necessary for
  * SRCU unlocking.
  *
  * See hprobe_expire() and hprobe_fetch() for details of race-free uprobe
@@ -115,7 +116,7 @@ enum hprobe_state {
  */
 struct hprobe {
 	enum hprobe_state state;
-	int srcu_idx;
+	struct srcu_ctr __percpu *srcu_ctr;
 	struct uprobe *uprobe;
 };
 
