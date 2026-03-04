@@ -3863,10 +3863,23 @@ struct bpf_perf_link {
 static void bpf_perf_link_release(struct bpf_link *link)
 {
 	struct bpf_perf_link *perf_link = container_of(link, struct bpf_perf_link, link);
-	struct perf_event *event = perf_link->perf_file->private_data;
+	struct perf_event *event;
+	struct file *perf_file;
 
+	/* bpf_perf_link_detach() may have already released perf_file */
+	perf_file = xchg(&perf_link->perf_file, NULL);
+	if (!perf_file)
+		return;
+
+	event = perf_file->private_data;
 	perf_event_free_bpf_prog(event);
-	fput(perf_link->perf_file);
+	fput(perf_file);
+}
+
+static int bpf_perf_link_detach(struct bpf_link *link)
+{
+	bpf_perf_link_release(link);
+	return 0;
 }
 
 static void bpf_perf_link_dealloc(struct bpf_link *link)
@@ -4075,9 +4088,13 @@ static int bpf_perf_link_fill_link_info(const struct bpf_link *link,
 {
 	struct bpf_perf_link *perf_link;
 	const struct perf_event *event;
+	struct file *perf_file;
 
 	perf_link = container_of(link, struct bpf_perf_link, link);
-	event = perf_get_event(perf_link->perf_file);
+	perf_file = READ_ONCE(perf_link->perf_file);
+	if (!perf_file)
+		return 0;
+	event = perf_get_event(perf_file);
 	if (IS_ERR(event))
 		return PTR_ERR(event);
 
@@ -4143,9 +4160,13 @@ static void bpf_perf_link_show_fdinfo(const struct bpf_link *link,
 {
 	struct bpf_perf_link *perf_link;
 	const struct perf_event *event;
+	struct file *perf_file;
 
 	perf_link = container_of(link, struct bpf_perf_link, link);
-	event = perf_get_event(perf_link->perf_file);
+	perf_file = READ_ONCE(perf_link->perf_file);
+	if (!perf_file)
+		return;
+	event = perf_get_event(perf_file);
 	if (IS_ERR(event))
 		return;
 
@@ -4163,6 +4184,7 @@ static void bpf_perf_link_show_fdinfo(const struct bpf_link *link,
 
 static const struct bpf_link_ops bpf_perf_link_lops = {
 	.release = bpf_perf_link_release,
+	.detach = bpf_perf_link_detach,
 	.dealloc = bpf_perf_link_dealloc,
 	.fill_link_info = bpf_perf_link_fill_link_info,
 	.show_fdinfo = bpf_perf_link_show_fdinfo,
