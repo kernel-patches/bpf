@@ -798,7 +798,7 @@ const struct bpf_func_proto bpf_find_vma_proto = {
 struct bpf_iter_task_vma_kern_data {
 	struct task_struct *task;
 	struct mm_struct *mm;
-	struct vm_area_struct *locked_vma;
+	struct vm_area_struct snapshot;
 	u64 last_addr;
 };
 
@@ -908,8 +908,8 @@ __bpf_kfunc int bpf_iter_task_vma_new(struct bpf_iter_task_vma *it,
 		goto err_cleanup_iter;
 	}
 
-	kit->data->locked_vma = NULL;
 	kit->data->last_addr = addr;
+	memset(&kit->data->snapshot, 0, sizeof(kit->data->snapshot));
 	return 0;
 
 err_cleanup_iter:
@@ -923,15 +923,19 @@ err_cleanup_iter:
 __bpf_kfunc struct vm_area_struct *bpf_iter_task_vma_next(struct bpf_iter_task_vma *it)
 {
 	struct bpf_iter_task_vma_kern *kit = (void *)it;
-	struct vm_area_struct *vma;
+	struct vm_area_struct *snap, *vma;
 	struct vma_iterator vmi;
 	unsigned long next_addr, next_end;
 
 	if (!kit->data) /* bpf_iter_task_vma_new failed */
 		return NULL;
 
-	if (kit->data->locked_vma)
-		vma_end_read(kit->data->locked_vma);
+	snap = &kit->data->snapshot;
+
+	if (snap->vm_file) {
+		fput(snap->vm_file);
+		snap->vm_file = NULL;
+	}
 
 retry:
 	rcu_read_lock();
@@ -939,7 +943,6 @@ retry:
 	vma = vma_next(&vmi);
 	if (!vma) {
 		rcu_read_unlock();
-		kit->data->locked_vma = NULL;
 		return NULL;
 	}
 	next_addr = vma->vm_start;
@@ -961,9 +964,17 @@ retry:
 		goto retry;
 	}
 
-	kit->data->locked_vma = vma;
+	snap->vm_start = vma->vm_start;
+	snap->vm_end = vma->vm_end;
+	snap->vm_mm = kit->data->mm;
+	snap->vm_page_prot = vma->vm_page_prot;
+	snap->flags = vma->flags;
+	snap->vm_pgoff = vma->vm_pgoff;
+	snap->vm_file = vma->vm_file ? get_file(vma->vm_file) : NULL;
+
 	kit->data->last_addr = vma->vm_end;
-	return vma;
+	vma_end_read(vma);
+	return snap;
 }
 
 __bpf_kfunc void bpf_iter_task_vma_destroy(struct bpf_iter_task_vma *it)
@@ -971,8 +982,8 @@ __bpf_kfunc void bpf_iter_task_vma_destroy(struct bpf_iter_task_vma *it)
 	struct bpf_iter_task_vma_kern *kit = (void *)it;
 
 	if (kit->data) {
-		if (kit->data->locked_vma)
-			vma_end_read(kit->data->locked_vma);
+		if (kit->data->snapshot.vm_file)
+			fput(kit->data->snapshot.vm_file);
 		bpf_iter_mmput(kit->data->mm);
 		put_task_struct(kit->data->task);
 		bpf_mem_free(&bpf_global_ma, kit->data);
