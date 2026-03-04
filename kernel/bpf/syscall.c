@@ -3783,6 +3783,12 @@ static void bpf_raw_tp_link_release(struct bpf_link *link)
 
 	bpf_probe_unregister(raw_tp->btp, raw_tp);
 	bpf_put_raw_tracepoint(raw_tp->btp);
+
+	/*
+	 * Ensure tp_probes is freed before the link. This prevents
+	 * use-after-free in __bpf_trace_run() when a tracepoint fires.
+	 */
+	tracepoint_synchronize_unregister();
 }
 
 static void bpf_raw_tp_link_dealloc(struct bpf_link *link)
