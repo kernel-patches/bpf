@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2022 Facebook */
 
+#include <vmlinux.h>
 #include <errno.h>
 #include <string.h>
-#include <stdbool.h>
-#include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
-#include <linux/if_ether.h>
 #include "bpf_misc.h"
 #include "bpf_kfuncs.h"
+#include "../test_kmods/bpf_testmod_kfunc.h"
 
 char _license[] SEC("license") = "GPL";
 
@@ -46,7 +45,7 @@ struct {
 	__type(value, __u64);
 } array_map4 SEC(".maps");
 
-struct sample {
+struct test_sample {
 	int pid;
 	long value;
 	char comm[16];
@@ -95,7 +94,7 @@ __failure __msg("Unreleased reference id=4")
 int ringbuf_missing_release2(void *ctx)
 {
 	struct bpf_dynptr ptr1, ptr2;
-	struct sample *sample;
+	struct test_sample *sample;
 
 	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr1);
 	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
@@ -173,7 +172,7 @@ __failure __msg("type=mem expected=ringbuf_mem")
 int ringbuf_invalid_api(void *ctx)
 {
 	struct bpf_dynptr ptr;
-	struct sample *sample;
+	struct test_sample *sample;
 
 	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr);
 	sample = bpf_dynptr_data(&ptr, 0, sizeof(*sample));
@@ -315,7 +314,7 @@ __failure __msg("invalid mem access 'scalar'")
 int data_slice_use_after_release1(void *ctx)
 {
 	struct bpf_dynptr ptr;
-	struct sample *sample;
+	struct test_sample *sample;
 
 	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr);
 	sample = bpf_dynptr_data(&ptr, 0, sizeof(*sample));
@@ -347,7 +346,7 @@ __failure __msg("invalid mem access 'scalar'")
 int data_slice_use_after_release2(void *ctx)
 {
 	struct bpf_dynptr ptr1, ptr2;
-	struct sample *sample;
+	struct test_sample *sample;
 
 	bpf_ringbuf_reserve_dynptr(&ringbuf, 64, 0, &ptr1);
 	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(*sample), 0, &ptr2);
@@ -1991,5 +1990,27 @@ int test_dynptr_reg_type(void *ctx)
 	 * this.
 	 */
 	global_call_bpf_dynptr((const struct bpf_dynptr *)current);
+	return 0;
+}
+
+/* Cannot pass CONST_PTR_TO_DYNPTR to bpf_kfunc_dynptr_test() that may mutate the dynptr */
+__noinline int global_subprog_dynptr_mutable(const struct bpf_dynptr *dynptr)
+{
+	long ret = 0;
+
+	/* this should fail */
+	bpf_kfunc_dynptr_test((struct bpf_dynptr *)dynptr, NULL);
+	__sink(ret);
+	return ret;
+}
+
+SEC("tc")
+__failure __msg("cannot pass pointer to const bpf_dynptr, the helper mutates it")
+int kfunc_dynptr_const_to_mutable(struct __sk_buff *skb)
+{
+	struct bpf_dynptr data;
+
+	bpf_dynptr_from_skb(skb, 0, &data);
+	global_subprog_dynptr_mutable(&data);
 	return 0;
 }
