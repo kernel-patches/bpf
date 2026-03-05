@@ -2,8 +2,11 @@
 /* Copyright (c) 2025 Meta Platforms, Inc. and affiliates. */
 
 #include <test_progs.h>
+#include <unistd.h>
 #include "testing_helpers.h"
 #include "livepatch_trampoline.skel.h"
+
+#define LIVEPATCH_ENABLED_PATH "/sys/kernel/livepatch/livepatch_sample/enabled"
 
 static int load_livepatch(void)
 {
@@ -19,7 +22,8 @@ static int load_livepatch(void)
 static void unload_livepatch(void)
 {
 	/* Disable the livepatch before unloading the module */
-	system("echo 0 > /sys/kernel/livepatch/livepatch_sample/enabled");
+	if (!access(LIVEPATCH_ENABLED_PATH, F_OK))
+		system("echo 0 > " LIVEPATCH_ENABLED_PATH);
 
 	unload_module("livepatch_sample", env_verbosity > VERBOSE_NONE);
 }
@@ -81,6 +85,28 @@ out:
 void test_livepatch_trampoline(void)
 {
 	int retry_cnt = 0;
+
+	/* Skip if kernel was built without CONFIG_LIVEPATCH */
+	if (access("/sys/kernel/livepatch", F_OK)) {
+		test__skip();
+		return;
+	}
+
+	/*
+	 * Skip if livepatch-sample.ko was not built (same path logic as
+	 * load_livepatch()).
+	 */
+	{
+		char path[4096];
+
+		snprintf(path, sizeof(path),
+			 "%s/samples/livepatch/livepatch-sample.ko",
+			 getenv("KBUILD_OUTPUT") ? : "../../../..");
+		if (access(path, R_OK)) {
+			test__skip();
+			return;
+		}
+	}
 
 retry:
 	if (load_livepatch()) {
