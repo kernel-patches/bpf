@@ -208,11 +208,12 @@ static int compile_regex(const char *pattern, regex_t *regex)
 }
 
 static int __push_msg(const char *pattern, bool on_next_line, bool negative,
-		      struct expected_msgs *msgs)
+		      struct expected_msgs *msgs, int index)
 {
 	struct expect_msg *msg;
 	void *tmp;
 	int err;
+	int i;
 
 	tmp = realloc(msgs->patterns,
 		      (1 + msgs->cnt) * sizeof(struct expect_msg));
@@ -221,11 +222,15 @@ static int __push_msg(const char *pattern, bool on_next_line, bool negative,
 		return -ENOMEM;
 	}
 	msgs->patterns = tmp;
-	msg = &msgs->patterns[msgs->cnt];
+	for (i = msgs->cnt; i > 0 && msgs->patterns[i-1].index > index; i--)
+		msgs->patterns[i] = msgs->patterns[i-1];
+
+	msg = &msgs->patterns[i];
 	msg->on_next_line = on_next_line;
 	msg->substr = pattern;
 	msg->negative = negative;
 	msg->is_regex = false;
+	msg->index = index;
 	if (strstr(pattern, "{{")) {
 		err = compile_regex(pattern, &msg->regex);
 		if (err)
@@ -243,19 +248,19 @@ static int clone_msgs(struct expected_msgs *from, struct expected_msgs *to)
 
 	for (i = 0; i < from->cnt; i++) {
 		msg = &from->patterns[i];
-		err = __push_msg(msg->substr, msg->on_next_line, msg->negative, to);
+		err = __push_msg(msg->substr, msg->on_next_line, msg->negative, to, msg->index);
 		if (err)
 			return err;
 	}
 	return 0;
 }
 
-static int push_msg(const char *substr, bool negative, struct expected_msgs *msgs)
+static int push_msg(const char *substr, bool negative, struct expected_msgs *msgs, int index)
 {
-	return __push_msg(substr, false, negative, msgs);
+	return __push_msg(substr, false, negative, msgs, index);
 }
 
-static int push_disasm_msg(const char *regex_str, bool *on_next_line, struct expected_msgs *msgs)
+static int push_disasm_msg(const char *regex_str, bool *on_next_line, struct expected_msgs *msgs, int index)
 {
 	int err;
 
@@ -263,7 +268,7 @@ static int push_disasm_msg(const char *regex_str, bool *on_next_line, struct exp
 		*on_next_line = false;
 		return 0;
 	}
-	err = __push_msg(regex_str, *on_next_line, false, msgs);
+	err = __push_msg(regex_str, *on_next_line, false, msgs, index);
 	if (err)
 		return err;
 	*on_next_line = true;
@@ -359,13 +364,19 @@ static void update_flags(int *flags, int flag, bool clear)
  *
  * And the purpose of this function is to extract 'foo' from the above.
  */
-static const char *skip_dynamic_pfx(const char *s, const char *pfx)
+static const char *skip_dynamic_pfx(const char *s, const char *pfx, int *index)
 {
 	const char *msg;
 
 	if (strncmp(s, pfx, strlen(pfx)) != 0)
 		return NULL;
 	msg = s + strlen(pfx);
+
+	errno = 0;
+	*index = strtol(msg, NULL, 10);
+	/* Make sure to always return a valid index.  */
+	if (errno)
+		*index = INT_MAX;
 	msg = strchr(msg, '=');
 	if (!msg)
 		return NULL;
@@ -443,6 +454,7 @@ static int parse_test_spec(struct test_loader *tester,
 		const struct btf_type *t;
 		bool clear;
 		int flags;
+		int index;
 
 		t = btf__type_by_id(btf, i);
 		if (!btf_is_decl_tag(t))
@@ -474,59 +486,59 @@ static int parse_test_spec(struct test_loader *tester,
 		} else if (strcmp(s, TEST_TAG_AUXILIARY_UNPRIV) == 0) {
 			spec->auxiliary = true;
 			spec->mode_mask |= UNPRIV;
-		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_MSG_PFX))) {
-			err = push_msg(msg, false, &spec->priv.expect_msgs);
+		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_MSG_PFX, &index))) {
+			err = push_msg(msg, false, &spec->priv.expect_msgs, index);
 			if (err)
 				goto cleanup;
 			spec->mode_mask |= PRIV;
-		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_NOT_MSG_PFX))) {
-			err = push_msg(msg, true, &spec->priv.expect_msgs);
+		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_NOT_MSG_PFX, &index))) {
+			err = push_msg(msg, true, &spec->priv.expect_msgs, index);
 			if (err)
 				goto cleanup;
 			spec->mode_mask |= PRIV;
-		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_MSG_PFX_UNPRIV))) {
-			err = push_msg(msg, false, &spec->unpriv.expect_msgs);
+		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_MSG_PFX_UNPRIV, &index))) {
+			err = push_msg(msg, false, &spec->unpriv.expect_msgs, index);
 			if (err)
 				goto cleanup;
 			spec->mode_mask |= UNPRIV;
-		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_NOT_MSG_PFX_UNPRIV))) {
-			err = push_msg(msg, true, &spec->unpriv.expect_msgs);
+		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_NOT_MSG_PFX_UNPRIV, &index))) {
+			err = push_msg(msg, true, &spec->unpriv.expect_msgs, index);
 			if (err)
 				goto cleanup;
 			spec->mode_mask |= UNPRIV;
-		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_JITED_PFX))) {
+		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_JITED_PFX, &index))) {
 			if (arch_mask == 0) {
 				PRINT_FAIL("__jited used before __arch_*");
 				goto cleanup;
 			}
 			if (collect_jit) {
 				err = push_disasm_msg(msg, &jit_on_next_line,
-						      &spec->priv.jited);
+						      &spec->priv.jited, index);
 				if (err)
 					goto cleanup;
 				spec->mode_mask |= PRIV;
 			}
-		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_JITED_PFX_UNPRIV))) {
+		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_JITED_PFX_UNPRIV, &index))) {
 			if (arch_mask == 0) {
 				PRINT_FAIL("__unpriv_jited used before __arch_*");
 				goto cleanup;
 			}
 			if (collect_jit) {
 				err = push_disasm_msg(msg, &unpriv_jit_on_next_line,
-						      &spec->unpriv.jited);
+						      &spec->unpriv.jited, index);
 				if (err)
 					goto cleanup;
 				spec->mode_mask |= UNPRIV;
 			}
-		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_XLATED_PFX))) {
+		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_XLATED_PFX, &index))) {
 			err = push_disasm_msg(msg, &xlated_on_next_line,
-					      &spec->priv.expect_xlated);
+					      &spec->priv.expect_xlated, index);
 			if (err)
 				goto cleanup;
 			spec->mode_mask |= PRIV;
-		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_XLATED_PFX_UNPRIV))) {
+		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_XLATED_PFX_UNPRIV, &index))) {
 			err = push_disasm_msg(msg, &unpriv_xlated_on_next_line,
-					      &spec->unpriv.expect_xlated);
+					      &spec->unpriv.expect_xlated, index);
 			if (err)
 				goto cleanup;
 			spec->mode_mask |= UNPRIV;
@@ -615,24 +627,24 @@ static int parse_test_spec(struct test_loader *tester,
 				err = -EINVAL;
 				goto cleanup;
 			}
-		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_STDERR_PFX))) {
+		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_STDERR_PFX, &index))) {
 			err = push_disasm_msg(msg, &stderr_on_next_line,
-					      &spec->priv.stderr);
+					      &spec->priv.stderr, index);
 			if (err)
 				goto cleanup;
-		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_STDERR_PFX_UNPRIV))) {
+		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_STDERR_PFX_UNPRIV, &index))) {
 			err = push_disasm_msg(msg, &unpriv_stderr_on_next_line,
-					      &spec->unpriv.stderr);
+					      &spec->unpriv.stderr, index);
 			if (err)
 				goto cleanup;
-		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_STDOUT_PFX))) {
+		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_STDOUT_PFX, &index))) {
 			err = push_disasm_msg(msg, &stdout_on_next_line,
-					      &spec->priv.stdout);
+					      &spec->priv.stdout, index);
 			if (err)
 				goto cleanup;
-		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_STDOUT_PFX_UNPRIV))) {
+		} else if ((msg = skip_dynamic_pfx(s, TEST_TAG_EXPECT_STDOUT_PFX_UNPRIV, &index))) {
 			err = push_disasm_msg(msg, &unpriv_stdout_on_next_line,
-					      &spec->unpriv.stdout);
+					      &spec->unpriv.stdout, index);
 			if (err)
 				goto cleanup;
 		} else if (str_has_pfx(s, TEST_TAG_LINEAR_SIZE)) {

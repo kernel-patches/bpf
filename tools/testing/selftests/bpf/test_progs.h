@@ -553,6 +553,7 @@ struct expect_msg {
 	bool is_regex;
 	bool on_next_line;
 	bool negative;
+	int index;
 };
 
 struct expected_msgs {
