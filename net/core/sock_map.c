@@ -353,11 +353,9 @@ static void sock_map_free(struct bpf_map *map)
 		sk = xchg(psk, NULL);
 		if (sk) {
 			sock_hold(sk);
-			lock_sock(sk);
-			rcu_read_lock();
+			sock_map_sk_acquire(sk);
 			sock_map_unref(sk, psk);
-			rcu_read_unlock();
-			release_sock(sk);
+			sock_map_sk_release(sk);
 			sock_put(sk);
 		}
 	}
@@ -1176,11 +1174,9 @@ static void sock_hash_free(struct bpf_map *map)
 		 */
 		hlist_for_each_entry_safe(elem, node, &unlink_list, node) {
 			hlist_del(&elem->node);
-			lock_sock(elem->sk);
-			rcu_read_lock();
+			sock_map_sk_acquire(elem->sk);
 			sock_map_unref(elem->sk, elem);
-			rcu_read_unlock();
-			release_sock(elem->sk);
+			sock_map_sk_release(elem->sk);
 			sock_put(elem->sk);
 			sock_hash_free_elem(htab, elem);
 		}
@@ -1676,8 +1672,7 @@ void sock_map_close(struct sock *sk, long timeout)
 	void (*saved_close)(struct sock *sk, long timeout);
 	struct sk_psock *psock;
 
-	lock_sock(sk);
-	rcu_read_lock();
+	sock_map_sk_acquire(sk);
 	psock = sk_psock(sk);
 	if (likely(psock)) {
 		saved_close = psock->saved_close;
@@ -1685,16 +1680,14 @@ void sock_map_close(struct sock *sk, long timeout)
 		psock = sk_psock_get(sk);
 		if (unlikely(!psock))
 			goto no_psock;
-		rcu_read_unlock();
 		sk_psock_stop(psock);
-		release_sock(sk);
+		sock_map_sk_release(sk);
 		cancel_delayed_work_sync(&psock->work);
 		sk_psock_put(sk, psock);
 	} else {
 		saved_close = READ_ONCE(sk->sk_prot)->close;
 no_psock:
-		rcu_read_unlock();
-		release_sock(sk);
+		sock_map_sk_release(sk);
 	}
 
 	/* Make sure we do not recurse. This is a bug.
