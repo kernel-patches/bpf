@@ -864,15 +864,6 @@ static int unmark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_re
 	struct bpf_func_state *state = func(env, reg);
 	int spi, ref_obj_id, i;
 
-	/*
-	 * This can only be set for PTR_TO_STACK, as CONST_PTR_TO_DYNPTR cannot
-	 * be released by any dynptr helper. Hence, unmark_stack_slots_dynptr
-	 * is safe to do directly.
-	 */
-	if (reg->type == CONST_PTR_TO_DYNPTR) {
-		verifier_bug(env, "CONST_PTR_TO_DYNPTR cannot be released");
-		return -EFAULT;
-	}
 	spi = dynptr_get_spi(env, reg);
 	if (spi < 0)
 		return spi;
@@ -8873,23 +8864,12 @@ static int process_kptr_func(struct bpf_verifier_env *env, int regno,
  * bytes as STACK_DYNPTR in case of PTR_TO_STACK. In case of
  * CONST_PTR_TO_DYNPTR, we are guaranteed to get the beginning of the object.
  *
- * Mutability of bpf_dynptr is at two levels, one is at the level of struct
- * bpf_dynptr itself, i.e. whether the helper is receiving a pointer to struct
- * bpf_dynptr or pointer to const struct bpf_dynptr. In the former case, it can
- * mutate the view of the dynptr and also possibly destroy it. In the latter
- * case, it cannot mutate the bpf_dynptr itself but it can still mutate the
- * memory that dynptr points to.
- *
- * The verifier will keep track both levels of mutation (bpf_dynptr's in
- * reg->type and the memory's in reg->dynptr.type), but there is no support for
- * readonly dynptr view yet, hence only the first case is tracked and checked.
- *
- * This is consistent with how C applies the const modifier to a struct object,
- * where the pointer itself inside bpf_dynptr becomes const but not what it
- * points to.
- *
- * Helpers which do not mutate the bpf_dynptr set MEM_RDONLY in their argument
- * type, and declare it as 'const struct bpf_dynptr *' in their prototype.
+ * Mutability of bpf_dynptr is at two levels: the dynptr and the memory the
+ * dynptr points to. At the first level, the verifier will make sure a
+ * CONST_PTR_TO_DYNPTR cannot be reinitialized or destroyed. The mutability of
+ * a dynptr's view (i.e., start and offset) is not tracked as there is no use
+ * case. The second level is tracked in reg->dynptr.type and checked
+ * dynamically during runtime in helpers.
  */
 static int process_dynptr_func(struct bpf_verifier_env *env, int regno, int insn_idx,
 			       enum bpf_arg_type arg_type, int clone_ref_obj_id)
@@ -8904,14 +8884,6 @@ static int process_dynptr_func(struct bpf_verifier_env *env, int regno, int insn
 		return -EINVAL;
 	}
 
-	/* MEM_UNINIT and MEM_RDONLY are exclusive, when applied to an
-	 * ARG_PTR_TO_DYNPTR (or ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_*):
-	 */
-	if ((arg_type & (MEM_UNINIT | MEM_RDONLY)) == (MEM_UNINIT | MEM_RDONLY)) {
-		verifier_bug(env, "misconfigured dynptr helper type flags");
-		return -EFAULT;
-	}
-
 	/*  MEM_UNINIT - Points to memory that is an appropriate candidate for
 	 *		 constructing a mutable bpf_dynptr object.
 	 *
@@ -8919,13 +8891,12 @@ static int process_dynptr_func(struct bpf_verifier_env *env, int regno, int insn
 	 *		 pointing to a region of at least 16 bytes which doesn't
 	 *		 contain an existing bpf_dynptr.
 	 *
-	 *  MEM_RDONLY - Points to a initialized bpf_dynptr that will not be
-	 *		 mutated or destroyed. However, the memory it points to
-	 *		 may be mutated.
+	 *  OBJ_RELEASE - Points to a initialized bpf_dynptr that will be
+	 *		  destroyed.
 	 *
-	 *  None       - Points to a initialized dynptr that can be mutated and
-	 *		 destroyed, including mutation of the memory it points
-	 *		 to.
+	 *  None       - Points to a initialized dynptr that cannot be
+	 *		 reinitialized or destroyed. However, the view of the
+	 *		 dynptr and the memory it points to may be mutated.
 	 */
 	if (arg_type & MEM_UNINIT) {
 		int i;
@@ -8944,10 +8915,10 @@ static int process_dynptr_func(struct bpf_verifier_env *env, int regno, int insn
 		}
 
 		err = mark_stack_slots_dynptr(env, reg, arg_type, insn_idx, clone_ref_obj_id);
-	} else /* MEM_RDONLY and None case from above */ {
+	} else /* OBJ_RELEASE and None case from above */ {
 		/* For the reg->type == PTR_TO_STACK case, bpf_dynptr is never const */
-		if (reg->type == CONST_PTR_TO_DYNPTR && !(arg_type & MEM_RDONLY)) {
-			verbose(env, "cannot pass pointer to const bpf_dynptr, the helper mutates it\n");
+		if (reg->type == CONST_PTR_TO_DYNPTR && (arg_type & OBJ_RELEASE)) {
+			verbose(env, "CONST_PTR_TO_DYNPTR cannot be released");
 			return -EINVAL;
 		}
 
@@ -13717,9 +13688,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		{
 			enum bpf_arg_type dynptr_arg_type = ARG_PTR_TO_DYNPTR;
 			int clone_ref_obj_id = 0;
-
-			if (reg->type == CONST_PTR_TO_DYNPTR)
-				dynptr_arg_type |= MEM_RDONLY;
 
 			if (is_kfunc_arg_uninit(btf, &args[i]))
 				dynptr_arg_type |= MEM_UNINIT;
