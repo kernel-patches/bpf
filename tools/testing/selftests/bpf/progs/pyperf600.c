@@ -9,4 +9,11 @@
  * the loop will still execute 600 times.
  */
 #define UNROLL_COUNT 150
+#define PYPERF_CUSTOM_ON_EVENT
 #include "pyperf.h"
+
+SEC("raw_tracepoint/kfree_skb")
+int on_event(struct bpf_raw_tracepoint_args *ctx)
+{
+	return __on_event(ctx);
+}

@@ -343,8 +343,9 @@ int __on_event(struct bpf_raw_tracepoint_args *ctx)
 	return 0;
 }
 
+#ifndef PYPERF_CUSTOM_ON_EVENT
 SEC("raw_tracepoint/kfree_skb")
-int on_event(struct bpf_raw_tracepoint_args* ctx)
+int on_event(struct bpf_raw_tracepoint_args *ctx)
 {
 	int ret = 0;
 	ret |= __on_event(ctx);
@@ -354,5 +355,6 @@ int on_event(struct bpf_raw_tracepoint_args* ctx)
 	ret |= __on_event(ctx);
 	return ret;
 }
+#endif
 
 char _license[] SEC("license") = "GPL";
