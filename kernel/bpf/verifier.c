@@ -16713,6 +16713,131 @@ static void find_good_pkt_pointers(struct bpf_verifier_state *vstate,
 	}));
 }
 
+/* Check if a register state's bounds in all domains (u64, s64, u32, s32, tnum)
+ * have some intersection. If the intersection is empty (e.g. u64 does not have
+ * any values common with s64), return false.
+ */
+static bool u64_s64_intersection(u64 umin, u64 umax, s64 smin, s64 smax)
+{
+	if ((u64)smin <= (u64)smax)
+		return !(((u64)smax < umin) || (umax < (u64)smin));
+	else
+		return !(((u64)smin > umax) && ((u64)smax < umin));
+}
+
+static bool u64_tnum_intersection(u64 umin, u64 umax, struct tnum t)
+{
+	u64 tmin = t.value;
+	u64 tmax = t.value | t.mask;
+
+	return !((tmin > umax) || (tmax < umin));
+}
+
+static bool s64_tnum_intersection(s64 smin, s64 smax, struct tnum t)
+{
+	if ((u64)smin <= (u64)smax)
+		return u64_tnum_intersection((u64)smin, (u64)smax, t);
+
+	return (u64_tnum_intersection((u64)smin, U64_MAX, t) ||
+			u64_tnum_intersection(0, (u64)smax, t));
+}
+
+static bool u32_s32_intersection(u32 u32_min, u32 u32_max, s32 s32_min, s32 s32_max)
+{
+	if ((u32)s32_min <= (u32)s32_max)
+		return !(((u32)s32_max < u32_min) || (u32_max < (u32)s32_min));
+	else
+		return !(((u32)s32_min > u32_max) && ((u32)s32_max < u32_min));
+}
+
+static bool u32_tnum_intersection(u32 u32_min, u32 u32_max, struct tnum t)
+{
+	struct tnum t32 = tnum_subreg(t);
+	u32 t32_min = t32.value;
+	u32 t32_max = t32.value | t32.mask;
+
+	return !((t32_min > u32_max) || (t32_max < u32_min));
+}
+
+static bool s32_tnum_intersection(s32 s32_min, s32 s32_max, struct tnum t)
+{
+	if ((u32)s32_min <= (u32)s32_max)
+		return u32_tnum_intersection((u32)s32_min, (u32)s32_max, t);
+
+	return (u32_tnum_intersection((u32)s32_min, U32_MAX, t) ||
+			u32_tnum_intersection(0, (u32)s32_max, t));
+}
+
+static bool u64_u32_intersection(u64 umin, u64 umax, u32 u32_min, u32 u32_max)
+{
+	return true;
+}
+
+static bool u64_s32_intersection(u64 umin, u64 umax, s32 s32_min, s32 s32_max)
+{
+	return true;
+}
+
+static bool u32_s64_intersection(u32 u32_min, u32 u32_max, s64 smin, s64 smax)
+{
+	return true;
+}
+
+static bool s64_s32_intersection(s64 smin, s64 smax, s32 s32_min, s32 s32_max)
+{
+	return true;
+}
+
+
+/* Check if a register state's bounds in all domains (u64, s64, u32, s32, tnum)
+ * have some intersection. Meaning there is *at least one* value x, such that x
+ * is a member of abstract values from pairs of domains. For e.g. reg_state with
+ * u64=[4, 6], tnum=x1x0 {4, 6, 12, 14}. Possible candidates for x here are 4,
+ * and 6. Now consider reg_state with u64=[1, 3], tnum=01x0 {4, 6}. There exists
+ * no x, such that x is a member of both u64 and tnum. The intersection between
+ * u64 and tnum is empty. If the intersection is empty, return false. Else
+ * return true.
+ */
+static bool reg_bounds_intersect(struct bpf_reg_state *reg)
+{
+
+	/* If the min > max, then the range itself is ill-formed, so there can be no
+	 * intersection in abstract values across domains.
+	 */
+	if (range_bounds_violation(reg))
+		return false;
+
+	/* If the var_off is ill-formed, there can be no intersection in abstract
+	 * values across domains.
+	 */
+	if ((reg->var_off.value & reg->var_off.mask) != 0)
+		return false;
+
+
+	/* Check consistency between pairs of abstract values. If any pair of domain
+	 * values has no intersection, return false;
+	 */
+	return (
+		u64_s64_intersection(reg->umin_value, reg->umax_value,
+			reg->smin_value, reg->smax_value) &&
+		u64_tnum_intersection(reg->umin_value, reg->umax_value, reg->var_off) &&
+		s64_tnum_intersection(reg->smin_value, reg->smax_value, reg->var_off) &&
+		u32_s32_intersection(reg->u32_min_value, reg->u32_max_value,
+			reg->s32_min_value, reg->s32_max_value) &&
+		u32_tnum_intersection(reg->u32_min_value, reg->u32_max_value, reg->var_off) &&
+		s32_tnum_intersection(reg->s32_min_value, reg->s32_max_value, reg->var_off) &&
+		u64_u32_intersection(reg->umin_value, reg->umax_value,
+			reg->u32_min_value, reg->u32_max_value) &&
+		u64_s32_intersection(reg->umin_value, reg->umax_value,
+			reg->s32_min_value, reg->s32_max_value) &&
+		u32_s64_intersection(reg->u32_min_value, reg->u32_max_value,
+			reg->smin_value, reg->smax_value) &&
+		s64_s32_intersection(reg->smin_value, reg->smax_value,
+			reg->s32_min_value, reg->s32_max_value)
+		);
+
+}
+
 static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
 				u8 opcode, bool is_jmp32);
 static u8 rev_opcode(u8 opcode);
@@ -16740,29 +16865,29 @@ static int simulate_both_branches_taken(struct bpf_reg_state *false_reg1,
 	/* fallthrough (FALSE) branch */
 	regs_refine_cond_op(&false_reg1_c, &false_reg2_c, rev_opcode(opcode), is_jmp32);
 
-	if (range_bounds_violation(&false_reg1_c))
+	if (!reg_bounds_intersect(&false_reg1_c))
 		goto only_true;
-	if (range_bounds_violation(&false_reg2_c))
+	if (!reg_bounds_intersect(&false_reg2_c))
 		goto only_true;
 	reg_bounds_sync(&false_reg1_c);
 	reg_bounds_sync(&false_reg2_c);
-	if (range_bounds_violation(&false_reg1_c))
+	if (!reg_bounds_intersect(&false_reg1_c))
 		goto only_true;
-	if (range_bounds_violation(&false_reg2_c))
+	if (reg_bounds_intersect(&false_reg2_c))
 		goto only_true;
 
 	/* jump (TRUE) branch */
 	regs_refine_cond_op(&true_reg1_c, &true_reg2_c, opcode, is_jmp32);
 
-	if (range_bounds_violation(&true_reg1_c))
+	if (!reg_bounds_intersect(&true_reg1_c))
 		goto only_false;
-	if (range_bounds_violation(&true_reg2_c))
+	if (!reg_bounds_intersect(&true_reg2_c))
 		goto only_false;
 	reg_bounds_sync(&true_reg1_c);
 	reg_bounds_sync(&true_reg2_c);
-	if (range_bounds_violation(&true_reg1_c))
+	if (!reg_bounds_intersect(&true_reg1_c))
 		goto only_false;
-	if (range_bounds_violation(&true_reg2_c))
+	if (!reg_bounds_intersect(&true_reg2_c))
 		goto only_false;
 
 	/* Both branches are possible, we can't determine which one will be taken.
