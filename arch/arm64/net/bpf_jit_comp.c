@@ -1223,6 +1223,21 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx,
 	int off_adj;
 	int ret;
 	bool sign_extend;
+	struct bpf_prog_aux *aux = ctx->prog->aux;
+
+	/*
+	 * In some cases, insn_aux_data is not passed,
+	 * and it does not need to be. For example, the embedded
+	 * program in ptp_classifier_init().
+	 * Therefore, we need to check whether insn_aux_data is present.
+	 */
+	if (aux->insn_aux_data) {
+		/*
+		 * emit BTI J for (BPF_JMP | BPF_X)'s destination.
+		 */
+		if (aux->insn_aux_data[i].gotox_point)
+			emit_bti(A64_BTI_J, ctx);
+	}
 
 	switch (code) {
 	/* dst = src */
