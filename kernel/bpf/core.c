@@ -189,8 +189,27 @@ int bpf_prog_alloc_jited_linfo(struct bpf_prog *prog)
 	return 0;
 }
 
+int bpf_prog_alloc_jit_insn_aux_data(struct bpf_prog *prog)
+{
+	if (!prog->len || !prog->jit_requested)
+		return -EINVAL;
+
+	prog->aux->insn_aux_data = kvzalloc_objs(*prog->aux->insn_aux_data,
+						 prog->len,
+						 bpf_memcg_flags(GFP_KERNEL | __GFP_NOWARN));
+	if (!prog->aux->insn_aux_data)
+		return -ENOMEM;
+
+	return 0;
+}
+
 void bpf_prog_jit_attempt_done(struct bpf_prog *prog)
 {
+	if (prog->aux->insn_aux_data) {
+		kvfree(prog->aux->insn_aux_data);
+		prog->aux->insn_aux_data = NULL;
+	}
+
 	if (prog->aux->jited_linfo &&
 	    (!prog->jited || !prog->aux->jited_linfo[0])) {
 		kvfree(prog->aux->jited_linfo);
@@ -252,6 +271,20 @@ void bpf_prog_fill_jited_linfo(struct bpf_prog *prog,
 		 */
 		jited_linfo[i] = prog->bpf_func +
 			insn_to_jit_off[linfo[i].insn_off - insn_start - 1];
+}
+
+void bpf_prog_fill_jit_insn_aux_data(struct bpf_prog *prog,
+				    struct bpf_insn_aux_data *insn_aux_data)
+{
+	int i;
+
+	if (!prog->aux->insn_aux_data || !insn_aux_data)
+		return;
+
+	for (i = 0; i < prog->len; i++) {
+		prog->aux->insn_aux_data[i].gotox_point =
+			insn_aux_data[i].gotox_point;
+	}
 }
 
 struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
@@ -458,6 +491,7 @@ struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 	u32 insn_adj_cnt, insn_rest, insn_delta = len - 1;
 	const u32 cnt_max = S16_MAX;
 	struct bpf_prog *prog_adj;
+	struct bpf_jit_insn_aux_data *insn_aux_data = NULL;
 	int err;
 
 	/* Since our patchlet doesn't expand the image, we're done. */
@@ -477,14 +511,28 @@ struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 	    (err = bpf_adj_branches(prog, off, off + 1, off + len, true)))
 		return ERR_PTR(err);
 
+	if (prog->aux->insn_aux_data) {
+		insn_aux_data = kvzalloc_objs(*prog->aux->insn_aux_data,
+					       insn_adj_cnt,
+					       bpf_memcg_flags(GFP_KERNEL | __GFP_NOWARN));
+		if (!insn_aux_data)
+			return ERR_PTR(-ENOMEM);
+
+		memcpy(insn_aux_data, prog->aux->insn_aux_data,
+		       prog->len * sizeof(*prog->aux->insn_aux_data));
+	}
+
 	/* Several new instructions need to be inserted. Make room
 	 * for them. Likely, there's no need for a new allocation as
 	 * last page could have large enough tailroom.
 	 */
 	prog_adj = bpf_prog_realloc(prog, bpf_prog_size(insn_adj_cnt),
 				    GFP_USER);
-	if (!prog_adj)
+	if (!prog_adj) {
+		if (insn_aux_data)
+			kvfree(insn_aux_data);
 		return ERR_PTR(-ENOMEM);
+	}
 
 	prog_adj->len = insn_adj_cnt;
 
@@ -501,6 +549,15 @@ struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 	memmove(prog_adj->insnsi + off + len, prog_adj->insnsi + off + 1,
 		sizeof(*patch) * insn_rest);
 	memcpy(prog_adj->insnsi + off, patch, sizeof(*patch) * len);
+
+	if (insn_aux_data) {
+		memmove(insn_aux_data + off + len, insn_aux_data + off + 1,
+			sizeof(*insn_aux_data) * insn_rest);
+		memset(insn_aux_data + off + 1, 0x00,
+		       sizeof(*insn_aux_data) * insn_delta);
+		kvfree(prog_adj->aux->insn_aux_data);
+		prog_adj->aux->insn_aux_data = insn_aux_data;
+	}
 
 	/* We are guaranteed to not fail at this point, otherwise
 	 * the ship has sailed to reverse to the original state. An

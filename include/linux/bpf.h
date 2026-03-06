@@ -1606,6 +1606,11 @@ struct bpf_jit_poke_descriptor {
 	u32 insn_idx;
 };
 
+/* Per-instruction auxiliary data for JIT. */
+struct bpf_jit_insn_aux_data {
+	bool gotox_point;
+};
+
 /* reg_type info for ctx arguments */
 struct bpf_ctx_arg_aux {
 	u32 offset;
@@ -1768,6 +1773,7 @@ struct bpf_prog_aux {
 	struct bpf_stream stream[2];
 	struct mutex st_ops_assoc_mutex;
 	struct bpf_map __rcu *st_ops_assoc;
+	struct bpf_jit_insn_aux_data *insn_aux_data;
 };
 
 #define BPF_NR_CONTEXTS        4       /* normal, softirq, hardirq, NMI */

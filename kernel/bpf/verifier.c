@@ -22928,6 +22928,12 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->arena = prog->aux->arena;
 		func[i]->aux->used_maps = env->used_maps;
 		func[i]->aux->used_map_cnt = env->used_map_cnt;
+
+		err = bpf_prog_alloc_jit_insn_aux_data(func[i]);
+		if (err)
+			goto out_free;
+		bpf_prog_fill_jit_insn_aux_data(func[i], &env->insn_aux_data[subprog_start]);
+
 		num_exentries = 0;
 		insn = func[i]->insnsi;
 		for (j = 0; j < func[i]->len; j++, insn++) {
@@ -23020,6 +23026,9 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	for (i = 0; i < env->subprog_cnt; i++) {
 		func[i]->aux->used_maps = NULL;
 		func[i]->aux->used_map_cnt = 0;
+		func[i]->aux->insn_aux_data = NULL;
+		kvfree(func[i]->aux->insn_aux_data);
+		func[i]->aux->insn_aux_data = NULL;
 	}
 
 	/* finally lock prog and jit images for all functions and
@@ -23082,6 +23091,10 @@ out_free:
 		if (!func[i])
 			continue;
 		func[i]->aux->poke_tab = NULL;
+		if (func[i]->aux->insn_aux_data) {
+			kvfree(func[i]->aux->insn_aux_data);
+			func[i]->aux->insn_aux_data = NULL;;
+		}
 		bpf_jit_free(func[i]);
 	}
 	kfree(func);
@@ -26157,6 +26170,15 @@ skip_full_check:
 	print_verification_stats(env);
 	env->prog->aux->verified_insns = env->insn_processed;
 
+	if (ret == 0 && !env->prog->jited && env->prog->jit_requested &&
+	    !bpf_prog_is_offloaded(env->prog->aux)) {
+		/* jit_insn_aux_data will be freed at bpf_prog_select_runtime() */
+		ret = bpf_prog_alloc_jit_insn_aux_data(env->prog);
+		if (ret)
+			goto err_release_maps;
+		bpf_prog_fill_jit_insn_aux_data(env->prog, env->insn_aux_data);
+	}
+
 	/* preserve original error even if log finalization is successful */
 	err = bpf_vlog_finalize(&env->log, &log_true_size);
 	if (err)
@@ -26211,8 +26233,14 @@ skip_full_check:
 	adjust_btf_func(env);
 
 err_release_maps:
-	if (ret)
+	if (ret) {
+		if (env->prog->aux->insn_aux_data) {
+			kvfree(env->prog->aux->insn_aux_data);
+			env->prog->aux->insn_aux_data = NULL;
+		}
+
 		release_insn_arrays(env);
+	}
 	if (!env->prog->aux->used_maps)
 		/* if we didn't copy map pointers into bpf_prog_info, release
 		 * them now. Otherwise free_used_maps() will release them.

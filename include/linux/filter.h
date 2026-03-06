@@ -38,6 +38,7 @@ struct xdp_buff;
 struct sock_reuseport;
 struct ctl_table;
 struct ctl_table_header;
+struct bpf_insn_aux_data;
 
 /* ArgX, context and stack frame pointer register positions. Note,
  * Arg1, Arg2, Arg3, etc are used as argument mappings of function
@@ -1116,6 +1117,9 @@ bool bpf_opcode_in_insntable(u8 code);
 void bpf_prog_fill_jited_linfo(struct bpf_prog *prog,
 			       const u32 *insn_to_jit_off);
 int bpf_prog_alloc_jited_linfo(struct bpf_prog *prog);
+int bpf_prog_alloc_jit_insn_aux_data(struct bpf_prog *prog);
+void bpf_prog_fill_jit_insn_aux_data(struct bpf_prog *prog,
+				    struct bpf_insn_aux_data *insn_aux_data);
 void bpf_prog_jit_attempt_done(struct bpf_prog *prog);
 
 struct bpf_prog *bpf_prog_alloc(unsigned int size, gfp_t gfp_extra_flags);
