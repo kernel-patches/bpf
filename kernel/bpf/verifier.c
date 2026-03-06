@@ -3998,6 +3998,11 @@ static bool is_jmp_point(struct bpf_verifier_env *env, int insn_idx)
 	return env->insn_aux_data[insn_idx].jmp_point;
 }
 
+static void mark_gotox_point(struct bpf_verifier_env *env, int idx)
+{
+	env->insn_aux_data[idx].gotox_point = true;
+}
+
 #define LR_FRAMENO_BITS	3
 #define LR_SPI_BITS	6
 #define LR_ENTRY_BITS	(LR_SPI_BITS + LR_FRAMENO_BITS + 1)
@@ -18775,6 +18780,7 @@ static int visit_gotox_insn(int t, struct bpf_verifier_env *env)
 		}
 
 		mark_jmp_point(env, w);
+		mark_gotox_point(env, w);
 
 		/* EXPLORED || DISCOVERED */
 		if (insn_state[w])
