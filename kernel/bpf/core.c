@@ -1745,6 +1745,12 @@ bool bpf_opcode_in_insntable(u8 code)
  *
  * Return: whatever value is in %BPF_R0 at program exit
  */
+
+/* Safe absolute value for s32 - abs() is undefined for S32_MIN */
+static inline u32 __safe_abs32(s32 x)
+{
+	return x >= 0 ? (u32)x : x == S32_MIN ? (u32)S32_MIN : (u32)-x;
+}
 static u64 ___bpf_prog_run(u64 *regs, const struct bpf_insn *insn)
 {
 #define BPF_INSN_2_LBL(x, y)    [BPF_##x | BPF_##y] = &&x##_##y
@@ -1900,8 +1906,8 @@ select_insn:
 			DST = do_div(AX, (u32) SRC);
 			break;
 		case 1:
-			AX = abs((s32)DST);
-			AX = do_div(AX, abs((s32)SRC));
+			AX = __safe_abs32((s32)DST);
+			AX = do_div(AX, __safe_abs32((s32)SRC));
 			if ((s32)DST < 0)
 				DST = (u32)-AX;
 			else
@@ -1928,8 +1934,8 @@ select_insn:
 			DST = do_div(AX, (u32) IMM);
 			break;
 		case 1:
-			AX = abs((s32)DST);
-			AX = do_div(AX, abs((s32)IMM));
+			AX = __safe_abs32((s32)DST);
+			AX = do_div(AX, __safe_abs32((s32)IMM));
 			if ((s32)DST < 0)
 				DST = (u32)-AX;
 			else
@@ -1955,8 +1961,8 @@ select_insn:
 			DST = (u32) AX;
 			break;
 		case 1:
-			AX = abs((s32)DST);
-			do_div(AX, abs((s32)SRC));
+			AX = __safe_abs32((s32)DST);
+			do_div(AX, __safe_abs32((s32)SRC));
 			if (((s32)DST < 0) == ((s32)SRC < 0))
 				DST = (u32)AX;
 			else
@@ -1982,8 +1988,8 @@ select_insn:
 			DST = (u32) AX;
 			break;
 		case 1:
-			AX = abs((s32)DST);
-			do_div(AX, abs((s32)IMM));
+			AX = __safe_abs32((s32)DST);
+			do_div(AX, __safe_abs32((s32)IMM));
 			if (((s32)DST < 0) == ((s32)IMM < 0))
 				DST = (u32)AX;
 			else
