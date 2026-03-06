@@ -217,7 +217,7 @@ struct neighbour *ip6_neigh_lookup(const struct in6_addr *gw,
 	if (n)
 		return n;
 
-	n = neigh_create(&nd_tbl, daddr, dev);
+	n = neigh_create(ipv6_get_nd_tbl(), daddr, dev);
 	return IS_ERR(n) ? NULL : n;
 }
 
@@ -4292,7 +4292,7 @@ static void rt6_do_redirect(struct dst_entry *dst, struct sock *sk, struct sk_bu
 	 */
 	dst_confirm_neigh(&rt->dst, &ipv6_hdr(skb)->saddr);
 
-	neigh = __neigh_lookup(&nd_tbl, &msg->target, skb->dev, 1);
+	neigh = __neigh_lookup(ipv6_get_nd_tbl(), &msg->target, skb->dev, 1);
 	if (!neigh)
 		return;
 
@@ -5022,7 +5022,7 @@ void rt6_disable_ip(struct net_device *dev, unsigned long event)
 {
 	rt6_sync_down_dev(dev, event);
 	rt6_uncached_list_flush_dev(dev);
-	neigh_ifdown(&nd_tbl, dev);
+	neigh_ifdown(ipv6_get_nd_tbl(), dev);
 }
 
 struct rt6_mtu_change_arg {

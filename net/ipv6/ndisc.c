@@ -120,7 +120,7 @@ struct neigh_table nd_tbl = {
 	.allow_add  =   ndisc_allow_add,
 	.id =		"ndisc_cache",
 	.parms = {
-		.tbl			= &nd_tbl,
+		.tbl			= ipv6_get_nd_tbl(),
 		.reachable_time		= ND_REACHABLE_TIME,
 		.data = {
 			[NEIGH_VAR_MCAST_PROBES] = 3,
@@ -769,7 +769,7 @@ static int pndisc_is_router(const void *pkey,
 	struct pneigh_entry *n;
 	int ret = -1;
 
-	n = pneigh_lookup(&nd_tbl, dev_net(dev), pkey, dev);
+	n = pneigh_lookup(ipv6_get_nd_tbl(), dev_net(dev), pkey, dev);
 	if (n)
 		ret = !!(READ_ONCE(n->flags) & NTF_ROUTER);
 
@@ -917,7 +917,7 @@ have_ifp:
 				 */
 				struct sk_buff *n = skb_clone(skb, GFP_ATOMIC);
 				if (n)
-					pneigh_enqueue(&nd_tbl, idev->nd_parms, n);
+					pneigh_enqueue(ipv6_get_nd_tbl(), idev->nd_parms, n);
 				goto out;
 			}
 		} else {
@@ -936,15 +936,15 @@ have_ifp:
 	}
 
 	if (inc)
-		NEIGH_CACHE_STAT_INC(&nd_tbl, rcv_probes_mcast);
+		NEIGH_CACHE_STAT_INC(ipv6_get_nd_tbl(), rcv_probes_mcast);
 	else
-		NEIGH_CACHE_STAT_INC(&nd_tbl, rcv_probes_ucast);
+		NEIGH_CACHE_STAT_INC(ipv6_get_nd_tbl(), rcv_probes_ucast);
 
 	/*
 	 *	update / create cache entry
 	 *	for the source address
 	 */
-	neigh = __neigh_lookup(&nd_tbl, saddr, dev,
+	neigh = __neigh_lookup(ipv6_get_nd_tbl(), saddr, dev,
 			       !inc || lladdr || !dev->addr_len);
 	if (neigh)
 		ndisc_update(dev, neigh, lladdr, NUD_STALE,
@@ -1059,7 +1059,7 @@ static enum skb_drop_reason ndisc_recv_na(struct sk_buff *skb)
 		return reason;
 	}
 
-	neigh = neigh_lookup(&nd_tbl, &msg->target, dev);
+	neigh = neigh_lookup(ipv6_get_nd_tbl(), &msg->target, dev);
 
 	/* RFC 9131 updates original Neighbour Discovery RFC 4861.
 	 * NAs with Target LL Address option without a corresponding
@@ -1079,7 +1079,7 @@ static enum skb_drop_reason ndisc_recv_na(struct sk_buff *skb)
 	new_state = msg->icmph.icmp6_solicited ? NUD_REACHABLE : NUD_STALE;
 	if (!neigh && lladdr && idev && READ_ONCE(idev->cnf.forwarding)) {
 		if (accept_untracked_na(dev, saddr)) {
-			neigh = neigh_create(&nd_tbl, &msg->target, dev);
+			neigh = neigh_create(ipv6_get_nd_tbl(), &msg->target, dev);
 			new_state = NUD_STALE;
 		}
 	}
@@ -1099,7 +1099,7 @@ static enum skb_drop_reason ndisc_recv_na(struct sk_buff *skb)
 		if (lladdr && !memcmp(lladdr, dev->dev_addr, dev->addr_len) &&
 		    READ_ONCE(net->ipv6.devconf_all->forwarding) &&
 		    READ_ONCE(net->ipv6.devconf_all->proxy_ndp) &&
-		    pneigh_lookup(&nd_tbl, net, &msg->target, dev)) {
+		    pneigh_lookup(ipv6_get_nd_tbl(), net, &msg->target, dev)) {
 			/* XXX: idev->cnf.proxy_ndp */
 			goto out;
 		}
@@ -1167,7 +1167,7 @@ static enum skb_drop_reason ndisc_recv_rs(struct sk_buff *skb)
 			goto out;
 	}
 
-	neigh = __neigh_lookup(&nd_tbl, saddr, skb->dev, 1);
+	neigh = __neigh_lookup(ipv6_get_nd_tbl(), saddr, skb->dev, 1);
 	if (neigh) {
 		ndisc_update(skb->dev, neigh, lladdr, NUD_STALE,
 			     NEIGH_UPDATE_F_WEAK_OVERRIDE|
@@ -1464,7 +1464,7 @@ skip_linkparms:
 	 */
 
 	if (!neigh)
-		neigh = __neigh_lookup(&nd_tbl, &ipv6_hdr(skb)->saddr,
+		neigh = __neigh_lookup(ipv6_get_nd_tbl(), &ipv6_hdr(skb)->saddr,
 				       skb->dev, 1);
 	if (neigh) {
 		u8 *lladdr = NULL;
@@ -1860,7 +1860,7 @@ static int ndisc_netdev_event(struct notifier_block *this, unsigned long event, 
 
 	switch (event) {
 	case NETDEV_CHANGEADDR:
-		neigh_changeaddr(&nd_tbl, dev);
+		neigh_changeaddr(ipv6_get_nd_tbl(), dev);
 		fib6_run_gc(0, net, false);
 		fallthrough;
 	case NETDEV_UP:
@@ -1884,12 +1884,12 @@ static int ndisc_netdev_event(struct notifier_block *this, unsigned long event, 
 
 		change_info = ptr;
 		if (change_info->flags_changed & IFF_NOARP)
-			neigh_changeaddr(&nd_tbl, dev);
+			neigh_changeaddr(ipv6_get_nd_tbl(), dev);
 		if (evict_nocarrier && !netif_carrier_ok(dev))
-			neigh_carrier_down(&nd_tbl, dev);
+			neigh_carrier_down(ipv6_get_nd_tbl(), dev);
 		break;
 	case NETDEV_DOWN:
-		neigh_ifdown(&nd_tbl, dev);
+		neigh_ifdown(ipv6_get_nd_tbl(), dev);
 		fib6_run_gc(0, net, false);
 		break;
 	case NETDEV_NOTIFY_PEERS:
@@ -2006,7 +2006,7 @@ int __init ndisc_init(void)
 	/*
 	 * Initialize the neighbour table
 	 */
-	neigh_table_init(NEIGH_ND_TABLE, &nd_tbl);
+	neigh_table_init(NEIGH_ND_TABLE, ipv6_get_nd_tbl());
 
 #ifdef CONFIG_SYSCTL
 	err = neigh_sysctl_register(NULL, &nd_tbl.parms,
@@ -2039,6 +2039,6 @@ void ndisc_cleanup(void)
 #ifdef CONFIG_SYSCTL
 	neigh_sysctl_unregister(&nd_tbl.parms);
 #endif
-	neigh_table_clear(NEIGH_ND_TABLE, &nd_tbl);
+	neigh_table_clear(NEIGH_ND_TABLE, ipv6_get_nd_tbl());
 	unregister_pernet_subsys(&ndisc_net_ops);
 }
