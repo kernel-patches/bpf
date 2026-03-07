@@ -57,6 +57,7 @@ ifeq ($(config),1)
 endif
 
 CFLAGS		+= $(INCLUDES) $(LIB_INCLUDES)
+CFLAGS		+= $(EXTRA_CFLAGS)
 
 export CFLAGS OUTPUT srctree
 
