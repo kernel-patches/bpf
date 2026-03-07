@@ -33,7 +33,7 @@ SEC("?lsm.s/bpf")
 __failure __msg("cannot pass in dynptr at an offset=-8")
 int BPF_PROG(not_valid_dynptr, int cmd, union bpf_attr *attr, unsigned int size, bool kernel)
 {
-	unsigned long val;
+	unsigned long val = 0;
 
 	return bpf_verify_pkcs7_signature((struct bpf_dynptr *)&val,
 					  (struct bpf_dynptr *)&val, NULL);
