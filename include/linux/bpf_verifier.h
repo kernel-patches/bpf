@@ -65,7 +65,6 @@ struct bpf_reg_state {
 
 		struct { /* for PTR_TO_MEM | PTR_TO_MEM_OR_NULL */
 			u32 mem_size;
-			u32 dynptr_id; /* for dynptr slices */
 		};
 
 		/* For dynptr stack slots */
@@ -193,6 +192,13 @@ struct bpf_reg_state {
 	 * allowed and has the same effect as bpf_sk_release(sk).
 	 */
 	u32 ref_obj_id;
+	/* Tracks the parent object this register was derived from.
+	 * Used for cascading invalidation: when the parent object is
+	 * released or invalidated, all registers with matching parent_id
+	 * are also invalidated. For example, a slice from bpf_dynptr_data()
+	 * gets parent_id set to the dynptr's id.
+	 */
+	u32 parent_id;
 	/* Inside the callee two registers can be both PTR_TO_STACK like
 	 * R1=fp-8 and R2=fp-8, but one of them points to this function stack
 	 * while another to the caller's stack. To differentiate them 'frameno'
@@ -708,6 +714,11 @@ struct bpf_idset {
 	} entries[BPF_ID_MAP_SIZE];
 };
 
+struct bpf_idstack {
+	int cnt;
+	u32 ids[BPF_ID_MAP_SIZE];
+};
+
 /* see verifier.c:compute_scc_callchain() */
 struct bpf_scc_callchain {
 	/* call sites from bpf_verifier_state->frame[*]->callsite leading to this SCC */
@@ -790,6 +801,7 @@ struct bpf_verifier_env {
 	union {
 		struct bpf_idmap idmap_scratch;
 		struct bpf_idset idset_scratch;
+		struct bpf_idstack idstack_scratch;
 	};
 	struct {
 		int *insn_state;
