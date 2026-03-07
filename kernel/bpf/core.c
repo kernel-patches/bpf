@@ -1475,10 +1475,29 @@ int bpf_jit_blind_constants(struct bpf_verifier_env *env)
 		insn = prog->insnsi + i + insn_delta;
 		insn_cnt += insn_delta;
 		i        += insn_delta;
+
+		/* bpf_patch_insn_data() calls adjust_insn_aux_data() to adjust insn_aux_data. The
+		 * indirect_target flag for the original instruction is moved to the last of the new
+		 * instructions, but the indirect jump target is actually the first one, so move
+		 * it back.
+		 */
+		if (env->insn_aux_data[i].indirect_target) {
+			env->insn_aux_data[i].indirect_target = 0;
+			env->insn_aux_data[i - insn_delta].indirect_target = 1;
+		}
 	}
 
 	prog->blinded = 1;
 	return 0;
+}
+
+bool bpf_insn_is_indirect_target(const struct bpf_verifier_env *env, const struct bpf_prog *prog,
+				 int insn_idx)
+{
+	if (!env)
+		return false;
+	insn_idx += prog->aux->subprog_start;
+	return env->insn_aux_data[insn_idx].indirect_target;
 }
 #endif /* CONFIG_BPF_JIT */
 
