@@ -12345,6 +12345,22 @@ static bool is_kfunc_arg_dynptr(const struct btf *btf, const struct btf_param *a
 	return __is_kfunc_ptr_arg_type(btf, arg, KF_ARG_DYNPTR_ID);
 }
 
+static bool is_kfunc_arg_const_ptr(const struct btf *btf, const struct btf_param *arg)
+{
+	const struct btf_type *t, *resolved_t;
+
+	t = btf_type_skip_modifiers(btf, arg->type, NULL);
+	if (!t || !btf_type_is_ptr(t))
+		return false;
+
+	resolved_t = btf_type_skip_modifiers(btf, t->type, NULL);
+	for (; t != resolved_t; t = btf_type_by_id(btf, t->type))
+		if (BTF_INFO_KIND(t->info) == BTF_KIND_CONST)
+			return true;
+
+	return false;
+}
+
 static bool is_kfunc_arg_list_head(const struct btf *btf, const struct btf_param *arg)
 {
 	return __is_kfunc_ptr_arg_type(btf, arg, KF_ARG_LIST_HEAD_ID);
@@ -13578,7 +13594,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			enum bpf_arg_type dynptr_arg_type = ARG_PTR_TO_DYNPTR;
 			int clone_ref_obj_id = 0;
 
-			if (reg->type == CONST_PTR_TO_DYNPTR)
+			if (is_kfunc_arg_const_ptr(btf, &args[i]))
 				dynptr_arg_type |= MEM_RDONLY;
 
 			if (is_kfunc_arg_uninit(btf, &args[i]))
