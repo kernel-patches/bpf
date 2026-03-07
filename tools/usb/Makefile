@@ -14,6 +14,7 @@ endif
 MAKEFLAGS += -r
 
 override CFLAGS += -O2 -Wall -Wextra -g -D_GNU_SOURCE -I$(OUTPUT)include -I$(srctree)/tools/include
+override CFLAGS += $(EXTRA_CFLAGS)
 override LDFLAGS += -lpthread
 
 ALL_TARGETS := testusb ffs-test
