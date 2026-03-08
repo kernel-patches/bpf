@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0
 include ../../scripts/Makefile.include
 
+CFLAGS += $(EXTRA_CFLAGS)
+
 FILES=                                          \
          test-all.bin                           \
          test-backtrace.bin                     \
