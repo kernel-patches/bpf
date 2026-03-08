@@ -105,7 +105,7 @@ headers_standalone: headers
 	$(Q)$(MAKE) -C $(srctree) headers_install INSTALL_HDR_PATH=$(OUTPUT)sysroot
 
 CFLAGS_s390 := -m64
-CFLAGS := $(CFLAGS_$(ARCH))
+CFLAGS := $(CFLAGS_$(ARCH)) $(EXTRA_CFLAGS)
 
 headers_check: headers_standalone
 	$(Q)for header in $(filter-out crt.h std.h,$(all_files)); do \
