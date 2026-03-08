@@ -13,6 +13,7 @@ endif
 # (this improves performance and avoids hard-to-debug behaviour);
 MAKEFLAGS += -r
 
+override CFLAGS += $(EXTRA_CFLAGS)
 override CFLAGS += -O2 -Wall -Wextra -g -D_GNU_SOURCE -I$(OUTPUT)include -I$(srctree)/tools/include
 override LDFLAGS += -lpthread
 
