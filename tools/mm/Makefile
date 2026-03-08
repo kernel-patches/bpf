@@ -9,6 +9,7 @@ INSTALL_TARGETS = $(BUILD_TARGETS) thpmaps
 LIB_DIR = ../lib/api
 LIBS = $(LIB_DIR)/libapi.a
 
+CFLAGS += $(EXTRA_CFLAGS)
 CFLAGS += -Wall -Wextra -I../lib/ -pthread
 LDFLAGS += $(LIBS) -pthread
 
