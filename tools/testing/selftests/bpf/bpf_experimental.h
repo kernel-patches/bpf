@@ -86,6 +86,22 @@ extern int bpf_list_push_back_impl(struct bpf_list_head *head,
 #define bpf_list_push_back(head, node) bpf_list_push_back_impl(head, node, NULL, 0)
 
 /* Description
+ *	Insert 'new' after 'prev' in the BPF linked list with head 'head'.
+ *	The bpf_spin_lock protecting the list must be held. 'prev' must already
+ *	be in that list; 'new' must not be in any list. The 'meta' and 'off'
+ *	parameters are rewritten by the verifier, no need for BPF programs to
+ *	set them.
+ * Returns
+ *	0 on success, -EINVAL if head is NULL, prev is not in the list with head,
+ *	or new is already in a list.
+ */
+extern int bpf_list_add_impl(struct bpf_list_head *head, struct bpf_list_node *new,
+			     struct bpf_list_node *prev, void *meta, __u64 off) __ksym;
+
+/* Convenience macro to wrap over bpf_list_add_impl */
+#define bpf_list_add(head, new, prev) bpf_list_add_impl(head, new, prev, NULL, 0)
+
+/* Description
  *	Remove the entry at the beginning of the BPF linked list.
  * Returns
  *	Pointer to bpf_list_node of deleted entry, or NULL if list is empty.

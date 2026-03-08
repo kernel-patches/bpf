@@ -367,6 +367,146 @@ long insert_rbtree_and_stash__del_tree_##rem_tree(void *ctx)		\
 INSERT_STASH_READ(true, "insert_stash_read: remove from tree");
 INSERT_STASH_READ(false, "insert_stash_read: don't remove from tree");
 
+/*
+ * Insert one node in tree and list, remove it from tree, add a second node
+ * after it with bpf_list_add, check bpf_list_is_first/is_last/empty, then
+ * remove both nodes from list via bpf_list_del.
+ */
+SEC("tc")
+__description("list_add_del_and_check: test bpf_list_add/del/is_first/is_last/empty")
+__success __retval(0)
+long list_add_del_and_check(void *ctx)
+{
+	long err = 0;
+	struct bpf_rb_node *rb;
+	struct bpf_list_node *l_node, *l_node_ref;
+	struct node_data *n_rb, *n_new, *n_new_ref;
+
+	err = __insert_in_tree_and_list(&head, &root, &lock);
+	if (err)
+		return err;
+
+	bpf_spin_lock(&lock);
+	/* Test1: bpf_list_empty */
+	if (bpf_list_empty(&head)) {
+		bpf_spin_unlock(&lock);
+		return -4;
+	}
+
+	rb = bpf_rbtree_first(&root);
+	if (!rb) {
+		bpf_spin_unlock(&lock);
+		return -5;
+	}
+
+	rb = bpf_rbtree_remove(&root, rb);
+	bpf_spin_unlock(&lock);
+	if (!rb)
+		return -6;
+
+	n_rb = container_of(rb, struct node_data, r);
+	n_new = bpf_obj_new(typeof(*n_new));
+	if (!n_new) {
+		bpf_obj_drop(n_rb);
+		return -7;
+	}
+	n_new_ref = bpf_refcount_acquire(n_new);
+	if (!n_new_ref) {
+		bpf_obj_drop(n_rb);
+		bpf_obj_drop(n_new);
+		return -8;
+	}
+
+	bpf_spin_lock(&lock);
+	/* Test2: bpf_list_add */
+	if (bpf_list_add(&head, &n_new->l, &n_rb->l)) {
+		bpf_spin_unlock(&lock);
+		bpf_obj_drop(n_rb);
+		bpf_obj_drop(n_new_ref);
+		return -9;
+	}
+
+	/* Test3: bpf_list_is_first/is_last */
+	if (!bpf_list_is_first(&head, &n_rb->l) ||
+	    !bpf_list_is_last(&head, &n_new_ref->l)) {
+		bpf_spin_unlock(&lock);
+		bpf_obj_drop(n_rb);
+		bpf_obj_drop(n_new_ref);
+		return -10;
+	}
+
+	/* Test4: bpf_list_del */
+	l_node = bpf_list_del(&head, &n_rb->l);
+	l_node_ref = bpf_list_del(&head, &n_new_ref->l);
+	bpf_spin_unlock(&lock);
+	bpf_obj_drop(n_rb);
+	bpf_obj_drop(n_new_ref);
+
+	if (l_node)
+		bpf_obj_drop(container_of(l_node, struct node_data, l));
+	else
+		err = -11;
+
+	if (l_node_ref)
+		bpf_obj_drop(container_of(l_node_ref, struct node_data, l));
+	else
+		err = -12;
+
+	bpf_spin_lock(&lock);
+	/* Test5: bpf_list_empty */
+	if (!bpf_list_empty(&head))
+		err = -13;
+	bpf_spin_unlock(&lock);
+	return err;
+}
+
+SEC("?tc")
+__failure __msg("bpf_spin_lock at off=32 must be held for bpf_list_head")
+long list_del_without_lock_fail(void *ctx)
+{
+	struct bpf_rb_node *rb;
+	struct bpf_list_node *l;
+	struct node_data *n;
+
+	bpf_spin_lock(&lock);
+	rb = bpf_rbtree_first(&root);
+	bpf_spin_unlock(&lock);
+	if (!rb)
+		return -1;
+
+	n = container_of(rb, struct node_data, r);
+	/* Error case: delete list node without holding lock */
+	l = bpf_list_del(&head, &n->l);
+	if (!l)
+		return -2;
+	bpf_obj_drop(container_of(l, struct node_data, l));
+
+	return 0;
+}
+
+SEC("?tc")
+__failure __msg("bpf_spin_lock at off=32 must be held for bpf_list_head")
+long list_add_without_lock_fail(void *ctx)
+{
+	struct bpf_rb_node *rb;
+	struct bpf_list_node *l;
+	struct node_data *n;
+
+	bpf_spin_lock(&lock);
+	rb = bpf_rbtree_first(&root);
+	l = bpf_list_front(&head);
+	bpf_spin_unlock(&lock);
+	if (!rb || !l)
+		return -1;
+
+	n = container_of(l, struct node_data, l);
+	/* Error case: add list node without holding lock */
+	if (bpf_list_add(&head, &n->l, l))
+		return -2;
+
+	return 0;
+}
+
 SEC("tc")
 __success
 long rbtree_refcounted_node_ref_escapes(void *ctx)
