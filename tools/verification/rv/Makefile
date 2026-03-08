@@ -55,6 +55,7 @@ ifeq ($(config),1)
   include Makefile.config
 endif
 
+CFLAGS		+= $(EXTRA_CFLAGS)
 CFLAGS		+= $(INCLUDES) $(LIB_INCLUDES)
 
 export CFLAGS OUTPUT srctree
