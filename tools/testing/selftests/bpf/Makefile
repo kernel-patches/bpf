@@ -49,6 +49,7 @@ srctree := $(patsubst %/,%,$(dir $(srctree)))
 srctree := $(patsubst %/,%,$(dir $(srctree)))
 endif
 
+CFLAGS += $(EXTRA_CFLAGS)
 CFLAGS += -g $(OPT_FLAGS) -rdynamic -std=gnu11				\
 	  -Wall -Werror -fno-omit-frame-pointer				\
 	  -Wno-unused-but-set-variable					\
