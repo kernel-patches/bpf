@@ -10,6 +10,7 @@ srctree := $(patsubst %/,%,$(dir $(srctree)))
 endif
 
 LIBSRC = $(srctree)/lib/bootconfig.c $(srctree)/include/linux/bootconfig.h
+override CFLAGS += $(EXTRA_CFLAGS)
 override CFLAGS += -Wall -g -I$(CURDIR)/include
 
 ALL_TARGETS := bootconfig
