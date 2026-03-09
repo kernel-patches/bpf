@@ -1427,82 +1427,19 @@ out:
 	return to - to_buff;
 }
 
-static struct bpf_prog *bpf_prog_clone_create(struct bpf_prog *fp_other,
-					      gfp_t gfp_extra_flags)
-{
-	gfp_t gfp_flags = GFP_KERNEL | __GFP_ZERO | gfp_extra_flags;
-	struct bpf_prog *fp;
-
-	fp = __vmalloc(fp_other->pages * PAGE_SIZE, gfp_flags);
-	if (fp != NULL) {
-		/* aux->prog still points to the fp_other one, so
-		 * when promoting the clone to the real program,
-		 * this still needs to be adapted.
-		 */
-		memcpy(fp, fp_other, fp_other->pages * PAGE_SIZE);
-	}
-
-	return fp;
-}
-
-static void bpf_prog_clone_free(struct bpf_prog *fp)
-{
-	/* aux was stolen by the other clone, so we cannot free
-	 * it from this path! It will be freed eventually by the
-	 * other program on release.
-	 *
-	 * At this point, we don't need a deferred release since
-	 * clone is guaranteed to not be locked.
-	 */
-	fp->aux = NULL;
-	fp->stats = NULL;
-	fp->active = NULL;
-	__bpf_prog_free(fp);
-}
-
-void bpf_jit_prog_release_other(struct bpf_prog *fp, struct bpf_prog *fp_other)
-{
-	/* We have to repoint aux->prog to self, as we don't
-	 * know whether fp here is the clone or the original.
-	 */
-	fp->aux->prog = fp;
-	bpf_prog_clone_free(fp_other);
-}
-
-static void adjust_insn_arrays(struct bpf_prog *prog, u32 off, u32 len)
-{
-#ifdef CONFIG_BPF_SYSCALL
-	struct bpf_map *map;
-	int i;
-
-	if (len <= 1)
-		return;
-
-	for (i = 0; i < prog->aux->used_map_cnt; i++) {
-		map = prog->aux->used_maps[i];
-		if (map->map_type == BPF_MAP_TYPE_INSN_ARRAY)
-			bpf_insn_array_adjust(map, off, len);
-	}
-#endif
-}
-
-struct bpf_prog *bpf_jit_blind_constants(struct bpf_prog *prog)
+int bpf_jit_blind_constants(struct bpf_verifier_env *env)
 {
 	struct bpf_insn insn_buff[16], aux[2];
-	struct bpf_prog *clone, *tmp;
+	struct bpf_prog *prog = env->prog;
 	int insn_delta, insn_cnt;
 	struct bpf_insn *insn;
 	int i, rewritten;
 
 	if (!prog->blinding_requested || prog->blinded)
-		return prog;
+		return 0;
 
-	clone = bpf_prog_clone_create(prog, GFP_USER);
-	if (!clone)
-		return ERR_PTR(-ENOMEM);
-
-	insn_cnt = clone->len;
-	insn = clone->insnsi;
+	insn_cnt = prog->len;
+	insn = prog->insnsi;
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		if (bpf_pseudo_func(insn)) {
@@ -1523,35 +1460,25 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_prog *prog)
 		    insn[1].code == 0)
 			memcpy(aux, insn, sizeof(aux));
 
-		rewritten = bpf_jit_blind_insn(insn, aux, insn_buff,
-						clone->aux->verifier_zext);
+		rewritten = bpf_jit_blind_insn(insn, aux, insn_buff, prog->aux->verifier_zext);
 		if (!rewritten)
 			continue;
 
-		tmp = bpf_patch_insn_single(clone, i, insn_buff, rewritten);
-		if (IS_ERR(tmp)) {
-			/* Patching may have repointed aux->prog during
-			 * realloc from the original one, so we need to
-			 * fix it up here on error.
-			 */
-			bpf_jit_prog_release_other(prog, clone);
-			return tmp;
-		}
+		prog = bpf_patch_insn_data(env, i, insn_buff, rewritten);
+		if (!prog)
+			return -ENOMEM;
 
-		clone = tmp;
+		env->prog = prog;
 		insn_delta = rewritten - 1;
 
-		/* Instructions arrays must be updated using absolute xlated offsets */
-		adjust_insn_arrays(clone, prog->aux->subprog_start + i, rewritten);
-
 		/* Walk new program and skip insns we just inserted. */
-		insn = clone->insnsi + i + insn_delta;
+		insn = prog->insnsi + i + insn_delta;
 		insn_cnt += insn_delta;
 		i        += insn_delta;
 	}
 
-	clone->blinded = 1;
-	return clone;
+	prog->blinded = 1;
+	return 0;
 }
 #endif /* CONFIG_BPF_JIT */
 
