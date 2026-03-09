@@ -44,30 +44,19 @@ bool bpf_jit_needs_zext(void)
 struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 {
 	unsigned int prog_size = 0, extable_size = 0;
-	bool tmp_blinded = false, extra_pass = false;
-	struct bpf_prog *tmp, *orig_prog = prog;
+	bool extra_pass = false;
 	int pass = 0, prev_ninsns = 0, prologue_len, i;
 	struct hppa_jit_data *jit_data;
 	struct hppa_jit_context *ctx;
 
 	if (!prog->jit_requested)
-		return orig_prog;
-
-	tmp = bpf_jit_blind_constants(prog);
-	if (IS_ERR(tmp))
-		return orig_prog;
-	if (tmp != prog) {
-		tmp_blinded = true;
-		prog = tmp;
-	}
+		return prog;
 
 	jit_data = prog->aux->jit_data;
 	if (!jit_data) {
 		jit_data = kzalloc_obj(*jit_data);
-		if (!jit_data) {
-			prog = orig_prog;
-			goto out;
-		}
+		if (!jit_data)
+			return prog;
 		prog->aux->jit_data = jit_data;
 	}
 
@@ -81,10 +70,8 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 
 	ctx->prog = prog;
 	ctx->offset = kzalloc_objs(int, prog->len);
-	if (!ctx->offset) {
-		prog = orig_prog;
+	if (!ctx->offset)
 		goto out_offset;
-	}
 	for (i = 0; i < prog->len; i++) {
 		prev_ninsns += 20;
 		ctx->offset[i] = prev_ninsns;
@@ -93,10 +80,8 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 	for (i = 0; i < NR_JIT_ITERATIONS; i++) {
 		pass++;
 		ctx->ninsns = 0;
-		if (build_body(ctx, extra_pass, ctx->offset)) {
-			prog = orig_prog;
+		if (build_body(ctx, extra_pass, ctx->offset))
 			goto out_offset;
-		}
 		ctx->body_len = ctx->ninsns;
 		bpf_jit_build_prologue(ctx);
 		ctx->prologue_len = ctx->ninsns - ctx->body_len;
@@ -116,10 +101,8 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 						     &jit_data->image,
 						     sizeof(long),
 						     bpf_fill_ill_insns);
-			if (!jit_data->header) {
-				prog = orig_prog;
+			if (!jit_data->header)
 				goto out_offset;
-			}
 
 			ctx->insns = (u32 *)jit_data->image;
 			/*
@@ -134,7 +117,6 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 		pr_err("bpf-jit: image did not converge in <%d passes!\n", i);
 		if (jit_data->header)
 			bpf_jit_binary_free(jit_data->header);
-		prog = orig_prog;
 		goto out_offset;
 	}
 
@@ -148,7 +130,6 @@ skip_init_ctx:
 	bpf_jit_build_prologue(ctx);
 	if (build_body(ctx, extra_pass, NULL)) {
 		bpf_jit_binary_free(jit_data->header);
-		prog = orig_prog;
 		goto out_offset;
 	}
 	bpf_jit_build_epilogue(ctx);
@@ -183,13 +164,10 @@ out_offset:
 		kfree(jit_data);
 		prog->aux->jit_data = NULL;
 	}
-out:
+
 	if (HPPA_JIT_REBOOT)
 		{ extern int machine_restart(char *); machine_restart(""); }
 
-	if (tmp_blinded)
-		bpf_jit_prog_release_other(prog, prog == orig_prog ?
-					   tmp : orig_prog);
 	return prog;
 }
 
