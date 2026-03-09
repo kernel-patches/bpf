@@ -12,9 +12,11 @@
 /* Globals for passing config from userspace */
 char dev_name[16] = {};
 __be32 remote_ip;
+struct in6_addr remote_ip6;
 __u16 local_port;
 __u16 remote_port;
 __u8 remote_mac[6] = {};
+int ipv6;
 
 /* Results */
 int status;
@@ -35,10 +37,14 @@ int netpoll_setup_test(void *ctx)
 	status = 0;
 
 	__builtin_memcpy(opts.dev_name, dev_name, 16);
-	opts.remote_ip = remote_ip;
+	if (ipv6)
+		__builtin_memcpy(&opts.remote_ip6, &remote_ip6, sizeof(remote_ip6));
+	else
+		opts.remote_ip = remote_ip;
 	opts.local_port = local_port;
 	opts.remote_port = remote_port;
 	__builtin_memcpy(opts.remote_mac, remote_mac, 6);
+	opts.ipv6 = ipv6;
 
 	bnp = bpf_netpoll_create(&opts, sizeof(opts), &err);
 	if (!bnp) {
@@ -88,7 +94,9 @@ int BPF_PROG(netpoll_dummy_xmit, struct sk_buff *skb, struct net_device *dev)
 	unsigned char *data;
 	struct ethhdr eth;
 	struct iphdr ip;
+	struct ipv6hdr ip6;
 	struct udphdr udp;
+	unsigned int offset;
 
 	if (bpf_probe_read_kernel(&data, sizeof(data), &skb->data) < 0)
 		return 0;
@@ -97,19 +105,28 @@ int BPF_PROG(netpoll_dummy_xmit, struct sk_buff *skb, struct net_device *dev)
 
 	if (bpf_probe_read_kernel(&eth, sizeof(eth), data) < 0)
 		return 0;
-	if (eth.h_proto != bpf_htons(ETH_P_IP))
-		return 0;
 
-	if (bpf_probe_read_kernel(&ip, sizeof(ip), data + sizeof(struct ethhdr)) < 0)
+	if (eth.h_proto == bpf_htons(ETH_P_IP)) {
+		if (bpf_probe_read_kernel(&ip, sizeof(ip), data + sizeof(struct ethhdr)) < 0)
+			return 0;
+		if (ip.protocol != IPPROTO_UDP)
+			return 0;
+		offset = sizeof(struct ethhdr) + (ip.ihl * 4);
+	} else if (eth.h_proto == bpf_htons(ETH_P_IPV6)) {
+		if (bpf_probe_read_kernel(&ip6, sizeof(ip6), data + sizeof(struct ethhdr)) < 0)
+			return 0;
+		if (ip6.nexthdr != IPPROTO_UDP)
+			return 0;
+		offset = sizeof(struct ethhdr) + sizeof(struct ipv6hdr);
+	} else {
 		return 0;
-	if (ip.protocol != IPPROTO_UDP)
-		return 0;
+	}
 
-	if (bpf_probe_read_kernel(&udp, sizeof(udp), data + sizeof(struct ethhdr) + (ip.ihl * 4)) < 0)
+	if (bpf_probe_read_kernel(&udp, sizeof(udp), data + offset) < 0)
 		return 0;
 	if (udp.dest != bpf_htons(remote_port))
 		return 0;
-	if (bpf_probe_read_kernel(&driver_xmit, sizeof(driver_xmit), data + sizeof(struct ethhdr) + (ip.ihl * 4) + sizeof(struct udphdr)) < 0)
+	if (bpf_probe_read_kernel(&driver_xmit, sizeof(driver_xmit), data + offset + sizeof(struct udphdr)) < 0)
 		return 0;
 
 	return 0;
