@@ -7,14 +7,37 @@
 #include "test_progs.h"
 #include "network_helpers.h"
 #include "netpoll_sanity.skel.h"
+#include "netpoll_basic.skel.h"
 
 #define NS_TEST "netpoll_sanity_ns"
 #define NS_TEST_V6 "netpoll_sanity_ns_v6"
+#define NS_BASIC_TEST "netpoll_basic_ns"
 #define DUMMY_DEV "dummy0"
 #define DUMMY_IP "10.0.0.1"
 #define REMOTE_IP "10.0.0.2"
 #define DUMMY_IP6 "fd00::1"
 #define REMOTE_IP6 "fd00::2"
+
+void test_netpoll_basic(void)
+{
+	struct nstoken *nstoken = NULL;
+
+	SYS(fail, "ip netns add %s", NS_BASIC_TEST);
+	SYS(fail, "ip -net %s link add %s type dummy", NS_BASIC_TEST, DUMMY_DEV);
+	SYS(fail, "ip -net %s addr add %s/24 dev %s", NS_BASIC_TEST, DUMMY_IP, DUMMY_DEV);
+	SYS(fail, "ip -net %s link set %s up", NS_BASIC_TEST, DUMMY_DEV);
+
+	nstoken = open_netns(NS_BASIC_TEST);
+	if (!ASSERT_OK_PTR(nstoken, "open_netns"))
+		goto fail;
+
+	RUN_TESTS(netpoll_basic);
+
+fail:
+	if (nstoken)
+		close_netns(nstoken);
+	SYS_NOFAIL("ip netns del %s &> /dev/null", NS_BASIC_TEST);
+}
 
 static void run_netpoll_test(const char *ns_name, const char *local_ip,
 			      const char *remote_ip, bool ipv6)
