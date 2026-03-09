@@ -651,6 +651,12 @@ enum priv_stack_mode {
 	PRIV_STACK_ADAPTIVE,
 };
 
+struct bpf_subprog_call_depth_info {
+	int ret_insn; /* caller instruction where we return to. */
+	int caller; /* caller subprogram idx */
+	int frame; /* # of consecutive static call stack frames on top of stack */
+};
+
 struct bpf_subprog_info {
 	/* 'start' has to be the first field otherwise find_subprog() won't work */
 	u32 start; /* insn idx of function entry point */
@@ -678,6 +684,9 @@ struct bpf_subprog_info {
 
 	enum priv_stack_mode priv_stack_mode;
 	struct bpf_subprog_arg_info args[MAX_BPF_FUNC_REG_ARGS];
+
+	/* temporary state used for call frame depth calculation */
+	struct bpf_subprog_call_depth_info dinfo;
 };
 
 struct bpf_verifier_env;
