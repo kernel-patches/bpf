@@ -751,7 +751,7 @@ static struct bpf_iter_reg task_vma_reg_info = {
 BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
 	   bpf_callback_t, callback_fn, void *, callback_ctx, u64, flags)
 {
-	struct mmap_unlock_irq_work *work = NULL;
+	struct bpf_iter_mm_irq_work *work = NULL;
 	struct vm_area_struct *vma;
 	bool irq_work_busy = false;
 	struct mm_struct *mm;
@@ -797,7 +797,7 @@ const struct bpf_func_proto bpf_find_vma_proto = {
 struct bpf_iter_task_vma_kern_data {
 	struct task_struct *task;
 	struct mm_struct *mm;
-	struct mmap_unlock_irq_work *work;
+	struct bpf_iter_mm_irq_work *work;
 	struct vma_iterator vmi;
 };
 
@@ -1029,22 +1029,22 @@ __bpf_kfunc void bpf_iter_task_destroy(struct bpf_iter_task *it)
 
 __bpf_kfunc_end_defs();
 
-DEFINE_PER_CPU(struct mmap_unlock_irq_work, mmap_unlock_work);
+DEFINE_PER_CPU(struct bpf_iter_mm_irq_work, mmap_unlock_work);
 
 static void do_mmap_read_unlock(struct irq_work *entry)
 {
-	struct mmap_unlock_irq_work *work;
+	struct bpf_iter_mm_irq_work *work;
 
 	if (WARN_ON_ONCE(IS_ENABLED(CONFIG_PREEMPT_RT)))
 		return;
 
-	work = container_of(entry, struct mmap_unlock_irq_work, irq_work);
+	work = container_of(entry, struct bpf_iter_mm_irq_work, irq_work);
 	mmap_read_unlock_non_owner(work->mm);
 }
 
 static int __init task_iter_init(void)
 {
-	struct mmap_unlock_irq_work *work;
+	struct bpf_iter_mm_irq_work *work;
 	int ret, cpu;
 
 	for_each_possible_cpu(cpu) {

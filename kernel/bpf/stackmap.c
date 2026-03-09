@@ -166,7 +166,7 @@ static void stack_map_get_build_id_offset(struct bpf_stack_build_id *id_offs,
 					  u32 trace_nr, bool user, bool may_fault)
 {
 	int i;
-	struct mmap_unlock_irq_work *work = NULL;
+	struct bpf_iter_mm_irq_work *work = NULL;
 	bool irq_work_busy = bpf_mmap_unlock_get_irq_work(&work);
 	struct vm_area_struct *vma, *prev_vma = NULL;
 	const char *prev_build_id;
