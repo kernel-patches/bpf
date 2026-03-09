@@ -13,6 +13,7 @@ that goes into great technical depth about the BPF Architecture.
    :maxdepth: 1
 
    verifier
+   verifier-overview-index
    libbpf/index
    standardization/index
    btf
