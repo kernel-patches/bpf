@@ -593,7 +593,7 @@ produce undesirable results. In such a case, a line:
 kretprobe BUG!: Processing kretprobe d000000000041aa8 @ c00000000004f48c
 gets printed. With this information, one will be able to correlate the
 exact instance of the kretprobe that caused the problem. We have the
-do_exit() case covered. do_execve() and do_fork() are not an issue.
+task_exit() case covered. do_execve() and do_fork() are not an issue.
 We're unaware of other specific cases where this could be a problem.
 
 If, upon entry to or exit from a function, the CPU is running on

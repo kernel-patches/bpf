@@ -2238,7 +2238,7 @@ bool do_notify_parent(struct task_struct *tsk, int sig)
 		 * or setting the SA_NOCLDWAIT flag: we should be reaped
 		 * automatically and not left for our parent's wait4 call.
 		 * Rather than having the parent do it as a magic kind of
-		 * signal handler, we just set this to tell do_exit that we
+		 * signal handler, we just set this to tell task_exit that we
 		 * can be cleaned up without becoming a zombie.  Note that
 		 * we still call __wake_up_parent in this case, because a
 		 * blocked sys_wait4 might now return -ECHILD.
@@ -3022,7 +3022,7 @@ relock:
 		/*
 		 * PF_USER_WORKER threads will catch and exit on fatal signals
 		 * themselves. They have cleanup that must be performed, so we
-		 * cannot call do_exit() on their behalf. Note that ksig won't
+		 * cannot call task_exit() on their behalf. Note that ksig won't
 		 * be properly initialized, PF_USER_WORKER's shouldn't use it.
 		 */
 		if (current->flags & PF_USER_WORKER)

@@ -1081,7 +1081,7 @@ static void __secure_computing_strict(int this_syscall)
 #endif
 	current->seccomp.mode = SECCOMP_MODE_DEAD;
 	seccomp_log(this_syscall, SIGKILL, SECCOMP_RET_KILL_THREAD, true);
-	do_exit(SIGKILL);
+	task_exit(SIGKILL);
 }
 
 #ifndef CONFIG_HAVE_ARCH_SECCOMP_FILTER
@@ -1365,7 +1365,7 @@ static int __seccomp_filter(int this_syscall, const bool recheck_after_trace)
 			/* Trigger a coredump with SIGSYS */
 			force_sig_seccomp(this_syscall, data, true);
 		} else {
-			do_exit(SIGSYS);
+			task_exit(SIGSYS);
 		}
 		return -1; /* skip the syscall go directly to signal handling */
 	}
@@ -1398,14 +1398,14 @@ int __secure_computing(void)
 
 	switch (mode) {
 	case SECCOMP_MODE_STRICT:
-		__secure_computing_strict(this_syscall);  /* may call do_exit */
+		__secure_computing_strict(this_syscall);  /* may call task_exit */
 		return 0;
 	case SECCOMP_MODE_FILTER:
 		return __seccomp_filter(this_syscall, false);
 	/* Surviving SECCOMP_RET_KILL_* must be proactively impossible. */
 	case SECCOMP_MODE_DEAD:
 		WARN_ON_ONCE(1);
-		do_exit(SIGKILL);
+		task_exit(SIGKILL);
 		return -1;
 	default:
 		BUG();

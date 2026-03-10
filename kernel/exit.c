@@ -893,7 +893,7 @@ static void synchronize_group_exit(struct task_struct *tsk, long code)
 		coredump_task_exit(tsk, core_state);
 }
 
-void __noreturn do_exit(long code)
+void __noreturn task_exit(long code)
 {
 	struct task_struct *tsk = current;
 	struct kthread *kthread;
@@ -1018,7 +1018,7 @@ void __noreturn do_exit(long code)
 	lockdep_free_task(tsk);
 	do_task_dead();
 }
-EXPORT_SYMBOL(do_exit);
+EXPORT_SYMBOL(task_exit);
 
 void __noreturn make_task_dead(int signr)
 {
@@ -1077,12 +1077,12 @@ void __noreturn make_task_dead(int signr)
 		do_task_dead();
 	}
 
-	do_exit(signr);
+	task_exit(signr);
 }
 
 SYSCALL_DEFINE1(exit, int, error_code)
 {
-	do_exit((error_code&0xff)<<8);
+	task_exit((error_code&0xff)<<8);
 }
 
 /*
@@ -1115,7 +1115,7 @@ do_group_exit(int exit_code)
 		spin_unlock_irq(&sighand->siglock);
 	}
 
-	do_exit(exit_code);
+	task_exit(exit_code);
 	/* NOTREACHED */
 }
 

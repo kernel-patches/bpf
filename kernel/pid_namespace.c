@@ -339,7 +339,7 @@ int reboot_pid_ns(struct pid_namespace *pid_ns, int cmd)
 	send_sig(SIGKILL, pid_ns->child_reaper, 1);
 	read_unlock(&tasklist_lock);
 
-	do_exit(0);
+	task_exit(0);
 
 	/* Not reached */
 	return 0;

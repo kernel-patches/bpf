@@ -640,7 +640,7 @@ static int tomoyo_gc_thread(void *unused)
 	}
 	mutex_unlock(&tomoyo_gc_mutex);
 out:
-	/* This acts as do_exit(0). */
+	/* This acts as task_exit(0). */
 	return 0;
 }
 

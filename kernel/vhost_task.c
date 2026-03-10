@@ -64,7 +64,7 @@ static int vhost_task_fn(void *data)
 	mutex_unlock(&vtsk->exit_mutex);
 	complete(&vtsk->exited);
 
-	do_exit(0);
+	task_exit(0);
 }
 
 /**

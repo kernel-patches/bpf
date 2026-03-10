@@ -423,7 +423,7 @@ static int io_sq_thread(void *data)
 	mutex_unlock(&sqd->lock);
 err_out:
 	complete(&sqd->exited);
-	do_exit(0);
+	task_exit(0);
 }
 
 void io_sqpoll_wait_sq(struct io_ring_ctx *ctx)

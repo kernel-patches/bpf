@@ -25,7 +25,7 @@ int BPF_PROG(tracing_deny)
 	return 0;
 }
 
-SEC("?fexit/do_exit")
+SEC("?fexit/task_exit")
 int BPF_PROG(fexit_noreturns)
 {
 	return 0;

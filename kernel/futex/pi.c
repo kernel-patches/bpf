@@ -336,7 +336,7 @@ static int handle_exit_race(u32 __user *uaddr, u32 uval,
 	 * CPU0				CPU1
 	 *
 	 * sys_exit()			sys_futex()
-	 *  do_exit()			 futex_lock_pi()
+	 *  task_exit()			 futex_lock_pi()
 	 *                                futex_lock_pi_atomic()
 	 *   exit_signals(tsk)		    No waiters:
 	 *    tsk->flags |= PF_EXITING;	    *uaddr == 0x00000PID

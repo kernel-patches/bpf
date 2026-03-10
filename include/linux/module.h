@@ -855,7 +855,7 @@ static inline int unregister_module_notifier(struct notifier_block *nb)
 	return 0;
 }
 
-#define module_put_and_kthread_exit(code) do_exit(code)
+#define module_put_and_kthread_exit(code) task_exit(code)
 
 static inline void print_modules(void)
 {

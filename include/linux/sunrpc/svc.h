@@ -338,7 +338,7 @@ static inline void svc_thread_init_status(struct svc_rqst *rqstp, int err)
 {
 	store_release_wake_up(&rqstp->rq_err, err);
 	if (err)
-		do_exit(1);
+		task_exit(1);
 }
 
 struct svc_deferred_req {

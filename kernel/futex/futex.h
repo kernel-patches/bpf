@@ -144,7 +144,7 @@ struct futex_hash_bucket {
 struct futex_pi_state {
 	/*
 	 * list of 'owned' pi_state instances - these have to be
-	 * cleaned up in do_exit() if the task exits prematurely:
+	 * cleaned up in task_exit() if the task exits prematurely:
 	 */
 	struct list_head list;
 

@@ -148,7 +148,7 @@ void __might_fault(const char *file, int line);
 static inline void might_fault(void) { }
 #endif
 
-void do_exit(long error_code) __noreturn;
+void task_exit(long error_code) __noreturn;
 
 extern int core_kernel_text(unsigned long addr);
 extern int __kernel_text_address(unsigned long addr);

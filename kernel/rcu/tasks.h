@@ -32,7 +32,7 @@ typedef void (*postgp_func_t)(struct rcu_tasks *rtp);
  * @rtp_irq_work: IRQ work queue for deferred wakeups.
  * @barrier_q_head: RCU callback for barrier operation.
  * @rtp_blkd_tasks: List of tasks blocked as readers.
- * @rtp_exit_list: List of tasks in the latter portion of do_exit().
+ * @rtp_exit_list: List of tasks in the latter portion of task_exit().
  * @cpu: CPU number corresponding to this entry.
  * @index: Index of this CPU in rtpcp_array of the rcu_tasks structure.
  * @rtpp: Pointer to the rcu_tasks structure.
@@ -922,12 +922,12 @@ static void rcu_tasks_wait_gp(struct rcu_tasks *rtp)
 //	number of voluntary context switches, and add that task to the
 //	holdout list.
 // rcu_tasks_postscan():
-//	Gather per-CPU lists of tasks in do_exit() to ensure that all
+//	Gather per-CPU lists of tasks in task_exit() to ensure that all
 //	tasks that were in the process of exiting (and which thus might
 //	not know to synchronize with this RCU Tasks grace period) have
 //	completed exiting.  The synchronize_rcu() in rcu_tasks_postgp()
 //	will take care of any tasks stuck in the non-preemptible region
-//	of do_exit() following its call to exit_tasks_rcu_finish().
+//	of task_exit() following its call to exit_tasks_rcu_finish().
 // check_all_holdout_tasks(), repeatedly until holdout list is empty:
 //	Scans the holdout list, attempting to identify a quiescent state
 //	for each task on the list.  If there is a quiescent state, the
@@ -1038,10 +1038,10 @@ static void rcu_tasks_postscan(struct list_head *hop)
 	 *
 	 * 1) A task_struct list addition before calling exit_notify(),
 	 *    which may remove the task from the tasklist, with the
-	 *    removal after the final preempt_disable() call in do_exit().
+	 *    removal after the final preempt_disable() call in task_exit().
 	 *
 	 * 2) An _RCU_ read side starting with the final preempt_disable()
-	 *    call in do_exit() and ending with the final call to schedule()
+	 *    call in task_exit() and ending with the final call to schedule()
 	 *    with TASK_DEAD state.
 	 *
 	 * This handles the part 1). And postgp will handle part 2) with a
@@ -1301,7 +1301,7 @@ void exit_tasks_rcu_start(void)
 }
 
 /*
- * Remove the task from the "yet another list" because do_exit() is now
+ * Remove the task from the "yet another list" because task_exit() is now
  * non-preemptible, allowing synchronize_rcu() to wait beyond this point.
  */
 void exit_tasks_rcu_finish(void)

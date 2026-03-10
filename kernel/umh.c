@@ -119,7 +119,7 @@ out:
 		umh_complete(sub_info);
 	if (!retval)
 		return 0;
-	do_exit(0);
+	task_exit(0);
 }
 
 /* Handles UMH_WAIT_PROC.  */

@@ -10,7 +10,7 @@
  * thread exit time.
  *
  * Implementation: user-space maintains a per-thread list of locks it
- * is holding. Upon do_exit(), the kernel carefully walks this list,
+ * is holding. Upon task_exit(), the kernel carefully walks this list,
  * and marks all locks that are owned by this thread with the
  * FUTEX_OWNER_DIED bit, and wakes up a waiter (if any). The list is
  * always manipulated with the lock held, so the list is private and

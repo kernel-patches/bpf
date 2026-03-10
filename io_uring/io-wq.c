@@ -261,7 +261,7 @@ static void io_worker_exit(struct io_worker *worker)
 
 	kfree_rcu(worker, rcu);
 	io_worker_ref_put(wq);
-	do_exit(0);
+	task_exit(0);
 }
 
 static inline bool __io_acct_run_queue(struct io_wq_acct *acct)

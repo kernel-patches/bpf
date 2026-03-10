@@ -1063,7 +1063,7 @@ SYSCALL_DEFINE1(timer_delete, timer_t, timer_id)
 }
 
 /*
- * Invoked from do_exit() when the last thread of a thread group exits.
+ * Invoked from task_exit() when the last thread of a thread group exits.
  * At that point no other task can access the timers of the dying
  * task anymore.
  */

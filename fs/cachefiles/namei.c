@@ -555,7 +555,7 @@ static bool cachefiles_open_file(struct cachefiles_object *object,
 	}
 
 	/* We need to open a file interface onto a data file now as we can't do
-	 * it on demand because writeback called from do_exit() sees
+	 * it on demand because writeback called from task_exit() sees
 	 * current->fs == NULL - which breaks d_path() called from ext4 open.
 	 */
 	path.mnt = cache->mnt;

@@ -82,7 +82,7 @@ check_error 'f vfs_read arg1=^'			# NO_ARG_BODY
 # multiprobe errors
 if grep -q "Create/append/" README && grep -q "imm-value" README; then
 echo "f:fprobes/testevent $FUNCTION_FORK" > dynamic_events
-check_error '^f:fprobes/testevent do_exit%return'	# DIFF_PROBE_TYPE
+check_error '^f:fprobes/testevent task_exit%return'	# DIFF_PROBE_TYPE
 
 # Explicitly use printf "%s" to not interpret \1
 printf "%s" "f:fprobes/testevent $FUNCTION_FORK abcd=\\1" > dynamic_events

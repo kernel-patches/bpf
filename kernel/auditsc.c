@@ -1797,7 +1797,7 @@ static void audit_log_exit(void)
  * __audit_free - free a per-task audit context
  * @tsk: task whose audit context block to free
  *
- * Called from copy_process, do_exit, and the io_uring code
+ * Called from copy_process, task_exit, and the io_uring code
  */
 void __audit_free(struct task_struct *tsk)
 {
@@ -1810,7 +1810,7 @@ void __audit_free(struct task_struct *tsk)
 	if (!list_empty(&context->killed_trees))
 		audit_kill_trees(context);
 
-	/* We are called either by do_exit() or the fork() error handling code;
+	/* We are called either by task_exit() or the fork() error handling code;
 	 * in the former case tsk == current and in the latter tsk is a
 	 * random task_struct that doesn't have any meaningful data we
 	 * need to log via audit_log_exit().

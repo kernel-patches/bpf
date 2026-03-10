@@ -5294,7 +5294,7 @@ void __unmap_hugepage_range(struct mmu_gather *tlb, struct vm_area_struct *vma,
 		 * Adjust the reservation for the region that will have the
 		 * reserve restored. Keep in mind that vma_needs_reservation() changes
 		 * resv->adds_in_progress if it succeeds. If this is not done,
-		 * do_exit() will not see it, and will keep the reservation
+		 * task_exit() will not see it, and will keep the reservation
 		 * forever.
 		 */
 		if (adjust_reservation) {

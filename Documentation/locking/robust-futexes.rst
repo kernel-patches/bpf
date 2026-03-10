@@ -55,7 +55,7 @@ To solve this problem, the traditional approach was to extend the vma
 (virtual memory area descriptor) concept to have a notion of 'pending
 robust futexes attached to this area'. This approach requires 3 new
 syscall variants to sys_futex(): FUTEX_REGISTER, FUTEX_DEREGISTER and
-FUTEX_RECOVER. At do_exit() time, all vmas are searched to see whether
+FUTEX_RECOVER. At task_exit() time, all vmas are searched to see whether
 they have a robust_head set. This approach has two fundamental problems
 left:
 
@@ -89,11 +89,11 @@ New approach to robust futexes
 At the heart of this new approach there is a per-thread private list of
 robust locks that userspace is holding (maintained by glibc) - which
 userspace list is registered with the kernel via a new syscall [this
-registration happens at most once per thread lifetime]. At do_exit()
+registration happens at most once per thread lifetime]. At task_exit()
 time, the kernel checks this user-space list: are there any robust futex
 locks to be cleaned up?
 
-In the common case, at do_exit() time, there is no list registered, so
+In the common case, at task_exit() time, there is no list registered, so
 the cost of robust futexes is just a simple current->robust_list != NULL
 comparison. If the thread has registered a list, then normally the list
 is empty. If the thread/process crashed or terminated in some incorrect
@@ -102,7 +102,7 @@ walks the list [not trusting it], and marks all locks that are owned by
 this thread with the FUTEX_OWNER_DIED bit, and wakes up one waiter (if
 any).
 
-The list is guaranteed to be private and per-thread at do_exit() time,
+The list is guaranteed to be private and per-thread at task_exit() time,
 so it can be accessed by the kernel in a lockless way.
 
 There is one race possible though: since adding to and removing from the

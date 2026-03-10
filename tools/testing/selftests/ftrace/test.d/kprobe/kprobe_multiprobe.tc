@@ -5,7 +5,7 @@
 
 # Choose 2 symbols for target
 SYM1=$FUNCTION_FORK
-SYM2=do_exit
+SYM2=task_exit
 EVENT_NAME=kprobes/testevent
 
 DEF1="p:$EVENT_NAME $SYM1"

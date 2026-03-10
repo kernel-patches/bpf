@@ -747,7 +747,7 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 	/*
 	 * If pid namespaces are enabled and the current task is in a child
 	 * pid_namespace, the command is handled by reboot_pid_ns() which will
-	 * call do_exit().
+	 * call task_exit().
 	 */
 	ret = reboot_pid_ns(pid_ns, cmd);
 	if (ret)
@@ -777,11 +777,11 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 
 	case LINUX_REBOOT_CMD_HALT:
 		kernel_halt();
-		do_exit(0);
+		task_exit(0);
 
 	case LINUX_REBOOT_CMD_POWER_OFF:
 		kernel_power_off();
-		do_exit(0);
+		task_exit(0);
 		break;
 
 	case LINUX_REBOOT_CMD_RESTART2:
