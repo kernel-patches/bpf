@@ -18,7 +18,7 @@
 void __noreturn kunit_try_catch_throw(struct kunit_try_catch *try_catch)
 {
 	try_catch->try_result = -EFAULT;
-	kthread_exit(0);
+	do_exit(0);
 }
 EXPORT_SYMBOL_GPL(kunit_try_catch_throw);
 

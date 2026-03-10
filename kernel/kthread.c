@@ -323,7 +323,7 @@ void __noreturn kthread_complete_and_exit(struct completion *comp, long code)
 	if (comp)
 		complete(comp);
 
-	kthread_exit(code);
+	do_exit(code);
 }
 EXPORT_SYMBOL(kthread_complete_and_exit);
 
@@ -395,7 +395,7 @@ static int kthread(void *_create)
 	if (!done) {
 		kfree(create->full_name);
 		kfree(create);
-		kthread_exit(-EINTR);
+		do_exit(-EINTR);
 	}
 
 	self->full_name = create->full_name;
@@ -435,7 +435,7 @@ static int kthread(void *_create)
 		__kthread_parkme(self);
 		ret = threadfn(data);
 	}
-	kthread_exit(ret);
+	do_exit(ret);
 }
 
 /* called from kernel_clone() to get node information for about to be created task */
@@ -738,7 +738,7 @@ EXPORT_SYMBOL_GPL(kthread_park);
  * instead of calling wake_up_process(): the thread will exit without
  * calling threadfn().
  *
- * If threadfn() may call kthread_exit() itself, the caller must ensure
+ * If threadfn() may call do_exit() itself, the caller must ensure
  * task_struct can't go away.
  *
  * Returns the result of threadfn(), or %-EINTR if wake_up_process()

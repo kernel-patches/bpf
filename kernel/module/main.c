@@ -228,7 +228,7 @@ static int mod_strncmp(const char *str_a, const char *str_b, size_t n)
 void __noreturn __module_put_and_kthread_exit(struct module *mod, long code)
 {
 	module_put(mod);
-	kthread_exit(code);
+	do_exit(code);
 }
 EXPORT_SYMBOL(__module_put_and_kthread_exit);
 
