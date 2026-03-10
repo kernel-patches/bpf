@@ -8382,7 +8382,12 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 		list_for_each_entry_safe(btf_mod, tmp, &btf_modules, list) {
 			if (btf_mod->module != module)
 				continue;
-
+			unsigned int timeout = 1000;
+			while (refcount_read(&btf_mod->btf->refcnt) > 1
+			&& timeout > 0 ) {
+				msleep(1);
+				timeout--;
+			}
 			list_del(&btf_mod->list);
 			if (btf_mod->sysfs_attr)
 				sysfs_remove_bin_file(btf_kobj, btf_mod->sysfs_attr);
