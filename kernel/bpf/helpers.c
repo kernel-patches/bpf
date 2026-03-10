@@ -2300,19 +2300,12 @@ void bpf_rb_root_free(const struct btf_field *field, void *rb_root,
 	}
 }
 
-/*
- * Inline helpers for kfuncs that have both a legacy (_impl with void *meta__ign)
- * and a new (KF_IMPLICIT_ARGS with struct btf_struct_meta *) variant.
- *
- * These __bpf_kfunc_<name> functions contain the actual implementation and are
- * always_inline, allowing both kfunc variants to share code without call overhead.
- * The naming convention is:
- *   - bpf_<name>       : new kfunc using KF_IMPLICIT_ARGS
- *   - bpf_<name>_impl  : legacy kfunc with void *meta__ign
- *   - __bpf_kfunc_<name>: inline implementation called by both
- */
-static __always_inline void *__bpf_kfunc_obj_new(u64 size, struct btf_struct_meta *meta)
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc void *bpf_obj_new_impl(u64 local_type_id__k, void *meta__ign)
 {
+	struct btf_struct_meta *meta = meta__ign;
+	u64 size = local_type_id__k;
 	void *p;
 
 	p = bpf_mem_alloc(&bpf_global_ma, size);
@@ -2323,93 +2316,22 @@ static __always_inline void *__bpf_kfunc_obj_new(u64 size, struct btf_struct_met
 	return p;
 }
 
-static __always_inline void *__bpf_kfunc_percpu_obj_new(u64 size)
-{
-	return bpf_mem_alloc(&bpf_global_percpu_ma, size);
-}
-
-static __always_inline void __bpf_kfunc_obj_drop(void *p, struct btf_struct_meta *meta)
-{
-	__bpf_obj_drop_impl(p, meta ? meta->record : NULL, false);
-}
-
-static __always_inline void __bpf_kfunc_percpu_obj_drop(void *p)
-{
-	bpf_mem_free_rcu(&bpf_global_percpu_ma, p);
-}
-
-static __always_inline void *__bpf_kfunc_refcount_acquire(void *p,
-							  struct btf_struct_meta *meta)
-{
-	struct bpf_refcount *ref;
-
-	ref = (struct bpf_refcount *)(p + meta->record->refcount_off);
-	if (!refcount_inc_not_zero((refcount_t *)ref))
-		return NULL;
-
-	return p;
-}
-
-static int __bpf_list_add(struct bpf_list_node_kern *node,
-			  struct bpf_list_head *head,
-			  bool tail, struct btf_record *rec, u64 off);
-
-static __always_inline int __bpf_kfunc_list_push_front(struct bpf_list_head *head,
-						       struct bpf_list_node *node,
-						       struct btf_struct_meta *meta,
-						       u64 off)
-{
-	struct bpf_list_node_kern *n = (void *)node;
-
-	return __bpf_list_add(n, head, false, meta ? meta->record : NULL, off);
-}
-
-static __always_inline int __bpf_kfunc_list_push_back(struct bpf_list_head *head,
-						      struct bpf_list_node *node,
-						      struct btf_struct_meta *meta,
-						      u64 off)
-{
-	struct bpf_list_node_kern *n = (void *)node;
-
-	return __bpf_list_add(n, head, true, meta ? meta->record : NULL, off);
-}
-
-static int __bpf_rbtree_add(struct bpf_rb_root *root,
-			    struct bpf_rb_node_kern *node,
-			    void *less, struct btf_record *rec, u64 off);
-
-static __always_inline int __bpf_kfunc_rbtree_add(struct bpf_rb_root *root,
-						  struct bpf_rb_node *node,
-						  void *less,
-						  struct btf_struct_meta *meta,
-						  u64 off)
-{
-	struct bpf_rb_node_kern *n = (void *)node;
-
-	return __bpf_rbtree_add(root, n, less, meta ? meta->record : NULL, off);
-}
-
-__bpf_kfunc_start_defs();
-
-__bpf_kfunc void *bpf_obj_new_impl(u64 local_type_id__k, void *meta__ign)
-{
-	return __bpf_kfunc_obj_new(local_type_id__k, meta__ign);
-}
-
 __bpf_kfunc void *bpf_obj_new(u64 local_type_id__k, struct btf_struct_meta *meta)
 {
-	return __bpf_kfunc_obj_new(local_type_id__k, meta);
+	return bpf_obj_new_impl(local_type_id__k, meta);
 }
 
 __bpf_kfunc void *bpf_percpu_obj_new_impl(u64 local_type_id__k, void *meta__ign)
 {
+	u64 size = local_type_id__k;
+
 	/* The verifier has ensured that meta__ign must be NULL */
-	return __bpf_kfunc_percpu_obj_new(local_type_id__k);
+	return bpf_mem_alloc(&bpf_global_percpu_ma, size);
 }
 
 __bpf_kfunc void *bpf_percpu_obj_new(u64 local_type_id__k, struct btf_struct_meta *meta)
 {
-	return __bpf_kfunc_percpu_obj_new(local_type_id__k);
+	return bpf_percpu_obj_new_impl(local_type_id__k, meta);
 }
 
 /* Must be called under migrate_disable(), as required by bpf_mem_free */
@@ -2437,33 +2359,49 @@ void __bpf_obj_drop_impl(void *p, const struct btf_record *rec, bool percpu)
 
 __bpf_kfunc void bpf_obj_drop_impl(void *p__alloc, void *meta__ign)
 {
-	__bpf_kfunc_obj_drop(p__alloc, meta__ign);
+	struct btf_struct_meta *meta = meta__ign;
+	void *p = p__alloc;
+
+	__bpf_obj_drop_impl(p, meta ? meta->record : NULL, false);
 }
 
 __bpf_kfunc void bpf_obj_drop(void *p__alloc, struct btf_struct_meta *meta)
 {
-	__bpf_kfunc_obj_drop(p__alloc, meta);
+	return bpf_obj_drop_impl(p__alloc, meta);
 }
 
 __bpf_kfunc void bpf_percpu_obj_drop_impl(void *p__alloc, void *meta__ign)
 {
 	/* The verifier has ensured that meta__ign must be NULL */
-	__bpf_kfunc_percpu_obj_drop(p__alloc);
+	bpf_mem_free_rcu(&bpf_global_percpu_ma, p__alloc);
 }
 
 __bpf_kfunc void bpf_percpu_obj_drop(void *p__alloc, struct btf_struct_meta *meta)
 {
-	__bpf_kfunc_percpu_obj_drop(p__alloc);
+	return bpf_percpu_obj_drop_impl(p__alloc, meta);
 }
 
 __bpf_kfunc void *bpf_refcount_acquire_impl(void *p__refcounted_kptr, void *meta__ign)
 {
-	return __bpf_kfunc_refcount_acquire(p__refcounted_kptr, meta__ign);
+	struct btf_struct_meta *meta = meta__ign;
+	struct bpf_refcount *ref;
+
+	/* Could just cast directly to refcount_t *, but need some code using
+	 * bpf_refcount type so that it is emitted in vmlinux BTF
+	 */
+	ref = (struct bpf_refcount *)(p__refcounted_kptr + meta->record->refcount_off);
+	if (!refcount_inc_not_zero((refcount_t *)ref))
+		return NULL;
+
+	/* Verifier strips KF_RET_NULL if input is owned ref, see is_kfunc_ret_null
+	 * in verifier.c
+	 */
+	return (void *)p__refcounted_kptr;
 }
 
 __bpf_kfunc void *bpf_refcount_acquire(void *p__refcounted_kptr, struct btf_struct_meta *meta)
 {
-	return __bpf_kfunc_refcount_acquire(p__refcounted_kptr, meta);
+	return bpf_refcount_acquire_impl(p__refcounted_kptr, meta);
 }
 
 static int __bpf_list_add(struct bpf_list_node_kern *node,
@@ -2497,30 +2435,20 @@ __bpf_kfunc int bpf_list_push_front_impl(struct bpf_list_head *head,
 					 struct bpf_list_node *node,
 					 void *meta__ign, u64 off)
 {
-	return __bpf_kfunc_list_push_front(head, node, meta__ign, off);
-}
+	struct bpf_list_node_kern *n = (void *)node;
+	struct btf_struct_meta *meta = meta__ign;
 
-__bpf_kfunc int bpf_list_push_front(struct bpf_list_head *head,
-				    struct bpf_list_node *node,
-				    struct btf_struct_meta *meta,
-				    u64 off)
-{
-	return __bpf_kfunc_list_push_front(head, node, meta, off);
+	return __bpf_list_add(n, head, false, meta ? meta->record : NULL, off);
 }
 
 __bpf_kfunc int bpf_list_push_back_impl(struct bpf_list_head *head,
 					struct bpf_list_node *node,
 					void *meta__ign, u64 off)
 {
-	return __bpf_kfunc_list_push_back(head, node, meta__ign, off);
-}
+	struct bpf_list_node_kern *n = (void *)node;
+	struct btf_struct_meta *meta = meta__ign;
 
-__bpf_kfunc int bpf_list_push_back(struct bpf_list_head *head,
-				   struct bpf_list_node *node,
-				   struct btf_struct_meta *meta,
-				   u64 off)
-{
-	return __bpf_kfunc_list_push_back(head, node, meta, off);
+	return __bpf_list_add(n, head, true, meta ? meta->record : NULL, off);
 }
 
 static struct bpf_list_node *__bpf_list_del(struct bpf_list_head *head, bool tail)
@@ -2636,16 +2564,10 @@ __bpf_kfunc int bpf_rbtree_add_impl(struct bpf_rb_root *root, struct bpf_rb_node
 				    bool (less)(struct bpf_rb_node *a, const struct bpf_rb_node *b),
 				    void *meta__ign, u64 off)
 {
-	return __bpf_kfunc_rbtree_add(root, node, (void *)less, meta__ign, off);
-}
+	struct btf_struct_meta *meta = meta__ign;
+	struct bpf_rb_node_kern *n = (void *)node;
 
-__bpf_kfunc int bpf_rbtree_add(struct bpf_rb_root *root,
-			       struct bpf_rb_node *node,
-			       bool (less)(struct bpf_rb_node *a, const struct bpf_rb_node *b),
-			       struct btf_struct_meta *meta,
-			       u64 off)
-{
-	return __bpf_kfunc_rbtree_add(root, node, (void *)less, meta, off);
+	return __bpf_rbtree_add(root, n, (void *)less, meta ? meta->record : NULL, off);
 }
 
 __bpf_kfunc struct bpf_rb_node *bpf_rbtree_first(struct bpf_rb_root *root)
