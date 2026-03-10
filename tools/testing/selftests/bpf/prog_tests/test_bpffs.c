@@ -17,11 +17,11 @@ static int read_iter(char *file)
 	char buf[1024];
 	int fd, len;
 
-	fd = open(file, 0);
+	fd = open(file, O_RDONLY);
 	if (fd < 0)
 		return -1;
-	while ((len = read(fd, buf, sizeof(buf))) > 0) {
-		buf[sizeof(buf) - 1] = '\0';
+	while ((len = read(fd, buf, sizeof(buf) - 1)) > 0) {
+		buf[len] = '\0';
 		if (strstr(buf, "iter")) {
 			close(fd);
 			return 0;
