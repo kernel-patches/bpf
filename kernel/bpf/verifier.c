@@ -15986,7 +15986,7 @@ static bool is_safe_to_compute_dst_reg_range(struct bpf_insn *insn,
 }
 
 static int maybe_fork_scalars(struct bpf_verifier_env *env, struct bpf_insn *insn,
-			      struct bpf_reg_state *dst_reg)
+			      struct bpf_reg_state *dst_reg, u8 opcode)
 {
 	struct bpf_verifier_state *branch;
 	struct bpf_reg_state *regs;
@@ -16004,11 +16004,16 @@ static int maybe_fork_scalars(struct bpf_verifier_env *env, struct bpf_insn *ins
 		return PTR_ERR(branch);
 
 	regs = branch->frame[branch->curframe]->regs;
+	/* For AND: 0 & K == 0, so pushed dst = 0 is correct.
+	 * For OR:  0 | K == K, so pushed dst must be set to K.
+	 */
 	if (alu32) {
-		__mark_reg32_known(&regs[insn->dst_reg], 0);
+		__mark_reg32_known(&regs[insn->dst_reg],
+				   opcode == BPF_OR ? (u32)insn->imm : 0);
 		__mark_reg32_known(dst_reg, -1ull);
 	} else {
-		__mark_reg_known(&regs[insn->dst_reg], 0);
+		__mark_reg_known(&regs[insn->dst_reg],
+				 opcode == BPF_OR ? insn->imm : 0);
 		__mark_reg_known(dst_reg, -1ull);
 	}
 	return 0;
@@ -16110,7 +16115,7 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		break;
 	case BPF_AND:
 		if (tnum_is_const(src_reg.var_off)) {
-			ret = maybe_fork_scalars(env, insn, dst_reg);
+			ret = maybe_fork_scalars(env, insn, dst_reg, BPF_AND);
 			if (ret)
 				return ret;
 		}
@@ -16120,7 +16125,7 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		break;
 	case BPF_OR:
 		if (tnum_is_const(src_reg.var_off)) {
-			ret = maybe_fork_scalars(env, insn, dst_reg);
+			ret = maybe_fork_scalars(env, insn, dst_reg, BPF_OR);
 			if (ret)
 				return ret;
 		}
