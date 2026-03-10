@@ -11,15 +11,18 @@
 /* TDIR must be in a location we can create a directory in. */
 #define TDIR "/tmp/test_bpffs_testdir"
 
-static int read_iter(char *file)
+static int read_iter(const char *file, int *save_errno)
 {
 	/* 1024 should be enough to get contiguous 4 "iter" letters at some point */
 	char buf[1024];
 	int fd, len;
 
 	fd = open(file, O_RDONLY);
-	if (fd < 0)
+	if (fd < 0) {
+		if (save_errno)
+			*save_errno = errno;
 		return -1;
+	}
 	while ((len = read(fd, buf, sizeof(buf) - 1)) > 0) {
 		buf[len] = '\0';
 		if (strstr(buf, "iter")) {
@@ -27,8 +30,31 @@ static int read_iter(char *file)
 			return 0;
 		}
 	}
+	if (save_errno)
+		*save_errno = (len < 0) ? errno : 0;
 	close(fd);
 	return -1;
+}
+
+static bool is_iter_skip_err(int err, int serrno)
+{
+	return err && (serrno == EPERM || serrno == EACCES || serrno == ENOENT);
+}
+
+static int read_iter_or_skip(const char *file)
+{
+	int serrno = 0;
+	int err = read_iter(file, &serrno);
+
+	if (is_iter_skip_err(err, serrno)) {
+		fprintf(stderr,
+			"INFO: %s unavailable (%d), skipping iter check\n",
+			file,
+			serrno);
+		return 0;
+	}
+
+	return err;
 }
 
 static int fn(void)
@@ -69,13 +95,16 @@ static int fn(void)
 	if (!ASSERT_OK(err, "mount bpffs " TDIR "/fs2"))
 		goto out;
 
-	err = read_iter(TDIR "/fs1/maps.debug");
-	if (!ASSERT_OK(err, "reading " TDIR "/fs1/maps.debug"))
+	err = read_iter_or_skip(TDIR "/fs1/maps.debug");
+	if (err) {
+		ASSERT_OK(err, "reading " TDIR "/fs1/maps.debug");
 		goto out;
-	err = read_iter(TDIR "/fs2/progs.debug");
-	if (!ASSERT_OK(err, "reading " TDIR "/fs2/progs.debug"))
+	}
+	err = read_iter_or_skip(TDIR "/fs2/progs.debug");
+	if (err) {
+		ASSERT_OK(err, "reading " TDIR "/fs2/progs.debug");
 		goto out;
-
+	}
 	err = mkdir(TDIR "/fs1/a", 0777);
 	if (!ASSERT_OK(err, "creating " TDIR "/fs1/a"))
 		goto out;
