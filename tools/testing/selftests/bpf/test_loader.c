@@ -1124,6 +1124,11 @@ static int get_stream(int stream_id, int prog_fd, char *text, size_t text_sz)
 	return ret;
 }
 
+static bool test_jited_code(struct test_subspec *subspec)
+{
+	return subspec->jited.cnt != 0;
+}
+
 /* this function is forced noinline and has short generic name to look better
  * in test_progs output (in case of a failure)
  */
@@ -1157,6 +1162,12 @@ void run_subtest(struct test_loader *tester,
 	}
 
 	if ((current_runtime & spec->load_mask) == 0) {
+		test__skip();
+		return;
+	}
+
+	if (is_jit_enabled() && test_jited_code(subspec) &&
+	    get_kasan_jit_enabled()) {
 		test__skip();
 		return;
 	}
