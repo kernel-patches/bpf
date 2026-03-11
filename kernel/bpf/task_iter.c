@@ -9,6 +9,7 @@
 #include <linux/bpf_mem_alloc.h>
 #include <linux/btf_ids.h>
 #include <linux/mm_types.h>
+#include <linux/sched/mm.h>
 #include "mmap_unlock_work.h"
 
 static const char * const iter_task_type_names[] = {
@@ -799,6 +800,7 @@ struct bpf_iter_task_vma_kern_data {
 	struct mm_struct *mm;
 	struct mmap_unlock_irq_work *work;
 	struct vma_iterator vmi;
+	struct irq_work irq_work;
 };
 
 struct bpf_iter_task_vma {
@@ -812,6 +814,16 @@ struct bpf_iter_task_vma {
 struct bpf_iter_task_vma_kern {
 	struct bpf_iter_task_vma_kern_data *data;
 } __attribute__((aligned(8)));
+
+static void do_bpf_iter_mmput(struct irq_work *entry)
+{
+	struct bpf_iter_task_vma_kern_data *data;
+
+	data = container_of(entry, struct bpf_iter_task_vma_kern_data,
+			    irq_work);
+	mmput_async(data->mm);
+	bpf_mem_free(&bpf_global_ma, data);
+}
 
 __bpf_kfunc_start_defs();
 
@@ -842,17 +854,38 @@ __bpf_kfunc int bpf_iter_task_vma_new(struct bpf_iter_task_vma *it,
 
 	/* kit->data->work == NULL is valid after bpf_mmap_unlock_get_irq_work */
 	irq_work_busy = bpf_mmap_unlock_get_irq_work(&kit->data->work);
-	if (irq_work_busy || !mmap_read_trylock(kit->data->mm)) {
+	if (irq_work_busy) {
 		err = -EBUSY;
 		goto err_cleanup_iter;
+	}
+
+	if (!mmget_not_zero(kit->data->mm)) {
+		err = -ENOENT;
+		goto err_cleanup_iter;
+	}
+
+	init_irq_work(&kit->data->irq_work, do_bpf_iter_mmput);
+
+	if (!mmap_read_trylock(kit->data->mm)) {
+		err = -EBUSY;
+		goto err_cleanup_mmget;
 	}
 
 	vma_iter_init(&kit->data->vmi, kit->data->mm, addr);
 	return 0;
 
+err_cleanup_mmget:
+	put_task_struct(kit->data->task);
+	if (!irqs_disabled()) {
+		mmput_async(kit->data->mm);
+		bpf_mem_free(&bpf_global_ma, kit->data);
+	} else {
+		irq_work_queue(&kit->data->irq_work);
+	}
+	kit->data = NULL;
+	return err;
 err_cleanup_iter:
-	if (kit->data->task)
-		put_task_struct(kit->data->task);
+	put_task_struct(kit->data->task);
 	bpf_mem_free(&bpf_global_ma, kit->data);
 	/* NULL kit->data signals failed bpf_iter_task_vma initialization */
 	kit->data = NULL;
@@ -875,7 +908,21 @@ __bpf_kfunc void bpf_iter_task_vma_destroy(struct bpf_iter_task_vma *it)
 	if (kit->data) {
 		bpf_mmap_unlock_mm(kit->data->work, kit->data->mm);
 		put_task_struct(kit->data->task);
-		bpf_mem_free(&bpf_global_ma, kit->data);
+		/*
+		 * mmput_async() -> schedule_work() -> __queue_work()
+		 * takes pool->lock. BPF programs on traceable functions
+		 * or tracepoints called under pool->lock, or programs
+		 * running in NMI, can reach here and try to re-acquire
+		 * pool->lock, causing a deadlock. queue_work() disables
+		 * IRQs before taking pool->lock, so irqs_disabled()
+		 * detects both cases.
+		 */
+		if (!irqs_disabled()) {
+			mmput_async(kit->data->mm);
+			bpf_mem_free(&bpf_global_ma, kit->data);
+		} else {
+			irq_work_queue(&kit->data->irq_work);
+		}
 	}
 }
 
