@@ -3,15 +3,13 @@
 TEST_GEN_PROGS := nolibc-test libc-test
 
 include ../lib.mk
-include $(top_srcdir)/scripts/Makefile.compiler
-
-cc-option = $(call __cc-option, $(CC),,$(1),$(2))
+include $(top_srcdir)/tools/scripts/Makefile.include
 
 include Makefile.include
 
 $(OUTPUT)/nolibc-test: CFLAGS = -nostdlib -nostdinc -static \
 	 -isystem $(top_srcdir)/tools/include/nolibc -isystem $(top_srcdir)/usr/include \
-	 $(CFLAGS_NOLIBC_TEST)
+	 $(CFLAGS_NOLIBC_TEST) $(EXTRA_CFLAGS)
 $(OUTPUT)/nolibc-test: LDLIBS = $(if $(LLVM),,-lgcc)
 $(OUTPUT)/nolibc-test: nolibc-test.c nolibc-test-linkage.c | headers
 
