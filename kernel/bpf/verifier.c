@@ -6737,9 +6737,11 @@ static int check_max_stack_depth_subprog(struct bpf_verifier_env *env, int idx,
 	struct bpf_insn *insn = env->prog->insnsi;
 	int depth = 0, frame = 0, i, subprog_end, subprog_depth;
 	bool tail_call_reachable = false;
-	int ret_insn[MAX_CALL_FRAMES];
-	int ret_prog[MAX_CALL_FRAMES];
-	int j;
+	int total;
+	int tmp;
+
+	/* no caller idx */
+	env->dinfo[idx].caller = -1;
 
 	i = subprog[idx].start;
 	if (!priv_stack_supported)
@@ -6791,8 +6793,12 @@ process_func:
 	} else {
 		depth += subprog_depth;
 		if (depth > MAX_BPF_STACK) {
+			total = 0;
+			for (tmp = idx; tmp >= 0; tmp = env->dinfo[tmp].caller)
+				total++;
+
 			verbose(env, "combined stack size of %d calls is %d. Too large\n",
-				frame + 1, depth);
+				total, depth);
 			return -EACCES;
 		}
 	}
@@ -6806,10 +6812,8 @@ continue_func:
 
 			if (!is_bpf_throw_kfunc(insn + i))
 				continue;
-			if (subprog[idx].is_cb)
-				err = true;
-			for (int c = 0; c < frame && !err; c++) {
-				if (subprog[ret_prog[c]].is_cb) {
+			for (tmp = idx; tmp >= 0 && !err; tmp = env->dinfo[tmp].caller) {
+				if (subprog[tmp].is_cb) {
 					err = true;
 					break;
 				}
@@ -6825,8 +6829,6 @@ continue_func:
 		if (!bpf_pseudo_call(insn + i) && !bpf_pseudo_func(insn + i))
 			continue;
 		/* remember insn and function to return to */
-		ret_insn[frame] = i + 1;
-		ret_prog[frame] = idx;
 
 		/* find the callee */
 		next_insn = i + insn[i].imm + 1;
@@ -6846,7 +6848,16 @@ continue_func:
 				return -EINVAL;
 			}
 		}
+
+		/* store caller info for after we return from callee */
+		env->dinfo[idx].frame = frame;
+		env->dinfo[idx].ret_insn = i + 1;
+
+		/* push caller idx into callee's dinfo */
+		env->dinfo[sidx].caller = idx;
+
 		i = next_insn;
+
 		idx = sidx;
 		if (!priv_stack_supported)
 			subprog[idx].priv_stack_mode = NO_PRIV_STACK;
@@ -6854,7 +6865,7 @@ continue_func:
 		if (subprog[idx].has_tail_call)
 			tail_call_reachable = true;
 
-		frame++;
+		frame = subprog_is_global(env, idx) ? 0 : frame + 1;
 		if (frame >= MAX_CALL_FRAMES) {
 			verbose(env, "the call stack of %d frames is too deep !\n",
 				frame);
@@ -6868,12 +6879,12 @@ continue_func:
 	 * tail call counter throughout bpf2bpf calls combined with tailcalls
 	 */
 	if (tail_call_reachable)
-		for (j = 0; j < frame; j++) {
-			if (subprog[ret_prog[j]].is_exception_cb) {
+		for (tmp = idx; tmp >= 0; tmp = env->dinfo[tmp].caller) {
+			if (subprog[tmp].is_exception_cb) {
 				verbose(env, "cannot tail call within exception cb\n");
 				return -EINVAL;
 			}
-			subprog[ret_prog[j]].tail_call_reachable = true;
+			subprog[tmp].tail_call_reachable = true;
 		}
 	if (subprog[0].tail_call_reachable)
 		env->prog->aux->tail_call_reachable = true;
@@ -6881,13 +6892,18 @@ continue_func:
 	/* end of for() loop means the last insn of the 'subprog'
 	 * was reached. Doesn't matter whether it was JA or EXIT
 	 */
-	if (frame == 0)
+	if (frame == 0 && env->dinfo[idx].caller < 0)
 		return 0;
 	if (subprog[idx].priv_stack_mode != PRIV_STACK_ADAPTIVE)
 		depth -= round_up_stack_depth(env, subprog[idx].stack_depth);
-	frame--;
-	i = ret_insn[frame];
-	idx = ret_prog[frame];
+
+	/* pop caller idx from callee */
+	idx = env->dinfo[idx].caller;
+
+	/* retrieve caller state from its frame */
+	frame = env->dinfo[idx].frame;
+	i = env->dinfo[idx].ret_insn;
+
 	goto continue_func;
 }
 
@@ -6897,6 +6913,10 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 	struct bpf_subprog_info *si = env->subprog_info;
 	bool priv_stack_supported;
 	int ret;
+
+	env->dinfo = kvcalloc(env->subprog_cnt, sizeof(*env->dinfo), GFP_KERNEL_ACCOUNT);
+	if (!env->dinfo)
+		return -ENOMEM;
 
 	for (int i = 0; i < env->subprog_cnt; i++) {
 		if (si[i].has_tail_call) {
@@ -6920,8 +6940,10 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 		if (!i || si[i].is_async_cb) {
 			priv_stack_supported = !i && priv_stack_mode == PRIV_STACK_ADAPTIVE;
 			ret = check_max_stack_depth_subprog(env, i, priv_stack_supported);
-			if (ret < 0)
+			if (ret < 0) {
+				kvfree(env->dinfo);
 				return ret;
+			}
 		}
 	}
 
@@ -6931,6 +6953,8 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 			break;
 		}
 	}
+
+	kvfree(env->dinfo);
 
 	return 0;
 }

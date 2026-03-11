@@ -742,6 +742,12 @@ struct bpf_scc_info {
 
 struct bpf_liveness;
 
+struct bpf_subprog_call_depth_info {
+	int ret_insn; /* caller instruction where we return to. */
+	int caller; /* caller subprogram idx */
+	int frame; /* # of consecutive static call stack frames on top of stack */
+};
+
 /* single container for all structs
  * one verifier_env per bpf_check() call
  */
@@ -851,6 +857,9 @@ struct bpf_verifier_env {
 	u32 scc_cnt;
 	struct bpf_iarray *succ;
 	struct bpf_iarray *gotox_tmp_buf;
+
+	/* temporary state used for call frame depth calculation */
+	struct bpf_subprog_call_depth_info *dinfo;
 };
 
 static inline struct bpf_func_info_aux *subprog_aux(struct bpf_verifier_env *env, int subprog)
