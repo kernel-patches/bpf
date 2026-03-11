@@ -562,8 +562,11 @@ int bpf_local_storage_alloc(void *owner,
 	int err;
 
 	err = mem_charge(smap, owner, sizeof(*storage));
-	if (err)
+	if (err) {
+		pr_warn("bpf_local_storage_alloc: mem_charge failed err=%d owner=%px\n",
+			err, owner);
 		return err;
+	}
 
 	if (smap->use_kmalloc_nolock)
 		storage = bpf_map_kmalloc_nolock(&smap->map, sizeof(*storage),
@@ -572,6 +575,8 @@ int bpf_local_storage_alloc(void *owner,
 		storage = bpf_map_kzalloc(&smap->map, sizeof(*storage),
 					  gfp_flags | __GFP_NOWARN);
 	if (!storage) {
+		pr_warn("bpf_local_storage_alloc: storage kzalloc failed owner=%px gfp=0x%x\n",
+			owner, gfp_flags);
 		err = -ENOMEM;
 		goto uncharge;
 	}
@@ -587,8 +592,11 @@ int bpf_local_storage_alloc(void *owner,
 
 	b = select_bucket(smap, storage);
 	err = raw_res_spin_lock_irqsave(&b->lock, flags);
-	if (err)
+	if (err) {
+		pr_warn("bpf_local_storage_alloc: bucket rqspinlock failed err=%d owner=%px b=%px\n",
+			err, owner, b);
 		goto uncharge;
+	}
 
 	bpf_selem_link_map_nolock(b, first_selem);
 
@@ -608,6 +616,8 @@ int bpf_local_storage_alloc(void *owner,
 	if (unlikely(prev_storage)) {
 		bpf_selem_unlink_map_nolock(first_selem);
 		raw_res_spin_unlock_irqrestore(&b->lock, flags);
+		pr_warn("bpf_local_storage_alloc: cmpxchg race, prev_storage=%px owner=%px\n",
+			prev_storage, owner);
 		err = -EAGAIN;
 		goto uncharge;
 	}
@@ -657,11 +667,16 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 			return ERR_PTR(err);
 
 		selem = bpf_selem_alloc(smap, owner, value, swap_uptrs, gfp_flags);
-		if (!selem)
+		if (!selem) {
+			pr_warn("bpf_local_storage_update: selem_alloc failed (first elem) owner=%px gfp=0x%x\n",
+				owner, gfp_flags);
 			return ERR_PTR(-ENOMEM);
+		}
 
 		err = bpf_local_storage_alloc(owner, smap, selem, gfp_flags);
 		if (err) {
+			pr_warn("bpf_local_storage_update: storage_alloc failed (first elem) err=%d owner=%px\n",
+				err, owner);
 			bpf_selem_free(selem, true);
 			mem_uncharge(smap, owner, smap->elem_size);
 			return ERR_PTR(err);
@@ -691,12 +706,18 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 	 * needed. The chance of an unnecessary alloc is unlikely.
 	 */
 	alloc_selem = selem = bpf_selem_alloc(smap, owner, value, swap_uptrs, gfp_flags);
-	if (!alloc_selem)
+	if (!alloc_selem) {
+		pr_warn("bpf_local_storage_update: selem_alloc failed (existing) owner=%px gfp=0x%x\n",
+			owner, gfp_flags);
 		return ERR_PTR(-ENOMEM);
+	}
 
 	err = raw_res_spin_lock_irqsave(&local_storage->lock, flags);
-	if (err)
+	if (err) {
+		pr_warn("bpf_local_storage_update: storage rqspinlock failed err=%d owner=%px storage=%px\n",
+			err, owner, local_storage);
 		goto free_selem;
+	}
 
 	/* Recheck local_storage->list under local_storage->lock */
 	if (unlikely(hlist_empty(&local_storage->list))) {
@@ -705,6 +726,8 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 		 * unlikely.  Return instead of retry to keep things
 		 * simple.
 		 */
+		pr_warn("bpf_local_storage_update: storage list empty (parallel del) owner=%px\n",
+			owner);
 		err = -EAGAIN;
 		goto unlock;
 	}
@@ -724,8 +747,11 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 	b = select_bucket(smap, local_storage);
 
 	err = raw_res_spin_lock_irqsave(&b->lock, b_flags);
-	if (err)
+	if (err) {
+		pr_warn("bpf_local_storage_update: bucket rqspinlock failed err=%d owner=%px b=%px\n",
+			err, owner, b);
 		goto unlock;
+	}
 
 	alloc_selem = NULL;
 	/* First, link the new selem to the map */

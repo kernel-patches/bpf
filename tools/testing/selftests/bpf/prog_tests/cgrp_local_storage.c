@@ -179,6 +179,7 @@ static void test_cgroup_iter_sleepable(int cgroup_fd, __u64 cgroup_id)
 	struct bpf_link *link;
 	int err, iter_fd;
 	char buf[16];
+	ssize_t nread;
 
 	skel = cgrp_ls_sleepable__open();
 	if (!ASSERT_OK_PTR(skel, "skel_open"))
@@ -204,8 +205,27 @@ static void test_cgroup_iter_sleepable(int cgroup_fd, __u64 cgroup_id)
 	if (!ASSERT_GE(iter_fd, 0, "iter_create"))
 		goto out_link;
 
+	/* DEBUG: check bss state before read */
+	fprintf(stderr, "DEBUG: before read: bss->cgroup_id=%llu, bss->debug_iter_called=%d, "
+		"bss->debug_storage_get_result=%d, expected cgroup_id=%llu, cgroup_fd=%d\n",
+		(unsigned long long)skel->bss->cgroup_id,
+		skel->bss->debug_iter_called,
+		skel->bss->debug_storage_get_result,
+		(unsigned long long)cgroup_id, cgroup_fd);
+
 	/* trigger the program run */
-	(void)read(iter_fd, buf, sizeof(buf));
+	nread = read(iter_fd, buf, sizeof(buf));
+
+	/* DEBUG: dump all state after read */
+	fprintf(stderr, "DEBUG: after read: nread=%zd errno=%d, bss->cgroup_id=%llu, "
+		"bss->debug_iter_called=%d, bss->debug_cgrp_was_null=%d, "
+		"bss->debug_storage_get_result=%d, expected=%llu\n",
+		nread, errno,
+		(unsigned long long)skel->bss->cgroup_id,
+		skel->bss->debug_iter_called,
+		skel->bss->debug_cgrp_was_null,
+		skel->bss->debug_storage_get_result,
+		(unsigned long long)cgroup_id);
 
 	ASSERT_EQ(skel->bss->cgroup_id, cgroup_id, "cgroup_id");
 

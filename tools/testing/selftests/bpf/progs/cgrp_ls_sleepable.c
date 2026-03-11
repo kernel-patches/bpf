@@ -19,6 +19,11 @@ __u64 cgroup_id;
 int target_hid;
 bool is_cgroup1;
 
+/* debug variables for cgroup_iter_sleepable diagnosis */
+int debug_iter_called;
+int debug_cgrp_was_null;
+int debug_storage_get_result; /* 0=not called, 1=success, -1=NULL returned */
+
 struct cgroup *bpf_task_get_cgroup1(struct task_struct *task, int hierarchy_id) __ksym;
 void bpf_cgroup_release(struct cgroup *cgrp) __ksym;
 void bpf_rcu_read_lock(void) __ksym;
@@ -30,13 +35,21 @@ int cgroup_iter(struct bpf_iter__cgroup *ctx)
 	struct cgroup *cgrp = ctx->cgroup;
 	long *ptr;
 
-	if (cgrp == NULL)
+	debug_iter_called++;
+
+	if (cgrp == NULL) {
+		debug_cgrp_was_null = 1;
 		return 0;
+	}
 
 	ptr = bpf_cgrp_storage_get(&map_a, cgrp, 0,
 				   BPF_LOCAL_STORAGE_GET_F_CREATE);
-	if (ptr)
+	if (ptr) {
+		debug_storage_get_result = 1;
 		cgroup_id = cgrp->kn->id;
+	} else {
+		debug_storage_get_result = -1;
+	}
 	return 0;
 }
 

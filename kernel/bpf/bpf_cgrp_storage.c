@@ -140,10 +140,20 @@ BPF_CALL_5(bpf_cgrp_storage_get, struct bpf_map *, map, struct cgroup *, cgroup,
 		goto out;
 
 	/* only allocate new storage, when the cgroup is refcounted */
-	if (!percpu_ref_is_dying(&cgroup->self.refcnt) &&
-	    (flags & BPF_LOCAL_STORAGE_GET_F_CREATE))
+	if (percpu_ref_is_dying(&cgroup->self.refcnt)) {
+		pr_warn("bpf_cgrp_storage_get: percpu_ref is dying! cgrp=%px kn_id=%llu flags=%llx\n",
+			cgroup, cgroup->kn ? cgroup->kn->id : 0, flags);
+		goto out;
+	}
+
+	if (flags & BPF_LOCAL_STORAGE_GET_F_CREATE) {
 		sdata = bpf_local_storage_update(cgroup, (struct bpf_local_storage_map *)map,
 						 value, BPF_NOEXIST, false, gfp_flags);
+		if (IS_ERR_OR_NULL(sdata))
+			pr_warn("bpf_cgrp_storage_get: bpf_local_storage_update failed, sdata=%pe "
+				"cgrp=%px kn_id=%llu gfp=0x%x\n",
+				sdata, cgroup, cgroup->kn ? cgroup->kn->id : 0, gfp_flags);
+	}
 
 out:
 	return IS_ERR_OR_NULL(sdata) ? (unsigned long)NULL : (unsigned long)sdata->data;

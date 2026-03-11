@@ -132,13 +132,20 @@ static int __cgroup_iter_seq_show(struct seq_file *seq,
 	int ret = 0;
 
 	/* cgroup is dead, skip this element */
-	if (css && cgroup_is_dead(css->cgroup))
+	if (css && cgroup_is_dead(css->cgroup)) {
+		pr_warn("cgroup_iter: skipping dead cgroup css=%px cgrp=%px kn_id=%llu in_stop=%d\n",
+			css, css->cgroup, css->cgroup->kn ? css->cgroup->kn->id : 0, in_stop);
 		return 0;
+	}
 
 	ctx.meta = &meta;
 	ctx.cgroup = css ? css->cgroup : NULL;
 	meta.seq = seq;
 	prog = bpf_iter_get_info(&meta, in_stop);
+	if (!prog) {
+		pr_warn("cgroup_iter: bpf_iter_get_info returned NULL, css=%px in_stop=%d\n",
+			css, in_stop);
+	}
 	if (prog)
 		ret = bpf_iter_run_prog(prog, &ctx);
 
