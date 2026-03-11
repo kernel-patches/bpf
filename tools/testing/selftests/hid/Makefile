@@ -26,6 +26,7 @@ HOSTPKG_CONFIG := pkg-config
 
 CFLAGS += -g -O0 -rdynamic -Wall -Werror -I$(OUTPUT)
 CFLAGS += -I$(OUTPUT)/tools/include
+CFLAGS += $(EXTRA_CFLAGS)
 
 LDLIBS += -lelf -lz -lrt -lpthread
 
