@@ -11,6 +11,7 @@ endif
 
 LIBSRC = $(srctree)/lib/bootconfig.c $(srctree)/include/linux/bootconfig.h
 override CFLAGS += -Wall -g -I$(CURDIR)/include
+override CFLAGS += $(EXTRA_CFLAGS)
 
 ALL_TARGETS := bootconfig
 ALL_PROGRAMS := $(patsubst %,$(OUTPUT)%,$(ALL_TARGETS))
