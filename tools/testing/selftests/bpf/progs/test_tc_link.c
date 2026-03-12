@@ -118,8 +118,15 @@ struct net_device {
 SEC("tc/egress")
 int tc8(struct __sk_buff *skb)
 {
-	struct net_device *dev = BPF_CORE_READ((struct sk_buff *)skb, dev);
+	struct net_device *dev;
 
+	/* Filter non-IP traffic (ARP, etc.) so that a stray packet
+	 * after the ICMP we sent doesn't overwrite the globals.
+	 */
+	if (skb->protocol != __bpf_constant_htons(ETH_P_IP))
+		return TCX_PASS;
+
+	dev = BPF_CORE_READ((struct sk_buff *)skb, dev);
 	seen_tc8 = true;
 	mark = skb->mark;
 	prio = skb->priority;
