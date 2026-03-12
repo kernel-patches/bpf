@@ -1883,10 +1883,17 @@ void btf_get(struct btf *btf)
 	refcount_inc(&btf->refcnt);
 }
 
+bool btf_is_module(const struct btf *btf);
+
 void btf_put(struct btf *btf)
 {
 	if (btf && refcount_dec_and_test(&btf->refcnt)) {
-		btf_free_id(btf);
+		/*
+		 * IDR for module BTFs is freed when module's BTF reference is
+		 * dropped, which _will_ happen before the final put.
+		 */
+		if (!btf_is_module(btf))
+			btf_free_id(btf);
 		call_rcu(&btf->rcu, btf_free_rcu);
 	}
 }
@@ -8382,6 +8389,12 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			if (btf_mod->module != module)
 				continue;
 
+			/*
+			 * For modules, we do the freeing of BTF IDR as soon as
+			 * module goes away to disable BTF discovery, since the
+			 * btf_try_get_module() on such BTFs will fail.
+			 */
+			btf_free_id(btf_mod->btf);
 			list_del(&btf_mod->list);
 			if (btf_mod->sysfs_attr)
 				sysfs_remove_bin_file(btf_kobj, btf_mod->sysfs_attr);
