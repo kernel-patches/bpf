@@ -1788,6 +1788,13 @@ static void btf_free_id(struct btf *btf)
 	 */
 	spin_lock_irqsave(&btf_idr_lock, flags);
 	idr_remove(&btf_idr, btf->id);
+	/*
+	 * Clear the id here to make this function idempotent, since it will get
+	 * called a couple of times for module BTFs: on module unload, and then
+	 * the final btf_put(). btf_alloc_id() starts IDs with 1, so we can use
+	 * 0 as sentinel value.
+	 */
+	btf->id = 0;
 	spin_unlock_irqrestore(&btf_idr_lock, flags);
 }
 
@@ -8382,6 +8389,13 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			if (btf_mod->module != module)
 				continue;
 
+			/*
+			 * For modules, we do the freeing of BTF IDR as soon as
+			 * module goes away to disable BTF discovery, since the
+			 * btf_try_get_module() on such BTFs will fail. This may
+			 * be called again on btf_put(), but it's ok to do so.
+			 */
+			btf_free_id(btf_mod->btf);
 			list_del(&btf_mod->list);
 			if (btf_mod->sysfs_attr)
 				sysfs_remove_bin_file(btf_kobj, btf_mod->sysfs_attr);
