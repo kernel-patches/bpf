@@ -152,6 +152,45 @@ unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 	return ret;
 }
 
+/**
+ * trace_call_bpf_faultable - invoke BPF program in faultable context
+ * @call: tracepoint event
+ * @ctx: opaque context pointer
+ *
+ * Variant of trace_call_bpf() for faultable tracepoints (e.g. syscall
+ * tracepoints). Supports sleepable BPF programs by using rcu_tasks_trace
+ * for lifetime protection and per-program rcu_read_lock for non-sleepable
+ * programs, following the uprobe_prog_run() pattern.
+ *
+ * Must be called from a faultable/preemptible context.
+ */
+unsigned int trace_call_bpf_faultable(struct trace_event_call *call, void *ctx)
+{
+	unsigned int ret;
+
+	might_fault();
+
+	guard(rcu_tasks_trace)();
+	guard(migrate)();
+
+	if (unlikely(this_cpu_inc_return(bpf_prog_active) != 1)) {
+		scoped_guard(rcu) {
+			bpf_prog_inc_misses_counters(rcu_dereference(call->prog_array));
+		}
+		this_cpu_dec(bpf_prog_active);
+		return 0;
+	}
+
+	ret = bpf_prog_run_array_uprobe(
+		rcu_dereference_check(call->prog_array,
+				      rcu_read_lock_trace_held()),
+		ctx, bpf_prog_run);
+
+	this_cpu_dec(bpf_prog_active);
+
+	return ret;
+}
+
 #ifdef CONFIG_BPF_KPROBE_OVERRIDE
 BPF_CALL_2(bpf_override_return, struct pt_regs *, regs, unsigned long, rc)
 {
