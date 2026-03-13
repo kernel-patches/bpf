@@ -2802,39 +2802,59 @@ static void reg_bounds_sync(struct bpf_reg_state *reg)
 	__update_reg_bounds(reg);
 }
 
-static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
-				   struct bpf_reg_state *reg, const char *ctx)
+static bool range_bounds_violation(struct bpf_reg_state *reg)
 {
-	const char *msg;
+	return (reg->umin_value > reg->umax_value || reg->smin_value > reg->smax_value ||
+		reg->u32_min_value > reg->u32_max_value ||
+		reg->s32_min_value > reg->s32_max_value);
+}
 
-	if (reg->umin_value > reg->umax_value ||
-	    reg->smin_value > reg->smax_value ||
-	    reg->u32_min_value > reg->u32_max_value ||
-	    reg->s32_min_value > reg->s32_max_value) {
-		    msg = "range bounds violation";
-		    goto out;
-	}
-
+static bool const_tnum_out_of_sync_with_range_bounds(struct bpf_reg_state *reg)
+{
 	if (tnum_is_const(reg->var_off)) {
 		u64 uval = reg->var_off.value;
 		s64 sval = (s64)uval;
 
 		if (reg->umin_value != uval || reg->umax_value != uval ||
 		    reg->smin_value != sval || reg->smax_value != sval) {
-			msg = "const tnum out of sync with range bounds";
-			goto out;
+			return true;
 		}
 	}
+	return false;
+}
 
+static bool const_subreg_tnum_out_of_sync_with_range_bounds(struct bpf_reg_state *reg)
+{
 	if (tnum_subreg_is_const(reg->var_off)) {
 		u32 uval32 = tnum_subreg(reg->var_off).value;
 		s32 sval32 = (s32)uval32;
 
 		if (reg->u32_min_value != uval32 || reg->u32_max_value != uval32 ||
 		    reg->s32_min_value != sval32 || reg->s32_max_value != sval32) {
-			msg = "const subreg tnum out of sync with range bounds";
-			goto out;
+			return true;
 		}
+	}
+	return false;
+}
+
+static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
+				   struct bpf_reg_state *reg, const char *ctx)
+{
+	const char *msg;
+
+	if (range_bounds_violation(reg)) {
+		msg = "range bounds violation";
+		goto out;
+	}
+
+	if (const_tnum_out_of_sync_with_range_bounds(reg)) {
+		msg = "const tnum out of sync with range bounds";
+		goto out;
+	}
+
+	if (const_subreg_tnum_out_of_sync_with_range_bounds(reg)) {
+		msg = "const subreg tnum out of sync with range bounds";
+		goto out;
 	}
 
 	return 0;
