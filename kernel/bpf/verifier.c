@@ -16712,6 +16712,57 @@ static void find_good_pkt_pointers(struct bpf_verifier_state *vstate,
 	}));
 }
 
+static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
+				u8 opcode, bool is_jmp32);
+static u8 rev_opcode(u8 opcode);
+
+/* Learn more information about live branches by simulating both branches being taken using
+ * regs_refine_cond_op. Because regs_refine_cond_op is sound when the branch is taken, if it
+ * produces ill-formed register bounds, it must mean that the branch is dead.
+ */
+static int simulate_both_branches_taken(struct bpf_reg_state *false_reg1,
+					struct bpf_reg_state *false_reg2, u8 opcode, bool is_jmp32)
+{
+	struct bpf_reg_state false_reg1_c, false_reg2_c, true_reg1_c, true_reg2_c;
+
+	/* Create copies of reg states to simulate both branches because regs_refine_cond_op
+	 * will modify the reg states passed in.
+	 */
+	memcpy(&false_reg1_c, false_reg1, sizeof(struct bpf_reg_state));
+	memcpy(&false_reg2_c, false_reg2, sizeof(struct bpf_reg_state));
+	memcpy(&true_reg1_c, false_reg1, sizeof(struct bpf_reg_state));
+	memcpy(&true_reg2_c, false_reg2, sizeof(struct bpf_reg_state));
+
+	/* Fallthrough (FALSE) branch */
+	regs_refine_cond_op(&false_reg1_c, &false_reg2_c, rev_opcode(opcode), is_jmp32);
+	/* If there is a range bounds violation in *any* of the abstract values in either
+	 * reg_states in the FALSE branch (i.e. false_reg1, false_reg2), the FALSE branch must be
+	 * dead. Only TRUE branch will be taken.
+	 */
+	if (range_bounds_violation(&false_reg1_c) || range_bounds_violation(&false_reg2_c))
+		return 1;
+	reg_bounds_sync(&false_reg1_c);
+	reg_bounds_sync(&false_reg2_c);
+	if (range_bounds_violation(&false_reg1_c) || range_bounds_violation(&false_reg2_c))
+		return 1;
+
+	/* Jump (TRUE) branch */
+	regs_refine_cond_op(&true_reg1_c, &true_reg2_c, opcode, is_jmp32);
+	/* If there is a range bounds violation in *any* of the abstract values in either
+	 * reg_states in the TRUE branch (i.e. true_reg1, true_reg2), the TRUE branch must be dead.
+	 * Only TRUE branch will be taken.
+	 */
+	if (range_bounds_violation(&true_reg1_c) || range_bounds_violation(&true_reg2_c))
+		return 0;
+	reg_bounds_sync(&true_reg1_c);
+	reg_bounds_sync(&true_reg2_c);
+	if (range_bounds_violation(&true_reg1_c) || range_bounds_violation(&true_reg2_c))
+		return 0;
+
+	/* Both branches are possible, we can't determine which one will be taken. */
+	return -1;
+}
+
 /*
  * <reg1> <op> <reg2>, currently assuming reg2 is a constant
  */
@@ -16868,7 +16919,7 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 		break;
 	}
 
-	return -1;
+	return simulate_both_branches_taken(reg1, reg2, opcode, is_jmp32);
 }
 
 static int flip_opcode(u32 opcode)
