@@ -18,6 +18,7 @@
 #include <asm/rqspinlock.h>
 
 #define BPF_LOCAL_STORAGE_CACHE_SIZE	16
+#define KMALLOC_NOLOCK_SUPPORTED IS_ENABLED(CONFIG_HAVE_CMPXCHG_DOUBLE)
 
 struct bpf_local_storage_map_bucket {
 	struct hlist_head list;
