@@ -894,7 +894,8 @@ bpf_local_storage_map_alloc(union bpf_attr *attr,
 	 * preemptible context. Thus, enforce all storages to use
 	 * kmalloc_nolock() when CONFIG_PREEMPT_RT is enabled.
 	 */
-	smap->use_kmalloc_nolock = IS_ENABLED(CONFIG_PREEMPT_RT) ? true : use_kmalloc_nolock;
+	smap->use_kmalloc_nolock = IS_ENABLED(CONFIG_PREEMPT_RT) &&
+		KMALLOC_NOLOCK_SUPPORTED ? true : use_kmalloc_nolock;
 
 	smap->cache_idx = bpf_local_storage_cache_idx_get(cache);
 	return &smap->map;
