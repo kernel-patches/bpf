@@ -13741,6 +13741,14 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				return ret;
 			break;
 		case KF_ARG_PTR_TO_LIST_NODE:
+			if (meta->func_id == special_kfunc_list[KF_bpf_list_add_impl]
+			    && i == 2 && type_is_non_owning_ref(reg->type)
+			    && !reg->ref_obj_id) {
+				/* Allow bpf_list_front/back return value as
+				 * list_add_impl's third arg (R3).
+				 */
+				goto check_ok;
+			}
 			if (reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
 				verbose(env, "arg#%d expected pointer to allocated object\n", i);
 				return -EINVAL;
@@ -13749,6 +13757,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				verbose(env, "allocated object must be referenced\n");
 				return -EINVAL;
 			}
+check_ok:
 			ret = process_kf_arg_ptr_to_list_node(env, reg, regno, meta);
 			if (ret < 0)
 				return ret;
