@@ -6404,6 +6404,14 @@ static int check_ctx_access(struct bpf_verifier_env *env, int insn_idx, int off,
 		/* remember the offset of last byte accessed in ctx */
 		if (env->prog->aux->max_ctx_offset < off + size)
 			env->prog->aux->max_ctx_offset = off + size;
+		if (env->prog->type == BPF_PROG_TYPE_EXT) {
+			struct bpf_prog *dst_prog = env->prog->aux->dst_prog;
+
+			if (env->prog->aux->kprobe_write_ctx != dst_prog->aux->kprobe_write_ctx) {
+				verbose(env, "Extension program cannot have different kprobe_write_ctx value with target prog\n");
+				return -EINVAL;
+			}
+		}
 		return 0;
 	}
 
