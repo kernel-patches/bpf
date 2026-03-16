@@ -8,6 +8,9 @@
 #include "bpf_experimental.h"
 
 extern void bpf_rcu_read_lock(void) __ksym;
+extern void bpf_rcu_read_unlock(void) __ksym;
+extern void bpf_preempt_disable(void) __ksym;
+extern void bpf_preempt_enable(void) __ksym;
 
 #define private(name) SEC(".bss." #name) __hidden __attribute__((aligned(8)))
 
@@ -343,6 +346,49 @@ int reject_exception_throw_cb_diff(struct __sk_buff *ctx)
 		bpf_loop(5, loop_cb1, NULL, 0);
 	else
 		bpf_loop(5, loop_cb2, NULL, 0);
+	return 0;
+}
+
+/* --- Tests for bpf_throw lock leak from subprogs --- */
+
+__noinline static int always_throws(void)
+{
+	bpf_throw(0);
+	return 0;
+}
+
+SEC("?tc")
+__failure __msg("bpf_throw cannot be used inside bpf_rcu_read_lock-ed region")
+int reject_subprog_throw_rcu_lock(void *ctx)
+{
+	bpf_rcu_read_lock();
+	always_throws();
+	bpf_rcu_read_unlock();
+	return 0;
+}
+
+__noinline static int rcu_lock_then_throw(void)
+{
+	bpf_rcu_read_lock();
+	bpf_throw(0);
+	return 0;
+}
+
+SEC("?tc")
+__failure __msg("bpf_throw cannot be used inside bpf_rcu_read_lock-ed region")
+int reject_subprog_rcu_lock_throw(void *ctx)
+{
+	rcu_lock_then_throw();
+	return 0;
+}
+
+SEC("?tc")
+__failure __msg("bpf_throw cannot be used inside bpf_preempt_disable-ed region")
+int reject_subprog_throw_preempt_lock(void *ctx)
+{
+	bpf_preempt_disable();
+	always_throws();
+	bpf_preempt_enable();
 	return 0;
 }
 
