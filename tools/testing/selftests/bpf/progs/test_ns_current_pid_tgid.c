@@ -14,6 +14,8 @@ struct {
 
 __u64 user_pid = 0;
 __u64 user_tgid = 0;
+__u64 expected_pid = 0;
+__u64 expected_tgid = 0;
 __u64 dev = 0;
 __u64 ino = 0;
 
@@ -22,6 +24,11 @@ static void get_pid_tgid(void)
 	struct bpf_pidns_info nsdata;
 
 	if (bpf_get_ns_current_pid_tgid(dev, ino, &nsdata, sizeof(struct bpf_pidns_info)))
+		return;
+
+	if (expected_pid && nsdata.pid != expected_pid)
+		return;
+	if (expected_tgid && nsdata.tgid != expected_tgid)
 		return;
 
 	user_pid = nsdata.pid;

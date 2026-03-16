@@ -34,6 +34,8 @@ static int get_pid_tgid(pid_t *pid, pid_t *tgid,
 	bss->ino = st.st_ino;
 	bss->user_pid = 0;
 	bss->user_tgid = 0;
+	bss->expected_pid = *pid;
+	bss->expected_tgid = *tgid;
 	return 0;
 }
 
@@ -200,8 +202,7 @@ static void test_ns_current_pid_tgid_new_ns(int (*fn)(void *), void *arg)
 		return;
 }
 
-/* TODO: use a different tracepoint */
-void serial_test_current_pid_tgid(void)
+void test_current_pid_tgid(void)
 {
 	if (test__start_subtest("root_ns_tp"))
 		test_current_pid_tgid_tp(NULL);
