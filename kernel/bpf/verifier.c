@@ -2521,69 +2521,19 @@ static void deduce_bounds_64_from_64(struct bpf_reg_state *reg)
 
 static void deduce_bounds_64_from_32(struct bpf_reg_state *reg)
 {
-	/* Try to tighten 64-bit bounds from 32-bit knowledge, using 32-bit
-	 * values on both sides of 64-bit range in hope to have tighter range.
-	 * E.g., if r1 is [0x1'00000000, 0x3'80000000], and we learn from
-	 * 32-bit signed > 0 operation that s32 bounds are now [1; 0x7fffffff].
-	 * With this, we can substitute 1 as low 32-bits of _low_ 64-bit bound
-	 * (0x100000000 -> 0x100000001) and 0x7fffffff as low 32-bits of
-	 * _high_ 64-bit bound (0x380000000 -> 0x37fffffff) and arrive at a
-	 * better overall bounds for r1 as [0x1'000000001; 0x3'7fffffff].
-	 * We just need to make sure that derived bounds we are intersecting
-	 * with are well-formed ranges in respective s64 or u64 domain, just
-	 * like we do with similar kinds of 32-to-64 or 64-to-32 adjustments.
-	 */
-	__u64 new_umin, new_umax;
-	__s64 new_smin, new_smax;
+	struct cnum32 s = cnum32_from_sreg(reg);
+	struct cnum32 u = cnum32_from_ureg(reg);
+	struct cnum64 t;
 
-	/* u32 -> u64 tightening, it's always well-formed */
-	new_umin = (reg->umin_value & ~0xffffffffULL) | reg->u32_min_value;
-	new_umax = (reg->umax_value & ~0xffffffffULL) | reg->u32_max_value;
-	reg->umin_value = max_t(u64, reg->umin_value, new_umin);
-	reg->umax_value = min_t(u64, reg->umax_value, new_umax);
-	/* u32 -> s64 tightening, u32 range embedded into s64 preserves range validity */
-	new_smin = (reg->smin_value & ~0xffffffffULL) | reg->u32_min_value;
-	new_smax = (reg->smax_value & ~0xffffffffULL) | reg->u32_max_value;
-	reg->smin_value = max_t(s64, reg->smin_value, new_smin);
-	reg->smax_value = min_t(s64, reg->smax_value, new_smax);
+	t = cnum64_from_ureg(reg);
+	if (cnum64_cnum32_intersect(t, s, &t) &&
+	    cnum64_cnum32_intersect(t, u, &t))
+		cnum_update_reg64_bounds(reg, t);
 
-	/* Here we would like to handle a special case after sign extending load,
-	 * when upper bits for a 64-bit range are all 1s or all 0s.
-	 *
-	 * Upper bits are all 1s when register is in a range:
-	 *   [0xffff_ffff_0000_0000, 0xffff_ffff_ffff_ffff]
-	 * Upper bits are all 0s when register is in a range:
-	 *   [0x0000_0000_0000_0000, 0x0000_0000_ffff_ffff]
-	 * Together this forms are continuous range:
-	 *   [0xffff_ffff_0000_0000, 0x0000_0000_ffff_ffff]
-	 *
-	 * Now, suppose that register range is in fact tighter:
-	 *   [0xffff_ffff_8000_0000, 0x0000_0000_ffff_ffff] (R)
-	 * Also suppose that it's 32-bit range is positive,
-	 * meaning that lower 32-bits of the full 64-bit register
-	 * are in the range:
-	 *   [0x0000_0000, 0x7fff_ffff] (W)
-	 *
-	 * If this happens, then any value in a range:
-	 *   [0xffff_ffff_0000_0000, 0xffff_ffff_7fff_ffff]
-	 * is smaller than a lowest bound of the range (R):
-	 *   0xffff_ffff_8000_0000
-	 * which means that upper bits of the full 64-bit register
-	 * can't be all 1s, when lower bits are in range (W).
-	 *
-	 * Note that:
-	 *  - 0xffff_ffff_8000_0000 == (s64)S32_MIN
-	 *  - 0x0000_0000_7fff_ffff == (s64)S32_MAX
-	 * These relations are used in the conditions below.
-	 */
-	if (reg->s32_min_value >= 0 && reg->smin_value >= S32_MIN && reg->smax_value <= S32_MAX) {
-		reg->smin_value = reg->s32_min_value;
-		reg->smax_value = reg->s32_max_value;
-		reg->umin_value = reg->s32_min_value;
-		reg->umax_value = reg->s32_max_value;
-		reg->var_off = tnum_intersect(reg->var_off,
-					      tnum_range(reg->smin_value, reg->smax_value));
-	}
+	t = cnum64_from_sreg(reg);
+	if (cnum64_cnum32_intersect(t, s, &t) &&
+	    cnum64_cnum32_intersect(t, u, &t))
+		cnum_update_reg64_bounds(reg, t);
 }
 
 static void __reg_deduce_bounds(struct bpf_reg_state *reg)
