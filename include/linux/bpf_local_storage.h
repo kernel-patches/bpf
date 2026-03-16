@@ -105,6 +105,7 @@ struct bpf_local_storage {
 	u64 mem_charge;		/* Copy of mem charged to owner. Protected by "lock" */
 	refcount_t owner_refcnt;/* Used to pin owner when map_free is uncharging */
 	bool use_kmalloc_nolock;
+	struct hlist_node deferred_free_node; /* Used for deferred free */
 };
 
 /* U16_MAX is much more than enough for sk local storage

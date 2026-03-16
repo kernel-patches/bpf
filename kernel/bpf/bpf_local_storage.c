@@ -14,8 +14,25 @@
 #include <linux/rcupdate.h>
 #include <linux/rcupdate_trace.h>
 #include <linux/rcupdate_wait.h>
+#include <linux/workqueue.h>
 
 #define BPF_LOCAL_STORAGE_CREATE_FLAG_MASK (BPF_F_NO_PREALLOC | BPF_F_CLONE)
+
+static DEFINE_PER_CPU(struct hlist_head, bpf_deferred_selem_free_list);
+static DEFINE_PER_CPU(struct hlist_head, bpf_deferred_storage_free_list);
+static DEFINE_PER_CPU(atomic_t, bpf_deferred_free_pending);
+
+struct bpf_deferred_free_rcu {
+	struct rcu_head rcu;
+	int cpu;
+};
+static DEFINE_PER_CPU(struct bpf_deferred_free_rcu, bpf_deferred_free_rcu);
+
+struct bpf_deferred_free_work {
+	struct work_struct work;
+	int cpu;
+};
+static DEFINE_PER_CPU(struct bpf_deferred_free_work, bpf_deferred_free_work);
 
 static struct bpf_local_storage_map_bucket *
 select_bucket(struct bpf_local_storage_map *smap,
@@ -260,6 +277,80 @@ static void bpf_selem_free_list(struct hlist_head *list, bool reuse_now)
 		bpf_selem_free(selem, reuse_now);
 }
 
+static void bpf_deferred_free_work_fn(struct work_struct *work)
+{
+	struct bpf_deferred_free_work *deferred_work =
+			container_of(work, struct bpf_deferred_free_work, work);
+	int cpu = deferred_work->cpu;
+	struct hlist_head *selem_list = per_cpu_ptr(&bpf_deferred_selem_free_list, cpu);
+	struct hlist_head *storage_list = per_cpu_ptr(&bpf_deferred_storage_free_list, cpu);
+	struct bpf_local_storage_elem *selem;
+	struct bpf_local_storage *local_storage;
+	struct hlist_node *n;
+
+	atomic_set(per_cpu_ptr(&bpf_deferred_free_pending, cpu), 0);
+
+	hlist_for_each_entry_safe(selem, n, selem_list, free_node) {
+		hlist_del_init(&selem->free_node);
+		bpf_selem_free(selem, true);
+	}
+
+	hlist_for_each_entry_safe(local_storage, n, storage_list, deferred_free_node) {
+		hlist_del_init(&local_storage->deferred_free_node);
+		bpf_local_storage_free(local_storage, true);
+	}
+}
+
+static void bpf_deferred_free_rcu_callback(struct rcu_head *rcu)
+{
+	struct bpf_deferred_free_rcu *deferred =
+			container_of(rcu, struct bpf_deferred_free_rcu, rcu);
+	int cpu = deferred->cpu;
+	struct bpf_deferred_free_work *work = per_cpu_ptr(&bpf_deferred_free_work, cpu);
+
+	work->cpu = cpu;
+	queue_work_on(cpu, system_wq, &work->work);
+}
+
+static void bpf_selem_unlink_defer_free(struct hlist_head *selem_free_list,
+					struct bpf_local_storage *local_storage,
+					bool free_local_storage)
+{
+	struct bpf_local_storage_elem *s;
+	struct hlist_node *n;
+	struct hlist_head *deferred_selem = this_cpu_ptr(&bpf_deferred_selem_free_list);
+	struct hlist_head *deferred_storage = this_cpu_ptr(&bpf_deferred_storage_free_list);
+	struct bpf_deferred_free_rcu *deferred_rcu = this_cpu_ptr(&bpf_deferred_free_rcu);
+
+	hlist_for_each_entry_safe(s, n, selem_free_list, free_node) {
+		hlist_del(&s->free_node);
+		hlist_add_head(&s->free_node, deferred_selem);
+	}
+
+	if (free_local_storage)
+		hlist_add_head(&local_storage->deferred_free_node, deferred_storage);
+
+	if (atomic_cmpxchg(this_cpu_ptr(&bpf_deferred_free_pending), 0, 1) == 0) {
+		deferred_rcu->cpu = smp_processor_id();
+		call_rcu(&deferred_rcu->rcu, bpf_deferred_free_rcu_callback);
+	}
+}
+
+static int __init bpf_local_storage_deferred_free_init(void)
+{
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		INIT_HLIST_HEAD(per_cpu_ptr(&bpf_deferred_selem_free_list, cpu));
+		INIT_HLIST_HEAD(per_cpu_ptr(&bpf_deferred_storage_free_list, cpu));
+		atomic_set(per_cpu_ptr(&bpf_deferred_free_pending, cpu), 0);
+		INIT_WORK(&per_cpu(bpf_deferred_free_work, cpu).work,
+			  bpf_deferred_free_work_fn);
+	}
+	return 0;
+}
+subsys_initcall(bpf_local_storage_deferred_free_init);
+
 static void bpf_selem_unlink_storage_nolock_misc(struct bpf_local_storage_elem *selem,
 						 struct bpf_local_storage_map *smap,
 						 struct bpf_local_storage *local_storage,
@@ -419,10 +510,7 @@ int bpf_selem_unlink(struct bpf_local_storage_elem *selem)
 out:
 	raw_res_spin_unlock_irqrestore(&local_storage->lock, flags);
 
-	bpf_selem_free_list(&selem_free_list, false);
-
-	if (free_local_storage)
-		bpf_local_storage_free(local_storage, false);
+	bpf_selem_unlink_defer_free(&selem_free_list, local_storage, free_local_storage);
 
 	return err;
 }
