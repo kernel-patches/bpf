@@ -23110,6 +23110,12 @@ static int fixup_call_args(struct bpf_verifier_env *env)
 
 		if (!bpf_pseudo_call(insn))
 			continue;
+
+		if (insn->imm < S16_MIN || insn->imm > S16_MAX) {
+			verbose(env, "bpf-to-bpf call offset out of range for interpreter\n");
+			return -EINVAL;
+		}
+
 		depth = get_callee_stack_depth(env, insn, i);
 		if (depth < 0)
 			return depth;
