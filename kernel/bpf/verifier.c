@@ -25519,6 +25519,10 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 		 */
 		env->ops = bpf_verifier_ops[tgt_prog->type];
 		prog->expected_attach_type = tgt_prog->expected_attach_type;
+		if (prog->aux->xdp_has_frags != tgt_prog->aux->xdp_has_frags) {
+			verbose(env, "Extension program cannot have different xdp_has_frags value with target prog\n");
+			return -EINVAL;
+		}
 	}
 
 	/* store info about the attachment target that will be used later */
