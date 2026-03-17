@@ -836,7 +836,7 @@ static void macsec_finalize_skb(struct sk_buff *skb, u8 icv_len, u8 hdr_len)
 
 static void count_rx(struct net_device *dev, int len)
 {
-	dev_sw_netstats_rx_add(dev, len);
+	dev_sw_netstats_rx_add(dev, 1, len);
 }
 
 static void macsec_decrypt_done(void *data, int err)

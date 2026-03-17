@@ -199,7 +199,7 @@ static int internal_dev_recv(struct sk_buff *skb)
 	skb->pkt_type = PACKET_HOST;
 	skb->protocol = eth_type_trans(skb, netdev);
 	skb_postpull_rcsum(skb, eth_hdr(skb), ETH_HLEN);
-	dev_sw_netstats_rx_add(netdev, skb->len);
+	dev_sw_netstats_rx_add(netdev, 1, skb->len);
 
 	netif_rx(skb);
 	return NETDEV_TX_OK;

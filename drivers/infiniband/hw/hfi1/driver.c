@@ -1689,7 +1689,7 @@ static void hfi1_ipoib_ib_rcv(struct hfi1_packet *packet)
 	if (unlikely(!skb))
 		goto drop;
 
-	dev_sw_netstats_rx_add(netdev, skb->len);
+	dev_sw_netstats_rx_add(netdev, 1, skb->len);
 
 	skb->dev = netdev;
 	skb->pkt_type = PACKET_HOST;

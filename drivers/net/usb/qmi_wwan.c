@@ -217,7 +217,7 @@ static int qmimux_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 			net->stats.rx_errors++;
 			return 0;
 		} else {
-			dev_sw_netstats_rx_add(net, pkt_len);
+			dev_sw_netstats_rx_add(net, 1, pkt_len);
 		}
 
 skip:

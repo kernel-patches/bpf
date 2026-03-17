@@ -432,7 +432,7 @@ int ip_tunnel_rcv(struct ip_tunnel *tunnel, struct sk_buff *skb,
 		}
 	}
 
-	dev_sw_netstats_rx_add(tunnel->dev, skb->len);
+	dev_sw_netstats_rx_add(tunnel->dev, 1, skb->len);
 	skb_scrub_packet(skb, !net_eq(tunnel->net, dev_net(tunnel->dev)));
 
 	if (tunnel->dev->type == ARPHRD_ETHER) {

@@ -956,7 +956,7 @@ ieee80211_rx_monitor(struct ieee80211_local *local, struct sk_buff *origskb,
 			continue;
 
 		skb->dev = prev_sdata->dev;
-		dev_sw_netstats_rx_add(skb->dev, skb->len);
+		dev_sw_netstats_rx_add(skb->dev, 1, skb->len);
 		netif_receive_skb(skb);
 		prev_sdata = sdata;
 	}
@@ -970,7 +970,7 @@ ieee80211_rx_monitor(struct ieee80211_local *local, struct sk_buff *origskb,
 							 only_monitor);
 		if (skb) {
 			skb->dev = prev_sdata->dev;
-			dev_sw_netstats_rx_add(skb->dev, skb->len);
+			dev_sw_netstats_rx_add(skb->dev, 1, skb->len);
 			netif_receive_skb(skb);
 		}
 	}
@@ -2776,7 +2776,7 @@ ieee80211_deliver_skb(struct ieee80211_rx_data *rx)
 	skb = rx->skb;
 	xmit_skb = NULL;
 
-	dev_sw_netstats_rx_add(dev, skb->len);
+	dev_sw_netstats_rx_add(dev, 1, skb->len);
 
 	if (rx->sta) {
 		/* The seqno index has the same property as needed
@@ -4878,7 +4878,7 @@ static void ieee80211_rx_8023(struct ieee80211_rx_data *rx,
 
 	skb->dev = fast_rx->dev;
 
-	dev_sw_netstats_rx_add(fast_rx->dev, skb->len);
+	dev_sw_netstats_rx_add(fast_rx->dev, 1, skb->len);
 
 	/* The seqno index has the same property as needed
 	 * for the rx_msdu field, i.e. it is IEEE80211_NUM_TIDS

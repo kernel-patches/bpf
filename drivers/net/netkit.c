@@ -107,7 +107,7 @@ static netdev_tx_t netkit_xmit(struct sk_buff *skb, struct net_device *dev)
 		skb_postpull_rcsum(skb, eth_hdr(skb), ETH_HLEN);
 		if (likely(__netif_rx(skb) == NET_RX_SUCCESS)) {
 			dev_sw_netstats_tx_add(dev, 1, len);
-			dev_sw_netstats_rx_add(peer, len);
+			dev_sw_netstats_rx_add(peer, 1, len);
 		} else {
 			goto drop_stats;
 		}

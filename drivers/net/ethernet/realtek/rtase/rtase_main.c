@@ -568,7 +568,7 @@ process_pkt:
 		rtase_rx_vlan_skb(desc, skb);
 		rtase_rx_skb(ring, skb);
 
-		dev_sw_netstats_rx_add(dev, pkt_size);
+		dev_sw_netstats_rx_add(dev, 1, pkt_size);
 
 skip_process_pkt:
 		workdone++;

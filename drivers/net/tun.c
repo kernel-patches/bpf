@@ -1567,7 +1567,7 @@ static int tun_xdp_act(struct tun_struct *tun, struct bpf_prog *xdp_prog,
 			dev_core_stats_rx_dropped_inc(tun->dev);
 			return err;
 		}
-		dev_sw_netstats_rx_add(tun->dev, xdp->data_end - xdp->data);
+		dev_sw_netstats_rx_add(tun->dev, 1, xdp->data_end - xdp->data);
 		break;
 	case XDP_TX:
 		err = tun_xdp_tx(tun->dev, xdp);
@@ -1575,7 +1575,7 @@ static int tun_xdp_act(struct tun_struct *tun, struct bpf_prog *xdp_prog,
 			dev_core_stats_rx_dropped_inc(tun->dev);
 			return err;
 		}
-		dev_sw_netstats_rx_add(tun->dev, xdp->data_end - xdp->data);
+		dev_sw_netstats_rx_add(tun->dev, 1, xdp->data_end - xdp->data);
 		break;
 	case XDP_PASS:
 		break;
@@ -1957,7 +1957,7 @@ napi_busy:
 	rcu_read_unlock();
 
 	preempt_disable();
-	dev_sw_netstats_rx_add(tun->dev, len);
+	dev_sw_netstats_rx_add(tun->dev, 1, len);
 	preempt_enable();
 
 	if (rxhash)
@@ -2497,7 +2497,7 @@ build:
 	/* No need to disable preemption here since this function is
 	 * always called with bh disabled
 	 */
-	dev_sw_netstats_rx_add(tun->dev, datasize);
+	dev_sw_netstats_rx_add(tun->dev, 1, datasize);
 
 	if (rxhash)
 		tun_flow_update(tun, rxhash, tfile);

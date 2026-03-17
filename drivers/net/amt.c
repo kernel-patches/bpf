@@ -2340,7 +2340,7 @@ static bool amt_multicast_data_handler(struct amt_dev *amt, struct sk_buff *skb)
 	len = skb->len;
 	err = gro_cells_receive(&amt->gro_cells, skb);
 	if (likely(err == NET_RX_SUCCESS))
-		dev_sw_netstats_rx_add(amt->dev, len);
+		dev_sw_netstats_rx_add(amt->dev, 1, len);
 	else
 		amt->dev->stats.rx_dropped++;
 
@@ -2439,7 +2439,7 @@ static bool amt_membership_query_handler(struct amt_dev *amt,
 	local_bh_disable();
 	if (__netif_rx(skb) == NET_RX_SUCCESS) {
 		amt_update_gw_status(amt, AMT_STATUS_RECEIVED_QUERY, true);
-		dev_sw_netstats_rx_add(amt->dev, len);
+		dev_sw_netstats_rx_add(amt->dev, 1, len);
 	} else {
 		amt->dev->stats.rx_dropped++;
 	}
@@ -2541,7 +2541,7 @@ report:
 	if (__netif_rx(skb) == NET_RX_SUCCESS) {
 		amt_update_relay_status(tunnel, AMT_STATUS_RECEIVED_UPDATE,
 					true);
-		dev_sw_netstats_rx_add(amt->dev, len);
+		dev_sw_netstats_rx_add(amt->dev, 1, len);
 	} else {
 		amt->dev->stats.rx_dropped++;
 	}

@@ -140,7 +140,7 @@ static int vti_rcv_cb(struct sk_buff *skb, int err)
 
 	skb_scrub_packet(skb, !net_eq(tunnel->net, dev_net(skb->dev)));
 	skb->dev = dev;
-	dev_sw_netstats_rx_add(dev, skb->len);
+	dev_sw_netstats_rx_add(dev, 1, skb->len);
 
 	return 0;
 }

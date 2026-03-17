@@ -19,7 +19,7 @@
 /* Must be called with bh disabled. */
 static void update_rx_stats(struct wg_peer *peer, size_t len)
 {
-	dev_sw_netstats_rx_add(peer->device->dev, len);
+	dev_sw_netstats_rx_add(peer->device->dev, 1, len);
 	peer->rx_bytes += len;
 }
 

@@ -516,7 +516,7 @@ static int hbg_napi_rx_poll(struct napi_struct *napi, int budget)
 		skb_put(buffer->skb, pkt_len);
 		buffer->skb->protocol = eth_type_trans(buffer->skb,
 						       priv->netdev);
-		dev_sw_netstats_rx_add(priv->netdev, pkt_len);
+		dev_sw_netstats_rx_add(priv->netdev, 1, pkt_len);
 		napi_gro_receive(napi, buffer->skb);
 		buffer->skb = NULL;
 		buffer->page = NULL;

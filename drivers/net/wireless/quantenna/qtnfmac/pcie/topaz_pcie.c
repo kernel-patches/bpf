@@ -662,7 +662,7 @@ static int qtnf_topaz_rx_poll(struct napi_struct *napi, int budget)
 			skb_put(skb, psize);
 			ndev = qtnf_classify_skb(bus, skb);
 			if (likely(ndev)) {
-				dev_sw_netstats_rx_add(ndev, skb->len);
+				dev_sw_netstats_rx_add(ndev, 1, skb->len);
 				skb->protocol = eth_type_trans(skb, ndev);
 				netif_receive_skb(skb);
 			} else {

@@ -1210,13 +1210,13 @@ static int am65_cpsw_run_xdp(struct am65_cpsw_rx_flow *flow,
 		if (err)
 			goto drop;
 
-		dev_sw_netstats_rx_add(ndev, pkt_len);
+		dev_sw_netstats_rx_add(ndev, 1, pkt_len);
 		return AM65_CPSW_XDP_TX;
 	case XDP_REDIRECT:
 		if (unlikely(xdp_do_redirect(ndev, xdp, prog)))
 			goto drop;
 
-		dev_sw_netstats_rx_add(ndev, pkt_len);
+		dev_sw_netstats_rx_add(ndev, 1, pkt_len);
 		return AM65_CPSW_XDP_REDIRECT;
 	default:
 		bpf_warn_invalid_xdp_action(ndev, prog, act);
@@ -1358,7 +1358,7 @@ static int am65_cpsw_nuss_rx_packets(struct am65_cpsw_rx_flow *flow,
 	am65_cpsw_nuss_rx_csum(skb, csum_info);
 	napi_gro_receive(&flow->napi_rx, skb);
 
-	dev_sw_netstats_rx_add(ndev, pkt_len);
+	dev_sw_netstats_rx_add(ndev, 1, pkt_len);
 
 allocate:
 	new_page = page_pool_dev_alloc_pages(flow->page_pool);

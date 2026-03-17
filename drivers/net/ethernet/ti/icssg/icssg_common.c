@@ -811,14 +811,14 @@ static u32 emac_run_xdp(struct prueth_emac *emac, struct xdp_buff *xdp, u32 *len
 			goto drop;
 		}
 
-		dev_sw_netstats_rx_add(ndev, xdpf->len);
+		dev_sw_netstats_rx_add(ndev, 1, xdpf->len);
 		return result;
 	case XDP_REDIRECT:
 		err = xdp_do_redirect(emac->ndev, xdp, xdp_prog);
 		if (err)
 			goto drop;
 
-		dev_sw_netstats_rx_add(ndev, pkt_len);
+		dev_sw_netstats_rx_add(ndev, 1, pkt_len);
 		return ICSSG_XDP_REDIR;
 	default:
 		bpf_warn_invalid_xdp_action(emac->ndev, xdp_prog, act);

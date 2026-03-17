@@ -756,7 +756,7 @@ static int qtnf_pcie_pearl_rx_poll(struct napi_struct *napi, int budget)
 			skb_put(skb, psize);
 			ndev = qtnf_classify_skb(bus, skb);
 			if (likely(ndev)) {
-				dev_sw_netstats_rx_add(ndev, skb->len);
+				dev_sw_netstats_rx_add(ndev, 1, skb->len);
 				skb->protocol = eth_type_trans(skb, ndev);
 				napi_gro_receive(napi, skb);
 			} else {

@@ -2526,7 +2526,7 @@ int skb_do_redirect(struct sk_buff *skb)
 			     net_eq(net, dev_net(dev))))
 			goto out_drop;
 		skb->dev = dev;
-		dev_sw_netstats_rx_add(dev, skb->len);
+		dev_sw_netstats_rx_add(dev, 1, skb->len);
 		skb_scrub_packet(skb, false);
 		return -EAGAIN;
 	}

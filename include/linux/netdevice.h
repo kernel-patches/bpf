@@ -2992,13 +2992,15 @@ struct pcpu_lstats {
 
 void dev_lstats_read(struct net_device *dev, u64 *packets, u64 *bytes);
 
-static inline void dev_sw_netstats_rx_add(struct net_device *dev, unsigned int len)
+static inline void dev_sw_netstats_rx_add(struct net_device *dev,
+					  unsigned int packets,
+					  unsigned int len)
 {
 	struct pcpu_sw_netstats *tstats = this_cpu_ptr(dev->tstats);
 
 	u64_stats_update_begin(&tstats->syncp);
 	u64_stats_add(&tstats->rx_bytes, len);
-	u64_stats_inc(&tstats->rx_packets);
+	u64_stats_add(&tstats->rx_packets, packets);
 	u64_stats_update_end(&tstats->syncp);
 }
 

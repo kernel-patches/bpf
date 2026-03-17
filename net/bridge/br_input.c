@@ -36,7 +36,7 @@ static int br_pass_frame_up(struct sk_buff *skb, bool promisc)
 	struct net_bridge *br = netdev_priv(brdev);
 	struct net_bridge_vlan_group *vg;
 
-	dev_sw_netstats_rx_add(brdev, skb->len);
+	dev_sw_netstats_rx_add(brdev, 1, skb->len);
 
 	vg = br_vlan_group_rcu(br);
 

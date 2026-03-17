@@ -870,7 +870,7 @@ static int __ip6_tnl_rcv(struct ip6_tnl *tunnel, struct sk_buff *skb,
 		}
 	}
 
-	dev_sw_netstats_rx_add(tunnel->dev, skb->len);
+	dev_sw_netstats_rx_add(tunnel->dev, 1, skb->len);
 
 	skb_scrub_packet(skb, !net_eq(tunnel->net, dev_net(tunnel->dev)));
 

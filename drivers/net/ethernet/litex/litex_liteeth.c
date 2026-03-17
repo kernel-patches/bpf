@@ -78,7 +78,7 @@ static int liteeth_rx(struct net_device *netdev)
 	memcpy_fromio(data, priv->rx_base + rx_slot * priv->slot_size, len);
 	skb->protocol = eth_type_trans(skb, netdev);
 
-	dev_sw_netstats_rx_add(netdev, len);
+	dev_sw_netstats_rx_add(netdev, 1, len);
 
 	return netif_rx(skb);
 

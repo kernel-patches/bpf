@@ -415,7 +415,7 @@ static int xfrmi_rcv_cb(struct sk_buff *skb, int err)
 		md_dst->u.xfrm_info.link = link;
 		skb_dst_set(skb, (struct dst_entry *)md_dst);
 	}
-	dev_sw_netstats_rx_add(dev, skb->len);
+	dev_sw_netstats_rx_add(dev, 1, skb->len);
 
 	return 0;
 }

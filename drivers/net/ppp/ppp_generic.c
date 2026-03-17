@@ -2498,7 +2498,7 @@ ppp_receive_nonmp_frame(struct ppp *ppp, struct sk_buff *skb)
 		break;
 	}
 
-	dev_sw_netstats_rx_add(ppp->dev, skb->len - PPP_PROTO_LEN);
+	dev_sw_netstats_rx_add(ppp->dev, 1, skb->len - PPP_PROTO_LEN);
 
 	npi = proto_to_npindex(proto);
 	if (npi < 0) {
