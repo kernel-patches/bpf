@@ -924,13 +924,41 @@ out:
 	nf_flow_offload_destroy(flow_rule);
 }
 
-static void flow_offload_work_del(struct flow_offload_work *offload)
+static void flow_offload_netdev_update(struct flow_offload_work *offload,
+				       struct flow_stats *stats)
 {
-	clear_bit(IPS_HW_OFFLOAD_BIT, &offload->flow->ct->status);
-	flow_offload_tuple_del(offload, FLOW_OFFLOAD_DIR_ORIGINAL);
-	if (test_bit(NF_FLOW_HW_BIDIRECTIONAL, &offload->flow->flags))
-		flow_offload_tuple_del(offload, FLOW_OFFLOAD_DIR_REPLY);
-	set_bit(NF_FLOW_HW_DEAD, &offload->flow->flags);
+	const struct flow_offload_tuple *tuple;
+	struct net_device *indev, *outdev;
+	struct net *net;
+
+	rcu_read_lock();
+	net = read_pnet(&offload->flowtable->net);
+	if (stats[0].pkts) {
+		tuple = &offload->flow->tuplehash[FLOW_OFFLOAD_DIR_ORIGINAL].tuple;
+		indev  = dev_get_by_index_rcu(net, tuple->iifidx);
+		if (indev)
+			dev_sw_netstats_rx_add(indev,
+					       stats[0].pkts, stats[0].bytes);
+
+		outdev = dev_get_by_index_rcu(net, tuple->out.ifidx);
+		if (outdev)
+			dev_sw_netstats_tx_add(outdev,
+					       stats[0].pkts, stats[0].bytes);
+	}
+
+	if (stats[1].pkts) {
+		tuple = &offload->flow->tuplehash[FLOW_OFFLOAD_DIR_REPLY].tuple;
+		indev  = dev_get_by_index_rcu(net, tuple->iifidx);
+		if (indev)
+			dev_sw_netstats_rx_add(indev,
+					       stats[1].pkts, stats[1].bytes);
+
+		outdev = dev_get_by_index_rcu(net, tuple->out.ifidx);
+		if (outdev)
+			dev_sw_netstats_tx_add(outdev,
+					       stats[1].pkts, stats[1].bytes);
+	}
+	rcu_read_unlock();
 }
 
 static void flow_offload_tuple_stats(struct flow_offload_work *offload,
@@ -967,6 +995,25 @@ static void flow_offload_work_stats(struct flow_offload_work *offload)
 				       FLOW_OFFLOAD_DIR_REPLY,
 				       stats[1].pkts, stats[1].bytes);
 	}
+
+	flow_offload_netdev_update(offload, stats);
+}
+
+static void flow_offload_work_del(struct flow_offload_work *offload)
+{
+	struct flow_stats stats[FLOW_OFFLOAD_DIR_MAX] = {};
+
+	flow_offload_tuple_stats(offload, FLOW_OFFLOAD_DIR_ORIGINAL, &stats[0]);
+	if (test_bit(NF_FLOW_HW_BIDIRECTIONAL, &offload->flow->flags))
+		flow_offload_tuple_stats(offload, FLOW_OFFLOAD_DIR_REPLY,
+					 &stats[1]);
+	flow_offload_netdev_update(offload, stats);
+
+	clear_bit(IPS_HW_OFFLOAD_BIT, &offload->flow->ct->status);
+	flow_offload_tuple_del(offload, FLOW_OFFLOAD_DIR_ORIGINAL);
+	if (test_bit(NF_FLOW_HW_BIDIRECTIONAL, &offload->flow->flags))
+		flow_offload_tuple_del(offload, FLOW_OFFLOAD_DIR_REPLY);
+	set_bit(NF_FLOW_HW_DEAD, &offload->flow->flags);
 }
 
 static void flow_offload_work_handler(struct work_struct *work)
