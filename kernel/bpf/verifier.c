@@ -2786,8 +2786,14 @@ static void __reg_bound_offset(struct bpf_reg_state *reg)
 	reg->var_off = tnum_or(tnum_clear_subreg(var64_off), var32_off);
 }
 
+static bool range_bounds_violation(struct bpf_reg_state *reg);
+
 static void reg_bounds_sync(struct bpf_reg_state *reg)
 {
+	/* If the input reg_state is invalid, we can exit early */
+	if (range_bounds_violation(reg))
+		return;
+	
 	/* We might have learned new bounds from the var_off. */
 	__update_reg_bounds(reg);
 	/* We might have learned something about the sign bit. */
@@ -16735,27 +16741,23 @@ static int simulate_both_branches_taken(struct bpf_verifier_env* env,
 
 	/* Fallthrough (FALSE) branch */
 	regs_refine_cond_op(&env->false_reg1, &env->false_reg2, rev_opcode(opcode), is_jmp32);
+	reg_bounds_sync(&env->false_reg1);
+	reg_bounds_sync(&env->false_reg2);
 	/* If there is a range bounds violation in *any* of the abstract values in either
 	 * reg_states in the FALSE branch (i.e. false_reg1, false_reg2), the FALSE branch must be
 	 * dead. Only TRUE branch will be taken.
 	 */
 	if (range_bounds_violation(&env->false_reg1) || range_bounds_violation(&env->false_reg2))
 		return 1;
-	reg_bounds_sync(&env->false_reg1);
-	reg_bounds_sync(&env->false_reg2);
-	if (range_bounds_violation(&env->false_reg1) || range_bounds_violation(&env->false_reg2))
-		return 1;
 
 	/* Jump (TRUE) branch */
 	regs_refine_cond_op(&env->true_reg1, &env->true_reg2, opcode, is_jmp32);
+	reg_bounds_sync(&env->true_reg1);
+	reg_bounds_sync(&env->true_reg2);
 	/* If there is a range bounds violation in *any* of the abstract values in either
 	 * reg_states in the TRUE branch (i.e. true_reg1, true_reg2), the TRUE branch must be dead.
 	 * Only FALSE branch will be taken.
 	 */
-	if (range_bounds_violation(&env->true_reg1) || range_bounds_violation(&env->true_reg2))
-		return 0;
-	reg_bounds_sync(&env->true_reg1);
-	reg_bounds_sync(&env->true_reg2);
 	if (range_bounds_violation(&env->true_reg1) || range_bounds_violation(&env->true_reg2))
 		return 0;
 
