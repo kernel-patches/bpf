@@ -126,29 +126,35 @@ struct test_val {
 __maybe_unused
 static void run_tests_aux(const char *skel_name,
 			  skel_elf_bytes_fn elf_bytes_factory,
-			  pre_execution_cb pre_execution_cb)
+			  pre_execution_cb pre_execution_cb,
+			  bool drop_sys_admin)
 {
 	struct test_loader tester = {};
 	__u64 old_caps;
 	int err;
 
-	/* test_verifier tests are executed w/o CAP_SYS_ADMIN, do the same here */
-	err = cap_disable_effective(1ULL << CAP_SYS_ADMIN, &old_caps);
-	if (err) {
-		PRINT_FAIL("failed to drop CAP_SYS_ADMIN: %i, %s\n", err, strerror(-err));
-		return;
+	if (drop_sys_admin) {
+		/* test_verifier tests are executed w/o CAP_SYS_ADMIN, do the same here */
+		err = cap_disable_effective(1ULL << CAP_SYS_ADMIN, &old_caps);
+		if (err) {
+			PRINT_FAIL("failed to drop CAP_SYS_ADMIN: %i, %s\n", err, strerror(-err));
+			return;
+		}
 	}
 
 	test_loader__set_pre_execution_cb(&tester, pre_execution_cb);
 	test_loader__run_subtests(&tester, skel_name, elf_bytes_factory);
 	test_loader_fini(&tester);
 
-	err = cap_enable_effective(old_caps, NULL);
-	if (err)
-		PRINT_FAIL("failed to restore CAP_SYS_ADMIN: %i, %s\n", err, strerror(-err));
+	if (drop_sys_admin) {
+		err = cap_enable_effective(old_caps, NULL);
+		if (err)
+			PRINT_FAIL("failed to restore CAP_SYS_ADMIN: %i, %s\n", err, strerror(-err));
+	}
 }
 
-#define RUN(skel) run_tests_aux(#skel, skel##__elf_bytes, NULL)
+#define RUN(skel) run_tests_aux(#skel, skel##__elf_bytes, NULL, true)
+#define RUN_WITH_CAP_SYS_ADMIN(skel) run_tests_aux(#skel, skel##__elf_bytes, NULL, false)
 
 void test_verifier_align(void)                { RUN(verifier_align); }
 void test_verifier_and(void)                  { RUN(verifier_and); }
@@ -173,7 +179,7 @@ void test_verifier_cgroup_skb(void)           { RUN(verifier_cgroup_skb); }
 void test_verifier_cgroup_storage(void)       { RUN(verifier_cgroup_storage); }
 void test_verifier_const(void)                { RUN(verifier_const); }
 void test_verifier_const_or(void)             { RUN(verifier_const_or); }
-void test_verifier_ctx(void)                  { RUN(verifier_ctx); }
+void test_verifier_ctx(void)                  { RUN_WITH_CAP_SYS_ADMIN(verifier_ctx); }
 void test_verifier_ctx_sk_msg(void)           { RUN(verifier_ctx_sk_msg); }
 void test_verifier_d_path(void)               { RUN(verifier_d_path); }
 void test_verifier_default_trusted_ptr(void)  { RUN_TESTS(verifier_default_trusted_ptr); }
@@ -293,7 +299,8 @@ void test_verifier_array_access(void)
 {
 	run_tests_aux("verifier_array_access",
 		      verifier_array_access__elf_bytes,
-		      init_array_access_maps);
+		      init_array_access_maps,
+		      true);
 }
 void test_verifier_async_cb_context(void)    { RUN(verifier_async_cb_context); }
 
@@ -306,5 +313,6 @@ void test_verifier_value_ptr_arith(void)
 {
 	run_tests_aux("verifier_value_ptr_arith",
 		      verifier_value_ptr_arith__elf_bytes,
-		      init_value_ptr_arith_maps);
+		      init_value_ptr_arith_maps,
+		      true);
 }
