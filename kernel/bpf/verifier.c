@@ -10778,6 +10778,17 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 				bpf_log(log, "arg#%d expects pointer to ctx\n", i);
 				return -EINVAL;
 			}
+			/*
+			 * We should not allow modified offset ctx to be passed
+			 * into global subprogs, to avoid messing up the math of
+			 * max_ctx_offset for the whole program. Supporting this
+			 * will require a post-veriifcation pass, not worth it.
+			 */
+			if (resolve_prog_type(env->prog) == BPF_PROG_TYPE_SYSCALL &&
+			    (!tnum_is_const(reg->var_off) || reg->var_off.value)) {
+				bpf_log(log, "arg#%d of syscall prog must have zero offset\n", i);
+				return -EINVAL;
+			}
 		} else if (base_type(arg->arg_type) == ARG_PTR_TO_MEM) {
 			ret = check_func_arg_reg_off(env, reg, regno, ARG_DONTCARE);
 			if (ret < 0)
