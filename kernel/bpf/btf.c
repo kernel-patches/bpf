@@ -5548,7 +5548,11 @@ static int btf_sec_info_cmp(const void *a, const void *b)
 	const struct btf_sec_info *x = a;
 	const struct btf_sec_info *y = b;
 
-	return (int)(x->off - y->off) ? : (int)(x->len - y->len);
+	if (x->off != y->off)
+		return x->off < y->off ? -1 : 1;
+	if (x->len != y->len)
+		return x->len < y->len ? -1 : 1;
+	return 0;
 }
 
 static int btf_check_sec_info(struct btf_verifier_env *env,
