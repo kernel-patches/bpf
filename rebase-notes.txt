@@ -1,0 +1,76 @@
+	/* Create copies of reg states to simulate both branches because
+	 * regs_refine_cond_op will modify the reg states passed in.
+	 */
+
+	/* Cache reg_states in the env to simulate both branch outcomes. 
+	
+	These
+	 * refined states are then reused in reg_set_min_max() to avoid redundant
+	 * recomputation.
+	 */
+	//  
+
+	/* In order to simulate both outcomes, we initialize separate true and false
+	 * reg_state pairs in env, from the current reg_state.
+	 * regs_refine_cond_op() will modify the reg_states passed in. If 
+
+	and cache the results for reuse later
+	 * in reg_set_min_max(), we initialize separate 'true' and 'false' register
+	 * pairs in the env from the current states. 
+	 */
+
+
+	/* In order to simulate both branches, we initialize separate true and false
+	 * reg_state pairs from the current reg_state, because regs_refine_cond_op()
+	 * will modify the reg states passed in.
+	 */
+
+
+	 /* Learn more information about live branches by simulating both branches being
+ * taken using regs_refine_cond_op. Because regs_refine_cond_op is sound when
+ * the branch is taken, if it produces ill-formed register bounds, it must mean
+ * that the branch is dead.
+ */
+static int simulate_both_branches_taken(struct bpf_reg_state *reg1,
+					struct bpf_reg_state *reg2, u8 opcode, bool is_jmp32)
+{
+	struct bpf_reg_state false_reg1, false_reg2, true_reg1, true_reg2;
+
+	/* In order to simulate both branches, we initialize separate true and false
+	 * reg_state pairs from the current reg_state, because regs_refine_cond_op()
+	 * will modify the reg states passed in.
+	 */
+	copy_register_state(&false_reg1, reg1);
+	copy_register_state(&false_reg2, reg2);
+	copy_register_state(&true_reg1, reg1);
+	copy_register_state(&true_reg2, reg2);
+
+	/* Fallthrough (FALSE) branch */
+	regs_refine_cond_op(&false_reg1, &false_reg2, rev_opcode(opcode), is_jmp32);
+	/* If there is a range bounds violation in *any* of the abstract values in
+	 * either reg_states in the FALSE branch (i.e. reg1, reg2), the
+	 * FALSE branch must be dead. Only TRUE branch will be taken.
+	 */
+	if (range_bounds_violation(&false_reg1) || range_bounds_violation(&false_reg2))
+		return 1;
+	reg_bounds_sync(&false_reg1);
+	reg_bounds_sync(&false_reg2);
+	if (range_bounds_violation(&false_reg1) || range_bounds_violation(&false_reg2))
+		return 1;
+
+	/* Jump (TRUE) branch */
+	regs_refine_cond_op(&true_reg1, &true_reg2, opcode, is_jmp32);
+	/* If there is a range bounds violation in *any* of the abstract values in
+	 * either reg_states in the TRUE branch (i.e. true_reg1, true_reg2), the
+	 * TRUE branch must be dead. Only FALSE branch will be taken.
+	 */
+	if (range_bounds_violation(&true_reg1) || range_bounds_violation(&true_reg2))
+		return 0;
+	reg_bounds_sync(&true_reg1);
+	reg_bounds_sync(&true_reg2);
+	if (range_bounds_violation(&true_reg1) || range_bounds_violation(&true_reg2))
+		return 0;
+
+	/* Both branches are possible, we can't determine which one will be taken. */
+	return -1;
+}

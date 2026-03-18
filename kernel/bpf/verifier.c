@@ -2786,6 +2786,8 @@ static void __reg_bound_offset(struct bpf_reg_state *reg)
 	reg->var_off = tnum_or(tnum_clear_subreg(var64_off), var32_off);
 }
 
+static bool range_bounds_violation(struct bpf_reg_state *reg);
+
 static void reg_bounds_sync(struct bpf_reg_state *reg)
 {
 	/* We might have learned new bounds from the var_off. */
@@ -16721,44 +16723,46 @@ static u8 rev_opcode(u8 opcode);
  * the branch is taken, if it produces ill-formed register bounds, it must mean
  * that the branch is dead.
  */
-static int simulate_both_branches_taken(struct bpf_reg_state *reg1,
-					struct bpf_reg_state *reg2, u8 opcode, bool is_jmp32)
+static int simulate_both_branches_taken(struct bpf_verifier_env* env,
+				    struct bpf_reg_state *reg1,
+					struct bpf_reg_state *reg2, 
+					u8 opcode, bool is_jmp32)
 {
-	struct bpf_reg_state false_reg1, false_reg2, true_reg1, true_reg2;
-
 	/* In order to simulate both branches, we initialize separate true and false
-	 * reg_state pairs from the current reg_state, because regs_refine_cond_op()
-	 * will modify the reg states passed in.
+	 * reg_state pairs in env, from the current reg_state. regs_refine_cond_op()
+	 * will evolve the reg_state buffers in-place, based on the branch
+	 * condition. The refined reg_states will persist in env and can later be
+	 * reused in reg_set_min_max().
 	 */
-	copy_register_state(&false_reg1, reg1);
-	copy_register_state(&false_reg2, reg2);
-	copy_register_state(&true_reg1, reg1);
-	copy_register_state(&true_reg2, reg2);
+	copy_register_state(&env->false_reg1, reg1);
+	copy_register_state(&env->false_reg2, reg2);
+	copy_register_state(&env->true_reg1, reg1);
+	copy_register_state(&env->true_reg2, reg2);
 
 	/* Fallthrough (FALSE) branch */
-	regs_refine_cond_op(&false_reg1, &false_reg2, rev_opcode(opcode), is_jmp32);
+	regs_refine_cond_op(&env->false_reg1, &env->false_reg2, rev_opcode(opcode), is_jmp32);
 	/* If there is a range bounds violation in *any* of the abstract values in
 	 * either reg_states in the FALSE branch (i.e. reg1, reg2), the
 	 * FALSE branch must be dead. Only TRUE branch will be taken.
 	 */
-	if (range_bounds_violation(&false_reg1) || range_bounds_violation(&false_reg2))
+	if (range_bounds_violation(&env->false_reg1) || range_bounds_violation(&env->false_reg2))
 		return 1;
-	reg_bounds_sync(&false_reg1);
-	reg_bounds_sync(&false_reg2);
-	if (range_bounds_violation(&false_reg1) || range_bounds_violation(&false_reg2))
+	reg_bounds_sync(&env->false_reg1);
+	reg_bounds_sync(&env->false_reg2);
+	if (range_bounds_violation(&env->false_reg1) || range_bounds_violation(&env->false_reg2))
 		return 1;
 
 	/* Jump (TRUE) branch */
-	regs_refine_cond_op(&true_reg1, &true_reg2, opcode, is_jmp32);
+	regs_refine_cond_op(&env->true_reg1, &env->true_reg2, opcode, is_jmp32);
 	/* If there is a range bounds violation in *any* of the abstract values in
 	 * either reg_states in the TRUE branch (i.e. true_reg1, true_reg2), the
 	 * TRUE branch must be dead. Only FALSE branch will be taken.
 	 */
-	if (range_bounds_violation(&true_reg1) || range_bounds_violation(&true_reg2))
+	if (range_bounds_violation(&env->true_reg1) || range_bounds_violation(&env->true_reg2))
 		return 0;
-	reg_bounds_sync(&true_reg1);
-	reg_bounds_sync(&true_reg2);
-	if (range_bounds_violation(&true_reg1) || range_bounds_violation(&true_reg2))
+	reg_bounds_sync(&env->true_reg1);
+	reg_bounds_sync(&env->true_reg2);
+	if (range_bounds_violation(&env->true_reg1) || range_bounds_violation(&env->true_reg2))
 		return 0;
 
 	/* Both branches are possible, we can't determine which one will be taken. */
@@ -16768,8 +16772,9 @@ static int simulate_both_branches_taken(struct bpf_reg_state *reg1,
 /*
  * <reg1> <op> <reg2>, currently assuming reg2 is a constant
  */
-static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
-				  u8 opcode, bool is_jmp32)
+static int is_scalar_branch_taken(struct bpf_verifier_env* env,
+				struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
+				u8 opcode, bool is_jmp32)
 {
 	struct tnum t1 = is_jmp32 ? tnum_subreg(reg1->var_off) : reg1->var_off;
 	struct tnum t2 = is_jmp32 ? tnum_subreg(reg2->var_off) : reg2->var_off;
@@ -16921,7 +16926,7 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 		break;
 	}
 
-	return simulate_both_branches_taken(reg1, reg2, opcode, is_jmp32);
+	return simulate_both_branches_taken(env, reg1, reg2, opcode, is_jmp32);
 }
 
 static int flip_opcode(u32 opcode)
@@ -16992,8 +16997,9 @@ static int is_pkt_ptr_branch_taken(struct bpf_reg_state *dst_reg,
  * -1 - unknown. Example: "if (reg1 < 5)" is unknown when register value
  *      range [0,10]
  */
-static int is_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
-			   u8 opcode, bool is_jmp32)
+static int is_branch_taken(struct bpf_verifier_env* env, 
+				struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
+				u8 opcode, bool is_jmp32)
 {
 	if (reg_is_pkt_pointer_any(reg1) && reg_is_pkt_pointer_any(reg2) && !is_jmp32)
 		return is_pkt_ptr_branch_taken(reg1, reg2, opcode);
@@ -17031,7 +17037,7 @@ static int is_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_state *reg
 	}
 
 	/* now deal with two scalars, but not necessarily constants */
-	return is_scalar_branch_taken(reg1, reg2, opcode, is_jmp32);
+	return is_scalar_branch_taken(env, reg1, reg2, opcode, is_jmp32);
 }
 
 /* Opcode that corresponds to a *false* branch condition.
@@ -17259,15 +17265,18 @@ static int reg_set_min_max(struct bpf_verifier_env *env,
 	if (false_reg1 == false_reg2)
 		return 0;
 
-	/* fallthrough (FALSE) branch */
-	regs_refine_cond_op(false_reg1, false_reg2, rev_opcode(opcode), is_jmp32);
-	reg_bounds_sync(false_reg1);
-	reg_bounds_sync(false_reg2);
-
-	/* jump (TRUE) branch */
-	regs_refine_cond_op(true_reg1, true_reg2, opcode, is_jmp32);
-	reg_bounds_sync(true_reg1);
-	reg_bounds_sync(true_reg2);
+	/* If we reached here (reg_set_min_max), it means both branch outcomes are
+	 * possible and the verifier state has been forked (via push_stack). The
+	 * refined register bounds for both the TRUE (goto) and FALSE (fall-through)
+	 * outcomes were previously computed in simulate_both_branches_taken and
+	 * cached in env. So instead of computing the updated reg states again using
+	 * regs_refine_cond_op, we can copy the cached states into the actual
+	 * register states for both branches.
+	 */
+	copy_register_state(false_reg1, &env->false_reg1);
+	copy_register_state(false_reg2, &env->false_reg2);
+	copy_register_state(true_reg1, &env->true_reg1);
+	copy_register_state(true_reg2, &env->true_reg2);
 
 	err = reg_bounds_sanity_check(env, true_reg1, "true_reg1");
 	err = err ?: reg_bounds_sanity_check(env, true_reg2, "true_reg2");
@@ -17650,7 +17659,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	}
 
 	is_jmp32 = BPF_CLASS(insn->code) == BPF_JMP32;
-	pred = is_branch_taken(dst_reg, src_reg, opcode, is_jmp32);
+	pred = is_branch_taken(env, dst_reg, src_reg, opcode, is_jmp32);
 	if (pred >= 0) {
 		/* If we get here with a dst_reg pointer type it is because
 		 * above is_branch_taken() special cased the 0 comparison.

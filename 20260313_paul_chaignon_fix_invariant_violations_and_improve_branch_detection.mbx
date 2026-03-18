@@ -1,0 +1,493 @@
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH 1/4] bpf: Refactor reg_bounds_sanity_check
+From: Harishankar Vishwanathan <harishankar.vishwanathan@gmail.com>
+Date: Fri, 13 Mar 2026 23:54:30 +0100
+Message-Id: <14685719219430e8d82b95f5f929428032f0c08e.1773441432.git.paul.chaignon@gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+This commit refactors reg_bounds_sanity_check to factor out the logic
+that performs the sanity check from the logic that does the reporting.
+
+Signed-off-by: Harishankar Vishwanathan <harishankar.vishwanathan@gmail.com>
+---
+ kernel/bpf/verifier.c | 50 ++++++++++++++++++++++++++++++-------------
+ 1 file changed, 35 insertions(+), 15 deletions(-)
+
+diff --git a/kernel/bpf/verifier.c b/kernel/bpf/verifier.c
+index 4fbacd2149cd..974305ef3210 100644
+--- a/kernel/bpf/verifier.c
++++ b/kernel/bpf/verifier.c
+@@ -2798,40 +2798,60 @@ static void reg_bounds_sync(struct bpf_reg_state *reg)
+ 	__update_reg_bounds(reg);
+ }
+ 
+-static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
+-				   struct bpf_reg_state *reg, const char *ctx)
++static bool range_bounds_violation(struct bpf_reg_state *reg)
+ {
+-	const char *msg;
+-
+-	if (reg->umin_value > reg->umax_value ||
+-	    reg->smin_value > reg->smax_value ||
+-	    reg->u32_min_value > reg->u32_max_value ||
+-	    reg->s32_min_value > reg->s32_max_value) {
+-		    msg = "range bounds violation";
+-		    goto out;
+-	}
++	return (reg->umin_value > reg->umax_value || reg->smin_value > reg->smax_value ||
++		reg->u32_min_value > reg->u32_max_value ||
++		reg->s32_min_value > reg->s32_max_value);
++}
+ 
++static bool const_tnum_out_of_sync_with_range_bounds(struct bpf_reg_state *reg)
++{
+ 	if (tnum_is_const(reg->var_off)) {
+ 		u64 uval = reg->var_off.value;
+ 		s64 sval = (s64)uval;
+ 
+ 		if (reg->umin_value != uval || reg->umax_value != uval ||
+ 		    reg->smin_value != sval || reg->smax_value != sval) {
+-			msg = "const tnum out of sync with range bounds";
+-			goto out;
++			return true;
+ 		}
+ 	}
++	return false;
++}
+ 
++static bool const_subreg_tnum_out_of_sync_with_range_bounds(struct bpf_reg_state *reg)
++{
+ 	if (tnum_subreg_is_const(reg->var_off)) {
+ 		u32 uval32 = tnum_subreg(reg->var_off).value;
+ 		s32 sval32 = (s32)uval32;
+ 
+ 		if (reg->u32_min_value != uval32 || reg->u32_max_value != uval32 ||
+ 		    reg->s32_min_value != sval32 || reg->s32_max_value != sval32) {
+-			msg = "const subreg tnum out of sync with range bounds";
+-			goto out;
++			return true;
+ 		}
+ 	}
++	return false;
++}
++
++static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
++				   struct bpf_reg_state *reg, const char *ctx)
++{
++	const char *msg;
++
++	if (range_bounds_violation(reg)) {
++		msg = "range bounds violation";
++		goto out;
++	}
++
++	if (const_tnum_out_of_sync_with_range_bounds(reg)) {
++		msg = "const tnum out of sync with range bounds";
++		goto out;
++	}
++
++	if (const_subreg_tnum_out_of_sync_with_range_bounds(reg)) {
++		msg = "const subreg tnum out of sync with range bounds";
++		goto out;
++	}
+ 
+ 	return 0;
+ out:
+-- 
+2.43.0
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH 2/4] bpf: Simulate branches to prune based on range
+ violations
+From: Harishankar Vishwanathan <harishankar.vishwanathan@gmail.com>
+Date: Fri, 13 Mar 2026 23:54:43 +0100
+Message-Id: <aacec3599b3965e022be1b9792f29e88a1780a78.1773441432.git.paul.chaignon@gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+This patch fixes the invariant violation warnings. These warnings
+happen after we refine ranges & tnum based on an incorrectly-detected
+branch condition. For example, the branch is always true, but we miss
+it in is_branch_taken; we then refine based on the branch being false
+and end up with incoherent ranges (e.g. umax < umin).
+
+To avoid this, we can simulate the refinement on both branches. More
+specifically, this patch simulates both branches taken using
+regs_refine_cond_op and reg_bounds_sync. If the resulting register
+states are ill-formed on one of the branches, is_branch_taken can mark
+that branch as "never taken".
+
+On a more formal note, we can deduce a branch is not taken when
+regs_refine_cond_op or reg_bounds_syncreturns an ill-formed state
+because the branch operators are sound (formally verified). Soundness
+means that the verifier is guaranteed to produce sound outputs on the
+taken branches. On the non-taken branch (explored because of
+imprecision in the bounds), the verifier is free to produce any output.
+We use ill-formedness as a signal that the branch is dead and prune
+that branch.
+
+We have had five patches fixing specific cases of invariant violations
+in the past, all added with selftests:
+- commit fbc7aef517d8 ("bpf: Fix u32/s32 bounds when ranges cross
+  min/max boundary")
+- commit efc11a667878 ("bpf: Improve bounds when tnum has a single
+  possible value")
+- commit f41345f47fb2 ("bpf: Use tnums for JEQ/JNE is_branch_taken
+  logic")
+- commit 00bf8d0c6c9b ("bpf: Improve bounds when s64 crosses sign
+  boundary")
+- commit 6279846b9b25 ("bpf: Forget ranges when refining tnum after
+  JSET")
+
+To confirm that this patch addresses all invariant violations, we have
+also reverted those five commits and verified that their related
+selftests don't cause any invariant violation warnings anymore. Those
+selftests still fail but only because of mis-detected branches or
+less-precise bounds than expected. This demonstrates that the current
+patch is enough to avoid the invariant violation warning AND that the
+previous five patches are still useful to improve branch detection.
+
+In addition to the selftests, this change was also tested with the
+Cilium complexity test suite: all programs were successfully loaded and
+it didn't change the number of processed instructions.
+
+Fixes: 5f99f312bd3b ("bpf: add register bounds sanity checks and sanitization")
+Reported-by: syzbot+c950cc277150935cc0b5@syzkaller.appspotmail.com
+Closes: https://syzkaller.appspot.com/bug?extid=c950cc277150935cc0b5
+Co-developed-by: Paul Chaignon <paul.chaignon@gmail.com>
+Signed-off-by: Paul Chaignon <paul.chaignon@gmail.com>
+Signed-off-by: Harishankar Vishwanathan <harishankar.vishwanathan@gmail.com>
+---
+ kernel/bpf/verifier.c | 53 ++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 52 insertions(+), 1 deletion(-)
+
+diff --git a/kernel/bpf/verifier.c b/kernel/bpf/verifier.c
+index 974305ef3210..bd3bdfb6b0c1 100644
+--- a/kernel/bpf/verifier.c
++++ b/kernel/bpf/verifier.c
+@@ -16676,6 +16676,57 @@ static void find_good_pkt_pointers(struct bpf_verifier_state *vstate,
+ 	}));
+ }
+ 
++static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
++				u8 opcode, bool is_jmp32);
++static u8 rev_opcode(u8 opcode);
++
++/* Learn more information about live branches by simulating both branches being taken using
++ * regs_refine_cond_op. Because regs_refine_cond_op is sound when the branch is taken, if it
++ * produces ill-formed register bounds, it must mean that the branch is dead.
++ */
++static int simulate_both_branches_taken(struct bpf_reg_state *false_reg1,
++					struct bpf_reg_state *false_reg2, u8 opcode, bool is_jmp32)
++{
++	struct bpf_reg_state false_reg1_c, false_reg2_c, true_reg1_c, true_reg2_c;
++
++	/* Create copies of reg states to simulate both branches because regs_refine_cond_op
++	 * will modify the reg states passed in.
++	 */
++	memcpy(&false_reg1_c, false_reg1, sizeof(struct bpf_reg_state));
++	memcpy(&false_reg2_c, false_reg2, sizeof(struct bpf_reg_state));
++	memcpy(&true_reg1_c, false_reg1, sizeof(struct bpf_reg_state));
++	memcpy(&true_reg2_c, false_reg2, sizeof(struct bpf_reg_state));
++
++	/* Fallthrough (FALSE) branch */
++	regs_refine_cond_op(&false_reg1_c, &false_reg2_c, rev_opcode(opcode), is_jmp32);
++	/* If there is a range bounds violation in *any* of the abstract values in either
++	 * reg_states in the FALSE branch (i.e. false_reg1, false_reg2), the FALSE branch must be
++	 * dead. Only TRUE branch will be taken.
++	 */
++	if (range_bounds_violation(&false_reg1_c) || range_bounds_violation(&false_reg2_c))
++		return 1;
++	reg_bounds_sync(&false_reg1_c);
++	reg_bounds_sync(&false_reg2_c);
++	if (range_bounds_violation(&false_reg1_c) || range_bounds_violation(&false_reg2_c))
++		return 1;
++
++	/* Jump (TRUE) branch */
++	regs_refine_cond_op(&true_reg1_c, &true_reg2_c, opcode, is_jmp32);
++	/* If there is a range bounds violation in *any* of the abstract values in either
++	 * reg_states in the TRUE branch (i.e. true_reg1, true_reg2), the TRUE branch must be dead.
++	 * Only TRUE branch will be taken.
++	 */
++	if (range_bounds_violation(&true_reg1_c) || range_bounds_violation(&true_reg2_c))
++		return 0;
++	reg_bounds_sync(&true_reg1_c);
++	reg_bounds_sync(&true_reg2_c);
++	if (range_bounds_violation(&true_reg1_c) || range_bounds_violation(&true_reg2_c))
++		return 0;
++
++	/* Both branches are possible, we can't determine which one will be taken. */
++	return -1;
++}
++
+ /*
+  * <reg1> <op> <reg2>, currently assuming reg2 is a constant
+  */
+@@ -16832,7 +16883,7 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
+ 		break;
+ 	}
+ 
+-	return -1;
++	return simulate_both_branches_taken(reg1, reg2, opcode, is_jmp32);
+ }
+ 
+ static int flip_opcode(u32 opcode)
+-- 
+2.43.0
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH 3/4] selftests/bpf: Cover invariant violation cases from
+ syzbot
+From: Paul Chaignon <paul.chaignon@gmail.com>
+Date: Fri, 13 Mar 2026 23:55:01 +0100
+Message-Id: <4233309514e3e1d70fc808daf86e28a499163280.1773441432.git.paul.chaignon@gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+This patch adds a selftest for the change in the previous patch. The
+selftest is derived from a syzbot reproducer from [1] (among the 22
+reproducers on that page, only 4 still reproduced on latest bpf tree,
+all being small variants of the same invariant violation).
+
+The test case failure without the previous patch is shown below.
+
+  0: R1=ctx() R10=fp0
+  0: (85) call bpf_get_prandom_u32#7    ; R0=scalar()
+  1: (bf) r5 = r0                       ; R0=scalar(id=1) R5=scalar(id=1)
+  2: (57) r5 &= -4                      ; R5=scalar(smax=0x7ffffffffffffffc,umax=0xfffffffffffffffc,smax32=0x7ffffffc,umax32=0xfffffffc,var_off=(0x0; 0xfffffffffffffffc))
+  3: (bf) r7 = r0                       ; R0=scalar(id=1) R7=scalar(id=1)
+  4: (57) r7 &= 1                       ; R7=scalar(smin=smin32=0,smax=umax=smax32=umax32=1,var_off=(0x0; 0x1))
+  5: (07) r7 += -43                     ; R7=scalar(smin=smin32=-43,smax=smax32=-42,umin=0xffffffffffffffd5,umax=0xffffffffffffffd6,umin32=0xffffffd5,umax32=0xffffffd6,var_off=(0xffffffffffffffd4; 0x3))
+  6: (5e) if w5 != w7 goto pc+1
+  verifier bug: REG INVARIANTS VIOLATION (false_reg1): range bounds violation u64=[0xffffffd5, 0xffffffffffffffd4] s64=[0x80000000ffffffd5, 0x7fffffffffffffd4] u32=[0xffffffd5, 0xffffffd4] s32=[0xffffffd5, 0xffffffd4] var_off=(0xffffffd4, 0xffffffff00000000)
+
+R5 and R7 are prepared such that their tnums intersection results in a
+known constant but that constant isn't within R7's u32 bounds.
+is_branch_taken isn't able to detect this case today, so the verifier
+walks the impossible fallthrough branch. After regs_refine_cond_op and
+reg_bounds_sync refine R5 on the assumption that the branch is taken,
+the impossibility becomes apparent and results in an invariant violation
+for R5: umin32 is greater than umax32.
+
+The previous patch fixes this by using regs_refine_cond_op and
+reg_bounds_sync in is_branch_taken to detect the impossible branch. The
+fallthrough branch is therefore correctly detected as dead code.
+
+Link: https://syzkaller.appspot.com/bug?extid=c950cc277150935cc0b5 [1]
+Signed-off-by: Paul Chaignon <paul.chaignon@gmail.com>
+---
+ .../selftests/bpf/progs/verifier_bounds.c     | 24 +++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/tools/testing/selftests/bpf/progs/verifier_bounds.c b/tools/testing/selftests/bpf/progs/verifier_bounds.c
+index ce09379130aa..20c857ba21a8 100644
+--- a/tools/testing/selftests/bpf/progs/verifier_bounds.c
++++ b/tools/testing/selftests/bpf/progs/verifier_bounds.c
+@@ -2037,4 +2037,28 @@ __naked void signed_unsigned_intersection32_case2(void *ctx)
+ 	: __clobber_all);
+ }
+ 
++/* Last jump can be detected as always taken because the union of R5 and R7
++ * 32bit tnums produces a constant that isn't within R7's s32 bounds.
++ */
++SEC("socket")
++__description("dead branch: tnums give impossible constant if equal")
++__success
++__flag(BPF_F_TEST_REG_INVARIANTS)
++__naked void tnums_equal_impossible_constant(void *ctx)
++{
++	asm volatile("										\
++	call %[bpf_get_prandom_u32];								\
++	r5 = r0;										\
++	r5 &= 0xfffffffffffffffc;	/* var_off32=(0; 0xfffffffc) */				\
++	r7 = r0;										\
++	r7 &= 0x1;			/* var_off32=(0x0; 0x1) */				\
++	r7 += -43;			/* s32=[-43; -42] & var_off32=(0xffffffd4; 0x3) */	\
++	if w5 != w7 goto +1;		/* on jump var_off32=(0xffffffd4; 0)=-44, not in s32 */	\
++	r10 = 0;										\
++	exit;											\
++"	:
++	: __imm(bpf_get_prandom_u32)
++	: __clobber_all);
++}
++
+ char _license[] SEC("license") = "GPL";
+-- 
+2.43.0
+
+From git@z Thu Jan  1 00:00:00 1970
+Subject: [PATCH 4/4] selftests/bpf: Remove invariant violation flags
+From: Paul Chaignon <paul.chaignon@gmail.com>
+Date: Fri, 13 Mar 2026 23:55:12 +0100
+Message-Id: <58a668169bde565701135d9705c819b7f4707dca.1773441432.git.paul.chaignon@gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+With the changes to the verifier in previous commits, we're not
+expecting any invariant violations anymore. We should therefore always
+enable BPF_F_TEST_REG_INVARIANTS to fail on invariant violations. Turns
+out that's already the case and we've been explicitly setting this flag
+in selftests when it wasn't necessary. This commit removes those flags
+from selftests, which should hopefully make clearer that it's always
+enabled.
+
+Signed-off-by: Paul Chaignon <paul.chaignon@gmail.com>
+---
+ .../selftests/bpf/progs/verifier_bounds.c     | 24 ++++++-------------
+ 1 file changed, 7 insertions(+), 17 deletions(-)
+
+diff --git a/tools/testing/selftests/bpf/progs/verifier_bounds.c b/tools/testing/selftests/bpf/progs/verifier_bounds.c
+index 20c857ba21a8..96df2950cdad 100644
+--- a/tools/testing/selftests/bpf/progs/verifier_bounds.c
++++ b/tools/testing/selftests/bpf/progs/verifier_bounds.c
+@@ -1066,7 +1066,6 @@ l0_%=:	r0 = 0;						\
+ SEC("xdp")
+ __description("bound check with JMP_JSLT for crossing 64-bit signed boundary")
+ __success __retval(0)
+-__flag(BPF_F_TEST_REG_INVARIANTS)
+ __naked void crossing_64_bit_signed_boundary_2(void)
+ {
+ 	asm volatile ("					\
+@@ -1148,7 +1147,6 @@ l0_%=:	r0 = 0;						\
+ SEC("xdp")
+ __description("bound check with JMP32_JSLT for crossing 32-bit signed boundary")
+ __success __retval(0)
+-__flag(BPF_F_TEST_REG_INVARIANTS)
+ __naked void crossing_32_bit_signed_boundary_2(void)
+ {
+ 	asm volatile ("					\
+@@ -1536,7 +1534,7 @@ __naked void sub32_partial_overflow(void)
+ SEC("socket")
+ __description("dead branch on jset, does not result in invariants violation error")
+ __success __log_level(2)
+-__retval(0) __flag(BPF_F_TEST_REG_INVARIANTS)
++__retval(0)
+ __naked void jset_range_analysis(void)
+ {
+ 	asm volatile ("			\
+@@ -1572,7 +1570,7 @@ l0_%=:	r0 = 0;				\
+  */
+ SEC("socket")
+ __description("bounds deduction cross sign boundary, negative overlap")
+-__success __log_level(2) __flag(BPF_F_TEST_REG_INVARIANTS)
++__success __log_level(2)
+ __msg("7: (1f) r0 -= r6 {{.*}} R0=scalar(smin=smin32=-655,smax=smax32=-146,umin=0xfffffffffffffd71,umax=0xffffffffffffff6e,umin32=0xfffffd71,umax32=0xffffff6e,var_off=(0xfffffffffffffc00; 0x3ff))")
+ __retval(0)
+ __naked void bounds_deduct_negative_overlap(void)
+@@ -1616,7 +1614,7 @@ l0_%=:	r0 = 0;				\
+  */
+ SEC("socket")
+ __description("bounds deduction cross sign boundary, positive overlap")
+-__success __log_level(2) __flag(BPF_F_TEST_REG_INVARIANTS)
++__success __log_level(2)
+ __msg("3: (2d) if r0 > r1 {{.*}} R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=127,var_off=(0x0; 0x7f))")
+ __retval(0)
+ __naked void bounds_deduct_positive_overlap(void)
+@@ -1649,7 +1647,7 @@ l0_%=:	r0 = 0;				\
+  */
+ SEC("socket")
+ __description("bounds deduction cross sign boundary, two overlaps")
+-__failure __flag(BPF_F_TEST_REG_INVARIANTS)
++__failure
+ __msg("3: (2d) if r0 > r1 {{.*}} R0=scalar(smin=smin32=-128,smax=smax32=127,umax=0xffffffffffffff80)")
+ __msg("frame pointer is read only")
+ __naked void bounds_deduct_two_overlaps(void)
+@@ -1713,7 +1711,7 @@ SEC("socket")
+ __description("conditional jump on same register, branch taken")
+ __not_msg("20: (b7) r0 = 1 {{.*}} R0=1")
+ __success __log_level(2)
+-__retval(0) __flag(BPF_F_TEST_REG_INVARIANTS)
++__retval(0)
+ __naked void condition_jump_on_same_register(void *ctx)
+ {
+ 	asm volatile("			\
+@@ -1748,7 +1746,7 @@ SEC("socket")
+ __description("jset on same register, constant value branch taken")
+ __not_msg("7: (b7) r0 = 1 {{.*}} R0=1")
+ __success __log_level(2)
+-__retval(0) __flag(BPF_F_TEST_REG_INVARIANTS)
++__retval(0)
+ __naked void jset_on_same_register_1(void *ctx)
+ {
+ 	asm volatile("			\
+@@ -1770,7 +1768,7 @@ SEC("socket")
+ __description("jset on same register, scalar value branch taken")
+ __not_msg("12: (b7) r0 = 1 {{.*}} R0=1")
+ __success __log_level(2)
+-__retval(0) __flag(BPF_F_TEST_REG_INVARIANTS)
++__retval(0)
+ __naked void jset_on_same_register_2(void *ctx)
+ {
+ 	asm volatile("			\
+@@ -1800,7 +1798,6 @@ __description("jset on same register, scalar value unknown branch 1")
+ __msg("3: (b7) r0 = 0 {{.*}} R0=0")
+ __msg("5: (b7) r0 = 1 {{.*}} R0=1")
+ __success __log_level(2)
+-__flag(BPF_F_TEST_REG_INVARIANTS)
+ __naked void jset_on_same_register_3(void *ctx)
+ {
+ 	asm volatile("			\
+@@ -1822,7 +1819,6 @@ __description("jset on same register, scalar value unknown branch 2")
+ __msg("4: (b7) r0 = 0 {{.*}} R0=0")
+ __msg("6: (b7) r0 = 1 {{.*}} R0=1")
+ __success __log_level(2)
+-__flag(BPF_F_TEST_REG_INVARIANTS)
+ __naked void jset_on_same_register_4(void *ctx)
+ {
+ 	asm volatile("			\
+@@ -1845,7 +1841,6 @@ __description("jset on same register, scalar value unknown branch 3")
+ __msg("4: (b7) r0 = 0 {{.*}} R0=0")
+ __msg("6: (b7) r0 = 1 {{.*}} R0=1")
+ __success __log_level(2)
+-__flag(BPF_F_TEST_REG_INVARIANTS)
+ __naked void jset_on_same_register_5(void *ctx)
+ {
+ 	asm volatile("			\
+@@ -1877,7 +1872,6 @@ SEC("socket")
+ __description("bounds refinement with single-value tnum on umax")
+ __msg("3: (15) if r0 == 0xe0 {{.*}} R0=240")
+ __success __log_level(2)
+-__flag(BPF_F_TEST_REG_INVARIANTS)
+ __naked void bounds_refinement_tnum_umax(void *ctx)
+ {
+ 	asm volatile("			\
+@@ -1907,7 +1901,6 @@ SEC("socket")
+ __description("bounds refinement with single-value tnum on umin")
+ __msg("3: (15) if r0 == 0xf0 {{.*}} R0=224")
+ __success __log_level(2)
+-__flag(BPF_F_TEST_REG_INVARIANTS)
+ __naked void bounds_refinement_tnum_umin(void *ctx)
+ {
+ 	asm volatile("			\
+@@ -2002,7 +1995,6 @@ __naked void bounds_refinement_multiple_overlaps(void *ctx)
+ 
+ SEC("socket")
+ __success
+-__flag(BPF_F_TEST_REG_INVARIANTS)
+ __naked void signed_unsigned_intersection32_case1(void *ctx)
+ {
+ 	asm volatile("									\
+@@ -2020,7 +2012,6 @@ __naked void signed_unsigned_intersection32_case1(void *ctx)
+ 
+ SEC("socket")
+ __success
+-__flag(BPF_F_TEST_REG_INVARIANTS)
+ __naked void signed_unsigned_intersection32_case2(void *ctx)
+ {
+ 	asm volatile("									\
+@@ -2043,7 +2034,6 @@ __naked void signed_unsigned_intersection32_case2(void *ctx)
+ SEC("socket")
+ __description("dead branch: tnums give impossible constant if equal")
+ __success
+-__flag(BPF_F_TEST_REG_INVARIANTS)
+ __naked void tnums_equal_impossible_constant(void *ctx)
+ {
+ 	asm volatile("										\
+-- 
+2.43.0
+

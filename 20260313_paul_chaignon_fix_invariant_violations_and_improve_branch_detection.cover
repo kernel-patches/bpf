@@ -1,0 +1,47 @@
+Subject: [PATCH 0/4] Fix invariant violations and improve branch detection
+From: Paul Chaignon <paul.chaignon@gmail.com>
+Date: Fri, 13 Mar 2026 23:53:23 +0100
+Message-Id: <cover.1773441432.git.paul.chaignon@gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+This patchset fixes invariant violations on register bounds. These
+invariant violations cause a warning and happen when reg_bounds_sync is
+trying to refine register bounds while walking an impossible branch.
+
+This patchset takes this situation as an opportunity to improve
+verification performance. That is, the verifier will use the invariant
+violations as a signal that a branch cannot be taken and process it as
+dead code.
+
+This patchset implements this approach and covers it in selftests with
+a new invariant violation case. Some of the logic in reg_bounds_sync
+likely acts as a duplicate with logic from is_scalar_branch_taken. This
+patchset does not attempt to remove superfluous logic from
+is_scalar_branch_taken and leaves it to a future patchset (ex. once
+syzbot has confirmed that all invariant violations are fixed).
+
+In the future, there is also a potential opportunity to simplify
+existing logic by merging reg_bounds_sync and range_bounds_violation
+(have reg_bounds_sync error out on invariant violation). That is
+however not needed to fix invariant violation, which we focus on in
+this patchset.
+
+Harishankar Vishwanathan (2):
+  bpf: Refactor reg_bounds_sanity_check
+  bpf: Simulate branches to prune based on range violations
+
+Paul Chaignon (2):
+  selftests/bpf: Cover invariant violation cases from syzbot
+  selftests/bpf: Remove invariant violation flags
+
+ kernel/bpf/verifier.c                         | 103 +++++++++++++++---
+ .../selftests/bpf/progs/verifier_bounds.c     |  46 +++++---
+ 2 files changed, 117 insertions(+), 32 deletions(-)
+
+-- 
+2.43.0
+
+
+
