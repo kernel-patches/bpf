@@ -2070,4 +2070,24 @@ __naked void refinement_32bounds_not_overwriting_64bounds(void *ctx)
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("32-bit bounds deduction cross sign boundary, two overlaps")
+__failure
+__flag(BPF_F_TEST_REG_INVARIANTS)
+__msg("frame pointer is read only")
+__naked void bounds_deduct_two_overlaps_32(void)
+{
+	asm volatile("				\
+	call %[bpf_get_prandom_u32];		\
+	r0 = (s8)r0;				\
+	w1 = 0xffffff80;			\
+	if w0 > w1 goto l0_%=;			\
+	if w0 < 128 goto l0_%=;			\
+	r10 = 0;				\
+l0_%=:	exit;					\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
