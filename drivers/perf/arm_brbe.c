@@ -8,8 +8,12 @@
  */
 #include <linux/types.h>
 #include <linux/bitmap.h>
+#include <linux/percpu.h>
 #include <linux/perf/arm_pmu.h>
+#include <asm/daifflags.h>
 #include "arm_brbe.h"
+
+static DEFINE_PER_CPU(bool, brbe_active);
 
 #define BRBFCR_EL1_BRANCH_FILTERS (BRBFCR_EL1_DIRECT   | \
 				   BRBFCR_EL1_INDIRECT | \
@@ -533,6 +537,8 @@ void brbe_enable(const struct arm_pmu *arm_pmu)
 	/* Finally write SYS_BRBFCR_EL to unpause BRBE */
 	write_sysreg_s(brbfcr, SYS_BRBFCR_EL1);
 	/* Synchronization in PMCR write ensures ordering WRT PMU enabling */
+
+	this_cpu_write(brbe_active, true);
 }
 
 void brbe_disable(void)
@@ -544,6 +550,7 @@ void brbe_disable(void)
 	 */
 	write_sysreg_s(BRBFCR_EL1_PAUSED, SYS_BRBFCR_EL1);
 	write_sysreg_s(0, SYS_BRBCR_EL1);
+	this_cpu_write(brbe_active, false);
 }
 
 static const int brbe_type_to_perf_type_map[BRBINFx_EL1_TYPE_DEBUG_EXIT + 1][2] = {
@@ -618,10 +625,10 @@ static bool perf_entry_from_brbe_regset(int index, struct perf_branch_entry *ent
 
 	brbe_set_perf_entry_type(entry, brbinf);
 
-	if (!branch_sample_no_cycles(event))
+	if (!event || !branch_sample_no_cycles(event))
 		entry->cycles = brbinf_get_cycles(brbinf);
 
-	if (!branch_sample_no_flags(event)) {
+	if (!event || !branch_sample_no_flags(event)) {
 		/* Mispredict info is available for source only and complete branch records. */
 		if (!brbe_record_is_target_only(brbinf)) {
 			entry->mispred = brbinf_get_mispredict(brbinf);
@@ -802,4 +809,72 @@ void brbe_read_filtered_entries(struct perf_branch_stack *branch_stack,
 
 done:
 	branch_stack->nr = nr_filtered;
+}
+
+/*
+ * Best-effort BRBE snapshot for BPF tracing. Pause BRBE to avoid
+ * self-recording and return 0 if the snapshot state appears disturbed.
+ */
+int arm_brbe_snapshot_branch_stack(struct perf_branch_entry *entries, unsigned int cnt)
+{
+	unsigned long flags;
+	int nr_hw, nr_banks, nr_copied = 0;
+	u64 brbidr, brbfcr, brbcr;
+
+	if (!cnt || !__this_cpu_read(brbe_active))
+		return 0;
+
+	/* Pause BRBE first to avoid recording our own branches. */
+	brbfcr = read_sysreg_s(SYS_BRBFCR_EL1);
+	brbcr = read_sysreg_s(SYS_BRBCR_EL1);
+	write_sysreg_s(brbfcr | BRBFCR_EL1_PAUSED, SYS_BRBFCR_EL1);
+	isb();
+
+	/* Block local exception delivery while reading the buffer. */
+	flags = local_daif_save();
+
+	/*
+	 * A PMU overflow before local_daif_save() could have re-enabled
+	 * BRBE, clearing the PAUSED bit. The overflow handler already
+	 * restored BRBE to its correct state, so just bail out.
+	 */
+	if (!(read_sysreg_s(SYS_BRBFCR_EL1) & BRBFCR_EL1_PAUSED)) {
+		local_daif_restore(flags);
+		return 0;
+	}
+
+	brbidr = read_sysreg_s(SYS_BRBIDR0_EL1);
+	if (!valid_brbidr(brbidr))
+		goto out;
+
+	nr_hw = FIELD_GET(BRBIDR0_EL1_NUMREC_MASK, brbidr);
+	nr_banks = DIV_ROUND_UP(nr_hw, BRBE_BANK_MAX_ENTRIES);
+
+	for (int bank = 0; bank < nr_banks; bank++) {
+		int nr_remaining = nr_hw - (bank * BRBE_BANK_MAX_ENTRIES);
+		int nr_this_bank = min(nr_remaining, BRBE_BANK_MAX_ENTRIES);
+
+		select_brbe_bank(bank);
+
+		for (int i = 0; i < nr_this_bank; i++) {
+			if (nr_copied >= cnt)
+				goto done;
+
+			if (!perf_entry_from_brbe_regset(i, &entries[nr_copied], NULL))
+				goto done;
+
+			nr_copied++;
+		}
+	}
+
+done:
+	brbe_invalidate();
+out:
+	/* Restore BRBCR before unpausing via BRBFCR, matching brbe_enable(). */
+	write_sysreg_s(brbcr, SYS_BRBCR_EL1);
+	isb();
+	write_sysreg_s(brbfcr, SYS_BRBFCR_EL1);
+	local_daif_restore(flags);
+
+	return nr_copied;
 }
