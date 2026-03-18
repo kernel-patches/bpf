@@ -431,7 +431,6 @@ static int intel_pinmux_set_mux(struct pinctrl_dev *pctldev,
 {
 	struct intel_pinctrl *pctrl = pinctrl_dev_get_drvdata(pctldev);
 	const struct intel_pingroup *grp = &pctrl->soc->groups[group];
-	int i;
 
 	guard(raw_spinlock_irqsave)(&pctrl->lock);
 
@@ -439,13 +438,13 @@ static int intel_pinmux_set_mux(struct pinctrl_dev *pctldev,
 	 * All pins in the groups needs to be accessible and writable
 	 * before we can enable the mux for this group.
 	 */
-	for (i = 0; i < grp->grp.npins; i++) {
+	for (unsigned int i = 0; i < grp->grp.npins; i++) {
 		if (!intel_pad_usable(pctrl, grp->grp.pins[i]))
 			return -EBUSY;
 	}
 
 	/* Now enable the mux setting for each pin in the group */
-	for (i = 0; i < grp->grp.npins; i++) {
+	for (unsigned int i = 0; i < grp->grp.npins; i++) {
 		void __iomem *padcfg0;
 		u32 value, pmode;
 
@@ -909,12 +908,12 @@ static int intel_config_set(struct pinctrl_dev *pctldev, unsigned int pin,
 			  unsigned long *configs, unsigned int nconfigs)
 {
 	struct intel_pinctrl *pctrl = pinctrl_dev_get_drvdata(pctldev);
-	int i, ret;
+	int ret;
 
 	if (!intel_pad_usable(pctrl, pin))
 		return -ENOTSUPP;
 
-	for (i = 0; i < nconfigs; i++) {
+	for (unsigned int i = 0; i < nconfigs; i++) {
 		switch (pinconf_to_config_param(configs[i])) {
 		case PIN_CONFIG_BIAS_DISABLE:
 		case PIN_CONFIG_BIAS_PULL_UP:
@@ -1323,9 +1322,8 @@ static void intel_gpio_irq_init(struct intel_pinctrl *pctrl)
 
 	for_each_intel_pin_community(pctrl, community) {
 		void __iomem *reg, *is;
-		unsigned int gpp;
 
-		for (gpp = 0; gpp < community->ngpps; gpp++) {
+		for (unsigned int gpp = 0; gpp < community->ngpps; gpp++) {
 			reg = community->regs + community->ie_offset + gpp * 4;
 			is = community->regs + community->is_offset + gpp * 4;
 
@@ -1436,14 +1434,14 @@ static int intel_pinctrl_add_padgroups_by_gpps(struct intel_pinctrl *pctrl,
 					       struct intel_community *community)
 {
 	struct intel_padgroup *gpps;
+	unsigned int ngpps = community->ngpps;
 	unsigned int padown_num = 0;
-	size_t i, ngpps = community->ngpps;
 
 	gpps = devm_kcalloc(pctrl->dev, ngpps, sizeof(*gpps), GFP_KERNEL);
 	if (!gpps)
 		return -ENOMEM;
 
-	for (i = 0; i < ngpps; i++) {
+	for (unsigned int i = 0; i < ngpps; i++) {
 		gpps[i] = community->gpps[i];
 
 		if (gpps[i].size > INTEL_PINCTRL_MAX_GPP_SIZE)
@@ -1476,18 +1474,18 @@ static int intel_pinctrl_add_padgroups_by_size(struct intel_pinctrl *pctrl,
 					       struct intel_community *community)
 {
 	struct intel_padgroup *gpps;
-	unsigned int npins = community->npins;
+	unsigned int npins = community->npins, ngpps;
 	unsigned int padown_num = 0;
-	size_t i, ngpps = DIV_ROUND_UP(npins, community->gpp_size);
 
 	if (community->gpp_size > INTEL_PINCTRL_MAX_GPP_SIZE)
 		return -EINVAL;
 
+	ngpps = DIV_ROUND_UP(npins, community->gpp_size);
 	gpps = devm_kcalloc(pctrl->dev, ngpps, sizeof(*gpps), GFP_KERNEL);
 	if (!gpps)
 		return -ENOMEM;
 
-	for (i = 0; i < ngpps; i++) {
+	for (unsigned int i = 0; i < ngpps; i++) {
 		unsigned int gpp_size = community->gpp_size;
 
 		gpps[i].reg_num = i;
@@ -1513,7 +1511,6 @@ static int intel_pinctrl_pm_init(struct intel_pinctrl *pctrl)
 	const struct intel_pinctrl_soc_data *soc = pctrl->soc;
 	struct intel_community_context *communities;
 	struct intel_pad_context *pads;
-	int i;
 
 	pads = devm_kcalloc(pctrl->dev, soc->npins, sizeof(*pads), GFP_KERNEL);
 	if (!pads)
@@ -1525,7 +1522,7 @@ static int intel_pinctrl_pm_init(struct intel_pinctrl *pctrl)
 		return -ENOMEM;
 
 
-	for (i = 0; i < pctrl->ncommunities; i++) {
+	for (unsigned int i = 0; i < pctrl->ncommunities; i++) {
 		struct intel_community *community = &pctrl->communities[i];
 		u32 *intmask, *hostown;
 
@@ -1579,7 +1576,7 @@ int intel_pinctrl_probe(struct platform_device *pdev,
 {
 	struct device *dev = &pdev->dev;
 	struct intel_pinctrl *pctrl;
-	int i, ret, irq;
+	int ret, irq;
 
 	pctrl = devm_kzalloc(dev, sizeof(*pctrl), GFP_KERNEL);
 	if (!pctrl)
@@ -1599,7 +1596,7 @@ int intel_pinctrl_probe(struct platform_device *pdev,
 	if (!pctrl->communities)
 		return -ENOMEM;
 
-	for (i = 0; i < pctrl->ncommunities; i++) {
+	for (unsigned int i = 0; i < pctrl->ncommunities; i++) {
 		struct intel_community *community = &pctrl->communities[i];
 		unsigned short capability_offset[6];
 		void __iomem *regs;
@@ -1826,10 +1823,9 @@ static int intel_pinctrl_suspend_noirq(struct device *dev)
 	struct intel_pinctrl *pctrl = dev_get_drvdata(dev);
 	struct intel_community_context *communities;
 	struct intel_pad_context *pads;
-	int i;
 
 	pads = pctrl->context.pads;
-	for (i = 0; i < pctrl->soc->npins; i++) {
+	for (unsigned int i = 0; i < pctrl->soc->npins; i++) {
 		const struct pinctrl_pin_desc *desc = &pctrl->soc->pins[i];
 		void __iomem *padcfg;
 		u32 val;
@@ -1848,7 +1844,7 @@ static int intel_pinctrl_suspend_noirq(struct device *dev)
 	}
 
 	communities = pctrl->context.communities;
-	for (i = 0; i < pctrl->ncommunities; i++) {
+	for (unsigned int i = 0; i < pctrl->ncommunities; i++) {
 		struct intel_community *community = &pctrl->communities[i];
 		void __iomem *base;
 		unsigned int gpp;
@@ -1935,13 +1931,12 @@ static int intel_pinctrl_resume_noirq(struct device *dev)
 	struct intel_pinctrl *pctrl = dev_get_drvdata(dev);
 	const struct intel_community_context *communities;
 	const struct intel_pad_context *pads;
-	int i;
 
 	/* Mask all interrupts */
 	intel_gpio_irq_init(pctrl);
 
 	pads = pctrl->context.pads;
-	for (i = 0; i < pctrl->soc->npins; i++) {
+	for (unsigned int i = 0; i < pctrl->soc->npins; i++) {
 		const struct pinctrl_pin_desc *desc = &pctrl->soc->pins[i];
 
 		if (!(intel_pinctrl_should_save(pctrl, desc->number) ||
@@ -1958,17 +1953,16 @@ static int intel_pinctrl_resume_noirq(struct device *dev)
 	}
 
 	communities = pctrl->context.communities;
-	for (i = 0; i < pctrl->ncommunities; i++) {
+	for (unsigned int i = 0; i < pctrl->ncommunities; i++) {
 		struct intel_community *community = &pctrl->communities[i];
 		void __iomem *base;
-		unsigned int gpp;
 
 		base = community->regs + community->ie_offset;
-		for (gpp = 0; gpp < community->ngpps; gpp++)
+		for (unsigned int gpp = 0; gpp < community->ngpps; gpp++)
 			intel_restore_intmask(pctrl, i, base, gpp, communities[i].intmask[gpp]);
 
 		base = community->regs + community->hostown_offset;
-		for (gpp = 0; gpp < community->ngpps; gpp++)
+		for (unsigned int gpp = 0; gpp < community->ngpps; gpp++)
 			intel_restore_hostown(pctrl, i, base, gpp, communities[i].hostown[gpp]);
 	}
 
