@@ -478,6 +478,52 @@ static struct range range_refine_in_halves(enum num_t x_t, struct range x,
 
 }
 
+static __always_inline u64 next_u32_block(u64 x) { return x + (1ULL << 32); }
+static __always_inline u64 prev_u32_block(u64 x) { return x - (1ULL << 32); }
+
+/* Is v within the circular u64 range [base, base + len]? */
+static __always_inline bool u64_range_contains(u64 v, u64 base, u64 len)
+{
+	return v - base <= len;
+}
+
+/* Is v within the circular u32 range [base, base + len]? */
+static __always_inline bool u32_range_contains(u32 v, u32 base, u32 len)
+{
+	return v - base <= len;
+}
+
+static bool range64_range32_intersect(enum num_t a_t,
+				      struct range a /* 64 */,
+				      struct range b /* 32 */,
+				      struct range *out /* 64 */)
+{
+	u64 b_len = (u32)(b.b - b.a);
+	u64 a_len = a.b - a.a;
+	u64 lo, hi;
+
+	if (u32_range_contains((u32)a.a, (u32)b.a, b_len)) {
+		lo = a.a;
+	} else {
+		lo = swap_low32(a.a, (u32)b.a);
+		if (!u64_range_contains(lo, a.a, a_len))
+			lo = next_u32_block(lo);
+		if (!u64_range_contains(lo, a.a, a_len))
+			return false;
+	}
+	if (u32_range_contains(a.b, (u32)b.a, b_len)) {
+		hi = a.b;
+	} else {
+		hi = swap_low32(a.b, (u32)b.b);
+		if (!u64_range_contains(hi, a.a, a_len))
+			hi = prev_u32_block(hi);
+		if (!u64_range_contains(hi, a.a, a_len))
+			return false;
+	}
+	*out = range(a_t, lo, hi);
+	return true;
+}
+
 static struct range range_refine(enum num_t x_t, struct range x, enum num_t y_t, struct range y)
 {
 	struct range y_cast;
@@ -485,39 +531,15 @@ static struct range range_refine(enum num_t x_t, struct range x, enum num_t y_t,
 	if (t_is_32(x_t) == t_is_32(y_t))
 		x = range_refine_in_halves(x_t, x, y_t, y);
 
-	y_cast = range_cast(y_t, x_t, y);
-
-	/* If we know that
-	 *   - *x* is in the range of signed 32bit value, and
-	 *   - *y_cast* range is 32-bit signed non-negative
-	 * then *x* range can be improved with *y_cast* such that *x* range
-	 * is 32-bit signed non-negative. Otherwise, if the new range for *x*
-	 * allows upper 32-bit * 0xffffffff then the eventual new range for
-	 * *x* will be out of signed 32-bit range which violates the origin
-	 * *x* range.
-	 */
-	if (x_t == S64 && y_t == S32 && y_cast.a <= S32_MAX  && y_cast.b <= S32_MAX &&
-	    (s64)x.a >= S32_MIN && (s64)x.b <= S32_MAX)
-		return range_intersection(x_t, x, y_cast);
-
-	/* the case when new range knowledge, *y*, is a 32-bit subregister
-	 * range, while previous range knowledge, *x*, is a full register
-	 * 64-bit range, needs special treatment to take into account upper 32
-	 * bits of full register range
-	 */
 	if (t_is_32(y_t) && !t_is_32(x_t)) {
-		struct range x_swap;
+		struct range x1;
 
-		/* some combinations of upper 32 bits and sign bit can lead to
-		 * invalid ranges, in such cases it's easier to detect them
-		 * after cast/swap than try to enumerate all the conditions
-		 * under which transformation and knowledge transfer is valid
-		 */
-		x_swap = range(x_t, swap_low32(x.a, y_cast.a), swap_low32(x.b, y_cast.b));
-		if (!is_valid_range(x_t, x_swap))
-			return x;
-		return range_intersection(x_t, x, x_swap);
+		if (range64_range32_intersect(x_t, x, y, &x1))
+			return x1;
+		return x;
 	}
+
+	y_cast = range_cast(y_t, x_t, y);
 
 	/* otherwise, plain range cast and intersection works */
 	return range_intersection(x_t, x, y_cast);
