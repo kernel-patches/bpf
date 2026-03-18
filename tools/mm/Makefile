@@ -10,6 +10,7 @@ LIB_DIR = ../lib/api
 LIBS = $(LIB_DIR)/libapi.a
 
 CFLAGS += -Wall -Wextra -I../lib/ -pthread
+CFLAGS += $(EXTRA_CFLAGS)
 LDFLAGS += $(LIBS) -pthread
 
 all: $(BUILD_TARGETS)
