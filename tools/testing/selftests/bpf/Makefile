@@ -158,6 +158,12 @@ endef
 
 include ../lib.mk
 
+# urandom_read is built with clang. Copy $(CFLAGS) before EXTRA_CFLAGS are
+# appended so that it does not inherit potentially incompatible options.
+URANDOM_READ_CFLAGS := $(CFLAGS)
+
+CFLAGS += $(EXTRA_CFLAGS)
+
 NON_CHECK_FEAT_TARGETS := clean docs-clean
 CHECK_FEAT := $(filter-out $(NON_CHECK_FEAT_TARGETS),$(or $(MAKECMDGOALS), "none"))
 ifneq ($(CHECK_FEAT),)
@@ -255,7 +261,7 @@ endif
 $(OUTPUT)/liburandom_read.so: urandom_read_lib1.c urandom_read_lib2.c liburandom_read.map
 	$(call msg,LIB,,$@)
 	$(Q)$(CLANG) $(CLANG_TARGET_ARCH) \
-		     $(filter-out -static,$(CFLAGS) $(LDFLAGS)) \
+		     $(filter-out -static,$(URANDOM_READ_CFLAGS) $(LDFLAGS)) \
 		     $(filter %.c,$^) $(filter-out -static,$(LDLIBS)) \
 		     -Wno-unused-command-line-argument \
 		     -fuse-ld=$(LLD) -Wl,-znoseparate-code -Wl,--build-id=sha1 \
@@ -265,7 +271,7 @@ $(OUTPUT)/liburandom_read.so: urandom_read_lib1.c urandom_read_lib2.c liburandom
 $(OUTPUT)/urandom_read: urandom_read.c urandom_read_aux.c $(OUTPUT)/liburandom_read.so
 	$(call msg,BINARY,,$@)
 	$(Q)$(CLANG) $(CLANG_TARGET_ARCH) \
-		     $(filter-out -static,$(CFLAGS) $(LDFLAGS)) $(filter %.c,$^) \
+		     $(filter-out -static,$(URANDOM_READ_CFLAGS) $(LDFLAGS)) $(filter %.c,$^) \
 		     -Wno-unused-command-line-argument \
 		     -lurandom_read $(filter-out -static,$(LDLIBS)) -L$(OUTPUT) \
 		     -fuse-ld=$(LLD) -Wl,-znoseparate-code -Wl,--build-id=sha1 \
