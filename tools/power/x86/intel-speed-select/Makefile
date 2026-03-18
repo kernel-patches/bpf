@@ -20,6 +20,7 @@ NL3_CFLAGS = -I/usr/include/libnl3
 endif
 
 override CFLAGS += -O2 -Wall -g -D_GNU_SOURCE -I$(OUTPUT)include $(NL3_CFLAGS)
+override CFLAGS += $(EXTRA_CFLAGS)
 override LDFLAGS += -lnl-genl-3 -lnl-3
 
 ALL_TARGETS := intel-speed-select
