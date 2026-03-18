@@ -1074,8 +1074,15 @@ static int armv8pmu_user_event_idx(struct perf_event *event)
 static void armv8pmu_sched_task(struct perf_event_pmu_context *pmu_ctx,
 				struct task_struct *task, bool sched_in)
 {
-	struct arm_pmu *armpmu = to_arm_pmu(pmu_ctx->pmu);
-	struct pmu_hw_events *hw_events = this_cpu_ptr(armpmu->hw_events);
+	struct arm_pmu *armpmu;
+	struct pmu_hw_events *hw_events;
+
+	/* cpc->task_epc is NULL when no per-task events exist for this PMU */
+	if (!pmu_ctx)
+		return;
+
+	armpmu = to_arm_pmu(pmu_ctx->pmu);
+	hw_events = this_cpu_ptr(armpmu->hw_events);
 
 	if (!hw_events->branch_users)
 		return;
