@@ -1535,8 +1535,17 @@ SYM_CODE_END(rewind_stack_and_make_dead)
 SYM_FUNC_START(clear_bhb_loop)
 	ANNOTATE_NOENDBR
 	push	%rbp
+	/* BPF caller may require %rax to be preserved */
+	push	%rax
 	mov	%rsp, %rbp
-	movl	$5, %ecx
+
+	/*
+	 * Between the long and short version of BHB clear sequence, just the
+	 * loop count differs based on BHI_CTRL, see Intel's BHI guidance.
+	 */
+	ALTERNATIVE "movb $5,  %al",	\
+		    "movb $12, %al", X86_FEATURE_BHI_CTRL
+
 	ANNOTATE_INTRA_FUNCTION_CALL
 	call	1f
 	jmp	5f
@@ -1556,16 +1565,18 @@ SYM_FUNC_START(clear_bhb_loop)
 	 * This should be ideally be: .skip 32 - (.Lret2 - 2f), 0xcc
 	 * but some Clang versions (e.g. 18) don't like this.
 	 */
-	.skip 32 - 18, 0xcc
-2:	movl	$5, %eax
+	.skip 32 - 14, 0xcc
+2:	ALTERNATIVE "movb $5, %ah",	\
+		    "movb $7, %ah", X86_FEATURE_BHI_CTRL
 3:	jmp	4f
 	nop
-4:	sub	$1, %eax
+4:	sub	$1, %ah
 	jnz	3b
-	sub	$1, %ecx
+	sub	$1, %al
 	jnz	1b
 .Lret2:	RET
 5:
+	pop	%rax
 	pop	%rbp
 	RET
 SYM_FUNC_END(clear_bhb_loop)

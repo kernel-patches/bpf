@@ -1614,11 +1614,6 @@ static int emit_spectre_bhb_barrier(u8 **pprog, u8 *ip,
 	u8 *func;
 
 	if (cpu_feature_enabled(X86_FEATURE_CLEAR_BHB_LOOP)) {
-		/* The clearing sequence clobbers eax and ecx. */
-		EMIT1(0x50); /* push rax */
-		EMIT1(0x51); /* push rcx */
-		ip += 2;
-
 		func = (u8 *)clear_bhb_loop;
 		ip += x86_call_depth_emit_accounting(&prog, func, ip);
 
@@ -1626,8 +1621,6 @@ static int emit_spectre_bhb_barrier(u8 **pprog, u8 *ip,
 			return -EINVAL;
 		/* Don't speculate past this until BHB is cleared */
 		EMIT_LFENCE();
-		EMIT1(0x59); /* pop rcx */
-		EMIT1(0x58); /* pop rax */
 	}
 	/* Insert IBHF instruction */
 	if ((cpu_feature_enabled(X86_FEATURE_CLEAR_BHB_LOOP) &&
