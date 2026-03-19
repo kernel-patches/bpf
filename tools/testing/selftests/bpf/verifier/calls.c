@@ -220,7 +220,7 @@
 	},
 	.result_unpriv = REJECT,
 	.result = REJECT,
-	.errstr = "variable trusted_ptr_ access var_off=(0x0; 0x7) disallowed",
+	.errstr = "R1 must have zero offset when passed to release func or trusted arg to kfunc",
 },
 {
 	"calls: invalid kfunc call: referenced arg needs refcounted PTR_TO_BTF_ID",

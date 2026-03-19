@@ -581,6 +581,8 @@ int tnum_strn(char *str, size_t size, struct tnum a)
 	if (a.mask == 0) {
 		if (is_unum_decimal(a.value))
 			return snprintf(str, size, "%llu", a.value);
+		if (is_snum_decimal(a.value))
+			return snprintf(str, size, "%lld", a.value);
 		else
 			return snprintf(str, size, "%#llx", a.value);
 	}
@@ -692,7 +694,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		if (state->frameno != reg->frameno)
 			verbose(env, "[%d]", reg->frameno);
 		if (tnum_is_const(reg->var_off)) {
-			verbose_snum(env, reg->var_off.value + reg->off);
+			verbose_snum(env, reg->var_off.value + reg->delta);
 			return;
 		}
 	}
@@ -702,7 +704,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 	if (reg->id)
 		verbose_a("id=%d", reg->id & ~BPF_ADD_CONST);
 	if (reg->id & BPF_ADD_CONST)
-		verbose(env, "%+d", reg->off);
+		verbose(env, "%+d", reg->delta);
 	if (reg->ref_obj_id)
 		verbose_a("ref_obj_id=%d", reg->ref_obj_id);
 	if (type_is_non_owning_ref(reg->type))
@@ -714,9 +716,9 @@ static void print_reg_state(struct bpf_verifier_env *env,
 			  reg->map_ptr->key_size,
 			  reg->map_ptr->value_size);
 	}
-	if (t != SCALAR_VALUE && reg->off) {
+	if (t != SCALAR_VALUE && reg->delta) {
 		verbose_a("off=");
-		verbose_snum(env, reg->off);
+		verbose_snum(env, reg->delta);
 	}
 	if (type_is_pkt_pointer(t)) {
 		verbose_a("r=");

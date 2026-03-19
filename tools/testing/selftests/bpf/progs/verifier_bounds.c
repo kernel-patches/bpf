@@ -202,7 +202,7 @@ l0_%=:	/* exit */					\
 
 SEC("tc")
 __description("bounds check based on reg_off + var_off + insn_off. test1")
-__failure __msg("value_size=8 off=1073741825")
+__failure __msg("map_value pointer offset 1073741822 is not allowed")
 __naked void var_off_insn_off_test1(void)
 {
 	asm volatile ("					\
@@ -2032,6 +2032,39 @@ __naked void signed_unsigned_intersection32_case2(void *ctx)
 	if w0 <= 5 goto 1f;		/* range can be narrowed to  [0..5] */		\
 	r10 = 0;			/* thus predicting the jump */			\
 1:	exit;										\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/* After instruction 3, the u64 and s64 ranges look as follows:
+ * 0  umin=2                             umax=0xff..ff00..03   U64_MAX
+ * |  [xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx]      |
+ * |----------------------------|------------------------------|
+ * |xx]                           [xxxxxxxxxxxxxxxxxxxxxxxxxxxx|
+ * 0  smax=2                      smin=0x800..02               -1
+ *
+ * The two ranges can't be refined because they overlap in two places. Once we
+ * add an upper-bound to u64 at instruction 4, the refinement can happen. This
+ * test validates that this refinement does happen and is not overwritten by
+ * the less-precise 32bits ranges.
+ */
+SEC("socket")
+__description("bounds refinement: 64bits ranges not overwritten by 32bits ranges")
+__msg("3: (65) if r0 s> 0x2 {{.*}} R0=scalar(smin=0x8000000000000002,smax=2,umin=smin32=umin32=2,umax=0xffffffff00000003,smax32=umax32=3")
+__msg("4: (25) if r0 > 0x13 {{.*}} R0=2")
+__success __log_level(2)
+__naked void refinement_32bounds_not_overwriting_64bounds(void *ctx)
+{
+	asm volatile("			\
+	call %[bpf_get_prandom_u32];	\
+	if w0 < 2 goto +5;		\
+	if w0 > 3 goto +4;		\
+	if r0 s> 2 goto +3;		\
+	if r0 > 19 goto +2;		\
+	if r0 == 2 goto +1;		\
+	r10 = 0;			\
+	exit;				\
 "	:
 	: __imm(bpf_get_prandom_u32)
 	: __clobber_all);

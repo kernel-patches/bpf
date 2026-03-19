@@ -627,6 +627,10 @@ struct task_struct___preempt_rt {
 	int softirq_disable_cnt;
 } __attribute__((preserve_access_index));
 
+#ifdef bpf_target_s390
+extern struct lowcore *bpf_get_lowcore(void) __weak __ksym;
+#endif
+
 static inline int get_preempt_count(void)
 {
 #if defined(bpf_target_x86)
@@ -645,6 +649,10 @@ static inline int get_preempt_count(void)
 			bpf_this_cpu_ptr(&pcpu_hot))->preempt_count;
 #elif defined(bpf_target_arm64)
 	return bpf_get_current_task_btf()->thread_info.preempt.count;
+#elif defined(bpf_target_powerpc)
+	return bpf_get_current_task_btf()->thread_info.preempt_count;
+#elif defined(bpf_target_s390)
+	return bpf_get_lowcore()->preempt_count;
 #endif
 	return 0;
 }
@@ -653,6 +661,8 @@ static inline int get_preempt_count(void)
  *	Report whether it is in interrupt context. Only works on the following archs:
  *	* x86
  *	* arm64
+ *	* powerpc64
+ *	* s390x
  */
 static inline int bpf_in_interrupt(void)
 {
@@ -672,6 +682,8 @@ static inline int bpf_in_interrupt(void)
  *	Report whether it is in NMI context. Only works on the following archs:
  *	* x86
  *	* arm64
+ *	* powerpc64
+ *	* s390x
  */
 static inline int bpf_in_nmi(void)
 {
@@ -682,6 +694,8 @@ static inline int bpf_in_nmi(void)
  *	Report whether it is in hard IRQ context. Only works on the following archs:
  *	* x86
  *	* arm64
+ *	* powerpc64
+ *	* s390x
  */
 static inline int bpf_in_hardirq(void)
 {
@@ -692,6 +706,8 @@ static inline int bpf_in_hardirq(void)
  *	Report whether it is in softirq context. Only works on the following archs:
  *	* x86
  *	* arm64
+ *	* powerpc64
+ *	* s390x
  */
 static inline int bpf_in_serving_softirq(void)
 {
@@ -710,6 +726,8 @@ static inline int bpf_in_serving_softirq(void)
  *	Report whether it is in task context. Only works on the following archs:
  *	* x86
  *	* arm64
+ *	* powerpc64
+ *	* s390x
  */
 static inline int bpf_in_task(void)
 {

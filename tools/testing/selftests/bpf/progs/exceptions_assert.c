@@ -114,7 +114,7 @@ int check_assert_single_range_u64(struct __sk_buff *ctx)
 
 SEC("?tc")
 __log_level(2) __failure
-__msg(": R1=pkt(off=64,r=64) R2=pkt_end() R6=pkt(r=64) R10=fp0")
+__msg(": R1=pkt(r=64,imm=64) R2=pkt_end() R6=pkt(r=64) R10=fp0")
 int check_assert_generic(struct __sk_buff *ctx)
 {
 	u8 *data_end = (void *)(long)ctx->data_end;

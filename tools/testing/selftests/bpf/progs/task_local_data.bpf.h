@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause) */
 #ifndef __TASK_LOCAL_DATA_BPF_H
 #define __TASK_LOCAL_DATA_BPF_H
 
