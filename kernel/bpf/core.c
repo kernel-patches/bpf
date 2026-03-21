@@ -1770,7 +1770,6 @@ static u64 ___bpf_prog_run(u64 *regs, const struct bpf_insn *insn)
 	u32 tail_call_cnt = 0;
 
 #define CONT	 ({ insn++; goto select_insn; })
-#define CONT_JMP ({ insn++; goto select_insn; })
 
 select_insn:
 	goto *jumptable[insn->code];
@@ -2089,25 +2088,25 @@ out:
 	JMP_##OPCODE##_X:					\
 		if ((SIGN##64) DST CMP_OP (SIGN##64) SRC) {	\
 			insn += insn->off;			\
-			CONT_JMP;				\
+			CONT;					\
 		}						\
 		CONT;						\
 	JMP32_##OPCODE##_X:					\
 		if ((SIGN##32) DST CMP_OP (SIGN##32) SRC) {	\
 			insn += insn->off;			\
-			CONT_JMP;				\
+			CONT;					\
 		}						\
 		CONT;						\
 	JMP_##OPCODE##_K:					\
 		if ((SIGN##64) DST CMP_OP (SIGN##64) IMM) {	\
 			insn += insn->off;			\
-			CONT_JMP;				\
+			CONT;					\
 		}						\
 		CONT;						\
 	JMP32_##OPCODE##_K:					\
 		if ((SIGN##32) DST CMP_OP (SIGN##32) IMM) {	\
 			insn += insn->off;			\
-			CONT_JMP;				\
+			CONT;					\
 		}						\
 		CONT;
 	COND_JMP(u, JEQ, ==)
