@@ -116,7 +116,7 @@ enum hashmap_insert_strategy {
 	_Static_assert((__builtin_constant_p((p)) ? (p) == NULL : 0) ||			\
 				sizeof(*(p)) == sizeof(long),				\
 		       #p " pointee should be a long-sized integer or a pointer");	\
-	(long *)(p);									\
+	(void *)(p);									\
 })
 
 /*
@@ -128,7 +128,7 @@ enum hashmap_insert_strategy {
  */
 int hashmap_insert(struct hashmap *map, long key, long value,
 		   enum hashmap_insert_strategy strategy,
-		   long *old_key, long *old_value);
+		   void *old_key, void *old_value);
 
 #define hashmap__insert(map, key, value, strategy, old_key, old_value) \
 	hashmap_insert((map), (long)(key), (long)(value), (strategy),  \
@@ -147,14 +147,14 @@ int hashmap_insert(struct hashmap *map, long key, long value,
 #define hashmap__append(map, key, value) \
 	hashmap__insert((map), (key), (value), HASHMAP_APPEND, NULL, NULL)
 
-bool hashmap_delete(struct hashmap *map, long key, long *old_key, long *old_value);
+bool hashmap_delete(struct hashmap *map, long key, void *old_key, void *old_value);
 
 #define hashmap__delete(map, key, old_key, old_value)		       \
 	hashmap_delete((map), (long)(key),			       \
 		       hashmap_cast_ptr(old_key),		       \
 		       hashmap_cast_ptr(old_value))
 
-bool hashmap_find(const struct hashmap *map, long key, long *value);
+bool hashmap_find(const struct hashmap *map, long key, void *value);
 
 #define hashmap__find(map, key, value) \
 	hashmap_find((map), (long)(key), hashmap_cast_ptr(value))
