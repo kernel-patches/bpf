@@ -2065,8 +2065,9 @@ config KALLSYMS_LINEINFO
 	    anon_vma_clone+0x2ed/0xcf0 (mm/rmap.c:412)
 
 	  This requires elfutils (libdw-dev/elfutils-devel) on the build host.
-	  Adds approximately 44MB to a typical kernel image (10 bytes per
-	  DWARF line-table entry, ~4.6M entries for a typical config).
+	  Adds approximately 10-15MB to a typical kernel image (~2-3 bytes
+	  per entry after delta compression, ~4.6M entries for a typical
+	  config).
 
 	  If unsure, say N.
 
@@ -2079,7 +2080,8 @@ config KALLSYMS_LINEINFO_MODULES
 	  so stack traces from module code include (file.c:123) annotations.
 
 	  Requires elfutils (libdw-dev/elfutils-devel) on the build host.
-	  Increases .ko sizes by approximately 10 bytes per DWARF line entry.
+	  Increases .ko sizes by approximately 2-3 bytes per DWARF line
+	  entry after delta compression.
 
 	  If unsure, say N.
 

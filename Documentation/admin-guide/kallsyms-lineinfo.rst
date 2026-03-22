@@ -76,10 +76,11 @@ Memory Overhead
 ===============
 
 The vmlinux lineinfo tables are stored in ``.rodata`` and typically add
-approximately 44 MiB to the kernel image for a standard configuration
-(~4.6 million DWARF line entries, ~10 bytes per entry after deduplication).
+approximately 10-15 MiB to the kernel image for a standard configuration
+(~4.6 million DWARF line entries, ~2-3 bytes per entry after delta
+compression).
 
-Per-module lineinfo adds approximately 10 bytes per DWARF line entry to each
+Per-module lineinfo adds approximately 2-3 bytes per DWARF line entry to each
 ``.ko`` file.
 
 Known Limitations

@@ -509,16 +509,11 @@ bool module_lookup_lineinfo(struct module *mod, unsigned long addr,
 			    const char **file, unsigned int *line)
 {
 	const struct mod_lineinfo_header *hdr;
+	struct lineinfo_table tbl;
 	const void *base;
-	const u32 *addrs, *lines, *file_offsets;
-	const u16 *file_ids;
-	const char *filenames;
-	u32 num_entries, num_files, filenames_size;
+	u32 section_size;
 	unsigned long text_base;
-	unsigned int offset;
 	unsigned long long raw_offset;
-	unsigned int low, high, mid;
-	u16 file_id;
 
 	if (!IS_ENABLED(CONFIG_KALLSYMS_LINEINFO_MODULES))
 		return false;
@@ -527,61 +522,55 @@ bool module_lookup_lineinfo(struct module *mod, unsigned long addr,
 	if (!base)
 		return false;
 
-	if (mod->lineinfo_data_size < sizeof(*hdr))
+	section_size = mod->lineinfo_data_size;
+	if (section_size < sizeof(*hdr))
 		return false;
 
 	hdr = base;
-	num_entries = hdr->num_entries;
-	num_files = hdr->num_files;
-	filenames_size = hdr->filenames_size;
 
-	if (num_entries == 0)
+	if (hdr->num_entries == 0 || hdr->num_blocks == 0)
 		return false;
 
-	/* Validate section is large enough for all arrays */
-	if (mod->lineinfo_data_size <
-	    mod_lineinfo_filenames_off(num_entries, num_files) + filenames_size)
+	/* Validate each sub-array fits within the section */
+	if (hdr->blocks_offset + hdr->blocks_size > section_size)
+		return false;
+	if (hdr->data_offset + hdr->data_size > section_size)
+		return false;
+	if (hdr->files_offset + hdr->files_size > section_size)
+		return false;
+	if (hdr->filenames_offset + hdr->filenames_size > section_size)
 		return false;
 
-	addrs = base + mod_lineinfo_addrs_off();
-	file_ids = base + mod_lineinfo_file_ids_off(num_entries);
-	lines = base + mod_lineinfo_lines_off(num_entries);
-	file_offsets = base + mod_lineinfo_file_offsets_off(num_entries);
-	filenames = base + mod_lineinfo_filenames_off(num_entries, num_files);
+	/* Validate array sizes match declared counts */
+	if (hdr->blocks_size < hdr->num_blocks * 2 * sizeof(u32))
+		return false;
+	if (hdr->files_size < hdr->num_files * sizeof(u32))
+		return false;
 
-	/* Compute offset from module .text base */
+	/*
+	 * Compute offset from module .text base.
+	 * NOTE: This assumes .text is at the start of the MOD_TEXT segment.
+	 * A proper fix would use ELF relocations to reference .text directly.
+	 */
 	text_base = (unsigned long)mod->mem[MOD_TEXT].base;
 	if (addr < text_base)
 		return false;
 
 	raw_offset = addr - text_base;
-	if (raw_offset > UINT_MAX)
-		return false;
-	offset = (unsigned int)raw_offset;
-
-	/* Binary search for largest entry <= offset */
-	low = 0;
-	high = num_entries;
-	while (low < high) {
-		mid = low + (high - low) / 2;
-		if (addrs[mid] <= offset)
-			low = mid + 1;
-		else
-			high = mid;
-	}
-
-	if (low == 0)
-		return false;
-	low--;
-
-	file_id = file_ids[low];
-	if (file_id >= num_files)
+	if (raw_offset > U32_MAX)
 		return false;
 
-	if (file_offsets[file_id] >= filenames_size)
-		return false;
+	tbl.blk_addrs	= base + hdr->blocks_offset;
+	tbl.blk_offsets	= base + hdr->blocks_offset +
+			  hdr->num_blocks * sizeof(u32);
+	tbl.data	= base + hdr->data_offset;
+	tbl.data_size	= hdr->data_size;
+	tbl.file_offsets = base + hdr->files_offset;
+	tbl.filenames	= base + hdr->filenames_offset;
+	tbl.num_entries	= hdr->num_entries;
+	tbl.num_blocks	= hdr->num_blocks;
+	tbl.num_files	= hdr->num_files;
+	tbl.filenames_size = hdr->filenames_size;
 
-	*file = &filenames[file_offsets[file_id]];
-	*line = lines[low];
-	return true;
+	return lineinfo_search(&tbl, (unsigned int)raw_offset, file, line);
 }

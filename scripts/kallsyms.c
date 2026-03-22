@@ -80,11 +80,12 @@ static bool is_ignored_symbol(const char *name, char type)
 {
 	/* Ignore lineinfo symbols for kallsyms pass stability */
 	static const char * const lineinfo_syms[] = {
-		"lineinfo_addrs",
-		"lineinfo_file_ids",
+		"lineinfo_block_addrs",
+		"lineinfo_block_offsets",
+		"lineinfo_data",
 		"lineinfo_file_offsets",
 		"lineinfo_filenames",
-		"lineinfo_lines",
+		"lineinfo_num_blocks",
 		"lineinfo_num_entries",
 		"lineinfo_num_files",
 	};
