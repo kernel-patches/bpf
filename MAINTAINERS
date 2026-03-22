@@ -13731,6 +13731,7 @@ M:	Sasha Levin <sashal@kernel.org>
 S:	Maintained
 F:	Documentation/admin-guide/kallsyms-lineinfo.rst
 F:	include/linux/mod_lineinfo.h
+F:	lib/tests/lineinfo_kunit.c
 F:	scripts/gen-mod-lineinfo.sh
 F:	scripts/gen_lineinfo.c
 
