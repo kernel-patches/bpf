@@ -43,6 +43,7 @@ HEADERS = vmlinux.h bpf_helper_defs.h image_size.h
 #   <P>.bpf                - final ELF wrapper with .bpf.1 section
 # ---------------------------------------------------------------------------
 BPF_TARGETS = zboot
+BPF_TARGETS += uki
 
 define BPF_ARTIFACTS
 $(1)_parser_bpf.o $(1)_parser_bpf.lskel.h $(1)_bytecode.c $(1)_bytecode.o $(1).bpf
@@ -54,8 +55,13 @@ ALL_BPF_ARTIFACTS = $(foreach t,$(BPF_TARGETS),$(call BPF_ARTIFACTS,$(t)))
 # Top-level phony targets
 # ---------------------------------------------------------------------------
 zboot: $(HEADERS) $(call BPF_ARTIFACTS,zboot) build_zboot_image
+ifeq ($(ARCH),$(filter $(ARCH),arm64 riscv loongarch))
+uki: $(HEADERS) zboot.bpf $(call BPF_ARTIFACTS,uki)
+else
+uki: $(HEADERS) $(call BPF_ARTIFACTS,uki)
+endif
 
-.PHONY: zboot clean
+.PHONY: zboot uki clean
 
 # ---------------------------------------------------------------------------
 # Shared header rules
@@ -123,6 +129,15 @@ image_size.h: $(KERNEL_IMAGE)
 # ---------------------------------------------------------------------------
 ZBOOT_BPF_MAPS := .bpf.1:zboot_bytecode.o
 
+# uki.bpf sections depend on architecture:
+#   arm64/riscv/loongarch: .bpf.1 (uki bytecode) + .bpf.nested (zboot.bpf ELF)
+#   x86: .bpf.1 only.  zboot format does not exist on x86
+ifeq ($(ARCH),$(filter $(ARCH),arm64 riscv loongarch))
+UKI_BPF_MAPS   := .bpf.1:uki_bytecode.o .bpf.nested:zboot.bpf
+else
+UKI_BPF_MAPS   := .bpf.1:uki_bytecode.o
+endif
+
 # ---------------------------------------------------------------------------
 # Helpers to build objcopy flags from a BPF_MAPS list
 # ---------------------------------------------------------------------------
@@ -154,6 +169,7 @@ $(1).bpf: $(foreach m,$($(2)_BPF_MAPS),$(call source_file,$(m)))
 endef
 
 $(eval $(call BPF_WRAPPER_RULE,zboot,ZBOOT))
+$(eval $(call BPF_WRAPPER_RULE,uki,UKI))
 
 # ---------------------------------------------------------------------------
 # Clean
