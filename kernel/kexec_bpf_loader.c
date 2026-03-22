@@ -78,6 +78,7 @@ late_initcall(kexec_bpf_prog_run_init);
 #define KEXEC_BPF_CMD_INVALID		0x0
 #define KEXEC_BPF_CMD_DONE		0x1
 #define KEXEC_BPF_CMD_DECOMPRESS	0x2
+#define KEXEC_BPF_CMD_COPY		0x3
 
 #define KEXEC_BPF_SUBCMD_INVALID	0x0
 #define KEXEC_BPF_SUBCMD_KERNEL		0x1
@@ -305,6 +306,34 @@ static int kexec_buff_parser(struct bpf_parser_context *parser)
 				vfree(decompressed_buf);
 				break;
 			}
+		}
+		break;
+	case KEXEC_BPF_CMD_COPY:
+		p = __vmalloc(cmd->payload_len, GFP_KERNEL | __GFP_ACCOUNT);
+		if (!p)
+			return -ENOMEM;
+		memcpy(p, buf, cmd->payload_len);
+		switch (cmd->subcmd) {
+		case KEXEC_BPF_SUBCMD_KERNEL:
+			vfree(ctx->kernel);
+			ctx->kernel = p;
+			ctx->kernel_sz = cmd->payload_len;
+			break;
+		/* Todo: allow the concatenation of multiple initrd */
+		case KEXEC_BPF_SUBCMD_INITRD:
+			vfree(ctx->initrd);
+			ctx->initrd = p;
+			ctx->initrd_sz = cmd->payload_len;
+			break;
+		/* Todo: allow the concatenation of multiple cmdline */
+		case KEXEC_BPF_SUBCMD_CMDLINE:
+			vfree(ctx->cmdline);
+			ctx->cmdline = p;
+			ctx->cmdline_sz = cmd->payload_len;
+			break;
+		default:
+			vfree(p);
+			break;
 		}
 		break;
 	default:
