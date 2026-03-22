@@ -4005,4 +4005,24 @@ static inline int bpf_map_check_op_flags(struct bpf_map *map, u64 flags, u64 all
 	return 0;
 }
 
+struct bpf_parser_buf {
+	char *buf;
+	int size;
+};
+
+struct bpf_parser_context;
+typedef int (*bpf_parser_handler_t)(struct bpf_parser_context *ctx);
+
+struct bpf_parser_context {
+	struct kref ref;
+	struct hlist_node hash_node;
+	/* This callback should be sync so that @buf can be freed */
+	bpf_parser_handler_t func;
+	struct bpf_parser_buf *buf;
+	void *data;
+};
+
+struct bpf_parser_context *alloc_bpf_parser_context(bpf_parser_handler_t func,
+			void *data);
+void put_bpf_parser_context(struct bpf_parser_context *ctx);
 #endif /* _LINUX_BPF_H */
