@@ -24,14 +24,105 @@
 #include <linux/decompress/generic.h>
 #include "kexec_internal.h"
 
+#include "kexec_bpf/kexec_pe_parser_bpf.lskel.h"
+
+static struct kexec_pe_parser_bpf *pe_parser;
+
+static void *get_symbol_from_elf(const char *elf_data, size_t elf_size,
+				 const char *symbol_name,
+				 unsigned int *symbol_size)
+{
+	Elf_Ehdr *ehdr = (Elf_Ehdr *)elf_data;
+	Elf_Shdr *shdr, *dst_shdr;
+	const Elf_Sym *sym;
+	void *symbol_data;
+
+	/* Check minimum size for ELF header */
+	if (elf_size < sizeof(Elf_Ehdr)) {
+		pr_err("ELF file too small\n");
+		return NULL;
+	}
+
+	if (memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) {
+		pr_err("Not a valid ELF file\n");
+		return NULL;
+	}
+
+	/* Check section header table bounds */
+	if (ehdr->e_shoff > elf_size ||
+	    ehdr->e_shoff + (ehdr->e_shnum * sizeof(Elf_Shdr)) > elf_size) {
+		pr_err("Section header table out of bounds\n");
+		return NULL;
+	}
+
+	sym = elf_find_symbol(ehdr, symbol_name);
+	if (!sym)
+		return NULL;
+
+	/* Check symbol section index */
+	if (sym->st_shndx >= ehdr->e_shnum) {
+		pr_err("Symbol section index out of bounds\n");
+		return NULL;
+	}
+
+	shdr = (struct elf_shdr *)(elf_data + ehdr->e_shoff);
+	dst_shdr = &shdr[sym->st_shndx];
+
+	/* Check section data bounds */
+	if (dst_shdr->sh_offset > elf_size ||
+	    dst_shdr->sh_offset + dst_shdr->sh_size > elf_size ||
+	    sym->st_value > dst_shdr->sh_size) {
+		pr_err("Symbol data out of bounds\n");
+		return NULL;
+	}
+
+	symbol_data = (void *)(elf_data + dst_shdr->sh_offset + sym->st_value);
+
+	if (symbol_size)
+		*symbol_size = sym->st_size;
+
+	return symbol_data;
+}
+
 /* Load a ELF */
 static int arm_bpf_prog(char *bpf_elf, unsigned long sz)
 {
-	return -1;
+	opts_data = get_symbol_from_elf(bpf_elf, sz, "opts_data", &opts_data_sz);
+	opts_insn = get_symbol_from_elf(bpf_elf, sz, "opts_insn", &opts_insn_sz);
+	if (!opts_data || !opts_insn) {
+		pr_err("Cannot get symbol from ELF: opts_data=%px, opts_insn=%px\n",
+			opts_data, opts_insn);
+		return -1;
+	}
+
+	if (opts_data_sz < 1 || opts_insn_sz < 1) {
+		pr_err("Symbol size too small (opts_data_sz=%u, opts_insn_sz=%u)\n",
+		       opts_data_sz, opts_insn_sz);
+		return -1;
+	}
+	/*
+	 * When light skeleton generates opts_data[] and opts_insn[], it appends a
+	 * NULL terminator at the end of string
+	 */
+	opts_data_sz = opts_data_sz - 1;
+	opts_insn_sz = opts_insn_sz - 1;
+
+	pe_parser = kexec_pe_parser_bpf__open_and_load();
+	if (!pe_parser) {
+		pr_info("Can not open and load bpf parser\n");
+		return -1;
+	}
+	kexec_pe_parser_bpf__attach(pe_parser);
+
+	return 0;
 }
 
 static void disarm_bpf_prog(void)
 {
+	kexec_pe_parser_bpf__destroy(pe_parser);
+	pe_parser = NULL;
+	opts_data = NULL;
+	opts_insn = NULL;
 }
 
 #define MAX_PARSING_BUF_NUM    16
