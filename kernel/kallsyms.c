@@ -467,6 +467,52 @@ static int append_buildid(char *buffer,   const char *modname,
 
 #endif /* CONFIG_STACKTRACE_BUILD_ID */
 
+bool kallsyms_lookup_lineinfo(unsigned long addr,
+			      const char **file, unsigned int *line)
+{
+	unsigned long long raw_offset;
+	unsigned int offset, low, high, mid, file_id;
+
+	if (!IS_ENABLED(CONFIG_KALLSYMS_LINEINFO) || !lineinfo_num_entries)
+		return false;
+
+	/* Compute offset from _text */
+	if (addr < (unsigned long)_text)
+		return false;
+
+	raw_offset = addr - (unsigned long)_text;
+	if (raw_offset > UINT_MAX)
+		return false;
+	offset = (unsigned int)raw_offset;
+
+	/* Binary search for largest entry <= offset */
+	low = 0;
+	high = lineinfo_num_entries;
+	while (low < high) {
+		mid = low + (high - low) / 2;
+		if (lineinfo_addrs[mid] <= offset)
+			low = mid + 1;
+		else
+			high = mid;
+	}
+
+	if (low == 0)
+		return false;
+	low--;
+
+	file_id = lineinfo_file_ids[low];
+	*line = lineinfo_lines[low];
+
+	if (file_id >= lineinfo_num_files)
+		return false;
+
+	if (lineinfo_file_offsets[file_id] >= lineinfo_filenames_size)
+		return false;
+
+	*file = &lineinfo_filenames[lineinfo_file_offsets[file_id]];
+	return true;
+}
+
 /* Look up a kernel symbol and return it in a text buffer. */
 static int __sprint_symbol(char *buffer, unsigned long address,
 			   int symbol_offset, int add_offset, int add_buildid)
@@ -495,6 +541,16 @@ static int __sprint_symbol(char *buffer, unsigned long address,
 		if (add_buildid)
 			len += append_buildid(buffer + len, modname, buildid);
 		len += sprintf(buffer + len, "]");
+	}
+
+	if (IS_ENABLED(CONFIG_KALLSYMS_LINEINFO) && !modname) {
+		const char *li_file;
+		unsigned int li_line;
+
+		if (kallsyms_lookup_lineinfo(address,
+					     &li_file, &li_line))
+			len += snprintf(buffer + len, KSYM_SYMBOL_LEN - len,
+					" (%s:%u)", li_file, li_line);
 	}
 
 	return len;
