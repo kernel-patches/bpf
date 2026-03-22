@@ -55,9 +55,6 @@ static bool check_ima_segment_index(struct kimage *image, int i)
 
 static int kexec_calculate_store_digests(struct kimage *image);
 
-/* Maximum size in bytes for kernel/initrd files. */
-#define KEXEC_FILE_SIZE_MAX	min_t(s64, 4LL << 30, SSIZE_MAX)
-
 /*
  * Currently this is the only default function that is exported as some
  * architectures need it to do additional handlings.
@@ -221,6 +218,7 @@ kimage_file_prepare_segments(struct kimage *image, int kernel_fd, int initrd_fd,
 {
 	ssize_t ret;
 	void *ldata;
+	bool envelop = false;
 
 	ret = kernel_read_file_from_fd(kernel_fd, 0, &image->kernel_buf,
 				       KEXEC_FILE_SIZE_MAX, NULL,
@@ -231,20 +229,40 @@ kimage_file_prepare_segments(struct kimage *image, int kernel_fd, int initrd_fd,
 	kexec_dprintk("kernel: %p kernel_size: %#lx\n",
 		      image->kernel_buf, image->kernel_buf_len);
 
-	/* Call arch image probe handlers */
+	if (IS_ENABLED(CONFIG_KEXEC_BPF)) {
+		/* Fill up image's kernel_buf, initrd_buf, cmdline_buf */
+		ret = decompose_kexec_image(image, initrd_fd);
+		switch (ret) {
+		case 0:
+			envelop = true;
+			break;
+		/* Valid format, but fail to parse */
+		case -EINVAL:
+			break;
+		default:
+			goto out;
+		}
+	}
+
+	/*
+	 * From this point, the kexec subsystem handle the kernel boot protocol.
+	 *
+	 * Call arch image probe handlers
+	 */
 	ret = arch_kexec_kernel_image_probe(image, image->kernel_buf,
 					    image->kernel_buf_len);
 	if (ret)
 		goto out;
 
 #ifdef CONFIG_KEXEC_SIG
-	ret = kimage_validate_signature(image);
-
-	if (ret)
-		goto out;
+	if (!envelop) {
+		ret = kimage_validate_signature(image);
+		if (ret)
+			goto out;
+	}
 #endif
 	/* It is possible that there no initramfs is being loaded */
-	if (!(flags & KEXEC_FILE_NO_INITRAMFS)) {
+	if (!(flags & KEXEC_FILE_NO_INITRAMFS) && !envelop) {
 		ret = kernel_read_file_from_fd(initrd_fd, 0, &image->initrd_buf,
 					       KEXEC_FILE_SIZE_MAX, NULL,
 					       READING_KEXEC_INITRAMFS);
@@ -257,7 +275,8 @@ kimage_file_prepare_segments(struct kimage *image, int kernel_fd, int initrd_fd,
 	image->no_cma = !!(flags & KEXEC_FILE_NO_CMA);
 	image->force_dtb = flags & KEXEC_FILE_FORCE_DTB;
 
-	if (cmdline_len) {
+	/* For envelop case, the cmdline should be passed in as a section */
+	if (cmdline_len && !envelop) {
 		image->cmdline_buf = memdup_user(cmdline_ptr, cmdline_len);
 		if (IS_ERR(image->cmdline_buf)) {
 			ret = PTR_ERR(image->cmdline_buf);
@@ -273,9 +292,11 @@ kimage_file_prepare_segments(struct kimage *image, int kernel_fd, int initrd_fd,
 			goto out;
 		}
 
+	}
+
+	if (image->cmdline_buf)
 		ima_kexec_cmdline(kernel_fd, image->cmdline_buf,
 				  image->cmdline_buf_len - 1);
-	}
 
 	/* IMA needs to pass the measurement list to the next kernel. */
 	ima_add_kexec_buffer(image);
