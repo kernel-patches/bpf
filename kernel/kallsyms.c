@@ -543,12 +543,24 @@ static int __sprint_symbol(char *buffer, unsigned long address,
 		len += sprintf(buffer + len, "]");
 	}
 
-	if (IS_ENABLED(CONFIG_KALLSYMS_LINEINFO) && !modname) {
+	if (IS_ENABLED(CONFIG_KALLSYMS_LINEINFO)) {
 		const char *li_file;
 		unsigned int li_line;
+		bool found = false;
 
-		if (kallsyms_lookup_lineinfo(address,
-					     &li_file, &li_line))
+		if (!modname)
+			found = kallsyms_lookup_lineinfo(address,
+							 &li_file, &li_line);
+		else if (IS_ENABLED(CONFIG_KALLSYMS_LINEINFO_MODULES)) {
+			struct module *mod = __module_address(address);
+
+			if (mod)
+				found = module_lookup_lineinfo(mod, address,
+							      &li_file,
+							      &li_line);
+		}
+
+		if (found)
 			len += snprintf(buffer + len, KSYM_SYMBOL_LEN - len,
 					" (%s:%u)", li_file, li_line);
 	}

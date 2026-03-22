@@ -23,7 +23,15 @@
 #include <gelf.h>
 #include <limits.h>
 
+#include "../include/linux/mod_lineinfo.h"
+
+static int module_mode;
+
 static unsigned int skipped_overflow;
+
+/* .text range for module mode (keep only runtime code) */
+static unsigned long long text_section_start;
+static unsigned long long text_section_end;
 
 struct line_entry {
 	unsigned int offset;	/* offset from _text */
@@ -148,27 +156,25 @@ static const char *make_relative(const char *path, const char *comp_dir)
 {
 	const char *p;
 
-	/* If already relative, use as-is */
-	if (path[0] != '/')
-		return path;
+	if (path[0] == '/') {
+		/* Try comp_dir prefix from DWARF */
+		if (comp_dir) {
+			size_t len = strlen(comp_dir);
 
-	/* comp_dir from DWARF is the most reliable method */
-	if (comp_dir) {
-		size_t len = strlen(comp_dir);
+			if (!strncmp(path, comp_dir, len) && path[len] == '/') {
+				const char *rel = path + len + 1;
 
-		if (!strncmp(path, comp_dir, len) && path[len] == '/') {
-			const char *rel = path + len + 1;
-
-			/*
-			 * If comp_dir pointed to a subdirectory
-			 * (e.g. arch/parisc/kernel) rather than
-			 * the tree root, stripping it leaves a
-			 * bare filename.  Fall through to the
-			 * kernel_dirs scan so we recover the full
-			 * relative path instead.
-			 */
-			if (strchr(rel, '/'))
-				return rel;
+				/*
+				 * If comp_dir pointed to a subdirectory
+				 * (e.g. arch/parisc/kernel) rather than
+				 * the tree root, stripping it leaves a
+				 * bare filename.  Fall through to the
+				 * kernel_dirs scan so we recover the full
+				 * relative path instead.
+				 */
+				if (strchr(rel, '/'))
+					return rel;
+			}
 		}
 
 		/*
@@ -194,9 +200,42 @@ static const char *make_relative(const char *path, const char *comp_dir)
 		return p ? p + 1 : path;
 	}
 
-	/* Fall back to basename */
-	p = strrchr(path, '/');
-	return p ? p + 1 : path;
+	/*
+	 * Relative path — check for duplicated-path quirk from libdw
+	 * on ET_REL files (e.g., "a/b.c/a/b.c" → "a/b.c").
+	 */
+	{
+		size_t len = strlen(path);
+		size_t mid = len / 2;
+
+		if (len > 1 && path[mid] == '/' &&
+		    !memcmp(path, path + mid + 1, mid))
+			return path + mid + 1;
+	}
+
+	/*
+	 * Bare filename with no directory component — try to recover the
+	 * relative path using comp_dir.  Some toolchains/elfutils combos
+	 * produce bare filenames where comp_dir holds the source directory.
+	 * Construct the absolute path and run the kernel_dirs scan.
+	 */
+	if (!strchr(path, '/') && comp_dir && comp_dir[0] == '/') {
+		static char buf[PATH_MAX];
+
+		snprintf(buf, sizeof(buf), "%s/%s", comp_dir, path);
+		for (p = buf + 1; *p; p++) {
+			if (*(p - 1) == '/') {
+				for (unsigned int i = 0; i < sizeof(kernel_dirs) /
+				     sizeof(kernel_dirs[0]); i++) {
+					if (!strncmp(p, kernel_dirs[i],
+						     strlen(kernel_dirs[i])))
+						return p;
+				}
+			}
+		}
+	}
+
+	return path;
 }
 
 static int compare_entries(const void *a, const void *b)
@@ -248,6 +287,159 @@ static unsigned long long find_text_addr(Elf *elf)
 	exit(1);
 }
 
+static void find_text_section_range(Elf *elf)
+{
+	Elf_Scn *scn = NULL;
+	GElf_Shdr shdr;
+	size_t shstrndx;
+
+	if (elf_getshdrstrndx(elf, &shstrndx) != 0)
+		return;
+
+	while ((scn = elf_nextscn(elf, scn)) != NULL) {
+		const char *name;
+
+		if (!gelf_getshdr(scn, &shdr))
+			continue;
+		name = elf_strptr(elf, shstrndx, shdr.sh_name);
+		if (name && !strcmp(name, ".text")) {
+			text_section_start = shdr.sh_addr;
+			text_section_end = shdr.sh_addr + shdr.sh_size;
+			return;
+		}
+	}
+}
+
+/*
+ * Apply .rela.debug_line relocations to a mutable copy of .debug_line data.
+ *
+ * elfutils libdw (through at least 0.194) does NOT apply relocations for
+ * ET_REL files when using dwarf_begin_elf().  The internal libdwfl layer
+ * does this via __libdwfl_relocate(), but that API is not public.
+ *
+ * For DWARF5, the .debug_line file name table uses DW_FORM_line_strp
+ * references into .debug_line_str.  Without relocation, all these offsets
+ * resolve to 0 (or garbage), causing dwarf_linesrc()/dwarf_filesrc() to
+ * return wrong filenames (typically the comp_dir for every file).
+ *
+ * This function applies the relocations manually so that the patched
+ * .debug_line data can be fed to dwarf_begin_elf() and produce correct
+ * results.
+ *
+ * See elfutils bug https://sourceware.org/bugzilla/show_bug.cgi?id=31447
+ * A fix (dwelf_elf_apply_relocs) was proposed but not yet merged as of
+ * elfutils 0.194: https://sourceware.org/pipermail/elfutils-devel/2024q3/007388.html
+ */
+/*
+ * Determine the relocation type for a 32-bit absolute reference
+ * on the given architecture.  Returns 0 if unknown.
+ */
+static unsigned int r_type_abs32(unsigned int e_machine)
+{
+	switch (e_machine) {
+	case EM_X86_64:		return R_X86_64_32;
+	case EM_386:		return R_386_32;
+	case EM_AARCH64:	return R_AARCH64_ABS32;
+	case EM_ARM:		return R_ARM_ABS32;
+	case EM_RISCV:		return R_RISCV_32;
+	case EM_S390:		return R_390_32;
+	case EM_MIPS:		return R_MIPS_32;
+	case EM_PPC64:		return R_PPC64_ADDR32;
+	case EM_PPC:		return R_PPC_ADDR32;
+	case EM_LOONGARCH:	return R_LARCH_32;
+	case EM_PARISC:		return R_PARISC_DIR32;
+	default:		return 0;
+	}
+}
+
+static void apply_debug_line_relocations(Elf *elf)
+{
+	Elf_Scn *scn = NULL;
+	Elf_Scn *debug_line_scn = NULL;
+	Elf_Scn *rela_debug_line_scn = NULL;
+	Elf_Scn *symtab_scn = NULL;
+	GElf_Shdr shdr;
+	GElf_Ehdr ehdr;
+	unsigned int abs32_type;
+	size_t shstrndx;
+	Elf_Data *dl_data, *rela_data, *sym_data;
+	GElf_Shdr rela_shdr, sym_shdr;
+	size_t nrels, i;
+
+	if (gelf_getehdr(elf, &ehdr) == NULL)
+		return;
+
+	abs32_type = r_type_abs32(ehdr.e_machine);
+	if (!abs32_type)
+		return;
+
+	if (elf_getshdrstrndx(elf, &shstrndx) != 0)
+		return;
+
+	/* Find the relevant sections */
+	while ((scn = elf_nextscn(elf, scn)) != NULL) {
+		const char *name;
+
+		if (!gelf_getshdr(scn, &shdr))
+			continue;
+		name = elf_strptr(elf, shstrndx, shdr.sh_name);
+		if (!name)
+			continue;
+
+		if (!strcmp(name, ".debug_line"))
+			debug_line_scn = scn;
+		else if (!strcmp(name, ".rela.debug_line"))
+			rela_debug_line_scn = scn;
+		else if (shdr.sh_type == SHT_SYMTAB)
+			symtab_scn = scn;
+	}
+
+	if (!debug_line_scn || !rela_debug_line_scn || !symtab_scn)
+		return;
+
+	dl_data = elf_getdata(debug_line_scn, NULL);
+	rela_data = elf_getdata(rela_debug_line_scn, NULL);
+	sym_data = elf_getdata(symtab_scn, NULL);
+	if (!dl_data || !rela_data || !sym_data)
+		return;
+
+	if (!gelf_getshdr(rela_debug_line_scn, &rela_shdr))
+		return;
+	if (!gelf_getshdr(symtab_scn, &sym_shdr))
+		return;
+
+	nrels = rela_shdr.sh_size / rela_shdr.sh_entsize;
+
+	for (i = 0; i < nrels; i++) {
+		GElf_Rela rela;
+		GElf_Sym sym;
+		unsigned int r_type;
+		size_t r_sym;
+		uint32_t value;
+
+		if (!gelf_getrela(rela_data, i, &rela))
+			continue;
+
+		r_type = GELF_R_TYPE(rela.r_info);
+		r_sym = GELF_R_SYM(rela.r_info);
+
+		/* Only handle the 32-bit absolute reloc for this arch */
+		if (r_type != abs32_type)
+			continue;
+
+		if (!gelf_getsym(sym_data, r_sym, &sym))
+			continue;
+
+		/* Relocated value = sym.st_value + addend */
+		value = (uint32_t)(sym.st_value + rela.r_addend);
+
+		/* Patch the .debug_line data at the relocation offset */
+		if (rela.r_offset + 4 <= dl_data->d_size)
+			memcpy((char *)dl_data->d_buf + rela.r_offset,
+			       &value, sizeof(value));
+	}
+}
+
 static void process_dwarf(Dwarf *dwarf, unsigned long long text_addr)
 {
 	Dwarf_Off off = 0, next_off;
@@ -293,6 +485,17 @@ static void process_dwarf(Dwarf *dwarf, unsigned long long text_addr)
 				continue;
 
 			if (addr < text_addr)
+				continue;
+
+			/*
+			 * In module mode, keep only .text addresses.
+			 * In ET_REL .ko files, .text, .init.text and
+			 * .exit.text all have sh_addr == 0 and therefore
+			 * overlapping address ranges.  Explicitly check
+			 * against the .text bounds.
+			 */
+			if (module_mode && text_section_end > text_section_start &&
+			    (addr < text_section_start || addr >= text_section_end))
 				continue;
 
 			{
@@ -440,6 +643,63 @@ static void output_assembly(void)
 	printf("\n");
 }
 
+static void output_module_assembly(void)
+{
+	unsigned int filenames_size = 0;
+
+	for (unsigned int i = 0; i < num_files; i++)
+		filenames_size += strlen(files[i].name) + 1;
+
+	printf("/* SPDX-License-Identifier: GPL-2.0 */\n");
+	printf("/*\n");
+	printf(" * Automatically generated by scripts/gen_lineinfo --module\n");
+	printf(" * Do not edit.\n");
+	printf(" */\n\n");
+
+	printf("\t.section .mod_lineinfo, \"a\"\n\n");
+
+	/* Header: num_entries, num_files, filenames_size, reserved */
+	printf("\t.balign 4\n");
+	printf("\t.long %u\n", num_entries);
+	printf("\t.long %u\n", num_files);
+	printf("\t.long %u\n", filenames_size);
+	printf("\t.long 0\n\n");
+
+	/* addrs[] */
+	for (unsigned int i = 0; i < num_entries; i++)
+		printf("\t.long 0x%x\n", entries[i].offset);
+	if (num_entries)
+		printf("\n");
+
+	/* file_ids[] */
+	for (unsigned int i = 0; i < num_entries; i++)
+		printf("\t.short %u\n", entries[i].file_id);
+
+	/* Padding to align lines[] to 4 bytes */
+	if (num_entries & 1)
+		printf("\t.short 0\n");
+	if (num_entries)
+		printf("\n");
+
+	/* lines[] */
+	for (unsigned int i = 0; i < num_entries; i++)
+		printf("\t.long %u\n", entries[i].line);
+	if (num_entries)
+		printf("\n");
+
+	/* file_offsets[] */
+	for (unsigned int i = 0; i < num_files; i++)
+		printf("\t.long %u\n", files[i].str_offset);
+	if (num_files)
+		printf("\n");
+
+	/* filenames[] */
+	for (unsigned int i = 0; i < num_files; i++)
+		print_escaped_asciz(files[i].name);
+	if (num_files)
+		printf("\n");
+}
+
 int main(int argc, char *argv[])
 {
 	int fd;
@@ -447,12 +707,23 @@ int main(int argc, char *argv[])
 	Dwarf *dwarf;
 	unsigned long long text_addr;
 
+	if (argc >= 2 && !strcmp(argv[1], "--module")) {
+		module_mode = 1;
+		argv++;
+		argc--;
+	}
+
 	if (argc != 2) {
-		fprintf(stderr, "Usage: %s <vmlinux>\n", argv[0]);
+		fprintf(stderr, "Usage: %s [--module] <ELF file>\n", argv[0]);
 		return 1;
 	}
 
-	fd = open(argv[1], O_RDONLY);
+	/*
+	 * For module mode, open O_RDWR so we can apply debug section
+	 * relocations to the in-memory ELF data.  The modifications
+	 * are NOT written back to disk (no elf_update() call).
+	 */
+	fd = open(argv[1], module_mode ? O_RDWR : O_RDONLY);
 	if (fd < 0) {
 		fprintf(stderr, "Cannot open %s: %s\n", argv[1],
 			strerror(errno));
@@ -460,7 +731,7 @@ int main(int argc, char *argv[])
 	}
 
 	elf_version(EV_CURRENT);
-	elf = elf_begin(fd, ELF_C_READ, NULL);
+	elf = elf_begin(fd, module_mode ? ELF_C_RDWR : ELF_C_READ, NULL);
 	if (!elf) {
 		fprintf(stderr, "elf_begin failed: %s\n",
 			elf_errmsg(elf_errno()));
@@ -468,7 +739,22 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	text_addr = find_text_addr(elf);
+	if (module_mode) {
+		/*
+		 * .ko files are ET_REL after ld -r.  libdw does NOT apply
+		 * relocations for ET_REL files, so DW_FORM_line_strp
+		 * references in .debug_line are not resolved.  Apply them
+		 * ourselves so that dwarf_linesrc() returns correct paths.
+		 *
+		 * DWARF addresses include the .text sh_addr.  Use .text
+		 * sh_addr as the base so offsets are .text-relative.
+		 */
+		apply_debug_line_relocations(elf);
+		find_text_section_range(elf);
+		text_addr = text_section_start;
+	} else {
+		text_addr = find_text_addr(elf);
+	}
 
 	dwarf = dwarf_begin_elf(elf, DWARF_C_READ, NULL);
 	if (!dwarf) {
@@ -494,7 +780,10 @@ int main(int argc, char *argv[])
 	fprintf(stderr, "lineinfo: %u entries, %u files\n",
 		num_entries, num_files);
 
-	output_assembly();
+	if (module_mode)
+		output_module_assembly();
+	else
+		output_assembly();
 
 	dwarf_end(dwarf);
 	elf_end(elf);

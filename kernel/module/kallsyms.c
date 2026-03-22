@@ -494,3 +494,94 @@ out:
 	mutex_unlock(&module_mutex);
 	return ret;
 }
+
+#include <linux/mod_lineinfo.h>
+
+/*
+ * Look up source file:line for an address within a loaded module.
+ * Uses the .mod_lineinfo section embedded in the .ko at build time.
+ *
+ * Safe in NMI/panic context: no locks, no allocations.
+ * Caller must hold RCU read lock (or be in a context where the module
+ * cannot be unloaded).
+ */
+bool module_lookup_lineinfo(struct module *mod, unsigned long addr,
+			    const char **file, unsigned int *line)
+{
+	const struct mod_lineinfo_header *hdr;
+	const void *base;
+	const u32 *addrs, *lines, *file_offsets;
+	const u16 *file_ids;
+	const char *filenames;
+	u32 num_entries, num_files, filenames_size;
+	unsigned long text_base;
+	unsigned int offset;
+	unsigned long long raw_offset;
+	unsigned int low, high, mid;
+	u16 file_id;
+
+	if (!IS_ENABLED(CONFIG_KALLSYMS_LINEINFO_MODULES))
+		return false;
+
+	base = mod->lineinfo_data;
+	if (!base)
+		return false;
+
+	if (mod->lineinfo_data_size < sizeof(*hdr))
+		return false;
+
+	hdr = base;
+	num_entries = hdr->num_entries;
+	num_files = hdr->num_files;
+	filenames_size = hdr->filenames_size;
+
+	if (num_entries == 0)
+		return false;
+
+	/* Validate section is large enough for all arrays */
+	if (mod->lineinfo_data_size <
+	    mod_lineinfo_filenames_off(num_entries, num_files) + filenames_size)
+		return false;
+
+	addrs = base + mod_lineinfo_addrs_off();
+	file_ids = base + mod_lineinfo_file_ids_off(num_entries);
+	lines = base + mod_lineinfo_lines_off(num_entries);
+	file_offsets = base + mod_lineinfo_file_offsets_off(num_entries);
+	filenames = base + mod_lineinfo_filenames_off(num_entries, num_files);
+
+	/* Compute offset from module .text base */
+	text_base = (unsigned long)mod->mem[MOD_TEXT].base;
+	if (addr < text_base)
+		return false;
+
+	raw_offset = addr - text_base;
+	if (raw_offset > UINT_MAX)
+		return false;
+	offset = (unsigned int)raw_offset;
+
+	/* Binary search for largest entry <= offset */
+	low = 0;
+	high = num_entries;
+	while (low < high) {
+		mid = low + (high - low) / 2;
+		if (addrs[mid] <= offset)
+			low = mid + 1;
+		else
+			high = mid;
+	}
+
+	if (low == 0)
+		return false;
+	low--;
+
+	file_id = file_ids[low];
+	if (file_id >= num_files)
+		return false;
+
+	if (file_offsets[file_id] >= filenames_size)
+		return false;
+
+	*file = &filenames[file_offsets[file_id]];
+	*line = lines[low];
+	return true;
+}

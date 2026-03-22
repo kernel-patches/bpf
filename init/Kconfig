@@ -2070,6 +2070,19 @@ config KALLSYMS_LINEINFO
 
 	  If unsure, say N.
 
+config KALLSYMS_LINEINFO_MODULES
+	bool "Embed source file:line information in module stack traces"
+	depends on KALLSYMS_LINEINFO && MODULES
+	help
+	  Extends KALLSYMS_LINEINFO to loadable kernel modules.  Each .ko
+	  gets a lineinfo table generated from its DWARF data at build time,
+	  so stack traces from module code include (file.c:123) annotations.
+
+	  Requires elfutils (libdw-dev/elfutils-devel) on the build host.
+	  Increases .ko sizes by approximately 10 bytes per DWARF line entry.
+
+	  If unsure, say N.
+
 # end of the "standard kernel features (expert users)" menu
 
 config ARCH_HAS_MEMBARRIER_CALLBACKS
