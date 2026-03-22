@@ -21,8 +21,20 @@ endif
 
 CC = clang
 CFLAGS = -O2
-BPF_PROG_CFLAGS = -g -fno-merge-all-constants -O2 -target bpf -Wall -I $(BPFDIR) -I .
+BPF_PROG_CFLAGS = -g -O2 -target bpf -Wall -I $(BPFDIR) -I .
 BPFTOOL = bpftool
+
+# Host compiler for native tools (must not be the BPF clang cross-compiler)
+HOSTCC ?= gcc
+HOSTCFLAGS = -std=c11 -O2 -Wall -Wextra
+
+# ---------------------------------------------------------------------------
+# zboot ELF image parameters
+# INITRAMFS: path to the initramfs image (required)
+# CMDLINE:   kernel command line string (optional, defaults to empty)
+# ---------------------------------------------------------------------------
+INITRAMFS ?=
+CMDLINE   ?=
 
 # ---------------------------------------------------------------------------
 # Shared generated headers (common to all targets)
@@ -54,7 +66,7 @@ ALL_BPF_ARTIFACTS = $(foreach t,$(BPF_TARGETS),$(call BPF_ARTIFACTS,$(t)))
 # ---------------------------------------------------------------------------
 # Top-level phony targets
 # ---------------------------------------------------------------------------
-zboot: $(HEADERS) $(call BPF_ARTIFACTS,zboot) build_zboot_image
+zboot: $(HEADERS) $(call BPF_ARTIFACTS,zboot) build_zboot_envelop
 ifeq ($(ARCH),$(filter $(ARCH),arm64 riscv loongarch))
 uki: $(HEADERS) zboot.bpf $(call BPF_ARTIFACTS,uki)
 else
@@ -172,7 +184,20 @@ $(eval $(call BPF_WRAPPER_RULE,zboot,ZBOOT))
 $(eval $(call BPF_WRAPPER_RULE,uki,UKI))
 
 # ---------------------------------------------------------------------------
+# Host tool: build_zboot_envelop
+# Packs EFI_IMAGE (.kernel), INITRAMFS (.initrd) and CMDLINE (.cmdline)
+# into a single ELF file consumed by the kexec loader.
+# ---------------------------------------------------------------------------
+build_zboot_envelop: build_zboot_envelop.c
+	@$(HOSTCC) $(HOSTCFLAGS) -o $@ $<
+
+zboot_image.elf: build_zboot_envelop $(EFI_IMAGE) $(INITRAMFS)
+	$(if $(INITRAMFS),,$(error INITRAMFS is not set. Usage: make INITRAMFS=<path> [CMDLINE="..."]))
+	@./build_zboot_envelop $(EFI_IMAGE) $(INITRAMFS) "$(CMDLINE)"
+
+# ---------------------------------------------------------------------------
 # Clean
 # ---------------------------------------------------------------------------
 clean:
-	@rm -f $(HEADERS) $(ALL_BPF_ARTIFACTS) *.base.o
+	@rm -f $(HEADERS) $(ALL_BPF_ARTIFACTS) *.base.o \
+		build_zboot_envelop zboot_image.elf

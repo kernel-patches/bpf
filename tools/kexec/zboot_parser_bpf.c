@@ -16,6 +16,7 @@
 #define RINGBUF4_SIZE   MIN_BUF_SIZE
 
 #include "template.c"
+#include "zboot_envelop.h"
 
 #define ELF_SCAN_MAX 8
 
@@ -43,9 +44,9 @@ struct linux_pe_zboot_header {
 	unsigned int pe_header_offset;
 } __attribute__((packed));
 
-static const char linux_sect_name[]   = ".kernel";
-static const char initrd_sect_name[]   = ".initrd";
-static const char cmdline_sect_name[]   = ".cmdline";
+static const char linux_sect_name[] = KERNEL_SECT_NAME;
+static const char initrd_sect_name[] = INITRD_SECT_NAME;
+static const char cmdline_sect_name[] = CMDLINE_SECT_NAME;
 
 /*
  * fill_cmd - overwrite the cmd_hdr at the start of @buf and copy @data_len
