@@ -21,6 +21,7 @@
 #include <asm/byteorder.h>
 #include <asm/image.h>
 #include <asm/memory.h>
+#include <linux/decompress/generic.h>
 #include "kexec_internal.h"
 
 /* Load a ELF */
@@ -73,8 +74,243 @@ static int __init kexec_bpf_prog_run_init(void)
 }
 late_initcall(kexec_bpf_prog_run_init);
 
+/* Mark the bpf parser success */
+#define KEXEC_BPF_CMD_INVALID		0x0
+#define KEXEC_BPF_CMD_DONE		0x1
+#define KEXEC_BPF_CMD_DECOMPRESS	0x2
+
+#define KEXEC_BPF_SUBCMD_INVALID	0x0
+#define KEXEC_BPF_SUBCMD_KERNEL		0x1
+#define KEXEC_BPF_SUBCMD_INITRD		0x2
+#define KEXEC_BPF_SUBCMD_CMDLINE	0x3
+
+#define KEXEC_BPF_PIPELINE_INVALID	0x0
+#define KEXEC_BPF_PIPELINE_FILL		0x1
+
+struct cmd_hdr {
+	uint16_t cmd;
+	uint8_t subcmd;
+	uint8_t pipeline_flag;
+	/* sizeof(chunks) + sizeof(all data) */
+	uint32_t payload_len;
+	/* 0 */
+	uint16_t num_chunks;
+} __packed;
+
+/* Reserved for extension */
+struct cmd_chunk {
+	uint16_t type;
+	uint32_t len;
+} __packed;
+
+
+/* Max decompressed size is capped at 512M */
+#define MAX_UNCOMPRESSED_BUF_SIZE	(1 << 29)
+#define CHUNK_SIZE	(1 << 23)
+
+struct decompress_mem_allocator {
+	void *chunk_start;
+	unsigned int chunk_size;
+	void *chunk_cur;
+	unsigned int next_idx;
+	char **chunk_base_addr;
+};
+
+/*
+ * This global allocator for decompression is protected by kexec lock.
+ */
+static struct decompress_mem_allocator dcmpr_allocator;
+
+/*
+ * Set up an active chunk to hold partial decompressed data.
+ */
+static char *allocate_chunk_memory(void)
+{
+	struct decompress_mem_allocator *a = &dcmpr_allocator;
+	char *p;
+
+	if (unlikely((a->next_idx * a->chunk_size >= MAX_UNCOMPRESSED_BUF_SIZE)))
+		return NULL;
+
+	p = __vmalloc(a->chunk_size, GFP_KERNEL | __GFP_ACCOUNT);
+	if (!p)
+		return NULL;
+	a->chunk_base_addr[a->next_idx++] = p;
+	a->chunk_start = a->chunk_cur = p;
+
+	return p;
+}
+
+static int merge_decompressed_data(struct decompress_mem_allocator *a,
+			char **out, unsigned long *size)
+{
+	unsigned int last_chunk_sz = a->chunk_cur - a->chunk_start;
+	unsigned long total_sz;
+	char *dst, *cur_dst;
+	int i;
+
+	total_sz = (a->next_idx - 1) * a->chunk_size + last_chunk_sz;
+	cur_dst = dst = __vmalloc(total_sz, GFP_KERNEL | __GFP_ACCOUNT);
+	if (!dst)
+		return -ENOMEM;
+
+	for (i = 0; i < a->next_idx - 1; i++) {
+		memcpy(cur_dst, a->chunk_base_addr[i], a->chunk_size);
+		cur_dst += a->chunk_size;
+		vfree(a->chunk_base_addr[i]);
+		a->chunk_base_addr[i] = NULL;
+	}
+
+	memcpy(cur_dst, a->chunk_base_addr[i], last_chunk_sz);
+	vfree(a->chunk_base_addr[i]);
+	a->chunk_base_addr[i] = NULL;
+	*out = dst;
+	*size = total_sz;
+
+	return 0;
+}
+
+static int decompress_mem_allocator_init(
+	struct decompress_mem_allocator *a,
+	unsigned int chunk_size)
+{
+	unsigned long sz = (MAX_UNCOMPRESSED_BUF_SIZE / chunk_size) * sizeof(void *);
+	char *buf;
+
+	a->chunk_base_addr = __vmalloc(sz, GFP_KERNEL | __GFP_ACCOUNT);
+	if (!a->chunk_base_addr)
+		return -ENOMEM;
+
+	/* Pre-allocate the memory for the first chunk */
+	buf = __vmalloc(chunk_size, GFP_KERNEL | __GFP_ACCOUNT);
+	if (!buf) {
+		vfree(a->chunk_base_addr);
+		return -ENOMEM;
+	}
+	a->chunk_base_addr[0] = buf;
+	a->chunk_start = a->chunk_cur = buf;
+	a->chunk_size = chunk_size;
+	a->next_idx = 1;
+	return 0;
+}
+
+static void decompress_mem_allocator_fini(struct decompress_mem_allocator *a)
+{
+	int i;
+
+	for (i = 0; i < a->next_idx; i++) {
+		if (a->chunk_base_addr[i] != NULL)
+			vfree(a->chunk_base_addr[i]);
+	}
+	vfree(a->chunk_base_addr);
+}
+
+/*
+ * This is a callback for decompress_fn.
+ *
+ * It copies the partial decompressed content in [buf, buf + len) to dst. If the
+ * active chunk is not large enough, retire it and activate a new chunk to hold
+ * the remaining data.
+ */
+static long flush(void *buf, unsigned long len)
+{
+	struct decompress_mem_allocator *a = &dcmpr_allocator;
+	long free, copied = 0;
+
+	if (unlikely(len > a->chunk_size)) {
+		pr_info("Chunk size is too small to hold decompressed data\n");
+		return -1;
+	}
+	free = a->chunk_start + a->chunk_size - a->chunk_cur;
+	BUG_ON(free < 0);
+	if (free < len) {
+		memcpy(a->chunk_cur, buf, free);
+		copied += free;
+		a->chunk_cur += free;
+		buf += free;
+		len -= free;
+		a->chunk_start = a->chunk_cur = allocate_chunk_memory();
+		if (unlikely(!a->chunk_start)) {
+			pr_info("Decompression runs out of memory\n");
+			return -1;
+		}
+	}
+	memcpy(a->chunk_cur, buf, len);
+	copied += len;
+	a->chunk_cur += len;
+	return copied;
+}
+
+static int parser_cmd_decompress(char *compressed_data, int image_gz_sz,
+		char **out_buf, unsigned long *out_sz, struct kexec_context *ctx)
+{
+	struct decompress_mem_allocator *a = &dcmpr_allocator;
+	decompress_fn decompressor;
+	const char *name;
+	int ret;
+
+	ret = decompress_mem_allocator_init(a, CHUNK_SIZE);
+	if (ret < 0)
+		return ret;
+	decompressor = decompress_method(compressed_data, image_gz_sz, &name);
+	if (!decompressor) {
+		pr_err("Can not find decompress method\n");
+		ret = -1;
+		goto err;
+	}
+	pr_debug("Find decompressing method: %s, compressed sz:0x%x\n",
+			name, image_gz_sz);
+	ret = decompressor(compressed_data, image_gz_sz, NULL, flush,
+				NULL, NULL, NULL);
+	if (!!ret)
+		goto err;
+	ret = merge_decompressed_data(a, out_buf, out_sz);
+
+err:
+	decompress_mem_allocator_fini(a);
+
+	return ret;
+}
+
 static int kexec_buff_parser(struct bpf_parser_context *parser)
 {
+	struct bpf_parser_buf *pbuf = parser->buf;
+	struct kexec_context *ctx = (struct kexec_context *)parser->data;
+	struct cmd_hdr *cmd = (struct cmd_hdr *)pbuf->buf;
+	char *decompressed_buf, *buf, *p;
+	unsigned long decompressed_sz;
+	int ret = 0;
+
+	buf = pbuf->buf + sizeof(struct cmd_hdr);
+	if (cmd->payload_len + sizeof(struct cmd_hdr) > pbuf->size) {
+		pr_info("Invalid payload size:0x%x, while buffer size:0x%x\n",
+				cmd->payload_len, pbuf->size);
+		return -EINVAL;
+	}
+	switch (cmd->cmd) {
+	case KEXEC_BPF_CMD_DONE:
+		ctx->parsed = true;
+		break;
+	case KEXEC_BPF_CMD_DECOMPRESS:
+		ret = parser_cmd_decompress(buf, cmd->payload_len, &decompressed_buf,
+					&decompressed_sz, ctx);
+		if (!ret) {
+			switch (cmd->subcmd) {
+			case KEXEC_BPF_SUBCMD_KERNEL:
+				vfree(ctx->kernel);
+				ctx->kernel = decompressed_buf;
+				ctx->kernel_sz = decompressed_sz;
+				break;
+			default:
+				vfree(decompressed_buf);
+				break;
+			}
+		}
+		break;
+	default:
+		break;
+	}
+
 	return 0;
 }
 
