@@ -41,6 +41,8 @@ struct kexec_context {
 	bool parsed;
 	char *parsing_buf[MAX_PARSING_BUF_NUM];
 	unsigned long parsing_buf_sz[MAX_PARSING_BUF_NUM];
+	char *next_parsing_buf[MAX_PARSING_BUF_NUM];
+	unsigned long next_parsing_buf_sz[MAX_PARSING_BUF_NUM];
 
 	char *kernel;
 	unsigned long kernel_sz;
@@ -278,8 +280,9 @@ static int kexec_buff_parser(struct bpf_parser_context *parser)
 	struct bpf_parser_buf *pbuf = parser->buf;
 	struct kexec_context *ctx = (struct kexec_context *)parser->data;
 	struct cmd_hdr *cmd = (struct cmd_hdr *)pbuf->buf;
-	char *decompressed_buf, *buf, *p;
+	char *decompressed_buf, *buf, *p, *pn;
 	unsigned long decompressed_sz;
+	bool fill_pipeline = false;
 	int ret = 0;
 
 	buf = pbuf->buf + sizeof(struct cmd_hdr);
@@ -288,6 +291,7 @@ static int kexec_buff_parser(struct bpf_parser_context *parser)
 				cmd->payload_len, pbuf->size);
 		return -EINVAL;
 	}
+	fill_pipeline = cmd->pipeline_flag & KEXEC_BPF_PIPELINE_FILL;
 	switch (cmd->cmd) {
 	case KEXEC_BPF_CMD_DONE:
 		ctx->parsed = true;
@@ -301,6 +305,23 @@ static int kexec_buff_parser(struct bpf_parser_context *parser)
 				vfree(ctx->kernel);
 				ctx->kernel = decompressed_buf;
 				ctx->kernel_sz = decompressed_sz;
+				if (fill_pipeline) {
+					int i;
+
+					for (i = 0; i < MAX_PARSING_BUF_NUM; i++) {
+						if (ctx->next_parsing_buf[i])
+							continue;
+						ctx->next_parsing_buf[i] = decompressed_buf;
+						ctx->next_parsing_buf_sz[i] = decompressed_sz;
+						break;
+					}
+					/* No enough parsing slot */
+					if (i == MAX_PARSING_BUF_NUM) {
+						ctx->kernel = NULL;
+						vfree(decompressed_buf);
+						return -ENOMEM;
+					}
+				}
 				break;
 			default:
 				vfree(decompressed_buf);
@@ -313,6 +334,22 @@ static int kexec_buff_parser(struct bpf_parser_context *parser)
 		if (!p)
 			return -ENOMEM;
 		memcpy(p, buf, cmd->payload_len);
+		if (fill_pipeline) {
+			pn = __vmalloc(cmd->payload_len, GFP_KERNEL | __GFP_ACCOUNT);
+			if (!pn) {
+				vfree(p);
+				return -ENOMEM;
+			}
+			memcpy(pn, buf, cmd->payload_len);
+			for (int i = 0; i < MAX_PARSING_BUF_NUM; i++) {
+				if (!ctx->next_parsing_buf[i]) {
+					ctx->next_parsing_buf[i] = pn;
+					ctx->next_parsing_buf_sz[i] = cmd->payload_len;
+					break;
+				}
+			}
+		}
+
 		switch (cmd->subcmd) {
 		case KEXEC_BPF_SUBCMD_KERNEL:
 			vfree(ctx->kernel);
@@ -636,6 +673,14 @@ static int process_bpf_parsers_container(const char *elf_buf, size_t elf_sz,
 			vfree(context->parsing_buf[i]);
 			context->parsing_buf[i] = NULL;
 			context->parsing_buf_sz[i] = 0;
+		}
+		for (int i = 0; i < MAX_PARSING_BUF_NUM; i++) {
+			if (!context->next_parsing_buf[i])
+				break;
+			context->parsing_buf[i] = context->next_parsing_buf[i];
+			context->parsing_buf_sz[i] = context->next_parsing_buf_sz[i];
+			context->next_parsing_buf[i] = NULL;
+			context->next_parsing_buf_sz[i] = 0;
 		}
 
 		put_bpf_parser_context(bpf);
