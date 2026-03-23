@@ -5,6 +5,7 @@
 #include <sched.h>
 #include <stdlib.h>
 #include <net/if.h>
+#include <netinet/in.h>
 
 #include "test_progs.h"
 #include "cgroup_helpers.h"
@@ -47,11 +48,10 @@ err:
 	return -1;
 }
 
-static int setup_tc(struct test_tcp_custom_syncookie *skel)
+static int setup_tc(int prog_fd)
 {
 	LIBBPF_OPTS(bpf_tc_hook, qdisc_lo, .attach_point = BPF_TC_INGRESS);
-	LIBBPF_OPTS(bpf_tc_opts, tc_attach,
-		    .prog_fd = bpf_program__fd(skel->progs.tcp_custom_syncookie));
+	LIBBPF_OPTS(bpf_tc_opts, tc_attach, .prog_fd = prog_fd);
 
 	qdisc_lo.ifindex = if_nametoindex("lo");
 	if (!ASSERT_OK(bpf_tc_hook_create(&qdisc_lo), "qdisc add dev lo clsact"))
@@ -127,7 +127,7 @@ void test_tcp_custom_syncookie(void)
 	if (!ASSERT_OK_PTR(skel, "open_and_load"))
 		return;
 
-	if (setup_tc(skel))
+	if (setup_tc(bpf_program__fd(skel->progs.tcp_custom_syncookie)))
 		goto destroy_skel;
 
 	for (i = 0; i < ARRAY_SIZE(test_cases); i++) {
@@ -145,6 +145,79 @@ void test_tcp_custom_syncookie(void)
 
 destroy_skel:
 	system("tc qdisc del dev lo clsact");
+	test_tcp_custom_syncookie__destroy(skel);
+}
 
+/* Test: bpf_sk_assign_tcp_reqsk() should reject non-TCP skb.
+ *
+ * Send a UDP packet through a BPF program that calls
+ * bpf_sk_assign_tcp_reqsk() on it. The kfunc should return -EINVAL
+ * because the skb carries UDP, not TCP.
+ *
+ * Currently the kfunc lacks L4 protocol check, so assign_ret == 0
+ * indicates the bug is present.
+ */
+void test_tcp_custom_syncookie_protocol_check(void)
+{
+	struct test_tcp_custom_syncookie *skel;
+	struct sockaddr_in tcp_addr, udp_addr;
+	socklen_t addr_len = sizeof(tcp_addr);
+	int tcp_server = -1, udp_client = -1;
+	char buf[32] = "test";
+	int ret;
+
+	if (setup_netns())
+		return;
+
+	skel = test_tcp_custom_syncookie__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+
+	/* Create a TCP listener so the BPF can find a LISTEN socket */
+	tcp_server = start_server(AF_INET, SOCK_STREAM, "127.0.0.1", 0, 0);
+	if (!ASSERT_NEQ(tcp_server, -1, "start tcp_server"))
+		goto destroy_skel;
+
+	ret = getsockname(tcp_server, (struct sockaddr *)&tcp_addr, &addr_len);
+	if (!ASSERT_OK(ret, "getsockname"))
+		goto close_tcp;
+
+	skel->bss->tcp_listener_port = ntohs(tcp_addr.sin_port);
+	skel->bss->udp_test_port = 9999;
+
+	ret = bpf_program__fd(skel->progs.tcp_custom_syncookie_badproto);
+	if (setup_tc(ret))
+		goto close_tcp;
+
+	udp_client = socket(AF_INET, SOCK_DGRAM, 0);
+	if (!ASSERT_NEQ(udp_client, -1, "udp socket"))
+		goto cleanup_tc;
+
+	memset(&udp_addr, 0, sizeof(udp_addr));
+	udp_addr.sin_family = AF_INET;
+	udp_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+	udp_addr.sin_port = htons(9999);
+
+	ret = sendto(udp_client, buf, sizeof(buf), 0,
+		     (struct sockaddr *)&udp_addr, sizeof(udp_addr));
+	ASSERT_EQ(ret, sizeof(buf), "sendto udp");
+
+	/* Wait for TC ingress BPF to process the skb. */
+	kern_sync_rcu();
+
+	ASSERT_EQ(skel->bss->udp_intercepted, true, "udp_intercepted");
+
+	/* assign_ret == 0 means kfunc accepted UDP skb (bug).
+	 * assign_ret < 0 means kfunc correctly rejected it (fixed).
+	 */
+	ASSERT_NEQ(skel->data->assign_ret, 0, "assign_ret");
+
+cleanup_tc:
+	system("tc qdisc del dev lo clsact");
+	if (udp_client >= 0)
+		close(udp_client);
+close_tcp:
+	close(tcp_server);
+destroy_skel:
 	test_tcp_custom_syncookie__destroy(skel);
 }
