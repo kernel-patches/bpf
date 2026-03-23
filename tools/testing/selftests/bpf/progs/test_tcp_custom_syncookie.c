@@ -588,4 +588,83 @@ int tcp_custom_syncookie(struct __sk_buff *skb)
 	return tcp_handle_ack(&ctx);
 }
 
+/* Test: call bpf_sk_assign_tcp_reqsk() on a UDP skb.
+ * The kfunc should reject it, but currently it doesn't check L4 protocol.
+ */
+__u16 tcp_listener_port = 0;
+__u16 udp_test_port = 0;
+int assign_ret = -1;
+bool udp_intercepted = false;
+
+SEC("tc")
+int tcp_custom_syncookie_badproto(struct __sk_buff *skb)
+{
+	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(long)skb->data_end;
+	struct bpf_sock_tuple tuple = {};
+	struct bpf_tcp_req_attrs attrs = {};
+	struct ethhdr *eth;
+	struct iphdr *iph;
+	struct udphdr *udp;
+	struct bpf_sock *skc;
+	struct sock *sk;
+
+	eth = (struct ethhdr *)data;
+	if (eth + 1 > data_end)
+		return TC_ACT_OK;
+
+	if (bpf_ntohs(eth->h_proto) != ETH_P_IP)
+		return TC_ACT_OK;
+
+	iph = (struct iphdr *)(eth + 1);
+	if (iph + 1 > data_end)
+		return TC_ACT_OK;
+
+	if (iph->protocol != IPPROTO_UDP)
+		return TC_ACT_OK;
+
+	udp = (struct udphdr *)(iph + 1);
+	if (udp + 1 > data_end)
+		return TC_ACT_OK;
+
+	if (bpf_ntohs(udp->dest) != udp_test_port)
+		return TC_ACT_OK;
+
+	udp_intercepted = true;
+
+	tuple.ipv4.saddr = iph->saddr;
+	tuple.ipv4.daddr = iph->daddr;
+	tuple.ipv4.sport = udp->source;
+	tuple.ipv4.dport = bpf_htons(tcp_listener_port);
+
+	skc = bpf_skc_lookup_tcp(skb, &tuple, sizeof(tuple.ipv4), -1, 0);
+	if (!skc)
+		return TC_ACT_OK;
+
+	if (skc->state != TCP_LISTEN) {
+		bpf_sk_release(skc);
+		return TC_ACT_OK;
+	}
+
+	sk = (struct sock *)bpf_skc_to_tcp_sock(skc);
+	if (!sk) {
+		bpf_sk_release(skc);
+		return TC_ACT_OK;
+	}
+
+	attrs.mss = 1460;
+	attrs.wscale_ok = 1;
+	attrs.snd_wscale = 7;
+	attrs.rcv_wscale = 7;
+	attrs.sack_ok = 1;
+
+	/* Call bpf_sk_assign_tcp_reqsk on a UDP skb. */
+	assign_ret = bpf_sk_assign_tcp_reqsk(skb, sk, &attrs, sizeof(attrs));
+
+	bpf_sk_release(skc);
+
+	/* Let the packet continue into the kernel */
+	return TC_ACT_OK;
+}
+
 char _license[] SEC("license") = "GPL";
