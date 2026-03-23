@@ -588,4 +588,106 @@ int tcp_custom_syncookie(struct __sk_buff *skb)
 	return tcp_handle_ack(&ctx);
 }
 
+/* Test: call bpf_sk_assign_tcp_reqsk() on a UDP skb. */
+bool udp_intercepted;
+
+static int badproto_lookup_assign(struct __sk_buff *skb,
+				  struct bpf_sock_tuple *tuple, u32 tuple_size)
+{
+	struct bpf_tcp_req_attrs attrs = {};
+	struct bpf_sock *skc;
+	struct sock *sk;
+
+	skc = bpf_skc_lookup_tcp(skb, tuple, tuple_size, -1, 0);
+	if (!skc)
+		return TC_ACT_OK;
+
+	if (skc->state != TCP_LISTEN) {
+		bpf_sk_release(skc);
+		return TC_ACT_OK;
+	}
+
+	sk = (struct sock *)bpf_skc_to_tcp_sock(skc);
+	if (!sk) {
+		bpf_sk_release(skc);
+		return TC_ACT_OK;
+	}
+
+	attrs.mss = 1460;
+	attrs.wscale_ok = 1;
+	attrs.snd_wscale = 7;
+	attrs.rcv_wscale = 7;
+	attrs.sack_ok = 1;
+
+	bpf_sk_assign_tcp_reqsk(skb, sk, &attrs, sizeof(attrs));
+
+	bpf_sk_release(skc);
+	return TC_ACT_OK;
+}
+
+SEC("tc")
+int tcp_custom_syncookie_badproto(struct __sk_buff *skb)
+{
+	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(long)skb->data_end;
+	struct bpf_sock_tuple tuple = {};
+	struct ethhdr *eth;
+	struct iphdr *iph;
+	struct ipv6hdr *ip6h;
+	struct udphdr *udp;
+
+	eth = (struct ethhdr *)data;
+	if (eth + 1 > data_end)
+		return TC_ACT_OK;
+
+	switch (bpf_ntohs(eth->h_proto)) {
+	case ETH_P_IP:
+		iph = (struct iphdr *)(eth + 1);
+		if (iph + 1 > data_end)
+			return TC_ACT_OK;
+
+		if (iph->protocol != IPPROTO_UDP)
+			return TC_ACT_OK;
+
+		udp = (struct udphdr *)(iph + 1);
+		if (udp + 1 > data_end)
+			return TC_ACT_OK;
+
+		udp_intercepted = true;
+
+		tuple.ipv4.saddr = iph->saddr;
+		tuple.ipv4.daddr = iph->daddr;
+		tuple.ipv4.sport = udp->source;
+		tuple.ipv4.dport = udp->dest;
+
+		return badproto_lookup_assign(skb, &tuple,
+					      sizeof(tuple.ipv4));
+	case ETH_P_IPV6:
+		ip6h = (struct ipv6hdr *)(eth + 1);
+		if (ip6h + 1 > data_end)
+			return TC_ACT_OK;
+
+		if (ip6h->nexthdr != IPPROTO_UDP)
+			return TC_ACT_OK;
+
+		udp = (struct udphdr *)(ip6h + 1);
+		if (udp + 1 > data_end)
+			return TC_ACT_OK;
+
+		udp_intercepted = true;
+
+		__builtin_memcpy(tuple.ipv6.saddr, &ip6h->saddr,
+				 sizeof(tuple.ipv6.saddr));
+		__builtin_memcpy(tuple.ipv6.daddr, &ip6h->daddr,
+				 sizeof(tuple.ipv6.daddr));
+		tuple.ipv6.sport = udp->source;
+		tuple.ipv6.dport = udp->dest;
+
+		return badproto_lookup_assign(skb, &tuple,
+					      sizeof(tuple.ipv6));
+	default:
+		return TC_ACT_OK;
+	}
+}
+
 char _license[] SEC("license") = "GPL";
