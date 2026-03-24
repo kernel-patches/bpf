@@ -344,7 +344,7 @@ toofar:
 #undef jmp_offset
 }
 
-static void emit_atomic(const struct bpf_insn *insn, struct jit_ctx *ctx)
+static void emit_atomic_rmw(const struct bpf_insn *insn, struct jit_ctx *ctx)
 {
 	const u8 t1 = LOONGARCH_GPR_T1;
 	const u8 t2 = LOONGARCH_GPR_T2;
@@ -1256,7 +1256,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 
 	case BPF_STX | BPF_ATOMIC | BPF_W:
 	case BPF_STX | BPF_ATOMIC | BPF_DW:
-		emit_atomic(insn, ctx);
+		emit_atomic_rmw(insn, ctx);
 		break;
 
 	/* Speculation barrier */
