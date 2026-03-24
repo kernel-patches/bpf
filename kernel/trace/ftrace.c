@@ -1249,7 +1249,7 @@ remove_hash_entry(struct ftrace_hash *hash,
 	hash->count--;
 }
 
-static void ftrace_hash_clear(struct ftrace_hash *hash)
+void ftrace_hash_clear(struct ftrace_hash *hash)
 {
 	struct hlist_head *hhd;
 	struct hlist_node *tn;
