@@ -597,6 +597,10 @@ DEF_EMIT_REG2_FORMAT(revb2w, revb2w_op)
 DEF_EMIT_REG2_FORMAT(revbd, revbd_op)
 DEF_EMIT_REG2_FORMAT(extwh, extwh_op)
 DEF_EMIT_REG2_FORMAT(extwb, extwb_op)
+DEF_EMIT_REG2_FORMAT(llacqw, llacqw_op)
+DEF_EMIT_REG2_FORMAT(screlw, screlw_op)
+DEF_EMIT_REG2_FORMAT(llacqd, llacqd_op)
+DEF_EMIT_REG2_FORMAT(screld, screld_op)
 
 #define DEF_EMIT_REG2I5_FORMAT(NAME, OP)				\
 static inline void emit_##NAME(union loongarch_instruction *insn,	\
