@@ -1402,7 +1402,7 @@ static void __uprobe_perf_func(struct trace_uprobe *tu,
 
 		rcu_read_lock_trace();
 		array = rcu_dereference_check(call->prog_array, rcu_read_lock_trace_held());
-		ret = bpf_prog_run_array_uprobe(array, regs, bpf_prog_run);
+		ret = bpf_prog_run_array_sleepable(array, regs, bpf_prog_run, true);
 		rcu_read_unlock_trace();
 		if (!ret)
 			return;
