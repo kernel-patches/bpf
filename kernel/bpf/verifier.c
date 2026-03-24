@@ -22121,8 +22121,8 @@ static void adjust_poke_descs(struct bpf_prog *prog, u32 off, u32 len)
 	}
 }
 
-static struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
-					    const struct bpf_insn *patch, u32 len)
+struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
+				     const struct bpf_insn *patch, u32 len)
 {
 	struct bpf_prog *new_prog;
 	struct bpf_insn_aux_data *new_data = NULL;
@@ -22891,16 +22891,22 @@ patch_insn_buf:
 
 static int jit_subprogs(struct bpf_verifier_env *env)
 {
-	struct bpf_prog *prog = env->prog, **func, *tmp;
+	struct bpf_prog *orig_prog = env->prog, *prog, **func, *tmp;
 	int i, j, subprog_start, subprog_end = 0, len, subprog;
 	struct bpf_map *map_ptr;
 	struct bpf_insn *insn;
 	void *old_bpf_func;
 	int err, num_exentries;
-	int old_len, subprog_start_adjustment = 0;
+	bool blinded = false;
 
 	if (env->subprog_cnt <= 1)
 		return 0;
+
+	prog = bpf_jit_blind_constants(env, NULL);
+	if (IS_ERR(prog))
+		return -ENOMEM;
+	if (prog != orig_prog)
+		blinded = true;
 
 	for (i = 0, insn = prog->insnsi; i < prog->len; i++, insn++) {
 		if (!bpf_pseudo_func(insn) && !bpf_pseudo_call(insn))
@@ -22912,8 +22918,13 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		 */
 		subprog = find_subprog(env, i + insn->imm + 1);
 		if (verifier_bug_if(subprog < 0, env, "No program to jit at insn %d",
-				    i + insn->imm + 1))
+				    i + insn->imm + 1)) {
+			if (blinded) {
+				bpf_jit_prog_release_other(orig_prog, prog);
+				env->prog = orig_prog;
+			}
 			return -EFAULT;
+		}
 		/* temporarily remember subprog id inside insn instead of
 		 * aux_data, since next loop will split up all insns into funcs
 		 */
@@ -22969,10 +22980,11 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 			goto out_free;
 		func[i]->is_func = 1;
 		func[i]->sleepable = prog->sleepable;
+		func[i]->blinded = prog->blinded;
 		func[i]->aux->func_idx = i;
 		/* Below members will be freed only at prog->aux */
 		func[i]->aux->btf = prog->aux->btf;
-		func[i]->aux->subprog_start = subprog_start + subprog_start_adjustment;
+		func[i]->aux->subprog_start = subprog_start;
 		func[i]->aux->func_info = prog->aux->func_info;
 		func[i]->aux->func_info_cnt = prog->aux->func_info_cnt;
 		func[i]->aux->poke_tab = prog->aux->poke_tab;
@@ -23028,15 +23040,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->might_sleep = env->subprog_info[i].might_sleep;
 		if (!i)
 			func[i]->aux->exception_boundary = env->seen_exception;
-
-		/*
-		 * To properly pass the absolute subprog start to jit
-		 * all instruction adjustments should be accumulated
-		 */
-		old_len = func[i]->len;
 		func[i] = bpf_int_jit_compile(func[i]);
-		subprog_start_adjustment += func[i]->len - old_len;
-
 		if (!func[i]->jited) {
 			err = -ENOTSUPP;
 			goto out_free;
@@ -23140,6 +23144,10 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	prog->aux->bpf_exception_cb = (void *)func[env->exception_callback_subprog]->bpf_func;
 	prog->aux->exception_boundary = func[0]->aux->exception_boundary;
 	bpf_prog_jit_attempt_done(prog);
+
+	if (blinded)
+		bpf_jit_prog_release_other(prog, orig_prog);
+
 	return 0;
 out_free:
 	/* We failed JIT'ing, so at this point we need to unregister poke
@@ -23162,14 +23170,21 @@ out_free:
 	}
 	kfree(func);
 out_undo_insn:
+	if (blinded) {
+		bpf_jit_prog_release_other(orig_prog, prog);
+		env->prog = prog = orig_prog;
+	}
 	/* cleanup main prog to be interpreted */
 	prog->jit_requested = 0;
 	prog->blinding_requested = 0;
-	for (i = 0, insn = prog->insnsi; i < prog->len; i++, insn++) {
-		if (!bpf_pseudo_call(insn))
-			continue;
-		insn->off = 0;
-		insn->imm = env->insn_aux_data[i].call_imm;
+	/* we already rolled back to the clean orig_prog when blinded is true */
+	if (!blinded) {
+		for (i = 0, insn = prog->insnsi; i < prog->len; i++, insn++) {
+			if (!bpf_pseudo_call(insn))
+				continue;
+			insn->off = 0;
+			insn->imm = env->insn_aux_data[i].call_imm;
+		}
 	}
 	bpf_prog_jit_attempt_done(prog);
 	return err;
