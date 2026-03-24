@@ -1912,6 +1912,7 @@ struct bpf_tracing_multi_node {
 
 struct bpf_tracing_multi_link {
 	struct bpf_link link;
+	u64 *cookies;
 	int nodes_cnt;
 	struct bpf_tracing_multi_node nodes[] __counted_by(nodes_cnt);
 };
