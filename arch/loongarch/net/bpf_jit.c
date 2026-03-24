@@ -344,6 +344,87 @@ toofar:
 #undef jmp_offset
 }
 
+static int emit_atomic_ld_st(const struct bpf_insn *insn, struct jit_ctx *ctx)
+{
+	const u8 t1 = LOONGARCH_GPR_T1;
+	const u8 t2 = LOONGARCH_GPR_T2;
+	const u8 src = regmap[insn->src_reg];
+	const u8 dst = regmap[insn->dst_reg];
+	const s16 off = insn->off;
+	const s32 imm = insn->imm;
+
+	switch (imm) {
+	/* dst_reg = load_acquire(src_reg + off16) */
+	case BPF_LOAD_ACQ:
+		switch (BPF_SIZE(insn->code)) {
+		case BPF_B:
+			pr_err_once("bpf-jit: llacq.b instruction is not supported\n");
+			return -EINVAL;
+		case BPF_H:
+			pr_err_once("bpf-jit: llacq.h instruction is not supported\n");
+			return -EINVAL;
+		case BPF_W:
+			if (cpu_has_llacq_screl) {
+				move_imm(ctx, t1, off, false);
+				emit_insn(ctx, addd, t2, src, t1);
+				emit_insn(ctx, llacqw, dst, t2);
+				emit_zext_32(ctx, dst, true);
+			} else {
+				pr_err_once("bpf-jit: llacq.w instruction is not supported\n");
+				return -EINVAL;
+			}
+			break;
+		case BPF_DW:
+			if (cpu_has_llacq_screl) {
+				move_imm(ctx, t1, off, false);
+				emit_insn(ctx, addd, t2, src, t1);
+				emit_insn(ctx, llacqd, dst, t2);
+			} else {
+				pr_err_once("bpf-jit: llacq.d instruction is not supported\n");
+				return -EINVAL;
+			}
+			break;
+		}
+		break;
+	/* store_release(dst_reg + off16, src_reg) */
+	case BPF_STORE_REL:
+		switch (BPF_SIZE(insn->code)) {
+		case BPF_B:
+			pr_err_once("bpf-jit: screl.b instruction is not supported\n");
+			return -EINVAL;
+		case BPF_H:
+			pr_err_once("bpf-jit: screl.h instruction is not supported\n");
+			return -EINVAL;
+		case BPF_W:
+			if (cpu_has_llacq_screl) {
+				move_imm(ctx, t1, off, false);
+				emit_insn(ctx, addd, t2, dst, t1);
+				emit_insn(ctx, screlw, src, t2);
+			} else {
+				pr_err_once("bpf-jit: screl.w instruction is not supported\n");
+				return -EINVAL;
+			}
+			break;
+		case BPF_DW:
+			if (cpu_has_llacq_screl) {
+				move_imm(ctx, t1, off, false);
+				emit_insn(ctx, addd, t2, dst, t1);
+				emit_insn(ctx, screld, src, t2);
+			} else {
+				pr_err_once("bpf-jit: screl.d instruction is not supported\n");
+				return -EINVAL;
+			}
+			break;
+		}
+		break;
+	default:
+		pr_err_once("bpf-jit: invalid atomic load/store opcode %02x\n", imm);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int emit_atomic_rmw(const struct bpf_insn *insn, struct jit_ctx *ctx)
 {
 	const u8 t1 = LOONGARCH_GPR_T1;
@@ -1326,7 +1407,10 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 	case BPF_STX | BPF_ATOMIC | BPF_H:
 	case BPF_STX | BPF_ATOMIC | BPF_W:
 	case BPF_STX | BPF_ATOMIC | BPF_DW:
-		ret = emit_atomic_rmw(insn, ctx);
+		if (bpf_atomic_is_load_store(insn))
+			ret = emit_atomic_ld_st(insn, ctx);
+		else
+			ret = emit_atomic_rmw(insn, ctx);
 		if (ret)
 			return ret;
 		break;
