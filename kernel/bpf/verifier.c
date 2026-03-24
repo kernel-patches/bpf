@@ -5407,7 +5407,7 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 {
 	struct bpf_func_state *cur; /* state of the current function */
 	int min_off, max_off;
-	int i, err;
+	int i, j, err;
 	struct bpf_reg_state *ptr_reg = NULL, *value_reg = NULL;
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
 	bool writing_zero = false;
@@ -5476,7 +5476,16 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 			}
 		}
 
-		/* Erase all other spilled pointers. */
+		/*
+		 * Scrub slots if variable-offset stack write goes over spilled pointers.
+		 * Otherwise is_spilled_reg() may == true && spilled_ptr.type == NOT_INIT
+		 * and valid program is rejected by check_stack_read_fixed_off()
+		 * with obscure "invalid size of register fill" message.
+		 */
+		if (is_stack_slot_special(&state->stack[spi])) {
+			for (j = 0; j < BPF_REG_SIZE; j++)
+				scrub_spilled_slot(&state->stack[spi].slot_type[j]);
+		}
 		state->stack[spi].spilled_ptr.type = NOT_INIT;
 
 		/* Update the slot type. */
