@@ -412,7 +412,7 @@ static int btf_parse_layout_sec(struct btf *btf)
 /* for unknown kinds, consult kind layout. */
 static int btf_type_size_unknown(const struct btf *btf, const struct btf_type *t)
 {
-	__u32 layout_kinds = btf->hdr.layout_len / sizeof(struct btf_layout);
+	__u32 l_cnt = btf->hdr.layout_len / sizeof(struct btf_layout);
 	struct btf_layout *l = btf->layout;
 	__u16 vlen = btf_vlen(t);
 	__u32 kind = btf_kind(t);
@@ -423,10 +423,10 @@ static int btf_type_size_unknown(const struct btf *btf, const struct btf_type *t
 
 		if (base_btf) {
 			l = base_btf->layout;
-			layout_kinds = base_btf->hdr.layout_len / sizeof(struct btf_layout);
+			l_cnt = base_btf->hdr.layout_len / sizeof(struct btf_layout);
 		}
 	}
-	if (!l || kind >= layout_kinds) {
+	if (!l || kind >= l_cnt) {
 		pr_debug("Unsupported BTF_KIND: %u\n", btf_kind(t));
 		return -EINVAL;
 	}
@@ -729,8 +729,12 @@ static int btf_validate_type(const struct btf *btf, const struct btf_type *t, __
 		break;
 	}
 	default:
-		pr_warn("btf: type [%u]: unrecognized kind %u\n", id, kind);
-		return -EINVAL;
+		/* Kind may be represented in kind layout information. */
+		if (btf_type_size_unknown(btf, t) < 0) {
+			pr_warn("btf: type [%u]: unrecognized kind %u\n", id, kind);
+			return -EINVAL;
+		}
+		break;
 	}
 	return 0;
 }
