@@ -2487,8 +2487,9 @@ bpf_prog_run_array(const struct bpf_prog_array *array,
  * rcu-protected dynamically sized maps.
  */
 static __always_inline u32
-bpf_prog_run_array_uprobe(const struct bpf_prog_array *array,
-			  const void *ctx, bpf_prog_run_fn run_prog)
+bpf_prog_run_array_sleepable(const struct bpf_prog_array *array,
+			     const void *ctx, bpf_prog_run_fn run_prog,
+			     bool is_uprobe)
 {
 	const struct bpf_prog_array_item *item;
 	const struct bpf_prog *prog;
@@ -2504,7 +2505,7 @@ bpf_prog_run_array_uprobe(const struct bpf_prog_array *array,
 
 	migrate_disable();
 
-	run_ctx.is_uprobe = true;
+	run_ctx.is_uprobe = is_uprobe;
 
 	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
 	item = &array->items[0];
