@@ -139,17 +139,11 @@ struct btf_struct_metas {
 	struct btf_struct_meta types[];
 };
 
-extern const struct file_operations btf_fops;
-
 const char *btf_get_name(const struct btf *btf);
 void btf_get(struct btf *btf);
 void btf_put(struct btf *btf);
 const struct btf_header *btf_header(const struct btf *btf);
-int btf_new_fd(const union bpf_attr *attr, bpfptr_t uattr, u32 uattr_sz);
-struct btf *btf_get_by_fd(int fd);
-int btf_get_info_by_fd(const struct btf *btf,
-		       const union bpf_attr *attr,
-		       union bpf_attr __user *uattr);
+
 /* Figure out the size of a type_id.  If type_id is a modifier
  * (e.g. const), it will be resolved to find out the type with size.
  *
@@ -213,12 +207,9 @@ int btf_type_seq_show_flags(const struct btf *btf, u32 type_id, void *obj,
 int btf_type_snprintf_show(const struct btf *btf, u32 type_id, void *obj,
 			   char *buf, int len, u64 flags);
 
-int btf_get_fd_by_id(u32 id);
-u32 btf_obj_id(const struct btf *btf);
 bool btf_is_kernel(const struct btf *btf);
 bool btf_is_module(const struct btf *btf);
 bool btf_is_vmlinux(const struct btf *btf);
-struct module *btf_try_get_module(const struct btf *btf);
 u32 btf_nr_types(const struct btf *btf);
 u32 btf_named_start_id(const struct btf *btf, bool own);
 struct btf *btf_base_btf(const struct btf *btf);
@@ -228,12 +219,8 @@ bool btf_type_is_primitive(const struct btf_type *t);
 bool btf_member_is_reg_int(const struct btf *btf, const struct btf_type *s,
 			   const struct btf_member *m,
 			   u32 expected_offset, u32 expected_size);
-struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type *t,
-				    u32 field_mask, u32 value_size);
-int btf_check_and_fixup_fields(const struct btf *btf, struct btf_record *rec);
 bool btf_type_is_void(const struct btf_type *t);
 s32 btf_find_by_name_kind(const struct btf *btf, const char *name, u8 kind);
-s32 bpf_find_btf_id(const char *name, u32 kind, struct btf **btf_p);
 const struct btf_type *btf_type_skip_modifiers(const struct btf *btf,
 					       u32 id, u32 *res_id);
 const struct btf_type *btf_type_resolve_ptr(const struct btf *btf,
@@ -244,6 +231,20 @@ const struct btf_type *
 btf_resolve_size(const struct btf *btf, const struct btf_type *type,
 		 u32 *type_size);
 const char *btf_type_str(const struct btf_type *t);
+
+/* BPF-specific declarations */
+extern const struct file_operations btf_fops;
+int btf_new_fd(const union bpf_attr *attr, bpfptr_t uattr, u32 uattr_sz);
+struct btf *btf_get_by_fd(int fd);
+int btf_get_info_by_fd(const struct btf *btf,
+		       const union bpf_attr *attr,
+		       union bpf_attr __user *uattr);
+int btf_get_fd_by_id(u32 id);
+u32 btf_obj_id(const struct btf *btf);
+struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type *t,
+				    u32 field_mask, u32 value_size);
+int btf_check_and_fixup_fields(const struct btf *btf, struct btf_record *rec);
+s32 bpf_find_btf_id(const char *name, u32 kind, struct btf **btf_p);
 
 #define for_each_member(i, struct_type, member)			\
 	for (i = 0, member = btf_type_member(struct_type);	\
@@ -524,9 +525,6 @@ static inline void *btf_id_set8_contains(const struct btf_id_set8 *set, u32 id)
 bool btf_param_match_suffix(const struct btf *btf,
 			    const struct btf_param *arg,
 			    const char *suffix);
-int btf_ctx_arg_offset(const struct btf *btf, const struct btf_type *func_proto,
-		       u32 arg_no);
-u32 btf_ctx_arg_idx(struct btf *btf, const struct btf_type *func_proto, int off);
 
 struct bpf_verifier_log;
 
@@ -564,16 +562,39 @@ struct btf_field_iter {
 	int vlen;
 };
 
-#ifdef CONFIG_BPF_SYSCALL
+#ifdef CONFIG_BTF
 const struct btf_type *btf_type_by_id(const struct btf *btf, u32 type_id);
 void btf_set_base_btf(struct btf *btf, const struct btf *base_btf);
+const char *btf_name_by_offset(const struct btf *btf, u32 offset);
+const char *btf_str_by_offset(const struct btf *btf, u32 offset);
+#else
+static inline const struct btf_type *btf_type_by_id(const struct btf *btf,
+						    u32 type_id)
+{
+	return NULL;
+}
+
+static inline void btf_set_base_btf(struct btf *btf, const struct btf *base_btf)
+{
+}
+
+static inline const char *btf_name_by_offset(const struct btf *btf,
+					     u32 offset)
+{
+	return NULL;
+}
+#endif /* CONFIG_BTF */
+
+#ifdef CONFIG_BPF_SYSCALL
+struct module *btf_try_get_module(const struct btf *btf);
 int btf_relocate(struct btf *btf, const struct btf *base_btf, __u32 **map_ids);
 int btf_field_iter_init(struct btf_field_iter *it, struct btf_type *t,
 			enum btf_field_iter_kind iter_kind);
 __u32 *btf_field_iter_next(struct btf_field_iter *it);
 
-const char *btf_name_by_offset(const struct btf *btf, u32 offset);
-const char *btf_str_by_offset(const struct btf *btf, u32 offset);
+int btf_ctx_arg_offset(const struct btf *btf, const struct btf_type *func_proto,
+		       u32 arg_no);
+u32 btf_ctx_arg_idx(struct btf *btf, const struct btf_type *func_proto, int off);
 struct btf *btf_parse_vmlinux(void);
 struct btf *bpf_prog_get_target_btf(const struct bpf_prog *prog);
 u32 *btf_kfunc_flags(const struct btf *btf, u32 kfunc_btf_id, const struct bpf_prog *prog);
@@ -606,17 +627,7 @@ static inline bool btf_type_is_struct_ptr(struct btf *btf, const struct btf_type
 	return btf_type_is_struct(t);
 }
 #else
-static inline const struct btf_type *btf_type_by_id(const struct btf *btf,
-						    u32 type_id)
-{
-	return NULL;
-}
-
-static inline void btf_set_base_btf(struct btf *btf, const struct btf *base_btf)
-{
-}
-
-static inline int btf_relocate(void *log, struct btf *btf, const struct btf *base_btf,
+static inline int btf_relocate(struct btf *btf, const struct btf *base_btf,
 			       __u32 **map_ids)
 {
 	return -EOPNOTSUPP;
@@ -633,11 +644,6 @@ static inline __u32 *btf_field_iter_next(struct btf_field_iter *it)
 	return NULL;
 }
 
-static inline const char *btf_name_by_offset(const struct btf *btf,
-					     u32 offset)
-{
-	return NULL;
-}
 static inline u32 *btf_kfunc_id_set_contains(const struct btf *btf,
 					     u32 kfunc_btf_id,
 					     struct bpf_prog *prog)
@@ -683,5 +689,5 @@ static inline int btf_check_iter_arg(struct btf *btf, const struct btf_type *fun
 {
 	return -EOPNOTSUPP;
 }
-#endif
+#endif /* CONFIG_BPF_SYSCALL */
 #endif

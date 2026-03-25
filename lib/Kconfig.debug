@@ -395,14 +395,23 @@ config DEBUG_INFO_SPLIT
 	  to know about the .dwo files and include them.
 	  Incompatible with older versions of ccache.
 
-config DEBUG_INFO_BTF
-	bool "Generate BTF type information"
+config BTF
+	bool "BTF type information support"
 	depends on !DEBUG_INFO_SPLIT && !DEBUG_INFO_REDUCED
 	depends on !GCC_PLUGIN_RANDSTRUCT || COMPILE_TEST
-	depends on BPF_SYSCALL
 	depends on PAHOLE_VERSION >= 122
 	# pahole uses elfutils, which does not have support for Hexagon relocations
 	depends on !HEXAGON
+	help
+	  Enable the core BTF (BPF Type Format) infrastructure. This provides
+	  BTF parsing, type lookup, and display functionality used by BPF and
+	  other kernel subsystems.
+
+	  This option is typically selected automatically by DEBUG_INFO_BTF.
+
+config DEBUG_INFO_BTF
+	bool "Generate BTF type information"
+	select BTF
 	help
 	  Generate deduplicated BTF type information from DWARF debug info.
 	  Turning this on requires pahole v1.22 or later, which will convert
