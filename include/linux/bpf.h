@@ -2486,13 +2486,15 @@ bpf_prog_run_array(const struct bpf_prog_array *array,
  * section and disable preemption for that program alone, so it can access
  * rcu-protected dynamically sized maps.
  */
+void notrace bpf_prog_inc_misses_counter(struct bpf_prog *prog);
+
 static __always_inline u32
 bpf_prog_run_array_sleepable(const struct bpf_prog_array *array,
 			     const void *ctx, bpf_prog_run_fn run_prog,
 			     bool is_uprobe)
 {
 	const struct bpf_prog_array_item *item;
-	const struct bpf_prog *prog;
+	struct bpf_prog *prog;
 	struct bpf_run_ctx *old_run_ctx;
 	struct bpf_trace_run_ctx run_ctx;
 	u32 ret = 1;
@@ -2513,8 +2515,21 @@ bpf_prog_run_array_sleepable(const struct bpf_prog_array *array,
 		if (!prog->sleepable)
 			rcu_read_lock();
 
+		/* Per-prog recursion check to enable private stack. */
+		if (!is_uprobe &&
+		    unlikely(!bpf_prog_get_recursion_context(prog))) {
+			bpf_prog_inc_misses_counter(prog);
+			if (!prog->sleepable)
+				rcu_read_unlock();
+			item++;
+			continue;
+		}
+
 		run_ctx.bpf_cookie = item->bpf_cookie;
 		ret &= run_prog(prog, ctx);
+
+		if (!is_uprobe)
+			bpf_prog_put_recursion_context(prog);
 		item++;
 
 		if (!prog->sleepable)
