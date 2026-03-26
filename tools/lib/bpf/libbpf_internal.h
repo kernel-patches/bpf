@@ -398,6 +398,8 @@ enum kern_feature_id {
 	FEAT_UPROBE_SYSCALL,
 	/* Kernel supports BTF layout information */
 	FEAT_BTF_LAYOUT,
+	/* BPF multi-kprobe link support */
+	FEAT_KPROBE_MULTI_LINK,
 	__FEAT_CNT,
 };
 
