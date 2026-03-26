@@ -23027,8 +23027,12 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		}
 		if (!bpf_pseudo_call(insn))
 			continue;
+		/*
+		 * Note: If the original insn->imm is out of s16 bounds,
+		 * insn->off here will be a truncated value.
+		 */
 		insn->off = env->insn_aux_data[i].call_imm;
-		subprog = find_subprog(env, i + insn->off + 1);
+		subprog = find_subprog(env, i + env->insn_aux_data[i].call_imm + 1);
 		insn->imm = subprog;
 	}
 
