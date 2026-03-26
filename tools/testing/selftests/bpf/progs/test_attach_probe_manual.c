@@ -14,14 +14,14 @@ int uretprobe_res = 0;
 int uprobe_byname_res = 0;
 void *user_ptr = 0;
 
-SEC("kprobe")
+SEC("kprobe.single")
 int handle_kprobe(struct pt_regs *ctx)
 {
 	kprobe_res = 1;
 	return 0;
 }
 
-SEC("kretprobe")
+SEC("kretprobe.single")
 int handle_kretprobe(struct pt_regs *ctx)
 {
 	kretprobe_res = 2;
