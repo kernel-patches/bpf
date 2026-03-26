@@ -8676,6 +8676,40 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 
 	local_func_proto_id = ext->ksym.type_id;
 
+	/*
+	 * For kfuncs with a flavor suffix (e.g. "func___v2"), first try the
+	 * exact name.  If the exact name exists in kernel BTF and its
+	 * prototype is compatible, use it directly.  This is necessary for
+	 * KF_IMPLICIT_ARGS kfuncs that export both a base name (with the
+	 * implicit aux parameter stripped) and a versioned name with extra
+	 * parameters: the essential-name lookup would find the base entry
+	 * (fewer params) and fail the compat check, leaving the weak symbol
+	 * unresolved even though the versioned kernel entry is a perfect
+	 * match.
+	 */
+	if (ext->essent_name) {
+		struct module_btf *exact_mod_btf = NULL;
+		struct btf *exact_btf = NULL;
+		int exact_id;
+
+		exact_id = find_ksym_btf_id(obj, ext->name, BTF_KIND_FUNC,
+					    &exact_btf, &exact_mod_btf);
+		if (exact_id >= 0) {
+			kern_func = btf__type_by_id(exact_btf, exact_id);
+			kfunc_proto_id = kern_func->type;
+			ret = bpf_core_types_are_compat(obj->btf,
+							local_func_proto_id,
+							exact_btf,
+							kfunc_proto_id);
+			if (ret > 0) {
+				kern_btf = exact_btf;
+				mod_btf = exact_mod_btf;
+				kfunc_id = exact_id;
+				goto found;
+			}
+		}
+	}
+
 	kfunc_id = find_ksym_btf_id(obj, ext->essent_name ?: ext->name, BTF_KIND_FUNC, &kern_btf,
 				    &mod_btf);
 	if (kfunc_id < 0) {
@@ -8701,6 +8735,7 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 		return -EINVAL;
 	}
 
+found:
 	/* set index for module BTF fd in fd_array, if unset */
 	if (mod_btf && !mod_btf->fd_array_idx) {
 		/* insn->off is s16 */
