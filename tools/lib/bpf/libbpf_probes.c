@@ -367,6 +367,12 @@ static int probe_map_create(enum bpf_map_type map_type)
 	case BPF_MAP_TYPE_INSN_ARRAY:
 		key_size	= sizeof(__u32);
 		value_size	= sizeof(struct bpf_insn_array_value);
+		max_entries	= 1;
+		break;
+	case BPF_MAP_TYPE_LANDLOCK_RULESET:
+		key_size	= sizeof(__u32);
+		value_size	= sizeof(__u32);
+		max_entries	= 1;
 		break;
 	case BPF_MAP_TYPE_UNSPEC:
 	default:
