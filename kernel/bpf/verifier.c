@@ -2717,9 +2717,29 @@ static void deduce_bounds_64_from_32(struct bpf_reg_state *reg)
 	__u64 new_umin, new_umax;
 	__s64 new_smin, new_smax;
 
-	/* u32 -> u64 tightening, it's always well-formed */
-	new_umin = (reg->umin_value & ~0xffffffffULL) | reg->u32_min_value;
-	new_umax = (reg->umax_value & ~0xffffffffULL) | reg->u32_max_value;
+	/*
+	 * If (u32)umin > u32_max, no value in the current upper-32-bit block
+	 * satisfies [u32_min, u32_max] while being >= umin; advance umin to
+	 * the next block. Otherwise apply standard u32->u64 tightening.
+	 */
+	if ((u32)reg->umin_value > reg->u32_max_value)
+		new_umin = (reg->umin_value & ~0xffffffffULL) + (1ULL << 32) |
+			   reg->u32_min_value;
+	else
+		new_umin = (reg->umin_value & ~0xffffffffULL) |
+			   reg->u32_min_value;
+
+	/*
+	 * Symmetrically, if (u32)umax < u32_min, retreat umax to the
+	 * previous block. Otherwise apply standard u32->u64 tightening.
+	 */
+	if ((u32)reg->umax_value < reg->u32_min_value)
+		new_umax = (reg->umax_value & ~0xffffffffULL) - (1ULL << 32) |
+			   reg->u32_max_value;
+	else
+		new_umax = (reg->umax_value & ~0xffffffffULL) |
+			   reg->u32_max_value;
+
 	reg->umin_value = max_t(u64, reg->umin_value, new_umin);
 	reg->umax_value = min_t(u64, reg->umax_value, new_umax);
 	/* u32 -> s64 tightening, u32 range embedded into s64 preserves range validity */
