@@ -8,6 +8,7 @@
 #include <linux/slab.h>
 #include <linux/mm.h>
 #include <linux/filter.h>
+#include <linux/landlock.h>
 #include <linux/perf_event.h>
 #include <uapi/linux/btf.h>
 #include <linux/rcupdate_trace.h>
@@ -1455,6 +1456,72 @@ const struct bpf_map_ops array_of_maps_map_ops = {
 	.map_lookup_batch = generic_map_lookup_batch,
 	.map_update_batch = generic_map_update_batch,
 	.map_check_btf = map_check_no_btf,
+	.map_mem_usage = array_map_mem_usage,
+	.map_btf_id = &array_map_btf_ids[0],
+};
+
+static int landlock_ruleset_map_alloc_check(union bpf_attr *attr)
+{
+	if (!IS_ENABLED(CONFIG_SECURITY_LANDLOCK))
+		return -EOPNOTSUPP;
+
+	return fd_array_map_alloc_check(attr);
+}
+
+static void landlock_ruleset_map_put_ptr(struct bpf_map *map, void *ptr,
+					 bool need_defer)
+{
+	if (!ptr)
+		return;
+
+	if (need_defer)
+		landlock_put_ruleset_deferred(ptr);
+	else
+		landlock_put_ruleset(ptr);
+}
+
+static void *landlock_ruleset_map_get_ptr(struct bpf_map *map,
+					  struct file *map_file, int fd)
+{
+	return landlock_get_ruleset_from_fd(fd, FMODE_CAN_READ);
+}
+
+static void *landlock_ruleset_map_lookup_elem(struct bpf_map *map, void *key)
+{
+	struct landlock_ruleset **elem, *ruleset;
+
+	rcu_read_lock();
+
+	elem = array_map_lookup_elem(map, key);
+	if (!elem) {
+		rcu_read_unlock();
+		return NULL;
+	}
+	ruleset = READ_ONCE(*elem);
+	if (!landlock_try_get_ruleset(ruleset))
+		ruleset = NULL;
+
+	rcu_read_unlock();
+
+	return ruleset;
+}
+
+static void landlock_ruleset_array_free(struct bpf_map *map)
+{
+	bpf_fd_array_map_clear(map, false);
+	fd_array_map_free(map);
+}
+
+const struct bpf_map_ops landlock_ruleset_map_ops = {
+	.map_alloc_check = landlock_ruleset_map_alloc_check,
+	.map_alloc = array_map_alloc,
+	.map_free = landlock_ruleset_array_free,
+	.map_get_next_key = bpf_array_get_next_key,
+	.map_lookup_elem_sys_only = fd_array_map_lookup_elem,
+	.map_lookup_elem = landlock_ruleset_map_lookup_elem,
+	.map_delete_elem = fd_array_map_delete_elem,
+	.map_fd_get_ptr = landlock_ruleset_map_get_ptr,
+	.map_fd_put_ptr = landlock_ruleset_map_put_ptr,
 	.map_mem_usage = array_map_mem_usage,
 	.map_btf_id = &array_map_btf_ids[0],
 };
