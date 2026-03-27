@@ -79,6 +79,26 @@ extern int bpf_verify_pkcs7_signature(struct bpf_dynptr *data_ptr,
 				      struct bpf_dynptr *sig_ptr,
 				      struct bpf_key *trusted_keyring) __ksym;
 
+struct bpf_landlock_ruleset;
+/*
+ * Description
+ *  Put a Landlock ruleset obtained from a Landlock ruleset map lookup.
+ */
+
+void bpf_landlock_put_ruleset(const struct bpf_landlock_ruleset *ruleset)
+	__ksym __weak;
+/*
+ * Description
+ *  Modifies the credential of the passed binary parameters to enforce the
+ *  provided landlock ruleset on the new credentials. The ruleset should
+ *  have been obtained from a Landlock ruleset map lookup.
+ * Returns
+ *  Error code same as those returned by landlock_restrict_self
+ */
+int bpf_landlock_restrict_binprm(struct linux_binprm *bprm,
+		const struct bpf_landlock_ruleset *ruleset,
+		__u32 flags) __ksym __weak;
+
 struct dentry;
 /* Description
  *  Returns xattr of a dentry
