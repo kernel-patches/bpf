@@ -16,6 +16,7 @@
 #include <linux/btf_ids.h>
 #include <linux/ima.h>
 #include <linux/bpf-cgroup.h>
+#include <linux/landlock.h>
 
 /* For every LSM hook that allows attachment of BPF programs, declare a nop
  * function where a BPF program can be attached. Notably, we qualify each with
@@ -447,3 +448,147 @@ int bpf_lsm_get_retval_range(const struct bpf_prog *prog,
 	}
 	return 0;
 }
+
+BTF_SET_START(bpf_landlock_kfunc_hooks)
+BTF_ID(func, bpf_lsm_bprm_creds_for_exec)
+BTF_ID(func, bpf_lsm_bprm_creds_from_file)
+BTF_SET_END(bpf_landlock_kfunc_hooks)
+
+BTF_KFUNCS_START(bpf_landlock_kfunc_btf_ids)
+BTF_ID_FLAGS(func, bpf_landlock_put_ruleset, KF_RELEASE | KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_landlock_restrict_binprm, KF_SLEEPABLE)
+BTF_KFUNCS_END(bpf_landlock_kfunc_btf_ids)
+
+BTF_ID_LIST(bpf_landlock_dtor_ids)
+BTF_ID(struct, bpf_landlock_ruleset)
+BTF_ID(func, bpf_landlock_put_ruleset_dtor)
+
+static int bpf_landlock_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	if (!btf_id_set8_contains(&bpf_landlock_kfunc_btf_ids, kfunc_id))
+		return 0;
+
+	/* BPF_LSM_CGROUP programs run under classic RCU and cannot sleep. */
+	if (prog->expected_attach_type == BPF_LSM_CGROUP)
+		return -EACCES;
+
+	if (!btf_id_set_contains(&bpf_landlock_kfunc_hooks,
+				 prog->aux->attach_btf_id))
+		return -EACCES;
+
+	return 0;
+}
+
+static const struct btf_kfunc_id_set bpf_landlock_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &bpf_landlock_kfunc_btf_ids,
+	.filter = bpf_landlock_kfunc_filter,
+};
+
+static int __init bpf_landlock_kfunc_init(void)
+{
+	const struct btf_id_dtor_kfunc bpf_landlock_dtors[] = {
+		{
+			.btf_id = bpf_landlock_dtor_ids[0],
+			.kfunc_btf_id = bpf_landlock_dtor_ids[1],
+		},
+	};
+	int ret;
+
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_LSM,
+					&bpf_landlock_kfunc_set);
+	if (ret)
+		return ret;
+
+	return register_btf_id_dtor_kfuncs(bpf_landlock_dtors,
+					   ARRAY_SIZE(bpf_landlock_dtors),
+					   THIS_MODULE);
+}
+
+late_initcall(bpf_landlock_kfunc_init);
+
+__bpf_kfunc_start_defs();
+
+#if IS_ENABLED(CONFIG_SECURITY_LANDLOCK)
+
+/**
+ * bpf_landlock_put_ruleset - put a Landlock ruleset
+ * @ruleset: Landlock ruleset to put
+ */
+__bpf_kfunc void
+bpf_landlock_put_ruleset(const struct bpf_landlock_ruleset *ruleset)
+{
+	landlock_put_ruleset((struct landlock_ruleset *)ruleset);
+}
+
+/**
+ * bpf_landlock_restrict_binprm - enforce a Landlock ruleset on exec credentials
+ * @bprm: execution context providing the prepared credentials to restrict
+ * @ruleset: Landlock ruleset to enforce, may be NULL only with
+ *	LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF
+ * @flags: landlock_restrict_self() flags
+ *
+ * When @flags contains LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS, the request is
+ * staged through @bprm and committed only after exec reaches point-of-no-return.
+ * This guarantees that the resulting task cannot gain more privileges through
+ * later exec transitions, including when called from bprm_creds_from_file.
+ * The current execution is unaffected, and may escalate as usual until the next
+ * exec.
+ */
+__bpf_kfunc int
+bpf_landlock_restrict_binprm(struct linux_binprm *bprm,
+			     const struct bpf_landlock_ruleset *ruleset,
+			     u32 flags)
+{
+	int err = landlock_restrict_cred_precheck(flags, false);
+
+	if (err)
+		return err;
+
+	err = landlock_restrict_cred(bprm->cred,
+				     (struct landlock_ruleset *)ruleset,
+				     flags);
+
+	if (err)
+		return err;
+	/*
+	 * Stage no_new_privs through @bprm so exec can honor it without
+	 * mutating the current task before point-of-no-return.
+	 */
+	if ((flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS)
+	    && !task_no_new_privs(current)
+	    && !ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN))
+		bprm->set_nnp_on_point_of_no_return = 1;
+
+	return err;
+}
+
+/* We define stubs for these to allow ebpf programs using landlock kfuncs to load
+ * even when CONFIG_SECURITY_LANDLOCK is not enabled.
+ */
+#else /* IS_ENABLED(CONFIG_SECURITY_LANDLOCK) */
+
+__bpf_kfunc void
+bpf_landlock_put_ruleset(const struct bpf_landlock_ruleset *ruleset)
+{
+}
+
+__bpf_kfunc int
+bpf_landlock_restrict_binprm(struct linux_binprm *bprm,
+			     const struct bpf_landlock_ruleset *ruleset,
+			     u32 flags)
+{
+	return -EOPNOTSUPP;
+}
+
+#endif /* IS_ENABLED(CONFIG_SECURITY_LANDLOCK) */
+
+/* Destructor does nothing when Landlock is not enabled */
+__bpf_kfunc void bpf_landlock_put_ruleset_dtor(void *ruleset)
+{
+	bpf_landlock_put_ruleset(ruleset);
+}
+
+CFI_NOSEAL(bpf_landlock_put_ruleset_dtor);
+
+__bpf_kfunc_end_defs();
