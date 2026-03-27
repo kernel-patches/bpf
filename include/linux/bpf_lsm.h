@@ -31,6 +31,21 @@ int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
 bool bpf_lsm_is_sleepable_hook(u32 btf_id);
 bool bpf_lsm_is_trusted(const struct bpf_prog *prog);
 
+/*
+ * Opaque type for BPF landlock ruleset.  This is used to prevent BPF programs
+ * from directly accessing the landlock_ruleset structure, which is not designed
+ * for external use and may change in the future.
+ */
+struct bpf_landlock_ruleset {};
+BTF_ID_LIST_SINGLE(bpf_landlock_ruleset_btf_ids, struct, bpf_landlock_ruleset)
+__bpf_kfunc void
+bpf_landlock_put_ruleset(const struct bpf_landlock_ruleset *ruleset);
+__bpf_kfunc int
+bpf_landlock_restrict_binprm(struct linux_binprm *bprm,
+			     const struct bpf_landlock_ruleset *ruleset,
+			     u32 flags);
+__bpf_kfunc void bpf_landlock_put_ruleset_dtor(void *ruleset);
+
 static inline struct bpf_storage_blob *bpf_inode(
 	const struct inode *inode)
 {
