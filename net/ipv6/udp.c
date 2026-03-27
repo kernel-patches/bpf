@@ -147,16 +147,16 @@ static int compute_score(struct sock *sk, const struct net *net,
 	score = 0;
 	inet = inet_sk(sk);
 
-	if (inet->inet_dport) {
+	if (sk->sk_state == TCP_ESTABLISHED) {
 		if (inet->inet_dport != sport)
 			return -1;
 		score++;
-	}
 
-	if (!ipv6_addr_any(&sk->sk_v6_daddr)) {
-		if (!ipv6_addr_equal(&sk->sk_v6_daddr, saddr))
-			return -1;
-		score++;
+		if (!ipv6_addr_any(&sk->sk_v6_daddr)) {
+			if (!ipv6_addr_equal(&sk->sk_v6_daddr, saddr))
+				return -1;
+			score++;
+		}
 	}
 
 	bound_dev_if = READ_ONCE(sk->sk_bound_dev_if);
@@ -949,9 +949,9 @@ static bool __udp_v6_is_mcast_sock(struct net *net, const struct sock *sk,
 
 	if (udp_sk(sk)->udp_port_hash != hnum ||
 	    sk->sk_family != PF_INET6 ||
-	    (inet->inet_dport && inet->inet_dport != rmt_port) ||
-	    (!ipv6_addr_any(&sk->sk_v6_daddr) &&
-		    !ipv6_addr_equal(&sk->sk_v6_daddr, rmt_addr)) ||
+	    (sk->sk_state == TCP_ESTABLISHED &&
+	     ((inet->inet_dport && inet->inet_dport != rmt_port) ||
+	     !ipv6_addr_equal(&sk->sk_v6_daddr, rmt_addr))) ||
 	    !udp_sk_bound_dev_eq(net, READ_ONCE(sk->sk_bound_dev_if), dif, sdif) ||
 	    (!ipv6_addr_any(&sk->sk_v6_rcv_saddr) &&
 		    !ipv6_addr_equal(&sk->sk_v6_rcv_saddr, loc_addr)))

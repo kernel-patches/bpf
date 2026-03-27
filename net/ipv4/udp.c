@@ -385,16 +385,16 @@ static int compute_score(struct sock *sk, const struct net *net,
 	score = (sk->sk_family == PF_INET) ? 2 : 1;
 
 	inet = inet_sk(sk);
-	if (inet->inet_daddr) {
+	if (sk->sk_state == TCP_ESTABLISHED) {
 		if (inet->inet_daddr != saddr)
 			return -1;
 		score += 4;
-	}
 
-	if (inet->inet_dport) {
-		if (inet->inet_dport != sport)
-			return -1;
-		score += 4;
+		if (inet->inet_dport) {
+			if (inet->inet_dport != sport)
+				return -1;
+			score += 4;
+		}
 	}
 
 	dev_match = udp_sk_bound_dev_eq(net, sk->sk_bound_dev_if,
@@ -796,8 +796,9 @@ static inline bool __udp_is_mcast_sock(struct net *net, const struct sock *sk,
 
 	if (!net_eq(sock_net(sk), net) ||
 	    udp_sk(sk)->udp_port_hash != hnum ||
-	    (inet->inet_daddr && inet->inet_daddr != rmt_addr) ||
-	    (inet->inet_dport != rmt_port && inet->inet_dport) ||
+	    (sk->sk_state == TCP_ESTABLISHED &&
+	     (inet->inet_daddr != rmt_addr ||
+	     (inet->inet_dport != rmt_port && inet->inet_dport))) ||
 	    (inet->inet_rcv_saddr && inet->inet_rcv_saddr != loc_addr) ||
 	    ipv6_only_sock(sk) ||
 	    !udp_sk_bound_dev_eq(net, sk->sk_bound_dev_if, dif, sdif))
@@ -2854,7 +2855,8 @@ static struct sock *__udp4_lib_demux_lookup(struct net *net,
 	ports = INET_COMBINED_PORTS(rmt_port, hnum);
 
 	udp_portaddr_for_each_entry_rcu(sk, &hslot2->head) {
-		if (inet_match(net, sk, acookie, ports, dif, sdif))
+		if (sk->sk_state == TCP_ESTABLISHED &&
+		    inet_match(net, sk, acookie, ports, dif, sdif))
 			return sk;
 		/* Only check first socket in chain */
 		break;
