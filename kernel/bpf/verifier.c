@@ -493,7 +493,8 @@ static bool is_acquire_function(enum bpf_func_id func_id,
 
 	if (func_id == BPF_FUNC_map_lookup_elem &&
 	    (map_type == BPF_MAP_TYPE_SOCKMAP ||
-	     map_type == BPF_MAP_TYPE_SOCKHASH))
+	     map_type == BPF_MAP_TYPE_SOCKHASH ||
+	     map_type == BPF_MAP_TYPE_LANDLOCK_RULESET))
 		return true;
 
 	return false;
@@ -2269,6 +2270,10 @@ static void mark_ptr_not_null_reg(struct bpf_reg_state *reg)
 		} else if (map->map_type == BPF_MAP_TYPE_SOCKMAP ||
 			   map->map_type == BPF_MAP_TYPE_SOCKHASH) {
 			reg->type = PTR_TO_SOCKET;
+		} else if (map->map_type == BPF_MAP_TYPE_LANDLOCK_RULESET) {
+			reg->type = PTR_TO_BTF_ID | PTR_TRUSTED;
+			reg->btf = btf_vmlinux;
+			reg->btf_id = *bpf_landlock_ruleset_btf_ids;
 		} else {
 			reg->type = PTR_TO_MAP_VALUE;
 		}
@@ -10236,6 +10241,13 @@ static int check_map_func_compatibility(struct bpf_verifier_env *env,
 		    func_id != BPF_FUNC_sk_select_reuseport &&
 		    func_id != BPF_FUNC_map_lookup_elem &&
 		    !may_update_sockmap(env, func_id))
+			goto error;
+		break;
+	case BPF_MAP_TYPE_LANDLOCK_RULESET:
+		if (resolve_prog_type(env->prog) != BPF_PROG_TYPE_LSM)
+			goto error;
+		if (func_id != BPF_FUNC_map_lookup_elem &&
+		    func_id != BPF_FUNC_map_delete_elem)
 			goto error;
 		break;
 	case BPF_MAP_TYPE_REUSEPORT_SOCKARRAY:
@@ -21662,6 +21674,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 		case BPF_MAP_TYPE_ARENA:
 		case BPF_MAP_TYPE_INSN_ARRAY:
 		case BPF_MAP_TYPE_PROG_ARRAY:
+		case BPF_MAP_TYPE_LANDLOCK_RULESET:
 			break;
 		default:
 			verbose(env,
