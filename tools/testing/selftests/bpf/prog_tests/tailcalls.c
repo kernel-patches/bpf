@@ -1113,6 +1113,114 @@ out:
 	bpf_object__close(tgt_obj);
 }
 
+static void test_tailcall_fentry_tailcallee(void)
+{
+	struct bpf_object *tgt_obj = NULL, *fentry_obj = NULL;
+	struct bpf_map *prog_array, *data_map;
+	struct bpf_link *fentry_link = NULL;
+	struct bpf_program *prog;
+	int err, map_fd, callee_fd, main_fd, data_fd, i, val;
+	char buff[128] = {};
+
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		    .data_in = buff,
+		    .data_size_in = sizeof(buff),
+		    .repeat = 1,
+	);
+
+	err = bpf_prog_test_load("tailcall_fentry_target.bpf.o",
+				 BPF_PROG_TYPE_SCHED_CLS,
+				 &tgt_obj, &main_fd);
+	if (!ASSERT_OK(err, "load tgt_obj"))
+		return;
+
+	prog_array = bpf_object__find_map_by_name(tgt_obj, "jmp_table");
+	if (!ASSERT_OK_PTR(prog_array, "find jmp_table map"))
+		goto out;
+
+	map_fd = bpf_map__fd(prog_array);
+	if (!ASSERT_FALSE(map_fd < 0, "find jmp_table map fd"))
+		goto out;
+
+	prog = bpf_object__find_program_by_name(tgt_obj, "entry");
+	if (!ASSERT_OK_PTR(prog, "find entry prog"))
+		goto out;
+
+	main_fd = bpf_program__fd(prog);
+	if (!ASSERT_FALSE(main_fd < 0, "find entry prog fd"))
+		goto out;
+
+	prog = bpf_object__find_program_by_name(tgt_obj, "callee");
+	if (!ASSERT_OK_PTR(prog, "find callee prog"))
+		goto out;
+
+	callee_fd = bpf_program__fd(prog);
+	if (!ASSERT_FALSE(callee_fd < 0, "find callee prog fd"))
+		goto out;
+
+	i = 0;
+	err = bpf_map_update_elem(map_fd, &i, &callee_fd, BPF_ANY);
+	if (!ASSERT_OK(err, "update jmp_table"))
+		goto out;
+
+	fentry_obj = bpf_object__open_file("tailcall_fentry_probe.bpf.o", NULL);
+	if (!ASSERT_OK_PTR(fentry_obj, "open fentry_obj file"))
+		goto out;
+
+	prog = bpf_object__find_program_by_name(fentry_obj, "fentry_callee");
+	if (!ASSERT_OK_PTR(prog, "find fentry prog"))
+		goto out;
+
+	err = bpf_program__set_attach_target(prog, callee_fd, "callee");
+	if (!ASSERT_OK(err, "set_attach_target callee"))
+		goto out;
+
+	err = bpf_object__load(fentry_obj);
+	if (!ASSERT_OK(err, "load fentry_obj"))
+		goto out;
+
+	fentry_link = bpf_program__attach_trace(prog);
+	if (!ASSERT_OK_PTR(fentry_link, "attach_trace"))
+		goto out;
+
+	data_map = bpf_object__find_map_by_name(fentry_obj, ".bss");
+	if (!ASSERT_FALSE(!data_map || !bpf_map__is_internal(data_map),
+			  "find tailcall_fentry_probe.bss map"))
+		goto out;
+
+	data_fd = bpf_map__fd(data_map);
+	if (!ASSERT_FALSE(data_fd < 0,
+			  "find tailcall_fentry_probe.bss map fd"))
+		goto out;
+
+	err = bpf_prog_test_run_opts(callee_fd, &topts);
+	ASSERT_OK(err, "direct callee");
+	ASSERT_EQ(topts.retval, 7, "direct callee retval");
+
+	i = 0;
+	err = bpf_map_lookup_elem(data_fd, &i, &val);
+	ASSERT_OK(err, "direct fentry count");
+	ASSERT_EQ(val, 1, "direct fentry count");
+
+	val = 0;
+	err = bpf_map_update_elem(data_fd, &i, &val, BPF_ANY);
+	ASSERT_OK(err, "reset fentry count");
+
+	err = bpf_prog_test_run_opts(main_fd, &topts);
+	ASSERT_OK(err, "tailcall");
+	ASSERT_EQ(topts.retval, 7, "tailcall retval");
+
+	i = 0;
+	err = bpf_map_lookup_elem(data_fd, &i, &val);
+	ASSERT_OK(err, "fentry count");
+	ASSERT_EQ(val, 1, "fentry count");
+
+out:
+	bpf_link__destroy(fentry_link);
+	bpf_object__close(fentry_obj);
+	bpf_object__close(tgt_obj);
+}
+
 #define JMP_TABLE "/sys/fs/bpf/jmp_table"
 
 static int poke_thread_exit;
@@ -1759,6 +1867,8 @@ void test_tailcalls(void)
 		test_tailcall_bpf2bpf_fentry_fexit();
 	if (test__start_subtest("tailcall_bpf2bpf_fentry_entry"))
 		test_tailcall_bpf2bpf_fentry_entry();
+	if (test__start_subtest("tailcall_fentry_tailcallee"))
+		test_tailcall_fentry_tailcallee();
 	if (test__start_subtest("tailcall_poke"))
 		test_tailcall_poke();
 	if (test__start_subtest("tailcall_bpf2bpf_hierarchy_1"))
