@@ -325,8 +325,10 @@ struct jit_context {
 
 /* Number of bytes emit_patch() needs to generate instructions */
 #define X86_PATCH_SIZE		5
+/* Number of bytes used by the short jump that skips the tail-call hook. */
+#define X86_TAIL_CALL_SKIP_JMP_SIZE	2
 /* Number of bytes that will be skipped on tailcall */
-#define X86_TAIL_CALL_OFFSET	(12 + ENDBR_INSN_SIZE)
+#define X86_TAIL_CALL_OFFSET	(12 + X86_TAIL_CALL_SKIP_JMP_SIZE + ENDBR_INSN_SIZE)
 
 static void push_r9(u8 **pprog)
 {
@@ -545,8 +547,15 @@ static void emit_prologue(u8 **pprog, u8 *ip, u32 stack_depth, bool ebpf_from_cb
 		EMIT3(0x48, 0x89, 0xE5); /* mov rbp, rsp */
 	}
 
+	if (!is_subprog) {
+		/* Normal entry skips the tail-call-only trampoline hook. */
+		EMIT2(0xEB, ENDBR_INSN_SIZE + X86_PATCH_SIZE);
+	}
+
 	/* X86_TAIL_CALL_OFFSET is here */
 	EMIT_ENDBR();
+	if (!is_subprog)
+		emit_nops(&prog, X86_PATCH_SIZE);
 
 	/* sub rsp, rounded_stack_depth */
 	if (stack_depth)
@@ -632,12 +641,33 @@ out:
 	return ret;
 }
 
+static void *bpf_tail_call_fentry_ip(void *ip)
+{
+	u8 *tail_ip = ip + X86_TAIL_CALL_OFFSET;
+	u8 *landing = tail_ip - ENDBR_INSN_SIZE;
+
+	/* ip points at the regular fentry slot after the entry ENDBR. */
+	if (landing[-X86_TAIL_CALL_SKIP_JMP_SIZE] != 0xEB ||
+	    landing[-X86_TAIL_CALL_SKIP_JMP_SIZE + 1] !=
+		    ENDBR_INSN_SIZE + X86_PATCH_SIZE)
+		return NULL;
+
+	if (ENDBR_INSN_SIZE && !is_endbr((u32 *)landing))
+		return NULL;
+
+	return tail_ip;
+}
+
 int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 		       enum bpf_text_poke_type new_t, void *old_addr,
 		       void *new_addr)
 {
+	void *tail_ip = NULL;
+	bool is_bpf_text = is_bpf_text_address((long)ip);
+	int ret, tail_ret;
+
 	if (!is_kernel_text((long)ip) &&
-	    !is_bpf_text_address((long)ip))
+	    !is_bpf_text)
 		/* BPF poking in modules is not supported */
 		return -EINVAL;
 
@@ -648,7 +678,18 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 	if (is_endbr(ip))
 		ip += ENDBR_INSN_SIZE;
 
-	return __bpf_arch_text_poke(ip, old_t, new_t, old_addr, new_addr);
+	if (is_bpf_text && (old_t == BPF_MOD_CALL || new_t == BPF_MOD_CALL))
+		tail_ip = bpf_tail_call_fentry_ip(ip);
+
+	ret = __bpf_arch_text_poke(ip, old_t, new_t, old_addr, new_addr);
+	if (ret < 0 || !tail_ip)
+		return ret;
+
+	tail_ret = __bpf_arch_text_poke(tail_ip, old_t, new_t, old_addr, new_addr);
+	if (tail_ret < 0)
+		return tail_ret;
+
+	return ret && tail_ret;
 }
 
 #define EMIT_LFENCE()	EMIT3(0x0F, 0xAE, 0xE8)
