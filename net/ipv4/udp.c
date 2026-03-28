@@ -2235,10 +2235,20 @@ int __udp_disconnect(struct sock *sk, int flags)
 }
 EXPORT_SYMBOL(__udp_disconnect);
 
+static int udp_disconnect_unhash4(struct sock *sk, int flags)
+{
+	struct udp_table *udptable = udp_get_table_prot(sk);
+
+	udp_unhash4(udptable, sk);
+	__udp_disconnect(sk, flags);
+
+	return 0;
+}
+
 int udp_disconnect(struct sock *sk, int flags)
 {
 	lock_sock(sk);
-	__udp_disconnect(sk, flags);
+	udp_disconnect_unhash4(sk, flags);
 	release_sock(sk);
 	return 0;
 }
@@ -3254,7 +3264,7 @@ int udp_abort(struct sock *sk, int err)
 
 	sk->sk_err = err;
 	sk_error_report(sk);
-	__udp_disconnect(sk, 0);
+	udp_disconnect_unhash4(sk, 0);
 
 out:
 	if (!has_current_bpf_ctx())
