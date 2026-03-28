@@ -563,9 +563,12 @@ struct bpf_kprobe_opts {
 	bool retprobe;
 	/* kprobe attach mode */
 	enum probe_attach_mode attach_mode;
+	/* kernel address to install kprobe to; mutually exclusive with func_name */
+	unsigned long addr;
 	size_t :0;
 };
-#define bpf_kprobe_opts__last_field attach_mode
+
+#define bpf_kprobe_opts__last_field addr
 
 LIBBPF_API struct bpf_link *
 bpf_program__attach_kprobe(const struct bpf_program *prog, bool retprobe,

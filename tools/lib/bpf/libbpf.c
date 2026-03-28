@@ -11523,7 +11523,7 @@ static int determine_uprobe_retprobe_bit(void)
 #define PERF_UPROBE_REF_CTR_OFFSET_SHIFT 32
 
 static int perf_event_open_probe(bool uprobe, bool retprobe, const char *name,
-				 uint64_t offset, int pid, size_t ref_ctr_off)
+				 uint64_t offset_or_addr, int pid, size_t ref_ctr_off)
 {
 	const size_t attr_sz = sizeof(struct perf_event_attr);
 	struct perf_event_attr attr;
@@ -11558,7 +11558,7 @@ static int perf_event_open_probe(bool uprobe, bool retprobe, const char *name,
 	attr.type = type;
 	attr.config |= (__u64)ref_ctr_off << PERF_UPROBE_REF_CTR_OFFSET_SHIFT;
 	attr.config1 = ptr_to_u64(name); /* kprobe_func or uprobe_path */
-	attr.config2 = offset;		 /* kprobe_addr or probe_offset */
+	attr.config2 = offset_or_addr;	 /* kprobe_addr or probe_offset */
 
 	/* pid filter is meaningful only for uprobes */
 	pfd = syscall(__NR_perf_event_open, &attr,
@@ -11633,13 +11633,14 @@ static const char *tracefs_available_filter_functions_addrs(void)
 }
 
 static void gen_probe_legacy_event_name(char *buf, size_t buf_sz,
-					const char *name, size_t offset)
+					const char *name, uint64_t offset_or_addr)
 {
 	static int index = 0;
 	int i;
 
-	snprintf(buf, buf_sz, "libbpf_%u_%d_%s_0x%zx", getpid(),
-		 __sync_fetch_and_add(&index, 1), name, offset);
+	snprintf(buf, buf_sz, "libbpf_%u_%d_%s_0x%" PRIx64, getpid(),
+		 __sync_fetch_and_add(&index, 1), name ?: "addr",
+		 offset_or_addr);
 
 	/* sanitize name in the probe name */
 	for (i = 0; buf[i]; i++) {
@@ -11648,13 +11649,27 @@ static void gen_probe_legacy_event_name(char *buf, size_t buf_sz,
 	}
 }
 
-static int add_kprobe_event_legacy(const char *probe_name, bool retprobe,
-				   const char *kfunc_name, size_t offset)
+static void gen_kprobe_target(char *buf, size_t buf_sz, const char *name,
+			      uint64_t offset_or_addr)
 {
-	return append_to_file(tracefs_kprobe_events(), "%c:%s/%s %s+0x%zx",
+	if (name)
+		snprintf(buf, buf_sz, "%s+0x%" PRIx64, name, offset_or_addr);
+	else
+		snprintf(buf, buf_sz, "0x%" PRIx64, offset_or_addr);
+}
+
+static int add_kprobe_event_legacy(const char *probe_name, bool retprobe,
+				   const char *kfunc_name, uint64_t offset_or_addr)
+{
+	char probe_target[128];
+
+	gen_kprobe_target(probe_target, sizeof(probe_target), kfunc_name,
+			  offset_or_addr);
+
+	return append_to_file(tracefs_kprobe_events(), "%c:%s/%s %s",
 			      retprobe ? 'r' : 'p',
 			      retprobe ? "kretprobes" : "kprobes",
-			      probe_name, kfunc_name, offset);
+			      probe_name, probe_target);
 }
 
 static int remove_kprobe_event_legacy(const char *probe_name, bool retprobe)
@@ -11674,24 +11689,27 @@ static int determine_kprobe_perf_type_legacy(const char *probe_name, bool retpro
 }
 
 static int perf_event_kprobe_open_legacy(const char *probe_name, bool retprobe,
-					 const char *kfunc_name, size_t offset, int pid)
+					 const char *kfunc_name, uint64_t offset_or_addr, int pid)
 {
 	const size_t attr_sz = sizeof(struct perf_event_attr);
 	struct perf_event_attr attr;
 	int type, pfd, err;
+	char probe_target[128];
 
-	err = add_kprobe_event_legacy(probe_name, retprobe, kfunc_name, offset);
+	gen_kprobe_target(probe_target, sizeof(probe_target), kfunc_name,
+			  offset_or_addr);
+
+	err = add_kprobe_event_legacy(probe_name, retprobe, kfunc_name,
+				      offset_or_addr);
 	if (err < 0) {
-		pr_warn("failed to add legacy kprobe event for '%s+0x%zx': %s\n",
-			kfunc_name, offset,
+		pr_warn("failed to add legacy kprobe event for '%s': %s\n", probe_target,
 			errstr(err));
 		return err;
 	}
 	type = determine_kprobe_perf_type_legacy(probe_name, retprobe);
 	if (type < 0) {
 		err = type;
-		pr_warn("failed to determine legacy kprobe event id for '%s+0x%zx': %s\n",
-			kfunc_name, offset,
+		pr_warn("failed to determine legacy kprobe event id for '%s': %s\n", probe_target,
 			errstr(err));
 		goto err_clean_legacy;
 	}
@@ -11784,6 +11802,9 @@ bpf_program__attach_kprobe_opts(const struct bpf_program *prog,
 	enum probe_attach_mode attach_mode;
 	char *legacy_probe = NULL;
 	struct bpf_link *link;
+	uint64_t offset_or_addr;
+	char probe_target[128];
+	unsigned long addr;
 	size_t offset;
 	bool retprobe, legacy;
 	int pfd, err;
@@ -11794,7 +11815,17 @@ bpf_program__attach_kprobe_opts(const struct bpf_program *prog,
 	attach_mode = OPTS_GET(opts, attach_mode, PROBE_ATTACH_MODE_DEFAULT);
 	retprobe = OPTS_GET(opts, retprobe, false);
 	offset = OPTS_GET(opts, offset, 0);
+	addr = OPTS_GET(opts, addr, 0);
+	offset_or_addr = func_name ? offset : addr;
 	pe_opts.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0);
+
+	if (!!func_name == !!addr)
+		return libbpf_err_ptr(-EINVAL);
+	if (addr && offset)
+		return libbpf_err_ptr(-EINVAL);
+
+	gen_kprobe_target(probe_target, sizeof(probe_target), func_name,
+			  offset_or_addr);
 
 	legacy = determine_kprobe_perf_type() < 0;
 	switch (attach_mode) {
@@ -11819,26 +11850,25 @@ bpf_program__attach_kprobe_opts(const struct bpf_program *prog,
 
 	if (!legacy) {
 		pfd = perf_event_open_probe(false /* uprobe */, retprobe,
-					    func_name, offset,
+					    func_name, offset_or_addr,
 					    -1 /* pid */, 0 /* ref_ctr_off */);
 	} else {
 		char probe_name[MAX_EVENT_NAME_LEN];
 
 		gen_probe_legacy_event_name(probe_name, sizeof(probe_name),
-					    func_name, offset);
+					    func_name, offset_or_addr);
 
 		legacy_probe = strdup(probe_name);
 		if (!legacy_probe)
 			return libbpf_err_ptr(-ENOMEM);
 
 		pfd = perf_event_kprobe_open_legacy(legacy_probe, retprobe, func_name,
-						    offset, -1 /* pid */);
+						    offset_or_addr, -1 /* pid */);
 	}
 	if (pfd < 0) {
-		err = -errno;
-		pr_warn("prog '%s': failed to create %s '%s+0x%zx' perf event: %s\n",
-			prog->name, retprobe ? "kretprobe" : "kprobe",
-			func_name, offset,
+		err = pfd;
+		pr_warn("prog '%s': failed to create %s '%s' perf event: %s\n",
+			prog->name, retprobe ? "kretprobe" : "kprobe", probe_target,
 			errstr(err));
 		goto err_out;
 	}
@@ -11846,9 +11876,8 @@ bpf_program__attach_kprobe_opts(const struct bpf_program *prog,
 	err = libbpf_get_error(link);
 	if (err) {
 		close(pfd);
-		pr_warn("prog '%s': failed to attach to %s '%s+0x%zx': %s\n",
-			prog->name, retprobe ? "kretprobe" : "kprobe",
-			func_name, offset,
+		pr_warn("prog '%s': failed to attach to %s '%s': %s\n",
+			prog->name, retprobe ? "kretprobe" : "kprobe", probe_target,
 			errstr(err));
 		goto err_clean_legacy;
 	}
