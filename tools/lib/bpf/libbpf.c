@@ -7826,6 +7826,27 @@ static int libbpf_prepare_prog_load(struct bpf_program *prog,
 
 static void fixup_verifier_log(struct bpf_program *prog, char *buf, size_t buf_sz);
 
+static void bpf_object_load_prog_emit_stderr(struct bpf_program *prog, int prog_fd)
+{
+	char chunk[256];
+	bool emitted = false;
+	int ret;
+
+	while ((ret = bpf_prog_stream_read(prog_fd, BPF_STREAM_STDERR, chunk,
+					   sizeof(chunk), NULL)) > 0) {
+		if (!emitted) {
+			pr_warn("prog '%s': VERIFIER WARNINGS:\n", prog->name);
+			emitted = true;
+		}
+		libbpf_print(LIBBPF_WARN, "%.*s", ret, chunk);
+	}
+
+	if (ret < 0) {
+		pr_debug("prog '%s': failed to read BPF stderr stream: %s\n",
+			 prog->name, errstr(ret));
+	}
+}
+
 static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog,
 				struct bpf_insn *insns, int insns_cnt,
 				const char *license, __u32 kern_version, int *prog_fd)
@@ -7949,6 +7970,8 @@ retry_load:
 			pr_debug("prog '%s': -- BEGIN PROG LOAD LOG --\n%s-- END PROG LOAD LOG --\n",
 				 prog->name, log_buf);
 		}
+
+		bpf_object_load_prog_emit_stderr(prog, ret);
 
 		if (obj->has_rodata && kernel_supports(obj, FEAT_PROG_BIND_MAP)) {
 			struct bpf_map *map;
