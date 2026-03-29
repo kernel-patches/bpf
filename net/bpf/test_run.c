@@ -1137,6 +1137,25 @@ int bpf_prog_test_run_skb(struct bpf_prog *prog, const union bpf_attr *kattr,
 
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
+		if (skb_headlen(skb) < sizeof(struct iphdr)) {
+			ret = -EINVAL;
+			goto out;
+		}
+		break;
+#if IS_ENABLED(CONFIG_IPV6)
+	case htons(ETH_P_IPV6):
+		if (skb_headlen(skb) < sizeof(struct ipv6hdr)) {
+			ret = -EINVAL;
+			goto out;
+		}
+		break;
+#endif
+	default:
+		break;
+	}
+
+	switch (skb->protocol) {
+	case htons(ETH_P_IP):
 		sk->sk_family = AF_INET;
 		if (sizeof(struct iphdr) <= skb_headlen(skb)) {
 			sk->sk_rcv_saddr = ip_hdr(skb)->saddr;
