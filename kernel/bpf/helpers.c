@@ -2449,10 +2449,10 @@ __bpf_kfunc int bpf_list_push_back_impl(struct bpf_list_head *head,
 
 __bpf_kfunc int bpf_list_add_impl(struct bpf_list_head *head,
 				  struct bpf_list_node *new,
-				  struct bpf_list_node *prev,
+				  struct bpf_list_node *prev__nonown_allowed,
 				  void *meta__ign, u64 off)
 {
-	struct bpf_list_node_kern *n = (void *)new, *p = (void *)prev;
+	struct bpf_list_node_kern *n = (void *)new, *p = (void *)prev__nonown_allowed;
 	struct btf_struct_meta *meta = meta__ign;
 	struct list_head *prev_ptr = &p->list_head;
 
