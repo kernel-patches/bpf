@@ -2232,7 +2232,7 @@ EXPORT_SYMBOL_GPL(bpf_base_func_proto);
 void bpf_list_head_free(const struct btf_field *field, void *list_head,
 			struct bpf_spin_lock *spin_lock)
 {
-	struct list_head *head = list_head, *orig_head = list_head;
+	struct list_head *head = list_head, *orig_head = list_head, *pos;
 
 	BUILD_BUG_ON(sizeof(struct list_head) > sizeof(struct bpf_list_head));
 	BUILD_BUG_ON(__alignof__(struct list_head) > __alignof__(struct bpf_list_head));
@@ -2247,6 +2247,9 @@ void bpf_list_head_free(const struct btf_field *field, void *list_head,
 	if (!head->next || list_empty(head))
 		goto unlock;
 	head = head->next;
+	/* Clear owner under spinlock to ensure the owner is always valid */
+	for (pos = head; pos != orig_head; pos = pos->next)
+		WRITE_ONCE(container_of(pos, struct bpf_list_node_kern, list_head)->owner, NULL);
 unlock:
 	INIT_LIST_HEAD(orig_head);
 	__bpf_spin_unlock_irqrestore(spin_lock);
@@ -2255,7 +2258,9 @@ unlock:
 		void *obj = head;
 
 		obj -= field->graph_root.node_offset;
+		pos = head;
 		head = head->next;
+		list_del_init(pos);
 		/* The contained type can also have resources, including a
 		 * bpf_list_head which needs to be freed.
 		 */
