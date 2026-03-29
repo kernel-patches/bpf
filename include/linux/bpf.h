@@ -3912,6 +3912,15 @@ int bpf_stream_stage_dump_stack(struct bpf_stream_stage *ss);
 		bpf_stream_stage_free(&ss);                    \
 	})
 
+#define bpf_stream_pr_warn(prog, fmt, ...)                              \
+	({                                                              \
+		struct bpf_stream_stage __ss;                           \
+									\
+		bpf_stream_stage(__ss, prog, BPF_STDERR, ({		\
+			bpf_stream_printk(__ss, fmt, ##__VA_ARGS__);	\
+		}));							\
+	})
+
 #ifdef CONFIG_BPF_LSM
 void bpf_cgroup_atype_get(u32 attach_btf_id, int cgroup_atype);
 void bpf_cgroup_atype_put(int cgroup_atype);

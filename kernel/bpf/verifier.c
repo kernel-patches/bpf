@@ -3206,6 +3206,7 @@ struct bpf_kfunc_desc {
 	u32 func_id;
 	s32 imm;
 	u16 offset;
+	bool warned_deprecated;
 	unsigned long addr;
 };
 
@@ -14045,6 +14046,53 @@ static int fetch_kfunc_arg_meta(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static bool get_insn_file_line(const struct bpf_verifier_env *env, u32 insn_off,
+			       const char **filep, int *linep)
+{
+	const struct bpf_line_info *linfo;
+
+	if (!env->prog->aux->btf)
+		return false;
+
+	linfo = bpf_find_linfo(env, insn_off);
+	if (!linfo)
+		return false;
+
+	if (bpf_get_linfo_file_line(env->prog->aux->btf, linfo, filep, NULL, linep))
+		return false;
+	return true;
+}
+
+static void warn_for_deprecated_kfuncs(struct bpf_verifier_env *env,
+				       struct bpf_kfunc_desc *desc,
+				       const char *func_name,
+				       int insn_idx)
+{
+	int repl_len, line;
+	const char *file;
+
+	if (desc->warned_deprecated)
+		return;
+
+	if (!func_name || !strends(func_name, KF_IMPL_SUFFIX))
+		return;
+
+	repl_len = strlen(func_name) - strlen(KF_IMPL_SUFFIX);
+
+	if (get_insn_file_line(env, insn_idx, &file, &line))
+		snprintf(env->tmp_str_buf, TMP_STR_BUF_LEN, "%s:%u", file, line);
+	else
+		snprintf(env->tmp_str_buf, TMP_STR_BUF_LEN, "insn #%d", insn_idx);
+
+	bpf_stream_pr_warn(env->prog,
+			   "WARNING: %s calls deprecated kfunc %s(), which will be removed.\n"
+			   "WARNING: Switch to kfunc %.*s() instead.\n"
+			   "WARNING: For older kernels, choose the kfunc using bpf_ksym_exists(%.*s).\n",
+			   env->tmp_str_buf, func_name, repl_len, func_name, repl_len, func_name);
+
+	desc->warned_deprecated = true;
+}
+
 /* check special kfuncs and return:
  *  1  - not fall-through to 'else' branch, continue verification
  *  0  - fall-through to 'else' branch
@@ -14231,6 +14279,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 {
 	bool sleepable, rcu_lock, rcu_unlock, preempt_disable, preempt_enable;
 	u32 i, nargs, ptr_type_id, release_ref_obj_id;
+	struct bpf_kfunc_desc *desc;
 	struct bpf_reg_state *regs = cur_regs(env);
 	const char *func_name, *ptr_type_name;
 	const struct btf_type *t, *ptr_type;
@@ -14252,6 +14301,10 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	desc_btf = meta.btf;
 	func_name = meta.func_name;
 	insn_aux = &env->insn_aux_data[insn_idx];
+
+	desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+	if (desc)
+		warn_for_deprecated_kfuncs(env, desc, func_name, insn_idx);
 
 	insn_aux->is_iter_next = is_iter_next_kfunc(&meta);
 

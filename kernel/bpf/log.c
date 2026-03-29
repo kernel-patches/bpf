@@ -329,8 +329,8 @@ __printf(2, 3) void bpf_log(struct bpf_verifier_log *log,
 }
 EXPORT_SYMBOL_GPL(bpf_log);
 
-static const struct bpf_line_info *
-find_linfo(const struct bpf_verifier_env *env, u32 insn_off)
+const struct bpf_line_info *
+bpf_find_linfo(const struct bpf_verifier_env *env, u32 insn_off)
 {
 	const struct bpf_line_info *linfo;
 	const struct bpf_prog *prog;
@@ -390,7 +390,7 @@ __printf(3, 4) void verbose_linfo(struct bpf_verifier_env *env,
 		return;
 
 	prev_linfo = env->prev_linfo;
-	linfo = find_linfo(env, insn_off);
+	linfo = bpf_find_linfo(env, insn_off);
 	if (!linfo || linfo == prev_linfo)
 		return;
 
