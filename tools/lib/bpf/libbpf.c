@@ -8311,6 +8311,24 @@ static int bpf_object_prepare_progs(struct bpf_object *obj)
 			}
 		}
 
+		if (kernel_supports(obj, FEAT_KPROBE_MULTI_LINK)) {
+			const char *sec_name = prog->sec_name;
+			/* Here, we filter out for k[ret]probe or "k[ret]probe/"
+			 * but we leave out anything with an '@'
+			 * in it as kprobe_multi does not support versioned
+			 * symbols, so we don't upgrade. Also for '+' as we do not
+			 * support offsets.
+			 */
+			if (((strncmp(sec_name, "kprobe", 6) == 0 &&
+			      (sec_name[6] == '/' || sec_name[6] == '\0')) ||
+			     (strncmp(sec_name, "kretprobe", 9) == 0 &&
+			      (sec_name[9] == '/' || sec_name[9] == '\0'))) &&
+			    !strchr(sec_name, '@') &&
+			    !strchr(sec_name, '+') &&
+			    !(prog->prog_flags & BPF_F_SLEEPABLE))
+				prog->expected_attach_type = BPF_TRACE_KPROBE_MULTI;
+		}
+
 		err = bpf_object__sanitize_prog(obj, prog);
 		if (err)
 			return err;
@@ -9970,10 +9988,12 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("sk_reuseport/migrate",	SK_REUSEPORT, BPF_SK_REUSEPORT_SELECT_OR_MIGRATE, SEC_ATTACHABLE),
 	SEC_DEF("sk_reuseport",		SK_REUSEPORT, BPF_SK_REUSEPORT_SELECT, SEC_ATTACHABLE),
 	SEC_DEF("kprobe+",		KPROBE,	0, SEC_NONE, attach_kprobe),
+	SEC_DEF("kprobe.single+",	KPROBE,	0, SEC_NONE, attach_kprobe),
 	SEC_DEF("uprobe+",		KPROBE,	0, SEC_NONE, attach_uprobe),
 	SEC_DEF("uprobe.s+",		KPROBE,	0, SEC_SLEEPABLE, attach_uprobe),
 	SEC_DEF("uprobe.single+",	KPROBE,	0, SEC_NONE, attach_uprobe),
 	SEC_DEF("kretprobe+",		KPROBE, 0, SEC_NONE, attach_kprobe),
+	SEC_DEF("kretprobe.single+",	KPROBE, 0, SEC_NONE, attach_kprobe),
 	SEC_DEF("uretprobe+",		KPROBE, 0, SEC_NONE, attach_uprobe),
 	SEC_DEF("uretprobe.s+",		KPROBE, 0, SEC_SLEEPABLE, attach_uprobe),
 	SEC_DEF("uretprobe.single+",	KPROBE,	0, SEC_NONE, attach_uprobe),
@@ -11815,6 +11835,25 @@ bpf_program__attach_kprobe_opts(const struct bpf_program *prog,
 	offset = OPTS_GET(opts, offset, 0);
 	pe_opts.bpf_cookie = OPTS_GET(opts, bpf_cookie, 0);
 
+	/* This provides backwards compatibility to programs using kprobe, but
+	 * have been auto-upgraded to multi kprobe.
+	 */
+	if (prog->expected_attach_type == BPF_TRACE_KPROBE_MULTI &&
+	    offset == 0 && attach_mode == PROBE_ATTACH_MODE_DEFAULT) {
+		LIBBPF_OPTS(bpf_kprobe_multi_opts, multi_opts);
+		const char *syms[1] = { func_name };
+		__u64 bpf_cookie;
+
+		multi_opts.retprobe = OPTS_GET(opts, retprobe, false);
+		multi_opts.syms = syms;
+		multi_opts.cnt = 1;
+		bpf_cookie = OPTS_GET(opts, bpf_cookie, 0);
+		if (bpf_cookie)
+			multi_opts.cookies = &bpf_cookie;
+
+		return bpf_program__attach_kprobe_multi_opts(prog, NULL, &multi_opts);
+	}
+
 	legacy = determine_kprobe_perf_type() < 0;
 	switch (attach_mode) {
 	case PROBE_ATTACH_MODE_LEGACY:
@@ -12269,14 +12308,24 @@ static int attach_kprobe(const struct bpf_program *prog, long cookie, struct bpf
 	*link = NULL;
 
 	/* no auto-attach for SEC("kprobe") and SEC("kretprobe") */
-	if (strcmp(prog->sec_name, "kprobe") == 0 || strcmp(prog->sec_name, "kretprobe") == 0)
+	if (strcmp(prog->sec_name, "kprobe") == 0 ||
+	    strcmp(prog->sec_name, "kretprobe") == 0 ||
+	    strcmp(prog->sec_name, "kprobe.single") == 0 ||
+	    strcmp(prog->sec_name, "kretprobe.single") == 0)
 		return 0;
 
-	opts.retprobe = str_has_pfx(prog->sec_name, "kretprobe/");
-	if (opts.retprobe)
-		func_name = prog->sec_name + sizeof("kretprobe/") - 1;
-	else
-		func_name = prog->sec_name + sizeof("kprobe/") - 1;
+	if (str_has_pfx(prog->sec_name, "kretprobe/") ||
+	    str_has_pfx(prog->sec_name, "kretprobe.single/")) {
+		opts.retprobe = true;
+		func_name = str_has_pfx(prog->sec_name, "kretprobe/")
+			    ? prog->sec_name + sizeof("kretprobe/") - 1
+			    : prog->sec_name + sizeof("kretprobe.single/") - 1;
+	} else {
+		opts.retprobe = false;
+		func_name = str_has_pfx(prog->sec_name, "kprobe.single/")
+			    ? prog->sec_name + sizeof("kprobe.single/") - 1
+			    : prog->sec_name + sizeof("kprobe/") - 1;
+	}
 
 	n = sscanf(func_name, "%m[a-zA-Z0-9_.]+%li", &func, &offset);
 	if (n < 1) {
