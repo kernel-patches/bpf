@@ -4645,7 +4645,8 @@ union bpf_attr {
  * 	Description
  * 		Discard reserved ring buffer sample, pointed to by *data*.
  * 		If **BPF_RB_NO_WAKEUP** is specified in *flags*, no notification
- * 		of new data availability is sent.
+ * 		of new data availability is sent, which is not recommended as
+ * 		it can suppress a later adaptive wakeup from a subsequent submit.
  * 		If **BPF_RB_FORCE_WAKEUP** is specified in *flags*, notification
  * 		of new data availability is sent unconditionally.
  * 		If **0** is specified in *flags*, an adaptive notification
