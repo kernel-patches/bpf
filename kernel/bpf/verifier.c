@@ -4474,6 +4474,31 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			 * encountered a case of pointer subtraction.
 			 */
 			return -ENOTSUPP;
+
+		/* atomic fetch operation writes the old value into a
+		 * register (sreg or r0) and if it was tracked for
+		 * precision, propagate to the stack slot like we do
+		 * in ldx.
+		 */
+		if (class == BPF_STX && mode == BPF_ATOMIC &&
+		    (insn->imm & BPF_FETCH)) {
+			u32 load_reg = insn->imm == BPF_CMPXCHG ?
+				       BPF_REG_0 : sreg;
+
+			if (bt_is_reg_set(bt, load_reg)) {
+				bt_clear_reg(bt, load_reg);
+				/* atomic fetch from non-stack memory
+				 * can't be further backtracked, same
+				 * as for ldx.
+				 */
+				if (!hist || !(hist->flags & INSN_F_STACK_ACCESS))
+					return 0;
+				spi = insn_stack_access_spi(hist->flags);
+				fr = insn_stack_access_frameno(hist->flags);
+				bt_set_frame_slot(bt, fr, spi);
+				return 0;
+			}
+		}
 		/* scalars can only be spilled into stack */
 		if (!hist || !(hist->flags & INSN_F_STACK_ACCESS))
 			return 0;
