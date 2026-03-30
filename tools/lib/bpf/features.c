@@ -424,6 +424,40 @@ static int probe_uprobe_multi_link(int token_fd)
 	return link_fd < 0 && err == -EINVAL;
 }
 
+static int probe_kprobe_multi_link(int token_fd)
+{
+	LIBBPF_OPTS(bpf_prog_load_opts, load_opts,
+		    .expected_attach_type = BPF_TRACE_KPROBE_MULTI,
+		    .token_fd = token_fd,
+		    .prog_flags = token_fd ? BPF_F_TOKEN_FD : 0,
+	);
+	LIBBPF_OPTS(bpf_link_create_opts, link_opts);
+	struct bpf_insn insns[] = {
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	int prog_fd, link_fd, err;
+	const char *sym = "bpf_map_lookup_elem"; /* stable, always present */
+
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_KPROBE, NULL, "GPL",
+				insns, ARRAY_SIZE(insns), &load_opts);
+	if (prog_fd < 0)
+		return -errno;
+
+	/* attaching to a valid symbol should succeed */
+	link_opts.kprobe_multi.syms = &sym;
+	link_opts.kprobe_multi.cnt = 1;
+	link_fd = bpf_link_create(prog_fd, -1, BPF_TRACE_KPROBE_MULTI, &link_opts);
+	err = -errno;
+	if (link_fd >= 0)
+		close(link_fd);
+	close(prog_fd);
+	/* if kprobe_multi is supported, link creation either succeeds or
+	 * fails with something other than -EINVAL due to permissions,
+	 */
+	return link_fd >= 0 || (err != -EINVAL);
+}
+
 static int probe_kern_bpf_cookie(int token_fd)
 {
 	struct bpf_insn insns[] = {
@@ -683,6 +717,9 @@ static struct kern_feature_desc {
 	},
 	[FEAT_UPROBE_MULTI_LINK] = {
 		"BPF multi-uprobe link support", probe_uprobe_multi_link,
+	},
+	[FEAT_KPROBE_MULTI_LINK] = {
+		"BPF multi-kprobe link support", probe_kprobe_multi_link,
 	},
 	[FEAT_ARG_CTX_TAG] = {
 		"kernel-side __arg_ctx tag", probe_kern_arg_ctx_tag,
