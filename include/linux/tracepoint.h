@@ -113,6 +113,10 @@ void for_each_tracepoint_in_module(struct module *mod,
  */
 #ifdef CONFIG_TRACEPOINTS
 extern struct srcu_struct tracepoint_srcu;
+static inline struct srcu_struct *tracepoint_srcu_ptr(void)
+{
+	return &tracepoint_srcu;
+}
 static inline void tracepoint_synchronize_unregister(void)
 {
 	synchronize_rcu_tasks_trace();
@@ -123,6 +127,10 @@ static inline bool tracepoint_is_faultable(struct tracepoint *tp)
 	return tp->ext && tp->ext->faultable;
 }
 #else
+static inline struct srcu_struct *tracepoint_srcu_ptr(void)
+{
+	return NULL;
+}
 static inline void tracepoint_synchronize_unregister(void)
 { }
 static inline bool tracepoint_is_faultable(struct tracepoint *tp)
