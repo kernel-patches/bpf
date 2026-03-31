@@ -18,6 +18,7 @@
 #include "devx.h"
 #include "qp.h"
 #include <linux/xarray.h>
+#include <linux/bpf_lsm.h>
 
 #define UVERBS_MODULE_NAME mlx5_ib
 #include <rdma/uverbs_named_ioctl.h>
@@ -1111,6 +1112,8 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_OTHER)(
 	struct mlx5_ib_dev *dev;
 	void *cmd_in = uverbs_attr_get_alloced_ptr(
 		attrs, MLX5_IB_ATTR_DEVX_OTHER_CMD_IN);
+	int cmd_in_len = uverbs_attr_get_len(attrs,
+					MLX5_IB_ATTR_DEVX_OTHER_CMD_IN);
 	int cmd_out_len = uverbs_attr_get_len(attrs,
 					MLX5_IB_ATTR_DEVX_OTHER_CMD_OUT);
 	void *cmd_out;
@@ -1135,9 +1138,12 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_OTHER)(
 		return PTR_ERR(cmd_out);
 
 	MLX5_SET(general_obj_in_cmd_hdr, cmd_in, uid, uid);
-	err = mlx5_cmd_do(dev->mdev, cmd_in,
-			  uverbs_attr_get_len(attrs, MLX5_IB_ATTR_DEVX_OTHER_CMD_IN),
-			  cmd_out, cmd_out_len);
+	err = bpf_lsm_fw_validate_cmd(cmd_in, cmd_in_len, &dev->ib_dev.dev,
+				      FW_CMD_CLASS_UVERBS, RDMA_DRIVER_MLX5);
+	if (err)
+		return err;
+
+	err = mlx5_cmd_do(dev->mdev, cmd_in, cmd_in_len, cmd_out, cmd_out_len);
 	if (err && err != -EREMOTEIO)
 		return err;
 
@@ -1570,6 +1576,11 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_OBJ_CREATE)(
 		devx_set_umem_valid(cmd_in);
 	}
 
+	err = bpf_lsm_fw_validate_cmd(cmd_in, cmd_in_len, &dev->ib_dev.dev,
+				      FW_CMD_CLASS_UVERBS, RDMA_DRIVER_MLX5);
+	if (err)
+		goto obj_free;
+
 	if (opcode == MLX5_CMD_OP_CREATE_DCT) {
 		obj->flags |= DEVX_OBJ_FLAGS_DCT;
 		err = mlx5_core_create_dct(dev, &obj->core_dct, cmd_in,
@@ -1646,6 +1657,8 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_OBJ_MODIFY)(
 	struct uverbs_attr_bundle *attrs)
 {
 	void *cmd_in = uverbs_attr_get_alloced_ptr(attrs, MLX5_IB_ATTR_DEVX_OBJ_MODIFY_CMD_IN);
+	int cmd_in_len = uverbs_attr_get_len(attrs,
+					MLX5_IB_ATTR_DEVX_OBJ_MODIFY_CMD_IN);
 	int cmd_out_len = uverbs_attr_get_len(attrs,
 					MLX5_IB_ATTR_DEVX_OBJ_MODIFY_CMD_OUT);
 	struct ib_uobject *uobj = uverbs_attr_get_uobject(attrs,
@@ -1676,10 +1689,12 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_OBJ_MODIFY)(
 
 	MLX5_SET(general_obj_in_cmd_hdr, cmd_in, uid, uid);
 	devx_set_umem_valid(cmd_in);
+	err = bpf_lsm_fw_validate_cmd(cmd_in, cmd_in_len, &mdev->ib_dev.dev,
+				      FW_CMD_CLASS_UVERBS, RDMA_DRIVER_MLX5);
+	if (err)
+		return err;
 
-	err = mlx5_cmd_do(mdev->mdev, cmd_in,
-			  uverbs_attr_get_len(attrs, MLX5_IB_ATTR_DEVX_OBJ_MODIFY_CMD_IN),
-			  cmd_out, cmd_out_len);
+	err = mlx5_cmd_do(mdev->mdev, cmd_in, cmd_in_len, cmd_out, cmd_out_len);
 	if (err && err != -EREMOTEIO)
 		return err;
 
@@ -1693,6 +1708,8 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_OBJ_QUERY)(
 	struct uverbs_attr_bundle *attrs)
 {
 	void *cmd_in = uverbs_attr_get_alloced_ptr(attrs, MLX5_IB_ATTR_DEVX_OBJ_QUERY_CMD_IN);
+	int cmd_in_len = uverbs_attr_get_len(attrs,
+					     MLX5_IB_ATTR_DEVX_OBJ_QUERY_CMD_IN);
 	int cmd_out_len = uverbs_attr_get_len(attrs,
 					      MLX5_IB_ATTR_DEVX_OBJ_QUERY_CMD_OUT);
 	struct ib_uobject *uobj = uverbs_attr_get_uobject(attrs,
@@ -1722,9 +1739,12 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_OBJ_QUERY)(
 		return PTR_ERR(cmd_out);
 
 	MLX5_SET(general_obj_in_cmd_hdr, cmd_in, uid, uid);
-	err = mlx5_cmd_do(mdev->mdev, cmd_in,
-			  uverbs_attr_get_len(attrs, MLX5_IB_ATTR_DEVX_OBJ_QUERY_CMD_IN),
-			  cmd_out, cmd_out_len);
+	err = bpf_lsm_fw_validate_cmd(cmd_in, cmd_in_len, &mdev->ib_dev.dev,
+				      FW_CMD_CLASS_UVERBS, RDMA_DRIVER_MLX5);
+	if (err)
+		return err;
+
+	err = mlx5_cmd_do(mdev->mdev, cmd_in, cmd_in_len, cmd_out, cmd_out_len);
 	if (err && err != -EREMOTEIO)
 		return err;
 
@@ -1832,6 +1852,8 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_OBJ_ASYNC_QUERY)(
 {
 	void *cmd_in = uverbs_attr_get_alloced_ptr(attrs,
 				MLX5_IB_ATTR_DEVX_OBJ_QUERY_ASYNC_CMD_IN);
+	int cmd_in_len = uverbs_attr_get_len(attrs,
+				MLX5_IB_ATTR_DEVX_OBJ_QUERY_ASYNC_CMD_IN);
 	struct ib_uobject *uobj = uverbs_attr_get_uobject(
 				attrs,
 				MLX5_IB_ATTR_DEVX_OBJ_QUERY_ASYNC_HANDLE);
@@ -1894,9 +1916,12 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DEVX_OBJ_ASYNC_QUERY)(
 	async_data->ev_file = ev_file;
 
 	MLX5_SET(general_obj_in_cmd_hdr, cmd_in, uid, uid);
-	err = mlx5_cmd_exec_cb(&ev_file->async_ctx, cmd_in,
-		    uverbs_attr_get_len(attrs,
-				MLX5_IB_ATTR_DEVX_OBJ_QUERY_ASYNC_CMD_IN),
+	err = bpf_lsm_fw_validate_cmd(cmd_in, cmd_in_len, &mdev->ib_dev.dev,
+				      FW_CMD_CLASS_UVERBS, RDMA_DRIVER_MLX5);
+	if (err)
+		goto free_async;
+
+	err = mlx5_cmd_exec_cb(&ev_file->async_ctx, cmd_in, cmd_in_len,
 		    async_data->hdr.out_data,
 		    async_data->cmd_out_len,
 		    devx_query_callback, &async_data->cb_work);
