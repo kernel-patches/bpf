@@ -7,6 +7,7 @@
 #include <linux/mlx5/device.h>
 #include <linux/mlx5/driver.h>
 #include <uapi/fwctl/mlx5.h>
+#include <linux/bpf_lsm.h>
 
 #define mlx5ctl_err(mcdev, format, ...) \
 	dev_err(&mcdev->fwctl.dev, format, ##__VA_ARGS__)
@@ -324,6 +325,15 @@ static void *mlx5ctl_fw_rpc(struct fwctl_uctx *uctx, enum fwctl_rpc_scope scope,
 	if (!mlx5ctl_validate_rpc(rpc_in, scope))
 		return ERR_PTR(-EBADMSG);
 
+	/* Enforce the user context for the command */
+	MLX5_SET(mbox_in_hdr, rpc_in, uid, mfd->uctx_uid);
+
+	ret = bpf_lsm_fw_validate_cmd(rpc_in, in_len, &mcdev->fwctl.dev,
+				      FW_CMD_CLASS_FWCTL,
+				      FWCTL_DEVICE_TYPE_MLX5);
+	if (ret)
+		return ERR_PTR(ret);
+
 	/*
 	 * mlx5_cmd_do() copies the input message to its own buffer before
 	 * executing it, so we can reuse the allocation for the output.
@@ -336,8 +346,6 @@ static void *mlx5ctl_fw_rpc(struct fwctl_uctx *uctx, enum fwctl_rpc_scope scope,
 			return ERR_PTR(-ENOMEM);
 	}
 
-	/* Enforce the user context for the command */
-	MLX5_SET(mbox_in_hdr, rpc_in, uid, mfd->uctx_uid);
 	ret = mlx5_cmd_do(mcdev->mdev, rpc_in, in_len, rpc_out, *out_len);
 
 	mlx5ctl_dbg(mcdev,
