@@ -28,12 +28,23 @@ __weak noinline RET bpf_lsm_##NAME(__VA_ARGS__)	\
 }
 
 #include <linux/lsm_hook_defs.h>
+
+/*
+ * fw_validate_cmd is not in lsm_hook_defs.h because it is a BPF-only
+ * hook — mailbox formats are device-specific, making BPF the natural
+ * fit for inspection.
+ */
+LSM_HOOK(int, 0, fw_validate_cmd, const void *in, size_t in_len,
+	 const struct device *dev, enum fw_cmd_class class_id, u32 id)
+EXPORT_SYMBOL_GPL(bpf_lsm_fw_validate_cmd);
+
 #undef LSM_HOOK
 
 #define LSM_HOOK(RET, DEFAULT, NAME, ...) BTF_ID(func, bpf_lsm_##NAME)
 BTF_SET_START(bpf_lsm_hooks)
 #include <linux/lsm_hook_defs.h>
 #undef LSM_HOOK
+BTF_ID(func, bpf_lsm_fw_validate_cmd)
 BTF_SET_END(bpf_lsm_hooks)
 
 BTF_SET_START(bpf_lsm_disabled_hooks)
