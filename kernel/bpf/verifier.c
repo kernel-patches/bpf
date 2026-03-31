@@ -14212,11 +14212,8 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_ca
 			return -EFAULT;
 		}
 		regs[BPF_REG_0].dynptr_id = meta->initialized_dynptr.id;
-
-		/* we don't need to set BPF_REG_0's ref obj id
-		 * because packet slices are not refcounted (see
-		 * dynptr_type_refcounted)
-		 */
+		if (dynptr_type_refcounted(meta->initialized_dynptr.type))
+			regs[BPF_REG_0].ref_obj_id = meta->initialized_dynptr.ref_obj_id;
 	} else {
 		return 0;
 	}
