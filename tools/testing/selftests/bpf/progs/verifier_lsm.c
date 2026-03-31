@@ -188,4 +188,27 @@ int BPF_PROG(null_check, struct file *file)
 	return 0;
 }
 
+SEC("lsm/fw_validate_cmd")
+__description("lsm fw_validate_cmd: validate hook parameters")
+__success
+int BPF_PROG(fw_validate_cmd_test, const void *in, size_t in_len,
+	     const struct device *dev, enum fw_cmd_class class_id, u32 id)
+{
+	if (!in_len)
+		return -22;
+
+	return 0;
+}
+
+SEC("lsm/fw_validate_cmd")
+__description("lsm fw_validate_cmd: invalid positive return")
+__failure __msg("R0 has smin=1 smax=1 should have been in [-4095, 0]")
+__naked int fw_validate_cmd_fail(void *ctx)
+{
+	asm volatile (
+	"r0 = 1;"
+	"exit;"
+	::: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
