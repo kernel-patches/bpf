@@ -122,6 +122,11 @@ static inline bool tracepoint_is_faultable(struct tracepoint *tp)
 {
 	return tp->ext && tp->ext->faultable;
 }
+static inline void call_tracepoint_unregister_non_faultable(struct rcu_head *rcu,
+							    rcu_callback_t func)
+{
+	call_srcu(&tracepoint_srcu, rcu, func);
+}
 #else
 static inline void tracepoint_synchronize_unregister(void)
 { }
@@ -129,6 +134,9 @@ static inline bool tracepoint_is_faultable(struct tracepoint *tp)
 {
 	return false;
 }
+static inline void call_tracepoint_unregister_non_faultable(struct rcu_head *rcu,
+							    rcu_callback_t func)
+{  }
 #endif
 
 #ifdef CONFIG_HAVE_SYSCALL_TRACEPOINTS
