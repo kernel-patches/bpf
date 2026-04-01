@@ -6083,7 +6083,7 @@ static const struct bpf_func_proto bpf_skb_get_xfrm_state_proto = {
 };
 #endif
 
-#if IS_ENABLED(CONFIG_INET) || IS_ENABLED(CONFIG_IPV6)
+#if IS_ENABLED(CONFIG_INET)
 static int bpf_fib_set_fwd_params(struct bpf_fib_lookup *params, u32 mtu)
 {
 	params->h_vlan_TCI = 0;

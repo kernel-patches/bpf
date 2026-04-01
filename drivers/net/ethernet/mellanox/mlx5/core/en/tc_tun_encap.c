@@ -104,7 +104,7 @@ int mlx5e_tc_set_attr_rx_tun(struct mlx5e_tc_flow *flow,
 		if (!tun_attr->dst_ip.v4 || !tun_attr->src_ip.v4)
 			return 0;
 	}
-#if IS_ENABLED(CONFIG_INET) && IS_ENABLED(CONFIG_IPV6)
+#if IS_ENABLED(CONFIG_IPV6)
 	else if (ip_version == 6) {
 		int ipv6_size = MLX5_FLD_SZ_BYTES(ipv6_layout, ipv6);
 

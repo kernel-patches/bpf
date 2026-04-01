@@ -814,7 +814,7 @@ void nfp_tunnel_request_route_v6(struct nfp_app *app, struct sk_buff *skb)
 	flow.daddr = payload->ipv6_addr;
 	flow.flowi6_proto = IPPROTO_UDP;
 
-#if IS_ENABLED(CONFIG_INET) && IS_ENABLED(CONFIG_IPV6)
+#if IS_ENABLED(CONFIG_IPV6)
 	dst = ipv6_stub->ipv6_dst_lookup_flow(dev_net(netdev), NULL, &flow,
 					      NULL);
 	if (IS_ERR(dst))

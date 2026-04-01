@@ -439,7 +439,7 @@ release_neigh:
 	return err;
 }
 
-#if IS_ENABLED(CONFIG_INET) && IS_ENABLED(CONFIG_IPV6)
+#if IS_ENABLED(CONFIG_IPV6)
 static int mlx5e_route_lookup_ipv6_get(struct mlx5e_priv *priv,
 				       struct net_device *dev,
 				       struct mlx5e_tc_tun_route_attr *attr)
@@ -727,7 +727,7 @@ int mlx5e_tc_tun_route_lookup(struct mlx5e_priv *priv,
 		attr.fl.fl4.daddr = esw_attr->rx_tun_attr->src_ip.v4;
 		err = mlx5e_route_lookup_ipv4_get(priv, filter_dev, &attr);
 	}
-#if IS_ENABLED(CONFIG_INET) && IS_ENABLED(CONFIG_IPV6)
+#if IS_ENABLED(CONFIG_IPV6)
 	else if (flow_attr->tun_ip_version == 6) {
 		/* Addresses are swapped for decap */
 		attr.fl.fl6.saddr = esw_attr->rx_tun_attr->dst_ip.v6;
@@ -762,7 +762,7 @@ int mlx5e_tc_tun_route_lookup(struct mlx5e_priv *priv,
 out:
 	if (flow_attr->tun_ip_version == 4)
 		mlx5e_route_lookup_ipv4_put(&attr);
-#if IS_ENABLED(CONFIG_INET) && IS_ENABLED(CONFIG_IPV6)
+#if IS_ENABLED(CONFIG_IPV6)
 	else if (flow_attr->tun_ip_version == 6)
 		mlx5e_route_lookup_ipv6_put(&attr);
 #endif

@@ -15,7 +15,7 @@
 #include <linux/siphash.h>
 #include <net/secure_seq.h>
 
-#if IS_ENABLED(CONFIG_IPV6) || IS_ENABLED(CONFIG_INET)
+#if IS_ENABLED(CONFIG_INET)
 #include <linux/in6.h>
 #include <net/tcp.h>
 
