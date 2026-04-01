@@ -247,8 +247,8 @@ static void __maybe_unused set_unix_address(struct service_fixture *const srv,
 {
 	srv->unix_addr.sun_family = AF_UNIX;
 	sprintf(srv->unix_addr.sun_path,
-		"_selftests-landlock-abstract-unix-tid%d-index%d", sys_gettid(),
-		index);
+		"_selftests-landlock-abstract-unix-tid%d-index%d",
+		landlock_gettid(), index);
 	srv->unix_addr_len = SUN_LEN(&srv->unix_addr);
 	srv->unix_addr.sun_path[0] = '\0';
 }
