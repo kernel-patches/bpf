@@ -1,5 +1,9 @@
 TEST_KMOD_DIR := $(realpath $(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
-KDIR ?= $(abspath $(TEST_KMOD_DIR)/../../../../..)
+SRCTREE_KDIR := $(abspath $(TEST_KMOD_DIR)/../../../../..)
+# Prefer an explicit O= build output directory if specified. Otherwise use the
+# in-tree kernel build when it has been configured, and fall back to the
+# running kernel's module build directory for distribution kernel builds.
+KDIR ?= $(if $(O),$(O),$(if $(wildcard $(SRCTREE_KDIR)/.config),$(SRCTREE_KDIR),/lib/modules/$(shell uname -r)/build))
 
 ifeq ($(V),1)
 Q =
