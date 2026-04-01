@@ -414,25 +414,38 @@ etc. This specification requires that signed modulo MUST use truncated division
 
    a % n = a - n * trunc(a / n)
 
-The ``MOVSX`` instruction does a move operation with sign extension.
-``{MOVSX, X, ALU}`` :term:`sign extends<Sign Extend>` 8-bit and 16-bit operands into
-32-bit operands, and zeroes the remaining upper 32 bits.
-``{MOVSX, X, ALU64}`` :term:`sign extends<Sign Extend>` 8-bit, 16-bit, and 32-bit
-operands into 64-bit operands.  Unlike other arithmetic instructions,
-``MOVSX`` is only defined for register source operands (``X``).
+For move operations, the ``MOV`` instruction has a few different forms.
+
+``{MOV, X, ALU64}`` means::
+
+  dst = src  (e.g. r1 = r2)
 
 ``{MOV, K, ALU64}`` means::
 
   dst = (s64)imm
 
-``{MOV, X, ALU}`` means::
+e.g. r1 = -4; r5 = 9282009
+
+``{MOV, X, ALU}`` has zero extension semantics (upper 32 bits are zeroed)::
 
   dst = (u32)src
+
+e.g. w5 = w9
+
+The ``MOVSX`` instruction does a move operation with sign extension.
+``{MOVSX, X, ALU64}`` :term:`sign extends<Sign Extend>` 8-bit, 16-bit, and 32-bit
+operands into 64-bit operands.
+
+The ``{MOVSX, X, ALU}`` form has slightly different semantics: it
+:term:`sign extends<Sign Extend>` 8-bit and 16-bit operands into
+32-bit operands, and zeroes the remaining upper 32 bits (similar to ``MOV``).
 
 ``{MOVSX, X, ALU}`` with 'offset' 8 means::
 
   dst = (u32)(s32)(s8)src
 
+Unlike other arithmetic instructions,
+``MOVSX`` is only defined for register source operands (``X``).
 
 The ``NEG`` instruction is only defined when the source bit is clear
 (``K``).
@@ -605,7 +618,7 @@ For load and store instructions (``LD``, ``LDX``, ``ST``, and ``STX``), the
     ABS            1      legacy BPF packet access (absolute)   `Legacy BPF Packet access instructions`_
     IND            2      legacy BPF packet access (indirect)   `Legacy BPF Packet access instructions`_
     MEM            3      regular load and store operations     `Regular load and store operations`_
-    MEMSX          4      sign-extension load operations        `Sign-extension load operations`_
+    MEMSX          4      sign extension load operations        `Sign extension load operations`_
     ATOMIC         6      atomic operations                     `Atomic operations`_
     =============  =====  ====================================  =============
 
@@ -649,10 +662,10 @@ instructions that transfer data between a register and memory.
 Where '<size>' is one of: ``B``, ``H``, ``W``, or ``DW``, and
 'unsigned size' is one of: u8, u16, u32, or u64.
 
-Sign-extension load operations
+Sign extension load operations
 ------------------------------
 
-The ``MEMSX`` mode modifier is used to encode :term:`sign-extension<Sign Extend>` load
+The ``MEMSX`` mode modifier is used to encode :term:`sign extension<Sign Extend>` load
 instructions that transfer data between a register and memory.
 
 ``{MEMSX, <size>, LDX}`` means::
