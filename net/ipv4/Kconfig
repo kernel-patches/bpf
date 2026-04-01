@@ -15,6 +15,7 @@ config LEGACY_IP
 
 config IP_MULTICAST
 	bool "IP: multicasting"
+	depends on LEGACY_IP
 	help
 	  This is code for addressing several networked computers at once,
 	  enlarging your kernel by about 2 KB. You need multicasting if you
@@ -25,6 +26,7 @@ config IP_MULTICAST
 
 config IP_ADVANCED_ROUTER
 	bool "IP: advanced router"
+	depends on LEGACY_IP
 	help
 	  If you intend to run your Linux box mostly as a router, i.e. as a
 	  computer that forwards and redistributes network packets, say Y; you
@@ -66,6 +68,7 @@ config IP_ADVANCED_ROUTER
 
 config IP_FIB_TRIE_STATS
 	bool "FIB TRIE statistics"
+	depends on LEGACY_IP
 	depends on IP_ADVANCED_ROUTER
 	help
 	  Keep track of statistics on structure of FIB TRIE table.
@@ -73,6 +76,7 @@ config IP_FIB_TRIE_STATS
 
 config IP_MULTIPLE_TABLES
 	bool "IP: policy routing"
+	depends on LEGACY_IP
 	depends on IP_ADVANCED_ROUTER
 	select FIB_RULES
 	help
@@ -90,6 +94,7 @@ config IP_MULTIPLE_TABLES
 
 config IP_ROUTE_MULTIPATH
 	bool "IP: equal cost multipath"
+	depends on LEGACY_IP
 	depends on IP_ADVANCED_ROUTER
 	help
 	  Normally, the routing tables specify a single action to be taken in
@@ -102,6 +107,7 @@ config IP_ROUTE_MULTIPATH
 
 config IP_ROUTE_VERBOSE
 	bool "IP: verbose route monitoring"
+	depends on LEGACY_IP
 	depends on IP_ADVANCED_ROUTER
 	help
 	  If you say Y here, which is recommended, then the kernel will print
@@ -113,9 +119,11 @@ config IP_ROUTE_VERBOSE
 
 config IP_ROUTE_CLASSID
 	bool
+	depends on LEGACY_IP
 
 config IP_PNP
 	bool "IP: kernel level autoconfiguration"
+	depends on LEGACY_IP
 	help
 	  This enables automatic configuration of IP addresses of devices and
 	  of the routing table during kernel boot, based on either information
@@ -172,6 +180,7 @@ config IP_PNP_RARP
 
 config NET_IPIP
 	tristate "IP: tunneling"
+	depends on LEGACY_IP
 	select INET_TUNNEL
 	select NET_IP_TUNNEL
 	help
@@ -190,6 +199,7 @@ config NET_IPIP
 
 config NET_IPGRE_DEMUX
 	tristate "IP: GRE demultiplexer"
+	depends on LEGACY_IP
 	help
 	  This is helper module to demultiplex GRE packets on GRE version field criteria.
 	  Required by ip_gre and pptp modules.
@@ -202,6 +212,7 @@ config NET_IP_TUNNEL
 
 config NET_IPGRE
 	tristate "IP: GRE tunnels over IP"
+	depends on LEGACY_IP
 	depends on (IPV6 || IPV6=n) && NET_IPGRE_DEMUX
 	select NET_IP_TUNNEL
 	help
@@ -217,6 +228,7 @@ config NET_IPGRE
 
 config NET_IPGRE_BROADCAST
 	bool "IP: broadcast GRE over IP"
+	depends on LEGACY_IP
 	depends on IP_MULTICAST && NET_IPGRE
 	help
 	  One application of GRE/IP is to construct a broadcast WAN (Wide Area
@@ -226,10 +238,12 @@ config NET_IPGRE_BROADCAST
 
 config IP_MROUTE_COMMON
 	bool
+	depends on LEGACY_IP
 	depends on IP_MROUTE || IPV6_MROUTE
 
 config IP_MROUTE
 	bool "IP: multicast routing"
+	depends on LEGACY_IP
 	depends on IP_MULTICAST
 	select IP_MROUTE_COMMON
 	help
@@ -242,6 +256,7 @@ config IP_MROUTE
 
 config IP_MROUTE_MULTIPLE_TABLES
 	bool "IP: multicast policy routing"
+	depends on LEGACY_IP
 	depends on IP_MROUTE && IP_ADVANCED_ROUTER
 	select FIB_RULES
 	help
@@ -256,6 +271,7 @@ config IP_MROUTE_MULTIPLE_TABLES
 
 config IP_PIMSM_V1
 	bool "IP: PIM-SM version 1 support"
+	depends on LEGACY_IP
 	depends on IP_MROUTE
 	help
 	  Kernel side support for Sparse Mode PIM (Protocol Independent
@@ -269,6 +285,7 @@ config IP_PIMSM_V1
 
 config IP_PIMSM_V2
 	bool "IP: PIM-SM version 2 support"
+	depends on LEGACY_IP
 	depends on IP_MROUTE
 	help
 	  Kernel side support for Sparse Mode PIM version 2. In order to use
@@ -314,6 +331,7 @@ config SYN_COOKIES
 
 config NET_IPVTI
 	tristate "Virtual (secure) IP: tunneling"
+	depends on LEGACY_IP
 	depends on IPV6 || IPV6=n
 	select INET_TUNNEL
 	select NET_IP_TUNNEL
@@ -341,6 +359,7 @@ config NET_FOU
 
 config NET_FOU_IP_TUNNELS
 	bool "IP: FOU encapsulation of IP tunnels"
+	depends on LEGACY_IP
 	depends on NET_IPIP || NET_IPGRE || IPV6_SIT
 	select NET_FOU
 	help
@@ -350,6 +369,7 @@ config NET_FOU_IP_TUNNELS
 
 config INET_AH
 	tristate "IP: AH transformation"
+	depends on LEGACY_IP
 	select XFRM_AH
 	help
 	  Support for IPsec AH (Authentication Header).
@@ -365,6 +385,7 @@ config INET_AH
 
 config INET_ESP
 	tristate "IP: ESP transformation"
+	depends on LEGACY_IP
 	select XFRM_ESP
 	help
 	  Support for IPsec ESP (Encapsulating Security Payload).
@@ -380,6 +401,7 @@ config INET_ESP
 
 config INET_ESP_OFFLOAD
 	tristate "IP: ESP transformation offload"
+	depends on LEGACY_IP
 	depends on INET_ESP
 	select XFRM_OFFLOAD
 	default n
@@ -393,6 +415,7 @@ config INET_ESP_OFFLOAD
 
 config INET_ESPINTCP
 	bool "IP: ESP in TCP encapsulation (RFC 8229)"
+	depends on LEGACY_IP
 	depends on XFRM && INET_ESP
 	select STREAM_PARSER
 	select NET_SOCK_MSG
@@ -405,6 +428,7 @@ config INET_ESPINTCP
 
 config INET_IPCOMP
 	tristate "IP: IPComp transformation"
+	depends on LEGACY_IP
 	select INET_XFRM_TUNNEL
 	select XFRM_IPCOMP
 	help
@@ -425,11 +449,13 @@ config INET_TABLE_PERTURB_ORDER
 
 config INET_XFRM_TUNNEL
 	tristate
+	depends on LEGACY_IP
 	select INET_TUNNEL
 	default n
 
 config INET_TUNNEL
 	tristate
+	depends on LEGACY_IP
 	default n
 
 config INET_DIAG
