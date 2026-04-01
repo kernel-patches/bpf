@@ -595,7 +595,7 @@ static bool is_async_cb_sleepable(struct bpf_verifier_env *env, struct bpf_insn 
 	return false;
 }
 
-static bool is_may_goto_insn(struct bpf_insn *insn)
+bool is_may_goto_insn(struct bpf_insn *insn)
 {
 	return insn->code == (BPF_JMP | BPF_JCOND) && insn->src_reg == BPF_MAY_GOTO;
 }
@@ -3082,7 +3082,7 @@ struct bpf_subprog_info *bpf_find_containing_subprog(struct bpf_verifier_env *en
 }
 
 /* Find subprogram that starts exactly at 'off' */
-static int find_subprog(struct bpf_verifier_env *env, int off)
+int find_subprog(struct bpf_verifier_env *env, int off)
 {
 	struct bpf_subprog_info *p;
 
@@ -7287,7 +7287,7 @@ out:
 	set_sext32_default_val(reg, size);
 }
 
-static bool bpf_map_is_rdonly(const struct bpf_map *map)
+bool bpf_map_is_rdonly(const struct bpf_map *map)
 {
 	/* A map is considered read-only if the following condition are true:
 	 *
@@ -7307,8 +7307,8 @@ static bool bpf_map_is_rdonly(const struct bpf_map *map)
 	       !bpf_map_write_active(map);
 }
 
-static int bpf_map_direct_read(struct bpf_map *map, int off, int size, u64 *val,
-			       bool is_ldsx)
+int bpf_map_direct_read(struct bpf_map *map, int off, int size, u64 *val,
+			bool is_ldsx)
 {
 	void *ptr;
 	u64 addr;
@@ -19234,7 +19234,7 @@ err_free:
  * [env->subprog_info[i].postorder_start, env->subprog_info[i+1].postorder_start)
  * with indices of 'i' instructions in postorder.
  */
-static int compute_postorder(struct bpf_verifier_env *env)
+int compute_postorder(struct bpf_verifier_env *env)
 {
 	u32 cur_postorder, i, top, stack_sz, s;
 	int *stack = NULL, *postorder = NULL, *state = NULL;
@@ -21538,6 +21538,27 @@ static int do_check(struct bpf_verifier_env *env)
 		sanitize_mark_insn_seen(env);
 		prev_insn_idx = env->insn_idx;
 
+		/* Sanity check: precomputed constants must match verifier state */
+		if (!state->speculative && insn_aux->const_reg_mask) {
+			struct bpf_reg_state *regs = cur_regs(env);
+			u16 mask = insn_aux->const_reg_mask;
+
+			for (int r = 0; r < MAX_BPF_REG; r++) {
+				u32 cval = insn_aux->const_reg_vals[r];
+
+				if (!(mask & BIT(r)))
+					continue;
+				if (regs[r].type != SCALAR_VALUE)
+					continue;
+				if (!tnum_is_const(regs[r].var_off))
+					continue;
+				if (verifier_bug_if((u32)regs[r].var_off.value != cval,
+						    env, "const R%d: %u != %llu",
+						    r, cval, regs[r].var_off.value))
+					return -EFAULT;
+			}
+		}
+
 		/* Reduce verification complexity by stopping speculative path
 		 * verification when a nospec is encountered.
 		 */
@@ -22527,7 +22548,7 @@ static void sanitize_dead_code(struct bpf_verifier_env *env)
 	}
 }
 
-static bool insn_is_cond_jump(u8 code)
+bool insn_is_cond_jump(u8 code)
 {
 	u8 op;
 
@@ -26351,6 +26372,14 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 
 	ret = check_attach_btf_id(env);
 	if (ret)
+		goto skip_full_check;
+
+	ret = compute_const_regs(env);
+	if (ret < 0)
+		goto skip_full_check;
+
+	ret = prune_dead_branches(env);
+	if (ret < 0)
 		goto skip_full_check;
 
 	ret = sort_subprogs_topo(env);
