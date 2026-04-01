@@ -240,6 +240,9 @@ int inet_listen(struct socket *sock, int backlog)
 	struct sock *sk = sock->sk;
 	int err = -EINVAL;
 
+	pr_warn_once("process '%s' (pid %d) is listening on an AF_INET socket. Consider using AF_INET6 with IPV6_V6ONLY=0 instead.\n",
+		     current->comm, task_pid_nr(current));
+
 	lock_sock(sk);
 
 	if (sock->state != SS_UNCONNECTED || sock->type != SOCK_STREAM)
