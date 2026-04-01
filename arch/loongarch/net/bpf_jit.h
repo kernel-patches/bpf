@@ -72,6 +72,18 @@ static inline int epilogue_offset(const struct jit_ctx *ctx)
 	return (to - from);
 }
 
+/* Zero-extend 8 bits into 64 bits */
+static inline void emit_zext_8(struct jit_ctx *ctx, enum loongarch_gpr reg)
+{
+	emit_insn(ctx, bstrinsd, reg, LOONGARCH_GPR_ZERO, 63, 8);
+}
+
+/* Zero-extend 16 bits into 64 bits */
+static inline void emit_zext_16(struct jit_ctx *ctx, enum loongarch_gpr reg)
+{
+	emit_insn(ctx, bstrinsd, reg, LOONGARCH_GPR_ZERO, 63, 16);
+}
+
 /* Zero-extend 32 bits into 64 bits */
 static inline void emit_zext_32(struct jit_ctx *ctx, enum loongarch_gpr reg, bool is32)
 {
