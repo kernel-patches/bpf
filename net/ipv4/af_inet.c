@@ -1922,7 +1922,15 @@ static int __init inet_init(void)
 	/*
 	 *	Tell SOCKET that we are alive...
 	 */
+	/* Initialize the socket-side protocol switch tables. */
+	for (r = &inetsw[0]; r < &inetsw[SOCK_MAX]; ++r)
+		INIT_LIST_HEAD(r);
 
+#ifdef CONFIG_XFRM
+	xfrm_init();
+#endif
+
+#ifdef CONFIG_LEGACY_IP
 	(void)sock_register(&inet_family_ops);
 
 #ifdef CONFIG_SYSCTL
@@ -1957,10 +1965,6 @@ static int __init inet_init(void)
 		pr_crit("%s: Cannot add IGMP protocol\n", __func__);
 #endif
 
-	/* Register the socket-side information for inet_create. */
-	for (r = &inetsw[0]; r < &inetsw[SOCK_MAX]; ++r)
-		INIT_LIST_HEAD(r);
-
 	for (q = inetsw_array; q < &inetsw_array[INETSW_ARRAY_LEN]; ++q)
 		inet_register_protosw(q);
 
@@ -1975,6 +1979,7 @@ static int __init inet_init(void)
 	 */
 
 	ip_init();
+#endif /* CONFIG_LEGACY_IP */
 
 	/* Initialise per-cpu ipv4 mibs */
 	if (init_ipv4_mibs())
@@ -1987,7 +1992,8 @@ static int __init inet_init(void)
 	udp_init();
 
 	/* Add UDP-Lite (RFC 3828) */
-	udplite4_register();
+	if (IS_ENABLED(CONFIG_LEGACY_IP))
+		udplite4_register();
 
 	raw_init();
 
@@ -1997,6 +2003,7 @@ static int __init inet_init(void)
 	 *	Set the ICMP layer up
 	 */
 
+#ifdef CONFIG_LEGACY_IP
 	if (icmp_init() < 0)
 		panic("Failed to create the ICMP control socket.\n");
 
@@ -2007,10 +2014,12 @@ static int __init inet_init(void)
 	if (ip_mr_init())
 		pr_crit("%s: Cannot init ipv4 mroute\n", __func__);
 #endif
+#endif /* CONFIG_LEGACY_IP */
 
 	if (init_inet_pernet_ops())
 		pr_crit("%s: Cannot init ipv4 inet pernet ops\n", __func__);
 
+#ifdef CONFIG_LEGACY_IP
 	ipv4_proc_init();
 
 	ipfrag_init();
@@ -2018,6 +2027,7 @@ static int __init inet_init(void)
 	dev_add_pack(&ip_packet_type);
 
 	ip_tunnel_core_init();
+#endif /* CONFIG_LEGACY_IP */
 
 	rc = 0;
 out:

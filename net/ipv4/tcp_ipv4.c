@@ -3717,25 +3717,27 @@ static void __init bpf_iter_register(void)
 
 void __init tcp_v4_init(void)
 {
-	int cpu, res;
+	if (IS_ENABLED(CONFIG_LEGACY_IP)) {
+		int cpu, res;
 
-	for_each_possible_cpu(cpu) {
-		struct sock *sk;
+		for_each_possible_cpu(cpu) {
+			struct sock *sk;
 
-		res = inet_ctl_sock_create(&sk, PF_INET, SOCK_RAW,
-					   IPPROTO_TCP, &init_net);
-		if (res)
-			panic("Failed to create the TCP control socket.\n");
-		sock_set_flag(sk, SOCK_USE_WRITE_QUEUE);
+			res = inet_ctl_sock_create(&sk, PF_INET, SOCK_RAW,
+						   IPPROTO_TCP, &init_net);
+			if (res)
+				panic("Failed to create the TCP control socket.\n");
+			sock_set_flag(sk, SOCK_USE_WRITE_QUEUE);
 
-		/* Please enforce IP_DF and IPID==0 for RST and
-		 * ACK sent in SYN-RECV and TIME-WAIT state.
-		 */
-		inet_sk(sk)->pmtudisc = IP_PMTUDISC_DO;
+			/* Please enforce IP_DF and IPID==0 for RST and
+			 * ACK sent in SYN-RECV and TIME-WAIT state.
+			 */
+			inet_sk(sk)->pmtudisc = IP_PMTUDISC_DO;
 
-		sk->sk_clockid = CLOCK_MONOTONIC;
+			sk->sk_clockid = CLOCK_MONOTONIC;
 
-		per_cpu(ipv4_tcp_sk.sock, cpu) = sk;
+			per_cpu(ipv4_tcp_sk.sock, cpu) = sk;
+		}
 	}
 	if (register_pernet_subsys(&tcp_sk_ops))
 		panic("Failed to create the TCP control socket.\n");

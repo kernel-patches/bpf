@@ -348,7 +348,9 @@ static int __init inet_blackhole_dev_init(void)
 
 	return PTR_ERR_OR_ZERO(in_dev);
 }
+#ifdef CONFIG_LEGACY_IP
 late_initcall(inet_blackhole_dev_init);
+#endif
 
 int inet_addr_onlink(struct in_device *in_dev, __be32 a, __be32 b)
 {

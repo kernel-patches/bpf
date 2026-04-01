@@ -3773,7 +3773,6 @@ int __init ip_rt_init(void)
 	if (ip_rt_proc_init())
 		pr_err("Unable to create route proc files\n");
 #ifdef CONFIG_XFRM
-	xfrm_init();
 	xfrm4_init();
 #endif
 	rtnl_register_many(ip_rt_rtnl_msg_handlers);
