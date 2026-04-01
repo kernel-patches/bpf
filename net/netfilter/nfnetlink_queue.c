@@ -339,7 +339,7 @@ static struct nf_hook_entries *nf_hook_entries_head(const struct net *net, u8 pf
 
 static int nf_ip_reroute(struct sk_buff *skb, const struct nf_queue_entry *entry)
 {
-#ifdef CONFIG_INET
+#ifdef CONFIG_LEGACY_IP
 	const struct ip_rt_info *rt_info = nf_queue_entry_reroute(entry);
 
 	if (entry->state.hook == NF_INET_LOCAL_OUT) {

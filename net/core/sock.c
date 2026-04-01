@@ -4267,7 +4267,7 @@ int sock_load_diag_module(int family, int protocol)
 				      NETLINK_SOCK_DIAG, family);
 	}
 
-#ifdef CONFIG_INET
+#ifdef CONFIG_LEGACY_IP
 	if (family == AF_INET &&
 	    protocol != IPPROTO_RAW &&
 	    protocol < MAX_INET_PROTOS &&
