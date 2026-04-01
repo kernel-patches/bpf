@@ -41,7 +41,7 @@ static inline int landlock_restrict_self(const int ruleset_fd,
 }
 #endif
 
-static inline pid_t sys_gettid(void)
+static inline pid_t landlock_gettid(void)
 {
 	return syscall(__NR_gettid);
 }
