@@ -2,6 +2,17 @@
 #
 # IP configuration
 #
+config LEGACY_IP
+	bool "The IPv4 protocol (Legacy IP)"
+	help
+	  Support for IP version 4 (IPv4).
+
+	  Legacy IP is the protocol used by the early ARPANET, before IPv6
+	  was standardised in the final decade of the 1900s. It should only
+	  be necessary these days to interoperate with legacy networks.
+
+	  If unsure, say N.
+
 config IP_MULTICAST
 	bool "IP: multicasting"
 	help
