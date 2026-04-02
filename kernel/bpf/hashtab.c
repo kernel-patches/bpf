@@ -2921,13 +2921,89 @@ static int rhtab_map_gen_lookup(struct bpf_map *map, struct bpf_insn *insn_buf)
 	return insn - insn_buf;
 }
 
+/* Helper to get next element, handling -EAGAIN during resize */
+static struct rhtab_elem *rhtab_iter_next(struct rhashtable_iter *iter)
+{
+	struct rhtab_elem *elem;
+
+	while ((elem = rhashtable_walk_next(iter))) {
+		if (IS_ERR(elem)) {
+			if (PTR_ERR(elem) == -EAGAIN)
+				continue;
+			return NULL;
+		}
+		return elem;
+	}
+
+	return NULL;
+}
+
 static void rhtab_map_free_internal_structs(struct bpf_map *map)
 {
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct rhashtable_iter iter;
+	struct rhtab_elem *elem;
+
+	if (!bpf_map_has_internal_structs(map))
+		return;
+
+	/*
+	 * An element can be processed twice if rhashtable resized concurrently.
+	 * Special structs freeing handles duplicate cancel_and_free.
+	 */
+	rhashtable_walk_enter(&rhtab->ht, &iter);
+	rhashtable_walk_start(&iter);
+
+	for (elem = rhtab_iter_next(&iter); elem; elem = rhtab_iter_next(&iter))
+		bpf_map_free_internal_structs(map, rhtab_elem_value(elem, map->key_size));
+
+	rhashtable_walk_stop(&iter);
+	rhashtable_walk_exit(&iter);
 }
 
 static int rhtab_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
 {
-	return -EOPNOTSUPP;
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct rhashtable_iter iter;
+	struct rhtab_elem *elem;
+	bool key_found;
+	int ret = -ENOENT;
+
+	/*
+	 * Hold RCU across enter_from + walk_start to prevent the
+	 * element cached by enter_from from being freed before
+	 * walk_start re-acquires RCU.
+	 */
+	guard(rcu)();
+	rhashtable_walk_enter_from(&rhtab->ht, &iter, key, rhtab->params);
+	key_found = key && iter.p;
+	rhashtable_walk_start(&iter);
+
+	elem = rhtab_iter_next(&iter);
+	if (elem) {
+		memcpy(next_key, elem->data, map->key_size);
+		ret = 0;
+	}
+
+	rhashtable_walk_stop(&iter);
+	rhashtable_walk_exit(&iter);
+
+	if (ret == 0 || key_found)
+		return ret;
+
+	/* Key was not found restart from the beginning */
+	rhashtable_walk_enter(&rhtab->ht, &iter);
+	rhashtable_walk_start(&iter);
+
+	elem = rhtab_iter_next(&iter);
+	if (elem) {
+		memcpy(next_key, elem->data, map->key_size);
+		ret = 0;
+	}
+
+	rhashtable_walk_stop(&iter);
+	rhashtable_walk_exit(&iter);
+	return ret;
 }
 
 static void rhtab_map_seq_show_elem(struct bpf_map *map, void *key, struct seq_file *m)
