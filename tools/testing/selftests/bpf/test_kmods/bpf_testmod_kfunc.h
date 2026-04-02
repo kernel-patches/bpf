@@ -48,6 +48,11 @@ struct prog_test_pass2 {
 	} x;
 };
 
+struct prog_test_big_arg {
+	long a;
+	long b;
+};
+
 struct prog_test_fail1 {
 	void *p;
 	int x;
@@ -118,6 +123,8 @@ __u64 bpf_kfunc_call_stack_arg_ptr(__u64 a, __u64 b, __u64 c, __u64 d, __u64 e,
 __u64 bpf_kfunc_call_stack_arg_mix(__u64 a, __u64 b, __u64 c, __u64 d, __u64 e,
 				   struct prog_test_pass1 *p, __u64 f,
 				   struct prog_test_pass1 *q) __ksym;
+__u64 bpf_kfunc_call_stack_arg_big(__u64 a, __u64 b, __u64 c, __u64 d, __u64 e,
+				   struct prog_test_big_arg s) __ksym;
 
 void bpf_kfunc_call_test_pass_ctx(struct __sk_buff *skb) __ksym;
 void bpf_kfunc_call_test_pass1(struct prog_test_pass1 *p) __ksym;
