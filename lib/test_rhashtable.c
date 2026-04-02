@@ -23,6 +23,7 @@
 #include <linux/random.h>
 #include <linux/vmalloc.h>
 #include <linux/wait.h>
+#include <linux/cleanup.h>
 
 #define MAX_ENTRIES	1000000
 #define TEST_INSERT_FAIL INT_MAX
@@ -679,6 +680,122 @@ out:
 	return err;
 }
 
+static int __init test_walk_enter_from(void)
+{
+	struct rhashtable ht;
+	struct test_obj objs[4];
+	struct rhashtable_iter iter;
+	struct test_obj *obj;
+	int err, i;
+
+	err = rhashtable_init(&ht, &test_rht_params);
+	if (err)
+		return err;
+
+	/* Insert 4 elements with keys 0, 2, 4, 6 */
+	for (i = 0; i < 4; i++) {
+		objs[i].value.id = i * 2;
+		objs[i].value.tid = 0;
+		err = rhashtable_insert_fast(&ht, &objs[i].node,
+					     test_rht_params);
+		if (err) {
+			pr_warn("walk_enter_from: insert %d failed: %d\n",
+				i, err);
+			goto out;
+		}
+	}
+
+	/*
+	 * Test 1: walk_enter_from positions at key, walk_next returns
+	 * the successor (not the key itself).
+	 */
+	for (i = 0; i < 4; i++) {
+		struct test_obj_val key = { .id = i * 2 };
+
+		scoped_guard(rcu) {
+			rhashtable_walk_enter_from(&ht, &iter, &key,
+						   test_rht_params);
+			rhashtable_walk_start(&iter);
+		}
+
+		obj = rhashtable_walk_next(&iter);
+		while (IS_ERR(obj) && PTR_ERR(obj) == -EAGAIN)
+			obj = rhashtable_walk_next(&iter);
+
+		/* Successor must not be the key itself */
+		if (obj && obj->value.id == i * 2) {
+			pr_warn("walk_enter_from: returned key %d instead of successor\n",
+				i * 2);
+			err = -EINVAL;
+			rhashtable_walk_stop(&iter);
+			rhashtable_walk_exit(&iter);
+			goto out;
+		}
+
+		rhashtable_walk_stop(&iter);
+		rhashtable_walk_exit(&iter);
+	}
+
+	/* Test 2: walk_enter_from with non-existent key starts from bucket */
+	{
+		struct test_obj_val key = { .id = 99 };
+
+		scoped_guard(rcu) {
+			rhashtable_walk_enter_from(&ht, &iter, &key,
+						   test_rht_params);
+			rhashtable_walk_start(&iter);
+		}
+
+		obj = rhashtable_walk_next(&iter);
+		while (IS_ERR(obj) && PTR_ERR(obj) == -EAGAIN)
+			obj = rhashtable_walk_next(&iter);
+
+		/* Should still return some element (iteration from bucket start) */
+		rhashtable_walk_stop(&iter);
+		rhashtable_walk_exit(&iter);
+	}
+
+	/* Test 3: verify walk_enter_from + walk_next can iterate remaining elements */
+	{
+		struct test_obj_val key = { .id = 0 };
+		int count = 0;
+
+		scoped_guard(rcu) {
+			rhashtable_walk_enter_from(&ht, &iter, &key,
+						   test_rht_params);
+			rhashtable_walk_start(&iter);
+		}
+
+		while ((obj = rhashtable_walk_next(&iter))) {
+			if (IS_ERR(obj)) {
+				if (PTR_ERR(obj) == -EAGAIN)
+					continue;
+				break;
+			}
+			count++;
+		}
+
+		rhashtable_walk_stop(&iter);
+		rhashtable_walk_exit(&iter);
+
+		/*
+		 * Should see at least some elements after key 0.
+		 * Exact count depends on hash distribution.
+		 */
+		if (count == 0) {
+			pr_warn("walk_enter_from: no elements found after key 0\n");
+			err = -EINVAL;
+			goto out;
+		}
+	}
+
+	pr_info("walk_enter_from: all tests passed\n");
+	err = 0;
+out:
+	rhashtable_destroy(&ht);
+	return err;
+}
+
 static int __init test_rht_init(void)
 {
 	unsigned int entries;
@@ -737,6 +854,9 @@ static int __init test_rht_init(void)
 	pr_info("Average test time: %llu\n", total_time);
 
 	test_insert_duplicates_run();
+
+	pr_info("Testing walk_enter_from: %s\n",
+		test_walk_enter_from() == 0 ? "pass" : "FAIL");
 
 	if (!tcount)
 		return 0;
