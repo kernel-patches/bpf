@@ -12,6 +12,8 @@ void test_empty_skb(void)
 	struct bpf_program *prog;
 	char eth_hlen_pp[15];
 	char eth_hlen[14];
+	char ipv4_eth_hlen[14];
+	char ipv6_eth_hlen[14];
 	int veth_ifindex;
 	int ipip_ifindex;
 	int err;
@@ -43,6 +45,24 @@ void test_empty_skb(void)
 			.data_in = NULL,
 			.data_size_in = 0,
 			.ifindex = &ipip_ifindex,
+			.err = -EINVAL,
+		},
+
+		/* ETH_HLEN-sized packets with IPv4/IPv6 EtherType but
+		 * no L3 header are rejected.
+		 */
+		{
+			.msg = "veth short IPv4 ingress packet",
+			.data_in = ipv4_eth_hlen,
+			.data_size_in = sizeof(ipv4_eth_hlen),
+			.ifindex = &veth_ifindex,
+			.err = -EINVAL,
+		},
+		{
+			.msg = "veth short IPv6 ingress packet",
+			.data_in = ipv6_eth_hlen,
+			.data_size_in = sizeof(ipv6_eth_hlen),
+			.ifindex = &veth_ifindex,
 			.err = -EINVAL,
 		},
 
@@ -107,6 +127,15 @@ void test_empty_skb(void)
 	SYS(out, "ip link set ipip0 up");
 	SYS(out, "ip addr add 192.168.1.1/16 dev ipip0");
 	ipip_ifindex = if_nametoindex("ipip0");
+
+	memset(ipv4_eth_hlen, 0, sizeof(ipv4_eth_hlen));
+	memset(ipv6_eth_hlen, 0, sizeof(ipv6_eth_hlen));
+
+	ipv4_eth_hlen[12] = 0x08;
+	ipv4_eth_hlen[13] = 0x00;
+
+	ipv6_eth_hlen[12] = 0x86;
+	ipv6_eth_hlen[13] = 0xdd;
 
 	bpf_obj = empty_skb__open_and_load();
 	if (!ASSERT_OK_PTR(bpf_obj, "open skeleton"))
