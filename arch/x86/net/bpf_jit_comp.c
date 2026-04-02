@@ -367,6 +367,27 @@ static void push_callee_regs(u8 **pprog, bool *callee_regs_used)
 	*pprog = prog;
 }
 
+static int push_stack_args(u8 **pprog, s32 base_off, int from, int to)
+{
+	u8 *prog = *pprog;
+	int j, off, cnt = 0;
+
+	for (j = from; j >= to; j--) {
+		off = base_off - j * 8;
+
+		/* push qword [rbp + off] */
+		if (is_imm8(off)) {
+			EMIT3(0xFF, 0x75, off);
+			cnt += 3;
+		} else {
+			EMIT2_off32(0xFF, 0xB5, off);
+			cnt += 6;
+		}
+	}
+	*pprog = prog;
+	return cnt;
+}
+
 static void pop_r12(u8 **pprog)
 {
 	u8 *prog = *pprog;
@@ -1664,18 +1685,34 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	int i, excnt = 0;
 	int ilen, proglen = 0;
 	u8 *prog = temp;
-	u32 stack_depth;
+	u16 stack_arg_depth, incoming_stack_arg_depth;
+	u32 prog_stack_depth, stack_depth;
+	bool has_stack_args;
 	int err;
 
 	stack_depth = bpf_prog->aux->stack_depth;
+	stack_arg_depth = bpf_prog->aux->stack_arg_depth;
+	incoming_stack_arg_depth = bpf_prog->aux->incoming_stack_arg_depth;
 	priv_stack_ptr = bpf_prog->aux->priv_stack_ptr;
 	if (priv_stack_ptr) {
 		priv_frame_ptr = priv_stack_ptr + PRIV_STACK_GUARD_SZ + round_up(stack_depth, 8);
 		stack_depth = 0;
 	}
 
+	/*
+	 * Save program stack depth before adding stack arg space.
+	 * Each function allocates its own stack arg space
+	 * (incoming + outgoing) below its BPF stack.
+	 * Stack args are accessed via RBP-based addressing.
+	 */
+	prog_stack_depth = round_up(stack_depth, 8);
+	if (stack_arg_depth)
+		stack_depth += stack_arg_depth;
+	has_stack_args = stack_arg_depth > 0;
+
 	arena_vm_start = bpf_arena_get_kern_vm_start(bpf_prog->aux->arena);
 	user_vm_start = bpf_arena_get_user_vm_start(bpf_prog->aux->arena);
+
 
 	detect_reg_usage(insn, insn_cnt, callee_regs_used);
 
@@ -1704,6 +1741,38 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		emit_mov_imm64(&prog, X86_REG_R12,
 			       arena_vm_start >> 32, (u32) arena_vm_start);
 
+	if (incoming_stack_arg_depth && bpf_is_subprog(bpf_prog)) {
+		int n = incoming_stack_arg_depth / 8;
+
+		/*
+		 * Caller pushed stack args before CALL, so after prologue
+		 * (CALL saves ret addr, then PUSH saves old RBP) they sit
+		 * above RBP:
+		 *
+		 *   [rbp + 16 + (n - 1) * 8]  stack_arg n
+		 *   ...
+		 *   [rbp + 24]                stack_arg 2
+		 *   [rbp + 16]                stack_arg 1
+		 *   [rbp +  8]                return address
+		 *   [rbp +  0]                saved rbp
+		 *
+		 * Copy each into callee's own region below the program stack:
+		 *   [rbp - prog_stack_depth - i * 8]
+		 */
+		for (i = 0; i < n; i++) {
+			s32 src = 16 + i * 8;
+			s32 dst = -prog_stack_depth - (i + 1) * 8;
+
+			/* mov rax, [rbp + src] */
+			EMIT4(0x48, 0x8B, 0x45, src);
+			/* mov [rbp + dst], rax */
+			if (is_imm8(dst))
+				EMIT4(0x48, 0x89, 0x45, dst);
+			else
+				EMIT3_off32(0x48, 0x89, 0x85, dst);
+		}
+	}
+
 	if (priv_frame_ptr)
 		emit_priv_frame_ptr(&prog, priv_frame_ptr);
 
@@ -1715,13 +1784,14 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	prog = temp;
 
 	for (i = 1; i <= insn_cnt; i++, insn++) {
+		bool adjust_stack_arg_off = false;
 		const s32 imm32 = insn->imm;
 		u32 dst_reg = insn->dst_reg;
 		u32 src_reg = insn->src_reg;
 		u8 b2 = 0, b3 = 0;
 		u8 *start_of_ldx;
 		s64 jmp_offset;
-		s16 insn_off;
+		s32 insn_off;
 		u8 jmp_cond;
 		u8 *func;
 		int nops;
@@ -1732,6 +1802,21 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 
 			if (dst_reg == BPF_REG_FP)
 				dst_reg = X86_REG_R9;
+		}
+
+		if (has_stack_args) {
+			u8 class = BPF_CLASS(insn->code);
+
+			if (class == BPF_LDX &&
+			    src_reg == BPF_REG_STACK_ARG_BASE) {
+				src_reg = BPF_REG_FP;
+				adjust_stack_arg_off = true;
+			}
+			if ((class == BPF_STX || class == BPF_ST) &&
+			    dst_reg == BPF_REG_STACK_ARG_BASE) {
+				dst_reg = BPF_REG_FP;
+				adjust_stack_arg_off = true;
+			}
 		}
 
 		switch (insn->code) {
@@ -2131,10 +2216,16 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 		case BPF_ST | BPF_MEM | BPF_DW:
 			EMIT2(add_1mod(0x48, dst_reg), 0xC7);
 
-st:			if (is_imm8(insn->off))
-				EMIT2(add_1reg(0x40, dst_reg), insn->off);
+st:		{
+			int off = insn->off;
+
+			if (adjust_stack_arg_off)
+				off -= prog_stack_depth;
+			if (is_imm8(off))
+				EMIT2(add_1reg(0x40, dst_reg), off);
 			else
-				EMIT1_off32(add_1reg(0x80, dst_reg), insn->off);
+				EMIT1_off32(add_1reg(0x80, dst_reg), off);
+		}
 
 			EMIT(imm32, bpf_size_to_x86_bytes(BPF_SIZE(insn->code)));
 			break;
@@ -2143,9 +2234,14 @@ st:			if (is_imm8(insn->off))
 		case BPF_STX | BPF_MEM | BPF_B:
 		case BPF_STX | BPF_MEM | BPF_H:
 		case BPF_STX | BPF_MEM | BPF_W:
-		case BPF_STX | BPF_MEM | BPF_DW:
-			emit_stx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn->off);
+		case BPF_STX | BPF_MEM | BPF_DW: {
+			int off = insn->off;
+
+			if (adjust_stack_arg_off)
+				off -= prog_stack_depth;
+			emit_stx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, off);
 			break;
+		}
 
 		case BPF_ST | BPF_PROBE_MEM32 | BPF_B:
 		case BPF_ST | BPF_PROBE_MEM32 | BPF_H:
@@ -2243,6 +2339,8 @@ populate_extable:
 		case BPF_LDX | BPF_PROBE_MEMSX | BPF_H:
 		case BPF_LDX | BPF_PROBE_MEMSX | BPF_W:
 			insn_off = insn->off;
+			if (adjust_stack_arg_off)
+				insn_off -= prog_stack_depth;
 
 			if (BPF_MODE(insn->code) == BPF_PROBE_MEM ||
 			    BPF_MODE(insn->code) == BPF_PROBE_MEMSX) {
@@ -2440,6 +2538,8 @@ populate_extable:
 
 			/* call */
 		case BPF_JMP | BPF_CALL: {
+			int off, base_off, n_stack_args, kfunc_stack_args = 0, stack_args = 0;
+			u16 outgoing_stack_args = stack_arg_depth - incoming_stack_arg_depth;
 			u8 *ip = image + addrs[i - 1];
 
 			func = (u8 *) __bpf_call_base + imm32;
@@ -2449,6 +2549,29 @@ populate_extable:
 			}
 			if (!imm32)
 				return -EINVAL;
+
+			if (src_reg == BPF_PSEUDO_CALL && outgoing_stack_args > 0) {
+				n_stack_args = outgoing_stack_args / 8;
+				base_off = -(prog_stack_depth + incoming_stack_arg_depth);
+				ip += push_stack_args(&prog, base_off, n_stack_args, 1);
+			}
+
+			if (src_reg != BPF_PSEUDO_CALL && insn->off > 0) {
+				kfunc_stack_args = insn->off;
+				stack_args = kfunc_stack_args > 1 ? kfunc_stack_args - 1 : 0;
+				base_off = -(prog_stack_depth + incoming_stack_arg_depth);
+				ip += push_stack_args(&prog, base_off, kfunc_stack_args, 2);
+
+				/* mov r9, [rbp + base_off - 8] */
+				off = base_off - 8;
+				if (is_imm8(off)) {
+					EMIT4(0x4C, 0x8B, 0x4D, off);
+					ip += 4;
+				} else {
+					EMIT3_off32(0x4C, 0x8B, 0x8D, off);
+					ip += 7;
+				}
+			}
 			if (priv_frame_ptr) {
 				push_r9(&prog);
 				ip += 2;
@@ -2458,6 +2581,14 @@ populate_extable:
 				return -EINVAL;
 			if (priv_frame_ptr)
 				pop_r9(&prog);
+			if (stack_args > 0) {
+				/* add rsp, stack_args * 8 */
+				EMIT4(0x48, 0x83, 0xC4, stack_args * 8);
+			}
+			if (src_reg == BPF_PSEUDO_CALL && outgoing_stack_args > 0) {
+				/* add rsp, outgoing_stack_args */
+				EMIT4(0x48, 0x83, 0xC4, outgoing_stack_args);
+			}
 			break;
 		}
 
