@@ -453,12 +453,15 @@ struct fuse_dev *fuse_dev_alloc(void)
 }
 EXPORT_SYMBOL_GPL(fuse_dev_alloc);
 
-static void fuse_dev_install_with_pq(struct fuse_dev *fud, struct fuse_chan *fch,
+/*
+ * Installs @fch into @fud, return true on success.  "Consumes" @pq in either case.
+ */
+static bool fuse_dev_install_with_pq(struct fuse_dev *fud, struct fuse_chan *fch,
 				     struct list_head *pq)
 {
 	struct fuse_chan *old_fch;
 
-	spin_lock(&fch->lock);
+	guard(spinlock)(&fch->lock);
 	/*
 	 * Pairs with:
 	 *  - xchg() in fuse_dev_release()
@@ -473,16 +476,16 @@ static void fuse_dev_install_with_pq(struct fuse_dev *fud, struct fuse_chan *fch
 		 */
 		fch->connected = 0;
 		kfree(pq);
-	} else {
-		if (pq) {
-			WARN_ON(fud->pq.processing);
-			fud->pq.processing = pq;
-		}
-		list_add_tail(&fud->entry, &fch->devices);
-		fuse_conn_get(fch->conn);
-		wake_up_all(&fuse_dev_waitq);
+		return false;
 	}
-	spin_unlock(&fch->lock);
+	if (pq) {
+		WARN_ON(fud->pq.processing);
+		fud->pq.processing = pq;
+	}
+	list_add_tail(&fud->entry, &fch->devices);
+	fuse_conn_get(fch->conn);
+	wake_up_all(&fuse_dev_waitq);
+	return true;
 }
 
 void fuse_dev_install(struct fuse_dev *fud, struct fuse_chan *fch)
@@ -2283,15 +2286,13 @@ static long fuse_dev_ioctl_clone(struct file *file, __u32 __user *argp)
 	if (IS_ERR(fud))
 		return PTR_ERR(fud);
 
-	new_fud = fuse_file_to_fud(file);
-	if (fuse_dev_chan_get(new_fud))
-		return -EINVAL;
-
 	pq = fuse_pqueue_alloc();
 	if (!pq)
 		return -ENOMEM;
 
-	fuse_dev_install_with_pq(new_fud, fud->chan, pq);
+	new_fud = fuse_file_to_fud(file);
+	if (!fuse_dev_install_with_pq(new_fud, fud->chan, pq))
+		return -EINVAL;
 
 	return 0;
 }
