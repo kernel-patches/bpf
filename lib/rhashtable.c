@@ -693,6 +693,47 @@ void rhashtable_walk_enter(struct rhashtable *ht, struct rhashtable_iter *iter)
 EXPORT_SYMBOL_GPL(rhashtable_walk_enter);
 
 /**
+ * rhashtable_walk_enter_from - Initialise a walk starting at a key's bucket
+ * @ht:		Table to walk over
+ * @iter:	Hash table iterator
+ * @key:	Key whose bucket to start from
+ * @params:	Hash table parameters
+ *
+ * Like rhashtable_walk_enter(), but positions the iterator at the bucket
+ * containing @key.  If @key is not present in the main table, the iterator is
+ * positioned at the beginning.
+ *
+ * Same constraints as rhashtable_walk_enter() apply.
+ */
+void rhashtable_walk_enter_from(struct rhashtable *ht,
+				struct rhashtable_iter *iter,
+				const void *key,
+				const struct rhashtable_params params)
+				__must_hold(RCU)
+{
+	struct bucket_table *tbl;
+	struct rhash_head *he;
+
+	rhashtable_walk_enter(ht, iter);
+
+	if (!key)
+		return;
+
+	tbl = iter->walker.tbl;
+	if (!tbl)
+		return;
+
+	he = __rhashtable_lookup_one(ht, tbl, key, params,
+				     RHT_LOOKUP_NORMAL);
+	if (!he)
+		return;
+
+	iter->slot = rht_key_hashfn(ht, tbl, key, params);
+	iter->p = he;
+}
+EXPORT_SYMBOL_GPL(rhashtable_walk_enter_from);
+
+/**
  * rhashtable_walk_exit - Free an iterator
  * @iter:	Hash table Iterator
  *
