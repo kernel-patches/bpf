@@ -88,7 +88,8 @@ TEST_F(scoped_domains, connect_to_parent)
 	ASSERT_EQ(0, pipe2(pipe_parent, O_CLOEXEC));
 	if (variant->domain_both) {
 		create_scoped_domain(_metadata,
-				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				     variant->domain_opts);
 		if (!__test_passed(_metadata))
 			return;
 	}
@@ -103,7 +104,8 @@ TEST_F(scoped_domains, connect_to_parent)
 		EXPECT_EQ(0, close(pipe_parent[1]));
 		if (variant->domain_child)
 			create_scoped_domain(
-				_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				variant->domain_opts);
 
 		stream_client = socket(AF_UNIX, SOCK_STREAM, 0);
 		ASSERT_LE(0, stream_client);
@@ -138,7 +140,8 @@ TEST_F(scoped_domains, connect_to_parent)
 	EXPECT_EQ(0, close(pipe_parent[0]));
 	if (variant->domain_parent)
 		create_scoped_domain(_metadata,
-				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				     variant->domain_opts);
 
 	stream_server = socket(AF_UNIX, SOCK_STREAM, 0);
 	ASSERT_LE(0, stream_server);
@@ -186,7 +189,8 @@ TEST_F(scoped_domains, connect_to_child)
 	ASSERT_EQ(0, pipe2(pipe_parent, O_CLOEXEC));
 	if (variant->domain_both) {
 		create_scoped_domain(_metadata,
-				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				     variant->domain_opts);
 		if (!__test_passed(_metadata))
 			return;
 	}
@@ -200,7 +204,8 @@ TEST_F(scoped_domains, connect_to_child)
 		EXPECT_EQ(0, close(pipe_child[0]));
 		if (variant->domain_child)
 			create_scoped_domain(
-				_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				variant->domain_opts);
 
 		/* Waits for the parent to be in a domain, if any. */
 		ASSERT_EQ(1, read(pipe_parent[0], &buf, 1));
@@ -231,7 +236,8 @@ TEST_F(scoped_domains, connect_to_child)
 
 	if (variant->domain_parent)
 		create_scoped_domain(_metadata,
-				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				     variant->domain_opts);
 
 	/* Signals that the parent is in a domain, if any. */
 	ASSERT_EQ(1, write(pipe_parent[1], ".", 1));
@@ -344,7 +350,8 @@ TEST_F(scoped_audit, connect_to_child)
 	EXPECT_EQ(0, close(pipe_child[1]));
 	EXPECT_EQ(0, close(pipe_parent[0]));
 
-	create_scoped_domain(_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+	create_scoped_domain(_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+			     default_scoped_domain_opts);
 
 	/* Signals that the parent is in a domain, if any. */
 	ASSERT_EQ(1, write(pipe_parent[1], ".", 1));
@@ -429,7 +436,8 @@ TEST_F(scoped_vs_unscoped, unix_scoping)
 		create_fs_domain(_metadata);
 	else if (variant->domain_all == SCOPE_SANDBOX)
 		create_scoped_domain(_metadata,
-				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				     default_scoped_domain_opts);
 
 	child = fork();
 	ASSERT_LE(0, child);
@@ -444,7 +452,8 @@ TEST_F(scoped_vs_unscoped, unix_scoping)
 			create_fs_domain(_metadata);
 		else if (variant->domain_children == SCOPE_SANDBOX)
 			create_scoped_domain(
-				_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				default_scoped_domain_opts);
 
 		grand_child = fork();
 		ASSERT_LE(0, grand_child);
@@ -461,7 +470,8 @@ TEST_F(scoped_vs_unscoped, unix_scoping)
 			else if (variant->domain_grand_child == SCOPE_SANDBOX)
 				create_scoped_domain(
 					_metadata,
-					LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+					LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+					default_scoped_domain_opts);
 
 			stream_client = socket(AF_UNIX, SOCK_STREAM, 0);
 			ASSERT_LE(0, stream_client);
@@ -525,7 +535,8 @@ TEST_F(scoped_vs_unscoped, unix_scoping)
 			create_fs_domain(_metadata);
 		else if (variant->domain_child == SCOPE_SANDBOX)
 			create_scoped_domain(
-				_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				default_scoped_domain_opts);
 
 		stream_server_child = socket(AF_UNIX, SOCK_STREAM, 0);
 		ASSERT_LE(0, stream_server_child);
@@ -552,7 +563,8 @@ TEST_F(scoped_vs_unscoped, unix_scoping)
 		create_fs_domain(_metadata);
 	else if (variant->domain_parent == SCOPE_SANDBOX)
 		create_scoped_domain(_metadata,
-				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				     default_scoped_domain_opts);
 
 	stream_server_parent = socket(AF_UNIX, SOCK_STREAM, 0);
 	ASSERT_LE(0, stream_server_parent);
@@ -656,7 +668,8 @@ TEST_F(outside_socket, socket_with_different_domain)
 
 		/* Client always has a domain. */
 		create_scoped_domain(_metadata,
-				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				     default_scoped_domain_opts);
 
 		if (variant->child_socket) {
 			int data_socket, passed_socket, stream_server;
@@ -713,7 +726,8 @@ TEST_F(outside_socket, socket_with_different_domain)
 	ASSERT_LE(0, server_socket);
 
 	/* Server always has a domain. */
-	create_scoped_domain(_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+	create_scoped_domain(_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+			     default_scoped_domain_opts);
 
 	ASSERT_EQ(0, bind(server_socket, &self->address.unix_addr,
 			  self->address.unix_addr_len));
@@ -820,7 +834,8 @@ TEST_F(various_address_sockets, scoped_pathname_sockets)
 
 		if (variant->domain == SCOPE_SANDBOX)
 			create_scoped_domain(
-				_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				_metadata, LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				default_scoped_domain_opts);
 		else if (variant->domain == OTHER_SANDBOX)
 			create_fs_domain(_metadata);
 
@@ -1027,7 +1042,8 @@ TEST(datagram_sockets)
 
 		/* Scopes the domain. */
 		create_scoped_domain(_metadata,
-				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				     default_scoped_domain_opts);
 
 		/*
 		 * Connected socket sends data to the receiver, but the
@@ -1108,7 +1124,8 @@ TEST(self_connect)
 	if (child == 0) {
 		/* Child's domain is scoped. */
 		create_scoped_domain(_metadata,
-				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+				     LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET,
+				     default_scoped_domain_opts);
 
 		/*
 		 * The child inherits the sockets, and cannot connect or

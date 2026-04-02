@@ -10,7 +10,8 @@
 #include <sys/types.h>
 
 static void create_scoped_domain(struct __test_metadata *const _metadata,
-				 const __u16 scope)
+				 const __u16 scope,
+				 const struct scoped_domain_opts opts)
 {
 	int ruleset_fd;
 	const struct landlock_ruleset_attr ruleset_attr = {
@@ -23,6 +24,6 @@ static void create_scoped_domain(struct __test_metadata *const _metadata,
 	{
 		TH_LOG("Failed to create a ruleset: %s", strerror(errno));
 	}
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, opts);
 	EXPECT_EQ(0, close(ruleset_fd));
 }

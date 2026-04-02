@@ -671,7 +671,8 @@ TEST_F(protocol, bind)
 			  landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 					    &tcp_connect_p1, 0));
 
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd));
 	}
 
@@ -721,7 +722,8 @@ TEST_F(protocol, connect)
 			  landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 					    &tcp_bind_p1, 0));
 
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd));
 	}
 
@@ -755,7 +757,8 @@ TEST_F(protocol, bind_unspec)
 		ASSERT_EQ(0,
 			  landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 					    &tcp_bind, 0));
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd));
 	}
 
@@ -788,7 +791,8 @@ TEST_F(protocol, bind_unspec)
 		ASSERT_LE(0, ruleset_fd);
 
 		/* Denies bind. */
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd));
 	}
 
@@ -874,7 +878,8 @@ TEST_F(protocol, connect_unspec)
 			ASSERT_EQ(0, landlock_add_rule(ruleset_fd,
 						       LANDLOCK_RULE_NET_PORT,
 						       &tcp_connect, 0));
-			enforce_ruleset(_metadata, ruleset_fd);
+			enforce_ruleset(_metadata, ruleset_fd,
+					default_scoped_domain_opts);
 			EXPECT_EQ(0, close(ruleset_fd));
 		}
 
@@ -902,7 +907,8 @@ TEST_F(protocol, connect_unspec)
 			ASSERT_LE(0, ruleset_fd);
 
 			/* Denies connect. */
-			enforce_ruleset(_metadata, ruleset_fd);
+			enforce_ruleset(_metadata, ruleset_fd,
+					default_scoped_domain_opts);
 			EXPECT_EQ(0, close(ruleset_fd));
 		}
 
@@ -1034,7 +1040,8 @@ TEST_F(ipv4, from_unix_to_inet)
 			  landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 					    &tcp_bind_connect_p0, 0));
 
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd));
 	}
 
@@ -1181,7 +1188,8 @@ TEST_F(tcp_layers, ruleset_overlap)
 		ASSERT_EQ(0,
 			  landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 					    &tcp_bind_connect, 0));
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd));
 	}
 
@@ -1197,7 +1205,8 @@ TEST_F(tcp_layers, ruleset_overlap)
 		ASSERT_EQ(0,
 			  landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 					    &tcp_bind, 0));
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd));
 	}
 
@@ -1213,7 +1222,8 @@ TEST_F(tcp_layers, ruleset_overlap)
 		ASSERT_EQ(0,
 			  landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 					    &tcp_bind_connect, 0));
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd));
 	}
 
@@ -1244,7 +1254,8 @@ TEST_F(tcp_layers, ruleset_expand)
 		ASSERT_EQ(0,
 			  landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 					    &bind_srv0, 0));
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd));
 	}
 
@@ -1276,7 +1287,8 @@ TEST_F(tcp_layers, ruleset_expand)
 		ASSERT_EQ(0,
 			  landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 					    &tcp_bind_p1, 0));
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd));
 	}
 
@@ -1298,7 +1310,8 @@ TEST_F(tcp_layers, ruleset_expand)
 		ASSERT_EQ(0,
 			  landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 					    &tcp_bind_p0, 0));
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd));
 	}
 
@@ -1546,7 +1559,7 @@ TEST_F(mini, tcp_port_overflow)
 					&port_overflow4, 0));
 	EXPECT_EQ(EINVAL, errno);
 
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 
 	test_bind_and_connect(_metadata, &srv_denied, true, true);
 	test_bind_and_connect(_metadata, &srv_max_allowed, false, false);
@@ -1611,7 +1624,7 @@ TEST_F(ipv4_tcp, port_endianness)
 				       &connect_big_endian_p0, 0));
 	ASSERT_EQ(0, landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 				       &bind_connect_host_endian_p1, 0));
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 
 	/* No restriction for big endinan CPU. */
 	test_bind_and_connect(_metadata, &self->srv0, false, little_endian);
@@ -1652,7 +1665,7 @@ TEST_F(ipv4_tcp, with_fs)
 	ASSERT_EQ(0, landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 				       &tcp_bind, 0));
 
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	EXPECT_EQ(0, close(ruleset_fd));
 
 	/* Tests file access. */
@@ -1766,7 +1779,8 @@ TEST_F(port_specific, bind_connect_zero)
 			  landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 					    &tcp_bind_connect_zero, 0));
 
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd));
 	}
 
@@ -1843,7 +1857,8 @@ TEST_F(port_specific, bind_connect_1023)
 			  landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
 					    &tcp_bind_connect, 0));
 
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd));
 	}
 
@@ -1982,7 +1997,7 @@ TEST_F(audit, bind)
 	ruleset_fd =
 		landlock_create_ruleset(&ruleset_attr, sizeof(ruleset_attr), 0);
 	ASSERT_LE(0, ruleset_fd);
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	EXPECT_EQ(0, close(ruleset_fd));
 
 	sock_fd = socket_variant(&self->srv0);
@@ -2010,7 +2025,7 @@ TEST_F(audit, connect)
 	ruleset_fd =
 		landlock_create_ruleset(&ruleset_attr, sizeof(ruleset_attr), 0);
 	ASSERT_LE(0, ruleset_fd);
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	EXPECT_EQ(0, close(ruleset_fd));
 
 	sock_fd = socket_variant(&self->srv0);

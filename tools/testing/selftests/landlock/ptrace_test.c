@@ -25,7 +25,8 @@
 #define YAMA_SCOPE_DISABLED 0
 #define YAMA_SCOPE_RELATIONAL 1
 
-static void create_domain(struct __test_metadata *const _metadata)
+static void create_domain(struct __test_metadata *const _metadata,
+			  const struct scoped_domain_opts opts)
 {
 	int ruleset_fd;
 	struct landlock_ruleset_attr ruleset_attr = {
@@ -38,8 +39,7 @@ static void create_domain(struct __test_metadata *const _metadata)
 	{
 		TH_LOG("Failed to create a ruleset: %s", strerror(errno));
 	}
-	EXPECT_EQ(0, prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
-	EXPECT_EQ(0, landlock_restrict_self(ruleset_fd, 0));
+	enforce_ruleset(_metadata, ruleset_fd, opts);
 	EXPECT_EQ(0, close(ruleset_fd));
 }
 
@@ -169,7 +169,7 @@ TEST_F(scoped_domains, trace)
 	ASSERT_EQ(0, pipe2(pipe_child, O_CLOEXEC));
 	ASSERT_EQ(0, pipe2(pipe_parent, O_CLOEXEC));
 	if (variant->domain_both) {
-		create_domain(_metadata);
+		create_domain(_metadata, variant->domain_opts);
 		if (!__test_passed(_metadata))
 			/* Aborts before forking. */
 			return;
@@ -183,7 +183,7 @@ TEST_F(scoped_domains, trace)
 		ASSERT_EQ(0, close(pipe_parent[1]));
 		ASSERT_EQ(0, close(pipe_child[0]));
 		if (variant->domain_child)
-			create_domain(_metadata);
+			create_domain(_metadata, variant->domain_opts);
 
 		/* Waits for the parent to be in a domain, if any. */
 		ASSERT_EQ(1, read(pipe_parent[0], &buf_child, 1));
@@ -238,7 +238,7 @@ TEST_F(scoped_domains, trace)
 	ASSERT_EQ(0, close(pipe_child[1]));
 	ASSERT_EQ(0, close(pipe_parent[0]));
 	if (variant->domain_parent)
-		create_domain(_metadata);
+		create_domain(_metadata, variant->domain_opts);
 
 	/* Signals that the parent is in a domain, if any. */
 	ASSERT_EQ(1, write(pipe_parent[1], ".", 1));
@@ -396,7 +396,7 @@ TEST_F(audit, trace)
 
 	ASSERT_EQ(0, close(pipe_child[1]));
 	ASSERT_EQ(0, close(pipe_parent[0]));
-	create_domain(_metadata);
+	create_domain(_metadata, default_scoped_domain_opts);
 
 	/* Signals that the parent is in a domain. */
 	ASSERT_EQ(1, write(pipe_parent[1], ".", 1));

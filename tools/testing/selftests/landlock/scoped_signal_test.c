@@ -111,7 +111,8 @@ TEST_F(scoping_signals, send_sig_to_parent)
 		ASSERT_EQ(1, read(pipe_parent[0], &buf_child, 1));
 		EXPECT_EQ(0, close(pipe_parent[0]));
 
-		create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL);
+		create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL,
+				     default_scoped_domain_opts);
 
 		/*
 		 * The child process cannot send signal to the parent
@@ -183,7 +184,8 @@ TEST_F(scoped_domains, check_access_signal)
 	can_signal_child = !variant->domain_parent;
 
 	if (variant->domain_both)
-		create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL);
+		create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL,
+				     variant->domain_opts);
 
 	ASSERT_EQ(0, pipe2(pipe_parent, O_CLOEXEC));
 	ASSERT_EQ(0, pipe2(pipe_child, O_CLOEXEC));
@@ -197,7 +199,8 @@ TEST_F(scoped_domains, check_access_signal)
 		EXPECT_EQ(0, close(pipe_parent[1]));
 
 		if (variant->domain_child)
-			create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL);
+			create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL,
+					     variant->domain_opts);
 
 		ASSERT_EQ(1, write(pipe_child[1], ".", 1));
 		EXPECT_EQ(0, close(pipe_child[1]));
@@ -226,7 +229,8 @@ TEST_F(scoped_domains, check_access_signal)
 	EXPECT_EQ(0, close(pipe_child[1]));
 
 	if (variant->domain_parent)
-		create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL);
+		create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL,
+				     variant->domain_opts);
 
 	ASSERT_EQ(1, read(pipe_child[0], &buf_parent, 1));
 	EXPECT_EQ(0, close(pipe_child[0]));
@@ -280,7 +284,8 @@ TEST(signal_scoping_thread_before)
 				    &thread_pipe[0]));
 
 	/* Enforces restriction after creating the thread. */
-	create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL);
+	create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL,
+			     default_scoped_domain_opts);
 
 	EXPECT_EQ(0, pthread_kill(no_sandbox_thread, 0));
 	EXPECT_EQ(1, write(thread_pipe[1], ".", 1));
@@ -302,7 +307,8 @@ TEST(signal_scoping_thread_after)
 	ASSERT_EQ(0, pipe2(thread_pipe, O_CLOEXEC));
 
 	/* Enforces restriction before creating the thread. */
-	create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL);
+	create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL,
+			     default_scoped_domain_opts);
 
 	ASSERT_EQ(0, pthread_create(&scoped_thread, NULL, thread_sync,
 				    &thread_pipe[0]));
@@ -360,7 +366,8 @@ TEST(signal_scoping_thread_setuid)
 				    &arg));
 
 	/* Enforces restriction after creating the thread. */
-	create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL);
+	create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL,
+			     default_scoped_domain_opts);
 
 	EXPECT_NE(arg.new_uid, getuid());
 	EXPECT_EQ(0, setuid(arg.new_uid));
@@ -469,7 +476,8 @@ TEST_F(fown, sigurg_socket)
 	ASSERT_EQ(0, pipe2(pipe_child, O_CLOEXEC));
 
 	if (variant->sandbox_setown == SANDBOX_BEFORE_FORK)
-		create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL);
+		create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL,
+				     default_scoped_domain_opts);
 
 	child = fork();
 	ASSERT_LE(0, child);
@@ -531,7 +539,8 @@ TEST_F(fown, sigurg_socket)
 	ASSERT_LE(0, recv_socket);
 
 	if (variant->sandbox_setown == SANDBOX_BEFORE_SETOWN)
-		create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL);
+		create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL,
+				     default_scoped_domain_opts);
 
 	/*
 	 * Sets the child to receive SIGURG for MSG_OOB.  This uncommon use is
@@ -540,7 +549,8 @@ TEST_F(fown, sigurg_socket)
 	ASSERT_EQ(0, fcntl(recv_socket, F_SETOWN, child));
 
 	if (variant->sandbox_setown == SANDBOX_AFTER_SETOWN)
-		create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL);
+		create_scoped_domain(_metadata, LANDLOCK_SCOPE_SIGNAL,
+				     default_scoped_domain_opts);
 
 	ASSERT_EQ(1, write(pipe_parent[1], ".", 1));
 

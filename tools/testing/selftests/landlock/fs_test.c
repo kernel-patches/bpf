@@ -790,7 +790,18 @@ static void enforce_fs(struct __test_metadata *const _metadata,
 {
 	const int ruleset_fd = create_ruleset(_metadata, access_fs, rules);
 
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
+	EXPECT_EQ(0, close(ruleset_fd));
+}
+
+static void enforce_resolve_unix(struct __test_metadata *const _metadata,
+				 const struct rule rules[],
+				 const struct scoped_domain_opts opts)
+{
+	const int ruleset_fd =
+		create_ruleset(_metadata, LANDLOCK_ACCESS_FS_RESOLVE_UNIX, rules);
+
+	enforce_ruleset(_metadata, ruleset_fd, opts);
 	EXPECT_EQ(0, close(ruleset_fd));
 }
 
@@ -805,14 +816,15 @@ TEST_F_FORK(layout0, proc_nsfs)
 		{},
 	};
 	struct landlock_path_beneath_attr path_beneath;
-	const int ruleset_fd = create_ruleset(
-		_metadata, rules[0].access | LANDLOCK_ACCESS_FS_READ_DIR,
-		rules);
+	const int ruleset_fd =
+		create_ruleset(_metadata,
+			       rules[0].access | LANDLOCK_ACCESS_FS_READ_DIR,
+			       rules);
 
 	ASSERT_LE(0, ruleset_fd);
 	ASSERT_EQ(0, test_open("/proc/self/ns/mnt", O_RDONLY));
 
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 
 	ASSERT_EQ(EACCES, test_open("/", O_RDONLY));
 	ASSERT_EQ(EACCES, test_open("/dev", O_RDONLY));
@@ -862,7 +874,7 @@ TEST_F_FORK(layout0, unpriv)
 	ASSERT_EQ(EPERM, errno);
 
 	/* enforce_ruleset() calls prctl(no_new_privs). */
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	ASSERT_EQ(0, close(ruleset_fd));
 }
 
@@ -1289,7 +1301,7 @@ TEST_F_FORK(layout1, inherit_subset)
 	};
 	const int ruleset_fd = create_ruleset(_metadata, ACCESS_RW, rules);
 
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 
 	ASSERT_EQ(EACCES, test_open(file1_s1d1, O_WRONLY));
 	ASSERT_EQ(EACCES, test_open(dir_s1d1, O_RDONLY | O_DIRECTORY));
@@ -1322,7 +1334,7 @@ TEST_F_FORK(layout1, inherit_subset)
 	 * LANDLOCK_ACCESS_FS_WRITE_FILE must not be allowed because it would
 	 * be a privilege escalation.
 	 */
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 
 	/* Same tests and results as above. */
 	ASSERT_EQ(EACCES, test_open(file1_s1d1, O_WRONLY));
@@ -1343,7 +1355,7 @@ TEST_F_FORK(layout1, inherit_subset)
 	 * directory: dir_s1d1.
 	 */
 	add_path_beneath(_metadata, ruleset_fd, ACCESS_RW, dir_s1d1);
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 
 	/* Same tests and results as above. */
 	ASSERT_EQ(EACCES, test_open(file1_s1d1, O_WRONLY));
@@ -1366,7 +1378,7 @@ TEST_F_FORK(layout1, inherit_subset)
 	 */
 	add_path_beneath(_metadata, ruleset_fd, LANDLOCK_ACCESS_FS_WRITE_FILE,
 			 dir_s1d3);
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	ASSERT_EQ(0, close(ruleset_fd));
 
 	/*
@@ -1404,7 +1416,7 @@ TEST_F_FORK(layout1, inherit_superset)
 	};
 	const int ruleset_fd = create_ruleset(_metadata, ACCESS_RW, rules);
 
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 
 	/* Readdir access is denied for dir_s1d2. */
 	ASSERT_EQ(EACCES, test_open(dir_s1d2, O_RDONLY | O_DIRECTORY));
@@ -1418,7 +1430,7 @@ TEST_F_FORK(layout1, inherit_superset)
 			 LANDLOCK_ACCESS_FS_READ_FILE |
 				 LANDLOCK_ACCESS_FS_READ_DIR,
 			 dir_s1d2);
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	EXPECT_EQ(0, close(ruleset_fd));
 
 	/* Readdir access is still denied for dir_s1d2. */
@@ -1442,7 +1454,8 @@ TEST_F_FORK(layout0, max_layers)
 	const int ruleset_fd = create_ruleset(_metadata, ACCESS_RW, rules);
 
 	for (i = 0; i < 16; i++)
-		enforce_ruleset(_metadata, ruleset_fd);
+		enforce_ruleset(_metadata, ruleset_fd,
+				default_scoped_domain_opts);
 
 	for (i = 0; i < 2; i++) {
 		err = landlock_restrict_self(ruleset_fd, 0);
@@ -1472,12 +1485,12 @@ TEST_F_FORK(layout1, empty_or_same_ruleset)
 	/* Nests a policy which denies read access to all directories. */
 	ruleset_fd =
 		create_ruleset(_metadata, LANDLOCK_ACCESS_FS_READ_DIR, NULL);
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	ASSERT_EQ(EACCES, test_open(file1_s1d1, O_RDONLY));
 	ASSERT_EQ(EACCES, test_open(dir_s1d1, O_RDONLY));
 
 	/* Enforces a second time with the same ruleset. */
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	ASSERT_EQ(0, close(ruleset_fd));
 }
 
@@ -1725,7 +1738,7 @@ TEST_F_FORK(layout1, release_inodes)
 	ASSERT_EQ(0, umount(dir_s3d2));
 	clear_cap(_metadata, CAP_SYS_ADMIN);
 
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	EXPECT_EQ(0, close(ruleset_fd));
 
 	ASSERT_EQ(0, test_open(file1_s1d1, O_RDONLY));
@@ -1766,7 +1779,7 @@ TEST_F_FORK(layout1, covered_rule)
 
 	ASSERT_EQ(0, test_open(dir_s3d2, O_RDONLY));
 
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	ASSERT_EQ(0, close(ruleset_fd));
 
 	/* Checks that access to the new mount point is denied. */
@@ -1828,7 +1841,7 @@ static void test_relative_path(struct __test_metadata *const _metadata,
 	}
 
 	set_cap(_metadata, CAP_SYS_CHROOT);
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 
 	switch (rel) {
 	case REL_OPEN:
@@ -4402,9 +4415,9 @@ static void test_connect_to_parent(struct __test_metadata *const _metadata,
 	char buf[1];
 
 	if (variant->domain_both)
-		enforce_fs(_metadata, LANDLOCK_ACCESS_FS_RESOLVE_UNIX, NULL);
+		enforce_resolve_unix(_metadata, NULL, variant->domain_opts);
 	else if (flags & ENFORCE_ALL)
-		enforce_fs(_metadata, LANDLOCK_ACCESS_FS_RESOLVE_UNIX, rules);
+		enforce_resolve_unix(_metadata, rules, variant->domain_opts);
 
 	unlink(path);
 	ASSERT_EQ(0, pipe2(readiness_pipe, O_CLOEXEC));
@@ -4414,11 +4427,11 @@ static void test_connect_to_parent(struct __test_metadata *const _metadata,
 
 	if (child_pid == 0) {
 		if (variant->domain_child)
-			enforce_fs(_metadata, LANDLOCK_ACCESS_FS_RESOLVE_UNIX,
-				   NULL);
+			enforce_resolve_unix(_metadata, NULL,
+					     variant->domain_opts);
 		else if (flags & ENFORCE_ALL)
-			enforce_fs(_metadata, LANDLOCK_ACCESS_FS_RESOLVE_UNIX,
-				   rules);
+			enforce_resolve_unix(_metadata, rules,
+					     variant->domain_opts);
 
 		/* Wait for server to be available. */
 		EXPECT_EQ(0, close(readiness_pipe[1]));
@@ -4444,9 +4457,9 @@ static void test_connect_to_parent(struct __test_metadata *const _metadata,
 	}
 
 	if (variant->domain_parent)
-		enforce_fs(_metadata, LANDLOCK_ACCESS_FS_RESOLVE_UNIX, NULL);
+		enforce_resolve_unix(_metadata, NULL, variant->domain_opts);
 	else if (flags & ENFORCE_ALL)
-		enforce_fs(_metadata, LANDLOCK_ACCESS_FS_RESOLVE_UNIX, rules);
+		enforce_resolve_unix(_metadata, rules, variant->domain_opts);
 
 	srv_fd = set_up_named_unix_server(_metadata, sock_type, path);
 
@@ -4485,9 +4498,9 @@ static void test_connect_to_child(struct __test_metadata *const _metadata,
 	char buf[1];
 
 	if (variant->domain_both)
-		enforce_fs(_metadata, LANDLOCK_ACCESS_FS_RESOLVE_UNIX, NULL);
+		enforce_resolve_unix(_metadata, NULL, variant->domain_opts);
 	else if (flags & ENFORCE_ALL)
-		enforce_fs(_metadata, LANDLOCK_ACCESS_FS_RESOLVE_UNIX, rules);
+		enforce_resolve_unix(_metadata, rules, variant->domain_opts);
 
 	unlink(path);
 	ASSERT_EQ(0, pipe2(readiness_pipe, O_CLOEXEC));
@@ -4498,11 +4511,11 @@ static void test_connect_to_child(struct __test_metadata *const _metadata,
 
 	if (child_pid == 0) {
 		if (variant->domain_child)
-			enforce_fs(_metadata, LANDLOCK_ACCESS_FS_RESOLVE_UNIX,
-				   NULL);
+			enforce_resolve_unix(_metadata, NULL,
+					     variant->domain_opts);
 		else if (flags & ENFORCE_ALL)
-			enforce_fs(_metadata, LANDLOCK_ACCESS_FS_RESOLVE_UNIX,
-				   rules);
+			enforce_resolve_unix(_metadata, rules,
+					     variant->domain_opts);
 
 		srv_fd = set_up_named_unix_server(_metadata, sock_type, path);
 
@@ -4526,9 +4539,9 @@ static void test_connect_to_child(struct __test_metadata *const _metadata,
 	}
 
 	if (variant->domain_parent)
-		enforce_fs(_metadata, LANDLOCK_ACCESS_FS_RESOLVE_UNIX, NULL);
+		enforce_resolve_unix(_metadata, NULL, variant->domain_opts);
 	else if (flags & ENFORCE_ALL)
-		enforce_fs(_metadata, LANDLOCK_ACCESS_FS_RESOLVE_UNIX, rules);
+		enforce_resolve_unix(_metadata, rules, variant->domain_opts);
 
 	/* Wait for server to be available. */
 	EXPECT_EQ(0, close(readiness_pipe[1]));
@@ -5072,7 +5085,7 @@ TEST_F_FORK(layout1_bind, path_disconnected)
 		create_ruleset(_metadata, ACCESS_RW, layer3_only_s1d2);
 	int bind_s1d3_fd;
 
-	enforce_ruleset(_metadata, ruleset_fd_l1);
+	enforce_ruleset(_metadata, ruleset_fd_l1, default_scoped_domain_opts);
 	EXPECT_EQ(0, close(ruleset_fd_l1));
 
 	bind_s1d3_fd = open(bind_dir_s1d3, O_PATH | O_CLOEXEC);
@@ -5102,7 +5115,7 @@ TEST_F_FORK(layout1_bind, path_disconnected)
 		  test_open_rel(bind_s1d3_fd, "..", O_RDONLY | O_DIRECTORY));
 
 	/* This should still work with a narrower rule. */
-	enforce_ruleset(_metadata, ruleset_fd_l2);
+	enforce_ruleset(_metadata, ruleset_fd_l2, default_scoped_domain_opts);
 	EXPECT_EQ(0, close(ruleset_fd_l2));
 
 	EXPECT_EQ(0, test_open(file1_s4d1, O_RDONLY));
@@ -5114,7 +5127,7 @@ TEST_F_FORK(layout1_bind, path_disconnected)
 	EXPECT_EQ(0, test_open_rel(bind_s1d3_fd, file1_name, O_RDONLY));
 	EXPECT_EQ(EACCES, test_open_rel(bind_s1d3_fd, file2_name, O_RDONLY));
 
-	enforce_ruleset(_metadata, ruleset_fd_l3);
+	enforce_ruleset(_metadata, ruleset_fd_l3, default_scoped_domain_opts);
 	EXPECT_EQ(0, close(ruleset_fd_l3));
 
 	EXPECT_EQ(EACCES, test_open(file1_s4d1, O_RDONLY));
@@ -5176,7 +5189,7 @@ TEST_F_FORK(layout1_bind, path_disconnected_rename)
 	ruleset_fd_l2 = create_ruleset(_metadata, LANDLOCK_ACCESS_FS_READ_FILE,
 				       layer2_only_s1d2);
 
-	enforce_ruleset(_metadata, ruleset_fd_l1);
+	enforce_ruleset(_metadata, ruleset_fd_l1, default_scoped_domain_opts);
 	EXPECT_EQ(0, close(ruleset_fd_l1));
 
 	bind_s1d3_fd = open(bind_dir_s1d3, O_PATH | O_CLOEXEC);
@@ -5201,7 +5214,8 @@ TEST_F_FORK(layout1_bind, path_disconnected_rename)
 	child_pid = fork();
 	ASSERT_LE(0, child_pid);
 	if (child_pid == 0) {
-		enforce_ruleset(_metadata, ruleset_fd_l2);
+		enforce_ruleset(_metadata, ruleset_fd_l2,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd_l2));
 		EXPECT_EQ(0, test_open_rel(bind_s1d3_fd, file1_name, O_RDONLY));
 		EXPECT_EQ(EACCES, test_open(file1_s4d2, O_RDONLY));
@@ -5238,7 +5252,8 @@ TEST_F_FORK(layout1_bind, path_disconnected_rename)
 	child_pid = fork();
 	ASSERT_LE(0, child_pid);
 	if (child_pid == 0) {
-		enforce_ruleset(_metadata, ruleset_fd_l2);
+		enforce_ruleset(_metadata, ruleset_fd_l2,
+				default_scoped_domain_opts);
 		EXPECT_EQ(0, close(ruleset_fd_l2));
 		EXPECT_EQ(0, test_open_rel(bind_s1d3_fd, file1_name, O_RDONLY));
 		EXPECT_EQ(0, test_open(file1_s1d3, O_RDONLY));
@@ -5290,7 +5305,7 @@ TEST_F_FORK(layout1_bind, path_disconnected_rename)
 	}
 
 	/* Checks again that we can access it under l2. */
-	enforce_ruleset(_metadata, ruleset_fd_l2);
+	enforce_ruleset(_metadata, ruleset_fd_l2, default_scoped_domain_opts);
 	EXPECT_EQ(0, close(ruleset_fd_l2));
 	EXPECT_EQ(0, test_open_rel(bind_s1d3_fd, file1_name, O_RDONLY));
 	EXPECT_EQ(0, test_open(file1_s1d3, O_RDONLY));
@@ -5914,7 +5929,7 @@ TEST_F_FORK(layout4_disconnected_leafs, read_rename_exchange)
 	EXPECT_EQ(ENOENT, test_open_rel(s1d41_bind_fd, "..", O_DIRECTORY));
 	EXPECT_EQ(ENOENT, test_open_rel(s1d42_bind_fd, "..", O_DIRECTORY));
 
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	EXPECT_EQ(0, close(ruleset_fd));
 
 	EXPECT_EQ(variant->expected_read_result,
@@ -6430,7 +6445,7 @@ TEST_F_FORK(layout5_disconnected_branch, read_rename_exchange)
 	EXPECT_EQ(0, test_open_rel(s1d3_bind_fd, "..", O_DIRECTORY));
 	EXPECT_EQ(ENOENT, test_open_rel(s1d3_bind_fd, "../..", O_DIRECTORY));
 
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	EXPECT_EQ(0, close(ruleset_fd));
 
 	EXPECT_EQ(variant->expected_read_result,
@@ -7201,7 +7216,7 @@ TEST_F_FORK(layout3_fs, release_inodes)
 	ASSERT_EQ(0, mount_opt(&mnt_tmp, TMP_DIR));
 	clear_cap(_metadata, CAP_SYS_ADMIN);
 
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	ASSERT_EQ(0, close(ruleset_fd));
 
 	/* Checks that access to the new mount point is denied. */

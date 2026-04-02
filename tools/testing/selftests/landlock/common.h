@@ -194,11 +194,27 @@ static int __maybe_unused send_fd(int usock, int fd_tx)
 	return 0;
 }
 
+/*
+ * Scoped domain options
+ */
+struct scoped_domain_opts {
+	bool use_restrict_self_no_new_privs;
+};
+
+static const struct scoped_domain_opts default_scoped_domain_opts = { 0 };
+
 static void __maybe_unused
-enforce_ruleset(struct __test_metadata *const _metadata, const int ruleset_fd)
+enforce_ruleset(struct __test_metadata *const _metadata, const int ruleset_fd,
+		const struct scoped_domain_opts opts)
 {
-	ASSERT_EQ(0, prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
-	ASSERT_EQ(0, landlock_restrict_self(ruleset_fd, 0))
+	/* Skip the explicit prctl() when the syscall flag sets no_new_privs. */
+	if (!opts.use_restrict_self_no_new_privs)
+		ASSERT_EQ(0, prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
+	ASSERT_EQ(0,
+		  landlock_restrict_self(ruleset_fd,
+					 opts.use_restrict_self_no_new_privs ?
+					 LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS :
+					 0))
 	{
 		TH_LOG("Failed to enforce ruleset: %s", strerror(errno));
 	}
@@ -216,7 +232,7 @@ drop_access_rights(struct __test_metadata *const _metadata,
 	{
 		TH_LOG("Failed to create a ruleset: %s", strerror(errno));
 	}
-	enforce_ruleset(_metadata, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd, default_scoped_domain_opts);
 	EXPECT_EQ(0, close(ruleset_fd));
 }
 

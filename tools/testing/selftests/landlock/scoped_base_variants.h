@@ -20,6 +20,7 @@ FIXTURE_VARIANT(scoped_domains)
 	bool domain_both;
 	bool domain_parent;
 	bool domain_child;
+	struct scoped_domain_opts domain_opts;
 };
 
 /*
@@ -54,6 +55,17 @@ FIXTURE_VARIANT_ADD(scoped_domains, child_domain) {
 	.domain_child = true,
 };
 
+/* clang-format off */
+FIXTURE_VARIANT_ADD(scoped_domains, child_domain_restrict_self_no_new_privs) {
+	/* clang-format on */
+	.domain_both = false,
+	.domain_parent = false,
+	.domain_child = true,
+	.domain_opts = {
+		.use_restrict_self_no_new_privs = true,
+	},
+};
+
 /*
  *        Parent domain
  * .------.
@@ -68,6 +80,17 @@ FIXTURE_VARIANT_ADD(scoped_domains, parent_domain) {
 	.domain_both = false,
 	.domain_parent = true,
 	.domain_child = false,
+};
+
+/* clang-format off */
+FIXTURE_VARIANT_ADD(scoped_domains, parent_domain_restrict_self_no_new_privs) {
+	/* clang-format on */
+	.domain_both = false,
+	.domain_parent = true,
+	.domain_child = false,
+	.domain_opts = {
+		.use_restrict_self_no_new_privs = true,
+	},
 };
 
 /*

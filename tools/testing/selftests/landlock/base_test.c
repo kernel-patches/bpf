@@ -244,6 +244,8 @@ TEST(restrict_self_checks_ordering)
 	};
 	const int ruleset_fd =
 		landlock_create_ruleset(&ruleset_attr, sizeof(ruleset_attr), 0);
+	const int last_flag = LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS;
+	const int invalid_flag = last_flag << 1;
 
 	ASSERT_LE(0, ruleset_fd);
 	path_beneath_attr.parent_fd =
@@ -255,7 +257,7 @@ TEST(restrict_self_checks_ordering)
 
 	/* Checks unprivileged enforcement without no_new_privs. */
 	drop_caps(_metadata);
-	ASSERT_EQ(-1, landlock_restrict_self(-1, -1));
+	ASSERT_EQ(-1, landlock_restrict_self(-1, invalid_flag));
 	ASSERT_EQ(EPERM, errno);
 	ASSERT_EQ(-1, landlock_restrict_self(-1, 0));
 	ASSERT_EQ(EPERM, errno);
@@ -265,7 +267,7 @@ TEST(restrict_self_checks_ordering)
 	ASSERT_EQ(0, prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
 
 	/* Checks invalid flags. */
-	ASSERT_EQ(-1, landlock_restrict_self(-1, -1));
+	ASSERT_EQ(-1, landlock_restrict_self(-1, invalid_flag));
 	ASSERT_EQ(EINVAL, errno);
 
 	/* Checks invalid ruleset FD. */
@@ -306,7 +308,7 @@ TEST(restrict_self_fd_logging_flags)
 
 TEST(restrict_self_logging_flags)
 {
-	const __u32 last_flag = LANDLOCK_RESTRICT_SELF_TSYNC;
+	const __u32 last_flag = LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS;
 
 	/* Tests invalid flag combinations. */
 
