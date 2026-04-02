@@ -124,6 +124,7 @@ struct klp_state {
  * @objs:	object entries for kernel objects to be patched
  * @states:	system states that can get modified
  * @replace:	replace all actively used patches
+ * @replaceable:	whether this patch can be replaced or not
  * @list:	list node for global list of actively used patches
  * @kobj:	kobject for sysfs resources
  * @obj_list:	dynamic list of the object entries
@@ -138,6 +139,7 @@ struct klp_patch {
 	struct klp_object *objs;
 	struct klp_state *states;
 	bool replace;
+	bool replaceable;
 
 	/* internal */
 	struct list_head list;

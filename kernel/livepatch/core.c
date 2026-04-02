@@ -351,6 +351,7 @@ int klp_apply_section_relocs(struct module *pmod, Elf_Shdr *sechdrs,
  * /sys/kernel/livepatch/<patch>/transition
  * /sys/kernel/livepatch/<patch>/force
  * /sys/kernel/livepatch/<patch>/replace
+ * /sys/kernel/livepatch/<patch>/replaceable
  * /sys/kernel/livepatch/<patch>/stack_order
  * /sys/kernel/livepatch/<patch>/<object>
  * /sys/kernel/livepatch/<patch>/<object>/patched
@@ -478,17 +479,60 @@ static ssize_t stack_order_show(struct kobject *kobj,
 	return sysfs_emit(buf, "%d\n", stack_order);
 }
 
+static ssize_t replaceable_store(struct kobject *kobj, struct kobj_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct klp_patch *patch;
+	bool replaceable;
+	int ret;
+
+	ret = kstrtobool(buf, &replaceable);
+	if (ret)
+		return ret;
+
+	patch = container_of(kobj, struct klp_patch, kobj);
+
+	mutex_lock(&klp_mutex);
+
+	if (patch->replaceable == replaceable)
+		goto out;
+
+	if (patch == klp_transition_patch) {
+		ret = -EAGAIN;
+		goto out;
+	}
+
+	patch->replaceable = replaceable;
+
+out:
+	mutex_unlock(&klp_mutex);
+
+	if (ret)
+		return ret;
+	return count;
+}
+static ssize_t replaceable_show(struct kobject *kobj,
+			       struct kobj_attribute *attr, char *buf)
+{
+	struct klp_patch *patch;
+
+	patch = container_of(kobj, struct klp_patch, kobj);
+	return sysfs_emit(buf, "%d\n", patch->replaceable);
+}
+
 static struct kobj_attribute enabled_kobj_attr = __ATTR_RW(enabled);
 static struct kobj_attribute transition_kobj_attr = __ATTR_RO(transition);
 static struct kobj_attribute force_kobj_attr = __ATTR_WO(force);
 static struct kobj_attribute replace_kobj_attr = __ATTR_RO(replace);
 static struct kobj_attribute stack_order_kobj_attr = __ATTR_RO(stack_order);
+static struct kobj_attribute replaceable_kobj_attr = __ATTR_RW(replaceable);
 static struct attribute *klp_patch_attrs[] = {
 	&enabled_kobj_attr.attr,
 	&transition_kobj_attr.attr,
 	&force_kobj_attr.attr,
 	&replace_kobj_attr.attr,
 	&stack_order_kobj_attr.attr,
+	&replaceable_kobj_attr.attr,
 	NULL
 };
 ATTRIBUTE_GROUPS(klp_patch);
