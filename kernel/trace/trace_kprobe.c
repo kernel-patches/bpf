@@ -53,17 +53,6 @@ static struct dyn_event_operations trace_kprobe_ops = {
 	.match = trace_kprobe_match,
 };
 
-/*
- * Kprobe event core functions
- */
-struct trace_kprobe {
-	struct dyn_event	devent;
-	struct kretprobe	rp;	/* Use rp.kp for kprobe use */
-	unsigned long __percpu *nhit;
-	const char		*symbol;	/* symbol name */
-	struct trace_probe	tp;
-};
-
 static bool is_trace_kprobe(struct dyn_event *ev)
 {
 	return ev->ops == &trace_kprobe_ops;
@@ -212,33 +201,16 @@ unsigned long trace_kprobe_address(struct trace_kprobe *tk)
 	return addr;
 }
 
-static nokprobe_inline struct trace_kprobe *
-trace_kprobe_primary_from_call(struct trace_event_call *call)
+bool trace_kprobe_on_func_entry(struct trace_kprobe *tp)
 {
-	struct trace_probe *tp;
-
-	tp = trace_probe_primary_from_call(call);
-	if (WARN_ON_ONCE(!tp))
-		return NULL;
-
-	return container_of(tp, struct trace_kprobe, tp);
+	return !kprobe_on_func_entry(tp->rp.kp.addr,
+			tp->rp.kp.addr ? NULL : tp->rp.kp.symbol_name,
+			tp->rp.kp.addr ? 0 : tp->rp.kp.offset);
 }
 
-bool trace_kprobe_on_func_entry(struct trace_event_call *call)
+bool trace_kprobe_error_injectable(struct trace_kprobe *tp)
 {
-	struct trace_kprobe *tk = trace_kprobe_primary_from_call(call);
-
-	return tk ? (kprobe_on_func_entry(tk->rp.kp.addr,
-			tk->rp.kp.addr ? NULL : tk->rp.kp.symbol_name,
-			tk->rp.kp.addr ? 0 : tk->rp.kp.offset) == 0) : false;
-}
-
-bool trace_kprobe_error_injectable(struct trace_event_call *call)
-{
-	struct trace_kprobe *tk = trace_kprobe_primary_from_call(call);
-
-	return tk ? within_error_injection_list(trace_kprobe_address(tk)) :
-	       false;
+	return within_error_injection_list(trace_kprobe_address(tp));
 }
 
 static int register_kprobe_event(struct trace_kprobe *tk);

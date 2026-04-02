@@ -1929,10 +1929,15 @@ int perf_event_attach_bpf_prog(struct perf_event *event,
 	 * Kprobe override only works if they are on the function entry,
 	 * and only if they are on the opt-in list.
 	 */
-	if (prog->kprobe_override &&
-	    (!trace_kprobe_on_func_entry(event->tp_event) ||
-	     !trace_kprobe_error_injectable(event->tp_event)))
-		return -EINVAL;
+	if (prog->kprobe_override) {
+		struct trace_kprobe *tp = trace_kprobe_primary_from_call(event->tp_event);
+
+		if (!tp)
+			return -EINVAL;
+		if (!trace_kprobe_on_func_entry(tp) ||
+		    !trace_kprobe_error_injectable(tp))
+			return -EINVAL;
+	}
 
 	mutex_lock(&bpf_event_mutex);
 

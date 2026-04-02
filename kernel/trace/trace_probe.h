@@ -30,6 +30,7 @@
 
 #include "trace.h"
 #include "trace_output.h"
+#include "trace_dynevent.h"
 
 #define MAX_TRACE_ARGS		128
 #define MAX_ARGSTR_LEN		63
@@ -210,21 +211,6 @@ DECLARE_BASIC_PRINT_TYPE_FUNC(symbol);
 #define ASSIGN_FETCH_TYPE_END {}
 #define MAX_ARRAY_LEN	64
 
-#ifdef CONFIG_KPROBE_EVENTS
-bool trace_kprobe_on_func_entry(struct trace_event_call *call);
-bool trace_kprobe_error_injectable(struct trace_event_call *call);
-#else
-static inline bool trace_kprobe_on_func_entry(struct trace_event_call *call)
-{
-	return false;
-}
-
-static inline bool trace_kprobe_error_injectable(struct trace_event_call *call)
-{
-	return false;
-}
-#endif /* CONFIG_KPROBE_EVENTS */
-
 struct probe_arg {
 	struct fetch_insn	*code;
 	bool			dynamic;/* Dynamic array (string) is used */
@@ -270,6 +256,32 @@ struct event_file_link {
 	struct trace_event_file		*file;
 	struct list_head		list;
 };
+
+/*
+ * Kprobe event core functions
+ */
+struct trace_kprobe {
+	struct dyn_event	devent;
+	struct kretprobe	rp;	/* Use rp.kp for kprobe use */
+	unsigned long __percpu	*nhit;
+	const char		*symbol;	/* symbol name */
+	struct trace_probe	tp;
+};
+
+#ifdef CONFIG_KPROBE_EVENTS
+bool trace_kprobe_on_func_entry(struct trace_kprobe *tp);
+bool trace_kprobe_error_injectable(struct trace_kprobe *tp);
+#else
+static inline bool trace_kprobe_on_func_entry(struct trace_kprobe *tp)
+{
+	return false;
+}
+
+static inline bool trace_kprobe_error_injectable(struct trace_kprobe *tp)
+{
+	return false;
+}
+#endif /* CONFIG_KPROBE_EVENTS */
 
 static inline unsigned int trace_probe_load_flag(struct trace_probe *tp)
 {
@@ -327,6 +339,18 @@ trace_probe_primary_from_call(struct trace_event_call *call)
 	struct trace_probe_event *tpe = trace_probe_event_from_call(call);
 
 	return list_first_entry_or_null(&tpe->probes, struct trace_probe, list);
+}
+
+static nokprobe_inline struct trace_kprobe *
+trace_kprobe_primary_from_call(struct trace_event_call *call)
+{
+	struct trace_probe *tp;
+
+	tp = trace_probe_primary_from_call(call);
+	if (WARN_ON_ONCE(!tp))
+		return NULL;
+
+	return container_of(tp, struct trace_kprobe, tp);
 }
 
 static inline struct list_head *trace_probe_probe_list(struct trace_probe *tp)
