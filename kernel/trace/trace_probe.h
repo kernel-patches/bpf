@@ -271,6 +271,7 @@ struct trace_kprobe {
 #ifdef CONFIG_KPROBE_EVENTS
 bool trace_kprobe_on_func_entry(struct trace_kprobe *tp);
 bool trace_kprobe_error_injectable(struct trace_kprobe *tp);
+bool trace_kprobe_klp_func_overridable(struct trace_kprobe *tp);
 #else
 static inline bool trace_kprobe_on_func_entry(struct trace_kprobe *tp)
 {
@@ -278,6 +279,10 @@ static inline bool trace_kprobe_on_func_entry(struct trace_kprobe *tp)
 }
 
 static inline bool trace_kprobe_error_injectable(struct trace_kprobe *tp)
+{
+	return false;
+}
+static inline bool trace_kprobe_klp_func_overridable(struct trace_kprobe *tp)
 {
 	return false;
 }

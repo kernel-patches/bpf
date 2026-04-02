@@ -1935,7 +1935,8 @@ int perf_event_attach_bpf_prog(struct perf_event *event,
 		if (!tp)
 			return -EINVAL;
 		if (!trace_kprobe_on_func_entry(tp) ||
-		    !trace_kprobe_error_injectable(tp))
+		    (!trace_kprobe_error_injectable(tp) &&
+		     !trace_kprobe_klp_func_overridable(tp)))
 			return -EINVAL;
 	}
 

@@ -1279,6 +1279,20 @@ config HIST_TRIGGERS_DEBUG
 
           If unsure, say N.
 
+config KPROBE_OVERRIDE_KLP_FUNC
+	bool "Allow kprobes to override livepatched functions"
+	depends on KPROBES && LIVEPATCH
+	help
+	  This option allows BPF programs to use kprobes to override functions
+	  that have already been patched by Livepatch (KLP).
+
+	  Enabling this provides a mechanism to dynamically control execution
+	  flow without requiring a reboot or a new livepatch module. It
+	  effectively combines the persistence of livepatching with the
+	  programmability of BPF.
+
+	  If unsure, say N.
+
 source "kernel/trace/rv/Kconfig"
 
 endif # FTRACE

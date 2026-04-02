@@ -213,6 +213,23 @@ bool trace_kprobe_error_injectable(struct trace_kprobe *tp)
 	return within_error_injection_list(trace_kprobe_address(tp));
 }
 
+bool trace_kprobe_klp_func_overridable(struct trace_kprobe *tp)
+{
+	bool overridable = false;
+#ifdef CONFIG_KPROBE_OVERRIDE_KLP_FUNC
+	struct module *mod;
+	unsigned long addr;
+
+	addr = trace_kprobe_address(tp);
+	rcu_read_lock();
+	mod = __module_address(addr);
+	if (mod && mod->klp)
+		overridable = true;
+	rcu_read_unlock();
+#endif
+	return overridable;
+}
+
 static int register_kprobe_event(struct trace_kprobe *tk);
 static int unregister_kprobe_event(struct trace_kprobe *tk);
 
