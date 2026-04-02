@@ -26,6 +26,7 @@
 #define TEST_F_FORK(fixture_name, test_name) TEST_F(fixture_name, test_name)
 
 static const char bin_sandbox_and_launch[] = "./sandbox-and-launch";
+static const char bin_exec_target[] = "./exec-target";
 static const char bin_wait_pipe[] = "./wait-pipe";
 static const char bin_wait_pipe_sandbox[] = "./wait-pipe-sandbox";
 
