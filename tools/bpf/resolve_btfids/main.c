@@ -89,6 +89,7 @@
 #define BTF_FUNC	"func"
 #define BTF_SET		"set"
 #define BTF_SET8	"set8"
+#define BTF_SETSC	"setsc"
 
 #define ADDR_CNT	100
 
@@ -104,7 +105,8 @@ enum btf_id_kind {
 	BTF_ID_KIND_NONE,
 	BTF_ID_KIND_SYM,
 	BTF_ID_KIND_SET,
-	BTF_ID_KIND_SET8
+	BTF_ID_KIND_SET8,
+	BTF_ID_KIND_SETSC,
 };
 
 struct btf_id {
@@ -309,6 +311,77 @@ static int get_id(const char *prefix_end, char *buf, size_t buf_sz)
 	return 0;
 }
 
+static int elf_sym_value_by_name(struct object *obj, const char *sym_name,
+				 GElf_Addr *val)
+{
+	Elf_Scn *scn = NULL;
+	GElf_Shdr sh;
+	int n, i;
+
+	scn = elf_getscn(obj->efile.elf, obj->efile.symbols_shndx);
+	if (!scn || gelf_getshdr(scn, &sh) != &sh)
+		return -1;
+
+	n = sh.sh_size / sh.sh_entsize;
+	for (i = 0; i < n; i++) {
+		GElf_Sym sym;
+		char *name;
+
+		if (!gelf_getsym(obj->efile.symbols, i, &sym))
+			return -1;
+		if (sym.st_shndx == SHN_UNDEF)
+			continue;
+		name = elf_strptr(obj->efile.elf, obj->efile.strtabidx,
+				  sym.st_name);
+		if (name && !strcmp(name, sym_name)) {
+			*val = sym.st_value;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+/*
+ * BTF_ID_KIND_SETSC: begin is __BTF_ID__setsc__<name> (sym.st_value); end is
+ * __BTF_ids_seg_end_<name> from the linker script (btf_ids.lds.h).
+ */
+static int scatter_set_cnt_from_seg(struct object *obj, struct btf_id *id,
+				    GElf_Addr begin)
+{
+	GElf_Addr end;
+	char sym_end[KSYM_NAME_LEN];
+	int cnt;
+
+	if (snprintf(sym_end, sizeof(sym_end), "__BTF_ids_seg_end_%s",
+		     id->name) >= (int)sizeof(sym_end)) {
+		pr_err("FAILED scatter set symbol name overflow: %s\n", id->name);
+		return -1;
+	}
+
+	if (elf_sym_value_by_name(obj, sym_end, &end)) {
+		pr_err("FAILED scatter set %s: missing %s in %s\n",
+		       id->name, sym_end, obj->path);
+		return -1;
+	}
+
+	if (end <= begin || (end - begin) % sizeof(int)) {
+		pr_err("FAILED scatter set %s: bad span (begin %#lx .. end %s %#lx)\n",
+		       id->name, (unsigned long)begin, sym_end, (unsigned long)end);
+		return -1;
+	}
+
+	cnt = (int)((unsigned long)(end - begin) / sizeof(int) - 1);
+	if (cnt < 0) {
+		pr_err("FAILED scatter set %s: negative cnt\n", id->name);
+		return -1;
+	}
+	id->cnt = cnt;
+	pr_debug("scatter set %s cnt %d span %lu\n", id->name, cnt,
+		 (unsigned long)(end - begin));
+
+	return 0;
+}
+
 static struct btf_id *add_set(struct object *obj, char *name, enum btf_id_kind kind)
 {
 	int len = strlen(name);
@@ -326,6 +399,9 @@ static struct btf_id *add_set(struct object *obj, char *name, enum btf_id_kind k
 		break;
 	case BTF_ID_KIND_SET8:
 		prefixlen = sizeof(BTF_SET8 "__") - 1;
+		break;
+	case BTF_ID_KIND_SETSC:
+		prefixlen = sizeof(BTF_SETSC "__") - 1;
 		break;
 	default:
 		pr_err("Unexpected kind %d passed to %s() for symbol %s\n", kind, __func__, name);
@@ -549,6 +625,11 @@ static int symbols_collect(struct object *obj)
 			 */
 			if (id)
 				id->cnt = sym.st_size / sizeof(uint64_t) - 1;
+		/* setsc */
+		} else if (!strncmp(prefix, BTF_SETSC, sizeof(BTF_SETSC) - 1)) {
+			id = add_set(obj, prefix, BTF_ID_KIND_SETSC);
+			if (id && scatter_set_cnt_from_seg(obj, id, sym.st_value))
+				return -1;
 		/* set */
 		} else if (!strncmp(prefix, BTF_SET, sizeof(BTF_SET) - 1)) {
 			id = add_set(obj, prefix, BTF_ID_KIND_SET);
@@ -690,8 +771,9 @@ static int id_patch(struct object *obj, struct btf_id *id)
 	int *ptr = data->d_buf;
 	int i;
 
-	/* For set, set8, id->id may be 0 */
-	if (!id->id && id->kind != BTF_ID_KIND_SET && id->kind != BTF_ID_KIND_SET8) {
+	/* For set, set8, setsc, id->id may be 0 */
+	if (!id->id && id->kind != BTF_ID_KIND_SET &&
+	    id->kind != BTF_ID_KIND_SET8 && id->kind != BTF_ID_KIND_SETSC) {
 		pr_err("WARN: resolve_btfids: unresolved symbol %s\n", id->name);
 		warnings++;
 	}
@@ -766,6 +848,7 @@ static int sets_patch(struct object *obj)
 
 		switch (id->kind) {
 		case BTF_ID_KIND_SET:
+		case BTF_ID_KIND_SETSC:
 			set = data->d_buf + off;
 			cnt = set->cnt;
 			qsort(set->ids, set->cnt, sizeof(set->ids[0]), cmp_id);
