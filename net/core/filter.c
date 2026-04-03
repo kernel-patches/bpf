@@ -12247,15 +12247,31 @@ __bpf_kfunc int bpf_sk_assign_tcp_reqsk(struct __sk_buff *s, struct sock *sk,
 		return -ENETUNREACH;
 
 	switch (skb->protocol) {
-	case htons(ETH_P_IP):
+	case htons(ETH_P_IP): {
+		struct iphdr *iph, _iph;
+
+		iph = skb_header_pointer(skb, skb_network_offset(skb),
+					 sizeof(*iph), &_iph);
+		if (!iph || iph->protocol != IPPROTO_TCP)
+			return -EINVAL;
+
 		ops = &tcp_request_sock_ops;
 		min_mss = 536;
 		break;
+	}
 #if IS_BUILTIN(CONFIG_IPV6)
-	case htons(ETH_P_IPV6):
+	case htons(ETH_P_IPV6): {
+		struct ipv6hdr *ip6h, _ip6h;
+
+		ip6h = skb_header_pointer(skb, skb_network_offset(skb),
+					  sizeof(*ip6h), &_ip6h);
+		if (!ip6h || ip6h->nexthdr != IPPROTO_TCP)
+			return -EINVAL;
+
 		ops = &tcp6_request_sock_ops;
 		min_mss = IPV6_MIN_MTU - 60;
 		break;
+	}
 #endif
 	default:
 		return -EINVAL;
