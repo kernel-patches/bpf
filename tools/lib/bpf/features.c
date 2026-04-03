@@ -424,6 +424,41 @@ static int probe_uprobe_multi_link(int token_fd)
 	return link_fd < 0 && err == -EINVAL;
 }
 
+static int probe_kprobe_multi_link(int token_fd)
+{
+	LIBBPF_OPTS(bpf_prog_load_opts, load_opts,
+		    .expected_attach_type = BPF_TRACE_KPROBE_MULTI,
+		    .token_fd = token_fd,
+		    .prog_flags = token_fd ? BPF_F_TOKEN_FD : 0,
+	);
+	LIBBPF_OPTS(bpf_link_create_opts, link_opts);
+	struct bpf_insn insns[] = {
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	int prog_fd, link_fd, err;
+	const char *sym = "bpf_map_lookup_elem"; /* stable, always present */
+
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_KPROBE, NULL, "GPL",
+				insns, ARRAY_SIZE(insns), &load_opts);
+	if (prog_fd < 0)
+		return -errno;
+
+	/* attaching to a valid symbol should succeed */
+	link_opts.kprobe_multi.syms = &sym;
+	/* MAX_KPROBE_MULTI_CNT is defined as (1U << 20) in kernel/trace/bpf_trace.c,
+	 * so we create one more than the allowed limit to make it fail with E2BIG.
+	 */
+	link_opts.kprobe_multi.cnt = (1U << 20) + 1;
+	link_fd = bpf_link_create(prog_fd, -1, BPF_TRACE_KPROBE_MULTI, &link_opts);
+	err = -errno;
+	if (link_fd >= 0)
+		close(link_fd);
+	close(prog_fd);
+	/* Fails with E2BIG on kernels where kprobe_multi is supported */
+	return link_fd <= 0 && err == -E2BIG;
+}
+
 static int probe_kern_bpf_cookie(int token_fd)
 {
 	struct bpf_insn insns[] = {
@@ -698,6 +733,9 @@ static struct kern_feature_desc {
 	},
 	[FEAT_BTF_LAYOUT] = {
 		"kernel supports BTF layout", probe_kern_btf_layout,
+	},
+	[FEAT_KPROBE_MULTI_LINK] = {
+		"BPF multi-kprobe link support", probe_kprobe_multi_link,
 	},
 };
 
