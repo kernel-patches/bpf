@@ -2,7 +2,6 @@
 
 #define _GNU_SOURCE
 #include "kselftest_harness.h"
-#include <asm-generic/unistd.h>
 #include <linux/prctl.h>
 #include <fcntl.h>
 #include <stdio.h>
