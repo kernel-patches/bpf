@@ -23265,7 +23265,7 @@ patch_insn_buf:
 	return 0;
 }
 
-static u32 *dup_subprog_starts(struct bpf_verifier_env *env)
+static u32 *bpf_dup_subprog_starts(struct bpf_verifier_env *env)
 {
 	u32 *starts = NULL;
 
@@ -23277,13 +23277,13 @@ static u32 *dup_subprog_starts(struct bpf_verifier_env *env)
 	return starts;
 }
 
-static void restore_subprog_starts(struct bpf_verifier_env *env, u32 *orig_starts)
+static void bpf_restore_subprog_starts(struct bpf_verifier_env *env, u32 *orig_starts)
 {
 	for (int i = 0; i < env->subprog_cnt; i++)
 		env->subprog_info[i].start = orig_starts[i];
 }
 
-static struct bpf_insn_aux_data *dup_insn_aux_data(struct bpf_verifier_env *env)
+struct bpf_insn_aux_data *bpf_dup_insn_aux_data(struct bpf_verifier_env *env)
 {
 	size_t size;
 
@@ -23291,8 +23291,8 @@ static struct bpf_insn_aux_data *dup_insn_aux_data(struct bpf_verifier_env *env)
 	return kvmemdup(env->insn_aux_data, size, GFP_KERNEL_ACCOUNT);
 }
 
-static void restore_insn_aux_data(struct bpf_verifier_env *env,
-				  struct bpf_insn_aux_data *orig_insn_aux)
+void bpf_restore_insn_aux_data(struct bpf_verifier_env *env,
+			       struct bpf_insn_aux_data *orig_insn_aux)
 {
 	/* the expanded elements are zero-filled, so no special handling is required */
 	vfree(env->insn_aux_data);
@@ -23435,7 +23435,7 @@ static int __jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->might_sleep = env->subprog_info[i].might_sleep;
 		if (!i)
 			func[i]->aux->exception_boundary = env->seen_exception;
-		func[i] = bpf_int_jit_compile(func[i]);
+		func[i] = bpf_int_jit_compile(env, func[i]);
 		if (!func[i]->jited) {
 			err = -ENOTSUPP;
 			goto out_free;
@@ -23479,7 +23479,7 @@ static int __jit_subprogs(struct bpf_verifier_env *env)
 	}
 	for (i = 0; i < env->subprog_cnt; i++) {
 		old_bpf_func = func[i]->bpf_func;
-		tmp = bpf_int_jit_compile(func[i]);
+		tmp = bpf_int_jit_compile(env, func[i]);
 		if (tmp != func[i] || func[i]->bpf_func != old_bpf_func) {
 			verbose(env, "JIT doesn't support bpf-to-bpf calls\n");
 			err = -ENOTSUPP;
@@ -23579,12 +23579,12 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 
 	prog = orig_prog = env->prog;
 	if (bpf_prog_need_blind(orig_prog)) {
-		orig_insn_aux = dup_insn_aux_data(env);
+		orig_insn_aux = bpf_dup_insn_aux_data(env);
 		if (!orig_insn_aux) {
 			err = -ENOMEM;
 			goto out_cleanup;
 		}
-		orig_subprog_starts = dup_subprog_starts(env);
+		orig_subprog_starts = bpf_dup_subprog_starts(env);
 		if (!orig_subprog_starts) {
 			err = -ENOMEM;
 			goto out_free_aux;
@@ -23629,8 +23629,8 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	return 0;
 
 out_restore:
-	restore_subprog_starts(env, orig_subprog_starts);
-	restore_insn_aux_data(env, orig_insn_aux);
+	bpf_restore_subprog_starts(env, orig_subprog_starts);
+	bpf_restore_insn_aux_data(env, orig_insn_aux);
 	kvfree(orig_subprog_starts);
 out_free_aux:
 	kvfree(orig_insn_aux);
@@ -26817,6 +26817,14 @@ skip_full_check:
 
 	adjust_btf_func(env);
 
+	/* extension progs temporarily inherit the attach_type of their targets
+	   for verification purposes, so set it back to zero before returning
+	 */
+	if (env->prog->type == BPF_PROG_TYPE_EXT)
+		env->prog->expected_attach_type = 0;
+
+	env->prog = __bpf_prog_select_runtime(env, env->prog, &ret);
+
 err_release_maps:
 	if (ret)
 		release_insn_arrays(env);
@@ -26827,12 +26835,6 @@ err_release_maps:
 		release_maps(env);
 	if (!env->prog->aux->used_btfs)
 		release_btfs(env);
-
-	/* extension progs temporarily inherit the attach_type of their targets
-	   for verification purposes, so set it back to zero before returning
-	 */
-	if (env->prog->type == BPF_PROG_TYPE_EXT)
-		env->prog->expected_attach_type = 0;
 
 	*prog = env->prog;
 

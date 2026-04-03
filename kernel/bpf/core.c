@@ -1489,23 +1489,6 @@ void bpf_jit_prog_release_other(struct bpf_prog *fp, struct bpf_prog *fp_other)
 	bpf_prog_clone_free(fp_other);
 }
 
-static void adjust_insn_arrays(struct bpf_prog *prog, u32 off, u32 len)
-{
-#ifdef CONFIG_BPF_SYSCALL
-	struct bpf_map *map;
-	int i;
-
-	if (len <= 1)
-		return;
-
-	for (i = 0; i < prog->aux->used_map_cnt; i++) {
-		map = prog->aux->used_maps[i];
-		if (map->map_type == BPF_MAP_TYPE_INSN_ARRAY)
-			bpf_insn_array_adjust(map, off, len);
-	}
-#endif
-}
-
 /* Now this function is used only to blind the main prog and must be invoked only when
  * bpf_prog_need_blind() returns true.
  */
@@ -1577,12 +1560,6 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bp
 
 		if (env)
 			env->prog = clone;
-		else
-			/* Instructions arrays must be updated using absolute xlated offsets.
-			 * The arrays have already been adjusted by bpf_patch_insn_data() when
-			 * env is not NULL.
-			 */
-			adjust_insn_arrays(clone, i, rewritten);
 
 		/* Walk new program and skip insns we just inserted. */
 		insn = clone->insnsi + i + insn_delta;
@@ -2551,47 +2528,63 @@ static bool bpf_prog_select_interpreter(struct bpf_prog *fp)
 	return select_interpreter;
 }
 
-static struct bpf_prog *bpf_prog_jit_compile(struct bpf_prog *prog)
+static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 #ifdef CONFIG_BPF_JIT
 	bool blinded = false;
 	struct bpf_prog *orig_prog = prog;
+	struct bpf_insn_aux_data *orig_insn_aux;
 
 	if (bpf_prog_need_blind(orig_prog)) {
-		prog = bpf_jit_blind_constants(NULL, orig_prog);
+		if (env) {
+			/* If env is not NULL, we are called from the end of bpf_check(), at this
+			 * point, only insn_aux_data is used after failure, so we only restore it
+			 * here.
+			 */
+			orig_insn_aux = bpf_dup_insn_aux_data(env);
+			if (!orig_insn_aux)
+				return orig_prog;
+		}
+		prog = bpf_jit_blind_constants(env, orig_prog);
 		/* If blinding was requested and we failed during blinding, we must fall
 		 * back to the interpreter.
 		 */
-		if (IS_ERR(prog))
-			return orig_prog;
+		if (IS_ERR(prog)) {
+			prog = orig_prog;
+			if (env)
+				goto out_restore;
+			else
+				return prog;
+		}
 		blinded = true;
 	}
 
-	prog = bpf_int_jit_compile(prog);
+	prog = bpf_int_jit_compile(env, prog);
 	if (blinded) {
 		if (!prog->jited) {
 			bpf_jit_prog_release_other(orig_prog, prog);
 			prog = orig_prog;
+			if (env)
+				goto out_restore;
 		} else {
 			bpf_jit_prog_release_other(prog, orig_prog);
+			if (env)
+				goto out_free;
 		}
 	}
+
+	return prog;
+
+out_restore:
+	bpf_restore_insn_aux_data(env, orig_insn_aux);
+out_free:
+	kvfree(orig_insn_aux);
 #endif
 	return prog;
 }
 
-/**
- *	bpf_prog_select_runtime - select exec runtime for BPF program
- *	@fp: bpf_prog populated with BPF program
- *	@err: pointer to error variable
- *
- * Try to JIT eBPF program, if JIT is not available, use interpreter.
- * The BPF program will be executed via bpf_prog_run() function.
- *
- * Return: the &fp argument along with &err set to 0 for success or
- * a negative errno code on failure
- */
-struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
+struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env, struct bpf_prog *fp,
+					   int *err)
 {
 	/* In case of BPF to BPF calls, verifier did all the prep
 	 * work with regards to JITing, etc.
@@ -2619,7 +2612,7 @@ struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
 		if (*err)
 			return fp;
 
-		fp = bpf_prog_jit_compile(fp);
+		fp = bpf_prog_jit_compile(env, fp);
 		bpf_prog_jit_attempt_done(fp);
 		if (!fp->jited && jit_needed) {
 			*err = -ENOTSUPP;
@@ -2644,6 +2637,22 @@ finalize:
 	*err = bpf_check_tail_call(fp);
 
 	return fp;
+}
+
+/**
+ *	bpf_prog_select_runtime - select exec runtime for BPF program
+ *	@fp: bpf_prog populated with BPF program
+ *	@err: pointer to error variable
+ *
+ * Try to JIT eBPF program, if JIT is not available, use interpreter.
+ * The BPF program will be executed via bpf_prog_run() function.
+ *
+ * Return: the &fp argument along with &err set to 0 for success or
+ * a negative errno code on failure
+ */
+struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
+{
+	return __bpf_prog_select_runtime(NULL, fp, err);
 }
 EXPORT_SYMBOL_GPL(bpf_prog_select_runtime);
 
@@ -3132,7 +3141,7 @@ const struct bpf_func_proto bpf_tail_call_proto = {
  * It is encouraged to implement bpf_int_jit_compile() instead, so that
  * eBPF and implicitly also cBPF can get JITed!
  */
-struct bpf_prog * __weak bpf_int_jit_compile(struct bpf_prog *prog)
+struct bpf_prog * __weak bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 	return prog;
 }
