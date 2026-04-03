@@ -144,6 +144,12 @@ EXPORT_SYMBOL_GPL(cpu_buf_idle_clear);
  */
 DEFINE_STATIC_KEY_FALSE(switch_mm_cond_l1d_flush);
 
+/*
+ * Controls how vmscape is mitigated e.g. via IBPB or BHB-clear
+ * sequence. This defaults to no mitigation.
+ */
+DEFINE_STATIC_CALL_NULL(vmscape_predictor_flush, write_ibpb);
+
 #undef pr_fmt
 #define pr_fmt(fmt)	"mitigations: " fmt
 
@@ -3133,8 +3139,14 @@ static void __init vmscape_update_mitigation(void)
 static void __init vmscape_apply_mitigation(void)
 {
 	if (vmscape_mitigation == VMSCAPE_MITIGATION_IBPB_EXIT_TO_USER)
-		setup_force_cpu_cap(X86_FEATURE_IBPB_EXIT_TO_USER);
+		static_call_update(vmscape_predictor_flush, write_ibpb);
 }
+
+bool vmscape_mitigation_enabled(void)
+{
+	return !!static_call_query(vmscape_predictor_flush);
+}
+EXPORT_SYMBOL_FOR_KVM(vmscape_mitigation_enabled);
 
 #undef pr_fmt
 #define pr_fmt(fmt) fmt

@@ -753,6 +753,7 @@ enum mds_mitigations {
 };
 
 extern bool gds_ucode_mitigated(void);
+extern bool vmscape_mitigation_enabled(void);
 
 /*
  * Make previous memory operations globally visible before
