@@ -137,6 +137,12 @@ error_no_destroy:					\
 	return ret;					\
 }
 
+TEST(test_buddy);
+
+#ifdef BPF_ARENA_ASAN
+TEST(asan_test_buddy);
+#endif
+
 static void
 banner(const char *progpath)
 {
@@ -173,6 +179,12 @@ int main(int argc, char *argv[])
 	}
 
 	libbpf_set_print(libbpf_print_fn);
+
+	run_test_buddy();
+
+#ifdef BPF_ARENA_ASAN
+	run_asan_test_buddy();
+#endif
 
 	return 0;
 }
