@@ -16655,6 +16655,24 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 					bpf_alu_string[opcode >> 4]);
 				return -EACCES;
 			} else {
+				/*
+				 * The compiler sometimes stores the result of
+				 * PTR_TO_ARENA + SCALAR addition to the scalar
+				 * register. Upgrade it to a PTR_TO_ARENA.
+				 */
+				if (src_reg->type == PTR_TO_ARENA && opcode == BPF_ADD) {
+					struct bpf_insn_aux_data *aux = cur_aux(env);
+
+					__mark_reg_unknown(env, dst_reg);
+					dst_reg->type = PTR_TO_ARENA;
+					dst_reg->subreg_def = env->insn_idx + 1;
+
+					if (BPF_CLASS(insn->code) == BPF_ALU64)
+						aux->needs_zext = true;
+
+					return 0;
+				}
+
 				/* scalar += pointer
 				 * This is legal, but we have to reverse our
 				 * src/dest handling in computing the range
