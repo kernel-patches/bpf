@@ -16796,23 +16796,6 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	int err;
 
 	if (opcode == BPF_END || opcode == BPF_NEG) {
-		if (opcode == BPF_NEG) {
-			if (BPF_SRC(insn->code) != BPF_K ||
-			    insn->src_reg != BPF_REG_0 ||
-			    insn->off != 0 || insn->imm != 0) {
-				verbose(env, "BPF_NEG uses reserved fields\n");
-				return -EINVAL;
-			}
-		} else {
-			if (insn->src_reg != BPF_REG_0 || insn->off != 0 ||
-			    (insn->imm != 16 && insn->imm != 32 && insn->imm != 64) ||
-			    (BPF_CLASS(insn->code) == BPF_ALU64 &&
-			     BPF_SRC(insn->code) != BPF_TO_LE)) {
-				verbose(env, "BPF_END uses reserved fields\n");
-				return -EINVAL;
-			}
-		}
-
 		/* check src operand */
 		err = check_reg_arg(env, insn->dst_reg, SRC_OP);
 		if (err)
@@ -21588,11 +21571,60 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 	return 0;
 }
 
+/* Structural pre-check: validate raw encoding of a single BPF instruction.
+ * Returns 0 if valid, -EINVAL if structurally invalid.
+ *
+ * Covers: reserved fields must be zero, opcode/mode/class combos must be
+ * recognized, immediate operand values must be in defined ranges, etc.
+ *
+ * This is purely structural -- semantic checks (register types, memory
+ * bounds, pointer arithmetic) are handled by per-class functions called
+ * from do_check_insn after this passes.
+ */
+static int valid_ins_check(struct bpf_verifier_env *env, struct bpf_insn *insn)
+{
+	u8 class = BPF_CLASS(insn->code);
+	u8 opcode = BPF_OP(insn->code);
+	u8 src = BPF_SRC(insn->code);
+
+	/* ALU: NEG and END have strict structural requirements on encoding fields */
+	if (class == BPF_ALU || class == BPF_ALU64) {
+		if (opcode == BPF_END || opcode == BPF_NEG) {
+			if (opcode == BPF_NEG) {
+				if (src != BPF_K || insn->src_reg != BPF_REG_0 ||
+				    insn->off != 0 || insn->imm != 0) {
+					verbose(env, "BPF_NEG uses reserved fields\n");
+					return -EINVAL;
+				}
+			} else {
+				/* BPF_END: imm must be 16/32/64; src_reg and off must be 0;
+				 * BPF_ALU64 additionally requires src == BPF_TO_LE
+				 */
+				if (insn->src_reg != BPF_REG_0 || insn->off != 0 ||
+				    (insn->imm != 16 && insn->imm != 32 && insn->imm != 64)) {
+					verbose(env, "BPF_END uses reserved fields\n");
+					return -EINVAL;
+				}
+				if (class == BPF_ALU64 && src != BPF_TO_LE) {
+					verbose(env, "BPF_END uses reserved fields\n");
+					return -EINVAL;
+				}
+			}
+		}
+	}
+
+	return 0;
+}
+
 static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 {
 	int err;
 	struct bpf_insn *insn = &env->prog->insnsi[env->insn_idx];
 	u8 class = BPF_CLASS(insn->code);
+
+	err = valid_ins_check(env, insn);
+	if (err)
+		return err;
 
 	if (class == BPF_ALU || class == BPF_ALU64) {
 		err = check_alu_op(env, insn);
