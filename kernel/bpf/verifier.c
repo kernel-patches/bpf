@@ -22497,8 +22497,8 @@ static void adjust_poke_descs(struct bpf_prog *prog, u32 off, u32 len)
 	}
 }
 
-static struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
-					    const struct bpf_insn *patch, u32 len)
+struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
+				     const struct bpf_insn *patch, u32 len)
 {
 	struct bpf_prog *new_prog;
 	struct bpf_insn_aux_data *new_data = NULL;
@@ -23265,7 +23265,41 @@ patch_insn_buf:
 	return 0;
 }
 
-static int jit_subprogs(struct bpf_verifier_env *env)
+static u32 *dup_subprog_starts(struct bpf_verifier_env *env)
+{
+	u32 *starts = NULL;
+
+	starts = kvmalloc_objs(u32, env->subprog_cnt, GFP_KERNEL_ACCOUNT);
+	if (!starts)
+		return NULL;
+	for (int i = 0; i < env->subprog_cnt; i++)
+		starts[i] = env->subprog_info[i].start;
+	return starts;
+}
+
+static void restore_subprog_starts(struct bpf_verifier_env *env, u32 *orig_starts)
+{
+	for (int i = 0; i < env->subprog_cnt; i++)
+		env->subprog_info[i].start = orig_starts[i];
+}
+
+static struct bpf_insn_aux_data *dup_insn_aux_data(struct bpf_verifier_env *env)
+{
+	size_t size;
+
+	size = array_size(sizeof(struct bpf_insn_aux_data), env->prog->len);
+	return kvmemdup(env->insn_aux_data, size, GFP_KERNEL_ACCOUNT);
+}
+
+static void restore_insn_aux_data(struct bpf_verifier_env *env,
+				  struct bpf_insn_aux_data *orig_insn_aux)
+{
+	/* the expanded elements are zero-filled, so no special handling is required */
+	vfree(env->insn_aux_data);
+	env->insn_aux_data = orig_insn_aux;
+}
+
+static int __jit_subprogs(struct bpf_verifier_env *env)
 {
 	struct bpf_prog *prog = env->prog, **func, *tmp;
 	int i, j, subprog_start, subprog_end = 0, len, subprog;
@@ -23273,10 +23307,6 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	struct bpf_insn *insn;
 	void *old_bpf_func;
 	int err, num_exentries;
-	int old_len, subprog_start_adjustment = 0;
-
-	if (env->subprog_cnt <= 1)
-		return 0;
 
 	for (i = 0, insn = prog->insnsi; i < prog->len; i++, insn++) {
 		if (!bpf_pseudo_func(insn) && !bpf_pseudo_call(insn))
@@ -23345,10 +23375,11 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 			goto out_free;
 		func[i]->is_func = 1;
 		func[i]->sleepable = prog->sleepable;
+		func[i]->blinded = prog->blinded;
 		func[i]->aux->func_idx = i;
 		/* Below members will be freed only at prog->aux */
 		func[i]->aux->btf = prog->aux->btf;
-		func[i]->aux->subprog_start = subprog_start + subprog_start_adjustment;
+		func[i]->aux->subprog_start = subprog_start;
 		func[i]->aux->func_info = prog->aux->func_info;
 		func[i]->aux->func_info_cnt = prog->aux->func_info_cnt;
 		func[i]->aux->poke_tab = prog->aux->poke_tab;
@@ -23404,15 +23435,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->might_sleep = env->subprog_info[i].might_sleep;
 		if (!i)
 			func[i]->aux->exception_boundary = env->seen_exception;
-
-		/*
-		 * To properly pass the absolute subprog start to jit
-		 * all instruction adjustments should be accumulated
-		 */
-		old_len = func[i]->len;
 		func[i] = bpf_int_jit_compile(func[i]);
-		subprog_start_adjustment += func[i]->len - old_len;
-
 		if (!func[i]->jited) {
 			err = -ENOTSUPP;
 			goto out_free;
@@ -23538,16 +23561,83 @@ out_free:
 	}
 	kfree(func);
 out_undo_insn:
+	bpf_prog_jit_attempt_done(prog);
+	return err;
+}
+
+static int jit_subprogs(struct bpf_verifier_env *env)
+{
+	int err, i;
+	bool blinded = false;
+	struct bpf_insn *insn;
+	struct bpf_prog *prog, *orig_prog;
+	struct bpf_insn_aux_data *orig_insn_aux;
+	u32 *orig_subprog_starts;
+
+	if (env->subprog_cnt <= 1)
+		return 0;
+
+	prog = orig_prog = env->prog;
+	if (bpf_prog_need_blind(orig_prog)) {
+		orig_insn_aux = dup_insn_aux_data(env);
+		if (!orig_insn_aux) {
+			err = -ENOMEM;
+			goto out_cleanup;
+		}
+		orig_subprog_starts = dup_subprog_starts(env);
+		if (!orig_subprog_starts) {
+			err = -ENOMEM;
+			goto out_free_aux;
+		}
+		prog = bpf_jit_blind_constants(env, NULL);
+		if (IS_ERR(prog)) {
+			err = -ENOMEM;
+			prog = orig_prog;
+			goto out_restore;
+		}
+		blinded = true;
+	}
+
+	err = __jit_subprogs(env);
+	if (blinded) {
+		if (err) {
+			bpf_jit_prog_release_other(orig_prog, prog);
+			/* roll back to the clean original prog */
+			prog = env->prog = orig_prog;
+			goto out_restore;
+		} else {
+			bpf_jit_prog_release_other(prog, orig_prog);
+			kvfree(orig_subprog_starts);
+			kvfree(orig_insn_aux);
+		}
+	} else if (err) {
+		/* We will fall back to interpreter mode when err is not -EFAULT, before
+		 * that, insn->off and insn->imm should be restored to their original values
+		 * since they were modified by __jit_subprogs.
+		 */
+		if (err != -EFAULT) {
+			for (i = 0, insn = prog->insnsi; i < prog->len; i++, insn++) {
+				if (!bpf_pseudo_call(insn))
+					continue;
+				insn->off = 0;
+				insn->imm = env->insn_aux_data[i].call_imm;
+			}
+		}
+		goto out_cleanup;
+	}
+
+	return 0;
+
+out_restore:
+	restore_subprog_starts(env, orig_subprog_starts);
+	restore_insn_aux_data(env, orig_insn_aux);
+	kvfree(orig_subprog_starts);
+out_free_aux:
+	kvfree(orig_insn_aux);
+out_cleanup:
 	/* cleanup main prog to be interpreted */
 	prog->jit_requested = 0;
 	prog->blinding_requested = 0;
-	for (i = 0, insn = prog->insnsi; i < prog->len; i++, insn++) {
-		if (!bpf_pseudo_call(insn))
-			continue;
-		insn->off = 0;
-		insn->imm = env->insn_aux_data[i].call_imm;
-	}
-	bpf_prog_jit_attempt_done(prog);
 	return err;
 }
 

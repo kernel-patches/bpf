@@ -1506,7 +1506,10 @@ static void adjust_insn_arrays(struct bpf_prog *prog, u32 off, u32 len)
 #endif
 }
 
-struct bpf_prog *bpf_jit_blind_constants(struct bpf_prog *prog)
+/* Now this function is used only to blind the main prog and must be invoked only when
+ * bpf_prog_need_blind() returns true.
+ */
+struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 	struct bpf_insn insn_buff[16], aux[2];
 	struct bpf_prog *clone, *tmp;
@@ -1514,12 +1517,16 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_prog *prog)
 	struct bpf_insn *insn;
 	int i, rewritten;
 
-	if (!prog->blinding_requested || prog->blinded)
-		return prog;
+	if (env)
+		prog = env->prog;
 
 	clone = bpf_prog_clone_create(prog, GFP_USER);
 	if (!clone)
 		return ERR_PTR(-ENOMEM);
+
+	/* make sure bpf_patch_insn_data() patches the correct prog */
+	if (env)
+		env->prog = clone;
 
 	insn_cnt = clone->len;
 	insn = clone->insnsi;
@@ -1548,21 +1555,34 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_prog *prog)
 		if (!rewritten)
 			continue;
 
-		tmp = bpf_patch_insn_single(clone, i, insn_buff, rewritten);
-		if (IS_ERR(tmp)) {
+		if (env)
+			tmp = bpf_patch_insn_data(env, i, insn_buff, rewritten);
+		else
+			tmp = bpf_patch_insn_single(clone, i, insn_buff, rewritten);
+
+		if (IS_ERR_OR_NULL(tmp)) {
+			if (env)
+				/* restore the original prog */
+				env->prog = prog;
 			/* Patching may have repointed aux->prog during
 			 * realloc from the original one, so we need to
 			 * fix it up here on error.
 			 */
 			bpf_jit_prog_release_other(prog, clone);
-			return tmp;
+			return IS_ERR(tmp) ? tmp : ERR_PTR(-ENOMEM);
 		}
 
 		clone = tmp;
 		insn_delta = rewritten - 1;
 
-		/* Instructions arrays must be updated using absolute xlated offsets */
-		adjust_insn_arrays(clone, prog->aux->subprog_start + i, rewritten);
+		if (env)
+			env->prog = clone;
+		else
+			/* Instructions arrays must be updated using absolute xlated offsets.
+			 * The arrays have already been adjusted by bpf_patch_insn_data() when
+			 * env is not NULL.
+			 */
+			adjust_insn_arrays(clone, i, rewritten);
 
 		/* Walk new program and skip insns we just inserted. */
 		insn = clone->insnsi + i + insn_delta;
@@ -2531,6 +2551,35 @@ static bool bpf_prog_select_interpreter(struct bpf_prog *fp)
 	return select_interpreter;
 }
 
+static struct bpf_prog *bpf_prog_jit_compile(struct bpf_prog *prog)
+{
+#ifdef CONFIG_BPF_JIT
+	bool blinded = false;
+	struct bpf_prog *orig_prog = prog;
+
+	if (bpf_prog_need_blind(orig_prog)) {
+		prog = bpf_jit_blind_constants(NULL, orig_prog);
+		/* If blinding was requested and we failed during blinding, we must fall
+		 * back to the interpreter.
+		 */
+		if (IS_ERR(prog))
+			return orig_prog;
+		blinded = true;
+	}
+
+	prog = bpf_int_jit_compile(prog);
+	if (blinded) {
+		if (!prog->jited) {
+			bpf_jit_prog_release_other(orig_prog, prog);
+			prog = orig_prog;
+		} else {
+			bpf_jit_prog_release_other(prog, orig_prog);
+		}
+	}
+#endif
+	return prog;
+}
+
 /**
  *	bpf_prog_select_runtime - select exec runtime for BPF program
  *	@fp: bpf_prog populated with BPF program
@@ -2570,7 +2619,7 @@ struct bpf_prog *bpf_prog_select_runtime(struct bpf_prog *fp, int *err)
 		if (*err)
 			return fp;
 
-		fp = bpf_int_jit_compile(fp);
+		fp = bpf_prog_jit_compile(fp);
 		bpf_prog_jit_attempt_done(fp);
 		if (!fp->jited && jit_needed) {
 			*err = -ENOTSUPP;
