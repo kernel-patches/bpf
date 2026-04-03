@@ -22,7 +22,7 @@ int unused(void)
 			CONFIG_PPC64 ? 0 : 1;
 }
 
-SEC("kprobe")
+SEC("kprobe.single")
 int BPF_PROG(kprobe_run)
 {
 	return 0;
