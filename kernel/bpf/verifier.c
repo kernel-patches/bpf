@@ -12801,6 +12801,10 @@ BTF_ID(func, bpf_session_is_return)
 BTF_ID(func, bpf_stream_vprintk)
 BTF_ID(func, bpf_stream_print_stack)
 
+BTF_SET_SUB(bpf_verif_kfunc_rbtree_add)
+BTF_SET_SUB(bpf_verif_kfunc_rbtree_graph_node)
+BTF_SET_SUB(bpf_verif_kfunc_rbtree_api)
+
 static bool is_bpf_obj_new_kfunc(u32 func_id)
 {
 	return func_id == special_kfunc_list[KF_bpf_obj_new] ||
@@ -12837,12 +12841,6 @@ static bool is_bpf_list_push_kfunc(u32 func_id)
 	       func_id == special_kfunc_list[KF_bpf_list_push_front_impl] ||
 	       func_id == special_kfunc_list[KF_bpf_list_push_back] ||
 	       func_id == special_kfunc_list[KF_bpf_list_push_back_impl];
-}
-
-static bool is_bpf_rbtree_add_kfunc(u32 func_id)
-{
-	return func_id == special_kfunc_list[KF_bpf_rbtree_add] ||
-	       func_id == special_kfunc_list[KF_bpf_rbtree_add_impl];
 }
 
 static bool is_task_work_add_kfunc(u32 func_id)
@@ -13249,16 +13247,6 @@ static bool is_bpf_list_api_kfunc(u32 btf_id)
 	       btf_id == special_kfunc_list[KF_bpf_list_back];
 }
 
-static bool is_bpf_rbtree_api_kfunc(u32 btf_id)
-{
-	return is_bpf_rbtree_add_kfunc(btf_id) ||
-	       btf_id == special_kfunc_list[KF_bpf_rbtree_remove] ||
-	       btf_id == special_kfunc_list[KF_bpf_rbtree_first] ||
-	       btf_id == special_kfunc_list[KF_bpf_rbtree_root] ||
-	       btf_id == special_kfunc_list[KF_bpf_rbtree_left] ||
-	       btf_id == special_kfunc_list[KF_bpf_rbtree_right];
-}
-
 static bool is_bpf_iter_num_api_kfunc(u32 btf_id)
 {
 	return btf_id == special_kfunc_list[KF_bpf_iter_num_new] ||
@@ -13269,7 +13257,7 @@ static bool is_bpf_iter_num_api_kfunc(u32 btf_id)
 static bool is_bpf_graph_api_kfunc(u32 btf_id)
 {
 	return is_bpf_list_api_kfunc(btf_id) ||
-	       is_bpf_rbtree_api_kfunc(btf_id) ||
+	       btf_id_set_contains(&bpf_verif_kfunc_rbtree_api, btf_id) ||
 	       is_bpf_refcount_acquire_kfunc(btf_id);
 }
 
@@ -13303,7 +13291,7 @@ static bool kfunc_spin_allowed(u32 btf_id)
 
 static bool is_sync_callback_calling_kfunc(u32 btf_id)
 {
-	return is_bpf_rbtree_add_kfunc(btf_id);
+	return btf_id_set_contains(&bpf_verif_kfunc_rbtree_add, btf_id);
 }
 
 static bool is_async_callback_calling_kfunc(u32 btf_id)
@@ -13331,7 +13319,7 @@ static bool is_callback_calling_kfunc(u32 btf_id)
 
 static bool is_rbtree_lock_required_kfunc(u32 btf_id)
 {
-	return is_bpf_rbtree_api_kfunc(btf_id);
+	return btf_id_set_contains(&bpf_verif_kfunc_rbtree_api, btf_id);
 }
 
 static bool check_kfunc_is_graph_root_api(struct bpf_verifier_env *env,
@@ -13345,7 +13333,7 @@ static bool check_kfunc_is_graph_root_api(struct bpf_verifier_env *env,
 		ret = is_bpf_list_api_kfunc(kfunc_btf_id);
 		break;
 	case BPF_RB_ROOT:
-		ret = is_bpf_rbtree_api_kfunc(kfunc_btf_id);
+		ret = btf_id_set_contains(&bpf_verif_kfunc_rbtree_api, kfunc_btf_id);
 		break;
 	default:
 		verbose(env, "verifier internal error: unexpected graph root argument type %s\n",
@@ -13370,10 +13358,7 @@ static bool check_kfunc_is_graph_node_api(struct bpf_verifier_env *env,
 		ret = is_bpf_list_push_kfunc(kfunc_btf_id);
 		break;
 	case BPF_RB_NODE:
-		ret = (is_bpf_rbtree_add_kfunc(kfunc_btf_id) ||
-		       kfunc_btf_id == special_kfunc_list[KF_bpf_rbtree_remove] ||
-		       kfunc_btf_id == special_kfunc_list[KF_bpf_rbtree_left] ||
-		       kfunc_btf_id == special_kfunc_list[KF_bpf_rbtree_right]);
+		ret = btf_id_set_contains(&bpf_verif_kfunc_rbtree_graph_node, kfunc_btf_id);
 		break;
 	default:
 		verbose(env, "verifier internal error: unexpected graph node argument type %s\n",
@@ -13910,7 +13895,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				return ret;
 			break;
 		case KF_ARG_PTR_TO_RB_NODE:
-			if (is_bpf_rbtree_add_kfunc(meta->func_id)) {
+			if (btf_id_set_contains(&bpf_verif_kfunc_rbtree_add, meta->func_id)) {
 				if (reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
 					verbose(env, "arg#%d expected pointer to allocated object\n", i);
 					return -EINVAL;
@@ -14580,7 +14565,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (err < 0)
 		return err;
 
-	if (is_bpf_rbtree_add_kfunc(meta.func_id)) {
+	if (btf_id_set_contains(&bpf_verif_kfunc_rbtree_add, meta.func_id)) {
 		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
 					 set_rbtree_add_callback_state);
 		if (err) {
@@ -14684,7 +14669,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			return err;
 	}
 
-	if (is_bpf_list_push_kfunc(meta.func_id) || is_bpf_rbtree_add_kfunc(meta.func_id)) {
+	if (is_bpf_list_push_kfunc(meta.func_id) ||
+	    btf_id_set_contains(&bpf_verif_kfunc_rbtree_add, meta.func_id)) {
 		release_ref_obj_id = regs[BPF_REG_2].ref_obj_id;
 		insn_aux->insert_off = regs[BPF_REG_2].var_off.value;
 		insn_aux->kptr_struct_meta = btf_find_struct_meta(meta.arg_btf, meta.arg_btf_id);
@@ -23739,13 +23725,13 @@ static int fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[2] = *insn;
 		*cnt = 3;
 	} else if (is_bpf_list_push_kfunc(desc->func_id) ||
-		   is_bpf_rbtree_add_kfunc(desc->func_id)) {
+		   btf_id_set_contains(&bpf_verif_kfunc_rbtree_add, desc->func_id)) {
 		struct btf_struct_meta *kptr_struct_meta = env->insn_aux_data[insn_idx].kptr_struct_meta;
 		int struct_meta_reg = BPF_REG_3;
 		int node_offset_reg = BPF_REG_4;
 
 		/* rbtree_add has extra 'less' arg, so args-to-fixup are in diff regs */
-		if (is_bpf_rbtree_add_kfunc(desc->func_id)) {
+		if (btf_id_set_contains(&bpf_verif_kfunc_rbtree_add, desc->func_id)) {
 			struct_meta_reg = BPF_REG_4;
 			node_offset_reg = BPF_REG_5;
 		}

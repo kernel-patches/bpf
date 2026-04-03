@@ -16,7 +16,10 @@
 		KEEP(*(.BTF_ids.##sfx))						\
 		__BTF_ids_seg_end_##sfx = .;
 
-#define BTF_IDS_VERIFIER_SUBSEGS
+#define BTF_IDS_VERIFIER_SUBSEGS						\
+	BTF_IDS_SUBSEG(bpf_verif_kfunc_rbtree_add)				\
+	BTF_IDS_SUBSEG(bpf_verif_kfunc_rbtree_graph_node)			\
+	BTF_IDS_SUBSEG(bpf_verif_kfunc_rbtree_api)
 
 #endif /* CONFIG_DEBUG_INFO_BTF */
 

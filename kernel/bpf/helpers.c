@@ -2606,6 +2606,7 @@ __bpf_kfunc struct bpf_rb_node *bpf_rbtree_remove(struct bpf_rb_root *root,
 	WRITE_ONCE(node_internal->owner, NULL);
 	return (struct bpf_rb_node *)n;
 }
+BPF_VERIF_KFUNC_DEF(bpf_rbtree_remove, rbtree_api, rbtree_graph_node)
 
 /* Need to copy rbtree_add_cached's logic here because our 'less' is a BPF
  * program
@@ -2667,6 +2668,7 @@ __bpf_kfunc int bpf_rbtree_add(struct bpf_rb_root *root,
 
 	return __bpf_rbtree_add(root, n, (void *)less, meta ? meta->record : NULL, off);
 }
+BPF_VERIF_KFUNC_DEF(bpf_rbtree_add, rbtree_api, rbtree_add, rbtree_graph_node)
 
 __bpf_kfunc int bpf_rbtree_add_impl(struct bpf_rb_root *root, struct bpf_rb_node *node,
 				    bool (less)(struct bpf_rb_node *a, const struct bpf_rb_node *b),
@@ -2674,6 +2676,7 @@ __bpf_kfunc int bpf_rbtree_add_impl(struct bpf_rb_root *root, struct bpf_rb_node
 {
 	return bpf_rbtree_add(root, node, less, meta__ign, off);
 }
+BPF_VERIF_KFUNC_DEF(bpf_rbtree_add_impl, rbtree_api, rbtree_add, rbtree_graph_node)
 
 __bpf_kfunc struct bpf_rb_node *bpf_rbtree_first(struct bpf_rb_root *root)
 {
@@ -2681,6 +2684,7 @@ __bpf_kfunc struct bpf_rb_node *bpf_rbtree_first(struct bpf_rb_root *root)
 
 	return (struct bpf_rb_node *)rb_first_cached(r);
 }
+BPF_VERIF_KFUNC_DEF(bpf_rbtree_first, rbtree_api)
 
 __bpf_kfunc struct bpf_rb_node *bpf_rbtree_root(struct bpf_rb_root *root)
 {
@@ -2688,6 +2692,7 @@ __bpf_kfunc struct bpf_rb_node *bpf_rbtree_root(struct bpf_rb_root *root)
 
 	return (struct bpf_rb_node *)r->rb_root.rb_node;
 }
+BPF_VERIF_KFUNC_DEF(bpf_rbtree_root, rbtree_api)
 
 __bpf_kfunc struct bpf_rb_node *bpf_rbtree_left(struct bpf_rb_root *root, struct bpf_rb_node *node)
 {
@@ -2698,6 +2703,7 @@ __bpf_kfunc struct bpf_rb_node *bpf_rbtree_left(struct bpf_rb_root *root, struct
 
 	return (struct bpf_rb_node *)node_internal->rb_node.rb_left;
 }
+BPF_VERIF_KFUNC_DEF(bpf_rbtree_left, rbtree_api, rbtree_graph_node)
 
 __bpf_kfunc struct bpf_rb_node *bpf_rbtree_right(struct bpf_rb_root *root, struct bpf_rb_node *node)
 {
@@ -2708,6 +2714,7 @@ __bpf_kfunc struct bpf_rb_node *bpf_rbtree_right(struct bpf_rb_root *root, struc
 
 	return (struct bpf_rb_node *)node_internal->rb_node.rb_right;
 }
+BPF_VERIF_KFUNC_DEF(bpf_rbtree_right, rbtree_api, rbtree_graph_node)
 
 /**
  * bpf_task_acquire - Acquire a reference to a task. A task acquired by this
