@@ -477,4 +477,33 @@ int arena_kfuncs_under_bpf_lock(void *ctx)
 
 	return 0;
 }
+/*
+ * Test that scalar += PTR_TO_ARENA correctly upgrades the
+ * destination register to a PTR_TO_ARENA.
+ */
+SEC("syscall")
+__success __retval(0)
+int scalar_add_arena_ptr(void *ctx)
+{
+#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
+	int __arena *result, *arena_ptr;
+
+	/* Needed for the verifier to link the arena to the subprog. */
+	volatile char __arena *base = arena_base(&arena);
+
+	/* Passing base here to avoid optimizing it out during compilation. */
+	asm volatile (
+		"%[arena_ptr] = 8192;"
+		"%[arena_ptr] = addr_space_cast(%[arena_ptr], 0x0, 0x1);"
+		"%[result] = 12;"
+		"%[result] += %[arena_ptr];"
+		: [result] "=r"(result),
+		  [arena_ptr] "=&r"(arena_ptr)
+		: "r"(base)
+		:
+	);
+#endif
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
