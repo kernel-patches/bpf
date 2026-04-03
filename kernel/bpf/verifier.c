@@ -16823,25 +16823,14 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	} else if (opcode == BPF_MOV) {
 
 		if (BPF_SRC(insn->code) == BPF_X) {
-			if (BPF_CLASS(insn->code) == BPF_ALU) {
-				if ((insn->off != 0 && insn->off != 8 && insn->off != 16) ||
-				    insn->imm) {
-					verbose(env, "BPF_MOV uses reserved fields\n");
-					return -EINVAL;
-				}
-			} else if (insn->off == BPF_ADDR_SPACE_CAST) {
+			/* addr_space_cast structural check stays here (needs arena check) */
+			if (insn->off == BPF_ADDR_SPACE_CAST) {
 				if (insn->imm != 1 && insn->imm != 1u << 16) {
 					verbose(env, "addr_space_cast insn can only convert between address space 1 and 0\n");
 					return -EINVAL;
 				}
 				if (!env->prog->aux->arena) {
 					verbose(env, "addr_space_cast insn can only be used in a program that has an associated arena\n");
-					return -EINVAL;
-				}
-			} else {
-				if ((insn->off != 0 && insn->off != 8 && insn->off != 16 &&
-				     insn->off != 32) || insn->imm) {
-					verbose(env, "BPF_MOV uses reserved fields\n");
 					return -EINVAL;
 				}
 			}
@@ -16851,10 +16840,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			if (err)
 				return err;
 		} else {
-			if (insn->src_reg != BPF_REG_0 || insn->off != 0) {
-				verbose(env, "BPF_MOV uses reserved fields\n");
-				return -EINVAL;
-			}
+			/* reserved field check already done in valid_ins_check */
 		}
 
 		/* check dest operand, mark as required later */
@@ -17909,19 +17895,13 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	int err;
 
 	/* Only conditional jumps are expected to reach here. */
-	if (opcode == BPF_JA || opcode > BPF_JCOND) {
-		verbose(env, "invalid BPF_JMP/JMP32 opcode %x\n", opcode);
-		return -EINVAL;
-	}
 
 	if (opcode == BPF_JCOND) {
 		struct bpf_verifier_state *cur_st = env->cur_state, *queued_st, *prev_st;
 		int idx = *insn_idx;
 
-		if (insn->code != (BPF_JMP | BPF_JCOND) ||
-		    insn->src_reg != BPF_MAY_GOTO ||
-		    insn->dst_reg || insn->imm) {
-			verbose(env, "invalid may_goto imm %d\n", insn->imm);
+		if (insn->src_reg != BPF_MAY_GOTO) {
+			verbose(env, "invalid may_goto src_reg %d\n", insn->src_reg);
 			return -EINVAL;
 		}
 		prev_st = find_prev_entry(env, cur_st->parent, idx);
@@ -21609,6 +21589,54 @@ static int valid_ins_check(struct bpf_verifier_env *env, struct bpf_insn *insn)
 					verbose(env, "BPF_END uses reserved fields\n");
 					return -EINVAL;
 				}
+			}
+		} else if (opcode == BPF_MOV) {
+			if (src == BPF_X) {
+				if (class == BPF_ALU) {
+					/* BPF_MOV imm field must be 0; off must be 0/8/16 */
+					if ((insn->off != 0 && insn->off != 8 && insn->off != 16) ||
+					    insn->imm) {
+						verbose(env, "BPF_MOV uses reserved fields\n");
+						return -EINVAL;
+					}
+				} else if (insn->off != BPF_ADDR_SPACE_CAST) {
+					/* BPF_ALU64 MOV X (non-addr_space_cast):
+					 * imm field must be 0; off must be 0/8/16/32
+					 */
+					if ((insn->off != 0 && insn->off != 8 &&
+					     insn->off != 16 && insn->off != 32) || insn->imm) {
+						verbose(env, "BPF_MOV uses reserved fields\n");
+						return -EINVAL;
+					}
+				}
+				/* addr_space_cast case stays in check_alu_op (needs arena check) */
+			} else {
+				/* BPF_MOV imm: src_reg must be 0, off must be 0 */
+				if (insn->src_reg != BPF_REG_0 || insn->off != 0) {
+					verbose(env, "BPF_MOV uses reserved fields\n");
+					return -EINVAL;
+				}
+			}
+		}
+	} else if (class == BPF_JMP || class == BPF_JMP32) {
+		u8 jmp_opcode = BPF_OP(insn->code);
+
+		/* opcode must be BPF_JA, BPF_JCOND, or within BPF_Jxxx range */
+		if (jmp_opcode == BPF_JA || jmp_opcode == BPF_JCOND)
+			goto done;
+		if (jmp_opcode > BPF_JCOND) {
+			verbose(env, "invalid BPF_JMP/JMP32 opcode %x\n", jmp_opcode);
+			return -EINVAL;
+		}
+done:
+		;
+
+		/* BPF_JCOND: code field must be exactly BPF_JMP | BPF_JCOND */
+		if (jmp_opcode == BPF_JCOND) {
+			if (insn->code != (BPF_JMP | BPF_JCOND) ||
+			    insn->dst_reg || insn->imm) {
+				verbose(env, "invalid may_goto insn layout\n");
+				return -EINVAL;
 			}
 		}
 	}
