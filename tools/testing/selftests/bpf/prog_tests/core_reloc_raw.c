@@ -118,8 +118,102 @@ out:
 	close(btf_fd);
 }
 
+/* Check that verifier rejects BPF program containing CO-RE relocation
+ * with a negative accessor index (e.g. "0:-1").
+ */
+static void test_negative_accessor(void)
+{
+	struct test_btf {
+		struct btf_header hdr;
+		__u32 types[18];
+		char strings[20];
+	} raw_btf = {
+		.hdr = {
+			.magic = BTF_MAGIC,
+			.version = BTF_VERSION,
+			.hdr_len = sizeof(struct btf_header),
+			.type_off = 0,
+			.type_len = sizeof(raw_btf.types),
+			.str_off = offsetof(struct test_btf, strings) -
+				   offsetof(struct test_btf, types),
+			.str_len = sizeof(raw_btf.strings),
+		},
+		.types = {
+			/* [1] int */
+			BTF_TYPE_INT_ENC(1, BTF_INT_SIGNED, 0, 32, 4),
+			/* [2] struct s { int x; } */
+			BTF_STRUCT_ENC(5, 1, 4),
+			BTF_MEMBER_ENC(7, 1, 0),
+			/* [3] int (*)(int a) */
+			BTF_FUNC_PROTO_ENC(1, 1),
+			BTF_FUNC_PROTO_ARG_ENC(13, 1),
+			/* [4] FUNC 'foo' */
+			BTF_FUNC_ENC(9, 3),
+		},
+		/* offsets: 0:NUL 1:"int" 5:"s" 7:"x" 9:"foo" 13:"a" 15:"0:-1" */
+		.strings = "\0int\0s\0x\0foo\0a\0" "0:-1",
+	};
+	__u32 log_level = 1 | 2 | 4;
+	LIBBPF_OPTS(bpf_btf_load_opts, opts,
+		    .log_buf = log,
+		    .log_size = sizeof(log),
+		    .log_level = log_level,
+	);
+	struct bpf_insn insns[] = {
+		BPF_ALU64_IMM(BPF_MOV, BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	struct bpf_func_info funcs[] = {
+		{ .insn_off = 0, .type_id = 4 }
+	};
+	struct bpf_core_relo relos[] = {
+		{
+			.insn_off = 0,
+			.type_id = 2,		/* struct s */
+			.access_str_off = 15,	/* "0:-1" */
+			.kind = BPF_CORE_FIELD_BYTE_OFFSET,
+		}
+	};
+	union bpf_attr attr;
+	int prog_fd = -1;
+	int btf_fd = -1;
+
+	btf_fd = bpf_btf_load(&raw_btf, sizeof(raw_btf), &opts);
+	if (!ASSERT_GE(btf_fd, 0, "btf_load"))
+		return;
+
+	log[0] = 0;
+	memset(&attr, 0, sizeof(attr));
+	attr.prog_btf_fd = btf_fd;
+	attr.prog_type = BPF_TRACE_RAW_TP;
+	attr.license = (__u64)"GPL";
+	attr.insns = (__u64)&insns;
+	attr.insn_cnt = sizeof(insns) / sizeof(*insns);
+	attr.log_buf = (__u64)log;
+	attr.log_size = sizeof(log);
+	attr.log_level = log_level;
+	attr.func_info = (__u64)funcs;
+	attr.func_info_cnt = sizeof(funcs) / sizeof(*funcs);
+	attr.func_info_rec_size = sizeof(*funcs);
+	attr.core_relos = (__u64)relos;
+	attr.core_relo_cnt = sizeof(relos) / sizeof(*relos);
+	attr.core_relo_rec_size = sizeof(*relos);
+	prog_fd = sys_bpf_prog_load(&attr, sizeof(attr), 1);
+	if (prog_fd >= 0) {
+		PRINT_FAIL("sys_bpf_prog_load() expected to fail\n");
+		goto out;
+	}
+	ASSERT_HAS_SUBSTR(log, "failed: -22", "prog_load_log");
+
+out:
+	close(prog_fd);
+	close(btf_fd);
+}
+
 void test_core_reloc_raw(void)
 {
 	if (test__start_subtest("bad_local_id"))
 		test_bad_local_id();
+	if (test__start_subtest("negative_accessor"))
+		test_negative_accessor();
 }
