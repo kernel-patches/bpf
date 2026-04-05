@@ -9259,14 +9259,14 @@ static bool is_kfunc_arg_iter(struct bpf_kfunc_call_arg_meta *meta, int arg_idx,
 }
 
 static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_idx,
-			    struct bpf_kfunc_call_arg_meta *meta)
+			    int argno, struct bpf_kfunc_call_arg_meta *meta)
 {
 	struct bpf_reg_state *reg = reg_state(env, regno);
 	const struct btf_type *t;
 	int spi, err, i, nr_slots, btf_id;
 
 	if (reg->type != PTR_TO_STACK) {
-		verbose(env, "arg#%d expected pointer to an iterator on stack\n", regno - 1);
+		verbose(env, "arg#%d expected pointer to an iterator on stack\n", argno);
 		return -EINVAL;
 	}
 
@@ -9276,9 +9276,9 @@ static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_id
 	 * to any kfunc, if arg has "__iter" suffix, we need to be a bit more
 	 * conservative here.
 	 */
-	btf_id = btf_check_iter_arg(meta->btf, meta->func_proto, regno - 1);
+	btf_id = btf_check_iter_arg(meta->btf, meta->func_proto, argno);
 	if (btf_id < 0) {
-		verbose(env, "expected valid iter pointer as arg #%d\n", regno - 1);
+		verbose(env, "expected valid iter pointer as arg #%d\n", argno);
 		return -EINVAL;
 	}
 	t = btf_type_by_id(meta->btf, btf_id);
@@ -9288,7 +9288,7 @@ static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_id
 		/* bpf_iter_<type>_new() expects pointer to uninit iter state */
 		if (!is_iter_reg_valid_uninit(env, reg, nr_slots)) {
 			verbose(env, "expected uninitialized iter_%s as arg #%d\n",
-				iter_type_str(meta->btf, btf_id), regno - 1);
+				iter_type_str(meta->btf, btf_id), argno);
 			return -EINVAL;
 		}
 
@@ -9312,7 +9312,7 @@ static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_id
 			break;
 		case -EINVAL:
 			verbose(env, "expected an initialized iter_%s as arg #%d\n",
-				iter_type_str(meta->btf, btf_id), regno - 1);
+				iter_type_str(meta->btf, btf_id), argno);
 			return err;
 		case -EPROTO:
 			verbose(env, "expected an RCU CS when using %s\n", meta->func_name);
@@ -14063,7 +14063,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 					return -EINVAL;
 				}
 			}
-			ret = process_iter_arg(env, regno, insn_idx, meta);
+			ret = process_iter_arg(env, regno, insn_idx, i, meta);
 			if (ret < 0)
 				return ret;
 			break;
