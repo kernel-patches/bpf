@@ -1477,6 +1477,19 @@ static int copy_stack_state(struct bpf_func_state *dst, const struct bpf_func_st
 		return -ENOMEM;
 
 	dst->allocated_stack = src->allocated_stack;
+
+	/* copy stack_arg_slots state */
+	n = src->stack_arg_depth / BPF_REG_SIZE;
+	if (n) {
+		dst->stack_arg_slots = copy_array(dst->stack_arg_slots, src->stack_arg_slots, n,
+						  sizeof(struct bpf_stack_arg_state),
+						  GFP_KERNEL_ACCOUNT);
+		if (!dst->stack_arg_slots)
+			return -ENOMEM;
+
+		dst->stack_arg_depth = src->stack_arg_depth;
+		dst->incoming_stack_arg_depth = src->incoming_stack_arg_depth;
+	}
 	return 0;
 }
 
@@ -1515,6 +1528,25 @@ static int grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state 
 	if (env->subprog_info[state->subprogno].stack_depth < size)
 		env->subprog_info[state->subprogno].stack_depth = size;
 
+	return 0;
+}
+
+static int grow_stack_arg_slots(struct bpf_verifier_env *env,
+				struct bpf_func_state *state, int size)
+{
+	size_t old_n = state->stack_arg_depth / BPF_REG_SIZE, n;
+
+	size = round_up(size, BPF_REG_SIZE);
+	n = size / BPF_REG_SIZE;
+	if (old_n >= n)
+		return 0;
+
+	state->stack_arg_slots = realloc_array(state->stack_arg_slots, old_n, n,
+					       sizeof(struct bpf_stack_arg_state));
+	if (!state->stack_arg_slots)
+		return -ENOMEM;
+
+	state->stack_arg_depth = size;
 	return 0;
 }
 
@@ -1688,6 +1720,7 @@ static void free_func_state(struct bpf_func_state *state)
 {
 	if (!state)
 		return;
+	kfree(state->stack_arg_slots);
 	kfree(state->stack);
 	kfree(state);
 }
@@ -5934,6 +5967,107 @@ static int check_stack_write(struct bpf_verifier_env *env,
 	return err;
 }
 
+/* Validate that a stack arg access is 8-byte sized and aligned. */
+static int check_stack_arg_access(struct bpf_verifier_env *env,
+				  struct bpf_insn *insn, const char *op)
+{
+	int size = bpf_size_to_bytes(BPF_SIZE(insn->code));
+
+	if (size != BPF_REG_SIZE) {
+		verbose(env, "stack arg %s must be %d bytes, got %d\n",
+			op, BPF_REG_SIZE, size);
+		return -EINVAL;
+	}
+	if (insn->off % BPF_REG_SIZE) {
+		verbose(env, "stack arg %s offset %d not aligned to %d\n",
+			op, insn->off, BPF_REG_SIZE);
+		return -EINVAL;
+	}
+	return 0;
+}
+
+/* Check that a stack arg slot has been properly initialized. */
+static bool is_stack_arg_slot_initialized(struct bpf_func_state *state, int spi)
+{
+	u8 type;
+
+	if (spi >= (int)(state->stack_arg_depth / BPF_REG_SIZE))
+		return false;
+	type = state->stack_arg_slots[spi].slot_type[BPF_REG_SIZE - 1];
+	return type == STACK_SPILL || type == STACK_MISC;
+}
+
+/*
+ * Write a value to the stack arg area.
+ * off is the negative offset from the stack arg frame pointer.
+ * Callers ensures off is 8-byte aligned and size is BPF_REG_SIZE.
+ */
+static int check_stack_arg_write(struct bpf_verifier_env *env, struct bpf_func_state *state,
+				 int off, int value_regno)
+{
+	int spi = (-off - 1) / BPF_REG_SIZE;
+	struct bpf_subprog_info *subprog;
+	struct bpf_func_state *cur;
+	struct bpf_reg_state *reg;
+	int i, err;
+	u8 type;
+
+	err = grow_stack_arg_slots(env, state, -off);
+	if (err)
+		return err;
+
+	/* Ensure the JIT allocates space for the stack arg area. */
+	subprog = &env->subprog_info[state->subprogno];
+	if (-off > subprog->outgoing_stack_arg_depth)
+		subprog->outgoing_stack_arg_depth = -off;
+
+	cur = env->cur_state->frame[env->cur_state->curframe];
+	if (value_regno >= 0) {
+		reg = &cur->regs[value_regno];
+		state->stack_arg_slots[spi].spilled_ptr = *reg;
+		type = is_spillable_regtype(reg->type) ? STACK_SPILL : STACK_MISC;
+		for (i = 0; i < BPF_REG_SIZE; i++)
+			state->stack_arg_slots[spi].slot_type[i] = type;
+	} else {
+		/* BPF_ST: store immediate, treat as scalar */
+		reg = &state->stack_arg_slots[spi].spilled_ptr;
+		reg->type = SCALAR_VALUE;
+		__mark_reg_known(reg, (u32)env->prog->insnsi[env->insn_idx].imm);
+		for (i = 0; i < BPF_REG_SIZE; i++)
+			state->stack_arg_slots[spi].slot_type[i] = STACK_MISC;
+	}
+	return 0;
+}
+
+/*
+ * Read a value from the stack arg area.
+ * off is the negative offset from the stack arg frame pointer.
+ * Callers ensures off is 8-byte aligned and size is BPF_REG_SIZE.
+ */
+static int check_stack_arg_read(struct bpf_verifier_env *env, struct bpf_func_state *state,
+				int off, int dst_regno)
+{
+	int spi = (-off - 1) / BPF_REG_SIZE;
+	struct bpf_func_state *cur;
+	u8 *stype;
+
+	if (-off > state->stack_arg_depth) {
+		verbose(env, "invalid read from stack arg off %d depth %d\n",
+			off, state->stack_arg_depth);
+		return -EACCES;
+	}
+
+	stype = state->stack_arg_slots[spi].slot_type;
+	cur = env->cur_state->frame[env->cur_state->curframe];
+
+	if (stype[BPF_REG_SIZE - 1] == STACK_SPILL)
+		copy_register_state(&cur->regs[dst_regno],
+				    &state->stack_arg_slots[spi].spilled_ptr);
+	else
+		mark_reg_unknown(env, cur->regs, dst_regno);
+	return 0;
+}
+
 static int check_map_access_type(struct bpf_verifier_env *env, u32 regno,
 				 int off, int size, enum bpf_access_type type)
 {
@@ -8109,9 +8243,22 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			  bool strict_alignment_once, bool is_ldsx,
 			  bool allow_trust_mismatch, const char *ctx)
 {
+	struct bpf_verifier_state *vstate = env->cur_state;
+	struct bpf_func_state *state = vstate->frame[vstate->curframe];
 	struct bpf_reg_state *regs = cur_regs(env);
 	enum bpf_reg_type src_reg_type;
 	int err;
+
+	/* Handle stack arg access */
+	if (insn->src_reg == BPF_REG_STACK_ARG_BASE) {
+		err = check_reg_arg(env, insn->dst_reg, DST_OP_NO_MARK);
+		if (err)
+			return err;
+		err = check_stack_arg_access(env, insn, "read");
+		if (err)
+			return err;
+		return check_stack_arg_read(env, state, insn->off, insn->dst_reg);
+	}
 
 	/* check src operand */
 	err = check_reg_arg(env, insn->src_reg, SRC_OP);
@@ -8141,9 +8288,22 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 static int check_store_reg(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			   bool strict_alignment_once)
 {
+	struct bpf_verifier_state *vstate = env->cur_state;
+	struct bpf_func_state *state = vstate->frame[vstate->curframe];
 	struct bpf_reg_state *regs = cur_regs(env);
 	enum bpf_reg_type dst_reg_type;
 	int err;
+
+	/* Handle stack arg write */
+	if (insn->dst_reg == BPF_REG_STACK_ARG_BASE) {
+		err = check_reg_arg(env, insn->src_reg, SRC_OP);
+		if (err)
+			return err;
+		err = check_stack_arg_access(env, insn, "write");
+		if (err)
+			return err;
+		return check_stack_arg_write(env, state, insn->off, insn->src_reg);
+	}
 
 	/* check src1 operand */
 	err = check_reg_arg(env, insn->src_reg, SRC_OP);
@@ -11027,8 +11187,10 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			   int *insn_idx)
 {
 	struct bpf_verifier_state *state = env->cur_state;
+	struct bpf_subprog_info *caller_info;
 	struct bpf_func_state *caller;
 	int err, subprog, target_insn;
+	u16 callee_incoming;
 
 	target_insn = *insn_idx + insn->imm + 1;
 	subprog = bpf_find_subprog(env, target_insn);
@@ -11079,6 +11241,15 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		/* continue with next insn after call */
 		return 0;
 	}
+
+	/*
+	 * Track caller's outgoing stack arg depth (max across all callees).
+	 * This is needed so the JIT knows how much stack arg space to allocate.
+	 */
+	caller_info = &env->subprog_info[caller->subprogno];
+	callee_incoming = env->subprog_info[subprog].incoming_stack_arg_depth;
+	if (callee_incoming > caller_info->outgoing_stack_arg_depth)
+		caller_info->outgoing_stack_arg_depth = callee_incoming;
 
 	/* for regular function entry setup new frame and continue
 	 * from that frame.
@@ -11135,13 +11306,41 @@ static int set_callee_state(struct bpf_verifier_env *env,
 			    struct bpf_func_state *caller,
 			    struct bpf_func_state *callee, int insn_idx)
 {
-	int i;
+	struct bpf_subprog_info *callee_info;
+	int i, err;
 
 	/* copy r1 - r5 args that callee can access.  The copy includes parent
 	 * pointers, which connects us up to the liveness chain
 	 */
 	for (i = BPF_REG_1; i <= BPF_REG_5; i++)
 		callee->regs[i] = caller->regs[i];
+
+	/*
+	 * Transfer stack args from caller's outgoing area to callee's incoming area.
+	 * Caller wrote outgoing args at offsets '-(incoming + 8)', '-(incoming + 16)', ...
+	 * These outgoing args will go to callee's incoming area.
+	 */
+	callee_info = &env->subprog_info[callee->subprogno];
+	if (callee_info->incoming_stack_arg_depth) {
+		int caller_incoming_slots = caller->incoming_stack_arg_depth / BPF_REG_SIZE;
+		int callee_incoming_slots = callee_info->incoming_stack_arg_depth / BPF_REG_SIZE;
+
+		callee->incoming_stack_arg_depth = callee_info->incoming_stack_arg_depth;
+		err = grow_stack_arg_slots(env, callee, callee_info->incoming_stack_arg_depth);
+		if (err)
+			return err;
+
+		for (i = 0; i < callee_incoming_slots; i++) {
+			int caller_spi = i + caller_incoming_slots;
+
+			if (!is_stack_arg_slot_initialized(caller, caller_spi)) {
+				verbose(env, "stack arg#%d not properly initialized\n",
+					i + MAX_BPF_FUNC_REG_ARGS);
+				return -EINVAL;
+			}
+			callee->stack_arg_slots[i] = caller->stack_arg_slots[caller_spi];
+		}
+	}
 	return 0;
 }
 
@@ -20535,6 +20734,56 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 	return true;
 }
 
+/*
+ * Compare stack arg slots between old and current states.
+ * Only incoming stack args need comparison -— outgoing slots are transient
+ * (written before each call, consumed at the call site) so they don't carry
+ * meaningful state across pruning points.
+ */
+static bool stack_arg_safe(struct bpf_verifier_env *env, struct bpf_func_state *old,
+			   struct bpf_func_state *cur, struct bpf_idmap *idmap,
+			   enum exact_level exact)
+{
+	int i, spi;
+
+	if (old->incoming_stack_arg_depth != cur->incoming_stack_arg_depth)
+		return false;
+
+	for (i = 0; i < old->incoming_stack_arg_depth; i++) {
+		spi = i / BPF_REG_SIZE;
+
+		if (exact == EXACT &&
+		    old->stack_arg_slots[spi].slot_type[i % BPF_REG_SIZE] !=
+		    cur->stack_arg_slots[spi].slot_type[i % BPF_REG_SIZE])
+			return false;
+
+		if (old->stack_arg_slots[spi].slot_type[i % BPF_REG_SIZE] == STACK_INVALID)
+			continue;
+
+		if (old->stack_arg_slots[spi].slot_type[i % BPF_REG_SIZE] !=
+		    cur->stack_arg_slots[spi].slot_type[i % BPF_REG_SIZE])
+			return false;
+
+		if (i % BPF_REG_SIZE != BPF_REG_SIZE - 1)
+			continue;
+
+		switch (old->stack_arg_slots[spi].slot_type[BPF_REG_SIZE - 1]) {
+		case STACK_SPILL:
+			if (!regsafe(env, &old->stack_arg_slots[spi].spilled_ptr,
+				     &cur->stack_arg_slots[spi].spilled_ptr, idmap, exact))
+				return false;
+			break;
+		case STACK_MISC:
+		case STACK_ZERO:
+		case STACK_INVALID:
+			continue;
+		default:
+			return false;
+		}
+	}
+	return true;
+}
+
 static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *cur,
 		    struct bpf_idmap *idmap)
 {
@@ -20624,6 +20873,9 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 			return false;
 
 	if (!stacksafe(env, old, cur, &env->idmap_scratch, exact))
+		return false;
+
+	if (!stack_arg_safe(env, old, cur, &env->idmap_scratch, exact))
 		return false;
 
 	return true;
@@ -21534,23 +21786,37 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 			verbose(env, "BPF_ST uses reserved fields\n");
 			return -EINVAL;
 		}
-		/* check src operand */
-		err = check_reg_arg(env, insn->dst_reg, SRC_OP);
-		if (err)
-			return err;
 
-		dst_reg_type = cur_regs(env)[insn->dst_reg].type;
+		/* Handle stack arg write (store immediate) */
+		if (insn->dst_reg == BPF_REG_STACK_ARG_BASE) {
+			struct bpf_verifier_state *vstate = env->cur_state;
+			struct bpf_func_state *state = vstate->frame[vstate->curframe];
 
-		/* check that memory (dst_reg + off) is writeable */
-		err = check_mem_access(env, env->insn_idx, insn->dst_reg,
-				       insn->off, BPF_SIZE(insn->code),
-				       BPF_WRITE, -1, false, false);
-		if (err)
-			return err;
+			err = check_stack_arg_access(env, insn, "write");
+			if (err)
+				return err;
+			err = check_stack_arg_write(env, state, insn->off, -1);
+			if (err)
+				return err;
+		} else {
+			/* check src operand */
+			err = check_reg_arg(env, insn->dst_reg, SRC_OP);
+			if (err)
+				return err;
 
-		err = save_aux_ptr_type(env, dst_reg_type, false);
-		if (err)
-			return err;
+			dst_reg_type = cur_regs(env)[insn->dst_reg].type;
+
+			/* check that memory (dst_reg + off) is writeable */
+			err = check_mem_access(env, env->insn_idx, insn->dst_reg,
+					       insn->off, BPF_SIZE(insn->code),
+					       BPF_WRITE, -1, false, false);
+			if (err)
+				return err;
+
+			err = save_aux_ptr_type(env, dst_reg_type, false);
+			if (err)
+				return err;
+		}
 	} else if (class == BPF_JMP || class == BPF_JMP32) {
 		u8 opcode = BPF_OP(insn->code);
 
@@ -22246,11 +22512,11 @@ static int resolve_pseudo_ldimm64(struct bpf_verifier_env *env)
 		return err;
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
-		if (insn->dst_reg >= MAX_BPF_REG) {
+		if (insn->dst_reg >= MAX_BPF_REG && insn->dst_reg != BPF_REG_STACK_ARG_BASE) {
 			verbose(env, "R%d is invalid\n", insn->dst_reg);
 			return -EINVAL;
 		}
-		if (insn->src_reg >= MAX_BPF_REG) {
+		if (insn->src_reg >= MAX_BPF_REG && insn->src_reg != BPF_REG_STACK_ARG_BASE) {
 			verbose(env, "R%d is invalid\n", insn->src_reg);
 			return -EINVAL;
 		}
@@ -23275,8 +23541,14 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	int err, num_exentries;
 	int old_len, subprog_start_adjustment = 0;
 
-	if (env->subprog_cnt <= 1)
+	if (env->subprog_cnt <= 1) {
+		/*
+		 * Even without subprogs, kfunc calls with >5 args need stack arg space
+		 * allocated by the root program.
+		 */
+		prog->aux->stack_arg_depth = env->subprog_info[0].outgoing_stack_arg_depth;
 		return 0;
+	}
 
 	for (i = 0, insn = prog->insnsi; i < prog->len; i++, insn++) {
 		if (!bpf_pseudo_func(insn) && !bpf_pseudo_call(insn))
@@ -23366,6 +23638,9 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 
 		func[i]->aux->name[0] = 'F';
 		func[i]->aux->stack_depth = env->subprog_info[i].stack_depth;
+		func[i]->aux->incoming_stack_arg_depth = env->subprog_info[i].incoming_stack_arg_depth;
+		func[i]->aux->stack_arg_depth = env->subprog_info[i].incoming_stack_arg_depth +
+						env->subprog_info[i].outgoing_stack_arg_depth;
 		if (env->subprog_info[i].priv_stack_mode == PRIV_STACK_ADAPTIVE)
 			func[i]->aux->jits_use_priv_stack = true;
 
