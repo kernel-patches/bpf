@@ -146,13 +146,13 @@ struct landlock_ruleset {
 	struct landlock_hierarchy *hierarchy;
 	union {
 		/**
-		 * @work_free: Enables to free a ruleset within a lockless
-		 * section.  This is only used by
+		 * @work_free: Enables to free a ruleset after an RCU grace
+		 * period from a sleepable context.  This is only used by
 		 * landlock_put_ruleset_deferred() when @usage reaches zero.
 		 * The fields @lock, @usage, @num_rules, @num_layers and
 		 * @access_masks are then unused.
 		 */
-		struct work_struct work_free;
+		struct rcu_work work_free;
 		struct {
 			/**
 			 * @lock: Protects against concurrent modifications of
