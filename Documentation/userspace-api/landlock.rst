@@ -204,7 +204,8 @@ similar backwards compatibility check is needed for the restrict flags
 
     __u32 restrict_flags =
         LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
-        LANDLOCK_RESTRICT_SELF_TSYNC;
+        LANDLOCK_RESTRICT_SELF_TSYNC |
+        LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS;
     switch (abi) {
     case 1 ... 6:
         /* Removes logging flags for ABI < 7 */
@@ -223,10 +224,18 @@ similar backwards compatibility check is needed for the restrict flags
          * children (and not for all threads, including parents and siblings).
          */
         restrict_flags &= ~LANDLOCK_RESTRICT_SELF_TSYNC;
+        __attribute__((fallthrough));
+    case 8:
+    case 9:
+        /* Removes no_new_privs convenience flag for ABI < 10 */
+        restrict_flags &= ~LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS;
     }
 
 The next step is to restrict the current thread from gaining more privileges
-(e.g. through a SUID binary).  We now have a ruleset with the first rule
+(e.g. through a SUID binary).  When supported, this can be folded into
+``landlock_restrict_self()`` with ``LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS``;
+otherwise, user space must still call :manpage:`prctl(2)` explicitly.  We now
+have a ruleset with the first rule
 allowing read and execute access to ``/usr`` while denying all other handled
 accesses for the filesystem, and a second rule allowing HTTPS connections.
 
@@ -715,6 +724,15 @@ Pathname UNIX sockets (ABI < 9)
 Starting with the Landlock ABI version 9, it is possible to restrict
 connections to pathname UNIX domain sockets (:manpage:`unix(7)`) using
 the new ``LANDLOCK_ACCESS_FS_RESOLVE_UNIX`` right.
+
+No New Privs flag (ABI < 10)
+----------------------------------------
+
+Starting with the Landlock ABI version 10, it is possible to request
+``no_new_privs`` as part of ``landlock_restrict_self()`` by passing the
+``LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS`` flag.  This lets user space request
+the prerequisite from the Landlock API itself, which is especially useful when
+the restriction is applied from an external context such as BPF.
 
 .. _kernel_support:
 
