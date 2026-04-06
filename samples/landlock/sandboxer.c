@@ -301,7 +301,7 @@ out_unset:
 
 /* clang-format on */
 
-#define LANDLOCK_ABI_LAST 9
+#define LANDLOCK_ABI_LAST 10
 
 #define XSTR(s) #s
 #define STR(s) XSTR(s)
@@ -360,7 +360,10 @@ int main(const int argc, char *const argv[], char *const *const envp)
 		.scoped = LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET |
 			  LANDLOCK_SCOPE_SIGNAL,
 	};
-	int supported_restrict_flags = LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON;
+	int supported_restrict_flags =
+		LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
+		LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME |
+		LANDLOCK_RESTRICT_SELF_EXECTIME;
 	int set_restrict_flags = 0;
 
 	if (argc < 2) {
@@ -444,6 +447,12 @@ int main(const int argc, char *const argv[], char *const *const envp)
 		/* Removes LANDLOCK_ACCESS_FS_RESOLVE_UNIX for ABI < 9 */
 		ruleset_attr.handled_access_fs &=
 			~LANDLOCK_ACCESS_FS_RESOLVE_UNIX;
+		__attribute__((fallthrough));
+	case 9:
+		/* Removes exec-time restriction flags for ABI < 10 */
+		supported_restrict_flags &=
+			~(LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME |
+			  LANDLOCK_RESTRICT_SELF_EXECTIME);
 		/* Must be printed for any ABI < LANDLOCK_ABI_LAST. */
 		fprintf(stderr,
 			"Hint: You should update the running kernel "
