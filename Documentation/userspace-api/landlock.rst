@@ -204,7 +204,8 @@ similar backwards compatibility check is needed for the restrict flags
 
     __u32 restrict_flags =
         LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
-        LANDLOCK_RESTRICT_SELF_TSYNC;
+        LANDLOCK_RESTRICT_SELF_TSYNC |
+        LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME;
     switch (abi) {
     case 1 ... 6:
         /* Removes logging flags for ABI < 7 */
@@ -223,12 +224,27 @@ similar backwards compatibility check is needed for the restrict flags
          * children (and not for all threads, including parents and siblings).
          */
         restrict_flags &= ~LANDLOCK_RESTRICT_SELF_TSYNC;
+        __attribute__((fallthrough));
+    case 8 ... 9:
+        /* Removes no_new_privs convenience flag for ABI < 10 */
+        restrict_flags &= ~LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME;
     }
 
 The next step is to restrict the current thread from gaining more privileges
-(e.g. through a SUID binary).  We now have a ruleset with the first rule
+(e.g. through a SUID binary) before installing Landlock restrictions.  This
+still requires an explicit :manpage:`prctl(2)` call here:
+``LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME`` only pins the resulting task
+after the next successful :manpage:`execve(2)` and is not a substitute for
+this immediate check.  We now have a ruleset with the first rule
 allowing read and execute access to ``/usr`` while denying all other handled
 accesses for the filesystem, and a second rule allowing HTTPS connections.
+
+Applications that want the ruleset itself to become effective only for the next
+successful :manpage:`execve(2)` can additionally pass
+``LANDLOCK_RESTRICT_SELF_EXECTIME`` when the running kernel supports ABI
+version 10 or newer.  This flag is per-thread, cannot be combined with
+``LANDLOCK_RESTRICT_SELF_TSYNC``, and may be combined with
+``LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME``.
 
 .. code-block:: c
 
@@ -249,12 +265,13 @@ The current thread is now ready to sandbox itself with the ruleset.
     }
     close(ruleset_fd);
 
-If the ``landlock_restrict_self`` system call succeeds, the current thread is
-now restricted and this policy will be enforced on all its subsequently created
-children as well.  Once a thread is landlocked, there is no way to remove its
-security policy; only adding more restrictions is allowed.  These threads are
-now in a new Landlock domain, which is a merger of their parent one (if any)
-with the new ruleset.
+If the ``landlock_restrict_self`` system call succeeds, then the current thread
+is immediately restricted unless ``LANDLOCK_RESTRICT_SELF_EXECTIME`` was
+specified.  In that case, the requested ruleset is staged and will only be
+enforced on the next successful :manpage:`execve(2)`.  Once a thread is
+landlocked, there is no way to remove its security policy; only adding more
+restrictions is allowed.  Any restrictions already in force are inherited by
+subsequently created children.
 
 Full working code can be found in `samples/landlock/sandboxer.c`_.
 
@@ -715,6 +732,76 @@ Pathname UNIX sockets (ABI < 9)
 Starting with the Landlock ABI version 9, it is possible to restrict
 connections to pathname UNIX domain sockets (:manpage:`unix(7)`) using
 the new ``LANDLOCK_ACCESS_FS_RESOLVE_UNIX`` right.
+
+No New Privs flag (ABI < 10)
+---------------------------
+
+Starting with the Landlock ABI version 10, it is possible to request
+``no_new_privs`` as part of ``landlock_restrict_self()`` by passing the
+``LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME`` flag.  This requests that
+``no_new_privs`` be set only when the next successful execution reaches
+point-of-no-return.
+
+This flag is not semantically equivalent to, nor a substitute for,
+:manpage:`prctl(2)` with ``PR_SET_NO_NEW_PRIVS``.  In particular,
+``landlock_restrict_self()`` still requires the caller to already have either
+``CAP_SYS_ADMIN`` or ``no_new_privs`` set, and this flag does not change that
+precondition.
+
+If accepted, the flag applies only upon the next successful execution after
+point-of-no-return is reached.  Failed :manpage:`execve(2)` calls, or checks
+that do not actually execute a new program such as ``AT_EXECVE_CHECK``, do not
+trigger it.
+
+When the flag is eventually committed, it pins the resulting task with
+``no_new_privs`` for later exec transitions.  It does not retroactively affect
+privilege-gain decisions already made for that current exec transition.
+
+The exception is ``bpf_landlock_restrict_binprm()``, which may use this flag
+unconditionally because it operates from a higher-security kernel context.
+
+Exec-time restriction flag (ABI < 10)
+-------------------------------------
+
+Starting with the Landlock ABI version 10, userspace may defer ruleset
+enforcement until the next successful execution by passing the ``LANDLOCK_RESTRICT_SELF_EXECTIME``
+flag to ``landlock_restrict_self()``.
+
+This allows userspace to delay enforcement of a ruleset until execution
+reaches point-of-no-return, without applying restrictions on the current task
+between the ``landlock_restrict_self()`` call and the next execution.
+
+Like ``LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME``, this flag does not
+bypass any capability / no_new_privs requirements on the caller.  If the
+caller does not have either ``CAP_SYS_ADMIN`` or the ``no_new_privs`` bit set
+at the time of the ``landlock_restrict_self()`` call, then the system call
+will fail with ``EPERM``.
+
+Note that the ruleset specified in the FD passed to this call is copied, and
+subsequent modifications via ``landlock_add_rule()`` on the ruleset FD will
+not affect the ruleset that will be enforced at exec time.  However, calling
+``landlock_restrict_self()`` with this flag multiple times will replace the
+ruleset that will be enforced at exec time, with the last call determining the
+final staged ruleset.
+
+This flag may not be passed to ``bpf_landlock_restrict_binprm()``, as that
+kfunc always applies the ruleset at exec time, and passing it results in an
+``EINVAL`` error.
+
+An important subtlety of this flag is the order of the layers in the resulting
+Landlock domain:
+
+1. The existing Landlock domain is applied first.
+2. The ruleset specified in the ``bpf_landlock_restrict_binprm()`` call is applied second.
+3. The ruleset specified in the ``landlock_restrict_self()`` call with the ``LANDLOCK_RESTRICT_SELF_EXECTIME``
+   flag is applied last.
+
+When combined with ``LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME``, the
+``no_new_privs`` bit will be set at the same time as the ruleset is enforced.
+
+When combined with other flags, such as
+``LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON``, the logging behavior will also be
+deferred until the next execution.
 
 .. _kernel_support:
 
