@@ -121,42 +121,6 @@ static void build_check_abi(void)
 
 /* Ruleset handling */
 
-static int fop_ruleset_release(struct inode *const inode,
-			       struct file *const filp)
-{
-	struct landlock_ruleset *ruleset = filp->private_data;
-
-	landlock_put_ruleset(ruleset);
-	return 0;
-}
-
-static ssize_t fop_dummy_read(struct file *const filp, char __user *const buf,
-			      const size_t size, loff_t *const ppos)
-{
-	/* Dummy handler to enable FMODE_CAN_READ. */
-	return -EINVAL;
-}
-
-static ssize_t fop_dummy_write(struct file *const filp,
-			       const char __user *const buf, const size_t size,
-			       loff_t *const ppos)
-{
-	/* Dummy handler to enable FMODE_CAN_WRITE. */
-	return -EINVAL;
-}
-
-/*
- * A ruleset file descriptor enables to build a ruleset by adding (i.e.
- * writing) rule after rule, without relying on the task's context.  This
- * reentrant design is also used in a read way to enforce the ruleset on the
- * current task.
- */
-static const struct file_operations ruleset_fops = {
-	.release = fop_ruleset_release,
-	.read = fop_dummy_read,
-	.write = fop_dummy_write,
-};
-
 /*
  * The Landlock ABI version should be incremented for each new Landlock-related
  * user space visible change (e.g. Landlock syscalls).  This version should
@@ -262,31 +226,6 @@ SYSCALL_DEFINE3(landlock_create_ruleset,
 	if (ruleset_fd < 0)
 		landlock_put_ruleset(ruleset);
 	return ruleset_fd;
-}
-
-/*
- * Returns an owned ruleset from a FD. It is thus needed to call
- * landlock_put_ruleset() on the return value.
- */
-static struct landlock_ruleset *get_ruleset_from_fd(const int fd,
-						    const fmode_t mode)
-{
-	CLASS(fd, ruleset_f)(fd);
-	struct landlock_ruleset *ruleset;
-
-	if (fd_empty(ruleset_f))
-		return ERR_PTR(-EBADF);
-
-	/* Checks FD type and access right. */
-	if (fd_file(ruleset_f)->f_op != &ruleset_fops)
-		return ERR_PTR(-EBADFD);
-	if (!(fd_file(ruleset_f)->f_mode & mode))
-		return ERR_PTR(-EPERM);
-	ruleset = fd_file(ruleset_f)->private_data;
-	if (WARN_ON_ONCE(ruleset->num_layers != 1))
-		return ERR_PTR(-EINVAL);
-	landlock_get_ruleset(ruleset);
-	return ruleset;
 }
 
 /* Path handling */
@@ -437,7 +376,7 @@ SYSCALL_DEFINE4(landlock_add_rule, const int, ruleset_fd,
 		return -EINVAL;
 
 	/* Gets and checks the ruleset. */
-	ruleset = get_ruleset_from_fd(ruleset_fd, FMODE_CAN_WRITE);
+	ruleset = landlock_get_ruleset_from_fd(ruleset_fd, FMODE_CAN_WRITE);
 	if (IS_ERR(ruleset))
 		return PTR_ERR(ruleset);
 
@@ -487,33 +426,13 @@ SYSCALL_DEFINE4(landlock_add_rule, const int, ruleset_fd,
 SYSCALL_DEFINE2(landlock_restrict_self, const int, ruleset_fd, const __u32,
 		flags)
 {
-	struct landlock_ruleset *ruleset __free(landlock_put_ruleset) = NULL;
 	struct cred *new_cred;
-	struct landlock_cred_security *new_llcred;
-	bool __maybe_unused log_same_exec, log_new_exec, log_subdomains,
-		prev_log_subdomains;
+	struct landlock_ruleset *ruleset __free(landlock_put_ruleset) = NULL;
+	int err;
 
-	if (!is_initialized())
-		return -EOPNOTSUPP;
-
-	/*
-	 * Similar checks as for seccomp(2), except that an -EPERM may be
-	 * returned.
-	 */
-	if (!task_no_new_privs(current) &&
-	    !ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN))
-		return -EPERM;
-
-	if ((flags | LANDLOCK_MASK_RESTRICT_SELF) !=
-	    LANDLOCK_MASK_RESTRICT_SELF)
-		return -EINVAL;
-
-	/* Translates "off" flag to boolean. */
-	log_same_exec = !(flags & LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF);
-	/* Translates "on" flag to boolean. */
-	log_new_exec = !!(flags & LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON);
-	/* Translates "off" flag to boolean. */
-	log_subdomains = !(flags & LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF);
+	err = landlock_restrict_cred_precheck(flags, true);
+	if (err)
+		return err;
 
 	/*
 	 * It is allowed to set LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF with
@@ -525,7 +444,8 @@ SYSCALL_DEFINE2(landlock_restrict_self, const int, ruleset_fd, const __u32,
 	      (flags & ~LANDLOCK_RESTRICT_SELF_TSYNC) ==
 		      LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF)) {
 		/* Gets and checks the ruleset. */
-		ruleset = get_ruleset_from_fd(ruleset_fd, FMODE_CAN_READ);
+		ruleset = landlock_get_ruleset_from_fd(ruleset_fd,
+						       FMODE_CAN_READ);
 		if (IS_ERR(ruleset))
 			return PTR_ERR(ruleset);
 	}
@@ -535,57 +455,10 @@ SYSCALL_DEFINE2(landlock_restrict_self, const int, ruleset_fd, const __u32,
 	if (!new_cred)
 		return -ENOMEM;
 
-	new_llcred = landlock_cred(new_cred);
-
-#ifdef CONFIG_AUDIT
-	prev_log_subdomains = !new_llcred->log_subdomains_off;
-	new_llcred->log_subdomains_off = !prev_log_subdomains ||
-					 !log_subdomains;
-#endif /* CONFIG_AUDIT */
-
-	/*
-	 * The only case when a ruleset may not be set is if
-	 * LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF is set (optionally with
-	 * LANDLOCK_RESTRICT_SELF_TSYNC) and ruleset_fd is -1.  We could
-	 * optimize this case by not calling commit_creds() if this flag was
-	 * already set, but it is not worth the complexity.
-	 */
-	if (ruleset) {
-		/*
-		 * There is no possible race condition while copying and
-		 * manipulating the current credentials because they are
-		 * dedicated per thread.
-		 */
-		struct landlock_ruleset *const new_dom =
-			landlock_merge_ruleset(new_llcred->domain, ruleset);
-		if (IS_ERR(new_dom)) {
-			abort_creds(new_cred);
-			return PTR_ERR(new_dom);
-		}
-
-#ifdef CONFIG_AUDIT
-		new_dom->hierarchy->log_same_exec = log_same_exec;
-		new_dom->hierarchy->log_new_exec = log_new_exec;
-		if ((!log_same_exec && !log_new_exec) || !prev_log_subdomains)
-			new_dom->hierarchy->log_status = LANDLOCK_LOG_DISABLED;
-#endif /* CONFIG_AUDIT */
-
-		/* Replaces the old (prepared) domain. */
-		landlock_put_ruleset(new_llcred->domain);
-		new_llcred->domain = new_dom;
-
-#ifdef CONFIG_AUDIT
-		new_llcred->domain_exec |= BIT(new_dom->num_layers - 1);
-#endif /* CONFIG_AUDIT */
-	}
-
-	if (flags & LANDLOCK_RESTRICT_SELF_TSYNC) {
-		const int err = landlock_restrict_sibling_threads(
-			current_cred(), new_cred);
-		if (err) {
-			abort_creds(new_cred);
-			return err;
-		}
+	err = landlock_restrict_cred(new_cred, ruleset, flags);
+	if (err) {
+		abort_creds(new_cred);
+		return err;
 	}
 
 	return commit_creds(new_cred);

@@ -11,6 +11,8 @@
 
 #include <linux/cleanup.h>
 #include <linux/err.h>
+#include <linux/fs.h>
+#include <linux/landlock.h>
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/refcount.h>
@@ -19,6 +21,8 @@
 #include "access.h"
 #include "limits.h"
 #include "object.h"
+
+extern const struct file_operations ruleset_fops;
 
 struct landlock_hierarchy;
 
@@ -194,6 +198,8 @@ landlock_create_ruleset(const access_mask_t access_mask_fs,
 			const access_mask_t access_mask_net,
 			const access_mask_t scope_mask);
 
+void landlock_get_ruleset(struct landlock_ruleset *ruleset);
+
 void landlock_put_ruleset(struct landlock_ruleset *const ruleset);
 void landlock_put_ruleset_deferred(struct landlock_ruleset *const ruleset);
 
@@ -204,6 +210,13 @@ int landlock_insert_rule(struct landlock_ruleset *const ruleset,
 			 const struct landlock_id id,
 			 const access_mask_t access);
 
+int landlock_restrict_cred_precheck(const __u32 flags,
+				    const bool in_task_context);
+
+int landlock_restrict_cred(struct cred *const cred,
+			   struct landlock_ruleset *const ruleset,
+			   const __u32 flags);
+
 struct landlock_ruleset *
 landlock_merge_ruleset(struct landlock_ruleset *const parent,
 		       struct landlock_ruleset *const ruleset);
@@ -211,12 +224,6 @@ landlock_merge_ruleset(struct landlock_ruleset *const parent,
 const struct landlock_rule *
 landlock_find_rule(const struct landlock_ruleset *const ruleset,
 		   const struct landlock_id id);
-
-static inline void landlock_get_ruleset(struct landlock_ruleset *const ruleset)
-{
-	if (ruleset)
-		refcount_inc(&ruleset->usage);
-}
 
 /**
  * landlock_union_access_masks - Return all access rights handled in the
