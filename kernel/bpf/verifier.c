@@ -19098,11 +19098,15 @@ static struct bpf_iarray *jt_from_subprog(struct bpf_verifier_env *env,
 	int i;
 
 	for (i = 0; i < env->insn_array_map_cnt; i++) {
-		/*
-		 * TODO (when needed): collect only jump tables, not static keys
-		 * or maps for indirect calls
-		 */
 		map = env->insn_array_maps[i];
+
+		/* Only consider instruction array maps with multiple entries.
+		 * These correspond to jump tables. Skip others (e.g. static keys,
+		 * indirect call maps).
+		 */
+		if (map->map_type != BPF_MAP_TYPE_INSN_ARRAY ||
+		    map->max_entries <= 1)
+			continue;
 
 		jt_cur = jt_from_map(map);
 		if (IS_ERR(jt_cur)) {
