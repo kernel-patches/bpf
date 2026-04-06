@@ -121,10 +121,12 @@ int landlock_restrict_cred_precheck(const __u32 flags,
 
 	/*
 	 * Similar checks as for seccomp(2), except that an -EPERM may be
-	 * returned.
+	 * returned, or no_new_privs may be set by the caller via
+	 * LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS.
 	 */
 	if (!task_no_new_privs(current) &&
 	    !ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN)) {
+		if (!(flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS))
 			return -EPERM;
 	}
 
@@ -197,6 +199,14 @@ int landlock_restrict_cred(struct cred *const cred,
 	}
 
 	if (flags & LANDLOCK_RESTRICT_SELF_TSYNC) {
+		/*
+		 * We know we can set no_new_privs on the current task
+		 * because this path is only valid in the syscall context
+		 */
+		if ((flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS) &&
+		     !task_no_new_privs(current) &&
+		     !ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN))
+			task_set_no_new_privs(current);
 		const int tsync_err =
 			landlock_restrict_sibling_threads(current_cred(), cred);
 
