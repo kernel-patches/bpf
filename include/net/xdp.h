@@ -301,6 +301,7 @@ struct xdp_frame {
 	 */
 	enum xdp_mem_type mem_type:32;
 	struct net_device *dev_rx; /* used by cpumap */
+	u32 queue_index;
 	u32 frame_sz;
 	u32 flags; /* supported values defined in xdp_buff_flags */
 };
@@ -347,6 +348,7 @@ static inline void xdp_scrub_frame(struct xdp_frame *frame)
 {
 	frame->data = NULL;
 	frame->dev_rx = NULL;
+	frame->queue_index = 0;
 }
 
 static inline void
@@ -392,6 +394,7 @@ void xdp_convert_frame_to_buff(const struct xdp_frame *frame,
 	xdp->data = frame->data;
 	xdp->data_end = frame->data + frame->len;
 	xdp->data_meta = frame->data - frame->metasize;
+	xdp->rxq->queue_index = frame->queue_index;
 	xdp->frame_sz = frame->frame_sz;
 	xdp->flags = frame->flags;
 }
@@ -419,6 +422,7 @@ int xdp_update_frame_from_buff(const struct xdp_buff *xdp,
 	xdp_frame->len  = xdp->data_end - xdp->data;
 	xdp_frame->headroom = headroom - sizeof(*xdp_frame);
 	xdp_frame->metasize = metasize;
+	xdp_frame->queue_index = xdp->rxq->queue_index;
 	xdp_frame->frame_sz = xdp->frame_sz;
 	xdp_frame->flags = xdp->flags;
 

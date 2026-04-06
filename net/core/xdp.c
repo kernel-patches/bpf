@@ -604,6 +604,7 @@ struct xdp_frame *xdp_convert_zc_to_xdp_frame(struct xdp_buff *xdp)
 	xdpf->len = totsize - metasize;
 	xdpf->headroom = 0;
 	xdpf->metasize = metasize;
+	xdpf->queue_index = xdp->rxq->queue_index;
 	xdpf->frame_sz = PAGE_SIZE;
 	xdpf->mem_type = MEM_TYPE_PAGE_ORDER0;
 
