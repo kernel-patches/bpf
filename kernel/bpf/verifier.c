@@ -16619,10 +16619,33 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 	int err;
 
 	dst_reg = &regs[insn->dst_reg];
-	src_reg = NULL;
+	if (BPF_SRC(insn->code) == BPF_X)
+		src_reg = &regs[insn->src_reg];
+	else
+		src_reg = NULL;
 
-	if (dst_reg->type == PTR_TO_ARENA) {
+	/* Case where at least one operand is an arena. */
+	if (dst_reg->type == PTR_TO_ARENA || (src_reg && src_reg->type == PTR_TO_ARENA)) {
 		struct bpf_insn_aux_data *aux = cur_aux(env);
+
+		/* The compiler sometimes stores the result of a SCALAR/PTR_TO_ARENA
+		 * operation into the scalar register. Properly mark the result as
+		 * holding an arena pointer.
+		 */
+		if (dst_reg->type != PTR_TO_ARENA) {
+			/* Can't do arena arithmetic with non-scalars. */
+			if (dst_reg->type != SCALAR_VALUE) {
+				verbose(env, "R%d pointer %s arena prohibited\n",
+					insn->dst_reg,
+					bpf_alu_string[opcode >> 4]);
+				return -EACCES;
+			}
+
+			/* We have a SCALAR_PTR_TO_ARENA operation,
+			 * propagate the info to dst_reg. */
+			*dst_reg = *src_reg;
+		}
+
 
 		if (BPF_CLASS(insn->code) == BPF_ALU64)
 			/*
