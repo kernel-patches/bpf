@@ -1462,10 +1462,40 @@ void bio_iov_iter_unbounce(struct bio *bio, bool is_error, bool mark_dirty)
 		bio_iov_iter_unbounce_read(bio, is_error, mark_dirty);
 }
 
-static void submit_bio_wait_endio(struct bio *bio)
+static void bio_wait_end_io(struct bio *bio)
 {
 	complete(bio->bi_private);
 }
+
+/**
+ * bio_await - call a function on a bio, and wait until it completes
+ * @bio:	the bio which describes the I/O
+ * @submit:	function called to submit the bio
+ * @priv:	private data passed to @submit
+ *
+ * Wait for the bio as well as any bio chained off it after executing the
+ * passed in callback @submit.  The wait for the bio is set up before calling
+ * @submit to ensure that the completion is captured.  If @submit is %NULL,
+ * submit_bio() is used instead to submit the bio.
+ *
+ * Note: this overrides the bi_private and bi_end_io fields in the bio.
+ */
+void bio_await(struct bio *bio, void *priv,
+	       void (*submit)(struct bio *bio, void *priv))
+{
+	DECLARE_COMPLETION_ONSTACK_MAP(done,
+			bio->bi_bdev->bd_disk->lockdep_map);
+
+	bio->bi_private = &done;
+	bio->bi_end_io = bio_wait_end_io;
+	bio->bi_opf |= REQ_SYNC;
+	if (submit)
+		submit(bio, priv);
+	else
+		submit_bio(bio);
+	blk_wait_io(&done);
+}
+EXPORT_SYMBOL_GPL(bio_await);
 
 /**
  * submit_bio_wait - submit a bio, and wait until it completes
@@ -1480,18 +1510,29 @@ static void submit_bio_wait_endio(struct bio *bio)
  */
 int submit_bio_wait(struct bio *bio)
 {
-	DECLARE_COMPLETION_ONSTACK_MAP(done,
-			bio->bi_bdev->bd_disk->lockdep_map);
-
-	bio->bi_private = &done;
-	bio->bi_end_io = submit_bio_wait_endio;
-	bio->bi_opf |= REQ_SYNC;
-	submit_bio(bio);
-	blk_wait_io(&done);
-
+	bio_await(bio, NULL, NULL);
 	return blk_status_to_errno(bio->bi_status);
 }
 EXPORT_SYMBOL(submit_bio_wait);
+
+static void bio_endio_cb(struct bio *bio, void *priv)
+{
+	bio_endio(bio);
+}
+
+/*
+ * Submit @bio synchronously, or call bio_endio on it if the current process
+ * is being killed.
+ */
+int bio_submit_or_kill(struct bio *bio, unsigned int flags)
+{
+	if ((flags & BLKDEV_ZERO_KILLABLE) && fatal_signal_pending(current)) {
+		bio_await(bio, NULL, bio_endio_cb);
+		return -EINTR;
+	}
+
+	return submit_bio_wait(bio);
+}
 
 /**
  * bdev_rw_virt - synchronously read into / write from kernel mapping
@@ -1522,26 +1563,6 @@ int bdev_rw_virt(struct block_device *bdev, sector_t sector, void *data,
 	return error;
 }
 EXPORT_SYMBOL_GPL(bdev_rw_virt);
-
-static void bio_wait_end_io(struct bio *bio)
-{
-	complete(bio->bi_private);
-	bio_put(bio);
-}
-
-/*
- * bio_await_chain - ends @bio and waits for every chained bio to complete
- */
-void bio_await_chain(struct bio *bio)
-{
-	DECLARE_COMPLETION_ONSTACK_MAP(done,
-			bio->bi_bdev->bd_disk->lockdep_map);
-
-	bio->bi_private = &done;
-	bio->bi_end_io = bio_wait_end_io;
-	bio_endio(bio);
-	blk_wait_io(&done);
-}
 
 void __bio_advance(struct bio *bio, unsigned bytes)
 {
