@@ -81,6 +81,7 @@ struct dev_ctx {
 	unsigned int	no_ublk_fixed_fd:1;
 	unsigned int	safe_stop:1;
 	unsigned int	no_auto_part_scan:1;
+	unsigned int	rdonly_shmem_buf:1;
 	__u32 integrity_flags;
 	__u8 metadata_size;
 	__u8 pi_offset;
@@ -95,6 +96,8 @@ struct dev_ctx {
 
 	/* for 'update_size' command */
 	unsigned long long size;
+
+	char *htlb_path;
 
 	union {
 		struct stripe_ctx 	stripe;
@@ -601,6 +604,18 @@ static inline void ublk_queued_tgt_io(struct ublk_thread *t, struct ublk_queue *
 		io->result = 0;
 	}
 }
+
+/* shared memory zero-copy support */
+#define UBLK_BUF_MAX		256
+
+struct ublk_shmem_entry {
+	int fd;
+	void *mmap_base;
+	size_t size;
+};
+
+extern struct ublk_shmem_entry shmem_table[UBLK_BUF_MAX];
+extern int shmem_count;
 
 extern const struct ublk_tgt_ops null_tgt_ops;
 extern const struct ublk_tgt_ops loop_tgt_ops;
