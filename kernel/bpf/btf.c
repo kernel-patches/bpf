@@ -7432,15 +7432,39 @@ int btf_struct_access(struct bpf_verifier_log *log,
  * the same. Trivial ID check is not enough due to module BTFs, because we can
  * end up with two different module BTFs, but IDs point to the common type in
  * vmlinux BTF.
+ *
+ * When comparing types across different BTF objects (e.g., module BTF vs
+ * vmlinux BTF), we need to compare the actual type content (name, kind, size)
+ * since type IDs may differ between BTF objects even for the same type.
  */
 bool btf_types_are_same(const struct btf *btf1, u32 id1,
 			const struct btf *btf2, u32 id2)
 {
-	if (id1 != id2)
-		return false;
+	const struct btf_type *t1, *t2;
+
+	/* If same BTF object, ID comparison is sufficient */
 	if (btf1 == btf2)
-		return true;
-	return btf_type_by_id(btf1, id1) == btf_type_by_id(btf2, id2);
+		return id1 == id2;
+
+	/* Different BTF objects - compare actual type content.
+	 * Type IDs may differ between module BTF and vmlinux BTF,
+	 * so we need to check if the types are semantically identical.
+	 */
+	t1 = btf_type_by_id(btf1, id1);
+	t2 = btf_type_by_id(btf2, id2);
+	if (!t1 || !t2)
+		return false;
+
+	/* Must be same kind and have same name */
+	if (BTF_INFO_KIND(t1->info) != BTF_INFO_KIND(t2->info))
+		return false;
+	if (t1->size != t2->size)
+		return false;
+	if (strcmp(__btf_name_by_offset(btf1, t1->name_off),
+		   __btf_name_by_offset(btf2, t2->name_off)) != 0)
+		return false;
+
+	return true;
 }
 
 bool btf_struct_ids_match(struct bpf_verifier_log *log,
