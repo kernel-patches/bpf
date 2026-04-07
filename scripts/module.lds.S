@@ -41,9 +41,11 @@ SECTIONS {
 	__kcfi_traps		: { KEEP(*(.kcfi_traps)) }
 #endif
 
+#ifndef CONFIG_ARCH_WANTS_MODULES_TEXT_SECTIONS
 	.text : {
 		*(.text .text.[0-9a-zA-Z_]*)
 	}
+#endif
 
 	.bss : {
 		*(.bss .bss.[0-9a-zA-Z_]*)
