@@ -549,7 +549,7 @@ does not take into account swapped out page of underlying shmem objects.
 naturally aligned THP pages of any currently enabled size. 1 if true, 0
 otherwise.
 
-If both the kernel and the system support protection keys (pkeys),
+If both the kernel and the hardware support protection keys (pkeys),
 "ProtectionKey" indicates the memory protection key associated with the
 virtual memory area.
 
