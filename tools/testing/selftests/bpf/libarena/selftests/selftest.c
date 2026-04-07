@@ -18,6 +18,17 @@
 #include <userapi.h>
 #include <selftest_helpers.h>
 
+#include "selftest.h"
+
+#ifdef BPF_ARENA_ASAN
+#include "../libarena_asan.skel.h"
+typedef struct libarena_asan selftest;
+#define selftest__open libarena_asan__open
+#define selftest__open_and_load libarena_asan__open_and_load
+#define selftest__load libarena_asan__load
+#define selftest__attach libarena_asan__attach
+#define selftest__destroy libarena_asan__destroy
+#else
 #include "../libarena.skel.h"
 typedef struct libarena selftest;
 #define selftest__open libarena__open
@@ -25,6 +36,7 @@ typedef struct libarena selftest;
 #define selftest__load libarena__load
 #define selftest__attach libarena__attach
 #define selftest__destroy libarena__destroy
+#endif
 
 static bool verbose = false;
 static int testno = 1;
@@ -69,12 +81,22 @@ static int libbpf_print_fn(enum libbpf_print_level level,
 
 int run_test(selftest *skel, const struct bpf_program *prog)
 {
+	size_t arena_pages = (1UL << 32) / sysconf(_SC_PAGESIZE);
 	int prog_fd;
 	int ret;
 
 	ret = libarena_run_prog(bpf_program__fd(skel->progs.arena_alloc_reserve));
 	if (ret)
 		return ret;
+
+#ifdef BPF_ARENA_ASAN
+	ret = libarena_asan_init(
+		bpf_program__fd(skel->progs.arena_get_base),
+		bpf_program__fd(skel->progs.asan_init),
+		arena_pages);
+	if (ret)
+		return ret;
+#endif
 
 	prog_fd = bpf_program__fd(prog);
 	if (prog_fd < 0)
@@ -119,10 +141,13 @@ static void
 banner(const char *progpath)
 {
 	char *name = basename(progpath);
+	bool is_asan;
 
+	/* Check if our BPF programs are ASAN-capable using strstr on the prog name. */
 	printf("%s\n", name);
+	is_asan = strstr(name, "_asan");
 
-	printf("=== %s ===\n", "libarena selftests");
+	printf("=== %s %s===\n", "libarena selftests", is_asan ? "(asan) " : "");
 }
 
 int main(int argc, char *argv[])

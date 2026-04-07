@@ -24,3 +24,4 @@ typedef int64_t s64;
 #define arena_spinlock_t u64
 
 #include "common.h"
+#include "asan.h"
