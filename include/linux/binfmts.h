@@ -49,7 +49,12 @@ struct linux_binprm {
 		 * Set by user space to check executability according to the
 		 * caller's environment.
 		 */
-		is_check:1;
+		is_check:1,
+		/*
+		 * Set when a NNP should be applied to the new program's
+		 * credentials during exec past the point of no return.
+		 */
+		set_nnp_on_point_of_no_return:1;
 	struct file *executable; /* Executable to pass to the interpreter */
 	struct file *interpreter;
 	struct file *file;

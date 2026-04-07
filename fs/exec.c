@@ -1111,6 +1111,14 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 */
 	bprm->point_of_no_return = true;
 
+	/*
+	 * If the binary format handler requested that we set NO_NEW_PRIVS on the
+	 * task, do so now that we're committed to exec. We have to wait until
+	 * we set it here in case it wasn't safe to set it before the point of no return.
+	 */
+	if (bprm->set_nnp_on_point_of_no_return)
+		task_set_no_new_privs(current);
+
 	/* Make this the only thread in the thread group */
 	retval = de_thread(me);
 	if (retval)
