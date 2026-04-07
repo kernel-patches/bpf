@@ -181,6 +181,7 @@ void gmap_remove_child(struct gmap *child)
 
 	list_del(&child->list);
 	child->parent = NULL;
+	child->invalidated = true;
 }
 
 /**
@@ -1074,10 +1075,12 @@ static void gmap_unshadow_level(struct gmap *sg, gfn_t r_gfn, int level)
 	if (ptep) {
 		if (READ_ONCE(*ptep).val != _PTE_EMPTY.val)
 			dat_ptep_xchg(ptep, _PTE_EMPTY, r_gfn, sg->asce, uses_skeys(sg));
+		sg->invalidated = true;
 		return;
 	}
 
 	crste = dat_crstep_clear_atomic(crstep, r_gfn, sg->asce);
+	sg->invalidated = true;
 	if (crste_leaf(crste) || crste.h.i)
 		return;
 	if (is_pmd(crste))
@@ -1174,6 +1177,7 @@ static inline int __gmap_protect_asce_top_level(struct kvm_s390_mmu_cache *mc, s
 	scoped_guard(spinlock, &parent->children_lock) {
 		if (READ_ONCE(sg->parent) != parent)
 			return -EAGAIN;
+		sg->invalidated = false;
 		for (i = 0; i < CRST_TABLE_PAGES; i++) {
 			if (!context->f[i].valid)
 				continue;
