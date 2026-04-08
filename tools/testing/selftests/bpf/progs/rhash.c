@@ -240,3 +240,38 @@ int test_rhash_delete_nonexistent(void *ctx)
 	err = 0;
 	return 0;
 }
+
+#define VAR_NUM 16
+
+struct lock_elem {
+	struct bpf_spin_lock lock;
+	int var[VAR_NUM];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RHASH);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct lock_elem);
+} rhmap_lock SEC(".maps");
+
+SEC("cgroup/skb")
+int test_rhash_spin_lock(struct __sk_buff *skb)
+{
+	struct lock_elem *val;
+	int rnd = bpf_get_prandom_u32();
+	int key = 0, i;
+
+	val = bpf_map_lookup_elem(&rhmap_lock, &key);
+	if (!val)
+		return 1;
+
+	/* spin_lock in resizable hash map */
+	bpf_spin_lock(&val->lock);
+	for (i = 0; i < VAR_NUM; i++)
+		val->var[i] = rnd;
+	bpf_spin_unlock(&val->lock);
+
+	return 0;
+}
