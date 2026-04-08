@@ -535,10 +535,15 @@ static inline void bpf_obj_memcpy(struct btf_record *rec,
 	int i;
 
 	if (IS_ERR_OR_NULL(rec)) {
-		if (long_memcpy)
-			bpf_long_memcpy(dst, src, round_up(size, 8));
-		else
+		u32 aligned = round_down(size, 8);
+
+		if (long_memcpy && aligned) {
+			bpf_long_memcpy(dst, src, aligned);
+			if (size > aligned)
+				memcpy(dst + aligned, src + aligned, size - aligned);
+		} else {
 			memcpy(dst, src, size);
+		}
 		return;
 	}
 
