@@ -3017,7 +3017,40 @@ static void rhtab_map_seq_show_elem(struct bpf_map *map, void *key, struct seq_f
 static long bpf_each_rhash_elem(struct bpf_map *map, bpf_callback_t callback_fn,
 				void *callback_ctx, u64 flags)
 {
-	return -EOPNOTSUPP;
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct rhashtable_iter iter;
+	struct rhtab_elem *elem;
+	int num_elems = 0;
+	u64 ret = 0;
+
+	if (flags != 0)
+		return -EINVAL;
+
+	/*
+	 * The rhashtable walk API uses spin_lock(&ht->lock) in rhashtable_walk_start/stop,
+	 * which is not safe in NMI or soft/hard IRQ context.
+	 */
+	if (!in_task())
+		return -EOPNOTSUPP;
+
+	rhashtable_walk_enter(&rhtab->ht, &iter);
+	rhashtable_walk_start(&iter);
+
+	for (elem = rhtab_iter_next(&iter); elem;
+	     elem = rhtab_iter_next(&iter)) {
+		num_elems++;
+		ret = callback_fn((u64)(long)map,
+				  (u64)(long)elem->data,
+				  (u64)(long)rhtab_elem_value(elem, map->key_size),
+				  (u64)(long)callback_ctx, 0);
+		if (ret)
+			break;
+	}
+
+	rhashtable_walk_stop(&iter);
+	rhashtable_walk_exit(&iter);
+
+	return num_elems;
 }
 
 static u64 rhtab_map_mem_usage(const struct bpf_map *map)
