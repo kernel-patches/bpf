@@ -256,6 +256,14 @@ struct {
 	__type(value, struct lock_elem);
 } rhmap_lock SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_RHASH);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__uint(max_entries, 65536);
+	__type(key, int);
+	__type(value, int);
+} rhmap_iter SEC(".maps");
+
 SEC("cgroup/skb")
 int test_rhash_spin_lock(struct __sk_buff *skb)
 {
