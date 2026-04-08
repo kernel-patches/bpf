@@ -89,6 +89,11 @@
  */
 #define __bpf_kfunc __used __retain __noclone noinline
 
+#define BPF_KFUNC_DECL_TAG_REPLACEMENT "bpf:kfunc:replacement:"
+
+#define __bpf_kfunc_replacement(replacement) \
+	BTF_DECL_TAG(BPF_KFUNC_DECL_TAG_REPLACEMENT __stringify(replacement))
+
 #define __bpf_kfunc_start_defs()					       \
 	__diag_push();							       \
 	__diag_ignore_all("-Wmissing-declarations",			       \

@@ -14594,6 +14594,8 @@ static void warn_for_deprecated_kfuncs(struct bpf_verifier_env *env,
 				       int insn_idx, s16 offset)
 {
 	const struct bpf_line_info *linfo;
+	const char *replacement;
+	const struct btf_type *t;
 	struct bpf_kfunc_desc *desc;
 	const char *file;
 	int line_num;
@@ -14610,6 +14612,13 @@ static void warn_for_deprecated_kfuncs(struct bpf_verifier_env *env,
 	} else {
 		warn(env, "(insn #%d) uses deprecated kfunc %s(), which will be removed.\n",
 		     insn_idx, meta->func_name);
+	}
+
+	t = btf_type_by_id(meta->btf, meta->func_id);
+	replacement = btf_find_decl_tag_value(meta->btf, t, -1, BPF_KFUNC_DECL_TAG_REPLACEMENT);
+	if (!IS_ERR(replacement) && !str_is_empty(replacement)) {
+		warn(env, "Switch to kfunc %s() instead.\n", replacement);
+		warn(env, "For older kernels, choose the correct kfunc using bpf_ksym_exists().\n");
 	}
 
 	desc->warned_deprecated = true;

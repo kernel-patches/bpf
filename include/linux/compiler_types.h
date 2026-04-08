@@ -35,10 +35,20 @@
  * see https://github.com/rust-lang/rust-bindgen/issues/2244.
  */
 #if defined(CONFIG_DEBUG_INFO_BTF) && defined(CONFIG_PAHOLE_HAS_BTF_TAG) && \
-	__has_attribute(btf_type_tag) && !defined(__BINDGEN__)
-# define BTF_TYPE_TAG(value) __attribute__((btf_type_tag(#value)))
+	!defined(__BINDGEN__)
+# if __has_attribute(btf_type_tag)
+#  define BTF_TYPE_TAG(value) __attribute__((btf_type_tag(#value)))
+# else
+#  define BTF_TYPE_TAG(value) /* nothing */
+# endif
+# if __has_attribute(btf_decl_tag)
+#  define BTF_DECL_TAG(value) __attribute__((btf_decl_tag(value)))
+# else
+#  define BTF_DECL_TAG(value) /* nothing */
+# endif
 #else
 # define BTF_TYPE_TAG(value) /* nothing */
+# define BTF_DECL_TAG(value) /* nothing */
 #endif
 
 #include <linux/compiler-context-analysis.h>
