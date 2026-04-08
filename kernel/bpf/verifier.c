@@ -3229,6 +3229,7 @@ struct bpf_kfunc_desc {
 	u32 func_id;
 	s32 imm;
 	u16 offset;
+	bool warned_deprecated;
 	unsigned long addr;
 };
 
@@ -12426,6 +12427,11 @@ static bool is_kfunc_destructive(struct bpf_kfunc_call_arg_meta *meta)
 	return meta->kfunc_flags & KF_DESTRUCTIVE;
 }
 
+static bool is_kfunc_deprecated(struct bpf_kfunc_call_arg_meta *meta)
+{
+	return meta->kfunc_flags & KF_DEPRECATED;
+}
+
 static bool is_kfunc_rcu(struct bpf_kfunc_call_arg_meta *meta)
 {
 	return meta->kfunc_flags & KF_RCU;
@@ -14583,6 +14589,32 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_ca
 
 static int check_return_code(struct bpf_verifier_env *env, int regno, const char *reg_name);
 
+static void warn_for_deprecated_kfuncs(struct bpf_verifier_env *env,
+				       struct bpf_kfunc_call_arg_meta *meta,
+				       int insn_idx, s16 offset)
+{
+	const struct bpf_line_info *linfo;
+	struct bpf_kfunc_desc *desc;
+	const char *file;
+	int line_num;
+
+	desc = find_kfunc_desc(env->prog, meta->func_id, offset);
+	if (!desc || desc->warned_deprecated || !is_kfunc_deprecated(meta) || !env->prog->aux->btf)
+		return;
+
+	linfo = bpf_find_linfo(env->prog, insn_idx);
+	if (linfo) {
+		bpf_get_linfo_file_line(env->prog->aux->btf, linfo, &file, NULL, &line_num);
+		warn(env, "%s:%d (insn #%d) uses deprecated kfunc %s(), which will be removed.\n",
+		     file, line_num, insn_idx, meta->func_name);
+	} else {
+		warn(env, "(insn #%d) uses deprecated kfunc %s(), which will be removed.\n",
+		     insn_idx, meta->func_name);
+	}
+
+	desc->warned_deprecated = true;
+}
+
 static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    int *insn_idx_p)
 {
@@ -14611,6 +14643,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	insn_aux = &env->insn_aux_data[insn_idx];
 
 	insn_aux->is_iter_next = is_iter_next_kfunc(&meta);
+
+	warn_for_deprecated_kfuncs(env, &meta, insn_idx, insn->off);
 
 	if (!insn->off &&
 	    (insn->imm == special_kfunc_list[KF_bpf_res_spin_lock] ||
