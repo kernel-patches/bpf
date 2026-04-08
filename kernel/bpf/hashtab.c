@@ -3012,6 +3012,19 @@ static int rhtab_map_get_next_key(struct bpf_map *map, void *key, void *next_key
 
 static void rhtab_map_seq_show_elem(struct bpf_map *map, void *key, struct seq_file *m)
 {
+	void *value;
+
+	/* Guarantee that hashtab value is not freed */
+	guard(rcu)();
+
+	value = rhtab_map_lookup_elem(map, key);
+	if (!value)
+		return;
+
+	btf_type_seq_show(map->btf, map->btf_key_type_id, key, m);
+	seq_puts(m, ": ");
+	btf_type_seq_show(map->btf, map->btf_value_type_id, value, m);
+	seq_putc(m, '\n');
 }
 
 static long bpf_each_rhash_elem(struct bpf_map *map, bpf_callback_t callback_fn,
@@ -3205,36 +3218,113 @@ struct bpf_iter_seq_rhash_map_info {
 	struct bpf_map *map;
 	struct bpf_rhtab *rhtab;
 	struct rhashtable_iter iter;
-	u32 skip_elems;
+	void *last_key;
 	bool iter_active;
 };
 
 static void *bpf_rhash_map_seq_start(struct seq_file *seq, loff_t *pos)
 {
-	return NULL;
+	struct bpf_iter_seq_rhash_map_info *info = seq->private;
+	struct rhtab_elem *elem;
+	void *key = *pos > 0 ? info->last_key : NULL;
+
+	scoped_guard(rcu) {
+		rhashtable_walk_enter_from(&info->rhtab->ht, &info->iter,
+					   key, info->rhtab->params);
+		rhashtable_walk_start(&info->iter);
+	}
+	info->iter_active = true;
+
+	elem = rhtab_iter_next(&info->iter);
+	if (!elem)
+		return NULL;
+	/*
+	 * if *pos is not 0, previously iteration failed on this elem,
+	 * so we are restarting it. That's why no need to increment *pos.
+	 */
+	if (*pos == 0)
+		++*pos;
+	return elem;
 }
 
 static void *bpf_rhash_map_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 {
-	return NULL;
+	struct bpf_iter_seq_rhash_map_info *info = seq->private;
+	struct rhtab_elem *elem = v;
+
+	/* Save current key for O(1) resume in next seq_start */
+	memcpy(info->last_key, elem->data, info->map->key_size);
+
+	++*pos;
+
+	return rhtab_iter_next(&info->iter);
+}
+
+static int __bpf_rhash_map_seq_show(struct seq_file *seq,
+				    struct rhtab_elem *elem)
+{
+	struct bpf_iter_seq_rhash_map_info *info = seq->private;
+	struct bpf_iter__bpf_map_elem ctx = {};
+	struct bpf_iter_meta meta;
+	struct bpf_prog *prog;
+	int ret = 0;
+
+	meta.seq = seq;
+	prog = bpf_iter_get_info(&meta, elem == NULL);
+	if (prog) {
+		ctx.meta = &meta;
+		ctx.map = info->map;
+		if (elem) {
+			ctx.key = elem->data;
+			ctx.value = rhtab_elem_value(elem, info->map->key_size);
+		}
+		ret = bpf_iter_run_prog(prog, &ctx);
+	}
+
+	return ret;
 }
 
 static int bpf_rhash_map_seq_show(struct seq_file *seq, void *v)
 {
-	return 0;
+	return __bpf_rhash_map_seq_show(seq, v);
 }
 
 static void bpf_rhash_map_seq_stop(struct seq_file *seq, void *v)
 {
+	struct bpf_iter_seq_rhash_map_info *info = seq->private;
+
+	if (!v)
+		(void)__bpf_rhash_map_seq_show(seq, NULL);
+
+	if (info->iter_active) {
+		rhashtable_walk_stop(&info->iter);
+		rhashtable_walk_exit(&info->iter);
+		info->iter_active = false;
+	}
 }
 
 static int bpf_iter_init_rhash_map(void *priv_data, struct bpf_iter_aux_info *aux)
 {
+	struct bpf_iter_seq_rhash_map_info *info = priv_data;
+	struct bpf_map *map = aux->map;
+
+	info->last_key = kmalloc(map->key_size, GFP_USER);
+	if (!info->last_key)
+		return -ENOMEM;
+
+	bpf_map_inc_with_uref(map);
+	info->map = map;
+	info->rhtab = container_of(map, struct bpf_rhtab, map);
+	info->iter_active = false;
 	return 0;
 }
 
 static void bpf_iter_fini_rhash_map(void *priv_data)
 {
+	struct bpf_iter_seq_rhash_map_info *info = priv_data;
+
+	kfree(info->last_key);
+	bpf_map_put_with_uref(info->map);
 }
 
 static const struct seq_operations bpf_rhash_map_seq_ops = {
