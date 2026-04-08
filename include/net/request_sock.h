@@ -89,9 +89,11 @@ static inline struct sock *req_to_sk(struct request_sock *req)
  * @skb: sk_buff to steal the socket from
  * @refcounted: is set to true if the socket is reference-counted
  * @prefetched: is set to true if the socket was assigned from bpf
+ * @protocol: expected L4 protocol
  */
 static inline struct sock *skb_steal_sock(struct sk_buff *skb,
-					  bool *refcounted, bool *prefetched)
+					  bool *refcounted, bool *prefetched,
+					  int protocol)
 {
 	struct sock *sk = skb->sk;
 
@@ -103,6 +105,18 @@ static inline struct sock *skb_steal_sock(struct sk_buff *skb,
 
 	*prefetched = skb_sk_is_prefetched(skb);
 	if (*prefetched) {
+		/* A non-full socket here is either a reqsk or a
+		 * timewait sock, both only contain sock_common and
+		 * lack sk_protocol. Since both can only be TCP,
+		 * use IPPROTO_TCP as the protocol.
+		 */
+		if (unlikely(((sk_fullsock(sk) ? sk->sk_protocol : IPPROTO_TCP) != protocol))) {
+			skb_orphan(skb);
+			*prefetched = false;
+			*refcounted = false;
+			return NULL;
+		}
+
 #if IS_ENABLED(CONFIG_SYN_COOKIES)
 		if (sk->sk_state == TCP_NEW_SYN_RECV && inet_reqsk(sk)->syncookie) {
 			struct request_sock *req = inet_reqsk(sk);
