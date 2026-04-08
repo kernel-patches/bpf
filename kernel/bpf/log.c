@@ -18,13 +18,11 @@ static bool bpf_verifier_log_attr_valid(const struct bpf_verifier_log *log)
 	/* ubuf and len_total should both be specified (or not) together */
 	if (!!log->ubuf != !!log->len_total)
 		return false;
-	/* log buf without log_level is meaningless */
-	if (log->ubuf && log->level == 0)
-		return false;
 	if (log->level & ~BPF_LOG_MASK)
 		return false;
 	if (log->len_total > UINT_MAX >> 2)
 		return false;
+	/* log->ubuf may be set for log->level = 0 to get warning messages. */
 	return true;
 }
 
@@ -229,7 +227,7 @@ int bpf_vlog_finalize(struct bpf_verifier_log *log, u32 *log_size_actual)
 	int err;
 
 	*log_size_actual = 0;
-	if (!log || log->level == 0 || log->level == BPF_LOG_KERNEL)
+	if (!log || (!log->ubuf && log->level == 0) || log->level == BPF_LOG_KERNEL)
 		return 0;
 
 	if (!log->ubuf)
