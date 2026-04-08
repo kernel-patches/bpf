@@ -378,6 +378,8 @@ enum kern_feature_id {
 	FEAT_BTF_DECL_TAG,
 	/* BTF_KIND_TYPE_TAG support */
 	FEAT_BTF_TYPE_TAG,
+	/* Kernel supports success-path verifier warnings */
+	FEAT_VERIFIER_WARNINGS,
 	/* memcg-based accounting for BPF maps and progs */
 	FEAT_MEMCG_ACCOUNT,
 	/* BPF cookie (bpf_get_attach_cookie() BPF helper) support */

@@ -315,11 +315,12 @@ int bpf_prog_load(enum bpf_prog_type prog_type,
 	attr.fd_array = ptr_to_u64(OPTS_GET(opts, fd_array, NULL));
 	attr.fd_array_cnt = OPTS_GET(opts, fd_array_cnt, 0);
 
-	if (log_level) {
+	/* Pass log_buf/log_size independently so log_level=0 loads can collect warnings. */
+	if (log_buf) {
 		attr.log_buf = ptr_to_u64(log_buf);
 		attr.log_size = log_size;
-		attr.log_level = log_level;
 	}
+	attr.log_level = log_level;
 
 	fd = sys_bpf_prog_load(&attr, attr_sz, attempts);
 	OPTS_SET(opts, log_true_size, attr.log_true_size);

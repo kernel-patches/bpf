@@ -7832,10 +7832,13 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 {
 	LIBBPF_OPTS(bpf_prog_load_opts, load_attr);
 	const char *prog_name = NULL;
+	const size_t warn_log_buf_size = 4096;
 	size_t log_buf_size = 0;
 	char *log_buf = NULL, *tmp;
 	bool own_log_buf = true;
 	__u32 log_level = prog->log_level;
+	bool want_verifier_warnings = log_level == 0 &&
+		kernel_supports(obj, FEAT_VERIFIER_WARNINGS);
 	int ret, err;
 
 	/* Be more helpful by rejecting programs that can't be validated early
@@ -7912,12 +7915,11 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 	}
 
 retry_load:
-	/* if log_level is zero, we don't request logs initially even if
-	 * custom log_buf is specified; if the program load fails, then we'll
-	 * bump log_level to 1 and use either custom log_buf or we'll allocate
-	 * our own and retry the load to get details on what failed
+	/* If supported, pass a buffer with log_level=0 so the kernel can report
+	 * success-path warnings. If the program load fails, retry with
+	 * log_level=1 to get details on what failed.
 	 */
-	if (log_level) {
+	if (log_level || want_verifier_warnings) {
 		if (prog->log_buf) {
 			log_buf = prog->log_buf;
 			log_buf_size = prog->log_size;
@@ -7927,7 +7929,8 @@ retry_load:
 			log_buf_size = obj->log_size;
 			own_log_buf = false;
 		} else {
-			log_buf_size = max((size_t)BPF_LOG_BUF_SIZE, log_buf_size * 2);
+			log_buf_size = max(log_level ? (size_t)BPF_LOG_BUF_SIZE : warn_log_buf_size,
+					   log_buf_size * 2);
 			tmp = realloc(log_buf, log_buf_size);
 			if (!tmp) {
 				ret = -ENOMEM;
@@ -7945,7 +7948,10 @@ retry_load:
 
 	ret = bpf_prog_load(prog->type, prog_name, license, insns, insns_cnt, &load_attr);
 	if (ret >= 0) {
-		if (log_level && own_log_buf) {
+		if (want_verifier_warnings && log_level == 0 && load_attr.log_true_size) {
+			pr_warn("prog '%s': -- BEGIN PROG LOAD WARNINGS --\n%s-- END PROG LOAD WARNINGS --\n",
+				prog->name, log_buf);
+		} else if (log_level && own_log_buf) {
 			pr_debug("prog '%s': -- BEGIN PROG LOAD LOG --\n%s-- END PROG LOAD LOG --\n",
 				 prog->name, log_buf);
 		}
