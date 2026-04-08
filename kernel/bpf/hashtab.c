@@ -2759,6 +2759,11 @@ struct bpf_rhtab {
 	u32 elem_size;
 };
 
+static inline void *rhtab_elem_value(struct rhtab_elem *l, u32 key_size)
+{
+	return l->data + round_up(key_size, 8);
+}
+
 static struct bpf_map *rhtab_map_alloc(union bpf_attr *attr)
 {
 	return ERR_PTR(-EOPNOTSUPP);
@@ -2773,33 +2778,155 @@ static void rhtab_map_free(struct bpf_map *map)
 {
 }
 
+static void *rhtab_lookup_elem(struct bpf_map *map, void *key)
+{
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	/* Using constant zeroed params to force rhashtable use inlined hashfunc */
+	static const struct rhashtable_params params = { 0 };
+
+	return rhashtable_lookup_likely(&rhtab->ht, key, params);
+}
+
 static void *rhtab_map_lookup_elem(struct bpf_map *map, void *key) __must_hold(RCU)
 {
-	return NULL;
+	struct rhtab_elem *l;
+
+	l = rhtab_lookup_elem(map, key);
+	return l ? rhtab_elem_value(l, map->key_size) : NULL;
+}
+
+static int rhtab_delete_elem(struct bpf_rhtab *rhtab, struct rhtab_elem *elem)
+{
+	int err;
+
+	err = rhashtable_remove_fast(&rhtab->ht, &elem->node, rhtab->params);
+	if (err)
+		return err;
+
+	bpf_map_free_internal_structs(&rhtab->map, rhtab_elem_value(elem, rhtab->map.key_size));
+	bpf_mem_cache_free_rcu(&rhtab->ma, elem);
+	return 0;
 }
 
 static long rhtab_map_delete_elem(struct bpf_map *map, void *key)
 {
-	return -EOPNOTSUPP;
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct rhtab_elem *l;
+
+	guard(rcu)();
+	l = rhtab_lookup_elem(map, key);
+	return l ? rhtab_delete_elem(rhtab, l) : -ENOENT;
+}
+
+static void rhtab_read_elem_value(struct bpf_map *map, void *dst, struct rhtab_elem *elem,
+				  u64 flags)
+{
+	void *src = rhtab_elem_value(elem, map->key_size);
+
+	if (flags & BPF_F_LOCK)
+		copy_map_value_locked(map, dst, src, true);
+	else
+		copy_map_value(map, dst, src);
 }
 
 static int rhtab_map_lookup_and_delete_elem(struct bpf_map *map, void *key, void *value, u64 flags)
 {
-	return -EOPNOTSUPP;
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct rhtab_elem *l;
+	int err;
+
+	if ((flags & ~BPF_F_LOCK) ||
+	    ((flags & BPF_F_LOCK) && !btf_record_has_field(map->record, BPF_SPIN_LOCK)))
+		return -EINVAL;
+
+	/* Make sure element is not deleted between lookup and copy */
+	guard(rcu)();
+
+	l = rhtab_lookup_elem(map, key);
+	if (!l)
+		return -ENOENT;
+
+	rhtab_read_elem_value(map, value, l, flags);
+	err = rhtab_delete_elem(rhtab, l);
+	if (err)
+		return err;
+
+	check_and_init_map_value(map, value);
+	return 0;
+}
+
+static long rhtab_map_update_existing(struct bpf_map *map, struct rhtab_elem *elem, void *value,
+				      u64 map_flags)
+{
+	if (map_flags & BPF_NOEXIST)
+		return -EEXIST;
+
+	if (map_flags & BPF_F_LOCK)
+		copy_map_value_locked(map, rhtab_elem_value(elem, map->key_size), value, false);
+	else
+		copy_map_value(map, rhtab_elem_value(elem, map->key_size), value);
+	return 0;
 }
 
 static long rhtab_map_update_elem(struct bpf_map *map, void *key, void *value, u64 map_flags)
 {
-	return -EOPNOTSUPP;
-}
+	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+	struct rhtab_elem *elem, *tmp;
 
-static void rhtab_map_free_internal_structs(struct bpf_map *map)
-{
+	if (unlikely((map_flags & ~BPF_F_LOCK) > BPF_EXIST))
+		return -EINVAL;
+
+	if ((map_flags & BPF_F_LOCK) && !btf_record_has_field(map->record, BPF_SPIN_LOCK))
+		return -EINVAL;
+
+	guard(rcu)();
+	elem = rhtab_lookup_elem(map, key);
+	if (elem)
+		return rhtab_map_update_existing(map, elem, value, map_flags);
+
+	if (map_flags & BPF_EXIST)
+		return -ENOENT;
+
+	/* Check max_entries limit before inserting new element */
+	if (atomic_read(&rhtab->ht.nelems) >= map->max_entries)
+		return -E2BIG;
+
+	elem = bpf_mem_cache_alloc(&rhtab->ma);
+	if (!elem)
+		return -ENOMEM;
+
+	memcpy(elem->data, key, map->key_size);
+	copy_map_value(map, rhtab_elem_value(elem, map->key_size), value);
+
+	tmp = rhashtable_lookup_get_insert_fast(&rhtab->ht, &elem->node, rhtab->params);
+	if (tmp) {
+		bpf_mem_cache_free(&rhtab->ma, elem);
+		if (IS_ERR(tmp))
+			return PTR_ERR(tmp);
+
+		return rhtab_map_update_existing(map, tmp, value, map_flags);
+	}
+
+	return 0;
 }
 
 static int rhtab_map_gen_lookup(struct bpf_map *map, struct bpf_insn *insn_buf)
 {
-	return -EOPNOTSUPP;
+	struct bpf_insn *insn = insn_buf;
+	const int ret = BPF_REG_0;
+
+	BUILD_BUG_ON(!__same_type(&rhtab_lookup_elem,
+				  (void *(*)(struct bpf_map *map, void *key)) NULL));
+	*insn++ = BPF_EMIT_CALL(rhtab_lookup_elem);
+	*insn++ = BPF_JMP_IMM(BPF_JEQ, ret, 0, 1);
+	*insn++ = BPF_ALU64_IMM(BPF_ADD, ret,
+				offsetof(struct rhtab_elem, data) + round_up(map->key_size, 8));
+
+	return insn - insn_buf;
+}
+
+static void rhtab_map_free_internal_structs(struct bpf_map *map)
+{
 }
 
 static int rhtab_map_get_next_key(struct bpf_map *map, void *key, void *next_key)
