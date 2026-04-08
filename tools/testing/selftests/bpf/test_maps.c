@@ -30,12 +30,23 @@ int skips;
 
 static struct bpf_map_create_opts map_opts = { .sz = sizeof(map_opts) };
 
+static bool skip_test(enum bpf_map_type map_type)
+{
+	return map_type == BPF_MAP_TYPE_RHASH &&
+	       !(map_opts.map_flags & BPF_F_NO_PREALLOC);
+}
+
 static void test_hashmap(unsigned int task, void *data)
 {
+	enum bpf_map_type map_type = data ? *(enum bpf_map_type *)data : BPF_MAP_TYPE_HASH;
 	long long key, next_key, first_key, value;
 	int fd;
 
-	fd = bpf_map_create(BPF_MAP_TYPE_HASH, NULL, sizeof(key), sizeof(value), 2, &map_opts);
+	/* RHASH doesn't support prealloc mode */
+	if (skip_test(map_type))
+		return;
+
+	fd = bpf_map_create(map_type, NULL, sizeof(key), sizeof(value), 2, &map_opts);
 	if (fd < 0) {
 		printf("Failed to create hashmap '%s'!\n", strerror(errno));
 		exit(1);
@@ -128,11 +139,16 @@ static void test_hashmap(unsigned int task, void *data)
 
 static void test_hashmap_sizes(unsigned int task, void *data)
 {
+	enum bpf_map_type map_type = data ? *(enum bpf_map_type *)data : BPF_MAP_TYPE_HASH;
 	int fd, i, j;
+
+	/* RHASH doesn't support prealloc mode */
+	if (skip_test(map_type))
+		return;
 
 	for (i = 1; i <= 512; i <<= 1)
 		for (j = 1; j <= 1 << 18; j <<= 1) {
-			fd = bpf_map_create(BPF_MAP_TYPE_HASH, NULL, i, j, 2, &map_opts);
+			fd = bpf_map_create(map_type, NULL, i, j, 2, &map_opts);
 			if (fd < 0) {
 				if (errno == ENOMEM)
 					return;
@@ -261,12 +277,12 @@ static void test_hashmap_percpu(unsigned int task, void *data)
 }
 
 #define VALUE_SIZE 3
-static int helper_fill_hashmap(int max_entries)
+static int helper_fill_hashmap(int max_entries, enum bpf_map_type map_type)
 {
 	int i, fd, ret;
 	long long key, value[VALUE_SIZE] = {};
 
-	fd = bpf_map_create(BPF_MAP_TYPE_HASH, NULL, sizeof(key), sizeof(value),
+	fd = bpf_map_create(map_type, NULL, sizeof(key), sizeof(value),
 			    max_entries, &map_opts);
 	CHECK(fd < 0,
 	      "failed to create hashmap",
@@ -285,19 +301,32 @@ static int helper_fill_hashmap(int max_entries)
 
 static void test_hashmap_walk(unsigned int task, void *data)
 {
+	enum bpf_map_type map_type = data ? *(enum bpf_map_type *)data : BPF_MAP_TYPE_HASH;
 	int fd, i, max_entries = 10000;
 	long long key, value[VALUE_SIZE], next_key;
 	bool next_key_valid = true;
 
-	fd = helper_fill_hashmap(max_entries);
+	/* RHASH doesn't support prealloc mode */
+	if (skip_test(map_type))
+		return;
+
+	fd = helper_fill_hashmap(max_entries, map_type);
 
 	for (i = 0; bpf_map_get_next_key(fd, !i ? NULL : &key,
 					 &next_key) == 0; i++) {
 		key = next_key;
-		assert(bpf_map_lookup_elem(fd, &key, value) == 0);
+		if (map_type == BPF_MAP_TYPE_RHASH)
+			/*
+			 * During chained rhashtable resize, a key visible to
+			 * get_next_key can be transiently invisible to lookup.
+			 */
+			bpf_map_lookup_elem(fd, &key, value);
+		else
+			assert(bpf_map_lookup_elem(fd, &key, value) == 0);
 	}
 
-	assert(i == max_entries);
+	/* rhash does not guarantee visiting all elements or not visiting the same element twice */
+	assert(map_type == BPF_MAP_TYPE_RHASH || i == max_entries);
 
 	assert(bpf_map_get_next_key(fd, NULL, &key) == 0);
 	for (i = 0; next_key_valid; i++) {
@@ -308,16 +337,23 @@ static void test_hashmap_walk(unsigned int task, void *data)
 		key = next_key;
 	}
 
-	assert(i == max_entries);
+	assert(map_type == BPF_MAP_TYPE_RHASH || i == max_entries);
 
 	for (i = 0; bpf_map_get_next_key(fd, !i ? NULL : &key,
 					 &next_key) == 0; i++) {
 		key = next_key;
 		assert(bpf_map_lookup_elem(fd, &key, value) == 0);
-		assert(value[0] - 1 == key);
+		/*
+		 * Async rhashtable resize (triggered by the fill above) can
+		 * still be in progress.  get_next_key follows future_tbl and
+		 * may revisit elements, so some values get incremented more
+		 * than once.
+		 */
+		assert(map_type == BPF_MAP_TYPE_RHASH ||
+		       value[0] - 1 == key);
 	}
 
-	assert(i == max_entries);
+	assert(map_type == BPF_MAP_TYPE_RHASH || i == max_entries);
 	close(fd);
 }
 
@@ -329,8 +365,8 @@ static void test_hashmap_zero_seed(void)
 	old_flags = map_opts.map_flags;
 	map_opts.map_flags |= BPF_F_ZERO_SEED;
 
-	first = helper_fill_hashmap(3);
-	second = helper_fill_hashmap(3);
+	first = helper_fill_hashmap(3, BPF_MAP_TYPE_HASH);
+	second = helper_fill_hashmap(3, BPF_MAP_TYPE_HASH);
 
 	for (i = 0; ; i++) {
 		void *key_ptr = !i ? NULL : &key;
@@ -1301,7 +1337,7 @@ out_map_in_map:
 
 #define MAP_SIZE (32 * 1024)
 
-static void test_map_large(void)
+static void test_map_large(enum bpf_map_type map_type)
 {
 
 	struct bigkey {
@@ -1311,7 +1347,11 @@ static void test_map_large(void)
 	} key;
 	int fd, i, value;
 
-	fd = bpf_map_create(BPF_MAP_TYPE_HASH, NULL, sizeof(key), sizeof(value),
+	/* RHASH doesn't support prealloc mode */
+	if (skip_test(map_type))
+		return;
+
+	fd = bpf_map_create(map_type, NULL, sizeof(key), sizeof(value),
 			    MAP_SIZE, &map_opts);
 	if (fd < 0) {
 		printf("Failed to create large map '%s'!\n", strerror(errno));
@@ -1378,10 +1418,16 @@ static void __run_parallel(unsigned int tasks,
 
 static void test_map_stress(void)
 {
-	run_parallel(100, test_hashmap_walk, NULL);
-	run_parallel(100, test_hashmap, NULL);
+	enum bpf_map_type hash_type = BPF_MAP_TYPE_HASH;
+	enum bpf_map_type rhash_type = BPF_MAP_TYPE_RHASH;
+
+	run_parallel(100, test_hashmap_walk, &hash_type);
+	run_parallel(100, test_hashmap_walk, &rhash_type);
+	run_parallel(100, test_hashmap, &hash_type);
+	run_parallel(100, test_hashmap, &rhash_type);
 	run_parallel(100, test_hashmap_percpu, NULL);
-	run_parallel(100, test_hashmap_sizes, NULL);
+	run_parallel(100, test_hashmap_sizes, &hash_type);
+	run_parallel(100, test_hashmap_sizes, &rhash_type);
 
 	run_parallel(100, test_arraymap, NULL);
 	run_parallel(100, test_arraymap_percpu, NULL);
@@ -1399,7 +1445,7 @@ static void test_map_stress(void)
 static bool can_retry(int err)
 {
 	return (err == EAGAIN || err == EBUSY ||
-		((err == ENOMEM || err == E2BIG) &&
+		((err == ENOMEM || err == E2BIG || err == ENOENT) &&
 		 map_opts.map_flags == BPF_F_NO_PREALLOC));
 }
 
@@ -1471,12 +1517,16 @@ static void test_update_delete(unsigned int fn, void *data)
 	}
 }
 
-static void test_map_parallel(void)
+static void test_map_parallel(enum bpf_map_type map_type)
 {
 	int i, fd, key = 0, value = 0, j = 0;
 	int data[2];
 
-	fd = bpf_map_create(BPF_MAP_TYPE_HASH, NULL, sizeof(key), sizeof(value),
+	/* RHASH doesn't support prealloc mode */
+	if (skip_test(map_type))
+		return;
+
+	fd = bpf_map_create(map_type, NULL, sizeof(key), sizeof(value),
 			    MAP_SIZE, &map_opts);
 	if (fd < 0) {
 		printf("Failed to create map for parallel test '%s'!\n",
@@ -1529,14 +1579,18 @@ again:
 	close(fd);
 }
 
-static void test_map_rdonly(void)
+static void test_map_rdonly(enum bpf_map_type map_type)
 {
 	int fd, key = 0, value = 0;
 	__u32 old_flags;
 
+	/* RHASH doesn't support prealloc mode */
+	if (skip_test(map_type))
+		return;
+
 	old_flags = map_opts.map_flags;
 	map_opts.map_flags |= BPF_F_RDONLY;
-	fd = bpf_map_create(BPF_MAP_TYPE_HASH, NULL, sizeof(key), sizeof(value),
+	fd = bpf_map_create(map_type, NULL, sizeof(key), sizeof(value),
 			    MAP_SIZE, &map_opts);
 	map_opts.map_flags = old_flags;
 	if (fd < 0) {
@@ -1558,14 +1612,18 @@ static void test_map_rdonly(void)
 	close(fd);
 }
 
-static void test_map_wronly_hash(void)
+static void test_map_wronly_hash(enum bpf_map_type map_type)
 {
 	int fd, key = 0, value = 0;
 	__u32 old_flags;
 
+	/* RHASH doesn't support prealloc mode */
+	if (skip_test(map_type))
+		return;
+
 	old_flags = map_opts.map_flags;
 	map_opts.map_flags |= BPF_F_WRONLY;
-	fd = bpf_map_create(BPF_MAP_TYPE_HASH, NULL, sizeof(key), sizeof(value),
+	fd = bpf_map_create(map_type, NULL, sizeof(key), sizeof(value),
 			    MAP_SIZE, &map_opts);
 	map_opts.map_flags = old_flags;
 	if (fd < 0) {
@@ -1623,7 +1681,8 @@ static void test_map_wronly_stack_or_queue(enum bpf_map_type map_type)
 
 static void test_map_wronly(void)
 {
-	test_map_wronly_hash();
+	test_map_wronly_hash(BPF_MAP_TYPE_HASH);
+	test_map_wronly_hash(BPF_MAP_TYPE_RHASH);
 	test_map_wronly_stack_or_queue(BPF_MAP_TYPE_STACK);
 	test_map_wronly_stack_or_queue(BPF_MAP_TYPE_QUEUE);
 }
@@ -1883,9 +1942,14 @@ static void test_reuseport_array(void)
 
 static void run_all_tests(void)
 {
-	test_hashmap(0, NULL);
+	enum bpf_map_type hash_type = BPF_MAP_TYPE_HASH;
+	enum bpf_map_type rhash_type = BPF_MAP_TYPE_RHASH;
+
+	test_hashmap(0, &hash_type);
+	test_hashmap(0, &rhash_type);
 	test_hashmap_percpu(0, NULL);
-	test_hashmap_walk(0, NULL);
+	test_hashmap_walk(0, &hash_type);
+	test_hashmap_walk(0, &rhash_type);
 	test_hashmap_zero_seed();
 
 	test_arraymap(0, NULL);
@@ -1897,11 +1961,14 @@ static void run_all_tests(void)
 	test_devmap_hash(0, NULL);
 	test_sockmap(0, NULL);
 
-	test_map_large();
-	test_map_parallel();
+	test_map_large(BPF_MAP_TYPE_HASH);
+	test_map_large(BPF_MAP_TYPE_RHASH);
+	test_map_parallel(BPF_MAP_TYPE_HASH);
+	test_map_parallel(BPF_MAP_TYPE_RHASH);
 	test_map_stress();
 
-	test_map_rdonly();
+	test_map_rdonly(BPF_MAP_TYPE_HASH);
+	test_map_rdonly(BPF_MAP_TYPE_RHASH);
 	test_map_wronly();
 
 	test_reuseport_array();
