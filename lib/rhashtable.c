@@ -693,6 +693,59 @@ void rhashtable_walk_enter(struct rhashtable *ht, struct rhashtable_iter *iter)
 EXPORT_SYMBOL_GPL(rhashtable_walk_enter);
 
 /**
+ * rhashtable_walk_enter_from - Initialise a walk starting at a key's bucket
+ * @ht:		Table to walk over
+ * @iter:	Hash table iterator
+ * @key:	Key whose bucket to start from
+ * @params:	Hash table parameters
+ *
+ * Like rhashtable_walk_enter(), but positions the iterator at the bucket
+ * containing @key. If a resize is in progress and @key has been migrated
+ * to the future table, the walker is moved to that table.
+ *
+ * Same constraints as rhashtable_walk_enter() apply.
+ */
+void rhashtable_walk_enter_from(struct rhashtable *ht,
+				struct rhashtable_iter *iter,
+				const void *key,
+				const struct rhashtable_params params)
+				__must_hold(RCU)
+{
+	struct bucket_table *tbl;
+	struct rhash_head *he;
+
+	rhashtable_walk_enter(ht, iter);
+
+	if (!key)
+		return;
+
+	tbl = rht_dereference_rcu(ht->tbl, ht);
+	he = __rhashtable_lookup_one(ht, tbl, key, params,
+				     RHT_LOOKUP_NORMAL);
+	if (!he) {
+		smp_rmb();
+		tbl = rht_dereference_rcu(tbl->future_tbl, ht);
+		if (!tbl)
+			return;
+
+		he = __rhashtable_lookup_one(ht, tbl, key, params,
+					     RHT_LOOKUP_NORMAL);
+		if (!he)
+			return;
+
+		spin_lock(&ht->lock);
+		list_del(&iter->walker.list);
+		iter->walker.tbl = tbl;
+		list_add(&iter->walker.list, &tbl->walkers);
+		spin_unlock(&ht->lock);
+	}
+
+	iter->slot = rht_key_hashfn(ht, tbl, key, params);
+	iter->p = he;
+}
+EXPORT_SYMBOL_GPL(rhashtable_walk_enter_from);
+
+/**
  * rhashtable_walk_exit - Free an iterator
  * @iter:	Hash table Iterator
  *

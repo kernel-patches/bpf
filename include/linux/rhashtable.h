@@ -253,6 +253,11 @@ static inline void rhashtable_walk_start(struct rhashtable_iter *iter)
 	(void)rhashtable_walk_start_check(iter);
 }
 
+void rhashtable_walk_enter_from(struct rhashtable *ht,
+				struct rhashtable_iter *iter,
+				const void *key,
+				const struct rhashtable_params params);
+
 void *rhashtable_walk_next(struct rhashtable_iter *iter);
 void *rhashtable_walk_peek(struct rhashtable_iter *iter);
 void rhashtable_walk_stop(struct rhashtable_iter *iter) __releases_shared(RCU);
@@ -613,8 +618,8 @@ static inline int rhashtable_compare(struct rhashtable_compare_arg *arg,
 }
 
 /* Internal function, do not use. */
-static __always_inline struct rhash_head *__rhashtable_lookup(
-	struct rhashtable *ht, const void *key,
+static __always_inline struct rhash_head *__rhashtable_lookup_one(
+	struct rhashtable *ht, struct bucket_table *tbl, const void *key,
 	const struct rhashtable_params params,
 	const enum rht_lookup_freq freq)
 	__must_hold_shared(RCU)
@@ -624,13 +629,10 @@ static __always_inline struct rhash_head *__rhashtable_lookup(
 		.key = key,
 	};
 	struct rhash_lock_head __rcu *const *bkt;
-	struct bucket_table *tbl;
 	struct rhash_head *he;
 	unsigned int hash;
 
 	BUILD_BUG_ON(!__builtin_constant_p(freq));
-	tbl = rht_dereference_rcu(ht->tbl, ht);
-restart:
 	hash = rht_key_hashfn(ht, tbl, key, params);
 	bkt = rht_bucket(tbl, hash);
 	do {
@@ -645,6 +647,25 @@ restart:
 		 * while we walk along it - better check and retry.
 		 */
 	} while (he != RHT_NULLS_MARKER(bkt));
+
+	return NULL;
+}
+
+/* Internal function, do not use. */
+static __always_inline struct rhash_head *__rhashtable_lookup(
+	struct rhashtable *ht, const void *key,
+	const struct rhashtable_params params,
+	const enum rht_lookup_freq freq)
+	__must_hold_shared(RCU)
+{
+	struct bucket_table *tbl;
+	struct rhash_head *he;
+
+	tbl = rht_dereference_rcu(ht->tbl, ht);
+restart:
+	he = __rhashtable_lookup_one(ht, tbl, key, params, freq);
+	if (he)
+		return he;
 
 	/* Ensure we see any new tables. */
 	smp_rmb();
