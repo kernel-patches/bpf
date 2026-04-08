@@ -8,11 +8,12 @@ Q = @
 endif
 
 MODULES = bpf_testmod.ko bpf_test_no_cfi.ko bpf_test_modorder_x.ko \
-	bpf_test_modorder_y.ko bpf_test_rqspinlock.ko
+	bpf_test_modorder_y.ko bpf_test_rqspinlock.ko test_klp_bpf.ko
 
 $(foreach m,$(MODULES),$(eval obj-m += $(m:.ko=.o)))
 
 CFLAGS_bpf_testmod.o = -I$(src)
+CFLAGS_test_klp_bpf.o = -I$(src)
 
 all:
 	$(Q)$(MAKE) -C $(KDIR) M=$(TEST_KMOD_DIR) modules
