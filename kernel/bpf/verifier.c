@@ -3656,9 +3656,12 @@ static int add_kfunc_in_insns(struct bpf_verifier_env *env,
 
 static int add_subprog_and_kfunc(struct bpf_verifier_env *env)
 {
+	struct bpf_func_info *func_info = env->prog->aux->func_info;
 	struct bpf_subprog_info *subprog = env->subprog_info;
 	int i, ret, insn_cnt = env->prog->len, ex_cb_insn;
 	struct bpf_insn *insn = env->prog->insnsi;
+	struct btf *btf = env->prog->aux->btf;
+	const struct btf_type *t;
 
 	/* Add entry function. */
 	ret = add_subprog(env, 0);
@@ -3710,9 +3713,16 @@ static int add_subprog_and_kfunc(struct bpf_verifier_env *env)
 	 */
 	subprog[env->subprog_cnt].start = insn_cnt;
 
+	if (func_info) {
+		for (i = 0; i < env->subprog_cnt; i++) {
+			t = btf_type_by_id(btf, func_info[i].type_id);
+			subprog[i].name = btf_name_by_offset(btf, t->name_off);
+		}
+	}
+
 	if (env->log.level & BPF_LOG_LEVEL2)
 		for (i = 0; i < env->subprog_cnt; i++)
-			verbose(env, "func#%d @%d\n", i, subprog[i].start);
+			verbose(env, "func#%d @%d %s\n", i, subprog[i].start, subprog[i].name ?: "");
 
 	return 0;
 }
