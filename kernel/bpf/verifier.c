@@ -1348,6 +1348,7 @@ static bool is_stack_slot_special(const struct bpf_stack_state *stack)
 	case STACK_IRQ_FLAG:
 		return true;
 	case STACK_INVALID:
+	case STACK_POISON:
 	case STACK_MISC:
 	case STACK_ZERO:
 		return false;
@@ -1390,14 +1391,14 @@ static void mark_stack_slot_misc(struct bpf_verifier_env *env, u8 *stype)
 {
 	if (*stype == STACK_ZERO)
 		return;
-	if (*stype == STACK_INVALID)
+	if (*stype == STACK_INVALID || *stype == STACK_POISON)
 		return;
 	*stype = STACK_MISC;
 }
 
 static void scrub_spilled_slot(u8 *stype)
 {
-	if (*stype != STACK_INVALID)
+	if (*stype != STACK_INVALID && *stype != STACK_POISON)
 		*stype = STACK_MISC;
 }
 
@@ -5598,7 +5599,8 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 		 * that may or may not be written because, if we're reject
 		 * them, the error would be too confusing.
 		 */
-		if (*stype == STACK_INVALID && !env->allow_uninit_stack) {
+		if ((*stype == STACK_INVALID || *stype == STACK_POISON) &&
+		    !env->allow_uninit_stack) {
 			verbose(env, "uninit stack in range of var-offset write prohibited for !root; insn %d, off: %d",
 					insn_idx, i);
 			return -EINVAL;
@@ -5734,8 +5736,13 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 					}
 					if (type == STACK_INVALID && env->allow_uninit_stack)
 						continue;
-					verbose(env, "invalid read from stack off %d+%d size %d\n",
-						off, i, size);
+					if (type == STACK_POISON) {
+						verbose(env, "reading from stack off %d+%d size %d, slot poisoned by dead code elimination\n",
+							off, i, size);
+					} else {
+						verbose(env, "invalid read from stack off %d+%d size %d\n",
+							off, i, size);
+					}
 					return -EACCES;
 				}
 
@@ -5784,8 +5791,13 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 				continue;
 			if (type == STACK_INVALID && env->allow_uninit_stack)
 				continue;
-			verbose(env, "invalid read from stack off %d+%d size %d\n",
-				off, i, size);
+			if (type == STACK_POISON) {
+				verbose(env, "reading from stack off %d+%d size %d, slot poisoned by dead code elimination\n",
+					off, i, size);
+			} else {
+				verbose(env, "invalid read from stack off %d+%d size %d\n",
+					off, i, size);
+			}
 			return -EACCES;
 		}
 		if (dst_regno >= 0)
@@ -8388,15 +8400,21 @@ static int check_stack_range_initialized(
 	/* Some accesses can write anything into the stack, others are
 	 * read-only.
 	 */
-	bool clobber = false;
+	bool clobber = type == BPF_WRITE;
+	/*
+	 * Negative access_size signals global subprog/kfunc arg check where
+	 * STACK_POISON slots are acceptable. static stack liveness
+	 * might have determined that subprog doesn't read them,
+	 * but BTF based global subprog validation isn't accurate enough.
+	 */
+	bool allow_poison = access_size < 0 || clobber;
+
+	access_size = abs(access_size);
 
 	if (access_size == 0 && !zero_size_allowed) {
 		verbose(env, "invalid zero-sized read\n");
 		return -EACCES;
 	}
-
-	if (type == BPF_WRITE)
-		clobber = true;
 
 	err = check_stack_access_within_bounds(env, regno, off, access_size, type);
 	if (err)
@@ -8496,7 +8514,12 @@ static int check_stack_range_initialized(
 			goto mark;
 		}
 
-		if (tnum_is_const(reg->var_off)) {
+		if (*stype == STACK_POISON) {
+			if (allow_poison)
+				goto mark;
+			verbose(env, "reading from stack R%d off %d+%d size %d, slot poisoned by dead code elimination\n",
+				regno, min_off, i - min_off, access_size);
+		} else if (tnum_is_const(reg->var_off)) {
 			verbose(env, "invalid read from stack R%d off %d+%d size %d\n",
 				regno, min_off, i - min_off, access_size);
 		} else {
@@ -8673,8 +8696,10 @@ static int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg
 		mark_ptr_not_null_reg(reg);
 	}
 
-	err = check_helper_mem_access(env, regno, mem_size, BPF_READ, true, NULL);
-	err = err ?: check_helper_mem_access(env, regno, mem_size, BPF_WRITE, true, NULL);
+	int size = base_type(reg->type) == PTR_TO_STACK ? -(int)mem_size : mem_size;
+
+	err = check_helper_mem_access(env, regno, size, BPF_READ, true, NULL);
+	err = err ?: check_helper_mem_access(env, regno, size, BPF_WRITE, true, NULL);
 
 	if (may_be_null)
 		*reg = saved_reg;
@@ -20193,7 +20218,7 @@ static void __clean_func_state(struct bpf_verifier_env *env,
 				__mark_reg_not_init(env, spill);
 			}
 			for (j = start; j < end; j++)
-				st->stack[i].slot_type[j] = STACK_INVALID;
+				st->stack[i].slot_type[j] = STACK_POISON;
 		}
 	}
 }
@@ -20520,7 +20545,8 @@ static bool is_stack_misc_after(struct bpf_verifier_env *env,
 
 	for (i = im; i < ARRAY_SIZE(stack->slot_type); ++i) {
 		if ((stack->slot_type[i] == STACK_MISC) ||
-		    (stack->slot_type[i] == STACK_INVALID && env->allow_uninit_stack))
+		    ((stack->slot_type[i] == STACK_INVALID || stack->slot_type[i] == STACK_POISON) &&
+		     env->allow_uninit_stack))
 			continue;
 		return false;
 	}
@@ -20556,13 +20582,22 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 
 		spi = i / BPF_REG_SIZE;
 
-		if (exact == EXACT &&
-		    (i >= cur->allocated_stack ||
-		     old->stack[spi].slot_type[i % BPF_REG_SIZE] !=
-		     cur->stack[spi].slot_type[i % BPF_REG_SIZE]))
-			return false;
+		if (exact == EXACT) {
+			u8 old_type = old->stack[spi].slot_type[i % BPF_REG_SIZE];
+			u8 cur_type = i < cur->allocated_stack ?
+				      cur->stack[spi].slot_type[i % BPF_REG_SIZE] : STACK_INVALID;
 
-		if (old->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_INVALID)
+			/* STACK_INVALID and STACK_POISON are equivalent for pruning */
+			if (old_type == STACK_POISON)
+				old_type = STACK_INVALID;
+			if (cur_type == STACK_POISON)
+				cur_type = STACK_INVALID;
+			if (i >= cur->allocated_stack || old_type != cur_type)
+				return false;
+		}
+
+		if (old->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_INVALID ||
+		    old->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_POISON)
 			continue;
 
 		if (env->allow_uninit_stack &&
@@ -20660,6 +20695,7 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		case STACK_MISC:
 		case STACK_ZERO:
 		case STACK_INVALID:
+		case STACK_POISON:
 			continue;
 		/* Ensure that new unhandled slot types return false by default */
 		default:
