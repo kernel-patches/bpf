@@ -42,6 +42,15 @@ static void verify_result(struct tcpbpf_globals *result)
 	/* check getsockopt for window_clamp */
 	ASSERT_EQ(result->window_clamp_client, 9216, "window_clamp_client");
 	ASSERT_EQ(result->window_clamp_server, 9216, "window_clamp_server");
+
+	ASSERT_EQ(result->timeout_init_req_seen, 1, "timeout_init_req_seen");
+	ASSERT_EQ(result->timeout_init_req_rtt_min, 0, "timeout_init_req_rtt_min");
+
+	ASSERT_EQ(result->rwnd_init_req_seen, 1, "rwnd_init_req_seen");
+	ASSERT_EQ(result->rwnd_init_req_rtt_min, 0, "rwnd_init_req_rtt_min");
+
+	ASSERT_EQ(result->needs_ecn_req_seen, 1, "needs_ecn_req_seen");
+	ASSERT_EQ(result->needs_ecn_req_rtt_min, 0, "needs_ecn_req_rtt_min");
 }
 
 static void run_test(struct tcpbpf_globals *result)

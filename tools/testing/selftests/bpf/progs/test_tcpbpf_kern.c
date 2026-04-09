@@ -85,6 +85,27 @@ int bpf_testcb(struct bpf_sock_ops *skops)
 	global.event_map |= (1 << op);
 
 	switch (op) {
+	case BPF_SOCK_OPS_TIMEOUT_INIT:
+		if (!skops->is_fullsock) {
+			global.timeout_init_req_seen = 1;
+			global.timeout_init_req_rtt_min = skops->rtt_min;
+		}
+		rv = -1;
+		break;
+	case BPF_SOCK_OPS_RWND_INIT:
+		if (!skops->is_fullsock) {
+			global.rwnd_init_req_seen = 1;
+			global.rwnd_init_req_rtt_min = skops->rtt_min;
+		}
+		rv = 0;
+		break;
+	case BPF_SOCK_OPS_NEEDS_ECN:
+		if (!skops->is_fullsock) {
+			global.needs_ecn_req_seen = 1;
+			global.needs_ecn_req_rtt_min = skops->rtt_min;
+		}
+		rv = 0;
+		break;
 	case BPF_SOCK_OPS_TCP_CONNECT_CB:
 		rv = bpf_setsockopt(skops, SOL_TCP, TCP_WINDOW_CLAMP,
 				    &window_clamp, sizeof(window_clamp));

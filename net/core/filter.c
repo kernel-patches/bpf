@@ -10827,16 +10827,49 @@ static u32 sock_ops_convert_ctx_access(enum bpf_access_type type,
 	case offsetof(struct bpf_sock_ops, rtt_min):
 		BUILD_BUG_ON(sizeof_field(struct tcp_sock, rtt_min) !=
 			     sizeof(struct minmax));
-		BUILD_BUG_ON(sizeof(struct minmax) <
-			     sizeof(struct minmax_sample));
+		BUILD_BUG_ON(sizeof_field(struct bpf_sock_ops, rtt_min) !=
+			     sizeof_field(struct minmax_sample, v));
+		off = offsetof(struct tcp_sock, rtt_min) +
+		      offsetof(struct minmax_sample, v);
 
-		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(
-						struct bpf_sock_ops_kern, sk),
-				      si->dst_reg, si->src_reg,
-				      offsetof(struct bpf_sock_ops_kern, sk));
-		*insn++ = BPF_LDX_MEM(BPF_W, si->dst_reg, si->dst_reg,
-				      offsetof(struct tcp_sock, rtt_min) +
-				      sizeof_field(struct minmax_sample, t));
+		{
+			int fullsock_reg = si->dst_reg, reg = BPF_REG_9, jmp = 2;
+
+			if (si->dst_reg == reg || si->src_reg == reg)
+				reg--;
+			if (si->dst_reg == reg || si->src_reg == reg)
+				reg--;
+			if (si->dst_reg == si->src_reg) {
+				*insn++ = BPF_STX_MEM(BPF_DW, si->src_reg, reg,
+						      offsetof(struct bpf_sock_ops_kern,
+							       temp));
+				fullsock_reg = reg;
+				jmp += 2;
+			}
+			*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(
+							struct bpf_sock_ops_kern,
+							is_locked_tcp_sock),
+					      fullsock_reg, si->src_reg,
+					      offsetof(struct bpf_sock_ops_kern,
+						       is_locked_tcp_sock));
+			*insn++ = BPF_JMP_IMM(BPF_JEQ, fullsock_reg, 0, jmp);
+			if (si->dst_reg == si->src_reg)
+				*insn++ = BPF_LDX_MEM(BPF_DW, reg, si->src_reg,
+						      offsetof(struct bpf_sock_ops_kern,
+							       temp));
+			*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(
+							struct bpf_sock_ops_kern, sk),
+					      si->dst_reg, si->src_reg,
+					      offsetof(struct bpf_sock_ops_kern, sk));
+			*insn++ = BPF_LDX_MEM(BPF_W, si->dst_reg, si->dst_reg,
+					      off);
+			if (si->dst_reg == si->src_reg) {
+				*insn++ = BPF_JMP_A(1);
+				*insn++ = BPF_LDX_MEM(BPF_DW, reg, si->src_reg,
+						      offsetof(struct bpf_sock_ops_kern,
+							       temp));
+			}
+		}
 		break;
 
 	case offsetof(struct bpf_sock_ops, bpf_sock_ops_cb_flags):

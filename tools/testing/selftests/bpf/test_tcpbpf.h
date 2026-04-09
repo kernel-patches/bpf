@@ -18,5 +18,11 @@ struct tcpbpf_globals {
 	__u32 tcp_saved_syn;
 	__u32 window_clamp_client;
 	__u32 window_clamp_server;
+	__u32 timeout_init_req_seen;
+	__u32 timeout_init_req_rtt_min;
+	__u32 rwnd_init_req_seen;
+	__u32 rwnd_init_req_rtt_min;
+	__u32 needs_ecn_req_seen;
+	__u32 needs_ecn_req_rtt_min;
 };
 #endif
