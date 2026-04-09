@@ -2045,6 +2045,9 @@ bool vma_can_userfault(struct vm_area_struct *vma, vm_flags_t vm_flags,
 {
 	const struct vm_uffd_ops *ops = vma_uffd_ops(vma);
 
+	if (vma->vm_flags & VM_DROPPABLE)
+		return false;
+
 	vm_flags &= __VM_UFFD_FLAGS;
 
 	/*
@@ -2056,9 +2059,6 @@ bool vma_can_userfault(struct vm_area_struct *vma, vm_flags_t vm_flags,
 
 	/* For any other mode reject VMAs that don't implement vm_uffd_ops */
 	if (!ops)
-		return false;
-
-	if (vma->vm_flags & VM_DROPPABLE)
 		return false;
 
 	/*
