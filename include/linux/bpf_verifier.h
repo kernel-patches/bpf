@@ -226,6 +226,7 @@ enum bpf_stack_slot_type {
 
 /* 4-byte stack slot granularity for liveness analysis */
 #define BPF_HALF_REG_SIZE	4
+#define STACK_SLOT_SZ		4
 #define STACK_SLOTS		(MAX_BPF_STACK / BPF_HALF_REG_SIZE)	/* 128 */
 
 typedef struct {

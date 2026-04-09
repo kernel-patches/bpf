@@ -1423,6 +1423,202 @@ static void arg_track_xfer(struct bpf_verifier_env *env, struct bpf_insn *insn,
 }
 
 /*
+ * Record access_bytes from helper/kfunc or load/store insn.
+ *   access_bytes > 0:      stack read
+ *   access_bytes < 0:      stack write
+ *   access_bytes == S64_MIN: unknown   — conservative, mark [0..slot] as read
+ *   access_bytes == 0:      no access
+ *
+ */
+static void record_stack_access_off(struct bpf_verifier_env *env,
+				    struct func_instance *instance, s64 fp_off,
+				    s64 access_bytes, u32 frame, u32 insn_idx)
+{
+	s32 slot_hi, slot_lo;
+	spis_t mask;
+
+	if (fp_off >= 0)
+		/*
+		 * out of bounds stack access doesn't contribute
+		 * into actual stack liveness. It will be rejected
+		 * by the main verifier pass later.
+		 */
+		return;
+	if (access_bytes == S64_MIN) {
+		/* helper/kfunc read unknown amount of bytes from fp_off until fp+0 */
+		slot_hi = (-fp_off - 1) / STACK_SLOT_SZ;
+		mask = SPIS_ZERO;
+		spis_or_range(&mask, 0, slot_hi);
+		mark_stack_read(instance, frame, insn_idx, mask);
+		return;
+	}
+	if (access_bytes > 0) {
+		/* Mark any touched slot as use */
+		slot_hi = (-fp_off - 1) / STACK_SLOT_SZ;
+		slot_lo = max_t(s32, (-fp_off - access_bytes) / STACK_SLOT_SZ, 0);
+		mask = SPIS_ZERO;
+		spis_or_range(&mask, slot_lo, slot_hi);
+		mark_stack_read(instance, frame, insn_idx, mask);
+	} else if (access_bytes < 0) {
+		/* Mark only fully covered slots as def */
+		access_bytes = -access_bytes;
+		slot_hi = (-fp_off) / STACK_SLOT_SZ - 1;
+		slot_lo = max_t(s32, (-fp_off - access_bytes + STACK_SLOT_SZ - 1) / STACK_SLOT_SZ, 0);
+		if (slot_lo <= slot_hi) {
+			mask = SPIS_ZERO;
+			spis_or_range(&mask, slot_lo, slot_hi);
+			bpf_mark_stack_write(env, frame, mask);
+		}
+	}
+}
+
+/*
+ * 'arg' is FP-derived argument to helper/kfunc or load/store that
+ * reads (positive) or writes (negative) 'access_bytes' into 'use' or 'def'.
+ */
+static void record_stack_access(struct bpf_verifier_env *env,
+				struct func_instance *instance,
+				const struct arg_track *arg,
+				s64 access_bytes, u32 frame, u32 insn_idx)
+{
+	int i;
+
+	if (access_bytes == 0)
+		return;
+	if (arg->off_cnt == 0) {
+		if (access_bytes > 0)
+			mark_stack_read(instance, frame, insn_idx, SPIS_ALL);
+		return;
+	}
+	if (access_bytes != S64_MIN && access_bytes < 0 && arg->off_cnt != 1)
+		/* multi-offset write cannot set stack_def */
+		return;
+
+	for (i = 0; i < arg->off_cnt; i++)
+		record_stack_access_off(env, instance, arg->off[i], access_bytes, frame, insn_idx);
+}
+
+/*
+ * When a pointer is ARG_IMPRECISE, conservatively mark every frame in
+ * the bitmask as fully used.
+ */
+static void record_imprecise(struct func_instance *instance, u32 mask, u32 insn_idx)
+{
+	int depth = instance->callchain.curframe;
+	int f;
+
+	for (f = 0; mask; f++, mask >>= 1) {
+		if (!(mask & 1))
+			continue;
+		if (f <= depth)
+			mark_stack_read(instance, f, insn_idx, SPIS_ALL);
+	}
+}
+
+/* Record load/store access for a given 'at' state of 'insn'. */
+static void record_load_store_access(struct bpf_verifier_env *env,
+				     struct func_instance *instance,
+				     struct arg_track *at, int insn_idx)
+{
+	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
+	int depth = instance->callchain.curframe;
+	s32 sz = bpf_size_to_bytes(BPF_SIZE(insn->code));
+	u8 class = BPF_CLASS(insn->code);
+	struct arg_track resolved, *ptr;
+	int oi;
+
+	switch (class) {
+	case BPF_LDX:
+		ptr = &at[insn->src_reg];
+		break;
+	case BPF_STX:
+		if (BPF_MODE(insn->code) == BPF_ATOMIC) {
+			if (insn->imm == BPF_STORE_REL)
+				sz = -sz;
+			if (insn->imm == BPF_LOAD_ACQ)
+				ptr = &at[insn->src_reg];
+			else
+				ptr = &at[insn->dst_reg];
+		} else {
+			ptr = &at[insn->dst_reg];
+			sz = -sz;
+		}
+		break;
+	case BPF_ST:
+		ptr = &at[insn->dst_reg];
+		sz = -sz;
+		break;
+	default:
+		return;
+	}
+
+	/* Resolve offsets: fold insn->off into arg_track */
+	if (ptr->off_cnt > 0) {
+		resolved.off_cnt = ptr->off_cnt;
+		resolved.frame = ptr->frame;
+		for (oi = 0; oi < ptr->off_cnt; oi++) {
+			resolved.off[oi] = arg_add(ptr->off[oi], insn->off);
+			if (resolved.off[oi] == OFF_IMPRECISE) {
+				resolved.off_cnt = 0;
+				break;
+			}
+		}
+		ptr = &resolved;
+	}
+
+	if (ptr->frame >= 0 && ptr->frame <= depth) {
+		record_stack_access(env, instance, ptr, sz, ptr->frame, insn_idx);
+	} else if (ptr->frame == ARG_IMPRECISE) {
+		record_imprecise(instance, ptr->mask, insn_idx);
+	}
+	/* ARG_NONE: not derived from any frame pointer, skip */
+}
+
+/* Record stack access for a given 'at' state of helper/kfunc 'insn' */
+static void record_call_access(struct bpf_verifier_env *env,
+			       struct func_instance *instance,
+			       struct arg_track *at,
+			       int insn_idx)
+{
+	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
+	int depth = instance->callchain.curframe;
+	struct bpf_call_summary cs;
+	int r, num_params = 5;
+
+	if (bpf_pseudo_call(insn))
+		return;
+
+	if (bpf_get_call_summary(env, insn, &cs))
+		num_params = cs.num_params;
+
+	for (r = BPF_REG_1; r < BPF_REG_1 + num_params; r++) {
+		int frame = at[r].frame;
+		s64 bytes;
+
+		if (!arg_is_fp(&at[r]))
+			continue;
+
+		if (bpf_helper_call(insn)) {
+			bytes = bpf_helper_stack_access_bytes(env, insn, r - 1, insn_idx);
+		} else if (bpf_pseudo_kfunc_call(insn)) {
+			bytes = bpf_kfunc_stack_access_bytes(env, insn, r - 1, insn_idx);
+		} else {
+			for (int f = 0; f <= depth; f++)
+				mark_stack_read(instance, f, insn_idx, SPIS_ALL);
+			return;
+		}
+		if (bytes == 0)
+			continue;
+
+		if (frame >= 0 && frame <= depth) {
+			record_stack_access(env, instance, &at[r], bytes, frame, insn_idx);
+		} else if (frame == ARG_IMPRECISE) {
+			record_imprecise(instance, at[r].mask, insn_idx);
+		}
+	}
+}
+
+/*
  * For a calls_callback helper, find the callback subprog and determine
  * which caller register maps to which callback register for FP passthrough.
  */
@@ -1665,10 +1861,17 @@ redo:
 	if (changed)
 		goto redo;
 
+	/* Record memory accesses using converged at_in (RPO skips dead code) */
 	for (p = po_end - 1; p >= po_start; p--) {
 		int idx = env->cfg.insn_postorder[p];
 		int i = idx - start;
 		struct bpf_insn *insn = &insns[idx];
+
+		reset_stack_write_marks(env, instance);
+		record_load_store_access(env, instance, at_in[i], idx);
+
+		if (insn->code == (BPF_JMP | BPF_CALL))
+			record_call_access(env, instance, at_in[i], idx);
 
 		if (bpf_pseudo_call(insn) || bpf_calls_callback(env, idx)) {
 			kvfree(env->callsite_at_stack[idx]);
@@ -1680,6 +1883,7 @@ redo:
 			memcpy(env->callsite_at_stack[idx],
 			       at_stack_in[i], sizeof(struct arg_track) * MAX_ARG_SPILL_SLOTS);
 		}
+		commit_stack_write_marks(env, instance, idx);
 	}
 
 	info->at_in = at_in;
@@ -1755,6 +1959,11 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 				 */
 				if (info[subprog].at_in[j][caller_reg].frame == ARG_NONE)
 					continue;
+				for (int f = 0; f <= depth; f++) {
+					err = mark_stack_read(instance, f, idx, SPIS_ALL);
+					if (err)
+						return err;
+				}
 				continue;
 			}
 			if (callee < 0)

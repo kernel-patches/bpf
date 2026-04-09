@@ -20374,6 +20374,13 @@ static void clean_live_states(struct bpf_verifier_env *env, int insn,
 	struct bpf_verifier_state_list *sl;
 	struct list_head *pos, *head;
 
+	/* keep cleaning the current state as registers/stack become dead */
+	clean_verifier_state(env, cur);
+
+	/*
+	 * can simply return here, since cached states will also be clean,
+	 * but keep old logic for the sake of dynamic liveness.
+	 */
 	head = explored_state(env, insn);
 	list_for_each(pos, head) {
 		sl = container_of(pos, struct bpf_verifier_state_list, node);
@@ -20384,8 +20391,6 @@ static void clean_live_states(struct bpf_verifier_env *env, int insn,
 			continue;
 		if (sl->state.cleaned)
 			/* all regs in this state in all frames were already marked */
-			continue;
-		if (incomplete_read_marks(env, &sl->state))
 			continue;
 		clean_verifier_state(env, &sl->state);
 	}
