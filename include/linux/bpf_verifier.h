@@ -224,6 +224,103 @@ enum bpf_stack_slot_type {
 
 #define BPF_REG_SIZE 8	/* size of eBPF register in bytes */
 
+/* 4-byte stack slot granularity for liveness analysis */
+#define BPF_HALF_REG_SIZE	4
+#define STACK_SLOTS		(MAX_BPF_STACK / BPF_HALF_REG_SIZE)	/* 128 */
+
+typedef struct {
+	u64 v[2];
+} spis_t;
+
+#define SPIS_ZERO	((spis_t){})
+#define SPIS_ALL	((spis_t){{ U64_MAX, U64_MAX }})
+
+static inline bool spis_is_zero(spis_t s)
+{
+	return s.v[0] == 0 && s.v[1] == 0;
+}
+
+static inline bool spis_equal(spis_t a, spis_t b)
+{
+	return a.v[0] == b.v[0] && a.v[1] == b.v[1];
+}
+
+static inline spis_t spis_or(spis_t a, spis_t b)
+{
+	return (spis_t){{ a.v[0] | b.v[0], a.v[1] | b.v[1] }};
+}
+
+static inline spis_t spis_and(spis_t a, spis_t b)
+{
+	return (spis_t){{ a.v[0] & b.v[0], a.v[1] & b.v[1] }};
+}
+
+static inline spis_t spis_xor(spis_t a, spis_t b)
+{
+	return (spis_t){{ a.v[0] ^ b.v[0], a.v[1] ^ b.v[1] }};
+}
+
+static inline spis_t spis_not(spis_t s)
+{
+	return (spis_t){{ ~s.v[0], ~s.v[1] }};
+}
+
+static inline void spis_set_bit(spis_t *s, u32 slot)
+{
+	s->v[slot / 64] |= BIT_ULL(slot % 64);
+}
+
+static inline bool spis_test_bit(spis_t s, u32 slot)
+{
+	return s.v[slot / 64] & BIT_ULL(slot % 64);
+}
+
+static inline void spis_or_range(spis_t *mask, u32 lo, u32 hi)
+{
+	u32 w;
+
+	for (w = lo; w <= hi && w < STACK_SLOTS; w++)
+		mask->v[w / 64] |= BIT_ULL(w % 64);
+}
+
+/*
+ * Return a mask with both 4-byte sub-slots of an 8-byte SPI set.
+ * Each 8-byte SPI maps to two consecutive 4-byte stack slots:
+ *   spi -> slots [spi*2, spi*2+1]
+ */
+static inline spis_t spis_single_slot(u32 spi)
+{
+	spis_t m = SPIS_ZERO;
+
+	spis_set_bit(&m, spi * 2);
+	spis_set_bit(&m, spi * 2 + 1);
+	return m;
+}
+
+/*
+ * Return a mask with only the MSB (higher-addressed) 4-byte half
+ * of an 8-byte SPI set. This is sub-slot spi*2+1.
+ */
+static inline spis_t spis_msb_half_slot(u32 spi)
+{
+	spis_t m = SPIS_ZERO;
+
+	spis_set_bit(&m, spi * 2 + 1);
+	return m;
+}
+
+/*
+ * Return a mask with only the LSB (lower-addressed) 4-byte half
+ * of an 8-byte SPI set. This is sub-slot spi*2.
+ */
+static inline spis_t spis_lsb_half_slot(u32 spi)
+{
+	spis_t m = SPIS_ZERO;
+
+	spis_set_bit(&m, spi * 2);
+	return m;
+}
+
 #define BPF_REGMASK_ARGS ((1 << BPF_REG_1) | (1 << BPF_REG_2) | \
 			  (1 << BPF_REG_3) | (1 << BPF_REG_4) | \
 			  (1 << BPF_REG_5))
