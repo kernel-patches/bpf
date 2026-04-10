@@ -1583,6 +1583,22 @@ bool bpf_insn_is_indirect_target(const struct bpf_verifier_env *env, const struc
 	return env->insn_aux_data[insn_idx].indirect_target;
 }
 
+bool bpf_insn_accesses_stack_only(const struct bpf_verifier_env *env,
+				  const struct bpf_prog *prog, int insn_idx)
+{
+	struct bpf_insn *insn;
+
+	/* cBPF: we have no verifier state, do a best-effort check based on
+	 * dst/src reg
+	 */
+	insn_idx += prog->aux->subprog_start;
+	insn = (struct bpf_insn *)prog->insnsi + insn_idx;
+	if (!env)
+		return insn->dst_reg == BPF_REG_FP ||
+		       insn->src_reg == BPF_REG_FP;
+	return !env->insn_aux_data[insn_idx].non_stack_access;
+}
+
 u16 bpf_out_stack_arg_cnt(const struct bpf_verifier_env *env, const struct bpf_prog *prog)
 {
 	const struct bpf_subprog_info *sub;
@@ -1592,6 +1608,7 @@ u16 bpf_out_stack_arg_cnt(const struct bpf_verifier_env *env, const struct bpf_p
 	sub = &env->subprog_info[prog->aux->func_idx];
 	return sub->stack_arg_cnt - bpf_in_stack_arg_cnt(sub);
 }
+
 #endif /* CONFIG_BPF_JIT */
 
 /* Base function for offset calculation. Needs to go into .text section,

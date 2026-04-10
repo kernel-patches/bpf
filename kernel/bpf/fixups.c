@@ -185,15 +185,21 @@ static void adjust_insn_aux_data(struct bpf_verifier_env *env,
 	}
 
 	/*
-	 * The indirect_target flag of the original instruction was moved to the last of the
-	 * new instructions by the above memmove and memset, but the indirect jump target is
-	 * actually the first instruction, so move it back. This also matches with the behavior
-	 * of bpf_insn_array_adjust(), which preserves xlated_off to point to the first new
-	 * instruction.
+	 * The indirect_target and non_stack_access flags of the original
+	 * instruction were moved to the last of the new instructions by the
+	 * above memmove and memset, but those actually match the first
+	 * instruction, so move them back. This also matches with the behavior
+	 * of bpf_insn_array_adjust(), which preserves xlated_off to point to
+	 * the first new instruction.
 	 */
 	if (data[off + cnt - 1].indirect_target) {
 		data[off].indirect_target = 1;
 		data[off + cnt - 1].indirect_target = 0;
+	}
+
+	if (data[off + cnt - 1].non_stack_access) {
+		data[off].non_stack_access = 1;
+		data[off + cnt - 1].non_stack_access = 0;
 	}
 }
 
