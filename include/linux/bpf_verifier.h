@@ -660,6 +660,8 @@ struct bpf_insn_aux_data {
 	u16 const_reg_map_mask;
 	u16 const_reg_subprog_mask;
 	u32 const_reg_vals[10];
+	/* instruction accesses stack */
+	bool accesses_stack;
 };
 
 #define MAX_USED_MAPS 64 /* max number of maps accessed by one eBPF program */
