@@ -1592,6 +1592,7 @@ u16 bpf_out_stack_arg_cnt(const struct bpf_verifier_env *env, const struct bpf_p
 	sub = &env->subprog_info[prog->aux->func_idx];
 	return sub->stack_arg_cnt - bpf_in_stack_arg_cnt(sub);
 }
+
 #endif /* CONFIG_BPF_JIT */
 
 /* Base function for offset calculation. Needs to go into .text section,
