@@ -271,6 +271,76 @@ __bpf_kfunc void bpf_kfunc_put_default_trusted_ptr_test(struct prog_test_member 
 	 */
 }
 
+static void *kasan_uaf(void)
+{
+	void *p = kmalloc(64, GFP_ATOMIC);
+
+	if (!p)
+		return NULL;
+	memset(p, 0xAA, 64);
+	kfree(p);
+
+	return p;
+}
+
+#ifdef CONFIG_KASAN_GENERIC
+extern void kasan_poison(const void *addr, size_t size, u8 value, bool init);
+
+__bpf_kfunc void bpf_kfunc_kasan_poison(void *mem, u32 mem__sz, u8 byte)
+{
+	kasan_poison(mem, mem__sz, byte, false);
+}
+#else
+__bpf_kfunc void bpf_kfunc_kasan_poison(void *mem, u32 mem__sz, u8 byte) { }
+#endif
+
+__bpf_kfunc u8 *bpf_kfunc_kasan_uaf_1(void)
+{
+	return kasan_uaf();
+}
+
+__bpf_kfunc u16 *bpf_kfunc_kasan_uaf_2(void)
+{
+	return kasan_uaf();
+}
+
+__bpf_kfunc u32 *bpf_kfunc_kasan_uaf_4(void)
+{
+	return kasan_uaf();
+}
+
+__bpf_kfunc u64 *bpf_kfunc_kasan_uaf_8(void)
+{
+	return kasan_uaf();
+}
+
+static u8 test_oob_buffer[64];
+
+static void *bpf_kfunc_kasan_oob(void)
+{
+	return test_oob_buffer+64;
+}
+
+__bpf_kfunc u8 *bpf_kfunc_kasan_oob_1(void)
+{
+	return bpf_kfunc_kasan_oob();
+}
+
+__bpf_kfunc u16 *bpf_kfunc_kasan_oob_2(void)
+{
+	return bpf_kfunc_kasan_oob();
+}
+
+__bpf_kfunc u32 *bpf_kfunc_kasan_oob_4(void)
+{
+	return bpf_kfunc_kasan_oob();
+}
+
+__bpf_kfunc u64 *bpf_kfunc_kasan_oob_8(void)
+{
+	return bpf_kfunc_kasan_oob();
+}
+
 __bpf_kfunc struct bpf_testmod_ctx *
 bpf_testmod_ctx_create(int *err)
 {
@@ -740,6 +810,15 @@ BTF_ID_FLAGS(func, bpf_testmod_ops3_call_test_1)
 BTF_ID_FLAGS(func, bpf_testmod_ops3_call_test_2)
 BTF_ID_FLAGS(func, bpf_kfunc_get_default_trusted_ptr_test);
 BTF_ID_FLAGS(func, bpf_kfunc_put_default_trusted_ptr_test);
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_poison)
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_uaf_1)
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_uaf_2)
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_uaf_4)
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_uaf_8)
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_oob_1)
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_oob_2)
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_oob_4)
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_oob_8)
 BTF_KFUNCS_END(bpf_testmod_common_kfunc_ids)
 
 BTF_ID_LIST(bpf_testmod_dtor_ids)
