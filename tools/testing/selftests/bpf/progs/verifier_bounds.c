@@ -2184,4 +2184,181 @@ __naked void tnums_equal_impossible_constant(void *ctx)
 	: __clobber_all);
 }
 
+/*
+ * 64-bit range is outside the 32-bit range in each 2^32 block.
+ *
+ * This test triggers updates on umin/umax and smin/smax.
+ *
+ * N*2^32                   (N+1)*2^32                (N+2)*2^32                (N+3)*2^32
+ * ||----|=====|--|----------||----|=====|-------------||--|-|=====|-------------||
+ *       |< b >|  |                |< b >|                 | |< b >|
+ *                |                |     |                 |
+ *                |<---------------+- a -+---------------->|
+ *                                 |     |
+ *                                 |< t >| refined r0 range
+ *
+ * a = u64 [0x1'00000008, 0x3'00000001]
+ * b = u32 [2, 5]
+ * t = u64 [0x2'00000002, 0x2'00000005]
+ */
+SEC("socket")
+__success
+__flag(BPF_F_TEST_REG_INVARIANTS)
+__naked void deduce64_from_32_block_change(void *ctx)
+{
+	asm volatile ("							\
+	call %[bpf_get_prandom_u32];					\
+	r1 = 0x100000008 ll;						\
+	if r0 < r1 goto 2f;						\
+	r1 = 0x300000001 ll;						\
+	if r0 > r1 goto 2f;	/* u64: [0x1'00000008, 0x3'00000001] */	\
+	if w0 < 2 goto 2f;						\
+	if w0 > 5 goto 2f;	/* u32: [2, 5] */			\
+	r2 = 0x200000002 ll;						\
+	r3 = 0x200000005 ll;						\
+	if r0 >= r2 goto 1f;	/* should be always true */		\
+	r10 = 0;		/* dead code */				\
+1:	if r0 <= r3 goto 2f;	/* should be always true */		\
+	r10 = 0;		/* dead code */				\
+2:	exit;								\
+	"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Similar to the deduce64_from_32_block_change test for smin/smax boundaries.
+ *
+ * a = s64 [0x8000000100000008, 0x0000000300000001]  (crosses sign boundary)
+ * b = u32 [2, 5]
+ * t = s64 [0x8000000200000002, 0x0000000200000005]
+ */
+SEC("socket")
+__success
+__flag(BPF_F_TEST_REG_INVARIANTS)
+__naked void deduce64_from_32_block_change_signed(void *ctx)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r1 = 0x8000000100000008 ll;				\
+	if r0 s< r1 goto 2f;					\
+	r1 = 0x300000001 ll;					\
+	if r0 s> r1 goto 2f;	/* s64: [0x8000000100000008, 0x3'00000001] */ \
+	if w0 < 2 goto 2f;					\
+	if w0 > 5 goto 2f;	/* u32: [2, 5] */		\
+	r2 = 0x8000000200000002 ll;				\
+	r3 = 0x200000005 ll;					\
+	if r0 s>= r2 goto 1f;	/* should be always true */	\
+	r10 = 0;		/* dead code */			\
+1:	if r0 s<= r3 goto 2f;	/* should be always true */	\
+	r10 = 0;		/* dead code */			\
+2:	exit;							\
+	"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Similar to the deduce64_from_32_block_change test, with conservative signed boundaries.
+ *
+ * a = u64 [0x1'00000008, 0x80000003'00000001]
+ *   = s64 [S64_MIN, S64_MAX] (since (s64)umin > (s64)umax)
+ * b = u32 [2, 5]
+ * t = u64 [0x2'00000002, 0x80000002'00000005]
+ */
+SEC("socket")
+__success
+__flag(BPF_F_TEST_REG_INVARIANTS)
+__naked void deduce64_from_32_block_change_conservative_signed(void *ctx)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r1 = 0x100000008 ll;					\
+	if r0 < r1 goto 2f;					\
+	r1 = 0x8000000300000001 ll;				\
+	if r0 > r1 goto 2f;	/* u64: [0x100000008, 0x8000000300000001] */ \
+	if w0 < 2 goto 2f;					\
+	if w0 > 5 goto 2f;	/* u32: [2, 5] */		\
+	r2 = 0x200000002 ll;					\
+	r3 = 0x8000000200000005 ll;				\
+	if r0 >= r2 goto 1f;	/* should be always true */	\
+	r10 = 0;		/* dead code */			\
+1:	if r0 <= r3 goto 2f;	/* should be always true */	\
+	r10 = 0;		/* dead code */			\
+2:	exit;							\
+	"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * 32-bit range crossing U32_MAX / 0 boundary.
+ *
+ * N*2^32                   (N+1)*2^32                (N+2)*2^32                (N+3)*2^32
+ * ||===|---------|------|===||===|----------------|===||===|---------|------|===||
+ *  |b >|         |      |< b||b >|                |< b||b >|         |      |< b|
+ *                |      |                                  |         |
+ *                |<-----+----------------- a --------------+-------->|
+ *                       |                                  |
+ *                       |<---------------- t ------------->| refined r0 range
+ *
+ * a = u64 [0x1'00000006, 0x2'FFFFFFEF]
+ * b = s32 [-16, 5] (u32 wrapping [0xFFFFFFF0, 0x00000005])
+ * t = u64 [0x1'FFFFFFF0, 0x2'00000005]
+ */
+SEC("socket")
+__success
+__flag(BPF_F_TEST_REG_INVARIANTS)
+__naked void deduce64_from_32_wrapping_32bit(void *ctx)
+{
+	asm volatile ("							\
+	call %[bpf_get_prandom_u32];					\
+	r1 = 0x100000006 ll;						\
+	if r0 < r1 goto 2f;						\
+	r1 = 0x2ffffffef ll;						\
+	if r0 > r1 goto 2f;	/* u64: [0x1'00000006, 0x2'FFFFFFEF] */	\
+	if w0 s< -16 goto 2f;						\
+	if w0 s> 5 goto 2f;	/* s32: [-16, 5] */			\
+	r1 = 0x1fffffff0 ll;						\
+	r2 = 0x200000005 ll;						\
+	if r0 >= r1 goto 1f;	/* should be always true */		\
+	r10 = 0;		/* dead code */				\
+1:	if r0 <= r2 goto 2f;	/* should be always true */		\
+	r10 = 0;		/* dead code */				\
+2:	exit;								\
+	"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * s32 range wraps, but u32 has a tighter lower bound from an unsigned
+ * comparison.
+ *
+ * a = u64 [0x7FFFFFFF'00000001, 0x80000002'00000010]
+ * b = s32 [-5, 5] + w0 u>= 2  =>  u32: [2, U32_MAX]
+ * t = u64 [0x7FFFFFFF'00000002, ...]
+ */
+SEC("socket")
+__success __flag(BPF_F_TEST_REG_INVARIANTS)
+__naked void deduce64_from_32_u32_tighter_than_s32(void *ctx)
+{
+	asm volatile ("							\
+	call %[bpf_get_prandom_u32];					\
+	r1 = 0x7fffffff00000001 ll;					\
+	if r0 < r1 goto 2f;						\
+	r1 = 0x8000000200000010 ll;					\
+	if r0 > r1 goto 2f;	/* u64: [0x7FFFFFFF'00000001, 0x80000002'00000010] */	\
+	if w0 s< -5 goto 2f;						\
+	if w0 s> 5 goto 2f;	/* s32: [-5, 5] */			\
+	if w0 < 2 goto 2f;	/* u32_min=2; s32 still wraps */	\
+	r2 = 0x7fffffff00000002 ll;					\
+	if r0 >= r2 goto 2f;	/* should be always true */		\
+	r10 = 0;		/* dead code */				\
+2:	exit;								\
+	"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
