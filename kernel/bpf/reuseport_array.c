@@ -5,6 +5,7 @@
 #include <linux/bpf.h>
 #include <linux/err.h>
 #include <linux/sock_diag.h>
+#include <linux/rcupdate_wait.h>
 #include <net/sock_reuseport.h>
 #include <linux/btf_ids.h>
 
@@ -136,6 +137,7 @@ static void reuseport_array_free(struct bpf_map *map)
 			write_unlock_bh(&sk->sk_callback_lock);
 			RCU_INIT_POINTER(array->ptrs[i], NULL);
 		}
+		cond_resched_rcu();
 	}
 	rcu_read_unlock();
 
