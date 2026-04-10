@@ -18371,6 +18371,167 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	return 0;
 }
 
+#define SECURITY_PREFIX "security_"
+
+#ifdef CONFIG_FUNCTION_ERROR_INJECTION
+
+/* list of non-sleepable functions that are otherwise on
+ * ALLOW_ERROR_INJECTION list
+ */
+BTF_SET_START(btf_non_sleepable_error_inject)
+/* Three functions below can be called from sleepable and non-sleepable context.
+ * Assume non-sleepable from bpf safety point of view.
+ */
+BTF_ID(func, __filemap_add_folio)
+#ifdef CONFIG_FAIL_PAGE_ALLOC
+BTF_ID(func, should_fail_alloc_page)
+#endif
+#ifdef CONFIG_FAILSLAB
+BTF_ID(func, should_failslab)
+#endif
+BTF_SET_END(btf_non_sleepable_error_inject)
+
+static int check_non_sleepable_error_inject(u32 btf_id)
+{
+	return btf_id_set_contains(&btf_non_sleepable_error_inject, btf_id);
+}
+
+static int check_attach_sleepable(u32 btf_id, unsigned long addr, const char *func_name)
+{
+	/* fentry/fexit/fmod_ret progs can be sleepable if they are
+	 * attached to ALLOW_ERROR_INJECTION and are not in denylist.
+	 */
+	if (!check_non_sleepable_error_inject(btf_id) &&
+	    within_error_injection_list(addr))
+		return 0;
+
+	return -EINVAL;
+}
+
+static int check_attach_modify_return(unsigned long addr, const char *func_name)
+{
+	if (within_error_injection_list(addr) ||
+	    !strncmp(SECURITY_PREFIX, func_name, sizeof(SECURITY_PREFIX) - 1))
+		return 0;
+
+	return -EINVAL;
+}
+
+static int modify_return_get_retval_range(const struct bpf_prog *prog,
+					  struct bpf_retval_range *retval_range)
+{
+	unsigned long addr = (unsigned long)prog->aux->dst_trampoline->func.addr;
+
+	if (within_error_injection_list(addr)) {
+		switch (get_injectable_error_type(addr)) {
+		case EI_ETYPE_NULL:
+			retval_range->minval = 0;
+			retval_range->maxval = 0;
+			break;
+		case EI_ETYPE_ERRNO:
+			retval_range->minval = -MAX_ERRNO;
+			retval_range->maxval = -1;
+			break;
+		case EI_ETYPE_ERRNO_NULL:
+			retval_range->minval = -MAX_ERRNO;
+			retval_range->maxval = 0;
+			break;
+		case EI_ETYPE_TRUE:
+			retval_range->minval = 1;
+			retval_range->maxval = 1;
+			break;
+		}
+		retval_range->return_32bit = true;
+
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+#else
+
+/* Unfortunately, the arch-specific prefixes are hard-coded in arch syscall code
+ * so we need to hard-code them, too. Ftrace has arch_syscall_match_sym_name()
+ * but that just compares two concrete function names.
+ */
+static bool has_arch_syscall_prefix(const char *func_name)
+{
+#if defined(__x86_64__)
+	return !strncmp(func_name, "__x64_", 6);
+#elif defined(__i386__)
+	return !strncmp(func_name, "__ia32_", 7);
+#elif defined(__s390x__)
+	return !strncmp(func_name, "__s390x_", 8);
+#elif defined(__aarch64__)
+	return !strncmp(func_name, "__arm64_", 8);
+#elif defined(__riscv)
+	return !strncmp(func_name, "__riscv_", 8);
+#elif defined(__powerpc__) || defined(__powerpc64__)
+	return !strncmp(func_name, "sys_", 4);
+#elif defined(__loongarch__)
+	return !strncmp(func_name, "sys_", 4);
+#else
+	return false;
+#endif
+}
+
+/* Without error injection, allow sleepable and fmod_ret progs on syscalls. */
+
+static int check_attach_sleepable(u32 btf_id, unsigned long addr, const char *func_name)
+{
+	if (has_arch_syscall_prefix(func_name))
+		return 0;
+
+	return -EINVAL;
+}
+
+static int check_attach_modify_return(unsigned long addr, const char *func_name)
+{
+	if (has_arch_syscall_prefix(func_name) ||
+	    !strncmp(SECURITY_PREFIX, func_name, sizeof(SECURITY_PREFIX) - 1))
+		return 0;
+
+	return -EINVAL;
+}
+
+/* The system call return value is allowed to be an arbitrary value. */
+static int modify_return_get_retval_range(const struct bpf_prog *prog,
+					  struct bpf_retval_range *retval_range)
+{
+	return -EINVAL;
+}
+
+#endif /* CONFIG_FUNCTION_ERROR_INJECTION */
+
+/* hooks return 0 or 1 */
+BTF_SET_START(bool_security_hooks)
+BTF_ID(func, security_xfrm_state_pol_flow_match)
+BTF_ID(func, security_audit_rule_known)
+BTF_ID(func, security_inode_xattr_skipcap)
+BTF_SET_END(bool_security_hooks)
+
+/* Similar to bpf_lsm_get_retval_range,
+ * ensure that the return values of fmod_ret are valid.
+ */
+static int bpf_security_get_retval_range(const struct bpf_prog *prog,
+					 struct bpf_retval_range *retval_range)
+{
+	if (strncmp(SECURITY_PREFIX, prog->aux->attach_func_name,
+		    sizeof(SECURITY_PREFIX) - 1))
+		return -EINVAL;
+
+	if (btf_id_set_contains(&bool_security_hooks, prog->aux->attach_btf_id)) {
+		retval_range->minval = 0;
+		retval_range->maxval = 1;
+	} else {
+		retval_range->minval = -MAX_ERRNO;
+		retval_range->maxval = 0;
+	}
+	retval_range->return_32bit = true;
+
+	return 0;
+}
 
 static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_range *range)
 {
@@ -18424,8 +18585,13 @@ static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_
 			*range = retval_range(0, 0);
 			break;
 		case BPF_TRACE_RAW_TP:
-		case BPF_MODIFY_RETURN:
 			return false;
+		case BPF_MODIFY_RETURN:
+			if (!bpf_security_get_retval_range(env->prog, range))
+				break;
+			if (modify_return_get_retval_range(env->prog, range))
+				return false;
+			break;
 		case BPF_TRACE_ITER:
 		default:
 			break;
@@ -25471,99 +25637,6 @@ static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 	return bpf_prog_ctx_arg_info_init(prog, st_ops_desc->arg_info[member_idx].info,
 					  st_ops_desc->arg_info[member_idx].cnt);
 }
-#define SECURITY_PREFIX "security_"
-
-#ifdef CONFIG_FUNCTION_ERROR_INJECTION
-
-/* list of non-sleepable functions that are otherwise on
- * ALLOW_ERROR_INJECTION list
- */
-BTF_SET_START(btf_non_sleepable_error_inject)
-/* Three functions below can be called from sleepable and non-sleepable context.
- * Assume non-sleepable from bpf safety point of view.
- */
-BTF_ID(func, __filemap_add_folio)
-#ifdef CONFIG_FAIL_PAGE_ALLOC
-BTF_ID(func, should_fail_alloc_page)
-#endif
-#ifdef CONFIG_FAILSLAB
-BTF_ID(func, should_failslab)
-#endif
-BTF_SET_END(btf_non_sleepable_error_inject)
-
-static int check_non_sleepable_error_inject(u32 btf_id)
-{
-	return btf_id_set_contains(&btf_non_sleepable_error_inject, btf_id);
-}
-
-static int check_attach_sleepable(u32 btf_id, unsigned long addr, const char *func_name)
-{
-	/* fentry/fexit/fmod_ret progs can be sleepable if they are
-	 * attached to ALLOW_ERROR_INJECTION and are not in denylist.
-	 */
-	if (!check_non_sleepable_error_inject(btf_id) &&
-	    within_error_injection_list(addr))
-		return 0;
-
-	return -EINVAL;
-}
-
-static int check_attach_modify_return(unsigned long addr, const char *func_name)
-{
-	if (within_error_injection_list(addr) ||
-	    !strncmp(SECURITY_PREFIX, func_name, sizeof(SECURITY_PREFIX) - 1))
-		return 0;
-
-	return -EINVAL;
-}
-
-#else
-
-/* Unfortunately, the arch-specific prefixes are hard-coded in arch syscall code
- * so we need to hard-code them, too. Ftrace has arch_syscall_match_sym_name()
- * but that just compares two concrete function names.
- */
-static bool has_arch_syscall_prefix(const char *func_name)
-{
-#if defined(__x86_64__)
-	return !strncmp(func_name, "__x64_", 6);
-#elif defined(__i386__)
-	return !strncmp(func_name, "__ia32_", 7);
-#elif defined(__s390x__)
-	return !strncmp(func_name, "__s390x_", 8);
-#elif defined(__aarch64__)
-	return !strncmp(func_name, "__arm64_", 8);
-#elif defined(__riscv)
-	return !strncmp(func_name, "__riscv_", 8);
-#elif defined(__powerpc__) || defined(__powerpc64__)
-	return !strncmp(func_name, "sys_", 4);
-#elif defined(__loongarch__)
-	return !strncmp(func_name, "sys_", 4);
-#else
-	return false;
-#endif
-}
-
-/* Without error injection, allow sleepable and fmod_ret progs on syscalls. */
-
-static int check_attach_sleepable(u32 btf_id, unsigned long addr, const char *func_name)
-{
-	if (has_arch_syscall_prefix(func_name))
-		return 0;
-
-	return -EINVAL;
-}
-
-static int check_attach_modify_return(unsigned long addr, const char *func_name)
-{
-	if (has_arch_syscall_prefix(func_name) ||
-	    !strncmp(SECURITY_PREFIX, func_name, sizeof(SECURITY_PREFIX) - 1))
-		return 0;
-
-	return -EINVAL;
-}
-
-#endif /* CONFIG_FUNCTION_ERROR_INJECTION */
 
 int bpf_check_attach_target(struct bpf_verifier_log *log,
 			    const struct bpf_prog *prog,
