@@ -1175,6 +1175,11 @@ void run_subtest(struct test_loader *tester,
 		return;
 	}
 
+	if (is_jit_enabled() && subspec->jited.cnt && get_kasan_jit_enabled()) {
+		test__skip();
+		return;
+	}
+
 	if (unpriv) {
 		if (!can_execute_unpriv(tester, spec)) {
 			test__skip();
