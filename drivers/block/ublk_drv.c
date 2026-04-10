@@ -63,6 +63,9 @@
 #define UBLK_CMD_REG_BUF	_IOC_NR(UBLK_U_CMD_REG_BUF)
 #define UBLK_CMD_UNREG_BUF	_IOC_NR(UBLK_U_CMD_UNREG_BUF)
 
+/* Default max shmem buffer size: 4GB (may be increased in future) */
+#define UBLK_SHMEM_BUF_SIZE_MAX	(1ULL << 32)
+
 #define UBLK_IO_REGISTER_IO_BUF		_IOC_NR(UBLK_U_IO_REGISTER_IO_BUF)
 #define UBLK_IO_UNREGISTER_IO_BUF	_IOC_NR(UBLK_U_IO_UNREGISTER_IO_BUF)
 
@@ -294,14 +297,8 @@ struct ublk_queue {
 	struct ublk_io ios[] __counted_by(q_depth);
 };
 
-/* Per-registered shared memory buffer */
-struct ublk_buf {
-	unsigned int nr_pages;
-};
-
 /* Maple tree value: maps a PFN range to buffer location */
 struct ublk_buf_range {
-	unsigned long base_pfn;
 	unsigned short buf_index;
 	unsigned short flags;
 	unsigned int base_offset;	/* byte offset within buffer */
@@ -343,7 +340,7 @@ struct ublk_device {
 
 	/* shared memory zero copy */
 	struct maple_tree	buf_tree;
-	struct xarray		bufs_xa;
+	struct ida		buf_ida;
 
 	struct ublk_queue       *queues[];
 };
@@ -4698,7 +4695,7 @@ static int ublk_ctrl_add_dev(const struct ublksrv_ctrl_cmd *header)
 	spin_lock_init(&ub->lock);
 	mutex_init(&ub->cancel_mutex);
 	mt_init(&ub->buf_tree);
-	xa_init_flags(&ub->bufs_xa, XA_FLAGS_ALLOC);
+	ida_init(&ub->buf_ida);
 	INIT_WORK(&ub->partition_scan_work, ublk_partition_scan_work);
 
 	ret = ublk_alloc_dev_number(ub, header->dev_id);
@@ -5250,23 +5247,29 @@ exit:
 }
 
 /*
- * Drain inflight I/O and quiesce the queue. Freeze drains all inflight
- * requests, quiesce_nowait marks the queue so no new requests dispatch,
- * then unfreeze allows new submissions (which won't dispatch due to
- * quiesce). This keeps freeze and ub->mutex non-nested.
- */
-static void ublk_quiesce_and_release(struct gendisk *disk)
+ * Lock for maple tree modification: acquire ub->mutex, then freeze queue
+ * if device is started. If device is not yet started, only mutex is
+ * needed since no I/O path can access the tree.
+ *
+ * This ordering (mutex -> freeze) is safe because ublk_stop_dev_unlocked()
+ * already holds ub->mutex when calling del_gendisk() which freezes the queue.
+*/
+static unsigned int ublk_lock_buf_tree(struct ublk_device *ub)
 {
-	unsigned int memflags;
+	unsigned int memflags = 0;
 
-	memflags = blk_mq_freeze_queue(disk->queue);
-	blk_mq_quiesce_queue_nowait(disk->queue);
-	blk_mq_unfreeze_queue(disk->queue, memflags);
+	mutex_lock(&ub->mutex);
+	if (ub->ub_disk)
+		memflags = blk_mq_freeze_queue(ub->ub_disk->queue);
+
+	return memflags;
 }
 
-static void ublk_unquiesce_and_resume(struct gendisk *disk)
+static void ublk_unlock_buf_tree(struct ublk_device *ub, unsigned int memflags)
 {
-	blk_mq_unquiesce_queue(disk->queue);
+	if (ub->ub_disk)
+		blk_mq_unfreeze_queue(ub->ub_disk->queue, memflags);
+	mutex_unlock(&ub->mutex);
 }
 
 /* Erase coalesced PFN ranges from the maple tree matching buf_index */
@@ -5286,15 +5289,13 @@ static void ublk_buf_erase_ranges(struct ublk_device *ub, int buf_index)
 }
 
 static int __ublk_ctrl_reg_buf(struct ublk_device *ub,
-			       struct ublk_buf *ubuf,
-			       struct page **pages, int index,
-			       unsigned short flags)
+			       struct page **pages, unsigned long nr_pages,
+			       int index, unsigned short flags)
 {
-	unsigned long nr_pages = ubuf->nr_pages;
 	unsigned long i;
 	int ret;
 
-	for (i = 0; i < nr_pages; ) {
+	for (i = 0; i < nr_pages; i++) {
 		unsigned long pfn = page_to_pfn(pages[i]);
 		unsigned long start = i;
 		struct ublk_buf_range *range;
@@ -5303,7 +5304,6 @@ static int __ublk_ctrl_reg_buf(struct ublk_device *ub,
 		while (i + 1 < nr_pages &&
 		       page_to_pfn(pages[i + 1]) == pfn + (i - start) + 1)
 			i++;
-		i++;	/* past the last page in this run */
 
 		range = kzalloc(sizeof(*range), GFP_KERNEL);
 		if (!range) {
@@ -5312,11 +5312,10 @@ static int __ublk_ctrl_reg_buf(struct ublk_device *ub,
 		}
 		range->buf_index = index;
 		range->flags = flags;
-		range->base_pfn = pfn;
 		range->base_offset = start << PAGE_SHIFT;
 
 		ret = mtree_insert_range(&ub->buf_tree, pfn,
-					 pfn + (i - start) - 1,
+					 pfn + (i - start),
 					 range, GFP_KERNEL);
 		if (ret) {
 			kfree(range);
@@ -5343,10 +5342,9 @@ static int ublk_ctrl_reg_buf(struct ublk_device *ub,
 	unsigned long addr, size, nr_pages;
 	struct page **pages = NULL;
 	unsigned int gup_flags;
-	struct gendisk *disk;
-	struct ublk_buf *ubuf;
+	unsigned int memflags;
 	long pinned;
-	u32 index;
+	int index;
 	int ret;
 
 	if (!ublk_dev_support_shmem_zc(ub))
@@ -5360,29 +5358,21 @@ static int ublk_ctrl_reg_buf(struct ublk_device *ub,
 	if (buf_reg.flags & ~UBLK_SHMEM_BUF_READ_ONLY)
 		return -EINVAL;
 
+	if (buf_reg.reserved)
+		return -EINVAL;
+
 	addr = buf_reg.addr;
 	size = buf_reg.len;
 	nr_pages = size >> PAGE_SHIFT;
 
-	if (!size || !PAGE_ALIGNED(size) || !PAGE_ALIGNED(addr))
+	if (!size || size > UBLK_SHMEM_BUF_SIZE_MAX ||
+	    !PAGE_ALIGNED(size) || !PAGE_ALIGNED(addr))
 		return -EINVAL;
 
-	disk = ublk_get_disk(ub);
-	if (!disk)
-		return -ENODEV;
-
-	/* Pin pages before quiescing (may sleep) */
-	ubuf = kzalloc(sizeof(*ubuf), GFP_KERNEL);
-	if (!ubuf) {
-		ret = -ENOMEM;
-		goto put_disk;
-	}
-
+	/* Pin pages before any locks (may sleep) */
 	pages = kvmalloc_array(nr_pages, sizeof(*pages), GFP_KERNEL);
-	if (!pages) {
-		ret = -ENOMEM;
-		goto err_free;
-	}
+	if (!pages)
+		return -ENOMEM;
 
 	gup_flags = FOLL_LONGTERM;
 	if (!(buf_reg.flags & UBLK_SHMEM_BUF_READ_ONLY))
@@ -5397,54 +5387,40 @@ static int ublk_ctrl_reg_buf(struct ublk_device *ub,
 		ret = -EFAULT;
 		goto err_unpin;
 	}
-	ubuf->nr_pages = nr_pages;
 
-	/*
-	 * Drain inflight I/O and quiesce the queue so no new requests
-	 * are dispatched while we modify the maple tree. Keep freeze
-	 * and mutex non-nested to avoid lock dependency.
-	 */
-	ublk_quiesce_and_release(disk);
+	memflags = ublk_lock_buf_tree(ub);
 
-	mutex_lock(&ub->mutex);
-
-	ret = xa_alloc(&ub->bufs_xa, &index, ubuf, xa_limit_16b, GFP_KERNEL);
-	if (ret)
-		goto err_unlock;
-
-	ret = __ublk_ctrl_reg_buf(ub, ubuf, pages, index, buf_reg.flags);
-	if (ret) {
-		xa_erase(&ub->bufs_xa, index);
+	index = ida_alloc_max(&ub->buf_ida, USHRT_MAX, GFP_KERNEL);
+	if (index < 0) {
+		ret = index;
 		goto err_unlock;
 	}
 
-	mutex_unlock(&ub->mutex);
+	ret = __ublk_ctrl_reg_buf(ub, pages, nr_pages, index, buf_reg.flags);
+	if (ret) {
+		ida_free(&ub->buf_ida, index);
+		goto err_unlock;
+	}
 
+	ublk_unlock_buf_tree(ub, memflags);
 	kvfree(pages);
-	ublk_unquiesce_and_resume(disk);
-	ublk_put_disk(disk);
 	return index;
 
 err_unlock:
-	mutex_unlock(&ub->mutex);
-	ublk_unquiesce_and_resume(disk);
+	ublk_unlock_buf_tree(ub, memflags);
 err_unpin:
 	unpin_user_pages(pages, pinned);
 err_free_pages:
 	kvfree(pages);
-err_free:
-	kfree(ubuf);
-put_disk:
-	ublk_put_disk(disk);
 	return ret;
 }
 
-static void __ublk_ctrl_unreg_buf(struct ublk_device *ub,
-				  struct ublk_buf *ubuf, int buf_index)
+static int __ublk_ctrl_unreg_buf(struct ublk_device *ub, int buf_index)
 {
 	MA_STATE(mas, &ub->buf_tree, 0, ULONG_MAX);
 	struct ublk_buf_range *range;
 	struct page *pages[32];
+	int ret = -ENOENT;
 
 	mas_lock(&mas);
 	mas_for_each(&mas, range, ULONG_MAX) {
@@ -5453,8 +5429,9 @@ static void __ublk_ctrl_unreg_buf(struct ublk_device *ub,
 		if (range->buf_index != buf_index)
 			continue;
 
-		base = range->base_pfn;
-		nr = mas.last - mas.index + 1;
+		ret = 0;
+		base = mas.index;
+		nr = mas.last - base + 1;
 		mas_erase(&mas);
 
 		for (off = 0; off < nr; ) {
@@ -5470,54 +5447,58 @@ static void __ublk_ctrl_unreg_buf(struct ublk_device *ub,
 		kfree(range);
 	}
 	mas_unlock(&mas);
-	kfree(ubuf);
+
+	return ret;
 }
 
 static int ublk_ctrl_unreg_buf(struct ublk_device *ub,
 			       struct ublksrv_ctrl_cmd *header)
 {
 	int index = (int)header->data[0];
-	struct gendisk *disk;
-	struct ublk_buf *ubuf;
+	unsigned int memflags;
+	int ret;
 
 	if (!ublk_dev_support_shmem_zc(ub))
 		return -EOPNOTSUPP;
 
-	disk = ublk_get_disk(ub);
-	if (!disk)
-		return -ENODEV;
+	if (index < 0 || index > USHRT_MAX)
+		return -EINVAL;
 
-	/* Drain inflight I/O before modifying the maple tree */
-	ublk_quiesce_and_release(disk);
+	memflags = ublk_lock_buf_tree(ub);
 
-	mutex_lock(&ub->mutex);
+	ret = __ublk_ctrl_unreg_buf(ub, index);
+	if (!ret)
+		ida_free(&ub->buf_ida, index);
 
-	ubuf = xa_erase(&ub->bufs_xa, index);
-	if (!ubuf) {
-		mutex_unlock(&ub->mutex);
-		ublk_unquiesce_and_resume(disk);
-		ublk_put_disk(disk);
-		return -ENOENT;
-	}
-
-	__ublk_ctrl_unreg_buf(ub, ubuf, index);
-
-	mutex_unlock(&ub->mutex);
-
-	ublk_unquiesce_and_resume(disk);
-	ublk_put_disk(disk);
-	return 0;
+	ublk_unlock_buf_tree(ub, memflags);
+	return ret;
 }
 
 static void ublk_buf_cleanup(struct ublk_device *ub)
 {
-	struct ublk_buf *ubuf;
-	unsigned long index;
+	MA_STATE(mas, &ub->buf_tree, 0, ULONG_MAX);
+	struct ublk_buf_range *range;
+	struct page *pages[32];
 
-	xa_for_each(&ub->bufs_xa, index, ubuf)
-		__ublk_ctrl_unreg_buf(ub, ubuf, index);
-	xa_destroy(&ub->bufs_xa);
+	mas_for_each(&mas, range, ULONG_MAX) {
+		unsigned long base = mas.index;
+		unsigned long nr = mas.last - base + 1;
+		unsigned long off;
+
+		for (off = 0; off < nr; ) {
+			unsigned int batch = min_t(unsigned long,
+						   nr - off, 32);
+			unsigned int j;
+
+			for (j = 0; j < batch; j++)
+				pages[j] = pfn_to_page(base + off + j);
+			unpin_user_pages(pages, batch);
+			off += batch;
+		}
+		kfree(range);
+	}
 	mtree_destroy(&ub->buf_tree);
+	ida_destroy(&ub->buf_ida);
 }
 
 /* Check if request pages match a registered shared memory buffer */
@@ -5533,15 +5514,22 @@ static bool ublk_try_buf_match(struct ublk_device *ub,
 
 	rq_for_each_bvec(bv, rq, iter) {
 		unsigned long pfn = page_to_pfn(bv.bv_page);
+		unsigned long end_pfn = pfn +
+			((bv.bv_offset + bv.bv_len - 1) >> PAGE_SHIFT);
 		struct ublk_buf_range *range;
 		unsigned long off;
+		MA_STATE(mas, &ub->buf_tree, pfn, pfn);
 
-		range = mtree_load(&ub->buf_tree, pfn);
+		range = mas_walk(&mas);
 		if (!range)
 			return false;
 
+		/* verify all pages in this bvec fall within the range */
+		if (end_pfn > mas.last)
+			return false;
+
 		off = range->base_offset +
-			(pfn - range->base_pfn) * PAGE_SIZE + bv.bv_offset;
+			(pfn - mas.index) * PAGE_SIZE + bv.bv_offset;
 
 		if (first) {
 			/* Read-only buffer can't serve READ (kernel writes) */
