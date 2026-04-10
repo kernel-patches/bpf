@@ -2694,6 +2694,48 @@ static void deduce_bounds_64_from_64(struct bpf_reg_state *reg)
 	}
 }
 
+/*
+ * Find the smallest v >= lo such that (u32)v is in the circular u32 range
+ * [b_min, b_max] (b_len = b_max - b_min wraps naturally for wrapping ranges).
+ */
+static u64 u64_tighten_umin(u64 lo, u64 hi, u32 b_min, u32 b_max)
+{
+	u32 b_len = b_max - b_min;
+	u64 a_len = hi - lo;
+	u64 cand;
+
+	/* lo32(lo) already in [b_min, b_max]? */
+	if ((u32)((u32)lo - b_min) <= b_len)
+		return lo;
+	/* Set lo32 to b_min and check if it's in the range [lo, hi] */
+	cand = (lo & ~(u64)U32_MAX) | b_min;
+	if (cand - lo <= a_len)
+		return cand;
+	/* Advance to the next 2^32 block */
+	return cand + BIT_ULL(32);
+}
+
+/*
+ * Find the largest v <= hi such that (u32)v is in the circular u32 range
+ * [b_min, b_max].
+ */
+static u64 u64_tighten_umax(u64 lo, u64 hi, u32 b_min, u32 b_max)
+{
+	u32 b_len = b_max - b_min;
+	u64 a_len = hi - lo;
+	u64 cand;
+
+	/* lo32(hi) already in [b_min, b_max]? */
+	if ((u32)((u32)hi - b_min) <= b_len)
+		return hi;
+	/* Set lo32 to b_max and check if it's in the range [lo, hi] */
+	cand = (hi & ~(u64)U32_MAX) | b_max;
+	if (hi - cand <= a_len)
+		return cand;
+	/* Retreat to the previous 2^32 block */
+	return cand - BIT_ULL(32);
+}
+
 static void deduce_bounds_64_from_32(struct bpf_reg_state *reg)
 {
 	/* Try to tighten 64-bit bounds from 32-bit knowledge, using 32-bit
@@ -2708,19 +2750,28 @@ static void deduce_bounds_64_from_32(struct bpf_reg_state *reg)
 	 * with are well-formed ranges in respective s64 or u64 domain, just
 	 * like we do with similar kinds of 32-to-64 or 64-to-32 adjustments.
 	 */
-	__u64 new_umin, new_umax;
-	__s64 new_smin, new_smax;
+	u32 b_min, b_max;
 
-	/* u32 -> u64 tightening, it's always well-formed */
-	new_umin = (reg->umin_value & ~0xffffffffULL) | reg->u32_min_value;
-	new_umax = (reg->umax_value & ~0xffffffffULL) | reg->u32_max_value;
-	reg->umin_value = max_t(u64, reg->umin_value, new_umin);
-	reg->umax_value = min_t(u64, reg->umax_value, new_umax);
-	/* u32 -> s64 tightening, u32 range embedded into s64 preserves range validity */
-	new_smin = (reg->smin_value & ~0xffffffffULL) | reg->u32_min_value;
-	new_smax = (reg->smax_value & ~0xffffffffULL) | reg->u32_max_value;
-	reg->smin_value = max_t(s64, reg->smin_value, new_smin);
-	reg->smax_value = min_t(s64, reg->smax_value, new_smax);
+	/*
+	 * If [u32_min_value, u32_max_value] is conservative, i.e. [0, U32_MAX],
+	 * use [s32_min_value, s32_max_value] for tightening.
+	 */
+	if (reg->u32_min_value == 0 && reg->u32_max_value == U32_MAX) {
+		b_min = (u32)reg->s32_min_value;
+		b_max = (u32)reg->s32_max_value;
+	} else {
+		b_min = reg->u32_min_value;
+		b_max = reg->u32_max_value;
+	}
+
+	reg->umin_value = u64_tighten_umin(reg->umin_value, reg->umax_value, b_min, b_max);
+	reg->umax_value = u64_tighten_umax(reg->umin_value, reg->umax_value, b_min, b_max);
+
+	/* u32 -> s64 tightening uses the same circular algorithm. */
+	reg->smin_value = (s64)u64_tighten_umin((u64)reg->smin_value, (u64)reg->smax_value,
+						reg->u32_min_value, reg->u32_max_value);
+	reg->smax_value = (s64)u64_tighten_umax((u64)reg->smin_value, (u64)reg->smax_value,
+						reg->u32_min_value, reg->u32_max_value);
 
 	/* Here we would like to handle a special case after sign extending load,
 	 * when upper bits for a 64-bit range are all 1s or all 0s.
