@@ -20369,6 +20369,15 @@ static int clean_live_states(struct bpf_verifier_env *env, int insn,
 	struct list_head *pos, *head;
 	int err;
 
+	/* keep cleaning the current state as registers/stack become dead */
+	err = clean_verifier_state(env, cur);
+	if (err)
+		return err;
+
+	/*
+	 * can simply return here, since cached states will also be clean,
+	 * but keep old logic for the sake of dynamic liveness.
+	 */
 	head = explored_state(env, insn);
 	list_for_each(pos, head) {
 		sl = container_of(pos, struct bpf_verifier_state_list, node);
@@ -20379,8 +20388,6 @@ static int clean_live_states(struct bpf_verifier_env *env, int insn,
 			continue;
 		if (sl->state.cleaned)
 			/* all regs in this state in all frames were already marked */
-			continue;
-		if (incomplete_read_marks(env, &sl->state))
 			continue;
 		err = clean_verifier_state(env, &sl->state);
 		if (err)
@@ -26413,6 +26420,11 @@ static int compute_live_registers(struct bpf_verifier_env *env)
 
 	for (i = 0; i < insn_cnt; ++i)
 		compute_insn_live_regs(env, &insns[i], &state[i]);
+
+	/* Forward pass: resolve stack access through FP-derived pointers */
+	err = bpf_compute_subprog_arg_access(env);
+	if (err)
+		goto out;
 
 	changed = true;
 	while (changed) {
