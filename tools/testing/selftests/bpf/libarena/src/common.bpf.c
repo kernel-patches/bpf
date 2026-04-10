@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: LGPL-2.1 OR BSD-2-Clause
 /* Copyright (c) 2026 Meta Platforms, Inc. and affiliates. */
 #include <common.h>
+#include <asan.h>
+#include <buddy.h>
 
 const volatile u32 zero = 0;
+
+buddy_t buddy;
 
 /* How many pages do we reserve at the beginning of the arena segment? */
 #define RESERVE_ALLOC (8)
@@ -54,6 +58,14 @@ SEC("syscall")
 __weak int arena_alloc_reserve(void)
 {
 	return bpf_arena_reserve_pages(&arena, NULL, RESERVE_ALLOC);
+}
+
+SEC("syscall")
+__weak int arena_buddy_reset(void)
+{
+	buddy_destroy(&buddy);
+
+	return buddy_init(&buddy);
 }
 
 char _license[] SEC("license") = "GPL";
