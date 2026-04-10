@@ -16635,10 +16635,31 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 	int err;
 
 	dst_reg = &regs[insn->dst_reg];
-	src_reg = NULL;
+	if (BPF_SRC(insn->code) == BPF_X)
+		src_reg = &regs[insn->src_reg];
+	else
+		src_reg = NULL;
 
-	if (dst_reg->type == PTR_TO_ARENA) {
+	/* Case where at least one operand is an arena. */
+	if (dst_reg->type == PTR_TO_ARENA || (src_reg && src_reg->type == PTR_TO_ARENA)) {
 		struct bpf_insn_aux_data *aux = cur_aux(env);
+
+		if (dst_reg->type != PTR_TO_ARENA) {
+			/* Can't do arena arithmetic with non-scalars. */
+			if (dst_reg->type != SCALAR_VALUE) {
+				verbose(env, "R%d %s R%d: Invalid operation between "
+						"bpf_reg_state types %s and %s\n",
+					insn->dst_reg,
+					bpf_alu_string[opcode >> 4],
+					insn->src_reg,
+					reg_type_str(env, dst_reg->type),
+					reg_type_str(env, src_reg->type));
+				return -EACCES;
+			}
+
+			*dst_reg = *src_reg;
+			dst_reg->subreg_def = env->insn_idx + 1;
+		}
 
 		if (BPF_CLASS(insn->code) == BPF_ALU64)
 			/*
