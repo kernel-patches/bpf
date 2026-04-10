@@ -16,8 +16,18 @@
 #include <sys/sysinfo.h>
 
 #include <common.h>
+#include <asan.h>
 #include <selftest_helpers.h>
 
+#ifdef BPF_ARENA_ASAN
+#include "../libarena_asan.skel.h"
+typedef struct libarena_asan selftest;
+#define selftest__open libarena_asan__open
+#define selftest__open_and_load libarena_asan__open_and_load
+#define selftest__load libarena_asan__load
+#define selftest__attach libarena_asan__attach
+#define selftest__destroy libarena_asan__destroy
+#else
 #include "../libarena.skel.h"
 typedef struct libarena selftest;
 #define selftest__open libarena__open
@@ -25,6 +35,7 @@ typedef struct libarena selftest;
 #define selftest__load libarena__load
 #define selftest__attach libarena__attach
 #define selftest__destroy libarena__destroy
+#endif
 
 static bool verbose;
 static int testno = 1;
@@ -67,6 +78,26 @@ static int libbpf_print_fn(enum libbpf_print_level level,
 	return vfprintf(stderr, format, args);
 }
 
+static int init_arena(selftest *skel)
+{
+	int ret;
+
+	ret = libarena_run_prog(bpf_program__fd(skel->progs.arena_alloc_reserve));
+	if (ret)
+		return ret;
+
+#ifdef BPF_ARENA_ASAN
+	ret = libarena_asan_init(
+		bpf_program__fd(skel->progs.arena_get_base),
+		bpf_program__fd(skel->progs.asan_init),
+		(1ULL << 32) / sysconf(_SC_PAGESIZE));
+	if (ret)
+		return ret;
+#endif
+
+	return 0;
+}
+
 static int run_test(selftest *skel, struct bpf_program *prog)
 {
 	int prog_fd;
@@ -82,10 +113,13 @@ static void
 banner(const char *progpath)
 {
 	char *name = basename(progpath);
+	bool is_asan;
 
+	/* Check if our BPF programs are ASAN-capable using strstr on the prog name. */
 	printf("%s\n", name);
+	is_asan = strstr(name, "_asan");
 
-	printf("=== %s ===\n", "libarena selftests");
+	printf("=== %s %s===\n", "libarena selftests", is_asan ? "(asan) " : "");
 }
 
 int main(int argc, char *argv[])
@@ -116,7 +150,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	ret = libarena_run_prog(bpf_program__fd(skel->progs.arena_alloc_reserve));
+	ret = init_arena(skel);
 	if (ret) {
 		fprintf(stderr, "Failed to initialize arena: %d\n", ret);
 		selftest__destroy(skel);
