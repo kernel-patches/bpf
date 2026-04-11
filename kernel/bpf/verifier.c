@@ -18363,6 +18363,112 @@ static int check_ld_abs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	return 0;
 }
 
+#ifdef CONFIG_FUNCTION_ERROR_INJECTION
+
+/*
+ * The return values corresponding to the error injection
+ * types shall be interpreted as follows:
+ *
+ * EI_ETYPE_NULL
+ *   This function will return `NULL` if it fails. e.g. return an allocated
+ *   object address.
+ *
+ * EI_ETYPE_ERRNO
+ *   This function will return an `-errno` error code if it fails. e.g. return
+ *   -EINVAL if the input is wrong. This will include the functions which will
+ *   return an address which encodes `-errno` by ERR_PTR() macro.
+ *
+ * EI_ETYPE_ERRNO_NULL
+ *   This function will return an `-errno` or `NULL` if it fails. If the caller
+ *   of this function checks the return value with IS_ERR_OR_NULL() macro, this
+ *   type will be appropriate.
+ *
+ * EI_ETYPE_TRUE
+ *   This function will return `true` (non-zero positive value) if it fails.
+ *
+ * Since returning 0 from modify_return means not modifying the return value,
+ * 0 must always be included.
+ */
+static int modify_return_get_retval_range(const struct bpf_prog *prog,
+					  struct bpf_retval_range *range)
+{
+	unsigned long addr = (unsigned long)prog->aux->dst_trampoline->func.addr;
+
+	if (within_error_injection_list(addr)) {
+		switch (get_injectable_error_type(addr)) {
+		case EI_ETYPE_NULL:
+			range->minval = 0;
+			range->maxval = 0;
+			break;
+		case EI_ETYPE_ERRNO:
+		case EI_ETYPE_ERRNO_NULL:
+			range->minval = -MAX_ERRNO;
+			range->maxval = 0;
+			break;
+		case EI_ETYPE_TRUE:
+			range->minval = 0;
+			range->maxval = 1;
+			break;
+		}
+		range->return_32bit = true;
+
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+#else
+
+/* The system call return value is allowed to be an arbitrary value. */
+static int modify_return_get_retval_range(const struct bpf_prog *prog,
+					  struct bpf_retval_range *range)
+{
+	return -EINVAL;
+}
+
+#endif /* CONFIG_FUNCTION_ERROR_INJECTION */
+
+#define SECURITY_PREFIX "security_"
+/* hooks return 0 or 1 */
+BTF_SET_START(bool_security_hooks)
+#ifdef CONFIG_SECURITY_NETWORK_XFRM
+BTF_ID(func, security_xfrm_state_pol_flow_match)
+#endif
+#ifdef CONFIG_AUDIT
+BTF_ID(func, security_audit_rule_known)
+#endif
+/*
+ * The inode_xattr_skipcap hook is called from within
+ * security_inode_removexattr and security_inode_setxattr.
+ * Since these two functions can also return values from
+ * inode_removexattr and inode_setxattr respectively,
+ * there is no need to restrict their return values to 0 or 1.
+ */
+BTF_SET_END(bool_security_hooks)
+
+/*
+ * Similar to bpf_lsm_get_retval_range,
+ * ensure that the return values of fmod_ret are valid.
+ */
+static int bpf_security_get_retval_range(const struct bpf_prog *prog,
+					 struct bpf_retval_range *range)
+{
+	if (strncmp(SECURITY_PREFIX, prog->aux->attach_func_name,
+		    sizeof(SECURITY_PREFIX) - 1))
+		return -EINVAL;
+
+	if (btf_id_set_contains(&bool_security_hooks, prog->aux->attach_btf_id)) {
+		range->minval = 0;
+		range->maxval = 1;
+	} else {
+		range->minval = -MAX_ERRNO;
+		range->maxval = 0;
+	}
+	range->return_32bit = true;
+
+	return 0;
+}
 
 static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_range *range)
 {
@@ -18416,8 +18522,13 @@ static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_
 			*range = retval_range(0, 0);
 			break;
 		case BPF_TRACE_RAW_TP:
-		case BPF_MODIFY_RETURN:
 			return false;
+		case BPF_MODIFY_RETURN:
+			if (!bpf_security_get_retval_range(env->prog, range))
+				break;
+			if (modify_return_get_retval_range(env->prog, range))
+				return false;
+			break;
 		case BPF_TRACE_ITER:
 		default:
 			break;
@@ -25460,7 +25571,6 @@ static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 	return bpf_prog_ctx_arg_info_init(prog, st_ops_desc->arg_info[member_idx].info,
 					  st_ops_desc->arg_info[member_idx].cnt);
 }
-#define SECURITY_PREFIX "security_"
 
 #ifdef CONFIG_FUNCTION_ERROR_INJECTION
 
