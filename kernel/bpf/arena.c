@@ -317,7 +317,6 @@ static u64 arena_map_mem_usage(const struct bpf_map *map)
 struct vma_list {
 	struct vm_area_struct *vma;
 	struct list_head head;
-	refcount_t mmap_count;
 };
 
 static int remember_vma(struct bpf_arena *arena, struct vm_area_struct *vma)
@@ -327,7 +326,6 @@ static int remember_vma(struct bpf_arena *arena, struct vm_area_struct *vma)
 	vml = kmalloc_obj(*vml);
 	if (!vml)
 		return -ENOMEM;
-	refcount_set(&vml->mmap_count, 1);
 	vma->vm_private_data = vml;
 	vml->vma = vma;
 	list_add(&vml->head, &arena->vma_list);
@@ -336,9 +334,28 @@ static int remember_vma(struct bpf_arena *arena, struct vm_area_struct *vma)
 
 static void arena_vm_open(struct vm_area_struct *vma)
 {
+	struct bpf_map *map = vma->vm_file->private_data;
+	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 	struct vma_list *vml = vma->vm_private_data;
 
-	refcount_inc(&vml->mmap_count);
+	/*
+	 * If vm_private_data points to a vma_list for a different VMA, it was
+	 * inherited via vm_area_dup (fork or split). Clear it and allocate a
+	 * fresh entry for this VMA, following the HugeTLB vma_lock pattern.
+	 */
+	if (vml && vml->vma != vma)
+		vma->vm_private_data = NULL;
+
+	if (vma->vm_private_data)
+		return;
+
+	vml = kmalloc_obj(*vml);
+	if (!vml)
+		return;
+	vml->vma = vma;
+	vma->vm_private_data = vml;
+	guard(mutex)(&arena->lock);
+	list_add(&vml->head, &arena->vma_list);
 }
 
 static void arena_vm_close(struct vm_area_struct *vma)
@@ -347,10 +364,9 @@ static void arena_vm_close(struct vm_area_struct *vma)
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 	struct vma_list *vml = vma->vm_private_data;
 
-	if (!refcount_dec_and_test(&vml->mmap_count))
+	if (!vml)
 		return;
 	guard(mutex)(&arena->lock);
-	/* update link list under lock */
 	list_del(&vml->head);
 	vma->vm_private_data = NULL;
 	kfree(vml);
