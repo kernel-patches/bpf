@@ -71,4 +71,42 @@ int verifier_percpu_read(void *ctx)
 	return c == 'd';
 }
 
+volatile const __u32 num_cpus = 0;
+__u32 percpu_data_sum = 0;
+bool run_iter = false;
+
+SEC("iter/bpf_map_elem")
+__auxiliary
+__arch_x86_64
+__arch_arm64
+int dump_percpu_data(struct bpf_iter__bpf_map_elem *ctx)
+{
+	struct {
+		int data;
+		char run;
+		struct {
+			char set;
+			int i;
+			int nums[7];
+		} struct_data;
+		int nums[7];
+	} *pptr = ctx->value;
+	__u32 step;
+	int i;
+
+	if (!pptr)
+		return 0;
+
+	run_iter = true;
+
+	/* percpu array element size is aligned to 8 */
+	step = (sizeof(*pptr) + 7) & ~7;
+
+	for (i = 0; i < num_cpus; i++) {
+		percpu_data_sum += pptr->struct_data.nums[6];
+		pptr = (void *)pptr + step;
+	}
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
