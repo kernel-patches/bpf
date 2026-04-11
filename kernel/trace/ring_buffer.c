@@ -4506,18 +4506,20 @@ static void check_buffer(struct ring_buffer_per_cpu *cpu_buffer,
 	ret = rb_read_data_buffer(bpage, tail, cpu_buffer->cpu, &ts, &delta);
 	if (ret < 0) {
 		if (delta < ts) {
-			buffer_warn_return("[CPU: %d]ABSOLUTE TIME WENT BACKWARDS: last ts: %lld absolute ts: %lld\n",
-					   cpu_buffer->cpu, ts, delta);
+			buffer_warn_return("[CPU: %d]ABSOLUTE TIME WENT BACKWARDS: last ts: %lld absolute ts: %lld clock:%pS\n",
+					   cpu_buffer->cpu, ts, delta,
+					   cpu_buffer->buffer->clock);
 			goto out;
 		}
 	}
 	if ((full && ts > info->ts) ||
 	    (!full && ts + info->delta != info->ts)) {
-		buffer_warn_return("[CPU: %d]TIME DOES NOT MATCH expected:%lld actual:%lld delta:%lld before:%lld after:%lld%s context:%s\n",
+		buffer_warn_return("[CPU: %d]TIME DOES NOT MATCH expected:%lld actual:%lld delta:%lld before:%lld after:%lld%s context:%s\ntrace clock:%pS",
 				   cpu_buffer->cpu,
 				   ts + info->delta, info->ts, info->delta,
 				   info->before, info->after,
-				   full ? " (full)" : "", show_interrupt_level());
+				   full ? " (full)" : "", show_interrupt_level(),
+				   cpu_buffer->buffer->clock);
 	}
 out:
 	atomic_dec(this_cpu_ptr(&checking));
@@ -7720,6 +7722,12 @@ out:
 	return 0;
 }
 
+static void rb_cpu_sync(void *data)
+{
+	/* Not really needed, but documents what is happening */
+	smp_rmb();
+}
+
 /*
  * We only allocate new buffers, never free them if the CPU goes down.
  * If we were to free the buffer, then the user would lose any trace that was in
@@ -7758,7 +7766,18 @@ int trace_rb_cpu_prepare(unsigned int cpu, struct hlist_node *node)
 		     cpu);
 		return -ENOMEM;
 	}
-	smp_wmb();
+
+	/*
+	 * Ensure trace_buffer readers observe the newly allocated
+	 * ring_buffer_per_cpu before they check the cpumask. Instead of using a
+	 * read barrier for all readers, send an IPI.
+	 */
+	if (unlikely(system_state == SYSTEM_RUNNING)) {
+		on_each_cpu(rb_cpu_sync, NULL, 1);
+		/* Not really needed, but documents what is happening */
+		smp_wmb();
+	}
+
 	cpumask_set_cpu(cpu, buffer->cpumask);
 	return 0;
 }

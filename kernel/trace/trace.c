@@ -539,7 +539,58 @@ void trace_set_ring_buffer_expanded(struct trace_array *tr)
 	tr->ring_buffer_expanded = true;
 }
 
+static void trace_array_autoremove(struct work_struct *work)
+{
+	struct trace_array *tr = container_of(work, struct trace_array, autoremove_work);
+
+	trace_array_destroy(tr);
+}
+
+static struct workqueue_struct *autoremove_wq;
+
+static void trace_array_kick_autoremove(struct trace_array *tr)
+{
+	if (autoremove_wq)
+		queue_work(autoremove_wq, &tr->autoremove_work);
+}
+
+static void trace_array_cancel_autoremove(struct trace_array *tr)
+{
+	/*
+	 * Since this can be called inside trace_array_autoremove(),
+	 * it has to avoid deadlock of the workqueue.
+	 */
+	if (work_pending(&tr->autoremove_work))
+		cancel_work_sync(&tr->autoremove_work);
+}
+
+static void trace_array_init_autoremove(struct trace_array *tr)
+{
+	INIT_WORK(&tr->autoremove_work, trace_array_autoremove);
+}
+
+static void trace_array_start_autoremove(void)
+{
+	if (autoremove_wq)
+		return;
+
+	autoremove_wq = alloc_workqueue("tr_autoremove_wq",
+					WQ_UNBOUND | WQ_HIGHPRI, 0);
+	if (!autoremove_wq)
+		pr_warn("Unable to allocate tr_autoremove_wq. autoremove disabled.\n");
+}
+
 LIST_HEAD(ftrace_trace_arrays);
+
+static int __trace_array_get(struct trace_array *this_tr)
+{
+	/* When free_on_close is set, this is not available anymore. */
+	if (autoremove_wq && this_tr->free_on_close)
+		return -ENODEV;
+
+	this_tr->ref++;
+	return 0;
+}
 
 int trace_array_get(struct trace_array *this_tr)
 {
@@ -548,8 +599,7 @@ int trace_array_get(struct trace_array *this_tr)
 	guard(mutex)(&trace_types_lock);
 	list_for_each_entry(tr, &ftrace_trace_arrays, list) {
 		if (tr == this_tr) {
-			tr->ref++;
-			return 0;
+			return __trace_array_get(tr);
 		}
 	}
 
@@ -560,6 +610,12 @@ static void __trace_array_put(struct trace_array *this_tr)
 {
 	WARN_ON(!this_tr->ref);
 	this_tr->ref--;
+	/*
+	 * When free_on_close is set, prepare removing the array
+	 * when the last reference is released.
+	 */
+	if (this_tr->ref == 1 && this_tr->free_on_close)
+		trace_array_kick_autoremove(this_tr);
 }
 
 /**
@@ -3421,6 +3477,11 @@ int tracing_open_generic_tr(struct inode *inode, struct file *filp)
 	if (ret)
 		return ret;
 
+	if ((filp->f_mode & FMODE_WRITE) && trace_array_is_readonly(tr)) {
+		trace_array_put(tr);
+		return -EACCES;
+	}
+
 	filp->private_data = inode->i_private;
 
 	return 0;
@@ -4830,6 +4891,10 @@ static void update_last_data(struct trace_array *tr)
 
 	/* Only if the buffer has previous boot data clear and update it. */
 	tr->flags &= ~TRACE_ARRAY_FL_LAST_BOOT;
+
+	/* If this is a backup instance, mark it for autoremove. */
+	if (tr->flags & TRACE_ARRAY_FL_VMALLOC)
+		tr->free_on_close = true;
 
 	/* Reset the module list and reload them */
 	if (tr->scratch) {
@@ -6441,6 +6506,11 @@ static int tracing_clock_open(struct inode *inode, struct file *file)
 	ret = tracing_check_open_get_tr(tr);
 	if (ret)
 		return ret;
+
+	if ((file->f_mode & FMODE_WRITE) && trace_array_is_readonly(tr)) {
+		trace_array_put(tr);
+		return -EACCES;
+	}
 
 	ret = single_open(file, tracing_clock_show, inode->i_private);
 	if (ret < 0)
@@ -8439,8 +8509,8 @@ struct trace_array *trace_array_find_get(const char *instance)
 
 	guard(mutex)(&trace_types_lock);
 	tr = trace_array_find(instance);
-	if (tr)
-		tr->ref++;
+	if (tr && __trace_array_get(tr) < 0)
+		tr = NULL;
 
 	return tr;
 }
@@ -8536,6 +8606,8 @@ trace_array_create_systems(const char *name, const char *systems,
 
 	if (ftrace_allocate_ftrace_ops(tr) < 0)
 		goto out_free_tr;
+
+	trace_array_init_autoremove(tr);
 
 	ftrace_init_trace_array(tr);
 
@@ -8647,7 +8719,9 @@ struct trace_array *trace_array_get_by_name(const char *name, const char *system
 
 	list_for_each_entry(tr, &ftrace_trace_arrays, list) {
 		if (tr->name && strcmp(tr->name, name) == 0) {
-			tr->ref++;
+			/* if this fails, @tr is going to be removed. */
+			if (__trace_array_get(tr) < 0)
+				tr = NULL;
 			return tr;
 		}
 	}
@@ -8686,6 +8760,7 @@ static int __remove_instance(struct trace_array *tr)
 			set_tracer_flag(tr, 1ULL << i, 0);
 	}
 
+	trace_array_cancel_autoremove(tr);
 	tracing_set_nop(tr);
 	clear_ftrace_function_probes(tr);
 	event_trace_del_tracer(tr);
@@ -8778,17 +8853,22 @@ static __init void create_trace_instances(struct dentry *d_tracer)
 static void
 init_tracer_tracefs(struct trace_array *tr, struct dentry *d_tracer)
 {
+	umode_t writable_mode = TRACE_MODE_WRITE;
 	int cpu;
 
+	if (trace_array_is_readonly(tr))
+		writable_mode = TRACE_MODE_READ;
+
 	trace_create_file("available_tracers", TRACE_MODE_READ, d_tracer,
-			tr, &show_traces_fops);
+			  tr, &show_traces_fops);
 
-	trace_create_file("current_tracer", TRACE_MODE_WRITE, d_tracer,
-			tr, &set_tracer_fops);
+	trace_create_file("current_tracer", writable_mode, d_tracer,
+			  tr, &set_tracer_fops);
 
-	trace_create_file("tracing_cpumask", TRACE_MODE_WRITE, d_tracer,
+	trace_create_file("tracing_cpumask", writable_mode, d_tracer,
 			  tr, &tracing_cpumask_fops);
 
+	/* Options are used for changing print-format even for readonly instance. */
 	trace_create_file("trace_options", TRACE_MODE_WRITE, d_tracer,
 			  tr, &tracing_iter_fops);
 
@@ -8798,11 +8878,35 @@ init_tracer_tracefs(struct trace_array *tr, struct dentry *d_tracer)
 	trace_create_file("trace_pipe", TRACE_MODE_READ, d_tracer,
 			  tr, &tracing_pipe_fops);
 
-	trace_create_file("buffer_size_kb", TRACE_MODE_WRITE, d_tracer,
+	trace_create_file("buffer_size_kb", writable_mode, d_tracer,
 			  tr, &tracing_entries_fops);
 
 	trace_create_file("buffer_total_size_kb", TRACE_MODE_READ, d_tracer,
 			  tr, &tracing_total_entries_fops);
+
+	trace_create_file("trace_clock", writable_mode, d_tracer, tr,
+			  &trace_clock_fops);
+
+	trace_create_file("timestamp_mode", TRACE_MODE_READ, d_tracer, tr,
+			  &trace_time_stamp_mode_fops);
+
+	tr->buffer_percent = 50;
+
+	trace_create_file("buffer_subbuf_size_kb", writable_mode, d_tracer,
+			  tr, &buffer_subbuf_size_fops);
+
+	create_trace_options_dir(tr);
+
+	if (tr->range_addr_start)
+		trace_create_file("last_boot_info", TRACE_MODE_READ, d_tracer,
+				  tr, &last_boot_fops);
+
+	for_each_tracing_cpu(cpu)
+		tracing_init_tracefs_percpu(tr, cpu);
+
+	/* Read-only instance has above files only. */
+	if (trace_array_is_readonly(tr))
+		return;
 
 	trace_create_file("free_buffer", 0200, d_tracer,
 			  tr, &tracing_free_buffer_fops);
@@ -8815,48 +8919,28 @@ init_tracer_tracefs(struct trace_array *tr, struct dentry *d_tracer)
 	trace_create_file("trace_marker_raw", 0220, d_tracer,
 			  tr, &tracing_mark_raw_fops);
 
-	trace_create_file("trace_clock", TRACE_MODE_WRITE, d_tracer, tr,
-			  &trace_clock_fops);
+	trace_create_file("buffer_percent", TRACE_MODE_WRITE, d_tracer,
+			  tr, &buffer_percent_fops);
+
+	trace_create_file("syscall_user_buf_size", TRACE_MODE_WRITE, d_tracer,
+			  tr, &tracing_syscall_buf_fops);
 
 	trace_create_file("tracing_on", TRACE_MODE_WRITE, d_tracer,
 			  tr, &rb_simple_fops);
-
-	trace_create_file("timestamp_mode", TRACE_MODE_READ, d_tracer, tr,
-			  &trace_time_stamp_mode_fops);
-
-	tr->buffer_percent = 50;
-
-	trace_create_file("buffer_percent", TRACE_MODE_WRITE, d_tracer,
-			tr, &buffer_percent_fops);
-
-	trace_create_file("buffer_subbuf_size_kb", TRACE_MODE_WRITE, d_tracer,
-			  tr, &buffer_subbuf_size_fops);
-
-	trace_create_file("syscall_user_buf_size", TRACE_MODE_WRITE, d_tracer,
-			 tr, &tracing_syscall_buf_fops);
-
-	create_trace_options_dir(tr);
 
 	trace_create_maxlat_file(tr, d_tracer);
 
 	if (ftrace_create_function_files(tr, d_tracer))
 		MEM_FAIL(1, "Could not allocate function filter files");
 
-	if (tr->range_addr_start) {
-		trace_create_file("last_boot_info", TRACE_MODE_READ, d_tracer,
-				  tr, &last_boot_fops);
 #ifdef CONFIG_TRACER_SNAPSHOT
-	} else {
+	if (!tr->range_addr_start)
 		trace_create_file("snapshot", TRACE_MODE_WRITE, d_tracer,
 				  tr, &snapshot_fops);
 #endif
-	}
 
 	trace_create_file("error_log", TRACE_MODE_WRITE, d_tracer,
 			  tr, &tracing_err_log_fops);
-
-	for_each_tracing_cpu(cpu)
-		tracing_init_tracefs_percpu(tr, cpu);
 
 	ftrace_init_tracefs(tr, d_tracer);
 }
@@ -9641,17 +9725,41 @@ __init static void enable_instances(void)
 		/*
 		 * Backup buffers can be freed but need vfree().
 		 */
-		if (backup)
-			tr->flags |= TRACE_ARRAY_FL_VMALLOC;
+		if (backup) {
+			tr->flags |= TRACE_ARRAY_FL_VMALLOC | TRACE_ARRAY_FL_RDONLY;
+			trace_array_start_autoremove();
+		}
 
 		if (start || backup) {
 			tr->flags |= TRACE_ARRAY_FL_BOOT | TRACE_ARRAY_FL_LAST_BOOT;
 			tr->range_name = no_free_ptr(rname);
 		}
 
+		/*
+		 * Save the events to start and enabled them after all boot instances
+		 * have been created.
+		 */
+		tr->boot_events = curr_str;
+	}
+
+	/* Enable the events after all boot instances have been created */
+	list_for_each_entry(tr, &ftrace_trace_arrays, list) {
+
+		if (!tr->boot_events || !(*tr->boot_events)) {
+			tr->boot_events = NULL;
+			continue;
+		}
+
+		curr_str = tr->boot_events;
+
+		/* Clear the instance if this is a persistent buffer */
+		if (tr->flags & TRACE_ARRAY_FL_LAST_BOOT)
+			update_last_data(tr);
+
 		while ((tok = strsep(&curr_str, ","))) {
 			early_enable_events(tr, tok, true);
 		}
+		tr->boot_events = NULL;
 	}
 }
 
