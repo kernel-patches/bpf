@@ -867,13 +867,13 @@ void update_max_tr_single(struct trace_array *tr,
 #if defined(CONFIG_TRACER_MAX_TRACE) && defined(CONFIG_FSNOTIFY)
 # define LATENCY_FS_NOTIFY
 #endif
+#endif /* CONFIG_TRACER_SNAPSHOT */
 
 #ifdef LATENCY_FS_NOTIFY
 void latency_fsnotify(struct trace_array *tr);
 #else
 static inline void latency_fsnotify(struct trace_array *tr) { }
 #endif
-#endif /* CONFIG_TRACER_SNAPSHOT */
 
 #ifdef CONFIG_STACKTRACE
 void __trace_stack(struct trace_array *tr, unsigned int trace_ctx, int skip);
@@ -927,6 +927,8 @@ extern int DYN_FTRACE_TEST_NAME(void);
 #define DYN_FTRACE_TEST_NAME2 trace_selftest_dynamic_test_func2
 extern int DYN_FTRACE_TEST_NAME2(void);
 
+void __init trace_append_boot_param(char *buf, const char *str,
+				    char sep, int size);
 extern void trace_set_ring_buffer_expanded(struct trace_array *tr);
 extern bool tracing_selftest_disabled;
 
