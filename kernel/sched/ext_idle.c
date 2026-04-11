@@ -789,7 +789,7 @@ void __scx_update_idle(struct rq *rq, bool idle, bool do_notify)
 	 */
 	if (SCX_HAS_OP(sch, update_idle) && do_notify &&
 	    !scx_bypassing(sch, cpu_of(rq)))
-		SCX_CALL_OP(sch, SCX_KF_REST, update_idle, rq, cpu_of(rq), idle);
+		SCX_CALL_OP(sch, update_idle, rq, cpu_of(rq), idle);
 }
 
 static void reset_idle_masks(struct sched_ext_ops *ops)
@@ -913,8 +913,8 @@ static s32 select_cpu_from_kfunc(struct scx_sched *sch, struct task_struct *p,
 				 s32 prev_cpu, u64 wake_flags,
 				 const struct cpumask *allowed, u64 flags)
 {
-	struct rq *rq;
-	struct rq_flags rf;
+	unsigned long irq_flags;
+	bool we_locked = false;
 	s32 cpu;
 
 	if (!ops_cpu_valid(sch, prev_cpu, NULL))
@@ -924,27 +924,20 @@ static s32 select_cpu_from_kfunc(struct scx_sched *sch, struct task_struct *p,
 		return -EBUSY;
 
 	/*
-	 * If called from an unlocked context, acquire the task's rq lock,
-	 * so that we can safely access p->cpus_ptr and p->nr_cpus_allowed.
+	 * Accessing p->cpus_ptr / p->nr_cpus_allowed needs either @p's rq
+	 * lock or @p's pi_lock. Three cases:
 	 *
-	 * Otherwise, allow to use this kfunc only from ops.select_cpu()
-	 * and ops.select_enqueue().
+	 *  - inside ops.select_cpu(): try_to_wake_up() holds @p's pi_lock.
+	 *  - other rq-locked SCX op: scx_locked_rq() points at the held rq.
+	 *  - truly unlocked (UNLOCKED ops, SYSCALL, non-SCX struct_ops):
+	 *    nothing held, take pi_lock ourselves.
 	 */
-	if (scx_kf_allowed_if_unlocked()) {
-		rq = task_rq_lock(p, &rf);
-	} else {
-		if (!scx_kf_allowed(sch, SCX_KF_SELECT_CPU | SCX_KF_ENQUEUE))
-			return -EPERM;
-		rq = scx_locked_rq();
-	}
-
-	/*
-	 * Validate locking correctness to access p->cpus_ptr and
-	 * p->nr_cpus_allowed: if we're holding an rq lock, we're safe;
-	 * otherwise, assert that p->pi_lock is held.
-	 */
-	if (!rq)
+	if (this_rq()->scx.in_select_cpu) {
 		lockdep_assert_held(&p->pi_lock);
+	} else if (!scx_locked_rq()) {
+		raw_spin_lock_irqsave(&p->pi_lock, irq_flags);
+		we_locked = true;
+	}
 
 	/*
 	 * This may also be called from ops.enqueue(), so we need to handle
@@ -963,8 +956,8 @@ static s32 select_cpu_from_kfunc(struct scx_sched *sch, struct task_struct *p,
 					 allowed ?: p->cpus_ptr, flags);
 	}
 
-	if (scx_kf_allowed_if_unlocked())
-		task_rq_unlock(rq, p, &rf);
+	if (we_locked)
+		raw_spin_unlock_irqrestore(&p->pi_lock, irq_flags);
 
 	return cpu;
 }
@@ -1469,14 +1462,34 @@ BTF_ID_FLAGS(func, scx_bpf_pick_idle_cpu_node, KF_IMPLICIT_ARGS | KF_RCU)
 BTF_ID_FLAGS(func, scx_bpf_pick_idle_cpu, KF_IMPLICIT_ARGS | KF_RCU)
 BTF_ID_FLAGS(func, scx_bpf_pick_any_cpu_node, KF_IMPLICIT_ARGS | KF_RCU)
 BTF_ID_FLAGS(func, scx_bpf_pick_any_cpu, KF_IMPLICIT_ARGS | KF_RCU)
-BTF_ID_FLAGS(func, __scx_bpf_select_cpu_and, KF_IMPLICIT_ARGS | KF_RCU)
-BTF_ID_FLAGS(func, scx_bpf_select_cpu_and, KF_RCU)
-BTF_ID_FLAGS(func, scx_bpf_select_cpu_dfl, KF_IMPLICIT_ARGS | KF_RCU)
 BTF_KFUNCS_END(scx_kfunc_ids_idle)
 
 static const struct btf_kfunc_id_set scx_kfunc_set_idle = {
 	.owner			= THIS_MODULE,
 	.set			= &scx_kfunc_ids_idle,
+};
+
+/*
+ * The select_cpu kfuncs internally call task_rq_lock() when invoked from an
+ * rq-unlocked context, and thus cannot be safely called from arbitrary tracing
+ * contexts where @p's pi_lock state is unknown. Keep them out of
+ * BPF_PROG_TYPE_TRACING by registering them in their own set which is exposed
+ * only to STRUCT_OPS and SYSCALL programs.
+ *
+ * These kfuncs are also members of scx_kfunc_ids_unlocked (see ext.c) because
+ * they're callable from unlocked contexts in addition to ops.select_cpu() and
+ * ops.enqueue().
+ */
+BTF_KFUNCS_START(scx_kfunc_ids_select_cpu)
+BTF_ID_FLAGS(func, __scx_bpf_select_cpu_and, KF_IMPLICIT_ARGS | KF_RCU)
+BTF_ID_FLAGS(func, scx_bpf_select_cpu_and, KF_RCU)
+BTF_ID_FLAGS(func, scx_bpf_select_cpu_dfl, KF_IMPLICIT_ARGS | KF_RCU)
+BTF_KFUNCS_END(scx_kfunc_ids_select_cpu)
+
+static const struct btf_kfunc_id_set scx_kfunc_set_select_cpu = {
+	.owner			= THIS_MODULE,
+	.set			= &scx_kfunc_ids_select_cpu,
+	.filter			= scx_kfunc_context_filter,
 };
 
 int scx_idle_init(void)
@@ -1485,7 +1498,9 @@ int scx_idle_init(void)
 
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &scx_kfunc_set_idle) ||
 	      register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &scx_kfunc_set_idle) ||
-	      register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &scx_kfunc_set_idle);
+	      register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &scx_kfunc_set_idle) ||
+	      register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &scx_kfunc_set_select_cpu) ||
+	      register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &scx_kfunc_set_select_cpu);
 
 	return ret;
 }
