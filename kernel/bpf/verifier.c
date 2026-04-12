@@ -16617,6 +16617,59 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	return 0;
 }
 
+/* At least one source instruction register is a PTR_TO_ARENA. */
+static int adjust_ptr_to_arena_vals(struct bpf_verifier_env *env,
+		struct bpf_insn *insn, struct bpf_reg_state *dst_reg,
+		struct bpf_reg_state *src_reg)
+{
+	struct bpf_insn_aux_data *aux = cur_aux(env);
+	u8 opcode = BPF_OP(insn->code);
+
+	/*
+	 * If it's an instruction with an imm operand, we know it's valid
+	 * because we checked in the caller if the destination is
+	 * an arena.
+	 */
+	if (!src_reg)
+		goto valid;
+
+	/* Ensure both operands is either PTR_TO_ARENA or SCALAR_VALUE. */
+
+	if (dst_reg->type != PTR_TO_ARENA && dst_reg->type != SCALAR_VALUE)
+		goto error;
+
+	if (src_reg->type != PTR_TO_ARENA && src_reg->type != SCALAR_VALUE)
+		goto error;
+
+	/* If dst_reg wasn't a PTR_TO_ARENA, it is now. */
+	if (dst_reg->type != PTR_TO_ARENA)
+		*dst_reg = *src_reg;
+
+valid:
+	dst_reg->subreg_def = env->insn_idx + 1;
+
+	if (BPF_CLASS(insn->code) == BPF_ALU64)
+		/*
+		 * 32-bit operations zero upper bits automatically.
+		 * 64-bit operations need to be converted to 32.
+		 */
+		aux->needs_zext = true;
+
+	/* Any arithmetic operations are allowed on arena pointers */
+	return 0;
+
+error:
+	verbose(env, "R%d %s R%d: Invalid operation between "
+			"bpf_reg_state types %s and %s\n",
+		insn->dst_reg,
+		bpf_alu_string[opcode >> 4],
+		insn->src_reg,
+		reg_type_str(env, dst_reg->type),
+		reg_type_str(env, src_reg->type));
+
+	return -EACCES;
+}
+
 /* Handles ALU ops other than BPF_END, BPF_NEG and BPF_MOV: computes new min/max
  * and var_off.
  */
@@ -16632,21 +16685,13 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 	int err;
 
 	dst_reg = &regs[insn->dst_reg];
-	src_reg = NULL;
+	if (BPF_SRC(insn->code) == BPF_X)
+		src_reg = &regs[insn->src_reg];
+	else
+		src_reg = NULL;
 
-	if (dst_reg->type == PTR_TO_ARENA) {
-		struct bpf_insn_aux_data *aux = cur_aux(env);
-
-		if (BPF_CLASS(insn->code) == BPF_ALU64)
-			/*
-			 * 32-bit operations zero upper bits automatically.
-			 * 64-bit operations need to be converted to 32.
-			 */
-			aux->needs_zext = true;
-
-		/* Any arithmetic operations are allowed on arena pointers */
-		return 0;
-	}
+	if (dst_reg->type == PTR_TO_ARENA || (src_reg && src_reg->type == PTR_TO_ARENA))
+		return adjust_ptr_to_arena_vals(env, insn, dst_reg, src_reg);
 
 	if (dst_reg->type != SCALAR_VALUE)
 		ptr_reg = dst_reg;
