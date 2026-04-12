@@ -5988,7 +5988,7 @@ static int __check_mem_access(struct bpf_verifier_env *env, struct bpf_reg_state
 }
 
 /* check read/write into a memory region with possible variable offset */
-static int check_mem_region_access(struct bpf_verifier_env *env, struct bpf_reg_state *reg, u32 regno,
+static int check_mem_region_access(struct bpf_verifier_env *env, struct bpf_reg_state *reg, int regno,
 				   int off, int size, u32 mem_size,
 				   bool zero_size_allowed)
 {
@@ -6330,7 +6330,7 @@ static u32 map_mem_size(const struct bpf_map *map)
 }
 
 /* check read/write into a map element with possible variable offset */
-static int check_map_access(struct bpf_verifier_env *env, struct bpf_reg_state *reg, u32 regno,
+static int check_map_access(struct bpf_verifier_env *env, struct bpf_reg_state *reg, int regno,
 			    int off, int size, bool zero_size_allowed,
 			    enum bpf_access_src src)
 {
@@ -6437,7 +6437,7 @@ static bool may_access_direct_pkt_data(struct bpf_verifier_env *env,
 	}
 }
 
-static int check_packet_access(struct bpf_verifier_env *env, struct bpf_reg_state *reg, u32 regno, int off,
+static int check_packet_access(struct bpf_verifier_env *env, struct bpf_reg_state *reg, int regno, int off,
 			       int size, bool zero_size_allowed)
 {
 	int err;
@@ -6502,7 +6502,7 @@ static int __check_ctx_access(struct bpf_verifier_env *env, int insn_idx, int of
 	return -EACCES;
 }
 
-static int check_ctx_access(struct bpf_verifier_env *env, int insn_idx, struct bpf_reg_state *reg, u32 regno,
+static int check_ctx_access(struct bpf_verifier_env *env, int insn_idx, struct bpf_reg_state *reg, int regno,
 			    int off, int access_size, enum bpf_access_type t,
 			    struct bpf_insn_access_aux *info)
 {
@@ -6541,7 +6541,7 @@ static int check_flow_keys_access(struct bpf_verifier_env *env, int off,
 }
 
 static int check_sock_access(struct bpf_verifier_env *env, int insn_idx,
-			     struct bpf_reg_state *reg, u32 regno, int off, int size,
+			     struct bpf_reg_state *reg, int regno, int off, int size,
 			     enum bpf_access_type t)
 {
 	struct bpf_insn_access_aux info = {};
@@ -7859,7 +7859,7 @@ static void add_scalar_to_reg(struct bpf_reg_state *dst_reg, s64 val)
  * if t==write && value_regno==-1, some unknown value is stored into memory
  * if t==read && value_regno==-1, don't care what we read from memory
  */
-static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct bpf_reg_state *reg, u32 regno,
+static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct bpf_reg_state *reg, int regno,
 			    int off, int bpf_size, enum bpf_access_type t,
 			    int value_regno, bool strict_alignment_once, bool is_ldsx)
 {
@@ -8592,7 +8592,7 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, struct bpf_reg_
  */
 static int check_mem_size_reg(struct bpf_verifier_env *env,
 			      struct bpf_reg_state *mem_reg,
-			      struct bpf_reg_state *size_reg, u32 mem_regno,
+			      struct bpf_reg_state *size_reg, int mem_regno,
 			      enum bpf_access_type access_type,
 			      bool zero_size_allowed,
 			      struct bpf_call_arg_meta *meta)
@@ -8643,7 +8643,7 @@ static int check_mem_size_reg(struct bpf_verifier_env *env,
 }
 
 static int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
-			 u32 regno, u32 mem_size)
+			 int regno, u32 mem_size)
 {
 	bool may_be_null = type_may_be_null(reg->type);
 	struct bpf_reg_state saved_reg;
@@ -9905,7 +9905,7 @@ static enum bpf_dynptr_type dynptr_get_type(struct bpf_verifier_env *env,
 }
 
 static int check_reg_const_str(struct bpf_verifier_env *env,
-			       struct bpf_reg_state *reg, u32 regno)
+			       struct bpf_reg_state *reg, int regno)
 {
 	struct bpf_map *map = reg->map_ptr;
 	int err;
