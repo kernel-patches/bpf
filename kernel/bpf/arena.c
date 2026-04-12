@@ -317,7 +317,6 @@ static u64 arena_map_mem_usage(const struct bpf_map *map)
 struct vma_list {
 	struct vm_area_struct *vma;
 	struct list_head head;
-	refcount_t mmap_count;
 };
 
 static int remember_vma(struct bpf_arena *arena, struct vm_area_struct *vma)
@@ -327,7 +326,6 @@ static int remember_vma(struct bpf_arena *arena, struct vm_area_struct *vma)
 	vml = kmalloc_obj(*vml);
 	if (!vml)
 		return -ENOMEM;
-	refcount_set(&vml->mmap_count, 1);
 	vma->vm_private_data = vml;
 	vml->vma = vma;
 	list_add(&vml->head, &arena->vma_list);
@@ -336,9 +334,17 @@ static int remember_vma(struct bpf_arena *arena, struct vm_area_struct *vma)
 
 static void arena_vm_open(struct vm_area_struct *vma)
 {
-	struct vma_list *vml = vma->vm_private_data;
+	struct bpf_map *map = vma->vm_file->private_data;
+	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 
-	refcount_inc(&vml->mmap_count);
+	/*
+	 * vm_private_data points to the parent's vma_list entry after fork.
+	 * Clear it and register this VMA separately.
+	 */
+	vma->vm_private_data = NULL;
+	guard(mutex)(&arena->lock);
+	/* OOM is silently ignored; arena_vm_close() handles NULL. */
+	remember_vma(arena, vma);
 }
 
 static void arena_vm_close(struct vm_area_struct *vma)
@@ -347,10 +353,9 @@ static void arena_vm_close(struct vm_area_struct *vma)
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 	struct vma_list *vml = vma->vm_private_data;
 
-	if (!refcount_dec_and_test(&vml->mmap_count))
+	if (!vml)
 		return;
 	guard(mutex)(&arena->lock);
-	/* update link list under lock */
 	list_del(&vml->head);
 	vma->vm_private_data = NULL;
 	kfree(vml);
@@ -415,9 +420,15 @@ out_unlock_sigsegv:
 	return VM_FAULT_SIGSEGV;
 }
 
+static int arena_vm_may_split(struct vm_area_struct *vma, unsigned long addr)
+{
+	return -EINVAL;
+}
+
 static const struct vm_operations_struct arena_vm_ops = {
 	.open		= arena_vm_open,
 	.close		= arena_vm_close,
+	.may_split	= arena_vm_may_split,
 	.fault          = arena_vm_fault,
 };
 
