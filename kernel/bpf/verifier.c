@@ -9074,7 +9074,7 @@ static int process_dynptr_func(struct bpf_verifier_env *env, int regno, int insn
 
 		if (!is_dynptr_reg_valid_init(env, reg)) {
 			verbose(env,
-				"Expected an initialized dynptr as arg #%d\n",
+				"Expected an initialized dynptr as arg#%d\n",
 				regno - 1);
 			return -EINVAL;
 		}
@@ -9082,7 +9082,7 @@ static int process_dynptr_func(struct bpf_verifier_env *env, int regno, int insn
 		/* Fold modifiers (in this case, MEM_RDONLY) when checking expected type */
 		if (!is_dynptr_type_expected(env, reg, arg_type & ~MEM_RDONLY)) {
 			verbose(env,
-				"Expected a dynptr of type %s as arg #%d\n",
+				"Expected a dynptr of type %s as arg#%d\n",
 				dynptr_type_str(arg_to_dynptr_type(arg_type)), regno - 1);
 			return -EINVAL;
 		}
@@ -9152,7 +9152,7 @@ static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_id
 	 */
 	btf_id = btf_check_iter_arg(meta->btf, meta->func_proto, regno - 1);
 	if (btf_id < 0) {
-		verbose(env, "expected valid iter pointer as arg #%d\n", regno - 1);
+		verbose(env, "expected valid iter pointer as arg#%d\n", regno - 1);
 		return -EINVAL;
 	}
 	t = btf_type_by_id(meta->btf, btf_id);
@@ -9161,7 +9161,7 @@ static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_id
 	if (is_iter_new_kfunc(meta)) {
 		/* bpf_iter_<type>_new() expects pointer to uninit iter state */
 		if (!is_iter_reg_valid_uninit(env, reg, nr_slots)) {
-			verbose(env, "expected uninitialized iter_%s as arg #%d\n",
+			verbose(env, "expected uninitialized iter_%s as arg#%d\n",
 				iter_type_str(meta->btf, btf_id), regno - 1);
 			return -EINVAL;
 		}
@@ -9185,7 +9185,7 @@ static int process_iter_arg(struct bpf_verifier_env *env, int regno, int insn_id
 		case 0:
 			break;
 		case -EINVAL:
-			verbose(env, "expected an initialized iter_%s as arg #%d\n",
+			verbose(env, "expected an initialized iter_%s as arg#%d\n",
 				iter_type_str(meta->btf, btf_id), regno - 1);
 			return err;
 		case -EPROTO:
