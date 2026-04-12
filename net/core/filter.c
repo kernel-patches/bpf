@@ -10544,12 +10544,10 @@ static u32 sock_ops_convert_ctx_access(enum bpf_access_type type,
 	struct bpf_insn *insn = insn_buf;
 	int off;
 
-/* Helper macro for adding read access to tcp_sock or sock fields. */
-#define SOCK_OPS_GET_FIELD(BPF_FIELD, OBJ_FIELD, OBJ)			      \
+/* Helper macro for adding guarded read access to tcp_sock fields. */
+#define SOCK_OPS_LOAD_TCP_SOCK_FIELD(FIELD_SIZE, FIELD_OFFSET)		      \
 	do {								      \
 		int fullsock_reg = si->dst_reg, reg = BPF_REG_9, jmp = 2;     \
-		BUILD_BUG_ON(sizeof_field(OBJ, OBJ_FIELD) >		      \
-			     sizeof_field(struct bpf_sock_ops, BPF_FIELD));   \
 		if (si->dst_reg == reg || si->src_reg == reg)		      \
 			reg--;						      \
 		if (si->dst_reg == reg || si->src_reg == reg)		      \
@@ -10576,10 +10574,9 @@ static u32 sock_ops_convert_ctx_access(enum bpf_access_type type,
 						struct bpf_sock_ops_kern, sk),\
 				      si->dst_reg, si->src_reg,		      \
 				      offsetof(struct bpf_sock_ops_kern, sk));\
-		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(OBJ,		      \
-						       OBJ_FIELD),	      \
+		*insn++ = BPF_LDX_MEM(FIELD_SIZE,			      \
 				      si->dst_reg, si->dst_reg,		      \
-				      offsetof(OBJ, OBJ_FIELD));	      \
+				      FIELD_OFFSET);			      \
 		if (si->dst_reg == si->src_reg)	{			      \
 			*insn++ = BPF_JMP_A(2);				      \
 			*insn++ = BPF_LDX_MEM(BPF_DW, reg, si->src_reg,	      \
@@ -10587,6 +10584,14 @@ static u32 sock_ops_convert_ctx_access(enum bpf_access_type type,
 				      temp));				      \
 			*insn++ = BPF_MOV64_IMM(si->dst_reg, 0);	      \
 		}							      \
+	} while (0)
+
+#define SOCK_OPS_GET_FIELD(BPF_FIELD, OBJ_FIELD, OBJ)			      \
+	do {								      \
+		BUILD_BUG_ON(sizeof_field(OBJ, OBJ_FIELD) >		      \
+			     sizeof_field(struct bpf_sock_ops, BPF_FIELD));   \
+		SOCK_OPS_LOAD_TCP_SOCK_FIELD(BPF_FIELD_SIZEOF(OBJ, OBJ_FIELD),\
+					     offsetof(OBJ, OBJ_FIELD));       \
 	} while (0)
 
 #define SOCK_OPS_GET_SK()							      \
