@@ -24,7 +24,7 @@ struct {
  */
 
 SEC("tp_btf/task_newtask")
-__failure __msg("R2 must be")
+__failure __msg("arg#1 must be")
 int BPF_PROG(test_invalid_nested_user_cpus, struct task_struct *task, u64 clone_flags)
 {
 	bpf_cpumask_test_cpu(0, task->user_cpus_ptr);

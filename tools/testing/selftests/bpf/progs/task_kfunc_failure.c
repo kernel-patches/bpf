@@ -262,7 +262,7 @@ int BPF_PROG(task_kfunc_from_vpid_no_null_check, struct task_struct *task, u64 c
 }
 
 SEC("lsm/task_free")
-__failure __msg("R1 must be a rcu pointer")
+__failure __msg("arg#0 must be a rcu pointer")
 int BPF_PROG(task_kfunc_from_lsm_task_free, struct task_struct *task)
 {
 	struct task_struct *acquired;
@@ -313,7 +313,7 @@ int BPF_PROG(task_access_comm4, struct task_struct *task, const char *buf, bool 
 }
 
 SEC("tp_btf/task_newtask")
-__failure __msg("R1 must be referenced or trusted")
+__failure __msg("arg#0 must be referenced or trusted")
 int BPF_PROG(task_kfunc_release_in_map, struct task_struct *task, u64 clone_flags)
 {
 	struct task_struct *local;

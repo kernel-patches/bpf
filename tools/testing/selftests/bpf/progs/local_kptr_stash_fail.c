@@ -63,7 +63,7 @@ long stash_rb_nodes(void *ctx)
 }
 
 SEC("tc")
-__failure __msg("R1 must have zero offset when passed to release func")
+__failure __msg("arg#0 must have zero offset when passed to release func")
 long drop_rb_node_off(void *ctx)
 {
 	struct map_value *mapval;

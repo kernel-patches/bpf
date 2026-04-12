@@ -175,7 +175,7 @@ __naked void check_that_printk_is_disallowed(void)
 
 SEC("socket")
 __description("unpriv: pass pointer to helper function")
-__success __failure_unpriv __msg_unpriv("R4 leaks addr")
+__success __failure_unpriv __msg_unpriv("arg#3 leaks addr")
 __retval(0)
 __naked void pass_pointer_to_helper_function(void)
 {
@@ -607,7 +607,7 @@ __naked void unpriv_partial_copy_of_pointer(void)
 
 SEC("socket")
 __description("unpriv: pass pointer to tail_call")
-__success __failure_unpriv __msg_unpriv("R3 leaks addr into helper")
+__success __failure_unpriv __msg_unpriv("arg#2 leaks addr into helper")
 __retval(0)
 __naked void pass_pointer_to_tail_call(void)
 {

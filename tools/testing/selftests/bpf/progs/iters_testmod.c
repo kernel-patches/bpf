@@ -85,7 +85,7 @@ int iter_next_rcu_or_null(const void *ctx)
 }
 
 SEC("raw_tp/sys_enter")
-__failure __msg("R1 must be referenced or trusted")
+__failure __msg("arg#0 must be referenced or trusted")
 int iter_next_rcu_not_trusted(const void *ctx)
 {
 	struct task_struct *cur_task = bpf_get_current_task_btf();
@@ -105,8 +105,8 @@ out:
 }
 
 SEC("raw_tp/sys_enter")
-__failure __msg("R1 cannot write into rdonly_mem")
-/* Message should not be 'R1 cannot write into rdonly_trusted_mem' */
+__failure __msg("arg#0 cannot write into rdonly_mem")
+/* Message should not be 'arg#0 cannot write into rdonly_trusted_mem' */
 int iter_next_ptr_mem_not_trusted(const void *ctx)
 {
 	struct bpf_iter_num num_it;

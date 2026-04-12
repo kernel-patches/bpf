@@ -46,7 +46,7 @@ int BPF_PROG(get_task_exe_file_kfunc_fp)
 }
 
 SEC("lsm.s/file_open")
-__failure __msg("R1 must be referenced or trusted")
+__failure __msg("arg#0 must be referenced or trusted")
 int BPF_PROG(get_task_exe_file_kfunc_untrusted)
 {
 	struct file *acquired;
@@ -98,7 +98,7 @@ int BPF_PROG(path_d_path_kfunc_null)
 }
 
 SEC("lsm.s/task_alloc")
-__failure __msg("R1 must be referenced or trusted")
+__failure __msg("arg#0 must be referenced or trusted")
 int BPF_PROG(path_d_path_kfunc_untrusted_from_argument, struct task_struct *task)
 {
 	struct path *root;
@@ -112,7 +112,7 @@ int BPF_PROG(path_d_path_kfunc_untrusted_from_argument, struct task_struct *task
 }
 
 SEC("lsm.s/file_open")
-__failure __msg("R1 must be referenced or trusted")
+__failure __msg("arg#0 must be referenced or trusted")
 int BPF_PROG(path_d_path_kfunc_untrusted_from_current)
 {
 	struct path *pwd;
@@ -128,7 +128,7 @@ int BPF_PROG(path_d_path_kfunc_untrusted_from_current)
 }
 
 SEC("lsm.s/file_open")
-__failure __msg("kernel function bpf_path_d_path args#0 expected pointer to STRUCT path but R1 has a pointer to STRUCT file")
+__failure __msg("kernel function bpf_path_d_path args#0 expected pointer to STRUCT path but has a pointer to STRUCT file")
 int BPF_PROG(path_d_path_kfunc_type_mismatch, struct file *file)
 {
 	bpf_path_d_path((struct path *)&file->f_task_work, buf, sizeof(buf));

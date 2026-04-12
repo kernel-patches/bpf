@@ -118,7 +118,7 @@ int atomic_rmw_not_ok(void *ctx)
 SEC("socket")
 __failure
 __msg("invalid access to memory, mem_size=0 off=0 size=4")
-__msg("R1 min value is outside of the allowed memory range")
+__msg("arg#0 min value is outside of the allowed memory range")
 int kfunc_param_not_ok(void *ctx)
 {
 	int *p;

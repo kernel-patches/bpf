@@ -844,7 +844,7 @@ int syscall_ctx_kfunc_zero_sized(void *ctx)
 	}								\
 	SEC("?" type)							\
 	__description(type ": reject kfunc zero-sized ctx access")	\
-	__failure __msg("R1 type=ctx expected=fp")			\
+	__failure __msg("arg#0 type=ctx expected=fp")			\
 	int no_rewrite_##name##_kfunc_zero(void *ctx)			\
 	{								\
 		bpf_kfunc_call_test_mem_len_pass1(ctx, 0);		\

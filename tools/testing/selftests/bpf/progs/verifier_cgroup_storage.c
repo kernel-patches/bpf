@@ -149,7 +149,7 @@ __naked void invalid_cgroup_storage_access_5(void)
 SEC("cgroup/skb")
 __description("invalid cgroup storage access 6")
 __failure __msg("get_local_storage() doesn't support non-zero flags")
-__msg_unpriv("R2 leaks addr into helper function")
+__msg_unpriv("arg#1 leaks addr into helper function")
 __naked void invalid_cgroup_storage_access_6(void)
 {
 	asm volatile ("					\
@@ -288,7 +288,7 @@ __naked void cpu_cgroup_storage_access_5(void)
 SEC("cgroup/skb")
 __description("invalid per-cpu cgroup storage access 6")
 __failure __msg("get_local_storage() doesn't support non-zero flags")
-__msg_unpriv("R2 leaks addr into helper function")
+__msg_unpriv("arg#1 leaks addr into helper function")
 __naked void cpu_cgroup_storage_access_6(void)
 {
 	asm volatile ("					\

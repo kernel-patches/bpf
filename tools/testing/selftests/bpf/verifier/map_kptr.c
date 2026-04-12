@@ -100,7 +100,7 @@
 	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	.fixup_map_kptr = { 1 },
 	.result = REJECT,
-	.errstr = "R1 doesn't have constant offset. kptr has to be at the constant offset",
+	.errstr = "arg#0 doesn't have constant offset. kptr has to be at the constant offset",
 },
 {
 	"map_kptr: unaligned boundary load/store",
@@ -176,7 +176,7 @@
 	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	.fixup_map_kptr = { 1 },
 	.result = REJECT,
-	.errstr = "invalid kptr access, R1 type=untrusted_ptr_prog_test_ref_kfunc expected=ptr_prog_test",
+	.errstr = "invalid kptr access, arg#0 type=untrusted_ptr_prog_test_ref_kfunc expected=ptr_prog_test",
 },
 {
 	"map_kptr: unref: loaded pointer marked as untrusted",
@@ -244,7 +244,7 @@
 	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	.fixup_map_kptr = { 1 },
 	.result = REJECT,
-	.errstr = "R1 type=untrusted_ptr_ expected=percpu_ptr_",
+	.errstr = "arg#0 type=untrusted_ptr_ expected=percpu_ptr_",
 },
 {
 	"map_kptr: unref: no reference state created",
@@ -311,7 +311,7 @@
 	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	.fixup_map_kptr = { 1 },
 	.result = REJECT,
-	.errstr = "R1 type=rcu_ptr_or_null_ expected=percpu_ptr_",
+	.errstr = "arg#0 type=rcu_ptr_or_null_ expected=percpu_ptr_",
 },
 {
 	"map_kptr: ref: reject off != 0",
@@ -342,7 +342,7 @@
 	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	.fixup_map_kptr = { 1 },
 	.result = REJECT,
-	.errstr = "invalid kptr access, R2 type=ptr_prog_test_ref_kfunc expected=ptr_prog_test_member",
+	.errstr = "invalid kptr access, arg#1 type=ptr_prog_test_ref_kfunc expected=ptr_prog_test_member",
 },
 {
 	"map_kptr: ref: reference state created and released on xchg",

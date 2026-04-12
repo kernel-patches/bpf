@@ -48,7 +48,7 @@ __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
 __failure
 __msg(": (85) call bpf_wq_init#") /* anchor message */
-__msg("pointer in R2 isn't map pointer")
+__msg("pointer in arg#1 isn't map pointer")
 long test_wq_init_nomap(void *ctx)
 {
 	struct bpf_wq *wq;
@@ -147,7 +147,7 @@ SEC("tc")
 __log_level(2)
 __failure
 __msg(": (85) call bpf_wq_init#")
-__msg("R1 doesn't have constant offset. bpf_wq has to be at the constant offset")
+__msg("arg#0 doesn't have constant offset. bpf_wq has to be at the constant offset")
 long test_bad_wq_off(void *ctx)
 {
 	struct elem *val;

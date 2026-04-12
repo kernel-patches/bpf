@@ -15,7 +15,7 @@ int stream_vprintk_null_arg(void *ctx)
 }
 
 SEC("syscall")
-__failure __msg("R3 type=scalar expected=")
+__failure __msg("arg#2 type=scalar expected=")
 int stream_vprintk_scalar_arg(void *ctx)
 {
 	bpf_stream_vprintk(BPF_STDOUT, "", (void *)46, 0);
