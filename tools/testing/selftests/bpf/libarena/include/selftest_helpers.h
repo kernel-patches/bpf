@@ -112,3 +112,10 @@ static inline int libarena_asan_init(int arena_get_base_fd,
 		return ret;
 	return opts.retval;
 }
+
+static inline bool libarena_must_setup_alloc(struct bpf_program *prog)
+{
+	const char *name = bpf_program__name(prog);
+
+	return !strstr(name, "test_buddy");
+}
