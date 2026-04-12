@@ -8499,12 +8499,12 @@ mark:
 	return 0;
 }
 
-static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
+static int check_helper_mem_access(struct bpf_verifier_env *env, struct bpf_reg_state *reg, int regno,
 				   int access_size, enum bpf_access_type access_type,
 				   bool zero_size_allowed,
 				   struct bpf_call_arg_meta *meta)
 {
-	struct bpf_reg_state *regs = cur_regs(env), *reg = &regs[regno];
+	struct bpf_reg_state *regs = cur_regs(env);
 	u32 *max_access;
 
 	switch (base_type(reg->type)) {
@@ -8591,11 +8591,13 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, int regno,
  * containing the pointer.
  */
 static int check_mem_size_reg(struct bpf_verifier_env *env,
-			      struct bpf_reg_state *reg, u32 regno,
+			      struct bpf_reg_state *mem_reg,
+			      struct bpf_reg_state *size_reg, u32 mem_regno,
 			      enum bpf_access_type access_type,
 			      bool zero_size_allowed,
 			      struct bpf_call_arg_meta *meta)
 {
+	int size_regno = mem_regno + 1;
 	int err;
 
 	/* This is used to refine r0 return value bounds for helpers
@@ -8606,37 +8608,37 @@ static int check_mem_size_reg(struct bpf_verifier_env *env,
 	 * out. Only upper bounds can be learned because retval is an
 	 * int type and negative retvals are allowed.
 	 */
-	meta->msize_max_value = reg->umax_value;
+	meta->msize_max_value = size_reg->umax_value;
 
 	/* The register is SCALAR_VALUE; the access check happens using
 	 * its boundaries. For unprivileged variable accesses, disable
 	 * raw mode so that the program is required to initialize all
 	 * the memory that the helper could just partially fill up.
 	 */
-	if (!tnum_is_const(reg->var_off))
+	if (!tnum_is_const(size_reg->var_off))
 		meta = NULL;
 
-	if (reg->smin_value < 0) {
+	if (size_reg->smin_value < 0) {
 		verbose(env, "R%d min value is negative, either use unsigned or 'var &= const'\n",
-			regno);
+			size_regno);
 		return -EACCES;
 	}
 
-	if (reg->umin_value == 0 && !zero_size_allowed) {
+	if (size_reg->umin_value == 0 && !zero_size_allowed) {
 		verbose(env, "R%d invalid zero-sized read: u64=[%lld,%lld]\n",
-			regno, reg->umin_value, reg->umax_value);
+			size_regno, size_reg->umin_value, size_reg->umax_value);
 		return -EACCES;
 	}
 
-	if (reg->umax_value >= BPF_MAX_VAR_SIZ) {
+	if (size_reg->umax_value >= BPF_MAX_VAR_SIZ) {
 		verbose(env, "R%d unbounded memory access, use 'var &= const' or 'if (var < const)'\n",
-			regno);
+			size_regno);
 		return -EACCES;
 	}
-	err = check_helper_mem_access(env, regno - 1, reg->umax_value,
+	err = check_helper_mem_access(env, mem_reg, mem_regno, size_reg->umax_value,
 				      access_type, zero_size_allowed, meta);
 	if (!err)
-		err = mark_chain_precision(env, regno);
+		err = mark_chain_precision(env, size_regno);
 	return err;
 }
 
@@ -8661,8 +8663,8 @@ static int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg
 
 	int size = base_type(reg->type) == PTR_TO_STACK ? -(int)mem_size : mem_size;
 
-	err = check_helper_mem_access(env, regno, size, BPF_READ, true, NULL);
-	err = err ?: check_helper_mem_access(env, regno, size, BPF_WRITE, true, NULL);
+	err = check_helper_mem_access(env, reg, regno, size, BPF_READ, true, NULL);
+	err = err ?: check_helper_mem_access(env, reg, regno, size, BPF_WRITE, true, NULL);
 
 	if (may_be_null)
 		*reg = saved_reg;
@@ -8670,16 +8672,16 @@ static int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg
 	return err;
 }
 
-static int check_kfunc_mem_size_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
-				    u32 regno)
+static int check_kfunc_mem_size_reg(struct bpf_verifier_env *env, struct bpf_reg_state *mem_reg,
+				    struct bpf_reg_state *size_reg,
+				    u32 mem_regno)
 {
-	struct bpf_reg_state *mem_reg = &cur_regs(env)[regno - 1];
 	bool may_be_null = type_may_be_null(mem_reg->type);
 	struct bpf_reg_state saved_reg;
 	struct bpf_call_arg_meta meta;
 	int err;
 
-	WARN_ON_ONCE(regno < BPF_REG_2 || regno > BPF_REG_5);
+	WARN_ON_ONCE(mem_regno > BPF_REG_4);
 
 	memset(&meta, 0, sizeof(meta));
 
@@ -8688,8 +8690,8 @@ static int check_kfunc_mem_size_reg(struct bpf_verifier_env *env, struct bpf_reg
 		mark_ptr_not_null_reg(mem_reg);
 	}
 
-	err = check_mem_size_reg(env, reg, regno, BPF_READ, true, &meta);
-	err = err ?: check_mem_size_reg(env, reg, regno, BPF_WRITE, true, &meta);
+	err = check_mem_size_reg(env, mem_reg, size_reg, mem_regno, BPF_READ, true, &meta);
+	err = err ?: check_mem_size_reg(env, mem_reg, size_reg, mem_regno, BPF_WRITE, true, &meta);
 
 	if (may_be_null)
 		*mem_reg = saved_reg;
@@ -10163,7 +10165,7 @@ skip_type_check:
 			return -EFAULT;
 		}
 		key_size = meta->map.ptr->key_size;
-		err = check_helper_mem_access(env, regno, key_size, BPF_READ, false, NULL);
+		err = check_helper_mem_access(env, reg, regno, key_size, BPF_READ, false, NULL);
 		if (err)
 			return err;
 		if (can_elide_value_nullness(meta->map.ptr->map_type)) {
@@ -10190,7 +10192,7 @@ skip_type_check:
 			return -EFAULT;
 		}
 		meta->raw_mode = arg_type & MEM_UNINIT;
-		err = check_helper_mem_access(env, regno, meta->map.ptr->value_size,
+		err = check_helper_mem_access(env, reg, regno, meta->map.ptr->value_size,
 					      arg_type & MEM_WRITE ? BPF_WRITE : BPF_READ,
 					      false, meta);
 		break;
@@ -10234,7 +10236,7 @@ skip_type_check:
 		 */
 		meta->raw_mode = arg_type & MEM_UNINIT;
 		if (arg_type & MEM_FIXED_SIZE) {
-			err = check_helper_mem_access(env, regno, fn->arg_size[arg],
+			err = check_helper_mem_access(env, reg, regno, fn->arg_size[arg],
 						      arg_type & MEM_WRITE ? BPF_WRITE : BPF_READ,
 						      false, meta);
 			if (err)
@@ -10244,13 +10246,13 @@ skip_type_check:
 		}
 		break;
 	case ARG_CONST_SIZE:
-		err = check_mem_size_reg(env, reg, regno,
+		err = check_mem_size_reg(env, reg_state(env, regno - 1), reg, regno - 1,
 					 fn->arg_type[arg - 1] & MEM_WRITE ?
 					 BPF_WRITE : BPF_READ,
 					 false, meta);
 		break;
 	case ARG_CONST_SIZE_OR_ZERO:
-		err = check_mem_size_reg(env, reg, regno,
+		err = check_mem_size_reg(env, reg_state(env, regno - 1), reg, regno - 1,
 					 fn->arg_type[arg - 1] & MEM_WRITE ?
 					 BPF_WRITE : BPF_READ,
 					 true, meta);
@@ -13988,7 +13990,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			const struct btf_param *size_arg = &args[i + 1];
 
 			if (!register_is_null(buff_reg) || !is_kfunc_arg_nullable(meta->btf, buff_arg)) {
-				ret = check_kfunc_mem_size_reg(env, size_reg, regno + 1);
+				ret = check_kfunc_mem_size_reg(env, buff_reg, size_reg, regno);
 				if (ret < 0) {
 					verbose(env, "arg#%d arg#%d memory, len pair leads to invalid memory access\n", i, i + 1);
 					return ret;
