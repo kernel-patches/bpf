@@ -13863,6 +13863,11 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			MAX_BPF_FUNC_ARGS);
 		return -EINVAL;
 	}
+	if (nargs > MAX_BPF_FUNC_REG_ARGS && !bpf_jit_supports_stack_args()) {
+		verbose(env, "JIT does not support kfunc %s() with %d args\n",
+			func_name, nargs);
+		return -ENOTSUPP;
+	}
 
 	/* Check that BTF function arguments match actual types that the
 	 * verifier sees.
