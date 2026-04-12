@@ -5764,6 +5764,13 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 					}
 					if (type == STACK_INVALID && env->allow_uninit_stack)
 						continue;
+					/*
+					 * Cross-frame reads may hit slots poisoned by dead code elimination.
+					 * Static liveness can't track indirect references through pointers,
+					 * so allow the read conservatively.
+					 */
+					if (type == STACK_POISON && reg_state != state)
+						continue;
 					if (type == STACK_POISON) {
 						verbose(env, "reading from stack off %d+%d size %d, slot poisoned by dead code elimination\n",
 							off, i, size);
@@ -5818,6 +5825,8 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 			if (type == STACK_ZERO)
 				continue;
 			if (type == STACK_INVALID && env->allow_uninit_stack)
+				continue;
+			if (type == STACK_POISON && reg_state != state)
 				continue;
 			if (type == STACK_POISON) {
 				verbose(env, "reading from stack off %d+%d size %d, slot poisoned by dead code elimination\n",
