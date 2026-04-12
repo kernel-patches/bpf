@@ -390,6 +390,34 @@ static void pop_callee_regs(u8 **pprog, bool *callee_regs_used)
 	*pprog = prog;
 }
 
+/* add rsp, depth */
+static void emit_add_rsp(u8 **pprog, u16 depth)
+{
+	u8 *prog = *pprog;
+
+	if (!depth)
+		return;
+	if (is_imm8(depth))
+		EMIT4(0x48, 0x83, 0xC4, depth); /* add rsp, imm8 */
+	else
+		EMIT3_off32(0x48, 0x81, 0xC4, depth); /* add rsp, imm32 */
+	*pprog = prog;
+}
+
+/* sub rsp, depth */
+static void emit_sub_rsp(u8 **pprog, u16 depth)
+{
+	u8 *prog = *pprog;
+
+	if (!depth)
+		return;
+	if (is_imm8(depth))
+		EMIT4(0x48, 0x83, 0xEC, depth); /* sub rsp, imm8 */
+	else
+		EMIT3_off32(0x48, 0x81, 0xEC, depth); /* sub rsp, imm32 */
+	*pprog = prog;
+}
+
 static void emit_nops(u8 **pprog, int len)
 {
 	u8 *prog = *pprog;
@@ -725,8 +753,8 @@ static void emit_return(u8 **pprog, u8 *ip)
  */
 static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
 					u8 **pprog, bool *callee_regs_used,
-					u32 stack_depth, u8 *ip,
-					struct jit_context *ctx)
+					u32 stack_depth, u16 outgoing_depth,
+					u8 *ip, struct jit_context *ctx)
 {
 	int tcc_ptr_off = BPF_TAIL_CALL_CNT_PTR_STACK_OFF(stack_depth);
 	u8 *prog = *pprog, *start = *pprog;
@@ -775,6 +803,9 @@ static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
 	/* Inc tail_call_cnt if the slot is populated. */
 	EMIT4(0x48, 0x83, 0x00, 0x01);            /* add qword ptr [rax], 1 */
 
+	/* Deallocate outgoing stack arg area. */
+	emit_add_rsp(&prog, outgoing_depth);
+
 	if (bpf_prog->aux->exception_boundary) {
 		pop_callee_regs(&prog, all_callee_regs_used);
 		pop_r12(&prog);
@@ -815,6 +846,7 @@ static void emit_bpf_tail_call_direct(struct bpf_prog *bpf_prog,
 				      struct bpf_jit_poke_descriptor *poke,
 				      u8 **pprog, u8 *ip,
 				      bool *callee_regs_used, u32 stack_depth,
+				      u16 outgoing_depth,
 				      struct jit_context *ctx)
 {
 	int tcc_ptr_off = BPF_TAIL_CALL_CNT_PTR_STACK_OFF(stack_depth);
@@ -841,6 +873,9 @@ static void emit_bpf_tail_call_direct(struct bpf_prog *bpf_prog,
 
 	/* Inc tail_call_cnt if the slot is populated. */
 	EMIT4(0x48, 0x83, 0x00, 0x01);                /* add qword ptr [rax], 1 */
+
+	/* Deallocate outgoing stack arg area. */
+	emit_add_rsp(&prog, outgoing_depth);
 
 	if (bpf_prog->aux->exception_boundary) {
 		pop_callee_regs(&prog, all_callee_regs_used);
@@ -1664,15 +1699,47 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	int i, excnt = 0;
 	int ilen, proglen = 0;
 	u8 *prog = temp;
+	u16 stack_arg_depth, incoming_stack_arg_depth, outgoing_stack_arg_depth;
+	u16 outgoing_rsp;
 	u32 stack_depth;
+	int callee_saved_size;
+	s32 outgoing_arg_base;
+	bool has_stack_args;
 	int err;
 
 	stack_depth = bpf_prog->aux->stack_depth;
+	stack_arg_depth = bpf_prog->aux->stack_arg_depth;
+	incoming_stack_arg_depth = bpf_prog->aux->incoming_stack_arg_depth;
+	outgoing_stack_arg_depth = stack_arg_depth - incoming_stack_arg_depth;
 	priv_stack_ptr = bpf_prog->aux->priv_stack_ptr;
 	if (priv_stack_ptr) {
 		priv_frame_ptr = priv_stack_ptr + PRIV_STACK_GUARD_SZ + round_up(stack_depth, 8);
 		stack_depth = 0;
 	}
+
+	/*
+	 * Follow x86-64 calling convention for both BPF-to-BPF and
+	 * kfunc calls:
+	 *   - Arg 6 is passed in R9 register
+	 *   - Args 7+ are passed on the stack at [rsp]
+	 *
+	 * Incoming arg 6 is read from R9 (BPF r12+8 → MOV from R9).
+	 * Incoming args 7+ are read from [rbp + 16], [rbp + 24], ...
+	 * (BPF r12+16, r12+24, ... map directly with no offset change).
+	 *
+	 * The verifier guarantees that neither tail_call_reachable nor
+	 * priv_stack is set when outgoing stack args exist, so R9 is
+	 * always available.
+	 *
+	 * Stack layout (high to low):
+	 *   [rbp + 16 + ...]    incoming stack args 7+ (from caller)
+	 *   [rbp + 8]           return address
+	 *   [rbp]               saved rbp
+	 *   [rbp - prog_stack]  program stack
+	 *   [below]             callee-saved regs
+	 *   [below]             outgoing args 7+ (= rsp)
+	 */
+	has_stack_args = stack_arg_depth > 0;
 
 	arena_vm_start = bpf_arena_get_kern_vm_start(bpf_prog->aux->arena);
 	user_vm_start = bpf_arena_get_user_vm_start(bpf_prog->aux->arena);
@@ -1700,6 +1767,41 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 			push_r12(&prog);
 		push_callee_regs(&prog, callee_regs_used);
 	}
+
+	/* Compute callee-saved register area size. */
+	callee_saved_size = 0;
+	if (bpf_prog->aux->exception_boundary || arena_vm_start)
+		callee_saved_size += 8; /* r12 */
+	if (bpf_prog->aux->exception_boundary) {
+		callee_saved_size += 4 * 8; /* rbx, r13, r14, r15 */
+	} else {
+		int j;
+
+		for (j = 0; j < 4; j++)
+			if (callee_regs_used[j])
+				callee_saved_size += 8;
+	}
+	/*
+	 * Base offset from rbp for translating BPF outgoing args 7+
+	 * to native offsets:
+	 *   native_off = outgoing_arg_base + bpf_off
+	 *
+	 * BPF outgoing offsets are negative (r12 - N*8 for arg6,
+	 * ..., r12 - 8 for last arg). Arg 6 goes to R9 directly,
+	 * so only args 7+ occupy the outgoing stack area.
+	 *
+	 * Note that tail_call_reachable is guaranteed to be false when
+	 * stack args exist, so tcc pushes need not be accounted for.
+	 */
+	outgoing_arg_base = -(round_up(stack_depth, 8) + callee_saved_size);
+
+	/*
+	 * Allocate outgoing stack arg area for args 7+ only.
+	 * Arg 6 goes into r9 register, not on stack.
+	 */
+	outgoing_rsp = outgoing_stack_arg_depth > 8 ?  outgoing_stack_arg_depth - 8 : 0;
+	emit_sub_rsp(&prog, outgoing_rsp);
+
 	if (arena_vm_start)
 		emit_mov_imm64(&prog, X86_REG_R12,
 			       arena_vm_start >> 32, (u32) arena_vm_start);
@@ -1715,13 +1817,14 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 	prog = temp;
 
 	for (i = 1; i <= insn_cnt; i++, insn++) {
+		bool adjust_stack_arg_off = false;
 		const s32 imm32 = insn->imm;
 		u32 dst_reg = insn->dst_reg;
 		u32 src_reg = insn->src_reg;
 		u8 b2 = 0, b3 = 0;
 		u8 *start_of_ldx;
 		s64 jmp_offset;
-		s16 insn_off;
+		s32 insn_off;
 		u8 jmp_cond;
 		u8 *func;
 		int nops;
@@ -1732,6 +1835,21 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 
 			if (dst_reg == BPF_REG_FP)
 				dst_reg = X86_REG_R9;
+		}
+
+		if (has_stack_args) {
+			u8 class = BPF_CLASS(insn->code);
+
+			if (class == BPF_LDX &&
+			    src_reg == BPF_REG_STACK_ARG_BASE) {
+				src_reg = BPF_REG_FP;
+				adjust_stack_arg_off = true;
+			}
+			if ((class == BPF_STX || class == BPF_ST) &&
+			    dst_reg == BPF_REG_STACK_ARG_BASE) {
+				dst_reg = BPF_REG_FP;
+				adjust_stack_arg_off = true;
+			}
 		}
 
 		switch (insn->code) {
@@ -2129,12 +2247,20 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image, u8 *rw_image
 				EMIT1(0xC7);
 			goto st;
 		case BPF_ST | BPF_MEM | BPF_DW:
+			if (adjust_stack_arg_off && insn->off == -outgoing_stack_arg_depth) {
+				/* Arg 6: store immediate in r9 register */
+				emit_mov_imm64(&prog, X86_REG_R9, imm32 >> 31, (u32)imm32);
+				break;
+			}
 			EMIT2(add_1mod(0x48, dst_reg), 0xC7);
 
-st:			if (is_imm8(insn->off))
-				EMIT2(add_1reg(0x40, dst_reg), insn->off);
+st:			insn_off = insn->off;
+			if (adjust_stack_arg_off)
+				insn_off = outgoing_arg_base + insn_off;
+			if (is_imm8(insn_off))
+				EMIT2(add_1reg(0x40, dst_reg), insn_off);
 			else
-				EMIT1_off32(add_1reg(0x80, dst_reg), insn->off);
+				EMIT1_off32(add_1reg(0x80, dst_reg), insn_off);
 
 			EMIT(imm32, bpf_size_to_x86_bytes(BPF_SIZE(insn->code)));
 			break;
@@ -2144,7 +2270,15 @@ st:			if (is_imm8(insn->off))
 		case BPF_STX | BPF_MEM | BPF_H:
 		case BPF_STX | BPF_MEM | BPF_W:
 		case BPF_STX | BPF_MEM | BPF_DW:
-			emit_stx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn->off);
+			if (adjust_stack_arg_off && insn->off == -outgoing_stack_arg_depth) {
+				/* Arg 6: store register value in r9 */
+				EMIT_mov(X86_REG_R9, src_reg);
+				break;
+			}
+			insn_off = insn->off;
+			if (adjust_stack_arg_off)
+				insn_off = outgoing_arg_base + insn_off;
+			emit_stx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn_off);
 			break;
 
 		case BPF_ST | BPF_PROBE_MEM32 | BPF_B:
@@ -2243,6 +2377,18 @@ populate_extable:
 		case BPF_LDX | BPF_PROBE_MEMSX | BPF_H:
 		case BPF_LDX | BPF_PROBE_MEMSX | BPF_W:
 			insn_off = insn->off;
+			if (adjust_stack_arg_off) {
+				if (insn_off == 8) {
+					/* Incoming arg 6: read from r9 */
+					EMIT_mov(dst_reg, X86_REG_R9);
+					break;
+				}
+				/*
+				 * Incoming args 7+: native_off == bpf_off
+				 * (r12+16 → [rbp+16], r12+24 → [rbp+24], ...)
+				 * No offset adjustment needed.
+				 */
+			}
 
 			if (BPF_MODE(insn->code) == BPF_PROBE_MEM ||
 			    BPF_MODE(insn->code) == BPF_PROBE_MEMSX) {
@@ -2468,12 +2614,14 @@ populate_extable:
 							  &prog, image + addrs[i - 1],
 							  callee_regs_used,
 							  stack_depth,
+							  outgoing_rsp,
 							  ctx);
 			else
 				emit_bpf_tail_call_indirect(bpf_prog,
 							    &prog,
 							    callee_regs_used,
 							    stack_depth,
+							    outgoing_rsp,
 							    image + addrs[i - 1],
 							    ctx);
 			break;
@@ -2734,6 +2882,8 @@ emit_jmp:
 				if (emit_spectre_bhb_barrier(&prog, ip, bpf_prog))
 					return -EINVAL;
 			}
+			/* Deallocate outgoing args 7+ area. */
+			emit_add_rsp(&prog, outgoing_rsp);
 			if (bpf_prog->aux->exception_boundary) {
 				pop_callee_regs(&prog, all_callee_regs_used);
 				pop_r12(&prog);
@@ -3757,7 +3907,13 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_prog *prog)
 		prog->aux->jit_data = jit_data;
 	}
 	priv_stack_ptr = prog->aux->priv_stack_ptr;
-	if (!priv_stack_ptr && prog->aux->jits_use_priv_stack) {
+	/*
+	 * x86-64 uses R9 for both private stack frame pointer and
+	 * outgoing arg 6, so disable private stack when outgoing
+	 * stack args are present.
+	 */
+	if (!priv_stack_ptr && prog->aux->jits_use_priv_stack &&
+	    prog->aux->stack_arg_depth == prog->aux->incoming_stack_arg_depth) {
 		/* Allocate actual private stack size with verifier-calculated
 		 * stack size plus two memory guards to protect overflow and
 		 * underflow.
