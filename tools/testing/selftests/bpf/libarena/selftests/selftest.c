@@ -17,6 +17,7 @@
 
 #include <common.h>
 #include <asan.h>
+#include <buddy.h>
 #include <selftest_helpers.h>
 
 #ifdef BPF_ARENA_ASAN
@@ -101,6 +102,13 @@ static int init_arena(selftest *skel)
 static int run_test(selftest *skel, struct bpf_program *prog)
 {
 	int prog_fd;
+	int ret;
+
+	if (libarena_must_setup_alloc(prog)) {
+		ret = libarena_run_prog(bpf_program__fd(skel->progs.arena_buddy_reset));
+		if (ret)
+			return ret;
+	}
 
 	prog_fd = bpf_program__fd(prog);
 	if (prog_fd < 0)
