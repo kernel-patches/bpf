@@ -7175,6 +7175,11 @@ continue_func:
 				verbose(env, "cannot tail call within exception cb\n");
 				return -EINVAL;
 			}
+			if (subprog[tmp].incoming_stack_arg_depth ||
+			    subprog[tmp].outgoing_stack_arg_depth) {
+				verbose(env, "tail_calls are not allowed in programs with stack args\n");
+				return -EINVAL;
+			}
 			subprog[tmp].tail_call_reachable = true;
 		}
 	if (subprog[0].tail_call_reachable)
