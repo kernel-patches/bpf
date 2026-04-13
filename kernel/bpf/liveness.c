@@ -1042,6 +1042,12 @@ static void arg_track_log(struct bpf_verifier_env *env, struct bpf_insn *insn, i
 		verbose(env, "\n");
 }
 
+static bool can_be_local_fp(int depth, int regno, struct arg_track *at)
+{
+	return regno == BPF_REG_FP || at->frame == depth ||
+	       (at->frame == ARG_IMPRECISE && (at->mask & BIT(depth)));
+}
+
 /*
  * Pure dataflow transfer function for arg_track state.
  * Updates at_out[] based on how the instruction modifies registers.
@@ -1111,8 +1117,7 @@ static void arg_track_xfer(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			at_out[r] = none;
 	} else if (class == BPF_LDX) {
 		u32 sz = bpf_size_to_bytes(BPF_SIZE(insn->code));
-		bool src_is_local_fp = insn->src_reg == BPF_REG_FP || src->frame == depth ||
-				       (src->frame == ARG_IMPRECISE && (src->mask & BIT(depth)));
+		bool src_is_local_fp = can_be_local_fp(depth, insn->src_reg, src);
 
 		/*
 		 * Reload from callee stack: if src is current-frame FP-derived
@@ -1147,7 +1152,7 @@ static void arg_track_xfer(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		bool dst_is_local_fp;
 
 		/* Track spills to current-frame FP-derived callee stack */
-		dst_is_local_fp = insn->dst_reg == BPF_REG_FP || dst->frame == depth;
+		dst_is_local_fp = can_be_local_fp(depth, insn->dst_reg, dst);
 		if (dst_is_local_fp && BPF_MODE(insn->code) == BPF_MEM)
 			spill_to_stack(insn, at_out, insn->dst_reg,
 				       at_stack_out, src, sz);
