@@ -68,5 +68,6 @@
 #define cpu_has_msgint		cpu_opt(LOONGARCH_CPU_MSGINT)
 #define cpu_has_avecint		cpu_opt(LOONGARCH_CPU_AVECINT)
 #define cpu_has_redirectint	cpu_opt(LOONGARCH_CPU_REDIRECTINT)
+#define cpu_has_lam_bh		cpu_opt(LOONGARCH_CPU_LAM_BH)
 
 #endif /* __ASM_CPU_FEATURES_H */
