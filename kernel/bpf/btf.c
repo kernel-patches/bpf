@@ -7152,6 +7152,13 @@ again:
 		if (!btf_type_is_struct(t))
 			goto error;
 
+		/* Zero-size element type (e.g., empty struct) would cause
+		 * division by zero below. Reject the access.
+		 */
+		if (t->size == 0) {
+			bpf_log(log, "zero-size type in flex array\n");
+			goto error;
+		}
 		off = (off - moff) % t->size;
 		goto again;
 
