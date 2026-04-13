@@ -338,7 +338,7 @@ TEST(restrict_self_checks_ordering)
 	};
 	const int ruleset_fd =
 		landlock_create_ruleset(&ruleset_attr, sizeof(ruleset_attr), 0);
-	const int last_flag = LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME;
+	const int last_flag = LANDLOCK_RESTRICT_SELF_EXECTIME;
 	const int invalid_flag = last_flag << 1;
 
 	ASSERT_LE(0, ruleset_fd);
@@ -371,6 +371,11 @@ TEST(restrict_self_checks_ordering)
 			     ruleset_fd,
 			     LANDLOCK_RESTRICT_SELF_TSYNC |
 				     LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME));
+	ASSERT_EQ(EINVAL, errno);
+	ASSERT_EQ(-1, landlock_restrict_self(
+			     ruleset_fd,
+			     LANDLOCK_RESTRICT_SELF_TSYNC |
+				     LANDLOCK_RESTRICT_SELF_EXECTIME));
 	ASSERT_EQ(EINVAL, errno);
 
 	/* Checks invalid ruleset FD. */
@@ -411,7 +416,7 @@ TEST(restrict_self_fd_logging_flags)
 
 TEST(restrict_self_logging_flags)
 {
-	const __u32 last_flag = LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME;
+	const __u32 last_flag = LANDLOCK_RESTRICT_SELF_EXECTIME;
 
 	/* Tests invalid flag combinations. */
 
@@ -426,6 +431,10 @@ TEST(restrict_self_logging_flags)
 				      LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME));
 	EXPECT_EQ(EINVAL, errno);
 
+	EXPECT_EQ(-1, landlock_restrict_self(
+			      -1, LANDLOCK_RESTRICT_SELF_TSYNC |
+				      LANDLOCK_RESTRICT_SELF_EXECTIME));
+	EXPECT_EQ(EINVAL, errno);
 	/* Tests valid flag combinations. */
 
 	EXPECT_EQ(-1, landlock_restrict_self(-1, 0));
@@ -486,6 +495,210 @@ TEST(restrict_self_nnp_exectime_requires_no_new_privs_or_cap_sys_admin)
 	ASSERT_EQ(0, close(ruleset_fd));
 }
 
+TEST(restrict_self_exectime_delays_enforcement)
+{
+	struct landlock_ruleset_attr ruleset_attr = {
+		.handled_access_fs = LANDLOCK_ACCESS_FS_READ_FILE,
+	};
+	char path[32];
+	int err;
+	int ruleset_fd;
+	int fd;
+
+	err = create_temp_file(path);
+	ASSERT_EQ(0, err);
+
+	ruleset_fd =
+		landlock_create_ruleset(&ruleset_attr, sizeof(ruleset_attr), 0);
+	ASSERT_LE(0, ruleset_fd);
+	add_exec_target_runtime_rules(_metadata, ruleset_fd);
+	ASSERT_EQ(0, prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
+	ASSERT_EQ(0, landlock_restrict_self(ruleset_fd,
+				    LANDLOCK_RESTRICT_SELF_EXECTIME));
+	ASSERT_EQ(0, close(ruleset_fd));
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	ASSERT_LE(0, fd);
+	ASSERT_EQ(0, close(fd));
+
+	ASSERT_EQ(EACCES, run_exec_target("read", path));
+	ASSERT_EQ(0, unlink(path));
+}
+
+TEST(restrict_self_exectime_failed_exec_keeps_pending_domain)
+{
+	struct landlock_ruleset_attr ruleset_attr = {
+		.handled_access_fs = LANDLOCK_ACCESS_FS_READ_FILE,
+	};
+	char path[32];
+	pid_t child;
+	int err;
+	int ruleset_fd;
+	int status;
+
+	err = create_temp_file(path);
+	ASSERT_EQ(0, err);
+
+	ruleset_fd =
+		landlock_create_ruleset(&ruleset_attr, sizeof(ruleset_attr), 0);
+	ASSERT_LE(0, ruleset_fd);
+	add_exec_target_runtime_rules(_metadata, ruleset_fd);
+
+	child = fork();
+	ASSERT_LE(0, child);
+	if (!child) {
+		char *const exec_argv[] = {
+			(char *)bin_exec_target,
+			(char *)"read",
+			path,
+			NULL,
+		};
+
+		if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
+			_exit(errno);
+		if (landlock_restrict_self(ruleset_fd,
+					  LANDLOCK_RESTRICT_SELF_EXECTIME))
+			_exit(errno);
+		close(ruleset_fd);
+
+		execve("/tmp/landlock-exectime-no-such-binary",
+		       (char *const[]){ (char *)"/tmp/landlock-exectime-no-such-binary",
+				       NULL },
+		       NULL);
+		if (errno != ENOENT)
+			_exit(errno);
+
+		execve(bin_exec_target, exec_argv, NULL);
+		_exit(errno);
+	}
+
+	ASSERT_EQ(child, waitpid(child, &status, 0));
+	ASSERT_TRUE(WIFEXITED(status));
+	ASSERT_EQ(EACCES, WEXITSTATUS(status));
+	ASSERT_EQ(0, close(ruleset_fd));
+	ASSERT_EQ(0, unlink(path));
+}
+
+TEST(restrict_self_exectime_clones_ruleset)
+{
+	struct landlock_ruleset_attr ruleset_attr = {
+		.handled_access_fs = LANDLOCK_ACCESS_FS_READ_FILE,
+	};
+	char path[32];
+	int err;
+	int ruleset_fd;
+
+	err = create_temp_file(path);
+	ASSERT_EQ(0, err);
+
+	ruleset_fd =
+		landlock_create_ruleset(&ruleset_attr, sizeof(ruleset_attr), 0);
+	ASSERT_LE(0, ruleset_fd);
+	add_exec_target_runtime_rules(_metadata, ruleset_fd);
+	ASSERT_EQ(0, prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
+	ASSERT_EQ(0, landlock_restrict_self(ruleset_fd,
+				    LANDLOCK_RESTRICT_SELF_EXECTIME));
+
+	add_read_rule(_metadata, ruleset_fd, path);
+	ASSERT_EQ(0, close(ruleset_fd));
+
+	ASSERT_EQ(0, access(path, R_OK));
+	ASSERT_EQ(EACCES, run_exec_target("read", path));
+	ASSERT_EQ(0, unlink(path));
+}
+
+TEST(restrict_self_exectime_layers_on_exec)
+{
+	struct landlock_ruleset_attr ruleset_attr = {
+		.handled_access_fs = LANDLOCK_ACCESS_FS_READ_FILE,
+	};
+	char path_before[32];
+	char path_after[32];
+	int err;
+	int fd;
+	int base_ruleset_fd;
+	int staged_ruleset_fd;
+
+	err = create_temp_file(path_before);
+	ASSERT_EQ(0, err);
+	err = create_temp_file(path_after);
+	ASSERT_EQ(0, err);
+
+	base_ruleset_fd =
+		landlock_create_ruleset(&ruleset_attr, sizeof(ruleset_attr), 0);
+	ASSERT_LE(0, base_ruleset_fd);
+	staged_ruleset_fd =
+		landlock_create_ruleset(&ruleset_attr, sizeof(ruleset_attr), 0);
+	ASSERT_LE(0, staged_ruleset_fd);
+
+	add_exec_target_runtime_rules(_metadata, base_ruleset_fd);
+	add_exec_target_runtime_rules(_metadata, staged_ruleset_fd);
+	add_read_rule(_metadata, base_ruleset_fd, path_before);
+	add_read_rule(_metadata, staged_ruleset_fd, path_after);
+
+	ASSERT_EQ(0, prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0));
+	ASSERT_EQ(0, landlock_restrict_self(base_ruleset_fd, 0));
+	ASSERT_EQ(0, close(base_ruleset_fd));
+
+	fd = open(path_before, O_RDONLY | O_CLOEXEC);
+	ASSERT_LE(0, fd);
+	ASSERT_EQ(0, close(fd));
+	ASSERT_EQ(-1, open(path_after, O_RDONLY | O_CLOEXEC));
+	ASSERT_EQ(EACCES, errno);
+
+	ASSERT_EQ(0, landlock_restrict_self(staged_ruleset_fd,
+				    LANDLOCK_RESTRICT_SELF_EXECTIME));
+	ASSERT_EQ(0, close(staged_ruleset_fd));
+
+	fd = open(path_before, O_RDONLY | O_CLOEXEC);
+	ASSERT_LE(0, fd);
+	ASSERT_EQ(0, close(fd));
+	ASSERT_EQ(-1, open(path_after, O_RDONLY | O_CLOEXEC));
+	ASSERT_EQ(EACCES, errno);
+
+	ASSERT_EQ(EACCES, run_exec_target("read", path_before));
+	ASSERT_EQ(EACCES, run_exec_target("read", path_after));
+	ASSERT_EQ(0, unlink(path_before));
+	ASSERT_EQ(0, unlink(path_after));
+}
+
+TEST(restrict_self_exectime_rejects_layer_overflow)
+{
+	struct landlock_ruleset_attr ruleset_attr = {
+		.handled_access_fs = LANDLOCK_ACCESS_FS_READ_FILE,
+	};
+	pid_t child;
+	int ruleset_fd;
+	int status;
+
+	ruleset_fd =
+		landlock_create_ruleset(&ruleset_attr, sizeof(ruleset_attr), 0);
+	ASSERT_LE(0, ruleset_fd);
+
+	child = fork();
+	ASSERT_LE(0, child);
+	if (!child) {
+		int i;
+
+		if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
+			_exit(errno);
+
+		for (i = 0; i < 16; i++) {
+			if (landlock_restrict_self(ruleset_fd, 0))
+				_exit(errno);
+		}
+
+		if (!landlock_restrict_self(ruleset_fd,
+					   LANDLOCK_RESTRICT_SELF_EXECTIME))
+			_exit(0);
+		_exit(errno);
+	}
+
+	ASSERT_EQ(child, waitpid(child, &status, 0));
+	ASSERT_TRUE(WIFEXITED(status));
+	ASSERT_EQ(E2BIG, WEXITSTATUS(status));
+	ASSERT_EQ(0, close(ruleset_fd));
+}
 TEST(restrict_self_nnp_exectime_sets_nnp_on_exec)
 {
 	struct landlock_ruleset_attr ruleset_attr = {
@@ -520,7 +733,6 @@ TEST(restrict_self_nnp_exectime_sets_nnp_on_exec)
 	ASSERT_EQ(0, run_exec_target("nnp", NULL));
 	ASSERT_EQ(0, unlink(path));
 }
-
 TEST(ruleset_fd_io)
 {
 	struct landlock_ruleset_attr ruleset_attr = {

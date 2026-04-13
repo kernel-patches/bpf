@@ -855,6 +855,120 @@ FIXTURE_TEARDOWN(audit_exec)
 	EXPECT_EQ(0, close(self->audit_fd));
 }
 
+FIXTURE(audit_exectime)
+{
+	int audit_fd;
+};
+
+FIXTURE_SETUP(audit_exectime)
+{
+	disable_caps(_metadata);
+	set_cap(_metadata, CAP_AUDIT_CONTROL);
+	self->audit_fd = audit_init();
+	EXPECT_LE(0, self->audit_fd)
+	{
+		const char *error_msg;
+
+		if (self->audit_fd == -EEXIST)
+			error_msg = "socket already in use (e.g. auditd)";
+		else
+			error_msg = strerror(-self->audit_fd);
+		TH_LOG("Failed to initialize audit: %s", error_msg);
+	}
+	clear_cap(_metadata, CAP_AUDIT_CONTROL);
+}
+
+FIXTURE_TEARDOWN(audit_exectime)
+{
+	EXPECT_EQ(0, close(self->audit_fd));
+}
+
+TEST_F(audit_exectime, staged_log_flags_apply_on_exec)
+{
+	const struct landlock_ruleset_attr ruleset_attr = {
+		.scoped = LANDLOCK_SCOPE_SIGNAL,
+	};
+	const __u32 staged_flags = LANDLOCK_RESTRICT_SELF_EXECTIME |
+		LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF |
+		LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON;
+	int pipe_child[2], pipe_parent[2];
+	char buf_parent;
+	pid_t child;
+	int status;
+
+	ASSERT_EQ(0, pipe2(pipe_child, 0));
+	ASSERT_EQ(0, pipe2(pipe_parent, 0));
+
+	child = fork();
+	ASSERT_LE(0, child);
+	if (child == 0) {
+		char pipe_child_str[12], pipe_parent_str[12], parent_pid_str[12];
+		char *const argv[] = { (char *)bin_wait_pipe, pipe_child_str,
+				       pipe_parent_str, parent_pid_str, NULL };
+		int current_fd, staged_fd;
+		char buf_child;
+
+		EXPECT_EQ(0, close(pipe_child[0]));
+		EXPECT_EQ(0, close(pipe_parent[1]));
+
+		current_fd =
+			landlock_create_ruleset(&ruleset_attr, sizeof(ruleset_attr), 0);
+		if (current_fd < 0)
+			_exit(errno);
+		if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
+			_exit(errno);
+		if (landlock_restrict_self(current_fd, 0))
+			_exit(errno);
+		close(current_fd);
+
+		staged_fd =
+			landlock_create_ruleset(&ruleset_attr, sizeof(ruleset_attr), 0);
+		if (staged_fd < 0)
+			_exit(errno);
+		if (landlock_restrict_self(staged_fd, staged_flags))
+			_exit(errno);
+		close(staged_fd);
+
+		if (!kill(getppid(), 0))
+			_exit(1);
+		if (errno != EPERM)
+			_exit(errno);
+
+		if (write(pipe_child[1], ".", 1) != 1)
+			_exit(errno);
+		if (read(pipe_parent[0], &buf_child, 1) != 1)
+			_exit(errno);
+
+		snprintf(pipe_child_str, sizeof(pipe_child_str), "%d",
+			 pipe_child[1]);
+		snprintf(pipe_parent_str, sizeof(pipe_parent_str), "%d",
+			 pipe_parent[0]);
+		snprintf(parent_pid_str, sizeof(parent_pid_str), "%d", getppid());
+		execve(argv[0], argv, NULL);
+		_exit(errno);
+	}
+
+	EXPECT_EQ(0, close(pipe_child[1]));
+	EXPECT_EQ(0, close(pipe_parent[0]));
+
+	ASSERT_EQ(1, read(pipe_child[0], &buf_parent, 1));
+	EXPECT_EQ(0, matches_log_signal(_metadata, self->audit_fd, getpid(),
+					NULL));
+
+	ASSERT_EQ(1, write(pipe_parent[1], ".", 1));
+	ASSERT_EQ(1, read(pipe_child[0], &buf_parent, 1));
+	ASSERT_EQ(1, write(pipe_parent[1], ".", 1));
+
+	ASSERT_EQ(child, waitpid(child, &status, 0));
+	ASSERT_TRUE(WIFEXITED(status));
+	ASSERT_EQ(0, WEXITSTATUS(status));
+	EXPECT_EQ(0, matches_log_signal(_metadata, self->audit_fd, getpid(),
+					NULL));
+
+	EXPECT_EQ(0, close(pipe_child[0]));
+	EXPECT_EQ(0, close(pipe_parent[1]));
+}
+
 TEST_F(audit_exec, signal_and_open)
 {
 	struct audit_records records;

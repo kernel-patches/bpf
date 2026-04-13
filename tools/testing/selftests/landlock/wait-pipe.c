@@ -8,6 +8,8 @@
  */
 
 #define _GNU_SOURCE
+#include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -17,9 +19,9 @@ int main(int argc, char *argv[])
 	int pipe_child, pipe_parent;
 	char buf;
 
-	/* The first argument must be the file descriptor number of a pipe. */
-	if (argc != 3) {
-		fprintf(stderr, "Wrong number of arguments (not two)\n");
+	/* The first two arguments must be the file descriptor numbers of pipes. */
+	if (argc != 3 && argc != 4) {
+		fprintf(stderr, "Wrong number of arguments (not two or three)\n");
 		return 1;
 	}
 
@@ -36,6 +38,19 @@ int main(int argc, char *argv[])
 	if (read(pipe_parent, &buf, 1) != 1) {
 		perror("Failed to write to the second argument");
 		return 1;
+	}
+
+	if (argc == 4) {
+		const pid_t target_pid = atoi(argv[3]);
+
+		if (!kill(target_pid, 0)) {
+			fprintf(stderr, "Successfully sent a signal to the target");
+			return 1;
+		}
+		if (errno != EPERM) {
+			perror("Failed to send a signal to the target");
+			return 1;
+		}
 	}
 
 	return 0;
