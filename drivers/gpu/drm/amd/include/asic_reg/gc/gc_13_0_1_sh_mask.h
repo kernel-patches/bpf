@@ -42972,8 +42972,10 @@
 #define SQ_DEBUG_STS_GLOBAL2__SQ_IND_ACCESS_RD_WR_SWITCH_MASK                                                 0x80000000L
 //SH_MEM_BASES
 #define SH_MEM_BASES__PRIVATE_BASE__SHIFT                                                                     0x0
+#define SH_MEM_BASES__PRIVATE_BASE_NATIVE__SHIFT                                                              0xa
 #define SH_MEM_BASES__SHARED_BASE__SHIFT                                                                      0x10
 #define SH_MEM_BASES__PRIVATE_BASE_MASK                                                                       0x0000FFFFL
+#define SH_MEM_BASES__PRIVATE_BASE_NATIVE_MASK                                                                0x0000FC00L
 #define SH_MEM_BASES__SHARED_BASE_MASK                                                                        0xFFFF0000L
 //SH_MEM_CONFIG
 #define SH_MEM_CONFIG__ADDRESS_MODE__SHIFT                                                                    0x0
