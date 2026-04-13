@@ -733,26 +733,60 @@ out_unlock:
 	return no_free_ptr(clone);
 }
 
-static int
-landlock_prepare_pending_domain(struct landlock_ruleset **const dst,
-				struct landlock_ruleset *const parent,
-				struct landlock_ruleset *const ruleset,
-				const __u32 flags,
-				const bool parent_logs_subdomains)
+static int landlock_prepare_pending_domain(
+	struct landlock_ruleset **const new_pending_domain,
+	struct landlock_ruleset *const domain,
+	struct landlock_ruleset *const pending_bpf_domain,
+	const __u32 pending_bpf_flags,
+	struct landlock_ruleset *const pending_userspace_domain,
+	const __u32 pending_userspace_flags,
+	const bool log_subdomains_off)
 {
-	struct landlock_ruleset *prepared __free(landlock_put_ruleset) = NULL;
+	struct landlock_ruleset *prepared = NULL;
+	struct landlock_ruleset *merged;
+#ifdef CONFIG_AUDIT
+	bool parent_logs_subdomains = !log_subdomains_off;
+#else
+	(void)log_subdomains_off;
+#endif /* CONFIG_AUDIT */
 
-	prepared = landlock_merge_ruleset(parent, ruleset);
-	if (IS_ERR(prepared))
-		return PTR_ERR(prepared);
+	if (pending_bpf_domain) {
+		prepared = landlock_merge_ruleset(domain, pending_bpf_domain);
+		if (IS_ERR(prepared))
+			return PTR_ERR(prepared);
 
-	landlock_apply_log_flags(prepared, flags, parent_logs_subdomains);
+#ifdef CONFIG_AUDIT
+		landlock_apply_log_flags(prepared, pending_bpf_flags,
+					 parent_logs_subdomains);
+		parent_logs_subdomains =
+			parent_logs_subdomains &&
+			landlock_logs_subdomains(pending_bpf_flags);
+#endif /* CONFIG_AUDIT */
+	}
 
-	landlock_put_ruleset(*dst);
-	*dst = no_free_ptr(prepared);
+	if (pending_userspace_domain) {
+		merged = landlock_merge_ruleset(prepared ?: domain,
+					 pending_userspace_domain);
+		if (IS_ERR(merged)) {
+			landlock_put_ruleset(prepared);
+			return PTR_ERR(merged);
+		}
+
+#ifdef CONFIG_AUDIT
+		landlock_apply_log_flags(merged, pending_userspace_flags,
+					 parent_logs_subdomains);
+		parent_logs_subdomains =
+			parent_logs_subdomains &&
+			landlock_logs_subdomains(pending_userspace_flags);
+#endif /* CONFIG_AUDIT */
+
+		landlock_put_ruleset(prepared);
+		prepared = merged;
+	}
+
+	*new_pending_domain = prepared;
 	return 0;
 }
-
 
 int landlock_prepare_exec_creds(struct cred *const cred)
 {
@@ -769,7 +803,10 @@ void landlock_commit_exec_creds(struct cred *const cred)
 {
 	struct landlock_cred_security *const llcred = landlock_cred(cred);
 
-	if (llcred->pending_userspace_flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME)
+	if ((llcred->pending_userspace_flags &
+	     LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME) ||
+	    (llcred->pending_bpf_flags &
+	     LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME))
 		task_set_no_new_privs(current);
 
 	if (llcred->pending_domain) {
@@ -780,10 +817,16 @@ void landlock_commit_exec_creds(struct cred *const cred)
 #ifdef CONFIG_AUDIT
 		llcred->log_subdomains_off =
 			!(!landlock_cred(current_cred())->log_subdomains_off &&
-			  landlock_logs_subdomains(llcred->pending_userspace_flags));
+			  (!llcred->pending_bpf_domain ||
+			   landlock_logs_subdomains(llcred->pending_bpf_flags)) &&
+			  (!llcred->pending_userspace_domain ||
+			   landlock_logs_subdomains(llcred->pending_userspace_flags)));
 #endif /* CONFIG_AUDIT */
 	}
 
+	landlock_put_ruleset(llcred->pending_bpf_domain);
+	llcred->pending_bpf_domain = NULL;
+	llcred->pending_bpf_flags = 0;
 	landlock_put_ruleset(llcred->pending_userspace_domain);
 	llcred->pending_userspace_domain = NULL;
 	llcred->pending_userspace_flags = 0;
@@ -830,14 +873,37 @@ int landlock_restrict_cred(struct cred *const cred,
 			   const __u32 flags, const bool in_task_context)
 {
 	struct landlock_cred_security *const new_llcred = landlock_cred(cred);
+	struct landlock_ruleset *staged_domain = new_llcred->domain;
+	struct landlock_ruleset *staged_pending_userspace_domain =
+		new_llcred->pending_userspace_domain;
+	u32 staged_pending_userspace_flags = new_llcred->pending_userspace_flags;
+	struct landlock_ruleset *staged_pending_bpf_domain =
+		new_llcred->pending_bpf_domain;
+	u32 staged_pending_bpf_flags = new_llcred->pending_bpf_flags;
+	struct landlock_ruleset **const staged_pending_slot =
+		in_task_context ? &staged_pending_userspace_domain :
+				  &staged_pending_bpf_domain;
+	__u32 *const staged_pending_flags =
+		in_task_context ? &staged_pending_userspace_flags :
+				  &staged_pending_bpf_flags;
+	struct landlock_ruleset **const pending_slot =
+		in_task_context ? &new_llcred->pending_userspace_domain :
+				  &new_llcred->pending_bpf_domain;
+	__u32 *const pending_flags =
+		in_task_context ? &new_llcred->pending_userspace_flags :
+				  &new_llcred->pending_bpf_flags;
 	const bool stage_domain =
-		in_task_context && (flags & LANDLOCK_RESTRICT_SELF_EXECTIME);
+		!!(flags & LANDLOCK_RESTRICT_SELF_EXECTIME) ||
+		(!in_task_context && ruleset);
+	struct landlock_ruleset *new_domain = NULL;
+	struct landlock_ruleset *new_pending_domain = NULL;
+	struct landlock_ruleset *new_prepared_domain = NULL;
 	int err;
 #ifdef CONFIG_AUDIT
 	const bool log_subdomains =
 		!(flags & LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF);
 	bool prev_log_subdomains = false;
-	bool parent_logs_subdomains;
+	bool log_subdomains_off = new_llcred->log_subdomains_off;
 #endif /* CONFIG_AUDIT */
 
 	/*
@@ -848,79 +914,89 @@ int landlock_restrict_cred(struct cred *const cred,
 	if (!ruleset && (flags & ~LANDLOCK_RESTRICT_SELF_TSYNC) !=
 				 LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF)
 		return -EINVAL;
+	if (!in_task_context && (flags & LANDLOCK_RESTRICT_SELF_EXECTIME))
+		return -EINVAL;
 
 	if (stage_domain) {
-		struct landlock_ruleset *const new_pending_domain =
-			landlock_clone_pending_domain(ruleset);
-
+		new_pending_domain = landlock_clone_pending_domain(ruleset);
 		if (IS_ERR(new_pending_domain))
 			return PTR_ERR(new_pending_domain);
 
-		landlock_put_ruleset(new_llcred->pending_userspace_domain);
-		new_llcred->pending_userspace_domain = new_pending_domain;
-		new_llcred->pending_userspace_flags = flags;
+		*staged_pending_slot = new_pending_domain;
+		*staged_pending_flags = flags;
 	} else {
-		new_llcred->pending_userspace_flags &=
-			~LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME;
-		new_llcred->pending_userspace_flags |=
+		*staged_pending_flags &= ~LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME;
+		*staged_pending_flags |=
 			flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME;
+
+		if (in_task_context) {
 #ifdef CONFIG_AUDIT
-		prev_log_subdomains = !new_llcred->log_subdomains_off;
-		new_llcred->log_subdomains_off =
-			!prev_log_subdomains || !log_subdomains;
+			prev_log_subdomains = !new_llcred->log_subdomains_off;
+			log_subdomains_off = !prev_log_subdomains ||
+					 !log_subdomains;
 #endif /* CONFIG_AUDIT */
 
-		/*
-		 * The only case when a ruleset may not be set is if
-		 * LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF is set, optionally
-		 * combined with LANDLOCK_RESTRICT_SELF_TSYNC.
-		 * We could optimize this case by not committing @cred if this flag
-		 * was already set, but it is not worth the complexity.
-		 */
-		if (ruleset) {
-			struct landlock_ruleset *const new_dom =
-				landlock_merge_ruleset(new_llcred->domain, ruleset);
+			/*
+			 * The only case when a ruleset may not be set is if
+			 * LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF is set, optionally
+			 * combined with LANDLOCK_RESTRICT_SELF_TSYNC.
+			 * We could optimize this case by not committing @cred if this flag
+			 * was already set, but it is not worth the complexity.
+			 */
+			if (ruleset) {
+				new_domain = landlock_merge_ruleset(staged_domain,
+							 ruleset);
 
-			if (IS_ERR(new_dom))
-				return PTR_ERR(new_dom);
+				if (IS_ERR(new_domain))
+					return PTR_ERR(new_domain);
+				staged_domain = new_domain;
 
 #ifdef CONFIG_AUDIT
-			landlock_apply_log_flags(new_dom, flags,
+				landlock_apply_log_flags(new_domain, flags,
 						 prev_log_subdomains);
 #endif /* CONFIG_AUDIT */
-
-			landlock_put_ruleset(new_llcred->domain);
-			new_llcred->domain = new_dom;
-
-#ifdef CONFIG_AUDIT
-			new_llcred->domain_exec |= BIT(new_dom->num_layers - 1);
-#endif /* CONFIG_AUDIT */
+			}
 		}
 	}
 
-	if (new_llcred->pending_userspace_domain) {
+	err = landlock_prepare_pending_domain(
+		&new_prepared_domain, staged_domain, staged_pending_bpf_domain,
+		staged_pending_bpf_flags, staged_pending_userspace_domain,
+		staged_pending_userspace_flags,
 #ifdef CONFIG_AUDIT
-		parent_logs_subdomains = !new_llcred->log_subdomains_off;
-		err = landlock_prepare_pending_domain(
-			&new_llcred->pending_domain, new_llcred->domain,
-			new_llcred->pending_userspace_domain,
-			new_llcred->pending_userspace_flags,
-			parent_logs_subdomains);
+		log_subdomains_off
 #else
-		err = landlock_prepare_pending_domain(
-			&new_llcred->pending_domain, new_llcred->domain,
-			new_llcred->pending_userspace_domain,
-			new_llcred->pending_userspace_flags, true);
+		false
 #endif /* CONFIG_AUDIT */
-		if (err)
-			return err;
-	} else {
-		landlock_put_ruleset(new_llcred->pending_domain);
-		new_llcred->pending_domain = NULL;
-		if (!(new_llcred->pending_userspace_flags &
-		      LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME))
-			new_llcred->pending_userspace_flags = 0;
+	);
+	if (err)
+		goto out;
+
+	if (new_domain) {
+		landlock_put_ruleset(new_llcred->domain);
+		new_llcred->domain = new_domain;
+		new_domain = NULL;
+
+#ifdef CONFIG_AUDIT
+		new_llcred->domain_exec |= BIT(new_llcred->domain->num_layers - 1);
+#endif /* CONFIG_AUDIT */
 	}
+
+	if (new_pending_domain) {
+		landlock_put_ruleset(*pending_slot);
+		*pending_slot = new_pending_domain;
+		new_pending_domain = NULL;
+	}
+	*pending_flags = *staged_pending_flags;
+
+#ifdef CONFIG_AUDIT
+	if (in_task_context)
+		new_llcred->log_subdomains_off = log_subdomains_off;
+#endif /* CONFIG_AUDIT */
+
+	landlock_put_ruleset(new_llcred->pending_domain);
+	new_llcred->pending_domain = new_prepared_domain;
+	new_prepared_domain = NULL;
 
 	if (flags & LANDLOCK_RESTRICT_SELF_TSYNC) {
 		const int tsync_err =
@@ -930,6 +1006,13 @@ int landlock_restrict_cred(struct cred *const cred,
 			return tsync_err;
 	}
 	return 0;
+
+out:
+	landlock_put_ruleset(new_prepared_domain);
+	landlock_put_ruleset(new_pending_domain);
+	landlock_put_ruleset(new_domain);
+
+	return err;
 }
 
 /*

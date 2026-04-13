@@ -157,8 +157,16 @@ struct landlock_ruleset_attr {
  *    During :manpage:`execve(2)`, once successful execution is guaranteed, the
  *    prepared domain is enforced for the new execution.
  *
- *    This allows userspace to prepare a domain for the next execve(2).  It
- *    may be combined with the other landlock_restrict_self() flags, except
+ *    If a BPF program also prepares a domain for the same execution, the
+ *    prepared domain combines these inputs in order:
+ *
+ *    1. The task's current domain, if any.
+ *    2. The domain prepared by BPF, if any.
+ *    3. The userspace-staged domain, if any.
+ *
+ *    This allows userspace to prepare a domain for the next execve(2) while
+ *    still letting BPF add restrictions for that same execution.  It may be
+ *    combined with the other landlock_restrict_self() flags, except
  *    %LANDLOCK_RESTRICT_SELF_TSYNC.
  */
 /* clang-format off */

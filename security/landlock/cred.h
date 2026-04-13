@@ -36,6 +36,7 @@ struct landlock_cred_security {
 	 * @domain: Immutable ruleset enforced on a task.
 	 */
 	struct landlock_ruleset *domain;
+
 	/**
 	 * @pending_userspace_flags: Restriction flags to commit during the next
 	 * successful execve(2).  When @pending_userspace_domain is set, these
@@ -43,16 +44,28 @@ struct landlock_cred_security {
 	 */
 	u32 pending_userspace_flags;
 	/**
-	 * @pending_userspace_domain: Snapshot of the ruleset requested with
-	 * LANDLOCK_RESTRICT_SELF_EXECTIME.  This staged ruleset is used to build
-	 * @pending_domain and is NULL otherwise.
+	 * @pending_userspace_domain: Snapshot of a userspace ruleset to be
+	 * enforced on the next execve(2).  This is only used when
+	 * LANDLOCK_RESTRICT_SELF_EXECTIME is set, and is NULL otherwise.
 	 */
 	struct landlock_ruleset *pending_userspace_domain;
 	/**
+	 * @pending_bpf_flags: Restriction flags associated with
+	 * @pending_bpf_domain.
+	 */
+	u32 pending_bpf_flags;
+	/**
+	 * @pending_bpf_domain: Snapshot of a ruleset to be enforced on the next
+	 * execve(2).  This is only used by bpf_landlock_restrict_binprm(), and
+	 * is NULL otherwise.  Upon execution this ruleset is merged after the
+	 * current domain, but before @pending_userspace_domain if any.
+	 */
+	struct landlock_ruleset *pending_bpf_domain;
+	/**
 	 * @pending_domain: Prepared domain to enforce on the next successful
-	 * execve(2).  This is built from the current domain and
-	 * @pending_userspace_domain when LANDLOCK_RESTRICT_SELF_EXECTIME is set,
-	 * and is NULL otherwise.
+	 * execve(2).  This is built from the current domain,
+	 * @pending_bpf_domain, and @pending_userspace_domain, in that order, and
+	 * is NULL otherwise.
 	 */
 	struct landlock_ruleset *pending_domain;
 
@@ -92,12 +105,14 @@ static inline void landlock_cred_copy(struct landlock_cred_security *dst,
 				      const struct landlock_cred_security *src)
 {
 	landlock_put_ruleset(dst->domain);
+	landlock_put_ruleset(dst->pending_bpf_domain);
 	landlock_put_ruleset(dst->pending_userspace_domain);
 	landlock_put_ruleset(dst->pending_domain);
 
 	*dst = *src;
 
 	landlock_get_ruleset(src->domain);
+	landlock_get_ruleset(src->pending_bpf_domain);
 	landlock_get_ruleset(src->pending_userspace_domain);
 	landlock_get_ruleset(src->pending_domain);
 }

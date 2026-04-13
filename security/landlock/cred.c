@@ -37,6 +37,9 @@ static void hook_cred_free(struct cred *const cred)
 {
 	if (landlock_cred(cred)->domain)
 		landlock_put_ruleset_deferred(landlock_cred(cred)->domain);
+	if (landlock_cred(cred)->pending_bpf_domain)
+		landlock_put_ruleset_deferred(
+			landlock_cred(cred)->pending_bpf_domain);
 	if (landlock_cred(cred)->pending_userspace_domain)
 		landlock_put_ruleset_deferred(
 			landlock_cred(cred)->pending_userspace_domain);
