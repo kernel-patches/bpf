@@ -1785,6 +1785,21 @@ static int map_update_elem(union bpf_attr *attr, bpfptr_t uattr)
 		goto err_put;
 	}
 
+	/*
+	 * When updating per-CPU maps via the lightweight skeleton
+	 * loader, use a single value slot across all CPUs. This avoids
+	 * two potential issues when updating on an M-CPU kernel with
+	 * N cached slots (N < M), especially when N is much smaller
+	 * than M:
+	 * 1) The update may trigger a page fault when copying data from
+	 *    the last slot, as the read may go beyond the allocated
+	 *    buffer.
+	 * 2) The update may copy unexpected data from slots [N, M-1].
+	 */
+	if (bpfptr_is_kernel(uattr) && bpf_map_supports_cpu_flags(map->map_type) &&
+	    !(attr->flags & (BPF_F_CPU | BPF_F_ALL_CPUS)))
+		attr->flags |= BPF_F_ALL_CPUS;
+
 	err = bpf_map_check_op_flags(map, attr->flags, ~0);
 	if (err)
 		goto err_put;
