@@ -15,21 +15,26 @@ __u32 pid = 0;
 __u64 add64_value = 1;
 __u64 add64_result = 0;
 __u64 add64_noreturn_value = 1;
+__u64 add64_stack_value_copy = 0;
+__u64 add64_stack_result = 0;
 
 __u32 add32_value = 1;
 __u32 add32_result = 0;
 __u32 add32_noreturn_value = 1;
+__u32 add32_stack_value_copy = 0;
+__u32 add32_stack_result = 0;
 
 __u16 add16_value = 1;
 __u16 add16_result = 0;
 __u16 add16_noreturn_value = 1;
+__u16 add16_stack_value_copy = 0;
+__u16 add16_stack_result = 0;
 
 __u8  add8_value = 1;
 __u8  add8_result = 0;
 __u8  add8_noreturn_value  = 1;
-
-__u64 add_stack_value_copy = 0;
-__u64 add_stack_result = 0;
+__u8  add8_stack_value_copy = 0;
+__u8  add8_stack_result = 0;
 
 SEC("raw_tp/sys_enter")
 int add(const void *ctx)
@@ -38,22 +43,30 @@ int add(const void *ctx)
 		return 0;
 
 #ifdef ENABLE_ATOMICS_TESTS
-	__u64 add_stack_value = 1;
+	__u64 add64_stack_value = 1;
+	__u32 add32_stack_value = 1;
+	__u16 add16_stack_value = 1;
+	__u8  add8_stack_value  = 1;
 
 	add64_result = __sync_fetch_and_add(&add64_value, 2);
 	__sync_fetch_and_add(&add64_noreturn_value, 2);
+	add64_stack_result = __sync_fetch_and_add(&add64_stack_value, 2);
+	add64_stack_value_copy = add64_stack_value;
 
 	add32_result = __sync_fetch_and_add(&add32_value, 2);
 	__sync_fetch_and_add(&add32_noreturn_value, 2);
+	add32_stack_result = __sync_fetch_and_add(&add32_stack_value, 2);
+	add32_stack_value_copy = add32_stack_value;
 
 	add16_result = __sync_fetch_and_add(&add16_value, 2);
 	__sync_fetch_and_add(&add16_noreturn_value, 2);
+	add16_stack_result = __sync_fetch_and_add(&add16_stack_value, 2);
+	add16_stack_value_copy = add16_stack_value;
 
 	add8_result  = __sync_fetch_and_add(&add8_value, 2);
 	__sync_fetch_and_add(&add8_noreturn_value, 2);
-
-	add_stack_result = __sync_fetch_and_add(&add_stack_value, 2);
-	add_stack_value_copy = add_stack_value;
+	add8_stack_result = __sync_fetch_and_add(&add8_stack_value, 2);
+	add8_stack_value_copy = add8_stack_value;
 #endif
 
 	return 0;
@@ -62,21 +75,26 @@ int add(const void *ctx)
 __s64 sub64_value = 1;
 __s64 sub64_result = 0;
 __s64 sub64_noreturn_value = 1;
+__s64 sub64_stack_value_copy = 0;
+__s64 sub64_stack_result = 0;
 
 __s32 sub32_value = 1;
 __s32 sub32_result = 0;
 __s32 sub32_noreturn_value = 1;
+__s32 sub32_stack_value_copy = 0;
+__s32 sub32_stack_result = 0;
 
 __s16 sub16_value = 1;
 __s16 sub16_result = 0;
 __s16 sub16_noreturn_value = 1;
+__s16 sub16_stack_value_copy = 0;
+__s16 sub16_stack_result = 0;
 
 __s8  sub8_value = 1;
 __s8  sub8_result = 0;
 __s8  sub8_noreturn_value  = 1;
-
-__s64 sub_stack_value_copy = 0;
-__s64 sub_stack_result = 0;
+__s8  sub8_stack_value_copy = 0;
+__s8  sub8_stack_result = 0;
 
 SEC("raw_tp/sys_enter")
 int sub(const void *ctx)
@@ -85,22 +103,30 @@ int sub(const void *ctx)
 		return 0;
 
 #ifdef ENABLE_ATOMICS_TESTS
-	__u64 sub_stack_value = 1;
+	__s64 sub64_stack_value = 1;
+	__s32 sub32_stack_value = 1;
+	__s16 sub16_stack_value = 1;
+	__s8  sub8_stack_value  = 1;
 
 	sub64_result = __sync_fetch_and_sub(&sub64_value, 2);
 	__sync_fetch_and_sub(&sub64_noreturn_value, 2);
+	sub64_stack_result = __sync_fetch_and_sub(&sub64_stack_value, 2);
+	sub64_stack_value_copy = sub64_stack_value;
 
 	sub32_result = __sync_fetch_and_sub(&sub32_value, 2);
 	__sync_fetch_and_sub(&sub32_noreturn_value, 2);
+	sub32_stack_result = __sync_fetch_and_sub(&sub32_stack_value, 2);
+	sub32_stack_value_copy = sub32_stack_value;
 
 	sub16_result = __sync_fetch_and_sub(&sub16_value, 2);
 	__sync_fetch_and_sub(&sub16_noreturn_value, 2);
+	sub16_stack_result = __sync_fetch_and_sub(&sub16_stack_value, 2);
+	sub16_stack_value_copy = sub16_stack_value;
 
 	sub8_result  = __sync_fetch_and_sub(&sub8_value, 2);
 	__sync_fetch_and_sub(&sub8_noreturn_value, 2);
-
-	sub_stack_result = __sync_fetch_and_sub(&sub_stack_value, 2);
-	sub_stack_value_copy = sub_stack_value;
+	sub8_stack_result = __sync_fetch_and_sub(&sub8_stack_value, 2);
+	sub8_stack_value_copy = sub8_stack_value;
 #endif
 
 	return 0;

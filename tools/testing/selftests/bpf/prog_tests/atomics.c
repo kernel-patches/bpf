@@ -20,21 +20,26 @@ static void test_add(struct atomics_lskel *skel)
 	ASSERT_EQ(skel->data->add64_value, 3, "add64_value");
 	ASSERT_EQ(skel->bss->add64_result, 1, "add64_result");
 	ASSERT_EQ(skel->data->add64_noreturn_value, 3, "add64_noreturn_value");
+	ASSERT_EQ(skel->bss->add64_stack_value_copy, 3, "add64_stack_value_copy");
+	ASSERT_EQ(skel->bss->add64_stack_result, 1, "add64_stack_result");
 
 	ASSERT_EQ(skel->data->add32_value, 3, "add32_value");
 	ASSERT_EQ(skel->bss->add32_result, 1, "add32_result");
 	ASSERT_EQ(skel->data->add32_noreturn_value, 3, "add32_noreturn_value");
+	ASSERT_EQ(skel->bss->add32_stack_value_copy, 3, "add32_stack_value_copy");
+	ASSERT_EQ(skel->bss->add32_stack_result, 1, "add32_stack_result");
 
 	ASSERT_EQ(skel->data->add16_value, 3, "add16_value");
 	ASSERT_EQ(skel->bss->add16_result, 1, "add16_result");
 	ASSERT_EQ(skel->data->add16_noreturn_value, 3, "add16_noreturn_value");
+	ASSERT_EQ(skel->bss->add16_stack_value_copy, 3, "add16_stack_value_copy");
+	ASSERT_EQ(skel->bss->add16_stack_result, 1, "add16_stack_result");
 
 	ASSERT_EQ(skel->data->add8_value, 3, "add8_value");
 	ASSERT_EQ(skel->bss->add8_result, 1, "add8_result");
 	ASSERT_EQ(skel->data->add8_noreturn_value, 3, "add8_noreturn_value");
-
-	ASSERT_EQ(skel->bss->add_stack_value_copy, 3, "add_stack_value");
-	ASSERT_EQ(skel->bss->add_stack_result, 1, "add_stack_result");
+	ASSERT_EQ(skel->bss->add8_stack_value_copy, 3, "add8_stack_value_copy");
+	ASSERT_EQ(skel->bss->add8_stack_result, 1, "add8_stack_result");
 }
 
 static void test_sub(struct atomics_lskel *skel)
@@ -53,21 +58,26 @@ static void test_sub(struct atomics_lskel *skel)
 	ASSERT_EQ(skel->data->sub64_value, -1, "sub64_value");
 	ASSERT_EQ(skel->bss->sub64_result, 1, "sub64_result");
 	ASSERT_EQ(skel->data->sub64_noreturn_value, -1, "sub64_noreturn_value");
+	ASSERT_EQ(skel->bss->sub64_stack_value_copy, -1, "sub64_stack_value_copy");
+	ASSERT_EQ(skel->bss->sub64_stack_result, 1, "sub64_stack_result");
 
 	ASSERT_EQ(skel->data->sub32_value, -1, "sub32_value");
 	ASSERT_EQ(skel->bss->sub32_result, 1, "sub32_result");
 	ASSERT_EQ(skel->data->sub32_noreturn_value, -1, "sub32_noreturn_value");
+	ASSERT_EQ(skel->bss->sub32_stack_value_copy, -1, "sub32_stack_value_copy");
+	ASSERT_EQ(skel->bss->sub32_stack_result, 1, "sub32_stack_result");
 
 	ASSERT_EQ(skel->data->sub16_value, -1, "sub16_value");
 	ASSERT_EQ(skel->bss->sub16_result, 1, "sub16_result");
 	ASSERT_EQ(skel->data->sub16_noreturn_value, -1, "sub16_noreturn_value");
+	ASSERT_EQ(skel->bss->sub16_stack_value_copy, -1, "sub16_stack_value_copy");
+	ASSERT_EQ(skel->bss->sub16_stack_result, 1, "sub16_stack_result");
 
 	ASSERT_EQ(skel->data->sub8_value, -1, "sub8_value");
 	ASSERT_EQ(skel->bss->sub8_result, 1, "sub8_result");
 	ASSERT_EQ(skel->data->sub8_noreturn_value, -1, "sub8_noreturn_value");
-
-	ASSERT_EQ(skel->bss->sub_stack_value_copy, -1, "sub_stack_value");
-	ASSERT_EQ(skel->bss->sub_stack_result, 1, "sub_stack_result");
+	ASSERT_EQ(skel->bss->sub8_stack_value_copy, -1, "sub8_stack_value_copy");
+	ASSERT_EQ(skel->bss->sub8_stack_result, 1, "sub8_stack_result");
 }
 
 static void test_and(struct atomics_lskel *skel)
