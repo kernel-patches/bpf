@@ -615,6 +615,42 @@ static int probe_kern_btf_layout(int token_fd)
 						 (char *)layout, token_fd));
 }
 
+static int probe_kern_btf_vlen_kind_extended(int token_fd)
+{
+	struct btf *btf;
+	int ret = 0;
+	__s32 id;
+	int err;
+
+	btf = btf__load_vmlinux_btf();
+	err = libbpf_get_error(btf);
+	if (err)
+		return err;
+	id = btf__find_by_name_kind(btf, "btf_max", BTF_KIND_ENUM);
+	if (id > 0) {
+		const struct btf_type *t;
+		const struct btf_enum *e;
+		const char *name;
+		__u32 i, vlen;
+
+		t = btf__type_by_id(btf, id);
+		if (t) {
+			vlen = btf_vlen(t);
+
+			for (i = 0, e = btf_enum(t); i < vlen; i++, e++) {
+				name = btf__name_by_offset(btf, e->name_off);
+				if (!name || strcmp(name, "BTF_MAX_VLEN") != 0)
+					continue;
+				if (e->val > 0xffff)
+					ret = 1;
+			}
+		}
+	}
+	btf__free(btf);
+
+	return ret;
+}
+
 typedef int (*feature_probe_fn)(int /* token_fd */);
 
 static struct kern_feature_cache feature_cache;
@@ -698,6 +734,9 @@ static struct kern_feature_desc {
 	},
 	[FEAT_BTF_LAYOUT] = {
 		"kernel supports BTF layout", probe_kern_btf_layout,
+	},
+	[FEAT_BTF_VLEN_KIND_EXTENDED] = {
+		"kernel supports extended BTF vlen/kind", probe_kern_btf_vlen_kind_extended,
 	},
 };
 

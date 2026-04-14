@@ -3139,10 +3139,11 @@ static bool btf_needs_sanitization(struct bpf_object *obj)
 	bool has_enum64 = kernel_supports(obj, FEAT_BTF_ENUM64);
 	bool has_qmark_datasec = kernel_supports(obj, FEAT_BTF_QMARK_DATASEC);
 	bool has_layout = kernel_supports(obj, FEAT_BTF_LAYOUT);
+	bool has_vlen_kind_extended = kernel_supports(obj, FEAT_BTF_VLEN_KIND_EXTENDED);
 
 	return !has_func || !has_datasec || !has_func_global || !has_float ||
 	       !has_decl_tag || !has_type_tag || !has_enum64 || !has_qmark_datasec ||
-	       !has_layout;
+	       !has_layout || !has_vlen_kind_extended;
 }
 
 struct btf *bpf_object__sanitize_btf(struct bpf_object *obj, struct btf *orig_btf)
@@ -3156,6 +3157,7 @@ struct btf *bpf_object__sanitize_btf(struct bpf_object *obj, struct btf *orig_bt
 	bool has_enum64 = kernel_supports(obj, FEAT_BTF_ENUM64);
 	bool has_qmark_datasec = kernel_supports(obj, FEAT_BTF_QMARK_DATASEC);
 	bool has_layout = kernel_supports(obj, FEAT_BTF_LAYOUT);
+	bool has_vlen_kind_extended = kernel_supports(obj, FEAT_BTF_VLEN_KIND_EXTENDED);
 	int enum64_placeholder_id = 0;
 	const struct btf_header *hdr;
 	struct btf *btf = NULL;
@@ -3216,6 +3218,19 @@ struct btf *bpf_object__sanitize_btf(struct bpf_object *obj, struct btf *orig_bt
 
 	for (i = 1; i < btf__type_cnt(btf); i++) {
 		t = (struct btf_type *)btf__type_by_id(btf, i);
+
+		/*
+		 * If BTF uses extended vlen/kind and kernel does not support
+		 * it, there is nothing we can do.
+		 */
+		if (!has_vlen_kind_extended) {
+			if (btf_vlen(t) > 0xffff || btf_kind(t) > 0x1f) {
+				pr_debug("Unsupported %s for id %u\n",
+					 btf_kind(t) > 0x1f ? "BTF kind" : "BTF vlen", i);
+				btf__free(btf);
+				return ERR_PTR(-EINVAL);
+			}
+		}
 
 		if ((!has_datasec && btf_is_var(t)) || (!has_decl_tag && btf_is_decl_tag(t))) {
 			/* replace VAR/DECL_TAG with INT */
