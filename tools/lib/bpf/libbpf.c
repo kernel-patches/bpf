@@ -5806,7 +5806,6 @@ static int load_module_btfs(struct bpf_object *obj)
 {
 	struct bpf_btf_info info;
 	struct module_btf *mod_btf;
-	struct btf *btf;
 	char name[64];
 	__u32 id = 0, len;
 	int err, fd;
@@ -5825,6 +5824,8 @@ static int load_module_btfs(struct bpf_object *obj)
 		return 0;
 
 	while (true) {
+		struct btf *btf = NULL;
+
 		err = bpf_btf_get_next_id(id, &id);
 		if (err && errno == ENOENT)
 			return 0;
@@ -5891,6 +5892,7 @@ static int load_module_btfs(struct bpf_object *obj)
 		continue;
 
 err_out:
+		btf__free(btf);
 		close(fd);
 		return err;
 	}
