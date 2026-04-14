@@ -56,7 +56,7 @@ __naked int bpf_rdtsc_jit_x86_64(void)
 SEC("syscall")
 __arch_arm64
 __xlated("0: r1 = 42")
-__xlated("1: r0 = r1")
+__xlated("1: call kernel-function")
 __naked int bpf_cyc2ns_arm(void)
 {
 	asm volatile(
@@ -103,6 +103,54 @@ __naked int bpf_cyc2ns_jit_x86(void)
 {
 	asm volatile(
 	"r1=0x2a2a2a2a2a ll;"
+	"call %[bpf_cpu_time_counter_to_ns];"
+	"exit"
+	:
+	: __imm(bpf_cpu_time_counter_to_ns)
+	: __clobber_all
+	);
+}
+
+SEC("syscall")
+__arch_arm64
+__xlated("0: call kernel-function")
+__naked int bpf_cntvct(void)
+{
+	asm volatile(
+	"call %[bpf_get_cpu_time_counter];"
+	"exit"
+	:
+	: __imm(bpf_get_cpu_time_counter)
+	: __clobber_all
+	);
+}
+
+SEC("syscall")
+__arch_arm64
+/*
+ * With ECV:    mrs x7, CNTVCTSS_EL0
+ * Without ECV: isb; mrs x7, CNTVCT_EL0
+ */
+__jited("	mrs	x7, CNTVCT{{(SS_EL0|_EL0)}}")
+__naked int bpf_cntvct_jit_arm64(void)
+{
+	asm volatile(
+	"call %[bpf_get_cpu_time_counter];"
+	"exit"
+	:
+	: __imm(bpf_get_cpu_time_counter)
+	: __clobber_all
+	);
+}
+
+SEC("syscall")
+__arch_arm64
+/* bpf_cpu_time_counter_to_ns: mov (1GHz identity) or mul+lsr */
+__jited("	{{(mov	x7, x0|mul	x7, x0, x10)}}")
+__naked int bpf_cyc2ns_jit_arm64(void)
+{
+	asm volatile(
+	"r1=0x2a;"
 	"call %[bpf_cpu_time_counter_to_ns];"
 	"exit"
 	:

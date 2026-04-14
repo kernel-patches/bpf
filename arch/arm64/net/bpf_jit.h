@@ -326,6 +326,10 @@
 	aarch64_insn_gen_mrs(Rt, AARCH64_INSN_SYSREG_TPIDR_EL2)
 #define A64_MRS_SP_EL0(Rt) \
 	aarch64_insn_gen_mrs(Rt, AARCH64_INSN_SYSREG_SP_EL0)
+#define A64_MRS_CNTVCT_EL0(Rt) \
+	aarch64_insn_gen_mrs(Rt, AARCH64_INSN_SYSREG_CNTVCT_EL0)
+#define A64_MRS_CNTVCTSS_EL0(Rt) \
+	aarch64_insn_gen_mrs(Rt, AARCH64_INSN_SYSREG_CNTVCTSS_EL0)
 
 /* Barriers */
 #define A64_SB aarch64_insn_get_sb_value()
