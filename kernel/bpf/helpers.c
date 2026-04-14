@@ -845,7 +845,13 @@ int bpf_bprintf_prepare(const char *fmt, u32 fmt_size, const u64 *raw_args,
 		data->buf = buffers->buf;
 
 	for (i = 0; i < fmt_size; i++) {
-		if ((!isprint(fmt[i]) && !isspace(fmt[i])) || !isascii(fmt[i])) {
+		unsigned char c = fmt[i];
+
+		/*
+		 * Permit non-ASCII bytes in plain text so UTF-8 messages can be
+		 * emitted, while keeping format specifiers ASCII-only.
+		 */
+		if (isascii(c) && !isprint(c) && !isspace(c)) {
 			err = -EINVAL;
 			goto out;
 		}
@@ -867,6 +873,10 @@ int bpf_bprintf_prepare(const char *fmt, u32 fmt_size, const u64 *raw_args,
 		 * always access fmt[i + 1], in the worst case it will be a 0
 		 */
 		i++;
+		if (!isascii((unsigned char)fmt[i])) {
+			err = -EINVAL;
+			goto out;
+		}
 
 		/* skip optional "[0 +-][num]" width formatting field */
 		while (fmt[i] == '0' || fmt[i] == '+'  || fmt[i] == '-' ||
@@ -881,8 +891,9 @@ int bpf_bprintf_prepare(const char *fmt, u32 fmt_size, const u64 *raw_args,
 		if (fmt[i] == 'p') {
 			sizeof_cur_arg = sizeof(long);
 
-			if (fmt[i + 1] == 0 || isspace(fmt[i + 1]) ||
-			    ispunct(fmt[i + 1])) {
+			if (fmt[i + 1] == 0 ||
+			    isspace((unsigned char)fmt[i + 1]) ||
+			    ispunct((unsigned char)fmt[i + 1])) {
 				if (tmp_buf)
 					cur_arg = raw_args[num_spec];
 				goto nocopy_fmt;
@@ -958,8 +969,8 @@ int bpf_bprintf_prepare(const char *fmt, u32 fmt_size, const u64 *raw_args,
 			fmt_ptype = fmt[i];
 fmt_str:
 			if (fmt[i + 1] != 0 &&
-			    !isspace(fmt[i + 1]) &&
-			    !ispunct(fmt[i + 1])) {
+			    !isspace((unsigned char)fmt[i + 1]) &&
+			    !ispunct((unsigned char)fmt[i + 1])) {
 				err = -EINVAL;
 				goto out;
 			}

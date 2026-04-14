@@ -10,13 +10,18 @@ char _license[] SEC("license") = "GPL";
 
 int trace_printk_ret = 0;
 int trace_printk_ran = 0;
+int trace_printk_utf8_ret = 0;
+int trace_printk_utf8_ran = 0;
 
-const char fmt[] = "Testing,testing %d\n";
+static const char fmt[] = "Testing,testing %d\n";
+static const char utf8_fmt[] = "中文,测试 %d\n";
 
 SEC("fentry/" SYS_PREFIX "sys_nanosleep")
 int sys_enter(void *ctx)
 {
 	trace_printk_ret = bpf_trace_printk(fmt, sizeof(fmt),
 					    ++trace_printk_ran);
+	trace_printk_utf8_ret = bpf_trace_printk(utf8_fmt, sizeof(utf8_fmt),
+						 ++trace_printk_utf8_ran);
 	return 0;
 }
