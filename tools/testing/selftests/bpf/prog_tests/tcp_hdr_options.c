@@ -513,6 +513,39 @@ check_linum:
 	bpf_link__destroy(link);
 }
 
+static void hdr_sockopt(void)
+{
+	const char send_msg[] = "MISC!!!";
+	char recv_msg[sizeof(send_msg)];
+	const unsigned int nr_data = 2;
+	struct bpf_link *link;
+	struct sk_fds sk_fds;
+	int i, ret;
+
+	link = bpf_program__attach_cgroup(misc_skel->progs.misc_hdr_sockopt, cg_fd);
+	if (!ASSERT_OK_PTR(link, "attach_cgroup(misc_hdr_sockopt)"))
+		return;
+
+	if (sk_fds_connect(&sk_fds, false)) {
+		bpf_link__destroy(link);
+		return;
+	}
+
+	for (i = 0; i < nr_data; i++) {
+		ret = send(sk_fds.active_fd, send_msg, sizeof(send_msg), 0);
+		if (!ASSERT_EQ(ret, sizeof(send_msg), "send(msg)"))
+			goto check_linum;
+
+		ret = read(sk_fds.passive_fd, recv_msg, sizeof(recv_msg));
+		if (!ASSERT_EQ(ret, sizeof(send_msg), "read(msg)"))
+			goto check_linum;
+	}
+
+check_linum:
+	sk_fds_close(&sk_fds);
+	bpf_link__destroy(link);
+}
+
 struct test {
 	const char *desc;
 	void (*run)(void);
@@ -526,6 +559,7 @@ static struct test tests[] = {
 	DEF_TEST(fastopen_estab),
 	DEF_TEST(fin),
 	DEF_TEST(misc),
+	DEF_TEST(hdr_sockopt),
 };
 
 void test_tcp_hdr_options(void)

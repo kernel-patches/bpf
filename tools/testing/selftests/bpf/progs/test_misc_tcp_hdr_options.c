@@ -326,4 +326,22 @@ int misc_estab(struct bpf_sock_ops *skops)
 	return CG_OK;
 }
 
+SEC("sockops")
+int misc_hdr_sockopt(struct bpf_sock_ops *skops)
+{
+	int true_val = 1;
+
+	switch (skops->op) {
+	case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB:
+	case BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB:
+		set_hdr_cb_flags(skops, 0);
+		break;
+	case BPF_SOCK_OPS_HDR_OPT_LEN_CB:
+		bpf_setsockopt(skops, SOL_TCP, TCP_NODELAY, &true_val, sizeof(true_val));
+		break;
+	}
+
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
