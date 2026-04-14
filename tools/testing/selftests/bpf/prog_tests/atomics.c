@@ -23,6 +23,12 @@ static void test_add(struct atomics_lskel *skel)
 	ASSERT_EQ(skel->data->add32_value, 3, "add32_value");
 	ASSERT_EQ(skel->bss->add32_result, 1, "add32_result");
 
+	ASSERT_EQ(skel->data->add16_value, 3, "add16_value");
+	ASSERT_EQ(skel->bss->add16_result, 1, "add16_result");
+
+	ASSERT_EQ(skel->data->add8_value, 3, "add8_value");
+	ASSERT_EQ(skel->bss->add8_result, 1, "add8_result");
+
 	ASSERT_EQ(skel->bss->add_stack_value_copy, 3, "add_stack_value");
 	ASSERT_EQ(skel->bss->add_stack_result, 1, "add_stack_result");
 
@@ -47,6 +53,12 @@ static void test_sub(struct atomics_lskel *skel)
 
 	ASSERT_EQ(skel->data->sub32_value, -1, "sub32_value");
 	ASSERT_EQ(skel->bss->sub32_result, 1, "sub32_result");
+
+	ASSERT_EQ(skel->data->sub16_value, -1, "sub16_value");
+	ASSERT_EQ(skel->bss->sub16_result, 1, "sub16_result");
+
+	ASSERT_EQ(skel->data->sub8_value, -1, "sub8_value");
+	ASSERT_EQ(skel->bss->sub8_result, 1, "sub8_result");
 
 	ASSERT_EQ(skel->bss->sub_stack_value_copy, -1, "sub_stack_value");
 	ASSERT_EQ(skel->bss->sub_stack_result, 1, "sub_stack_result");
@@ -73,6 +85,12 @@ static void test_and(struct atomics_lskel *skel)
 	ASSERT_EQ(skel->data->and32_value, 0x010, "and32_value");
 	ASSERT_EQ(skel->bss->and32_result, 0x110, "and32_result");
 
+	ASSERT_EQ(skel->data->and16_value, 0x010, "and16_value");
+	ASSERT_EQ(skel->bss->and16_result, 0x110, "and16_result");
+
+	ASSERT_EQ(skel->data->and8_value, 0x01, "and8_value");
+	ASSERT_EQ(skel->bss->and8_result, 0x11, "and8_result");
+
 	ASSERT_EQ(skel->data->and_noreturn_value, 0x010ull << 32, "and_noreturn_value");
 }
 
@@ -95,6 +113,12 @@ static void test_or(struct atomics_lskel *skel)
 	ASSERT_EQ(skel->data->or32_value, 0x111, "or32_value");
 	ASSERT_EQ(skel->bss->or32_result, 0x110, "or32_result");
 
+	ASSERT_EQ(skel->data->or16_value, 0x111, "or16_value");
+	ASSERT_EQ(skel->bss->or16_result, 0x110, "or16_result");
+
+	ASSERT_EQ(skel->data->or8_value, 0x13, "or8_value");
+	ASSERT_EQ(skel->bss->or8_result, 0x11, "or8_result");
+
 	ASSERT_EQ(skel->data->or_noreturn_value, 0x111ull << 32, "or_noreturn_value");
 }
 
@@ -116,6 +140,12 @@ static void test_xor(struct atomics_lskel *skel)
 
 	ASSERT_EQ(skel->data->xor32_value, 0x101, "xor32_value");
 	ASSERT_EQ(skel->bss->xor32_result, 0x110, "xor32_result");
+
+	ASSERT_EQ(skel->data->xor16_value, 0x101, "xor16_value");
+	ASSERT_EQ(skel->bss->xor16_result, 0x110, "xor16_result");
+
+	ASSERT_EQ(skel->data->xor8_value, 0x10, "xor8_value");
+	ASSERT_EQ(skel->bss->xor8_result, 0x11, "xor8_result");
 
 	ASSERT_EQ(skel->data->xor_noreturn_value, 0x101ull << 32, "xor_nxoreturn_value");
 }
@@ -140,6 +170,14 @@ static void test_cmpxchg(struct atomics_lskel *skel)
 	ASSERT_EQ(skel->data->cmpxchg32_value, 2, "lcmpxchg32_value");
 	ASSERT_EQ(skel->bss->cmpxchg32_result_fail, 1, "cmpxchg_result_fail");
 	ASSERT_EQ(skel->bss->cmpxchg32_result_succeed, 1, "cmpxchg_result_succeed");
+
+	ASSERT_EQ(skel->data->cmpxchg16_value, 2, "cmpxchg16_value");
+	ASSERT_EQ(skel->bss->cmpxchg16_result_fail, 1, "cmpxchg16_result_fail");
+	ASSERT_EQ(skel->bss->cmpxchg16_result_succeed, 1, "cmpxchg16_result_succeed");
+
+	ASSERT_EQ(skel->data->cmpxchg8_value, 2, "cmpxchg8_value");
+	ASSERT_EQ(skel->bss->cmpxchg8_result_fail, 1, "cmpxchg8_result_fail");
+	ASSERT_EQ(skel->bss->cmpxchg8_result_succeed, 1, "cmpxchg8_result_succeed");
 }
 
 static void test_xchg(struct atomics_lskel *skel)
@@ -160,6 +198,12 @@ static void test_xchg(struct atomics_lskel *skel)
 
 	ASSERT_EQ(skel->data->xchg32_value, 2, "xchg32_value");
 	ASSERT_EQ(skel->bss->xchg32_result, 1, "xchg32_result");
+
+	ASSERT_EQ(skel->data->xchg16_value, 2, "xchg16_value");
+	ASSERT_EQ(skel->bss->xchg16_result, 1, "xchg16_result");
+
+	ASSERT_EQ(skel->data->xchg8_value, 2, "xchg8_value");
+	ASSERT_EQ(skel->bss->xchg8_result, 1, "xchg8_result");
 }
 
 void test_atomics(void)
