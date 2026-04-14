@@ -5879,7 +5879,7 @@ static int load_module_btfs(struct bpf_object *obj)
 		if (err)
 			goto err_out;
 
-		mod_btf = &obj->btf_modules[obj->btf_module_cnt++];
+		mod_btf = &obj->btf_modules[obj->btf_module_cnt];
 
 		mod_btf->btf = btf;
 		mod_btf->id = id;
@@ -5889,6 +5889,7 @@ static int load_module_btfs(struct bpf_object *obj)
 			err = -ENOMEM;
 			goto err_out;
 		}
+		obj->btf_module_cnt++;
 		continue;
 
 err_out:
