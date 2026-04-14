@@ -40,7 +40,7 @@ static const struct layout_btf layout_btf = {
 	.strs = "\0int",
 };
 
-void test_btf_sanitize_layout(void)
+static void test_btf_sanitize_layout(void)
 {
 	struct btf *orig = NULL, *sanitized = NULL;
 	struct kern_feature_cache *cache = NULL;
@@ -94,4 +94,66 @@ out:
 	kfree_skb__destroy(skel);
 	btf__free(sanitized);
 	btf__free(orig);
+}
+
+static void test_btf_sanitize_extended(void)
+{
+	struct btf *btf = NULL, *sanitized = NULL;
+	struct kern_feature_cache *cache = NULL;
+	struct kfree_skb *skel = NULL;
+	int i;
+
+	skel = kfree_skb__open();
+	if (!ASSERT_OK_PTR(skel, "kfree_skb_skel"))
+		return;
+
+	cache = calloc(1, sizeof(*cache));
+	if (!ASSERT_OK_PTR(cache, "alloc_feat_cache"))
+		goto out;
+	for (i = 0; i < __FEAT_CNT; i++)
+		cache->res[i] = FEAT_SUPPORTED;
+	cache->res[FEAT_BTF_VLEN_KIND_EXTENDED] = FEAT_MISSING;
+
+	bpf_object_set_feat_cache(skel->obj, cache);
+
+	if (!ASSERT_FALSE(kernel_supports(skel->obj, FEAT_BTF_VLEN_KIND_EXTENDED),
+			  "vlen_kind_extended_feature_missing"))
+		goto out;
+	if (!ASSERT_TRUE(kernel_supports(skel->obj, FEAT_BTF_FUNC), "other_feature_allowed"))
+		goto out;
+
+	btf = btf__new_empty();
+	if (!ASSERT_OK_PTR(btf, "empty_btf"))
+		goto out;
+	btf__add_int(btf, "int", 4, BTF_INT_SIGNED);
+	btf__add_var(btf, "var1", 0, 1);
+	btf__add_datasec(btf, "datasec1", BTF_MAX_VLEN);
+	for (i = 0; i <= 0xffff; i++)
+		btf__add_datasec_var_info(btf, 2, i * 4, 4);
+
+	/* Sanitization should fail here as vlen surpasses unextended limit. */
+	sanitized = bpf_object__sanitize_btf(skel->obj, btf);
+	if (!ASSERT_ERR_PTR(sanitized, "bpf_object__sanitize_btf_should_fail")) {
+		sanitized = NULL;
+		goto out;
+	}
+	/* Now switch extended feature on and ensure success. */
+	cache->res[FEAT_BTF_VLEN_KIND_EXTENDED] = FEAT_SUPPORTED;
+	sanitized = bpf_object__sanitize_btf(skel->obj, btf);
+	if (!ASSERT_OK_PTR(sanitized, "bpf_object__sanitize_btf_should_succeed"))
+		sanitized = NULL;
+
+out:
+	/* This will free the cache we allocated above */
+	kfree_skb__destroy(skel);
+	btf__free(btf);
+	btf__free(sanitized);
+}
+
+void test_btf_sanitize(void)
+{
+	if (test__start_subtest("layout"))
+		test_btf_sanitize_layout();
+	if (test__start_subtest("extended"))
+		test_btf_sanitize_extended();
 }
