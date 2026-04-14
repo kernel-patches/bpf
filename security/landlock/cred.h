@@ -13,6 +13,7 @@
 #include <linux/container_of.h>
 #include <linux/cred.h>
 #include <linux/init.h>
+#include <linux/landlock.h>
 #include <linux/rcupdate.h>
 
 #include "access.h"

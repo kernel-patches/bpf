@@ -27,6 +27,80 @@
 #include "limits.h"
 #include "object.h"
 #include "ruleset.h"
+#include "setup.h"
+#include "tsync.h"
+
+static int fop_ruleset_release(struct inode *const inode,
+			       struct file *const filp)
+{
+	struct landlock_ruleset *ruleset = filp->private_data;
+
+	landlock_put_ruleset(ruleset);
+	return 0;
+}
+
+static ssize_t fop_dummy_read(struct file *const filp, char __user *const buf,
+			      const size_t size, loff_t *const ppos)
+{
+	/* Dummy handler to enable FMODE_CAN_READ. */
+	return -EINVAL;
+}
+
+static ssize_t fop_dummy_write(struct file *const filp,
+			       const char __user *const buf, const size_t size,
+			       loff_t *const ppos)
+{
+	/* Dummy handler to enable FMODE_CAN_WRITE. */
+	return -EINVAL;
+}
+
+/*
+ * A ruleset file descriptor enables to build a ruleset by adding (i.e.
+ * writing) rule after rule, without relying on the task's context.  This
+ * reentrant design is also used in a read way to enforce the ruleset on the
+ * current task.
+ */
+const struct file_operations ruleset_fops = {
+	.release = fop_ruleset_release,
+	.read = fop_dummy_read,
+	.write = fop_dummy_write,
+};
+
+/*
+ * Returns an owned ruleset from a FD. It is thus needed to call
+ * landlock_put_ruleset() on the return value.
+ */
+struct landlock_ruleset *landlock_get_ruleset_from_fd(const int fd,
+						      const fmode_t mode)
+{
+	CLASS(fd, ruleset_f)(fd);
+	struct landlock_ruleset *ruleset;
+
+	if (fd_empty(ruleset_f))
+		return ERR_PTR(-EBADF);
+
+	/* Checks FD type and access right. */
+	if (fd_file(ruleset_f)->f_op != &ruleset_fops)
+		return ERR_PTR(-EBADFD);
+	if (!(fd_file(ruleset_f)->f_mode & mode))
+		return ERR_PTR(-EPERM);
+	ruleset = fd_file(ruleset_f)->private_data;
+	if (WARN_ON_ONCE(ruleset->num_layers != 1))
+		return ERR_PTR(-EINVAL);
+	landlock_get_ruleset(ruleset);
+	return ruleset;
+}
+
+void landlock_get_ruleset(struct landlock_ruleset *const ruleset)
+{
+	if (ruleset)
+		refcount_inc(&ruleset->usage);
+}
+
+bool landlock_try_get_ruleset(struct landlock_ruleset *const ruleset)
+{
+	return ruleset && refcount_inc_not_zero(&ruleset->usage);
+}
 
 static struct landlock_ruleset *create_ruleset(const u32 num_layers)
 {
@@ -582,6 +656,105 @@ landlock_merge_ruleset(struct landlock_ruleset *const parent,
 		return ERR_PTR(err);
 
 	return no_free_ptr(new_dom);
+}
+
+int landlock_restrict_cred_precheck(const __u32 flags,
+				    const bool in_task_context)
+{
+	if (!landlock_initialized)
+		return -EOPNOTSUPP;
+
+	/*
+	 * LANDLOCK_RESTRICT_SELF_TSYNC requires that the current task is
+	 * the target of restriction.
+	 */
+	if ((flags & LANDLOCK_RESTRICT_SELF_TSYNC) && !in_task_context)
+		return -EINVAL;
+
+	/*
+	 * Similar checks as for seccomp(2), except that an -EPERM may be
+	 * returned.
+	 */
+	if (in_task_context) {
+		if (!task_no_new_privs(current) &&
+		    !ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN))
+			return -EPERM;
+	}
+
+	if (flags & ~LANDLOCK_MASK_RESTRICT_SELF)
+		return -EINVAL;
+
+	return 0;
+}
+
+int landlock_restrict_cred(struct cred *const cred,
+			   struct landlock_ruleset *const ruleset,
+			   const __u32 flags, const bool in_task_context)
+{
+	struct landlock_cred_security *new_llcred;
+#ifdef CONFIG_AUDIT
+	const bool log_same_exec =
+		!(flags & LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF);
+	const bool log_new_exec =
+		!!(flags & LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON);
+	const bool log_subdomains =
+		!(flags & LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF);
+	bool prev_log_subdomains;
+#endif /* CONFIG_AUDIT */
+	/*
+	 * It is allowed to set LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF without
+	 * a ruleset, optionally combined with LANDLOCK_RESTRICT_SELF_TSYNC, but
+	 * no other flag must be set.
+	 */
+	if (!ruleset && (flags & ~LANDLOCK_RESTRICT_SELF_TSYNC) !=
+				LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF)
+		return -EINVAL;
+
+	new_llcred = landlock_cred(cred);
+
+#ifdef CONFIG_AUDIT
+	prev_log_subdomains = !new_llcred->log_subdomains_off;
+	new_llcred->log_subdomains_off = !prev_log_subdomains ||
+					 !log_subdomains;
+#endif /* CONFIG_AUDIT */
+	/*
+	 * The only case when a ruleset may not be set is if
+	 * LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF is set, optionally combined
+	 * with LANDLOCK_RESTRICT_SELF_TSYNC.
+	 * We could optimize this case by not committing @cred if this flag was
+	 * already set, but it is not worth the complexity.
+	 */
+	if (ruleset) {
+		struct landlock_ruleset *const new_dom =
+			landlock_merge_ruleset(new_llcred->domain, ruleset);
+
+		if (IS_ERR(new_dom))
+			return PTR_ERR(new_dom);
+
+#ifdef CONFIG_AUDIT
+		new_dom->hierarchy->log_same_exec = log_same_exec;
+		new_dom->hierarchy->log_new_exec = log_new_exec;
+		if ((!log_same_exec && !log_new_exec) || !prev_log_subdomains)
+			new_dom->hierarchy->log_status = LANDLOCK_LOG_DISABLED;
+#endif /* CONFIG_AUDIT */
+
+		landlock_put_ruleset(new_llcred->domain);
+		new_llcred->domain = new_dom;
+
+#ifdef CONFIG_AUDIT
+		new_llcred->domain_exec |= BIT(new_dom->num_layers - 1);
+#endif /* CONFIG_AUDIT */
+	}
+
+	if (flags & LANDLOCK_RESTRICT_SELF_TSYNC) {
+		const int tsync_err =
+			landlock_restrict_sibling_threads(current_cred(), cred);
+
+		if (tsync_err)
+			return tsync_err;
+	}
+
+	return 0;
 }
 
 /*

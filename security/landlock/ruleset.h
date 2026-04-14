@@ -21,6 +21,9 @@
 #include "object.h"
 
 struct landlock_hierarchy;
+struct file_operations;
+
+extern const struct file_operations ruleset_fops;
 
 /**
  * struct landlock_layer - Access rights for a given layer
@@ -194,6 +197,7 @@ landlock_create_ruleset(const access_mask_t access_mask_fs,
 			const access_mask_t access_mask_net,
 			const access_mask_t scope_mask);
 
+void landlock_get_ruleset(struct landlock_ruleset *const ruleset);
 void landlock_put_ruleset(struct landlock_ruleset *const ruleset);
 void landlock_put_ruleset_deferred(struct landlock_ruleset *const ruleset);
 
@@ -211,12 +215,6 @@ landlock_merge_ruleset(struct landlock_ruleset *const parent,
 const struct landlock_rule *
 landlock_find_rule(const struct landlock_ruleset *const ruleset,
 		   const struct landlock_id id);
-
-static inline void landlock_get_ruleset(struct landlock_ruleset *const ruleset)
-{
-	if (ruleset)
-		refcount_inc(&ruleset->usage);
-}
 
 /**
  * landlock_union_access_masks - Return all access rights handled in the
