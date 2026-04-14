@@ -475,6 +475,7 @@ static void bpf_skops_hdr_opt_len(struct sock *sk, struct sk_buff *skb,
 				  unsigned int *remaining)
 {
 	struct bpf_sock_ops_kern sock_ops;
+	struct tcp_sock *tp = tcp_sk(sk);
 	int err;
 
 	if (likely(!BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk),
@@ -519,7 +520,9 @@ static void bpf_skops_hdr_opt_len(struct sock *sk, struct sk_buff *skb,
 	if (skb)
 		bpf_skops_init_skb(&sock_ops, skb, 0);
 
+	tp->bpf_hdr_opt_len_cb_inprogress = 1;
 	err = BPF_CGROUP_RUN_PROG_SOCK_OPS_SK(&sock_ops, sk);
+	tp->bpf_hdr_opt_len_cb_inprogress = 0;
 
 	if (err || sock_ops.remaining_opt_len == *remaining)
 		return;

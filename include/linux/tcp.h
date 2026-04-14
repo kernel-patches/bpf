@@ -475,12 +475,21 @@ struct tcp_sock {
 	u8	bpf_sock_ops_cb_flags;  /* Control calling BPF programs
 					 * values defined in uapi/linux/tcp.h
 					 */
-	u8	bpf_chg_cc_inprogress:1; /* In the middle of
+	u8	bpf_chg_cc_inprogress:1, /* In the middle of
 					  * bpf_setsockopt(TCP_CONGESTION),
 					  * it is to avoid the bpf_tcp_cc->init()
 					  * to recur itself by calling
 					  * bpf_setsockopt(TCP_CONGESTION, "itself").
 					  */
+		bpf_hdr_opt_len_cb_inprogress:1; /* It is set before invoking the
+						  * callback so that a nested
+						  * bpf_setsockopt(TCP_NODELAY) or
+						  * bpf_setsockopt(TCP_CORK) cannot
+						  * trigger tcp_push_pending_frames(),
+						  * which would call tcp_current_mss()
+						  * -> bpf_skops_hdr_opt_len(), causing
+						  * infinite recursion.
+						  */
 #define BPF_SOCK_OPS_TEST_FLAG(TP, ARG) (TP->bpf_sock_ops_cb_flags & ARG)
 #else
 #define BPF_SOCK_OPS_TEST_FLAG(TP, ARG) 0

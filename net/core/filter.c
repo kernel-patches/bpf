@@ -5483,6 +5483,10 @@ static int sol_tcp_sockopt(struct sock *sk, int optname,
 	if (sk->sk_protocol != IPPROTO_TCP)
 		return -EINVAL;
 
+	if ((optname == TCP_NODELAY || optname == TCP_CORK) &&
+	    tcp_sk(sk)->bpf_hdr_opt_len_cb_inprogress)
+		return -EBUSY;
+
 	switch (optname) {
 	case TCP_NODELAY:
 	case TCP_MAXSEG:

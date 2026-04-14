@@ -663,6 +663,7 @@ struct sock *tcp_create_openreq_child(const struct sock *sk,
 	RCU_INIT_POINTER(newtp->fastopen_rsk, NULL);
 
 	newtp->bpf_chg_cc_inprogress = 0;
+	newtp->bpf_hdr_opt_len_cb_inprogress = 0;
 	tcp_bpf_clone(sk, newsk);
 
 	__TCP_INC_STATS(sock_net(sk), TCP_MIB_PASSIVEOPENS);

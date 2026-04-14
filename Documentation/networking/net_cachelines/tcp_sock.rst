@@ -152,6 +152,7 @@ unsigned_int                  keepalive_intvl
 int                           linger2
 u8                            bpf_sock_ops_cb_flags
 u8:1                          bpf_chg_cc_inprogress
+u8:1                          bpf_hdr_opt_len_cb_inprogress
 u16                           timeout_rehash
 u32                           rcv_ooopack
 u32                           rcv_rtt_last_tsecr
