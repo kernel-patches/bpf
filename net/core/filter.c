@@ -5531,6 +5531,10 @@ static int sol_tcp_sockopt(struct sock *sk, int optname,
 					 KERNEL_SOCKPTR(optlen));
 	}
 
+	if (optname == TCP_NODELAY &&
+	    unlikely(BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk), BPF_SOCK_OPS_WRITE_HDR_OPT_CB_FLAG)))
+		return -EOPNOTSUPP;
+
 	return do_tcp_setsockopt(sk, SOL_TCP, optname,
 				 KERNEL_SOCKPTR(optval), *optlen);
 }
