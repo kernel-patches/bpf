@@ -584,16 +584,17 @@ static void free_ruleset_work(struct work_struct *const work)
 {
 	struct landlock_ruleset *ruleset;
 
-	ruleset = container_of(work, struct landlock_ruleset, work_free);
+	ruleset = container_of(to_rcu_work(work), struct landlock_ruleset,
+			       work_free);
 	free_ruleset(ruleset);
 }
 
-/* Only called by hook_cred_free(). */
+/* Called by deferred ruleset owners that cannot free from their context. */
 void landlock_put_ruleset_deferred(struct landlock_ruleset *const ruleset)
 {
 	if (ruleset && refcount_dec_and_test(&ruleset->usage)) {
-		INIT_WORK(&ruleset->work_free, free_ruleset_work);
-		schedule_work(&ruleset->work_free);
+		INIT_RCU_WORK(&ruleset->work_free, free_ruleset_work);
+		queue_rcu_work(system_wq, &ruleset->work_free);
 	}
 }
 
