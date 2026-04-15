@@ -88,6 +88,7 @@ xe-y += xe_bb.o \
 	xe_irq.o \
 	xe_late_bind_fw.o \
 	xe_lrc.o \
+	xe_mem_pool.o \
 	xe_migrate.o \
 	xe_mmio.o \
 	xe_mmio_gem.o \
@@ -123,6 +124,8 @@ xe-y += xe_bb.o \
 	xe_step.o \
 	xe_survivability_mode.o \
 	xe_sync.o \
+	xe_sysctrl.o \
+	xe_sysctrl_mailbox.o \
 	xe_tile.o \
 	xe_tile_sysfs.o \
 	xe_tlb_inval.o \
