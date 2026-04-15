@@ -2184,4 +2184,29 @@ __naked void tnums_equal_impossible_constant(void *ctx)
 	: __clobber_all);
 }
 
+SEC("socket")
+__description("dead branch: tnum and u64 don't intersect on true branch")
+__success
+__naked void empty_tnum_u64_intersection(void *ctx)
+{
+	asm volatile("									\
+	call %[bpf_get_prandom_u32];							\
+	r6 = r0;									\
+	r1 = 0xe00000002 ll;								\
+	r2 = 0xf00000000 ll;								\
+	if r6 s< r1 goto +2;								\
+	/* On fallthrough, r6's u64=[0xe00000002;0xf00000000] */			\
+	/*                      tnum=(0xe00000000; 0x1ffffffff) */			\
+	if r6 s> r2 goto +1;								\
+	/* On fallthrough, r6's tnum=(0xe00000001; 0x100000000) */			\
+	/* It doesn't intersect with the u64 so the condition is always false */	\
+	if w6 == 1 goto +1;								\
+	exit;										\
+	r10 = 0;									\
+	exit;										\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
