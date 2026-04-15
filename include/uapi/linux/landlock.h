@@ -145,6 +145,21 @@ struct landlock_ruleset_attr {
  *    This flag is not inherited by the new execution, but the resulting
  *    no_new_privs state is.  This flag is mutually exclusive with
  *    %LANDLOCK_RESTRICT_SELF_TSYNC.
+ *
+ *
+ * %LANDLOCK_RESTRICT_SELF_EXECTIME
+ *    Defers ruleset enforcement to the point of no return during the next
+ *    :manpage:`execve(2)` call.  This flag may only be specified through
+ *    landlock_restrict_self().  When this flag is set, a snapshot of the
+ *    requested ruleset is stored in the current credentials.  Repeated calls
+ *    to landlock_restrict_self() replace the previously stored snapshot.
+ *
+ *    During :manpage:`execve(2)`, once successful execution is guaranteed, the
+ *    prepared domain is enforced for the new execution.
+ *
+ *    This allows userspace to prepare a domain for the next execve(2).  It
+ *    may be combined with the other landlock_restrict_self() flags, except
+ *    %LANDLOCK_RESTRICT_SELF_TSYNC.
  */
 /* clang-format off */
 #define LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF		(1U << 0)
@@ -152,6 +167,7 @@ struct landlock_ruleset_attr {
 #define LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF		(1U << 2)
 #define LANDLOCK_RESTRICT_SELF_TSYNC				(1U << 3)
 #define LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME			(1U << 4)
+#define LANDLOCK_RESTRICT_SELF_EXECTIME				(1U << 5)
 /* clang-format on */
 
 /**

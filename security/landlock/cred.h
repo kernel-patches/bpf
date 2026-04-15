@@ -38,9 +38,23 @@ struct landlock_cred_security {
 	struct landlock_ruleset *domain;
 	/**
 	 * @pending_userspace_flags: Restriction flags to commit during the next
-	 * successful execve(2).
+	 * successful execve(2).  When @pending_userspace_domain is set, these
+	 * flags are also associated with that staged ruleset.
 	 */
 	u32 pending_userspace_flags;
+	/**
+	 * @pending_userspace_domain: Snapshot of the ruleset requested with
+	 * LANDLOCK_RESTRICT_SELF_EXECTIME.  This staged ruleset is used to build
+	 * @pending_domain and is NULL otherwise.
+	 */
+	struct landlock_ruleset *pending_userspace_domain;
+	/**
+	 * @pending_domain: Prepared domain to enforce on the next successful
+	 * execve(2).  This is built from the current domain and
+	 * @pending_userspace_domain when LANDLOCK_RESTRICT_SELF_EXECTIME is set,
+	 * and is NULL otherwise.
+	 */
+	struct landlock_ruleset *pending_domain;
 
 #ifdef CONFIG_AUDIT
 	/**
@@ -78,10 +92,14 @@ static inline void landlock_cred_copy(struct landlock_cred_security *dst,
 				      const struct landlock_cred_security *src)
 {
 	landlock_put_ruleset(dst->domain);
+	landlock_put_ruleset(dst->pending_userspace_domain);
+	landlock_put_ruleset(dst->pending_domain);
 
 	*dst = *src;
 
 	landlock_get_ruleset(src->domain);
+	landlock_get_ruleset(src->pending_userspace_domain);
+	landlock_get_ruleset(src->pending_domain);
 }
 
 static inline struct landlock_ruleset *landlock_get_current_domain(void)

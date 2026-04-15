@@ -659,6 +659,101 @@ landlock_merge_ruleset(struct landlock_ruleset *const parent,
 	return no_free_ptr(new_dom);
 }
 
+static void
+landlock_apply_log_flags(struct landlock_ruleset *const domain,
+			 const __u32 flags,
+			 const bool parent_logs_subdomains)
+{
+#ifdef CONFIG_AUDIT
+	const bool log_same_exec =
+		!(flags & LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF);
+	const bool log_new_exec =
+		!!(flags & LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON);
+
+	domain->hierarchy->log_same_exec = log_same_exec;
+	domain->hierarchy->log_new_exec = log_new_exec;
+	if ((!log_same_exec && !log_new_exec) || !parent_logs_subdomains)
+		domain->hierarchy->log_status = LANDLOCK_LOG_DISABLED;
+#endif /* CONFIG_AUDIT */
+}
+
+static bool landlock_logs_subdomains(const __u32 flags)
+{
+	return !(flags & LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF);
+}
+
+static struct landlock_ruleset *
+landlock_clone_pending_domain(struct landlock_ruleset *const ruleset)
+{
+	struct landlock_ruleset *clone __free(landlock_put_ruleset) = NULL;
+	int err;
+	u16 layer_level;
+
+	if (!ruleset)
+		return ERR_PTR(-EINVAL);
+	if (WARN_ON_ONCE(ruleset->hierarchy))
+		return ERR_PTR(-EINVAL);
+
+	clone = create_ruleset(ruleset->num_layers);
+	if (IS_ERR(clone))
+		return clone;
+
+	mutex_lock(&clone->lock);
+	mutex_lock_nested(&ruleset->lock, SINGLE_DEPTH_NESTING);
+
+	err = inherit_tree(ruleset, clone, LANDLOCK_KEY_INODE);
+	if (err)
+		goto out_unlock;
+
+#if IS_ENABLED(CONFIG_INET)
+	err = inherit_tree(ruleset, clone, LANDLOCK_KEY_NET_PORT);
+	if (err)
+		goto out_unlock;
+#endif /* IS_ENABLED(CONFIG_INET) */
+
+	for (layer_level = 0; layer_level < ruleset->num_layers; layer_level++) {
+		landlock_add_fs_access_mask(
+			clone, ruleset->access_masks[layer_level].fs, layer_level);
+#if IS_ENABLED(CONFIG_INET)
+		landlock_add_net_access_mask(
+			clone, ruleset->access_masks[layer_level].net,
+			layer_level);
+#endif /* IS_ENABLED(CONFIG_INET) */
+		landlock_add_scope_mask(
+			clone, ruleset->access_masks[layer_level].scope,
+			layer_level);
+	}
+
+out_unlock:
+	mutex_unlock(&ruleset->lock);
+	mutex_unlock(&clone->lock);
+	if (err)
+		return ERR_PTR(err);
+
+	return no_free_ptr(clone);
+}
+
+static int
+landlock_prepare_pending_domain(struct landlock_ruleset **const dst,
+				struct landlock_ruleset *const parent,
+				struct landlock_ruleset *const ruleset,
+				const __u32 flags,
+				const bool parent_logs_subdomains)
+{
+	struct landlock_ruleset *prepared __free(landlock_put_ruleset) = NULL;
+
+	prepared = landlock_merge_ruleset(parent, ruleset);
+	if (IS_ERR(prepared))
+		return PTR_ERR(prepared);
+
+	landlock_apply_log_flags(prepared, flags, parent_logs_subdomains);
+
+	landlock_put_ruleset(*dst);
+	*dst = no_free_ptr(prepared);
+	return 0;
+}
+
+
 int landlock_prepare_exec_creds(struct cred *const cred)
 {
 	struct landlock_cred_security *const llcred = landlock_cred(cred);
@@ -677,6 +772,20 @@ void landlock_commit_exec_creds(struct cred *const cred)
 	if (llcred->pending_userspace_flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME)
 		task_set_no_new_privs(current);
 
+	if (llcred->pending_domain) {
+		landlock_put_ruleset(llcred->domain);
+		llcred->domain = llcred->pending_domain;
+		llcred->pending_domain = NULL;
+
+#ifdef CONFIG_AUDIT
+		llcred->log_subdomains_off =
+			!(!landlock_cred(current_cred())->log_subdomains_off &&
+			  landlock_logs_subdomains(llcred->pending_userspace_flags));
+#endif /* CONFIG_AUDIT */
+	}
+
+	landlock_put_ruleset(llcred->pending_userspace_domain);
+	llcred->pending_userspace_domain = NULL;
 	llcred->pending_userspace_flags = 0;
 }
 
@@ -692,6 +801,8 @@ int landlock_restrict_cred_precheck(const __u32 flags,
 	 */
 	if ((flags & LANDLOCK_RESTRICT_SELF_TSYNC) && !in_task_context)
 		return -EINVAL;
+	if ((flags & LANDLOCK_RESTRICT_SELF_EXECTIME) && !in_task_context)
+		return -EINVAL;
 
 	/*
 	 * Similar checks as for seccomp(2), except that an -EPERM may be
@@ -704,7 +815,8 @@ int landlock_restrict_cred_precheck(const __u32 flags,
 	}
 
 	if ((flags & LANDLOCK_RESTRICT_SELF_TSYNC) &&
-	    (flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME))
+	    (flags & (LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME |
+		      LANDLOCK_RESTRICT_SELF_EXECTIME)))
 		return -EINVAL;
 
 	if (flags & ~LANDLOCK_MASK_RESTRICT_SELF)
@@ -717,61 +829,97 @@ int landlock_restrict_cred(struct cred *const cred,
 			   struct landlock_ruleset *const ruleset,
 			   const __u32 flags, const bool in_task_context)
 {
-	struct landlock_cred_security *new_llcred;
+	struct landlock_cred_security *const new_llcred = landlock_cred(cred);
+	const bool stage_domain =
+		in_task_context && (flags & LANDLOCK_RESTRICT_SELF_EXECTIME);
+	int err;
 #ifdef CONFIG_AUDIT
-	const bool log_same_exec =
-		!(flags & LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF);
-	const bool log_new_exec =
-		!!(flags & LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON);
 	const bool log_subdomains =
 		!(flags & LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF);
-	bool prev_log_subdomains;
+	bool prev_log_subdomains = false;
+	bool parent_logs_subdomains;
 #endif /* CONFIG_AUDIT */
+
 	/*
 	 * It is allowed to set LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF without
 	 * a ruleset, optionally combined with LANDLOCK_RESTRICT_SELF_TSYNC, but
 	 * no other flag must be set.
 	 */
 	if (!ruleset && (flags & ~LANDLOCK_RESTRICT_SELF_TSYNC) !=
-				LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF)
+				 LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF)
 		return -EINVAL;
 
-	new_llcred = landlock_cred(cred);
-	new_llcred->pending_userspace_flags =
-		flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME;
+	if (stage_domain) {
+		struct landlock_ruleset *const new_pending_domain =
+			landlock_clone_pending_domain(ruleset);
+
+		if (IS_ERR(new_pending_domain))
+			return PTR_ERR(new_pending_domain);
+
+		landlock_put_ruleset(new_llcred->pending_userspace_domain);
+		new_llcred->pending_userspace_domain = new_pending_domain;
+		new_llcred->pending_userspace_flags = flags;
+	} else {
+		new_llcred->pending_userspace_flags &=
+			~LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME;
+		new_llcred->pending_userspace_flags |=
+			flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME;
 #ifdef CONFIG_AUDIT
-	prev_log_subdomains = !new_llcred->log_subdomains_off;
-	new_llcred->log_subdomains_off = !prev_log_subdomains ||
-					 !log_subdomains;
+		prev_log_subdomains = !new_llcred->log_subdomains_off;
+		new_llcred->log_subdomains_off =
+			!prev_log_subdomains || !log_subdomains;
 #endif /* CONFIG_AUDIT */
 
-	/*
-	 * The only case when a ruleset may not be set is if
-	 * LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF is set, optionally combined
-	 * with LANDLOCK_RESTRICT_SELF_TSYNC.
-	 * We could optimize this case by not committing @cred if this flag was
-	 * already set, but it is not worth the complexity.
-	 */
-	if (ruleset) {
-		struct landlock_ruleset *const new_dom =
-			landlock_merge_ruleset(new_llcred->domain, ruleset);
+		/*
+		 * The only case when a ruleset may not be set is if
+		 * LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF is set, optionally
+		 * combined with LANDLOCK_RESTRICT_SELF_TSYNC.
+		 * We could optimize this case by not committing @cred if this flag
+		 * was already set, but it is not worth the complexity.
+		 */
+		if (ruleset) {
+			struct landlock_ruleset *const new_dom =
+				landlock_merge_ruleset(new_llcred->domain, ruleset);
 
-		if (IS_ERR(new_dom))
-			return PTR_ERR(new_dom);
-
-#ifdef CONFIG_AUDIT
-		new_dom->hierarchy->log_same_exec = log_same_exec;
-		new_dom->hierarchy->log_new_exec = log_new_exec;
-		if ((!log_same_exec && !log_new_exec) || !prev_log_subdomains)
-			new_dom->hierarchy->log_status = LANDLOCK_LOG_DISABLED;
-#endif /* CONFIG_AUDIT */
-
-		landlock_put_ruleset(new_llcred->domain);
-		new_llcred->domain = new_dom;
+			if (IS_ERR(new_dom))
+				return PTR_ERR(new_dom);
 
 #ifdef CONFIG_AUDIT
-		new_llcred->domain_exec |= BIT(new_dom->num_layers - 1);
+			landlock_apply_log_flags(new_dom, flags,
+						 prev_log_subdomains);
 #endif /* CONFIG_AUDIT */
+
+			landlock_put_ruleset(new_llcred->domain);
+			new_llcred->domain = new_dom;
+
+#ifdef CONFIG_AUDIT
+			new_llcred->domain_exec |= BIT(new_dom->num_layers - 1);
+#endif /* CONFIG_AUDIT */
+		}
+	}
+
+	if (new_llcred->pending_userspace_domain) {
+#ifdef CONFIG_AUDIT
+		parent_logs_subdomains = !new_llcred->log_subdomains_off;
+		err = landlock_prepare_pending_domain(
+			&new_llcred->pending_domain, new_llcred->domain,
+			new_llcred->pending_userspace_domain,
+			new_llcred->pending_userspace_flags,
+			parent_logs_subdomains);
+#else
+		err = landlock_prepare_pending_domain(
+			&new_llcred->pending_domain, new_llcred->domain,
+			new_llcred->pending_userspace_domain,
+			new_llcred->pending_userspace_flags, true);
+#endif /* CONFIG_AUDIT */
+		if (err)
+			return err;
+	} else {
+		landlock_put_ruleset(new_llcred->pending_domain);
+		new_llcred->pending_domain = NULL;
+		if (!(new_llcred->pending_userspace_flags &
+		      LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME))
+			new_llcred->pending_userspace_flags = 0;
 	}
 
 	if (flags & LANDLOCK_RESTRICT_SELF_TSYNC) {

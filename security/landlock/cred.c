@@ -35,10 +35,13 @@ static int hook_cred_prepare(struct cred *const new,
 
 static void hook_cred_free(struct cred *const cred)
 {
-	struct landlock_ruleset *const dom = landlock_cred(cred)->domain;
-
-	if (dom)
-		landlock_put_ruleset_deferred(dom);
+	if (landlock_cred(cred)->domain)
+		landlock_put_ruleset_deferred(landlock_cred(cred)->domain);
+	if (landlock_cred(cred)->pending_userspace_domain)
+		landlock_put_ruleset_deferred(
+			landlock_cred(cred)->pending_userspace_domain);
+	if (landlock_cred(cred)->pending_domain)
+		landlock_put_ruleset_deferred(landlock_cred(cred)->pending_domain);
 }
 
 static void hook_bprm_committing_creds(const struct linux_binprm *bprm)
