@@ -1045,11 +1045,6 @@ struct amdgpu_device {
 	struct amdgpu_mqd               mqds[AMDGPU_HW_IP_NUM];
 	const struct amdgpu_userq_funcs *userq_funcs[AMDGPU_HW_IP_NUM];
 
-	/* xarray used to retrieve the user queue fence driver reference
-	 * in the EOP interrupt handler to signal the particular user
-	 * queue fence.
-	 */
-	struct xarray			userq_xa;
 	/**
 	 * @userq_doorbell_xa: Global user queue map (doorbell index → queue)
 	 * Key: doorbell_index (unique global identifier for the queue)
@@ -1467,6 +1462,8 @@ ssize_t amdgpu_get_soft_full_reset_mask(struct amdgpu_ring *ring);
 ssize_t amdgpu_show_reset_mask(char *buf, uint32_t supported_reset);
 void amdgpu_sdma_set_vm_pte_scheds(struct amdgpu_device *adev,
 				   const struct amdgpu_vm_pte_funcs *vm_pte_funcs);
+void amdgpu_sdma_set_buffer_funcs_scheds(struct amdgpu_device *adev,
+					 const struct amdgpu_buffer_funcs *buffer_funcs);
 
 /* atpx handler */
 #if defined(CONFIG_VGA_SWITCHEROO)
