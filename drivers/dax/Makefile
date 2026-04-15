@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
+obj-y += hmem/
 obj-$(CONFIG_DAX) += dax.o
 obj-$(CONFIG_DEV_DAX) += device_dax.o
 obj-$(CONFIG_DEV_DAX_KMEM) += kmem.o
@@ -12,5 +13,3 @@ device_dax-y := device.o
 dax_pmem-y := pmem.o
 dax_cxl-y := cxl.o
 fsdev_dax-y := fsdev.o
-
-obj-y += hmem/
