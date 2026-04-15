@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <malloc.h>
 #include <stdlib.h>
+#include <linux/compiler.h>
 #include <test_progs.h>
 #include "cgroup_helpers.h"
 
@@ -201,8 +202,6 @@ static void subtest_task_iters(void)
 cleanup:
 	iters_task__destroy(skel);
 }
-
-extern int stack_mprotect(void);
 
 static void subtest_css_task_iters(void)
 {
