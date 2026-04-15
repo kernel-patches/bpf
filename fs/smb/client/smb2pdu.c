@@ -36,7 +36,6 @@
 #include "../common/smb2status.h"
 #include "smb2glob.h"
 #include "cifs_spnego.h"
-#include "../common/smbdirect/smbdirect.h"
 #include "smbdirect.h"
 #include "trace.h"
 #ifdef CONFIG_CIFS_DFS_UPCALL
@@ -4554,9 +4553,7 @@ smb2_new_read_req(void **buf, unsigned int *total_len,
 		req->ReadChannelInfoLength =
 			cpu_to_le16(sizeof(struct smbdirect_buffer_descriptor_v1));
 		v1 = (struct smbdirect_buffer_descriptor_v1 *) &req->Buffer[0];
-		v1->offset = cpu_to_le64(rdata->mr->mr->iova);
-		v1->token = cpu_to_le32(rdata->mr->mr->rkey);
-		v1->length = cpu_to_le32(rdata->mr->mr->length);
+		smbd_mr_fill_buffer_descriptor(rdata->mr, v1);
 
 		*total_len += sizeof(*v1) - 1;
 	}
@@ -5155,9 +5152,7 @@ smb2_async_writev(struct cifs_io_subrequest *wdata)
 		req->WriteChannelInfoLength =
 			cpu_to_le16(sizeof(struct smbdirect_buffer_descriptor_v1));
 		v1 = (struct smbdirect_buffer_descriptor_v1 *) &req->Buffer[0];
-		v1->offset = cpu_to_le64(wdata->mr->mr->iova);
-		v1->token = cpu_to_le32(wdata->mr->mr->rkey);
-		v1->length = cpu_to_le32(wdata->mr->mr->length);
+		smbd_mr_fill_buffer_descriptor(wdata->mr, v1);
 
 		rqst.rq_iov[0].iov_len += sizeof(*v1);
 
@@ -6147,8 +6142,8 @@ replay_again:
 		max_len = sizeof(struct smb3_fs_ss_info);
 		min_len = sizeof(struct smb3_fs_ss_info);
 	} else if (level == FS_VOLUME_INFORMATION) {
-		max_len = sizeof(struct smb3_fs_vol_info) + MAX_VOL_LABEL_LEN;
-		min_len = sizeof(struct smb3_fs_vol_info);
+		max_len = sizeof(struct filesystem_vol_info) + MAX_VOL_LABEL_LEN;
+		min_len = sizeof(struct filesystem_vol_info);
 	} else {
 		cifs_dbg(FYI, "Invalid qfsinfo level %d\n", level);
 		return -EINVAL;
@@ -6203,9 +6198,9 @@ replay_again:
 		tcon->perf_sector_size =
 			le32_to_cpu(ss_info->PhysicalBytesPerSectorForPerf);
 	} else if (level == FS_VOLUME_INFORMATION) {
-		struct smb3_fs_vol_info *vol_info = (struct smb3_fs_vol_info *)
+		struct filesystem_vol_info *vol_info = (struct filesystem_vol_info *)
 			(offset + (char *)rsp);
-		tcon->vol_serial_number = vol_info->VolumeSerialNumber;
+		tcon->vol_serial_number = le32_to_cpu(vol_info->VolumeSerialNumber);
 		tcon->vol_create_time = vol_info->VolumeCreationTime;
 	}
 
