@@ -452,6 +452,7 @@ static struct bpf_struct_ops bpf_Qdisc_ops = {
 	.init = bpf_qdisc_init,
 	.name = "Qdisc_ops",
 	.cfi_stubs = &__bpf_ops_qdisc_ops,
+	.free_after_rcu_gp = true,
 	.owner = THIS_MODULE,
 };
 
