@@ -19,6 +19,7 @@
 #include <linux/highmem.h>
 #include <linux/cleanup.h>
 #include <linux/uio.h>
+#include "dev.h"
 #include "fuse_i.h"
 #include "fuse_dev_i.h"
 
@@ -486,7 +487,7 @@ static void virtio_fs_free_devs(struct virtio_fs *fs)
 		if (!fsvq->fud)
 			continue;
 
-		fuse_dev_free(fsvq->fud);
+		fuse_dev_put(fsvq->fud);
 		fsvq->fud = NULL;
 	}
 }
@@ -758,6 +759,27 @@ static void copy_args_from_argbuf(struct fuse_args *args, struct fuse_req *req)
 	req->argbuf = NULL;
 }
 
+/* Verify that the server properly follows the FUSE protocol */
+static bool virtio_fs_verify_response(struct fuse_req *req, unsigned int len)
+{
+	struct fuse_out_header *oh = &req->out.h;
+
+	if (len < sizeof(*oh)) {
+		pr_warn("virtio-fs: response too short (%u)\n", len);
+		return false;
+	}
+	if (oh->len != len) {
+		pr_warn("virtio-fs: oh.len mismatch (%u != %u)\n", oh->len, len);
+		return false;
+	}
+	if (oh->unique != req->in.h.unique) {
+		pr_warn("virtio-fs: oh.unique mismatch (%llu != %llu)\n",
+			oh->unique, req->in.h.unique);
+		return false;
+	}
+	return true;
+}
+
 /* Work function for request completion */
 static void virtio_fs_request_complete(struct fuse_req *req,
 				       struct virtio_fs_vq *fsvq)
@@ -767,10 +789,6 @@ static void virtio_fs_request_complete(struct fuse_req *req,
 	unsigned int len, i, thislen;
 	struct folio *folio;
 
-	/*
-	 * TODO verify that server properly follows FUSE protocol
-	 * (oh.uniq, oh.len)
-	 */
 	args = req->args;
 	copy_args_from_argbuf(args, req);
 
@@ -824,6 +842,10 @@ static void virtio_fs_requests_done_work(struct work_struct *work)
 		virtqueue_disable_cb(vq);
 
 		while ((req = virtqueue_get_buf(vq, &len)) != NULL) {
+			if (!virtio_fs_verify_response(req, len)) {
+				req->out.h.error = -EIO;
+				req->out.h.len = sizeof(struct fuse_out_header);
+			}
 			spin_lock(&fpq->lock);
 			list_move_tail(&req->list, &reqs);
 			spin_unlock(&fpq->lock);
@@ -1498,7 +1520,7 @@ static void virtio_fs_send_req(struct fuse_iqueue *fiq, struct fuse_req *req)
 		if (ret == -ENOSPC) {
 			/*
 			 * Virtqueue full. Retry submission from worker
-			 * context as we might be holding fc->bg_lock.
+			 * context as we might be holding fc->chan->bg_lock.
 			 */
 			spin_lock(&fsvq->lock);
 			list_add_tail(&req->list, &fsvq->queued_reqs);
@@ -1541,7 +1563,7 @@ static int virtio_fs_fill_super(struct super_block *sb, struct fs_context *fsc)
 {
 	struct fuse_mount *fm = get_fuse_mount_super(sb);
 	struct fuse_conn *fc = fm->fc;
-	struct virtio_fs *fs = fc->iq.priv;
+	struct virtio_fs *fs = fc->chan->iq.priv;
 	struct fuse_fs_context *ctx = fsc->fs_private;
 	unsigned int i;
 	int err;
@@ -1569,8 +1591,6 @@ static int virtio_fs_fill_super(struct super_block *sb, struct fs_context *fsc)
 			goto err_free_fuse_devs;
 	}
 
-	/* virtiofs allocates and installs its own fuse devices */
-	ctx->fudptr = NULL;
 	if (ctx->dax_mode != FUSE_DAX_NEVER) {
 		if (ctx->dax_mode == FUSE_DAX_ALWAYS && !fs->dax_dev) {
 			err = -EINVAL;
@@ -1587,7 +1607,7 @@ static int virtio_fs_fill_super(struct super_block *sb, struct fs_context *fsc)
 	for (i = 0; i < fs->nvqs; i++) {
 		struct virtio_fs_vq *fsvq = &fs->vqs[i];
 
-		fuse_dev_install(fsvq->fud, fc);
+		fuse_dev_install(fsvq->fud, fc->chan);
 	}
 
 	/* Previous unmount will stop all queues. Start these again */
@@ -1606,7 +1626,7 @@ err:
 static void virtio_fs_conn_destroy(struct fuse_mount *fm)
 {
 	struct fuse_conn *fc = fm->fc;
-	struct virtio_fs *vfs = fc->iq.priv;
+	struct virtio_fs *vfs = fc->chan->iq.priv;
 	struct virtio_fs_vq *fsvq = &vfs->vqs[VQ_HIPRIO];
 
 	/* Stop dax worker. Soon evict_inodes() will be called which
@@ -1654,7 +1674,7 @@ static int virtio_fs_test_super(struct super_block *sb,
 	struct fuse_mount *fsc_fm = fsc->s_fs_info;
 	struct fuse_mount *sb_fm = get_fuse_mount_super(sb);
 
-	return fsc_fm->fc->iq.priv == sb_fm->fc->iq.priv;
+	return fsc_fm->fc->chan->iq.priv == sb_fm->fc->chan->iq.priv;
 }
 
 static int virtio_fs_get_tree(struct fs_context *fsc)
@@ -1664,13 +1684,17 @@ static int virtio_fs_get_tree(struct fs_context *fsc)
 	struct fuse_conn *fc = NULL;
 	struct fuse_mount *fm;
 	unsigned int virtqueue_size;
+	struct fuse_chan *fch __free(fuse_chan_free) = fuse_chan_new();
 	int err = -EIO;
+
+	if (!fch)
+		return -ENOMEM;
 
 	if (!fsc->source)
 		return invalf(fsc, "No source specified");
 
 	/* This gets a reference on virtio_fs object. This ptr gets installed
-	 * in fc->iq->priv. Once fuse_conn is going away, it calls ->put()
+	 * in chan->iq->priv. Once fuse_conn is going away, it calls ->put()
 	 * to drop the reference to this object.
 	 */
 	fs = virtio_fs_find_instance(fsc->source);
@@ -1692,7 +1716,9 @@ static int virtio_fs_get_tree(struct fs_context *fsc)
 	if (!fm)
 		goto out_err;
 
-	fuse_conn_init(fc, fm, fsc->user_ns, &virtio_fs_fiq_ops, fs);
+	fuse_iqueue_init(&fch->iq, &virtio_fs_fiq_ops, fs);
+	fuse_conn_init(fc, fm, fsc->user_ns, no_free_ptr(fch));
+
 	fc->release = fuse_free_conn;
 	fc->delete_stale = true;
 	fc->auto_submounts = true;
