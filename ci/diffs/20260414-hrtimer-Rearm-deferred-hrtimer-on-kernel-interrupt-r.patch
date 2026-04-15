@@ -1,0 +1,55 @@
+From 153443587b0985244039dcc556e5cf71f3ba401d Mon Sep 17 00:00:00 2001
+From: Alexei Starovoitov <ast@kernel.org>
+Date: Tue, 14 Apr 2026 21:42:04 -0700
+Subject: [PATCH] hrtimer: Rearm deferred hrtimer on kernel interrupt return
+ path
+
+0e98eb14814e ("entry: Prepare for deferred hrtimer rearming") added
+hrtimer_rearm_deferred() to irqentry_exit_to_kernel_mode(). Then
+041aa7a85390 ("entry: Split preemption from
+irqentry_exit_to_kernel_mode()") split that function into
+irqentry_exit_to_kernel_mode_preempt() and
+irqentry_exit_to_kernel_mode_after_preempt(). When the two were
+merged in c43267e6794a, hrtimer_rearm_deferred() ended up after the
+regs_irqs_disabled() early return in the _preempt() path.
+
+When the system is executing only in kernel mode (e.g. during boot),
+hrtimer interrupts return to kernel context exclusively. Without the
+rearm call on this path, the clock event device is never reprogrammed
+after the first hrtimer interrupt and the tick dies.
+
+On KVM guests this happens reliably because virtual interrupt
+injection timing causes the hrtimer interrupt to frequently arrive
+while the interrupted kernel code has IRQs disabled.
+
+Move hrtimer_rearm_deferred() before the early return.
+
+Fixes: c43267e6794a ("Merge tag 'arm64-upstream' of git://git.kernel.org/pub/scm/linux/kernel/git/arm64/linux")
+Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+---
+ include/linux/irq-entry-common.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/include/linux/irq-entry-common.h b/include/linux/irq-entry-common.h
+index 7ab41eec549f..08f671cbd1a5 100644
+--- a/include/linux/irq-entry-common.h
++++ b/include/linux/irq-entry-common.h
+@@ -469,13 +469,13 @@ static __always_inline irqentry_state_t irqentry_enter_from_kernel_mode(struct p
+ static inline void irqentry_exit_to_kernel_mode_preempt(struct pt_regs *regs,
+ 							irqentry_state_t state)
+ {
++	hrtimer_rearm_deferred();
++
+ 	if (regs_irqs_disabled(regs) || state.exit_rcu)
+ 		return;
+ 
+ 	if (IS_ENABLED(CONFIG_PREEMPTION))
+ 		irqentry_exit_cond_resched();
+-
+-	hrtimer_rearm_deferred();
+ }
+ 
+ /**
+-- 
+2.53.0
+
