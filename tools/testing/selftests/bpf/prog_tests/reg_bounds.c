@@ -500,7 +500,7 @@ static struct range range_refine(enum num_t x_t, struct range x, enum num_t y_t,
 	    (s64)x.a >= S32_MIN && (s64)x.b <= S32_MAX)
 		return range_intersection(x_t, x, y_cast);
 
-	if (y_t == U32 && x_t == U64) {
+	if (y_t == U32 && !t_is_32(x_t)) {
 		u64 xmin_swap, xmax_swap, xmin_lower32, xmax_lower32;
 
 		xmin_lower32 = x.a & 0xffffffff;
@@ -518,8 +518,8 @@ static struct range range_refine(enum num_t x_t, struct range x, enum num_t y_t,
 			 */
 			if (xmin_swap < x.a)
 				xmin_swap += 0x100000000;
-			if (xmin_swap == x.b)
-				return range(x_t, x.b, x.b);
+			if (xmin_swap != x.a)
+				return range(x_t, xmin_swap, x.b);
 		} else if (xmax_lower32 < y.a || xmax_lower32 > y.b) {
 			/* Same for the umax64, but we want to *decrease*
 			 * umax64 to the *maximum* value that matches the u32
@@ -528,8 +528,8 @@ static struct range range_refine(enum num_t x_t, struct range x, enum num_t y_t,
 			xmax_swap = swap_low32(x.b, y.b);
 			if (xmax_swap > x.b)
 				xmax_swap -= 0x100000000;
-			if (xmax_swap == x.a)
-				return range(x_t, x.a, x.a);
+			if (xmax_swap != x.b)
+				return range(x_t, x.a, xmax_swap);
 		}
 	}
 
