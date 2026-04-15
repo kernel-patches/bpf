@@ -632,7 +632,7 @@ err_out:
 	return err;
 }
 
-static int ntfs_test_inode_wb(struct inode *vi, unsigned long ino, void *data)
+static int ntfs_test_inode_wb(struct inode *vi, u64 ino, void *data)
 {
 	struct ntfs_attr *na = data;
 
