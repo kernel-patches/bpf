@@ -1076,10 +1076,12 @@ static void gmap_unshadow_level(struct gmap *sg, gfn_t r_gfn, int level)
 	if (ptep) {
 		if (READ_ONCE(*ptep).val != _PTE_EMPTY.val)
 			dat_ptep_xchg(ptep, _PTE_EMPTY, r_gfn, sg->asce, uses_skeys(sg));
+		sg->invalidated = true;
 		return;
 	}
 
 	crste = dat_crstep_clear_atomic(crstep, r_gfn, sg->asce);
+	sg->invalidated = true;
 	if (crste_leaf(crste) || crste.h.i)
 		return;
 	if (is_pmd(crste))
