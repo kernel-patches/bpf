@@ -13,7 +13,7 @@
 
 &mmc0 {
 	bus-width = <4>;
-	cd-gpios = <&sysgpio 41 GPIO_ACTIVE_LOW>;
+	broken-cd;
 	disable-wp;
 };
 
