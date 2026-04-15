@@ -78,6 +78,18 @@ static char *sym_name(const struct sym_entry *s)
 
 static bool is_ignored_symbol(const char *name, char type)
 {
+	/* Ignore lineinfo symbols for kallsyms pass stability */
+	static const char * const lineinfo_syms[] = {
+		"lineinfo_block_addrs",
+		"lineinfo_block_offsets",
+		"lineinfo_data",
+		"lineinfo_file_offsets",
+		"lineinfo_filenames",
+		"lineinfo_num_blocks",
+		"lineinfo_num_entries",
+		"lineinfo_num_files",
+	};
+
 	if (type == 'u' || type == 'n')
 		return true;
 
@@ -87,6 +99,11 @@ static bool is_ignored_symbol(const char *name, char type)
 		    strcmp(name, "__kernel_syscall_via_epc") &&
 		    strcmp(name, "__kernel_sigtramp") &&
 		    strcmp(name, "__gp"))
+			return true;
+	}
+
+	for (size_t i = 0; i < ARRAY_SIZE(lineinfo_syms); i++) {
+		if (!strcmp(name, lineinfo_syms[i]))
 			return true;
 	}
 

@@ -103,7 +103,7 @@ vmlinux_link()
 	${ld} ${ldflags} -o ${output}					\
 		${wl}--whole-archive ${objs} ${wl}--no-whole-archive	\
 		${wl}--start-group ${libs} ${wl}--end-group		\
-		${kallsymso} ${btf_vmlinux_bin_o} ${arch_vmlinux_o} ${ldlibs}
+		${kallsymso} ${lineinfo_o} ${btf_vmlinux_bin_o} ${arch_vmlinux_o} ${ldlibs}
 }
 
 # Create ${2}.o file with all symbols from the ${1} object file
@@ -127,6 +127,26 @@ kallsyms()
 	      ${KBUILD_AFLAGS} ${KBUILD_AFLAGS_KERNEL} -c -o "${2}.o" "${2}.S"
 
 	kallsymso=${2}.o
+}
+
+# Generate lineinfo tables from DWARF debug info in a temporary vmlinux.
+# ${1} - temporary vmlinux with debug info
+# Output: sets lineinfo_o to the generated .o file
+gen_lineinfo()
+{
+	info LINEINFO .tmp_lineinfo.S
+	if ! scripts/gen_lineinfo "${1}" > .tmp_lineinfo.S; then
+		echo >&2 "Failed to generate lineinfo from ${1}"
+		echo >&2 "Try to disable CONFIG_KALLSYMS_LINEINFO"
+		exit 1
+	fi
+
+	info AS .tmp_lineinfo.o
+	${CC} ${NOSTDINC_FLAGS} ${LINUXINCLUDE} ${KBUILD_CPPFLAGS} \
+	      ${KBUILD_AFLAGS} ${KBUILD_AFLAGS_KERNEL} \
+	      -c -o .tmp_lineinfo.o .tmp_lineinfo.S
+
+	lineinfo_o=.tmp_lineinfo.o
 }
 
 # Perform kallsyms for the given temporary vmlinux.
@@ -155,6 +175,7 @@ sorttable()
 cleanup()
 {
 	rm -f .btf.*
+	rm -f .tmp_lineinfo.*
 	rm -f .tmp_vmlinux.nm-sort
 	rm -f System.map
 	rm -f vmlinux
@@ -183,6 +204,7 @@ fi
 btf_vmlinux_bin_o=
 btfids_vmlinux=
 kallsymso=
+lineinfo_o=
 strip_debug=
 generate_map=
 
@@ -198,10 +220,21 @@ if is_enabled CONFIG_KALLSYMS; then
 	kallsyms .tmp_vmlinux0.syms .tmp_vmlinux0.kallsyms
 fi
 
+if is_enabled CONFIG_KALLSYMS_LINEINFO; then
+	# Assemble an empty lineinfo stub for the initial link.
+	# The real lineinfo is generated from .tmp_vmlinux1 by gen_lineinfo.
+	${CC} ${NOSTDINC_FLAGS} ${LINUXINCLUDE} ${KBUILD_CPPFLAGS} \
+	      ${KBUILD_AFLAGS} ${KBUILD_AFLAGS_KERNEL} \
+	      -c -o .tmp_lineinfo.o "${srctree}/scripts/empty_lineinfo.S"
+	lineinfo_o=.tmp_lineinfo.o
+fi
+
 if is_enabled CONFIG_KALLSYMS || is_enabled CONFIG_DEBUG_INFO_BTF; then
 
-	# The kallsyms linking does not need debug symbols, but the BTF does.
-	if ! is_enabled CONFIG_DEBUG_INFO_BTF; then
+	# The kallsyms linking does not need debug symbols, but BTF and
+	# lineinfo generation do.
+	if ! is_enabled CONFIG_DEBUG_INFO_BTF &&
+	   ! is_enabled CONFIG_KALLSYMS_LINEINFO; then
 		strip_debug=1
 	fi
 
@@ -217,6 +250,10 @@ if is_enabled CONFIG_DEBUG_INFO_BTF; then
 	fi
 	btf_vmlinux_bin_o=.tmp_vmlinux1.btf.o
 	btfids_vmlinux=.tmp_vmlinux1.BTF_ids
+fi
+
+if is_enabled CONFIG_KALLSYMS_LINEINFO; then
+	gen_lineinfo .tmp_vmlinux1
 fi
 
 if is_enabled CONFIG_KALLSYMS; then

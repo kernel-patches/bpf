@@ -16,10 +16,15 @@
 #include <asm/sections.h>
 
 #define KSYM_NAME_LEN 512
+
+/* Extra space for " (path/to/file.c:12345)" suffix when lineinfo is enabled */
+#define KSYM_LINEINFO_LEN (IS_ENABLED(CONFIG_KALLSYMS_LINEINFO) ? 128 : 0)
+
 #define KSYM_SYMBOL_LEN (sizeof("%s+%#lx/%#lx [%s %s]") + \
 			(KSYM_NAME_LEN - 1) + \
 			2*(BITS_PER_LONG*3/10) + (MODULE_NAME_LEN - 1) + \
-			(BUILD_ID_SIZE_MAX * 2) + 1)
+			(BUILD_ID_SIZE_MAX * 2) + 1 + \
+			KSYM_LINEINFO_LEN)
 
 struct cred;
 struct module;
@@ -96,6 +101,9 @@ extern int sprint_backtrace_build_id(char *buffer, unsigned long address);
 
 int lookup_symbol_name(unsigned long addr, char *symname);
 
+bool kallsyms_lookup_lineinfo(unsigned long addr,
+			      const char **file, unsigned int *line);
+
 #else /* !CONFIG_KALLSYMS */
 
 static inline unsigned long kallsyms_lookup_name(const char *name)
@@ -163,6 +171,13 @@ static inline int kallsyms_on_each_match_symbol(int (*fn)(void *, unsigned long)
 						const char *name, void *data)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline bool kallsyms_lookup_lineinfo(unsigned long addr,
+					    const char **file,
+					    unsigned int *line)
+{
+	return false;
 }
 #endif /*CONFIG_KALLSYMS*/
 
