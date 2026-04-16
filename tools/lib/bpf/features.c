@@ -615,6 +615,46 @@ static int probe_kern_btf_layout(int token_fd)
 						 (char *)layout, token_fd));
 }
 
+#define EXTEND_TYPE_LEN	((3 * sizeof(struct btf_type) + sizeof(__u32))/sizeof(__u32))
+#define EXTEND_VLEN		0x10000
+#define EXTEND_SECINFO_LEN	(EXTEND_VLEN * sizeof(struct btf_var_secinfo)/sizeof(__u32))
+
+static int probe_kern_btf_vlen_kind_extended(int token_fd)
+{
+	static const char strs[] = "\0int\0foo\0bar";
+	__u32 types[EXTEND_TYPE_LEN] = {
+		/* int */
+		BTF_TYPE_INT_ENC(1, BTF_INT_SIGNED, 0, 32, 4),
+		/* var */
+		BTF_TYPE_ENC(5 /* "foo" */, BTF_INFO_ENC(BTF_KIND_VAR, 0, 0), 1),
+		/* datasec */
+		BTF_TYPE_ENC(9 /* "bar" */, BTF_INFO_ENC(BTF_KIND_DATASEC, EXTEND_VLEN, 0), 0),
+	};
+	struct btf_var_secinfo *s;
+	__u32 *types_data;
+	__u32 i;
+	int ret;
+
+	types_data = calloc(EXTEND_TYPE_LEN + EXTEND_SECINFO_LEN, sizeof(__u32));
+	if (!types_data)
+		return -ENOMEM;
+	memcpy(types_data, types, sizeof(types));
+
+	for (i = 0, s = (struct btf_var_secinfo *)&types_data[EXTEND_TYPE_LEN];
+	     i < EXTEND_VLEN; i++, s++) {
+		s->type = 2;
+		s->offset = 4 * i;
+		s->size = 4;
+	}
+
+	ret = probe_fd(libbpf__load_raw_btf((char *)types_data,
+					    (EXTEND_TYPE_LEN + EXTEND_SECINFO_LEN) * sizeof(__u32),
+					    strs, sizeof(strs), token_fd));
+	free(types_data);
+
+	return ret;
+}
+
 typedef int (*feature_probe_fn)(int /* token_fd */);
 
 static struct kern_feature_cache feature_cache;
@@ -698,6 +738,9 @@ static struct kern_feature_desc {
 	},
 	[FEAT_BTF_LAYOUT] = {
 		"kernel supports BTF layout", probe_kern_btf_layout,
+	},
+	[FEAT_BTF_VLEN_KIND_EXTENDED] = {
+		"kernel supports extended BTF vlen/kind", probe_kern_btf_vlen_kind_extended,
 	},
 };
 

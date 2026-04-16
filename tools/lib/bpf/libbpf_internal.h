@@ -398,6 +398,8 @@ enum kern_feature_id {
 	FEAT_UPROBE_SYSCALL,
 	/* Kernel supports BTF layout information */
 	FEAT_BTF_LAYOUT,
+	/* Kernel supports BTF vlen > 65535, kind > 31 */
+	FEAT_BTF_VLEN_KIND_EXTENDED,
 	__FEAT_CNT,
 };
 
