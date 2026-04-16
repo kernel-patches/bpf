@@ -487,7 +487,7 @@ static void test_split_module(void)
 	for (i = 0; i < ARRAY_SIZE(mod_funcs); i++) {
 		const struct btf_param *p;
 		const struct btf_type *t;
-		__u16 vlen;
+		__u32 vlen;
 		__u32 id;
 		int j;
 
