@@ -2261,6 +2261,13 @@ config KCOV_SELFTEST
 	  On test failure, causes the kernel to panic. Recommended to be
 	  enabled, ensuring critical functionality works as intended.
 
+config DEBUG_AID_FOR_SYZBOT
+       bool "Additional debug code for syzbot"
+       default n
+       select PREEMPT_RT if EXPERT && ARCH_SUPPORTS_RT && !COMPILE_TEST
+       help
+         This option is intended for testing by syzbot.
+
 menuconfig RUNTIME_TESTING_MENU
 	bool "Runtime Testing"
 	default y
@@ -2526,6 +2533,17 @@ config STRING_HELPERS_KUNIT_TEST
 	depends on KUNIT
 	default KUNIT_ALL_TESTS
 
+config STRING_KUNIT_BENCH
+       bool "Benchmark string functions at runtime"
+       depends on STRING_KUNIT_TEST
+       help
+         Enable performance measurement for string functions.
+
+         This measures the execution efficiency of string functions
+         during the KUnit test run.
+
+         If unsure, say N.
+
 config FFS_KUNIT_TEST
 	tristate "KUnit test ffs-family functions at runtime" if !KUNIT_ALL_TESTS
 	depends on KUNIT
@@ -2633,6 +2651,16 @@ config TEST_VMALLOC
 	  stress and performance analysis. So, any new change for vmalloc
 	  subsystem can be evaluated from performance and stability point
 	  of view.
+
+	  If unsure, say N.
+
+config TEST_WORKQUEUE
+	tristate "Test module for stress/performance analysis of workqueue"
+	default n
+	help
+	  This builds the "test_workqueue" module for benchmarking
+	  workqueue throughput under contention. Useful for evaluating
+	  affinity scope changes (e.g., cache_shard vs cache).
 
 	  If unsure, say N.
 
@@ -3053,6 +3081,16 @@ config LONGEST_SYM_KUNIT_TEST
 	default KUNIT_ALL_TESTS
 	help
 	  Tests the longest symbol possible
+
+	  If unsure, say N.
+
+config LINEINFO_KUNIT_TEST
+	tristate "KUnit tests for kallsyms lineinfo" if !KUNIT_ALL_TESTS
+	depends on KUNIT && KALLSYMS_LINEINFO
+	default KUNIT_ALL_TESTS
+	help
+	  KUnit tests for the kallsyms source line info feature.
+	  Verifies that stack traces include correct (file.c:line) annotations.
 
 	  If unsure, say N.
 

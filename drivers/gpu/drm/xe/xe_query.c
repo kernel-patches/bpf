@@ -142,9 +142,6 @@ query_engine_cycles(struct xe_device *xe,
 		return -EINVAL;
 
 	eci = &resp.eci;
-	if (eci->gt_id >= xe->info.max_gt_per_tile)
-		return -EINVAL;
-
 	gt = xe_device_get_gt(xe, eci->gt_id);
 	if (!gt)
 		return -EINVAL;
@@ -234,6 +231,9 @@ static size_t calc_mem_regions_size(struct xe_device *xe)
 	u32 num_managers = 1;
 	int i;
 
+	if (xe_device_is_admin_only(xe))
+		return sizeof(struct drm_xe_query_mem_regions);
+
 	for (i = XE_PL_VRAM0; i <= XE_PL_VRAM1; ++i)
 		if (ttm_manager_type(&xe->ttm, i))
 			num_managers++;
@@ -261,6 +261,9 @@ static int query_mem_regions(struct xe_device *xe,
 	mem_regions = kzalloc(size, GFP_KERNEL);
 	if (XE_IOCTL_DBG(xe, !mem_regions))
 		return -ENOMEM;
+
+	if (xe_device_is_admin_only(xe))
+		goto user_copy;
 
 	man = ttm_manager_type(&xe->ttm, XE_PL_TT);
 	mem_regions->mem_regions[0].mem_class = DRM_XE_MEM_REGION_CLASS_SYSMEM;
@@ -300,6 +303,7 @@ static int query_mem_regions(struct xe_device *xe,
 		}
 	}
 
+user_copy:
 	if (!copy_to_user(query_ptr, mem_regions, size))
 		ret = 0;
 	else
@@ -343,6 +347,10 @@ static int query_config(struct xe_device *xe, struct drm_xe_device_query *query)
 			DRM_XE_QUERY_CONFIG_FLAG_HAS_NO_COMPRESSION_HINT;
 	config->info[DRM_XE_QUERY_CONFIG_FLAGS] |=
 			DRM_XE_QUERY_CONFIG_FLAG_HAS_LOW_LATENCY;
+	config->info[DRM_XE_QUERY_CONFIG_FLAGS] |=
+		DRM_XE_QUERY_CONFIG_FLAG_HAS_DISABLE_STATE_CACHE_PERF_FIX;
+	config->info[DRM_XE_QUERY_CONFIG_FLAGS] |=
+		DRM_XE_QUERY_CONFIG_FLAG_HAS_PURGING_SUPPORT;
 	config->info[DRM_XE_QUERY_CONFIG_MIN_ALIGNMENT] =
 		xe->info.vram_flags & XE_VRAM_FLAGS_NEED64K ? SZ_64K : SZ_4K;
 	config->info[DRM_XE_QUERY_CONFIG_VA_BITS] = xe->info.va_bits;

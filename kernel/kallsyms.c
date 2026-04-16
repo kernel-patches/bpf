@@ -467,6 +467,40 @@ static int append_buildid(char *buffer,   const char *modname,
 
 #endif /* CONFIG_STACKTRACE_BUILD_ID */
 
+#include <linux/mod_lineinfo.h>
+
+bool kallsyms_lookup_lineinfo(unsigned long addr,
+			      const char **file, unsigned int *line)
+{
+	struct lineinfo_table tbl;
+	unsigned long long raw_offset;
+
+	if (!IS_ENABLED(CONFIG_KALLSYMS_LINEINFO) ||
+	    !lineinfo_num_entries || !lineinfo_num_blocks)
+		return false;
+
+	/* Compute offset from _text */
+	if (addr < (unsigned long)_text)
+		return false;
+
+	raw_offset = addr - (unsigned long)_text;
+	if (raw_offset > UINT_MAX)
+		return false;
+
+	tbl.blk_addrs	= lineinfo_block_addrs;
+	tbl.blk_offsets	= lineinfo_block_offsets;
+	tbl.data	= lineinfo_data;
+	tbl.data_size	= lineinfo_data_size;
+	tbl.file_offsets = lineinfo_file_offsets;
+	tbl.filenames	= lineinfo_filenames;
+	tbl.num_entries	= lineinfo_num_entries;
+	tbl.num_blocks	= lineinfo_num_blocks;
+	tbl.num_files	= lineinfo_num_files;
+	tbl.filenames_size = lineinfo_filenames_size;
+
+	return lineinfo_search(&tbl, (unsigned int)raw_offset, file, line);
+}
+
 /* Look up a kernel symbol and return it in a text buffer. */
 static int __sprint_symbol(char *buffer, unsigned long address,
 			   int symbol_offset, int add_offset, int add_buildid)
@@ -495,6 +529,28 @@ static int __sprint_symbol(char *buffer, unsigned long address,
 		if (add_buildid)
 			len += append_buildid(buffer + len, modname, buildid);
 		len += sprintf(buffer + len, "]");
+	}
+
+	if (IS_ENABLED(CONFIG_KALLSYMS_LINEINFO)) {
+		const char *li_file;
+		unsigned int li_line;
+		bool found = false;
+
+		if (!modname)
+			found = kallsyms_lookup_lineinfo(address,
+							 &li_file, &li_line);
+		else if (IS_ENABLED(CONFIG_KALLSYMS_LINEINFO_MODULES)) {
+			struct module *mod = __module_address(address);
+
+			if (mod)
+				found = module_lookup_lineinfo(mod, address,
+							      &li_file,
+							      &li_line);
+		}
+
+		if (found)
+			len += snprintf(buffer + len, KSYM_SYMBOL_LEN - len,
+					" (%s:%u)", li_file, li_line);
 	}
 
 	return len;
@@ -569,6 +625,7 @@ int sprint_backtrace(char *buffer, unsigned long address)
 {
 	return __sprint_symbol(buffer, address, -1, 1, 0);
 }
+EXPORT_SYMBOL_GPL(sprint_backtrace);
 
 /**
  * sprint_backtrace_build_id - Look up a backtrace symbol and return it in a text buffer
@@ -589,6 +646,7 @@ int sprint_backtrace_build_id(char *buffer, unsigned long address)
 {
 	return __sprint_symbol(buffer, address, -1, 1, 1);
 }
+EXPORT_SYMBOL_GPL(sprint_backtrace_build_id);
 
 /* To avoid using get_symbol_offset for every symbol, we carry prefix along. */
 struct kallsym_iter {

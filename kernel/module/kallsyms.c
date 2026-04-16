@@ -494,3 +494,83 @@ out:
 	mutex_unlock(&module_mutex);
 	return ret;
 }
+
+#include <linux/mod_lineinfo.h>
+
+/*
+ * Look up source file:line for an address within a loaded module.
+ * Uses the .mod_lineinfo section embedded in the .ko at build time.
+ *
+ * Safe in NMI/panic context: no locks, no allocations.
+ * Caller must hold RCU read lock (or be in a context where the module
+ * cannot be unloaded).
+ */
+bool module_lookup_lineinfo(struct module *mod, unsigned long addr,
+			    const char **file, unsigned int *line)
+{
+	const struct mod_lineinfo_header *hdr;
+	struct lineinfo_table tbl;
+	const void *base;
+	u32 section_size;
+	unsigned long text_base;
+	unsigned long long raw_offset;
+
+	if (!IS_ENABLED(CONFIG_KALLSYMS_LINEINFO_MODULES))
+		return false;
+
+	base = mod->lineinfo_data;
+	if (!base)
+		return false;
+
+	section_size = mod->lineinfo_data_size;
+	if (section_size < sizeof(*hdr))
+		return false;
+
+	hdr = base;
+
+	if (hdr->num_entries == 0 || hdr->num_blocks == 0)
+		return false;
+
+	/* Validate each sub-array fits within the section */
+	if (hdr->blocks_offset + hdr->blocks_size > section_size)
+		return false;
+	if (hdr->data_offset + hdr->data_size > section_size)
+		return false;
+	if (hdr->files_offset + hdr->files_size > section_size)
+		return false;
+	if (hdr->filenames_offset + hdr->filenames_size > section_size)
+		return false;
+
+	/* Validate array sizes match declared counts */
+	if (hdr->blocks_size < hdr->num_blocks * 2 * sizeof(u32))
+		return false;
+	if (hdr->files_size < hdr->num_files * sizeof(u32))
+		return false;
+
+	/*
+	 * Compute offset from module .text base.
+	 * NOTE: This assumes .text is at the start of the MOD_TEXT segment.
+	 * A proper fix would use ELF relocations to reference .text directly.
+	 */
+	text_base = (unsigned long)mod->mem[MOD_TEXT].base;
+	if (addr < text_base)
+		return false;
+
+	raw_offset = addr - text_base;
+	if (raw_offset > U32_MAX)
+		return false;
+
+	tbl.blk_addrs	= base + hdr->blocks_offset;
+	tbl.blk_offsets	= base + hdr->blocks_offset +
+			  hdr->num_blocks * sizeof(u32);
+	tbl.data	= base + hdr->data_offset;
+	tbl.data_size	= hdr->data_size;
+	tbl.file_offsets = base + hdr->files_offset;
+	tbl.filenames	= base + hdr->filenames_offset;
+	tbl.num_entries	= hdr->num_entries;
+	tbl.num_blocks	= hdr->num_blocks;
+	tbl.num_files	= hdr->num_files;
+	tbl.filenames_size = hdr->filenames_size;
+
+	return lineinfo_search(&tbl, (unsigned int)raw_offset, file, line);
+}

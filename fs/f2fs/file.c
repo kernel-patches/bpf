@@ -17,7 +17,6 @@
 #include <linux/compat.h>
 #include <linux/uaccess.h>
 #include <linux/mount.h>
-#include <linux/pagevec.h>
 #include <linux/uio.h>
 #include <linux/uuid.h>
 #include <linux/file.h>
@@ -3043,8 +3042,10 @@ out:
 	clear_inode_flag(inode, FI_OPU_WRITE);
 unlock_out:
 	inode_unlock(inode);
-	if (!err)
+	if (!err) {
 		range->len = (u64)total << PAGE_SHIFT;
+		stat_inc_defrag_blk_count(sbi, total);
+	}
 	return err;
 }
 

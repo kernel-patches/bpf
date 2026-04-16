@@ -3,8 +3,8 @@
  * Copyright © 2020 Intel Corporation
  */
 
-#ifndef _XE_MIGRATE_
-#define _XE_MIGRATE_
+#ifndef _XE_MIGRATE_H_
+#define _XE_MIGRATE_H_
 
 #include <linux/types.h>
 
@@ -131,6 +131,10 @@ struct dma_fence *xe_migrate_copy(struct xe_migrate *m,
 				  struct ttm_resource *src,
 				  struct ttm_resource *dst,
 				  bool copy_only_ccs);
+
+struct dma_fence *xe_migrate_resolve(struct xe_migrate *m,
+				     struct xe_bo *bo,
+				     struct ttm_resource *res);
 
 int xe_migrate_ccs_rw_copy(struct xe_tile *tile, struct xe_exec_queue *q,
 			   struct xe_bo *src_bo,

@@ -3,8 +3,8 @@
  * Copyright © 2022 Intel Corporation
  */
 
-#ifndef _XE_RTP_TYPES_
-#define _XE_RTP_TYPES_
+#ifndef _XE_RTP_TYPES_H_
+#define _XE_RTP_TYPES_H_
 
 #include <linux/types.h>
 
@@ -41,6 +41,7 @@ struct xe_rtp_action {
 enum {
 	XE_RTP_MATCH_PLATFORM,
 	XE_RTP_MATCH_SUBPLATFORM,
+	XE_RTP_MATCH_PLATFORM_STEP,
 	XE_RTP_MATCH_GRAPHICS_VERSION,
 	XE_RTP_MATCH_GRAPHICS_VERSION_RANGE,
 	XE_RTP_MATCH_GRAPHICS_VERSION_ANY_GT,

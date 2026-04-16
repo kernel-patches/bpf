@@ -214,6 +214,17 @@ static struct xe_device *uc_fw_to_xe(struct xe_uc_fw *uc_fw)
 	return gt_to_xe(uc_fw_to_gt(uc_fw));
 }
 
+#if IS_ENABLED(CONFIG_DRM_XE_DEBUG_GUC)
+void xe_uc_fw_change_status(struct xe_uc_fw *uc_fw, enum xe_uc_fw_status status)
+{
+	xe_gt_dbg(uc_fw_to_gt(uc_fw), "%s %s->%s\n",
+		  xe_uc_fw_type_repr(uc_fw->type),
+		  xe_uc_fw_status_repr(uc_fw->status),
+		  xe_uc_fw_status_repr(status));
+	uc_fw->__status = status;
+}
+#endif
+
 static void
 uc_fw_auto_select(struct xe_device *xe, struct xe_uc_fw *uc_fw)
 {
@@ -881,7 +892,7 @@ static int uc_fw_xfer(struct xe_uc_fw *uc_fw, u32 offset, u32 dma_flags)
 
 	/* Start the DMA */
 	xe_mmio_write32(mmio, DMA_CTRL,
-			_MASKED_BIT_ENABLE(dma_flags | START_DMA));
+			REG_MASKED_FIELD_ENABLE(dma_flags | START_DMA));
 
 	/* Wait for DMA to finish */
 	ret = xe_mmio_wait32(mmio, DMA_CTRL, START_DMA, 0, 100000, &dma_ctrl,
@@ -891,7 +902,7 @@ static int uc_fw_xfer(struct xe_uc_fw *uc_fw, u32 offset, u32 dma_flags)
 			xe_uc_fw_type_repr(uc_fw->type), dma_ctrl);
 
 	/* Disable the bits once DMA is over */
-	xe_mmio_write32(mmio, DMA_CTRL, _MASKED_BIT_DISABLE(dma_flags));
+	xe_mmio_write32(mmio, DMA_CTRL, REG_MASKED_FIELD_DISABLE(dma_flags));
 
 	return ret;
 }
