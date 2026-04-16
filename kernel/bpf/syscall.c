@@ -1262,7 +1262,12 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 				       BPF_RB_ROOT | BPF_REFCOUNT | BPF_WORKQUEUE | BPF_UPTR |
 				       BPF_TASK_WORK,
 				       map->value_size);
-	if (!IS_ERR_OR_NULL(map->record)) {
+	if (IS_ERR(map->record)) {
+		ret = PTR_ERR(map->record);
+		map->record = NULL;
+		goto free_map_tab;
+	}
+	if (map->record) {
 		int i;
 
 		if (!bpf_token_capable(token, CAP_BPF)) {
