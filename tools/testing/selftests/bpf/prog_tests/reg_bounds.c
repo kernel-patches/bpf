@@ -2246,6 +2246,13 @@ static struct subtest_case crafted_cases[] = {
 	{S64, U32, {0x0, 0x1f}, {0xffffffff80000000ULL, 0x000000007fffffffULL}},
 	{S64, U32, {0x0, 0x1f}, {0xffffffffffff8000ULL, 0x0000000000007fffULL}},
 	{S64, U32, {0x0, 0x1f}, {0xffffffffffffff80ULL, 0x000000000000007fULL}},
+
+	/* edge cases for 64bit refinement from 32bit bounds */
+	{S64, U32, {0xfffffffe00000002ULL, 0xffffffff00000000ULL}, {S64_MIN + 1, S64_MIN + 1}},
+	{S64, U32, {0xffffffff00000002ULL, 0}, {S64_MIN + 1, S64_MIN + 1}},
+	{S64, U32, {0xfffffffe000000ffULL, 0xffffffff00000000ULL}, {S64_MIN + 255, S64_MIN + 255}},
+	{S64, S32, {0x8000000080000000ULL, 0}, {S64_MIN, S64_MIN}},
+	{S64, S32, {0x2, 0x100000000}, {S64_MIN, S64_MIN}},
 };
 
 /* Go over crafted hard-coded cases. This is fast, so we do it as part of
