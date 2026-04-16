@@ -15,6 +15,7 @@
 #include <linux/init.h>
 #include <linux/landlock.h>
 #include <linux/rcupdate.h>
+#include <linux/types.h>
 
 #include "access.h"
 #include "limits.h"
@@ -35,6 +36,11 @@ struct landlock_cred_security {
 	 * @domain: Immutable ruleset enforced on a task.
 	 */
 	struct landlock_ruleset *domain;
+	/**
+	 * @pending_userspace_flags: Restriction flags to commit during the next
+	 * successful execve(2).
+	 */
+	u32 pending_userspace_flags;
 
 #ifdef CONFIG_AUDIT
 	/**
@@ -155,5 +161,8 @@ landlock_get_applicable_subject(const struct cred *const cred,
 }
 
 __init void landlock_add_cred_hooks(void);
+
+int landlock_prepare_exec_creds(struct cred *cred);
+void landlock_commit_exec_creds(struct cred *cred);
 
 #endif /* _SECURITY_LANDLOCK_CRED_H */

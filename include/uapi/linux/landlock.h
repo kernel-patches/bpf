@@ -129,14 +129,29 @@ struct landlock_ruleset_attr {
  *     threads, irrespective of previously established Landlock domains and
  *     logging configurations on these threads.
  *
+ *     This flag is mutually exclusive with
+ *     %LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME.
+ *
  *     If the calling thread is running with no_new_privs, this operation
  *     enables no_new_privs on the sibling threads as well.
+ *
+ * %LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME
+ *    Sets no_new_privs at the point of no return during the next
+ *    :manpage:`execve(2)` call.  When requested, no_new_privs is always set
+ *    for the new execution.  landlock_restrict_self() still enforces its
+ *    usual no_new_privs or %CAP_SYS_ADMIN invariant before this flag may be
+ *    requested.
+ *
+ *    This flag is not inherited by the new execution, but the resulting
+ *    no_new_privs state is.  This flag is mutually exclusive with
+ *    %LANDLOCK_RESTRICT_SELF_TSYNC.
  */
 /* clang-format off */
 #define LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF		(1U << 0)
 #define LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON			(1U << 1)
 #define LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF		(1U << 2)
 #define LANDLOCK_RESTRICT_SELF_TSYNC				(1U << 3)
+#define LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME			(1U << 4)
 /* clang-format on */
 
 /**

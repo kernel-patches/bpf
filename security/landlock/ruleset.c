@@ -658,6 +658,27 @@ landlock_merge_ruleset(struct landlock_ruleset *const parent,
 	return no_free_ptr(new_dom);
 }
 
+int landlock_prepare_exec_creds(struct cred *const cred)
+{
+	struct landlock_cred_security *const llcred = landlock_cred(cred);
+
+#ifdef CONFIG_AUDIT
+	/* Resets for each execution. */
+	llcred->domain_exec = 0;
+#endif /* CONFIG_AUDIT */
+	return 0;
+}
+
+void landlock_commit_exec_creds(struct cred *const cred)
+{
+	struct landlock_cred_security *const llcred = landlock_cred(cred);
+
+	if (llcred->pending_userspace_flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME)
+		task_set_no_new_privs(current);
+
+	llcred->pending_userspace_flags = 0;
+}
+
 int landlock_restrict_cred_precheck(const __u32 flags,
 				    const bool in_task_context)
 {
@@ -680,6 +701,10 @@ int landlock_restrict_cred_precheck(const __u32 flags,
 		    !ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN))
 			return -EPERM;
 	}
+
+	if ((flags & LANDLOCK_RESTRICT_SELF_TSYNC) &&
+	    (flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME))
+		return -EINVAL;
 
 	if (flags & ~LANDLOCK_MASK_RESTRICT_SELF)
 		return -EINVAL;
@@ -711,12 +736,14 @@ int landlock_restrict_cred(struct cred *const cred,
 		return -EINVAL;
 
 	new_llcred = landlock_cred(cred);
-
+	new_llcred->pending_userspace_flags =
+		flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS_EXECTIME;
 #ifdef CONFIG_AUDIT
 	prev_log_subdomains = !new_llcred->log_subdomains_off;
 	new_llcred->log_subdomains_off = !prev_log_subdomains ||
 					 !log_subdomains;
 #endif /* CONFIG_AUDIT */
+
 	/*
 	 * The only case when a ruleset may not be set is if
 	 * LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF is set, optionally combined
@@ -753,7 +780,6 @@ int landlock_restrict_cred(struct cred *const cred,
 		if (tsync_err)
 			return tsync_err;
 	}
-
 	return 0;
 }
 
