@@ -761,6 +761,16 @@ static void print_refinement(enum num_t s_t, struct range src,
 	print_range(d_t, new, "\n");
 }
 
+static bool is_valid_reg(struct reg_state *x)
+{
+	enum num_t t;
+
+	for (t = first_t; t <= last_t; t++)
+		if (!is_valid_range(t, x->r[t]))
+			return false;
+	return true;
+}
+
 static void reg_state_refine(struct reg_state *r, enum num_t t, struct range x, const char *ctx)
 {
 	enum num_t d_t, s_t;
@@ -791,6 +801,9 @@ again:
 			}
 		}
 	}
+
+	if (!is_valid_reg(r))
+		return;
 
 	/* keep refining until we converge */
 	if (keep_going) {
@@ -837,6 +850,8 @@ static void reg_state_cond(enum num_t t, struct reg_state *x, struct reg_state *
 		z2 = y->r[t];
 
 		range_cond(t, z1, z2, op, &z1, &z2);
+		if (!is_valid_range(t, z1) || !is_valid_range(t, z2))
+			return;
 
 		if (newx) {
 			snprintf(buf, sizeof(buf), "%s R1", ctx);
@@ -1401,12 +1416,14 @@ static void sim_case(enum num_t init_t, enum num_t cond_t,
 	fr1->valid = fr2->valid = false;
 	tr1->valid = tr2->valid = false;
 	if (*branch_taken != 1) { /* FALSE is possible */
-		fr1->valid = fr2->valid = true;
 		reg_state_cond(cond_t, fr1, fr2, rev_op, fr1, fr2, "FALSE");
+		if (is_valid_reg(fr1) && is_valid_reg(fr2))
+			fr1->valid = fr2->valid = true;
 	}
 	if (*branch_taken != 0) { /* TRUE is possible */
-		tr1->valid = tr2->valid = true;
 		reg_state_cond(cond_t, tr1, tr2, op, tr1, tr2, "TRUE");
+		if (is_valid_reg(tr1) && is_valid_reg(tr2))
+			tr1->valid = tr2->valid = true;
 	}
 	if (env.verbosity >= VERBOSE_VERY) {
 		printf("STEP3 (%s) FALSE R1:", t_str(cond_t)); print_reg_state(fr1, "\n");
