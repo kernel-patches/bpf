@@ -2273,17 +2273,51 @@ static void deduce_bounds_64_from_32(struct bpf_reg_state *reg)
 	 */
 	__u64 new_umin, new_umax;
 	__s64 new_smin, new_smax;
+	__u32 umin_32lower, umax_32lower;
+	__u32 smin_32lower, smax_32lower;
 
 	/* u32 -> u64 tightening, it's always well-formed */
-	new_umin = (reg->umin_value & ~0xffffffffULL) | reg->u32_min_value;
-	new_umax = (reg->umax_value & ~0xffffffffULL) | reg->u32_max_value;
-	reg->umin_value = max_t(u64, reg->umin_value, new_umin);
-	reg->umax_value = min_t(u64, reg->umax_value, new_umax);
+	umin_32lower = reg->umin_value & 0xffffffffULL;
+	if (umin_32lower < reg->u32_min_value || umin_32lower > reg->u32_max_value) {
+		new_umin = (reg->umin_value & ~0xffffffffULL) | reg->u32_min_value;
+		if (new_umin < reg->umin_value)
+			/*
+			 * The potential overflow here corresponds to the
+			 * following case and doesn't require special handling.
+			 *
+			 * u32:     xxx        xxx        xxx        xxx
+			 *      |---------------------|---------------------|
+			 * u64: xxxxxx                                   xxxx
+			 */
+			new_umin += 0x100000000;
+		reg->umin_value = new_umin;
+	}
+	umax_32lower = reg->umax_value & 0xffffffffULL;
+	if (umax_32lower < reg->u32_min_value || umax_32lower > reg->u32_max_value) {
+		new_umax = (reg->umax_value & ~0xffffffffULL) | reg->u32_max_value;
+		if (new_umax > reg->umax_value)
+			/* Cf comment on new_umin for potential overflow. */
+			new_umax -= 0x100000000;
+		reg->umax_value = new_umax;
+	}
+
 	/* u32 -> s64 tightening, u32 range embedded into s64 preserves range validity */
-	new_smin = (reg->smin_value & ~0xffffffffULL) | reg->u32_min_value;
-	new_smax = (reg->smax_value & ~0xffffffffULL) | reg->u32_max_value;
-	reg->smin_value = max_t(s64, reg->smin_value, new_smin);
-	reg->smax_value = min_t(s64, reg->smax_value, new_smax);
+	smin_32lower = reg->smin_value & 0xffffffffULL;
+	if (smin_32lower < reg->u32_min_value || smin_32lower > reg->u32_max_value) {
+		new_smin = (reg->smin_value & ~0xffffffffULL) | reg->u32_min_value;
+		if (new_smin < reg->smin_value)
+			/* Cf comment on new_umin for potential overflow. */
+			new_smin += 0x100000000;
+		reg->smin_value = new_smin;
+	}
+	smax_32lower = reg->smax_value & 0xffffffffULL;
+	if (smax_32lower < reg->u32_min_value || smax_32lower > reg->u32_max_value) {
+		new_smax = (reg->smax_value & ~0xffffffffULL) | reg->u32_max_value;
+		if (new_smax > reg->smax_value)
+			/* Cf comment on new_umin for potential overflow. */
+			new_smax -= 0x100000000;
+		reg->smax_value = new_smax;
+	}
 
 	/* Here we would like to handle a special case after sign extending load,
 	 * when upper bits for a 64-bit range are all 1s or all 0s.
