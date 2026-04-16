@@ -1,0 +1,90 @@
+name: linux-next sync
+
+on:
+  push:
+    branches:
+      - linux-next-sync
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: linux-next-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  sync-linux-next:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Clone kernel-patches/bpf (blobless)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git clone \
+            --filter=blob:none \
+            --no-checkout \
+            --single-branch \
+            https://github.com/kernel-patches/bpf.git \
+            repo
+
+      - name: Configure git identity
+        working-directory: repo
+        shell: bash
+        run: |
+          git config user.name 'bpf-ci[bot]'
+          git config user.email 'bot+bpf-ci@kernel.org'
+
+      - name: Sync linux-next branch
+        working-directory: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE_BRANCH='bpf_base'
+          HEAD_BRANCH='linux-next'
+          UPSTREAM_REMOTE='linux-next-upstream'
+          UPSTREAM_URL='https://git.kernel.org/pub/scm/linux/kernel/git/next/linux-next.git'
+          UPSTREAM_BRANCH='master'
+
+          git remote add "${UPSTREAM_REMOTE}" "${UPSTREAM_URL}"
+          git config "remote.${UPSTREAM_REMOTE}.promisor" true
+          git config "remote.${UPSTREAM_REMOTE}.partialclonefilter" blob:none
+
+          git fetch --no-tags origin \
+            "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+          git fetch --no-tags --filter=blob:none "${UPSTREAM_REMOTE}" \
+            "+refs/heads/${UPSTREAM_BRANCH}:refs/remotes/${UPSTREAM_REMOTE}/${UPSTREAM_BRANCH}"
+
+          if git ls-remote --exit-code --heads origin "${HEAD_BRANCH}" >/dev/null 2>&1; then
+            git fetch --no-tags origin \
+              "+refs/heads/${HEAD_BRANCH}:refs/remotes/origin/${HEAD_BRANCH}"
+          fi
+
+          git checkout -B "${HEAD_BRANCH}" "refs/remotes/origin/${BASE_BRANCH}"
+          git merge --no-ff --no-edit "refs/remotes/${UPSTREAM_REMOTE}/${UPSTREAM_BRANCH}"
+
+      - name: Push linux-next branch
+        if: ${{ github.repository == 'kernel-patches/bpf' }}
+        working-directory: repo
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          HEAD_BRANCH='linux-next'
+          git remote set-url origin \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/kernel-patches/bpf.git"
+
+          if git show-ref --verify --quiet "refs/remotes/origin/${HEAD_BRANCH}"; then
+            old_head=$(git rev-parse "refs/remotes/origin/${HEAD_BRANCH}")
+            git push \
+              --force-with-lease="refs/heads/${HEAD_BRANCH}:${old_head}" \
+              origin HEAD:"refs/heads/${HEAD_BRANCH}"
+          else
+            git push origin HEAD:"refs/heads/${HEAD_BRANCH}"
+          fi
