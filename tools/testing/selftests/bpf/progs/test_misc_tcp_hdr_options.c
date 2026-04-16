@@ -28,6 +28,12 @@ unsigned int nr_data = 0;
 unsigned int nr_syn = 0;
 unsigned int nr_fin = 0;
 unsigned int nr_hwtstamp = 0;
+unsigned int nr_hdr_sockopt_estab = 0;
+unsigned int nr_hdr_sockopt_estab_err = 0;
+unsigned int nr_hdr_sockopt_len = 0;
+unsigned int nr_hdr_sockopt_len_err = 0;
+unsigned int nr_hdr_sockopt_write = 0;
+unsigned int nr_hdr_sockopt_write_err = 0;
 
 /* Check the header received from the active side */
 static int __check_active_hdr_in(struct bpf_sock_ops *skops, bool check_syn)
@@ -321,6 +327,40 @@ int misc_estab(struct bpf_sock_ops *skops)
 		return handle_write_hdr_opt(skops);
 	case BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB:
 		return handle_passive_estab(skops);
+	}
+
+	return CG_OK;
+}
+
+SEC("sockops")
+int misc_hdr_sockopt(struct bpf_sock_ops *skops)
+{
+	int true_val = 1;
+	int ret;
+
+	switch (skops->op) {
+	case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB:
+	case BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB:
+		nr_hdr_sockopt_estab++;
+		set_hdr_cb_flags(skops, 0);
+		ret = bpf_setsockopt(skops, SOL_TCP, TCP_NODELAY, &true_val, sizeof(true_val));
+		if (ret)
+			nr_hdr_sockopt_estab_err++;
+		break;
+	case BPF_SOCK_OPS_HDR_OPT_LEN_CB:
+		nr_hdr_sockopt_len++;
+		ret = bpf_setsockopt(skops, SOL_TCP, TCP_NODELAY, &true_val, sizeof(true_val));
+		if (ret != -EOPNOTSUPP)
+			nr_hdr_sockopt_len_err++;
+		/* just trigger BPF_SOCK_OPS_WRITE_HDR_OPT_CB */
+		bpf_reserve_hdr_opt(skops, 12, 0);
+		break;
+	case BPF_SOCK_OPS_WRITE_HDR_OPT_CB:
+		nr_hdr_sockopt_write++;
+		ret = bpf_setsockopt(skops, SOL_TCP, TCP_NODELAY, &true_val, sizeof(true_val));
+		if (ret != -EOPNOTSUPP)
+			nr_hdr_sockopt_write_err++;
+		break;
 	}
 
 	return CG_OK;

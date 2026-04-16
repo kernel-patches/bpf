@@ -513,6 +513,59 @@ check_linum:
 	bpf_link__destroy(link);
 }
 
+static void hdr_sockopt(void)
+{
+	const char send_msg[] = "MISC!!!";
+	char recv_msg[sizeof(send_msg)];
+	const unsigned int nr_data = 2;
+	struct bpf_link *link;
+	struct sk_fds sk_fds;
+	int i, ret, true_val = 1;
+
+	lport_linum_map_fd = bpf_map__fd(misc_skel->maps.lport_linum_map);
+
+	link = bpf_program__attach_cgroup(misc_skel->progs.misc_hdr_sockopt, cg_fd);
+	if (!ASSERT_OK_PTR(link, "attach_cgroup(misc_hdr_sockopt)"))
+		return;
+
+	if (sk_fds_connect(&sk_fds, false)) {
+		bpf_link__destroy(link);
+		return;
+	}
+
+	ret = setsockopt(sk_fds.active_fd, SOL_TCP, TCP_NODELAY, &true_val, sizeof(true_val));
+	if (!ASSERT_OK(ret, "setsockopt(TCP_NODELAY) active"))
+		goto check_linum;
+
+	ret = setsockopt(sk_fds.passive_fd, SOL_TCP, TCP_NODELAY, &true_val, sizeof(true_val));
+	if (!ASSERT_OK(ret, "setsockopt(TCP_NODELAY) passive"))
+		goto check_linum;
+
+	for (i = 0; i < nr_data; i++) {
+		ret = send(sk_fds.active_fd, send_msg, sizeof(send_msg), 0);
+		if (!ASSERT_EQ(ret, sizeof(send_msg), "send(msg)"))
+			goto check_linum;
+
+		ret = read(sk_fds.passive_fd, recv_msg, sizeof(recv_msg));
+		if (!ASSERT_EQ(ret, sizeof(send_msg), "read(msg)"))
+			goto check_linum;
+	}
+
+	ASSERT_NEQ(misc_skel->bss->nr_hdr_sockopt_estab, 0, "nr_hdr_sockopt_estab");
+	ASSERT_EQ(misc_skel->bss->nr_hdr_sockopt_estab_err, 0, "nr_hdr_sockopt_estab_err");
+
+	ASSERT_NEQ(misc_skel->bss->nr_hdr_sockopt_len, 0, "nr_hdr_sockopt_len");
+	ASSERT_EQ(misc_skel->bss->nr_hdr_sockopt_len_err, 0, "nr_hdr_sockopt_len_err");
+
+	ASSERT_NEQ(misc_skel->bss->nr_hdr_sockopt_write, 0, "nr_hdr_sockopt_write");
+	ASSERT_EQ(misc_skel->bss->nr_hdr_sockopt_write_err, 0, "nr_hdr_sockopt_write_err");
+
+check_linum:
+	ASSERT_FALSE(check_error_linum(&sk_fds), "check_error_linum");
+	sk_fds_close(&sk_fds);
+	bpf_link__destroy(link);
+}
+
 struct test {
 	const char *desc;
 	void (*run)(void);
@@ -526,6 +579,7 @@ static struct test tests[] = {
 	DEF_TEST(fastopen_estab),
 	DEF_TEST(fin),
 	DEF_TEST(misc),
+	DEF_TEST(hdr_sockopt),
 };
 
 void test_tcp_hdr_options(void)
