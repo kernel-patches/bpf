@@ -838,6 +838,44 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 	return true;
 }
 
+/*
+ * Compare stack arg slots between old and current states.
+ * Outgoing stack args are path-local state and must agree for pruning.
+ */
+static bool stack_arg_safe(struct bpf_verifier_env *env, struct bpf_func_state *old,
+			   struct bpf_func_state *cur, struct bpf_idmap *idmap,
+			   enum exact_level exact)
+{
+	int i, nslots;
+
+	if (old->incoming_stack_arg_depth != cur->incoming_stack_arg_depth)
+		return false;
+
+	/* Compare both incoming and outgoing stack arg slots. */
+	if (old->stack_arg_depth != cur->stack_arg_depth)
+		return false;
+
+	if (old->out_stack_arg_mask != cur->out_stack_arg_mask)
+		return false;
+
+	nslots = old->stack_arg_depth / BPF_REG_SIZE;
+	for (i = 0; i < nslots; i++) {
+		struct bpf_reg_state *old_arg = &old->stack_arg_regs[i];
+		struct bpf_reg_state *cur_arg = &cur->stack_arg_regs[i];
+
+		if (old_arg->type == NOT_INIT && cur_arg->type == NOT_INIT)
+			continue;
+
+		if (exact == EXACT && old_arg->type != cur_arg->type)
+			return false;
+
+		if (!regsafe(env, old_arg, cur_arg, idmap, exact))
+			return false;
+	}
+
+	return true;
+}
+
 static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *cur,
 		    struct bpf_idmap *idmap)
 {
@@ -927,6 +965,9 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 			return false;
 
 	if (!stacksafe(env, old, cur, &env->idmap_scratch, exact))
+		return false;
+
+	if (!stack_arg_safe(env, old, cur, &env->idmap_scratch, exact))
 		return false;
 
 	return true;
