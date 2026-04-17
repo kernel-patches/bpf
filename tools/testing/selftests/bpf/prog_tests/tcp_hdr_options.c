@@ -461,7 +461,7 @@ static void misc(void)
 	const unsigned int nr_data = 2;
 	struct bpf_link *link;
 	struct sk_fds sk_fds;
-	int i, ret;
+	int i, ret, true_val = 1;
 
 	lport_linum_map_fd = bpf_map__fd(misc_skel->maps.lport_linum_map);
 
@@ -476,6 +476,10 @@ static void misc(void)
 		bpf_link__destroy(link);
 		return;
 	}
+
+	ret = setsockopt(sk_fds.active_fd, SOL_TCP, TCP_NODELAY, &true_val, sizeof(true_val));
+	if (!ASSERT_OK(ret, "setsockopt(TCP_NODELAY)"))
+		goto check_linum;
 
 	for (i = 0; i < nr_data; i++) {
 		/* MSG_EOR to ensure skb will not be combined */
@@ -506,6 +510,12 @@ static void misc(void)
 	ASSERT_EQ(misc_skel->bss->nr_fin, 1, "unexpected nr_fin");
 
 	ASSERT_EQ(misc_skel->bss->nr_hwtstamp, 0, "nr_hwtstamp");
+
+	ASSERT_TRUE(misc_skel->data->nodelay_est_ok, "unexpected nodelay_est_ok");
+
+	ASSERT_TRUE(misc_skel->data->nodelay_hdr_len_err, "unexpected nodelay_hdr_len_err");
+
+	ASSERT_TRUE(misc_skel->data->nodelay_write_hdr_err, "unexpected nodelay_write_hdr_err");
 
 check_linum:
 	ASSERT_FALSE(check_error_linum(&sk_fds), "check_error_linum");
