@@ -2047,6 +2047,8 @@ go_jmp:
 	/* function call */
 	case BPF_JMP | BPF_CALL:
 	{
+		if (insn->src_reg == BPF_PSEUDO_CALL)
+			goto notyet;
 		const s8 *r0 = bpf2a32[BPF_REG_0];
 		const s8 *r1 = bpf2a32[BPF_REG_1];
 		const s8 *r2 = bpf2a32[BPF_REG_2];
