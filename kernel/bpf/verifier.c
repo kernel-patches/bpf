@@ -18487,13 +18487,22 @@ static int check_and_resolve_insns(struct bpf_verifier_env *env)
 		return err;
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
+		u8 class = BPF_CLASS(insn->code);
+		u8 mode = BPF_MODE(insn->code);
+
 		if (insn->dst_reg >= MAX_BPF_REG) {
-			verbose(env, "R%d is invalid\n", insn->dst_reg);
-			return -EINVAL;
+			if (insn->dst_reg != BPF_REG_PARAMS ||
+			    !((class == BPF_ST  || class == BPF_STX) && mode == BPF_MEM)) {
+				verbose(env, "R%d is invalid\n", insn->dst_reg);
+				return -EINVAL;
+			}
 		}
 		if (insn->src_reg >= MAX_BPF_REG) {
-			verbose(env, "R%d is invalid\n", insn->src_reg);
-			return -EINVAL;
+			if (insn->src_reg != BPF_REG_PARAMS || class != BPF_LDX ||
+			    mode != BPF_MEM) {
+				verbose(env, "R%d is invalid\n", insn->src_reg);
+				return -EINVAL;
+			}
 		}
 		if (insn[0].code == (BPF_LD | BPF_IMM | BPF_DW)) {
 			struct bpf_insn_aux_data *aux;

@@ -1056,11 +1056,16 @@ static void arg_track_xfer(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	int depth = instance->depth;
 	u8 class = BPF_CLASS(insn->code);
 	u8 code = BPF_OP(insn->code);
-	struct arg_track *dst = &at_out[insn->dst_reg];
-	struct arg_track *src = &at_out[insn->src_reg];
+	struct arg_track *dst, *src;
 	struct arg_track none = { .frame = ARG_NONE };
 	int r;
 
+	/* Stack arguments using BPF_REG_PARAMS are outside the tracked register set. */
+	if (insn->dst_reg >= MAX_BPF_REG || insn->src_reg >= MAX_BPF_REG)
+		return;
+
+	dst = &at_out[insn->dst_reg];
+	src = &at_out[insn->src_reg];
 	if (class == BPF_ALU64 && BPF_SRC(insn->code) == BPF_K) {
 		if (code == BPF_MOV) {
 			*dst = none;

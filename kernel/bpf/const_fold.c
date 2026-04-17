@@ -51,13 +51,18 @@ static void const_reg_xfer(struct bpf_verifier_env *env, struct const_arg_info *
 			   struct bpf_insn *insn, struct bpf_insn *insns, int idx)
 {
 	struct const_arg_info unknown = { .state = CONST_ARG_UNKNOWN, .val = 0 };
-	struct const_arg_info *dst = &ci_out[insn->dst_reg];
-	struct const_arg_info *src = &ci_out[insn->src_reg];
+	struct const_arg_info *dst, *src;
 	u8 class = BPF_CLASS(insn->code);
 	u8 mode = BPF_MODE(insn->code);
 	u8 opcode = BPF_OP(insn->code) | BPF_SRC(insn->code);
 	int r;
 
+	/* Stack arguments using BPF_REG_PARAMS are outside the tracked register set. */
+	if (insn->dst_reg >= MAX_BPF_REG || insn->src_reg >= MAX_BPF_REG)
+		return;
+
+	dst = &ci_out[insn->dst_reg];
+	src = &ci_out[insn->src_reg];
 	switch (class) {
 	case BPF_ALU:
 	case BPF_ALU64:
