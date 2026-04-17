@@ -155,6 +155,12 @@ bpf_crypto_ctx_create(const struct bpf_crypto_params *params, u32 params__sz,
 		return NULL;
 	}
 
+	if (strnlen(params->type, sizeof(params->type)) == sizeof(params->type) ||
+	    strnlen(params->algo, sizeof(params->algo)) == sizeof(params->algo)) {
+		*err = -EINVAL;
+		return NULL;
+	}
+
 	type = bpf_crypto_get_type(params->type);
 	if (IS_ERR(type)) {
 		*err = PTR_ERR(type);
