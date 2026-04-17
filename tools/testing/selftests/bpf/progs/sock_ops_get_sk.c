@@ -114,4 +114,35 @@ __naked void sock_ops_get_sk_diff_reg(void)
 		: __clobber_all);
 }
 
+/* sock_ops rtt_min access: different-register, is_locked_tcp_sock == 0 path (TCP_NEW_SYN_RECV). */
+int rtt_min_bug_detected;
+int rtt_min_null_seen;
+
+SEC("sockops")
+__naked void sock_ops_get_rtt_min(void)
+{
+	asm volatile (
+		"r7 = *(u32 *)(r1 + %[is_fullsock_off]);"
+		"r2 = *(u32 *)(r1 + %[rtt_min_off]);"
+		"if r7 != 0 goto 2f;"
+		"if r2 == 0 goto 1f;"
+		"r1 = %[rtt_min_bug_detected] ll;"
+		"r3 = 1;"
+		"*(u32 *)(r1 + 0) = r3;"
+		"goto 2f;"
+	"1:"
+		"r1 = %[rtt_min_null_seen] ll;"
+		"r3 = 1;"
+		"*(u32 *)(r1 + 0) = r3;"
+	"2:"
+		"r0 = 1;"
+		"exit;"
+		:
+		: __imm_const(is_fullsock_off, offsetof(struct bpf_sock_ops, is_fullsock)),
+		  __imm_const(rtt_min_off, offsetof(struct bpf_sock_ops, rtt_min)),
+		  __imm_addr(rtt_min_bug_detected),
+		  __imm_addr(rtt_min_null_seen)
+		: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";

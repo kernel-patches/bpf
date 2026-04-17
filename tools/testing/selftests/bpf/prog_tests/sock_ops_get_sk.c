@@ -70,6 +70,15 @@ void test_ns_sock_ops_get_sk(void)
 		ASSERT_EQ(skel->bss->diff_reg_bug_detected, 0, "diff_reg_bug_not_detected");
 	}
 
+	/* Test sock_ops rtt_min access in !fullsock callbacks */
+	if (test__start_subtest("get_rtt_min")) {
+		run_sock_ops_test(cgroup_fd,
+				  bpf_program__fd(skel->progs.sock_ops_get_rtt_min));
+		ASSERT_EQ(skel->bss->rtt_min_null_seen, 1, "rtt_min_null_seen");
+		ASSERT_EQ(skel->bss->rtt_min_bug_detected, 0,
+			  "rtt_min_bug_not_detected");
+	}
+
 	sock_ops_get_sk__destroy(skel);
 close_cgroup:
 	close(cgroup_fd);

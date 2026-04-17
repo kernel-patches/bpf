@@ -10827,14 +10827,12 @@ static u32 sock_ops_convert_ctx_access(enum bpf_access_type type,
 			     sizeof(struct minmax));
 		BUILD_BUG_ON(sizeof(struct minmax) <
 			     sizeof(struct minmax_sample));
+		BUILD_BUG_ON(offsetof(struct tcp_sock, rtt_min) +
+			     offsetof(struct minmax_sample, v) > S16_MAX);
 
-		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(
-						struct bpf_sock_ops_kern, sk),
-				      si->dst_reg, si->src_reg,
-				      offsetof(struct bpf_sock_ops_kern, sk));
-		*insn++ = BPF_LDX_MEM(BPF_W, si->dst_reg, si->dst_reg,
-				      offsetof(struct tcp_sock, rtt_min) +
-				      sizeof_field(struct minmax_sample, t));
+		off = offsetof(struct tcp_sock, rtt_min) +
+		      offsetof(struct minmax_sample, v);
+		SOCK_OPS_LOAD_TCP_SOCK_FIELD(BPF_W, off);
 		break;
 
 	case offsetof(struct bpf_sock_ops, bpf_sock_ops_cb_flags):
