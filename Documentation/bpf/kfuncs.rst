@@ -344,22 +344,23 @@ RCU protection but do not take RCU protected arguments.
 
 .. _KF_deprecated_flag:
 
-2.5.8 KF_DEPRECATED flag
-------------------------
+2.5.8 Deprecated kfunc annotation
+---------------------------------
 
-The KF_DEPRECATED flag is used for kfuncs which are scheduled to be
-changed or removed in a subsequent kernel release. A kfunc that is
-marked with KF_DEPRECATED should also have any relevant information
-captured in its kernel doc. Such information typically includes the
-kfunc's expected remaining lifespan, a recommendation for new
-functionality that can replace it if any is available, and possibly a
-rationale for why it is being removed. When verifier warning logging is
-requested, the verifier will emit a warning when a BPF program uses a
-deprecated kfunc.
+The ``__bpf_kfunc_mark_deprecated(replacement)`` annotation is used for
+kfuncs which are scheduled to be changed or removed in a subsequent
+kernel release. A kfunc annotated with
+``__bpf_kfunc_mark_deprecated(replacement)`` should also have any
+relevant information captured in its kernel doc. Such information
+typically includes the kfunc's expected remaining lifespan, a
+recommendation for new functionality that can replace it if any is
+available, and possibly a rationale for why it is being removed. When
+verifier warning logging is requested, the verifier will emit a warning
+when a BPF program uses such a deprecated kfunc.
 
-Note that while on some occasions, a KF_DEPRECATED kfunc may continue to be
-supported and have its KF_DEPRECATED flag removed, it is likely to be far more
-difficult to remove a KF_DEPRECATED flag after it's been added than it is to
+Note that while on some occasions, a deprecated kfunc may continue to be
+supported and have its deprecation annotation removed, it is likely to be far
+more difficult to remove such an annotation after it's been added than it is to
 prevent it from being added in the first place. As described in
 :ref:`BPF_kfunc_lifecycle_expectations`, users that rely on specific kfuncs are
 encouraged to make their use-cases known as early as possible, and participate
@@ -534,10 +535,11 @@ maintainer if it turns out that the kfunc is actually being used.
 
 It's expected that the common case will be that kfuncs will go through a
 deprecation period rather than being changed or removed without warning. As
-described in :ref:`KF_deprecated_flag`, the kfunc framework provides the
-KF_DEPRECATED flag to kfunc developers to signal to users that a kfunc has been
-deprecated. Once a kfunc has been marked with KF_DEPRECATED, the following
-procedure is followed for removal:
+described in :ref:`KF_deprecated_flag`, the kfunc framework provides
+the ``__bpf_kfunc_mark_deprecated(replacement)`` annotation to signal to users
+that a kfunc has been deprecated and to identify the replacement kfunc. Once a
+kfunc has been marked deprecated, the following procedure is followed for
+removal:
 
 1. Any relevant information for deprecated kfuncs is documented in the kfunc's
    kernel docs. This documentation will typically include the kfunc's expected

@@ -2343,6 +2343,7 @@ __bpf_kfunc void *bpf_obj_new(u64 local_type_id__k, struct btf_struct_meta *meta
 	return p;
 }
 
+__bpf_kfunc_mark_deprecated(bpf_obj_new)
 __bpf_kfunc void *bpf_obj_new_impl(u64 local_type_id__k, void *meta__ign)
 {
 	return bpf_obj_new(local_type_id__k, meta__ign);
@@ -2367,6 +2368,7 @@ __bpf_kfunc void *bpf_percpu_obj_new(u64 local_type_id__k, struct btf_struct_met
 	return bpf_mem_alloc(&bpf_global_percpu_ma, size);
 }
 
+__bpf_kfunc_mark_deprecated(bpf_percpu_obj_new)
 __bpf_kfunc void *bpf_percpu_obj_new_impl(u64 local_type_id__k, void *meta__ign)
 {
 	return bpf_percpu_obj_new(local_type_id__k, meta__ign);
@@ -2410,6 +2412,7 @@ __bpf_kfunc void bpf_obj_drop(void *p__alloc, struct btf_struct_meta *meta)
 	__bpf_obj_drop_impl(p, meta ? meta->record : NULL, false);
 }
 
+__bpf_kfunc_mark_deprecated(bpf_obj_drop)
 __bpf_kfunc void bpf_obj_drop_impl(void *p__alloc, void *meta__ign)
 {
 	return bpf_obj_drop(p__alloc, meta__ign);
@@ -2428,6 +2431,7 @@ __bpf_kfunc void bpf_percpu_obj_drop(void *p__alloc, struct btf_struct_meta *met
 	bpf_mem_free_rcu(&bpf_global_percpu_ma, p__alloc);
 }
 
+__bpf_kfunc_mark_deprecated(bpf_percpu_obj_drop)
 __bpf_kfunc void bpf_percpu_obj_drop_impl(void *p__alloc, void *meta__ign)
 {
 	bpf_percpu_obj_drop(p__alloc, meta__ign);
@@ -2460,6 +2464,7 @@ __bpf_kfunc void *bpf_refcount_acquire(void *p__refcounted_kptr, struct btf_stru
 	return (void *)p__refcounted_kptr;
 }
 
+__bpf_kfunc_mark_deprecated(bpf_refcount_acquire)
 __bpf_kfunc void *bpf_refcount_acquire_impl(void *p__refcounted_kptr, void *meta__ign)
 {
 	return bpf_refcount_acquire(p__refcounted_kptr, meta__ign);
@@ -2514,6 +2519,7 @@ __bpf_kfunc int bpf_list_push_front(struct bpf_list_head *head,
 	return __bpf_list_add(n, head, false, meta ? meta->record : NULL, off);
 }
 
+__bpf_kfunc_mark_deprecated(bpf_list_push_front)
 __bpf_kfunc int bpf_list_push_front_impl(struct bpf_list_head *head,
 					 struct bpf_list_node *node,
 					 void *meta__ign, u64 off)
@@ -2543,6 +2549,7 @@ __bpf_kfunc int bpf_list_push_back(struct bpf_list_head *head,
 	return __bpf_list_add(n, head, true, meta ? meta->record : NULL, off);
 }
 
+__bpf_kfunc_mark_deprecated(bpf_list_push_back)
 __bpf_kfunc int bpf_list_push_back_impl(struct bpf_list_head *head,
 					struct bpf_list_node *node,
 					void *meta__ign, u64 off)
@@ -2683,6 +2690,7 @@ __bpf_kfunc int bpf_rbtree_add(struct bpf_rb_root *root,
 	return __bpf_rbtree_add(root, n, (void *)less, meta ? meta->record : NULL, off);
 }
 
+__bpf_kfunc_mark_deprecated(bpf_rbtree_add)
 __bpf_kfunc int bpf_rbtree_add_impl(struct bpf_rb_root *root, struct bpf_rb_node *node,
 				    bool (less)(struct bpf_rb_node *a, const struct bpf_rb_node *b),
 				    void *meta__ign, u64 off)

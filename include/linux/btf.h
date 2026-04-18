@@ -88,6 +88,11 @@
  */
 #define __bpf_kfunc __used __retain __noclone noinline
 
+#define BPF_KFUNC_DECL_TAG_DEPRECATED "bpf:kfunc:deprecated:"
+
+#define __bpf_kfunc_mark_deprecated(replacement) \
+	BTF_DECL_TAG(BPF_KFUNC_DECL_TAG_DEPRECATED __stringify(replacement))
+
 #define __bpf_kfunc_start_defs()					       \
 	__diag_push();							       \
 	__diag_ignore_all("-Wmissing-declarations",			       \

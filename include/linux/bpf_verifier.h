@@ -1461,6 +1461,7 @@ struct bpf_kfunc_desc {
 	u32 func_id;
 	s32 imm;
 	u16 offset;
+	bool warned_deprecated;
 	unsigned long addr;
 };
 

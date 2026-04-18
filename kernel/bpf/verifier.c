@@ -12955,6 +12955,45 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 static int process_bpf_exit_full(struct bpf_verifier_env *env,
 				 bool *do_print_state, bool exception_exit);
 
+static void warn_for_deprecated_kfuncs(struct bpf_verifier_env *env,
+				       struct bpf_kfunc_call_arg_meta *meta,
+				       int insn_idx, s16 offset)
+{
+	const struct bpf_line_info *linfo;
+	const char *replacement;
+	const struct btf_type *t;
+	struct bpf_kfunc_desc *desc;
+	const char *file;
+	int line_num;
+
+	if (!env->prog->aux->btf)
+		return;
+
+	t = btf_type_by_id(meta->btf, meta->func_id);
+	replacement = btf_find_decl_tag_value(meta->btf, t, -1, BPF_KFUNC_DECL_TAG_DEPRECATED);
+	if (IS_ERR(replacement) || str_is_empty(replacement))
+		return;
+
+	desc = find_kfunc_desc(env->prog, meta->func_id, offset);
+	if (!desc || desc->warned_deprecated)
+		return;
+
+	linfo = bpf_find_linfo(env->prog, insn_idx);
+	if (linfo) {
+		bpf_get_linfo_file_line(env->prog->aux->btf, linfo, &file, NULL, &line_num);
+		warn(env, "%s:%d (insn #%d) uses deprecated kfunc %s(), which will be removed.\n",
+		     file, line_num, insn_idx, meta->func_name);
+	} else {
+		warn(env, "(insn #%d) uses deprecated kfunc %s(), which will be removed.\n",
+		     insn_idx, meta->func_name);
+	}
+
+	warn(env, "Switch to kfunc %s() instead.\n", replacement);
+	warn(env, "For older kernels, choose the correct kfunc using bpf_ksym_exists().\n");
+
+	desc->warned_deprecated = true;
+}
+
 static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    int *insn_idx_p)
 {
@@ -12983,6 +13022,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	insn_aux = &env->insn_aux_data[insn_idx];
 
 	insn_aux->is_iter_next = bpf_is_iter_next_kfunc(&meta);
+
+	warn_for_deprecated_kfuncs(env, &meta, insn_idx, insn->off);
 
 	if (!insn->off &&
 	    (insn->imm == special_kfunc_list[KF_bpf_res_spin_lock] ||
