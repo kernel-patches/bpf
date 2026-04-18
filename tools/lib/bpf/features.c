@@ -208,6 +208,59 @@ static int probe_kern_btf_type_tag(int token_fd)
 					     strs, sizeof(strs), token_fd));
 }
 
+static bool btf_type_has_enum_value(const struct btf *btf, const struct btf_type *t,
+				    const char *value_name)
+{
+	int i, vlen = btf_vlen(t);
+
+	if (btf_is_enum(t)) {
+		const struct btf_enum *e = btf_enum(t);
+
+		for (i = 0; i < vlen; i++, e++) {
+			if (strcmp(btf__name_by_offset(btf, e->name_off), value_name) == 0)
+				return true;
+		}
+	} else if (btf_is_enum64(t)) {
+		const struct btf_enum64 *e = btf_enum64(t);
+
+		for (i = 0; i < vlen; i++, e++) {
+			if (strcmp(btf__name_by_offset(btf, e->name_off), value_name) == 0)
+				return true;
+		}
+	}
+
+	return false;
+}
+
+static int probe_kern_verifier_warnings(int token_fd)
+{
+	const struct btf_type *t;
+	struct btf *btf;
+	bool found = false;
+	__s32 type_id;
+
+	(void)token_fd;
+
+	btf = btf__load_vmlinux_btf();
+	if (libbpf_get_error(btf))
+		return 0;
+
+	type_id = btf__find_by_name_kind(btf, "bpf_features", BTF_KIND_ENUM);
+	if (type_id < 0)
+		type_id = btf__find_by_name_kind(btf, "bpf_features", BTF_KIND_ENUM64);
+	if (type_id < 0) {
+		btf__free(btf);
+		return 0;
+	}
+
+	t = btf__type_by_id(btf, type_id);
+	if (t)
+		found = btf_type_has_enum_value(btf, t, "BPF_FEAT_VERIFIER_WARNINGS");
+
+	btf__free(btf);
+	return found;
+}
+
 static int probe_kern_array_mmap(int token_fd)
 {
 	LIBBPF_OPTS(bpf_map_create_opts, opts,
@@ -668,6 +721,9 @@ static struct kern_feature_desc {
 	},
 	[FEAT_BTF_TYPE_TAG] = {
 		"BTF_KIND_TYPE_TAG support", probe_kern_btf_type_tag,
+	},
+	[FEAT_VERIFIER_WARNINGS] = {
+		"BPF_LOG_LEVEL_WARN verifier warnings", probe_kern_verifier_warnings,
 	},
 	[FEAT_MEMCG_ACCOUNT] = {
 		"memcg-based memory accounting", probe_memcg_account,

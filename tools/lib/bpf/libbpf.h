@@ -194,8 +194,11 @@ struct bpf_object_open_opts {
 	/*
 	 * Log level can be set independently from log buffer. Log_level=0
 	 * means that libbpf will attempt loading BTF or program without any
-	 * logging requested, but will retry with either its own or custom log
-	 * buffer, if provided, and log_level=1 on any error.
+	 * verbose logging requested, but will retry with either its own or
+	 * custom log buffer, if provided, and log_level=1 on any error. On
+	 * kernels supporting verifier warning logging, libbpf will also
+	 * request warning messages for successful program loads by default
+	 * when log_level=0.
 	 * And vice versa, setting log_level>0 will request BTF or prog
 	 * loading with verbose log from the first attempt (and as such also
 	 * for successfully loaded BTF or program), and the actual log buffer

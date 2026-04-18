@@ -7841,11 +7841,16 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 {
 	LIBBPF_OPTS(bpf_prog_load_opts, load_attr);
 	const char *prog_name = NULL;
+	const size_t warn_log_buf_size = 4096;
 	size_t log_buf_size = 0;
 	char *log_buf = NULL, *tmp;
 	bool own_log_buf = true;
 	__u32 log_level = prog->log_level;
+	bool supports_verifier_warnings = kernel_supports(obj, FEAT_VERIFIER_WARNINGS);
 	int ret, err;
+
+	if (supports_verifier_warnings)
+		log_level |= 16;
 
 	/* Be more helpful by rejecting programs that can't be validated early
 	 * with more meaningful and actionable error message.
@@ -7921,10 +7926,9 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 	}
 
 retry_load:
-	/* if log_level is zero, we don't request logs initially even if
-	 * custom log_buf is specified; if the program load fails, then we'll
-	 * bump log_level to 1 and use either custom log_buf or we'll allocate
-	 * our own and retry the load to get details on what failed
+	/* If verifier warning logging is supported, we can request warnings
+	 * even without verbose logging. If the program load fails, retry with
+	 * log_level=1 to get details on what failed.
 	 */
 	if (log_level) {
 		if (prog->log_buf) {
@@ -7936,7 +7940,9 @@ retry_load:
 			log_buf_size = obj->log_size;
 			own_log_buf = false;
 		} else {
-			log_buf_size = max((size_t)BPF_LOG_BUF_SIZE, log_buf_size * 2);
+			log_buf_size = max(log_level == 16 ? warn_log_buf_size :
+					   (size_t)BPF_LOG_BUF_SIZE,
+					   log_buf_size * 2);
 			tmp = realloc(log_buf, log_buf_size);
 			if (!tmp) {
 				ret = -ENOMEM;
@@ -7954,7 +7960,10 @@ retry_load:
 
 	ret = bpf_prog_load(prog->type, prog_name, license, insns, insns_cnt, &load_attr);
 	if (ret >= 0) {
-		if (log_level && own_log_buf) {
+		if (log_level == 16 && load_attr.log_true_size && own_log_buf) {
+			pr_warn("prog '%s': -- BEGIN PROG LOAD WARNINGS --\n%s-- END PROG LOAD WARNINGS --\n",
+				prog->name, log_buf);
+		} else if (log_level && own_log_buf) {
 			pr_debug("prog '%s': -- BEGIN PROG LOAD LOG --\n%s-- END PROG LOAD LOG --\n",
 				 prog->name, log_buf);
 		}
@@ -7981,8 +7990,8 @@ retry_load:
 		goto out;
 	}
 
-	if (log_level == 0) {
-		log_level = 1;
+	if (log_level == (supports_verifier_warnings ? 16 : 0)) {
+		log_level = 1 | (supports_verifier_warnings ? 16 : 0);
 		goto retry_load;
 	}
 	/* On ENOSPC, increase log buffer size and retry, unless custom
