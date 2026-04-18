@@ -10,6 +10,7 @@
 #include <linux/arm-smccc.h>
 #include <linux/bitfield.h>
 #include <linux/bpf.h>
+#include <linux/clocksource.h>
 #include <linux/cfi.h>
 #include <linux/filter.h>
 #include <linux/memory.h>
@@ -19,6 +20,7 @@
 #include <asm/asm-extable.h>
 #include <asm/byteorder.h>
 #include <asm/cpufeature.h>
+#include <asm/arch_timer.h>
 #include <asm/debug-monitors.h>
 #include <asm/insn.h>
 #include <asm/text-patching.h>
@@ -1571,9 +1573,53 @@ emit_cond_jmp:
 	case BPF_JMP | BPF_CALL:
 	{
 		const u8 r0 = bpf2a64[BPF_REG_0];
+		const u8 r1 = bpf2a64[BPF_REG_1];
+		const s32 imm = insn->imm;
 		bool func_addr_fixed;
 		u64 func_addr;
 		u32 cpu_offset;
+
+		/* Inline kfunc bpf_get_cpu_time_counter() */
+		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
+		    imm == BPF_CALL_IMM(bpf_get_cpu_time_counter) &&
+		    bpf_jit_inlines_kfunc_call(imm)) {
+			/*
+			 * With ECV (ARMv8.6+), CNTVCTSS_EL0 is self-
+			 * synchronizing — no ISB needed.  Without ECV,
+			 * an ISB is required before reading CNTVCT_EL0
+			 * to prevent speculative/out-of-order reads.
+			 *
+			 * Matches arch_timer_read_cntvct_el0().
+			 */
+			if (cpus_have_cap(ARM64_HAS_ECV)) {
+				emit(A64_MRS_CNTVCTSS_EL0(r0), ctx);
+			} else {
+				emit(A64_ISB, ctx);
+				emit(A64_MRS_CNTVCT_EL0(r0), ctx);
+			}
+			break;
+		}
+
+		/* Inline kfunc bpf_cpu_time_counter_to_ns() */
+		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
+		    imm == BPF_CALL_IMM(bpf_cpu_time_counter_to_ns) &&
+		    bpf_jit_inlines_kfunc_call(imm)) {
+			u32 freq = arch_timer_get_cntfrq();
+
+			if (freq == NSEC_PER_SEC) {
+				/* 1 GHz counter: 1 tick = 1 ns, identity */
+				emit(A64_MOV(1, r0, r1), ctx);
+			} else {
+				u32 mult, shift;
+
+				clocks_calc_mult_shift(&mult, &shift, freq, NSEC_PER_SEC, 3600);
+				emit_a64_mov_i(1, tmp, mult, ctx);
+				emit(A64_MUL(1, r0, r1, tmp), ctx);
+				if (shift)
+					emit(A64_LSR(1, r0, r0, shift), ctx);
+			}
+			break;
+		}
 
 		/* Implement helper call to bpf_get_smp_processor_id() inline */
 		if (insn->src_reg == 0 && insn->imm == BPF_FUNC_get_smp_processor_id) {
@@ -3125,6 +3171,14 @@ bool bpf_jit_inlines_helper_call(s32 imm)
 	default:
 		return false;
 	}
+}
+
+bool bpf_jit_inlines_kfunc_call(s32 imm)
+{
+	if (imm == BPF_CALL_IMM(bpf_get_cpu_time_counter) ||
+	    imm == BPF_CALL_IMM(bpf_cpu_time_counter_to_ns))
+		return true;
+	return false;
 }
 
 void bpf_jit_free(struct bpf_prog *prog)
