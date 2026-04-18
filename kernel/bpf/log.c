@@ -154,7 +154,7 @@ void bpf_vlog_reset(struct bpf_verifier_log *log, u64 new_pos)
 	if (WARN_ON_ONCE(new_pos > log->end_pos))
 		return;
 
-	if (!bpf_verifier_log_needed(log) || log->level == BPF_LOG_KERNEL)
+	if (!log || log->level == 0 || log->level == BPF_LOG_KERNEL)
 		return;
 
 	/* if position to which we reset is beyond current log window,

@@ -689,15 +689,21 @@ struct bpf_verifier_log {
 #define BPF_LOG_LEVEL2	2
 #define BPF_LOG_STATS	4
 #define BPF_LOG_FIXED	8
+#define BPF_LOG_LEVEL_WARN	16
 #define BPF_LOG_LEVEL	(BPF_LOG_LEVEL1 | BPF_LOG_LEVEL2)
-#define BPF_LOG_MASK	(BPF_LOG_LEVEL | BPF_LOG_STATS | BPF_LOG_FIXED)
+#define BPF_LOG_MASK	(BPF_LOG_LEVEL | BPF_LOG_STATS | BPF_LOG_FIXED | BPF_LOG_LEVEL_WARN)
 #define BPF_LOG_KERNEL	(BPF_LOG_MASK + 1) /* kernel internal flag */
 #define BPF_LOG_MIN_ALIGNMENT 8U
 #define BPF_LOG_ALIGNMENT 40U
 
 static inline bool bpf_verifier_log_needed(const struct bpf_verifier_log *log)
 {
-	return log && log->level;
+	return log && (log->level & ~BPF_LOG_LEVEL_WARN);
+}
+
+static inline bool bpf_verifier_warn_needed(const struct bpf_verifier_log *log)
+{
+	return log && (log->level & BPF_LOG_LEVEL_WARN);
 }
 
 #define BPF_MAX_SUBPROGS 256
@@ -848,6 +854,7 @@ struct bpf_verifier_env {
 	bool bypass_spec_v4;
 	bool seen_direct_write;
 	bool seen_exception;
+	bool warnings;
 	struct bpf_insn_aux_data *insn_aux_data; /* array of per-insn state */
 	const struct bpf_line_info *prev_linfo;
 	struct bpf_verifier_log log;

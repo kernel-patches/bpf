@@ -353,7 +353,9 @@ marked with KF_DEPRECATED should also have any relevant information
 captured in its kernel doc. Such information typically includes the
 kfunc's expected remaining lifespan, a recommendation for new
 functionality that can replace it if any is available, and possibly a
-rationale for why it is being removed.
+rationale for why it is being removed. When verifier warning logging is
+requested, the verifier will emit a warning when a BPF program uses a
+deprecated kfunc.
 
 Note that while on some occasions, a KF_DEPRECATED kfunc may continue to be
 supported and have its KF_DEPRECATED flag removed, it is likely to be far more

@@ -47,6 +47,7 @@ static const struct bpf_verifier_ops * const bpf_verifier_ops[] = {
 enum bpf_features {
 	BPF_FEAT_RDONLY_CAST_TO_VOID = 0,
 	BPF_FEAT_STREAMS	     = 1,
+	BPF_FEAT_VERIFIER_WARNINGS   = 2,
 	__MAX_BPF_FEAT,
 };
 
@@ -280,6 +281,20 @@ __printf(2, 3) static void verbose(void *private_data, const char *fmt, ...)
 	va_start(args, fmt);
 	bpf_verifier_vlog(&env->log, fmt, args);
 	va_end(args);
+}
+
+__printf(2, 3) static void warn(void *private_data, const char *fmt, ...)
+{
+	struct bpf_verifier_env *env = private_data;
+	va_list args;
+
+	if (!bpf_verifier_warn_needed(&env->log))
+		return;
+
+	va_start(args, fmt);
+	bpf_verifier_vlog(&env->log, fmt, args);
+	va_end(args);
+	env->warnings = true;
 }
 
 static void verbose_invalid_scalar(struct bpf_verifier_env *env,
@@ -1674,7 +1689,8 @@ static int pop_stack(struct bpf_verifier_env *env, int *prev_insn_idx,
 		if (err)
 			return err;
 	}
-	if (pop_log)
+	/* Preserve warning output across branch explorations. */
+	if (pop_log && !(env->warnings && bpf_verifier_warn_needed(&env->log)))
 		bpf_vlog_reset(&env->log, head->log_pos);
 	if (insn_idx)
 		*insn_idx = head->insn_idx;
@@ -18771,7 +18787,8 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 
 	ret = do_check(env);
 out:
-	if (!ret && pop_log)
+	if (!ret && pop_log &&
+	    !(env->warnings && bpf_verifier_warn_needed(&env->log)))
 		bpf_vlog_reset(&env->log, 0);
 	free_states(env);
 	return ret;
