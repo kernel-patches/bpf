@@ -4536,6 +4536,18 @@ static int map_kptr_match_type(struct bpf_verifier_env *env,
 			       struct btf_field *kptr_field,
 			       struct bpf_reg_state *reg, u32 regno)
 {
+	/*
+	 * If the source register has no BTF type (e.g. it is a scalar),
+	 * it cannot possibly match a kptr slot. Reject early to avoid
+	 * passing a NULL reg->btf to btf_is_kernel(), which would cause
+	 * a NULL pointer dereference inside that function.
+	 */
+	if (!reg->btf) {
+		verbose(env, "R%d is not a pointer, cannot store into kptr slot\n",
+			regno);
+		return -EACCES;
+	}
+
 	const char *targ_name = btf_type_name(kptr_field->kptr.btf, kptr_field->kptr.btf_id);
 	int perm_flags;
 	const char *reg_name = "";
