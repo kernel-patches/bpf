@@ -271,7 +271,7 @@ static void jit_fill_hole(void *area, unsigned int size)
 
 int bpf_arch_text_invalidate(void *dst, size_t len)
 {
-	if (!aarch64_insn_set(dst, AARCH64_BREAK_FAULT, len))
+	if (!aarch64_insn_set_nosync(dst, AARCH64_BREAK_FAULT, len))
 		return -EINVAL;
 
 	return 0;
@@ -2231,7 +2231,7 @@ bool bpf_jit_supports_kfunc_call(void)
 
 void *bpf_arch_text_copy(void *dst, void *src, size_t len)
 {
-	if (!aarch64_insn_copy(dst, src, len))
+	if (!aarch64_insn_copy_nosync(dst, src, len))
 		return ERR_PTR(-EINVAL);
 	return dst;
 }
