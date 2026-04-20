@@ -8,15 +8,17 @@
 #define SRV_PORT 54321
 
 #define ICMP_DEST_UNREACH 3
+#define ICMPV6_DEST_UNREACH 1
 
 #define ICMP_FRAG_NEEDED 4
 #define NR_ICMP_UNREACH 15
+#define NR_ICMPV6_UNREACH 6
 
 static int connect_to_fd_nonblock(int server_fd)
 {
 	struct sockaddr_storage addr;
 	socklen_t len = sizeof(addr);
-	int fd, err;
+	int fd, err, on = 1;
 
 	if (getsockname(server_fd, (struct sockaddr *)&addr, &len))
 		return -1;
@@ -24,6 +26,12 @@ static int connect_to_fd_nonblock(int server_fd)
 	fd = socket(addr.ss_family, SOCK_STREAM | SOCK_NONBLOCK, 0);
 	if (fd < 0)
 		return -1;
+
+	if (addr.ss_family == AF_INET6 &&
+	    setsockopt(fd, IPPROTO_IPV6, IPV6_RECVERR, &on, sizeof(on)) < 0) {
+		close(fd);
+		return -1;
+	}
 
 	err = connect(fd, (struct sockaddr *)&addr, len);
 	if (err < 0 && errno != EINPROGRESS) {
@@ -34,7 +42,7 @@ static int connect_to_fd_nonblock(int server_fd)
 	return fd;
 }
 
-static void read_icmp_errqueue(int sockfd, int expected_code)
+static void read_icmp_errqueue(int sockfd, int expected_code, int af)
 {
 	ssize_t n;
 	struct sock_extended_err *sock_err;
@@ -44,6 +52,12 @@ static void read_icmp_errqueue(int sockfd, int expected_code)
 		.msg_control = ctrl_buf,
 		.msg_controllen = sizeof(ctrl_buf),
 	};
+	int expected_level = (af == AF_INET) ? IPPROTO_IP : IPPROTO_IPV6;
+	int expected_type = (af == AF_INET) ? IP_RECVERR : IPV6_RECVERR;
+	int expected_origin = (af == AF_INET) ? SO_EE_ORIGIN_ICMP :
+						SO_EE_ORIGIN_ICMP6;
+	int expected_ee_type = (af == AF_INET) ? ICMP_DEST_UNREACH :
+						 ICMPV6_DEST_UNREACH;
 
 	n = recvmsg(sockfd, &msg, MSG_ERRQUEUE);
 	if (!ASSERT_GE(n, 0, "recvmsg_errqueue"))
@@ -54,28 +68,27 @@ static void read_icmp_errqueue(int sockfd, int expected_code)
 		return;
 
 	for (; cm; cm = CMSG_NXTHDR(&msg, cm)) {
-		if (!ASSERT_EQ(cm->cmsg_level, IPPROTO_IP, "cmsg_type") ||
-		    !ASSERT_EQ(cm->cmsg_type, IP_RECVERR, "cmsg_level"))
+		if (!ASSERT_EQ(cm->cmsg_level, expected_level, "cmsg_level") ||
+		    !ASSERT_EQ(cm->cmsg_type, expected_type, "cmsg_type"))
 			continue;
 
 		sock_err = (struct sock_extended_err *)CMSG_DATA(cm);
 
-		if (!ASSERT_EQ(sock_err->ee_origin, SO_EE_ORIGIN_ICMP,
-			       "sock_err_origin_icmp"))
+		if (!ASSERT_EQ(sock_err->ee_origin, expected_origin,
+			       "sock_err_origin"))
 			return;
-		if (!ASSERT_EQ(sock_err->ee_type, ICMP_DEST_UNREACH,
+		if (!ASSERT_EQ(sock_err->ee_type, expected_ee_type,
 			       "sock_err_type_dest_unreach"))
 			return;
 		ASSERT_EQ(sock_err->ee_code, expected_code, "sock_err_code");
 	}
 }
 
-static void trigger_prog_read_icmp_errqueue(int *code)
+static void trigger_prog_read_icmp_errqueue(int *code, int af, const char *addr)
 {
 	int srv_fd = -1, client_fd = -1;
 
-	srv_fd = start_server(AF_INET, SOCK_STREAM, "127.0.0.1", SRV_PORT,
-			      TIMEOUT_MS);
+	srv_fd = start_server(af, SOCK_STREAM, addr, SRV_PORT, TIMEOUT_MS);
 	if (!ASSERT_GE(srv_fd, 0, "start_server"))
 		return;
 
@@ -86,18 +99,40 @@ static void trigger_prog_read_icmp_errqueue(int *code)
 	}
 
 	/* Skip reading ICMP error queue if code is invalid */
-	if (*code >= 0 && *code <= NR_ICMP_UNREACH)
-		read_icmp_errqueue(client_fd, *code);
+	if (*code >= 0 && ((af == AF_INET && *code <= NR_ICMP_UNREACH) ||
+			   (af == AF_INET6 && *code <= NR_ICMPV6_UNREACH)))
+		read_icmp_errqueue(client_fd, *code, af);
 
-	close(srv_fd);
 	close(client_fd);
+	close(srv_fd);
+}
+
+static void run_icmp_test(struct icmp_send_unreach *skel, int af,
+			  const char *addr, int max_code)
+{
+	int *code = &skel->bss->unreach_code;
+
+	for (*code = 0; *code <= max_code; (*code)++) {
+		/* The TCP stack reacts differently when asking for
+		 * fragmentation, let's ignore it for now.
+		 */
+		if (af == AF_INET && *code == ICMP_FRAG_NEEDED)
+			continue;
+
+		trigger_prog_read_icmp_errqueue(code, af, addr);
+		ASSERT_EQ(skel->data->kfunc_ret, 0, "kfunc_ret");
+	}
+
+	/* Test an invalid code */
+	*code = -1;
+	trigger_prog_read_icmp_errqueue(code, af, addr);
+	ASSERT_EQ(skel->data->kfunc_ret, -EINVAL, "kfunc_ret");
 }
 
 void test_icmp_send_unreach_kfunc(void)
 {
 	struct icmp_send_unreach *skel;
 	int cgroup_fd = -1;
-	int *code;
 
 	skel = icmp_send_unreach__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "skel_open"))
@@ -112,23 +147,11 @@ void test_icmp_send_unreach_kfunc(void)
 	if (!ASSERT_OK_PTR(skel->links.egress, "prog_attach_cgroup"))
 		goto cleanup;
 
-	code = &skel->bss->unreach_code;
+	if (test__start_subtest("ipv4"))
+		run_icmp_test(skel, AF_INET, "127.0.0.1", NR_ICMP_UNREACH);
 
-	for (*code = 0; *code <= NR_ICMP_UNREACH; (*code)++) {
-		/* The TCP stack reacts differently when asking for
-		 * fragmentation, let's ignore it for now.
-		 */
-		if (*code == ICMP_FRAG_NEEDED)
-			continue;
-
-		trigger_prog_read_icmp_errqueue(code);
-		ASSERT_EQ(skel->data->kfunc_ret, 0, "kfunc_ret");
-	}
-
-	/* Test an invalid code */
-	*code = -1;
-	trigger_prog_read_icmp_errqueue(code);
-	ASSERT_EQ(skel->data->kfunc_ret, -EINVAL, "kfunc_ret");
+	if (test__start_subtest("ipv6"))
+		run_icmp_test(skel, AF_INET6, "::1", NR_ICMPV6_UNREACH);
 
 cleanup:
 	icmp_send_unreach__destroy(skel);
