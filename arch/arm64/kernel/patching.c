@@ -104,7 +104,7 @@ noinstr int aarch64_insn_write_literal_u64(void *addr, u64 val)
 
 typedef void text_poke_f(void *dst, void *src, size_t patched, size_t len);
 
-static void *__text_poke(text_poke_f func, void *addr, void *src, size_t len)
+static void *__text_poke(text_poke_f func, void *addr, void *src, size_t len, bool sync)
 {
 	unsigned long flags;
 	size_t patched = 0;
@@ -127,7 +127,10 @@ static void *__text_poke(text_poke_f func, void *addr, void *src, size_t len)
 	}
 	raw_spin_unlock_irqrestore(&patch_lock, flags);
 
-	flush_icache_range((uintptr_t)addr, (uintptr_t)addr + len);
+	if (sync)
+		flush_icache_range((uintptr_t)addr, (uintptr_t)addr + len);
+	else
+		caches_clean_inval_pou((uintptr_t)addr, (uintptr_t)addr + len);
 
 	return addr;
 }
@@ -158,7 +161,16 @@ noinstr void *aarch64_insn_copy(void *dst, void *src, size_t len)
 	if ((uintptr_t)dst & 0x3)
 		return NULL;
 
-	return __text_poke(text_poke_memcpy, dst, src, len);
+	return __text_poke(text_poke_memcpy, dst, src, len, true);
+}
+
+noinstr void *aarch64_insn_copy_nosync(void *dst, void *src, size_t len)
+{
+	/* A64 instructions must be word aligned */
+	if ((uintptr_t)dst & 0x3)
+		return NULL;
+
+	return __text_poke(text_poke_memcpy, dst, src, len, false);
 }
 
 /**
@@ -174,7 +186,15 @@ noinstr void *aarch64_insn_set(void *dst, u32 insn, size_t len)
 	if ((uintptr_t)dst & 0x3)
 		return NULL;
 
-	return __text_poke(text_poke_memset, dst, &insn, len);
+	return __text_poke(text_poke_memset, dst, &insn, len, true);
+}
+
+noinstr void *aarch64_insn_set_nosync(void *dst, u32 insn, size_t len)
+{
+	if ((uintptr_t)dst & 0x3)
+		return NULL;
+
+	return __text_poke(text_poke_memset, dst, &insn, len, false);
 }
 
 int __kprobes aarch64_insn_patch_text_nosync(void *addr, u32 insn)
