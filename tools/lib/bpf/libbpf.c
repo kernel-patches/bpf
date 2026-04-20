@@ -15269,19 +15269,23 @@ static int bpf_program__set_dynamicload(struct bpf_program *prog)
 
 	attach_name = strchr(prog->sec_name, '/');
 	if (!attach_name || strchr(attach_name, ':')) {
-		/* Dynamic loading is not supported if module's BTF
-		 * data is required for a bpf program.
-		 * The module's BTF data is required in the folowing cases:
-		 * - If a BPF program is annotated with just SEC("fentry")
-		 * (or similar) without declaratively specifying
-		 * target, then it is expected that target will be
-		 * specified with bpf_program__set_attach_target() at
-		 * runtime before BPF object load step. The module's
-		 * BTF data will be required by libbpf_prepare_prog_load and
-		 * libbpf_find_attach_btf_id.
-		 * - The attach name is prepended with a module name.
+		/* Only reject programs that require BTF-based attach target
+		 * resolution (indicated by the SEC_ATTACH_BTF flag). Such
+		 * programs need the section name parsed for the attach target
+		 * function name (after '/') and optionally the module name
+		 * (before ':') for libbpf_find_attach_btf_id.
+		 *
+		 * Programs like SEC("classifier"), SEC("socket"), etc. do
+		 * not require BTF attach resolution and can safely use
+		 * dynamic loading despite having no '/' in their section
+		 * name. The BTF guard in libbpf_prepare_prog_load (checking
+		 * SEC_ATTACH_BTF) is the authoritative check; this is an
+		 * early-reject for programs that would fail there.
 		 */
-		return libbpf_err(-EINVAL);
+		long flags = prog->sec_def ?
+			(long)prog->sec_def->cookie : SEC_ATTACH_BTF;
+		if ((flags & SEC_ATTACH_BTF) && !prog->attach_btf_id)
+			return libbpf_err(-EINVAL);
 	}
 
 	obj->has_dynload_progs = true;
