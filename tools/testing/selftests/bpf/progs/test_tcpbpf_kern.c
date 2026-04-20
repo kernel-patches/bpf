@@ -33,6 +33,7 @@ int bpf_testcb(struct bpf_sock_ops *skops)
 {
 	char header[sizeof(struct ipv6hdr) + sizeof(struct tcphdr)];
 	struct bpf_sock_ops *reuse = skops;
+	long rtt_min = (long)skops;
 	struct tcphdr *thdr;
 	int window_clamp = 9216;
 	int save_syn = 1;
@@ -83,6 +84,19 @@ int bpf_testcb(struct bpf_sock_ops *skops)
 	op = (int) skops->op;
 
 	global.event_map |= (1 << op);
+
+	if (!skops->is_fullsock &&
+	    (op == BPF_SOCK_OPS_RWND_INIT || op == BPF_SOCK_OPS_NEEDS_ECN)) {
+		asm volatile (
+			"%[rtt_min] = *(u32 *)(%[rtt_min] + %[rtt_min_off]);\n"
+			: [rtt_min] "+r"(rtt_min)
+			: [rtt_min_off] "i"(offsetof(struct bpf_sock_ops, rtt_min))
+			:);
+
+		global.rtt_min_req_seen = 1;
+		if (rtt_min)
+			global.rtt_min_req_nonzero = 1;
+	}
 
 	switch (op) {
 	case BPF_SOCK_OPS_TCP_CONNECT_CB:

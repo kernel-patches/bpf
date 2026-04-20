@@ -42,6 +42,10 @@ static void verify_result(struct tcpbpf_globals *result)
 	/* check getsockopt for window_clamp */
 	ASSERT_EQ(result->window_clamp_client, 9216, "window_clamp_client");
 	ASSERT_EQ(result->window_clamp_server, 9216, "window_clamp_server");
+
+	/* check same-reg rtt_min read on request_sock-backed callbacks */
+	ASSERT_NEQ(result->rtt_min_req_seen, 0, "rtt_min_req_seen");
+	ASSERT_EQ(result->rtt_min_req_nonzero, 0, "rtt_min_req_nonzero");
 }
 
 static void run_test(struct tcpbpf_globals *result)

@@ -18,5 +18,7 @@ struct tcpbpf_globals {
 	__u32 tcp_saved_syn;
 	__u32 window_clamp_client;
 	__u32 window_clamp_server;
+	__u32 rtt_min_req_seen;
+	__u32 rtt_min_req_nonzero;
 };
 #endif
