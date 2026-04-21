@@ -188,5 +188,11 @@ static inline bool gic_has_relaxed_pmr_sync(void)
 	return cpus_have_cap(ARM64_HAS_GIC_PRIO_RELAXED_SYNC);
 }
 
+#ifdef CONFIG_ARM64_RUNTIME_PSEUDO_NMI
+bool gic_runtime_nmi_forbidden(void);
+void gic_runtime_enable_nmi(void);
+void gic_runtime_disable_nmi(void);
+#endif
+
 #endif /* __ASSEMBLER__ */
 #endif /* __ASM_ARCH_GICV3_H */

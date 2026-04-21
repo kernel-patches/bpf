@@ -1966,6 +1966,36 @@ static void gic_enable_nmi_support(void)
 		gic_chip.flags |= IRQCHIP_SUPPORTS_NMI;
 }
 
+#ifdef CONFIG_ARM64_RUNTIME_PSEUDO_NMI
+bool gic_runtime_nmi_forbidden(void)
+{
+	return nmi_support_forbidden || !cpus_have_cap(ARM64_HAS_GICV3_CPUIF);
+}
+
+void gic_runtime_enable_nmi(void)
+{
+	lockdep_assert_cpus_held();
+	static_branch_enable_cpuslocked(&supports_pseudo_nmis);
+
+	if (static_branch_likely(&supports_deactivate_key))
+		gic_eoimode1_chip.flags |= IRQCHIP_SUPPORTS_NMI;
+	else
+		gic_chip.flags |= IRQCHIP_SUPPORTS_NMI;
+}
+
+void gic_runtime_disable_nmi(void)
+{
+	lockdep_assert_cpus_held();
+
+	if (static_branch_likely(&supports_deactivate_key))
+		gic_eoimode1_chip.flags &= ~IRQCHIP_SUPPORTS_NMI;
+	else
+		gic_chip.flags &= ~IRQCHIP_SUPPORTS_NMI;
+
+	static_branch_disable_cpuslocked(&supports_pseudo_nmis);
+}
+#endif
+
 static int __init gic_init_bases(phys_addr_t dist_phys_base,
 				 void __iomem *dist_base,
 				 struct redist_region *rdist_regs,
