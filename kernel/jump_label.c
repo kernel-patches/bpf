@@ -90,7 +90,7 @@ jump_label_sort_entries(struct jump_entry *start, struct jump_entry *stop)
 	sort(start, size, sizeof(struct jump_entry), jump_label_cmp, swapfn);
 }
 
-static void jump_label_update(struct static_key *key);
+void jump_label_update(struct static_key *key);
 
 /*
  * There are similar definitions for the !CONFIG_JUMP_LABEL case in jump_label.h.
@@ -892,7 +892,7 @@ int jump_label_text_reserved(void *start, void *end)
 	return ret;
 }
 
-static void jump_label_update(struct static_key *key)
+void jump_label_update(struct static_key *key)
 {
 	struct jump_entry *stop = __stop___jump_table;
 	bool init = system_state < SYSTEM_RUNNING;
@@ -917,6 +917,67 @@ static void jump_label_update(struct static_key *key)
 	/* if there are no users, entry can be NULL */
 	if (entry)
 		__jump_label_update(key, entry, stop, init);
+}
+
+/*
+ * Patch all jump label sites for @key without cross-CPU synchronisation.
+ *
+ * The text is patched but no kick/IPI/ISB is performed — the caller
+ * must ensure every CPU executes an ISB before using the patched code.
+ * This is intended for callers that have already parked all remote CPUs
+ * (e.g. with IRQs disabled in an IPI handler) where a kick would
+ * deadlock.
+ *
+ * Caller must hold jump_label_lock() and have set key->enabled.
+ */
+static void __jump_label_update_nosync(struct static_key *key,
+				       struct jump_entry *entry,
+				       struct jump_entry *stop)
+{
+	for (; (entry < stop) && (jump_entry_key(entry) == key); entry++) {
+		if (jump_label_can_update(entry, false))
+			arch_jump_label_transform_queue(entry,
+							jump_label_type(entry));
+	}
+}
+
+void jump_label_update_nosync(struct static_key *key)
+{
+	struct jump_entry *stop = __stop___jump_table;
+	struct jump_entry *entry;
+#ifdef CONFIG_MODULES
+	struct static_key_mod *mod;
+
+	if (static_key_linked(key)) {
+		for (mod = static_key_mod(key); mod; mod = mod->next) {
+			struct module *m;
+
+			if (!mod->entries)
+				continue;
+
+			m = mod->mod;
+			if (!m)
+				stop = __stop___jump_table;
+			else
+				stop = m->jump_entries + m->num_jump_entries;
+			__jump_label_update_nosync(key, mod->entries, stop);
+		}
+		return;
+	}
+
+	scoped_guard(rcu) {
+		struct module *m;
+
+		m = __module_address((unsigned long)key);
+		if (m)
+			stop = m->jump_entries + m->num_jump_entries;
+	}
+#endif
+	entry = static_key_entries(key);
+	if (!entry)
+		return;
+
+	__jump_label_update_nosync(key, entry, stop);
 }
 
 #ifdef CONFIG_STATIC_KEYS_SELFTEST

@@ -236,6 +236,8 @@ extern void static_key_enable(struct static_key *key);
 extern void static_key_disable(struct static_key *key);
 extern void static_key_enable_cpuslocked(struct static_key *key);
 extern void static_key_disable_cpuslocked(struct static_key *key);
+extern void jump_label_update(struct static_key *key);
+extern void jump_label_update_nosync(struct static_key *key);
 extern enum jump_label_type jump_label_init_type(struct jump_entry *entry);
 
 /*
