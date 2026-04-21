@@ -2,6 +2,8 @@
 /* Copyright (c) 2026 Meta Platforms, Inc. and affiliates. */
 #include <common.h>
 
+#include <asan.h>
+
 const volatile u32 zero = 0;
 
 /* How many pages do we reserve at the beginning of the arena segment? */
