@@ -18,12 +18,6 @@
 #include <common.h>
 #include <selftest_helpers.h>
 
-struct arena_qnode {
-	unsigned long next;
-	int count;
-	int locked;
-};
-
 #include "../libarena.skel.h"
 typedef struct libarena selftest;
 #define selftest__open libarena__open
