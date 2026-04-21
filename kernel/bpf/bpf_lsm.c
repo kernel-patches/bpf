@@ -87,6 +87,13 @@ BTF_ID(func, bpf_lsm_socket_socketpair)
 #endif
 BTF_SET_END(bpf_lsm_unlocked_sockopt_hooks)
 
+BTF_SET_START(bpf_lsm_negative_set_retval_hooks)
+#ifdef CONFIG_SECURITY_NETWORK
+BTF_ID(func, bpf_lsm_socket_create)
+#endif
+BTF_SET_END(bpf_lsm_negative_set_retval_hooks)
+
+
 #ifdef CONFIG_CGROUP_BPF
 void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog,
 			     bpf_func_t *bpf_func)
@@ -221,12 +228,37 @@ static const struct bpf_func_proto bpf_get_attach_cookie_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 };
 
+BPF_CALL_1(bpf_lsm_set_retval, int, retval)
+{
+	struct bpf_cg_run_ctx *ctx;
+
+	if (retval > 0)
+		return -EINVAL;
+
+	ctx = container_of(current->bpf_ctx, struct bpf_cg_run_ctx, run_ctx);
+	ctx->retval = retval;
+
+	return 0;
+}
+
+const struct bpf_func_proto bpf_lsm_set_retval_proto = {
+	.func		= bpf_lsm_set_retval,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+};
+
 static const struct bpf_func_proto *
 bpf_lsm_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
 	const struct bpf_func_proto *func_proto;
 
 	if (prog->expected_attach_type == BPF_LSM_CGROUP) {
+		if (func_id == BPF_FUNC_set_retval &&
+		    btf_id_set_contains(&bpf_lsm_negative_set_retval_hooks,
+					prog->aux->attach_btf_id))
+			return &bpf_lsm_set_retval_proto;
+
 		func_proto = cgroup_common_func_proto(func_id, prog);
 		if (func_proto)
 			return func_proto;
