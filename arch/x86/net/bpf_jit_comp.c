@@ -1649,6 +1649,286 @@ static int emit_spectre_bhb_barrier(u8 **pprog, u8 *ip,
 	return 0;
 }
 
+/*
+ * ---------- Division by compile-time constant optimization ----------
+ *
+ * For 64-bit BPF_K (immediate divisor) div/mod operations, replace slow
+ * div/idiv instructions (15+ cycles) with fast multiply+shift sequences
+ * (~4 cycles).
+ *
+ * LLVM already optimizes power-of-2 divisors and 32-bit operations at the
+ * compiler level, so this JIT optimization only focuses on 64-bit division by
+ * general constants, both signed and unsigned. For power-of-2 divisors, the
+ * algorithm generates instructions yielding correct results, but isn't the
+ * most optimal for performance (still faster than div/idiv though).
+ */
+
+struct bpf_jit_div_const {
+	u64 m;        /* magic multiplier */
+	u8 shift;     /* post-shift amount */
+	bool is_wide; /* unsigned: m > 2^64, needs (n-t)/2+t correction
+		       * signed: m overflows, needs add-n correction
+		       */
+};
+
+/*
+ * Divide a 128-bit value (n_hi:n_lo) by a u64 divisor using x86-64 divq.
+ * Do not rely on libgcc for 128-bit division. Two divq steps give a full
+ * 128-bit quotient.
+ */
+static inline unsigned __int128 div128_u64(u64 n_hi, u64 n_lo, u64 d)
+{
+	u64 q_hi, q_lo, rem;
+
+	asm("divq %[d]" : "=a"(q_hi), "=d"(rem)
+	    : "a"(n_hi), "d"(0ULL), [d] "rm"(d));
+	asm("divq %[d]" : "=a"(q_lo), "=d"(rem)
+	    : "a"(n_lo), "d"(rem), [d] "rm"(d));
+
+	return ((unsigned __int128)q_hi << 64) | q_lo;
+}
+
+/*
+ * Granlund-Montgomery choose_multiplier for 64-bit division by constant.
+ * Computes magic multiplier m and shift s such that:
+ *   unsigned: floor(n/d) = mulhi(n, m) >> s  (with possible wide correction)
+ *   signed:   floor(n/d) = mulhi_signed(n, m) >> s + sign_correction
+ *
+ * prec = 64 for unsigned, 63 for signed (sign bit reduces usable range).
+ */
+static bool choose_multiplier_64(u32 d, u8 prec, struct bpf_jit_div_const *c)
+{
+	unsigned __int128 mlow, mhigh;
+	u32 l, post_shift;
+
+	if (d <= 1)
+		return false;
+
+	l = fls(d - 1);
+
+	mlow = div128_u64(1ULL << l, 0, d);
+	mhigh = div128_u64(1ULL << l, 1ULL << (l + 64 - prec), d);
+
+	post_shift = l;
+	while (post_shift > 0) {
+		unsigned __int128 lo = mlow >> 1, hi = mhigh >> 1;
+
+		if (lo >= hi)
+			break;
+		mlow = lo;
+		mhigh = hi;
+		post_shift--;
+	}
+
+	c->m = (u64)mhigh;
+	c->shift = post_shift;
+	c->is_wide = (mhigh >> 64) != 0;
+	return true;
+}
+
+/* Unsigned 64-bit div/mod by constant via multiply+shift */
+static void emit_udivmod_const(u8 **pprog, u32 dst_reg, u32 d,
+			       const struct bpf_jit_div_const *c, bool is_mod)
+{
+	u8 *prog = *pprog;
+
+	/* For MOD, save original n for remainder = n - q * d */
+	if (is_mod) {
+		maybe_emit_1mod(&prog, dst_reg, false); /* push dst */
+		EMIT1(add_1reg(0x50, dst_reg));
+	}
+
+	if (dst_reg != BPF_REG_0)
+		EMIT1(0x50); /* push rax */
+	if (dst_reg != BPF_REG_3)
+		EMIT1(0x52); /* push rdx */
+	if (dst_reg != BPF_REG_0)
+		emit_mov_reg(&prog, true, BPF_REG_0, dst_reg); /* mov rax, dst */
+	if (c->is_wide)
+		EMIT1(0x50); /* push rax (= n, for wide correction) */
+
+	/* movabs r11, m */
+	emit_mov_imm64(&prog, AUX_REG, (u32)(c->m >> 32), (u32)c->m);
+
+	/* mul r11 -> rdx:rax = rax * r11 (unsigned) */
+	EMIT1(add_1mod(0x48, AUX_REG));
+	EMIT2(0xF7, add_1reg(0xE0, AUX_REG));
+
+	if (c->is_wide) {
+		/*
+		 * Wide correction: quotient = ((n - t) >> 1 + t) >> (shift-1)
+		 * where t = mulhi(n, m) in rdx
+		 */
+		EMIT2(0x41, 0x5B); /* pop r11 (= n) */
+		/* sub r11, rdx */
+		EMIT1(add_2mod(0x48, AUX_REG, BPF_REG_3));
+		EMIT2(0x29, add_2reg(0xC0, AUX_REG, BPF_REG_3));
+		/* shr r11, 1 */
+		EMIT1(add_1mod(0x48, AUX_REG));
+		EMIT2(0xD1, add_1reg(0xE8, AUX_REG));
+		/* add r11, rdx */
+		EMIT1(add_2mod(0x48, AUX_REG, BPF_REG_3));
+		EMIT2(0x01, add_2reg(0xC0, AUX_REG, BPF_REG_3));
+		/* shr r11, shift-1 */
+		if (c->shift > 1) {
+			EMIT1(add_1mod(0x48, AUX_REG));
+			EMIT3(0xC1, add_1reg(0xE8, AUX_REG),
+			      c->shift - 1);
+		}
+		/* mov dst, r11 */
+		emit_mov_reg(&prog, true, dst_reg, AUX_REG);
+	} else {
+		/* shr rdx, shift */
+		if (c->shift) {
+			EMIT1(0x48);
+			EMIT3(0xC1, add_1reg(0xE8, BPF_REG_3), c->shift);
+		}
+		/* mov dst, rdx */
+		if (dst_reg != BPF_REG_3)
+			emit_mov_reg(&prog, true, dst_reg, BPF_REG_3);
+	}
+
+	if (dst_reg != BPF_REG_3)
+		EMIT1(0x5A); /* pop rdx */
+	if (dst_reg != BPF_REG_0)
+		EMIT1(0x58); /* pop rax */
+
+	/* dst = quotient; compute remainder if needed */
+	if (is_mod) {
+		/* imul r11, dst, d -> r11 = quotient * d */
+		maybe_emit_mod(&prog, dst_reg, AUX_REG, true);
+		if (is_imm8(d))
+			EMIT3(0x6B, add_2reg(0xC0, dst_reg, AUX_REG), d);
+		else
+			EMIT2_off32(0x69,
+				    add_2reg(0xC0, dst_reg, AUX_REG), d);
+		/* pop dst (= original n) */
+		maybe_emit_1mod(&prog, dst_reg, false);
+		EMIT1(add_1reg(0x58, dst_reg));
+		/* sub dst, r11 -> remainder = n - q*d */
+		maybe_emit_mod(&prog, dst_reg, AUX_REG, true);
+		EMIT2(0x29, add_2reg(0xC0, dst_reg, AUX_REG));
+	}
+
+	*pprog = prog;
+}
+
+/* Signed 64-bit div/mod by constant via multiply+shift */
+static void emit_sdivmod_const(u8 **pprog, u32 dst_reg, s32 imm,
+			       const struct bpf_jit_div_const *c, bool is_mod)
+{
+	u8 *prog = *pprog;
+	bool neg_divisor = (imm < 0);
+
+	/* For MOD, save original n for remainder = n - q * d */
+	if (is_mod) {
+		maybe_emit_1mod(&prog, dst_reg, false); /* push dst */
+		EMIT1(add_1reg(0x50, dst_reg));
+	}
+
+	if (dst_reg != BPF_REG_0)
+		EMIT1(0x50); /* push rax */
+	if (dst_reg != BPF_REG_3)
+		EMIT1(0x52); /* push rdx */
+	if (dst_reg != BPF_REG_0)
+		emit_mov_reg(&prog, true, BPF_REG_0, dst_reg); /* mov rax, dst */
+	if (c->is_wide)
+		EMIT1(0x50); /* push rax (= n, for wide correction) */
+
+	/* movabs r11, m */
+	emit_mov_imm64(&prog, AUX_REG, (u32)(c->m >> 32), (u32)c->m);
+
+	/* imul r11 -> rdx:rax = rax * r11 (signed) */
+	EMIT1(add_1mod(0x48, AUX_REG));
+	EMIT2(0xF7, add_1reg(0xE8, AUX_REG));
+
+	if (c->is_wide) {
+		/* Wide correction: rdx += n (bit 63 set in m) */
+		EMIT2(0x41, 0x5B); /* pop r11 (= n) */
+		/* add rdx, r11 */
+		EMIT1(add_2mod(0x48, BPF_REG_3, AUX_REG));
+		EMIT2(0x01, add_2reg(0xC0, BPF_REG_3, AUX_REG));
+	}
+
+	/* sar rdx, shift */
+	if (c->shift) {
+		EMIT1(0x48);
+		EMIT3(0xC1, add_1reg(0xF8, BPF_REG_3), c->shift);
+	}
+
+	/* Sign correction: round toward zero by adding sign bit */
+	emit_mov_reg(&prog, true, AUX_REG, BPF_REG_3); /* mov r11, rdx */
+	EMIT1(add_1mod(0x48, AUX_REG));
+	EMIT3(0xC1, add_1reg(0xE8, AUX_REG), 63); /* shr r11, 63 */
+	EMIT1(add_2mod(0x48, BPF_REG_3, AUX_REG));
+	EMIT2(0x01, add_2reg(0xC0, BPF_REG_3, AUX_REG)); /* add rdx, r11 */
+
+	/* mov dst, rdx */
+	if (dst_reg != BPF_REG_3)
+		emit_mov_reg(&prog, true, dst_reg, BPF_REG_3);
+	if (dst_reg != BPF_REG_3)
+		EMIT1(0x5A); /* pop rdx */
+	if (dst_reg != BPF_REG_0)
+		EMIT1(0x58); /* pop rax */
+
+	/* neg dst (if divisor was negative) */
+	if (neg_divisor) {
+		EMIT1(add_1mod(0x48, dst_reg));
+		EMIT2(0xF7, add_1reg(0xD8, dst_reg));
+	}
+
+	/* dst = quotient; compute remainder if needed */
+	if (is_mod) {
+		/* imul r11, dst, d -> r11 = quotient * d */
+		maybe_emit_mod(&prog, dst_reg, AUX_REG, true);
+		if (is_imm8(imm))
+			EMIT3(0x6B, add_2reg(0xC0, dst_reg, AUX_REG), imm);
+		else
+			EMIT2_off32(0x69,
+				    add_2reg(0xC0, dst_reg, AUX_REG), imm);
+		/* pop dst (= original n) */
+		maybe_emit_1mod(&prog, dst_reg, false);
+		EMIT1(add_1reg(0x58, dst_reg));
+		/* sub dst, r11 -> remainder = n - q*d */
+		maybe_emit_mod(&prog, dst_reg, AUX_REG, true);
+		EMIT2(0x29, add_2reg(0xC0, dst_reg, AUX_REG));
+	}
+
+	*pprog = prog;
+}
+
+static bool emit_divmod_const(u8 **pprog, u32 dst_reg, s32 imm, bool is64,
+			      bool is_mod, bool is_signed)
+{
+	struct bpf_jit_div_const c;
+
+    /* Assuming that LLVM already optimizes 32-bit */
+	if (!is64 || imm == 0)
+		return false;
+
+	if (!is_signed) {
+		if (imm < 0)
+			return false;
+		if (!choose_multiplier_64((u32)imm, 64, &c))
+			return false;
+		emit_udivmod_const(pprog, dst_reg, (u32)imm, &c, is_mod);
+	} else {
+		u32 ad = (imm > 0) ? (u32)imm : (u32)(-imm);
+
+		if (ad <= 1)
+			return false;
+		if (!choose_multiplier_64(ad, 63, &c))
+			return false;
+		/* For signed, is_wide means bit 63 is set (m appears
+		 * negative to imul), not that it exceeds 2^64.
+		 */
+		c.is_wide = (c.m >> 63) != 0;
+		emit_sdivmod_const(pprog, dst_reg, imm, &c, is_mod);
+	}
+
+	return true;
+}
+
 static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 		  u8 *rw_image, int oldproglen, struct jit_context *ctx, bool jmp_padding)
 {
@@ -1890,6 +2170,12 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 		case BPF_ALU64 | BPF_MOD | BPF_K:
 		case BPF_ALU64 | BPF_DIV | BPF_K: {
 			bool is64 = BPF_CLASS(insn->code) == BPF_ALU64;
+
+			if (BPF_SRC(insn->code) == BPF_K &&
+			    emit_divmod_const(&prog, dst_reg, imm32, is64,
+					     BPF_OP(insn->code) == BPF_MOD,
+					     insn->off != 0))
+				break;
 
 			if (dst_reg != BPF_REG_0)
 				EMIT1(0x50); /* push rax */
