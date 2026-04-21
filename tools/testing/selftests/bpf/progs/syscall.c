@@ -6,7 +6,6 @@
 #include <bpf/bpf_tracing.h>
 #include <../../../tools/include/linux/filter.h>
 #include <linux/btf.h>
-#include <string.h>
 #include <errno.h>
 #include "bpf_misc.h"
 
@@ -169,13 +168,13 @@ int update_outer_map(void *ctx)
 	if (!attr)
 		goto out;
 
-	memset(attr, 0, attr_sz);
+	__builtin_memset(attr, 0, attr_sz);
 	attr->map_id = ((struct bpf_map *)&outer_array_map)->id;
 	outer_fd = bpf_sys_bpf(BPF_MAP_GET_FD_BY_ID, attr, attr_sz);
 	if (outer_fd < 0)
 		goto out;
 
-	memset(attr, 0, attr_sz);
+	__builtin_memset(attr, 0, attr_sz);
 	attr->map_type = BPF_MAP_TYPE_ARRAY;
 	attr->key_size = 4;
 	attr->value_size = 4;
@@ -184,7 +183,7 @@ int update_outer_map(void *ctx)
 	if (inner_fd < 0)
 		goto out;
 
-	memset(attr, 0, attr_sz);
+	__builtin_memset(attr, 0, attr_sz);
 	attr->map_fd = outer_fd;
 	attr->key = ptr_to_u64(&zero);
 	attr->value = ptr_to_u64(&inner_fd);
@@ -192,7 +191,7 @@ int update_outer_map(void *ctx)
 	if (err)
 		goto out;
 
-	memset(attr, 0, attr_sz);
+	__builtin_memset(attr, 0, attr_sz);
 	attr->map_fd = outer_fd;
 	attr->key = ptr_to_u64(&zero);
 	err = bpf_sys_bpf(BPF_MAP_DELETE_ELEM, attr, attr_sz);

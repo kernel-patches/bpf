@@ -2,7 +2,6 @@
 // Copyright (c) 2019 Facebook
 
 #include <stdint.h>
-#include <string.h>
 
 #include <linux/stddef.h>
 #include <linux/bpf.h>
@@ -25,7 +24,7 @@ static __always_inline int is_tcp_mem(struct bpf_sysctl *ctx)
 	char name[sizeof(tcp_mem_name)];
 	int ret;
 
-	memset(name, 0, sizeof(name));
+	__builtin_memset(name, 0, sizeof(name));
 	ret = bpf_sysctl_get_name(ctx, name, sizeof(name), 0);
 	if (ret < 0 || ret != sizeof(tcp_mem_name) - 1)
 		return 0;

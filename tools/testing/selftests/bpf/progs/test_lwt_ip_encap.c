@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <stddef.h>
-#include <string.h>
 #include <linux/bpf.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
@@ -21,7 +20,7 @@ int bpf_lwt_encap_gre(struct __sk_buff *skb)
 	} hdr;
 	int err;
 
-	memset(&hdr, 0, sizeof(struct encap_hdr));
+	__builtin_memset(&hdr, 0, sizeof(struct encap_hdr));
 
 	hdr.iph.ihl = 5;
 	hdr.iph.version = 4;
@@ -57,7 +56,7 @@ int bpf_lwt_encap_gre6(struct __sk_buff *skb)
 	} hdr;
 	int err;
 
-	memset(&hdr, 0, sizeof(struct encap_hdr));
+	__builtin_memset(&hdr, 0, sizeof(struct encap_hdr));
 
 	hdr.ip6hdr.version = 6;
 	hdr.ip6hdr.payload_len = bpf_htons(skb->len + sizeof(struct grehdr));

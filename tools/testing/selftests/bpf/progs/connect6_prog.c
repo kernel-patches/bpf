@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2018 Facebook
 
-#include <string.h>
 
 #include <linux/stddef.h>
 #include <linux/bpf.h>
@@ -32,8 +31,8 @@ int connect_v6_prog(struct bpf_sock_addr *ctx)
 	struct bpf_sock *sk;
 
 	/* Verify that new destination is available. */
-	memset(&tuple.ipv6.saddr, 0, sizeof(tuple.ipv6.saddr));
-	memset(&tuple.ipv6.sport, 0, sizeof(tuple.ipv6.sport));
+	__builtin_memset(&tuple.ipv6.saddr, 0, sizeof(tuple.ipv6.saddr));
+	__builtin_memset(&tuple.ipv6.sport, 0, sizeof(tuple.ipv6.sport));
 
 	tuple.ipv6.daddr[0] = bpf_htonl(DST_REWRITE_IP6_0);
 	tuple.ipv6.daddr[1] = bpf_htonl(DST_REWRITE_IP6_1);
@@ -74,7 +73,7 @@ int connect_v6_prog(struct bpf_sock_addr *ctx)
 	ctx->user_port = bpf_htons(DST_REWRITE_PORT6);
 
 	/* Rewrite source. */
-	memset(&sa, 0, sizeof(sa));
+	__builtin_memset(&sa, 0, sizeof(sa));
 
 	sa.sin6_family = AF_INET6;
 	sa.sin6_port = bpf_htons(0);

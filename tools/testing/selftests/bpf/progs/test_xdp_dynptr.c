@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2022 Meta */
 #include <stddef.h>
-#include <string.h>
 #include <stdbool.h>
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
@@ -69,8 +68,8 @@ static __always_inline void set_ethhdr(struct ethhdr *new_eth,
 				       const struct iptnl_info *tnl,
 				       __be16 h_proto)
 {
-	memcpy(new_eth->h_source, old_eth->h_dest, sizeof(new_eth->h_source));
-	memcpy(new_eth->h_dest, tnl->dmac, sizeof(new_eth->h_dest));
+	__builtin_memcpy(new_eth->h_source, old_eth->h_dest, sizeof(new_eth->h_source));
+	__builtin_memcpy(new_eth->h_dest, tnl->dmac, sizeof(new_eth->h_dest));
 	new_eth->h_proto = h_proto;
 }
 
@@ -188,7 +187,7 @@ static __always_inline int handle_ipv6(struct xdp_md *xdp, struct bpf_dynptr *xd
 
 	vip.protocol = ip6h->nexthdr;
 	vip.family = AF_INET6;
-	memcpy(vip.daddr.v6, ip6h->daddr.s6_addr32, sizeof(vip.daddr));
+	__builtin_memcpy(vip.daddr.v6, ip6h->daddr.s6_addr32, sizeof(vip.daddr));
 	vip.dport = dport;
 	payload_len = ip6h->payload_len;
 
@@ -215,12 +214,12 @@ static __always_inline int handle_ipv6(struct xdp_md *xdp, struct bpf_dynptr *xd
 
 	ip6h->version = 6;
 	ip6h->priority = 0;
-	memset(ip6h->flow_lbl, 0, sizeof(ip6h->flow_lbl));
+	__builtin_memset(ip6h->flow_lbl, 0, sizeof(ip6h->flow_lbl));
 	ip6h->payload_len = bpf_htons(bpf_ntohs(payload_len) + ipv6hdr_sz);
 	ip6h->nexthdr = IPPROTO_IPV6;
 	ip6h->hop_limit = 8;
-	memcpy(ip6h->saddr.s6_addr32, tnl->saddr.v6, sizeof(tnl->saddr.v6));
-	memcpy(ip6h->daddr.s6_addr32, tnl->daddr.v6, sizeof(tnl->daddr.v6));
+	__builtin_memcpy(ip6h->saddr.s6_addr32, tnl->saddr.v6, sizeof(tnl->saddr.v6));
+	__builtin_memcpy(ip6h->daddr.s6_addr32, tnl->daddr.v6, sizeof(tnl->daddr.v6));
 
 	count_tx(vip.protocol);
 

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <stddef.h>
-#include <string.h>
 #include <netinet/in.h>
 #include <linux/bpf.h>
 #include <linux/if_ether.h>

@@ -3,7 +3,6 @@
 
 #include "vmlinux.h"
 
-#include <string.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include "bpf_kfuncs.h"
@@ -28,8 +27,8 @@ int recvmsg_unix_prog(struct bpf_sock_addr *ctx)
 		return 1;
 
 	sa_kern_unaddr = bpf_core_cast(sa_kern->uaddr, struct sockaddr_un);
-	if (memcmp(sa_kern_unaddr->sun_path, SERVUN_ADDRESS,
-			sizeof(SERVUN_ADDRESS) - 1) != 0)
+	if (__builtin_memcmp(sa_kern_unaddr->sun_path, SERVUN_ADDRESS,
+			     sizeof(SERVUN_ADDRESS) - 1) != 0)
 		return 1;
 
 	return 1;

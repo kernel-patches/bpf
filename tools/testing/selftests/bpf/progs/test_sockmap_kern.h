@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /* Copyright (c) 2017-2018 Covalent IO, Inc. http://covalent.io */
 #include <stddef.h>
-#include <string.h>
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
@@ -148,7 +147,7 @@ static inline void bpf_write_pass(struct __sk_buff *skb, int offset)
 	data_end = (void *)(long)skb->data_end;
 
 	if (c + 5 + offset < data_end)
-		memcpy(c + offset, "PASS", 4);
+		__builtin_memcpy(c + offset, "PASS", 4);
 }
 
 SEC("sk_skb/stream_verdict")

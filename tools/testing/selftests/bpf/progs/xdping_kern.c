@@ -3,7 +3,6 @@
 
 #define KBUILD_MODNAME "foo"
 #include <stddef.h>
-#include <string.h>
 #include <linux/bpf.h>
 #include <linux/icmp.h>
 #include <linux/in.h>

@@ -2,7 +2,6 @@
 // Copyright (c) 2017 Facebook
 #include <stddef.h>
 #include <stdbool.h>
-#include <string.h>
 #include <linux/pkt_cls.h>
 #include <linux/bpf.h>
 #include <linux/in.h>
@@ -251,8 +250,8 @@ static __noinline int parse_icmpv6(struct bpf_dynptr *skb_ptr, __u64 off,
 		return TC_ACT_SHOT;
 	pckt->proto = ip6h->nexthdr;
 	pckt->flags |= F_ICMP;
-	memcpy(pckt->srcv6, ip6h->daddr.s6_addr32, 16);
-	memcpy(pckt->dstv6, ip6h->saddr.s6_addr32, 16);
+	__builtin_memcpy(pckt->srcv6, ip6h->daddr.s6_addr32, 16);
+	__builtin_memcpy(pckt->dstv6, ip6h->saddr.s6_addr32, 16);
 	return TC_ACT_UNSPEC;
 }
 
@@ -368,8 +367,8 @@ static __noinline int process_packet(struct bpf_dynptr *skb_ptr,
 				return action;
 			off += IPV6_PLUS_ICMP_HDR;
 		} else {
-			memcpy(pckt.srcv6, ip6h->saddr.s6_addr32, 16);
-			memcpy(pckt.dstv6, ip6h->daddr.s6_addr32, 16);
+			__builtin_memcpy(pckt.srcv6, ip6h->saddr.s6_addr32, 16);
+			__builtin_memcpy(pckt.dstv6, ip6h->daddr.s6_addr32, 16);
 		}
 	} else {
 		__u8 buffer[sizeof(struct iphdr)] = {};
@@ -408,7 +407,7 @@ static __noinline int process_packet(struct bpf_dynptr *skb_ptr,
 	}
 
 	if (is_ipv6)
-		memcpy(vip.daddr.v6, pckt.dstv6, 16);
+		__builtin_memcpy(vip.daddr.v6, pckt.dstv6, 16);
 	else
 		vip.daddr.v4 = pckt.dst;
 
@@ -434,7 +433,7 @@ static __noinline int process_packet(struct bpf_dynptr *skb_ptr,
 		if (!cval)
 			return TC_ACT_SHOT;
 		ifindex = cval->ifindex;
-		memcpy(tkey.remote_ipv6, dst->dstv6, 16);
+		__builtin_memcpy(tkey.remote_ipv6, dst->dstv6, 16);
 		tun_flag = BPF_F_TUNINFO_IPV6;
 	} else {
 		cval = bpf_map_lookup_elem(&ctl_array, &v4_intf_pos);

@@ -2,7 +2,6 @@
 // Copyright (c) 2017 Facebook
 #include <stddef.h>
 #include <stdbool.h>
-#include <string.h>
 #include <linux/pkt_cls.h>
 #include <linux/bpf.h>
 #include <linux/in.h>
@@ -297,12 +296,12 @@ bool encap_v6(struct xdp_md *xdp, struct ctl_value *cval,
 	if (new_eth + 1 > data_end ||
 	    old_eth + 1 > data_end || ip6h + 1 > data_end)
 		return false;
-	memcpy(new_eth->eth_dest, cval->mac, 6);
-	memcpy(new_eth->eth_source, old_eth->eth_dest, 6);
+	__builtin_memcpy(new_eth->eth_dest, cval->mac, 6);
+	__builtin_memcpy(new_eth->eth_source, old_eth->eth_dest, 6);
 	new_eth->eth_proto = 56710;
 	ip6h->version = 6;
 	ip6h->priority = 0;
-	memset(ip6h->flow_lbl, 0, sizeof(ip6h->flow_lbl));
+	__builtin_memset(ip6h->flow_lbl, 0, sizeof(ip6h->flow_lbl));
 
 	ip6h->nexthdr = IPPROTO_IPV6;
 	ip_suffix = pckt->flow.srcv6[3] ^ pckt->flow.port16[0];
@@ -314,7 +313,7 @@ bool encap_v6(struct xdp_md *xdp, struct ctl_value *cval,
 	ip6h->saddr.in6_u.u6_addr32[1] = 2;
 	ip6h->saddr.in6_u.u6_addr32[2] = 3;
 	ip6h->saddr.in6_u.u6_addr32[3] = ip_suffix;
-	memcpy(ip6h->daddr.in6_u.u6_addr32, dst->dstv6, 16);
+	__builtin_memcpy(ip6h->daddr.in6_u.u6_addr32, dst->dstv6, 16);
 	return true;
 }
 
@@ -353,8 +352,8 @@ bool encap_v4(struct xdp_md *xdp, struct ctl_value *cval,
 	if (new_eth + 1 > data_end ||
 	    old_eth + 1 > data_end || iph + 1 > data_end)
 		return false;
-	memcpy(new_eth->eth_dest, cval->mac, 6);
-	memcpy(new_eth->eth_source, old_eth->eth_dest, 6);
+	__builtin_memcpy(new_eth->eth_dest, cval->mac, 6);
+	__builtin_memcpy(new_eth->eth_source, old_eth->eth_dest, 6);
 	new_eth->eth_proto = 8;
 	iph->version = 4;
 	iph->ihl = 5;
@@ -391,9 +390,9 @@ int swap_mac_and_send(void *data, void *data_end)
 	struct eth_hdr *eth;
 
 	eth = data;
-	memcpy(tmp_mac, eth->eth_source, 6);
-	memcpy(eth->eth_source, eth->eth_dest, 6);
-	memcpy(eth->eth_dest, tmp_mac, 6);
+	__builtin_memcpy(tmp_mac, eth->eth_source, 6);
+	__builtin_memcpy(eth->eth_source, eth->eth_dest, 6);
+	__builtin_memcpy(eth->eth_dest, tmp_mac, 6);
 	return XDP_TX;
 }
 
@@ -447,9 +446,9 @@ int send_icmp6_reply(void *data, void *data_end)
 	icmp_hdr->icmp6_type = 129;
 	icmp_hdr->icmp6_cksum -= 0x0001;
 	ip6h->hop_limit = 4;
-	memcpy(tmp_addr, ip6h->saddr.in6_u.u6_addr32, 16);
-	memcpy(ip6h->saddr.in6_u.u6_addr32, ip6h->daddr.in6_u.u6_addr32, 16);
-	memcpy(ip6h->daddr.in6_u.u6_addr32, tmp_addr, 16);
+	__builtin_memcpy(tmp_addr, ip6h->saddr.in6_u.u6_addr32, 16);
+	__builtin_memcpy(ip6h->saddr.in6_u.u6_addr32, ip6h->daddr.in6_u.u6_addr32, 16);
+	__builtin_memcpy(ip6h->daddr.in6_u.u6_addr32, tmp_addr, 16);
 	return swap_mac_and_send(data, data_end);
 }
 
@@ -473,8 +472,8 @@ int parse_icmpv6(void *data, void *data_end, __u64 off,
 		return XDP_DROP;
 	pckt->flow.proto = ip6h->nexthdr;
 	pckt->flags |= (1 << 0);
-	memcpy(pckt->flow.srcv6, ip6h->daddr.in6_u.u6_addr32, 16);
-	memcpy(pckt->flow.dstv6, ip6h->saddr.in6_u.u6_addr32, 16);
+	__builtin_memcpy(pckt->flow.srcv6, ip6h->daddr.in6_u.u6_addr32, 16);
+	__builtin_memcpy(pckt->flow.dstv6, ip6h->saddr.in6_u.u6_addr32, 16);
 	return -1;
 }
 
@@ -532,7 +531,7 @@ static bool get_packet_dst(struct real_definition **real,
 		hash_16bytes = 1;
 	if (vip_info->flags & (1 << 3)) {
 		pckt->flow.port16[0] = pckt->flow.port16[1];
-		memset(pckt->flow.srcv6, 0, 16);
+		__builtin_memset(pckt->flow.srcv6, 0, 16);
 	}
 	hash = get_packet_hash(pckt, hash_16bytes);
 	if (hash != 0x358459b7 /* jhash of ipv4 packet */  &&
@@ -623,8 +622,8 @@ static int process_l3_headers_v6(struct packet_description *pckt,
 		if (action >= 0)
 			return action;
 	} else {
-		memcpy(pckt->flow.srcv6, ip6h->saddr.in6_u.u6_addr32, 16);
-		memcpy(pckt->flow.dstv6, ip6h->daddr.in6_u.u6_addr32, 16);
+		__builtin_memcpy(pckt->flow.srcv6, ip6h->saddr.in6_u.u6_addr32, 16);
+		__builtin_memcpy(pckt->flow.dstv6, ip6h->daddr.in6_u.u6_addr32, 16);
 	}
 	return -1;
 }
@@ -702,7 +701,7 @@ static int process_packet(void *data, __u64 off, void *data_end,
 	}
 
 	if (is_ipv6)
-		memcpy(vip.vipv6, pckt.flow.dstv6, 16);
+		__builtin_memcpy(vip.vipv6, pckt.flow.dstv6, 16);
 	else
 		vip.vip = pckt.flow.dst;
 	vip.port = pckt.flow.port16[1];

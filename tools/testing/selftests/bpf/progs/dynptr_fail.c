@@ -2,7 +2,6 @@
 /* Copyright (c) 2022 Facebook */
 
 #include <errno.h>
-#include <string.h>
 #include <stdbool.h>
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
@@ -457,7 +456,7 @@ int invalid_write1(void *ctx)
 
 	get_map_val_dynptr(&ptr);
 
-	memcpy(&ptr, &x, sizeof(x));
+	__builtin_memcpy(&ptr, &x, sizeof(x));
 
 	/* this should fail */
 	data = bpf_dynptr_data(&ptr, 0, 1);
@@ -480,7 +479,7 @@ int invalid_write2(void *ctx)
 
 	bpf_ringbuf_reserve_dynptr(&ringbuf, 64, 0, &ptr);
 
-	memcpy((void *)&ptr + 8, &x, sizeof(x));
+	__builtin_memcpy((void *)&ptr + 8, &x, sizeof(x));
 
 	/* this should fail */
 	bpf_dynptr_read(read_data, sizeof(read_data), &ptr, 0, 0);
@@ -505,10 +504,10 @@ int invalid_write3(void *ctx)
 
 	bpf_ringbuf_reserve_dynptr(&ringbuf, 8, 0, &ptr);
 
-	memcpy(stack_buf, &val, sizeof(val));
+	__builtin_memcpy(stack_buf, &val, sizeof(val));
 	len = stack_buf[0] & 0xf;
 
-	memcpy((void *)&ptr + len, &x, sizeof(x));
+	__builtin_memcpy((void *)&ptr + len, &x, sizeof(x));
 
 	/* this should fail */
 	bpf_ringbuf_submit_dynptr(&ptr, 0);
@@ -601,7 +600,7 @@ int invalid_read3(void *ctx)
 	bpf_ringbuf_reserve_dynptr(&ringbuf, 16, 0, &ptr2);
 
 	/* this should fail */
-	memcpy(&val, (void *)&ptr1 + 8, sizeof(val));
+	__builtin_memcpy(&val, (void *)&ptr1 + 8, sizeof(val));
 
 	bpf_ringbuf_discard_dynptr(&ptr1, 0);
 	bpf_ringbuf_discard_dynptr(&ptr2, 0);

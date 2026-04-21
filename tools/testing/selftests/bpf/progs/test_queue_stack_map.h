@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 // Copyright (c) 2018 Politecnico di Torino
 #include <stddef.h>
-#include <string.h>
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>

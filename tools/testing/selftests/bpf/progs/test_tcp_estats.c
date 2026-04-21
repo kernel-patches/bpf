@@ -31,7 +31,6 @@
  * blocks "_tcp_send_active_reset" and "LBB0_3", and used in "LBB0_4".
  * The verifier should be able to handle such code patterns.
  */
-#include <string.h>
 #include <linux/bpf.h>
 #include <linux/ipv6.h>
 #include <linux/version.h>
@@ -239,7 +238,7 @@ static __always_inline void send_basic_event(struct sock *sk,
 	struct tcp_estats_basic_event ev;
 	__u32 key = bpf_get_prandom_u32();
 
-	memset(&ev, 0, sizeof(ev));
+	__builtin_memset(&ev, 0, sizeof(ev));
 	tcp_estats_init(sk, &ev.event, &ev.conn_id, type);
 	bpf_map_update_elem(&ev_record_map, &key, &ev, BPF_ANY);
 }

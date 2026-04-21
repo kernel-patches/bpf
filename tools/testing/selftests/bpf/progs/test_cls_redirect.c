@@ -4,7 +4,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <string.h>
 
 #include <linux/bpf.h>
 #include <linux/icmp.h>
@@ -533,10 +532,10 @@ static INLINING ret_t forward_to_next_hop(struct __sk_buff *skb, encap_headers_t
 	 * the router, which will send it to the appropriate machine.
 	 */
 	unsigned char temp[ETH_ALEN];
-	memcpy(temp, encap->eth.h_dest, sizeof(temp));
-	memcpy(encap->eth.h_dest, encap->eth.h_source,
+	__builtin_memcpy(temp, encap->eth.h_dest, sizeof(temp));
+	__builtin_memcpy(encap->eth.h_dest, encap->eth.h_source,
 	       sizeof(encap->eth.h_dest));
-	memcpy(encap->eth.h_source, temp, sizeof(encap->eth.h_source));
+	__builtin_memcpy(encap->eth.h_source, temp, sizeof(encap->eth.h_source));
 
 	if (encap->unigue.next_hop == encap->unigue.hop_count - 1 &&
 	    encap->unigue.last_hop_gre) {
@@ -631,10 +630,10 @@ static INLINING uint64_t fill_tuple(struct bpf_sock_tuple *tuple, void *iph,
 
 	case sizeof(struct ipv6hdr): {
 		struct ipv6hdr *ipv6 = (struct ipv6hdr *)iph;
-		memcpy(&tuple->ipv6.daddr, &ipv6->daddr,
-		       sizeof(tuple->ipv6.daddr));
-		memcpy(&tuple->ipv6.saddr, &ipv6->saddr,
-		       sizeof(tuple->ipv6.saddr));
+		__builtin_memcpy(&tuple->ipv6.daddr, &ipv6->daddr,
+				 sizeof(tuple->ipv6.daddr));
+		__builtin_memcpy(&tuple->ipv6.saddr, &ipv6->saddr,
+				 sizeof(tuple->ipv6.saddr));
 		tuple->ipv6.sport = sport;
 		tuple->ipv6.dport = dport;
 		return sizeof(tuple->ipv6);
@@ -800,8 +799,8 @@ static INLINING verdict_t process_icmpv6(buf_t *pkt, metrics_t *metrics)
 
 	/* Swap source and dest addresses. */
 	struct bpf_sock_tuple tuple;
-	memcpy(&tuple.ipv6.saddr, &ipv6->daddr, sizeof(tuple.ipv6.saddr));
-	memcpy(&tuple.ipv6.daddr, &ipv6->saddr, sizeof(tuple.ipv6.daddr));
+	__builtin_memcpy(&tuple.ipv6.saddr, &ipv6->daddr, sizeof(tuple.ipv6.saddr));
+	__builtin_memcpy(&tuple.ipv6.daddr, &ipv6->saddr, sizeof(tuple.ipv6.daddr));
 
 	if (!pkt_parse_icmp_l4_ports(pkt, (flow_ports_t *)&tuple.ipv6.sport)) {
 		metrics->errors_total_malformed_icmp_pkt_too_big++;

@@ -2,7 +2,6 @@
 #include <limits.h>
 #include <stddef.h>
 #include <stdbool.h>
-#include <string.h>
 #include <linux/pkt_cls.h>
 #include <linux/bpf.h>
 #include <linux/in.h>
@@ -78,7 +77,7 @@ static __always_inline int export_flow_keys(struct bpf_flow_keys *keys,
 	__u32 key = (__u32)(keys->sport) << 16 | keys->dport;
 	struct bpf_flow_keys val;
 
-	memcpy(&val, keys, sizeof(val));
+	__builtin_memcpy(&val, keys, sizeof(val));
 	bpf_map_update_elem(&last_dissection, &key, &val, BPF_ANY);
 	return ret;
 }
@@ -331,7 +330,7 @@ PROG(IPV6)(struct __sk_buff *skb)
 		return export_flow_keys(keys, BPF_DROP);
 
 	keys->addr_proto = ETH_P_IPV6;
-	memcpy(&keys->ipv6_src, &ip6h->saddr, 2*sizeof(ip6h->saddr));
+	__builtin_memcpy(&keys->ipv6_src, &ip6h->saddr, 2*sizeof(ip6h->saddr));
 
 	keys->thoff += sizeof(struct ipv6hdr);
 	keys->ip_proto = ip6h->nexthdr;

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0
-#include <string.h>
 #include <linux/tcp.h>
 #include <linux/bpf.h>
 #include <netinet/in.h>
@@ -184,7 +183,7 @@ int _setsockopt(struct bpf_sockopt *ctx)
 		if (optval + 5 > optval_end)
 			return 0; /* bounds check */
 
-		memcpy(optval, "cubic", 5);
+		__builtin_memcpy(optval, "cubic", 5);
 		ctx->optlen = 5;
 
 		return 1;
