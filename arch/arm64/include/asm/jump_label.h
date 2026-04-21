@@ -58,5 +58,21 @@ l_yes:
 	return true;
 }
 
+#else /* __ASSEMBLER__ */
+
+/*
+ * Branch to \target when static key \key is disabled (false).
+ * Patched to NOP when \key is enabled, falling through to the next
+ * instruction.
+ */
+.macro	STATIC_BRANCH_DISABLE	key, target
+1:	b	\target
+	.pushsection	__jump_table, "aw"
+	.align	3
+	.long	1b - ., \target - .
+	.quad	\key + 1 - .
+	.popsection
+.endm
+
 #endif  /* __ASSEMBLER__ */
 #endif	/* __ASM_JUMP_LABEL_H */

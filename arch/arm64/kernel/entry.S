@@ -17,6 +17,7 @@
 #include <asm/asm_pointer_auth.h>
 #include <asm/bug.h>
 #include <asm/cpufeature.h>
+#include <asm/jump_label.h>
 #include <asm/errno.h>
 #include <asm/esr.h>
 #include <asm/irq.h>
@@ -310,9 +311,13 @@ alternative_else_nop_endif
 	.endif
 
 #ifdef CONFIG_ARM64_PSEUDO_NMI
+#ifdef CONFIG_ARM64_RUNTIME_PSEUDO_NMI
+	STATIC_BRANCH_DISABLE arm64_irq_prio_masking, .Lskip_pmr_save\@
+#else
 alternative_if_not ARM64_HAS_GIC_PRIO_MASKING
 	b	.Lskip_pmr_save\@
 alternative_else_nop_endif
+#endif
 
 	mrs_s	x20, SYS_ICC_PMR_EL1
 	str	w20, [sp, #S_PMR]
@@ -338,9 +343,13 @@ alternative_else_nop_endif
 	.endif
 
 #ifdef CONFIG_ARM64_PSEUDO_NMI
+#ifdef CONFIG_ARM64_RUNTIME_PSEUDO_NMI
+	STATIC_BRANCH_DISABLE arm64_irq_prio_masking, .Lskip_pmr_restore\@
+#else
 alternative_if_not ARM64_HAS_GIC_PRIO_MASKING
 	b	.Lskip_pmr_restore\@
 alternative_else_nop_endif
+#endif
 
 	ldr	w20, [sp, #S_PMR]
 	msr_s	SYS_ICC_PMR_EL1, x20
