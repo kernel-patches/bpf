@@ -188,6 +188,13 @@ static void init_gic_priority_masking(void)
 	gic_write_pmr(GIC_PRIO_IRQON | GIC_PRIO_PSR_I_SET);
 }
 
+#ifdef CONFIG_ARM64_RUNTIME_PSEUDO_NMI
+void init_gic_priority_masking_cpu(void *data)
+{
+	init_gic_priority_masking();
+}
+#endif
+
 /*
  * This is the secondary CPU boot entry.  We're using this CPUs
  * idle thread stack, but a set of temporary page tables.
@@ -1147,6 +1154,111 @@ void __init set_smp_ipi_range_percpu(int ipi_base, int n, int ncpus)
 	/* Setup the boot CPU immediately */
 	ipi_setup(smp_processor_id());
 }
+
+#ifdef CONFIG_ARM64_RUNTIME_PSEUDO_NMI
+static void disable_percpu_irq_cb(void *data)
+{
+	disable_percpu_irq((unsigned long)data);
+}
+
+static void enable_percpu_irq_cb(void *data)
+{
+	enable_percpu_irq((unsigned long)data, 0);
+}
+
+static void setup_percpu_nmi_cb(void *data)
+{
+	unsigned long irq = (unsigned long)data;
+
+	prepare_percpu_nmi(irq);
+	enable_percpu_nmi(irq, 0);
+}
+
+static void teardown_percpu_nmi_cb(void *data)
+{
+	unsigned long irq = (unsigned long)data;
+
+	disable_percpu_nmi(irq);
+	teardown_percpu_nmi(irq);
+}
+
+static int ipi_promote_one(int ipi)
+{
+	int irq = ipi_irq_base + ipi;
+	int err;
+
+	on_each_cpu(disable_percpu_irq_cb, (void *)(unsigned long)irq, 1);
+	free_percpu_irq(irq, &irq_stat);
+
+	err = request_percpu_nmi(irq, ipi_handler, "IPI", NULL, &irq_stat);
+	if (err) {
+		int err2;
+
+		pr_err("Failed to promote IPI %d to NMI: %d\n", ipi, err);
+		err2 = request_percpu_irq(irq, ipi_handler, "IPI", &irq_stat);
+		WARN_ON(err2);
+		on_each_cpu(enable_percpu_irq_cb,
+			    (void *)(unsigned long)irq, 1);
+		return err;
+	}
+
+	on_each_cpu(setup_percpu_nmi_cb, (void *)(unsigned long)irq, 1);
+	return 0;
+}
+
+static void ipi_demote_one(int ipi)
+{
+	int irq = ipi_irq_base + ipi;
+	int err;
+
+	on_each_cpu(teardown_percpu_nmi_cb, (void *)(unsigned long)irq, 1);
+	free_percpu_nmi(irq, &irq_stat);
+
+	err = request_percpu_irq(irq, ipi_handler, "IPI", &irq_stat);
+	WARN_ON(err);
+	on_each_cpu(enable_percpu_irq_cb, (void *)(unsigned long)irq, 1);
+}
+
+int ipi_promote_to_nmi(void)
+{
+	int i, err;
+
+	if (percpu_ipi_descs || !ipi_irq_base)
+		return -ENODEV;
+
+	for (i = 0; i < nr_ipi; i++) {
+		if (!ipi_should_be_nmi(i))
+			continue;
+
+		err = ipi_promote_one(i);
+		if (err)
+			goto rollback;
+	}
+
+	return 0;
+
+rollback:
+	for (i--; i >= 0; i--) {
+		if (ipi_should_be_nmi(i))
+			ipi_demote_one(i);
+	}
+	return err;
+}
+
+void ipi_demote_from_nmi(void)
+{
+	int i;
+
+	if (percpu_ipi_descs || !ipi_irq_base)
+		return;
+
+	for (i = 0; i < nr_ipi; i++) {
+		if (!ipi_should_be_nmi(i))
+			continue;
+		ipi_demote_one(i);
+	}
+}
+#endif
 
 void arch_smp_send_reschedule(int cpu)
 {

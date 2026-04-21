@@ -77,6 +77,12 @@ static inline void set_smp_ipi_range(int ipi_base, int n)
 	set_smp_ipi_range_percpu(ipi_base, n, 0);
 }
 
+#ifdef CONFIG_ARM64_RUNTIME_PSEUDO_NMI
+void init_gic_priority_masking_cpu(void *data);
+int ipi_promote_to_nmi(void);
+void ipi_demote_from_nmi(void);
+#endif
+
 /*
  * Called from the secondary holding pen, this is the secondary CPU entry point.
  */
