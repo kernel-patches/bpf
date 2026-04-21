@@ -2280,6 +2280,24 @@ config ARM64_PSEUDO_NMI
 	  If unsure, say N
 
 if ARM64_PSEUDO_NMI
+config ARM64_RUNTIME_PSEUDO_NMI
+	bool "Runtime enableable pseudo-NMI"
+	select DEBUG_FS
+	help
+	  Allow pseudo-NMI to be enabled and disabled at runtime via debugfs
+	  instead of requiring the irqchip.gicv3_pseudo_nmi=1 boot parameter.
+
+	  When this option is selected, pseudo-NMI is not activated at boot.
+	  It can be enabled later by writing to
+	  /sys/kernel/debug/pseudo_nmi/enable, which switches interrupt
+	  masking from DAIF to PMR and promotes debug IPIs to NMI priority.
+
+	  This is useful for on-demand debugging of hard lockups and other
+	  situations where NMI backtraces are needed without paying the PMR
+	  masking overhead at all times.
+
+	  If unsure, say N
+
 config ARM64_DEBUG_PRIORITY_MASKING
 	bool "Debug interrupt priority masking"
 	help

@@ -1133,6 +1133,9 @@ static void init_32bit_cpu_features(struct cpuinfo_32bit *info)
 }
 
 #ifdef CONFIG_ARM64_PSEUDO_NMI
+DEFINE_STATIC_KEY_FALSE(arm64_irq_prio_masking);
+EXPORT_SYMBOL(arm64_irq_prio_masking);
+
 static bool enable_pseudo_nmi;
 
 static int __init early_enable_pseudo_nmi(char *p)
@@ -2273,6 +2276,9 @@ static bool can_use_gic_priorities(const struct arm64_cpu_capabilities *entry,
 	 */
 	BUILD_BUG_ON(ARM64_HAS_GIC_PRIO_MASKING <= ARM64_HAS_GICV3_CPUIF);
 	if (!cpus_have_cap(ARM64_HAS_GICV3_CPUIF))
+		return false;
+
+	if (IS_ENABLED(CONFIG_ARM64_RUNTIME_PSEUDO_NMI))
 		return false;
 
 	return enable_pseudo_nmi;

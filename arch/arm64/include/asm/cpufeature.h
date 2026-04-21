@@ -804,8 +804,13 @@ static inline bool system_has_full_ptr_auth(void)
 	return system_supports_address_auth() && system_supports_generic_auth();
 }
 
+DECLARE_STATIC_KEY_FALSE(arm64_irq_prio_masking);
+
 static __always_inline bool system_uses_irq_prio_masking(void)
 {
+	if (IS_ENABLED(CONFIG_ARM64_RUNTIME_PSEUDO_NMI) &&
+	    !__is_defined(__KVM_NVHE_HYPERVISOR__))
+		return static_branch_unlikely(&arm64_irq_prio_masking);
 	return alternative_has_cap_unlikely(ARM64_HAS_GIC_PRIO_MASKING);
 }
 
