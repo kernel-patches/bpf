@@ -599,6 +599,7 @@ static int handle_gso_encap(struct sk_buff *skb, bool ipv4, int encap_len)
 
 int bpf_lwt_push_ip_encap(struct sk_buff *skb, void *hdr, u32 len, bool ingress)
 {
+	u8 buff[LWT_BPF_MAX_HEADROOM];
 	struct iphdr *iph;
 	bool ipv4;
 	int err;
@@ -606,8 +607,10 @@ int bpf_lwt_push_ip_encap(struct sk_buff *skb, void *hdr, u32 len, bool ingress)
 	if (unlikely(len < sizeof(struct iphdr) || len > LWT_BPF_MAX_HEADROOM))
 		return -EINVAL;
 
+	memcpy(buff, hdr, len);
+
 	/* validate protocol and length */
-	iph = (struct iphdr *)hdr;
+	iph = (struct iphdr *)buff;
 	if (iph->version == 4) {
 		ipv4 = true;
 		if (unlikely(len < iph->ihl * 4))
@@ -637,7 +640,7 @@ int bpf_lwt_push_ip_encap(struct sk_buff *skb, void *hdr, u32 len, bool ingress)
 	if (ingress)
 		skb_postpush_rcsum(skb, iph, len);
 	skb_reset_network_header(skb);
-	memcpy(skb_network_header(skb), hdr, len);
+	memcpy(skb_network_header(skb), buff, len);
 	bpf_compute_data_pointers(skb);
 	skb_clear_hash(skb);
 
