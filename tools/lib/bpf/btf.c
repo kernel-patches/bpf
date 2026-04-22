@@ -420,9 +420,11 @@ static int btf_parse_layout_sec(struct btf *btf)
 static int btf_type_size_unknown(const struct btf *btf, const struct btf_type *t)
 {
 	__u32 l_cnt = btf->hdr.layout_len / sizeof(struct btf_layout);
+	const void *end_type = btf->types_data + btf->hdr.type_len;
 	struct btf_layout *l = btf->layout;
 	__u16 vlen = btf_vlen(t);
 	__u32 kind = btf_kind(t);
+	int type_size;
 
 	/* Fall back to base BTF if needed as they share layout information */
 	if (!l) {
@@ -448,7 +450,13 @@ static int btf_type_size_unknown(const struct btf *btf, const struct btf_type *t
 		return -EINVAL;
 	}
 
-	return sizeof(struct btf_type) + l[kind].info_sz + vlen * l[kind].elem_sz;
+	type_size = sizeof(struct btf_type) + l[kind].info_sz + vlen * l[kind].elem_sz;
+	if ((size_t)type_size > (size_t)(end_type - (const void *)t)) {
+		pr_debug("Overflow in type size %d for kind %u\n",
+			 type_size, kind);
+		return -EINVAL;
+	}
+	return type_size;
 }
 
 static int btf_type_size(const struct btf *btf, const struct btf_type *t)
