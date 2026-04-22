@@ -660,4 +660,15 @@ source "drivers/misc/mchp_pci1xxxx/Kconfig"
 source "drivers/misc/keba/Kconfig"
 source "drivers/misc/amd-sbi/Kconfig"
 source "drivers/misc/rp1/Kconfig"
+
+config TEST_IRQOFF
+	tristate "Test module for IRQ-disabled spin (NOT FOR SUBMISSION)"
+	depends on ARM64_RUNTIME_PSEUDO_NMI
+	help
+	  Test module that spins with IRQs disabled on a specific CPU.
+	  With pseudo-NMI enabled, sysrq-l will show simulated_hard_lockup()
+	  in the backtrace. Without it, the CPU is invisible.
+
+	  Usage: insmod test_irqoff.ko cpu=2 duration_ms=5000
+
 endmenu
