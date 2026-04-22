@@ -613,7 +613,7 @@ int bpf_lwt_push_ip_encap(struct sk_buff *skb, void *hdr, u32 len, bool ingress)
 	iph = (struct iphdr *)buff;
 	if (iph->version == 4) {
 		ipv4 = true;
-		if (unlikely(len < iph->ihl * 4))
+		if (unlikely(iph->ihl < 5 || len < iph->ihl * 4))
 			return -EINVAL;
 	} else if (iph->version == 6) {
 		ipv4 = false;
