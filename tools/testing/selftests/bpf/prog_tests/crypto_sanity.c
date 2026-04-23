@@ -117,6 +117,19 @@ void test_crypto_sanity(void)
 	udp_test_port = skel->data->udp_test_port;
 	memcpy(skel->bss->key, crypto_key, sizeof(crypto_key));
 	snprintf(skel->bss->algo, 128, "%s", algo);
+
+	pfd = bpf_program__fd(skel->progs.skb_crypto_setup_bad_algo);
+	if (!ASSERT_GT(pfd, 0, "skb_crypto_setup_bad_algo fd"))
+		goto fail;
+
+	err = bpf_prog_test_run_opts(pfd, &opts);
+	if (!ASSERT_OK(err, "skb_crypto_setup_bad_algo") ||
+	    !ASSERT_OK(opts.retval, "skb_crypto_setup_bad_algo retval"))
+		goto fail;
+
+	if (!ASSERT_OK(skel->bss->status, "skb_crypto_setup_bad_algo status"))
+		goto fail;
+
 	pfd = bpf_program__fd(skel->progs.skb_crypto_setup);
 	if (!ASSERT_GT(pfd, 0, "skb_crypto_setup fd"))
 		goto fail;

@@ -147,31 +147,46 @@ bpf_crypto_ctx_create(const struct bpf_crypto_params *params, u32 params__sz,
 		      int *err)
 {
 	const struct bpf_crypto_type *type;
+	struct bpf_crypto_params params_copy;
 	struct bpf_crypto_ctx *ctx;
 
-	if (!params || params->reserved[0] || params->reserved[1] ||
-	    params__sz != sizeof(struct bpf_crypto_params)) {
+	if (!params || params__sz != sizeof(params_copy)) {
 		*err = -EINVAL;
 		return NULL;
 	}
 
-	type = bpf_crypto_get_type(params->type);
+	params_copy = *params;
+
+	if (params_copy.reserved[0] || params_copy.reserved[1]) {
+		*err = -EINVAL;
+		return NULL;
+	}
+
+	if (strnlen(params_copy.type, sizeof(params_copy.type)) ==
+	    sizeof(params_copy.type) ||
+	    strnlen(params_copy.algo, sizeof(params_copy.algo)) ==
+	    sizeof(params_copy.algo)) {
+		*err = -EINVAL;
+		return NULL;
+	}
+
+	type = bpf_crypto_get_type(params_copy.type);
 	if (IS_ERR(type)) {
 		*err = PTR_ERR(type);
 		return NULL;
 	}
 
-	if (!type->has_algo(params->algo)) {
+	if (!type->has_algo(params_copy.algo)) {
 		*err = -EOPNOTSUPP;
 		goto err_module_put;
 	}
 
-	if (!!params->authsize ^ !!type->setauthsize) {
+	if (!!params_copy.authsize ^ !!type->setauthsize) {
 		*err = -EOPNOTSUPP;
 		goto err_module_put;
 	}
 
-	if (!params->key_len || params->key_len > sizeof(params->key)) {
+	if (!params_copy.key_len || params_copy.key_len > sizeof(params_copy.key)) {
 		*err = -EINVAL;
 		goto err_module_put;
 	}
@@ -183,19 +198,19 @@ bpf_crypto_ctx_create(const struct bpf_crypto_params *params, u32 params__sz,
 	}
 
 	ctx->type = type;
-	ctx->tfm = type->alloc_tfm(params->algo);
+	ctx->tfm = type->alloc_tfm(params_copy.algo);
 	if (IS_ERR(ctx->tfm)) {
 		*err = PTR_ERR(ctx->tfm);
 		goto err_free_ctx;
 	}
 
-	if (params->authsize) {
-		*err = type->setauthsize(ctx->tfm, params->authsize);
+	if (params_copy.authsize) {
+		*err = type->setauthsize(ctx->tfm, params_copy.authsize);
 		if (*err)
 			goto err_free_tfm;
 	}
 
-	*err = type->setkey(ctx->tfm, params->key, params->key_len);
+	*err = type->setkey(ctx->tfm, params_copy.key, params_copy.key_len);
 	if (*err)
 		goto err_free_tfm;
 
