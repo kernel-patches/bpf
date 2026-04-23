@@ -745,6 +745,9 @@ int netkit_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	struct net_device *dev;
 	int ret;
 
+	if (bpf_prog_is_offloaded(prog->aux))
+		return -EINVAL;
+
 	rtnl_lock();
 	dev = netkit_dev_fetch(current->nsproxy->net_ns, attr->target_ifindex,
 			       attr->attach_type);
@@ -999,6 +1002,9 @@ int netkit_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	struct netkit_link *nkl;
 	struct net_device *dev;
 	int ret;
+
+	if (bpf_prog_is_offloaded(prog->aux))
+		return -EINVAL;
 
 	rtnl_lock();
 	dev = netkit_dev_fetch(current->nsproxy->net_ns,
