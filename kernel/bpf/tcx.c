@@ -16,6 +16,9 @@ int tcx_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	struct net_device *dev;
 	int ret;
 
+	if (bpf_prog_is_offloaded(prog->aux))
+		return -EINVAL;
+
 	rtnl_lock();
 	dev = __dev_get_by_index(net, attr->target_ifindex);
 	if (!dev) {
@@ -314,6 +317,9 @@ int tcx_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	struct net_device *dev;
 	struct tcx_link *tcx;
 	int ret;
+
+	if (bpf_prog_is_offloaded(prog->aux))
+		return -EINVAL;
 
 	rtnl_lock();
 	dev = __dev_get_by_index(net, attr->link_create.target_ifindex);
