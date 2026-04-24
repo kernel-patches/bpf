@@ -13617,13 +13617,15 @@ static void scalar_min_max_sub(struct bpf_reg_state *dst_reg,
 }
 
 static void scalar32_min_max_mul(struct bpf_reg_state *dst_reg,
-				 struct bpf_reg_state *src_reg)
+				 struct bpf_reg_state *src_reg,
+				 struct bpf_verifier_env *env)
 {
 	s32 smin = reg_s32_min(dst_reg);
 	s32 smax = reg_s32_max(dst_reg);
 	u32 umin = reg_u32_min(dst_reg);
 	u32 umax = reg_u32_max(dst_reg);
 	s32 tmp_prod[4];
+	bool two_arcs;
 
 	if (check_mul_overflow(umax, reg_u32_max(src_reg), &umax) ||
 	    check_mul_overflow(umin, reg_u32_min(src_reg), &umin)) {
@@ -13644,17 +13646,20 @@ static void scalar32_min_max_mul(struct bpf_reg_state *dst_reg,
 	}
 
 	dst_reg->r32 = cnum32_intersect(cnum32_from_urange(umin, umax),
-					cnum32_from_srange(smin, smax), NULL);
+					cnum32_from_srange(smin, smax), &two_arcs);
+	cnum_isec_count(env, two_arcs);
 }
 
 static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
-			       struct bpf_reg_state *src_reg)
+			       struct bpf_reg_state *src_reg,
+			       struct bpf_verifier_env *env)
 {
 	s64 smin = reg_smin(dst_reg);
 	s64 smax = reg_smax(dst_reg);
 	u64 umin = reg_umin(dst_reg);
 	u64 umax = reg_umax(dst_reg);
 	s64 tmp_prod[4];
+	bool two_arcs;
 
 	if (check_mul_overflow(umax, reg_umax(src_reg), &umax) ||
 	    check_mul_overflow(umin, reg_umin(src_reg), &umin)) {
@@ -13675,7 +13680,8 @@ static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
 	}
 
 	dst_reg->r64 = cnum64_intersect(cnum64_from_urange(umin, umax),
-					cnum64_from_srange(smin, smax), NULL);
+					cnum64_from_srange(smin, smax), &two_arcs);
+	cnum_isec_count(env, two_arcs);
 }
 
 static void scalar32_min_max_udiv(struct bpf_reg_state *dst_reg,
@@ -14045,9 +14051,11 @@ static void scalar32_min_max_lsh(struct bpf_reg_state *dst_reg,
 }
 
 static void __scalar64_min_max_lsh(struct bpf_reg_state *dst_reg,
-				   u64 umin_val, u64 umax_val)
+				   u64 umin_val, u64 umax_val,
+				   struct bpf_verifier_env *env)
 {
 	struct cnum64 u, s;
+	bool two_arcs;
 
 	/* Special case <<32 because it is a common compiler pattern to sign
 	 * extend subreg by doing <<32 s>>32. smin/smax assignments are correct
@@ -14067,17 +14075,19 @@ static void __scalar64_min_max_lsh(struct bpf_reg_state *dst_reg,
 		u = cnum64_from_urange(reg_umin(dst_reg) << umin_val,
 				       reg_umax(dst_reg) << umax_val);
 
-	dst_reg->r64 = cnum64_intersect(u, s, NULL);
+	dst_reg->r64 = cnum64_intersect(u, s, &two_arcs);
+	cnum_isec_count(env, two_arcs);
 }
 
 static void scalar_min_max_lsh(struct bpf_reg_state *dst_reg,
-			       struct bpf_reg_state *src_reg)
+			       struct bpf_reg_state *src_reg,
+			       struct bpf_verifier_env *env)
 {
 	u64 umax_val = reg_umax(src_reg);
 	u64 umin_val = reg_umin(src_reg);
 
 	/* scalar64 calc uses 32bit unshifted bounds so must be called first */
-	__scalar64_min_max_lsh(dst_reg, umin_val, umax_val);
+	__scalar64_min_max_lsh(dst_reg, umin_val, umax_val, env);
 	__scalar32_min_max_lsh(dst_reg, umin_val, umax_val);
 
 	dst_reg->var_off = tnum_lshift(dst_reg->var_off, umin_val);
@@ -14375,8 +14385,8 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		break;
 	case BPF_MUL:
 		dst_reg->var_off = tnum_mul(dst_reg->var_off, src_reg.var_off);
-		scalar32_min_max_mul(dst_reg, &src_reg);
-		scalar_min_max_mul(dst_reg, &src_reg);
+		scalar32_min_max_mul(dst_reg, &src_reg, env);
+		scalar_min_max_mul(dst_reg, &src_reg, env);
 		break;
 	case BPF_DIV:
 		/* BPF div specification: x / 0 = 0 */
@@ -14439,7 +14449,7 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		if (alu32)
 			scalar32_min_max_lsh(dst_reg, &src_reg);
 		else
-			scalar_min_max_lsh(dst_reg, &src_reg);
+			scalar_min_max_lsh(dst_reg, &src_reg, env);
 		break;
 	case BPF_RSH:
 		if (alu32)
