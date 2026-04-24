@@ -10677,6 +10677,11 @@ static int bpf_xdp_link_update(struct bpf_link *link, struct bpf_prog *new_prog,
 
 	netdev_lock_ops(xdp_link->dev);
 	mode = dev_xdp_mode(xdp_link->dev, xdp_link->flags);
+	if (mode != XDP_MODE_HW && bpf_prog_is_offloaded(new_prog->aux)) {
+		netdev_unlock_ops(xdp_link->dev);
+		err = -EINVAL;
+		goto out_unlock;
+	}
 	bpf_op = dev_xdp_bpf_op(xdp_link->dev, mode);
 	err = dev_xdp_install(xdp_link->dev, mode, bpf_op, NULL,
 			      xdp_link->flags, new_prog);
