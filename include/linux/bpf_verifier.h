@@ -413,6 +413,7 @@ struct bpf_func_state {
 	 *                           | number of simulations is tracked in frame N
 	 */
 	u32 callback_depth;
+	bool no_stack_arg_load;
 
 	/* The following fields should be last. See copy_func_state() */
 	/* The state of the stack. Each element of the array describes BPF_REG_SIZE
@@ -427,6 +428,9 @@ struct bpf_func_state {
 	 * `stack`. allocated_stack is always a multiple of BPF_REG_SIZE.
 	 */
 	int allocated_stack;
+
+	u16 out_stack_arg_depth; /* Size of max outgoing stack args in bytes. */
+	struct bpf_reg_state *stack_arg_regs; /* Outgoing on-stack arguments */
 };
 
 #define MAX_CALL_FRAMES 8
@@ -563,6 +567,17 @@ struct bpf_verifier_state {
 	     iter < frame->allocated_stack / BPF_REG_SIZE;		\
 	     iter++, reg = bpf_get_spilled_reg(iter, frame, mask))
 
+#define bpf_get_spilled_stack_arg(slot, frame, mask)                   \
+	((((slot) < frame->out_stack_arg_depth / BPF_REG_SIZE) &&           \
+	  (frame->stack_arg_regs[slot].type != NOT_INIT))               \
+	 ? &frame->stack_arg_regs[slot] : NULL)
+
+/* Iterate over 'frame', setting 'reg' to either NULL or a spilled stack arg. */
+#define bpf_for_each_spilled_stack_arg(iter, frame, reg, mask)         \
+	for (iter = 0, reg = bpf_get_spilled_stack_arg(iter, frame, mask); \
+	     iter < frame->out_stack_arg_depth / BPF_REG_SIZE;              \
+	     iter++, reg = bpf_get_spilled_stack_arg(iter, frame, mask))
+
 #define bpf_for_each_reg_in_vstate_mask(__vst, __state, __reg, __mask, __expr)   \
 	({                                                               \
 		struct bpf_verifier_state *___vstate = __vst;            \
@@ -580,6 +595,11 @@ struct bpf_verifier_state {
 					continue;                        \
 				(void)(__expr);                          \
 			}                                                \
+			bpf_for_each_spilled_stack_arg(___j, __state, __reg, __mask) { \
+				if (!__reg)                              \
+					continue;                        \
+				(void)(__expr);                          \
+			}						 \
 		}                                                        \
 	})
 
@@ -794,10 +814,13 @@ struct bpf_subprog_info {
 	bool keep_fastcall_stack: 1;
 	bool changes_pkt_data: 1;
 	bool might_sleep: 1;
-	u8 arg_cnt:3;
+	u8 arg_cnt:4;
 
 	enum priv_stack_mode priv_stack_mode;
-	struct bpf_subprog_arg_info args[MAX_BPF_FUNC_REG_ARGS];
+	struct bpf_subprog_arg_info args[MAX_BPF_FUNC_ARGS];
+	u16 incoming_stack_arg_depth;
+	u16 stack_arg_depth; /* incoming + max outgoing */
+	u16 max_out_stack_arg_depth;
 };
 
 struct bpf_verifier_env;

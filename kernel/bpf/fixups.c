@@ -1123,6 +1123,8 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 
 		func[i]->aux->name[0] = 'F';
 		func[i]->aux->stack_depth = env->subprog_info[i].stack_depth;
+		func[i]->aux->incoming_stack_arg_depth = env->subprog_info[i].incoming_stack_arg_depth;
+		func[i]->aux->stack_arg_depth = env->subprog_info[i].stack_arg_depth;
 		if (env->subprog_info[i].priv_stack_mode == PRIV_STACK_ADAPTIVE)
 			func[i]->aux->jits_use_priv_stack = true;
 
@@ -1301,8 +1303,10 @@ int bpf_jit_subprogs(struct bpf_verifier_env *env)
 	struct bpf_insn_aux_data *orig_insn_aux;
 	u32 *orig_subprog_starts;
 
-	if (env->subprog_cnt <= 1)
+	if (env->subprog_cnt <= 1) {
+		env->prog->aux->stack_arg_depth = env->subprog_info[0].stack_arg_depth;
 		return 0;
+	}
 
 	prog = orig_prog = env->prog;
 	if (bpf_prog_need_blind(prog)) {
@@ -1378,9 +1382,21 @@ int bpf_fixup_call_args(struct bpf_verifier_env *env)
 	struct bpf_prog *prog = env->prog;
 	struct bpf_insn *insn = prog->insnsi;
 	bool has_kfunc_call = bpf_prog_has_kfunc_call(prog);
-	int i, depth;
+	int depth;
 #endif
-	int err = 0;
+	int i, err = 0;
+
+	for (i = 0; i < env->subprog_cnt; i++) {
+		struct bpf_subprog_info *subprog = &env->subprog_info[i];
+		u16 outgoing = subprog->stack_arg_depth - subprog->incoming_stack_arg_depth;
+
+		if (subprog->max_out_stack_arg_depth > outgoing) {
+			verbose(env,
+				"func#%d writes stack arg slot at depth %u, but calls only require %u bytes\n",
+				i, subprog->max_out_stack_arg_depth, outgoing);
+			return -EINVAL;
+		}
+	}
 
 	if (env->prog->jit_requested &&
 	    !bpf_prog_is_offloaded(env->prog->aux)) {
