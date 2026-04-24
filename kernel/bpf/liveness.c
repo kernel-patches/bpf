@@ -610,6 +610,18 @@ enum arg_track_state {
 /* Track callee stack slots fp-8 through fp-512 (64 slots of 8 bytes each) */
 #define MAX_ARG_SPILL_SLOTS 64
 
+/* Stack arg slots: outgoing at -(i+1)*8, incoming at +(i+1)*8 */
+#define MAX_STACK_ARG_SLOTS (MAX_BPF_FUNC_ARGS - MAX_BPF_FUNC_REG_ARGS)
+
+static int stack_arg_off_to_slot(s16 off)
+{
+	int aoff = off < 0 ? -off : off;
+
+	if (aoff / 8 > MAX_STACK_ARG_SLOTS)
+		return -1;
+	return aoff / 8 - 1;
+}
+
 static bool arg_is_visited(const struct arg_track *at)
 {
 	return at->frame != ARG_UNVISITED;
@@ -1062,17 +1074,37 @@ static bool can_be_local_fp(int depth, int regno, struct arg_track *at)
 static void arg_track_xfer(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			   int insn_idx,
 			   struct arg_track *at_out, struct arg_track *at_stack_out,
+			   struct arg_track *at_stack_arg_out,
+			   const struct arg_track *at_stack_arg_entry,
 			   struct func_instance *instance,
 			   u32 *callsites)
 {
 	int depth = instance->depth;
 	u8 class = BPF_CLASS(insn->code);
 	u8 code = BPF_OP(insn->code);
-	struct arg_track *dst = &at_out[insn->dst_reg];
-	struct arg_track *src = &at_out[insn->src_reg];
+	struct arg_track *dst, *src;
 	struct arg_track none = { .frame = ARG_NONE };
-	int r;
+	int r, slot;
 
+	/* Handle stack arg stores and loads. */
+	if (insn->dst_reg == BPF_REG_PARAMS) {
+		slot = stack_arg_off_to_slot(insn->off);
+		if (slot >= 0) {
+			if (class == BPF_STX)
+				at_stack_arg_out[slot] = at_out[insn->src_reg];
+			else
+				at_stack_arg_out[slot] = none;
+		}
+		return;
+	}
+	if (insn->src_reg == BPF_REG_PARAMS) {
+		slot = stack_arg_off_to_slot(insn->off);
+		at_out[insn->dst_reg] = (slot >= 0) ? at_stack_arg_entry[slot] : none;
+		return;
+	}
+
+	dst = &at_out[insn->dst_reg];
+	src = &at_out[insn->src_reg];
 	if (class == BPF_ALU64 && BPF_SRC(insn->code) == BPF_K) {
 		if (code == BPF_MOV) {
 			*dst = none;
@@ -1385,6 +1417,7 @@ static int record_arg_access(struct bpf_verifier_env *env,
 static int record_call_access(struct bpf_verifier_env *env,
 			      struct func_instance *instance,
 			      struct arg_track *at,
+			      struct arg_track *at_stack_arg,
 			      int insn_idx)
 {
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
@@ -1399,6 +1432,15 @@ static int record_call_access(struct bpf_verifier_env *env,
 
 	for (r = BPF_REG_1; r < BPF_REG_1 + num_params; r++) {
 		err = record_arg_access(env, instance, insn, &at[r], r - 1, insn_idx);
+		if (err)
+			return err > 0 ? 0 : err;
+	}
+
+	if (num_params <= MAX_BPF_FUNC_REG_ARGS)
+		return 0;
+	for (r = 0; r < MAX_STACK_ARG_SLOTS && r < num_params - MAX_BPF_FUNC_REG_ARGS; r++) {
+		err = record_arg_access(env, instance, insn, &at_stack_arg[r],
+					r + MAX_BPF_FUNC_REG_ARGS, insn_idx);
 		if (err)
 			return err > 0 ? 0 : err;
 	}
@@ -1545,6 +1587,7 @@ static void print_subprog_arg_access(struct bpf_verifier_env *env,
 static int compute_subprog_args(struct bpf_verifier_env *env,
 				struct subprog_at_info *info,
 				struct arg_track *callee_entry,
+				struct arg_track *callee_stack_arg_entry,
 				struct func_instance *instance,
 				u32 *callsites)
 {
@@ -1560,6 +1603,9 @@ static int compute_subprog_args(struct bpf_verifier_env *env,
 	struct arg_track at_out[MAX_BPF_REG];
 	struct arg_track (*at_stack_in)[MAX_ARG_SPILL_SLOTS] = NULL;
 	struct arg_track *at_stack_out = NULL;
+	struct arg_track (*at_stack_arg_in)[MAX_STACK_ARG_SLOTS] = NULL;
+	struct arg_track at_stack_arg_out[MAX_STACK_ARG_SLOTS];
+	struct arg_track at_stack_arg_entry[MAX_STACK_ARG_SLOTS];
 	struct arg_track unvisited = { .frame = ARG_UNVISITED };
 	struct arg_track none = { .frame = ARG_NONE };
 	bool changed;
@@ -1567,6 +1613,10 @@ static int compute_subprog_args(struct bpf_verifier_env *env,
 
 	at_in = kvmalloc_objs(*at_in, len, GFP_KERNEL_ACCOUNT);
 	if (!at_in)
+		goto err_free;
+
+	at_stack_arg_in = kvmalloc_objs(*at_stack_arg_in, len, GFP_KERNEL_ACCOUNT);
+	if (!at_stack_arg_in)
 		goto err_free;
 
 	at_stack_in = kvmalloc_objs(*at_stack_in, len, GFP_KERNEL_ACCOUNT);
@@ -1582,6 +1632,8 @@ static int compute_subprog_args(struct bpf_verifier_env *env,
 			at_in[i][r] = unvisited;
 		for (r = 0; r < MAX_ARG_SPILL_SLOTS; r++)
 			at_stack_in[i][r] = unvisited;
+		for (r = 0; r < MAX_STACK_ARG_SLOTS; r++)
+			at_stack_arg_in[i][r] = unvisited;
 	}
 
 	for (r = 0; r < MAX_BPF_REG; r++)
@@ -1600,6 +1652,12 @@ static int compute_subprog_args(struct bpf_verifier_env *env,
 	for (r = 0; r < MAX_ARG_SPILL_SLOTS; r++)
 		at_stack_in[0][r] = none;
 
+	/* Entry: incoming stack args from caller, or ARG_NONE for main */
+	for (r = 0; r < MAX_STACK_ARG_SLOTS; r++) {
+		at_stack_arg_entry[r] = callee_stack_arg_entry ? callee_stack_arg_entry[r] : none;
+		at_stack_arg_in[0][r] = none;
+	}
+
 	if (env->log.level & BPF_LOG_LEVEL2)
 		verbose(env, "subprog#%d: analyzing (depth %d)...\n", subprog, depth);
 
@@ -1617,8 +1675,10 @@ redo:
 
 		memcpy(at_out, at_in[i], sizeof(at_out));
 		memcpy(at_stack_out, at_stack_in[i], MAX_ARG_SPILL_SLOTS * sizeof(*at_stack_out));
+		memcpy(at_stack_arg_out, at_stack_arg_in[i], sizeof(at_stack_arg_out));
 
-		arg_track_xfer(env, insn, idx, at_out, at_stack_out, instance, callsites);
+		arg_track_xfer(env, insn, idx, at_out, at_stack_out,
+			       at_stack_arg_out, at_stack_arg_entry, instance, callsites);
 		arg_track_log(env, insn, idx, at_in[i], at_stack_in[i], at_out, at_stack_out);
 
 		/* Propagate to successors within this subprogram */
@@ -1639,6 +1699,18 @@ redo:
 			for (r = 0; r < MAX_ARG_SPILL_SLOTS; r++)
 				changed |= arg_track_join(env, idx, target, -r - 1,
 							  &at_stack_in[ti][r], at_stack_out[r]);
+
+			/*
+			 * Stack arg slots use indices after spill slots:
+			 * -(r + MAX_ARG_SPILL_SLOTS + 1) so that index * 8 in verbose logging
+			 * yields unique FP-relative offsets that don't * collide with spill slot
+			 * offsets -8..-512.
+			 */
+			for (r = 0; r < MAX_STACK_ARG_SLOTS; r++)
+				changed |= arg_track_join(env, idx, target,
+							  -(r + MAX_ARG_SPILL_SLOTS + 1),
+							  &at_stack_arg_in[ti][r],
+							  at_stack_arg_out[r]);
 		}
 	}
 	if (changed)
@@ -1655,7 +1727,7 @@ redo:
 			goto err_free;
 
 		if (insn->code == (BPF_JMP | BPF_CALL)) {
-			err = record_call_access(env, instance, at_in[i], idx);
+			err = record_call_access(env, instance, at_in[i], at_stack_arg_in[i], idx);
 			if (err)
 				goto err_free;
 		}
@@ -1671,6 +1743,17 @@ redo:
 			}
 			memcpy(env->callsite_at_stack[idx],
 			       at_stack_in[i], sizeof(struct arg_track) * MAX_ARG_SPILL_SLOTS);
+
+			kvfree(env->callsite_at_stack_arg[idx]);
+			env->callsite_at_stack_arg[idx] =
+				kvmalloc_objs(*env->callsite_at_stack_arg[idx],
+					      MAX_STACK_ARG_SLOTS, GFP_KERNEL_ACCOUNT);
+			if (!env->callsite_at_stack_arg[idx]) {
+				err = -ENOMEM;
+				goto err_free;
+			}
+			memcpy(env->callsite_at_stack_arg[idx],
+			       at_stack_arg_in[i], sizeof(struct arg_track) * MAX_STACK_ARG_SLOTS);
 		}
 	}
 
@@ -1683,6 +1766,7 @@ redo:
 err_free:
 	kvfree(at_stack_out);
 	kvfree(at_stack_in);
+	kvfree(at_stack_arg_in);
 	kvfree(at_in);
 	return err;
 }
@@ -1692,6 +1776,16 @@ static bool has_fp_args(struct arg_track *args)
 {
 	for (int r = BPF_REG_1; r <= BPF_REG_5; r++)
 		if (args[r].frame != ARG_NONE)
+			return true;
+	return false;
+}
+
+static bool has_fp_stack_args(struct arg_track *stack_args)
+{
+	if (!stack_args)
+		return false;
+	for (int r = 0; r < MAX_STACK_ARG_SLOTS; r++)
+		if (arg_is_fp(&stack_args[r]))
 			return true;
 	return false;
 }
@@ -1768,6 +1862,7 @@ static void free_instance(struct func_instance *instance)
  */
 static int analyze_subprog(struct bpf_verifier_env *env,
 			   struct arg_track *entry_args,
+			   struct arg_track *entry_stack_args,
 			   struct subprog_at_info *info,
 			   struct func_instance *instance,
 			   u32 *callsites)
@@ -1809,7 +1904,8 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 	kvfree(info[subprog].at_in);
 	info[subprog].at_in = NULL;
 
-	err = compute_subprog_args(env, &info[subprog], entry_args, instance, callsites);
+	err = compute_subprog_args(env, &info[subprog], entry_args, entry_stack_args, instance,
+				   callsites);
 	if (err)
 		goto out_free;
 
@@ -1817,6 +1913,7 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 	for (int p = po_start; p < po_end; p++) {
 		int idx = env->cfg.insn_postorder[p];
 		struct arg_track callee_args[BPF_REG_5 + 1];
+		struct arg_track *callee_stack_args = NULL;
 		struct arg_track none = { .frame = ARG_NONE };
 		struct bpf_insn *insn = &insns[idx];
 		struct func_instance *callee_instance;
@@ -1834,6 +1931,7 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 			/* Build entry args: R1-R5 from at_in at call site */
 			for (int r = BPF_REG_1; r <= BPF_REG_5; r++)
 				callee_args[r] = info[subprog].at_in[j][r];
+			callee_stack_args = env->callsite_at_stack_arg[idx];
 		} else if (bpf_calls_callback(env, idx)) {
 			callee = find_callback_subprog(env, insn, idx, &caller_reg, &cb_callee_reg);
 			if (callee == -2) {
@@ -1860,7 +1958,7 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 			continue;
 		}
 
-		if (!has_fp_args(callee_args))
+		if (!has_fp_args(callee_args) && !has_fp_stack_args(callee_stack_args))
 			continue;
 
 		if (depth == MAX_CALL_FRAMES - 1) {
@@ -1874,7 +1972,8 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 			goto out_free;
 		}
 		callsites[depth] = idx;
-		err = analyze_subprog(env, callee_args, info, callee_instance, callsites);
+		err = analyze_subprog(env, callee_args, callee_stack_args, info, callee_instance,
+				      callsites);
 		if (err)
 			goto out_free;
 
@@ -1926,13 +2025,21 @@ int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env)
 		kvfree(info);
 		return -ENOMEM;
 	}
+	env->callsite_at_stack_arg = kvzalloc_objs(*env->callsite_at_stack_arg, insn_cnt,
+					      GFP_KERNEL_ACCOUNT);
+	if (!env->callsite_at_stack_arg) {
+		kvfree(env->callsite_at_stack);
+		env->callsite_at_stack = NULL;
+		kvfree(info);
+		return -ENOMEM;
+	}
 
 	instance = call_instance(env, NULL, 0, 0);
 	if (IS_ERR(instance)) {
 		err = PTR_ERR(instance);
 		goto out;
 	}
-	err = analyze_subprog(env, NULL, info, instance, callsites);
+	err = analyze_subprog(env, NULL, NULL, info, instance, callsites);
 	if (err)
 		goto out;
 
@@ -1958,7 +2065,7 @@ int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env)
 			err = PTR_ERR(instance);
 			goto out;
 		}
-		err = analyze_subprog(env, NULL, info, instance, callsites);
+		err = analyze_subprog(env, NULL, NULL, info, instance, callsites);
 		if (err)
 			goto out;
 	}
@@ -1967,10 +2074,14 @@ int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env)
 		err = print_instances(env);
 
 out:
-	for (k = 0; k < insn_cnt; k++)
+	for (k = 0; k < insn_cnt; k++) {
 		kvfree(env->callsite_at_stack[k]);
+		kvfree(env->callsite_at_stack_arg[k]);
+	}
 	kvfree(env->callsite_at_stack);
 	env->callsite_at_stack = NULL;
+	kvfree(env->callsite_at_stack_arg);
+	env->callsite_at_stack_arg = NULL;
 	for (k = 0; k < env->subprog_cnt; k++)
 		kvfree(info[k].at_in);
 	kvfree(info);

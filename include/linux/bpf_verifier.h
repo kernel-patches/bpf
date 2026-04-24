@@ -960,6 +960,8 @@ struct bpf_verifier_env {
 	struct bpf_jmp_history_entry *cur_hist_ent;
 	/* Per-callsite copy of parent's converged at_stack_in for cross-frame fills. */
 	struct arg_track **callsite_at_stack;
+	/* Per-callsite stack arg state for cross-frame stack arg tracking. */
+	struct arg_track **callsite_at_stack_arg;
 	u32 pass_cnt; /* number of times do_check() was called */
 	u32 subprog_cnt;
 	/* number of instructions analyzed by the verifier */
