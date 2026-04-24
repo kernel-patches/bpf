@@ -47,6 +47,8 @@ enum stat_id {
 	MARK_READ_MAX_LEN,
 	SIZE,
 	JITED_SIZE,
+	ISEC_OVERAPPROX,
+	CROSSING_POLES,
 	STACK,
 	PROG_TYPE,
 	ATTACH_TYPE,
@@ -738,10 +740,11 @@ cleanup:
 }
 
 static const struct stat_specs default_output_spec = {
-	.spec_cnt = 8,
+	.spec_cnt = 10,
 	.ids = {
 		FILE_NAME, PROG_NAME, VERDICT, DURATION,
-		TOTAL_INSNS, TOTAL_STATES, SIZE, JITED_SIZE
+		TOTAL_INSNS, TOTAL_STATES, SIZE, JITED_SIZE,
+		ISEC_OVERAPPROX, CROSSING_POLES
 	},
 };
 
@@ -789,13 +792,14 @@ cleanup:
 }
 
 static const struct stat_specs default_csv_output_spec = {
-	.spec_cnt = 15,
+	.spec_cnt = 17,
 	.ids = {
 		FILE_NAME, PROG_NAME, VERDICT, DURATION,
 		TOTAL_INSNS, TOTAL_STATES, PEAK_STATES,
 		MAX_STATES_PER_INSN, MARK_READ_MAX_LEN,
 		SIZE, JITED_SIZE, PROG_TYPE, ATTACH_TYPE,
 		STACK, MEMORY_PEAK,
+		ISEC_OVERAPPROX, CROSSING_POLES,
 	},
 };
 
@@ -833,6 +837,8 @@ static struct stat_def {
 	[MARK_READ_MAX_LEN] = { "Max mark read length", {"max_mark_read_len", "mark_read"}, },
 	[SIZE] = { "Program size", {"prog_size"}, },
 	[JITED_SIZE] = { "Jited size", {"prog_size_jited"}, },
+	[ISEC_OVERAPPROX] = { "Isec overapprox", {"isec_overapprox"}, },
+	[CROSSING_POLES] = { "Crossing poles", {"crossing_poles"}, },
 	[STACK] = {"Stack depth", {"stack_depth", "stack"}, },
 	[PROG_TYPE] = { "Program type", {"prog_type"}, },
 	[ATTACH_TYPE] = { "Attach type", {"attach_type", }, },
@@ -1014,6 +1020,15 @@ static int parse_verif_log(char * const buf, size_t buf_sz, struct verif_stats *
 			cur++;
 
 		if (1 == sscanf(cur, "verification time %ld usec\n", &s->stats[DURATION]))
+			continue;
+		if (7 == sscanf(cur, "processed %ld insns (limit %*d) max_states_per_insn %ld total_states %ld peak_states %ld mark_read %ld isec_overapprox %ld crossing_poles %ld",
+				&s->stats[TOTAL_INSNS],
+				&s->stats[MAX_STATES_PER_INSN],
+				&s->stats[TOTAL_STATES],
+				&s->stats[PEAK_STATES],
+				&s->stats[MARK_READ_MAX_LEN],
+				&s->stats[ISEC_OVERAPPROX],
+				&s->stats[CROSSING_POLES]))
 			continue;
 		if (5 == sscanf(cur, "processed %ld insns (limit %*d) max_states_per_insn %ld total_states %ld peak_states %ld mark_read %ld",
 				&s->stats[TOTAL_INSNS],
@@ -2277,6 +2292,8 @@ static int cmp_stat(const struct verif_stats *s1, const struct verif_stats *s2,
 	case PROG_TYPE:
 	case SIZE:
 	case JITED_SIZE:
+	case ISEC_OVERAPPROX:
+	case CROSSING_POLES:
 	case STACK:
 	case VERDICT:
 	case DURATION:
@@ -2514,6 +2531,8 @@ static void prepare_value(const struct verif_stats *s, enum stat_id id,
 	case STACK:
 	case SIZE:
 	case JITED_SIZE:
+	case ISEC_OVERAPPROX:
+	case CROSSING_POLES:
 	case MEMORY_PEAK:
 		*val = s ? s->stats[id] : 0;
 		break;
@@ -2601,6 +2620,8 @@ static int parse_stat_value(const char *str, enum stat_id id, struct verif_stats
 	case MARK_READ_MAX_LEN:
 	case SIZE:
 	case JITED_SIZE:
+	case ISEC_OVERAPPROX:
+	case CROSSING_POLES:
 	case MEMORY_PEAK:
 	case STACK: {
 		long val;

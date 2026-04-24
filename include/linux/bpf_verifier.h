@@ -951,6 +951,9 @@ struct bpf_verifier_env {
 	u32 free_list_size;
 	u32 explored_states_size;
 	u32 num_backedges;
+	u32 num_isec_overapprox; /* how many times cnum{32,64} had to collapse two intervals as one */
+	u32 num_cnums_crossing_poles; /* how many times arithmetic ops produced cnums crossing MAX/0
+	                               * and SMAX/SMIN boundaries */
 	bpfptr_t fd_array;
 
 	/* bit mask to keep track of whether a register has been accessed

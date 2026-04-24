@@ -2267,4 +2267,38 @@ __naked void deduce64_from_32_wrapping_32bit(void)
 	: __clobber_all);
 }
 
+SEC("socket")
+__success __log_level(2)
+__msg("isec_overapprox 2")
+__naked void isec_overapprox_counter(void)
+{
+	asm volatile (
+	"call %[bpf_get_current_pid_tgid];"
+	"r1 = 0x8000000000000000 ll;"
+	"if r0 s< r1 goto 1f;"		/* r0 s>= S64_MIN (always true) */
+	"if r0 s> 0 goto 1f;"		/* r0 s<= 0, so r0 in [S64_MIN, 0] */
+	"if r0 > r1 goto 1f;"		/* r0 u<= S64_MIN: cross-domain comparison */
+	"1: r0 = 0;"
+	"exit;"
+	:: __imm(bpf_get_current_pid_tgid)
+	: __clobber_all);
+}
+
+SEC("socket")
+__success __log_level(2)
+__msg("crossing_poles 1")
+__naked void crossing_poles_counter(void)
+{
+	asm volatile (
+	"call %[bpf_get_current_pid_tgid];"
+	"r1 = 0xc000000000000000 ll;"
+	"if r0 > r1 goto 1f;"		/* r0 u<= 0xc000000000000000 */
+	"r1 = 0x7000000000000000 ll;"
+	"r0 += r1;"			/* wrapping add: crosses both poles */
+	"1: r0 = 0;"
+	"exit;"
+	:: __imm(bpf_get_current_pid_tgid)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";

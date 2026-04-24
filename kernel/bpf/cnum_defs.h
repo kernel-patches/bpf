@@ -87,10 +87,13 @@ st FN(smax)(struct cnum_t cnum)
  * - if intersection produces two ranges, returns smaller of
  *   'a' or 'b' in 'out'.
  */
-struct cnum_t FN(intersect)(struct cnum_t a, struct cnum_t b)
+struct cnum_t FN(intersect)(struct cnum_t a, struct cnum_t b, bool *two_arcs)
 {
 	struct cnum_t b1;
 	ut dbase;
+
+	if (two_arcs)
+		*two_arcs = false;
 
 	if (FN(is_empty)(a) || FN(is_empty)(b))
 		return EMPTY;
@@ -119,6 +122,8 @@ struct cnum_t FN(intersect)(struct cnum_t a, struct cnum_t b)
 			 * can't represent as single cnum, over-approximate
 			 * the result.
 			 */
+			if (two_arcs)
+				*two_arcs = true;
 			return a.size <= b.size ? a : b;
 		} else {
 			/*
@@ -164,19 +169,19 @@ struct cnum_t FN(intersect)(struct cnum_t a, struct cnum_t b)
 	}
 }
 
-void FN(intersect_with)(struct cnum_t *dst, struct cnum_t src)
+void FN(intersect_with)(struct cnum_t *dst, struct cnum_t src, bool *two_arcs)
 {
-	*dst = FN(intersect)(*dst, src);
+	*dst = FN(intersect)(*dst, src, two_arcs);
 }
 
-void FN(intersect_with_urange)(struct cnum_t *dst, ut min, ut max)
+void FN(intersect_with_urange)(struct cnum_t *dst, ut min, ut max, bool *two_arcs)
 {
-	FN(intersect_with)(dst, FN(from_urange)(min, max));
+	FN(intersect_with)(dst, FN(from_urange)(min, max), two_arcs);
 }
 
-void FN(intersect_with_srange)(struct cnum_t *dst, st min, st max)
+void FN(intersect_with_srange)(struct cnum_t *dst, st min, st max, bool *two_arcs)
 {
-	FN(intersect_with)(dst, FN(from_srange)(min, max));
+	FN(intersect_with)(dst, FN(from_srange)(min, max), two_arcs);
 }
 
 static inline struct cnum_t FN(normalize)(struct cnum_t cnum)

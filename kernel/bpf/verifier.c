@@ -300,6 +300,22 @@ static const char *btf_type_name(const struct btf *btf, u32 id)
 static DEFINE_MUTEX(bpf_verifier_lock);
 static DEFINE_MUTEX(bpf_percpu_ma_lock);
 
+static bool cnum32_crosses_both_poles(struct cnum32 c)
+{
+	return c.size > S32_MAX && c.size != U32_MAX;
+}
+
+static bool cnum64_crosses_both_poles(struct cnum64 c)
+{
+	return c.size > S64_MAX && c.size != U64_MAX;
+}
+
+static void cnum_isec_count(struct bpf_verifier_env *env, bool two_arcs)
+{
+	if (two_arcs)
+		env->num_isec_overapprox++;
+}
+
 __printf(2, 3) static void verbose(void *private_data, const char *fmt, ...)
 {
 	struct bpf_verifier_env *env = private_data;
@@ -1982,7 +1998,7 @@ static struct cnum64 cnum64_from_tnum(struct tnum tnum)
 
 static void __update_reg32_bounds(struct bpf_reg_state *reg)
 {
-	cnum32_intersect_with(&reg->r32, cnum32_from_tnum(reg->var_off));
+	cnum32_intersect_with(&reg->r32, cnum32_from_tnum(reg->var_off), NULL);
 }
 
 static void __update_reg64_bounds(struct bpf_reg_state *reg)
@@ -1990,7 +2006,7 @@ static void __update_reg64_bounds(struct bpf_reg_state *reg)
 	u64 tnum_next, tmax;
 	bool umin_in_tnum;
 
-	cnum64_intersect_with(&reg->r64, cnum64_from_tnum(reg->var_off));
+	cnum64_intersect_with(&reg->r64, cnum64_from_tnum(reg->var_off), NULL);
 
 	/* Check if u64 and tnum overlap in a single value */
 	tnum_next = tnum_step(reg->var_off, reg_umin(reg));
@@ -2029,7 +2045,7 @@ static void __update_reg_bounds(struct bpf_reg_state *reg)
 /* Uses signed min/max values to inform unsigned, and vice-versa */
 static void deduce_bounds_32_from_64(struct bpf_reg_state *reg)
 {
-	cnum32_intersect_with(&reg->r32, cnum32_from_cnum64(reg->r64));
+	cnum32_intersect_with(&reg->r32, cnum32_from_cnum64(reg->r64), NULL);
 }
 
 static void deduce_bounds_64_from_32(struct bpf_reg_state *reg)
@@ -13628,7 +13644,7 @@ static void scalar32_min_max_mul(struct bpf_reg_state *dst_reg,
 	}
 
 	dst_reg->r32 = cnum32_intersect(cnum32_from_urange(umin, umax),
-					cnum32_from_srange(smin, smax));
+					cnum32_from_srange(smin, smax), NULL);
 }
 
 static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
@@ -13659,7 +13675,7 @@ static void scalar_min_max_mul(struct bpf_reg_state *dst_reg,
 	}
 
 	dst_reg->r64 = cnum64_intersect(cnum64_from_urange(umin, umax),
-					cnum64_from_srange(smin, smax));
+					cnum64_from_srange(smin, smax), NULL);
 }
 
 static void scalar32_min_max_udiv(struct bpf_reg_state *dst_reg,
@@ -14051,7 +14067,7 @@ static void __scalar64_min_max_lsh(struct bpf_reg_state *dst_reg,
 		u = cnum64_from_urange(reg_umin(dst_reg) << umin_val,
 				       reg_umax(dst_reg) << umax_val);
 
-	dst_reg->r64 = cnum64_intersect(u, s);
+	dst_reg->r64 = cnum64_intersect(u, s, NULL);
 }
 
 static void scalar_min_max_lsh(struct bpf_reg_state *dst_reg,
@@ -14455,6 +14471,9 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	 */
 	if (alu32 && opcode != BPF_END)
 		zext_32_to_64(dst_reg);
+	if (cnum64_crosses_both_poles(dst_reg->r64) ||
+	    cnum32_crosses_both_poles(dst_reg->r32))
+		env->num_cnums_crossing_poles++;
 	reg_bounds_sync(dst_reg);
 	return 0;
 }
@@ -14896,7 +14915,8 @@ static void find_good_pkt_pointers(struct bpf_verifier_state *vstate,
 	}));
 }
 
-static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
+static void regs_refine_cond_op(struct bpf_verifier_env *env,
+				struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
 				u8 opcode, bool is_jmp32);
 static u8 rev_opcode(u8 opcode);
 
@@ -14908,7 +14928,7 @@ static u8 rev_opcode(u8 opcode);
 static int simulate_both_branches_taken(struct bpf_verifier_env *env, u8 opcode, bool is_jmp32)
 {
 	/* Fallthrough (FALSE) branch */
-	regs_refine_cond_op(&env->false_reg1, &env->false_reg2, rev_opcode(opcode), is_jmp32);
+	regs_refine_cond_op(env, &env->false_reg1, &env->false_reg2, rev_opcode(opcode), is_jmp32);
 	reg_bounds_sync(&env->false_reg1);
 	reg_bounds_sync(&env->false_reg2);
 	/*
@@ -14920,7 +14940,7 @@ static int simulate_both_branches_taken(struct bpf_verifier_env *env, u8 opcode,
 		return 1;
 
 	/* Jump (TRUE) branch */
-	regs_refine_cond_op(&env->true_reg1, &env->true_reg2, opcode, is_jmp32);
+	regs_refine_cond_op(env, &env->true_reg1, &env->true_reg2, opcode, is_jmp32);
 	reg_bounds_sync(&env->true_reg1);
 	reg_bounds_sync(&env->true_reg2);
 	/*
@@ -15229,10 +15249,13 @@ static u8 rev_opcode(u8 opcode)
 	}
 }
 
+
 /* Refine range knowledge for <reg1> <op> <reg>2 conditional operation. */
-static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
+static void regs_refine_cond_op(struct bpf_verifier_env *env,
+				struct bpf_reg_state *reg1, struct bpf_reg_state *reg2,
 				u8 opcode, bool is_jmp32)
 {
+	bool two_arcs;
 	struct tnum t;
 	u64 val;
 
@@ -15252,14 +15275,16 @@ static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state
 	switch (opcode) {
 	case BPF_JEQ:
 		if (is_jmp32) {
-			reg1->r32 = cnum32_intersect(reg1->r32, reg2->r32);
+			reg1->r32 = cnum32_intersect(reg1->r32, reg2->r32, &two_arcs);
+			cnum_isec_count(env, two_arcs);
 			reg2->r32 = reg1->r32;
 
 			t = tnum_intersect(tnum_subreg(reg1->var_off), tnum_subreg(reg2->var_off));
 			reg1->var_off = tnum_with_subreg(reg1->var_off, t);
 			reg2->var_off = tnum_with_subreg(reg2->var_off, t);
 		} else {
-			reg1->r64 = cnum64_intersect(reg1->r64, reg2->r64);
+			reg1->r64 = cnum64_intersect(reg1->r64, reg2->r64, &two_arcs);
+			cnum_isec_count(env, two_arcs);
 			reg2->r64 = reg1->r64;
 
 			reg1->var_off = tnum_intersect(reg1->var_off, reg2->var_off);
@@ -15278,10 +15303,12 @@ static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state
 		val = reg_const_value(reg2, is_jmp32);
 		if (is_jmp32) {
 			/* Complement of the range [val, val] as cnum32. */
-			cnum32_intersect_with(&reg1->r32, (struct cnum32){ val + 1, U32_MAX - 1 });
+			cnum32_intersect_with(&reg1->r32, (struct cnum32){ val + 1, U32_MAX - 1 }, &two_arcs);
+			cnum_isec_count(env, two_arcs);
 		} else {
 			/* Complement of the range [val, val] as cnum64. */
-			cnum64_intersect_with(&reg1->r64, (struct cnum64){ val + 1, U64_MAX - 1 });
+			cnum64_intersect_with(&reg1->r64, (struct cnum64){ val + 1, U64_MAX - 1 }, &two_arcs);
+			cnum_isec_count(env, two_arcs);
 		}
 		break;
 	case BPF_JSET:
@@ -15328,38 +15355,54 @@ static void regs_refine_cond_op(struct bpf_reg_state *reg1, struct bpf_reg_state
 		break;
 	case BPF_JLE:
 		if (is_jmp32) {
-			cnum32_intersect_with_urange(&reg1->r32, 0, reg_u32_max(reg2));
-			cnum32_intersect_with_urange(&reg2->r32, reg_u32_min(reg1), U32_MAX);
+			cnum32_intersect_with_urange(&reg1->r32, 0, reg_u32_max(reg2), &two_arcs);
+			cnum_isec_count(env, two_arcs);
+			cnum32_intersect_with_urange(&reg2->r32, reg_u32_min(reg1), U32_MAX, &two_arcs);
+			cnum_isec_count(env, two_arcs);
 		} else {
-			cnum64_intersect_with_urange(&reg1->r64, 0, reg_umax(reg2));
-			cnum64_intersect_with_urange(&reg2->r64, reg_umin(reg1), U64_MAX);
+			cnum64_intersect_with_urange(&reg1->r64, 0, reg_umax(reg2), &two_arcs);
+			cnum_isec_count(env, two_arcs);
+			cnum64_intersect_with_urange(&reg2->r64, reg_umin(reg1), U64_MAX, &two_arcs);
+			cnum_isec_count(env, two_arcs);
 		}
 		break;
 	case BPF_JLT:
 		if (is_jmp32) {
-			cnum32_intersect_with_urange(&reg1->r32, 0, reg_u32_max(reg2) - 1);
-			cnum32_intersect_with_urange(&reg2->r32, reg_u32_min(reg1) + 1, U32_MAX);
+			cnum32_intersect_with_urange(&reg1->r32, 0, reg_u32_max(reg2) - 1, &two_arcs);
+			cnum_isec_count(env, two_arcs);
+			cnum32_intersect_with_urange(&reg2->r32, reg_u32_min(reg1) + 1, U32_MAX, &two_arcs);
+			cnum_isec_count(env, two_arcs);
 		} else {
-			cnum64_intersect_with_urange(&reg1->r64, 0, reg_umax(reg2) - 1);
-			cnum64_intersect_with_urange(&reg2->r64, reg_umin(reg1) + 1, U64_MAX);
+			cnum64_intersect_with_urange(&reg1->r64, 0, reg_umax(reg2) - 1, &two_arcs);
+			cnum_isec_count(env, two_arcs);
+			cnum64_intersect_with_urange(&reg2->r64, reg_umin(reg1) + 1, U64_MAX, &two_arcs);
+			cnum_isec_count(env, two_arcs);
 		}
 		break;
 	case BPF_JSLE:
 		if (is_jmp32) {
-			cnum32_intersect_with_srange(&reg1->r32, S32_MIN, reg_s32_max(reg2));
-			cnum32_intersect_with_srange(&reg2->r32, reg_s32_min(reg1), S32_MAX);
+			cnum32_intersect_with_srange(&reg1->r32, S32_MIN, reg_s32_max(reg2), &two_arcs);
+			cnum_isec_count(env, two_arcs);
+			cnum32_intersect_with_srange(&reg2->r32, reg_s32_min(reg1), S32_MAX, &two_arcs);
+			cnum_isec_count(env, two_arcs);
 		} else {
-			cnum64_intersect_with_srange(&reg1->r64, S64_MIN, reg_smax(reg2));
-			cnum64_intersect_with_srange(&reg2->r64, reg_smin(reg1), S64_MAX);
+			cnum64_intersect_with_srange(&reg1->r64, S64_MIN, reg_smax(reg2), &two_arcs);
+			cnum_isec_count(env, two_arcs);
+			cnum64_intersect_with_srange(&reg2->r64, reg_smin(reg1), S64_MAX, &two_arcs);
+			cnum_isec_count(env, two_arcs);
 		}
 		break;
 	case BPF_JSLT:
 		if (is_jmp32) {
-			cnum32_intersect_with_srange(&reg1->r32, S32_MIN, reg_s32_max(reg2) - 1);
-			cnum32_intersect_with_srange(&reg2->r32, reg_s32_min(reg1) + 1, S32_MAX);
+			cnum32_intersect_with_srange(&reg1->r32, S32_MIN, reg_s32_max(reg2) - 1, &two_arcs);
+			cnum_isec_count(env, two_arcs);
+			cnum32_intersect_with_srange(&reg2->r32, reg_s32_min(reg1) + 1, S32_MAX, &two_arcs);
+			cnum_isec_count(env, two_arcs);
 		} else {
-			cnum64_intersect_with_srange(&reg1->r64, S64_MIN, reg_smax(reg2) - 1);
-			cnum64_intersect_with_srange(&reg2->r64, reg_smin(reg1) + 1, S64_MAX);
+			cnum64_intersect_with_srange(&reg1->r64, S64_MIN, reg_smax(reg2) - 1, &two_arcs);
+			cnum_isec_count(env, two_arcs);
+			cnum64_intersect_with_srange(&reg2->r64, reg_smin(reg1) + 1, S64_MAX, &two_arcs);
+			cnum_isec_count(env, two_arcs);
 		}
 		break;
 	default:
@@ -18291,10 +18334,12 @@ static void print_verification_stats(struct bpf_verifier_env *env)
 		verbose(env, "\n");
 	}
 	verbose(env, "processed %d insns (limit %d) max_states_per_insn %d "
-		"total_states %d peak_states %d mark_read %d\n",
+		"total_states %d peak_states %d mark_read %d "
+		"isec_overapprox %d crossing_poles %d\n",
 		env->insn_processed, BPF_COMPLEXITY_LIMIT_INSNS,
 		env->max_states_per_insn, env->total_states,
-		env->peak_states, env->longest_mark_read_walk);
+		env->peak_states, env->longest_mark_read_walk,
+		env->num_isec_overapprox, env->num_cnums_crossing_poles);
 }
 
 int bpf_prog_ctx_arg_info_init(struct bpf_prog *prog,
