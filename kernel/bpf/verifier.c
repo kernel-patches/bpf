@@ -18018,13 +18018,34 @@ static int check_and_resolve_insns(struct bpf_verifier_env *env)
 		return err;
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
+		u8 class = BPF_CLASS(insn->code);
+		u8 mode = BPF_MODE(insn->code);
+		u8 size = BPF_SIZE(insn->code);
+
 		if (insn->dst_reg >= MAX_BPF_REG) {
-			verbose(env, "R%d is invalid\n", insn->dst_reg);
-			return -EINVAL;
+			if (insn->dst_reg != BPF_REG_PARAMS ||
+			    (class != BPF_ST  && class != BPF_STX) ||
+			     mode != BPF_MEM || size != BPF_DW) {
+				verbose(env, "R%d is invalid\n", insn->dst_reg);
+				return -EINVAL;
+			}
+			if (insn->off >= 0 || insn->off % BPF_REG_SIZE) {
+				verbose(env, "invalid stack arg store offset %d\n",
+					insn->off);
+				return -EINVAL;
+			}
 		}
 		if (insn->src_reg >= MAX_BPF_REG) {
-			verbose(env, "R%d is invalid\n", insn->src_reg);
-			return -EINVAL;
+			if (insn->src_reg != BPF_REG_PARAMS ||
+			    insn->code != (BPF_LDX | BPF_MEM | BPF_DW)) {
+				verbose(env, "R%d is invalid\n", insn->src_reg);
+				return -EINVAL;
+			}
+			if (insn->off <= 0 || insn->off % BPF_REG_SIZE) {
+				verbose(env, "invalid stack arg load offset %d\n",
+					insn->off);
+				return -EINVAL;
+			}
 		}
 		if (insn[0].code == (BPF_LD | BPF_IMM | BPF_DW)) {
 			struct bpf_insn_aux_data *aux;
