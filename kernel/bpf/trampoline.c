@@ -618,8 +618,10 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mut
 
 	if (total == 0) {
 		err = unregister_fentry(tr, orig_flags, tr->cur_image->image);
-		bpf_tramp_image_put(tr->cur_image);
-		tr->cur_image = NULL;
+		if (!err) {
+			bpf_tramp_image_put(tr->cur_image);
+			tr->cur_image = NULL;
+		}
 		goto out;
 	}
 
