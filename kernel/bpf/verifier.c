@@ -3202,6 +3202,11 @@ static int insn_stack_access_flags(int frameno, int spi)
 	return INSN_F_STACK_ACCESS | (spi << INSN_F_SPI_SHIFT) | frameno;
 }
 
+static int insn_stack_arg_access_flags(int frameno, int spi)
+{
+	return INSN_F_STACK_ARG_ACCESS | (spi << INSN_F_SPI_SHIFT) | frameno;
+}
+
 static void mark_indirect_target(struct bpf_verifier_env *env, int idx)
 {
 	env->insn_aux_data[idx].indirect_target = true;
@@ -4123,7 +4128,8 @@ static int check_stack_arg_write(struct bpf_verifier_env *env, struct bpf_func_s
 		__mark_reg_known(arg, env->prog->insnsi[env->insn_idx].imm);
 	}
 	state->no_stack_arg_load = true;
-	return 0;
+	return bpf_push_jmp_history(env, env->cur_state,
+				    insn_stack_arg_access_flags(state->frameno, spi), 0);
 }
 
 /*
@@ -4158,7 +4164,17 @@ static int check_stack_arg_read(struct bpf_verifier_env *env, struct bpf_func_st
 		copy_register_state(&cur->regs[dst_regno], arg);
 	else
 		mark_reg_unknown(env, cur->regs, dst_regno);
-	return 0;
+	return bpf_push_jmp_history(env, env->cur_state,
+				    insn_stack_arg_access_flags(state->frameno, spi), 0);
+}
+
+static int mark_stack_arg_precision(struct bpf_verifier_env *env, int arg_idx)
+{
+	struct bpf_func_state *caller = cur_func(env);
+	int spi = arg_idx - MAX_BPF_FUNC_REG_ARGS;
+
+	bt_set_frame_stack_arg_slot(&env->bt, caller->frameno, spi);
+	return mark_chain_precision_batch(env, env->cur_state);
 }
 
 static int check_outgoing_stack_args(struct bpf_verifier_env *env, struct bpf_func_state *caller,
@@ -6887,8 +6903,14 @@ static int check_mem_size_reg(struct bpf_verifier_env *env,
 	}
 	err = check_helper_mem_access(env, mem_reg, mem_argno, reg_umax(size_reg),
 				      access_type, zero_size_allowed, meta);
-	if (!err)
-		err = mark_chain_precision(env, reg_from_argno(size_argno));
+	if (!err) {
+		int regno = reg_from_argno(size_argno);
+
+		if (regno >= 0)
+			err = mark_chain_precision(env, regno);
+		else
+			err = mark_stack_arg_precision(env, arg_from_argno(size_argno) - 1);
+	}
 	return err;
 }
 
