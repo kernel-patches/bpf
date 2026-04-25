@@ -10359,6 +10359,11 @@ static int dev_xdp_install(struct net_device *dev, enum bpf_xdp_mode mode,
 
 	netdev_ops_assert_locked(dev);
 
+	if (prog && mode != XDP_MODE_HW && bpf_prog_is_offloaded(prog->aux)) {
+		NL_SET_ERR_MSG(extack, "Using offloaded program without HW_MODE flag is not supported");
+		return -EINVAL;
+	}
+
 	if (dev->cfg->hds_config == ETHTOOL_TCP_DATA_SPLIT_ENABLED &&
 	    prog && !prog->aux->xdp_has_frags) {
 		NL_SET_ERR_MSG(extack, "unable to install XDP to device using tcp-data-split");
@@ -10509,10 +10514,6 @@ static int dev_xdp_attach(struct net_device *dev, struct netlink_ext_ack *extack
 		if (!offload && dev_xdp_prog(dev, other_mode)) {
 			NL_SET_ERR_MSG(extack, "Native and generic XDP can't be active at the same time");
 			return -EEXIST;
-		}
-		if (!offload && bpf_prog_is_offloaded(new_prog->aux)) {
-			NL_SET_ERR_MSG(extack, "Using offloaded program without HW_MODE flag is not supported");
-			return -EINVAL;
 		}
 		if (bpf_prog_is_dev_bound(new_prog->aux) && !bpf_offload_dev_match(new_prog, dev)) {
 			NL_SET_ERR_MSG(extack, "Program bound to different device");
