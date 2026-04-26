@@ -792,6 +792,11 @@ void print_verifier_state(struct bpf_verifier_env *env, const struct bpf_verifie
 		verbose(env, " cb");
 	if (state->in_async_callback_fn)
 		verbose(env, " async_cb");
+	if (state->loop_stack_cnt) {
+		verbose(env, " loop_stack=");
+		for (i = 0; i < state->loop_stack_cnt; i++)
+			verbose(env, "%s%d", i ? "," : "", state->loop_stack[i].loop_id);
+	}
 	verbose(env, "\n");
 	if (!print_all)
 		mark_verifier_state_clean(env);
