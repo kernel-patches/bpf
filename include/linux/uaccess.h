@@ -221,6 +221,8 @@ copy_from_user(void *to, const void __user *from, unsigned long n)
 		return _inline_copy_from_user(to, from, n);
 }
 
+#define copy_from_user_partial copy_from_user
+
 static __always_inline unsigned long __must_check
 copy_to_user(void __user *to, const void *from, unsigned long n)
 {
@@ -232,6 +234,8 @@ copy_to_user(void __user *to, const void *from, unsigned long n)
 	else
 		return _inline_copy_to_user(to, from, n);
 }
+
+#define copy_to_user_partial copy_to_user
 
 #ifndef copy_mc_to_kernel
 /*
