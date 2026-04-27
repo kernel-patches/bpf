@@ -494,17 +494,20 @@ static int bpf_encap_nlsize(struct lwtunnel_state *lwtstate)
 
 static int bpf_lwt_prog_cmp(struct bpf_lwt_prog *a, struct bpf_lwt_prog *b)
 {
-	/* FIXME:
-	 * The LWT state is currently rebuilt for delete requests which
-	 * results in a new bpf_prog instance. Comparing names for now.
+	/* Delete requests rebuild the LWT state, so pointer equality is
+	 * not sufficient. Compare by digest (SHA256 of instructions with
+	 * map fds zeroed by bpf_prog_calc_tag()) as a reliable fallback.
 	 */
-	if (!a->name && !b->name)
+	if (!a->prog && !b->prog)
 		return 0;
 
-	if (!a->name || !b->name)
+	if (!a->prog || !b->prog)
 		return 1;
 
-	return strcmp(a->name, b->name);
+	if (a->prog == b->prog)
+		return 0;
+
+	return memcmp(a->prog->digest, b->prog->digest, SHA256_DIGEST_SIZE);
 }
 
 static int bpf_encap_cmp(struct lwtunnel_state *a, struct lwtunnel_state *b)
