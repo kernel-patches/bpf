@@ -2372,7 +2372,6 @@ config TEST_IOV_ITER
 	tristate "Test iov_iter operation" if !KUNIT_ALL_TESTS
 	depends on KUNIT
 	depends on MMU
-	default KUNIT_ALL_TESTS
 	help
 	  Enable this to turn on testing of the operation of the I/O iterator
 	  (iov_iter). This test is executed only once during system boot (so
@@ -2519,12 +2518,10 @@ config SEQ_BUF_KUNIT_TEST
 config STRING_KUNIT_TEST
 	tristate "KUnit test string functions at runtime" if !KUNIT_ALL_TESTS
 	depends on KUNIT
-	default KUNIT_ALL_TESTS
 
 config STRING_HELPERS_KUNIT_TEST
 	tristate "KUnit test string helpers at runtime" if !KUNIT_ALL_TESTS
 	depends on KUNIT
-	default KUNIT_ALL_TESTS
 
 config STRING_KUNIT_BENCH
        bool "Benchmark string functions at runtime"
@@ -2843,7 +2840,6 @@ config KFIFO_KUNIT_TEST
 config LIST_KUNIT_TEST
 	tristate "KUnit Test for Kernel Linked-list structures" if !KUNIT_ALL_TESTS
 	depends on KUNIT
-	default KUNIT_ALL_TESTS
 	help
 	  This builds the linked list KUnit test suite.
 	  It tests that the API and basic functionality of the list_head type
@@ -2862,7 +2858,6 @@ config LIST_KUNIT_TEST
 config LIST_PRIVATE_KUNIT_TEST
 	tristate "KUnit Test for Kernel Private Linked-list structures" if !KUNIT_ALL_TESTS
 	depends on KUNIT
-	default KUNIT_ALL_TESTS
 	help
 	  This builds the KUnit test for the private linked-list primitives
 	  defined in include/linux/list_private.h.
@@ -2876,7 +2871,6 @@ config LIST_PRIVATE_KUNIT_TEST
 config HASHTABLE_KUNIT_TEST
 	tristate "KUnit Test for Kernel Hashtable structures" if !KUNIT_ALL_TESTS
 	depends on KUNIT
-	default KUNIT_ALL_TESTS
 	help
 	  This builds the hashtable KUnit test suite.
 	  It tests the basic functionality of the API defined in
@@ -2989,7 +2983,6 @@ config SHDI3_KUNIT_TEST
 config SLUB_KUNIT_TEST
 	tristate "KUnit test for SLUB cache error detection" if !KUNIT_ALL_TESTS
 	depends on SLUB_DEBUG && KUNIT
-	default KUNIT_ALL_TESTS
 	help
 	  This builds SLUB allocator unit test.
 	  Tests SLUB cache debugging functionality.
@@ -3012,7 +3005,6 @@ config RATIONAL_KUNIT_TEST
 config MEMCPY_KUNIT_TEST
 	tristate "Test memcpy(), memmove(), and memset() functions at runtime" if !KUNIT_ALL_TESTS
 	depends on KUNIT
-	default KUNIT_ALL_TESTS
 	help
 	  Builds unit tests for memcpy(), memmove(), and memset() functions.
 	  For more information on KUnit and unit tests in general please refer
@@ -3059,7 +3051,6 @@ config OVERFLOW_KUNIT_TEST
 config RANDSTRUCT_KUNIT_TEST
 	tristate "Test randstruct structure layout randomization at runtime" if !KUNIT_ALL_TESTS
 	depends on KUNIT
-	default KUNIT_ALL_TESTS
 	help
 	  Builds unit tests for the checking CONFIG_RANDSTRUCT=y, which
 	  randomizes structure layouts.
