@@ -81,6 +81,7 @@ bpf_selem_alloc(struct bpf_local_storage_map *smap, void *owner,
 	if (selem) {
 		RCU_INIT_POINTER(SDATA(selem)->smap, smap);
 		atomic_set(&selem->state, 0);
+		bpf_kptr_aux_init_value(smap->map.record, SDATA(selem)->data);
 
 		if (value) {
 			/* No need to call check_and_init_map_value as memory is zero init */
@@ -800,14 +801,20 @@ bpf_local_storage_map_alloc(union bpf_attr *attr,
 		raw_res_spin_lock_init(&smap->buckets[i].lock);
 	}
 
-	smap->elem_size = offsetof(struct bpf_local_storage_elem,
-				   sdata.data[attr->value_size]);
+	smap->elem_size = offsetof(
+		struct bpf_local_storage_elem,
+		sdata.data[attr->value_size]);
+	err = bpf_map_attr_ref_kptr_aux_size(attr);
+	if (err < 0)
+		goto free_buckets;
+	smap->elem_size += err;
 
 	smap->cache_idx = bpf_local_storage_cache_idx_get(cache);
 	return &smap->map;
 
-free_smap:
+free_buckets:
 	kvfree(smap->buckets);
+free_smap:
 	bpf_map_area_free(smap);
 	return ERR_PTR(err);
 }

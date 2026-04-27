@@ -661,12 +661,93 @@ struct btf_field *btf_record_find(const struct btf_record *rec, u32 offset,
 	return field;
 }
 
+static void bpf_kptr_call_dtor(const struct btf_field *field, void *ptr)
+{
+	struct btf_struct_meta *pointee_struct_meta;
+
+	if (!btf_is_kernel(field->kptr.btf)) {
+		pointee_struct_meta = btf_find_struct_meta(field->kptr.btf,
+							   field->kptr.btf_id);
+		__bpf_obj_drop_impl(ptr,
+				    pointee_struct_meta ?
+					    pointee_struct_meta->record :
+					    NULL,
+				    false);
+		return;
+	}
+
+	field->kptr.dtor(ptr);
+}
+
+static void bpf_kptr_ref_process_queue(struct btf_field *field)
+{
+	struct llist_node *node, *tmp, *list;
+
+	list = llist_del_all(&field->kptr.irq_work_items);
+	if (!list)
+		return;
+
+	list = llist_reverse_order(list);
+	llist_for_each_safe(node, tmp, list) {
+		struct bpf_kptr_dtor_aux *aux;
+		void *ptr;
+
+		aux = container_of(node, struct bpf_kptr_dtor_aux, node);
+		ptr = xchg(&aux->ptr, NULL);
+		if (!ptr)
+			continue;
+		bpf_kptr_call_dtor(field, ptr);
+	}
+}
+
+static void bpf_kptr_ref_irq_work(struct irq_work *irq_work)
+{
+	struct btf_field_kptr *kptr =
+		container_of(irq_work, struct btf_field_kptr, irq_work);
+	struct btf_field *field = container_of(kptr, struct btf_field, kptr);
+
+	bpf_kptr_ref_process_queue(field);
+}
+
+static void bpf_kptr_record_init(struct btf_record *rec)
+{
+	int i;
+
+	if (IS_ERR_OR_NULL(rec))
+		return;
+
+	for (i = 0; i < rec->cnt; i++) {
+		if (rec->fields[i].type != BPF_KPTR_REF)
+			continue;
+		init_irq_work(&rec->fields[i].kptr.irq_work,
+			      bpf_kptr_ref_irq_work);
+		init_llist_head(&rec->fields[i].kptr.irq_work_items);
+		init_llist_head(&rec->fields[i].kptr.free_list);
+	}
+}
+
+static void bpf_kptr_record_flush(struct btf_record *rec)
+{
+	int i;
+
+	if (IS_ERR_OR_NULL(rec))
+		return;
+
+	for (i = 0; i < rec->cnt; i++) {
+		if (rec->fields[i].type != BPF_KPTR_REF)
+			continue;
+		irq_work_sync(&rec->fields[i].kptr.irq_work);
+		bpf_kptr_ref_process_queue(&rec->fields[i]);
+	}
+}
+
 void btf_record_free(struct btf_record *rec)
 {
 	int i;
 
 	if (IS_ERR_OR_NULL(rec))
 		return;
+	bpf_kptr_record_flush(rec);
 	for (i = 0; i < rec->cnt; i++) {
 		switch (rec->fields[i].type) {
 		case BPF_KPTR_UNREF:
@@ -751,6 +832,7 @@ struct btf_record *btf_record_dup(const struct btf_record *rec)
 		}
 		new_rec->cnt++;
 	}
+	bpf_kptr_record_init(new_rec);
 	return new_rec;
 free:
 	btf_record_free(new_rec);
@@ -792,12 +874,77 @@ bool btf_record_equal(const struct btf_record *rec_a, const struct btf_record *r
 		return false;
 
 	for (i = 0; i < rec_a->cnt; i++) {
-		if (memcmp(&rec_a->fields[i], &rec_b->fields[i],
-			   sizeof(rec_a->fields[i])))
+		struct btf_field a = rec_a->fields[i];
+		struct btf_field b = rec_b->fields[i];
+
+		switch (a.type) {
+		case BPF_KPTR_UNREF:
+		case BPF_KPTR_REF:
+		case BPF_KPTR_PERCPU:
+		case BPF_UPTR:
+			memset(&a.kptr.irq_work, 0, sizeof(a.kptr.irq_work));
+			memset(&a.kptr.irq_work_items, 0,
+			       sizeof(a.kptr.irq_work_items));
+			memset(&a.kptr.free_list, 0, sizeof(a.kptr.free_list));
+			memset(&b.kptr.irq_work, 0, sizeof(b.kptr.irq_work));
+			memset(&b.kptr.irq_work_items, 0,
+			       sizeof(b.kptr.irq_work_items));
+			memset(&b.kptr.free_list, 0, sizeof(b.kptr.free_list));
+			break;
+		default:
+			break;
+		}
+
+		if (memcmp(&a, &b, sizeof(a)))
 			return false;
 	}
 
 	return true;
+}
+
+int bpf_map_attr_ref_kptr_aux_size(const union bpf_attr *attr)
+{
+	const struct btf_type *value_type;
+	struct btf_record *rec;
+	struct btf *btf;
+	u32 btf_value_type_id;
+	u32 value_size;
+	int aux_size;
+
+	if (!attr->btf_value_type_id)
+		return 0;
+
+	btf = btf_get_by_fd(attr->btf_fd);
+	if (IS_ERR(btf))
+		return 0;
+
+	btf_value_type_id = attr->btf_value_type_id;
+	value_type = btf_type_id_size(btf, &btf_value_type_id, &value_size);
+	if (!value_type || value_size != attr->value_size) {
+		aux_size = 0;
+		goto out;
+	}
+
+	/*
+	 * This helper is only sizing hidden storage for valid ref-kptr fields.
+	 * Leave full BTF validation to the regular map_check_btf() path.
+	 */
+	if (!__btf_type_is_struct(value_type) &&
+	    BTF_INFO_KIND(value_type->info) != BTF_KIND_DATASEC) {
+		aux_size = 0;
+		goto out;
+	}
+
+	rec = btf_parse_fields(btf, value_type, BPF_KPTR_REF, attr->value_size);
+	if (IS_ERR(rec)) {
+		aux_size = 0;
+		goto out;
+	}
+	aux_size = rec ? rec->kptr_ref_aux_size : 0;
+	btf_record_free(rec);
+out:
+	btf_put(btf);
+	return aux_size;
 }
 
 void bpf_obj_free_timer(const struct btf_record *rec, void *obj)
@@ -830,8 +977,7 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 		return;
 	fields = rec->fields;
 	for (i = 0; i < rec->cnt; i++) {
-		struct btf_struct_meta *pointee_struct_meta;
-		const struct btf_field *field = &fields[i];
+		struct btf_field *field = (struct btf_field *)&fields[i];
 		void *field_ptr = obj + field->offset;
 		void *xchgd_field;
 
@@ -857,14 +1003,35 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 			if (!xchgd_field)
 				break;
 
-			if (!btf_is_kernel(field->kptr.btf)) {
-				pointee_struct_meta = btf_find_struct_meta(field->kptr.btf,
-									   field->kptr.btf_id);
-				__bpf_obj_drop_impl(xchgd_field, pointee_struct_meta ?
-								 pointee_struct_meta->record : NULL,
-								 fields[i].type == BPF_KPTR_PERCPU);
+			if (field->type == BPF_KPTR_REF && in_nmi()) {
+				struct bpf_kptr_dtor_aux *aux;
+
+				aux = bpf_kptr_ref_aux(field, obj);
+				WARN_ON_ONCE(READ_ONCE(aux->ptr));
+				WRITE_ONCE(aux->ptr, xchgd_field);
+				if (llist_add(&aux->node,
+					      &field->kptr.irq_work_items))
+					irq_work_queue(&field->kptr.irq_work);
+				break;
+			}
+
+			if (field->type == BPF_KPTR_PERCPU) {
+				struct btf_struct_meta *pointee_struct_meta;
+
+				pointee_struct_meta = NULL;
+				if (!btf_is_kernel(field->kptr.btf))
+					pointee_struct_meta =
+						btf_find_struct_meta(
+							field->kptr.btf,
+							field->kptr.btf_id);
+				__bpf_obj_drop_impl(
+					xchgd_field,
+					pointee_struct_meta ?
+						pointee_struct_meta->record :
+						NULL,
+					true);
 			} else {
-				field->kptr.dtor(xchgd_field);
+				bpf_kptr_call_dtor(field, xchgd_field);
 			}
 			break;
 		case BPF_UPTR:
@@ -1276,6 +1443,7 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 				       BPF_RB_ROOT | BPF_REFCOUNT | BPF_WORKQUEUE | BPF_UPTR |
 				       BPF_TASK_WORK,
 				       map->value_size);
+	bpf_kptr_record_init(map->record);
 	if (!IS_ERR_OR_NULL(map->record)) {
 		int i;
 
