@@ -92,4 +92,7 @@ extern int bpf_set_dentry_xattr(struct dentry *dentry, const char *name__str,
 				const struct bpf_dynptr *value_p, int flags) __ksym __weak;
 extern int bpf_remove_dentry_xattr(struct dentry *dentry, const char *name__str) __ksym __weak;
 
+extern int bpf_init_inode_xattr(const char *name__str,
+				const struct bpf_dynptr *value_p) __ksym __weak;
+
 #endif
