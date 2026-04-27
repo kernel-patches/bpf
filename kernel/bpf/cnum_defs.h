@@ -6,6 +6,7 @@
 #endif
 
 #include <linux/cnum.h>
+#include <linux/kernel.h>
 #include <linux/limits.h>
 #include <linux/minmax.h>
 #include <linux/compiler_types.h>
@@ -23,6 +24,7 @@ struct cnum_t FN(from_urange)(ut min, ut max)
 {
 	return (struct cnum_t){ .base = min, .size = (ut)max - min };
 }
+EXPORT_SYMBOL_GPL(FN(from_urange));
 
 struct cnum_t FN(from_srange)(st min, st max)
 {
@@ -31,6 +33,7 @@ struct cnum_t FN(from_srange)(st min, st max)
 
 	return (struct cnum_t){ .base = base, .size = size };
 }
+EXPORT_SYMBOL_GPL(FN(from_srange));
 
 /* True if this cnum represents two unsigned ranges. */
 static inline bool FN(urange_overflow)(struct cnum_t cnum)
@@ -48,11 +51,13 @@ ut FN(umin)(struct cnum_t cnum)
 {
 	return FN(urange_overflow)(cnum) ? 0 : cnum.base;
 }
+EXPORT_SYMBOL_GPL(FN(umin));
 
 ut FN(umax)(struct cnum_t cnum)
 {
 	return FN(urange_overflow)(cnum) ? UT_MAX : cnum.base + cnum.size;
 }
+EXPORT_SYMBOL_GPL(FN(umax));
 
 /* True if this cnum represents two signed ranges. */
 static inline bool FN(srange_overflow)(struct cnum_t cnum)
@@ -71,6 +76,7 @@ st FN(smin)(struct cnum_t cnum)
 	       ? ST_MIN
 	       : min((st)cnum.base, (st)(cnum.base + cnum.size));
 }
+EXPORT_SYMBOL_GPL(FN(smin));
 
 st FN(smax)(struct cnum_t cnum)
 {
@@ -78,6 +84,7 @@ st FN(smax)(struct cnum_t cnum)
 	       ? ST_MAX
 	       : max((st)cnum.base, (st)(cnum.base + cnum.size));
 }
+EXPORT_SYMBOL_GPL(FN(smax));
 
 /*
  * Returns a possibly empty intersection of cnums 'a' and 'b'.
