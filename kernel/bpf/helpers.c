@@ -2571,10 +2571,10 @@ __bpf_kfunc int bpf_list_push_back_impl(struct bpf_list_head *head,
 }
 
 __bpf_kfunc int bpf_list_add(struct bpf_list_head *head, struct bpf_list_node *new,
-			     struct bpf_list_node *prev, struct btf_struct_meta *meta,
-			     u64 off)
+			     struct bpf_list_node *prev__nonown_allowed,
+			     struct btf_struct_meta *meta, u64 off)
 {
-	struct bpf_list_node_kern *n = (void *)new, *p = (void *)prev;
+	struct bpf_list_node_kern *n = (void *)new, *p = (void *)prev__nonown_allowed;
 	struct list_head *prev_ptr = &p->list_head;
 
 	return __bpf_list_add(n, head, &prev_ptr, meta ? meta->record : NULL, off);
@@ -2620,9 +2620,9 @@ __bpf_kfunc struct bpf_list_node *bpf_list_pop_back(struct bpf_list_head *head)
 }
 
 __bpf_kfunc struct bpf_list_node *bpf_list_del(struct bpf_list_head *head,
-					       struct bpf_list_node *node)
+				struct bpf_list_node *node__nonown_allowed)
 {
-	struct bpf_list_node_kern *kn = (void *)node;
+	struct bpf_list_node_kern *kn = (void *)node__nonown_allowed;
 
 	/* verifier guarantees node is a list node rather than list head */
 	return __bpf_list_del(head, &kn->list_head);
@@ -2648,10 +2648,11 @@ __bpf_kfunc struct bpf_list_node *bpf_list_back(struct bpf_list_head *head)
 	return (struct bpf_list_node *)h->prev;
 }
 
-__bpf_kfunc bool bpf_list_is_first(struct bpf_list_head *head, struct bpf_list_node *node)
+__bpf_kfunc bool bpf_list_is_first(struct bpf_list_head *head,
+				   struct bpf_list_node *node__nonown_allowed)
 {
 	struct list_head *h = (struct list_head *)head;
-	struct bpf_list_node_kern *kn = (struct bpf_list_node_kern *)node;
+	struct bpf_list_node_kern *kn = (struct bpf_list_node_kern *)node__nonown_allowed;
 
 	if (READ_ONCE(kn->owner) != head)
 		return false;
@@ -2659,10 +2660,11 @@ __bpf_kfunc bool bpf_list_is_first(struct bpf_list_head *head, struct bpf_list_n
 	return list_is_first(&kn->list_head, h);
 }
 
-__bpf_kfunc bool bpf_list_is_last(struct bpf_list_head *head, struct bpf_list_node *node)
+__bpf_kfunc bool bpf_list_is_last(struct bpf_list_head *head,
+				  struct bpf_list_node *node__nonown_allowed)
 {
 	struct list_head *h = (struct list_head *)head;
-	struct bpf_list_node_kern *kn = (struct bpf_list_node_kern *)node;
+	struct bpf_list_node_kern *kn = (struct bpf_list_node_kern *)node__nonown_allowed;
 
 	if (READ_ONCE(kn->owner) != head)
 		return false;
