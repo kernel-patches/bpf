@@ -1088,7 +1088,7 @@ skip_read:
 	mutex_unlock(&wl->mutex);
 
 	if (ret == 0) {
-		ret = copy_to_user(user_buf, buf, bytes);
+		ret = copy_to_user_partial(user_buf, buf, bytes);
 		if (ret < bytes) {
 			bytes -= ret;
 			*ppos += bytes;

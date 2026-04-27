@@ -133,7 +133,7 @@ copy_ucs2_to_user_len(efi_char16_t __user *dst, efi_char16_t *src, size_t len)
 	if (!src)
 		return 0;
 
-	return copy_to_user(dst, src, len);
+	return copy_to_user_partial(dst, src, len);
 }
 
 static long efi_runtime_get_variable(unsigned long arg)

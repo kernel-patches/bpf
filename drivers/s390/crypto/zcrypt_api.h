@@ -185,7 +185,7 @@ static inline unsigned long z_copy_from_user(bool userspace,
 					     unsigned long n)
 {
 	if (likely(userspace))
-		return copy_from_user(to, from, n);
+		return copy_from_user_partial(to, from, n);
 	memcpy(to, (void __force *)from, n);
 	return 0;
 }
@@ -196,7 +196,7 @@ static inline unsigned long z_copy_to_user(bool userspace,
 					   unsigned long n)
 {
 	if (likely(userspace))
-		return copy_to_user(to, from, n);
+		return copy_to_user_partial(to, from, n);
 	memcpy((void __force *)to, from, n);
 	return 0;
 }

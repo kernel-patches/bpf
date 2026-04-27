@@ -1491,7 +1491,7 @@ int atomisp_gdc_cac_table(struct atomisp_sub_device *asd, int flag,
 		}
 
 		for (i = 0; i < IA_CSS_MORPH_TABLE_NUM_PLANES; i++) {
-			ret = copy_from_user(tab->coordinates_x[i],
+			ret = copy_from_user_partial(tab->coordinates_x[i],
 					     config->coordinates_x[i],
 					     config->height * config->width *
 					     sizeof(*config->coordinates_x[i]));
@@ -1502,7 +1502,7 @@ int atomisp_gdc_cac_table(struct atomisp_sub_device *asd, int flag,
 				atomisp_css_morph_table_free(tab);
 				return -EFAULT;
 			}
-			ret = copy_from_user(tab->coordinates_y[i],
+			ret = copy_from_user_partial(tab->coordinates_y[i],
 					     config->coordinates_y[i],
 					     config->height * config->width *
 					     sizeof(*config->coordinates_y[i]));
@@ -1709,7 +1709,7 @@ int atomisp_3a_stat(struct atomisp_sub_device *asd, int flag,
 	config->exp_id = s3a_buf->s3a_data->exp_id;
 	config->isp_config_id = s3a_buf->s3a_data->isp_config_id;
 
-	ret = copy_to_user(config->data, asd->params.s3a_user_stat->data,
+	ret = copy_to_user_partial(config->data, asd->params.s3a_user_stat->data,
 			   asd->params.s3a_output_bytes);
 	if (ret) {
 		dev_err(isp->dev, "copy to user failed: copied %lu bytes\n",
@@ -2031,7 +2031,7 @@ static unsigned int long copy_from_compatible(void *to, const void *from,
 	unsigned long n, bool from_user)
 {
 	if (from_user)
-		return copy_from_user(to, (void __user *)from, n);
+		return copy_from_user_partial(to, (void __user *)from, n);
 	else
 		memcpy(to, from, n);
 	return 0;

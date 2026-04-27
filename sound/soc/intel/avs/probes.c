@@ -244,10 +244,10 @@ static int avs_probe_compr_copy(struct snd_soc_component *comp, struct snd_compr
 	n = rtd->buffer_size - offset;
 
 	if (count < n) {
-		ret = copy_to_user(buf, ptr, count);
+		ret = copy_to_user_partial(buf, ptr, count);
 	} else {
-		ret = copy_to_user(buf, ptr, n);
-		ret += copy_to_user(buf + n, rtd->dma_area, count - n);
+		ret = copy_to_user_partial(buf, ptr, n);
+		ret += copy_to_user_partial(buf + n, rtd->dma_area, count - n);
 	}
 
 	if (ret)

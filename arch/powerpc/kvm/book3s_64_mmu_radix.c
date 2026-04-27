@@ -1307,7 +1307,7 @@ static ssize_t debugfs_radix_read(struct file *file, char __user *buf,
 		n = p->chars_left;
 		if (n > len)
 			n = len;
-		r = copy_to_user(buf, p->buf + p->buf_index, n);
+		r = copy_to_user_partial(buf, p->buf + p->buf_index, n);
 		n -= r;
 		p->chars_left -= n;
 		p->buf_index += n;
@@ -1407,7 +1407,7 @@ static ssize_t debugfs_radix_read(struct file *file, char __user *buf,
 		p->chars_left = n;
 		if (n > len)
 			n = len;
-		r = copy_to_user(buf, p->buf, n);
+		r = copy_to_user_partial(buf, p->buf, n);
 		n -= r;
 		p->chars_left -= n;
 		p->buf_index = n;

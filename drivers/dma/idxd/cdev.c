@@ -751,7 +751,7 @@ int idxd_copy_cr(struct idxd_wq *wq, ioasid_t pasid, unsigned long addr,
 	 * to addr in the mm.
 	 */
 	kthread_use_mm(mm);
-	left = copy_to_user((void __user *)addr + status_size, cr + status_size,
+	left = copy_to_user_partial((void __user *)addr + status_size, cr + status_size,
 			    len - status_size);
 	/*
 	 * Copy status only after the rest of completion record is copied

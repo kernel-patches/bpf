@@ -139,7 +139,7 @@ static long __restore_v_state(struct pt_regs *regs, void __user *sc_vec)
 	 * Copy the whole vector content from user space datap. Use
 	 * copy_from_user to prevent information leak.
 	 */
-	return copy_from_user(current->thread.vstate.datap, datap, riscv_v_vsize);
+	return copy_from_user_partial(current->thread.vstate.datap, datap, riscv_v_vsize);
 }
 
 static long save_cfiss_state(struct pt_regs *regs, void __user *sc_cfi)

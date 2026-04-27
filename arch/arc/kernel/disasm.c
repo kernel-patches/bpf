@@ -34,7 +34,7 @@ void __kprobes disasm_instr(unsigned long addr, struct disasm_state *state,
 	/* This fetches the upper part of the 32 bit instruction
 	 * in both the cases of Little Endian or Big Endian configurations. */
 	if (userspace) {
-		bytes_not_copied = copy_from_user(ins_buf,
+		bytes_not_copied = copy_from_user_partial(ins_buf,
 						(const void __user *) addr, 8);
 		if (bytes_not_copied > 6)
 			goto fault;

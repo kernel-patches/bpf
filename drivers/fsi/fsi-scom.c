@@ -332,7 +332,7 @@ static ssize_t scom_read(struct file *filep, char __user *buf, size_t len,
 		return rc;
 	}
 
-	rc = copy_to_user(buf, &val, len);
+	rc = copy_to_user_partial(buf, &val, len);
 	if (rc)
 		dev_dbg(dev, "copy to user failed:%d\n", rc);
 

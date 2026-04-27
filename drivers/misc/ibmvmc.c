@@ -1112,7 +1112,7 @@ static ssize_t ibmvmc_write(struct file *file, const char *buffer,
 	while (c > 0) {
 		bytes = min_t(size_t, c, vmc_buffer->size);
 
-		bytes -= copy_from_user(buf, p, bytes);
+		bytes -= copy_from_user_partial(buf, p, bytes);
 		if (!bytes) {
 			ret = -EFAULT;
 			goto out;

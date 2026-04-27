@@ -349,7 +349,7 @@ static ssize_t f_hidg_intout_read(struct file *file, char __user *buffer,
 	spin_unlock_irqrestore(&hidg->read_spinlock, flags);
 
 	/* copy to user outside spinlock */
-	count -= copy_to_user(buffer, req->buf + list->pos, count);
+	count -= copy_to_user_partial(buffer, req->buf + list->pos, count);
 	list->pos += count;
 
 	/*
@@ -410,7 +410,7 @@ static ssize_t f_hidg_ssreport_read(struct file *file, char __user *buffer,
 	spin_unlock_irqrestore(&hidg->read_spinlock, flags);
 
 	if (tmp_buf != NULL) {
-		count -= copy_to_user(buffer, tmp_buf, count);
+		count -= copy_to_user_partial(buffer, tmp_buf, count);
 		kfree(tmp_buf);
 	} else {
 		count = -ENOMEM;

@@ -262,7 +262,7 @@ comp_read(struct file *filp, char __user *buf, size_t count, loff_t *offset)
 			count,
 			mbo->processed_length - c->mbo_offs);
 
-	not_copied = copy_to_user(buf,
+	not_copied = copy_to_user_partial(buf,
 				  mbo->virt_address + c->mbo_offs,
 				  to_copy);
 

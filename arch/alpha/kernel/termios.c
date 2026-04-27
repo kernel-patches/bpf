@@ -52,5 +52,5 @@ int kernel_termios_to_user_termio(struct termio __user *termio,
 	v.c_cc[_VEOL2]  = termios->c_cc[VEOL2];
 	v.c_cc[_VSWTC]  = termios->c_cc[VSWTC];
 
-	return copy_to_user(termio, &v, sizeof(struct termio));
+	return copy_to_user_partial(termio, &v, sizeof(struct termio));
 }

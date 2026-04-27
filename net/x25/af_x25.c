@@ -471,7 +471,7 @@ static int x25_getsockopt(struct socket *sock, int level, int optname,
 		goto out;
 
 	val = test_bit(X25_Q_BIT_FLAG, &x25_sk(sk)->flags);
-	rc = copy_to_user(optval, &val, len) ? -EFAULT : 0;
+	rc = copy_to_user_partial(optval, &val, len) ? -EFAULT : 0;
 out:
 	return rc;
 }

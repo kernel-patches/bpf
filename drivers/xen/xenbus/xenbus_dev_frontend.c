@@ -150,7 +150,7 @@ again:
 	while (i < len) {
 		size_t sz = min_t(size_t, len - i, rb->len - rb->cons);
 
-		ret = copy_to_user(ubuf + i, &rb->msg[rb->cons], sz);
+		ret = copy_to_user_partial(ubuf + i, &rb->msg[rb->cons], sz);
 
 		i += sz - ret;
 		rb->cons += sz - ret;

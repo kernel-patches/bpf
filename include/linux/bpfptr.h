@@ -50,7 +50,7 @@ static inline int copy_from_bpfptr_offset(void *dst, bpfptr_t src,
 					  size_t offset, size_t size)
 {
 	if (!bpfptr_is_kernel(src))
-		return copy_from_user(dst, src.user + offset, size);
+		return copy_from_user_partial(dst, src.user + offset, size);
 	return copy_from_kernel_nofault(dst, src.kernel + offset, size);
 }
 

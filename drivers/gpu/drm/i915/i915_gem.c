@@ -291,7 +291,7 @@ gtt_user_read(struct io_mapping *mapping,
 	io_mapping_unmap_atomic(vaddr);
 	if (unwritten) {
 		vaddr = io_mapping_map_wc(mapping, base, PAGE_SIZE);
-		unwritten = copy_to_user(user_data,
+		unwritten = copy_to_user_partial(user_data,
 					 (void __force *)vaddr + offset,
 					 length);
 		io_mapping_unmap(vaddr);
@@ -525,7 +525,7 @@ ggtt_write(struct io_mapping *mapping,
 	io_mapping_unmap_atomic(vaddr);
 	if (unwritten) {
 		vaddr = io_mapping_map_wc(mapping, base, PAGE_SIZE);
-		unwritten = copy_from_user((void __force *)vaddr + offset,
+		unwritten = copy_from_user_partial((void __force *)vaddr + offset,
 					   user_data, length);
 		io_mapping_unmap(vaddr);
 	}

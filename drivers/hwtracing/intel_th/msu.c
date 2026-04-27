@@ -1457,7 +1457,7 @@ static unsigned long msc_win_to_user(void *data, void *src, size_t len)
 	struct msc_win_to_user_struct *u = data;
 	unsigned long ret;
 
-	ret = copy_to_user(u->buf + u->offset, src, len);
+	ret = copy_to_user_partial(u->buf + u->offset, src, len);
 	u->offset += len - ret;
 
 	return ret;

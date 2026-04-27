@@ -53,7 +53,7 @@ static inline int put_sigset_t(compat_sigset_t __user *uset, sigset_t *set)
 	cset.sig[0] = set->sig[0] & 0xffffffffull;
 	cset.sig[1] = set->sig[0] >> 32;
 
-	return copy_to_user(uset, &cset, sizeof(*uset));
+	return copy_to_user_partial(uset, &cset, sizeof(*uset));
 }
 
 static inline int get_sigset_t(sigset_t *set,

@@ -2460,7 +2460,7 @@ static ssize_t ca8210_test_int_user_write(
 		return -EBADE;
 	}
 
-	ret = copy_from_user(command, in_buf, len);
+	ret = copy_from_user_partial(command, in_buf, len);
 	if (ret) {
 		dev_err(
 			&priv->spi->dev,
@@ -2548,7 +2548,7 @@ static ssize_t ca8210_test_int_user_read(
 	cmdlen = fifo_buffer[1];
 	bytes_not_copied = cmdlen + 2;
 
-	bytes_not_copied = copy_to_user(buf, fifo_buffer, bytes_not_copied);
+	bytes_not_copied = copy_to_user_partial(buf, fifo_buffer, bytes_not_copied);
 	if (bytes_not_copied > 0) {
 		dev_err(
 			&priv->spi->dev,

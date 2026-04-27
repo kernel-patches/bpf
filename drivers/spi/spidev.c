@@ -157,7 +157,7 @@ spidev_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 	if (status > 0) {
 		unsigned long	missing;
 
-		missing = copy_to_user(buf, spidev->rx_buffer, status);
+		missing = copy_to_user_partial(buf, spidev->rx_buffer, status);
 		if (missing == status)
 			status = -EFAULT;
 		else

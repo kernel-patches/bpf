@@ -1346,7 +1346,7 @@ static ssize_t dp_sdp_message_debugfs_write(struct file *f, const char __user *b
 
 	acrtc_state = to_dm_crtc_state(connector->base.state->crtc->state);
 
-	r = copy_from_user(data, buf, write_size);
+	r = copy_from_user_partial(data, buf, write_size);
 
 	write_size -= r;
 

@@ -262,13 +262,13 @@ ssize_t rtlx_read(int index, void __user *buff, size_t count)
 	/* then how much from the read pointer onwards */
 	fl = min(count, (size_t)lx->buffer_size - lx->lx_read);
 
-	failed = copy_to_user(buff, lx->lx_buffer + lx->lx_read, fl);
+	failed = copy_to_user_partial(buff, lx->lx_buffer + lx->lx_read, fl);
 	if (failed)
 		goto out;
 
 	/* and if there is anything left at the beginning of the buffer */
 	if (count - fl)
-		failed = copy_to_user(buff + fl, lx->lx_buffer, count - fl);
+		failed = copy_to_user_partial(buff + fl, lx->lx_buffer, count - fl);
 
 out:
 	count -= failed;
@@ -304,13 +304,13 @@ ssize_t rtlx_write(int index, const void __user *buffer, size_t count)
 	/* first bit from write pointer to the end of the buffer, or count */
 	fl = min(count, (size_t) rt->buffer_size - rt->rt_write);
 
-	failed = copy_from_user(rt->rt_buffer + rt->rt_write, buffer, fl);
+	failed = copy_from_user_partial(rt->rt_buffer + rt->rt_write, buffer, fl);
 	if (failed)
 		goto out;
 
 	/* if there's any left copy to the beginning of the buffer */
 	if (count - fl)
-		failed = copy_from_user(rt->rt_buffer, buffer + fl, count - fl);
+		failed = copy_from_user_partial(rt->rt_buffer, buffer + fl, count - fl);
 
 out:
 	count -= failed;

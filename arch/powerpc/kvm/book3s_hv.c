@@ -2916,7 +2916,7 @@ static ssize_t debugfs_timings_read(struct file *file, char __user *buf,
 		return 0;
 	if (len > p->buflen - pos)
 		len = p->buflen - pos;
-	n = copy_to_user(buf, p->buf + pos, len);
+	n = copy_to_user_partial(buf, p->buf + pos, len);
 	if (n) {
 		if (n == len)
 			return -EFAULT;

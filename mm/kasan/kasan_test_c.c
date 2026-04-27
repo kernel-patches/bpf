@@ -2169,9 +2169,9 @@ static void copy_user_test_oob(struct kunit *test)
 	usermem = (char __user *)useraddr;
 
 	KUNIT_EXPECT_KASAN_FAIL(test,
-		unused = copy_from_user(kmem, usermem, size + 1));
+		unused = copy_from_user_partial(kmem, usermem, size + 1));
 	KUNIT_EXPECT_KASAN_FAIL_READ(test,
-		unused = copy_to_user(usermem, kmem, size + 1));
+		unused = copy_to_user_partial(usermem, kmem, size + 1));
 	KUNIT_EXPECT_KASAN_FAIL(test,
 		unused = __copy_from_user(kmem, usermem, size + 1));
 	KUNIT_EXPECT_KASAN_FAIL_READ(test,

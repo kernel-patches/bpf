@@ -27,7 +27,7 @@ int kernel_termios_to_user_termio(struct termio __user *termio,
 		v.c_cc[_VMIN] = termios->c_cc[VMIN];
 		v.c_cc[_VTIME] = termios->c_cc[VTIME];
 	}
-	return copy_to_user(termio, &v, sizeof(struct termio));
+	return copy_to_user_partial(termio, &v, sizeof(struct termio));
 }
 
 int user_termios_to_kernel_termios(struct ktermios *k,

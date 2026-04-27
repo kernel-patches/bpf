@@ -114,7 +114,7 @@ int intel_sseu_copy_eumask_to_user(void __user *to,
 		}
 	}
 
-	return copy_to_user(to, eu_mask, len);
+	return copy_to_user_partial(to, eu_mask, len);
 }
 
 /**
@@ -146,7 +146,7 @@ int intel_sseu_copy_ssmask_to_user(void __user *to,
 		}
 	}
 
-	return copy_to_user(to, ss_mask, len);
+	return copy_to_user_partial(to, ss_mask, len);
 }
 
 static void gen11_compute_sseu_info(struct sseu_dev_info *sseu,

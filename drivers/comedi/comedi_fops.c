@@ -2659,7 +2659,7 @@ static unsigned int comedi_buf_copy_to_user(struct comedi_subdevice *s,
 		unsigned int copy_amount = min(n, PAGE_SIZE - offset);
 		unsigned int uncopied;
 
-		uncopied = copy_to_user(dest, buf_page_list[page].virt_addr +
+		uncopied = copy_to_user_partial(dest, buf_page_list[page].virt_addr +
 					offset, copy_amount);
 		copy_amount -= uncopied;
 		n -= copy_amount;
@@ -2687,7 +2687,7 @@ static unsigned int comedi_buf_copy_from_user(struct comedi_subdevice *s,
 		unsigned int copy_amount = min(n, PAGE_SIZE - offset);
 		unsigned int uncopied;
 
-		uncopied = copy_from_user(buf_page_list[page].virt_addr +
+		uncopied = copy_from_user_partial(buf_page_list[page].virt_addr +
 					  offset, src, copy_amount);
 		copy_amount -= uncopied;
 		n -= copy_amount;

@@ -3173,7 +3173,7 @@ static int vfio_iommu_type1_dma_rw_chunk(struct vfio_iommu *iommu,
 	vaddr = dma->vaddr + offset;
 
 	if (write) {
-		*copied = copy_to_user((void __user *)vaddr, data,
+		*copied = copy_to_user_partial((void __user *)vaddr, data,
 					 count) ? 0 : count;
 		if (*copied && iommu->dirty_page_tracking) {
 			unsigned long pgshift = __ffs(iommu->pgsize_bitmap);
@@ -3186,7 +3186,7 @@ static int vfio_iommu_type1_dma_rw_chunk(struct vfio_iommu *iommu,
 				   (offset >> pgshift) + 1);
 		}
 	} else
-		*copied = copy_from_user(data, (void __user *)vaddr,
+		*copied = copy_from_user_partial(data, (void __user *)vaddr,
 					   count) ? 0 : count;
 	if (kthread)
 		kthread_unuse_mm(mm);

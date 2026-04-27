@@ -388,29 +388,29 @@ __weak int kernel_termios_to_user_termio(struct termio __user *termio,
 	v.c_lflag = termios->c_lflag;
 	v.c_line = termios->c_line;
 	memcpy(v.c_cc, termios->c_cc, NCC);
-	return copy_to_user(termio, &v, sizeof(struct termio));
+	return copy_to_user_partial(termio, &v, sizeof(struct termio));
 }
 
 #ifdef TCGETS2
 __weak int user_termios_to_kernel_termios(struct ktermios *k,
 						 struct termios2 __user *u)
 {
-	return copy_from_user(k, u, sizeof(struct termios2));
+	return copy_from_user_partial(k, u, sizeof(struct termios2));
 }
 __weak int kernel_termios_to_user_termios(struct termios2 __user *u,
 						 struct ktermios *k)
 {
-	return copy_to_user(u, k, sizeof(struct termios2));
+	return copy_to_user_partial(u, k, sizeof(struct termios2));
 }
 __weak int user_termios_to_kernel_termios_1(struct ktermios *k,
 						   struct termios __user *u)
 {
-	return copy_from_user(k, u, sizeof(struct termios));
+	return copy_from_user_partial(k, u, sizeof(struct termios));
 }
 __weak int kernel_termios_to_user_termios_1(struct termios __user *u,
 						   struct ktermios *k)
 {
-	return copy_to_user(u, k, sizeof(struct termios));
+	return copy_to_user_partial(u, k, sizeof(struct termios));
 }
 
 #else
@@ -418,12 +418,12 @@ __weak int kernel_termios_to_user_termios_1(struct termios __user *u,
 __weak int user_termios_to_kernel_termios(struct ktermios *k,
 						 struct termios __user *u)
 {
-	return copy_from_user(k, u, sizeof(struct termios));
+	return copy_from_user_partial(k, u, sizeof(struct termios));
 }
 __weak int kernel_termios_to_user_termios(struct termios __user *u,
 						 struct ktermios *k)
 {
-	return copy_to_user(u, k, sizeof(struct termios));
+	return copy_to_user_partial(u, k, sizeof(struct termios));
 }
 #endif /* TCGETS2 */
 

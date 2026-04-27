@@ -213,7 +213,7 @@ static int drv_cp_harray_to_user(void __user *user_buf_uva,
 
 	*user_buf_size = array_size * sizeof(*handles);
 	if (*user_buf_size)
-		*retval = copy_to_user(user_buf_uva,
+		*retval = copy_to_user_partial(user_buf_uva,
 				       vmci_handle_arr_get_handles
 				       (handle_array), *user_buf_size);
 

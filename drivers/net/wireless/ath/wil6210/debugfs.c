@@ -659,7 +659,7 @@ static ssize_t wil_read_file_ioblob(struct file *file, char __user *user_buf,
 	wil_memcpy_fromio_32(buf, (const void __iomem *)
 			     wil_blob->blob.data + aligned_pos, aligned_count);
 
-	ret = copy_to_user(user_buf, buf + unaligned_bytes, count);
+	ret = copy_to_user_partial(user_buf, buf + unaligned_bytes, count);
 
 	wil_mem_access_unlock(wil);
 	wil_pm_runtime_put(wil);

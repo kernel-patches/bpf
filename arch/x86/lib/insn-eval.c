@@ -1512,7 +1512,7 @@ int insn_fetch_from_user(struct pt_regs *regs, unsigned char buf[MAX_INSN_SIZE])
 	if (insn_get_effective_ip(regs, &ip))
 		return -EINVAL;
 
-	not_copied = copy_from_user(buf, (void __user *)ip, MAX_INSN_SIZE);
+	not_copied = copy_from_user_partial(buf, (void __user *)ip, MAX_INSN_SIZE);
 
 	return MAX_INSN_SIZE - not_copied;
 }

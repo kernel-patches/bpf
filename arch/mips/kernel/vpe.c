@@ -854,7 +854,7 @@ static ssize_t vpe_write(struct file *file, const char __user *buffer,
 		return -ENOMEM;
 	}
 
-	count -= copy_from_user(v->pbuffer + v->len, buffer, count);
+	count -= copy_from_user_partial(v->pbuffer + v->len, buffer, count);
 	if (!count)
 		return -EFAULT;
 

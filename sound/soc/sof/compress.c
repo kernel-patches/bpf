@@ -324,10 +324,10 @@ static int sof_compr_copy_playback(struct snd_compr_runtime *rtd,
 	n = rtd->buffer_size - offset;
 
 	if (count < n) {
-		ret = copy_from_user(ptr, buf, count);
+		ret = copy_from_user_partial(ptr, buf, count);
 	} else {
-		ret = copy_from_user(ptr, buf, n);
-		ret += copy_from_user(rtd->dma_area, buf + n, count - n);
+		ret = copy_from_user_partial(ptr, buf, n);
+		ret += copy_from_user_partial(rtd->dma_area, buf + n, count - n);
 	}
 
 	return count - ret;
@@ -345,10 +345,10 @@ static int sof_compr_copy_capture(struct snd_compr_runtime *rtd,
 	n = rtd->buffer_size - offset;
 
 	if (count < n) {
-		ret = copy_to_user(buf, ptr, count);
+		ret = copy_to_user_partial(buf, ptr, count);
 	} else {
-		ret = copy_to_user(buf, ptr, n);
-		ret += copy_to_user(buf + n, rtd->dma_area, count - n);
+		ret = copy_to_user_partial(buf, ptr, n);
+		ret += copy_to_user_partial(buf + n, rtd->dma_area, count - n);
 	}
 
 	return count - ret;

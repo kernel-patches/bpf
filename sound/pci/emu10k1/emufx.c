@@ -739,10 +739,10 @@ static int copy_gctl_to_user(struct snd_emu10k1 *emu,
 
 	_dst = (struct snd_emu10k1_fx8010_control_gpr __user *)dst;
 	if (emu->support_tlv)
-		return copy_to_user(&_dst[idx], src, sizeof(*src));
+		return copy_to_user_partial(&_dst[idx], src, sizeof(*src));
 	
 	octl = (struct snd_emu10k1_fx8010_control_old_gpr __user *)dst;
-	return copy_to_user(&octl[idx], src, sizeof(*octl));
+	return copy_to_user_partial(&octl[idx], src, sizeof(*octl));
 }
 
 static int copy_ctl_elem_id(const struct emu10k1_ctl_elem_id *list, int i,

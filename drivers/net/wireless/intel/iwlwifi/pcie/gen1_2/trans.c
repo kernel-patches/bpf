@@ -3060,7 +3060,7 @@ static bool iwl_write_to_user_buf(char __user *user_buf, ssize_t count,
 	if (*size > buf_size_left)
 		*size = buf_size_left;
 
-	*size -= copy_to_user(user_buf, buf, *size);
+	*size -= copy_to_user_partial(user_buf, buf, *size);
 	*bytes_copied += *size;
 
 	if (buf_size_left == *size)

@@ -139,7 +139,7 @@ static inline u64 get_user_gcs(unsigned long __user *addr, int *err)
 
 	/* Ensure previous GCS operation are visible before we read the page */
 	gcsb_dsync();
-	ret = copy_from_user(&load, addr, sizeof(load));
+	ret = copy_from_user_partial(&load, addr, sizeof(load));
 	if (ret != 0)
 		*err = ret;
 	return load;

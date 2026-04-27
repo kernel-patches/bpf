@@ -255,7 +255,7 @@ static ssize_t dlmfs_file_write(struct file *filp,
 	if (!count)
 		return 0;
 
-	bytes_left = copy_from_user(lvb_buf, buf, count);
+	bytes_left = copy_from_user_partial(lvb_buf, buf, count);
 	count -= bytes_left;
 	if (count)
 		user_dlm_write_lvb(inode, lvb_buf, count);

@@ -45,7 +45,7 @@ static inline int copy_from_sockptr_offset(void *dst, sockptr_t src,
 		size_t offset, size_t size)
 {
 	if (!sockptr_is_kernel(src))
-		return copy_from_user(dst, src.user + offset, size);
+		return copy_from_user_partial(dst, src.user + offset, size);
 	memcpy(dst, src.kernel + offset, size);
 	return 0;
 }
@@ -111,7 +111,7 @@ static inline int copy_to_sockptr_offset(sockptr_t dst, size_t offset,
 		const void *src, size_t size)
 {
 	if (!sockptr_is_kernel(dst))
-		return copy_to_user(dst.user + offset, src, size);
+		return copy_to_user_partial(dst.user + offset, src, size);
 	memcpy(dst.kernel + offset, src, size);
 	return 0;
 }

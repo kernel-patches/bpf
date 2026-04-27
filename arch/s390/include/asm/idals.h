@@ -301,14 +301,14 @@ static inline size_t idal_buffer_to_user(struct idal_buffer *ib, void __user *to
 	BUG_ON(count > ib->size);
 	for (i = 0; count > IDA_BLOCK_SIZE; i++) {
 		vaddr = dma64_to_virt(ib->data[i]);
-		left = copy_to_user(to, vaddr, IDA_BLOCK_SIZE);
+		left = copy_to_user_partial(to, vaddr, IDA_BLOCK_SIZE);
 		if (left)
 			return left + count - IDA_BLOCK_SIZE;
 		to = (void __user *)to + IDA_BLOCK_SIZE;
 		count -= IDA_BLOCK_SIZE;
 	}
 	vaddr = dma64_to_virt(ib->data[i]);
-	return copy_to_user(to, vaddr, count);
+	return copy_to_user_partial(to, vaddr, count);
 }
 
 /*
@@ -323,14 +323,14 @@ static inline size_t idal_buffer_from_user(struct idal_buffer *ib, const void __
 	BUG_ON(count > ib->size);
 	for (i = 0; count > IDA_BLOCK_SIZE; i++) {
 		vaddr = dma64_to_virt(ib->data[i]);
-		left = copy_from_user(vaddr, from, IDA_BLOCK_SIZE);
+		left = copy_from_user_partial(vaddr, from, IDA_BLOCK_SIZE);
 		if (left)
 			return left + count - IDA_BLOCK_SIZE;
 		from = (void __user *)from + IDA_BLOCK_SIZE;
 		count -= IDA_BLOCK_SIZE;
 	}
 	vaddr = dma64_to_virt(ib->data[i]);
-	return copy_from_user(vaddr, from, count);
+	return copy_from_user_partial(vaddr, from, count);
 }
 
 #endif

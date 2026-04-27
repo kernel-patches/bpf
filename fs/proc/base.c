@@ -278,7 +278,7 @@ static ssize_t get_mm_proctitle(struct mm_struct *mm, char __user *buf,
 			len -= pos;
 			if (len > count)
 				len = count;
-			len -= copy_to_user(buf, page+pos, len);
+			len -= copy_to_user_partial(buf, page+pos, len);
 			if (!len)
 				len = -EFAULT;
 			ret = len;
@@ -359,7 +359,7 @@ static ssize_t get_mm_cmdline(struct mm_struct *mm, char __user *buf,
 		got = access_remote_vm(mm, pos, page, size, FOLL_ANON);
 		if (got <= 0)
 			break;
-		got -= copy_to_user(buf, page, got);
+		got -= copy_to_user_partial(buf, page, got);
 		if (unlikely(!got)) {
 			if (!len)
 				len = -EFAULT;

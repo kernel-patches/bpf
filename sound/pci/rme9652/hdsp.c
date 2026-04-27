@@ -4541,7 +4541,7 @@ static int snd_hdsp_capture_release(struct snd_pcm_substream *substream)
 static inline int copy_u32_le(void __user *dest, void __iomem *src)
 {
 	u32 val = readl(src);
-	return copy_to_user(dest, &val, 4);
+	return copy_to_user_partial(dest, &val, 4);
 }
 
 static inline int copy_u64_le(void __user *dest, void __iomem *src_low, void __iomem *src_high)
@@ -4551,7 +4551,7 @@ static inline int copy_u64_le(void __user *dest, void __iomem *src_low, void __i
 	rms_low = readl(src_low);
 	rms_high = readl(src_high);
 	rms = ((u64)rms_high << 32) | rms_low;
-	return copy_to_user(dest, &rms, 8);
+	return copy_to_user_partial(dest, &rms, 8);
 }
 
 static inline int copy_u48_le(void __user *dest, void __iomem *src_low, void __iomem *src_high)
@@ -4561,7 +4561,7 @@ static inline int copy_u48_le(void __user *dest, void __iomem *src_low, void __i
 	rms_low = readl(src_low) & 0xffffff00;
 	rms_high = readl(src_high) & 0xffffff00;
 	rms = ((u64)rms_high << 32) | rms_low;
-	return copy_to_user(dest, &rms, 8);
+	return copy_to_user_partial(dest, &rms, 8);
 }
 
 static int hdsp_9652_get_peak(struct hdsp *hdsp, struct hdsp_peak_rms __user *peak_rms)

@@ -1196,7 +1196,7 @@ static unsigned long copy_semid_to_user(void __user *buf, struct semid64_ds *in,
 {
 	switch (version) {
 	case IPC_64:
-		return copy_to_user(buf, in, sizeof(*in));
+		return copy_to_user_partial(buf, in, sizeof(*in));
 	case IPC_OLD:
 	    {
 		struct semid_ds out;
@@ -1209,7 +1209,7 @@ static unsigned long copy_semid_to_user(void __user *buf, struct semid64_ds *in,
 		out.sem_ctime	= in->sem_ctime;
 		out.sem_nsems	= in->sem_nsems;
 
-		return copy_to_user(buf, &out, sizeof(out));
+		return copy_to_user_partial(buf, &out, sizeof(out));
 	    }
 	default:
 		return -EINVAL;
@@ -1759,7 +1759,7 @@ static int copy_compat_semid_to_user(void __user *buf, struct semid64_ds *in,
 		v.sem_ctime	 = lower_32_bits(in->sem_ctime);
 		v.sem_ctime_high = upper_32_bits(in->sem_ctime);
 		v.sem_nsems = in->sem_nsems;
-		return copy_to_user(buf, &v, sizeof(v));
+		return copy_to_user_partial(buf, &v, sizeof(v));
 	} else {
 		struct compat_semid_ds v;
 		memset(&v, 0, sizeof(v));
@@ -1767,7 +1767,7 @@ static int copy_compat_semid_to_user(void __user *buf, struct semid64_ds *in,
 		v.sem_otime = in->sem_otime;
 		v.sem_ctime = in->sem_ctime;
 		v.sem_nsems = in->sem_nsems;
-		return copy_to_user(buf, &v, sizeof(v));
+		return copy_to_user_partial(buf, &v, sizeof(v));
 	}
 }
 

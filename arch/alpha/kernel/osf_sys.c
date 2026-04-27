@@ -944,7 +944,7 @@ get_tv32(struct timespec64 *o, struct timeval32 __user *i)
 static inline long
 put_tv32(struct timeval32 __user *o, struct timespec64 *i)
 {
-	return copy_to_user(o, &(struct timeval32){
+	return copy_to_user_partial(o, &(struct timeval32){
 				.tv_sec = i->tv_sec,
 				.tv_usec = i->tv_nsec / NSEC_PER_USEC},
 			    sizeof(struct timeval32));
@@ -953,7 +953,7 @@ put_tv32(struct timeval32 __user *o, struct timespec64 *i)
 static inline long
 put_tv_to_tv32(struct timeval32 __user *o, struct __kernel_old_timeval *i)
 {
-	return copy_to_user(o, &(struct timeval32){
+	return copy_to_user_partial(o, &(struct timeval32){
 				.tv_sec = i->tv_sec,
 				.tv_usec = i->tv_usec},
 			    sizeof(struct timeval32));

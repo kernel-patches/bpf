@@ -525,7 +525,7 @@ printer_read(struct file *fd, char __user *buf, size_t len, loff_t *ptr)
 		else
 			size = len;
 
-		size -= copy_to_user(buf, current_rx_buf, size);
+		size -= copy_to_user_partial(buf, current_rx_buf, size);
 		bytes_copied += size;
 		len -= size;
 		buf += size;

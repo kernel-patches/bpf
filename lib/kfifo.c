@@ -203,11 +203,11 @@ static unsigned long kfifo_copy_from_user(struct __kfifo *fifo,
 	}
 	l = min(len, size - off);
 
-	ret = copy_from_user(fifo->data + off, from, l);
+	ret = copy_from_user_partial(fifo->data + off, from, l);
 	if (unlikely(ret))
 		ret = DIV_ROUND_UP(ret + len - l, esize);
 	else {
-		ret = copy_from_user(fifo->data, from + l, len - l);
+		ret = copy_from_user_partial(fifo->data, from + l, len - l);
 		if (unlikely(ret))
 			ret = DIV_ROUND_UP(ret, esize);
 	}
@@ -263,11 +263,11 @@ static unsigned long kfifo_copy_to_user(struct __kfifo *fifo, void __user *to,
 	}
 	l = min(len, size - off);
 
-	ret = copy_to_user(to, fifo->data + off, l);
+	ret = copy_to_user_partial(to, fifo->data + off, l);
 	if (unlikely(ret))
 		ret = DIV_ROUND_UP(ret + len - l, esize);
 	else {
-		ret = copy_to_user(to + l, fifo->data, len - l);
+		ret = copy_to_user_partial(to + l, fifo->data, len - l);
 		if (unlikely(ret))
 			ret = DIV_ROUND_UP(ret, esize);
 	}

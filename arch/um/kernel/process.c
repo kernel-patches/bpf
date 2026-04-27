@@ -252,7 +252,7 @@ EXPORT_SYMBOL(uml_strdup);
 
 int copy_from_user_proc(void *to, void __user *from, int size)
 {
-	return copy_from_user(to, from, size);
+	return copy_from_user_partial(to, from, size);
 }
 
 int singlestepping(void)

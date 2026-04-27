@@ -70,7 +70,7 @@ int copy_regset_to_user(struct task_struct *target,
 
 	ret = regset_get_alloc(target, regset, size, &buf);
 	if (ret > 0)
-		ret = copy_to_user(data, buf, ret) ? -EFAULT : 0;
+		ret = copy_to_user_partial(data, buf, ret) ? -EFAULT : 0;
 	kvfree(buf);
 	return ret;
 }

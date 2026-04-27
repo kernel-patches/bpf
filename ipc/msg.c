@@ -322,7 +322,7 @@ copy_msqid_to_user(void __user *buf, struct msqid64_ds *in, int version)
 {
 	switch (version) {
 	case IPC_64:
-		return copy_to_user(buf, in, sizeof(*in));
+		return copy_to_user_partial(buf, in, sizeof(*in));
 	case IPC_OLD:
 	{
 		struct msqid_ds out;
@@ -355,7 +355,7 @@ copy_msqid_to_user(void __user *buf, struct msqid64_ds *in, int version)
 		out.msg_lspid		= in->msg_lspid;
 		out.msg_lrpid		= in->msg_lrpid;
 
-		return copy_to_user(buf, &out, sizeof(out));
+		return copy_to_user_partial(buf, &out, sizeof(out));
 	}
 	default:
 		return -EINVAL;
@@ -712,7 +712,7 @@ static int copy_compat_msqid_to_user(void __user *buf, struct msqid64_ds *in,
 		v.msg_qbytes = in->msg_qbytes;
 		v.msg_lspid = in->msg_lspid;
 		v.msg_lrpid = in->msg_lrpid;
-		return copy_to_user(buf, &v, sizeof(v));
+		return copy_to_user_partial(buf, &v, sizeof(v));
 	} else {
 		struct compat_msqid_ds v;
 		memset(&v, 0, sizeof(v));
@@ -725,7 +725,7 @@ static int copy_compat_msqid_to_user(void __user *buf, struct msqid64_ds *in,
 		v.msg_qbytes = in->msg_qbytes;
 		v.msg_lspid = in->msg_lspid;
 		v.msg_lrpid = in->msg_lrpid;
-		return copy_to_user(buf, &v, sizeof(v));
+		return copy_to_user_partial(buf, &v, sizeof(v));
 	}
 }
 

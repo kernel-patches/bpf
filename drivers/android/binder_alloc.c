@@ -1346,7 +1346,7 @@ binder_alloc_copy_user_to_buffer(struct binder_alloc *alloc,
 					     buffer_offset, &pgoff);
 		size = min_t(size_t, bytes, PAGE_SIZE - pgoff);
 		kptr = kmap_local_page(page) + pgoff;
-		ret = copy_from_user(kptr, from, size);
+		ret = copy_from_user_partial(kptr, from, size);
 		kunmap_local(kptr);
 		if (ret)
 			return bytes - size + ret;

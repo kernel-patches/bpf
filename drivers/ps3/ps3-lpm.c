@@ -999,7 +999,7 @@ int ps3_lpm_copy_tb_to_user(unsigned long offset, void __user *buf,
 			return result == LV1_WRONG_STATE ? -EBUSY : -EINVAL;
 		}
 
-		result = copy_to_user(buf, lpm_priv->tb_cache, tmp);
+		result = copy_to_user_partial(buf, lpm_priv->tb_cache, tmp);
 
 		if (result) {
 			dev_dbg(sbd_core(), "%s:%u: 0x%llx bytes at 0x%p\n",

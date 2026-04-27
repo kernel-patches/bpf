@@ -450,7 +450,7 @@ vcs_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 		 */
 
 		console_unlock();
-		ret = copy_to_user(buf, con_buf + skip, this_round);
+		ret = copy_to_user_partial(buf, con_buf + skip, this_round);
 		console_lock();
 
 		if (ret) {
@@ -630,7 +630,7 @@ vcs_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
 		 * in the write data from userspace safely.
 		 */
 		console_unlock();
-		ret = copy_from_user(con_buf, buf, this_round);
+		ret = copy_from_user_partial(con_buf, buf, this_round);
 		console_lock();
 
 		if (ret) {

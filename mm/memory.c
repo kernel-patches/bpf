@@ -7529,7 +7529,7 @@ long copy_folio_from_user(struct folio *dst_folio,
 		kaddr = kmap_local_page(subpage);
 		if (!allow_pagefault)
 			pagefault_disable();
-		rc = copy_from_user(kaddr, usr_src + i * PAGE_SIZE, PAGE_SIZE);
+		rc = copy_from_user_partial(kaddr, usr_src + i * PAGE_SIZE, PAGE_SIZE);
 		if (!allow_pagefault)
 			pagefault_enable();
 		kunmap_local(kaddr);
