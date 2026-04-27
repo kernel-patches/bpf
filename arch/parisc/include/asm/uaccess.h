@@ -197,7 +197,4 @@ unsigned long __must_check raw_copy_to_user(void __user *dst, const void *src,
 					    unsigned long len);
 unsigned long __must_check raw_copy_from_user(void *dst, const void __user *src,
 					    unsigned long len);
-#define INLINE_COPY_TO_USER
-#define INLINE_COPY_FROM_USER
-
 #endif /* __PARISC_UACCESS_H */

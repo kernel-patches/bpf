@@ -83,8 +83,8 @@
  * with that.  They should not be used directly; they are used to implement
  * the 6 functions (copy_{to,from}_user(), __copy_{to,from}_user_inatomic())
  * that are used instead.  Out of those, __... ones are inlined.  Plain
- * copy_{to,from}_user() might or might not be inlined.  If you want them
- * inlined, have asm/uaccess.h define INLINE_COPY_{TO,FROM}_USER.
+ * copy_{to,from}_user() might or might not be inlined.  If you don't want them
+ * inlined, select CONFIG_ARCH_WANTS_NOINLINE_COPY_USER.
  *
  * NOTE: only copy_from_user() zero-pads the destination in case of short copy.
  * Neither __copy_from_user() nor __copy_from_user_inatomic() zero anything
@@ -157,8 +157,8 @@ __copy_to_user(void __user *to, const void *from, unsigned long n)
 }
 
 /*
- * Architectures that #define INLINE_COPY_TO_USER use this function
- * directly in the normal copy_to/from_user(), the other ones go
+ * Architectures that don't select CONFIG_ARCH_WANTS_NOINLINE_COPY_USER use
+ * this function directly in the normal copy_to/from_user(), the other ones go
  * through an extern _copy_to/from_user(), which expands the same code
  * here.
  */
@@ -190,10 +190,9 @@ fail:
 	memset(to + (n - res), 0, res);
 	return res;
 }
-#ifndef INLINE_COPY_FROM_USER
+
 extern __must_check unsigned long
 _copy_from_user(void *, const void __user *, unsigned long);
-#endif
 
 static inline __must_check unsigned long
 _inline_copy_to_user(void __user *to, const void *from, unsigned long n)
@@ -207,21 +206,19 @@ _inline_copy_to_user(void __user *to, const void *from, unsigned long n)
 	}
 	return n;
 }
-#ifndef INLINE_COPY_TO_USER
+
 extern __must_check unsigned long
 _copy_to_user(void __user *, const void *, unsigned long);
-#endif
 
 static __always_inline unsigned long __must_check
 copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	if (!check_copy_size(to, n, false))
 		return n;
-#ifdef INLINE_COPY_FROM_USER
-	return _inline_copy_from_user(to, from, n);
-#else
-	return _copy_from_user(to, from, n);
-#endif
+	if (IS_ENABLED(ARCH_WANTS_NOINLINE_COPY_USER))
+		return _copy_from_user(to, from, n);
+	else
+		return _inline_copy_from_user(to, from, n);
 }
 
 static __always_inline unsigned long __must_check
@@ -230,11 +227,10 @@ copy_to_user(void __user *to, const void *from, unsigned long n)
 	if (!check_copy_size(from, n, true))
 		return n;
 
-#ifdef INLINE_COPY_TO_USER
-	return _inline_copy_to_user(to, from, n);
-#else
-	return _copy_to_user(to, from, n);
-#endif
+	if (IS_ENABLED(ARCH_WANTS_NOINLINE_COPY_USER))
+		return _copy_to_user(to, from, n);
+	else
+		return _inline_copy_to_user(to, from, n);
 }
 
 #ifndef copy_mc_to_kernel

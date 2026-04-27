@@ -27,9 +27,6 @@ static inline int __access_ok(const void __user *ptr, unsigned long size);
 #define __access_ok __access_ok
 #define __clear_user __clear_user
 
-#define INLINE_COPY_FROM_USER
-#define INLINE_COPY_TO_USER
-
 #include <asm-generic/uaccess.h>
 
 static inline int __access_ok(const void __user *ptr, unsigned long size)
