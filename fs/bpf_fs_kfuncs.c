@@ -10,6 +10,7 @@
 #include <linux/fsnotify.h>
 #include <linux/file.h>
 #include <linux/kernfs.h>
+#include <linux/lsm_hooks.h>
 #include <linux/mm.h>
 #include <linux/xattr.h>
 
@@ -353,6 +354,68 @@ __bpf_kfunc int bpf_cgroup_read_xattr(struct cgroup *cgroup, const char *name__s
 }
 #endif /* CONFIG_CGROUPS */
 
+/* Called from the verifier fixup of bpf_init_inode_xattr(). */
+__bpf_kfunc int bpf_init_inode_xattr_impl(struct xattr *xattrs, int *xattr_count,
+					  const char *name__str,
+					  const struct bpf_dynptr *value_p)
+{
+	struct bpf_dynptr_kern *value_ptr = (struct bpf_dynptr_kern *)value_p;
+	size_t name_len;
+	void *xattr_value;
+	struct xattr *xattr;
+	const void *value;
+	u32 value_len;
+
+	if (!xattrs || !xattr_count || !name__str)
+		return -EINVAL;
+
+	name_len = strlen(name__str);
+	if (name_len == 0 || name_len > XATTR_NAME_MAX)
+		return -EINVAL;
+
+	value_len = __bpf_dynptr_size(value_ptr);
+	if (value_len == 0 || value_len > XATTR_SIZE_MAX)
+		return -EINVAL;
+
+	value = __bpf_dynptr_data(value_ptr, value_len);
+	if (!value)
+		return -EINVAL;
+
+	xattr_value = kmemdup(value, value_len, GFP_ATOMIC);
+	if (!xattr_value)
+		return -ENOMEM;
+
+	xattr = lsm_get_xattr_slot(xattrs, xattr_count);
+	if (!xattr) {
+		kfree(xattr_value);
+		return -ENOSPC;
+	}
+
+	xattr->name = name__str;
+	xattr->value = xattr_value;
+	xattr->value_len = value_len;
+
+	return 0;
+}
+
+/**
+ * bpf_init_inode_xattr - set an xattr on a new inode from inode_init_security
+ * @name__str: xattr name (e.g., "bpf.file_label")
+ * @value_p: dynptr containing the xattr value
+ *
+ * Only callable from lsm/inode_init_security programs. The verifier rewrites
+ * calls to bpf_init_inode_xattr_impl() with xattrs/xattr_count extracted from
+ * the hook context.
+ *
+ * Return: 0 on success, negative error on failure.
+ */
+__bpf_kfunc int bpf_init_inode_xattr(const char *name__str,
+				     const struct bpf_dynptr *value_p)
+{
+	WARN_ONCE(1, "%s called without verifier fixup\n", __func__);
+	return -EFAULT;
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(bpf_fs_kfunc_set_ids)
@@ -363,13 +426,28 @@ BTF_ID_FLAGS(func, bpf_get_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_set_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_remove_dentry_xattr, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_init_inode_xattr)
+BTF_ID_FLAGS(func, bpf_init_inode_xattr_impl)
 BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
+
+BTF_ID_LIST(bpf_lsm_inode_init_security_btf_ids)
+BTF_ID(func, bpf_lsm_inode_init_security)
+
+BTF_ID_LIST(bpf_init_inode_xattr_btf_ids)
+BTF_ID(func, bpf_init_inode_xattr)
+BTF_ID(func, bpf_init_inode_xattr_impl)
 
 static int bpf_fs_kfuncs_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
 	if (!btf_id_set8_contains(&bpf_fs_kfunc_set_ids, kfunc_id) ||
-	    prog->type == BPF_PROG_TYPE_LSM)
+	    prog->type == BPF_PROG_TYPE_LSM) {
+		/* bpf_init_inode_xattr[_impl] only attach to inode_init_security. */
+		if ((kfunc_id == bpf_init_inode_xattr_btf_ids[0] ||
+		     kfunc_id == bpf_init_inode_xattr_btf_ids[1]) &&
+		    prog->aux->attach_btf_id != bpf_lsm_inode_init_security_btf_ids[0])
+			return -EACCES;
 		return 0;
+	}
 	return -EACCES;
 }
 

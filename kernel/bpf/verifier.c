@@ -10794,6 +10794,8 @@ enum special_kfunc_type {
 	KF_bpf_arena_alloc_pages,
 	KF_bpf_arena_free_pages,
 	KF_bpf_arena_reserve_pages,
+	KF_bpf_init_inode_xattr,
+	KF_bpf_init_inode_xattr_impl,
 	KF_bpf_session_is_return,
 	KF_bpf_stream_vprintk,
 	KF_bpf_stream_print_stack,
@@ -10882,6 +10884,13 @@ BTF_ID(func, bpf_task_work_schedule_resume)
 BTF_ID(func, bpf_arena_alloc_pages)
 BTF_ID(func, bpf_arena_free_pages)
 BTF_ID(func, bpf_arena_reserve_pages)
+#ifdef CONFIG_BPF_LSM
+BTF_ID(func, bpf_init_inode_xattr)
+BTF_ID(func, bpf_init_inode_xattr_impl)
+#else
+BTF_ID_UNUSED
+BTF_ID_UNUSED
+#endif
 BTF_ID(func, bpf_session_is_return)
 BTF_ID(func, bpf_stream_vprintk)
 BTF_ID(func, bpf_stream_print_stack)
@@ -12700,6 +12709,24 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	err = check_kfunc_args(env, &meta, insn_idx);
 	if (err < 0)
 		return err;
+
+	if (meta.func_id == special_kfunc_list[KF_bpf_init_inode_xattr_impl]) {
+		verbose(env, "bpf_init_inode_xattr_impl is not callable directly\n");
+		return -EACCES;
+	}
+
+	if (meta.func_id == special_kfunc_list[KF_bpf_init_inode_xattr]) {
+		if (env->cur_state->curframe != 0) {
+			verbose(env, "bpf_init_inode_xattr cannot be called from subprograms\n");
+			return -EINVAL;
+		}
+		env->needs_ctx_spill = true;
+		insn_aux->init_inode_xattr_fixup = true;
+		err = bpf_add_kfunc_call(env,
+					 special_kfunc_list[KF_bpf_init_inode_xattr_impl], 0);
+		if (err < 0)
+			return err;
+	}
 
 	if (is_bpf_rbtree_add_kfunc(meta.func_id)) {
 		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
@@ -19271,6 +19298,33 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[3] = BPF_ALU64_IMM(BPF_LSH, BPF_REG_0, 3);
 		insn_buf[4] = BPF_ALU64_REG(BPF_SUB, BPF_REG_0, BPF_REG_1);
 		insn_buf[5] = BPF_ALU64_IMM(BPF_NEG, BPF_REG_0, 0);
+		*cnt = 6;
+	} else if (env->insn_aux_data[insn_idx].init_inode_xattr_fixup) {
+		struct bpf_kfunc_desc *impl_desc;
+
+		impl_desc = find_kfunc_desc(env->prog,
+					    special_kfunc_list[KF_bpf_init_inode_xattr_impl], 0);
+		if (!impl_desc) {
+			verifier_bug(env, "bpf_init_inode_xattr_impl desc not found");
+			return -EFAULT;
+		}
+
+		/* Rewrite bpf_init_inode_xattr(name, value) to inject xattrs and
+		 * xattr_count loaded from the saved inode_init_security ctx.
+		 */
+		insn_buf[0] = BPF_MOV64_REG(BPF_REG_3, BPF_REG_1);
+		insn_buf[1] = BPF_MOV64_REG(BPF_REG_4, BPF_REG_2);
+		insn_buf[2] = BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_FP,
+					  env->ctx_stack_off);
+		insn_buf[3] = BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_2,
+					  3 * sizeof(u64));
+		insn_buf[4] = BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_2,
+					  4 * sizeof(u64));
+		insn_buf[5] = *insn;
+		if (!bpf_jit_supports_far_kfunc_call())
+			insn_buf[5].imm = BPF_CALL_IMM(impl_desc->addr);
+		else
+			insn_buf[5].imm = impl_desc->func_id;
 		*cnt = 6;
 	}
 

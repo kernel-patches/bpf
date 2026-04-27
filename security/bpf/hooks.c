@@ -28,8 +28,11 @@ static int __init bpf_lsm_init(void)
 	return 0;
 }
 
+#define BPF_LSM_INODE_INIT_XATTRS 1
+
 struct lsm_blob_sizes bpf_lsm_blob_sizes __ro_after_init = {
 	.lbs_inode = sizeof(struct bpf_storage_blob),
+	.lbs_xattr_count = BPF_LSM_INODE_INIT_XATTRS,
 };
 
 DEFINE_LSM(bpf) = {

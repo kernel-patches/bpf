@@ -682,6 +682,7 @@ struct bpf_insn_aux_data {
 	 */
 	u8 fastcall_spills_num:3;
 	u8 arg_prog:4;
+	u8 init_inode_xattr_fixup:1;
 
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */
@@ -903,6 +904,8 @@ struct bpf_verifier_env {
 	bool bypass_spec_v4;
 	bool seen_direct_write;
 	bool seen_exception;
+	bool needs_ctx_spill;
+	s16 ctx_stack_off;
 	struct bpf_insn_aux_data *insn_aux_data; /* array of per-insn state */
 	const struct bpf_line_info *prev_linfo;
 	struct bpf_verifier_log log;

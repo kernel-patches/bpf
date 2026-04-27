@@ -725,6 +725,26 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 		}
 	}
 
+	if (env->needs_ctx_spill) {
+		if (epilogue_cnt) {
+			/* gen_epilogue already saved ctx to the stack */
+			env->ctx_stack_off = -(s16)subprogs[0].stack_depth;
+		} else {
+			cnt = 0;
+			subprogs[0].stack_depth += 8;
+			env->ctx_stack_off = -(s16)subprogs[0].stack_depth;
+			insn_buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_FP,
+						      BPF_REG_1,
+						      env->ctx_stack_off);
+			insn_buf[cnt++] = env->prog->insnsi[0];
+			new_prog = bpf_patch_insn_data(env, 0, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+			env->prog = new_prog;
+			delta += cnt - 1;
+		}
+	}
+
 	if (ops->gen_prologue || env->seen_direct_write) {
 		if (!ops->gen_prologue) {
 			verifier_bug(env, "gen_prologue is null");
