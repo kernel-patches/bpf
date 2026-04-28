@@ -80,23 +80,6 @@ typedef int (*validation_func_t)(struct ifobject *ifobj);
 typedef void *(*thread_func_t)(void *arg);
 typedef int (*test_func_t)(struct test_spec *test);
 
-struct xsk_socket_info {
-	struct xsk_ring_cons rx;
-	struct xsk_ring_prod tx;
-	struct xsk_umem_info *umem;
-	struct xsk_socket *xsk;
-	struct pkt_stream *pkt_stream;
-	u32 outstanding_tx;
-	u32 rxqsize;
-	u32 batch_size;
-	u8 dst_mac[ETH_ALEN];
-	u8 src_mac[ETH_ALEN];
-	bool check_consumer;
-};
-
-int kick_rx(struct xsk_socket_info *xsk);
-int kick_tx(struct xsk_socket_info *xsk);
-
 struct xsk_umem_info {
 	struct xsk_ring_prod fq;
 	struct xsk_ring_cons cq;
@@ -112,6 +95,24 @@ struct xsk_umem_info {
 	bool unaligned_mode;
 };
 
+struct xsk_socket_info {
+	struct xsk_ring_cons rx;
+	struct xsk_ring_prod tx;
+	struct xsk_umem_info umem_real;
+	struct xsk_umem_info *umem;
+	struct xsk_socket *xsk;
+	struct pkt_stream *pkt_stream;
+	u32 outstanding_tx;
+	u32 rxqsize;
+	u32 batch_size;
+	u8 dst_mac[ETH_ALEN];
+	u8 src_mac[ETH_ALEN];
+	bool check_consumer;
+};
+
+int kick_rx(struct xsk_socket_info *xsk);
+int kick_tx(struct xsk_socket_info *xsk);
+
 struct set_hw_ring {
 	u32 default_tx;
 	u32 default_rx;
@@ -123,7 +124,6 @@ struct ifobject {
 	char ifname[MAX_INTERFACE_NAME_CHARS];
 	struct xsk_socket_info *xsk;
 	struct xsk_socket_info *xsk_arr;
-	struct xsk_umem_info *umem;
 	thread_func_t func_ptr;
 	validation_func_t validation_func;
 	struct xsk_xdp_progs *xdp_progs;
