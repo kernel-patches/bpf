@@ -828,12 +828,12 @@ static bool is_frag_valid(struct xsk_umem_info *umem, u64 addr, u32 len, u32 exp
 			  u32 bytes_processed)
 {
 	u32 seqnum, pkt_nb, *pkt_data, words_to_end, expected_seqnum;
+	u64 umem_sz = umem_size(umem);
 	void *data = xsk_umem__get_data(umem->buffer, addr);
 
 	addr -= umem->base_addr;
 
-	if (addr >= umem->num_frames * umem->frame_size ||
-	    addr + len > umem->num_frames * umem->frame_size) {
+	if (addr >= umem_sz || addr + len > umem_sz) {
 		ksft_print_msg("Frag invalid addr: %llx len: %u\n",
 			       (unsigned long long)addr, len);
 		return false;
@@ -1581,7 +1581,7 @@ static int thread_common_ops(struct test_spec *test, struct ifobject *ifobject)
 	int ret;
 	u32 i;
 
-	umem_sz = umem->num_frames * umem->frame_size;
+	umem_sz = umem_size(umem);
 	mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
 
 	if (umem->unaligned_mode)
@@ -1700,7 +1700,7 @@ void *worker_testapp_validate_rx(void *arg)
 static void testapp_clean_xsk_umem(struct ifobject *ifobj)
 {
 	struct xsk_umem_info *umem = ifobj->xsk->umem;
-	u64 umem_sz = umem->num_frames * umem->frame_size;
+	u64 umem_sz = umem_size(umem);
 
 	if (ifobj->shared_umem)
 		umem_sz *= 2;
@@ -2091,7 +2091,7 @@ int testapp_send_receive_mb(struct test_spec *test)
 int testapp_invalid_desc_mb(struct test_spec *test)
 {
 	struct xsk_umem_info *umem = test->ifobj_tx->xsk->umem;
-	u64 umem_size = umem->num_frames * umem->frame_size;
+	u64 umem_sz = umem_size(umem);
 	struct pkt pkts[] = {
 		/* Valid packet for synch to start with */
 		{0, MIN_PKT_SIZE, 0, true, 0},
@@ -2101,7 +2101,7 @@ int testapp_invalid_desc_mb(struct test_spec *test)
 		{0, 0, 0, false, 0},
 		/* Invalid address in the second frame */
 		{0, XSK_UMEM__LARGE_FRAME_SIZE, 0, false, XDP_PKT_CONTD},
-		{umem_size, XSK_UMEM__LARGE_FRAME_SIZE, 0, false, XDP_PKT_CONTD},
+		{umem_sz, XSK_UMEM__LARGE_FRAME_SIZE, 0, false, XDP_PKT_CONTD},
 		/* Invalid len in the middle */
 		{0, XSK_UMEM__LARGE_FRAME_SIZE, 0, false, XDP_PKT_CONTD},
 		{0, XSK_UMEM__INVALID_FRAME_SIZE, 0, false, XDP_PKT_CONTD},
@@ -2132,7 +2132,7 @@ int testapp_invalid_desc_mb(struct test_spec *test)
 int testapp_invalid_desc(struct test_spec *test)
 {
 	struct xsk_umem_info *umem = test->ifobj_tx->xsk->umem;
-	u64 umem_size = umem->num_frames * umem->frame_size;
+	u64 umem_sz = umem_size(umem);
 	struct pkt pkts[] = {
 		/* Zero packet address allowed */
 		{0, MIN_PKT_SIZE, 0, true},
@@ -2143,11 +2143,11 @@ int testapp_invalid_desc(struct test_spec *test)
 		/* Packet too large */
 		{0, XSK_UMEM__INVALID_FRAME_SIZE, 0, false},
 		/* Up to end of umem allowed */
-		{umem_size - MIN_PKT_SIZE - 2 * umem->frame_size, MIN_PKT_SIZE, 0, true},
+		{umem_sz - MIN_PKT_SIZE - 2 * umem->frame_size, MIN_PKT_SIZE, 0, true},
 		/* After umem ends */
-		{umem_size, MIN_PKT_SIZE, 0, false},
+		{umem_sz, MIN_PKT_SIZE, 0, false},
 		/* Straddle the end of umem */
-		{umem_size - MIN_PKT_SIZE / 2, MIN_PKT_SIZE, 0, false},
+		{umem_sz - MIN_PKT_SIZE / 2, MIN_PKT_SIZE, 0, false},
 		/* Straddle a 4K boundary */
 		{0x1000 - MIN_PKT_SIZE / 2, MIN_PKT_SIZE, 0, false},
 		/* Straddle a 2K boundary */
@@ -2165,9 +2165,9 @@ int testapp_invalid_desc(struct test_spec *test)
 	}
 
 	if (test->ifobj_tx->shared_umem) {
-		pkts[4].offset += umem_size;
-		pkts[5].offset += umem_size;
-		pkts[6].offset += umem_size;
+		pkts[4].offset += umem_sz;
+		pkts[5].offset += umem_sz;
+		pkts[6].offset += umem_sz;
 	}
 
 	if (pkt_stream_generate_custom(test, pkts, ARRAY_SIZE(pkts)))
