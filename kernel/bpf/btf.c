@@ -28,6 +28,7 @@
 #include <linux/string.h>
 #include <linux/sysfs.h>
 #include <linux/overflow.h>
+#include <linux/workqueue.h>
 
 #include <net/netfilter/nf_bpf_link.h>
 
@@ -264,13 +265,13 @@ struct btf {
 	u32 data_size;
 	refcount_t refcnt;
 	u32 id;
-	struct rcu_head rcu;
+	/* Final free runs after an RCU grace period in process context. */
+	struct rcu_work free_work;
 	struct btf_kfunc_set_tab *kfunc_set_tab;
 	struct btf_id_dtor_kfunc_tab *dtor_kfunc_tab;
 	struct btf_struct_metas *struct_meta_tab;
 	struct btf_struct_ops_tab *struct_ops_tab;
 	struct btf_layout *layout;
-
 	/* split BTF support */
 	struct btf *base_btf;
 	u32 start_id; /* first type ID in this BTF (0 for base BTF) */
@@ -1880,9 +1881,10 @@ static void btf_free(struct btf *btf)
 	kfree(btf);
 }
 
-static void btf_free_rcu(struct rcu_head *rcu)
+static void btf_free_work(struct work_struct *work)
 {
-	struct btf *btf = container_of(rcu, struct btf, rcu);
+	struct rcu_work *rwork = to_rcu_work(work);
+	struct btf *btf = container_of(rwork, struct btf, free_work);
 
 	btf_free(btf);
 }
@@ -1901,7 +1903,7 @@ void btf_put(struct btf *btf)
 {
 	if (btf && refcount_dec_and_test(&btf->refcnt)) {
 		btf_free_id(btf);
-		call_rcu(&btf->rcu, btf_free_rcu);
+		queue_rcu_work(system_wq, &btf->free_work);
 	}
 }
 
@@ -6013,6 +6015,7 @@ static struct btf *btf_parse(const union bpf_attr *attr, bpfptr_t uattr, u32 uat
 		goto errout_free;
 
 	btf_verifier_env_free(env);
+	INIT_RCU_WORK(&btf->free_work, btf_free_work);
 	refcount_set(&btf->refcnt, 1);
 	return btf;
 
@@ -6400,6 +6403,7 @@ static struct btf *btf_parse_base(struct btf_verifier_env *env, const char *name
 		goto errout;
 
 	btf_check_sorted(btf);
+	INIT_RCU_WORK(&btf->free_work, btf_free_work);
 	refcount_set(&btf->refcnt, 1);
 
 	return btf;
@@ -6535,6 +6539,7 @@ static struct btf *btf_parse_module(const char *module_name, const void *data,
 
 	btf_verifier_env_free(env);
 	btf_check_sorted(btf);
+	INIT_RCU_WORK(&btf->free_work, btf_free_work);
 	refcount_set(&btf->refcnt, 1);
 	return btf;
 
@@ -8446,6 +8451,7 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 				sysfs_remove_bin_file(btf_kobj, btf_mod->sysfs_attr);
 			purge_cand_cache(btf_mod->btf);
 			btf_put(btf_mod->btf);
+			flush_rcu_work(&btf_mod->btf->free_work);
 			kfree(btf_mod->sysfs_attr);
 			kfree(btf_mod);
 			break;
