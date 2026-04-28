@@ -54,6 +54,9 @@
 #include <asm/vdso.h>
 #include <asm/vdso/vdso.h>
 
+DEFINE_PER_CPU(struct task_struct *, __entry_task);
+EXPORT_PER_CPU_SYMBOL_GPL(__entry_task);
+
 #ifdef CONFIG_STACKPROTECTOR
 #include <linux/stackprotector.h>
 unsigned long __stack_chk_guard __read_mostly;
@@ -222,6 +225,9 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 
 	if (clone_flags & CLONE_SETTLS)
 		childregs->regs[2] = tls;
+
+	/* Set tp to the new task structure for context switching */
+	p->thread.reg02 = (unsigned long)p;
 
 out:
 	ptrace_hw_copy_thread(p);

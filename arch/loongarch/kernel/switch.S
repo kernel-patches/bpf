@@ -12,7 +12,7 @@
 
 /*
  * task_struct *__switch_to(task_struct *prev, task_struct *next,
- *			    struct thread_info *next_ti, void *sched_ra, void *sched_cfa)
+ *			    void *sched_ra, void *sched_cfa)
  */
 	.align	5
 SYM_FUNC_START(__switch_to)
@@ -33,11 +33,12 @@ SYM_FUNC_START(__switch_to)
 	LONG_SPTR	t8, t7, 0
 #endif
 
-	move	tp, a2
+	move	tp, a1
 	cpu_restore_nonscratch a1
 
-	li.w		t0, _THREAD_SIZE
-	PTR_ADD		t0, t0, tp
+	LONG_LPTR	t0, tp, TASK_STACK
+	PTR_LI		t1, _THREAD_SIZE
+	PTR_ADD		t0, t0, t1
 	set_saved_sp	t0, t1, t2
 
 	LONG_LPTR	t1, a1, (THREAD_CSRPRMD - TASK_STRUCT_OFFSET)

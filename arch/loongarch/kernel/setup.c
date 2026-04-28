@@ -46,6 +46,7 @@
 #include <asm/pgalloc.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
+#include <asm/switch_to.h>
 #include <asm/time.h>
 #include <asm/unwind.h>
 
@@ -617,4 +618,6 @@ void __init setup_arch(char **cmdline_p)
 #ifdef CONFIG_KASAN
 	kasan_init();
 #endif
+
+	entry_task_switch(&init_task);
 }

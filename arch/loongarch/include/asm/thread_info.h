@@ -22,9 +22,7 @@
  *   must also be changed
  */
 struct thread_info {
-	struct task_struct	*task;		/* main task structure */
 	unsigned long		flags;		/* low level flags */
-	unsigned long		tp_value;	/* thread pointer */
 	__u32			cpu;		/* current CPU */
 	int			preempt_count;	/* 0 => preemptible, <0 => BUG */
 	struct pt_regs		*regs;
@@ -37,18 +35,9 @@ struct thread_info {
  */
 #define INIT_THREAD_INFO(tsk)			\
 {						\
-	.task		= &tsk,			\
-	.flags		= _TIF_FIXADE,		\
+	.flags		= 0,			\
 	.cpu		= 0,			\
 	.preempt_count	= INIT_PREEMPT_COUNT,	\
-}
-
-/* How to get the thread information struct from C. */
-register struct thread_info *__current_thread_info __asm__("$tp");
-
-static inline struct thread_info *current_thread_info(void)
-{
-	return __current_thread_info;
 }
 
 register unsigned long current_stack_pointer __asm__("$sp");

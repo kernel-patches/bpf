@@ -170,12 +170,6 @@ static inline void die_if_kernel(const char *str, struct pt_regs *regs)
 		die(str, regs);
 }
 
-#define current_pt_regs()						\
-({									\
-	unsigned long sp = (unsigned long)__builtin_frame_address(0);	\
-	(struct pt_regs *)((sp | (THREAD_SIZE - 1)) + 1) - 1;		\
-})
-
 /* Helpers for working with the user stack pointer */
 
 static inline unsigned long user_stack_pointer(struct pt_regs *regs)

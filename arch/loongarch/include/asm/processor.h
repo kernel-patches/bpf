@@ -109,7 +109,7 @@ struct loongarch_vdso_info;
  */
 struct thread_struct {
 	/* Main processor registers. */
-	unsigned long reg01, reg03, reg22; /* ra sp fp */
+	unsigned long reg01, reg02, reg03, reg22; /* ra tp sp fp */
 	unsigned long reg23, reg24, reg25, reg26; /* s0-s3 */
 	unsigned long reg27, reg28, reg29, reg30, reg31; /* s4-s8 */
 
@@ -145,45 +145,9 @@ struct thread_struct {
 #define thread_saved_ra(tsk)	(tsk->thread.sched_ra)
 #define thread_saved_fp(tsk)	(tsk->thread.sched_cfa)
 
-#define INIT_THREAD  {						\
-	/*							\
-	 * Main processor registers				\
-	 */							\
-	.reg01			= 0,				\
-	.reg03			= 0,				\
-	.reg22			= 0,				\
-	.reg23			= 0,				\
-	.reg24			= 0,				\
-	.reg25			= 0,				\
-	.reg26			= 0,				\
-	.reg27			= 0,				\
-	.reg28			= 0,				\
-	.reg29			= 0,				\
-	.reg30			= 0,				\
-	.reg31			= 0,				\
-	.sched_ra		= 0,				\
-	.sched_cfa		= 0,				\
-	.csr_crmd		= 0,				\
-	.csr_prmd		= 0,				\
-	.csr_euen		= 0,				\
-	.csr_ecfg		= 0,				\
-	.csr_badvaddr		= 0,				\
-	/*							\
-	 * Other stuff associated with the process		\
-	 */							\
-	.trap_nr		= 0,				\
-	.error_code		= 0,				\
-	/*							\
-	 * FPU & vector registers				\
-	 */							\
-	.fpu			= {				\
-		.fcc		= 0,				\
-		.fcsr		= 0,				\
-		.ftop		= 0,				\
-		.fpr		= {{{0,},},},			\
-	},							\
-	.hbp_break		= {0},				\
-	.hbp_watch		= {0},				\
+#define INIT_THREAD  {							\
+	.reg02 = (unsigned long)&init_task,				\
+	.reg03 = (unsigned long)&init_stack + sizeof(init_stack),	\
 }
 
 struct task_struct;

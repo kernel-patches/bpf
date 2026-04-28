@@ -191,8 +191,13 @@
 	andi	t0, t0, 0x3	/* extract pplv bit */
 	beqz	t0, 9f
 
-	LONG_LI	tp, ~_THREAD_MASK
-	and	tp, tp, sp
+	la_abs      t1, __entry_task
+#ifdef CONFIG_SMP
+	csrrd       t0, PERCPU_BASE_KS
+	LONG_ADD    t1, t1, t0
+#endif
+	LONG_L      tp, t1, 0
+
 	cfi_st  u0, PT_R21, \docfi
 	csrrd	u0, PERCPU_BASE_KS
 9:

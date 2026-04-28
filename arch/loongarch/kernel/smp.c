@@ -34,6 +34,7 @@
 #include <asm/paravirt.h>
 #include <asm/processor.h>
 #include <asm/setup.h>
+#include <asm/switch_to.h>
 #include <asm/time.h>
 
 int __cpu_number_map[NR_CPUS];   /* Map physical to logical */
@@ -400,8 +401,9 @@ void loongson_boot_secondary(int cpu, struct task_struct *idle)
 	pr_info("Booting CPU#%d...\n", cpu);
 
 	entry = __pa_symbol((unsigned long)&smpboot_entry);
-	cpuboot_data.stack = (unsigned long)__KSTK_TOS(idle);
-	cpuboot_data.thread_info = (unsigned long)task_thread_info(idle);
+	cpuboot_data.stack = (unsigned long)task_pt_regs(idle);
+	cpuboot_data.task = (unsigned long)idle;
+	cpuboot_data.offset = per_cpu_offset(cpu);
 
 	csr_mail_send(entry, cpu_logical_map(cpu), 0);
 
@@ -685,6 +687,8 @@ asmlinkage void start_secondary(void)
 	 * from __cpu_up()
 	 */
 	complete(&cpu_running);
+
+	entry_task_switch(current);
 
 	/*
 	 * irq will be enabled in loongson_smp_finish(), enabling it too
