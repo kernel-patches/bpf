@@ -760,7 +760,8 @@ free:
 bool btf_record_equal(const struct btf_record *rec_a, const struct btf_record *rec_b)
 {
 	bool a_has_fields = !IS_ERR_OR_NULL(rec_a), b_has_fields = !IS_ERR_OR_NULL(rec_b);
-	int size;
+	size_t size;
+	int i;
 
 	if (!a_has_fields && !b_has_fields)
 		return true;
@@ -768,7 +769,6 @@ bool btf_record_equal(const struct btf_record *rec_a, const struct btf_record *r
 		return false;
 	if (rec_a->cnt != rec_b->cnt)
 		return false;
-	size = struct_size(rec_a, fields, rec_a->cnt);
 	/* btf_parse_fields uses kzalloc to allocate a btf_record, so unused
 	 * members are zeroed out. So memcmp is safe to do without worrying
 	 * about padding/unused fields.
@@ -780,10 +780,24 @@ bool btf_record_equal(const struct btf_record *rec_a, const struct btf_record *r
 	 *
 	 * So while by default, we don't rely on the map BTF (which the records
 	 * were parsed from) matching for both records, which is not backwards
-	 * compatible, in case list_head is part of it, we implicitly rely on
-	 * that by way of depending on memcmp succeeding for it.
+	 * compatible; in case list_head is part of a record, we implicitly
+	 * rely on that by way of depending on memcmp succeeding for each
+	 * individual field.
+	 *
+	 * Comparing the whole record may be incorrect due to auxiliary data
+	 * attached to the record.
 	 */
-	return !memcmp(rec_a, rec_b, size);
+	size = offsetof(struct btf_record, fields);
+	if (memcmp(rec_a, rec_b, size))
+		return false;
+
+	for (i = 0; i < rec_a->cnt; i++) {
+		if (memcmp(&rec_a->fields[i], &rec_b->fields[i],
+			   sizeof(rec_a->fields[i])))
+			return false;
+	}
+
+	return true;
 }
 
 void bpf_obj_free_timer(const struct btf_record *rec, void *obj)
