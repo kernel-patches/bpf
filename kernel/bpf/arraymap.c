@@ -54,6 +54,7 @@ int array_map_alloc_check(union bpf_attr *attr)
 {
 	bool percpu = attr->map_type == BPF_MAP_TYPE_PERCPU_ARRAY;
 	int numa_node = bpf_map_attr_numa_node(attr);
+	int aux_size;
 
 	/* check sanity of attributes */
 	if (attr->max_entries == 0 || attr->key_size != 4 ||
@@ -74,8 +75,12 @@ int array_map_alloc_check(union bpf_attr *attr)
 	/* avoid overflow on round_up(map->value_size) */
 	if (attr->value_size > INT_MAX)
 		return -E2BIG;
+	aux_size = bpf_map_attr_ref_kptr_aux_size(attr);
+	if (aux_size < 0)
+		return aux_size;
 	/* percpu map value size is bound by PCPU_MIN_UNIT_SIZE */
-	if (percpu && round_up(attr->value_size, 8) > PCPU_MIN_UNIT_SIZE)
+	if (percpu &&
+	    round_up(attr->value_size, 8) + aux_size > PCPU_MIN_UNIT_SIZE)
 		return -E2BIG;
 
 	return 0;
@@ -89,8 +94,13 @@ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
 	bool bypass_spec_v1 = bpf_bypass_spec_v1(NULL);
 	u64 array_size, mask64;
 	struct bpf_array *array;
+	int aux_size;
 
 	elem_size = round_up(attr->value_size, 8);
+	aux_size = bpf_map_attr_ref_kptr_aux_size(attr);
+	if (aux_size < 0)
+		return ERR_PTR(aux_size);
+	elem_size += aux_size;
 
 	max_entries = attr->max_entries;
 
@@ -205,7 +215,7 @@ static int array_map_direct_value_meta(const struct bpf_map *map, u64 imm,
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
 	u64 base = (unsigned long)array->value;
-	u64 range = array->elem_size;
+	u64 range = map->value_size;
 
 	if (map->max_entries != 1)
 		return -ENOTSUPP;
@@ -553,6 +563,9 @@ static int array_map_check_btf(struct bpf_map *map,
 			       const struct btf_type *key_type,
 			       const struct btf_type *value_type)
 {
+	struct bpf_array *array = container_of(map, struct bpf_array, map);
+	int i;
+
 	/* One exception for keyless BTF: .bss/.data/.rodata map */
 	if (btf_type_is_void(key_type)) {
 		if (map->map_type != BPF_MAP_TYPE_ARRAY ||
@@ -571,6 +584,25 @@ static int array_map_check_btf(struct bpf_map *map,
 	 */
 	if (!btf_type_is_i32(key_type))
 		return -EINVAL;
+
+	if (!IS_ERR_OR_NULL(map->record) && map->record->kptr_ref_aux_size) {
+		if (array->map.map_type == BPF_MAP_TYPE_PERCPU_ARRAY) {
+			for (i = 0; i < array->map.max_entries; i++) {
+				void __percpu *pptr =
+					array->pptrs[i & array->index_mask];
+				int cpu;
+
+				for_each_possible_cpu(cpu)
+					bpf_kptr_aux_init_value(
+						map->record,
+						per_cpu_ptr(pptr, cpu));
+			}
+		} else {
+			for (i = 0; i < array->map.max_entries; i++)
+				bpf_kptr_aux_init_value(map->record,
+							array_map_elem_ptr(array, i));
+		}
+	}
 
 	return 0;
 }

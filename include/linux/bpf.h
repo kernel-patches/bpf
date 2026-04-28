@@ -9,6 +9,8 @@
 
 #include <crypto/sha2.h>
 #include <linux/workqueue.h>
+#include <linux/irq_work.h>
+#include <linux/llist.h>
 #include <linux/file.h>
 #include <linux/percpu.h>
 #include <linux/err.h>
@@ -234,6 +236,10 @@ struct btf_field_kptr {
 	 * program-allocated, dtor is NULL,  and __bpf_obj_drop_impl is used
 	 */
 	btf_dtor_kfunc_t dtor;
+	struct irq_work irq_work;
+	struct llist_head irq_work_items;
+	struct llist_head free_list;
+	u32 aux_off;
 	u32 btf_id;
 };
 
@@ -257,6 +263,7 @@ struct btf_field {
 struct btf_record {
 	u32 cnt;
 	u32 field_mask;
+	u32 kptr_ref_aux_size;
 	int spin_lock_off;
 	int res_spin_lock_off;
 	int timer_off;
@@ -265,6 +272,67 @@ struct btf_record {
 	int task_work_off;
 	struct btf_field fields[];
 };
+
+struct bpf_kptr_dtor_aux {
+	struct llist_node node;
+	void *ptr;
+};
+
+static inline struct bpf_kptr_dtor_aux *
+bpf_kptr_ref_aux(const struct btf_field *field, void *value)
+{
+	return value + field->kptr.aux_off;
+}
+
+static inline void bpf_kptr_aux_init_field(struct btf_field *field, u32 *aux_off)
+{
+	if (field->type != BPF_KPTR_REF)
+		return;
+
+	field->kptr.aux_off = *aux_off;
+	*aux_off += sizeof(struct bpf_kptr_dtor_aux);
+}
+
+static inline void bpf_kptr_aux_init_value(const struct btf_record *rec, void *value)
+{
+	int i;
+
+	if (IS_ERR_OR_NULL(rec) || !rec->kptr_ref_aux_size)
+		return;
+
+	for (i = 0; i < rec->cnt; i++) {
+		struct bpf_kptr_dtor_aux *aux;
+
+		if (rec->fields[i].type != BPF_KPTR_REF)
+			continue;
+
+		aux = bpf_kptr_ref_aux(&rec->fields[i], value);
+		init_llist_node(&aux->node);
+		aux->ptr = NULL;
+	}
+}
+
+static inline bool bpf_kptr_ref_has_deferred_dtor(const struct btf_record *rec,
+						  void *value)
+{
+	int i;
+
+	if (IS_ERR_OR_NULL(rec) || !rec->kptr_ref_aux_size)
+		return false;
+
+	for (i = 0; i < rec->cnt; i++) {
+		struct bpf_kptr_dtor_aux *aux;
+
+		if (rec->fields[i].type != BPF_KPTR_REF)
+			continue;
+
+		aux = bpf_kptr_ref_aux(&rec->fields[i], value);
+		if (READ_ONCE(aux->ptr))
+			return true;
+	}
+
+	return false;
+}
 
 /* Non-opaque version of bpf_rb_node in uapi/linux/bpf.h */
 struct bpf_rb_node_kern {
@@ -2602,6 +2670,7 @@ void bpf_obj_free_workqueue(const struct btf_record *rec, void *obj);
 void bpf_obj_free_task_work(const struct btf_record *rec, void *obj);
 void bpf_obj_free_fields(const struct btf_record *rec, void *obj);
 void __bpf_obj_drop_impl(void *p, const struct btf_record *rec, bool percpu);
+int bpf_map_attr_ref_kptr_aux_size(const union bpf_attr *attr);
 
 struct bpf_map *bpf_map_get(u32 ufd);
 struct bpf_map *bpf_map_get_with_uref(u32 ufd);

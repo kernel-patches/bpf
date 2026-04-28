@@ -4074,7 +4074,7 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 				    u32 field_mask, u32 value_size)
 {
 	struct btf_field_info info_arr[BTF_FIELDS_MAX];
-	u32 next_off = 0, field_type_size;
+	u32 next_off = 0, value_data_size, aux_off, field_type_size;
 	struct btf_record *rec;
 	int ret, i, cnt;
 
@@ -4098,6 +4098,8 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 	rec->wq_off = -EINVAL;
 	rec->refcount_off = -EINVAL;
 	rec->task_work_off = -EINVAL;
+	value_data_size = round_up(value_size, 8);
+	aux_off = value_data_size;
 	for (i = 0; i < cnt; i++) {
 		field_type_size = btf_field_type_size(info_arr[i].type);
 		if (info_arr[i].off + field_type_size > value_size) {
@@ -4171,8 +4173,10 @@ struct btf_record *btf_parse_fields(const struct btf *btf, const struct btf_type
 			ret = -EFAULT;
 			goto end;
 		}
+		bpf_kptr_aux_init_field(&rec->fields[i], &aux_off);
 		rec->cnt++;
 	}
+	rec->kptr_ref_aux_size = aux_off - value_data_size;
 
 	if (rec->spin_lock_off >= 0 && rec->res_spin_lock_off >= 0) {
 		ret = -EINVAL;
