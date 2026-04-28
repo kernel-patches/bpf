@@ -92,7 +92,9 @@ enum {
 	BTF_KIND_DECL_TAG	= 17,	/* Decl Tag */
 	BTF_KIND_TYPE_TAG	= 18,	/* Type Tag */
 	BTF_KIND_ENUM64		= 19,	/* Enumeration up to 64-bit values */
-
+	BTF_KIND_LOC_PARAM	= 20,	/* Location parameter information */
+	BTF_KIND_LOC_PROTO	= 21,	/* Location prototype for site */
+	BTF_KIND_LOCSEC		= 22,	/* Location section */
 	NR_BTF_KINDS,
 	BTF_KIND_MAX		= NR_BTF_KINDS - 1,
 };
@@ -210,6 +212,67 @@ struct btf_enum64 {
 	__u32	name_off;
 	__u32	val_lo32;
 	__u32	val_hi32;
+};
+
+/*
+ * BTF_KIND_LOC_PARAM is followed by a single "struct btf_loc_param"
+ * that contains flags specifying the contents of the vlen-specified
+ * number of 4-byte values that follow.
+ */
+struct btf_loc_param {
+	__u32 flags;
+};
+
+/*
+ * The combination of size, vlen and flags gives us the means to interpret
+ * the following vlen-specified set of 4-byte values:
+ *
+ * - a BTF_LOC_PARAM_CONST is a constant value; combination
+ *   of size, vlen and _SIGNED flag determines it. If the value requires
+ *   64 bits it is stored in {lo,hi} order.
+ * - a BTF_LOC_PARAM_ADDR is an address that will be normalized with
+ *   respect to kernel base address.
+ * - a BTF_LOC_PARAM_REG with vlen 1 is a simple register number;
+ *   with vlen 2 it is a multi-register parameter.
+ * - a _REG | DEREF with vlen 1 dereferences the value in the register
+ *   number specified.
+ * - a REG | DEREF | OFFSET with vlen specifies the register value in
+ *   the first 4-byte value and the offset in the remainder.
+ * - binary logical operators operate on a combination of register
+ *   number and constant value, aside from _NOT which operates on
+ *   a register
+ */
+enum btf_loc_param_flags {
+	BTF_LOC_PARAM_SIGNED		=	0x1,
+	BTF_LOC_PARAM_CONST		=	0x2,
+	BTF_LOC_PARAM_ADDR		=	0x4,
+	BTF_LOC_PARAM_REG		=	0x8,
+	BTF_LOC_PARAM_DEREF		=	0x10,
+	BTF_LOC_PARAM_OFFSET		=	0x20,
+};
+
+/*
+ * BTF_KIND_LOC_PROTO specifies location prototypes; i.e. how locations relate
+ * to parameters; a struct btf_type of BTF_KIND_LOC_PROTO is followed by a
+ * a vlen-specified number of __u32 BTF type ids which specify the associated
+ * BTF_KIND_LOC_PARAM for each function parameter associated with the
+ * location.  The type should either be 0 (no location info) or point at
+ * a BTF_KIND_LOC_PARAM.
+ */
+
+/*
+ * BTF_KIND_LOCSEC consists of vlen-specified number of "struct btf_loc"
+ * containing location site-specific information;
+ *
+ * - function (func)
+ * - location prototype type id (loc_proto)
+ * - address offset (offset) relative to kernel base address
+ */
+
+struct btf_loc {
+	__u32 func;
+	__u32 loc_proto;
+	__u32 offset;
 };
 
 #endif /* _UAPI__LINUX_BTF_H__ */
