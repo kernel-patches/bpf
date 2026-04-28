@@ -630,10 +630,10 @@ static void pkt_stream_cancel(struct pkt_stream *pkt_stream)
 	pkt_stream->current_pkt_nb--;
 }
 
-static void pkt_generate(struct xsk_socket_info *xsk, struct xsk_umem_info *umem, u64 addr, u32 len,
-			 u32 pkt_nb, u32 bytes_written)
+static void pkt_generate(struct xsk_socket_info *xsk, u64 addr, u32 len, u32 pkt_nb,
+			 u32 bytes_written)
 {
-	void *data = xsk_umem__get_data(umem->buffer, addr);
+	void *data = xsk_umem__get_data(xsk->umem->buffer, addr);
 
 	if (len < MIN_PKT_SIZE)
 		return;
@@ -1241,7 +1241,7 @@ static int __send_pkts(struct ifobject *ifobject, struct xsk_socket_info *xsk, b
 				tx_desc->options = 0;
 			}
 			if (pkt->valid)
-				pkt_generate(xsk, umem, tx_desc->addr, tx_desc->len, pkt->pkt_nb,
+				pkt_generate(xsk, tx_desc->addr, tx_desc->len, pkt->pkt_nb,
 					     bytes_written);
 			bytes_written += tx_desc->len;
 
