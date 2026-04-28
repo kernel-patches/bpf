@@ -46,7 +46,7 @@ __noinline long global_dead(void)
 }
 
 SEC("?raw_tp")
-__success __log_level(2)
+__success __log_level(6)
 /* main prog is validated completely first */
 __msg("('global_calls_good_only') is global and assumed valid.")
 /* eventually global_good() is transitively validated as well */
@@ -86,7 +86,8 @@ __noinline int global_unsupp(const int *mem)
 const volatile bool skip_unsupp_global = true;
 
 SEC("?raw_tp")
-__success
+__success __log_level(4)
+__msg("insns processed 5")
 int guarded_unsupp_global_called(void)
 {
 	if (!skip_unsupp_global)
@@ -142,7 +143,7 @@ int anon_user_mem_invalid(void *ctx)
 }
 
 SEC("?tracepoint")
-__success __log_level(2)
+__success __log_level(6)
 __msg("Func#1 ('subprog_user_anon_mem') is safe for any args that match its prototype")
 int anon_user_mem_valid(void *ctx)
 {
@@ -159,7 +160,7 @@ __noinline __weak int subprog_nonnull_ptr_good(int *p1 __arg_nonnull, int *p2 __
 int x = 47;
 
 SEC("?raw_tp")
-__success __log_level(2)
+__success __log_level(6)
 int arg_tag_nonnull_ptr_good(void *ctx)
 {
 	int y = 74;
@@ -186,21 +187,24 @@ __weak int raw_tp_u64_array(u64 *ctx __arg_ctx)
 }
 
 SEC("?raw_tp")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 12+5+2+2")
 int arg_tag_ctx_raw_tp(void *ctx)
 {
 	return subprog_ctx_tag(ctx) + raw_tp_canonical(ctx) + raw_tp_u64_array(ctx);
 }
 
 SEC("?raw_tp.w")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 12+5+2+2")
 int arg_tag_ctx_raw_tp_writable(void *ctx)
 {
 	return subprog_ctx_tag(ctx) + raw_tp_canonical(ctx) + raw_tp_u64_array(ctx);
 }
 
 SEC("?tp_btf/sys_enter")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 12+5+2+2")
 int arg_tag_ctx_raw_tp_btf(void *ctx)
 {
 	return subprog_ctx_tag(ctx) + raw_tp_canonical(ctx) + raw_tp_u64_array(ctx);
@@ -214,7 +218,8 @@ __weak int tp_whatever(struct whatever *ctx __arg_ctx)
 }
 
 SEC("?tp")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 7+5+2")
 int arg_tag_ctx_tp(void *ctx)
 {
 	return subprog_ctx_tag(ctx) + tp_whatever(ctx);
@@ -231,7 +236,8 @@ __weak int kprobe_subprog_typedef(bpf_user_pt_regs_t *ctx __arg_ctx)
 }
 
 SEC("?kprobe")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 12+5+2+2")
 int arg_tag_ctx_kprobe(void *ctx)
 {
 	return subprog_ctx_tag(ctx) +
@@ -266,7 +272,8 @@ __weak int perf_subprog_canonical(struct bpf_perf_event_data *ctx __arg_ctx)
 }
 
 SEC("?perf_event")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 15+5+2+2+2")
 int arg_tag_ctx_perf(void *ctx)
 {
 	return subprog_ctx_tag(ctx) +
@@ -286,7 +293,8 @@ __weak int iter_subprog_typed(struct bpf_iter__task *ctx __arg_ctx)
 }
 
 SEC("?iter/task")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 8+2+2")
 int arg_tag_ctx_iter_task(struct bpf_iter__task *ctx)
 {
 	return (iter_subprog_void(ctx) + iter_subprog_typed(ctx)) & 1;
@@ -305,7 +313,8 @@ __weak int tracing_subprog_u64(u64 *ctx __arg_ctx)
 int acc;
 
 SEC("?fentry/" SYS_PREFIX "sys_nanosleep")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 12+2+2")
 int BPF_PROG(arg_tag_ctx_fentry)
 {
 	acc += tracing_subprog_void(ctx) + tracing_subprog_u64(ctx);
@@ -313,7 +322,8 @@ int BPF_PROG(arg_tag_ctx_fentry)
 }
 
 SEC("?fexit/" SYS_PREFIX "sys_nanosleep")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 12+2+2")
 int BPF_PROG(arg_tag_ctx_fexit)
 {
 	acc += tracing_subprog_void(ctx) + tracing_subprog_u64(ctx);
@@ -321,14 +331,15 @@ int BPF_PROG(arg_tag_ctx_fexit)
 }
 
 SEC("?fmod_ret/" SYS_PREFIX "sys_nanosleep")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 7+2+2")
 int BPF_PROG(arg_tag_ctx_fmod_ret)
 {
 	return tracing_subprog_void(ctx) + tracing_subprog_u64(ctx);
 }
 
 SEC("?lsm/bpf")
-__success __log_level(2)
+__success __log_level(6)
 int BPF_PROG(arg_tag_ctx_lsm)
 {
 	int ret;
@@ -339,7 +350,8 @@ int BPF_PROG(arg_tag_ctx_lsm)
 }
 
 SEC("?struct_ops/test_1")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 7+2+2")
 int BPF_PROG(arg_tag_ctx_struct_ops)
 {
 	return tracing_subprog_void(ctx) + tracing_subprog_u64(ctx);
@@ -351,7 +363,8 @@ struct bpf_dummy_ops dummy_1 = {
 };
 
 SEC("?syscall")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 12+2+2+2")
 int arg_tag_ctx_syscall(void *ctx)
 {
 	return tracing_subprog_void(ctx) + tracing_subprog_u64(ctx) + tp_whatever(ctx);
@@ -369,7 +382,8 @@ __weak int syscall_array_bpf_for(void *ctx __arg_ctx)
 }
 
 SEC("?syscall")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 2+58")
 int arg_tag_ctx_syscall_bpf_for(void *ctx)
 {
 	return syscall_array_bpf_for(ctx);
@@ -394,7 +408,8 @@ struct {
 };
 
 SEC("?syscall")
-__success __log_level(2)
+__success __log_level(6)
+__msg("insns processed 5")
 int arg_tag_ctx_syscall_tailcall(void *ctx)
 {
 	bpf_tail_call(ctx, &syscall_prog_array, 0);
@@ -471,7 +486,7 @@ __weak int subprog_dynptr(struct bpf_dynptr *dptr)
 }
 
 SEC("?xdp")
-__success __log_level(2)
+__success __log_level(6)
 int arg_tag_dynptr(struct xdp_md *ctx)
 {
 	struct bpf_dynptr dptr;
