@@ -923,12 +923,12 @@ static bool pcap_next_pkt(void)
 	struct pcap_pkthdr *hdr = pcap_curr_pkt();
 
 	if (pcap_ptr_va_curr + sizeof(*hdr) -
-	    pcap_ptr_va_start >= pcap_map_size)
+	    pcap_ptr_va_start > pcap_map_size)
 		return false;
 	if (hdr->caplen == 0 || hdr->len == 0 || hdr->caplen > hdr->len)
 		return false;
 	if (pcap_ptr_va_curr + sizeof(*hdr) + hdr->caplen -
-	    pcap_ptr_va_start >= pcap_map_size)
+	    pcap_ptr_va_start > pcap_map_size)
 		return false;
 
 	pcap_ptr_va_curr += (sizeof(*hdr) + hdr->caplen);
@@ -1141,7 +1141,7 @@ static int cmd_select(char *num)
 	pcap_reset_pkt();
 	bpf_reset();
 
-	for (i = 0; i < which && (have_next = pcap_next_pkt()); i++)
+	for (i = 1; i < which && (have_next = pcap_next_pkt()); i++)
 		/* noop */;
 	if (!have_next || pcap_curr_pkt() == NULL) {
 		rl_printf("no packet #%u available!\n", which);
