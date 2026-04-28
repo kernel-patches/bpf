@@ -18183,6 +18183,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 	}
 
 	ret = do_check(env);
+
 out:
 	if (!ret && pop_log)
 		bpf_vlog_reset(&env->log, 0);
@@ -18215,6 +18216,7 @@ static int do_check_subprogs(struct bpf_verifier_env *env)
 	struct bpf_prog_aux *aux = env->prog->aux;
 	struct bpf_func_info_aux *sub_aux;
 	int i, ret, new_cnt;
+	u32 insn_processed;
 
 	if (!aux->func_info)
 		return 0;
@@ -18229,6 +18231,8 @@ again:
 		if (!bpf_subprog_is_global(env, i))
 			continue;
 
+		insn_processed = env->insn_processed;
+
 		sub_aux = subprog_aux(env, i);
 		if (!sub_aux->called || sub_aux->verified)
 			continue;
@@ -18236,6 +18240,7 @@ again:
 		env->insn_idx = env->subprog_info[i].start;
 		WARN_ON_ONCE(env->insn_idx == 0);
 		ret = do_check_common(env, i);
+		env->subprog_info[i].insn_processed = env->insn_processed - insn_processed;
 		if (ret) {
 			return ret;
 		} else if (env->log.level & BPF_LOG_LEVEL) {
@@ -18262,10 +18267,12 @@ again:
 
 static int do_check_main(struct bpf_verifier_env *env)
 {
+	u32 insn_processed = env->insn_processed;
 	int ret;
 
 	env->insn_idx = 0;
 	ret = do_check_common(env, 0);
+	env->subprog_info[0].insn_processed = env->insn_processed - insn_processed;
 	if (!ret)
 		env->prog->aux->stack_depth = env->subprog_info[0].stack_depth;
 	return ret;
@@ -18286,6 +18293,13 @@ static void print_verification_stats(struct bpf_verifier_env *env)
 			verbose(env, "%d", depth);
 			if (i + 1 < env->subprog_cnt)
 				verbose(env, "+");
+		}
+		verbose(env, "\n");
+		verbose(env, "insns processed %d", env->subprog_info[0].insn_processed);
+		for (i = 1; i < env->subprog_cnt; i++) {
+			if (!bpf_subprog_is_global(env, i))
+				continue;
+			verbose(env, "+%d", env->subprog_info[i].insn_processed);
 		}
 		verbose(env, "\n");
 	}
