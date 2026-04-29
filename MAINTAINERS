@@ -4699,6 +4699,12 @@ L:	bpf@vger.kernel.org
 S:	Maintained
 F:	arch/loongarch/net/
 
+BPF JIT FOR M68K
+M:	Kuan-Wei Chiu <visitorckw@gmail.com>
+L:	bpf@vger.kernel.org
+S:	Maintained
+F:	arch/m68k/net/
+
 BPF JIT for MIPS (32-BIT AND 64-BIT)
 M:	Johan Almbladh <johan.almbladh@anyfinetworks.com>
 M:	Paul Burton <paulburton@kernel.org>
