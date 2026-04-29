@@ -10,6 +10,7 @@
 #include "test_get_xattr.skel.h"
 #include "test_set_remove_xattr.skel.h"
 #include "test_fsverity.skel.h"
+#include "test_create_check_xattr.skel.h"
 
 static const char testfile[] = "/tmp/test_progs_fs_kfuncs";
 
@@ -268,6 +269,37 @@ out:
 	remove(testfile);
 }
 
+void test_create_check_xattr(void)
+{
+	struct test_create_check_xattr *skel = NULL;
+	int fd = -1, err;
+
+	/* Remove the file if it exists */
+	remove(testfile);
+
+	skel = test_create_check_xattr__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_create_check_xattr__open_and_load"))
+		return;
+
+	skel->bss->monitored_pid = getpid();
+	err = test_create_check_xattr__attach(skel);
+	if (!ASSERT_OK(err, "test_create_check_xattr__attach"))
+		goto out;
+
+	fd = open(testfile, O_CREAT | O_RDONLY, 0644);
+	if (!ASSERT_GE(fd, 0, "create_file"))
+		goto out;
+
+	ASSERT_TRUE(skel->bss->create_get_dentry_xattr_fail, "create_get_dentry_xattr_fail");
+	ASSERT_TRUE(skel->bss->create_set_dentry_xattr_fail, "create_set_dentry_xattr_fail");
+	ASSERT_TRUE(skel->bss->create_remove_dentry_xattr_fail, "create_remove_dentry_xattr_fail");
+
+out:
+	close(fd);
+	test_create_check_xattr__destroy(skel);
+	remove(testfile);
+}
+
 void test_fs_kfuncs(void)
 {
 	/* Matches xattr_names in progs/test_get_xattr.c */
@@ -288,4 +320,7 @@ void test_fs_kfuncs(void)
 
 	if (test__start_subtest("fsverity"))
 		test_fsverity();
+
+	if (test__start_subtest("create_check_xattr"))
+		test_create_check_xattr();
 }
