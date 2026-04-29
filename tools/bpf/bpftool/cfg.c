@@ -142,7 +142,7 @@ static bool cfg_partition_funcs(struct cfg *cfg, struct bpf_insn *cur,
 			continue;
 		if (cur->src_reg != BPF_PSEUDO_CALL)
 			continue;
-		func = cfg_append_func(cfg, cur + cur->off + 1);
+		func = cfg_append_func(cfg, cur + cur->imm + 1);
 		if (!func)
 			return true;
 	}
