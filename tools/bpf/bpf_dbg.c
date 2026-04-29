@@ -918,21 +918,30 @@ static struct pcap_pkthdr *pcap_curr_pkt(void)
 	return (void *) pcap_ptr_va_curr;
 }
 
-static bool pcap_next_pkt(void)
+static bool pcap_curr_pkt_valid(void)
 {
 	struct pcap_pkthdr *hdr = pcap_curr_pkt();
 
 	if (pcap_ptr_va_curr + sizeof(*hdr) -
-	    pcap_ptr_va_start >= pcap_map_size)
+	    pcap_ptr_va_start > pcap_map_size)
 		return false;
 	if (hdr->caplen == 0 || hdr->len == 0 || hdr->caplen > hdr->len)
 		return false;
 	if (pcap_ptr_va_curr + sizeof(*hdr) + hdr->caplen -
-	    pcap_ptr_va_start >= pcap_map_size)
+	    pcap_ptr_va_start > pcap_map_size)
 		return false;
-
-	pcap_ptr_va_curr += (sizeof(*hdr) + hdr->caplen);
 	return true;
+}
+
+static bool pcap_next_pkt(void)
+{
+	struct pcap_pkthdr *hdr;
+
+	if (!pcap_curr_pkt_valid())
+		return false;
+	hdr = pcap_curr_pkt();
+	pcap_ptr_va_curr += (sizeof(*hdr) + hdr->caplen);
+	return pcap_curr_pkt_valid();
 }
 
 static void pcap_reset_pkt(void)
@@ -1143,7 +1152,7 @@ static int cmd_select(char *num)
 
 	for (i = 0; i < which && (have_next = pcap_next_pkt()); i++)
 		/* noop */;
-	if (!have_next || pcap_curr_pkt() == NULL) {
+	if (!have_next || !pcap_curr_pkt_valid()) {
 		rl_printf("no packet #%u available!\n", which);
 		pcap_reset_pkt();
 		return CMD_ERR;
