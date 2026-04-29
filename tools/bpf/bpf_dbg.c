@@ -1141,7 +1141,7 @@ static int cmd_select(char *num)
 	pcap_reset_pkt();
 	bpf_reset();
 
-	for (i = 0; i < which && (have_next = pcap_next_pkt()); i++)
+	for (i = 1; i < which && (have_next = pcap_next_pkt()); i++)
 		/* noop */;
 	if (!have_next || pcap_curr_pkt() == NULL) {
 		rl_printf("no packet #%u available!\n", which);
