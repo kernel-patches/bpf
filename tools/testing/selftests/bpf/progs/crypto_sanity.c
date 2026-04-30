@@ -82,6 +82,34 @@ int skb_crypto_setup(void *ctx)
 	return 0;
 }
 
+SEC("syscall")
+int skb_crypto_setup_bad_algo(void *ctx)
+{
+	struct bpf_crypto_params params = {
+		.type = "skcipher",
+		.key_len = 16,
+	};
+	struct bpf_crypto_ctx *cctx;
+	int err = 0;
+
+	status = 0;
+
+	__builtin_memset(params.algo, 'a', sizeof(params.algo));
+	__builtin_memcpy(&params.key, key, sizeof(key));
+
+	cctx = bpf_crypto_ctx_create(&params, sizeof(params), &err);
+	if (cctx) {
+		bpf_crypto_ctx_release(cctx);
+		status = -EIO;
+		return 0;
+	}
+
+	if (err != -EINVAL)
+		status = err;
+
+	return 0;
+}
+
 SEC("tc")
 int decrypt_sanity(struct __sk_buff *skb)
 {
