@@ -8593,29 +8593,31 @@ static int find_ksym_btf_id(struct bpf_object *obj, const char *ksym_name,
 {
 	struct module_btf *mod_btf;
 	struct btf *btf;
-	int i, id, err;
+	int i, id = 0, err;
 
+	mod_btf = NULL;
+
+	err = load_module_btfs(obj);
+	if (err)
+		goto search_vmlinux;
+
+	for (i = 0; i < obj->btf_module_cnt; i++) {
+		/* we assume module_btf's BTF FD is always >0 */
+		mod_btf = &obj->btf_modules[i];
+		btf = mod_btf->btf;
+		id = btf__find_by_name_kind_own(btf, ksym_name, kind);
+		if (id != -ENOENT)
+			goto found;
+	}
+
+search_vmlinux:
 	btf = obj->btf_vmlinux;
 	mod_btf = NULL;
 	id = btf__find_by_name_kind(btf, ksym_name, kind);
-
-	if (id == -ENOENT) {
-		err = load_module_btfs(obj);
-		if (err)
-			return err;
-
-		for (i = 0; i < obj->btf_module_cnt; i++) {
-			/* we assume module_btf's BTF FD is always >0 */
-			mod_btf = &obj->btf_modules[i];
-			btf = mod_btf->btf;
-			id = btf__find_by_name_kind_own(btf, ksym_name, kind);
-			if (id != -ENOENT)
-				break;
-		}
-	}
-	if (id <= 0)
+	if (id == -ENOENT)
 		return -ESRCH;
 
+found:
 	*res_btf = btf;
 	*res_mod_btf = mod_btf;
 	return id;
