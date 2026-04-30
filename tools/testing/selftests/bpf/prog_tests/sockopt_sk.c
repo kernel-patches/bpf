@@ -190,7 +190,7 @@ static int getsetsockopt(void)
 	fd = socket(AF_NETLINK, SOCK_RAW, 0);
 	if (fd < 0) {
 		log_err("Failed to create AF_NETLINK socket");
-		return -1;
+		goto err;
 	}
 
 	buf.u32 = 1;
@@ -210,6 +210,21 @@ static int getsetsockopt(void)
 		goto err;
 	}
 	ASSERT_EQ(optlen, 8, "Unexpected NETLINK_LIST_MEMBERSHIPS value");
+
+	/* Trick bpf_tcp_sock() with IPPROTO_TCP */
+	close(fd);
+	fd = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
+	if (fd < 0) {
+		log_err("Failed to create RAW socket");
+		goto err;
+	}
+
+	optlen = 60;
+	err = setsockopt(fd, SOL_TCP, TCP_SAVED_SYN, &buf, optlen);
+	if (err) {
+		log_err("Unexpected setsockopt(TCP_SAVED_SYN)");
+		goto err;
+	}
 
 	free(big_buf);
 	close(fd);
