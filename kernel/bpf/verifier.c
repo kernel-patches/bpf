@@ -2734,7 +2734,10 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	if (err)
 		return err;
 
-	addr = kallsyms_lookup_name(kfunc.name);
+	if (offset)
+		addr = module_kallsyms_lookup_name(kfunc.name);
+	else
+		addr = kallsyms_lookup_name(kfunc.name);
 	if (!addr) {
 		verbose(env, "cannot find address for kernel function %s\n", kfunc.name);
 		return -EINVAL;
