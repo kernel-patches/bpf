@@ -1388,9 +1388,6 @@ static ssize_t governor_store(struct device *dev, struct device_attribute *attr,
 	char str_governor[DEVFREQ_NAME_LEN + 1];
 	const struct devfreq_governor *governor, *prev_governor;
 
-	if (!df->governor)
-		return -EINVAL;
-
 	ret = sscanf(buf, "%" __stringify(DEVFREQ_NAME_LEN) "s", str_governor);
 	if (ret != 1)
 		return -EINVAL;
@@ -1401,6 +1398,9 @@ static ssize_t governor_store(struct device *dev, struct device_attribute *attr,
 		ret = PTR_ERR(governor);
 		goto out;
 	}
+	if (!df->governor)
+		goto start_new_governor;
+
 	if (df->governor == governor) {
 		ret = 0;
 		goto out;
@@ -1421,6 +1421,7 @@ static ssize_t governor_store(struct device *dev, struct device_attribute *attr,
 		goto out;
 	}
 
+start_new_governor:
 	/*
 	 * Start the new governor and create the specific sysfs files
 	 * which depend on the new governor.
@@ -1434,6 +1435,9 @@ static ssize_t governor_store(struct device *dev, struct device_attribute *attr,
 
 		/* Restore previous governor */
 		df->governor = prev_governor;
+		if (!df->governor)
+			goto out;
+
 		ret = df->governor->event_handler(df, DEVFREQ_GOV_START, NULL);
 		if (ret) {
 			dev_err(dev,
