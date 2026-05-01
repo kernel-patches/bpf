@@ -103,7 +103,17 @@ SKIP_LLVM ?=
 SKIP_LIBBFD ?=
 SKIP_CRYPTO ?=
 ifneq ($(SKIP_CRYPTO),1)
-  CRYPTO_LIBS := -lcrypto
+  # Resolve libcrypto link flags via pkg-config so transitive dependencies
+  # (e.g. libjitterentropy on distros where libcrypto.a references it) are
+  # included for static builds. Pass --static when the user requested a
+  # static build via EXTRA_LDFLAGS=-static. Fall back to -lcrypto if
+  # pkg-config or libcrypto.pc is unavailable.
+  ifneq ($(findstring -static,$(EXTRA_LDFLAGS)),)
+    CRYPTO_LIBS := $(shell pkg-config --libs --static libcrypto 2>/dev/null)
+  else
+    CRYPTO_LIBS := $(shell pkg-config --libs libcrypto 2>/dev/null)
+  endif
+  CRYPTO_LIBS := $(if $(CRYPTO_LIBS),$(CRYPTO_LIBS),-lcrypto)
 endif
 
 FEATURE_TESTS := clang-bpf-co-re
