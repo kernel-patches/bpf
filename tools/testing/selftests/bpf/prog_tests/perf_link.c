@@ -18,29 +18,84 @@ static void burn_cpu(void)
 		barrier();
 }
 
-void test_perf_link(void)
+static int perf_link_setup(struct test_perf_link **skel, int *pfd)
 {
-	struct test_perf_link *skel = NULL;
 	struct perf_event_attr attr;
-	int pfd = -1, link_fd = -1, err;
-	int run_cnt_before, run_cnt_after;
-	struct bpf_link_info info;
-	__u32 info_len = sizeof(info);
-	__u64 timeout_time_ns;
 
-	/* create perf event */
 	memset(&attr, 0, sizeof(attr));
 	attr.size = sizeof(attr);
 	attr.type = PERF_TYPE_SOFTWARE;
 	attr.config = PERF_COUNT_SW_CPU_CLOCK;
 	attr.freq = 1;
 	attr.sample_freq = 1000;
-	pfd = syscall(__NR_perf_event_open, &attr, 0, -1, -1, PERF_FLAG_FD_CLOEXEC);
-	if (!ASSERT_GE(pfd, 0, "perf_fd"))
+	*pfd = syscall(__NR_perf_event_open, &attr, 0, -1, -1, PERF_FLAG_FD_CLOEXEC);
+	if (!ASSERT_GE(*pfd, 0, "perf_fd"))
+		return -1;
+
+	*skel = test_perf_link__open_and_load();
+	if (!ASSERT_OK_PTR(*skel, "skel_load"))
+		return -1;
+
+	return 0;
+}
+
+void test_perf_link_detach(void)
+{
+	struct test_perf_link *skel = NULL;
+	int pfd = -1, link_fd = -1, err;
+	int run_cnt_before, run_cnt_after;
+	__u64 timeout_time_ns;
+
+	if (perf_link_setup(&skel, &pfd))
 		goto cleanup;
 
-	skel = test_perf_link__open_and_load();
-	if (!ASSERT_OK_PTR(skel, "skel_load"))
+	link_fd = bpf_link_create(bpf_program__fd(skel->progs.handler), pfd,
+				  BPF_PERF_EVENT, NULL);
+	if (!ASSERT_GE(link_fd, 0, "link_fd"))
+		goto cleanup;
+
+	/* ensure we get at least one perf_event prog execution */
+	timeout_time_ns = get_time_ns() + BURN_TIMEOUT_NS;
+	while (true) {
+		burn_cpu();
+		if (skel->bss->run_cnt > 0)
+			break;
+		if (!ASSERT_LT(get_time_ns(), timeout_time_ns, "run_cnt_timeout"))
+			goto cleanup;
+	}
+
+	/* detach via BPF_LINK_DETACH - BPF program should no longer be executed */
+	err = bpf_link_detach(link_fd);
+	if (!ASSERT_OK(err, "link_detach"))
+		goto cleanup;
+
+	/* make sure there are no stragglers */
+	kern_sync_rcu();
+
+	run_cnt_before = skel->bss->run_cnt;
+	burn_cpu();
+	run_cnt_after = skel->bss->run_cnt;
+
+	ASSERT_EQ(run_cnt_before, run_cnt_after, "run_cnt_detached");
+
+cleanup:
+	if (link_fd >= 0)
+		close(link_fd);
+	if (pfd >= 0)
+		close(pfd);
+	test_perf_link__destroy(skel);
+}
+
+void test_perf_link(void)
+{
+	struct test_perf_link *skel = NULL;
+	int pfd = -1, link_fd = -1, err;
+	int run_cnt_before, run_cnt_after;
+	struct bpf_link_info info;
+	__u32 info_len = sizeof(info);
+	__u64 timeout_time_ns;
+
+	if (perf_link_setup(&skel, &pfd))
 		goto cleanup;
 
 	link_fd = bpf_link_create(bpf_program__fd(skel->progs.handler), pfd,
