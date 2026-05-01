@@ -103,7 +103,35 @@ SKIP_LLVM ?=
 SKIP_LIBBFD ?=
 SKIP_CRYPTO ?=
 ifneq ($(SKIP_CRYPTO),1)
-  CRYPTO_LIBS := -lcrypto
+  PKG_CONFIG ?= $(CROSS_COMPILE)pkg-config
+  HOSTPKG_CONFIG ?= pkg-config
+
+  ifeq ($(shell command -v $(PKG_CONFIG) 2>/dev/null),)
+    NO_PKG_CONFIG := 1
+  endif
+  ifeq ($(shell command -v $(HOSTPKG_CONFIG) 2>/dev/null),)
+    NO_HOSTPKG_CONFIG := 1
+  endif
+
+  # Resolve libcrypto link flags via pkg-config when available, so transitive
+  # dependencies (e.g. libjitterentropy on distros where libcrypto.a
+  # references it) are included for static builds. Pass --static when the
+  # user requested a static build via EXTRA_LDFLAGS=-static.
+  ifneq ($(filter -static,$(EXTRA_LDFLAGS)),)
+    PKG_CONFIG_LIBCRYPTO := --libs --static libcrypto
+  else
+    PKG_CONFIG_LIBCRYPTO := --libs libcrypto
+  endif
+
+  ifndef NO_PKG_CONFIG
+    CRYPTO_LIBS := $(shell $(PKG_CONFIG) $(PKG_CONFIG_LIBCRYPTO) 2>/dev/null)
+  endif
+  CRYPTO_LIBS := $(if $(CRYPTO_LIBS),$(CRYPTO_LIBS),-lcrypto)
+
+  ifndef NO_HOSTPKG_CONFIG
+    CRYPTO_LIBS_BOOTSTRAP := $(shell $(HOSTPKG_CONFIG) $(PKG_CONFIG_LIBCRYPTO) 2>/dev/null)
+  endif
+  CRYPTO_LIBS_BOOTSTRAP := $(if $(CRYPTO_LIBS_BOOTSTRAP),$(CRYPTO_LIBS_BOOTSTRAP),-lcrypto)
 endif
 
 FEATURE_TESTS := clang-bpf-co-re
@@ -140,7 +168,7 @@ endif
 endif
 
 LIBS = $(LIBBPF) -lelf $(CRYPTO_LIBS) -lz
-LIBS_BOOTSTRAP = $(LIBBPF_BOOTSTRAP) -lelf $(CRYPTO_LIBS) -lz
+LIBS_BOOTSTRAP = $(LIBBPF_BOOTSTRAP) -lelf $(CRYPTO_LIBS_BOOTSTRAP) -lz
 
 ifeq ($(feature-libelf-zstd),1)
 LIBS += -lzstd
