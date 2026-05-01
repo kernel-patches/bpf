@@ -3880,13 +3880,35 @@ struct bpf_perf_link {
 	struct file *perf_file;
 };
 
+/* Serializes bpf_perf_link_release() against bpf_perf_link_fill_link_info()
+ * and bpf_perf_link_show_fdinfo() to prevent a use-after-free on perf_file
+ * when BPF_LINK_DETACH races with BPF_OBJ_GET_INFO_BY_FD or /proc fdinfo.
+ */
+static DEFINE_MUTEX(bpf_perf_link_mutex);
+
 static void bpf_perf_link_release(struct bpf_link *link)
 {
 	struct bpf_perf_link *perf_link = container_of(link, struct bpf_perf_link, link);
-	struct perf_event *event = perf_link->perf_file->private_data;
+	struct perf_event *event;
+	struct file *perf_file;
 
+	mutex_lock(&bpf_perf_link_mutex);
+	perf_file = perf_link->perf_file;
+	perf_link->perf_file = NULL;
+	mutex_unlock(&bpf_perf_link_mutex);
+
+	if (!perf_file)
+		return;
+
+	event = perf_file->private_data;
 	perf_event_free_bpf_prog(event);
-	fput(perf_link->perf_file);
+	fput(perf_file);
+}
+
+static int bpf_perf_link_detach(struct bpf_link *link)
+{
+	bpf_perf_link_release(link);
+	return 0;
 }
 
 static void bpf_perf_link_dealloc(struct bpf_link *link)
@@ -4095,22 +4117,42 @@ static int bpf_perf_link_fill_link_info(const struct bpf_link *link,
 {
 	struct bpf_perf_link *perf_link;
 	const struct perf_event *event;
+	struct file *perf_file;
+	int ret;
 
 	perf_link = container_of(link, struct bpf_perf_link, link);
-	event = perf_get_event(perf_link->perf_file);
-	if (IS_ERR(event))
+
+	mutex_lock(&bpf_perf_link_mutex);
+	perf_file = perf_link->perf_file;
+	if (perf_file)
+		get_file(perf_file);
+	mutex_unlock(&bpf_perf_link_mutex);
+
+	if (!perf_file)
+		return 0;
+
+	event = perf_get_event(perf_file);
+	if (IS_ERR(event)) {
+		fput(perf_file);
 		return PTR_ERR(event);
+	}
 
 	switch (event->prog->type) {
 	case BPF_PROG_TYPE_PERF_EVENT:
-		return bpf_perf_link_fill_perf_event(event, info);
+		ret = bpf_perf_link_fill_perf_event(event, info);
+		break;
 	case BPF_PROG_TYPE_TRACEPOINT:
-		return bpf_perf_link_fill_tracepoint(event, info);
+		ret = bpf_perf_link_fill_tracepoint(event, info);
+		break;
 	case BPF_PROG_TYPE_KPROBE:
-		return bpf_perf_link_fill_probe(event, info);
+		ret = bpf_perf_link_fill_probe(event, info);
+		break;
 	default:
-		return -EOPNOTSUPP;
+		ret = -EOPNOTSUPP;
 	}
+
+	fput(perf_file);
+	return ret;
 }
 
 static void bpf_perf_event_link_show_fdinfo(const struct perf_event *event,
@@ -4163,26 +4205,43 @@ static void bpf_perf_link_show_fdinfo(const struct bpf_link *link,
 {
 	struct bpf_perf_link *perf_link;
 	const struct perf_event *event;
+	struct file *perf_file;
 
 	perf_link = container_of(link, struct bpf_perf_link, link);
-	event = perf_get_event(perf_link->perf_file);
-	if (IS_ERR(event))
+
+	mutex_lock(&bpf_perf_link_mutex);
+	perf_file = perf_link->perf_file;
+	if (perf_file)
+		get_file(perf_file);
+	mutex_unlock(&bpf_perf_link_mutex);
+
+	if (!perf_file)
 		return;
+
+	event = perf_get_event(perf_file);
+	if (IS_ERR(event))
+		goto out;
 
 	switch (event->prog->type) {
 	case BPF_PROG_TYPE_PERF_EVENT:
-		return bpf_perf_event_link_show_fdinfo(event, seq);
+		bpf_perf_event_link_show_fdinfo(event, seq);
+		break;
 	case BPF_PROG_TYPE_TRACEPOINT:
-		return bpf_tracepoint_link_show_fdinfo(event, seq);
+		bpf_tracepoint_link_show_fdinfo(event, seq);
+		break;
 	case BPF_PROG_TYPE_KPROBE:
-		return bpf_probe_link_show_fdinfo(event, seq);
+		bpf_probe_link_show_fdinfo(event, seq);
+		break;
 	default:
-		return;
+		break;
 	}
+out:
+	fput(perf_file);
 }
 
 static const struct bpf_link_ops bpf_perf_link_lops = {
 	.release = bpf_perf_link_release,
+	.detach = bpf_perf_link_detach,
 	.dealloc = bpf_perf_link_dealloc,
 	.fill_link_info = bpf_perf_link_fill_link_info,
 	.show_fdinfo = bpf_perf_link_show_fdinfo,
