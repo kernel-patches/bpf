@@ -44,4 +44,12 @@ config BFQ_CGROUP_DEBUG
 	Enable some debugging help. Currently it exports additional stat
 	files in a cgroup which can be useful for debugging.
 
+config IOSCHED_UFQ
+	tristate "UFQ I/O scheduler"
+	default y
+	help
+	The UFQ I/O scheduler is a programmable I/O scheduler. When
+	enabled, an out-of-kernel I/O scheduler based on eBPF can be
+	designed to interact with it, leveraging its customizable
+	hooks to redefine I/O scheduling policies.
 endmenu

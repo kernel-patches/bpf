@@ -796,7 +796,7 @@ static void blk_mq_finish_request(struct request *rq)
 	}
 }
 
-static void __blk_mq_free_request(struct request *rq)
+void __blk_mq_free_request(struct request *rq)
 {
 	struct request_queue *q = rq->q;
 	struct blk_mq_ctx *ctx = rq->mq_ctx;
@@ -1843,6 +1843,12 @@ static bool dispatch_rq_from_ctx(struct sbitmap *sb, unsigned int bitnr,
 		list_del_init(&dispatch_data->rq->queuelist);
 		if (list_empty(&ctx->rq_lists[type]))
 			sbitmap_clear_bit(sb, bitnr);
+	}
+
+	if (dispatch_data->rq) {
+		dispatch_data->rq->rq_flags |= RQF_STARTED;
+		if (hctx->queue->last_merge == dispatch_data->rq)
+			hctx->queue->last_merge = NULL;
 	}
 	spin_unlock(&ctx->lock);
 

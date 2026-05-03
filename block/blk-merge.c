@@ -774,8 +774,8 @@ u8 bio_seg_gap(struct request_queue *q, struct bio *prev, struct bio *next,
  * For non-mq, this has to be called with the request spinlock acquired.
  * For mq with scheduling, the appropriate queue wide lock should be held.
  */
-static struct request *attempt_merge(struct request_queue *q,
-				     struct request *req, struct request *next)
+static struct request *attempt_merge(struct request_queue *q, struct request *req,
+				     struct request *next, bool nohash)
 {
 	if (!rq_mergeable(req) || !rq_mergeable(next))
 		return NULL;
@@ -842,7 +842,7 @@ static struct request *attempt_merge(struct request_queue *q,
 
 	req->__data_len += blk_rq_bytes(next);
 
-	if (!blk_discard_mergable(req))
+	if (!nohash && !blk_discard_mergable(req))
 		elv_merge_requests(q, req, next);
 
 	blk_crypto_rq_put_keyslot(next);
@@ -868,7 +868,7 @@ static struct request *attempt_back_merge(struct request_queue *q,
 	struct request *next = elv_latter_request(q, rq);
 
 	if (next)
-		return attempt_merge(q, rq, next);
+		return attempt_merge(q, rq, next, false);
 
 	return NULL;
 }
@@ -879,9 +879,15 @@ static struct request *attempt_front_merge(struct request_queue *q,
 	struct request *prev = elv_former_request(q, rq);
 
 	if (prev)
-		return attempt_merge(q, prev, rq);
+		return attempt_merge(q, prev, rq, false);
 
 	return NULL;
+}
+
+struct request *bpf_attempt_merge(struct request_queue *q, struct request *rq,
+				  struct request *next)
+{
+	return attempt_merge(q, rq, next, true);
 }
 
 /*
@@ -892,7 +898,7 @@ static struct request *attempt_front_merge(struct request_queue *q,
 bool blk_attempt_req_merge(struct request_queue *q, struct request *rq,
 			   struct request *next)
 {
-	return attempt_merge(q, rq, next);
+	return attempt_merge(q, rq, next, false);
 }
 
 bool blk_rq_merge_ok(struct request *rq, struct bio *bio)
@@ -1035,11 +1041,11 @@ no_merge:
 	return BIO_MERGE_FAILED;
 }
 
-static enum bio_merge_status blk_attempt_bio_merge(struct request_queue *q,
-						   struct request *rq,
-						   struct bio *bio,
-						   unsigned int nr_segs,
-						   bool sched_allow_merge)
+enum bio_merge_status blk_attempt_bio_merge(struct request_queue *q,
+					    struct request *rq,
+					    struct bio *bio,
+					    unsigned int nr_segs,
+					    bool sched_allow_merge)
 {
 	if (!blk_rq_merge_ok(rq, bio))
 		return BIO_MERGE_NONE;
