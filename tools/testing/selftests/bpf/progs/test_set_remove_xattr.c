@@ -17,6 +17,14 @@ static const char xattr_selinux[] = "security.selinux";
 char value_bar[] = "world";
 char read_value[32];
 
+const char xattr_negative[] = "security.bpf.negative";
+int ret_code_name_empty;
+int ret_code_name_too_long;
+int ret_code_value_too_large;
+int ret_code_invalid_flags;
+char long_name[257];
+char large_value[65537];
+
 bool set_security_bpf_bar_success;
 bool remove_security_bpf_bar_success;
 bool set_security_selinux_fail;
@@ -72,6 +80,19 @@ int BPF_PROG(test_inode_getxattr, struct dentry *dentry, char *name)
 		if (ret)
 			remove_security_selinux_fail = true;
 	}
+
+	bpf_dynptr_from_mem(read_value, sizeof(read_value), 0, &value_ptr);
+	ret_code_name_empty = bpf_get_dentry_xattr(dentry, "", &value_ptr);
+	ret_code_name_too_long =
+		bpf_get_dentry_xattr(dentry, long_name, &value_ptr);
+
+	bpf_dynptr_from_mem(large_value, sizeof(large_value), 0, &value_ptr);
+	ret_code_value_too_large =
+		bpf_set_dentry_xattr(dentry, xattr_negative, &value_ptr, 0);
+
+	bpf_dynptr_from_mem(value_bar, sizeof(value_bar), 0, &value_ptr);
+	ret_code_invalid_flags = bpf_set_dentry_xattr(dentry, xattr_negative,
+						      &value_ptr, 0xFFFF);
 
 	return 0;
 }

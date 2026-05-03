@@ -128,6 +128,11 @@ static void test_set_remove_xattr(void)
 	if (!ASSERT_OK_PTR(skel, "test_set_remove_xattr__open_and_load"))
 		return;
 
+	/* Prepare the long name for negative test */
+	memset(skel->bss->long_name, 'a', 256);
+	memcpy(skel->bss->long_name, "security.bpf.", 13);
+	skel->bss->long_name[256] = '\0';
+
 	/* Set security.bpf.foo to "hello" */
 	err = setxattr(testfile, skel->rodata->xattr_foo, value_foo, strlen(value_foo) + 1, 0);
 	if (err && errno == EOPNOTSUPP) {
@@ -187,6 +192,14 @@ static void test_set_remove_xattr(void)
 		    "locked_set_security_selinux_fail");
 	ASSERT_TRUE(skel->bss->locked_remove_security_selinux_fail,
 		    "locked_remove_security_selinux_fail");
+
+	ASSERT_EQ(skel->bss->ret_name_empty, -ERANGE, "ret_code_name_empty");
+	ASSERT_EQ(skel->bss->ret_name_too_long, -ERANGE,
+		  "ret_code_name_too_long");
+	ASSERT_EQ(skel->bss->ret_value_too_large, -E2BIG,
+		  "ret_code_value_too_large");
+	ASSERT_EQ(skel->bss->ret_invalid_flags, -EINVAL,
+		  "ret_code_invalid_flags");
 
 out:
 	close(fd);
