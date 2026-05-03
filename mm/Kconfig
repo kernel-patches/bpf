@@ -962,6 +962,20 @@ config NO_PAGE_MAPCOUNT
 
 	  EXPERIMENTAL because the impact of some changes is still unclear.
 
+config BPF_TRANSPARENT_HUGEPAGE
+	bool "BPF-based transparent hugepage (EXPERIMENTAL)"
+	depends on TRANSPARENT_HUGEPAGE
+	help
+	  Using cgroup-bpf to customize mTHP size for different scenarios,
+	  automatically select different mTHP sizes for different cgroups,
+	  let's focus on making them truly transparent.
+
+	  This is an experimental feature, that might go away at any time,
+	  Please do not rely any production environment.
+
+	  EXPERIMENTAL because the BPF interface is unstable and may be removed
+	  at any time.
+
 endif # TRANSPARENT_HUGEPAGE
 
 # simple helper to make the code a bit easier to read

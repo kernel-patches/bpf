@@ -4885,7 +4885,10 @@ M:	Shakeel Butt <shakeel.butt@linux.dev>
 L:	bpf@vger.kernel.org
 L:	linux-mm@kvack.org
 S:	Maintained
+F:	include/linux/bpf_huge_memory.h
+F:	mm/bpf_huge_memory.c
 F:	mm/bpf_memcontrol.c
+F:	samples/bpf/mthp_ext.*
 
 BPF [MISC]
 L:	bpf@vger.kernel.org
