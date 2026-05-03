@@ -183,6 +183,7 @@ unsigned int trace_call_bpf_faultable(struct trace_event_call *call, void *ctx)
 #ifdef CONFIG_BPF_KPROBE_OVERRIDE
 BPF_CALL_2(bpf_override_return, struct pt_regs *, regs, unsigned long, rc)
 {
+	add_taint(TAINT_UNSAFE_BPF, LOCKDEP_STILL_OK);
 	regs_set_return_value(regs, rc);
 	override_function_with_return(regs);
 	return 0;
@@ -371,6 +372,8 @@ BPF_CALL_3(bpf_probe_write_user, void __user *, unsafe_ptr, const void *, src,
 		return -EPERM;
 	if (unlikely(!nmi_uaccess_okay()))
 		return -EPERM;
+
+	add_taint(TAINT_UNSAFE_BPF, LOCKDEP_STILL_OK);
 
 	return copy_to_user_nofault(unsafe_ptr, src, size);
 }
