@@ -3083,6 +3083,13 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	if (err < 0)
 		goto free_used_maps;
 
+	/*
+	 * The program has passed the verifier. If it utilises unsafe
+	 * helpers, formally taint the kernel now.
+	 */
+	if (prog->aux->taints_kernel)
+		add_taint(TAINT_UNSAFE_BPF, LOCKDEP_STILL_OK);
+
 	err = bpf_prog_mark_insn_arrays_ready(prog);
 	if (err < 0)
 		goto free_used_maps;

@@ -9906,6 +9906,14 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		return err;
 	}
 
+	/*
+	 * Flag the program if it attempts to use mutating helpers.
+	 * The actual taint is deferred until successful verification.
+	 */
+	if (func_id == BPF_FUNC_probe_write_user ||
+	    func_id == BPF_FUNC_override_return)
+		env->prog->aux->taints_kernel = true;
+
 	/* eBPF programs must be GPL compatible to use GPL-ed functions */
 	if (!env->prog->gpl_compatible && fn->gpl_only) {
 		verbose(env, "cannot call GPL-restricted function from non-GPL compatible program\n");
