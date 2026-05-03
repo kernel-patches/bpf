@@ -19,6 +19,9 @@
 #include <linux/lsm_hook_defs.h>
 #undef LSM_HOOK
 
+/* max bpf xattrs per inode */
+#define BPF_LSM_INODE_INIT_XATTRS 1
+
 struct bpf_storage_blob {
 	struct bpf_local_storage __rcu *storage;
 };
