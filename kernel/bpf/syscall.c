@@ -3109,6 +3109,13 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, u32 uattr_size)
 	perf_event_bpf_event(prog, PERF_BPF_EVENT_PROG_LOAD, 0);
 	bpf_audit_prog(prog, BPF_AUDIT_LOAD);
 
+	/*
+	 * The program has passed the verifier and is now publicly exposed.
+	 * If it utilises unsafe helpers, formally taint the kernel now.
+	 */
+	if (prog->aux->taints_kernel)
+		add_taint(TAINT_UNSAFE_BPF, LOCKDEP_STILL_OK);
+
 	err = bpf_prog_new_fd(prog);
 	if (err < 0)
 		bpf_prog_put(prog);
