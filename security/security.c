@@ -1334,6 +1334,7 @@ int security_inode_init_security(struct inode *inode, struct inode *dir,
 {
 	struct lsm_static_call *scall;
 	struct xattr *new_xattrs = NULL;
+	struct lsm_xattr_ctx xattr_ctx;
 	int ret = -EOPNOTSUPP, xattr_count = 0;
 
 	if (unlikely(IS_PRIVATE(inode)))
@@ -1349,10 +1350,12 @@ int security_inode_init_security(struct inode *inode, struct inode *dir,
 		if (!new_xattrs)
 			return -ENOMEM;
 	}
+	xattr_ctx.xattrs = new_xattrs;
+	xattr_ctx.xattr_count = &xattr_count;
 
 	lsm_for_each_hook(scall, inode_init_security) {
-		ret = scall->hl->hook.inode_init_security(inode, dir, qstr, new_xattrs,
-						  &xattr_count);
+		ret = scall->hl->hook.inode_init_security(inode, dir, qstr,
+							  &xattr_ctx);
 		if (ret && ret != -EOPNOTSUPP)
 			goto out;
 		/*
