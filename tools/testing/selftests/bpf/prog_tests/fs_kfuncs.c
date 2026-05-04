@@ -115,18 +115,18 @@ static void validate_bar_removed(struct test_set_remove_xattr *skel)
 static void test_set_remove_xattr(void)
 {
 	struct test_set_remove_xattr *skel = NULL;
-	int fd = -1, err;
+	int fd, err;
 
 	fd = open(testfile, O_CREAT | O_RDONLY, 0644);
 	if (!ASSERT_GE(fd, 0, "create_file"))
 		return;
 
 	close(fd);
-	fd = -1;
 
 	skel = test_set_remove_xattr__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "test_set_remove_xattr__open_and_load"))
-		return;
+		goto out;
+
 
 	/* Set security.bpf.foo to "hello" */
 	err = setxattr(testfile, skel->rodata->xattr_foo, value_foo, strlen(value_foo) + 1, 0);
@@ -188,8 +188,16 @@ static void test_set_remove_xattr(void)
 	ASSERT_TRUE(skel->bss->locked_remove_security_selinux_fail,
 		    "locked_remove_security_selinux_fail");
 
+	ASSERT_EQ(skel->bss->ret_code_name_empty, -ERANGE,
+		  "ret_code_name_empty");
+	ASSERT_EQ(skel->bss->ret_code_name_too_long, -ERANGE,
+		  "ret_code_name_too_long");
+	ASSERT_EQ(skel->bss->ret_code_value_too_large, -E2BIG,
+		  "ret_code_value_too_large");
+	ASSERT_EQ(skel->bss->ret_code_invalid_flags, -EINVAL,
+		  "ret_code_invalid_flags");
+
 out:
-	close(fd);
 	test_set_remove_xattr__destroy(skel);
 	remove(testfile);
 }
