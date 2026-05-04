@@ -93,6 +93,21 @@ __bpf_kfunc int bpf_path_d_path(const struct path *path, char *buf, size_t buf__
 	return len;
 }
 
+static int bpf_xattr_validate_name(const char *name)
+{
+	u32 name_len;
+
+	/*
+	 * Impose the same restrictions on the supplied name as done so within
+	 * the VFS by helpers like import_xattr_name().
+	 */
+	name_len = strlen(name);
+	if (!name_len || name_len > XATTR_NAME_MAX)
+		return -ERANGE;
+
+	return 0;
+}
+
 static bool match_security_bpf_prefix(const char *name__str)
 {
 	return !strncmp(name__str, XATTR_NAME_BPF_LSM, XATTR_NAME_BPF_LSM_LEN);
@@ -117,10 +132,10 @@ static int bpf_xattr_read_permission(const char *name, struct inode *inode)
  * @name__str: name of the xattr
  * @value_p: output buffer of the xattr value
  *
- * Get xattr *name__str* of *dentry* and store the output in *value_ptr*.
+ * Get xattr *name__str* of *dentry* and store the output in *value_p*.
  *
- * For security reasons, only *name__str* with prefixes "user." or
- * "security.bpf." are allowed.
+ * For security reasons, only *name__str* values prefixed with "user." or
+ * "security.bpf." are permitted.
  *
  * Return: length of the xattr value on success, a negative value on error.
  */
@@ -132,6 +147,10 @@ __bpf_kfunc int bpf_get_dentry_xattr(struct dentry *dentry, const char *name__st
 	u32 value_len;
 	void *value;
 	int ret;
+
+	ret = bpf_xattr_validate_name(name__str);
+	if (ret)
+		return ret;
 
 	value_len = __bpf_dynptr_size(value_ptr);
 	value = __bpf_dynptr_data_rw(value_ptr, value_len);
@@ -150,10 +169,10 @@ __bpf_kfunc int bpf_get_dentry_xattr(struct dentry *dentry, const char *name__st
  * @name__str: name of the xattr
  * @value_p: output buffer of the xattr value
  *
- * Get xattr *name__str* of *file* and store the output in *value_ptr*.
+ * Get xattr *name__str* of *file* and store the output in *value_p*.
  *
- * For security reasons, only *name__str* with prefixes "user." or
- * "security.bpf." are allowed.
+ * For security reasons, only *name__str* values prefixed with "user." or
+ * "security.bpf." are permitted.
  *
  * Return: length of the xattr value on success, a negative value on error.
  */
@@ -187,10 +206,18 @@ static int bpf_xattr_write_permission(const char *name, struct inode *inode)
  * @value_p: xattr value
  * @flags: flags to pass into filesystem operations
  *
- * Set xattr *name__str* of *dentry* to the value in *value_ptr*.
+ * Set xattr *name__str* of *dentry* to the value in *value_p*.
  *
- * For security reasons, only *name__str* with prefix "security.bpf."
- * is allowed.
+ * For security reasons, only *name__str* values prefixed with "security.bpf."
+ * are permitted.
+ *
+ * The length constraints imposed on both the xattr name and value abide those
+ * that are also enforced by the VFS. Additionally, the flags argument respects
+ * what's enforced by the VFS in the same way. By default, the flag value of 0
+ * is permitted and an xattr will be created if it does not exist, or the value
+ * will be replaced if the xattr already exists. More course grained control
+ * over these exact semantics is permitted by explicitly specifying either
+ * XATTR_CREATE or XATTR_REPLACE.
  *
  * The caller already locked dentry->d_inode.
  *
@@ -206,7 +233,17 @@ int bpf_set_dentry_xattr_locked(struct dentry *dentry, const char *name__str,
 	u32 value_len;
 	int ret;
 
+	if (flags & ~(XATTR_CREATE | XATTR_REPLACE))
+		return -EINVAL;
+
+	ret = bpf_xattr_validate_name(name__str);
+	if (ret)
+		return ret;
+
 	value_len = __bpf_dynptr_size(value_ptr);
+	if (value_len > XATTR_SIZE_MAX)
+		return -E2BIG;
+
 	value = __bpf_dynptr_data(value_ptr, value_len);
 	if (!value)
 		return -EINVAL;
@@ -237,8 +274,8 @@ int bpf_set_dentry_xattr_locked(struct dentry *dentry, const char *name__str,
  *
  * Rmove xattr *name__str* of *dentry*.
  *
- * For security reasons, only *name__str* with prefix "security.bpf."
- * is allowed.
+ * For security reasons, only *name__str* values prefixed with "security.bpf."
+ * are permitted.
  *
  * The caller already locked dentry->d_inode.
  *
@@ -248,6 +285,10 @@ int bpf_remove_dentry_xattr_locked(struct dentry *dentry, const char *name__str)
 {
 	struct inode *inode = d_inode(dentry);
 	int ret;
+
+	ret = bpf_xattr_validate_name(name__str);
+	if (ret)
+		return ret;
 
 	ret = bpf_xattr_write_permission(name__str, inode);
 	if (ret)
@@ -274,10 +315,18 @@ __bpf_kfunc_start_defs();
  * @value_p: xattr value
  * @flags: flags to pass into filesystem operations
  *
- * Set xattr *name__str* of *dentry* to the value in *value_ptr*.
+ * Set xattr *name__str* of *dentry* to the value in *value_p*.
  *
  * For security reasons, only *name__str* with prefix "security.bpf."
  * is allowed.
+ *
+ * The length constraints imposed on both the xattr name and value abide those
+ * that are also enforced by the VFS. Additionally, the flags argument respects
+ * what's enforced by the VFS in the same way. By default, the flag value of 0
+ * is permitted and an xattr will be created if it does not exist, or the value
+ * will be replaced if the xattr already exists. More course grained control
+ * over these exact semantics is permitted by explicitly specifying either
+ * XATTR_CREATE or XATTR_REPLACE.
  *
  * The caller has not locked dentry->d_inode.
  *
@@ -327,18 +376,24 @@ __bpf_kfunc int bpf_remove_dentry_xattr(struct dentry *dentry, const char *name_
  * @name__str: name of the xattr
  * @value_p: output buffer of the xattr value
  *
- * Get xattr *name__str* of *cgroup* and store the output in *value_ptr*.
+ * Get xattr *name__str* of *cgroup* and store the output in *value_p*.
  *
- * For security reasons, only *name__str* with prefix "user." is allowed.
+ * For security reasons, only *name__str* values prefixed with "user." are
+ * permitted.
  *
  * Return: length of the xattr value on success, a negative value on error.
  */
 __bpf_kfunc int bpf_cgroup_read_xattr(struct cgroup *cgroup, const char *name__str,
-					struct bpf_dynptr *value_p)
+				      struct bpf_dynptr *value_p)
 {
 	struct bpf_dynptr_kern *value_ptr = (struct bpf_dynptr_kern *)value_p;
 	u32 value_len;
 	void *value;
+	int ret;
+
+	ret = bpf_xattr_validate_name(name__str);
+	if (ret)
+		return ret;
 
 	/* Only allow reading "user.*" xattrs */
 	if (strncmp(name__str, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN))
