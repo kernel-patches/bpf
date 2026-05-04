@@ -5481,7 +5481,7 @@ static int sol_tcp_sockopt(struct sock *sk, int optname,
 			   char *optval, int *optlen,
 			   bool getopt)
 {
-	if (sk->sk_protocol != IPPROTO_TCP)
+	if (!sk_is_tcp(sk))
 		return -EINVAL;
 
 	switch (optname) {
