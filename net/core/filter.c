@@ -11963,7 +11963,7 @@ const struct bpf_func_proto bpf_skc_to_tcp6_sock_proto = {
 
 BPF_CALL_1(bpf_skc_to_tcp_sock, struct sock *, sk)
 {
-	if (sk && sk_fullsock(sk) && sk->sk_protocol == IPPROTO_TCP)
+	if (sk && sk_fullsock(sk) && sk_is_tcp(sk))
 		return (unsigned long)sk;
 
 	return (unsigned long)NULL;
