@@ -252,7 +252,7 @@ extern void usdt_1(void);
 extern void usdt_2(void);
 
 static unsigned char nop1[1] = { 0x90 };
-static unsigned char nop1_nop5_combo[6] = { 0x90, 0x0f, 0x1f, 0x44, 0x00, 0x00 };
+static unsigned char nop1_nop10_combo[11] = { 0x90, 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
 static void *find_instr(void *fn, unsigned char *instr, size_t cnt)
 {
@@ -271,17 +271,17 @@ static void subtest_optimized_attach(void)
 	__u8 *addr_1, *addr_2;
 
 	/* usdt_1 USDT probe has single nop instruction */
-	addr_1 = find_instr(usdt_1, nop1_nop5_combo, 6);
-	if (!ASSERT_NULL(addr_1, "usdt_1_find_nop1_nop5_combo"))
+	addr_1 = find_instr(usdt_1, nop1_nop10_combo, 11);
+	if (!ASSERT_NULL(addr_1, "usdt_1_find_nop1_nop10_combo"))
 		return;
 
 	addr_1 = find_instr(usdt_1, nop1, 1);
 	if (!ASSERT_OK_PTR(addr_1, "usdt_1_find_nop1"))
 		return;
 
-	/* usdt_2 USDT probe has nop,nop5 instructions combo */
-	addr_2 = find_instr(usdt_2, nop1_nop5_combo, 6);
-	if (!ASSERT_OK_PTR(addr_2, "usdt_2_find_nop1_nop5_combo"))
+	/* usdt_2 USDT probe has nop,nop10 instructions combo */
+	addr_2 = find_instr(usdt_2, nop1_nop10_combo, 11);
+	if (!ASSERT_OK_PTR(addr_2, "usdt_2_find_nop1_nop10_combo"))
 		return;
 
 	skel = test_usdt__open_and_load();
@@ -309,12 +309,12 @@ static void subtest_optimized_attach(void)
 
 	bpf_link__destroy(skel->links.usdt_executed);
 
-	/* we expect the nop5 ip */
+	/* we expect the nop10 ip */
 	skel->bss->expected_ip = (unsigned long) addr_2 + 1;
 
 	/*
 	 * Attach program on top of usdt_2 which is probe defined on top
-	 * of nop1,nop5 combo, so the probe gets optimized on top of nop5.
+	 * of nop1,nop10 combo, so the probe gets optimized on top of nop10.
 	 */
 	skel->links.usdt_executed = bpf_program__attach_usdt(skel->progs.usdt_executed,
 						     0 /*self*/, "/proc/self/exe",
@@ -328,8 +328,13 @@ static void subtest_optimized_attach(void)
 	/* nop stays on addr_2 address */
 	ASSERT_EQ(*addr_2, 0x90, "nop");
 
-	/* call is on addr_2 + 1 address */
-	ASSERT_EQ(*(addr_2 + 1), 0xe8, "call");
+	/*
+	 * lea -0x80(%rsp), %rsp
+	 * call ...
+	 */
+	static unsigned char expected[] = { 0x48, 0x8d, 0x64, 0x24, 0x80, 0xe8 };
+
+	ASSERT_MEMEQ(addr_2 + 1, expected, sizeof(expected), "lea_and_call");
 	ASSERT_EQ(skel->bss->executed, 4, "executed");
 
 cleanup:
