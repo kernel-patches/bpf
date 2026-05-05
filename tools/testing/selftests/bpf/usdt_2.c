@@ -3,7 +3,7 @@
 #if defined(__x86_64__)
 
 /*
- * Include usdt.h with default nop,nop5 instructions combo.
+ * Include usdt.h with default nop,nop10 instructions combo.
  */
 #include "usdt.h"
 
