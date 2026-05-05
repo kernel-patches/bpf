@@ -9950,6 +9950,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		if (err)
 			return err;
 	}
+	env->insn_aux_data[insn_idx].kptr_has_dtor =
+		func_id == BPF_FUNC_kptr_xchg && !!meta.kptr_field->kptr.dtor;
 
 	err = record_func_map(env, &meta, func_id, insn_idx);
 	if (err)

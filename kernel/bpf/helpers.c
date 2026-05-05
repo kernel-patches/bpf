@@ -1728,7 +1728,7 @@ void bpf_wq_cancel_and_free(void *val)
 	bpf_async_cancel_and_free(val);
 }
 
-BPF_CALL_2(bpf_kptr_xchg, void *, dst, void *, ptr)
+BPF_CALL_2(bpf_kptr_xchg_nodtor, void *, dst, void *, ptr)
 {
 	unsigned long *kptr = dst;
 
@@ -1736,12 +1736,32 @@ BPF_CALL_2(bpf_kptr_xchg, void *, dst, void *, ptr)
 	return xchg(kptr, (unsigned long)ptr);
 }
 
+BPF_CALL_2(bpf_ref_kptr_xchg, void *, dst, void *, ptr)
+{
+	unsigned long *kptr = dst;
+	void *old;
+
+	/*
+	 * If the incoming pointer cannot be torn down safely from NMI later on,
+	 * leave the destination untouched and return ptr so the caller keeps
+	 * ownership.
+	 */
+	if (ptr && bpf_kptr_offload_inc())
+		return (unsigned long)ptr;
+
+	old = (void *)xchg(kptr, (unsigned long)ptr);
+	if (old)
+		bpf_kptr_offload_dec();
+	return (unsigned long)old;
+}
+
 /* Unlike other PTR_TO_BTF_ID helpers the btf_id in bpf_kptr_xchg()
  * helper is determined dynamically by the verifier. Use BPF_PTR_POISON to
  * denote type that verifier will determine.
+ * No-dtor callsites are redirected to bpf_kptr_xchg_nodtor() from fixups.
  */
 static const struct bpf_func_proto bpf_kptr_xchg_proto = {
-	.func         = bpf_kptr_xchg,
+	.func         = bpf_ref_kptr_xchg,
 	.gpl_only     = false,
 	.ret_type     = RET_PTR_TO_BTF_ID_OR_NULL,
 	.ret_btf_id   = BPF_PTR_POISON,

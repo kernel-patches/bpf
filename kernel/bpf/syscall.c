@@ -7,6 +7,7 @@
 #include <linux/bpf_trace.h>
 #include <linux/bpf_lirc.h>
 #include <linux/bpf_verifier.h>
+#include <linux/bpf_mem_alloc.h>
 #include <linux/bsearch.h>
 #include <linux/btf.h>
 #include <linux/hex.h>
@@ -19,6 +20,8 @@
 #include <linux/fdtable.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/irq_work.h>
+#include <linux/llist.h>
 #include <linux/license.h>
 #include <linux/filter.h>
 #include <linux/kernel.h>
@@ -64,6 +67,131 @@ static DEFINE_IDR(map_idr);
 static DEFINE_SPINLOCK(map_idr_lock);
 static DEFINE_IDR(link_idr);
 static DEFINE_SPINLOCK(link_idr_lock);
+
+struct bpf_dtor_kptr_work {
+	struct llist_node node;
+	void *obj;
+	btf_dtor_kfunc_t dtor;
+};
+
+/* Queue pending dtors per CPU; the idle pool stays global. */
+static DEFINE_PER_CPU(struct llist_head, bpf_dtor_kptr_jobs);
+static LLIST_HEAD(bpf_dtor_kptr_idle);
+/* Keep total >= refs + active so NMI frees never need to allocate. */
+static atomic_long_t bpf_dtor_kptr_refs = ATOMIC_LONG_INIT(0);
+static atomic_long_t bpf_dtor_kptr_active = ATOMIC_LONG_INIT(0);
+static atomic_long_t bpf_dtor_kptr_total = ATOMIC_LONG_INIT(0);
+
+/* Bound reserve overshoot so the pool tracks demand instead of growing on itself. */
+#define BPF_DTOR_KPTR_RESERVE_HEADROOM 64L
+
+static void bpf_dtor_kptr_worker(struct irq_work *work);
+static DEFINE_PER_CPU(struct irq_work, bpf_dtor_kptr_irq_work) =
+	IRQ_WORK_INIT_HARD(bpf_dtor_kptr_worker);
+
+static void bpf_dtor_kptr_push_idle(struct bpf_dtor_kptr_work *job)
+{
+	llist_add(&job->node, &bpf_dtor_kptr_idle);
+}
+
+static struct bpf_dtor_kptr_work *bpf_dtor_kptr_pop_idle(void)
+{
+	struct llist_node *node;
+
+	node = llist_del_first(&bpf_dtor_kptr_idle);
+	if (!node)
+		return NULL;
+
+	return llist_entry(node, struct bpf_dtor_kptr_work, node);
+}
+
+static void bpf_dtor_kptr_trim(void)
+{
+	struct bpf_dtor_kptr_work *job;
+	long total;
+	long needed;
+
+	for (;;) {
+		total = atomic_long_read(&bpf_dtor_kptr_total);
+		needed = atomic_long_read(&bpf_dtor_kptr_refs) +
+			 atomic_long_read(&bpf_dtor_kptr_active);
+		if (total <= needed)
+			return;
+
+		job = bpf_dtor_kptr_pop_idle();
+		if (!job)
+			return;
+
+		if (!atomic_long_try_cmpxchg(&bpf_dtor_kptr_total, &total, total - 1)) {
+			bpf_dtor_kptr_push_idle(job);
+			continue;
+		}
+
+		bpf_mem_free(&bpf_global_ma, job);
+	}
+}
+
+static int bpf_dtor_kptr_reserve(long needed)
+{
+	struct bpf_dtor_kptr_work *job;
+	long headroom;
+	long target;
+
+	headroom = min_t(long, needed, BPF_DTOR_KPTR_RESERVE_HEADROOM);
+	if (check_add_overflow(needed, headroom, &target))
+		target = needed;
+
+	while (atomic_long_read(&bpf_dtor_kptr_total) < target) {
+		job = bpf_mem_alloc(&bpf_global_ma, sizeof(*job));
+		if (!job)
+			return -ENOMEM;
+		atomic_long_inc(&bpf_dtor_kptr_total);
+		bpf_dtor_kptr_push_idle(job);
+	}
+
+	return 0;
+}
+
+int bpf_kptr_offload_inc(void)
+{
+	long needed;
+	int err;
+
+	if (unlikely(!bpf_global_ma_set))
+		return -ENOMEM;
+
+	/*
+	 * Read active before incrementing refs so a free path moving one slot from
+	 * refs to active cannot shrink the reservation snapshot below the steady
+	 * state we need to cover. Racing results worst case in a larger reservation.
+	 */
+	needed = atomic_long_read(&bpf_dtor_kptr_active);
+	needed += atomic_long_inc_return(&bpf_dtor_kptr_refs);
+	err = bpf_dtor_kptr_reserve(needed);
+	if (err)
+		atomic_long_dec(&bpf_dtor_kptr_refs);
+
+	return err;
+}
+
+void bpf_kptr_offload_dec(void)
+{
+	long val;
+
+	val = atomic_long_dec_return(&bpf_dtor_kptr_refs);
+	if (!WARN_ON_ONCE(val < 0))
+		return;
+
+	/*
+	 * Clamp a mismatched decrement back to zero without overwriting a
+	 * concurrent increment that already repaired the counter.
+	 */
+	do {
+		val = atomic_long_read(&bpf_dtor_kptr_refs);
+		if (val >= 0)
+			break;
+	} while (!atomic_long_try_cmpxchg(&bpf_dtor_kptr_refs, &val, 0));
+}
 
 int sysctl_unprivileged_bpf_disabled __read_mostly =
 	IS_BUILTIN(CONFIG_BPF_UNPRIV_DEFAULT_OFF) ? 2 : 0;
@@ -807,6 +935,46 @@ void bpf_obj_free_task_work(const struct btf_record *rec, void *obj)
 	bpf_task_work_cancel_and_free(obj + rec->task_work_off);
 }
 
+static void bpf_dtor_kptr_worker(struct irq_work *work)
+{
+	struct llist_node *jobs, *node, *next;
+
+	jobs = llist_del_all(this_cpu_ptr(&bpf_dtor_kptr_jobs));
+	llist_for_each_safe(node, next, jobs) {
+		struct bpf_dtor_kptr_work *job;
+
+		job = llist_entry(node, struct bpf_dtor_kptr_work, node);
+		job->dtor(job->obj);
+		atomic_long_dec(&bpf_dtor_kptr_active);
+		bpf_dtor_kptr_push_idle(job);
+	}
+
+	bpf_dtor_kptr_trim();
+}
+
+static void bpf_dtor_kptr_offload(void *obj, btf_dtor_kfunc_t dtor)
+{
+	struct bpf_dtor_kptr_work *job;
+
+	atomic_long_inc(&bpf_dtor_kptr_active);
+	job = bpf_dtor_kptr_pop_idle();
+	if (WARN_ON_ONCE(!job)) {
+		atomic_long_dec(&bpf_dtor_kptr_active);
+		/*
+		 * This should stay unreachable if reserve accounting is correct. If it
+		 * ever breaks, running the destructor unsafely is still better than
+		 * leaking the object permanently.
+		 */
+		dtor(obj);
+		return;
+	}
+
+	job->obj = obj;
+	job->dtor = dtor;
+	if (llist_add(&job->node, this_cpu_ptr(&bpf_dtor_kptr_jobs)))
+		irq_work_queue(this_cpu_ptr(&bpf_dtor_kptr_irq_work));
+}
+
 void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 {
 	const struct btf_field *fields;
@@ -842,6 +1010,19 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 			xchgd_field = (void *)xchg((unsigned long *)field_ptr, 0);
 			if (!xchgd_field)
 				break;
+			if (in_nmi() && field->kptr.dtor) {
+				bpf_dtor_kptr_offload(xchgd_field, field->kptr.dtor);
+				bpf_kptr_offload_dec();
+				break;
+			}
+			if (field->kptr.dtor)
+				/*
+				 * Dtor kptrs reach storage through bpf_ref_kptr_xchg(), which
+				 * pairs installation with bpf_kptr_offload_inc(). Drop that
+				 * reservation on non-NMI teardown once no active transition is
+				 * needed.
+				 */
+				bpf_kptr_offload_dec();
 
 			if (!btf_is_kernel(field->kptr.btf)) {
 				pointee_struct_meta = btf_find_struct_meta(field->kptr.btf,

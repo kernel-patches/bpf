@@ -3454,6 +3454,22 @@ static inline struct bpf_prog *bpf_prog_get_type(u32 ufd,
 
 void __bpf_free_used_maps(struct bpf_prog_aux *aux,
 			  struct bpf_map **used_maps, u32 len);
+/* Direct-call target used by fixups for bpf_kptr_xchg() sites without dtors. */
+u64 bpf_kptr_xchg_nodtor(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
+
+#ifdef CONFIG_BPF_SYSCALL
+int bpf_kptr_offload_inc(void);
+void bpf_kptr_offload_dec(void);
+#else
+static inline int bpf_kptr_offload_inc(void)
+{
+	return 0;
+}
+
+static inline void bpf_kptr_offload_dec(void)
+{
+}
+#endif
 
 bool bpf_prog_get_ok(struct bpf_prog *, enum bpf_prog_type *, bool);
 
