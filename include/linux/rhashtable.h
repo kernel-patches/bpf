@@ -650,6 +650,110 @@ restart:
 	return NULL;
 }
 
+/* Internal: scan one element forward from prev_key's position.
+ * Returns first rhash_head whose bucket >= prev_key's bucket and
+ * (if within prev_key's bucket) appears after prev_key in chain.
+ * Returns first element if prev_key is NULL or ERR_PTR(-ENOENT) if prev_key
+ * is not found.
+ */
+static __always_inline struct rhash_head *__rhashtable_next_in_table(
+	struct rhashtable *ht, struct bucket_table *tbl,
+	const void *prev_key, const struct rhashtable_params params)
+	__must_hold_shared(RCU)
+{
+	struct rhashtable_compare_arg arg = { .ht = ht, .key = prev_key };
+	struct rhash_head *he;
+	unsigned int b = 0;
+	bool found = false;
+
+	if (prev_key) {
+		b = rht_key_hashfn(ht, tbl, prev_key, params);
+		rht_for_each_rcu(he, tbl, b) {
+			bool match = params.obj_cmpfn
+				     ? !params.obj_cmpfn(&arg, rht_obj(ht, he))
+				     : !rhashtable_compare(&arg, rht_obj(ht, he));
+			if (found) {
+				/* Skip duplicate keys. */
+				if (match)
+					continue;
+				return he;
+			}
+			if (match)
+				found = true;
+		}
+		if (!found)
+			return ERR_PTR(-ENOENT);
+		b++;
+	}
+
+	for (; b < tbl->size; b++)
+		rht_for_each_rcu(he, tbl, b)
+			return he;
+	return NULL;
+}
+
+/**
+ * rhashtable_next_key - return next element after a given key
+ * @ht:		hash table
+ * @prev_key:	pointer to previous key, or NULL for the first element
+ * @params:	hash table parameters
+ *
+ * WARNING: this walk is highly unstable. Unlike rhashtable_walk_*(),
+ * it cannot detect a concurrent resize or rehash, so a full iteration
+ * is NOT guaranteed to terminate under adversarial or sustained
+ * rehashing. Callers MUST tolerate skipped and duplicated elements and
+ * SHOULD bound their loop externally.
+ *
+ * Returns the next element in best-effort iteration order, walking the
+ * @tbl chain (including any future_tbl in flight). Caller must hold RCU.
+ *
+ * Pass @prev_key == NULL to obtain the first element. To iterate, set
+ * @prev_key to the key of the previously returned element on each call,
+ * and stop when NULL is returned.
+ *
+ * Best-effort semantics:
+ *   - Across the tbl->future_tbl chain, an element being migrated may
+ *     transiently appear in both tables and be observed twice.
+ *   - Concurrent inserts may or may not be observed.
+ *   - Termination of a full iteration loop is NOT guaranteed under
+ *     adversarial continuous rehash; callers MUST tolerate skips and
+ *     repeats and SHOULD bound their loop externally.
+ *   - Walks the main bucket chain only. Tables with duplicate keys
+ *     in the main chain are handled (each duplicate visited once).
+ *     rhltable instances are not supported and return
+ *     ERR_PTR(-EOPNOTSUPP).
+ *   - If prev_key was concurrently deleted and is not present in any
+ *     in-flight table, returns ERR_PTR(-ENOENT).
+ *
+ * Returns entry of the next element, or NULL when iteration is exhausted,
+ * or ERR_PTR(-ENOENT) if prev_key is not found, or
+ * ERR_PTR(-EOPNOTSUPP) if @ht is an rhltable.
+ */
+static inline void *rhashtable_next_key(
+	struct rhashtable *ht, const void *prev_key,
+	const struct rhashtable_params params)
+	__must_hold_shared(RCU)
+{
+	struct bucket_table *tbl;
+	struct rhash_head *he;
+
+	if (unlikely(ht->rhlist))
+		return ERR_PTR(-EOPNOTSUPP);
+
+	tbl = rht_dereference_rcu(ht->tbl, ht);
+	do {
+		he = __rhashtable_next_in_table(ht, tbl, prev_key, params);
+		if (!IS_ERR_OR_NULL(he))
+			return rht_obj(ht, he);
+		if (!he)
+			prev_key = NULL;
+		/* Ensure we see any new future_tbl attached during a rehash. */
+		smp_rmb();
+		tbl = rht_dereference_rcu(tbl->future_tbl, ht);
+	} while (tbl);
+	return he; /* NULL or -ENOENT */
+}
+
 /**
  * rhashtable_lookup - search hash table
  * @ht:		hash table
