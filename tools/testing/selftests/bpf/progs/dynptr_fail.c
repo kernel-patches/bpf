@@ -471,7 +471,7 @@ int invalid_write1(void *ctx)
  * offset
  */
 SEC("?raw_tp")
-__failure __msg("cannot overwrite referenced dynptr")
+__failure __msg("Leaking reference id={{[0-9]+}} alloc_insn={{[0-9]+}}. Release it first.")
 int invalid_write2(void *ctx)
 {
 	struct bpf_dynptr ptr;
@@ -495,7 +495,7 @@ int invalid_write2(void *ctx)
  * non-const offset
  */
 SEC("?raw_tp")
-__failure __msg("cannot overwrite referenced dynptr")
+__failure __msg("Leaking reference id={{[0-9]+}} alloc_insn={{[0-9]+}}. Release it first.")
 int invalid_write3(void *ctx)
 {
 	struct bpf_dynptr ptr;
@@ -527,7 +527,7 @@ static int invalid_write4_callback(__u32 index, void *data)
  * be invalidated as a dynptr
  */
 SEC("?raw_tp")
-__failure __msg("cannot overwrite referenced dynptr")
+__failure __msg("Leaking reference id={{[0-9]+}} alloc_insn={{[0-9]+}}. Release it first.")
 int invalid_write4(void *ctx)
 {
 	struct bpf_dynptr ptr;
@@ -706,7 +706,7 @@ int dynptr_from_mem_invalid_api(void *ctx)
 }
 
 SEC("?tc")
-__failure __msg("cannot overwrite referenced dynptr") __log_level(2)
+__failure __msg("Leaking reference id={{[0-9]+}} alloc_insn={{[0-9]+}}. Release it first.") __log_level(2)
 int dynptr_pruning_overwrite(struct __sk_buff *ctx)
 {
 	asm volatile (
@@ -768,7 +768,7 @@ int dynptr_pruning_stacksafe(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("cannot overwrite referenced dynptr") __log_level(2)
+__failure __msg("Leaking reference id={{[0-9]+}} alloc_insn={{[0-9]+}}. Release it first.") __log_level(2)
 int dynptr_pruning_type_confusion(struct __sk_buff *ctx)
 {
 	asm volatile (
@@ -880,7 +880,7 @@ int dynptr_var_off_overwrite(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("cannot overwrite referenced dynptr") __log_level(2)
+__failure __msg("Leaking reference id={{[0-9]+}} alloc_insn={{[0-9]+}}. Release it first.") __log_level(2)
 int dynptr_partial_slot_invalidate(struct __sk_buff *ctx)
 {
 	asm volatile (
@@ -1056,7 +1056,7 @@ int dynptr_invalidate_slice_success(void *ctx)
 
 /* Overwriting referenced dynptr should be rejected */
 SEC("?raw_tp")
-__failure __msg("cannot overwrite referenced dynptr")
+__failure __msg("Leaking reference id={{[0-9]+}} alloc_insn={{[0-9]+}}. Release it first.")
 int dynptr_overwrite_ref(void *ctx)
 {
 	struct bpf_dynptr ptr;
@@ -1708,7 +1708,7 @@ int clone_invalid1(void *ctx)
 
 /* Can't overwrite an existing dynptr when cloning */
 SEC("?xdp")
-__failure __msg("cannot overwrite referenced dynptr")
+__failure __msg("Leaking reference id={{[0-9]+}} alloc_insn={{[0-9]+}}. Release it first.")
 int clone_invalid2(struct xdp_md *xdp)
 {
 	struct bpf_dynptr ptr1;
@@ -2015,7 +2015,7 @@ int dynptr_overwrite_ref_with_clone(void *ctx)
 
 /* Overwriting the last referenced dynptr should still be rejected */
 SEC("?raw_tp")
-__failure __msg("cannot overwrite referenced dynptr")
+__failure __msg("Leaking reference id={{[0-9]+}} alloc_insn={{[0-9]+}}. Release it first.")
 int dynptr_overwrite_ref_last_clone(void *ctx)
 {
 	struct bpf_dynptr ptr, clone;
