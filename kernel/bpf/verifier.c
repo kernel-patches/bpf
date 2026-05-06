@@ -234,6 +234,7 @@ static void bpf_map_key_store(struct bpf_insn_aux_data *aux, u64 state)
 struct bpf_call_arg_meta {
 	struct bpf_map_desc map;
 	struct bpf_dynptr_desc dynptr;
+	struct ref_obj_desc ref_obj;
 	bool raw_mode;
 	bool pkt_access;
 	u8 release_regno;
@@ -525,20 +526,6 @@ bool bpf_is_may_goto_insn(struct bpf_insn *insn)
 	return insn->code == (BPF_JMP | BPF_JCOND) && insn->src_reg == BPF_MAY_GOTO;
 }
 
-static bool helper_multiple_ref_obj_use(enum bpf_func_id func_id,
-					const struct bpf_map *map)
-{
-	int ref_obj_uses = 0;
-
-	if (is_ptr_cast_function(func_id))
-		ref_obj_uses++;
-	if (is_acquire_function(func_id, map))
-		ref_obj_uses++;
-
-	return ref_obj_uses > 1;
-}
-
-
 static bool is_spi_bounds_valid(struct bpf_func_state *state, int spi, int nr_slots)
 {
        int allocated_slots = state->allocated_stack / BPF_REG_SIZE;
@@ -667,11 +654,11 @@ static int destroy_if_dynptr_stack_slot(struct bpf_verifier_env *env,
 				        struct bpf_func_state *state, int spi);
 
 static int mark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
-				   enum bpf_arg_type arg_type, int insn_idx, int parent_id,
-				   struct bpf_dynptr_desc *dynptr)
+				   enum bpf_arg_type arg_type, int insn_idx,
+				   struct ref_obj_desc *ref_obj, struct bpf_dynptr_desc *dynptr)
 {
 	struct bpf_func_state *state = bpf_func(env, reg);
-	int spi, i, err, ref_obj_id = 0;
+	int spi, i, err, ref_obj_id = 0, parent_id = 0;
 	enum bpf_dynptr_type type;
 
 	spi = dynptr_get_spi(env, reg);
@@ -713,6 +700,13 @@ static int mark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_
 				return ref_obj_id;
 		}
 		/* Track parent's id if the parent is a referenced object */
+		if (ref_obj && ref_obj->ref_obj_id) {
+			if (ref_obj->cnt > 1) {
+				verifier_bug(env, "function expects only one referenced object but got %d\n", ref_obj->cnt);
+				return -EFAULT;
+			}
+			parent_id = ref_obj->id;
+		}
 	} else { /* bpf_dynptr_clone() */
 		ref_obj_id = dynptr->ref_obj_id;
 		parent_id = dynptr->parent_id;
@@ -6982,7 +6976,7 @@ static int process_kptr_func(struct bpf_verifier_env *env, int regno,
  */
 static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 			       argno_t argno, int insn_idx, enum bpf_arg_type arg_type,
-			       int parent_id, struct bpf_dynptr_desc *dynptr)
+			       struct ref_obj_desc *ref_obj, struct bpf_dynptr_desc *dynptr)
 {
 	int spi, err = 0;
 
@@ -7023,7 +7017,7 @@ static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_stat
 				return err;
 		}
 
-		err = mark_stack_slots_dynptr(env, reg, arg_type, insn_idx, parent_id, dynptr);
+		err = mark_stack_slots_dynptr(env, reg, arg_type, insn_idx, ref_obj, dynptr);
 	} else /* OBJ_RELEASE and None case from above */ {
 		/* For the reg->type == PTR_TO_STACK case, bpf_dynptr is never const */
 		if (reg->type == CONST_PTR_TO_DYNPTR && (arg_type & OBJ_RELEASE)) {
@@ -7072,13 +7066,6 @@ static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_stat
 	return err;
 }
 
-static u32 iter_ref_obj_id(struct bpf_verifier_env *env, struct bpf_reg_state *reg, int spi)
-{
-	struct bpf_func_state *state = bpf_func(env, reg);
-
-	return state->stack[spi].spilled_ptr.ref_obj_id;
-}
-
 static bool is_iter_kfunc(struct bpf_kfunc_call_arg_meta *meta)
 {
 	return meta->kfunc_flags & (KF_ITER_NEW | KF_ITER_NEXT | KF_ITER_DESTROY);
@@ -7108,9 +7095,17 @@ static bool is_kfunc_arg_iter(struct bpf_kfunc_call_arg_meta *meta, int arg_idx,
 	return btf_param_match_suffix(meta->btf, arg, "__iter");
 }
 
+static void update_ref_obj(struct ref_obj_desc *ref_obj, struct bpf_reg_state *reg)
+{
+	ref_obj->id = reg->id;
+	ref_obj->ref_obj_id = reg->ref_obj_id;
+	ref_obj->cnt++;
+}
+
 static int process_iter_arg(struct bpf_verifier_env *env, struct bpf_reg_state *reg, argno_t argno, int insn_idx,
 			    struct bpf_kfunc_call_arg_meta *meta)
 {
+	struct bpf_func_state *state = bpf_func(env, reg);
 	const struct btf_type *t;
 	u32 arg_idx = arg_from_argno(argno) - 1;
 	int spi, err, i, nr_slots, btf_id;
@@ -7182,7 +7177,7 @@ static int process_iter_arg(struct bpf_verifier_env *env, struct bpf_reg_state *
 		/* remember meta->iter info for process_iter_next_call() */
 		meta->iter.spi = spi;
 		meta->iter.frameno = reg->frameno;
-		meta->ref_obj_id = iter_ref_obj_id(env, reg, spi);
+		update_ref_obj(&meta->ref_obj, &state->stack[spi].spilled_ptr);
 
 		if (is_iter_destroy_kfunc(meta)) {
 			err = unmark_stack_slots_iter(env, reg, nr_slots);
@@ -7961,6 +7956,7 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	u32 regno = BPF_REG_1 + arg;
 	struct bpf_reg_state *reg = reg_state(env, regno);
 	enum bpf_arg_type arg_type = fn->arg_type[arg];
+	argno_t argno = argno_from_arg(arg + 1);
 	enum bpf_reg_type type = reg->type;
 	u32 *arg_btf_id = NULL;
 	u32 key_size;
@@ -8028,14 +8024,13 @@ skip_type_check:
 	}
 
 	if (reg->ref_obj_id && base_type(arg_type) != ARG_KPTR_XCHG_DEST) {
-		if (meta->ref_obj_id) {
-			verbose(env, "more than one arg with ref_obj_id R%d %u %u",
-				regno, reg->ref_obj_id,
-				meta->ref_obj_id);
+		if (meta->release_regno && meta->ref_obj.cnt) {
+			verbose(env, "more than one arg with ref_obj_id %s %u %u",
+				reg_arg_name(env, argno), reg->ref_obj_id,
+				meta->ref_obj.ref_obj_id);
 			return -EACCES;
 		}
-		meta->ref_obj_id = reg->ref_obj_id;
-		meta->id = reg->id;
+		update_ref_obj(&meta->ref_obj, reg);
 	}
 
 	switch (base_type(arg_type)) {
@@ -8175,7 +8170,7 @@ skip_type_check:
 					 true, meta);
 		break;
 	case ARG_PTR_TO_DYNPTR:
-		err = process_dynptr_func(env, reg, argno_from_reg(regno), insn_idx, arg_type, 0,
+		err = process_dynptr_func(env, reg, argno_from_reg(regno), insn_idx, arg_type, NULL,
 					  &meta->dynptr);
 		if (err)
 			return err;
@@ -8900,7 +8895,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 			if (ret)
 				return ret;
 
-			ret = process_dynptr_func(env, reg, argno, -1, arg->arg_type, 0, NULL);
+			ret = process_dynptr_func(env, reg, argno, -1, arg->arg_type, NULL, NULL);
 			if (ret)
 				return ret;
 		} else if (base_type(arg->arg_type) == ARG_PTR_TO_BTF_ID) {
@@ -9878,8 +9873,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		err = -EINVAL;
 		if (arg_type_is_dynptr(fn->arg_type[meta.release_regno - BPF_REG_1])) {
 			err = unmark_stack_slots_dynptr(env, &regs[meta.release_regno]);
-		} else if (func_id == BPF_FUNC_kptr_xchg && meta.ref_obj_id) {
-			u32 ref_obj_id = meta.ref_obj_id;
+		} else if (func_id == BPF_FUNC_kptr_xchg && meta.ref_obj.ref_obj_id) {
+			u32 ref_obj_id = meta.ref_obj.ref_obj_id;
 			bool in_rcu = in_rcu_cs(env);
 			struct bpf_func_state *state;
 			struct bpf_reg_state *reg;
@@ -9898,10 +9893,10 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 					}
 				}));
 			}
-		} else if (meta.ref_obj_id) {
-			err = release_reference(env, meta.ref_obj_id);
+		} else if (meta.ref_obj.ref_obj_id) {
+			err = release_reference(env, meta.ref_obj.ref_obj_id);
 		} else if (bpf_register_is_null(&regs[meta.release_regno])) {
-			/* meta.ref_obj_id can only be 0 if register that is meant to be
+			/* meta.ref_obj.ref_obj_id can only be 0 if register that is meant to be
 			 * released is NULL, which must be > R0.
 			 */
 			err = 0;
@@ -10165,15 +10160,14 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	if (type_may_be_null(regs[BPF_REG_0].type))
 		regs[BPF_REG_0].id = ++env->id_gen;
 
-	if (helper_multiple_ref_obj_use(func_id, meta.map.ptr)) {
-		verifier_bug(env, "func %s#%d sets ref_obj_id more than once",
-			     func_id_name(func_id), func_id);
-		return -EFAULT;
-	}
-
 	if (is_ptr_cast_function(func_id)) {
 		/* For release_reference() */
-		regs[BPF_REG_0].ref_obj_id = meta.ref_obj_id;
+		if (meta.ref_obj.cnt > 1) {
+			verifier_bug(env, "function expects only one referenced object but got %d\n",
+				     meta.ref_obj.cnt);
+			return -EFAULT;
+		}
+		regs[BPF_REG_0].ref_obj_id = meta.ref_obj.ref_obj_id;
 	} else if (is_acquire_function(func_id, meta.map.ptr)) {
 		int id = acquire_reference(env, insn_idx);
 
@@ -11616,14 +11610,13 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		}
 
 		if (reg->ref_obj_id) {
-			if (is_kfunc_release(meta) && meta->ref_obj_id) {
-				verifier_bug(env, "more than one arg with ref_obj_id %s %u %u",
-					     reg_arg_name(env, argno), reg->ref_obj_id,
-					     meta->ref_obj_id);
+			if (is_kfunc_release(meta) && meta->ref_obj.cnt) {
+				verbose(env, "more than one arg with ref_obj_id %s %u %u",
+					reg_arg_name(env, argno), reg->ref_obj_id,
+					meta->ref_obj.ref_obj_id);
 				return -EFAULT;
 			}
-			meta->ref_obj_id = reg->ref_obj_id;
-			meta->id = reg->id;
+			update_ref_obj(&meta->ref_obj, reg);
 			if (is_kfunc_release(meta))
 				meta->release_regno = regno;
 		}
@@ -11794,7 +11787,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			}
 
 			ret = process_dynptr_func(env, reg, argno, insn_idx, dynptr_arg_type,
-						  meta->ref_obj_id ? meta->id : 0, &meta->dynptr);
+						  &meta->ref_obj, &meta->dynptr);
 			if (ret < 0)
 				return ret;
 			break;
@@ -12740,8 +12733,14 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				regs[BPF_REG_0].type |= MEM_RDONLY;
 
 			/* Ensures we don't access the memory after a release_reference() */
-			if (meta.ref_obj_id)
-				regs[BPF_REG_0].parent_id = meta.ref_obj_id;
+			if (meta.ref_obj.ref_obj_id) {
+				if (meta.ref_obj.cnt > 1) {
+					verifier_bug(env, "function expects only one referenced object but got %d\n",
+						     meta.ref_obj.cnt);
+					return -EFAULT;
+				}
+				regs[BPF_REG_0].parent_id = meta.ref_obj.ref_obj_id;
+			}
 
 			if (is_kfunc_rcu_protected(&meta))
 				regs[BPF_REG_0].type |= MEM_RCU;
