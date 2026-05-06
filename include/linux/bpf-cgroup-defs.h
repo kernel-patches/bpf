@@ -12,7 +12,7 @@ struct bpf_prog_array;
 
 #ifdef CONFIG_BPF_LSM
 /* Maximum number of concurrently attachable per-cgroup LSM hooks. */
-#define CGROUP_LSM_NUM 10
+#define CGROUP_LSM_NUM CONFIG_CGROUP_LSM_NUM
 #else
 #define CGROUP_LSM_NUM 0
 #endif

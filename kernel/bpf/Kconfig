@@ -101,4 +101,17 @@ config BPF_LSM
 
 	  If you are unsure how to answer this question, answer N.
 
+config CGROUP_LSM_NUM
+	int "Maximum number of per-cgroup LSM hooks"
+	depends on BPF_LSM
+	depends on CGROUP_BPF
+	range 0 300
+	default 10
+	help
+	  Maximum number of concurrently attachable per-cgroup LSM hooks.
+	  Increasing this value increases the size of the cgroup_lsm_atype
+	  structure.
+
+	  If you are unsure, leave the default value.
+
 endmenu # "BPF subsystem"
