@@ -5117,6 +5117,11 @@ struct bpf_subprog_call_depth_info {
 	int frame; /* # of consecutive static call stack frames on top of stack */
 };
 
+static bool subprog_has_stack_args(const struct bpf_subprog_info *si)
+{
+	return si->stack_arg_cnt;
+}
+
 /* starting from main bpf function walk all instructions of the function
  * and recursively walk all callees that given function can call.
  * Ignore jump and exit insns.
@@ -5270,14 +5275,23 @@ continue_func:
 	 * this info will be utilized by JIT so that we will be preserving the
 	 * tail call counter throughout bpf2bpf calls combined with tailcalls
 	 */
-	if (tail_call_reachable)
+	if (tail_call_reachable) {
 		for (tmp = idx; tmp >= 0; tmp = dinfo[tmp].caller) {
 			if (subprog[tmp].is_exception_cb) {
 				verbose(env, "cannot tail call within exception cb\n");
 				return -EINVAL;
 			}
+			if (subprog_has_stack_args(&subprog[tmp])) {
+				verbose(env, "tail_calls are not allowed in programs with stack args\n");
+				return -EINVAL;
+			}
 			subprog[tmp].tail_call_reachable = true;
 		}
+	} else if (!idx && subprog[0].has_tail_call && subprog_has_stack_args(&subprog[0])) {
+		verbose(env, "tail_calls are not allowed in programs with stack args\n");
+		return -EINVAL;
+	}
+
 	if (subprog[0].tail_call_reachable)
 		env->prog->aux->tail_call_reachable = true;
 
