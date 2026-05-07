@@ -1914,15 +1914,6 @@ int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env)
 		return -ENOMEM;
 	}
 
-	instance = call_instance(env, NULL, 0, 0);
-	if (IS_ERR(instance)) {
-		err = PTR_ERR(instance);
-		goto out;
-	}
-	err = analyze_subprog(env, NULL, info, instance, callsites);
-	if (err)
-		goto out;
-
 	/*
 	 * Subprogs and callbacks that don't receive FP-derived arguments
 	 * cannot access ancestor stack frames, so they were skipped during
@@ -1934,6 +1925,8 @@ int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env)
 	 * each subprog is analyzed before its callees, allowing the
 	 * recursive walk inside analyze_subprog() to naturally
 	 * reach nested callees that also lack FP-derived args.
+	 *
+	 * Note the main subprog is also analyzed as part of this loop.
 	 */
 	for (k = env->subprog_cnt - 1; k >= 0; k--) {
 		int sub = env->subprog_topo_order[k];
