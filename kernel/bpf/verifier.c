@@ -9891,6 +9891,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	int insn_idx = *insn_idx_p;
 	bool changes_data;
 	int i, err, func_id;
+	bool kptr_has_dtor;
 
 	/* find function prototype */
 	func_id = insn->imm;
@@ -9949,6 +9950,18 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		err = check_func_arg(env, i, &meta, fn, insn_idx);
 		if (err)
 			return err;
+	}
+	if (func_id == BPF_FUNC_kptr_xchg) {
+		kptr_has_dtor = !!meta.kptr_field->kptr.dtor;
+		if (env->insn_aux_data[insn_idx].kptr_has_dtor_seen &&
+		    env->insn_aux_data[insn_idx].kptr_has_dtor != kptr_has_dtor) {
+			verbose(env,
+				"same insn cannot call bpf_kptr_xchg() on both dtor and non-dtor kptrs\n");
+			return -EINVAL;
+		}
+
+		env->insn_aux_data[insn_idx].kptr_has_dtor_seen = true;
+		env->insn_aux_data[insn_idx].kptr_has_dtor = kptr_has_dtor;
 	}
 
 	err = record_func_map(env, &meta, func_id, insn_idx);

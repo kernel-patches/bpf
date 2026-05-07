@@ -7,6 +7,7 @@
 #include <linux/bpf_trace.h>
 #include <linux/bpf_lirc.h>
 #include <linux/bpf_verifier.h>
+#include <linux/bpf_mem_alloc.h>
 #include <linux/bsearch.h>
 #include <linux/btf.h>
 #include <linux/hex.h>
@@ -19,6 +20,7 @@
 #include <linux/fdtable.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/irq_work.h>
 #include <linux/license.h>
 #include <linux/filter.h>
 #include <linux/kernel.h>
@@ -42,6 +44,8 @@
 #include <linux/cookie.h>
 #include <linux/verification.h>
 
+#include "percpu_freelist.h"
+
 #include <net/netfilter/nf_bpf_link.h>
 #include <net/netkit.h>
 #include <net/tcx.h>
@@ -64,6 +68,111 @@ static DEFINE_IDR(map_idr);
 static DEFINE_SPINLOCK(map_idr_lock);
 static DEFINE_IDR(link_idr);
 static DEFINE_SPINLOCK(link_idr_lock);
+
+struct bpf_dtor_kptr_work {
+	struct pcpu_freelist_node fnode;
+	void *obj;
+	btf_dtor_kfunc_t dtor;
+};
+
+/* Queue pending dtors; the idle pool uses a global pcpu_freelist. */
+static struct pcpu_freelist bpf_dtor_kptr_jobs;
+static struct pcpu_freelist bpf_dtor_kptr_idle;
+/* Keep surplus = total - needed = idle - refs >= 0 so NMI frees never need to allocate. */
+static atomic_long_t bpf_dtor_kptr_surplus = ATOMIC_LONG_INIT(0);
+
+static void bpf_dtor_kptr_worker(struct irq_work *work);
+static DEFINE_PER_CPU(struct irq_work, bpf_dtor_kptr_irq_work) =
+	IRQ_WORK_INIT_HARD(bpf_dtor_kptr_worker);
+
+static struct bpf_dtor_kptr_work *bpf_dtor_kptr_pop_idle(void)
+{
+	struct pcpu_freelist_node *node;
+
+	node = pcpu_freelist_pop(&bpf_dtor_kptr_idle);
+	if (!node)
+		return NULL;
+
+	return container_of(node, struct bpf_dtor_kptr_work, fnode);
+}
+
+static void bpf_dtor_kptr_release_one(void)
+{
+	struct bpf_dtor_kptr_work *job;
+	long surplus;
+
+	for (;;) {
+		surplus = atomic_long_read(&bpf_dtor_kptr_surplus);
+		if (surplus <= 0)
+			return;
+
+		job = bpf_dtor_kptr_pop_idle();
+		if (!job)
+			return;
+
+		if (!atomic_long_try_cmpxchg(&bpf_dtor_kptr_surplus, &surplus,
+						     surplus - 1)) {
+			pcpu_freelist_push(&bpf_dtor_kptr_idle, &job->fnode);
+			continue;
+		}
+
+		bpf_mem_free(&bpf_global_ma, job);
+		return;
+	}
+}
+
+void bpf_kptr_offload_slot_release(void)
+{
+	if (atomic_long_inc_return(&bpf_dtor_kptr_surplus) > 0)
+		bpf_dtor_kptr_release_one();
+}
+
+int bpf_kptr_offload_slot_acquire(void)
+{
+	struct bpf_dtor_kptr_work *job;
+	long surplus;
+
+	if (unlikely(!bpf_global_ma_set ||
+		     !READ_ONCE(bpf_dtor_kptr_idle.freelist) ||
+		     !READ_ONCE(bpf_dtor_kptr_jobs.freelist)))
+		return -ENOMEM;
+
+	/*
+	 * Each successful install can decrease the surplus by at most one, so it only
+	 * ever needs to provision one additional idle job.
+	 */
+	surplus = atomic_long_dec_return(&bpf_dtor_kptr_surplus);
+	if (surplus >= 0)
+		return 0;
+
+	job = bpf_mem_alloc(&bpf_global_ma, sizeof(*job));
+	if (!job) {
+		atomic_long_inc(&bpf_dtor_kptr_surplus);
+		return -ENOMEM;
+	}
+
+	pcpu_freelist_push(&bpf_dtor_kptr_idle, &job->fnode);
+	/* A racing teardown may have already removed the demand that forced this. */
+	bpf_kptr_offload_slot_release();
+
+	return 0;
+}
+
+static int __init bpf_dtor_kptr_init(void)
+{
+	int err;
+
+	err = pcpu_freelist_init(&bpf_dtor_kptr_idle);
+	if (err)
+		return err;
+
+	err = pcpu_freelist_init(&bpf_dtor_kptr_jobs);
+	if (err)
+		return err;
+
+	return 0;
+}
+late_initcall(bpf_dtor_kptr_init);
 
 int sysctl_unprivileged_bpf_disabled __read_mostly =
 	IS_BUILTIN(CONFIG_BPF_UNPRIV_DEFAULT_OFF) ? 2 : 0;
@@ -807,6 +916,43 @@ void bpf_obj_free_task_work(const struct btf_record *rec, void *obj)
 	bpf_task_work_cancel_and_free(obj + rec->task_work_off);
 }
 
+static void bpf_dtor_kptr_worker(struct irq_work *work)
+{
+	struct pcpu_freelist_node *fnode;
+	struct bpf_dtor_kptr_work *job;
+
+	while ((fnode = pcpu_freelist_pop(&bpf_dtor_kptr_jobs))) {
+		job = container_of(fnode, struct bpf_dtor_kptr_work, fnode);
+		job->dtor(job->obj);
+		pcpu_freelist_push(&bpf_dtor_kptr_idle, &job->fnode);
+		bpf_kptr_offload_slot_release();
+	}
+}
+
+static void bpf_dtor_kptr_offload(void *obj, btf_dtor_kfunc_t dtor)
+{
+	struct bpf_dtor_kptr_work *job;
+
+	/* Handing storage teardown off to irq_work consumes one idle slot. */
+	atomic_long_dec(&bpf_dtor_kptr_surplus);
+	job = bpf_dtor_kptr_pop_idle();
+	if (WARN_ON_ONCE(!job)) {
+		atomic_long_inc(&bpf_dtor_kptr_surplus);
+		/*
+		 * This should stay unreachable if reserve accounting is correct. If it
+		 * ever breaks, running the destructor unsafely is still better than
+		 * leaking the object permanently.
+		 */
+		dtor(obj);
+		return;
+	}
+
+	job->obj = obj;
+	job->dtor = dtor;
+	pcpu_freelist_push(&bpf_dtor_kptr_jobs, &job->fnode);
+	irq_work_queue(this_cpu_ptr(&bpf_dtor_kptr_irq_work));
+}
+
 void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 {
 	const struct btf_field *fields;
@@ -842,6 +988,19 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 			xchgd_field = (void *)xchg((unsigned long *)field_ptr, 0);
 			if (!xchgd_field)
 				break;
+			if (in_nmi() && field->kptr.dtor) {
+				bpf_dtor_kptr_offload(xchgd_field, field->kptr.dtor);
+				bpf_kptr_offload_slot_release();
+				break;
+			}
+			if (field->kptr.dtor)
+				/*
+				 * Dtor kptrs reach storage through bpf_ref_kptr_xchg(), which
+				 * pairs installation with bpf_kptr_offload_slot_acquire(). Return
+				 * that slot on non-NMI teardown once no active transition is
+				 * needed.
+				 */
+				bpf_kptr_offload_slot_release();
 
 			if (!btf_is_kernel(field->kptr.btf)) {
 				pointee_struct_meta = btf_find_struct_meta(field->kptr.btf,
