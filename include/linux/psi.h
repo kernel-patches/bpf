@@ -52,6 +52,10 @@ static inline void psi_memstall_enter(unsigned long *flags) {}
 static inline void psi_memstall_leave(unsigned long *flags) {}
 
 #ifdef CONFIG_CGROUPS
+static inline struct psi_group *cgroup_psi(struct cgroup *cgrp)
+{
+	return NULL;
+}
 static inline int psi_cgroup_alloc(struct cgroup *cgrp)
 {
 	return 0;

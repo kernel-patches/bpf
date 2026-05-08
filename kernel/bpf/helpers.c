@@ -29,6 +29,7 @@
 #include <linux/task_work.h>
 #include <linux/irq_work.h>
 #include <linux/buildid.h>
+#include <linux/psi.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -2881,6 +2882,37 @@ bpf_task_get_cgroup1(struct task_struct *task, int hierarchy_id)
 		return NULL;
 	return cgrp;
 }
+
+/**
+ * bpf_cgroup_stall - acquire the total stall time of cgroup
+ * @cgrp: cgroup struct
+ * @states: psi states
+ *
+ * Return the total stall time.
+ */
+__bpf_kfunc u64 bpf_cgroup_stall(struct cgroup *cgrp, enum psi_states states)
+{
+	struct psi_group *group = cgroup_psi(cgrp);
+
+	if (unlikely(!group || (u32)states >= NR_PSI_STATES - 1))
+		return (u64)-1;
+
+	return div_u64(group->total[PSI_AVGS][states], NSEC_PER_MSEC);
+}
+
+/**
+ * bpf_cgroup_flush_stats - Flush cgroup's statistics
+ * @cgrp: cgroup struct
+ */
+__bpf_kfunc void bpf_cgroup_flush_stats(struct cgroup *cgrp)
+{
+	struct psi_group *group = cgroup_psi(cgrp);
+
+	if (unlikely(!group))
+		return;
+
+	psi_group_flush_stats(group);
+}
 #endif /* CONFIG_CGROUPS */
 
 /**
@@ -4734,6 +4766,8 @@ BTF_ID_FLAGS(func, bpf_cgroup_ancestor, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_cgroup_from_id, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_under_cgroup, KF_RCU)
 BTF_ID_FLAGS(func, bpf_task_get_cgroup1, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_cgroup_stall)
+BTF_ID_FLAGS(func, bpf_cgroup_flush_stats, KF_SLEEPABLE)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_from_vpid, KF_ACQUIRE | KF_RET_NULL)
