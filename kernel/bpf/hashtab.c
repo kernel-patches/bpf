@@ -2759,6 +2759,22 @@ static inline void *rhtab_elem_value(struct rhtab_elem *l, u32 key_size)
 	return l->data + round_up(key_size, 8);
 }
 
+static __always_inline int rhtab_key_cmp_long(struct rhashtable_compare_arg *arg,
+					      const void *ptr)
+{
+	const unsigned long key1 = *(const unsigned long *)arg->key;
+	const struct rhtab_elem *key2 = ptr;
+
+	return key1 != *(const unsigned long *)key2->data;
+}
+
+static __always_inline u32 rhtab_hashfn_long(const void *data, u32 len, u32 seed)
+{
+	u64 k = *(const unsigned long *)data;
+
+	return (u32)(k ^ (k >> 32)) ^ seed;
+}
+
 static struct bpf_map *rhtab_map_alloc(union bpf_attr *attr)
 {
 	struct bpf_rhtab *rhtab;
@@ -2783,6 +2799,11 @@ static struct bpf_map *rhtab_map_alloc(union bpf_attr *attr)
 	rhtab->params.key_len = rhtab->map.key_size;
 	rhtab->params.nelem_hint = (u32)attr->map_extra;
 	rhtab->params.automatic_shrinking = true;
+
+	if (rhtab->map.key_size == sizeof(long)) {
+		rhtab->params.hashfn = rhtab_hashfn_long;
+		rhtab->params.obj_cmpfn = rhtab_key_cmp_long;
+	}
 
 	err = rhashtable_init(&rhtab->ht, &rhtab->params);
 	if (err)
@@ -2867,16 +2888,39 @@ static void rhtab_map_free(struct bpf_map *map)
 	bpf_map_area_free(rhtab);
 }
 
+/* Static-const params let the rhashtable inline helpers */
+static const struct rhashtable_params rhtab_params_long = {
+	.head_offset = offsetof(struct rhtab_elem, node),
+	.key_offset  = offsetof(struct rhtab_elem, data),
+	.key_len     = sizeof(long),
+	.hashfn      = rhtab_hashfn_long,
+	.obj_cmpfn   = rhtab_key_cmp_long,
+};
+
+static const struct rhashtable_params rhtab_params = {
+	.head_offset = offsetof(struct rhtab_elem, node),
+	.key_offset  = offsetof(struct rhtab_elem, data),
+};
+
+static __always_inline struct rhtab_elem *
+rhtab_next_key(struct bpf_rhtab *rhtab, const void *prev_key)
+{
+	if (rhtab->map.key_size == sizeof(long))
+		return rhashtable_next_key(&rhtab->ht, prev_key, rhtab_params_long);
+	return rhashtable_next_key(&rhtab->ht, prev_key, rhtab_params);
+}
+
 static void *rhtab_lookup_elem(struct bpf_map *map, void *key)
 {
 	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
-	/* Using constant zeroed params to force rhashtable use inlined hashfunc */
-	static const struct rhashtable_params params = { 0 };
 
 	/* Hold RCU lock in case sleepable program calls via gen_lookup */
 	guard(rcu)();
 
-	return rhashtable_lookup_likely(&rhtab->ht, key, params);
+	if (map->key_size == sizeof(long))
+		return rhashtable_lookup_likely(&rhtab->ht, key, rhtab_params_long);
+
+	return rhashtable_lookup_likely(&rhtab->ht, key, rhtab_params);
 }
 
 static void *rhtab_map_lookup_elem(struct bpf_map *map, void *key) __must_hold(RCU)
@@ -2904,7 +2948,10 @@ static int rhtab_delete_elem(struct bpf_rhtab *rhtab, struct rhtab_elem *elem, v
 
 	/* Prevent deadlock for NMI programs attempting to take bucket lock */
 	bpf_disable_instrumentation();
-	err = rhashtable_remove_fast(&rhtab->ht, &elem->node, rhtab->params);
+	if (rhtab->map.key_size == sizeof(long))
+		err = rhashtable_remove_fast(&rhtab->ht, &elem->node, rhtab_params_long);
+	else
+		err = rhashtable_remove_fast(&rhtab->ht, &elem->node, rhtab_params);
 	bpf_enable_instrumentation();
 
 	if (err)
@@ -3017,7 +3064,10 @@ static long rhtab_map_update_elem(struct bpf_map *map, void *key, void *value, u
 
 	/* Prevent deadlock for NMI programs attempting to take bucket lock */
 	bpf_disable_instrumentation();
-	tmp = rhashtable_lookup_get_insert_fast(&rhtab->ht, &elem->node, rhtab->params);
+	if (map->key_size == sizeof(long))
+		tmp = rhashtable_lookup_get_insert_fast(&rhtab->ht, &elem->node, rhtab_params_long);
+	else
+		tmp = rhashtable_lookup_get_insert_fast(&rhtab->ht, &elem->node, rhtab_params);
 	bpf_enable_instrumentation();
 
 	if (tmp) {
@@ -3101,11 +3151,9 @@ static int rhtab_map_get_next_key(struct bpf_map *map, void *key, void *next_key
 	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
 	struct rhtab_elem *elem;
 
-	elem = rhashtable_next_key(&rhtab->ht, key, rhtab->params);
-
-	/* if not found, return the first key */
+	elem = rhtab_next_key(rhtab, key);
 	if (PTR_ERR(elem) == -ENOENT)
-		elem = rhashtable_next_key(&rhtab->ht, NULL, rhtab->params);
+		elem = rhtab_next_key(rhtab, NULL);
 
 	if (!elem)
 		return -ENOENT;
@@ -3259,8 +3307,7 @@ static int __rhtab_map_lookup_and_delete_batch(struct bpf_map *map,
 	 * returns ERR_PTR(-ENOENT); the batch terminates with no elements
 	 * and userspace must restart from a NULL cursor.
 	 */
-	elem = rhashtable_next_key(&rhtab->ht, ubatch ? cursor : NULL,
-				   rhtab->params);
+	elem = rhtab_next_key(rhtab, ubatch ? cursor : NULL);
 	while (elem && !IS_ERR(elem) && total < max_count) {
 		memcpy(dst_key, elem->data, key_size);
 		rhtab_read_elem_value(map, dst_val, elem, elem_map_flags);
@@ -3269,7 +3316,7 @@ static int __rhtab_map_lookup_and_delete_batch(struct bpf_map *map,
 		if (do_delete)
 			del_elems[total] = elem;
 
-		elem = rhashtable_next_key(&rhtab->ht, dst_key, rhtab->params);
+		elem = rhtab_next_key(rhtab, dst_key);
 		dst_key += key_size;
 		dst_val += value_size;
 		total++;
@@ -3346,8 +3393,7 @@ static void *bpf_rhash_map_seq_start(struct seq_file *seq, loff_t *pos)
 	struct rhtab_elem *elem;
 
 	rcu_read_lock();
-	elem = rhashtable_next_key(&info->rhtab->ht, key,
-				   info->rhtab->params);
+	elem = rhtab_next_key(info->rhtab, key);
 	if (IS_ERR_OR_NULL(elem))
 		return NULL;
 	if (*pos == 0)
@@ -3365,8 +3411,7 @@ static void *bpf_rhash_map_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 	info->last_key_valid = true;
 	++*pos;
 
-	next = rhashtable_next_key(&info->rhtab->ht, info->last_key,
-				   info->rhtab->params);
+	next = rhtab_next_key(info->rhtab, info->last_key);
 	if (IS_ERR(next))
 		return NULL;
 	return next;
