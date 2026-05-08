@@ -64,6 +64,10 @@ struct bpf_tcp_req_attrs;
 extern int bpf_sk_assign_tcp_reqsk(struct __sk_buff *skb, struct sock *sk,
 				   struct bpf_tcp_req_attrs *attrs, int attrs__sz) __ksym;
 
+struct bpf_sock_ops_kern;
+extern int bpf_sock_ops_tcp_set_rcvlowat(struct bpf_sock_ops_kern *skops_kern,
+					 int rcvlowat) __ksym;
+
 void *bpf_cast_to_kern_ctx(void *) __ksym;
 
 extern void *bpf_rdonly_cast(const void *obj, __u32 btf_id) __ksym __weak;
