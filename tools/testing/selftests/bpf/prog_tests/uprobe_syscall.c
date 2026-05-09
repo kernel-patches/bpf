@@ -357,6 +357,46 @@ __nocf_check __weak void usdt_test(void)
 	USDT(optimized_uprobe, usdt);
 }
 
+/*
+ * Assembly-level red zone clobbering test. Stores known values in the
+ * red zone (below RSP), executes a nop5 (uprobe site), and checks that
+ * the values survived. Returns 0 if intact, 1 if clobbered.
+ *
+ * If the nop5 optimization uses CALL (which pushes a return address to
+ * [rsp-8]), the value at -8(%rsp) gets overwritten.
+ */
+__attribute__((aligned(16)))
+__nocf_check __weak __naked unsigned long uprobe_red_zone_test(void)
+{
+	asm volatile (
+		"movabs $0x1111111111111111, %%rax\n"
+		"movq   %%rax, -8(%%rsp)\n"
+		"movabs $0x2222222222222222, %%rax\n"
+		"movq   %%rax, -16(%%rsp)\n"
+		"movabs $0x3333333333333333, %%rax\n"
+		"movq   %%rax, -24(%%rsp)\n"
+
+		".byte 0x0f, 0x1f, 0x44, 0x00, 0x00\n" /* nop5: uprobe site */
+
+		"movabs $0x1111111111111111, %%rax\n"
+		"cmpq   %%rax, -8(%%rsp)\n"
+		"jne    1f\n"
+		"movabs $0x2222222222222222, %%rax\n"
+		"cmpq   %%rax, -16(%%rsp)\n"
+		"jne    1f\n"
+		"movabs $0x3333333333333333, %%rax\n"
+		"cmpq   %%rax, -24(%%rsp)\n"
+		"jne    1f\n"
+
+		"xorl   %%eax, %%eax\n"
+		"retq\n"
+		"1:\n"
+		"movl   $1, %%eax\n"
+		"retq\n"
+		::: "rax", "memory"
+	);
+}
+
 static int find_uprobes_trampoline(void *tramp_addr)
 {
 	void *start, *end;
@@ -394,7 +434,7 @@ static void *find_nop5(void *fn)
 {
 	int i;
 
-	for (i = 0; i < 10; i++) {
+	for (i = 0; i < 128; i++) {
 		if (!memcmp(nop5, fn + i, 5))
 			return fn + i;
 	}
@@ -758,6 +798,37 @@ cleanup:
 #define __NR_uprobe 336
 #endif
 
+static void test_uprobe_red_zone(void)
+{
+	struct uprobe_syscall_executed *skel;
+	struct bpf_link *link;
+	void *nop5_addr;
+	size_t offset;
+	int i;
+
+	nop5_addr = find_nop5(uprobe_red_zone_test);
+	if (!ASSERT_NEQ(nop5_addr, NULL, "find_nop5"))
+		return;
+
+	skel = uprobe_syscall_executed__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+
+	offset = get_uprobe_offset(nop5_addr);
+	link = bpf_program__attach_uprobe_opts(skel->progs.test_uprobe,
+			0, "/proc/self/exe", offset, NULL);
+	if (!ASSERT_OK_PTR(link, "attach_uprobe"))
+		goto cleanup;
+
+	for (i = 0; i < 10; i++)
+		ASSERT_EQ(uprobe_red_zone_test(), 0, "red_zone_intact");
+
+	bpf_link__destroy(link);
+
+cleanup:
+	uprobe_syscall_executed__destroy(skel);
+}
+
 static void test_uprobe_error(void)
 {
 	long err = syscall(__NR_uprobe);
@@ -784,6 +855,8 @@ static void __test_uprobe_syscall(void)
 		test_uprobe_usdt();
 	if (test__start_subtest("uprobe_race"))
 		test_uprobe_race();
+	if (test__start_subtest("uprobe_red_zone"))
+		test_uprobe_red_zone();
 	if (test__start_subtest("uprobe_error"))
 		test_uprobe_error();
 	if (test__start_subtest("uprobe_regs_equal"))
