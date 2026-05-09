@@ -329,7 +329,7 @@ static void subtest_optimized_attach(void)
 	ASSERT_EQ(*addr_2, 0x90, "nop");
 
 	/* call is on addr_2 + 1 address */
-	ASSERT_EQ(*(addr_2 + 1), 0xe8, "call");
+	ASSERT_EQ(*(addr_2 + 1), 0xe9, "jmp");
 	ASSERT_EQ(skel->bss->executed, 4, "executed");
 
 cleanup:

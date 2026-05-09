@@ -633,14 +633,23 @@ static struct vm_special_mapping tramp_mapping = {
 
 struct uprobe_trampoline {
 	struct hlist_node	node;
+	struct rcu_head		rcu;
 	unsigned long		vaddr;
+	unsigned long		probe_addrs[UPROBE_TRAMP_MAX_SLOTS];
 };
 
-static bool is_reachable_by_call(unsigned long vtramp, unsigned long vaddr)
+
+static bool is_reachable_by_jmp(unsigned long dst, unsigned long src)
 {
-	long delta = (long)(vaddr + 5 - vtramp);
+	long delta = (long)(dst - (src + JMP32_INSN_SIZE));
 
 	return delta >= INT_MIN && delta <= INT_MAX;
+}
+
+static bool is_reachable_by_trampoline(unsigned long vtramp, unsigned long vaddr)
+{
+	return is_reachable_by_jmp(vtramp, vaddr) &&
+	       is_reachable_by_jmp(vtramp + PAGE_SIZE - 1, vaddr);
 }
 
 static unsigned long find_nearest_trampoline(unsigned long vaddr)
@@ -711,6 +720,21 @@ static struct uprobe_trampoline *create_uprobe_trampoline(unsigned long vaddr)
 	return tramp;
 }
 
+static int tramp_alloc_slot(struct uprobe_trampoline *tramp, unsigned long probe_addr)
+{
+	int i;
+
+	for (i = 0; i < UPROBE_TRAMP_MAX_SLOTS; i++) {
+		if (tramp->probe_addrs[i] == probe_addr)
+			return i;
+		if (tramp->probe_addrs[i] == 0) {
+			tramp->probe_addrs[i] = probe_addr;
+			return i;
+		}
+	}
+	return -ENOSPC;
+}
+
 static struct uprobe_trampoline *get_uprobe_trampoline(unsigned long vaddr, bool *new)
 {
 	struct uprobes_state *state = &current->mm->uprobes_state;
@@ -720,7 +744,7 @@ static struct uprobe_trampoline *get_uprobe_trampoline(unsigned long vaddr, bool
 		return NULL;
 
 	hlist_for_each_entry(tramp, &state->head_tramps, node) {
-		if (is_reachable_by_call(tramp->vaddr, vaddr)) {
+		if (is_reachable_by_trampoline(tramp->vaddr, vaddr)) {
 			*new = false;
 			return tramp;
 		}
@@ -731,7 +755,7 @@ static struct uprobe_trampoline *get_uprobe_trampoline(unsigned long vaddr, bool
 		return NULL;
 
 	*new = true;
-	hlist_add_head(&tramp->node, &state->head_tramps);
+	hlist_add_head_rcu(&tramp->node, &state->head_tramps);
 	return tramp;
 }
 
@@ -742,8 +766,8 @@ static void destroy_uprobe_trampoline(struct uprobe_trampoline *tramp)
 	 * because there's no easy way to make sure none of the threads
 	 * is still inside the trampoline.
 	 */
-	hlist_del(&tramp->node);
-	kfree(tramp);
+	hlist_del_rcu(&tramp->node);
+	kfree_rcu(tramp, rcu);
 }
 
 void arch_uprobe_init_state(struct mm_struct *mm)
@@ -761,147 +785,153 @@ void arch_uprobe_clear_state(struct mm_struct *mm)
 		destroy_uprobe_trampoline(tramp);
 }
 
-static bool __in_uprobe_trampoline(unsigned long ip)
+/*
+ * Find the trampoline containing @ip. If @probe_addr is non-NULL, also
+ * resolve the slot index from @ip and return the probe address.
+ *
+ * @ip is expected to point right after the syscall instruction, i.e.,
+ * at the end of the slot (slot_start + UPROBE_TRAMP_SLOT_SIZE).
+ */
+static bool resolve_uprobe_addr(unsigned long ip, unsigned long *probe_addr)
 {
-	struct vm_area_struct *vma = vma_lookup(current->mm, ip);
+	struct uprobes_state *state = &current->mm->uprobes_state;
+	struct uprobe_trampoline *tramp;
 
-	return vma && vma_is_special_mapping(vma, &tramp_mapping);
+	hlist_for_each_entry_rcu(tramp, &state->head_tramps, node) {
+		/*
+		 * ip points to after syscall, so it's on 16 byte boundary,
+		 * which means that valid ip can point right after the page
+		 * and should never be at zero offset within the page
+		 */
+		if (ip <= tramp->vaddr || ip > tramp->vaddr + PAGE_SIZE)
+			continue;
+
+		if (probe_addr) {
+			/* we already validated ip is within expected range */
+			unsigned int slot = (ip - tramp->vaddr - 1) / UPROBE_TRAMP_SLOT_SIZE;
+			unsigned long addr = tramp->probe_addrs[slot];
+
+			*probe_addr = addr;
+			if (addr == 0)
+				return false;
+		}
+
+		return true;
+	}
+	return false;
 }
 
-static bool in_uprobe_trampoline(unsigned long ip)
+static bool in_uprobe_trampoline(unsigned long ip, unsigned long *probe_addr)
 {
-	struct mm_struct *mm = current->mm;
-	bool found, retry = true;
-	unsigned int seq;
-
-	rcu_read_lock();
-	if (mmap_lock_speculate_try_begin(mm, &seq)) {
-		found = __in_uprobe_trampoline(ip);
-		retry = mmap_lock_speculate_retry(mm, seq);
-	}
-	rcu_read_unlock();
-
-	if (retry) {
-		mmap_read_lock(mm);
-		found = __in_uprobe_trampoline(ip);
-		mmap_read_unlock(mm);
-	}
-	return found;
+	guard(rcu)();
+	return resolve_uprobe_addr(ip, probe_addr);
 }
 
 /*
- * See uprobe syscall trampoline; the call to the trampoline will push
- * the return address on the stack, the trampoline itself then pushes
- * cx, r11 and ax.
+ * The trampoline slot pushes cx, r11, ax (the registers syscall clobbers)
+ * before doing the uprobe syscall. No return address is pushed — the
+ * probe site uses jmp, not call.
  */
 struct uprobe_syscall_args {
 	unsigned long ax;
 	unsigned long r11;
 	unsigned long cx;
-	unsigned long retaddr;
 };
+
+#define UPROBE_TRAMP_REDZONE 128
 
 SYSCALL_DEFINE0(uprobe)
 {
 	struct pt_regs *regs = task_pt_regs(current);
 	struct uprobe_syscall_args args;
-	unsigned long ip, sp, sret;
+	unsigned long probe_addr;
 	int err;
 
 	/* Allow execution only from uprobe trampolines. */
-	if (!in_uprobe_trampoline(regs->ip))
-		return -ENXIO;
+	if (!in_uprobe_trampoline(regs->ip, &probe_addr))
+		return -EPROTO;
 
 	err = copy_from_user(&args, (void __user *)regs->sp, sizeof(args));
 	if (err)
 		goto sigill;
 
-	ip = regs->ip;
-
 	/*
-	 * expose the "right" values of ax/r11/cx/ip/sp to uprobe_consumer/s, plus:
-	 * - adjust ip to the probe address, call saved next instruction address
-	 * - adjust sp to the probe's stack frame (check trampoline code)
+	 * Restore the register state as it was at the probe site:
+	 * - ax/r11/cx from the trampoline-saved copies on user stack
+	 * - adjust ip to the probe address based on matching slot
+	 * - adjust sp to skip red zone and pushed args
 	 */
 	regs->ax  = args.ax;
 	regs->r11 = args.r11;
 	regs->cx  = args.cx;
-	regs->ip  = args.retaddr - 5;
-	regs->sp += sizeof(args);
+	regs->ip  = probe_addr;
+	regs->sp += sizeof(args) + UPROBE_TRAMP_REDZONE;
 	regs->orig_ax = -1;
 
-	sp = regs->sp;
-
-	err = shstk_pop((u64 *)&sret);
-	if (err == -EFAULT || (!err && sret != args.retaddr))
-		goto sigill;
-
-	handle_syscall_uprobe(regs, regs->ip);
+	handle_syscall_uprobe(regs, probe_addr);
 
 	/*
-	 * Some of the uprobe consumers has changed sp, we can do nothing,
-	 * just return via iret.
+	 * Skip the jmp instruction at the probe site (5 bytes) unless
+	 * a consumer redirected execution elsewhere.
 	 */
-	if (regs->sp != sp) {
-		/* skip the trampoline call */
-		if (args.retaddr - 5 == regs->ip)
-			regs->ip += 5;
-		return regs->ax;
-	}
+	if (regs->ip == probe_addr)
+		regs->ip = probe_addr + 5;
 
-	regs->sp -= sizeof(args);
-
-	/* for the case uprobe_consumer has changed ax/r11/cx */
-	args.ax  = regs->ax;
-	args.r11 = regs->r11;
-	args.cx  = regs->cx;
-
-	/* keep return address unless we are instructed otherwise */
-	if (args.retaddr - 5 != regs->ip)
-		args.retaddr = regs->ip;
-
-	if (shstk_push(args.retaddr) == -EFAULT)
-		goto sigill;
-
-	regs->ip = ip;
-
-	err = copy_to_user((void __user *)regs->sp, &args, sizeof(args));
-	if (err)
-		goto sigill;
-
-	/* ensure sysret, see do_syscall_64() */
-	regs->r11 = regs->flags;
-	regs->cx  = regs->ip;
-	return 0;
+	/*
+	 * Return via iret by returning regs->ax. This preserves all
+	 * GP registers (including cx and r11) without needing any
+	 * user-space cleanup code. The iret path is used because we
+	 * don't set up cx/r11 for sysret.
+	 */
+	return regs->ax;
 
 sigill:
 	force_sig(SIGILL);
 	return -1;
 }
 
+/*
+ * All uprobe trampoline slots are identical: skip the red zone,
+ * save the three registers that syscall clobbers, then invoke
+ * the uprobe syscall. The handler returns directly to the probe
+ * caller via iret. Execution never returns to the trampoline.
+ */
 asm (
 	".pushsection .rodata\n"
-	".balign " __stringify(PAGE_SIZE) "\n"
-	"uprobe_trampoline_entry:\n"
+	".balign " __stringify(UPROBE_TRAMP_SLOT_SIZE) "\n"
+	"uprobe_trampoline_slot:\n"
+	"lea -128(%rsp), %rsp\n"
 	"push %rcx\n"
 	"push %r11\n"
 	"push %rax\n"
-	"mov $" __stringify(__NR_uprobe) ", %rax\n"
+	"mov $" __stringify(__NR_uprobe) ", %eax\n"
 	"syscall\n"
-	"pop %rax\n"
-	"pop %r11\n"
-	"pop %rcx\n"
-	"ret\n"
-	"int3\n"
-	".balign " __stringify(PAGE_SIZE) "\n"
+	"uprobe_trampoline_slot_end:\n"
 	".popsection\n"
 );
 
-extern u8 uprobe_trampoline_entry[];
+extern u8 uprobe_trampoline_slot[];
+extern u8 uprobe_trampoline_slot_end[];
 
 static int __init arch_uprobes_init(void)
 {
-	tramp_mapping_pages[0] = virt_to_page(uprobe_trampoline_entry);
+	unsigned int slot_size = uprobe_trampoline_slot_end - uprobe_trampoline_slot;
+	struct page *page;
+	u8 *page_addr;
+	int i;
+
+	BUILD_BUG_ON(UPROBE_TRAMP_SLOT_SIZE != 16);
+	WARN_ON_ONCE(slot_size != UPROBE_TRAMP_SLOT_SIZE);
+
+	page = alloc_page(GFP_KERNEL);
+	if (!page)
+		return -ENOMEM;
+
+	page_addr = page_address(page);
+	for (i = 0; i < UPROBE_TRAMP_MAX_SLOTS; i++)
+		memcpy(page_addr + i * UPROBE_TRAMP_SLOT_SIZE, uprobe_trampoline_slot, slot_size);
+
+	tramp_mapping_pages[0] = page;
 	return 0;
 }
 
@@ -909,7 +939,7 @@ late_initcall(arch_uprobes_init);
 
 enum {
 	EXPECT_SWBP,
-	EXPECT_CALL,
+	EXPECT_JMP,
 };
 
 struct write_opcode_ctx {
@@ -917,14 +947,14 @@ struct write_opcode_ctx {
 	int expect;
 };
 
-static int is_call_insn(uprobe_opcode_t *insn)
+static int is_jmp_insn(uprobe_opcode_t *insn)
 {
-	return *insn == CALL_INSN_OPCODE;
+	return *insn == JMP32_INSN_OPCODE;
 }
 
 /*
  * Verification callback used by int3_update uprobe_write calls to make sure
- * the underlying instruction is as expected - either int3 or call.
+ * the underlying instruction is as expected - either int3 or jmp.
  */
 static int verify_insn(struct page *page, unsigned long vaddr, uprobe_opcode_t *new_opcode,
 		       int nbytes, void *data)
@@ -939,8 +969,8 @@ static int verify_insn(struct page *page, unsigned long vaddr, uprobe_opcode_t *
 		if (is_swbp_insn(&old_opcode[0]))
 			return 1;
 		break;
-	case EXPECT_CALL:
-		if (is_call_insn(&old_opcode[0]))
+	case EXPECT_JMP:
+		if (is_jmp_insn(&old_opcode[0]))
 			return 1;
 		break;
 	}
@@ -978,7 +1008,7 @@ static int int3_update(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
 	 * so we can skip this step for optimize == true.
 	 */
 	if (!optimize) {
-		ctx.expect = EXPECT_CALL;
+		ctx.expect = EXPECT_JMP;
 		err = uprobe_write(auprobe, vma, vaddr, &int3, 1, verify_insn,
 				   true /* is_register */, false /* do_update_ref_ctr */,
 				   &ctx);
@@ -1015,13 +1045,13 @@ static int int3_update(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
 }
 
 static int swbp_optimize(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
-			 unsigned long vaddr, unsigned long tramp)
+			 unsigned long vaddr, unsigned long slot_vaddr)
 {
-	u8 call[5];
+	u8 jmp[5];
 
-	__text_gen_insn(call, CALL_INSN_OPCODE, (const void *) vaddr,
-			(const void *) tramp, CALL_INSN_SIZE);
-	return int3_update(auprobe, vma, vaddr, call, true /* optimize */);
+	__text_gen_insn(jmp, JMP32_INSN_OPCODE, (const void *) vaddr,
+			(const void *) slot_vaddr, JMP32_INSN_SIZE);
+	return int3_update(auprobe, vma, vaddr, jmp, true /* optimize */);
 }
 
 static int swbp_unoptimize(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
@@ -1049,11 +1079,17 @@ static bool __is_optimized(uprobe_opcode_t *insn, unsigned long vaddr)
 	struct __packed __arch_relative_insn {
 		u8 op;
 		s32 raddr;
-	} *call = (struct __arch_relative_insn *) insn;
+	} *jmp = (struct __arch_relative_insn *) insn;
 
-	if (!is_call_insn(insn))
+	if (!is_jmp_insn(&jmp->op))
 		return false;
-	return __in_uprobe_trampoline(vaddr + 5 + call->raddr);
+
+	guard(rcu)();
+	/*
+	 * resolve_uprobe_addr() expects IP pointing after syscall instruction
+	 * (after the slot, basically), so adjust jump target address accordingly
+	 */
+	return resolve_uprobe_addr(vaddr + 5 + jmp->raddr + UPROBE_TRAMP_SLOT_SIZE, NULL);
 }
 
 static int is_optimized(struct mm_struct *mm, unsigned long vaddr)
@@ -1113,8 +1149,9 @@ static int __arch_uprobe_optimize(struct arch_uprobe *auprobe, struct mm_struct 
 {
 	struct uprobe_trampoline *tramp;
 	struct vm_area_struct *vma;
+	unsigned long slot_vaddr;
 	bool new = false;
-	int err = 0;
+	int slot, err;
 
 	vma = find_vma(mm, vaddr);
 	if (!vma)
@@ -1122,8 +1159,17 @@ static int __arch_uprobe_optimize(struct arch_uprobe *auprobe, struct mm_struct 
 	tramp = get_uprobe_trampoline(vaddr, &new);
 	if (!tramp)
 		return -EINVAL;
-	err = swbp_optimize(auprobe, vma, vaddr, tramp->vaddr);
-	if (WARN_ON_ONCE(err) && new)
+
+	slot = tramp_alloc_slot(tramp, vaddr);
+	if (slot < 0) {
+		if (new)
+			destroy_uprobe_trampoline(tramp);
+		return slot;
+	}
+
+	slot_vaddr = tramp->vaddr + slot * UPROBE_TRAMP_SLOT_SIZE;
+	err = swbp_optimize(auprobe, vma, vaddr, slot_vaddr);
+	if (err && new)
 		destroy_uprobe_trampoline(tramp);
 	return err;
 }

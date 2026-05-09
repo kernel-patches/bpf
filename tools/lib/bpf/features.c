@@ -577,10 +577,12 @@ static int probe_ldimm64_full_range_off(int token_fd)
 static int probe_uprobe_syscall(int token_fd)
 {
 	/*
-	 * If kernel supports uprobe() syscall, it will return -ENXIO when called
-	 * from the outside of a kernel-generated uprobe trampoline.
+	 * If kernel supports uprobe() syscall, it will return -EPROTO when
+	 * called from outside a kernel-generated uprobe trampoline.
+	 * Older kernels with the red-zone-clobbering bug return -ENXIO;
+	 * we only enable the nop5 optimization on fixed kernels.
 	 */
-	return syscall(__NR_uprobe) < 0 && errno == ENXIO;
+	return syscall(__NR_uprobe) < 0 && errno == EPROTO;
 }
 #else
 static int probe_uprobe_syscall(int token_fd)

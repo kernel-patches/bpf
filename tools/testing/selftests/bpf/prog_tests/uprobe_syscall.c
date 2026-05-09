@@ -422,7 +422,8 @@ static void *check_attach(struct uprobe_syscall_executed *skel, trigger_t trigge
 	/* .. and check the trampoline is as expected. */
 	call = (struct __arch_relative_insn *) addr;
 	tramp = (void *) (call + 1) + call->raddr;
-	ASSERT_EQ(call->op, 0xe8, "call");
+	tramp = (void *)((unsigned long)tramp & ~(getpagesize() - 1UL));
+	ASSERT_EQ(call->op, 0xe9, "jmp");
 	ASSERT_OK(find_uprobes_trampoline(tramp), "uprobes_trampoline");
 
 	return tramp;
@@ -762,7 +763,7 @@ static void test_uprobe_error(void)
 	long err = syscall(__NR_uprobe);
 
 	ASSERT_EQ(err, -1, "error");
-	ASSERT_EQ(errno, ENXIO, "errno");
+	ASSERT_EQ(errno, EPROTO, "errno");
 }
 
 static void __test_uprobe_syscall(void)

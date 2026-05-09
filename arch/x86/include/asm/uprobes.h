@@ -25,6 +25,24 @@ enum {
 	ARCH_UPROBE_FLAG_OPTIMIZE_FAIL  = 1,
 };
 
+/*
+ * Trampoline page layout: identical 16-byte slots, each containing:
+ *   lea  -128(%rsp), %rsp (5B)  skip red zone
+ *   push %rcx             (1B)  save (syscall clobbers)
+ *   push %r11             (2B)  save (syscall clobbers)
+ *   push %rax             (1B)  save (syscall uses for nr)
+ *   mov  $336, %eax       (5B)  uprobe syscall number
+ *   syscall               (2B)
+ *                        = 16B, no padding needed
+ *
+ * The handler identifies which probe fired from regs->ip (each
+ * slot is at a unique offset), looks up the probe address from a
+ * per-process table, and returns directly to probe_addr+5 via iret
+ * with all registers restored.
+ */
+#define UPROBE_TRAMP_SLOT_SIZE	16
+#define UPROBE_TRAMP_MAX_SLOTS	(PAGE_SIZE / UPROBE_TRAMP_SLOT_SIZE)
+
 struct uprobe_xol_ops;
 
 struct arch_uprobe {
