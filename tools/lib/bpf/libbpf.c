@@ -8587,35 +8587,65 @@ static int bpf_object__read_kallsyms_file(struct bpf_object *obj)
 	return libbpf_kallsyms_parse(kallsyms_cb, obj);
 }
 
+static void split_module_from_ksym(const char *ksym_name,
+			const char **module_name,
+			size_t *module_name_len,
+			const char **kfunc_name)
+{
+	const char *sep = strstr(ksym_name, "__");
+
+	if (!sep) {
+		*module_name = NULL;
+		*module_name_len = 0;
+		*kfunc_name = ksym_name;
+	} else {
+		*module_name = ksym_name;
+		*module_name_len = sep - ksym_name;
+		*kfunc_name = sep + strlen("__");
+	}
+}
+
 static int find_ksym_btf_id(struct bpf_object *obj, const char *ksym_name,
-			    __u16 kind, struct btf **res_btf,
-			    struct module_btf **res_mod_btf)
+			__u16 kind, struct btf **res_btf,
+			struct module_btf **res_mod_btf)
 {
 	struct module_btf *mod_btf;
 	struct btf *btf;
-	int i, id, err;
+	int i, id = 0, err;
+	const char *module_name;
+	const char *kfunc_name;
+	size_t module_name_len;
 
+	split_module_from_ksym(ksym_name, &module_name, &module_name_len, &kfunc_name);
+	if (module_name_len == 0)
+		goto search_vmlinux;
+
+	mod_btf = NULL;
+
+	err = load_module_btfs(obj);
+	if (err)
+		goto search_vmlinux;
+
+	for (i = 0; i < obj->btf_module_cnt; i++) {
+		/* we assume module_btf's BTF FD is always >0 */
+		mod_btf = &obj->btf_modules[i];
+		if (strlen(mod_btf->name) == module_name_len &&
+			!strncmp(mod_btf->name, module_name, module_name_len)) {
+			btf = mod_btf->btf;
+			id = btf__find_by_name_kind_own(btf, kfunc_name, kind);
+			if (id != -ENOENT)
+				goto found;
+		}
+	}
+
+search_vmlinux:
 	btf = obj->btf_vmlinux;
 	mod_btf = NULL;
 	id = btf__find_by_name_kind(btf, ksym_name, kind);
-
-	if (id == -ENOENT) {
-		err = load_module_btfs(obj);
-		if (err)
-			return err;
-
-		for (i = 0; i < obj->btf_module_cnt; i++) {
-			/* we assume module_btf's BTF FD is always >0 */
-			mod_btf = &obj->btf_modules[i];
-			btf = mod_btf->btf;
-			id = btf__find_by_name_kind_own(btf, ksym_name, kind);
-			if (id != -ENOENT)
-				break;
-		}
-	}
-	if (id <= 0)
+	if (id == -ENOENT)
 		return -ESRCH;
 
+found:
 	*res_btf = btf;
 	*res_mod_btf = mod_btf;
 	return id;
