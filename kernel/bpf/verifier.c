@@ -2539,6 +2539,7 @@ static struct btf *__find_kfunc_desc_btf(struct bpf_verifier_env *env,
 		 */
 		sort(tab->descs, tab->nr_descs, sizeof(tab->descs[0]),
 		     kfunc_btf_cmp_by_off, NULL);
+
 	} else {
 		btf = b->btf;
 	}
@@ -2734,7 +2735,16 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	if (err)
 		return err;
 
-	addr = kallsyms_lookup_name(kfunc.name);
+	if (offset) {
+		struct bpf_kfunc_btf kf_btf = { .offset = offset };
+		struct module *mod;
+		struct bpf_kfunc_btf *b;
+		b = bsearch(&kf_btf, btf_tab->descs, btf_tab->nr_descs,
+            sizeof(btf_tab->descs[0]), kfunc_btf_cmp_by_off);
+		mod = b->module;
+		addr = find_kallsyms_symbol_value(mod, kfunc.name);
+	} else
+		addr = kallsyms_lookup_name(kfunc.name);
 	if (!addr) {
 		verbose(env, "cannot find address for kernel function %s\n", kfunc.name);
 		return -EINVAL;
