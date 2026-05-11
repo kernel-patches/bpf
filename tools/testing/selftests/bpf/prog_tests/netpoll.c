@@ -9,15 +9,20 @@
 #include "netpoll_sanity.skel.h"
 
 #define NS_TEST "netpoll_sanity_ns"
+#define NS_TEST_V6 "netpoll_sanity_ns_v6"
 #define DUMMY_DEV "dummy0"
 #define DUMMY_IP "10.0.0.1"
 #define REMOTE_IP "10.0.0.2"
+#define DUMMY_IP6 "fd00::1"
+#define REMOTE_IP6 "fd00::2"
 
-void test_netpoll_sanity(void)
+static void run_netpoll_test(const char *ns_name, const char *local_ip,
+			      const char *remote_ip, bool ipv6)
 {
 	LIBBPF_OPTS(bpf_test_run_opts, opts);
 	struct nstoken *nstoken = NULL;
 	struct netpoll_sanity *skel;
+	struct in6_addr addr6;
 	int err, pfd, fd;
 
 	skel = netpoll_sanity__open_and_load();
@@ -25,18 +30,28 @@ void test_netpoll_sanity(void)
 		return;
 
 	/* Create a network namespace with a dummy device */
-	SYS(fail, "ip netns add %s", NS_TEST);
-	SYS(fail, "ip -net %s link add %s type dummy", NS_TEST, DUMMY_DEV);
-	SYS(fail, "ip -net %s addr add %s/24 dev %s", NS_TEST, DUMMY_IP, DUMMY_DEV);
-	SYS(fail, "ip -net %s link set %s up", NS_TEST, DUMMY_DEV);
+	SYS(fail, "ip netns add %s", ns_name);
+	SYS(fail, "ip -net %s link add %s type dummy", ns_name, DUMMY_DEV);
+	if (ipv6)
+		SYS(fail, "ip -net %s addr add %s/64 dev %s", ns_name, local_ip, DUMMY_DEV);
+	else
+		SYS(fail, "ip -net %s addr add %s/24 dev %s", ns_name, local_ip, DUMMY_DEV);
+	SYS(fail, "ip -net %s link set %s up", ns_name, DUMMY_DEV);
 
-	nstoken = open_netns(NS_TEST);
+	nstoken = open_netns(ns_name);
 	if (!ASSERT_OK_PTR(nstoken, "open_netns"))
 		goto fail;
 
 	/* Configure the BPF program globals */
 	snprintf(skel->bss->dev_name, sizeof(skel->bss->dev_name), "%s", DUMMY_DEV);
-	skel->bss->remote_ip = inet_addr(REMOTE_IP);
+	if (ipv6) {
+		if (inet_pton(AF_INET6, remote_ip, &addr6) != 1)
+			goto fail;
+		__builtin_memcpy(&skel->bss->remote_ip6, &addr6, sizeof(addr6));
+		skel->bss->ipv6 = 1;
+	} else {
+		skel->bss->remote_ip = inet_addr(remote_ip);
+	}
 	skel->bss->local_port = 5555;
 	skel->bss->remote_port = 6666;
 	skel->bss->remote_mac[0] = 0xaa;
@@ -87,6 +102,15 @@ void test_netpoll_sanity(void)
 fail:
 	if (nstoken)
 		close_netns(nstoken);
-	SYS_NOFAIL("ip netns del " NS_TEST " &> /dev/null");
+	SYS_NOFAIL("ip netns del %s &> /dev/null", ns_name);
 	netpoll_sanity__destroy(skel);
+}
+
+void test_netpoll_sanity(void)
+{
+	if (test__start_subtest("ipv4"))
+		run_netpoll_test(NS_TEST, DUMMY_IP, REMOTE_IP, false);
+
+	if (test__start_subtest("ipv6"))
+		run_netpoll_test(NS_TEST_V6, DUMMY_IP6, REMOTE_IP6, true);
 }
