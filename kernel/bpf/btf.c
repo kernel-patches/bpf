@@ -7880,6 +7880,7 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	}
 	args = (const struct btf_param *)(t + 1);
 	nargs = btf_type_vlen(t);
+	sub->arg_cnt = nargs;
 	if (nargs > MAX_BPF_FUNC_REG_ARGS) {
 		if (!is_global)
 			return -EINVAL;
@@ -8067,7 +8068,6 @@ skip_pointer:
 		return -EINVAL;
 	}
 
-	sub->arg_cnt = nargs;
 	sub->args_cached = true;
 
 	return 0;
