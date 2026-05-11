@@ -162,7 +162,8 @@ static void priv_stack_check_guard(void __percpu *priv_stack_ptr, int alloc_size
 	}
 }
 
-struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *fp)
+struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *fp,
+				     struct bpf_subprog_info *subprog_info)
 {
 	u32 proglen;
 	u32 alloclen;

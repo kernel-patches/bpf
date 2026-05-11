@@ -2547,7 +2547,8 @@ static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struc
 	struct bpf_insn_aux_data *orig_insn_aux;
 
 	if (!bpf_prog_need_blind(prog))
-		return bpf_int_jit_compile(env, prog);
+		return bpf_int_jit_compile(env, prog,
+					   env ? &env->subprog_info[0] : NULL);
 
 	if (env) {
 		/*
@@ -2569,7 +2570,8 @@ static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struc
 	if (IS_ERR(prog))
 		goto out_restore;
 
-	prog = bpf_int_jit_compile(env, prog);
+	prog = bpf_int_jit_compile(env, prog,
+				   env ? &env->subprog_info[0] : NULL);
 	if (prog->jited) {
 		bpf_jit_prog_release_other(prog, orig_prog);
 		if (env)
@@ -3145,7 +3147,8 @@ const struct bpf_func_proto bpf_tail_call_proto = {
  * It is encouraged to implement bpf_int_jit_compile() instead, so that
  * eBPF and implicitly also cBPF can get JITed!
  */
-struct bpf_prog * __weak bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
+struct bpf_prog * __weak bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog,
+					     struct bpf_subprog_info *subprog_info)
 {
 	return prog;
 }

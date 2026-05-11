@@ -2337,7 +2337,8 @@ static struct bpf_binary_header *bpf_jit_alloc(struct bpf_jit *jit,
 /*
  * Compile eBPF program "fp"
  */
-struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *fp)
+struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *fp,
+				     struct bpf_subprog_info *subprog_info)
 {
 	struct bpf_binary_header *header;
 	struct s390_jit_data *jit_data;

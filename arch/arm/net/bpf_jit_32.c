@@ -2148,7 +2148,8 @@ bool bpf_jit_needs_zext(void)
 	return true;
 }
 
-struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
+struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog,
+				     struct bpf_subprog_info *subprog_info)
 {
 	struct bpf_binary_header *header;
 	struct jit_ctx ctx;
