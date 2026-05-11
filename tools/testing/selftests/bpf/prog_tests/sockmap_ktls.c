@@ -417,6 +417,113 @@ static void run_tests(int family, enum bpf_map_type map_type)
 	close(map);
 }
 
+/*
+ * Regression test for the KTLS + sockmap reverse-order frag_list UAF.
+ *
+ * Vulnerable sequence:
+ *   1. Insert receiver socket into sockmap (sets sk_data_ready =
+ *      sk_psock_verdict_data_ready)
+ *   2. Configure TLS RX on the same socket: tls_sw_strparser_arm() saves
+ *      sk_psock_verdict_data_ready as rx_ctx->saved_data_ready and replaces
+ *      sk_data_ready with tls_data_ready.
+ *
+ * When data arrives, tls_rx_msg_ready() calls saved_data_ready(), which is
+ * sk_psock_verdict_data_ready().  That drains sk_receive_queue via
+ * tcp_read_skb() / __skb_unlink() without advancing copied_seq.
+ * tls_strp_msg_load() then finds an empty queue while tcp_inq() is still
+ * non-zero, hits WARN_ON_ONCE(!first), and leaves a dangling frag_list
+ * pointer that tls_decrypt_sg() walks — a use-after-free.
+ *
+ * After the fix the kernel either:
+ *   (a) rejects setsockopt(TLS_RX) with EBUSY/EINVAL when the socket is
+ *       already owned by a psock, or
+ *   (b) correctly handles the data path so recv() returns the right data.
+ */
+static void test_sockmap_ktls_reverse_order_tls(int family, int sotype)
+{
+	struct tls12_crypto_info_aes_gcm_128 crypto_info = {};
+	char send_buf[] = "hello ktls sockmap reverse order";
+	char recv_buf[sizeof(send_buf)] = {};
+	struct test_sockmap_ktls *skel;
+	int c = -1, p = -1, zero = 0;
+	int prog_fd, map_fd;
+	ssize_t n;
+	int err;
+
+	skel = test_sockmap_ktls__open_and_load();
+	if (!ASSERT_TRUE(skel, "open_and_load"))
+		return;
+
+	err = create_pair(family, sotype, &c, &p);
+	if (!ASSERT_OK(err, "create_pair"))
+		goto out;
+
+	prog_fd = bpf_program__fd(skel->progs.prog_skb_verdict_pass);
+	map_fd = bpf_map__fd(skel->maps.sock_map_verdict);
+
+	err = bpf_prog_attach(prog_fd, map_fd, BPF_SK_SKB_VERDICT, 0);
+	if (!ASSERT_OK(err, "bpf_prog_attach sk_skb verdict"))
+		goto out;
+
+	/* Configure TLS TX on the sender (normal order, no sockmap) */
+	err = setsockopt(c, IPPROTO_TCP, TCP_ULP, "tls", strlen("tls"));
+	if (!ASSERT_OK(err, "setsockopt(TCP_ULP) client"))
+		goto out;
+
+	crypto_info.info.version = TLS_1_2_VERSION;
+	crypto_info.info.cipher_type = TLS_CIPHER_AES_GCM_128;
+	memset(crypto_info.key, 0x01, sizeof(crypto_info.key));
+	memset(crypto_info.salt, 0x02, sizeof(crypto_info.salt));
+
+	err = setsockopt(c, SOL_TLS, TLS_TX, &crypto_info, sizeof(crypto_info));
+	if (!ASSERT_OK(err, "setsockopt(TLS_TX)"))
+		goto out;
+
+	/* Insert receiver into sockmap BEFORE TLS RX — the vulnerable ordering */
+	err = bpf_map_update_elem(map_fd, &zero, &p, BPF_NOEXIST);
+	if (!ASSERT_OK(err, "bpf_map_update_elem server"))
+		goto out;
+
+	/* Attempt TLS RX setup AFTER sockmap insertion */
+	err = setsockopt(p, IPPROTO_TCP, TCP_ULP, "tls", strlen("tls"));
+	if (err) {
+		/* Kernel correctly rejected TLS ULP on a psock-owned socket */
+		ASSERT_TRUE(errno == EINVAL || errno == EBUSY,
+			    "expected EINVAL or EBUSY for TCP_ULP on sockmap socket");
+		goto out;
+	}
+
+	err = setsockopt(p, SOL_TLS, TLS_RX, &crypto_info, sizeof(crypto_info));
+	if (err) {
+		/* Kernel correctly rejected TLS RX after sockmap insertion */
+		ASSERT_TRUE(errno == EINVAL || errno == EBUSY || errno == ENOTSUPP,
+			    "expected rejection of TLS_RX on sockmap socket");
+		goto out;
+	}
+
+	/*
+	 * Setup was allowed — verify data transfer is correct.
+	 * A buggy kernel hits WARN_ON_ONCE in tls_strp_load_anchor_with_queue
+	 * and may UAF in tls_decrypt_sg when walking the stale frag_list.
+	 */
+	n = send(c, send_buf, sizeof(send_buf), 0);
+	if (!ASSERT_EQ(n, (ssize_t)sizeof(send_buf), "send"))
+		goto out;
+
+	n = recv_timeout(p, recv_buf, sizeof(recv_buf), 0, 5);
+	if (!ASSERT_EQ(n, (ssize_t)sizeof(send_buf), "recv"))
+		goto out;
+
+	ASSERT_OK(memcmp(send_buf, recv_buf, sizeof(send_buf)), "data integrity");
+
+out:
+	if (c != -1)
+		close(c);
+	if (p != -1)
+		close(p);
+	test_sockmap_ktls__destroy(skel);
+}
+
 static void run_ktls_test(int family, int sotype)
 {
 	if (test__start_subtest("tls simple offload"))
@@ -429,6 +536,8 @@ static void run_ktls_test(int family, int sotype)
 		test_sockmap_ktls_tx_no_buf(family, sotype, true);
 	if (test__start_subtest("tls tx with pop"))
 		test_sockmap_ktls_tx_pop(family, sotype);
+	if (test__start_subtest("tls rx after sockmap insert"))
+		test_sockmap_ktls_reverse_order_tls(family, sotype);
 }
 
 void test_sockmap_ktls(void)
