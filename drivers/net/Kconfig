@@ -364,6 +364,17 @@ config NETCONSOLE_PREPEND_RELEASE
 	  message.  See <file:Documentation/networking/netconsole.rst> for
 	  details.
 
+config BPF_NETPOLL
+	bool "BPF netpoll UDP support"
+	depends on BPF_SYSCALL && NET
+	select NETPOLL
+	help
+	  Enable BPF kfuncs for sending UDP packets via netpoll.
+	  This allows BPF programs to send UDP packets from any
+	  context using the netpoll infrastructure.
+
+	  If unsure, say N.
+
 config NETPOLL
 	def_bool NETCONSOLE
 
