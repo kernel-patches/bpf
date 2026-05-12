@@ -9,6 +9,7 @@
 #include <linux/perf_event.h>
 #include <linux/btf_ids.h>
 #include <linux/buildid.h>
+#include <linux/mmap_lock.h>
 #include "percpu_freelist.h"
 #include "mmap_unlock_work.h"
 
@@ -158,6 +159,105 @@ static inline void stack_map_build_id_set_ip(struct bpf_stack_build_id *id)
 	memset(id->build_id, 0, BUILD_ID_SIZE_MAX);
 }
 
+struct stack_map_vma_lock {
+	bool vma_locked;
+	struct vm_area_struct *vma;
+	struct mm_struct *mm;
+};
+
+static struct vm_area_struct *
+stack_map_lock_vma(struct stack_map_vma_lock *lock, unsigned long ip)
+{
+	struct mm_struct *mm = lock->mm;
+	struct vm_area_struct *vma;
+
+	if (WARN_ON_ONCE(!mm))
+		return NULL;
+
+	vma = lock_vma_under_rcu(mm, ip);
+	if (vma)
+		goto vma_locked;
+
+	if (!mmap_read_trylock(mm))
+		return NULL;
+
+	vma = vma_lookup(mm, ip);
+	if (!vma) {
+		mmap_read_unlock(mm);
+		return NULL;
+	}
+
+#ifdef CONFIG_PER_VMA_LOCK
+	if (!vma_start_read_locked(vma)) {
+		mmap_read_unlock(mm);
+		return NULL;
+	}
+	mmap_read_unlock(mm);
+#else
+	mmap_read_unlock(mm);
+	return NULL;
+#endif
+vma_locked:
+	lock->vma_locked = true;
+	lock->vma = vma;
+	return vma;
+}
+
+static void stack_map_unlock_vma(struct stack_map_vma_lock *lock)
+{
+	struct vm_area_struct *vma = lock->vma;
+
+	if (lock->vma_locked) {
+		if (WARN_ON_ONCE(!vma))
+			goto out;
+		vma_end_read(vma);
+	}
+out:
+	lock->vma_locked = false;
+	lock->vma = NULL;
+}
+
+static void stack_map_get_build_id_offset_sleepable(struct bpf_stack_build_id *id_offs,
+						    u32 trace_nr)
+{
+	struct mm_struct *mm = current->mm;
+	struct stack_map_vma_lock lock = {
+		.vma_locked = false,
+		.vma = NULL,
+		.mm = mm,
+	};
+	unsigned long vm_pgoff, vm_start;
+	struct vm_area_struct *vma;
+	struct file *file;
+	u64 ip;
+
+	for (u32 i = 0; i < trace_nr; i++) {
+		ip = READ_ONCE(id_offs[i].ip);
+		vma = stack_map_lock_vma(&lock, ip);
+		if (!vma || !vma->vm_file) {
+			stack_map_build_id_set_ip(&id_offs[i]);
+			stack_map_unlock_vma(&lock);
+			continue;
+		}
+
+		file = get_file(vma->vm_file);
+		vm_pgoff = vma->vm_pgoff;
+		vm_start = vma->vm_start;
+		stack_map_unlock_vma(&lock);
+
+		/* build_id_parse_file() may block on filesystem reads */
+		if (build_id_parse_file(file, id_offs[i].build_id, NULL)) {
+			stack_map_build_id_set_ip(&id_offs[i]);
+			fput(file);
+			continue;
+		}
+		fput(file);
+
+		id_offs[i].offset = (vm_pgoff << PAGE_SHIFT) + ip - vm_start;
+		id_offs[i].status = BPF_STACK_BUILD_ID_VALID;
+	}
+}
+
 /*
  * Expects all id_offs[i].ip values to be set to correct initial IPs.
  * They will be subsequently:
@@ -177,6 +277,11 @@ static void stack_map_get_build_id_offset(struct bpf_stack_build_id *id_offs,
 	struct vm_area_struct *vma, *prev_vma = NULL;
 	const char *prev_build_id;
 	int i;
+
+	if (may_fault && has_user_ctx) {
+		stack_map_get_build_id_offset_sleepable(id_offs, trace_nr);
+		return;
+	}
 
 	/* If the irq_work is in use, fall back to report ips. Same
 	 * fallback is used for kernel stack (!user) on a stackmap with
