@@ -100,6 +100,8 @@ struct bpf_cgroup_storage {
 struct bpf_cgroup_link {
 	struct bpf_link link;
 	struct cgroup *cgroup;
+	struct bpf_map *map;
+	wait_queue_head_t wait_hup;
 };
 
 struct bpf_prog_list {
@@ -109,6 +111,14 @@ struct bpf_prog_list {
 	struct bpf_cgroup_storage *storage[MAX_BPF_CGROUP_STORAGE_TYPE];
 	u32 flags;
 };
+
+void bpf_cgroup_struct_ops_register(int atype, u32 type_id, void *cfi_stubs, bool mult_trace);
+int cgroup_bpf_struct_ops_attach(struct bpf_map *map, const union bpf_attr *attr);
+
+#define bpf_cgroup_struct_ops_foreach(var, eff, cgrp, atype)		\
+	for (eff = rcu_dereference((cgrp)->bpf.effective[atype])->items;\
+	     ((var) = READ_ONCE(eff->kdata));				\
+	     eff++)
 
 void __init cgroup_bpf_lifetime_notifier_init(void);
 
@@ -185,6 +195,11 @@ static inline bool cgroup_bpf_sock_enabled(struct sock *sk,
 
 	array = rcu_access_pointer(cgrp->bpf.effective[type]);
 	return array != &bpf_empty_prog_array;
+}
+
+static inline bool cgroup_bpf_is_struct_ops_atype(enum cgroup_bpf_attach_type atype)
+{
+	return atype == CGROUP_TCP_SOCK_OPS;
 }
 
 /* Wrappers for __cgroup_bpf_run_filter_skb() guarded by cgroup_bpf_enabled. */
@@ -476,6 +491,20 @@ static inline int bpf_percpu_cgroup_storage_copy(struct bpf_map *map, void *key,
 static inline int bpf_percpu_cgroup_storage_update(struct bpf_map *map,
 					void *key, void *value, u64 flags) {
 	return 0;
+}
+
+static inline bool cgroup_bpf_is_struct_ops_atype(int atype)
+{
+	return false;
+}
+static inline void bpf_cgroup_struct_ops_register(int atype, u32 type_id, void *cfi_stubs,
+						  bool mult_trace)
+{
+}
+static inline int cgroup_bpf_struct_ops_attach(struct bpf_map *map,
+					       const union bpf_attr *attr)
+{
+	return -EOPNOTSUPP;
 }
 
 #define cgroup_bpf_enabled(atype) (0)
