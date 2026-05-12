@@ -5045,6 +5045,8 @@ process_func:
 		}
 	} else {
 		depth += subprog_depth;
+		if (depth > env->max_stack_depth)
+			env->max_stack_depth = depth;
 		if (depth > MAX_BPF_STACK) {
 			total = 0;
 			for (tmp = idx; tmp >= 0; tmp = dinfo[tmp].caller)
@@ -5184,6 +5186,8 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 
 	if (priv_stack_mode == PRIV_STACK_UNKNOWN)
 		priv_stack_mode = bpf_enable_priv_stack(env->prog);
+
+	env->max_stack_depth = env->subprog_info[0].stack_depth;
 
 	/* All async_cb subprogs use normal kernel stack. If a particular
 	 * subprog appears in both main prog and async_cb subtree, that
@@ -18289,7 +18293,7 @@ static void print_verification_stats(struct bpf_verifier_env *env)
 		verbose(env, "stack depth %d", env->subprog_info[0].stack_depth);
 		for (i = 1; i < subprog_cnt; i++)
 			verbose(env, "+%d", env->subprog_info[i].stack_depth);
-		verbose(env, "\n");
+		verbose(env, " max %d\n", env->max_stack_depth);
 		verbose(env, "insns processed %d", env->subprog_info[0].insn_processed);
 		for (i = 1; i < subprog_cnt; i++)
 			if (bpf_subprog_is_global(env, i))
