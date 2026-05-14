@@ -2624,8 +2624,7 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 	struct bpf_insn *insns = env->prog->insnsi;
 	struct insn_live_regs *state;
 	int insn_cnt = env->prog->len;
-	u64 pos, insn_pos;
-	int err = 0, i, j, subprog, start, end;
+	int err = 0, i, subprog, start, end;
 	bool changed, ret_reg_pair;
 
 	/* Use the following algorithm:
@@ -2702,31 +2701,6 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 		 * upper half of that register is alive after the instruction.
 		 */
 		insn_aux[i].zext_dst = def32 >= 0 && (mask_hi(out) & BIT(def32));
-	}
-
-	if (env->log.level & BPF_LOG_LEVEL2) {
-		verbose(env, "Live regs before insn:\n");
-		for (i = 0; i < insn_cnt; ++i) {
-			if (env->insn_aux_data[i].scc)
-				verbose(env, "%3d ", env->insn_aux_data[i].scc);
-			else
-				verbose(env, "    ");
-			verbose(env, "%3d: ", i);
-			for (j = BPF_REG_0; j < BPF_REG_10; ++j)
-				if (insn_aux[i].live_regs_before & BIT(j))
-					verbose(env, "%d", j);
-				else
-					verbose(env, ".");
-			verbose(env, " ");
-			pos = env->log.end_pos;
-			bpf_verbose_insn(env, &insns[i]);
-			insn_pos = env->log.end_pos;
-			if (insn_aux[i].zext_dst)
-				verbose(env, "%*c; zext", bpf_vlog_alignment(insn_pos - pos), ' ');
-			verbose(env, "\n");
-			if (bpf_is_ldimm64(&insns[i]))
-				i++;
-		}
 	}
 
 out:
