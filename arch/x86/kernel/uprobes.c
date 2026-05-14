@@ -636,9 +636,21 @@ struct uprobe_trampoline {
 	unsigned long		vaddr;
 };
 
+#define LEA_INSN_SIZE		5
+#define OPT_INSN_SIZE		(LEA_INSN_SIZE + CALL_INSN_SIZE)
+#define OPT_JMP8_OFFSET		(OPT_INSN_SIZE - JMP8_INSN_SIZE)
+#define REDZONE_SIZE		0x80
+
+static const u8 lea_rsp[] = { 0x48, 0x8d, 0x64, 0x24, 0x80 };
+
+static bool is_lea_insn(const uprobe_opcode_t *insn)
+{
+	return !memcmp(insn, lea_rsp, LEA_INSN_SIZE);
+}
+
 static bool is_reachable_by_call(unsigned long vtramp, unsigned long vaddr)
 {
-	long delta = (long)(vaddr + 5 - vtramp);
+	long delta = (long)(vaddr + OPT_INSN_SIZE - vtramp);
 
 	return delta >= INT_MIN && delta <= INT_MAX;
 }
@@ -651,7 +663,7 @@ static unsigned long find_nearest_trampoline(unsigned long vaddr)
 	};
 	unsigned long low_limit, high_limit;
 	unsigned long low_tramp, high_tramp;
-	unsigned long call_end = vaddr + 5;
+	unsigned long call_end = vaddr + OPT_INSN_SIZE;
 
 	if (check_add_overflow(call_end, INT_MIN, &low_limit))
 		low_limit = PAGE_SIZE;
@@ -826,8 +838,8 @@ SYSCALL_DEFINE0(uprobe)
 	regs->ax  = args.ax;
 	regs->r11 = args.r11;
 	regs->cx  = args.cx;
-	regs->ip  = args.retaddr - 5;
-	regs->sp += sizeof(args);
+	regs->ip  = args.retaddr - OPT_INSN_SIZE;
+	regs->sp += sizeof(args) + REDZONE_SIZE;
 	regs->orig_ax = -1;
 
 	sp = regs->sp;
@@ -844,12 +856,12 @@ SYSCALL_DEFINE0(uprobe)
 	 */
 	if (regs->sp != sp) {
 		/* skip the trampoline call */
-		if (args.retaddr - 5 == regs->ip)
-			regs->ip += 5;
+		if (args.retaddr - OPT_INSN_SIZE == regs->ip)
+			regs->ip += OPT_INSN_SIZE;
 		return regs->ax;
 	}
 
-	regs->sp -= sizeof(args);
+	regs->sp -= sizeof(args) + REDZONE_SIZE;
 
 	/* for the case uprobe_consumer has changed ax/r11/cx */
 	args.ax  = regs->ax;
@@ -857,7 +869,7 @@ SYSCALL_DEFINE0(uprobe)
 	args.cx  = regs->cx;
 
 	/* keep return address unless we are instructed otherwise */
-	if (args.retaddr - 5 != regs->ip)
+	if (args.retaddr - OPT_INSN_SIZE != regs->ip)
 		args.retaddr = regs->ip;
 
 	if (shstk_push(args.retaddr) == -EFAULT)
@@ -891,7 +903,7 @@ asm (
 	"pop %rax\n"
 	"pop %r11\n"
 	"pop %rcx\n"
-	"ret\n"
+	"ret $" __stringify(REDZONE_SIZE) "\n"
 	"int3\n"
 	".balign " __stringify(PAGE_SIZE) "\n"
 	".popsection\n"
@@ -909,7 +921,7 @@ late_initcall(arch_uprobes_init);
 
 enum {
 	EXPECT_SWBP,
-	EXPECT_CALL,
+	EXPECT_OPTIMIZED,
 };
 
 struct write_opcode_ctx {
@@ -930,17 +942,18 @@ static int verify_insn(struct page *page, unsigned long vaddr, uprobe_opcode_t *
 		       int nbytes, void *data)
 {
 	struct write_opcode_ctx *ctx = data;
-	uprobe_opcode_t old_opcode[5];
+	uprobe_opcode_t old_opcode[OPT_INSN_SIZE];
 
-	uprobe_copy_from_page(page, ctx->base, (uprobe_opcode_t *) &old_opcode, 5);
+	uprobe_copy_from_page(page, ctx->base, old_opcode, OPT_INSN_SIZE);
 
 	switch (ctx->expect) {
 	case EXPECT_SWBP:
 		if (is_swbp_insn(&old_opcode[0]))
 			return 1;
 		break;
-	case EXPECT_CALL:
-		if (is_call_insn(&old_opcode[0]))
+	case EXPECT_OPTIMIZED:
+		if (is_lea_insn(&old_opcode[0]) &&
+		    is_call_insn(&old_opcode[LEA_INSN_SIZE]))
 			return 1;
 		break;
 	}
@@ -963,7 +976,7 @@ static int verify_insn(struct page *page, unsigned long vaddr, uprobe_opcode_t *
  *   - SMP sync all CPUs
  */
 static int int3_update(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
-		       unsigned long vaddr, char *insn, bool optimize)
+		       unsigned long vaddr, char *insn, int size, bool optimize)
 {
 	uprobe_opcode_t int3 = UPROBE_SWBP_INSN;
 	struct write_opcode_ctx ctx = {
@@ -978,7 +991,7 @@ static int int3_update(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
 	 * so we can skip this step for optimize == true.
 	 */
 	if (!optimize) {
-		ctx.expect = EXPECT_CALL;
+		ctx.expect = EXPECT_OPTIMIZED;
 		err = uprobe_write(auprobe, vma, vaddr, &int3, 1, verify_insn,
 				   true /* is_register */, false /* do_update_ref_ctr */,
 				   &ctx);
@@ -990,7 +1003,7 @@ static int int3_update(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
 
 	/* Write all but the first byte of the patched range. */
 	ctx.expect = EXPECT_SWBP;
-	err = uprobe_write(auprobe, vma, vaddr + 1, insn + 1, 4, verify_insn,
+	err = uprobe_write(auprobe, vma, vaddr + 1, insn + 1, size - 1, verify_insn,
 			   true /* is_register */, false /* do_update_ref_ctr */,
 			   &ctx);
 	if (err)
@@ -1017,17 +1030,32 @@ static int int3_update(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
 static int swbp_optimize(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
 			 unsigned long vaddr, unsigned long tramp)
 {
-	u8 call[5];
+	u8 insn[OPT_INSN_SIZE], *call = &insn[LEA_INSN_SIZE];
 
-	__text_gen_insn(call, CALL_INSN_OPCODE, (const void *) vaddr,
+	/*
+	 * We have nop10 instruction (with first byte overwritten to int3),
+	 * changing it to:
+	 *   lea -0x80(%rsp), %rsp
+	 *   call tramp
+	 */
+	memcpy(insn, lea_rsp, LEA_INSN_SIZE);
+	__text_gen_insn(call, CALL_INSN_OPCODE,
+			(const void *) (vaddr + LEA_INSN_SIZE),
 			(const void *) tramp, CALL_INSN_SIZE);
-	return int3_update(auprobe, vma, vaddr, call, true /* optimize */);
+	return int3_update(auprobe, vma, vaddr, insn, OPT_INSN_SIZE, true /* optimize */);
 }
 
 static int swbp_unoptimize(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
 			   unsigned long vaddr)
 {
-	return int3_update(auprobe, vma, vaddr, auprobe->insn, false /* optimize */);
+	/*
+	 * We have optimized nop10 (lea, call), changing it to 'jmp rel8' to
+	 * end of the 10-byte slot instead of restoring the original nop10,
+	 * because we could have thread already inside lea instruction.
+	 */
+	u8 jmp[OPT_INSN_SIZE] = { JMP8_INSN_OPCODE, OPT_JMP8_OFFSET };
+
+	return int3_update(auprobe, vma, vaddr, jmp, JMP8_INSN_SIZE, false /* optimize */);
 }
 
 static int copy_from_vaddr(struct mm_struct *mm, unsigned long vaddr, void *dst, int len)
@@ -1049,19 +1077,21 @@ static bool __is_optimized(uprobe_opcode_t *insn, unsigned long vaddr)
 	struct __packed __arch_relative_insn {
 		u8 op;
 		s32 raddr;
-	} *call = (struct __arch_relative_insn *) insn;
+	} *call = (struct __arch_relative_insn *)(insn + LEA_INSN_SIZE);
 
-	if (!is_call_insn(insn))
+	if (!is_lea_insn(insn))
 		return false;
-	return __in_uprobe_trampoline(vaddr + 5 + call->raddr);
+	if (!is_call_insn(insn + LEA_INSN_SIZE))
+		return false;
+	return __in_uprobe_trampoline(vaddr + OPT_INSN_SIZE + call->raddr);
 }
 
 static int is_optimized(struct mm_struct *mm, unsigned long vaddr)
 {
-	uprobe_opcode_t insn[5];
+	uprobe_opcode_t insn[OPT_INSN_SIZE];
 	int err;
 
-	err = copy_from_vaddr(mm, vaddr, &insn, 5);
+	err = copy_from_vaddr(mm, vaddr, &insn, OPT_INSN_SIZE);
 	if (err)
 		return err;
 	return __is_optimized((uprobe_opcode_t *)&insn, vaddr);
@@ -1095,14 +1125,25 @@ int set_orig_insn(struct arch_uprobe *auprobe, struct vm_area_struct *vma,
 		  unsigned long vaddr)
 {
 	if (test_bit(ARCH_UPROBE_FLAG_CAN_OPTIMIZE, &auprobe->flags)) {
-		int ret = is_optimized(vma->vm_mm, vaddr);
-		if (ret < 0)
+		uprobe_opcode_t insn[OPT_INSN_SIZE];
+		int ret;
+
+		ret = copy_from_vaddr(vma->vm_mm, vaddr, &insn, OPT_INSN_SIZE);
+		if (ret)
 			return ret;
-		if (ret) {
+		if (__is_optimized((uprobe_opcode_t *)&insn, vaddr)) {
 			ret = swbp_unoptimize(auprobe, vma, vaddr);
 			WARN_ON_ONCE(ret);
 			return ret;
 		}
+		/*
+		 * We can have re-attached probe on top of jmp8 instruction,
+		 * which did not get optimized. We need to restore the jmp8
+		 * instruction, instead of the original instruction (nop10).
+		 */
+		if (is_swbp_insn(&insn[0]) && insn[1] == OPT_JMP8_OFFSET)
+			return uprobe_write_opcode(auprobe, vma, vaddr, JMP8_INSN_OPCODE,
+						   false /* is_register */);
 	}
 	return uprobe_write_opcode(auprobe, vma, vaddr, *(uprobe_opcode_t *)&auprobe->insn,
 				   false /* is_register */);
@@ -1131,7 +1172,7 @@ static int __arch_uprobe_optimize(struct arch_uprobe *auprobe, struct mm_struct 
 void arch_uprobe_optimize(struct arch_uprobe *auprobe, unsigned long vaddr)
 {
 	struct mm_struct *mm = current->mm;
-	uprobe_opcode_t insn[5];
+	uprobe_opcode_t insn[OPT_INSN_SIZE];
 
 	if (!should_optimize(auprobe))
 		return;
@@ -1142,7 +1183,7 @@ void arch_uprobe_optimize(struct arch_uprobe *auprobe, unsigned long vaddr)
 	 * Check if some other thread already optimized the uprobe for us,
 	 * if it's the case just go away silently.
 	 */
-	if (copy_from_vaddr(mm, vaddr, &insn, 5))
+	if (copy_from_vaddr(mm, vaddr, &insn, OPT_INSN_SIZE))
 		goto unlock;
 	if (!is_swbp_insn((uprobe_opcode_t*) &insn))
 		goto unlock;
@@ -1160,14 +1201,24 @@ unlock:
 
 static bool can_optimize(struct insn *insn, unsigned long vaddr)
 {
-	if (!insn->x86_64 || insn->length != 5)
-		return false;
-
-	if (!insn_is_nop(insn))
+	if (!insn->x86_64)
 		return false;
 
 	/* We can't do cross page atomic writes yet. */
-	return PAGE_SIZE - (vaddr & ~PAGE_MASK) >= 5;
+	if (PAGE_SIZE - (vaddr & ~PAGE_MASK) < OPT_INSN_SIZE)
+		return false;
+
+	/* We can optimize on top of nop10.. */
+	if (insn->length == OPT_INSN_SIZE && insn_is_nop(insn))
+		return true;
+
+	/* .. and JMP rel8 to end of slot — check swbp_unoptimize. */
+	if (insn->length == 2 &&
+	    insn->opcode.bytes[0] == JMP8_INSN_OPCODE &&
+	    insn->immediate.value == OPT_JMP8_OFFSET)
+		return true;
+
+	return false;
 }
 #else /* 32-bit: */
 /*
