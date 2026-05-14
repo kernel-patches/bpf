@@ -9,6 +9,8 @@
 #include <linux/filter.h> /* for MAX_BPF_STACK */
 #include <linux/tnum.h>
 #include <linux/cnum.h>
+#include <linux/hashtable.h>
+#include <linux/jhash.h>
 
 /* Maximum variable offset umax_value permitted when resolving memory accesses.
  * In practice this is far bigger than any realistic pointer offset; this limit
@@ -660,6 +662,17 @@ struct bpf_loop {
 	bool irreducible;
 };
 
+struct bpf_callchain {
+	u32 insn_idx[MAX_CALL_FRAMES];
+	u32 curframe;
+};
+
+struct bpf_callchain_entry {
+	struct hlist_node node;
+	struct bpf_callchain cc;
+	u64 count;
+};
+
 struct bpf_insn_aux_data {
 	union {
 		enum bpf_reg_type ptr_type;	/* pointer type for load/store insns */
@@ -1043,6 +1056,7 @@ struct bpf_verifier_env {
 	u32 scc_cnt;
 	struct bpf_iarray *succ;
 	struct bpf_iarray *gotox_tmp_buf;
+	DECLARE_HASHTABLE(callchain_htab, 8);
 };
 
 static inline struct bpf_func_info_aux *subprog_aux(struct bpf_verifier_env *env, int subprog)
