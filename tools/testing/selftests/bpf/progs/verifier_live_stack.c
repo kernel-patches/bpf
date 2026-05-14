@@ -64,7 +64,7 @@ SEC("socket")
 __log_level(2)
 __msg("stack use/def subprog#0 must_write_not_same_slot (d0,cs0):")
 __msg("6: (7b) *(u64 *)(r2 +0) = r0{{$}}")
-__msg("Live regs before insn:")
+__msg("Program dump")
 __naked void must_write_not_same_slot(void)
 {
 	asm volatile (
