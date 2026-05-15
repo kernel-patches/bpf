@@ -936,6 +936,91 @@ static void test_uprobe_error(void)
 	ASSERT_EQ(errno, ENXIO, "errno");
 }
 
+struct child_args {
+	struct uprobe_syscall_executed *skel;
+	void *addr;
+};
+
+static int child_func(void *_args)
+{
+	struct child_args *args = _args;
+
+	/* Make sure the child's probe is still there and optimized.. */
+	if (memcmp(args->addr, lea_rsp, sizeof(lea_rsp)))
+		_exit(1);
+
+	args->skel->bss->pid = getpid();
+
+	/* .. and it executes properly. */
+	uprobe_test();
+
+	if (args->skel->bss->executed != 3)
+		_exit(2);
+
+	_exit(0);
+}
+
+static void test_uprobe_fork_optimized(bool clone_vm)
+{
+	struct uprobe_syscall_executed *skel = NULL;
+	struct bpf_link *link = NULL;
+	struct child_args args;
+	unsigned long offset;
+	int pid, status, err;
+	char stack[65535];
+	void *addr;
+
+	addr = find_nop10(uprobe_test);
+	if (!ASSERT_NEQ(addr, NULL, "find_nop10"))
+		return;
+
+	skel = uprobe_syscall_executed__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		goto cleanup;
+
+	offset = get_uprobe_offset(addr);
+
+	link = bpf_program__attach_uprobe_opts(skel->progs.test_uprobe,
+				-1, "/proc/self/exe", offset, NULL);
+	if (!ASSERT_OK_PTR(link, "attach_uprobe"))
+		goto cleanup;
+
+	skel->bss->pid = getpid();
+
+	/* Trigger optimization of uprobe in uprobe_test.  */
+	uprobe_test();
+	uprobe_test();
+
+	/* Make sure it got optimied. */
+	if (!ASSERT_OK(memcmp(addr, lea_rsp, sizeof(lea_rsp)), "optimized"))
+		goto cleanup;
+
+	args.skel = skel;
+	args.addr = addr;
+
+	if (clone_vm) {
+		pid = clone(child_func, stack + sizeof(stack), CLONE_VM|SIGCHLD, &args);
+		if (!ASSERT_GT(pid, 0, "clone"))
+			goto cleanup;
+	} else {
+		pid = fork();
+		if (!ASSERT_GE(pid, 0, "fork"))
+			goto cleanup;
+		if (pid == 0)
+			child_func(&args);
+	}
+
+	/* Wait for the child and verify it exited properly with 0. */
+	err = waitpid(pid, &status, 0);
+	if (ASSERT_EQ(err, pid, "waitpid")) {
+		ASSERT_EQ(WIFEXITED(status), 1, "child_exited");
+		ASSERT_EQ(WEXITSTATUS(status), 0, "child_exit_code");
+	}
+
+cleanup:
+	uprobe_syscall_executed__destroy(skel);
+}
+
 static void __test_uprobe_syscall(void)
 {
 	if (test__start_subtest("uretprobe_regs_equal"))
@@ -956,6 +1041,10 @@ static void __test_uprobe_syscall(void)
 		test_uprobe_race();
 	if (test__start_subtest("uprobe_red_zone"))
 		test_uprobe_red_zone();
+	if (test__start_subtest("uprobe_optimized_fork"))
+		test_uprobe_fork_optimized(false);
+	if (test__start_subtest("uprobe_optimized_clone_vm"))
+		test_uprobe_fork_optimized(true);
 	if (test__start_subtest("uprobe_error"))
 		test_uprobe_error();
 	if (test__start_subtest("uprobe_regs_equal"))
