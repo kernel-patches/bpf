@@ -557,10 +557,15 @@ static void emit_prologue(u8 **pprog, u8 *ip, u32 stack_depth, bool ebpf_from_cb
 			/* Keep the same instruction layout. */
 			emit_nops(&prog, 3);     /* nop3 */
 	}
-	/* Exception callback receives FP as third parameter */
+	/*
+	 * Exception callback receives:
+	 *   rsi = main program's SP, rdx = main program's FP,
+	 *   rcx = main program's outgoing stack arg area size
+	 */
 	if (is_exception_cb) {
 		EMIT3(0x48, 0x89, 0xF4); /* mov rsp, rsi */
 		EMIT3(0x48, 0x89, 0xD5); /* mov rbp, rdx */
+		EMIT3(0x48, 0x01, 0xCC); /* add rsp, rcx */
 		/* The main frame must have exception_boundary as true, so we
 		 * first restore those callee-saved regs from stack, before
 		 * reusing the stack frame.
@@ -1789,6 +1794,8 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 	 * Arg 6 goes into r9 register, not on stack.
 	 */
 	outgoing_rsp = out_stack_arg_cnt > 1 ? (out_stack_arg_cnt - 1) * 8 : 0;
+	if (bpf_prog->aux->exception_boundary)
+		bpf_prog->aux->stack_arg_adjust = outgoing_rsp;
 	emit_sub_rsp(&prog, outgoing_rsp);
 
 	if (arena_vm_start)
