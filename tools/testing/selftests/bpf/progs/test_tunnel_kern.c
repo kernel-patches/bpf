@@ -674,7 +674,7 @@ int ip6geneve_set_tunnel(struct __sk_buff *skb)
 	gopt->length = 2; /* 4-byte multiple */
 	*(int *) &gopt->opt_data = bpf_htonl(0xfeedbeef);
 
-	ret = bpf_skb_set_tunnel_opt(skb, gopt, sizeof(gopt));
+	ret = bpf_skb_set_tunnel_opt(skb, gopt, sizeof(local_gopt));
 	if (ret < 0) {
 		log_err(ret);
 		return TC_ACT_SHOT;
