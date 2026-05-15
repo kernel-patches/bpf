@@ -362,27 +362,31 @@ static int bpf_test_run_xdp_live(struct bpf_prog *prog, struct xdp_buff *ctx,
 				 u32 repeat, u32 batch_size, u32 *time)
 
 {
-	struct xdp_test_data xdp = { .batch_size = batch_size };
+	struct xdp_test_data *xdp __free(kfree) = kzalloc_obj(*xdp);
 	struct bpf_test_timer t = {};
 	int ret;
+
+	if (!xdp)
+		return -ENOMEM;
 
 	if (!repeat)
 		repeat = 1;
 
-	ret = xdp_test_run_setup(&xdp, ctx);
+	xdp->batch_size = batch_size;
+	ret = xdp_test_run_setup(xdp, ctx);
 	if (ret)
 		return ret;
 
 	bpf_test_timer_enter(&t);
 	do {
-		xdp.frame_cnt = 0;
-		ret = xdp_test_run_batch(&xdp, prog, repeat - t.i);
+		xdp->frame_cnt = 0;
+		ret = xdp_test_run_batch(xdp, prog, repeat - t.i);
 		if (unlikely(ret < 0))
 			break;
-	} while (bpf_test_timer_continue(&t, xdp.frame_cnt, repeat, &ret, time));
+	} while (bpf_test_timer_continue(&t, xdp->frame_cnt, repeat, &ret, time));
 	bpf_test_timer_leave(&t);
 
-	xdp_test_run_teardown(&xdp);
+	xdp_test_run_teardown(xdp);
 	return ret;
 }
 
