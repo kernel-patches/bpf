@@ -6429,12 +6429,13 @@ err_out:
  * split BTF ids will need to be mapped to actual base/split ids for
  * BTF now that it has been relocated.
  */
-static __u32 btf_relocate_id(const struct btf *btf, __u32 id)
+__u32 btf_relocate_id(const struct btf *btf, __u32 id)
 {
 	if (!btf->base_btf || !btf->base_id_map)
 		return id;
 	return btf->base_id_map[id];
 }
+EXPORT_SYMBOL_GPL(btf_relocate_id);
 
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
 
@@ -8496,7 +8497,7 @@ struct module *btf_try_get_module(const struct btf *btf)
 /* Returns struct btf corresponding to the struct module.
  * This function can return NULL or ERR_PTR.
  */
-static struct btf *btf_get_module_btf(const struct module *module)
+struct btf *btf_get_module_btf(const struct module *module)
 {
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
 	struct btf_module *btf_mod, *tmp;
@@ -8525,6 +8526,7 @@ static struct btf *btf_get_module_btf(const struct module *module)
 
 	return btf;
 }
+EXPORT_SYMBOL_GPL(btf_get_module_btf);
 
 static int check_btf_kconfigs(const struct module *module, const char *feature)
 {
