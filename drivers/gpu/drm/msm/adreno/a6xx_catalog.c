@@ -2088,6 +2088,90 @@ static const struct adreno_reglist_pipe a810_dyn_pwrup_reglist_regs[] = {
 };
 DECLARE_ADRENO_REGLIST_PIPE_LIST(a810_dyn_pwrup_reglist);
 
+static const struct a6xx_hfi_clx_table_v2_cmd x285_clx_tbl = {
+	.version = (2 << 16) | 1,
+	.domain = {
+		/* GX DOMAIN */
+		{
+			.data = CLX_DATA(60, 11, 0, 1),
+			.clxt = 0,
+			.clxh = 0,
+			.urg_mode = 1,
+			.lkg_en = 0,
+			.curr_budget = 100,
+		},
+		/* MXG DOMAIN */
+		{
+			.data = CLX_DATA(60, 3, 1, 1),
+			.clxt = 0,
+			.clxh = 0,
+			.urg_mode = 1,
+			.lkg_en = 0,
+			.curr_budget = 100,
+		},
+	},
+};
+
+struct a6xx_hfi_limits_tbl x285_limits_tbl[] = {
+	{
+		.feature_id = GMU_MIT_IFF,
+		.domain = GMU_GX_DOMAIN,
+		.feature_rev = 0,
+		.cfg = {
+			.enable = 1,
+			.msg_path = 0,
+			.lkg_en = 0,
+			.mode = 0,
+			.sid = 12,
+			.mit_time = 5,
+			.curr_limit = 18000,
+		},
+	},
+	{
+		.feature_id = GMU_MIT_IFF,
+		.domain = GMU_MX_DOMAIN,
+		.feature_rev = 0,
+		.cfg = {
+			.enable = 1,
+			.msg_path = 0,
+			.lkg_en = 0,
+			.mode = 0,
+			.sid = 18,
+			.mit_time = 2000,
+			.curr_limit = 6000,
+		},
+	},
+	{
+		.feature_id = GMU_MIT_PCLX,
+		.domain = GMU_GX_DOMAIN,
+		.feature_rev = 0,
+		.cfg = {
+			.enable = 1,
+			.msg_path = 0,
+			.lkg_en = 0,
+			.mode = 0,
+			.sid = 6,
+			.mit_time = 3,
+			.curr_limit = 66000,
+		},
+	},
+	{
+		.feature_id = GMU_MIT_PCLX,
+		.domain = GMU_MX_DOMAIN,
+		.feature_rev = 0,
+		.cfg = {
+			.enable = 0,
+			.msg_path = 0,
+			.lkg_en = 0,
+			.mode = 0,
+			.sid = 6,
+			.mit_time = 3,
+			.curr_limit = 18000,
+		},
+	},
+};
+DECLARE_ADRENO_LIMITS_TABLE(x285_limits);
+
 static const struct adreno_reglist_pipe a840_nonctxt_regs[] = {
 	{ REG_A8XX_CP_SMMU_STREAM_ID_LPAC, 0x00000101, BIT(PIPE_NONE) },
 	{ REG_A8XX_GRAS_DBG_ECO_CNTL, 0x00000800, BIT(PIPE_BV) | BIT(PIPE_BR) },
@@ -2516,6 +2600,8 @@ static const struct adreno_info a8xx_gpus[] = {
 				},
 				{ /* sentinel */ },
 			},
+			.clx_tbl = &x285_clx_tbl,
+			.limits_tbl = &x285_limits,
 		},
 		.speedbins = ADRENO_SPEEDBINS(
 			{ 0,   0 },
