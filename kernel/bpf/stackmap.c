@@ -230,13 +230,33 @@ static void stack_map_get_build_id_offset_sleepable(struct bpf_stack_build_id *i
 		.vma = NULL,
 		.mm = mm,
 	};
-	unsigned long vm_pgoff, vm_start;
+	struct {
+		struct file *file;
+		const unsigned char *build_id;
+		unsigned long vm_start;
+		unsigned long vm_end;
+		unsigned long vm_pgoff;
+	} cache = {};
+	unsigned long vm_pgoff, vm_start, vm_end;
 	struct vm_area_struct *vma;
 	struct file *file;
 	u64 ip;
 
 	for (u32 i = 0; i < trace_nr; i++) {
 		ip = READ_ONCE(id_offs[i].ip);
+
+		/*
+		 * Range cache fast path: if ip falls within the previously
+		 * resolved VMA range, reuse the cache build_id without
+		 * re-acquiring the VMA lock.
+		 */
+		if (cache.build_id && ip >= cache.vm_start && ip < cache.vm_end) {
+			vm_start = cache.vm_start;
+			vm_end = cache.vm_end;
+			vm_pgoff = cache.vm_pgoff;
+			goto build_id_valid;
+		}
+
 		vma = stack_map_lock_vma(&lock, ip);
 		if (!vma || !vma->vm_file) {
 			stack_map_build_id_set_ip(&id_offs[i]);
@@ -244,9 +264,21 @@ static void stack_map_get_build_id_offset_sleepable(struct bpf_stack_build_id *i
 			continue;
 		}
 
-		file = get_file(vma->vm_file);
+		file = vma->vm_file;
 		vm_pgoff = vma->vm_pgoff;
 		vm_start = vma->vm_start;
+		vm_end = vma->vm_end;
+
+		if (file == cache.file) {
+			/*
+			 * Same backing file as previous (e.g. different VMAs
+			 * of the same ELF binary). Reuse the cache build_id.
+			 */
+			stack_map_unlock_vma(&lock);
+			goto build_id_valid;
+		}
+
+		file = get_file(file);
 		stack_map_unlock_vma(&lock);
 
 		/* build_id_parse_file() may block on filesystem reads */
@@ -255,11 +287,29 @@ static void stack_map_get_build_id_offset_sleepable(struct bpf_stack_build_id *i
 			fput(file);
 			continue;
 		}
-		fput(file);
 
+		if (cache.file)
+			fput(cache.file);
+		cache.file = file;
+		cache.build_id = id_offs[i].build_id;
+
+build_id_valid:
+		/*
+		 * In the slow path cache.build_id points to id_offs[i].build_id.
+		 * Cache hits leave cache.build_id pointing at a prior slot,
+		 * triggering the memcpy here.
+		 */
+		if (cache.build_id != id_offs[i].build_id)
+			memcpy(id_offs[i].build_id, cache.build_id, BUILD_ID_SIZE_MAX);
+		cache.vm_start = vm_start;
+		cache.vm_end = vm_end;
+		cache.vm_pgoff = vm_pgoff;
 		id_offs[i].offset = (vm_pgoff << PAGE_SHIFT) + ip - vm_start;
 		id_offs[i].status = BPF_STACK_BUILD_ID_VALID;
 	}
+
+	if (cache.file)
+		fput(cache.file);
 }
 
 /*
