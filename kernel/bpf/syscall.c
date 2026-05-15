@@ -1647,11 +1647,18 @@ static int map_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_at
 
 	/* preserve original error even if log finalization is successful */
 	ret = bpf_log_attr_finalize(&attr_log, log);
-	if (ret) {
-		if (err >= 0)
-			close_fd(err);
+	if (ret && err < 0)
+		/*
+		 * Failed to finalize the log.
+		 * Should not close_fd(err) here. Since the bpf_map_new_fd()
+		 * has published the map fd, if a concurrent thread closes the
+		 * fd, then opens new, unrelated file that receives the exact
+		 * same fd number, close_fd(err) might inadvertently close the
+		 * unrelated file.
+		 * As a trade-off, override the err only when failed to finalize
+		 * the log and failed to create map.
+		 */
 		err = ret;
-	}
 
 	kfree(log);
 	return err;
