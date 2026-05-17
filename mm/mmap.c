@@ -1739,7 +1739,6 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 	if (mmap_write_lock_killable(oldmm))
 		return -EINTR;
 	flush_cache_dup_mm(oldmm);
-	uprobe_dup_mmap(oldmm, mm);
 	/*
 	 * Not linked in yet - no deadlock potential:
 	 */
@@ -1901,6 +1900,7 @@ loop_out:
 		mm_flags_set(MMF_UNSTABLE, mm);
 	}
 out:
+	retval = retval ?: uprobe_dup_mmap(oldmm, mm);
 	mmap_write_unlock(mm);
 	flush_tlb_mm(oldmm);
 	mmap_write_unlock(oldmm);

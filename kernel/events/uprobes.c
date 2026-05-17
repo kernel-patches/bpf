@@ -1845,13 +1845,19 @@ void uprobe_end_dup_mmap(void)
 	percpu_up_read(&dup_mmap_sem);
 }
 
-void uprobe_dup_mmap(struct mm_struct *oldmm, struct mm_struct *newmm)
+int __weak arch_uprobe_dup_mmap(struct mm_struct *oldmm, struct mm_struct *newmm)
+{
+	return 0;
+}
+
+int uprobe_dup_mmap(struct mm_struct *oldmm, struct mm_struct *newmm)
 {
 	if (mm_flags_test(MMF_HAS_UPROBES, oldmm)) {
 		mm_flags_set(MMF_HAS_UPROBES, newmm);
 		/* unconditionally, dup_mmap() skips VM_DONTCOPY vmas */
 		mm_flags_set(MMF_RECALC_UPROBES, newmm);
 	}
+	return arch_uprobe_dup_mmap(oldmm, newmm);
 }
 
 static unsigned long xol_get_slot_nr(struct xol_area *area)

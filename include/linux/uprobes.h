@@ -214,7 +214,8 @@ extern int uprobe_mmap(struct vm_area_struct *vma);
 extern void uprobe_munmap(struct vm_area_struct *vma, unsigned long start, unsigned long end);
 extern void uprobe_start_dup_mmap(void);
 extern void uprobe_end_dup_mmap(void);
-extern void uprobe_dup_mmap(struct mm_struct *oldmm, struct mm_struct *newmm);
+extern int uprobe_dup_mmap(struct mm_struct *oldmm, struct mm_struct *newmm);
+extern int arch_uprobe_dup_mmap(struct mm_struct *oldmm, struct mm_struct *newmm);
 extern void uprobe_free_utask(struct task_struct *t);
 extern void uprobe_copy_process(struct task_struct *t, u64 flags);
 extern int uprobe_post_sstep_notifier(struct pt_regs *regs);
@@ -284,9 +285,10 @@ static inline void uprobe_start_dup_mmap(void)
 static inline void uprobe_end_dup_mmap(void)
 {
 }
-static inline void
+static inline int
 uprobe_dup_mmap(struct mm_struct *oldmm, struct mm_struct *newmm)
 {
+	return 0;
 }
 static inline void uprobe_notify_resume(struct pt_regs *regs)
 {
