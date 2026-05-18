@@ -130,6 +130,16 @@ struct htab_btf_record {
 	u32 key_size;
 };
 
+static inline bool htab_has_nmi_special_fields(const struct bpf_htab *htab)
+{
+	const struct btf_record *rec = htab->map.record;
+
+	if (IS_ERR_OR_NULL(rec))
+		return false;
+	return rec->field_mask & (BPF_KPTR_REF | BPF_KPTR_PERCPU | BPF_UPTR |
+				  BPF_LIST_HEAD | BPF_RB_ROOT);
+}
+
 static inline bool htab_is_prealloc(const struct bpf_htab *htab)
 {
 	return !(htab->map.map_flags & BPF_F_NO_PREALLOC);
@@ -522,13 +532,53 @@ static int htab_set_dtor(struct bpf_htab *htab, void (*dtor)(void *, void *))
 	return 0;
 }
 
+static int htab_convert_to_non_prealloc(struct bpf_htab *htab)
+{
+	bool percpu = htab_is_percpu(htab);
+	int err;
+
+	htab_free_prealloced_fields(htab);
+	free_percpu(htab->extra_elems);
+	htab->extra_elems = NULL;
+	prealloc_destroy(htab);
+	htab->map.map_flags |= BPF_F_NO_PREALLOC;
+
+	err = bpf_mem_alloc_init(&htab->ma, htab->elem_size, false);
+	if (err)
+		return err;
+	if (percpu) {
+		err = bpf_mem_alloc_init(&htab->pcpu_ma,
+					 round_up(htab->map.value_size, 8),
+					 true);
+		if (err) {
+			bpf_mem_alloc_destroy(&htab->ma);
+			return err;
+		}
+	}
+
+	return 0;
+}
+
 static int htab_map_check_btf(struct bpf_map *map, const struct btf *btf,
 			      const struct btf_type *key_type, const struct btf_type *value_type)
 {
 	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
+	int err;
 
-	if (htab_is_prealloc(htab))
-		return 0;
+	if (!htab_has_nmi_special_fields(htab)) {
+		if (htab_is_prealloc(htab))
+			return 0;
+	} else {
+		if (htab_is_lru(htab))
+			return 0;
+
+		if (htab_is_prealloc(htab)) {
+			err = htab_convert_to_non_prealloc(htab);
+			if (err)
+				return err;
+		}
+	}
+
 	/*
 	 * We must set the dtor using this callback, as map's BTF record is not
 	 * populated in htab_map_alloc(), so it will always appear as NULL.
@@ -1355,7 +1405,7 @@ static long htab_map_update_elem_in_place(struct bpf_map *map, void *key,
 					  bool percpu, bool onallcpus)
 {
 	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
-	struct htab_elem *l_new, *l_old;
+	struct htab_elem *l_new = NULL, *l_old;
 	struct hlist_nulls_head *head;
 	void *old_map_ptr = NULL;
 	unsigned long flags;
@@ -1387,8 +1437,17 @@ static long htab_map_update_elem_in_place(struct bpf_map *map, void *key,
 		goto err;
 
 	if (l_old) {
-		/* Update value in-place */
-		if (percpu) {
+		if (htab_has_nmi_special_fields(htab)) {
+			l_new = alloc_htab_elem(htab, key, value, key_size,
+						hash, percpu, onallcpus,
+						l_old, map_flags);
+			if (IS_ERR(l_new)) {
+				ret = PTR_ERR(l_new);
+				goto err;
+			}
+			hlist_nulls_add_head_rcu(&l_new->hash_node, head);
+			hlist_nulls_del_rcu(&l_old->hash_node);
+		} else if (percpu) {
 			pcpu_copy_value(htab, htab_elem_get_ptr(l_old, key_size),
 					value, onallcpus, map_flags);
 		} else {
@@ -1408,6 +1467,8 @@ static long htab_map_update_elem_in_place(struct bpf_map *map, void *key,
 	}
 err:
 	htab_unlock_bucket(b, flags);
+	if (l_old && htab_has_nmi_special_fields(htab) && !ret)
+		free_htab_elem(htab, l_old);
 	if (old_map_ptr)
 		map->ops->map_fd_put_ptr(map, old_map_ptr, true);
 	return ret;
@@ -1443,7 +1504,7 @@ static long __htab_lru_percpu_map_update_elem(struct bpf_map *map, void *key,
 	 * to remove older elem from htab and this removal
 	 * operation will need a bucket lock.
 	 */
-	if (map_flags != BPF_EXIST) {
+	if (map_flags != BPF_EXIST || htab_has_nmi_special_fields(htab)) {
 		l_new = prealloc_lru_pop(htab, key, hash);
 		if (!l_new)
 			return -ENOMEM;
@@ -1460,11 +1521,21 @@ static long __htab_lru_percpu_map_update_elem(struct bpf_map *map, void *key,
 		goto err;
 
 	if (l_old) {
-		bpf_lru_node_set_ref(&l_old->lru_node);
+		if (htab_has_nmi_special_fields(htab)) {
+			pcpu_init_value(htab,
+					htab_elem_get_ptr(l_new, key_size),
+					value, onallcpus, map_flags);
+			hlist_nulls_add_head_rcu(&l_new->hash_node, head);
+			hlist_nulls_del_rcu(&l_old->hash_node);
+			bpf_lru_node_set_ref(&l_new->lru_node);
+			l_new = NULL;
+		} else {
+			bpf_lru_node_set_ref(&l_old->lru_node);
 
-		/* per-cpu hash map can update value in-place */
-		pcpu_copy_value(htab, htab_elem_get_ptr(l_old, key_size),
-				value, onallcpus, map_flags);
+			/* per-cpu hash map can update value in-place */
+			pcpu_copy_value(htab, htab_elem_get_ptr(l_old, key_size),
+					value, onallcpus, map_flags);
+		}
 	} else {
 		pcpu_init_value(htab, htab_elem_get_ptr(l_new, key_size),
 				value, onallcpus, map_flags);
@@ -1479,6 +1550,8 @@ err_lock_bucket:
 		bpf_map_dec_elem_count(&htab->map);
 		bpf_lru_push_free(&htab->lru, &l_new->lru_node);
 	}
+	if (l_old && !ret && htab_has_nmi_special_fields(htab))
+		htab_lru_push_free(htab, l_old);
 	return ret;
 }
 
