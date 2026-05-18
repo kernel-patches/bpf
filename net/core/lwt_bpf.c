@@ -610,11 +610,17 @@ int bpf_lwt_push_ip_encap(struct sk_buff *skb, void *hdr, u32 len, bool ingress)
 	iph = (struct iphdr *)hdr;
 	if (iph->version == 4) {
 		ipv4 = true;
-		if (unlikely(len < iph->ihl * 4))
+		if (unlikely(iph->ihl < 5 || len < iph->ihl * 4))
+			return -EINVAL;
+		if (unlikely(iph->protocol == IPPROTO_UDP &&
+			     len < iph->ihl * 4 + sizeof(struct udphdr)))
 			return -EINVAL;
 	} else if (iph->version == 6) {
 		ipv4 = false;
 		if (unlikely(len < sizeof(struct ipv6hdr)))
+			return -EINVAL;
+		if (unlikely(((struct ipv6hdr *)iph)->nexthdr == NEXTHDR_UDP &&
+			     len < sizeof(struct ipv6hdr) + sizeof(struct udphdr)))
 			return -EINVAL;
 	} else {
 		return -EINVAL;
@@ -634,16 +640,20 @@ int bpf_lwt_push_ip_encap(struct sk_buff *skb, void *hdr, u32 len, bool ingress)
 	skb_set_inner_protocol(skb, skb->protocol);
 	skb->encapsulation = 1;
 	skb_push(skb, len);
-	if (ingress)
-		skb_postpush_rcsum(skb, iph, len);
 	skb_reset_network_header(skb);
 	memcpy(skb_network_header(skb), hdr, len);
+	iph = ip_hdr(skb);
+	if (ingress)
+		skb_postpush_rcsum(skb, iph, len);
+	if (ipv4 && iph->protocol == IPPROTO_UDP /* UDP tunnel */)
+		skb_set_transport_header(skb, skb_network_offset(skb) + iph->ihl * 4);
+	else if (!ipv4 && ((struct ipv6hdr *)iph)->nexthdr == NEXTHDR_UDP /* UDP tunnel */)
+		skb_set_transport_header(skb, skb_network_offset(skb) + sizeof(struct ipv6hdr));
 	bpf_compute_data_pointers(skb);
 	skb_clear_hash(skb);
 
 	if (ipv4) {
 		skb->protocol = htons(ETH_P_IP);
-		iph = ip_hdr(skb);
 
 		if (!iph->check)
 			iph->check = ip_fast_csum((unsigned char *)iph,
