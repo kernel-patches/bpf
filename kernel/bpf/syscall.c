@@ -839,6 +839,8 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 			break;
 		case BPF_KPTR_REF:
 		case BPF_KPTR_PERCPU:
+			if (irqs_disabled())
+				break;
 			xchgd_field = (void *)xchg((unsigned long *)field_ptr, 0);
 			if (!xchgd_field)
 				break;
@@ -854,16 +856,18 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 			}
 			break;
 		case BPF_UPTR:
+			if (irqs_disabled())
+				break;
 			/* The caller ensured that no one is using the uptr */
 			unpin_uptr_kaddr(*(void **)field_ptr);
 			break;
 		case BPF_LIST_HEAD:
-			if (WARN_ON_ONCE(rec->spin_lock_off < 0))
+			if (irqs_disabled() || WARN_ON_ONCE(rec->spin_lock_off < 0))
 				continue;
 			bpf_list_head_free(field, field_ptr, obj + rec->spin_lock_off);
 			break;
 		case BPF_RB_ROOT:
-			if (WARN_ON_ONCE(rec->spin_lock_off < 0))
+			if (irqs_disabled() || WARN_ON_ONCE(rec->spin_lock_off < 0))
 				continue;
 			bpf_rb_root_free(field, field_ptr, obj + rec->spin_lock_off);
 			break;
