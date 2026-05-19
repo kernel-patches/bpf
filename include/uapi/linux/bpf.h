@@ -1506,6 +1506,7 @@ struct bpf_common_attr {
 	__u32 log_size;
 	__u32 log_level;
 	__u32 log_true_size;
+	__u32 __pad;
 };
 
 #define BPF_OBJ_NAME_LEN 16U
