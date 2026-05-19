@@ -601,6 +601,23 @@ static void emit_signature_match(struct bpf_gen *gen)
 			emit(gen, BPF_JMP_IMM(BPF_JA, 0, 0, -1));
 		}
 	}
+
+	/* Reject if the metadata map is not exclusive. Without exclusivity
+	 * the cached map->sha[] verified above can be stale: another BPF
+	 * program with map access could have mutated the contents between
+	 * BPF_OBJ_GET_INFO_BY_FD and loader execution.
+	 */
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX,
+					 0, 0, 0, 0));
+	emit(gen, BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, SHA256_DWORD_SIZE * sizeof(__u64)));
+	off = -(gen->insn_cur - gen->insn_start - gen->cleanup_label) / 8 - 1;
+	if (is_simm16(off)) {
+		emit(gen, BPF_MOV64_IMM(BPF_REG_7, -EINVAL));
+		emit(gen, BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, 0, off));
+	} else {
+		gen->error = -ERANGE;
+		emit(gen, BPF_JMP_IMM(BPF_JA, 0, 0, -1));
+	}
 }
 
 void bpf_gen__record_attach_target(struct bpf_gen *gen, const char *attach_name,
