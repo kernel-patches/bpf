@@ -166,7 +166,7 @@ void bpf_bench_timing_report(struct bpf_bench_timing *t, const char *name, const
 
 #define CALIBRATE_SEED_BATCH	100
 #define CALIBRATE_MIN_BATCH	100
-#define CALIBRATE_MAX_BATCH	10000000
+#define CALIBRATE_MAX_BATCH	8000000
 #define CALIBRATE_TARGET_MS	10
 #define CALIBRATE_RUNS		5
 #define PROPORTIONALITY_TOL	0.05	/* 5% */
