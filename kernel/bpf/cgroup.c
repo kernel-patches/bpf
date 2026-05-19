@@ -967,8 +967,6 @@ static void replace_effective_prog(struct cgroup *cgrp,
 
 			head = &cg->bpf.progs[atype];
 			hlist_for_each_entry(pl, head, node) {
-				if (!prog_list_prog(pl))
-					continue;
 				if (pl->link == link)
 					goto found;
 				pos++;
@@ -1120,8 +1118,6 @@ static void purge_effective_progs(struct cgroup *cgrp, struct bpf_prog *prog,
 
 			head = &cg->bpf.progs[atype];
 			hlist_for_each_entry(pl, head, node) {
-				if (!prog_list_prog(pl))
-					continue;
 				if (pl->prog == prog && pl->link == link)
 					goto found;
 				pos++;
