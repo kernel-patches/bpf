@@ -17664,9 +17664,11 @@ static int check_pseudo_btf_id(struct bpf_verifier_env *env,
 	return __add_used_btf(env, btf);
 }
 
-static bool is_tracing_prog_type(enum bpf_prog_type type)
+static bool is_tracing_prog_type(const struct bpf_prog *prog)
 {
-	switch (type) {
+	switch (resolve_prog_type(prog)) {
+	case BPF_PROG_TYPE_TRACING:
+		return prog->expected_attach_type != BPF_TRACE_ITER;
 	case BPF_PROG_TYPE_KPROBE:
 	case BPF_PROG_TYPE_TRACEPOINT:
 	case BPF_PROG_TYPE_PERF_EVENT:
@@ -17699,7 +17701,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 
 	if (btf_record_has_field(map->record, BPF_LIST_HEAD) ||
 	    btf_record_has_field(map->record, BPF_RB_ROOT)) {
-		if (is_tracing_prog_type(prog_type)) {
+		if (is_tracing_prog_type(prog)) {
 			verbose(env, "tracing progs cannot use bpf_{list_head,rb_root} yet\n");
 			return -EINVAL;
 		}
@@ -17711,7 +17713,7 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 			return -EINVAL;
 		}
 
-		if (is_tracing_prog_type(prog_type)) {
+		if (is_tracing_prog_type(prog)) {
 			verbose(env, "tracing progs cannot use bpf_spin_lock yet\n");
 			return -EINVAL;
 		}
