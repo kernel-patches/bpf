@@ -695,22 +695,24 @@ arithmetic operations in the 'imm' field to encode the atomic operation:
   *(u64 *)(dst + offset) += src
 
 In addition to the simple atomic operations, there also is a modifier and
-two complex atomic operations:
+four complex atomic operations:
 
 .. table:: Complex atomic operations
 
   ===========  ================  ===========================
   imm          value             description
   ===========  ================  ===========================
-  FETCH        0x01              modifier: return old value
-  XCHG         0xe0 | FETCH      atomic exchange
-  CMPXCHG      0xf0 | FETCH      atomic compare and exchange
+  FETCH        0x0001            modifier: return old value
+  XCHG         0x00e0 | FETCH    atomic exchange
+  CMPXCHG      0x00f0 | FETCH    atomic compare and exchange
+  LOAD_ACQ     0x0100            atomic load with barrier
+  STORE_REL    0x0110            atomic store with barrier
   ===========  ================  ===========================
 
 The ``FETCH`` modifier is optional for simple atomic operations, and
-always set for the complex atomic operations.  If the ``FETCH`` flag
-is set, then the operation also overwrites ``src`` with the value that
-was in memory before it was modified.
+always set for the ``XCHG`` and ``CMPXCHG`` complex atomic operations.  If
+the ``FETCH`` flag is set, then the operation also overwrites ``src`` with
+the value that was in memory before it was modified.
 
 The ``XCHG`` operation atomically exchanges ``src`` with the value
 addressed by ``dst + offset``.
@@ -720,6 +722,11 @@ The ``CMPXCHG`` operation atomically compares the value addressed by
 ``dst + offset`` is replaced with ``src``. In either case, the
 value that was at ``dst + offset`` before the operation is zero-extended
 and loaded back to ``R0``.
+
+The ``LOAD_ACQ`` and ``STORE_REL`` operations implement lighter LOAD and
+STORE memory barriers than full barriers. The corresponding accesses must
+be aligned, but are allowed for any access size (8-bit up to 64-bit
+operations).
 
 64-bit immediate instructions
 -----------------------------
