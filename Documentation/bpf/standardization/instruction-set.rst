@@ -668,7 +668,8 @@ that use the ``ATOMIC`` mode modifier as follows:
   part of the "atomic32" conformance group.
 * ``{ATOMIC, DW, STX}`` for 64-bit operations, which are
   part of the "atomic64" conformance group.
-* 8-bit and 16-bit wide atomic operations are not supported.
+* ``{ATOMIC, H, STX}`` (only for LOAD_ACQ/STORE_REL)
+* ``{ATOMIC, B, STX}`` (only for LOAD_ACQ/STORE_REL)
 
 The 'imm' field is used to encode the actual atomic operation.
 Simple atomic operation use a subset of the values defined to encode
@@ -695,22 +696,24 @@ arithmetic operations in the 'imm' field to encode the atomic operation:
   *(u64 *)(dst + offset) += src
 
 In addition to the simple atomic operations, there also is a modifier and
-two complex atomic operations:
+four complex atomic operations:
 
 .. table:: Complex atomic operations
 
   ===========  ================  ===========================
   imm          value             description
   ===========  ================  ===========================
-  FETCH        0x01              modifier: return old value
-  XCHG         0xe0 | FETCH      atomic exchange
-  CMPXCHG      0xf0 | FETCH      atomic compare and exchange
+  FETCH        0x0001            modifier: return old value
+  XCHG         0x00e0 | FETCH    atomic exchange
+  CMPXCHG      0x00f0 | FETCH    atomic compare and exchange
+  LOAD_ACQ     0x0100            atomic load with barrier
+  STORE_REL    0x0110            atomic store with barrier
   ===========  ================  ===========================
 
 The ``FETCH`` modifier is optional for simple atomic operations, and
-always set for the complex atomic operations.  If the ``FETCH`` flag
-is set, then the operation also overwrites ``src`` with the value that
-was in memory before it was modified.
+always set for the ``XCHG`` and ``CMPXCHG`` complex atomic operations.  If
+the ``FETCH`` flag is set, then the operation also overwrites ``src`` with
+the value that was in memory before it was modified.
 
 The ``XCHG`` operation atomically exchanges ``src`` with the value
 addressed by ``dst + offset``.
@@ -720,6 +723,14 @@ The ``CMPXCHG`` operation atomically compares the value addressed by
 ``dst + offset`` is replaced with ``src``. In either case, the
 value that was at ``dst + offset`` before the operation is zero-extended
 and loaded back to ``R0``.
+
+The ``LOAD_ACQ`` and ``STORE_REL`` operations allow using lighter load and
+store memory barriers rather than full barriers. The corresponding accesses
+must be aligned, but are allowed for any access size (8-bit up to 64-bit
+operations), with 8-bit and 16-bit ``LOAD_ACQ`` loaded values being
+zero-extended. As atomics are encoded as stores, the meaning of dst and src
+are different for ``LOAD_ACQ``, effectively using src as memory based
+pointer and dst as destination register for the fetched value.
 
 64-bit immediate instructions
 -----------------------------
