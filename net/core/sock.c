@@ -2197,6 +2197,23 @@ static inline void sock_lock_init(struct sock *sk)
 			af_family_keys + sk->sk_family);
 }
 
+#ifdef CONFIG_BPF_SYSCALL
+#define sk_reserved_size(obj_size) ((obj_size) + bpf_sk_reserve)
+#define sk_from_reserve(p)	   ((struct sock *)((void *)(p) + bpf_sk_reserve))
+#define sk_to_reserve(sk)	   ((void *)(sk) - bpf_sk_reserve)
+#define sk_reserve_init(sk)					\
+	do {							\
+		if (unlikely(bpf_sk_reserve))			\
+			memset(sk_to_reserve(sk), 0,		\
+			       bpf_sk_reserve);			\
+	} while (0)
+#else
+#define sk_reserved_size(obj_size) (obj_size)
+#define sk_from_reserve(p)	   ((struct sock *)(p))
+#define sk_to_reserve(sk)	   ((void *)(sk))
+#define sk_reserve_init(sk)	   do { } while (0)
+#endif
+
 /*
  * Copy all fields from osk to nsk but nsk->sk_refcnt must not change yet,
  * even temporarily, because of RCU lookups. sk_node should also be left as is.
@@ -2241,10 +2258,14 @@ static struct sock *sk_prot_alloc(struct proto *prot, gfp_t priority,
 		sk = kmem_cache_alloc(slab, priority & ~__GFP_ZERO);
 		if (!sk)
 			return sk;
+		sk = sk_from_reserve(sk);
 		if (want_init_on_alloc(priority))
 			sk_prot_clear_nulls(sk, prot->obj_size);
-	} else
-		sk = kmalloc(prot->obj_size, priority);
+	} else {
+		sk = kmalloc(sk_reserved_size(prot->obj_size), priority);
+		if (sk)
+			sk = sk_from_reserve(sk);
+	}
 
 	if (sk != NULL) {
 		if (security_sk_alloc(sk, family, priority))
@@ -2252,6 +2273,8 @@ static struct sock *sk_prot_alloc(struct proto *prot, gfp_t priority,
 
 		if (!try_module_get(prot->owner))
 			goto out_free_sec;
+
+		sk_reserve_init(sk);
 	}
 
 	return sk;
@@ -2260,9 +2283,9 @@ out_free_sec:
 	security_sk_free(sk);
 out_free:
 	if (slab != NULL)
-		kmem_cache_free(slab, sk);
+		kmem_cache_free(slab, sk_to_reserve(sk));
 	else
-		kfree(sk);
+		kfree(sk_to_reserve(sk));
 	return NULL;
 }
 
@@ -2281,9 +2304,9 @@ static void sk_prot_free(struct proto *prot, struct sock *sk)
 	sk_owner_put(sk);
 
 	if (slab != NULL)
-		kmem_cache_free(slab, sk);
+		kmem_cache_free(slab, sk_to_reserve(sk));
 	else
-		kfree(sk);
+		kfree(sk_to_reserve(sk));
 	module_put(owner);
 }
 
@@ -4216,7 +4239,16 @@ int proto_register(struct proto *prot, int alloc_slab)
 			.use_freeptr_offset = !!prot->freeptr_offset,
 		};
 
-		prot->slab = kmem_cache_create(prot->name, prot->obj_size,
+#ifdef CONFIG_BPF_SYSCALL
+		if (bpf_sk_reserve) {
+			if (prot->usersize)
+				args.useroffset += bpf_sk_reserve;
+			if (prot->freeptr_offset)
+				args.freeptr_offset += bpf_sk_reserve;
+		}
+#endif
+		prot->slab = kmem_cache_create(prot->name,
+					sk_reserved_size(prot->obj_size),
 					&args,
 					SLAB_HWCACHE_ALIGN | SLAB_ACCOUNT |
 					prot->slab_flags);

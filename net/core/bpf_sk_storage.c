@@ -15,6 +15,35 @@
 #include <uapi/linux/btf.h>
 #include <linux/rcupdate_trace.h>
 
+#define MAX_BPF_SK_RESERVE_BYTES 1024
+
+u32 bpf_sk_reserve;
+
+static int __init set_bpf_sk_reserve(char *str)
+{
+	u32 reserve_size, rounded;
+	int ret;
+
+	ret = kstrtouint(str, 0, &reserve_size);
+	if (ret)
+		return ret;
+
+	if (reserve_size > MAX_BPF_SK_RESERVE_BYTES) {
+		pr_warn("bpf_sk_reserve=%u limited to %u\n",
+			reserve_size, MAX_BPF_SK_RESERVE_BYTES);
+		reserve_size = MAX_BPF_SK_RESERVE_BYTES;
+	}
+
+	rounded = round_up(reserve_size, SMP_CACHE_BYTES);
+	if (rounded != reserve_size)
+		pr_info("bpf_sk_reserve=%u rounded up to %u\n",
+			reserve_size, rounded);
+
+	bpf_sk_reserve = rounded;
+	return 1;
+}
+__setup("bpf_sk_reserve=", set_bpf_sk_reserve);
+
 DEFINE_BPF_STORAGE_CACHE(sk_cache);
 
 static struct bpf_local_storage_data *
