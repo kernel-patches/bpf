@@ -149,12 +149,15 @@ static void build_prologue(struct jit_ctx *ctx)
 		emit_insn(ctx, nop);
 
 	/*
-	 * First instruction initializes the tail call count (TCC)
-	 * register to zero. On tail call we skip this instruction,
-	 * and the TCC is passed in REG_TCC from the caller.
+	 * Initialize or align the TCC register slot.
+	 * For main programs, TCC is zeroed. For subprograms, a nop is emitted
+	 * to keep the prologue size consistent, ensuring tail calls skip the
+	 * correct number of instructions.
 	 */
 	if (is_main_prog)
 		emit_insn(ctx, addid, REG_TCC, LOONGARCH_GPR_ZERO, 0);
+	else
+		emit_insn(ctx, nop);
 
 	emit_insn(ctx, addid, LOONGARCH_GPR_SP, LOONGARCH_GPR_SP, -stack_adjust);
 
