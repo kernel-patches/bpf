@@ -701,7 +701,7 @@ static struct vm_area_struct *get_uprobe_trampoline(unsigned long vaddr)
 		return ERR_PTR(vaddr);
 
 	return _install_special_mapping(current->mm, vaddr, PAGE_SIZE,
-				VM_READ|VM_EXEC|VM_MAYEXEC|VM_MAYREAD|VM_DONTCOPY|VM_IO,
+				VM_READ|VM_EXEC|VM_MAYEXEC|VM_MAYREAD|VM_IO,
 				&tramp_mapping);
 }
 
