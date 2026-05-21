@@ -398,7 +398,7 @@ static void *uprobe_producer_ret(void *input)
 #ifdef __x86_64__
 __nocf_check __weak void uprobe_target_nop5(void)
 {
-	asm volatile (".byte 0x0f, 0x1f, 0x44, 0x00, 0x00");
+	asm volatile (".byte 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00");
 }
 
 static void *uprobe_producer_nop5(void *input)
