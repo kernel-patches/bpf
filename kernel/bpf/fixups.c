@@ -3,12 +3,16 @@
 #include <linux/bpf.h>
 #include <linux/btf.h>
 #include <linux/bpf_verifier.h>
+#include <linux/bpf_local_storage.h>
 #include <linux/filter.h>
 #include <linux/vmalloc.h>
 #include <linux/bsearch.h>
 #include <linux/sort.h>
 #include <linux/perf_event.h>
 #include <net/xdp.h>
+#include <net/tcp_states.h>
+#include <net/bpf_sk_storage.h>
+#include <net/sock.h>
 #include "disasm.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
@@ -1975,6 +1979,98 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			env->prog = prog = new_prog;
 			insn = new_prog->insnsi + i + delta;
 			goto patch_call_imm;
+		}
+
+		/*
+		 * Inline bpf_sk_storage_get for reserved maps when
+		 * flags == 0 (pure lookup, no CREATE).  The CREATE path
+		 * stays in the helper where it handles value copying
+		 * and bitmap updates correctly.
+		 *
+		 *  0: r0 = *(u8)(r2 + skc_state)
+		 *  1: if r0 == TCP_NEW_SYN_RECV goto null
+		 *  2: if r0 == TCP_TIME_WAIT goto null
+		 *  3: r0 = *(u64)(r2 + bitmap_off)
+		 *  4: r0 &= (1 << slot)
+		 *  5: if r0 == 0 goto null
+		 *  6: r0 = r2
+		 *  7: r0 -= reserve_off
+		 *  8: goto done
+		 *  9: r0 = 0
+		 */
+		if (prog->jit_requested && BITS_PER_LONG == 64 &&
+		    insn->imm == BPF_FUNC_sk_storage_get &&
+		    prog->type != BPF_PROG_TYPE_TRACING &&
+		    prog->type != BPF_PROG_TYPE_LSM) {
+			struct bpf_local_storage_map *smap;
+			struct bpf_insn *prev;
+			s32 bitmap_off;
+
+			aux = &env->insn_aux_data[i + delta];
+			if (bpf_map_ptr_poisoned(aux))
+				goto patch_call_imm;
+
+			map_ptr = aux->map_ptr_state.map_ptr;
+			if (!map_ptr ||
+			    map_ptr->map_type != BPF_MAP_TYPE_SK_STORAGE)
+				goto patch_call_imm;
+
+			smap = container_of(map_ptr,
+				struct bpf_local_storage_map, map);
+			if (!smap->reserve_off)
+				goto patch_call_imm;
+
+			/*
+			 * Only inline the flags==0 case (pure lookup).
+			 * Check that the preceding insn sets r4 to 0.
+			 */
+			if (i + delta < 1)
+				goto patch_call_imm;
+			prev = &prog->insnsi[i + delta - 1];
+			if (prev->code != (BPF_ALU64 | BPF_MOV | BPF_K) ||
+			    prev->dst_reg != BPF_REG_4 ||
+			    prev->imm != 0)
+				goto patch_call_imm;
+
+			bitmap_off = -(s32)bpf_sk_reserve;
+			cnt = 0;
+
+			/* fullsock check */
+			insn_buf[cnt++] = BPF_LDX_MEM(BPF_B, BPF_REG_0,
+				BPF_REG_2,
+				offsetof(struct sock_common, skc_state));
+			insn_buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_0,
+				TCP_NEW_SYN_RECV, 7);
+			insn_buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_0,
+				TCP_TIME_WAIT, 6);
+
+			/* test bitmap */
+			insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_0,
+				BPF_REG_2, bitmap_off);
+			insn_buf[cnt++] = BPF_ALU64_IMM(BPF_AND, BPF_REG_0,
+				1 << smap->reserve_slot);
+			insn_buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_0,
+				0, 3);
+
+			/* ret_ptr: r0 = r2 - reserve_off */
+			insn_buf[cnt++] = BPF_MOV64_REG(BPF_REG_0,
+				BPF_REG_2);
+			insn_buf[cnt++] = BPF_ALU64_IMM(BPF_SUB, BPF_REG_0,
+				smap->reserve_off);
+			insn_buf[cnt++] = BPF_JMP_A(1);
+
+			/* null: r0 = 0 */
+			insn_buf[cnt++] = BPF_MOV64_IMM(BPF_REG_0, 0);
+
+			new_prog = bpf_patch_insn_data(env, i + delta,
+						       insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta += cnt - 1;
+			env->prog = prog = new_prog;
+			insn = new_prog->insnsi + i + delta;
+			goto next_insn;
 		}
 
 		/* BPF_EMIT_CALL() assumptions in some of the map_gen_lookup
