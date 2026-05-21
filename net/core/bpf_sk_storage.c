@@ -17,6 +17,8 @@
 
 #define MAX_BPF_SK_RESERVE_BYTES 1024
 
+DEFINE_BPF_STORAGE_RESERVE(sk_reserve);
+
 u32 bpf_sk_reserve;
 
 static int __init set_bpf_sk_reserve(char *str)
@@ -40,6 +42,9 @@ static int __init set_bpf_sk_reserve(char *str)
 			reserve_size, rounded);
 
 	bpf_sk_reserve = rounded;
+	sk_reserve.limit = rounded;
+	sk_reserve.used = sizeof(unsigned long);
+	sk_reserve.last_off = sizeof(unsigned long);
 	return 1;
 }
 __setup("bpf_sk_reserve=", set_bpf_sk_reserve);
@@ -92,12 +97,47 @@ out:
 
 static void bpf_sk_storage_map_free(struct bpf_map *map)
 {
+	struct bpf_local_storage_map *smap;
+
+	smap = (struct bpf_local_storage_map *)map;
+	if (smap->reserve_off)
+		bpf_ls_reserve_del(smap, &sk_reserve);
+
 	bpf_local_storage_map_free(map, &sk_cache);
 }
 
 static struct bpf_map *bpf_sk_storage_map_alloc(union bpf_attr *attr)
 {
 	return bpf_local_storage_map_alloc(attr, &sk_cache);
+}
+
+static void bpf_sk_storage_map_settle(struct bpf_map *map)
+{
+	struct bpf_local_storage_map *smap;
+
+	if (!sk_reserve.limit)
+		return;
+
+	smap = (struct bpf_local_storage_map *)map;
+
+	if (map->map_flags & BPF_F_CLONE)
+		return;
+	if (!IS_ERR_OR_NULL(map->record))
+		return;
+	if (!map->name[0])
+		return;
+
+	if (bpf_ls_reserve_add(smap, &sk_reserve))
+		return;
+
+	/* reserve_off already set if we inherited from an existing map */
+	if (!smap->reserve_off)
+		bpf_ls_reserve_commit(smap, &sk_reserve);
+}
+
+static inline unsigned long *sk_reserve_bitmap(struct sock *sk)
+{
+	return (unsigned long *)((void *)sk - bpf_sk_reserve);
 }
 
 static int notsupp_get_next_key(struct bpf_map *map, void *key,
@@ -108,54 +148,100 @@ static int notsupp_get_next_key(struct bpf_map *map, void *key,
 
 static void *bpf_fd_sk_storage_lookup_elem(struct bpf_map *map, void *key)
 {
-	struct bpf_local_storage_data *sdata;
+	struct bpf_local_storage_map *smap;
 	struct socket *sock;
 	int fd, err;
+	void *data;
 
 	fd = *(int *)key;
 	sock = sockfd_lookup(fd, &err);
-	if (sock) {
+	if (!sock)
+		return ERR_PTR(err);
+
+	smap = (struct bpf_local_storage_map *)map;
+	if (smap->reserve_off) {
+		if (test_bit(smap->reserve_slot,
+			     sk_reserve_bitmap(sock->sk)))
+			data = (void *)sock->sk - smap->reserve_off;
+		else
+			data = NULL;
+	} else {
+		struct bpf_local_storage_data *sdata;
+
 		sdata = bpf_sk_storage_lookup(sock->sk, map, true);
-		sockfd_put(sock);
-		return sdata ? sdata->data : NULL;
+		data = sdata ? sdata->data : NULL;
 	}
 
-	return ERR_PTR(err);
+	sockfd_put(sock);
+	return data;
 }
 
 static long bpf_fd_sk_storage_update_elem(struct bpf_map *map, void *key,
 					  void *value, u64 map_flags)
 {
+	struct bpf_local_storage_map *smap;
 	struct bpf_local_storage_data *sdata;
 	struct socket *sock;
 	int fd, err;
 
 	fd = *(int *)key;
 	sock = sockfd_lookup(fd, &err);
-	if (sock) {
+	if (!sock)
+		return err;
+
+	smap = (struct bpf_local_storage_map *)map;
+	if (smap->reserve_off) {
+		unsigned long *bitmap = sk_reserve_bitmap(sock->sk);
+		bool exists = test_bit(smap->reserve_slot, bitmap);
+
+		if ((map_flags & BPF_NOEXIST) && exists) {
+			err = -EEXIST;
+		} else if ((map_flags & BPF_EXIST) && !exists) {
+			err = -ENOENT;
+		} else {
+			set_bit(smap->reserve_slot, bitmap);
+			copy_map_value(&smap->map,
+				       (void *)sock->sk - smap->reserve_off,
+				       value);
+			err = 0;
+		}
+	} else {
 		sdata = bpf_local_storage_update(
-			sock->sk, (struct bpf_local_storage_map *)map, value,
-			map_flags, false);
-		sockfd_put(sock);
-		return PTR_ERR_OR_ZERO(sdata);
+			sock->sk, smap, value, map_flags, false);
+		err = PTR_ERR_OR_ZERO(sdata);
 	}
 
+	sockfd_put(sock);
 	return err;
 }
 
 static long bpf_fd_sk_storage_delete_elem(struct bpf_map *map, void *key)
 {
+	struct bpf_local_storage_map *smap;
 	struct socket *sock;
 	int fd, err;
 
+	smap = (struct bpf_local_storage_map *)map;
+
 	fd = *(int *)key;
 	sock = sockfd_lookup(fd, &err);
-	if (sock) {
-		err = bpf_sk_storage_del(sock->sk, map);
-		sockfd_put(sock);
+	if (!sock)
 		return err;
+
+	if (smap->reserve_off) {
+		if (!test_and_clear_bit(smap->reserve_slot,
+					sk_reserve_bitmap(sock->sk))) {
+			err = -ENOENT;
+		} else {
+			memset((void *)sock->sk - smap->reserve_off, 0,
+			       map->value_size);
+			err = 0;
+		}
+	} else {
+		err = bpf_sk_storage_del(sock->sk, map);
 	}
 
+	sockfd_put(sock);
 	return err;
 }
 
@@ -259,11 +345,33 @@ out:
 BPF_CALL_4(bpf_sk_storage_get, struct bpf_map *, map, struct sock *, sk,
 	   void *, value, u64, flags)
 {
+	struct bpf_local_storage_map *smap;
 	struct bpf_local_storage_data *sdata;
 
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
 	if (!sk || !sk_fullsock(sk) || flags > BPF_SK_STORAGE_GET_F_CREATE)
 		return (unsigned long)NULL;
+
+	smap = (struct bpf_local_storage_map *)map;
+	if (smap->reserve_off) {
+		unsigned long *bitmap = sk_reserve_bitmap(sk);
+
+		if (flags & BPF_LOCAL_STORAGE_GET_F_CREATE) {
+			if (!test_bit(smap->reserve_slot, bitmap)) {
+				set_bit(smap->reserve_slot, bitmap);
+				if (value)
+					copy_map_value(map,
+						(void *)sk - smap->reserve_off,
+						value);
+			}
+			return (unsigned long)((void *)sk - smap->reserve_off);
+		}
+
+		if (test_bit(smap->reserve_slot, bitmap))
+			return (unsigned long)((void *)sk - smap->reserve_off);
+
+		return (unsigned long)NULL;
+	}
 
 	sdata = bpf_sk_storage_lookup(sk, map, true);
 	if (sdata)
@@ -292,9 +400,22 @@ BPF_CALL_4(bpf_sk_storage_get, struct bpf_map *, map, struct sock *, sk,
 
 BPF_CALL_2(bpf_sk_storage_delete, struct bpf_map *, map, struct sock *, sk)
 {
+	struct bpf_local_storage_map *smap;
+
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
 	if (!sk || !sk_fullsock(sk))
 		return -EINVAL;
+
+	smap = (struct bpf_local_storage_map *)map;
+	if (smap->reserve_off) {
+		unsigned long *bitmap = sk_reserve_bitmap(sk);
+
+		if (!test_and_clear_bit(smap->reserve_slot, bitmap))
+			return -ENOENT;
+		memset((void *)sk - smap->reserve_off, 0,
+		       map->value_size);
+		return 0;
+	}
 
 	if (refcount_inc_not_zero(&sk->sk_refcnt)) {
 		int err;
@@ -355,6 +476,7 @@ const struct bpf_map_ops sk_storage_map_ops = {
 	.map_local_storage_uncharge = bpf_sk_storage_uncharge,
 	.map_owner_storage_ptr = bpf_sk_storage_ptr,
 	.map_mem_usage = bpf_local_storage_map_mem_usage,
+	.map_settle = bpf_sk_storage_map_settle,
 };
 
 const struct bpf_func_proto bpf_sk_storage_get_proto = {
@@ -892,6 +1014,9 @@ static int bpf_iter_attach_map(struct bpf_prog *prog,
 		return PTR_ERR(map);
 
 	if (map->map_type != BPF_MAP_TYPE_SK_STORAGE)
+		goto put_map;
+
+	if (((struct bpf_local_storage_map *)map)->reserve_off)
 		goto put_map;
 
 	if (prog->aux->max_rdwr_access > map->value_size) {
