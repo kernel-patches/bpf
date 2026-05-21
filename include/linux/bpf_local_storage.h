@@ -51,7 +51,9 @@ struct bpf_local_storage_map {
 	 * multiple buckets to improve contention.
 	 */
 	struct bpf_local_storage_map_bucket *buckets;
+	u32 reserve_off;
 	u32 bucket_log;
+	u16 reserve_slot;
 	u16 elem_size;
 	u16 cache_idx;
 };
@@ -128,6 +130,34 @@ struct bpf_local_storage_cache {
 static struct bpf_local_storage_cache name = {			\
 	.idx_lock = __SPIN_LOCK_UNLOCKED(name.idx_lock),	\
 }
+
+/*
+ * The inline BPF sequence loads the bit mask as a s32 immediate
+ * (BPF_MOV64_IMM sign-extends to 64 bits), so the slot index must
+ * stay below 31 to keep 1 << slot representable.
+ */
+#define MAX_BPF_LS_RESERVE_MAPS 31
+
+struct bpf_ls_reserve {
+	spinlock_t lock;
+	u16 limit;		/* total reserved bytes */
+	u16 used;		/* bytes consumed (including bitmap) */
+	u16 last_off;		/* next data offset from start of reserved area */
+	u16 nr_maps;
+	const struct bpf_local_storage_map *smaps[MAX_BPF_LS_RESERVE_MAPS];
+};
+
+#define DEFINE_BPF_STORAGE_RESERVE(name)				\
+static struct bpf_ls_reserve name = {					\
+	.lock = __SPIN_LOCK_UNLOCKED(name.lock),			\
+}
+
+int bpf_ls_reserve_add(struct bpf_local_storage_map *smap,
+		       struct bpf_ls_reserve *reserve);
+void bpf_ls_reserve_del(struct bpf_local_storage_map *smap,
+			struct bpf_ls_reserve *reserve);
+void bpf_ls_reserve_commit(struct bpf_local_storage_map *smap,
+			   struct bpf_ls_reserve *reserve);
 
 /* Helper functions for bpf_local_storage */
 int bpf_local_storage_map_alloc_check(union bpf_attr *attr);

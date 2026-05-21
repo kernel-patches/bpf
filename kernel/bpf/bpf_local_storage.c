@@ -769,6 +769,87 @@ u64 bpf_local_storage_map_mem_usage(const struct bpf_map *map)
 	return usage;
 }
 
+int bpf_ls_reserve_add(struct bpf_local_storage_map *smap,
+		       struct bpf_ls_reserve *reserve)
+{
+	const struct bpf_local_storage_map *existing;
+	struct bpf_map *map = &smap->map;
+	u32 aligned_sz;
+	int i, err = 0;
+
+	aligned_sz = round_up(map->value_size, 8);
+
+	spin_lock(&reserve->lock);
+
+	for (i = 0; i < reserve->nr_maps; i++) {
+		existing = reserve->smaps[i];
+		if (strcmp(existing->map.name, map->name))
+			continue;
+
+		/*
+		 * A pinned map with the same name already occupies this
+		 * slot. If the value_size matches, let the new map
+		 * inherit the existing offset so it uses the same
+		 * inline storage. Otherwise reject the collision.
+		 */
+		if (existing->map.value_size != map->value_size) {
+			err = -EEXIST;
+			goto unlock;
+		}
+		smap->reserve_slot = existing->reserve_slot;
+		smap->reserve_off = existing->reserve_off;
+		goto unlock;
+	}
+
+	if (aligned_sz > reserve->limit - reserve->used ||
+	    reserve->nr_maps == MAX_BPF_LS_RESERVE_MAPS) {
+		err = -ENOSPC;
+		goto unlock;
+	}
+
+	smap->reserve_slot = reserve->nr_maps;
+	reserve->used += aligned_sz;
+	reserve->smaps[reserve->nr_maps++] = smap;
+
+unlock:
+	spin_unlock(&reserve->lock);
+	return err;
+}
+
+void bpf_ls_reserve_del(struct bpf_local_storage_map *smap,
+			struct bpf_ls_reserve *reserve)
+{
+	bool found = false;
+	int i;
+
+	spin_lock(&reserve->lock);
+	for (i = 0; i < reserve->nr_maps; i++) {
+		if (reserve->smaps[i] == smap) {
+			reserve->smaps[i] =
+				reserve->smaps[reserve->nr_maps - 1];
+			found = true;
+			break;
+		}
+	}
+	if (found) {
+		reserve->used -= round_up(smap->map.value_size, 8);
+		reserve->nr_maps--;
+	}
+	spin_unlock(&reserve->lock);
+}
+
+void bpf_ls_reserve_commit(struct bpf_local_storage_map *smap,
+			   struct bpf_ls_reserve *reserve)
+{
+	u32 aligned_sz = round_up(smap->map.value_size, 8);
+
+	spin_lock(&reserve->lock);
+	smap->reserve_off = reserve->limit - reserve->last_off;
+	reserve->last_off += aligned_sz;
+	bpf_map_inc(&smap->map);
+	spin_unlock(&reserve->lock);
+}
+
 struct bpf_map *
 bpf_local_storage_map_alloc(union bpf_attr *attr,
 			    struct bpf_local_storage_cache *cache)

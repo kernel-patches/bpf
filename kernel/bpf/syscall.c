@@ -1606,6 +1606,9 @@ static int __map_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_verifie
 	if (err)
 		goto free_map_sec;
 
+	if (ops->map_settle)
+		ops->map_settle(map);
+
 	bpf_map_save_memcg(map);
 	bpf_token_put(token);
 
