@@ -923,15 +923,12 @@ static int cgroup_bpf_attach(struct cgroup *cgrp,
  */
 static void replace_effective_prog(struct cgroup *cgrp,
 				   enum cgroup_bpf_attach_type atype,
-				   struct bpf_cgroup_link *link)
+				   struct bpf_cgroup_link *link,
+				   struct bpf_prog *old_prog)
 {
 	struct bpf_prog_array_item *item;
 	struct cgroup_subsys_state *css;
 	struct bpf_prog_array *progs;
-	struct bpf_prog_list *pl;
-	struct hlist_head *head;
-	struct cgroup *cg;
-	int pos;
 
 	css_for_each_descendant_pre(css, &cgrp->self) {
 		struct cgroup *desc = container_of(css, struct cgroup, self);
@@ -939,27 +936,20 @@ static void replace_effective_prog(struct cgroup *cgrp,
 		if (percpu_ref_is_zero(&desc->bpf.refcnt))
 			continue;
 
-		/* find position of link in effective progs array */
-		for (pos = 0, cg = desc; cg; cg = cgroup_parent(cg)) {
-			if (pos && !(cg->bpf.flags[atype] & BPF_F_ALLOW_MULTI))
-				continue;
-
-			head = &cg->bpf.progs[atype];
-			hlist_for_each_entry(pl, head, node) {
-				if (!prog_list_prog(pl))
-					continue;
-				if (pl->link == link)
-					goto found;
-				pos++;
-			}
-		}
-found:
-		BUG_ON(!cg);
+		/* find the old prog in effective array by direct pointer
+		 * comparison, since compute_effective_progs() partitions
+		 * the array (preorder progs first) and the hlist walk
+		 * order does not match the effective array order.
+		 */
 		progs = rcu_dereference_protected(
 				desc->bpf.effective[atype],
 				lockdep_is_held(&cgroup_mutex));
-		item = &progs->items[pos];
-		WRITE_ONCE(item->prog, link->link.prog);
+		for (item = &progs->items[0]; item->prog; item++) {
+			if (item->prog == old_prog) {
+				WRITE_ONCE(item->prog, link->link.prog);
+				break;
+			}
+		}
 	}
 }
 
@@ -1003,7 +993,7 @@ static int __cgroup_bpf_replace(struct cgroup *cgrp,
 
 	cgrp->bpf.revisions[atype] += 1;
 	old_prog = xchg(&link->link.prog, new_prog);
-	replace_effective_prog(cgrp, atype, link);
+	replace_effective_prog(cgrp, atype, link, old_prog);
 	bpf_prog_put(old_prog);
 	return 0;
 }
@@ -1078,11 +1068,9 @@ static void purge_effective_progs(struct cgroup *cgrp, struct bpf_prog *prog,
 				  struct bpf_cgroup_link *link,
 				  enum cgroup_bpf_attach_type atype)
 {
+	struct bpf_prog *target_prog = prog ? : link->link.prog;
 	struct cgroup_subsys_state *css;
 	struct bpf_prog_array *progs;
-	struct bpf_prog_list *pl;
-	struct hlist_head *head;
-	struct cgroup *cg;
 	int pos;
 
 	/* recompute effective prog array in place */
@@ -1092,27 +1080,23 @@ static void purge_effective_progs(struct cgroup *cgrp, struct bpf_prog *prog,
 		if (percpu_ref_is_zero(&desc->bpf.refcnt))
 			continue;
 
-		/* find position of link or prog in effective progs array */
-		for (pos = 0, cg = desc; cg; cg = cgroup_parent(cg)) {
-			if (pos && !(cg->bpf.flags[atype] & BPF_F_ALLOW_MULTI))
-				continue;
-
-			head = &cg->bpf.progs[atype];
-			hlist_for_each_entry(pl, head, node) {
-				if (!prog_list_prog(pl))
-					continue;
-				if (pl->prog == prog && pl->link == link)
-					goto found;
-				pos++;
-			}
-		}
-
-		/* no link or prog match, skip the cgroup of this layer */
-		continue;
-found:
+		/* find the prog in the effective array by direct pointer
+		 * comparison instead of computing index from hlist walk,
+		 * since compute_effective_progs() partitions the array.
+		 * Use target_prog which resolves link->link.prog for
+		 * link-based entries where prog is NULL.
+		 */
 		progs = rcu_dereference_protected(
 				desc->bpf.effective[atype],
 				lockdep_is_held(&cgroup_mutex));
+
+		for (pos = 0; progs->items[pos].prog; pos++) {
+			if (progs->items[pos].prog == target_prog)
+				break;
+		}
+
+		if (!progs->items[pos].prog)
+			continue;
 
 		/* Remove the program from the array */
 		WARN_ONCE(bpf_prog_array_delete_safe_at(progs, pos),
