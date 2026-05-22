@@ -3764,7 +3764,8 @@ static int btf_find_field_one(const struct btf *btf,
 	 */
 	for (i = 0; i < MAX_RESOLVE_DEPTH && btf_type_is_array(var_type); i++) {
 		array = btf_array(var_type);
-		nelems *= array->nelems;
+		if (check_mul_overflow(nelems, array->nelems, &nelems))
+			return -E2BIG;
 		var_type = btf_type_by_id(btf, array->type);
 	}
 	if (i == MAX_RESOLVE_DEPTH)
