@@ -2300,41 +2300,50 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 			EMIT_LFENCE();
 			break;
 
-			/* ST: *(u8*)(dst_reg + off) = imm */
 		case BPF_ST | BPF_MEM | BPF_B:
-			if (is_ereg(dst_reg))
-				EMIT2(0x41, 0xC6);
-			else
-				EMIT1(0xC6);
-			goto st;
 		case BPF_ST | BPF_MEM | BPF_H:
-			if (is_ereg(dst_reg))
-				EMIT3(0x66, 0x41, 0xC7);
-			else
-				EMIT2(0x66, 0xC7);
-			goto st;
 		case BPF_ST | BPF_MEM | BPF_W:
-			if (is_ereg(dst_reg))
-				EMIT2(0x41, 0xC7);
-			else
-				EMIT1(0xC7);
-			goto st;
 		case BPF_ST | BPF_MEM | BPF_DW:
-			if (dst_reg == BPF_REG_PARAMS && insn->off == -8) {
-				/* Arg 6: store immediate in r9 register */
-				emit_mov_imm64(&prog, X86_REG_R9, imm32 >> 31, (u32)imm32);
+			switch (BPF_SIZE(insn->code)) {
+			case BPF_B:
+				if (is_ereg(dst_reg))
+					EMIT2(0x41, 0xC6);
+				else
+					EMIT1(0xC6);
+				break;
+			case BPF_H:
+				if (is_ereg(dst_reg))
+					EMIT3(0x66, 0x41, 0xC7);
+				else
+					EMIT2(0x66, 0xC7);
+				break;
+			case BPF_W:
+				if (is_ereg(dst_reg))
+					EMIT2(0x41, 0xC7);
+				else
+					EMIT1(0xC7);
+				break;
+			case BPF_DW:
+				if (dst_reg == BPF_REG_PARAMS &&
+				    insn->off == -8) {
+					/* Arg 6: store immediate in r9 register */
+					emit_mov_imm64(&prog, X86_REG_R9,
+						       imm32 >> 31, (u32)imm32);
+					break;
+				}
+				EMIT2(add_1mod(0x48, dst_reg), 0xC7);
 				break;
 			}
-			EMIT2(add_1mod(0x48, dst_reg), 0xC7);
 
-st:			insn_off = insn->off;
+			insn_off = insn->off;
 			if (dst_reg == BPF_REG_PARAMS) {
 				/*
 				 * Args 7+: reverse BPF negative offsets to
 				 * x86 positive rsp offsets.
 				 * BPF off=-16 → [rsp+0], off=-24 → [rsp+8], ...
 				 */
-				insn_off = outgoing_arg_base - outgoing_rsp - insn_off - 16;
+				insn_off = outgoing_arg_base - outgoing_rsp -
+					   insn_off - 16;
 				dst_reg = BPF_REG_FP;
 			}
 			if (is_imm8(insn_off))
