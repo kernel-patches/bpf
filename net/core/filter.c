@@ -5392,6 +5392,9 @@ static int bpf_sock_ops_check_rcvq_cb(struct sock *sk, int val)
 #endif
 		if (not_tcp_prot)
 			return -EBUSY;
+
+		if (unlikely(sk_is_mptcp(sk)))
+			return -EOPNOTSUPP;
 	}
 
 	return 0;
