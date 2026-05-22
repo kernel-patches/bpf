@@ -5395,6 +5395,9 @@ static int bpf_sock_ops_check_rcvq_cb(struct sock *sk, int val)
 
 		if (unlikely(sk_is_mptcp(sk)))
 			return -EOPNOTSUPP;
+
+		if (!skb_queue_empty(&sk->sk_receive_queue))
+			return -EUCLEAN;
 	}
 
 	return 0;
