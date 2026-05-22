@@ -118,7 +118,7 @@ static long bpf_pid_task_storage_update_elem(struct bpf_map *map, void *key,
 
 	sdata = bpf_local_storage_update(
 		task, (struct bpf_local_storage_map *)map, value, map_flags,
-		true);
+		true /* swap_uptrs */, true /* nolock */);
 
 	err = PTR_ERR_OR_ZERO(sdata);
 out:
@@ -165,8 +165,9 @@ out:
 	return err;
 }
 
-BPF_CALL_4(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
-	   task, void *, value, u64, flags)
+static unsigned long __bpf_task_storage_get(struct bpf_map *map,
+					    struct task_struct *task,
+					    void *value, u64 flags, bool nolock)
 {
 	struct bpf_local_storage_data *sdata;
 
@@ -183,11 +184,41 @@ BPF_CALL_4(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
 	    (flags & BPF_LOCAL_STORAGE_GET_F_CREATE)) {
 		sdata = bpf_local_storage_update(
 			task, (struct bpf_local_storage_map *)map, value,
-			BPF_NOEXIST, false);
+			BPF_NOEXIST, false, nolock);
 		return IS_ERR(sdata) ? (unsigned long)NULL : (unsigned long)sdata->data;
 	}
 
 	return (unsigned long)NULL;
+}
+
+BPF_CALL_4(bpf_task_storage_get, struct bpf_map *, map, struct task_struct *,
+	   task, void *, value, u64, flags)
+{
+	return __bpf_task_storage_get(map, task, value, flags, true);
+}
+
+BPF_CALL_4(bpf_task_storage_get_uprobe_multi, struct bpf_map *, map,
+	   struct task_struct *, task, void *, value, u64, flags)
+{
+	return __bpf_task_storage_get(map, task, value, flags, false);
+}
+
+/*
+ * For BPF_PROG_TYPE_KPROBE programs, bpf_ctx is always bpf_trace_run_ctx.
+ * Check is_uprobe at runtime to allow large storage allocation when
+ * the program is executing from a single uprobe (task context).
+ */
+BPF_CALL_4(bpf_task_storage_get_kprobe, struct bpf_map *, map,
+	   struct task_struct *, task, void *, value, u64, flags)
+{
+	struct bpf_trace_run_ctx *run_ctx __maybe_unused;
+	bool nolock = true;
+
+#ifdef CONFIG_UPROBES
+	run_ctx = container_of(current->bpf_ctx, struct bpf_trace_run_ctx, run_ctx);
+	nolock = !run_ctx->is_uprobe;
+#endif
+	return __bpf_task_storage_get(map, task, value, flags, nolock);
 }
 
 BPF_CALL_2(bpf_task_storage_delete, struct bpf_map *, map, struct task_struct *,
@@ -237,6 +268,28 @@ const struct bpf_map_ops task_storage_map_ops = {
 
 const struct bpf_func_proto bpf_task_storage_get_proto = {
 	.func = bpf_task_storage_get,
+	.gpl_only = false,
+	.ret_type = RET_PTR_TO_MAP_VALUE_OR_NULL,
+	.arg1_type = ARG_CONST_MAP_PTR,
+	.arg2_type = ARG_PTR_TO_BTF_ID_OR_NULL,
+	.arg2_btf_id = &btf_tracing_ids[BTF_TRACING_TYPE_TASK],
+	.arg3_type = ARG_PTR_TO_MAP_VALUE_OR_NULL,
+	.arg4_type = ARG_ANYTHING,
+};
+
+const struct bpf_func_proto bpf_task_storage_get_uprobe_multi_proto = {
+	.func = bpf_task_storage_get_uprobe_multi,
+	.gpl_only = false,
+	.ret_type = RET_PTR_TO_MAP_VALUE_OR_NULL,
+	.arg1_type = ARG_CONST_MAP_PTR,
+	.arg2_type = ARG_PTR_TO_BTF_ID_OR_NULL,
+	.arg2_btf_id = &btf_tracing_ids[BTF_TRACING_TYPE_TASK],
+	.arg3_type = ARG_PTR_TO_MAP_VALUE_OR_NULL,
+	.arg4_type = ARG_ANYTHING,
+};
+
+const struct bpf_func_proto bpf_task_storage_get_kprobe_proto = {
+	.func = bpf_task_storage_get_kprobe,
 	.gpl_only = false,
 	.ret_type = RET_PTR_TO_MAP_VALUE_OR_NULL,
 	.arg1_type = ARG_CONST_MAP_PTR,

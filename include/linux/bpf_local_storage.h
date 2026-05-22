@@ -188,7 +188,7 @@ int bpf_selem_link_map(struct bpf_local_storage_map *smap,
 
 struct bpf_local_storage_elem *
 bpf_selem_alloc(struct bpf_local_storage_map *smap, void *owner, void *value,
-		bool swap_uptrs);
+		bool swap_uptrs, bool nolock);
 
 void bpf_selem_free(struct bpf_local_storage_elem *selem,
 		    bool reuse_now);
@@ -200,7 +200,7 @@ bpf_local_storage_alloc(void *owner,
 
 struct bpf_local_storage_data *
 bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
-			 void *value, u64 map_flags, bool swap_uptrs);
+			 void *value, u64 map_flags, bool swap_uptrs, bool nolock);
 
 u64 bpf_local_storage_map_mem_usage(const struct bpf_map *map);
 

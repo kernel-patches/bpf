@@ -68,15 +68,20 @@ static bool selem_linked_to_map(const struct bpf_local_storage_elem *selem)
 
 struct bpf_local_storage_elem *
 bpf_selem_alloc(struct bpf_local_storage_map *smap, void *owner,
-		void *value, bool swap_uptrs)
+		void *value, bool swap_uptrs, bool nolock)
 {
 	struct bpf_local_storage_elem *selem;
 
 	if (mem_charge(smap, owner, smap->elem_size))
 		return NULL;
 
-	selem = bpf_map_kmalloc_nolock(&smap->map, smap->elem_size,
-				       __GFP_ZERO, NUMA_NO_NODE);
+	if (nolock) {
+		selem = bpf_map_kmalloc_nolock(&smap->map, smap->elem_size,
+					       __GFP_ZERO, NUMA_NO_NODE);
+	} else {
+		selem = bpf_map_kzalloc(&smap->map, smap->elem_size,
+					GFP_NOWAIT | __GFP_NOWARN);
+	}
 
 	if (selem) {
 		RCU_INIT_POINTER(SDATA(selem)->smap, smap);
@@ -545,7 +550,7 @@ uncharge:
  */
 struct bpf_local_storage_data *
 bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
-			 void *value, u64 map_flags, bool swap_uptrs)
+			 void *value, u64 map_flags, bool swap_uptrs, bool nolock)
 {
 	struct bpf_local_storage_data *old_sdata = NULL;
 	struct bpf_local_storage_elem *alloc_selem, *selem = NULL;
@@ -570,7 +575,7 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 		if (err)
 			return ERR_PTR(err);
 
-		selem = bpf_selem_alloc(smap, owner, value, swap_uptrs);
+		selem = bpf_selem_alloc(smap, owner, value, swap_uptrs, nolock);
 		if (!selem)
 			return ERR_PTR(-ENOMEM);
 
@@ -604,7 +609,7 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 	/* A lookup has just been done before and concluded a new selem is
 	 * needed. The chance of an unnecessary alloc is unlikely.
 	 */
-	alloc_selem = selem = bpf_selem_alloc(smap, owner, value, swap_uptrs);
+	alloc_selem = selem = bpf_selem_alloc(smap, owner, value, swap_uptrs, nolock);
 	if (!alloc_selem)
 		return ERR_PTR(-ENOMEM);
 

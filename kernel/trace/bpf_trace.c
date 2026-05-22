@@ -1362,6 +1362,12 @@ kprobe_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		if (is_uprobe_multi(prog))
 			return &bpf_get_attach_cookie_proto_umulti;
 		return &bpf_get_attach_cookie_proto_trace;
+	case BPF_FUNC_task_storage_get:
+		if (is_uprobe_multi(prog))
+			return &bpf_task_storage_get_uprobe_multi_proto;
+		if (is_kprobe_multi(prog))
+			return &bpf_task_storage_get_proto;
+		return &bpf_task_storage_get_kprobe_proto;
 	default:
 		return bpf_tracing_func_proto(func_id, prog);
 	}
