@@ -729,6 +729,8 @@ int tcp_bpf_update_proto(struct sock *sk, struct sk_psock *psock, bool restore)
 			sock_replace_proto(sk, psock->sk_proto);
 		}
 		return 0;
+	} else if (BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk), BPF_SOCK_OPS_RCVQ_CB_FLAG)) {
+		return -EBUSY;
 	}
 
 	if (sk->sk_family == AF_INET6) {
