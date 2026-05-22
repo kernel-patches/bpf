@@ -6,11 +6,11 @@
 
 #include <linux/cache.h>
 #include <linux/list.h>
-#include <linux/spinlock_types.h>
+#include <linux/llist.h>
+#include <asm/rqspinlock.h>
 
 #define NR_BPF_LRU_LIST_T	(3)
 #define NR_BPF_LRU_LIST_COUNT	(2)
-#define NR_BPF_LRU_LOCAL_LIST_T (2)
 #define BPF_LOCAL_LIST_T_OFFSET NR_BPF_LRU_LIST_T
 
 enum bpf_lru_list_type {
@@ -22,10 +22,26 @@ enum bpf_lru_list_type {
 };
 
 struct bpf_lru_node {
-	struct list_head list;
+	/*
+	 * A node is in at most one list at a time. The free path on the
+	 * per-CPU locallist uses an llist, so share storage via a union.
+	 */
+	union {
+		struct list_head list;
+		struct llist_node llist;
+	};
 	u16 cpu;
 	u8 type;
 	u8 ref;
+	/*
+	 * Set by *_push_free() when its lock acquisition fails. The flush
+	 * and shrink paths route flagged nodes to the global FREE list
+	 * without consulting del_from_htab() - which can no longer find
+	 * the elem because the htab caller detached it before calling
+	 * push_free. Cleared whenever a node is moved to a FREE list, so
+	 * the flag is always 0 on entry to a fresh push_free().
+	 */
+	u8 pending_free;
 };
 
 struct bpf_lru_list {
@@ -34,13 +50,14 @@ struct bpf_lru_list {
 	/* The next inactive list rotation starts from here */
 	struct list_head *next_inactive_rotation;
 
-	raw_spinlock_t lock ____cacheline_aligned_in_smp;
+	rqspinlock_t lock ____cacheline_aligned_in_smp;
 };
 
 struct bpf_lru_locallist {
-	struct list_head lists[NR_BPF_LRU_LOCAL_LIST_T];
+	struct list_head pending_list;
+	struct llist_head free_llist;
 	u16 next_steal;
-	raw_spinlock_t lock;
+	rqspinlock_t lock;
 };
 
 struct bpf_common_lru {
