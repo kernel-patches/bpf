@@ -6002,7 +6002,8 @@ BPF_CALL_2(bpf_sock_ops_cb_flags_set, struct bpf_sock_ops_kern *, bpf_sock,
 	struct sock *sk = bpf_sock->sk;
 	int val = argval & BPF_SOCK_OPS_ALL_CB_FLAGS;
 
-	if (!is_locked_tcp_sock_ops(bpf_sock))
+	if (!is_locked_tcp_sock_ops(bpf_sock) &&
+	    bpf_sock->op != BPF_SOCK_OPS_RCVQ_CB)
 		return -EOPNOTSUPP;
 
 	if (!IS_ENABLED(CONFIG_INET) || !sk_fullsock(sk))
