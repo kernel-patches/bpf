@@ -5390,6 +5390,9 @@ static int __bpf_sock_ops_cb_flags_set(struct sock *sk, int val)
 		return 0;
 	}
 
+	if (unlikely(sk_is_mptcp(sk)))
+		return -EOPNOTSUPP;
+
 	write_lock_bh(&sk->sk_callback_lock);
 
 	if (unlikely(tcp_in_sockmap(sk))) {
