@@ -188,4 +188,49 @@ int BPF_PROG(null_check, struct file *file)
 	return 0;
 }
 
+SEC("lsm_cgroup/socket_create")
+__description("lsm_cgroup with -4095~0 retval test 1")
+__success
+int BPF_PROG(lsm_cgroup_set_retval_zero_valid, struct task_struct *task)
+{
+	bpf_set_retval(0);
+	return 0;
+}
+
+SEC("lsm_cgroup/socket_create")
+__description("lsm_cgroup with -4095~0 retval test 2")
+__success
+int BPF_PROG(lsm_cgroup_set_retval_negative_valid, struct task_struct *task)
+{
+	bpf_set_retval(-12);
+	return 0;
+}
+
+SEC("lsm_cgroup/socket_create")
+__description("lsm_cgroup with -4095~0 retval test 3")
+__failure __msg("should have been in [-4095, 0]")
+int BPF_PROG(lsm_cgroup_set_retval_negative_invalid, struct task_struct *task)
+{
+	bpf_set_retval(-4096);
+	return 0;
+}
+
+SEC("lsm_cgroup/socket_create")
+__description("lsm_cgroup with -4095~0 retval test 4")
+__failure __msg("should have been in [-4095, 0]")
+int BPF_PROG(lsm_cgroup_set_retval_positive_invalid, struct task_struct *task)
+{
+	bpf_set_retval(1);
+	return 0;
+}
+
+SEC("lsm_cgroup/file_release")
+__description("lsm_cgroup bpf_set_retval on void hook test")
+__failure __msg("BPF_LSM_CGROUP that attach to void LSM hooks can't modify return value")
+int BPF_PROG(lsm_cgroup_set_retval_for_void_hook, struct file *file)
+{
+	bpf_set_retval(0);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
