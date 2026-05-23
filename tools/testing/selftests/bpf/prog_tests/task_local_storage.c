@@ -16,6 +16,7 @@
 #include "task_local_storage_exit_creds.skel.h"
 #include "task_ls_recursion.skel.h"
 #include "task_storage_nodeadlock.skel.h"
+#include "task_storage_uprobe_alloc.skel.h"
 #include "uptr_test_common.h"
 #include "task_ls_uptr.skel.h"
 #include "uptr_update_failure.skel.h"
@@ -240,6 +241,52 @@ static void test_nodeadlock(void)
 done:
 	task_storage_nodeadlock__destroy(skel);
 	sched_setaffinity(getpid(), sizeof(old), &old);
+}
+
+static noinline void task_storage_uprobe_alloc_trigger(void)
+{
+	asm volatile("");
+}
+
+static void test_uprobe_large_alloc(void)
+{
+	LIBBPF_OPTS(bpf_uprobe_opts, uprobe_opts);
+	LIBBPF_OPTS(bpf_uprobe_multi_opts, uprobe_multi_opts);
+	struct task_storage_uprobe_alloc *skel;
+	unsigned long offset;
+
+	offset = get_uprobe_offset(&task_storage_uprobe_alloc_trigger);
+	if (!ASSERT_GE(offset, 0, "get_uprobe_offset"))
+		return;
+
+	skel = task_storage_uprobe_alloc__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+
+	skel->bss->pid = getpid();
+
+	skel->links.test_uprobe = bpf_program__attach_uprobe_opts(skel->progs.test_uprobe,
+					       0, "/proc/self/exe",
+					       offset, &uprobe_opts);
+	if (!ASSERT_OK_PTR(skel->links.test_uprobe, "bpf_program__attach_uprobe_opts"))
+		goto out;
+
+	uprobe_multi_opts.offsets = &offset;
+	uprobe_multi_opts.cnt = 1;
+
+	skel->links.test_uprobe_multi = bpf_program__attach_uprobe_multi(skel->progs.test_uprobe_multi,
+						0, "/proc/self/exe", NULL,
+						&uprobe_multi_opts);
+	if (!ASSERT_OK_PTR(skel->links.test_uprobe_multi, "bpf_program__attach_uprobe_multi"))
+		goto out;
+
+	task_storage_uprobe_alloc_trigger();
+
+	ASSERT_EQ(skel->bss->uprobe_ok, 1, "uprobe_ok");
+	ASSERT_EQ(skel->bss->uprobe_multi_ok, 1, "uprobe_multi_ok");
+
+out:
+	task_storage_uprobe_alloc__destroy(skel);
 }
 
 static struct user_data udata __attribute__((aligned(16))) = {
@@ -505,6 +552,8 @@ void test_task_local_storage(void)
 		test_recursion();
 	if (test__start_subtest("nodeadlock"))
 		test_nodeadlock();
+	if (test__start_subtest("uprobe_large_alloc"))
+		test_uprobe_large_alloc();
 	if (test__start_subtest("uptr_basic"))
 		test_uptr_basic();
 	if (test__start_subtest("uptr_across_pages"))
