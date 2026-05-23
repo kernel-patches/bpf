@@ -5390,6 +5390,9 @@ static int __bpf_sock_ops_cb_flags_set(struct sock *sk, int val)
 		return 0;
 	}
 
+	if (!skb_queue_empty(&sk->sk_receive_queue))
+		return -EUCLEAN;
+
 	if (unlikely(sk_is_mptcp(sk)))
 		return -EOPNOTSUPP;
 
