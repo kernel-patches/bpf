@@ -2854,6 +2854,7 @@ struct sk_msg;
 struct sk_psock;
 
 #ifdef CONFIG_BPF_SYSCALL
+bool tcp_in_sockmap(const struct sock *sk);
 int tcp_bpf_update_proto(struct sock *sk, struct sk_psock *psock, bool restore);
 void tcp_bpf_clone(const struct sock *sk, struct sock *newsk);
 #ifdef CONFIG_BPF_STREAM_PARSER

@@ -705,6 +705,16 @@ out:
 }
 #endif /* CONFIG_BPF_STREAM_PARSER */
 
+bool tcp_in_sockmap(const struct sock *sk)
+{
+	const struct proto *prot = sk->sk_prot;
+
+	lockdep_assert_held(&sk->sk_callback_lock);
+
+	return &tcp_bpf_prots[0][0] <= prot &&
+		prot <= &tcp_bpf_prots[TCP_BPF_NUM_PROTS - 1][TCP_BPF_NUM_CFGS - 1];
+}
+
 int tcp_bpf_update_proto(struct sock *sk, struct sk_psock *psock, bool restore)
 {
 	int family = sk->sk_family == AF_INET6 ? TCP_BPF_IPV6 : TCP_BPF_IPV4;
@@ -729,6 +739,8 @@ int tcp_bpf_update_proto(struct sock *sk, struct sk_psock *psock, bool restore)
 			sock_replace_proto(sk, psock->sk_proto);
 		}
 		return 0;
+	} else if (BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk), BPF_SOCK_OPS_RCVQ_CB_FLAG)) {
+		return -EBUSY;
 	}
 
 	if (sk->sk_family == AF_INET6) {

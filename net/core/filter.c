@@ -5382,12 +5382,34 @@ static int bpf_sol_tcp_getsockopt(struct sock *sk, int optname,
 	return 0;
 }
 
+static int __bpf_sock_ops_cb_flags_set(struct sock *sk, int val)
+{
+	if (!(val & BPF_SOCK_OPS_RCVQ_CB_FLAG) ||
+	    tcp_sk(sk)->bpf_sock_ops_cb_flags & BPF_SOCK_OPS_RCVQ_CB_FLAG) {
+		tcp_sk(sk)->bpf_sock_ops_cb_flags = val;
+		return 0;
+	}
+
+	write_lock_bh(&sk->sk_callback_lock);
+
+	if (unlikely(tcp_in_sockmap(sk))) {
+		write_unlock_bh(&sk->sk_callback_lock);
+		return -EBUSY;
+	}
+
+	tcp_sk(sk)->bpf_sock_ops_cb_flags = val;
+
+	write_unlock_bh(&sk->sk_callback_lock);
+
+	return 0;
+}
+
 static int bpf_sol_tcp_setsockopt(struct sock *sk, int optname,
 				  char *optval, int optlen)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	unsigned long timeout;
-	int val;
+	int val, err;
 
 	if (optlen != sizeof(int))
 		return -EINVAL;
@@ -5424,7 +5446,9 @@ static int bpf_sol_tcp_setsockopt(struct sock *sk, int optname,
 	case TCP_BPF_SOCK_OPS_CB_FLAGS:
 		if (val & ~(BPF_SOCK_OPS_ALL_CB_FLAGS))
 			return -EINVAL;
-		tp->bpf_sock_ops_cb_flags = val;
+		err = __bpf_sock_ops_cb_flags_set(sk, val);
+		if (err)
+			return err;
 		break;
 	default:
 		return -EINVAL;
@@ -5999,8 +6023,9 @@ static const struct bpf_func_proto bpf_sock_ops_getsockopt_proto = {
 BPF_CALL_2(bpf_sock_ops_cb_flags_set, struct bpf_sock_ops_kern *, bpf_sock,
 	   int, argval)
 {
-	struct sock *sk = bpf_sock->sk;
 	int val = argval & BPF_SOCK_OPS_ALL_CB_FLAGS;
+	struct sock *sk = bpf_sock->sk;
+	int err;
 
 	if (!is_locked_tcp_sock_ops(bpf_sock) &&
 	    bpf_sock->op != BPF_SOCK_OPS_RCVQ_CB)
@@ -6009,7 +6034,9 @@ BPF_CALL_2(bpf_sock_ops_cb_flags_set, struct bpf_sock_ops_kern *, bpf_sock,
 	if (!IS_ENABLED(CONFIG_INET) || !sk_fullsock(sk))
 		return -EINVAL;
 
-	tcp_sk(sk)->bpf_sock_ops_cb_flags = val;
+	err = __bpf_sock_ops_cb_flags_set(sk, val);
+	if (err)
+		return err;
 
 	return argval & (~BPF_SOCK_OPS_ALL_CB_FLAGS);
 }
