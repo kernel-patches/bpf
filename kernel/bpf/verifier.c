@@ -10462,11 +10462,21 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	case BPF_FUNC_set_retval:
 		if (prog_type == BPF_PROG_TYPE_LSM &&
 		    env->prog->expected_attach_type == BPF_LSM_CGROUP) {
+			struct bpf_retval_range range;
+			struct bpf_reg_state *r1 = &regs[BPF_REG_1];
+
 			if (!env->prog->aux->attach_func_proto->type) {
 				/* Make sure programs that attach to void
 				 * hooks don't try to modify return value.
 				 */
 				verbose(env, "BPF_LSM_CGROUP that attach to void LSM hooks can't modify return value!\n");
+				return -EINVAL;
+			}
+
+			bpf_lsm_get_retval_range(env->prog, &range);
+			range.return_32bit = true;
+			if (!retval_range_within(range, r1)) {
+				verbose_invalid_scalar(env, r1, range, "At bpf_set_retval", "R1");
 				return -EINVAL;
 			}
 		}
