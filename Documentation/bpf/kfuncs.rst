@@ -750,3 +750,29 @@ the verifier. bpf_cgroup_ancestor() can be used as follows:
 BPF provides a set of kfuncs that can be used to query, allocate, mutate, and
 destroy struct cpumask * objects. Please refer to :ref:`cpumasks-header-label`
 for more details.
+
+4.4 BPF arena kfuncs
+--------------------
+
+A BPF arena (``BPF_MAP_TYPE_ARENA``) is a sparsely-populated shared memory
+region that a BPF program and a user-space process can both address. The
+following kfuncs allow a BPF program to allocate, free, and reserve pages
+within an arena:
+
+.. kernel-doc:: kernel/bpf/arena.c
+   :identifiers: bpf_arena_alloc_pages bpf_arena_free_pages bpf_arena_reserve_pages
+
+A typical pattern is to allocate one or more pages, write to them from BPF,
+and let user space access the same pages through its mapping of the arena:
+
+.. code-block:: c
+
+	void __arena *page;
+
+	page = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
+	if (!page)
+		return -ENOMEM;
+
+	/* ... use the page from BPF; user space sees the same bytes ... */
+
+	bpf_arena_free_pages(&arena, page, 1);

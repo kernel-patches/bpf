@@ -870,6 +870,31 @@ static void arena_free_irq(struct irq_work *iw)
 
 __bpf_kfunc_start_defs();
 
+/**
+ * bpf_arena_alloc_pages() - Allocate pages within a BPF arena.
+ * @p__map: Pointer to a ``BPF_MAP_TYPE_ARENA`` map.
+ * @addr__ign: Page-aligned user-space address within the arena at which to
+ *	       place the allocation, or %NULL to let the kernel choose. When
+ *	       non-NULL the address must fall inside the arena's user VMA
+ *	       range; otherwise the allocation fails.
+ * @page_cnt: Number of pages to allocate. Must be non-zero and no greater
+ *	      than the arena's configured size in pages.
+ * @node_id: NUMA node hint for the backing pages, or %NUMA_NO_NODE.
+ * @flags: Reserved for future use; must be 0.
+ *
+ * Allocates @page_cnt pages and inserts them into the arena at the offset
+ * corresponding to @addr__ign (or at an arbitrary free offset when
+ * @addr__ign is %NULL). The pages become accessible to the BPF program
+ * immediately and to user space through the arena's mmap()ed region.
+ *
+ * Return:
+ * * The user-space virtual address of the start of the allocated region on
+ *   success. The BPF JIT translates this address for accesses from the BPF
+ *   program.
+ * * %NULL if @p__map is not an arena, @flags is non-zero, @page_cnt is zero
+ *   or exceeds the arena size, @addr__ign is misaligned or outside the
+ *   arena, @node_id is invalid, or the kernel is out of memory.
+ */
 __bpf_kfunc void *bpf_arena_alloc_pages(void *p__map, void *addr__ign, u32 page_cnt,
 					int node_id, u64 flags)
 {
@@ -893,6 +918,20 @@ void *bpf_arena_alloc_pages_non_sleepable(void *p__map, void *addr__ign, u32 pag
 
 	return (void *)arena_alloc_pages(arena, (long)addr__ign, page_cnt, node_id, false);
 }
+
+/**
+ * bpf_arena_free_pages() - Free a range of pages within a BPF arena.
+ * @p__map: Pointer to a ``BPF_MAP_TYPE_ARENA`` map.
+ * @ptr__ign: User-space virtual address of the first page to free, as
+ *	      returned by bpf_arena_alloc_pages().
+ * @page_cnt: Number of pages to free.
+ *
+ * Releases the backing pages and unmaps them from any user-space mapping
+ * of the arena.
+ *
+ * The call is a no-op when @p__map is not an arena, when @page_cnt is zero,
+ * or when @ptr__ign is %NULL.
+ */
 __bpf_kfunc void bpf_arena_free_pages(void *p__map, void *ptr__ign, u32 page_cnt)
 {
 	struct bpf_map *map = p__map;
@@ -913,6 +952,26 @@ void bpf_arena_free_pages_non_sleepable(void *p__map, void *ptr__ign, u32 page_c
 	arena_free_pages(arena, (long)ptr__ign, page_cnt, false);
 }
 
+/**
+ * bpf_arena_reserve_pages() - Reserve a page range within a BPF arena.
+ * @p__map: Pointer to a ``BPF_MAP_TYPE_ARENA`` map.
+ * @ptr__ign: Page-aligned user-space virtual address of the start of the
+ *	      range to reserve.
+ * @page_cnt: Number of pages to reserve. Zero is permitted and is a no-op.
+ *
+ * Marks @page_cnt pages starting at @ptr__ign as reserved so that subsequent
+ * bpf_arena_alloc_pages() calls will not place allocations in that range.
+ * No physical pages are allocated by this kfunc; the range is simply
+ * excluded from the arena's free space.
+ *
+ * Return:
+ * * 0 on success, or when @page_cnt is zero.
+ * * -EINVAL if @p__map is not an arena or the requested range falls outside
+ *   the arena's user VMA.
+ * * -EBUSY if any page in the requested range is already allocated, or if
+ *   contention on the arena's internal spinlock prevents the operation from
+ *   completing.
+ */
 __bpf_kfunc int bpf_arena_reserve_pages(void *p__map, void *ptr__ign, u32 page_cnt)
 {
 	struct bpf_map *map = p__map;
