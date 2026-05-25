@@ -119,6 +119,11 @@ struct btf_id {
 	Elf64_Addr	 addr[ADDR_CNT];
 };
 
+struct addr_sym {
+	Elf64_Addr	 addr;
+	const char	*name;
+};
+
 struct object {
 	const char *path;
 	const char *btf_path;
@@ -150,6 +155,10 @@ struct object {
 	int nr_structs;
 	int nr_unions;
 	int nr_typedefs;
+
+	struct addr_sym *addr_syms;
+	int nr_addr_syms;
+	int max_addr_syms;
 };
 
 #define KF_IMPLICIT_ARGS (1 << 16)
@@ -480,6 +489,49 @@ static int elf_collect(struct object *obj)
 	return 0;
 }
 
+static int push_addr_sym(struct object *obj, Elf64_Addr addr, const char *name)
+{
+	struct addr_sym *arr = obj->addr_syms;
+	int cap = obj->max_addr_syms;
+
+	if (obj->nr_addr_syms + 1 > cap) {
+		cap = max(cap + 256, cap * 2);
+		arr = realloc(arr, sizeof(*arr) * cap);
+		if (!arr)
+			return -ENOMEM;
+		obj->max_addr_syms = cap;
+		obj->addr_syms = arr;
+	}
+
+	obj->addr_syms[obj->nr_addr_syms].addr = addr;
+	obj->addr_syms[obj->nr_addr_syms].name = name;
+	obj->nr_addr_syms++;
+
+	return 0;
+}
+
+static int cmp_addr_sym(const void *a, const void *b)
+{
+	Elf64_Addr aa = ((const struct addr_sym *)a)->addr;
+	Elf64_Addr ab = ((const struct addr_sym *)b)->addr;
+
+	if (aa < ab)
+		return -1;
+	if (aa > ab)
+		return 1;
+	return 0;
+}
+
+static const char *find_name_by_addr(struct object *obj, Elf64_Addr addr)
+{
+	struct addr_sym key = { .addr = addr };
+	struct addr_sym *res;
+
+	res = bsearch(&key, obj->addr_syms, obj->nr_addr_syms,
+		      sizeof(*obj->addr_syms), cmp_addr_sym);
+	return res ? res->name : NULL;
+}
+
 static int symbols_collect(struct object *obj)
 {
 	Elf_Scn *scn = NULL;
@@ -573,7 +625,13 @@ static int symbols_collect(struct object *obj)
 			return -1;
 		}
 		id->addr[id->addr_cnt++] = sym.st_value;
+
+		if (push_addr_sym(obj, sym.st_value, id->name))
+			return -1;
 	}
+
+	qsort(obj->addr_syms, obj->nr_addr_syms, sizeof(*obj->addr_syms),
+	      cmp_addr_sym);
 
 	return 0;
 }
@@ -946,43 +1004,41 @@ static int collect_decl_tags(struct btf2btf_context *ctx)
 }
 
 /*
- * To find the kfunc flags having its struct btf_id (with ELF addresses)
- * we need to find the address that is in range of a set8.
- * If a set8 is found, then the flags are located at addr + 4 bytes.
+ * To find kfunc flags, scan BTF_SET8_KFUNCS entries and use the entry
+ * address to recover the corresponding BTF_ID symbol name.
  * Return 0 (no flags!) if not found.
  */
 static u32 find_kfunc_flags(struct object *obj, struct btf_id *kfunc_id)
 {
 	const u32 *elf_data_ptr = obj->efile.idlist->d_buf;
-	u64 set_lower_addr, set_upper_addr, addr;
 	struct btf_id *set_id;
 	struct rb_node *next;
-	u32 flags;
-	u64 idx;
+	u64 idx, set_addr;
+	u32 set_flags;
 
 	for (next = rb_first(&obj->sets); next; next = rb_next(next)) {
 		set_id = rb_entry(next, struct btf_id, rb_node);
 		if (set_id->kind != BTF_ID_KIND_SET8 || set_id->addr_cnt != 1)
 			continue;
 
-		set_lower_addr = set_id->addr[0];
-		set_upper_addr = set_lower_addr + set_id->cnt * sizeof(u64);
+		set_addr = set_id->addr[0];
+		idx = (set_addr - obj->efile.idlist_addr) / sizeof(u32) + 1;
+		set_flags = elf_data_ptr[idx];
+		if (!(set_flags & BTF_SET8_KFUNCS))
+			continue;
 
-		for (u32 i = 0; i < kfunc_id->addr_cnt; i++) {
-			addr = kfunc_id->addr[i];
-			/*
-			 * Lower bound is exclusive to skip the 8-byte header of the set.
-			 * Upper bound is inclusive to capture the last entry at offset 8*cnt.
-			 */
-			if (set_lower_addr < addr && addr <= set_upper_addr) {
-				pr_debug("found kfunc %s in BTF_ID_FLAGS %s\n",
-					 kfunc_id->name, set_id->name);
-				idx = addr - obj->efile.idlist_addr;
-				idx = idx / sizeof(u32) + 1;
-				flags = elf_data_ptr[idx];
+		for (u32 i = 0; i < set_id->cnt; i++) {
+			Elf64_Addr addr = set_addr + sizeof(u64) * (i + 1);
+			const char *name = find_name_by_addr(obj, addr);
 
-				return flags;
-			}
+			if (!name || strcmp(name, kfunc_id->name) != 0)
+				continue;
+
+			pr_debug("found kfunc %s in BTF_ID_FLAGS %s\n",
+				 kfunc_id->name, set_id->name);
+
+			idx = (addr - obj->efile.idlist_addr) / sizeof(u32) + 1;
+			return elf_data_ptr[idx];
 		}
 	}
 
@@ -1575,6 +1631,7 @@ out:
 	btf_id__free_all(&obj.typedefs);
 	btf_id__free_all(&obj.funcs);
 	btf_id__free_all(&obj.sets);
+	free(obj.addr_syms);
 	if (obj.efile.elf) {
 		elf_end(obj.efile.elf);
 		close(obj.efile.fd);
