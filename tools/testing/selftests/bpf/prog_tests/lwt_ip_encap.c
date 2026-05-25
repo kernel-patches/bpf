@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-only
+#include <linux/ip.h>
+#include <linux/ipv6.h>
 #include <netinet/in.h>
 
 #include "network_helpers.h"
 #include "test_progs.h"
+#include "test_lwt_ip_encap_fix.skel.h"
 
 #define BPF_FILE "test_lwt_ip_encap.bpf.o"
 
@@ -34,6 +37,10 @@
 
 #define IP6_ADDR_SRC IP6_ADDR_1
 #define IP6_ADDR_DST IP6_ADDR_4
+
+/* VxLAN tunnel endpoints, reachable via the bottom route (veth5/6/7/8). */
+#define IP4_ADDR_VXLAN  "172.16.17.100"
+#define IP6_ADDR_VXLAN  "fb20::1"
 
 /* Setup/topology:
  *
@@ -537,4 +544,150 @@ void test_lwt_ip_encap_ipv4(void)
 
 	if (test__start_subtest("ingress"))
 		lwt_ip_encap(IPV4_ENCAP, INGRESS, "");
+}
+
+/* VxLAN Setup/topology:
+ *
+ * NS1 (IP*_ADDR_1)                NS2                  NS3 (IP*_ADDR_4)
+ *       [ping src]
+ *           |                          top route
+ *         veth1 (LWT encap)  <<-- veth2        veth3  -X-  veth4 (ping dst)
+ *           |                                                ^
+ *       (bottom route)                                       | (inner pkt)
+ *           v                        bottom route            |
+ *         veth5              -->> veth6        veth7  -->> veth8 (vxlan decap)
+ *                                                          (IP*_ADDR_VXLAN)
+ *
+ * Add the VxLAN endpoint addresses to NS3's veth8, create standard
+ * VxLAN decap devices bound to those addresses, and install routes so
+ * NS1/NS2 can reach the endpoints via the bottom route.
+ */
+static int setup_vxlan_routes(const char *ns3, const char *ns1, const char *ns2,
+			      const char *vrf)
+{
+	struct nstoken *nstoken;
+
+	nstoken = open_netns(ns3);
+	if (!ASSERT_OK_PTR(nstoken, "open ns3 for vxlan"))
+		return -1;
+
+	SYS(fail_close, "ip    a add %s/32  dev veth8", IP4_ADDR_VXLAN);
+	SYS(fail_close, "ip -6 a add %s/128 dev veth8", IP6_ADDR_VXLAN);
+	/* Standard VxLAN devices to decap the encapsulated packets.  The inner
+	 * Ethernet frame uses a broadcast dst MAC so the IP stack accepts it
+	 * without ARP or FDB configuration.
+	 */
+	SYS(fail_close, "ip link add vxlan4 type vxlan id 1 dstport 4789 local %s dev veth8 nolearning noudpcsum",
+	    IP4_ADDR_VXLAN);
+	SYS(fail_close, "ip link set vxlan4 up");
+	SYS(fail_close, "ip link add vxlan6 type vxlan id 1 dstport 4789 local %s dev veth8 nolearning udp6zerocsumrx",
+	    IP6_ADDR_VXLAN);
+	SYS(fail_close, "ip link set vxlan6 up");
+	close_netns(nstoken);
+
+	SYS(fail, "ip -n %s    route add %s/32  dev veth5 via %s %s",
+	    ns1, IP4_ADDR_VXLAN, IP4_ADDR_6, vrf);
+	SYS(fail, "ip -n %s    route add %s/32  dev veth7 via %s %s",
+	    ns2, IP4_ADDR_VXLAN, IP4_ADDR_8, vrf);
+	SYS(fail, "ip -n %s -6 route add %s/128 dev veth5 via %s %s",
+	    ns1, IP6_ADDR_VXLAN, IP6_ADDR_6, vrf);
+	SYS(fail, "ip -n %s -6 route add %s/128 dev veth7 via %s %s",
+	    ns2, IP6_ADDR_VXLAN, IP6_ADDR_8, vrf);
+	return 0;
+
+fail_close:
+	close_netns(nstoken);
+fail:
+	return -1;
+}
+
+/* VxLAN encap tests (IPv4-outer and IPv6-outer variants).
+ *
+ * Test 1 - functional: the BPF LWT xmit program encapsulates the packet
+ *   (protocol=UDP, port=4789) and re-routes it without dropping it.
+ *   Verified by ping success.
+ *
+ * Test 2 - fix verification: after bpf_lwt_push_ip_encap() the
+ *   skb->transport_header must point at the outer UDP header, i.e.
+ *   transport_header - network_header == sizeof(outer IP header).
+ *   Without the fix the transport_header still points at the inner
+ *   transport layer, giving a wrong (larger) offset.
+ */
+static void lwt_ip_encap_vxlan(bool ipv4_encap)
+{
+	char ns1[NETNS_NAME_SIZE] = NETNS_BASE "-1-";
+	char ns2[NETNS_NAME_SIZE] = NETNS_BASE "-2-";
+	char ns3[NETNS_NAME_SIZE] = NETNS_BASE "-3-";
+	const char *sec = ipv4_encap ? "encap_vxlan" : "encap_vxlan6";
+	int expected_offset = ipv4_encap ? (int)sizeof(struct iphdr)
+					 : (int)sizeof(struct ipv6hdr);
+	struct test_lwt_ip_encap_fix *skel = NULL;
+	int thdr_offset;
+
+	if (!ASSERT_OK(create_ns(ns1, NETNS_NAME_SIZE), "create ns1"))
+		goto out;
+	if (!ASSERT_OK(create_ns(ns2, NETNS_NAME_SIZE), "create ns2"))
+		goto out;
+	if (!ASSERT_OK(create_ns(ns3, NETNS_NAME_SIZE), "create ns3"))
+		goto out;
+
+	if (!ASSERT_OK(setup_network(ns1, ns2, ns3, ""), "setup network"))
+		goto out;
+
+	if (!ASSERT_OK(setup_vxlan_routes(ns3, ns1, ns2, ""), "setup vxlan routes"))
+		goto out;
+
+	/* Attach fexit to bpf_lwt_push_ip_encap() before installing the
+	 * LWT route so we don't miss the first encap call.
+	 */
+	skel = test_lwt_ip_encap_fix__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_lwt_ip_encap_fix__open_and_load"))
+		goto out;
+
+	if (!ASSERT_OK(test_lwt_ip_encap_fix__attach(skel), "test_lwt_ip_encap_fix__attach"))
+		goto out;
+
+	/* Remove the direct NS2->DST route so packets must go via LWT encap. */
+	SYS(out, "ip -n %s    route del %s/32  dev veth3", ns2, IP4_ADDR_DST);
+	SYS(out, "ip -n %s -6 route del %s/128 dev veth3", ns2, IP6_ADDR_DST);
+
+	/* Install the VxLAN BPF LWT xmit route. */
+	if (ipv4_encap)
+		SYS(out, "ip -n %s route add %s encap bpf xmit obj %s sec %s dev veth1",
+		    ns1, IP4_ADDR_DST, BPF_FILE, sec);
+	else
+		SYS(out, "ip -n %s -6 route add %s encap bpf xmit obj %s sec %s dev veth1",
+		    ns1, IP6_ADDR_DST, BPF_FILE, sec);
+
+	skel->bss->fexit_triggered = false;
+	if (ipv4_encap)
+		SYS(out, "ip netns exec %s ping  -c 1 -W1 %s", ns1, IP4_ADDR_DST);
+	else
+		SYS(out, "ip netns exec %s ping6 -c 1 -W1 %s", ns1, IP6_ADDR_DST);
+
+	/* Test 1: fexit triggered means bpf_lwt_push_ip_encap() succeeded. */
+	if (!ASSERT_TRUE(skel->bss->fexit_triggered, "fexit_triggered"))
+		goto out;
+
+	/* Test 2: transport_header must sit immediately after the outer IP
+	 * header, pointing at the UDP header of the VxLAN encap.
+	 */
+	thdr_offset = (int)skel->bss->transport_hdr - (int)skel->bss->network_hdr;
+	ASSERT_EQ(thdr_offset, expected_offset, "transport_hdr offset");
+
+out:
+	test_lwt_ip_encap_fix__destroy(skel);
+	SYS_NOFAIL("ip netns del %s", ns1);
+	SYS_NOFAIL("ip netns del %s", ns2);
+	SYS_NOFAIL("ip netns del %s", ns3);
+}
+
+void test_lwt_ip_encap_vxlan_ipv4(void)
+{
+	lwt_ip_encap_vxlan(IPV4_ENCAP);
+}
+
+void test_lwt_ip_encap_vxlan_ipv6(void)
+{
+	lwt_ip_encap_vxlan(IPV6_ENCAP);
 }
