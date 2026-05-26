@@ -525,13 +525,14 @@ void bpf_gen__map_create(struct bpf_gen *gen,
 	attr.max_entries = tgt_endian(max_entries);
 	attr.btf_key_type_id = tgt_endian(map_attr->btf_key_type_id);
 	attr.btf_value_type_id = tgt_endian(map_attr->btf_value_type_id);
+	attr.btf_vmlinux_value_type_id = tgt_endian(map_attr->btf_vmlinux_value_type_id);
 
 	map_create_attr = add_data(gen, &attr, attr_size);
 	pr_debug("gen: map_create: %s idx %d type %d value_type_id %d, attr: off %d size %d\n",
 		 map_name, map_idx, map_type, map_attr->btf_value_type_id,
 		 map_create_attr, attr_size);
 
-	if (map_attr->btf_value_type_id)
+	if (map_attr->btf_value_type_id || map_attr->btf_vmlinux_value_type_id)
 		/* populate union bpf_attr with btf_fd saved in the stack earlier */
 		move_stack2blob(gen, attr_field(map_create_attr, btf_fd), 4,
 				stack_off(btf_fd));
