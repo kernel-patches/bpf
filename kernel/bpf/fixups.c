@@ -450,6 +450,11 @@ void bpf_clear_insn_aux_data(struct bpf_verifier_env *env, int start, int len)
 			aux_data[i].jt = NULL;
 		}
 
+		if (aux_data[i].loop) {
+			kvfree(aux_data[i].loop);
+			aux_data[i].loop = NULL;
+		}
+
 		if (bpf_is_ldimm64(&insns[i]))
 			i++;
 	}
