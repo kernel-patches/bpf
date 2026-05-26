@@ -168,6 +168,47 @@ int write_cgroup_file(const char *relative_path, const char *file,
 }
 
 /**
+ * read_cgroup_file() - Read content from a cgroup file
+ * @relative_path: The cgroup path, relative to the workdir
+ * @file: The name of the file in cgroupfs to read from
+ * @buf: Buffer to store the read data
+ * @buf_size: Size of the buffer
+ *
+ * Read the entire content of a cgroup file into the provided buffer.
+ * The buffer will be null-terminated on success.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int read_cgroup_file(const char *relative_path, const char *file,
+		     char *buf, size_t buf_size)
+{
+	char cgroup_path[PATH_MAX - 24];
+	char file_path[PATH_MAX + 1];
+	int fd;
+	ssize_t len;
+
+	if (!relative_path || !file || !buf || buf_size == 0)
+		return -EINVAL;
+
+	format_cgroup_path(cgroup_path, relative_path);
+	snprintf(file_path, sizeof(file_path), "%s/%s", cgroup_path, file);
+
+	fd = open(file_path, O_RDONLY);
+	if (fd < 0)
+		return -errno;
+
+	len = read(fd, buf, buf_size - 1);
+	if (len < 0) {
+		close(fd);
+		return -errno;
+	}
+	close(fd);
+
+	buf[len] = '\0';
+	return 0;
+}
+
+/**
  * write_cgroup_file_parent() - Write to a cgroup file in the parent process
  *                              workdir
  * @relative_path: The cgroup path, relative to the parent process workdir

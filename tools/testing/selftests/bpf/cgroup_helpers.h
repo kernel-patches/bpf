@@ -13,6 +13,8 @@
 int enable_controllers(const char *relative_path, const char *controllers);
 int write_cgroup_file(const char *relative_path, const char *file,
 		      const char *buf);
+int read_cgroup_file(const char *relative_path, const char *file,
+		     char *buf, size_t buf_size);
 int write_cgroup_file_parent(const char *relative_path, const char *file,
 			     const char *buf);
 int cgroup_setup_and_join(const char *relative_path);
