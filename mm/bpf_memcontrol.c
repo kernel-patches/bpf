@@ -6,6 +6,7 @@
  */
 
 #include <linux/memcontrol.h>
+#include <linux/swap.h>
 #include <linux/bpf.h>
 
 /* Protects memcg->bpf_ops pointer for read and write. */
@@ -162,6 +163,60 @@ __bpf_kfunc void bpf_mem_cgroup_flush_stats(struct mem_cgroup *memcg)
 	mem_cgroup_flush_stats(memcg);
 }
 
+/**
+ * bpf_try_to_free_mem_cgroup_pages - attempt to reclaim pages from
+ *                                    a memory cgroup
+ * @memcg:           the target memory cgroup to reclaim from
+ * @nr_pages:        the number of pages to reclaim
+ * @gfp_mask:        GFP flags controlling the reclaim behavior
+ * @reclaim_options: bitmask of MEMCG_RECLAIM_* flags to tune
+ *                   reclaim strategy
+ * @swappiness:      swappiness override value, or a sentinel to use
+ *                   the default
+ *
+ * BPF-facing wrapper around try_to_free_mem_cgroup_pages() that
+ * validates and translates the @swappiness argument before
+ * delegating to the core reclaim path.
+ *
+ * The @swappiness parameter follows these semantics:
+ *   - Values in [MIN_SWAPPINESS, SWAPPINESS_ANON_ONLY] are passed
+ *     through as an explicit swappiness override.
+ *   - Values below MIN_SWAPPINESS are treated as "use the system
+ *     default"; the override pointer is set to NULL and the cgroup's
+ *     own swappiness setting takes effect.
+ *   - Values above SWAPPINESS_ANON_ONLY are rejected as invalid.
+ *   - If @reclaim_options does not include MEMCG_RECLAIM_PROACTIVE,
+ *     the @swappiness override is ignored entirely by the core
+ *     reclaim path and the system default is used regardless.
+ *
+ * Swap usage during reclaim is gated on @reclaim_options: swap is
+ * considered only when MEMCG_RECLAIM_MAY_SWAP is set.  Without this
+ * flag, reclaim is restricted to file-backed pages regardless of the
+ * @swappiness value or the cgroup's swappiness setting.
+ *
+ * Return:
+ *   The number of pages actually reclaimed on success, or -%EINVAL
+ *   if @swappiness exceeds SWAPPINESS_ANON_ONLY.
+ */
+unsigned long bpf_try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
+					       unsigned long nr_pages,
+					       gfp_t gfp_mask,
+					       unsigned int reclaim_options,
+					       int swappiness)
+{
+	int *swapiness_ptr;
+
+	if (swappiness > SWAPPINESS_ANON_ONLY)
+		return -EINVAL;
+	else if (swappiness < MIN_SWAPPINESS)
+		swapiness_ptr = NULL;
+	else
+		swapiness_ptr = &swappiness;
+
+	return try_to_free_mem_cgroup_pages(memcg, nr_pages, gfp_mask,
+					    reclaim_options, swapiness_ptr);
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(bpf_memcontrol_kfuncs)
@@ -174,6 +229,8 @@ BTF_ID_FLAGS(func, bpf_mem_cgroup_memory_events)
 BTF_ID_FLAGS(func, bpf_mem_cgroup_usage)
 BTF_ID_FLAGS(func, bpf_mem_cgroup_page_state)
 BTF_ID_FLAGS(func, bpf_mem_cgroup_flush_stats, KF_SLEEPABLE)
+
+BTF_ID_FLAGS(func, bpf_try_to_free_mem_cgroup_pages, KF_SLEEPABLE)
 
 BTF_KFUNCS_END(bpf_memcontrol_kfuncs)
 
