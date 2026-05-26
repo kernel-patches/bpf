@@ -13,6 +13,8 @@
 #include <linux/btf_ids.h>
 #include <linux/rcupdate_wait.h>
 #include <linux/poll.h>
+#include <linux/bpf-cgroup.h>
+#include <linux/cgroup.h>
 
 struct bpf_struct_ops_value {
 	struct bpf_struct_ops_common_value common;
@@ -1256,6 +1258,10 @@ static void bpf_struct_ops_map_link_dealloc(struct bpf_link *link)
 		st_map->st_ops_desc->st_ops->unreg(&st_map->kvalue.data, link);
 		bpf_map_put(&st_map->map);
 	}
+
+	if (st_link->cgroup)
+		cgroup_bpf_detach_struct_ops(st_link->cgroup, st_link);
+
 	kfree(st_link);
 }
 
@@ -1264,6 +1270,7 @@ static void bpf_struct_ops_map_link_show_fdinfo(const struct bpf_link *link,
 {
 	struct bpf_struct_ops_link *st_link;
 	struct bpf_map *map;
+	u64 cgrp_id = 0;
 
 	st_link = container_of(link, struct bpf_struct_ops_link, link);
 	rcu_read_lock();
@@ -1271,6 +1278,14 @@ static void bpf_struct_ops_map_link_show_fdinfo(const struct bpf_link *link,
 	if (map)
 		seq_printf(seq, "map_id:\t%d\n", map->id);
 	rcu_read_unlock();
+
+	cgroup_lock();
+	if (st_link->cgroup)
+		cgrp_id = cgroup_id(st_link->cgroup);
+	cgroup_unlock();
+
+	if (cgrp_id)
+		seq_printf(seq, "cgroup_id:\t%llu\n", cgrp_id);
 }
 
 static int bpf_struct_ops_map_link_fill_link_info(const struct bpf_link *link,
@@ -1278,6 +1293,7 @@ static int bpf_struct_ops_map_link_fill_link_info(const struct bpf_link *link,
 {
 	struct bpf_struct_ops_link *st_link;
 	struct bpf_map *map;
+	u64 cgrp_id = 0;
 
 	st_link = container_of(link, struct bpf_struct_ops_link, link);
 	rcu_read_lock();
@@ -1285,6 +1301,13 @@ static int bpf_struct_ops_map_link_fill_link_info(const struct bpf_link *link,
 	if (map)
 		info->struct_ops.map_id = map->id;
 	rcu_read_unlock();
+
+	cgroup_lock();
+	if (st_link->cgroup)
+		cgrp_id = cgroup_id(st_link->cgroup);
+	cgroup_unlock();
+
+	info->struct_ops.cgroup_id = cgrp_id;
 	return 0;
 }
 
@@ -1363,6 +1386,9 @@ static int bpf_struct_ops_map_link_detach(struct bpf_link *link)
 
 	mutex_unlock(&update_mutex);
 
+	if (st_link->cgroup)
+		cgroup_bpf_detach_struct_ops(st_link->cgroup, st_link);
+
 	wake_up_interruptible_poll(&st_link->wait_hup, EPOLLHUP);
 
 	return 0;
@@ -1374,6 +1400,9 @@ static __poll_t bpf_struct_ops_map_link_poll(struct file *file,
 	struct bpf_struct_ops_link *st_link = file->private_data;
 
 	poll_wait(file, &st_link->wait_hup, pts);
+
+	if (st_link->cgroup_removed)
+		return EPOLLHUP;
 
 	return rcu_access_pointer(st_link->map) ? 0 : EPOLLHUP;
 }
@@ -1393,7 +1422,11 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 	struct bpf_link_primer link_primer;
 	struct bpf_struct_ops_map *st_map;
 	struct bpf_map *map;
+	struct cgroup *cgrp;
 	int err;
+
+	if (attr->link_create.flags & ~BPF_F_CGROUP_FD)
+		return -EINVAL;
 
 	map = bpf_map_get(attr->link_create.map_fd);
 	if (IS_ERR(map))
@@ -1414,11 +1447,26 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 	bpf_link_init(&link->link, BPF_LINK_TYPE_STRUCT_OPS, &bpf_struct_ops_map_lops, NULL,
 		      attr->link_create.attach_type);
 
+	init_waitqueue_head(&link->wait_hup);
+
+	if (attr->link_create.flags & BPF_F_CGROUP_FD) {
+		cgrp = cgroup_get_from_fd(attr->link_create.target_fd);
+		if (IS_ERR(cgrp)) {
+			err = PTR_ERR(cgrp);
+			goto err_out;
+		}
+		link->cgroup = cgrp;
+		err = cgroup_bpf_attach_struct_ops(cgrp, link);
+		if (err) {
+			cgroup_put(cgrp);
+			link->cgroup = NULL;
+			goto err_out;
+		}
+	}
+
 	err = bpf_link_prime(&link->link, &link_primer);
 	if (err)
-		goto err_out;
-
-	init_waitqueue_head(&link->wait_hup);
+		goto err_put_cgroup;
 
 	/* Hold the update_mutex such that the subsystem cannot
 	 * do link->ops->detach() before the link is fully initialized.
@@ -1429,13 +1477,16 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 		mutex_unlock(&update_mutex);
 		bpf_link_cleanup(&link_primer);
 		link = NULL;
-		goto err_out;
+		goto err_put_cgroup;
 	}
 	RCU_INIT_POINTER(link->map, map);
 	mutex_unlock(&update_mutex);
 
 	return bpf_link_settle(&link_primer);
 
+err_put_cgroup:
+	if (link && link->cgroup)
+		cgroup_bpf_detach_struct_ops(link->cgroup, link);
 err_out:
 	bpf_map_put(map);
 	kfree(link);

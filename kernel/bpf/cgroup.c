@@ -16,6 +16,7 @@
 #include <linux/bpf-cgroup.h>
 #include <linux/bpf_lsm.h>
 #include <linux/bpf_verifier.h>
+#include <linux/poll.h>
 #include <net/sock.h>
 #include <net/bpf_sk_storage.h>
 
@@ -307,11 +308,22 @@ static void cgroup_bpf_release(struct work_struct *work)
 					       bpf.release_work);
 	struct bpf_prog_array *old_array;
 	struct list_head *storages = &cgrp->bpf.storages;
+	struct bpf_struct_ops_link *st_link, *st_tmp;
 	struct bpf_cgroup_storage *storage, *stmp;
+	LIST_HEAD(st_links);
 
 	unsigned int atype;
 
 	cgroup_lock();
+
+	list_splice_init(&cgrp->bpf.struct_ops_links, &st_links);
+	list_for_each_entry_safe(st_link, st_tmp, &st_links, list) {
+		st_link->cgroup = NULL;
+		st_link->cgroup_removed = true;
+		cgroup_put(cgrp);
+		if (IS_ERR(bpf_link_inc_not_zero(&st_link->link)))
+			list_del(&st_link->list);
+	}
 
 	for (atype = 0; atype < ARRAY_SIZE(cgrp->bpf.progs); atype++) {
 		struct hlist_head *progs = &cgrp->bpf.progs[atype];
@@ -345,6 +357,11 @@ static void cgroup_bpf_release(struct work_struct *work)
 	}
 
 	cgroup_unlock();
+
+	list_for_each_entry_safe(st_link, st_tmp, &st_links, list) {
+		st_link->link.ops->detach(&st_link->link);
+		bpf_link_put(&st_link->link);
+	}
 
 	for (p = cgroup_parent(cgrp); p; p = cgroup_parent(p))
 		cgroup_bpf_put(p);
@@ -525,6 +542,7 @@ static int cgroup_bpf_inherit(struct cgroup *cgrp)
 		INIT_HLIST_HEAD(&cgrp->bpf.progs[i]);
 
 	INIT_LIST_HEAD(&cgrp->bpf.storages);
+	INIT_LIST_HEAD(&cgrp->bpf.struct_ops_links);
 
 	for (i = 0; i < NR; i++)
 		if (compute_effective_progs(cgrp, i, &arrays[i]))
@@ -2754,4 +2772,32 @@ cgroup_common_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	default:
 		return NULL;
 	}
+}
+
+int cgroup_bpf_attach_struct_ops(struct cgroup *cgrp,
+				 struct bpf_struct_ops_link *link)
+{
+	int ret = 0;
+
+	cgroup_lock();
+	if (percpu_ref_is_zero(&cgrp->bpf.refcnt)) {
+		ret = -EBUSY;
+		goto out;
+	}
+	list_add_tail(&link->list, &cgrp->bpf.struct_ops_links);
+out:
+	cgroup_unlock();
+	return ret;
+}
+
+void cgroup_bpf_detach_struct_ops(struct cgroup *cgrp,
+				  struct bpf_struct_ops_link *link)
+{
+	cgroup_lock();
+	if (link->cgroup == cgrp) {
+		list_del(&link->list);
+		link->cgroup = NULL;
+		cgroup_put(cgrp);
+	}
+	cgroup_unlock();
 }
