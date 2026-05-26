@@ -250,6 +250,7 @@ cleanup:
 #ifdef __x86_64__
 extern void usdt_1(void);
 extern void usdt_2(void);
+extern void usdt_red_zone_trigger(void);
 
 static unsigned char nop1[1] = { 0x90 };
 static unsigned char nop1_nop10_combo[11] = { 0x90, 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00 };
@@ -340,6 +341,52 @@ static void subtest_optimized_attach(void)
 cleanup:
 	test_usdt__destroy(skel);
 }
+
+/*
+ * Test that USDT arguments survive nop10 optimization in a function where
+ * the compiler places operands in the red zone.
+ *
+ * Signal handlers are prone to having the compiler place USDT argument
+ * operands in the red zone (below rsp).
+ *
+ * The nop5 optimization used CALL (which pushes a return address to
+ * [rsp-8]), the value at -8(%rsp) was overwritten. The nop10 optimization
+ * should escape that by moving stackpointer below the redzone before
+ * doing the CALL.
+ */
+static void subtest_optimized_red_zone(void)
+{
+	struct test_usdt *skel;
+	int i;
+
+	skel = test_usdt__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+
+	skel->bss->expected_arg[0] = 0xDEADBEEF;
+	skel->bss->expected_arg[1] = 0xCAFEBABE;
+	skel->bss->expected_arg[2] = 0xFEEDFACE;
+	skel->bss->expected_pid = getpid();
+
+	skel->links.usdt_check_arg = bpf_program__attach_usdt(
+		skel->progs.usdt_check_arg, 0, "/proc/self/exe",
+		"optimized_attach", "usdt_red_zone", NULL);
+	if (!ASSERT_OK_PTR(skel->links.usdt_check_arg, "attach_usdt_red_zone"))
+		goto cleanup;
+
+	for (i = 0; i < 10; i++)
+		usdt_red_zone_trigger();
+
+	ASSERT_EQ(skel->bss->arg_total, 10, "arg_total");
+	ASSERT_EQ(skel->bss->arg_bad, 0, "arg_bad");
+	ASSERT_EQ(skel->bss->arg_last[0], 0xDEADBEEF, "arg_last_1");
+	ASSERT_EQ(skel->bss->arg_last[1], 0xCAFEBABE, "arg_last_2");
+	ASSERT_EQ(skel->bss->arg_last[2], 0xFEEDFACE, "arg_last_3");
+
+cleanup:
+	test_usdt__destroy(skel);
+}
+
 #endif
 
 unsigned short test_usdt_100_semaphore SEC(".probes");
@@ -613,6 +660,8 @@ void test_usdt(void)
 		subtest_basic_usdt(true);
 	if (test__start_subtest("optimized_attach"))
 		subtest_optimized_attach();
+	if (test__start_subtest("optimized_red_zone"))
+		subtest_optimized_red_zone();
 #endif
 	if (test__start_subtest("multispec"))
 		subtest_multispec_usdt();
