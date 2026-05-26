@@ -3777,10 +3777,11 @@ unlock:
 }
 
 /* key_size is the encryption key size of an ACL link reported by the event,
- * or 0 if it doesn't report it, in which case it is read.
+ * or 0 if it doesn't report it, in which case it is read. mic_len is the MIC
+ * length reported by the event, 0x00 (32 bits) if it doesn't report it.
  */
 static void hci_change_encrypt(struct hci_conn *conn, u8 status, u8 encrypt,
-			       u8 key_size)
+			       u8 key_size, u8 mic_len)
 {
 	struct hci_dev *hdev = conn->hdev;
 
@@ -3798,6 +3799,9 @@ static void hci_change_encrypt(struct hci_conn *conn, u8 status, u8 encrypt,
 			if ((conn->type == ACL_LINK && encrypt == 0x02) ||
 			    conn->type == LE_LINK)
 				set_bit(HCI_CONN_AES_CCM, conn->flags);
+
+			/* A 32-bit MIC is reported as 0x00 */
+			conn->mic_len = mic_len;
 
 			/* For ACL links the encryption key size is still
 			 * validated below by hci_conn_enc_key_size_set(),
@@ -3915,8 +3919,10 @@ static void hci_encrypt_change_evt(struct hci_dev *hdev, void *data,
 	if (!conn)
 		goto unlock;
 
-	/* This version doesn't report the key size, so it is read */
-	hci_change_encrypt(conn, ev->status, ev->encrypt, 0x00);
+	/* This version doesn't report the key size, so it is read, nor the
+	 * MIC length.
+	 */
+	hci_change_encrypt(conn, ev->status, ev->encrypt, 0x00, 0x00);
 
 unlock:
 	hci_dev_unlock(hdev);
@@ -3955,7 +3961,7 @@ static void hci_encrypt_change_v3_evt(struct hci_dev *hdev, void *data,
 	    ev->key_size >= 0x07 && ev->key_size <= 0x10)
 		key_size = ev->key_size;
 
-	hci_change_encrypt(conn, ev->status, ev->mode, key_size);
+	hci_change_encrypt(conn, ev->status, ev->mode, key_size, ev->mic_len);
 
 unlock:
 	hci_dev_unlock(hdev);
@@ -5740,6 +5746,10 @@ static void hci_key_refresh_complete_v2_evt(struct hci_dev *hdev, void *data,
 	conn = hci_conn_hash_lookup_handle(hdev, __le16_to_cpu(ev->handle));
 	if (!conn)
 		goto unlock;
+
+	/* The key refresh may change the MIC length */
+	if (!ev->status)
+		conn->mic_len = ev->mic_len;
 
 	hci_conn_refresh_key(conn, ev->status);
 
