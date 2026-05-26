@@ -1204,7 +1204,9 @@ static enum hrtimer_restart bpf_timer_cb(struct hrtimer *hrtimer)
 
 	key = map_key_from_value(map, value, &idx);
 
+	rcu_read_lock_trace();
 	callback_fn((u64)(long)map, (u64)(long)key, (u64)(long)value, 0, 0);
+	rcu_read_unlock_trace();
 	/* The verifier checked that return value is zero. */
 
 	this_cpu_write(hrtimer_running, NULL);
