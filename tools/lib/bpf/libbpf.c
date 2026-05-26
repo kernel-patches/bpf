@@ -3590,7 +3590,10 @@ static int bpf_object__load_vmlinux_btf(struct bpf_object *obj, bool force)
 	int err;
 
 	/* btf_vmlinux could be loaded earlier */
-	if (obj->btf_vmlinux || obj->gen_loader)
+	if (obj->btf_vmlinux)
+		return 0;
+
+	if (obj->gen_loader && !obj_needs_vmlinux_btf(obj))
 		return 0;
 
 	if (!force && !obj_needs_vmlinux_btf(obj))
