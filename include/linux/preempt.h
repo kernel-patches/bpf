@@ -30,18 +30,20 @@
  * NMI nesting depth is tracked in a separate per-CPU variable
  * (nmi_nesting) to save bits in preempt_count.
  *
- *         PREEMPT_MASK:	0x000000ff
- *         SOFTIRQ_MASK:	0x0000ff00
- * HARDIRQ_DISABLE_MASK:	0x00ff0000
- *         HARDIRQ_MASK:	0x0f000000
- *             NMI_MASK:	0x10000000
- * PREEMPT_NEED_RESCHED:	0x80000000
+ *				32bit		HAS_SEPARATE_PREEMPT_RESCHED_BITS
+ *
+ *         PREEMPT_MASK:	0x000000ff	0x00000000000000ff
+ *         SOFTIRQ_MASK:	0x0000ff00	0x000000000000ff00
+ * HARDIRQ_DISABLE_MASK:	0x00ff0000	0x0000000000ff0000
+ *         HARDIRQ_MASK:	0x0f000000	0x000000000f000000
+ *             NMI_MASK:	0x10000000	0x00000000f0000000
+ * PREEMPT_NEED_RESCHED:	0x80000000	0x8000000000000000
  */
 #define PREEMPT_BITS	8
 #define SOFTIRQ_BITS	8
 #define HARDIRQ_DISABLE_BITS	8
 #define HARDIRQ_BITS	4
-#define NMI_BITS	1
+#define NMI_BITS	(1 + 3*IS_ENABLED(CONFIG_HAS_SEPARATE_PREEMPT_RESCHED_BITS))
 
 #define PREEMPT_SHIFT	0
 #define SOFTIRQ_SHIFT	(PREEMPT_SHIFT + PREEMPT_BITS)
@@ -116,8 +118,8 @@ static __always_inline unsigned char interrupt_context_level(void)
  * preempt_count() is commonly implemented with READ_ONCE().
  */
 
-#define nmi_count()	(preempt_count() & NMI_MASK)
-#define hardirq_count()	(preempt_count() & HARDIRQ_MASK)
+#define nmi_count()		(preempt_count() & NMI_MASK)
+#define hardirq_count()		(preempt_count() & HARDIRQ_MASK)
 #ifdef CONFIG_PREEMPT_RT
 # define softirq_count()	(current->softirq_disable_cnt & SOFTIRQ_MASK)
 # define irq_count()		((preempt_count() & (NMI_MASK | HARDIRQ_MASK)) | softirq_count())

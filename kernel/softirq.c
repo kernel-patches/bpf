@@ -91,7 +91,13 @@ EXPORT_PER_CPU_SYMBOL_GPL(hardirq_context);
 DEFINE_PER_CPU(struct interrupt_disable_state, local_interrupt_disable_state);
 EXPORT_PER_CPU_SYMBOL_GPL(local_interrupt_disable_state);
 
+#ifndef CONFIG_HAS_SEPARATE_PREEMPT_RESCHED_BITS
+/*
+ * Any 32bit architecture that still cares about performance should
+ * probably ensure this is near preempt_count.
+ */
 DEFINE_PER_CPU(unsigned int, nmi_nesting);
+#endif
 
 /*
  * SOFTIRQ_OFFSET usage:
