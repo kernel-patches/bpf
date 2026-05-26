@@ -4,6 +4,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/cnum.h>
 #include <linux/filter.h>
+#include <linux/sort.h>
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
@@ -696,7 +697,7 @@ static struct bpf_reg_state *scalar_reg_for_stack(struct bpf_verifier_env *env,
 
 static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		      struct bpf_func_state *cur, struct bpf_idmap *idmap,
-		      enum exact_level exact)
+		      enum exact_level exact, struct bpf_state_diff *diff)
 {
 	int i, spi;
 
@@ -720,8 +721,11 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 				old_type = STACK_INVALID;
 			if (cur_type == STACK_POISON)
 				cur_type = STACK_INVALID;
-			if (i >= cur->allocated_stack || old_type != cur_type)
+			if (i >= cur->allocated_stack || old_type != cur_type) {
+				diff->slot = spi;
+				diff->kind = DIFF_STACK;
 				return false;
+			}
 		}
 
 		if (old->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_INVALID ||
@@ -735,8 +739,11 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		/* explored stack has more populated slots than current stack
 		 * and these slots were used
 		 */
-		if (i >= cur->allocated_stack)
+		if (i >= cur->allocated_stack) {
+			diff->slot = spi;
+			diff->kind = DIFF_STACK;
 			return false;
+		}
 
 		/*
 		 * 64 and 32-bit scalar spills vs MISC/INVALID slots and vice versa.
@@ -748,8 +755,11 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			old_reg = scalar_reg_for_stack(env, &old->stack[spi], im);
 			cur_reg = scalar_reg_for_stack(env, &cur->stack[spi], im);
 			if (old_reg && cur_reg) {
-				if (!regsafe(env, old_reg, cur_reg, idmap, exact))
+				if (!regsafe(env, old_reg, cur_reg, idmap, exact)) {
+					diff->slot = spi;
+					diff->kind = DIFF_STACK;
 					return false;
+				}
 				i += (im == 0 ? BPF_REG_SIZE - 1 : 3);
 				continue;
 			}
@@ -763,13 +773,16 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 		    cur->stack[spi].slot_type[i % BPF_REG_SIZE] == STACK_ZERO)
 			continue;
 		if (old->stack[spi].slot_type[i % BPF_REG_SIZE] !=
-		    cur->stack[spi].slot_type[i % BPF_REG_SIZE])
+		    cur->stack[spi].slot_type[i % BPF_REG_SIZE]) {
 			/* Ex: old explored (safe) state has STACK_SPILL in
 			 * this stack slot, but current has STACK_MISC ->
 			 * this verifier states are not equivalent,
 			 * return false to continue verification of this path
 			 */
+			diff->slot = spi;
+			diff->kind = DIFF_STACK;
 			return false;
+		}
 		if (i % BPF_REG_SIZE != BPF_REG_SIZE - 1)
 			continue;
 		/* Both old and cur are having same slot_type */
@@ -786,16 +799,22 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			 * return false to continue verification of this path
 			 */
 			if (!regsafe(env, &old->stack[spi].spilled_ptr,
-				     &cur->stack[spi].spilled_ptr, idmap, exact))
+				     &cur->stack[spi].spilled_ptr, idmap, exact)) {
+				diff->slot = spi;
+				diff->kind = DIFF_STACK;
 				return false;
+			}
 			break;
 		case STACK_DYNPTR:
 			old_reg = &old->stack[spi].spilled_ptr;
 			cur_reg = &cur->stack[spi].spilled_ptr;
 			if (old_reg->dynptr.type != cur_reg->dynptr.type ||
 			    old_reg->dynptr.first_slot != cur_reg->dynptr.first_slot ||
-			    !check_ids(old_reg->ref_obj_id, cur_reg->ref_obj_id, idmap))
+			    !check_ids(old_reg->ref_obj_id, cur_reg->ref_obj_id, idmap)) {
+				diff->slot = spi;
+				diff->kind = DIFF_STACK;
 				return false;
+			}
 			break;
 		case STACK_ITER:
 			old_reg = &old->stack[spi].spilled_ptr;
@@ -810,15 +829,21 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			    old_reg->iter.btf_id != cur_reg->iter.btf_id ||
 			    old_reg->iter.state != cur_reg->iter.state ||
 			    /* ignore {old_reg,cur_reg}->iter.depth, see above */
-			    !check_ids(old_reg->ref_obj_id, cur_reg->ref_obj_id, idmap))
+			    !check_ids(old_reg->ref_obj_id, cur_reg->ref_obj_id, idmap)) {
+				diff->slot = spi;
+				diff->kind = DIFF_STACK;
 				return false;
+			}
 			break;
 		case STACK_IRQ_FLAG:
 			old_reg = &old->stack[spi].spilled_ptr;
 			cur_reg = &cur->stack[spi].spilled_ptr;
 			if (!check_ids(old_reg->ref_obj_id, cur_reg->ref_obj_id, idmap) ||
-			    old_reg->irq.kfunc_class != cur_reg->irq.kfunc_class)
+			    old_reg->irq.kfunc_class != cur_reg->irq.kfunc_class) {
+				diff->slot = spi;
+				diff->kind = DIFF_STACK;
 				return false;
+			}
 			break;
 		case STACK_MISC:
 		case STACK_ZERO:
@@ -827,6 +852,8 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			continue;
 		/* Ensure that new unhandled slot types return false by default */
 		default:
+			diff->slot = spi;
+			diff->kind = DIFF_STACK;
 			return false;
 		}
 	}
@@ -839,7 +866,7 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
  */
 static bool stack_arg_safe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 			   struct bpf_func_state *cur, struct bpf_idmap *idmap,
-			   enum exact_level exact)
+			   enum exact_level exact, struct bpf_state_diff *diff)
 {
 	int i, nslots;
 
@@ -852,8 +879,11 @@ static bool stack_arg_safe(struct bpf_verifier_env *env, struct bpf_func_state *
 			  &old->stack_arg_regs[i] : &not_init;
 		cur_arg = i < cur->out_stack_arg_cnt ?
 			  &cur->stack_arg_regs[i] : &not_init;
-		if (!regsafe(env, old_arg, cur_arg, idmap, exact))
+		if (!regsafe(env, old_arg, cur_arg, idmap, exact)) {
+			diff->slot = i;
+			diff->kind = DIFF_ARG;
 			return false;
+		}
 	}
 
 	return true;
@@ -933,7 +963,8 @@ static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *c
  * the current state will reach 'bpf_exit' instruction safely
  */
 static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_state *old,
-			      struct bpf_func_state *cur, u32 insn_idx, enum exact_level exact)
+			      struct bpf_func_state *cur, u32 insn_idx,
+			      enum exact_level exact, struct bpf_state_diff *diff)
 {
 	u16 live_regs = env->insn_aux_data[insn_idx].live_regs_before;
 	u16 i;
@@ -947,13 +978,16 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 	for (i = 0; i < MAX_BPF_REG; i++)
 		if (((1 << i) & live_regs) &&
 		    !regsafe(env, &old->regs[i], &cur->regs[i],
-			     &env->idmap_scratch, exact))
+			     &env->idmap_scratch, exact)) {
+			diff->slot = i;
+			diff->kind = DIFF_REG;
 			return false;
+		}
 
-	if (!stacksafe(env, old, cur, &env->idmap_scratch, exact))
+	if (!stacksafe(env, old, cur, &env->idmap_scratch, exact, diff))
 		return false;
 
-	if (!stack_arg_safe(env, old, cur, &env->idmap_scratch, exact))
+	if (!stack_arg_safe(env, old, cur, &env->idmap_scratch, exact, diff))
 		return false;
 
 	return true;
@@ -970,7 +1004,8 @@ static void reset_idmap_scratch(struct bpf_verifier_env *env)
 static bool states_equal(struct bpf_verifier_env *env,
 			 struct bpf_verifier_state *old,
 			 struct bpf_verifier_state *cur,
-			 enum exact_level exact)
+			 enum exact_level exact,
+			 struct bpf_state_diff *diff)
 {
 	u32 insn_idx;
 	int i;
@@ -999,8 +1034,11 @@ static bool states_equal(struct bpf_verifier_env *env,
 		insn_idx = bpf_frame_insn_idx(old, i);
 		if (old->frame[i]->callsite != cur->frame[i]->callsite)
 			return false;
-		if (!func_states_equal(env, old->frame[i], cur->frame[i], insn_idx, exact))
+		if (!func_states_equal(env, old->frame[i], cur->frame[i],
+				       insn_idx, exact, diff)) {
+			diff->frame = i;
 			return false;
+		}
 	}
 	return true;
 }
@@ -1231,6 +1269,7 @@ int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 	struct bpf_verifier_state_list *new_sl;
 	struct bpf_verifier_state_list *sl;
 	struct bpf_verifier_state *cur = env->cur_state, *new;
+	struct bpf_state_diff diff = {};
 	bool force_new_state, add_new_state, loop;
 	int n, err, states_cnt = 0;
 	struct list_head *pos, *tmp, *head;
@@ -1320,7 +1359,7 @@ int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 			 * => unsafe memory access at 11 would not be caught.
 			 */
 			if (is_iter_next_insn(env, insn_idx)) {
-				if (states_equal(env, &sl->state, cur, RANGE_WITHIN)) {
+				if (states_equal(env, &sl->state, cur, RANGE_WITHIN, &diff)) {
 					struct bpf_func_state *cur_frame;
 					struct bpf_reg_state *iter_state, *iter_reg;
 					int spi;
@@ -1345,13 +1384,13 @@ int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 			}
 			if (is_may_goto_insn_at(env, insn_idx)) {
 				if (sl->state.may_goto_depth != cur->may_goto_depth &&
-				    states_equal(env, &sl->state, cur, RANGE_WITHIN)) {
+				    states_equal(env, &sl->state, cur, RANGE_WITHIN, &diff)) {
 					loop = true;
 					goto hit;
 				}
 			}
 			if (bpf_calls_callback(env, insn_idx)) {
-				if (states_equal(env, &sl->state, cur, RANGE_WITHIN)) {
+				if (states_equal(env, &sl->state, cur, RANGE_WITHIN, &diff)) {
 					loop = true;
 					goto hit;
 				}
@@ -1359,7 +1398,7 @@ int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 			}
 			/* attempt to detect infinite loop to avoid unnecessary doomed work */
 			if (states_maybe_looping(&sl->state, cur) &&
-			    states_equal(env, &sl->state, cur, EXACT) &&
+			    states_equal(env, &sl->state, cur, EXACT, &diff) &&
 			    !iter_active_depths_differ(&sl->state, cur) &&
 			    sl->state.may_goto_depth == cur->may_goto_depth &&
 			    sl->state.callback_unroll_depth == cur->callback_unroll_depth) {
@@ -1392,7 +1431,7 @@ skip_inf_loop_check:
 		}
 		/* See comments for mark_all_regs_read_and_precise() */
 		loop = incomplete_read_marks(env, &sl->state);
-		if (states_equal(env, &sl->state, cur, loop ? RANGE_WITHIN : NOT_EXACT)) {
+		if (states_equal(env, &sl->state, cur, loop ? RANGE_WITHIN : NOT_EXACT, &diff)) {
 hit:
 			sl->hit_cnt++;
 
@@ -1586,5 +1625,96 @@ miss:
 	cur->dfs_depth = new->dfs_depth + 1;
 	bpf_clear_jmp_history(cur);
 	list_add(&new_sl->node, head);
+	return 0;
+}
+
+static bool callchain_matches_state(struct bpf_callchain *cc,
+				    struct bpf_verifier_state *st)
+{
+	int i;
+
+	if (st->curframe != cc->curframe)
+		return false;
+	for (i = 0; i < (int)cc->curframe; i++)
+		if (st->frame[i + 1]->callsite != cc->insn_idx[i])
+			return false;
+	return true;
+}
+
+struct state_diff_cnt {
+	struct bpf_state_diff diff;
+	u32 cnt;
+};
+
+static int state_diff_cmp(const void *a, const void *b)
+{
+	return ((struct state_diff_cnt *)b)->cnt - ((struct state_diff_cnt *)a)->cnt;
+}
+
+static bool state_diff_eq(struct bpf_state_diff *a, struct bpf_state_diff *b)
+{
+	return a->frame == b->frame && a->slot == b->slot && a->kind == b->kind;
+}
+
+int bpf_sample_state_diffs(struct bpf_verifier_env *env,
+			   struct bpf_callchain *cc,
+			   struct bpf_state_diff *top_diffs,
+			   int *nr_diffs)
+{
+	struct bpf_verifier_state_list *sl_i, *sl_j;
+	struct state_diff_cnt *diff_cnts = NULL;
+	struct list_head *pos_i, *pos_j, *head;
+	u32 leaf_insn, callsite, hash_idx;
+	int i, cap = 0, nr_locs = 0;
+
+	leaf_insn = cc->insn_idx[cc->curframe];
+	callsite = cc->curframe > 0 ? cc->insn_idx[cc->curframe - 1] : BPF_MAIN_FUNC;
+	hash_idx = (leaf_insn ^ callsite) % env->prog->len;
+	head = &env->explored_states[hash_idx];
+
+	list_for_each(pos_i, head) {
+		sl_i = container_of(pos_i, struct bpf_verifier_state_list, node);
+		if (!callchain_matches_state(cc, &sl_i->state))
+			continue;
+		list_for_each(pos_j, pos_i) {
+			struct bpf_state_diff diff = {};
+
+			sl_j = container_of(pos_j, struct bpf_verifier_state_list, node);
+			if (!callchain_matches_state(cc, &sl_j->state))
+				continue;
+			if (states_equal(env, &sl_i->state, &sl_j->state, NOT_EXACT, &diff))
+				continue;
+			for (i = 0; i < nr_locs; i++) {
+				if (state_diff_eq(&diff_cnts[i].diff, &diff)) {
+					diff_cnts[i].cnt++;
+					goto next;
+				}
+			}
+			if (nr_locs == cap) {
+				int new_cap = cap ? cap * 2 : 16;
+				struct state_diff_cnt *new;
+
+				new = kvrealloc(diff_cnts, new_cap * sizeof(*new),
+						GFP_KERNEL_ACCOUNT);
+				if (!new) {
+					kvfree(diff_cnts);
+					return -ENOMEM;
+				}
+				memset(new + cap, 0, (new_cap - cap) * sizeof(*new));
+				diff_cnts = new;
+				cap = new_cap;
+			}
+			diff_cnts[nr_locs].diff = diff;
+			diff_cnts[nr_locs].cnt = 1;
+			nr_locs++;
+next:;
+		}
+	}
+
+	sort(diff_cnts, nr_locs, sizeof(*diff_cnts), state_diff_cmp, NULL);
+	*nr_diffs = min(nr_locs, *nr_diffs);
+	for (i = 0; i < *nr_diffs; i++)
+		top_diffs[i] = diff_cnts[i].diff;
+	kvfree(diff_cnts);
 	return 0;
 }
