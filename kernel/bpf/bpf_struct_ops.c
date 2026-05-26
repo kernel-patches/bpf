@@ -1425,7 +1425,8 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 	struct cgroup *cgrp;
 	int err;
 
-	if (attr->link_create.flags & ~BPF_F_CGROUP_FD)
+	if (attr->link_create.flags & ~(BPF_F_CGROUP_FD |
+					BPF_F_ALLOW_OVERRIDE))
 		return -EINVAL;
 
 	map = bpf_map_get(attr->link_create.map_fd);
@@ -1463,6 +1464,7 @@ int bpf_struct_ops_link_create(union bpf_attr *attr)
 			goto err_out;
 		}
 	}
+	link->flags = attr->link_create.flags;
 
 	err = bpf_link_prime(&link->link, &link_primer);
 	if (err)
