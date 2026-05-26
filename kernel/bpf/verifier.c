@@ -17247,6 +17247,152 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 	return INSN_IDX_UPDATED;
 }
 
+static void compute_callchain(struct bpf_verifier_state *st, struct bpf_callchain *cc)
+{
+	int i;
+
+	cc->curframe = st->curframe;
+	for (i = 0; i <= st->curframe; i++)
+		cc->insn_idx[i] = bpf_frame_insn_idx(st, i);
+}
+
+static int update_callchain_profile(struct bpf_verifier_env *env, struct bpf_verifier_state *st)
+{
+	struct bpf_callchain_entry *entry;
+	struct bpf_callchain cc = {};
+	u32 hash;
+
+	compute_callchain(st, &cc);
+	hash = jhash2(cc.insn_idx, cc.curframe + 1, cc.curframe + 1);
+	hash_for_each_possible(env->callchain_htab, entry, node, hash) {
+		if (entry->cc.curframe == cc.curframe &&
+		    !memcmp(entry->cc.insn_idx, cc.insn_idx, (cc.curframe + 1) * sizeof(u32))) {
+			entry->count++;
+			return 0;
+		}
+	}
+	entry = kzalloc(sizeof(*entry), GFP_KERNEL_ACCOUNT);
+	if (!entry)
+		return -ENOMEM;
+	entry->cc = cc;
+	entry->count = 1;
+	hash_add(env->callchain_htab, &entry->node, hash);
+	return 0;
+}
+
+static void free_callchain_profile(struct bpf_verifier_env *env)
+{
+	struct bpf_callchain_entry *entry;
+	struct hlist_node *tmp;
+	int bkt;
+
+	hash_for_each_safe(env->callchain_htab, bkt, tmp, entry, node) {
+		hash_del(&entry->node);
+		kfree(entry);
+	}
+}
+
+static void print_callchain_entry(struct bpf_verifier_env *env,
+				  struct bpf_callchain_entry *entry, int idx)
+{
+	struct bpf_callchain *cc = &entry->cc;
+	const struct bpf_line_info *linfo;
+	struct bpf_subprog_info *sub;
+	int i, insn_idx;
+
+	verbose(env, "#%d most visited simulated stacktrace (visited %llu times):\n",
+		idx, entry->count);
+	for (i = 0; i <= cc->curframe; i++) {
+		insn_idx = cc->insn_idx[i];
+		sub = bpf_find_containing_subprog(env, insn_idx);
+		linfo = bpf_find_linfo(env->prog, insn_idx);
+		if (sub->name)
+			verbose(env, "  %s/%d", sub->name, insn_idx);
+		else
+			verbose(env, "  subprog#%td/%d", sub - env->subprog_info, insn_idx);
+		if (linfo)
+			verbose(env, " (%s:%u)",
+				btf_name_by_offset(env->prog->aux->btf, linfo->file_name_off),
+				BPF_LINE_INFO_LINE_NUM(linfo->line_col));
+		verbose(env, "\n");
+	}
+}
+
+static void disasm_subprog(struct bpf_verifier_env *env, struct bpf_subprog_info *sub)
+{
+	u32 i, end = (sub + 1)->start;
+
+	if (sub->name)
+		verbose(env, "%s():\n", sub->name);
+	else
+		verbose(env, "subprog#%td:\n", sub - env->subprog_info);
+	env->prev_linfo = NULL;
+	for (i = sub->start; i < end; i++) {
+		verbose_linfo(env, i, "  ; ");
+		verbose(env, "  %d: ", i);
+		bpf_verbose_insn(env, &env->prog->insnsi[i]);
+		if (bpf_is_ldimm64(&env->prog->insnsi[i]))
+			i++;
+	}
+}
+
+/*
+ * Print several most visited simulated stack traces,
+ * and a disasembly of related subprograms.
+ */
+static void print_hotspots(struct bpf_verifier_env *env)
+{
+	DECLARE_BITMAP(printed_subs, BPF_MAX_SUBPROGS + 2) = {};
+	struct bpf_callchain_entry *top[3] = {};
+	struct bpf_callchain_entry *entry;
+	struct bpf_subprog_info *sub;
+	int i, j, bkt, nr_top = 0;
+
+	if (!(env->log.level & BPF_LOG_LEVEL))
+		return;
+
+	/* Collect the hottest callchains */
+	hash_for_each(env->callchain_htab, bkt, entry, node) {
+		for (i = 0; i < 3; i++) {
+			if (!top[i] || entry->count > top[i]->count) {
+				memmove(&top[i + 1], &top[i], (2 - i) * sizeof(top[0]));
+				top[i] = entry;
+				break;
+			}
+		}
+	}
+
+	for (i = 0; i < 3 && top[i]; i++)
+		nr_top++;
+
+	if (!nr_top)
+		return;
+
+	if (!(env->log.level & BPF_LOG_LEVEL2))
+		bpf_vlog_reset(&env->log, 0);
+
+	/* Identify callchain subprograms and print disasm of those */
+	for (i = 0; i < nr_top; i++) {
+		struct bpf_callchain *cc = &top[i]->cc;
+
+		for (j = 0; j <= cc->curframe; j++) {
+			sub = bpf_find_containing_subprog(env, cc->insn_idx[j]);
+			__set_bit(sub - env->subprog_info, printed_subs);
+		}
+	}
+
+	for_each_set_bit(i, printed_subs, env->subprog_cnt) {
+		disasm_subprog(env, &env->subprog_info[i]);
+		verbose(env, "\n");
+	}
+
+	/* Print the hot callchains */
+	for (i = 0; i < nr_top; i++) {
+		print_callchain_entry(env, top[i], i + 1);
+		verbose(env, "\n");
+	}
+}
+
 static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 {
 	int err;
@@ -17381,6 +17527,7 @@ static int do_check(struct bpf_verifier_env *env)
 		insn_aux = &env->insn_aux_data[env->insn_idx];
 
 		if (++env->insn_processed > BPF_COMPLEXITY_LIMIT_INSNS) {
+			print_hotspots(env);
 			verbose(env,
 				"BPF program is too large. Processed %d insn\n",
 				env->insn_processed);
@@ -17389,6 +17536,12 @@ static int do_check(struct bpf_verifier_env *env)
 
 		state->last_insn_idx = env->prev_insn_idx;
 		state->insn_idx = env->insn_idx;
+
+		if (bpf_is_force_checkpoint(env, env->insn_idx) || insn_aux->loop) {
+			err = update_callchain_profile(env, state);
+			if (err)
+				return err;
+		}
 
 		if (bpf_is_prune_point(env, env->insn_idx)) {
 			err = bpf_is_state_visited(env, env->insn_idx);
@@ -19673,6 +19826,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 		return -ENOMEM;
 
 	env->bt.env = env;
+	hash_init(env->callchain_htab);
 
 	len = (*prog)->len;
 	env->insn_aux_data =
@@ -19945,6 +20099,7 @@ err_unlock:
 	bpf_clear_insn_aux_data(env, 0, env->prog->len);
 	vfree(env->insn_aux_data);
 err_free_env:
+	free_callchain_profile(env);
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.insn_postorder);
 	kvfree(env->scc_info);
