@@ -662,6 +662,17 @@ struct bpf_loop {
 	bool irreducible;
 };
 
+struct bpf_state_diff {
+	u8 slot;
+	u8 frame;
+	enum {
+		DIFF_OTHER,
+		DIFF_REG,
+		DIFF_STACK,
+		DIFF_ARG,
+	} kind;
+};
+
 struct bpf_callchain {
 	u32 insn_idx[MAX_CALL_FRAMES];
 	u32 curframe;
@@ -1631,5 +1642,9 @@ int bpf_fixup_call_args(struct bpf_verifier_env *env);
 int bpf_do_misc_fixups(struct bpf_verifier_env *env);
 
 int bpf_compute_loops(struct bpf_verifier_env *env);
+int bpf_sample_state_diffs(struct bpf_verifier_env *env,
+			   struct bpf_callchain *cc,
+			   struct bpf_state_diff *top_diffs,
+			   int *nr_diffs);
 
 #endif /* _LINUX_BPF_VERIFIER_H */
