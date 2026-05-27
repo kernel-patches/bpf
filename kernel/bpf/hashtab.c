@@ -1246,18 +1246,16 @@ static long htab_map_update_elem(struct bpf_map *map, void *key, void *value,
 		goto err;
 	}
 
-	/* add new element to the head of the list, so that
-	 * concurrent search will find it before old elem
-	 */
-	hlist_nulls_add_head_rcu(&l_new->hash_node, head);
 	if (l_old) {
-		hlist_nulls_del_rcu(&l_old->hash_node);
+		hlist_nulls_replace_rcu(&l_old->hash_node, &l_new->hash_node);
 
 		/* l_old has already been stashed in htab->extra_elems, free
 		 * its special fields before it is available for reuse.
 		 */
 		if (htab_is_prealloc(htab))
 			check_and_free_fields(htab, l_old);
+	} else {
+		hlist_nulls_add_head_rcu(&l_new->hash_node, head);
 	}
 	htab_unlock_bucket(b, flags);
 	if (l_old && !htab_is_prealloc(htab))
@@ -1319,13 +1317,11 @@ static long htab_lru_map_update_elem(struct bpf_map *map, void *key, void *value
 	if (ret)
 		goto err;
 
-	/* add new element to the head of the list, so that
-	 * concurrent search will find it before old elem
-	 */
-	hlist_nulls_add_head_rcu(&l_new->hash_node, head);
 	if (l_old) {
 		bpf_lru_node_set_ref(&l_new->lru_node);
-		hlist_nulls_del_rcu(&l_old->hash_node);
+		hlist_nulls_replace_rcu(&l_old->hash_node, &l_new->hash_node);
+	} else {
+		hlist_nulls_add_head_rcu(&l_new->hash_node, head);
 	}
 	ret = 0;
 
