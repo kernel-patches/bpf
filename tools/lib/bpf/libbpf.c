@@ -5440,6 +5440,7 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 		map->btf_value_type_id = 0;
 		break;
 	case BPF_MAP_TYPE_STRUCT_OPS:
+		create_attr.btf_key_type_id = 0;
 		create_attr.btf_value_type_id = 0;
 		break;
 	default:
