@@ -7107,6 +7107,11 @@ static int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg
 	struct bpf_reg_state saved_reg;
 	int err;
 
+	if (mem_size > S32_MAX) {
+		verbose(env, "R%d memory size %u is too large\n", regno, mem_size);
+		return -EACCES;
+	}
+
 	if (bpf_register_is_null(reg))
 		return 0;
 
@@ -7119,7 +7124,7 @@ static int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg
 		mark_ptr_not_null_reg(reg);
 	}
 
-	int size = base_type(reg->type) == PTR_TO_STACK ? -(int)mem_size : mem_size;
+	int size = base_type(reg->type) == PTR_TO_STACK ? -(int)mem_size : (int)mem_size;
 
 	err = check_helper_mem_access(env, regno, size, BPF_READ, true, NULL);
 	err = err ?: check_helper_mem_access(env, regno, size, BPF_WRITE, true, NULL);
