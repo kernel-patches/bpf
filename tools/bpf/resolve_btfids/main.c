@@ -1255,6 +1255,44 @@ add_new_proto:
 	return 0;
 }
 
+static bool btf_has_decl_tag(struct btf2btf_context *ctx, const char *tag_name,
+			     u32 target_btf_id, int component_idx)
+{
+	const struct btf_type *t;
+	const char *name;
+
+	for (u32 i = 0; i < ctx->nr_decl_tags; i++) {
+		t = btf__type_by_id(ctx->btf, ctx->decl_tags[i]);
+		if (t->type != target_btf_id)
+			continue;
+		if (btf_decl_tag(t)->component_idx != component_idx)
+			continue;
+		name = btf__name_by_offset(ctx->btf, t->name_off);
+		if (name && strcmp(name, tag_name) == 0)
+			return true;
+	}
+	return false;
+}
+
+/* Add a decl tag if an identical one is not already present. */
+static int ensure_decl_tag(struct btf2btf_context *ctx, const char *tag_name,
+			   u32 target_btf_id, int component_idx)
+{
+	int new_id;
+
+	if (btf_has_decl_tag(ctx, tag_name, target_btf_id, component_idx))
+		return 0;
+
+	new_id = btf__add_decl_tag(ctx->btf, tag_name, target_btf_id, component_idx);
+	if (new_id < 0) {
+		pr_err("ERROR: resolve_btfids: failed to add '%s' decl tag for BTF id %u: %d\n",
+		       tag_name, target_btf_id, new_id);
+		return new_id;
+	}
+
+	return push_decl_tag_id(ctx, new_id);
+}
+
 static int btf2btf(struct object *obj)
 {
 	struct btf2btf_context ctx = {};
@@ -1267,12 +1305,15 @@ static int btf2btf(struct object *obj)
 	for (u32 i = 0; i < ctx.nr_kfuncs; i++) {
 		struct kfunc *kfunc = &ctx.kfuncs[i];
 
-		if (!(kfunc->flags & KF_IMPLICIT_ARGS))
-			continue;
-
-		err = process_kfunc_with_implicit_args(&ctx, kfunc);
+		err = ensure_decl_tag(&ctx, "bpf_kfunc", kfunc->btf_id, -1);
 		if (err)
 			goto out;
+
+		if (kfunc->flags & KF_IMPLICIT_ARGS) {
+			err = process_kfunc_with_implicit_args(&ctx, kfunc);
+			if (err)
+				goto out;
+		}
 	}
 
 	err = 0;
