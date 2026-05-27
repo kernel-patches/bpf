@@ -15965,6 +15965,90 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 	}
 }
 
+/*
+ * This is a workaround for a specific pattern:
+ *
+ *   1: ... rX setup with [negative, positive] bounds ...
+ *   2: if rX == 0 goto ...
+ *   3: if rX > C  goto ...
+ *   4: ... code relying on rX being in range [1, C] ...
+ *
+ * The comparison at (2) is processed by cnum{32,64}_intersect(),
+ * which can't punch a hole in [negative, positive] range and
+ * over approximates by leaving rX range unchanged,
+ * leading to a deduction of range [0, C] at (4).
+ *
+ * The workaround is to fork verifier state when:
+ * - 'if rX ==/!= 0 goto ...' is processed
+ * - rX has [negative, positive] range
+ * The current and forked states are used to split rX representation
+ * in [negative, 0] and [0, positive] parts (make it overlap to avoid
+ * forcing precision in check_cond_jmp_op()).
+ */
+static int maybe_fork_cmp_with_zero(struct bpf_verifier_env *env,
+				    struct bpf_insn *insn,
+				    struct bpf_reg_state *src_reg,
+				    struct bpf_reg_state *dst_reg)
+{
+	bool cross_sign32, cross_sign64, is_jmp32 = BPF_CLASS(insn->code) == BPF_JMP32;
+	struct bpf_verifier_state *fork, *cur = env->cur_state;
+	struct bpf_reg_state *fork_dst_reg;
+	struct linked_regs linked_regs = {};
+	u8 opcode = BPF_OP(insn->code);
+	bool swapped = false;
+	u32 fork_dst_regno;
+
+	if (opcode != BPF_JEQ && opcode != BPF_JNE)
+		return 0;
+
+	if (src_reg->type != SCALAR_VALUE || dst_reg->type != SCALAR_VALUE)
+		return 0;
+
+	if (!is_reg_const(src_reg, is_jmp32)) {
+		swap(src_reg, dst_reg);
+		swapped = true;
+	}
+
+	if (!is_reg_const(src_reg, is_jmp32) || reg_const_value(src_reg, is_jmp32) != 0)
+		return 0;
+
+	cross_sign32 = is_jmp32 &&
+		       dst_reg->r32.size < S32_MAX &&
+		       cnum32_smin(dst_reg->r32) < 0 && cnum32_smax(dst_reg->r32) > 0;
+	cross_sign64 = !is_jmp32 &&
+		       dst_reg->r64.size < S64_MAX &&
+		       cnum64_smin(dst_reg->r64) < 0 && cnum64_smax(dst_reg->r64) > 0;
+	if (!cross_sign32 && !cross_sign64)
+		return 0;
+
+	fork = push_stack(env, env->insn_idx, env->insn_idx, cur->speculative);
+	if (IS_ERR(fork))
+		return PTR_ERR(fork);
+
+	fork_dst_regno = swapped ? insn->src_reg : insn->dst_reg;
+	fork_dst_reg = &fork->frame[fork->curframe]->regs[fork_dst_regno];
+	if (is_jmp32) {
+		cnum32_intersect_with_srange(&dst_reg->r32, S32_MIN, 0);
+		cnum32_intersect_with_srange(&fork_dst_reg->r32, 0, S32_MAX);
+	} else {
+		cnum64_intersect_with_srange(&dst_reg->r64, S64_MIN, 0);
+		cnum64_intersect_with_srange(&fork_dst_reg->r64, 0, S64_MAX);
+	}
+	reg_bounds_sync(dst_reg);
+	reg_bounds_sync(fork_dst_reg);
+	if (dst_reg->id) {
+		collect_linked_regs(env, cur, dst_reg->id, &linked_regs);
+		sync_linked_regs(env, cur, dst_reg, &linked_regs);
+		sync_linked_regs(env, fork, fork_dst_reg, &linked_regs);
+		/*
+		 * No need to push linked regs to the jump history,
+		 * if prediction of the jump direction can't be made
+		 * check_cond_jmp_op() will do the push.
+		 */
+	}
+	return 0;
+}
+
 static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			     struct bpf_insn *insn, int *insn_idx)
 {
@@ -16037,6 +16121,10 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		if (dst_reg->type == PTR_TO_STACK)
 			insn_flags |= INSN_F_DST_REG_STACK;
 	}
+
+	err = maybe_fork_cmp_with_zero(env, insn, src_reg, dst_reg);
+	if (err)
+		return err;
 
 	if (insn_flags) {
 		err = bpf_push_jmp_history(env, this_branch, insn_flags, 0, 0, 0);
