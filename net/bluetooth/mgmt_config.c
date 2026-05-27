@@ -91,6 +91,9 @@ int read_def_system_config(struct sock *sk, struct hci_dev *hdev, void *data,
 		HDEV_PARAM_U16(advmon_no_filter_duration);
 		HDEV_PARAM_U8(enable_advmon_interleave_scan);
 		HDEV_PARAM_U32(idle_timeout);
+		HDEV_PARAM_U8(hdt_def_mic_len);
+		HDEV_PARAM_U8(hdt_def_format);
+		HDEV_PARAM_U16(hdt_def_rates);
 	} __packed rp = {
 		TLV_SET_U16(0x0000, def_page_scan_type),
 		TLV_SET_U16(0x0001, def_page_scan_int),
@@ -125,6 +128,9 @@ int read_def_system_config(struct sock *sk, struct hci_dev *hdev, void *data,
 		TLV_SET_U16(0x001e, advmon_no_filter_duration),
 		TLV_SET_U8(0x001f, enable_advmon_interleave_scan),
 		TLV_SET_U32(0x0020, idle_timeout),
+		TLV_SET_U8(0x0021, hdt_def_mic_len),
+		TLV_SET_U8(0x0022, hdt_def_format),
+		TLV_SET_U16(0x0023, hdt_def_rates),
 	};
 
 	bt_dev_dbg(hdev, "sock %p", sk);
@@ -140,11 +146,19 @@ int read_def_system_config(struct sock *sk, struct hci_dev *hdev, void *data,
 #define TLV_GET_LE16(tlv)	le16_to_cpu(*((__le16 *)(TO_TLV(tlv)->value)))
 #define TLV_GET_U8(tlv)		(*((__u8 *)(TO_TLV(tlv)->value)))
 
+static int set_hdt_params_sync(struct hci_dev *hdev, void *data)
+{
+	return hci_le_set_hdt_params_sync(hdev);
+}
+
 int set_def_system_config(struct sock *sk, struct hci_dev *hdev, void *data,
 			  u16 data_len)
 {
 	u16 buffer_left = data_len;
 	u8 *buffer = data;
+	u8 old_mic_len = hdev->hdt_def_mic_len;
+	u8 old_format = hdev->hdt_def_format;
+	u16 old_rates = hdev->hdt_def_rates;
 
 	if (buffer_left < sizeof(struct mgmt_tlv)) {
 		return mgmt_cmd_status(sk, hdev->id,
@@ -159,6 +173,7 @@ int set_def_system_config(struct sock *sk, struct hci_dev *hdev, void *data,
 		const u16 exp_len = sizeof(struct mgmt_tlv) +
 				    len;
 		const u16 type = le16_to_cpu(TO_TLV(buffer)->type);
+		bool invalid;
 
 		if (buffer_left < exp_len) {
 			bt_dev_warn(hdev, "invalid len left %u, exp >= %u",
@@ -201,9 +216,12 @@ int set_def_system_config(struct sock *sk, struct hci_dev *hdev, void *data,
 		case 0x001b:
 		case 0x001d:
 		case 0x001e:
+		case 0x0023:
 			exp_type_len = sizeof(u16);
 			break;
 		case 0x001f:
+		case 0x0021:
+		case 0x0022:
 			exp_type_len = sizeof(u8);
 			break;
 		case 0x0020:
@@ -218,6 +236,51 @@ int set_def_system_config(struct sock *sk, struct hci_dev *hdev, void *data,
 		if (exp_type_len && len != exp_type_len) {
 			bt_dev_warn(hdev, "invalid length %d, exp %zu for type %u",
 				    len, exp_type_len, type);
+
+			return mgmt_cmd_status(sk, hdev->id,
+				MGMT_OP_SET_DEF_SYSTEM_CONFIG,
+				MGMT_STATUS_INVALID_PARAMS);
+		}
+
+		/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 4, Part E,
+		 * Section 7.8.159:
+		 *
+		 * Preferred_MIC_Length: 0x01 Preferred MIC length is 64 bits.
+		 * 0x02 MIC length is 128 bits (default). All other values
+		 * Reserved for future use.
+		 * Preferred_Packet_Format: 0x00 any supported, 0x01 packet
+		 * format 0, 0x02 packet format 1. All other values Reserved
+		 * for future use.
+		 * Preferred_ACL_Rates: bits 0 to 4 are the HDT2, HDT3, HDT4,
+		 * HDT6 and HDT7.5 rates. All other bits Reserved for future
+		 * use.
+		 *
+		 * So a reserved value is not valid, the controller would
+		 * reject it, failing the initialization when the default
+		 * parameters are sent. For the MIC length, that includes 0x00
+		 * (32 bits), the one of the GFSK PHYs.
+		 */
+		switch (type) {
+		case 0x0021:
+			invalid = TLV_GET_U8(buffer) != 0x01 &&
+				  TLV_GET_U8(buffer) != 0x02;
+			break;
+		case 0x0022:
+			invalid = TLV_GET_U8(buffer) > 0x02;
+			break;
+		case 0x0023:
+			invalid = TLV_GET_LE16(buffer) &
+				  ~(HCI_HDT_RATE_2M | HCI_HDT_RATE_3M |
+				    HCI_HDT_RATE_4M | HCI_HDT_RATE_6M |
+				    HCI_HDT_RATE_7_5M);
+			break;
+		default:
+			invalid = false;
+			break;
+		}
+
+		if (invalid) {
+			bt_dev_warn(hdev, "invalid value for type %u", type);
 
 			return mgmt_cmd_status(sk, hdev->id,
 				MGMT_OP_SET_DEF_SYSTEM_CONFIG,
@@ -335,6 +398,15 @@ int set_def_system_config(struct sock *sk, struct hci_dev *hdev, void *data,
 		case 0x00020:
 			hdev->idle_timeout = TLV_GET_LE32(buffer);
 			break;
+		case 0x0021:
+			hdev->hdt_def_mic_len = TLV_GET_U8(buffer);
+			break;
+		case 0x0022:
+			hdev->hdt_def_format = TLV_GET_U8(buffer);
+			break;
+		case 0x0023:
+			hdev->hdt_def_rates = TLV_GET_LE16(buffer);
+			break;
 		default:
 			bt_dev_warn(hdev, "unsupported parameter %u", type);
 			break;
@@ -343,6 +415,13 @@ int set_def_system_config(struct sock *sk, struct hci_dev *hdev, void *data,
 		buffer_left -= exp_len;
 		buffer += exp_len;
 	}
+
+	/* The controller may be up without being powered through MGMT */
+	if (test_bit(HCI_UP, &hdev->flags) &&
+	    (hdev->hdt_def_mic_len != old_mic_len ||
+	     hdev->hdt_def_format != old_format ||
+	     hdev->hdt_def_rates != old_rates))
+		hci_cmd_sync_queue(hdev, set_hdt_params_sync, NULL, NULL);
 
 	return mgmt_cmd_complete(sk, hdev->id,
 				 MGMT_OP_SET_DEF_SYSTEM_CONFIG, 0, NULL, 0);
