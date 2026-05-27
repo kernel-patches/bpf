@@ -3544,15 +3544,20 @@ static bool prog_needs_vmlinux_btf(struct bpf_program *prog)
 	return false;
 }
 
-static bool map_needs_vmlinux_btf(struct bpf_map *map)
+static bool obj_maps_need_vmlinux_btf(const struct bpf_object *obj)
 {
-	return bpf_map__is_struct_ops(map);
+	struct bpf_map *map;
+
+	bpf_object__for_each_map(map, obj) {
+		if (bpf_map__is_struct_ops(map))
+			return true;
+	}
+	return false;
 }
 
 static bool obj_needs_vmlinux_btf(const struct bpf_object *obj)
 {
 	struct bpf_program *prog;
-	struct bpf_map *map;
 	int i;
 
 	/* CO-RE relocations need kernel BTF, only when btf_custom_path
@@ -3577,12 +3582,7 @@ static bool obj_needs_vmlinux_btf(const struct bpf_object *obj)
 			return true;
 	}
 
-	bpf_object__for_each_map(map, obj) {
-		if (map_needs_vmlinux_btf(map))
-			return true;
-	}
-
-	return false;
+	return obj_maps_need_vmlinux_btf(obj);
 }
 
 static int bpf_object__load_vmlinux_btf(struct bpf_object *obj, bool force)
@@ -3590,7 +3590,11 @@ static int bpf_object__load_vmlinux_btf(struct bpf_object *obj, bool force)
 	int err;
 
 	/* btf_vmlinux could be loaded earlier */
-	if (obj->btf_vmlinux || obj->gen_loader)
+	if (obj->btf_vmlinux)
+		return 0;
+
+	/* only struct_ops maps need btf_vmlinux in gen_loader */
+	if (obj->gen_loader && !obj_maps_need_vmlinux_btf(obj))
 		return 0;
 
 	if (!force && !obj_needs_vmlinux_btf(obj))
