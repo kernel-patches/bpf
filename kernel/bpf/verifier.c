@@ -6924,6 +6924,11 @@ static int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg
 	struct bpf_reg_state saved_reg;
 	int err;
 
+	if (mem_size > S32_MAX) {
+		verbose(env, "R%d memory size %u is too large\n", regno, mem_size);
+		return -EACCES;
+	}
+
 	if (bpf_register_is_null(reg))
 		return 0;
 
