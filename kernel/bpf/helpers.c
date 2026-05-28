@@ -20,6 +20,7 @@
 #include <linux/proc_ns.h>
 #include <linux/sched/task.h>
 #include <linux/security.h>
+#include <linux/fs.h>
 #include <linux/btf_ids.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/kasan.h>
@@ -2842,6 +2843,13 @@ __bpf_kfunc void bpf_task_release_dtor(void *p)
 }
 CFI_NOSEAL(bpf_task_release_dtor);
 
+__bpf_kfunc void bpf_file_release_dtor(void *file)
+{
+	fput((struct file *)file);
+}
+
+CFI_NOSEAL(bpf_file_release_dtor);
+
 #ifdef CONFIG_CGROUPS
 /**
  * bpf_cgroup_acquire - Acquire a reference to a cgroup. A cgroup acquired by
@@ -4863,6 +4871,8 @@ static const struct btf_kfunc_id_set generic_kfunc_set = {
 BTF_ID_LIST(generic_dtor_ids)
 BTF_ID(struct, task_struct)
 BTF_ID(func, bpf_task_release_dtor)
+BTF_ID(struct, file)
+BTF_ID(func, bpf_file_release_dtor)
 #ifdef CONFIG_CGROUPS
 BTF_ID(struct, cgroup)
 BTF_ID(func, bpf_cgroup_release_dtor)
@@ -4974,10 +4984,14 @@ static int __init kfunc_init(void)
 			.btf_id       = generic_dtor_ids[0],
 			.kfunc_btf_id = generic_dtor_ids[1]
 		},
-#ifdef CONFIG_CGROUPS
 		{
 			.btf_id       = generic_dtor_ids[2],
 			.kfunc_btf_id = generic_dtor_ids[3]
+		},
+#ifdef CONFIG_CGROUPS
+		{
+			.btf_id       = generic_dtor_ids[4],
+			.kfunc_btf_id = generic_dtor_ids[5]
 		},
 #endif
 	};
