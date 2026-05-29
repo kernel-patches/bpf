@@ -2184,4 +2184,72 @@ __naked void tnums_equal_impossible_constant(void *ctx)
 	: __clobber_all);
 }
 
+SEC("socket")
+__success
+__naked void fork_on_zero_cmp_k(void)
+{
+	asm volatile ("							\
+	call %[bpf_get_prandom_u32];					\
+	r0 &= 0xff;			/* r0 ∈ [0, 255] */		\
+	r1 = 8;								\
+	r1 -= r0;			/* r1 ∈ [-247, 8] */		\
+	if r1 == 0 goto 1f;						\
+	if r1 > 8 goto 1f;		/* r1 ∈ [1, 8] */		\
+	if r1 < 1 goto 2f;		/* must be dead */		\
+	if r1 > 8 goto 2f;		/* must be dead */		\
+	goto 1f;							\
+2:	r0 /= 0;			/* unreachable */		\
+1:	r0 = 0;								\
+	exit;								\
+	"
+	:: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__success
+__naked void fork_on_zero_cmp_x(void)
+{
+	asm volatile ("							\
+	call %[bpf_get_prandom_u32];					\
+	r0 &= 0xff;			/* r0 ∈ [0, 255] */		\
+	r1 = 8;								\
+	r1 -= r0;			/* r1 ∈ [-247, 8] */		\
+	r2 = 0;								\
+	if r1 == r2 goto 1f;						\
+	if r1 > 8 goto 1f;		/* r1 ∈ [1, 8] */		\
+	if r1 < 1 goto 2f;		/* must be dead */		\
+	if r1 > 8 goto 2f;		/* must be dead */		\
+	goto 1f;							\
+2:	r0 /= 0;			/* unreachable */		\
+1:	r0 = 0;								\
+	exit;								\
+	"
+	:: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__success
+__naked void fork_on_zero_cmp_x_swapped(void)
+{
+	asm volatile ("							\
+	call %[bpf_get_prandom_u32];					\
+	r0 &= 0xff;			/* r0 ∈ [0, 255] */		\
+	r1 = 8;								\
+	r1 -= r0;			/* r1 ∈ [-247, 8] */		\
+	r2 = 0;								\
+	if r2 == r1 goto 1f;						\
+	if r1 > 8 goto 1f;		/* r1 ∈ [1, 8] */		\
+	if r1 < 1 goto 2f;		/* must be dead */		\
+	if r1 > 8 goto 2f;		/* must be dead */		\
+	goto 1f;							\
+2:	r0 /= 0;			/* unreachable */		\
+1:	r0 = 0;								\
+	exit;								\
+	"
+	:: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
