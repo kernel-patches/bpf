@@ -1168,8 +1168,13 @@ void serial_test_token(void)
 	}
 	if (test__start_subtest("obj_priv_map")) {
 		struct bpffs_opts opts = {
-			.cmds = bit(BPF_MAP_CREATE),
+			/* BPF_PROG_LOAD is needed for bpf_object__probe_loading */
+			.cmds = bit(BPF_MAP_CREATE) | bit(BPF_PROG_LOAD),
 			.maps = bit(BPF_MAP_TYPE_QUEUE),
+			/* Allow SOCKET_FILTER and TRACEPOINT for bpf_object__probe_loading */
+			.progs = bit(BPF_PROG_TYPE_SOCKET_FILTER) |
+					 bit(BPF_PROG_TYPE_TRACEPOINT),
+			.attachs = ~0ULL,
 		};
 
 		subtest_userns(&opts, userns_obj_priv_map);
@@ -1177,7 +1182,10 @@ void serial_test_token(void)
 	if (test__start_subtest("obj_priv_prog")) {
 		struct bpffs_opts opts = {
 			.cmds = bit(BPF_PROG_LOAD),
-			.progs = bit(BPF_PROG_TYPE_XDP),
+			/* Allow SOCKET_FILTER and TRACEPOINT for bpf_object__probe_loading */
+			.progs = bit(BPF_PROG_TYPE_XDP) |
+					 bit(BPF_PROG_TYPE_SOCKET_FILTER) |
+					 bit(BPF_PROG_TYPE_TRACEPOINT),
 			.attachs = ~0ULL,
 		};
 
@@ -1185,16 +1193,24 @@ void serial_test_token(void)
 	}
 	if (test__start_subtest("obj_priv_freplace_prog")) {
 		struct bpffs_opts opts = {
-			.cmds = bit(BPF_BTF_LOAD) | bit(BPF_PROG_LOAD) | bit(BPF_BTF_GET_FD_BY_ID),
-			.progs = bit(BPF_PROG_TYPE_EXT) | bit(BPF_PROG_TYPE_XDP),
+			.cmds = bit(BPF_BTF_LOAD) | bit(BPF_PROG_LOAD) |
+					bit(BPF_BTF_GET_FD_BY_ID),
+			/* Allow SOCKET_FILTER and TRACEPOINT for bpf_object__probe_loading */
+			.progs = bit(BPF_PROG_TYPE_EXT) | bit(BPF_PROG_TYPE_XDP) |
+					 bit(BPF_PROG_TYPE_SOCKET_FILTER) |
+					 bit(BPF_PROG_TYPE_TRACEPOINT),
 			.attachs = ~0ULL,
 		};
 		subtest_userns(&opts, userns_obj_priv_freplace_prog);
 	}
 	if (test__start_subtest("obj_priv_freplace_prog_fail")) {
 		struct bpffs_opts opts = {
-			.cmds = bit(BPF_BTF_LOAD) | bit(BPF_PROG_LOAD) | bit(BPF_BTF_GET_FD_BY_ID),
-			.progs = bit(BPF_PROG_TYPE_EXT) | bit(BPF_PROG_TYPE_XDP),
+			.cmds = bit(BPF_BTF_LOAD) | bit(BPF_PROG_LOAD) |
+					bit(BPF_BTF_GET_FD_BY_ID),
+			/* Allow SOCKET_FILTER and TRACEPOINT for bpf_object__probe_loading */
+			.progs = bit(BPF_PROG_TYPE_EXT) | bit(BPF_PROG_TYPE_XDP) |
+					 bit(BPF_PROG_TYPE_SOCKET_FILTER) |
+					 bit(BPF_PROG_TYPE_TRACEPOINT),
 			.attachs = ~0ULL,
 		};
 		subtest_userns(&opts, userns_obj_priv_freplace_prog_fail);
@@ -1204,7 +1220,10 @@ void serial_test_token(void)
 			/* disallow BTF loading */
 			.cmds = bit(BPF_MAP_CREATE) | bit(BPF_PROG_LOAD),
 			.maps = bit(BPF_MAP_TYPE_STRUCT_OPS),
-			.progs = bit(BPF_PROG_TYPE_STRUCT_OPS),
+			/* Allow SOCKET_FILTER and TRACEPOINT for bpf_object__probe_loading */
+			.progs = bit(BPF_PROG_TYPE_STRUCT_OPS) |
+					 bit(BPF_PROG_TYPE_SOCKET_FILTER) |
+					 bit(BPF_PROG_TYPE_TRACEPOINT),
 			.attachs = ~0ULL,
 		};
 
@@ -1213,9 +1232,13 @@ void serial_test_token(void)
 	if (test__start_subtest("obj_priv_btf_success")) {
 		struct bpffs_opts opts = {
 			/* allow BTF loading */
-			.cmds = bit(BPF_BTF_LOAD) | bit(BPF_MAP_CREATE) | bit(BPF_PROG_LOAD),
-			.maps = bit(BPF_MAP_TYPE_STRUCT_OPS),
-			.progs = bit(BPF_PROG_TYPE_STRUCT_OPS),
+			.cmds = bit(BPF_BTF_LOAD) | bit(BPF_MAP_CREATE) |
+					bit(BPF_PROG_LOAD),
+			.maps = bit(BPF_MAP_TYPE_STRUCT_OPS) | bit(BPF_MAP_TYPE_ARRAY),
+			/* Allow SOCKET_FILTER and TRACEPOINT for bpf_object__probe_loading */
+			.progs = bit(BPF_PROG_TYPE_STRUCT_OPS) |
+					 bit(BPF_PROG_TYPE_SOCKET_FILTER) |
+					 bit(BPF_PROG_TYPE_TRACEPOINT),
 			.attachs = ~0ULL,
 		};
 
@@ -1224,9 +1247,13 @@ void serial_test_token(void)
 	if (test__start_subtest("obj_priv_implicit_token")) {
 		struct bpffs_opts opts = {
 			/* allow BTF loading */
-			.cmds = bit(BPF_BTF_LOAD) | bit(BPF_MAP_CREATE) | bit(BPF_PROG_LOAD),
-			.maps = bit(BPF_MAP_TYPE_STRUCT_OPS),
-			.progs = bit(BPF_PROG_TYPE_STRUCT_OPS),
+			.cmds = bit(BPF_BTF_LOAD) | bit(BPF_MAP_CREATE) |
+					bit(BPF_PROG_LOAD),
+			.maps = bit(BPF_MAP_TYPE_STRUCT_OPS) | bit(BPF_MAP_TYPE_ARRAY),
+			/* Allow SOCKET_FILTER and TRACEPOINT for bpf_object__probe_loading */
+			.progs = bit(BPF_PROG_TYPE_STRUCT_OPS) |
+					 bit(BPF_PROG_TYPE_SOCKET_FILTER) |
+					 bit(BPF_PROG_TYPE_TRACEPOINT),
 			.attachs = ~0ULL,
 		};
 
@@ -1235,9 +1262,13 @@ void serial_test_token(void)
 	if (test__start_subtest("obj_priv_implicit_token_envvar")) {
 		struct bpffs_opts opts = {
 			/* allow BTF loading */
-			.cmds = bit(BPF_BTF_LOAD) | bit(BPF_MAP_CREATE) | bit(BPF_PROG_LOAD),
-			.maps = bit(BPF_MAP_TYPE_STRUCT_OPS),
-			.progs = bit(BPF_PROG_TYPE_STRUCT_OPS),
+			.cmds = bit(BPF_BTF_LOAD) | bit(BPF_MAP_CREATE) |
+					bit(BPF_PROG_LOAD),
+			.maps = bit(BPF_MAP_TYPE_STRUCT_OPS) | bit(BPF_MAP_TYPE_ARRAY),
+			/* Allow SOCKET_FILTER and TRACEPOINT for bpf_object__probe_loading */
+			.progs = bit(BPF_PROG_TYPE_STRUCT_OPS) |
+					 bit(BPF_PROG_TYPE_SOCKET_FILTER) |
+					 bit(BPF_PROG_TYPE_TRACEPOINT),
 			.attachs = ~0ULL,
 		};
 
@@ -1257,7 +1288,10 @@ void serial_test_token(void)
 		char kptr_restrict_orig[32] = {};
 		struct bpffs_opts opts = {
 			.cmds = bit(BPF_BTF_LOAD) | bit(BPF_PROG_LOAD),
-			.progs = bit(BPF_PROG_TYPE_XDP),
+			/* Allow SOCKET_FILTER and TRACEPOINT for bpf_object__probe_loading */
+			.progs = bit(BPF_PROG_TYPE_XDP) |
+					 bit(BPF_PROG_TYPE_SOCKET_FILTER) |
+					 bit(BPF_PROG_TYPE_TRACEPOINT),
 			.attachs = ~0ULL,
 		};
 
