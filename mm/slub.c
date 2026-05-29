@@ -21,6 +21,7 @@
 #include <linux/bitops.h>
 #include <linux/slab.h>
 #include "slab.h"
+#include <linux/bpf_defs.h>
 #include <linux/vmalloc.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
@@ -531,11 +532,25 @@ static inline void *get_freepointer(struct kmem_cache *s, void *object)
 {
 	unsigned long ptr_addr;
 	freeptr_t p;
+	void *decoded;
 
 	object = kasan_reset_tag(object);
 	ptr_addr = (unsigned long)object + s->offset;
 	p = *(freeptr_t *)(ptr_addr);
-	return freelist_ptr_decode(s, p, ptr_addr);
+	decoded = freelist_ptr_decode(s, p, ptr_addr);
+	/*
+	 * SLAB_BPF_ARENA freepointer slots are BPF-writable. Clamp the decoded
+	 * pointer to an s->size-aligned address within the same slab page so
+	 * chain walks stay on legitimate object boundaries. Arena slabs are
+	 * always one page (order 0). NULL preserved.
+	 */
+	if (unlikely(s->bpf_arena) && decoded) {
+		unsigned long obj_mask = s->size - 1;
+
+		decoded = (void *)(((unsigned long)object & PAGE_MASK) |
+				   ((unsigned long)decoded & ~PAGE_MASK & ~obj_mask));
+	}
+	return decoded;
 }
 
 static inline void set_freepointer(struct kmem_cache *s, void *object, void *fp)
@@ -543,7 +558,12 @@ static inline void set_freepointer(struct kmem_cache *s, void *object, void *fp)
 	unsigned long freeptr_addr = (unsigned long)object + s->offset;
 
 #ifdef CONFIG_SLAB_FREELIST_HARDENED
-	BUG_ON(object == fp); /* naive detection of double free or corruption */
+	if (unlikely(object == fp)) {
+		/* BPF double-free of arena objects must not panic the kernel. */
+		if (s->bpf_arena)
+			return;
+		BUG_ON(object == fp); /* naive detection of double free or corruption */
+	}
 #endif
 
 	freeptr_addr = (unsigned long)kasan_reset_tag((void *)freeptr_addr);
@@ -3270,6 +3290,9 @@ static inline struct slab *alloc_slab_page(struct kmem_cache *s, gfp_t flags,
 	struct slab *slab;
 	unsigned int order = oo_order(oo);
 
+	if (unlikely(s->bpf_arena))
+		return bpf_arena_alloc_slab_page(s->bpf_arena, flags, node, allow_spin);
+
 	if (unlikely(!allow_spin))
 		page = alloc_frozen_pages_nolock(0/* __GFP_COMP is implied */,
 								  node, order);
@@ -3493,9 +3516,11 @@ static struct slab *allocate_slab(struct kmem_cache *s, gfp_t flags, int node)
 	init_slab_obj_exts(slab);
 	/*
 	 * Poison the slab before initializing the slabobj_ext array
-	 * to prevent the array from being overwritten.
+	 * to prevent the array from being overwritten. Arena caches
+	 * stash uaddr32 in slab->stride; let them keep it.
 	 */
-	alloc_slab_obj_exts_early(s, slab);
+	if (!(s->flags & SLAB_BPF_ARENA))
+		alloc_slab_obj_exts_early(s, slab);
 	account_slab(slab, oo_order(oo), s, flags);
 
 	shuffle = shuffle_freelist(s, slab, allow_spin);
@@ -3538,6 +3563,10 @@ static void __free_slab(struct kmem_cache *s, struct slab *slab, bool allow_spin
 	__ClearPageSlab(page);
 	mm_account_reclaimed_pages(pages);
 	unaccount_slab(slab, order, s, allow_spin);
+	if (unlikely(s->bpf_arena)) {
+		bpf_arena_free_slab_page(s->bpf_arena, slab);
+		return;
+	}
 	if (allow_spin)
 		free_frozen_pages(page, order);
 	else
@@ -5442,6 +5471,32 @@ void *kmem_cache_alloc_nolock_noprof(struct kmem_cache *s, gfp_t gfp_flags,
 }
 EXPORT_SYMBOL_GPL(kmem_cache_alloc_nolock_noprof);
 
+/**
+ * kmem_cache_force_discard_slab - force-evict a slab page from its cache
+ * @s: kmem_cache that owns the slab
+ * @slab: the slab to evict
+ *
+ * Removes @slab from any per-node list it may be on and then discards it
+ * (decrements nr_slabs and frees the backing page). Intended for arena
+ * teardown: arena owns the page-tracking array and can enumerate every
+ * slab page it allocated, including orphans not on any partial list (left
+ * behind by spin_trylock failures in __slab_free()) and slabs whose
+ * objects were never returned (BPF program leak).
+ */
+void kmem_cache_force_discard_slab(struct kmem_cache *s, struct slab *slab)
+{
+	struct kmem_cache_node *n = get_node(s, slab_nid(slab));
+	unsigned long flags;
+
+	spin_lock_irqsave(&n->list_lock, flags);
+	if (slab_test_node_partial(slab))
+		remove_partial(n, slab);
+	spin_unlock_irqrestore(&n->list_lock, flags);
+
+	discard_slab(s, slab);
+}
+EXPORT_SYMBOL_GPL(kmem_cache_force_discard_slab);
+
 void *__kmalloc_node_track_caller_noprof(DECL_BUCKET_PARAMS(size, b), gfp_t flags,
 					 int node, unsigned long caller)
 {
@@ -5589,14 +5644,19 @@ static void __slab_free(struct kmem_cache *s, struct slab *slab,
 
 			n = get_node(s, slab_nid(slab));
 			/*
-			 * Speculatively acquire the list_lock.
-			 * If the cmpxchg does not succeed then we may
-			 * drop the list_lock without any processing.
+			 * Speculatively acquire the list_lock. If the cmpxchg
+			 * does not succeed we drop the lock without processing.
 			 *
-			 * Otherwise the list_lock will synchronize with
-			 * other processors updating the list of slabs.
+			 * Arena caches may reach here from kfree_nolock() in
+			 * NMI/irq-off context; trylock and orphan the slab on
+			 * failure. A later allow_spin caller adopts it.
 			 */
-			spin_lock_irqsave(&n->list_lock, flags);
+			if (unlikely(s->bpf_arena)) {
+				if (!spin_trylock_irqsave(&n->list_lock, flags))
+					n = NULL;
+			} else {
+				spin_lock_irqsave(&n->list_lock, flags);
+			}
 
 			on_node_partial = slab_test_node_partial(slab);
 		}
@@ -6667,6 +6727,15 @@ void kfree_nolock(const void *object)
 		return;
 
 	/*
+	 * Arena freepointer slots are BPF-writable; defer_free()'s in-object
+	 * llist chain could be redirected. Route through __slab_free() instead;
+	 * it trylocks n->list_lock and orphans the slab on failure.
+	 */
+	if (s->bpf_arena) {
+		__slab_free(s, slab, x, x, 1, _RET_IP_);
+		return;
+	}
+	/*
 	 * __slab_free() can locklessly cmpxchg16 into a slab, but then it might
 	 * need to take spin_lock for further processing.
 	 * Avoid the complexity and simply add to a deferred list.
@@ -7181,16 +7250,22 @@ __refill_objects_node(struct kmem_cache *s, void **p, gfp_t gfp, unsigned int mi
 		/*
 		 * Freelist had more objects than we can accommodate, we need to
 		 * free them back. We can treat it like a detached freelist, just
-		 * need to find the tail object.
+		 * need to find the tail object. Bound the walk by slab->objects
+		 * so a corrupted in-object freepointer (e.g. BPF arena cache
+		 * where the slot is writable from BPF) cannot loop forever; a
+		 * legitimate freelist on this slab has at most that many nodes.
 		 */
 		if (unlikely(object)) {
 			void *head = object;
 			void *tail;
-			int cnt = 0;
+			unsigned int cnt = 0;
+			unsigned int limit = slab->objects;
 
 			do {
 				tail = object;
 				cnt++;
+				if (unlikely(cnt >= limit))
+					break;
 				object = get_freepointer(s, object);
 			} while (object);
 			__slab_free(s, slab, head, tail, cnt, _RET_IP_);
@@ -7763,12 +7838,21 @@ static unsigned int calculate_sheaf_capacity(struct kmem_cache *s,
 		return 0;
 
 	/*
-	 * Bootstrap caches can't have sheaves for now (SLAB_NO_OBJ_EXT).
+	 * Bootstrap caches (kmem_cache, kmem_cache_node) carry SLAB_NO_OBJ_EXT
+	 * and are created before kmalloc is available, so sheaf/barn setup
+	 * can't run yet.
+	 *
 	 * SLAB_NOLEAKTRACE caches (e.g., kmemleak's object_cache) must not
 	 * have sheaves to avoid recursion when sheaf allocation triggers
 	 * kmemleak tracking.
+	 *
+	 * SLAB_BPF_ARENA caches also set SLAB_NO_OBJ_EXT to suppress per-object
+	 * extensions, but they are created at runtime and want sheaves like any
+	 * other cache, so exempt them.
 	 */
-	if (s->flags & (SLAB_NO_OBJ_EXT | SLAB_NOLEAKTRACE))
+	if (s->flags & SLAB_NOLEAKTRACE)
+		return 0;
+	if ((s->flags & SLAB_NO_OBJ_EXT) && !(s->flags & SLAB_BPF_ARENA))
 		return 0;
 
 	/*
@@ -8607,6 +8691,27 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 	s->useroffset = args->useroffset;
 	s->usersize = args->usersize;
 #endif
+	if (s->flags & SLAB_BPF_ARENA) {
+		if (!args->bpf_arena)
+			goto out;
+		/*
+		 * Strip every SLAB_DEBUG_FLAGS bit from arena caches.
+		 * Masking (rather than goto out) keeps arena maps creatable
+		 * under slub_debug=... cmdline.
+		 */
+		s->flags &= ~SLAB_DEBUG_FLAGS;
+		/* Non-debug knobs we cannot honor: refuse the cache. */
+		if (s->flags & (SLAB_KASAN | SLAB_TYPESAFE_BY_RCU | SLAB_ACCOUNT))
+			goto out;
+		/*
+		 * Suppress per-object obj_exts for arena caches: accounting
+		 * already happens at arena-page granularity (bpf_map_memcg_enter
+		 * in arena_alloc_pages), and per-slab obj_exts would cost
+		 * sizeof(slabobj_ext) * objs_per_slab of overhead per page.
+		 */
+		s->flags |= SLAB_NO_OBJ_EXT;
+		s->bpf_arena = args->bpf_arena;
+	}
 
 	if (!calculate_sizes(args, s))
 		goto out;
@@ -8621,6 +8726,17 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 			if (!calculate_sizes(args, s))
 				goto out;
 		}
+	}
+
+	if (s->flags & SLAB_BPF_ARENA) {
+		/*
+		 * Arena page source currently allocates one page at a time;
+		 * force order 0 and pin s->min to s->oo so allocate_slab() has
+		 * no fallback path and get_freepointer()'s slab-mask sanitize
+		 * (oo_order(s->oo)) always matches the actual slab order.
+		 */
+		s->oo = oo_make(0, s->size);
+		s->min = s->oo;
 	}
 
 #ifdef system_has_freelist_aba
@@ -9627,6 +9743,17 @@ static int sysfs_slab_add(struct kmem_cache *s)
 	const char *name;
 	struct kset *kset = cache_kset(s);
 	int unmergeable = slab_unmergeable(s);
+
+	/*
+	 * Hide arena caches from /sys/kernel/slab: shrink/validate/etc would
+	 * BUG_ON on BPF-induced inuse underflow or corrupted freelists.
+	 * kobject_init() (no kobject_add()) keeps the destroy-time
+	 * kobject_put() -> slab_kmem_cache_release() path working.
+	 */
+	if (s->bpf_arena) {
+		kobject_init(&s->kobj, &slab_ktype);
+		return 0;
+	}
 
 	if (!unmergeable && disable_higher_order_debug &&
 			(slub_debug & DEBUG_METADATA_FLAGS))

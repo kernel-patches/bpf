@@ -34,6 +34,9 @@ config BPF_SYSCALL
 	select NET_SOCK_MSG if NET
 	select NET_XGRESS if NET
 	select PAGE_POOL if NET
+	# bpf_arena_alloc()/free() stashes uaddr32 in slab->stride which only
+	# becomes a real field with CONFIG_SLAB_OBJ_EXT.
+	select SLAB_OBJ_EXT if MMU && 64BIT
 	default n
 	help
 	  Enable the bpf() system call that allows to manipulate BPF programs
