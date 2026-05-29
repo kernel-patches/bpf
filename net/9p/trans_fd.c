@@ -887,8 +887,8 @@ p9_fd_create_tcp(struct p9_client *client, struct fs_context *fc)
 		return -EINVAL;
 
 	sprintf(port_str, "%u", opts.port);
-	err = inet_pton_with_scope(current->nsproxy->net_ns, AF_UNSPEC, addr,
-				   port_str, &stor);
+	err = inet_pton_with_scope(fc->net_ns, AF_UNSPEC, addr, port_str,
+				   &stor);
 	if (err < 0)
 		return err;
 
@@ -896,8 +896,8 @@ p9_fd_create_tcp(struct p9_client *client, struct fs_context *fc)
 
 	client->trans_opts.tcp.port = opts.port;
 	client->trans_opts.tcp.privport = opts.privport;
-	err = __sock_create(current->nsproxy->net_ns, stor.ss_family,
-			    SOCK_STREAM, IPPROTO_TCP, &csocket, 1);
+	err = __sock_create(fc->net_ns, stor.ss_family, SOCK_STREAM,
+			    IPPROTO_TCP, &csocket, 1);
 	if (err) {
 		pr_err("%s (%d): problem creating socket\n",
 		       __func__, task_pid_nr(current));
@@ -946,8 +946,7 @@ p9_fd_create_unix(struct p9_client *client, struct fs_context *fc)
 		       __func__, task_pid_nr(current), addr);
 		return -ENAMETOOLONG;
 	}
-	err = __sock_create(current->nsproxy->net_ns, PF_UNIX,
-			    SOCK_STREAM, 0, &csocket, 1);
+	err = __sock_create(fc->net_ns, PF_UNIX, SOCK_STREAM, 0, &csocket, 1);
 	if (err < 0) {
 		pr_err("%s (%d): problem creating socket\n",
 		       __func__, task_pid_nr(current));
