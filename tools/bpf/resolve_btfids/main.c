@@ -161,6 +161,7 @@ struct object {
 	int max_addr_syms;
 };
 
+#define KF_FASTCALL (1 << 12)
 #define KF_IMPLICIT_ARGS (1 << 16)
 #define KF_IMPL_SUFFIX "_impl"
 
@@ -1308,6 +1309,12 @@ static int btf2btf(struct object *obj)
 		err = ensure_decl_tag(&ctx, "bpf_kfunc", kfunc->btf_id, -1);
 		if (err)
 			goto out;
+
+		if (kfunc->flags & KF_FASTCALL) {
+			err = ensure_decl_tag(&ctx, "bpf_fastcall", kfunc->btf_id, -1);
+			if (err)
+				goto out;
+		}
 
 		if (kfunc->flags & KF_IMPLICIT_ARGS) {
 			err = process_kfunc_with_implicit_args(&ctx, kfunc);
