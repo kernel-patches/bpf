@@ -32,6 +32,7 @@
 #include <linux/static_call.h>
 #include <linux/memcontrol.h>
 #include <linux/cfi.h>
+#include <linux/xattr.h>
 #include <asm/rqspinlock.h>
 
 struct bpf_verifier_env;
@@ -1937,6 +1938,8 @@ struct bpf_mount_opts {
 	u64 delegate_maps;
 	u64 delegate_progs;
 	u64 delegate_attachs;
+
+	struct simple_xattr_cache xa_cache;
 };
 
 struct bpf_token {
