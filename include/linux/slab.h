@@ -62,6 +62,7 @@ enum _slab_flag_bits {
 #if defined(CONFIG_SLAB_OBJ_EXT) && defined(CONFIG_64BIT)
 	_SLAB_OBJ_EXT_IN_OBJ,
 #endif
+	_SLAB_BPF_ARENA,
 	_SLAB_FLAGS_LAST_BIT
 };
 
@@ -249,6 +250,15 @@ enum _slab_flag_bits {
 #endif
 
 /*
+ * Cache is backed by bpf_arena pages instead of the page allocator.
+ * Slab pages live in the arena's kernel vmalloc range and are visible to
+ * BPF programs via 32-bit arena addressing. Freepointers stored inside
+ * free objects may be scribbled by BPF; get_freepointer() reconstructs a
+ * pointer that is always within the arena's 4GB window.
+ */
+#define SLAB_BPF_ARENA		__SLAB_FLAG_BIT(_SLAB_BPF_ARENA)
+
+/*
  * ZERO_SIZE_PTR will be returned for zero sized kmalloc requests.
  *
  * Dereferencing ZERO_SIZE_PTR will lead to a distinct access fault.
@@ -372,6 +382,15 @@ struct kmem_cache_args {
 	 * %0 means no sheaves will be created.
 	 */
 	unsigned int sheaf_capacity;
+	/**
+	 * @bpf_arena: Opaque arena pointer for SLAB_BPF_ARENA caches.
+	 *
+	 * When non-%NULL, slab pages for this cache are sourced from the
+	 * arena via bpf_arena_alloc_slab_page()/bpf_arena_free_slab_page(),
+	 * and freepointer reads are sanitized to remain inside the arena.
+	 * Caller must also pass %SLAB_BPF_ARENA in the flags argument.
+	 */
+	void *bpf_arena;
 };
 
 struct kmem_cache *__kmem_cache_create_args(const char *name,
@@ -960,6 +979,9 @@ void *kmalloc_nolock_noprof(size_t size, gfp_t gfp_flags, int node);
 #define kmalloc_nolock(...)			alloc_hooks(kmalloc_nolock_noprof(__VA_ARGS__))
 
 void *kmem_cache_alloc_arena_nolock(struct kmem_cache *s, int node);
+
+struct slab;
+void kmem_cache_force_discard_slab(struct kmem_cache *s, struct slab *slab);
 
 /**
  * __alloc_objs - Allocate objects of a given type using
