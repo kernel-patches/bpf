@@ -5402,6 +5402,50 @@ success:
 }
 EXPORT_SYMBOL_GPL(kmalloc_nolock_noprof);
 
+/**
+ * kmem_cache_alloc_arena_nolock - allocate one object from a SLAB_BPF_ARENA
+ * kmem_cache, safe from any context (including NMI / IRQ-off).
+ * @s:    the SLAB_BPF_ARENA kmem_cache to allocate from
+ * @node: NUMA node hint (NUMA_NO_NODE for any)
+ *
+ * Counterpart to kfree_arena_nolock(). The slab_post_alloc_hook() and
+ * kasan_kmalloc() steps that the regular alloc path runs are deliberately
+ * skipped: arena objects are user-controlled and a BPF program may double-
+ * free, free a misaligned pointer, etc. Those must be reported by the arena
+ * layer (bpf_prog_report_arena_violation()), never surface as kernel KASAN
+ * splats.
+ *
+ * __GFP_ACCOUNT is intentionally not supported. Arena pages are already
+ * memcg-charged by bpf_map_alloc_pages() at the page-allocator boundary;
+ * adding per-object accounting on top would double-count.
+ *
+ * Returns NULL on transient trylock failure.
+ */
+void *kmem_cache_alloc_arena_nolock(struct kmem_cache *s, int node)
+{
+	gfp_t alloc_gfp = __GFP_NOWARN | __GFP_NOMEMALLOC;
+	void *ret;
+
+	if (IS_ENABLED(CONFIG_PREEMPT_RT) && (in_nmi() || in_hardirq()))
+		return NULL;
+	if (!IS_ENABLED(CONFIG_SMP) && in_nmi())
+		return NULL;
+
+	if (!(s->flags & __CMPXCHG_DOUBLE) && !kmem_cache_debug(s))
+		return NULL;
+
+	ret = alloc_from_pcs(s, alloc_gfp, node);
+	if (!ret)
+		ret = __slab_alloc_node(s, alloc_gfp, node, _RET_IP_,
+					s->object_size);
+	if (!ret)
+		return NULL;
+
+	maybe_wipe_obj_freeptr(s, ret);
+	return ret;
+}
+EXPORT_SYMBOL_GPL(kmem_cache_alloc_arena_nolock);
+
 void *__kmalloc_node_track_caller_noprof(DECL_BUCKET_PARAMS(size, b), gfp_t flags,
 					 int node, unsigned long caller)
 {
@@ -6634,6 +6678,44 @@ void kfree_nolock(const void *object)
 	defer_free(s, x);
 }
 EXPORT_SYMBOL_GPL(kfree_nolock);
+
+/*
+ * kfree_arena_nolock - free a SLAB_BPF_ARENA object, safe from any context.
+ *
+ * Counterpart to kmem_cache_alloc_arena_nolock(). The kasan_slab_pre_free()
+ * and kasan_slab_free() hooks that kfree_nolock() runs are deliberately
+ * skipped (see kmem_cache_alloc_arena_nolock() for the rationale). The
+ * memcg_slab_free_hook(), alloc_tagging_slab_free_hook() and kmsan_slab_free()
+ * hooks are skipped too: arena pages are memcg-charged at allocation by
+ * bpf_map_alloc_pages() (no per-object accounting), arena objects don't
+ * participate in alloc-tagging, and kmsan tracking on BPF-writable memory
+ * would be meaningless.
+ *
+ * The free is routed through __slab_free() because arena freepointer slots
+ * are BPF-writable and defer_free()'s in-object llist chain could be
+ * redirected through a poisoned freepointer.
+ */
+void kfree_arena_nolock(const void *object)
+{
+	struct slab *slab;
+	struct kmem_cache *s;
+	void *x = (void *)object;
+
+	if (unlikely(ZERO_OR_NULL_PTR(object)))
+		return;
+
+	slab = virt_to_slab(object);
+	if (unlikely(!slab))
+		return;
+
+	s = slab->slab_cache;
+
+	if (likely(can_free_to_pcs(slab)) && likely(free_to_pcs(s, x, false)))
+		return;
+
+	__slab_free(s, slab, x, x, 1, _RET_IP_);
+}
+EXPORT_SYMBOL_GPL(kfree_arena_nolock);
 
 static __always_inline __realloc_size(2) void *
 __do_krealloc(const void *p, size_t new_size, unsigned long align, gfp_t flags, int nid)
