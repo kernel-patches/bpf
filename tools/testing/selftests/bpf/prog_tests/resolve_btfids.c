@@ -13,6 +13,15 @@
 #ifndef KF_FASTCALL
 #define KF_FASTCALL (1 << 12)
 #endif
+#ifndef KF_ARENA_RET
+#define KF_ARENA_RET  (1 << 13)
+#endif
+#ifndef KF_ARENA_ARG1
+#define KF_ARENA_ARG1 (1 << 14)
+#endif
+#ifndef KF_ARENA_ARG2
+#define KF_ARENA_ARG2 (1 << 15)
+#endif
 
 struct symbol {
 	const char	*name;
@@ -39,6 +48,8 @@ struct kfunc_symbol {
 static struct kfunc_symbol kfunc_symbols[] = {
 	{ "kfunc_a", -1, 0 },
 	{ "kfunc_b", -1, KF_FASTCALL },
+	{ "kfunc_c", -1, KF_ARENA_RET | KF_ARENA_ARG1 | KF_ARENA_ARG2 },
+	{ "kfunc_d", -1, KF_ARENA_ARG2 },
 };
 
 /* Align the .BTF_ids section to 4 bytes */
@@ -95,6 +106,8 @@ BTF_SET_END(test_set)
 BTF_KFUNCS_START(test_kfunc_set)
 BTF_ID_FLAGS(func, kfunc_a)
 BTF_ID_FLAGS(func, kfunc_b, KF_FASTCALL)
+BTF_ID_FLAGS(func, kfunc_c, KF_ARENA_RET | KF_ARENA_ARG1 | KF_ARENA_ARG2)
+BTF_ID_FLAGS(func, kfunc_d, KF_ARENA_ARG2)
 BTF_KFUNCS_END(test_kfunc_set)
 
 #pragma GCC visibility pop
@@ -178,6 +191,22 @@ static bool btf_has_decl_tag(struct btf *btf, const char *tag_name, s32 target_i
 	return false;
 }
 
+/* True if @id is PTR -> TYPE_TAG(kflag=1, "address_space(1)") -> pointee */
+static bool is_arena_tagged_ptr(struct btf *btf, __u32 id)
+{
+	const struct btf_type *ptr, *tag;
+	const char *name;
+
+	ptr = btf__type_by_id(btf, id);
+	if (!ptr || !btf_is_ptr(ptr))
+		return false;
+	tag = btf__type_by_id(btf, ptr->type);
+	if (!tag || !btf_is_type_tag(tag) || !btf_kflag(tag))
+		return false;
+	name = btf__name_by_offset(btf, tag->name_off);
+	return name && strcmp(name, "address_space(1)") == 0;
+}
+
 void test_resolve_btfids(void)
 {
 	__u32 *test_list, *test_lists[] = { test_list_local, test_list_global };
@@ -252,6 +281,36 @@ void test_resolve_btfids(void)
 			ASSERT_TRUE(btf_has_decl_tag(btf, "bpf_fastcall",
 						     kfunc_symbols[i].id),
 				    kfunc_symbols[i].name);
+
+	/* Check resolve_btfids wrapped exactly the arena-flagged return/args with
+	 * the address_space(1) type attribute, and left other pointers/returns
+	 * untouched.
+	 */
+	for (i = 0; i < ARRAY_SIZE(kfunc_symbols); i++) {
+		const struct btf_type *fn, *proto;
+		const struct btf_param *params;
+		const char *name = kfunc_symbols[i].name;
+		u32 fl = kfunc_symbols[i].flags;
+		__u32 nr;
+
+		fn = btf__type_by_id(btf, kfunc_symbols[i].id);
+		if (!ASSERT_TRUE(fn && btf_is_func(fn), name))
+			continue;
+		proto = btf__type_by_id(btf, fn->type);
+		if (!ASSERT_TRUE(proto && btf_is_func_proto(proto), name))
+			continue;
+		params = btf_params(proto);
+		nr = btf_vlen(proto);
+
+		ASSERT_EQ(is_arena_tagged_ptr(btf, proto->type),
+			  !!(fl & KF_ARENA_RET), name);
+		if (nr > 0)
+			ASSERT_EQ(is_arena_tagged_ptr(btf, params[0].type),
+				  !!(fl & KF_ARENA_ARG1), name);
+		if (nr > 1)
+			ASSERT_EQ(is_arena_tagged_ptr(btf, params[1].type),
+				  !!(fl & KF_ARENA_ARG2), name);
+	}
 
 out:
 	btf__free(btf);
