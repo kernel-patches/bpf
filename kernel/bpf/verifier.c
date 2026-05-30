@@ -9381,7 +9381,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		clear_caller_saved_regs(env, caller->regs);
 		invalidate_outgoing_stack_args(env, cur_func(env));
 
-		/* All non-void global functions return a 64-bit SCALAR_VALUE. */
+		/* All non-void global functions return a 64-bit SCALAR_VALUE or PTR_TO_ARENA. */
 		if (!subprog_returns_void(env, subprog)) {
 			mark_reg_unknown(env, caller->regs, BPF_REG_0);
 			caller->regs[BPF_REG_0].subreg_def = DEF_NOT_SUBREG;
@@ -16650,6 +16650,10 @@ static int check_global_subprog_return_code(struct bpf_verifier_env *env)
 	err = check_reg_arg(env, BPF_REG_0, SRC_OP);
 	if (err)
 		return err;
+
+	/* Pointers to arena are safe to pass between subprograms. */
+	if (is_arena_reg(env, BPF_REG_0))
+		return 0;
 
 	if (is_pointer_value(env, BPF_REG_0)) {
 		verbose(env, "R%d leaks addr as return value\n", BPF_REG_0);
