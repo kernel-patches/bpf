@@ -437,6 +437,14 @@ type. An example is shown below::
         }
         late_initcall(init_subsystem);
 
+At kernel build time the ``resolve_btfids`` tool discovers all kfuncs from the
+registered ``BTF_SET8_KFUNCS`` sets and emits their BTF annotations into the
+kernel's BTF; these annotations were historically produced by pahole. For each
+discovered kfunc ``resolve_btfids`` emits a ``bpf_kfunc`` BTF decl tag, a
+``bpf_fastcall`` decl tag when the kfunc is flagged ``KF_FASTCALL``, and the
+``address_space(1)`` type attribute on the return value and/or arguments flagged
+``KF_ARENA_RET``, ``KF_ARENA_ARG1`` or ``KF_ARENA_ARG2`` (see section 2.8).
+
 2.7  Specifying no-cast aliases with ___init
 --------------------------------------------
 
