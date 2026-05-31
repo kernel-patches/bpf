@@ -11,6 +11,7 @@
 #include <bpf_arena_common.h>
 
 #define private(name) SEC(".bss." #name) __hidden __attribute__((aligned(8)))
+#define INVALID_NODE_ID 0x7fffffff
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARENA);
@@ -196,6 +197,20 @@ int basic_alloc3(void *ctx)
 	pages = bpf_arena_alloc_pages(&ar->map, NULL, ar->map.max_entries, NUMA_NO_NODE, 0);
 	if (!pages)
 		return 1;
+	return 0;
+}
+
+SEC("syscall")
+__success __retval(0)
+int alloc_pages_invalid_node(void *ctx)
+{
+#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
+	void __arena *page;
+
+	page = bpf_arena_alloc_pages(&arena, NULL, 1, INVALID_NODE_ID, 0);
+	if (page)
+		return 1;
+#endif
 	return 0;
 }
 
