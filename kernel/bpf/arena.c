@@ -157,15 +157,13 @@ static int apply_range_set_cb(pte_t *pte, unsigned long addr, void *data)
 
 	if (!data)
 		return 0;
-	/* sanity check */
-	if (unlikely(!pte_none(ptep_get(pte))))
-		return -EBUSY;
 
 	page = d->pages[d->i];
 	/* paranoia, similar to vmap_pages_pte_range() */
 	if (WARN_ON_ONCE(!pfn_valid(page_to_pfn(page))))
 		return -EINVAL;
 
+	/* May be none or the scratch page, overwrite either way */
 	set_pte_at(&init_mm, addr, pte, mk_pte(page, PAGE_KERNEL));
 	d->i++;
 	return 0;
