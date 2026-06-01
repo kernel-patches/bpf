@@ -246,6 +246,13 @@ void test_resolve_btfids(void)
 					     kfunc_symbols[i].id),
 			    kfunc_symbols[i].name);
 
+	/* Check resolve_btfids emitted bpf_fastcall decl_tag for fastcall kfuncs */
+	for (i = 0; i < ARRAY_SIZE(kfunc_symbols); i++)
+		if (kfunc_symbols[i].flags & KF_FASTCALL)
+			ASSERT_TRUE(btf_has_decl_tag(btf, "bpf_fastcall",
+						     kfunc_symbols[i].id),
+				    kfunc_symbols[i].name);
+
 out:
 	btf__free(btf);
 }
