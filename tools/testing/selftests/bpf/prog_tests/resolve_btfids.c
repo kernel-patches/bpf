@@ -156,6 +156,28 @@ static int resolve_symbols(struct btf *btf)
 	return 0;
 }
 
+static bool btf_has_decl_tag(struct btf *btf, const char *tag_name, s32 target_id)
+{
+	const struct btf_type *t;
+	const char *name;
+	int nr, id;
+
+	nr = btf__type_cnt(btf);
+	for (id = 1; id < nr; id++) {
+		t = btf__type_by_id(btf, id);
+		if (!btf_is_decl_tag(t))
+			continue;
+		if (t->type != (__u32)target_id)
+			continue;
+		if (btf_decl_tag(t)->component_idx != -1)
+			continue;
+		name = btf__name_by_offset(btf, t->name_off);
+		if (name && strcmp(name, tag_name) == 0)
+			return true;
+	}
+	return false;
+}
+
 void test_resolve_btfids(void)
 {
 	__u32 *test_list, *test_lists[] = { test_list_local, test_list_global };
@@ -217,6 +239,12 @@ void test_resolve_btfids(void)
 			ASSERT_LE(test_kfunc_set.pairs[i - 1].id,
 				  test_kfunc_set.pairs[i].id, "kfunc_sort_check");
 	}
+
+	/* Check resolve_btfids emitted bpf_kfunc decl_tag for each kfunc */
+	for (i = 0; i < ARRAY_SIZE(kfunc_symbols); i++)
+		ASSERT_TRUE(btf_has_decl_tag(btf, "bpf_kfunc",
+					     kfunc_symbols[i].id),
+			    kfunc_symbols[i].name);
 
 out:
 	btf__free(btf);
