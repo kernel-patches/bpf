@@ -11040,6 +11040,39 @@ static bool is_kfunc_arg_prog_aux(const struct btf *btf, const struct btf_param 
 }
 
 /*
+ * Injectable argument types are implicit kfunc arguments whose value is
+ * injected by the kernel at call time rather than received from the BPF
+ * program.  Use name-based matching for initial detection to avoid false
+ * negatives when a module's BTF references the type via a different BTF ID
+ * than vmlinux's.  Actual type compatibility is still validated by the
+ * caller with btf_types_are_same().
+ */
+enum kfunc_inject_arg_type {
+	KF_INJECT_ARG_NONE = 0,
+	KF_INJECT_ARG_PROG_AUX,
+};
+
+static enum kfunc_inject_arg_type get_kfunc_arg_inject_type(
+	const struct btf *btf, const struct btf_param *arg)
+{
+	const struct btf_type *t;
+	u32 res_id;
+
+	t = btf_type_skip_modifiers(btf, arg->type, NULL);
+	if (!t || !btf_type_is_ptr(t))
+		return KF_INJECT_ARG_NONE;
+
+	t = btf_type_skip_modifiers(btf, t->type, &res_id);
+	if (!t)
+		return KF_INJECT_ARG_NONE;
+
+	if (strcmp(btf_type_name(btf, res_id), "bpf_prog_aux") == 0)
+		return KF_INJECT_ARG_PROG_AUX;
+
+	return KF_INJECT_ARG_NONE;
+}
+
+/*
  * A kfunc with KF_IMPLICIT_ARGS has two prototypes in BTF:
  *   - the _impl prototype with full arg list (meta->func_proto)
  *   - the BPF API prototype w/o implicit args (func->type in BTF)
@@ -12070,8 +12103,17 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		u32 regno = i + 1, ref_id, type_size;
 		bool is_ret_buf_sz = false;
 		int kf_arg_type;
+		enum kfunc_inject_arg_type inject_type;
 
-		if (is_kfunc_arg_prog_aux(btf, &args[i])) {
+		inject_type = get_kfunc_arg_inject_type(btf, &args[i]);
+		switch (inject_type) {
+		case KF_INJECT_ARG_PROG_AUX:
+			/* Validate the arg type against vmlinux's definition */
+			if (!is_kfunc_arg_prog_aux(btf, &args[i])) {
+				verbose(env, "arg#%d implicit argument type mismatch, "
+					"expected struct bpf_prog_aux *\n", i);
+				return -EINVAL;
+			}
 			/* Reject repeated use bpf_prog_aux */
 			if (meta->arg_prog) {
 				verifier_bug(env, "Only 1 prog->aux argument supported per-kfunc");
@@ -12080,6 +12122,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			meta->arg_prog = true;
 			cur_aux(env)->arg_prog = regno;
 			continue;
+		default:
+			break;
 		}
 
 		if (is_kfunc_arg_ignore(btf, &args[i]) || is_kfunc_arg_implicit(meta, i))
