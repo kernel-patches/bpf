@@ -103,3 +103,43 @@ SEC(".struct_ops.link")
 struct bpf_testmod_multi_st_ops st_ops_map_b = {
 	.test_1 = (void *)test_1_b,
 };
+
+/* Test for aux injection with stale register contamination.
+ *
+ * This test reproduces the scenario where the BPF verifier fails to
+ * inject the implicit bpf_prog_aux pointer for kfuncs with
+ * KF_IMPLICIT_ARGS.  The program uses inline assembly to explicitly
+ * set R2 (the register for the 2nd kfunc argument, which maps to
+ * the implicit bpf_prog_aux *) to a known magic value (0xDEAD,
+ * chosen with bit 31 clear to avoid BPF ALU64 sign-extension):
+ *
+ *   asm volatile("r2 = %[magic]" :: [magic] "ri"(0xDEAD) : "r2");
+ *
+ * Then bpf_kfunc_aux_inject_stale() is called.  The kernel verifier
+ * should inject the real bpf_prog_aux into R2, overriding the magic
+ * value.  The kfunc compares aux against 0xDEAD:
+ *
+ *   - aux == 0xDEAD  → kernel failed to inject aux → test fails
+ *   - aux != 0xDEAD  → kernel correctly injected aux → test passes
+ */
+int test_err_inject;
+
+SEC("tp_btf/sys_enter")
+int BPF_PROG(sys_enter_prog_test_aux_inject, struct pt_regs *regs, long id)
+{
+	struct task_struct *task;
+	int marker = 0x5A5A;
+	int ret;
+
+	task = bpf_get_current_task_btf();
+	if (!test_pid || task->pid != test_pid)
+		return 0;
+
+	asm volatile("r2 = %[magic]" :: [magic] "ri"(0xDEAD) : "r2");
+
+	ret = bpf_kfunc_aux_inject_stale(marker);
+	if (ret != marker)
+		test_err_inject++;
+
+	return 0;
+}

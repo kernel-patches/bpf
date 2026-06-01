@@ -1253,6 +1253,7 @@ __bpf_kfunc int bpf_kfunc_multi_st_ops_test_1_assoc(struct st_ops_args *args, st
 __bpf_kfunc int bpf_kfunc_implicit_arg(int a, struct bpf_prog_aux *aux);
 __bpf_kfunc int bpf_kfunc_implicit_arg_legacy(int a, int b, struct bpf_prog_aux *aux);
 __bpf_kfunc int bpf_kfunc_implicit_arg_legacy_impl(int a, int b, struct bpf_prog_aux *aux);
+__bpf_kfunc int bpf_kfunc_aux_inject_stale(int marker, struct bpf_prog_aux *aux);
 
 /* hook targets */
 noinline void bpf_testmod_test_hardirq_fn(void) { barrier(); }
@@ -1327,6 +1328,7 @@ BTF_ID_FLAGS(func, bpf_kfunc_multi_st_ops_test_1_assoc, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_kfunc_implicit_arg, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_kfunc_implicit_arg_legacy, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_kfunc_implicit_arg_legacy_impl)
+BTF_ID_FLAGS(func, bpf_kfunc_aux_inject_stale, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_kfunc_trigger_ctx_check)
 BTF_KFUNCS_END(bpf_testmod_check_kfunc_ids)
 
@@ -1842,6 +1844,13 @@ int bpf_kfunc_implicit_arg_legacy(int a, int b, struct bpf_prog_aux *aux)
 int bpf_kfunc_implicit_arg_legacy_impl(int a, int b, struct bpf_prog_aux *aux)
 {
 	return bpf_kfunc_implicit_arg_legacy(a, b, aux);
+}
+
+int bpf_kfunc_aux_inject_stale(int marker, struct bpf_prog_aux *aux)
+{
+	if ((unsigned long)aux == 0xDEAD)
+		return -EINVAL;
+	return marker;
 }
 
 static int multi_st_ops_reg(void *kdata, struct bpf_link *link)

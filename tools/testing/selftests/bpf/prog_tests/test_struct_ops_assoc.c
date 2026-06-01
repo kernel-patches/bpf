@@ -35,6 +35,10 @@ static void test_st_ops_assoc(void)
 					    skel->maps.st_ops_map_b, NULL);
 	ASSERT_OK(err, "bpf_program__assoc_struct_ops(sys_enter_prog_b, st_ops_map_b)");
 
+	err = bpf_program__assoc_struct_ops(skel->progs.sys_enter_prog_test_aux_inject,
+					    skel->maps.st_ops_map_a, NULL);
+	ASSERT_OK(err, "bpf_program__assoc_struct_ops(sys_enter_prog_test_aux_inject, st_ops_map_a)");
+
 	/* sys_enter_prog_a already associated with map_a */
 	err = bpf_program__assoc_struct_ops(skel->progs.sys_enter_prog_a,
 					    skel->maps.st_ops_map_b, NULL);
@@ -52,6 +56,7 @@ static void test_st_ops_assoc(void)
 
 	ASSERT_EQ(skel->bss->test_err_a, 0, "skel->bss->test_err_a");
 	ASSERT_EQ(skel->bss->test_err_b, 0, "skel->bss->test_err_b");
+	ASSERT_EQ(skel->bss->test_err_inject, 0, "skel->bss->test_err_inject");
 
 	/* run syscall_prog that calls .test_1 and checks return */
 	err = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.syscall_prog_a), NULL);
