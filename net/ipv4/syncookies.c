@@ -280,9 +280,18 @@ static int cookie_tcp_reqsk_init(struct sock *sk, struct sk_buff *skb,
 	treq->snt_synack = 0;
 	treq->snt_tsval_first = 0;
 	treq->tfo_listener = false;
-	treq->txhash = net_tx_rndhash();
 	treq->rcv_isn = ntohl(th->seq) - 1;
 	treq->snt_isn = ntohl(th->ack_seq) - 1;
+	if (sk->sk_family == AF_INET6) {
+		/* Use the cookie as txhash so the ECMP path matches
+		 * the SYN-ACK, where txhash was also set to the
+		 * cookie.  The original request socket (and its
+		 * txhash) was freed after sending the SYN-ACK.
+		 */
+		treq->txhash = treq->snt_isn;
+	} else {
+		treq->txhash = net_tx_rndhash();
+	}
 	treq->syn_tos = TCP_SKB_CB(skb)->ip_dsfield;
 
 #if IS_ENABLED(CONFIG_MPTCP)
