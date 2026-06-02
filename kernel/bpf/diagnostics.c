@@ -1,16 +1,45 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (c) 2026 Meta Platforms, Inc. and affiliates.
 
+#include <linux/bpf.h>
 #include <linux/bpf_verifier.h>
+#include <linux/btf.h>
+#include <linux/kernel.h>
 #include <linux/stdarg.h>
 #include <linux/string.h>
 
+#include "disasm.h"
 #include "diagnostics.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 #define BPF_DIAG_TEXT_WIDTH 120
 #define BPF_DIAG_TEXT_INDENT "  "
 #define BPF_DIAG_MSG_LEN 512
+#define BPF_DIAG_SOURCE_CONTEXT 2
+#define BPF_DIAG_INSN_CONTEXT 2
+#define BPF_DIAG_COLUMN_GAP 3
+#define BPF_DIAG_SOURCE_LANE_WIDTH 88
+#define BPF_DIAG_TAB_WIDTH 8
+
+struct bpf_diag_source {
+	const char *file;
+	const char *line;
+	u32 file_name_off;
+	int line_num;
+	int line_col;
+};
+
+struct bpf_diag_insn {
+	char text[160];
+	int idx;
+	bool valid;
+};
+
+struct bpf_diag_insn_buf {
+	char *buf;
+	size_t size;
+	size_t len;
+};
 
 static void bpf_diag_print_wrapped_prefixed(struct bpf_verifier_env *env,
 					    const char *first_prefix,
@@ -68,6 +97,282 @@ static void bpf_diag_vprint_indented(struct bpf_verifier_env *env,
 	bpf_diag_print_wrapped_text(env, buf);
 }
 
+static int bpf_diag_line_width(unsigned int line)
+{
+	int width = 1;
+
+	while (line >= 10) {
+		line /= 10;
+		width++;
+	}
+
+	return width;
+}
+
+static const char *bpf_diag_func_name(struct bpf_verifier_env *env, u32 insn_idx)
+{
+	const struct bpf_subprog_info *subprog;
+	const struct bpf_func_info *info;
+	const struct btf_type *type;
+	int subprogno;
+
+	if (!env->prog->aux->func_info || !env->prog->aux->btf)
+		return NULL;
+
+	subprog = bpf_find_containing_subprog(env, insn_idx);
+	if (!subprog)
+		return NULL;
+
+	subprogno = subprog - env->subprog_info;
+	info = &env->prog->aux->func_info[subprogno];
+	type = btf_type_by_id(env->prog->aux->btf, info->type_id);
+	if (!type)
+		return NULL;
+
+	return btf_name_by_offset(env->prog->aux->btf, type->name_off);
+}
+
+static bool bpf_diag_fill_source(struct bpf_verifier_env *env,
+				 const struct bpf_line_info *linfo,
+				 struct bpf_diag_source *src)
+{
+	const char *file, *line;
+
+	file = btf_name_by_offset(env->prog->aux->btf, linfo->file_name_off);
+	line = btf_name_by_offset(env->prog->aux->btf, linfo->line_off);
+	if (!file || !*file || !line || !*line)
+		return false;
+
+	src->file = kbasename(file);
+	src->line = line;
+	src->file_name_off = linfo->file_name_off;
+	src->line_num = BPF_LINE_INFO_LINE_NUM(linfo->line_col);
+	src->line_col = BPF_LINE_INFO_LINE_COL(linfo->line_col);
+	return true;
+}
+
+static bool bpf_diag_get_source(struct bpf_verifier_env *env, u32 insn_idx,
+				struct bpf_diag_source *src)
+{
+	const struct bpf_line_info *linfo;
+
+	linfo = bpf_find_linfo(env->prog, insn_idx);
+	if (!linfo)
+		return false;
+
+	return bpf_diag_fill_source(env, linfo, src);
+}
+
+static const char *bpf_diag_find_source_line(struct bpf_verifier_env *env,
+					     u32 file_name_off, int line_num)
+{
+	const struct bpf_line_info *linfo = env->prog->aux->linfo;
+	struct bpf_diag_source src;
+	u32 i;
+
+	for (i = 0; i < env->prog->aux->nr_linfo; i++) {
+		if (linfo[i].file_name_off != file_name_off ||
+		    BPF_LINE_INFO_LINE_NUM(linfo[i].line_col) != line_num)
+			continue;
+		if (bpf_diag_fill_source(env, &linfo[i], &src))
+			return src.line;
+	}
+
+	return NULL;
+}
+
+static int bpf_diag_line_indent(const char *line)
+{
+	int indent = 0;
+
+	while (*line == ' ' || *line == '\t') {
+		if (*line == '\t')
+			indent = round_up(indent + 1, BPF_DIAG_TAB_WIDTH);
+		else
+			indent++;
+		line++;
+	}
+
+	return indent;
+}
+
+static const char *bpf_diag_marker_label(char marker)
+{
+	switch (marker) {
+	case '!':
+		return "error";
+	case '?':
+		return "branch";
+	case '~':
+		return "update";
+	case '+':
+		return "acquired";
+	case '-':
+		return "released";
+	default:
+		return "note";
+	}
+}
+
+static void bpf_diag_insn_print(void *private_data, const char *fmt, ...)
+{
+	struct bpf_diag_insn_buf *buf = private_data;
+	va_list args;
+
+	if (buf->len >= buf->size)
+		return;
+
+	va_start(args, fmt);
+	buf->len += vscnprintf(buf->buf + buf->len, buf->size - buf->len,
+			       fmt, args);
+	va_end(args);
+}
+
+static const char *bpf_diag_kfunc_name(void *private_data,
+				       const struct bpf_insn *insn)
+{
+	const struct btf_type *func;
+	struct btf *btf;
+
+	(void)private_data;
+
+	if (insn->src_reg != BPF_PSEUDO_KFUNC_CALL || insn->off)
+		return NULL;
+
+	btf = bpf_get_btf_vmlinux();
+	if (IS_ERR_OR_NULL(btf))
+		return NULL;
+
+	func = btf_type_by_id(btf, insn->imm);
+	if (!func)
+		return NULL;
+
+	return btf_name_by_offset(btf, func->name_off);
+}
+
+static void bpf_diag_format_insn(struct bpf_verifier_env *env, int insn_idx,
+				 struct bpf_diag_insn *diag_insn)
+{
+	struct bpf_insn *insn;
+	struct bpf_diag_insn_buf buf = {
+		.buf = diag_insn->text,
+		.size = sizeof(diag_insn->text),
+	};
+	const struct bpf_insn_cbs cbs = {
+		.cb_call = bpf_diag_kfunc_name,
+		.cb_print = bpf_diag_insn_print,
+		.private_data = &buf,
+	};
+
+	diag_insn->idx = insn_idx;
+	diag_insn->valid = false;
+	diag_insn->text[0] = '\0';
+
+	if (insn_idx < 0 || insn_idx >= env->prog->len)
+		return;
+
+	if (insn_idx > 0 && bpf_is_ldimm64(&env->prog->insnsi[insn_idx - 1]))
+		return;
+
+	insn = &env->prog->insnsi[insn_idx];
+	if (bpf_is_ldimm64(insn) && insn_idx + 1 >= env->prog->len)
+		return;
+
+	print_bpf_insn(&cbs, insn, env->allow_ptr_leaks);
+	while (buf.len && (diag_insn->text[buf.len - 1] == '\n' ||
+			   diag_insn->text[buf.len - 1] == '\r'))
+		diag_insn->text[--buf.len] = '\0';
+
+	diag_insn->valid = true;
+}
+
+static void bpf_diag_format_source_text(char *buf, size_t size,
+					const char *line, int width)
+{
+	bool truncated = false;
+	int col = 0, len = 0;
+
+	if (!size)
+		return;
+	if (width <= 0) {
+		buf[0] = '\0';
+		return;
+	}
+
+	line = line ?: "...";
+	while (*line && col < width && len + 1 < size) {
+		if (*line == '\t') {
+			int next = round_up(col + 1, BPF_DIAG_TAB_WIDTH);
+
+			while (col < next && col < width && len + 1 < size) {
+				buf[len++] = ' ';
+				col++;
+			}
+			line++;
+			continue;
+		}
+
+		buf[len++] = *line++;
+		col++;
+	}
+
+	if (*line)
+		truncated = true;
+	if (truncated) {
+		int ellipsis_len = min(3, width);
+
+		while (len > 0 && col > width - ellipsis_len) {
+			len--;
+			col--;
+		}
+		while (ellipsis_len-- && len + 1 < size) {
+			buf[len++] = '.';
+			col++;
+		}
+	}
+
+	buf[len] = '\0';
+}
+
+static void bpf_diag_format_source_lane(char *buf, size_t size,
+					const char *source_prefix,
+					int source_line_width,
+					int line_num, const char *line)
+{
+	int len, text_width;
+
+	len = scnprintf(buf, size, "%s%*d | ",
+			source_prefix, source_line_width, line_num);
+	if (len >= (int)size)
+		return;
+
+	text_width = BPF_DIAG_SOURCE_LANE_WIDTH - len;
+	bpf_diag_format_source_text(buf + len, size - len, line, text_width);
+}
+
+static void bpf_diag_print_source_insn_line(struct bpf_verifier_env *env,
+					    const char *source_prefix,
+					    int source_line_width,
+					    int line_num, const char *line,
+					    const struct bpf_diag_insn *diag_insn,
+					    int focus_insn_idx,
+					    int insn_width)
+{
+	char source_lane[BPF_DIAG_SOURCE_LANE_WIDTH + 1];
+
+	bpf_diag_format_source_lane(source_lane, sizeof(source_lane),
+				    source_prefix, source_line_width,
+				    line_num, line);
+
+	verbose(env, "  %-*s%*s", BPF_DIAG_SOURCE_LANE_WIDTH,
+		source_lane, BPF_DIAG_COLUMN_GAP, "");
+	if (diag_insn->valid)
+		verbose(env, "%s%*d | %s",
+			diag_insn->idx == focus_insn_idx ? ">>> " : "    ",
+			insn_width, diag_insn->idx, diag_insn->text);
+	verbose(env, "\n");
+}
+
 static const char *bpf_diag_category_name(enum bpf_diag_category category)
 {
 	switch (category) {
@@ -92,6 +397,7 @@ static const char *bpf_diag_category_name(enum bpf_diag_category category)
 		return "Verifier Internal Error";
 	}
 }
+
 
 void bpf_diag_report_header(struct bpf_verifier_env *env,
 			    enum bpf_diag_category category,
@@ -133,4 +439,82 @@ void bpf_diag_report_suggestion(struct bpf_verifier_env *env, const char *fmt, .
 	bpf_diag_vprint_indented(env, fmt, args);
 	va_end(args);
 	verbose(env, "\n");
+}
+
+static void bpf_diag_print_source_annotation(struct bpf_verifier_env *env,
+					     int line_width, int indent,
+					     const char *label,
+					     const char *msg)
+{
+	char first_prefix[128], next_prefix[128], text[BPF_DIAG_MSG_LEN];
+
+	scnprintf(first_prefix, sizeof(first_prefix), "  %*s | %*s^-- ",
+		  line_width + 4, "", indent, "");
+	scnprintf(next_prefix, sizeof(next_prefix), "  %*s | %*s    ",
+		  line_width + 4, "", indent, "");
+	scnprintf(text, sizeof(text), "%s: %s", label, msg);
+
+	bpf_diag_print_wrapped_prefixed(env, first_prefix, next_prefix, text);
+}
+
+void bpf_diag_report_source(struct bpf_verifier_env *env, u32 insn_idx,
+			    char marker, const char *fmt, ...)
+{
+	struct bpf_diag_source src;
+	struct bpf_diag_insn diag_insn[1 + BPF_DIAG_INSN_CONTEXT * 2];
+	char msg[BPF_DIAG_MSG_LEN];
+	const char *func, *label;
+	int start_line, end_line, line_num, indent, width;
+	int insn_width, i;
+	va_list args;
+
+	va_start(args, fmt);
+	vscnprintf(msg, sizeof(msg), fmt, args);
+	va_end(args);
+	label = bpf_diag_marker_label(marker);
+
+	if (!bpf_diag_get_source(env, insn_idx, &src)) {
+		verbose(env, "  insn %u\n", insn_idx);
+		bpf_diag_print_source_annotation(env, 0, 0, label, msg);
+		return;
+	}
+
+	func = bpf_diag_func_name(env, insn_idx);
+	if (func && *func)
+		verbose(env, "  %s @ %s:%d:%d\n", func, src.file,
+			src.line_num, src.line_col);
+	else
+		verbose(env, "  %s:%d:%d\n", src.file, src.line_num,
+			src.line_col);
+
+	start_line = max_t(int, 1, src.line_num - BPF_DIAG_SOURCE_CONTEXT);
+	end_line = src.line_num + BPF_DIAG_SOURCE_CONTEXT;
+	width = bpf_diag_line_width(end_line);
+	indent = bpf_diag_line_indent(src.line);
+	insn_width = bpf_diag_line_width(env->prog->len ? env->prog->len - 1 : 0);
+
+	for (i = 0; i < ARRAY_SIZE(diag_insn); i++) {
+		int row = i - BPF_DIAG_INSN_CONTEXT;
+
+		bpf_diag_format_insn(env, insn_idx + row, &diag_insn[i]);
+	}
+
+	for (line_num = start_line; line_num <= end_line; line_num++) {
+		const char *line;
+		int row = line_num - src.line_num;
+
+		line = line_num == src.line_num ?
+		       src.line :
+		       bpf_diag_find_source_line(env, src.file_name_off, line_num);
+
+		bpf_diag_print_source_insn_line(env,
+						line_num == src.line_num ?
+						">>> " : "    ",
+						width, line_num, line,
+						&diag_insn[row + BPF_DIAG_INSN_CONTEXT],
+						insn_idx, insn_width);
+		if (line_num == src.line_num)
+			bpf_diag_print_source_annotation(env, width, indent,
+							 label, msg);
+	}
 }

@@ -5,6 +5,7 @@
 #define __BPF_DIAGNOSTICS_H
 
 #include <linux/compiler_attributes.h>
+#include <linux/types.h>
 
 enum bpf_diag_category {
 	BPF_DIAG_CATEGORY_MEMORY_SAFETY,
@@ -28,5 +29,8 @@ void bpf_diag_report_reason(struct bpf_verifier_env *env, const char *fmt, ...)
 void bpf_diag_report_section(struct bpf_verifier_env *env, const char *title);
 void bpf_diag_report_suggestion(struct bpf_verifier_env *env, const char *fmt, ...)
 	__printf(2, 3);
+void bpf_diag_report_source(struct bpf_verifier_env *env, u32 insn_idx,
+			    char marker, const char *fmt, ...)
+	__printf(4, 5);
 
 #endif /* __BPF_DIAGNOSTICS_H */
