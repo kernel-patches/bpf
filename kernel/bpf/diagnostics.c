@@ -936,6 +936,22 @@ void bpf_diag_report_policy(struct bpf_verifier_env *env, u32 insn_idx,
 	bpf_diag_report_suggestion(env, "%s", suggestion);
 }
 
+void bpf_diag_report_limit(struct bpf_verifier_env *env, u32 insn_idx,
+			   const char *limit, const char *reason,
+			   const char *suggestion)
+{
+	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_VERIFIER_LIMIT,
+			       "limit exceeded");
+	bpf_diag_report_reason(env, "The %s limit was exceeded: %s.",
+			       limit, reason);
+
+	bpf_diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, '!', "limit exceeded: %s",
+			       limit);
+
+	bpf_diag_report_suggestion(env, "%s", suggestion);
+}
+
 void bpf_diag_report_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx,
 				   int regno, const char *reg_name,
 				   const char *type_name,
