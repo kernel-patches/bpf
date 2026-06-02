@@ -1134,7 +1134,7 @@ static struct i2c_driver ov01a10_i2c_driver = {
 
 module_i2c_driver(ov01a10_i2c_driver);
 
-MODULE_AUTHOR("Bingbu Cao <bingbu.cao@intel.com>");
+MODULE_AUTHOR("Bingbu Cao <bingbu.cao@amd.com>");
 MODULE_AUTHOR("Wang Yating <yating.wang@intel.com>");
 MODULE_DESCRIPTION("OmniVision OV01A10 sensor driver");
 MODULE_LICENSE("GPL");

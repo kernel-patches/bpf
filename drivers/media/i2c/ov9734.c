@@ -990,6 +990,6 @@ static struct i2c_driver ov9734_i2c_driver = {
 module_i2c_driver(ov9734_i2c_driver);
 
 MODULE_AUTHOR("Qiu, Tianshu <tian.shu.qiu@intel.com>");
-MODULE_AUTHOR("Bingbu Cao <bingbu.cao@intel.com>");
+MODULE_AUTHOR("Bingbu Cao <bingbu.cao@amd.com>");
 MODULE_DESCRIPTION("OmniVision OV9734 sensor driver");
 MODULE_LICENSE("GPL v2");

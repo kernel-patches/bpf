@@ -352,6 +352,6 @@ static struct i2c_driver ak7375_i2c_driver = {
 module_i2c_driver(ak7375_i2c_driver);
 
 MODULE_AUTHOR("Tianshu Qiu <tian.shu.qiu@intel.com>");
-MODULE_AUTHOR("Bingbu Cao <bingbu.cao@intel.com>");
+MODULE_AUTHOR("Bingbu Cao <bingbu.cao@amd.com>");
 MODULE_DESCRIPTION("AK7375 VCM driver");
 MODULE_LICENSE("GPL v2");
