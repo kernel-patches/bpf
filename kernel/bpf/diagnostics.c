@@ -842,13 +842,38 @@ void bpf_diag_record_stack_arg(struct bpf_verifier_state *state, u32 insn_idx,
 	bpf_diag_append_history(state, &event);
 }
 
+static void bpf_diag_record_ref(struct bpf_verifier_state *state, u32 insn_idx,
+				u8 kind, u32 ref_id)
+{
+	struct bpf_diag_history_event event = {
+		.insn_idx = insn_idx,
+		.kind = kind,
+		.ref.ref_id = ref_id,
+	};
+
+	bpf_diag_append_history(state, &event);
+}
+
+void bpf_diag_record_ref_acquire(struct bpf_verifier_state *state, u32 insn_idx,
+				 u32 ref_id)
+{
+	bpf_diag_record_ref(state, insn_idx, BPF_DIAG_HISTORY_REF_ACQUIRE,
+			    ref_id);
+}
+
+void bpf_diag_record_ref_release(struct bpf_verifier_state *state, u32 insn_idx,
+				 u32 ref_id)
+{
+	bpf_diag_record_ref(state, insn_idx, BPF_DIAG_HISTORY_REF_RELEASE,
+			    ref_id);
+}
+
 static int bpf_diag_history_start_idx(const struct bpf_verifier_state *state,
 				      const struct bpf_diag_history_opts *opts)
 {
 	int i;
 
-	if (!opts || (opts->scope != BPF_DIAG_HISTORY_SCOPE_REG &&
-		      opts->scope != BPF_DIAG_HISTORY_SCOPE_STACK_ARG))
+	if (!opts || opts->scope == BPF_DIAG_HISTORY_SCOPE_ALL)
 		return 0;
 
 	for (i = state->diag_history_cnt; i > 0; i--) {
@@ -863,6 +888,10 @@ static int bpf_diag_history_start_idx(const struct bpf_verifier_state *state,
 		    event->kind == BPF_DIAG_HISTORY_STACK_ARG &&
 		    event->stack_arg.slot == opts->stack_arg_slot &&
 		    event->stack_arg.frameno == opts->frameno)
+			return i - 1;
+		if (opts->scope == BPF_DIAG_HISTORY_SCOPE_REF &&
+		    event->kind == BPF_DIAG_HISTORY_REF_ACQUIRE &&
+		    event->ref.ref_id == opts->ref_id)
 			return i - 1;
 	}
 
@@ -886,6 +915,10 @@ static bool bpf_diag_history_event_visible(const struct bpf_diag_history_event *
 		return opts->scope == BPF_DIAG_HISTORY_SCOPE_STACK_ARG &&
 		       event->stack_arg.slot == opts->stack_arg_slot &&
 		       event->stack_arg.frameno == opts->frameno;
+	case BPF_DIAG_HISTORY_REF_ACQUIRE:
+	case BPF_DIAG_HISTORY_REF_RELEASE:
+		return opts->scope == BPF_DIAG_HISTORY_SCOPE_REF &&
+		       event->ref.ref_id == opts->ref_id;
 	default:
 		return false;
 	}
@@ -1084,6 +1117,21 @@ static void bpf_diag_print_reg_mod(struct bpf_verifier_env *env,
 			       event->reg.dst_reg, old_buf, new_buf);
 }
 
+static void bpf_diag_print_ref_event(struct bpf_verifier_env *env,
+				     const struct bpf_diag_history_event *event)
+{
+	if (event->kind == BPF_DIAG_HISTORY_REF_ACQUIRE) {
+		bpf_diag_report_source(env, event->insn_idx, '+',
+				       "owned resource (id=%u)",
+				       event->ref.ref_id);
+		return;
+	}
+
+	bpf_diag_report_source(env, event->insn_idx, '-',
+			       "owned resource (id=%u)",
+			       event->ref.ref_id);
+}
+
 void bpf_diag_print_history(struct bpf_verifier_env *env,
 			    const struct bpf_diag_history_opts *opts)
 {
@@ -1120,6 +1168,11 @@ void bpf_diag_print_history(struct bpf_verifier_env *env,
 			break;
 		case BPF_DIAG_HISTORY_REG_MOD:
 			bpf_diag_print_reg_mod(env, event);
+			printed = true;
+			break;
+		case BPF_DIAG_HISTORY_REF_ACQUIRE:
+		case BPF_DIAG_HISTORY_REF_RELEASE:
+			bpf_diag_print_ref_event(env, event);
 			printed = true;
 			break;
 		default:

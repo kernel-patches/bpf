@@ -69,6 +69,9 @@ struct bpf_diag_history_event {
 			u8 reason;
 			struct bpf_diag_reg_snapshot old, new;
 		} stack_arg;
+		struct {
+			u32 ref_id;
+		} ref;
 	};
 };
 
@@ -78,12 +81,15 @@ enum bpf_diag_history_kind {
 	BPF_DIAG_HISTORY_BRANCH,
 	BPF_DIAG_HISTORY_REG_MOD,
 	BPF_DIAG_HISTORY_STACK_ARG,
+	BPF_DIAG_HISTORY_REF_ACQUIRE,
+	BPF_DIAG_HISTORY_REF_RELEASE,
 };
 
 enum bpf_diag_history_scope {
 	BPF_DIAG_HISTORY_SCOPE_ALL,
 	BPF_DIAG_HISTORY_SCOPE_REG,
 	BPF_DIAG_HISTORY_SCOPE_STACK_ARG,
+	BPF_DIAG_HISTORY_SCOPE_REF,
 };
 
 enum bpf_diag_stack_arg_reason {
@@ -97,6 +103,7 @@ struct bpf_diag_history_opts {
 	u32 frameno;
 	int regno;
 	int stack_arg_slot;
+	u32 ref_id;
 };
 
 struct bpf_verifier_env;
@@ -134,6 +141,10 @@ void bpf_diag_record_stack_arg(struct bpf_verifier_state *state, u32 insn_idx,
 			       enum bpf_diag_stack_arg_reason reason,
 			       const struct bpf_reg_state *old_reg,
 			       const struct bpf_reg_state *new_reg);
+void bpf_diag_record_ref_acquire(struct bpf_verifier_state *state, u32 insn_idx,
+				 u32 ref_id);
+void bpf_diag_record_ref_release(struct bpf_verifier_state *state, u32 insn_idx,
+				 u32 ref_id);
 void bpf_diag_print_history(struct bpf_verifier_env *env,
 			    const struct bpf_diag_history_opts *opts);
 
