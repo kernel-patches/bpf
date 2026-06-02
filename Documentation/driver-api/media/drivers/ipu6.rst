@@ -4,7 +4,7 @@
 Intel IPU6 Driver
 ==================
 
-Author: Bingbu Cao <bingbu.cao@intel.com>
+Author: Bingbu Cao
 
 Overview
 =========
