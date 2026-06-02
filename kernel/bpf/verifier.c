@@ -32,6 +32,7 @@
 #include <linux/trace_events.h>
 #include <linux/kallsyms.h>
 
+#include "diagnostics.h"
 #include "disasm.h"
 
 static const struct bpf_verifier_ops * const bpf_verifier_ops[] = {
@@ -1598,6 +1599,7 @@ void bpf_free_verifier_state(struct bpf_verifier_state *state,
 	}
 	kfree(state->refs);
 	bpf_clear_jmp_history(state);
+	bpf_diag_clear_history(state);
 	if (free_self)
 		kfree(state);
 }
@@ -1624,6 +1626,7 @@ int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
 	if (!dst_state->jmp_history)
 		return -ENOMEM;
 	dst_state->jmp_history_cnt = src->jmp_history_cnt;
+	bpf_diag_copy_history(dst_state, src);
 
 	/* if dst has more stack frames then src frame, free them, this is also
 	 * necessary in case of exceptional exits using bpf_throw.
@@ -15933,6 +15936,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		}
 		if (env->log.level & BPF_LOG_LEVEL)
 			print_insn_state(env, this_branch, this_branch->curframe);
+		bpf_diag_record_branch(this_branch, *insn_idx, true);
 		*insn_idx += insn->off;
 		return 0;
 	} else if (pred == 0) {
@@ -15948,6 +15952,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		}
 		if (env->log.level & BPF_LOG_LEVEL)
 			print_insn_state(env, this_branch, this_branch->curframe);
+		bpf_diag_record_branch(this_branch, *insn_idx, false);
 		return 0;
 	}
 
@@ -15980,6 +15985,8 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	other_branch_regs[insn->dst_reg] = env->true_reg1;
 	if (BPF_SRC(insn->code) == BPF_X)
 		other_branch_regs[insn->src_reg] = env->true_reg2;
+	bpf_diag_record_branch(this_branch, *insn_idx, false);
+	bpf_diag_record_branch(other_branch, *insn_idx, true);
 
 	if (BPF_SRC(insn->code) == BPF_X &&
 	    src_reg->type == SCALAR_VALUE && src_reg->id &&
