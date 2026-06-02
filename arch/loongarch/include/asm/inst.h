@@ -783,6 +783,8 @@ DEF_EMIT_REG3_FORMAT(amswapb, amswapb_op)
 DEF_EMIT_REG3_FORMAT(amswaph, amswaph_op)
 DEF_EMIT_REG3_FORMAT(amswapw, amswapw_op)
 DEF_EMIT_REG3_FORMAT(amswapd, amswapd_op)
+DEF_EMIT_REG3_FORMAT(amswapdbw, amswapdbw_op)
+DEF_EMIT_REG3_FORMAT(amswapdbd, amswapdbd_op)
 
 #define DEF_EMIT_REG3SA2_FORMAT(NAME, OP)				\
 static inline void emit_##NAME(union loongarch_instruction *insn,	\

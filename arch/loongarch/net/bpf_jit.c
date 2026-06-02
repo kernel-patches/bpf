@@ -486,7 +486,7 @@ static int emit_atomic_rmw(const struct bpf_insn *insn, struct jit_ctx *ctx)
 			emit_zext_32(ctx, src, true);
 			break;
 		case BPF_DW:
-			emit_insn(ctx, amswapd, src, t1, t3);
+			emit_insn(ctx, amswapdbd, src, t1, t3);
 			break;
 		}
 		break;
@@ -2358,6 +2358,11 @@ bool bpf_jit_supports_arena(void)
 }
 
 bool bpf_jit_supports_fsession(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_ptr_xchg(void)
 {
 	return true;
 }
