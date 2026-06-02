@@ -166,6 +166,7 @@ int *bpf_kfunc_ret_rcu_test_nostruct(int rdonly_buf_size) __ksym;
 #ifndef __KERNEL__
 extern int bpf_kfunc_multi_st_ops_test_1(struct st_ops_args *args, u32 id) __weak __ksym;
 extern int bpf_kfunc_multi_st_ops_test_1_assoc(struct st_ops_args *args) __weak __ksym;
+extern int bpf_kfunc_aux_inject_stale(int marker) __weak __ksym;
 #endif
 
 struct prog_test_member *bpf_kfunc_get_default_trusted_ptr_test(void) __ksym;
