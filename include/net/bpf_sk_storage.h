@@ -28,6 +28,8 @@ struct bpf_sk_storage_diag;
 struct sk_buff;
 struct nlattr;
 
+extern u32 bpf_sk_reserve;
+
 #ifdef CONFIG_BPF_SYSCALL
 int bpf_sk_storage_clone(const struct sock *sk, struct sock *newsk);
 struct bpf_sk_storage_diag *
