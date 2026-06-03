@@ -952,6 +952,22 @@ void bpf_diag_report_limit(struct bpf_verifier_env *env, u32 insn_idx,
 	bpf_diag_report_suggestion(env, "%s", suggestion);
 }
 
+void bpf_diag_report_internal_error(struct bpf_verifier_env *env,
+				    u32 insn_idx, const char *problem,
+				    const char *reason)
+{
+	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_VERIFIER_INTERNAL_ERROR,
+			       problem);
+	bpf_diag_report_reason(env, "The verifier hit an internal error: %s",
+			       reason);
+
+	bpf_diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, '!', "%s", problem);
+
+	bpf_diag_report_suggestion(env,
+				   "Report this problem to bpf@vger.kernel.org with the full verifier log and program.");
+}
+
 void bpf_diag_report_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx,
 				   int regno, const char *reg_name,
 				   const char *type_name,
