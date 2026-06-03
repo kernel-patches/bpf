@@ -2197,6 +2197,44 @@ static inline void sock_lock_init(struct sock *sk)
 			af_family_keys + sk->sk_family);
 }
 
+#ifdef CONFIG_BPF_SYSCALL
+#include <net/bpf_sk_storage.h>
+
+static inline int sk_reserved_size(int obj_size)
+{
+	return obj_size + bpf_sk_reserve;
+}
+
+static inline struct sock *sk_from_reserve(void *p)
+{
+	return (struct sock *)(p + bpf_sk_reserve);
+}
+
+static inline void *sk_to_reserve(struct sock *sk)
+{
+	return (void *)sk - bpf_sk_reserve;
+}
+
+static inline void sk_reserve_init(struct sock *sk)
+{
+	if (unlikely(bpf_sk_reserve))
+		memset(sk_to_reserve(sk), 0, bpf_sk_reserve);
+}
+
+static inline void sk_reserve_clone(struct sock *newsk, const struct sock *oldsk)
+{
+	if (unlikely(bpf_sk_reserve))
+		memcpy(sk_to_reserve(newsk),
+		       (void *)oldsk - bpf_sk_reserve, bpf_sk_reserve);
+}
+#else
+static inline int sk_reserved_size(int obj_size) { return obj_size; }
+static inline struct sock *sk_from_reserve(void *p) { return (struct sock *)p; }
+static inline void *sk_to_reserve(struct sock *sk) { return (void *)sk; }
+static inline void sk_reserve_init(struct sock *sk) {}
+static inline void sk_reserve_clone(struct sock *n, const struct sock *o) {}
+#endif
+
 /*
  * Copy all fields from osk to nsk but nsk->sk_refcnt must not change yet,
  * even temporarily, because of RCU lookups. sk_node should also be left as is.
@@ -2241,10 +2279,14 @@ static struct sock *sk_prot_alloc(struct proto *prot, gfp_t priority,
 		sk = kmem_cache_alloc(slab, priority & ~__GFP_ZERO);
 		if (!sk)
 			return sk;
+		sk = sk_from_reserve(sk);
 		if (want_init_on_alloc(priority))
 			sk_prot_clear_nulls(sk, prot->obj_size);
-	} else
-		sk = kmalloc(prot->obj_size, priority);
+	} else {
+		sk = kmalloc(sk_reserved_size(prot->obj_size), priority);
+		if (sk)
+			sk = sk_from_reserve(sk);
+	}
 
 	if (sk != NULL) {
 		if (security_sk_alloc(sk, family, priority))
@@ -2252,6 +2294,8 @@ static struct sock *sk_prot_alloc(struct proto *prot, gfp_t priority,
 
 		if (!try_module_get(prot->owner))
 			goto out_free_sec;
+
+		sk_reserve_init(sk);
 	}
 
 	return sk;
@@ -2260,9 +2304,9 @@ out_free_sec:
 	security_sk_free(sk);
 out_free:
 	if (slab != NULL)
-		kmem_cache_free(slab, sk);
+		kmem_cache_free(slab, sk_to_reserve(sk));
 	else
-		kfree(sk);
+		kfree(sk_to_reserve(sk));
 	return NULL;
 }
 
@@ -2281,9 +2325,9 @@ static void sk_prot_free(struct proto *prot, struct sock *sk)
 	sk_owner_put(sk);
 
 	if (slab != NULL)
-		kmem_cache_free(slab, sk);
+		kmem_cache_free(slab, sk_to_reserve(sk));
 	else
-		kfree(sk);
+		kfree(sk_to_reserve(sk));
 	module_put(owner);
 }
 
@@ -2485,6 +2529,7 @@ struct sock *sk_clone(const struct sock *sk, const gfp_t priority,
 		goto out;
 
 	sock_copy(newsk, sk);
+	sk_reserve_clone(newsk, sk);
 
 	newsk->sk_prot_creator = prot;
 
@@ -4216,10 +4261,19 @@ int proto_register(struct proto *prot, int alloc_slab)
 			.use_freeptr_offset = !!prot->freeptr_offset,
 		};
 
-		prot->slab = kmem_cache_create(prot->name, prot->obj_size,
-					&args,
-					SLAB_HWCACHE_ALIGN | SLAB_ACCOUNT |
-					prot->slab_flags);
+#ifdef CONFIG_BPF_SYSCALL
+		if (bpf_sk_reserve) {
+			if (prot->usersize)
+				args.useroffset += bpf_sk_reserve;
+			if (prot->freeptr_offset)
+				args.freeptr_offset += bpf_sk_reserve;
+		}
+#endif
+		prot->slab = kmem_cache_create(prot->name,
+					       sk_reserved_size(prot->obj_size),
+					       &args,
+					       SLAB_HWCACHE_ALIGN | SLAB_ACCOUNT |
+					       prot->slab_flags);
 		if (prot->slab == NULL) {
 			pr_crit("%s: Can't create sock SLAB cache!\n",
 				prot->name);
