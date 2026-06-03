@@ -23,6 +23,7 @@
 #include <linux/sort.h>
 #include <linux/key.h>
 #include <linux/namei.h>
+#include <linux/file.h>
 
 #include <net/bpf_sk_storage.h>
 
@@ -3212,6 +3213,9 @@ static u64 bpf_uprobe_multi_cookie(struct bpf_run_ctx *ctx)
 	return run_ctx->uprobe->cookie;
 }
 
+#define UPROBE_MULTI_ALLOWED_FLAGS \
+	(BPF_F_UPROBE_MULTI_RETURN|BPF_F_UPROBE_MULTI_PATH_FD|BPF_F_UPROBE_MULTI_PATH_EMPTY)
+
 int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 {
 	struct bpf_uprobe_multi_link *link = NULL;
@@ -3221,11 +3225,12 @@ int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	struct task_struct *task = NULL;
 	unsigned long __user *uoffsets;
 	u64 __user *ucookies;
+	unsigned path_flags;
 	void __user *upath;
 	u32 flags, cnt, i;
+	int err, path_fd;
 	struct path path;
 	pid_t pid;
-	int err;
 
 	/* no support for 32bit archs yet */
 	if (sizeof(u64) != sizeof(void *))
@@ -3238,19 +3243,18 @@ int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 		return -EINVAL;
 
 	flags = attr->link_create.uprobe_multi.flags;
-	if (flags & ~BPF_F_UPROBE_MULTI_RETURN)
+	if (flags & ~UPROBE_MULTI_ALLOWED_FLAGS)
 		return -EINVAL;
 
 	/*
-	 * path, offsets and cnt are mandatory,
+	 * offsets and cnt are mandatory,
 	 * ref_ctr_offsets and cookies are optional
 	 */
-	upath = u64_to_user_ptr(attr->link_create.uprobe_multi.path);
 	uoffsets = u64_to_user_ptr(attr->link_create.uprobe_multi.offsets);
 	cnt = attr->link_create.uprobe_multi.cnt;
 	pid = attr->link_create.uprobe_multi.pid;
 
-	if (!upath || !uoffsets || !cnt || pid < 0)
+	if (!uoffsets || !cnt || pid < 0)
 		return -EINVAL;
 	if (cnt > MAX_UPROBE_MULTI_CNT)
 		return -E2BIG;
@@ -3258,9 +3262,45 @@ int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	uref_ctr_offsets = u64_to_user_ptr(attr->link_create.uprobe_multi.ref_ctr_offsets);
 	ucookies = u64_to_user_ptr(attr->link_create.uprobe_multi.cookies);
 
-	err = user_path_at(AT_FDCWD, upath, LOOKUP_FOLLOW, &path);
-	if (err)
-		return err;
+	/*
+	 * The executable can be specified in three forms:
+	 *
+	 * - path only: no path flags, path is resolved from AT_FDCWD and
+	 *   path_fd must be zero.
+	 * - fd-relative path: BPF_F_UPROBE_MULTI_PATH_FD is set, path is
+	 *   resolved relative to path_fd.
+	 * - file fd only: BPF_F_UPROBE_MULTI_PATH_FD and
+	 *   BPF_F_UPROBE_MULTI_PATH_EMPTY are set, path must be NULL, and
+	 *   path_fd identifies the executable.
+	 */
+	upath = u64_to_user_ptr(attr->link_create.uprobe_multi.path);
+	path_fd = attr->link_create.uprobe_multi.path_fd;
+	path_flags = LOOKUP_FOLLOW;
+
+	if (flags & BPF_F_UPROBE_MULTI_PATH_EMPTY) {
+		if (!(flags & BPF_F_UPROBE_MULTI_PATH_FD) || upath)
+			return -EINVAL;
+
+		CLASS(fd, f)(path_fd);
+		if (fd_empty(f))
+			return -EBADF;
+
+		path = fd_file(f)->f_path;
+		path_get(&path);
+	} else {
+		if (flags & BPF_F_UPROBE_MULTI_PATH_FD) {
+			if (!upath)
+				return -EINVAL;
+		} else {
+			if (!upath || path_fd)
+				return -EINVAL;
+			path_fd = AT_FDCWD;
+		}
+
+		err = user_path_at(path_fd, upath, path_flags, &path);
+		if (err)
+			return err;
+	}
 
 	if (!d_is_reg(path.dentry)) {
 		err = -EBADF;
