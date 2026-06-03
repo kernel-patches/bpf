@@ -3224,7 +3224,6 @@ int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	void __user *upath;
 	u32 flags, cnt, i;
 	struct path path;
-	char *name;
 	pid_t pid;
 	int err;
 
@@ -3259,14 +3258,7 @@ int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 	uref_ctr_offsets = u64_to_user_ptr(attr->link_create.uprobe_multi.ref_ctr_offsets);
 	ucookies = u64_to_user_ptr(attr->link_create.uprobe_multi.cookies);
 
-	name = strndup_user(upath, PATH_MAX);
-	if (IS_ERR(name)) {
-		err = PTR_ERR(name);
-		return err;
-	}
-
-	err = kern_path(name, LOOKUP_FOLLOW, &path);
-	kfree(name);
+	err = user_path_at(AT_FDCWD, upath, LOOKUP_FOLLOW, &path);
 	if (err)
 		return err;
 
