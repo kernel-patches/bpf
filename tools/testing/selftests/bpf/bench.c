@@ -577,6 +577,7 @@ extern const struct bench bench_lpm_trie_insert;
 extern const struct bench bench_lpm_trie_update;
 extern const struct bench bench_lpm_trie_delete;
 extern const struct bench bench_lpm_trie_free;
+extern const struct bench bench_sk_storage_get;
 extern const struct bench bench_bpf_nop;
 extern const struct bench bench_xdp_lb;
 
@@ -657,6 +658,7 @@ static const struct bench *benchs[] = {
 	&bench_lpm_trie_update,
 	&bench_lpm_trie_delete,
 	&bench_lpm_trie_free,
+	&bench_sk_storage_get,
 	&bench_bpf_nop,
 	&bench_xdp_lb,
 };
