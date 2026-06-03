@@ -14633,27 +14633,33 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	case BPF_LSH:
 		if (alu32) {
 			src_reg.r32 = normalize_shift_k_cnum32(src_reg.r32, 32);
+			src_reg.var_off = tnum_and(src_reg.var_off, tnum_const(0x1F));
 			scalar32_min_max_lsh(dst_reg, &src_reg);
 		} else {
 			src_reg.r64 = normalize_shift_k_cnum64(src_reg.r64, 64);
+			src_reg.var_off = tnum_and(src_reg.var_off, tnum_const(0x3F));
 			scalar_min_max_lsh(dst_reg, &src_reg);
 		}
 		break;
 	case BPF_RSH:
 		if (alu32) {
 			src_reg.r32 = normalize_shift_k_cnum32(src_reg.r32, 32);
+			src_reg.var_off = tnum_and(src_reg.var_off, tnum_const(0x1F));
 			scalar32_min_max_rsh(dst_reg, &src_reg);
 		} else {
 			src_reg.r64 = normalize_shift_k_cnum64(src_reg.r64, 64);
+			src_reg.var_off = tnum_and(src_reg.var_off, tnum_const(0x3F));
 			scalar_min_max_rsh(dst_reg, &src_reg);
 		}
 		break;
 	case BPF_ARSH:
 		if (alu32) {
 			src_reg.r32 = normalize_shift_k_cnum32(src_reg.r32, 32);
+			src_reg.var_off = tnum_and(src_reg.var_off, tnum_const(0x1F));
 			scalar32_min_max_arsh(dst_reg, &src_reg);
 		} else {
 			src_reg.r64 = normalize_shift_k_cnum64(src_reg.r64, 64);
+			src_reg.var_off = tnum_and(src_reg.var_off, tnum_const(0x3F));
 			scalar_min_max_arsh(dst_reg, &src_reg);
 		}
 		break;
