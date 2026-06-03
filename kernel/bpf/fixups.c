@@ -3,12 +3,16 @@
 #include <linux/bpf.h>
 #include <linux/btf.h>
 #include <linux/bpf_verifier.h>
+#include <linux/bpf_local_storage.h>
 #include <linux/filter.h>
 #include <linux/vmalloc.h>
 #include <linux/bsearch.h>
 #include <linux/sort.h>
 #include <linux/perf_event.h>
 #include <net/xdp.h>
+#include <net/tcp_states.h>
+#include <net/bpf_sk_storage.h>
+#include <net/sock.h>
 #include "disasm.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
@@ -1976,6 +1980,113 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			insn = new_prog->insnsi + i + delta;
 			goto patch_call_imm;
 		}
+
+		/*
+		 * Inline bpf_sk_storage_get for reserved maps.
+		 *
+		 * flags==0 (lookup, replaces call, 9 insns):
+		 *  0: r0 = *(u8)(r2 + skc_state)
+		 *  1: if r0 == TCP_NEW_SYN_RECV goto 8 (null)
+		 *  2: if r0 == TCP_TIME_WAIT goto 8 (null)
+		 *  3: r0 = *(u32)(r2 + owner_off)
+		 *  4: if r0 != map_id goto 8 (null)
+		 *  5: r0 = r2
+		 *  6: r0 -= reserve_off
+		 *  7: goto 9 (done)
+		 *  8: r0 = 0
+		 *
+		 * flags==CREATE (prepend + keep call, 11 insns):
+		 *  0-2: same fullsock check
+		 *  3: load owner
+		 *  4: if r0 != map_id goto 10 (call)
+		 *  5: r0 = r2
+		 *  6: r0 -= reserve_off
+		 *  7: goto 11 (done, skip null+call)
+		 *  8: r0 = 0 (null for minisock)
+		 *  9: goto 11 (done, skip call)
+		 * 10: original CALL
+		 */
+		if (prog->jit_requested && BITS_PER_LONG == 64 &&
+		    insn->imm == BPF_FUNC_sk_storage_get &&
+		    prog->type != BPF_PROG_TYPE_TRACING &&
+		    prog->type != BPF_PROG_TYPE_LSM) {
+			struct bpf_local_storage_map *smap;
+			struct bpf_insn *prev;
+			s32 owner_off;
+
+			aux = &env->insn_aux_data[i + delta];
+			if (bpf_map_ptr_poisoned(aux))
+				goto sk_stg_no_inline;
+
+			map_ptr = aux->map_ptr_state.map_ptr;
+			if (!map_ptr || map_ptr->map_type != BPF_MAP_TYPE_SK_STORAGE)
+				goto sk_stg_no_inline;
+
+			smap = container_of(map_ptr, struct bpf_local_storage_map, map);
+			if (!smap->reserve_off)
+				goto sk_stg_no_inline;
+
+			if (i + delta < 1)
+				goto sk_stg_no_inline;
+			prev = &prog->insnsi[i + delta - 1];
+			if (prev->code != (BPF_ALU64 | BPF_MOV | BPF_K) ||
+			    prev->dst_reg != BPF_REG_4)
+				goto sk_stg_no_inline;
+
+			owner_off = -(s32)(smap->reserve_off + sizeof(u32));
+			cnt = 0;
+
+#define SK_STATE	offsetof(struct sock_common, skc_state)
+#define R0		BPF_REG_0
+#define R2		BPF_REG_2
+
+			insn_buf[cnt++] = BPF_LDX_MEM(BPF_B, R0, R2, SK_STATE);
+
+			if (prev->imm == 0) {
+				/* flags==0: fully replace call (9 insns) */
+				insn_buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, R0, TCP_NEW_SYN_RECV, 6);
+				insn_buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, R0, TCP_TIME_WAIT, 5);
+				insn_buf[cnt++] = BPF_LDX_MEM(BPF_W, R0, R2, owner_off);
+				insn_buf[cnt++] = BPF_JMP_IMM(BPF_JNE, R0, map_ptr->id, 3);
+				insn_buf[cnt++] = BPF_MOV64_REG(R0, R2);
+				insn_buf[cnt++] = BPF_ALU64_IMM(BPF_SUB, R0, smap->reserve_off);
+				insn_buf[cnt++] = BPF_JMP_A(1);
+				insn_buf[cnt++] = BPF_MOV64_IMM(R0, 0);
+
+				new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+				if (!new_prog)
+					return -ENOMEM;
+				delta	 += cnt - 1;
+				env->prog = prog = new_prog;
+				insn	  = new_prog->insnsi + i + delta;
+				goto next_insn;
+			}
+
+			/* flags==CREATE: prepend fast-path, keep call (11 insns) */
+			insn_buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, R0, TCP_NEW_SYN_RECV, 6);
+			insn_buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, R0, TCP_TIME_WAIT, 5);
+			insn_buf[cnt++] = BPF_LDX_MEM(BPF_W, R0, R2, owner_off);
+			insn_buf[cnt++] = BPF_JMP_IMM(BPF_JNE, R0, map_ptr->id, 5);
+			insn_buf[cnt++] = BPF_MOV64_REG(R0, R2);
+			insn_buf[cnt++] = BPF_ALU64_IMM(BPF_SUB, R0, smap->reserve_off);
+			insn_buf[cnt++] = BPF_JMP_A(3);
+			insn_buf[cnt++] = BPF_MOV64_IMM(R0, 0);
+			insn_buf[cnt++] = BPF_JMP_A(1);
+			insn_buf[cnt++] = *insn;
+
+#undef SK_STATE
+#undef R0
+#undef R2
+
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+			delta	 += cnt - 1;
+			env->prog = prog = new_prog;
+			insn	  = new_prog->insnsi + i + delta;
+			goto patch_call_imm;
+		}
+sk_stg_no_inline:
 
 		/* BPF_EMIT_CALL() assumptions in some of the map_gen_lookup
 		 * and other inlining handlers are currently limited to 64 bit

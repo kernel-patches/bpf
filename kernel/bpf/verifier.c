@@ -9811,7 +9811,9 @@ record_func_map(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	    func_id != BPF_FUNC_map_peek_elem &&
 	    func_id != BPF_FUNC_for_each_map_elem &&
 	    func_id != BPF_FUNC_redirect_map &&
-	    func_id != BPF_FUNC_map_lookup_percpu_elem)
+	    func_id != BPF_FUNC_map_lookup_percpu_elem &&
+	    func_id != BPF_FUNC_sk_storage_get &&
+	    func_id != BPF_FUNC_sk_storage_delete)
 		return 0;
 
 	if (map == NULL) {
