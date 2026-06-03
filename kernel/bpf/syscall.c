@@ -1648,6 +1648,12 @@ static int map_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_at
 	if (err)
 		goto free_map_sec;
 
+	if (map->ops->map_settle) {
+		err = map->ops->map_settle(map);
+		if (err)
+			goto free_map_sec;
+	}
+
 	err = bpf_map_alloc_id(map);
 	if (err)
 		goto free_map_sec;

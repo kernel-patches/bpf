@@ -179,6 +179,7 @@ struct bpf_map_ops {
 				     void *callback_ctx, u64 flags);
 
 	u64 (*map_mem_usage)(const struct bpf_map *map);
+	int (*map_settle)(struct bpf_map *map);
 
 	/* BTF id of struct allocated by map_alloc */
 	int *map_btf_id;

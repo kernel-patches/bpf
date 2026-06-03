@@ -699,6 +699,53 @@ static void bpf_local_storage_cache_idx_free(struct bpf_local_storage_cache *cac
 	spin_unlock(&cache->idx_lock);
 }
 
+int bpf_ls_reserve_alloc(struct bpf_local_storage_map *smap, struct bpf_ls_reserve *reserve)
+{
+	u32 needed = round_up(sizeof(u32) + smap->map.value_size, 8);
+	int i, err = -ENOSPC;
+
+	spin_lock(&reserve->lock);
+
+	for (i = 0; i < reserve->nr_slots; i++) {
+		struct bpf_ls_reserve_slot *slot = &reserve->slots[i];
+
+		if (slot->active || slot->size < needed)
+			continue;
+
+		slot->active = true;
+		smap->reserve_slot = i;
+		smap->reserve_off = reserve->limit - slot->off - sizeof(u32);
+		err = 0;
+		goto unlock;
+	}
+
+	if (reserve->nr_slots >= MAX_BPF_LS_RESERVE_SLOTS ||
+	    reserve->bump + needed > reserve->limit)
+		goto unlock;
+
+	i = reserve->nr_slots++;
+	reserve->slots[i].off = reserve->bump;
+	reserve->slots[i].size = needed;
+	reserve->slots[i].active = true;
+
+	smap->reserve_slot = i;
+	smap->reserve_off = reserve->limit - reserve->bump - sizeof(u32);
+	reserve->bump += needed;
+	err = 0;
+
+unlock:
+	spin_unlock(&reserve->lock);
+	return err;
+}
+
+void bpf_ls_reserve_free(struct bpf_local_storage_map *smap, struct bpf_ls_reserve *reserve)
+{
+	spin_lock(&reserve->lock);
+	if (smap->reserve_slot < reserve->nr_slots)
+		reserve->slots[smap->reserve_slot].active = false;
+	spin_unlock(&reserve->lock);
+}
+
 int bpf_local_storage_map_alloc_check(union bpf_attr *attr)
 {
 	if (attr->map_flags & ~BPF_LOCAL_STORAGE_CREATE_FLAG_MASK ||
