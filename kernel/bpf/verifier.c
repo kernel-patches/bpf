@@ -14632,51 +14632,27 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		break;
 	case BPF_LSH:
 		if (alu32) {
-			// struct bpf_reg_state src = src_reg;
-			// src.r32 = normalize_shift_k_cnum32(src.r32, 32);
-			// src.r64 = normalize_shift_k_cnum64(src.r64, 32);
 			src_reg.r32 = normalize_shift_k_cnum32(src_reg.r32, 32);
-			// src_reg.r64 = normalize_shift_k_cnum64(src_reg.r64, 32);
 			scalar32_min_max_lsh(dst_reg, &src_reg);
 		} else {
-			// struct bpf_reg_state src = src_reg;
-			// src.r32 = normalize_shift_k_cnum32(src.r32, 64);
-			// src.r64 = normalize_shift_k_cnum64(src.r64, 64);
-			// src_reg.r32 = normalize_shift_k_cnum32(src_reg.r32, 64);
 			src_reg.r64 = normalize_shift_k_cnum64(src_reg.r64, 64);
 			scalar_min_max_lsh(dst_reg, &src_reg);
 		}
 		break;
 	case BPF_RSH:
 		if (alu32) {
-			// struct bpf_reg_state src = src_reg;
-			// src.r32 = normalize_shift_k_cnum32(src.r32, 32);
-			// src.r64 = normalize_shift_k_cnum64(src.r64, 32);
 			src_reg.r32 = normalize_shift_k_cnum32(src_reg.r32, 32);
-			// src_reg.r64 = normalize_shift_k_cnum64(src_reg.r64, 32);
 			scalar32_min_max_rsh(dst_reg, &src_reg);
 		} else {
-			// struct bpf_reg_state src = src_reg;
-			// src.r32 = normalize_shift_k_cnum32(src.r32, 64);
-			// src.r64 = normalize_shift_k_cnum64(src.r64, 64);
-			// src_reg.r32 = normalize_shift_k_cnum32(src_reg.r32, 64);
 			src_reg.r64 = normalize_shift_k_cnum64(src_reg.r64, 64);
 			scalar_min_max_rsh(dst_reg, &src_reg);
 		}
 		break;
 	case BPF_ARSH:
 		if (alu32) {
-			// struct bpf_reg_state src = src_reg;
-			// src.r32 = normalize_shift_k_cnum32(src.r32, 32);
-			// src.r64 = normalize_shift_k_cnum64(src.r64, 32);
 			src_reg.r32 = normalize_shift_k_cnum32(src_reg.r32, 32);
-			// src_reg.r64 = normalize_shift_k_cnum64(src_reg.r64, 32);
 			scalar32_min_max_arsh(dst_reg, &src_reg);
 		} else {
-			// struct bpf_reg_state src = src_reg;
-			// src.r32 = normalize_shift_k_cnum32(src.r32, 64);
-			// src.r64 = normalize_shift_k_cnum64(src.r64, 64);
-			// src_reg.r32 = normalize_shift_k_cnum32(src_reg.r32, 64);
 			src_reg.r64 = normalize_shift_k_cnum64(src_reg.r64, 64);
 			scalar_min_max_arsh(dst_reg, &src_reg);
 		}
