@@ -113,6 +113,13 @@ enum bpf_diag_stack_arg_reason {
 	BPF_DIAG_STACK_ARG_PKT_DATA_CHANGE,
 };
 
+enum bpf_diag_invalid_deref_kind {
+	BPF_DIAG_DEREF_SCALAR,
+	BPF_DIAG_DEREF_NULLABLE_PTR,
+	BPF_DIAG_DEREF_MODIFIED_PTR,
+	BPF_DIAG_DEREF_INVALID_PTR,
+};
+
 struct bpf_diag_history_opts {
 	enum bpf_diag_history_scope scope;
 	u32 frameno;
@@ -137,6 +144,21 @@ void bpf_diag_report_suggestion(struct bpf_verifier_env *env, const char *fmt, .
 void bpf_diag_report_source(struct bpf_verifier_env *env, u32 insn_idx,
 			    char marker, const char *fmt, ...)
 	__printf(4, 5);
+void bpf_diag_report_register_type(struct bpf_verifier_env *env,
+				   u32 insn_idx, int regno,
+				   const char *problem, const char *reason,
+				   const char *suggestion);
+void bpf_diag_report_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx,
+				   int regno, const char *reg_name,
+				   const char *type_name,
+				   enum bpf_diag_invalid_deref_kind kind,
+				   s64 offset);
+void bpf_diag_report_unreadable_reg(struct bpf_verifier_env *env,
+				    u32 insn_idx, int regno);
+void bpf_diag_report_stack_arg_uninit(struct bpf_verifier_env *env,
+				      u32 insn_idx, int nargs,
+				      int stack_arg_slot,
+				      const char *callee_name);
 
 void bpf_diag_clear_history(struct bpf_verifier_state *state);
 void bpf_diag_copy_history(struct bpf_verifier_state *dst,
