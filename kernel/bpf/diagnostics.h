@@ -175,6 +175,12 @@ void bpf_diag_report_mem_bounds(struct bpf_verifier_env *env, u32 insn_idx,
 				enum bpf_diag_mem_bounds_kind kind,
 				int off, int size, u32 mem_size,
 				const struct bpf_reg_state *reg);
+void bpf_diag_report_resource_state(struct bpf_verifier_env *env,
+				    u32 insn_idx, const char *problem,
+				    const char *reason,
+				    const char *suggestion);
+void bpf_diag_report_ref_leak(struct bpf_verifier_env *env, u32 ref_id,
+			      u32 alloc_insn, u32 fail_insn);
 
 void bpf_diag_clear_history(struct bpf_verifier_state *state);
 void bpf_diag_copy_history(struct bpf_verifier_state *dst,
