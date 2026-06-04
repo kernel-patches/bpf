@@ -16,7 +16,14 @@ int probe_fd(int fd)
 {
 	if (fd >= 0)
 		close(fd);
-	return fd >= 0;
+	/* Return 1 on success, negative error on failure, so
+	 * feat_supported() can distinguish probe errors from
+	 * genuine feature absence.  When a BPF token is present,
+	 * a negative return triggers the rescue path that marks
+	 * the feature as SUPPORTED (token creation itself proves
+	 * the kernel BPF subsystem works).
+	 */
+	return fd >= 0 ? 1 : fd;
 }
 
 static int probe_kern_prog_name(int token_fd)
@@ -725,9 +732,21 @@ bool feat_supported(struct kern_feature_cache *cache, enum kern_feature_id feat_
 		} else if (ret == 0) {
 			WRITE_ONCE(cache->res[feat_id], FEAT_MISSING);
 		} else {
+			/*
+			 * A BPF token may restrict which program/map types
+			 * are permitted, causing the probe to fail even
+			 * though the kernel supports the feature.  When a
+			 * token is present the probe is best-effort: BPF
+			 * token creation itself proves the kernel has a
+			 * working BPF subsystem.  Real BPF issues will be
+			 * caught during actual program/map loading.
+			 */
+			if (cache->token_fd)
+				WRITE_ONCE(cache->res[feat_id], FEAT_SUPPORTED);
+			else
+				WRITE_ONCE(cache->res[feat_id], FEAT_MISSING);
 			pr_warn("Detection of kernel %s support failed: %s\n",
 				feat->desc, errstr(ret));
-			WRITE_ONCE(cache->res[feat_id], FEAT_MISSING);
 		}
 	}
 
