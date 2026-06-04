@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 #include <pthread.h>
+#include <fcntl.h>
 #include <test_progs.h>
 #include "uprobe_multi.skel.h"
 #include "uprobe_multi_bench.skel.h"
@@ -52,6 +53,12 @@ struct child {
 	int tid;
 	pthread_t thread;
 	char stack[65536];
+};
+
+enum uprobe_multi_path_kind {
+	UPROBE_MULTI_PATH_ABS,
+	UPROBE_MULTI_PATH_FD_DIR,
+	UPROBE_MULTI_PATH_FD_FILE,
 };
 
 static void release_child(struct child *child)
@@ -660,59 +667,87 @@ static void test_attach_uprobe_fails(void)
 	uprobe_multi__destroy(skel);
 }
 
-static void __test_link_api(struct child *child)
+static void __test_link_api(struct child *child, enum uprobe_multi_path_kind path_kind)
 {
 	int prog_fd, link1_fd = -1, link2_fd = -1, link3_fd = -1, link4_fd = -1;
 	LIBBPF_OPTS(bpf_link_create_opts, opts);
-	const char *path = "/proc/self/exe";
+	const char *resolve_path = "/proc/self/exe";
 	struct uprobe_multi *skel = NULL;
 	unsigned long *offsets = NULL;
+	bool child_released = false;
+	__u32 path_flags = 0;
+	const char *path = NULL;
 	const char *syms[3] = {
 		"uprobe_multi_func_1",
 		"uprobe_multi_func_2",
 		"uprobe_multi_func_3",
 	};
 	int link_extra_fd = -1;
+	int path_fd = -1;
 	int err;
 
-	err = elf_resolve_syms_offsets(path, 3, syms, (unsigned long **) &offsets, STT_FUNC);
+	err = elf_resolve_syms_offsets(resolve_path, 3, syms, &offsets, STT_FUNC);
 	if (!ASSERT_OK(err, "elf_resolve_syms_offsets"))
 		return;
+
+	switch (path_kind) {
+	case UPROBE_MULTI_PATH_ABS:
+		path = resolve_path;
+		break;
+	case UPROBE_MULTI_PATH_FD_DIR:
+		path_fd = open("/proc/self", O_PATH | O_DIRECTORY);
+		if (!ASSERT_GE(path_fd, 0, "path_fd_dir"))
+			goto cleanup;
+		path = "exe";
+		path_flags = BPF_F_UPROBE_MULTI_PATH_FD;
+		break;
+	case UPROBE_MULTI_PATH_FD_FILE:
+		path_fd = open(resolve_path, O_PATH);
+		if (!ASSERT_GE(path_fd, 0, "path_fd_file"))
+			goto cleanup;
+		path = NULL;
+		path_flags = BPF_F_UPROBE_MULTI_PATH_FD | BPF_F_UPROBE_MULTI_PATH_EMPTY;
+		break;
+	default:
+		ASSERT_FAIL("path_kind");
+		goto cleanup;
+	}
 
 	opts.uprobe_multi.path = path;
 	opts.uprobe_multi.offsets = offsets;
 	opts.uprobe_multi.cnt = ARRAY_SIZE(syms);
 	opts.uprobe_multi.pid = child ? child->pid : 0;
+	opts.uprobe_multi.path_fd = path_fd >= 0 ? path_fd : 0;
 
 	skel = uprobe_multi__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "uprobe_multi__open_and_load"))
 		goto cleanup;
 
-	opts.kprobe_multi.flags = 0;
+	opts.uprobe_multi.flags = path_flags;
 	prog_fd = bpf_program__fd(skel->progs.uprobe);
 	link1_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
 	if (!ASSERT_GE(link1_fd, 0, "link1_fd"))
 		goto cleanup;
 
-	opts.kprobe_multi.flags = BPF_F_UPROBE_MULTI_RETURN;
+	opts.uprobe_multi.flags = path_flags | BPF_F_UPROBE_MULTI_RETURN;
 	prog_fd = bpf_program__fd(skel->progs.uretprobe);
 	link2_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
 	if (!ASSERT_GE(link2_fd, 0, "link2_fd"))
 		goto cleanup;
 
-	opts.kprobe_multi.flags = 0;
+	opts.uprobe_multi.flags = path_flags;
 	prog_fd = bpf_program__fd(skel->progs.uprobe_sleep);
 	link3_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
 	if (!ASSERT_GE(link3_fd, 0, "link3_fd"))
 		goto cleanup;
 
-	opts.kprobe_multi.flags = BPF_F_UPROBE_MULTI_RETURN;
+	opts.uprobe_multi.flags = path_flags | BPF_F_UPROBE_MULTI_RETURN;
 	prog_fd = bpf_program__fd(skel->progs.uretprobe_sleep);
 	link4_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
 	if (!ASSERT_GE(link4_fd, 0, "link4_fd"))
 		goto cleanup;
 
-	opts.kprobe_multi.flags = 0;
+	opts.uprobe_multi.flags = path_flags;
 	opts.uprobe_multi.pid = 0;
 	prog_fd = bpf_program__fd(skel->progs.uprobe_extra);
 	link_extra_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_UPROBE_MULTI, &opts);
@@ -720,6 +755,7 @@ static void __test_link_api(struct child *child)
 		goto cleanup;
 
 	uprobe_multi_test_run(skel, child);
+	child_released = true;
 
 cleanup:
 	if (link1_fd >= 0)
@@ -732,6 +768,10 @@ cleanup:
 		close(link4_fd);
 	if (link_extra_fd >= 0)
 		close(link_extra_fd);
+	if (path_fd >= 0)
+		close(path_fd);
+	if (child && !child_released)
+		release_child(child);
 
 	uprobe_multi__destroy(skel);
 	free(offsets);
@@ -740,21 +780,29 @@ cleanup:
 static void test_link_api(void)
 {
 	static struct child child;
+	int i;
 
 	/* no pid filter */
-	__test_link_api(NULL);
+	for (i = UPROBE_MULTI_PATH_ABS; i <= UPROBE_MULTI_PATH_FD_FILE; i++)
+		__test_link_api(NULL, i);
 
 	/* pid filter */
-	if (!ASSERT_OK(spawn_child(&child), "spawn_child"))
-		return;
+	for (i = UPROBE_MULTI_PATH_ABS; i <= UPROBE_MULTI_PATH_FD_FILE; i++) {
+		memset(&child, 0, sizeof(child));
+		if (!ASSERT_OK(spawn_child(&child), "spawn_child"))
+			return;
 
-	__test_link_api(&child);
+		__test_link_api(&child, i);
+	}
 
 	/* pid filter (thread) */
-	if (!ASSERT_OK(spawn_thread(&child), "spawn_thread"))
-		return;
+	for (i = UPROBE_MULTI_PATH_ABS; i <= UPROBE_MULTI_PATH_FD_FILE; i++) {
+		memset(&child, 0, sizeof(child));
+		if (!ASSERT_OK(spawn_thread(&child), "spawn_thread"))
+			return;
 
-	__test_link_api(&child);
+		__test_link_api(&child, i);
+	}
 }
 
 static struct bpf_program *
