@@ -1060,7 +1060,8 @@ static int is_iter_reg_valid_init(struct bpf_verifier_env *env, struct bpf_reg_s
 }
 
 static int acquire_irq_state(struct bpf_verifier_env *env, int insn_idx);
-static int release_irq_state(struct bpf_verifier_state *state, int id);
+static int release_irq_state(struct bpf_verifier_state *state, int id,
+			     int insn_idx);
 
 static int mark_stack_slot_irq_flag(struct bpf_verifier_env *env,
 				     struct bpf_kfunc_call_arg_meta *meta,
@@ -1119,7 +1120,7 @@ static int unmark_stack_slot_irq_flag(struct bpf_verifier_env *env, struct bpf_r
 		return -EINVAL;
 	}
 
-	err = release_irq_state(env->cur_state, st->id);
+	err = release_irq_state(env->cur_state, st->id, env->insn_idx);
 	WARN_ON_ONCE(err && err != -EACCES);
 	if (err) {
 		int insn_idx = 0;
@@ -1454,6 +1455,8 @@ static int acquire_lock_state(struct bpf_verifier_env *env, int insn_idx, enum r
 	state->active_locks++;
 	state->active_lock_id = id;
 	state->active_lock_ptr = ptr;
+	bpf_diag_record_context(state, insn_idx, BPF_DIAG_CONTEXT_LOCK, true,
+				state->active_locks);
 	return 0;
 }
 
@@ -1469,6 +1472,8 @@ static int acquire_irq_state(struct bpf_verifier_env *env, int insn_idx)
 	s->id = ++env->id_gen;
 
 	state->active_irq_id = s->id;
+	bpf_diag_record_context(state, insn_idx, BPF_DIAG_CONTEXT_IRQ, true,
+				1);
 	return s->id;
 }
 
@@ -1510,7 +1515,8 @@ static bool reg_is_referenced(struct bpf_verifier_env *env, const struct bpf_reg
 	return find_reference_state(env->cur_state, reg->id);
 }
 
-static int release_lock_state(struct bpf_verifier_state *state, int type, int id, void *ptr)
+static int release_lock_state(struct bpf_verifier_state *state, int type,
+			      int id, void *ptr, int insn_idx)
 {
 	void *prev_ptr = NULL;
 	u32 prev_id = 0;
@@ -1524,6 +1530,9 @@ static int release_lock_state(struct bpf_verifier_state *state, int type, int id
 			/* Reassign active lock (id, ptr). */
 			state->active_lock_id = prev_id;
 			state->active_lock_ptr = prev_ptr;
+			bpf_diag_record_context(state, insn_idx,
+						BPF_DIAG_CONTEXT_LOCK, false,
+						state->active_locks);
 			return 0;
 		}
 		if (state->refs[i].type & REF_TYPE_LOCK_MASK) {
@@ -1534,7 +1543,8 @@ static int release_lock_state(struct bpf_verifier_state *state, int type, int id
 	return -EINVAL;
 }
 
-static int release_irq_state(struct bpf_verifier_state *state, int id)
+static int release_irq_state(struct bpf_verifier_state *state, int id,
+			     int insn_idx)
 {
 	u32 prev_id = 0;
 	int i;
@@ -1548,6 +1558,9 @@ static int release_irq_state(struct bpf_verifier_state *state, int id)
 		if (state->refs[i].id == id) {
 			release_reference_state(state, i);
 			state->active_irq_id = prev_id;
+			bpf_diag_record_context(state, insn_idx,
+						BPF_DIAG_CONTEXT_IRQ, false,
+						state->active_irq_id ? 1 : 0);
 			return 0;
 		} else {
 			prev_id = state->refs[i].id;
@@ -7084,7 +7097,8 @@ static int process_spin_lock(struct bpf_verifier_env *env, struct bpf_reg_state 
 			verbose(env, "%s_unlock cannot be out of order\n", lock_str);
 			return -EINVAL;
 		}
-		if (release_lock_state(cur, type, reg->id, ptr)) {
+		if (release_lock_state(cur, type, reg->id, ptr,
+				       env->insn_idx)) {
 			verbose(env, "%s_unlock of different lock\n", lock_str);
 			return -EINVAL;
 		}
@@ -13029,21 +13043,34 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 	if (rcu_lock) {
 		env->cur_state->active_rcu_locks++;
+		bpf_diag_record_context(env->cur_state, insn_idx,
+					BPF_DIAG_CONTEXT_RCU, true,
+					env->cur_state->active_rcu_locks);
 	} else if (rcu_unlock) {
 		if (env->cur_state->active_rcu_locks == 0) {
 			verbose(env, "unmatched rcu read unlock (kernel function %s)\n", func_name);
 			return -EINVAL;
 		}
-		if (--env->cur_state->active_rcu_locks == 0)
+		env->cur_state->active_rcu_locks--;
+		bpf_diag_record_context(env->cur_state, insn_idx,
+					BPF_DIAG_CONTEXT_RCU, false,
+					env->cur_state->active_rcu_locks);
+		if (env->cur_state->active_rcu_locks == 0)
 			invalidate_rcu_protected_refs(env);
 	} else if (preempt_disable) {
 		env->cur_state->active_preempt_locks++;
+		bpf_diag_record_context(env->cur_state, insn_idx,
+					BPF_DIAG_CONTEXT_PREEMPT, true,
+					env->cur_state->active_preempt_locks);
 	} else if (preempt_enable) {
 		if (env->cur_state->active_preempt_locks == 0) {
 			verbose(env, "unmatched attempt to enable preemption (kernel function %s)\n", func_name);
 			return -EINVAL;
 		}
 		env->cur_state->active_preempt_locks--;
+		bpf_diag_record_context(env->cur_state, insn_idx,
+					BPF_DIAG_CONTEXT_PREEMPT, false,
+					env->cur_state->active_preempt_locks);
 	}
 
 	if (sleepable && !in_sleepable_context(env)) {
