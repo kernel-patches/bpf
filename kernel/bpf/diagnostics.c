@@ -751,6 +751,159 @@ void bpf_diag_report_call_type(struct bpf_verifier_env *env, u32 insn_idx,
 	bpf_diag_report_suggestion(env, "%s", suggestion);
 }
 
+static const char *bpf_diag_context_constraint(enum bpf_diag_context_kind kind)
+{
+	switch (kind) {
+	case BPF_DIAG_CONTEXT_RCU:
+		return "RCU read-side critical sections cannot call operations that may sleep";
+	case BPF_DIAG_CONTEXT_PREEMPT:
+		return "preemption-disabled code cannot call operations that may sleep";
+	case BPF_DIAG_CONTEXT_IRQ:
+		return "IRQ-disabled code cannot call operations that may sleep";
+	case BPF_DIAG_CONTEXT_LOCK:
+		return "code holding a BPF spin lock cannot call operations that may sleep";
+	case BPF_DIAG_CONTEXT_NONE:
+	default:
+		return NULL;
+	}
+}
+
+static void bpf_diag_format_active_context(char *buf, size_t size, u32 depth,
+					   const char *context)
+{
+	if (depth == 1)
+		scnprintf(buf, size, "an active %s (depth 1)", context);
+	else
+		scnprintf(buf, size, "%u active %ss (depth %u)", depth,
+			  context, depth);
+}
+
+static u32 bpf_diag_context_depth(struct bpf_verifier_env *env,
+				  enum bpf_diag_context_kind kind)
+{
+	if (!env->cur_state)
+		return 0;
+
+	switch (kind) {
+	case BPF_DIAG_CONTEXT_RCU:
+		return env->cur_state->active_rcu_locks;
+	case BPF_DIAG_CONTEXT_PREEMPT:
+		return env->cur_state->active_preempt_locks;
+	case BPF_DIAG_CONTEXT_IRQ:
+		return env->cur_state->active_irq_id ? 1 : 0;
+	case BPF_DIAG_CONTEXT_LOCK:
+		return env->cur_state->active_locks;
+	case BPF_DIAG_CONTEXT_NONE:
+	default:
+		return 0;
+	}
+}
+
+void bpf_diag_report_execution_context(struct bpf_verifier_env *env,
+				       u32 insn_idx, const char *operation,
+				       enum bpf_diag_context_kind ctx_kind,
+				       const char *context,
+				       const char *suggestion)
+{
+	struct bpf_diag_history_opts opts = {
+		.scope = BPF_DIAG_HISTORY_SCOPE_CONTEXT,
+		.ctx_kind = ctx_kind,
+	};
+	u32 depth = bpf_diag_context_depth(env, ctx_kind);
+	char depth_buf[80];
+
+	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_EXECUTION_CONTEXT_SAFETY,
+			       "operation is not allowed in this context");
+	if (bpf_diag_context_constraint(ctx_kind)) {
+		if (depth) {
+			bpf_diag_format_active_context(depth_buf,
+						       sizeof(depth_buf),
+						       depth, context);
+			bpf_diag_report_reason(env,
+					       "The operation %s cannot be used in %s because %s. This path is still inside %s.",
+					       operation, context,
+					       bpf_diag_context_constraint(ctx_kind),
+					       depth_buf);
+		} else {
+			bpf_diag_report_reason(env,
+					       "The operation %s cannot be used in %s because %s.",
+					       operation, context,
+					       bpf_diag_context_constraint(ctx_kind));
+		}
+	} else {
+		bpf_diag_report_reason(env,
+				       "The operation %s cannot be used in %s.",
+				       operation, context);
+	}
+
+	bpf_diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, '!',
+			       "%s is not allowed in %s", operation, context);
+
+	if (ctx_kind != BPF_DIAG_CONTEXT_NONE)
+		bpf_diag_print_history(env, &opts);
+
+	bpf_diag_report_suggestion(env, "%s", suggestion);
+}
+
+void bpf_diag_report_context_still_active(struct bpf_verifier_env *env,
+					  u32 insn_idx, const char *operation,
+					  enum bpf_diag_context_kind ctx_kind,
+					  const char *context,
+					  const char *suggestion)
+{
+	struct bpf_diag_history_opts opts = {
+		.scope = BPF_DIAG_HISTORY_SCOPE_CONTEXT,
+		.ctx_kind = ctx_kind,
+	};
+	u32 depth = bpf_diag_context_depth(env, ctx_kind);
+	char depth_buf[80];
+
+	bpf_diag_format_active_context(depth_buf, sizeof(depth_buf), depth,
+				       context);
+
+	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_EXECUTION_CONTEXT_SAFETY,
+			       "operation is not allowed in this context");
+	bpf_diag_report_reason(env,
+			       "The operation %s cannot be used while this path is still inside %s. Leave the region before this operation.",
+			       operation, depth_buf);
+
+	bpf_diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, '!',
+			       "%s is not allowed before leaving %s",
+			       operation, context);
+
+	bpf_diag_print_history(env, &opts);
+
+	bpf_diag_report_suggestion(env, "%s", suggestion);
+}
+
+void bpf_diag_report_context_underflow(struct bpf_verifier_env *env,
+				       u32 insn_idx, const char *operation,
+				       enum bpf_diag_context_kind ctx_kind,
+				       const char *suggestion)
+{
+	struct bpf_diag_history_opts opts = {
+		.scope = BPF_DIAG_HISTORY_SCOPE_CONTEXT,
+		.ctx_kind = ctx_kind,
+	};
+	const char *context = bpf_diag_context_name(ctx_kind);
+
+	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_EXECUTION_CONTEXT_SAFETY,
+			       "unmatched context exit");
+	bpf_diag_report_reason(env,
+			       "The operation %s tries to leave %s, but this path has no active %s to leave. The current depth is 0.",
+			       operation, context, context);
+
+	bpf_diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, '!',
+			       "%s has no matching enter on this path",
+			       operation);
+
+	bpf_diag_print_history(env, &opts);
+
+	bpf_diag_report_suggestion(env, "%s", suggestion);
+}
 void bpf_diag_report_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx,
 				   int regno, const char *reg_name,
 				   const char *type_name,

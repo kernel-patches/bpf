@@ -185,6 +185,20 @@ void bpf_diag_report_call_type(struct bpf_verifier_env *env, u32 insn_idx,
 			       int regno, const char *call_name,
 			       const char *arg_name, const char *reason,
 			       const char *suggestion);
+void bpf_diag_report_execution_context(struct bpf_verifier_env *env,
+				       u32 insn_idx, const char *operation,
+				       enum bpf_diag_context_kind ctx_kind,
+				       const char *context,
+				       const char *suggestion);
+void bpf_diag_report_context_still_active(struct bpf_verifier_env *env,
+					  u32 insn_idx, const char *operation,
+					  enum bpf_diag_context_kind ctx_kind,
+					  const char *context,
+					  const char *suggestion);
+void bpf_diag_report_context_underflow(struct bpf_verifier_env *env,
+				       u32 insn_idx, const char *operation,
+				       enum bpf_diag_context_kind ctx_kind,
+				       const char *suggestion);
 
 void bpf_diag_clear_history(struct bpf_verifier_state *state);
 void bpf_diag_copy_history(struct bpf_verifier_state *dst,
