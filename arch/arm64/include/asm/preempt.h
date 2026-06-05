@@ -55,20 +55,20 @@ static inline void __preempt_count_sub(int val)
 	WRITE_ONCE(current_thread_info()->preempt.count, pc);
 }
 
-static inline int __preempt_count_add_return(int val)
+static inline unsigned long __preempt_count_add_return(int val)
 {
-	u32 pc = READ_ONCE(current_thread_info()->preempt.count);
+	u64 pc = READ_ONCE(current_thread_info()->preempt_count);
 	pc += val;
-	WRITE_ONCE(current_thread_info()->preempt.count, pc);
+	WRITE_ONCE(current_thread_info()->preempt_count, pc);
 
 	return pc;
 }
 
-static inline int __preempt_count_sub_return(int val)
+static inline unsigned long __preempt_count_sub_return(int val)
 {
-	u32 pc = READ_ONCE(current_thread_info()->preempt.count);
+	u64 pc = READ_ONCE(current_thread_info()->preempt_count);
 	pc -= val;
-	WRITE_ONCE(current_thread_info()->preempt.count, pc);
+	WRITE_ONCE(current_thread_info()->preempt_count, pc);
 
 	return pc;
 }

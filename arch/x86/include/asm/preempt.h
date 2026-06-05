@@ -103,12 +103,12 @@ static __always_inline void __preempt_count_sub(int val)
 	__pc_op(add, __preempt_count, -val);
 }
 
-static __always_inline int __preempt_count_add_return(int val)
+static __always_inline unsigned long __preempt_count_add_return(int val)
 {
 	return __pc_op(add_return, __preempt_count, val);
 }
 
-static __always_inline int __preempt_count_sub_return(int val)
+static __always_inline unsigned long __preempt_count_sub_return(int val)
 {
 	return __pc_op(add_return, __preempt_count, -val);
 }

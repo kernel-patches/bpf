@@ -27,7 +27,7 @@ DECLARE_PER_CPU(struct interrupt_disable_state, local_interrupt_disable_state);
 static inline void local_interrupt_disable(void)
 {
 	unsigned long flags;
-	int new_count;
+	unsigned long new_count;
 
 	WARN_ON_ONCE(in_nmi());
 
@@ -41,9 +41,25 @@ static inline void local_interrupt_disable(void)
 	}
 }
 
+#ifdef CONFIG_PREEMPTION
+static inline void local_interrupt_enable_reched(unsigned long pc)
+{
+	if (pc)
+		return;
+	/* No PREEMPT_NEED_RESCHED bit? Check tif_need_resched() */
+#ifndef PREEMPT_NEED_RESCHED
+	if (!tif_need_resched())
+		return;
+#endif
+	__preempt_schedule();
+}
+#else
+static inline void local_interrupt_enable_reched(unsigned long pc) {}
+#endif
+
 static inline void local_interrupt_enable(void)
 {
-	int new_count;
+	unsigned long new_count;
 
 	new_count = hardirq_disable_exit();
 
@@ -52,15 +68,8 @@ static inline void local_interrupt_enable(void)
 
 		flags = raw_cpu_read(local_interrupt_disable_state.flags);
 		local_irq_restore(flags);
-		/*
-		 * TODO: re-read preempt count can be avoided, but it needs
-		 * should_resched() taking another parameter as the current
-		 * preempt count
-		 */
-#ifdef CONFIG_PREEMPTION
-		if (should_resched(0))
-			__preempt_schedule();
-#endif
+
+		local_interrupt_enable_reched(new_count);
 	}
 }
 
