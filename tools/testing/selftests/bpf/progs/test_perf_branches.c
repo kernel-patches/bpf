@@ -8,7 +8,6 @@
 #include <bpf/bpf_tracing.h>
 
 int valid = 0;
-int run_cnt = 0;
 int required_size_out = 0;
 int written_stack_out = 0;
 int written_global_out = 0;
@@ -25,13 +24,11 @@ int perf_branches(void *ctx)
 	__u64 entries[4 * 3] = {0};
 	int required_size, written_stack, written_global;
 
-	++run_cnt;
-
 	/* write to stack */
 	written_stack = bpf_read_branch_records(ctx, entries, sizeof(entries), 0);
 	/* ignore spurious events */
 	if (!written_stack)
-		return 1;
+		return 0;
 
 	/* get required size */
 	required_size = bpf_read_branch_records(ctx, NULL, 0,
@@ -40,14 +37,14 @@ int perf_branches(void *ctx)
 	written_global = bpf_read_branch_records(ctx, fpbe, sizeof(fpbe), 0);
 	/* ignore spurious events */
 	if (!written_global)
-		return 1;
+		return 0;
 
 	required_size_out = required_size;
 	written_stack_out = written_stack;
 	written_global_out = written_global;
-	valid = 1;
+	__atomic_add_fetch(&valid, 1, __ATOMIC_RELEASE);
 
-	return 0;
+	return 1;
 }
 
 char _license[] SEC("license") = "GPL";

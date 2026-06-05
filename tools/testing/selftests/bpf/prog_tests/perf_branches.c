@@ -15,10 +15,6 @@ static void check_good_sample(struct test_perf_branches *skel)
 	int pbe_size = sizeof(struct perf_branch_entry);
 	int duration = 0;
 
-	if (CHECK(!skel->bss->run_cnt, "invalid run_cnt",
-		  "checked sample validity before prog run"))
-		return;
-
 	if (CHECK(!skel->bss->valid, "output not valid",
 		 "no valid sample from prog"))
 		return;
@@ -49,10 +45,6 @@ static void check_bad_sample(struct test_perf_branches *skel)
 	int written_stack = skel->bss->written_stack_out;
 	int duration = 0;
 
-	if (CHECK(!skel->bss->run_cnt, "invalid run_cnt",
-		  "checked sample validity before prog run"))
-		return;
-
 	if (CHECK(!skel->bss->valid, "output not valid",
 		 "no valid sample from prog"))
 		return;
@@ -73,7 +65,6 @@ static void test_perf_branches_common(int perf_fd,
 	bool detached = false;
 	struct bpf_link *link;
 	volatile int j = 0;
-	cpu_set_t cpu_set;
 
 	skel = test_perf_branches__open_and_load();
 	if (CHECK(!skel, "test_perf_branches_load",
@@ -85,19 +76,35 @@ static void test_perf_branches_common(int perf_fd,
 	if (!ASSERT_OK_PTR(link, "attach_perf_event"))
 		goto out_destroy_skel;
 
-	/* generate some branches on cpu 0 */
-	CPU_ZERO(&cpu_set);
-	CPU_SET(0, &cpu_set);
-	err = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set), &cpu_set);
-	if (CHECK(err, "set_affinity", "cpu #0, err %d\n", err))
+	err = ioctl(perf_fd, PERF_EVENT_IOC_RESET, 0);
+	if (!ASSERT_OK(err, "ioctl(PERF_EVENT_IOC_RESET)"))
 		goto out_destroy;
 
-	/* Spin the loop for a while by using a high iteration count, and by
-	 * checking whether the specific run count marker has been explicitly
-	 * incremented at least once by the backing perf_event BPF program.
+	err = ioctl(perf_fd, PERF_EVENT_IOC_REFRESH, 10);
+	if (!ASSERT_OK(err, "ioctl(PERF_EVENT_IOC_REFRESH)"))
+		goto out_destroy;
+
+	/* Make up a bunch of branch events until we time out or bpf prog sets a flag
+	 * that it caught a valid event. To be completely sure that required_size_out,
+	 * written_stack_out or written_global_out writes and reads won't get
+	 * reordered by anyone in a way that would fail this test, use atomic
+	 * operations
 	 */
-	for (i = 0; i < 100000000 && !*(volatile int *)&skel->bss->run_cnt; ++i)
+	for (i = 0; i < 100000000; ++i) {
+		/* This technically should be an atomic load with acquire
+		 * ordering, but we don't want to clog up memory bus while
+		 * spinning
+		 */
+		if (READ_ONCE(skel->bss->valid) > 0)
+			break;
 		++j;
+	}
+
+	__atomic_thread_fence(__ATOMIC_ACQUIRE);
+
+	err = ioctl(perf_fd, PERF_EVENT_IOC_DISABLE, 0);
+	if (!ASSERT_OK(err, "ioctl(PERF_EVENT_IOC_DISABLE)"))
+		goto out_destroy;
 
 	test_perf_branches__detach(skel);
 	detached = true;
@@ -121,6 +128,7 @@ static void test_perf_branches_hw(void)
 	attr.size = sizeof(attr);
 	attr.type = PERF_TYPE_HARDWARE;
 	attr.config = PERF_COUNT_HW_CPU_CYCLES;
+	attr.disabled = 1;
 	attr.freq = 1;
 	attr.sample_freq = 1000;
 	attr.sample_type = PERF_SAMPLE_BRANCH_STACK;
@@ -162,6 +170,7 @@ static void test_perf_branches_no_hw(void)
 	attr.size = sizeof(attr);
 	attr.type = PERF_TYPE_SOFTWARE;
 	attr.config = PERF_COUNT_SW_CPU_CLOCK;
+	attr.disabled = 1;
 	attr.freq = 1;
 	attr.sample_freq = 1000;
 	pfd = syscall(__NR_perf_event_open, &attr, -1, 0, -1, PERF_FLAG_FD_CLOEXEC);
@@ -175,6 +184,18 @@ static void test_perf_branches_no_hw(void)
 
 void test_perf_branches(void)
 {
+	int err, duration = 0;
+	cpu_set_t cpu_set;
+
+	/* Pin ourselves to cpu0 so that all branches we generate would be
+	 * also on cpu0
+	 */
+	CPU_ZERO(&cpu_set);
+	CPU_SET(0, &cpu_set);
+	err = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set), &cpu_set);
+	if (!ASSERT_OK(err, "pthread_set_affinity"))
+		return;
+
 	if (test__start_subtest("perf_branches_hw"))
 		test_perf_branches_hw();
 	if (test__start_subtest("perf_branches_no_hw"))
