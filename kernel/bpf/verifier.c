@@ -831,6 +831,11 @@ static int destroy_if_dynptr_stack_slot(struct bpf_verifier_env *env,
 	if (dynptr_type_referenced(state->stack[spi].spilled_ptr.dynptr.type) &&
 	    dynptr_ref_cnt(env, state->stack[spi].spilled_ptr.parent_id) <= 1) {
 		verbose(env, "cannot overwrite referenced dynptr\n");
+		bpf_diag_report_resource_state(env, env->insn_idx,
+					       "referenced dynptr overwrite",
+					       "This stack slot contains a dynptr that owns or protects a referenced resource. Overwriting the last dynptr for that resource "
+					       "would lose the verifier-tracked release path.",
+					       "Release or clone the dynptr so another live dynptr still tracks the referenced resource before overwriting this stack slot.");
 		return -EINVAL;
 	}
 
@@ -1114,9 +1119,18 @@ static int unmark_stack_slot_irq_flag(struct bpf_verifier_env *env, struct bpf_r
 	if (st->irq.kfunc_class != kfunc_class) {
 		const char *flag_kfunc = st->irq.kfunc_class == IRQ_NATIVE_KFUNC ? "native" : "lock";
 		const char *used_kfunc = kfunc_class == IRQ_NATIVE_KFUNC ? "native" : "lock";
+		char reason[256];
 
 		verbose(env, "irq flag acquired by %s kfuncs cannot be restored with %s kfuncs\n",
 			flag_kfunc, used_kfunc);
+		scnprintf(reason, sizeof(reason),
+			  "This IRQ flag was saved by %s IRQ kfuncs, but the restore call belongs to the %s IRQ kfunc family. Save and restore operations must "
+			  "use the same family.",
+			  flag_kfunc, used_kfunc);
+		bpf_diag_report_resource_state(env, env->insn_idx,
+					       "IRQ flag restore mismatch",
+					       reason,
+					       "Restore the flag with the matching IRQ restore kfunc for the save operation that created it.");
 		return -EINVAL;
 	}
 
@@ -1134,6 +1148,11 @@ static int unmark_stack_slot_irq_flag(struct bpf_verifier_env *env, struct bpf_r
 
 		verbose(env, "cannot restore irq state out of order, expected id=%d acquired at insn_idx=%d\n",
 			env->cur_state->active_irq_id, insn_idx);
+		bpf_diag_report_resource_state(env, env->insn_idx,
+					       "IRQ flag restore out of order",
+					       "IRQ-disabled regions must be restored in last-in, first-out order, but this restore does not match the currently active IRQ "
+					       "flag.",
+					       "Restore nested IRQ flags in the reverse order they were saved.");
 		return err;
 	}
 
@@ -7151,11 +7170,19 @@ static int process_spin_lock(struct bpf_verifier_env *env, struct bpf_reg_state 
 			if (find_lock_state(env->cur_state, REF_TYPE_LOCK, 0, NULL)) {
 				verbose(env,
 					"Locking two bpf_spin_locks are not allowed\n");
+				bpf_diag_report_resource_state(env, env->insn_idx,
+							       "nested spin lock",
+							       "This path already holds a bpf_spin_lock. The verifier allows only one regular BPF spin lock at a time.",
+							       "Unlock the current bpf_spin_lock before taking another one.");
 				return -EINVAL;
 			}
 		} else if (is_res_lock && cur->active_locks) {
 			if (find_lock_state(env->cur_state, REF_TYPE_RES_LOCK | REF_TYPE_RES_LOCK_IRQ, reg->id, ptr)) {
 				verbose(env, "Acquiring the same lock again, AA deadlock detected\n");
+				bpf_diag_report_resource_state(env, env->insn_idx,
+							       "recursive resource spin lock",
+							       "This path already holds the same resource spin lock. Taking it again would deadlock.",
+							       "Avoid reacquiring the same resource spin lock before it is unlocked.");
 				return -EINVAL;
 			}
 		}
@@ -7182,6 +7209,10 @@ static int process_spin_lock(struct bpf_verifier_env *env, struct bpf_reg_state 
 
 		if (!cur->active_locks) {
 			verbose(env, "%s_unlock without taking a lock\n", lock_str);
+			bpf_diag_report_resource_state(env, env->insn_idx,
+						       "unlock without lock",
+						       "This unlock operation has no matching active lock on the current path.",
+						       "Take the matching lock before this unlock, or remove the unmatched unlock path.");
 			return -EINVAL;
 		}
 
@@ -7193,15 +7224,27 @@ static int process_spin_lock(struct bpf_verifier_env *env, struct bpf_reg_state 
 			type = REF_TYPE_LOCK;
 		if (!find_lock_state(cur, type, reg->id, ptr)) {
 			verbose(env, "%s_unlock of different lock\n", lock_str);
+			bpf_diag_report_resource_state(env, env->insn_idx,
+						       "unlock of different lock",
+						       "This unlock does not match any active lock with the same tracked identity on the current path.",
+						       "Unlock the same lock object that was most recently acquired.");
 			return -EINVAL;
 		}
 		if (reg->id != cur->active_lock_id || ptr != cur->active_lock_ptr) {
 			verbose(env, "%s_unlock cannot be out of order\n", lock_str);
+			bpf_diag_report_resource_state(env, env->insn_idx,
+						       "unlock out of order",
+						       "Locks must be released in last-in, first-out order, but this unlock does not match the currently active lock.",
+						       "Release nested locks in the reverse order they were acquired.");
 			return -EINVAL;
 		}
 		if (release_lock_state(cur, type, reg->id, ptr,
 				       env->insn_idx)) {
 			verbose(env, "%s_unlock of different lock\n", lock_str);
+			bpf_diag_report_resource_state(env, env->insn_idx,
+						       "unlock of different lock",
+						       "The verifier could not release a lock state matching this unlock operation.",
+						       "Pass the same lock object and lock kind that were used for the matching lock operation.");
 			return -EINVAL;
 		}
 
@@ -7367,6 +7410,10 @@ static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_stat
 		verbose(env,
 			"%s expected pointer to stack or const struct bpf_dynptr\n",
 			reg_arg_name(env, argno));
+		bpf_diag_report_resource_state(env, insn_idx,
+					       "invalid dynptr argument",
+					       "A dynptr argument must be a pointer to a dynptr stack slot or a verifier-provided const struct bpf_dynptr.",
+					       "Pass the address of a stack dynptr object, or use a const dynptr pointer returned by the verifier-supported path.");
 		return -EINVAL;
 	}
 
@@ -7389,6 +7436,11 @@ static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_stat
 
 		if (!is_dynptr_reg_valid_uninit(env, reg)) {
 			verbose(env, "Dynptr has to be an uninitialized dynptr\n");
+			bpf_diag_report_resource_state(env, insn_idx,
+						       "dynptr is already initialized",
+						       "This kfunc constructs a dynptr and requires an uninitialized dynptr stack slot, but the selected slot already holds dynptr "
+						       "state.",
+						       "Use a fresh stack dynptr slot, or release/destroy the existing dynptr before reusing the slot.");
 			return -EINVAL;
 		}
 
@@ -7405,12 +7457,21 @@ static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_stat
 		/* For the reg->type == PTR_TO_STACK case, bpf_dynptr is never const */
 		if (reg->type == CONST_PTR_TO_DYNPTR && (arg_type & OBJ_RELEASE)) {
 			verbose(env, "CONST_PTR_TO_DYNPTR cannot be released\n");
+			bpf_diag_report_resource_state(env, insn_idx,
+						       "const dynptr release",
+						       "This release operation was given a const dynptr. Const dynptr values are verifier-provided views and cannot be released by "
+						       "the program.",
+						       "Release only mutable dynptrs that the program initialized or reserved.");
 			return -EINVAL;
 		}
 
 		if (!is_dynptr_reg_valid_init(env, reg)) {
 			verbose(env, "Expected an initialized dynptr as %s\n",
 				reg_arg_name(env, argno));
+			bpf_diag_report_resource_state(env, insn_idx,
+						       "uninitialized dynptr use",
+						       "This operation requires an initialized dynptr, but the stack slot does not currently hold a valid dynptr on this path.",
+						       "Initialize the dynptr on every path before this call, and avoid overwriting or releasing it before this use.");
 			return -EINVAL;
 		}
 
@@ -7420,6 +7481,10 @@ static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_stat
 				"Expected a dynptr of type %s as %s\n",
 				dynptr_type_str(arg_to_dynptr_type(arg_type)),
 				reg_arg_name(env, argno));
+			bpf_diag_report_resource_state(env, insn_idx,
+						       "wrong dynptr type",
+						       "The dynptr is initialized, but it was created for a different backing object type than this operation accepts.",
+						       "Use a dynptr constructor that matches this operation, or call an operation that accepts the dynptr's current type.");
 			return -EINVAL;
 		}
 
@@ -7488,6 +7553,10 @@ static int process_iter_arg(struct bpf_verifier_env *env, struct bpf_reg_state *
 	if (reg->type != PTR_TO_STACK) {
 		verbose(env, "%s expected pointer to an iterator on stack\n",
 			reg_arg_name(env, argno));
+		bpf_diag_report_resource_state(env, insn_idx,
+					       "invalid iterator argument",
+					       "Iterator state must live in verifier-tracked stack memory, but this argument is not a stack pointer.",
+					       "Pass the address of a stack iterator object for iterator new, next, and destroy calls.");
 		return -EINVAL;
 	}
 
@@ -7501,6 +7570,10 @@ static int process_iter_arg(struct bpf_verifier_env *env, struct bpf_reg_state *
 	if (btf_id < 0) {
 		verbose(env, "expected valid iter pointer as %s\n",
 			reg_arg_name(env, argno));
+		bpf_diag_report_resource_state(env, insn_idx,
+					       "invalid iterator type",
+					       "The kfunc expects a recognized iterator state pointer, but this argument does not match a valid iterator type.",
+					       "Pass the exact iterator state type expected by this kfunc.");
 		return -EINVAL;
 	}
 	t = btf_type_by_id(meta->btf, btf_id);
@@ -7511,6 +7584,10 @@ static int process_iter_arg(struct bpf_verifier_env *env, struct bpf_reg_state *
 		if (!is_iter_reg_valid_uninit(env, reg, nr_slots)) {
 			verbose(env, "expected uninitialized iter_%s as %s\n",
 				iter_type_str(meta->btf, btf_id), reg_arg_name(env, argno));
+			bpf_diag_report_resource_state(env, insn_idx,
+						       "iterator is already initialized",
+						       "Iterator creation requires an uninitialized iterator stack object, but this stack range already contains iterator state.",
+						       "Use a fresh iterator stack slot, or destroy the existing iterator before reusing the slot.");
 			return -EINVAL;
 		}
 
@@ -7535,9 +7612,19 @@ static int process_iter_arg(struct bpf_verifier_env *env, struct bpf_reg_state *
 		case -EINVAL:
 			verbose(env, "expected an initialized iter_%s as %s\n",
 				iter_type_str(meta->btf, btf_id), reg_arg_name(env, argno));
+			bpf_diag_report_resource_state(env, insn_idx,
+						       "uninitialized iterator use",
+						       "This iterator operation requires an initialized iterator state object, but the stack range does not contain a live iterator "
+						       "on this path.",
+						       "Call the matching iterator new kfunc on every path before calling next or destroy, and do not destroy the iterator before "
+						       "this use.");
 			return err;
 		case -EPROTO:
 			verbose(env, "expected an RCU CS when using %s\n", meta->func_name);
+			bpf_diag_report_resource_state(env, insn_idx,
+						       "iterator requires RCU read lock",
+						       "This iterator was created for use under RCU protection, but this path is not currently inside an RCU read lock region.",
+						       "Wrap iterator use in bpf_rcu_read_lock() and bpf_rcu_read_unlock(), keeping all exit paths balanced.");
 			return err;
 		default:
 			return err;
@@ -10119,6 +10206,8 @@ static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exi
 			continue;
 		verbose(env, "Unreleased reference id=%d alloc_insn=%d\n",
 			state->refs[i].id, state->refs[i].insn_idx);
+		bpf_diag_report_ref_leak(env, state->refs[i].id,
+					 state->refs[i].insn_idx, env->insn_idx);
 		refs_lingering = true;
 	}
 	return refs_lingering ? -EINVAL : 0;
@@ -11576,6 +11665,11 @@ static int process_irq_flag(struct bpf_verifier_env *env, struct bpf_reg_state *
 		if (!is_irq_flag_reg_valid_uninit(env, reg)) {
 			verbose(env, "expected uninitialized irq flag as %s\n",
 				reg_arg_name(env, argno));
+				bpf_diag_report_resource_state(env, env->insn_idx,
+							       "IRQ flag is already initialized",
+							       "Saving IRQ state requires an uninitialized stack slot for the IRQ flag, but this slot already contains tracked IRQ flag "
+							       "state.",
+							       "Use a fresh stack slot for this save operation, or restore the existing IRQ flag before reusing the slot.");
 			return -EINVAL;
 		}
 
@@ -11592,6 +11686,10 @@ static int process_irq_flag(struct bpf_verifier_env *env, struct bpf_reg_state *
 		if (err) {
 			verbose(env, "expected an initialized irq flag as %s\n",
 				reg_arg_name(env, argno));
+				bpf_diag_report_resource_state(env, env->insn_idx,
+							       "uninitialized IRQ flag restore",
+							       "Restoring IRQ state requires a stack slot that was initialized by a matching IRQ save operation on this path.",
+							       "Pass the same stack slot that was previously initialized by the matching IRQ save kfunc.");
 			return err;
 		}
 
