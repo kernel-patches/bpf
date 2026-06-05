@@ -5,6 +5,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/btf.h>
 #include <linux/kernel.h>
+#include <linux/slab.h>
 #include <linux/stdarg.h>
 #include <linux/string.h>
 
@@ -517,4 +518,131 @@ void bpf_diag_report_source(struct bpf_verifier_env *env, u32 insn_idx,
 			bpf_diag_print_source_annotation(env, width, indent,
 							 label, msg);
 	}
+}
+
+void bpf_diag_clear_history(struct bpf_verifier_state *state)
+{
+	kfree(state->diag_history);
+	state->diag_history = NULL;
+	state->diag_history_cnt = 0;
+	state->diag_history_omitted = 0;
+}
+
+void bpf_diag_copy_history(struct bpf_verifier_state *dst,
+			   const struct bpf_verifier_state *src)
+{
+	struct bpf_diag_history_event *history;
+
+	if (!src->diag_history_cnt) {
+		bpf_diag_clear_history(dst);
+		dst->diag_history_omitted = src->diag_history_omitted;
+		return;
+	}
+
+	history = krealloc_array(dst->diag_history, src->diag_history_cnt,
+				 sizeof(*history), GFP_KERNEL_ACCOUNT);
+	if (!history) {
+		kfree(dst->diag_history);
+		dst->diag_history = NULL;
+		dst->diag_history_cnt = 0;
+		dst->diag_history_omitted = src->diag_history_omitted +
+					    src->diag_history_cnt;
+		return;
+	}
+
+	dst->diag_history = history;
+	memcpy(dst->diag_history, src->diag_history,
+	       src->diag_history_cnt * sizeof(*dst->diag_history));
+	dst->diag_history_cnt = src->diag_history_cnt;
+	dst->diag_history_omitted = src->diag_history_omitted;
+}
+
+static void
+bpf_diag_drop_oldest_and_append_history(struct bpf_verifier_state *state,
+					const struct bpf_diag_history_event *event)
+{
+	if (!state->diag_history_cnt) {
+		state->diag_history_omitted++;
+		return;
+	}
+
+	memmove(state->diag_history, state->diag_history + 1,
+		(state->diag_history_cnt - 1) * sizeof(*state->diag_history));
+	state->diag_history[state->diag_history_cnt - 1] = *event;
+	state->diag_history_omitted++;
+}
+
+static void bpf_diag_append_history(struct bpf_verifier_state *state,
+				    const struct bpf_diag_history_event *event)
+{
+	struct bpf_diag_history_event *history;
+
+	if (!state)
+		return;
+
+	if (state->diag_history_cnt < BPF_DIAG_HISTORY_MAX) {
+		history = krealloc_array(state->diag_history,
+					 state->diag_history_cnt + 1,
+					 sizeof(*history), GFP_KERNEL_ACCOUNT);
+		if (!history) {
+			bpf_diag_drop_oldest_and_append_history(state, event);
+			return;
+		}
+
+		state->diag_history = history;
+		state->diag_history[state->diag_history_cnt++] = *event;
+		return;
+	}
+
+	bpf_diag_drop_oldest_and_append_history(state, event);
+}
+
+void bpf_diag_record_branch(struct bpf_verifier_state *state, u32 insn_idx,
+			    bool cond_true)
+{
+	struct bpf_diag_history_event event = {
+		.insn_idx = insn_idx,
+		.kind = BPF_DIAG_HISTORY_BRANCH,
+		.branch.cond_true = cond_true,
+	};
+
+	bpf_diag_append_history(state, &event);
+}
+
+void bpf_diag_print_history(struct bpf_verifier_env *env)
+{
+	const struct bpf_verifier_state *state = env->cur_state;
+	const struct bpf_diag_history_event *event;
+	bool printed = false;
+	u32 i;
+
+	bpf_diag_report_section(env, "Causal path");
+
+	if (!state)
+		return;
+
+	if (state->diag_history_omitted)
+		verbose(env, "  ... %u earlier diagnostic events omitted by display limit ...\n",
+			state->diag_history_omitted);
+
+	for (i = 0; i < state->diag_history_cnt; i++) {
+		event = &state->diag_history[i];
+
+		switch (event->kind) {
+		case BPF_DIAG_HISTORY_BRANCH:
+			bpf_diag_report_source(env, event->insn_idx, '?',
+					       "explored as %s, goto %s",
+					       event->branch.cond_true ? "true" :
+					       "false",
+					       event->branch.cond_true ? "followed" :
+					       "not followed");
+			printed = true;
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (!printed && !state->diag_history_omitted)
+		verbose(env, "  no recorded diagnostic events on this path\n");
 }
