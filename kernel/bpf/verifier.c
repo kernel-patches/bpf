@@ -14176,7 +14176,7 @@ static void __scalar32_min_max_lsh(struct bpf_reg_state *dst_reg,
 }
 
 static void scalar32_min_max_lsh(struct bpf_reg_state *dst_reg,
-				 struct bpf_reg_state *src_reg)
+					 struct bpf_reg_state *src_reg)
 {
 	u32 umax_val = reg_u32_max(src_reg);
 	u32 umin_val = reg_u32_min(src_reg);
@@ -14184,7 +14184,10 @@ static void scalar32_min_max_lsh(struct bpf_reg_state *dst_reg,
 	struct tnum subreg = tnum_subreg(dst_reg->var_off);
 
 	__scalar32_min_max_lsh(dst_reg, umin_val, umax_val);
-	dst_reg->var_off = tnum_subreg(tnum_lshift(subreg, umin_val));
+	if (umin_val == umax_val)
+		dst_reg->var_off = tnum_subreg(tnum_lshift(subreg, umin_val));
+	else
+		dst_reg->var_off = tnum_unknown;
 	/* Not required but being careful mark reg64 bounds as unknown so
 	 * that we are forced to pick them up from tnum and zext later and
 	 * if some path skips this step we are still safe.
@@ -14220,7 +14223,7 @@ static void __scalar64_min_max_lsh(struct bpf_reg_state *dst_reg,
 }
 
 static void scalar_min_max_lsh(struct bpf_reg_state *dst_reg,
-			       struct bpf_reg_state *src_reg)
+				 struct bpf_reg_state *src_reg)
 {
 	u64 umax_val = reg_umax(src_reg);
 	u64 umin_val = reg_umin(src_reg);
@@ -14229,7 +14232,10 @@ static void scalar_min_max_lsh(struct bpf_reg_state *dst_reg,
 	__scalar64_min_max_lsh(dst_reg, umin_val, umax_val);
 	__scalar32_min_max_lsh(dst_reg, umin_val, umax_val);
 
-	dst_reg->var_off = tnum_lshift(dst_reg->var_off, umin_val);
+	if (umin_val == umax_val)
+		dst_reg->var_off = tnum_lshift(dst_reg->var_off, umin_val);
+	else
+		dst_reg->var_off = tnum_unknown;
 	/* We may learn something more from the var_off */
 	__update_reg_bounds(dst_reg);
 }
@@ -14256,7 +14262,10 @@ static void scalar32_min_max_rsh(struct bpf_reg_state *dst_reg,
 	 * var_off of the result.
 	 */
 
-	dst_reg->var_off = tnum_rshift(subreg, umin_val);
+	if (umin_val == umax_val)
+		dst_reg->var_off = tnum_rshift(subreg, umin_val);
+	else
+		dst_reg->var_off = tnum_unknown;
 	reg_set_urange32(dst_reg, reg_u32_min(dst_reg) >> umax_val,
 			 reg_u32_max(dst_reg) >> umin_val);
 
@@ -14284,7 +14293,10 @@ static void scalar_min_max_rsh(struct bpf_reg_state *dst_reg,
 	 * and rely on inferring new ones from the unsigned bounds and
 	 * var_off of the result.
 	 */
-	dst_reg->var_off = tnum_rshift(dst_reg->var_off, umin_val);
+	if (umin_val == umax_val)
+		dst_reg->var_off = tnum_rshift(dst_reg->var_off, umin_val);
+	else
+		dst_reg->var_off = tnum_unknown;
 	reg_set_urange64(dst_reg, reg_umin(dst_reg) >> umax_val,
 			 reg_umax(dst_reg) >> umin_val);
 
@@ -14299,18 +14311,22 @@ static void scalar_min_max_rsh(struct bpf_reg_state *dst_reg,
 static void scalar32_min_max_arsh(struct bpf_reg_state *dst_reg,
 				  struct bpf_reg_state *src_reg)
 {
-	u64 umin_val = reg_u32_min(src_reg);
+	u32 umin_val = reg_u32_min(src_reg);
+	u32 umax_val = reg_u32_max(src_reg);
 
-	/* Upon reaching here, src_known is true and
-	 * umax_val is equal to umin_val.
-	 * Blow away the dst_reg umin_value/umax_value and rely on
+	/* Blow away the dst_reg umin_value/umax_value and rely on
 	 * dst_reg var_off to refine the result.
 	 */
-	reg_set_srange32(dst_reg,
+
+	if (umin_val == umax_val){
+		reg_set_srange32(dst_reg,
 			 (u32)(((s32)reg_s32_min(dst_reg)) >> umin_val),
 			 (u32)(((s32)reg_s32_max(dst_reg)) >> umin_val));
-
-	dst_reg->var_off = tnum_arshift(tnum_subreg(dst_reg->var_off), umin_val, 32);
+		dst_reg->var_off = tnum_arshift(tnum_subreg(dst_reg->var_off), umin_val, 32);
+	}else{
+		__mark_reg32_unbounded(dst_reg);
+		dst_reg->var_off = tnum_unknown;
+	}
 
 	__mark_reg64_unbounded(dst_reg);
 	__update_reg32_bounds(dst_reg);
@@ -14320,14 +14336,16 @@ static void scalar_min_max_arsh(struct bpf_reg_state *dst_reg,
 				struct bpf_reg_state *src_reg)
 {
 	u64 umin_val = reg_umin(src_reg);
+	u64 umax_val = reg_umax(src_reg);
 
-	/* Upon reaching here, src_known is true and umax_val is equal
-	 * to umin_val.
-	 */
-	reg_set_srange64(dst_reg, reg_smin(dst_reg) >> umin_val,
+	if (umin_val == umax_val){
+		reg_set_srange64(dst_reg, reg_smin(dst_reg) >> umin_val,
 			 reg_smax(dst_reg) >> umin_val);
-
-	dst_reg->var_off = tnum_arshift(dst_reg->var_off, umin_val, 64);
+		dst_reg->var_off = tnum_arshift(dst_reg->var_off, umin_val, 64);
+	}else{
+		__mark_reg64_unbounded(dst_reg);
+		dst_reg->var_off = tnum_unknown;
+	}
 
 	/* Its not easy to operate on alu32 bounds here because it depends
 	 * on bits being shifted in from upper 32-bits. Take easy way out
@@ -14423,14 +14441,13 @@ static bool is_safe_to_compute_dst_reg_range(struct bpf_insn *insn,
 	case BPF_MOD:
 		return src_is_const;
 
-	/* Shift operators range is only computable if shift dimension operand
-	 * is a constant. Shifts greater than 31 or 63 are undefined. This
-	 * includes shifts by a negative number.
+	/* Shifts greater than 31 or 63 are undefined. This includes shifts
+	 * by a negative number.
 	 */
 	case BPF_LSH:
 	case BPF_RSH:
 	case BPF_ARSH:
-		return (src_is_const && reg_umax(src_reg) < insn_bitness);
+		return reg_umax(src_reg) < insn_bitness;
 	default:
 		return false;
 	}
