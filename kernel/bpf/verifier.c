@@ -4033,6 +4033,8 @@ static int check_stack_arg_write(struct bpf_verifier_env *env, struct bpf_func_s
 	struct bpf_subprog_info *subprog = &env->subprog_info[state->subprogno];
 	int spi = -off / BPF_REG_SIZE - 1;
 	struct bpf_reg_state *arg;
+	struct bpf_reg_state old_arg;
+	bool slot_exists;
 	int err;
 
 	if (spi >= max_stack_arg_regs) {
@@ -4041,6 +4043,7 @@ static int check_stack_arg_write(struct bpf_verifier_env *env, struct bpf_func_s
 		return -EINVAL;
 	}
 
+	slot_exists = spi < state->out_stack_arg_cnt;
 	err = grow_stack_arg_slots(env, state, spi + 1);
 	if (err)
 		return err;
@@ -4049,13 +4052,27 @@ static int check_stack_arg_write(struct bpf_verifier_env *env, struct bpf_func_s
 	if (spi + 1 > subprog->max_out_stack_arg_cnt)
 		subprog->max_out_stack_arg_cnt = spi + 1;
 
+	arg = &state->stack_arg_regs[spi];
+	if (slot_exists)
+		old_arg = *arg;
+	else
+		bpf_mark_reg_not_init(env, &old_arg);
+
 	if (value_reg) {
 		state->stack_arg_regs[spi] = *value_reg;
+		bpf_diag_record_stack_arg(env->cur_state, env->insn_idx,
+					  state->frameno, spi,
+					  BPF_DIAG_STACK_ARG_WRITE,
+					  &old_arg,
+					  &state->stack_arg_regs[spi]);
 	} else {
 		/* BPF_ST: store immediate, treat as scalar */
-		arg = &state->stack_arg_regs[spi];
 		arg->type = SCALAR_VALUE;
 		__mark_reg_known(arg, env->prog->insnsi[env->insn_idx].imm);
+		bpf_diag_record_stack_arg(env->cur_state, env->insn_idx,
+					  state->frameno, spi,
+					  BPF_DIAG_STACK_ARG_WRITE,
+					  &old_arg, arg);
 	}
 	state->no_stack_arg_load = true;
 	return bpf_push_jmp_history(env, env->cur_state,
@@ -6316,15 +6333,27 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	struct bpf_verifier_state *vstate = env->cur_state;
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
 	struct bpf_reg_state *regs = cur_regs(env);
+	struct bpf_reg_state old_dst = {};
 	enum bpf_reg_type src_reg_type;
+	bool have_old_dst;
 	int err;
+
+	have_old_dst = insn->dst_reg < MAX_BPF_REG;
+	if (have_old_dst)
+		old_dst = regs[insn->dst_reg];
 
 	/* Handle stack arg read */
 	if (is_stack_arg_ldx(insn)) {
 		err = check_reg_arg(env, insn->dst_reg, DST_OP_NO_MARK);
 		if (err)
 			return err;
-		return check_stack_arg_read(env, state, insn->off, insn->dst_reg);
+		err = check_stack_arg_read(env, state, insn->off, insn->dst_reg);
+		if (!err && have_old_dst)
+			bpf_diag_record_reg_mod(env->cur_state, env->insn_idx,
+						insn->dst_reg, true,
+						insn->src_reg, BPF_OP(insn->code),
+						&old_dst, &regs[insn->dst_reg]);
+		return err;
 	}
 
 	/* check src operand */
@@ -6348,6 +6377,11 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	err = err ?: save_aux_ptr_type(env, src_reg_type,
 				       allow_trust_mismatch);
 	err = err ?: reg_bounds_sanity_check(env, &regs[insn->dst_reg], ctx);
+	if (!err && have_old_dst)
+		bpf_diag_record_reg_mod(env->cur_state, env->insn_idx,
+					insn->dst_reg, true, insn->src_reg,
+					BPF_OP(insn->code), &old_dst,
+					&regs[insn->dst_reg]);
 
 	return err;
 }
@@ -8833,14 +8867,51 @@ static int check_func_proto(const struct bpf_func_proto *fn, struct bpf_call_arg
  * This also applies to dynptr slices belonging to skb and xdp dynptrs,
  * since these slices point to packet data.
  */
+static int bpf_diag_stack_arg_slot(const struct bpf_func_state *state,
+				   const struct bpf_reg_state *reg)
+{
+	if (!state->stack_arg_regs)
+		return -1;
+	if (reg < state->stack_arg_regs ||
+	    reg >= state->stack_arg_regs + state->out_stack_arg_cnt)
+		return -1;
+	return reg - state->stack_arg_regs;
+}
+
+static int bpf_diag_func_regno(const struct bpf_func_state *state,
+			       const struct bpf_reg_state *reg)
+{
+	if (reg < state->regs || reg >= state->regs + MAX_BPF_REG)
+		return -1;
+	return reg - state->regs;
+}
+
 static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
 {
 	struct bpf_func_state *state;
 	struct bpf_reg_state *reg;
 
 	bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
-		if (reg_is_pkt_pointer_any(reg) || reg_is_dynptr_slice_pkt(reg))
+		if (reg_is_pkt_pointer_any(reg) || reg_is_dynptr_slice_pkt(reg)) {
+			struct bpf_reg_state old_reg = *reg;
+			int regno = bpf_diag_func_regno(state, reg);
+			int slot = bpf_diag_stack_arg_slot(state, reg);
+
 			mark_reg_invalid(env, reg);
+			if (regno >= 0)
+				bpf_diag_record_reg_invalidate(env->cur_state,
+							       env->insn_idx,
+							       regno,
+							       BPF_DIAG_REG_MOD_PKT_DATA_CHANGE,
+							       &old_reg, reg);
+			if (slot >= 0)
+				bpf_diag_record_stack_arg(env->cur_state,
+							  env->insn_idx,
+							  state->frameno,
+							  slot,
+							  BPF_DIAG_STACK_ARG_PKT_DATA_CHANGE,
+							  &old_reg, reg);
+		}
 	}));
 }
 
@@ -8946,6 +9017,10 @@ static int release_reference(struct bpf_verifier_env *env, int id)
 		}
 
 		bpf_for_each_reg_in_vstate_mask(vstate, state, reg, stack, mask, ({
+			struct bpf_reg_state old_reg;
+			int regno;
+			int slot;
+
 			if (reg->id != id && reg->parent_id != id)
 				continue;
 
@@ -8956,10 +9031,24 @@ static int release_reference(struct bpf_verifier_env *env, int id)
 					return err;
 			}
 
+			old_reg = *reg;
+			regno = bpf_diag_func_regno(state, reg);
+			slot = bpf_diag_stack_arg_slot(state, reg);
 			if (!stack || stack->slot_type[BPF_REG_SIZE - 1] == STACK_SPILL)
 				mark_reg_invalid(env, reg);
 			else if (stack->slot_type[BPF_REG_SIZE - 1] == STACK_DYNPTR)
 				invalidate_dynptr(env, stack);
+			if (regno >= 0)
+				bpf_diag_record_reg_invalidate(vstate,
+							       env->insn_idx,
+							       regno,
+							       BPF_DIAG_REG_MOD_REF_RELEASE,
+							       &old_reg, reg);
+			if (slot >= 0)
+				bpf_diag_record_stack_arg(vstate, env->insn_idx,
+							  state->frameno, slot,
+							  BPF_DIAG_STACK_ARG_REF_RELEASE,
+							  &old_reg, reg);
 		}));
 	}
 
@@ -14801,8 +14890,14 @@ clear_id:
 static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
 	struct bpf_reg_state *regs = cur_regs(env);
+	struct bpf_reg_state old_dst = {};
 	u8 opcode = BPF_OP(insn->code);
+	bool have_old_dst;
 	int err;
+
+	have_old_dst = insn->dst_reg < MAX_BPF_REG;
+	if (have_old_dst)
+		old_dst = regs[insn->dst_reg];
 
 	if (opcode == BPF_END || opcode == BPF_NEG) {
 		/* check src operand */
@@ -14984,7 +15079,16 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			return err;
 	}
 
-	return reg_bounds_sanity_check(env, &regs[insn->dst_reg], "alu");
+	err = reg_bounds_sanity_check(env, &regs[insn->dst_reg], "alu");
+	if (err)
+		return err;
+
+	if (have_old_dst)
+		bpf_diag_record_reg_mod(env->cur_state, env->insn_idx,
+					insn->dst_reg, BPF_SRC(insn->code) == BPF_X,
+					insn->src_reg, opcode, &old_dst,
+					&regs[insn->dst_reg]);
+	return 0;
 }
 
 static void find_good_pkt_pointers(struct bpf_verifier_state *vstate,
