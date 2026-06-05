@@ -87,6 +87,11 @@ static void bpf_diag_print_wrapped_text(struct bpf_verifier_env *env,
 					BPF_DIAG_TEXT_INDENT, text);
 }
 
+static bool bpf_diag_enabled(const struct bpf_verifier_env *env)
+{
+	return env && (env->log.level & BPF_LOG_LEVEL);
+}
+
 void bpf_diag_format_btf_type(char *buf, size_t size,
 			      const struct btf_type *type,
 			      const char *type_name)
@@ -120,7 +125,7 @@ static void bpf_diag_vprint_indented(struct bpf_verifier_env *env,
 {
 	char buf[1024];
 
-	if (!bpf_verifier_log_needed(&env->log))
+	if (!bpf_diag_enabled(env))
 		return;
 
 	vscnprintf(buf, sizeof(buf), fmt, args);
@@ -473,6 +478,9 @@ void bpf_diag_report_header(struct bpf_verifier_env *env,
 {
 	char problem_buf[BPF_DIAG_MSG_LEN];
 
+	if (!bpf_diag_enabled(env))
+		return;
+
 	strscpy(problem_buf, problem ?: "", sizeof(problem_buf));
 	if (problem_buf[0] >= 'a' && problem_buf[0] <= 'z')
 		problem_buf[0] += 'A' - 'a';
@@ -485,6 +493,9 @@ void bpf_diag_report_reason(struct bpf_verifier_env *env, const char *fmt, ...)
 {
 	va_list args;
 
+	if (!bpf_diag_enabled(env))
+		return;
+
 	bpf_diag_report_section(env, "Reason");
 
 	va_start(args, fmt);
@@ -494,12 +505,18 @@ void bpf_diag_report_reason(struct bpf_verifier_env *env, const char *fmt, ...)
 
 void bpf_diag_report_section(struct bpf_verifier_env *env, const char *title)
 {
+	if (!bpf_diag_enabled(env))
+		return;
+
 	verbose(env, "\n%s:\n", title);
 }
 
 void bpf_diag_report_suggestion(struct bpf_verifier_env *env, const char *fmt, ...)
 {
 	va_list args;
+
+	if (!bpf_diag_enabled(env))
+		return;
 
 	bpf_diag_report_section(env, "Suggestion");
 
@@ -606,6 +623,9 @@ void bpf_diag_report_source(struct bpf_verifier_env *env, u32 insn_idx,
 	int start_line, end_line, line_num, indent, width;
 	int insn_width, i;
 	va_list args;
+
+	if (!bpf_diag_enabled(env))
+		return;
 
 	va_start(args, fmt);
 	vscnprintf(msg, sizeof(msg), fmt, args);
@@ -1228,6 +1248,12 @@ void bpf_diag_copy_history(struct bpf_verifier_state *dst,
 {
 	struct bpf_diag_history_event *history;
 
+	dst->diag_enabled = src->diag_enabled;
+	if (!src->diag_enabled) {
+		bpf_diag_clear_history(dst);
+		return;
+	}
+
 	if (!src->diag_history_cnt) {
 		bpf_diag_clear_history(dst);
 		dst->diag_history_omitted = src->diag_history_omitted;
@@ -1272,7 +1298,7 @@ static void bpf_diag_append_history(struct bpf_verifier_state *state,
 {
 	struct bpf_diag_history_event *history;
 
-	if (!state)
+	if (!state || !state->diag_enabled)
 		return;
 
 	if (state->diag_history_cnt < BPF_DIAG_HISTORY_MAX) {
@@ -1854,6 +1880,9 @@ void bpf_diag_print_history(struct bpf_verifier_env *env,
 	bool printed = false;
 	int start_idx;
 	u32 i;
+
+	if (!bpf_diag_enabled(env))
+		return;
 
 	bpf_diag_report_section(env, "Causal path");
 

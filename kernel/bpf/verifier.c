@@ -19239,6 +19239,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 	state->speculative = false;
 	state->branches = 1;
 	state->in_sleepable = env->prog->sleepable;
+	state->diag_enabled = env->log.level & BPF_LOG_LEVEL;
 	state->frame[0] = kzalloc_obj(struct bpf_func_state, GFP_KERNEL_ACCOUNT);
 	if (!state->frame[0]) {
 		kfree(state);
