@@ -181,6 +181,10 @@ void bpf_diag_report_resource_state(struct bpf_verifier_env *env,
 				    const char *suggestion);
 void bpf_diag_report_ref_leak(struct bpf_verifier_env *env, u32 ref_id,
 			      u32 alloc_insn, u32 fail_insn);
+void bpf_diag_report_call_type(struct bpf_verifier_env *env, u32 insn_idx,
+			       int regno, const char *call_name,
+			       const char *arg_name, const char *reason,
+			       const char *suggestion);
 
 void bpf_diag_clear_history(struct bpf_verifier_state *state);
 void bpf_diag_copy_history(struct bpf_verifier_state *dst,
