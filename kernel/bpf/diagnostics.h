@@ -209,6 +209,9 @@ void bpf_diag_report_policy(struct bpf_verifier_env *env, u32 insn_idx,
 void bpf_diag_report_limit(struct bpf_verifier_env *env, u32 insn_idx,
 			   const char *limit, const char *reason,
 			   const char *suggestion);
+void bpf_diag_report_internal_error(struct bpf_verifier_env *env,
+				    u32 insn_idx, const char *problem,
+				    const char *reason);
 
 void bpf_diag_clear_history(struct bpf_verifier_state *state);
 void bpf_diag_copy_history(struct bpf_verifier_state *dst,

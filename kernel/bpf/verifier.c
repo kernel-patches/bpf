@@ -8313,6 +8313,9 @@ found:
 				verbose(env, "verifier internal error:");
 				verbose(env, "%s has non-overwritten BPF_PTR_POISON type\n",
 					reg_arg_name(env, argno));
+				bpf_diag_report_internal_error(env, env->insn_idx,
+							       "poisoned helper argument type",
+							       "helper type checking reached a non-overwritten BPF_PTR_POISON expected type.");
 				return -EACCES;
 			}
 
@@ -12280,12 +12283,19 @@ static bool check_kfunc_is_graph_node_api(struct bpf_verifier_env *env,
 	default:
 		verbose(env, "verifier internal error: unexpected graph node argument type %s\n",
 			btf_field_type_name(node_field_type));
+		bpf_diag_report_internal_error(env, env->insn_idx,
+					       "unexpected graph node argument type",
+					       "the kfunc graph-node checker saw an unsupported graph node field type.");
 		return false;
 	}
 
-	if (!ret)
+	if (!ret) {
 		verbose(env, "verifier internal error: %s node arg for unknown kfunc\n",
 			btf_field_type_name(node_field_type));
+		bpf_diag_report_internal_error(env, env->insn_idx,
+					       "graph node argument for unknown kfunc",
+					       "the kfunc graph-node checker could not map this graph node argument to the called kfunc.");
+	}
 	return ret;
 }
 
