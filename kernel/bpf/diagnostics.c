@@ -920,6 +920,22 @@ void bpf_diag_report_program_structure(struct bpf_verifier_env *env,
 	bpf_diag_report_suggestion(env, "%s", suggestion);
 }
 
+void bpf_diag_report_policy(struct bpf_verifier_env *env, u32 insn_idx,
+			    const char *operation, const char *reason,
+			    const char *suggestion)
+{
+	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_POLICY,
+			       "operation is not allowed");
+	bpf_diag_report_reason(env, "The operation %s is not allowed: %s.",
+			       operation, reason);
+
+	bpf_diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, '!',
+			       "policy check failed for %s", operation);
+
+	bpf_diag_report_suggestion(env, "%s", suggestion);
+}
+
 void bpf_diag_report_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx,
 				   int regno, const char *reg_name,
 				   const char *type_name,
