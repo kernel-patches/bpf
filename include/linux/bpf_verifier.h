@@ -526,6 +526,7 @@ struct bpf_verifier_state {
 	struct bpf_diag_history_event *diag_history;
 	u32 diag_history_cnt;
 	u32 diag_history_omitted;
+	bool diag_enabled;
 	u32 dfs_depth;
 	u32 callback_unroll_depth;
 	u32 may_goto_depth;
