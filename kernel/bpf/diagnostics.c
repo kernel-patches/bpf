@@ -809,6 +809,119 @@ void bpf_diag_report_unreadable_reg(struct bpf_verifier_env *env,
 				   "Avoid using the register after it is invalidated, or reload and revalidate a fresh pointer before this instruction.");
 }
 
+static void bpf_diag_format_access_offset(char *buf, size_t size, int off,
+					  const struct bpf_reg_state *reg)
+{
+	char range[BPF_DIAG_REG_DESC_LEN];
+
+	if (tnum_is_const(reg->var_off)) {
+		scnprintf(buf, size, "constant %lld",
+			  (s64)off + reg->var_off.value);
+		return;
+	}
+
+	if (bpf_diag_var_off_unknown(reg->var_off.value, reg->var_off.mask) &&
+	    bpf_diag_range_unknown(reg_smin(reg), reg_smax(reg),
+				   reg_umin(reg), reg_umax(reg))) {
+		scnprintf(buf, size, "unknown");
+		return;
+	}
+
+	bpf_diag_format_scalar_range(range, sizeof(range), reg_smin(reg),
+				     reg_smax(reg), reg_umin(reg),
+				     reg_umax(reg));
+	if (off) {
+		scnprintf(buf, size,
+			  "variable: pointer known bits %#llx, unknown mask %#llx, plus %d from this access; %s",
+			  (u64)reg->var_off.value, reg->var_off.mask, off,
+			  range);
+		return;
+	}
+
+	scnprintf(buf, size,
+		  "variable: known bits %#llx, unknown mask %#llx, %s",
+		  (u64)reg->var_off.value, reg->var_off.mask,
+		  range);
+}
+
+void bpf_diag_report_memory(struct bpf_verifier_env *env, u32 insn_idx,
+			    const char *problem, const char *reason,
+			    const char *suggestion)
+{
+	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_MEMORY_SAFETY,
+			       problem);
+	bpf_diag_report_reason(env, "%s", reason);
+
+	bpf_diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, '!', "%s", problem);
+
+	bpf_diag_report_suggestion(env, "%s", suggestion);
+}
+
+void bpf_diag_report_mem_bounds(struct bpf_verifier_env *env, u32 insn_idx,
+				int regno, const char *reg_name,
+				const char *type_name,
+				enum bpf_diag_mem_bounds_kind kind,
+				int off, int size, u32 mem_size,
+				const struct bpf_reg_state *reg)
+{
+	struct bpf_diag_history_opts opts = {
+		.scope = BPF_DIAG_HISTORY_SCOPE_REG,
+		.frameno = bpf_diag_current_frameno(env),
+		.regno = regno,
+	};
+	char offset_desc[256];
+	char proof[192];
+	u64 max_start, max_end;
+
+	switch (kind) {
+	case BPF_DIAG_MEM_NEGATIVE_MIN:
+		scnprintf(proof, sizeof(proof),
+			  "The smallest possible offset is %lld, below 0",
+			  reg_smin(reg) + off);
+		break;
+	case BPF_DIAG_MEM_MIN_OUT_OF_RANGE:
+		scnprintf(proof, sizeof(proof),
+			  "The smallest possible access starts at %lld, outside an object of size %u",
+			  reg_smin(reg) + off, mem_size);
+		break;
+	case BPF_DIAG_MEM_UNBOUNDED:
+		scnprintf(proof, sizeof(proof),
+			  "The access needs offset + size <= %u, but %s has no safe upper bound",
+			  mem_size, reg_name);
+		break;
+	case BPF_DIAG_MEM_MAX_OUT_OF_RANGE:
+	default:
+		if (off < 0 && reg_umax(reg) < (u64)-off)
+			max_start = 0;
+		else
+			max_start = reg_umax(reg) + off;
+		max_end = max_start + size;
+		scnprintf(proof, sizeof(proof),
+			  "The largest possible access ends at %llu, beyond an object of size %u",
+			  max_end, mem_size);
+		break;
+	}
+
+	bpf_diag_format_access_offset(offset_desc, sizeof(offset_desc), off, reg);
+
+	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_MEMORY_SAFETY,
+			       "access outside bounds");
+	bpf_diag_report_reason(env,
+			       "The verifier cannot prove that this access stays within the object: %s. %s is %s; offset is %s; access size %d; object size %u.",
+			       proof, reg_name, type_name, offset_desc, size,
+			       mem_size);
+
+	bpf_diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, '!',
+			       "access may be outside object bounds");
+
+	bpf_diag_print_history(env, &opts);
+
+	bpf_diag_report_suggestion(env,
+				   "Add or adjust a bounds check that proves offset + access size stays within the object.");
+}
+
 void bpf_diag_clear_history(struct bpf_verifier_state *state)
 {
 	kfree(state->diag_history);
