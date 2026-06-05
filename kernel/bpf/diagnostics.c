@@ -241,6 +241,8 @@ static const char *bpf_diag_marker_label(char marker)
 		return "acquired";
 	case '-':
 		return "released";
+	case '@':
+		return "context";
 	default:
 		return "note";
 	}
@@ -435,6 +437,23 @@ static const char *bpf_diag_category_name(enum bpf_diag_category category)
 	case BPF_DIAG_CATEGORY_VERIFIER_INTERNAL_ERROR:
 	default:
 		return "Verifier Internal Error";
+	}
+}
+
+static const char *bpf_diag_context_name(enum bpf_diag_context_kind kind)
+{
+	switch (kind) {
+	case BPF_DIAG_CONTEXT_RCU:
+		return "RCU read lock region";
+	case BPF_DIAG_CONTEXT_PREEMPT:
+		return "non-preemptible region";
+	case BPF_DIAG_CONTEXT_IRQ:
+		return "IRQ-disabled region";
+	case BPF_DIAG_CONTEXT_LOCK:
+		return "lock region";
+	case BPF_DIAG_CONTEXT_NONE:
+	default:
+		return "context";
 	}
 }
 
@@ -868,6 +887,24 @@ void bpf_diag_record_ref_release(struct bpf_verifier_state *state, u32 insn_idx,
 			    ref_id);
 }
 
+void bpf_diag_record_context(struct bpf_verifier_state *state, u32 insn_idx,
+			     enum bpf_diag_context_kind ctx_kind, bool enter,
+			     u32 depth)
+{
+	struct bpf_diag_history_event event = {
+		.insn_idx = insn_idx,
+		.kind = BPF_DIAG_HISTORY_CONTEXT,
+		.ctx.kind = ctx_kind,
+		.ctx.enter = enter,
+		.ctx.depth = depth,
+	};
+
+	if (ctx_kind == BPF_DIAG_CONTEXT_NONE)
+		return;
+
+	bpf_diag_append_history(state, &event);
+}
+
 static int bpf_diag_history_start_idx(const struct bpf_verifier_state *state,
 				      const struct bpf_diag_history_opts *opts)
 {
@@ -893,7 +930,15 @@ static int bpf_diag_history_start_idx(const struct bpf_verifier_state *state,
 		    event->kind == BPF_DIAG_HISTORY_REF_ACQUIRE &&
 		    event->ref.ref_id == opts->ref_id)
 			return i - 1;
+		if (opts->scope == BPF_DIAG_HISTORY_SCOPE_CONTEXT &&
+		    event->kind == BPF_DIAG_HISTORY_CONTEXT &&
+		    event->ctx.enter &&
+		    event->ctx.kind == opts->ctx_kind)
+			return i - 1;
 	}
+
+	if (opts->scope == BPF_DIAG_HISTORY_SCOPE_CONTEXT)
+		return state->diag_history_cnt;
 
 	return 0;
 }
@@ -919,6 +964,9 @@ static bool bpf_diag_history_event_visible(const struct bpf_diag_history_event *
 	case BPF_DIAG_HISTORY_REF_RELEASE:
 		return opts->scope == BPF_DIAG_HISTORY_SCOPE_REF &&
 		       event->ref.ref_id == opts->ref_id;
+	case BPF_DIAG_HISTORY_CONTEXT:
+		return opts->scope == BPF_DIAG_HISTORY_SCOPE_CONTEXT &&
+		       event->ctx.kind == opts->ctx_kind;
 	default:
 		return false;
 	}
@@ -1132,6 +1180,16 @@ static void bpf_diag_print_ref_event(struct bpf_verifier_env *env,
 			       event->ref.ref_id);
 }
 
+static void bpf_diag_print_context_event(struct bpf_verifier_env *env,
+					 const struct bpf_diag_history_event *event)
+{
+	bpf_diag_report_source(env, event->insn_idx, '@',
+			       "%s %s; depth is now %u",
+			       event->ctx.enter ? "entered" : "left",
+			       bpf_diag_context_name(event->ctx.kind),
+			       event->ctx.depth);
+}
+
 void bpf_diag_print_history(struct bpf_verifier_env *env,
 			    const struct bpf_diag_history_opts *opts)
 {
@@ -1173,6 +1231,10 @@ void bpf_diag_print_history(struct bpf_verifier_env *env,
 		case BPF_DIAG_HISTORY_REF_ACQUIRE:
 		case BPF_DIAG_HISTORY_REF_RELEASE:
 			bpf_diag_print_ref_event(env, event);
+			printed = true;
+			break;
+		case BPF_DIAG_HISTORY_CONTEXT:
+			bpf_diag_print_context_event(env, event);
 			printed = true;
 			break;
 		default:
