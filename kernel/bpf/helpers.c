@@ -2912,6 +2912,9 @@ __bpf_kfunc struct task_struct *bpf_task_from_vpid(s32 vpid)
 {
 	struct task_struct *p;
 
+	if (in_interrupt())
+		return NULL;
+
 	rcu_read_lock();
 	p = find_task_by_vpid(vpid);
 	if (p)
