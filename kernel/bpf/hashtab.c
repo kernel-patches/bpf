@@ -102,6 +102,7 @@ struct bpf_htab {
 	u32 n_buckets;	/* number of hash buckets */
 	u32 elem_size;	/* size of each element in bytes */
 	u32 hashrnd;
+	struct work_struct work;
 };
 
 /* each htab element is struct htab_elem + key + value */
@@ -539,6 +540,8 @@ static int htab_map_check_btf(struct bpf_map *map, const struct btf *btf,
 		return htab_set_dtor(htab, htab_mem_dtor);
 }
 
+static void htab_map_free_internal_structs_deferred(struct work_struct *work);
+
 static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 {
 	bool percpu = (attr->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
@@ -557,6 +560,7 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 	if (!htab)
 		return ERR_PTR(-ENOMEM);
 
+	INIT_WORK(&htab->work, htab_map_free_internal_structs_deferred);
 	bpf_map_init_from_attr(&htab->map, attr);
 
 	if (percpu_lru) {
@@ -1606,18 +1610,27 @@ static void htab_free_malloced_internal_structs(struct bpf_htab *htab)
 	rcu_read_unlock();
 }
 
-static void htab_map_free_internal_structs(struct bpf_map *map)
+static void htab_map_free_internal_structs_deferred(struct work_struct *work)
 {
+	struct bpf_map *map = container_of(work, struct bpf_map, work);
 	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
-
-	/* We only free internal structs on uref dropping to zero */
-	if (!bpf_map_has_internal_structs(map))
-		return;
 
 	if (htab_is_prealloc(htab))
 		htab_free_prealloced_internal_structs(htab);
 	else
 		htab_free_malloced_internal_structs(htab);
+	bpf_map_put(map);
+}
+
+static void htab_map_free_internal_structs(struct bpf_map *map)
+{
+	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
+	/* We only free internal structs on uref dropping to zero */
+	if (!bpf_map_has_internal_structs(map))
+		return;
+
+	bpf_map_inc(map);
+	schedule_work(&htab->work);
 }
 
 /* Called when map->refcnt goes to zero, either from workqueue or from syscall */
