@@ -13167,9 +13167,11 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 		mark_btf_func_reg_size(env, BPF_REG_0, sizeof(void *));
 		if (is_kfunc_acquire(&meta)) {
-			id = acquire_reference(env, insn_idx, 0);
-			if (id < 0)
-				return id;
+			err = acquire_reference(env, insn_idx, 0);
+			if (err < 0)
+				return err;
+			id = err;
+
 			regs[BPF_REG_0].id = id;
 		} else if (is_rbtree_node_type(ptr_type) || is_list_node_type(ptr_type)) {
 			ref_set_non_owning(env, &regs[BPF_REG_0]);
