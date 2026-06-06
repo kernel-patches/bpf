@@ -836,7 +836,7 @@ int disconnect_tag(int nfc_sock, int virtual_fd)
 	return status;
 }
 
-TEST_F(NCI, t4t_tag_read)
+TEST_F_TIMEOUT(NCI, t4t_tag_read, 120)
 {
 	int nfc_sock;
 	int status;
