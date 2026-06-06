@@ -14,9 +14,11 @@
 #include <linux/acpi.h>
 #include <linux/dmi.h>
 #include <linux/gpio/consumer.h>
-#include <linux/gpio_keys.h>
+#include <linux/gpio/driver.h>
+#include <linux/gpio/machine.h>
 #include <linux/platform_data/x86/soc.h>
 #include <linux/platform_device.h>
+#include <linux/property.h>
 #include <linux/slab.h>
 
 static bool use_low_level_irq;
@@ -59,10 +61,10 @@ struct soc_button_data {
  * gets called with the lid open (e.g. on boot and on resume), it sets the
  * irq-type to IRQ_TYPE_LEVEL_LOW. Where as the gpio-keys driver programs the
  * type to, and expects it to be, IRQ_TYPE_EDGE_BOTH.
- * To work around this we don't set gpio_keys_button.gpio on these 2-in-1s,
+ * To work around this we don't set "gpios" property on these 2-in-1s,
  * instead we get the irq for the GPIO ourselves, configure it as
  * IRQ_TYPE_LEVEL_LOW (to match how the _LID AML code configures it) and pass
- * the irq in gpio_keys_button.irq. Below is a list of affected devices.
+ * the irq as a device resource. Below is a list of affected devices.
  */
 static const struct dmi_system_id dmi_use_low_level_irq[] = {
 	{
@@ -131,18 +133,31 @@ static const struct dmi_system_id dmi_invalid_acpi_index[] = {
 };
 
 /*
- * Get the Nth GPIO number from the ACPI object.
+ * Get the Nth GPIO information from the ACPI object.
  */
 static int soc_button_lookup_gpio(struct device *dev, int acpi_index,
-				  int *gpio_ret, int *irq_ret)
+				  bool active_low,
+				  struct software_node_ref_args *gpio_ref,
+				  int *irq_ret)
 {
+	struct gpio_device *gdev;
+	struct fwnode_handle *fwnode;
 	struct gpio_desc *desc;
 
 	desc = gpiod_get_index(dev, NULL, acpi_index, GPIOD_ASIS);
 	if (IS_ERR(desc))
 		return PTR_ERR(desc);
 
-	*gpio_ret = desc_to_gpio(desc);
+	gdev = gpiod_to_gpio_device(desc);
+	fwnode = dev_fwnode(gpio_device_to_device(gdev));
+	if (!fwnode) {
+		gpiod_put(desc);
+		return -ENODEV;
+	}
+
+	*gpio_ref = SOFTWARE_NODE_REFERENCE(fwnode, gpiod_hwgpio(desc),
+					    active_low ? GPIO_ACTIVE_LOW :
+							 GPIO_ACTIVE_HIGH);
 	*irq_ret = gpiod_to_irq(desc);
 
 	gpiod_put(desc);
@@ -150,28 +165,48 @@ static int soc_button_lookup_gpio(struct device *dev, int acpi_index,
 	return 0;
 }
 
+static void soc_button_remove_swnodes(struct fwnode_handle *parent)
+{
+	struct fwnode_handle *child;
+
+	if (IS_ERR_OR_NULL(parent))
+		return;
+
+	fwnode_for_each_child_node(parent, child)
+		fwnode_remove_software_node(child);
+
+	fwnode_remove_software_node(parent);
+}
+
+DEFINE_FREE(soc_button_swnodes, struct fwnode_handle *, soc_button_remove_swnodes(_T))
+
 static struct platform_device *
 soc_button_device_create(struct platform_device *pdev,
 			 const struct soc_button_info *button_info,
 			 bool autorepeat)
 {
+	static const struct property_entry parent_props[] = {
+		PROPERTY_ENTRY_BOOL("autorepeat"),
+		{ }
+	};
 	struct platform_device_info pdevinfo = {
 		.parent = &pdev->dev,
 		.name = "gpio-keys",
 		.id = PLATFORM_DEVID_AUTO,
 	};
 	const struct soc_button_info *info;
-	struct platform_device *pd;
-	struct gpio_keys_button *gpio_keys;
-	struct gpio_keys_platform_data *gpio_keys_pdata;
 	const struct dmi_system_id *dmi_id;
+	struct platform_device *pd;
 	int invalid_acpi_index = -1;
-	int error, gpio, irq = 0;
+	int error, irq = 0;
 	int n_buttons = 0;
 
 	for (info = button_info; info->name; info++)
 		if (info->autorepeat == autorepeat)
 			n_buttons++;
+
+	if (n_buttons == 0)
+		return ERR_PTR(-ENODEV);
 
 	struct resource *irq_resources __free(kfree) = NULL;
 	/* See dmi_use_low_level_irq[] comment */
@@ -182,17 +217,11 @@ soc_button_device_create(struct platform_device *pdev,
 			return ERR_PTR(-ENOMEM);
 	}
 
-	gpio_keys_pdata = devm_kzalloc(&pdev->dev,
-				       sizeof(*gpio_keys_pdata) +
-					sizeof(*gpio_keys) * n_buttons,
-				       GFP_KERNEL);
-	if (!gpio_keys_pdata)
-		return ERR_PTR(-ENOMEM);
+	struct fwnode_handle *parent_node __free(soc_button_swnodes) =
+		fwnode_create_software_node(autorepeat ? parent_props : NULL, NULL);
+	if (IS_ERR(parent_node))
+		return ERR_CAST(parent_node);
 
-	pdevinfo.data = gpio_keys_pdata;
-	pdevinfo.size_data = sizeof(*gpio_keys_pdata);
-
-	gpio_keys = (void *)(gpio_keys_pdata + 1);
 	n_buttons = 0;
 
 	dmi_id = dmi_first_match(dmi_invalid_acpi_index);
@@ -200,13 +229,19 @@ soc_button_device_create(struct platform_device *pdev,
 		invalid_acpi_index = (long)dmi_id->driver_data;
 
 	for (info = button_info; info->name; info++) {
+		struct software_node_ref_args gpio_ref;
+		struct property_entry child_props[7] = { };
+		struct fwnode_handle *child_node;
+		int prop_idx = 0;
+
 		if (info->autorepeat != autorepeat)
 			continue;
 
 		if (info->acpi_index == invalid_acpi_index)
 			continue;
 
-		error = soc_button_lookup_gpio(&pdev->dev, info->acpi_index, &gpio, &irq);
+		error = soc_button_lookup_gpio(&pdev->dev, info->acpi_index,
+					       info->active_low, &gpio_ref, &irq);
 		if (error || irq < 0) {
 			/*
 			 * Propagate -EPROBE_DEFER, skip button on other errors.
@@ -221,60 +256,61 @@ soc_button_device_create(struct platform_device *pdev,
 			 * show up, therefore we ignore -EPROBE_DEFER.
 			 */
 			if ((error == -EPROBE_DEFER || irq == -EPROBE_DEFER) &&
-			    !(soc_intel_is_byt() || soc_intel_is_cht())) {
-				error = -EPROBE_DEFER;
-				goto err_free_mem;
-			}
+			    !(soc_intel_is_byt() || soc_intel_is_cht()))
+				return ERR_PTR(-EPROBE_DEFER);
 
 			continue;
 		}
+
+		child_props[prop_idx++] = PROPERTY_ENTRY_U32("linux,code", info->event_code);
+		child_props[prop_idx++] = PROPERTY_ENTRY_STRING("label", info->name);
+
+		if (info->event_type != EV_KEY)
+			child_props[prop_idx++] =
+				PROPERTY_ENTRY_U32("linux,input-type", info->event_type);
+
+		if (info->wakeup)
+			child_props[prop_idx++] = PROPERTY_ENTRY_BOOL("wakeup-source");
+
+		/* These devices often use cheap buttons, use 50 ms debounce */
+		child_props[prop_idx++] = PROPERTY_ENTRY_U32("debounce-interval", 50);
 
 		/* See dmi_use_low_level_irq[] comment */
 		if (irq_resources) {
 			irq_set_irq_type(irq, IRQ_TYPE_LEVEL_LOW);
 			irq_resources[n_buttons] = DEFINE_RES_IRQ(irq);
-			gpio_keys[n_buttons].gpio = -ENOENT;
 		} else {
-			gpio_keys[n_buttons].gpio = gpio;
+			child_props[prop_idx++] =
+				PROPERTY_ENTRY_REF("gpios", &gpio_ref);
 		}
 
-		gpio_keys[n_buttons].type = info->event_type;
-		gpio_keys[n_buttons].code = info->event_code;
-		gpio_keys[n_buttons].active_low = info->active_low;
-		gpio_keys[n_buttons].desc = info->name;
-		gpio_keys[n_buttons].wakeup = info->wakeup;
-		/* These devices often use cheap buttons, use 50 ms debounce */
-		gpio_keys[n_buttons].debounce_interval = 50;
+		child_node = fwnode_create_software_node(child_props, parent_node);
+		if (IS_ERR(child_node))
+			return ERR_CAST(child_node);
+
 		n_buttons++;
 	}
 
-	if (n_buttons == 0) {
-		error = -ENODEV;
-		goto err_free_mem;
-	}
-
-	gpio_keys_pdata->buttons = gpio_keys;
-	gpio_keys_pdata->nbuttons = n_buttons;
-	gpio_keys_pdata->rep = autorepeat;
+	if (n_buttons == 0)
+		return ERR_PTR(-ENODEV);
 
 	if (irq_resources) {
 		pdevinfo.res = irq_resources;
 		pdevinfo.num_res = n_buttons;
 	}
 
+	pdevinfo.fwnode = parent_node;
+
 	pd = platform_device_register_full(&pdevinfo);
 	error = PTR_ERR_OR_ZERO(pd);
 	if (error) {
 		dev_err(&pdev->dev,
 			"failed registering gpio-keys: %d\n", error);
-		goto err_free_mem;
+		return ERR_PTR(error);
 	}
 
+	retain_and_null_ptr(parent_node);
 	return pd;
-
-err_free_mem:
-	devm_kfree(&pdev->dev, gpio_keys_pdata);
-	return ERR_PTR(error);
 }
 
 static int soc_button_get_acpi_object_int(const union acpi_object *obj)
@@ -439,12 +475,18 @@ static struct soc_button_info *soc_button_get_button_info(struct device *dev)
 static void soc_button_remove(struct platform_device *pdev)
 {
 	struct soc_button_data *priv = platform_get_drvdata(pdev);
+	struct platform_device *pd;
+	struct fwnode_handle *fwnode;
 
-	int i;
+	for (int i = 0; i < BUTTON_TYPES; i++) {
+		pd = priv->children[i];
+		if (!pd)
+			continue;
 
-	for (i = 0; i < BUTTON_TYPES; i++)
-		if (priv->children[i])
-			platform_device_unregister(priv->children[i]);
+		fwnode = dev_fwnode(&pd->dev);
+		platform_device_unregister(pd);
+		soc_button_remove_swnodes(fwnode);
+	}
 }
 
 static int soc_button_probe(struct platform_device *pdev)
