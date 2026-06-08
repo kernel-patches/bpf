@@ -593,6 +593,7 @@ void __init setup_arch(char **cmdline_p)
 {
 	cpu_probe();
 	unwind_init();
+	set_current(&init_task);
 
 	init_environ();
 	efi_init();
