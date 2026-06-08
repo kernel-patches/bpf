@@ -6968,6 +6968,11 @@ static int process_spin_lock(struct bpf_verifier_env *env, struct bpf_reg_state 
 	u32 spin_lock_off;
 	int err;
 
+	if (is_tracing_prog_type(env->prog)) {
+		verbose(env, "tracing progs cannot use bpf_spin_lock yet\n");
+		return -EINVAL;
+	}
+
 	if (!is_const) {
 		verbose(env,
 			"%s doesn't have constant offset. %s_lock has to be at the constant offset\n",
@@ -17726,11 +17731,11 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 			verbose(env, "socket filter progs cannot use bpf_spin_lock yet\n");
 			return -EINVAL;
 		}
-
-		if (is_tracing_prog_type(prog)) {
-			verbose(env, "tracing progs cannot use bpf_spin_lock yet\n");
-			return -EINVAL;
-		}
+		/*
+		 * Rejecting tracing progs accessing maps with bpf_spin_lock in
+		 * them here would be too conservative; let's defer rejection
+		 * until seeing first use.
+		 */
 	}
 
 	if ((bpf_prog_is_offloaded(prog->aux) || bpf_map_is_offloaded(map)) &&
