@@ -1827,7 +1827,11 @@ int bpf_kfunc_multi_st_ops_test_1_assoc(struct st_ops_args *args, struct bpf_pro
 
 int bpf_kfunc_implicit_arg(int a, struct bpf_prog_aux *aux)
 {
-	if (aux && a > 0)
+	/* Verify the kernel injected the correct bpf_prog_aux pointer
+	 * rather than leaving a stale register value. */
+	if (!aux || strncmp(aux->name, "test_kfunc", sizeof("test_kfunc") - 1))
+		return -EINVAL;
+	if (a > 0)
 		return a;
 	return -EINVAL;
 }
