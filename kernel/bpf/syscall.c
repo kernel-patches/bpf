@@ -808,6 +808,33 @@ void bpf_obj_free_task_work(const struct btf_record *rec, void *obj)
 	bpf_task_work_cancel_and_free(obj + rec->task_work_off);
 }
 
+void bpf_obj_cancel_fields(const struct btf_record *rec, void *obj)
+{
+	const struct btf_field *fields;
+	int i;
+
+	if (IS_ERR_OR_NULL(rec))
+		return;
+	fields = rec->fields;
+	for (i = 0; i < rec->cnt; i++) {
+		void *field_ptr = obj + fields[i].offset;
+
+		switch (fields[i].type) {
+		case BPF_TIMER:
+			bpf_timer_cancel_and_free(field_ptr);
+			break;
+		case BPF_WORKQUEUE:
+			bpf_wq_cancel_and_free(field_ptr);
+			break;
+		case BPF_TASK_WORK:
+			bpf_task_work_cancel_and_free(field_ptr);
+			break;
+		default:
+			break;
+		}
+	}
+}
+
 void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 {
 	const struct btf_field *fields;
