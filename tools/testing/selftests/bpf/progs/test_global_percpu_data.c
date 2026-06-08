@@ -51,4 +51,15 @@ int verifier_snprintf(void *ctx)
 	return 0;
 }
 
+static volatile const char fmt2[] SEC(".percpu.fmt") = "data %d\n";
+
+SEC("kprobe")
+__auxiliary
+int verifier_percpu_read(void *ctx)
+{
+	char c = fmt2[4];
+
+	return c == ' ';
+}
+
 char _license[] SEC("license") = "GPL";

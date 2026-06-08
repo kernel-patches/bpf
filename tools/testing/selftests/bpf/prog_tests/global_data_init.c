@@ -249,6 +249,90 @@ static void test_global_percpu_data_verifier_log(void)
 	RUN_TESTS(test_global_percpu_data);
 }
 
+static int find_ld_imm64(const struct bpf_insn *insns, size_t insn_cnt, struct bpf_insn *ld_imm64)
+{
+	size_t i;
+
+	for (i = 0; i < insn_cnt; i++) {
+		if (insns[i].code == (BPF_LD | BPF_IMM | BPF_DW)) {
+			ld_imm64[0] = insns[i];
+			ld_imm64[1] = insns[i + 1];
+			return i;
+		}
+	}
+
+	return -ENOENT;
+}
+
+/*
+ * Special (internal-only) form of mov, used to resolve per-CPU addrs:
+ * dst_reg = src_reg + <percpu_base_off>
+ * BPF_ADDR_PERCPU is used as a special insn->off value.
+ */
+#define BPF_ADDR_PERCPU	(-1)
+
+#define BPF_MOV64_PERCPU_REG(DST, SRC)				\
+	((struct bpf_insn) {					\
+		.code  = BPF_ALU64 | BPF_MOV | BPF_X,		\
+		.dst_reg = DST,					\
+		.src_reg = SRC,					\
+		.off   = BPF_ADDR_PERCPU,			\
+		.imm   = 0 })
+
+static __u64 ld_imm64_to_u64(const struct bpf_insn *insn)
+{
+	return ((__u64) insn[1].imm << 32) | (__u64) insn[0].imm;
+}
+
+static void test_global_percpu_data_xlated(void)
+{
+	struct bpf_insn ld_imm64_raw[2], ld_imm64_xlated[2], mov64_percpu_reg, *insns = NULL;
+	size_t insn_sz = sizeof(struct bpf_insn);
+	struct test_global_percpu_data *skel;
+	struct bpf_program *prog;
+	int idx, err;
+	__u32 cnt;
+
+	skel = test_global_percpu_data__open();
+	if (!ASSERT_OK_PTR(skel, "test_global_percpu_data__open"))
+		return;
+
+	prog = skel->progs.verifier_percpu_read;
+	idx = find_ld_imm64(bpf_program__insns(prog), bpf_program__insn_cnt(prog), ld_imm64_raw);
+	if (!ASSERT_GE(idx, 0, "find_ld_imm64 raw"))
+		goto out;
+
+	err = test_global_percpu_data__load(skel);
+	if (!ASSERT_OK(err, "test_global_percpu_data__load"))
+		goto out;
+
+	err = get_xlated_program(bpf_program__fd(prog), &insns, &cnt);
+	if (!ASSERT_OK(err, "get_xlated_program"))
+		goto out;
+	if (!ASSERT_GT(cnt, idx + 2, "xlated insn count"))
+		goto out;
+
+	idx = find_ld_imm64(insns, cnt, ld_imm64_xlated);
+	if (!ASSERT_GE(idx, 0, "find_ld_imm64 xlated"))
+		goto out;
+
+	ASSERT_EQ(ld_imm64_xlated[0].code, ld_imm64_raw[0].code, "ld_imm64 opcode");
+	ASSERT_TRUE(ld_imm64_xlated[0].dst_reg == ld_imm64_raw[0].dst_reg, "ld_imm64 dst_reg");
+	/*
+	 * The xlated instruction has the map ID in imm and the offset
+	 * in the next instruction's imm. The raw instruction just has
+	 * the offset in its imm.
+	 */
+	ASSERT_EQ(ld_imm64_xlated[1].imm, ld_imm64_to_u64(ld_imm64_raw), "ld_imm64 off");
+
+	mov64_percpu_reg = BPF_MOV64_PERCPU_REG(ld_imm64_raw[0].dst_reg, ld_imm64_raw[0].dst_reg);
+	ASSERT_MEMEQ(&insns[idx + 2], &mov64_percpu_reg, insn_sz, "mov64_percpu_reg");
+
+out:
+	test_global_percpu_data__destroy(skel);
+	free(insns);
+}
+
 void test_global_percpu_data(void)
 {
 	if (!feat_supported(NULL, FEAT_PERCPU_DATA)) {
@@ -262,4 +346,6 @@ void test_global_percpu_data(void)
 		test_global_percpu_data_lskel();
 	if (test__start_subtest("verifier_log"))
 		test_global_percpu_data_verifier_log();
+	if (test__start_subtest("xlated"))
+		test_global_percpu_data_xlated();
 }
