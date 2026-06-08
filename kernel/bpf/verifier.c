@@ -6967,6 +6967,11 @@ static int process_spin_lock(struct bpf_verifier_env *env, struct bpf_reg_state 
 	u32 spin_lock_off;
 	int err;
 
+	if (is_tracing_prog_type(env->prog)) {
+		verbose(env, "tracing progs cannot use bpf_spin_lock yet\n");
+		return -EINVAL;
+	}
+
 	if (!is_const) {
 		verbose(env,
 			"%s doesn't have constant offset. %s_lock has to be at the constant offset\n",
@@ -12222,6 +12227,10 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				return ret;
 			break;
 		case KF_ARG_PTR_TO_LIST_HEAD:
+			if (is_tracing_prog_type(env->prog)) {
+				verbose(env, "tracing progs cannot use bpf_{list_head,rb_root} yet\n");
+				return -EINVAL;
+			}
 			if (reg->type != PTR_TO_MAP_VALUE &&
 			    reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
 				verbose(env, "%s expected pointer to map value or allocated object\n",
@@ -12238,6 +12247,10 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				return ret;
 			break;
 		case KF_ARG_PTR_TO_RB_ROOT:
+			if (is_tracing_prog_type(env->prog)) {
+				verbose(env, "tracing progs cannot use bpf_{list_head,rb_root} yet\n");
+				return -EINVAL;
+			}
 			if (reg->type != PTR_TO_MAP_VALUE &&
 			    reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
 				verbose(env, "%s expected pointer to map value or allocated object\n",
@@ -17664,9 +17677,11 @@ static int check_pseudo_btf_id(struct bpf_verifier_env *env,
 	return __add_used_btf(env, btf);
 }
 
-static bool is_tracing_prog_type(enum bpf_prog_type type)
+static bool is_tracing_prog_type(const struct bpf_prog *prog)
 {
-	switch (type) {
+	switch (resolve_prog_type(prog)) {
+	case BPF_PROG_TYPE_TRACING:
+		return prog->expected_attach_type != BPF_TRACE_ITER;
 	case BPF_PROG_TYPE_KPROBE:
 	case BPF_PROG_TYPE_TRACEPOINT:
 	case BPF_PROG_TYPE_PERF_EVENT:
@@ -17697,24 +17712,16 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	if (btf_record_has_field(map->record, BPF_LIST_HEAD) ||
-	    btf_record_has_field(map->record, BPF_RB_ROOT)) {
-		if (is_tracing_prog_type(prog_type)) {
-			verbose(env, "tracing progs cannot use bpf_{list_head,rb_root} yet\n");
-			return -EINVAL;
-		}
-	}
-
 	if (btf_record_has_field(map->record, BPF_SPIN_LOCK | BPF_RES_SPIN_LOCK)) {
 		if (prog_type == BPF_PROG_TYPE_SOCKET_FILTER) {
 			verbose(env, "socket filter progs cannot use bpf_spin_lock yet\n");
 			return -EINVAL;
 		}
-
-		if (is_tracing_prog_type(prog_type)) {
-			verbose(env, "tracing progs cannot use bpf_spin_lock yet\n");
-			return -EINVAL;
-		}
+		/*
+		 * Rejecting tracing progs accessing maps with bpf_spin_lock in
+		 * them here would be too conservative; let's defer rejection
+		 * until seeing first use.
+		 */
 	}
 
 	if ((bpf_prog_is_offloaded(prog->aux) || bpf_map_is_offloaded(map)) &&
