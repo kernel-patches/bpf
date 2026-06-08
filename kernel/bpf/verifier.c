@@ -205,6 +205,7 @@ static int release_reference_nomark(struct bpf_verifier_state *state, int id);
 static int release_reference(struct bpf_verifier_env *env, int id);
 static void invalidate_non_owning_refs(struct bpf_verifier_env *env);
 static bool in_rbtree_lock_required_cb(struct bpf_verifier_env *env);
+static bool is_tracing_prog_type(const struct bpf_prog *prog);
 static int ref_set_non_owning(struct bpf_verifier_env *env,
 			      struct bpf_reg_state *reg);
 static bool is_trusted_reg(struct bpf_verifier_env *env, const struct bpf_reg_state *reg);
@@ -12969,6 +12970,19 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	err = check_kfunc_args(env, &meta, insn_idx);
 	if (err < 0)
 		return err;
+
+	if ((is_bpf_obj_drop_kfunc(meta.func_id) ||
+	     is_bpf_percpu_obj_drop_kfunc(meta.func_id)) && is_tracing_prog_type(env->prog)) {
+		struct btf_struct_meta *struct_meta;
+
+		struct_meta = btf_find_struct_meta(meta.arg_btf, meta.arg_btf_id);
+		if (struct_meta &&
+		    btf_record_has_nmi_unsafe_fields(struct_meta->record)) {
+			verbose(env, "%s cannot be used in tracing programs on types with NMI unsafe fields\n",
+				func_name);
+			return -EINVAL;
+		}
+	}
 
 	if (is_bpf_rbtree_add_kfunc(meta.func_id)) {
 		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
