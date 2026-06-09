@@ -730,6 +730,12 @@ static int dev_map_redirect_clone(struct bpf_dtab_netdev *dst,
 	if (!nskb)
 		return -ENOMEM;
 
+	if (dst->xdp_prog) {
+		nskb = skb_unshare(nskb, GFP_ATOMIC);
+		if (!nskb)
+			return -ENOMEM;
+	}
+
 	err = dev_map_generic_redirect(dst, nskb, xdp_prog);
 	if (unlikely(err)) {
 		consume_skb(nskb);
