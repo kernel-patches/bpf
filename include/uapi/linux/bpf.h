@@ -3527,6 +3527,19 @@ union bpf_attr {
  *			Use the mark present in *params*->mark for the fib lookup.
  *			This option should not be used with BPF_FIB_LOOKUP_DIRECT,
  *			as it only has meaning for full lookups.
+ *		**BPF_FIB_LOOKUP_VLAN**
+ *			If the fib lookup resolves to a VLAN device, set
+ *			*params*->h_vlan_proto and *params*->h_vlan_TCI from
+ *			the VLAN device and replace *params*->ifindex with the
+ *			underlying real device's ifindex. This lets XDP
+ *			programs that target the underlying physical device
+ *			(VLAN devices have no XDP xmit) discover both the
+ *			real egress ifindex and the VLAN tag to push in one
+ *			call. *params*->h_vlan_TCI carries the VID only,
+ *			with PCP and DEI bits zero; a consumer wanting to
+ *			set egress priority writes PCP itself. Only the
+ *			immediate parent is resolved; stacked VLANs (QinQ)
+ *			are not walked.
  *
  *		*ctx* is either **struct xdp_md** for XDP programs or
  *		**struct sk_buff** tc cls_act programs.
@@ -7322,6 +7335,7 @@ enum {
 	BPF_FIB_LOOKUP_TBID    = (1U << 3),
 	BPF_FIB_LOOKUP_SRC     = (1U << 4),
 	BPF_FIB_LOOKUP_MARK    = (1U << 5),
+	BPF_FIB_LOOKUP_VLAN    = (1U << 6),
 };
 
 enum {
@@ -7388,7 +7402,12 @@ struct bpf_fib_lookup {
 
 	union {
 		struct {
-			/* output */
+			/* output: only populated with BPF_FIB_LOOKUP_VLAN
+			 * when the resolved egress is a VLAN device, in
+			 * which case *ifindex* is replaced with the
+			 * underlying real device's ifindex. Otherwise
+			 * both fields are zeroed.
+			 */
 			__be16	h_vlan_proto;
 			__be16	h_vlan_TCI;
 		};
