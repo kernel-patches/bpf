@@ -14758,6 +14758,14 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 				 * This is legal, but we have to reverse our
 				 * src/dest handling in computing the range
 				 */
+				if (opcode == BPF_ADD &&
+				    base_type(src_reg->type) == PTR_TO_MEM &&
+				    (src_reg->type & PTR_UNTRUSTED)) {
+					verbose(env, "R%d tried to add from %s to scalar\n",
+						insn->dst_reg,
+						reg_type_str(env, src_reg->type));
+					return -EACCES;
+				}
 				err = mark_chain_precision(env, insn->dst_reg);
 				if (err)
 					return err;
