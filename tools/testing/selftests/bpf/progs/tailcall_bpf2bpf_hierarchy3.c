@@ -33,17 +33,22 @@ int count = 0;
 static __noinline
 int subprog_tail(struct __sk_buff *skb, void *jmp_table)
 {
+	int ret = 0;
+
 	bpf_tail_call_static(skb, jmp_table, 0);
-	return 0;
+	barrier_var(ret);
+	return ret;
 }
+
+int ret1, ret2;
 
 __auxiliary
 SEC("tc")
 int classifier_0(struct __sk_buff *skb)
 {
 	count++;
-	subprog_tail(skb, &jmp_table0);
-	subprog_tail(skb, &jmp_table1);
+	ret1 = subprog_tail(skb, &jmp_table0);
+	ret2 = subprog_tail(skb, &jmp_table1);
 	return count;
 }
 

@@ -1120,8 +1120,11 @@ int tail_call(struct __sk_buff *sk)
 static __noinline
 int static_tail_call(struct __sk_buff *sk)
 {
+	int ret = 0;
+
 	bpf_tail_call_static(sk, &jmp_table, 0);
-	return 0;
+	barrier_var(ret);
+	return ret;
 }
 
 /* Tail calls in sub-programs invalidate packet pointers. */
@@ -1138,6 +1141,8 @@ int invalidate_pkt_pointers_by_global_tail_call(struct __sk_buff *sk)
 	return TCX_PASS;
 }
 
+int ret1;
+
 /* Tail calls in static sub-programs invalidate packet pointers. */
 SEC("tc")
 __failure __msg("invalid mem access")
@@ -1147,7 +1152,7 @@ int invalidate_pkt_pointers_by_static_tail_call(struct __sk_buff *sk)
 
 	if ((void *)(p + 1) > (void *)(long)sk->data_end)
 		return TCX_DROP;
-	static_tail_call(sk);
+	ret1 = static_tail_call(sk);
 	*p = 42; /* this is unsafe */
 	return TCX_PASS;
 }
