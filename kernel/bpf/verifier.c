@@ -17124,6 +17124,23 @@ static int indirect_jump_min_max_index(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static bool is_cfg_indirect_jump_target(struct bpf_verifier_env *env,
+					u32 target)
+{
+	struct bpf_iarray *jt = env->insn_aux_data[env->insn_idx].jt;
+	int i;
+
+	if (!jt)
+		return false;
+
+	for (i = 0; i < jt->cnt; i++) {
+		if (jt->items[i] == target)
+			return true;
+	}
+
+	return false;
+}
+
 /* gotox *dst_reg */
 static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
@@ -17169,6 +17186,15 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 		verbose(env, "register R%d doesn't point to any offset in map id=%d\n",
 			     insn->dst_reg, map->id);
 		return -EINVAL;
+	}
+
+	for (i = 0; i < n; i++) {
+		if (!is_cfg_indirect_jump_target(env, env->gotox_tmp_buf->items[i])) {
+			verbose(env,
+				"gotox target %u from map id=%d is not in the CFG jump table\n",
+				env->gotox_tmp_buf->items[i], map->id);
+			return -EINVAL;
+		}
 	}
 
 	for (i = 0; i < n - 1; i++) {
