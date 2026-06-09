@@ -23,6 +23,7 @@
 #include <linux/sort.h>
 #include <linux/key.h>
 #include <linux/namei.h>
+#include <linux/file.h>
 
 #include <net/bpf_sk_storage.h>
 
@@ -3240,29 +3241,51 @@ int bpf_uprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 		return -EINVAL;
 
 	flags = attr->link_create.uprobe_multi.flags;
-	if (flags & ~BPF_F_UPROBE_MULTI_RETURN)
+	if (flags & ~(BPF_F_UPROBE_MULTI_RETURN|BPF_F_UPROBE_MULTI_PATH_FD))
 		return -EINVAL;
 
 	/*
-	 * path, offsets and cnt are mandatory,
+	 * offsets and cnt are mandatory,
 	 * ref_ctr_offsets and cookies are optional
 	 */
-	upath = u64_to_user_ptr(attr->link_create.uprobe_multi.path);
 	uoffsets = u64_to_user_ptr(attr->link_create.uprobe_multi.offsets);
 	cnt = attr->link_create.uprobe_multi.cnt;
 	pid = attr->link_create.uprobe_multi.pid;
 
-	if (!upath || !uoffsets || !cnt || pid < 0)
+	if (!uoffsets || !cnt || pid < 0)
 		return -EINVAL;
 	if (cnt > MAX_UPROBE_MULTI_CNT)
 		return -E2BIG;
 
 	uref_ctr_offsets = u64_to_user_ptr(attr->link_create.uprobe_multi.ref_ctr_offsets);
 	ucookies = u64_to_user_ptr(attr->link_create.uprobe_multi.cookies);
+	upath = u64_to_user_ptr(attr->link_create.uprobe_multi.path);
 
-	err = user_path_at(AT_FDCWD, upath, LOOKUP_FOLLOW, &path);
-	if (err)
-		return err;
+	if (flags & BPF_F_UPROBE_MULTI_PATH_FD) {
+		/*
+		 * When BPF_F_UPROBE_MULTI_PATH_FD is set, the executable is identified
+		 * by path_fd, and upath must be NULL.
+		 */
+		if (upath)
+			return -EINVAL;
+
+		CLASS(fd, f)(attr->link_create.uprobe_multi.path_fd);
+		if (fd_empty(f))
+			return -EBADF;
+		path = fd_file(f)->f_path;
+		path_get(&path);
+	} else {
+		/*
+		 * When BPF_F_UPROBE_MULTI_PATH_FD is not set, the path is resolved
+		 * relative to the cwd (AT_FDCWD) or absolute  using the upath string.
+		 */
+		if (!upath)
+			return -EINVAL;
+
+		err = user_path_at(AT_FDCWD, upath, LOOKUP_FOLLOW, &path);
+		if (err)
+			return err;
+	}
 
 	if (!d_is_reg(path.dentry)) {
 		err = -EBADF;
