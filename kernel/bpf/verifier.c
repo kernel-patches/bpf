@@ -12082,8 +12082,27 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			continue;
 		}
 
-		if (is_kfunc_arg_ignore(btf, &args[i]) || is_kfunc_arg_implicit(meta, i))
+		if (is_kfunc_arg_ignore(btf, &args[i]))
 			continue;
+
+		if (is_kfunc_arg_implicit(meta, i)) {
+			/*
+			 * This is an exhaustive list of the non-bpf_prog_aux
+			 * implicit args kfuncs, which are handled
+			 * post-verification by bpf_fixup_kfunc_call().
+			 */
+			if (is_bpf_obj_new_kfunc(meta->func_id) ||
+			    is_bpf_percpu_obj_new_kfunc(meta->func_id) ||
+			    is_bpf_obj_drop_kfunc(meta->func_id) ||
+			    is_bpf_percpu_obj_drop_kfunc(meta->func_id) ||
+			    is_bpf_refcount_acquire_kfunc(meta->func_id) ||
+			    is_bpf_list_push_kfunc(meta->func_id) ||
+			    is_bpf_rbtree_add_kfunc(meta->func_id))
+				continue;
+			verbose(env, "%s unrecognized implicit argument, possible BTF mismatch\n",
+				reg_arg_name(env, argno));
+			return -EFAULT;
+		}
 
 		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
 
