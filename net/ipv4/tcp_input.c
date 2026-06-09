@@ -208,6 +208,22 @@ static void bpf_skops_established(struct sock *sk, int bpf_op,
 }
 #endif
 
+/* struct_ops bpf_tcp_ops parse_hdr hook. Runs independently of the legacy
+ * BPF_SOCK_OPS_PARSE_*_HDR_OPT_CB path; gated by cgroup_bpf_enabled()
+ * inside the macro. Skip non-established states, matching the legacy guard.
+ */
+static void bpf_tcp_ops_parse_hdr(struct sock *sk, struct sk_buff *skb)
+{
+	switch (sk->sk_state) {
+	case TCP_SYN_RECV:
+	case TCP_SYN_SENT:
+	case TCP_LISTEN:
+		return;
+	}
+
+	bpf_tcp_ops_call(parse_hdr, sk, skb);
+}
+
 static __cold void tcp_gro_dev_warn(const struct sock *sk, const struct sk_buff *skb,
 				    unsigned int len)
 {
@@ -6431,6 +6447,7 @@ syn_challenge:
 
 pass:
 	bpf_skops_parse_hdr(sk, skb);
+	bpf_tcp_ops_parse_hdr(sk, skb);
 
 	return true;
 
