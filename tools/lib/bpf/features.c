@@ -19,6 +19,57 @@ int probe_fd(int fd)
 	return fd >= 0;
 }
 
+/* Fetch the first program type from the token that can be used for
+ * feature probes.  Only a few common types are checked that are known
+ * to accept a trivial "return 0" program.  Returns the type on success,
+ * -EINVAL if the token has no probeable type.
+ */
+static int token_probeable_prog_type(int token_fd)
+{
+	/* Types that accept a simple "return 0" probe program */
+	/* Types that accept a trivial "return 0" program without
+	 * specific expected_attach_type.  Types requiring expected_attach_type
+	 * (CGROUP_SOCK, CGROUP_SOCK_ADDR, LWT_*, NETFILTER) are excluded.
+	 */
+	static const int probeable[] = {
+		BPF_PROG_TYPE_SOCKET_FILTER,
+		BPF_PROG_TYPE_KPROBE,
+		BPF_PROG_TYPE_SCHED_CLS,
+		BPF_PROG_TYPE_SCHED_ACT,
+		BPF_PROG_TYPE_TRACEPOINT,
+		BPF_PROG_TYPE_XDP,
+		BPF_PROG_TYPE_PERF_EVENT,
+		BPF_PROG_TYPE_CGROUP_SKB,
+		BPF_PROG_TYPE_SOCK_OPS,
+		BPF_PROG_TYPE_SK_SKB,
+		BPF_PROG_TYPE_CGROUP_DEVICE,
+		BPF_PROG_TYPE_SK_MSG,
+		BPF_PROG_TYPE_RAW_TRACEPOINT,
+		BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE,
+		BPF_PROG_TYPE_CGROUP_SOCKOPT,
+		BPF_PROG_TYPE_CGROUP_SYSCTL,
+		BPF_PROG_TYPE_FLOW_DISSECTOR,
+		BPF_PROG_TYPE_SK_LOOKUP,
+	};
+	struct bpf_token_info info = {};
+	__u32 info_len = sizeof(info);
+	int i, err;
+
+	if (!token_fd)
+		return BPF_PROG_TYPE_SOCKET_FILTER;
+
+	err = bpf_obj_get_info_by_fd(token_fd, &info, &info_len);
+	if (err)
+		return -errno;
+
+	for (i = 0; i < ARRAY_SIZE(probeable); i++) {
+		if (info.allowed_progs & (1ULL << probeable[i]))
+			return probeable[i];
+	}
+
+	return -EINVAL;
+}
+
 static int probe_kern_prog_name(int token_fd)
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, prog_token_fd);
@@ -27,10 +78,14 @@ static int probe_kern_prog_name(int token_fd)
 		BPF_EXIT_INSN(),
 	};
 	union bpf_attr attr;
-	int ret;
+	int ret, prog_type;
+
+	prog_type = token_probeable_prog_type(token_fd);
+	if (prog_type < 0)
+		return 1;
 
 	memset(&attr, 0, attr_sz);
-	attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
+	attr.prog_type = prog_type;
 	attr.license = ptr_to_u64("GPL");
 	attr.insns = ptr_to_u64(insns);
 	attr.insn_cnt = (__u32)ARRAY_SIZE(insns);
@@ -61,6 +116,7 @@ static int probe_kern_global_data(int token_fd)
 		.prog_flags = token_fd ? BPF_F_TOKEN_FD : 0,
 	);
 	int ret, map, insn_cnt = ARRAY_SIZE(insns);
+	int prog_type;
 
 	map = bpf_map_create(BPF_MAP_TYPE_ARRAY, "libbpf_global", sizeof(int), 32, 1, &map_opts);
 	if (map < 0) {
@@ -72,7 +128,12 @@ static int probe_kern_global_data(int token_fd)
 
 	insns[0].imm = map;
 
-	ret = bpf_prog_load(BPF_PROG_TYPE_SOCKET_FILTER, NULL, "GPL", insns, insn_cnt, &prog_opts);
+	prog_type = token_probeable_prog_type(token_fd);
+	if (prog_type < 0) {
+		close(map);
+		return 1;
+	}
+	ret = bpf_prog_load(prog_type, NULL, "GPL", insns, insn_cnt, &prog_opts);
 	close(map);
 	return probe_fd(ret);
 }
@@ -257,8 +318,13 @@ static int probe_kern_probe_read_kernel(int token_fd)
 		BPF_EXIT_INSN(),
 	};
 	int fd, insn_cnt = ARRAY_SIZE(insns);
+	int prog_type;
 
-	fd = bpf_prog_load(BPF_PROG_TYPE_TRACEPOINT, NULL, "GPL", insns, insn_cnt, &opts);
+	prog_type = token_probeable_prog_type(token_fd);
+	if (prog_type < 0)
+		return 1;
+
+	fd = bpf_prog_load(prog_type, NULL, "GPL", insns, insn_cnt, &opts);
 	return probe_fd(fd);
 }
 
@@ -277,6 +343,7 @@ static int probe_prog_bind_map(int token_fd)
 		.prog_flags = token_fd ? BPF_F_TOKEN_FD : 0,
 	);
 	int ret, map, prog, insn_cnt = ARRAY_SIZE(insns);
+	int prog_type;
 
 	map = bpf_map_create(BPF_MAP_TYPE_ARRAY, "libbpf_det_bind", sizeof(int), 32, 1, &map_opts);
 	if (map < 0) {
@@ -286,7 +353,12 @@ static int probe_prog_bind_map(int token_fd)
 		return ret;
 	}
 
-	prog = bpf_prog_load(BPF_PROG_TYPE_SOCKET_FILTER, NULL, "GPL", insns, insn_cnt, &prog_opts);
+	prog = prog_type = token_probeable_prog_type(token_fd);
+	if (prog_type < 0) {
+		close(map);
+		return 1;
+	}
+	prog = bpf_prog_load(prog_type, NULL, "GPL", insns, insn_cnt, &prog_opts);
 	if (prog < 0) {
 		close(map);
 		return 0;
@@ -435,8 +507,13 @@ static int probe_kern_bpf_cookie(int token_fd)
 		.prog_flags = token_fd ? BPF_F_TOKEN_FD : 0,
 	);
 	int ret, insn_cnt = ARRAY_SIZE(insns);
+	int prog_type;
 
-	ret = bpf_prog_load(BPF_PROG_TYPE_TRACEPOINT, NULL, "GPL", insns, insn_cnt, &opts);
+	prog_type = token_probeable_prog_type(token_fd);
+	if (prog_type < 0)
+		return 1;
+
+	ret = bpf_prog_load(prog_type, NULL, "GPL", insns, insn_cnt, &opts);
 	return probe_fd(ret);
 }
 
@@ -509,7 +586,7 @@ static int probe_kern_arg_ctx_tag(int token_fd)
 static int probe_ldimm64_full_range_off(int token_fd)
 {
 	char log_buf[1024];
-	int prog_fd, map_fd;
+	int prog_fd, map_fd, prog_type;
 	int ret;
 	LIBBPF_OPTS(bpf_map_create_opts, map_opts,
 		.token_fd = token_fd,
@@ -527,6 +604,10 @@ static int probe_ldimm64_full_range_off(int token_fd)
 	};
 	int insn_cnt = ARRAY_SIZE(insns);
 
+	prog_type = token_probeable_prog_type(token_fd);
+	if (prog_type < 0)
+		return 1;
+
 	map_fd = bpf_map_create(BPF_MAP_TYPE_ARRAY, "arr", sizeof(int), 1, 1, &map_opts);
 	if (map_fd < 0) {
 		ret = -errno;
@@ -537,7 +618,7 @@ static int probe_ldimm64_full_range_off(int token_fd)
 	insns[0].imm = map_fd;
 
 	log_buf[0] = '\0';
-	prog_fd = bpf_prog_load(BPF_PROG_TYPE_SOCKET_FILTER, "global_reloc", "GPL", insns, insn_cnt, &prog_opts);
+	prog_fd = bpf_prog_load(prog_type, "global_reloc", "GPL", insns, insn_cnt, &prog_opts);
 	ret = -errno;
 
 	close(map_fd);
