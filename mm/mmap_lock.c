@@ -338,6 +338,33 @@ inval:
 	return NULL;
 }
 
+/*
+ * Find the VMA covering 'address' and lock it for reading. Waits for writers to
+ * finish if the VMA is being modified. Returns NULL if there is no VMA covering
+ * 'address'.
+ *
+ * Use only in code paths where no mmap_lock and no VMA lock is held.
+ *
+ * The fast path does not take mmap_lock.
+ */
+struct vm_area_struct *vma_start_read_unlocked(struct mm_struct *mm,
+					       unsigned long address)
+{
+	struct vm_area_struct *vma;
+
+	/* Fast path: return stable VMA covering 'address': */
+	vma = lock_vma_under_rcu(mm, address);
+	if (vma)
+		return vma;
+
+	/* Slow path: preclude VMA writers by getting mmap read lock. */
+	guard(rwsem_read)(&mm->mmap_lock);
+	if (!vma_start_read_locked(vma))
+		return NULL;
+
+	return vma;
+}
+
 static struct vm_area_struct *lock_next_vma_under_mmap_lock(struct mm_struct *mm,
 							    struct vma_iterator *vmi,
 							    unsigned long from_addr)
