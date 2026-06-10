@@ -835,11 +835,6 @@ __bpf_kfunc int bpf_iter_task_vma_new(struct bpf_iter_task_vma *it,
 	BUILD_BUG_ON(sizeof(struct bpf_iter_task_vma_kern) != sizeof(struct bpf_iter_task_vma));
 	BUILD_BUG_ON(__alignof__(struct bpf_iter_task_vma_kern) != __alignof__(struct bpf_iter_task_vma));
 
-	if (!IS_ENABLED(CONFIG_PER_VMA_LOCK)) {
-		kit->data = NULL;
-		return -EOPNOTSUPP;
-	}
-
 	/*
 	 * Reject irqs-disabled contexts including NMI. Operations used
 	 * by _next() and _destroy() (vma_end_read, fput, bpf_iter_mmput_async)

@@ -174,7 +174,6 @@ impl MmWithUser {
     /// When per-vma locks are disabled, this always returns `None`.
     #[inline]
     pub fn lock_vma_under_rcu(&self, vma_addr: usize) -> Option<VmaReadGuard<'_>> {
-        #[cfg(CONFIG_PER_VMA_LOCK)]
         {
             // SAFETY: Calling `bindings::lock_vma_under_rcu` is always okay given an mm where
             // `mm_users` is non-zero.
@@ -188,12 +187,6 @@ impl MmWithUser {
                 });
             }
         }
-
-        // Silence warnings about unused variables.
-        #[cfg(not(CONFIG_PER_VMA_LOCK))]
-        let _ = vma_addr;
-
-        None
     }
 
     /// Lock the mmap read lock.

@@ -446,7 +446,6 @@ static inline void process_mm_walk_lock(struct mm_struct *mm,
 static inline void process_vma_walk_lock(struct vm_area_struct *vma,
 					 enum page_walk_lock walk_lock)
 {
-#ifdef CONFIG_PER_VMA_LOCK
 	switch (walk_lock) {
 	case PGWALK_WRLOCK:
 		vma_start_write(vma);
@@ -461,7 +460,6 @@ static inline void process_vma_walk_lock(struct vm_area_struct *vma,
 		/* PGWALK_RDLOCK is handled by process_mm_walk_lock */
 		break;
 	}
-#endif
 }
 
 /*
