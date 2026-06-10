@@ -80,7 +80,9 @@ static int udp_bpf_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 	}
 
 msg_bytes_ready:
+	lock_sock(sk);
 	copied = sk_msg_recvmsg(sk, psock, msg, len, flags);
+	release_sock(sk);
 	if (!copied) {
 		long timeo;
 		int data;
