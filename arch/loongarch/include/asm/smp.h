@@ -82,7 +82,8 @@ struct seq_file;
 
 struct secondary_data {
 	unsigned long stack;
-	unsigned long thread_info;
+	unsigned long task;
+	unsigned long offset;
 };
 extern struct secondary_data cpuboot_data;
 

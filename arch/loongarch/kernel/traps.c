@@ -90,6 +90,9 @@ static void show_backtrace(struct task_struct *task, const struct pt_regs *regs,
 	if (!task)
 		task = current;
 
+	if (!try_get_task_stack(task))
+		return;
+
 	printk("%sCall Trace:", loglvl);
 	for (unwind_start(&state, task, pregs);
 	      !unwind_done(&state); unwind_next_frame(&state)) {
@@ -97,6 +100,8 @@ static void show_backtrace(struct task_struct *task, const struct pt_regs *regs,
 		print_ip_sym(loglvl, addr);
 	}
 	printk("%s\n", loglvl);
+
+	put_task_stack(task);
 }
 
 static void show_stacktrace(struct task_struct *task,
