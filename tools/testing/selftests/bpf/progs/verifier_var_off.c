@@ -60,6 +60,94 @@ __naked void stack_read_priv_vs_unpriv(void)
 }
 
 SEC("cgroup/skb")
+__description("variable-offset stack read preserves spilled zero")
+__success
+__failure_unpriv __msg_unpriv("R2 variable stack access prohibited for !root")
+__retval(0)
+__naked void stack_read_var_off_preserves_spilled_zero(void)
+{
+	asm volatile (
+	"r0 = 0; "
+	" *(u64 *)(r10 - 8) = r0; "
+	"r2 = *(u32 *)(r1 + 0); "
+	"r2 &= 7; "
+	"r2 -= 8; "
+	"r2 += r10; "
+	"r3 = *(u8 *)(r2 + 0); "
+	"r1 = r10; "
+	"r1 += -1; "
+	"r1 += r3; "
+	" *(u8 *)(r1 + 0) = r3; "
+	"r0 = 0; "
+	"exit; "
+	::
+	: __clobber_all);
+}
+
+SEC("cgroup/skb")
+__description("variable-offset stack read preserves spilled zero across slots")
+__success
+__failure_unpriv __msg_unpriv("R2 variable stack access prohibited for !root")
+__retval(0)
+__naked void stack_read_var_off_preserves_spilled_zero_across_slots(void)
+{
+	asm volatile (
+	"r0 = 0; "
+	" *(u64 *)(r10 - 8) = r0; "
+	" *(u64 *)(r10 - 16) = r0; "
+	"r2 = *(u32 *)(r1 + 0); "
+	"r2 &= 15; "
+	"r2 -= 16; "
+	"r2 += r10; "
+	"r3 = *(u8 *)(r2 + 0); "
+	"r1 = r10; "
+	"r1 += -1; "
+	"r1 += r3; "
+	" *(u8 *)(r1 + 0) = r3; "
+	"r0 = 0; "
+	"exit; "
+	::
+	: __clobber_all);
+}
+
+SEC("cgroup/skb")
+__description("variable-offset stack read tracks spilled zero precisely")
+__failure
+__flag(BPF_F_TEST_STATE_FREQ)
+__msg("invalid variable-offset write to stack R1")
+__failure_unpriv __msg_unpriv("R2 variable stack access prohibited for !root")
+__naked void stack_read_var_off_tracks_spilled_zero_precisely(void)
+{
+	asm volatile (
+	"r6 = *(u32 *)(r1 + 0); "
+	"r6 &= 1; "
+	"r0 = 0; "
+	"if r6 != 0 goto "
+	"+"
+	"2; "
+	" *(u64 *)(r10 - 8) = r0; "
+	"goto "
+	"+"
+	"2; "
+	"r0 = 1; "
+	" *(u64 *)(r10 - 8) = r0; "
+	"r0 = 0; "
+	"r2 = *(u32 *)(r1 + 4); "
+	"r2 &= 7; "
+	"r2 -= 8; "
+	"r2 += r10; "
+	"r3 = *(u8 *)(r2 + 0); "
+	"r1 = r10; "
+	"r1 += -1; "
+	"r1 += r3; "
+	" *(u8 *)(r1 + 0) = 0; "
+	"r0 = 0; "
+	"exit; "
+	::
+	: __clobber_all);
+}
+
+SEC("cgroup/skb")
 __description("variable-offset stack read, uninitialized")
 __success
 __failure_unpriv __msg_unpriv("R2 variable stack access prohibited for !root")
