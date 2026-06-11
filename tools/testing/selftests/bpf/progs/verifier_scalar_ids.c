@@ -448,6 +448,41 @@ __naked void linked_regs_broken_link_2(void)
 	: __clobber_all);
 }
 
+SEC("tc")
+__description("helper retval linked scalar pruning")
+__success __retval(0)
+__naked void helper_retval_linked_scalar_pruning(void)
+{
+	asm volatile (
+	"r7 = *(u32 *)(r1 + %[__sk_buff_data_end]);"
+	"r5 = *(u32 *)(r1 + %[__sk_buff_data]);"
+	"r7 -= r5;"
+	"r2 = 0;"
+	"r3 = r10;"
+	"r3 += -8;"
+	"r4 = 1;"
+	"call %[bpf_skb_load_bytes];"
+	"r0 += 1;"
+	"r6 = 1;"
+	/* success path keeps r7 independent; failure path links r7 to r0. */
+	"if r0 == 1 goto l0_%=;"
+	"r7 = r0;"
+"l0_%=: if r0 != 1 goto l1_%=;"
+	"r7 <<= 32;"
+	"r7 >>= 32;"
+	"if r7 != %[test_data_len] goto l1_%=;"
+	"r0 = 0;"
+	"exit;"
+"l1_%=: r0 = r6;"
+	"exit;"
+	:
+	: __imm(bpf_skb_load_bytes),
+	  __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end)),
+	  __imm_const(test_data_len, TEST_DATA_LEN)
+	: __clobber_all);
+}
+
 /* Check that mark_chain_precision() for one of the conditional jump
  * operands does not trigger equal scalars precision propagation.
  */
