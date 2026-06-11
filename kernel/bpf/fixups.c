@@ -1523,6 +1523,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 				insn->off = 0;
 				insn->imm = 0;
 			} /* cast from as(0) to as(1) should be handled by JIT */
+			if (insn_is_cast_user(insn))
+				prog->aux->has_addr_space_cast_insn = true;
 			goto next_insn;
 		}
 
