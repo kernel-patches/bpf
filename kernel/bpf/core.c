@@ -2608,6 +2608,30 @@ out_restore:
 	return prog;
 }
 
+/*
+ * Rewrite the helper call offset for inlined helpers when fallback to
+ * the interpreter happens due to JIT compilation failure or JIT disabled.
+ */
+static void bpf_fixup_fallback_inline_helpers(struct bpf_verifier_env *env, struct bpf_prog *fp)
+{
+	struct bpf_insn *insn = fp->insnsi;
+	const struct bpf_func_proto *fn;
+	int i;
+
+	if (!env || !env->ops->get_func_proto)
+		return;
+
+	for (i = 0; i < fp->len; i++, insn++) {
+		if (insn->code == (BPF_JMP | BPF_CALL) && insn->src_reg == 0) {
+			if (bpf_jit_inlines_helper_call(insn->imm)) {
+				fn = env->ops->get_func_proto(insn->imm, fp);
+				if (fn && fn->func)
+					insn->imm = fn->func - __bpf_call_base;
+			}
+		}
+	}
+}
+
 struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env, struct bpf_prog *fp,
 					   int *err)
 {
@@ -2639,6 +2663,15 @@ struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env, struct 
 
 		fp = bpf_prog_jit_compile(env, fp);
 		bpf_prog_jit_attempt_done(fp);
+
+		/*
+		 * If JIT compilation failed or is disabled (!fp->jited), we are
+		 * about to fall back to the interpreter path. Fix up the call
+		 * offsets to prevent unaligned memory access panic.
+		 */
+		if (!fp->jited)
+			bpf_fixup_fallback_inline_helpers(env, fp);
+
 		if (!fp->jited && jit_needed) {
 			*err = -ENOTSUPP;
 			return fp;
