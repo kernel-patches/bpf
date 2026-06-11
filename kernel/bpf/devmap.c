@@ -512,35 +512,52 @@ static inline int __xdp_enqueue(struct net_device *dev, struct xdp_frame *xdpf,
 	return 0;
 }
 
-static u32 dev_map_bpf_prog_run_skb(struct sk_buff *skb, struct bpf_dtab_netdev *dst)
+static int dev_map_bpf_prog_run_skb(struct sk_buff **pskb,
+				    struct bpf_dtab_netdev *dst,
+				    u32 *act)
 {
+	struct sk_buff *skb = *pskb;
 	struct xdp_txq_info txq = { .dev = dst->dev };
 	struct xdp_buff xdp;
-	u32 act;
 
-	if (!dst->xdp_prog)
-		return XDP_PASS;
+	if (!dst->xdp_prog) {
+		*act = XDP_PASS;
+		return 0;
+	}
+
+	if (skb_cloned(skb)) {
+		struct sk_buff *nskb;
+
+		nskb = skb_copy(skb, GFP_ATOMIC);
+		if (!nskb)
+			return -ENOMEM;
+
+		nskb->mac_len = skb->mac_len;
+		consume_skb(skb);
+		skb = nskb;
+		*pskb = nskb;
+	}
 
 	__skb_pull(skb, skb->mac_len);
 	xdp.txq = &txq;
 
-	act = bpf_prog_run_generic_xdp(skb, &xdp, dst->xdp_prog);
-	switch (act) {
+	*act = bpf_prog_run_generic_xdp(skb, &xdp, dst->xdp_prog);
+	switch (*act) {
 	case XDP_PASS:
 		__skb_push(skb, skb->mac_len);
 		break;
 	default:
-		bpf_warn_invalid_xdp_action(NULL, dst->xdp_prog, act);
+		bpf_warn_invalid_xdp_action(NULL, dst->xdp_prog, *act);
 		fallthrough;
 	case XDP_ABORTED:
-		trace_xdp_exception(dst->dev, dst->xdp_prog, act);
+		trace_xdp_exception(dst->dev, dst->xdp_prog, *act);
 		fallthrough;
 	case XDP_DROP:
 		kfree_skb(skb);
 		break;
 	}
 
-	return act;
+	return 0;
 }
 
 int dev_xdp_enqueue(struct net_device *dev, struct xdp_frame *xdpf,
@@ -700,6 +717,7 @@ int dev_map_enqueue_multi(struct xdp_frame *xdpf, struct net_device *dev_rx,
 int dev_map_generic_redirect(struct bpf_dtab_netdev *dst, struct sk_buff *skb,
 			     const struct bpf_prog *xdp_prog)
 {
+	u32 act;
 	int err;
 
 	err = xdp_ok_fwd_dev(dst->dev, skb->len);
@@ -710,7 +728,10 @@ int dev_map_generic_redirect(struct bpf_dtab_netdev *dst, struct sk_buff *skb,
 	 * return 0 even if packet is dropped. Helper below takes care of
 	 * freeing skb.
 	 */
-	if (dev_map_bpf_prog_run_skb(skb, dst) != XDP_PASS)
+	err = dev_map_bpf_prog_run_skb(&skb, dst, &act);
+	if (err)
+		return err;
+	if (act != XDP_PASS)
 		return 0;
 
 	skb->dev = dst->dev;
