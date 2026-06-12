@@ -4698,6 +4698,11 @@ static inline bool skb_defer_rx_timestamp(struct sk_buff *skb)
 
 #endif /* !CONFIG_NETWORK_PHY_TIMESTAMPING */
 
+struct bpf_hwtstamp {
+	ktime_t hwtstamp;
+	u64 reserved;
+} __packed;
+
 /**
  * skb_complete_tx_timestamp() - deliver cloned skb with tx timestamps
  *
