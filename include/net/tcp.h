@@ -2855,6 +2855,8 @@ struct sk_psock;
 #ifdef CONFIG_BPF_SYSCALL
 int tcp_bpf_update_proto(struct sock *sk, struct sk_psock *psock, bool restore);
 void tcp_bpf_clone(const struct sock *sk, struct sock *newsk);
+void tcp_bpf_splice_unpair(struct sk_psock *psock);
+void tcp_bpf_splice_destroy(struct sk_psock *psock);
 #ifdef CONFIG_BPF_STREAM_PARSER
 struct strparser;
 int tcp_bpf_strp_read_sock(struct strparser *strp, read_descriptor_t *desc,
@@ -2878,6 +2880,12 @@ int tcp_bpf_sendmsg_redir(struct sock *sk, bool ingress,
 static inline void tcp_bpf_clone(const struct sock *sk, struct sock *newsk)
 {
 }
+#endif
+
+#if !defined(CONFIG_BPF_SYSCALL)
+struct sk_psock;
+static inline void tcp_bpf_splice_unpair(struct sk_psock *psock) {}
+static inline void tcp_bpf_splice_destroy(struct sk_psock *psock) {}
 #endif
 
 #ifdef CONFIG_CGROUP_BPF

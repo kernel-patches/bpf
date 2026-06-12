@@ -881,12 +881,15 @@ static void sk_psock_destroy(struct work_struct *work)
 		sock_put(psock->sk_redir);
 	if (psock->sk_pair)
 		sock_put(psock->sk_pair);
+	tcp_bpf_splice_destroy(psock);
 	sock_put(psock->sk);
 	kfree(psock);
 }
 
 void sk_psock_drop(struct sock *sk, struct sk_psock *psock)
 {
+	tcp_bpf_splice_unpair(psock);
+
 	write_lock_bh(&sk->sk_callback_lock);
 	sk_psock_restore_proto(sk, psock);
 	rcu_assign_sk_user_data(sk, NULL);

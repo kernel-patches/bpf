@@ -80,6 +80,8 @@ struct sk_psock_work_state {
 	u32				off;
 };
 
+struct sk_psock_splice;	/* defined in net/ipv4/tcp_bpf.c */
+
 struct sk_psock {
 	struct sock			*sk;
 	struct sock			*sk_redir;
@@ -121,6 +123,13 @@ struct sk_psock {
 	struct delayed_work		work;
 	struct sock			*sk_pair;
 	struct rcu_work			rwork;
+
+	/* Loopback splice state for paired stream sockets. NULL until the
+	 * first bpf_sock_splice_pair() call on this psock; lazily allocated
+	 * and kept for the lifetime of the psock so that sender/receiver
+	 * paths don't need to revalidate the pointer mid-flight.
+	 */
+	struct sk_psock_splice __rcu	*splice;
 };
 
 int sk_msg_alloc(struct sock *sk, struct sk_msg *msg, int len,
