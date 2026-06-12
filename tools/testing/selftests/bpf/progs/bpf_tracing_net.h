@@ -73,6 +73,7 @@
 #define ETH_P_IPV6		0x86DD
 
 #define NEXTHDR_TCP		6
+#define NEXTHDR_UDP		17
 
 #define TCPOPT_NOP		1
 #define TCPOPT_EOL		0
