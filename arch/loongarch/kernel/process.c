@@ -54,6 +54,8 @@
 #include <asm/vdso.h>
 #include <asm/vdso/vdso.h>
 
+DEFINE_PER_CPU(struct task_struct *, cpu_tasks);
+
 #ifdef CONFIG_STACKPROTECTOR
 #include <linux/stackprotector.h>
 unsigned long __stack_chk_guard __read_mostly;

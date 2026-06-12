@@ -191,10 +191,15 @@
 	andi	t0, t0, 0x3	/* extract pplv bit */
 	beqz	t0, 9f
 
-	LONG_LI	tp, ~_THREAD_MASK
-	and	tp, tp, sp
 	cfi_st  u0, PT_R21, \docfi
 	csrrd	u0, PERCPU_BASE_KS
+
+	la_abs      t1, cpu_tasks
+#ifdef CONFIG_SMP
+	LONG_ADD    t1, t1, u0
+#endif
+	LONG_L      tp, t1, 0
+
 9:
 #ifdef CONFIG_KGDB
 	li.w	t0, CSR_CRMD_WE
