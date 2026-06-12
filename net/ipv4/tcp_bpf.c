@@ -13,6 +13,7 @@
 #include <linux/util_macros.h>
 #include <linux/percpu-refcount.h>
 
+#include <net/busy_poll.h>
 #include <net/inet_common.h>
 #include <net/inet_sock.h>
 #include <net/tls.h>
@@ -1255,6 +1256,33 @@ static long splice_recv_wait(struct sock *sk, struct sk_psock_splice *s,
 					splice_recv_ready(sk, s), timeo);
 }
 
+/* Bounded busy-poll on the ring before parking the receiver. Reuses the
+ * socket's SO_BUSY_POLL budget (sk_ll_usec) via sk_can_busy_loop() and
+ * sk_busy_loop_timeout(); the default budget of 0 makes sk_can_busy_loop()
+ * false so this is a no-op unless the application (or net.core.busy_read)
+ * opted in.
+ *
+ * Unlike sk_busy_loop() / napi_busy_loop(), this spins on the in-kernel
+ * ring directly rather than polling a NAPI instance, so it is effective on
+ * loopback - which delivers via the per-CPU backlog and exposes no
+ * pollable napi_id. Keeping the receiver hot lets a synchronous sender's
+ * small writes accumulate in the ring without a wakeup per message.
+ */
+static void splice_busy_loop(struct sock *sk, struct sk_psock_splice *s)
+{
+	unsigned long start;
+
+	if (!sk_can_busy_loop(sk))
+		return;
+
+	start = busy_loop_current_time();
+	do {
+		cpu_relax();
+		if (splice_recv_ready(sk, s) || signal_pending(current))
+			return;
+	} while (!sk_busy_loop_timeout(sk, start));
+}
+
 /* prot->sock_is_readable for paired-splice sockets. tcp_stream_is_readable()
  * (via tcp_poll() / select() / epoll) consults this to mark POLLIN when
  * sk_receive_queue is empty - we must also report data sitting in the
@@ -1348,6 +1376,16 @@ static int tcp_bpf_splice_recvmsg(struct sock *sk,
 			*err = -EAGAIN;
 			return 0;
 		}
+
+		/* Spin on the ring for the SO_BUSY_POLL budget before
+		 * sleeping. If the spin observes data, re-read from the
+		 * loop head; otherwise (budget expired or a terminal
+		 * condition) proceed to park - splice_recv_wait() returns
+		 * immediately for terminal conditions.
+		 */
+		splice_busy_loop(sk, s);
+		if (splice_ring_has_data(s))
+			continue;
 
 		timeo = splice_recv_wait(sk, s, timeo);
 	}
