@@ -41,7 +41,7 @@ static int tsconfig_prepare_data(const struct ethnl_req_info *req_base,
 	struct kernel_hwtstamp_config cfg = {};
 	int ret;
 
-	if (!dev->netdev_ops->ndo_hwtstamp_get)
+	if (!dev->netdev_ops->ndo_hwtstamp_get && !dev->tsinfo.enabled)
 		return -EOPNOTSUPP;
 
 	ret = ethnl_ops_begin(dev);
@@ -61,7 +61,7 @@ static int tsconfig_prepare_data(const struct ethnl_req_info *req_base,
 	if (hwprov) {
 		data->hwprov_desc.index = hwprov->desc.index;
 		data->hwprov_desc.qualifier = hwprov->desc.qualifier;
-	} else {
+	} else if (!dev->tsinfo.enabled) {
 		struct kernel_ethtool_ts_info ts_info = {};
 
 		ts_info.phc_index = -1;
@@ -245,7 +245,8 @@ static int ethnl_set_tsconfig_validate(struct ethnl_req_info *req_base,
 {
 	const struct net_device_ops *ops = req_base->dev->netdev_ops;
 
-	if (!ops->ndo_hwtstamp_set || !ops->ndo_hwtstamp_get)
+	if ((!ops->ndo_hwtstamp_set || !ops->ndo_hwtstamp_get) &&
+	    !READ_ONCE(req_base->dev->tsinfo.enabled))
 		return -EOPNOTSUPP;
 
 	return 1;

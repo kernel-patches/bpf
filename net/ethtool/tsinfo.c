@@ -38,6 +38,14 @@ const struct nla_policy ethnl_tsinfo_get_policy[ETHTOOL_A_TSINFO_MAX + 1] = {
 		NLA_POLICY_NESTED(ethnl_ts_hwtst_prov_policy),
 };
 
+const struct nla_policy ethnl_tsinfo_set_policy[ETHTOOL_A_TSINFO_MAX + 1] = {
+	[ETHTOOL_A_TSINFO_HEADER]		=
+		NLA_POLICY_NESTED(ethnl_header_policy_stats),
+	[ETHTOOL_A_TSINFO_TIMESTAMPING]		= { .type = NLA_NESTED },
+	[ETHTOOL_A_TSINFO_TX_TYPES]		= { .type = NLA_NESTED },
+	[ETHTOOL_A_TSINFO_RX_FILTERS]		= { .type = NLA_NESTED },
+};
+
 int ts_parse_hwtst_provider(const struct nlattr *nest,
 			    struct hwtstamp_provider_desc *hwprov_desc,
 			    struct netlink_ext_ack *extack,
@@ -385,15 +393,17 @@ static int ethnl_tsinfo_dump_one_netdev(struct sk_buff *skb,
 {
 	struct ethnl_tsinfo_dump_ctx *ctx = (void *)cb->ctx;
 	const struct ethtool_ops *ops = dev->ethtool_ops;
+	struct kernel_ethtool_ts_info *ts_info;
 	struct tsinfo_reply_data *reply_data;
 	struct tsinfo_req_info *req_info;
 	void *ehdr = NULL;
 	int ret = 0;
 
-	if (!ops->get_ts_info)
+	if (!ops->get_ts_info && !dev->tsinfo.enabled)
 		return -EOPNOTSUPP;
 
 	reply_data = ctx->reply_data;
+	ts_info = &reply_data->ts_info;
 	req_info = ctx->req_info;
 	for (; ctx->pos_phcqualifier < HWTSTAMP_PROVIDER_QUALIFIER_CNT;
 	     ctx->pos_phcqualifier++) {
@@ -408,9 +418,16 @@ static int ethnl_tsinfo_dump_one_netdev(struct sk_buff *skb,
 		}
 
 		reply_data->ts_info.phc_qualifier = ctx->pos_phcqualifier;
-		ret = ops->get_ts_info(dev, &reply_data->ts_info);
-		if (ret < 0)
-			goto err;
+
+		if (dev->tsinfo.enabled) {
+			ts_info->so_timestamping |= dev->tsinfo.so_timestamping;
+			ts_info->tx_types |= dev->tsinfo.tx_types;
+			ts_info->rx_filters |= dev->tsinfo.rx_filters;
+		} else {
+			ret = ops->get_ts_info(dev, ts_info);
+			if (ret < 0)
+				goto err;
+		}
 
 		if (reply_data->ts_info.phc_index >= 0)
 			reply_data->ts_info.phc_source = HWTSTAMP_SOURCE_NETDEV;
@@ -552,6 +569,101 @@ int ethnl_tsinfo_done(struct netlink_callback *cb)
 	return 0;
 }
 
+static int ethnl_tsinfo_set_validate(struct ethnl_req_info *req_base,
+				     struct genl_info *info)
+{
+	const struct net_device *dev = req_base->dev;
+
+	if (!dev->rtnl_link_ops ||
+	    dev->ethtool_ops->get_ts_info ||
+	    dev->netdev_ops->ndo_hwtstamp_set ||
+	    dev->netdev_ops->ndo_hwtstamp_get)
+		return -EOPNOTSUPP;
+
+	return 1;
+}
+
+static int ethnl_tsinfo_set(struct ethnl_req_info *req_base,
+			    struct genl_info *info)
+{
+	struct net_device *dev = req_base->dev;
+	struct kernel_ethtool_ts_info ts_info;
+	struct nlattr **tb = info->attrs;
+	bool config_mod = false;
+	int ret;
+
+	ts_info.so_timestamping = dev->tsinfo.so_timestamping;
+	ts_info.tx_types = dev->tsinfo.tx_types;
+	ts_info.rx_filters = dev->tsinfo.rx_filters;
+
+	if (tb[ETHTOOL_A_TSINFO_TIMESTAMPING]) {
+		ret = ethnl_update_bitset32(&ts_info.so_timestamping,
+					    __SOF_TIMESTAMPING_CNT,
+					    tb[ETHTOOL_A_TSINFO_TIMESTAMPING],
+					    sof_timestamping_names, info->extack,
+					    &config_mod);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (tb[ETHTOOL_A_TSINFO_TX_TYPES]) {
+		ret = ethnl_update_bitset32(&ts_info.tx_types,
+					    __HWTSTAMP_TX_CNT,
+					    tb[ETHTOOL_A_TSINFO_TX_TYPES],
+					    ts_tx_type_names, info->extack,
+					    &config_mod);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (tb[ETHTOOL_A_TSINFO_RX_FILTERS]) {
+		ret = ethnl_update_bitset32(&ts_info.rx_filters,
+					    __HWTSTAMP_FILTER_CNT,
+					    tb[ETHTOOL_A_TSINFO_RX_FILTERS],
+					    ts_rx_filter_names, info->extack,
+					    &config_mod);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (!config_mod)
+		goto out;
+
+	if (!ts_info.so_timestamping &&
+	    !ts_info.tx_types && !ts_info.rx_filters) {
+		WRITE_ONCE(dev->tsinfo.enabled, false);
+		memset(&dev->tsinfo, 0, offsetof(typeof(dev->tsinfo), enabled));
+		goto out;
+	}
+
+	/* __ethtool_get_ts_info() and ethnl_tsinfo_end_dump()
+	 * unconditionally report these flags.
+	 */
+	ts_info.so_timestamping |= SOF_TIMESTAMPING_RX_SOFTWARE |
+				   SOF_TIMESTAMPING_SOFTWARE;
+
+	/* Fallback to HWTSTAMP_TX_OFF / HWTSTAMP_FILTER_NONE
+	 * if the current mode is not supported.
+	 */
+	if (!(ts_info.tx_types & BIT(dev->tsinfo.cfg.tx_type))) {
+		ts_info.tx_types |= BIT(HWTSTAMP_TX_OFF);
+		dev->tsinfo.cfg.tx_type = HWTSTAMP_TX_OFF;
+	}
+	if (!(ts_info.rx_filters & BIT(dev->tsinfo.cfg.rx_filter))) {
+		ts_info.rx_filters |= BIT(HWTSTAMP_FILTER_NONE);
+		dev->tsinfo.cfg.rx_filter = HWTSTAMP_FILTER_NONE;
+	}
+
+	dev->tsinfo.so_timestamping = ts_info.so_timestamping;
+	dev->tsinfo.tx_types = ts_info.tx_types;
+	dev->tsinfo.rx_filters = ts_info.rx_filters;
+
+	WRITE_ONCE(dev->tsinfo.enabled, true);
+out:
+	/* no notification. */
+	return 0;
+}
+
 const struct ethnl_request_ops ethnl_tsinfo_request_ops = {
 	.request_cmd		= ETHTOOL_MSG_TSINFO_GET,
 	.reply_cmd		= ETHTOOL_MSG_TSINFO_GET_REPLY,
@@ -563,4 +675,7 @@ const struct ethnl_request_ops ethnl_tsinfo_request_ops = {
 	.prepare_data		= tsinfo_prepare_data,
 	.reply_size		= tsinfo_reply_size,
 	.fill_reply		= tsinfo_fill_reply,
+
+	.set_validate		= ethnl_tsinfo_set_validate,
+	.set			= ethnl_tsinfo_set,
 };

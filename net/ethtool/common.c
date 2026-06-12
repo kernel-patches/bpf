@@ -1090,6 +1090,10 @@ int __ethtool_get_ts_info(struct net_device *dev,
 			err = ops->get_ts_info(dev, info);
 			if (!err && info->phc_index >= 0)
 				info->phc_source = HWTSTAMP_SOURCE_NETDEV;
+		} else if (dev->tsinfo.enabled) {
+			info->so_timestamping = dev->tsinfo.so_timestamping;
+			info->tx_types = dev->tsinfo.tx_types;
+			info->rx_filters = dev->tsinfo.rx_filters;
 		}
 
 		info->so_timestamping |= SOF_TIMESTAMPING_RX_SOFTWARE |
