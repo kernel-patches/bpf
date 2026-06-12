@@ -1149,9 +1149,29 @@ static int sk_psock_strp_parse(struct strparser *strp, struct sk_buff *skb)
 	rcu_read_lock();
 	prog = READ_ONCE(psock->progs.stream_parser);
 	if (likely(prog)) {
-		skb->sk = psock->sk;
-		ret = bpf_prog_run_pin_on_cpu(prog, skb);
-		skb->sk = NULL;
+		struct sk_buff *parse_skb = skb;
+
+		/*
+		 * strparser chains the message skbs through skb->frag_list and
+		 * keeps a pointer into that list in strp->skb_nextp.  The parser
+		 * program may call bpf_skb_change_tail() and friends, which go
+		 * through __pskb_pull_tail() and free the frag_list skbs that
+		 * strparser still tracks.  Run the program on a clone when the head
+		 * has a frag_list and the program can modify the packet, so it
+		 * cannot drop frags strparser owns.
+		 */
+		if (skb_has_frag_list(skb) && prog->aux->changes_pkt_data) {
+			parse_skb = skb_clone(skb, GFP_ATOMIC);
+			if (!parse_skb) {
+				rcu_read_unlock();
+				return 0;
+			}
+		}
+		parse_skb->sk = psock->sk;
+		ret = bpf_prog_run_pin_on_cpu(prog, parse_skb);
+		parse_skb->sk = NULL;
+		if (parse_skb != skb)
+			consume_skb(parse_skb);
 	}
 	rcu_read_unlock();
 	return ret;
