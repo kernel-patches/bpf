@@ -483,6 +483,114 @@ l0_%=:	/* exit */					\
 }
 
 SEC("socket")
+__description("pure bounds check after non-const 32-bit left shift")
+__success __log_level(2)
+__msg("w1 <<= w2 {{.*}}; R1=scalar(smin=umin=smin32=umin32=2,smax=umax=smax32=umax32=16,var_off=(0x0; 0x1f))")
+__naked void shift_with_non_const_src_lsh_32(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	w2 = w0;					\
+	w2 &= 3;					\
+	w2 += 1;					\
+	w1 = 1;						\
+	w1 <<= w2;					\
+	exit;						\
+"	:: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("pure bounds check after non-const 32-bit right shift")
+__success __log_level(2)
+__msg("w1 >>= w2 {{.*}}; R1=scalar(smin=umin=smin32=umin32=15,smax=umax=smax32=umax32=127,var_off=(0x0; 0x7f))")
+__naked void shift_with_non_const_src_rsh_32(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	w2 = w0;					\
+	w2 &= 3;					\
+	w2 += 1;					\
+	w1 = 0xff;					\
+	w1 >>= w2;					\
+	exit;						\
+"	:: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("pure bounds check after non-const 32-bit arithmetic right shift")
+__success __log_level(2)
+__msg("w1 s>>= w2 {{.*}}; R1=scalar(smin=umin=umin32=0xfffffffc,smax=umax=0xffffffff,smin32=-4,smax32=-1,var_off=(0xfffffffc; 0x3)) R2=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=4,var_off=(0x0; 0x7))")
+__naked void shift_with_non_const_src_arsh_32(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	w2 = w0;					\
+	w2 &= 3;					\
+	w2 += 1;					\
+	w1 = -8;					\
+	w1 s>>= w2;					\
+	exit;						\
+"	:: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("pure bounds check after non-const 64-bit left shift")
+__success __log_level(2)
+__msg("r1 <<= r2 {{.*}}; R1=scalar(smin=umin=smin32=umin32=2,smax=umax=smax32=umax32=16,var_off=(0x0; 0x1f))")
+__naked void shift_with_non_const_src_lsh_64(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r2 = r0;					\
+	r2 &= 3;					\
+	r2 += 1;					\
+	r1 = 1;						\
+	r1 <<= r2;					\
+	exit;						\
+"	:: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("pure bounds check after non-const 64-bit right shift")
+__success __log_level(2)
+__msg("r1 >>= r2 {{.*}}; R1=scalar(smin=umin=smin32=umin32=15,smax=umax=smax32=umax32=127,var_off=(0x0; 0x7f))")
+__naked void shift_with_non_const_src_rsh_64(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r2 = r0;					\
+	r2 &= 3;					\
+	r2 += 1;					\
+	r1 = 0xff;					\
+	r1 >>= r2;					\
+	exit;						\
+"	:: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("pure bounds check after non-const 64-bit arithmetic right shift")
+__success __log_level(2)
+__msg("r1 s>>= r2 {{.*}}; R1=scalar(smin=smin32=-4,smax=smax32=-1,umin=0xfffffffffffffffc,umin32=0xfffffffc,var_off=(0xfffffffffffffffc; 0x3)) R2=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=4,var_off=(0x0; 0x7))")
+__naked void shift_with_non_const_src_arsh_64(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r2 = r0;					\
+	r2 &= 3;					\
+	r2 += 1;					\
+	r1 = -8;					\
+	r1 s>>= r2;					\
+	exit;						\
+"	:: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
 __description("bounds check after 32-bit right shift with 64-bit input")
 __failure __msg("math between map_value pointer and 4294967294 is not allowed")
 __failure_unpriv
