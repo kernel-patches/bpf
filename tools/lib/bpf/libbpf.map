@@ -461,4 +461,6 @@ LIBBPF_1.8.0 {
 		bpf_program__attach_tracing_multi;
 		bpf_program__clone;
 		btf__new_empty_opts;
+		ring__consume_n_cb;
+		ring_buffer__consume_n_cb;
 } LIBBPF_1.7.0;

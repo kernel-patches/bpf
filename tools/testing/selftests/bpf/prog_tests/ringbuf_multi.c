@@ -38,12 +38,37 @@ static int process_sample(void *ctx, void *data, size_t len)
 	return 0;
 }
 
+static int process_sample_override(void *ctx, void *data, size_t len)
+{
+	struct sample *s = data;
+	int *cnt = ctx;
+
+	if (!ASSERT_LT(s->seq, 2, "override_sample_seq"))
+		return -EINVAL;
+	ASSERT_EQ(s->value, s->seq ? 777L : 333L, "override_sample_value");
+	(*cnt)++;
+
+	return 0;
+}
+
+static void trigger_samples(struct test_ringbuf_multi *skel)
+{
+	skel->bss->total = 0;
+	skel->bss->target_ring = 0;
+	skel->bss->value = 333;
+	syscall(__NR_getpgid);
+	skel->bss->target_ring = 2;
+	skel->bss->value = 777;
+	syscall(__NR_getpgid);
+}
+
 void test_ringbuf_multi(void)
 {
 	struct test_ringbuf_multi *skel;
 	struct ring_buffer *ringbuf = NULL;
 	struct ring *ring_old;
 	struct ring *ring;
+	int override_cnt = 0;
 	int err;
 	int page_size = getpagesize();
 	int proto_fd = -1;
@@ -138,6 +163,73 @@ void test_ringbuf_multi(void)
 	      1L, skel->bss->skipped);
 	CHECK(skel->bss->total != 2, "err_total", "exp %ld, got %ld\n",
 	      2L, skel->bss->total);
+
+	trigger_samples(skel);
+	err = ring_buffer__consume_n(ringbuf, 0);
+	if (!ASSERT_EQ(err, 0, "ringbuf_consume_zero_stored_cb"))
+		goto cleanup;
+	err = ring_buffer__consume_n_cb(ringbuf, NULL, NULL, 0);
+	if (!ASSERT_EQ(err, -EINVAL, "ringbuf_consume_null_cb"))
+		goto cleanup;
+	err = ring_buffer__consume_n_cb(ringbuf, process_sample_override,
+					&override_cnt, 0);
+	if (!ASSERT_EQ(err, 0, "ringbuf_consume_zero"))
+		goto cleanup;
+	if (!ASSERT_EQ(override_cnt, 0, "ringbuf_zero_callback_count"))
+		goto cleanup;
+	err = ring_buffer__consume_n_cb(ringbuf, process_sample_override,
+					&override_cnt, 1);
+	if (!ASSERT_EQ(err, 1, "ringbuf_consume_n_cb_1"))
+		goto cleanup;
+	err = ring_buffer__consume_n_cb(ringbuf, process_sample_override,
+					&override_cnt, 1);
+	if (!ASSERT_EQ(err, 1, "ringbuf_consume_n_cb_2"))
+		goto cleanup;
+	if (!ASSERT_EQ(override_cnt, 2, "ringbuf_callback_count"))
+		goto cleanup;
+
+	trigger_samples(skel);
+	err = ring_buffer__consume_n(ringbuf, 2);
+	if (!ASSERT_EQ(err, 2, "ringbuf_consume_stored_cb"))
+		goto cleanup;
+	if (!ASSERT_EQ(override_cnt, 2, "ringbuf_override_not_stored"))
+		goto cleanup;
+
+	trigger_samples(skel);
+	ring = ring_buffer__ring(ringbuf, 0);
+	if (!ASSERT_OK_PTR(ring, "ring_buffer__ring_idx_0_cb"))
+		goto cleanup;
+	err = ring__consume_n(ring, 0);
+	if (!ASSERT_EQ(err, 0, "ring1_consume_zero_stored_cb"))
+		goto cleanup;
+	err = ring__consume_n_cb(ring, NULL, NULL, 0);
+	if (!ASSERT_EQ(err, -EINVAL, "ring1_consume_null_cb"))
+		goto cleanup;
+	err = ring__consume_n_cb(ring, process_sample_override, &override_cnt,
+				 0);
+	if (!ASSERT_EQ(err, 0, "ring1_consume_zero"))
+		goto cleanup;
+	if (!ASSERT_EQ(override_cnt, 2, "ring1_zero_callback_count"))
+		goto cleanup;
+	err = ring__consume_n_cb(ring, process_sample_override, &override_cnt,
+				 1);
+	if (!ASSERT_EQ(err, 1, "ring1_consume_n_cb"))
+		goto cleanup;
+
+	ring = ring_buffer__ring(ringbuf, 1);
+	if (!ASSERT_OK_PTR(ring, "ring_buffer__ring_idx_1_cb"))
+		goto cleanup;
+	err = ring__consume_n_cb(ring, process_sample_override, &override_cnt,
+				 1);
+	if (!ASSERT_EQ(err, 1, "ring2_consume_n_cb"))
+		goto cleanup;
+	if (!ASSERT_EQ(override_cnt, 4, "ring_callback_count"))
+		goto cleanup;
+
+	trigger_samples(skel);
+	err = ring_buffer__consume_n(ringbuf, 2);
+	ASSERT_EQ(err, 2, "ring_consume_stored_cb");
+	ASSERT_EQ(override_cnt, 4, "ring_override_not_stored");
 
 cleanup:
 	if (proto_fd >= 0)

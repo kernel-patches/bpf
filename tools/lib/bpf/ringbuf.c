@@ -231,7 +231,8 @@ static inline int roundup_len(__u32 len)
 	return (len + 7) / 8 * 8;
 }
 
-static int64_t ringbuf_process_ring(struct ring *r, size_t n)
+static int64_t ringbuf_process_ring(struct ring *r, size_t n,
+				    ring_buffer_sample_fn sample_cb, void *ctx)
 {
 	int *len_ptr, len, err;
 	/* 64-bit to avoid overflow in case of extreme application behavior */
@@ -239,6 +240,11 @@ static int64_t ringbuf_process_ring(struct ring *r, size_t n)
 	unsigned long cons_pos, prod_pos;
 	bool got_new_data;
 	void *sample;
+
+	if (!sample_cb)
+		return -EINVAL;
+	if (n == 0)
+		return 0;
 
 	cons_pos = smp_load_acquire(r->consumer_pos);
 	do {
@@ -257,7 +263,7 @@ static int64_t ringbuf_process_ring(struct ring *r, size_t n)
 
 			if ((len & BPF_RINGBUF_DISCARD_BIT) == 0) {
 				sample = (void *)len_ptr + BPF_RINGBUF_HDR_SZ;
-				err = r->sample_cb(r->ctx, sample, len);
+				err = sample_cb(ctx, sample, len);
 				if (err < 0) {
 					/* update consumer pos and bail out */
 					smp_store_release(r->consumer_pos,
@@ -292,7 +298,32 @@ int ring_buffer__consume_n(struct ring_buffer *rb, size_t n)
 	for (i = 0; i < rb->ring_cnt; i++) {
 		struct ring *ring = rb->rings[i];
 
-		err = ringbuf_process_ring(ring, n);
+		err = ringbuf_process_ring(ring, n, ring->sample_cb, ring->ctx);
+		if (err < 0)
+			return libbpf_err(err);
+		res += err;
+		n -= err;
+
+		if (n == 0)
+			break;
+	}
+	return res > INT_MAX ? INT_MAX : res;
+}
+
+int ring_buffer__consume_n_cb(struct ring_buffer *rb,
+			      ring_buffer_sample_fn sample_cb, void *ctx,
+			      size_t n)
+{
+	int64_t err, res = 0;
+	int i;
+
+	if (!sample_cb)
+		return libbpf_err(-EINVAL);
+	if (n == 0)
+		return 0;
+
+	for (i = 0; i < rb->ring_cnt; i++) {
+		err = ringbuf_process_ring(rb->rings[i], n, sample_cb, ctx);
 		if (err < 0)
 			return libbpf_err(err);
 		res += err;
@@ -317,7 +348,8 @@ int ring_buffer__consume(struct ring_buffer *rb)
 	for (i = 0; i < rb->ring_cnt; i++) {
 		struct ring *ring = rb->rings[i];
 
-		err = ringbuf_process_ring(ring, INT_MAX);
+		err = ringbuf_process_ring(ring, INT_MAX, ring->sample_cb,
+					   ring->ctx);
 		if (err < 0)
 			return libbpf_err(err);
 		res += err;
@@ -346,7 +378,8 @@ int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms)
 		__u32 ring_id = rb->events[i].data.fd;
 		struct ring *ring = rb->rings[ring_id];
 
-		err = ringbuf_process_ring(ring, INT_MAX);
+		err = ringbuf_process_ring(ring, INT_MAX, ring->sample_cb,
+					   ring->ctx);
 		if (err < 0)
 			return libbpf_err(err);
 		res += err;
@@ -405,9 +438,15 @@ int ring__map_fd(const struct ring *r)
 
 int ring__consume_n(struct ring *r, size_t n)
 {
+	return ring__consume_n_cb(r, r->sample_cb, r->ctx, n);
+}
+
+int ring__consume_n_cb(struct ring *r, ring_buffer_sample_fn sample_cb,
+		       void *ctx, size_t n)
+{
 	int64_t res;
 
-	res = ringbuf_process_ring(r, n);
+	res = ringbuf_process_ring(r, n, sample_cb, ctx);
 	if (res < 0)
 		return libbpf_err(res);
 

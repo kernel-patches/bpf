@@ -1471,6 +1471,29 @@ LIBBPF_API int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 LIBBPF_API int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms);
 LIBBPF_API int ring_buffer__consume(struct ring_buffer *rb);
 LIBBPF_API int ring_buffer__consume_n(struct ring_buffer *rb, size_t n);
+
+/**
+ * @brief **ring_buffer__consume_n_cb()** consumes up to a requested number of
+ * records across all registered ring buffer maps without event polling, using
+ * the provided callback and context for every ring buffer map.
+ *
+ * The provided callback and context override the callbacks configured for the
+ * manager's rings for the duration of this call without changing them.
+ * **ring_buffer__new()** and **ring_buffer__add()** may receive a NULL callback
+ * for rings consumed only through this function.
+ *
+ * @param rb A ring buffer manager object.
+ * @param sample_cb Non-NULL callback to invoke for each available record.
+ * @param ctx Context to pass to *sample_cb*.
+ * @param n Maximum number of records to consume across all registered ring
+ * buffer maps.
+ * @return The number of records consumed (or INT_MAX, whichever is less), or a
+ * negative error code on failure.
+ */
+LIBBPF_API int ring_buffer__consume_n_cb(struct ring_buffer *rb,
+					 ring_buffer_sample_fn sample_cb,
+					 void *ctx, size_t n);
+
 LIBBPF_API int ring_buffer__epoll_fd(const struct ring_buffer *rb);
 
 /**
@@ -1546,15 +1569,36 @@ LIBBPF_API int ring__map_fd(const struct ring *r);
 LIBBPF_API int ring__consume(struct ring *r);
 
 /**
- * @brief **ring__consume_n()** consumes up to a requested amount of items from
- * a ringbuffer without event polling.
+ * @brief **ring__consume_n()** consumes up to a requested number of records
+ * from a ring buffer without event polling.
  *
- * @param r A ringbuffer object.
- * @param n Maximum amount of items to consume.
- * @return The number of items consumed, or a negative number if any of the
- * callbacks return an error.
+ * @param r A ring buffer object.
+ * @param n Maximum number of records to consume.
+ * @return The number of records consumed (or INT_MAX, whichever is less), or a
+ * negative error code on failure.
  */
 LIBBPF_API int ring__consume_n(struct ring *r, size_t n);
+
+/**
+ * @brief **ring__consume_n_cb()** consumes up to a requested number of records
+ * from a ring buffer without event polling, using the provided callback and
+ * context.
+ *
+ * The provided callback and context override the callback configured for the
+ * ring for the duration of this call without changing it.
+ * **ring_buffer__new()** and **ring_buffer__add()** may receive a NULL callback
+ * for rings consumed only through this function.
+ *
+ * @param r A ring buffer object.
+ * @param sample_cb Non-NULL callback to invoke for each available record.
+ * @param ctx Context to pass to *sample_cb*.
+ * @param n Maximum number of records to consume.
+ * @return The number of records consumed (or INT_MAX, whichever is less), or a
+ * negative error code on failure.
+ */
+LIBBPF_API int ring__consume_n_cb(struct ring *r,
+				  ring_buffer_sample_fn sample_cb, void *ctx,
+				  size_t n);
 
 struct user_ring_buffer_opts {
 	size_t sz; /* size of this struct, for forward/backward compatibility */

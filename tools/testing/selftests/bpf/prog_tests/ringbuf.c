@@ -397,6 +397,8 @@ static int process_n_sample(void *ctx, void *data, size_t len)
 	struct sample *s = data;
 
 	ASSERT_EQ(s->value, SAMPLE_VALUE, "sample_value");
+	if (ctx)
+		(*(int *)ctx)++;
 
 	return 0;
 }
@@ -404,6 +406,8 @@ static int process_n_sample(void *ctx, void *data, size_t len)
 static void ringbuf_n_subtest(void)
 {
 	struct test_ringbuf_n_lskel *skel_n;
+	struct ring *ring;
+	int cb_cnt = 0;
 	int err, i;
 
 	skel_n = test_ringbuf_n_lskel__open();
@@ -437,6 +441,27 @@ static void ringbuf_n_subtest(void)
 		if (!ASSERT_EQ(err, N_SAMPLES, "rb_consume"))
 			goto cleanup_ringbuf;
 	}
+
+	ring_buffer__free(ringbuf);
+	ringbuf =
+		ring_buffer__new(skel_n->maps.ringbuf.map_fd, NULL, NULL, NULL);
+	if (!ASSERT_OK_PTR(ringbuf, "ring_buffer__new_without_cb"))
+		goto cleanup;
+
+	for (i = 0; i < N_TOT_SAMPLES; i++)
+		syscall(__NR_getpgid);
+
+	ring = ring_buffer__ring(ringbuf, 0);
+	if (!ASSERT_OK_PTR(ring, "ring_buffer__ring"))
+		goto cleanup_ringbuf;
+
+	for (i = 0; i < N_TOT_SAMPLES; i += err) {
+		err = ring__consume_n_cb(ring, process_n_sample, &cb_cnt,
+					 N_SAMPLES);
+		if (!ASSERT_EQ(err, N_SAMPLES, "ring_consume_cb"))
+			goto cleanup_ringbuf;
+	}
+	ASSERT_EQ(cb_cnt, N_TOT_SAMPLES, "callback_count");
 
 cleanup_ringbuf:
 	ring_buffer__free(ringbuf);
