@@ -260,6 +260,15 @@ int dev_get_hwtstamp_phylib(struct net_device *dev,
 {
 	struct hwtstamp_provider *hwprov;
 
+	if (!dev->netdev_ops->ndo_hwtstamp_get) {
+		if (!dev->tsinfo.enabled)
+			return -EOPNOTSUPP;
+
+		cfg->rx_filter = dev->tsinfo.cfg.rx_filter;
+		cfg->tx_type = dev->tsinfo.cfg.tx_type;
+		return 0;
+	}
+
 	hwprov = rtnl_dereference(dev->hwprov);
 	if (hwprov) {
 		cfg->qualifier = hwprov->desc.qualifier;
@@ -286,7 +295,7 @@ static int dev_get_hwtstamp(struct net_device *dev, struct ifreq *ifr)
 	struct hwtstamp_config cfg;
 	int err;
 
-	if (!ops->ndo_hwtstamp_get)
+	if (!ops->ndo_hwtstamp_get && !dev->tsinfo.enabled)
 		return -EOPNOTSUPP;
 
 	if (!netif_device_present(dev))
@@ -336,6 +345,20 @@ int dev_set_hwtstamp_phylib(struct net_device *dev,
 	bool changed = false;
 	bool phy_ts;
 	int err;
+
+	if (!ops->ndo_hwtstamp_set) {
+		if (!dev->tsinfo.enabled ||
+		    !(dev->tsinfo.tx_types & BIT(cfg->tx_type)) ||
+		    !(dev->tsinfo.rx_filters & BIT(cfg->rx_filter)))
+			return -EOPNOTSUPP;
+
+		if (cfg->flags)
+			return -EINVAL;
+
+		dev->tsinfo.cfg.tx_type = cfg->tx_type;
+		dev->tsinfo.cfg.rx_filter = cfg->rx_filter;
+		return 0;
+	}
 
 	hwprov = rtnl_dereference(dev->hwprov);
 	if (hwprov) {
@@ -413,7 +436,7 @@ static int dev_set_hwtstamp(struct net_device *dev, struct ifreq *ifr)
 		return err;
 	}
 
-	if (!ops->ndo_hwtstamp_set)
+	if (!ops->ndo_hwtstamp_set && !dev->tsinfo.enabled)
 		return -EOPNOTSUPP;
 
 	if (!netif_device_present(dev))
@@ -447,7 +470,7 @@ int generic_hwtstamp_get_lower(struct net_device *dev,
 	if (!netif_device_present(dev))
 		return -ENODEV;
 
-	if (!ops->ndo_hwtstamp_get)
+	if (!ops->ndo_hwtstamp_get && !dev->tsinfo.enabled)
 		return -EOPNOTSUPP;
 
 	netdev_lock_ops(dev);
@@ -468,7 +491,7 @@ int generic_hwtstamp_set_lower(struct net_device *dev,
 	if (!netif_device_present(dev))
 		return -ENODEV;
 
-	if (!ops->ndo_hwtstamp_set)
+	if (!ops->ndo_hwtstamp_set && !dev->tsinfo.enabled)
 		return -EOPNOTSUPP;
 
 	netdev_lock_ops(dev);

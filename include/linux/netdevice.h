@@ -2076,6 +2076,7 @@ enum netdev_reg_state {
  *				offload capabilities of the device
  *	@udp_tunnel_nic:	UDP tunnel offload state
  *	@ethtool:	ethtool related state
+ *	@tsinfo:	HW timestamping capability for virtual devices
  *	@xdp_state:		stores info on attached XDP BPF programs
  *
  *	@nested_level:	Used as a parameter of spin_lock_nested() of
@@ -2498,6 +2499,16 @@ struct net_device {
 	 */
 	struct netdev_config	*cfg_pending;
 	struct ethtool_netdev_state *ethtool;
+	struct {
+		struct {
+			u32	tx_type;
+			u32	rx_filter;
+		} cfg;
+		u32		so_timestamping;
+		u32		tx_types;
+		u32		rx_filters;
+		bool		enabled;
+	} tsinfo;
 
 	/* protected by rtnl_lock */
 	struct bpf_xdp_entity	xdp_state[__MAX_XDP_MODE];
