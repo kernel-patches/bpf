@@ -4456,6 +4456,41 @@ tcx_run(const struct bpf_mprog_entry *entry, struct sk_buff *skb,
 	return tcx_action_code(skb, ret);
 }
 
+static int skb_do_completion(struct sk_buff *skb)
+{
+	enum skb_drop_reason drop_reason = SKB_DROP_REASON_TC_INGRESS;
+	struct bpf_redirect_info *ri = bpf_net_ctx_get_ri();
+	struct bpf_tx_tstamp_cmpl *txtscmpl;
+
+	if (!(ri->kern_flags & BPF_RI_F_TX_TS_CMPL))
+		goto drop;
+
+	if (skb_unclone(skb, GFP_ATOMIC))
+		goto drop;
+
+	__skb_push(skb, skb->mac_len);
+
+	txtscmpl = &ri->txtscmpl;
+
+	drop_reason = pskb_may_pull_reason(skb, txtscmpl->payload_offset);
+	if (drop_reason)
+		goto drop;
+
+	skb->protocol = txtscmpl->protocol;
+	skb_set_network_header(skb, txtscmpl->network_offset);
+	__skb_pull(skb, txtscmpl->payload_offset);
+
+	skb_shinfo(skb)->tskey = txtscmpl->tskey;
+	skb_shinfo(skb)->tx_flags = SKBTX_HW_TSTAMP_NOBPF;
+	__skb_tstamp_tx(skb, NULL, skb_hwtstamps(skb), skb->sk, SCM_TSTAMP_SND);
+
+	consume_skb(skb);
+	return NET_RX_SUCCESS;
+drop:
+	kfree_skb_reason(skb, drop_reason);
+	return NET_RX_DROP;
+}
+
 static __always_inline struct sk_buff *
 sch_handle_ingress(struct sk_buff *skb, struct packet_type **pt_prev, int *ret,
 		   struct net_device *orig_dev, bool *another)
@@ -4502,6 +4537,10 @@ ingress_verdict:
 	case TC_ACT_SHOT:
 		kfree_skb_reason(skb, drop_reason);
 		*ret = NET_RX_DROP;
+		bpf_net_ctx_clear(bpf_net_ctx);
+		return NULL;
+	case TC_ACT_ERRQUEUE:
+		*ret = skb_do_completion(skb);
 		bpf_net_ctx_clear(bpf_net_ctx);
 		return NULL;
 	/* used by tc_run */

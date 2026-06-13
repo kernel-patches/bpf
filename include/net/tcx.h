@@ -151,6 +151,7 @@ static inline enum tcx_action_base tcx_action_code(struct sk_buff *skb,
 		fallthrough;
 	case TCX_DROP:
 	case TCX_REDIRECT:
+	case TCX_ERRQUEUE:
 		return code;
 	case TCX_NEXT:
 	default:
