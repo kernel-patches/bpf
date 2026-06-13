@@ -92,4 +92,14 @@ extern int bpf_set_dentry_xattr(struct dentry *dentry, const char *name__str,
 				const struct bpf_dynptr *value_p, int flags) __ksym __weak;
 extern int bpf_remove_dentry_xattr(struct dentry *dentry, const char *name__str) __ksym __weak;
 
+extern int bpf_skb_scrub_tx_tstamp(struct __sk_buff *s) __ksym __weak;
+
+struct bpf_hwtstamp;
+extern int bpf_skb_set_hwtstamp(struct __sk_buff *s,
+				struct bpf_hwtstamp *attrs, int attrs__sz) __ksym __weak;
+
+struct bpf_tx_tstamp_cmpl;
+extern int bpf_skb_complete_tx_tstamp(struct __sk_buff *s,
+				      struct bpf_tx_tstamp_cmpl *attrs,
+				      int attrs__sz) __ksym __weak;
 #endif
