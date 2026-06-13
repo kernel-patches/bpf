@@ -79,6 +79,58 @@ int offset_not_tracked(void *ctx)
 
 SEC("socket")
 __failure
+__msg("R1 bitwise operator &= on pointer prohibited")
+__naked void scalar_add_tracks_pointer(void)
+{
+	asm volatile ("r1 = 0;"
+	"r2 = 0;"
+	"call %[bpf_rdonly_cast];"
+	"r1 = 0;"
+	"r1 += r0;"
+	"r1 &= 1;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_rdonly_cast)
+	: __clobber_all);
+}
+
+SEC("socket")
+__failure
+__msg("R1 tried to subtract pointer from scalar")
+__naked void scalar_sub_ptr_not_ok(void)
+{
+	asm volatile ("r1 = 0;"
+	"r2 = 0;"
+	"call %[bpf_rdonly_cast];"
+	"r1 = 0;"
+	"r1 -= r0;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_rdonly_cast)
+	: __clobber_all);
+}
+
+SEC("socket")
+__failure
+__msg("R1 bitwise operator ^= on pointer prohibited")
+__naked void scalar_xor_ptr_not_ok(void)
+{
+	asm volatile ("r1 = 0;"
+	"r2 = 0;"
+	"call %[bpf_rdonly_cast];"
+	"r1 = 0;"
+	"r1 ^= r0;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_rdonly_cast)
+	: __clobber_all);
+}
+
+SEC("socket")
+__failure
 __msg("cannot write into rdonly_untrusted_mem")
 int stx_not_ok(void *ctx)
 {
