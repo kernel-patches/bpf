@@ -13686,8 +13686,32 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 	 * Accesses to untrusted PTR_TO_MEM are done through probe
 	 * instructions, hence no need to track offsets.
 	 */
-	if (base_type(ptr_reg->type) == PTR_TO_MEM && (ptr_reg->type & PTR_UNTRUSTED))
-		return 0;
+	if (base_type(ptr_reg->type) == PTR_TO_MEM &&
+	    (ptr_reg->type & PTR_UNTRUSTED)) {
+		switch (opcode) {
+		case BPF_ADD:
+			*dst_reg = *ptr_reg;
+			return 0;
+		case BPF_SUB:
+			if (dst_reg == off_reg) {
+				verbose(env, "R%d tried to subtract pointer from scalar\n",
+					dst);
+				return -EACCES;
+			}
+			*dst_reg = *ptr_reg;
+			return 0;
+		case BPF_AND:
+		case BPF_OR:
+		case BPF_XOR:
+			verbose(env, "R%d bitwise operator %s on pointer prohibited\n",
+				dst, bpf_alu_string[opcode >> 4]);
+			return -EACCES;
+		default:
+			verbose(env, "R%d pointer arithmetic with %s operator prohibited\n",
+				dst, bpf_alu_string[opcode >> 4]);
+			return -EACCES;
+		}
+	}
 
 	switch (base_type(ptr_reg->type)) {
 	case PTR_TO_CTX:
