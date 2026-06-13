@@ -550,6 +550,10 @@ static int sk_psock_skb_ingress_enqueue(struct sk_buff *skb,
 {
 	int num_sge, copied;
 
+	if (off >= skb->len)
+		return -EINVAL;
+	len = min_t(u32, len, skb->len - off);
+
 	/* skb_to_sgvec will fail when the total number of fragments in
 	 * frag_list and frags exceeds MAX_MSG_FRAGS. For example, the
 	 * caller may aggregate multiple skbs.
