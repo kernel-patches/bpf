@@ -6555,6 +6555,7 @@ enum tcx_action_base {
 	TCX_PASS	= 0,
 	TCX_DROP	= 2,
 	TCX_REDIRECT	= 7,
+	TCX_ERRQUEUE	= 9,
 };
 
 struct bpf_xdp_sock {

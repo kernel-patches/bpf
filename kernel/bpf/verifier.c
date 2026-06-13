@@ -11051,6 +11051,7 @@ enum special_kfunc_type {
 	KF_bpf_stream_vprintk,
 	KF_bpf_stream_print_stack,
 	KF_bpf_skb_set_hwtstamp,
+	KF_bpf_skb_scrub_tx_tstamp,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -11150,7 +11151,9 @@ BTF_ID(func, bpf_stream_vprintk)
 BTF_ID(func, bpf_stream_print_stack)
 #ifdef CONFIG_NET
 BTF_ID(func, bpf_skb_set_hwtstamp)
+BTF_ID(func, bpf_skb_scrub_tx_tstamp)
 #else
+BTF_ID_UNUSED
 BTF_ID_UNUSED
 #endif
 
@@ -11236,7 +11239,8 @@ static bool is_kfunc_bpf_preempt_enable(struct bpf_kfunc_call_arg_meta *meta)
 bool bpf_is_kfunc_pkt_changing(struct bpf_kfunc_call_arg_meta *meta)
 {
 	return meta->func_id == special_kfunc_list[KF_bpf_xdp_pull_data] ||
-	       meta->func_id == special_kfunc_list[KF_bpf_skb_set_hwtstamp];
+	       meta->func_id == special_kfunc_list[KF_bpf_skb_set_hwtstamp] ||
+	       meta->func_id == special_kfunc_list[KF_bpf_skb_scrub_tx_tstamp];
 }
 
 static enum kfunc_ptr_arg_type

@@ -12396,6 +12396,67 @@ __bpf_kfunc int bpf_skb_set_hwtstamp(struct __sk_buff *s,
 	return 0;
 }
 
+__bpf_kfunc int bpf_skb_scrub_tx_tstamp(struct __sk_buff *s)
+{
+	struct sk_buff *skb = (struct sk_buff *)s;
+
+	if (skb_at_tc_ingress(skb))
+		return -EINVAL;
+
+	if (skb_unclone(skb, GFP_ATOMIC))
+		return -ENOMEM;
+
+	skb_shinfo(skb)->tx_flags = 0;
+
+	bpf_compute_data_pointers(skb);
+
+	return 0;
+}
+
+__bpf_kfunc int bpf_skb_complete_tx_tstamp(struct __sk_buff *s,
+					   struct bpf_tx_tstamp_cmpl *attrs,
+					   int attrs__sz)
+{
+	int defined_sz = offsetofend(struct bpf_tx_tstamp_cmpl, payload_offset);
+	struct sk_buff *skb = (struct sk_buff *)s;
+	struct bpf_redirect_info *ri;
+	struct sock *sk = skb->sk;
+	s32 delta;
+
+	if (attrs__sz != sizeof(*attrs) ||
+	    memchr_inv((char *)attrs + defined_sz, 0, sizeof(u16)))
+		return -EINVAL;
+
+	if (!sk || !sk_fullsock(sk))
+		return -EINVAL;
+
+	if (!skb_at_tc_ingress(skb))
+		return -EINVAL;
+
+	if (attrs->payload_offset > skb->len)
+		return -EINVAL;
+
+	delta = attrs->payload_offset - attrs->network_offset;
+	switch (attrs->protocol) {
+	case htons(ETH_P_IP):
+		if (delta < (s32)sizeof(struct iphdr) || !sk_is_inet(sk))
+			return -EINVAL;
+		break;
+	case htons(ETH_P_IPV6):
+		if (delta < (s32)sizeof(struct ipv6hdr) || sk->sk_family != AF_INET6)
+			return -EINVAL;
+		break;
+	default:
+		return -EAFNOSUPPORT;
+	}
+
+	ri = bpf_net_ctx_get_ri();
+	ri->kern_flags |= BPF_RI_F_TX_TS_CMPL;
+	ri->txtscmpl = *attrs;
+
+	return 0;
+}
+
 /**
  * bpf_xdp_pull_data() - Pull in non-linear xdp data.
  * @x: &xdp_md associated with the XDP buffer
@@ -12525,6 +12586,8 @@ BTF_KFUNCS_END(bpf_kfunc_check_set_sock_addr)
 BTF_KFUNCS_START(bpf_kfunc_check_set_sched_cls)
 BTF_ID_FLAGS(func, bpf_sk_assign_tcp_reqsk)
 BTF_ID_FLAGS(func, bpf_skb_set_hwtstamp)
+BTF_ID_FLAGS(func, bpf_skb_scrub_tx_tstamp)
+BTF_ID_FLAGS(func, bpf_skb_complete_tx_tstamp)
 BTF_KFUNCS_END(bpf_kfunc_check_set_sched_cls)
 
 BTF_KFUNCS_START(bpf_kfunc_check_set_sock_ops)

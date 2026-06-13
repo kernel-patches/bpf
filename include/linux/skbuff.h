@@ -4703,6 +4703,14 @@ struct bpf_hwtstamp {
 	u64 :64;
 };
 
+struct bpf_tx_tstamp_cmpl {
+	u32 tskey;
+	__be16 protocol;
+	u16 network_offset;
+	u16 payload_offset;
+	u16 :16;
+};
+
 /**
  * skb_complete_tx_timestamp() - deliver cloned skb with tx timestamps
  *

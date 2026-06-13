@@ -792,6 +792,7 @@ struct bpf_nh_params {
 #define BPF_RI_F_CPU_MAP_INIT	BIT(2)
 #define BPF_RI_F_DEV_MAP_INIT	BIT(3)
 #define BPF_RI_F_XSK_MAP_INIT	BIT(4)
+#define BPF_RI_F_TX_TS_CMPL	BIT(5)
 
 struct bpf_redirect_info {
 	u64 tgt_index;
@@ -802,6 +803,7 @@ struct bpf_redirect_info {
 	enum bpf_map_type map_type;
 	struct bpf_nh_params nh;
 	u32 kern_flags;
+	struct bpf_tx_tstamp_cmpl txtscmpl;
 };
 
 struct bpf_net_context {

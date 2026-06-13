@@ -76,7 +76,8 @@ enum {
 				   * the skb and act like everything
 				   * is alright.
 				   */
-#define TC_ACT_VALUE_MAX	TC_ACT_TRAP
+#define TC_ACT_ERRQUEUE		9
+#define TC_ACT_VALUE_MAX	TC_ACT_ERRQUEUE
 
 /* There is a special kind of actions called "extended actions",
  * which need a value parameter. These have a local opcode located in
