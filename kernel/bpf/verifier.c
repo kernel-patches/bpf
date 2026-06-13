@@ -17150,9 +17150,11 @@ static int indirect_jump_min_max_index(struct bpf_verifier_env *env,
 static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
 	struct bpf_verifier_state *other_branch;
+	struct bpf_subprog_info *subprog;
 	struct bpf_reg_state *dst_reg;
 	struct bpf_map *map;
 	u32 min_index, max_index;
+	int subprog_start, subprog_end;
 	int err = 0;
 	int n;
 	int i;
@@ -17191,6 +17193,25 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 		verbose(env, "register R%d doesn't point to any offset in map id=%d\n",
 			     insn->dst_reg, map->id);
 		return -EINVAL;
+	}
+
+	subprog = bpf_find_containing_subprog(env, env->insn_idx);
+	if (verifier_bug_if(!subprog, env,
+			    "gotox insn %d is outside subprog bounds\n",
+			    env->insn_idx))
+		return -EFAULT;
+	subprog_start = subprog->start;
+	subprog_end = (subprog + 1)->start;
+
+	for (i = 0; i < n; i++) {
+		u32 target = env->gotox_tmp_buf->items[i];
+
+		if (target < subprog_start || target >= subprog_end) {
+			verbose(env,
+				"gotox target %u from map id=%d is outside subprog [%d,%d)\n",
+				target, map->id, subprog_start, subprog_end);
+			return -EINVAL;
+		}
 	}
 
 	for (i = 0; i < n - 1; i++) {
