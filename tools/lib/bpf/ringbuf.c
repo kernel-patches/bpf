@@ -255,7 +255,7 @@ static int64_t ringbuf_process_ring(struct ring *r, size_t n)
 	/* 64-bit to avoid overflow in case of extreme application behavior */
 	int64_t cnt = 0;
 	unsigned long cons_pos, prod_pos;
-	bool got_new_data;
+	bool got_new_data, needs_wakeup = false;
 	void *sample;
 
 	err = ringbuf_validate(r);
@@ -267,14 +267,21 @@ static int64_t ringbuf_process_ring(struct ring *r, size_t n)
 	cons_pos = __atomic_load_n(r->consumer_pos, __ATOMIC_ACQUIRE);
 	do {
 		got_new_data = false;
+		if (needs_wakeup) {
+			/* Ensure either this sees a new record or its producer sees
+			 * the updated consumer position and sends a notification.
+			 */
+			__atomic_thread_fence(__ATOMIC_SEQ_CST);
+			needs_wakeup = false;
+		}
 		prod_pos = __atomic_load_n(r->producer_pos, __ATOMIC_ACQUIRE);
 		while (cons_pos != prod_pos) {
 			len_ptr = r->data + (cons_pos & r->mask);
 			len = __atomic_load_n(len_ptr, __ATOMIC_ACQUIRE);
 
-			/* sample not committed yet, bail out for now */
+			/* Retry a busy record once after publishing prior records. */
 			if (len & BPF_RINGBUF_BUSY_BIT)
-				goto done;
+				break;
 
 			got_new_data = true;
 			cons_pos += roundup_len(len);
@@ -294,6 +301,7 @@ static int64_t ringbuf_process_ring(struct ring *r, size_t n)
 
 			__atomic_store_n(r->consumer_pos, cons_pos,
 					 __ATOMIC_RELEASE);
+			needs_wakeup = true;
 
 			if (cnt >= n)
 				goto done;
