@@ -1454,6 +1454,7 @@ struct ring_buffer;
 struct ring;
 struct user_ring_buffer;
 
+/* Callback-based consumption is unsupported for BPF_F_RB_OVERWRITE maps. */
 /* A negative return stops consumption; non-negative values continue. Stopping
  * can leave records queued without a new readiness notification. Before
  * waiting for readiness again, consume until no records remain.
