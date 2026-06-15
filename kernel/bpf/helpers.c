@@ -4866,9 +4866,41 @@ BTF_ID_FLAGS(func, bpf_dynptr_file_discard)
 BTF_ID_FLAGS(func, bpf_timer_cancel_async)
 BTF_KFUNCS_END(common_btf_ids)
 
+#ifdef CONFIG_BPF_EVENTS
+BTF_KFUNCS_START(probe_read_dynptr_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_probe_read_user_dynptr)
+BTF_ID_FLAGS(func, bpf_probe_read_kernel_dynptr)
+BTF_ID_FLAGS(func, bpf_probe_read_user_str_dynptr)
+BTF_ID_FLAGS(func, bpf_probe_read_kernel_str_dynptr)
+BTF_KFUNCS_END(probe_read_dynptr_kfunc_ids)
+
+BTF_KFUNCS_START(probe_read_kernel_dynptr_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_probe_read_kernel_dynptr)
+BTF_ID_FLAGS(func, bpf_probe_read_kernel_str_dynptr)
+BTF_KFUNCS_END(probe_read_kernel_dynptr_kfunc_ids)
+#endif
+
+static int common_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+#ifdef CONFIG_BPF_EVENTS
+	if (!btf_id_set8_contains(&probe_read_dynptr_kfunc_ids, kfunc_id))
+		return 0;
+
+	if (!bpf_token_capable(prog->aux->token, CAP_PERFMON))
+		return -EACCES;
+
+	if (btf_id_set8_contains(&probe_read_kernel_dynptr_kfunc_ids, kfunc_id) &&
+	    security_locked_down(LOCKDOWN_BPF_READ_KERNEL) < 0)
+		return -EACCES;
+#endif
+
+	return 0;
+}
+
 static const struct btf_kfunc_id_set common_kfunc_set = {
 	.owner = THIS_MODULE,
 	.set   = &common_btf_ids,
+	.filter = common_kfunc_filter,
 };
 
 static int __init kfunc_init(void)
