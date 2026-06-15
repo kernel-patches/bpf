@@ -3,6 +3,7 @@
 
 #include <test_progs.h>
 #include <network_helpers.h>
+#include "cap_helpers.h"
 #include "dynptr_fail.skel.h"
 #include "dynptr_success.skel.h"
 
@@ -53,7 +54,65 @@ static struct {
 	{"test_copy_from_user_task_str_dynptr", SETUP_SYSCALL_SLEEP},
 };
 
+static const char * const probe_read_cap_tests[] = {
+	"test_probe_read_user_dynptr_cap",
+	"test_probe_read_kernel_dynptr_cap",
+	"test_probe_read_user_str_dynptr_cap",
+	"test_probe_read_kernel_str_dynptr_cap",
+};
+
 #define PAGE_SIZE_64K 65536
+
+static int load_probe_read_cap_prog(const char *prog_name)
+{
+	struct bpf_program *prog, *tmp;
+	struct dynptr_success *skel;
+	int err;
+
+	skel = dynptr_success__open();
+	if (!ASSERT_OK_PTR(skel, "dynptr_success__open"))
+		return -EINVAL;
+
+	bpf_object__for_each_program(tmp, skel->obj)
+		bpf_program__set_autoload(tmp, false);
+
+	prog = bpf_object__find_program_by_name(skel->obj, prog_name);
+	if (!ASSERT_OK_PTR(prog, "bpf_object__find_program_by_name")) {
+		err = -ENOENT;
+		goto cleanup;
+	}
+
+	bpf_program__set_autoload(prog, true);
+	err = dynptr_success__load(skel);
+
+cleanup:
+	dynptr_success__destroy(skel);
+	return err;
+}
+
+static void verify_probe_read_cap(const char *prog_name)
+{
+	__u64 old_caps = 0;
+	int err;
+
+	err = load_probe_read_cap_prog(prog_name);
+	if (!ASSERT_OK(err, "full_caps_load"))
+		return;
+
+	err = cap_enable_effective(1ULL << CAP_BPF, &old_caps);
+	if (!ASSERT_OK(err, "enable_cap_bpf"))
+		return;
+
+	err = cap_disable_effective(1ULL << CAP_SYS_ADMIN | 1ULL << CAP_PERFMON, NULL);
+	if (!ASSERT_OK(err, "disable_cap_sys_admin_perfmon"))
+		goto restore_cap;
+
+	err = load_probe_read_cap_prog(prog_name);
+	ASSERT_EQ(err, -EACCES, "cap_bpf_without_perfmon_load");
+
+restore_cap:
+	cap_enable_effective(old_caps, NULL);
+}
 
 static void verify_success(const char *prog_name, enum test_setup_type setup_type)
 {
@@ -184,6 +243,13 @@ cleanup:
 void test_dynptr(void)
 {
 	int i;
+
+	for (i = 0; i < ARRAY_SIZE(probe_read_cap_tests); i++) {
+		if (!test__start_subtest(probe_read_cap_tests[i]))
+			continue;
+
+		verify_probe_read_cap(probe_read_cap_tests[i]);
+	}
 
 	for (i = 0; i < ARRAY_SIZE(success_tests); i++) {
 		if (!test__start_subtest(success_tests[i].prog_name))

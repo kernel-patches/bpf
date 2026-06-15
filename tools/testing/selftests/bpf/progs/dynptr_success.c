@@ -34,6 +34,13 @@ struct {
 	__type(value, __u32);
 } array_map SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u8[32]);
+} probe_read_map SEC(".maps");
+
 SEC("?tp/syscalls/sys_enter_nanosleep")
 int test_read_write(void *ctx)
 {
@@ -1090,6 +1097,74 @@ int test_probe_read_kernel_str_dynptr(struct xdp_md *xdp)
 	if (!err)
 		test_dynptr_probe_str_xdp(xdp, expected_str, bpf_probe_read_kernel_str_dynptr);
 	return XDP_PASS;
+}
+
+SEC("?socket")
+int test_probe_read_user_dynptr_cap(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	__u32 key = 0;
+	void *value;
+
+	value = bpf_map_lookup_elem(&probe_read_map, &key);
+	if (!value)
+		return 0;
+
+	if (bpf_dynptr_from_mem(value, 32, 0, &ptr))
+		return 0;
+
+	return bpf_probe_read_user_dynptr(&ptr, 0, 8, value);
+}
+
+SEC("?socket")
+int test_probe_read_kernel_dynptr_cap(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	__u32 key = 0;
+	void *value;
+
+	value = bpf_map_lookup_elem(&probe_read_map, &key);
+	if (!value)
+		return 0;
+
+	if (bpf_dynptr_from_mem(value, 32, 0, &ptr))
+		return 0;
+
+	return bpf_probe_read_kernel_dynptr(&ptr, 0, 8, value);
+}
+
+SEC("?socket")
+int test_probe_read_user_str_dynptr_cap(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	__u32 key = 0;
+	void *value;
+
+	value = bpf_map_lookup_elem(&probe_read_map, &key);
+	if (!value)
+		return 0;
+
+	if (bpf_dynptr_from_mem(value, 32, 0, &ptr))
+		return 0;
+
+	return bpf_probe_read_user_str_dynptr(&ptr, 0, 8, value);
+}
+
+SEC("?socket")
+int test_probe_read_kernel_str_dynptr_cap(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	__u32 key = 0;
+	void *value;
+
+	value = bpf_map_lookup_elem(&probe_read_map, &key);
+	if (!value)
+		return 0;
+
+	if (bpf_dynptr_from_mem(value, 32, 0, &ptr))
+		return 0;
+
+	return bpf_probe_read_kernel_str_dynptr(&ptr, 0, 8, value);
 }
 
 SEC("fentry.s/" SYS_PREFIX "sys_nanosleep")
