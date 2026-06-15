@@ -1232,6 +1232,244 @@ int skb_invalid_data_slice4(struct __sk_buff *skb)
 	return SK_PASS;
 }
 
+char dynptr_writer_data[8] = "test";
+char dynptr_writer_dst[8];
+
+extern int bpf_dynptr_copy(struct bpf_dynptr *dst, __u64 dst_off,
+			   struct bpf_dynptr *src, __u64 src_off,
+			   __u64 size) __ksym __weak;
+extern int bpf_dynptr_memset(struct bpf_dynptr *ptr, __u64 offset,
+			     __u64 size, __u8 val) __ksym __weak;
+extern int bpf_probe_read_kernel_dynptr(struct bpf_dynptr *dptr,
+					__u64 off, __u64 size,
+					const void *unsafe_ptr__ign) __ksym __weak;
+
+__noinline int global_dynptr_helper_write(struct bpf_dynptr *ptr)
+{
+	return bpf_dynptr_write(ptr, 0, dynptr_writer_data, 1, 0);
+}
+
+__noinline int global_dynptr_helper_write_and_read(struct __sk_buff *skb,
+						   struct bpf_dynptr *ptr)
+{
+	__u8 *data = (void *)(long)skb->data;
+	__u8 *data_end = (void *)(long)skb->data_end;
+
+	if (data + 1 > data_end)
+		return SK_DROP;
+
+	bpf_dynptr_write(ptr, 0, dynptr_writer_data, 1, 0);
+
+	/* this should fail */
+	return *data;
+}
+
+__noinline int global_dynptr_clone_write_and_read(struct __sk_buff *skb,
+						  struct bpf_dynptr *ptr)
+{
+	__u8 *data = (void *)(long)skb->data;
+	__u8 *data_end = (void *)(long)skb->data_end;
+	struct bpf_dynptr clone;
+
+	if (data + 1 > data_end)
+		return SK_DROP;
+	if (bpf_dynptr_clone(ptr, &clone))
+		return SK_DROP;
+
+	bpf_dynptr_write(&clone, 0, dynptr_writer_data, 1, 0);
+
+	/* this should fail */
+	return *data;
+}
+
+__noinline int global_dynptr_slice_write_and_read(struct bpf_dynptr *ptr)
+{
+	__u8 buffer[1] = {};
+	__u8 *data;
+
+	data = bpf_dynptr_slice_rdwr(ptr, 0, buffer, sizeof(buffer));
+	if (!data)
+		return SK_DROP;
+
+	bpf_dynptr_write(ptr, 0, dynptr_writer_data, 1, 0);
+
+	/* this should fail */
+	return *data;
+}
+
+__noinline int global_dynptr_kfunc_memset(struct bpf_dynptr *ptr)
+{
+	return bpf_dynptr_memset(ptr, 0, 1, 0);
+}
+
+__noinline int global_dynptr_kfunc_memset_and_read(struct __sk_buff *skb,
+						   struct bpf_dynptr *ptr)
+{
+	__u8 *data = (void *)(long)skb->data;
+	__u8 *data_end = (void *)(long)skb->data_end;
+
+	if (data + 1 > data_end)
+		return SK_DROP;
+
+	bpf_dynptr_memset(ptr, 0, 1, 0);
+
+	/* this should fail */
+	return *data;
+}
+
+SEC("?tc")
+__failure __msg("invalid mem access 'scalar'")
+int skb_pkt_ptr_invalid_after_global_dynptr_write(struct __sk_buff *skb)
+{
+	__u8 *data = (void *)(long)skb->data;
+	__u8 *data_end = (void *)(long)skb->data_end;
+	struct bpf_dynptr ptr;
+
+	if (data + 1 > data_end)
+		return SK_DROP;
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+	global_dynptr_helper_write(&ptr);
+
+	/* this should fail */
+	return *data;
+}
+
+SEC("?tc")
+__failure __msg("invalid mem access 'scalar'")
+int skb_pkt_ptr_invalid_inside_global_dynptr_write(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+
+	return global_dynptr_helper_write_and_read(skb, &ptr);
+}
+
+SEC("?tc")
+__failure __msg("invalid mem access 'scalar'")
+int skb_pkt_ptr_invalid_after_global_dynptr_clone_write(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+
+	return global_dynptr_clone_write_and_read(skb, &ptr);
+}
+
+SEC("?tc")
+__failure __msg("invalid mem access 'scalar'")
+int skb_slice_invalid_after_global_dynptr_write(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+
+	return global_dynptr_slice_write_and_read(&ptr);
+}
+
+SEC("?tc")
+__failure __msg("invalid mem access 'scalar'")
+int skb_pkt_ptr_invalid_after_dynptr_memset(struct __sk_buff *skb)
+{
+	__u8 *data = (void *)(long)skb->data;
+	__u8 *data_end = (void *)(long)skb->data_end;
+	struct bpf_dynptr ptr;
+
+	if (data + 1 > data_end)
+		return SK_DROP;
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+	bpf_dynptr_memset(&ptr, 0, 1, 0);
+
+	/* this should fail */
+	return *data;
+}
+
+SEC("?tc")
+__failure __msg("invalid mem access 'scalar'")
+int skb_pkt_ptr_invalid_after_global_dynptr_memset(struct __sk_buff *skb)
+{
+	__u8 *data = (void *)(long)skb->data;
+	__u8 *data_end = (void *)(long)skb->data_end;
+	struct bpf_dynptr ptr;
+
+	if (data + 1 > data_end)
+		return SK_DROP;
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+	global_dynptr_kfunc_memset(&ptr);
+
+	/* this should fail */
+	return *data;
+}
+
+SEC("?tc")
+__failure __msg("invalid mem access 'scalar'")
+int skb_pkt_ptr_invalid_inside_global_dynptr_memset(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+
+	return global_dynptr_kfunc_memset_and_read(skb, &ptr);
+}
+
+SEC("?tc")
+__failure __msg("invalid mem access 'scalar'")
+int skb_pkt_ptr_invalid_after_dynptr_copy_dst(struct __sk_buff *skb)
+{
+	__u8 *data = (void *)(long)skb->data;
+	__u8 *data_end = (void *)(long)skb->data_end;
+	struct bpf_dynptr dst, src;
+
+	if (data + 1 > data_end)
+		return SK_DROP;
+
+	bpf_dynptr_from_skb(skb, 0, &dst);
+	bpf_dynptr_from_mem(dynptr_writer_data, sizeof(dynptr_writer_data), 0, &src);
+	bpf_dynptr_copy(&dst, 0, &src, 0, 1);
+
+	/* this should fail */
+	return *data;
+}
+
+SEC("?tc")
+__success
+int skb_pkt_ptr_valid_after_dynptr_copy_src(struct __sk_buff *skb)
+{
+	__u8 *data = (void *)(long)skb->data;
+	__u8 *data_end = (void *)(long)skb->data_end;
+	struct bpf_dynptr dst, src;
+
+	if (data + 1 > data_end)
+		return SK_DROP;
+
+	bpf_dynptr_from_skb(skb, 0, &src);
+	bpf_dynptr_from_mem(dynptr_writer_dst, sizeof(dynptr_writer_dst), 0, &dst);
+	bpf_dynptr_copy(&dst, 0, &src, 0, 1);
+
+	return *data;
+}
+
+SEC("?tc")
+__failure __msg("invalid mem access 'scalar'")
+int skb_pkt_ptr_invalid_after_probe_read_kernel_dynptr(struct __sk_buff *skb)
+{
+	__u8 *data = (void *)(long)skb->data;
+	__u8 *data_end = (void *)(long)skb->data_end;
+	struct bpf_dynptr ptr;
+
+	if (data + 1 > data_end)
+		return SK_DROP;
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+	bpf_probe_read_kernel_dynptr(&ptr, 0, 1, dynptr_writer_data);
+
+	/* this should fail */
+	return *data;
+}
+
 /* Read-only skb data slice is invalidated on write to skb metadata */
 SEC("?tc")
 __failure __msg("invalid mem access 'scalar'")
