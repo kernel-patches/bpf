@@ -832,10 +832,16 @@ static int destroy_if_dynptr_stack_slot(struct bpf_verifier_env *env,
 	dynptr_id = state->stack[spi].spilled_ptr.id;
 	/* Invalidate any slices associated with this dynptr */
 	bpf_for_each_reg_in_vstate(env->cur_state, fstate, dreg, ({
-		/* Dynptr slices are only PTR_TO_MEM_OR_NULL and PTR_TO_MEM */
-		if (dreg->type != (PTR_TO_MEM | PTR_MAYBE_NULL) && dreg->type != PTR_TO_MEM)
+		if (base_type(dreg->type) == PTR_TO_MEM &&
+		    dreg->dynptr_id == dynptr_id) {
+			mark_reg_invalid(env, dreg);
 			continue;
-		if (dreg->dynptr_id == dynptr_id)
+		}
+
+		/* Typed bpf_rdonly_cast() aliases keep dynptr_id in reg id. */
+		if (base_type(dreg->type) == PTR_TO_BTF_ID &&
+		    (dreg->type & PTR_UNTRUSTED) &&
+		    dreg->id == dynptr_id)
 			mark_reg_invalid(env, dreg);
 	}));
 
@@ -12082,8 +12088,17 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			continue;
 		}
 
-		if (is_kfunc_arg_ignore(btf, &args[i]) || is_kfunc_arg_implicit(meta, i))
+		if (is_kfunc_arg_ignore(btf, &args[i]) || is_kfunc_arg_implicit(meta, i)) {
+			if (meta->func_id == special_kfunc_list[KF_bpf_rdonly_cast] &&
+			    i == 0 && is_spillable_regtype(reg->type)) {
+				meta->rdonly_cast_src.id = reg->id;
+				if (base_type(reg->type) == PTR_TO_MEM)
+					meta->rdonly_cast_src.dynptr_id = reg->dynptr_id;
+				meta->rdonly_cast_src.ref_obj_id = reg->ref_obj_id;
+			}
+
 			continue;
+		}
 
 		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
 
@@ -12932,10 +12947,17 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_ca
 			regs[BPF_REG_0].type = PTR_TO_BTF_ID | PTR_UNTRUSTED;
 			regs[BPF_REG_0].btf = desc_btf;
 			regs[BPF_REG_0].btf_id = meta->arg_constant.value;
+			regs[BPF_REG_0].id = meta->rdonly_cast_src.id;
+			if (!regs[BPF_REG_0].id)
+				regs[BPF_REG_0].id = meta->rdonly_cast_src.dynptr_id;
+			regs[BPF_REG_0].ref_obj_id = meta->rdonly_cast_src.ref_obj_id;
 		} else if (btf_type_is_void(ret_t)) {
 			mark_reg_known_zero(env, regs, BPF_REG_0);
 			regs[BPF_REG_0].type = PTR_TO_MEM | MEM_RDONLY | PTR_UNTRUSTED;
 			regs[BPF_REG_0].mem_size = 0;
+			regs[BPF_REG_0].id = meta->rdonly_cast_src.id;
+			regs[BPF_REG_0].dynptr_id = meta->rdonly_cast_src.dynptr_id;
+			regs[BPF_REG_0].ref_obj_id = meta->rdonly_cast_src.ref_obj_id;
 		} else {
 			verbose(env,
 				"kfunc bpf_rdonly_cast type ID argument must be of a struct or void\n");
@@ -12972,11 +12994,9 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_ca
 			return -EFAULT;
 		}
 		regs[BPF_REG_0].dynptr_id = meta->initialized_dynptr.id;
+		regs[BPF_REG_0].ref_obj_id = meta->initialized_dynptr.ref_obj_id;
 
-		/* we don't need to set BPF_REG_0's ref obj id
-		 * because packet slices are not refcounted (see
-		 * dynptr_type_refcounted)
-		 */
+		/* ref_obj_id is zero for non-refcounted packet slices. */
 	} else {
 		return 0;
 	}

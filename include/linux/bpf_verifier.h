@@ -1367,6 +1367,11 @@ struct bpf_kfunc_call_arg_meta {
 		u32 ref_obj_id;
 	} initialized_dynptr;
 	struct {
+		u32 id;
+		u32 dynptr_id;
+		u32 ref_obj_id;
+	} rdonly_cast_src;
+	struct {
 		u8 spi;
 		u8 frameno;
 	} iter;
