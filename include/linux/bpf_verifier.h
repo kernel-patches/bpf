@@ -66,11 +66,13 @@ struct bpf_reg_state {
 		struct { /* for PTR_TO_MEM | PTR_TO_MEM_OR_NULL */
 			u32 mem_size;
 			u32 dynptr_id; /* for dynptr slices */
+			bool dynptr_may_be_pkt_data; /* for dynptr slices */
 		};
 
 		/* For dynptr stack slots */
 		struct {
 			enum bpf_dynptr_type type;
+			bool may_be_pkt_data;
 			/* A dynptr is 16 bytes so it takes up 2 stack slots.
 			 * We need to track which slot is the first slot
 			 * to protect against cases where the user may try to
@@ -1332,6 +1334,7 @@ struct bpf_kfunc_call_arg_meta {
 	u32 ref_obj_id;
 	u8 release_regno;
 	bool r0_rdonly;
+	bool pkt_dynptr_write;
 	u32 ret_btf_id;
 	u64 r0_size;
 	u32 subprogno;
@@ -1365,6 +1368,7 @@ struct bpf_kfunc_call_arg_meta {
 		enum bpf_dynptr_type type;
 		u32 id;
 		u32 ref_obj_id;
+		bool may_be_pkt_data;
 	} initialized_dynptr;
 	struct {
 		u8 spi;
@@ -1389,6 +1393,8 @@ static inline bool bpf_is_kfunc_sleepable(struct bpf_kfunc_call_arg_meta *meta)
 {
 	return meta->kfunc_flags & KF_SLEEPABLE;
 }
+
+bool bpf_kfunc_may_change_pkt_data(struct bpf_kfunc_call_arg_meta *meta);
 bool bpf_is_kfunc_pkt_changing(struct bpf_kfunc_call_arg_meta *meta);
 struct bpf_iarray *bpf_iarray_realloc(struct bpf_iarray *old, size_t n_elem);
 int bpf_copy_insn_array_uniq(struct bpf_map *map, u32 start, u32 end, u32 *off);
