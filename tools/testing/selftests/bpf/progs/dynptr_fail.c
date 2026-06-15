@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <linux/bpf.h>
+#include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <linux/if_ether.h>
@@ -12,6 +13,18 @@
 #include "bpf_kfuncs.h"
 
 char _license[] SEC("license") = "GPL";
+
+struct sock {
+	int __unused;
+};
+
+static __always_inline void overwrite_dynptr(struct bpf_dynptr *ptr)
+{
+	asm volatile("*(u8 *)(%[ptr] + 0) = 0"
+		     :
+		     : [ptr] "r"(ptr)
+		     : "memory");
+}
 
 struct test_info {
 	int x;
@@ -2075,6 +2088,153 @@ int dynptr_overwrite_ref_invalidate_slice(void *ctx)
 	*data = 123;
 
 	return 0;
+}
+
+/* A read-only cast of a dynptr slice should be invalidated on release */
+SEC("?raw_tp")
+__failure __msg("invalid mem access 'scalar'")
+int dynptr_rdonly_cast_slice_after_release(void *ctx)
+{
+	struct bpf_dynptr ptr;
+	__u64 *data;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(__u64), 0, &ptr);
+
+	data = bpf_dynptr_slice(&ptr, 0, NULL, sizeof(*data));
+	if (!data) {
+		bpf_ringbuf_discard_dynptr(&ptr, 0);
+		return 0;
+	}
+
+	data = bpf_rdonly_cast(data, 0);
+	bpf_ringbuf_discard_dynptr(&ptr, 0);
+
+	return *data;
+}
+
+SEC("?raw_tp")
+__failure __msg("invalid mem access 'scalar'")
+int dynptr_rdonly_cast_typed_slice_after_release(void *ctx)
+{
+	struct bpf_dynptr ptr;
+	__u64 *data;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(__u64), 0, &ptr);
+
+	data = bpf_dynptr_slice(&ptr, 0, NULL, sizeof(*data));
+	if (!data) {
+		bpf_ringbuf_discard_dynptr(&ptr, 0);
+		return 0;
+	}
+
+	data = bpf_rdonly_cast(data, bpf_core_type_id_kernel(struct sock));
+	bpf_ringbuf_discard_dynptr(&ptr, 0);
+
+	return *data;
+}
+
+/* A read-only cast alias from an overwritten dynptr should be invalidated
+ * even when a clone still holds the underlying reference.
+ */
+SEC("?raw_tp")
+__failure __msg("invalid mem access 'scalar'")
+int dynptr_rdonly_cast_slice_after_overwrite(void *ctx)
+{
+	struct bpf_dynptr ptr, clone;
+	__u64 *data;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(__u64), 0, &ptr);
+
+	data = bpf_dynptr_slice(&ptr, 0, NULL, sizeof(*data));
+	if (!data) {
+		bpf_ringbuf_discard_dynptr(&ptr, 0);
+		return 0;
+	}
+
+	bpf_dynptr_clone(&ptr, &clone);
+	data = bpf_rdonly_cast(data, 0);
+
+	overwrite_dynptr(&ptr);
+
+	return *data;
+}
+
+SEC("?raw_tp")
+__failure __msg("invalid mem access 'scalar'")
+int dynptr_rdonly_cast_typed_slice_after_overwrite(void *ctx)
+{
+	struct bpf_dynptr ptr, clone;
+	__u64 *data;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(__u64), 0, &ptr);
+
+	data = bpf_dynptr_slice(&ptr, 0, NULL, sizeof(*data));
+	if (!data) {
+		bpf_ringbuf_discard_dynptr(&ptr, 0);
+		return 0;
+	}
+
+	bpf_dynptr_clone(&ptr, &clone);
+	data = bpf_rdonly_cast(data, bpf_core_type_id_kernel(struct sock));
+
+	overwrite_dynptr(&ptr);
+
+	return *data;
+}
+
+/* A read-only cast alias from a clone should remain valid after overwriting
+ * the original dynptr while the clone still holds the reference.
+ */
+SEC("?raw_tp")
+__success
+int dynptr_rdonly_cast_clone_slice_after_parent_overwrite(void *ctx)
+{
+	struct bpf_dynptr ptr, clone;
+	__u64 *data;
+	int ret;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(__u64), 0, &ptr);
+	bpf_dynptr_clone(&ptr, &clone);
+
+	data = bpf_dynptr_slice(&clone, 0, NULL, sizeof(*data));
+	if (!data) {
+		bpf_ringbuf_discard_dynptr(&clone, 0);
+		return 0;
+	}
+
+	data = bpf_rdonly_cast(data, 0);
+	overwrite_dynptr(&ptr);
+
+	ret = *data;
+	bpf_ringbuf_discard_dynptr(&clone, 0);
+
+	return ret;
+}
+
+SEC("?raw_tp")
+__success
+int dynptr_rdonly_cast_typed_clone_slice_after_parent_overwrite(void *ctx)
+{
+	struct bpf_dynptr ptr, clone;
+	__u64 *data;
+	int ret;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, sizeof(__u64), 0, &ptr);
+	bpf_dynptr_clone(&ptr, &clone);
+
+	data = bpf_dynptr_slice(&clone, 0, NULL, sizeof(*data));
+	if (!data) {
+		bpf_ringbuf_discard_dynptr(&clone, 0);
+		return 0;
+	}
+
+	data = bpf_rdonly_cast(data, bpf_core_type_id_kernel(struct sock));
+	overwrite_dynptr(&ptr);
+
+	ret = *data;
+	bpf_ringbuf_discard_dynptr(&clone, 0);
+
+	return ret;
 }
 
 /*
