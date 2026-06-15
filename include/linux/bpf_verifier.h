@@ -1332,6 +1332,7 @@ struct bpf_kfunc_call_arg_meta {
 	u32 ref_obj_id;
 	u8 release_regno;
 	bool r0_rdonly;
+	bool pkt_dynptr_write;
 	u32 ret_btf_id;
 	u64 r0_size;
 	u32 subprogno;
@@ -1389,6 +1390,8 @@ static inline bool bpf_is_kfunc_sleepable(struct bpf_kfunc_call_arg_meta *meta)
 {
 	return meta->kfunc_flags & KF_SLEEPABLE;
 }
+
+bool bpf_kfunc_may_change_pkt_data(struct bpf_kfunc_call_arg_meta *meta);
 bool bpf_is_kfunc_pkt_changing(struct bpf_kfunc_call_arg_meta *meta);
 struct bpf_iarray *bpf_iarray_realloc(struct bpf_iarray *old, size_t n_elem);
 int bpf_copy_insn_array_uniq(struct bpf_map *map, u32 start, u32 end, u32 *off);
