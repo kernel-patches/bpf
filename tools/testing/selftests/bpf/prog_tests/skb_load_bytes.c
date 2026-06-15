@@ -3,6 +3,39 @@
 #include <network_helpers.h>
 #include "skb_load_bytes.skel.h"
 
+#define NONLINEAR_PKT_LEN 9000
+#define NONLINEAR_HEAD_LEN 64
+#define SHORT_OUT_LEN 100
+
+static void test_nonlinear_data_out_partial(int prog_fd)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, tattr);
+	__u8 pkt[NONLINEAR_PKT_LEN];
+	__u8 out[SHORT_OUT_LEN];
+	struct __sk_buff skb = {};
+	int err, i;
+
+	for (i = 0; i < sizeof(pkt); i++)
+		pkt[i] = i & 0xff;
+
+	memset(out, 0xa5, sizeof(out));
+
+	skb.data_end = NONLINEAR_HEAD_LEN;
+
+	tattr.data_in = pkt;
+	tattr.data_size_in = sizeof(pkt);
+	tattr.data_out = out;
+	tattr.data_size_out = sizeof(out);
+	tattr.ctx_in = &skb;
+	tattr.ctx_size_in = sizeof(skb);
+
+	err = bpf_prog_test_run_opts(prog_fd, &tattr);
+
+	ASSERT_EQ(err, -ENOSPC, "nonlinear_partial_err");
+	ASSERT_EQ(tattr.data_size_out, sizeof(pkt), "nonlinear_partial_data_size_out");
+	ASSERT_OK(memcmp(out, pkt, sizeof(out)), "nonlinear_partial_data_out");
+}
+
 void test_skb_load_bytes(void)
 {
 	struct skb_load_bytes *skel;
@@ -39,6 +72,8 @@ void test_skb_load_bytes(void)
 	test_result = skel->bss->test_result;
 	if (!ASSERT_EQ(test_result, 0, "offset 10"))
 		goto out;
+
+	test_nonlinear_data_out_partial(prog_fd);
 
 out:
 	skb_load_bytes__destroy(skel);
