@@ -6244,6 +6244,7 @@ static int bpf_ipv4_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
 	fl4.flowi4_dscp = inet_dsfield_to_dscp(params->tos);
 	fl4.flowi4_scope = RT_SCOPE_UNIVERSE;
 	fl4.flowi4_flags = 0;
+	fl4.flowi4_l3mdev = 0;
 
 	fl4.flowi4_proto = params->l4_protocol;
 	fl4.daddr = params->ipv4_dst;
@@ -6389,6 +6390,7 @@ static int bpf_ipv6_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
 	fl6.flowlabel = params->flowinfo;
 	fl6.flowi6_scope = 0;
 	fl6.flowi6_flags = 0;
+	fl6.flowi6_l3mdev = 0;
 	fl6.mp_hash = 0;
 
 	fl6.flowi6_proto = params->l4_protocol;
