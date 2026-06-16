@@ -65,6 +65,11 @@ enum {
 	NF_BPF_CT_OPTS_SZ = 16,
 };
 
+static bool bpf_ct_opts_has_error(u32 opts_len)
+{
+	return opts_len >= offsetofend(struct bpf_ct_opts, error);
+}
+
 static int bpf_nf_ct_tuple_parse(struct bpf_sock_tuple *bpf_tuple,
 				 u32 tuple_len, u8 protonum, u8 dir,
 				 struct nf_conntrack_tuple *tuple)
@@ -298,7 +303,8 @@ bpf_xdp_ct_alloc(struct xdp_md *xdp_ctx, struct bpf_sock_tuple *bpf_tuple,
 	nfct = __bpf_nf_ct_alloc_entry(dev_net(ctx->rxq->dev), bpf_tuple, tuple__sz,
 				       opts, opts__sz, 10);
 	if (IS_ERR(nfct)) {
-		opts->error = PTR_ERR(nfct);
+		if (bpf_ct_opts_has_error(opts__sz))
+			opts->error = PTR_ERR(nfct);
 		return NULL;
 	}
 
@@ -332,7 +338,8 @@ bpf_xdp_ct_lookup(struct xdp_md *xdp_ctx, struct bpf_sock_tuple *bpf_tuple,
 	caller_net = dev_net(ctx->rxq->dev);
 	nfct = __bpf_nf_ct_lookup(caller_net, bpf_tuple, tuple__sz, opts, opts__sz);
 	if (IS_ERR(nfct)) {
-		opts->error = PTR_ERR(nfct);
+		if (bpf_ct_opts_has_error(opts__sz))
+			opts->error = PTR_ERR(nfct);
 		return NULL;
 	}
 	return nfct;
@@ -364,7 +371,8 @@ bpf_skb_ct_alloc(struct __sk_buff *skb_ctx, struct bpf_sock_tuple *bpf_tuple,
 	net = skb->dev ? dev_net(skb->dev) : sock_net(skb->sk);
 	nfct = __bpf_nf_ct_alloc_entry(net, bpf_tuple, tuple__sz, opts, opts__sz, 10);
 	if (IS_ERR(nfct)) {
-		opts->error = PTR_ERR(nfct);
+		if (bpf_ct_opts_has_error(opts__sz))
+			opts->error = PTR_ERR(nfct);
 		return NULL;
 	}
 
@@ -398,7 +406,8 @@ bpf_skb_ct_lookup(struct __sk_buff *skb_ctx, struct bpf_sock_tuple *bpf_tuple,
 	caller_net = skb->dev ? dev_net(skb->dev) : sock_net(skb->sk);
 	nfct = __bpf_nf_ct_lookup(caller_net, bpf_tuple, tuple__sz, opts, opts__sz);
 	if (IS_ERR(nfct)) {
-		opts->error = PTR_ERR(nfct);
+		if (bpf_ct_opts_has_error(opts__sz))
+			opts->error = PTR_ERR(nfct);
 		return NULL;
 	}
 	return nfct;
