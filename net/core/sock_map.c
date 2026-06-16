@@ -421,13 +421,13 @@ static int __sock_map_delete(struct bpf_stab *stab, struct sock *sk_test,
 	spin_lock_bh(&stab->lock);
 	if (!sk_test || sk_test == *psk)
 		sk = xchg(psk, NULL);
+	spin_unlock_bh(&stab->lock);
 
 	if (likely(sk))
 		sock_map_unref(sk, psk);
 	else
 		err = -EINVAL;
 
-	spin_unlock_bh(&stab->lock);
 	return err;
 }
 
@@ -505,9 +505,10 @@ static int sock_map_update_common(struct bpf_map *map, u32 idx,
 
 	sock_map_add_link(psock, link, map, &stab->sks[idx]);
 	stab->sks[idx] = sk;
+	spin_unlock_bh(&stab->lock);
+
 	if (osk)
 		sock_map_unref(osk, &stab->sks[idx]);
-	spin_unlock_bh(&stab->lock);
 	return 0;
 out_unlock:
 	spin_unlock_bh(&stab->lock);
