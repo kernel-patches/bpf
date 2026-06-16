@@ -343,7 +343,7 @@ void amd_brs_drain(void)
 
 		rdmsrq(brs_from(brs_idx), from);
 
-		perf_clear_branch_entry_bitfields(br+nr);
+		perf_clear_branch_entry(br + nr);
 
 		br[nr].from = from;
 		br[nr].to   = to;

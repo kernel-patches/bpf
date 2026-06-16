@@ -183,7 +183,7 @@ void amd_pmu_lbr_read(void)
 		    entry.to.split.reserved)
 			continue;
 
-		perf_clear_branch_entry_bitfields(br + out);
+		perf_clear_branch_entry(br + out);
 
 		br[out].from	= sign_ext_branch_ip(entry.from.split.ip);
 		br[out].to	= sign_ext_branch_ip(entry.to.split.ip);

@@ -756,7 +756,7 @@ void intel_pmu_lbr_read_32(struct cpu_hw_events *cpuc)
 
 		rdmsrq(x86_pmu.lbr_from + lbr_idx, msr_lastbranch.lbr);
 
-		perf_clear_branch_entry_bitfields(br);
+		perf_clear_branch_entry(br);
 
 		br->from	= msr_lastbranch.from;
 		br->to		= msr_lastbranch.to;
@@ -847,7 +847,7 @@ void intel_pmu_lbr_read_64(struct cpu_hw_events *cpuc)
 		if (abort && x86_pmu.lbr_double_abort && out > 0)
 			out--;
 
-		perf_clear_branch_entry_bitfields(br+out);
+		perf_clear_branch_entry(br + out);
 		br[out].from	 = from;
 		br[out].to	 = to;
 		br[out].mispred	 = mis;
@@ -921,7 +921,7 @@ static void intel_pmu_store_lbr(struct cpu_hw_events *cpuc,
 		to = rdlbr_to(i, lbr);
 		info = rdlbr_info(i, lbr);
 
-		perf_clear_branch_entry_bitfields(e);
+		perf_clear_branch_entry(e);
 
 		e->from		= from;
 		e->to		= to;
