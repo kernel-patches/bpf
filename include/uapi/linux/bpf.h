@@ -3532,6 +3532,31 @@ union bpf_attr {
  *			Use the mark present in *params*->mark for the fib lookup.
  *			This option should not be used with BPF_FIB_LOOKUP_DIRECT,
  *			as it only has meaning for full lookups.
+ *		**BPF_FIB_LOOKUP_VLAN**
+ *			If the fib lookup resolves to a VLAN device whose
+ *			parent is a real (non-VLAN) device, set
+ *			*params*->h_vlan_proto and *params*->h_vlan_TCI from
+ *			the VLAN device and replace *params*->ifindex with the
+ *			parent's ifindex. This lets XDP programs that target
+ *			the underlying physical device (VLAN devices have no
+ *			XDP xmit) discover both the real egress ifindex and
+ *			the VLAN tag to push in one call. *params*->h_vlan_TCI
+ *			carries the VID only, with PCP and DEI bits zero; a
+ *			consumer wanting to set egress priority writes PCP
+ *			itself. *params*->smac is the VLAN device's own
+ *			address, which can differ from the parent's. Only the
+ *			immediate parent is resolved: for a stacked VLAN (QinQ)
+ *			the parent is itself a VLAN device, and since one tag
+ *			pair cannot describe two tags, *params*->ifindex is
+ *			left unchanged and the vlan fields remain zero. The
+ *			same applies when the parent is in another network
+ *			namespace, where its ifindex would be meaningless.
+ *			The swap and the vlan fields are written only on
+ *			success; other output fields keep the helper's
+ *			existing behaviour, so a frag-needed result still
+ *			reports the route mtu in *params*->mtu_result, and on
+ *			the tc path without tot_len the mtu check runs after
+ *			the swap, against the parent device.
  *
  *		*ctx* is either **struct xdp_md** for XDP programs or
  *		**struct sk_buff** tc cls_act programs.
@@ -7327,6 +7352,7 @@ enum {
 	BPF_FIB_LOOKUP_TBID    = (1U << 3),
 	BPF_FIB_LOOKUP_SRC     = (1U << 4),
 	BPF_FIB_LOOKUP_MARK    = (1U << 5),
+	BPF_FIB_LOOKUP_VLAN    = (1U << 6),
 };
 
 enum {
@@ -7393,7 +7419,10 @@ struct bpf_fib_lookup {
 
 	union {
 		struct {
-			/* output */
+			/* output with BPF_FIB_LOOKUP_VLAN: set from the
+			 * resolved egress VLAN device (see the flag); zeroed
+			 * on other successful lookups.
+			 */
 			__be16	h_vlan_proto;
 			__be16	h_vlan_TCI;
 		};
