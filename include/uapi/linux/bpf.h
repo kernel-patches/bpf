@@ -3557,6 +3557,35 @@ union bpf_attr {
  *			reports the route mtu in *params*->mtu_result, and on
  *			the tc path without tot_len the mtu check runs after
  *			the swap, against the parent device.
+ *		**BPF_FIB_LOOKUP_VLAN_INPUT**
+ *			Treat *params*->h_vlan_proto and *params*->h_vlan_TCI
+ *			as an input VLAN tag (e.g. parsed from the packet) and
+ *			run the lookup as if ingress had happened on the VLAN
+ *			subinterface carrying that tag for *params*->ifindex,
+ *			rather than on *params*->ifindex itself. The VID is the
+ *			low 12 bits of *params*->h_vlan_TCI;
+ *			*params*->h_vlan_proto must be ETH_P_8021Q or
+ *			ETH_P_8021AD in network byte order (any other value
+ *			returns **-EINVAL**). The
+ *			subinterface is the one configured for that tag on
+ *			*params*->ifindex; if *params*->ifindex is itself a
+ *			VLAN device, its inner (QinQ) subinterface is matched.
+ *			For a bond or team, a tag on a port matches no
+ *			device and returns NOT_FWDED; pass the master's
+ *			ifindex.
+ *			If no matching subinterface exists, or it is not up,
+ *			or it was moved to another network namespace, the
+ *			lookup returns **BPF_FIB_LKUP_RET_NOT_FWDED**,
+ *			mirroring real ingress, which drops a frame whose tag
+ *			is unconfigured or whose VLAN device is down. A VID of
+ *			0 (a priority-tagged frame) is looked up literally like
+ *			any other VID; receive instead processes such frames
+ *			untagged on the device itself, so do not set this flag
+ *			for priority tags.
+ *			Cannot be combined with **BPF_FIB_LOOKUP_TBID** (both
+ *			use the same input fields) or **BPF_FIB_LOOKUP_OUTPUT**
+ *			(this flag is ingress-only); doing so returns
+ *			**-EINVAL**.
  *
  *		*ctx* is either **struct xdp_md** for XDP programs or
  *		**struct sk_buff** tc cls_act programs.
@@ -7353,6 +7382,7 @@ enum {
 	BPF_FIB_LOOKUP_SRC     = (1U << 4),
 	BPF_FIB_LOOKUP_MARK    = (1U << 5),
 	BPF_FIB_LOOKUP_VLAN    = (1U << 6),
+	BPF_FIB_LOOKUP_VLAN_INPUT = (1U << 7),
 };
 
 enum {
@@ -7421,7 +7451,9 @@ struct bpf_fib_lookup {
 		struct {
 			/* output with BPF_FIB_LOOKUP_VLAN: set from the
 			 * resolved egress VLAN device (see the flag); zeroed
-			 * on other successful lookups.
+			 * on other successful lookups. input with
+			 * BPF_FIB_LOOKUP_VLAN_INPUT: the VLAN tag to scope
+			 * the lookup by.
 			 */
 			__be16	h_vlan_proto;
 			__be16	h_vlan_TCI;
