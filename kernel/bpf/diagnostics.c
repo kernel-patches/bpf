@@ -1702,6 +1702,71 @@ void bpf_diag_report_mem_bounds(struct bpf_verifier_env *env, u32 insn_idx,
 				   "Add or adjust a bounds check that proves offset + access_size stays within the object.");
 }
 
+void bpf_diag_report_resource_state(struct bpf_verifier_env *env,
+				    u32 insn_idx, const char *problem,
+				    const char *reason,
+				    const char *suggestion)
+{
+	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_RESOURCE_LIFETIME_SAFETY,
+			       problem);
+	bpf_diag_report_reason(env, "%s", reason);
+
+	bpf_diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, "error", "%s", problem);
+
+	bpf_diag_report_suggestion(env, "%s", suggestion);
+}
+
+void bpf_diag_report_irq_resource_state(struct bpf_verifier_env *env,
+					u32 insn_idx, const char *problem,
+					const char *reason,
+					const char *suggestion,
+					u32 depth)
+{
+	struct bpf_diag_history_opts opts = {
+		.scope = BPF_DIAG_HISTORY_SCOPE_CONTEXT,
+		.ctx_kind = BPF_DIAG_CONTEXT_IRQ,
+		.ctx_depth = depth,
+	};
+
+	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_RESOURCE_LIFETIME_SAFETY,
+			       problem);
+	bpf_diag_report_reason(env, "%s", reason);
+
+	bpf_diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, "error", "%s", problem);
+
+	if (depth)
+		bpf_diag_print_history(env, &opts);
+
+	bpf_diag_report_suggestion(env, "%s", suggestion);
+}
+
+void bpf_diag_report_ref_leak(struct bpf_verifier_env *env, u32 ref_id,
+			      u32 alloc_insn, u32 fail_insn)
+{
+	struct bpf_diag_history_opts opts = {
+		.scope = BPF_DIAG_HISTORY_SCOPE_REF,
+		.ref_id = ref_id,
+	};
+
+	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_RESOURCE_LIFETIME_SAFETY,
+			       "unreleased resource");
+	bpf_diag_report_reason(env,
+			       "Owned resource (id=%u) was acquired at instruction %u and still needs to be released before this exit path.",
+			       ref_id, alloc_insn);
+
+	bpf_diag_report_section(env, "At");
+	bpf_diag_report_source(env, fail_insn, "error",
+			       "owned resource (id=%u) still needs release",
+			       ref_id);
+
+	bpf_diag_print_history(env, &opts);
+
+	bpf_diag_report_suggestion(env,
+				   "Release or transfer ownership of the acquired resource on every path before the program exits.");
+}
+
 static void bpf_diag_format_var_offset(struct bpf_diag_reg_fmt *fmt,
 				       char *buf, size_t size,
 				       const struct bpf_diag_reg_snapshot *snapshot)
