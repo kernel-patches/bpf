@@ -1238,31 +1238,12 @@ static __always_inline u64 notrace bpf_prog_start_time(void)
  * [2..MAX_U64] - execute bpf prog and record execution time.
  *     This is start time.
  */
-/* cgroup struct_ops dispatchers (e.g. bpf_tcp_ops_call_int()) chain
- * bpf_get_retval()/bpf_set_retval() across the struct_ops progs they run by
- * keeping the value in their own run_ctx. The trampoline installs its own
- * run_ctx for the prog, so inherit the retval from the caller's run_ctx (now
- * saved_run_ctx) to make it visible to the prog via current->bpf_ctx. Only
- * struct_ops is affected; saved_run_ctx may be NULL when no dispatcher set one.
- */
-static __always_inline void notrace
-bpf_tramp_inherit_retval(struct bpf_prog *prog, struct bpf_tramp_run_ctx *run_ctx)
-{
-	if (resolve_prog_type(prog) != BPF_PROG_TYPE_STRUCT_OPS)
-		return;
-
-	run_ctx->retval = run_ctx->saved_run_ctx ?
-		container_of(run_ctx->saved_run_ctx,
-			     struct bpf_tramp_run_ctx, run_ctx)->retval : 0;
-}
-
 static u64 notrace __bpf_prog_enter_recur(struct bpf_prog *prog, struct bpf_tramp_run_ctx *run_ctx)
 	__acquires(RCU)
 {
 	rcu_read_lock_dont_migrate();
 
 	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
-	bpf_tramp_inherit_retval(prog, run_ctx);
 
 	if (unlikely(!bpf_prog_get_recursion_context(prog))) {
 		bpf_prog_inc_misses_counter(prog);
@@ -1343,7 +1324,6 @@ u64 notrace __bpf_prog_enter_sleepable_recur(struct bpf_prog *prog,
 	might_fault();
 
 	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
-	bpf_tramp_inherit_retval(prog, run_ctx);
 
 	if (unlikely(!bpf_prog_get_recursion_context(prog))) {
 		bpf_prog_inc_misses_counter(prog);
@@ -1373,7 +1353,6 @@ static u64 notrace __bpf_prog_enter_sleepable(struct bpf_prog *prog,
 	might_fault();
 
 	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
-	bpf_tramp_inherit_retval(prog, run_ctx);
 
 	return bpf_prog_start_time();
 }
@@ -1395,7 +1374,6 @@ static u64 notrace __bpf_prog_enter(struct bpf_prog *prog,
 	rcu_read_lock_dont_migrate();
 
 	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
-	bpf_tramp_inherit_retval(prog, run_ctx);
 
 	return bpf_prog_start_time();
 }

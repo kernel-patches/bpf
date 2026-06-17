@@ -2,6 +2,7 @@
 /* Copyright (c) 2026 Meta Platforms, Inc. and affiliates. */
 
 #include <linux/bpf.h>
+#include <linux/btf.h>
 #include <linux/btf_ids.h>
 #include <linux/bpf_verifier.h>
 #include <linux/filter.h>
@@ -196,6 +197,50 @@ const struct bpf_func_proto bpf_tcp_ops_get_retval_proto = {
 	.ret_type	= RET_INTEGER,
 };
 
+__bpf_kfunc_start_defs();
+
+/* Hidden kfunc emitted in the prologue of the int-returning members
+ * (timeout_init, rwnd_init). When multiple bpf_tcp_ops are attached to a
+ * cgroup, bpf_tcp_ops_call_int() chains the int return value by keeping it in
+ * its own run_ctx, which becomes this program's saved_run_ctx. Copy it into
+ * the current run_ctx so the program reads the running value with
+ * bpf_get_retval().
+ */
+__bpf_kfunc void bpf_tcp_ops_inherit_retval(void)
+{
+	struct bpf_tramp_run_ctx *ctx =
+		container_of(current->bpf_ctx, struct bpf_tramp_run_ctx, run_ctx);
+
+	ctx->retval = ctx->saved_run_ctx ?
+		container_of(ctx->saved_run_ctx, struct bpf_tramp_run_ctx,
+			     run_ctx)->retval : 0;
+}
+
+__bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(bpf_tcp_ops_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_tcp_ops_inherit_retval)
+BTF_KFUNCS_END(bpf_tcp_ops_kfunc_ids)
+
+BTF_ID_LIST_SINGLE(bpf_tcp_ops_inherit_retval_ids, func, bpf_tcp_ops_inherit_retval)
+
+static int bpf_tcp_ops_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	/* bpf_tcp_ops_inherit_retval() is internal: it is only emitted by the
+	 * prologue (which bypasses this filter). Reject any direct call.
+	 */
+	if (btf_id_set8_contains(&bpf_tcp_ops_kfunc_ids, kfunc_id))
+		return -EACCES;
+
+	return 0;
+}
+
+static const struct btf_kfunc_id_set bpf_tcp_ops_kfunc_set = {
+	.owner	= THIS_MODULE,
+	.set	= &bpf_tcp_ops_kfunc_ids,
+	.filter	= bpf_tcp_ops_kfunc_filter,
+};
+
 static const struct bpf_func_proto *
 get_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -261,6 +306,33 @@ static bool is_valid_access(int off, int size, enum bpf_access_type type,
 	return true;
 }
 
+/* Emit a call to bpf_tcp_ops_inherit_retval() at the start of the
+ * int-returning members so bpf_get_retval() observes the value returned by the
+ * previous bpf_tcp_ops in the cgroup. Doing it here keeps the cost confined to
+ * these two members instead of every trampoline enter.
+ */
+static int bpf_tcp_ops_gen_prologue(struct bpf_insn *insn_buf, bool direct_write,
+				    const struct bpf_prog *prog)
+{
+	u32 moff = prog->aux->attach_st_ops_member_off;
+	struct bpf_insn *insn = insn_buf;
+
+	if (moff != offsetof(struct bpf_tcp_ops, timeout_init) &&
+	    moff != offsetof(struct bpf_tcp_ops, rwnd_init))
+		return 0;
+
+	/* r6 = r1;  // save "u64 *ctx"
+	 * bpf_tcp_ops_inherit_retval();
+	 * r1 = r6;  // restore "u64 *ctx"
+	 */
+	*insn++ = BPF_MOV64_REG(BPF_REG_6, BPF_REG_1);
+	*insn++ = BPF_CALL_KFUNC(0, bpf_tcp_ops_inherit_retval_ids[0]);
+	*insn++ = BPF_MOV64_REG(BPF_REG_1, BPF_REG_6);
+	*insn++ = prog->insnsi[0];
+
+	return insn - insn_buf;
+}
+
 static int bpf_tcp_ops_init_member(const struct btf_type *t,
 				   const struct btf_member *member,
 				   void *kdata, const void *udata)
@@ -281,6 +353,7 @@ static int bpf_tcp_ops_validate(void *kdata)
 static const struct bpf_verifier_ops bpf_tcp_ops_verifier = {
 	.get_func_proto		= get_func_proto,
 	.is_valid_access	= is_valid_access,
+	.gen_prologue		= bpf_tcp_ops_gen_prologue,
 };
 
 static struct bpf_struct_ops bpf_tcp_ops = {
@@ -296,6 +369,13 @@ static struct bpf_struct_ops bpf_tcp_ops = {
 
 static int __init __bpf_tcp_ops_init(void)
 {
+	int ret;
+
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+					&bpf_tcp_ops_kfunc_set);
+	if (ret)
+		return ret;
+
 	return register_bpf_struct_ops(&bpf_tcp_ops, bpf_tcp_ops);
 }
 late_initcall(__bpf_tcp_ops_init);
