@@ -34,17 +34,25 @@ asm (
 ".balign 4, 0;                            \n"
 ".popsection;                             \n");
 
+/*
+ * test_list_local and test_set are .local symbols placed in .BTF_ids by
+ * inline asm, and are read here directly by C name. To the compiler they
+ * are plain, default-visibility extern objects.
+ *
+ * When test_progs is linked as a position-independent executable (PIE),
+ * taking the address of such an extern is routed through the GOT. The
+ * GNU assembler on aarch64 unconditionally converts references to .local
+ * symbols into section + addend form (".BTF_ids + <offset>"), but a GOT
+ * slot cannot carry an addend (the AArch64 ELF spec mandates zero), so
+ * the linker resolves it to the .BTF_ids base.
+ *
+ * Mark them hidden so the compiler treats them as non-interposable and
+ * emits a direct, addend-preserving PC-relative access instead of a GOT
+ * load, in both PIE and non-PIE builds. test_list_global is .globl and
+ * not affected, so it is left at default visibility.
+ */
+#pragma GCC visibility push(hidden)
 BTF_ID_LIST(test_list_local)
-BTF_ID_UNUSED
-BTF_ID(typedef, S)
-BTF_ID(typedef, T)
-BTF_ID(typedef, U)
-BTF_ID(struct,  S)
-BTF_ID(union,   U)
-BTF_ID(func,    func)
-
-extern __u32 test_list_global[];
-BTF_ID_LIST_GLOBAL(test_list_global, 1)
 BTF_ID_UNUSED
 BTF_ID(typedef, S)
 BTF_ID(typedef, T)
@@ -61,6 +69,17 @@ BTF_ID(struct,  S)
 BTF_ID(union,   U)
 BTF_ID(func,    func)
 BTF_SET_END(test_set)
+#pragma GCC visibility pop
+
+extern __u32 test_list_global[];
+BTF_ID_LIST_GLOBAL(test_list_global, 1)
+BTF_ID_UNUSED
+BTF_ID(typedef, S)
+BTF_ID(typedef, T)
+BTF_ID(typedef, U)
+BTF_ID(struct,  S)
+BTF_ID(union,   U)
+BTF_ID(func,    func)
 
 static int
 __resolve_symbol(struct btf *btf, int type_id)
