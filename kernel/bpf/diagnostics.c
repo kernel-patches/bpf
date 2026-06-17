@@ -75,11 +75,24 @@ struct bpf_diag_log {
 	u32 cap;
 };
 
+struct bpf_diag_reg_fmt {
+	char old_buf[BPF_DIAG_REG_DESC_LEN];
+	char new_buf[BPF_DIAG_REG_DESC_LEN];
+	char offset_desc[BPF_DIAG_REG_DESC_LEN];
+	char btf_type[BPF_DIAG_REG_TMP_LEN];
+	char range[BPF_DIAG_REG_TMP_LEN];
+	char smin_buf[32];
+	char smax_buf[32];
+	char umin_buf[32];
+	char umax_buf[32];
+};
+
 struct bpf_diag_scratch {
 	char str[BPF_DIAG_SCRATCH_STR_CNT][BPF_DIAG_SCRATCH_STR_LEN];
 	struct bpf_diag_source source;
 	struct bpf_diag_source_line source_lines[BPF_DIAG_SOURCE_LINE_CNT];
 	struct bpf_diag_insn insns[BPF_DIAG_INSN_CNT];
+	struct bpf_diag_reg_fmt reg_fmt;
 };
 
 struct bpf_diag {
@@ -297,6 +310,47 @@ static void bpf_diag_print_wrapped_text(struct bpf_verifier_env *env,
 {
 	bpf_diag_print_wrapped_prefixed(env, BPF_DIAG_TEXT_INDENT,
 					BPF_DIAG_TEXT_INDENT, text);
+}
+
+static void bpf_diag_trim_btf_show_name(char *buf)
+{
+	size_t len = strlen(buf);
+
+	if (len && buf[len - 1] == '{')
+		buf[len - 1] = '\0';
+}
+
+void bpf_diag_format_btf_type(char *buf, size_t size, const struct btf *btf,
+			      u32 type_id)
+{
+	int ret;
+
+	if (!size)
+		return;
+
+	buf[0] = '\0';
+	ret = btf_type_snprintf_show_name(btf, type_id, buf, size);
+	if (ret < 0 || !buf[0]) {
+		scnprintf(buf, size, "BTF type ID %u", type_id);
+		return;
+	}
+
+	bpf_diag_trim_btf_show_name(buf);
+}
+
+const char *bpf_diag_format_btf_type_scratch(struct bpf_verifier_env *env,
+					     unsigned int slot,
+					     const struct btf *btf,
+					     u32 type_id)
+{
+	size_t size;
+	char *buf = bpf_diag_scratch_buf(env, slot, &size);
+
+	if (!buf)
+		return "";
+
+	bpf_diag_format_btf_type(buf, size, btf, type_id);
+	return buf;
 }
 
 static void bpf_diag_vprint_indented(struct bpf_verifier_env *env,
@@ -795,11 +849,703 @@ void bpf_diag_record_branch(struct bpf_verifier_env *env, u32 insn_idx,
 	bpf_diag_append_history(env, &event);
 }
 
-void bpf_diag_print_history(struct bpf_verifier_env *env)
+static void bpf_diag_snapshot_one_reg(struct bpf_diag_reg_snapshot *snapshot,
+				      const struct bpf_reg_state *reg)
+{
+	snapshot->type = reg->type;
+	if (base_type(reg->type) == PTR_TO_MAP_VALUE ||
+	    base_type(reg->type) == CONST_PTR_TO_MAP ||
+	    base_type(reg->type) == PTR_TO_MAP_KEY)
+		snapshot->map_ptr = reg->map_ptr;
+	if (base_type(reg->type) == PTR_TO_BTF_ID && reg->btf && reg->btf_id) {
+		snapshot->btf = reg->btf;
+		snapshot->btf_id = reg->btf_id;
+	}
+	snapshot->var_off = reg->var_off;
+	snapshot->r64 = reg->r64;
+}
+
+static void bpf_diag_snapshot_reg(struct bpf_diag_history_event *event,
+				  enum bpf_diag_reg_mod_reason reason,
+				  const struct bpf_reg_state *old_reg,
+				  const struct bpf_reg_state *new_reg)
+{
+	event->reg.reason = reason;
+	bpf_diag_snapshot_one_reg(&event->reg.old, old_reg);
+	bpf_diag_snapshot_one_reg(&event->reg.new, new_reg);
+}
+
+static bool bpf_diag_snapshot_eq(const struct bpf_diag_reg_snapshot *old,
+				 const struct bpf_diag_reg_snapshot *new)
+{
+	return old->type == new->type &&
+	       old->map_ptr == new->map_ptr &&
+	       old->btf == new->btf &&
+	       old->btf_id == new->btf_id &&
+	       old->var_off.value == new->var_off.value &&
+	       old->var_off.mask == new->var_off.mask &&
+	       old->r64.base == new->r64.base &&
+	       old->r64.size == new->r64.size;
+}
+
+static bool bpf_diag_reg_snapshot_eq(const struct bpf_diag_history_event *event)
+{
+	return bpf_diag_snapshot_eq(&event->reg.old, &event->reg.new);
+}
+
+static void bpf_diag_record_reg_mod_reason(struct bpf_verifier_env *env,
+					   u32 insn_idx, u32 frameno,
+					   u8 dst_reg, bool src_valid,
+					   u8 src_reg, u8 opcode,
+					   bool stack_slot_valid,
+					   u32 stack_frameno,
+					   u16 stack_spi,
+					   enum bpf_diag_reg_mod_reason reason,
+					   const struct bpf_reg_state *old_reg,
+					   const struct bpf_reg_state *new_reg)
+{
+	struct bpf_diag_history_event event = {
+		.insn_idx = insn_idx,
+		.kind = BPF_DIAG_HISTORY_REG_MOD,
+		.reg.frameno = frameno,
+		.reg.dst_reg = dst_reg,
+		.reg.src_reg = src_reg,
+		.reg.opcode = opcode,
+		.reg.src_valid = src_valid,
+		.reg.stack_slot_valid = stack_slot_valid,
+		.reg.stack_frameno = stack_frameno,
+		.reg.stack_spi = stack_spi,
+	};
+
+	bpf_diag_snapshot_reg(&event, reason, old_reg, new_reg);
+	if (reason == BPF_DIAG_REG_MOD_WRITE &&
+	    bpf_diag_reg_snapshot_eq(&event))
+		return;
+
+	bpf_diag_append_history(env, &event);
+}
+
+void bpf_diag_record_reg_mod(struct bpf_verifier_env *env, u32 insn_idx,
+			     u32 frameno, u8 dst_reg, bool src_valid,
+			     u8 src_reg, u8 opcode,
+			     const struct bpf_reg_state *old_reg,
+			     const struct bpf_reg_state *new_reg)
+{
+	bpf_diag_record_reg_mod_reason(env, insn_idx, frameno, dst_reg,
+				       src_valid, src_reg, opcode, false, 0, 0,
+				       BPF_DIAG_REG_MOD_WRITE, old_reg,
+				       new_reg);
+}
+
+void bpf_diag_record_reg_stack_fill(struct bpf_verifier_env *env, u32 insn_idx,
+				    u32 frameno, u8 dst_reg, u32 stack_frameno,
+				    u16 stack_spi, bool src_valid, u8 src_reg,
+				    u8 opcode,
+				    const struct bpf_reg_state *old_reg,
+				    const struct bpf_reg_state *new_reg)
+{
+	bpf_diag_record_reg_mod_reason(env, insn_idx, frameno, dst_reg,
+				       src_valid, src_reg, opcode, true,
+				       stack_frameno, stack_spi,
+				       BPF_DIAG_REG_MOD_WRITE, old_reg,
+				       new_reg);
+}
+
+void bpf_diag_record_reg_invalidate(struct bpf_verifier_env *env, u32 insn_idx,
+				    u32 frameno, u8 dst_reg,
+				    enum bpf_diag_reg_mod_reason reason,
+				    const struct bpf_reg_state *old_reg,
+				    const struct bpf_reg_state *new_reg)
+{
+	bpf_diag_record_reg_mod_reason(env, insn_idx, frameno, dst_reg,
+				       false, 0, 0, false, 0, 0, reason, old_reg,
+				       new_reg);
+}
+
+void bpf_diag_record_stack_arg(struct bpf_verifier_env *env, u32 insn_idx,
+			       u32 frameno, u8 slot,
+			       enum bpf_diag_stack_arg_reason reason,
+			       const struct bpf_reg_state *old_reg,
+			       const struct bpf_reg_state *new_reg)
+{
+	struct bpf_diag_history_event event = {
+		.insn_idx = insn_idx,
+		.kind = BPF_DIAG_HISTORY_STACK_ARG,
+		.stack_arg.frameno = frameno,
+		.stack_arg.slot = slot,
+		.stack_arg.reason = reason,
+	};
+
+	bpf_diag_snapshot_one_reg(&event.stack_arg.old, old_reg);
+	bpf_diag_snapshot_one_reg(&event.stack_arg.new, new_reg);
+
+	if (reason == BPF_DIAG_STACK_ARG_WRITE &&
+	    bpf_diag_snapshot_eq(&event.stack_arg.old, &event.stack_arg.new))
+		return;
+
+	bpf_diag_append_history(env, &event);
+}
+
+void bpf_diag_record_stack_slot(struct bpf_verifier_env *env, u32 insn_idx,
+				u32 frameno, u16 spi,
+				enum bpf_diag_stack_slot_reason reason,
+				const struct bpf_reg_state *old_reg,
+				const struct bpf_reg_state *new_reg)
+{
+	struct bpf_diag_history_event event = {
+		.insn_idx = insn_idx,
+		.kind = BPF_DIAG_HISTORY_STACK_SLOT,
+		.stack_slot.frameno = frameno,
+		.stack_slot.spi = spi,
+		.stack_slot.reason = reason,
+	};
+
+	bpf_diag_snapshot_one_reg(&event.stack_slot.old, old_reg);
+	bpf_diag_snapshot_one_reg(&event.stack_slot.new, new_reg);
+
+	if (reason == BPF_DIAG_STACK_SLOT_SPILL &&
+	    bpf_diag_snapshot_eq(&event.stack_slot.old,
+				 &event.stack_slot.new))
+		return;
+	if (reason == BPF_DIAG_STACK_SLOT_WRITE &&
+	    bpf_diag_snapshot_eq(&event.stack_slot.old,
+				 &event.stack_slot.new))
+		return;
+
+	bpf_diag_append_history(env, &event);
+}
+
+struct bpf_diag_history_filter {
+	const struct bpf_diag_history_opts *opts;
+	bool stack_slot_valid;
+	u32 stack_frameno;
+	u16 stack_spi;
+	u32 stack_until_idx;
+};
+
+static bool bpf_diag_reg_event_matches(const struct bpf_diag_history_event *event,
+				       const struct bpf_diag_history_opts *opts)
+{
+	return opts->scope == BPF_DIAG_HISTORY_SCOPE_REG &&
+	       event->kind == BPF_DIAG_HISTORY_REG_MOD &&
+	       event->reg.dst_reg == opts->regno &&
+	       event->reg.frameno == opts->frameno;
+}
+
+static bool bpf_diag_stack_slot_matches(const struct bpf_diag_history_event *event,
+					const struct bpf_diag_history_filter *filter)
+{
+	return event->kind == BPF_DIAG_HISTORY_STACK_SLOT &&
+	       event->stack_slot.spi == filter->stack_spi &&
+	       event->stack_slot.frameno == filter->stack_frameno;
+}
+
+static bool bpf_diag_reg_event_keeps_lineage(const struct bpf_diag_history_event *event)
+{
+	if (event->reg.reason != BPF_DIAG_REG_MOD_WRITE)
+		return false;
+
+	switch (event->reg.opcode) {
+	case BPF_ADD:
+	case BPF_SUB:
+	case BPF_MUL:
+	case BPF_OR:
+	case BPF_AND:
+	case BPF_LSH:
+	case BPF_RSH:
+	case BPF_ARSH:
+	case BPF_XOR:
+	case BPF_NEG:
+	case BPF_END:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static void bpf_diag_history_follow_reg_stack(const struct bpf_diag_log *log,
+					      struct bpf_diag_history_filter *filter)
+{
+	const struct bpf_diag_history_opts *opts = filter->opts;
+	int i;
+
+	if (!opts || opts->scope != BPF_DIAG_HISTORY_SCOPE_REG)
+		return;
+
+	for (i = log->cnt; i > 0; i--) {
+		const struct bpf_diag_history_event *event;
+
+		event = bpf_diag_history_event(log, i - 1);
+		if (!bpf_diag_reg_event_matches(event, opts))
+			continue;
+
+		if (event->reg.stack_slot_valid) {
+			filter->stack_slot_valid = true;
+			filter->stack_frameno = event->reg.stack_frameno;
+			filter->stack_spi = event->reg.stack_spi;
+			filter->stack_until_idx = i - 1;
+			return;
+		}
+
+		if (!bpf_diag_reg_event_keeps_lineage(event))
+			return;
+	}
+}
+
+static int bpf_diag_history_stack_start_idx(const struct bpf_diag_log *log,
+					    const struct bpf_diag_history_filter *filter)
+{
+	int fallback = filter->stack_until_idx;
+	int i;
+
+	for (i = filter->stack_until_idx + 1; i > 0; i--) {
+		const struct bpf_diag_history_event *event;
+
+		event = bpf_diag_history_event(log, i - 1);
+		if (!bpf_diag_stack_slot_matches(event, filter))
+			continue;
+
+		fallback = i - 1;
+		if (event->stack_slot.reason == BPF_DIAG_STACK_SLOT_SPILL)
+			return fallback;
+	}
+
+	return fallback;
+}
+
+static int bpf_diag_history_start_idx(const struct bpf_diag_log *log,
+				      const struct bpf_diag_history_filter *filter)
+{
+	const struct bpf_diag_history_opts *opts = filter->opts;
+	int i;
+
+	if (!opts || opts->scope == BPF_DIAG_HISTORY_SCOPE_ALL)
+		return 0;
+	if (filter->stack_slot_valid)
+		return bpf_diag_history_stack_start_idx(log, filter);
+
+	for (i = log->cnt; i > 0; i--) {
+		const struct bpf_diag_history_event *event;
+
+		event = bpf_diag_history_event(log, i - 1);
+
+		if (bpf_diag_reg_event_matches(event, opts))
+			return i - 1;
+		if (opts->scope == BPF_DIAG_HISTORY_SCOPE_STACK_ARG &&
+		    event->kind == BPF_DIAG_HISTORY_STACK_ARG &&
+		    event->stack_arg.slot == opts->stack_arg_slot &&
+		    event->stack_arg.frameno == opts->frameno)
+			return i - 1;
+	}
+
+	return 0;
+}
+
+static bool
+bpf_diag_history_event_visible(const struct bpf_diag_history_event *event,
+			       u32 idx,
+			       const struct bpf_diag_history_filter *filter)
+{
+	const struct bpf_diag_history_opts *opts = filter->opts;
+
+	if (!opts || opts->scope == BPF_DIAG_HISTORY_SCOPE_ALL)
+		return true;
+
+	switch (event->kind) {
+	case BPF_DIAG_HISTORY_BRANCH:
+		return true;
+	case BPF_DIAG_HISTORY_REG_MOD:
+		return opts->scope == BPF_DIAG_HISTORY_SCOPE_REG &&
+		       event->reg.dst_reg == opts->regno &&
+		       event->reg.frameno == opts->frameno;
+	case BPF_DIAG_HISTORY_STACK_ARG:
+		return opts->scope == BPF_DIAG_HISTORY_SCOPE_STACK_ARG &&
+		       event->stack_arg.slot == opts->stack_arg_slot &&
+		       event->stack_arg.frameno == opts->frameno;
+	case BPF_DIAG_HISTORY_STACK_SLOT:
+		return filter->stack_slot_valid &&
+		       idx <= filter->stack_until_idx &&
+		       bpf_diag_stack_slot_matches(event, filter);
+	default:
+		return false;
+	}
+}
+
+static const char *bpf_diag_s64_bound_name(s64 value)
+{
+	if (value == S64_MIN)
+		return "S64_MIN";
+	if (value == S64_MAX)
+		return "S64_MAX";
+	return NULL;
+}
+
+static const char *bpf_diag_u64_bound_name(u64 value)
+{
+	if (value == U64_MAX)
+		return "U64_MAX";
+	return NULL;
+}
+
+static void bpf_diag_format_s64_value(char *buf, size_t size, s64 value)
+{
+	const char *name = bpf_diag_s64_bound_name(value);
+
+	if (name)
+		strscpy(buf, name, size);
+	else
+		scnprintf(buf, size, "%lld", value);
+}
+
+static void bpf_diag_format_u64_value(char *buf, size_t size, u64 value)
+{
+	const char *name = bpf_diag_u64_bound_name(value);
+
+	if (name)
+		strscpy(buf, name, size);
+	else
+		scnprintf(buf, size, "%llu", value);
+}
+
+static bool bpf_diag_range_unknown(s64 smin, s64 smax, u64 umin, u64 umax)
+{
+	return smin == S64_MIN && smax == S64_MAX &&
+	       umin == 0 && umax == U64_MAX;
+}
+
+static bool bpf_diag_cnum64_unknown(struct cnum64 range)
+{
+	return bpf_diag_range_unknown(cnum64_smin(range), cnum64_smax(range),
+				      cnum64_umin(range), cnum64_umax(range));
+}
+
+static bool bpf_diag_snapshot_unknown(const struct bpf_diag_reg_snapshot *snapshot)
+{
+	return tnum_is_unknown(snapshot->var_off) &&
+	       bpf_diag_cnum64_unknown(snapshot->r64);
+}
+
+static void bpf_diag_format_scalar_range(struct bpf_diag_reg_fmt *fmt,
+					 char *buf, size_t size,
+					 struct cnum64 range)
+{
+	s64 smin = cnum64_smin(range);
+	s64 smax = cnum64_smax(range);
+	u64 umin = cnum64_umin(range);
+	u64 umax = cnum64_umax(range);
+
+	bpf_diag_format_s64_value(fmt->smin_buf, sizeof(fmt->smin_buf), smin);
+	bpf_diag_format_s64_value(fmt->smax_buf, sizeof(fmt->smax_buf), smax);
+	bpf_diag_format_u64_value(fmt->umin_buf, sizeof(fmt->umin_buf), umin);
+	bpf_diag_format_u64_value(fmt->umax_buf, sizeof(fmt->umax_buf), umax);
+
+	scnprintf(buf, size,
+		  "signed range [%s, %s], unsigned range [%s, %s]",
+		  fmt->smin_buf, fmt->smax_buf, fmt->umin_buf, fmt->umax_buf);
+}
+
+static void bpf_diag_format_var_offset(struct bpf_diag_reg_fmt *fmt,
+				       char *buf, size_t size,
+				       const struct bpf_diag_reg_snapshot *snapshot)
+{
+	if (tnum_is_const(snapshot->var_off)) {
+		scnprintf(buf, size, "at offset %lld",
+			  (s64)snapshot->var_off.value);
+		return;
+	}
+
+	if (bpf_diag_snapshot_unknown(snapshot)) {
+		scnprintf(buf, size, "with unknown offset");
+		return;
+	}
+
+	bpf_diag_format_scalar_range(fmt, fmt->range, sizeof(fmt->range),
+				     snapshot->r64);
+	scnprintf(buf, size,
+		  "with variable offset: known bits %#llx, unknown mask %#llx, %s",
+		  snapshot->var_off.value, snapshot->var_off.mask, fmt->range);
+}
+
+static bool bpf_diag_format_snapshot_btf_type(char *buf, size_t size,
+					      const struct bpf_diag_reg_snapshot *snapshot)
+{
+	if (!snapshot->btf || !snapshot->btf_id)
+		return false;
+
+	bpf_diag_format_btf_type(buf, size, snapshot->btf, snapshot->btf_id);
+	return true;
+}
+
+static const char *bpf_diag_reg_map_name(const struct bpf_map *map)
+{
+	if (!map || !map->name[0])
+		return NULL;
+
+	return map->name;
+}
+
+static void bpf_diag_format_reg_snapshot(struct bpf_verifier_env *env,
+					 struct bpf_diag_reg_fmt *fmt,
+					 char *buf, size_t size,
+					 const struct bpf_diag_reg_snapshot *snapshot)
+{
+	const char *type_name = reg_type_str(env, snapshot->type);
+	const char *map_name;
+	bool has_btf_type;
+
+	bpf_diag_format_var_offset(fmt, fmt->offset_desc,
+				   sizeof(fmt->offset_desc), snapshot);
+	has_btf_type = bpf_diag_format_snapshot_btf_type(fmt->btf_type,
+							 sizeof(fmt->btf_type),
+							 snapshot);
+
+	if (snapshot->type == SCALAR_VALUE) {
+		if (tnum_is_const(snapshot->var_off)) {
+			scnprintf(buf, size, "integer scalar value %lld",
+				  (s64)snapshot->var_off.value);
+			return;
+		}
+
+		if (bpf_diag_snapshot_unknown(snapshot)) {
+			scnprintf(buf, size, "integer scalar with unknown value");
+			return;
+		}
+
+		if (cnum64_is_const(snapshot->r64)) {
+			scnprintf(buf, size, "integer scalar value %lld",
+				  cnum64_smin(snapshot->r64));
+			return;
+		}
+
+		bpf_diag_format_scalar_range(fmt, fmt->range,
+					     sizeof(fmt->range),
+					     snapshot->r64);
+		scnprintf(buf, size, "integer scalar with %s", fmt->range);
+		return;
+	}
+
+	if (snapshot->type == NOT_INIT) {
+		scnprintf(buf, size, "uninitialized value");
+		return;
+	}
+
+	if (base_type(snapshot->type) == PTR_TO_CTX) {
+		scnprintf(buf, size, "context pointer %s", fmt->offset_desc);
+		return;
+	}
+
+	if (base_type(snapshot->type) == PTR_TO_STACK) {
+		scnprintf(buf, size, "stack pointer %s", fmt->offset_desc);
+		return;
+	}
+
+	if (base_type(snapshot->type) == PTR_TO_MAP_VALUE) {
+		map_name = bpf_diag_reg_map_name(snapshot->map_ptr);
+		if (map_name) {
+			scnprintf(buf, size, "%s from %s %s",
+				  type_may_be_null(snapshot->type) ?
+				  "nullable map value" : "map value",
+				  map_name, fmt->offset_desc);
+			return;
+		}
+		scnprintf(buf, size, "%s %s",
+			  type_may_be_null(snapshot->type) ?
+			  "nullable map value" : "map value",
+			  fmt->offset_desc);
+		return;
+	}
+
+	if (base_type(snapshot->type) == CONST_PTR_TO_MAP) {
+		map_name = bpf_diag_reg_map_name(snapshot->map_ptr);
+		if (map_name)
+			scnprintf(buf, size, "map pointer for map %s", map_name);
+		else
+			scnprintf(buf, size, "map pointer");
+		return;
+	}
+
+	if (type_is_non_owning_ref(snapshot->type)) {
+		if (has_btf_type)
+			scnprintf(buf, size,
+				  "borrowed allocated object pointer type=%s",
+				  fmt->btf_type);
+		else
+			scnprintf(buf, size, "borrowed allocated object pointer");
+		return;
+	}
+
+	if (type_is_ptr_alloc_obj(snapshot->type)) {
+		if (has_btf_type)
+			scnprintf(buf, size,
+				  "owned allocated object pointer type=%s",
+				  fmt->btf_type);
+		else
+			scnprintf(buf, size, "owned allocated object pointer");
+		return;
+	}
+
+	if (base_type(snapshot->type) == PTR_TO_BTF_ID && has_btf_type) {
+		scnprintf(buf, size, "%s type=%s %s", type_name,
+			  fmt->btf_type, fmt->offset_desc);
+		return;
+	}
+
+	scnprintf(buf, size, "%s %s", type_name, fmt->offset_desc);
+}
+
+static void bpf_diag_print_reg_mod(struct bpf_verifier_env *env,
+				   const struct bpf_diag_history_event *event)
+{
+	struct bpf_diag_scratch *scratch = bpf_diag_scratch(env);
+	struct bpf_diag_reg_fmt *fmt = &scratch->reg_fmt;
+	const char *reason = NULL;
+
+	memset(fmt, 0, sizeof(*fmt));
+
+	bpf_diag_format_reg_snapshot(env, fmt, fmt->old_buf,
+				     sizeof(fmt->old_buf), &event->reg.old);
+	bpf_diag_format_reg_snapshot(env, fmt, fmt->new_buf,
+				     sizeof(fmt->new_buf), &event->reg.new);
+
+	switch (event->reg.reason) {
+	case BPF_DIAG_REG_MOD_REF_RELEASE:
+		reason = "resource release invalidated this pointer";
+		break;
+	case BPF_DIAG_REG_MOD_PKT_DATA_CHANGE:
+		reason = "packet data may have moved";
+		break;
+	case BPF_DIAG_REG_MOD_NON_OWN_REF:
+		reason = "leaving the protected region invalidated this borrowed pointer";
+		break;
+	case BPF_DIAG_REG_MOD_WRITE:
+	default:
+		break;
+	}
+
+	if (reason) {
+		bpf_diag_report_source(env, event->insn_idx, "invalidated",
+				       "R%d: %s; previous value was %s",
+				       event->reg.dst_reg, reason,
+				       fmt->old_buf);
+		return;
+	}
+
+	bpf_diag_report_source(env, event->insn_idx, "update",
+			       "R%d changed from %s to %s",
+			       event->reg.dst_reg, fmt->old_buf, fmt->new_buf);
+}
+
+static int bpf_diag_stack_argno(u8 slot)
+{
+	return MAX_BPF_FUNC_REG_ARGS + slot + 1;
+}
+
+static void bpf_diag_print_stack_arg(struct bpf_verifier_env *env,
+				     const struct bpf_diag_history_event *event)
+{
+	struct bpf_diag_scratch *scratch = bpf_diag_scratch(env);
+	struct bpf_diag_reg_fmt *fmt = &scratch->reg_fmt;
+	const char *reason = NULL;
+	int argno = bpf_diag_stack_argno(event->stack_arg.slot);
+
+	memset(fmt, 0, sizeof(*fmt));
+
+	bpf_diag_format_reg_snapshot(env, fmt, fmt->old_buf,
+				     sizeof(fmt->old_buf),
+				     &event->stack_arg.old);
+	bpf_diag_format_reg_snapshot(env, fmt, fmt->new_buf,
+				     sizeof(fmt->new_buf),
+				     &event->stack_arg.new);
+
+	switch (event->stack_arg.reason) {
+	case BPF_DIAG_STACK_ARG_REF_RELEASE:
+		reason = "resource release invalidated this value";
+		break;
+	case BPF_DIAG_STACK_ARG_PKT_DATA_CHANGE:
+		reason = "packet data may have moved";
+		break;
+	case BPF_DIAG_STACK_ARG_NON_OWN_REF:
+		reason = "leaving the protected region invalidated this borrowed pointer";
+		break;
+	case BPF_DIAG_STACK_ARG_WRITE:
+	default:
+		break;
+	}
+
+	if (reason) {
+		bpf_diag_report_source(env, event->insn_idx, "invalidated",
+				       "stack arg%d: %s; previous value was %s",
+				       argno, reason, fmt->old_buf);
+		return;
+	}
+
+	bpf_diag_report_source(env, event->insn_idx, "update",
+			       "stack arg%d changed from %s to %s",
+			       argno, fmt->old_buf, fmt->new_buf);
+}
+
+static int bpf_diag_stack_slot_off(u16 spi)
+{
+	return -(spi + 1) * BPF_REG_SIZE;
+}
+
+static void bpf_diag_print_stack_slot(struct bpf_verifier_env *env,
+				      const struct bpf_diag_history_event *event)
+{
+	struct bpf_diag_scratch *scratch = bpf_diag_scratch(env);
+	struct bpf_diag_reg_fmt *fmt = &scratch->reg_fmt;
+	const char *reason = NULL;
+	int off = bpf_diag_stack_slot_off(event->stack_slot.spi);
+
+	memset(fmt, 0, sizeof(*fmt));
+
+	bpf_diag_format_reg_snapshot(env, fmt, fmt->old_buf,
+				     sizeof(fmt->old_buf),
+				     &event->stack_slot.old);
+	bpf_diag_format_reg_snapshot(env, fmt, fmt->new_buf,
+				     sizeof(fmt->new_buf),
+				     &event->stack_slot.new);
+
+	switch (event->stack_slot.reason) {
+	case BPF_DIAG_STACK_SLOT_REF_RELEASE:
+		reason = "resource release invalidated this spilled value";
+		break;
+	case BPF_DIAG_STACK_SLOT_PKT_DATA_CHANGE:
+		reason = "packet data may have moved";
+		break;
+	case BPF_DIAG_STACK_SLOT_NON_OWN_REF:
+		reason = "leaving the protected region invalidated this borrowed pointer";
+		break;
+	case BPF_DIAG_STACK_SLOT_WRITE:
+		reason = "a later stack write overwrote this spilled value";
+		break;
+	case BPF_DIAG_STACK_SLOT_SPILL:
+	default:
+		break;
+	}
+
+	if (reason) {
+		bpf_diag_report_source(env, event->insn_idx, "invalidated",
+				       "stack slot fp%d: %s; previous value was %s",
+				       off, reason, fmt->old_buf);
+		return;
+	}
+
+	bpf_diag_report_source(env, event->insn_idx, "spilled",
+			       "stack slot fp%d changed from %s to %s",
+			       off, fmt->old_buf, fmt->new_buf);
+}
+
+void bpf_diag_print_history(struct bpf_verifier_env *env,
+			    const struct bpf_diag_history_opts *opts)
 {
 	const struct bpf_diag_history_event *event;
+	struct bpf_diag_history_filter filter = {
+		.opts = opts,
+	};
 	const struct bpf_diag_log *log;
 	bool printed = false;
+	int start_idx;
 	u32 i;
 
 	bpf_diag_report_section(env, "Causal path");
@@ -810,8 +1556,12 @@ void bpf_diag_print_history(struct bpf_verifier_env *env)
 	}
 	log = &env->diag->log;
 
-	for (i = 0; i < log->cnt; i++) {
+	bpf_diag_history_follow_reg_stack(log, &filter);
+	start_idx = bpf_diag_history_start_idx(log, &filter);
+	for (i = start_idx; i < log->cnt; i++) {
 		event = bpf_diag_history_event(log, i);
+		if (!bpf_diag_history_event_visible(event, i, &filter))
+			continue;
 
 		switch (event->kind) {
 		case BPF_DIAG_HISTORY_BRANCH:
@@ -821,6 +1571,18 @@ void bpf_diag_print_history(struct bpf_verifier_env *env)
 					       "false",
 					       event->branch.cond_true ? "followed" :
 					       "not followed");
+			printed = true;
+			break;
+		case BPF_DIAG_HISTORY_REG_MOD:
+			bpf_diag_print_reg_mod(env, event);
+			printed = true;
+			break;
+		case BPF_DIAG_HISTORY_STACK_ARG:
+			bpf_diag_print_stack_arg(env, event);
+			printed = true;
+			break;
+		case BPF_DIAG_HISTORY_STACK_SLOT:
+			bpf_diag_print_stack_slot(env, event);
 			printed = true;
 			break;
 		default:
