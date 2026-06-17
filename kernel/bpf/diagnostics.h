@@ -228,6 +228,9 @@ void bpf_diag_report_limit(struct bpf_verifier_env *env, u32 insn_idx,
 			   const char *limit, const char *suggestion,
 			   const char *reason_fmt, ...)
 		__printf(5, 6);
+void bpf_diag_report_internal_error(struct bpf_verifier_env *env,
+				    u32 insn_idx, const char *problem,
+				    const char *reason);
 void bpf_diag_record_branch(struct bpf_verifier_env *env, u32 insn_idx,
 			    bool cond_true);
 void bpf_diag_record_reg_mod(struct bpf_verifier_env *env, u32 insn_idx,
