@@ -12,6 +12,10 @@
 
 #define BTF_DATA_FILE "resolve_btfids.test.o.BTF"
 
+#ifndef KF_FASTCALL
+#define KF_FASTCALL (1 << 12)
+#endif
+
 struct symbol {
 	const char	*name;
 	int		 type;
@@ -28,6 +32,17 @@ struct symbol test_symbols[] = {
 	{ "func",    BTF_KIND_FUNC,    -1 },
 };
 
+struct kfunc_symbol {
+	const char	*name;
+	s32		 id;
+	u32		 flags;
+};
+
+static struct kfunc_symbol kfunc_symbols[] = {
+	{ "kfunc_a", -1, 0 },
+	{ "kfunc_b", -1, KF_FASTCALL },
+};
+
 /* Align the .BTF_ids section to 4 bytes */
 asm (
 ".pushsection " BTF_IDS_SECTION " ,\"a\"; \n"
@@ -35,9 +50,9 @@ asm (
 ".popsection;                             \n");
 
 /*
- * test_list_local and test_set are .local symbols placed in .BTF_ids by
- * inline asm, and are read here directly by C name. To the compiler they
- * are plain, default-visibility extern objects.
+ * test_list_local, test_set and test_kfunc_set are .local symbols placed
+ * in .BTF_ids by inline asm, and are read here directly by C name. To the
+ * compiler they are plain, default-visibility extern objects.
  *
  * When test_progs is linked as a position-independent executable (PIE),
  * taking the address of such an extern is routed through the GOT. The
@@ -69,6 +84,11 @@ BTF_ID(struct,  S)
 BTF_ID(union,   U)
 BTF_ID(func,    func)
 BTF_SET_END(test_set)
+
+BTF_KFUNCS_START(test_kfunc_set)
+BTF_ID_FLAGS(func, kfunc_a)
+BTF_ID_FLAGS(func, kfunc_b, KF_FASTCALL)
+BTF_KFUNCS_END(test_kfunc_set)
 #pragma GCC visibility pop
 
 extern __u32 test_list_global[];
@@ -92,6 +112,8 @@ __resolve_symbol(struct btf *btf, int type_id)
 	if (!ASSERT_OK_PTR(type, "btf__type_by_id"))
 		return -1;
 
+	str = btf__name_by_offset(btf, type->name_off);
+
 	for (i = 0; i < ARRAY_SIZE(test_symbols); i++) {
 		if (test_symbols[i].id >= 0)
 			continue;
@@ -99,12 +121,18 @@ __resolve_symbol(struct btf *btf, int type_id)
 		if (BTF_INFO_KIND(type->info) != test_symbols[i].type)
 			continue;
 
-		str = btf__name_by_offset(btf, type->name_off);
-		if (!ASSERT_OK_PTR(str, "btf__name_by_offset"))
-			return -1;
-
 		if (!strcmp(str, test_symbols[i].name))
 			test_symbols[i].id = type_id;
+	}
+
+	if (!btf_is_func(type))
+		return 0;
+
+	for (i = 0; i < ARRAY_SIZE(kfunc_symbols); i++) {
+		if (kfunc_symbols[i].id >= 0)
+			continue;
+		if (!strcmp(str, kfunc_symbols[i].name))
+			kfunc_symbols[i].id = type_id;
 	}
 
 	return 0;
@@ -159,6 +187,27 @@ void test_resolve_btfids(void)
 
 		if (i > 0)
 			ASSERT_LE(test_set.ids[i - 1], test_set.ids[i], "sort_check");
+	}
+
+	/* Check BTF_KFUNCS_START(test_kfunc_set) */
+	ASSERT_EQ(test_kfunc_set.flags, BTF_SET8_KFUNCS, "kfunc_set_flags");
+	ASSERT_EQ(test_kfunc_set.cnt, ARRAY_SIZE(kfunc_symbols), "kfunc_set_cnt");
+
+	for (i = 0; i < test_kfunc_set.cnt; i++) {
+		for (j = 0; j < ARRAY_SIZE(kfunc_symbols); j++) {
+			if (kfunc_symbols[j].id == (s32)test_kfunc_set.pairs[i].id) {
+				ASSERT_EQ(test_kfunc_set.pairs[i].flags,
+					  kfunc_symbols[j].flags, "kfunc_flags_check");
+				break;
+			}
+		}
+
+		ASSERT_TRUE(j < ARRAY_SIZE(kfunc_symbols), "kfunc_id_found");
+
+		if (i > 0) {
+			ASSERT_LE(test_kfunc_set.pairs[i - 1].id,
+				  test_kfunc_set.pairs[i].id, "kfunc_sort_check");
+		}
 	}
 
 out:
