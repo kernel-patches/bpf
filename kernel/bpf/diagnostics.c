@@ -1118,6 +1118,27 @@ void bpf_diag_report_context_underflow(struct bpf_verifier_env *env,
 	bpf_diag_report_suggestion(env, "%s", suggestion);
 }
 
+void bpf_diag_report_program_structure(struct bpf_verifier_env *env,
+				       u32 insn_idx, const char *problem,
+				       const char *suggestion,
+				       const char *reason_fmt, ...)
+{
+	va_list args;
+
+	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_PROGRAM_STRUCTURE,
+			       problem);
+	bpf_diag_report_section(env, "Reason");
+
+	va_start(args, reason_fmt);
+	bpf_diag_vprint_indented(env, reason_fmt, args);
+	va_end(args);
+
+	bpf_diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, "error", "%s", problem);
+
+	bpf_diag_report_suggestion(env, "%s", suggestion);
+}
+
 void bpf_diag_report_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx,
 				   int regno, const char *reg_name,
 				   const char *type_name,
