@@ -69,6 +69,12 @@ struct bpf_diag_insn_ctx {
 	struct bpf_diag_insn_buf buf;
 };
 
+struct bpf_diag_log {
+	struct bpf_diag_history_event *events;
+	u32 cnt;
+	u32 cap;
+};
+
 struct bpf_diag_scratch {
 	char str[BPF_DIAG_SCRATCH_STR_CNT][BPF_DIAG_SCRATCH_STR_LEN];
 	struct bpf_diag_source source;
@@ -77,6 +83,7 @@ struct bpf_diag_scratch {
 };
 
 struct bpf_diag {
+	struct bpf_diag_log log;
 	struct bpf_diag_scratch scratch;
 };
 
@@ -155,18 +162,7 @@ const char *bpf_diag_scratch_printf(struct bpf_verifier_env *env,
 	return buf;
 }
 
-void bpf_diag_free(struct bpf_verifier_env *env)
-{
-	struct bpf_diag *diag = env->diag;
-
-	if (!diag)
-		return;
-
-	kfree(diag);
-	env->diag = NULL;
-}
-
-static void bpf_diag_log(struct bpf_verifier_env *env, const char *fmt, ...)
+static void bpf_diag_write(struct bpf_verifier_env *env, const char *fmt, ...)
 {
 	va_list args;
 
@@ -177,6 +173,87 @@ static void bpf_diag_log(struct bpf_verifier_env *env, const char *fmt, ...)
 	bpf_verifier_vlog(&env->log, fmt, args);
 	va_end(args);
 }
+
+static struct bpf_diag_log *bpf_diag_event_log(struct bpf_verifier_env *env)
+{
+	struct bpf_diag *diag = bpf_diag_env(env);
+
+	return diag ? &diag->log : NULL;
+}
+
+u64 bpf_diag_event_log_pos(struct bpf_verifier_env *env)
+{
+	struct bpf_diag *diag = bpf_diag_env(env);
+
+	if (!diag)
+		return 0;
+	return diag->log.cnt;
+}
+
+void bpf_diag_event_log_reset(struct bpf_verifier_env *env, u64 pos)
+{
+	struct bpf_diag *diag = env->diag;
+	struct bpf_diag_log *log;
+	u64 end;
+
+	if (!diag)
+		return;
+
+	log = &diag->log;
+	end = log->cnt;
+	if (WARN_ON_ONCE(pos > end))
+		pos = end;
+
+	log->cnt = pos;
+}
+
+void bpf_diag_free(struct bpf_verifier_env *env)
+{
+	struct bpf_diag *diag = env->diag;
+
+	if (!diag)
+		return;
+
+	kfree(diag->log.events);
+	kfree(diag);
+	env->diag = NULL;
+}
+
+static const struct bpf_diag_history_event *
+bpf_diag_history_event(const struct bpf_diag_log *log, u32 idx)
+{
+	return &log->events[idx];
+}
+
+static void bpf_diag_append_history(struct bpf_verifier_env *env,
+				    const struct bpf_diag_history_event *event)
+{
+	struct bpf_diag_history_event *events;
+	struct bpf_diag_log *log;
+	u32 cap;
+
+	log = bpf_diag_event_log(env);
+	if (!log)
+		return;
+
+	if (log->cnt < log->cap) {
+		log->events[log->cnt++] = *event;
+		return;
+	}
+
+	cap = log->cap ? log->cap * 2 : 64;
+	if (cap < log->cap)
+		return;
+
+	events = krealloc_array(log->events, cap, sizeof(*events),
+				GFP_KERNEL_ACCOUNT);
+	if (!events)
+		return;
+	log->events = events;
+	log->cap = cap;
+	log->events[log->cnt++] = *event;
+}
+
 static void bpf_diag_print_wrapped_prefixed(struct bpf_verifier_env *env,
 					    const char *first_prefix,
 					    const char *next_prefix,
@@ -203,7 +280,7 @@ static void bpf_diag_print_wrapped_prefixed(struct bpf_verifier_env *env,
 		    last_space > 0)
 			len = last_space;
 
-		bpf_diag_log(env, "%s%.*s\n", prefix, len, line);
+		bpf_diag_write(env, "%s%.*s\n", prefix, len, line);
 
 		text = line + len;
 		while (*text == ' ')
@@ -232,8 +309,8 @@ static void bpf_diag_vprint_indented(struct bpf_verifier_env *env,
 
 	buf = kvasprintf(GFP_KERNEL_ACCOUNT, fmt, args);
 	if (!buf) {
-		bpf_diag_log(env, "%s<failed to allocate diagnostic text>\n",
-			     BPF_DIAG_TEXT_INDENT);
+		bpf_diag_write(env, "%s<failed to allocate diagnostic text>\n",
+			       BPF_DIAG_TEXT_INDENT);
 		return;
 	}
 
@@ -513,13 +590,14 @@ static void bpf_diag_print_source_insn_line(struct bpf_verifier_env *env,
 				    source_prefix, source_line_width,
 				    line->line_num, line->line);
 
-	bpf_diag_log(env, "  %-*s%*s", BPF_DIAG_SOURCE_LANE_WIDTH,
-		     source_lane, BPF_DIAG_COLUMN_GAP, "");
+	bpf_diag_write(env, "  %-*s%*s", BPF_DIAG_SOURCE_LANE_WIDTH,
+		       source_lane, BPF_DIAG_COLUMN_GAP, "");
 	if (diag_insn->valid)
-		bpf_diag_log(env, "%s%*d | %s",
-			     diag_insn->idx == focus_insn_idx ? ">>> " : "    ",
-			     insn_width, diag_insn->idx, diag_insn->text);
-	bpf_diag_log(env, "\n");
+		bpf_diag_write(env, "%s%*d | %s",
+			       diag_insn->idx == focus_insn_idx ?
+			       ">>> " : "    ", insn_width, diag_insn->idx,
+			       diag_insn->text);
+	bpf_diag_write(env, "\n");
 }
 
 void bpf_diag_report_header(struct bpf_verifier_env *env,
@@ -534,13 +612,13 @@ void bpf_diag_report_header(struct bpf_verifier_env *env,
 	problem = problem ?: "";
 
 	if (!problem[0]) {
-		bpf_diag_log(env, "\nVerification failed: %s\n", category);
+		bpf_diag_write(env, "\nVerification failed: %s\n", category);
 		return;
 	}
 
 	first = toupper(problem[0]);
-	bpf_diag_log(env, "\nVerification failed: %s: %c%s\n", category,
-		     first, problem + 1);
+	bpf_diag_write(env, "\nVerification failed: %s: %c%s\n", category,
+		       first, problem + 1);
 }
 
 static void bpf_diag_report_reason(struct bpf_verifier_env *env,
@@ -554,7 +632,7 @@ static void bpf_diag_report_section(struct bpf_verifier_env *env,
 	if (!bpf_diag_enabled(env))
 		return;
 
-	bpf_diag_log(env, "\n%s:\n", title);
+	bpf_diag_write(env, "\n%s:\n", title);
 }
 
 static void bpf_diag_report_reason(struct bpf_verifier_env *env,
@@ -585,7 +663,7 @@ static void bpf_diag_report_suggestion(struct bpf_verifier_env *env,
 	va_start(args, fmt);
 	bpf_diag_vprint_indented(env, fmt, args);
 	va_end(args);
-	bpf_diag_log(env, "\n");
+	bpf_diag_write(env, "\n");
 }
 
 static void bpf_diag_print_source_annotation(struct bpf_verifier_env *env,
@@ -610,8 +688,8 @@ static void bpf_diag_print_source_annotation(struct bpf_verifier_env *env,
 			     line_width - 8));
 	text = kasprintf(GFP_KERNEL_ACCOUNT, "%s: %s", label, msg);
 	if (!text) {
-		bpf_diag_log(env, "  %*s | %*s^-- %s\n",
-			     line_width + 4, "", indent, "", label);
+		bpf_diag_write(env, "  %*s | %*s^-- %s\n",
+			       line_width + 4, "", indent, "", label);
 		return;
 	}
 
@@ -660,18 +738,18 @@ void bpf_diag_report_source(struct bpf_verifier_env *env, u32 insn_idx,
 	memset(diag_insn, 0, sizeof(scratch->insns));
 
 	if (!bpf_diag_get_source(env, insn_idx, src)) {
-		bpf_diag_log(env, "  insn %u\n", insn_idx);
+		bpf_diag_write(env, "  insn %u\n", insn_idx);
 		bpf_diag_print_source_annotation(env, 0, 0, label, msg);
 		goto out_free_msg;
 	}
 
 	func = bpf_diag_func_name(env, insn_idx);
 	if (func && *func)
-		bpf_diag_log(env, "  %s @ %s:%d:%d\n", func, src->file,
-			     src->line_num, src->line_col);
+		bpf_diag_write(env, "  %s @ %s:%d:%d\n", func, src->file,
+			       src->line_num, src->line_col);
 	else
-		bpf_diag_log(env, "  %s:%d:%d\n", src->file, src->line_num,
-			     src->line_col);
+		bpf_diag_write(env, "  %s:%d:%d\n", src->file, src->line_num,
+			       src->line_col);
 
 	start_line = src->line_num - BPF_DIAG_SOURCE_CONTEXT;
 	end_line = src->line_num + BPF_DIAG_SOURCE_CONTEXT;
@@ -703,4 +781,54 @@ void bpf_diag_report_source(struct bpf_verifier_env *env, u32 insn_idx,
 
 out_free_msg:
 	kfree(msg);
+}
+
+void bpf_diag_record_branch(struct bpf_verifier_env *env, u32 insn_idx,
+			    bool cond_true)
+{
+	struct bpf_diag_history_event event = {
+		.insn_idx = insn_idx,
+		.kind = BPF_DIAG_HISTORY_BRANCH,
+		.branch.cond_true = cond_true,
+	};
+
+	bpf_diag_append_history(env, &event);
+}
+
+void bpf_diag_print_history(struct bpf_verifier_env *env)
+{
+	const struct bpf_diag_history_event *event;
+	const struct bpf_diag_log *log;
+	bool printed = false;
+	u32 i;
+
+	bpf_diag_report_section(env, "Causal path");
+
+	if (!env->diag) {
+		bpf_diag_write(env, "  no recorded diagnostic events on this path\n");
+		return;
+	}
+	log = &env->diag->log;
+
+	for (i = 0; i < log->cnt; i++) {
+		event = bpf_diag_history_event(log, i);
+
+		switch (event->kind) {
+		case BPF_DIAG_HISTORY_BRANCH:
+			bpf_diag_report_source(env, event->insn_idx, "branch",
+					       "explored as %s, goto %s",
+					       event->branch.cond_true ? "true" :
+					       "false",
+					       event->branch.cond_true ? "followed" :
+					       "not followed");
+			printed = true;
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (!printed)
+		bpf_diag_write(env,
+			       "  no retained diagnostic events on this path\n");
 }
