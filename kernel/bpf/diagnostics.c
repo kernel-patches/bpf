@@ -1162,6 +1162,9 @@ void bpf_diag_report_limit(struct bpf_verifier_env *env, u32 insn_idx,
 	char *reason, *text;
 	va_list args;
 
+	if (!bpf_diag_enabled(env))
+		return;
+
 	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_VERIFIER_LIMIT,
 			       "limit exceeded");
 	bpf_diag_report_section(env, "Reason");
@@ -2421,6 +2424,9 @@ void bpf_diag_print_history(struct bpf_verifier_env *env,
 	bool printed = false;
 	int start_idx;
 	u32 i;
+
+	if (!bpf_diag_enabled(env))
+		return;
 
 	bpf_diag_report_section(env, "Causal path");
 
