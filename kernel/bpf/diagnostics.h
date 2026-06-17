@@ -124,6 +124,13 @@ enum bpf_diag_invalid_deref_kind {
 	BPF_DIAG_DEREF_INVALID_PTR,
 };
 
+enum bpf_diag_mem_bounds_kind {
+	BPF_DIAG_MEM_NEGATIVE_MIN,
+	BPF_DIAG_MEM_MIN_OUT_OF_RANGE,
+	BPF_DIAG_MEM_UNBOUNDED,
+	BPF_DIAG_MEM_MAX_OUT_OF_RANGE,
+};
+
 struct bpf_diag_history_opts {
 	enum bpf_diag_history_scope scope;
 	u32 frameno;
@@ -171,6 +178,15 @@ void bpf_diag_report_stack_arg_uninit(struct bpf_verifier_env *env,
 				      u32 insn_idx, int nargs,
 				      int stack_arg_slot,
 				      const char *callee_name);
+void bpf_diag_report_memory(struct bpf_verifier_env *env, u32 insn_idx,
+			    const char *problem, const char *reason,
+			    const char *suggestion);
+void bpf_diag_report_mem_bounds(struct bpf_verifier_env *env, u32 insn_idx,
+				int regno, const char *reg_name,
+				const char *type_name,
+				enum bpf_diag_mem_bounds_kind kind,
+				int off, int size, u32 mem_size,
+				const struct bpf_reg_state *reg);
 void bpf_diag_record_branch(struct bpf_verifier_env *env, u32 insn_idx,
 			    bool cond_true);
 void bpf_diag_record_reg_mod(struct bpf_verifier_env *env, u32 insn_idx,
