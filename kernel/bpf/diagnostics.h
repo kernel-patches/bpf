@@ -117,6 +117,13 @@ enum bpf_diag_context_kind {
 	BPF_DIAG_CONTEXT_LOCK,
 };
 
+enum bpf_diag_invalid_deref_kind {
+	BPF_DIAG_DEREF_SCALAR,
+	BPF_DIAG_DEREF_NULLABLE_PTR,
+	BPF_DIAG_DEREF_MODIFIED_PTR,
+	BPF_DIAG_DEREF_INVALID_PTR,
+};
+
 struct bpf_diag_history_opts {
 	enum bpf_diag_history_scope scope;
 	u32 frameno;
@@ -149,6 +156,21 @@ void bpf_diag_report_header(struct bpf_verifier_env *env,
 void bpf_diag_report_source(struct bpf_verifier_env *env, u32 insn_idx,
 			    const char *label, const char *fmt, ...)
 	__printf(4, 5);
+void bpf_diag_report_register_type(struct bpf_verifier_env *env,
+				   u32 insn_idx, int regno,
+				   const char *problem, const char *reason,
+				   const char *suggestion);
+void bpf_diag_report_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx,
+				   int regno, const char *reg_name,
+				   const char *type_name,
+				   enum bpf_diag_invalid_deref_kind kind,
+				   s64 offset);
+void bpf_diag_report_unreadable_reg(struct bpf_verifier_env *env,
+				    u32 insn_idx, int regno);
+void bpf_diag_report_stack_arg_uninit(struct bpf_verifier_env *env,
+				      u32 insn_idx, int nargs,
+				      int stack_arg_slot,
+				      const char *callee_name);
 void bpf_diag_record_branch(struct bpf_verifier_env *env, u32 insn_idx,
 			    bool cond_true);
 void bpf_diag_record_reg_mod(struct bpf_verifier_env *env, u32 insn_idx,
