@@ -20,7 +20,7 @@ __bpf_kfunc_start_defs();
  *
  * Return: A pointer to the root memory cgroup.
  */
-__bpf_kfunc struct mem_cgroup *bpf_get_root_mem_cgroup(void)
+__bpf_kfunc static struct mem_cgroup *bpf_get_root_mem_cgroup(void)
 {
 	if (mem_cgroup_disabled())
 		return NULL;
@@ -41,7 +41,7 @@ __bpf_kfunc struct mem_cgroup *bpf_get_root_mem_cgroup(void)
  * Return: A pointer to a mem_cgroup structure after bumping
  * the corresponding css's reference counter.
  */
-__bpf_kfunc struct mem_cgroup *
+__bpf_kfunc static struct mem_cgroup *
 bpf_get_mem_cgroup(struct cgroup_subsys_state *css)
 {
 	struct mem_cgroup *memcg = NULL;
@@ -75,7 +75,7 @@ bpf_get_mem_cgroup(struct cgroup_subsys_state *css)
  * Releases a previously acquired memcg reference.
  * Implements KF_RELEASE semantics.
  */
-__bpf_kfunc void bpf_put_mem_cgroup(struct mem_cgroup *memcg)
+__bpf_kfunc static void bpf_put_mem_cgroup(struct mem_cgroup *memcg)
 {
 	css_put(&memcg->css);
 }
@@ -89,8 +89,8 @@ __bpf_kfunc void bpf_put_mem_cgroup(struct mem_cgroup *memcg)
  *
  * Return: The current value of the corresponding events counter.
  */
-__bpf_kfunc unsigned long bpf_mem_cgroup_vm_events(struct mem_cgroup *memcg,
-						   enum vm_event_item event)
+__bpf_kfunc static unsigned long
+bpf_mem_cgroup_vm_events(struct mem_cgroup *memcg, enum vm_event_item event)
 {
 	if (unlikely(!memcg_vm_event_item_valid(event)))
 		return (unsigned long)-1;
@@ -110,7 +110,7 @@ __bpf_kfunc unsigned long bpf_mem_cgroup_vm_events(struct mem_cgroup *memcg,
  *
  * Return: The current memory cgroup size in bytes.
  */
-__bpf_kfunc unsigned long bpf_mem_cgroup_usage(struct mem_cgroup *memcg)
+__bpf_kfunc static unsigned long bpf_mem_cgroup_usage(struct mem_cgroup *memcg)
 {
 	return page_counter_read(&memcg->memory) * PAGE_SIZE;
 }
@@ -122,8 +122,8 @@ __bpf_kfunc unsigned long bpf_mem_cgroup_usage(struct mem_cgroup *memcg)
  *
  * Return: The current value of the memory event counter.
  */
-__bpf_kfunc unsigned long bpf_mem_cgroup_memory_events(struct mem_cgroup *memcg,
-						       enum memcg_memory_event event)
+__bpf_kfunc static unsigned long
+bpf_mem_cgroup_memory_events(struct mem_cgroup *memcg, enum memcg_memory_event event)
 {
 	if (unlikely(event >= MEMCG_NR_MEMORY_EVENTS))
 		return (unsigned long)-1;
@@ -140,7 +140,8 @@ __bpf_kfunc unsigned long bpf_mem_cgroup_memory_events(struct mem_cgroup *memcg,
  *
  * Return: The value of the page state counter in bytes.
  */
-__bpf_kfunc unsigned long bpf_mem_cgroup_page_state(struct mem_cgroup *memcg, int idx)
+__bpf_kfunc static unsigned long
+bpf_mem_cgroup_page_state(struct mem_cgroup *memcg, int idx)
 {
 	if (unlikely(!memcg_stat_item_valid(idx)))
 		return (unsigned long)-1;
@@ -154,7 +155,7 @@ __bpf_kfunc unsigned long bpf_mem_cgroup_page_state(struct mem_cgroup *memcg, in
  *
  * Propagate memory cgroup's statistics up the cgroup tree.
  */
-__bpf_kfunc void bpf_mem_cgroup_flush_stats(struct mem_cgroup *memcg)
+__bpf_kfunc static void bpf_mem_cgroup_flush_stats(struct mem_cgroup *memcg)
 {
 	mem_cgroup_flush_stats(memcg);
 }
