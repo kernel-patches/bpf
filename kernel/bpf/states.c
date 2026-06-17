@@ -1573,21 +1573,16 @@ miss:
 	/* add new state to the head of linked list */
 	new = &new_sl->state;
 	err = bpf_copy_verifier_state(new, cur);
-	if (err) {
-		bpf_free_verifier_state(new, false);
-		kfree(new_sl);
-		return err;
-	}
+	if (err)
+		goto free_verifier_state;
+
 	new->insn_idx = insn_idx;
 	verifier_bug_if(new->branches != 1, env,
 			"%s:branches_to_explore=%d insn %d",
 			__func__, new->branches, insn_idx);
 	err = maybe_enter_scc(env, new);
-	if (err) {
-		bpf_free_verifier_state(new, false);
-		kfree(new_sl);
-		return err;
-	}
+	if (err)
+		goto free_verifier_state;
 
 	cur->parent = new;
 	cur->first_insn_idx = insn_idx;
@@ -1595,4 +1590,9 @@ miss:
 	bpf_clear_jmp_history(cur);
 	list_add(&new_sl->node, head);
 	return 0;
+
+free_verifier_state:
+	bpf_free_verifier_state(new, false);
+	kfree(new_sl);
+	return err;
 }
