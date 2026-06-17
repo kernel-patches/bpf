@@ -1438,6 +1438,7 @@ static int acquire_reference(struct bpf_verifier_env *env, int insn_idx, int par
 	s->type = REF_TYPE_PTR;
 	s->id = ++env->id_gen;
 	s->parent_id = parent_id;
+	bpf_diag_record_ref_acquire(env, insn_idx, s->id);
 	return s->id;
 }
 
@@ -9140,8 +9141,12 @@ static int release_reference(struct bpf_verifier_env *env, int id)
 	if (err)
 		return err;
 
-	if (find_reference_state(vstate, id))
-		WARN_ON_ONCE(release_reference_nomark(vstate, id));
+	if (find_reference_state(vstate, id)) {
+		err = release_reference_nomark(vstate, id);
+		WARN_ON_ONCE(err);
+		if (!err)
+			bpf_diag_record_ref_release(env, env->insn_idx, id);
+	}
 
 	while ((id = idstack_pop(idstack))) {
 		/*
@@ -9263,6 +9268,9 @@ static int ref_convert_alloc_rcu_protected(struct bpf_verifier_env *env, u32 id)
 	int err;
 
 	err = release_reference_nomark(env->cur_state, id);
+	if (err)
+		return err;
+	bpf_diag_record_ref_release(env, env->insn_idx, id);
 
 	bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
 		if (reg->id != id)
@@ -11746,8 +11754,12 @@ static void ref_convert_owning_non_owning(struct bpf_verifier_env *env, u32 id)
 {
 	struct bpf_func_state *unused;
 	struct bpf_reg_state *reg;
+	int err;
 
-	WARN_ON_ONCE(release_reference_nomark(env->cur_state, id));
+	err = release_reference_nomark(env->cur_state, id);
+	WARN_ON_ONCE(err);
+	if (!err)
+		bpf_diag_record_ref_release(env, env->insn_idx, id);
 
 	bpf_for_each_reg_in_vstate(env->cur_state, unused, reg, ({
 		if (reg->id == id) {
