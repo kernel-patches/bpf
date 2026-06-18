@@ -859,6 +859,9 @@ static int bpf_trampoline_add_prog(struct bpf_trampoline *tr,
 	}
 	if (cnt >= BPF_MAX_TRAMP_LINKS)
 		return -E2BIG;
+	if (node->link->prog->aux->attach_limit &&
+	    tr->progs_cnt[kind] >= node->link->prog->aux->attach_limit)
+		return -E2BIG;
 	if (!hlist_unhashed(&node->tramp_hlist))
 		/* prog already linked */
 		return -EBUSY;

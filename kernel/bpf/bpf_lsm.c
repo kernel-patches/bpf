@@ -113,6 +113,9 @@ void bpf_lsm_find_cgroup_shim(const struct bpf_prog *prog,
 }
 #endif
 
+BTF_ID_LIST_SINGLE(bpf_lsm_inode_init_security_btf_ids, func,
+		   bpf_lsm_inode_init_security)
+
 int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
 			const struct bpf_prog *prog)
 {
@@ -136,6 +139,12 @@ int bpf_lsm_verify_prog(struct bpf_verifier_log *vlog,
 			btf_id, func_name);
 		return -EINVAL;
 	}
+
+	/* bpf reserves a fixed number of xattr slots for itself.
+	 * Set the attach limit so the trampoline rejects excess attaches.
+	 */
+	if (btf_id == bpf_lsm_inode_init_security_btf_ids[0])
+		prog->aux->attach_limit = BPF_LSM_INODE_INIT_XATTRS;
 
 	return 0;
 }
@@ -315,6 +324,7 @@ BTF_ID(func, bpf_lsm_inode_create)
 BTF_ID(func, bpf_lsm_inode_free_security)
 BTF_ID(func, bpf_lsm_inode_getattr)
 BTF_ID(func, bpf_lsm_inode_getxattr)
+BTF_ID(func, bpf_lsm_inode_init_security)
 BTF_ID(func, bpf_lsm_inode_mknod)
 BTF_ID(func, bpf_lsm_inode_need_killpriv)
 BTF_ID(func, bpf_lsm_inode_post_setxattr)
