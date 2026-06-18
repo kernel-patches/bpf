@@ -9,9 +9,10 @@
 #include <test_progs.h>
 #include "test_get_xattr.skel.h"
 #include "test_set_remove_xattr.skel.h"
+#include "test_init_inode_xattr.skel.h"
 #include "test_fsverity.skel.h"
 
-static const char testfile[] = "/tmp/test_progs_fs_kfuncs";
+static const char testfile[] = "/tmp/labelme";
 
 static void test_get_xattr(const char *name, const char *value, bool allow_access)
 {
@@ -268,6 +269,102 @@ out:
 	remove(testfile);
 }
 
+static void test_init_inode_xattr(void)
+{
+	struct test_init_inode_xattr *skel = NULL;
+	int fd = -1, err;
+	char value_out[64];
+	const char *testfile_new = "/tmp/test_progs_fs_kfuncs_new";
+
+	skel = test_init_inode_xattr__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_init_inode_xattr__open_and_load"))
+		return;
+
+	skel->bss->monitored_pid = getpid();
+	err = test_init_inode_xattr__attach(skel);
+	if (!ASSERT_OK(err, "test_init_inode_xattr__attach"))
+		goto out;
+
+	/* Trigger inode_init_security */
+	fd = open(testfile_new, O_CREAT | O_RDWR, 0644);
+	if (!ASSERT_GE(fd, 0, "create_file"))
+		goto out;
+
+	ASSERT_EQ(skel->data->init_result, 0, "init_result");
+
+	/* initxattrs prepends "security." to the name. */
+	err = getxattr(testfile_new, "security.bpf.test_label", value_out,
+		       sizeof(value_out));
+	if (err < 0 && errno == ENODATA) {
+		printf("%s:SKIP:filesystem did not apply LSM xattrs\n",
+		       __func__);
+		test__skip();
+		goto out;
+	}
+	if (!ASSERT_GE(err, 0, "getxattr"))
+		goto out;
+
+	ASSERT_EQ(err, (int)sizeof(skel->data->xattr_value), "xattr_size");
+	ASSERT_EQ(strncmp(value_out, "unconfined_u:object_r:user_home_t:s0",
+			  sizeof("unconfined_u:object_r:user_home_t:s0")), 0,
+		  "xattr_value");
+
+out:
+	close(fd);
+	test_init_inode_xattr__destroy(skel);
+	remove(testfile_new);
+}
+
+/* Keep in sync with BPF_LSM_INODE_INIT_XATTRS in include/linux/bpf_lsm.h. */
+#define INIT_INODE_XATTR_MAX 4
+
+/* At most INIT_INODE_XATTR_MAX programs can attach to inode_init_security. */
+static void test_init_inode_xattr_attach_cap(void)
+{
+	struct test_init_inode_xattr *skel[INIT_INODE_XATTR_MAX + 1] = {};
+	struct bpf_link *link[INIT_INODE_XATTR_MAX + 1] = {};
+	struct bpf_link *extra = NULL;
+	int i, err;
+
+	/* Fill all available xattr slots */
+	for (i = 0; i < INIT_INODE_XATTR_MAX; i++) {
+		skel[i] = test_init_inode_xattr__open_and_load();
+		if (!ASSERT_OK_PTR(skel[i], "open_and_load"))
+			goto out;
+
+		link[i] = bpf_program__attach_lsm(skel[i]->progs.test_init_inode_xattr);
+		if (!ASSERT_OK_PTR(link[i], "attach_within_cap"))
+			goto out;
+	}
+
+	skel[INIT_INODE_XATTR_MAX] = test_init_inode_xattr__open_and_load();
+	if (!ASSERT_OK_PTR(skel[INIT_INODE_XATTR_MAX], "open_and_load_extra"))
+		goto out;
+
+	/* New additions fail with -E2BIG */
+	extra = bpf_program__attach_lsm(skel[INIT_INODE_XATTR_MAX]->progs.test_init_inode_xattr);
+	err = -errno;
+	if (!ASSERT_ERR_PTR(extra, "attach_over_cap_should_fail")) {
+		bpf_link__destroy(extra);
+		goto out;
+	}
+	ASSERT_EQ(err, -E2BIG, "attach_over_cap_errno");
+
+	bpf_link__destroy(link[0]);
+	link[0] = NULL; /* avoid double free in cleanup */
+
+	/* Freeing a slot lets the extra program attach */
+	extra = bpf_program__attach_lsm(skel[INIT_INODE_XATTR_MAX]->progs.test_init_inode_xattr);
+	ASSERT_OK_PTR(extra, "attach_after_detach");
+
+out:
+	bpf_link__destroy(extra);
+	for (i = 0; i <= INIT_INODE_XATTR_MAX; i++) {
+		bpf_link__destroy(link[i]);
+		test_init_inode_xattr__destroy(skel[i]);
+	}
+}
+
 void test_fs_kfuncs(void)
 {
 	/* Matches xattr_names in progs/test_get_xattr.c */
@@ -285,6 +382,12 @@ void test_fs_kfuncs(void)
 
 	if (test__start_subtest("set_remove_xattr"))
 		test_set_remove_xattr();
+
+	if (test__start_subtest("init_inode_xattr"))
+		test_init_inode_xattr();
+
+	if (test__start_subtest("init_inode_xattr_attach_cap"))
+		test_init_inode_xattr_attach_cap();
 
 	if (test__start_subtest("fsverity"))
 		test_fsverity();
