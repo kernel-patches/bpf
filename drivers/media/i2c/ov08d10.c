@@ -1391,10 +1391,10 @@ static int ov08d10_power_on(struct device *dev)
 		fsleep(5 * USEC_PER_MSEC);
 
 		reset_control_deassert(ov08d10->reset);
-
-		/* Delay from XSHUTDN pull up to SCCB start: 8ms */
-		fsleep(8 * USEC_PER_MSEC);
 	}
+
+	/* Delay from XSHUTDN pull up to SCCB start: 8ms */
+	fsleep(8 * USEC_PER_MSEC);
 
 	return 0;
 }
