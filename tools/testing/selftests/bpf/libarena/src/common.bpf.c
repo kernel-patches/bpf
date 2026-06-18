@@ -4,9 +4,8 @@
 #include <libarena/asan.h>
 #include <libarena/buddy.h>
 
-const volatile u32 zero = 0;
-
 struct buddy __arena buddy;
+volatile u32 zero = 0;
 
 int arena_fls(__u64 word)
 {
