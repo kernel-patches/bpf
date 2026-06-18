@@ -1,0 +1,2 @@
+# loongarch64 deny list for BPF CI and local vmtest
+arena_atomics					# JIT does not support atomics in arena (verifier rejects BPF_ATOMIC on arena pointers)
