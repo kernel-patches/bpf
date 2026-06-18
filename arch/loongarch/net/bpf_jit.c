@@ -2357,6 +2357,26 @@ bool bpf_jit_supports_arena(void)
 	return true;
 }
 
+bool bpf_jit_supports_insn(struct bpf_insn *insn, bool in_arena)
+{
+	if (!in_arena)
+		return true;
+
+	switch (insn->code) {
+	case BPF_STX | BPF_ATOMIC | BPF_W:
+	case BPF_STX | BPF_ATOMIC | BPF_DW:
+		/* Atomics on arena pointers are not implemented yet. */
+		return false;
+	case BPF_LDX | BPF_MEMSX | BPF_B:
+	case BPF_LDX | BPF_MEMSX | BPF_H:
+	case BPF_LDX | BPF_MEMSX | BPF_W:
+		/* Sign-extending loads from arena are not implemented yet. */
+		return false;
+	}
+
+	return true;
+}
+
 bool bpf_jit_supports_fsession(void)
 {
 	return true;
