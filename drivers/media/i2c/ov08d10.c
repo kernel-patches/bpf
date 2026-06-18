@@ -1549,7 +1549,8 @@ static int ov08d10_probe(struct i2c_client *client)
 		return ret;
 	}
 
-	ov08d10->reset = devm_reset_control_get_optional_exclusive(ov08d10->dev, NULL);
+	ov08d10->reset = devm_reset_control_get_optional_exclusive(ov08d10->dev,
+								   NULL);
 	if (IS_ERR(ov08d10->reset))
 		return dev_err_probe(ov08d10->dev, PTR_ERR(ov08d10->reset),
 				     "failed to get reset\n");
