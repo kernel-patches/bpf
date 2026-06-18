@@ -4,6 +4,7 @@
  *
  * Copyright (C) 2022 Loongson Technology Corporation Limited
  */
+#include <linux/filter.h>
 #include <linux/sched.h>
 #include <linux/stacktrace.h>
 #include <linux/uaccess.h>
@@ -39,6 +40,57 @@ void arch_stack_walk(stack_trace_consume_fn consume_entry, void *cookie,
 			break;
 	}
 }
+
+#ifdef CONFIG_UNWINDER_ORC
+/*
+ * Used by BPF exception support (bpf_throw) to find the exception boundary
+ * frame. The ORC unwinder reports the stack and frame pointer of each frame
+ * and, via its generated-code fallback, can walk JITed BPF frames, which set
+ * up the expected frame record ($ra at fp-8, previous fp at fp-16).
+ */
+static noinline void walk_stackframe_bpf(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp),
+					 void *cookie, unsigned long fp)
+{
+	unsigned long addr;
+	struct pt_regs dummyregs;
+	struct pt_regs *regs = &dummyregs;
+	struct unwind_state state;
+
+	regs->regs[3] = (unsigned long)__builtin_frame_address(0);
+	regs->csr_era = (unsigned long)__builtin_return_address(0);
+	regs->regs[1] = 0;
+	regs->regs[22] = fp;
+
+	for (unwind_start(&state, current, regs);
+	     !unwind_done(&state); unwind_next_frame(&state)) {
+		addr = unwind_get_return_address(&state);
+		if (!addr || !consume_fn(cookie, (u64)addr, (u64)state.sp, (u64)state.fp))
+			break;
+	}
+}
+
+void arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp),
+			 void *cookie)
+{
+	unsigned long fp;
+
+	/*
+	 * Capture the live frame pointer ($r22/$fp) here, before handing off to
+	 * the worker. The kernel is built with -fomit-frame-pointer, so $fp is
+	 * an ordinary callee-saved register that is preserved across the call
+	 * from the JITed BPF program into bpf_throw() down to here, and thus
+	 * still points at the innermost BPF frame. The ORC frame-pointer
+	 * fallback walks the BPF frames up to the exception boundary from it.
+	 *
+	 * This must be a thin wrapper with no large stack locals: the worker
+	 * uses $r22 to address its frame, which would clobber the live $fp
+	 * before it could be read. __builtin_frame_address() cannot be used
+	 * either, as it is $sp-derived and would yield a kernel-stack frame.
+	 */
+	asm volatile("move %0, $r22" : "=r"(fp));
+	walk_stackframe_bpf(consume_fn, cookie, fp);
+}
+#endif /* CONFIG_UNWINDER_ORC */
 
 int arch_stack_walk_reliable(stack_trace_consume_fn consume_entry,
 			     void *cookie, struct task_struct *task)
