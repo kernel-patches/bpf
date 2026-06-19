@@ -339,7 +339,7 @@ static int dev_map_bpf_prog_run(struct bpf_prog *xdp_prog,
 				struct net_device *rx_dev)
 {
 	struct xdp_txq_info txq = { .dev = tx_dev };
-	struct xdp_rxq_info rxq = { .dev = rx_dev };
+	struct xdp_rxq_info rxq = { };
 	struct xdp_buff xdp;
 	int i, nframes = 0;
 
@@ -349,6 +349,9 @@ static int dev_map_bpf_prog_run(struct bpf_prog *xdp_prog,
 		int err;
 
 		xdp_convert_frame_to_buff(xdpf, &xdp);
+		rxq.dev = rx_dev;
+		rxq.mem.type = xdpf->mem_type;
+		rxq.queue_index = xdpf->rx_queue_index;
 		xdp.txq = &txq;
 		xdp.rxq = &rxq;
 
