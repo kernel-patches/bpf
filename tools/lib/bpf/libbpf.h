@@ -1455,6 +1455,11 @@ struct ring;
 struct user_ring_buffer;
 
 /* Callback-based consumption is unsupported for BPF_F_RB_OVERWRITE maps. */
+/*
+ * A negative return stops consumption; non-negative values continue. Stopping
+ * can leave records queued without a new readiness notification. Before
+ * waiting for readiness again, consume until no records remain.
+ */
 typedef int (*ring_buffer_sample_fn)(void *ctx, void *data, size_t size);
 
 struct ring_buffer_opts {
@@ -1471,6 +1476,20 @@ LIBBPF_API int ring_buffer__add(struct ring_buffer *rb, int map_fd,
 				ring_buffer_sample_fn sample_cb, void *ctx);
 LIBBPF_API int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms);
 LIBBPF_API int ring_buffer__consume(struct ring_buffer *rb);
+
+/**
+ * @brief **ring_buffer__consume_n()** consumes up to a requested number of
+ * records from a ring buffer manager without event polling.
+ *
+ * @param rb A ring buffer manager object.
+ * @param n Maximum number of records to consume.
+ * @return The number of records consumed, or a negative error code on failure.
+ *
+ * Reaching the requested bound does not establish that every ring is empty.
+ * Records can remain queued without a new readiness notification. Before
+ * calling ring_buffer__poll() or waiting on ring_buffer__epoll_fd(), call
+ * ring_buffer__consume() until it returns 0.
+ */
 LIBBPF_API int ring_buffer__consume_n(struct ring_buffer *rb, size_t n);
 LIBBPF_API int ring_buffer__epoll_fd(const struct ring_buffer *rb);
 
@@ -1553,6 +1572,10 @@ LIBBPF_API int ring__consume(struct ring *r);
  * @param r A ringbuffer object.
  * @param n Maximum number of records to consume.
  * @return The number of records consumed, or a negative error code on failure.
+ *
+ * Reaching the requested bound does not establish that the ring is empty.
+ * Records can remain queued without a new readiness notification. Before
+ * waiting on ring__map_fd(), call ring__consume() until it returns 0.
  */
 LIBBPF_API int ring__consume_n(struct ring *r, size_t n);
 
