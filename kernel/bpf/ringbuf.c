@@ -748,9 +748,9 @@ const struct bpf_func_proto bpf_ringbuf_discard_dynptr_proto = {
 
 static int __bpf_user_ringbuf_peek(struct bpf_ringbuf *rb, void **sample, u32 *size)
 {
+	unsigned long avail, cons_pos, prod_pos;
 	int err;
 	u32 hdr_len, sample_len, total_len, flags, *hdr;
-	u64 cons_pos, prod_pos;
 
 	/* Synchronizes with smp_store_release() in user-space producer. */
 	prod_pos = smp_load_acquire(&rb->producer_pos);
@@ -759,8 +759,11 @@ static int __bpf_user_ringbuf_peek(struct bpf_ringbuf *rb, void **sample, u32 *s
 
 	/* Synchronizes with smp_store_release() in __bpf_user_ringbuf_sample_release() */
 	cons_pos = smp_load_acquire(&rb->consumer_pos);
-	if (cons_pos >= prod_pos)
+	avail = prod_pos - cons_pos;
+	if (!avail)
 		return -ENODATA;
+	if (avail > ringbuf_total_data_sz(rb))
+		return -EINVAL;
 
 	hdr = (u32 *)((uintptr_t)rb->data + (uintptr_t)(cons_pos & rb->mask));
 	/* Synchronizes with smp_store_release() in user-space producer. */
@@ -770,7 +773,7 @@ static int __bpf_user_ringbuf_peek(struct bpf_ringbuf *rb, void **sample, u32 *s
 	total_len = round_up(sample_len + BPF_RINGBUF_HDR_SZ, 8);
 
 	/* The sample must fit within the region advertised by the producer position. */
-	if (total_len > prod_pos - cons_pos)
+	if (total_len > avail)
 		return -EINVAL;
 
 	/* The sample must fit within the data region of the ring buffer. */
