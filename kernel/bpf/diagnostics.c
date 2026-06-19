@@ -1015,6 +1015,32 @@ void bpf_diag_record_stack_slot(struct bpf_verifier_env *env, u32 insn_idx,
 	bpf_diag_append_history(env, &event);
 }
 
+static void bpf_diag_record_ref(struct bpf_verifier_env *env, u32 insn_idx,
+				u8 kind, u32 ref_id)
+{
+	struct bpf_diag_history_event event = {
+		.insn_idx = insn_idx,
+		.kind = kind,
+		.ref.ref_id = ref_id,
+	};
+
+	bpf_diag_append_history(env, &event);
+}
+
+void bpf_diag_record_ref_acquire(struct bpf_verifier_env *env, u32 insn_idx,
+				 u32 ref_id)
+{
+	bpf_diag_record_ref(env, insn_idx, BPF_DIAG_HISTORY_REF_ACQUIRE,
+			    ref_id);
+}
+
+void bpf_diag_record_ref_release(struct bpf_verifier_env *env, u32 insn_idx,
+				 u32 ref_id)
+{
+	bpf_diag_record_ref(env, insn_idx, BPF_DIAG_HISTORY_REF_RELEASE,
+			    ref_id);
+}
+
 struct bpf_diag_history_filter {
 	const struct bpf_diag_history_opts *opts;
 	bool stack_slot_valid;
@@ -1136,6 +1162,10 @@ static int bpf_diag_history_start_idx(const struct bpf_diag_log *log,
 		    event->stack_arg.slot == opts->stack_arg_slot &&
 		    event->stack_arg.frameno == opts->frameno)
 			return i - 1;
+		if (opts->scope == BPF_DIAG_HISTORY_SCOPE_REF &&
+		    event->kind == BPF_DIAG_HISTORY_REF_ACQUIRE &&
+		    event->ref.ref_id == opts->ref_id)
+			return i - 1;
 	}
 
 	return 0;
@@ -1166,6 +1196,10 @@ bpf_diag_history_event_visible(const struct bpf_diag_history_event *event,
 		return filter->stack_slot_valid &&
 		       idx <= filter->stack_until_idx &&
 		       bpf_diag_stack_slot_matches(event, filter);
+	case BPF_DIAG_HISTORY_REF_ACQUIRE:
+	case BPF_DIAG_HISTORY_REF_RELEASE:
+		return opts->scope == BPF_DIAG_HISTORY_SCOPE_REF &&
+		       event->ref.ref_id == opts->ref_id;
 	default:
 		return false;
 	}
@@ -1536,6 +1570,20 @@ static void bpf_diag_print_stack_slot(struct bpf_verifier_env *env,
 			       off, fmt->old_buf, fmt->new_buf);
 }
 
+static void bpf_diag_print_ref_event(struct bpf_verifier_env *env,
+				     const struct bpf_diag_history_event *event)
+{
+	if (event->kind == BPF_DIAG_HISTORY_REF_ACQUIRE) {
+		bpf_diag_report_source(env, event->insn_idx, "acquired",
+				       "owned resource (id=%u)",
+				       event->ref.ref_id);
+		return;
+	}
+
+	bpf_diag_report_source(env, event->insn_idx, "released",
+			       "owned resource (id=%u)", event->ref.ref_id);
+}
+
 void bpf_diag_print_history(struct bpf_verifier_env *env,
 			    const struct bpf_diag_history_opts *opts)
 {
@@ -1583,6 +1631,11 @@ void bpf_diag_print_history(struct bpf_verifier_env *env,
 			break;
 		case BPF_DIAG_HISTORY_STACK_SLOT:
 			bpf_diag_print_stack_slot(env, event);
+			printed = true;
+			break;
+		case BPF_DIAG_HISTORY_REF_ACQUIRE:
+		case BPF_DIAG_HISTORY_REF_RELEASE:
+			bpf_diag_print_ref_event(env, event);
 			printed = true;
 			break;
 		default:
