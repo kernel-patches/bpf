@@ -49,4 +49,5 @@ struct xdp_meta {
 		__s32 rx_vlan_tag_err;
 	};
 	enum xdp_meta_field hint_valid;
+	__u32 rx_queue_index;
 };
