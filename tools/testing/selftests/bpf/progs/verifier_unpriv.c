@@ -6,6 +6,8 @@
 #include "../../../include/linux/filter.h"
 #include "bpf_misc.h"
 
+extern const int bpf_prog_active __ksym;
+
 #define BPF_SK_LOOKUP(func) \
 	/* struct bpf_sock_tuple tuple = {} */ \
 	"r2 = 0;"			\
@@ -74,6 +76,36 @@ __naked void dummy_prog_loop1_socket(void)
 "	:
 	: __imm(bpf_tail_call),
 	  __imm_addr(map_prog1_socket)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("unpriv: pseudo btf id ksym requires CAP_BPF")
+__success __failure_unpriv
+__msg_unpriv("BPF_PSEUDO_BTF_ID loads require CAP_BPF")
+__retval(0)
+__naked void pseudo_btf_id_ksym_requires_cap_bpf(void)
+{
+	asm volatile ("r1 = %[bpf_prog_active] ll;"
+		      "r0 = 0;"
+		      "exit;"
+	:
+	: __imm_addr(bpf_prog_active)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("unpriv: pseudo btf id ksym works with CAP_BPF")
+__success_unpriv
+__caps_unpriv(CAP_BPF)
+__retval_unpriv(0)
+__naked void pseudo_btf_id_ksym_with_cap_bpf(void)
+{
+	asm volatile ("r1 = %[bpf_prog_active] ll;"
+		      "r0 = 0;"
+		      "exit;"
+	:
+	: __imm_addr(bpf_prog_active)
 	: __clobber_all);
 }
 
