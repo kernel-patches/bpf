@@ -3408,7 +3408,8 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(xdp_bulk_tx);
 #ifdef CONFIG_BPF_SYSCALL
 
 void bpf_get_linfo_file_line(struct btf *btf, const struct bpf_line_info *linfo,
-			     const char **filep, const char **linep, int *nump)
+			     const char **filep, const char **linep, int *nump,
+			     u32 flags)
 {
 	/* Get base component of the file path. */
 	if (filep) {
@@ -3416,10 +3417,10 @@ void bpf_get_linfo_file_line(struct btf *btf, const struct bpf_line_info *linfo,
 		*filep = kbasename(*filep);
 	}
 
-	/* Obtain the source line, and strip whitespace in prefix. */
+	/* Obtain the source line, and optionally strip whitespace in prefix. */
 	if (linep) {
 		*linep = btf_name_by_offset(btf, linfo->line_off);
-		while (isspace(**linep))
+		while ((flags & BPF_LINFO_LINE_TRIM) && isspace(**linep))
 			*linep += 1;
 	}
 
@@ -3498,7 +3499,8 @@ int bpf_prog_get_file_line(struct bpf_prog *prog, unsigned long ip, const char *
 	if (idx == -1)
 		return -ENOENT;
 
-	bpf_get_linfo_file_line(btf, &linfo[idx], filep, linep, nump);
+	bpf_get_linfo_file_line(btf, &linfo[idx], filep, linep, nump,
+				BPF_LINFO_LINE_TRIM);
 	return 0;
 }
 
