@@ -12392,6 +12392,11 @@ check_ok:
 					reg_arg_name(env, argno));
 				return -EINVAL;
 			}
+			if (reg->var_off.value != 0) {
+				verbose(env, "%s must have zero offset when passed to %s\n",
+					reg_arg_name(env, argno), meta->func_name);
+				return -EINVAL;
+			}
 			if (!type_is_non_owning_ref(reg->type))
 				meta->arg_owning_ref = true;
 
