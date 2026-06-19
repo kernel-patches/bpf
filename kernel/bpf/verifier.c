@@ -3527,6 +3527,13 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 	    !bpf_is_spilled_scalar_reg(&state->stack[spi]) &&
 	    size != BPF_REG_SIZE) {
 		verbose(env, "attempt to corrupt spilled pointer on stack\n");
+		bpf_diag_report_memory(env, insn_idx,
+				       "stack spill corruption",
+				       bpf_diag_scratch_printf(env,
+							       0,
+							       "This store writes %d bytes at stack offset %d into a stack slot that currently holds a spilled pointer. Partial writes to spilled pointers are rejected because they can corrupt pointer metadata and leak kernel pointers.",
+							       size, off),
+				       "Write the full 8-byte spilled pointer slot, or use a separate stack slot for scalar data before overwriting only part of it.");
 		return -EACCES;
 	}
 
@@ -3811,6 +3818,18 @@ static void mark_reg_stack_read(struct bpf_verifier_env *env,
 	}
 }
 
+static void bpf_diag_report_stack_read_uninit(struct bpf_verifier_env *env,
+					      int off, int i, int size)
+{
+	bpf_diag_report_memory(env, env->insn_idx,
+			       "uninitialized stack read",
+			       bpf_diag_scratch_printf(env,
+						       0,
+						       "This rejected read uses %d bytes at stack offset %d, but byte %d in that range is uninitialized on this path. Programs with sufficient privilege can be allowed to read uninitialized stack bytes, but this program is being rejected without that allowance.",
+						       size, off, i),
+			       "Initialize every byte in the stack range before reading it, adjust the offset and size so the read covers only initialized bytes, or load with the privilege needed for uninitialized stack reads.");
+}
+
 /* Read the stack at 'off' and put the results into the register indicated by
  * 'dst_regno'. It handles reg filling if the addressed stack slot is a
  * spilled reg.
@@ -3896,9 +3915,12 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 					if (type == STACK_POISON) {
 						verbose(env, "reading from stack off %d+%d size %d, slot poisoned by dead code elimination\n",
 							off, i, size);
+						return -EFAULT;
 					} else {
 						verbose(env, "invalid read from stack off %d+%d size %d\n",
 							off, i, size);
+						bpf_diag_report_stack_read_uninit(env, off, i,
+										  size);
 					}
 					return -EACCES;
 				}
@@ -3951,9 +3973,12 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 			if (type == STACK_POISON) {
 				verbose(env, "reading from stack off %d+%d size %d, slot poisoned by dead code elimination\n",
 					off, i, size);
+				return -EFAULT;
 			} else {
 				verbose(env, "invalid read from stack off %d+%d size %d\n",
 					off, i, size);
+				bpf_diag_report_stack_read_uninit(env, off, i,
+								  size);
 			}
 			return -EACCES;
 		}
@@ -4045,6 +4070,13 @@ static int check_stack_read(struct bpf_verifier_env *env,
 		tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
 		verbose(env, "variable offset stack pointer cannot be passed into helper function; var_off=%s off=%d size=%d\n",
 			tn_buf, off, size);
+		bpf_diag_report_memory(env, env->insn_idx,
+				       "variable stack access",
+				       bpf_diag_scratch_printf(env,
+							       0,
+							       "The helper would access the stack through variable offset %s plus fixed offset %d and size %d. Helper stack memory arguments require a constant stack offset and a precise initialized range.",
+							       tn_buf, off, size),
+				       "Use a fixed stack offset for helper memory arguments, or copy the needed bytes into a fixed stack slot first.");
 		return -EACCES;
 	}
 	/* Variable offset is prohibited for unprivileged mode for simplicity
@@ -4312,6 +4344,12 @@ static int check_mem_region_access(struct bpf_verifier_env *env, struct bpf_reg_
 	      reg_smin(reg) + off < 0)) {
 		verbose(env, "%s min value is negative, either use unsigned index or do a if (index >=0) check.\n",
 			reg_arg_name(env, argno));
+		bpf_diag_report_mem_bounds(env, env->insn_idx,
+					   reg_from_argno(argno),
+					   reg_arg_name(env, argno),
+					   reg_type_str(env, reg->type),
+					   BPF_DIAG_MEM_NEGATIVE_MIN,
+					   off, size, mem_size, reg);
 		return -EACCES;
 	}
 	err = __check_mem_access(env, reg, argno, reg_smin(reg) + off, size,
@@ -4319,6 +4357,12 @@ static int check_mem_region_access(struct bpf_verifier_env *env, struct bpf_reg_
 	if (err) {
 		verbose(env, "%s min value is outside of the allowed memory range\n",
 			reg_arg_name(env, argno));
+		bpf_diag_report_mem_bounds(env, env->insn_idx,
+					   reg_from_argno(argno),
+					   reg_arg_name(env, argno),
+					   reg_type_str(env, reg->type),
+					   BPF_DIAG_MEM_MIN_OUT_OF_RANGE,
+					   off, size, mem_size, reg);
 		return err;
 	}
 
@@ -4329,6 +4373,12 @@ static int check_mem_region_access(struct bpf_verifier_env *env, struct bpf_reg_
 	if (reg_umax(reg) >= BPF_MAX_VAR_OFF) {
 		verbose(env, "%s unbounded memory access, make sure to bounds check any such access\n",
 			reg_arg_name(env, argno));
+		bpf_diag_report_mem_bounds(env, env->insn_idx,
+					   reg_from_argno(argno),
+					   reg_arg_name(env, argno),
+					   reg_type_str(env, reg->type),
+					   BPF_DIAG_MEM_UNBOUNDED,
+					   off, size, mem_size, reg);
 		return -EACCES;
 	}
 	err = __check_mem_access(env, reg, argno, reg_umax(reg) + off, size,
@@ -4336,6 +4386,12 @@ static int check_mem_region_access(struct bpf_verifier_env *env, struct bpf_reg_
 	if (err) {
 		verbose(env, "%s max value is outside of the allowed memory range\n",
 			reg_arg_name(env, argno));
+		bpf_diag_report_mem_bounds(env, env->insn_idx,
+					   reg_from_argno(argno),
+					   reg_arg_name(env, argno),
+					   reg_type_str(env, reg->type),
+					   BPF_DIAG_MEM_MAX_OUT_OF_RANGE,
+					   off, size, mem_size, reg);
 		return err;
 	}
 
