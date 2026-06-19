@@ -198,6 +198,10 @@ void bpf_diag_report_irq_resource_state(struct bpf_verifier_env *env,
 					u32 depth);
 void bpf_diag_report_ref_leak(struct bpf_verifier_env *env, u32 ref_id,
 			      u32 alloc_insn, u32 fail_insn);
+void bpf_diag_report_call_type(struct bpf_verifier_env *env, u32 insn_idx,
+			       int argno, int regno, int stack_arg_slot,
+			       const char *call_name, const char *arg_name,
+			       const char *reason, const char *suggestion);
 void bpf_diag_record_branch(struct bpf_verifier_env *env, u32 insn_idx,
 			    bool cond_true);
 void bpf_diag_record_reg_mod(struct bpf_verifier_env *env, u32 insn_idx,

@@ -901,6 +901,58 @@ static const char *bpf_diag_arg_ordinal(int argno)
 	}
 }
 
+void bpf_diag_report_call_type(struct bpf_verifier_env *env, u32 insn_idx,
+			       int argno, int regno, int stack_arg_slot,
+			       const char *call_name, const char *arg_name,
+			       const char *reason, const char *suggestion)
+{
+	struct bpf_diag_history_opts opts = {
+		.frameno = bpf_diag_current_frameno(env),
+	};
+	const char *ordinal = bpf_diag_arg_ordinal(argno);
+	const char *arg_desc;
+	bool print_history = true;
+
+	if (regno >= 0) {
+		opts.scope = BPF_DIAG_HISTORY_SCOPE_REG;
+		opts.regno = regno;
+	} else if (stack_arg_slot >= 0) {
+		opts.scope = BPF_DIAG_HISTORY_SCOPE_STACK_ARG;
+		opts.stack_arg_slot = stack_arg_slot;
+	} else {
+		print_history = false;
+	}
+
+	if (ordinal && arg_name)
+		arg_desc = bpf_diag_scratch_printf(env, 1,
+						   "%s argument (%s)",
+						   ordinal, arg_name);
+	else if (ordinal)
+		arg_desc = bpf_diag_scratch_printf(env, 1,
+						   "%s argument", ordinal);
+	else if (arg_name)
+		arg_desc = bpf_diag_scratch_printf(env, 1,
+						   "argument %s", arg_name);
+	else
+		arg_desc = bpf_diag_scratch_strcpy(env, 1,
+						   "argument");
+
+	bpf_diag_report_header(env, BPF_DIAG_CATEGORY_CALL_TYPE_SAFETY,
+			       "invalid call argument");
+	bpf_diag_report_reason(env,
+			       "The %s to %s does not satisfy the verifier contract: %s.",
+			       arg_desc, call_name, reason);
+
+	bpf_diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, "error",
+			       "invalid %s for %s", arg_desc, call_name);
+
+	if (print_history)
+		bpf_diag_print_history(env, &opts);
+
+	bpf_diag_report_suggestion(env, "%s", suggestion);
+}
+
 void bpf_diag_report_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx,
 				   int regno, const char *reg_name,
 				   const char *type_name,
