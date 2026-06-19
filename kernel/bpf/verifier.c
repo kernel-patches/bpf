@@ -17661,6 +17661,11 @@ static int check_pseudo_btf_id(struct bpf_verifier_env *env,
 	int btf_fd;
 	int err;
 
+	if (!env->bpf_capable) {
+		verbose(env, "BPF_PSEUDO_BTF_ID loads require CAP_BPF\n");
+		return -EACCES;
+	}
+
 	btf_fd = insn[1].imm;
 	if (btf_fd) {
 		btf = btf_get_by_fd(btf_fd);
