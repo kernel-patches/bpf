@@ -174,6 +174,7 @@ auto-test-targets :=			\
 	init_enable_count		\
 	maximal				\
 	maybe_null			\
+	cpu_rq_ret_null		\
 	minimal				\
 	non_scx_kfunc_deny		\
 	numa				\
