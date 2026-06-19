@@ -1113,6 +1113,7 @@ static int process_kfunc_with_implicit_args(struct btf2btf_context *ctx, struct 
 {
 	s32 idx, new_proto_id, new_func_id, proto_id;
 	const char *param_name, *tag_name;
+	char *tmp_param_name, *tmp_tag_name;
 	const struct btf_param *params;
 	enum btf_func_linkage linkage;
 	char tmp_name[KSYM_NAME_LEN];
@@ -1163,18 +1164,22 @@ static int process_kfunc_with_implicit_args(struct btf2btf_context *ctx, struct 
 		if (strcmp(tag_name, "bpf_kfunc") == 0)
 			continue;
 
+		tmp_tag_name = strdup(tag_name);
 		idx = btf_decl_tag(t)->component_idx;
 
 		if (btf_kflag(t))
-			err = btf__add_decl_attr(btf, tag_name, new_func_id, idx);
+			err = btf__add_decl_attr(btf, tmp_tag_name, new_func_id, idx);
 		else
-			err = btf__add_decl_tag(btf, tag_name, new_func_id, idx);
+			err = btf__add_decl_tag(btf, tmp_tag_name, new_func_id, idx);
 
 		if (err < 0) {
 			pr_err("ERROR: resolve_btfids: failed to add decl tag %s for %s\n",
-			       tag_name, tmp_name);
+			       tmp_tag_name, tmp_name);
+			free(tmp_tag_name);
 			return -EINVAL;
 		}
+
+		free(tmp_tag_name);
 	}
 
 add_new_proto:
@@ -1193,12 +1198,17 @@ add_new_proto:
 		if (is_kf_implicit_arg(btf, &params[i]))
 			break;
 		param_name = btf__name_by_offset(btf, params[i].name_off);
-		err = btf__add_func_param(btf, param_name, params[i].type);
+		tmp_param_name = strdup(param_name);
+		if (!tmp_param_name)
+			return -ENOMEM;
+		err = btf__add_func_param(btf, tmp_param_name, params[i].type);
 		if (err < 0) {
 			pr_err("ERROR: resolve_btfids: failed to add param %s for %s\n",
-			       param_name, kfunc->name);
+			       tmp_param_name, kfunc->name);
+			free(tmp_param_name);
 			return err;
 		}
+		free(tmp_param_name);
 		t = (struct btf_type *)btf__type_by_id(btf, proto_id);
 	}
 
