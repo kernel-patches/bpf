@@ -741,6 +741,39 @@ int list_push_back_uninit_head(void *ctx)
 	return ret;
 }
 
+SEC("tc")
+__description("refcount_acquire_list_pop_container: acquire normalized list pop")
+__success __retval(0)
+int refcount_acquire_list_pop_container(void *ctx)
+{
+	struct node_data *node, *base, *ref;
+	struct bpf_list_node *list_node;
+	long err;
+
+	node = bpf_obj_new(typeof(*node));
+	if (!node)
+		return -1;
+
+	bpf_spin_lock(&lock);
+	err = bpf_list_push_front(&head, &node->l);
+	if (err) {
+		bpf_spin_unlock(&lock);
+		bpf_obj_drop(node);
+		return -2;
+	}
+
+	list_node = bpf_list_pop_front(&head);
+	bpf_spin_unlock(&lock);
+	if (!list_node)
+		return -3;
+
+	base = container_of(list_node, struct node_data, l);
+	ref = bpf_refcount_acquire(base);
+	bpf_obj_drop(ref);
+	bpf_obj_drop(base);
+	return 0;
+}
+
 SEC("?tc")
 __failure __msg("bpf_spin_lock at off=32 must be held for bpf_list_head")
 long list_del_without_lock_fail(void *ctx)
