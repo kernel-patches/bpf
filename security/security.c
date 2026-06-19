@@ -406,14 +406,14 @@ int lsm_fill_user_ctx(struct lsm_ctx __user *uctx, u32 *uctx_len,
 	int rc = 0;
 
 	nctx_len = ALIGN(struct_size(nctx, ctx, val_len), sizeof(void *));
+	/* no buffer - return success/0 and set @uctx_len to the req size */
+	if (!uctx)
+		goto out;
+
 	if (nctx_len > *uctx_len) {
 		rc = -E2BIG;
 		goto out;
 	}
-
-	/* no buffer - return success/0 and set @uctx_len to the req size */
-	if (!uctx)
-		goto out;
 
 	nctx = kzalloc(nctx_len, GFP_KERNEL);
 	if (nctx == NULL) {

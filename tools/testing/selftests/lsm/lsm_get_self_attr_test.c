@@ -39,15 +39,14 @@ TEST(size_null_lsm_get_self_attr)
 
 TEST(ctx_null_lsm_get_self_attr)
 {
-	const long page_size = sysconf(_SC_PAGESIZE);
-	__u32 size = page_size;
+	__u32 size = 0;
 	int rc;
 
 	rc = lsm_get_self_attr(LSM_ATTR_CURRENT, NULL, &size, 0);
 
 	if (attr_lsm_count()) {
 		ASSERT_NE(-1, rc);
-		ASSERT_NE(1, size);
+		ASSERT_NE(0, size);
 	} else {
 		ASSERT_EQ(-1, rc);
 	}
