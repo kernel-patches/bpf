@@ -859,6 +859,9 @@ enum bpf_type_flag {
 	/* DYNPTR points to file */
 	DYNPTR_TYPE_FILE	= BIT(20 + BPF_BASE_TYPE_BITS),
 
+	/* PTR argument cannot have a fixed offset. */
+	PTR_ZERO_OFF		= BIT(21 + BPF_BASE_TYPE_BITS),
+
 	__BPF_TYPE_FLAG_MAX,
 	__BPF_TYPE_LAST_FLAG	= __BPF_TYPE_FLAG_MAX - 1,
 };

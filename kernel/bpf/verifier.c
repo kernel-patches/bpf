@@ -7994,7 +7994,10 @@ static int check_func_arg_reg_off(struct bpf_verifier_env *env,
 				  const struct bpf_reg_state *reg, argno_t argno,
 				  enum bpf_arg_type arg_type)
 {
+	bool fixed_off_ok = !(arg_type & PTR_ZERO_OFF);
 	u32 type = reg->type;
+
+	arg_type &= ~PTR_ZERO_OFF;
 
 	/* When referenced register is passed to release function, its fixed
 	 * offset must be 0.
@@ -8048,13 +8051,12 @@ static int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	case PTR_TO_BTF_ID | MEM_ALLOC | NON_OWN_REF:
 	case PTR_TO_BTF_ID | MEM_ALLOC | NON_OWN_REF | MEM_RCU:
 		/* When referenced PTR_TO_BTF_ID is passed to release function,
-		 * its fixed offset must be 0. In the other cases, fixed offset
-		 * can be non-zero. This was already checked above. So pass
-		 * fixed_off_ok as true to allow fixed offset for all other
-		 * cases. var_off always must be 0 for PTR_TO_BTF_ID, hence we
-		 * still need to do checks instead of returning.
+		 * or when the argument type requires zero fixed offset, its
+		 * fixed offset must be 0. In the other cases, fixed offset can
+		 * be non-zero. var_off always must be 0 for PTR_TO_BTF_ID,
+		 * hence we still need to do checks instead of returning.
 		 */
-		return __check_ptr_off_reg(env, reg, argno, true);
+		return __check_ptr_off_reg(env, reg, argno, fixed_off_ok);
 	case PTR_TO_CTX:
 		/*
 		 * Allow fixed and variable offsets for syscall context, but
@@ -12114,7 +12116,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		case KF_ARG_PTR_TO_MEM:
 		case KF_ARG_PTR_TO_MEM_SIZE:
 		case KF_ARG_PTR_TO_CALLBACK:
-		case KF_ARG_PTR_TO_REFCOUNTED_KPTR:
 		case KF_ARG_PTR_TO_CONST_STR:
 		case KF_ARG_PTR_TO_WORKQUEUE:
 		case KF_ARG_PTR_TO_TIMER:
@@ -12127,6 +12128,9 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			break;
 		case KF_ARG_PTR_TO_CTX:
 			arg_type = ARG_PTR_TO_CTX;
+			break;
+		case KF_ARG_PTR_TO_REFCOUNTED_KPTR:
+			arg_type = ARG_PTR_TO_BTF_ID | PTR_ZERO_OFF;
 			break;
 		default:
 			verifier_bug(env, "unknown kfunc arg type %d", kf_arg_type);
