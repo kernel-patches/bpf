@@ -168,3 +168,32 @@ int BPF_PROG(cpumask_kfunc_perf_event)
 	cpumask_kfunc_load_test();
 	return 0;
 }
+
+/*********************
+ * kmem_cache kfunc *
+ *********************/
+
+extern struct kmem_cache *bpf_get_kmem_cache(u64 addr) __ksym;
+
+SEC("raw_tp")
+__failure __msg("R0 invalid mem access 'untrusted_ptr_or_null_'")
+int bpf_get_kmem_cache_no_null_check(void *ctx)
+{
+	struct kmem_cache *s;
+
+	s = bpf_get_kmem_cache(0);
+	return s->size;
+}
+
+SEC("raw_tp")
+__success
+int bpf_get_kmem_cache_null_check(void *ctx)
+{
+	struct kmem_cache *s;
+
+	s = bpf_get_kmem_cache(0);
+	if (!s)
+		return 0;
+
+	return s->size;
+}
