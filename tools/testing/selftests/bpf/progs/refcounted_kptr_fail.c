@@ -13,12 +13,22 @@ struct node_acquire {
 	struct bpf_refcount refcount;
 };
 
+struct node_refcounted {
+	long key;
+	struct bpf_rb_node rb;
+	struct bpf_list_node list;
+	struct bpf_refcount refcount;
+};
+
 extern void bpf_rcu_read_lock(void) __ksym;
 extern void bpf_rcu_read_unlock(void) __ksym;
 
 #define private(name) SEC(".data." #name) __hidden __attribute__((aligned(8)))
 private(A) struct bpf_spin_lock glock;
 private(A) struct bpf_rb_root groot __contains(node_acquire, node);
+private(B) struct bpf_spin_lock lock;
+private(B) struct bpf_rb_root root __contains(node_refcounted, rb);
+private(B) struct bpf_list_head head __contains(node_refcounted, list);
 
 static bool less(struct bpf_rb_node *a, const struct bpf_rb_node *b)
 {
@@ -27,6 +37,17 @@ static bool less(struct bpf_rb_node *a, const struct bpf_rb_node *b)
 
 	node_a = container_of(a, struct node_acquire, node);
 	node_b = container_of(b, struct node_acquire, node);
+
+	return node_a->key < node_b->key;
+}
+
+static bool less_refcounted(struct bpf_rb_node *a, const struct bpf_rb_node *b)
+{
+	struct node_refcounted *node_a;
+	struct node_refcounted *node_b;
+
+	node_a = container_of(a, struct node_refcounted, rb);
+	node_b = container_of(b, struct node_refcounted, rb);
 
 	return node_a->key < node_b->key;
 }
@@ -90,6 +111,62 @@ long rbtree_refcounted_node_ref_escapes_owning_input(void *ctx)
 	bpf_rbtree_add(&groot, &n->node, less);
 	bpf_spin_unlock(&glock);
 
+	return 0;
+}
+
+SEC("?tc")
+__failure __msg("dereference of modified ptr_node_refcounted ptr R1")
+long refcount_acquire_list_node_offset(void *ctx)
+{
+	struct node_refcounted *node, *base, *ref;
+	struct bpf_list_node *list_node;
+
+	node = bpf_obj_new(typeof(*node));
+	if (!node)
+		return 1;
+
+	bpf_spin_lock(&lock);
+	bpf_list_push_front(&head, &node->list);
+	list_node = bpf_list_pop_front(&head);
+	bpf_spin_unlock(&lock);
+	if (!list_node)
+		return 2;
+
+	base = container_of(list_node, struct node_refcounted, list);
+	ref = bpf_refcount_acquire(list_node);
+	if (ref)
+		bpf_obj_drop(ref);
+	bpf_obj_drop(base);
+	return 0;
+}
+
+SEC("?tc")
+__failure __msg("dereference of modified ptr_node_refcounted ptr R1")
+long refcount_acquire_rbtree_node_offset(void *ctx)
+{
+	struct node_refcounted *node, *base, *ref;
+	struct bpf_rb_node *rb_node;
+
+	node = bpf_obj_new(typeof(*node));
+	if (!node)
+		return 1;
+
+	node->key = 1;
+
+	bpf_spin_lock(&lock);
+	bpf_rbtree_add(&root, &node->rb, less_refcounted);
+	rb_node = bpf_rbtree_first(&root);
+	if (rb_node)
+		rb_node = bpf_rbtree_remove(&root, rb_node);
+	bpf_spin_unlock(&lock);
+	if (!rb_node)
+		return 2;
+
+	base = container_of(rb_node, struct node_refcounted, rb);
+	ref = bpf_refcount_acquire(rb_node);
+	if (ref)
+		bpf_obj_drop(ref);
+	bpf_obj_drop(base);
 	return 0;
 }
 
