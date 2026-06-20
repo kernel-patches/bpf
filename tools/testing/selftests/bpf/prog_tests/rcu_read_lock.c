@@ -72,6 +72,20 @@ out:
 	rcu_read_lock__destroy(skel);
 }
 
+static void test_rcuptr_null_check(void)
+{
+	struct rcu_read_lock *skel;
+
+	skel = rcu_read_lock__open();
+	if (!ASSERT_OK_PTR(skel, "skel_open"))
+		return;
+
+	bpf_program__set_autoload(skel->progs.rcu_null_check_after_unlock, true);
+	ASSERT_OK(rcu_read_lock__load(skel), "skel_load");
+
+	rcu_read_lock__destroy(skel);
+}
+
 static const char * const inproper_region_tests[] = {
 	"miss_lock",
 	"no_lock",
@@ -113,6 +127,7 @@ out:
 static const char * const rcuptr_misuse_tests[] = {
 	"task_untrusted_rcuptr",
 	"cross_rcu_region",
+	"rcu_null_deref_after_unlock",
 };
 
 static void test_rcuptr_misuse(void)
@@ -150,6 +165,8 @@ void test_rcu_read_lock(void)
 		test_success();
 	if (test__start_subtest("rcuptr_acquire"))
 		test_rcuptr_acquire();
+	if (test__start_subtest("rcuptr_null_check"))
+		test_rcuptr_null_check();
 	if (test__start_subtest("negative_tests_inproper_region"))
 		test_inproper_region();
 	if (test__start_subtest("negative_tests_rcuptr_misuse"))

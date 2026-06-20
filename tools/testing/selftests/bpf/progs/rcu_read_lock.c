@@ -372,6 +372,26 @@ int cross_rcu_region(void *ctx)
 	return 0;
 }
 
+SEC("?tp_btf/net_dev_queue")
+int BPF_PROG(rcu_null_check_after_unlock, struct sk_buff *skb)
+{
+	bpf_rcu_read_lock();
+	bpf_rcu_read_unlock();
+
+	if (!skb->sk)
+		return 0;
+	return skb->sk->__sk_common.skc_daddr;
+}
+
+SEC("?tp_btf/net_dev_queue")
+int BPF_PROG(rcu_null_deref_after_unlock, struct sk_buff *skb)
+{
+	bpf_rcu_read_lock();
+	bpf_rcu_read_unlock();
+
+	return skb->sk->__sk_common.skc_daddr;
+}
+
 __noinline
 static int static_subprog(void *ctx)
 {
