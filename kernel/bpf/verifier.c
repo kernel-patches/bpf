@@ -9001,7 +9001,7 @@ static void invalidate_rcu_protected_refs(struct bpf_verifier_env *env)
 
 	bpf_for_each_reg_in_vstate_mask(env->cur_state, state, reg, stack, clear_mask, ({
 		if (reg->type & MEM_RCU) {
-			reg->type &= ~(MEM_RCU | PTR_MAYBE_NULL);
+			reg->type &= ~MEM_RCU;
 			reg->type |= PTR_UNTRUSTED;
 		}
 	}));
