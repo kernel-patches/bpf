@@ -19291,22 +19291,24 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			return -EOPNOTSUPP;
 		}
 
-		/*
-		 * *.multi programs don't need an address during program
-		 * verification, we just take the module ref if needed.
-		 */
-		if (is_tracing_multi_id(prog, btf_id)) {
+		if (tgt_prog) {
+			if (subprog == 0)
+				addr = (long) tgt_prog->bpf_func;
+			else
+				addr = (long) tgt_prog->aux->func[subprog]->bpf_func;
+		} else if (is_tracing_multi_id(prog, btf_id)) {
+			/*
+			 * *.multi programs don't need an address during program
+			 * verification, we just take the module ref if needed.
+			 * *.multi programs don't have tgt_prog during program
+			 * verification.
+			 */
 			if (btf_is_module(btf)) {
 				mod = btf_try_get_module(btf);
 				if (!mod)
 					return -ENOENT;
 			}
 			addr = 0;
-		} else if (tgt_prog) {
-			if (subprog == 0)
-				addr = (long) tgt_prog->bpf_func;
-			else
-				addr = (long) tgt_prog->aux->func[subprog]->bpf_func;
 		} else {
 			if (btf_is_module(btf)) {
 				mod = btf_try_get_module(btf);

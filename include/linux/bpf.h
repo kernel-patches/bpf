@@ -1517,6 +1517,7 @@ void bpf_trampoline_put(struct bpf_trampoline *tr);
 int arch_prepare_bpf_dispatcher(void *image, void *buf, s64 *funcs, int num_funcs);
 
 int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
+				u64 *keys, struct bpf_prog **progs,
 				struct bpf_tracing_multi_link *link);
 int bpf_trampoline_multi_detach(struct bpf_prog *prog,
 				struct bpf_tracing_multi_link *link);
@@ -1635,6 +1636,7 @@ static inline bool bpf_prog_has_trampoline(const struct bpf_prog *prog)
 	return false;
 }
 static inline int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
+					      u64 *keys, struct bpf_prog **progs,
 					      struct bpf_tracing_multi_link *link)
 {
 	return -ENOTSUPP;
@@ -2002,6 +2004,7 @@ struct bpf_tracing_multi_link {
 	struct bpf_tracing_multi_data data;
 	u64 *cookies;
 	struct bpf_tramp_node *fexits;
+	struct bpf_prog **progs;
 	int nodes_cnt;
 	struct bpf_tracing_multi_node nodes[] __counted_by(nodes_cnt);
 };

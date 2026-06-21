@@ -1888,6 +1888,8 @@ union bpf_attr {
 				__aligned_u64	ids;
 				__aligned_u64	cookies;
 				__u32		cnt;
+				__u32		:32;
+				__aligned_u64	fds;
 			} tracing_multi;
 		};
 	} link_create;

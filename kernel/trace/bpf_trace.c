@@ -3682,12 +3682,15 @@ __bpf_kfunc_end_defs();
 #if defined(CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS) && \
     defined(CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS)
 
+static void bpf_put_progs(struct bpf_prog **progs, int cnt);
+
 static void bpf_tracing_multi_link_release(struct bpf_link *link)
 {
 	struct bpf_tracing_multi_link *tr_link =
 		container_of(link, struct bpf_tracing_multi_link, link);
 
 	WARN_ON_ONCE(bpf_trampoline_multi_detach(link->prog, tr_link));
+	bpf_put_progs(tr_link->progs, tr_link->nodes_cnt);
 }
 
 static void bpf_tracing_multi_link_dealloc(struct bpf_link *link)
@@ -3695,6 +3698,7 @@ static void bpf_tracing_multi_link_dealloc(struct bpf_link *link)
 	struct bpf_tracing_multi_link *tr_link =
 		container_of(link, struct bpf_tracing_multi_link, link);
 
+	kvfree(tr_link->progs);
 	kvfree(tr_link->fexits);
 	kvfree(tr_link->cookies);
 	kvfree(tr_link);
@@ -3790,64 +3794,128 @@ static const struct bpf_link_ops bpf_tracing_multi_link_lops = {
 #endif
 };
 
-static int ids_cmp_r(const void *pa, const void *pb, const void *priv __maybe_unused)
-{
-	u32 a = *(u32 *) pa;
-	u32 b = *(u32 *) pb;
+struct tracing_multi_sort_data {
+	u64 *keys;
+	struct bpf_prog **progs;
+	u32 *ids;
+	u64 *cookies;
+};
 
-	return (a > b) - (a < b);
+static int keys_cmp_r(const void *pa, const void *pb, const void *priv __maybe_unused)
+{
+	const u64 *key_a = pa, *key_b = pb;
+
+	return (*key_a > *key_b) - (*key_a < *key_b);
 }
 
-static void ids_swap_r(void *a, void *b, int size __maybe_unused,
-		       const void *priv __maybe_unused)
+static void keys_swap_r(void *a, void *b, int size __maybe_unused,
+			const void *priv __maybe_unused)
 {
+	const struct tracing_multi_sort_data *data = priv;
+	struct bpf_prog **prog_a, **prog_b;
 	u64 *cookie_a, *cookie_b, *cookies;
-	u32 *id_a = a, *id_b = b, *ids;
-	void **data = (void **) priv;
+	u64 *key_a = a, *key_b = b, *keys;
+	u32 *id_a, *id_b, *ids;
 
-	ids     = data[0];
-	cookies = data[1];
+	keys    = data->keys;
+	ids     = data->ids;
+	cookies = data->cookies;
+	id_a    = ids + (key_a - keys);
+	id_b    = ids + (key_b - keys);
+
+	if (data->progs) {
+		prog_a = data->progs + (key_a - keys);
+		prog_b = data->progs + (key_b - keys);
+		swap(*prog_a, *prog_b);
+	}
 
 	if (cookies) {
 		cookie_a = cookies + (id_a - ids);
 		cookie_b = cookies + (id_b - ids);
 		swap(*cookie_a, *cookie_b);
 	}
+
 	swap(*id_a, *id_b);
+	swap(*key_a, *key_b);
 }
 
-static int check_dup_ids(u32 *ids, u64 *cookies, u32 cnt)
+static int check_dup_keys(u64 *keys, struct bpf_prog **progs, u32 *ids,
+			  u64 *cookies, u32 cnt)
 {
-	void *data[2] = { ids, cookies };
-	int err = 0;
+	struct tracing_multi_sort_data data = {
+		.keys = keys,
+		.progs = progs,
+		.ids = ids,
+		.cookies = cookies,
+	};
 
 	/*
-	 * Sort ids array (together with cookies array if defined)
-	 * and check it for duplicates. The ids and cookies arrays
-	 * are left sorted.
+	 * Sort trampoline keys together with target programs, ids, and cookies,
+	 * then check for duplicates. The arrays are left sorted.
 	 */
-	sort_r_nonatomic(ids, cnt, sizeof(ids[0]), ids_cmp_r, ids_swap_r, data);
+	sort_r_nonatomic(keys, cnt, sizeof(keys[0]), keys_cmp_r, keys_swap_r, &data);
 
-	for (int i = 1; i < cnt; i++) {
-		if (ids[i] == ids[i - 1]) {
+	for (int i = 1; i < cnt; i++)
+		if (keys[i] == keys[i - 1])
+			return -EINVAL;
+
+	return 0;
+}
+
+static void bpf_put_progs(struct bpf_prog **progs, int cnt)
+{
+	int i;
+
+	if (!progs)
+		return;
+
+	for (i = 0; i < cnt; i++)
+		bpf_prog_put(progs[i]);
+}
+
+static int bpf_get_progs(struct bpf_prog **progs, int *fds, int cnt)
+{
+	int err, i, put_cnt = 0;
+	struct bpf_prog *prog;
+
+	for (i = 0; i < cnt; i++) {
+		prog = bpf_prog_get(fds[i]);
+		if (IS_ERR(prog)) {
+			err = PTR_ERR(prog);
+			goto error;
+		}
+
+		progs[i] = prog;
+		put_cnt++;
+
+		if (is_tracing_multi(prog->expected_attach_type)) {
 			err = -EINVAL;
-			break;
+			goto error;
 		}
 	}
+	return 0;
+
+error:
+	bpf_put_progs(progs, put_cnt);
 	return err;
 }
 
 int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
 {
 	struct bpf_tracing_multi_link *link = NULL;
+	struct btf *btf = prog->aux->attach_btf;
 	struct bpf_tramp_node *fexits = NULL;
 	struct bpf_link_primer link_primer;
+	u64 *cookies = NULL, *keys = NULL;
+	struct bpf_prog **progs = NULL;
 	u32 cnt, *ids = NULL;
 	u64 __user *ucookies;
-	u64 *cookies = NULL;
 	u32 __user *uids;
+	int __user *ufds;
+	int *fds = NULL;
 	int err;
 
+	ufds = u64_to_user_ptr(attr->link_create.tracing_multi.fds);
 	uids = u64_to_user_ptr(attr->link_create.tracing_multi.ids);
 	cnt = attr->link_create.tracing_multi.cnt;
 
@@ -3867,6 +3935,32 @@ int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
 		goto error;
 	}
 
+	if (ufds) {
+		fds = kvmalloc_objs(*fds, cnt);
+		if (!fds) {
+			err = -ENOMEM;
+			goto error;
+		}
+
+		if (copy_from_user(fds, ufds, cnt * sizeof(*fds))) {
+			err = -EFAULT;
+			goto error;
+
+		}
+
+		progs = kvmalloc_objs(*progs, cnt);
+		if (!progs) {
+			err = -ENOMEM;
+			goto error;
+		}
+
+		err = bpf_get_progs(progs, fds, cnt);
+		if (err) {
+			cnt = 0;
+			goto error;
+		}
+	}
+
 	ucookies = u64_to_user_ptr(attr->link_create.tracing_multi.cookies);
 	if (ucookies) {
 		cookies = kvmalloc_objs(*cookies, cnt);
@@ -3880,7 +3974,16 @@ int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
 		}
 	}
 
-	err = check_dup_ids(ids, cookies, cnt);
+	keys = kvmalloc_objs(*keys, cnt);
+	if (!keys) {
+		err = -ENOMEM;
+		goto error;
+	}
+
+	for (int i = 0; i < cnt; i++)
+		keys[i] = bpf_trampoline_compute_key(progs ? progs[i] : NULL, btf, ids[i]);
+
+	err = check_dup_keys(keys, progs, ids, cookies, cnt);
 	if (err)
 		goto error;
 
@@ -3908,19 +4011,27 @@ int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
 	link->nodes_cnt = cnt;
 	link->cookies = cookies;
 	link->fexits = fexits;
+	link->progs = progs;
 
-	err = bpf_trampoline_multi_attach(prog, ids, link);
+	err = bpf_trampoline_multi_attach(prog, ids, keys, progs, link);
 	kvfree(ids);
+	kvfree(keys);
+	kvfree(fds);
 	if (err) {
+		bpf_put_progs(progs, cnt);
 		bpf_link_cleanup(&link_primer);
 		return err;
 	}
 	return bpf_link_settle(&link_primer);
 
 error:
+	bpf_put_progs(progs, cnt);
 	kvfree(fexits);
 	kvfree(cookies);
 	kvfree(ids);
+	kvfree(keys);
+	kvfree(fds);
+	kvfree(progs);
 	kvfree(link);
 	return err;
 }
