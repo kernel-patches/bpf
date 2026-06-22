@@ -12687,10 +12687,12 @@ bpf_program__attach_tracing_multi(const struct bpf_program *prog, const char *pa
 {
 	LIBBPF_OPTS(bpf_link_create_opts, lopts);
 	int prog_fd, link_fd, err, cnt;
+	struct bpf_link *link = NULL;
 	__u32 *free_ids = NULL;
-	struct bpf_link *link;
 	const __u64 *cookies;
+	const char **funcs;
 	const __u32 *ids;
+	const int *fds;
 
 	if (!OPTS_VALID(opts, bpf_tracing_multi_opts))
 		return libbpf_err_ptr(-EINVAL);
@@ -12705,12 +12707,22 @@ bpf_program__attach_tracing_multi(const struct bpf_program *prog, const char *pa
 	cnt = OPTS_GET(opts, cnt, 0);
 	ids = OPTS_GET(opts, ids, NULL);
 	cookies = OPTS_GET(opts, cookies, NULL);
+	fds = OPTS_GET(opts, fds, NULL);
+	funcs = OPTS_GET(opts, funcs, NULL);
 
-	if (!!ids != !!cnt)
+	if (ids && fds)
 		return libbpf_err_ptr(-EINVAL);
-	if (pattern && (ids || cookies))
+	if (!!fds != !!funcs)
 		return libbpf_err_ptr(-EINVAL);
-	if (!pattern && !ids)
+	if (fds && !cnt)
+		return libbpf_err_ptr(-EINVAL);
+	if (ids && !cnt)
+		return libbpf_err_ptr(-EINVAL);
+	if (!fds && !ids && cnt)
+		return libbpf_err_ptr(-EINVAL);
+	if (pattern && (fds || ids || cookies))
+		return libbpf_err_ptr(-EINVAL);
+	if (!pattern && !ids && !fds)
 		return libbpf_err_ptr(-EINVAL);
 
 	if (pattern) {
@@ -12720,11 +12732,28 @@ bpf_program__attach_tracing_multi(const struct bpf_program *prog, const char *pa
 		if (cnt == 0)
 			return libbpf_err_ptr(-EINVAL);
 		ids = (const __u32 *) free_ids;
+	} else if (fds) {
+		size_t cap = 0;
+		int i;
+
+		err = libbpf_ensure_mem((void **) &free_ids, &cap, sizeof(*free_ids), cnt);
+		if (err)
+			return libbpf_err_ptr(err);
+
+		for (i = 0; i < cnt; i++) {
+			err = libbpf_find_prog_btf_id(funcs[i], fds[i], prog->obj->token_fd);
+			if (err < 0)
+				goto error;
+
+			free_ids[i] = err;
+		}
+		ids = (const __u32 *) free_ids;
 	}
 
 	lopts.tracing_multi.ids = ids;
 	lopts.tracing_multi.cookies = cookies;
 	lopts.tracing_multi.cnt = cnt;
+	lopts.tracing_multi.fds = fds;
 
 	link = calloc(1, sizeof(*link));
 	if (!link) {
