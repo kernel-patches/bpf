@@ -852,6 +852,7 @@ int bpf_link_create(int prog_fd, int target_fd,
 		attr.link_create.tracing_multi.ids = ptr_to_u64(OPTS_GET(opts, tracing_multi.ids, 0));
 		attr.link_create.tracing_multi.cookies = ptr_to_u64(OPTS_GET(opts, tracing_multi.cookies, 0));
 		attr.link_create.tracing_multi.cnt = OPTS_GET(opts, tracing_multi.cnt, 0);
+		attr.link_create.tracing_multi.fds = ptr_to_u64(OPTS_GET(opts, tracing_multi.fds, 0));
 		if (!OPTS_ZEROED(opts, tracing_multi))
 			return libbpf_err(-EINVAL);
 		break;

@@ -474,6 +474,8 @@ struct bpf_link_create_opts {
 			const __u32 *ids;
 			const __u64 *cookies;
 			__u32 cnt;
+			__u32 :32;
+			const int *fds;
 		} tracing_multi;
 	};
 	size_t :0;
