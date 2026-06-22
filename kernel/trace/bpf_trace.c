@@ -3759,26 +3759,46 @@ static int bpf_tracing_multi_link_fill_link_info(const struct bpf_link *link,
 }
 
 #ifdef CONFIG_PROC_FS
+static const char *bpf_prog_func_name(struct bpf_prog *prog, u32 btf_id)
+{
+	const struct btf *btf = prog->aux->btf;
+	const struct btf_type *t;
+
+	t = btf_type_by_id(btf, btf_id);
+	if (!t || !btf_type_is_func(t))
+		return "";
+
+	return btf_name_by_offset(btf, t->name_off);
+}
+
 static void bpf_tracing_multi_show_fdinfo(const struct bpf_link *link,
 					  struct seq_file *seq)
 {
 	struct bpf_tracing_multi_link *tr_link =
 		container_of(link, struct bpf_tracing_multi_link, link);
 	bool has_cookies = !!tr_link->cookies;
+	bool has_progs = !!tr_link->progs;
 
 	seq_printf(seq, "attach_type:\t%u\n", tr_link->link.attach_type);
 	seq_printf(seq, "cnt:\t%u\n", tr_link->nodes_cnt);
 
-	seq_printf(seq, "%s\t %s\t %s\t %s\n", "obj-id", "btf-id", "cookie", "func");
+	seq_printf(seq, "%s\t %s\t %s\t %s\n", has_progs ? "prog-id" : "obj-id", "btf-id", "cookie",
+		   "func");
 	for (int i = 0; i < tr_link->nodes_cnt; i++) {
 		struct bpf_tracing_multi_node *mnode = &tr_link->nodes[i];
+		u64 cookie = has_cookies ? tr_link->cookies[i] : 0;
 		u32 btf_id, obj_id;
 
 		bpf_trampoline_unpack_key(mnode->trampoline->key, &obj_id, &btf_id);
-		seq_printf(seq, "%u\t %u\t %llu\t %pS\n",
-			   obj_id, btf_id,
-			   has_cookies ? tr_link->cookies[i] : 0,
-			   (void *) mnode->trampoline->ip);
+		btf_id = has_progs ? (u32) mnode->trampoline->key : btf_id;
+		if (has_progs)
+			seq_printf(seq, "%u\t %u\t %llu\t %s\n",
+				   obj_id, btf_id, cookie,
+				   bpf_prog_func_name(tr_link->progs[i], btf_id));
+		else
+			seq_printf(seq, "%u\t %u\t %llu\t %pS\n",
+				   obj_id, btf_id, cookie,
+				   (void *) mnode->trampoline->ip);
 
 		cond_resched();
 	}
