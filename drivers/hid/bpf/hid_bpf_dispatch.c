@@ -299,7 +299,8 @@ hid_bpf_get_data(struct hid_bpf_ctx *ctx, unsigned int offset, const size_t rdwr
 
 	ctx_kern = container_of(ctx, struct hid_bpf_ctx_kern, ctx);
 
-	if (rdwr_buf_size + offset > ctx->allocated_size)
+	if (offset > ctx->allocated_size ||
+	    rdwr_buf_size > ctx->allocated_size - offset)
 		return NULL;
 
 	return ctx_kern->data + offset;
