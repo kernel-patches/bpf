@@ -7,6 +7,7 @@
 #include <linux/stddef.h>
 #include <linux/poison.h>
 #include <linux/const.h>
+#include <linux/args.h>
 
 #include <asm/barrier.h>
 
@@ -763,27 +764,71 @@ static inline void list_splice_tail_init(struct list_head *list,
 #define list_for_each_prev(pos, head) \
 	for (pos = (head)->prev; !list_is_head(pos, (head)); pos = pos->prev)
 
-/**
- * list_for_each_safe - iterate over a list safe against removal of list entry
- * @pos:	the &struct list_head to use as a loop cursor.
- * @n:		another &struct list_head to use as temporary storage
- * @head:	the head for your list.
+/*
+ * list_for_each_safe is an old interface, use list_for_each_mutable instead.
  */
 #define list_for_each_safe(pos, n, head) \
 	for (pos = (head)->next, n = pos->next; \
 	     !list_is_head(pos, (head)); \
 	     pos = n, n = pos->next)
 
+#define __list_for_each_mutable_internal(pos, tmp, head)		\
+	for (typeof(pos) tmp = (pos = (head)->next)->next;		\
+	     !list_is_head(pos, (head));				\
+	     pos = tmp, tmp = pos->next)
+
+#define __list_for_each_mutable1(pos, head)				\
+	__list_for_each_mutable_internal(pos, __UNIQUE_ID(next), head)
+
+#define __list_for_each_mutable2(pos, next, head)			\
+	list_for_each_safe(pos, next, head)
+
 /**
- * list_for_each_prev_safe - iterate over a list backwards safe against removal of list entry
+ * list_for_each_mutable - iterate over a list safe against entry removal
  * @pos:	the &struct list_head to use as a loop cursor.
- * @n:		another &struct list_head to use as temporary storage
- * @head:	the head for your list.
+ * @...:	either (head) or (next, head)
+ *
+ * next:	another &struct list_head to use as optional temporary storage.
+ *		The temporary cursor is internal unless explicitly supplied by
+ *		the caller.
+ * head:	the head for your list.
+ */
+#define list_for_each_mutable(pos, ...)					\
+	CONCATENATE(__list_for_each_mutable, COUNT_ARGS(__VA_ARGS__))	\
+		(pos, __VA_ARGS__)
+
+/*
+ * list_for_each_prev_safe is an old interface, use list_for_each_prev_mutable instead.
  */
 #define list_for_each_prev_safe(pos, n, head) \
 	for (pos = (head)->prev, n = pos->prev; \
 	     !list_is_head(pos, (head)); \
 	     pos = n, n = pos->prev)
+
+#define __list_for_each_prev_mutable_internal(pos, tmp, head)		\
+	for (typeof(pos) tmp = (pos = (head)->prev)->prev;		\
+	     !list_is_head(pos, (head));				\
+	     pos = tmp, tmp = pos->prev)
+
+#define __list_for_each_prev_mutable1(pos, head)			\
+	__list_for_each_prev_mutable_internal(pos, __UNIQUE_ID(prev), head)
+
+#define __list_for_each_prev_mutable2(pos, prev, head)			\
+	list_for_each_prev_safe(pos, prev, head)
+
+/**
+ * list_for_each_prev_mutable - iterate over a list backwards safe against entry removal
+ * @pos:	the &struct list_head to use as a loop cursor.
+ * @...:	either (head) or (prev, head)
+ *
+ * prev:	another &struct list_head to use as optional temporary storage.
+ *		The temporary cursor is internal unless explicitly supplied by
+ *		the caller.
+ * head:	the head for your list.
+ */
+#define list_for_each_prev_mutable(pos, ...)				\
+	CONCATENATE(__list_for_each_prev_mutable, COUNT_ARGS(__VA_ARGS__)) \
+		(pos, __VA_ARGS__)
 
 /**
  * list_count_nodes - count nodes in the list
@@ -895,12 +940,8 @@ static inline size_t list_count_nodes(struct list_head *head)
 	for (; !list_entry_is_head(pos, head, member);			\
 	     pos = list_prev_entry(pos, member))
 
-/**
- * list_for_each_entry_safe - iterate over list of given type safe against removal of list entry
- * @pos:	the type * to use as a loop cursor.
- * @n:		another type * to use as temporary storage
- * @head:	the head for your list.
- * @member:	the name of the list_head within the struct.
+/*
+ * list_for_each_entry_safe is an old interface, use list_for_each_entry_mutable instead.
  */
 #define list_for_each_entry_safe(pos, n, head, member)			\
 	for (pos = list_first_entry(head, typeof(*pos), member),	\
@@ -908,15 +949,36 @@ static inline size_t list_count_nodes(struct list_head *head)
 	     !list_entry_is_head(pos, head, member); 			\
 	     pos = n, n = list_next_entry(n, member))
 
+#define __list_for_each_entry_mutable_internal(pos, tmp, head, member)	\
+	for (typeof(pos) tmp = list_next_entry(pos =			\
+		list_first_entry(head, typeof(*pos), member), member);	\
+	     !list_entry_is_head(pos, head, member);			\
+	     pos = tmp, tmp = list_next_entry(tmp, member))
+
+#define __list_for_each_entry_mutable2(pos, head, member)		\
+	__list_for_each_entry_mutable_internal(pos, __UNIQUE_ID(next), head, member)
+
+#define __list_for_each_entry_mutable3(pos, next, head, member)		\
+	list_for_each_entry_safe(pos, next, head, member)
+
 /**
- * list_for_each_entry_safe_continue - continue list iteration safe against removal
+ * list_for_each_entry_mutable - iterate over a list safe against entry removal
  * @pos:	the type * to use as a loop cursor.
- * @n:		another type * to use as temporary storage
- * @head:	the head for your list.
- * @member:	the name of the list_head within the struct.
+ * @...:	either (head, member) or (next, head, member)
  *
- * Iterate over list of given type, continuing after current point,
- * safe against removal of list entry.
+ * next:	another type * to use as optional temporary storage. The
+ *		temporary cursor is internal unless explicitly supplied by the
+ *		caller.
+ * head:	the head for your list.
+ * member:	the name of the list_head within the struct.
+ */
+#define list_for_each_entry_mutable(pos, ...)				\
+	CONCATENATE(__list_for_each_entry_mutable, COUNT_ARGS(__VA_ARGS__)) \
+		(pos, __VA_ARGS__)
+
+/*
+ * list_for_each_entry_safe_continue is an old interface,
+ * use list_for_each_entry_mutable_continue instead.
  */
 #define list_for_each_entry_safe_continue(pos, n, head, member) 		\
 	for (pos = list_next_entry(pos, member), 				\
@@ -924,36 +986,116 @@ static inline size_t list_count_nodes(struct list_head *head)
 	     !list_entry_is_head(pos, head, member);				\
 	     pos = n, n = list_next_entry(n, member))
 
+#define __list_for_each_entry_mutable_continue_internal(pos, tmp, head, member) \
+	for (typeof(pos) tmp = list_next_entry(pos =			\
+		list_next_entry(pos, member), member);			\
+	     !list_entry_is_head(pos, head, member);			\
+	     pos = tmp, tmp = list_next_entry(tmp, member))
+
+#define __list_for_each_entry_mutable_continue2(pos, head, member)	\
+	__list_for_each_entry_mutable_continue_internal(pos,		\
+		__UNIQUE_ID(next), head, member)
+
+#define __list_for_each_entry_mutable_continue3(pos, next, head, member) \
+	list_for_each_entry_safe_continue(pos, next, head, member)
+
 /**
- * list_for_each_entry_safe_from - iterate over list from current point safe against removal
+ * list_for_each_entry_mutable_continue - continue list iteration safe against removal
  * @pos:	the type * to use as a loop cursor.
- * @n:		another type * to use as temporary storage
- * @head:	the head for your list.
- * @member:	the name of the list_head within the struct.
+ * @...:	either (head, member) or (next, head, member)
  *
- * Iterate over list of given type from current point, safe against
- * removal of list entry.
+ * next:	another type * to use as optional temporary storage. The
+ *		temporary cursor is internal unless explicitly supplied by the
+ *		caller.
+ * head:	the head for your list.
+ * member:	the name of the list_head within the struct.
+ *
+ * Iterate over list of given type, continuing after current point,
+ * safe against removal of list entry.
+ */
+#define list_for_each_entry_mutable_continue(pos, ...)			\
+	CONCATENATE(__list_for_each_entry_mutable_continue,		\
+		COUNT_ARGS(__VA_ARGS__))(pos, __VA_ARGS__)
+
+/*
+ * list_for_each_entry_safe_from is an old interface,
+ * use list_for_each_entry_mutable_from instead.
  */
 #define list_for_each_entry_safe_from(pos, n, head, member) 			\
 	for (n = list_next_entry(pos, member);					\
 	     !list_entry_is_head(pos, head, member);				\
 	     pos = n, n = list_next_entry(n, member))
 
+#define __list_for_each_entry_mutable_from_internal(pos, tmp, head, member) \
+	for (typeof(pos) tmp = list_next_entry(pos, member);		\
+	     !list_entry_is_head(pos, head, member);			\
+	     pos = tmp, tmp = list_next_entry(tmp, member))
+
+#define __list_for_each_entry_mutable_from2(pos, head, member)		\
+	__list_for_each_entry_mutable_from_internal(pos,		\
+		__UNIQUE_ID(next), head, member)
+
+#define __list_for_each_entry_mutable_from3(pos, next, head, member)	\
+	list_for_each_entry_safe_from(pos, next, head, member)
+
 /**
- * list_for_each_entry_safe_reverse - iterate backwards over list safe against removal
+ * list_for_each_entry_mutable_from - iterate over list from current point safe against removal
  * @pos:	the type * to use as a loop cursor.
- * @n:		another type * to use as temporary storage
- * @head:	the head for your list.
- * @member:	the name of the list_head within the struct.
+ * @...:	either (head, member) or (next, head, member)
  *
- * Iterate backwards over list of given type, safe against removal
- * of list entry.
+ * next:	another type * to use as optional temporary storage. The
+ *		temporary cursor is internal unless explicitly supplied by the
+ *		caller.
+ * head:	the head for your list.
+ * member:	the name of the list_head within the struct.
+ *
+ * Iterate over list of given type from current point, safe against
+ * removal of list entry.
+ */
+#define list_for_each_entry_mutable_from(pos, ...)			\
+	CONCATENATE(__list_for_each_entry_mutable_from,			\
+		COUNT_ARGS(__VA_ARGS__))(pos, __VA_ARGS__)
+
+/*
+ * list_for_each_entry_safe_reverse is an old interface,
+ * use list_for_each_entry_mutable_reverse instead.
  */
 #define list_for_each_entry_safe_reverse(pos, n, head, member)		\
 	for (pos = list_last_entry(head, typeof(*pos), member),		\
 		n = list_prev_entry(pos, member);			\
 	     !list_entry_is_head(pos, head, member); 			\
 	     pos = n, n = list_prev_entry(n, member))
+
+#define __list_for_each_entry_mutable_reverse_internal(pos, tmp, head, member) \
+	for (typeof(pos) tmp = list_prev_entry(pos =			\
+		list_last_entry(head, typeof(*pos), member), member);	\
+	     !list_entry_is_head(pos, head, member);			\
+	     pos = tmp, tmp = list_prev_entry(tmp, member))
+
+#define __list_for_each_entry_mutable_reverse2(pos, head, member)	\
+	__list_for_each_entry_mutable_reverse_internal(pos,		\
+		__UNIQUE_ID(prev), head, member)
+
+#define __list_for_each_entry_mutable_reverse3(pos, prev, head, member)	\
+	list_for_each_entry_safe_reverse(pos, prev, head, member)
+
+/**
+ * list_for_each_entry_mutable_reverse - iterate backwards over list safe against removal
+ * @pos:	the type * to use as a loop cursor.
+ * @...:	either (head, member) or (prev, head, member)
+ *
+ * prev:	another type * to use as optional temporary storage. The
+ *		temporary cursor is internal unless explicitly supplied by the
+ *		caller.
+ * head:	the head for your list.
+ * member:	the name of the list_head within the struct.
+ *
+ * Iterate backwards over list of given type, safe against removal
+ * of list entry.
+ */
+#define list_for_each_entry_mutable_reverse(pos, ...)			\
+	CONCATENATE(__list_for_each_entry_mutable_reverse,		\
+		COUNT_ARGS(__VA_ARGS__))(pos, __VA_ARGS__)
 
 /**
  * list_safe_reset_next - reset a stale list_for_each_entry_safe loop
@@ -1189,6 +1331,31 @@ static inline void hlist_splice_init(struct hlist_head *from,
 	for (pos = (head)->first; pos && ({ n = pos->next; 1; }); \
 	     pos = n)
 
+#define __hlist_for_each_mutable_internal(pos, tmp, head)		\
+	for (typeof(pos) tmp = (pos = (head)->first) ? pos->next : NULL; \
+	     pos;							\
+	     pos = tmp, tmp = pos ? pos->next : NULL)
+
+#define __hlist_for_each_mutable1(pos, head)				\
+	__hlist_for_each_mutable_internal(pos, __UNIQUE_ID(next), head)
+
+#define __hlist_for_each_mutable2(pos, next, head)			\
+	hlist_for_each_safe(pos, next, head)
+
+/**
+ * hlist_for_each_mutable - iterate over a hlist safe against entry removal
+ * @pos:	the &struct hlist_node to use as a loop cursor.
+ * @...:	either (head) or (next, head)
+ *
+ * next:	another &struct hlist_node to use as optional temporary storage.
+ *		The temporary cursor is internal unless explicitly supplied by
+ *		the caller.
+ * head:	the head for your hlist.
+ */
+#define hlist_for_each_mutable(pos, ...)				\
+	CONCATENATE(__hlist_for_each_mutable, COUNT_ARGS(__VA_ARGS__))	\
+		(pos, __VA_ARGS__)
+
 #define hlist_entry_safe(ptr, type, member) \
 	({ typeof(ptr) ____ptr = (ptr); \
 	   ____ptr ? hlist_entry(____ptr, type, member) : NULL; \
@@ -1224,17 +1391,43 @@ static inline void hlist_splice_init(struct hlist_head *from,
 	for (; pos;							\
 	     pos = hlist_entry_safe((pos)->member.next, typeof(*(pos)), member))
 
-/**
- * hlist_for_each_entry_safe - iterate over list of given type safe against removal of list entry
- * @pos:	the type * to use as a loop cursor.
- * @n:		a &struct hlist_node to use as temporary storage
- * @head:	the head for your list.
- * @member:	the name of the hlist_node within the struct.
+/*
+ * hlist_for_each_entry_safe is an old interface, use hlist_for_each_entry_mutable instead.
  */
 #define hlist_for_each_entry_safe(pos, n, head, member) 		\
 	for (pos = hlist_entry_safe((head)->first, typeof(*pos), member);\
 	     pos && ({ n = pos->member.next; 1; });			\
 	     pos = hlist_entry_safe(n, typeof(*pos), member))
+
+#define __hlist_for_each_entry_mutable_internal(pos, tmp, head, member)	\
+	for (struct hlist_node *tmp = (pos =				\
+		hlist_entry_safe((head)->first, typeof(*pos), member)) ? \
+		pos->member.next : NULL;				\
+	     pos;							\
+	     pos = hlist_entry_safe((tmp), typeof(*pos), member),	\
+		tmp = pos ? pos->member.next : NULL)
+
+#define __hlist_for_each_entry_mutable2(pos, head, member)		\
+	__hlist_for_each_entry_mutable_internal(pos,			\
+		__UNIQUE_ID(next), head, member)
+
+#define __hlist_for_each_entry_mutable3(pos, next, head, member)	\
+	hlist_for_each_entry_safe(pos, next, head, member)
+
+/**
+ * hlist_for_each_entry_mutable - iterate over hlist safe against entry removal
+ * @pos:	the type * to use as a loop cursor.
+ * @...:	either (head, member) or (next, head, member)
+ *
+ * next:	a &struct hlist_node to use as optional temporary storage. The
+ *		temporary cursor is internal unless explicitly supplied by the
+ *		caller.
+ * head:	the head for your hlist.
+ * member:	the name of the hlist_node within the struct.
+ */
+#define hlist_for_each_entry_mutable(pos, ...)				\
+	CONCATENATE(__hlist_for_each_entry_mutable,			\
+		COUNT_ARGS(__VA_ARGS__))(pos, __VA_ARGS__)
 
 /**
  * hlist_count_nodes - count nodes in the hlist
