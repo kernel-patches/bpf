@@ -10955,6 +10955,30 @@ static bool __btf_type_is_scalar_struct(struct bpf_verifier_env *env,
 	return true;
 }
 
+static bool btf_type_has_trailing_flex_array(const struct btf *btf,
+					     const struct btf_type *t)
+{
+	const struct btf_type *member_type;
+	const struct btf_member *member;
+	const struct btf_array *array;
+	u32 vlen;
+
+	if (!btf_type_is_struct(t))
+		return false;
+
+	vlen = btf_type_vlen(t);
+	if (!vlen)
+		return false;
+
+	member = btf_type_member(t) + vlen - 1;
+	member_type = btf_type_skip_modifiers(btf, member->type, NULL);
+	if (!btf_type_is_array(member_type))
+		return false;
+
+	array = btf_array(member_type);
+	return !array->nelems;
+}
+
 enum kfunc_ptr_arg_type {
 	KF_ARG_PTR_TO_CTX,
 	KF_ARG_PTR_TO_ALLOC_BTF_ID,    /* Allocated object */
@@ -12747,6 +12771,10 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_ca
 		ret_t = btf_type_by_id(ret_btf, ret_btf_id);
 		if (!ret_t || !__btf_type_is_struct(ret_t)) {
 			verbose(env, "bpf_obj_new/bpf_percpu_obj_new type ID argument must be of a struct\n");
+			return -EINVAL;
+		}
+		if (btf_type_has_trailing_flex_array(ret_btf, ret_t)) {
+			verbose(env, "bpf_obj_new type must not contain a flexible array\n");
 			return -EINVAL;
 		}
 
