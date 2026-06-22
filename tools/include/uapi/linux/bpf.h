@@ -1397,7 +1397,7 @@ enum bpf_addr_space_cast {
 	BPF_ADDR_SPACE_CAST = 1,
 };
 
-/* flags for BPF_MAP_UPDATE_ELEM command */
+/* flags for BPF_MAP_UPDATE_ELEM / BPF_MAP_DELETE_ELEM commands */
 enum {
 	BPF_ANY		= 0, /* create new element or update existing */
 	BPF_NOEXIST	= 1, /* create new element if it didn't exist */
@@ -1405,6 +1405,7 @@ enum {
 	BPF_F_LOCK	= 4, /* spin_lock-ed map_lookup/map_update */
 	BPF_F_CPU	= 8, /* cpu flag for percpu maps, upper 32-bit of flags is a cpu number */
 	BPF_F_ALL_CPUS	= 16, /* update value across all CPUs for percpu maps */
+	BPF_F_COMPARE	= 32, /* compare-and-delete: delete elem only if value region == compare */
 };
 
 /* flags for BPF_MAP_CREATE command */
@@ -1586,6 +1587,9 @@ union bpf_attr {
 			__aligned_u64 next_key;
 		};
 		__u64		flags;
+		__aligned_u64	compare;	/* user ptr to expected bytes (BPF_F_COMPARE) */
+		__u32		compare_offset;	/* start offset within value */
+		__u32		compare_size;	/* bytes to compare; 0 == whole value */
 	};
 
 	struct { /* struct used by BPF_MAP_*_BATCH commands */
