@@ -2620,6 +2620,7 @@ struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env, struct 
 		goto finalize;
 
 	if (IS_ENABLED(CONFIG_BPF_JIT_ALWAYS_ON) ||
+	    fp->aux->has_addr_space_cast_insn ||
 	    bpf_prog_has_kfunc_call(fp))
 		jit_needed = true;
 
