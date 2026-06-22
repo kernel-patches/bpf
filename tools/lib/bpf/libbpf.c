@@ -8309,19 +8309,25 @@ static int bpf_program_record_relos(struct bpf_program *prog)
 		struct reloc_desc *relo = &prog->reloc_desc[i];
 		struct extern_desc *ext = &obj->externs[relo->ext_idx];
 		int kind;
+		const char *name;
 
 		switch (relo->type) {
 		case RELO_EXTERN_LD64:
 			if (ext->type != EXT_KSYM)
 				continue;
-			kind = btf_is_var(btf__type_by_id(obj->btf, ext->btf_id)) ?
-				BTF_KIND_VAR : BTF_KIND_FUNC;
-			bpf_gen__record_extern(obj->gen_loader, ext->name,
+			if (btf_is_var(btf__type_by_id(obj->btf, ext->btf_id))) {
+				kind = BTF_KIND_VAR;
+				name = ext->name;
+			} else {
+				kind = BTF_KIND_FUNC;
+				name = ext->essent_name ?: ext->name;
+			}
+			bpf_gen__record_extern(obj->gen_loader, name,
 					       ext->is_weak, !ext->ksym.type_id,
 					       true, kind, relo->insn_idx);
 			break;
 		case RELO_EXTERN_CALL:
-			bpf_gen__record_extern(obj->gen_loader, ext->name,
+			bpf_gen__record_extern(obj->gen_loader, ext->essent_name ?: ext->name,
 					       ext->is_weak, false, false, BTF_KIND_FUNC,
 					       relo->insn_idx);
 			break;
