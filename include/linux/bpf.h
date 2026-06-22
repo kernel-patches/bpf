@@ -110,6 +110,8 @@ struct bpf_map_ops {
 	void *(*map_lookup_elem)(struct bpf_map *map, void *key);
 	long (*map_update_elem)(struct bpf_map *map, void *key, void *value, u64 flags);
 	long (*map_delete_elem)(struct bpf_map *map, void *key);
+	long (*map_delete_elem_cmp)(struct bpf_map *map, void *key,
+				    const void *compare, u32 off, u32 size);
 	long (*map_push_elem)(struct bpf_map *map, void *value, u64 flags);
 	long (*map_pop_elem)(struct bpf_map *map, void *value);
 	long (*map_peek_elem)(struct bpf_map *map, void *value);

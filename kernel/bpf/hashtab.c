@@ -1534,6 +1534,44 @@ static long htab_map_delete_elem(struct bpf_map *map, void *key)
 	return ret;
 }
 
+static long htab_map_delete_elem_cmp(struct bpf_map *map, void *key,
+				     const void *compare, u32 off, u32 size)
+{
+	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
+	struct hlist_nulls_head *head;
+	struct bucket *b;
+	struct htab_elem *l;
+	unsigned long flags;
+	u32 hash, key_size;
+	int ret;
+
+	WARN_ON_ONCE(!bpf_rcu_lock_held());
+
+	key_size = map->key_size;
+
+	hash = htab_map_hash(key, key_size, htab->hashrnd);
+	b = __select_bucket(htab, hash);
+	head = &b->head;
+
+	ret = htab_lock_bucket(b, &flags);
+	if (ret)
+		return ret;
+
+	l = lookup_elem_raw(head, hash, key, key_size);
+	if (!l)
+		ret = -ENOENT;
+	else if (memcmp(htab_elem_value(l, key_size) + off, compare, size) != 0)
+		ret = -EBUSY;
+	else
+		hlist_nulls_del_rcu(&l->hash_node);
+
+	htab_unlock_bucket(b, flags);
+
+	if (!ret)
+		free_htab_elem(htab, l);	/* ret==0 implies we unlinked l */
+	return ret;
+}
+
 static long htab_lru_map_delete_elem(struct bpf_map *map, void *key)
 {
 	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
@@ -2366,6 +2404,7 @@ const struct bpf_map_ops htab_map_ops = {
 	.map_lookup_and_delete_elem = htab_map_lookup_and_delete_elem,
 	.map_update_elem = htab_map_update_elem,
 	.map_delete_elem = htab_map_delete_elem,
+	.map_delete_elem_cmp = htab_map_delete_elem_cmp,
 	.map_gen_lookup = htab_map_gen_lookup,
 	.map_seq_show_elem = htab_map_seq_show_elem,
 	.map_set_for_each_callback_args = map_set_for_each_callback_args,

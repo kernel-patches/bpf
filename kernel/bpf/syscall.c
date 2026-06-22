@@ -1892,16 +1892,28 @@ err_put:
 	return err;
 }
 
-#define BPF_MAP_DELETE_ELEM_LAST_FIELD key
+#define BPF_MAP_DELETE_ELEM_LAST_FIELD compare_size
 
 static int map_delete_elem(union bpf_attr *attr, bpfptr_t uattr)
 {
 	bpfptr_t ukey = make_bpfptr(attr->key, uattr.is_kernel);
 	struct bpf_map *map;
-	void *key;
+	void *key, *compare = NULL;
+	u32 off = 0, size = 0;
 	int err;
 
 	if (CHECK_ATTR(BPF_MAP_DELETE_ELEM))
+		return -EINVAL;
+
+	if (attr->flags & ~BPF_F_COMPARE)
+		return -EINVAL;
+
+	/* The compare* fields are meaningful only with BPF_F_COMPARE.  Reject them
+	 * when the flag is absent so a dropped BPF_F_COMPARE cannot silently turn a
+	 * compare-and-delete into an unconditional delete.
+	 */
+	if (!(attr->flags & BPF_F_COMPARE) &&
+	    (attr->compare || attr->compare_offset || attr->compare_size))
 		return -EINVAL;
 
 	CLASS(fd, f)(attr->map_fd);
@@ -1920,6 +1932,38 @@ static int map_delete_elem(union bpf_attr *attr, bpfptr_t uattr)
 		goto err_put;
 	}
 
+	if (attr->flags & BPF_F_COMPARE) {
+		bpfptr_t ucmp = make_bpfptr(attr->compare, uattr.is_kernel);
+
+		off = attr->compare_offset;
+		size = attr->compare_size ?: map->value_size;
+		/* off + size must fit in value_size, overflow-safe */
+		if (size > map->value_size || off > map->value_size - size) {
+			err = -EINVAL;
+			goto out;
+		}
+		if (!map->ops->map_delete_elem_cmp) {
+			err = -EOPNOTSUPP;
+			goto out;
+		}
+		/* Compare-and-delete reads the raw stored value.  Maps whose value carries
+		 * BTF-managed fields (bpf_spin_lock, bpf_timer, kptr, ...) have
+		 * those bytes sanitised on lookup, so a raw compare would never
+		 * match the caller's snapshot and could expose kernel-internal
+		 * bytes.  Reject such maps for now.
+		 */
+		if (!IS_ERR_OR_NULL(map->record)) {
+			err = -EOPNOTSUPP;
+			goto out;
+		}
+		compare = kvmemdup_bpfptr(ucmp, size);
+		if (IS_ERR(compare)) {
+			err = PTR_ERR(compare);
+			compare = NULL;
+			goto out;
+		}
+	}
+
 	if (bpf_map_is_offloaded(map)) {
 		err = bpf_map_offload_delete_elem(map, key);
 		goto out;
@@ -1932,12 +1976,16 @@ static int map_delete_elem(union bpf_attr *attr, bpfptr_t uattr)
 
 	bpf_disable_instrumentation();
 	rcu_read_lock();
-	err = map->ops->map_delete_elem(map, key);
+	if (compare)
+		err = map->ops->map_delete_elem_cmp(map, key, compare, off, size);
+	else
+		err = map->ops->map_delete_elem(map, key);
 	rcu_read_unlock();
 	bpf_enable_instrumentation();
 	if (!err)
 		maybe_wait_bpf_programs(map);
 out:
+	kvfree(compare);
 	kvfree(key);
 err_put:
 	bpf_map_write_active_dec(map);
