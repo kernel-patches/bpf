@@ -21,6 +21,15 @@ static __u32 map_info_alloc_len;
 static struct btf *btf_vmlinux;
 static __s32 map_info_type_id;
 
+static void free_btf_vmlinux(void)
+{
+	btf__free(btf_vmlinux);
+	btf_vmlinux = NULL;
+	map_info_type = NULL;
+	map_info_alloc_len = 0;
+	map_info_type_id = 0;
+}
+
 struct res {
 	unsigned int nr_maps;
 	unsigned int nr_errs;
@@ -642,7 +651,7 @@ int do_struct_ops(int argc, char **argv)
 
 	err = cmd_select(cmds, argc, argv, do_help);
 
-	btf__free(btf_vmlinux);
+	free_btf_vmlinux();
 
 	return err;
 }
