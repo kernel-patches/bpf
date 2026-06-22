@@ -7990,9 +7990,10 @@ reg_find_field_offset(const struct bpf_reg_state *reg, s32 off, u32 fields)
 	return field;
 }
 
-static int check_func_arg_reg_off(struct bpf_verifier_env *env,
-				  const struct bpf_reg_state *reg, argno_t argno,
-				  enum bpf_arg_type arg_type)
+static int __check_func_arg_reg_off(struct bpf_verifier_env *env,
+				    const struct bpf_reg_state *reg, argno_t argno,
+				    enum bpf_arg_type arg_type,
+				    bool btf_id_fixed_off_ok)
 {
 	u32 type = reg->type;
 
@@ -8049,12 +8050,11 @@ static int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	case PTR_TO_BTF_ID | MEM_ALLOC | NON_OWN_REF | MEM_RCU:
 		/* When referenced PTR_TO_BTF_ID is passed to release function,
 		 * its fixed offset must be 0. In the other cases, fixed offset
-		 * can be non-zero. This was already checked above. So pass
-		 * fixed_off_ok as true to allow fixed offset for all other
-		 * cases. var_off always must be 0 for PTR_TO_BTF_ID, hence we
-		 * still need to do checks instead of returning.
+		 * can be non-zero unless the caller requires otherwise.
+		 * var_off always must be 0 for PTR_TO_BTF_ID, hence we still
+		 * need to do checks instead of returning.
 		 */
-		return __check_ptr_off_reg(env, reg, argno, true);
+		return __check_ptr_off_reg(env, reg, argno, btf_id_fixed_off_ok);
 	case PTR_TO_CTX:
 		/*
 		 * Allow fixed and variable offsets for syscall context, but
@@ -8068,6 +8068,13 @@ static int check_func_arg_reg_off(struct bpf_verifier_env *env,
 	default:
 		return __check_ptr_off_reg(env, reg, argno, false);
 	}
+}
+
+static int check_func_arg_reg_off(struct bpf_verifier_env *env,
+				  const struct bpf_reg_state *reg, argno_t argno,
+				  enum bpf_arg_type arg_type)
+{
+	return __check_func_arg_reg_off(env, reg, argno, arg_type, true);
 }
 
 static int check_arg_const_str(struct bpf_verifier_env *env,
@@ -11941,6 +11948,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		enum bpf_arg_type arg_type = ARG_DONTCARE;
 		argno_t argno = argno_from_arg(i + 1);
 		int regno = reg_from_argno(argno);
+		bool btf_id_fixed_off_ok = true;
 		u32 ref_id, type_size;
 		bool is_ret_buf_sz = false;
 		int kf_arg_type;
@@ -12114,7 +12122,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		case KF_ARG_PTR_TO_MEM:
 		case KF_ARG_PTR_TO_MEM_SIZE:
 		case KF_ARG_PTR_TO_CALLBACK:
-		case KF_ARG_PTR_TO_REFCOUNTED_KPTR:
 		case KF_ARG_PTR_TO_CONST_STR:
 		case KF_ARG_PTR_TO_WORKQUEUE:
 		case KF_ARG_PTR_TO_TIMER:
@@ -12128,6 +12135,10 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		case KF_ARG_PTR_TO_CTX:
 			arg_type = ARG_PTR_TO_CTX;
 			break;
+		case KF_ARG_PTR_TO_REFCOUNTED_KPTR:
+			arg_type = ARG_PTR_TO_BTF_ID;
+			btf_id_fixed_off_ok = false;
+			break;
 		default:
 			verifier_bug(env, "unknown kfunc arg type %d", kf_arg_type);
 			return -EFAULT;
@@ -12135,7 +12146,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 
 		if (regno == meta->release_regno)
 			arg_type |= OBJ_RELEASE;
-		ret = check_func_arg_reg_off(env, reg, argno, arg_type);
+		ret = __check_func_arg_reg_off(env, reg, argno, arg_type,
+					       btf_id_fixed_off_ok);
 		if (ret < 0)
 			return ret;
 
