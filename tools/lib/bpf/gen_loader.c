@@ -783,10 +783,17 @@ static void emit_relo_kfunc_btf(struct bpf_gen *gen, struct ksym_relo_desc *relo
 		return;
 	/* try to copy from existing bpf_insn */
 	if (kdesc->ref > 1) {
-		move_blob2blob(gen, insn + offsetof(struct bpf_insn, imm), 4,
-			       kdesc->insn + offsetof(struct bpf_insn, imm));
 		move_blob2blob(gen, insn + offsetof(struct bpf_insn, off), 2,
 			       kdesc->insn + offsetof(struct bpf_insn, off));
+		move_blob2blob(gen, insn + offsetof(struct bpf_insn, imm), 4,
+			       kdesc->insn + offsetof(struct bpf_insn, imm));
+		/*
+		 * jump over src_reg adjustment if imm (btf_id) is not 0, reuse BPF_REG_0 from
+		 * move_blob2blob. If btf_id is zero, clear BPF_PSEUDO_KFUNC_CALL flag in src_reg
+		 * of call insn.
+		 */
+		emit(gen, BPF_JMP_IMM(BPF_JNE, BPF_REG_0, 0, 1));
+		emit(gen, BPF_ST_MEM(BPF_B, BPF_REG_8, 1, 0));
 		goto log;
 	}
 	/* remember insn offset, so we can copy BTF ID and FD later */
@@ -804,10 +811,12 @@ static void emit_relo_kfunc_btf(struct bpf_gen *gen, struct ksym_relo_desc *relo
 	}
 	kdesc->off = btf_fd_idx;
 	/* jump to success case */
-	emit(gen, BPF_JMP_IMM(BPF_JSGE, BPF_REG_7, 0, 3));
+	emit(gen, BPF_JMP_IMM(BPF_JSGE, BPF_REG_7, 0, 4));
 	/* set value for imm, off as 0 */
 	emit(gen, BPF_ST_MEM(BPF_W, BPF_REG_8, offsetof(struct bpf_insn, imm), 0));
 	emit(gen, BPF_ST_MEM(BPF_H, BPF_REG_8, offsetof(struct bpf_insn, off), 0));
+	/* clear src_reg (and dst_reg) to convert pseudo kfunc call into invalid helper call */
+	emit(gen, BPF_ST_MEM(BPF_B, BPF_REG_8, 1, 0));
 	/* skip success case for ret < 0 */
 	emit(gen, BPF_JMP_IMM(BPF_JA, 0, 0, 10));
 	/* store btf_id into insn[insn_idx].imm */
