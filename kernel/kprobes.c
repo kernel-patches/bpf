@@ -228,12 +228,12 @@ static bool collect_one_slot(struct kprobe_insn_page *kip, int idx)
 
 static int collect_garbage_slots(struct kprobe_insn_cache *c)
 {
-	struct kprobe_insn_page *kip, *next;
+	struct kprobe_insn_page *kip;
 
 	/* Ensure no-one is interrupted on the garbages */
 	synchronize_rcu();
 
-	list_for_each_entry_safe(kip, next, &c->pages, list) {
+	list_for_each_entry_mutable(kip, &c->pages, list) {
 		int i;
 
 		if (kip->ngarbage == 0)
@@ -563,7 +563,7 @@ static void do_optimize_kprobes(void)
  */
 static void do_unoptimize_kprobes(void)
 {
-	struct optimized_kprobe *op, *tmp;
+	struct optimized_kprobe *op;
 
 	lockdep_assert_held(&text_mutex);
 	/* See comment in do_optimize_kprobes() */
@@ -573,7 +573,7 @@ static void do_unoptimize_kprobes(void)
 		arch_unoptimize_kprobes(&unoptimizing_list, &freeing_list);
 
 	/* Loop on 'freeing_list' for disarming and removing from kprobe hash list */
-	list_for_each_entry_safe(op, tmp, &freeing_list, list) {
+	list_for_each_entry_mutable(op, &freeing_list, list) {
 		/* Switching from detour code to origin */
 		op->kp.flags &= ~KPROBE_FLAG_OPTIMIZED;
 		/* Disarm probes if marked disabled and not gone */
@@ -594,9 +594,9 @@ static void do_unoptimize_kprobes(void)
 /* Reclaim all kprobes on the 'freeing_list' */
 static void do_free_cleaned_kprobes(void)
 {
-	struct optimized_kprobe *op, *tmp;
+	struct optimized_kprobe *op;
 
-	list_for_each_entry_safe(op, tmp, &freeing_list, list) {
+	list_for_each_entry_mutable(op, &freeing_list, list) {
 		list_del_init(&op->list);
 		if (WARN_ON_ONCE(!kprobe_unused(&op->kp))) {
 			/*
@@ -2598,9 +2598,9 @@ static int __init populate_kprobe_blacklist(unsigned long *start,
 /* Remove all symbols in given area from kprobe blacklist */
 static void kprobe_remove_area_blacklist(unsigned long start, unsigned long end)
 {
-	struct kprobe_blacklist_entry *ent, *n;
+	struct kprobe_blacklist_entry *ent;
 
-	list_for_each_entry_safe(ent, n, &kprobe_blacklist, list) {
+	list_for_each_entry_mutable(ent, &kprobe_blacklist, list) {
 		if (ent->start_addr < start || ent->start_addr >= end)
 			continue;
 		list_del(&ent->list);

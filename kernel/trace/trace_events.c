@@ -75,8 +75,7 @@ static int system_refcount_dec(struct event_subsystem *system)
 
 #define do_for_each_event_file_safe(tr, file)			\
 	list_for_each_entry(tr, &ftrace_trace_arrays, list) {	\
-		struct trace_event_file *___n;				\
-		list_for_each_entry_safe(file, ___n, &tr->events, list)
+		list_for_each_entry_mutable(file, &tr->events, list)
 
 #define while_for_each_event_file()		\
 	}
@@ -219,11 +218,11 @@ static int trace_define_common_fields(void)
 
 static void trace_destroy_fields(struct trace_event_call *call)
 {
-	struct ftrace_event_field *field, *next;
+	struct ftrace_event_field *field;
 	struct list_head *head;
 
 	head = trace_get_fields(call);
-	list_for_each_entry_safe(field, next, head, link) {
+	list_for_each_entry_mutable(field, head, link) {
 		list_del(&field->link);
 		kmem_cache_free(field_cachep, field);
 	}
@@ -928,9 +927,9 @@ static void free_event_mod(struct event_mod_load *event_mod)
 
 static void clear_mod_events(struct trace_array *tr)
 {
-	struct event_mod_load *event_mod, *n;
+	struct event_mod_load *event_mod;
 
-	list_for_each_entry_safe(event_mod, n, &tr->mod_events, list) {
+	list_for_each_entry_mutable(event_mod, &tr->mod_events, list) {
 		free_event_mod(event_mod);
 	}
 }
@@ -938,10 +937,10 @@ static void clear_mod_events(struct trace_array *tr)
 static int remove_cache_mod(struct trace_array *tr, const char *mod,
 			    const char *match, const char *system, const char *event)
 {
-	struct event_mod_load *event_mod, *n;
+	struct event_mod_load *event_mod;
 	int ret = -EINVAL;
 
-	list_for_each_entry_safe(event_mod, n, &tr->mod_events, list) {
+	list_for_each_entry_mutable(event_mod, &tr->mod_events, list) {
 		if (strcmp(event_mod->module, mod) != 0)
 			continue;
 
@@ -3557,7 +3556,7 @@ static void update_event_fields(struct trace_event_call *call,
 /* Update all events for replacing eval and sanitizing */
 void trace_event_update_all(struct trace_eval_map **map, int len)
 {
-	struct trace_event_call *call, *p;
+	struct trace_event_call *call;
 	const char *last_system = NULL;
 	bool first = false;
 	bool updated;
@@ -3565,7 +3564,7 @@ void trace_event_update_all(struct trace_eval_map **map, int len)
 	int i;
 
 	down_write(&trace_event_sem);
-	list_for_each_entry_safe(call, p, &ftrace_events, list) {
+	list_for_each_entry_mutable(call, &ftrace_events, list) {
 		/* events are usually grouped together with systems */
 		if (!last_system || call->class->system != last_system) {
 			first = true;
@@ -3892,9 +3891,9 @@ EXPORT_SYMBOL_GPL(trace_remove_event_call);
 #ifdef CONFIG_MODULES
 static void update_mod_cache(struct trace_array *tr, struct module *mod)
 {
-	struct event_mod_load *event_mod, *n;
+	struct event_mod_load *event_mod;
 
-	list_for_each_entry_safe(event_mod, n, &tr->mod_events, list) {
+	list_for_each_entry_mutable(event_mod, &tr->mod_events, list) {
 		if (strcmp(event_mod->module, mod->name) != 0)
 			continue;
 
@@ -3940,18 +3939,18 @@ static void trace_module_add_events(struct module *mod)
 
 static void trace_module_remove_events(struct module *mod)
 {
-	struct trace_event_call *call, *p;
-	struct module_string *modstr, *m;
+	struct trace_event_call *call;
+	struct module_string *modstr;
 
 	down_write(&trace_event_sem);
-	list_for_each_entry_safe(call, p, &ftrace_events, list) {
+	list_for_each_entry_mutable(call, &ftrace_events, list) {
 		if ((call->flags & TRACE_EVENT_FL_DYNAMIC) || !call->module)
 			continue;
 		if (call->module == mod)
 			__trace_remove_event_call(call);
 	}
 	/* Check for any strings allocated for this module */
-	list_for_each_entry_safe(modstr, m, &module_strings, next) {
+	list_for_each_entry_mutable(modstr, &module_strings, next) {
 		if (modstr->module != mod)
 			continue;
 		list_del(&modstr->next);
@@ -4483,9 +4482,9 @@ void __trace_early_add_events(struct trace_array *tr)
 static void
 __trace_remove_event_dirs(struct trace_array *tr)
 {
-	struct trace_event_file *file, *next;
+	struct trace_event_file *file;
 
-	list_for_each_entry_safe(file, next, &tr->events, list)
+	list_for_each_entry_mutable(file, &tr->events, list)
 		remove_event_file_dir(file);
 }
 

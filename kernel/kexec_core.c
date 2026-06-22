@@ -318,9 +318,9 @@ static void kimage_free_pages(struct page *page)
 
 void kimage_free_page_list(struct list_head *list)
 {
-	struct page *page, *next;
+	struct page *page;
 
-	list_for_each_entry_safe(page, next, list, lru) {
+	list_for_each_entry_mutable(page, list, lru) {
 		list_del(&page->lru);
 		kimage_free_pages(page);
 	}

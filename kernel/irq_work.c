@@ -234,7 +234,7 @@ void irq_work_single(void *arg)
 
 static void irq_work_run_list(struct llist_head *list)
 {
-	struct irq_work *work, *tmp;
+	struct irq_work *work;
 	struct llist_node *llnode;
 
 	/*
@@ -248,7 +248,7 @@ static void irq_work_run_list(struct llist_head *list)
 		return;
 
 	llnode = llist_del_all(list);
-	llist_for_each_entry_safe(work, tmp, llnode, node.llist)
+	llist_for_each_entry_mutable(work, llnode, node.llist)
 		irq_work_single(work);
 }
 

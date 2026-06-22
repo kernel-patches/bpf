@@ -2276,7 +2276,7 @@ subsys_initcall(send_signal_irq_work_init);
 static int bpf_event_notify(struct notifier_block *nb, unsigned long op,
 			    void *module)
 {
-	struct bpf_trace_module *btm, *tmp;
+	struct bpf_trace_module *btm;
 	struct module *mod = module;
 	int ret = 0;
 
@@ -2297,7 +2297,7 @@ static int bpf_event_notify(struct notifier_block *nb, unsigned long op,
 		}
 		break;
 	case MODULE_STATE_GOING:
-		list_for_each_entry_safe(btm, tmp, &bpf_trace_modules, list) {
+		list_for_each_entry_mutable(btm, &bpf_trace_modules, list) {
 			if (btm->module == module) {
 				list_del(&btm->list);
 				kfree(btm);

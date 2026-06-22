@@ -35,11 +35,10 @@ EXPORT_SYMBOL_GPL(user_return_notifier_unregister);
 void fire_user_return_notifiers(void)
 {
 	struct user_return_notifier *urn;
-	struct hlist_node *tmp2;
 	struct hlist_head *head;
 
 	head = &get_cpu_var(return_notifier_list);
-	hlist_for_each_entry_safe(urn, tmp2, head, link)
+	hlist_for_each_entry_mutable(urn, head, link)
 		urn->on_user_return(urn);
 	put_cpu_var(return_notifier_list);
 }

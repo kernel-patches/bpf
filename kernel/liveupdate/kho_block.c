@@ -298,9 +298,9 @@ err_destroy:
  */
 void kho_block_set_destroy(struct kho_block_set *bs)
 {
-	struct kho_block *block, *tmp;
+	struct kho_block *block;
 
-	list_for_each_entry_safe(block, tmp, &bs->blocks, list) {
+	list_for_each_entry_mutable(block, &bs->blocks, list) {
 		list_del(&block->list);
 		kho_block_free_ser(bs, block->ser);
 		kfree(block);

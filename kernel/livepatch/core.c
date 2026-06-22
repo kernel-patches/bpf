@@ -788,9 +788,9 @@ void klp_free_patch_async(struct klp_patch *patch)
 
 void klp_free_replaced_patches_async(struct klp_patch *new_patch)
 {
-	struct klp_patch *old_patch, *tmp_patch;
+	struct klp_patch *old_patch;
 
-	klp_for_each_patch_safe(old_patch, tmp_patch) {
+	klp_for_each_patch_safe(old_patch) {
 		if (old_patch == new_patch)
 			return;
 		klp_free_patch_async(old_patch);

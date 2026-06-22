@@ -1052,12 +1052,11 @@ static void rcu_tasks_postscan(struct list_head *hop)
 	for_each_possible_cpu(cpu) {
 		unsigned long j = jiffies + 1;
 		struct rcu_tasks_percpu *rtpcp = per_cpu_ptr(rcu_tasks.rtpcpu, cpu);
-		struct task_struct *t;
-		struct task_struct *t1;
+		struct task_struct *t, *t1;
 		struct list_head tmp;
 
 		raw_spin_lock_irq_rcu_node(rtpcp);
-		list_for_each_entry_safe(t, t1, &rtpcp->rtp_exit_list, rcu_tasks_exit_list) {
+		list_for_each_entry_mutable(t, t1, &rtpcp->rtp_exit_list, rcu_tasks_exit_list) {
 			if (list_empty(&t->rcu_tasks_holdout_list))
 				rcu_tasks_pertask(t, hop);
 
@@ -1120,9 +1119,9 @@ static void check_holdout_task(struct task_struct *t,
 static void check_all_holdout_tasks(struct list_head *hop,
 				    bool needreport, bool *firstreport)
 {
-	struct task_struct *t, *t1;
+	struct task_struct *t;
 
-	list_for_each_entry_safe(t, t1, hop, rcu_tasks_holdout_list) {
+	list_for_each_entry_mutable(t, hop, rcu_tasks_holdout_list) {
 		check_holdout_task(t, needreport, firstreport);
 		cond_resched();
 	}

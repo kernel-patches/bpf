@@ -2362,7 +2362,7 @@ static int __rb_allocate_pages(struct ring_buffer_per_cpu *cpu_buffer,
 {
 	struct trace_buffer *buffer = cpu_buffer->buffer;
 	struct ring_buffer_cpu_meta *meta = NULL;
-	struct buffer_page *bpage, *tmp;
+	struct buffer_page *bpage;
 	bool user_thread = current->mm != NULL;
 	struct ring_buffer_desc *desc = NULL;
 	long i;
@@ -2450,7 +2450,7 @@ static int __rb_allocate_pages(struct ring_buffer_per_cpu *cpu_buffer,
 	return 0;
 
 free_pages:
-	list_for_each_entry_safe(bpage, tmp, pages, list) {
+	list_for_each_entry_mutable(bpage, pages, list) {
 		list_del_init(&bpage->list);
 		free_buffer_page(bpage);
 	}
@@ -2609,7 +2609,7 @@ rb_allocate_cpu_buffer(struct trace_buffer *buffer, long nr_pages, int cpu)
 static void rb_free_cpu_buffer(struct ring_buffer_per_cpu *cpu_buffer)
 {
 	struct list_head *head = cpu_buffer->pages;
-	struct buffer_page *bpage, *tmp;
+	struct buffer_page *bpage;
 
 	irq_work_sync(&cpu_buffer->irq_work.work);
 
@@ -2621,7 +2621,7 @@ static void rb_free_cpu_buffer(struct ring_buffer_per_cpu *cpu_buffer)
 	if (head) {
 		rb_head_page_deactivate(cpu_buffer);
 
-		list_for_each_entry_safe(bpage, tmp, head, list) {
+		list_for_each_entry_mutable(bpage, head, list) {
 			list_del_init(&bpage->list);
 			free_buffer_page(bpage);
 		}
@@ -3163,9 +3163,9 @@ rb_insert_pages(struct ring_buffer_per_cpu *cpu_buffer)
 
 	/* free pages if they weren't inserted */
 	if (!success) {
-		struct buffer_page *bpage, *tmp;
-		list_for_each_entry_safe(bpage, tmp, &cpu_buffer->new_pages,
-					 list) {
+		struct buffer_page *bpage;
+
+		list_for_each_entry_mutable(bpage, &cpu_buffer->new_pages, list) {
 			list_del_init(&bpage->list);
 			free_buffer_page(bpage);
 		}
@@ -3395,7 +3395,7 @@ int ring_buffer_resize(struct trace_buffer *buffer, unsigned long size,
 
  out_err:
 	for_each_buffer_cpu(buffer, cpu) {
-		struct buffer_page *bpage, *tmp;
+		struct buffer_page *bpage;
 
 		cpu_buffer = buffer->buffers[cpu];
 		cpu_buffer->nr_pages_to_update = 0;
@@ -3403,8 +3403,7 @@ int ring_buffer_resize(struct trace_buffer *buffer, unsigned long size,
 		if (list_empty(&cpu_buffer->new_pages))
 			continue;
 
-		list_for_each_entry_safe(bpage, tmp, &cpu_buffer->new_pages,
-					list) {
+		list_for_each_entry_mutable(bpage, &cpu_buffer->new_pages, list) {
 			list_del_init(&bpage->list);
 			free_buffer_page(bpage);
 
@@ -7316,7 +7315,7 @@ EXPORT_SYMBOL_GPL(ring_buffer_subbuf_order_get);
 int ring_buffer_subbuf_order_set(struct trace_buffer *buffer, int order)
 {
 	struct ring_buffer_per_cpu *cpu_buffer;
-	struct buffer_page *bpage, *tmp;
+	struct buffer_page *bpage;
 	int old_order, old_size;
 	int nr_pages;
 	int psize;
@@ -7436,7 +7435,7 @@ int ring_buffer_subbuf_order_set(struct trace_buffer *buffer, int order)
 		raw_spin_unlock_irqrestore(&cpu_buffer->reader_lock, flags);
 
 		/* Free old sub buffers */
-		list_for_each_entry_safe(bpage, tmp, &old_pages, list) {
+		list_for_each_entry_mutable(bpage, &old_pages, list) {
 			list_del_init(&bpage->list);
 			free_buffer_page(bpage);
 		}
@@ -7461,7 +7460,7 @@ error:
 		if (!cpu_buffer->nr_pages_to_update)
 			continue;
 
-		list_for_each_entry_safe(bpage, tmp, &cpu_buffer->new_pages, list) {
+		list_for_each_entry_mutable(bpage, &cpu_buffer->new_pages, list) {
 			list_del_init(&bpage->list);
 			free_buffer_page(bpage);
 		}

@@ -6765,7 +6765,7 @@ static bool hist_file_check_refs(struct trace_event_file *file)
 
 static void hist_unreg_all(struct trace_event_file *file)
 {
-	struct event_trigger_data *test, *n;
+	struct event_trigger_data *test;
 	struct hist_trigger_data *hist_data;
 	struct synth_event *se;
 	const char *se_name;
@@ -6775,7 +6775,7 @@ static void hist_unreg_all(struct trace_event_file *file)
 	if (hist_file_check_refs(file))
 		return;
 
-	list_for_each_entry_safe(test, n, &file->triggers, list) {
+	list_for_each_entry_mutable(test, &file->triggers, list) {
 		if (test->cmd_ops->trigger_type == ETT_EVENT_HIST) {
 			hist_data = test->private_data;
 			list_del_rcu(&test->list);
@@ -7002,9 +7002,9 @@ hist_enable_trigger(struct event_trigger_data *data,
 
 static void hist_enable_unreg_all(struct trace_event_file *file)
 {
-	struct event_trigger_data *test, *n;
+	struct event_trigger_data *test;
 
-	list_for_each_entry_safe(test, n, &file->triggers, list) {
+	list_for_each_entry_mutable(test, &file->triggers, list) {
 		if (test->cmd_ops->trigger_type == ETT_HIST_ENABLE) {
 			list_del_rcu(&test->list);
 			update_cond_flag(file);

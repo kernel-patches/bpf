@@ -872,9 +872,9 @@ static void css_set_update_populated(struct css_set *cset, bool populated)
 static void css_set_skip_task_iters(struct css_set *cset,
 				    struct task_struct *task)
 {
-	struct css_task_iter *it, *pos;
+	struct css_task_iter *it;
 
-	list_for_each_entry_safe(it, pos, &cset->task_iters, iters_node)
+	list_for_each_entry_mutable(it, &cset->task_iters, iters_node)
 		css_task_iter_skip(it, task);
 }
 
@@ -951,7 +951,7 @@ static unsigned long css_set_hash(struct cgroup_subsys_state **css)
 
 void put_css_set_locked(struct css_set *cset)
 {
-	struct cgrp_cset_link *link, *tmp_link;
+	struct cgrp_cset_link *link;
 	struct cgroup_subsys *ss;
 	int ssid;
 
@@ -970,7 +970,7 @@ void put_css_set_locked(struct css_set *cset)
 	hash_del(&cset->hlist);
 	css_set_count--;
 
-	list_for_each_entry_safe(link, tmp_link, &cset->cgrp_links, cgrp_link) {
+	list_for_each_entry_mutable(link, &cset->cgrp_links, cgrp_link) {
 		list_del(&link->cset_link);
 		list_del(&link->cgrp_link);
 		if (cgroup_parent(link->cgrp))
@@ -1129,9 +1129,9 @@ static struct css_set *find_existing_css_set(struct css_set *old_cset,
 
 static void free_cgrp_cset_links(struct list_head *links_to_free)
 {
-	struct cgrp_cset_link *link, *tmp_link;
+	struct cgrp_cset_link *link;
 
-	list_for_each_entry_safe(link, tmp_link, links_to_free, cset_link) {
+	list_for_each_entry_mutable(link, links_to_free, cset_link) {
 		list_del(&link->cset_link);
 		kfree(link);
 	}
@@ -1372,7 +1372,7 @@ void cgroup_free_root(struct cgroup_root *root)
 static void cgroup_destroy_root(struct cgroup_root *root)
 {
 	struct cgroup *cgrp = &root->cgrp;
-	struct cgrp_cset_link *link, *tmp_link;
+	struct cgrp_cset_link *link;
 	int ret;
 
 	trace_cgroup_destroy_root(root);
@@ -1395,7 +1395,7 @@ static void cgroup_destroy_root(struct cgroup_root *root)
 	 */
 	spin_lock_irq(&css_set_lock);
 
-	list_for_each_entry_safe(link, tmp_link, &cgrp->cset_links, cset_link) {
+	list_for_each_entry_mutable(link, &cgrp->cset_links, cset_link) {
 		list_del(&link->cset_link);
 		list_del(&link->cgrp_link);
 		kfree(link);
@@ -1887,7 +1887,7 @@ int rebind_subsystems(struct cgroup_root *dst_root, u32 ss_mask)
 		struct cgroup_root *src_root = ss->root;
 		struct cgroup *scgrp = &src_root->cgrp;
 		struct cgroup_subsys_state *css = cgroup_css(scgrp, ss);
-		struct css_set *cset, *cset_pos;
+		struct css_set *cset;
 		struct css_task_iter *it;
 
 		WARN_ON(!css || cgroup_css(dcgrp, ss));
@@ -1912,8 +1912,8 @@ int rebind_subsystems(struct cgroup_root *dst_root, u32 ss_mask)
 		spin_lock_irq(&css_set_lock);
 		css->cgroup = dcgrp;
 		WARN_ON(!list_empty(&dcgrp->e_csets[ss->id]));
-		list_for_each_entry_safe(cset, cset_pos, &scgrp->e_csets[ss->id],
-					 e_cset_node[ss->id]) {
+		list_for_each_entry_mutable(cset, &scgrp->e_csets[ss->id],
+					    e_cset_node[ss->id]) {
 			list_move_tail(&cset->e_cset_node[ss->id],
 				       &dcgrp->e_csets[ss->id]);
 			/*
@@ -2689,8 +2689,8 @@ static int cgroup_migrate_execute(struct cgroup_mgctx *mgctx)
 {
 	struct cgroup_taskset *tset = &mgctx->tset;
 	struct cgroup_subsys *ss;
-	struct task_struct *task, *tmp_task;
-	struct css_set *cset, *tmp_cset;
+	struct task_struct *task;
+	struct css_set *cset;
 	int ssid, failed_ssid, ret;
 
 	/* check that we can legitimately attach to the cgroup */
@@ -2714,7 +2714,7 @@ static int cgroup_migrate_execute(struct cgroup_mgctx *mgctx)
 	 */
 	spin_lock_irq(&css_set_lock);
 	list_for_each_entry(cset, &tset->src_csets, mg_node) {
-		list_for_each_entry_safe(task, tmp_task, &cset->mg_tasks, cg_list) {
+		list_for_each_entry_mutable(task, &cset->mg_tasks, cg_list) {
 			struct css_set *from_cset = task_css_set(task);
 			struct css_set *to_cset = cset->mg_dst_cset;
 
@@ -2767,7 +2767,7 @@ out_cancel_attach:
 out_release_tset:
 	spin_lock_irq(&css_set_lock);
 	list_splice_init(&tset->dst_csets, &tset->src_csets);
-	list_for_each_entry_safe(cset, tmp_cset, &tset->src_csets, mg_node) {
+	list_for_each_entry_mutable(cset, &tset->src_csets, mg_node) {
 		list_splice_tail_init(&cset->mg_tasks, &cset->tasks);
 		list_del_init(&cset->mg_node);
 	}
@@ -2825,14 +2825,14 @@ int cgroup_migrate_vet_dst(struct cgroup *dst_cgrp)
  */
 void cgroup_migrate_finish(struct cgroup_mgctx *mgctx)
 {
-	struct css_set *cset, *tmp_cset;
+	struct css_set *cset;
 
 	lockdep_assert_held(&cgroup_mutex);
 
 	spin_lock_irq(&css_set_lock);
 
-	list_for_each_entry_safe(cset, tmp_cset, &mgctx->preloaded_src_csets,
-				 mg_src_preload_node) {
+	list_for_each_entry_mutable(cset, &mgctx->preloaded_src_csets,
+				    mg_src_preload_node) {
 		cset->mg_src_cgrp = NULL;
 		cset->mg_dst_cgrp = NULL;
 		cset->mg_dst_cset = NULL;
@@ -2840,8 +2840,8 @@ void cgroup_migrate_finish(struct cgroup_mgctx *mgctx)
 		put_css_set_locked(cset);
 	}
 
-	list_for_each_entry_safe(cset, tmp_cset, &mgctx->preloaded_dst_csets,
-				 mg_dst_preload_node) {
+	list_for_each_entry_mutable(cset, &mgctx->preloaded_dst_csets,
+				    mg_dst_preload_node) {
 		cset->mg_src_cgrp = NULL;
 		cset->mg_dst_cgrp = NULL;
 		cset->mg_dst_cset = NULL;
@@ -2917,13 +2917,13 @@ void cgroup_migrate_add_src(struct css_set *src_cset,
  */
 int cgroup_migrate_prepare_dst(struct cgroup_mgctx *mgctx)
 {
-	struct css_set *src_cset, *tmp_cset;
+	struct css_set *src_cset;
 
 	lockdep_assert_held(&cgroup_mutex);
 
 	/* look up the dst cset for each src cset and link it to src */
-	list_for_each_entry_safe(src_cset, tmp_cset, &mgctx->preloaded_src_csets,
-				 mg_src_preload_node) {
+	list_for_each_entry_mutable(src_cset, &mgctx->preloaded_src_csets,
+				    mg_src_preload_node) {
 		struct css_set *dst_cset;
 		struct cgroup_subsys *ss;
 		int ssid;
@@ -3225,10 +3225,10 @@ static int cgroup_update_dfl_csses(struct cgroup *cgrp)
 	spin_lock_irq(&css_set_lock);
 	list_for_each_entry(src_cset, &mgctx.preloaded_src_csets,
 			    mg_src_preload_node) {
-		struct task_struct *task, *ntask;
+		struct task_struct *task;
 
 		/* all tasks in src_csets need to be migrated */
-		list_for_each_entry_safe(task, ntask, &src_cset->tasks, cg_list)
+		list_for_each_entry_mutable(task, &src_cset->tasks, cg_list)
 			cgroup_migrate_add_task(task, &mgctx);
 	}
 	spin_unlock_irq(&css_set_lock);
@@ -7106,10 +7106,10 @@ static DEFINE_PER_CPU(struct irq_work, cgrp_dead_tasks_iwork);
 static void cgrp_dead_tasks_iwork_fn(struct irq_work *iwork)
 {
 	struct llist_node *lnode;
-	struct task_struct *task, *next;
+	struct task_struct *task;
 
 	lnode = llist_del_all(this_cpu_ptr(&cgrp_dead_tasks));
-	llist_for_each_entry_safe(task, next, lnode, cg_dead_lnode) {
+	llist_for_each_entry_mutable(task, lnode, cg_dead_lnode) {
 		do_cgroup_task_dead(task);
 		put_task_struct(task);
 	}

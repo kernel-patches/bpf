@@ -115,10 +115,9 @@ int dyn_event_create(const char *raw_command, struct dyn_event_operations *type)
 /*
  * for_each_dyn_event	-	iterate over the dyn_event list safely
  * @pos:	the struct dyn_event * to use as a loop cursor
- * @n:		the struct dyn_event * to use as temporary storage
  */
-#define for_each_dyn_event_safe(pos, n)	\
-	list_for_each_entry_safe(pos, n, &dyn_event_list, list)
+#define for_each_dyn_event_safe(pos)	\
+	list_for_each_entry_mutable(pos, &dyn_event_list, list)
 
 extern void dynevent_cmd_init(struct dynevent_cmd *cmd, char *buf, int maxlen,
 			      enum dynevent_type type,

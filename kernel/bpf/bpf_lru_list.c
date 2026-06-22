@@ -126,11 +126,11 @@ static void __bpf_lru_list_rotate_active(struct bpf_lru *lru,
 					 struct bpf_lru_list *l)
 {
 	struct list_head *active = &l->lists[BPF_LRU_LIST_T_ACTIVE];
-	struct bpf_lru_node *node, *tmp_node, *first_node;
+	struct bpf_lru_node *node, *first_node;
 	unsigned int i = 0;
 
 	first_node = list_first_entry(active, struct bpf_lru_node, list);
-	list_for_each_entry_safe_reverse(node, tmp_node, active, list) {
+	list_for_each_entry_mutable_reverse(node, active, list) {
 		if (bpf_lru_node_is_ref(node))
 			__bpf_lru_node_move(l, node, BPF_LRU_LIST_T_ACTIVE);
 		else
@@ -196,11 +196,11 @@ __bpf_lru_list_shrink_inactive(struct bpf_lru *lru,
 			       enum bpf_lru_list_type tgt_free_type)
 {
 	struct list_head *inactive = &l->lists[BPF_LRU_LIST_T_INACTIVE];
-	struct bpf_lru_node *node, *tmp_node;
+	struct bpf_lru_node *node;
 	unsigned int nshrinked = 0;
 	unsigned int i = 0;
 
-	list_for_each_entry_safe_reverse(node, tmp_node, inactive, list) {
+	list_for_each_entry_mutable_reverse(node, inactive, list) {
 		if (bpf_lru_node_is_ref(node) &&
 		    !READ_ONCE(node->pending_free)) {
 			__bpf_lru_node_move(l, node, BPF_LRU_LIST_T_ACTIVE);
@@ -247,7 +247,7 @@ static unsigned int __bpf_lru_list_shrink(struct bpf_lru *lru,
 					  enum bpf_lru_list_type tgt_free_type)
 
 {
-	struct bpf_lru_node *node, *tmp_node;
+	struct bpf_lru_node *node;
 	struct list_head *force_shrink_list;
 	unsigned int nshrinked;
 
@@ -262,8 +262,7 @@ static unsigned int __bpf_lru_list_shrink(struct bpf_lru *lru,
 	else
 		force_shrink_list = &l->lists[BPF_LRU_LIST_T_ACTIVE];
 
-	list_for_each_entry_safe_reverse(node, tmp_node, force_shrink_list,
-					 list) {
+	list_for_each_entry_mutable_reverse(node, force_shrink_list, list) {
 		if (READ_ONCE(node->pending_free) ||
 		    lru->del_from_htab(lru->del_arg, node)) {
 			__bpf_lru_node_move_to_free(l, node, free_list,
@@ -279,10 +278,9 @@ static unsigned int __bpf_lru_list_shrink(struct bpf_lru *lru,
 static void __local_list_flush(struct bpf_lru_list *l,
 			       struct bpf_lru_locallist *loc_l)
 {
-	struct bpf_lru_node *node, *tmp_node;
+	struct bpf_lru_node *node;
 
-	list_for_each_entry_safe_reverse(node, tmp_node,
-					 &loc_l->pending_list, list) {
+	list_for_each_entry_mutable_reverse(node, &loc_l->pending_list, list) {
 		if (READ_ONCE(node->pending_free))
 			__bpf_lru_node_move_in(l, node, BPF_LRU_LIST_T_FREE);
 		else if (bpf_lru_node_is_ref(node))
@@ -313,7 +311,7 @@ static void bpf_lru_list_pop_free_to_local(struct bpf_lru *lru,
 					   struct bpf_lru_locallist *loc_l)
 {
 	struct bpf_lru_list *l = &lru->common_lru.lru_list;
-	struct bpf_lru_node *node, *tmp_node;
+	struct bpf_lru_node *node;
 	unsigned int nfree = 0;
 	LIST_HEAD(tmp_free);
 
@@ -324,8 +322,7 @@ static void bpf_lru_list_pop_free_to_local(struct bpf_lru *lru,
 
 	__bpf_lru_list_rotate(lru, l);
 
-	list_for_each_entry_safe(node, tmp_node, &l->lists[BPF_LRU_LIST_T_FREE],
-				 list) {
+	list_for_each_entry_mutable(node, &l->lists[BPF_LRU_LIST_T_FREE], list) {
 		__bpf_lru_node_move_to_free(l, node, &tmp_free,
 					    BPF_LRU_LOCAL_LIST_T_FREE);
 		if (++nfree == lru->target_free)
@@ -343,7 +340,7 @@ static void bpf_lru_list_pop_free_to_local(struct bpf_lru *lru,
 	 * Transfer the harvested nodes from the temporary list_head into
 	 * the lockless per-CPU free llist.
 	 */
-	list_for_each_entry_safe(node, tmp_node, &tmp_free, list) {
+	list_for_each_entry_mutable(node, &tmp_free, list) {
 		list_del(&node->list);
 		llist_add(&node->llist, &loc_l->free_llist);
 	}

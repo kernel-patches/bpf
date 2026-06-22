@@ -1352,9 +1352,9 @@ struct filter_head {
 
 static void free_filter_list(struct filter_head *filter_list)
 {
-	struct filter_list *filter_item, *tmp;
+	struct filter_list *filter_item;
 
-	list_for_each_entry_safe(filter_item, tmp, &filter_list->list, list) {
+	list_for_each_entry_mutable(filter_item, &filter_list->list, list) {
 		__free_filter(filter_item->filter);
 		list_del(&filter_item->list);
 		kfree(filter_item);

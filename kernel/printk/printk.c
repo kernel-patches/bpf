@@ -3787,7 +3787,6 @@ static struct syscore printk_syscore = {
  */
 static void printk_kthreads_check_locked(void)
 {
-	struct hlist_node *tmp;
 	struct console *con;
 
 	lockdep_assert_console_list_lock_held();
@@ -3805,7 +3804,7 @@ static void printk_kthreads_check_locked(void)
 			 * are any nbcon consoles, they will set up their own
 			 * kthread.
 			 */
-			hlist_for_each_entry_safe(con, tmp, &console_list, node) {
+			hlist_for_each_entry_mutable(con, &console_list, node) {
 				if (con->flags & CON_NBCON)
 					continue;
 
@@ -3833,7 +3832,7 @@ static void printk_kthreads_check_locked(void)
 	if (printk_kthreads_running)
 		return;
 
-	hlist_for_each_entry_safe(con, tmp, &console_list, node) {
+	hlist_for_each_entry_mutable(con, &console_list, node) {
 		if (!(con->flags & CON_NBCON))
 			continue;
 
@@ -4209,9 +4208,8 @@ void register_console(struct console *newcon)
 	if (bootcon_registered &&
 	    ((newcon->flags & (CON_CONSDEV | CON_BOOT)) == CON_CONSDEV) &&
 	    !keep_bootcon) {
-		struct hlist_node *tmp;
 
-		hlist_for_each_entry_safe(con, tmp, &console_list, node) {
+		hlist_for_each_entry_mutable(con, &console_list, node) {
 			if (con->flags & CON_BOOT)
 				unregister_console_locked(con);
 		}
@@ -4426,12 +4424,11 @@ void __init console_init(void)
  */
 static int __init printk_late_init(void)
 {
-	struct hlist_node *tmp;
 	struct console *con;
 	int ret;
 
 	console_list_lock();
-	hlist_for_each_entry_safe(con, tmp, &console_list, node) {
+	hlist_for_each_entry_mutable(con, &console_list, node) {
 		if (!(con->flags & CON_BOOT))
 			continue;
 

@@ -546,7 +546,7 @@ static void stress_reorder_work(struct work_struct *work)
 	} while (!time_after(jiffies, stress->timeout));
 
 out:
-	list_for_each_entry_safe(ll, ln, &locks, link)
+	list_for_each_entry_mutable(ll, &locks, link)
 		kfree(ll);
 	kfree(order);
 }

@@ -929,9 +929,9 @@ static inline void audit_free_module(struct audit_context *context)
 }
 static inline void audit_free_names(struct audit_context *context)
 {
-	struct audit_names *n, *next;
+	struct audit_names *n;
 
-	list_for_each_entry_safe(n, next, &context->names_list, list) {
+	list_for_each_entry_mutable(n, &context->names_list, list) {
 		list_del(&n->list);
 		if (n->name)
 			putname(n->name);

@@ -264,10 +264,10 @@ static void free_one(void *obj, bool percpu)
 
 static int free_all(struct bpf_mem_cache *c, struct llist_node *llnode, bool percpu)
 {
-	struct llist_node *pos, *t;
+	struct llist_node *pos;
 	int cnt = 0;
 
-	llist_for_each_safe(pos, t, llnode) {
+	llist_for_each_mutable(pos, llnode) {
 		if (c->dtor)
 			c->dtor((void *)pos + LLIST_NODE_SZ, c->dtor_ctx);
 		free_one(pos, percpu);
@@ -296,7 +296,7 @@ static void enque_to_free(struct bpf_mem_cache *c, void *obj)
 
 static void do_call_rcu_ttrace(struct bpf_mem_cache *c)
 {
-	struct llist_node *llnode, *t;
+	struct llist_node *llnode;
 
 	if (atomic_xchg(&c->call_rcu_ttrace_in_progress, 1)) {
 		if (unlikely(READ_ONCE(c->draining))) {
@@ -307,7 +307,7 @@ static void do_call_rcu_ttrace(struct bpf_mem_cache *c)
 	}
 
 	WARN_ON_ONCE(!llist_empty(&c->waiting_for_gp_ttrace));
-	llist_for_each_safe(llnode, t, llist_del_all(&c->free_by_rcu_ttrace))
+	llist_for_each_mutable(llnode, llist_del_all(&c->free_by_rcu_ttrace))
 		llist_add(llnode, &c->waiting_for_gp_ttrace);
 
 	if (unlikely(READ_ONCE(c->draining))) {
@@ -326,7 +326,7 @@ static void do_call_rcu_ttrace(struct bpf_mem_cache *c)
 static void free_bulk(struct bpf_mem_cache *c)
 {
 	struct bpf_mem_cache *tgt = c->tgt;
-	struct llist_node *llnode, *t;
+	struct llist_node *llnode;
 	unsigned long flags;
 	int cnt;
 
@@ -346,7 +346,7 @@ static void free_bulk(struct bpf_mem_cache *c)
 	} while (cnt > (c->high_watermark + c->low_watermark) / 2);
 
 	/* and drain free_llist_extra */
-	llist_for_each_safe(llnode, t, llist_del_all(&c->free_llist_extra))
+	llist_for_each_mutable(llnode, llist_del_all(&c->free_llist_extra))
 		enque_to_free(tgt, llnode);
 	do_call_rcu_ttrace(tgt);
 }
@@ -374,13 +374,13 @@ out:
 
 static void check_free_by_rcu(struct bpf_mem_cache *c)
 {
-	struct llist_node *llnode, *t;
+	struct llist_node *llnode;
 	unsigned long flags;
 
 	/* drain free_llist_extra_rcu */
 	if (unlikely(!llist_empty(&c->free_llist_extra_rcu))) {
 		inc_active(c, &flags);
-		llist_for_each_safe(llnode, t, llist_del_all(&c->free_llist_extra_rcu))
+		llist_for_each_mutable(llnode, llist_del_all(&c->free_llist_extra_rcu))
 			if (__llist_add(llnode, &c->free_by_rcu))
 				c->free_by_rcu_tail = llnode;
 		dec_active(c, &flags);

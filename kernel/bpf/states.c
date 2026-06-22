@@ -1241,7 +1241,7 @@ int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 	struct bpf_verifier_state *cur = env->cur_state, *new;
 	bool force_new_state, add_new_state, loop;
 	int n, err, states_cnt = 0;
-	struct list_head *pos, *tmp, *head;
+	struct list_head *pos, *head;
 
 	force_new_state = env->test_state_freq || bpf_is_force_checkpoint(env, insn_idx) ||
 			  /* Avoid accumulating infinitely long jmp history */
@@ -1267,7 +1267,7 @@ int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 
 	loop = false;
 	head = bpf_explored_state(env, insn_idx);
-	list_for_each_safe(pos, tmp, head) {
+	list_for_each_mutable(pos, head) {
 		sl = container_of(pos, struct bpf_verifier_state_list, node);
 		states_cnt++;
 		if (sl->state.insn_idx != insn_idx)

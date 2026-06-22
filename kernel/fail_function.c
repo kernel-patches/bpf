@@ -226,9 +226,9 @@ static void fei_attr_remove(struct fei_attr *attr)
 
 static void fei_attr_remove_all(void)
 {
-	struct fei_attr *attr, *n;
+	struct fei_attr *attr;
 
-	list_for_each_entry_safe(attr, n, &fei_attr_list, list) {
+	list_for_each_entry_mutable(attr, &fei_attr_list, list) {
 		fei_attr_remove(attr);
 	}
 }

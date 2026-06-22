@@ -100,7 +100,7 @@ int dyn_event_release(const char *raw_command, struct dyn_event_operations *type
 		return -EINVAL;
 
 	mutex_lock(&event_mutex);
-	for_each_dyn_event_safe(pos, n) {
+	for_each_dyn_event_safe(pos) {
 		if (type && type != pos->ops)
 			continue;
 		if (!pos->ops->match(system, event,
@@ -207,7 +207,7 @@ static const struct seq_operations dyn_event_seq_op = {
  */
 int dyn_events_release_all(struct dyn_event_operations *type)
 {
-	struct dyn_event *ev, *tmp;
+	struct dyn_event *ev;
 	int ret = 0;
 
 	mutex_lock(&event_mutex);
@@ -219,7 +219,7 @@ int dyn_events_release_all(struct dyn_event_operations *type)
 			goto out;
 		}
 	}
-	for_each_dyn_event_safe(ev, tmp) {
+	for_each_dyn_event_safe(ev) {
 		if (type && ev->ops != type)
 			continue;
 		ret = ev->ops->free(ev);

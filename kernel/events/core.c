@@ -2346,7 +2346,7 @@ static inline struct list_head *get_event_list(struct perf_event *event)
 static void perf_group_detach(struct perf_event *event)
 {
 	struct perf_event *leader = event->group_leader;
-	struct perf_event *sibling, *tmp;
+	struct perf_event *sibling;
 	struct perf_event_context *ctx = event->ctx;
 
 	lockdep_assert_held(&ctx->lock);
@@ -2376,7 +2376,7 @@ static void perf_group_detach(struct perf_event *event)
 	 * upgrade the siblings to singleton events by adding them
 	 * to whatever list we are on.
 	 */
-	list_for_each_entry_safe(sibling, tmp, &event->sibling_list, sibling_list) {
+	list_for_each_entry_mutable(sibling, &event->sibling_list, sibling_list) {
 
 		/*
 		 * Events that have PERF_EV_CAP_SIBLING require being part of
@@ -2405,8 +2405,8 @@ static void perf_group_detach(struct perf_event *event)
 	}
 
 out:
-	for_each_sibling_event(tmp, leader)
-		perf_event__header_size(tmp);
+	for_each_sibling_event(sibling, leader)
+		perf_event__header_size(sibling);
 
 	perf_event__header_size(leader);
 }
@@ -3528,7 +3528,7 @@ static void __pmu_ctx_sched_out(struct perf_event_pmu_context *pmu_ctx,
 				enum event_type_t event_type)
 {
 	struct perf_event_context *ctx = pmu_ctx->ctx;
-	struct perf_event *event, *tmp;
+	struct perf_event *event;
 	struct pmu *pmu = pmu_ctx->pmu;
 
 	if (ctx->task && !(ctx->is_active & EVENT_ALL)) {
@@ -3543,16 +3543,14 @@ static void __pmu_ctx_sched_out(struct perf_event_pmu_context *pmu_ctx,
 
 	perf_pmu_disable(pmu);
 	if (event_type & EVENT_PINNED) {
-		list_for_each_entry_safe(event, tmp,
-					 &pmu_ctx->pinned_active,
-					 active_list)
+		list_for_each_entry_mutable(event, &pmu_ctx->pinned_active,
+					    active_list)
 			group_sched_out(event, ctx);
 	}
 
 	if (event_type & EVENT_FLEXIBLE) {
-		list_for_each_entry_safe(event, tmp,
-					 &pmu_ctx->flexible_active,
-					 active_list)
+		list_for_each_entry_mutable(event, &pmu_ctx->flexible_active,
+					    active_list)
 			group_sched_out(event, ctx);
 		/*
 		 * Since we cleared EVENT_FLEXIBLE, also clear
@@ -4738,7 +4736,7 @@ static void perf_event_exit_event(struct perf_event *event,
 static void perf_event_remove_on_exec(struct perf_event_context *ctx)
 {
 	struct perf_event_context *clone_ctx = NULL;
-	struct perf_event *event, *next;
+	struct perf_event *event;
 	unsigned long flags;
 	bool modified = false;
 
@@ -4747,7 +4745,7 @@ static void perf_event_remove_on_exec(struct perf_event_context *ctx)
 	if (WARN_ON_ONCE(ctx->task != current))
 		goto unlock;
 
-	list_for_each_entry_safe(event, next, &ctx->event_list, event_entry) {
+	list_for_each_entry_mutable(event, &ctx->event_list, event_entry) {
 		if (!event->attr.remove_on_exec)
 			continue;
 
@@ -11833,9 +11831,9 @@ perf_addr_filter_new(struct perf_event *event, struct list_head *filters)
 
 static void free_filters_list(struct list_head *filters)
 {
-	struct perf_addr_filter *filter, *iter;
+	struct perf_addr_filter *filter;
 
-	list_for_each_entry_safe(filter, iter, filters, entry) {
+	list_for_each_entry_mutable(filter, filters, entry) {
 		path_put(&filter->path);
 		list_del(&filter->entry);
 		kfree(filter);
@@ -14436,7 +14434,7 @@ static void __perf_pmu_install_event(struct pmu *pmu,
 static void __perf_pmu_install(struct perf_event_context *ctx,
 			       int cpu, struct pmu *pmu, struct list_head *events)
 {
-	struct perf_event *event, *tmp;
+	struct perf_event *event;
 
 	/*
 	 * Re-instate events in 2 passes.
@@ -14446,7 +14444,7 @@ static void __perf_pmu_install(struct perf_event_context *ctx,
 	 * leader will enable its siblings, even if those are still on the old
 	 * context.
 	 */
-	list_for_each_entry_safe(event, tmp, events, migrate_entry) {
+	list_for_each_entry_mutable(event, events, migrate_entry) {
 		if (event->group_leader == event)
 			continue;
 
@@ -14458,7 +14456,7 @@ static void __perf_pmu_install(struct perf_event_context *ctx,
 	 * Once all the siblings are setup properly, install the group leaders
 	 * to make it go.
 	 */
-	list_for_each_entry_safe(event, tmp, events, migrate_entry) {
+	list_for_each_entry_mutable(event, events, migrate_entry) {
 		list_del(&event->migrate_entry);
 		__perf_pmu_install_event(pmu, ctx, cpu, event);
 	}
@@ -14592,7 +14590,7 @@ perf_event_exit_event(struct perf_event *event,
 static void perf_event_exit_task_context(struct task_struct *task, bool exit)
 {
 	struct perf_event_context *ctx, *clone_ctx = NULL;
-	struct perf_event *child_event, *next;
+	struct perf_event *child_event;
 
 	ctx = perf_pin_task_context(task);
 	if (!ctx)
@@ -14642,7 +14640,7 @@ static void perf_event_exit_task_context(struct task_struct *task, bool exit)
 	if (exit)
 		perf_event_task(task, ctx, 0);
 
-	list_for_each_entry_safe(child_event, next, &ctx->event_list, event_entry)
+	list_for_each_entry_mutable(child_event, &ctx->event_list, event_entry)
 		perf_event_exit_event(child_event, ctx, exit ? task : NULL, false);
 
 	mutex_unlock(&ctx->mutex);
@@ -14675,13 +14673,13 @@ static void perf_event_exit_task_context(struct task_struct *task, bool exit)
  */
 void perf_event_exit_task(struct task_struct *task)
 {
-	struct perf_event *event, *tmp;
+	struct perf_event *event;
 
 	WARN_ON_ONCE(task != current);
 
 	mutex_lock(&task->perf_event_mutex);
-	list_for_each_entry_safe(event, tmp, &task->perf_event_list,
-				 owner_entry) {
+	list_for_each_entry_mutable(event, &task->perf_event_list,
+				    owner_entry) {
 		list_del_init(&event->owner_entry);
 
 		/*

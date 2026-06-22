@@ -92,7 +92,7 @@ EXPORT_SYMBOL(remove_wait_queue);
 static int __wake_up_common(struct wait_queue_head *wq_head, unsigned int mode,
 			int nr_exclusive, int wake_flags, void *key)
 {
-	wait_queue_entry_t *curr, *next;
+	wait_queue_entry_t *curr;
 
 	lockdep_assert_held(&wq_head->lock);
 
@@ -101,7 +101,7 @@ static int __wake_up_common(struct wait_queue_head *wq_head, unsigned int mode,
 	if (&curr->entry == &wq_head->head)
 		return nr_exclusive;
 
-	list_for_each_entry_safe_from(curr, next, &wq_head->head, entry) {
+	list_for_each_entry_mutable_from(curr, &wq_head->head, entry) {
 		unsigned flags = curr->flags;
 		int ret;
 

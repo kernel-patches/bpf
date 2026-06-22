@@ -1083,12 +1083,12 @@ out:
 static void prog_array_map_poke_untrack(struct bpf_map *map,
 					struct bpf_prog_aux *prog_aux)
 {
-	struct prog_poke_elem *elem, *tmp;
+	struct prog_poke_elem *elem;
 	struct bpf_array_aux *aux;
 
 	aux = container_of(map, struct bpf_array, map)->aux;
 	mutex_lock(&aux->poke_mutex);
-	list_for_each_entry_safe(elem, tmp, &aux->poke_progs, list) {
+	list_for_each_entry_mutable(elem, &aux->poke_progs, list) {
 		if (elem->aux == prog_aux) {
 			list_del_init(&elem->list);
 			kfree(elem);
@@ -1196,11 +1196,11 @@ static struct bpf_map *prog_array_map_alloc(union bpf_attr *attr)
 
 static void prog_array_map_free(struct bpf_map *map)
 {
-	struct prog_poke_elem *elem, *tmp;
+	struct prog_poke_elem *elem;
 	struct bpf_array_aux *aux;
 
 	aux = container_of(map, struct bpf_array, map)->aux;
-	list_for_each_entry_safe(elem, tmp, &aux->poke_progs, list) {
+	list_for_each_entry_mutable(elem, &aux->poke_progs, list) {
 		list_del_init(&elem->list);
 		kfree(elem);
 	}

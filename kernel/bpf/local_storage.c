@@ -342,11 +342,11 @@ static void cgroup_storage_map_free(struct bpf_map *_map)
 {
 	struct bpf_cgroup_storage_map *map = map_to_storage(_map);
 	struct list_head *storages = &map->list;
-	struct bpf_cgroup_storage *storage, *stmp;
+	struct bpf_cgroup_storage *storage;
 
 	cgroup_lock();
 
-	list_for_each_entry_safe(storage, stmp, storages, list_map) {
+	list_for_each_entry_mutable(storage, storages, list_map) {
 		bpf_cgroup_storage_unlink(storage);
 		bpf_cgroup_storage_free(storage);
 	}

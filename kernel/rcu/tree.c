@@ -1664,7 +1664,7 @@ static void rcu_sr_normal_complete(struct llist_node *node)
 
 static void rcu_sr_normal_gp_cleanup_work(struct work_struct *work)
 {
-	struct llist_node *done, *rcu, *next, *head;
+	struct llist_node *done, *rcu, *head;
 
 	/*
 	 * This work execution can potentially execute
@@ -1694,7 +1694,7 @@ static void rcu_sr_normal_gp_cleanup_work(struct work_struct *work)
 	 * nodes is removed, in next round of cleanup
 	 * work execution.
 	 */
-	llist_for_each_safe(rcu, next, head) {
+	llist_for_each_mutable(rcu, head) {
 		if (!rcu_sr_is_wait_head(rcu)) {
 			rcu_sr_normal_complete(rcu);
 			continue;
@@ -1726,7 +1726,7 @@ static void rcu_sr_normal_gp_cleanup(void)
 	/*
 	 * Process (a) and (d) cases. See an illustration.
 	 */
-	llist_for_each_safe(rcu, next, wait_tail->next) {
+	llist_for_each_mutable(rcu, next, wait_tail->next) {
 		if (rcu_sr_is_wait_head(rcu))
 			break;
 

@@ -1951,9 +1951,9 @@ EXPORT_SYMBOL(resource_list_create_entry);
 
 void resource_list_free(struct list_head *head)
 {
-	struct resource_entry *entry, *tmp;
+	struct resource_entry *entry;
 
-	list_for_each_entry_safe(entry, tmp, head, node)
+	list_for_each_entry_mutable(entry, head, node)
 		resource_list_destroy_entry(entry);
 }
 EXPORT_SYMBOL(resource_list_free);

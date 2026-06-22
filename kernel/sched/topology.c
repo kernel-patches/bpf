@@ -1753,7 +1753,7 @@ done:
  */
 static void asym_cpu_capacity_scan(void)
 {
-	struct asym_cap_data *entry, *next;
+	struct asym_cap_data *entry;
 	int cpu;
 
 	list_for_each_entry(entry, &asym_cap_list, link)
@@ -1762,7 +1762,7 @@ static void asym_cpu_capacity_scan(void)
 	for_each_cpu_and(cpu, cpu_possible_mask, housekeeping_cpumask(HK_TYPE_DOMAIN))
 		asym_cpu_capacity_update_data(cpu);
 
-	list_for_each_entry_safe(entry, next, &asym_cap_list, link) {
+	list_for_each_entry_mutable(entry, &asym_cap_list, link) {
 		if (cpumask_empty(cpu_capacity_span(entry))) {
 			list_del_rcu(&entry->link);
 			call_rcu(&entry->rcu, free_asym_cap_entry);

@@ -8476,7 +8476,7 @@ static void purge_cand_cache(struct btf *btf);
 static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			     void *module)
 {
-	struct btf_module *btf_mod, *tmp;
+	struct btf_module *btf_mod;
 	struct module *mod = module;
 	struct btf *btf;
 	int err = 0;
@@ -8549,7 +8549,7 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 		break;
 	case MODULE_STATE_LIVE:
 		mutex_lock(&btf_module_mutex);
-		list_for_each_entry_safe(btf_mod, tmp, &btf_modules, list) {
+		list_for_each_entry_mutable(btf_mod, &btf_modules, list) {
 			if (btf_mod->module != module)
 				continue;
 
@@ -8560,7 +8560,7 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 		break;
 	case MODULE_STATE_GOING:
 		mutex_lock(&btf_module_mutex);
-		list_for_each_entry_safe(btf_mod, tmp, &btf_modules, list) {
+		list_for_each_entry_mutable(btf_mod, &btf_modules, list) {
 			if (btf_mod->module != module)
 				continue;
 
@@ -8604,10 +8604,10 @@ struct module *btf_try_get_module(const struct btf *btf)
 {
 	struct module *res = NULL;
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
-	struct btf_module *btf_mod, *tmp;
+	struct btf_module *btf_mod;
 
 	mutex_lock(&btf_module_mutex);
-	list_for_each_entry_safe(btf_mod, tmp, &btf_modules, list) {
+	list_for_each_entry_mutable(btf_mod, &btf_modules, list) {
 		if (btf_mod->btf != btf)
 			continue;
 
@@ -8633,7 +8633,7 @@ struct module *btf_try_get_module(const struct btf *btf)
 static struct btf *btf_get_module_btf(const struct module *module)
 {
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
-	struct btf_module *btf_mod, *tmp;
+	struct btf_module *btf_mod;
 #endif
 	struct btf *btf = NULL;
 
@@ -8646,7 +8646,7 @@ static struct btf *btf_get_module_btf(const struct module *module)
 
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
 	mutex_lock(&btf_module_mutex);
-	list_for_each_entry_safe(btf_mod, tmp, &btf_modules, list) {
+	list_for_each_entry_mutable(btf_mod, &btf_modules, list) {
 		if (btf_mod->module != module)
 			continue;
 
@@ -8810,7 +8810,7 @@ static int btf_check_iter_kfuncs(struct btf *btf, const char *func_name,
 static int btf_check_kfunc_name(struct btf *btf, const char *func_name, u32 kind)
 {
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
-	struct btf_module *btf_mod, *tmp;
+	struct btf_module *btf_mod;
 #endif
 	s32 id;
 
@@ -8826,7 +8826,7 @@ static int btf_check_kfunc_name(struct btf *btf, const char *func_name, u32 kind
 
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
 	guard(mutex)(&btf_module_mutex);
-	list_for_each_entry_safe(btf_mod, tmp, &btf_modules, list) {
+	list_for_each_entry_mutable(btf_mod, &btf_modules, list) {
 		if (btf_mod->btf == btf)
 			continue;
 		id = btf_find_by_name_kind(btf_mod->btf, func_name, kind);

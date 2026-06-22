@@ -1662,7 +1662,7 @@ static void bpf_async_process_op(struct bpf_async_cb *cb, u32 op,
 static void bpf_async_irq_worker(struct irq_work *work)
 {
 	struct bpf_async_cb *cb = container_of(work, struct bpf_async_cb, worker);
-	struct llist_node *pos, *n, *list;
+	struct llist_node *pos, *list;
 
 	list = llist_del_all(&cb->async_cmds);
 	if (!list)
@@ -1670,7 +1670,7 @@ static void bpf_async_irq_worker(struct irq_work *work)
 
 	list = llist_reverse_order(list);
 	this_cpu_write(async_cb_running, cb);
-	llist_for_each_safe(pos, n, list) {
+	llist_for_each_mutable(pos, list) {
 		struct bpf_async_cmd *cmd;
 
 		cmd = container_of(pos, struct bpf_async_cmd, node);
@@ -2247,7 +2247,7 @@ EXPORT_SYMBOL_GPL(bpf_base_func_proto);
 void bpf_list_head_free(const struct btf_field *field, void *list_head,
 			struct bpf_spin_lock *spin_lock)
 {
-	struct list_head *head = list_head, drain, *pos, *n;
+	struct list_head *head = list_head, drain, *pos;
 
 	BUILD_BUG_ON(sizeof(struct list_head) > sizeof(struct bpf_list_head));
 	BUILD_BUG_ON(__alignof__(struct list_head) > __alignof__(struct bpf_list_head));
@@ -2262,7 +2262,7 @@ void bpf_list_head_free(const struct btf_field *field, void *list_head,
 	__bpf_spin_lock_irqsave(spin_lock);
 	if (!head->next || list_empty(head))
 		goto unlock;
-	list_for_each_safe(pos, n, head) {
+	list_for_each_mutable(pos, head) {
 		struct bpf_list_node_kern *node;
 
 		node = container_of(pos, struct bpf_list_node_kern, list_head);

@@ -510,10 +510,9 @@ EXPORT_SYMBOL_GPL(torture_shuffle_task_register);
 static void torture_shuffle_task_unregister_all(void)
 {
 	struct shuffle_task *stp;
-	struct shuffle_task *p;
 
 	mutex_lock(&shuffle_task_mutex);
-	list_for_each_entry_safe(stp, p, &shuffle_task_list, st_l) {
+	list_for_each_entry_mutable(stp, &shuffle_task_list, st_l) {
 		list_del(&stp->st_l);
 		kfree(stp);
 	}

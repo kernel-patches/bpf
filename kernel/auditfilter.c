@@ -1445,14 +1445,14 @@ static int update_lsm_rule(struct audit_krule *r)
  * updated rule. */
 int audit_update_lsm_rules(void)
 {
-	struct audit_krule *r, *n;
+	struct audit_krule *r;
 	int i, err = 0;
 
 	/* audit_filter_mutex synchronizes the writers */
 	mutex_lock(&audit_filter_mutex);
 
 	for (i = 0; i < AUDIT_NR_FILTERS; i++) {
-		list_for_each_entry_safe(r, n, &audit_rules_list[i], list) {
+		list_for_each_entry_mutable(r, &audit_rules_list[i], list) {
 			int res = update_lsm_rule(r);
 			if (!err)
 				err = res;

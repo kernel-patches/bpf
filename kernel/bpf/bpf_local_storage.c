@@ -161,14 +161,13 @@ void bpf_selem_free(struct bpf_local_storage_elem *selem,
 static void bpf_selem_free_list(struct hlist_head *list, bool reuse_now)
 {
 	struct bpf_local_storage_elem *selem;
-	struct hlist_node *n;
 
 	/* The "_safe" iteration is needed.
 	 * The loop is not removing the selem from the list
 	 * but bpf_selem_free will use the selem->rcu_head
 	 * which is union-ized with the selem->free_node.
 	 */
-	hlist_for_each_entry_safe(selem, n, list, free_node)
+	hlist_for_each_entry_mutable(selem, list, free_node)
 		bpf_selem_free(selem, reuse_now);
 }
 

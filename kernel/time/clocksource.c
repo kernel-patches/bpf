@@ -776,12 +776,12 @@ static void clocksource_dequeue_watchdog(struct clocksource *cs)
 
 static int __clocksource_watchdog_kthread(void)
 {
-	struct clocksource *cs, *tmp;
+	struct clocksource *cs;
 	unsigned long flags;
 	int select = 0;
 
 	spin_lock_irqsave(&watchdog_lock, flags);
-	list_for_each_entry_safe(cs, tmp, &watchdog_list, wd_list) {
+	list_for_each_entry_mutable(cs, &watchdog_list, wd_list) {
 		if (cs->flags & CLOCK_SOURCE_UNSTABLE) {
 			list_del_init(&cs->wd_list);
 			clocksource_change_rating(cs, 0);

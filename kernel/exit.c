@@ -630,7 +630,7 @@ static struct task_struct *find_child_reaper(struct task_struct *father,
 {
 	struct pid_namespace *pid_ns = task_active_pid_ns(father);
 	struct task_struct *reaper = pid_ns->child_reaper;
-	struct task_struct *p, *n;
+	struct task_struct *p;
 
 	if (likely(reaper != father))
 		return reaper;
@@ -644,7 +644,7 @@ static struct task_struct *find_child_reaper(struct task_struct *father,
 
 	write_unlock_irq(&tasklist_lock);
 
-	list_for_each_entry_safe(p, n, dead, ptrace_entry) {
+	list_for_each_entry_mutable(p, dead, ptrace_entry) {
 		list_del_init(&p->ptrace_entry);
 		release_task(p);
 	}
@@ -766,7 +766,7 @@ static void forget_original_parent(struct task_struct *father,
 static void exit_notify(struct task_struct *tsk, int group_dead)
 {
 	bool autoreap;
-	struct task_struct *p, *n;
+	struct task_struct *p;
 	LIST_HEAD(dead);
 
 	write_lock_irq(&tasklist_lock);
@@ -800,7 +800,7 @@ static void exit_notify(struct task_struct *tsk, int group_dead)
 		wake_up_process(tsk->signal->group_exec_task);
 	write_unlock_irq(&tasklist_lock);
 
-	list_for_each_entry_safe(p, n, &dead, ptrace_entry) {
+	list_for_each_entry_mutable(p, &dead, ptrace_entry) {
 		list_del_init(&p->ptrace_entry);
 		release_task(p);
 	}

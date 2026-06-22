@@ -137,8 +137,8 @@ static void __bpf_offload_dev_netdev_unregister(struct bpf_offload_dev *offdev,
 						struct net_device *netdev)
 {
 	struct bpf_offload_netdev *ondev, *altdev = NULL;
-	struct bpf_offloaded_map *offmap, *mtmp;
-	struct bpf_prog_offload *offload, *ptmp;
+	struct bpf_offloaded_map *offmap;
+	struct bpf_prog_offload *offload;
 
 	ASSERT_RTNL();
 
@@ -165,9 +165,9 @@ static void __bpf_offload_dev_netdev_unregister(struct bpf_offload_dev *offdev,
 			offmap->netdev = altdev->netdev;
 		list_splice_init(&ondev->maps, &altdev->maps);
 	} else {
-		list_for_each_entry_safe(offload, ptmp, &ondev->progs, offloads)
+		list_for_each_entry_mutable(offload, &ondev->progs, offloads)
 			__bpf_prog_offload_destroy(offload->prog);
-		list_for_each_entry_safe(offmap, mtmp, &ondev->maps, offloads)
+		list_for_each_entry_mutable(offmap, &ondev->maps, offloads)
 			__bpf_map_offload_destroy(offmap);
 	}
 

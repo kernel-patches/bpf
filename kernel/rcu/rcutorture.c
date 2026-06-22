@@ -537,11 +537,10 @@ static void
 rcu_torture_pipe_update(struct rcu_torture *old_rp)
 {
 	struct rcu_torture *rp;
-	struct rcu_torture *rp1;
 
 	if (old_rp)
 		list_add(&old_rp->rtort_free, &rcu_torture_removed);
-	list_for_each_entry_safe(rp, rp1, &rcu_torture_removed, rtort_free) {
+	list_for_each_entry_mutable(rp, &rcu_torture_removed, rtort_free) {
 		if (rcu_torture_pipe_update_one(rp)) {
 			list_del(&rp->rtort_free);
 			rcu_torture_free(rp);

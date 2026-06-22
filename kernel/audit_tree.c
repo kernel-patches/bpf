@@ -543,10 +543,10 @@ static void audit_tree_log_remove_rule(struct audit_context *context,
 
 static void kill_rules(struct audit_context *context, struct audit_tree *tree)
 {
-	struct audit_krule *rule, *next;
+	struct audit_krule *rule;
 	struct audit_entry *entry;
 
-	list_for_each_entry_safe(rule, next, &tree->rules, rlist) {
+	list_for_each_entry_mutable(rule, &tree->rules, rlist) {
 		entry = container_of(rule, struct audit_entry, rule);
 
 		list_del_init(&rule->rlist);

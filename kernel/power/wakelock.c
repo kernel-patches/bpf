@@ -102,13 +102,13 @@ static inline void wakelocks_lru_most_recent(struct wakelock *wl)
 
 static void __wakelocks_gc(struct work_struct *work)
 {
-	struct wakelock *wl, *aux;
+	struct wakelock *wl;
 	ktime_t now;
 
 	mutex_lock(&wakelocks_lock);
 
 	now = ktime_get();
-	list_for_each_entry_safe_reverse(wl, aux, &wakelocks_lru_list, lru) {
+	list_for_each_entry_mutable_reverse(wl, &wakelocks_lru_list, lru) {
 		u64 idle_time_ns;
 		bool active;
 

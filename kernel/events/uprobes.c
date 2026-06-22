@@ -258,13 +258,13 @@ static void delayed_uprobe_delete(struct delayed_uprobe *du)
 
 static void delayed_uprobe_remove(struct uprobe *uprobe, struct mm_struct *mm)
 {
-	struct list_head *pos, *q;
+	struct list_head *pos;
 	struct delayed_uprobe *du;
 
 	if (!uprobe && !mm)
 		return;
 
-	list_for_each_safe(pos, q, &delayed_uprobe_list) {
+	list_for_each_mutable(pos, &delayed_uprobe_list) {
 		du = list_entry(pos, struct delayed_uprobe, list);
 
 		if (uprobe && du->uprobe != uprobe)
@@ -1562,13 +1562,13 @@ static void build_probe_list(struct inode *inode,
 /* @vma contains reference counter, not the probed instruction. */
 static int delayed_ref_ctr_inc(struct vm_area_struct *vma)
 {
-	struct list_head *pos, *q;
+	struct list_head *pos;
 	struct delayed_uprobe *du;
 	unsigned long vaddr;
 	int ret = 0, err = 0;
 
 	mutex_lock(&delayed_uprobe_lock);
-	list_for_each_safe(pos, q, &delayed_uprobe_list) {
+	list_for_each_mutable(pos, &delayed_uprobe_list) {
 		du = list_entry(pos, struct delayed_uprobe, list);
 
 		if (du->mm != vma->vm_mm ||
@@ -1597,7 +1597,7 @@ static int delayed_ref_ctr_inc(struct vm_area_struct *vma)
 int uprobe_mmap(struct vm_area_struct *vma)
 {
 	struct list_head tmp_list;
-	struct uprobe *uprobe, *u;
+	struct uprobe *uprobe;
 	struct inode *inode;
 
 	if (no_uprobe_events())
@@ -1622,7 +1622,7 @@ int uprobe_mmap(struct vm_area_struct *vma)
 	 * removed. But in this case filter_chain() must return false, all
 	 * consumers have gone away.
 	 */
-	list_for_each_entry_safe(uprobe, u, &tmp_list, pending_list) {
+	list_for_each_entry_mutable(uprobe, &tmp_list, pending_list) {
 		if (!fatal_signal_pending(current) &&
 		    filter_chain(uprobe, vma->vm_mm)) {
 			unsigned long vaddr = offset_to_vaddr(vma, uprobe->offset);

@@ -1168,7 +1168,7 @@ static int seccomp_do_user_notification(int this_syscall,
 	u32 flags = 0;
 	long ret = 0;
 	struct seccomp_knotif n = {};
-	struct seccomp_kaddfd *addfd, *tmp;
+	struct seccomp_kaddfd *addfd;
 
 	mutex_lock(&match->notify_lock);
 	err = -ENOSYS;
@@ -1225,7 +1225,7 @@ static int seccomp_do_user_notification(int this_syscall,
 
 interrupted:
 	/* If there were any pending addfd calls, clear them out */
-	list_for_each_entry_safe(addfd, tmp, &n.addfd, list) {
+	list_for_each_entry_mutable(addfd, &n.addfd, list) {
 		/* The process went away before we got a chance to handle it */
 		addfd->ret = -ESRCH;
 		list_del_init(&addfd->list);

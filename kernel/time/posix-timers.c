@@ -1085,7 +1085,6 @@ SYSCALL_DEFINE1(timer_delete, timer_t, timer_id)
 void exit_itimers(struct task_struct *tsk)
 {
 	struct hlist_head timers;
-	struct hlist_node *next;
 	struct k_itimer *timer;
 
 	/* Clear restore mode for exec() */
@@ -1099,7 +1098,7 @@ void exit_itimers(struct task_struct *tsk)
 		hlist_move_list(&tsk->signal->posix_timers, &timers);
 
 	/* The timers are not longer accessible via tsk::signal */
-	hlist_for_each_entry_safe(timer, next, &timers, list) {
+	hlist_for_each_entry_mutable(timer, &timers, list) {
 		scoped_guard (spinlock_irq, &timer->it_lock)
 			posix_timer_delete(timer);
 		posix_timer_unhash_and_free(timer);

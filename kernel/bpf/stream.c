@@ -96,9 +96,9 @@ static void bpf_stream_free_elem(struct bpf_stream_elem *elem)
 
 static void bpf_stream_free_list(struct llist_node *list)
 {
-	struct bpf_stream_elem *elem, *tmp;
+	struct bpf_stream_elem *elem;
 
-	llist_for_each_entry_safe(elem, tmp, list, node)
+	llist_for_each_entry_mutable(elem, list, node)
 		bpf_stream_free_elem(elem);
 }
 

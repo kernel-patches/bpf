@@ -1167,7 +1167,7 @@ static void move_linked_works(struct work_struct *work, struct list_head *head,
 	 * Linked worklist will always end before the end of the list,
 	 * use NULL for list head.
 	 */
-	list_for_each_entry_safe_from(work, n, NULL, entry) {
+	list_for_each_entry_mutable_from(work, n, NULL, entry) {
 		list_move_tail(&work->entry, head);
 		if (!(*work_data_bits(work) & WORK_STRUCT_LINKED))
 			break;
@@ -1193,7 +1193,7 @@ static void move_linked_works(struct work_struct *work, struct list_head *head,
  *
  * If @nextp is not NULL, it's updated to point to the next work of the last
  * scheduled work. This allows assign_work() to be nested inside
- * list_for_each_entry_safe().
+ * list_for_each_entry_mutable().
  *
  * Returns %true if @work was successfully assigned to @worker. %false if @work
  * was punted to another worker already executing it.
@@ -2912,9 +2912,9 @@ static void detach_dying_workers(struct list_head *cull_list)
 
 static void reap_dying_workers(struct list_head *cull_list)
 {
-	struct worker *worker, *tmp;
+	struct worker *worker;
 
-	list_for_each_entry_safe(worker, tmp, cull_list, entry) {
+	list_for_each_entry_mutable(worker, cull_list, entry) {
 		list_del_init(&worker->entry);
 		kthread_stop_put(worker->task);
 		kfree(worker);
@@ -3546,7 +3546,7 @@ static bool assign_rescuer_work(struct pool_workqueue *pwq, struct worker *rescu
 		work = list_next_entry(cursor, entry);
 
 	/* find the next work item to rescue */
-	list_for_each_entry_safe_from(work, n, &pool->worklist, entry) {
+	list_for_each_entry_mutable_from(work, n, &pool->worklist, entry) {
 		if (get_work_pwq(work) == pwq && assign_work(work, rescuer, &n)) {
 			pwq->stats[PWQ_STAT_RESCUED]++;
 			/* put the cursor for next search */
@@ -4153,7 +4153,7 @@ void __flush_workqueue(struct workqueue_struct *wq)
 		struct wq_flusher *next, *tmp;
 
 		/* complete all the flushers sharing the current flush color */
-		list_for_each_entry_safe(next, tmp, &wq->flusher_queue, list) {
+		list_for_each_entry_mutable(next, &wq->flusher_queue, list) {
 			if (next->flush_color != wq->flush_color)
 				break;
 			list_del_init(&next->list);
@@ -7076,7 +7076,7 @@ static int workqueue_apply_unbound_cpumask(const cpumask_var_t unbound_cpumask)
 	LIST_HEAD(ctxs);
 	int ret = 0;
 	struct workqueue_struct *wq;
-	struct apply_wqattrs_ctx *ctx, *n;
+	struct apply_wqattrs_ctx *ctx;
 
 	lockdep_assert_held(&wq_pool_mutex);
 
@@ -7093,7 +7093,7 @@ static int workqueue_apply_unbound_cpumask(const cpumask_var_t unbound_cpumask)
 		list_add_tail(&ctx->list, &ctxs);
 	}
 
-	list_for_each_entry_safe(ctx, n, &ctxs, list) {
+	list_for_each_entry_mutable(ctx, &ctxs, list) {
 		if (!ret)
 			apply_wqattrs_commit(ctx);
 		apply_wqattrs_cleanup(ctx);

@@ -821,9 +821,9 @@ trace:
 
 void __cpu_map_flush(struct list_head *flush_list)
 {
-	struct xdp_bulk_queue *bq, *tmp;
+	struct xdp_bulk_queue *bq;
 
-	list_for_each_entry_safe(bq, tmp, flush_list, flush_node) {
+	list_for_each_entry_mutable(bq, flush_list, flush_node) {
 		local_lock_nested_bh(&bq->obj->bulkq->bq_lock);
 		bq_flush_to_queue(bq);
 		local_unlock_nested_bh(&bq->obj->bulkq->bq_lock);

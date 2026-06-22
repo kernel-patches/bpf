@@ -678,7 +678,7 @@ void clockevents_resume(void)
  */
 void tick_offline_cpu(unsigned int cpu)
 {
-	struct clock_event_device *dev, *tmp;
+	struct clock_event_device *dev;
 
 	raw_spin_lock(&clockevents_lock);
 
@@ -689,13 +689,13 @@ void tick_offline_cpu(unsigned int cpu)
 	 * Unregister the clock event devices which were
 	 * released above.
 	 */
-	list_for_each_entry_safe(dev, tmp, &clockevents_released, list)
+	list_for_each_entry_mutable(dev, &clockevents_released, list)
 		list_del(&dev->list);
 
 	/*
 	 * Now check whether the CPU has left unused per cpu devices
 	 */
-	list_for_each_entry_safe(dev, tmp, &clockevent_devices, list) {
+	list_for_each_entry_mutable(dev, &clockevent_devices, list) {
 		if (cpumask_test_cpu(cpu, dev->cpumask) &&
 		    cpumask_weight(dev->cpumask) == 1 &&
 		    !tick_is_broadcast_device(dev)) {

@@ -328,7 +328,7 @@ static void cgroup_bpf_release(struct work_struct *work)
 					       bpf.release_work);
 	struct bpf_prog_array *old_array;
 	struct list_head *storages = &cgrp->bpf.storages;
-	struct bpf_cgroup_storage *storage, *stmp;
+	struct bpf_cgroup_storage *storage;
 
 	unsigned int atype;
 
@@ -337,9 +337,8 @@ static void cgroup_bpf_release(struct work_struct *work)
 	for (atype = 0; atype < ARRAY_SIZE(cgrp->bpf.progs); atype++) {
 		struct hlist_head *progs = &cgrp->bpf.progs[atype];
 		struct bpf_prog_list *pl;
-		struct hlist_node *pltmp;
 
-		hlist_for_each_entry_safe(pl, pltmp, progs, node) {
+		hlist_for_each_entry_mutable(pl, progs, node) {
 			hlist_del(&pl->node);
 			if (pl->prog) {
 				if (pl->prog->expected_attach_type == BPF_LSM_CGROUP)
@@ -360,7 +359,7 @@ static void cgroup_bpf_release(struct work_struct *work)
 		bpf_prog_array_free(old_array);
 	}
 
-	list_for_each_entry_safe(storage, stmp, storages, list_cg) {
+	list_for_each_entry_mutable(storage, storages, list_cg) {
 		bpf_cgroup_storage_unlink(storage);
 		bpf_cgroup_storage_free(storage);
 	}

@@ -1296,7 +1296,7 @@ static inline bool posix_cpu_timers_enable_work(struct task_struct *tsk,
 
 static void handle_posix_cpu_timers(struct task_struct *tsk)
 {
-	struct k_itimer *timer, *next;
+	struct k_itimer *timer;
 	unsigned long flags, start;
 	LIST_HEAD(firing);
 
@@ -1369,7 +1369,7 @@ static void handle_posix_cpu_timers(struct task_struct *tsk)
 	 * each timer's lock before clearing its firing flag, so no
 	 * timer call will interfere.
 	 */
-	list_for_each_entry_safe(timer, next, &firing, it.cpu.elist) {
+	list_for_each_entry_mutable(timer, &firing, it.cpu.elist) {
 		bool cpu_firing;
 
 		/*

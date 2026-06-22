@@ -7,8 +7,8 @@
 extern struct mutex klp_mutex;
 extern struct list_head klp_patches;
 
-#define klp_for_each_patch_safe(patch, tmp_patch)		\
-	list_for_each_entry_safe(patch, tmp_patch, &klp_patches, list)
+#define klp_for_each_patch_safe(patch)		\
+	list_for_each_entry_mutable(patch, &klp_patches, list)
 
 #define klp_for_each_patch(patch)	\
 	list_for_each_entry(patch, &klp_patches, list)

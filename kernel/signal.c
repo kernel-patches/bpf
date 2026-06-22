@@ -748,7 +748,7 @@ static void sigqueue_free_ignored(struct task_struct *tsk, struct sigqueue *q)
 /* Remove signals in mask from the pending set and queue. */
 static void flush_sigqueue_mask(struct task_struct *p, sigset_t *mask, struct sigpending *s)
 {
-	struct sigqueue *q, *n;
+	struct sigqueue *q;
 	sigset_t m;
 
 	lockdep_assert_held(&p->sighand->siglock);
@@ -758,7 +758,7 @@ static void flush_sigqueue_mask(struct task_struct *p, sigset_t *mask, struct si
 		return;
 
 	sigandnsets(&s->signal, &s->signal, mask);
-	list_for_each_entry_safe(q, n, &s->list, list) {
+	list_for_each_entry_mutable(q, &s->list, list) {
 		if (sigismember(mask, q->info.si_signo)) {
 			list_del_init(&q->list);
 			sigqueue_free_ignored(p, q);
@@ -1899,12 +1899,12 @@ EXPORT_SYMBOL(kill_pid);
 static void __flush_itimer_signals(struct sigpending *pending)
 {
 	sigset_t signal, retain;
-	struct sigqueue *q, *n;
+	struct sigqueue *q;
 
 	signal = pending->signal;
 	sigemptyset(&retain);
 
-	list_for_each_entry_safe(q, n, &pending->list, list) {
+	list_for_each_entry_mutable(q, &pending->list, list) {
 		int sig = q->info.si_signo;
 
 		if (likely(q->info.si_code != SI_TIMER)) {
@@ -2101,7 +2101,6 @@ static inline void posixtimer_sig_ignore(struct task_struct *tsk, struct sigqueu
 static void posixtimer_sig_unignore(struct task_struct *tsk, int sig)
 {
 	struct hlist_head *head = &tsk->signal->ignored_posix_timers;
-	struct hlist_node *tmp;
 	struct k_itimer *tmr;
 
 	if (likely(hlist_empty(head)))
@@ -2114,7 +2113,7 @@ static void posixtimer_sig_unignore(struct task_struct *tsk, int sig)
 	 * rearmed or not. This cannot be decided here w/o dropping sighand
 	 * lock and creating a loop retry horror show.
 	 */
-	hlist_for_each_entry_safe(tmr, tmp , head, ignored_list) {
+	hlist_for_each_entry_mutable(tmr, head, ignored_list) {
 		struct task_struct *target;
 
 		/*

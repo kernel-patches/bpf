@@ -842,7 +842,7 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 	long kaddr, pgoff;
 	struct page *page;
 	struct llist_head free_pages;
-	struct llist_node *pos, *t;
+	struct llist_node *pos;
 	struct arena_free_span *s;
 	struct clear_range_data cdata;
 	unsigned long flags;
@@ -889,7 +889,7 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 		/* bulk zap if multiple pages being freed */
 		zap_pages(arena, full_uaddr, page_cnt);
 
-	llist_for_each_safe(pos, t, __llist_del_all(&free_pages)) {
+	llist_for_each_mutable(pos, __llist_del_all(&free_pages)) {
 		page = llist_entry(pos, struct page, pcp_llist);
 		if (page_cnt == 1 && page_ref_count(page) > 1) /* maybe mapped by user space */
 			/* Optimization for the common case of page_cnt==1:
@@ -963,7 +963,7 @@ static void arena_free_worker(struct work_struct *work)
 {
 	struct bpf_arena *arena = container_of(work, struct bpf_arena, free_work);
 	struct mem_cgroup *new_memcg, *old_memcg;
-	struct llist_node *list, *pos, *t;
+	struct llist_node *list, *pos;
 	struct arena_free_span *s;
 	u64 arena_vm_start, user_vm_start;
 	struct llist_head free_pages;
@@ -1002,7 +1002,7 @@ static void arena_free_worker(struct work_struct *work)
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 
 	/* Iterate the list again without holding spinlock to do the tlb flush and zap_pages */
-	llist_for_each_safe(pos, t, list) {
+	llist_for_each_mutable(pos, list) {
 		s = llist_entry(pos, struct arena_free_span, node);
 		page_cnt = s->page_cnt;
 		full_uaddr = clear_lo32(user_vm_start) + s->uaddr;
@@ -1018,7 +1018,7 @@ static void arena_free_worker(struct work_struct *work)
 	}
 
 	/* free all pages collected by apply_to_existing_page_range() in the first loop */
-	llist_for_each_safe(pos, t, __llist_del_all(&free_pages)) {
+	llist_for_each_mutable(pos, __llist_del_all(&free_pages)) {
 		page = llist_entry(pos, struct page, pcp_llist);
 		__free_page(page);
 	}

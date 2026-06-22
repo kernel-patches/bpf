@@ -1380,7 +1380,7 @@ static int do_run_tracer_selftest(struct tracer *type)
 
 static __init int init_trace_selftests(void)
 {
-	struct trace_selftests *p, *n;
+	struct trace_selftests *p;
 	struct tracer *t, **last;
 	int ret;
 
@@ -1394,7 +1394,7 @@ static __init int init_trace_selftests(void)
 	pr_info("Running postponed tracer tests:\n");
 
 	tracing_selftest_running = true;
-	list_for_each_entry_safe(p, n, &postponed_selftests, list) {
+	list_for_each_entry_mutable(p, &postponed_selftests, list) {
 		/* This loop can take minutes when sanitizers are enabled, so
 		 * lets make sure we allow RCU processing.
 		 */
@@ -1434,11 +1434,11 @@ static void __init apply_trace_boot_options(void);
 
 static void free_tracers(struct trace_array *tr)
 {
-	struct tracers *t, *n;
+	struct tracers *t;
 
 	lockdep_assert_held(&trace_types_lock);
 
-	list_for_each_entry_safe(t, n, &tr->tracers, list) {
+	list_for_each_entry_mutable(t, &tr->tracers, list) {
 		list_del(&t->list);
 		kfree(t->flags);
 		kfree(t);
@@ -6906,11 +6906,11 @@ void tracing_log_err(struct trace_array *tr,
 
 static void clear_tracing_err_log(struct trace_array *tr)
 {
-	struct tracing_log_err *err, *next;
+	struct tracing_log_err *err;
 
 	guard(mutex)(&tracing_err_log_lock);
 
-	list_for_each_entry_safe(err, next, &tr->err_log, list) {
+	list_for_each_entry_mutable(err, &tr->err_log, list) {
 		list_del(&err->list);
 		free_tracing_log_err(err);
 	}

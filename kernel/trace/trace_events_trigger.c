@@ -40,7 +40,7 @@ static void trigger_create_kthread_locked(void)
 
 static void trigger_data_free_queued_locked(void)
 {
-	struct event_trigger_data *data, *tmp;
+	struct event_trigger_data *data;
 	struct llist_node *llnodes;
 
 	lockdep_assert_held(&trigger_data_kthread_mutex);
@@ -51,14 +51,14 @@ static void trigger_data_free_queued_locked(void)
 
 	tracepoint_synchronize_unregister();
 
-	llist_for_each_entry_safe(data, tmp, llnodes, llist)
+	llist_for_each_entry_mutable(data, llnodes, llist)
 		kfree(data);
 }
 
 /* Bulk garbage collection of event_trigger_data elements */
 static int trigger_kthread_fn(void *ignore)
 {
-	struct event_trigger_data *data, *tmp;
+	struct event_trigger_data *data;
 	struct llist_node *llnodes;
 
 	/* Once this task starts, it lives forever */
@@ -74,7 +74,7 @@ static int trigger_kthread_fn(void *ignore)
 		/* make sure current triggers exit before free */
 		tracepoint_synchronize_unregister();
 
-		llist_for_each_entry_safe(data, tmp, llnodes, llist)
+		llist_for_each_entry_mutable(data, llnodes, llist)
 			kfree(data);
 	}
 
@@ -477,11 +477,11 @@ __init int register_event_command(struct event_command *cmd)
  */
 __init int unregister_event_command(struct event_command *cmd)
 {
-	struct event_command *p, *n;
+	struct event_command *p;
 
 	guard(mutex)(&trigger_cmd_mutex);
 
-	list_for_each_entry_safe(p, n, &trigger_commands, list) {
+	list_for_each_entry_mutable(p, &trigger_commands, list) {
 		if (strcmp(cmd->name, p->name) == 0) {
 			list_del_init(&p->list);
 			return 0;
@@ -632,8 +632,9 @@ clear_event_triggers(struct trace_array *tr)
 	struct trace_event_file *file;
 
 	list_for_each_entry(file, &tr->events, list) {
-		struct event_trigger_data *data, *n;
-		list_for_each_entry_safe(data, n, &file->triggers, list) {
+		struct event_trigger_data *data;
+
+		list_for_each_entry_mutable(data, &file->triggers, list) {
 			trace_event_trigger_enable_disable(file, 0);
 			list_del_rcu(&data->list);
 			if (data->cmd_ops->free)

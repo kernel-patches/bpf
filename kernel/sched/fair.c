@@ -408,9 +408,9 @@ static inline void assert_list_leaf_cfs_rq(struct rq *rq)
 }
 
 /* Iterate through all leaf cfs_rq's on a runqueue */
-#define for_each_leaf_cfs_rq_safe(rq, cfs_rq, pos)			\
-	list_for_each_entry_safe(cfs_rq, pos, &rq->leaf_cfs_rq_list,	\
-				 leaf_cfs_rq_list)
+#define for_each_leaf_cfs_rq_safe(rq, cfs_rq)			\
+	list_for_each_entry_mutable(cfs_rq, &(rq)->leaf_cfs_rq_list,	\
+				    leaf_cfs_rq_list)
 
 /* Do the two (enqueued) entities belong to the same group ? */
 static inline struct cfs_rq *
@@ -494,8 +494,8 @@ static inline void assert_list_leaf_cfs_rq(struct rq *rq)
 {
 }
 
-#define for_each_leaf_cfs_rq_safe(rq, cfs_rq, pos)	\
-		for (cfs_rq = &rq->cfs, pos = NULL; cfs_rq; cfs_rq = pos)
+#define for_each_leaf_cfs_rq_safe(rq, cfs_rq)	\
+		for (cfs_rq = &(rq)->cfs; cfs_rq; cfs_rq = NULL)
 
 static inline struct sched_entity *parent_entity(struct sched_entity *se)
 {
@@ -6724,7 +6724,7 @@ static int tg_unthrottle_up(struct task_group *tg, void *data)
 {
 	struct rq *rq = data;
 	struct cfs_rq *cfs_rq = tg_cfs_rq(tg, cpu_of(rq));
-	struct task_struct *p, *tmp;
+	struct task_struct *p;
 	LIST_HEAD(throttled_tasks);
 
 	/*
@@ -6765,7 +6765,7 @@ static int tg_unthrottle_up(struct task_group *tg, void *data)
 	list_splice_init(&cfs_rq->throttled_limbo_list, &throttled_tasks);
 
 	/* Re-enqueue the tasks that have been throttled at this level. */
-	list_for_each_entry_safe(p, tmp, &throttled_tasks, throttle_node) {
+	list_for_each_entry_mutable(p, &throttled_tasks, throttle_node) {
 		/*
 		 * Back to being throttled! Break out and put the remaining
 		 * tasks back onto the limbo_list to prevent running them
@@ -6966,7 +6966,7 @@ void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 
 static void __cfsb_csd_unthrottle(void *arg)
 {
-	struct cfs_rq *cursor, *tmp;
+	struct cfs_rq *cursor;
 	struct rq *rq = arg;
 
 	guard(rq_lock)(rq);
@@ -6988,8 +6988,8 @@ static void __cfsb_csd_unthrottle(void *arg)
 	 */
 	guard(rcu)();
 
-	list_for_each_entry_safe(cursor, tmp, &rq->cfsb_csd_list,
-				 throttled_csd_list) {
+	list_for_each_entry_mutable(cursor, &rq->cfsb_csd_list,
+				    throttled_csd_list) {
 		list_del_init(&cursor->throttled_csd_list);
 
 		if (cfs_rq_throttled(cursor))
@@ -11118,14 +11118,14 @@ static bool __update_blocked_others(struct rq *rq, bool *done)
 
 static bool __update_blocked_fair(struct rq *rq, bool *done)
 {
-	struct cfs_rq *cfs_rq, *pos;
+	struct cfs_rq *cfs_rq;
 	bool decayed = false;
 
 	/*
 	 * Iterates the task_group tree in a bottom up fashion, see
 	 * list_add_leaf_cfs_rq() for details.
 	 */
-	for_each_leaf_cfs_rq_safe(rq, cfs_rq, pos) {
+	for_each_leaf_cfs_rq_safe(rq, cfs_rq) {
 		struct sched_entity *se;
 
 		if (update_cfs_rq_load_avg(cfs_rq_clock_pelt(cfs_rq), cfs_rq)) {
@@ -15401,10 +15401,10 @@ DEFINE_SCHED_CLASS(fair) = {
 
 void print_cfs_stats(struct seq_file *m, int cpu)
 {
-	struct cfs_rq *cfs_rq, *pos;
+	struct cfs_rq *cfs_rq;
 
 	rcu_read_lock();
-	for_each_leaf_cfs_rq_safe(cpu_rq(cpu), cfs_rq, pos)
+	for_each_leaf_cfs_rq_safe(cpu_rq(cpu), cfs_rq)
 		print_cfs_rq(m, cpu, cfs_rq);
 	rcu_read_unlock();
 }

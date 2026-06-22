@@ -111,7 +111,7 @@ static void send_cpu_listeners(struct sk_buff *skb,
 					struct listener_list *listeners)
 {
 	struct genlmsghdr *genlhdr = nlmsg_data(nlmsg_hdr(skb));
-	struct listener *s, *tmp;
+	struct listener *s;
 	struct sk_buff *skb_next, *skb_cur = skb;
 	void *reply = genlmsg_data(genlhdr);
 	int delcount = 0;
@@ -145,7 +145,7 @@ static void send_cpu_listeners(struct sk_buff *skb,
 
 	/* Delete invalidated entries */
 	down_write(&listeners->sem);
-	list_for_each_entry_safe(s, tmp, &listeners->list, list) {
+	list_for_each_entry_mutable(s, &listeners->list, list) {
 		if (!s->valid) {
 			list_del(&s->list);
 			kfree(s);
@@ -299,7 +299,7 @@ ret:
 static int add_del_listener(pid_t pid, const struct cpumask *mask, int isadd)
 {
 	struct listener_list *listeners;
-	struct listener *s, *tmp, *s2;
+	struct listener *s, *s2;
 	unsigned int cpu;
 	int ret = 0;
 
@@ -343,7 +343,7 @@ cleanup:
 	for_each_cpu(cpu, mask) {
 		listeners = &per_cpu(listener_array, cpu);
 		down_write(&listeners->sem);
-		list_for_each_entry_safe(s, tmp, &listeners->list, list) {
+		list_for_each_entry_mutable(s, &listeners->list, list) {
 			if (s->pid == pid) {
 				list_del(&s->list);
 				kfree(s);

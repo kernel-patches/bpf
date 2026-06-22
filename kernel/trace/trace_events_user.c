@@ -761,9 +761,9 @@ error:
 
 static void user_event_mm_destroy(struct user_event_mm *mm)
 {
-	struct user_event_enabler *enabler, *next;
+	struct user_event_enabler *enabler;
 
-	list_for_each_entry_safe(enabler, next, &mm->enablers, mm_enablers_link)
+	list_for_each_entry_mutable(enabler, &mm->enablers, mm_enablers_link)
 		user_event_enabler_destroy(enabler, false);
 
 	mmdrop(mm->mm);
@@ -1085,10 +1085,10 @@ static int user_field_size(const char *type)
 
 static void user_event_destroy_validators(struct user_event *user)
 {
-	struct user_event_validator *validator, *next;
+	struct user_event_validator *validator;
 	struct list_head *head = &user->validators;
 
-	list_for_each_entry_safe(validator, next, head, user_event_link) {
+	list_for_each_entry_mutable(validator, head, user_event_link) {
 		list_del(&validator->user_event_link);
 		kfree(validator);
 	}
@@ -1096,10 +1096,10 @@ static void user_event_destroy_validators(struct user_event *user)
 
 static void user_event_destroy_fields(struct user_event *user)
 {
-	struct ftrace_event_field *field, *next;
+	struct ftrace_event_field *field;
 	struct list_head *head = &user->fields;
 
-	list_for_each_entry_safe(field, next, head, link) {
+	list_for_each_entry_mutable(field, head, link) {
 		list_del(&field->link);
 		kfree(field);
 	}
@@ -2611,7 +2611,7 @@ static long user_events_ioctl_unreg(unsigned long uarg)
 {
 	struct user_unreg __user *ureg = (struct user_unreg __user *)uarg;
 	struct user_event_mm *mm = current->user_event_mm;
-	struct user_event_enabler *enabler, *next;
+	struct user_event_enabler *enabler;
 	struct user_unreg reg;
 	unsigned long flags;
 	long ret;
@@ -2636,7 +2636,7 @@ static long user_events_ioctl_unreg(unsigned long uarg)
 	 */
 	mutex_lock(&event_mutex);
 
-	list_for_each_entry_safe(enabler, next, &mm->enablers, mm_enablers_link) {
+	list_for_each_entry_mutable(enabler, &mm->enablers, mm_enablers_link) {
 		if (enabler->addr == reg.disable_addr &&
 		    ENABLE_BIT(enabler) == reg.disable_bit) {
 			set_bit(ENABLE_VAL_FREEING_BIT, ENABLE_BITOPS(enabler));

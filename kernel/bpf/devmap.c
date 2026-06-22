@@ -219,11 +219,10 @@ static void dev_map_free(struct bpf_map *map)
 		for (i = 0; i < dtab->n_buckets; i++) {
 			struct bpf_dtab_netdev *dev;
 			struct hlist_head *head;
-			struct hlist_node *next;
 
 			head = dev_map_index_hash(dtab, i);
 
-			hlist_for_each_entry_safe(dev, next, head, index_hlist) {
+			hlist_for_each_entry_mutable(dev, head, index_hlist) {
 				hlist_del_rcu(&dev->index_hlist);
 				if (dev->xdp_prog)
 					bpf_prog_put(dev->xdp_prog);
@@ -426,9 +425,9 @@ out:
  */
 void __dev_flush(struct list_head *flush_list)
 {
-	struct xdp_dev_bulk_queue *bq, *tmp;
+	struct xdp_dev_bulk_queue *bq;
 
-	list_for_each_entry_safe(bq, tmp, flush_list, flush_node) {
+	list_for_each_entry_mutable(bq, flush_list, flush_node) {
 		local_lock_nested_bh(&bq->dev->xdp_bulkq->bq_lock);
 		bq_xmit_all(bq, XDP_XMIT_FLUSH);
 		bq->dev_rx = NULL;
@@ -1124,11 +1123,10 @@ static void dev_map_hash_remove_netdev(struct bpf_dtab *dtab,
 	for (i = 0; i < dtab->n_buckets; i++) {
 		struct bpf_dtab_netdev *dev;
 		struct hlist_head *head;
-		struct hlist_node *next;
 
 		head = dev_map_index_hash(dtab, i);
 
-		hlist_for_each_entry_safe(dev, next, head, index_hlist) {
+		hlist_for_each_entry_mutable(dev, head, index_hlist) {
 			if (netdev != dev->dev)
 				continue;
 

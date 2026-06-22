@@ -610,9 +610,9 @@ struct mem_extent {
  */
 static void free_mem_extents(struct list_head *list)
 {
-	struct mem_extent *ext, *aux;
+	struct mem_extent *ext;
 
-	list_for_each_entry_safe(ext, aux, list, hook) {
+	list_for_each_entry_mutable(ext, list, hook) {
 		list_del(&ext->hook);
 		kfree(ext);
 	}
@@ -633,7 +633,7 @@ static int create_mem_extents(struct list_head *list, gfp_t gfp_mask)
 
 	for_each_populated_zone(zone) {
 		unsigned long zone_start, zone_end;
-		struct mem_extent *ext, *cur, *aux;
+		struct mem_extent *ext, *cur;
 
 		zone_start = zone->zone_start_pfn;
 		zone_end = zone_end_pfn(zone);
@@ -665,7 +665,7 @@ static int create_mem_extents(struct list_head *list, gfp_t gfp_mask)
 
 		/* More merging may be possible */
 		cur = ext;
-		list_for_each_entry_safe_continue(cur, aux, list, hook) {
+		list_for_each_entry_mutable_continue(cur, list, hook) {
 			if (zone_end < cur->start)
 				break;
 			if (zone_end < cur->end)

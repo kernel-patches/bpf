@@ -1252,7 +1252,6 @@ void ftrace_hash_remove(struct ftrace_hash *hash)
 {
 	struct ftrace_func_entry *entry;
 	struct hlist_head *hhd;
-	struct hlist_node *tn;
 	int size;
 	int i;
 
@@ -1261,7 +1260,7 @@ void ftrace_hash_remove(struct ftrace_hash *hash)
 	size = 1 << hash->size_bits;
 	for (i = 0; i < size; i++) {
 		hhd = &hash->buckets[i];
-		hlist_for_each_entry_safe(entry, tn, hhd, hlist)
+		hlist_for_each_entry_mutable(entry, hhd, hlist)
 			remove_hash_entry(hash, entry);
 	}
 	FTRACE_WARN_ON(hash->count);
@@ -1270,7 +1269,6 @@ void ftrace_hash_remove(struct ftrace_hash *hash)
 static void ftrace_hash_clear(struct ftrace_hash *hash)
 {
 	struct hlist_head *hhd;
-	struct hlist_node *tn;
 	struct ftrace_func_entry *entry;
 	int size = 1 << hash->size_bits;
 	int i;
@@ -1280,7 +1278,7 @@ static void ftrace_hash_clear(struct ftrace_hash *hash)
 
 	for (i = 0; i < size; i++) {
 		hhd = &hash->buckets[i];
-		hlist_for_each_entry_safe(entry, tn, hhd, hlist)
+		hlist_for_each_entry_mutable(entry, hhd, hlist)
 			free_hash_entry(hash, entry);
 	}
 	FTRACE_WARN_ON(hash->count);
@@ -1296,14 +1294,14 @@ static void free_ftrace_mod(struct ftrace_mod_load *ftrace_mod)
 
 static void clear_ftrace_mod_list(struct list_head *head)
 {
-	struct ftrace_mod_load *p, *n;
+	struct ftrace_mod_load *p;
 
 	/* stack tracer isn't supported yet */
 	if (!head)
 		return;
 
 	mutex_lock(&ftrace_lock);
-	list_for_each_entry_safe(p, n, head, list)
+	list_for_each_entry_mutable(p, head, list)
 		free_ftrace_mod(p);
 	mutex_unlock(&ftrace_lock);
 }
@@ -1451,7 +1449,6 @@ static struct ftrace_hash *__move_hash(struct ftrace_hash *src, int size)
 	struct ftrace_func_entry *entry;
 	struct ftrace_hash *new_hash;
 	struct hlist_head *hhd;
-	struct hlist_node *tn;
 	int bits = 0;
 	int i;
 
@@ -1474,7 +1471,7 @@ static struct ftrace_hash *__move_hash(struct ftrace_hash *src, int size)
 	size = 1 << src->size_bits;
 	for (i = 0; i < size; i++) {
 		hhd = &src->buckets[i];
-		hlist_for_each_entry_safe(entry, tn, hhd, hlist) {
+		hlist_for_each_entry_mutable(entry, hhd, hlist) {
 			remove_hash_entry(src, entry);
 			add_ftrace_hash_entry(new_hash, entry);
 		}
@@ -3327,7 +3324,6 @@ static int append_hash(struct ftrace_hash **hash, struct ftrace_hash *new_hash,
 static void remove_hash(struct ftrace_hash *hash, struct ftrace_hash *notrace_hash)
 {
 	struct ftrace_func_entry *entry;
-	struct hlist_node *tmp;
 	int size;
 	int i;
 
@@ -3337,7 +3333,7 @@ static void remove_hash(struct ftrace_hash *hash, struct ftrace_hash *notrace_ha
 
 	size = 1 << hash->size_bits;
 	for (i = 0; i < size; i++) {
-		hlist_for_each_entry_safe(entry, tmp, &hash->buckets[i], hlist) {
+		hlist_for_each_entry_mutable(entry, &hash->buckets[i], hlist) {
 			if (!__ftrace_lookup_ip(notrace_hash, entry->ip))
 				continue;
 			remove_hash_entry(hash, entry);
@@ -5084,7 +5080,7 @@ static int ftrace_hash_move_and_update_ops(struct ftrace_ops *ops,
 static int cache_mod(struct trace_array *tr,
 		     const char *func, char *module, int enable)
 {
-	struct ftrace_mod_load *ftrace_mod, *n;
+	struct ftrace_mod_load *ftrace_mod;
 	struct list_head *head = enable ? &tr->mod_trace : &tr->mod_notrace;
 
 	guard(mutex)(&ftrace_lock);
@@ -5096,7 +5092,7 @@ static int cache_mod(struct trace_array *tr,
 		func++;
 
 		/* Look to remove this hash */
-		list_for_each_entry_safe(ftrace_mod, n, head, list) {
+		list_for_each_entry_mutable(ftrace_mod, head, list) {
 			if (strcmp(ftrace_mod->module, module) != 0)
 				continue;
 
@@ -5124,7 +5120,7 @@ static int cache_mod(struct trace_array *tr,
 static void process_mod_list(struct list_head *head, struct ftrace_ops *ops,
 			     char *mod, bool enable)
 {
-	struct ftrace_mod_load *ftrace_mod, *n;
+	struct ftrace_mod_load *ftrace_mod;
 	struct ftrace_hash **orig_hash, *new_hash;
 	LIST_HEAD(process_mods);
 	char *func;
@@ -5143,7 +5139,7 @@ static void process_mod_list(struct list_head *head, struct ftrace_ops *ops,
 
 	mutex_lock(&ftrace_lock);
 
-	list_for_each_entry_safe(ftrace_mod, n, head, list) {
+	list_for_each_entry_mutable(ftrace_mod, head, list) {
 
 		if (strcmp(ftrace_mod->module, mod) != 0)
 			continue;
@@ -5165,7 +5161,7 @@ static void process_mod_list(struct list_head *head, struct ftrace_ops *ops,
 
 	mutex_unlock(&ftrace_lock);
 
-	list_for_each_entry_safe(ftrace_mod, n, &process_mods, list) {
+	list_for_each_entry_mutable(ftrace_mod, &process_mods, list) {
 
 		func = ftrace_mod->func;
 
@@ -5616,7 +5612,6 @@ unregister_ftrace_function_probe_func(char *glob, struct trace_array *tr,
 	struct ftrace_hash **orig_hash;
 	struct ftrace_hash *old_hash;
 	struct ftrace_hash *hash = NULL;
-	struct hlist_node *tmp;
 	struct hlist_head hhd;
 	char str[KSYM_SYMBOL_LEN];
 	int count = 0;
@@ -5677,7 +5672,7 @@ unregister_ftrace_function_probe_func(char *glob, struct trace_array *tr,
 
 	size = 1 << hash->size_bits;
 	for (i = 0; i < size; i++) {
-		hlist_for_each_entry_safe(entry, tmp, &hash->buckets[i], hlist) {
+		hlist_for_each_entry_mutable(entry, &hash->buckets[i], hlist) {
 
 			if (func_g.search) {
 				kallsyms_lookup(entry->ip, NULL, NULL,
@@ -5715,7 +5710,7 @@ unregister_ftrace_function_probe_func(char *glob, struct trace_array *tr,
 				       &old_hash_ops);
 	synchronize_rcu();
 
-	hlist_for_each_entry_safe(entry, tmp, &hhd, hlist) {
+	hlist_for_each_entry_mutable(entry, &hhd, hlist) {
 		hlist_del(&entry->hlist);
 		if (probe_ops->free)
 			probe_ops->free(probe_ops, tr, entry->ip, probe->data);
@@ -5738,9 +5733,9 @@ unregister_ftrace_function_probe_func(char *glob, struct trace_array *tr,
 
 void clear_ftrace_function_probes(struct trace_array *tr)
 {
-	struct ftrace_func_probe *probe, *n;
+	struct ftrace_func_probe *probe;
 
-	list_for_each_entry_safe(probe, n, &tr->func_probes, list)
+	list_for_each_entry_mutable(probe, &tr->func_probes, list)
 		unregister_ftrace_function_probe_func(NULL, tr, probe->probe_ops);
 }
 
@@ -5771,11 +5766,11 @@ __init int register_ftrace_command(struct ftrace_func_command *cmd)
  */
 __init int unregister_ftrace_command(struct ftrace_func_command *cmd)
 {
-	struct ftrace_func_command *p, *n;
+	struct ftrace_func_command *p;
 
 	guard(mutex)(&ftrace_cmd_mutex);
 
-	list_for_each_entry_safe(p, n, &ftrace_commands, list) {
+	list_for_each_entry_mutable(p, &ftrace_commands, list) {
 		if (strcmp(cmd->name, p->name) == 0) {
 			list_del_init(&p->list);
 			return 0;
@@ -7876,10 +7871,9 @@ static void ftrace_free_mod_map(struct rcu_head *rcu)
 {
 	struct ftrace_mod_map *mod_map = container_of(rcu, struct ftrace_mod_map, rcu);
 	struct ftrace_mod_func *mod_func;
-	struct ftrace_mod_func *n;
 
 	/* All the contents of mod_map are now not visible to readers */
-	list_for_each_entry_safe(mod_func, n, &mod_map->funcs, list) {
+	list_for_each_entry_mutable(mod_func, &mod_map->funcs, list) {
 		kfree(mod_func->name);
 		list_del(&mod_func->list);
 		kfree(mod_func);
@@ -7891,7 +7885,6 @@ static void ftrace_free_mod_map(struct rcu_head *rcu)
 void ftrace_release_mod(struct module *mod)
 {
 	struct ftrace_mod_map *mod_map;
-	struct ftrace_mod_map *n;
 	struct dyn_ftrace *rec;
 	struct ftrace_page **last_pg;
 	struct ftrace_page *tmp_page = NULL;
@@ -7903,7 +7896,7 @@ void ftrace_release_mod(struct module *mod)
 	 * To avoid the UAF problem after the module is unloaded, the
 	 * 'mod_map' resource needs to be released unconditionally.
 	 */
-	list_for_each_entry_safe(mod_map, n, &ftrace_mod_maps, list) {
+	list_for_each_entry_mutable(mod_map, &ftrace_mod_maps, list) {
 		if (mod_map->mod == mod) {
 			list_del_rcu(&mod_map->list);
 			call_rcu(&mod_map->rcu, ftrace_free_mod_map);
@@ -8290,7 +8283,7 @@ void ftrace_free_mem(struct module *mod, void *start_ptr, void *end_ptr)
 	struct dyn_ftrace *rec;
 	struct dyn_ftrace key;
 	struct ftrace_mod_map *mod_map = NULL;
-	struct ftrace_init_func *func, *func_next;
+	struct ftrace_init_func *func;
 	LIST_HEAD(clear_hash);
 
 	key.ip = start;
@@ -8341,7 +8334,7 @@ void ftrace_free_mem(struct module *mod, void *start_ptr, void *end_ptr)
 	}
 	mutex_unlock(&ftrace_lock);
 
-	list_for_each_entry_safe(func, func_next, &clear_hash, list) {
+	list_for_each_entry_mutable(func, &clear_hash, list) {
 		clear_func_from_hashes(func);
 		kfree(func);
 	}

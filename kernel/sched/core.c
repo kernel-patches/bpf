@@ -3892,7 +3892,7 @@ void sched_ttwu_pending(void *arg)
 {
 	struct llist_node *llist = arg;
 	struct rq *rq = this_rq();
-	struct task_struct *p, *t;
+	struct task_struct *p;
 	struct rq_flags rf;
 
 	if (!llist)
@@ -3901,7 +3901,7 @@ void sched_ttwu_pending(void *arg)
 	rq_lock_irqsave(rq, &rf);
 	update_rq_clock(rq);
 
-	llist_for_each_entry_safe(p, t, llist, wake_entry.llist) {
+	llist_for_each_entry_mutable(p, llist, wake_entry.llist) {
 		if (WARN_ON_ONCE(p->on_cpu))
 			smp_cond_load_acquire(&p->on_cpu, !VAL);
 

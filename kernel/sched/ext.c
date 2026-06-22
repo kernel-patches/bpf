@@ -4121,7 +4121,7 @@ static void process_ddsp_deferred_locals(struct rq *rq)
 	 * Now that @rq can be unlocked, execute the deferred enqueueing of
 	 * tasks directly dispatched to the local DSQs of other CPUs. See
 	 * direct_dispatch(). Keep popping from the head instead of using
-	 * list_for_each_entry_safe() as dispatch_local_dsq() may unlock @rq
+	 * list_for_each_entry_mutable() as dispatch_local_dsq() may unlock @rq
 	 * temporarily.
 	 */
 	while ((p = list_first_entry_or_null(&rq->scx.ddsp_deferred_locals,
@@ -4186,7 +4186,7 @@ static u32 reenq_local(struct scx_sched *sch, struct rq *rq, u64 reenq_flags)
 {
 	LIST_HEAD(tasks);
 	u32 nr_enqueued = 0;
-	struct task_struct *p, *n;
+	struct task_struct *p;
 
 	lockdep_assert_rq_held(rq);
 
@@ -4200,8 +4200,8 @@ static u32 reenq_local(struct scx_sched *sch, struct rq *rq, u64 reenq_flags)
 	 * @rq->scx.local_dsq. Move all candidate tasks off to a private list
 	 * first to avoid processing the same tasks repeatedly.
 	 */
-	list_for_each_entry_safe(p, n, &rq->scx.local_dsq.list,
-				 scx.dsq_list.node) {
+	list_for_each_entry_mutable(p, &rq->scx.local_dsq.list,
+				    scx.dsq_list.node) {
 		struct scx_sched *task_sch = scx_task_sched(p);
 		u32 reason;
 
@@ -4234,7 +4234,7 @@ static u32 reenq_local(struct scx_sched *sch, struct rq *rq, u64 reenq_flags)
 		list_add_tail(&p->scx.dsq_list.node, &tasks);
 	}
 
-	list_for_each_entry_safe(p, n, &tasks, scx.dsq_list.node) {
+	list_for_each_entry_mutable(p, &tasks, scx.dsq_list.node) {
 		list_del_init(&p->scx.dsq_list.node);
 
 		do_enqueue_task(rq, p, SCX_ENQ_REENQ, -1);
@@ -4786,9 +4786,9 @@ static void free_dsq_rcufn(struct rcu_head *rcu)
 static void free_dsq_irq_workfn(struct irq_work *irq_work)
 {
 	struct llist_node *to_free = llist_del_all(&dsqs_to_free);
-	struct scx_dispatch_q *dsq, *tmp_dsq;
+	struct scx_dispatch_q *dsq;
 
-	llist_for_each_entry_safe(dsq, tmp_dsq, to_free, free_node)
+	llist_for_each_entry_mutable(dsq, to_free, free_node)
 		call_rcu(&dsq->rcu, free_dsq_rcufn);
 }
 
@@ -5684,7 +5684,7 @@ static void scx_bypass(struct scx_sched *sch, bool bypass)
 	 */
 	for_each_possible_cpu(cpu) {
 		struct rq *rq = cpu_rq(cpu);
-		struct task_struct *p, *n;
+		struct task_struct *p;
 
 		raw_spin_rq_lock(rq);
 		raw_spin_lock(&scx_sched_lock);
@@ -5711,14 +5711,14 @@ static void scx_bypass(struct scx_sched *sch, bool bypass)
 		}
 
 		/*
-		 * The use of list_for_each_entry_safe_reverse() is required
+		 * The use of list_for_each_entry_mutable_reverse() is required
 		 * because each task is going to be removed from and added back
 		 * to the runnable_list during iteration. Because they're added
 		 * to the tail of the list, safe reverse iteration can still
 		 * visit all nodes.
 		 */
-		list_for_each_entry_safe_reverse(p, n, &rq->scx.runnable_list,
-						 scx.runnable_node) {
+		list_for_each_entry_mutable_reverse(p, &rq->scx.runnable_list,
+						    scx.runnable_node) {
 			if (!scx_is_descendant(scx_task_sched(p), sch))
 				continue;
 

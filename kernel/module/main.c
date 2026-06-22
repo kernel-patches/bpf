@@ -725,10 +725,10 @@ static int ref_module(struct module *a, struct module *b)
 /* Clear the unload stuff of the module. */
 static void module_unload_free(struct module *mod)
 {
-	struct module_use *use, *tmp;
+	struct module_use *use;
 
 	mutex_lock(&module_mutex);
-	list_for_each_entry_safe(use, tmp, &mod->target_list, target_list) {
+	list_for_each_entry_mutable(use, &mod->target_list, target_list) {
 		struct module *i = use->target;
 		pr_debug("%s unusing %s\n", mod->name, i->name);
 		module_put(i);
@@ -3041,14 +3041,14 @@ struct mod_initfree {
 
 static void do_free_init(struct work_struct *w)
 {
-	struct llist_node *pos, *n, *list;
+	struct llist_node *pos, *list;
 	struct mod_initfree *initfree;
 
 	list = llist_del_all(&init_free_list);
 
 	synchronize_rcu();
 
-	llist_for_each_safe(pos, n, list) {
+	llist_for_each_mutable(pos, list) {
 		initfree = container_of(pos, struct mod_initfree, node);
 		execmem_free(initfree->init_text);
 		execmem_free(initfree->init_data);
@@ -3701,11 +3701,10 @@ static int idempotent_complete(struct idempotent *u, int ret)
 	const void *cookie = u->cookie;
 	int hash = hash_ptr(cookie, IDEM_HASH_BITS);
 	struct hlist_head *head = idem_hash + hash;
-	struct hlist_node *next;
 	struct idempotent *pos;
 
 	spin_lock(&idem_lock);
-	hlist_for_each_entry_safe(pos, next, head, entry) {
+	hlist_for_each_entry_mutable(pos, head, entry) {
 		if (pos->cookie != cookie)
 			continue;
 		hlist_del_init(&pos->entry);

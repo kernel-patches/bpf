@@ -247,14 +247,14 @@ static void audit_update_watch(struct audit_parent *parent,
 			       u64 ino, unsigned int invalidating,
 			       struct audit_watch_ctx *ctx)
 {
-	struct audit_watch *owatch, *nwatch, *nextw;
-	struct audit_krule *r, *nextr;
+	struct audit_watch *owatch, *nwatch;
+	struct audit_krule *r;
 	struct audit_entry *oentry, *nentry;
 
 	mutex_lock(&audit_filter_mutex);
 	/* Run all of the watches on this parent looking for the one that
 	 * matches the given dname */
-	list_for_each_entry_safe(owatch, nextw, &parent->watches, wlist) {
+	list_for_each_entry_mutable(owatch, &parent->watches, wlist) {
 		if (audit_compare_dname_path(dname, owatch->path,
 					     AUDIT_NAME_FULL))
 			continue;
@@ -275,7 +275,7 @@ static void audit_update_watch(struct audit_parent *parent,
 		nwatch->dev = dev;
 		nwatch->ino = ino;
 
-		list_for_each_entry_safe(r, nextr, &owatch->rules, rlist) {
+		list_for_each_entry_mutable(r, &owatch->rules, rlist) {
 
 			oentry = container_of(r, struct audit_entry, rule);
 			list_del(&oentry->rule.rlist);
@@ -322,13 +322,13 @@ add_watch_to_parent:
 /* Remove all watches & rules associated with a parent that is going away. */
 static void audit_remove_parent_watches(struct audit_parent *parent)
 {
-	struct audit_watch *w, *nextw;
-	struct audit_krule *r, *nextr;
+	struct audit_watch *w;
+	struct audit_krule *r;
 	struct audit_entry *e;
 
 	mutex_lock(&audit_filter_mutex);
-	list_for_each_entry_safe(w, nextw, &parent->watches, wlist) {
-		list_for_each_entry_safe(r, nextr, &w->rules, rlist) {
+	list_for_each_entry_mutable(w, &parent->watches, wlist) {
+		list_for_each_entry_mutable(r, &w->rules, rlist) {
 			e = container_of(r, struct audit_entry, rule);
 			audit_watch_log_rule_change(r, w, "remove_rule");
 			if (e->rule.exe)

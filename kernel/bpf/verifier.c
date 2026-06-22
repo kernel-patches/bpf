@@ -18290,7 +18290,7 @@ static void sanitize_dead_code(struct bpf_verifier_env *env)
 static void free_states(struct bpf_verifier_env *env)
 {
 	struct bpf_verifier_state_list *sl;
-	struct list_head *head, *pos, *tmp;
+	struct list_head *head, *pos;
 	struct bpf_scc_info *info;
 	int i, j;
 
@@ -18298,7 +18298,7 @@ static void free_states(struct bpf_verifier_env *env)
 	env->cur_state = NULL;
 	while (!pop_stack(env, NULL, NULL, false));
 
-	list_for_each_safe(pos, tmp, &env->free_list) {
+	list_for_each_mutable(pos, &env->free_list) {
 		sl = container_of(pos, struct bpf_verifier_state_list, node);
 		bpf_free_verifier_state(&sl->state, false);
 		kfree(sl);
@@ -18321,7 +18321,7 @@ static void free_states(struct bpf_verifier_env *env)
 	for (i = 0; i < state_htab_size(env); i++) {
 		head = &env->explored_states[i];
 
-		list_for_each_safe(pos, tmp, head) {
+		list_for_each_mutable(pos, head) {
 			sl = container_of(pos, struct bpf_verifier_state_list, node);
 			bpf_free_verifier_state(&sl->state, false);
 			kfree(sl);

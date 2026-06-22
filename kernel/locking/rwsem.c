@@ -567,7 +567,7 @@ static void rwsem_mark_wake(struct rw_semaphore *sem,
 		atomic_long_add(adjustment, &sem->count);
 
 	/* 2nd pass */
-	list_for_each_entry_safe(waiter, next, &wlist, list) {
+	list_for_each_entry_mutable(waiter, &wlist, list) {
 		struct task_struct *tsk;
 
 		tsk = waiter->task;

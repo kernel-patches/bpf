@@ -359,13 +359,13 @@ static void luo_flb_unregister_one(struct liveupdate_file_handler *fh,
 void luo_flb_unregister_all(struct liveupdate_file_handler *fh)
 {
 	struct list_head *flb_list = &ACCESS_PRIVATE(fh, flb_list);
-	struct luo_flb_link *iter, *tmp;
+	struct luo_flb_link *iter;
 
 	if (!liveupdate_enabled())
 		return;
 
 	lockdep_assert_held_write(&luo_register_rwlock);
-	list_for_each_entry_safe(iter, tmp, flb_list, list)
+	list_for_each_entry_mutable(iter, flb_list, list)
 		luo_flb_unregister_one(fh, iter->flb);
 }
 

@@ -203,10 +203,10 @@ static void dmemcs_offline(struct cgroup_subsys_state *css)
 static void dmemcs_free(struct cgroup_subsys_state *css)
 {
 	struct dmemcg_state *dmemcs = css_to_dmemcs(css);
-	struct dmem_cgroup_pool_state *pool, *next;
+	struct dmem_cgroup_pool_state *pool;
 
 	spin_lock(&dmemcg_lock);
-	list_for_each_entry_safe(pool, next, &dmemcs->pools, css_node) {
+	list_for_each_entry_mutable(pool, &dmemcs->pools, css_node) {
 		/*
 		 *The pool is dead and all references are 0,
 		 * no need for RCU protection with list_del_rcu or freeing.
@@ -444,9 +444,9 @@ get_cg_pool_locked(struct dmemcg_state *dmemcs, struct dmem_cgroup_region *regio
 static void dmemcg_free_rcu(struct rcu_head *rcu)
 {
 	struct dmem_cgroup_region *region = container_of(rcu, typeof(*region), rcu);
-	struct dmem_cgroup_pool_state *pool, *next;
+	struct dmem_cgroup_pool_state *pool;
 
-	list_for_each_entry_safe(pool, next, &region->pools, region_node)
+	list_for_each_entry_mutable(pool, &region->pools, region_node)
 		free_cg_pool(pool);
 	kfree(region->name);
 	kfree(region);
@@ -467,7 +467,7 @@ static void dmemcg_free_region(struct kref *ref)
  */
 void dmem_cgroup_unregister_region(struct dmem_cgroup_region *region)
 {
-	struct dmem_cgroup_pool_state *pool, *next;
+	struct dmem_cgroup_pool_state *pool;
 
 	if (!region)
 		return;
@@ -477,7 +477,7 @@ void dmem_cgroup_unregister_region(struct dmem_cgroup_region *region)
 	/* Remove from global region list */
 	list_del_rcu(&region->region_node);
 
-	list_for_each_entry_safe(pool, next, &region->pools, region_node) {
+	list_for_each_entry_mutable(pool, &region->pools, region_node) {
 		list_del_rcu(&pool->css_node);
 		list_del(&pool->region_node);
 		dmemcg_pool_put(pool);

@@ -444,7 +444,7 @@ EXPORT_SYMBOL(rdmacg_register_device);
  */
 void rdmacg_unregister_device(struct rdmacg_device *device)
 {
-	struct rdmacg_resource_pool *rpool, *tmp;
+	struct rdmacg_resource_pool *rpool;
 
 	/*
 	 * Synchronize with any active resource settings,
@@ -457,7 +457,7 @@ void rdmacg_unregister_device(struct rdmacg_device *device)
 	 * Now that this device is off the cgroup list, its safe to free
 	 * all the rpool resources.
 	 */
-	list_for_each_entry_safe(rpool, tmp, &device->rpools, dev_node)
+	list_for_each_entry_mutable(rpool, &device->rpools, dev_node)
 		free_cg_rpool_locked(rpool);
 
 	mutex_unlock(&rdmacg_mutex);
@@ -747,11 +747,11 @@ rdmacg_css_alloc(struct cgroup_subsys_state *parent)
 static void rdmacg_css_free(struct cgroup_subsys_state *css)
 {
 	struct rdma_cgroup *cg = css_rdmacg(css);
-	struct rdmacg_resource_pool *rpool, *tmp;
+	struct rdmacg_resource_pool *rpool;
 
 	/* Clean up rpools kept alive by non-zero peak values */
 	mutex_lock(&rdmacg_mutex);
-	list_for_each_entry_safe(rpool, tmp, &cg->rpools, cg_node)
+	list_for_each_entry_mutable(rpool, &cg->rpools, cg_node)
 		free_cg_rpool_locked(rpool);
 	mutex_unlock(&rdmacg_mutex);
 

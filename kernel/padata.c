@@ -134,13 +134,13 @@ static void padata_work_free(struct padata_work *pw)
 
 static void __init padata_works_free(struct list_head *works)
 {
-	struct padata_work *cur, *next;
+	struct padata_work *cur;
 
 	if (list_empty(works))
 		return;
 
 	spin_lock_bh(&padata_works_lock);
-	list_for_each_entry_safe(cur, next, works, pw_list) {
+	list_for_each_entry_mutable(cur, works, pw_list) {
 		list_del(&cur->pw_list);
 		padata_work_free(cur);
 	}

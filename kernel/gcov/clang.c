@@ -347,9 +347,9 @@ err:
  */
 void gcov_info_free(struct gcov_info *info)
 {
-	struct gcov_fn_info *fn, *tmp;
+	struct gcov_fn_info *fn;
 
-	list_for_each_entry_safe(fn, tmp, &info->functions, head) {
+	list_for_each_entry_mutable(fn, &info->functions, head) {
 		kvfree(fn->counters);
 		list_del(&fn->head);
 		kfree(fn);
