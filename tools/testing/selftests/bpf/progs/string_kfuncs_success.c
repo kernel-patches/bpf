@@ -7,6 +7,9 @@
 
 char str[] = "hello world";
 
+extern int bpf_memcmp(const void *ptr1__ign, const void *ptr2__ign,
+		      size_t size) __ksym;
+
 #define __test(retval) SEC("syscall") __success __retval(retval)
 
 /* Functional tests */
@@ -59,5 +62,19 @@ __test(-ENOENT) int test_strncasestr_notfound1(void *ctx) { return bpf_strncases
 __test(-ENOENT) int test_strncasestr_notfound2(void *ctx) { return bpf_strncasestr(str, "hello", 4); }
 __test(-ENOENT) int test_strncasestr_notfound3(void *ctx) { return bpf_strncasestr("", "a", 0); }
 __test(0) int test_strncasestr_empty(void *ctx) { return bpf_strncasestr(str, "", 1); }
+
+/* bpf_memcmp - functional tests */
+char data1[] = "hello world";
+char data2[] = "hello world";
+char data3[] = "hello worle";
+__test(0) int test_memcmp_eq(void *ctx) { return bpf_memcmp(data1, data2, sizeof(data1)); }
+__test(-1) int test_memcmp_neq_less(void *ctx) { return bpf_memcmp(data1, data3, sizeof(data1)); }
+__test(1) int test_memcmp_neq_greater(void *ctx) { return bpf_memcmp(data3, data1, sizeof(data1)); }
+__test(0) int test_memcmp_size_zero(void *ctx) { return bpf_memcmp(data1, data3, 0); }
+/* memcmp should NOT stop at null byte - compare past '\0' */
+char bin1[] = { 'a', '\0', 'c' };
+char bin2[] = { 'a', '\0', 'd' };
+__test(0) int test_memcmp_null_byte_eq(void *ctx) { return bpf_memcmp(bin1, bin1, sizeof(bin1)); }
+__test(-1) int test_memcmp_null_byte_neq(void *ctx) { return bpf_memcmp(bin1, bin2, sizeof(bin1)); }
 
 char _license[] SEC("license") = "GPL";
