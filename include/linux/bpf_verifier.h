@@ -1059,7 +1059,7 @@ __printf(2, 3) void bpf_verifier_log_write(struct bpf_verifier_env *env,
 __printf(2, 3) void bpf_log(struct bpf_verifier_log *log,
 			    const char *fmt, ...);
 int bpf_vlog_init(struct bpf_verifier_log *log, u32 log_level,
-		  char __user *log_buf, u32 log_size);
+		  char __user *log_buf, u32 log_size, bool is_kernel);
 void bpf_vlog_reset(struct bpf_verifier_log *log, u64 new_pos);
 int bpf_vlog_finalize(struct bpf_verifier_log *log, u32 *log_size_actual);
 

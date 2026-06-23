@@ -13,8 +13,12 @@
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
-static bool bpf_verifier_log_attr_valid(u32 log_level, char __user *log_buf, u32 log_size)
+static bool bpf_verifier_log_attr_valid(u32 log_level, char __user *log_buf, u32 log_size,
+					 bool is_kernel)
 {
+	if (log_level == BPF_LOG_KERNEL && is_kernel)
+		return true;
+
 	/* ubuf and len_total should both be specified (or not) together */
 	if (!!log_buf != !!log_size)
 		return false;
@@ -29,14 +33,14 @@ static bool bpf_verifier_log_attr_valid(u32 log_level, char __user *log_buf, u32
 }
 
 int bpf_vlog_init(struct bpf_verifier_log *log, u32 log_level,
-		  char __user *log_buf, u32 log_size)
+		  char __user *log_buf, u32 log_size, bool is_kernel)
 {
 	log->level = log_level;
 	log->ubuf = log_buf;
 	log->len_total = log_size;
 
 	/* log attributes have to be sane */
-	if (!bpf_verifier_log_attr_valid(log_level, log_buf, log_size))
+	if (!bpf_verifier_log_attr_valid(log_level, log_buf, log_size, is_kernel))
 		return -EINVAL;
 
 	return 0;
@@ -831,8 +835,9 @@ int bpf_log_attr_init(struct bpf_log_attr *log, u64 log_buf, u32 log_size, u32 l
 	char __user *ubuf_common = u64_to_user_ptr(common->log_buf);
 	char __user *ubuf = u64_to_user_ptr(log_buf);
 
-	if (!bpf_verifier_log_attr_valid(common->log_level, ubuf_common, common->log_size) ||
-	    !bpf_verifier_log_attr_valid(log_level, ubuf, log_size))
+	if (!bpf_verifier_log_attr_valid(common->log_level, ubuf_common,
+					 common->log_size, uattr_common.is_kernel) ||
+	    !bpf_verifier_log_attr_valid(log_level, ubuf, log_size, uattr.is_kernel))
 		return -EINVAL;
 
 	if (ubuf && ubuf_common && (ubuf != ubuf_common || log_size != common->log_size ||
@@ -878,7 +883,7 @@ struct bpf_verifier_log *bpf_log_attr_create_vlog(struct bpf_log_attr *attr_log,
 		return ERR_PTR(-ENOMEM);
 
 	err = bpf_vlog_init(log, common->log_level, u64_to_user_ptr(common->log_buf),
-			    common->log_size);
+			    common->log_size, uattr.is_kernel);
 	if (err) {
 		kfree(log);
 		return ERR_PTR(err);

@@ -5926,7 +5926,8 @@ static struct btf *btf_parse(const union bpf_attr *attr, bpfptr_t uattr,
 	/* user could have requested verbose verifier output
 	 * and supplied buffer to store the verification trace
 	 */
-	err = bpf_vlog_init(&env->log, attr_log->level, attr_log->ubuf, attr_log->size);
+	err = bpf_vlog_init(&env->log, attr_log->level, attr_log->ubuf, attr_log->size,
+			    uattr.is_kernel);
 	if (err)
 		goto errout_free;
 

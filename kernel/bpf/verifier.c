@@ -19755,7 +19755,8 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	/* user could have requested verbose verifier output
 	 * and supplied buffer to store the verification trace
 	 */
-	ret = bpf_vlog_init(&env->log, attr_log->level, attr_log->ubuf, attr_log->size);
+	ret = bpf_vlog_init(&env->log, attr_log->level, attr_log->ubuf, attr_log->size,
+			    uattr.is_kernel);
 	if (ret)
 		goto err_unlock;
 
