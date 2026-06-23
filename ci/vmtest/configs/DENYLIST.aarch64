@@ -1,5 +1,8 @@
+bpftool_maps_access/nested_maps   # stale pin EEXIST on retried/interrupted runs; vmtest#486
 map_kptr/success-map
 ns_xsk_drv
 ns_xsk_skb
 send_signal
+tc_tunnel/udp_mpls                # connect() EINPROGRESS; 1000ms too short under QEMU; vmtest#475
 unpriv_bpf_disabled
+wq                                # usleep(50) too short for wq callback under emulation; vmtest#455

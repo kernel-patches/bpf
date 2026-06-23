@@ -1,6 +1,10 @@
 arena_spin_lock
+bpftool_maps_access/unprotected_unpinned   # btf dump asserts map BTF but btf_id==0 on no_alu32; vmtest#486
 map_kptr/success-map
 ns_xsk_drv
 ns_xsk_skb
 res_spin_lock_stress
+sock_iter_batch/udp                        # SO_REUSEPORT bind(0) port collision -> idx mismatch; vmtest#454
 tc_edt
+tc_tunnel/ip6gre*                          # connect() 1000ms too short for IPv6 neigh resolution under emulation; vmtest#483
+wq                                         # usleep(50) too short under emulation; vmtest#455

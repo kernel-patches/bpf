@@ -1,3 +1,10 @@
 verif_scale_pyperf600
 sockmap_basic/sockmap udp multi channels
 map_kptr
+
+# Flaky / deterministically-broken upstream tests — CI noise mitigation (all arches).
+# Drop each once the referenced upstream fix reaches the tested base branch.
+lru_lock_nmi                                # rqspinlock pending_free lazy-reclaim race -> drain_then_verify_capacity() -EIO; deterministic aarch64, intermittent x86_64; vmtest#489/#488
+fd_array_cnt/fd-array-ref-btfs              # 100ms async BTF-free wait too short under CI load; vmtest#484
+test_task_work/test_task_work_array_map     # array-map task_work reschedule race in parallel mode; vmtest#471
+stream_success/stream_arena_callback_fault  # async softirq timer callback may not fill stream before read; vmtest#449
