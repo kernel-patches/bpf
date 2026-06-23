@@ -624,7 +624,7 @@ int BPF_PROG(test_dynptr_skb_tp_btf, void *skb, void *location)
 	return 1;
 }
 
-static inline int bpf_memcmp(const char *a, const char *b, u32 size)
+static inline int local_memcmp(const char *a, const char *b, u32 size)
 {
 	int i;
 
@@ -650,12 +650,12 @@ int test_dynptr_copy(void *ctx)
 	err = bpf_dynptr_write(&src, 0, data, sz, 0);
 	err = err ?: bpf_dynptr_copy(&dst, 0, &src, 0, sz);
 	err = err ?: bpf_dynptr_read(buf, sz, &dst, 0, 0);
-	err = err ?: bpf_memcmp(data, buf, sz);
+	err = err ?: local_memcmp(data, buf, sz);
 
 	/* Test that offsets are handled correctly */
 	err = err ?: bpf_dynptr_copy(&dst, 3, &src, 5, sz - 5);
 	err = err ?: bpf_dynptr_read(buf, sz - 5, &dst, 3, 0);
-	err = err ?: bpf_memcmp(data + 5, buf, sz - 5);
+	err = err ?: local_memcmp(data + 5, buf, sz - 5);
 
 	bpf_ringbuf_discard_dynptr(&src, 0);
 	bpf_ringbuf_discard_dynptr(&dst, 0);
@@ -692,7 +692,7 @@ int test_dynptr_copy_xdp(struct xdp_md *xdp)
 		err = bpf_dynptr_read(&buf, len, &ptr_xdp, i * len, 0);
 		if (err)
 			goto out;
-		if (bpf_memcmp(data, buf, len) != 0)
+		if (local_memcmp(data, buf, len) != 0)
 			goto out;
 	}
 
@@ -713,7 +713,7 @@ int test_dynptr_copy_xdp(struct xdp_md *xdp)
 		err = bpf_dynptr_read(&buf, len, &ptr_buf, i * len, 0);
 		if (err)
 			goto out;
-		if (bpf_memcmp(data, buf, len) != 0)
+		if (local_memcmp(data, buf, len) != 0)
 			goto out;
 	}
 
@@ -727,7 +727,7 @@ int test_dynptr_copy_xdp(struct xdp_md *xdp)
 		err = bpf_dynptr_read(&buf, len, &ptr_xdp, 2 + i * len, 0);
 		if (err)
 			goto out;
-		if (bpf_memcmp(data, buf, len) != 0)
+		if (local_memcmp(data, buf, len) != 0)
 			goto out;
 	}
 
@@ -750,7 +750,7 @@ int test_dynptr_memset_zero(void *ctx)
 
 	err = bpf_dynptr_from_mem(memset_zero_data, data_sz, 0, &ptr);
 	err = err ?: bpf_dynptr_memset(&ptr, 0, data_sz, 0);
-	err = err ?: bpf_memcmp(zeroes, memset_zero_data, data_sz);
+	err = err ?: local_memcmp(zeroes, memset_zero_data, data_sz);
 
 	return 0;
 }
@@ -770,7 +770,7 @@ int test_dynptr_memset_notzero(void *ctx)
 
 	err = bpf_dynptr_from_mem(memset_notzero_data, data_sz, 0, &ptr);
 	err = err ?: bpf_dynptr_memset(&ptr, 0, data_sz, DYNPTR_MEMSET_VAL);
-	err = err ?: bpf_memcmp(expected, memset_notzero_data, data_sz);
+	err = err ?: local_memcmp(expected, memset_notzero_data, data_sz);
 
 	return 0;
 }
@@ -786,7 +786,7 @@ int test_dynptr_memset_zero_offset(void *ctx)
 
 	err = bpf_dynptr_from_mem(memset_zero_offset_data, data_sz, 0, &ptr);
 	err = err ?: bpf_dynptr_memset(&ptr, 8, 4, 0);
-	err = err ?: bpf_memcmp(expected, memset_zero_offset_data, data_sz);
+	err = err ?: local_memcmp(expected, memset_zero_offset_data, data_sz);
 
 	return 0;
 }
@@ -803,7 +803,7 @@ int test_dynptr_memset_zero_adjusted(void *ctx)
 	err = bpf_dynptr_from_mem(memset_zero_adjusted_data, data_sz, 0, &ptr);
 	err = err ?: bpf_dynptr_adjust(&ptr, 4, 8);
 	err = err ?: bpf_dynptr_memset(&ptr, 0, bpf_dynptr_size(&ptr), 0);
-	err = err ?: bpf_memcmp(expected, memset_zero_adjusted_data, data_sz);
+	err = err ?: local_memcmp(expected, memset_zero_adjusted_data, data_sz);
 
 	return 0;
 }
@@ -898,7 +898,7 @@ int test_dynptr_memset_xdp_chunks(struct xdp_md *xdp)
 		err = bpf_dynptr_read(&buf, chunk_sz, &ptr_xdp, offset, 0);
 		if (err)
 			goto out;
-		err = bpf_memcmp(buf, expected_buf, sizeof(buf));
+		err = local_memcmp(buf, expected_buf, sizeof(buf));
 		if (err)
 			goto out;
 	}
@@ -952,7 +952,7 @@ static __always_inline void test_dynptr_probe(void *ptr, bpf_read_dynptr_fn_t bp
 			break;
 		err = err ?: bpf_dynptr_read(&buf, len, &ptr_buf, 0, 0);
 
-		if (err || bpf_memcmp(expected_str, buf, len))
+		if (err || local_memcmp(expected_str, buf, len))
 			err = 1;
 
 		/* Reset buffer and dynptr */
@@ -986,7 +986,7 @@ static __always_inline void test_dynptr_probe_str(void *ptr,
 		err = err ?: bpf_dynptr_read(&buf, len, &ptr_buf, 0, 0);
 		if (!len)
 			continue;
-		if (err || bpf_memcmp(expected_str, buf, len - 1) || buf[len - 1] != '\0')
+		if (err || local_memcmp(expected_str, buf, len - 1) || buf[len - 1] != '\0')
 			err = 1;
 	}
 	bpf_ringbuf_discard_dynptr(&ptr_buf, 0);
@@ -1012,7 +1012,7 @@ static __always_inline void test_dynptr_probe_xdp(struct xdp_md *xdp, void *ptr,
 		if (len > sizeof(buf))
 			continue;
 		err = err ?: bpf_dynptr_read(&buf, len, &ptr_xdp, off, 0);
-		if (err || bpf_memcmp(expected_str, buf, len))
+		if (err || local_memcmp(expected_str, buf, len))
 			err = 1;
 		/* Reset buffer and dynptr */
 		__builtin_memset(buf, 0, sizeof(buf));
@@ -1048,7 +1048,7 @@ static __always_inline void test_dynptr_probe_str_xdp(struct xdp_md *xdp, void *
 
 		if (!len)
 			continue;
-		if (err || bpf_memcmp(expected_str, buf, len - 1) || buf[len - 1] != '\0')
+		if (err || local_memcmp(expected_str, buf, len - 1) || buf[len - 1] != '\0')
 			err = 1;
 
 		__builtin_memset(buf, 0, sizeof(buf));
