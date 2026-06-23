@@ -4087,6 +4087,67 @@ err_out:
  * * %-E2BIG  - @size exceeds the maximum allowed size
  * * %-ERANGE - One of the memory regions is outside of kernel address space
  */
+/**
+ * bpf_strpbrk - Find the first occurrence of a set of characters in a string
+ * @s__ign: The string to be searched
+ * @accept__ign: The string containing the characters to search for
+ *
+ * Return:
+ * * >=0      - Index of the first character in @s__ign that matches any
+ *              character in @accept__ign
+ * * %-ENOENT - No character of @accept__ign found in @s__ign
+ * * %-EFAULT - Cannot read one of the strings
+ * * %-E2BIG  - One of the strings is too large
+ * * %-ERANGE - One of the strings is outside of kernel address space
+ */
+__bpf_kfunc int bpf_strpbrk(const char *s__ign, const char *accept__ign)
+{
+	char cs, ca;
+	int i, j;
+
+	if (!copy_from_kernel_nofault_allowed(s__ign, 1) ||
+	    !copy_from_kernel_nofault_allowed(accept__ign, 1)) {
+		return -ERANGE;
+	}
+
+	guard(pagefault)();
+	for (i = 0; i < XATTR_SIZE_MAX; i++) {
+		__get_kernel_nofault(&cs, s__ign, char, err_out);
+		if (cs == '\0')
+			return -ENOENT;
+		for (j = 0; j < XATTR_SIZE_MAX; j++) {
+			__get_kernel_nofault(&ca, accept__ign + j, char, err_out);
+			if (ca == '\0')
+				break;
+			if (cs == ca)
+				return i;
+		}
+		if (j == XATTR_SIZE_MAX)
+			return -E2BIG;
+		s__ign++;
+	}
+	return -E2BIG;
+err_out:
+	return -EFAULT;
+}
+
+/**
+ * bpf_memcmp - Compare two memory regions byte by byte
+ * @ptr1__ign: First memory region
+ * @ptr2__ign: Second memory region
+ * @size: Number of bytes to compare
+ *
+ * Compares the first @size bytes of the memory areas @ptr1__ign and
+ * @ptr2__ign. Unlike bpf_strcmp, null bytes do not terminate the comparison.
+ *
+ * Return:
+ * * %0       - The memory regions are equal
+ * * %-1      - @ptr1__ign is less than @ptr2__ign
+ * * %1       - @ptr1__ign is greater than @ptr2__ign
+ * * %-EFAULT - Cannot read one of the memory regions
+ * * %-E2BIG  - @size exceeds the maximum allowed size
+ * * %-ERANGE - One of the memory regions is outside of kernel address space
+ */
 __bpf_kfunc int bpf_memcmp(const void *ptr1__ign, const void *ptr2__ign,
 			   size_t size)
 {
@@ -4996,6 +5057,7 @@ BTF_ID_FLAGS(func, bpf_strlen);
 BTF_ID_FLAGS(func, bpf_strnlen);
 BTF_ID_FLAGS(func, bpf_strspn);
 BTF_ID_FLAGS(func, bpf_strcspn);
+BTF_ID_FLAGS(func, bpf_strpbrk);
 BTF_ID_FLAGS(func, bpf_memcmp);
 BTF_ID_FLAGS(func, bpf_strstr);
 BTF_ID_FLAGS(func, bpf_strcasestr);
