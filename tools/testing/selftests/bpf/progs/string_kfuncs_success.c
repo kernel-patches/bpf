@@ -7,6 +7,7 @@
 
 char str[] = "hello world";
 
+extern int bpf_strpbrk(const char *s__ign, const char *accept__ign) __ksym;
 extern int bpf_memcmp(const void *ptr1__ign, const void *ptr2__ign,
 		      size_t size) __ksym;
 
@@ -62,6 +63,13 @@ __test(-ENOENT) int test_strncasestr_notfound1(void *ctx) { return bpf_strncases
 __test(-ENOENT) int test_strncasestr_notfound2(void *ctx) { return bpf_strncasestr(str, "hello", 4); }
 __test(-ENOENT) int test_strncasestr_notfound3(void *ctx) { return bpf_strncasestr("", "a", 0); }
 __test(0) int test_strncasestr_empty(void *ctx) { return bpf_strncasestr(str, "", 1); }
+
+/* bpf_strpbrk - functional tests */
+__test(0) int test_strpbrk_found_first(void *ctx) { return bpf_strpbrk(str, "h"); }
+__test(4) int test_strpbrk_found_middle(void *ctx) { return bpf_strpbrk(str, "ow"); }
+__test(6) int test_strpbrk_found_multiple(void *ctx) { return bpf_strpbrk(str, "w"); }
+__test(-ENOENT) int test_strpbrk_notfound(void *ctx) { return bpf_strpbrk(str, "xyz"); }
+__test(-ENOENT) int test_strpbrk_empty_accept(void *ctx) { return bpf_strpbrk(str, ""); }
 
 /* bpf_memcmp - functional tests */
 char data1[] = "hello world";
