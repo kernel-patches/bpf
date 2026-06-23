@@ -173,6 +173,9 @@ int udp_bpf_update_proto(struct sock *sk, struct sk_psock *psock, bool restore)
 	if (sk->sk_family == AF_INET6)
 		udp_bpf_check_v6_needs_rebuild(psock->sk_proto);
 
+	/* Treat all sockets as non-refcounted, regardless of binding state. */
+	sock_set_flag(sk, SOCK_RCU_FREE);
+
 	sock_replace_proto(sk, &udp_bpf_prots[family]);
 	return 0;
 }
