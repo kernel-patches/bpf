@@ -1983,6 +1983,11 @@ static int btf_dump_float_data(struct btf_dump *d,
 	union float_data fl;
 	int sz = t->size;
 
+	if (sz < 0 || sz > sizeof(fl)) {
+		pr_warn("unexpected size %d for id [%u]\n", sz, type_id);
+		return -EINVAL;
+	}
+
 	/* handle unaligned data; copy to local union */
 	if (!ptr_is_aligned(d->btf, type_id, data)) {
 		memcpy(&fl, data, sz);
