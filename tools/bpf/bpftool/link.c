@@ -377,6 +377,25 @@ static __u64 *u64_to_arr(__u64 val)
 	return (__u64 *) u64_to_ptr(val);
 }
 
+static __u32 *u64_to_u32_arr(__u64 val)
+{
+	return (__u32 *)u64_to_ptr(val);
+}
+
+static struct kernel_sym *find_kernel_sym_by_addr(__u64 addr, bool is_ibt_enabled)
+{
+	struct kernel_sym *sym;
+
+	if (!addr)
+		return NULL;
+
+	sym = kernel_syms_search(&dd, addr);
+	if (!sym && is_ibt_enabled && addr >= 4)
+		sym = kernel_syms_search(&dd, addr - 4);
+
+	return sym;
+}
+
 static void
 show_uprobe_multi_json(struct bpf_link_info *info, json_writer_t *wtr)
 {
@@ -401,6 +420,47 @@ show_uprobe_multi_json(struct bpf_link_info *info, json_writer_t *wtr)
 		jsonw_end_object(json_wtr);
 	}
 	jsonw_end_array(json_wtr);
+}
+
+static void
+show_tracing_multi_json(struct bpf_link_info *info, json_writer_t *wtr)
+{
+	bool is_ibt_enabled = is_x86_ibt_enabled(), show_symbol;
+	__u32 i;
+
+	if (!dd.sym_count)
+		kernel_syms_load(&dd);
+	show_symbol = !!dd.sym_count;
+
+	show_link_attach_type_json(info->tracing_multi.attach_type, wtr);
+	jsonw_uint_field(wtr, "func_cnt", info->tracing_multi.count);
+	jsonw_uint_field(wtr, "obj_id", info->tracing_multi.obj_id);
+	jsonw_name(wtr, "funcs");
+
+	jsonw_start_array(wtr);
+
+	for (i = 0; i < info->tracing_multi.count; i++) {
+		__u64 addr = u64_to_arr(info->tracing_multi.addrs)[i];
+		struct kernel_sym *sym;
+
+		sym = show_symbol ? find_kernel_sym_by_addr(addr, is_ibt_enabled) : NULL;
+
+		jsonw_start_object(wtr);
+		jsonw_uint_field(wtr, "id", u64_to_u32_arr(info->tracing_multi.ids)[i]);
+		jsonw_uint_field(wtr, "addr", addr);
+		if (sym) {
+			jsonw_string_field(wtr, "func", sym->name);
+			if (sym->module[0] == '\0') {
+				jsonw_name(wtr, "module");
+				jsonw_null(wtr);
+			} else {
+				jsonw_string_field(wtr, "module", sym->module);
+			}
+		}
+		jsonw_uint_field(wtr, "cookie", u64_to_arr(info->tracing_multi.cookies)[i]);
+		jsonw_end_object(wtr);
+	}
+	jsonw_end_array(wtr);
 }
 
 static void
@@ -588,6 +648,9 @@ static int show_link_close_json(int fd, struct bpf_link_info *info)
 		break;
 	case BPF_LINK_TYPE_UPROBE_MULTI:
 		show_uprobe_multi_json(info, json_wtr);
+		break;
+	case BPF_LINK_TYPE_TRACING_MULTI:
+		show_tracing_multi_json(info, json_wtr);
 		break;
 	case BPF_LINK_TYPE_PERF_EVENT:
 		switch (info->perf_event.type) {
@@ -833,6 +896,42 @@ static void show_uprobe_multi_plain(struct bpf_link_info *info)
 	}
 }
 
+static void show_tracing_multi_plain(struct bpf_link_info *info)
+{
+	bool is_ibt_enabled = is_x86_ibt_enabled(), show_symbol;
+	__u32 i;
+
+	if (!info->tracing_multi.count)
+		return;
+
+	if (!dd.sym_count)
+		kernel_syms_load(&dd);
+	show_symbol = !!dd.sym_count;
+
+	printf("\n\t");
+	show_link_attach_type_plain(info->tracing_multi.attach_type);
+	printf("obj_id %u  ", info->tracing_multi.obj_id);
+	printf("count %u  ", info->tracing_multi.count);
+
+	printf("\n\t%-16s %-16s %-16s %s",
+	       "btf_id", "addr", "cookie", "func [module]");
+	for (i = 0; i < info->tracing_multi.count; i++) {
+		__u64 addr = u64_to_arr(info->tracing_multi.addrs)[i];
+		struct kernel_sym *sym;
+
+		sym = show_symbol ? find_kernel_sym_by_addr(addr, is_ibt_enabled) : NULL;
+
+		printf("\n\t%-16u %016llx %-16llx",
+		       u64_to_u32_arr(info->tracing_multi.ids)[i],
+		       addr, u64_to_arr(info->tracing_multi.cookies)[i]);
+		if (sym) {
+			printf(" %s", sym->name);
+			if (sym->module[0] != '\0')
+				printf(" [%s]", sym->module);
+		}
+	}
+}
+
 static void show_perf_event_kprobe_plain(struct bpf_link_info *info)
 {
 	const char *buf;
@@ -989,6 +1088,9 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info)
 	case BPF_LINK_TYPE_UPROBE_MULTI:
 		show_uprobe_multi_plain(info);
 		break;
+	case BPF_LINK_TYPE_TRACING_MULTI:
+		show_tracing_multi_plain(info);
+		break;
 	case BPF_LINK_TYPE_PERF_EVENT:
 		switch (info->perf_event.type) {
 		case BPF_PERF_EVENT_EVENT:
@@ -1029,6 +1131,7 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info)
 static int do_show_link(int fd)
 {
 	__u64 *ref_ctr_offsets = NULL, *offsets = NULL, *cookies = NULL;
+	__u32 *ids = NULL;
 	struct bpf_link_info info;
 	__u32 len = sizeof(info);
 	char path_buf[PATH_MAX];
@@ -1114,6 +1217,39 @@ again:
 			goto again;
 		}
 	}
+	if (info.type == BPF_LINK_TYPE_TRACING_MULTI &&
+	    !info.tracing_multi.ids) {
+		count = info.tracing_multi.count;
+		if (count) {
+			ids = calloc(count, sizeof(__u32));
+			if (!ids) {
+				p_err("mem alloc failed");
+				close(fd);
+				return -ENOMEM;
+			}
+			info.tracing_multi.ids = ptr_to_u64(ids);
+
+			addrs = calloc(count, sizeof(__u64));
+			if (!addrs) {
+				p_err("mem alloc failed");
+				free(ids);
+				close(fd);
+				return -ENOMEM;
+			}
+			info.tracing_multi.addrs = ptr_to_u64(addrs);
+
+			cookies = calloc(count, sizeof(__u64));
+			if (!cookies) {
+				p_err("mem alloc failed");
+				free(addrs);
+				free(ids);
+				close(fd);
+				return -ENOMEM;
+			}
+			info.tracing_multi.cookies = ptr_to_u64(cookies);
+			goto again;
+		}
+	}
 	if (info.type == BPF_LINK_TYPE_PERF_EVENT) {
 		switch (info.perf_event.type) {
 		case BPF_PERF_EVENT_TRACEPOINT:
@@ -1153,6 +1289,7 @@ again:
 	free(cookies);
 	free(offsets);
 	free(addrs);
+	free(ids);
 	close(fd);
 	return 0;
 }
