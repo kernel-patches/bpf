@@ -7,6 +7,7 @@
 
 #include "test_progs.h"
 #include "test_skmsg_load_helpers.skel.h"
+#include "test_sockmap_lookup_bind_release.skel.h"
 #include "test_sockmap_update.skel.h"
 #include "test_sockmap_invalid_update.skel.h"
 #include "test_sockmap_skb_verdict_attach.skel.h"
@@ -17,6 +18,7 @@
 #include "test_sockmap_msg_pop_data.skel.h"
 #include "bpf_iter_sockmap.skel.h"
 
+#include "cgroup_helpers.h"
 #include "sockmap_helpers.h"
 
 #define TCP_REPAIR		19	/* TCP sock is under repair right now */
@@ -1373,6 +1375,52 @@ end:
 	test_sockmap_pass_prog__destroy(skel);
 }
 
+#define LOOKUP_BIND_RELEASE_CG	"/sockmap_lookup-bind-release"
+#define LOOKUP_BIND_RELEASE_REP	64
+
+static void test_sockmap_lookup_bind_release(void)
+{
+	struct test_sockmap_lookup_bind_release *skel;
+	struct sockaddr_in sa;
+	int cg, i;
+
+	cg = cgroup_setup_and_join(LOOKUP_BIND_RELEASE_CG);
+	if (!ASSERT_OK_FD(cg, "cgroup_setup_and_join"))
+		return;
+
+	skel = test_sockmap_lookup_bind_release__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		goto cleanup;
+
+	skel->links.connect = bpf_program__attach_cgroup(skel->progs.connect, cg);
+	if (!ASSERT_OK_PTR(skel->links.connect, "attach_cgroup"))
+		goto destroy;
+
+	sa.sin_family = AF_INET;
+	sa.sin_port = bpf_htons(1234);
+	sa.sin_addr.s_addr = bpf_htonl(INADDR_LOOPBACK);
+
+	for (i = 0; i < LOOKUP_BIND_RELEASE_REP; ++i) {
+		__close_fd int sk;
+
+		sk = xsocket(AF_INET, SOCK_DGRAM, 0);
+		if (sk < 0)
+			break;
+
+		if (xbpf_map_update_elem(bpf_map__fd(skel->maps.sockmap), &u32(0),
+					 &sk, BPF_ANY))
+			break;
+
+		if (xconnect(sk, (struct sockaddr *)&sa, sizeof(sa)))
+			break;
+	}
+
+destroy:
+	test_sockmap_lookup_bind_release__destroy(skel);
+cleanup:
+	cleanup_cgroup_environment();
+}
+
 void test_sockmap_basic(void)
 {
 	if (test__start_subtest("sockmap create_update_free"))
@@ -1451,4 +1499,6 @@ void test_sockmap_basic(void)
 		test_sockmap_multi_channels(SOCK_STREAM);
 	if (test__start_subtest("sockmap udp multi channels"))
 		test_sockmap_multi_channels(SOCK_DGRAM);
+	if (test__start_subtest("sockmap lookup-bind-release"))
+		test_sockmap_lookup_bind_release();
 }
