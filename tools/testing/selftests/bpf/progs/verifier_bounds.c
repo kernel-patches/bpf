@@ -482,6 +482,173 @@ l0_%=:	/* exit */					\
 	: __clobber_all);
 }
 
+#define SHIFT_NON_CONST_SRC_TEST(name, desc, rand, dst, src, op, src_add, dst_init, msg) \
+	SEC("socket")					\
+	__description(desc)				\
+	__success __log_level(2)			\
+	__msg(#dst " " op " " #src " {{.*}}; " msg)	\
+	__naked void name(void)				\
+	{						\
+		asm volatile ("				\
+		call %[bpf_get_prandom_u32];		\
+		" #src " = " #rand ";			\
+		" #src " &= 3;				\
+		" #src " += " #src_add ";		\
+		" #dst " = " #dst_init ";		\
+		" #dst " " op " " #src ";		\
+		exit;					\
+"		:: __imm(bpf_get_prandom_u32)		\
+		: __clobber_all);			\
+	}
+
+SHIFT_NON_CONST_SRC_TEST(
+	shift_with_non_const_src_lsh_32,
+	"bounds check after non-const 32-bit left shift",
+	w0, w1, w2, "<<=", 1, 1,
+	"R1=scalar(smin=umin=smin32=umin32=2,smax=umax=smax32=umax32=16,var_off=(0x0; 0x1f))"
+)
+
+SHIFT_NON_CONST_SRC_TEST(
+	shift_with_non_const_src_lsh_32_overflow,
+	"bounds check after non-const 32-bit lsh with overflow src",
+	w0, w1, w2, "<<=", 32, 1,
+	"R1=scalar() R2=scalar(smin=umin=smin32=umin32=32,smax=umax=smax32=umax32=35,var_off=(0x20; 0x3))"
+)
+
+SHIFT_NON_CONST_SRC_TEST(
+	shift_with_non_const_src_rsh_32,
+	"bounds check after non-const 32-bit right shift",
+	w0, w1, w2, ">>=", 1, 0xff,
+	"R1=scalar(smin=umin=smin32=umin32=15,smax=umax=smax32=umax32=127,var_off=(0x0; 0x7f))"
+)
+
+SHIFT_NON_CONST_SRC_TEST(
+	shift_with_non_const_src_rsh_32_overflow,
+	"bounds check after non-const 32-bit rsh with overflow src",
+	w0, w1, w2, ">>=", 32, 1,
+	"R1=scalar() R2=scalar(smin=umin=smin32=umin32=32,smax=umax=smax32=umax32=35,var_off=(0x20; 0x3))"
+)
+
+SHIFT_NON_CONST_SRC_TEST(
+	shift_with_non_const_src_arsh_32,
+	"bounds check after non-const 32-bit arithmetic shift",
+	w0, w1, w2, "s>>=", 1, -8,
+	"R1=scalar(smin=umin=umin32=0xfffffffc,smax=umax=0xffffffff,smin32=-4,smax32=-1,var_off=(0xfffffffc; 0x3)) R2=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=4,var_off=(0x0; 0x7))"
+)
+
+SHIFT_NON_CONST_SRC_TEST(
+	shift_with_non_const_src_arsh_32_overflow,
+	"bounds check after non-const 32-bit arsh with overflow src",
+	w0, w1, w2, "s>>=", 32, 1,
+	"R1=scalar() R2=scalar(smin=umin=smin32=umin32=32,smax=umax=smax32=umax32=35,var_off=(0x20; 0x3))"
+)
+
+SHIFT_NON_CONST_SRC_TEST(
+	shift_with_non_const_src_lsh_64,
+	"bounds check after non-const 64-bit left shift",
+	r0, r1, r2, "<<=", 1, 1,
+	"R1=scalar(smin=umin=smin32=umin32=2,smax=umax=smax32=umax32=16,var_off=(0x0; 0x1f))"
+)
+
+SHIFT_NON_CONST_SRC_TEST(
+	shift_with_non_const_src_lsh_64_overflow,
+	"bounds check after non-const 64-bit lsh with overflow src",
+	r0, r1, r2, "<<=", 64, 1,
+	"R1=scalar() R2=scalar(smin=umin=smin32=umin32=64,smax=umax=smax32=umax32=67,var_off=(0x40; 0x3))"
+)
+
+SHIFT_NON_CONST_SRC_TEST(
+	shift_with_non_const_src_rsh_64,
+	"bounds check after non-const 64-bit right shift",
+	r0, r1, r2, ">>=", 1, 0xff,
+	"R1=scalar(smin=umin=smin32=umin32=15,smax=umax=smax32=umax32=127,var_off=(0x0; 0x7f))"
+)
+
+SHIFT_NON_CONST_SRC_TEST(
+	shift_with_non_const_src_rsh_64_overflow,
+	"bounds check after non-const 64-bit rsh with overflow src",
+	r0, r1, r2, ">>=", 64, 1,
+	"R1=scalar() R2=scalar(smin=umin=smin32=umin32=64,smax=umax=smax32=umax32=67,var_off=(0x40; 0x3))"
+)
+
+SHIFT_NON_CONST_SRC_TEST(
+	shift_with_non_const_src_arsh_64,
+	"bounds check after non-const 64-bit arithmetic shift",
+	r0, r1, r2, "s>>=", 1, -8,
+	"R1=scalar(smin=smin32=-4,smax=smax32=-1,umin=0xfffffffffffffffc,umin32=0xfffffffc,var_off=(0xfffffffffffffffc; 0x3)) R2=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=4,var_off=(0x0; 0x7))"
+)
+
+SHIFT_NON_CONST_SRC_TEST(
+	shift_with_non_const_src_arsh_64_overflow,
+	"bounds check after non-const 64-bit arsh with overflow src",
+	r0, r1, r2, "s>>=", 64, 1,
+	"R1=scalar() R2=scalar(smin=umin=smin32=umin32=64,smax=umax=smax32=umax32=67,var_off=(0x40; 0x3))"
+)
+
+#define SHIFT_ARSH_DST_RANGE_TEST(name, desc, rand, dst, src, dst_mask, dst_delta, msg) \
+	SEC("socket")					\
+	__description(desc)				\
+	__success __log_level(2)			\
+	__msg(#dst " s>>= " #src " {{.*}}; {{.*}} " msg)\
+	__naked void name(void)				\
+	{						\
+		asm volatile ("				\
+		call %[bpf_get_prandom_u32];		\
+		" #dst " = " #rand ";			\
+		" #dst " &= " #dst_mask ";		\
+		" #dst " += " #dst_delta ";		\
+		call %[bpf_get_prandom_u32];		\
+		" #src " = " #rand ";			\
+		" #src " &= 1;				\
+		" #src " += 1;				\
+		" #dst " s>>= " #src ";			\
+		exit;					\
+"		:: __imm(bpf_get_prandom_u32)		\
+		: __clobber_all);			\
+	}
+
+SHIFT_ARSH_DST_RANGE_TEST(
+	shift_with_non_const_src_arsh_32_pos,
+	"bounds check after non-const 32-bit arsh with positive dst",
+	w0, w6, w2, 7, 1,
+	"R6=scalar(smin=smin32=0,smax=umax=smax32=umax32=4,var_off=(0x0; 0x7))"
+)
+
+SHIFT_ARSH_DST_RANGE_TEST(
+	shift_with_non_const_src_arsh_32_mixed,
+	"bounds check after non-const 32-bit arsh with mixed-sign dst",
+	w0, w6, w2, 15, -8,
+	"R6=scalar(smin=0,smax=umax=0xffffffff,smin32=-4,smax32=3,var_off=(0x0; 0xffffffff))"
+)
+
+SHIFT_ARSH_DST_RANGE_TEST(
+	shift_with_non_const_src_arsh_32_neg,
+	"bounds check after non-const 32-bit arsh with negative dst",
+	w0, w6, w2, 8, -16,
+	"R6=scalar(smin=umin=umin32=0xfffffff8,smax=umax=umax32=0xfffffffe,smin32=-8,smax32=-2,var_off=(0xfffffff8; 0x7))"
+)
+
+SHIFT_ARSH_DST_RANGE_TEST(
+	shift_with_non_const_src_arsh_64_pos,
+	"bounds check after non-const 64-bit arsh with positive dst",
+	r0, r6, r2, 7, 1,
+	"R6=scalar(smin=smin32=0,smax=umax=smax32=umax32=4,var_off=(0x0; 0x7))"
+)
+
+SHIFT_ARSH_DST_RANGE_TEST(
+	shift_with_non_const_src_arsh_64_mixed,
+	"bounds check after non-const 64-bit arsh with mixed-sign dst",
+	r0, r6, r2, 15, -8,
+	"R6=scalar(smin=smin32=-4,smax=smax32=3)"
+)
+
+SHIFT_ARSH_DST_RANGE_TEST(
+	shift_with_non_const_src_arsh_64_neg,
+	"bounds check after non-const 64-bit arsh with negative dst",
+	r0, r6, r2, 8, -16,
+	"R6=scalar(smin=smin32=-8,smax=smax32=-2,umin=0xfffffffffffffff8,umax=0xfffffffffffffffe,umin32=0xfffffff8,umax32=0xfffffffe,var_off=(0xfffffffffffffff8; 0x7))"
+)
+
 SEC("socket")
 __description("bounds check after 32-bit right shift with 64-bit input")
 __failure __msg("math between map_value pointer and 4294967294 is not allowed")
