@@ -86,6 +86,10 @@ The possible values in this file are:
    run a potentially malicious guest and issues an IBPB before the first
    exit to userspace after VM-exit.
 
+ * 'Mitigation: Clear BHB before exit to userspace':
+
+   As above, conditional BHB clearing mitigation is enabled.
+
  * 'Mitigation: IBPB on VMEXIT':
 
    IBPB is issued on every VM-exit. This occurs when other mitigations like
@@ -102,9 +106,14 @@ The mitigation can be controlled via the ``vmscape=`` command line parameter:
 
  * ``vmscape=ibpb``:
 
-   Enable conditional IBPB mitigation (default when CONFIG_MITIGATION_VMSCAPE=y).
+   Enable conditional IBPB mitigation.
 
  * ``vmscape=force``:
 
    Force vulnerability detection and mitigation even on processors that are
    not known to be affected.
+
+ * ``vmscape=auto``:
+
+   Choose the mitigation based on the VMSCAPE variant the CPU is affected by.
+   (default when CONFIG_MITIGATION_VMSCAPE=y)
