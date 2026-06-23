@@ -2675,7 +2675,7 @@ static int unix_dgram_recvmsg(struct socket *sock, struct msghdr *msg, size_t si
 #ifdef CONFIG_BPF_SYSCALL
 	const struct proto *prot = READ_ONCE(sk->sk_prot);
 
-	if (prot != &unix_dgram_proto)
+	if (prot->recvmsg)
 		return prot->recvmsg(sk, msg, size, flags);
 #endif
 	return __unix_dgram_recvmsg(sk, msg, size, flags);
@@ -3152,7 +3152,7 @@ static int unix_stream_recvmsg(struct socket *sock, struct msghdr *msg,
 	struct sock *sk = sock->sk;
 	const struct proto *prot = READ_ONCE(sk->sk_prot);
 
-	if (prot != &unix_stream_proto)
+	if (prot->recvmsg)
 		return prot->recvmsg(sk, msg, size, flags);
 #endif
 	return unix_stream_read_generic(&state, true);

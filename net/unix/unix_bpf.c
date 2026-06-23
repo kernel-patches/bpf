@@ -7,6 +7,7 @@
 
 #include "af_unix.h"
 
+#ifdef CONFIG_NET_SOCK_MSG
 #define unix_sk_has_data(__sk, __psock)					\
 		({	!skb_queue_empty(&__sk->sk_receive_queue) ||	\
 			!skb_queue_empty(&__psock->ingress_skb) ||	\
@@ -94,6 +95,7 @@ msg_bytes_ready:
 	sk_psock_put(sk, psock);
 	return copied;
 }
+#endif /* CONFIG_NET_SOCK_MSG */
 
 static struct proto *unix_dgram_prot_saved __read_mostly;
 static DEFINE_SPINLOCK(unix_dgram_prot_lock);
@@ -107,8 +109,10 @@ static void unix_dgram_bpf_rebuild_protos(struct proto *prot, const struct proto
 {
 	*prot        = *base;
 	prot->close  = sock_map_close;
+#ifdef CONFIG_NET_SOCK_MSG
 	prot->recvmsg = unix_bpf_recvmsg;
 	prot->sock_is_readable = sk_msg_is_readable;
+#endif
 }
 
 static void unix_stream_bpf_rebuild_protos(struct proto *prot,
@@ -116,8 +120,10 @@ static void unix_stream_bpf_rebuild_protos(struct proto *prot,
 {
 	*prot        = *base;
 	prot->close  = sock_map_close;
+#ifdef CONFIG_NET_SOCK_MSG
 	prot->recvmsg = unix_bpf_recvmsg;
 	prot->sock_is_readable = sk_msg_is_readable;
+#endif
 	prot->unhash  = sock_map_unhash;
 }
 
