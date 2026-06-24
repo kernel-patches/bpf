@@ -20,6 +20,8 @@ static const char * const test_cases[] = {
 	"strspn_accept",
 	"strcspn_str",
 	"strcspn_reject",
+		"strpbrk_str",
+		"strpbrk_accept",
 	"strstr",
 	"strcasestr",
 	"strnstr",

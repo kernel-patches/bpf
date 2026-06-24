@@ -9,6 +9,7 @@
 char *user_ptr = (char *)1;
 char *invalid_kern_ptr = (char *)-1;
 
+extern int bpf_strpbrk(const char *s__ign, const char *accept__ign) __ksym;
 extern int bpf_memcmp(const void *ptr1__ign, const void *ptr2__ign,
 		      size_t size) __ksym;
 
@@ -58,6 +59,8 @@ SEC("syscall")  __retval(USER_PTR_ERR)int test_strncasestr_null1(void *ctx) { re
 SEC("syscall")  __retval(USER_PTR_ERR)int test_strncasestr_null2(void *ctx) { return bpf_strncasestr("hello", NULL, 1); }
 SEC("syscall")  __retval(USER_PTR_ERR)int test_memcmp_null1(void *ctx) { return bpf_memcmp(NULL, "x", 1); }
 SEC("syscall")  __retval(USER_PTR_ERR)int test_memcmp_null2(void *ctx) { return bpf_memcmp("x", NULL, 1); }
+SEC("syscall")  __retval(USER_PTR_ERR)int test_strpbrk_null1(void *ctx) { return bpf_strpbrk(NULL, "x"); }
+SEC("syscall")  __retval(USER_PTR_ERR)int test_strpbrk_null2(void *ctx) { return bpf_strpbrk("x", NULL); }
 
 /* Passing userspace ptr to string kfuncs */
 SEC("syscall") __retval(USER_PTR_ERR) int test_strcmp_user_ptr1(void *ctx) { return bpf_strcmp(user_ptr, "hello"); }
@@ -86,6 +89,8 @@ SEC("syscall") __retval(USER_PTR_ERR) int test_strncasestr_user_ptr1(void *ctx) 
 SEC("syscall") __retval(USER_PTR_ERR) int test_strncasestr_user_ptr2(void *ctx) { return bpf_strncasestr("hello", user_ptr, 1); }
 SEC("syscall") __retval(USER_PTR_ERR) int test_memcmp_user_ptr1(void *ctx) { return bpf_memcmp(user_ptr, "x", 1); }
 SEC("syscall") __retval(USER_PTR_ERR) int test_memcmp_user_ptr2(void *ctx) { return bpf_memcmp("x", user_ptr, 1); }
+SEC("syscall") __retval(USER_PTR_ERR) int test_strpbrk_user_ptr1(void *ctx) { return bpf_strpbrk(user_ptr, "x"); }
+SEC("syscall") __retval(USER_PTR_ERR) int test_strpbrk_user_ptr2(void *ctx) { return bpf_strpbrk("x", user_ptr); }
 
 #endif /* __TARGET_ARCH_s390 */
 
@@ -116,5 +121,7 @@ SEC("syscall") __retval(-EFAULT) int test_strncasestr_pagefault1(void *ctx) { re
 SEC("syscall") __retval(-EFAULT) int test_strncasestr_pagefault2(void *ctx) { return bpf_strncasestr("hello", invalid_kern_ptr, 1); }
 SEC("syscall") __retval(-EFAULT) int test_memcmp_pagefault1(void *ctx) { return bpf_memcmp(invalid_kern_ptr, "x", 1); }
 SEC("syscall") __retval(-EFAULT) int test_memcmp_pagefault2(void *ctx) { return bpf_memcmp("x", invalid_kern_ptr, 1); }
+SEC("syscall") __retval(-EFAULT) int test_strpbrk_pagefault1(void *ctx) { return bpf_strpbrk(invalid_kern_ptr, "x"); }
+SEC("syscall") __retval(-EFAULT) int test_strpbrk_pagefault2(void *ctx) { return bpf_strpbrk("x", invalid_kern_ptr); }
 
 char _license[] SEC("license") = "GPL";
