@@ -5919,6 +5919,9 @@ static struct btf *btf_parse(const union bpf_attr *attr, bpfptr_t uattr,
 	if (attr->btf_size > BTF_MAX_SIZE)
 		return ERR_PTR(-E2BIG);
 
+	if (attr_log->level == BPF_LOG_KERNEL && !uattr.is_kernel)
+		return ERR_PTR(-EINVAL);
+
 	env = kzalloc_obj(*env, GFP_KERNEL | __GFP_NOWARN);
 	if (!env)
 		return ERR_PTR(-ENOMEM);

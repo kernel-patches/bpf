@@ -21,6 +21,15 @@ static bool bpf_verifier_log_attr_valid(u32 log_level, char __user *log_buf, u32
 	/* log buf without log_level is meaningless */
 	if (log_buf && log_level == 0)
 		return false;
+
+	/* BPF_LOG_KERNEL is an exclusive internal mode, not a bit flag.
+	 * It must be checked via strict equality to prevent it from being
+	 * combined with userspace flags, which would cause the verifier
+	 * to fallback to userspace logging and copy_to_user() failures.
+	 */
+	if (log_level == BPF_LOG_KERNEL)
+		return true;
+
 	if (log_level & ~BPF_LOG_MASK)
 		return false;
 	if (log_size > UINT_MAX >> 2)
@@ -831,6 +840,11 @@ int bpf_log_attr_init(struct bpf_log_attr *log, u64 log_buf, u32 log_size, u32 l
 	char __user *ubuf_common = u64_to_user_ptr(common->log_buf);
 	char __user *ubuf = u64_to_user_ptr(log_buf);
 
+	if (common->log_level == BPF_LOG_KERNEL && !uattr_common.is_kernel)
+		return -EINVAL;
+	if (log_level == BPF_LOG_KERNEL && !uattr.is_kernel)
+		return -EINVAL;
+
 	if (!bpf_verifier_log_attr_valid(common->log_level, ubuf_common, common->log_size) ||
 	    !bpf_verifier_log_attr_valid(log_level, ubuf, log_size))
 		return -EINVAL;
@@ -872,6 +886,9 @@ struct bpf_verifier_log *bpf_log_attr_create_vlog(struct bpf_log_attr *attr_log,
 
 	if (!size)
 		return NULL;
+
+	if (common->log_level == BPF_LOG_KERNEL && !uattr.is_kernel)
+		return ERR_PTR(-EINVAL);
 
 	log = kzalloc_obj(*log, GFP_KERNEL);
 	if (!log)
