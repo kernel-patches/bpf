@@ -4060,7 +4060,7 @@ static int bpf_perf_link_fill_kprobe(const struct perf_event *event,
 	ulen = info->perf_event.kprobe.name_len;
 	err = bpf_perf_link_fill_common(event, uname, &ulen, &offset, &addr,
 					&type, &missed);
-	if (err)
+	if (err && err != -ENOSPC)
 		return err;
 	if (type == BPF_FD_TYPE_KRETPROBE)
 		info->perf_event.type = BPF_PERF_EVENT_KRETPROBE;
@@ -4073,7 +4073,7 @@ static int bpf_perf_link_fill_kprobe(const struct perf_event *event,
 		addr = 0;
 	info->perf_event.kprobe.addr = addr;
 	info->perf_event.kprobe.cookie = event->bpf_cookie;
-	return 0;
+	return err;
 }
 
 static void bpf_perf_link_fdinfo_kprobe(const struct perf_event *event,
@@ -4116,7 +4116,7 @@ static int bpf_perf_link_fill_uprobe(const struct perf_event *event,
 	ulen = info->perf_event.uprobe.name_len;
 	err = bpf_perf_link_fill_common(event, uname, &ulen, &offset, &ref_ctr_offset,
 					&type, NULL);
-	if (err)
+	if (err && err != -ENOSPC)
 		return err;
 
 	if (type == BPF_FD_TYPE_URETPROBE)
@@ -4127,7 +4127,7 @@ static int bpf_perf_link_fill_uprobe(const struct perf_event *event,
 	info->perf_event.uprobe.offset = offset;
 	info->perf_event.uprobe.cookie = event->bpf_cookie;
 	info->perf_event.uprobe.ref_ctr_offset = ref_ctr_offset;
-	return 0;
+	return err;
 }
 
 static void bpf_perf_link_fdinfo_uprobe(const struct perf_event *event,
@@ -4180,13 +4180,13 @@ static int bpf_perf_link_fill_tracepoint(const struct perf_event *event,
 	uname = u64_to_user_ptr(info->perf_event.tracepoint.tp_name);
 	ulen = info->perf_event.tracepoint.name_len;
 	err = bpf_perf_link_fill_common(event, uname, &ulen, NULL, NULL, NULL, NULL);
-	if (err)
+	if (err && err != -ENOSPC)
 		return err;
 
 	info->perf_event.type = BPF_PERF_EVENT_TRACEPOINT;
 	info->perf_event.tracepoint.name_len = ulen;
 	info->perf_event.tracepoint.cookie = event->bpf_cookie;
-	return 0;
+	return err;
 }
 
 static int bpf_perf_link_fill_perf_event(const struct perf_event *event,
@@ -5536,7 +5536,7 @@ static int bpf_link_get_info_by_fd(struct file *file,
 	struct bpf_link_info __user *uinfo = u64_to_user_ptr(attr->info.info);
 	struct bpf_link_info info;
 	u32 info_len = attr->info.info_len;
-	int err;
+	int err = 0;
 
 	err = bpf_check_uarg_tail_zero(USER_BPFPTR(uinfo), sizeof(info), info_len);
 	if (err)
@@ -5554,7 +5554,7 @@ static int bpf_link_get_info_by_fd(struct file *file,
 
 	if (link->ops->fill_link_info) {
 		err = link->ops->fill_link_info(link, &info);
-		if (err)
+		if (err && err != -ENOSPC)
 			return err;
 	}
 
@@ -5562,7 +5562,7 @@ static int bpf_link_get_info_by_fd(struct file *file,
 	    put_user(info_len, &uattr->info.info_len))
 		return -EFAULT;
 
-	return 0;
+	return err;
 }
 
 
