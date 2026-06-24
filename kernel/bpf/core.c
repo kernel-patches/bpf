@@ -2613,6 +2613,22 @@ static bool bpf_insn_requires_jit(struct bpf_insn *insn)
 	if (insn_is_cast_user(insn))
 		return true;
 
+	switch (BPF_CLASS(insn->code)) {
+	case BPF_ST:
+	case BPF_LDX:
+	case BPF_STX:
+		/* arena ST/LDX/STX insns */
+		if (BPF_MODE(insn->code) == BPF_PROBE_MEM32)
+			return true;
+		if (BPF_MODE(insn->code) == BPF_PROBE_MEM32SX &&
+		    BPF_CLASS(insn->code) == BPF_LDX &&
+		    BPF_SIZE(insn->code) != BPF_DW)
+			return true;
+		break;
+	default:
+		return false;
+	}
+
 	return false;
 }
 
