@@ -6644,6 +6644,10 @@ static int check_stack_range_initialized(
 		max_off = reg_smax(reg) + off;
 	}
 
+	if (access_size)
+		check_fastcall_stack_contract(env, state, env->insn_idx,
+					      min_off);
+
 	if (meta && meta->raw_mode) {
 		/* Ensure we won't be overwriting dynptrs when simulating byte
 		 * by byte access in check_helper_call using meta.access_size.
