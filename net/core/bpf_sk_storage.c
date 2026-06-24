@@ -46,6 +46,8 @@ static int __init set_bpf_sk_reserve(char *str)
 
 	bpf_sk_reserve = rounded;
 	sk_reserve.limit = rounded;
+	pr_info("bpf_sk_reserve=%u set\n", bpf_sk_reserve);
+
 	return 1;
 }
 __setup("bpf_sk_reserve=", set_bpf_sk_reserve);
@@ -100,8 +102,11 @@ static void bpf_sk_storage_map_free(struct bpf_map *map)
 {
 	struct bpf_local_storage_map *smap = (struct bpf_local_storage_map *)map;
 
-	if (smap->reserve_off)
+	if (smap->reserve_off) {
+		pr_info("bpf_sk_reserve: freeing map '%s' slot=%u off=%u\n", map->name,
+			 smap->reserve_slot, smap->reserve_off);
 		bpf_ls_reserve_free(smap, &sk_reserve);
+	}
 
 	bpf_local_storage_map_free(map, &sk_cache);
 }
@@ -127,6 +132,7 @@ static int bpf_sk_storage_map_alloc_check(union bpf_attr *attr)
 static int bpf_sk_storage_map_settle(struct bpf_map *map)
 {
 	struct bpf_local_storage_map *smap;
+	int err;
 
 	/*
 	 * BPF_F_NO_PREALLOC selects the normal hash-based path.  Its
@@ -143,7 +149,20 @@ static int bpf_sk_storage_map_settle(struct bpf_map *map)
 	if (!IS_ERR_OR_NULL(map->record))
 		return -EINVAL;
 
-	return bpf_ls_reserve_alloc(smap, &sk_reserve);
+	err = bpf_ls_reserve_alloc(smap, &sk_reserve);
+
+	if (err) {
+		pr_info_ratelimited("bpf_sk_reserve: map '%s' not reserved: %d (bump=%u/%u nr=%u)\n",
+				    map->name, err, sk_reserve.bump, sk_reserve.limit,
+				    sk_reserve.nr_slots);
+		return err;
+	}
+
+	pr_info("bpf_sk_reserve: map '%s' reserved off=%u slot=%u (bump=%u/%u nr=%u)\n", map->name,
+		smap->reserve_off, smap->reserve_slot, sk_reserve.bump, sk_reserve.limit,
+		sk_reserve.nr_slots);
+
+	return 0;
 }
 
 static inline u32 *sk_reserve_owner(struct sock *sk, struct bpf_local_storage_map *smap)
