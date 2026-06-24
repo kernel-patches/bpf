@@ -2608,23 +2608,37 @@ out_restore:
 	return prog;
 }
 
+static bool bpf_insn_requires_jit(struct bpf_insn *insn)
+{
+	if (insn_is_cast_user(insn))
+		return true;
+
+	return false;
+}
+
 /* Fix up helper call offsets on JIT fallback path. */
-static void bpf_fixup_fallback_helpers(struct bpf_verifier_env *env, struct bpf_prog *fp)
+static int bpf_fixup_fallback_helpers(struct bpf_verifier_env *env, struct bpf_prog *fp)
 {
 	struct bpf_insn *insn = fp->insnsi;
 	const struct bpf_func_proto *fn;
 	int i;
 
-	if (!env || !env->ops->get_func_proto)
-		return;
+	if (!env)
+		return 0;
 
 	for (i = 0; i < fp->len; i++, insn++) {
-		if (bpf_helper_call(insn) && bpf_jit_inlines_helper_call(insn->imm)) {
+		if (env->ops->get_func_proto && bpf_helper_call(insn) &&
+		    bpf_jit_inlines_helper_call(insn->imm)) {
 			fn = env->ops->get_func_proto(insn->imm, env->prog);
 			if (fn && fn->func)
 				insn->imm = fn->func - __bpf_call_base;
 		}
+
+		if (bpf_insn_requires_jit(insn))
+			return -EOPNOTSUPP;
 	}
+
+	return 0;
 }
 
 struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env, struct bpf_prog *fp,
@@ -2663,8 +2677,11 @@ struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env, struct 
 			return fp;
 		}
 
-		if (!fp->jited)
-			bpf_fixup_fallback_helpers(env, fp);
+		if (!fp->jited) {
+			*err = bpf_fixup_fallback_helpers(env, fp);
+			if (*err)
+				return fp;
+		}
 	} else {
 		*err = bpf_prog_offload_compile(fp);
 		if (*err)
