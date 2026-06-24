@@ -80,6 +80,7 @@
 #include <linux/unaligned.h>
 #include <linux/errqueue.h>
 #include <trace/events/tcp.h>
+#include <trace/events/skb.h>
 #include <linux/jump_label_ratelimit.h>
 #include <net/busy_poll.h>
 #include <net/mptcp.h>
@@ -5693,6 +5694,7 @@ static void tcp_data_queue(struct sock *sk, struct sk_buff *skb)
 	}
 
 	if (TCP_SKB_CB(skb)->seq == TCP_SKB_CB(skb)->end_seq) {
+		trace_skb_free(skb, SKB_CONSUMED, __builtin_return_address(0));
 		__kfree_skb(skb);
 		return;
 	}
@@ -6689,6 +6691,7 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 				 * on entry.
 				 */
 				tcp_ack(sk, skb, flag);
+				trace_skb_free(skb, SKB_CONSUMED, __builtin_return_address(0));
 				__kfree_skb(skb);
 				tcp_data_snd_check(sk);
 				/* When receiving pure ack in fast path, update
@@ -7315,6 +7318,7 @@ tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 
 		/* Do step6 onward by hand. */
 		tcp_urg(sk, skb, th);
+		trace_skb_free(skb, SKB_CONSUMED, __builtin_return_address(0));
 		__kfree_skb(skb);
 		tcp_data_snd_check(sk);
 		return 0;
@@ -7526,6 +7530,7 @@ discard:
 	return 0;
 
 consume:
+	trace_skb_free(skb, SKB_CONSUMED, __builtin_return_address(0));
 	__kfree_skb(skb);
 	return 0;
 }

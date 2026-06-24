@@ -12564,6 +12564,44 @@ __bpf_kfunc int bpf_dynptr_from_skb(struct __sk_buff *s, u64 flags,
 }
 
 /**
+ * bpf_trace_skb() - Opt an skb into gated lifetime tracepoints
+ * @skb_: socket buffer to tag
+ * @flags__k: future use, must be zero
+ *
+ * Tag the skb as traced so that the gated skb_free tracepoint fires for it
+ * when the skb is freed or stolen. Programs can use this to reap per-packet
+ * metadata kept in a BPF map keyed by the skb address. skb_free carries the
+ * drop reason, mirroring kfree_skb.
+ *
+ * Return:
+ * * %0         - skb tagged or already tagged
+ * * %-EINVAL   - nonzero flags
+ * * %-EBUSY    - skb is shared
+ */
+__bpf_kfunc int bpf_trace_skb(struct sk_buff *skb, u64 flags__k)
+{
+	if (flags__k)
+		return -EINVAL;
+	if (skb_shared(skb))
+		return -EBUSY;
+
+	skb->traced = 1;
+
+	return 0;
+}
+
+/**
+ * bpf_skb_is_traced() - Check whether an skb is tagged
+ * @skb_: socket buffer to query
+ *
+ * Return: true if the skb was tagged with bpf_trace_skb().
+ */
+__bpf_kfunc bool bpf_skb_is_traced(struct sk_buff *skb)
+{
+	return skb->traced;
+}
+
+/**
  * bpf_dynptr_from_skb_meta() - Initialize a dynptr to the skb metadata area.
  * @skb_: socket buffer carrying the metadata
  * @flags: future use, must be zero
@@ -12944,6 +12982,11 @@ BTF_KFUNCS_START(bpf_kfunc_check_set_skb_meta)
 BTF_ID_FLAGS(func, bpf_dynptr_from_skb_meta)
 BTF_KFUNCS_END(bpf_kfunc_check_set_skb_meta)
 
+BTF_KFUNCS_START(bpf_kfunc_check_set_skb_tracepoints)
+BTF_ID_FLAGS(func, bpf_trace_skb)
+BTF_ID_FLAGS(func, bpf_skb_is_traced)
+BTF_KFUNCS_END(bpf_kfunc_check_set_skb_tracepoints)
+
 BTF_KFUNCS_START(bpf_kfunc_check_set_xdp)
 BTF_ID_FLAGS(func, bpf_dynptr_from_xdp)
 BTF_ID_FLAGS(func, bpf_xdp_pull_data)
@@ -12973,6 +13016,11 @@ static const struct btf_kfunc_id_set bpf_kfunc_set_skb = {
 static const struct btf_kfunc_id_set bpf_kfunc_set_skb_meta = {
 	.owner = THIS_MODULE,
 	.set = &bpf_kfunc_check_set_skb_meta,
+};
+
+static const struct btf_kfunc_id_set bpf_kfunc_set_skb_tracepoints = {
+	.owner = THIS_MODULE,
+	.set = &bpf_kfunc_check_set_skb_tracepoints,
 };
 
 static const struct btf_kfunc_id_set bpf_kfunc_set_xdp = {
@@ -13018,6 +13066,32 @@ static int __init bpf_kfunc_init(void)
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &bpf_kfunc_set_skb);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &bpf_kfunc_set_skb_meta);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_ACT, &bpf_kfunc_set_skb_meta);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS,
+					       &bpf_kfunc_set_skb_tracepoints);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_ACT,
+					       &bpf_kfunc_set_skb_tracepoints);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SKB,
+					       &bpf_kfunc_set_skb_tracepoints);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SOCK_OPS,
+					       &bpf_kfunc_set_skb_tracepoints);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SK_SKB,
+					       &bpf_kfunc_set_skb_tracepoints);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SOCKET_FILTER,
+					       &bpf_kfunc_set_skb_tracepoints);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_LWT_OUT,
+					       &bpf_kfunc_set_skb_tracepoints);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_LWT_IN,
+					       &bpf_kfunc_set_skb_tracepoints);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_LWT_XMIT,
+					       &bpf_kfunc_set_skb_tracepoints);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_LWT_SEG6LOCAL,
+					       &bpf_kfunc_set_skb_tracepoints);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_NETFILTER,
+					       &bpf_kfunc_set_skb_tracepoints);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_LSM,
+					       &bpf_kfunc_set_skb_tracepoints);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING,
+					       &bpf_kfunc_set_skb_tracepoints);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &bpf_kfunc_set_xdp);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SOCK_ADDR,
 					       &bpf_kfunc_set_sock_addr);

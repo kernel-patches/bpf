@@ -1847,6 +1847,7 @@ void skb_consume_udp(struct sock *sk, struct sk_buff *skb, int len)
 
 	if (!skb_shared(skb)) {
 		skb_orphan(skb);
+		trace_skb_free(skb, SKB_CONSUMED, __builtin_return_address(0));
 		skb_attempt_defer_free(skb);
 		return;
 	}

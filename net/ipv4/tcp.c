@@ -286,6 +286,7 @@
 #include <asm/ioctls.h>
 #include <net/busy_poll.h>
 #include <net/hotdata.h>
+#include <trace/events/skb.h>
 #include <trace/events/tcp.h>
 #include <net/rps.h>
 
@@ -1630,6 +1631,7 @@ void tcp_cleanup_rbuf(struct sock *sk, int copied)
 static void tcp_eat_recv_skb(struct sock *sk, struct sk_buff *skb)
 {
 	__skb_unlink(skb, &sk->sk_receive_queue);
+	trace_skb_free(skb, SKB_CONSUMED, __builtin_return_address(0));
 	if (likely(skb->destructor == sock_rfree)) {
 		sock_rfree(skb);
 		skb->destructor = NULL;

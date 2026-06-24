@@ -92,6 +92,66 @@ TRACE_EVENT(skb_copy_datagram_iovec,
 	TP_printk("skbaddr=%p len=%d", __entry->skbaddr, __entry->len)
 );
 
+/*
+ * Gated variant of the kfree/consume_skb tracepoints, which fires only for skbs
+ * tagged with bpf_trace_skb().
+ */
+
+#undef FN
+#undef FNe
+#define FN(reason)	{ SKB_DROP_REASON_##reason, #reason },
+#define FNe(reason)	{ SKB_DROP_REASON_##reason, #reason }
+
+TRACE_EVENT_CONDITION(skb_free,
+
+	TP_PROTO(struct sk_buff *skb, enum skb_drop_reason reason,
+		 void *location),
+
+	TP_ARGS(skb, reason, location),
+
+	TP_CONDITION(skb->traced),
+
+	TP_STRUCT__entry(
+		__field(	void *,		skbaddr)
+		__field(	enum skb_drop_reason,	reason)
+		__field(	void *,		location)
+	),
+
+	TP_fast_assign(
+		__entry->skbaddr = skb;
+		__entry->reason = reason;
+		__entry->location = location;
+	),
+
+	TP_printk("skbaddr=%p reason=%s location=%pS",
+		  __entry->skbaddr,
+		  __print_symbolic(__entry->reason,
+				   DEFINE_DROP_REASON(FN, FNe)),
+		  __entry->location)
+);
+
+#undef FN
+#undef FNe
+
+#define trace_consume_skb(skb, location)			 \
+	do {							 \
+		struct sk_buff *__skb = (skb);			 \
+		void *__location = (location);			 \
+								 \
+		trace_consume_skb(__skb, __location);		 \
+		trace_skb_free(__skb, SKB_CONSUMED, __location); \
+	} while (0)
+
+#define trace_kfree_skb(skb, location, reason, rx_sk)		     \
+	do {							     \
+		struct sk_buff *__skb = (skb);			     \
+		void *__location = (location);			     \
+		enum skb_drop_reason __reason = (reason);	     \
+								     \
+		trace_kfree_skb(__skb, __location, __reason, rx_sk); \
+		trace_skb_free(__skb, __reason, __location);	     \
+	} while (0)
+
 #endif /* _TRACE_SKB_H */
 
 /* This part must be outside protection */

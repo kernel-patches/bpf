@@ -1496,6 +1496,9 @@ void napi_skb_free_stolen_head(struct sk_buff *skb)
 		skb_orphan(skb);
 		skb->slow_gro = 0;
 	}
+	trace_skb_free(skb, SKB_CONSUMED, __builtin_return_address(0));
+	skb->traced = 0;
+
 	if (skb->fclone != SKB_FCLONE_UNAVAILABLE) {
 		kfree_skbmem(skb);
 		return;
@@ -1596,6 +1599,8 @@ static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
 	CHECK_SKB_FIELD(tc_index);
 #endif
 
+	/* The headers memcpy carried the flag over; the copy is not traced. */
+	new->traced = 0;
 }
 
 /*
