@@ -10,7 +10,7 @@
 #include <linux/btf_ids.h>
 #include "test_progs.h"
 
-static int duration;
+#define BTF_DATA_FILE "resolve_btfids.test.o.BTF"
 
 struct symbol {
 	const char	*name;
@@ -70,10 +70,8 @@ __resolve_symbol(struct btf *btf, int type_id)
 	unsigned int i;
 
 	type = btf__type_by_id(btf, type_id);
-	if (!type) {
-		PRINT_FAIL("Failed to get type for ID %d\n", type_id);
+	if (!ASSERT_OK_PTR(type, "btf__type_by_id"))
 		return -1;
-	}
 
 	for (i = 0; i < ARRAY_SIZE(test_symbols); i++) {
 		if (test_symbols[i].id >= 0)
@@ -83,10 +81,8 @@ __resolve_symbol(struct btf *btf, int type_id)
 			continue;
 
 		str = btf__name_by_offset(btf, type->name_off);
-		if (!str) {
-			PRINT_FAIL("Failed to get name for BTF ID %d\n", type_id);
+		if (!ASSERT_OK_PTR(str, "btf__name_by_offset"))
 			return -1;
-		}
 
 		if (!strcmp(str, test_symbols[i].name))
 			test_symbols[i].id = type_id;
@@ -95,25 +91,15 @@ __resolve_symbol(struct btf *btf, int type_id)
 	return 0;
 }
 
-static int resolve_symbols(void)
+static int resolve_symbols(struct btf *btf)
 {
-	struct btf *btf;
+	__u32 nr = btf__type_cnt(btf);
 	int type_id;
-	__u32 nr;
-
-	btf = btf__parse_raw("resolve_btfids.test.o.BTF");
-	if (CHECK(libbpf_get_error(btf), "resolve",
-		  "Failed to load BTF from resolve_btfids.test.o.BTF\n"))
-		return -1;
-
-	nr = btf__type_cnt(btf);
 
 	for (type_id = 1; type_id < nr; type_id++) {
 		if (__resolve_symbol(btf, type_id))
-			break;
+			return -1;
 	}
-
-	btf__free(btf);
 	return 0;
 }
 
@@ -121,25 +107,22 @@ void test_resolve_btfids(void)
 {
 	__u32 *test_list, *test_lists[] = { test_list_local, test_list_global };
 	unsigned int i, j;
-	int ret = 0;
+	struct btf *btf;
 
-	if (resolve_symbols())
+	btf = btf__parse_raw(BTF_DATA_FILE);
+	if (!ASSERT_OK_PTR(btf, "btf_parse"))
 		return;
+
+	if (resolve_symbols(btf))
+		goto out;
 
 	/* Check BTF_ID_LIST(test_list_local) and
 	 * BTF_ID_LIST_GLOBAL(test_list_global) IDs
 	 */
 	for (j = 0; j < ARRAY_SIZE(test_lists); j++) {
 		test_list = test_lists[j];
-		for (i = 0; i < ARRAY_SIZE(test_symbols); i++) {
-			ret = CHECK(test_list[i] != test_symbols[i].id,
-				    "id_check",
-				    "wrong ID for %s (%d != %d)\n",
-				    test_symbols[i].name,
-				    test_list[i], test_symbols[i].id);
-			if (ret)
-				return;
-		}
+		for (i = 0; i < ARRAY_SIZE(test_symbols); i++)
+			ASSERT_EQ(test_list[i], test_symbols[i].id, test_symbols[i].name);
 	}
 
 	/* Check BTF_SET_START(test_set) IDs */
@@ -153,15 +136,13 @@ void test_resolve_btfids(void)
 			break;
 		}
 
-		ret = CHECK(!found, "id_check",
-			    "ID %d not found in test_symbols\n",
-			    test_set.ids[i]);
-		if (ret)
+		if (!ASSERT_TRUE(found, "id_in_test_symbols"))
 			break;
 
-		if (i > 0) {
-			if (!ASSERT_LE(test_set.ids[i - 1], test_set.ids[i], "sort_check"))
-				return;
-		}
+		if (i > 0)
+			ASSERT_LE(test_set.ids[i - 1], test_set.ids[i], "sort_check");
 	}
+
+out:
+	btf__free(btf);
 }
