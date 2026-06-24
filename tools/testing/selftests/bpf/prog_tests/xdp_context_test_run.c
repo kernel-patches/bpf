@@ -693,3 +693,55 @@ void test_xdp_context_lwt_encap(void)
 
 	test_xdp_meta__destroy(skel);
 }
+
+void test_skb_ext_basic(void)
+{
+	struct test_xdp_meta *skel = NULL;
+
+	skel = test_xdp_meta__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open and load skeleton"))
+		return;
+
+	if (test__start_subtest("tc_write_read"))
+		test_tuntap(NULL, /* xdp */
+			    skel->progs.tc_skb_ext_write,
+			    skel->progs.tc_skb_ext_read,
+			    &skel->bss->test_pass);
+	if (test__start_subtest("tc_write_clone_read"))
+		test_tuntap(NULL, /* xdp */
+			    skel->progs.tc_skb_ext_write,
+			    skel->progs.tc_skb_ext_clone_read,
+			    &skel->bss->test_pass);
+	if (test__start_subtest("tc_write_slice_read"))
+		test_tuntap(NULL, /* xdp */
+			    skel->progs.tc_skb_ext_write,
+			    skel->progs.tc_skb_ext_slice_read,
+			    &skel->bss->test_pass);
+	if (test__start_subtest("tc_slice_write_read"))
+		test_tuntap(NULL, /* xdp */
+			    skel->progs.tc_skb_ext_slice_write,
+			    skel->progs.tc_skb_ext_read,
+			    &skel->bss->test_pass);
+	if (test__start_subtest("tc_no_alloc"))
+		test_tuntap(NULL, /* xdp */
+			    skel->progs.tc_skb_ext_no_alloc,
+			    NULL, /* tc prio 2 */
+			    &skel->bss->test_pass);
+	if (test__start_subtest("tc_invalid_flags"))
+		test_tuntap(NULL, /* xdp */
+			    skel->progs.tc_skb_ext_invalid_flags,
+			    NULL, /* tc prio 2 */
+			    &skel->bss->test_pass);
+	if (test__start_subtest("tc_rdonly"))
+		test_tuntap(NULL, /* xdp */
+			    skel->progs.tc_skb_ext_rdonly,
+			    NULL, /* tc prio 2 */
+			    &skel->bss->test_pass);
+	if (test__start_subtest("tc_double_alloc"))
+		test_tuntap(NULL, /* xdp */
+			    skel->progs.tc_skb_ext_double_alloc,
+			    NULL, /* tc prio 2 */
+			    &skel->bss->test_pass);
+
+	test_xdp_meta__destroy(skel);
+}
