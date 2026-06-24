@@ -4454,7 +4454,10 @@ static void bpf_task_work_callback(struct callback_head *cb)
 	u32 idx;
 	void *key;
 
-	/* Read lock is needed to protect ctx and map key/value access */
+	/* Hold rcu_read_lock_trace so that call_rcu_tasks_trace() in
+	 * htab_elem_defer_free() waits for this callback to finish before
+	 * recycling the htab_elem.
+	 */
 	guard(rcu_tasks_trace)();
 	/*
 	 * This callback may start running before bpf_task_work_irq() switched to
@@ -4784,8 +4787,8 @@ void bpf_task_work_cancel_and_free(void *val)
 	struct bpf_task_work_ctx *ctx;
 	enum bpf_task_work_state state;
 
-	ctx = xchg(&twk->ctx, NULL);
-	if (!ctx)
+	ctx = xchg(&twk->ctx, ERR_PTR(-EBUSY));
+	if (IS_ERR_OR_NULL(ctx))
 		return;
 
 	state = xchg(&ctx->state, BPF_TW_FREED);

@@ -310,6 +310,7 @@ static struct htab_elem *prealloc_lru_pop(struct bpf_htab *htab, void *key,
 		bpf_map_inc_elem_count(&htab->map);
 		l = container_of(node, struct htab_elem, lru_node);
 		memcpy(l->key, key, htab->map.key_size);
+		check_and_init_map_value(&htab->map, htab_elem_value(l, htab->map.key_size));
 		return l;
 	}
 
@@ -950,12 +951,69 @@ find_first_elem:
 	return -ENOENT;
 }
 
+/* Deferred htab_elem free for bpf_task_work maps.  cancel_and_free()
+ * returns while the task_work callback may still be accessing map_val;
+ * the callback holds guard(rcu_tasks_trace), so deferring the recycle
+ * through call_rcu_tasks_trace() waits for it (and, since a tasks trace
+ * GP implies a regular RCU GP, for BPF value readers too) before the
+ * element is reused.  A callback that enters after the GP finds the ctx
+ * already FREED and bails out.
+ */
+struct htab_elem_free_rcu {
+	struct rcu_head rcu;
+	struct bpf_htab *htab;
+	struct htab_elem *elem;
+};
+
+/* Return an htab_elem to its map's free pool: bpf_mem_cache_free for
+ * non-prealloc, pcpu_freelist_push for prealloc, bpf_lru_push_free for
+ * prealloc LRU.
+ */
+static void htab_elem_recycle(struct bpf_htab *htab, struct htab_elem *l)
+{
+	if (htab_is_prealloc(htab)) {
+		if (htab_is_lru(htab))
+			bpf_lru_push_free(&htab->lru, &l->lru_node);
+		else
+			pcpu_freelist_push(&htab->freelist, &l->fnode);
+	} else {
+		bpf_mem_cache_free(&htab->ma, l);
+	}
+}
+
+static void htab_elem_free_rcu_cb(struct rcu_head *head)
+{
+	struct htab_elem_free_rcu *fr = container_of(head, struct htab_elem_free_rcu, rcu);
+
+	htab_elem_recycle(fr->htab, fr->elem);
+	kfree(fr);
+}
+
+static void htab_elem_defer_free(struct bpf_htab *htab, struct htab_elem *l)
+{
+	struct htab_elem_free_rcu *fr;
+
+	fr = kmalloc_obj(*fr, GFP_ATOMIC);
+	if (WARN_ON_ONCE(!fr)) {
+		/* Fallback: immediate recycle, small UAF risk */
+		htab_elem_recycle(htab, l);
+		return;
+	}
+	fr->htab = htab;
+	fr->elem = l;
+	call_rcu_tasks_trace(&fr->rcu, htab_elem_free_rcu_cb);
+}
+
 static void htab_elem_free(struct bpf_htab *htab, struct htab_elem *l)
 {
 	check_and_cancel_fields(htab, l);
 
 	if (htab->map.map_type == BPF_MAP_TYPE_PERCPU_HASH)
 		bpf_mem_cache_free(&htab->pcpu_ma, l->ptr_to_pptr);
+	if (btf_record_has_field(htab->map.record, BPF_TASK_WORK)) {
+		htab_elem_defer_free(htab, l);
+		return;
+	}
 	bpf_mem_cache_free(&htab->ma, l);
 }
 
@@ -1006,6 +1064,10 @@ static void free_htab_elem(struct bpf_htab *htab, struct htab_elem *l)
 	if (htab_is_prealloc(htab)) {
 		bpf_map_dec_elem_count(&htab->map);
 		check_and_cancel_fields(htab, l);
+		if (btf_record_has_field(htab->map.record, BPF_TASK_WORK)) {
+			htab_elem_defer_free(htab, l);
+			return;
+		}
 		pcpu_freelist_push(&htab->freelist, &l->fnode);
 	} else {
 		dec_elem_count(htab);
@@ -1118,6 +1180,11 @@ static struct htab_elem *alloc_htab_elem(struct bpf_htab *htab, void *key,
 	}
 
 	memcpy(l_new->key, key, key_size);
+	/* Re-initialize special fields for recycled elements.  copy_map_value()
+	 * skips btf_record fields, so a stale ERR_PTR(-EBUSY) left by
+	 * bpf_task_work_cancel_and_free would persist and block new scheduling.
+	 */
+	check_and_init_map_value(&htab->map, htab_elem_value(l_new, key_size));
 	if (percpu) {
 		if (prealloc) {
 			pptr = htab_elem_get_ptr(l_new, key_size);
@@ -1275,6 +1342,10 @@ static void htab_lru_push_free(struct bpf_htab *htab, struct htab_elem *elem)
 {
 	check_and_cancel_fields(htab, elem);
 	bpf_map_dec_elem_count(&htab->map);
+	if (btf_record_has_field(htab->map.record, BPF_TASK_WORK)) {
+		htab_elem_defer_free(htab, elem);
+		return;
+	}
 	bpf_lru_push_free(&htab->lru, &elem->lru_node);
 }
 
@@ -1641,8 +1712,18 @@ static void htab_map_free(struct bpf_map *map)
 		delete_all_elements(htab);
 	} else {
 		htab_free_prealloced_fields(htab);
-		prealloc_destroy(htab);
 	}
+
+	/* For bpf_task_work maps, element frees defer recycling through
+	 * call_rcu_tasks_trace() so running callbacks finish before reuse.
+	 * Wait for any in-flight deferred recycles here, before the
+	 * freelist/LRU and element memory are torn down.
+	 */
+	if (btf_record_has_field(htab->map.record, BPF_TASK_WORK))
+		rcu_barrier_tasks_trace();
+
+	if (htab_is_prealloc(htab))
+		prealloc_destroy(htab);
 
 	bpf_map_free_elem_count(map);
 	free_percpu(htab->extra_elems);
