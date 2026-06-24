@@ -4070,6 +4070,48 @@ err_out:
 	return -EFAULT;
 }
 
+/**
+ * bpf_memcmp - Compare two memory regions byte by byte
+ * @ptr1__ign: First memory region
+ * @ptr2__ign: Second memory region
+ * @size: Number of bytes to compare
+ *
+ * Compares the first @size bytes of the memory areas @ptr1__ign and
+ * @ptr2__ign. Unlike bpf_strcmp, null bytes do not terminate the comparison.
+ *
+ * Return:
+ * * %0       - The memory regions are equal
+ * * %-1      - @ptr1__ign is less than @ptr2__ign
+ * * %1       - @ptr1__ign is greater than @ptr2__ign
+ * * %-EFAULT - Cannot read one of the memory regions
+ * * %-E2BIG  - @size exceeds the maximum allowed size
+ * * %-ERANGE - One of the memory regions is outside of kernel address space
+ */
+__bpf_kfunc int bpf_memcmp(const void *ptr1__ign, const void *ptr2__ign,
+			   size_t size)
+{
+	const unsigned char *p1 = ptr1__ign, *p2 = ptr2__ign;
+	unsigned char c1, c2;
+	size_t i;
+
+	if (size > XATTR_SIZE_MAX)
+		return -E2BIG;
+	if (!copy_from_kernel_nofault_allowed(p1, size) ||
+	    !copy_from_kernel_nofault_allowed(p2, size))
+		return -ERANGE;
+
+	guard(pagefault)();
+	for (i = 0; i < size; i++) {
+		__get_kernel_nofault(&c1, p1 + i, char, err_out);
+		__get_kernel_nofault(&c2, p2 + i, char, err_out);
+		if (c1 != c2)
+			return c1 < c2 ? -1 : 1;
+	}
+	return 0;
+err_out:
+	return -EFAULT;
+}
+
 static int __bpf_strnstr(const char *s1, const char *s2, size_t len,
 			 bool ignore_case)
 {
@@ -4954,6 +4996,7 @@ BTF_ID_FLAGS(func, bpf_strlen);
 BTF_ID_FLAGS(func, bpf_strnlen);
 BTF_ID_FLAGS(func, bpf_strspn);
 BTF_ID_FLAGS(func, bpf_strcspn);
+BTF_ID_FLAGS(func, bpf_memcmp);
 BTF_ID_FLAGS(func, bpf_strstr);
 BTF_ID_FLAGS(func, bpf_strcasestr);
 BTF_ID_FLAGS(func, bpf_strnstr);
