@@ -3,9 +3,11 @@
 
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 #include <errno.h>
 
 #include "bpf_kfuncs.h"
+#include "bpf_misc.h"
 #include "bpf_tracing_net.h"
 
 #define META_SIZE 32
@@ -687,6 +689,87 @@ int helper_skb_change_proto(struct __sk_buff *ctx)
 	test_pass = true;
 out:
 	return TC_ACT_SHOT;
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RHASH);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__uint(max_entries, 128);
+	__type(key, struct __sk_buff *);
+	__type(value, __u8[META_SIZE]);
+} meta_map SEC(".maps");
+
+bool write_done;
+
+static void write_meta(struct __sk_buff *ctx, void *map)
+{
+	if (bpf_map_update_elem(map, &ctx, &meta_want, BPF_NOEXIST))
+		return;
+	bpf_trace_skb(bpf_cast_to_kern_ctx(ctx), 0);
+	write_done = true;
+}
+
+/* Stash test metadata in the meta_map, keyed by the skb address */
+SEC("tc")
+int tc_meta_write(struct __sk_buff *ctx)
+{
+	if (!is_test_packet_tc(ctx))
+		return TC_ACT_SHOT;
+
+	write_meta(ctx, &meta_map);
+	return TC_ACT_UNSPEC;
+}
+
+/* Read test metadata stashed in the meta_map on the same hook */
+SEC("tc")
+int tc_meta_read(struct __sk_buff *ctx)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &ctx);
+	if (!meta_have)
+		return TC_ACT_SHOT;
+	if (!check_metadata(meta_have))
+		return TC_ACT_SHOT;
+
+	test_pass = true;
+	return TC_ACT_UNSPEC;
+}
+
+int free_count;
+
+SEC("raw_tp/skb_free")
+int BPF_PROG(skb_free, struct sk_buff *skb, enum skb_drop_reason reason,
+	     void *location)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &skb);
+	if (!meta_have)
+		return 0;
+	if (bpf_map_delete_elem(&meta_map, &skb))
+		return 0;
+
+	free_count++;
+	return 0;
+}
+
+bool copy_done;
+
+SEC("tp_btf/skb_copy")
+int BPF_PROG(skb_copy, struct sk_buff *dst, struct sk_buff *src)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &src);
+	if (!meta_have)
+		return 0;
+	if (bpf_map_update_elem(&meta_map, &dst, meta_have, BPF_NOEXIST))
+		return 0;
+
+	bpf_trace_skb(dst, 0);
+	copy_done = true;
+	return 0;
 }
 
 char _license[] SEC("license") = "GPL";
