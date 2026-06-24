@@ -7732,4 +7732,9 @@ struct bpf_insn_array_value {
 	__u32 :32;
 };
 
+/* Flags to control bpf_dynptr_from_skb_ext() behavior. */
+enum {
+	BPF_SKB_EXT_F_CREATE = (1ULL << 0),
+};
+
 #endif /* _UAPI__LINUX_BPF_H__ */

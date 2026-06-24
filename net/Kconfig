@@ -540,4 +540,24 @@ config NET_TEST
 
 	  If unsure, say N.
 
+config BPF_SKB_EXT
+	bool "skb extension for BPF metadata"
+	depends on BPF_SYSCALL
+	select SKB_EXTENSIONS
+	help
+	  Enable an sk_buff extension for storing BPF metadata. This allows BPF
+	  programs to associate arbitrary data with individual packets as they
+	  traverse the network stack. The storage is automatically freed when
+	  the sk_buff is freed.
+
+config BPF_SKB_EXT_SIZE
+	int "Size of the BPF skb extension metadata buffer"
+	depends on BPF_SKB_EXT
+	range 1 256
+	default 64
+	help
+	  Configures the size of the inline metadata buffer in struct
+	  bpf_skb_ext, which is the maximum amount of data a BPF program can
+	  store or retrieve with bpf_dynptr_from_skb_ext().
+
 endif   # if NET

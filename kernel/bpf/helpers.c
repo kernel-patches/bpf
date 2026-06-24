@@ -1926,6 +1926,8 @@ static int __bpf_dynptr_read(void *dst, u64 len, const struct bpf_dynptr_kern *s
 		return 0;
 	case BPF_DYNPTR_TYPE_FILE:
 		return bpf_file_fetch_bytes(src->data, offset, dst, len);
+	case BPF_DYNPTR_TYPE_SKB_EXT:
+		return __bpf_skb_ext_load_bytes(src->data, src->offset + offset, dst, len);
 	default:
 		WARN_ONCE(true, "bpf_dynptr_read: unknown dynptr type %d\n", type);
 		return -EFAULT;
@@ -1985,6 +1987,8 @@ int __bpf_dynptr_write(const struct bpf_dynptr_kern *dst, u64 offset, void *src,
 	case BPF_DYNPTR_TYPE_SKB_META:
 		return __bpf_skb_meta_store_bytes(dst->data, dst->offset + offset, src,
 						  len, flags);
+	case BPF_DYNPTR_TYPE_SKB_EXT:
+		return __bpf_skb_ext_store_bytes(dst->data, dst->offset + offset, src, len, flags);
 	default:
 		WARN_ONCE(true, "bpf_dynptr_write: unknown dynptr type %d\n", type);
 		return -EFAULT;
@@ -2032,6 +2036,7 @@ BPF_CALL_3(bpf_dynptr_data, const struct bpf_dynptr_kern *, ptr, u64, offset, u6
 	case BPF_DYNPTR_TYPE_SKB:
 	case BPF_DYNPTR_TYPE_XDP:
 	case BPF_DYNPTR_TYPE_SKB_META:
+	case BPF_DYNPTR_TYPE_SKB_EXT:
 		/* skb and xdp dynptrs should use bpf_dynptr_slice / bpf_dynptr_slice_rdwr */
 		return 0;
 	default:
@@ -3087,6 +3092,8 @@ __bpf_kfunc void *bpf_dynptr_slice(const struct bpf_dynptr *p, u64 offset,
 	}
 	case BPF_DYNPTR_TYPE_SKB_META:
 		return bpf_skb_meta_pointer(ptr->data, ptr->offset + offset);
+	case BPF_DYNPTR_TYPE_SKB_EXT:
+		return bpf_skb_ext_pointer(ptr->data, ptr->offset + offset);
 	case BPF_DYNPTR_TYPE_FILE:
 		err = bpf_file_fetch_bytes(ptr->data, offset, buffer__nullable, buffer__szk);
 		return err ? NULL : buffer__nullable;

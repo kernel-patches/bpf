@@ -12259,6 +12259,48 @@ int __bpf_skb_meta_store_bytes(struct sk_buff *skb, u32 offset,
 	return 0;
 }
 
+#ifdef CONFIG_BPF_SKB_EXT
+void *bpf_skb_ext_pointer(struct sk_buff *skb, u32 offset)
+{
+	struct bpf_skb_ext *ext;
+
+	ext = skb_ext_find(skb, SKB_EXT_BPF);
+	if (!ext)
+		return NULL;
+
+	return ext->buf + offset;
+}
+
+int __bpf_skb_ext_load_bytes(const struct sk_buff *skb, u32 offset, void *to,
+			     u32 len)
+{
+	struct bpf_skb_ext *ext;
+
+	ext = skb_ext_find(skb, SKB_EXT_BPF);
+	if (!ext)
+		return -ENOENT;
+
+	memmove(to, ext->buf + offset, len);
+	return 0;
+}
+
+int __bpf_skb_ext_store_bytes(struct sk_buff *skb, u32 offset,
+			      const void *from, u32 len, u64 flags)
+{
+	struct bpf_skb_ext *ext;
+
+	if (unlikely(flags))
+		return -EINVAL;
+
+	ext = skb_ext_find(skb, SKB_EXT_BPF);
+	if (!ext)
+		return -ENOENT;
+
+	memmove(ext->buf + offset, from, len);
+	return 0;
+}
+#endif /* CONFIG_BPF_SKB_EXT */
+
 __bpf_kfunc_start_defs();
 __bpf_kfunc int bpf_dynptr_from_skb(struct __sk_buff *s, u64 flags,
 				    struct bpf_dynptr *ptr__uninit)
@@ -12275,6 +12317,71 @@ __bpf_kfunc int bpf_dynptr_from_skb(struct __sk_buff *s, u64 flags,
 
 	return 0;
 }
+
+#ifdef CONFIG_BPF_SKB_EXT
+/**
+ * bpf_dynptr_from_skb_ext() - Initialize a dynptr to the skb_ext BPF area.
+ * @skb_: socket buffer to attach the extension to
+ * @size: dynptr size in bytes, 0 for maximum (CONFIG_BPF_SKB_EXT_SIZE)
+ * @flags: BPF_SKB_EXT_F_CREATE to create/COW (read-write), 0 to find (read-only)
+ * @ptr__uninit: dynptr to initialize
+ *
+ * Return:
+ * * %0         - dynptr ready to use
+ * * %-ENOENT   - extension not found (when not creating)
+ * * %-ENOMEM   - allocation failed
+ * * %-EINVAL   - invalid flags
+ * * %-E2BIG    - size exceeds CONFIG_BPF_SKB_EXT_SIZE
+ */
+__bpf_kfunc int bpf_dynptr_from_skb_ext(struct __sk_buff *skb_, u32 size,
+					u64 flags,
+					struct bpf_dynptr *ptr__uninit)
+{
+	struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)ptr__uninit;
+	struct sk_buff *skb = (struct sk_buff *)skb_;
+	bool create = flags & BPF_SKB_EXT_F_CREATE;
+	struct bpf_skb_ext *ext;
+	bool exists;
+	int err;
+
+	if (flags & ~BPF_SKB_EXT_F_CREATE) {
+		err = -EINVAL;
+		goto error;
+	}
+
+	if (size > ARRAY_SIZE(ext->buf)) {
+		err = -E2BIG;
+		goto error;
+	}
+	if (!size)
+		size = ARRAY_SIZE(ext->buf);
+
+	exists = skb_ext_exist(skb, SKB_EXT_BPF);
+	if (!create) {
+		if (!exists) {
+			err = -ENOENT;
+			goto error;
+		}
+		goto out;
+	}
+
+	ext = skb_ext_add(skb, SKB_EXT_BPF);
+	if (!ext) {
+		err = -ENOMEM;
+		goto error;
+	}
+	if (!exists)
+		memset(ext, 0, sizeof(*ext));
+out:
+	bpf_dynptr_init(ptr, skb, BPF_DYNPTR_TYPE_SKB_EXT, 0, size);
+	if (!create)
+		bpf_dynptr_set_rdonly(ptr);
+	return 0;
+error:
+	bpf_dynptr_set_null(ptr);
+	return err;
+}
+#endif /* CONFIG_BPF_SKB_EXT */
 
 /**
  * bpf_dynptr_from_skb_meta() - Initialize a dynptr to the skb metadata area.
@@ -12576,6 +12683,12 @@ BTF_KFUNCS_START(bpf_kfunc_check_set_skb_meta)
 BTF_ID_FLAGS(func, bpf_dynptr_from_skb_meta)
 BTF_KFUNCS_END(bpf_kfunc_check_set_skb_meta)
 
+#ifdef CONFIG_BPF_SKB_EXT
+BTF_KFUNCS_START(bpf_kfunc_check_set_skb_ext)
+BTF_ID_FLAGS(func, bpf_dynptr_from_skb_ext)
+BTF_KFUNCS_END(bpf_kfunc_check_set_skb_ext)
+#endif
+
 BTF_KFUNCS_START(bpf_kfunc_check_set_xdp)
 BTF_ID_FLAGS(func, bpf_dynptr_from_xdp)
 BTF_ID_FLAGS(func, bpf_xdp_pull_data)
@@ -12602,6 +12715,13 @@ static const struct btf_kfunc_id_set bpf_kfunc_set_skb_meta = {
 	.owner = THIS_MODULE,
 	.set = &bpf_kfunc_check_set_skb_meta,
 };
+
+#ifdef CONFIG_BPF_SKB_EXT
+static const struct btf_kfunc_id_set bpf_kfunc_set_skb_ext = {
+	.owner = THIS_MODULE,
+	.set = &bpf_kfunc_check_set_skb_ext,
+};
+#endif
 
 static const struct btf_kfunc_id_set bpf_kfunc_set_xdp = {
 	.owner = THIS_MODULE,
@@ -12640,6 +12760,21 @@ static int __init bpf_kfunc_init(void)
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &bpf_kfunc_set_skb);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &bpf_kfunc_set_skb_meta);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_ACT, &bpf_kfunc_set_skb_meta);
+#ifdef CONFIG_BPF_SKB_EXT
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &bpf_kfunc_set_skb_ext);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_ACT, &bpf_kfunc_set_skb_ext);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SKB, &bpf_kfunc_set_skb_ext);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SOCK_OPS, &bpf_kfunc_set_skb_ext);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SK_SKB, &bpf_kfunc_set_skb_ext);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SOCKET_FILTER, &bpf_kfunc_set_skb_ext);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_LWT_OUT, &bpf_kfunc_set_skb_ext);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_LWT_IN, &bpf_kfunc_set_skb_ext);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_LWT_XMIT, &bpf_kfunc_set_skb_ext);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_LWT_SEG6LOCAL, &bpf_kfunc_set_skb_ext);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_NETFILTER, &bpf_kfunc_set_skb_ext);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_LSM, &bpf_kfunc_set_skb_ext);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &bpf_kfunc_set_skb_ext);
+#endif
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &bpf_kfunc_set_xdp);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SOCK_ADDR,
 					       &bpf_kfunc_set_sock_addr);

@@ -462,6 +462,8 @@ const char *dynptr_type_str(enum bpf_dynptr_type type)
 		return "skb_meta";
 	case BPF_DYNPTR_TYPE_FILE:
 		return "file";
+	case BPF_DYNPTR_TYPE_SKB_EXT:
+		return "skb_ext";
 	case BPF_DYNPTR_TYPE_INVALID:
 		return "<invalid>";
 	default:

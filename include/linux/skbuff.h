@@ -5032,6 +5032,9 @@ enum skb_ext_id {
 #if IS_ENABLED(CONFIG_CAN)
 	SKB_EXT_CAN,
 #endif
+#if IS_ENABLED(CONFIG_BPF_SKB_EXT)
+	SKB_EXT_BPF,
+#endif
 	SKB_EXT_NUM, /* must be last */
 };
 
