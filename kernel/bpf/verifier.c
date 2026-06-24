@@ -618,6 +618,7 @@ static enum bpf_type_flag get_dynptr_type_flag(enum bpf_dynptr_type type)
 	case BPF_DYNPTR_TYPE_XDP:
 		return DYNPTR_TYPE_XDP;
 	case BPF_DYNPTR_TYPE_SKB_META:
+	case BPF_DYNPTR_TYPE_SKB_EXT:
 		return DYNPTR_TYPE_SKB_META;
 	case BPF_DYNPTR_TYPE_FILE:
 		return DYNPTR_TYPE_FILE;
@@ -11090,6 +11091,7 @@ enum special_kfunc_type {
 	KF_bpf_dynptr_from_xdp,
 	KF_bpf_dynptr_from_skb_meta,
 	KF_bpf_xdp_pull_data,
+	KF_bpf_dynptr_from_skb_ext,
 	KF_bpf_dynptr_slice,
 	KF_bpf_dynptr_slice_rdwr,
 	KF_bpf_dynptr_clone,
@@ -11165,6 +11167,11 @@ BTF_ID(func, bpf_xdp_pull_data)
 BTF_ID_UNUSED
 BTF_ID_UNUSED
 BTF_ID_UNUSED
+BTF_ID_UNUSED
+#endif
+#ifdef CONFIG_BPF_SKB_EXT
+BTF_ID(func, bpf_dynptr_from_skb_ext)
+#else
 BTF_ID_UNUSED
 #endif
 BTF_ID(func, bpf_dynptr_slice)
@@ -12243,7 +12250,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 				dynptr_arg_type |= DYNPTR_TYPE_SKB;
 			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_xdp]) {
 				dynptr_arg_type |= DYNPTR_TYPE_XDP;
-			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb_meta]) {
+			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb_meta] ||
+				   meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb_ext]) {
 				dynptr_arg_type |= DYNPTR_TYPE_SKB_META;
 			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_file]) {
 				dynptr_arg_type |= DYNPTR_TYPE_FILE;

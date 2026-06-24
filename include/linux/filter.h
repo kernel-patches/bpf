@@ -1958,4 +1958,30 @@ static inline void *bpf_skb_meta_pointer(struct sk_buff *skb, u32 offset)
 }
 #endif /* CONFIG_NET */
 
+#ifdef CONFIG_BPF_SKB_EXT
+void *bpf_skb_ext_pointer(struct sk_buff *skb, u32 offset);
+int __bpf_skb_ext_load_bytes(const struct sk_buff *skb, u32 offset, void *to,
+			     u32 len);
+int __bpf_skb_ext_store_bytes(struct sk_buff *skb, u32 offset, const void *from,
+			      u32 len, u64 flags);
+#else /* CONFIG_BPF_SKB_EXT */
+static inline void *bpf_skb_ext_pointer(struct sk_buff *skb, u32 offset)
+{
+	return NULL;
+}
+
+static inline int __bpf_skb_ext_load_bytes(const struct sk_buff *skb,
+					   u32 offset, void *to, u32 len)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int __bpf_skb_ext_store_bytes(struct sk_buff *skb, u32 offset,
+					    const void *from, u32 len,
+					    u64 flags)
+{
+	return -EOPNOTSUPP;
+}
+#endif /* CONFIG_BPF_SKB_EXT */
+
 #endif /* __LINUX_FILTER_H__ */

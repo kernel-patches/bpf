@@ -1480,6 +1480,8 @@ enum bpf_dynptr_type {
 	BPF_DYNPTR_TYPE_SKB_META,
 	/* Underlying data is a file */
 	BPF_DYNPTR_TYPE_FILE,
+	/* Underlying data is a bpf_skb_ext chunk */
+	BPF_DYNPTR_TYPE_SKB_EXT,
 };
 
 int bpf_dynptr_check_size(u64 size);
@@ -4206,5 +4208,13 @@ static inline int bpf_map_check_op_flags(struct bpf_map *map, u64 flags, u64 all
 
 	return 0;
 }
+
+#ifdef CONFIG_BPF_SKB_EXT
+
+struct bpf_skb_ext {
+	u8 buf[CONFIG_BPF_SKB_EXT_SIZE] __aligned(8);
+};
+
+#endif /* CONFIG_BPF_SKB_EXT */
 
 #endif /* _LINUX_BPF_H */
