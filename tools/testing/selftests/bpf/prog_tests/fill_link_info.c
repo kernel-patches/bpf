@@ -126,6 +126,37 @@ again:
 	return err;
 }
 
+static int verify_perf_tp_link_info_enospc(int fd)
+{
+	struct bpf_link_info info;
+	__u32 len = sizeof(info);
+	char buf[1] = {};
+	int err;
+
+	memset(&info, 0, sizeof(info));
+	info.perf_event.tracepoint.tp_name = ptr_to_u64(buf);
+	info.perf_event.tracepoint.name_len = sizeof(buf);
+
+	err = bpf_link_get_info_by_fd(fd, &info, &len);
+	if (!ASSERT_EQ(err, -ENOSPC, "get_link_info_enospc"))
+		return -1;
+
+	if (!ASSERT_EQ(info.type, BPF_LINK_TYPE_PERF_EVENT, "link_type_enospc"))
+		return -1;
+	if (!ASSERT_EQ(info.perf_event.type, BPF_PERF_EVENT_TRACEPOINT, "perf_type_enospc"))
+		return -1;
+	if (!ASSERT_EQ(info.perf_event.tracepoint.name_len, strlen(TP_NAME) + 1,
+		       "tp_name_len_enospc"))
+		return -1;
+	if (!ASSERT_EQ(info.perf_event.tracepoint.cookie, PERF_EVENT_COOKIE,
+		       "tp_cookie_enospc"))
+		return -1;
+	if (!ASSERT_EQ(buf[0], '\0', "short_tp_name_nul"))
+		return -1;
+
+	return 0;
+}
+
 static void kprobe_fill_invalid_user_buffer(int fd)
 {
 	struct bpf_link_info info;
@@ -200,6 +231,10 @@ static void test_tp_fill_link_info(struct test_fill_link_info *skel)
 	link_fd = bpf_link__fd(link);
 	err = verify_perf_link_info(link_fd, BPF_PERF_EVENT_TRACEPOINT, 0, 0, 0);
 	ASSERT_OK(err, "verify_perf_link_info");
+
+	err = verify_perf_tp_link_info_enospc(link_fd);
+	ASSERT_OK(err, "verify_perf_tp_link_info_enospc");
+
 	bpf_link__destroy(link);
 }
 
