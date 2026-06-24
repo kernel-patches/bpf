@@ -500,6 +500,38 @@ __naked void bad_helper_write(void)
 	: __clobber_all);
 }
 
+SEC("tc")
+__arch_x86_64
+__xlated("1: *(u64 *)(r10 -8) = r1")
+__xlated("...")
+__xlated("3: r0 = &(void __percpu *)(r0)")
+__xlated("...")
+__xlated("5: r1 = *(u64 *)(r10 -8)")
+__success
+__naked void bad_helper_read(void)
+{
+	asm volatile (
+	"r1 = 1;"
+	/* bpf_fastcall pattern with stack offset -8 */
+	"*(u64 *)(r10 - 8) = r1;"
+	"call %[bpf_get_smp_processor_id];"
+	"r1 = *(u64 *)(r10 - 8);"
+	/* bpf_csum_diff() reads fp[-8], so keep the spill materialized */
+	"r1 = r10;"
+	"r1 += -8;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"r4 = 0;"
+	"r5 = 0;"
+	"call %[bpf_csum_diff];"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_get_smp_processor_id),
+	  __imm(bpf_csum_diff)
+	: __clobber_all);
+}
+
 SEC("raw_tp")
 __arch_x86_64
 /* main, not patched */
