@@ -1243,6 +1243,11 @@ static inline void bpf_bt_set_frame_slot(struct backtrack_state *bt, u32 frame, 
 	bt->stack_masks[frame] |= 1ull << slot;
 }
 
+static inline void bpf_bt_set_frame_slot_mask(struct backtrack_state *bt, u32 frame, u64 mask)
+{
+	bt->stack_masks[frame] |= mask;
+}
+
 static inline void bt_set_frame_stack_arg_slot(struct backtrack_state *bt, u32 frame, u32 slot)
 {
 	bt->stack_arg_masks[frame] |= 1 << slot;

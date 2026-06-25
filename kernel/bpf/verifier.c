@@ -3702,14 +3702,21 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
  * SCALAR. This function does not deal with register filling; the caller must
  * ensure that all spilled registers in the stack range have been marked as
  * read.
+ *
+ * STACK_SPILL bytes backed by spilled scalar const zeroes are also considered
+ * zero bytes. In that case, mark the contributing stack slots precise so
+ * pruning cannot reuse a zero-spill state for a later non-zero spill state.
+ *
+ * Returns an error if precision backtracking fails.
  */
-static void mark_reg_stack_read(struct bpf_verifier_env *env,
-				/* func where src register points to */
-				struct bpf_func_state *ptr_state,
-				int min_off, int max_off, int dst_regno)
+static int mark_reg_stack_read(struct bpf_verifier_env *env,
+			       /* func where src register points to */
+			       struct bpf_func_state *ptr_state,
+			       int min_off, int max_off, int dst_regno)
 {
 	struct bpf_verifier_state *vstate = env->cur_state;
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
+	u64 zero_spill_mask = 0;
 	int i, slot, spi;
 	u8 *stype;
 	int zeros = 0;
@@ -3719,19 +3726,33 @@ static void mark_reg_stack_read(struct bpf_verifier_env *env,
 		spi = slot / BPF_REG_SIZE;
 		mark_stack_slot_scratched(env, spi);
 		stype = ptr_state->stack[spi].slot_type;
-		if (stype[slot % BPF_REG_SIZE] != STACK_ZERO)
-			break;
-		zeros++;
+		if (stype[slot % BPF_REG_SIZE] == STACK_ZERO) {
+			zeros++;
+			continue;
+		}
+		if (stype[slot % BPF_REG_SIZE] == STACK_SPILL &&
+		    bpf_register_is_null(&ptr_state->stack[spi].spilled_ptr)) {
+			zero_spill_mask |= 1ull << spi;
+			zeros++;
+			continue;
+		}
+		break;
 	}
 	if (zeros == max_off - min_off) {
 		/* Any access_size read into register is zero extended,
 		 * so the whole register == const_zero.
 		 */
 		__mark_reg_const_zero(env, &state->regs[dst_regno]);
+		if (zero_spill_mask) {
+			bpf_bt_set_frame_slot_mask(&env->bt, ptr_state->frameno, zero_spill_mask);
+			return mark_chain_precision_batch(env, env->cur_state);
+		}
 	} else {
 		/* have read misc data from the stack */
 		mark_reg_unknown(env, state->regs, dst_regno);
 	}
+
+	return 0;
 }
 
 /* Read the stack at 'off' and put the results into the register indicated by
@@ -3753,6 +3774,7 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 	int i, slot = -off - 1, spi = slot / BPF_REG_SIZE;
 	struct bpf_reg_state *reg;
 	u8 *stype, type;
+	int err;
 	int insn_flags = INSN_F_STACK_ACCESS;
 	int hist_spi = spi, hist_frame = reg_state->frameno;
 
@@ -3835,7 +3857,10 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 					__mark_reg_const_zero(env, &state->regs[dst_regno]);
 					insn_flags = 0; /* not restoring original register state */
 				} else {
-					mark_reg_unknown(env, state->regs, dst_regno);
+					err = mark_reg_stack_read(env, reg_state, off, off + size,
+								  dst_regno);
+					if (err)
+						return err;
 					insn_flags = 0; /* not restoring original register state */
 				}
 			}
@@ -3880,8 +3905,12 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 			}
 			return -EACCES;
 		}
-		if (dst_regno >= 0)
-			mark_reg_stack_read(env, reg_state, off, off + size, dst_regno);
+		if (dst_regno >= 0) {
+			err = mark_reg_stack_read(env, reg_state, off, off + size,
+						  dst_regno);
+			if (err)
+				return err;
+		}
 		insn_flags = 0; /* we are not restoring spilled register */
 	}
 	if (insn_flags)
@@ -3935,7 +3964,10 @@ static int check_stack_read_var_off(struct bpf_verifier_env *env, struct bpf_reg
 
 	min_off = reg_smin(reg) + off;
 	max_off = reg_smax(reg) + off;
-	mark_reg_stack_read(env, ptr_state, min_off, max_off + size, dst_regno);
+	err = mark_reg_stack_read(env, ptr_state, min_off, max_off + size,
+				  dst_regno);
+	if (err)
+		return err;
 	check_fastcall_stack_contract(env, ptr_state, env->insn_idx, min_off);
 	return 0;
 }
