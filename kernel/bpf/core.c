@@ -2627,6 +2627,9 @@ static bool bpf_insn_requires_jit(struct bpf_insn *insn)
 		    BPF_CLASS(insn->code) == BPF_LDX &&
 		    BPF_SIZE(insn->code) != BPF_DW)
 			return true;
+		/* BPF_LOAD_ACQ, BPF_STORE_REL insns */
+		if (BPF_MODE(insn->code) == BPF_PROBE_ATOMIC)
+			return true;
 		break;
 	default:
 		return false;
