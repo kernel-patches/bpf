@@ -323,13 +323,18 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx, int insn)
 		goto toofar;
 
 	/*
-	 * if ((*tcc_ptr)++ >= MAX_TAIL_CALL_CNT)
+	 * if (*tcc_ptr + 1 > MAX_TAIL_CALL_CNT)
 	 *      goto out;
+	 *
+	 * Compute the bumped count but do not write it back yet: the
+	 * interpreter increments tail_call_cnt only after the prog pointer is
+	 * found to be non-NULL, so a tail call to an empty slot must not
+	 * consume the tail call budget.  The store is deferred until the call
+	 * is known to be taken (below).
 	 */
 	emit_insn(ctx, ldd, REG_TCC, LOONGARCH_GPR_SP, tcc_ptr_off);
 	emit_insn(ctx, ldd, t3, REG_TCC, 0);
 	emit_insn(ctx, addid, t3, t3, 1);
-	emit_insn(ctx, std, t3, REG_TCC, 0);
 	emit_insn(ctx, addid, t2, LOONGARCH_GPR_ZERO, MAX_TAIL_CALL_CNT);
 	if (emit_tailcall_jmp(ctx, BPF_JSGT, t3, t2, jmp_offset) < 0)
 		goto toofar;
@@ -345,6 +350,9 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx, int insn)
 	/* beq $t2, $zero, jmp_offset */
 	if (emit_tailcall_jmp(ctx, BPF_JEQ, t2, LOONGARCH_GPR_ZERO, jmp_offset) < 0)
 		goto toofar;
+
+	/* (*tcc_ptr)++; the tail call is taken, so commit the bumped count */
+	emit_insn(ctx, std, t3, REG_TCC, 0);
 
 	/* goto *(prog->bpf_func + 4); */
 	off = offsetof(struct bpf_prog, bpf_func);
