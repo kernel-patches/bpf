@@ -157,7 +157,8 @@ static int get_callee_stack_depth(struct bpf_verifier_env *env,
  * [0, off) and [off, end) to new locations, so the patched range stays zero
  */
 static void adjust_insn_aux_data(struct bpf_verifier_env *env,
-				 struct bpf_prog *new_prog, u32 off, u32 cnt)
+				 struct bpf_prog *new_prog, u32 off, u32 cnt,
+				 s32 insn_off_in_patch)
 {
 	struct bpf_insn_aux_data *data = env->insn_aux_data;
 	struct bpf_insn *insn = new_prog->insnsi;
@@ -245,7 +246,8 @@ static void adjust_poke_descs(struct bpf_prog *prog, u32 off, u32 len)
 }
 
 struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
-				     const struct bpf_insn *patch, u32 len)
+				     const struct bpf_insn *patch, u32 len,
+				     s32 insn_off_in_patch)
 {
 	struct bpf_prog *new_prog;
 	struct bpf_insn_aux_data *new_data = NULL;
@@ -269,7 +271,7 @@ struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
 				env->insn_aux_data[off].orig_idx);
 		return NULL;
 	}
-	adjust_insn_aux_data(env, new_prog, off, len);
+	adjust_insn_aux_data(env, new_prog, off, len, insn_off_in_patch);
 	adjust_subprog_starts(env, off, len);
 	adjust_insn_arrays(env, off, len);
 	adjust_poke_descs(new_prog, off, len);
@@ -668,7 +670,7 @@ int bpf_opt_subreg_zext_lo32_rnd_hi32(struct bpf_verifier_env *env,
 		patch = zext_patch;
 		patch_len = 2;
 apply_patch_buffer:
-		new_prog = bpf_patch_insn_data(env, adj_idx, patch, patch_len);
+		new_prog = bpf_patch_insn_data(env, adj_idx, patch, patch_len, 0);
 		if (!new_prog)
 			return -ENOMEM;
 		env->prog = new_prog;
@@ -713,7 +715,7 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			insn_buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_FP, BPF_REG_1,
 						      -subprogs[0].stack_depth);
 			insn_buf[cnt++] = env->prog->insnsi[0];
-			new_prog = bpf_patch_insn_data(env, 0, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, 0, insn_buf, cnt, 1);
 			if (!new_prog)
 				return -ENOMEM;
 			env->prog = new_prog;
@@ -736,7 +738,8 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			verifier_bug(env, "prologue is too long");
 			return -EFAULT;
 		} else if (cnt) {
-			new_prog = bpf_patch_insn_data(env, 0, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, 0, insn_buf, cnt,
+						       cnt - 1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -759,6 +762,7 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		bpf_convert_ctx_access_t convert_ctx_access;
+		s32 insn_off_in_patch = -1;
 		u8 mode;
 
 		if (env->insn_aux_data[i + delta].nospec) {
@@ -768,7 +772,8 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			*patch++ = BPF_ST_NOSPEC();
 			*patch++ = *insn;
 			cnt = patch - insn_buf;
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, cnt - 1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -841,7 +846,8 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			*patch++ = *insn;
 			*patch++ = BPF_ST_NOSPEC();
 			cnt = patch - insn_buf;
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, 0);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -971,7 +977,8 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 						       size * 8, 0);
 
 patch_insn_buf:
-		new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+		new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt,
+					       insn_off_in_patch);
 		if (!new_prog)
 			return -ENOMEM;
 
@@ -1463,7 +1470,7 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 	 * ones for the hidden subprog. Hence all of the adjustment operations
 	 * in bpf_patch_insn_data are no-ops.
 	 */
-	prog = bpf_patch_insn_data(env, env->prog->len - 1, patch, len);
+	prog = bpf_patch_insn_data(env, env->prog->len - 1, patch, len, 0);
 	if (!prog)
 		return -ENOMEM;
 	env->prog = prog;
@@ -1548,7 +1555,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 
 			cnt = patch - insn_buf;
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, 0);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -1568,6 +1576,7 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			bool is_sdiv = isdiv && insn->off == 1;
 			bool is_smod = !isdiv && insn->off == 1;
 			struct bpf_insn *patch = insn_buf;
+			s32 insn_off_in_patch;
 
 			if (is_sdiv) {
 				/* [R,W]x sdiv 0 -> 0
@@ -1594,6 +1603,7 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 				*patch++ = BPF_JMP_IMM(BPF_JA, 0, 0, 1);
 				*patch++ = *insn;
 				cnt = patch - insn_buf;
+				insn_off_in_patch = cnt - 1;
 			} else if (is_smod) {
 				/* [R,W]x mod 0 -> [R,W]x */
 				/* [R,W]x mod -1 -> 0 */
@@ -1610,6 +1620,7 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 				*patch++ = BPF_MOV32_IMM(insn->dst_reg, 0);
 				*patch++ = BPF_JMP_IMM(BPF_JA, 0, 0, 1);
 				*patch++ = *insn;
+				insn_off_in_patch = patch - insn_buf - 1;
 
 				if (!is64) {
 					*patch++ = BPF_JMP_IMM(BPF_JA, 0, 0, 1);
@@ -1625,12 +1636,14 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 				*patch++ = BPF_JMP_IMM(BPF_JA, 0, 0, 1);
 				*patch++ = *insn;
 				cnt = patch - insn_buf;
+				insn_off_in_patch = cnt - 1;
 			} else {
 				/* [R,W]x mod 0 -> [R,W]x */
 				*patch++ = BPF_RAW_INSN((is64 ? BPF_JMP : BPF_JMP32) |
 							BPF_JEQ | BPF_K, insn->src_reg,
 							0, 1 + (is64 ? 0 : 1), 0);
 				*patch++ = *insn;
+				insn_off_in_patch = patch - insn_buf - 1;
 
 				if (!is64) {
 					*patch++ = BPF_JMP_IMM(BPF_JA, 0, 0, 1);
@@ -1639,7 +1652,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 				cnt = patch - insn_buf;
 			}
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, insn_off_in_patch);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -1655,6 +1669,7 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 		     BPF_MODE(insn->code) == BPF_PROBE_MEMSX)) {
 			struct bpf_insn *patch = insn_buf;
 			u64 uaddress_limit = bpf_arch_uaddress_limit();
+			s32 insn_off_in_patch;
 
 			if (!uaddress_limit)
 				goto next_insn;
@@ -1665,11 +1680,13 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			*patch++ = BPF_ALU64_IMM(BPF_RSH, BPF_REG_AX, 32);
 			*patch++ = BPF_JMP_IMM(BPF_JLE, BPF_REG_AX, uaddress_limit >> 32, 2);
 			*patch++ = *insn;
+			insn_off_in_patch = patch - insn_buf - 1;
 			*patch++ = BPF_JMP_IMM(BPF_JA, 0, 0, 1);
 			*patch++ = BPF_MOV64_IMM(insn->dst_reg, 0);
 
 			cnt = patch - insn_buf;
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, insn_off_in_patch);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -1689,7 +1706,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 				return -EFAULT;
 			}
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, 0);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -1742,7 +1760,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 				*patch++ = BPF_ALU64_IMM(BPF_MUL, off_reg, -1);
 			cnt = patch - insn_buf;
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, cnt - 1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -1787,7 +1806,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			insn_buf[6] = BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_AX, stack_off_cnt);
 			cnt = 7;
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, 3);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -1808,7 +1828,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			insn_buf[3] = BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_AX, stack_off);
 			cnt = 4;
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, 2);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -1829,7 +1850,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			if (cnt == 0)
 				goto next_insn;
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, cnt - 1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -1916,7 +1938,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 								 map)->index_mask);
 			insn_buf[2] = *insn;
 			cnt = 3;
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, cnt - 1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -1949,7 +1972,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			insn_buf[2] = *insn;
 			cnt = 3;
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, cnt - 1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -1968,7 +1992,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			insn_buf[1] = *insn;
 			cnt = 2;
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, cnt - 1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -2008,8 +2033,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 					return -EFAULT;
 				}
 
-				new_prog = bpf_patch_insn_data(env, i + delta,
-							       insn_buf, cnt);
+				new_prog = bpf_patch_insn_data(
+					env, i + delta, insn_buf, cnt, -1);
 				if (!new_prog)
 					return -ENOMEM;
 
@@ -2092,7 +2117,7 @@ patch_map_ops_generic:
 			cnt = 3;
 
 			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
-						       cnt);
+						       cnt, -1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -2120,7 +2145,8 @@ patch_map_ops_generic:
 			insn_buf[0] = BPF_ALU32_REG(BPF_XOR, BPF_REG_0, BPF_REG_0);
 			cnt = 1;
 #endif
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, -1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -2138,7 +2164,8 @@ patch_map_ops_generic:
 			insn_buf[2] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_0, 0);
 			cnt = 3;
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, -1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -2172,7 +2199,8 @@ patch_map_ops_generic:
 			insn_buf[cnt++] = BPF_JMP_A(1);
 			insn_buf[cnt++] = BPF_MOV64_IMM(BPF_REG_0, -EINVAL);
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, -1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -2204,7 +2232,8 @@ patch_map_ops_generic:
 				cnt = 1;
 			}
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, -1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -2230,7 +2259,8 @@ patch_map_ops_generic:
 				cnt = 2;
 			}
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, -1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -2246,7 +2276,8 @@ patch_map_ops_generic:
 			/* Load IP address from ctx - 16 */
 			insn_buf[0] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1, -16);
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, 1);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       1, -1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -2301,7 +2332,8 @@ patch_map_ops_generic:
 			insn_buf[10] = BPF_MOV64_IMM(BPF_REG_0, -ENOENT);
 			cnt = 11;
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, -1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -2319,7 +2351,8 @@ patch_map_ops_generic:
 			insn_buf[1] = BPF_ATOMIC_OP(BPF_DW, BPF_XCHG, BPF_REG_1, BPF_REG_0, 0);
 			cnt = 2;
 
-			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf,
+						       cnt, -1);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -2387,7 +2420,7 @@ next_insn:
 		/* Copy first actual insn to preserve it */
 		insn_buf[cnt++] = env->prog->insnsi[subprog_start];
 
-		new_prog = bpf_patch_insn_data(env, subprog_start, insn_buf, cnt);
+		new_prog = bpf_patch_insn_data(env, subprog_start, insn_buf, cnt, cnt - 1);
 		if (!new_prog)
 			return -ENOMEM;
 		env->prog = prog = new_prog;
@@ -2486,7 +2519,7 @@ static struct bpf_prog *inline_bpf_loop(struct bpf_verifier_env *env,
 	insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_8, BPF_REG_10, r8_offset);
 
 	*total_cnt = cnt;
-	new_prog = bpf_patch_insn_data(env, position, insn_buf, cnt);
+	new_prog = bpf_patch_insn_data(env, position, insn_buf, cnt, -1);
 	if (!new_prog)
 		return new_prog;
 
