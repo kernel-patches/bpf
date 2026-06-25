@@ -634,6 +634,32 @@ __naked void partial_stack_load_preserves_partial_zeros(void)
 	: __clobber_common);
 }
 
+SEC("raw_tp")
+__log_level(2)
+__success
+__msg("mark_precise: frame0: regs= stack=-8")
+__msg("R2=0")
+__naked void stack_load_preserves_mixed_zero_and_zero_spill(void)
+{
+	asm volatile (
+		/* fp-8 has scalar const-zero spill bytes and STACK_ZERO bytes. */
+		".8byte %[fp4_st_zero];" /* LLVM-18+: *(u32 *)(r10 -4) = 0; */
+		"r0 = 0;"
+		"*(u32 *)(r10 -8) = r0;"
+
+		"r1 = %[single_byte_buf];"
+		"r2 = *(u64 *)(r10 -8);"
+		"r1 += r2;"
+		"*(u8 *)(r1 + 0) = r2;" /* this should be fine */
+
+		"r0 = 0;"
+		"exit;"
+	:
+	: __imm_ptr(single_byte_buf),
+	  __imm_insn(fp4_st_zero, BPF_ST_MEM(BPF_W, BPF_REG_FP, -4, 0))
+	: __clobber_common);
+}
+
 char two_byte_buf[2] SEC(".data.two_byte_buf");
 
 SEC("raw_tp")
