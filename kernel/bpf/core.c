@@ -2613,6 +2613,9 @@ static bool bpf_insn_requires_jit(struct bpf_insn *insn)
 	if (insn_is_mov_percpu_addr(insn))
 		return true;
 
+	if (insn_is_gotox(insn))
+		return true;
+
 	if (insn_is_cast_user(insn))
 		return true;
 
