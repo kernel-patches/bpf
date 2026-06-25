@@ -550,6 +550,16 @@ int bpf_jit_harden   __read_mostly;
 long bpf_jit_limit   __read_mostly;
 long bpf_jit_limit_max __read_mostly;
 
+#if IS_ENABLED(CONFIG_TEST_BPF)
+static struct task_struct *bpf_jit_test_fail_task;
+
+void bpf_jit_set_test_force_fail(bool force)
+{
+	WRITE_ONCE(bpf_jit_test_fail_task, force ? current : NULL);
+}
+EXPORT_SYMBOL_GPL(bpf_jit_set_test_force_fail);
+#endif
+
 static void
 bpf_prog_ksym_set_addr(struct bpf_prog *prog)
 {
@@ -2566,6 +2576,11 @@ static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struc
 #ifdef CONFIG_BPF_JIT
 	struct bpf_prog *orig_prog;
 	struct bpf_insn_aux_data *orig_insn_aux;
+
+#if IS_ENABLED(CONFIG_TEST_BPF)
+	if (unlikely(READ_ONCE(bpf_jit_test_fail_task) == current))
+		return prog;
+#endif
 
 	if (!bpf_prog_need_blind(prog))
 		return bpf_int_jit_compile(env, prog);

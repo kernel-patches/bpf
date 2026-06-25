@@ -1312,6 +1312,10 @@ extern int bpf_jit_kallsyms;
 extern long bpf_jit_limit;
 extern long bpf_jit_limit_max;
 
+#if IS_ENABLED(CONFIG_TEST_BPF)
+void bpf_jit_set_test_force_fail(bool force);
+#endif
+
 typedef void (*bpf_jit_fill_hole_t)(void *area, unsigned int size);
 
 void bpf_jit_fill_hole_with_zero(void *area, unsigned int size);

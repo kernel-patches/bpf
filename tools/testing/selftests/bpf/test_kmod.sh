@@ -47,14 +47,14 @@ test_run()
 			rc=1
 		fi
 	fi
-	rmmod  test_bpf 2> /dev/null
+	rmmod test_bpf 2> /dev/null
 	dmesg | grep FAIL
 }
 
 test_save()
 {
-	JE=`sysctl -n net.core.bpf_jit_enable`
-	JH=`sysctl -n net.core.bpf_jit_harden`
+	JE=$(sysctl -n net.core.bpf_jit_enable)
+	JH=$(sysctl -n net.core.bpf_jit_harden)
 }
 
 test_restore()
@@ -63,11 +63,44 @@ test_restore()
 	sysctl -w net.core.bpf_jit_harden=$JH 2>&1 > /dev/null
 }
 
+test_interpreter_fallback()
+{
+	if ! sysctl -w net.core.bpf_jit_enable=1 >/dev/null 2>&1 ||
+		! sysctl -w net.core.bpf_jit_harden=0 >/dev/null 2>&1; then
+		echo "[ interpreter fallback: SKIP ]"
+		return
+	fi
+
+	echo "[ interpreter fallback ]"
+	dmesg -C
+	if [ -f ${OUTPUT}/lib/test_bpf.ko ]; then
+		insmod ${OUTPUT}/lib/test_bpf.ko \
+			test_suite=test_interpreter_fallback 2>/dev/null
+		if [ $? -ne 0 ]; then
+			rc=1
+		fi
+	else
+		if ! /sbin/modprobe -q -n test_bpf \
+			test_suite=test_interpreter_fallback; then
+			echo "test_bpf (test_suite=test_interpreter_fallback): [SKIP]"
+		elif /sbin/modprobe -q test_bpf \
+			test_suite=test_interpreter_fallback; then
+			echo "test_bpf (test_suite=test_interpreter_fallback): ok"
+		else
+			echo "test_bpf (test_suite=test_interpreter_fallback): [FAIL]"
+			rc=1
+		fi
+	fi
+	rmmod test_bpf 2>/dev/null
+	dmesg | grep FAIL
+}
+
 rc=0
 test_save
 test_run 0 0 "$@"
 test_run 1 0 "$@"
 test_run 1 1 "$@"
 test_run 1 2 "$@"
+test_interpreter_fallback
 test_restore
 exit $rc

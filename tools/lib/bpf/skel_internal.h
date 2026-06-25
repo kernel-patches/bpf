@@ -76,7 +76,9 @@ struct bpf_load_and_run_opts {
 	__u32 excl_prog_hash_sz;
 };
 
+#ifndef __KERNEL__
 long kern_sys_bpf(__u32 cmd, void *attr, __u32 attr_size);
+#endif
 
 static inline int skel_sys_bpf(enum bpf_cmd cmd, union bpf_attr *attr,
 			  unsigned int size)
