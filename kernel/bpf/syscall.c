@@ -2441,7 +2441,6 @@ static void __bpf_prog_put_rcu(struct rcu_head *rcu)
 	kvfree(aux->func_info);
 	kfree(aux->func_info_aux);
 	free_uid(aux->user);
-	security_bpf_prog_free(aux->prog);
 	bpf_prog_free(aux->prog);
 }
 
@@ -2457,6 +2456,7 @@ static void __bpf_prog_put_noref(struct bpf_prog *prog, bool deferred)
 	if (prog->aux->attach_btf)
 		btf_put(prog->aux->attach_btf);
 
+	security_bpf_prog_free(prog);
 	if (deferred) {
 		if (prog->sleepable)
 			call_rcu_tasks_trace(&prog->aux->rcu, __bpf_prog_put_rcu);
