@@ -5085,6 +5085,15 @@ err_free_new_name:
 	return libbpf_err(err);
 }
 
+int bpf_map__reuse_fd_from_loader_ctx(struct bpf_map *map)
+{
+	if (map_is_created(map))
+		return libbpf_err(-EBUSY);
+
+	map->reused = true;
+	return 0;
+}
+
 __u32 bpf_map__max_entries(const struct bpf_map *map)
 {
 	return map->def.max_entries;
@@ -5659,6 +5668,8 @@ retry:
 		}
 
 		if (map->reused) {
+			if (obj->gen_loader)
+				bpf_gen__map_reuse_fd(obj->gen_loader, map - obj->maps);
 			pr_debug("map '%s': skipping creation (preset fd=%d)\n",
 				 map->name, map->fd);
 		} else {

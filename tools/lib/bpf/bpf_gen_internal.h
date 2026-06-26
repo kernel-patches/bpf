@@ -50,6 +50,7 @@ struct bpf_gen {
 	struct ksym_desc *ksyms;
 	__u32 nr_ksyms;
 	int fd_array;
+	int borrowed_fd_array;
 	int nr_fd_array;
 	int hash_insn_offset[SHA256_DWORD_SIZE];
 };
@@ -62,6 +63,7 @@ void bpf_gen__map_create(struct bpf_gen *gen,
 			 enum bpf_map_type map_type, const char *map_name,
 			 __u32 key_size, __u32 value_size, __u32 max_entries,
 			 struct bpf_map_create_opts *map_attr, int map_idx);
+void bpf_gen__map_reuse_fd(struct bpf_gen *gen, int map_idx);
 void bpf_gen__prog_load(struct bpf_gen *gen,
 			enum bpf_prog_type prog_type, const char *prog_name,
 			const char *license, struct bpf_insn *insns, size_t insn_cnt,

@@ -47,6 +47,11 @@ static int blob_fd_array_off(struct bpf_gen *gen, int index)
 	return gen->fd_array + index * sizeof(int);
 }
 
+static int blob_borrowed_fd_array_off(struct bpf_gen *gen, int index)
+{
+	return gen->borrowed_fd_array + index * sizeof(int);
+}
+
 static int realloc_insn_buf(struct bpf_gen *gen, __u32 size)
 {
 	size_t off = gen->insn_cur - gen->insn_start;
@@ -111,6 +116,7 @@ static void emit2(struct bpf_gen *gen, struct bpf_insn insn1, struct bpf_insn in
 
 static int add_data(struct bpf_gen *gen, const void *data, __u32 size);
 static void emit_sys_close_blob(struct bpf_gen *gen, int blob_off);
+static void emit_sys_close_owned_blob(struct bpf_gen *gen, int map_idx);
 static void emit_signature_match(struct bpf_gen *gen);
 
 void bpf_gen__init(struct bpf_gen *gen, int log_level, int nr_progs, int nr_maps)
@@ -119,6 +125,7 @@ void bpf_gen__init(struct bpf_gen *gen, int log_level, int nr_progs, int nr_maps
 	int i;
 
 	gen->fd_array = add_data(gen, NULL, MAX_FD_ARRAY_SZ * sizeof(int));
+	gen->borrowed_fd_array = add_data(gen, NULL, nr_maps * sizeof(int));
 	gen->log_level = log_level;
 	/* save ctx pointer into R6 */
 	emit(gen, BPF_MOV64_REG(BPF_REG_6, BPF_REG_1));
@@ -137,9 +144,10 @@ void bpf_gen__init(struct bpf_gen *gen, int log_level, int nr_progs, int nr_maps
 			      /* size of cleanup code below (including map fd cleanup) */
 			      (nr_progs_sz / 4) * 3 + 2 +
 			      /* 6 insns for emit_sys_close_blob,
+			       * 4 insns for borrowed fd check,
 			       * 6 insns for debug_regs in emit_sys_close_blob
 			       */
-			      nr_maps * (6 + (gen->log_level ? 6 : 0))));
+			      nr_maps * (10 + (gen->log_level ? 6 : 0))));
 
 	/* remember the label where all error branches will jump to */
 	gen->cleanup_label = gen->insn_cur - gen->insn_start;
@@ -150,7 +158,7 @@ void bpf_gen__init(struct bpf_gen *gen, int log_level, int nr_progs, int nr_maps
 		emit(gen, BPF_EMIT_CALL(BPF_FUNC_sys_close));
 	}
 	for (i = 0; i < nr_maps; i++)
-		emit_sys_close_blob(gen, blob_fd_array_off(gen, i));
+		emit_sys_close_owned_blob(gen, i);
 	/* R7 contains the error code from sys_bpf. Copy it into R0 and exit. */
 	emit(gen, BPF_MOV64_REG(BPF_REG_0, BPF_REG_7));
 	emit(gen, BPF_EXIT_INSN());
@@ -377,6 +385,17 @@ static void emit_sys_close_blob(struct bpf_gen *gen, int blob_off)
 	__emit_sys_close(gen);
 }
 
+static void emit_sys_close_owned_blob(struct bpf_gen *gen, int map_idx)
+{
+	int close_insn_cnt = 6 + (gen->log_level ? 6 : 0);
+
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_0, BPF_PSEUDO_MAP_IDX_VALUE,
+					 0, 0, 0, blob_borrowed_fd_array_off(gen, map_idx)));
+	emit(gen, BPF_LDX_MEM(BPF_W, BPF_REG_1, BPF_REG_0, 0));
+	emit(gen, BPF_JMP_IMM(BPF_JNE, BPF_REG_1, 0, close_insn_cnt));
+	emit_sys_close_blob(gen, blob_fd_array_off(gen, map_idx));
+}
+
 static void compute_sha_update_offsets(struct bpf_gen *gen);
 
 int bpf_gen__finish(struct bpf_gen *gen, int nr_progs, int nr_maps)
@@ -459,6 +478,11 @@ void bpf_gen__free(struct bpf_gen *gen)
 	}							\
 	_val;							\
 })
+
+static void set_blob_borrowed_fd_array_off(struct bpf_gen *gen, int index)
+{
+	*(__u32 *)(gen->data_start + blob_borrowed_fd_array_off(gen, index)) = tgt_endian(1);
+}
 
 static void compute_sha_update_offsets(struct bpf_gen *gen)
 {
@@ -594,6 +618,28 @@ void bpf_gen__map_create(struct bpf_gen *gen,
 	}
 	if (close_inner_map_fd)
 		emit_sys_close_stack(gen, stack_off(inner_map_fd));
+}
+
+void bpf_gen__map_reuse_fd(struct bpf_gen *gen, int map_idx)
+{
+	int idx;
+
+	if (map_idx != gen->nr_maps) {
+		gen->error = -EDOM;
+		return;
+	}
+
+	idx = add_map_fd(gen);
+	if (gen->error)
+		return;
+
+	set_blob_borrowed_fd_array_off(gen, idx);
+	move_ctx2blob(gen, blob_fd_array_off(gen, idx), 4,
+		      sizeof(struct bpf_loader_ctx) +
+		      sizeof(struct bpf_map_desc) * map_idx +
+		      offsetof(struct bpf_map_desc, map_fd),
+		      false);
+	pr_debug("gen: map_reuse_fd idx %d\n", map_idx);
 }
 
 static void emit_signature_match(struct bpf_gen *gen)
