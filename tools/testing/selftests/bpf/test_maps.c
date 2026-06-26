@@ -759,12 +759,12 @@ static void test_sockmap(unsigned int tasks, void *data)
 		goto out_sockmap;
 	}
 
-	/* Test update with unsupported UDP socket */
+	/* Test update with unsupported unbound UDP socket */
 	udp = socket(AF_INET, SOCK_DGRAM, 0);
 	i = 0;
 	err = bpf_map_update_elem(fd, &i, &udp, BPF_ANY);
-	if (err) {
-		printf("Failed socket update SOCK_DGRAM '%i:%i'\n",
+	if (!err) {
+		printf("Failed allowed unbound SOCK_DGRAM socket update '%i:%i'\n",
 		       i, udp);
 		goto out_sockmap;
 	}
