@@ -1220,6 +1220,8 @@ struct btf_func_model {
 	u8 nr_args;
 	u8 arg_size[MAX_BPF_FUNC_ARGS];
 	u8 arg_flags[MAX_BPF_FUNC_ARGS];
+	/* argument registers for bpf SDT probe site */
+	u8 arg_regs[MAX_BPF_FUNC_REG_ARGS];
 };
 
 /* Restore arguments before returning from trampoline to let original function
@@ -1417,6 +1419,15 @@ struct bpf_attach_target_info {
 	struct module *tgt_mod;
 	const char *tgt_name;
 	const struct btf_type *tgt_type;
+};
+
+/*
+ * cached in prog->aux, used by the verifier to type the observer's context
+ * arguments, and by link_create to build the trampoline without re-resolving
+ */
+struct bpf_sdt_probe_info {
+	struct bpf_insn_array_value val;
+	unsigned long probe_ip;
 };
 
 #define BPF_DISPATCHER_MAX 48 /* Fits in 2048B */
@@ -1762,6 +1773,7 @@ struct bpf_prog_aux {
 	void __percpu *priv_stack_ptr;
 	struct mutex dst_mutex; /* protects dst_* pointers below, *after* prog becomes visible */
 	struct bpf_prog *dst_prog;
+	struct bpf_sdt_probe_info *sdt_probe;
 	struct bpf_trampoline *dst_trampoline;
 	enum bpf_prog_type saved_dst_prog_type;
 	enum bpf_attach_type saved_dst_attach_type;
@@ -4159,6 +4171,9 @@ int bpf_insn_array_ready(struct bpf_map *map);
 void bpf_insn_array_release(struct bpf_map *map);
 void bpf_insn_array_adjust(struct bpf_map *map, u32 off, u32 len);
 void bpf_insn_array_adjust_after_remove(struct bpf_map *map, u32 off, u32 len);
+int bpf_insn_array_get_sdt_probe_by_name(struct bpf_prog *prog, const char *name,
+					 struct bpf_insn_array_value *val,
+					 unsigned long *ip);
 
 #ifdef CONFIG_BPF_SYSCALL
 void bpf_prog_update_insn_ptrs(struct bpf_prog *prog, u32 *offsets, void *image);

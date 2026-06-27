@@ -263,6 +263,34 @@ void bpf_insn_array_release(struct bpf_map *map)
 	atomic_set(&insn_array->used, 0);
 }
 
+int bpf_insn_array_get_sdt_probe_by_name(struct bpf_prog *prog, const char *name,
+					 struct bpf_insn_array_value *val,
+					 unsigned long *ip)
+{
+	int i, j;
+	struct bpf_map *map;
+	struct bpf_insn_array *insn_array;
+
+	for (i = 0; i < prog->aux->used_map_cnt; i++) {
+		map = prog->aux->used_maps[i];
+		if (map->map_type != BPF_MAP_TYPE_INSN_ARRAY ||
+		    !(map->map_flags & BPF_F_INSN_ARRAY_SDT))
+			continue;
+		insn_array = cast_insn_array(map);
+		for (j = 0; j < map->max_entries; j++) {
+			if (insn_array->values[j].xlated_off == INSN_DELETED)
+				continue;
+			if (!strcmp(insn_array->values[j].name, name)) {
+				*val = insn_array->values[j];
+				*ip = (unsigned long)insn_array->ips[j];
+				return 0;
+			}
+		}
+	}
+
+	return -EEXIST;
+}
+
 void bpf_insn_array_adjust(struct bpf_map *map, u32 off, u32 len)
 {
 	struct bpf_insn_array *insn_array = cast_insn_array(map);

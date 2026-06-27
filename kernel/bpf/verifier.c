@@ -16451,6 +16451,7 @@ static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_
 			break;
 		case BPF_TRACE_RAW_TP:
 		case BPF_MODIFY_RETURN:
+		case BPF_TRACE_SDT:
 			return false;
 		case BPF_TRACE_ITER:
 		default:
@@ -19457,6 +19458,24 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	    prog->type != BPF_PROG_TYPE_LSM &&
 	    prog->type != BPF_PROG_TYPE_EXT)
 		return 0;
+
+	if (prog->expected_attach_type == BPF_TRACE_SDT) {
+		const struct btf_type *sdt_t;
+		struct btf *sdt_btf = tgt_prog ? tgt_prog->aux->btf : NULL;
+
+		if (!sdt_btf) {
+			verbose(env, "SDT observer requires a target program with BTF\n");
+			return -EINVAL;
+		}
+		sdt_t = btf_type_by_id(sdt_btf, btf_id);
+		if (!sdt_t || !btf_type_is_func_proto(sdt_t)) {
+			verbose(env, "SDT attach_btf_id %u is not a FUNC_PROTO\n", btf_id);
+			return -EINVAL;
+		}
+		prog->aux->attach_func_proto = sdt_t;
+		prog->aux->attach_func_name = "sdt_probe";
+		return 0;
+	}
 
 	ret = bpf_check_attach_target(&env->log, prog, tgt_prog, btf_id, &tgt_info);
 	if (ret)

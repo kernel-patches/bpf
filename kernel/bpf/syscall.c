@@ -2454,6 +2454,7 @@ static void __bpf_prog_put_noref(struct bpf_prog *prog, bool deferred)
 	kvfree(prog->aux->linfo);
 	kfree(prog->aux->kfunc_tab);
 	kfree(prog->aux->ctx_arg_info);
+	kfree(prog->aux->sdt_probe);
 	if (prog->aux->attach_btf)
 		btf_put(prog->aux->attach_btf);
 
@@ -2967,13 +2968,15 @@ int __init __used bpf_multi_func(void) { return 0; }
 BTF_ID_LIST_GLOBAL_SINGLE(bpf_multi_func_btf_id, func, bpf_multi_func)
 
 /* last field in 'union bpf_attr' used by this command */
-#define BPF_PROG_LOAD_LAST_FIELD sdt_map_fd
+#define BPF_PROG_LOAD_LAST_FIELD sdt.name
 
 static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_attr *attr_log)
 {
 	enum bpf_prog_type type = attr->prog_type;
+	struct bpf_sdt_probe_info *prog_sdt_probe = NULL;
 	struct bpf_prog *prog, *dst_prog = NULL;
 	struct btf *attach_btf = NULL;
+	u32 attach_btf_id = 0;
 	struct bpf_token *token = NULL;
 	bool bpf_cap;
 	int err;
@@ -3082,33 +3085,75 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 		btf_get(attach_btf);
 	}
 
+	/*
+	 * find the probe site in the target program at load time of the
+	 * observer program, so the verifier can check the observer's context
+	 * arguments from the probe's FUNC_PROTO.
+	 */
+	if (attr->expected_attach_type == BPF_TRACE_SDT) {
+		struct bpf_insn_array_value sdt_val;
+		struct bpf_sdt_probe_info *sdt_probe;
+		unsigned long probe_ip;
+
+		if (!bpf_jit_supports_sdt_probe()) {
+			err = -EOPNOTSUPP;
+			goto put_token;
+		}
+		if (!attr->sdt.target_prog_fd) {
+			err = -EINVAL;
+			goto put_token;
+		}
+		dst_prog = bpf_prog_get(attr->sdt.target_prog_fd);
+		if (IS_ERR(dst_prog)) {
+			err = PTR_ERR(dst_prog);
+			dst_prog = NULL;
+			goto put_token;
+		}
+		err = bpf_insn_array_get_sdt_probe_by_name(dst_prog, attr->sdt.name,
+							   &sdt_val, &probe_ip);
+		if (err)
+			goto put_sdt;
+		sdt_probe = kzalloc_obj(struct bpf_sdt_probe_info, GFP_USER);
+		if (!sdt_probe) {
+			err = -ENOMEM;
+			goto put_sdt;
+		}
+		sdt_probe->val = sdt_val;
+		sdt_probe->probe_ip = probe_ip;
+		prog_sdt_probe = sdt_probe;
+		attach_btf_id = sdt_val.btf_id;
+	}
+
+
 	if (bpf_prog_load_check_attach(type, attr->expected_attach_type,
-				       attach_btf, attr->attach_btf_id,
+				       attach_btf,
+				       prog_sdt_probe ? attach_btf_id : attr->attach_btf_id,
 				       dst_prog, multi_func)) {
-		if (dst_prog)
-			bpf_prog_put(dst_prog);
-		if (attach_btf)
-			btf_put(attach_btf);
 		err = -EINVAL;
-		goto put_token;
+		goto put_sdt;
 	}
 
 	/* plain bpf_prog allocation */
 	prog = bpf_prog_alloc(bpf_prog_size(attr->insn_cnt), GFP_USER);
 	if (!prog) {
-		if (dst_prog)
-			bpf_prog_put(dst_prog);
-		if (attach_btf)
-			btf_put(attach_btf);
 		err = -EINVAL;
-		goto put_token;
+		goto put_sdt;
 	}
 
 	prog->expected_attach_type = attr->expected_attach_type;
 	prog->sleepable = !!(attr->prog_flags & BPF_F_SLEEPABLE);
 	prog->aux->attach_btf = attach_btf;
-	prog->aux->attach_btf_id = multi_func ? bpf_multi_func_btf_id[0] : attr->attach_btf_id;
+	if (prog_sdt_probe)
+		prog->aux->attach_btf_id = attach_btf_id;
+	else
+		prog->aux->attach_btf_id =
+			multi_func ? bpf_multi_func_btf_id[0] : attr->attach_btf_id;
 	prog->aux->dst_prog = dst_prog;
+	prog->aux->sdt_probe = prog_sdt_probe;
+	/* ownership of dst_prog/attach_btf/prog_sdt_probe moved to prog->aux */
+	dst_prog = NULL;
+	attach_btf = NULL;
+	prog_sdt_probe = NULL;
 	prog->aux->dev_bound = !!attr->prog_ifindex;
 	prog->aux->xdp_has_frags = attr->prog_flags & BPF_F_XDP_HAS_FRAGS;
 
@@ -3242,6 +3287,12 @@ free_prog:
 	if (prog->aux->attach_btf)
 		btf_put(prog->aux->attach_btf);
 	bpf_prog_free(prog);
+put_sdt:
+	kfree(prog_sdt_probe);
+	if (attach_btf)
+		btf_put(attach_btf);
+	if (dst_prog)
+		bpf_prog_put(dst_prog);
 put_token:
 	bpf_token_put(token);
 	return err;
@@ -4507,6 +4558,7 @@ attach_type_to_prog_type(enum bpf_attach_type attach_type)
 	case BPF_TRACE_FENTRY_MULTI:
 	case BPF_TRACE_FEXIT_MULTI:
 	case BPF_MODIFY_RETURN:
+	case BPF_TRACE_SDT:
 		return BPF_PROG_TYPE_TRACING;
 	case BPF_LSM_MAC:
 		return BPF_PROG_TYPE_LSM;
