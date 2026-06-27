@@ -2797,6 +2797,16 @@ emit_cond_jmp:		/* Convert BPF opcode to x86 */
 			}
 
 			if (!jmp_offset) {
+				int index = bpf_prog->aux->subprog_start + i - 1;
+
+				/*
+				 * Emit a 5-byte NOP for SDT probe site, so it can be patched to
+				 * a CALL instruction when observer program is attached.
+				 */
+				if (env->insn_aux_data[index].sdt_entry) {
+					emit_nops(&prog, X86_PATCH_SIZE);
+					break;
+				}
 				/*
 				 * If jmp_padding is enabled, the extra nops will
 				 * be inserted. Otherwise, optimize out nop jumps.
@@ -3059,9 +3069,13 @@ static void save_args(const struct btf_func_model *m, u8 **prog,
 
 			/* copy the arguments from regs into stack */
 			for (j = 0; j < arg_regs; j++) {
+				u8 reg = (flags & BPF_TRAMP_F_SDT_PROBE)
+					? m->arg_regs[nr_regs]
+					: (nr_regs == 5 ? X86_REG_R9
+					   : BPF_REG_1 + nr_regs);
+
 				emit_stx(prog, BPF_DW, BPF_REG_FP,
-					 nr_regs == 5 ? X86_REG_R9 : BPF_REG_1 + nr_regs,
-					 -stack_size);
+					 reg, -stack_size);
 				stack_size -= 8;
 				nr_regs++;
 			}
@@ -3072,7 +3086,7 @@ static void save_args(const struct btf_func_model *m, u8 **prog,
 }
 
 static void restore_regs(const struct btf_func_model *m, u8 **prog,
-			 int stack_size)
+			 int stack_size, u32 flags)
 {
 	int i, j, arg_regs, nr_regs = 0;
 
@@ -3087,9 +3101,12 @@ static void restore_regs(const struct btf_func_model *m, u8 **prog,
 		arg_regs = (m->arg_size[i] + 7) / 8;
 		if (nr_regs + arg_regs <= 6) {
 			for (j = 0; j < arg_regs; j++) {
-				emit_ldx(prog, BPF_DW,
-					 nr_regs == 5 ? X86_REG_R9 : BPF_REG_1 + nr_regs,
-					 BPF_REG_FP,
+				u8 reg = (flags & BPF_TRAMP_F_SDT_PROBE)
+					? m->arg_regs[nr_regs]
+					: (nr_regs == 5 ? X86_REG_R9
+					   : BPF_REG_1 + nr_regs);
+
+				emit_ldx(prog, BPF_DW, reg, BPF_REG_FP,
 					 -stack_size);
 				stack_size -= 8;
 				nr_regs++;
@@ -3547,7 +3564,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	}
 
 	if (flags & BPF_TRAMP_F_CALL_ORIG) {
-		restore_regs(m, &prog, regs_off);
+		restore_regs(m, &prog, regs_off, flags);
 		save_args(m, &prog, arg_stack_off, true, flags);
 
 		if (flags & BPF_TRAMP_F_TAIL_CALL_CTX) {
@@ -3603,7 +3620,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 	}
 
 	if (flags & BPF_TRAMP_F_RESTORE_REGS)
-		restore_regs(m, &prog, regs_off);
+		restore_regs(m, &prog, regs_off, flags);
 
 	/* This needs to be done regardless. If there were fmod_ret programs,
 	 * the return value is only updated on the stack and still needs to be
@@ -4217,6 +4234,11 @@ bool bpf_jit_supports_timed_may_goto(void)
 }
 
 bool bpf_jit_supports_fsession(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_sdt_probe(void)
 {
 	return true;
 }
