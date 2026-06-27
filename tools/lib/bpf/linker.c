@@ -2028,6 +2028,8 @@ static int linker_append_elf_sym(struct bpf_linker *linker, struct src_obj *obj,
 
 		if (strcmp(src_sec->sec_name, JUMPTABLES_SEC) == 0)
 			goto add_sym;
+		if (strcmp(src_sec->sec_name, SDT_NOTES_SEC) == 0)
+			goto add_sym;
 	}
 
 	if (sym_bind == STB_LOCAL)
@@ -2274,6 +2276,13 @@ static int linker_append_elf_relos(struct bpf_linker *linker, struct src_obj *ob
 						insn->imm += sec->dst_off / sizeof(struct bpf_insn);
 					else
 						insn->imm += sec->dst_off;
+				} else if (strcmp(src_linked_sec->sec_name, SDT_NOTES_SEC) == 0) {
+					/* .bpf_sdt_notes contains R_BPF_64_ABS64 relocations
+					 * referencing code section symbols. Adjust the 64-bit
+					 * address by dst_off.
+					 */
+					__u64 *addr = dst_linked_sec->raw_data + dst_rel->r_offset;
+					*addr += sec->dst_off;
 				} else {
 					pr_warn("relocation against STT_SECTION in non-exec section is not supported!\n");
 					return -EINVAL;

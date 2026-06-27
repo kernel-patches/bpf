@@ -75,6 +75,7 @@
 #endif
 
 #define JUMPTABLES_SEC ".jumptables"
+#define SDT_NOTES_SEC ".bpf_sdt_notes"
 
 #define BTF_INFO_ENC(kind, kind_flag, vlen) \
 	((!!(kind_flag) << 31) | ((kind) << 24) | ((vlen) & BTF_MAX_VLEN))
