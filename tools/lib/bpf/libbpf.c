@@ -4146,6 +4146,12 @@ static int bpf_object__collect_sdt_notes(struct bpf_object *obj)
 			err = -ENOMEM;
 			goto out;
 		}
+		if (strlen(e->name) >= BPF_SDT_MAX_NAME_LEN) {
+			pr_warn("sdt: probe name '%s' too long (max %d chars)\n",
+				e->name, BPF_SDT_MAX_NAME_LEN - 1);
+			err = -EINVAL;
+			goto out;
+		}
 		e->sec_idx = sec_idx;
 		e->insn_idx = nop_idx;
 		e->nargs = nargs;
@@ -6843,6 +6849,7 @@ static int bpf_object__create_sdt_maps(struct bpf_object *obj)
 		val.nargs = e->nargs;
 		val.orig_off = e->insn_idx - prog->sec_insn_off;
 		memcpy(val.arg_reg, e->arg_reg, sizeof(val.arg_reg));
+		strncpy(val.name, e->name, sizeof(val.name) - 1);
 
 		err = bpf_map_update_elem(prog->sdt_map_fd, &key, &val, 0);
 		if (err)

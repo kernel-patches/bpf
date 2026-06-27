@@ -3,6 +3,7 @@
 
 #include <linux/bpf.h>
 #include <linux/bpf_verifier.h>
+#include <linux/string.h>
 
 struct bpf_insn_array {
 	struct bpf_map map;
@@ -107,6 +108,7 @@ static long insn_array_update_elem(struct bpf_map *map, void *key, void *value, 
 		insn_array->values[index].btf_id = val.btf_id;
 		insn_array->values[index].nargs = val.nargs;
 		memcpy(insn_array->values[index].arg_reg, val.arg_reg, sizeof(val.arg_reg));
+		strscpy(insn_array->values[index].name, val.name, sizeof(val.name));
 	}
 
 	return 0;

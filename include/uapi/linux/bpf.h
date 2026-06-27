@@ -1521,6 +1521,7 @@ struct bpf_common_attr {
 };
 
 #define BPF_OBJ_NAME_LEN 16U
+#define BPF_SDT_MAX_NAME_LEN 64
 
 enum {
 	BPF_STREAM_STDOUT = 1,
@@ -7743,6 +7744,7 @@ struct bpf_insn_array_value {
 	__u8  nargs;		/* argument count (0..5) */
 	__u8  arg_reg[5];	/* BPF register for each argument */
 	__u8  pad[2];
+	char  name[BPF_SDT_MAX_NAME_LEN]; /* probe name */
 };
 
 #endif /* _UAPI__LINUX_BPF_H__ */
