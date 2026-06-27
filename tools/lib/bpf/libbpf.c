@@ -139,6 +139,7 @@ static const char * const attach_type_name[] = {
 	[BPF_TRACE_FENTRY_MULTI]	= "trace_fentry_multi",
 	[BPF_TRACE_FEXIT_MULTI]		= "trace_fexit_multi",
 	[BPF_TRACE_FSESSION_MULTI]	= "trace_fsession_multi",
+	[BPF_TRACE_SDT]			= "trace_sdt",
 };
 
 static const char * const link_type_name[] = {
@@ -158,6 +159,7 @@ static const char * const link_type_name[] = {
 	[BPF_LINK_TYPE_NETKIT]			= "netkit",
 	[BPF_LINK_TYPE_SOCKMAP]			= "sockmap",
 	[BPF_LINK_TYPE_TRACING_MULTI]		= "tracing_multi",
+	[BPF_LINK_TYPE_SDT]			= "sdt",
 };
 
 static const char * const map_type_name[] = {
@@ -507,6 +509,7 @@ struct bpf_program {
 	__u32 attach_btf_obj_fd;
 	__u32 attach_btf_id;
 	__u32 attach_prog_fd;
+	char *sdt_probe_name;
 
 	void *func_info;
 	__u32 func_info_rec_size;
@@ -836,6 +839,7 @@ static void bpf_program__exit(struct bpf_program *prog)
 	zfree(&prog->sec_name);
 	zfree(&prog->insns);
 	zfree(&prog->reloc_desc);
+	zfree(&prog->sdt_probe_name);
 
 	prog->nr_reloc = 0;
 	prog->insns_cnt = 0;
@@ -8451,6 +8455,10 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 	load_attr.fd_array = obj->fd_array;
 	if (prog->sdt_map_fd >= 0)
 		load_attr.sdt_map_fd = prog->sdt_map_fd;
+	if (prog->expected_attach_type == BPF_TRACE_SDT && prog->sdt_probe_name) {
+		load_attr.sdt.target_prog_fd = prog->attach_prog_fd;
+		load_attr.sdt.name = prog->sdt_probe_name;
+	}
 
 	load_attr.token_fd = obj->token_fd;
 	if (obj->token_fd)
@@ -10587,6 +10595,7 @@ static const struct bpf_sec_def section_defs[] = {
 	SEC_DEF("kretsyscall+",		KPROBE, 0, SEC_NONE, attach_ksyscall),
 	SEC_DEF("usdt+",		KPROBE,	0, SEC_USDT, attach_usdt),
 	SEC_DEF("usdt.s+",		KPROBE,	0, SEC_USDT | SEC_SLEEPABLE, attach_usdt),
+	SEC_DEF("bpf_sdt",		TRACING, BPF_TRACE_SDT, SEC_NONE),
 	SEC_DEF("tc/ingress",		SCHED_CLS, BPF_TCX_INGRESS, SEC_NONE), /* alias for tcx */
 	SEC_DEF("tc/egress",		SCHED_CLS, BPF_TCX_EGRESS, SEC_NONE),  /* alias for tcx */
 	SEC_DEF("tcx/ingress",		SCHED_CLS, BPF_TCX_INGRESS, SEC_NONE),
@@ -15202,6 +15211,17 @@ int bpf_program__set_attach_target(struct bpf_program *prog,
 
 	if (prog->obj->state >= OBJ_LOADED)
 		return libbpf_err(-EINVAL);
+
+	if (prog->expected_attach_type == BPF_TRACE_SDT) {
+		if (!attach_func_name)
+			return libbpf_err(-EINVAL);
+		free(prog->sdt_probe_name);
+		prog->sdt_probe_name = strdup(attach_func_name);
+		if (!prog->sdt_probe_name)
+			return libbpf_err(-ENOMEM);
+		prog->attach_prog_fd = attach_prog_fd;
+		return 0;
+	}
 
 	if (attach_prog_fd && !attach_func_name) {
 		/* Store attach_prog_fd. The BTF ID will be resolved later during

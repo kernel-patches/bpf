@@ -1159,6 +1159,7 @@ enum bpf_attach_type {
 	BPF_TRACE_FENTRY_MULTI,
 	BPF_TRACE_FEXIT_MULTI,
 	BPF_TRACE_FSESSION_MULTI,
+	BPF_TRACE_SDT,
 	__MAX_BPF_ATTACH_TYPE
 };
 
@@ -1184,6 +1185,7 @@ enum bpf_link_type {
 	BPF_LINK_TYPE_NETKIT = 13,
 	BPF_LINK_TYPE_SOCKMAP = 14,
 	BPF_LINK_TYPE_TRACING_MULTI = 15,
+	BPF_LINK_TYPE_SDT,
 	__MAX_BPF_LINK_TYPE,
 };
 
@@ -1677,6 +1679,11 @@ union bpf_attr {
 		 * BPF_F_INSN_ARRAY_SDT, used for SDT probe
 		 */
 		__u32		sdt_map_fd;
+		/* Kernel looks up the probe using target prog and probe name */
+		struct {
+			__u32	target_prog_fd;
+			char	name[BPF_SDT_MAX_NAME_LEN]; /* probe name */
+		} sdt;
 	};
 
 	struct { /* anonymous struct used by BPF_OBJ_* commands */

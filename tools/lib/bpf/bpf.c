@@ -295,7 +295,7 @@ int bpf_prog_load(enum bpf_prog_type prog_type,
 		  const struct bpf_insn *insns, size_t insn_cnt,
 		  struct bpf_prog_load_opts *opts)
 {
-	const size_t attr_sz = offsetofend(union bpf_attr, sdt_map_fd);
+	const size_t attr_sz = offsetofend(union bpf_attr, sdt.name);
 	void *finfo = NULL, *linfo = NULL;
 	const char *func_info, *line_info;
 	__u32 log_size, log_level, attach_prog_fd, attach_btf_obj_fd;
@@ -303,6 +303,7 @@ int bpf_prog_load(enum bpf_prog_type prog_type,
 	int fd, attempts;
 	union bpf_attr attr;
 	char *log_buf;
+	const char *sdt_name;
 
 	bump_rlimit_memlock();
 
@@ -370,6 +371,11 @@ int bpf_prog_load(enum bpf_prog_type prog_type,
 	attr.fd_array = ptr_to_u64(OPTS_GET(opts, fd_array, NULL));
 	attr.fd_array_cnt = OPTS_GET(opts, fd_array_cnt, 0);
 	attr.sdt_map_fd = OPTS_GET(opts, sdt_map_fd, 0);
+	attr.sdt.target_prog_fd = OPTS_GET(opts, sdt.target_prog_fd, 0);
+
+	sdt_name = OPTS_GET(opts, sdt.name, NULL);
+	if (sdt_name)
+		snprintf(attr.sdt.name, sizeof(attr.sdt.name), "%s", sdt_name);
 
 	if (log_level) {
 		attr.log_buf = ptr_to_u64(log_buf);
@@ -862,6 +868,7 @@ int bpf_link_create(int prog_fd, int target_fd,
 	case BPF_MODIFY_RETURN:
 	case BPF_TRACE_FSESSION:
 	case BPF_LSM_MAC:
+	case BPF_TRACE_SDT:
 		attr.link_create.tracing.cookie = OPTS_GET(opts, tracing.cookie, 0);
 		if (!OPTS_ZEROED(opts, tracing))
 			return libbpf_err(-EINVAL);

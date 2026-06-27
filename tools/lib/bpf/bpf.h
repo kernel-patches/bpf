@@ -130,9 +130,14 @@ struct bpf_prog_load_opts {
 	__u32 fd_array_cnt;
 	/* if set, FD of the program's BPF_MAP_TYPE_INSN_ARRAY SDT map */
 	__u32 sdt_map_fd;
+	/* target program fd and probe name for SDT observer program */
+	struct {
+		__u32 target_prog_fd;
+		const char *name;
+	} sdt;
 	size_t :0;
 };
-#define bpf_prog_load_opts__last_field sdt_map_fd
+#define bpf_prog_load_opts__last_field sdt.name
 
 LIBBPF_API int bpf_prog_load(enum bpf_prog_type prog_type,
 			     const char *prog_name, const char *license,
