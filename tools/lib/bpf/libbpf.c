@@ -693,6 +693,7 @@ struct elf_state {
 	bool has_st_ops;
 	int arena_data_shndx;
 	int jumptables_data_shndx;
+	int sdt_notes_shndx;
 };
 
 struct usdt_manager;
@@ -701,6 +702,15 @@ enum bpf_object_state {
 	OBJ_OPEN,
 	OBJ_PREPARED,
 	OBJ_LOADED,
+};
+
+struct sdt_entry {
+	char *name;      /* probe name */
+	__u16 prog_idx;  /* resolved in bpf_object__resolve_sdt_progs */
+	__u16 sec_idx;   /* ELF section index of the probe site (from reloc) */
+	__u64 insn_idx;  /* insn index of probe site within its ELF section */
+	__u8 nargs;      /* how many arguments */
+	__u8 arg_reg[5]; /* which register the argument locates in */
 };
 
 struct bpf_object {
@@ -767,6 +777,13 @@ struct bpf_object {
 
 	void *jumptables_data;
 	size_t jumptables_data_sz;
+
+	void *sdt_notes_data;
+	size_t sdt_notes_data_sz;
+
+	struct sdt_entry *sdt_entries;
+	size_t sdt_entry_cnt;
+	size_t sdt_entry_cap;
 
 	struct {
 		struct bpf_program *prog;
@@ -3892,6 +3909,254 @@ static int cmp_progs(const void *_a, const void *_b)
 	return a->sec_insn_off < b->sec_insn_off ? -1 : 1;
 }
 
+static struct bpf_program *find_prog_by_sec_insn(const struct bpf_object *obj,
+						 size_t sec_idx, size_t insn_idx);
+
+struct sdt_sym {
+	const char *name;
+	size_t off; /* offset in the sdt entry section */
+};
+
+static int sdt_sym_cmp(const void *a, const void *b)
+{
+	const struct sdt_sym *sym1 = a, *sym2 = b;
+
+	if (sym1->off == sym2->off)
+		return 0;
+
+	return sym1->off < sym2->off ? -1 : 1;
+}
+
+static Elf_Data *sdt_find_relo(struct bpf_object *obj)
+{
+	GElf_Shdr shdr;
+	Elf_Scn *scn = NULL;
+
+	while ((scn = elf_nextscn(obj->efile.elf, scn)) != NULL) {
+		if (!gelf_getshdr(scn, &shdr) || shdr.sh_type != SHT_REL)
+			continue;
+
+		if (shdr.sh_info == obj->efile.sdt_notes_shndx)
+			return elf_getdata(scn, NULL);
+	}
+
+	return NULL;
+}
+
+static int sdt_collect_syms(struct bpf_object *obj, struct sdt_sym **sdt_syms)
+{
+	int i, err, cnt = 0;
+	size_t nr_syms;
+	size_t sym_cap = 0;
+	const char *name;
+	Elf64_Sym *sym, *syms;
+	struct sdt_sym *ssyms = NULL;
+
+	syms = obj->efile.symbols->d_buf;
+	nr_syms = obj->efile.symbols->d_size / sizeof(Elf64_Sym);
+
+	for (i = 0; i < nr_syms; i++) {
+		sym = &syms[i];
+		if (sym->st_shndx != obj->efile.sdt_notes_shndx)
+			continue;
+
+		if (ELF64_ST_TYPE(sym->st_info) != STT_NOTYPE)
+			continue;
+
+		name = elf_sym_str(obj, sym->st_name);
+		if (!name || strncmp(name, "___sdt_jt_", 10))
+			continue;
+
+		err = libbpf_ensure_mem((void **)&ssyms, &sym_cap, sizeof(*ssyms), cnt + 1);
+		if (err) {
+			free(ssyms);
+			return -ENOMEM;
+		}
+
+		ssyms[cnt].name = name;
+		ssyms[cnt].off = sym->st_value;
+		cnt++;
+	}
+
+	if (cnt)
+		qsort(ssyms, cnt, sizeof(*ssyms), sdt_sym_cmp);
+
+	*sdt_syms = ssyms;
+
+	return cnt;
+}
+
+/*
+ * Layout of SDT entry:
+ *
+ *   off + 0:  64 bits of the NOP instruction offset
+ *   off + 8:  r1 = %[arg0_reg]  //  bpf move instruction for arg0
+ *   off + 16: r2 = %[arg1_reg]  //  bpf move instruction for arg1
+ *       ...
+ *   off + 8 * N: rN = %[argN_reg]  //  bpf move instruction for argN
+ *
+ *   next_off + 0: // start of the next entry
+ *
+ *   so argument number N = (next_entry_off - off - 8) / sizeof(bpf_insn).
+ */
+static int sdt_calc_nargs(struct sdt_sym *syms, int sym_idx, size_t sym_cnt, size_t last_off)
+{
+	size_t off = syms[sym_idx].off;
+	size_t next_off = (sym_idx + 1 < sym_cnt) ? syms[sym_idx + 1].off : last_off;
+
+	if (next_off > last_off)
+		return -EINVAL;
+
+	if (off + 8 > next_off)
+		return -EINVAL;
+
+	if ((next_off - off - 8) % sizeof(struct bpf_insn))
+		return -EINVAL;
+
+	if ((next_off - off - 8) / sizeof(struct bpf_insn) > 5)
+		return -EINVAL;
+
+	return (next_off - off - 8) / sizeof(struct bpf_insn);
+}
+
+/*
+ * Look up the ELF section index of the code section containing the probe
+ * site, via the R_BPF_64_ABS64 relocation on this entry's .quad.  The
+ * target symbol's st_shndx is the code section; this is stored in the
+ * sdt_entry and used later (after subprogram linking) to resolve prog_idx.
+ *
+ * Returns the section index on success, -1 on failure.
+ */
+static int sdt_find_sec_idx(struct bpf_object *obj, Elf_Data *sdt_relo,
+			    size_t sdt_entry_off)
+{
+	int i;
+	Elf64_Sym *tgt;
+	Elf64_Rel *rel = sdt_relo->d_buf;
+	Elf64_Sym *elf_syms = obj->efile.symbols->d_buf;
+
+	for (i = 0; i < sdt_relo->d_size / sizeof(Elf64_Rel); i++, rel++) {
+		if (rel->r_offset != sdt_entry_off)
+			continue;
+		if (ELF64_R_TYPE(rel->r_info) != R_BPF_64_ABS64)
+			continue;
+
+		tgt = &elf_syms[ELF64_R_SYM(rel->r_info)];
+		return tgt->st_shndx;
+	}
+
+	return -1;
+}
+
+static int sdt_parse_arg(const void *data, int nargs, struct sdt_entry *e)
+{
+	int i;
+	const struct bpf_insn *insn;
+
+	insn = (const struct bpf_insn *)data;
+	for (i = 0; i < nargs; i++, insn++) {
+		if (insn->code != (BPF_ALU64 | BPF_MOV | BPF_X))
+			return -EINVAL;
+		e->arg_reg[i] = insn->src_reg;
+	}
+
+	return 0;
+}
+
+
+/*
+ * Parse .bpf_sdt_notes into per-probe SDT entries.
+ *
+ * Each entry starts at a ___sdt_jt_<name> label and contains .quad nop_off
+ * (8 bytes, with R_BPF_64_ABS64 reloc) followed by one 8-byte BPF_MOV
+ * instruction per argument whose src_reg field encodes the register.
+ *
+ * nargs is derived from the gap between consecutive labels: the assembler
+ * lays entries out sequentially, so nargs = (next_off - off - 8) / 8.
+ */
+static int bpf_object__collect_sdt_notes(struct bpf_object *obj)
+{
+	int i, sym_cnt, err = 0;
+	struct sdt_sym *sdt_syms = NULL;
+	Elf_Data *sdt_relo = NULL;
+	const void *data = obj->sdt_notes_data;
+
+	if (!obj->sdt_notes_data || !obj->sdt_notes_data_sz)
+		return 0;
+
+	sdt_relo = sdt_find_relo(obj);
+	if (!sdt_relo)
+		return -EINVAL;
+
+	sym_cnt = sdt_collect_syms(obj, &sdt_syms);
+	if (sym_cnt < 0)
+		return sym_cnt;
+
+	for (i = 0; i < sym_cnt; i++) {
+		__u64 nop_idx;
+		int nargs, sec_idx;
+		struct sdt_entry *e;
+		size_t off = sdt_syms[i].off;
+
+		nargs = sdt_calc_nargs(sdt_syms, i, sym_cnt, obj->sdt_notes_data_sz);
+		if (nargs < 0) {
+			err = -EINVAL;
+			goto out;
+		}
+
+		memcpy(&nop_idx, data + off, sizeof(__u64));
+		nop_idx = nop_idx / sizeof(struct bpf_insn);
+
+		/*
+		 * Record the ELF section index of the code section containing
+		 * the probe site.  prog_idx is resolved later in
+		 * bpf_object__resolve_sdt_progs(), after static subprograms
+		 * in .text have been absorbed into their calling main program;
+		 * resolving here would return the subprogram's own entry, not
+		 * the main program that ends up owning the probe site.
+		 */
+		sec_idx = sdt_find_sec_idx(obj, sdt_relo, off);
+		if (sec_idx < 0) {
+			err = -EINVAL;
+			goto out;
+		}
+
+		/* Read arg_reg[] from cold instructions */
+		err = libbpf_ensure_mem((void **)&obj->sdt_entries, &obj->sdt_entry_cap,
+					sizeof(*obj->sdt_entries), i + 1);
+		if (err) {
+			err = -ENOMEM;
+			goto out;
+		}
+
+		e = &obj->sdt_entries[i];
+		err = sdt_parse_arg(data + off + 8, nargs, e);
+		if (err < 0)
+			goto out;
+
+		e->name = strdup(sdt_syms[i].name + 10); /* skip "___sdt_jt_" */
+		if (!e->name) {
+			err = -ENOMEM;
+			goto out;
+		}
+		e->sec_idx = sec_idx;
+		e->insn_idx = nop_idx;
+		e->nargs = nargs;
+		obj->sdt_entry_cnt++;
+	}
+
+out:
+	if (err) {
+		for (i = 0; i < obj->sdt_entry_cnt; i++)
+			free(obj->sdt_entries[i].name);
+		zfree(&obj->sdt_entries);
+		obj->sdt_entry_cnt = obj->sdt_entry_cap = 0;
+	}
+
+	free(sdt_syms);
+	return err;
+}
+
 static int bpf_object__elf_collect(struct bpf_object *obj)
 {
 	struct elf_sec_desc *sec_desc;
@@ -4034,6 +4299,13 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 				memcpy(obj->jumptables_data, data->d_buf, data->d_size);
 				obj->jumptables_data_sz = data->d_size;
 				obj->efile.jumptables_data_shndx = idx;
+			} else if (strcmp(name, SDT_NOTES_SEC) == 0) {
+				obj->sdt_notes_data = malloc(data->d_size);
+				if (!obj->sdt_notes_data)
+					return -ENOMEM;
+				memcpy(obj->sdt_notes_data, data->d_buf, data->d_size);
+				obj->sdt_notes_data_sz = data->d_size;
+				obj->efile.sdt_notes_shndx = idx;
 			} else {
 				pr_info("elf: skipping unrecognized data section(%d) %s\n",
 					idx, name);
@@ -4086,6 +4358,13 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 	 */
 	if (obj->nr_programs)
 		qsort(obj->programs, obj->nr_programs, sizeof(*obj->programs), cmp_progs);
+
+	err = bpf_object__collect_sdt_notes(obj);
+	if (err) {
+		zfree(&obj->sdt_notes_data);
+		obj->sdt_notes_data_sz = 0;
+		return err;
+	}
 
 	return bpf_object__init_btf(obj, btf_data, btf_ext_data);
 }
@@ -9628,6 +9907,17 @@ void bpf_object__close(struct bpf_object *obj)
 
 	zfree(&obj->jumptables_data);
 	obj->jumptables_data_sz = 0;
+
+	zfree(&obj->sdt_notes_data);
+	obj->sdt_notes_data_sz = 0;
+
+	if (obj->sdt_entries) {
+		for (i = 0; i < obj->sdt_entry_cnt; i++)
+			free(obj->sdt_entries[i].name);
+		zfree(&obj->sdt_entries);
+		obj->sdt_entry_cnt = 0;
+		obj->sdt_entry_cap = 0;
+	}
 
 	for (i = 0; i < obj->jumptable_map_cnt; i++)
 		close(obj->jumptable_maps[i].fd);
