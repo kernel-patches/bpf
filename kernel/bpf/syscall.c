@@ -3737,6 +3737,89 @@ static const struct bpf_link_ops bpf_tracing_link_lops = {
 	.fill_link_info = bpf_tracing_link_fill_link_info,
 };
 
+struct bpf_sdt_link {
+	struct bpf_tramp_link link;
+	struct bpf_trampoline *trampoline;
+};
+
+static void bpf_sdt_link_release(struct bpf_link *link)
+{
+	struct bpf_sdt_link *sdt_link = container_of(link, struct bpf_sdt_link, link.link);
+	struct bpf_prog *prog = sdt_link->link.link.prog;
+	struct bpf_prog *tgt_prog = prog->aux->dst_prog;
+
+	WARN_ON_ONCE(bpf_trampoline_unlink_prog(&sdt_link->link.node, sdt_link->trampoline,
+						tgt_prog));
+	bpf_trampoline_put(sdt_link->trampoline);
+}
+
+static void bpf_sdt_link_dealloc(struct bpf_link *link)
+{
+	struct bpf_sdt_link *sdt_link = container_of(link, struct bpf_sdt_link, link.link);
+
+	kfree(sdt_link);
+}
+
+static const struct bpf_link_ops bpf_sdt_link_lops = {
+	.release = bpf_sdt_link_release,
+	.dealloc = bpf_sdt_link_dealloc,
+};
+
+static int bpf_sdt_link_attach(struct bpf_prog *prog)
+{
+	struct bpf_sdt_probe_info *sdt = prog->aux->sdt_probe;
+	struct bpf_attach_target_info tgt_info = {};
+	struct bpf_link_primer primer;
+	struct bpf_sdt_link *sdt_link;
+	struct bpf_prog *tgt_prog = prog->aux->dst_prog;
+	u64 tr_key;
+	int i, err;
+
+	if (!sdt || !tgt_prog)
+		return -EINVAL;
+
+	sdt_link = kzalloc_obj(struct bpf_sdt_link, GFP_USER);
+	if (!sdt_link)
+		return -ENOMEM;
+
+	bpf_tramp_link_init(&sdt_link->link, BPF_LINK_TYPE_SDT, &bpf_sdt_link_lops, prog,
+			    BPF_TRACE_SDT, 0);
+	err = bpf_link_prime(&sdt_link->link.link, &primer);
+	if (err) {
+		kfree(sdt_link);
+		return err;
+	}
+
+	/* use orig_off to compute the key as orig_off is unique for each probe */
+	tr_key = bpf_trampoline_compute_key(tgt_prog, NULL, sdt->val.orig_off);
+	tgt_info.tgt_addr = sdt->probe_ip;
+	tgt_info.tgt_name = sdt->val.name;
+	tgt_info.fmodel.nr_args = sdt->val.nargs;
+	for (i = 0; i < sdt->val.nargs; i++) {
+		tgt_info.fmodel.arg_size[i] = 8;
+		tgt_info.fmodel.arg_regs[i] = sdt->val.arg_reg[i];
+	}
+
+	sdt_link->trampoline = bpf_trampoline_get(tr_key, &tgt_info);
+	if (!sdt_link->trampoline) {
+		err = -ENOMEM;
+		goto err_cleanup;
+	}
+	sdt_link->trampoline->func.sdt_probe_site = 1;
+
+	err = bpf_trampoline_link_prog(&sdt_link->link.node, sdt_link->trampoline, tgt_prog);
+	if (err)
+		goto err_put_tramp;
+
+	return bpf_link_settle(&primer);
+
+err_put_tramp:
+	bpf_trampoline_put(sdt_link->trampoline);
+err_cleanup:
+	bpf_link_cleanup(&primer);
+	return err;
+}
+
 static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 				   int tgt_prog_fd,
 				   u32 btf_id,
@@ -5945,6 +6028,8 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 			ret = cgroup_bpf_link_attach(attr, prog);
 		else if (is_tracing_multi(prog->expected_attach_type))
 			ret = bpf_tracing_multi_attach(prog, attr);
+		else if (prog->expected_attach_type == BPF_TRACE_SDT)
+			ret = bpf_sdt_link_attach(prog);
 		else
 			ret = bpf_tracing_prog_attach(prog,
 						      attr->link_create.target_fd,

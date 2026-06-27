@@ -1270,6 +1270,12 @@ struct btf_func_model {
  */
 #define BPF_TRAMP_F_INDIRECT		BIT(8)
 
+/* Trampoline is for an SDT probe site: arguments arrive in
+ * BPF registers recorded by the SDT macro at build time,
+ * described by btf_func_model.arg_regs[] instead of ABI order.
+ */
+#define BPF_TRAMP_F_SDT_PROBE		BIT(9)
+
 /* Each call __bpf_prog_enter + call bpf_func + call __bpf_prog_exit is ~50
  * bytes on x86.
  */
@@ -1393,7 +1399,8 @@ struct bpf_trampoline {
 	struct {
 		struct btf_func_model model;
 		void *addr;
-		bool ftrace_managed;
+		u8 ftrace_managed:1;
+		u8 sdt_probe_site:1;
 	} func;
 	/* if !NULL this is BPF_PROG_TYPE_EXT program that extends another BPF
 	 * program by replacing one of its functions. func.addr is the address
