@@ -7739,6 +7739,7 @@ struct bpf_insn_array_value {
 	__u32 orig_off;
 	__u32 xlated_off;
 	__u32 jitted_off;
+	__u32 btf_id;		/* BTF FUNC_PROTO type ID (0 if none) */
 	__u8  nargs;		/* argument count (0..5) */
 	__u8  arg_reg[5];	/* BPF register for each argument */
 	__u8  pad[2];

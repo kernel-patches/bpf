@@ -715,6 +715,7 @@ struct sdt_entry {
 	__u64 insn_idx;  /* insn index of probe site within its ELF section */
 	__u8 nargs;      /* how many arguments */
 	__u8 arg_reg[5]; /* which register the argument locates in */
+	__u32 btf_id;    /* BTF FUNC_PROTO type ID from decl tag */
 };
 
 struct bpf_object {
@@ -6692,6 +6693,57 @@ err_close:
 	return err;
 }
 
+static void sdt_collect_btf_ids(struct bpf_object *obj)
+{
+	int n = btf__type_cnt(obj->btf);
+	const struct btf_type *t;
+	int i;
+
+	for (i = 1; i < n; i++) {
+		const char *tag, *colon;
+		size_t name_len;
+		__u32 func_proto_id;
+		int j;
+
+		t = btf_type_by_id(obj->btf, i);
+		if (!btf_is_decl_tag(t) || btf_decl_tag(t)->component_idx != -1)
+			continue;
+
+		tag = btf__str_by_offset(obj->btf, t->name_off);
+		if (strncmp(tag, "bpf_sdt:", 8) != 0)
+			continue;
+
+		/* tag format: "bpf_sdt:<name>:<nargs>"; <name> has no colons */
+		colon = strchr(tag + 8, ':');
+		if (!colon)
+			continue;
+		name_len = colon - tag - 8;
+
+		/* type chain: DECL_TAG -> VAR -> (CONST) -> PTR -> FUNC_PROTO */
+		t = btf_type_by_id(obj->btf, t->type);
+		if (!btf_is_var(t))
+			continue;
+		t = btf_type_by_id(obj->btf, t->type);
+		if (btf_kind(t) == BTF_KIND_CONST)
+			t = btf_type_by_id(obj->btf, t->type);
+		if (!btf_is_ptr(t))
+			continue;
+		func_proto_id = t->type;
+		t = btf_type_by_id(obj->btf, func_proto_id);
+		if (!btf_is_func_proto(t))
+			continue;
+
+		/* match by name (tag format: "bpf_sdt:<name>:<nargs>") */
+		for (j = 0; j < obj->sdt_entry_cnt; j++) {
+			struct sdt_entry *e = &obj->sdt_entries[j];
+
+			if (!e->btf_id && strlen(e->name) == name_len &&
+			    strncmp(tag + 8, e->name, name_len) == 0)
+				e->btf_id = func_proto_id;
+		}
+	}
+}
+
 static int bpf_object__resolve_sdt_progs(struct bpf_object *obj)
 {
 	int i, j;
@@ -6749,6 +6801,8 @@ static int bpf_object__create_sdt_maps(struct bpf_object *obj)
 	if (err)
 		return err;
 
+	sdt_collect_btf_ids(obj);
+
 	prog_sdt = calloc(obj->nr_programs, sizeof(*prog_sdt));
 	if (!prog_sdt)
 		return -ENOMEM;
@@ -6785,6 +6839,7 @@ static int bpf_object__create_sdt_maps(struct bpf_object *obj)
 		key = prog_sdt[e->prog_idx].next_key++;
 
 		memset(&val, 0, sizeof(val));
+		val.btf_id = e->btf_id;
 		val.nargs = e->nargs;
 		val.orig_off = e->insn_idx - prog->sec_insn_off;
 		memcpy(val.arg_reg, e->arg_reg, sizeof(val.arg_reg));

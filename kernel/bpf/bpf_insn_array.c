@@ -103,6 +103,7 @@ static long insn_array_update_elem(struct bpf_map *map, void *key, void *value, 
 	insn_array->values[index].orig_off = val.orig_off;
 
 	if (insn_array->subtype == BPF_INSN_ARRAY_SUBTYPE_SDT) {
+		insn_array->values[index].btf_id = val.btf_id;
 		insn_array->values[index].nargs = val.nargs;
 		memcpy(insn_array->values[index].arg_reg, val.arg_reg, sizeof(val.arg_reg));
 	}
