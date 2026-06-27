@@ -17242,6 +17242,133 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 	return INSN_IDX_UPDATED;
 }
 
+static int check_sdt_probe(struct bpf_verifier_env *env, int insn_idx)
+{
+	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
+	struct bpf_insn_array_value *val;
+	struct bpf_func_state *frame;
+	struct bpf_reg_state *regs;
+	const struct btf *btf;
+	const struct btf_type *proto;
+	const struct btf_param *args;
+	int i, nargs;
+
+	val = env->insn_aux_data[insn_idx].sdt_entry;
+	if (!val->nargs)
+		return 0;
+
+	if (val->nargs > MAX_BPF_FUNC_REG_ARGS) {
+		verbose(env, "SDT probe nargs %u > 5\n", val->nargs);
+		return -EINVAL;
+	}
+
+	frame = env->cur_state->frame[env->cur_state->curframe];
+	regs = frame->regs;
+
+	for (i = 0; i < val->nargs; i++) {
+		u8 reg = val->arg_reg[i];
+		struct bpf_reg_state *rs = &regs[reg];
+
+		if (rs->type == NOT_INIT) {
+			verbose(env, "SDT arg%d (r%d) is uninitialized\n", i, reg);
+			return -EINVAL;
+		}
+	}
+
+	btf = env->prog->aux->btf;
+	if (!btf || !val->btf_id) {
+		verbose(env, "BTF is required for SDT probe with %u arguments\n", val->nargs);
+		return -EINVAL;
+	}
+
+	proto = btf_type_by_id(btf, val->btf_id);
+	if (!proto || !btf_type_is_func_proto(proto)) {
+		verbose(env, "SDT btf_id %u is not a FUNC_PROTO\n", val->btf_id);
+		return -EINVAL;
+	}
+
+	nargs = btf_type_vlen(proto);
+	if (nargs != val->nargs) {
+		verbose(env, "SDT nargs %u != BTF FUNC_PROTO nargs %d\n",
+			val->nargs, nargs);
+		return -EINVAL;
+	}
+
+	args = (const struct btf_param *)(proto + 1);
+	for (i = 0; i < nargs; i++) {
+		u8 reg = val->arg_reg[i];
+		struct bpf_reg_state *rs = &regs[reg];
+		const struct btf_type *t;
+		u32 arg_btf_id;
+		u32 t_size;
+
+		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
+		t_size = t ? t->size : 0;
+
+		if (btf_type_is_scalar(t)) {
+			if (base_type(rs->type) != SCALAR_VALUE) {
+				verbose(env, "SDT arg%d (r%d) type %s expected scalar\n",
+					i, reg, reg_type_str(env, rs->type));
+				return -EACCES;
+			}
+			continue;
+		}
+
+		/*
+		 * Small structs/unions (<= 8 bytes) are passed by value in
+		 * a register as a SCALAR_VALUE carrying the raw bytes.  The
+		 * BPF_SDT_PROBE<N> macro enforces sizeof(arg) <= 8 at build
+		 * time, so the FUNC_PROTO parameter type is the struct itself
+		 * (not a pointer) and the verifier sees SCALAR_VALUE.
+		 */
+		if (btf_type_is_struct(t) && t_size <= 8) {
+			if (base_type(rs->type) != SCALAR_VALUE) {
+				verbose(env,
+				"SDT arg%d (r%d) type %s expected scalar (small struct by value)\n",
+					i, reg, reg_type_str(env, rs->type));
+				return -EACCES;
+			}
+			continue;
+		}
+
+		if (!btf_type_is_ptr(t)) {
+			verbose(env, "SDT arg%d (r%d) unsupported BTF parameter kind\n",
+				i, reg);
+			return -EACCES;
+		}
+
+		/*
+		 * When the probe argument is the target program's context
+		 * type (e.g. struct xdp_md * for XDP), the register at the
+		 * probe site is PTR_TO_CTX, not PTR_TO_BTF_ID.
+		 */
+		if (base_type(rs->type) == PTR_TO_CTX &&
+		    btf_is_prog_ctx_type(&env->log, btf, t, prog_type, i))
+			continue;
+
+		t = btf_type_skip_modifiers(btf, t->type, &arg_btf_id);
+		if (!btf_type_is_struct(t)) {
+			verbose(env, "SDT arg%d (r%d) unsupported BTF pointer target\n",
+				i, reg);
+			return -EACCES;
+		}
+
+		if (base_type(rs->type) != PTR_TO_BTF_ID) {
+			verbose(env, "SDT arg%d (r%d) type %s expected PTR_TO_BTF_ID\n",
+				i, reg, reg_type_str(env, rs->type));
+			return -EACCES;
+		}
+
+		if (!btf_struct_ids_match(&env->log, rs->btf, rs->btf_id,
+					  rs->var_off.value, btf, arg_btf_id, false)) {
+			verbose(env, "SDT arg%d (r%d) btf_id %u does not match expected %u\n",
+				i, reg, rs->btf_id, arg_btf_id);
+			return -EACCES;
+		}
+	}
+	return 0;
+}
+
 static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 {
 	int err;
@@ -17316,6 +17443,9 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 		} else if (opcode == BPF_JA) {
 			if (BPF_SRC(insn->code) == BPF_X)
 				return check_indirect_jump(env, insn);
+
+			if (env->insn_aux_data[env->insn_idx].sdt_entry)
+				return check_sdt_probe(env, env->insn_idx);
 
 			if (class == BPF_JMP)
 				env->insn_idx += insn->off + 1;
@@ -17882,7 +18012,7 @@ static int __add_used_map(struct bpf_verifier_env *env, struct bpf_map *map)
 	env->used_maps[env->used_map_cnt++] = map;
 
 	if (map->map_type == BPF_MAP_TYPE_INSN_ARRAY) {
-		err = bpf_insn_array_init(map, env->prog);
+		err = bpf_insn_array_init(map, env);
 		if (err) {
 			verbose(env, "Failed to properly initialize insn array\n");
 			return err;

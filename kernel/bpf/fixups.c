@@ -568,6 +568,10 @@ int bpf_opt_remove_nops(struct bpf_verifier_env *env)
 		if (!is_may_goto_0 && !is_ja)
 			continue;
 
+		/* SDT probes are NOPs kept for text_poke at attach time. */
+		if (env->insn_aux_data[i].sdt_entry)
+			continue;
+
 		err = verifier_remove_insns(env, i, 1);
 		if (err)
 			return err;

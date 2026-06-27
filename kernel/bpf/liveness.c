@@ -2062,6 +2062,7 @@ struct insn_live_regs {
 /* Compute info->{use,def} fields for the instruction */
 static void compute_insn_live_regs(struct bpf_verifier_env *env,
 				   struct bpf_insn *insn,
+				   int insn_idx,
 				   struct insn_live_regs *info)
 {
 	struct bpf_call_summary cs;
@@ -2163,10 +2164,27 @@ static void compute_insn_live_regs(struct bpf_verifier_env *env,
 		switch (code) {
 		case BPF_JA:
 			def = 0;
-			if (BPF_SRC(insn->code) == BPF_X)
+			if (BPF_SRC(insn->code) == BPF_X) {
 				use = dst;
-			else
+			} else if (env->insn_aux_data[insn_idx].sdt_entry) {
+				struct bpf_insn_array_value *sdt;
+				int i;
+
+				/*
+				 * Without marking the argument registers arg_reg[]
+				 * as live, the liveness pass would clear them before
+				 * the probe site, causing check_sdt_probe() to reject
+				 * the prog with "arg is uninitialized".
+				 */
 				use = 0;
+				sdt = env->insn_aux_data[insn_idx].sdt_entry;
+				for (i = 0; i < sdt->nargs; i++) {
+					if (sdt->arg_reg[i] < BPF_REG_FP)
+						use |= BIT(sdt->arg_reg[i]);
+				}
+			} else {
+				use = 0;
+			}
 			break;
 		case BPF_JCOND:
 			def = 0;
@@ -2238,7 +2256,7 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 	}
 
 	for (i = 0; i < insn_cnt; ++i)
-		compute_insn_live_regs(env, &insns[i], &state[i]);
+		compute_insn_live_regs(env, &insns[i], i, &state[i]);
 
 	/* Forward pass: resolve stack access through FP-derived pointers */
 	err = bpf_compute_subprog_arg_access(env);

@@ -691,6 +691,9 @@ struct bpf_insn_aux_data {
 	u8 fastcall_spills_num:3;
 	u8 arg_prog:4;
 
+	/* set when the instruction is a SDT probe site */
+	struct bpf_insn_array_value *sdt_entry;
+
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */
 	u32 jmp_point:1;

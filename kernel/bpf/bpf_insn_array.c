@@ -2,6 +2,7 @@
 /* Copyright (c) 2025 Isovalent */
 
 #include <linux/bpf.h>
+#include <linux/bpf_verifier.h>
 
 struct bpf_insn_array {
 	struct bpf_map map;
@@ -198,10 +199,12 @@ static inline bool valid_offsets(const struct bpf_insn_array *insn_array,
 	return true;
 }
 
-int bpf_insn_array_init(struct bpf_map *map, const struct bpf_prog *prog)
+int bpf_insn_array_init(struct bpf_map *map, struct bpf_verifier_env *env)
 {
 	struct bpf_insn_array *insn_array = cast_insn_array(map);
 	struct bpf_insn_array_value *values = insn_array->values;
+	const struct bpf_prog *prog = env->prog;
+	const struct bpf_insn *insn;
 	int i;
 
 	if (!is_frozen(map))
@@ -223,6 +226,15 @@ int bpf_insn_array_init(struct bpf_map *map, const struct bpf_prog *prog)
 	 */
 	for (i = 0; i < map->max_entries; i++)
 		values[i].xlated_off = values[i].orig_off;
+
+	if (insn_array->subtype == BPF_INSN_ARRAY_SUBTYPE_SDT) {
+		for (i = 0; i < map->max_entries; i++) {
+			insn = &prog->insnsi[values[i].orig_off];
+			if (insn->code != (BPF_JMP | BPF_JA) || insn->off != 0)
+				return -EINVAL;
+			env->insn_aux_data[values[i].orig_off].sdt_entry = &values[i];
+		}
+	}
 
 	return 0;
 }
