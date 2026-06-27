@@ -1466,6 +1466,9 @@ enum {
 
 /* Enable BPF ringbuf overwrite mode */
 	BPF_F_RB_OVERWRITE	= (1U << 19),
+
+/* insn_array map is used for bpf SDT probe */
+	BPF_F_INSN_ARRAY_SDT	= (1U << 20),
 };
 
 /* Flags for BPF_PROG_QUERY. */
@@ -1669,6 +1672,10 @@ union bpf_attr {
 		 * verification.
 		 */
 		__s32		keyring_id;
+		/* fd of the BPF_MAP_TYPE_INSN_ARRAY map created with
+		 * BPF_F_INSN_ARRAY_SDT, used for SDT probe
+		 */
+		__u32		sdt_map_fd;
 	};
 
 	struct { /* anonymous struct used by BPF_OBJ_* commands */
@@ -7732,7 +7739,9 @@ struct bpf_insn_array_value {
 	__u32 orig_off;
 	__u32 xlated_off;
 	__u32 jitted_off;
-	__u32 :32;
+	__u8  nargs;		/* argument count (0..5) */
+	__u8  arg_reg[5];	/* BPF register for each argument */
+	__u8  pad[2];
 };
 
 #endif /* _UAPI__LINUX_BPF_H__ */

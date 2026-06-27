@@ -7,6 +7,7 @@ struct bpf_insn_array {
 	struct bpf_map map;
 	atomic_t used;
 	long *ips;
+	int subtype;
 	DECLARE_FLEX_ARRAY(struct bpf_insn_array_value, values);
 };
 
@@ -14,6 +15,11 @@ struct bpf_insn_array {
 	container_of((MAP_PTR), struct bpf_insn_array, map)
 
 #define INSN_DELETED ((u32)-1)
+
+enum bpf_insn_array_subtype {
+	BPF_INSN_ARRAY_SUBTYPE_JUMP_TABLE = 0,
+	BPF_INSN_ARRAY_SUBTYPE_SDT = 1,
+};
 
 static inline u64 insn_array_alloc_size(u32 max_entries)
 {
@@ -28,7 +34,8 @@ static int insn_array_alloc_check(union bpf_attr *attr)
 	u32 value_size = sizeof(struct bpf_insn_array_value);
 
 	if (attr->max_entries == 0 || attr->key_size != 4 ||
-	    attr->value_size != value_size || attr->map_flags != 0)
+	    attr->value_size != value_size ||
+	    attr->map_flags & ~BPF_F_INSN_ARRAY_SDT)
 		return -EINVAL;
 
 	return 0;
@@ -54,6 +61,11 @@ static struct bpf_map *insn_array_alloc(union bpf_attr *attr)
 	insn_array->ips = (void *)&insn_array->values[attr->max_entries];
 
 	bpf_map_init_from_attr(&insn_array->map, attr);
+
+	if (attr->map_flags & BPF_F_INSN_ARRAY_SDT)
+		insn_array->subtype = BPF_INSN_ARRAY_SUBTYPE_SDT;
+	else
+		insn_array->subtype = BPF_INSN_ARRAY_SUBTYPE_JUMP_TABLE;
 
 	/* BPF programs aren't allowed to write to the map */
 	insn_array->map.map_flags |= BPF_F_RDONLY_PROG;
@@ -89,6 +101,11 @@ static long insn_array_update_elem(struct bpf_map *map, void *key, void *value, 
 		return -EINVAL;
 
 	insn_array->values[index].orig_off = val.orig_off;
+
+	if (insn_array->subtype == BPF_INSN_ARRAY_SUBTYPE_SDT) {
+		insn_array->values[index].nargs = val.nargs;
+		memcpy(insn_array->values[index].arg_reg, val.arg_reg, sizeof(val.arg_reg));
+	}
 
 	return 0;
 }

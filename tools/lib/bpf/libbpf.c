@@ -494,6 +494,7 @@ struct bpf_program {
 	struct bpf_object *obj;
 
 	int fd;
+	int sdt_map_fd;
 	bool autoload;
 	bool autoattach;
 	bool sym_global;
@@ -519,6 +520,9 @@ struct bpf_program {
 
 	struct bpf_light_subprog *subprogs;
 	__u32 subprog_cnt;
+
+	/* index of the main program that absorbed this subprog */
+	int absorbed_by;
 };
 
 struct bpf_struct_ops {
@@ -879,7 +883,9 @@ bpf_object__init_prog(struct bpf_object *obj, struct bpf_program *prog,
 
 	prog->type = BPF_PROG_TYPE_UNSPEC;
 	prog->fd = -1;
+	prog->sdt_map_fd = -1;
 	prog->exception_cb_idx = -1;
+	prog->absorbed_by = -1;
 
 	/* libbpf's convention for SEC("?abc...") is that it's just like
 	 * SEC("abc...") but the corresponding bpf_program starts out with
@@ -6686,6 +6692,131 @@ err_close:
 	return err;
 }
 
+static int bpf_object__resolve_sdt_progs(struct bpf_object *obj)
+{
+	int i, j;
+	struct bpf_light_subprog *sp;
+
+	for (i = 0; i < obj->sdt_entry_cnt; i++) {
+		struct sdt_entry *e = &obj->sdt_entries[i];
+		struct bpf_program *prog, *subprog;
+
+		prog = find_prog_by_sec_insn(obj, e->sec_idx, e->insn_idx);
+		if (!prog) {
+			pr_warn("sdt: probe '%s' at sec %u insn %llu not found in any program\n",
+				e->name, (unsigned)e->sec_idx, (unsigned long long)e->insn_idx);
+			return -EINVAL;
+		}
+
+		/* resolve subprog probe in the main prog that absorbed the subprog */
+		if (prog_is_subprog(obj, prog) && prog->absorbed_by != -1) {
+			subprog = prog;
+			prog = &obj->programs[prog->absorbed_by];
+			for (j = 0; j < prog->subprog_cnt; j++) {
+				sp = &prog->subprogs[j];
+				if (sp->sec_insn_off == subprog->sec_insn_off) {
+					e->insn_idx = sp->sub_insn_off +
+						       (e->insn_idx - sp->sec_insn_off);
+					break;
+				}
+			}
+			if (j >= prog->subprog_cnt) {
+				pr_warn("sdt: subprog probe '%s' not found\n", e->name);
+				return -EINVAL;
+			}
+		}
+
+		e->prog_idx = prog - obj->programs;
+	}
+	return 0;
+}
+
+static int bpf_object__create_sdt_maps(struct bpf_object *obj)
+{
+	const __u32 value_size = sizeof(struct bpf_insn_array_value);
+	struct bpf_insn_array_value val = {};
+	struct bpf_program *prog;
+	struct {
+		__u32 sdt_cnt;
+		__u32 next_key;
+	} *prog_sdt;
+	int i, err = 0;
+
+	if (!obj->sdt_entry_cnt)
+		return 0;
+
+	err = bpf_object__resolve_sdt_progs(obj);
+	if (err)
+		return err;
+
+	prog_sdt = calloc(obj->nr_programs, sizeof(*prog_sdt));
+	if (!prog_sdt)
+		return -ENOMEM;
+
+	/* count entries per program */
+	for (i = 0; i < obj->sdt_entry_cnt; i++)
+		prog_sdt[obj->sdt_entries[i].prog_idx].sdt_cnt++;
+
+	/* create insn_array maps per program and populate entries */
+	for (i = 0; i < obj->sdt_entry_cnt; i++) {
+		__u32 key;
+		struct sdt_entry *e = &obj->sdt_entries[i];
+		__u32 sdt_cnt = prog_sdt[e->prog_idx].sdt_cnt;
+
+		if (!sdt_cnt)
+			continue;
+
+		prog = &obj->programs[e->prog_idx];
+
+		if (prog->sdt_map_fd < 0) {
+			int map_fd;
+			LIBBPF_OPTS(bpf_map_create_opts, map_opts);
+
+			map_opts.map_flags = BPF_F_INSN_ARRAY_SDT;
+			map_fd = bpf_map_create(BPF_MAP_TYPE_INSN_ARRAY, ".bpf_sdt_notes",
+						sizeof(key), value_size, sdt_cnt, &map_opts);
+			if (map_fd < 0) {
+				err = map_fd;
+				goto out_free;
+			}
+			prog->sdt_map_fd = map_fd;
+		}
+
+		key = prog_sdt[e->prog_idx].next_key++;
+
+		memset(&val, 0, sizeof(val));
+		val.nargs = e->nargs;
+		val.orig_off = e->insn_idx - prog->sec_insn_off;
+		memcpy(val.arg_reg, e->arg_reg, sizeof(val.arg_reg));
+
+		err = bpf_map_update_elem(prog->sdt_map_fd, &key, &val, 0);
+		if (err)
+			goto out_free;
+	}
+
+	/* freeze maps */
+	for (i = 0; i < obj->nr_programs; i++) {
+		prog = &obj->programs[i];
+		if (prog->sdt_map_fd >= 0) {
+			err = bpf_map_freeze(prog->sdt_map_fd);
+			if (err)
+				goto out_free;
+		}
+	}
+
+out_free:
+	free(prog_sdt);
+	if (err) {
+		for (i = 0; i < obj->nr_programs; i++) {
+			if (obj->programs[i].sdt_map_fd >= 0) {
+				close(obj->programs[i].sdt_map_fd);
+				obj->programs[i].sdt_map_fd = -1;
+			}
+		}
+	}
+	return err;
+}
+
 /* Relocate data references within program code:
  *  - map references;
  *  - global variable references;
@@ -7135,6 +7266,8 @@ bpf_object__reloc_code(struct bpf_object *obj, struct bpf_program *main_prog,
 			err = bpf_object__append_subprog_code(obj, main_prog, subprog);
 			if (err)
 				return err;
+			if (subprog->absorbed_by == -1)
+				subprog->absorbed_by = main_prog - obj->programs;
 			err = bpf_object__reloc_code(obj, main_prog, subprog);
 			if (err)
 				return err;
@@ -8254,6 +8387,8 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 	load_attr.log_level = log_level;
 	load_attr.prog_flags = prog->prog_flags;
 	load_attr.fd_array = obj->fd_array;
+	if (prog->sdt_map_fd >= 0)
+		load_attr.sdt_map_fd = prog->sdt_map_fd;
 
 	load_attr.token_fd = obj->token_fd;
 	if (obj->token_fd)
@@ -9343,6 +9478,7 @@ static int bpf_object_prepare(struct bpf_object *obj, const char *target_btf_pat
 	err = err ? : bpf_object__relocate(obj, obj->btf_custom_path ? : target_btf_path);
 	err = err ? : bpf_object__sanitize_and_load_btf(obj);
 	err = err ? : bpf_object__create_maps(obj);
+	err = err ? : bpf_object__create_sdt_maps(obj);
 	err = err ? : bpf_object_prepare_progs(obj);
 
 	if (err) {
@@ -9893,8 +10029,11 @@ void bpf_object__close(struct bpf_object *obj)
 	obj->nr_maps = 0;
 
 	if (obj->programs && obj->nr_programs) {
-		for (i = 0; i < obj->nr_programs; i++)
+		for (i = 0; i < obj->nr_programs; i++) {
+			if (obj->programs[i].sdt_map_fd >= 0)
+				close(obj->programs[i].sdt_map_fd);
 			bpf_program__exit(&obj->programs[i]);
+		}
 	}
 	zfree(&obj->programs);
 

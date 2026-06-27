@@ -19800,6 +19800,29 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret)
 		goto skip_full_check;
 
+	if (attr->sdt_map_fd) {
+		CLASS(fd, f)(attr->sdt_map_fd);
+		struct bpf_map *sdt_map = __bpf_map_get(f);
+
+		if (IS_ERR(sdt_map)) {
+			verbose(env, "sdt_map_fd %d is not a valid bpf_map\n",
+				attr->sdt_map_fd);
+			ret = PTR_ERR(sdt_map);
+			goto skip_full_check;
+		}
+		if (sdt_map->map_type != BPF_MAP_TYPE_INSN_ARRAY) {
+			verbose(env, "sdt_map_fd %d is not an INSN_ARRAY map\n",
+				attr->sdt_map_fd);
+			ret = -EINVAL;
+			goto skip_full_check;
+		}
+		ret = __add_used_map(env, sdt_map);
+		if (ret < 0) {
+			verbose(env, "failed to bind SDT map to program: %d\n", ret);
+			goto skip_full_check;
+		}
+	}
+
 	mark_verifier_state_clean(env);
 
 	if (IS_ERR(btf_vmlinux)) {

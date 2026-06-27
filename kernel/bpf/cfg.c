@@ -251,6 +251,9 @@ static struct bpf_iarray *jt_from_map(struct bpf_map *map)
 	int err;
 	int n;
 
+	if (map->map_flags & BPF_F_INSN_ARRAY_SDT)
+		return ERR_PTR(-EINVAL);
+
 	jt = bpf_iarray_realloc(NULL, map->max_entries);
 	if (!jt)
 		return ERR_PTR(-ENOMEM);
