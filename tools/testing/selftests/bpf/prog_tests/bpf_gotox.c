@@ -255,6 +255,30 @@ static int create_jt_map(__u32 max_entries)
 			      key_size, value_size, max_entries, NULL);
 }
 
+static int create_jt_map_with_target(__u32 target)
+{
+	struct bpf_insn_array_value val = { .orig_off = target };
+	__u32 key = 0;
+	int map_fd;
+
+	map_fd = create_jt_map(1);
+	if (!ASSERT_GE(map_fd, 0, "create_jt_map"))
+		return -1;
+
+	if (!ASSERT_EQ(bpf_map_update_elem(map_fd, &key, &val, 0),
+		       0, "bpf_map_update_elem")) {
+		close(map_fd);
+		return -1;
+	}
+
+	if (!ASSERT_EQ(bpf_map_freeze(map_fd), 0, "bpf_map_freeze")) {
+		close(map_fd);
+		return -1;
+	}
+
+	return map_fd;
+}
+
 static int prog_load(struct bpf_insn *insns, __u32 insn_cnt)
 {
 	return bpf_prog_load(BPF_PROG_TYPE_RAW_TRACEPOINT, NULL, "GPL", insns, insn_cnt, NULL);
@@ -391,6 +415,52 @@ reject_offsets(struct bpf_insn *insns, __u32 insn_cnt, int off1, int off2, int o
 	prog_fd = __check_ldimm64_gotox_prog_load(insns, insn_cnt, off1, off2, off3);
 	if (!ASSERT_EQ(prog_fd, -EACCES, "__check_ldimm64_gotox_prog_load"))
 		close(prog_fd);
+}
+
+static void
+check_cross_subprog_gotox_target(void)
+{
+	struct bpf_insn insns[] = {
+		/* main subprog [0,14) */
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_1),
+		BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0, BPF_PSEUDO_CALL, 0, 12),
+		BPF_LDX_MEM(BPF_W, BPF_REG_7, BPF_REG_6, 0),
+		BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, 0, 4),
+		BPF_LD_IMM64_RAW(BPF_REG_2, BPF_PSEUDO_MAP_VALUE, 0),
+		BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_2, 0),
+		BPF_JMP_A(3),
+		BPF_LD_IMM64_RAW(BPF_REG_2, BPF_PSEUDO_MAP_VALUE, 0),
+		BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_2, 0),
+		BPF_RAW_INSN(BPF_JMP | BPF_JA | BPF_X, BPF_REG_2, 0, 0, 0),
+		BPF_MOV64_IMM(BPF_REG_0, 1),
+		BPF_EXIT_INSN(),
+
+		/* static subprog [14,16) */
+		BPF_MOV64_IMM(BPF_REG_0, 42),
+		BPF_EXIT_INSN(),
+	};
+	int good_fd, bad_fd, prog_fd;
+
+	good_fd = create_jt_map_with_target(12);
+	if (!ASSERT_GE(good_fd, 0, "create_good_jt_map"))
+		return;
+
+	bad_fd = create_jt_map_with_target(14);
+	if (!ASSERT_GE(bad_fd, 0, "create_bad_jt_map")) {
+		close(good_fd);
+		return;
+	}
+
+	insns[4].imm = bad_fd;
+	insns[8].imm = good_fd;
+
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_SOCKET_FILTER, NULL, "GPL",
+				insns, ARRAY_SIZE(insns), NULL);
+	if (!ASSERT_EQ(prog_fd, -EINVAL, "cross_subprog_gotox_prog_load"))
+		close(prog_fd);
+
+	close(bad_fd);
+	close(good_fd);
 }
 
 /*
@@ -540,6 +610,9 @@ void test_bpf_gotox(void)
 
 	if (test__start_subtest("check-ldimm64-off-gotox-llvm"))
 		__subtest(skel, check_ldimm64_off_gotox_llvm);
+
+	if (test__start_subtest("check-cross-subprog-gotox-target"))
+		check_cross_subprog_gotox_target();
 
 	bpf_gotox__destroy(skel);
 }
