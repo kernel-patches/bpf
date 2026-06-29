@@ -8,7 +8,6 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/slab.h>
 #include <linux/input.h>
 #include <linux/module.h>
 #include <linux/init.h>
@@ -101,12 +100,13 @@ static int probe_maple_controller(struct device *dev)
 	struct input_dev *idev;
 	unsigned long data = be32_to_cpu(mdev->devinfo.function_data[0]);
 
-	pad = kzalloc_obj(*pad);
-	idev = input_allocate_device();
-	if (!pad || !idev) {
-		error = -ENOMEM;
-		goto fail;
-	}
+	pad = devm_kzalloc(&mdev->dev, sizeof(*pad), GFP_KERNEL);
+	if (!pad)
+		return -ENOMEM;
+
+	idev = devm_input_allocate_device(&mdev->dev);
+	if (!idev)
+		return -ENOMEM;
 
 	pad->dev = idev;
 
@@ -130,28 +130,12 @@ static int probe_maple_controller(struct device *dev)
 	if (idev->keybit[BIT_WORD(BTN_JOYSTICK)])
 		idev->evbit[0] |= BIT_MASK(EV_KEY);
 
-	idev->dev.parent = &mdev->dev;
 	idev->name = mdev->product_name;
 	idev->id.bustype = BUS_HOST;
 
 	error = input_register_device(idev);
 	if (error)
-		goto fail;
-	return 0;
-
-fail:
-	input_free_device(idev);
-	kfree(pad);
-	return error;
-}
-
-static int remove_maple_controller(struct device *dev)
-{
-	struct maple_device *mdev = to_maple_dev(dev);
-	struct dc_pad *pad = maple_get_drvdata(mdev);
-
-	input_unregister_device(pad->dev);
-	kfree(pad);
+		return error;
 
 	return 0;
 }
@@ -161,7 +145,6 @@ static struct maple_driver dc_pad_driver = {
 	.drv = {
 		.name	= "Dreamcast_controller",
 		.probe	= probe_maple_controller,
-		.remove	= remove_maple_controller,
 	},
 };
 
