@@ -3700,6 +3700,60 @@ static void bpf_tracing_multi_link_dealloc(struct bpf_link *link)
 	kvfree(tr_link);
 }
 
+static int bpf_tracing_multi_link_fill_link_info(const struct bpf_link *link,
+						 struct bpf_link_info *info)
+{
+	u64 __user *ucookies = u64_to_user_ptr(info->tracing_multi.cookies);
+	u64 __user *uaddrs = u64_to_user_ptr(info->tracing_multi.addrs);
+	u32 __user *uids = u64_to_user_ptr(info->tracing_multi.ids);
+	struct bpf_tracing_multi_link *tr_link;
+	u32 ucount = info->tracing_multi.count;
+	bool has_cookies, show_addrs;
+	int err = 0;
+
+	if ((uids || ucookies || uaddrs) && !ucount)
+		return -EINVAL;
+
+	tr_link = container_of(link, struct bpf_tracing_multi_link, link);
+
+	info->tracing_multi.attach_type = tr_link->link.attach_type;
+	info->tracing_multi.count = tr_link->nodes_cnt;
+	info->tracing_multi.btf_obj_id = btf_obj_id(tr_link->link.prog->aux->attach_btf);
+
+	if (!uids && !ucookies && !uaddrs)
+		return 0;
+
+	if (ucount < tr_link->nodes_cnt)
+		err = -ENOSPC;
+	else
+		ucount = tr_link->nodes_cnt;
+
+	has_cookies = !!tr_link->cookies;
+	show_addrs = kallsyms_show_value(current_cred());
+
+	for (int i = 0; i < ucount; i++) {
+		struct bpf_tracing_multi_node *mnode = &tr_link->nodes[i];
+		u64 addr, cookie;
+		u32 id;
+
+		bpf_trampoline_unpack_key(mnode->trampoline->key, NULL, &id);
+
+		addr = show_addrs ? mnode->trampoline->ip : 0;
+		cookie = has_cookies ? tr_link->cookies[i] : 0;
+
+		if (uids && put_user(id, uids + i))
+			return -EFAULT;
+		if (uaddrs && put_user(addr, uaddrs + i))
+			return -EFAULT;
+		if (ucookies && put_user(cookie, ucookies + i))
+			return -EFAULT;
+
+		cond_resched();
+	}
+
+	return err;
+}
+
 #ifdef CONFIG_PROC_FS
 static void bpf_tracing_multi_show_fdinfo(const struct bpf_link *link,
 					  struct seq_file *seq)
@@ -3730,6 +3784,7 @@ static void bpf_tracing_multi_show_fdinfo(const struct bpf_link *link,
 static const struct bpf_link_ops bpf_tracing_multi_link_lops = {
 	.release = bpf_tracing_multi_link_release,
 	.dealloc_deferred = bpf_tracing_multi_link_dealloc,
+	.fill_link_info = bpf_tracing_multi_link_fill_link_info,
 #ifdef CONFIG_PROC_FS
 	.show_fdinfo = bpf_tracing_multi_show_fdinfo,
 #endif
