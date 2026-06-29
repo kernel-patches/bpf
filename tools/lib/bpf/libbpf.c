@@ -8536,6 +8536,9 @@ bpf_object__open_file(const char *path, const struct bpf_object_open_opts *opts)
 	if (!path)
 		return libbpf_err_ptr(-EINVAL);
 
+	if (strlen(path) >= PATH_MAX)
+		return libbpf_err_ptr(-ENAMETOOLONG);
+
 	return libbpf_ptr(bpf_object_open(path, NULL, 0, NULL, opts));
 }
 
@@ -9191,10 +9194,16 @@ int bpf_program__pin(struct bpf_program *prog, const char *path)
 {
 	int err;
 
+	if (!prog || !path)
+		return libbpf_err(-EINVAL);
+
 	if (prog->fd < 0) {
 		pr_warn("prog '%s': can't pin program that wasn't loaded\n", prog->name);
 		return libbpf_err(-EINVAL);
 	}
+
+	if (strlen(path) >= PATH_MAX)
+		return libbpf_err(-ENAMETOOLONG);
 
 	err = make_parent_dir(path);
 	if (err)
@@ -9218,10 +9227,16 @@ int bpf_program__unpin(struct bpf_program *prog, const char *path)
 {
 	int err;
 
+	if (!prog || !path)
+		return libbpf_err(-EINVAL);
+
 	if (prog->fd < 0) {
 		pr_warn("prog '%s': can't unpin program that wasn't loaded\n", prog->name);
 		return libbpf_err(-EINVAL);
 	}
+
+	if (strlen(path) >= PATH_MAX)
+		return libbpf_err(-ENAMETOOLONG);
 
 	err = check_path(path);
 	if (err)
@@ -9268,6 +9283,9 @@ int bpf_map__pin(struct bpf_map *map, const char *path)
 			pr_warn("map '%s' already pinned\n", bpf_map__name(map));
 			return libbpf_err(-EEXIST);
 		}
+
+		if (strlen(path) >= PATH_MAX)
+			return libbpf_err(-ENAMETOOLONG);
 
 		map->pin_path = strdup(path);
 		if (!map->pin_path) {
@@ -9319,6 +9337,8 @@ int bpf_map__unpin(struct bpf_map *map, const char *path)
 		pr_warn("no path to unpin map '%s' from\n",
 			bpf_map__name(map));
 		return libbpf_err(-EINVAL);
+	} else if (strlen(path) >= PATH_MAX) {
+		return libbpf_err(-ENAMETOOLONG);
 	}
 
 	err = check_path(path);
@@ -9339,7 +9359,13 @@ int bpf_map__set_pin_path(struct bpf_map *map, const char *path)
 {
 	char *new = NULL;
 
+	if (!map)
+		return libbpf_err(-EINVAL);
+
 	if (path) {
+		if (strlen(path) >= PATH_MAX)
+			return libbpf_err(-ENAMETOOLONG);
+
 		new = strdup(path);
 		if (!new)
 			return libbpf_err(-errno);
@@ -11431,6 +11457,12 @@ int bpf_link__detach(struct bpf_link *link)
 int bpf_link__pin(struct bpf_link *link, const char *path)
 {
 	int err;
+
+	if (!link || !path)
+		return libbpf_err(-EINVAL);
+
+	if (strlen(path) >= PATH_MAX)
+		return libbpf_err(-ENAMETOOLONG);
 
 	if (link->pin_path)
 		return libbpf_err(-EBUSY);
