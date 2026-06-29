@@ -21,7 +21,6 @@ MODULE_LICENSE("GPL");
 
 struct dc_pad {
 	struct input_dev *dev;
-	struct maple_device *mdev;
 };
 
 static void dc_pad_callback(struct mapleq *mq)
@@ -64,19 +63,19 @@ static void dc_pad_callback(struct mapleq *mq)
 
 static int dc_pad_open(struct input_dev *dev)
 {
-	struct dc_pad *pad = dev_get_platdata(&dev->dev);
+	struct maple_device *mdev = input_get_drvdata(dev);
 
-	maple_getcond_callback(pad->mdev, dc_pad_callback, HZ/20,
-		MAPLE_FUNC_CONTROLLER);
+	maple_getcond_callback(mdev, dc_pad_callback, HZ / 20,
+			       MAPLE_FUNC_CONTROLLER);
 
 	return 0;
 }
 
 static void dc_pad_close(struct input_dev *dev)
 {
-	struct dc_pad *pad = dev_get_platdata(&dev->dev);
+	struct maple_device *mdev = input_get_drvdata(dev);
 
-	maple_getcond_callback(pad->mdev, NULL, 0, MAPLE_FUNC_CONTROLLER);
+	maple_getcond_callback(mdev, NULL, 0, MAPLE_FUNC_CONTROLLER);
 }
 
 /* allow the controller to be used */
@@ -110,9 +109,9 @@ static int probe_maple_controller(struct device *dev)
 	}
 
 	pad->dev = idev;
-	pad->mdev = mdev;
 
 	maple_set_drvdata(mdev, pad);
+	input_set_drvdata(idev, mdev);
 
 	idev->open = dc_pad_open;
 	idev->close = dc_pad_close;
@@ -131,7 +130,6 @@ static int probe_maple_controller(struct device *dev)
 	if (idev->keybit[BIT_WORD(BTN_JOYSTICK)])
 		idev->evbit[0] |= BIT_MASK(EV_KEY);
 
-	idev->dev.platform_data = pad;
 	idev->dev.parent = &mdev->dev;
 	idev->name = mdev->product_name;
 	idev->id.bustype = BUS_HOST;
