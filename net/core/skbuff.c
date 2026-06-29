@@ -83,6 +83,7 @@
 #include <net/page_pool/helpers.h>
 #include <net/psp/types.h>
 #include <net/dropreason.h>
+#include <linux/bpf.h>
 #include <net/xdp_sock.h>
 
 #include <linux/uaccess.h>
@@ -6284,7 +6285,7 @@ void skb_scrub_packet(struct sk_buff *skb, bool xnet)
 	skb->skb_iif = 0;
 	skb->ignore_df = 0;
 	skb_dst_drop(skb);
-	skb_ext_reset(skb);
+	skb_ext_scrub(skb);
 	nf_reset_ct(skb);
 	nf_reset_trace(skb);
 
@@ -7258,6 +7259,20 @@ void __skb_ext_del(struct sk_buff *skb, enum skb_ext_id id)
 }
 EXPORT_SYMBOL(__skb_ext_del);
 
+static void skb_ext_put_each(struct skb_ext *ext, unsigned int skip)
+{
+#ifdef CONFIG_XFRM
+	if (!(skip & (1 << SKB_EXT_SEC_PATH)) &&
+	    __skb_ext_exist(ext, SKB_EXT_SEC_PATH))
+		skb_ext_put_sp(skb_ext_get_ptr(ext, SKB_EXT_SEC_PATH));
+#endif
+#ifdef CONFIG_MCTP_FLOWS
+	if (!(skip & (1 << SKB_EXT_MCTP)) &&
+	    __skb_ext_exist(ext, SKB_EXT_MCTP))
+		skb_ext_put_mctp(skb_ext_get_ptr(ext, SKB_EXT_MCTP));
+#endif
+}
+
 void __skb_ext_put(struct skb_ext *ext)
 {
 	/* If this is last clone, nothing can increment
@@ -7269,18 +7284,61 @@ void __skb_ext_put(struct skb_ext *ext)
 	if (!refcount_dec_and_test(&ext->refcnt))
 		return;
 free_now:
-#ifdef CONFIG_XFRM
-	if (__skb_ext_exist(ext, SKB_EXT_SEC_PATH))
-		skb_ext_put_sp(skb_ext_get_ptr(ext, SKB_EXT_SEC_PATH));
-#endif
-#ifdef CONFIG_MCTP_FLOWS
-	if (__skb_ext_exist(ext, SKB_EXT_MCTP))
-		skb_ext_put_mctp(skb_ext_get_ptr(ext, SKB_EXT_MCTP));
-#endif
-
+	skb_ext_put_each(ext, 0);
 	kmem_cache_free(skbuff_ext_cache, ext);
 }
 EXPORT_SYMBOL(__skb_ext_put);
+
+static unsigned int skb_ext_no_scrub(struct skb_ext *ext)
+{
+	unsigned int keep = 0;
+
+#if IS_ENABLED(CONFIG_BPF_SKB_EXT)
+	if (__skb_ext_exist(ext, SKB_EXT_BPF))
+		keep |= (1 << SKB_EXT_BPF);
+#endif
+	return keep;
+}
+
+static int __skb_ext_scrub(struct sk_buff *skb, unsigned int keep)
+{
+	struct skb_ext *old = skb->extensions;
+	struct skb_ext *ext;
+	int i;
+
+	if (refcount_read(&old->refcnt) == 1) {
+		skb_ext_put_each(old, keep);
+		ext = old;
+	} else {
+		ext = skb_ext_maybe_cow(old, keep);
+		if (!ext)
+			return -ENOMEM;
+		skb->extensions = ext;
+	}
+
+	for (i = 0; i < SKB_EXT_NUM; i++) {
+		if (!(keep & (1 << i)))
+			ext->offset[i] = 0;
+	}
+	skb->active_extensions = keep;
+	return 0;
+}
+
+void skb_ext_scrub(struct sk_buff *skb)
+{
+	unsigned int keep;
+
+	if (likely(!skb->active_extensions))
+		return;
+
+	keep = skb_ext_no_scrub(skb->extensions);
+	if (keep && !__skb_ext_scrub(skb, keep))
+		return;
+
+	skb_ext_reset(skb);
+}
+EXPORT_SYMBOL(skb_ext_scrub);
+
 #endif /* CONFIG_SKB_EXTENSIONS */
 
 static void kfree_skb_napi_cache(struct sk_buff *skb)

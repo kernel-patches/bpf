@@ -1528,7 +1528,10 @@ void udp_splice_eof(struct socket *sock)
  * We need to preserve secpath, if present, to eventually process
  * IP_CMSG_PASSSEC at recvmsg() time.
  *
- * Other extensions can be cleared.
+ * Other extensions get scrubbed. If any extension survives scrubbing
+ * (e.g. SKB_EXT_BPF), the skb must stay stateful, so that
+ * skb_consume_udp() releases it via skb_release_head_state() instead of
+ * leaking the extension slab on the __consume_stateless_skb() path.
  */
 static bool udp_try_make_stateless(struct sk_buff *skb)
 {
@@ -1536,8 +1539,8 @@ static bool udp_try_make_stateless(struct sk_buff *skb)
 		return true;
 
 	if (!secpath_exists(skb)) {
-		skb_ext_reset(skb);
-		return true;
+		skb_ext_scrub(skb);
+		return !skb_has_extensions(skb);
 	}
 
 	return false;
