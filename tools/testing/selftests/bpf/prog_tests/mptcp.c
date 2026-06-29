@@ -264,7 +264,7 @@ static int verify_mptcpify(int server_fd, int client_fd)
 	return err;
 }
 
-static int run_mptcpify(int cgroup_fd)
+static int run_mptcpify(int cgroup_fd, int type)
 {
 	int server_fd, client_fd, err = 0;
 	struct mptcpify *mptcpify_skel;
@@ -280,7 +280,7 @@ static int run_mptcpify(int cgroup_fd)
 		goto out;
 
 	/* without MPTCP */
-	server_fd = start_server(AF_INET, SOCK_STREAM, NULL, 0, 0);
+	server_fd = start_server(AF_INET, type, NULL, 0, 0);
 	if (!ASSERT_GE(server_fd, 0, "start_server")) {
 		err = -EIO;
 		goto out;
@@ -307,7 +307,18 @@ out:
 static void test_mptcpify(void)
 {
 	struct netns_obj *netns = NULL;
-	int cgroup_fd;
+	int cgroup_fd, i;
+	int types[] = {
+		SOCK_STREAM,
+		/* userspace sets these flags together with the type, and the
+		 * BPF prog must still upgrade the socket to MPTCP. See
+		 * update_socket_protocol() in net/socket.c, which runs before
+		 * the type is masked with SOCK_TYPE_MASK.
+		 */
+		SOCK_STREAM | SOCK_CLOEXEC,
+		SOCK_STREAM | SOCK_NONBLOCK,
+		SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK,
+	};
 
 	cgroup_fd = test__join_cgroup("/mptcpify");
 	if (!ASSERT_GE(cgroup_fd, 0, "test__join_cgroup"))
@@ -317,7 +328,8 @@ static void test_mptcpify(void)
 	if (!ASSERT_OK_PTR(netns, "netns_new"))
 		goto fail;
 
-	ASSERT_OK(run_mptcpify(cgroup_fd), "run_mptcpify");
+	for (i = 0; i < ARRAY_SIZE(types); i++)
+		ASSERT_OK(run_mptcpify(cgroup_fd, types[i]), "run_mptcpify");
 
 fail:
 	netns_free(netns);
