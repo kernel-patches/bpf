@@ -7,7 +7,6 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/slab.h>
 #include <linux/input.h>
 #include <linux/module.h>
 #include <linux/init.h>
@@ -167,17 +166,13 @@ static int probe_maple_kbd(struct device *dev)
 
 	mdev = to_maple_dev(dev);
 
-	kbd = kzalloc_obj(*kbd);
-	if (!kbd) {
-		error = -ENOMEM;
-		goto fail;
-	}
+	kbd = devm_kzalloc(&mdev->dev, sizeof(*kbd), GFP_KERNEL);
+	if (!kbd)
+		return -ENOMEM;
 
-	idev = input_allocate_device();
-	if (!idev) {
-		error = -ENOMEM;
-		goto fail_idev_alloc;
-	}
+	idev = devm_input_allocate_device(&mdev->dev);
+	if (!idev)
+		return -ENOMEM;
 
 	kbd->dev = idev;
 	memcpy(kbd->keycode, dc_kbd_keycode, sizeof(kbd->keycode));
@@ -191,7 +186,6 @@ static int probe_maple_kbd(struct device *dev)
 	idev->keycodesize = sizeof(unsigned short);
 	idev->keycodemax = ARRAY_SIZE(kbd->keycode);
 	idev->id.bustype = BUS_HOST;
-	idev->dev.parent = &mdev->dev;
 	idev->open = dc_kbd_open;
 	idev->close = dc_kbd_close;
 
@@ -203,15 +197,9 @@ static int probe_maple_kbd(struct device *dev)
 
 	error = input_register_device(idev);
 	if (error)
-		goto fail_register;
-	return error;
+		return error;
 
-fail_register:
-	input_free_device(idev);
-fail_idev_alloc:
-	kfree(kbd);
-fail:
-	return error;
+	return 0;
 }
 
 static int remove_maple_kbd(struct device *dev)
@@ -222,7 +210,6 @@ static int remove_maple_kbd(struct device *dev)
 	guard(mutex)(&maple_keyb_mutex);
 
 	input_unregister_device(kbd->dev);
-	kfree(kbd);
 
 	return 0;
 }
