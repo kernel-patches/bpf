@@ -227,42 +227,6 @@ static void check_incorrect_index(void)
 	check_mid_insn_index();
 }
 
-static int set_bpf_jit_harden(char *level)
-{
-	char old_level;
-	int err = -1;
-	int fd = -1;
-
-	fd = open("/proc/sys/net/core/bpf_jit_harden", O_RDWR | O_NONBLOCK);
-	if (fd < 0) {
-		ASSERT_FAIL("open .../bpf_jit_harden returned %d (errno=%d)", fd, errno);
-		return -1;
-	}
-
-	err = read(fd, &old_level, 1);
-	if (err != 1) {
-		ASSERT_FAIL("read from .../bpf_jit_harden returned %d (errno=%d)", err, errno);
-		err = -1;
-		goto end;
-	}
-
-	lseek(fd, 0, SEEK_SET);
-
-	err = write(fd, level, 1);
-	if (err != 1) {
-		ASSERT_FAIL("write to .../bpf_jit_harden returned %d (errno=%d)", err, errno);
-		err = -1;
-		goto end;
-	}
-
-	err = 0;
-	*level = old_level;
-end:
-	if (fd >= 0)
-		close(fd);
-	return err;
-}
-
 static void check_blindness(void)
 {
 	struct bpf_insn insns[] = {
@@ -272,7 +236,7 @@ static void check_blindness(void)
 		BPF_MOV64_IMM(BPF_REG_0, 1),
 		BPF_EXIT_INSN(),
 	};
-	int prog_fd = -1, map_fd;
+	int prog_fd = -1, map_fd, ret;
 	struct bpf_insn_array_value val = {};
 	char bpf_jit_harden = '@'; /* non-exizsting value */
 	int i;
@@ -291,7 +255,8 @@ static void check_blindness(void)
 		goto cleanup;
 
 	bpf_jit_harden = '2';
-	if (set_bpf_jit_harden(&bpf_jit_harden)) {
+	ret = set_bpf_jit_harden(&bpf_jit_harden);
+	if (!ASSERT_OK(ret, "set bpf_jit_harden")) {
 		bpf_jit_harden = '@'; /* open, read or write failed => no write was done */
 		goto cleanup;
 	}
@@ -313,7 +278,8 @@ static void check_blindness(void)
 cleanup:
 	/* restore the old one */
 	if (bpf_jit_harden != '@')
-		set_bpf_jit_harden(&bpf_jit_harden);
+		ASSERT_OK(set_bpf_jit_harden(&bpf_jit_harden),
+			  "restore hardening configuration");
 
 	close(prog_fd);
 	close(map_fd);
