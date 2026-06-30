@@ -951,7 +951,7 @@ void notrace bpf_mem_cache_free_rcu(struct bpf_mem_alloc *ma, void *ptr)
 	if (!ptr)
 		return;
 
-	unit_free_rcu(this_cpu_ptr(ma->cache), ptr);
+	unit_free_rcu(per_cpu_ptr(ma->cache, raw_smp_processor_id()), ptr);
 }
 
 /* Directly does a kfree() without putting 'ptr' back to the free_llist
