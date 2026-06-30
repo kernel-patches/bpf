@@ -6733,31 +6733,6 @@ static int check_stack_range_initialized(
 	}
 
 	if (meta && meta->raw_mode) {
-		/* Ensure we won't be overwriting dynptrs when simulating byte
-		 * by byte access in check_helper_call using meta.access_size.
-		 * This would be a problem if we have a helper in the future
-		 * which takes:
-		 *
-		 *	helper(uninit_mem, len, dynptr)
-		 *
-		 * Now, uninint_mem may overlap with dynptr pointer. Hence, it
-		 * may end up writing to dynptr itself when touching memory from
-		 * arg 1. This can be relaxed on a case by case basis for known
-		 * safe cases, but reject due to the possibilitiy of aliasing by
-		 * default.
-		 */
-		for (i = min_off; i < max_off + access_size; i++) {
-			int stack_off = -i - 1;
-
-			spi = bpf_get_spi(i);
-			/* raw_mode may write past allocated_stack */
-			if (state->allocated_stack <= stack_off)
-				continue;
-			if (state->stack[spi].slot_type[stack_off % BPF_REG_SIZE] == STACK_DYNPTR) {
-				verbose(env, "potential write to dynptr at off=%d disallowed\n", i);
-				return -EACCES;
-			}
-		}
 		meta->access_size = access_size;
 		meta->regno = reg_from_argno(argno);
 		return 0;

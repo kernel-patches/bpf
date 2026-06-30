@@ -1112,7 +1112,7 @@ int dynptr_overwrite_ref(void *ctx)
 
 /* Reject writes to dynptr slot from bpf_dynptr_read */
 SEC("?raw_tp")
-__failure __msg("potential write to dynptr at off=-16")
+__failure __msg("cannot overwrite referenced dynptr")
 int dynptr_read_into_slot(void *ctx)
 {
 	union {
@@ -1558,7 +1558,7 @@ int BPF_PROG(skb_invalid_ctx_fexit, void *skb)
 
 /* Reject writes to dynptr slot for uninit arg */
 SEC("?raw_tp")
-__failure __msg("potential write to dynptr at off=-16")
+__failure __msg("cannot overwrite referenced dynptr")
 int uninit_write_into_slot(void *ctx)
 {
 	struct {
