@@ -277,10 +277,33 @@ static int mlx5e_xdp_rx_vlan_tag(const struct xdp_md *ctx, __be16 *vlan_proto,
 	return 0;
 }
 
+static int mlx5e_xdp_rx_csum(const struct xdp_md *ctx,
+			     enum xdp_csum_status *csum_status)
+{
+	const struct mlx5e_xdp_buff *_ctx = (void *)ctx;
+	const struct mlx5_cqe64 *cqe = _ctx->cqe;
+
+	if (unlikely(!(_ctx->xdp.rxq->dev->features & NETIF_F_RXCSUM)))
+		return -ENODATA;
+
+	/* Same verdict the normal RX path uses for CHECKSUM_UNNECESSARY.
+	 * CHECKSUM_COMPLETE is deliberately not surfaced here: it is disabled
+	 * while an XDP program is loaded (see mlx5e_handle_csum()).
+	 */
+	if (likely((cqe->hds_ip_ext & CQE_L3_OK) &&
+		   (cqe->hds_ip_ext & CQE_L4_OK)))
+		*csum_status = XDP_CSUM_VERIFIED;
+	else
+		*csum_status = XDP_CSUM_NONE;
+
+	return 0;
+}
+
 const struct xdp_metadata_ops mlx5e_xdp_metadata_ops = {
 	.xmo_rx_timestamp		= mlx5e_xdp_rx_timestamp,
 	.xmo_rx_hash			= mlx5e_xdp_rx_hash,
 	.xmo_rx_vlan_tag		= mlx5e_xdp_rx_vlan_tag,
+	.xmo_rx_csum			= mlx5e_xdp_rx_csum,
 };
 
 struct mlx5e_xsk_tx_complete {
