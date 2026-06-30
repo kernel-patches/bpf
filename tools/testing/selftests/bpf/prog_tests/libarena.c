@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: LGPL-2.1 OR BSD-2-Clause
 /* Copyright (c) 2026 Meta Platforms, Inc. and affiliates. */
 #include <test_progs.h>
+
+#ifdef HAS_BPF_ARENA
 #include <unistd.h>
 
 #include <libarena/common.h>
@@ -198,7 +200,7 @@ static void run_libarena_parallel_test(struct libarena *skel, struct bpf_program
 	run_libarena_parallel_fini(skel, name, prefixlen);
 }
 
-void test_libarena(void)
+static void run_test(void)
 {
 	struct arena_alloc_reserve_args args;
 	struct libarena *skel;
@@ -250,4 +252,19 @@ void test_libarena(void)
 
 out:
 	libarena__destroy(skel);
+}
+
+#endif /* HAS_BPF_ARENA */
+
+/*
+ * Run the test only if the BPF backend can compile the arena programs
+ * libarena depends on (see CLANG_HAS_ARENA_CMPXCHG32 in the Makefile).
+ */
+void test_libarena(void)
+{
+#ifdef HAS_BPF_ARENA
+	run_test();
+#else
+	test__skip();
+#endif
 }

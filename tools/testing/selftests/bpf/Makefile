@@ -91,6 +91,17 @@ CLANG_HAS_ARENA_ASAN := $(shell echo 'int x;' | \
 	-mllvm -asan-shadow-addr-space=1 \
 	-x c -c - -o /dev/null 2>/dev/null && echo 1)
 
+# The arena qspinlock used by libarena performs a 32-bit atomic cmpxchg on an
+# arena (address space 1) pointer. Not every LLVM BPF backend can select it;
+# older releases bail out with "unsupported atomic operation, please use 64 bit
+# version", which aborts the whole selftests build. Probe for the operation and
+# skip libarena (and its dependent tests) when the backend cannot handle it.
+CLANG_HAS_ARENA_CMPXCHG32 := $(shell printf '%s\n' \
+	'struct s { int counter; };' \
+	'int f(struct s __attribute__((address_space(1))) *l, int o, int n)' \
+	'{ return __sync_val_compare_and_swap(&l->counter, o, n); }' | \
+	$(CLANG) --target=bpf -O2 -x c -c - -o /dev/null 2>/dev/null && echo 1)
+
 # Order correspond to 'make run_tests' order
 TEST_GEN_PROGS = test_verifier test_tag test_maps test_lru_map test_progs \
 	test_sockmap \
@@ -835,10 +846,13 @@ LIBARENA_BPF_DEPS := $(wildcard libarena/Makefile		\
 				 libarena/selftests/*		\
 				 libarena/*.bpf.o)
 
+ifneq ($(CLANG_HAS_ARENA_CMPXCHG32),)
 LIBARENA_SKEL := libarena/libarena.skel.h
+CFLAGS += -DHAS_BPF_ARENA
 
 $(LIBARENA_SKEL): $(INCLUDE_DIR)/vmlinux.h $(BPFOBJ) $(LIBARENA_BPF_DEPS)
 	+$(MAKE) -C libarena libarena.skel.h $(LIBARENA_MAKE_ARGS)
+endif
 
 ifneq ($(CLANG_HAS_ARENA_ASAN),)
 LIBARENA_ASAN_SKEL := libarena/libarena_asan.skel.h
