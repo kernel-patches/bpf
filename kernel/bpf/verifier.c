@@ -14211,6 +14211,55 @@ static bool kfunc_spin_allowed(struct bpf_verifier_env *env, s32 func_id, s16 of
 	return *kfunc.flags & KF_SPINLOCK_SAFE;
 }
 
+/*
+ * True if insn calls a helper/kfunc that requires one of its arguments to
+ * be a stack pointer with a constant offset.
+ */
+bool bpf_needs_fixed_stack_off(struct bpf_verifier_env *env, int insn_idx)
+{
+	const struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
+	const struct bpf_func_proto *fn;
+	struct bpf_kfunc_desc *desc;
+	u32 *flags, btf_id;
+	int i;
+
+	if (bpf_helper_call(insn)) {
+		if (bpf_get_helper_proto(env, insn->imm, &fn) < 0)
+			return false;
+	} else if (bpf_pseudo_kfunc_call(insn)) {
+		desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+		if (!desc)
+			return false;
+		fn = &desc->proto;
+	} else {
+		return false;
+	}
+
+	/* Both initialized and uninitialized stack dynptrs need a fixed offset. */
+	for (i = 0; i < ARRAY_SIZE(fn->arg_type); i++)
+		if (arg_type_is_dynptr(fn->arg_type[i]))
+			return true;
+
+	/* vmlinux kfuncs only */
+	if (!bpf_pseudo_kfunc_call(insn) || insn->off != 0)
+		return false;
+	btf_id = insn->imm;
+
+	flags = btf_kfunc_flags(btf_vmlinux, btf_id, env->prog);
+	if (flags && (*flags & (KF_ITER_NEW | KF_ITER_NEXT | KF_ITER_DESTROY)))
+		return true;
+
+	if (btf_id == special_kfunc_list[KF_bpf_res_spin_lock] ||
+	    btf_id == special_kfunc_list[KF_bpf_res_spin_unlock] ||
+	    btf_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave] ||
+	    btf_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore] ||
+	    btf_id == special_kfunc_list[KF_bpf_local_irq_save] ||
+	    btf_id == special_kfunc_list[KF_bpf_local_irq_restore])
+		return true;
+
+	return false;
+}
+
 static bool is_sync_callback_calling_kfunc(u32 btf_id)
 {
 	return is_bpf_rbtree_add_kfunc(btf_id);
