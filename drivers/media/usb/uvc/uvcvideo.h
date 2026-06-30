@@ -456,7 +456,6 @@ struct uvc_streaming {
 	struct list_head list;
 	struct uvc_device *dev;
 	struct uvc_video_chain *chain;
-	atomic_t active;
 
 	struct usb_interface *intf;
 	int intfnum;
