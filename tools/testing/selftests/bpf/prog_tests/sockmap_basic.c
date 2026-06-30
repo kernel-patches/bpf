@@ -1292,6 +1292,64 @@ static int wait_for_fionread(int fd, int expected, unsigned int timeout_ms)
 	return avail;
 }
 
+
+static void test_sockmap_strp_recover_undelivered(void)
+{
+	struct test_sockmap_pass_prog *skel = NULL;
+	int c0 = -1, p0 = -1, c1 = -1, p1 = -1;
+	char buf[10] = "0123456789", rcv[11];
+	int err, map, verdict, parser, sent, recvd, avail, zero = 0;
+
+	skel = test_sockmap_pass_prog__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+
+	if (create_socket_pairs(AF_INET, SOCK_STREAM, &c0, &c1, &p0, &p1))
+		goto out;
+
+	map = bpf_map__fd(skel->maps.sock_map_rx);
+
+	verdict = bpf_program__fd(skel->progs.prog_skb_verdict);
+	err = bpf_prog_attach(verdict, map, BPF_SK_SKB_STREAM_VERDICT, 0);
+	if (!ASSERT_OK(err, "bpf_prog_attach"))
+		goto out;
+
+	parser = bpf_program__fd(skel->progs.prog_skb_verdict_ingress_strp);
+	err = bpf_prog_attach(parser, map, BPF_SK_SKB_STREAM_PARSER, 0);
+	if (!ASSERT_OK(err, "bpf_prog_attach"))
+		goto out;
+
+	err = bpf_map_update_elem(map, &zero, &p1, BPF_ANY);
+	if (!ASSERT_OK(err, "bpf_map_update(p1)"))
+		goto out;
+
+	sent = xsend(c1, buf, sizeof(buf), 0);
+	if (!ASSERT_EQ(sent, sizeof(buf), "xsend(c1) bpf"))
+		goto out;
+
+	avail = wait_for_fionread(p1, sizeof(buf), 1000);
+	if (!ASSERT_EQ(avail, sizeof(buf), "fionread"))
+		goto out;
+
+	err = bpf_map_delete_elem(map, &zero);
+	if (!ASSERT_OK(err, "map_delete(p1)"))
+		goto out;
+
+	sent = xsend(c1, buf, sizeof(buf), 0);
+	if (!ASSERT_EQ(sent, sizeof(buf), "xsend(c1) native"))
+		goto out;
+	recvd = recv_timeout(p1, rcv, sizeof(buf), MSG_DONTWAIT, 1);
+	ASSERT_EQ(recvd, sent, "recv(p1) native after drop");
+
+out:
+	close(c0);
+	close(p0);
+	close(c1);
+	close(p1);
+
+	test_sockmap_pass_prog__destroy(skel);
+}
+
 /* it is used to send data to via native stack and BPF redirecting */
 static void test_sockmap_multi_channels(int sotype)
 {
@@ -1447,6 +1505,8 @@ void test_sockmap_basic(void)
 		test_sockmap_copied_seq(false);
 	if (test__start_subtest("sockmap recover with strp"))
 		test_sockmap_copied_seq(true);
+	if (test__start_subtest("sockmap strp recover undelivered"))
+		test_sockmap_strp_recover_undelivered();
 	if (test__start_subtest("sockmap tcp multi channels"))
 		test_sockmap_multi_channels(SOCK_STREAM);
 	if (test__start_subtest("sockmap udp multi channels"))
