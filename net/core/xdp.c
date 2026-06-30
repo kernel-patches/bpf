@@ -965,6 +965,29 @@ __bpf_kfunc int bpf_xdp_metadata_rx_vlan_tag(const struct xdp_md *ctx,
 }
 
 /**
+ * bpf_xdp_metadata_rx_csum - Read the device's RX checksum verdict.
+ * @ctx: XDP context pointer.
+ * @csum_status: Destination pointer for the checksum status.
+ *
+ * Report what the hardware concluded about the packet's checksum, so the
+ * program can decide whether to assert it (e.g. via bpf_xdp_assert_rx_csum()
+ * before a cpumap redirect) instead of having the stack validate it again.
+ *
+ * On ``XDP_CSUM_VERIFIED`` the device has checked the L4 checksum and it is
+ * correct. ``XDP_CSUM_NONE`` means the device did not validate it.
+ *
+ * Return:
+ * * Returns 0 on success or ``-errno`` on error.
+ * * ``-EOPNOTSUPP`` : device driver doesn't implement kfunc
+ * * ``-ENODATA``    : checksum information is not available
+ */
+__bpf_kfunc int bpf_xdp_metadata_rx_csum(const struct xdp_md *ctx,
+					 enum xdp_csum_status *csum_status)
+{
+	return -EOPNOTSUPP;
+}
+
+/**
  * bpf_xdp_assert_rx_csum - Assert the packet's L4 checksum is correct.
  * @ctx: XDP context pointer.
  *
