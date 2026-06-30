@@ -715,6 +715,15 @@ int tcp_bpf_update_proto(struct sock *sk, struct sk_psock *psock, bool restore)
 	}
 
 	if (restore) {
+#if IS_ENABLED(CONFIG_BPF_STREAM_PARSER)
+		/*
+		 * Settle the copied_seq rollback for the now-discarded
+		 * ingress_msg data so it cannot trail the receive queue
+		 */
+		if (sk_psock_test_state(psock, SK_PSOCK_RX_STRP_ENABLED) &&
+		    before(tcp_sk(sk)->copied_seq, psock->copied_seq))
+			WRITE_ONCE(tcp_sk(sk)->copied_seq, psock->copied_seq);
+#endif
 		if (inet_csk_has_ulp(sk)) {
 			/* TLS does not have an unhash proto in SW cases,
 			 * but we need to ensure we stop using the sock_map
