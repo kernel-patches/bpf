@@ -3299,6 +3299,7 @@ static int __rhtab_map_lookup_and_delete_batch(struct bpf_map *map,
 	dst_val = values;
 	total = 0;
 
+	bpf_disable_instrumentation();
 	rcu_read_lock();
 
 	/*
@@ -3313,6 +3314,7 @@ static int __rhtab_map_lookup_and_delete_batch(struct bpf_map *map,
 		elem = rhtab_lookup_elem(map, cursor);
 		if (!elem) {
 			rcu_read_unlock();
+			bpf_enable_instrumentation();
 			ret = -EAGAIN;
 			goto free;
 		}
@@ -3350,6 +3352,7 @@ static int __rhtab_map_lookup_and_delete_batch(struct bpf_map *map,
 	}
 
 	rcu_read_unlock();
+	bpf_enable_instrumentation();
 
 	if (total == 0) {
 		ret = -ENOENT;
