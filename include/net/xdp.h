@@ -81,6 +81,11 @@ enum xdp_buff_flags {
 	 * XDP program is not attached.
 	 */
 	XDP_FLAGS_FRAGS_UNREADABLE	= BIT(2),
+	/* XDP program asserts the L4 checksum is correct, so the skb built
+	 * out of this frame (e.g. on the cpumap redirect path) can be marked
+	 * CHECKSUM_UNNECESSARY instead of being validated in software.
+	 */
+	XDP_FLAGS_RX_CSUM_UNNECESSARY	= BIT(3),
 };
 
 struct xdp_buff {
@@ -314,6 +319,12 @@ static __always_inline u32
 xdp_frame_get_skb_flags(const struct xdp_frame *frame)
 {
 	return frame->flags;
+}
+
+static __always_inline bool
+xdp_frame_rx_csum_unnecessary(const struct xdp_frame *frame)
+{
+	return !!(frame->flags & XDP_FLAGS_RX_CSUM_UNNECESSARY);
 }
 
 #define XDP_BULK_QUEUE_SIZE	16

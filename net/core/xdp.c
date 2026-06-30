@@ -830,8 +830,11 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 	/* Essential SKB info: protocol and skb->dev */
 	skb->protocol = eth_type_trans(skb, dev);
 
+	/* HW checksum info, if the XDP program asserted it */
+	if (xdp_frame_rx_csum_unnecessary(xdpf))
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+
 	/* Optional SKB info, currently missing:
-	 * - HW checksum info		(skb->ip_summed)
 	 * - HW RX hash			(skb_set_hash)
 	 * - RX ring dev queue index	(skb_record_rx_queue)
 	 */
@@ -961,6 +964,31 @@ __bpf_kfunc int bpf_xdp_metadata_rx_vlan_tag(const struct xdp_md *ctx,
 	return -EOPNOTSUPP;
 }
 
+/**
+ * bpf_xdp_assert_rx_csum - Assert the packet's L4 checksum is correct.
+ * @ctx: XDP context pointer.
+ *
+ * Mark the frame so that an skb later built out of it (e.g. on the cpumap
+ * redirect path, see __xdp_build_skb_from_frame()) is set to
+ * CHECKSUM_UNNECESSARY instead of being validated in software when it enters
+ * the stack.
+ *
+ * This is an assertion made by the XDP program: the kernel cannot verify it.
+ * The program takes responsibility for the checksum being correct, the same
+ * way it is already trusted to rewrite arbitrary packet contents. If the
+ * program modifies L4 data after calling this kfunc the assertion may no
+ * longer hold.
+ *
+ * Return: 0.
+ */
+__bpf_kfunc int bpf_xdp_assert_rx_csum(struct xdp_md *ctx)
+{
+	struct xdp_buff *xdp = (struct xdp_buff *)ctx;
+
+	xdp->flags |= XDP_FLAGS_RX_CSUM_UNNECESSARY;
+	return 0;
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(xdp_metadata_kfunc_ids)
@@ -972,6 +1000,18 @@ BTF_KFUNCS_END(xdp_metadata_kfunc_ids)
 static const struct btf_kfunc_id_set xdp_metadata_kfunc_set = {
 	.owner = THIS_MODULE,
 	.set   = &xdp_metadata_kfunc_ids,
+};
+
+/* Generic XDP kfuncs that need no driver support and are therefore not
+ * dev-bound (unlike the rx-metadata kfuncs above).
+ */
+BTF_KFUNCS_START(xdp_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_xdp_assert_rx_csum)
+BTF_KFUNCS_END(xdp_kfunc_ids)
+
+static const struct btf_kfunc_id_set xdp_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set   = &xdp_kfunc_ids,
 };
 
 BTF_ID_LIST(xdp_metadata_kfunc_ids_unsorted)
@@ -992,7 +1032,13 @@ bool bpf_dev_bound_kfunc_id(u32 btf_id)
 
 static int __init xdp_metadata_init(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &xdp_metadata_kfunc_set);
+	int ret;
+
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &xdp_metadata_kfunc_set);
+	if (ret)
+		return ret;
+
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &xdp_kfunc_set);
 }
 late_initcall(xdp_metadata_init);
 
