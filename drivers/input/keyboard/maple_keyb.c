@@ -10,7 +10,7 @@
 #include <linux/input.h>
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/timer.h>
+#include <linux/jiffies.h>
 #include <linux/maple.h>
 
 /* Very simple mutex to ensure proper cleanup */
@@ -50,7 +50,7 @@ static const unsigned short dc_kbd_keycode[NR_SCANCODES] = {
 	KEY_F23, KEY_F24, KEY_OPEN, KEY_HELP, KEY_PROPS, KEY_FRONT, KEY_STOP,
 	KEY_AGAIN, KEY_UNDO, KEY_CUT, KEY_COPY, KEY_PASTE, KEY_FIND, KEY_MUTE,
 	KEY_VOLUMEUP, KEY_VOLUMEDOWN, KEY_RESERVED, KEY_RESERVED, KEY_RESERVED,
-	KEY_KPCOMMA, KEY_RESERVED, KEY_RO, KEY_KATAKANAHIRAGANA , KEY_YEN,
+	KEY_KPCOMMA, KEY_RESERVED, KEY_RO, KEY_KATAKANAHIRAGANA, KEY_YEN,
 	KEY_HENKAN, KEY_MUHENKAN, KEY_KPJPCOMMA, KEY_RESERVED, KEY_RESERVED,
 	KEY_RESERVED, KEY_HANGEUL, KEY_HANJA, KEY_KATAKANA, KEY_HIRAGANA,
 	KEY_ZENKAKUHANKAKU, KEY_RESERVED, KEY_RESERVED, KEY_RESERVED,
@@ -94,15 +94,16 @@ static void dc_scan_kbd(struct dc_kbd *kbd)
 	for (i = 2; i < 8; i++) {
 		ptr = memchr(kbd->new + 2, kbd->old[i], 6);
 		code = kbd->old[i];
-		if (code > 3 && ptr == NULL) {
+		if (code > 3 && !ptr) {
 			keycode = kbd->keycode[code];
 			if (keycode) {
 				input_event(dev, EV_MSC, MSC_SCAN, code);
 				input_report_key(dev, keycode, 0);
-			} else
+			} else {
 				dev_dbg(&dev->dev,
 					"Unknown key (scancode %#x) released.",
 					code);
+			}
 		}
 		ptr = memchr(kbd->old + 2, kbd->new[i], 6);
 		code = kbd->new[i];
@@ -111,10 +112,11 @@ static void dc_scan_kbd(struct dc_kbd *kbd)
 			if (keycode) {
 				input_event(dev, EV_MSC, MSC_SCAN, code);
 				input_report_key(dev, keycode, 1);
-			} else
+			} else {
 				dev_dbg(&dev->dev,
 					"Unknown key (scancode %#x) pressed.",
 					code);
+			}
 		}
 	}
 	input_sync(dev);
