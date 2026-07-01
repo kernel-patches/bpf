@@ -1542,7 +1542,7 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bp
 			continue;
 
 		if (env)
-			tmp = bpf_patch_insn_data(env, i, insn_buff, rewritten);
+			tmp = bpf_patch_insn_data(env, i, insn_buff, rewritten, rewritten - 1);
 		else
 			tmp = bpf_patch_insn_single(clone, i, insn_buff, rewritten);
 
