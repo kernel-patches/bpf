@@ -2184,12 +2184,20 @@ static irqreturn_t macb_interrupt(int irq, void *dev_id)
 	struct net_device *netdev = bp->netdev;
 	u32 status;
 
-	status = queue_readl(queue, ISR);
-
-	if (unlikely(!status))
-		return IRQ_NONE;
+	/* detect spurious interrupts without grabbing bp->lock */
+	if (bp->caps & MACB_CAPS_ISR_CLEAR_ON_WRITE) {
+		status = queue_readl(queue, ISR);
+		if (unlikely(!status))
+			return IRQ_NONE;
+	}
 
 	spin_lock(&bp->lock);
+
+	status = queue_readl(queue, ISR);
+	if (unlikely(!status)) {
+		spin_unlock(&bp->lock);
+		return IRQ_NONE;
+	}
 
 	while (status) {
 		/* close possible race with dev_close */
