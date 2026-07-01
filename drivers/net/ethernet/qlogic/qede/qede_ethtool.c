@@ -618,10 +618,10 @@ static void qede_get_drvinfo(struct net_device *ndev,
 	if ((strlen(storm) + strlen("[storm]")) <
 	    sizeof(info->version))
 		snprintf(info->version, sizeof(info->version),
-			 "[storm %s]", storm);
+			 "[storm %.16s]", storm);
 	else
 		snprintf(info->version, sizeof(info->version),
-			 "%s", storm);
+			 "%.16s", storm);
 
 	if (edev->dev_info.common.mbi_version) {
 		snprintf(mbi, ETHTOOL_FWVERS_LEN, "%d.%d.%d",
@@ -632,10 +632,10 @@ static void qede_get_drvinfo(struct net_device *ndev,
 			 (edev->dev_info.common.mbi_version &
 			  QED_MBI_VERSION_0_MASK) >> QED_MBI_VERSION_0_OFFSET);
 		snprintf(info->fw_version, sizeof(info->fw_version),
-			 "mbi %s [mfw %s]", mbi, mfw);
+			 "mbi %.10s [mfw %.10s]", mbi, mfw);
 	} else {
 		snprintf(info->fw_version, sizeof(info->fw_version),
-			 "mfw %s", mfw);
+			 "mfw %.16s", mfw);
 	}
 
 	strscpy(info->bus_info, pci_name(edev->pdev), sizeof(info->bus_info));
