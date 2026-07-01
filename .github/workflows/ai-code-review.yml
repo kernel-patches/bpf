@@ -1,0 +1,192 @@
+name: AI Code Review
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+  pull-requests: write
+
+on:
+  pull_request:
+    types: [opened, review_requested]
+
+jobs:
+  get-commits:
+    # This codition is an indicator that we are running in a context of PR owned by kernel-patches org
+    if: ${{ github.repository == 'kernel-patches/bpf' && vars.AWS_REGION }}
+    runs-on:
+      - ${{ format('codebuild-bpf-ci-{0}-{1}', github.run_id, github.run_attempt) }}
+      - image:custom-linux-ghcr.io/kernel-patches/runner:kbuilder-debian-x86_64
+      - instance-size:small
+    continue-on-error: true
+    outputs:
+      commits: ${{ steps.get-commits.outputs.commits }}
+    steps:
+
+      - name: Download Linux source tree
+        uses: libbpf/ci/get-linux-source@v4
+        with:
+          repo: ${{ github.event.pull_request.head.repo.clone_url }}
+          rev: ${{ github.event.pull_request.head.sha }}
+          dest: .kernel
+        env:
+          REFERENCE_REPO_PATH: /libbpfci/mirrors/linux
+          FETCH_DEPTH: 100
+
+      # Get the list of commits and trigger a review job for each separate commit
+      # As a safeguard, check no more than the first 50 commits
+      - name: Get PR commits
+        id: get-commits
+        run: |
+          cd .kernel
+          tmp=$(mktemp)
+          git rev-list ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }} | head -n 50 > pr_commits.txt
+          cat pr_commits.txt | jq -R -s -c 'split("\n")[:-1]' > $tmp
+          echo "commits=$(cat $tmp)" >> $GITHUB_OUTPUT
+
+  ai-review:
+    needs: get-commits
+    runs-on:
+      - ${{ format('codebuild-bpf-ci-{0}-{1}', github.run_id, github.run_attempt) }}
+      - image:custom-linux-ghcr.io/kernel-patches/runner:ai-review
+      - instance-size:large
+    strategy:
+      matrix:
+        commit: ${{ fromJson(needs.get-commits.outputs.commits) }}
+      fail-fast: false
+    env:
+      AWS_REGION: us-west-2
+    steps:
+      - name: Checkout CI code
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            .github
+            ci
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.KP_REVIEW_BOT_APP_ID }}
+          private-key: ${{ secrets.KP_REVIEW_BOT_APP_PRIVATE_KEY }}
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_BEDROCK_ROLE }}
+          aws-region: us-west-2
+
+      - name: Set up .claude/settings.json
+        shell: bash
+        run: |
+          mkdir -p ~/.claude
+          cp ci/claude/settings.json ~/.claude/settings.json
+
+      - name: Download Linux source tree
+        uses: libbpf/ci/get-linux-source@v4
+        with:
+          repo: ${{ github.event.pull_request.head.repo.clone_url }}
+          rev: ${{ github.event.pull_request.head.sha }}
+          dest: .kernel
+        env:
+          REFERENCE_REPO_PATH: /libbpfci/mirrors/linux
+          FETCH_DEPTH: 100
+
+      # This manipulation is necessary to make sure that
+      # ${{ github.workspace }} is the root of the Linux git repo
+      - name: Move linux source in place
+        shell: bash
+        run: |
+          rm -rf .git .github ci
+          cd .kernel
+          mv -t .. $(ls -A)
+          cd ..
+          rmdir .kernel
+
+      - name: semcode-index
+        shell: bash
+        run: |
+          git remote add bpf-next https://git.kernel.org/pub/scm/linux/kernel/git/bpf/bpf-next.git
+          git fetch bpf-next
+          git checkout ${{ matrix.commit }} -b patch-series.local
+          MERGE_BASE=$(git merge-base bpf-next/master HEAD)
+          rm -rf /ci/.semcode.db/lore
+          ln -s /ci/.semcode.db ${{ github.workspace }}/.semcode.db
+          semcode-index --git "${MERGE_BASE}..HEAD"
+          semcode-index --lore bpf
+
+      - name: Get patch subject
+        id: get-patch-subject
+        shell: bash
+        run: |
+          subject=$(git log -1 --pretty=format:"%s" ${{ matrix.commit }})
+          echo "subject=$subject" >> $GITHUB_OUTPUT
+
+      - name: Checkout prompts repo
+        uses: actions/checkout@v6
+        with:
+          repository: 'masoncl/review-prompts'
+          path: 'review-prompts'
+          ref: main
+
+      - name: Set up review prompts
+        shell: bash
+        run: |
+          mv review-prompts/kernel ${{ github.workspace }}/review
+          rm -rf review-prompts
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          show_full_output: true
+          github_token: ${{ steps.app-token.outputs.token }}
+          use_bedrock: "true"
+          claude_args: |
+            --max-turns 100
+            --mcp-config ci/claude/mcp.json
+            --model us.anthropic.claude-opus-4-8
+          allowed_bots: "kernel-patches-daemon-bpf,kernel-patches-review-bot"
+          prompt: |
+            Current directory is the root of a Linux Kernel git repository.
+
+            Read the prompt review/agent/orc.md
+
+            Analyze commit HEAD using prompts from review/
+
+            This commit is part of a series with git range ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+
+      # If Claude produced review-inline.txt then it found something
+      # Post a comment on PR and fail the job
+      - name: Check review-inline.txt and review-metadata.json
+        id: check_review
+        shell: bash
+        run: |
+          review_file=$(find ${{ github.workspace }} -name review-inline.txt)
+          if [ -s "$review_file" ]; then
+              cat $review_file || true
+              echo "review_file=$review_file" >> $GITHUB_OUTPUT
+          fi
+          review_metadata=$(find ${{ github.workspace }} -name review-metadata.json)
+          if [ -s "$review_metadata" ]; then
+              cat $review_metadata || true
+              echo "review_metadata=$review_metadata" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Comment on PR
+        if: steps.check_review.outputs.review_file != ''
+        uses: actions/github-script@v8
+        env:
+          REVIEW_FILE: ${{ steps.check_review.outputs.review_file }}
+          REVIEW_METADATA: ${{ steps.check_review.outputs.review_metadata }}
+          PATCH_SUBJECT: ${{ steps.get-patch-subject.outputs.subject }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const commentScript = require('./ci/claude/post-pr-comment.js');
+            await commentScript({github, context});
+
+      - name: Fail CI job if review file exists
+        if: steps.check_review.outputs.review_file != ''
+        run: |
+          echo "Review file found - failing the CI job"
+          exit 42
