@@ -17,7 +17,7 @@
 #include "uprobe_syscall_executed.skel.h"
 #include "bpf/libbpf_internal.h"
 
-#define USDT_NOP .byte 0x0f, 0x1f, 0x44, 0x00, 0x00
+#define USDT_NOP .byte 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00
 #include "usdt.h"
 
 #pragma GCC diagnostic ignored "-Wattributes"
@@ -26,7 +26,7 @@ __attribute__((aligned(16)))
 __nocf_check __weak __naked unsigned long uprobe_regs_trigger(void)
 {
 	asm volatile (
-		".byte 0x0f, 0x1f, 0x44, 0x00, 0x00\n" /* nop5 */
+		".byte 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00\n" /* nop10 */
 		"movq $0xdeadbeef, %rax\n"
 		"ret\n"
 	);
@@ -345,9 +345,9 @@ cleanup:
 __attribute__((aligned(16)))
 __nocf_check __weak __naked void uprobe_test(void)
 {
-	asm volatile ("					\n"
-		".byte 0x0f, 0x1f, 0x44, 0x00, 0x00	\n"
-		"ret					\n"
+	asm volatile (
+		".byte 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00\n" /* nop10 */
+		"ret\n"
 	);
 }
 
@@ -388,14 +388,15 @@ static int find_uprobes_trampoline(void *tramp_addr)
 	return ret;
 }
 
-static unsigned char nop5[5] = { 0x0f, 0x1f, 0x44, 0x00, 0x00 };
+static unsigned char nop10[10]  = { 0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00 };
+static unsigned char lea_rsp[5] = { 0x48, 0x8d, 0x64, 0x24, 0x80 };
 
-static void *find_nop5(void *fn)
+static void *find_nop10(void *fn)
 {
 	int i;
 
-	for (i = 0; i < 10; i++) {
-		if (!memcmp(nop5, fn + i, 5))
+	for (i = 0; i < 128; i++) {
+		if (!memcmp(nop10, fn + i, 10))
 			return fn + i;
 	}
 	return NULL;
@@ -420,7 +421,8 @@ static void *check_attach(struct uprobe_syscall_executed *skel, trigger_t trigge
 	ASSERT_EQ(skel->bss->executed, executed, "executed");
 
 	/* .. and check the trampoline is as expected. */
-	call = (struct __arch_relative_insn *) addr;
+	ASSERT_OK(memcmp(addr, lea_rsp, 5), "lea_rsp");
+	call = (struct __arch_relative_insn *)(addr + 5);
 	tramp = (void *) (call + 1) + call->raddr;
 	ASSERT_EQ(call->op, 0xe8, "call");
 	ASSERT_OK(find_uprobes_trampoline(tramp), "uprobes_trampoline");
@@ -430,9 +432,11 @@ static void *check_attach(struct uprobe_syscall_executed *skel, trigger_t trigge
 
 static void check_detach(void *addr, void *tramp)
 {
+	static const unsigned char nop10_prefix[] = { 0x66, 0x2e, 0x0f, 0x1f, 0x84 };
+
 	/* [uprobes_trampoline] stays after detach */
 	ASSERT_OK(find_uprobes_trampoline(tramp), "uprobes_trampoline");
-	ASSERT_OK(memcmp(addr, nop5, 5), "nop5");
+	ASSERT_OK(memcmp(addr, nop10_prefix, 5), "nop10_prefix");
 }
 
 static void check(struct uprobe_syscall_executed *skel, struct bpf_link *link,
@@ -568,8 +572,8 @@ static void test_uprobe_usdt(void)
 	void *addr;
 
 	errno = 0;
-	addr = find_nop5(usdt_test);
-	if (!ASSERT_OK_PTR(addr, "find_nop5"))
+	addr = find_nop10(usdt_test);
+	if (!ASSERT_OK_PTR(addr, "find_nop10"))
 		return;
 
 	skel = uprobe_syscall_executed__open_and_load();
