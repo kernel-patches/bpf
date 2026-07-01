@@ -1473,6 +1473,12 @@ struct arg_raw_mem_desc {
 	int size;
 };
 
+/* Size of PTR_TO_MEM returned, taken from a constant allocation-size argument */
+struct arg_alloc_mem_desc {
+	u32 size;
+	bool found;
+};
+
 struct bpf_kfunc_call_arg_meta {
 	/* In parameters */
 	struct btf *btf;
@@ -1484,7 +1490,6 @@ struct bpf_kfunc_call_arg_meta {
 	u8 release_regno;
 	bool r0_rdonly;
 	u32 ret_btf_id;
-	u64 r0_size;
 	u32 subprogno;
 	struct {
 		u64 value;
@@ -1520,7 +1525,7 @@ struct bpf_kfunc_call_arg_meta {
 	struct bpf_dynptr_desc dynptr;
 	struct ref_obj_desc ref_obj;
 	struct arg_raw_mem_desc arg_raw_mem;
-	u64 mem_size;
+	struct arg_alloc_mem_desc arg_alloc_mem;
 };
 
 int bpf_get_helper_proto(struct bpf_verifier_env *env, int func_id,
