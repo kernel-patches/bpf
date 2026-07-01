@@ -911,7 +911,8 @@ void notrace bpf_mem_free(struct bpf_mem_alloc *ma, void *ptr)
 	if (WARN_ON_ONCE(idx < 0))
 		return;
 
-	unit_free(this_cpu_ptr(ma->caches)->cache + idx, ptr);
+	unit_free(get_cpu_ptr(ma->caches)->cache + idx, ptr);
+	put_cpu_ptr(ma->caches);
 }
 
 void notrace bpf_mem_free_rcu(struct bpf_mem_alloc *ma, void *ptr)
@@ -927,7 +928,8 @@ void notrace bpf_mem_free_rcu(struct bpf_mem_alloc *ma, void *ptr)
 	if (WARN_ON_ONCE(idx < 0))
 		return;
 
-	unit_free_rcu(this_cpu_ptr(ma->caches)->cache + idx, ptr);
+	unit_free_rcu(get_cpu_ptr(ma->caches)->cache + idx, ptr);
+	put_cpu_ptr(ma->caches);
 }
 
 void notrace *bpf_mem_cache_alloc(struct bpf_mem_alloc *ma)
@@ -951,7 +953,8 @@ void notrace bpf_mem_cache_free_rcu(struct bpf_mem_alloc *ma, void *ptr)
 	if (!ptr)
 		return;
 
-	unit_free_rcu(this_cpu_ptr(ma->cache), ptr);
+	unit_free_rcu(get_cpu_ptr(ma->cache), ptr);
+	put_cpu_ptr(ma->cache);
 }
 
 /* Directly does a kfree() without putting 'ptr' back to the free_llist
