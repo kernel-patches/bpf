@@ -76,43 +76,6 @@ struct ksz_stats_raw {
 	u64 tx_discards;
 };
 
-struct ksz88xx_stats_raw {
-	u64 rx;
-	u64 rx_hi;
-	u64 rx_undersize;
-	u64 rx_fragments;
-	u64 rx_oversize;
-	u64 rx_jabbers;
-	u64 rx_symbol_err;
-	u64 rx_crc_err;
-	u64 rx_align_err;
-	u64 rx_mac_ctrl;
-	u64 rx_pause;
-	u64 rx_bcast;
-	u64 rx_mcast;
-	u64 rx_ucast;
-	u64 rx_64_or_less;
-	u64 rx_65_127;
-	u64 rx_128_255;
-	u64 rx_256_511;
-	u64 rx_512_1023;
-	u64 rx_1024_1522;
-	u64 tx;
-	u64 tx_hi;
-	u64 tx_late_col;
-	u64 tx_pause;
-	u64 tx_bcast;
-	u64 tx_mcast;
-	u64 tx_ucast;
-	u64 tx_deferred;
-	u64 tx_total_col;
-	u64 tx_exc_col;
-	u64 tx_single_col;
-	u64 tx_mult_col;
-	u64 rx_discards;
-	u64 tx_discards;
-};
-
 static const struct ksz_mib_names ksz88xx_mib_names[] = {
 	{ 0x00, "rx" },
 	{ 0x01, "rx_hi" },
@@ -2061,55 +2024,6 @@ void ksz_r_mib_stats64(struct ksz_device *dev, int port)
 		if (ret)
 			dev_err(dev->dev, "Failed to monitor transmission halt\n");
 	}
-}
-
-void ksz88xx_r_mib_stats64(struct ksz_device *dev, int port)
-{
-	struct ethtool_pause_stats *pstats;
-	struct rtnl_link_stats64 *stats;
-	struct ksz88xx_stats_raw *raw;
-	struct ksz_port_mib *mib;
-
-	mib = &dev->ports[port].mib;
-	stats = &mib->stats64;
-	pstats = &mib->pause_stats;
-	raw = (struct ksz88xx_stats_raw *)mib->counters;
-
-	spin_lock(&mib->stats64_lock);
-
-	stats->rx_packets = raw->rx_bcast + raw->rx_mcast + raw->rx_ucast +
-		raw->rx_pause;
-	stats->tx_packets = raw->tx_bcast + raw->tx_mcast + raw->tx_ucast +
-		raw->tx_pause;
-
-	/* HW counters are counting bytes + FCS which is not acceptable
-	 * for rtnl_link_stats64 interface
-	 */
-	stats->rx_bytes = raw->rx + raw->rx_hi - stats->rx_packets * ETH_FCS_LEN;
-	stats->tx_bytes = raw->tx + raw->tx_hi - stats->tx_packets * ETH_FCS_LEN;
-
-	stats->rx_length_errors = raw->rx_undersize + raw->rx_fragments +
-		raw->rx_oversize;
-
-	stats->rx_crc_errors = raw->rx_crc_err;
-	stats->rx_frame_errors = raw->rx_align_err;
-	stats->rx_dropped = raw->rx_discards;
-	stats->rx_errors = stats->rx_length_errors + stats->rx_crc_errors +
-		stats->rx_frame_errors  + stats->rx_dropped;
-
-	stats->tx_window_errors = raw->tx_late_col;
-	stats->tx_fifo_errors = raw->tx_discards;
-	stats->tx_aborted_errors = raw->tx_exc_col;
-	stats->tx_errors = stats->tx_window_errors + stats->tx_fifo_errors +
-		stats->tx_aborted_errors;
-
-	stats->multicast = raw->rx_mcast;
-	stats->collisions = raw->tx_total_col;
-
-	pstats->tx_pause_frames = raw->tx_pause;
-	pstats->rx_pause_frames = raw->rx_pause;
-
-	spin_unlock(&mib->stats64_lock);
 }
 
 void ksz_get_stats64(struct dsa_switch *ds, int port,
