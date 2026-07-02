@@ -2639,7 +2639,7 @@ struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env, struct 
 
 		fp = bpf_prog_jit_compile(env, fp);
 		bpf_prog_jit_attempt_done(fp);
-		if (!fp->jited && jit_needed) {
+		if (!fp->jited && (jit_needed || fp->jit_required)) {
 			*err = -ENOTSUPP;
 			return fp;
 		}

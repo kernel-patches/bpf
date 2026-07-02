@@ -1889,6 +1889,7 @@ struct bpf_prog {
 		u8 digest[SHA256_DIGEST_SIZE];
 		u8 tag[BPF_TAG_SIZE];
 	};
+	u8			jit_required;	/* program strictly requires JIT compiler */
 	struct bpf_prog_stats __percpu *stats;
 	u8 __percpu		*active;	/* u8[BPF_NR_CONTEXTS] for recursion protection */
 	unsigned int		(*bpf_func)(const void *ctx,
