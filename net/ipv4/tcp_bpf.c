@@ -15,7 +15,7 @@
 void tcp_eat_skb(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tcp;
-	int copied;
+	u32 end_seq, delta;
 
 	if (!skb || !skb->len || !sk_is_tcp(sk))
 		return;
@@ -24,10 +24,11 @@ void tcp_eat_skb(struct sock *sk, struct sk_buff *skb)
 		return;
 
 	tcp = tcp_sk(sk);
-	copied = tcp->copied_seq + skb->len;
-	WRITE_ONCE(tcp->copied_seq, copied);
+	end_seq = TCP_SKB_CB(skb)->end_seq;
+	delta = end_seq - tcp->copied_seq;
+	WRITE_ONCE(tcp->copied_seq, end_seq);
 	tcp_rcv_space_adjust(sk);
-	__tcp_cleanup_rbuf(sk, skb->len);
+	__tcp_cleanup_rbuf(sk, delta);
 }
 
 static int bpf_tcp_ingress(struct sock *sk, struct sk_psock *psock,
