@@ -40,8 +40,8 @@
  * driver has only been tested with a fixed-link, but in principle it should not
  * matter.
  *
- * NOTE: Currently, only the RGMII and SGMII interfaces are implemented in this
- * driver.
+ * NOTE: Currently, only the RGMII, SGMII and HSGMII interfaces are implemented
+ * in this driver.
  *
  * The interrupt line is asserted on link UP/DOWN events. The driver creates a
  * custom irqchip to handle this interrupt and demultiplex the events by reading
@@ -635,6 +635,18 @@ static const struct rtl8365mb_jam_tbl_entry rtl8365mb_sds_jam_sgmii[] = {
 	{ 0x0480, 0x04D7 }, { 0x0481, 0xF994 }, { 0x0482, 0x2420 },
 	{ 0x0483, 0x6960 }, { 0x0484, 0x9728 }, { 0x0423, 0x9D85 },
 	{ 0x0424, 0xD810 }, { 0x002E, 0x83F2 },
+};
+
+/* HSGMII SerDes tuning parameters, lifted from the vendor driver sources. As
+ * with the SGMII table, the vendor driver keeps several variants and selects
+ * one based on the chip option register; these are the values for a non-zero
+ * option, which is what RTL8367S parts seen so far report. See
+ * rtl8365mb_sds_probe_option().
+ */
+static const struct rtl8365mb_jam_tbl_entry rtl8365mb_sds_jam_hsgmii[] = {
+	{ 0x0500, 0x82F0 }, { 0x0501, 0xF195 }, { 0x0502, 0x31A2 },
+	{ 0x0503, 0x7960 }, { 0x0504, 0x9728 }, { 0x0423, 0x9D85 },
+	{ 0x0424, 0xD810 }, { 0x0001, 0x0F80 }, { 0x002E, 0x83F2 },
 };
 
 enum rtl8365mb_phy_interface_mode {
@@ -1247,9 +1259,12 @@ static int rtl8365mb_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 				const unsigned long *advertising,
 				bool permit_pause_to_mac)
 {
+	const struct rtl8365mb_jam_tbl_entry *sds_jam;
 	const int id = RTL8365MB_SDS_EXT_INTERFACE_ID;
 	struct rtl8365mb *mb = pcs_to_rtl8365mb(pcs);
 	struct realtek_priv *priv;
+	size_t sds_jam_size;
+	u32 mode;
 	u16 val;
 	int ret;
 	int i;
@@ -1263,6 +1278,16 @@ static int rtl8365mb_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 	 */
 	if (neg_mode == PHYLINK_PCS_NEG_INBAND_ENABLED)
 		return -EOPNOTSUPP;
+
+	if (interface == PHY_INTERFACE_MODE_2500BASEX) {
+		sds_jam = rtl8365mb_sds_jam_hsgmii;
+		sds_jam_size = ARRAY_SIZE(rtl8365mb_sds_jam_hsgmii);
+		mode = RTL8365MB_EXT_PORT_MODE_HSGMII;
+	} else {
+		sds_jam = rtl8365mb_sds_jam_sgmii;
+		sds_jam_size = ARRAY_SIZE(rtl8365mb_sds_jam_sgmii);
+		mode = RTL8365MB_EXT_PORT_MODE_SGMII;
+	}
 
 	/* Hold the embedded DW8051 microcontroller in reset and keep it
 	 * disabled. The vendor driver loads firmware into it to manage the
@@ -1291,24 +1316,24 @@ static int rtl8365mb_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 		return ret;
 
 	/* Tune the SerDes with vendor-prescribed parameters */
-	for (i = 0; i < ARRAY_SIZE(rtl8365mb_sds_jam_sgmii); i++) {
-		ret = rtl8365mb_sds_write(priv,
-					  rtl8365mb_sds_jam_sgmii[i].reg,
-					  rtl8365mb_sds_jam_sgmii[i].val);
+	for (i = 0; i < sds_jam_size; i++) {
+		ret = rtl8365mb_sds_write(priv, sds_jam[i].reg,
+					  sds_jam[i].val);
 		if (ret)
 			return ret;
 	}
 
-	/* Mux the SerDes to MAC8 in SGMII mode */
+	/* Mux the SerDes to MAC8 in the requested mode */
 	ret = regmap_update_bits(priv->map, RTL8365MB_SDS_MISC_REG,
 				 RTL8365MB_SDS_MISC_MAC8_SEL_SGMII_MASK |
 					 RTL8365MB_SDS_MISC_MAC8_SEL_HSGMII_MASK,
-				 RTL8365MB_SDS_MISC_MAC8_SEL_SGMII_MASK);
+				 mode == RTL8365MB_EXT_PORT_MODE_SGMII ?
+					 RTL8365MB_SDS_MISC_MAC8_SEL_SGMII_MASK :
+					 RTL8365MB_SDS_MISC_MAC8_SEL_HSGMII_MASK);
 	if (ret)
 		return ret;
 
-	val = RTL8365MB_EXT_PORT_MODE_SGMII
-	      << RTL8365MB_DIGITAL_INTERFACE_SELECT_MODE_OFFSET(id);
+	val = mode << RTL8365MB_DIGITAL_INTERFACE_SELECT_MODE_OFFSET(id);
 	ret = regmap_update_bits(priv->map,
 				 RTL8365MB_DIGITAL_INTERFACE_SELECT_REG(id),
 				 RTL8365MB_DIGITAL_INTERFACE_SELECT_MODE_MASK(id),
@@ -1354,7 +1379,8 @@ static int rtl8365mb_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 
 static bool rtl8365mb_interface_is_serdes(phy_interface_t interface)
 {
-	return interface == PHY_INTERFACE_MODE_SGMII;
+	return interface == PHY_INTERFACE_MODE_SGMII ||
+	       interface == PHY_INTERFACE_MODE_2500BASEX;
 }
 
 static unsigned int rtl8365mb_pcs_inband_caps(struct phylink_pcs *pcs,
@@ -1409,7 +1435,9 @@ static void rtl8365mb_pcs_get_state(struct phylink_pcs *pcs,
 
 	switch (FIELD_GET(RTL8365MB_SDS_MISC_SGMII_SPD_MASK, val)) {
 	case RTL8365MB_PORT_SPEED_1000M:
-		state->speed = SPEED_1000;
+		state->speed =
+			state->interface == PHY_INTERFACE_MODE_2500BASEX ?
+				SPEED_2500 : SPEED_1000;
 		break;
 	case RTL8365MB_PORT_SPEED_100M:
 		state->speed = SPEED_100;
@@ -1434,7 +1462,11 @@ static void rtl8365mb_pcs_link_up(struct phylink_pcs *pcs,
 	u32 r_speed;
 	int ret;
 
-	if (speed == SPEED_1000) {
+	/* The speed field has no value for 2.5 Gbps: the rate is determined by
+	 * the HSGMII SerDes configuration, and the vendor driver programs the
+	 * 1 Gbps value here.
+	 */
+	if (speed == SPEED_2500 || speed == SPEED_1000) {
 		r_speed = RTL8365MB_PORT_SPEED_1000M;
 	} else if (speed == SPEED_100) {
 		r_speed = RTL8365MB_PORT_SPEED_100M;
@@ -1494,7 +1526,11 @@ static int rtl8365mb_ext_config_forcemode(struct realtek_priv *priv, int port,
 		r_rx_pause = rx_pause ? 1 : 0;
 		r_tx_pause = tx_pause ? 1 : 0;
 
-		if (speed == SPEED_1000) {
+		/* The speed field has no value for 2.5 Gbps: the rate is
+		 * determined by the HSGMII SerDes configuration, and the
+		 * vendor driver programs the 1 Gbps value here.
+		 */
+		if (speed == SPEED_2500 || speed == SPEED_1000) {
 			r_speed = RTL8365MB_PORT_SPEED_1000M;
 		} else if (speed == SPEED_100) {
 			r_speed = RTL8365MB_PORT_SPEED_100M;
@@ -1577,6 +1613,13 @@ static void rtl8365mb_phylink_get_caps(struct dsa_switch *ds, int port,
 	    mb->sds_supported)
 		__set_bit(PHY_INTERFACE_MODE_SGMII,
 			  config->supported_interfaces);
+
+	if (extint->supported_interfaces & RTL8365MB_PHY_INTERFACE_MODE_HSGMII &&
+	    mb->sds_supported) {
+		__set_bit(PHY_INTERFACE_MODE_2500BASEX,
+			  config->supported_interfaces);
+		config->mac_capabilities |= MAC_2500FD;
+	}
 }
 
 static struct phylink_pcs *
@@ -1618,8 +1661,8 @@ static void rtl8365mb_phylink_mac_config(struct phylink_config *config,
 		return;
 	}
 
-	/* SGMII is handled by the SerDes PCS, configured through the
-	 * phylink_pcs ops, so there is nothing to do here for it.
+	/* SGMII and 2500base-x are handled by the SerDes PCS, configured
+	 * through the phylink_pcs ops, so nothing to do here for them.
 	 */
 	if (rtl8365mb_interface_is_serdes(state->interface))
 		return;
