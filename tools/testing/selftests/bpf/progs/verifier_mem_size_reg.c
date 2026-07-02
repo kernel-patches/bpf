@@ -54,7 +54,7 @@ struct {
  * Case 1: read-only mem+size arg must verify with only a READ check.
  *
  * bpf_strtol()'s first argument is ARG_PTR_TO_MEM | MEM_RDONLY paired with
- * ARG_CONST_SIZE, so access_type is BPF_READ.  Passing a read-only .rodata
+ * ARG_MEM_SIZE, so access_type is BPF_READ.  Passing a read-only .rodata
  * pointer must succeed.  A direction bug that also runs the BPF_WRITE check
  * would reject it ("write into map ... forbidden" / "cannot write into
  * rdonly_mem").
@@ -102,7 +102,7 @@ int mapofmaps_value_as_kfunc_mem_buf(struct __sk_buff *skb)
 /*
  * Case 3 (exploratory): the same un-narrowed map-of-maps value passed to a
  * __nullable *helper* mem arg (bpf_csum_diff()'s @from is
- * ARG_PTR_TO_MEM | PTR_MAYBE_NULL | MEM_RDONLY + ARG_CONST_SIZE_OR_ZERO).
+ * ARG_PTR_TO_MEM | PTR_MAYBE_NULL | MEM_RDONLY + ARG_MEM_SIZE_OR_ZERO).
  *
  * Unlike the kfunc path, the helper mem+size path uses base_type() dispatch
  * and does NOT run mark_ptr_not_null_reg(), so it would not reclassify the
