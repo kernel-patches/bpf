@@ -2753,28 +2753,6 @@ void ksz_port_bridge_leave(struct dsa_switch *ds, int port,
 	 */
 }
 
-int ksz9477_set_default_prio_queue_mapping(struct ksz_device *dev, int port)
-{
-	u32 queue_map = 0;
-	int ipm;
-
-	for (ipm = 0; ipm < dev->info->num_ipms; ipm++) {
-		int queue;
-
-		/* Traffic Type (TT) is corresponding to the Internal Priority
-		 * Map (IPM) in the switch. Traffic Class (TC) is
-		 * corresponding to the queue in the switch.
-		 */
-		queue = ieee8021q_tt_to_tc(ipm, dev->info->num_tx_queues);
-		if (queue < 0)
-			return queue;
-
-		queue_map |= queue << (ipm * KSZ9477_PORT_TC_MAP_S);
-	}
-
-	return ksz_pwrite32(dev, port, KSZ9477_PORT_MRI_TC_MAP__4, queue_map);
-}
-
 void ksz_port_stp_state_set(struct dsa_switch *ds, int port, u8 state)
 {
 	struct ksz_device *dev = ds->priv;
