@@ -346,7 +346,7 @@ static void host1x_setup_virtualization_tables(struct host1x *host)
 	const struct host1x_info *info = host->info;
 	unsigned int i;
 
-	if (!info->has_hypervisor)
+	if (!host->hv_regs)
 		return;
 
 	for (i = 0; i < info->num_sid_entries; i++) {
@@ -573,15 +573,20 @@ static int host1x_probe(struct platform_device *pdev)
 	host->info = of_device_get_match_data(&pdev->dev);
 
 	if (host->info->has_hypervisor) {
+		struct resource *res;
+
 		host->regs = devm_platform_ioremap_resource_byname(pdev, "vm");
 		if (IS_ERR(host->regs))
 			return PTR_ERR(host->regs);
 
-		host->hv_regs = devm_platform_ioremap_resource_byname(pdev, "hypervisor");
-		if (IS_ERR(host->hv_regs))
-			return PTR_ERR(host->hv_regs);
+		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "hypervisor");
+		if (res) {
+			host->hv_regs = devm_ioremap_resource(&pdev->dev, res);
+			if (IS_ERR(host->hv_regs))
+				return PTR_ERR(host->hv_regs);
+		}
 
-		if (host->info->has_common) {
+		if (res && host->info->has_common) {
 			host->common_regs = devm_platform_ioremap_resource_byname(pdev, "common");
 			if (IS_ERR(host->common_regs))
 				return PTR_ERR(host->common_regs);
