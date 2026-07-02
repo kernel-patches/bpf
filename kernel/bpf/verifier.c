@@ -2765,6 +2765,8 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	desc->func_model = func_model;
 	sort(tab->descs, tab->nr_descs, sizeof(tab->descs[0]),
 	     kfunc_desc_cmp_by_id_off, NULL);
+
+	env->prog->jit_required = 1;
 	return 0;
 }
 
