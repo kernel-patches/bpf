@@ -210,8 +210,17 @@ int lan9645x_port_setup(struct dsa_switch *ds, int port)
 		ANA_PORT_CFG_PORTID_VAL,
 		lan9645x, ANA_PORT_CFG(p->chip_port));
 
-	if (p->chip_port != lan9645x->npi)
+	if (p->chip_port != lan9645x->npi) {
 		lan9645x_vlan_set_hostmode(p);
+
+		lan_rmw(ANA_CPU_FWD_CFG_IGMP_REDIR_ENA_SET(true) |
+			ANA_CPU_FWD_CFG_MLD_REDIR_ENA_SET(true) |
+			ANA_CPU_FWD_CFG_IPMC_CTRL_COPY_ENA_SET(true),
+			ANA_CPU_FWD_CFG_IGMP_REDIR_ENA |
+			ANA_CPU_FWD_CFG_MLD_REDIR_ENA |
+			ANA_CPU_FWD_CFG_IPMC_CTRL_COPY_ENA,
+			lan9645x, ANA_CPU_FWD_CFG(p->chip_port));
+	}
 
 	return 0;
 }

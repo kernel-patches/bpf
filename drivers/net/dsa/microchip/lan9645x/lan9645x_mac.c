@@ -143,6 +143,20 @@ int lan9645x_mact_learn(struct lan9645x *lan9645x, int port,
 	return err;
 }
 
+int lan9645x_mact_learn_cpu_copy(struct lan9645x *lan9645x, int port,
+				 const unsigned char *addr, u16 vid,
+				 enum macaccess_entry_type type, bool cpu_copy)
+{
+	int err;
+
+	mutex_lock(&lan9645x->mact_lock);
+	err = __lan9645x_mact_learn_cpu_copy(lan9645x, port, addr, vid, type,
+					     cpu_copy);
+	mutex_unlock(&lan9645x->mact_lock);
+
+	return err;
+}
+
 int lan9645x_mact_flush(struct lan9645x *lan9645x, int port)
 {
 	int err;
