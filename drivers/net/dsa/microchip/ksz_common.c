@@ -3097,8 +3097,8 @@ static int ksz_setup_tc_mode(struct ksz_device *dev, int port, u8 scheduler,
 			   FIELD_PREP(MTI_SHAPING_M, shaper));
 }
 
-static int ksz_setup_tc_cbs(struct dsa_switch *ds, int port,
-			    struct tc_cbs_qopt_offload *qopt)
+int ksz_setup_tc_cbs(struct dsa_switch *ds, int port,
+		     struct tc_cbs_qopt_offload *qopt)
 {
 	struct ksz_device *dev = ds->priv;
 	int ret;
@@ -3163,112 +3163,14 @@ static int ksz_disable_egress_rate_limit(struct ksz_device *dev, int port)
 	return 0;
 }
 
-static int ksz_ets_band_to_queue(struct tc_ets_qopt_offload_replace_params *p,
-				 int band)
+int ksz_ets_band_to_queue(struct tc_ets_qopt_offload_replace_params *p,
+			  int band)
 {
 	/* Compared to queues, bands prioritize packets differently. In strict
 	 * priority mode, the lowest priority is assigned to Queue 0 while the
 	 * highest priority is given to Band 0.
 	 */
 	return p->bands - 1 - band;
-}
-
-static u8 ksz8463_tc_ctrl(int port, int queue)
-{
-	u8 reg;
-
-	reg = 0xC8 + port * 4;
-	reg += ((3 - queue) / 2) * 2;
-	reg++;
-	reg -= (queue & 1);
-	return reg;
-}
-
-/**
- * ksz88x3_tc_ets_add - Configure ETS (Enhanced Transmission Selection)
- *                      for a port on KSZ88x3 switch
- * @dev: Pointer to the KSZ switch device structure
- * @port: Port number to configure
- * @p: Pointer to offload replace parameters describing ETS bands and mapping
- *
- * The KSZ88x3 supports two scheduling modes: Strict Priority and
- * Weighted Fair Queuing (WFQ). Both modes have fixed behavior:
- *   - No configurable queue-to-priority mapping
- *   - No weight adjustment in WFQ mode
- *
- * This function configures the switch to use strict priority mode by
- * clearing the WFQ enable bit for all queues associated with ETS bands.
- * If strict priority is not explicitly requested, the switch will default
- * to WFQ mode.
- *
- * Return: 0 on success, or a negative error code on failure
- */
-static int ksz88x3_tc_ets_add(struct ksz_device *dev, int port,
-			      struct tc_ets_qopt_offload_replace_params *p)
-{
-	int ret, band;
-
-	/* Only strict priority mode is supported for now.
-	 * WFQ is implicitly enabled when strict mode is disabled.
-	 */
-	for (band = 0; band < p->bands; band++) {
-		int queue = ksz_ets_band_to_queue(p, band);
-		u8 reg;
-
-		/* Calculate TXQ Split Control register address for this
-		 * port/queue
-		 */
-		reg = KSZ8873_TXQ_SPLIT_CTRL_REG(port, queue);
-		if (ksz_is_ksz8463(dev))
-			reg = ksz8463_tc_ctrl(port, queue);
-
-		/* Clear WFQ enable bit to select strict priority scheduling */
-		ret = ksz_rmw8(dev, reg, KSZ8873_TXQ_WFQ_ENABLE, 0);
-		if (ret)
-			return ret;
-	}
-
-	return 0;
-}
-
-/**
- * ksz88x3_tc_ets_del - Reset ETS (Enhanced Transmission Selection) config
- *                      for a port on KSZ88x3 switch
- * @dev: Pointer to the KSZ switch device structure
- * @port: Port number to reset
- *
- * The KSZ88x3 supports only fixed scheduling modes: Strict Priority or
- * Weighted Fair Queuing (WFQ), with no reconfiguration of weights or
- * queue mapping. This function resets the port’s scheduling mode to
- * the default, which is WFQ, by enabling the WFQ bit for all queues.
- *
- * Return: 0 on success, or a negative error code on failure
- */
-static int ksz88x3_tc_ets_del(struct ksz_device *dev, int port)
-{
-	int ret, queue;
-
-	/* Iterate over all transmit queues for this port */
-	for (queue = 0; queue < dev->info->num_tx_queues; queue++) {
-		u8 reg;
-
-		/* Calculate TXQ Split Control register address for this
-		 * port/queue
-		 */
-		reg = KSZ8873_TXQ_SPLIT_CTRL_REG(port, queue);
-		if (ksz_is_ksz8463(dev))
-			reg = ksz8463_tc_ctrl(port, queue);
-
-		/* Set WFQ enable bit to revert back to default scheduling
-		 * mode
-		 */
-		ret = ksz_rmw8(dev, reg, KSZ8873_TXQ_WFQ_ENABLE,
-			       KSZ8873_TXQ_WFQ_ENABLE);
-		if (ret)
-			return ret;
-	}
-
-	return 0;
 }
 
 static int ksz_queue_set_strict(struct ksz_device *dev, int port, int queue)
@@ -3363,8 +3265,8 @@ static int ksz_tc_ets_del(struct ksz_device *dev, int port)
 	return ksz9477_set_default_prio_queue_mapping(dev, port);
 }
 
-static int ksz_tc_ets_validate(struct ksz_device *dev, int port,
-			       struct tc_ets_qopt_offload_replace_params *p)
+int ksz_tc_ets_validate(struct ksz_device *dev, int port,
+			struct tc_ets_qopt_offload_replace_params *p)
 {
 	int band;
 
@@ -3405,9 +3307,6 @@ static int ksz_tc_setup_qdisc_ets(struct dsa_switch *ds, int port,
 	struct ksz_device *dev = ds->priv;
 	int ret;
 
-	if (is_ksz8(dev) && !(ksz_is_ksz88x3(dev) || ksz_is_ksz8463(dev)))
-		return -EOPNOTSUPP;
-
 	if (qopt->parent != TC_H_ROOT) {
 		dev_err(dev->dev, "Parent should be \"root\"\n");
 		return -EOPNOTSUPP;
@@ -3419,16 +3318,9 @@ static int ksz_tc_setup_qdisc_ets(struct dsa_switch *ds, int port,
 		if (ret)
 			return ret;
 
-		if (ksz_is_ksz88x3(dev) || ksz_is_ksz8463(dev))
-			return ksz88x3_tc_ets_add(dev, port,
-						  &qopt->replace_params);
-		else
-			return ksz_tc_ets_add(dev, port, &qopt->replace_params);
+		return ksz_tc_ets_add(dev, port, &qopt->replace_params);
 	case TC_ETS_DESTROY:
-		if (ksz_is_ksz88x3(dev) || ksz_is_ksz8463(dev))
-			return ksz88x3_tc_ets_del(dev, port);
-		else
-			return ksz_tc_ets_del(dev, port);
+		return ksz_tc_ets_del(dev, port);
 	case TC_ETS_STATS:
 	case TC_ETS_GRAFT:
 		return -EOPNOTSUPP;
