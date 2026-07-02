@@ -29,16 +29,20 @@
 
 static int tail_call_cnt_ptr_stack_off(struct jit_ctx *ctx)
 {
+	const struct bpf_prog *prog = ctx->prog;
+	const bool is_exception_prog = prog->aux->exception_boundary ||
+				       prog->aux->exception_cb;
 	/* Ten words are pushed below the BPF stack: ra, fp, s0-s5, and the
 	 * tail call count plus its pointer, which occupy the two deepest
 	 * slots of the callee-saved area.
 	 */
 	int offset = sizeof(long) * 10;
 
-	/* An arena program reserves one extra word above them (REG_ARENA),
-	 * which pushes the tail call count pointer down by one slot.
+	/* An arena or exception program reserves one extra word above them
+	 * ($s6, see build_prologue()), which pushes the tail call count
+	 * pointer down by one slot.
 	 */
-	if (ctx->arena_vm_start)
+	if (ctx->arena_vm_start || is_exception_prog)
 		offset += sizeof(long);
 
 	return round_up(ctx->stack_size, 16) - offset;
@@ -151,6 +155,9 @@ static void prepare_bpf_tail_call_cnt(struct jit_ctx *ctx, int *store_offset)
  *                            +-------------------------+
  *                            |           $s5           |
  *                            +-------------------------+
+ *                            |   $s6 (arena/exception) |
+ *                            |        (optional)       |
+ *                            +-------------------------+
  *                            |           tcc           |
  *                            +-------------------------+
  *                            |           tcc_ptr       |
@@ -165,6 +172,13 @@ static void build_prologue(struct jit_ctx *ctx)
 	int i, stack_adjust = 0, store_offset, bpf_stack_adjust;
 	const struct bpf_prog *prog = ctx->prog;
 	const bool is_main_prog = !bpf_is_subprog(prog);
+	/*
+	 * Exception boundary and callback programs must agree on the frame
+	 * layout: the callback reuses the boundary's frame to restore its
+	 * callee-saved registers, so the s6 slot is always reserved for them.
+	 */
+	const bool is_exception_prog = prog->aux->exception_boundary ||
+				       prog->aux->exception_cb;
 
 	bpf_stack_adjust = round_up(ctx->prog->aux->stack_depth, 16);
 
@@ -174,7 +188,7 @@ static void build_prologue(struct jit_ctx *ctx)
 	/* To store tcc and tcc_ptr */
 	stack_adjust += sizeof(long) * 2;
 
-	if (ctx->arena_vm_start)
+	if (ctx->arena_vm_start || is_exception_prog)
 		stack_adjust += 8;
 
 	stack_adjust = round_up(stack_adjust, 16);
@@ -205,6 +219,19 @@ static void build_prologue(struct jit_ctx *ctx)
 	if (is_main_prog)
 		emit_insn(ctx, addid, REG_TCC, LOONGARCH_GPR_ZERO, 0);
 
+	if (prog->aux->exception_cb) {
+		/*
+		 * The exception callback receives the boundary program's frame
+		 * pointer as its third argument (a2). Reuse that frame so the
+		 * (FP-anchored) epilogue restores the boundary's callee-saved
+		 * registers and returns to the boundary's caller. The boundary
+		 * already saved them, so nothing is pushed here.
+		 */
+		move_reg(ctx, LOONGARCH_GPR_FP, LOONGARCH_GPR_A2);
+		emit_insn(ctx, addid, LOONGARCH_GPR_SP, LOONGARCH_GPR_FP, -stack_adjust);
+		goto setup_bpf_fp;
+	}
+
 	emit_insn(ctx, addid, LOONGARCH_GPR_SP, LOONGARCH_GPR_SP, -stack_adjust);
 
 	store_offset = stack_adjust - sizeof(long);
@@ -231,7 +258,7 @@ static void build_prologue(struct jit_ctx *ctx)
 	store_offset -= sizeof(long);
 	emit_insn(ctx, std, LOONGARCH_GPR_S5, LOONGARCH_GPR_SP, store_offset);
 
-	if (ctx->arena_vm_start) {
+	if (ctx->arena_vm_start || is_exception_prog) {
 		store_offset -= sizeof(long);
 		emit_insn(ctx, std, REG_ARENA, LOONGARCH_GPR_SP, store_offset);
 	}
@@ -240,6 +267,7 @@ static void build_prologue(struct jit_ctx *ctx)
 
 	emit_insn(ctx, addid, LOONGARCH_GPR_FP, LOONGARCH_GPR_SP, stack_adjust);
 
+setup_bpf_fp:
 	if (ctx->priv_sp_used) {
 		/* Set up the private stack pointer and the BPF frame pointer */
 		void __percpu *priv_stack_ptr;
@@ -261,6 +289,9 @@ static void __build_epilogue(struct jit_ctx *ctx, bool is_tail_call)
 {
 	int stack_adjust = ctx->stack_size;
 	int load_offset;
+	const struct bpf_prog *prog = ctx->prog;
+	const bool is_exception_prog = prog->aux->exception_boundary ||
+				       prog->aux->exception_cb;
 
 	load_offset = stack_adjust - sizeof(long);
 	emit_insn(ctx, ldd, LOONGARCH_GPR_RA, LOONGARCH_GPR_SP, load_offset);
@@ -286,7 +317,7 @@ static void __build_epilogue(struct jit_ctx *ctx, bool is_tail_call)
 	load_offset -= sizeof(long);
 	emit_insn(ctx, ldd, LOONGARCH_GPR_S5, LOONGARCH_GPR_SP, load_offset);
 
-	if (ctx->arena_vm_start) {
+	if (ctx->arena_vm_start || is_exception_prog) {
 		load_offset -= sizeof(long);
 		emit_insn(ctx, ldd, REG_ARENA, LOONGARCH_GPR_SP, load_offset);
 	}
@@ -2536,6 +2567,17 @@ bool bpf_jit_supports_timed_may_goto(void)
 bool bpf_jit_supports_private_stack(void)
 {
 	return true;
+}
+
+bool bpf_jit_supports_exceptions(void)
+{
+	/*
+	 * Walking kernel and BPF frames from within bpf_throw() relies on
+	 * arch_bpf_stack_walk(), which is only implemented for the ORC
+	 * unwinder. ORC reports each frame's stack and frame pointer and
+	 * walks JITed BPF frames via its frame-pointer fallback.
+	 */
+	return IS_ENABLED(CONFIG_UNWINDER_ORC);
 }
 
 /* Indicate the JIT backend supports mixing bpf2bpf and tailcalls. */
