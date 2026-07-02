@@ -372,6 +372,39 @@ static void host1x_setup_virtualization_tables(struct host1x *host)
 	}
 }
 
+static int host1x_get_assigned_resources(struct host1x *host)
+{
+	struct device_node *np = host->dev->of_node;
+	u32 vals[2];
+	int err;
+
+	err = of_property_read_u32_array(np, "nvidia,channels", vals, 2);
+	if (err == 0) {
+		host->channel_base = vals[0];
+		host->channel_end = vals[0] + vals[1];
+	} else if (err == -EINVAL) {
+		host->channel_base = 0;
+		host->channel_end = host->info->nb_channels;
+	} else {
+		dev_err(host->dev, "invalid nvidia,channels property: %d\n", err);
+		return err;
+	}
+
+	err = of_property_read_u32_array(np, "nvidia,syncpoints", vals, 2);
+	if (err == 0) {
+		host->syncpt_base = vals[0];
+		host->syncpt_end = vals[0] + vals[1];
+	} else if (err == -EINVAL) {
+		host->syncpt_base = 0;
+		host->syncpt_end = host->info->nb_pts;
+	} else {
+		dev_err(host->dev, "invalid nvidia,syncpoints property: %d\n", err);
+		return err;
+	}
+
+	return 0;
+}
+
 static bool host1x_wants_iommu(struct host1x *host1x)
 {
 	/* Our IOMMU usage policy doesn't currently play well with GART */
@@ -642,6 +675,10 @@ static int host1x_probe(struct platform_device *pdev)
 	host->clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(host->clk))
 		return dev_err_probe(&pdev->dev, PTR_ERR(host->clk), "failed to get clock\n");
+
+	err = host1x_get_assigned_resources(host);
+	if (err)
+		return err;
 
 	err = host1x_get_resets(host);
 	if (err)
