@@ -6941,11 +6941,14 @@ static int check_mem_size_reg(struct bpf_verifier_env *env,
 }
 
 static int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
-			 argno_t argno, u32 mem_size, struct bpf_call_arg_meta *meta)
+			 argno_t argno, u32 mem_size, enum bpf_access_type access_type,
+			 struct bpf_call_arg_meta *meta)
 {
+	/* meta->btf is set only for kfuncs; a NULL meta means a global subprog. */
+	bool helper = meta && !meta->btf;
 	bool may_be_null = type_may_be_null(reg->type);
 	struct bpf_reg_state saved_reg;
-	int err;
+	int size, err = 0;
 
 	if (bpf_register_is_null(reg))
 		return 0;
@@ -6965,10 +6968,12 @@ static int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg
 		mark_ptr_not_null_reg(reg);
 	}
 
-	int size = base_type(reg->type) == PTR_TO_STACK ? -(int)mem_size : mem_size;
+	size = (!helper && base_type(reg->type) == PTR_TO_STACK) ? -(int)mem_size : mem_size;
 
-	err = check_helper_mem_access(env, reg, argno, size, BPF_READ, true, meta);
-	err = err ?: check_helper_mem_access(env, reg, argno, size, BPF_WRITE, true, meta);
+	if (access_type & BPF_READ)
+		err = check_helper_mem_access(env, reg, argno, size, BPF_READ, true, meta);
+	if (!err && (access_type & BPF_WRITE))
+		err = check_helper_mem_access(env, reg, argno, size, BPF_WRITE, true, meta);
 
 	if (may_be_null)
 		*reg = saved_reg;
@@ -8477,9 +8482,8 @@ skip_type_check:
 		 * next is_mem_size argument below.
 		 */
 		if (arg_type & MEM_FIXED_SIZE) {
-			err = check_helper_mem_access(env, reg, argno, fn->arg_size[arg],
-						      arg_type & MEM_WRITE ? BPF_WRITE : BPF_READ,
-						      false, meta);
+			err = check_mem_reg(env, reg, argno_from_reg(regno), fn->arg_size[arg],
+					    arg_type & MEM_WRITE ? BPF_WRITE : BPF_READ, meta);
 			if (err)
 				return err;
 			if (arg_type & MEM_ALIGNED)
@@ -9251,7 +9255,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 			ret = check_func_arg_reg_off(env, reg, argno, ARG_DONTCARE);
 			if (ret < 0)
 				return ret;
-			if (check_mem_reg(env, reg, argno, arg->mem_size, NULL))
+			if (check_mem_reg(env, reg, argno, arg->mem_size, BPF_READ | BPF_WRITE, NULL))
 				return -EINVAL;
 			if (!(arg->arg_type & PTR_MAYBE_NULL) && (reg->type & PTR_MAYBE_NULL)) {
 				bpf_log(log, "%s is expected to be non-NULL\n",
@@ -12397,7 +12401,7 @@ check_ok:
 					ref_tname, PTR_ERR(resolve_ret));
 				return -EINVAL;
 			}
-			ret = check_mem_reg(env, reg, argno, type_size, meta);
+			ret = check_mem_reg(env, reg, argno, type_size, BPF_READ | BPF_WRITE, meta);
 			if (ret < 0)
 				return ret;
 			break;
