@@ -75,6 +75,17 @@ config NET_DSA_TAG_HELLCREEK
 	  Say Y or M if you want to enable support for tagging frames
 	  for the Hirschmann Hellcreek TSN switches.
 
+config NET_DSA_TAG_LAN9645X
+	tristate "Tag driver for Lan9645x switches"
+	help
+	  Say Y or M if you want to enable NPI tagging for the Lan9645x switches.
+	  In this mode, the frames over the Ethernet CPU port are prepended with
+	  a hardware-defined injection/extraction frame header.
+	  On injection a 28 byte internal frame header (IFH) is used. On
+	  extraction a 16 byte prefix is prepended before the internal frame
+	  header. This prefix starts with a broadcast MAC, to ease passage
+	  through the host side RX filter.
+
 config NET_DSA_TAG_GSWIP
 	tristate "Tag driver for Lantiq / Intel GSWIP switches"
 	help
