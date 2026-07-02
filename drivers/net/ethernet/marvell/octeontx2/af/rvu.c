@@ -23,6 +23,7 @@
 #include "cn20k/reg.h"
 #include "cn20k/api.h"
 #include "cn20k/npc.h"
+#include "switch/rvu_sw.h"
 
 #define DRV_NAME	"rvu_af"
 #define DRV_STRING      "Marvell OcteonTX2 RVU Admin Function Driver"
@@ -2579,6 +2580,7 @@ static void __rvu_mbox_up_handler(struct rvu_work *mwork, int type)
 
 		switch (msg->id) {
 		case MBOX_MSG_CGX_LINK_EVENT:
+		case MBOX_MSG_AF2PF_FDB_REFRESH:
 			break;
 		default:
 			if (msg->rc)
@@ -3820,6 +3822,8 @@ err_freemem:
 static void rvu_remove(struct pci_dev *pdev)
 {
 	struct rvu *rvu = pci_get_drvdata(pdev);
+
+	rvu_sw_shutdown();
 
 	rvu_dbg_exit(rvu);
 	rvu_unregister_dl(rvu);

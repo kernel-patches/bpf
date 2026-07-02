@@ -10,5 +10,6 @@
 
 /* RVU Switch */
 u32 rvu_sw_port_id(struct rvu *rvu, u16 pcifunc);
+void rvu_sw_shutdown(void);
 
 #endif
