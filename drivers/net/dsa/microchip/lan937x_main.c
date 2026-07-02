@@ -787,10 +787,6 @@ static int lan937x_setup(struct dsa_switch *ds)
 		return ret;
 	}
 
-	ret = ksz_parse_drive_strength(dev);
-	if (ret)
-		return ret;
-
 	/* set broadcast storm protection 10% rate */
 	storm_mask = BROADCAST_STORM_RATE;
 	storm_rate = (BROADCAST_STORM_VALUE * BROADCAST_STORM_PROT_RATE) / 100;

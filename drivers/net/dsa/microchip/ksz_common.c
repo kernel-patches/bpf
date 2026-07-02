@@ -113,28 +113,6 @@ static const struct ksz_mib_names ksz9477_mib_names[] = {
 	{ 0x83, "tx_discards" },
 };
 
-struct ksz_driver_strength_prop {
-	const char *name;
-	int offset;
-	int value;
-};
-
-enum ksz_driver_strength_type {
-	KSZ_DRIVER_STRENGTH_HI,
-	KSZ_DRIVER_STRENGTH_LO,
-	KSZ_DRIVER_STRENGTH_IO,
-};
-
-/**
- * struct ksz_drive_strength - drive strength mapping
- * @reg_val:	register value
- * @microamp:	microamp value
- */
-struct ksz_drive_strength {
-	u32 reg_val;
-	u32 microamp;
-};
-
 /* ksz9477_drive_strengths - Drive strength mapping for KSZ9477 variants
  *
  * This values are not documented in KSZ9477 variants but confirmed by
@@ -168,15 +146,6 @@ static const struct ksz_drive_strength ksz9477_drive_strengths[] = {
 	{ SW_DRIVE_STRENGTH_20MA, 20000 },
 	{ SW_DRIVE_STRENGTH_24MA, 24000 },
 	{ SW_DRIVE_STRENGTH_28MA, 28000 },
-};
-
-/* ksz88x3_drive_strengths - Drive strength mapping for KSZ8863, KSZ8873, ..
- *			     variants.
- * This values are documented in KSZ8873 and KSZ8863 datasheets.
- */
-static const struct ksz_drive_strength ksz88x3_drive_strengths[] = {
-	{ 0,  8000 },
-	{ KSZ8873_DRIVE_STRENGTH_16MA, 16000 },
 };
 
 /**
@@ -3785,8 +3754,8 @@ static void ksz_parse_rgmii_delay(struct ksz_device *dev, int port_num,
  * Returns: If found, the corresponding register value for that drive strength
  * is returned. Otherwise, -EINVAL is returned indicating an invalid value.
  */
-static int ksz_drive_strength_to_reg(const struct ksz_drive_strength *array,
-				     size_t array_size, int microamp)
+int ksz_drive_strength_to_reg(const struct ksz_drive_strength *array,
+			      size_t array_size, int microamp)
 {
 	int i;
 
@@ -3809,9 +3778,9 @@ static int ksz_drive_strength_to_reg(const struct ksz_drive_strength *array,
  * is detected. It lists out all the supported drive strength values for
  * reference in the error message.
  */
-static void ksz_drive_strength_error(struct ksz_device *dev,
-				     const struct ksz_drive_strength *array,
-				     size_t array_size, int microamp)
+void ksz_drive_strength_error(struct ksz_device *dev,
+			      const struct ksz_drive_strength *array,
+			      size_t array_size, int microamp)
 {
 	char supported_values[100];
 	size_t remaining_size;
@@ -3850,9 +3819,9 @@ static void ksz_drive_strength_error(struct ksz_device *dev,
  *
  * Return: 0 on successful configuration, a negative error code on failure.
  */
-static int ksz_drive_strength_write(struct ksz_device *dev,
-				    struct ksz_driver_strength_prop *props,
-				    int num_props)
+int ksz_drive_strength_write(struct ksz_device *dev,
+			     struct ksz_driver_strength_prop *props,
+			     int num_props)
 {
 	size_t array_size = ARRAY_SIZE(ksz9477_drive_strengths);
 	int i, ret, reg;
@@ -3887,130 +3856,6 @@ static int ksz_drive_strength_write(struct ksz_device *dev,
 	}
 
 	return ksz_rmw8(dev, reg, mask, val);
-}
-
-/**
- * ksz88x3_drive_strength_write() - Set the drive strength configuration for
- *				    KSZ8863 compatible chip variants.
- * @dev:       ksz device
- * @props:     Array of drive strength properties to be set
- * @num_props: Number of properties in the array
- *
- * This function applies the specified drive strength settings to KSZ88X3 chip
- * variants (KSZ8873, KSZ8863).
- * It ensures the configurations align with what the chip variant supports and
- * warns or errors out on unsupported settings.
- *
- * Return: 0 on success, error code otherwise
- */
-static int ksz88x3_drive_strength_write(struct ksz_device *dev,
-					struct ksz_driver_strength_prop *props,
-					int num_props)
-{
-	size_t array_size = ARRAY_SIZE(ksz88x3_drive_strengths);
-	int microamp;
-	int i, ret;
-
-	for (i = 0; i < num_props; i++) {
-		if (props[i].value == -1 || i == KSZ_DRIVER_STRENGTH_IO)
-			continue;
-
-		dev_warn(dev->dev, "%s is not supported by this chip variant\n",
-			 props[i].name);
-	}
-
-	microamp = props[KSZ_DRIVER_STRENGTH_IO].value;
-	ret = ksz_drive_strength_to_reg(ksz88x3_drive_strengths, array_size,
-					microamp);
-	if (ret < 0) {
-		ksz_drive_strength_error(dev, ksz88x3_drive_strengths,
-					 array_size, microamp);
-		return ret;
-	}
-
-	return ksz_rmw8(dev, KSZ8873_REG_GLOBAL_CTRL_12,
-			KSZ8873_DRIVE_STRENGTH_16MA, ret);
-}
-
-/**
- * ksz_parse_drive_strength() - Extract and apply drive strength configurations
- *				from device tree properties.
- * @dev:	ksz device
- *
- * This function reads the specified drive strength properties from the
- * device tree, validates against the supported chip variants, and sets
- * them accordingly. An error should be critical here, as the drive strength
- * settings are crucial for EMI compliance.
- *
- * Return: 0 on success, error code otherwise
- */
-int ksz_parse_drive_strength(struct ksz_device *dev)
-{
-	struct ksz_driver_strength_prop of_props[] = {
-		[KSZ_DRIVER_STRENGTH_HI] = {
-			.name = "microchip,hi-drive-strength-microamp",
-			.offset = SW_HI_SPEED_DRIVE_STRENGTH_S,
-			.value = -1,
-		},
-		[KSZ_DRIVER_STRENGTH_LO] = {
-			.name = "microchip,lo-drive-strength-microamp",
-			.offset = SW_LO_SPEED_DRIVE_STRENGTH_S,
-			.value = -1,
-		},
-		[KSZ_DRIVER_STRENGTH_IO] = {
-			.name = "microchip,io-drive-strength-microamp",
-			.offset = 0, /* don't care */
-			.value = -1,
-		},
-	};
-	struct device_node *np = dev->dev->of_node;
-	bool have_any_prop = false;
-	int i, ret;
-
-	for (i = 0; i < ARRAY_SIZE(of_props); i++) {
-		ret = of_property_read_u32(np, of_props[i].name,
-					   &of_props[i].value);
-		if (ret && ret != -EINVAL)
-			dev_warn(dev->dev, "Failed to read %s\n",
-				 of_props[i].name);
-		if (ret)
-			continue;
-
-		have_any_prop = true;
-	}
-
-	if (!have_any_prop)
-		return 0;
-
-	switch (dev->chip_id) {
-	case KSZ88X3_CHIP_ID:
-		return ksz88x3_drive_strength_write(dev, of_props,
-						    ARRAY_SIZE(of_props));
-	case KSZ8795_CHIP_ID:
-	case KSZ8794_CHIP_ID:
-	case KSZ8765_CHIP_ID:
-	case KSZ8563_CHIP_ID:
-	case KSZ8567_CHIP_ID:
-	case KSZ9477_CHIP_ID:
-	case KSZ9563_CHIP_ID:
-	case KSZ9567_CHIP_ID:
-	case KSZ9893_CHIP_ID:
-	case KSZ9896_CHIP_ID:
-	case KSZ9897_CHIP_ID:
-	case LAN9646_CHIP_ID:
-		return ksz_drive_strength_write(dev, of_props,
-						ARRAY_SIZE(of_props));
-	default:
-		for (i = 0; i < ARRAY_SIZE(of_props); i++) {
-			if (of_props[i].value == -1)
-				continue;
-
-			dev_warn(dev->dev, "%s is not supported by this chip variant\n",
-				 of_props[i].name);
-		}
-	}
-
-	return 0;
 }
 
 static int ksz8463_configure_straps_spi(struct ksz_device *dev)

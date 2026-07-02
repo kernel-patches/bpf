@@ -511,7 +511,37 @@ int ksz_mdio_register(struct ksz_device *dev);
 int ksz_pirq_setup(struct ksz_device *dev, u8 p);
 int ksz_girq_setup(struct ksz_device *dev);
 void ksz_irq_free(struct ksz_irq *kirq);
-int ksz_parse_drive_strength(struct ksz_device *dev);
+
+struct ksz_driver_strength_prop {
+	const char *name;
+	int offset;
+	int value;
+};
+
+enum ksz_driver_strength_type {
+	KSZ_DRIVER_STRENGTH_HI,
+	KSZ_DRIVER_STRENGTH_LO,
+	KSZ_DRIVER_STRENGTH_IO,
+};
+
+/**
+ * struct ksz_drive_strength - drive strength mapping
+ * @reg_val:	register value
+ * @microamp:	microamp value
+ */
+struct ksz_drive_strength {
+	u32 reg_val;
+	u32 microamp;
+};
+
+void ksz_drive_strength_error(struct ksz_device *dev,
+			      const struct ksz_drive_strength *array,
+			      size_t array_size, int microamp);
+int ksz_drive_strength_to_reg(const struct ksz_drive_strength *array,
+			      size_t array_size, int microamp);
+int ksz_drive_strength_write(struct ksz_device *dev,
+			     struct ksz_driver_strength_prop *props,
+			     int num_props);
 
 /* Common register access functions */
 static inline struct regmap *ksz_regmap_8(struct ksz_device *dev)
