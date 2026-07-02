@@ -3671,6 +3671,34 @@ int ksz_handle_wake_reason(struct ksz_device *dev, int port)
 }
 
 /**
+ * ksz_is_port_mac_global_usable - Check if the MAC address on a given port
+ *                                 can be used as a global address.
+ * @ds: Pointer to the DSA switch structure.
+ * @port: The port number on which the MAC address is to be checked.
+ *
+ * This function examines the MAC address set on the specified port and
+ * determines if it can be used as a global address for the switch.
+ *
+ * Return: true if the port's MAC address can be used as a global address, false
+ * otherwise.
+ */
+static bool ksz_is_port_mac_global_usable(struct dsa_switch *ds, int port)
+{
+	struct net_device *user = dsa_to_port(ds, port)->user;
+	const unsigned char *addr = user->dev_addr;
+	struct ksz_switch_macaddr *switch_macaddr;
+	struct ksz_device *dev = ds->priv;
+
+	ASSERT_RTNL();
+
+	switch_macaddr = dev->switch_macaddr;
+	if (switch_macaddr && !ether_addr_equal(switch_macaddr->addr, addr))
+		return false;
+
+	return true;
+}
+
+/**
  * ksz_get_wol - Get Wake-on-LAN settings for a specified port.
  * @ds: The dsa_switch structure.
  * @port: The port number.
@@ -3861,34 +3889,6 @@ int ksz_port_set_mac_address(struct dsa_switch *ds, int port,
 	}
 
 	return 0;
-}
-
-/**
- * ksz_is_port_mac_global_usable - Check if the MAC address on a given port
- *                                 can be used as a global address.
- * @ds: Pointer to the DSA switch structure.
- * @port: The port number on which the MAC address is to be checked.
- *
- * This function examines the MAC address set on the specified port and
- * determines if it can be used as a global address for the switch.
- *
- * Return: true if the port's MAC address can be used as a global address, false
- * otherwise.
- */
-bool ksz_is_port_mac_global_usable(struct dsa_switch *ds, int port)
-{
-	struct net_device *user = dsa_to_port(ds, port)->user;
-	const unsigned char *addr = user->dev_addr;
-	struct ksz_switch_macaddr *switch_macaddr;
-	struct ksz_device *dev = ds->priv;
-
-	ASSERT_RTNL();
-
-	switch_macaddr = dev->switch_macaddr;
-	if (switch_macaddr && !ether_addr_equal(switch_macaddr->addr, addr))
-		return false;
-
-	return true;
 }
 
 /**
