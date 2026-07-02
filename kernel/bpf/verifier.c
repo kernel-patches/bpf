@@ -12070,7 +12070,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 				return -EINVAL;
 			}
 
-			if (is_kfunc_arg_constant(meta->btf, &args[i])) {
+			if (is_kfunc_arg_constant(meta->btf, &args[i]) ||
+			    is_kfunc_arg_const_mem_size(meta->btf, &args[i], reg)) {
 				if (meta->arg_constant.found) {
 					verifier_bug(env, "only one constant argument permitted");
 					return -EFAULT;
@@ -12421,23 +12422,6 @@ check_ok:
 					return ret;
 				}
 			}
-
-			if (is_kfunc_arg_const_mem_size(meta->btf, size_arg, size_reg)) {
-				if (meta->arg_constant.found) {
-					verifier_bug(env, "only one constant argument permitted");
-					return -EFAULT;
-				}
-				if (!tnum_is_const(size_reg->var_off)) {
-					verbose(env, "%s must be a known constant\n",
-						reg_arg_name(env, next_argno));
-					return -EINVAL;
-				}
-				meta->arg_constant.found = true;
-				meta->arg_constant.value = size_reg->var_off.value;
-			}
-
-			/* Skip next '__sz' or '__szk' argument */
-			i++;
 			break;
 		}
 		case KF_ARG_PTR_TO_CALLBACK:
