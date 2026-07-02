@@ -7,14 +7,14 @@
 
 #include <linux/bitfield.h>
 #include "rvu.h"
-#include "rvu_sw.h"
 #include "rvu_sw_l2.h"
 #include "rvu_sw_l3.h"
 #include "rvu_sw_fl.h"
+#include "rvu_sw.h"
 
 u32 rvu_sw_port_id(struct rvu *rvu, u16 pcifunc)
 {
-	u32 port_id;
+	u16 port_id;
 	u16 rep_id;
 
 	rep_id  = rvu_rep_get_vlan_id(rvu, pcifunc);
@@ -39,6 +39,10 @@ int rvu_mbox_handler_swdev2af_notify(struct rvu *rvu,
 	case SWDEV2AF_MSG_TYPE_REFRESH_FDB:
 		rc = rvu_sw_l2_fdb_list_entry_add(rvu, req->pcifunc, req->mac);
 		break;
+
+	case SWDEV2AF_MSG_TYPE_REFRESH_FL:
+		rc = rvu_sw_fl_stats_sync2db(rvu, req->fl, req->cnt);
+		break;
 	}
 
 	return rc;
@@ -48,4 +52,5 @@ void rvu_sw_shutdown(void)
 {
 	rvu_sw_l2_shutdown();
 	rvu_sw_l3_shutdown();
+	rvu_sw_fl_shutdown();
 }
