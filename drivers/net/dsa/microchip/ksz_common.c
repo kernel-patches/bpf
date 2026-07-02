@@ -3838,8 +3838,8 @@ static void ksz_drive_strength_error(struct ksz_device *dev,
 }
 
 /**
- * ksz9477_drive_strength_write() - Set the drive strength for specific KSZ9477
- *				    chip variants.
+ * ksz_drive_strength_write() - Set the drive strength for specific KSZ9477
+ *				and the KSZ87xx chip variants.
  * @dev:       ksz device
  * @props:     Array of drive strength properties to be applied
  * @num_props: Number of properties in the array
@@ -3850,9 +3850,9 @@ static void ksz_drive_strength_error(struct ksz_device *dev,
  *
  * Return: 0 on successful configuration, a negative error code on failure.
  */
-static int ksz9477_drive_strength_write(struct ksz_device *dev,
-					struct ksz_driver_strength_prop *props,
-					int num_props)
+static int ksz_drive_strength_write(struct ksz_device *dev,
+				    struct ksz_driver_strength_prop *props,
+				    int num_props)
 {
 	size_t array_size = ARRAY_SIZE(ksz9477_drive_strengths);
 	int i, ret, reg;
@@ -3998,8 +3998,8 @@ int ksz_parse_drive_strength(struct ksz_device *dev)
 	case KSZ9896_CHIP_ID:
 	case KSZ9897_CHIP_ID:
 	case LAN9646_CHIP_ID:
-		return ksz9477_drive_strength_write(dev, of_props,
-						    ARRAY_SIZE(of_props));
+		return ksz_drive_strength_write(dev, of_props,
+						ARRAY_SIZE(of_props));
 	default:
 		for (i = 0; i < ARRAY_SIZE(of_props); i++) {
 			if (of_props[i].value == -1)
