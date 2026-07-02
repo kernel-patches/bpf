@@ -98,6 +98,18 @@ properties:
     items:
       - description: phandle to the HEG or core power domain
 
+  nvidia,channels:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 2
+    maxItems: 2
+    description: Describes range of usable Host1x channels as a <base count> tuple.
+
+  nvidia,syncpoints:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 2
+    maxItems: 2
+    description: Describes range of writable Host1x syncpoints as a <base count> tuple.
+
 required:
   - compatible
   - interrupts
