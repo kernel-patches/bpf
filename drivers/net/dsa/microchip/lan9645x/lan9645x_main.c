@@ -151,6 +151,9 @@ static int lan9645x_setup(struct dsa_switch *ds)
 
 	mutex_init(&lan9645x->port_mux_lock);
 	mutex_init(&lan9645x->fwd_domain_lock);
+	err = lan9645x_vlan_init(lan9645x);
+	if (err)
+		goto err_mutex;
 
 	/* Link Aggregation Mode: NETDEV_LAG_HASH_L2 */
 	lan_wr(ANA_AGGR_CFG_AC_SMAC_ENA |
@@ -524,6 +527,7 @@ static int lan9645x_port_bridge_join(struct dsa_switch *ds, int port,
 
 	lan9645x->bridge_mask |= BIT(p->chip_port);
 	__lan9645x_port_set_host_flood(lan9645x);
+	lan9645x_vlan_clear_hostmode(p);
 
 	mutex_unlock(&lan9645x->fwd_domain_lock);
 
@@ -579,9 +583,50 @@ static void lan9645x_port_bridge_leave(struct dsa_switch *ds, int port,
 		lan9645x->bridge = NULL;
 
 	__lan9645x_port_set_host_flood(lan9645x);
+	lan9645x_vlan_set_hostmode(p);
 	lan9645x_update_fwd_mask(lan9645x);
 
 	mutex_unlock(&lan9645x->fwd_domain_lock);
+}
+
+static int lan9645x_port_vlan_filtering(struct dsa_switch *ds, int port,
+					bool enabled,
+					struct netlink_ext_ack *extack)
+{
+	struct lan9645x *lan9645x = ds->priv;
+	struct lan9645x_port *p;
+
+	p = lan9645x_to_port(lan9645x, port);
+	p->vlan_aware = enabled;
+	lan9645x_vlan_port_apply(p);
+
+	return 0;
+}
+
+static int lan9645x_port_vlan_add(struct dsa_switch *ds, int port,
+				  const struct switchdev_obj_port_vlan *vlan,
+				  struct netlink_ext_ack *extack)
+{
+	struct lan9645x *lan9645x = ds->priv;
+	struct lan9645x_port *p;
+	bool pvid, untagged;
+
+	p = lan9645x_to_port(lan9645x, port);
+	pvid = !!(vlan->flags & BRIDGE_VLAN_INFO_PVID);
+	untagged = !!(vlan->flags & BRIDGE_VLAN_INFO_UNTAGGED);
+
+	return lan9645x_vlan_port_add_vlan(p, vlan->vid, pvid, untagged,
+					   extack);
+}
+
+static int lan9645x_port_vlan_del(struct dsa_switch *ds, int port,
+				  const struct switchdev_obj_port_vlan *vlan)
+{
+	struct lan9645x *lan9645x = ds->priv;
+	struct lan9645x_port *p;
+
+	p = lan9645x_to_port(lan9645x, port);
+	return lan9645x_vlan_port_del_vlan(p, vlan->vid);
 }
 
 static const struct dsa_switch_ops lan9645x_switch_ops = {
@@ -606,6 +651,11 @@ static const struct dsa_switch_ops lan9645x_switch_ops = {
 	.port_bridge_leave		= lan9645x_port_bridge_leave,
 	.port_stp_state_set		= lan9645x_port_bridge_stp_state_set,
 	.port_set_host_flood		= lan9645x_port_set_host_flood,
+
+	/* VLAN integration */
+	.port_vlan_filtering		= lan9645x_port_vlan_filtering,
+	.port_vlan_add			= lan9645x_port_vlan_add,
+	.port_vlan_del			= lan9645x_port_vlan_del,
 };
 
 static int lan9645x_request_target_regmaps(struct lan9645x *lan9645x)
