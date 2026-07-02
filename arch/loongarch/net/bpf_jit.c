@@ -25,7 +25,23 @@
 
 #define REG_TCC		LOONGARCH_GPR_A6
 #define REG_ARENA	LOONGARCH_GPR_S6 /* For storing arena_vm_start */
-#define BPF_TAIL_CALL_CNT_PTR_STACK_OFF(stack) (round_up(stack, 16) - 80)
+
+static int tail_call_cnt_ptr_stack_off(struct jit_ctx *ctx)
+{
+	/* Ten words are pushed below the BPF stack: ra, fp, s0-s5, and the
+	 * tail call count plus its pointer, which occupy the two deepest
+	 * slots of the callee-saved area.
+	 */
+	int offset = sizeof(long) * 10;
+
+	/* An arena program reserves one extra word above them (REG_ARENA),
+	 * which pushes the tail call count pointer down by one slot.
+	 */
+	if (ctx->arena_vm_start)
+		offset += sizeof(long);
+
+	return round_up(ctx->stack_size, 16) - offset;
+}
 
 static const int regmap[] = {
 	/* return value from in-kernel function, and exit value for eBPF program */
@@ -291,7 +307,7 @@ bool bpf_jit_supports_far_kfunc_call(void)
 static int emit_bpf_tail_call(struct jit_ctx *ctx, int insn)
 {
 	int off, tc_ninsn = 0;
-	int tcc_ptr_off = BPF_TAIL_CALL_CNT_PTR_STACK_OFF(ctx->stack_size);
+	int tcc_ptr_off = tail_call_cnt_ptr_stack_off(ctx);
 	u8 a1 = LOONGARCH_GPR_A1;
 	u8 a2 = LOONGARCH_GPR_A2;
 	u8 t1 = LOONGARCH_GPR_T1;
@@ -1181,7 +1197,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 			return ret;
 
 		if (insn->src_reg == BPF_PSEUDO_CALL) {
-			tcc_ptr_off = BPF_TAIL_CALL_CNT_PTR_STACK_OFF(ctx->stack_size);
+			tcc_ptr_off = tail_call_cnt_ptr_stack_off(ctx);
 			emit_insn(ctx, ldd, REG_TCC, LOONGARCH_GPR_SP, tcc_ptr_off);
 		}
 
