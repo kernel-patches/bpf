@@ -12665,6 +12665,9 @@ __bpf_kfunc int bpf_sock_destroy(struct sock_common *sock)
 {
 	struct sock *sk = (struct sock *)sock;
 
+	if (!sk_fullsock(sk))
+		return -EOPNOTSUPP;
+
 	/* The locking semantics that allow for synchronous execution of the
 	 * destroy handlers are only supported for TCP and UDP.
 	 * Supporting protocols will need to acquire sock lock in the BPF context
