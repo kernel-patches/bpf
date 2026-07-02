@@ -147,14 +147,20 @@ allOf:
     then:
       properties:
         reg-names:
-          items:
-            - const: hypervisor
-            - const: vm
+          oneOf:
+            - items:
+                - const: hypervisor
+                - const: vm
+            - items:
+                - const: vm
 
         reg:
-          items:
-            - description: region used by the hypervisor
-            - description: region assigned to the virtual machine
+          oneOf:
+            - items:
+                - description: region used by the hypervisor
+                - description: region assigned to the virtual machine
+            - items:
+                - description: region assigned to the virtual machine
 
         resets:
           maxItems: 1
@@ -198,16 +204,22 @@ allOf:
     then:
       properties:
         reg-names:
-          items:
-            - const: common
-            - const: hypervisor
-            - const: vm
+          oneOf:
+            - items:
+                - const: common
+                - const: hypervisor
+                - const: vm
+            - items:
+                - const: vm
 
         reg:
-          items:
-            - description: region used by host1x server
-            - description: region used by the hypervisor
-            - description: region assigned to the virtual machine
+          oneOf:
+            - items:
+                - description: region used by host1x server
+                - description: region used by the hypervisor
+                - description: region assigned to the virtual machine
+            - items:
+                - description: region assigned to the virtual machine
 
         interrupts:
           items:
