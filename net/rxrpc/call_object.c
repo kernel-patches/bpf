@@ -198,7 +198,7 @@ static struct rxrpc_call *rxrpc_alloc_client_call(struct rxrpc_sock *rx,
 	ktime_t now;
 	int ret;
 
-	_enter("");
+	_enter("%p", p->app_data);
 
 	call = rxrpc_alloc_call(rx, gfp, debug_id);
 	if (!call)
@@ -211,6 +211,7 @@ static struct rxrpc_call *rxrpc_alloc_client_call(struct rxrpc_sock *rx,
 	call->interruptibility	= p->interruptibility;
 	call->tx_total_len	= p->tx_total_len;
 	call->key		= key_get(cp->key);
+	call->app_data		= key_get(p->app_data);
 	call->peer		= rxrpc_get_peer(cp->peer, rxrpc_peer_get_call);
 	call->local		= rxrpc_get_local(cp->local, rxrpc_local_get_call);
 	call->security_level	= cp->security_level;
@@ -697,6 +698,7 @@ static void rxrpc_destroy_call(struct work_struct *work)
 	rxrpc_put_peer(call->peer, rxrpc_peer_put_call);
 	rxrpc_put_local(call->local, rxrpc_local_put_call);
 	key_put(call->key);
+	key_put(call->app_data);
 	call_rcu(&call->rcu, rxrpc_rcu_free_call);
 }
 

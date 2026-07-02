@@ -58,11 +58,7 @@ enum rxrpc_cmsg_type {
 	RXRPC_TX_LENGTH		= 12,	/* -s-: Total length of Tx data */
 	RXRPC_SET_CALL_TIMEOUT	= 13,	/* -s-: Set one or more call timeouts */
 	RXRPC_CHARGE_ACCEPT	= 14,	/* Ss-: Charge the accept pool with a user call ID */
-	RXRPC_OOB_ID		= 15,	/* -sr: OOB message ID */
-	RXRPC_CHALLENGED	= 16,	/* C-r: Info on a received CHALLENGE */
-	RXRPC_RESPOND		= 17,	/* Cs-: Respond to a challenge */
-	RXRPC_RESPONDED		= 18,	/* S-r: Data received in RESPONSE */
-	RXRPC_RESP_RXGK_APPDATA	= 19,	/* Cs-: RESPONSE: RxGK app data to include */
+	RXRPC_RESPONSE_APPDATA	= 20,	/* Cs-: User key holding app data for RESPONSE */
 	RXRPC__SUPPORTED
 };
 

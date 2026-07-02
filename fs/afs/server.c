@@ -398,7 +398,7 @@ static void afs_server_rcu(struct rcu_head *rcu)
 	afs_put_endpoint_state(rcu_access_pointer(server->endpoint_state),
 			       afs_estate_trace_put_server);
 	afs_put_cell(server->cell, afs_cell_trace_put_server);
-	kfree(server->cm_rxgk_appdata.data);
+	key_put(server->cm_rxgk_appdata);
 	kfree(server);
 }
 

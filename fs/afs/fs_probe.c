@@ -241,8 +241,13 @@ int afs_fs_probe_fileserver(struct afs_net *net, struct afs_server *server,
 	struct afs_endpoint_state *estate, *old;
 	struct afs_addr_list *old_alist = NULL, *alist;
 	unsigned long unprobed;
+	int ret;
 
 	_enter("%pU", &server->uuid);
+
+	ret = afs_create_server_appdata(server, key);
+	if (ret < 0)
+		return ret;
 
 	estate = kzalloc_obj(*estate);
 	if (!estate)

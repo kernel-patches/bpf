@@ -6,7 +6,9 @@
  */
 
 #include <linux/slab.h>
+#include <linux/key-type.h>
 #include <crypto/krb5.h>
+#include <keys/user-type.h>
 #include "internal.h"
 #include "afs_cm.h"
 #include "afs_fs.h"
@@ -19,97 +21,66 @@
 #define xdr_len_object(x) (4 + round_up((x), sizeof(__be32)))
 
 #ifdef CONFIG_RXGK
-static int afs_create_yfs_cm_token(struct sk_buff *challenge,
-				   struct afs_server *server);
+static int afs_create_yfs_cm_token(struct afs_server *server, u32 krb5_enctype);
 #endif
 
 /*
- * Respond to an RxGK challenge, adding appdata.
+ * Create the application data to go in a RESPONSE packet a server's CHALLENGE
+ * from the parameters contained in a key.  The key specifies the security
+ * index and other appropriate parameters such as the encoding type for RxGK.
  */
-static int afs_respond_to_challenge(struct sk_buff *challenge)
+int afs_create_server_appdata(struct afs_server *server, struct key *key)
 {
-#ifdef CONFIG_RXGK
-	struct krb5_buffer appdata = {};
-	struct afs_server *server;
-#endif
-	struct rxrpc_peer *peer;
-	unsigned long peer_data;
-	u16 service_id;
+	u32 krb5_enctype;
+	int ret;
 	u8 security_index;
 
-	rxrpc_kernel_query_challenge(challenge, &peer, &peer_data,
-				     &service_id, &security_index);
+	if (!key)
+		return 0;
 
-	_enter("%u,%u", service_id, security_index);
+	/* Read APPDATA flag before cm_rxgk_appdata */
+	if (test_bit_acquire(AFS_SERVER_FL_APPDATA, &server->flags))
+		return 0;
 
-	switch (service_id) {
-		/* We don't send CM_SERVICE RPCs, so don't expect a challenge
-		 * therefrom.
-		 */
-	case FS_SERVICE:
-	case VL_SERVICE:
-	case YFS_FS_SERVICE:
-	case YFS_VL_SERVICE:
-		break;
-	default:
-		pr_warn("Can't respond to unknown challenge %u:%u",
-			service_id, security_index);
-		return rxrpc_kernel_reject_challenge(challenge, RX_USER_ABORT, -EPROTO,
-						     afs_abort_unsupported_sec_class);
-	}
+	rxrpc_kernel_query_key(key, &security_index, &krb5_enctype);
 
-	switch (security_index) {
+	_enter("%u,%u", security_index, krb5_enctype);
+
+	ret = 0;
+	mutex_lock(&server->cm_token_lock);
+
+	/* Read APPDATA flag before cm_rxgk_appdata */
+	if (!test_bit_acquire(AFS_SERVER_FL_APPDATA, &server->flags)) {
+		switch (security_index) {
+		case 0:
+			break;
 #ifdef CONFIG_RXKAD
-	case RXRPC_SECURITY_RXKAD:
-		return rxkad_kernel_respond_to_challenge(challenge);
+		case RXRPC_SECURITY_RXKAD:
+			set_bit(AFS_SERVER_FL_APPDATA, &server->flags);
+			break;
 #endif
 
 #ifdef CONFIG_RXGK
-	case RXRPC_SECURITY_RXGK:
-		return rxgk_kernel_respond_to_challenge(challenge, &appdata);
-
-	case RXRPC_SECURITY_YFS_RXGK:
-		switch (service_id) {
-		case FS_SERVICE:
-		case YFS_FS_SERVICE:
-			server = (struct afs_server *)peer_data;
-			if (!server->cm_rxgk_appdata.data) {
-				mutex_lock(&server->cm_token_lock);
-				if (!server->cm_rxgk_appdata.data)
-					afs_create_yfs_cm_token(challenge, server);
-				mutex_unlock(&server->cm_token_lock);
-			}
-			if (server->cm_rxgk_appdata.data)
-				appdata = server->cm_rxgk_appdata;
+		case RXRPC_SECURITY_RXGK:
+			set_bit(AFS_SERVER_FL_APPDATA, &server->flags);
 			break;
-		}
-		return rxgk_kernel_respond_to_challenge(challenge, &appdata);
+
+		case RXRPC_SECURITY_YFS_RXGK:
+			ret = afs_create_yfs_cm_token(server, krb5_enctype);
+			if (ret < 0)
+				break;
+			set_bit(AFS_SERVER_FL_APPDATA, &server->flags);
+			break;
 #endif
 
-	default:
-		return rxrpc_kernel_reject_challenge(challenge, RX_USER_ABORT, -EPROTO,
-						     afs_abort_unsupported_sec_class);
-	}
-}
-
-/*
- * Process the OOB message queue, processing challenge packets.
- */
-void afs_process_oob_queue(struct work_struct *work)
-{
-	struct afs_net *net = container_of(work, struct afs_net, rx_oob_work);
-	struct sk_buff *oob;
-	enum rxrpc_oob_type type;
-
-	while (READ_ONCE(net->live) &&
-	       (oob = rxrpc_kernel_dequeue_oob(net->socket, &type))) {
-		switch (type) {
-		case RXRPC_OOB_CHALLENGE:
-			afs_respond_to_challenge(oob);
+		default:
+			WARN_ON_ONCE(1);
 			break;
 		}
-		rxrpc_kernel_free_oob(oob);
 	}
+
+	mutex_unlock(&server->cm_token_lock);
+	return ret;
 }
 
 #ifdef CONFIG_RXGK
@@ -177,37 +148,34 @@ out:
 /*
  * Create an YFS RxGK GSS token to use as a ticket to the specified fileserver.
  */
-static int afs_create_yfs_cm_token(struct sk_buff *challenge,
-				   struct afs_server *server)
+static int afs_create_yfs_cm_token(struct afs_server *server, u32 enctype)
 {
 	const struct krb5_enctype *conn_krb5, *token_krb5;
 	const struct krb5_buffer *token_key;
 	struct crypto_aead *aead;
 	struct scatterlist sg;
 	struct afs_net *net = server->cell->net;
-	const struct key *key = net->fs_cm_token_key;
+	const struct key *cm_key = net->fs_cm_token_key;
+	struct key *appdata_key = NULL;
 	size_t keysize, uuidsize, authsize, toksize, encsize, contsize, adatasize, offset;
 	__be32 caps[1] = {
 		[0] = htonl(AFS_CAP_ERROR_TRANSLATION),
 	};
 	__be32 *xdr;
 	void *appdata, *K0, *encbase;
-	u32 enctype;
 	int ret;
 
-	if (!key)
+	if (!cm_key)
 		return -ENOKEY;
 
 	/* Assume that the fileserver is happy to use the same encoding type as
 	 * we were told to use by the token obtained by the user.
 	 */
-	enctype = rxgk_kernel_query_challenge(challenge);
-
 	conn_krb5 = crypto_krb5_find_enctype(enctype);
 	if (!conn_krb5)
 		return -ENOPKG;
-	token_krb5 = key->payload.data[0];
-	token_key = (const struct krb5_buffer *)&key->payload.data[2];
+	token_krb5 = cm_key->payload.data[0];
+	token_key = (const struct krb5_buffer *)&cm_key->payload.data[2];
 
 	/* struct rxgk_key {
 	 *	afs_uint32	enctype;
@@ -327,9 +295,22 @@ static int afs_create_yfs_cm_token(struct sk_buff *challenge,
 	if (ret < 0)
 		goto out_aead;
 
-	server->cm_rxgk_appdata.len  = adatasize;
-	server->cm_rxgk_appdata.data = appdata;
-	appdata = NULL;
+	appdata_key = key_alloc(&key_type_user, "rxrpc: afs rxgk appdata",
+				GLOBAL_ROOT_UID, GLOBAL_ROOT_GID, current_cred(),
+				KEY_POS_VIEW | KEY_POS_SEARCH | KEY_USR_VIEW,
+				KEY_ALLOC_NOT_IN_QUOTA, NULL);
+	if (IS_ERR(appdata_key)) {
+		ret = PTR_ERR(appdata_key);
+		goto out_aead;
+	}
+
+	ret = key_instantiate_and_link(appdata_key, appdata, adatasize, NULL, NULL);
+	if (ret < 0) {
+		key_put(appdata_key);
+		goto out_aead;
+	}
+
+	server->cm_rxgk_appdata = appdata_key;
 
 out_aead:
 	crypto_free_aead(aead);

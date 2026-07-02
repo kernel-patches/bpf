@@ -11,6 +11,7 @@
 #include <linux/skbuff.h>
 #include <linux/slab.h>
 #include <linux/key-type.h>
+#include <keys/user-type.h>
 #include "ar-internal.h"
 #include "rxgk_common.h"
 
@@ -734,37 +735,6 @@ static bool rxgk_validate_challenge(struct rxrpc_connection *conn,
 	return true;
 }
 
-/**
- * rxgk_kernel_query_challenge - Query RxGK-specific challenge parameters
- * @challenge: The challenge packet to query
- *
- * Return: The Kerberos 5 encoding type for the challenged connection.
- */
-u32 rxgk_kernel_query_challenge(struct sk_buff *challenge)
-{
-	struct rxrpc_skb_priv *sp = rxrpc_skb(challenge);
-
-	return sp->chall.conn->rxgk.enctype;
-}
-EXPORT_SYMBOL(rxgk_kernel_query_challenge);
-
-/*
- * Fill out the control message to pass to userspace to inform about the
- * challenge.
- */
-static int rxgk_challenge_to_recvmsg(struct rxrpc_connection *conn,
-				     struct sk_buff *challenge,
-				     struct msghdr *msg)
-{
-	struct rxgk_challenge chall;
-
-	chall.base.service_id		= conn->service_id;
-	chall.base.security_index	= conn->security_ix;
-	chall.enctype			= conn->rxgk.enctype;
-
-	return put_cmsg(msg, SOL_RXRPC, RXRPC_CHALLENGED, sizeof(chall), &chall);
-}
-
 /*
  * Insert the requisite amount of XDR padding for the length given.
  */
@@ -837,7 +807,7 @@ static noinline ssize_t rxgk_insert_response_header(struct rxrpc_connection *con
  */
 static ssize_t rxgk_construct_authenticator(struct rxrpc_connection *conn,
 					    struct sk_buff *challenge,
-					    const struct krb5_buffer *appdata,
+					    const struct user_key_payload *appdata,
 					    struct sk_buff *response,
 					    size_t offset)
 {
@@ -859,20 +829,20 @@ static ssize_t rxgk_construct_authenticator(struct rxrpc_connection *conn,
 	if (ret < 0)
 		return -EPROTO;
 
-	a.appdata_len = htonl(appdata->len);
+	a.appdata_len = htonl(appdata->datalen);
 
 	ret = skb_store_bits(response, offset, &a, sizeof(a));
 	if (ret < 0)
 		return ret;
 	offset += sizeof(a);
 
-	if (appdata->len) {
-		ret = skb_store_bits(response, offset, appdata->data, appdata->len);
+	if (appdata->datalen) {
+		ret = skb_store_bits(response, offset, appdata->data, appdata->datalen);
 		if (ret < 0)
 			return ret;
-		offset += appdata->len;
+		offset += appdata->datalen;
 
-		ret = rxgk_pad_out(response, appdata->len, offset);
+		ret = rxgk_pad_out(response, appdata->datalen, offset);
 		if (ret < 0)
 			return ret;
 		offset += ret;
@@ -890,7 +860,7 @@ static ssize_t rxgk_construct_authenticator(struct rxrpc_connection *conn,
 	ret = skb_store_bits(response, offset, &b, sizeof(b));
 	if (ret < 0)
 		return ret;
-	return sizeof(a) + xdr_round_up(appdata->len) + sizeof(b);
+	return sizeof(a) + xdr_round_up(appdata->datalen) + sizeof(b);
 }
 
 static ssize_t rxgk_encrypt_authenticator(struct rxrpc_connection *conn,
@@ -923,7 +893,7 @@ static ssize_t rxgk_encrypt_authenticator(struct rxrpc_connection *conn,
  */
 static int rxgk_construct_response(struct rxrpc_connection *conn,
 				   struct sk_buff *challenge,
-				   struct krb5_buffer *appdata)
+				   const struct user_key_payload *appdata)
 {
 	struct rxrpc_skb_priv *csp, *rsp;
 	struct rxgk_context *gk;
@@ -936,7 +906,7 @@ static int rxgk_construct_response(struct rxrpc_connection *conn,
 	if (IS_ERR(gk))
 		return PTR_ERR(gk);
 
-	auth_len = 20 + (4 + appdata->len) + 12 + (1 + 4) * 4;
+	auth_len = 20 + (4 + appdata->datalen) + 12 + (1 + 4) * 4;
 	authx_len = crypto_krb5_how_much_buffer(gk->krb5, KRB5_ENCRYPT_MODE,
 						auth_len, &auth_offset);
 	len = sizeof(struct rxrpc_wire_header) +
@@ -1011,66 +981,36 @@ error:
  * Respond to a challenge packet.
  */
 static int rxgk_respond_to_challenge(struct rxrpc_connection *conn,
-				     struct sk_buff *challenge,
-				     struct krb5_buffer *appdata)
+				     struct sk_buff *challenge)
 {
-	_enter("{%d,%x}", conn->debug_id, key_serial(conn->key));
+	struct user_key_payload dummy = {}, *appdata = &dummy;
+	int ret;
+
+	_enter("{%d,%u,%x,%x}",
+	       conn->debug_id, conn->service_id,
+	       key_serial(conn->key), key_serial(conn->bundle->app_data));
 
 	if (key_validate(conn->key) < 0)
 		return rxrpc_abort_conn(conn, NULL, RXGK_EXPIRED, -EPROTO,
 					rxgk_abort_chall_key_expired);
 
-	return rxgk_construct_response(conn, challenge, appdata);
-}
-
-static int rxgk_respond_to_challenge_no_appdata(struct rxrpc_connection *conn,
-						struct sk_buff *challenge)
-{
-	struct krb5_buffer appdata = {};
-
-	return rxgk_respond_to_challenge(conn, challenge, &appdata);
-}
-
-/**
- * rxgk_kernel_respond_to_challenge - Respond to a challenge with appdata
- * @challenge: The challenge to respond to
- * @appdata: The application data to include in the RESPONSE authenticator
- *
- * Allow a kernel application to respond to a CHALLENGE with application data
- * to be included in the RxGK RESPONSE Authenticator.
- *
- * Return: %0 if successful and a negative error code otherwise.
- */
-int rxgk_kernel_respond_to_challenge(struct sk_buff *challenge,
-				     struct krb5_buffer *appdata)
-{
-	struct rxrpc_skb_priv *csp = rxrpc_skb(challenge);
-
-	return rxgk_respond_to_challenge(csp->chall.conn, challenge, appdata);
-}
-EXPORT_SYMBOL(rxgk_kernel_respond_to_challenge);
-
-/*
- * Parse sendmsg() control message and respond to challenge.  We need to see if
- * there's an appdata to fish out.
- */
-static int rxgk_sendmsg_respond_to_challenge(struct sk_buff *challenge,
-					     struct msghdr *msg)
-{
-	struct krb5_buffer appdata = {};
-	struct cmsghdr *cmsg;
-
-	for_each_cmsghdr(cmsg, msg) {
-		if (cmsg->cmsg_level != SOL_RXRPC ||
-		    cmsg->cmsg_type != RXRPC_RESP_RXGK_APPDATA)
-			continue;
-		if (appdata.data)
-			return -EINVAL;
-		appdata.data = CMSG_DATA(cmsg);
-		appdata.len = cmsg->cmsg_len - sizeof(struct cmsghdr);
+	if (conn->bundle->app_data) {
+		rcu_read_lock();
+		appdata = (struct user_key_payload *)
+			user_key_payload_rcu(conn->bundle->app_data);
+		if (!refcount_inc_not_zero(&appdata->ref))
+			appdata = NULL;
+		rcu_read_unlock();
+		if (!appdata)
+			return rxrpc_abort_conn(conn, NULL, RXGK_EXPIRED, -EKEYREVOKED,
+						rxgk_abort_chall_key_expired);
 	}
 
-	return rxgk_kernel_respond_to_challenge(challenge, &appdata);
+	ret = rxgk_construct_response(conn, challenge, appdata);
+
+	if (appdata != &dummy)
+		put_user_key_payload(appdata);
+	return ret;
 }
 
 /*
@@ -1346,9 +1286,7 @@ const struct rxrpc_security rxgk_yfs = {
 	.free_call_crypto		= rxgk_free_call_crypto,
 	.issue_challenge		= rxgk_issue_challenge,
 	.validate_challenge		= rxgk_validate_challenge,
-	.challenge_to_recvmsg		= rxgk_challenge_to_recvmsg,
-	.sendmsg_respond_to_challenge	= rxgk_sendmsg_respond_to_challenge,
-	.respond_to_challenge		= rxgk_respond_to_challenge_no_appdata,
+	.respond_to_challenge		= rxgk_respond_to_challenge,
 	.verify_response		= rxgk_verify_response,
 	.clear				= rxgk_clear,
 	.default_decode_ticket		= rxgk_yfs_decode_ticket,

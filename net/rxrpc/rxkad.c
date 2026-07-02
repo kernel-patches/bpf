@@ -748,32 +748,6 @@ error:
 	return ret;
 }
 
-/*
- * RxKAD does automatic response only as there's nothing to manage that isn't
- * already in the key.
- */
-static int rxkad_sendmsg_respond_to_challenge(struct sk_buff *challenge,
-					      struct msghdr *msg)
-{
-	return -EINVAL;
-}
-
-/**
- * rxkad_kernel_respond_to_challenge - Respond to a challenge with appdata
- * @challenge: The challenge to respond to
- *
- * Allow a kernel application to respond to a CHALLENGE.
- *
- * Return: %0 if successful and a negative error code otherwise.
- */
-int rxkad_kernel_respond_to_challenge(struct sk_buff *challenge)
-{
-	struct rxrpc_skb_priv *csp = rxrpc_skb(challenge);
-
-	return rxkad_respond_to_challenge(csp->chall.conn, challenge);
-}
-EXPORT_SYMBOL(rxkad_kernel_respond_to_challenge);
-
 /* Decrypt data in-place using DES-PCBC.  @len must be a multiple of 8. */
 VISIBLE_IF_KUNIT void des_pcbc_decrypt_inplace(const struct des_ctx *key,
 					       __le64 iv, u8 *data, size_t len)
@@ -1134,7 +1108,6 @@ const struct rxrpc_security rxkad = {
 	.free_call_crypto		= rxkad_free_call_crypto,
 	.issue_challenge		= rxkad_issue_challenge,
 	.validate_challenge		= rxkad_validate_challenge,
-	.sendmsg_respond_to_challenge	= rxkad_sendmsg_respond_to_challenge,
 	.respond_to_challenge		= rxkad_respond_to_challenge,
 	.verify_response		= rxkad_verify_response,
 	.clear				= rxkad_clear,

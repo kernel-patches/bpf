@@ -279,10 +279,7 @@ static int rxrpc_process_event(struct rxrpc_connection *conn,
 
 	switch (sp->hdr.type) {
 	case RXRPC_PACKET_TYPE_CHALLENGE:
-		ret = conn->security->respond_to_challenge(conn, skb);
-		sp->chall.conn = NULL;
-		rxrpc_put_connection(conn, rxrpc_conn_put_challenge_input);
-		return ret;
+		return conn->security->respond_to_challenge(conn, skb);
 
 	case RXRPC_PACKET_TYPE_RESPONSE:
 		spin_lock_irq(&conn->state_lock);
@@ -426,66 +423,6 @@ static void rxrpc_post_packet_to_conn(struct rxrpc_connection *conn,
 }
 
 /*
- * Post a CHALLENGE packet to the socket of one of a connection's calls so that
- * it can get application data to include in the packet, possibly querying
- * userspace.
- */
-static bool rxrpc_post_challenge(struct rxrpc_connection *conn,
-				 struct sk_buff *skb)
-{
-	struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
-	struct rxrpc_call *call = NULL;
-	struct rxrpc_sock *rx;
-	bool respond = false, queued = false;
-
-	sp->chall.conn =
-		rxrpc_get_connection(conn, rxrpc_conn_get_challenge_input);
-
-	if (!conn->security->challenge_to_recvmsg) {
-		rxrpc_post_packet_to_conn(conn, skb);
-		return true;
-	}
-
-	rcu_read_lock();
-
-	for (int i = 0; i < ARRAY_SIZE(conn->channels); i++) {
-		if (conn->channels[i].call) {
-			call = conn->channels[i].call;
-			rx = rcu_dereference(call->socket);
-			if (!rx) {
-				call = NULL;
-				continue;
-			}
-
-			respond = true;
-			if (test_bit(RXRPC_SOCK_MANAGE_RESPONSE, &rx->flags))
-				break;
-			call = NULL;
-		}
-	}
-
-	if (!respond) {
-		rcu_read_unlock();
-		rxrpc_put_connection(conn, rxrpc_conn_put_challenge_input);
-		sp->chall.conn = NULL;
-		return false;
-	}
-
-	if (call)
-		queued = rxrpc_notify_socket_oob(call, skb);
-	rcu_read_unlock();
-	if (call && !queued) {
-		rxrpc_put_connection(conn, rxrpc_conn_put_challenge_input);
-		sp->chall.conn = NULL;
-		return false;
-	}
-
-	if (!call)
-		rxrpc_post_packet_to_conn(conn, skb);
-	return true;
-}
-
-/*
  * Input a connection-level packet.
  */
 bool rxrpc_input_conn_packet(struct rxrpc_connection *conn, struct sk_buff *skb)
@@ -513,7 +450,8 @@ bool rxrpc_input_conn_packet(struct rxrpc_connection *conn, struct sk_buff *skb)
 		}
 		if (!conn->security->validate_challenge(conn, skb))
 			return false;
-		return rxrpc_post_challenge(conn, skb);
+		rxrpc_post_packet_to_conn(conn, skb);
+		return true;
 
 	case RXRPC_PACKET_TYPE_RESPONSE:
 		if (rxrpc_is_conn_aborted(conn)) {

@@ -506,6 +506,8 @@ wait_for_space:
 static int rxrpc_sendmsg_cmsg(struct msghdr *msg, struct rxrpc_send_params *p)
 {
 	struct cmsghdr *cmsg;
+	key_serial_t key_id;
+	key_ref_t key;
 	bool got_user_ID = false;
 	int len;
 
@@ -588,6 +590,18 @@ static int rxrpc_sendmsg_cmsg(struct msghdr *msg, struct rxrpc_send_params *p)
 				return -ERANGE;
 			if (p->call.nr_timeouts >= 3 && p->call.timeouts.normal > 60 * 60 * 1000)
 				return -ERANGE;
+			break;
+
+		case RXRPC_RESPONSE_APPDATA:
+			if (len != sizeof(key_serial_t))
+				return -EINVAL;
+			if (p->call.app_data)
+				return -EINVAL;
+			key_id = *(key_serial_t *)CMSG_DATA(cmsg);
+			key = lookup_user_key(key_id, 0, KEY_NEED_SEARCH);
+			if (IS_ERR(key))
+				return PTR_ERR(key);
+			p->call.app_data = key_ref_to_ptr(key);
 			break;
 
 		default:
@@ -789,6 +803,7 @@ error_put:
 
 error_release_sock:
 	release_sock(&rx->sk);
+	key_put(p.call.app_data);
 	return ret;
 }
 

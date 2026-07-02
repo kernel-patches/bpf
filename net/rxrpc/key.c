@@ -893,3 +893,39 @@ static long rxrpc_read(const struct key *key,
 	_leave(" = %zu", size);
 	return size;
 }
+
+/**
+ * rxrpc_kernel_query_key - Query parameters from an rxrpc key
+ * @key: The key to query
+ * @_security_index: Where to return the security index
+ * @_krb5_enctype: Where to return the krb5 encryption type if applicable
+ *
+ * Query an rxrpc authentication key, extracting the security index from the
+ * first token therein.
+ */
+void rxrpc_kernel_query_key(const struct key *key, u8 *_security_index, u32 *_krb5_enctype)
+{
+	const struct rxrpc_key_token *token;
+
+	token = key->payload.data[0];
+	if (!token) {
+		*_security_index = 0;
+		*_krb5_enctype = 0;
+		return;
+	}
+
+	*_security_index = token->security_index;
+	switch (token->security_index) {
+	case RXRPC_SECURITY_RXKAD:
+		*_krb5_enctype = 0;
+		break;
+	case RXRPC_SECURITY_YFS_RXGK:
+		*_krb5_enctype = token->rxgk->enctype;
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		*_krb5_enctype = 0;
+		break;
+	}
+}
+EXPORT_SYMBOL(rxrpc_kernel_query_key);
