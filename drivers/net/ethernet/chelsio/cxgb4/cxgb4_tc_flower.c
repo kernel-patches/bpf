@@ -40,6 +40,7 @@
 #include "cxgb4.h"
 #include "cxgb4_filter.h"
 #include "cxgb4_tc_flower.h"
+#include "t4_regs.h"
 
 #define STATS_CHECK_PERIOD (HZ / 2)
 
@@ -266,24 +267,48 @@ static void cxgb4_process_flow_match(struct net_device *dev,
 					       VLAN_PRIO_SHIFT);
 		vlan_tci_mask = match.mask->vlan_id | (match.mask->vlan_priority <<
 						     VLAN_PRIO_SHIFT);
-		fs->val.ivlan = vlan_tci;
-		fs->mask.ivlan = vlan_tci_mask;
 
-		fs->val.ivlan_vld = 1;
-		fs->mask.ivlan_vld = 1;
+		if (match.key->vlan_tpid == cpu_to_be16(ETH_P_8021AD)) {
+			struct adapter *adap = netdev2adap(dev);
+			u32 ovlan_reg, ctl_reg, val, port_id;
 
-		/* Chelsio adapters use ivlan_vld bit to match vlan packets
-		 * as 802.1Q. Also, when vlan tag is present in packets,
-		 * ethtype match is used then to match on ethtype of inner
-		 * header ie. the header following the vlan header.
-		 * So, set the ivlan_vld based on ethtype info supplied by
-		 * TC for vlan packets if its 802.1Q. And then reset the
-		 * ethtype value else, hw will try to match the supplied
-		 * ethtype value with ethtype of inner header.
-		 */
-		if (fs->val.ethtype == ETH_P_8021Q) {
-			fs->val.ethtype = 0;
-			fs->mask.ethtype = 0;
+			if (!adap) {
+				netdev_err(dev, "%s: adap not found\n", __func__);
+				return;
+			}
+
+			val = (0xffff << 16) | ETH_P_8021AD;
+			port_id = netdev2pinfo(dev)->port_id;
+			fs->val.ovlan = vlan_tci;
+			fs->mask.ovlan = vlan_tci_mask;
+			fs->val.ovlan_vld = 1;
+			fs->mask.ovlan_vld = 1;
+			ovlan_reg = PORT_REG(port_id, MPS_PORT_RX_OVLAN0_A);
+			ctl_reg = PORT_REG(port_id, MPS_PORT_RX_CTL_A);
+			t4_write_reg(adap, ovlan_reg, val);
+			val = t4_read_reg(adap, ctl_reg);
+			t4_write_reg(adap, ctl_reg, val | 1);
+			t4_tp_wr_bits_indirect(adap, TP_INGRESS_CONFIG_A, 1U << 9, 0);
+		} else {
+			fs->val.ivlan = vlan_tci;
+			fs->mask.ivlan = vlan_tci_mask;
+			fs->val.ivlan_vld = 1;
+			fs->mask.ivlan_vld = 1;
+
+			/* Chelsio adapters use ivlan_vld bit to match vlan packets
+			 * as 802.1Q. Also, when vlan tag is present in packets,
+			 * ethtype match is used then to match on ethtype of inner
+			 * header ie. the header following the vlan header.
+			 * So, set the ivlan_vld based on ethtype info supplied by
+			 * TC for vlan packets if its 802.1Q. And then reset the
+			 * ethtype value else, hw will try to match the supplied
+			 * ethtype value with ethtype of inner header.
+			 */
+
+			if (fs->val.ethtype == ETH_P_8021Q) {
+				fs->val.ethtype = 0;
+				fs->mask.ethtype = 0;
+			}
 		}
 	}
 
