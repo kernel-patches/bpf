@@ -347,7 +347,9 @@ void afs_make_call(struct afs_call *call, gfp_t gfp)
 	struct rxrpc_call *rxcall;
 	struct msghdr msg;
 	struct kvec iov[1];
+	unsigned int debug_id = call->debug_id;
 	size_t len;
+	bool write_iter = call->write_iter;
 	s64 tx_total_len;
 	int ret;
 
@@ -410,7 +412,7 @@ void afs_make_call(struct afs_call *call, gfp_t gfp)
 	iov_iter_kvec(&msg.msg_iter, ITER_SOURCE, iov, 1, call->request_size);
 	msg.msg_control		= NULL;
 	msg.msg_controllen	= 0;
-	msg.msg_flags		= MSG_WAITALL | (call->write_iter ? MSG_MORE : 0);
+	msg.msg_flags		= MSG_WAITALL | (write_iter ? MSG_MORE : 0);
 
 	ret = rxrpc_kernel_send_data(call->net->socket, rxcall,
 				     &msg, call->request_size,
@@ -418,7 +420,9 @@ void afs_make_call(struct afs_call *call, gfp_t gfp)
 	if (ret < 0)
 		goto error_do_abort;
 
-	if (call->write_iter) {
+	/* We lost our ref on call if MSG_MORE was set. */
+
+	if (write_iter) {
 		msg.msg_iter = *call->write_iter;
 		msg.msg_flags &= ~MSG_MORE;
 		trace_afs_send_data(call, &msg);
@@ -427,9 +431,9 @@ void afs_make_call(struct afs_call *call, gfp_t gfp)
 					     call->rxcall, &msg,
 					     iov_iter_count(&msg.msg_iter),
 					     afs_notify_end_request_tx);
-		*call->write_iter = msg.msg_iter;
+		/* We lost our ref on call. */
 
-		trace_afs_sent_data(call, &msg, ret);
+		trace_afs_sent_data(debug_id, &msg, ret);
 		if (ret < 0)
 			goto error_do_abort;
 	}
