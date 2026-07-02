@@ -739,7 +739,8 @@ static int add_exception_handler(const struct bpf_insn *insn,
 
 	if (BPF_MODE(insn->code) != BPF_PROBE_MEM &&
 	    BPF_MODE(insn->code) != BPF_PROBE_MEMSX &&
-	    BPF_MODE(insn->code) != BPF_PROBE_MEM32)
+	    BPF_MODE(insn->code) != BPF_PROBE_MEM32 &&
+	    BPF_MODE(insn->code) != BPF_PROBE_MEM32SX)
 		return 0;
 
 	if (WARN_ON_ONCE(ctx->num_exentries >= ctx->prog->aux->num_exentries))
@@ -1349,10 +1350,16 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 	case BPF_LDX | BPF_PROBE_MEM32 | BPF_H:
 	case BPF_LDX | BPF_PROBE_MEM32 | BPF_W:
 	case BPF_LDX | BPF_PROBE_MEM32 | BPF_DW:
+	/* LDX | PROBE_MEM32SX: dst = *(signed size *)(src + REG_ARENA + off) */
+	case BPF_LDX | BPF_PROBE_MEM32SX | BPF_B:
+	case BPF_LDX | BPF_PROBE_MEM32SX | BPF_H:
+	case BPF_LDX | BPF_PROBE_MEM32SX | BPF_W:
 		sign_extend = BPF_MODE(code) == BPF_MEMSX ||
-			      BPF_MODE(code) == BPF_PROBE_MEMSX;
+			      BPF_MODE(code) == BPF_PROBE_MEMSX ||
+			      BPF_MODE(code) == BPF_PROBE_MEM32SX;
 
-		if (BPF_MODE(code) == BPF_PROBE_MEM32) {
+		if (BPF_MODE(code) == BPF_PROBE_MEM32 ||
+		    BPF_MODE(code) == BPF_PROBE_MEM32SX) {
 			emit_insn(ctx, addd, t2, src, REG_ARENA);
 			src = t2;
 		}
@@ -2546,6 +2553,21 @@ bool bpf_jit_bypass_spec_v4(void)
 
 bool bpf_jit_supports_arena(void)
 {
+	return true;
+}
+
+bool bpf_jit_supports_insn(struct bpf_insn *insn, bool in_arena)
+{
+	if (!in_arena)
+		return true;
+
+	switch (insn->code) {
+	case BPF_STX | BPF_ATOMIC | BPF_W:
+	case BPF_STX | BPF_ATOMIC | BPF_DW:
+		/* Atomics on arena pointers are not implemented yet. */
+		return false;
+	}
+
 	return true;
 }
 
