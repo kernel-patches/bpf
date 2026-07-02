@@ -1229,7 +1229,13 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 		move_addr(ctx, t1, func_addr);
 		emit_insn(ctx, jirl, LOONGARCH_GPR_RA, t1, 0);
 
-		if (insn->src_reg != BPF_PSEUDO_CALL)
+		/*
+		 * Call to arch_bpf_timed_may_goto() uses a custom calling
+		 * convention with the argument and return value in BPF_REG_AX,
+		 * so skip moving the C return value into BPF_REG_0.
+		 */
+		if (insn->src_reg != BPF_PSEUDO_CALL &&
+		    func_addr != (u64)arch_bpf_timed_may_goto)
 			move_reg(ctx, regmap[BPF_REG_0], LOONGARCH_GPR_A0);
 
 		break;
@@ -2417,6 +2423,11 @@ bool bpf_jit_supports_fsession(void)
 }
 
 bool bpf_jit_supports_percpu_insn(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_timed_may_goto(void)
 {
 	return true;
 }
