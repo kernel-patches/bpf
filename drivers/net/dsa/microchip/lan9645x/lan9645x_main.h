@@ -117,6 +117,9 @@
 				 (_cond), SLOW_RD_SLEEP_US,		\
 				 SLOW_RD_SLEEPTIMEOUT_US)
 
+#define LAN9645X_HOST_FLOOD_UC		BIT(0)
+#define LAN9645X_HOST_FLOOD_MC		BIT(1)
+
 /* NPI port prefix config encoding
  *
  * 0: No CPU extraction header (normal frames)
@@ -158,6 +161,11 @@ struct lan9645x {
 	struct dsa_switch *ds;
 	struct regmap *rmap[NUM_TARGETS];
 
+	u16 host_flood_uc_mask;
+	u16 host_flood_mc_mask;
+
+	struct workqueue_struct *owq;
+
 	int shared_queue_sz;
 
 	/* NPI chip_port */
@@ -168,6 +176,12 @@ struct lan9645x {
 
 	struct mutex port_mux_lock; /* serialize port muxing */
 
+	/* Forwarding Database */
+	struct net_device *bridge; /* Only support single bridge */
+	u16 bridge_mask; /* Mask for bridged ports */
+	u16 bridge_fwd_mask; /* Mask for forwarding bridged ports */
+	struct mutex fwd_domain_lock; /* lock forwarding configuration */
+
 	int num_port_dis;
 };
 
@@ -175,9 +189,17 @@ struct lan9645x_port {
 	struct lan9645x *lan9645x;
 
 	u8 chip_port;
+	u8 stp_state;
+	bool learn_ena;
 
 	bool rx_internal_delay;
 	bool tx_internal_delay;
+
+	struct work_struct host_flood_work;
+	/* Packed host flood request deposited by port_set_host_flood (atomic
+	 * context) and consumed by host_flood_work_fn.
+	 */
+	u8 host_flood_req;
 };
 
 extern const struct phylink_mac_ops lan9645x_phylink_mac_ops;
@@ -222,6 +244,11 @@ static inline struct lan9645x_port *lan9645x_to_port(struct lan9645x *lan9645x,
 						     int port)
 {
 	return lan9645x->ports[port];
+}
+
+static inline bool lan9645x_port_is_bridged(struct lan9645x_port *p)
+{
+	return p && (p->lan9645x->bridge_mask & BIT(p->chip_port));
 }
 
 static inline struct regmap *lan_tgt2rmap(struct lan9645x *lan9645x,
