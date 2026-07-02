@@ -889,7 +889,7 @@ enum bpf_arg_type {
 	ARG_PTR_TO_MEM,		/* pointer to valid memory (stack, packet, map value) */
 	ARG_PTR_TO_ARENA,
 
-	ARG_CONST_SIZE,		/* number of bytes accessed from memory */
+	ARG_MEM_SIZE,		/* number of bytes accessed from memory */
 
 	ARG_PTR_TO_CTX,		/* pointer to context */
 	ARG_ANYTHING,		/* any (initialized) argument is ok */
@@ -923,7 +923,7 @@ enum bpf_arg_type {
 	/* Pointer to valid memory of size known at compile time. */
 	ARG_PTR_TO_FIXED_SIZE_MEM	= MEM_FIXED_SIZE | ARG_PTR_TO_MEM,
 	/* Number of bytes accessed from memory, or 0. */
-	ARG_CONST_SIZE_OR_ZERO		= SCALAR_MAYBE_ZERO | ARG_CONST_SIZE,
+	ARG_MEM_SIZE_OR_ZERO		= SCALAR_MAYBE_ZERO | ARG_MEM_SIZE,
 
 	/* This must be the last entry. Its purpose is to ensure the enum is
 	 * wide enough to hold the higher bits reserved for bpf_type_flag.
