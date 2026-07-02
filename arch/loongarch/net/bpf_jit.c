@@ -25,6 +25,7 @@
 
 #define REG_TCC		LOONGARCH_GPR_A6
 #define REG_ARENA	LOONGARCH_GPR_S6 /* For storing arena_vm_start */
+#define REG_PRIV_SP	LOONGARCH_GPR_S5 /* For storing the private stack pointer */
 
 static int tail_call_cnt_ptr_stack_off(struct jit_ctx *ctx)
 {
@@ -42,6 +43,10 @@ static int tail_call_cnt_ptr_stack_off(struct jit_ctx *ctx)
 
 	return round_up(ctx->stack_size, 16) - offset;
 }
+
+/* Memory size/value to protect private stack overflow/underflow */
+#define PRIV_STACK_GUARD_SZ	16
+#define PRIV_STACK_GUARD_VAL	0xEB9F12345678eb9fULL
 
 static const int regmap[] = {
 	/* return value from in-kernel function, and exit value for eBPF program */
@@ -62,6 +67,15 @@ static const int regmap[] = {
 	/* temporary register for blinding constants */
 	[BPF_REG_AX] = LOONGARCH_GPR_T0,
 };
+
+static void emit_percpu_ptr(struct jit_ctx *ctx, u8 dst, void __percpu *ptr)
+{
+	move_imm(ctx, dst, (__force long)ptr, false);
+#ifdef CONFIG_SMP
+	/* dst += __my_cpu_offset, held in $r21 */
+	emit_insn(ctx, addd, dst, dst, LOONGARCH_GPR_U0);
+#endif
+}
 
 static void prepare_bpf_tail_call_cnt(struct jit_ctx *ctx, int *store_offset)
 {
@@ -164,7 +178,14 @@ static void build_prologue(struct jit_ctx *ctx)
 		stack_adjust += 8;
 
 	stack_adjust = round_up(stack_adjust, 16);
-	stack_adjust += bpf_stack_adjust;
+
+	/*
+	 * When a private stack is used the BPF stack lives in a per-CPU
+	 * allocation rather than on the kernel stack, so only the non-BPF
+	 * part is reserved here.
+	 */
+	if (!ctx->priv_sp_used)
+		stack_adjust += bpf_stack_adjust;
 
 	/*
 	 * Save the original return address to a temporary register to prevent
@@ -219,8 +240,16 @@ static void build_prologue(struct jit_ctx *ctx)
 
 	emit_insn(ctx, addid, LOONGARCH_GPR_FP, LOONGARCH_GPR_SP, stack_adjust);
 
-	if (bpf_stack_adjust)
+	if (ctx->priv_sp_used) {
+		/* Set up the private stack pointer and the BPF frame pointer */
+		void __percpu *priv_stack_ptr;
+
+		priv_stack_ptr = prog->aux->priv_stack_ptr + PRIV_STACK_GUARD_SZ;
+		emit_percpu_ptr(ctx, REG_PRIV_SP, priv_stack_ptr);
+		emit_insn(ctx, addid, regmap[BPF_REG_FP], REG_PRIV_SP, bpf_stack_adjust);
+	} else if (bpf_stack_adjust) {
 		emit_insn(ctx, addid, regmap[BPF_REG_FP], LOONGARCH_GPR_SP, bpf_stack_adjust);
+	}
 
 	ctx->stack_size = stack_adjust;
 
@@ -2225,6 +2254,39 @@ int arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
 	return ret < 0 ? ret : ret * LOONGARCH_INSN_SIZE;
 }
 
+static void priv_stack_init_guard(void __percpu *priv_stack_ptr, int alloc_size)
+{
+	int cpu, underflow_idx = (alloc_size - PRIV_STACK_GUARD_SZ) >> 3;
+	u64 *stack_ptr;
+
+	for_each_possible_cpu(cpu) {
+		stack_ptr = per_cpu_ptr(priv_stack_ptr, cpu);
+		stack_ptr[0] = PRIV_STACK_GUARD_VAL;
+		stack_ptr[1] = PRIV_STACK_GUARD_VAL;
+		stack_ptr[underflow_idx] = PRIV_STACK_GUARD_VAL;
+		stack_ptr[underflow_idx + 1] = PRIV_STACK_GUARD_VAL;
+	}
+}
+
+static void priv_stack_check_guard(void __percpu *priv_stack_ptr, int alloc_size,
+				   struct bpf_prog *prog)
+{
+	int cpu, underflow_idx = (alloc_size - PRIV_STACK_GUARD_SZ) >> 3;
+	u64 *stack_ptr;
+
+	for_each_possible_cpu(cpu) {
+		stack_ptr = per_cpu_ptr(priv_stack_ptr, cpu);
+		if (stack_ptr[0] != PRIV_STACK_GUARD_VAL ||
+		    stack_ptr[1] != PRIV_STACK_GUARD_VAL ||
+		    stack_ptr[underflow_idx] != PRIV_STACK_GUARD_VAL ||
+		    stack_ptr[underflow_idx + 1] != PRIV_STACK_GUARD_VAL) {
+			pr_err("BPF private stack overflow/underflow detected for prog %s\n",
+			       bpf_jit_get_prog_name(prog));
+			break;
+		}
+	}
+}
+
 struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 	bool extra_pass = false;
@@ -2233,7 +2295,9 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 	struct jit_ctx ctx;
 	struct jit_data *jit_data;
 	struct bpf_binary_header *header;
-	struct bpf_binary_header *ro_header;
+	struct bpf_binary_header *ro_header = NULL;
+	void __percpu *priv_stack_ptr = NULL;
+	int priv_stack_alloc_sz;
 
 	/*
 	 * If BPF JIT was not enabled then we must fall back to
@@ -2248,6 +2312,22 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 		if (!jit_data)
 			return prog;
 		prog->aux->jit_data = jit_data;
+	}
+	priv_stack_ptr = prog->aux->priv_stack_ptr;
+	if (!priv_stack_ptr && prog->aux->jits_use_priv_stack) {
+		/*
+		 * Allocate the actual private stack: the verifier-calculated
+		 * stack size plus two guard regions to detect overflow and
+		 * underflow.
+		 */
+		priv_stack_alloc_sz = round_up(prog->aux->stack_depth, 16) +
+				      2 * PRIV_STACK_GUARD_SZ;
+		priv_stack_ptr = __alloc_percpu_gfp(priv_stack_alloc_sz, 16, GFP_KERNEL);
+		if (!priv_stack_ptr)
+			goto out_priv_stack;
+
+		priv_stack_init_guard(priv_stack_ptr, priv_stack_alloc_sz);
+		prog->aux->priv_stack_ptr = priv_stack_ptr;
 	}
 	if (jit_data->ctx.offset) {
 		ctx = jit_data->ctx;
@@ -2264,6 +2344,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 	ctx.prog = prog;
 	ctx.arena_vm_start = bpf_arena_get_kern_vm_start(prog->aux->arena);
 	ctx.user_vm_start = bpf_arena_get_user_vm_start(prog->aux->arena);
+	ctx.priv_sp_used = priv_stack_ptr ? true : false;
 
 	ctx.offset = kvcalloc(prog->len + 1, sizeof(u32), GFP_KERNEL);
 	if (ctx.offset == NULL)
@@ -2358,7 +2439,17 @@ skip_init_ctx:
 		bpf_prog_fill_jited_linfo(prog, ctx.offset + 1);
 
 out_offset:
+		/*
+		 * A NULL ro_header here means the JIT failed, so release the
+		 * private stack that was allocated above; on success the
+		 * program keeps it until bpf_jit_free().
+		 */
+		if (!ro_header && priv_stack_ptr) {
+			free_percpu(priv_stack_ptr);
+			prog->aux->priv_stack_ptr = NULL;
+		}
 		kvfree(ctx.offset);
+out_priv_stack:
 		kfree(jit_data);
 		prog->aux->jit_data = NULL;
 	}
@@ -2375,6 +2466,7 @@ out_free:
 	if (header) {
 		bpf_arch_text_copy(&ro_header->size, &header->size, sizeof(header->size));
 		bpf_jit_binary_pack_free(ro_header, header);
+		ro_header = NULL;
 	}
 	goto out_offset;
 }
@@ -2384,6 +2476,8 @@ void bpf_jit_free(struct bpf_prog *prog)
 	if (prog->jited) {
 		struct jit_data *jit_data = prog->aux->jit_data;
 		struct bpf_binary_header *hdr;
+		void __percpu *priv_stack_ptr;
+		int priv_stack_alloc_sz;
 
 		/*
 		 * If we fail the final pass of JIT (from jit_subprogs), the
@@ -2396,6 +2490,13 @@ void bpf_jit_free(struct bpf_prog *prog)
 		}
 		hdr = bpf_jit_binary_pack_hdr(prog);
 		bpf_jit_binary_pack_free(hdr, NULL);
+		priv_stack_ptr = prog->aux->priv_stack_ptr;
+		if (priv_stack_ptr) {
+			priv_stack_alloc_sz = round_up(prog->aux->stack_depth, 16) +
+					      2 * PRIV_STACK_GUARD_SZ;
+			priv_stack_check_guard(priv_stack_ptr, priv_stack_alloc_sz, prog);
+			free_percpu(prog->aux->priv_stack_ptr);
+		}
 		WARN_ON_ONCE(!bpf_prog_kallsyms_verify_off(prog));
 	}
 
@@ -2428,6 +2529,11 @@ bool bpf_jit_supports_percpu_insn(void)
 }
 
 bool bpf_jit_supports_timed_may_goto(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_private_stack(void)
 {
 	return true;
 }

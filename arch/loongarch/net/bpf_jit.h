@@ -22,6 +22,7 @@ struct jit_ctx {
 	u32 stack_size;
 	u64 arena_vm_start;
 	u64 user_vm_start;
+	bool priv_sp_used;
 };
 
 struct jit_data {
