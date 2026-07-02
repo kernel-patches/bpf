@@ -1634,14 +1634,22 @@ static int record_load_store_access(struct bpf_verifier_env *env,
 		break;
 	case BPF_STX:
 		if (BPF_MODE(insn->code) == BPF_ATOMIC) {
-			if (insn->imm == BPF_STORE_REL)
-				write = true;
-			else
-				read = true;
-			if (insn->imm == BPF_LOAD_ACQ)
+			switch (insn->imm) {
+			case BPF_LOAD_ACQ:
 				ptr = &at[insn->src_reg];
-			else
+				read = true;
+				break;
+			case BPF_STORE_REL:
 				ptr = &at[insn->dst_reg];
+				write = true;
+				break;
+			default:
+				/* ADD/AND/OR/XOR(+FETCH), XCHG, CMPXCHG */
+				ptr = &at[insn->dst_reg];
+				read = true;
+				write = true;
+				break;
+			}
 		} else {
 			ptr = &at[insn->dst_reg];
 			write = true;
