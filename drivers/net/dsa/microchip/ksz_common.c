@@ -2984,40 +2984,6 @@ int ksz_port_bridge_flags(struct dsa_switch *ds, int port,
 	return 0;
 }
 
-int ksz_max_mtu(struct dsa_switch *ds, int port)
-{
-	struct ksz_device *dev = ds->priv;
-
-	switch (dev->chip_id) {
-	case KSZ8795_CHIP_ID:
-	case KSZ8794_CHIP_ID:
-	case KSZ8765_CHIP_ID:
-		return KSZ8795_HUGE_PACKET_SIZE - VLAN_ETH_HLEN - ETH_FCS_LEN;
-	case KSZ8463_CHIP_ID:
-	case KSZ88X3_CHIP_ID:
-	case KSZ8864_CHIP_ID:
-	case KSZ8895_CHIP_ID:
-		return KSZ8863_HUGE_PACKET_SIZE - VLAN_ETH_HLEN - ETH_FCS_LEN;
-	case KSZ8563_CHIP_ID:
-	case KSZ8567_CHIP_ID:
-	case KSZ9477_CHIP_ID:
-	case KSZ9563_CHIP_ID:
-	case KSZ9567_CHIP_ID:
-	case KSZ9893_CHIP_ID:
-	case KSZ9896_CHIP_ID:
-	case KSZ9897_CHIP_ID:
-	case LAN9370_CHIP_ID:
-	case LAN9371_CHIP_ID:
-	case LAN9372_CHIP_ID:
-	case LAN9373_CHIP_ID:
-	case LAN9374_CHIP_ID:
-	case LAN9646_CHIP_ID:
-		return KSZ9477_MAX_FRAME_SIZE - VLAN_ETH_HLEN - ETH_FCS_LEN;
-	}
-
-	return -EOPNOTSUPP;
-}
-
 int ksz_set_mac_eee(struct dsa_switch *ds, int port,
 		    struct ethtool_keee *e)
 {

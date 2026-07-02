@@ -21,6 +21,7 @@ void ksz9477_freeze_mib(struct ksz_device *dev, int port, bool freeze);
 void ksz9477_port_init_cnt(struct ksz_device *dev, int port);
 int ksz9477_port_vlan_filtering(struct dsa_switch *ds, int port,
 				bool flag, struct netlink_ext_ack *extack);
+int ksz9477_max_mtu(struct dsa_switch *ds, int port);
 int ksz9477_port_vlan_add(struct dsa_switch *ds, int port,
 			  const struct switchdev_obj_port_vlan *vlan,
 			  struct netlink_ext_ack *extack);

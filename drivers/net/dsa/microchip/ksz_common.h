@@ -443,8 +443,6 @@ void ksz_phylink_mac_link_down(struct phylink_config *config,
 			       unsigned int mode,
 			       phy_interface_t interface);
 
-int ksz_max_mtu(struct dsa_switch *ds, int port);
-
 int ksz_set_mac_eee(struct dsa_switch *ds, int port,
 		    struct ethtool_keee *e);
 

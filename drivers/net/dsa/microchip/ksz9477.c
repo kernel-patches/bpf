@@ -60,6 +60,11 @@ static int ksz9477_change_mtu(struct dsa_switch *ds, int port, int mtu)
 				  REG_SW_MTU_MASK, frame_size);
 }
 
+int ksz9477_max_mtu(struct dsa_switch *ds, int port)
+{
+	return KSZ9477_MAX_FRAME_SIZE - VLAN_ETH_HLEN - ETH_FCS_LEN;
+}
+
 static int ksz9477_wait_vlan_ctrl_ready(struct ksz_device *dev)
 {
 	unsigned int val;
@@ -2098,7 +2103,7 @@ const struct dsa_switch_ops ksz9477_switch_ops = {
 	.get_stats64		= ksz_get_stats64,
 	.get_pause_stats	= ksz_get_pause_stats,
 	.port_change_mtu	= ksz9477_change_mtu,
-	.port_max_mtu		= ksz_max_mtu,
+	.port_max_mtu		= ksz9477_max_mtu,
 	.get_wol		= ksz_get_wol,
 	.set_wol		= ksz_set_wol,
 	.suspend		= ksz_suspend,

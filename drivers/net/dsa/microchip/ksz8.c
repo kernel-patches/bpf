@@ -202,6 +202,16 @@ static int ksz87xx_change_mtu(struct dsa_switch *ds, int port, int mtu)
 	return ksz_rmw8(dev, REG_SW_CTRL_2, SW_LEGAL_PACKET_DISABLE, ctrl2);
 }
 
+static int ksz87xx_max_mtu(struct dsa_switch *ds, int port)
+{
+	return KSZ8795_HUGE_PACKET_SIZE - VLAN_ETH_HLEN - ETH_FCS_LEN;
+}
+
+static int ksz88xx_max_mtu(struct dsa_switch *ds, int port)
+{
+	return KSZ8863_HUGE_PACKET_SIZE - VLAN_ETH_HLEN - ETH_FCS_LEN;
+}
+
 static int ksz8_port_queue_split(struct ksz_device *dev, int port, int queues)
 {
 	u8 mask_4q, mask_2q;
@@ -2541,7 +2551,7 @@ const struct dsa_switch_ops ksz8463_switch_ops = {
 	.get_stats64		= ksz_get_stats64,
 	.get_pause_stats	= ksz_get_pause_stats,
 	.port_change_mtu	= ksz88xx_change_mtu,
-	.port_max_mtu		= ksz_max_mtu,
+	.port_max_mtu		= ksz88xx_max_mtu,
 	.suspend		= ksz_suspend,
 	.resume			= ksz_resume,
 	.get_ts_info		= ksz_get_ts_info,
@@ -2591,7 +2601,7 @@ const struct dsa_switch_ops ksz87xx_switch_ops = {
 	.get_stats64		= ksz_get_stats64,
 	.get_pause_stats	= ksz_get_pause_stats,
 	.port_change_mtu	= ksz87xx_change_mtu,
-	.port_max_mtu		= ksz_max_mtu,
+	.port_max_mtu		= ksz87xx_max_mtu,
 	.suspend		= ksz_suspend,
 	.resume			= ksz_resume,
 	.get_ts_info		= ksz_get_ts_info,
@@ -2642,7 +2652,7 @@ const struct dsa_switch_ops ksz88xx_switch_ops = {
 	.get_stats64		= ksz_get_stats64,
 	.get_pause_stats	= ksz_get_pause_stats,
 	.port_change_mtu	= ksz88xx_change_mtu,
-	.port_max_mtu		= ksz_max_mtu,
+	.port_max_mtu		= ksz88xx_max_mtu,
 	.get_wol		= ksz_get_wol,
 	.set_wol		= ksz_set_wol,
 	.suspend		= ksz_suspend,
