@@ -483,8 +483,8 @@ static int ksz9477_half_duplex_monitor(struct ksz_device *dev, int port,
 	return ret;
 }
 
-int ksz9477_errata_monitor(struct ksz_device *dev, int port,
-			   u64 tx_late_col)
+static int ksz9477_errata_monitor(struct ksz_device *dev, int port,
+				  u64 tx_late_col)
 {
 	u8 status;
 	int ret;
@@ -501,6 +501,24 @@ int ksz9477_errata_monitor(struct ksz_device *dev, int port,
 
 	return ret;
 }
+
+static void ksz9477_r_mib_stats64(struct ksz_device *dev, int port)
+{
+	struct ksz_stats_raw *raw;
+	struct ksz_port_mib *mib;
+	int ret;
+
+	ksz_r_mib_stats64(dev, port);
+
+	if (dev->info->phy_errata_9477 && !ksz_is_sgmii_port(dev, port)) {
+		mib = &dev->ports[port].mib;
+		raw = (struct ksz_stats_raw *)mib->counters;
+
+		ret = ksz9477_errata_monitor(dev, port, raw->tx_late_col);
+		if (ret)
+			dev_err(dev->dev, "Failed to monitor transmission halt\n");
+	}
+};
 
 void ksz9477_port_init_cnt(struct ksz_device *dev, int port)
 {
@@ -2109,7 +2127,7 @@ const struct ksz_dev_ops ksz9477_dev_ops = {
 	.cfg_port_member = ksz9477_cfg_port_member,
 	.r_mib_cnt = ksz9477_r_mib_cnt,
 	.r_mib_pkt = ksz9477_r_mib_pkt,
-	.r_mib_stat64 = ksz_r_mib_stats64,
+	.r_mib_stat64 = ksz9477_r_mib_stats64,
 	.freeze_mib = ksz9477_freeze_mib,
 	.port_init_cnt = ksz9477_port_init_cnt,
 	.pme_write8 = ksz_write8,

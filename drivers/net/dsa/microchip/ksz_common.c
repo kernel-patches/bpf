@@ -37,45 +37,6 @@
 
 #define MIB_COUNTER_NUM 0x20
 
-struct ksz_stats_raw {
-	u64 rx_hi;
-	u64 rx_undersize;
-	u64 rx_fragments;
-	u64 rx_oversize;
-	u64 rx_jabbers;
-	u64 rx_symbol_err;
-	u64 rx_crc_err;
-	u64 rx_align_err;
-	u64 rx_mac_ctrl;
-	u64 rx_pause;
-	u64 rx_bcast;
-	u64 rx_mcast;
-	u64 rx_ucast;
-	u64 rx_64_or_less;
-	u64 rx_65_127;
-	u64 rx_128_255;
-	u64 rx_256_511;
-	u64 rx_512_1023;
-	u64 rx_1024_1522;
-	u64 rx_1523_2000;
-	u64 rx_2001;
-	u64 tx_hi;
-	u64 tx_late_col;
-	u64 tx_pause;
-	u64 tx_bcast;
-	u64 tx_mcast;
-	u64 tx_ucast;
-	u64 tx_deferred;
-	u64 tx_total_col;
-	u64 tx_exc_col;
-	u64 tx_single_col;
-	u64 tx_mult_col;
-	u64 rx_total;
-	u64 tx_total;
-	u64 rx_discards;
-	u64 tx_discards;
-};
-
 static const struct ksz_mib_names ksz88xx_mib_names[] = {
 	{ 0x00, "rx" },
 	{ 0x01, "rx_hi" },
@@ -1976,7 +1937,6 @@ void ksz_r_mib_stats64(struct ksz_device *dev, int port)
 	struct rtnl_link_stats64 *stats;
 	struct ksz_stats_raw *raw;
 	struct ksz_port_mib *mib;
-	int ret;
 
 	mib = &dev->ports[port].mib;
 	stats = &mib->stats64;
@@ -2018,12 +1978,6 @@ void ksz_r_mib_stats64(struct ksz_device *dev, int port)
 	pstats->rx_pause_frames = raw->rx_pause;
 
 	spin_unlock(&mib->stats64_lock);
-
-	if (dev->info->phy_errata_9477 && !ksz_is_sgmii_port(dev, port)) {
-		ret = ksz9477_errata_monitor(dev, port, raw->tx_late_col);
-		if (ret)
-			dev_err(dev->dev, "Failed to monitor transmission halt\n");
-	}
 }
 
 void ksz_get_stats64(struct dsa_switch *ds, int port,

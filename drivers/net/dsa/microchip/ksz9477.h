@@ -32,8 +32,6 @@ int ksz9477_port_mirror_add(struct dsa_switch *ds, int port,
 			    bool ingress, struct netlink_ext_ack *extack);
 void ksz9477_port_mirror_del(struct dsa_switch *ds, int port,
 			     struct dsa_mall_mirror_tc_entry *mirror);
-int ksz9477_errata_monitor(struct ksz_device *dev, int port,
-			   u64 tx_late_col);
 int ksz9477_fdb_dump(struct dsa_switch *ds, int port,
 		     dsa_fdb_dump_cb_t *cb, void *data);
 int ksz9477_fdb_add(struct dsa_switch *ds, int port,
