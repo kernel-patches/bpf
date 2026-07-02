@@ -1970,7 +1970,7 @@ struct af2swdev_notify_req {
 		};
 		struct {
 			u8 cnt;
-			struct fib_entry entry[16];
+			struct fib_entry entry[12];
 		};
 
 		struct {

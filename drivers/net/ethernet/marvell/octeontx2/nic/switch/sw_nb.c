@@ -112,6 +112,7 @@ static int sw_nb_fdb_event(struct notifier_block *unused,
 {
 	struct net_device *dev = switchdev_notifier_info_to_dev(ptr);
 	struct switchdev_notifier_fdb_info *fdb_info = ptr;
+	int rc = 0;
 
 	if (!sw_nb_is_valid_dev(dev))
 		return NOTIFY_DONE;
@@ -120,18 +121,21 @@ static int sw_nb_fdb_event(struct notifier_block *unused,
 	case SWITCHDEV_FDB_ADD_TO_DEVICE:
 		if (fdb_info->is_local)
 			break;
-		sw_fdb_add_to_list(dev, (u8 *)fdb_info->addr, true);
+		rc = sw_fdb_add_to_list(dev, (u8 *)fdb_info->addr, true);
 		break;
 
 	case SWITCHDEV_FDB_DEL_TO_DEVICE:
 		if (fdb_info->is_local)
 			break;
-		sw_fdb_add_to_list(dev, (u8 *)fdb_info->addr, false);
+		rc = sw_fdb_add_to_list(dev, (u8 *)fdb_info->addr, false);
 		break;
 
 	default:
 		return NOTIFY_DONE;
 	}
+
+	if (rc)
+		netdev_err(dev, "%s: Error to add to list\n", __func__);
 
 	return NOTIFY_DONE;
 }
@@ -301,11 +305,9 @@ static int sw_nb_netdev_event(struct notifier_block *unused,
 	if (idev)
 		sw_nb_v4_netdev_event(unused, event, ptr);
 
-#if IS_ENABLED(CONFIG_IPV6)
 	i6dev = __in6_dev_get(dev);
 	if (i6dev)
 		sw_nb_v6_netdev_event(unused, event, ptr);
-#endif
 
 	return NOTIFY_DONE;
 }

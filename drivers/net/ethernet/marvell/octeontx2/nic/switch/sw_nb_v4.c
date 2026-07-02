@@ -76,7 +76,7 @@ int sw_nb_v4_netdev_event(struct notifier_block *unused,
 
 	netdev_dbg(dev, "%s: pushing netdev event from HOST interface address %#x, %pM, dev=%s\n",
 		   __func__, entry->dst, entry->mac, dev->name);
-	kfree(entry);
+	sw_fib_add_to_list(pf_dev, entry, 1);
 
 	return NOTIFY_DONE;
 }
@@ -134,7 +134,7 @@ int sw_nb_v4_inetaddr_event(struct notifier_block *nb,
 	netdev_dbg(dev, "%s: pushing inetaddr event from HOST interface address %#x, %pM, %s\n",
 		   __func__, entry->dst, entry->mac, dev->name);
 
-	kfree(entry);
+	sw_fib_add_to_list(pf_dev, entry, 1);
 	return NOTIFY_DONE;
 }
 
@@ -250,18 +250,26 @@ int sw_nb_v4_fib_event(struct notifier_block *nb,
 	}
 
 	cnt = iter - entries;
-	if (!cnt)
+	if (!cnt) {
+		kfree(entries);
+		kfree(haddr);
 		return NOTIFY_DONE;
+	}
 
 	netdev_dbg(pf_dev, "pf_dev is %s cnt=%d\n", pf_dev->name, cnt);
-	kfree(entries);
 
-	if (!hcnt)
+	sw_fib_add_to_list(pf_dev, entries, cnt);
+
+	if (!hcnt) {
+		kfree(haddr);
 		return NOTIFY_DONE;
+	}
 
 	entries = kcalloc(hcnt, sizeof(*entries), GFP_ATOMIC);
-	if (!entries)
+	if (!entries) {
+		kfree(haddr);
 		return NOTIFY_DONE;
+	}
 
 	iter = entries;
 
@@ -281,7 +289,7 @@ int sw_nb_v4_fib_event(struct notifier_block *nb,
 		netdev_dbg(pf_dev, "%s: FIB host  Rule cmd=%lld dst=%#x dst_len=%d gw=%#x %s\n",
 			   __func__, iter->cmd, iter->dst, iter->dst_len, iter->gw, pf_dev->name);
 	}
-	kfree(entries);
+	sw_fib_add_to_list(pf_dev, entries, hcnt);
 	kfree(haddr);
 	return NOTIFY_DONE;
 }
@@ -326,8 +334,8 @@ int sw_nb_net_v4_neigh_update(struct notifier_block *nb,
 	pf = netdev_priv(pf_dev);
 	entry->port_id = pf->pcifunc;
 
+	sw_fib_add_to_list(pf_dev, entry, 1);
 	rcu_read_unlock();
 
-	kfree(entry);
 	return NOTIFY_DONE;
 }
