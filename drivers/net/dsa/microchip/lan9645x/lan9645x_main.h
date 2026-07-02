@@ -219,6 +219,9 @@ struct lan9645x {
 	 */
 	struct mutex mdb_lock;
 
+	/* Statistics  */
+	struct lan9645x_stats *stats;
+
 	int num_port_dis;
 };
 
