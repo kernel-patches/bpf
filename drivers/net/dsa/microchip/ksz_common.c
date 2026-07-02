@@ -2966,39 +2966,6 @@ void ksz_set_xmii(struct ksz_device *dev, int port, phy_interface_t interface)
 	ksz_pwrite8(dev, port, regs[P_XMII_CTRL_1], data8);
 }
 
-phy_interface_t ksz_get_xmii(struct ksz_device *dev, int port, bool gbit)
-{
-	const u8 *bitval = dev->info->xmii_ctrl1;
-	const u16 *regs = dev->info->regs;
-	phy_interface_t interface;
-	u8 data8;
-	u8 val;
-
-	ksz_pread8(dev, port, regs[P_XMII_CTRL_1], &data8);
-
-	val = FIELD_GET(P_MII_SEL_M, data8);
-
-	if (val == bitval[P_MII_SEL]) {
-		if (gbit)
-			interface = PHY_INTERFACE_MODE_GMII;
-		else
-			interface = PHY_INTERFACE_MODE_MII;
-	} else if (val == bitval[P_RMII_SEL]) {
-		interface = PHY_INTERFACE_MODE_RMII;
-	} else {
-		interface = PHY_INTERFACE_MODE_RGMII;
-		if (data8 & P_RGMII_ID_EG_ENABLE)
-			interface = PHY_INTERFACE_MODE_RGMII_TXID;
-		if (data8 & P_RGMII_ID_IG_ENABLE) {
-			interface = PHY_INTERFACE_MODE_RGMII_RXID;
-			if (data8 & P_RGMII_ID_EG_ENABLE)
-				interface = PHY_INTERFACE_MODE_RGMII_ID;
-		}
-	}
-
-	return interface;
-}
-
 bool ksz_phylink_need_config(struct phylink_config *config,
 			     unsigned int mode)
 {
@@ -3032,24 +2999,6 @@ void ksz_phylink_mac_config(struct phylink_config *config,
 
 	if (ksz_phylink_need_config(config, mode))
 		ksz_set_xmii(dev, port, state->interface);
-}
-
-bool ksz_get_gbit(struct ksz_device *dev, int port)
-{
-	const u8 *bitval = dev->info->xmii_ctrl1;
-	const u16 *regs = dev->info->regs;
-	bool gbit = false;
-	u8 data8;
-	bool val;
-
-	ksz_pread8(dev, port, regs[P_XMII_CTRL_1], &data8);
-
-	val = FIELD_GET(P_GMII_1GBIT_M, data8);
-
-	if (val == bitval[P_GMII_1GBIT])
-		gbit = true;
-
-	return gbit;
 }
 
 static int ksz_switch_detect(struct ksz_device *dev)
