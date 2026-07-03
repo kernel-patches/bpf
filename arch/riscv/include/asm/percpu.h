@@ -9,7 +9,9 @@
 #include <asm/alternative-macros.h>
 #include <asm/cmpxchg.h>
 #include <asm/cpufeature-macros.h>
+#include <asm/current.h>
 #include <asm/hwcap.h>
+#include <asm/thread_info.h>
 
 #define PERCPU_RW_OPS(sz)						\
 static inline unsigned long __percpu_read_##sz(void *ptr)		\
@@ -278,6 +280,8 @@ _pcp_protect_return(__percpu_add_return_amo_case_64, pcp, val)
 	ret__;								\
 })
 #endif
+
+#define __my_cpu_offset (((struct thread_info *)current)->pcpu_offset)
 
 #undef PERCPU_RW_OPS
 #undef __PERCPU_AMO_OP_CASE
