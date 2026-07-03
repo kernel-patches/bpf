@@ -1352,17 +1352,28 @@ int dsa_port_simple_hsr_leave(struct dsa_switch *ds, int port,
 
 /* Perform operations on a switch by sending it request in Ethernet
  * frames and expecting a response in a frame.
+ *
+ * resp_lock protects resp and resp_len to ensure they are consistent.
+ * If there is a thread waiting for the response, resp will point to a
+ * buffer to copy the response to. If the thread has given up waiting,
+ * resp will be a NULL pointer.
  */
 struct dsa_inband {
 	struct completion completion;
 	u32 seqno;
 	u32 seqno_mask;
+	int err;
+	spinlock_t resp_lock;
+	void *resp;
+	unsigned int resp_len;
 };
 
 void dsa_inband_init(struct dsa_inband *inband, u32 seqno_mask);
-void dsa_inband_complete(struct dsa_inband *inband);
+void dsa_inband_complete(struct dsa_inband *inband,
+		      void *resp, unsigned int resp_len, int err);
 int dsa_inband_request(struct dsa_inband *inband, struct sk_buff *skb,
 		       void (*insert_seqno)(struct sk_buff *skb, u32 seqno),
+		       void *resp, unsigned int resp_len,
 		       int timeout_ms);
 int dsa_inband_wait_for_completion(struct dsa_inband *inband, int timeout_ms);
 u32 dsa_inband_seqno(struct dsa_inband *inband);

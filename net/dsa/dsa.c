@@ -1851,13 +1851,27 @@ EXPORT_SYMBOL_GPL(dsa_port_simple_hsr_leave);
 void dsa_inband_init(struct dsa_inband *inband, u32 seqno_mask)
 {
 	init_completion(&inband->completion);
+	spin_lock_init(&inband->resp_lock);
 	inband->seqno_mask = seqno_mask;
 	inband->seqno = 0;
 }
 EXPORT_SYMBOL_GPL(dsa_inband_init);
 
-void dsa_inband_complete(struct dsa_inband *inband)
+void dsa_inband_complete(struct dsa_inband *inband,
+			 void *resp, unsigned int resp_len,
+			 int err)
 {
+	inband->err = err;
+
+	if (!err) {
+		spin_lock_bh(&inband->resp_lock);
+		resp_len = min(inband->resp_len, resp_len);
+		if (inband->resp && resp)
+			memcpy(inband->resp, resp, resp_len);
+		spin_unlock_bh(&inband->resp_lock);
+		inband->err = resp_len;
+	}
+
 	complete(&inband->completion);
 }
 EXPORT_SYMBOL_GPL(dsa_inband_complete);
@@ -1892,10 +1906,18 @@ EXPORT_SYMBOL_GPL(dsa_inband_wait_for_completion);
  */
 int dsa_inband_request(struct dsa_inband *inband, struct sk_buff *skb,
 		       void (*insert_seqno)(struct sk_buff *skb, u32 seqno),
+		       void *resp, unsigned int resp_len,
 		       int timeout_ms)
 {
 	unsigned long jiffies = msecs_to_jiffies(timeout_ms);
 	int ret;
+
+	inband->err = 0;
+
+	spin_lock_bh(&inband->resp_lock);
+	inband->resp = resp;
+	inband->resp_len = resp_len;
+	spin_unlock_bh(&inband->resp_lock);
 
 	if (insert_seqno) {
 		WRITE_ONCE(inband->seqno, inband->seqno + 1);
@@ -1907,9 +1929,16 @@ int dsa_inband_request(struct dsa_inband *inband, struct sk_buff *skb,
 	dev_queue_xmit(skb);
 
 	ret = wait_for_completion_timeout(&inband->completion, jiffies);
+
+	spin_lock_bh(&inband->resp_lock);
+	inband->resp = NULL;
+	inband->resp_len = 0;
+	spin_unlock_bh(&inband->resp_lock);
+
 	if (ret == 0)
 		return -ETIMEDOUT;
-	return 0;
+
+	return inband->err;
 }
 EXPORT_SYMBOL_GPL(dsa_inband_request);
 
