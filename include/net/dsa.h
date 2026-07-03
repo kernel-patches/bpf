@@ -1355,13 +1355,17 @@ int dsa_port_simple_hsr_leave(struct dsa_switch *ds, int port,
  */
 struct dsa_inband {
 	struct completion completion;
+	u32 seqno;
+	u32 seqno_mask;
 };
 
-void dsa_inband_init(struct dsa_inband *inband);
+void dsa_inband_init(struct dsa_inband *inband, u32 seqno_mask);
 void dsa_inband_complete(struct dsa_inband *inband);
 int dsa_inband_request(struct dsa_inband *inband, struct sk_buff *skb,
+		       void (*insert_seqno)(struct sk_buff *skb, u32 seqno),
 		       int timeout_ms);
 int dsa_inband_wait_for_completion(struct dsa_inband *inband, int timeout_ms);
+u32 dsa_inband_seqno(struct dsa_inband *inband);
 
 /* Keep inline for faster access in hot path */
 static inline bool netdev_uses_dsa(const struct net_device *dev)
