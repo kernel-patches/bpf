@@ -1986,8 +1986,6 @@ static void identify_cpu(struct cpuinfo_x86 *c)
 
 	c->loops_per_jiffy = loops_per_jiffy;
 
-	init_cpu_info(c);
-
 	if (!cpuid_feature())
 		identify_cpu_without_cpuid(c);
 
@@ -2156,6 +2154,13 @@ static void identify_cpu_32(struct cpuinfo_x86 *c)
 
 static __init void identify_boot_cpu(void)
 {
+	/*
+	 * The boot CPU's capabilities were already scanned in early_identify_cpu().
+	 * However 32-bit still needs to init_cpu_info() here for the no-CPUID
+	 * cpuid_level default.
+	 */
+	if (IS_ENABLED(CONFIG_X86_32))
+		init_cpu_info(&boot_cpu_data);
 	identify_cpu(&boot_cpu_data);
 	if (HAS_KERNEL_IBT && cpu_feature_enabled(X86_FEATURE_IBT))
 		pr_info("CET detected: Indirect Branch Tracking enabled\n");
@@ -2178,6 +2183,7 @@ void identify_secondary_cpu(unsigned int cpu)
 		*c = boot_cpu_data;
 	c->cpu_index = cpu;
 
+	init_cpu_info(c);
 	identify_cpu(c);
 	identify_cpu_32(c);
 	x86_spec_ctrl_setup_ap();
