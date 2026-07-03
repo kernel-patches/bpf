@@ -394,7 +394,7 @@ enum {
 struct qca8k_mgmt_eth_data {
 	struct dsa_inband inband;
 	struct mutex mutex; /* Enforce one mdio read/write at time */
-	bool ack;
+	int err;
 	u32 data[4];
 };
 
