@@ -2146,14 +2146,20 @@ void enable_sep_cpu(void)
 }
 #endif
 
+static void identify_cpu_32(struct cpuinfo_x86 *c)
+{
+	if (!IS_ENABLED(CONFIG_X86_32))
+		return;
+
+	enable_sep_cpu();
+}
+
 static __init void identify_boot_cpu(void)
 {
 	identify_cpu(&boot_cpu_data);
 	if (HAS_KERNEL_IBT && cpu_feature_enabled(X86_FEATURE_IBT))
 		pr_info("CET detected: Indirect Branch Tracking enabled\n");
-#ifdef CONFIG_X86_32
-	enable_sep_cpu();
-#endif
+	identify_cpu_32(&boot_cpu_data);
 	cpu_detect_tlb(&boot_cpu_data);
 	setup_cr_pinning();
 
@@ -2173,9 +2179,7 @@ void identify_secondary_cpu(unsigned int cpu)
 	c->cpu_index = cpu;
 
 	identify_cpu(c);
-#ifdef CONFIG_X86_32
-	enable_sep_cpu();
-#endif
+	identify_cpu_32(c);
 	x86_spec_ctrl_setup_ap();
 	update_srbds_msr();
 	if (boot_cpu_has_bug(X86_BUG_GDS))
