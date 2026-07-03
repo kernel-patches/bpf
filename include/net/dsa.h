@@ -1357,8 +1357,12 @@ int dsa_port_simple_hsr_leave(struct dsa_switch *ds, int port,
  * If there is a thread waiting for the response, resp will point to a
  * buffer to copy the response to. If the thread has given up waiting,
  * resp will be a NULL pointer.
+ *
+ * The lock is used to serialise all inband operations. It also protects
+ * the seqno, which is incremented while holding the lock.
  */
 struct dsa_inband {
+	struct mutex lock; /* Serialise operations */
 	struct completion completion;
 	u32 seqno;
 	u32 seqno_mask;

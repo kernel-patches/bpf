@@ -324,65 +324,39 @@ static int qca8k_read_eth(struct qca8k_priv *priv, u32 reg, u32 *val, int len)
 	if (!skb)
 		return -ENOMEM;
 
-	mutex_lock(&mgmt_eth_data->mutex);
-
-	/* Check if the mgmt_conduit if is operational */
-	if (!priv->mgmt_conduit) {
-		kfree_skb(skb);
-		mutex_unlock(&mgmt_eth_data->mutex);
-		return -EINVAL;
-	}
-
-	skb->dev = priv->mgmt_conduit;
+	skb->dev = READ_ONCE(priv->mgmt_conduit);
 
 	ret = dsa_inband_request(&mgmt_eth_data->inband, skb,
 				 qca8k_mdio_header_fill_seq_num,
 				 data, sizeof(data),
 				 QCA8K_ETHERNET_TIMEOUT);
 	if (ret < 0)
-		goto out;
+		return ret;
 	ret = 0;
 
 	*val = data[0];
 	if (len > QCA_HDR_MGMT_DATA1_LEN)
 		memcpy(val + 1, &data[1], len - QCA_HDR_MGMT_DATA1_LEN);
 
-out:
-	mutex_unlock(&mgmt_eth_data->mutex);
-
-	return ret;
+	return 0;
 }
 
 static int qca8k_write_eth(struct qca8k_priv *priv, u32 reg, u32 *val, int len)
 {
 	struct qca8k_mgmt_eth_data *mgmt_eth_data = &priv->mgmt_eth_data;
 	struct sk_buff *skb;
-	int ret;
 
 	skb = qca8k_alloc_mdio_header(MDIO_WRITE, reg, val,
 				      QCA8K_ETHERNET_MDIO_PRIORITY, len);
 	if (!skb)
 		return -ENOMEM;
 
-	mutex_lock(&mgmt_eth_data->mutex);
+	skb->dev = READ_ONCE(priv->mgmt_conduit);
 
-	/* Check if the mgmt_conduit if is operational */
-	if (!priv->mgmt_conduit) {
-		kfree_skb(skb);
-		mutex_unlock(&mgmt_eth_data->mutex);
-		return -EINVAL;
-	}
-
-	skb->dev = priv->mgmt_conduit;
-
-	ret = dsa_inband_request(&mgmt_eth_data->inband, skb,
-				 qca8k_mdio_header_fill_seq_num,
-				 NULL, 0,
-				 QCA8K_ETHERNET_TIMEOUT);
-
-	mutex_unlock(&mgmt_eth_data->mutex);
-
-	return ret;
+	return dsa_inband_request(&mgmt_eth_data->inband, skb,
+				  qca8k_mdio_header_fill_seq_num,
+				  NULL, 0,
+				  QCA8K_ETHERNET_TIMEOUT);
 }
 
 static int
@@ -484,7 +458,7 @@ qca8k_bulk_read(void *ctx, const void *reg_buf, size_t reg_len,
 	struct qca8k_priv *priv = ctx;
 	u32 reg = *(u16 *)reg_buf;
 
-	if (priv->mgmt_conduit &&
+	if (READ_ONCE(priv->mgmt_conduit) &&
 	    !qca8k_read_eth(priv, reg, val_buf, val_len))
 		return 0;
 
@@ -507,7 +481,7 @@ qca8k_bulk_gather_write(void *ctx, const void *reg_buf, size_t reg_len,
 	u32 reg = *(u16 *)reg_buf;
 	u32 *val = (u32 *)val_buf;
 
-	if (priv->mgmt_conduit &&
+	if (READ_ONCE(priv->mgmt_conduit) &&
 	    !qca8k_write_eth(priv, reg, val, val_len))
 		return 0;
 
@@ -645,17 +619,7 @@ qca8k_phy_eth_command(struct qca8k_priv *priv, bool read, int phy,
 	 * 3. Get the data if we are reading
 	 * 4. Reset the mdio master (even with error)
 	 */
-	mutex_lock(&mgmt_eth_data->mutex);
-
-	/* Check if mgmt_conduit is operational */
-	mgmt_conduit = priv->mgmt_conduit;
-	if (!mgmt_conduit) {
-		mutex_unlock(&mgmt_eth_data->mutex);
-		mutex_unlock(&priv->bus->mdio_lock);
-		ret = -EINVAL;
-		goto err_mgmt_conduit;
-	}
-
+	mgmt_conduit = READ_ONCE(priv->mgmt_conduit);
 	read_skb->dev = mgmt_conduit;
 	clear_skb->dev = mgmt_conduit;
 	write_skb->dev = mgmt_conduit;
@@ -701,14 +665,10 @@ exit:
 			   NULL, 0,
 			   QCA8K_ETHERNET_TIMEOUT);
 
-	mutex_unlock(&mgmt_eth_data->mutex);
 	mutex_unlock(&priv->bus->mdio_lock);
 
 	return ret;
 
-	/* Error handling before lock */
-err_mgmt_conduit:
-	kfree_skb(read_skb);
 err_read_skb:
 	kfree_skb(clear_skb);
 err_clear_skb:
@@ -1698,13 +1658,12 @@ qca8k_conduit_change(struct dsa_switch *ds, const struct net_device *conduit,
 	if (dp->index != 0)
 		return;
 
-	mutex_lock(&priv->mgmt_eth_data.mutex);
 	mutex_lock(&priv->mib_eth_data.mutex);
 
-	priv->mgmt_conduit = operational ? (struct net_device *)conduit : NULL;
+	WRITE_ONCE(priv->mgmt_conduit,
+		   operational ? (struct net_device *)conduit : NULL);
 
 	mutex_unlock(&priv->mib_eth_data.mutex);
-	mutex_unlock(&priv->mgmt_eth_data.mutex);
 }
 
 static int qca8k_connect_tag_protocol(struct dsa_switch *ds,
@@ -2032,7 +1991,6 @@ qca8k_sw_probe(struct mdio_device *mdiodev)
 	if (!priv->ds)
 		return -ENOMEM;
 
-	mutex_init(&priv->mgmt_eth_data.mutex);
 	dsa_inband_init(&priv->mgmt_eth_data.inband, U32_MAX);
 
 	mutex_init(&priv->mib_eth_data.mutex);

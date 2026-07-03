@@ -393,7 +393,6 @@ enum {
 
 struct qca8k_mgmt_eth_data {
 	struct dsa_inband inband;
-	struct mutex mutex; /* Enforce one mdio read/write at time */
 };
 
 struct qca8k_mib_eth_data {
