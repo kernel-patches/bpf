@@ -1892,12 +1892,16 @@ int dsa_inband_request(struct dsa_inband *inband, struct sk_buff *skb,
 		       int timeout_ms)
 {
 	unsigned long jiffies = msecs_to_jiffies(timeout_ms);
+	int ret;
 
 	reinit_completion(&inband->completion);
 
 	dev_queue_xmit(skb);
 
-	return wait_for_completion_timeout(&inband->completion, jiffies);
+	ret = wait_for_completion_timeout(&inband->completion, jiffies);
+	if (ret == 0)
+		return -ETIMEDOUT;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(dsa_inband_request);
 
