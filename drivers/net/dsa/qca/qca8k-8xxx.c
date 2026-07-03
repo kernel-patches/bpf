@@ -341,6 +341,7 @@ static int qca8k_read_eth(struct qca8k_priv *priv, u32 reg, u32 *val, int len)
 				 QCA8K_ETHERNET_TIMEOUT);
 	if (ret < 0)
 		goto out;
+	ret = 0;
 
 	*val = data[0];
 	if (len > QCA_HDR_MGMT_DATA1_LEN)
@@ -574,7 +575,7 @@ qca8k_phy_eth_busy_wait(struct qca8k_mgmt_eth_data *mgmt_eth_data,
 				 data, sizeof(data),
 				 QCA8K_ETHERNET_TIMEOUT);
 
-	if (ret)
+	if (ret < 0)
 		return ret;
 
 	*val = data[0];
@@ -664,7 +665,7 @@ qca8k_phy_eth_command(struct qca8k_priv *priv, bool read, int phy,
 				 NULL, 0,
 				 QCA8K_ETHERNET_TIMEOUT);
 
-	if (ret) {
+	if (ret < 0) {
 		kfree_skb(read_skb);
 		goto exit;
 	}
@@ -685,7 +686,7 @@ qca8k_phy_eth_command(struct qca8k_priv *priv, bool read, int phy,
 					 resp_data, sizeof(resp_data),
 					 QCA8K_ETHERNET_TIMEOUT);
 
-		if (ret)
+		if (ret < 0)
 			goto exit;
 
 		ret = resp_data[0] & QCA8K_MDIO_MASTER_DATA_MASK;
