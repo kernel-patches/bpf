@@ -813,19 +813,22 @@ static int unix_listen(struct socket *sock, int backlog)
 	struct unix_sock *u = unix_sk(sk);
 	struct unix_peercred peercred = {};
 
-	err = -EOPNOTSUPP;
-	if (sock->type != SOCK_STREAM && sock->type != SOCK_SEQPACKET)
+	if (sock->type != SOCK_STREAM && sock->type != SOCK_SEQPACKET) {
+		err = -EOPNOTSUPP;
 		goto out;	/* Only stream/seqpacket sockets accept */
-	err = -EINVAL;
-	if (!READ_ONCE(u->addr))
+	}
+	if (!READ_ONCE(u->addr)) {
+		err = -EINVAL;
 		goto out;	/* No listens on an unbound socket */
+	}
 	err = prepare_peercred(&peercred);
 	if (err)
 		goto out;
 	unix_state_lock(sk);
-	err = -EINVAL;
-	if (sk->sk_state != TCP_CLOSE && sk->sk_state != TCP_LISTEN)
+	if (sk->sk_state != TCP_CLOSE && sk->sk_state != TCP_LISTEN) {
+		err = -EINVAL;
 		goto out_unlock;
+	}
 	if (backlog > sk->sk_max_ack_backlog)
 		wake_up_interruptible_all(&u->peer_wait);
 	sk->sk_max_ack_backlog	= backlog;
