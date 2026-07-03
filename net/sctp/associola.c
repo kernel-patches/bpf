@@ -260,9 +260,13 @@ static struct sctp_association *sctp_association_init(
 	asoc->strreset_enable = ep->strreset_enable;
 
 	/* Save the hmacs and chunks list into this association */
-	if (ep->auth_hmacs_list)
-		memcpy(asoc->c.auth_hmacs, ep->auth_hmacs_list,
-			ntohs(ep->auth_hmacs_list->param_hdr.length));
+	if (ep->auth_hmacs_list) {
+		size_t hmac_len = min_t(size_t,
+				ntohs(ep->auth_hmacs_list->param_hdr.length),
+				sizeof(asoc->c.auth_hmacs));
+
+		memcpy(asoc->c.auth_hmacs, ep->auth_hmacs_list, hmac_len);
+	}
 	if (ep->auth_chunk_list)
 		memcpy(asoc->c.auth_chunks, ep->auth_chunk_list,
 			ntohs(ep->auth_chunk_list->param_hdr.length));

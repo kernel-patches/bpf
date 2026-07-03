@@ -4431,6 +4431,8 @@ static enum sctp_ierror sctp_sf_authenticate(
 	sig_len = ntohs(chunk->chunk_hdr->length) -
 		  sizeof(struct sctp_auth_chunk);
 	hmac = sctp_auth_get_hmac(ntohs(auth_hdr->hmac_id));
+	if (!hmac)
+		return SCTP_IERROR_AUTH_BAD_HMAC;
 	if (sig_len != hmac->hmac_len)
 		return SCTP_IERROR_PROTO_VIOLATION;
 

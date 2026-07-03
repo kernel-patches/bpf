@@ -447,6 +447,8 @@ struct sctp_shared_key *sctp_auth_get_shkey(
 
 const struct sctp_hmac *sctp_auth_get_hmac(__u16 hmac_id)
 {
+	if (hmac_id >= SCTP_AUTH_NUM_HMACS)
+		return NULL;
 	return &sctp_hmac_list[hmac_id];
 }
 
@@ -510,6 +512,9 @@ int sctp_auth_asoc_verify_hmac_id(const struct sctp_association *asoc,
 	hmacs = (struct sctp_hmac_algo_param *)asoc->c.auth_hmacs;
 	n_elt = (ntohs(hmacs->param_hdr.length) -
 		 sizeof(struct sctp_paramhdr)) >> 1;
+	n_elt = min_t(__u16, n_elt,
+		      (sizeof(asoc->c.auth_hmacs) -
+		       sizeof(struct sctp_paramhdr)) / sizeof(__u16));
 
 	return __sctp_auth_find_hmacid(hmacs->hmac_ids, n_elt, hmac_id);
 }
@@ -708,8 +713,9 @@ int sctp_auth_ep_set_hmacs(struct sctp_endpoint *ep,
 		ep->auth_hmacs_list->hmac_ids[i] =
 				htons(hmacs->shmac_idents[i]);
 	ep->auth_hmacs_list->param_hdr.length =
-			htons(sizeof(struct sctp_paramhdr) +
-			hmacs->shmac_num_idents * sizeof(__u16));
+			htons(min_t(__u16, sizeof(struct sctp_paramhdr) +
+				      hmacs->shmac_num_idents * sizeof(__u16),
+			      SCTP_AUTH_NUM_HMACS * sizeof(__u16) + 2));
 	return 0;
 }
 
