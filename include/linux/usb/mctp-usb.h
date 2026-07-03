@@ -76,6 +76,10 @@ struct mctp_usblib_tx_ops {
 struct mctp_usblib_tx {
 	struct mctp_usblib_tx_ops ops;
 	void *priv;
+	/* protects access to cur_ctx */
+	spinlock_t lock;
+	/* context to which we are adding packets, cleared on send */
+	struct mctp_usblib_tx_ctx *cur_ctx;
 };
 
 void mctp_usblib_tx_init(struct mctp_usblib_tx *tx,
