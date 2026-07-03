@@ -305,6 +305,7 @@ struct enic {
 	struct vnic_intr admin_intr;
 	struct work_struct admin_poll_work;
 	unsigned int admin_intr_index;
+	struct work_struct link_notify_work;
 	struct work_struct admin_msg_work;
 	spinlock_t admin_msg_lock;	/* protects admin_msg_list */
 	struct list_head admin_msg_list;
@@ -324,6 +325,7 @@ struct enic {
 	 */
 	struct completion mbox_comp;
 	u8 mbox_expected_reply;
+	bool mbox_initialized;
 
 	/* PF: per-VF MBOX state, allocated when SRIOV V2 is enabled */
 	struct enic_vf_state {

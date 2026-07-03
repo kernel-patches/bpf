@@ -616,6 +616,7 @@ void enic_admin_channel_close(struct enic *enic)
 
 	vnic_intr_mask(&enic->admin_intr);
 	enic_admin_teardown_intr(enic);
+	cancel_work_sync(&enic->link_notify_work);
 	cancel_work_sync(&enic->admin_msg_work);
 	enic_admin_msg_drain(enic);
 
@@ -635,6 +636,8 @@ void enic_admin_channel_close(struct enic *enic)
 	vnic_cq_clean(&enic->admin_cq[0]);
 	vnic_cq_clean(&enic->admin_cq[1]);
 	vnic_intr_clean(&enic->admin_intr);
+
+	enic->admin_rq_handler = NULL;
 	enic_admin_free_resources(enic);
 
 	enic->admin_chan_up = false;
