@@ -7,6 +7,7 @@
 #ifndef __LINUX_NET_DSA_H
 #define __LINUX_NET_DSA_H
 
+#include <linux/completion.h>
 #include <linux/if.h>
 #include <linux/if_ether.h>
 #include <linux/list.h>
@@ -1348,6 +1349,17 @@ int dsa_port_simple_hsr_join(struct dsa_switch *ds, int port,
 			     struct netlink_ext_ack *extack);
 int dsa_port_simple_hsr_leave(struct dsa_switch *ds, int port,
 			      struct net_device *hsr);
+
+/* Perform operations on a switch by sending it request in Ethernet
+ * frames and expecting a response in a frame.
+ */
+struct dsa_inband {
+	struct completion completion;
+};
+
+void dsa_inband_init(struct dsa_inband *inband);
+void dsa_inband_complete(struct dsa_inband *inband);
+int dsa_inband_wait_for_completion(struct dsa_inband *inband, int timeout_ms);
 
 /* Keep inline for faster access in hot path */
 static inline bool netdev_uses_dsa(const struct net_device *dev)
