@@ -88,22 +88,6 @@ static inline port_status_t *get_status(struct port *port)
 	return &port->card->status->port_status[port->node];
 }
 
-#ifdef DEBUG_PCI
-static inline dma_addr_t pci_map_single_debug(struct pci_dev *pdev, void *ptr,
-					      size_t size, int direction)
-{
-	dma_addr_t addr = dma_map_single(&pdev->dev, ptr, size, direction);
-
-	if (addr + size > 0x100000000LL)
-		pr_crit("%s: pci_map_single() returned memory at 0x%llx!\n",
-			pci_name(pdev), (unsigned long long)addr);
-	return addr;
-}
-
-#undef pci_map_single
-#define pci_map_single pci_map_single_debug
-#endif
-
 /* Cable and/or personality module change interrupt service */
 static inline void wanxl_cable_intr(struct port *port)
 {
