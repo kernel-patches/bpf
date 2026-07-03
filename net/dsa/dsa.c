@@ -1870,6 +1870,37 @@ int dsa_inband_wait_for_completion(struct dsa_inband *inband, int timeout_ms)
 }
 EXPORT_SYMBOL_GPL(dsa_inband_wait_for_completion);
 
+/* dsa_inband_request - send an inband request frame and wait for the reply.
+ * @inband: inband state for the switch
+ * @skb: request frame; ownership is transferred to this function
+ * @insert_seqno: optional callback to stamp the sequence number into @skb
+ * @resp: buffer to receive the reply payload, or NULL if none is expected
+ * @resp_len: size of @resp in bytes
+ * @timeout_ms: how long to wait for the reply, in milliseconds
+ *
+ * Serialise against other inband operations, transmit @skb and wait for the
+ * matching reply handed back via dsa_inband_complete().
+ *
+ * Return the number of response bytes copied into @resp (0 when no response
+ * is expected) on success, or a negative errno (-EOPNOTSUPP if the conduit
+ * is down, -ETIMEDOUT if no reply arrived, or an error from the completer).
+ *
+ * Cannot use dsa_inband_wait_for_completion() since the completion needs to
+ * be reinitialised before the skb is queued, to avoid races.
+ */
+int dsa_inband_request(struct dsa_inband *inband, struct sk_buff *skb,
+		       int timeout_ms)
+{
+	unsigned long jiffies = msecs_to_jiffies(timeout_ms);
+
+	reinit_completion(&inband->completion);
+
+	dev_queue_xmit(skb);
+
+	return wait_for_completion_timeout(&inband->completion, jiffies);
+}
+EXPORT_SYMBOL_GPL(dsa_inband_request);
+
 static const struct dsa_stubs __dsa_stubs = {
 	.conduit_hwtstamp_validate = __dsa_conduit_hwtstamp_validate,
 };

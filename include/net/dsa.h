@@ -1359,6 +1359,8 @@ struct dsa_inband {
 
 void dsa_inband_init(struct dsa_inband *inband);
 void dsa_inband_complete(struct dsa_inband *inband);
+int dsa_inband_request(struct dsa_inband *inband, struct sk_buff *skb,
+		       int timeout_ms);
 int dsa_inband_wait_for_completion(struct dsa_inband *inband, int timeout_ms);
 
 /* Keep inline for faster access in hot path */

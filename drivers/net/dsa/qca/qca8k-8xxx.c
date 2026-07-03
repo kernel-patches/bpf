@@ -337,10 +337,8 @@ static int qca8k_read_eth(struct qca8k_priv *priv, u32 reg, u32 *val, int len)
 	qca8k_mdio_header_fill_seq_num(skb, mgmt_eth_data->seq);
 	mgmt_eth_data->ack = false;
 
-	dev_queue_xmit(skb);
-
-	ret = dsa_inband_wait_for_completion(&mgmt_eth_data->inband,
-					     QCA8K_ETHERNET_TIMEOUT);
+	ret = dsa_inband_request(&mgmt_eth_data->inband, skb,
+				 QCA8K_ETHERNET_TIMEOUT);
 
 	*val = mgmt_eth_data->data[0];
 	if (len > QCA_HDR_MGMT_DATA1_LEN)
@@ -387,10 +385,8 @@ static int qca8k_write_eth(struct qca8k_priv *priv, u32 reg, u32 *val, int len)
 	qca8k_mdio_header_fill_seq_num(skb, mgmt_eth_data->seq);
 	mgmt_eth_data->ack = false;
 
-	dev_queue_xmit(skb);
-
-	ret = dsa_inband_wait_for_completion(&mgmt_eth_data->inband,
-					     QCA8K_ETHERNET_TIMEOUT);
+	ret = dsa_inband_request(&mgmt_eth_data->inband, skb,
+				 QCA8K_ETHERNET_TIMEOUT);
 
 	ack = mgmt_eth_data->ack;
 
@@ -595,10 +591,8 @@ qca8k_phy_eth_busy_wait(struct qca8k_mgmt_eth_data *mgmt_eth_data,
 	qca8k_mdio_header_fill_seq_num(skb, mgmt_eth_data->seq);
 	mgmt_eth_data->ack = false;
 
-	dev_queue_xmit(skb);
-
-	ret = dsa_inband_wait_for_completion(&mgmt_eth_data->inband,
-					     QCA8K_ETHERNET_TIMEOUT);
+	ret = dsa_inband_request(&mgmt_eth_data->inband, skb,
+				 QCA8K_ETHERNET_TIMEOUT);
 
 	ack = mgmt_eth_data->ack;
 
@@ -695,10 +689,8 @@ qca8k_phy_eth_command(struct qca8k_priv *priv, bool read, int phy,
 	qca8k_mdio_header_fill_seq_num(write_skb, mgmt_eth_data->seq);
 	mgmt_eth_data->ack = false;
 
-	dev_queue_xmit(write_skb);
-
-	ret = dsa_inband_wait_for_completion(&mgmt_eth_data->inband,
-					     QCA8K_ETHERNET_TIMEOUT);
+	ret = dsa_inband_request(&mgmt_eth_data->inband, write_skb,
+				 QCA8K_ETHERNET_TIMEOUT);
 
 	ack = mgmt_eth_data->ack;
 
@@ -730,10 +722,8 @@ qca8k_phy_eth_command(struct qca8k_priv *priv, bool read, int phy,
 		qca8k_mdio_header_fill_seq_num(read_skb, mgmt_eth_data->seq);
 		mgmt_eth_data->ack = false;
 
-		dev_queue_xmit(read_skb);
-
-		ret = dsa_inband_wait_for_completion(&mgmt_eth_data->inband,
-						     QCA8K_ETHERNET_TIMEOUT);
+		ret = dsa_inband_request(&mgmt_eth_data->inband, read_skb,
+					 QCA8K_ETHERNET_TIMEOUT);
 
 		ack = mgmt_eth_data->ack;
 
@@ -756,8 +746,6 @@ exit:
 	mgmt_eth_data->seq++;
 	qca8k_mdio_header_fill_seq_num(clear_skb, mgmt_eth_data->seq);
 	mgmt_eth_data->ack = false;
-
-	dev_queue_xmit(clear_skb);
 
 	dsa_inband_wait_for_completion(&mgmt_eth_data->inband,
 				       QCA8K_ETHERNET_TIMEOUT);
