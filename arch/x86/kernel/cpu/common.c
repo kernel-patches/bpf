@@ -2005,23 +2005,6 @@ static void identify_cpu(struct cpuinfo_x86 *c)
 
 	get_model_name(c); /* Default name */
 
-	/*
-	 * ESPFIX is a strange bug.  All real CPUs have it.  Paravirt
-	 * systems that run Linux at CPL > 0 may or may not have the
-	 * issue, but, even if they have the issue, there's absolutely
-	 * nothing we can do about it because we can't use the real IRET
-	 * instruction.
-	 *
-	 * NB: For the time being, only 32-bit kernels support
-	 * X86_BUG_ESPFIX as such.  64-bit kernels directly choose
-	 * whether to apply espfix using paravirt hooks.  If any
-	 * non-paravirt system ever shows up that does *not* have the
-	 * ESPFIX issue, we can change this.
-	 */
-#ifdef CONFIG_X86_32
-	set_cpu_bug(c, X86_BUG_ESPFIX);
-#endif
-
 no_cpuid:
 	cpu_parse_topology(c);
 
@@ -2150,6 +2133,23 @@ static void identify_cpu_32(struct cpuinfo_x86 *c)
 {
 	if (!IS_ENABLED(CONFIG_X86_32))
 		return;
+
+	/*
+	 * ESPFIX is a strange bug.  All real CPUs have it.  Paravirt
+	 * systems that run Linux at CPL > 0 may or may not have the
+	 * issue, but, even if they have the issue, there's absolutely
+	 * nothing we can do about it because we can't use the real IRET
+	 * instruction.
+	 *
+	 * NB: For the time being, only 32-bit kernels support
+	 * X86_BUG_ESPFIX as such.  64-bit kernels directly choose
+	 * whether to apply espfix using paravirt hooks.  If any
+	 * non-paravirt system ever shows up that does *not* have the
+	 * ESPFIX issue, we can change this.
+	 */
+#ifdef CONFIG_X86_32
+	set_cpu_bug(c, X86_BUG_ESPFIX);
+#endif
 
 	enable_sep_cpu();
 }
