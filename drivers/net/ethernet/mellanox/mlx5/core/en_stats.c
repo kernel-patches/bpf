@@ -171,6 +171,7 @@ static const struct counter_desc sw_stats_desc[] = {
 	{ MLX5E_DECLARE_STAT(struct mlx5e_sw_stats, tx_cqes) },
 	{ MLX5E_DECLARE_STAT(struct mlx5e_sw_stats, tx_queue_wake) },
 	{ MLX5E_DECLARE_STAT(struct mlx5e_sw_stats, tx_cqe_err) },
+	{ MLX5E_DECLARE_STAT(struct mlx5e_sw_stats, tx_time_budget_exit) },
 	{ MLX5E_DECLARE_STAT(struct mlx5e_sw_stats, tx_xdp_xmit) },
 	{ MLX5E_DECLARE_STAT(struct mlx5e_sw_stats, tx_xdp_mpwqe) },
 	{ MLX5E_DECLARE_STAT(struct mlx5e_sw_stats, tx_xdp_inlnw) },
@@ -426,6 +427,7 @@ static void mlx5e_stats_grp_sw_update_stats_sq(struct mlx5e_sw_stats *s,
 	s->tx_queue_wake            += sq_stats->wake;
 	s->tx_queue_dropped         += sq_stats->dropped;
 	s->tx_cqe_err               += sq_stats->cqe_err;
+	s->tx_time_budget_exit      += sq_stats->time_budget_exit;
 	s->tx_recover               += sq_stats->recover;
 	s->tx_xmit_more             += sq_stats->xmit_more;
 	s->tx_csum_partial_inner    += sq_stats->csum_partial_inner;
@@ -2323,6 +2325,7 @@ static const struct counter_desc sq_stats_desc[] = {
 	{ MLX5E_DECLARE_TX_STAT(struct mlx5e_sq_stats, cqes) },
 	{ MLX5E_DECLARE_TX_STAT(struct mlx5e_sq_stats, wake) },
 	{ MLX5E_DECLARE_TX_STAT(struct mlx5e_sq_stats, cqe_err) },
+	{ MLX5E_DECLARE_TX_STAT(struct mlx5e_sq_stats, time_budget_exit) },
 };
 
 static const struct counter_desc rq_xdpsq_stats_desc[] = {
@@ -2399,6 +2402,7 @@ static const struct counter_desc ptp_sq_stats_desc[] = {
 	{ MLX5E_DECLARE_PTP_TX_STAT(struct mlx5e_sq_stats, cqes) },
 	{ MLX5E_DECLARE_PTP_TX_STAT(struct mlx5e_sq_stats, wake) },
 	{ MLX5E_DECLARE_PTP_TX_STAT(struct mlx5e_sq_stats, cqe_err) },
+	{ MLX5E_DECLARE_PTP_TX_STAT(struct mlx5e_sq_stats, time_budget_exit) },
 };
 
 static const struct counter_desc ptp_ch_stats_desc[] = {
@@ -2476,6 +2480,7 @@ static const struct counter_desc qos_sq_stats_desc[] = {
 	{ MLX5E_DECLARE_QOS_TX_STAT(struct mlx5e_sq_stats, cqes) },
 	{ MLX5E_DECLARE_QOS_TX_STAT(struct mlx5e_sq_stats, wake) },
 	{ MLX5E_DECLARE_QOS_TX_STAT(struct mlx5e_sq_stats, cqe_err) },
+	{ MLX5E_DECLARE_QOS_TX_STAT(struct mlx5e_sq_stats, time_budget_exit) },
 };
 
 #define NUM_RQ_STATS			ARRAY_SIZE(rq_stats_desc)
