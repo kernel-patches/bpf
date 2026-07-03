@@ -192,6 +192,9 @@ struct dsa_switch_tree {
 static inline struct dsa_lag *dsa_lag_by_id(struct dsa_switch_tree *dst,
 					    unsigned int id)
 {
+	if (unlikely(id == 0 || id > dst->lags_len))
+		return NULL;
+
 	/* DSA LAG IDs are one-based, dst->lags is zero-based */
 	return dst->lags[id - 1];
 }
