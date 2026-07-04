@@ -2878,8 +2878,11 @@ static int gfar_enet_open(struct net_device *dev)
 		return err;
 
 	err = startup_gfar(dev);
-	if (err)
+	if (err) {
+		phy_disconnect(dev->phydev);
+		gfar_free_irq(priv);
 		return err;
+	}
 
 	return err;
 }
