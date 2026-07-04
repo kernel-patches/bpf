@@ -5,6 +5,7 @@
  */
 
 #include <linux/device.h>
+#include <linux/seq_buf.h>
 #include <net/genetlink.h>
 #include <net/sock.h>
 #include "devl_internal.h"
@@ -1188,8 +1189,10 @@ static void __devlink_compat_running_version(struct devlink *devlink,
 					     char *buf, size_t len)
 {
 	struct devlink_info_req req = {};
+	size_t used = strnlen(buf, len);
 	const struct nlattr *nlattr;
 	struct sk_buff *msg;
+	struct seq_buf sb;
 	int rem, err;
 
 	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
@@ -1201,6 +1204,8 @@ static void __devlink_compat_running_version(struct devlink *devlink,
 	if (err)
 		goto free_msg;
 
+	seq_buf_init(&sb, buf + used, len - used);
+
 	nla_for_each_attr_type(nlattr, DEVLINK_ATTR_INFO_VERSION_RUNNING,
 			       (void *)msg->data, msg->len, rem) {
 		const struct nlattr *kv;
@@ -1208,8 +1213,8 @@ static void __devlink_compat_running_version(struct devlink *devlink,
 
 		nla_for_each_nested_type(kv, DEVLINK_ATTR_INFO_VERSION_VALUE,
 					 nlattr, rem_kv) {
-			strlcat(buf, nla_data(kv), len);
-			strlcat(buf, " ", len);
+			seq_buf_printf(&sb, "%s ",
+				       (const char *)nla_data(kv));
 		}
 	}
 free_msg:
