@@ -19,4 +19,40 @@ int fib_lookup(struct __sk_buff *skb)
 	return TC_ACT_SHOT;
 }
 
+SEC("xdp")
+int fib_lookup_xdp(struct xdp_md *ctx)
+{
+	fib_lookup_ret = bpf_fib_lookup(ctx, &fib_params, sizeof(fib_params),
+					lookup_flags);
+
+	return XDP_DROP;
+}
+
+int redirected = 0;
+int passed = 0;
+int delivered = 0;
+
+SEC("xdp")
+int fib_lookup_redirect(struct xdp_md *ctx)
+{
+	struct bpf_fib_lookup params = fib_params;
+	long ret;
+
+	ret = bpf_fib_lookup(ctx, &params, sizeof(params), lookup_flags);
+	if (ret == BPF_FIB_LKUP_RET_SUCCESS) {
+		redirected++;
+		return bpf_redirect(params.ifindex, 0);
+	}
+
+	passed++;
+	return XDP_PASS;
+}
+
+SEC("xdp")
+int xdp_count(struct xdp_md *ctx)
+{
+	delivered++;
+	return XDP_DROP;
+}
+
 char _license[] SEC("license") = "GPL";
