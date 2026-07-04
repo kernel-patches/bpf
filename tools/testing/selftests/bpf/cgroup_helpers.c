@@ -188,6 +188,52 @@ int write_cgroup_file_parent(const char *relative_path, const char *file,
 	return __write_cgroup_file(cgroup_path, file, buf);
 }
 
+static int __read_cgroup_file(const char *cgroup_path, const char *file,
+			      char *buf, size_t buf_size)
+{
+	char file_path[PATH_MAX + 1];
+	ssize_t len;
+	int fd;
+
+	snprintf(file_path, sizeof(file_path), "%s/%s", cgroup_path, file);
+	fd = open(file_path, O_RDONLY);
+	if (fd < 0) {
+		log_err("Opening %s", file_path);
+		return 1;
+	}
+
+	len = read(fd, buf, buf_size - 1);
+	close(fd);
+	if (len < 0) {
+		log_err("Reading %s", file_path);
+		return 1;
+	}
+	buf[len] = '\0';
+	return 0;
+}
+
+/**
+ * read_cgroup_file() - Read from a cgroup file
+ * @relative_path: The cgroup path, relative to the workdir
+ * @file: The name of the file in cgroupfs to read from
+ * @buf: Buffer to read into; NUL-terminated on success
+ * @buf_size: Size of @buf; at most @buf_size - 1 bytes are read
+ *
+ * Read from a file in the given cgroup's directory. As with reading any
+ * cgroupfs control/stat file, @buf should be large enough to hold the whole
+ * value in a single read().
+ *
+ * If successful, 0 is returned.
+ */
+int read_cgroup_file(const char *relative_path, const char *file,
+		     char *buf, size_t buf_size)
+{
+	char cgroup_path[PATH_MAX - 24];
+
+	format_cgroup_path(cgroup_path, relative_path);
+	return __read_cgroup_file(cgroup_path, file, buf, buf_size);
+}
+
 /**
  * setup_cgroup_environment() - Setup the cgroup environment
  *
