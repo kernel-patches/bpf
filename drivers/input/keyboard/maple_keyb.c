@@ -25,8 +25,7 @@ MODULE_LICENSE("GPL");
 struct dc_kbd {
 	struct input_dev *dev;
 	unsigned short keycode[NR_SCANCODES];
-	unsigned char new[8];
-	unsigned char old[8];
+	u8 old[8];
 };
 
 static const unsigned short dc_kbd_keycode[NR_SCANCODES] = {
@@ -77,7 +76,7 @@ static const unsigned short dc_kbd_keycode[NR_SCANCODES] = {
 	KEY_CALC, KEY_RESERVED, KEY_RESERVED, KEY_RESERVED, KEY_RESERVED
 };
 
-static void dc_scan_kbd(struct dc_kbd *kbd)
+static void dc_scan_kbd(struct dc_kbd *kbd, const u8 *new)
 {
 	struct input_dev *dev = kbd->dev;
 	void *ptr;
@@ -88,11 +87,11 @@ static void dc_scan_kbd(struct dc_kbd *kbd)
 		code = i + 224;
 		keycode = kbd->keycode[code];
 		input_event(dev, EV_MSC, MSC_SCAN, code);
-		input_report_key(dev, keycode, (kbd->new[0] >> i) & 1);
+		input_report_key(dev, keycode, (new[0] >> i) & 1);
 	}
 
 	for (i = 2; i < 8; i++) {
-		ptr = memchr(kbd->new + 2, kbd->old[i], 6);
+		ptr = memchr(new + 2, kbd->old[i], 6);
 		code = kbd->old[i];
 		if (code > 3 && !ptr) {
 			keycode = kbd->keycode[code];
@@ -105,8 +104,8 @@ static void dc_scan_kbd(struct dc_kbd *kbd)
 					code);
 			}
 		}
-		ptr = memchr(kbd->old + 2, kbd->new[i], 6);
-		code = kbd->new[i];
+		ptr = memchr(kbd->old + 2, new[i], 6);
+		code = new[i];
 		if (code > 3 && !ptr) {
 			keycode = kbd->keycode[code];
 			if (keycode) {
@@ -120,24 +119,22 @@ static void dc_scan_kbd(struct dc_kbd *kbd)
 		}
 	}
 	input_sync(dev);
-	memcpy(kbd->old, kbd->new, 8);
+	memcpy(kbd->old, new, 8);
 }
 
 static void dc_kbd_callback(struct mapleq *mq)
 {
 	struct maple_device *mapledev = mq->dev;
 	struct dc_kbd *kbd = maple_get_drvdata(mapledev);
-	unsigned long *buf = (unsigned long *)(mq->recvbuf->buf);
+	unsigned long *buf = mq->recvbuf->buf;
 
 	/*
 	 * We should always get the lock because the only
 	 * time it may be locked is if the driver is in the cleanup phase.
 	 */
 	scoped_guard(mutex_try, &maple_keyb_mutex) {
-		if (buf[1] == mapledev->function) {
-			memcpy(kbd->new, buf + 2, 8);
-			dc_scan_kbd(kbd);
-		}
+		if (buf[1] == mapledev->function)
+			dc_scan_kbd(kbd, mq->recvbuf->buf + 8);
 	}
 }
 
