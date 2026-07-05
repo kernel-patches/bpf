@@ -242,7 +242,7 @@ static void cx82310_unbind(struct usbnet *dev, struct usb_interface *intf)
  */
 static int cx82310_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 {
-	int len;
+	int len, pull_len;
 	struct sk_buff *skb2;
 	struct cx82310_priv *priv = dev->driver_priv;
 
@@ -251,6 +251,13 @@ static int cx82310_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 	 * end of that packet at the beginning.
 	 */
 	if (dev->partial_rem) {
+		pull_len = (dev->partial_rem + 1) & ~1;
+		if (skb->len < pull_len) {
+			dev->partial_len = 0;
+			dev->partial_rem = 0;
+			return 0;
+		}
+
 		len = dev->partial_len + dev->partial_rem;
 		skb2 = alloc_skb(len, GFP_ATOMIC);
 		if (!skb2)
@@ -261,7 +268,7 @@ static int cx82310_rx_fixup(struct usbnet *dev, struct sk_buff *skb)
 		memcpy(skb2->data + dev->partial_len, skb->data,
 		       dev->partial_rem);
 		usbnet_skb_return(dev, skb2);
-		skb_pull(skb, (dev->partial_rem + 1) & ~1);
+		skb_pull(skb, pull_len);
 		dev->partial_rem = 0;
 		if (skb->len < 2)
 			return 1;
