@@ -21,6 +21,17 @@ enum s3fwrn5_mode {
 	S3FWRN5_MODE_FW,
 };
 
+enum s3fwrn5_variant {
+	/* S3FWRN5 / S3FWRN82: firmware is downloaded by this driver */
+	S3FWRN5_VARIANT_FWDL,
+	/*
+	 * S3NRN4V: ships with working firmware behind a bootloader protocol
+	 * this driver does not implement; skip the download, configure the
+	 * clock (FW_CFG) and update the RF registers via the DUAL_OPTION cmd.
+	 */
+	S3FWRN5_VARIANT_S3NRN4V,
+};
+
 struct s3fwrn5_phy_ops {
 	void (*set_wake)(void *id, bool sleep);
 	void (*set_mode)(void *id, enum s3fwrn5_mode);
@@ -36,6 +47,7 @@ struct s3fwrn5_info {
 	const struct s3fwrn5_phy_ops *phy_ops;
 
 	struct s3fwrn5_fw_info fw_info;
+	enum s3fwrn5_variant variant;
 
 	struct mutex mutex;
 };
@@ -78,7 +90,7 @@ static inline int s3fwrn5_write(struct s3fwrn5_info *info, struct sk_buff *skb)
 }
 
 int s3fwrn5_probe(struct nci_dev **ndev, void *phy_id, struct device *pdev,
-	const struct s3fwrn5_phy_ops *phy_ops);
+	const struct s3fwrn5_phy_ops *phy_ops, enum s3fwrn5_variant variant);
 void s3fwrn5_remove(struct nci_dev *ndev);
 
 int s3fwrn5_recv_frame(struct nci_dev *ndev, struct sk_buff *skb,

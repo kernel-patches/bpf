@@ -122,10 +122,46 @@ static int s3fwrn5_nci_send(struct nci_dev *ndev, struct sk_buff *skb)
 	return 0;
 }
 
+static int s3fwrn5_nci_setup(struct nci_dev *ndev)
+{
+	struct s3fwrn5_info *info = nci_get_drvdata(ndev);
+
+	/*
+	 * Runs after CORE_RESET, before CORE_INIT. The S3NRN4V needs its
+	 * reference clock configured here (the downstream stack does it in the
+	 * bootloader, before CORE_RESET, but this is the earliest hook the NCI
+	 * core offers and the chip accepts it).
+	 */
+	if (info->variant == S3FWRN5_VARIANT_S3NRN4V)
+		return s3fwrn5_nci_clk_cfg(info);
+
+	return 0;
+}
+
 static int s3fwrn5_nci_post_setup(struct nci_dev *ndev)
 {
 	struct s3fwrn5_info *info = nci_get_drvdata(ndev);
 	int ret;
+
+	if (info->variant == S3FWRN5_VARIANT_S3NRN4V) {
+		/*
+		 * The S3NRN4V ships with working firmware behind a bootloader
+		 * protocol this driver does not implement, so there is no
+		 * download step; the NCI core has already done CORE_RESET +
+		 * CORE_INIT. Just (re)load the RF registers via DUAL_OPTION.
+		 */
+		ret = s3fwrn5_nci_rf_configure_dual(info, "sec_s3nrn4v_hwreg.bin",
+						    "sec_s3nrn4v_swreg.bin");
+		/*
+		 * Keep going even if the blobs could not be loaded: the chip
+		 * still enumerates and falls back to the RF registers programmed
+		 * in its flash, so NFC may work anyway.
+		 */
+		if (ret < 0)
+			dev_warn(&ndev->nfc_dev->dev,
+				 "rfreg configure failed (%d)\n", ret);
+		return 0;
+	}
 
 	if (s3fwrn5_firmware_init(info)) {
 		//skip bootloader mode
@@ -152,13 +188,14 @@ static const struct nci_ops s3fwrn5_nci_ops = {
 	.open = s3fwrn5_nci_open,
 	.close = s3fwrn5_nci_close,
 	.send = s3fwrn5_nci_send,
+	.setup = s3fwrn5_nci_setup,
 	.post_setup = s3fwrn5_nci_post_setup,
 	.prop_ops = s3fwrn5_nci_prop_ops,
 	.n_prop_ops = ARRAY_SIZE(s3fwrn5_nci_prop_ops),
 };
 
 int s3fwrn5_probe(struct nci_dev **ndev, void *phy_id, struct device *pdev,
-	const struct s3fwrn5_phy_ops *phy_ops)
+	const struct s3fwrn5_phy_ops *phy_ops, enum s3fwrn5_variant variant)
 {
 	struct s3fwrn5_info *info;
 	int ret;
@@ -170,6 +207,7 @@ int s3fwrn5_probe(struct nci_dev **ndev, void *phy_id, struct device *pdev,
 	info->phy_id = phy_id;
 	info->pdev = pdev;
 	info->phy_ops = phy_ops;
+	info->variant = variant;
 	mutex_init(&info->mutex);
 
 	s3fwrn5_set_mode(info, S3FWRN5_MODE_COLD);
