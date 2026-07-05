@@ -710,6 +710,12 @@ static void oa_tc6_free_pending_skbs(struct oa_tc6 *tc6)
 	oa_tc6_cleanup_waiting_tx_skb(tc6);
 }
 
+static void oa_tc6_look_for_new_frame(struct oa_tc6 *tc6)
+{
+	tc6->rx_buf_overflow = true;
+	oa_tc6_cleanup_ongoing_rx_skb(tc6);
+}
+
 /* If the failure is at SPI interface level, masking and clearing
  * the interrupt of the device won't work. Since SPI interrupt is
  * disabled, it should stop the repeated interrupts.
@@ -753,8 +759,7 @@ static int oa_tc6_process_extended_status(struct oa_tc6 *tc6)
 	}
 
 	if (FIELD_GET(STATUS0_RX_BUFFER_OVERFLOW_ERROR, value)) {
-		tc6->rx_buf_overflow = true;
-		oa_tc6_cleanup_ongoing_rx_skb(tc6);
+		oa_tc6_look_for_new_frame(tc6);
 		net_err_ratelimited("%s: Receive buffer overflow error\n",
 				    tc6->netdev->name);
 		return -EAGAIN;
@@ -780,6 +785,8 @@ static int oa_tc6_process_extended_status(struct oa_tc6 *tc6)
 
 static int oa_tc6_process_rx_chunk_footer(struct oa_tc6 *tc6, u32 footer)
 {
+	int ret = 0;
+
 	/* Process rx chunk footer for the following,
 	 * 1. tx credits
 	 * 2. errors if any from MAC-PHY
@@ -790,9 +797,11 @@ static int oa_tc6_process_rx_chunk_footer(struct oa_tc6 *tc6, u32 footer)
 					     footer);
 
 	if (FIELD_GET(OA_TC6_DATA_FOOTER_EXTENDED_STS, footer)) {
-		int ret = oa_tc6_process_extended_status(tc6);
-
-		if (ret)
+		ret = oa_tc6_process_extended_status(tc6);
+		/* EAGAIN error is recoverable. Move on to check
+		 * HEADER and SYNC errors before returning.
+		 */
+		if (ret && ret != -EAGAIN)
 			return ret;
 	}
 
@@ -810,7 +819,7 @@ static int oa_tc6_process_rx_chunk_footer(struct oa_tc6 *tc6, u32 footer)
 		return -ENODEV;
 	}
 
-	return 0;
+	return ret;
 }
 
 static void oa_tc6_submit_rx_skb(struct oa_tc6 *tc6)
@@ -835,13 +844,35 @@ static void oa_tc6_submit_rx_skb(struct oa_tc6 *tc6)
 	tc6->rx_skb = NULL;
 }
 
-static void oa_tc6_update_rx_skb(struct oa_tc6 *tc6, u8 *payload, u8 length)
+/* On oversubscribed traffic condition, particularly with overwhelming rx
+ * buffer overflow errors, there could be data chunk loss. If tail + length
+ * goes beyond end pointer, that is an indication that the data chunk with
+ * end_valid bit is lost. Time to look for a data chunk with start_valid bit.
+ *
+ * If rx_skb is NULL, it is time to start looking for data chunk with
+ * start_bit.
+ */
+static int oa_tc6_update_rx_skb(struct oa_tc6 *tc6, u8 *payload, u8 length)
 {
+	if (!tc6->rx_skb ||
+	    (tc6->rx_skb->tail + length) > tc6->rx_skb->end) {
+		oa_tc6_look_for_new_frame(tc6);
+		return -EAGAIN;
+	}
+
 	memcpy(skb_put(tc6->rx_skb, length), payload, length);
+	return 0;
 }
 
+/* On overwhelming rx buffer overflow errors, due to data chunk loss, it is
+ * possible that we get two data chunks with start_valid bit set, without
+ * end_valid bit set in between. In this case, rx_skb would have a valid
+ * buffer pointer. We should release, if a valid pointer is found before
+ * allocating a new one.
+ */
 static int oa_tc6_allocate_rx_skb(struct oa_tc6 *tc6)
 {
+	oa_tc6_cleanup_ongoing_rx_skb(tc6);
 	tc6->rx_skb = netdev_alloc_skb_ip_align(tc6->netdev, tc6->netdev->mtu +
 						ETH_HLEN + ETH_FCS_LEN);
 	if (!tc6->rx_skb) {
@@ -861,7 +892,9 @@ static int oa_tc6_prcs_complete_rx_frame(struct oa_tc6 *tc6, u8 *payload,
 	if (ret)
 		return ret;
 
-	oa_tc6_update_rx_skb(tc6, payload, size);
+	ret = oa_tc6_update_rx_skb(tc6, payload, size);
+	if (ret)
+		return ret;
 
 	oa_tc6_submit_rx_skb(tc6);
 
@@ -876,22 +909,24 @@ static int oa_tc6_prcs_rx_frame_start(struct oa_tc6 *tc6, u8 *payload, u16 size)
 	if (ret)
 		return ret;
 
-	oa_tc6_update_rx_skb(tc6, payload, size);
-
-	return 0;
+	return oa_tc6_update_rx_skb(tc6, payload, size);
 }
 
-static void oa_tc6_prcs_rx_frame_end(struct oa_tc6 *tc6, u8 *payload, u16 size)
+static int oa_tc6_prcs_rx_frame_end(struct oa_tc6 *tc6, u8 *payload, u16 size)
 {
-	oa_tc6_update_rx_skb(tc6, payload, size);
+	int ret;
 
-	oa_tc6_submit_rx_skb(tc6);
+	ret = oa_tc6_update_rx_skb(tc6, payload, size);
+	if (!ret)
+		oa_tc6_submit_rx_skb(tc6);
+	return ret;
 }
 
-static void oa_tc6_prcs_ongoing_rx_frame(struct oa_tc6 *tc6, u8 *payload,
-					 u32 footer)
+static int oa_tc6_prcs_ongoing_rx_frame(struct oa_tc6 *tc6, u8 *payload,
+					u32 footer)
 {
-	oa_tc6_update_rx_skb(tc6, payload, OA_TC6_CHUNK_PAYLOAD_SIZE);
+	return oa_tc6_update_rx_skb(tc6, payload,
+				    OA_TC6_CHUNK_PAYLOAD_SIZE);
 }
 
 static int oa_tc6_prcs_rx_chunk_payload(struct oa_tc6 *tc6, u8 *data,
@@ -931,8 +966,7 @@ static int oa_tc6_prcs_rx_chunk_payload(struct oa_tc6 *tc6, u8 *data,
 	/* Process the chunk with only rx frame end */
 	if (end_valid && !start_valid) {
 		size = end_byte_offset + 1;
-		oa_tc6_prcs_rx_frame_end(tc6, data, size);
-		return 0;
+		return oa_tc6_prcs_rx_frame_end(tc6, data, size);
 	}
 
 	/* Process the chunk with previous rx frame end and next rx frame
@@ -954,9 +988,7 @@ static int oa_tc6_prcs_rx_chunk_payload(struct oa_tc6 *tc6, u8 *data,
 	}
 
 	/* Process the chunk with ongoing rx frame data */
-	oa_tc6_prcs_ongoing_rx_frame(tc6, data, footer);
-
-	return 0;
+	return oa_tc6_prcs_ongoing_rx_frame(tc6, data, footer);
 }
 
 static u32 oa_tc6_get_rx_chunk_footer(struct oa_tc6 *tc6, u16 footer_offset)
@@ -972,8 +1004,9 @@ static u32 oa_tc6_get_rx_chunk_footer(struct oa_tc6 *tc6, u16 footer_offset)
 static int oa_tc6_process_spi_data_rx_buf(struct oa_tc6 *tc6, u16 length)
 {
 	u16 no_of_rx_chunks = length / OA_TC6_CHUNK_SIZE;
+	bool retry = false;
+	int ret = 0;
 	u32 footer;
-	int ret;
 
 	/* All the rx chunks in the receive SPI data buffer are examined here */
 	for (int i = 0; i < no_of_rx_chunks; i++) {
@@ -982,8 +1015,11 @@ static int oa_tc6_process_spi_data_rx_buf(struct oa_tc6 *tc6, u16 length)
 						    OA_TC6_CHUNK_PAYLOAD_SIZE);
 
 		ret = oa_tc6_process_rx_chunk_footer(tc6, footer);
-		if (ret)
-			return ret;
+		if (ret) {
+			if (ret != -EAGAIN)
+				return ret;
+			retry = true;
+		}
 
 		/* If there is a data valid chunks then process it for the
 		 * information needed to determine the validity and the location
@@ -995,12 +1031,25 @@ static int oa_tc6_process_spi_data_rx_buf(struct oa_tc6 *tc6, u16 length)
 
 			ret = oa_tc6_prcs_rx_chunk_payload(tc6, payload,
 							   footer);
-			if (ret)
-				return ret;
+			if (ret) {
+				if (ret != -ENOMEM && ret != -EAGAIN)
+					return ret;
+				retry = true;
+			}
 		}
 	}
 
-	return 0;
+	/* As a recoverable error, not bailing out on error code
+	 * -EAGAIN. If subsequent loop iterations, if any, succeeds,
+	 * error code would be overwritten. retry flag helps to
+	 * make the caller to continue and retry.
+	 */
+	if (retry) {
+		ret = -EAGAIN;
+		oa_tc6_look_for_new_frame(tc6);
+	}
+
+	return ret;
 }
 
 static __be32 oa_tc6_prepare_data_header(bool data_valid, bool start_valid,
@@ -1162,10 +1211,12 @@ static int oa_tc6_try_spi_transfer(struct oa_tc6 *tc6)
 		}
 
 		ret = oa_tc6_process_spi_data_rx_buf(tc6, spi_len);
-		if (ret) {
-			if (ret == -EAGAIN)
-				continue;
 
+		/* Not continuing with the next iteration to give
+		 * waiting_tx_skb a chance to get drained, if
+		 * needed.
+		 */
+		if (ret && ret != -EAGAIN) {
 			oa_tc6_free_ongoing_skbs(tc6);
 			netdev_err(tc6->netdev, "Device error: %d\n", ret);
 			return ret;
