@@ -376,6 +376,10 @@ struct mii_bus {
 			 int regnum, u16 val);
 	/** @reset: Perform a reset of the bus */
 	int (*reset)(struct mii_bus *bus);
+	/** @notify_phy_attach: Perform post-attach handling */
+	int (*notify_phy_attach)(struct phy_device *phydev);
+	/** @notify_phy_detach: Perform pre-detach handling */
+	void (*notify_phy_detach)(struct phy_device *phydev);
 
 	/** @stats: Statistic counters per device on the bus */
 	struct mdio_bus_stats stats[PHY_MAX_ADDR];
