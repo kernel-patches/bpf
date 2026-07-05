@@ -1771,7 +1771,7 @@ static int btf_dump_get_bitfield_value(struct btf_dump *d,
 	nr_bytes = (start_bit + bit_sz + 7) / 8;
 
 	/* Bound check */
-	if (data + nr_bytes > d->typed_dump->data_end)
+	if (data + t->size > d->typed_dump->data_end)
 		return -E2BIG;
 
 	/* Maximum supported bitfield size is 64 bits */
