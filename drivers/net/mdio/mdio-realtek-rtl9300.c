@@ -171,6 +171,7 @@
 #define PHY_CTRL_CMD				BIT(0)
 #define PHY_CTRL_MMD_DEVAD			GENMASK(20, 16)
 #define PHY_CTRL_MMD_REG			GENMASK(15, 0)
+#define PHY_VENDOR_REALTEK			0x001cc800
 
 #define MAP_ADDRS_PER_REG			6
 #define MAP_BITS_PER_ADDR			5
@@ -198,6 +199,7 @@ struct otto_emdio_priv {
 	struct mutex lock; /* protect HW access */
 	DECLARE_BITMAP(phy_poll, MAX_PORTS);
 	DECLARE_BITMAP(valid_ports, MAX_PORTS);
+	u16 page[MAX_PORTS];
 	u8 smi_bus[MAX_PORTS];
 	u8 smi_addr[MAX_PORTS];
 	bool smi_bus_is_c45[MAX_SMI_BUSSES];
@@ -351,7 +353,7 @@ static int otto_emdio_9300_read_c22(struct mii_bus *bus, int port, int regnum, u
 	struct otto_emdio_cmd_regs cmd_data = {
 		.c22_data	= FIELD_PREP(RTL9300_PHY_CTRL_REG_ADDR, regnum) |
 				  FIELD_PREP(RTL9300_PHY_CTRL_PARK_PAGE, 0x1f) |
-				  FIELD_PREP(RTL9300_PHY_CTRL_MAIN_PAGE, RAW_PAGE(priv)),
+				  FIELD_PREP(RTL9300_PHY_CTRL_MAIN_PAGE, priv->page[port]),
 		.io_data	= FIELD_PREP(RTL9300_PHY_CTRL_INDATA, port),
 	};
 
@@ -365,7 +367,7 @@ static int otto_emdio_9300_write_c22(struct mii_bus *bus, int port, int regnum, 
 	struct otto_emdio_cmd_regs cmd_data = {
 		.c22_data	= FIELD_PREP(RTL9300_PHY_CTRL_REG_ADDR, regnum) |
 				  FIELD_PREP(RTL9300_PHY_CTRL_PARK_PAGE, 0x1f) |
-				  FIELD_PREP(RTL9300_PHY_CTRL_MAIN_PAGE, RAW_PAGE(priv)),
+				  FIELD_PREP(RTL9300_PHY_CTRL_MAIN_PAGE, priv->page[port]),
 		.io_data	= FIELD_PREP(RTL9300_PHY_CTRL_INDATA, value),
 		.port_mask_low	= BIT(port),
 	};
@@ -405,7 +407,7 @@ static int otto_emdio_9310_read_c22(struct mii_bus *bus, int port, int regnum, u
 	struct otto_emdio_cmd_regs cmd_data = {
 		.broadcast	= FIELD_PREP(RTL9310_BC_PORT_ID, port),
 		.c22_data	= FIELD_PREP(RTL9310_PHY_CTRL_REG_ADDR, regnum) |
-				  FIELD_PREP(RTL9310_PHY_CTRL_MAIN_PAGE, RAW_PAGE(priv)),
+				  FIELD_PREP(RTL9310_PHY_CTRL_MAIN_PAGE, priv->page[port]),
 	};
 
 	return otto_emdio_read_cmd(bus, RTL9310_PHY_CTRL_TYPE_C22, &cmd_data,
@@ -417,7 +419,7 @@ static int otto_emdio_9310_write_c22(struct mii_bus *bus, int port, int regnum, 
 	struct otto_emdio_priv *priv = otto_emdio_bus_to_priv(bus);
 	struct otto_emdio_cmd_regs cmd_data = {
 		.c22_data	= FIELD_PREP(RTL9310_PHY_CTRL_REG_ADDR, regnum) |
-				  FIELD_PREP(RTL9310_PHY_CTRL_MAIN_PAGE, RAW_PAGE(priv)),
+				  FIELD_PREP(RTL9310_PHY_CTRL_MAIN_PAGE, priv->page[port]),
 		.io_data	= FIELD_PREP(RTL9310_PHY_CTRL_INDATA, value),
 		.port_mask_high	= (u32)(BIT_ULL(port) >> 32),
 		.port_mask_low	= (u32)(BIT_ULL(port)),
@@ -463,8 +465,12 @@ static int otto_emdio_read_c22(struct mii_bus *bus, int phy_id, int regnum)
 	if (port < 0)
 		return port;
 
-	scoped_guard(mutex, &priv->lock)
+	scoped_guard(mutex, &priv->lock) {
+		if (regnum == 31)
+			return priv->page[port];
+
 		ret = priv->info->read_c22(bus, port, regnum, &value);
+	}
 
 	return ret ? ret : value;
 }
@@ -478,8 +484,17 @@ static int otto_emdio_write_c22(struct mii_bus *bus, int phy_id, int regnum, u16
 	if (port < 0)
 		return port;
 
-	scoped_guard(mutex, &priv->lock)
+	scoped_guard(mutex, &priv->lock) {
+		if (regnum == 31) {
+			if (value >= RAW_PAGE(priv))
+				return -EINVAL;
+
+			priv->page[port] = value;
+			return 0;
+		}
+
 		ret = priv->info->write_c22(bus, port, regnum, value);
+	}
 
 	return ret;
 }
@@ -592,6 +607,7 @@ static int otto_emdio_notify_phy_attach(struct phy_device *phydev)
 {
 	struct otto_emdio_priv *priv = otto_emdio_bus_to_priv(phydev->mdio.bus);
 	int port = otto_emdio_phy_to_port(phydev->mdio.bus, phydev->mdio.addr);
+	struct otto_emdio_chan *chan = phydev->mdio.bus->priv;
 	int ret;
 
 	if (port < 0)
@@ -599,6 +615,12 @@ static int otto_emdio_notify_phy_attach(struct phy_device *phydev)
 
 	if (test_bit(port, priv->phy_poll))
 		return 0;
+
+	if (!priv->smi_bus_is_c45[chan->mdio_bus] &&
+	    (!phy_id_compare_vendor(phydev->phy_id, PHY_VENDOR_REALTEK))) {
+		phydev_err(phydev, "Only Realtek PHYs allowed on C22 bus\n");
+		return -EOPNOTSUPP;
+	}
 
 	scoped_guard(mutex, &priv->lock) {
 		ret = otto_emdio_set_port_polling(priv, port, true);
