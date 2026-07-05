@@ -22,7 +22,7 @@ insert_count=2000
 modprobe -q nf_conntrack
 if ! sysctl -q net.netfilter.nf_conntrack_max >/dev/null;then
 	echo "SKIP: conntrack sysctls not available"
-	exit $KSFT_SKIP
+	exit $ksft_skip
 fi
 
 init_net_max=$(sysctl -n net.netfilter.nf_conntrack_max) || exit 1
