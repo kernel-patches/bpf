@@ -37,6 +37,10 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 #endif
 
+#ifndef div_round_up
+#define div_round_up(a, b) (((a) + (b) - 1) / (b))
+#endif
+
 enum stat_id {
 	VERDICT,
 	DURATION,
@@ -1238,6 +1242,17 @@ static void mask_unrelated_struct_ops_progs(struct bpf_object *obj,
 	}
 }
 
+/* size of global arena data in pages (minimum 1) */
+static size_t arena_global_pages(struct bpf_map *map)
+{
+	size_t min_bytes;
+
+	if (!bpf_map__initial_value(map, &min_bytes))
+		return 1;
+
+	return div_round_up(min_bytes, sysconf(_SC_PAGESIZE)) ?: 1;
+}
+
 static void fixup_obj_maps(struct bpf_object *obj)
 {
 	struct bpf_map *map;
@@ -1248,6 +1263,37 @@ static void fixup_obj_maps(struct bpf_object *obj)
 
 		/* fix up map size, if necessary */
 		switch (bpf_map__type(map)) {
+		/*
+		 * if the verifier doesn't use max_entries
+		 * then set to 1 to avoid -ENOMEM
+		 */
+		case BPF_MAP_TYPE_HASH:
+		case BPF_MAP_TYPE_PERCPU_HASH:
+		case BPF_MAP_TYPE_LRU_HASH:
+		case BPF_MAP_TYPE_LRU_PERCPU_HASH:
+		case BPF_MAP_TYPE_HASH_OF_MAPS:
+		case BPF_MAP_TYPE_RHASH:
+		case BPF_MAP_TYPE_SOCKHASH:
+		case BPF_MAP_TYPE_DEVMAP_HASH:
+		case BPF_MAP_TYPE_LPM_TRIE:
+		case BPF_MAP_TYPE_QUEUE:
+		case BPF_MAP_TYPE_STACK:
+		case BPF_MAP_TYPE_BLOOM_FILTER:
+		case BPF_MAP_TYPE_STACK_TRACE:
+			bpf_map__set_max_entries(map, 1);
+			break;
+
+		/* arenas must be big enough to fit all globals */
+		case BPF_MAP_TYPE_ARENA:
+			bpf_map__set_max_entries(map, arena_global_pages(map));
+			break;
+
+		/* ringbufs must be page-aligned */
+		case BPF_MAP_TYPE_RINGBUF:
+		case BPF_MAP_TYPE_USER_RINGBUF:
+			bpf_map__set_max_entries(map, sysconf(_SC_PAGESIZE));
+			break;
+
 		case BPF_MAP_TYPE_SK_STORAGE:
 		case BPF_MAP_TYPE_TASK_STORAGE:
 		case BPF_MAP_TYPE_INODE_STORAGE:
