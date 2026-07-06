@@ -206,6 +206,23 @@ enable is true we enable it, otherwise we disable it::
       return ioctl(fd, TUNSETQUEUE, (void *)&ifr);
   }
 
+3.4 qdisc backpressure
+----------------------
+
+Starting with Linux 7.2, IFF_BACKPRESSURE can be set to enable qdisc
+backpressure. Without it, TX drops occur when the internal ring buffer is
+full. With it, the kernel stops the TX queue instead, letting the qdisc
+hold packets. Drops only occur as a rare race. This can benefit protocols
+like TCP that react to drops. Backpressure requires a qdisc to be
+attached and has no effect with noqueue.
+
+The TUN/TAP ring buffer size can be reduced alongside this flag to
+further shift buffering into the qdisc and reduce bufferbloat, but comes
+at possible performance cost.
+
+When running multiple network streams in parallel, the flag may reduce
+performance due to the extra overhead of the backpressure mechanism.
+
 Universal TUN/TAP device driver Frequently Asked Question
 =========================================================
 
