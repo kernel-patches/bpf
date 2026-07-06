@@ -3895,6 +3895,9 @@ static int ixgbe_get_pfa_module_tlv(struct ixgbe_hw *hw, u16 *module_tlv,
 	while (next_tlv < pfa_end_ptr) {
 		u16 tlv_sub_module_type, tlv_len;
 
+		if (pfa_end_ptr - next_tlv < 2)
+			break;
+
 		/* Read TLV type */
 		err = ixgbe_read_ee_aci_e610(hw, next_tlv,
 					     &tlv_sub_module_type);
@@ -3917,6 +3920,9 @@ static int ixgbe_get_pfa_module_tlv(struct ixgbe_hw *hw, u16 *module_tlv,
 		/* Check next TLV, i.e. current TLV pointer + length + 2 words
 		 * (for current TLV's type and length).
 		 */
+		if (tlv_len > pfa_end_ptr - next_tlv - 2)
+			break;
+
 		next_tlv = next_tlv + tlv_len + 2;
 	}
 	/* Module does not exist */
