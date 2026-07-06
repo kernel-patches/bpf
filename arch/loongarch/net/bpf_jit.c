@@ -52,50 +52,56 @@ static void prepare_bpf_tail_call_cnt(struct jit_ctx *ctx, int *store_offset)
 	const struct bpf_prog *prog = ctx->prog;
 	const bool is_main_prog = !bpf_is_subprog(prog);
 
+	*store_offset -= sizeof(long);
 	if (is_main_prog) {
-		/*
-		 * LOONGARCH_GPR_T3 = MAX_TAIL_CALL_CNT
-		 * if (REG_TCC > T3 )
-		 *	std REG_TCC -> LOONGARCH_GPR_SP + store_offset
-		 * else
-		 *	std REG_TCC -> LOONGARCH_GPR_SP + store_offset
-		 *	REG_TCC = LOONGARCH_GPR_SP + store_offset
-		 *
-		 * std REG_TCC -> LOONGARCH_GPR_SP + store_offset
-		 *
-		 * The purpose of this code is to first push the TCC into stack,
-		 * and then push the address of TCC into stack.
-		 * In cases where bpf2bpf and tailcall are used in combination,
-		 * the value in REG_TCC may be a count or an address,
-		 * these two cases need to be judged and handled separately.
-		 */
-		emit_insn(ctx, addid, LOONGARCH_GPR_T3, LOONGARCH_GPR_ZERO, MAX_TAIL_CALL_CNT);
-		*store_offset -= sizeof(long);
-
-		emit_cond_jmp(ctx, BPF_JGT, REG_TCC, LOONGARCH_GPR_T3, 4);
-
-		/*
-		 * If REG_TCC < MAX_TAIL_CALL_CNT, the value in REG_TCC is a count,
-		 * push tcc into stack
-		 */
+		/* Save entrance TCC state (scalar count or kernel pointer) to local 'tcc' slot */
 		emit_insn(ctx, std, REG_TCC, LOONGARCH_GPR_SP, *store_offset);
 
-		/* Push the address of TCC into the REG_TCC */
-		emit_insn(ctx, addid, REG_TCC, LOONGARCH_GPR_SP, *store_offset);
-
-		emit_uncond_jmp(ctx, 2);
+		/* Compute the absolute pointer to the local 'tcc' slot */
+		emit_insn(ctx, addid, LOONGARCH_GPR_T7, LOONGARCH_GPR_SP, *store_offset);
 
 		/*
-		 * If REG_TCC > MAX_TAIL_CALL_CNT, the value in REG_TCC is an address,
-		 * push tcc_ptr into stack
+		 * Branchless classification and blending:
+		 *
+		 * In combined bpf2bpf and tailcall scenarios, REG_TCC can carry
+		 * either a scalar count (0 to 33) or an inherited kernel pointer address.
+		 *
+		 * Entrance status for a main program based on REG_TCC physical content:
+		 * 1) Initial Entry (Scalar): Enter via a standard event, where REG_TCC
+		 *    is initialized to a pure scalar 0.
+		 * 2) Inherited Entry (Scalar): Enter via a flat main-to-main tail call,
+		 *    where REG_TCC carries an accumulated scalar count (1 to 33) reloaded
+		 *    from the prior stack frame.
+		 * 3) Inherited Entry (Pointer): Enter via a tail call from a subprogram,
+		 *    where REG_TCC inherits and carries a massive kernel pointer address
+		 *    reloaded from the prior stack frame.
+		 *
+		 * sltui:   Identify the type of REG_TCC.
+		 *          If REG_TCC < MAX_TAIL_CALL_CNT + 1 (scalar 0~33), sets T8 = 1.
+		 *          If REG_TCC >= MAX_TAIL_CALL_CNT + 1 (kernel pointer), sets T8 = 0.
+		 *
+		 * maskeqz: Handle the local stack pointer (T7).
+		 *          If T8 == 1, keeps T7 intact.
+		 *          If T8 == 0, clears T7 to 0.
+		 *
+		 * masknez: Handle the incoming REG_TCC to prevent register pollution.
+		 *          If T8 == 1, clears REG_TCC to 0 (erasing 1~33 scalars).
+		 *          If T8 == 0, keeps the massive kernel pointer intact.
+		 *
+		 * or:      Combine the results.
+		 *          Scalar Case:  REG_TCC = 0 | T7       -> Clean local stack pointer.
+		 *          Pointer Case: REG_TCC = REG_TCC | 0  -> Clean inherited global pointer.
 		 */
-		emit_insn(ctx, std, REG_TCC, LOONGARCH_GPR_SP, *store_offset);
+		emit_insn(ctx, sltui, LOONGARCH_GPR_T8, REG_TCC, MAX_TAIL_CALL_CNT + 1);
+		emit_insn(ctx, maskeqz, LOONGARCH_GPR_T7, LOONGARCH_GPR_T7, LOONGARCH_GPR_T8);
+		emit_insn(ctx, masknez, REG_TCC, REG_TCC, LOONGARCH_GPR_T8);
+		emit_insn(ctx, or, REG_TCC, REG_TCC, LOONGARCH_GPR_T7);
 	} else {
-		*store_offset -= sizeof(long);
+		/* Subprograms: backup the verified TCC pointer inherited via REG_TCC */
 		emit_insn(ctx, std, REG_TCC, LOONGARCH_GPR_SP, *store_offset);
 	}
 
-	/* Push tcc_ptr into stack */
+	/* Store the finalized TCC pointer value securely into the local 'tcc_ptr' slot */
 	*store_offset -= sizeof(long);
 	emit_insn(ctx, std, REG_TCC, LOONGARCH_GPR_SP, *store_offset);
 }
