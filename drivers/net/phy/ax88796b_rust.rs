@@ -5,7 +5,12 @@
 //!
 //! C version of this driver: [`drivers/net/phy/ax88796b.c`](./ax88796b.c)
 use kernel::{
-    net::phy::{self, reg::C22, DeviceId, Driver},
+    net::phy::{
+        self,
+        reg::C22,
+        DeviceId,
+        Driver, //
+    },
     prelude::*,
     uapi,
 };
