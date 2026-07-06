@@ -729,8 +729,9 @@ static void half_spis_to_slots(unsigned long *slots, const unsigned long *mask, 
 }
 
 /*
- * Precompute, for each instruction, the OR of may_write masks over its top
- * frame across all func_instances reaching it, stash it in the insn_aux_data.
+ * Precompute, for each instruction, the OR of may_write and live_before masks
+ * over its top frame across all func_instances reaching it, stash them in the
+ * insn_aux_data.
  */
 static void compute_may_write_masks(struct bpf_verifier_env *env)
 {
@@ -746,9 +747,12 @@ static void compute_may_write_masks(struct bpf_verifier_env *env)
 		if (!fm)
 			continue;
 		nbits = frame_mask_bits(fm);
-		for (i = 0; i < instance->insn_cnt; i++)
+		for (i = 0; i < instance->insn_cnt; i++) {
 			half_spis_to_slots(aux[instance->subprog_start + i].may_write_mask,
 					   rel_mask(fm, i, FM_MAY_WRITE), nbits);
+			half_spis_to_slots(aux[instance->subprog_start + i].live_stack_before,
+					   rel_mask(fm, i, FM_LIVE_BEFORE), nbits);
+		}
 	}
 }
 
