@@ -561,20 +561,55 @@ int netxen_pinit_from_rom(struct netxen_adapter *adapter)
 	return 0;
 }
 
-static struct uni_table_desc *nx_get_table_desc(const u8 *unirom, int section)
+#define NX_UNI_DIR_TYPE_OFF		8
+#define NX_UNI_DIR_ENTRY_MIN_SIZE \
+	((NX_UNI_DIR_TYPE_OFF + 1) * sizeof(u32))
+#define NX_UNI_PRODUCT_ENTRY_MIN_SIZE \
+	((NX_UNI_FIRMWARE_IDX_OFF + 1) * sizeof(u32))
+
+static bool netxen_rom_range_valid(size_t size, u32 off, u32 len)
 {
-	uint32_t i;
+	return off <= size && len <= size - off;
+}
+
+static bool netxen_rom_table_valid(size_t size, u32 off, u32 n, u32 esz)
+{
+	if (off > size)
+		return false;
+	if (!esz)
+		return n == 0;
+
+	return n <= (size - off) / esz;
+}
+
+static bool netxen_rom_entry_valid(size_t size, u32 off, u32 esz, u32 idx)
+{
+	if (!esz || off > size)
+		return false;
+
+	return idx < (size - off) / esz;
+}
+
+static struct uni_table_desc *
+nx_get_table_desc(const u8 *unirom, size_t fw_size, int section)
+{
 	struct uni_table_desc *directory = (struct uni_table_desc *) &unirom[0];
-	__le32 entries = cpu_to_le32(directory->num_entries);
+	u32 entries = cpu_to_le32(directory->num_entries);
+	u32 entry_size = cpu_to_le32(directory->entry_size);
+	u32 findex = cpu_to_le32(directory->findex);
+	u32 i;
+
+	if (entry_size < NX_UNI_DIR_ENTRY_MIN_SIZE ||
+	    !netxen_rom_table_valid(fw_size, findex, entries, entry_size))
+		return NULL;
 
 	for (i = 0; i < entries; i++) {
-
-		__le32 offs = cpu_to_le32(directory->findex) +
-				(i * cpu_to_le32(directory->entry_size));
-		__le32 tab_type = cpu_to_le32(*((u32 *)&unirom[offs] + 8));
+		size_t offs = findex + (size_t)i * entry_size;
+		u32 tab_type = cpu_to_le32(*((u32 *)&unirom[offs] +
+						NX_UNI_DIR_TYPE_OFF));
 
 		if (tab_type == section)
-			return (struct uni_table_desc *) &unirom[offs];
+			return (struct uni_table_desc *)&unirom[offs];
 	}
 
 	return NULL;
@@ -586,20 +621,18 @@ static int
 netxen_nic_validate_header(struct netxen_adapter *adapter)
 {
 	const u8 *unirom = adapter->fw->data;
-	struct uni_table_desc *directory = (struct uni_table_desc *) &unirom[0];
+	struct uni_table_desc *directory = (struct uni_table_desc *)&unirom[0];
 	u32 fw_file_size = adapter->fw->size;
-	u32 tab_size;
-	__le32 entries;
-	__le32 entry_size;
+	u32 entries, entry_size, findex;
 
 	if (fw_file_size < QLCNIC_FILEHEADER_SIZE)
 		return -EINVAL;
 
 	entries = cpu_to_le32(directory->num_entries);
 	entry_size = cpu_to_le32(directory->entry_size);
-	tab_size = cpu_to_le32(directory->findex) + (entries * entry_size);
+	findex = cpu_to_le32(directory->findex);
 
-	if (fw_file_size < tab_size)
+	if (!netxen_rom_table_valid(fw_file_size, findex, entries, entry_size))
 		return -EINVAL;
 
 	return 0;
@@ -611,30 +644,30 @@ netxen_nic_validate_bootld(struct netxen_adapter *adapter)
 	struct uni_table_desc *tab_desc;
 	struct uni_data_desc *descr;
 	const u8 *unirom = adapter->fw->data;
-	__le32 idx = cpu_to_le32(*((int *)&unirom[adapter->file_prd_off] +
-				NX_UNI_BOOTLD_IDX_OFF));
-	u32 offs;
-	u32 tab_size;
-	u32 data_size;
+	u32 data_len, data_off, entry_size, findex, idx;
+	u32 section = NX_UNI_DIR_SECT_BOOTLD;
+	size_t offs;
 
-	tab_desc = nx_get_table_desc(unirom, NX_UNI_DIR_SECT_BOOTLD);
+	idx = cpu_to_le32(*((int *)&unirom[adapter->file_prd_off] +
+			     NX_UNI_BOOTLD_IDX_OFF));
+	tab_desc = nx_get_table_desc(unirom, adapter->fw->size, section);
 
 	if (!tab_desc)
 		return -EINVAL;
 
-	tab_size = cpu_to_le32(tab_desc->findex) +
-			(cpu_to_le32(tab_desc->entry_size) * (idx + 1));
-
-	if (adapter->fw->size < tab_size)
+	entry_size = cpu_to_le32(tab_desc->entry_size);
+	findex = cpu_to_le32(tab_desc->findex);
+	if (entry_size < sizeof(*descr) ||
+	    !netxen_rom_entry_valid(adapter->fw->size, findex, entry_size,
+				     idx))
 		return -EINVAL;
 
-	offs = cpu_to_le32(tab_desc->findex) +
-		(cpu_to_le32(tab_desc->entry_size) * (idx));
+	offs = findex + (size_t)entry_size * idx;
 	descr = (struct uni_data_desc *)&unirom[offs];
+	data_off = cpu_to_le32(descr->findex);
+	data_len = cpu_to_le32(descr->size);
 
-	data_size = cpu_to_le32(descr->findex) + cpu_to_le32(descr->size);
-
-	if (adapter->fw->size < data_size)
+	if (!netxen_rom_range_valid(adapter->fw->size, data_off, data_len))
 		return -EINVAL;
 
 	return 0;
@@ -646,29 +679,30 @@ netxen_nic_validate_fw(struct netxen_adapter *adapter)
 	struct uni_table_desc *tab_desc;
 	struct uni_data_desc *descr;
 	const u8 *unirom = adapter->fw->data;
-	__le32 idx = cpu_to_le32(*((int *)&unirom[adapter->file_prd_off] +
-				NX_UNI_FIRMWARE_IDX_OFF));
-	u32 offs;
-	u32 tab_size;
-	u32 data_size;
+	u32 data_len, data_off, entry_size, findex, idx;
+	u32 section = NX_UNI_DIR_SECT_FW;
+	size_t offs;
 
-	tab_desc = nx_get_table_desc(unirom, NX_UNI_DIR_SECT_FW);
+	idx = cpu_to_le32(*((int *)&unirom[adapter->file_prd_off] +
+			     NX_UNI_FIRMWARE_IDX_OFF));
+	tab_desc = nx_get_table_desc(unirom, adapter->fw->size, section);
 
 	if (!tab_desc)
 		return -EINVAL;
 
-	tab_size = cpu_to_le32(tab_desc->findex) +
-			(cpu_to_le32(tab_desc->entry_size) * (idx + 1));
-
-	if (adapter->fw->size < tab_size)
+	entry_size = cpu_to_le32(tab_desc->entry_size);
+	findex = cpu_to_le32(tab_desc->findex);
+	if (entry_size < sizeof(*descr) ||
+	    !netxen_rom_entry_valid(adapter->fw->size, findex, entry_size,
+				     idx))
 		return -EINVAL;
 
-	offs = cpu_to_le32(tab_desc->findex) +
-		(cpu_to_le32(tab_desc->entry_size) * (idx));
+	offs = findex + (size_t)entry_size * idx;
 	descr = (struct uni_data_desc *)&unirom[offs];
-	data_size = cpu_to_le32(descr->findex) + cpu_to_le32(descr->size);
+	data_off = cpu_to_le32(descr->findex);
+	data_len = cpu_to_le32(descr->size);
 
-	if (adapter->fw->size < data_size)
+	if (!netxen_rom_range_valid(adapter->fw->size, data_off, data_len))
 		return -EINVAL;
 
 	return 0;
@@ -682,39 +716,37 @@ netxen_nic_validate_product_offs(struct netxen_adapter *adapter)
 	const u8 *unirom = adapter->fw->data;
 	int mn_present = (NX_IS_REVISION_P2(adapter->ahw.revision_id)) ?
 			1 : netxen_p3_has_mn(adapter);
-	__le32 entries;
-	__le32 entry_size;
-	u32 tab_size;
-	u32 i;
+	u32 entries, entry_size, findex, i;
+	u32 section = NX_UNI_DIR_SECT_PRODUCT_TBL;
 
-	ptab_descr = nx_get_table_desc(unirom, NX_UNI_DIR_SECT_PRODUCT_TBL);
+	ptab_descr = nx_get_table_desc(unirom, adapter->fw->size, section);
 	if (ptab_descr == NULL)
 		return -EINVAL;
 
 	entries = cpu_to_le32(ptab_descr->num_entries);
 	entry_size = cpu_to_le32(ptab_descr->entry_size);
-	tab_size = cpu_to_le32(ptab_descr->findex) + (entries * entry_size);
-
-	if (adapter->fw->size < tab_size)
+	findex = cpu_to_le32(ptab_descr->findex);
+	if (entry_size < NX_UNI_PRODUCT_ENTRY_MIN_SIZE ||
+	    !netxen_rom_table_valid(adapter->fw->size, findex, entries,
+				     entry_size))
 		return -EINVAL;
 
 nomn:
 	for (i = 0; i < entries; i++) {
-
-		__le32 flags, file_chiprev, offs;
+		size_t offs;
+		__le32 flags, file_chiprev;
 		u8 chiprev = adapter->ahw.revision_id;
 		uint32_t flagbit;
 
-		offs = cpu_to_le32(ptab_descr->findex) +
-				(i * cpu_to_le32(ptab_descr->entry_size));
+		offs = findex + (size_t)i * entry_size;
 		flags = cpu_to_le32(*((int *)&unirom[offs] + NX_UNI_FLAGS_OFF));
 		file_chiprev = cpu_to_le32(*((int *)&unirom[offs] +
-							NX_UNI_CHIP_REV_OFF));
+						    NX_UNI_CHIP_REV_OFF));
 
 		flagbit = mn_present ? 1 : 2;
 
 		if ((chiprev == file_chiprev) &&
-					((1ULL << flagbit) & flags)) {
+		    ((1ULL << flagbit) & flags)) {
 			adapter->file_prd_off = offs;
 			return 0;
 		}
@@ -767,7 +799,7 @@ static struct uni_data_desc *nx_get_data_desc(struct netxen_adapter *adapter,
 	struct uni_table_desc *tab_desc;
 	__le32 offs;
 
-	tab_desc = nx_get_table_desc(unirom, section);
+	tab_desc = nx_get_table_desc(unirom, adapter->fw->size, section);
 
 	if (tab_desc == NULL)
 		return NULL;
