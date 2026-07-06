@@ -11,6 +11,7 @@
 #include <bpf_arena_common.h>
 
 #define private(name) SEC(".bss." #name) __hidden __attribute__((aligned(8)))
+#define ARENA_VM_START_L32 (~0u - __PAGE_SIZE * 2 + 1)
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARENA);
@@ -89,6 +90,31 @@ int basic_alloc1(void *ctx)
 		return 9;
 	if (*page1 != 1)
 		return 10;
+#endif
+	return 0;
+}
+
+SEC("syscall")
+__success __retval(0)
+int free_pages_out_of_bounds(void *ctx)
+{
+#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
+	__u64 page1, page2, no_page;
+	__u64 below_start = (__u32)(ARENA_VM_START_L32 - __PAGE_SIZE);
+
+	page1 = (__u64)bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
+	if (!page1)
+		return 1;
+	page2 = (__u64)bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
+	if (!page2)
+		return 2;
+
+	asm volatile("" : "+r"(below_start));
+	bpf_arena_free_pages(&arena, (void __arena *)below_start, 1);
+
+	no_page = (__u64)bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
+	if (no_page)
+		return 3;
 #endif
 	return 0;
 }
