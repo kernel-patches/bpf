@@ -1766,17 +1766,21 @@ static int btf_dump_get_bitfield_value(struct btf_dump *d,
 	__u64 num = 0;
 	int i;
 
-	/* Calculate how many bytes cover the bitfield */
-	start_bit = bits_offset % 8;
-	nr_bytes = (start_bit + bit_sz + 7) / 8;
+	if (bit_sz) {
+		/* Calculate how many bytes cover the bitfield */
+		start_bit = bits_offset % 8;
+		nr_bytes = (start_bit + bit_sz + 7) / 8;
+	} else {
+		nr_bytes = t->size;
+	}
 
 	/* Bound check */
 	if (data + nr_bytes > d->typed_dump->data_end)
 		return -E2BIG;
 
 	/* Maximum supported bitfield size is 64 bits */
-	if (t->size > 8) {
-		pr_warn("unexpected bitfield size %d\n", t->size);
+	if (nr_bytes < 1 || nr_bytes > 8) {
+		pr_warn("unexpected bitfield size %d\n", nr_bytes);
 		return -EINVAL;
 	}
 
@@ -1784,13 +1788,13 @@ static int btf_dump_get_bitfield_value(struct btf_dump *d,
 	 * stored in num, then we left/right shift num to eliminate irrelevant bits.
 	 */
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-	for (i = t->size - 1; i >= 0; i--)
+	for (i = nr_bytes - 1; i >= 0; i--)
 		num = num * 256 + bytes[i];
-	nr_copy_bits = bit_sz + bits_offset;
+	nr_copy_bits = bit_sz ? bit_sz + bits_offset : nr_bytes * 8;
 #elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-	for (i = 0; i < t->size; i++)
+	for (i = 0; i < nr_bytes; i++)
 		num = num * 256 + bytes[i];
-	nr_copy_bits = t->size * 8 - bits_offset;
+	nr_copy_bits = nr_bytes * 8 - bits_offset;
 #else
 # error "Unrecognized __BYTE_ORDER__"
 #endif
