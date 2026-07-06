@@ -85,6 +85,8 @@ enum {
  * @tx_push_buf_max_len: Maximum allowed size of TX push buffer
  * @hds_thresh: Packet size threshold for header data split (HDS)
  * @hds_thresh_max: Maximum supported setting for @hds_threshold
+ * @pacing_offload_horizon: pacing offload horizon value in usec.
+ * @max_pacing_offload_horizon: max pacing offload horizon value in usec.
  *
  */
 struct kernel_ethtool_ringparam {
@@ -97,6 +99,8 @@ struct kernel_ethtool_ringparam {
 	u32	tx_push_buf_max_len;
 	u32	hds_thresh;
 	u32	hds_thresh_max;
+	u32	pacing_offload_horizon;
+	u32	max_pacing_offload_horizon;
 };
 
 /**
@@ -108,6 +112,7 @@ struct kernel_ethtool_ringparam {
  * @ETHTOOL_RING_USE_TX_PUSH_BUF_LEN: capture for setting tx_push_buf_len
  * @ETHTOOL_RING_USE_TCP_DATA_SPLIT: capture for setting tcp_data_split
  * @ETHTOOL_RING_USE_HDS_THRS: capture for setting header-data-split-thresh
+ * @ETHTOOL_RING_USE_PACING_OFFLOAD_HORIZON: capture for setting pacing offload horizon
  */
 enum ethtool_supported_ring_param {
 	ETHTOOL_RING_USE_RX_BUF_LEN		= BIT(0),
@@ -117,6 +122,7 @@ enum ethtool_supported_ring_param {
 	ETHTOOL_RING_USE_TX_PUSH_BUF_LEN	= BIT(4),
 	ETHTOOL_RING_USE_TCP_DATA_SPLIT		= BIT(5),
 	ETHTOOL_RING_USE_HDS_THRS		= BIT(6),
+	ETHTOOL_RING_USE_PACING_OFFLOAD_HORIZON	= BIT(7),
 };
 
 #define __ETH_RSS_HASH_BIT(bit)	((u32)1 << (bit))
