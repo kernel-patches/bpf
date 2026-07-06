@@ -898,6 +898,14 @@ struct bpf_scc_info {
 
 struct bpf_liveness;
 
+struct bpf_fd_array {
+	union {
+		struct bpf_map *map;
+		struct btf *btf;
+		unsigned long val;
+	};
+};
+
 /* single container for all structs
  * one verifier_env per bpf_check() call
  */
@@ -939,6 +947,7 @@ struct bpf_verifier_env {
 	bool bypass_spec_v4;
 	bool seen_direct_write;
 	bool seen_exception;
+	bool signature;
 	struct bpf_insn_aux_data *insn_aux_data; /* array of per-insn state */
 	const struct bpf_line_info *prev_linfo;
 	struct bpf_verifier_log log;
@@ -989,7 +998,19 @@ struct bpf_verifier_env {
 	u32 free_list_size;
 	u32 explored_states_size;
 	u32 num_backedges;
-	bpfptr_t fd_array;
+	/*
+	 * The program's fd_array comes in two shapes, told apart by whether
+	 * the caller passed fd_array_cnt. They are mutually exclusive:
+	 *  - continuous (fd_array_cnt given): ->fd_array holds every entry
+	 *    resolved to its object up front, indexed by fd_array position,
+	 *    with ->fd_array_cnt slots; ->fd_array_raw is unused.
+	 *  - sparse (no fd_array_cnt): ->fd_array is NULL, and entries are
+	 *    read from ->fd_array_raw (the caller's fd_array) and resolved
+	 *    on the spot at each reference.
+	 */
+	struct bpf_fd_array *fd_array;
+	u32 fd_array_cnt;
+	bpfptr_t fd_array_raw;
 
 	/* bit mask to keep track of whether a register has been accessed
 	 * since the last time the function state was printed
