@@ -402,7 +402,10 @@ static int init(struct dtsec_regs __iomem *regs, struct dtsec_cfg *cfg,
 	tmp |= MACCFG1_TX_FLOW;
 	iowrite32be(tmp, &regs->maccfg1);
 
-	tmp = 0;
+	/* write a non-reserved mode, otherwise the PCS won't establish a link
+	 * and .mac_link_up() is never called.
+	 */
+	tmp = MACCFG2_NIBBLE_MODE;
 
 	tmp |= (cfg->preamble_len << MACCFG2_PREAMBLE_LENGTH_SHIFT) &
 		MACCFG2_PREAMBLE_LENGTH_MASK;
