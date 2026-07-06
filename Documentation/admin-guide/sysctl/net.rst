@@ -128,6 +128,18 @@ compiler in order to reject unprivileged JIT requests once it has
 been surpassed. bpf_jit_limit contains the value of the global limit
 in bytes.
 
+bpf_ksock_max
+-------------
+
+Maximum number of BPF kernel sockets that may exist in each network namespace.
+This host-wide setting is exposed in the initial network namespace and applies
+the same limit independently to every network namespace. Sockets awaiting
+deferred RCU and workqueue cleanup remain counted until the underlying socket
+has been released. A value of 0 disables creation of BPF kernel sockets in
+every network namespace.
+
+Default: 1024
+
 dev_weight
 ----------
 

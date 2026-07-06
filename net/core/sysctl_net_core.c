@@ -7,6 +7,7 @@
  */
 
 #include <linux/filter.h>
+#include <linux/bpf_ksock.h>
 #include <linux/mm.h>
 #include <linux/sysctl.h>
 #include <linux/module.h>
@@ -524,6 +525,16 @@ static struct ctl_table net_core_table[] = {
 		.proc_handler	= proc_dolongvec_minmax_bpf_restricted,
 		.extra1		= SYSCTL_LONG_ONE,
 		.extra2		= &bpf_jit_limit_max,
+	},
+#endif
+#if IS_ENABLED(CONFIG_BPF_SYSCALL) && IS_ENABLED(CONFIG_INET)
+	{
+		.procname	= "bpf_ksock_max",
+		.data		= &sysctl_bpf_ksock_max,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
 	},
 #endif
 	{
