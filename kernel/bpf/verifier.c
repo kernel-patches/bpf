@@ -22,6 +22,8 @@
 #include <linux/ctype.h>
 #include <linux/error-injection.h>
 #include <linux/bpf_lsm.h>
+#include <linux/security.h>
+#include <linux/verification.h>
 #include <linux/btf_ids.h>
 #include <linux/poison.h>
 #include <linux/module.h>
@@ -2554,6 +2556,10 @@ fd_array_get_btf_sparse(struct bpf_verifier_env *env, u32 idx)
 
 static struct btf *fd_array_get_btf(struct bpf_verifier_env *env, u32 idx)
 {
+	if (env->signature) {
+		verbose(env, "signed program cannot bind any BTF\n");
+		return ERR_PTR(-EACCES);
+	}
 	if (env->fd_array)
 		return fd_array_get_btf_continuous(env, idx);
 	if (!bpfptr_is_null(env->fd_array_raw))
@@ -17648,6 +17654,11 @@ static int __add_used_btf(struct bpf_verifier_env *env, struct btf *btf)
 		if (env->used_btfs[i].btf == btf)
 			goto ret_put;
 
+	if (env->signature) {
+		verbose(env, "signed program cannot bind any BTF\n");
+		ret = -EACCES;
+		goto ret_put;
+	}
 	if (env->used_btf_cnt >= MAX_USED_BTFS) {
 		verbose(env, "The total number of btfs per program has reached the limit of %u\n",
 			MAX_USED_BTFS);
@@ -17930,6 +17941,12 @@ static int __add_used_map(struct bpf_verifier_env *env, struct bpf_map *map)
 		if (env->used_maps[i] == map)
 			return i;
 
+	if (env->signature &&
+	    env->prog->aux->sig.verdict == BPF_SIG_VERIFIED) {
+		verbose(env, "signed program cannot bind map '%s' not covered by the signature\n",
+			map->name);
+		return -EACCES;
+	}
 	if (env->used_map_cnt >= MAX_USED_MAPS) {
 		verbose(env, "The total number of maps per program has reached the limit of %u\n",
 			MAX_USED_MAPS);
@@ -18013,6 +18030,10 @@ static int fd_array_get_map_idx(struct bpf_verifier_env *env, u32 idx)
 {
 	if (env->fd_array)
 		return fd_array_get_map_idx_continuous(env, idx);
+	if (env->signature) {
+		verbose(env, "signed program must bind maps via a continuous fd_array (fd_array_cnt)\n");
+		return -EACCES;
+	}
 	if (!bpfptr_is_null(env->fd_array_raw))
 		return fd_array_get_map_idx_sparse(env, idx);
 
@@ -18291,6 +18312,10 @@ static int check_and_resolve_insns(struct bpf_verifier_env *env)
 				map_idx = fd_array_get_map_idx(env, insn[0].imm);
 				break;
 			default:
+				if (env->signature) {
+					verbose(env, "signed program cannot reference a map by fd, only via fd_array index\n");
+					return -EINVAL;
+				}
 				map_idx = add_used_map(env, insn[0].imm);
 				break;
 			}
@@ -19872,6 +19897,139 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	return 0;
 }
 
+static enum bpf_sig_keyring bpf_classify_keyring(s32 keyring_id)
+{
+	switch (keyring_id) {
+	case 0:
+		return BPF_SIG_KEYRING_BUILTIN;
+	case (s32)(unsigned long)VERIFY_USE_SECONDARY_KEYRING:
+		return BPF_SIG_KEYRING_SECONDARY;
+	case (s32)(unsigned long)VERIFY_USE_PLATFORM_KEYRING:
+		return BPF_SIG_KEYRING_PLATFORM;
+	default:
+		return BPF_SIG_KEYRING_USER;
+	}
+}
+
+/*
+ * Verify the PKCS#7 signature of a loaded program. Called from bpf_check()
+ * once the program's metadata maps have been resolved into used_maps, so
+ * the exact maps folded into the signature are the ones the program binds.
+ *
+ * The signature covers the instructions followed by the frozen contents of
+ * each map, in @maps order: insns || map_0 || map_1 || [...]. On success the
+ * verdict and keyring info are recorded on prog->aux.
+ */
+static int bpf_prog_verify_signature(struct bpf_verifier_env *env,
+				     union bpf_attr *attr, bool is_kernel)
+{
+	bpfptr_t usig = make_bpfptr(attr->signature, is_kernel);
+	struct bpf_dynptr_kern sig_ptr, data_ptr;
+	struct bpf_prog *prog = env->prog;
+	struct bpf_map **maps = env->used_maps;
+	struct bpf_key *key = NULL;
+	void *sig, *data = NULL;
+	u32 map_cnt = env->used_map_cnt;
+	u32 i, off, insns_sz;
+	u64 data_sz;
+	int err = 0;
+
+	/*
+	 * Don't attempt to use kmalloc_large or vmalloc for signatures.
+	 * Practical signature for BPF program should be below this limit.
+	 */
+	if (attr->signature_size > KMALLOC_MAX_CACHE_SIZE)
+		return -EINVAL;
+	if (system_keyring_id_check(attr->keyring_id) == 0)
+		key = bpf_lookup_system_key(attr->keyring_id);
+	else
+		key = bpf_lookup_user_key(attr->keyring_id, 0);
+	if (!key) {
+		verbose(env, "cannot resolve signing keyring with keyring_id %d\n",
+			attr->keyring_id);
+		return -EINVAL;
+	}
+
+	sig = kvmemdup_bpfptr(usig, attr->signature_size);
+	if (IS_ERR(sig)) {
+		bpf_key_put(key);
+		return PTR_ERR(sig);
+	}
+
+	insns_sz = prog->len * sizeof(struct bpf_insn);
+	data_sz = insns_sz;
+	for (i = 0; i < map_cnt; i++) {
+		struct bpf_map *map = maps[i];
+
+		if (map->map_type != BPF_MAP_TYPE_ARRAY ||
+		    !map->ops->map_direct_value_addr) {
+			verbose(env, "signed program metadata map '%s' must be an array\n",
+				map->name);
+			err = -EINVAL;
+			goto out;
+		}
+		if (!READ_ONCE(map->frozen)) {
+			verbose(env, "signed program metadata map '%s' must be frozen\n",
+				map->name);
+			err = -EPERM;
+			goto out;
+		}
+		if (!map->excl_prog_sha) {
+			verbose(env, "signed program metadata map '%s' must be exclusive\n",
+				map->name);
+			err = -EPERM;
+			goto out;
+		}
+		data_sz += map->value_size;
+	}
+	if (bpf_dynptr_check_size(data_sz)) {
+		verbose(env, "signed payload too large: %llu bytes\n", data_sz);
+		err = -E2BIG;
+		goto out;
+	}
+	data = kvmalloc(data_sz, GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+	if (!data) {
+		err = -ENOMEM;
+		goto out;
+	}
+	memcpy(data, prog->insnsi, insns_sz);
+	off = insns_sz;
+	for (i = 0; i < map_cnt; i++) {
+		struct bpf_map *map = maps[i];
+		u64 addr;
+
+		err = map->ops->map_direct_value_addr(map, &addr, 0);
+		if (err) {
+			verbose(env, "failed to read signed metadata map '%s': %d\n",
+				map->name, err);
+			goto out;
+		}
+		memcpy(data + off, (void *)(unsigned long)addr,
+		       map->value_size);
+		off += map->value_size;
+	}
+
+	bpf_dynptr_init(&data_ptr, data, BPF_DYNPTR_TYPE_LOCAL, 0, data_sz);
+	bpf_dynptr_init(&sig_ptr, sig, BPF_DYNPTR_TYPE_LOCAL, 0,
+			attr->signature_size);
+
+	err = bpf_verify_pkcs7_signature((struct bpf_dynptr *)&data_ptr,
+					 (struct bpf_dynptr *)&sig_ptr, key);
+	if (err) {
+		verbose(env, "signature verification failed: %d\n", err);
+	} else {
+		verbose(env, "signature verification passed\n");
+		prog->aux->sig.keyring_serial = bpf_key_serial(key);
+		prog->aux->sig.keyring_type = bpf_classify_keyring(attr->keyring_id);
+		prog->aux->sig.verdict = BPF_SIG_VERIFIED;
+	}
+out:
+	kvfree(data);
+	bpf_key_put(key);
+	kvfree(sig);
+	return err;
+}
+
 int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	      struct bpf_log_attr *attr_log)
 {
@@ -19902,6 +20060,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	env->bypass_spec_v1 = bpf_bypass_spec_v1(env->prog->aux->token);
 	env->bypass_spec_v4 = bpf_bypass_spec_v4(env->prog->aux->token);
 	env->bpf_capable = is_priv = bpf_token_capable(env->prog->aux->token, CAP_BPF);
+	env->signature = attr->signature;
 
 	/* user could have requested verbose verifier output
 	 * and supplied buffer to store the verification trace
@@ -19909,8 +20068,24 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	ret = bpf_vlog_init(&env->log, attr_log->level, attr_log->ubuf, attr_log->size);
 	if (ret)
 		goto err_free_env;
+	if (env->signature) {
+		ret = bpf_prog_calc_tag(env->prog);
+		if (ret < 0)
+			goto err_prep;
+	}
 
 	ret = process_fd_array(env, attr, uattr);
+	if (ret)
+		goto err_prep;
+
+	if (env->signature) {
+		ret = bpf_prog_verify_signature(env, attr, uattr.is_kernel);
+		if (ret)
+			goto err_prep;
+	}
+
+	ret = security_bpf_prog_load(env->prog, attr, env->prog->aux->token,
+				     uattr.is_kernel);
 	if (ret)
 		goto err_prep;
 
