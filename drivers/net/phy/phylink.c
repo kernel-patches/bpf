@@ -2988,6 +2988,10 @@ int phylink_ethtool_ksettings_set(struct phylink *pl,
 	if (pl->phydev) {
 		struct ethtool_link_ksettings phy_kset = *kset;
 
+		if (!phy_caps_lookup(kset->base.speed, kset->base.duplex,
+				     pl->supported, true))
+			return -EINVAL;
+
 		linkmode_and(phy_kset.link_modes.advertising,
 			     phy_kset.link_modes.advertising,
 			     pl->supported);
