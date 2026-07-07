@@ -62,7 +62,10 @@ psp_nl_multicast_per_ns(struct psp_dev *psd, unsigned int group,
 	struct net *main_net;
 	struct sk_buff *ntf;
 
-	main_net = dev_net(psd->main_netdev);
+	main_net = maybe_get_net(dev_net(psd->main_netdev));
+	if (!main_net)
+		return;
+
 	xa_init(&sent_nets);
 
 	list_for_each_entry(entry, &psd->assoc_dev_list, dev_list) {
@@ -77,21 +80,23 @@ psp_nl_multicast_per_ns(struct psp_dev *psd, unsigned int group,
 		if (ret == -EBUSY)
 			continue;
 
-		ntf = build_ntf(psd, assoc_net, ctx);
-		if (!ntf)
+		if (!maybe_get_net(assoc_net))
 			continue;
 
-		genlmsg_multicast_netns(&psp_nl_family, assoc_net, ntf, 0,
-					group, GFP_KERNEL);
+		ntf = build_ntf(psd, assoc_net, ctx);
+		if (ntf)
+			genlmsg_multicast_netns(&psp_nl_family, assoc_net, ntf,
+						0, group, GFP_KERNEL);
+		put_net(assoc_net);
 	}
 	xa_destroy(&sent_nets);
 
 	/* Send to main device netns */
 	ntf = build_ntf(psd, main_net, ctx);
-	if (!ntf)
-		return;
-	genlmsg_multicast_netns(&psp_nl_family, main_net, ntf, 0, group,
-				GFP_KERNEL);
+	if (ntf)
+		genlmsg_multicast_netns(&psp_nl_family, main_net, ntf, 0, group,
+					GFP_KERNEL);
+	put_net(main_net);
 }
 
 static struct sk_buff *psp_nl_clone_ntf(struct psp_dev *psd, struct net *net,
