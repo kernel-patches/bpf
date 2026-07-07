@@ -73,38 +73,103 @@ static enum mlx5_traffic_types fs_psp2tt(enum accel_fs_psp_type i)
 	return MLX5_TT_IPV6_UDP;
 }
 
+static int accel_psp_fs_create_ft(struct mlx5e_psp_fs *fs,
+				  struct mlx5_flow_table_attr *ft_attr,
+				  struct mlx5_flow_table **ft)
+{
+	struct mlx5_flow_namespace *ns = mlx5e_fs_get_ns(fs->fs, false);
+	int err = 0;
+
+	*ft = mlx5_create_auto_grouped_flow_table(ns, ft_attr);
+	if (IS_ERR(*ft)) {
+		err = PTR_ERR(*ft);
+		*ft = NULL;
+	}
+
+	return err;
+}
+
+static void accel_psp_fs_destroy_ft(struct mlx5_flow_table **table)
+{
+	if (*table) {
+		mlx5_destroy_flow_table(*table);
+		*table = NULL;
+	}
+}
+
+static void accel_psp_fs_del_flow_rule(struct mlx5_flow_handle **rule)
+{
+	if (*rule) {
+		mlx5_del_flow_rules(*rule);
+		*rule = NULL;
+	}
+}
+
+static int accel_psp_fs_create_miss_group(struct mlx5_flow_table *ft,
+					  struct mlx5_flow_group **group)
+{
+	int inlen = MLX5_ST_SZ_BYTES(create_flow_group_in);
+	u32 *in = kvzalloc(inlen, GFP_KERNEL);
+	int err = 0;
+
+	if (!in)
+		return -ENOMEM;
+
+	MLX5_SET(create_flow_group_in, in, start_flow_index, ft->max_fte - 1);
+	MLX5_SET(create_flow_group_in, in, end_flow_index, ft->max_fte - 1);
+	*group = mlx5_create_flow_group(ft, in);
+	if (IS_ERR(*group)) {
+		err = PTR_ERR(*group);
+		*group = NULL;
+	}
+	kvfree(in);
+
+	return err;
+}
+
+static void accel_psp_fs_destroy_flow_group(struct mlx5_flow_group **group)
+{
+	if (*group) {
+		mlx5_destroy_flow_group(*group);
+		*group = NULL;
+	}
+}
+
+static int accel_psp_fs_create_counter(struct mlx5_core_dev *dev,
+				       struct mlx5_fc **counter)
+{
+	*counter = mlx5_fc_create(dev, false);
+	if (IS_ERR(*counter)) {
+		int err = PTR_ERR(*counter);
+
+		*counter = NULL;
+		return err;
+	}
+
+	return 0;
+}
+
+static void accel_psp_fs_destroy_counter(struct mlx5_core_dev *dev,
+					 struct mlx5_fc **counter)
+{
+	if (*counter) {
+		mlx5_fc_destroy(dev, *counter);
+		*counter = NULL;
+	}
+}
+
 static void accel_psp_fs_rx_err_destroy_ft(struct mlx5e_psp_fs *fs,
 					   struct mlx5e_psp_rx_err *rx_err)
 {
-	if (rx_err->bad_rule) {
-		mlx5_del_flow_rules(rx_err->bad_rule);
-		rx_err->bad_rule = NULL;
-	}
-
-	if (rx_err->err_rule) {
-		mlx5_del_flow_rules(rx_err->err_rule);
-		rx_err->err_rule = NULL;
-	}
-
-	if (rx_err->auth_fail_rule) {
-		mlx5_del_flow_rules(rx_err->auth_fail_rule);
-		rx_err->auth_fail_rule = NULL;
-	}
-
-	if (rx_err->rule) {
-		mlx5_del_flow_rules(rx_err->rule);
-		rx_err->rule = NULL;
-	}
-
+	accel_psp_fs_del_flow_rule(&rx_err->bad_rule);
+	accel_psp_fs_del_flow_rule(&rx_err->err_rule);
+	accel_psp_fs_del_flow_rule(&rx_err->auth_fail_rule);
+	accel_psp_fs_del_flow_rule(&rx_err->rule);
 	if (rx_err->copy_modify_hdr) {
 		mlx5_modify_header_dealloc(fs->mdev, rx_err->copy_modify_hdr);
 		rx_err->copy_modify_hdr = NULL;
 	}
-
-	if (rx_err->ft) {
-		mlx5_destroy_flow_table(rx_err->ft);
-		rx_err->ft = NULL;
-	}
+	accel_psp_fs_destroy_ft(&rx_err->ft);
 }
 
 static void accel_psp_setup_syndrome_match(struct mlx5_flow_spec *spec,
@@ -124,7 +189,6 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 				  struct mlx5e_accel_fs_psp_prot *fs_prot,
 				  struct mlx5e_psp_rx_err *rx_err)
 {
-	struct mlx5_flow_namespace *ns = mlx5e_fs_get_ns(fs->fs, false);
 	u8 action[MLX5_UN_SZ_BYTES(set_add_copy_action_in_auto)] = {};
 	struct mlx5_flow_table_attr ft_attr = {};
 	struct mlx5_core_dev *mdev = fs->mdev;
@@ -133,7 +197,6 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 	struct mlx5_modify_hdr *modify_hdr;
 	struct mlx5_flow_handle *fte;
 	struct mlx5_flow_spec *spec;
-	struct mlx5_flow_table *ft;
 	int err = 0;
 
 	spec = kzalloc_obj(*spec);
@@ -144,14 +207,12 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 	ft_attr.autogroup.max_num_groups = 2;
 	ft_attr.level = MLX5E_ACCEL_FS_ESP_FT_ERR_LEVEL;
 	ft_attr.prio = MLX5E_NIC_PRIO;
-	ft = mlx5_create_auto_grouped_flow_table(ns, &ft_attr);
-	if (IS_ERR(ft)) {
-		err = PTR_ERR(ft);
+	err = accel_psp_fs_create_ft(fs, &ft_attr, &rx_err->ft);
+	if (err) {
 		mlx5_core_err(fs->mdev,
 			      "fail to create psp rx inline ft err=%d\n", err);
-		goto out_spec;
+		goto out_err;
 	}
-	rx_err->ft = ft;
 
 	/* Action to copy 7 bit psp_syndrome to regB[23:29] */
 	MLX5_SET(copy_action_in, action, action_type, MLX5_ACTION_TYPE_COPY);
@@ -167,7 +228,7 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 		err = PTR_ERR(modify_hdr);
 		mlx5_core_err(mdev,
 			      "fail to alloc psp copy modify_header_id err=%d\n", err);
-		goto out_ft;
+		goto out_err;
 	}
 	rx_err->copy_modify_hdr = modify_hdr;
 
@@ -184,8 +245,9 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 	fte = mlx5_add_flow_rules(rx_err->ft, spec, &flow_act, dest, 2);
 	if (IS_ERR(fte)) {
 		err = PTR_ERR(fte);
-		mlx5_core_err(mdev, "fail to add psp rx err copy rule err=%d\n", err);
-		goto out_modhdr;
+		mlx5_core_err(mdev, "fail to add psp rx err rule err=%d\n",
+			      err);
+		goto out_err;
 	}
 	rx_err->rule = fte;
 
@@ -203,7 +265,7 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 		err = PTR_ERR(fte);
 		mlx5_core_err(mdev, "fail to add psp rx auth fail drop rule err=%d\n",
 			      err);
-		goto out_drop_rule;
+		goto out_err;
 	}
 	rx_err->auth_fail_rule = fte;
 
@@ -221,7 +283,7 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 		err = PTR_ERR(fte);
 		mlx5_core_err(mdev, "fail to add psp rx framing err drop rule err=%d\n",
 			      err);
-		goto out_drop_auth_fail_rule;
+		goto out_err;
 	}
 	rx_err->err_rule = fte;
 
@@ -238,27 +300,14 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 		err = PTR_ERR(fte);
 		mlx5_core_err(mdev, "fail to add psp rx misc. err drop rule err=%d\n",
 			      err);
-		goto out_drop_error_rule;
+		goto out_err;
 	}
 	rx_err->bad_rule = fte;
 
 	goto out_spec;
 
-out_drop_error_rule:
-	mlx5_del_flow_rules(rx_err->err_rule);
-	rx_err->err_rule = NULL;
-out_drop_auth_fail_rule:
-	mlx5_del_flow_rules(rx_err->auth_fail_rule);
-	rx_err->auth_fail_rule = NULL;
-out_drop_rule:
-	mlx5_del_flow_rules(rx_err->rule);
-	rx_err->rule = NULL;
-out_modhdr:
-	mlx5_modify_header_dealloc(mdev, modify_hdr);
-	rx_err->copy_modify_hdr = NULL;
-out_ft:
-	mlx5_destroy_flow_table(rx_err->ft);
-	rx_err->ft = NULL;
+out_err:
+	accel_psp_fs_rx_err_destroy_ft(fs, rx_err);
 out_spec:
 	kfree(spec);
 	return err;
@@ -268,30 +317,14 @@ out_spec:
 static void accel_psp_fs_rx_fs_destroy(struct mlx5e_psp_fs *fs,
 				       struct mlx5e_accel_fs_psp_prot *fs_prot)
 {
-	if (fs_prot->def_rule) {
-		mlx5_del_flow_rules(fs_prot->def_rule);
-		fs_prot->def_rule = NULL;
-	}
-
+	accel_psp_fs_del_flow_rule(&fs_prot->def_rule);
 	if (fs_prot->rx_modify_hdr) {
 		mlx5_modify_header_dealloc(fs->mdev, fs_prot->rx_modify_hdr);
 		fs_prot->rx_modify_hdr = NULL;
 	}
-
-	if (fs_prot->miss_rule) {
-		mlx5_del_flow_rules(fs_prot->miss_rule);
-		fs_prot->miss_rule = NULL;
-	}
-
-	if (fs_prot->miss_group) {
-		mlx5_destroy_flow_group(fs_prot->miss_group);
-		fs_prot->miss_group = NULL;
-	}
-
-	if (fs_prot->ft) {
-		mlx5_destroy_flow_table(fs_prot->ft);
-		fs_prot->ft = NULL;
-	}
+	accel_psp_fs_del_flow_rule(&fs_prot->miss_rule);
+	accel_psp_fs_destroy_flow_group(&fs_prot->miss_group);
+	accel_psp_fs_destroy_ft(&fs_prot->ft);
 }
 
 static void setup_fte_udp_psp(struct mlx5_flow_spec *spec, u16 udp_port)
@@ -306,55 +339,42 @@ static void setup_fte_udp_psp(struct mlx5_flow_spec *spec, u16 udp_port)
 static int accel_psp_fs_rx_create_ft(struct mlx5e_psp_fs *fs,
 				     struct mlx5e_accel_fs_psp_prot *fs_prot)
 {
-	struct mlx5_flow_namespace *ns = mlx5e_fs_get_ns(fs->fs, false);
 	u8 action[MLX5_UN_SZ_BYTES(set_add_copy_action_in_auto)] = {};
-	int inlen = MLX5_ST_SZ_BYTES(create_flow_group_in);
 	struct mlx5_modify_hdr *modify_hdr = NULL;
 	struct mlx5_flow_table_attr ft_attr = {};
 	struct mlx5_flow_destination dest = {};
 	struct mlx5_core_dev *mdev = fs->mdev;
-	struct mlx5_flow_group *miss_group;
 	MLX5_DECLARE_FLOW_ACT(flow_act);
 	struct mlx5_flow_handle *rule;
 	struct mlx5_flow_spec *spec;
-	struct mlx5_flow_table *ft;
-	u32 *flow_group_in;
 	int err = 0;
 
-	flow_group_in = kvzalloc(inlen, GFP_KERNEL);
 	spec = kvzalloc_obj(*spec);
-	if (!flow_group_in || !spec) {
-		err = -ENOMEM;
-		goto out;
-	}
+	if (!spec)
+		return -ENOMEM;
 
 	/* Create FT */
 	ft_attr.max_fte = 2;
 	ft_attr.level = MLX5E_ACCEL_FS_ESP_FT_LEVEL;
-	ft_attr.prio = MLX5E_NIC_PRIO;
 	ft_attr.autogroup.num_reserved_entries = 1;
 	ft_attr.autogroup.max_num_groups = 1;
-	ft = mlx5_create_auto_grouped_flow_table(ns, &ft_attr);
-	if (IS_ERR(ft)) {
-		err = PTR_ERR(ft);
+	ft_attr.prio = MLX5E_NIC_PRIO;
+	err = accel_psp_fs_create_ft(fs, &ft_attr, &fs_prot->ft);
+	if (err) {
 		mlx5_core_err(mdev, "fail to create psp rx ft err=%d\n", err);
 		goto out_err;
 	}
-	fs_prot->ft = ft;
 
 	/* Create miss_group */
-	MLX5_SET(create_flow_group_in, flow_group_in, start_flow_index, ft->max_fte - 1);
-	MLX5_SET(create_flow_group_in, flow_group_in, end_flow_index, ft->max_fte - 1);
-	miss_group = mlx5_create_flow_group(ft, flow_group_in);
-	if (IS_ERR(miss_group)) {
-		err = PTR_ERR(miss_group);
+	err = accel_psp_fs_create_miss_group(fs_prot->ft, &fs_prot->miss_group);
+	if (err) {
 		mlx5_core_err(mdev, "fail to create psp rx miss_group err=%d\n", err);
 		goto out_err;
 	}
-	fs_prot->miss_group = miss_group;
 
 	/* Create miss rule */
-	rule = mlx5_add_flow_rules(ft, spec, &flow_act, &fs_prot->default_dest, 1);
+	rule = mlx5_add_flow_rules(fs_prot->ft, spec, &flow_act,
+				   &fs_prot->default_dest, 1);
 	if (IS_ERR(rule)) {
 		err = PTR_ERR(rule);
 		mlx5_core_err(mdev, "fail to create psp rx miss_rule err=%d\n", err);
@@ -399,12 +419,11 @@ static int accel_psp_fs_rx_create_ft(struct mlx5e_psp_fs *fs,
 	}
 
 	fs_prot->def_rule = rule;
-	goto out;
+	goto out_spec;
 
 out_err:
 	accel_psp_fs_rx_fs_destroy(fs, fs_prot);
-out:
-	kvfree(flow_group_in);
+out_spec:
 	kvfree(spec);
 	return err;
 }
@@ -456,82 +475,61 @@ static void accel_psp_fs_cleanup_rx(struct mlx5e_psp_fs *fs)
 	if (!accel_psp)
 		return;
 
-	mlx5_fc_destroy(fs->mdev, accel_psp->rx_bad_counter);
-	mlx5_fc_destroy(fs->mdev, accel_psp->rx_err_counter);
-	mlx5_fc_destroy(fs->mdev, accel_psp->rx_auth_fail_counter);
-	mlx5_fc_destroy(fs->mdev, accel_psp->rx_counter);
+	accel_psp_fs_destroy_counter(fs->mdev, &accel_psp->rx_bad_counter);
+	accel_psp_fs_destroy_counter(fs->mdev, &accel_psp->rx_err_counter);
+	accel_psp_fs_destroy_counter(fs->mdev,
+				     &accel_psp->rx_auth_fail_counter);
+	accel_psp_fs_destroy_counter(fs->mdev, &accel_psp->rx_counter);
 	kfree(accel_psp);
 	fs->rx_fs = NULL;
 }
 
 static int accel_psp_fs_init_rx(struct mlx5e_psp_fs *fs)
 {
-	struct mlx5e_accel_fs_psp *accel_psp;
 	struct mlx5_core_dev *mdev = fs->mdev;
-	struct mlx5_fc *flow_counter;
 	int err;
 
-	accel_psp = kzalloc_obj(*accel_psp);
-	if (!accel_psp)
+	fs->rx_fs = kzalloc_obj(*fs->rx_fs);
+	if (!fs->rx_fs)
 		return -ENOMEM;
 
-	flow_counter = mlx5_fc_create(mdev, false);
-	if (IS_ERR(flow_counter)) {
+	err = accel_psp_fs_create_counter(mdev, &fs->rx_fs->rx_counter);
+	if (err) {
 		mlx5_core_warn(mdev,
-			       "fail to create psp rx flow counter err=%pe\n",
-			       flow_counter);
-		err = PTR_ERR(flow_counter);
+			       "fail to create psp rx flow counter err=%d\n",
+			       err);
 		goto out_err;
 	}
-	accel_psp->rx_counter = flow_counter;
 
-	flow_counter = mlx5_fc_create(mdev, false);
-	if (IS_ERR(flow_counter)) {
+	err = accel_psp_fs_create_counter(mdev,
+					  &fs->rx_fs->rx_auth_fail_counter);
+	if (err) {
 		mlx5_core_warn(mdev,
-			       "fail to create psp rx auth fail flow counter err=%pe\n",
-			       flow_counter);
-		err = PTR_ERR(flow_counter);
-		goto out_counter_err;
+			       "fail to create psp rx auth fail flow counter err=%d\n",
+			       err);
+		goto out_err;
 	}
-	accel_psp->rx_auth_fail_counter = flow_counter;
 
-	flow_counter = mlx5_fc_create(mdev, false);
-	if (IS_ERR(flow_counter)) {
+	err = accel_psp_fs_create_counter(mdev, &fs->rx_fs->rx_err_counter);
+	if (err) {
 		mlx5_core_warn(mdev,
-			       "fail to create psp rx error flow counter err=%pe\n",
-			       flow_counter);
-		err = PTR_ERR(flow_counter);
-		goto out_auth_fail_counter_err;
+			       "fail to create psp rx error flow counter err=%d\n",
+			       err);
+		goto out_err;
 	}
-	accel_psp->rx_err_counter = flow_counter;
 
-	flow_counter = mlx5_fc_create(mdev, false);
-	if (IS_ERR(flow_counter)) {
+	err = accel_psp_fs_create_counter(mdev, &fs->rx_fs->rx_bad_counter);
+	if (err) {
 		mlx5_core_warn(mdev,
-			       "fail to create psp rx bad flow counter err=%pe\n",
-			       flow_counter);
-		err = PTR_ERR(flow_counter);
-		goto out_err_counter_err;
+			       "fail to create psp rx bad flow counter err=%d\n",
+			       err);
+		goto out_err;
 	}
-	accel_psp->rx_bad_counter = flow_counter;
-
-	fs->rx_fs = accel_psp;
 
 	return 0;
 
-out_err_counter_err:
-	mlx5_fc_destroy(mdev, accel_psp->rx_err_counter);
-	accel_psp->rx_err_counter = NULL;
-out_auth_fail_counter_err:
-	mlx5_fc_destroy(mdev, accel_psp->rx_auth_fail_counter);
-	accel_psp->rx_auth_fail_counter = NULL;
-out_counter_err:
-	mlx5_fc_destroy(mdev, accel_psp->rx_counter);
-	accel_psp->rx_counter = NULL;
 out_err:
-	kfree(accel_psp);
-	fs->rx_fs = NULL;
-
+	accel_psp_fs_cleanup_rx(fs);
 	return err;
 }
 
@@ -675,12 +673,9 @@ out:
 
 static void accel_psp_fs_tx_destroy(struct mlx5e_psp_tx *tx_fs)
 {
-	if (!tx_fs->ft)
-		return;
-
-	mlx5_del_flow_rules(tx_fs->rule);
-	mlx5_destroy_flow_group(tx_fs->fg);
-	mlx5_destroy_flow_table(tx_fs->ft);
+	accel_psp_fs_del_flow_rule(&tx_fs->rule);
+	accel_psp_fs_destroy_flow_group(&tx_fs->fg);
+	accel_psp_fs_destroy_ft(&tx_fs->ft);
 }
 
 static void accel_psp_fs_cleanup_tx(struct mlx5e_psp_fs *fs)
@@ -690,7 +685,7 @@ static void accel_psp_fs_cleanup_tx(struct mlx5e_psp_fs *fs)
 	if (!tx_fs)
 		return;
 
-	mlx5_fc_destroy(fs->mdev, tx_fs->tx_counter);
+	accel_psp_fs_destroy_counter(fs->mdev, &tx_fs->tx_counter);
 	kfree(tx_fs);
 	fs->tx_fs = NULL;
 }
@@ -699,8 +694,8 @@ static int accel_psp_fs_init_tx(struct mlx5e_psp_fs *fs)
 {
 	struct mlx5_core_dev *mdev = fs->mdev;
 	struct mlx5_flow_namespace *ns;
-	struct mlx5_fc *flow_counter;
 	struct mlx5e_psp_tx *tx_fs;
+	int err;
 
 	ns = mlx5_get_flow_namespace(mdev, MLX5_FLOW_NAMESPACE_EGRESS_IPSEC);
 	if (!ns)
@@ -710,15 +705,14 @@ static int accel_psp_fs_init_tx(struct mlx5e_psp_fs *fs)
 	if (!tx_fs)
 		return -ENOMEM;
 
-	flow_counter = mlx5_fc_create(mdev, false);
-	if (IS_ERR(flow_counter)) {
+	err = accel_psp_fs_create_counter(mdev, &tx_fs->tx_counter);
+	if (err) {
 		mlx5_core_warn(mdev,
-			       "fail to create psp tx flow counter err=%pe\n",
-			       flow_counter);
+			       "fail to create psp tx flow counter err=%d\n",
+			       err);
 		kfree(tx_fs);
-		return PTR_ERR(flow_counter);
+		return err;
 	}
-	tx_fs->tx_counter = flow_counter;
 	tx_fs->ns = ns;
 	fs->tx_fs = tx_fs;
 	return 0;
