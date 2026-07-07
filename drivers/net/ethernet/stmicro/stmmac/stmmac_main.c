@@ -262,7 +262,11 @@ static void stmmac_verify_args(void)
 		pr_warn("stmmac: module parameter 'flow_ctrl' is obsolete - please remove from your module configuration\n");
 }
 
-static void __stmmac_disable_all_queues(struct stmmac_priv *priv)
+/**
+ * stmmac_disable_all_queues - Disable all queues
+ * @priv: driver private structure
+ */
+static void stmmac_disable_all_queues(struct stmmac_priv *priv)
 {
 	u8 rx_queues_cnt = priv->plat->rx_queues_to_use;
 	u8 tx_queues_cnt = priv->plat->tx_queues_to_use;
@@ -286,16 +290,15 @@ static void __stmmac_disable_all_queues(struct stmmac_priv *priv)
 }
 
 /**
- * stmmac_disable_all_queues - Disable all queues
+ * stmmac_drain_xdp - Cleanup for XDP apps
  * @priv: driver private structure
  */
-static void stmmac_disable_all_queues(struct stmmac_priv *priv)
+static void stmmac_drain_xdp(struct stmmac_priv *priv)
 {
 	u8 rx_queues_cnt = priv->plat->rx_queues_to_use;
 	struct stmmac_rx_queue *rx_q;
 	u8 queue;
 
-	/* synchronize_rcu() needed for pending XDP buffers to drain */
 	for (queue = 0; queue < rx_queues_cnt; queue++) {
 		rx_q = &priv->dma_conf.rx_queue[queue];
 		if (rx_q->xsk_pool) {
@@ -303,8 +306,6 @@ static void stmmac_disable_all_queues(struct stmmac_priv *priv)
 			break;
 		}
 	}
-
-	__stmmac_disable_all_queues(priv);
 }
 
 /**
@@ -4197,6 +4198,9 @@ static int __stmmac_open(struct net_device *dev,
 
 	stmmac_reset_queues_param(priv);
 
+	/* Clear DOWN flag when opening the interface */
+	clear_bit(STMMAC_DOWN, &priv->state);
+
 	ret = stmmac_hw_setup(dev);
 	if (ret < 0) {
 		netdev_err(priv->dev, "%s: Hw setup failed\n", __func__);
@@ -4291,6 +4295,9 @@ static void __stmmac_release(struct net_device *dev)
 	/* Stop and disconnect the PHY */
 	phylink_stop(priv->phylink);
 
+	/* Set DOWN flag to prevent XDP from processing new packets */
+	set_bit(STMMAC_DOWN, &priv->state);
+
 	stmmac_disable_all_queues(priv);
 
 	for (chan = 0; chan < priv->plat->tx_queues_to_use; chan++)
@@ -4303,6 +4310,8 @@ static void __stmmac_release(struct net_device *dev)
 
 	/* Stop TX/RX DMA and clear the descriptors */
 	stmmac_stop_all_dma(priv);
+
+	stmmac_drain_xdp(priv);
 
 	/* Release and free the Rx/Tx resources */
 	free_dma_desc_resources(priv, &priv->dma_conf);
@@ -6473,7 +6482,7 @@ static int stmmac_setup_tc_block_cb(enum tc_setup_type type, void *type_data,
 	if (!tc_cls_can_offload_and_chain0(priv->dev, type_data))
 		return ret;
 
-	__stmmac_disable_all_queues(priv);
+	stmmac_disable_all_queues(priv);
 
 	switch (type) {
 	case TC_SETUP_CLSU32:
@@ -7183,6 +7192,9 @@ void stmmac_xdp_release(struct net_device *dev)
 
 	/* Stop TX/RX DMA channels */
 	stmmac_stop_all_dma(priv);
+
+	/* Drain leftover XDP buffers */
+	stmmac_drain_xdp(priv);
 
 	/* Release and free the Rx/Tx resources */
 	free_dma_desc_resources(priv, &priv->dma_conf);
@@ -8259,6 +8271,8 @@ int stmmac_suspend(struct device *dev)
 
 	/* Stop TX/RX DMA */
 	stmmac_stop_all_dma(priv);
+
+	stmmac_drain_xdp(priv);
 
 	stmmac_legacy_serdes_power_down(priv);
 
