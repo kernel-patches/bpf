@@ -1506,9 +1506,6 @@ static struct btf *btf_parse_elf(const char *path, struct btf *base_btf,
 		dist_base_btf = NULL;
 	}
 
-	if (dist_base_btf)
-		btf->owns_base = true;
-
 	switch (gelf_getclass(elf)) {
 	case ELFCLASS32:
 		btf__set_pointer_size(btf, 4);
@@ -1530,6 +1527,9 @@ static struct btf *btf_parse_elf(const char *path, struct btf *base_btf,
 	} else if (btf_ext) {
 		*btf_ext = NULL;
 	}
+
+	if (dist_base_btf)
+		btf->owns_base = true;
 done:
 	if (elf)
 		elf_end(elf);
