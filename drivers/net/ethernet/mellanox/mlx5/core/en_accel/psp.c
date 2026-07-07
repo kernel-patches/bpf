@@ -35,7 +35,6 @@ struct mlx5e_psp_rx_err {
 	struct mlx5_flow_handle *auth_fail_rule;
 	struct mlx5_flow_handle *err_rule;
 	struct mlx5_flow_handle *bad_rule;
-	struct mlx5_modify_hdr *copy_modify_hdr;
 };
 
 struct mlx5e_accel_fs_psp_prot {
@@ -165,10 +164,6 @@ static void accel_psp_fs_rx_err_destroy_ft(struct mlx5e_psp_fs *fs,
 	accel_psp_fs_del_flow_rule(&rx_err->err_rule);
 	accel_psp_fs_del_flow_rule(&rx_err->auth_fail_rule);
 	accel_psp_fs_del_flow_rule(&rx_err->rule);
-	if (rx_err->copy_modify_hdr) {
-		mlx5_modify_header_dealloc(fs->mdev, rx_err->copy_modify_hdr);
-		rx_err->copy_modify_hdr = NULL;
-	}
 	accel_psp_fs_destroy_ft(&rx_err->ft);
 }
 
@@ -210,12 +205,10 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 				  struct mlx5e_accel_fs_psp_prot *fs_prot,
 				  struct mlx5e_psp_rx_err *rx_err)
 {
-	u8 action[MLX5_UN_SZ_BYTES(set_add_copy_action_in_auto)] = {};
 	struct mlx5_flow_table_attr ft_attr = {};
 	struct mlx5_core_dev *mdev = fs->mdev;
 	struct mlx5_flow_destination dest[2];
 	struct mlx5_flow_act flow_act = {};
-	struct mlx5_modify_hdr *modify_hdr;
 	struct mlx5_flow_handle *fte;
 	struct mlx5_flow_spec *spec;
 	int err = 0;
@@ -235,30 +228,10 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 		goto out_err;
 	}
 
-	/* Action to copy 7 bit psp_syndrome to regB[23:29] */
-	MLX5_SET(copy_action_in, action, action_type, MLX5_ACTION_TYPE_COPY);
-	MLX5_SET(copy_action_in, action, src_field, MLX5_ACTION_IN_FIELD_PSP_SYNDROME);
-	MLX5_SET(copy_action_in, action, src_offset, 0);
-	MLX5_SET(copy_action_in, action, length, 7);
-	MLX5_SET(copy_action_in, action, dst_field, MLX5_ACTION_IN_FIELD_METADATA_REG_B);
-	MLX5_SET(copy_action_in, action, dst_offset, 23);
-
-	modify_hdr = mlx5_modify_header_alloc(mdev, MLX5_FLOW_NAMESPACE_KERNEL,
-					      1, action);
-	if (IS_ERR(modify_hdr)) {
-		err = PTR_ERR(modify_hdr);
-		mlx5_core_err(mdev,
-			      "fail to alloc psp copy modify_header_id err=%d\n", err);
-		goto out_err;
-	}
-	rx_err->copy_modify_hdr = modify_hdr;
-
 	accel_psp_setup_syndrome_match(spec, PSP_OK);
 	/* create fte */
-	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_MOD_HDR |
-			  MLX5_FLOW_CONTEXT_ACTION_FWD_DEST |
+	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_FWD_DEST |
 			  MLX5_FLOW_CONTEXT_ACTION_COUNT;
-	flow_act.modify_hdr = modify_hdr;
 	dest[0].type = fs_prot->default_dest.type;
 	dest[0].ft = fs_prot->default_dest.ft;
 	dest[1].type = MLX5_FLOW_DESTINATION_TYPE_COUNTER;
@@ -389,7 +362,6 @@ static int accel_psp_fs_rx_create_ft(struct mlx5e_psp_fs *fs,
 	setup_fte_udp_psp(spec, PSP_DEFAULT_UDP_PORT);
 	flow_act.crypto.type = MLX5_FLOW_CONTEXT_ENCRYPT_DECRYPT_TYPE_PSP;
 	/* Set bit[31, 30] PSP marker */
-	/* Set bit[29-23] psp_syndrome is set in error FT */
 #define MLX5E_PSP_MARKER_BIT (BIT(30) | BIT(31))
 	MLX5_SET(set_action_in, action, action_type, MLX5_ACTION_TYPE_SET);
 	MLX5_SET(set_action_in, action, field, MLX5_ACTION_IN_FIELD_METADATA_REG_B);
