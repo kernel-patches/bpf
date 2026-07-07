@@ -24,6 +24,7 @@
 #include <net/tcp.h>
 #include <net/tcp_ecn.h>
 #include <net/rstreason.h>
+#include <trace/events/tcp.h>
 
 static u32 tcp_clamp_rto_to_user_timeout(const struct sock *sk)
 {
@@ -754,6 +755,8 @@ void tcp_syn_ack_timeout(const struct request_sock *req)
 	struct net *net = read_pnet(&inet_rsk(req)->ireq_net);
 
 	__NET_INC_STATS(net, LINUX_MIB_TCPTIMEOUTS);
+
+	trace_tcp_syn_ack_timeout(req);
 }
 
 void tcp_reset_keepalive_timer(struct sock *sk, unsigned long len)
