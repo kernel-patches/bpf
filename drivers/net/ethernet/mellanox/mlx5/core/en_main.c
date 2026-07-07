@@ -6191,7 +6191,7 @@ static int mlx5e_init_nic_tx(struct mlx5e_priv *priv)
 	return 0;
 }
 
-static void mlx5e_nic_enable(struct mlx5e_priv *priv)
+static int mlx5e_nic_enable(struct mlx5e_priv *priv)
 {
 	struct net_device *netdev = priv->netdev;
 	struct mlx5_core_dev *mdev = priv->mdev;
@@ -6222,7 +6222,7 @@ static void mlx5e_nic_enable(struct mlx5e_priv *priv)
 	mlx5e_pcie_cong_event_init(priv);
 	mlx5e_hv_vhca_stats_create(priv);
 	if (netdev->reg_state != NETREG_REGISTERED)
-		return;
+		return 0;
 	mlx5e_dcbnl_init_app(priv);
 
 	mlx5e_nic_set_rx_mode(priv);
@@ -6235,6 +6235,8 @@ static void mlx5e_nic_enable(struct mlx5e_priv *priv)
 	netdev_unlock(netdev);
 	netif_device_attach(netdev);
 	rtnl_unlock();
+
+	return 0;
 }
 
 static void mlx5e_nic_disable(struct mlx5e_priv *priv)
@@ -6616,13 +6618,18 @@ int mlx5e_attach_netdev(struct mlx5e_priv *priv)
 	if (err)
 		goto err_cleanup_tx;
 
-	if (profile->enable)
-		profile->enable(priv);
+	if (profile->enable) {
+		err = profile->enable(priv);
+		if (err)
+			goto err_cleanup_rx;
+	}
 
 	mlx5e_update_features(priv->netdev);
 
 	return 0;
 
+err_cleanup_rx:
+	profile->cleanup_rx(priv);
 err_cleanup_tx:
 	profile->cleanup_tx(priv);
 
