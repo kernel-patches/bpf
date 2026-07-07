@@ -6199,7 +6199,9 @@ static int mlx5e_nic_enable(struct mlx5e_priv *priv)
 
 	mlx5e_fs_init_l2_addr(priv->fs, netdev);
 	mlx5e_ipsec_init(priv);
-	mlx5e_psp_register(priv);
+	err = mlx5e_psp_register(priv);
+	if (err)
+		goto out_ipsec_cleanup;
 
 	err = mlx5e_macsec_init(priv);
 	if (err)
@@ -6237,6 +6239,10 @@ static int mlx5e_nic_enable(struct mlx5e_priv *priv)
 	rtnl_unlock();
 
 	return 0;
+
+out_ipsec_cleanup:
+	mlx5e_ipsec_cleanup(priv);
+	return err;
 }
 
 static void mlx5e_nic_disable(struct mlx5e_priv *priv)

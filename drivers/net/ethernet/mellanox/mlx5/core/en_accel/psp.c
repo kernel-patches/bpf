@@ -1028,14 +1028,14 @@ void mlx5e_psp_unregister(struct mlx5e_priv *priv)
 	psp->psd = NULL;
 }
 
-void mlx5e_psp_register(struct mlx5e_priv *priv)
+int mlx5e_psp_register(struct mlx5e_priv *priv)
 {
 	struct mlx5e_psp *psp = priv->psp;
 	struct psp_dev *psd;
 
 	/* FW Caps missing */
 	if (!priv->psp)
-		return;
+		return 0;
 
 	psp->caps.assoc_drv_spc = sizeof(u32);
 	psp->caps.versions = 1 << PSP_VERSION_HDR0_AES_GCM_128;
@@ -1047,9 +1047,11 @@ void mlx5e_psp_register(struct mlx5e_priv *priv)
 	if (IS_ERR(psd)) {
 		mlx5_core_err(priv->mdev, "PSP failed to register due to %pe\n",
 			      psd);
-		return;
+		return PTR_ERR(psd);
 	}
 	psp->psd = psd;
+
+	return 0;
 }
 
 int mlx5e_psp_init(struct mlx5e_priv *priv)
