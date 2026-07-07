@@ -1163,6 +1163,12 @@ int __tipc_nl_bearer_set(struct sk_buff *skb, struct genl_info *info)
 					       "MTU value is out-of-range");
 				return -EINVAL;
 			}
+			if (nla_get_u32(props[TIPC_NLA_PROP_MTU]) >
+			    U16_MAX) {
+				NL_SET_ERR_MSG(info->extack,
+					       "MTU value is out-of-range");
+				return -EINVAL;
+			}
 			b->mtu = nla_get_u32(props[TIPC_NLA_PROP_MTU]);
 			tipc_node_apply_property(net, b, TIPC_NLA_PROP_MTU);
 #endif
