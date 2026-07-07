@@ -26,7 +26,6 @@ struct mlx5e_psp_tx {
 	struct mlx5_flow_table *ft;
 	struct mlx5_flow_group *fg;
 	struct mlx5_flow_handle *rule;
-	u32 refcnt;
 	struct mlx5_fc *tx_counter;
 };
 
@@ -46,7 +45,6 @@ struct mlx5e_accel_fs_psp_prot {
 	struct mlx5_modify_hdr *rx_modify_hdr;
 	struct mlx5_flow_destination default_dest;
 	struct mlx5e_psp_rx_err rx_err;
-	u32 refcnt;
 	struct mlx5_flow_handle *def_rule;
 };
 
@@ -469,75 +467,18 @@ static int accel_psp_fs_rx_create(struct mlx5e_psp_fs *fs, enum accel_fs_psp_typ
 	return err;
 }
 
-static int accel_psp_fs_rx_ft_get(struct mlx5e_psp_fs *fs, enum accel_fs_psp_type type)
-{
-	struct mlx5e_accel_fs_psp_prot *fs_prot;
-	struct mlx5_flow_destination dest = {};
-	struct mlx5e_accel_fs_psp *accel_psp;
-	struct mlx5_ttc_table *ttc;
-	int err = 0;
-
-	if (!fs || !fs->rx_fs)
-		return -EINVAL;
-
-	ttc = mlx5e_fs_get_ttc(fs->fs, false);
-	accel_psp = fs->rx_fs;
-	fs_prot = &accel_psp->fs_prot[type];
-	if (fs_prot->refcnt++)
-		return 0;
-
-	/* create FT */
-	err = accel_psp_fs_rx_create(fs, type);
-	if (err) {
-		fs_prot->refcnt--;
-		return err;
-	}
-
-	/* connect */
-	dest.type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
-	dest.ft = fs_prot->ft;
-	mlx5_ttc_fwd_dest(ttc, fs_psp2tt(type), &dest);
-
-	return 0;
-}
-
-static void accel_psp_fs_rx_ft_put(struct mlx5e_psp_fs *fs, enum accel_fs_psp_type type)
-{
-	struct mlx5_ttc_table *ttc = mlx5e_fs_get_ttc(fs->fs, false);
-	struct mlx5e_accel_fs_psp_prot *fs_prot;
-	struct mlx5e_accel_fs_psp *accel_psp;
-
-	accel_psp = fs->rx_fs;
-	fs_prot = &accel_psp->fs_prot[type];
-	if (--fs_prot->refcnt)
-		return;
-
-	/* disconnect */
-	mlx5_ttc_fwd_default_dest(ttc, fs_psp2tt(type));
-
-	/* remove FT */
-	accel_psp_fs_rx_destroy(fs, type);
-}
-
 static void accel_psp_fs_cleanup_rx(struct mlx5e_psp_fs *fs)
 {
-	struct mlx5e_accel_fs_psp_prot *fs_prot;
-	struct mlx5e_accel_fs_psp *accel_psp;
-	enum accel_fs_psp_type i;
+	struct mlx5e_accel_fs_psp *accel_psp = fs->rx_fs;
 
-	if (!fs->rx_fs)
+	if (!accel_psp)
 		return;
 
-	accel_psp = fs->rx_fs;
 	mlx5_fc_destroy(fs->mdev, accel_psp->rx_bad_counter);
 	mlx5_fc_destroy(fs->mdev, accel_psp->rx_err_counter);
 	mlx5_fc_destroy(fs->mdev, accel_psp->rx_auth_fail_counter);
 	mlx5_fc_destroy(fs->mdev, accel_psp->rx_counter);
-	for (i = 0; i < ACCEL_FS_PSP_NUM_TYPES; i++) {
-		fs_prot = &accel_psp->fs_prot[i];
-		WARN_ON(fs_prot->refcnt);
-	}
-	kfree(fs->rx_fs);
+	kfree(accel_psp);
 	fs->rx_fs = NULL;
 }
 
@@ -614,17 +555,27 @@ out_err:
 
 void mlx5_accel_psp_fs_cleanup_rx_tables(struct mlx5e_priv *priv)
 {
+	struct mlx5_ttc_table *ttc;
+	struct mlx5e_psp_fs *fs;
 	int i;
 
 	if (!priv->psp)
 		return;
 
-	for (i = 0; i < ACCEL_FS_PSP_NUM_TYPES; i++)
-		accel_psp_fs_rx_ft_put(priv->psp->fs, i);
+	fs = priv->psp->fs;
+	ttc = mlx5e_fs_get_ttc(fs->fs, false);
+	for (i = 0; i < ACCEL_FS_PSP_NUM_TYPES; i++) {
+		/* disconnect */
+		mlx5_ttc_fwd_default_dest(ttc, fs_psp2tt(i));
+
+		/* remove FT */
+		accel_psp_fs_rx_destroy(fs, i);
+	}
 }
 
 int mlx5_accel_psp_fs_init_rx_tables(struct mlx5e_priv *priv)
 {
+	struct mlx5_ttc_table *ttc;
 	struct mlx5e_psp_fs *fs;
 	int err, i;
 
@@ -632,19 +583,30 @@ int mlx5_accel_psp_fs_init_rx_tables(struct mlx5e_priv *priv)
 		return 0;
 
 	fs = priv->psp->fs;
+	ttc = mlx5e_fs_get_ttc(fs->fs, false);
+
 	for (i = 0; i < ACCEL_FS_PSP_NUM_TYPES; i++) {
-		err = accel_psp_fs_rx_ft_get(fs, i);
+		struct mlx5e_accel_fs_psp_prot *fs_prot;
+		struct mlx5_flow_destination dest = {};
+
+		/* create FT */
+		err = accel_psp_fs_rx_create(fs, i);
 		if (err)
 			goto out_err;
+
+		/* connect */
+		dest.type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
+		fs_prot = &fs->rx_fs->fs_prot[i];
+		dest.ft = fs_prot->ft;
+		mlx5_ttc_fwd_dest(ttc, fs_psp2tt(i), &dest);
 	}
 
 	return 0;
 
 out_err:
-	i--;
-	while (i >= 0) {
-		accel_psp_fs_rx_ft_put(fs, i);
-		--i;
+	while (--i >= 0) {
+		mlx5_ttc_fwd_default_dest(ttc, fs_psp2tt(i));
+		accel_psp_fs_rx_destroy(fs, i);
 	}
 
 	return err;
@@ -739,30 +701,6 @@ static void accel_psp_fs_tx_destroy(struct mlx5e_psp_tx *tx_fs)
 	mlx5_destroy_flow_table(tx_fs->ft);
 }
 
-static int accel_psp_fs_tx_ft_get(struct mlx5e_psp_fs *fs)
-{
-	struct mlx5e_psp_tx *tx_fs = fs->tx_fs;
-	int err;
-
-	if (tx_fs->refcnt++)
-		return 0;
-
-	err = accel_psp_fs_tx_create_ft_table(fs);
-	if (err)
-		tx_fs->refcnt--;
-	return err;
-}
-
-static void accel_psp_fs_tx_ft_put(struct mlx5e_psp_fs *fs)
-{
-	struct mlx5e_psp_tx *tx_fs = fs->tx_fs;
-
-	if (--tx_fs->refcnt)
-		return;
-
-	accel_psp_fs_tx_destroy(tx_fs);
-}
-
 static void accel_psp_fs_cleanup_tx(struct mlx5e_psp_fs *fs)
 {
 	struct mlx5e_psp_tx *tx_fs = fs->tx_fs;
@@ -771,7 +709,6 @@ static void accel_psp_fs_cleanup_tx(struct mlx5e_psp_fs *fs)
 		return;
 
 	mlx5_fc_destroy(fs->mdev, tx_fs->tx_counter);
-	WARN_ON(tx_fs->refcnt);
 	kfree(tx_fs);
 	fs->tx_fs = NULL;
 }
@@ -844,7 +781,7 @@ void mlx5_accel_psp_fs_cleanup_tx_tables(struct mlx5e_priv *priv)
 	if (!priv->psp)
 		return;
 
-	accel_psp_fs_tx_ft_put(priv->psp->fs);
+	accel_psp_fs_tx_destroy(priv->psp->fs->tx_fs);
 }
 
 int mlx5_accel_psp_fs_init_tx_tables(struct mlx5e_priv *priv)
@@ -852,7 +789,7 @@ int mlx5_accel_psp_fs_init_tx_tables(struct mlx5e_priv *priv)
 	if (!priv->psp)
 		return 0;
 
-	return accel_psp_fs_tx_ft_get(priv->psp->fs);
+	return accel_psp_fs_tx_create_ft_table(priv->psp->fs);
 }
 
 static void mlx5e_accel_psp_fs_cleanup(struct mlx5e_psp_fs *fs)
