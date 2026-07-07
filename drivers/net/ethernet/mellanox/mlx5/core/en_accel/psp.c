@@ -184,6 +184,27 @@ static void accel_psp_setup_syndrome_match(struct mlx5_flow_spec *spec,
 	MLX5_SET(fte_match_set_misc2, misc_params_2, psp_syndrome, syndrome);
 }
 
+static int accel_psp_add_drop_rule(struct mlx5_flow_table *ft,
+				   struct mlx5_flow_spec *spec,
+				   struct mlx5_fc *counter,
+				   struct mlx5_flow_handle **rule)
+{
+	struct mlx5_flow_destination dest = {};
+	struct mlx5_flow_act flow_act = {};
+	int err = 0;
+
+	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_DROP |
+			  MLX5_FLOW_CONTEXT_ACTION_COUNT;
+	dest.type = MLX5_FLOW_DESTINATION_TYPE_COUNTER;
+	dest.counter = counter;
+	*rule = mlx5_add_flow_rules(ft, spec, &flow_act, &dest, 1);
+	if (IS_ERR(*rule)) {
+		err = PTR_ERR(*rule);
+		*rule = NULL;
+	}
+	return err;
+}
+
 static
 int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 				  struct mlx5e_accel_fs_psp_prot *fs_prot,
@@ -253,56 +274,38 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 
 	/* add auth fail drop rule */
 	memset(spec, 0, sizeof(*spec));
-	memset(&flow_act, 0, sizeof(flow_act));
 	accel_psp_setup_syndrome_match(spec, PSP_ICV_FAIL);
-	/* create fte */
-	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_DROP |
-			  MLX5_FLOW_CONTEXT_ACTION_COUNT;
-	dest[0].type = MLX5_FLOW_DESTINATION_TYPE_COUNTER;
-	dest[0].counter = fs->rx_fs->rx_auth_fail_counter;
-	fte = mlx5_add_flow_rules(rx_err->ft, spec, &flow_act, dest, 1);
-	if (IS_ERR(fte)) {
-		err = PTR_ERR(fte);
+	err = accel_psp_add_drop_rule(rx_err->ft, spec,
+				      fs->rx_fs->rx_auth_fail_counter,
+				      &rx_err->auth_fail_rule);
+	if (err) {
 		mlx5_core_err(mdev, "fail to add psp rx auth fail drop rule err=%d\n",
 			      err);
 		goto out_err;
 	}
-	rx_err->auth_fail_rule = fte;
 
 	/* add framing drop rule */
 	memset(spec, 0, sizeof(*spec));
-	memset(&flow_act, 0, sizeof(flow_act));
 	accel_psp_setup_syndrome_match(spec, PSP_BAD_TRAILER);
-	/* create fte */
-	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_DROP |
-			  MLX5_FLOW_CONTEXT_ACTION_COUNT;
-	dest[0].type = MLX5_FLOW_DESTINATION_TYPE_COUNTER;
-	dest[0].counter = fs->rx_fs->rx_err_counter;
-	fte = mlx5_add_flow_rules(rx_err->ft, spec, &flow_act, dest, 1);
-	if (IS_ERR(fte)) {
-		err = PTR_ERR(fte);
-		mlx5_core_err(mdev, "fail to add psp rx framing err drop rule err=%d\n",
+	err = accel_psp_add_drop_rule(rx_err->ft, spec,
+				      fs->rx_fs->rx_err_counter,
+				      &rx_err->err_rule);
+	if (err) {
+		mlx5_core_err(mdev, "fail to add psp rx framing drop rule err=%d\n",
 			      err);
 		goto out_err;
 	}
-	rx_err->err_rule = fte;
 
 	/* add misc. errors drop rule */
 	memset(spec, 0, sizeof(*spec));
-	memset(&flow_act, 0, sizeof(flow_act));
-	/* create fte */
-	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_DROP |
-			  MLX5_FLOW_CONTEXT_ACTION_COUNT;
-	dest[0].type = MLX5_FLOW_DESTINATION_TYPE_COUNTER;
-	dest[0].counter = fs->rx_fs->rx_bad_counter;
-	fte = mlx5_add_flow_rules(rx_err->ft, spec, &flow_act, dest, 1);
-	if (IS_ERR(fte)) {
-		err = PTR_ERR(fte);
+	err = accel_psp_add_drop_rule(rx_err->ft, spec,
+				      fs->rx_fs->rx_bad_counter,
+				      &rx_err->bad_rule);
+	if (err) {
 		mlx5_core_err(mdev, "fail to add psp rx misc. err drop rule err=%d\n",
 			      err);
 		goto out_err;
 	}
-	rx_err->bad_rule = fte;
 
 	goto out_spec;
 
