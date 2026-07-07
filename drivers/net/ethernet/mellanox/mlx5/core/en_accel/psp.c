@@ -26,7 +26,6 @@ struct mlx5e_psp_tx {
 	struct mlx5_flow_table *ft;
 	struct mlx5_flow_group *fg;
 	struct mlx5_flow_handle *rule;
-	struct mutex mutex; /* Protect PSP TX steering */
 	u32 refcnt;
 	struct mlx5_fc *tx_counter;
 };
@@ -48,7 +47,6 @@ struct mlx5e_accel_fs_psp_prot {
 	struct mlx5_flow_destination default_dest;
 	struct mlx5e_psp_rx_err rx_err;
 	u32 refcnt;
-	struct mutex prot_mutex; /* protect ESP4/ESP6 protocol */
 	struct mlx5_flow_handle *def_rule;
 };
 
@@ -485,15 +483,14 @@ static int accel_psp_fs_rx_ft_get(struct mlx5e_psp_fs *fs, enum accel_fs_psp_typ
 	ttc = mlx5e_fs_get_ttc(fs->fs, false);
 	accel_psp = fs->rx_fs;
 	fs_prot = &accel_psp->fs_prot[type];
-	mutex_lock(&fs_prot->prot_mutex);
 	if (fs_prot->refcnt++)
-		goto out;
+		return 0;
 
 	/* create FT */
 	err = accel_psp_fs_rx_create(fs, type);
 	if (err) {
 		fs_prot->refcnt--;
-		goto out;
+		return err;
 	}
 
 	/* connect */
@@ -501,9 +498,7 @@ static int accel_psp_fs_rx_ft_get(struct mlx5e_psp_fs *fs, enum accel_fs_psp_typ
 	dest.ft = fs_prot->ft;
 	mlx5_ttc_fwd_dest(ttc, fs_psp2tt(type), &dest);
 
-out:
-	mutex_unlock(&fs_prot->prot_mutex);
-	return err;
+	return 0;
 }
 
 static void accel_psp_fs_rx_ft_put(struct mlx5e_psp_fs *fs, enum accel_fs_psp_type type)
@@ -514,18 +509,14 @@ static void accel_psp_fs_rx_ft_put(struct mlx5e_psp_fs *fs, enum accel_fs_psp_ty
 
 	accel_psp = fs->rx_fs;
 	fs_prot = &accel_psp->fs_prot[type];
-	mutex_lock(&fs_prot->prot_mutex);
 	if (--fs_prot->refcnt)
-		goto out;
+		return;
 
 	/* disconnect */
 	mlx5_ttc_fwd_default_dest(ttc, fs_psp2tt(type));
 
 	/* remove FT */
 	accel_psp_fs_rx_destroy(fs, type);
-
-out:
-	mutex_unlock(&fs_prot->prot_mutex);
 }
 
 static void accel_psp_fs_cleanup_rx(struct mlx5e_psp_fs *fs)
@@ -544,7 +535,6 @@ static void accel_psp_fs_cleanup_rx(struct mlx5e_psp_fs *fs)
 	mlx5_fc_destroy(fs->mdev, accel_psp->rx_counter);
 	for (i = 0; i < ACCEL_FS_PSP_NUM_TYPES; i++) {
 		fs_prot = &accel_psp->fs_prot[i];
-		mutex_destroy(&fs_prot->prot_mutex);
 		WARN_ON(fs_prot->refcnt);
 	}
 	kfree(fs->rx_fs);
@@ -553,21 +543,14 @@ static void accel_psp_fs_cleanup_rx(struct mlx5e_psp_fs *fs)
 
 static int accel_psp_fs_init_rx(struct mlx5e_psp_fs *fs)
 {
-	struct mlx5e_accel_fs_psp_prot *fs_prot;
 	struct mlx5e_accel_fs_psp *accel_psp;
 	struct mlx5_core_dev *mdev = fs->mdev;
 	struct mlx5_fc *flow_counter;
-	enum accel_fs_psp_type i;
 	int err;
 
 	accel_psp = kzalloc_obj(*accel_psp);
 	if (!accel_psp)
 		return -ENOMEM;
-
-	for (i = 0; i < ACCEL_FS_PSP_NUM_TYPES; i++) {
-		fs_prot = &accel_psp->fs_prot[i];
-		mutex_init(&fs_prot->prot_mutex);
-	}
 
 	flow_counter = mlx5_fc_create(mdev, false);
 	if (IS_ERR(flow_counter)) {
@@ -623,10 +606,6 @@ out_counter_err:
 	mlx5_fc_destroy(mdev, accel_psp->rx_counter);
 	accel_psp->rx_counter = NULL;
 out_err:
-	for (i = 0; i < ACCEL_FS_PSP_NUM_TYPES; i++) {
-		fs_prot = &accel_psp->fs_prot[i];
-		mutex_destroy(&fs_prot->prot_mutex);
-	}
 	kfree(accel_psp);
 	fs->rx_fs = NULL;
 
@@ -763,17 +742,14 @@ static void accel_psp_fs_tx_destroy(struct mlx5e_psp_tx *tx_fs)
 static int accel_psp_fs_tx_ft_get(struct mlx5e_psp_fs *fs)
 {
 	struct mlx5e_psp_tx *tx_fs = fs->tx_fs;
-	int err = 0;
+	int err;
 
-	mutex_lock(&tx_fs->mutex);
 	if (tx_fs->refcnt++)
-		goto out;
+		return 0;
 
 	err = accel_psp_fs_tx_create_ft_table(fs);
 	if (err)
 		tx_fs->refcnt--;
-out:
-	mutex_unlock(&tx_fs->mutex);
 	return err;
 }
 
@@ -781,13 +757,10 @@ static void accel_psp_fs_tx_ft_put(struct mlx5e_psp_fs *fs)
 {
 	struct mlx5e_psp_tx *tx_fs = fs->tx_fs;
 
-	mutex_lock(&tx_fs->mutex);
 	if (--tx_fs->refcnt)
-		goto out;
+		return;
 
 	accel_psp_fs_tx_destroy(tx_fs);
-out:
-	mutex_unlock(&tx_fs->mutex);
 }
 
 static void accel_psp_fs_cleanup_tx(struct mlx5e_psp_fs *fs)
@@ -798,7 +771,6 @@ static void accel_psp_fs_cleanup_tx(struct mlx5e_psp_fs *fs)
 		return;
 
 	mlx5_fc_destroy(fs->mdev, tx_fs->tx_counter);
-	mutex_destroy(&tx_fs->mutex);
 	WARN_ON(tx_fs->refcnt);
 	kfree(tx_fs);
 	fs->tx_fs = NULL;
@@ -828,7 +800,6 @@ static int accel_psp_fs_init_tx(struct mlx5e_psp_fs *fs)
 		return PTR_ERR(flow_counter);
 	}
 	tx_fs->tx_counter = flow_counter;
-	mutex_init(&tx_fs->mutex);
 	tx_fs->ns = ns;
 	fs->tx_fs = tx_fs;
 	return 0;
