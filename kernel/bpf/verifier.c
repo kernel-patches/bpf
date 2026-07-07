@@ -3304,34 +3304,6 @@ static int mark_chain_precision_batch(struct bpf_verifier_env *env,
 	return bpf_mark_chain_precision(env, starting_state, -1, NULL);
 }
 
-static bool is_spillable_regtype(enum bpf_reg_type type)
-{
-	switch (base_type(type)) {
-	case PTR_TO_MAP_VALUE:
-	case PTR_TO_STACK:
-	case PTR_TO_CTX:
-	case PTR_TO_PACKET:
-	case PTR_TO_PACKET_META:
-	case PTR_TO_PACKET_END:
-	case PTR_TO_FLOW_KEYS:
-	case CONST_PTR_TO_MAP:
-	case PTR_TO_SOCKET:
-	case PTR_TO_SOCK_COMMON:
-	case PTR_TO_TCP_SOCK:
-	case PTR_TO_XDP_SOCK:
-	case PTR_TO_BTF_ID:
-	case PTR_TO_BUF:
-	case PTR_TO_MEM:
-	case PTR_TO_FUNC:
-	case PTR_TO_MAP_KEY:
-	case PTR_TO_ARENA:
-		return true;
-	default:
-		return false;
-	}
-}
-
-
 /* check if register is a constant scalar value */
 static bool is_reg_const(struct bpf_reg_state *reg, bool subreg32)
 {
@@ -3345,13 +3317,18 @@ static u64 reg_const_value(struct bpf_reg_state *reg, bool subreg32)
 	return subreg32 ? tnum_subreg(reg->var_off).value : reg->var_off.value;
 }
 
+static bool is_pointer_regtype(enum bpf_reg_type type)
+{
+	return type != SCALAR_VALUE && type != NOT_INIT;
+}
+
 static bool __is_pointer_value(bool allow_ptr_leaks,
 			       const struct bpf_reg_state *reg)
 {
 	if (allow_ptr_leaks)
 		return false;
 
-	return reg->type != SCALAR_VALUE;
+	return is_pointer_regtype(reg->type);
 }
 
 static void clear_scalar_id(struct bpf_reg_state *reg)
@@ -3476,7 +3453,7 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 	if (value_regno >= 0)
 		reg = &cur->regs[value_regno];
 	if (!env->bypass_spec_v4) {
-		bool sanitize = reg && is_spillable_regtype(reg->type);
+		bool sanitize = reg && is_pointer_regtype(reg->type);
 
 		for (i = 0; i < size; i++) {
 			u8 type = state->stack[spi].slot_type[(slot - i) %
@@ -3517,7 +3494,7 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 		__mark_reg_known(tmp_reg, insn->imm);
 		tmp_reg->type = SCALAR_VALUE;
 		save_register_state(env, state, spi, tmp_reg, size);
-	} else if (reg && is_spillable_regtype(reg->type)) {
+	} else if (reg && is_pointer_regtype(reg->type)) {
 		/* register containing pointer is being spilled into stack */
 		if (size != BPF_REG_SIZE) {
 			verbose_linfo(env, insn_idx, "; ");
