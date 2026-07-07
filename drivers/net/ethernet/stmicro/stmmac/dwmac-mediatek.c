@@ -37,7 +37,8 @@
 #define ETH_FINE_DLY_RXC	BIT(0)
 
 /* Peri Configuration register for mt8189 */
-#define MT8189_CTRL0_TXC_OUT_OP		BIT(20)
+#define MT8189_CTRL0_TXC_OUT_OP			BIT(20)
+#define MT8189_CTRL0_DLY_GTXC_STAGE_FINE	GENMASK(11, 6)
 
 /* Peri Configuration register for mt8195 */
 #define MT8195_PERI_ETH_CTRL_BASE	0xFD0
@@ -103,6 +104,7 @@ struct mediatek_dwmac_variant {
 	u32 peri_eth_ctrl_offset;
 	u8 dma_bit_mask;
 	bool use_out_op;
+	bool use_stage_fine;
 };
 
 /* list of clocks required for mac */
@@ -326,9 +328,12 @@ static void delay_stage2ps_v2(struct mediatek_dwmac_plat_data *plat)
 
 static int set_delay_v2(struct mediatek_dwmac_plat_data *plat)
 {
-	u32 gtxc_delay_val = 0, delay_val = 0, rmii_delay_val = 0;
 	struct mac_delay_struct *mac_delay = &plat->mac_delay;
 	u32 reg_offset = plat->variant->peri_eth_ctrl_offset;
+	u32 gtxc_delay_mask = 0;
+	u32 gtxc_delay_val = 0;
+	u32 rmii_delay_val = 0;
+	u32 delay_val = 0;
 
 	delay_ps2stage_v2(plat);
 
@@ -402,6 +407,9 @@ static int set_delay_v2(struct mediatek_dwmac_plat_data *plat)
 		gtxc_delay_val |= FIELD_PREP(MT8195_DLY_GTXC_STAGES, mac_delay->tx_delay);
 		gtxc_delay_val |= FIELD_PREP(MT8195_DLY_GTXC_INV, mac_delay->tx_inv);
 
+		if (plat->variant->use_stage_fine)
+			gtxc_delay_val |= MT8189_CTRL0_DLY_GTXC_STAGE_FINE;
+
 		delay_val |= FIELD_PREP(MT8195_DLY_RXC_ENABLE, !!mac_delay->rx_delay);
 		delay_val |= FIELD_PREP(MT8195_DLY_RXC_STAGES, mac_delay->rx_delay);
 		delay_val |= FIELD_PREP(MT8195_DLY_RXC_INV, mac_delay->rx_inv);
@@ -412,12 +420,17 @@ static int set_delay_v2(struct mediatek_dwmac_plat_data *plat)
 		return -EINVAL;
 	}
 
+	gtxc_delay_mask = MT8195_RGMII_TXC_PHASE_CTRL |
+			  MT8195_DLY_GTXC_INV |
+			  MT8195_DLY_GTXC_ENABLE |
+			  MT8195_DLY_GTXC_STAGES;
+
+	if (plat->variant->use_stage_fine)
+		gtxc_delay_mask |= MT8189_CTRL0_DLY_GTXC_STAGE_FINE;
+
 	regmap_update_bits(plat->peri_regmap,
 			   reg_offset + MT8195_PERI_ETH_CTRL0,
-			   MT8195_RGMII_TXC_PHASE_CTRL |
-			   MT8195_DLY_GTXC_INV |
-			   MT8195_DLY_GTXC_ENABLE |
-			   MT8195_DLY_GTXC_STAGES,
+			   gtxc_delay_mask,
 			   gtxc_delay_val);
 	regmap_write(plat->peri_regmap,
 		     reg_offset + MT8195_PERI_ETH_CTRL1,
