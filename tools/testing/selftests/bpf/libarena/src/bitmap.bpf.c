@@ -10,16 +10,16 @@
 #include <libarena/bitmap.h>
 
 __weak
-struct bitmap __arena *bmp_alloc(size_t bits)
+struct arena_bitmap __arena *bmp_alloc(size_t bits)
 {
-	struct bitmap __arena *bmp;
+	struct arena_bitmap __arena *bmp;
 	size_t size = BITS_TO_LONG_LONGS(bits) * sizeof(bmp->bits[0]);
 
 	/* Assume long-aligned masks. */
 	if (bits % BITS_PER_LONG_LONG)
 		return NULL;
 
-	bmp = (struct bitmap __arena *)arena_malloc(size);
+	bmp = (struct arena_bitmap __arena *)arena_malloc(size);
 	if (!bmp)
 		return NULL;
 
@@ -29,31 +29,31 @@ struct bitmap __arena *bmp_alloc(size_t bits)
 }
 
 __weak
-void bmp_free(struct bitmap __arena *bmp)
+void bmp_free(struct arena_bitmap __arena *bmp)
 {
 	arena_free(bmp);
 }
 
 __weak
-void __bmp_set_bit(u32 bit, struct bitmap __arena *bmp)
+void __bmp_set_bit(u32 bit, struct arena_bitmap __arena *bmp)
 {
 	bmp->bits[BIT_WORD(bit)] |= BIT_MASK(bit);
 }
 
 __weak
-void __bmp_clear_bit(u32 bit, struct bitmap __arena *bmp)
+void __bmp_clear_bit(u32 bit, struct arena_bitmap __arena *bmp)
 {
 	bmp->bits[BIT_WORD(bit)] &= ~BIT_MASK(bit);
 }
 
 __weak
-bool bmp_test_bit(u32 bit, struct bitmap __arena *bmp)
+bool bmp_test_bit(u32 bit, struct arena_bitmap __arena *bmp)
 {
 	return bmp->bits[BIT_WORD(bit)] & BIT_MASK(bit);
 }
 
 __weak
-bool bmp_test_and_clear_bit(u32 bit, struct bitmap __arena *bmp)
+bool bmp_test_and_clear_bit(u32 bit, struct arena_bitmap __arena *bmp)
 {
 	u64 val = BIT_MASK(bit);
 	u32 idx = BIT_WORD(bit);
@@ -77,7 +77,7 @@ bool bmp_test_and_clear_bit(u32 bit, struct bitmap __arena *bmp)
 }
 
 __weak
-bool bmp_test_and_set_bit(u32 bit, struct bitmap __arena *bmp)
+bool bmp_test_and_set_bit(u32 bit, struct arena_bitmap __arena *bmp)
 {
 	u64 val = BIT_MASK(bit);
 	u32 idx = BIT_WORD(bit);
@@ -101,7 +101,7 @@ bool bmp_test_and_set_bit(u32 bit, struct bitmap __arena *bmp)
 }
 
 __weak
-void bmp_clear_bit(u32 bit, struct bitmap __arena *bmp)
+void bmp_clear_bit(u32 bit, struct arena_bitmap __arena *bmp)
 {
 	u64 val = BIT_MASK(bit);
 	u32 idx = BIT_WORD(bit);
@@ -116,7 +116,7 @@ void bmp_clear_bit(u32 bit, struct bitmap __arena *bmp)
 }
 
 __weak
-void bmp_set_bit(u32 bit, struct bitmap __arena *bmp)
+void bmp_set_bit(u32 bit, struct arena_bitmap __arena *bmp)
 {
 	u64 val = BIT_MASK(bit);
 	u32 idx = BIT_WORD(bit);
@@ -131,7 +131,7 @@ void bmp_set_bit(u32 bit, struct bitmap __arena *bmp)
 }
 
 __weak
-void bmp_clear(size_t bits, struct bitmap __arena *bmp)
+void bmp_clear(size_t bits, struct arena_bitmap __arena *bmp)
 {
 	size_t nwords = BITS_TO_LONG_LONGS(bits);
 	volatile u32 i;
@@ -148,7 +148,7 @@ static __always_inline u64 bmp_last_word_mask(size_t bits)
 }
 
 __weak
-void bmp_and(size_t bits, struct bitmap __arena *dst, struct bitmap __arena *src1, struct bitmap __arena *src2)
+void bmp_and(size_t bits, struct arena_bitmap __arena *dst, struct arena_bitmap __arena *src1, struct arena_bitmap __arena *src2)
 {
 	size_t nwords = BITS_TO_LONG_LONGS(bits);
 	volatile u32 i;
@@ -161,7 +161,7 @@ void bmp_and(size_t bits, struct bitmap __arena *dst, struct bitmap __arena *src
 }
 
 __weak
-void bmp_or(size_t bits, struct bitmap __arena *dst, struct bitmap __arena *src1, struct bitmap __arena *src2)
+void bmp_or(size_t bits, struct arena_bitmap __arena *dst, struct arena_bitmap __arena *src1, struct arena_bitmap __arena *src2)
 {
 	size_t nwords = BITS_TO_LONG_LONGS(bits);
 	volatile u32 i;
@@ -174,7 +174,7 @@ void bmp_or(size_t bits, struct bitmap __arena *dst, struct bitmap __arena *src1
 }
 
 __weak
-bool bmp_empty(size_t bits, struct bitmap __arena *bmp)
+bool bmp_empty(size_t bits, struct arena_bitmap __arena *bmp)
 {
 	size_t nwords = BITS_TO_LONG_LONGS(bits);
 	volatile u32 i;
@@ -190,7 +190,7 @@ bool bmp_empty(size_t bits, struct bitmap __arena *bmp)
 }
 
 __weak
-void bmp_copy(size_t bits, struct bitmap __arena *dst, struct bitmap __arena *src)
+void bmp_copy(size_t bits, struct arena_bitmap __arena *dst, struct arena_bitmap __arena *src)
 {
 	size_t nwords = BITS_TO_LONG_LONGS(bits);
 	volatile u32 i;
@@ -203,7 +203,7 @@ void bmp_copy(size_t bits, struct bitmap __arena *dst, struct bitmap __arena *sr
 }
 
 __weak
-bool bmp_subset(size_t bits, struct bitmap __arena *big, struct bitmap __arena *small)
+bool bmp_subset(size_t bits, struct arena_bitmap __arena *big, struct arena_bitmap __arena *small)
 {
 	size_t nwords = BITS_TO_LONG_LONGS(bits);
 	volatile u32 i;
@@ -219,7 +219,7 @@ bool bmp_subset(size_t bits, struct bitmap __arena *big, struct bitmap __arena *
 }
 
 __weak
-bool bmp_intersects(size_t bits, struct bitmap __arena *arg1, struct bitmap __arena *arg2)
+bool bmp_intersects(size_t bits, struct arena_bitmap __arena *arg1, struct arena_bitmap __arena *arg2)
 {
 	size_t nwords = BITS_TO_LONG_LONGS(bits);
 	volatile u32 i;
@@ -235,7 +235,7 @@ bool bmp_intersects(size_t bits, struct bitmap __arena *arg1, struct bitmap __ar
 }
 
 __weak
-void bmp_print(size_t bits, struct bitmap __arena *bmp)
+void bmp_print(size_t bits, struct arena_bitmap __arena *bmp)
 {
 	size_t nwords = BITS_TO_LONG_LONGS(bits);
 	volatile u32 i;

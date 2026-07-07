@@ -8,7 +8,7 @@
 #define MID_BIT		(BITS_PER_LONG_LONG + 1)
 #define LAST_BIT	(TEST_BITS - 1)
 
-static void test_bmp_setall(struct bitmap __arena *bmp)
+static void test_bmp_setall(struct arena_bitmap __arena *bmp)
 {
 	volatile u32 i;
 
@@ -19,7 +19,7 @@ static void test_bmp_setall(struct bitmap __arena *bmp)
 SEC("syscall")
 __weak int test_bitmap_alloc_free(void)
 {
-	struct bitmap __arena *bmp;
+	struct arena_bitmap __arena *bmp;
 
 	bmp = bmp_alloc(TEST_BITS);
 	if (!bmp)
@@ -47,7 +47,7 @@ err:
 SEC("syscall")
 __weak int test_bitmap_bit_ops(void)
 {
-	struct bitmap __arena *bmp;
+	struct arena_bitmap __arena *bmp;
 
 	bmp = bmp_alloc(TEST_BITS);
 	if (!bmp)
@@ -97,7 +97,7 @@ err:
 	return -EINVAL;
 }
 
-static bool test_bitmap_test_and_clear_single(struct bitmap __arena *bmp, size_t ind)
+static bool test_bitmap_test_and_clear_single(struct arena_bitmap __arena *bmp, size_t ind)
 {
 	if (bmp_test_and_clear_bit(ind, bmp))
 		return false;
@@ -116,7 +116,7 @@ static bool test_bitmap_test_and_clear_single(struct bitmap __arena *bmp, size_t
 	return true;
 }
 
-static bool test_bitmap_test_and_set_single(struct bitmap __arena *bmp, size_t ind)
+static bool test_bitmap_test_and_set_single(struct arena_bitmap __arena *bmp, size_t ind)
 {
 	if (bmp_test_and_set_bit(ind, bmp))
 		return false;
@@ -138,7 +138,7 @@ static bool test_bitmap_test_and_set_single(struct bitmap __arena *bmp, size_t i
 SEC("syscall")
 __weak int test_bitmap_test_and_clear_bit(void)
 {
-	struct bitmap __arena *bmp;
+	struct arena_bitmap __arena *bmp;
 
 	bmp = bmp_alloc(TEST_BITS);
 	if (!bmp)
@@ -167,7 +167,7 @@ err:
 SEC("syscall")
 __weak int test_bitmap_test_and_set_bit(void)
 {
-	struct bitmap __arena *bmp;
+	struct arena_bitmap __arena *bmp;
 
 	bmp = bmp_alloc(TEST_BITS);
 	if (!bmp)
@@ -194,7 +194,7 @@ err:
 SEC("syscall")
 __weak int test_bitmap_and(void)
 {
-	struct bitmap __arena *src1 = NULL, *src2 = NULL, *dst = NULL;
+	struct arena_bitmap __arena *src1 = NULL, *src2 = NULL, *dst = NULL;
 
 	src1 = bmp_alloc(TEST_BITS);
 	src2 = bmp_alloc(TEST_BITS);
@@ -240,7 +240,7 @@ err:
 SEC("syscall")
 __weak int test_bitmap_or(void)
 {
-	struct bitmap __arena *src1 = NULL, *src2 = NULL, *dst = NULL;
+	struct arena_bitmap __arena *src1 = NULL, *src2 = NULL, *dst = NULL;
 
 	src1 = bmp_alloc(TEST_BITS);
 	src2 = bmp_alloc(TEST_BITS);
@@ -285,7 +285,7 @@ err:
 SEC("syscall")
 __weak int test_bitmap_subset(void)
 {
-	struct bitmap __arena *big = NULL, *small = NULL;
+	struct arena_bitmap __arena *big = NULL, *small = NULL;
 
 	big = bmp_alloc(TEST_BITS);
 	small = bmp_alloc(TEST_BITS);
@@ -329,7 +329,7 @@ err:
 SEC("syscall")
 __weak int test_bitmap_intersects(void)
 {
-	struct bitmap __arena *arg1 = NULL, *arg2 = NULL;
+	struct arena_bitmap __arena *arg1 = NULL, *arg2 = NULL;
 
 	arg1 = bmp_alloc(TEST_BITS);
 	arg2 = bmp_alloc(TEST_BITS);
@@ -362,7 +362,7 @@ err:
 SEC("syscall")
 __weak int test_bitmap_copy(void)
 {
-	struct bitmap __arena *arg1 = NULL, *arg2 = NULL;
+	struct arena_bitmap __arena *arg1 = NULL, *arg2 = NULL;
 
 	arg1 = bmp_alloc(TEST_BITS);
 	arg2 = bmp_alloc(TEST_BITS);

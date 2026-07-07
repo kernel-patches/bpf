@@ -12,7 +12,7 @@
 #define TEST_BITMAP_SYNC_SPINS	BPF_MAX_LOOPS
 #define TEST_BITMAP_ITERS	10 * 1000 * 1000
 
-static struct bitmap __arena *bitmap;
+static struct arena_bitmap __arena *bitmap;
 static volatile u64 started;
 static volatile bool test_abort;
 
