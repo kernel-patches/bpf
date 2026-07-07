@@ -36,6 +36,9 @@
 #define ETH_FINE_DLY_GTXC	BIT(1)
 #define ETH_FINE_DLY_RXC	BIT(0)
 
+/* Peri Configuration register for mt8189 */
+#define MT8189_CTRL0_TXC_OUT_OP		BIT(20)
+
 /* Peri Configuration register for mt8195 */
 #define MT8195_PERI_ETH_CTRL_BASE	0xFD0
 
@@ -99,6 +102,7 @@ struct mediatek_dwmac_variant {
 	u32 tx_delay_max;
 	u32 peri_eth_ctrl_offset;
 	u8 dma_bit_mask;
+	bool use_out_op;
 };
 
 /* list of clocks required for mac */
@@ -291,6 +295,9 @@ static int set_phy_interface_v2(struct mediatek_dwmac_plat_data *plat,
 
 	/* MT8195 only support external PHY */
 	intf_val |= MT8195_EXT_PHY_MODE;
+
+	if (plat->variant->use_out_op)
+		intf_val |= MT8189_CTRL0_TXC_OUT_OP;
 
 	regmap_write(plat->peri_regmap,
 		     reg_offset + MT8195_PERI_ETH_CTRL0,
