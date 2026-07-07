@@ -124,7 +124,7 @@ bool mlx5e_psp_offload_handle_rx_skb(struct net_device *netdev, struct sk_buff *
 {
 	u32 psp_meta_data = be32_to_cpu(cqe->ft_metadata);
 	struct mlx5e_priv *priv = netdev_priv(netdev);
-	u16 dev_id = priv->psp->psp->id;
+	u16 dev_id = priv->psp->psd->id;
 	bool strip_icv = true;
 	u8 generation = 0;
 

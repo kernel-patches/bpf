@@ -1072,11 +1072,11 @@ void mlx5e_psp_unregister(struct mlx5e_priv *priv)
 {
 	struct mlx5e_psp *psp = priv->psp;
 
-	if (!psp || !psp->psp)
+	if (!psp || !psp->psd)
 		return;
 
-	psp_dev_unregister(psp->psp);
-	psp->psp = NULL;
+	psp_dev_unregister(psp->psd);
+	psp->psd = NULL;
 }
 
 void mlx5e_psp_register(struct mlx5e_priv *priv)
@@ -1100,7 +1100,7 @@ void mlx5e_psp_register(struct mlx5e_priv *priv)
 			      psd);
 		return;
 	}
-	psp->psp = psd;
+	psp->psd = psd;
 }
 
 int mlx5e_psp_init(struct mlx5e_priv *priv)
