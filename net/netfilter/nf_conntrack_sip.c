@@ -935,7 +935,7 @@ static int set_expected_rtp_rtcp(struct sk_buff *skb, unsigned int protoff,
 	union nf_inet_addr *saddr;
 	struct nf_conntrack_tuple tuple;
 	int direct_rtp = 0, skip_expect = 0, ret = NF_DROP;
-	u_int16_t base_port;
+	u16 base_port;
 	__be16 rtp_port, rtcp_port;
 	const struct nf_nat_sip_hooks *hooks;
 	struct nf_conn_help *help;
