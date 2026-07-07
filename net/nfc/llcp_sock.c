@@ -960,7 +960,8 @@ static void llcp_sock_destruct(struct sock *sk)
 
 	pr_debug("%p\n", sk);
 
-	if (sk->sk_state == LLCP_CONNECTED)
+	if (sk->sk_state == LLCP_CONNECTED ||
+	    sk->sk_state == LLCP_CONNECTING)
 		nfc_put_device(llcp_sock->dev);
 
 	skb_queue_purge(&sk->sk_receive_queue);
