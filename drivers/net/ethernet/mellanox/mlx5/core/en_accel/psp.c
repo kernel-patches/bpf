@@ -21,7 +21,7 @@ enum accel_psp_syndrome {
 	PSP_BAD_TRAILER,
 };
 
-struct mlx5e_psp_tx {
+struct mlx5e_psp_tx_table {
 	struct mlx5_flow_namespace *ns;
 	struct mlx5_flow_table *ft;
 	struct mlx5_flow_group *fg;
@@ -29,7 +29,7 @@ struct mlx5e_psp_tx {
 	struct mlx5_fc *tx_counter;
 };
 
-struct mlx5e_psp_rx_err {
+struct mlx5e_psp_rx_check_table {
 	struct mlx5_flow_table *ft;
 	struct mlx5_flow_handle *rule;
 	struct mlx5_flow_handle *auth_fail_rule;
@@ -37,18 +37,18 @@ struct mlx5e_psp_rx_err {
 	struct mlx5_flow_handle *bad_rule;
 };
 
-struct mlx5e_accel_fs_psp_prot {
+struct mlx5e_psp_rx_decrypt_table {
 	struct mlx5_flow_table *ft;
 	struct mlx5_flow_group *miss_group;
 	struct mlx5_flow_handle *miss_rule;
 	struct mlx5_modify_hdr *rx_modify_hdr;
 	struct mlx5_flow_destination default_dest;
-	struct mlx5e_psp_rx_err rx_err;
-	struct mlx5_flow_handle *def_rule;
+	struct mlx5e_psp_rx_check_table check;
+	struct mlx5_flow_handle *rule;
 };
 
-struct mlx5e_accel_fs_psp {
-	struct mlx5e_accel_fs_psp_prot fs_prot[ACCEL_FS_PSP_NUM_TYPES];
+struct mlx5e_psp_rx {
+	struct mlx5e_psp_rx_decrypt_table decrypt[ACCEL_FS_PSP_NUM_TYPES];
 	struct mlx5_fc *rx_counter;
 	struct mlx5_fc *rx_auth_fail_counter;
 	struct mlx5_fc *rx_err_counter;
@@ -57,10 +57,10 @@ struct mlx5e_accel_fs_psp {
 
 struct mlx5e_psp_fs {
 	struct mlx5_core_dev *mdev;
-	struct mlx5e_psp_tx *tx_fs;
+	struct mlx5e_psp_tx_table *tx_fs;
 	/* Rx manage */
 	struct mlx5e_flow_steering *fs;
-	struct mlx5e_accel_fs_psp *rx_fs;
+	struct mlx5e_psp_rx *rx_fs;
 };
 
 /* PSP RX flow steering */
@@ -157,14 +157,15 @@ static void accel_psp_fs_destroy_counter(struct mlx5_core_dev *dev,
 	}
 }
 
-static void accel_psp_fs_rx_err_destroy_ft(struct mlx5e_psp_fs *fs,
-					   struct mlx5e_psp_rx_err *rx_err)
+static
+void accel_psp_fs_rx_check_ft_destroy(struct mlx5e_psp_fs *fs,
+				      struct mlx5e_psp_rx_check_table *check)
 {
-	accel_psp_fs_del_flow_rule(&rx_err->bad_rule);
-	accel_psp_fs_del_flow_rule(&rx_err->err_rule);
-	accel_psp_fs_del_flow_rule(&rx_err->auth_fail_rule);
-	accel_psp_fs_del_flow_rule(&rx_err->rule);
-	accel_psp_fs_destroy_ft(&rx_err->ft);
+	accel_psp_fs_del_flow_rule(&check->bad_rule);
+	accel_psp_fs_del_flow_rule(&check->err_rule);
+	accel_psp_fs_del_flow_rule(&check->auth_fail_rule);
+	accel_psp_fs_del_flow_rule(&check->rule);
+	accel_psp_fs_destroy_ft(&check->ft);
 }
 
 static void accel_psp_setup_syndrome_match(struct mlx5_flow_spec *spec,
@@ -201,9 +202,9 @@ static int accel_psp_add_drop_rule(struct mlx5_flow_table *ft,
 }
 
 static
-int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
-				  struct mlx5e_accel_fs_psp_prot *fs_prot,
-				  struct mlx5e_psp_rx_err *rx_err)
+int accel_psp_fs_rx_check_ft_create(struct mlx5e_psp_fs *fs,
+				    struct mlx5e_psp_rx_decrypt_table *decrypt,
+				    struct mlx5e_psp_rx_check_table *check)
 {
 	struct mlx5_flow_table_attr ft_attr = {};
 	struct mlx5_core_dev *mdev = fs->mdev;
@@ -221,10 +222,10 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 	ft_attr.autogroup.max_num_groups = 2;
 	ft_attr.level = MLX5E_ACCEL_FS_ESP_FT_ERR_LEVEL;
 	ft_attr.prio = MLX5E_NIC_PRIO;
-	err = accel_psp_fs_create_ft(fs, &ft_attr, &rx_err->ft);
+	err = accel_psp_fs_create_ft(fs, &ft_attr, &check->ft);
 	if (err) {
 		mlx5_core_err(fs->mdev,
-			      "fail to create psp rx inline ft err=%d\n", err);
+			      "fail to create psp rx check ft err=%d\n", err);
 		goto out_err;
 	}
 
@@ -232,27 +233,28 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 	/* create fte */
 	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_FWD_DEST |
 			  MLX5_FLOW_CONTEXT_ACTION_COUNT;
-	dest[0].type = fs_prot->default_dest.type;
-	dest[0].ft = fs_prot->default_dest.ft;
+	dest[0].type = decrypt->default_dest.type;
+	dest[0].ft = decrypt->default_dest.ft;
 	dest[1].type = MLX5_FLOW_DESTINATION_TYPE_COUNTER;
 	dest[1].counter = fs->rx_fs->rx_counter;
-	fte = mlx5_add_flow_rules(rx_err->ft, spec, &flow_act, dest, 2);
+	fte = mlx5_add_flow_rules(check->ft, spec, &flow_act, dest, 2);
 	if (IS_ERR(fte)) {
 		err = PTR_ERR(fte);
-		mlx5_core_err(mdev, "fail to add psp rx err rule err=%d\n",
+		mlx5_core_err(mdev, "fail to add psp rx check ok rule err=%d\n",
 			      err);
 		goto out_err;
 	}
-	rx_err->rule = fte;
+	check->rule = fte;
 
 	/* add auth fail drop rule */
 	memset(spec, 0, sizeof(*spec));
 	accel_psp_setup_syndrome_match(spec, PSP_ICV_FAIL);
-	err = accel_psp_add_drop_rule(rx_err->ft, spec,
+	err = accel_psp_add_drop_rule(check->ft, spec,
 				      fs->rx_fs->rx_auth_fail_counter,
-				      &rx_err->auth_fail_rule);
+				      &check->auth_fail_rule);
 	if (err) {
-		mlx5_core_err(mdev, "fail to add psp rx auth fail drop rule err=%d\n",
+		mlx5_core_err(mdev,
+			      "fail to add psp rx check auth fail drop rule err=%d\n",
 			      err);
 		goto out_err;
 	}
@@ -260,22 +262,24 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 	/* add framing drop rule */
 	memset(spec, 0, sizeof(*spec));
 	accel_psp_setup_syndrome_match(spec, PSP_BAD_TRAILER);
-	err = accel_psp_add_drop_rule(rx_err->ft, spec,
+	err = accel_psp_add_drop_rule(check->ft, spec,
 				      fs->rx_fs->rx_err_counter,
-				      &rx_err->err_rule);
+				      &check->err_rule);
 	if (err) {
-		mlx5_core_err(mdev, "fail to add psp rx framing drop rule err=%d\n",
+		mlx5_core_err(mdev,
+			      "fail to add psp rx check framing drop rule err=%d\n",
 			      err);
 		goto out_err;
 	}
 
 	/* add misc. errors drop rule */
 	memset(spec, 0, sizeof(*spec));
-	err = accel_psp_add_drop_rule(rx_err->ft, spec,
+	err = accel_psp_add_drop_rule(check->ft, spec,
 				      fs->rx_fs->rx_bad_counter,
-				      &rx_err->bad_rule);
+				      &check->bad_rule);
 	if (err) {
-		mlx5_core_err(mdev, "fail to add psp rx misc. err drop rule err=%d\n",
+		mlx5_core_err(mdev,
+			      "fail to add psp rx check misc. err drop rule err=%d\n",
 			      err);
 		goto out_err;
 	}
@@ -283,24 +287,25 @@ int accel_psp_fs_rx_err_create_ft(struct mlx5e_psp_fs *fs,
 	goto out_spec;
 
 out_err:
-	accel_psp_fs_rx_err_destroy_ft(fs, rx_err);
+	accel_psp_fs_rx_check_ft_destroy(fs, check);
 out_spec:
 	kfree(spec);
 	return err;
 }
 
 
-static void accel_psp_fs_rx_fs_destroy(struct mlx5e_psp_fs *fs,
-				       struct mlx5e_accel_fs_psp_prot *fs_prot)
+static void
+accel_psp_fs_rx_decrypt_ft_destroy(struct mlx5e_psp_fs *fs,
+				   struct mlx5e_psp_rx_decrypt_table *decrypt)
 {
-	accel_psp_fs_del_flow_rule(&fs_prot->def_rule);
-	if (fs_prot->rx_modify_hdr) {
-		mlx5_modify_header_dealloc(fs->mdev, fs_prot->rx_modify_hdr);
-		fs_prot->rx_modify_hdr = NULL;
+	accel_psp_fs_del_flow_rule(&decrypt->rule);
+	if (decrypt->rx_modify_hdr) {
+		mlx5_modify_header_dealloc(fs->mdev, decrypt->rx_modify_hdr);
+		decrypt->rx_modify_hdr = NULL;
 	}
-	accel_psp_fs_del_flow_rule(&fs_prot->miss_rule);
-	accel_psp_fs_destroy_flow_group(&fs_prot->miss_group);
-	accel_psp_fs_destroy_ft(&fs_prot->ft);
+	accel_psp_fs_del_flow_rule(&decrypt->miss_rule);
+	accel_psp_fs_destroy_flow_group(&decrypt->miss_group);
+	accel_psp_fs_destroy_ft(&decrypt->ft);
 }
 
 static void setup_fte_udp_psp(struct mlx5_flow_spec *spec, u16 udp_port)
@@ -312,8 +317,9 @@ static void setup_fte_udp_psp(struct mlx5_flow_spec *spec, u16 udp_port)
 	MLX5_SET(fte_match_set_lyr_2_4, spec->match_value, ip_protocol, IPPROTO_UDP);
 }
 
-static int accel_psp_fs_rx_create_ft(struct mlx5e_psp_fs *fs,
-				     struct mlx5e_accel_fs_psp_prot *fs_prot)
+static int
+accel_psp_fs_rx_decrypt_ft_create(struct mlx5e_psp_fs *fs,
+				  struct mlx5e_psp_rx_decrypt_table *decrypt)
 {
 	u8 action[MLX5_UN_SZ_BYTES(set_add_copy_action_in_auto)] = {};
 	struct mlx5_modify_hdr *modify_hdr = NULL;
@@ -335,30 +341,36 @@ static int accel_psp_fs_rx_create_ft(struct mlx5e_psp_fs *fs,
 	ft_attr.autogroup.num_reserved_entries = 1;
 	ft_attr.autogroup.max_num_groups = 1;
 	ft_attr.prio = MLX5E_NIC_PRIO;
-	err = accel_psp_fs_create_ft(fs, &ft_attr, &fs_prot->ft);
+	err = accel_psp_fs_create_ft(fs, &ft_attr, &decrypt->ft);
 	if (err) {
-		mlx5_core_err(mdev, "fail to create psp rx ft err=%d\n", err);
+		mlx5_core_err(mdev, "fail to create psp rx decrypt ft err=%d\n",
+			      err);
 		goto out_err;
 	}
 
 	/* Create miss_group */
-	err = accel_psp_fs_create_miss_group(fs_prot->ft, &fs_prot->miss_group);
+	err = accel_psp_fs_create_miss_group(decrypt->ft, &decrypt->miss_group);
 	if (err) {
-		mlx5_core_err(mdev, "fail to create psp rx miss_group err=%d\n", err);
+		mlx5_core_err(mdev,
+			      "fail to create psp rx decrypt miss_group err=%d\n",
+			      err);
 		goto out_err;
 	}
 
 	/* Create miss rule */
-	rule = mlx5_add_flow_rules(fs_prot->ft, spec, &flow_act,
-				   &fs_prot->default_dest, 1);
+	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_FWD_DEST;
+	rule = mlx5_add_flow_rules(decrypt->ft, spec, &flow_act,
+				   &decrypt->default_dest, 1);
 	if (IS_ERR(rule)) {
 		err = PTR_ERR(rule);
-		mlx5_core_err(mdev, "fail to create psp rx miss_rule err=%d\n", err);
+		mlx5_core_err(mdev,
+			      "fail to create psp rx decrypt miss_rule err=%d\n",
+			      err);
 		goto out_err;
 	}
-	fs_prot->miss_rule = rule;
+	decrypt->miss_rule = rule;
 
-	/* Add default Rx psp rule */
+	/* Add PSP RX decrypt rule */
 	setup_fte_udp_psp(spec, PSP_DEFAULT_UDP_PORT);
 	flow_act.crypto.type = MLX5_FLOW_CONTEXT_ENCRYPT_DECRYPT_TYPE_PSP;
 	/* Set bit[31, 30] PSP marker */
@@ -376,46 +388,44 @@ static int accel_psp_fs_rx_create_ft(struct mlx5e_psp_fs *fs,
 		modify_hdr = NULL;
 		goto out_err;
 	}
-	fs_prot->rx_modify_hdr = modify_hdr;
+	decrypt->rx_modify_hdr = modify_hdr;
 
 	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_FWD_DEST |
 			  MLX5_FLOW_CONTEXT_ACTION_CRYPTO_DECRYPT |
 			  MLX5_FLOW_CONTEXT_ACTION_MOD_HDR;
 	flow_act.modify_hdr = modify_hdr;
 	dest.type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
-	dest.ft = fs_prot->rx_err.ft;
-	rule = mlx5_add_flow_rules(fs_prot->ft, spec, &flow_act, &dest, 1);
+	dest.ft = decrypt->check.ft;
+	rule = mlx5_add_flow_rules(decrypt->ft, spec, &flow_act, &dest, 1);
 	if (IS_ERR(rule)) {
 		err = PTR_ERR(rule);
-		mlx5_core_err(mdev,
-			      "fail to add psp rule Rx decryption, err=%d, flow_act.action = %#04X\n",
-			      err, flow_act.action);
+		mlx5_core_err(mdev, "fail to add psp rx decrypt rule, err=%d\n",
+			      err);
 		goto out_err;
 	}
 
-	fs_prot->def_rule = rule;
+	decrypt->rule = rule;
 	goto out_spec;
 
 out_err:
-	accel_psp_fs_rx_fs_destroy(fs, fs_prot);
+	accel_psp_fs_rx_decrypt_ft_destroy(fs, decrypt);
 out_spec:
 	kvfree(spec);
 	return err;
 }
 
-static int accel_psp_fs_rx_destroy(struct mlx5e_psp_fs *fs, enum accel_fs_psp_type type)
+static int accel_psp_fs_rx_destroy(struct mlx5e_psp_fs *fs,
+				   enum accel_fs_psp_type type)
 {
-	struct mlx5e_accel_fs_psp_prot *fs_prot;
-	struct mlx5e_accel_fs_psp *accel_psp;
-
-	accel_psp = fs->rx_fs;
+	struct mlx5e_psp_rx_decrypt_table *decrypt;
+	struct mlx5e_psp_rx *rx_fs = fs->rx_fs;
 
 	/* The netdev unreg already happened, so all offloaded rule are already removed */
-	fs_prot = &accel_psp->fs_prot[type];
+	decrypt = &rx_fs->decrypt[type];
 
-	accel_psp_fs_rx_fs_destroy(fs, fs_prot);
+	accel_psp_fs_rx_decrypt_ft_destroy(fs, decrypt);
 
-	accel_psp_fs_rx_err_destroy_ft(fs, &fs_prot->rx_err);
+	accel_psp_fs_rx_check_ft_destroy(fs, &decrypt->check);
 
 	return 0;
 }
@@ -423,43 +433,45 @@ static int accel_psp_fs_rx_destroy(struct mlx5e_psp_fs *fs, enum accel_fs_psp_ty
 static int accel_psp_fs_rx_create(struct mlx5e_psp_fs *fs, enum accel_fs_psp_type type)
 {
 	struct mlx5_ttc_table *ttc = mlx5e_fs_get_ttc(fs->fs, false);
-	struct mlx5e_accel_fs_psp_prot *fs_prot;
-	struct mlx5e_accel_fs_psp *accel_psp;
+	struct mlx5e_psp_rx_decrypt_table *decrypt;
+	struct mlx5e_psp_rx *rx_fs = fs->rx_fs;
 	int err;
 
-	accel_psp = fs->rx_fs;
-	fs_prot = &accel_psp->fs_prot[type];
+	decrypt = &rx_fs->decrypt[type];
+	decrypt->default_dest = mlx5_ttc_get_default_dest(ttc,
+							  fs_psp2tt(type));
 
-	fs_prot->default_dest = mlx5_ttc_get_default_dest(ttc, fs_psp2tt(type));
-
-	err = accel_psp_fs_rx_err_create_ft(fs, fs_prot, &fs_prot->rx_err);
+	err = accel_psp_fs_rx_check_ft_create(fs, decrypt, &decrypt->check);
 	if (err)
 		return err;
 
-	err = accel_psp_fs_rx_create_ft(fs, fs_prot);
+	err = accel_psp_fs_rx_decrypt_ft_create(fs, decrypt);
 	if (err)
-		accel_psp_fs_rx_err_destroy_ft(fs, &fs_prot->rx_err);
+		goto out_err_ft;
 
+	return 0;
+
+out_err_ft:
+	accel_psp_fs_rx_check_ft_destroy(fs, &decrypt->check);
 	return err;
 }
 
-static void accel_psp_fs_cleanup_rx(struct mlx5e_psp_fs *fs)
+static void accel_psp_fs_rx_cleanup(struct mlx5e_psp_fs *fs)
 {
-	struct mlx5e_accel_fs_psp *accel_psp = fs->rx_fs;
+	struct mlx5e_psp_rx *rx_fs = fs->rx_fs;
 
-	if (!accel_psp)
+	if (!rx_fs)
 		return;
 
-	accel_psp_fs_destroy_counter(fs->mdev, &accel_psp->rx_bad_counter);
-	accel_psp_fs_destroy_counter(fs->mdev, &accel_psp->rx_err_counter);
-	accel_psp_fs_destroy_counter(fs->mdev,
-				     &accel_psp->rx_auth_fail_counter);
-	accel_psp_fs_destroy_counter(fs->mdev, &accel_psp->rx_counter);
-	kfree(accel_psp);
+	accel_psp_fs_destroy_counter(fs->mdev, &rx_fs->rx_bad_counter);
+	accel_psp_fs_destroy_counter(fs->mdev, &rx_fs->rx_err_counter);
+	accel_psp_fs_destroy_counter(fs->mdev, &rx_fs->rx_auth_fail_counter);
+	accel_psp_fs_destroy_counter(fs->mdev, &rx_fs->rx_counter);
+	kfree(rx_fs);
 	fs->rx_fs = NULL;
 }
 
-static int accel_psp_fs_init_rx(struct mlx5e_psp_fs *fs)
+static int accel_psp_fs_rx_init(struct mlx5e_psp_fs *fs)
 {
 	struct mlx5_core_dev *mdev = fs->mdev;
 	int err;
@@ -504,7 +516,7 @@ static int accel_psp_fs_init_rx(struct mlx5e_psp_fs *fs)
 	return 0;
 
 out_err:
-	accel_psp_fs_cleanup_rx(fs);
+	accel_psp_fs_rx_cleanup(fs);
 	return err;
 }
 
@@ -541,7 +553,7 @@ int mlx5_accel_psp_fs_init_rx_tables(struct mlx5e_priv *priv)
 	ttc = mlx5e_fs_get_ttc(fs->fs, false);
 
 	for (i = 0; i < ACCEL_FS_PSP_NUM_TYPES; i++) {
-		struct mlx5e_accel_fs_psp_prot *fs_prot;
+		struct mlx5e_psp_rx_decrypt_table *decrypt;
 		struct mlx5_flow_destination dest = {};
 
 		/* create FT */
@@ -551,8 +563,8 @@ int mlx5_accel_psp_fs_init_rx_tables(struct mlx5e_priv *priv)
 
 		/* connect */
 		dest.type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
-		fs_prot = &fs->rx_fs->fs_prot[i];
-		dest.ft = fs_prot->ft;
+		decrypt = &fs->rx_fs->decrypt[i];
+		dest.ft = decrypt->ft;
 		mlx5_ttc_fwd_dest(ttc, fs_psp2tt(i), &dest);
 	}
 
@@ -567,17 +579,17 @@ out_err:
 	return err;
 }
 
-static int accel_psp_fs_tx_create_ft_table(struct mlx5e_psp_fs *fs)
+static int accel_psp_fs_tx_ft_create(struct mlx5e_psp_fs *fs)
 {
 	int inlen = MLX5_ST_SZ_BYTES(create_flow_group_in);
 	struct mlx5_flow_table_attr ft_attr = {};
 	struct mlx5_flow_destination dest = {};
 	struct mlx5_core_dev *mdev = fs->mdev;
 	struct mlx5_flow_act flow_act = {};
+	struct mlx5e_psp_tx_table *tx_fs;
 	u32 *in, *mc, *outer_headers_c;
 	struct mlx5_flow_handle *rule;
 	struct mlx5_flow_spec *spec;
-	struct mlx5e_psp_tx *tx_fs;
 	struct mlx5_flow_table *ft;
 	struct mlx5_flow_group *fg;
 	int err = 0;
@@ -646,16 +658,16 @@ out:
 	return err;
 }
 
-static void accel_psp_fs_tx_destroy(struct mlx5e_psp_tx *tx_fs)
+static void accel_psp_fs_tx_ft_destroy(struct mlx5e_psp_tx_table *tx_fs)
 {
 	accel_psp_fs_del_flow_rule(&tx_fs->rule);
 	accel_psp_fs_destroy_flow_group(&tx_fs->fg);
 	accel_psp_fs_destroy_ft(&tx_fs->ft);
 }
 
-static void accel_psp_fs_cleanup_tx(struct mlx5e_psp_fs *fs)
+static void accel_psp_fs_tx_cleanup(struct mlx5e_psp_fs *fs)
 {
-	struct mlx5e_psp_tx *tx_fs = fs->tx_fs;
+	struct mlx5e_psp_tx_table *tx_fs = fs->tx_fs;
 
 	if (!tx_fs)
 		return;
@@ -665,11 +677,11 @@ static void accel_psp_fs_cleanup_tx(struct mlx5e_psp_fs *fs)
 	fs->tx_fs = NULL;
 }
 
-static int accel_psp_fs_init_tx(struct mlx5e_psp_fs *fs)
+static int accel_psp_fs_tx_init(struct mlx5e_psp_fs *fs)
 {
 	struct mlx5_core_dev *mdev = fs->mdev;
+	struct mlx5e_psp_tx_table *tx_fs;
 	struct mlx5_flow_namespace *ns;
-	struct mlx5e_psp_tx *tx_fs;
 	int err;
 
 	ns = mlx5_get_flow_namespace(mdev, MLX5_FLOW_NAMESPACE_EGRESS_IPSEC);
@@ -697,32 +709,30 @@ static void
 mlx5e_accel_psp_fs_get_stats_fill(struct mlx5e_priv *priv,
 				  struct mlx5e_psp_stats *stats)
 {
-	struct mlx5e_psp_tx *tx_fs = priv->psp->fs->tx_fs;
+	struct mlx5e_psp_tx_table *tx_fs = priv->psp->fs->tx_fs;
+	struct mlx5e_psp_rx *rx_fs = priv->psp->fs->rx_fs;
 	struct mlx5_core_dev *mdev = priv->mdev;
-	struct mlx5e_accel_fs_psp *accel_psp;
-
-	accel_psp = (struct mlx5e_accel_fs_psp *)priv->psp->fs->rx_fs;
 
 	if (tx_fs->tx_counter)
 		mlx5_fc_query(mdev, tx_fs->tx_counter, &stats->psp_tx_pkts,
 			      &stats->psp_tx_bytes);
 
-	if (accel_psp->rx_counter)
-		mlx5_fc_query(mdev, accel_psp->rx_counter, &stats->psp_rx_pkts,
+	if (rx_fs->rx_counter)
+		mlx5_fc_query(mdev, rx_fs->rx_counter, &stats->psp_rx_pkts,
 			      &stats->psp_rx_bytes);
 
-	if (accel_psp->rx_auth_fail_counter)
-		mlx5_fc_query(mdev, accel_psp->rx_auth_fail_counter,
+	if (rx_fs->rx_auth_fail_counter)
+		mlx5_fc_query(mdev, rx_fs->rx_auth_fail_counter,
 			      &stats->psp_rx_pkts_auth_fail,
 			      &stats->psp_rx_bytes_auth_fail);
 
-	if (accel_psp->rx_err_counter)
-		mlx5_fc_query(mdev, accel_psp->rx_err_counter,
+	if (rx_fs->rx_err_counter)
+		mlx5_fc_query(mdev, rx_fs->rx_err_counter,
 			      &stats->psp_rx_pkts_frame_err,
 			      &stats->psp_rx_bytes_frame_err);
 
-	if (accel_psp->rx_bad_counter)
-		mlx5_fc_query(mdev, accel_psp->rx_bad_counter,
+	if (rx_fs->rx_bad_counter)
+		mlx5_fc_query(mdev, rx_fs->rx_bad_counter,
 			      &stats->psp_rx_pkts_drop,
 			      &stats->psp_rx_bytes_drop);
 }
@@ -732,7 +742,7 @@ void mlx5_accel_psp_fs_cleanup_tx_tables(struct mlx5e_priv *priv)
 	if (!priv->psp)
 		return;
 
-	accel_psp_fs_tx_destroy(priv->psp->fs->tx_fs);
+	accel_psp_fs_tx_ft_destroy(priv->psp->fs->tx_fs);
 }
 
 int mlx5_accel_psp_fs_init_tx_tables(struct mlx5e_priv *priv)
@@ -740,13 +750,13 @@ int mlx5_accel_psp_fs_init_tx_tables(struct mlx5e_priv *priv)
 	if (!priv->psp)
 		return 0;
 
-	return accel_psp_fs_tx_create_ft_table(priv->psp->fs);
+	return accel_psp_fs_tx_ft_create(priv->psp->fs);
 }
 
 static void mlx5e_accel_psp_fs_cleanup(struct mlx5e_psp_fs *fs)
 {
-	accel_psp_fs_cleanup_rx(fs);
-	accel_psp_fs_cleanup_tx(fs);
+	accel_psp_fs_rx_cleanup(fs);
+	accel_psp_fs_tx_cleanup(fs);
 	kfree(fs);
 }
 
@@ -760,19 +770,19 @@ static struct mlx5e_psp_fs *mlx5e_accel_psp_fs_init(struct mlx5e_priv *priv)
 		return ERR_PTR(-ENOMEM);
 
 	fs->mdev = priv->mdev;
-	err = accel_psp_fs_init_tx(fs);
+	err = accel_psp_fs_tx_init(fs);
 	if (err)
 		goto err_tx;
 
 	fs->fs = priv->fs;
-	err = accel_psp_fs_init_rx(fs);
+	err = accel_psp_fs_rx_init(fs);
 	if (err)
 		goto err_rx;
 
 	return fs;
 
 err_rx:
-	accel_psp_fs_cleanup_tx(fs);
+	accel_psp_fs_tx_cleanup(fs);
 err_tx:
 	kfree(fs);
 	return ERR_PTR(err);
