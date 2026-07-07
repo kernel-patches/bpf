@@ -43,7 +43,6 @@ struct mlx5e_psp_rx_decrypt_table {
 	struct mlx5_flow_group *miss_group;
 	struct mlx5_flow_handle *miss_rule;
 	struct mlx5_modify_hdr *rx_modify_hdr;
-	struct mlx5e_psp_rx_check_table check;
 	struct mlx5_flow_handle *rule;
 };
 
@@ -69,6 +68,7 @@ struct mlx5e_psp_fs {
 	struct mlx5e_flow_steering *fs;
 	struct mlx5e_psp_rx *rx_fs;
 
+	struct mlx5e_psp_rx_check_table check;
 	struct mlx5e_psp_rx_table rx;
 };
 
@@ -267,8 +267,7 @@ out_spec:
 }
 
 static
-void accel_psp_fs_rx_check_ft_destroy(struct mlx5e_psp_fs *fs,
-				      struct mlx5e_psp_rx_check_table *check)
+void accel_psp_fs_rx_check_ft_destroy(struct mlx5e_psp_rx_check_table *check)
 {
 	accel_psp_fs_del_flow_rule(&check->bad_rule);
 	accel_psp_fs_del_flow_rule(&check->err_rule);
@@ -402,12 +401,11 @@ int accel_psp_fs_rx_check_ft_create(struct mlx5e_psp_fs *fs,
 	goto out_spec;
 
 out_err:
-	accel_psp_fs_rx_check_ft_destroy(fs, check);
+	accel_psp_fs_rx_check_ft_destroy(check);
 out_spec:
 	kfree(spec);
 	return err;
 }
-
 
 static void
 accel_psp_fs_rx_decrypt_ft_destroy(struct mlx5e_psp_fs *fs,
@@ -511,7 +509,7 @@ accel_psp_fs_rx_decrypt_ft_create(struct mlx5e_psp_fs *fs,
 			  MLX5_FLOW_CONTEXT_ACTION_MOD_HDR;
 	flow_act.modify_hdr = modify_hdr;
 	dest.type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
-	dest.ft = decrypt->check.ft;
+	dest.ft = fs->check.ft;
 	rule = mlx5_add_flow_rules(decrypt->ft, spec, &flow_act, &dest, 1);
 	if (IS_ERR(rule)) {
 		err = PTR_ERR(rule);
@@ -541,8 +539,6 @@ static int accel_psp_fs_rx_destroy(struct mlx5e_psp_fs *fs,
 
 	accel_psp_fs_rx_decrypt_ft_destroy(fs, decrypt);
 
-	accel_psp_fs_rx_check_ft_destroy(fs, &decrypt->check);
-
 	return 0;
 }
 
@@ -552,24 +548,11 @@ static int accel_psp_fs_rx_create(struct mlx5e_psp_fs *fs, enum accel_fs_psp_typ
 	struct mlx5e_psp_rx_decrypt_table *decrypt;
 	struct mlx5e_psp_rx *rx_fs = fs->rx_fs;
 	struct mlx5_flow_destination dest = {};
-	int err;
 
 	decrypt = &rx_fs->decrypt[type];
 
-	err = accel_psp_fs_rx_check_ft_create(fs, &decrypt->check);
-	if (err)
-		return err;
-
 	dest = mlx5_ttc_get_default_dest(ttc, fs_psp2tt(type));
-	err = accel_psp_fs_rx_decrypt_ft_create(fs, decrypt, &dest);
-	if (err)
-		goto out_err_ft;
-
-	return 0;
-
-out_err_ft:
-	accel_psp_fs_rx_check_ft_destroy(fs, &decrypt->check);
-	return err;
+	return accel_psp_fs_rx_decrypt_ft_create(fs, decrypt, &dest);
 }
 
 static void accel_psp_fs_rx_cleanup(struct mlx5e_psp_fs *fs)
@@ -654,6 +637,7 @@ void mlx5_accel_psp_fs_cleanup_rx_tables(struct mlx5e_priv *priv)
 		/* remove FT */
 		accel_psp_fs_rx_destroy(fs, i);
 	}
+	accel_psp_fs_rx_check_ft_destroy(&fs->check);
 	accel_psp_fs_rx_ft_destroy(&priv->psp->fs->rx);
 }
 
@@ -672,6 +656,10 @@ int mlx5_accel_psp_fs_init_rx_tables(struct mlx5e_priv *priv)
 	err = accel_psp_fs_rx_ft_create(fs, &fs->rx);
 	if (err)
 		return err;
+
+	err = accel_psp_fs_rx_check_ft_create(fs, &fs->check);
+	if (err)
+		goto err_ft;
 
 	for (i = 0; i < ACCEL_FS_PSP_NUM_TYPES; i++) {
 		struct mlx5e_psp_rx_decrypt_table *decrypt;
@@ -696,6 +684,8 @@ out_err:
 		mlx5_ttc_fwd_default_dest(ttc, fs_psp2tt(i));
 		accel_psp_fs_rx_destroy(fs, i);
 	}
+	accel_psp_fs_rx_check_ft_destroy(&fs->check);
+err_ft:
 	accel_psp_fs_rx_ft_destroy(&fs->rx);
 
 	return err;
