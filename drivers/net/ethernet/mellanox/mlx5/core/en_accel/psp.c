@@ -537,18 +537,24 @@ static void accel_psp_fs_rx_destroy(struct mlx5e_psp_fs *fs)
 	accel_psp_fs_rx_ft_destroy(&fs->rx);
 }
 
-static int accel_psp_fs_rx_create(struct mlx5e_psp_fs *fs)
+static int accel_psp_fs_rx_create(struct mlx5e_psp_fs *fs,
+				  struct netlink_ext_ack *extack)
 {
 	struct mlx5_ttc_table *ttc = mlx5e_fs_get_ttc(fs->fs, false);
 	int i, err;
 
 	err = accel_psp_fs_rx_ft_create(fs, &fs->rx);
-	if (err)
+	if (err) {
+		NL_SET_ERR_MSG(extack, "Failed creating RX steering table");
 		return err;
+	}
 
 	err = accel_psp_fs_rx_check_ft_create(fs, &fs->check);
-	if (err)
+	if (err) {
+		NL_SET_ERR_MSG(extack,
+			       "Failed creating RX check steering table");
 		goto err_ft;
+	}
 
 	for (i = 0; i < ACCEL_FS_PSP_NUM_TYPES; i++) {
 		struct mlx5_flow_destination dest;
@@ -556,8 +562,11 @@ static int accel_psp_fs_rx_create(struct mlx5e_psp_fs *fs)
 		dest = mlx5_ttc_get_default_dest(ttc, fs_psp2tt(i));
 		err = accel_psp_fs_rx_decrypt_ft_create(fs, &fs->decrypt[i],
 							&dest);
-		if (err)
+		if (err) {
+			NL_SET_ERR_MSG(extack,
+				       "Failed creating RX decrypt steering table");
 			goto err_decrypt_ft;
+		}
 
 		dest.type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
 		dest.ft = fs->decrypt[i].ft;
@@ -634,15 +643,9 @@ void mlx5_accel_psp_fs_cleanup_rx_tables(struct mlx5e_priv *priv)
 	if (!priv->psp)
 		return;
 
+	netdev_lock(priv->netdev);
 	accel_psp_fs_rx_destroy(priv->psp->fs);
-}
-
-int mlx5_accel_psp_fs_init_rx_tables(struct mlx5e_priv *priv)
-{
-	if (!priv->psp)
-		return 0;
-
-	return accel_psp_fs_rx_create(priv->psp->fs);
+	netdev_unlock(priv->netdev);
 }
 
 static int accel_psp_fs_tx_ft_create(struct mlx5e_psp_fs *fs,
@@ -791,15 +794,9 @@ void mlx5_accel_psp_fs_cleanup_tx_tables(struct mlx5e_priv *priv)
 	if (!priv->psp)
 		return;
 
+	netdev_lock(priv->netdev);
 	accel_psp_fs_tx_ft_destroy(&priv->psp->fs->tx);
-}
-
-int mlx5_accel_psp_fs_init_tx_tables(struct mlx5e_priv *priv)
-{
-	if (!priv->psp)
-		return 0;
-
-	return accel_psp_fs_tx_ft_create(priv->psp->fs, &priv->psp->fs->tx);
+	netdev_unlock(priv->netdev);
 }
 
 static void mlx5e_accel_psp_fs_cleanup(struct mlx5e_psp_fs *fs)
@@ -837,11 +834,45 @@ err_tx:
 	return ERR_PTR(err);
 }
 
+static int accel_psp_fs_create(struct mlx5e_priv *priv,
+			       struct netlink_ext_ack *extack)
+{
+	int err;
+
+	err = accel_psp_fs_rx_create(priv->psp->fs, extack);
+	if (err)
+		return err;
+
+	err = accel_psp_fs_tx_ft_create(priv->psp->fs, &priv->psp->fs->tx);
+	if (err) {
+		NL_SET_ERR_MSG(extack, "Failed creating TX steering table");
+		accel_psp_fs_rx_destroy(priv->psp->fs);
+	}
+	return err;
+}
+
+static void accel_psp_fs_destroy(struct mlx5e_priv *priv)
+{
+	accel_psp_fs_tx_ft_destroy(&priv->psp->fs->tx);
+	accel_psp_fs_rx_destroy(priv->psp->fs);
+}
+
 static int
 mlx5e_psp_set_config(struct psp_dev *psd, struct psp_dev_config *conf,
 		     struct netlink_ext_ack *extack)
 {
-	return 0; /* TODO: this should actually do things to the device */
+	struct mlx5e_priv *priv = netdev_priv(psd->main_netdev);
+	bool psp_enabled = psd->config.versions;
+	bool enable_psp = conf->versions;
+	int err = 0;
+
+	netdev_lock(priv->netdev);
+	if (!psp_enabled && enable_psp)
+		err = accel_psp_fs_create(priv, extack);
+	else if (psp_enabled && !enable_psp)
+		accel_psp_fs_destroy(priv);
+	netdev_unlock(priv->netdev);
+	return err;
 }
 
 static int
