@@ -31,6 +31,7 @@ struct mlx5e_psp_tx_table {
 
 struct mlx5e_psp_rx_check_table {
 	struct mlx5_flow_table *ft;
+	struct mlx5_flow_group *drop_group;
 	struct mlx5_flow_handle *rule;
 	struct mlx5_flow_handle *auth_fail_rule;
 	struct mlx5_flow_handle *err_rule;
@@ -165,6 +166,7 @@ void accel_psp_fs_rx_check_ft_destroy(struct mlx5e_psp_fs *fs,
 	accel_psp_fs_del_flow_rule(&check->err_rule);
 	accel_psp_fs_del_flow_rule(&check->auth_fail_rule);
 	accel_psp_fs_del_flow_rule(&check->rule);
+	accel_psp_fs_destroy_flow_group(&check->drop_group);
 	accel_psp_fs_destroy_ft(&check->ft);
 }
 
@@ -218,7 +220,8 @@ int accel_psp_fs_rx_check_ft_create(struct mlx5e_psp_fs *fs,
 	if (!spec)
 		return -ENOMEM;
 
-	ft_attr.max_fte = 2;
+	ft_attr.max_fte = 4;
+	ft_attr.autogroup.num_reserved_entries = 1;
 	ft_attr.autogroup.max_num_groups = 2;
 	ft_attr.level = MLX5E_ACCEL_FS_ESP_FT_ERR_LEVEL;
 	ft_attr.prio = MLX5E_NIC_PRIO;
@@ -226,6 +229,14 @@ int accel_psp_fs_rx_check_ft_create(struct mlx5e_psp_fs *fs,
 	if (err) {
 		mlx5_core_err(fs->mdev,
 			      "fail to create psp rx check ft err=%d\n", err);
+		goto out_err;
+	}
+
+	err = accel_psp_fs_create_miss_group(check->ft, &check->drop_group);
+	if (err) {
+		mlx5_core_err(fs->mdev,
+			      "fail to create psp rx check drop group err=%d\n",
+			      err);
 		goto out_err;
 	}
 
