@@ -37,6 +37,8 @@
 #define ETH_FINE_DLY_RXC	BIT(0)
 
 /* Peri Configuration register for mt8189 */
+#define MT8189_PERI_ETH_CTRL_BASE		0x270
+
 #define MT8189_CTRL0_TXC_OUT_OP			BIT(20)
 #define MT8189_CTRL0_DLY_GTXC_STAGE_FINE	GENMASK(11, 6)
 
@@ -114,6 +116,10 @@ static const char * const mt2712_dwmac_clk_l[] = {
 
 static const char * const mt8195_dwmac_clk_l[] = {
 	"axi", "apb", "mac_cg", "mac_main", "ptp_ref"
+};
+
+static const char * const mt8189_dwmac_clk_l[] = {
+	"mac_main", "ptp_ref"
 };
 
 static int set_phy_interface_v1(struct mediatek_dwmac_plat_data *plat,
@@ -444,6 +450,19 @@ static int set_delay_v2(struct mediatek_dwmac_plat_data *plat)
 	return 0;
 }
 
+static const struct mediatek_dwmac_variant mt8189_gmac_variant = {
+	.dwmac_set_phy_interface = set_phy_interface_v2,
+	.dwmac_set_delay = set_delay_v2,
+	.clk_list = mt8189_dwmac_clk_l,
+	.num_clks = ARRAY_SIZE(mt8189_dwmac_clk_l),
+	.dma_bit_mask = 35,
+	.rx_delay_max = 9280,
+	.tx_delay_max = 9280,
+	.peri_eth_ctrl_offset = MT8189_PERI_ETH_CTRL_BASE,
+	.use_out_op = true,
+	.use_stage_fine = true,
+};
+
 static const struct mediatek_dwmac_variant mt8195_gmac_variant = {
 	.dwmac_set_phy_interface = set_phy_interface_v2,
 	.dwmac_set_delay = set_delay_v2,
@@ -694,6 +713,8 @@ static void mediatek_dwmac_remove(struct platform_device *pdev)
 static const struct of_device_id mediatek_dwmac_match[] = {
 	{ .compatible = "mediatek,mt2712-gmac",
 	  .data = &mt2712_gmac_variant },
+	{ .compatible = "mediatek,mt8189-gmac",
+	  .data = &mt8189_gmac_variant },
 	{ .compatible = "mediatek,mt8195-gmac",
 	  .data = &mt8195_gmac_variant },
 	{ }
