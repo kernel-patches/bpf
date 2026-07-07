@@ -882,7 +882,7 @@ static inline enum ip_defrag_users ip_vs_defrag_user(unsigned int hooknum)
 }
 
 static inline int ip_vs_gather_frags(struct netns_ipvs *ipvs,
-				     struct sk_buff *skb, u_int32_t user)
+				     struct sk_buff *skb, u32 user)
 {
 	int err;
 
