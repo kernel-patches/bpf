@@ -136,7 +136,7 @@ static int s3fwrn82_uart_probe(struct serdev_device *serdev)
 	}
 
 	ret = s3fwrn5_probe(&phy->common.ndev, phy, &phy->ser_dev->dev,
-			    &uart_phy_ops);
+			    &uart_phy_ops, S3FWRN5_VARIANT_FWDL);
 	if (ret < 0)
 		goto err_serdev;
 

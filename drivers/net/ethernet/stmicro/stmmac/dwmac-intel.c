@@ -536,6 +536,15 @@ static int intel_mac_finish(struct net_device *ndev,
 	int max_regs = 0;
 	int ret = 0;
 
+	/* mac_finish() runs at the end of every major link reconfiguration,
+	 * including the initial one at probe, where the interface mode has
+	 * not actually changed. Reprogramming and power-cycling the SerDes is
+	 * only needed on a real mode change and is otherwise needlessly
+	 * disruptive, so skip it when the mode is unchanged.
+	 */
+	if (priv->plat->phy_interface == interface)
+		return 0;
+
 	ret = intel_tsn_lane_is_available(ndev, intel_priv);
 	if (ret < 0) {
 		netdev_info(priv->dev, "No TSN lane available to set the registers.\n");

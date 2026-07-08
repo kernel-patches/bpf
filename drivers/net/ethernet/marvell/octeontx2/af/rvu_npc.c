@@ -3544,6 +3544,45 @@ exit:
 	return rc;
 }
 
+int rvu_mbox_handler_npc_flow_del_n_free(struct rvu *rvu,
+					 struct npc_flow_del_n_free_req *mreq,
+					 struct msg_rsp *rsp)
+{
+	struct npc_mcam_free_entry_req sreq = { 0 };
+	struct npc_delete_flow_req dreq = { 0 };
+	struct npc_delete_flow_rsp drsp = { 0 };
+	bool err = false;
+	int ret = 0, i;
+
+	sreq.hdr.pcifunc = mreq->hdr.pcifunc;
+	dreq.hdr.pcifunc = mreq->hdr.pcifunc;
+
+	if (!mreq->cnt || mreq->cnt > 256) {
+		dev_err(rvu->dev, "Invalid cnt=%d\n", mreq->cnt);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < mreq->cnt; i++) {
+		dreq.entry = mreq->entry[i];
+		ret = rvu_mbox_handler_npc_delete_flow(rvu, &dreq, &drsp);
+		if (ret) {
+			dev_err(rvu->dev, "delete flow error for i=%d entry=%d\n",
+				i, mreq->entry[i]);
+			err = true;
+		}
+
+		sreq.entry = mreq->entry[i];
+		ret = rvu_mbox_handler_npc_mcam_free_entry(rvu, &sreq, rsp);
+		if (ret) {
+			dev_err(rvu->dev, "free entry error for i=%d entry=%d\n",
+				i, mreq->entry[i]);
+			err = true;
+		}
+	}
+
+	return err ? -EINVAL : 0;
+}
+
 int rvu_mbox_handler_npc_mcam_read_entry(struct rvu *rvu,
 					 struct npc_mcam_read_entry_req *req,
 					 struct npc_mcam_read_entry_rsp *rsp)
@@ -4194,10 +4233,40 @@ npc_set_var_len_offset_pkind(struct rvu *rvu, u16 pcifunc, u64 pkind,
 	return 0;
 }
 
+static int npc_set_skip_size_pkind(struct rvu *rvu, u16 pcifunc, u64 pkind,
+				   u8 skip_size)
+{
+	struct npc_kpu_action0 *act0;
+	int blkaddr;
+	u64 val;
+
+	blkaddr = rvu_get_blkaddr(rvu, BLKTYPE_NPC, pcifunc);
+	if (blkaddr < 0) {
+		dev_err(rvu->dev, "%s: NPC block not implemented\n", __func__);
+		return -EINVAL;
+	}
+
+	val = rvu_read64(rvu, blkaddr, NPC_AF_PKINDX_ACTION0(pkind));
+	act0 = (struct npc_kpu_action0 *)&val;
+	act0->ptr_advance = skip_size;
+	rvu_write64(rvu, blkaddr, NPC_AF_PKINDX_ACTION0(pkind), val);
+
+	/* Update CPT_HR new PKIND */
+	val = rvu_read64(rvu, blkaddr, NPC_AF_PKINDX_ACTION0(pkind + 4));
+	act0 = (struct npc_kpu_action0 *)&val;
+	act0->ptr_advance = (skip_size + 40);
+	act0->next_state = NPC_S_KPU1_CPT_HDR;
+	act0->var_len_offset = (skip_size + 6);
+	act0->var_len_mask = 0xe0;
+	act0->var_len_shift = 0x5;
+	act0->var_len_right = 0x1;
+	rvu_write64(rvu, blkaddr, NPC_AF_PKINDX_ACTION0(pkind + 4), val);
+	return 0;
+}
+
 int rvu_npc_set_parse_mode(struct rvu *rvu, u16 pcifunc, u64 mode, u8 dir,
 			   u64 pkind, u8 var_len_off, u8 var_len_off_mask,
-			   u8 shift_dir)
-
+			   u8 shift_dir, u8 skip_size)
 {
 	struct rvu_pfvf *pfvf = rvu_get_pfvf(rvu, pcifunc);
 	int blkaddr, nixlf, rc, intf_mode;
@@ -4216,6 +4285,12 @@ int rvu_npc_set_parse_mode(struct rvu *rvu, u16 pcifunc, u64 mode, u8 dir,
 							  var_len_off,
 							  var_len_off_mask,
 							  shift_dir);
+			if (rc)
+				return rc;
+		} else if (pkind >= NPC_RX_SKIP_SIZE_PKIND &&
+			   pkind <= NPC_RX_SKIP_SIZE_PKIND + 3) {
+			rc = npc_set_skip_size_pkind(rvu, pcifunc, pkind,
+						     skip_size);
 			if (rc)
 				return rc;
 		}
@@ -4254,7 +4329,8 @@ int rvu_mbox_handler_npc_set_pkind(struct rvu *rvu, struct npc_set_pkind *req,
 {
 	return rvu_npc_set_parse_mode(rvu, req->hdr.pcifunc, req->mode,
 				      req->dir, req->pkind, req->var_len_off,
-				      req->var_len_off_mask, req->shift_dir);
+				      req->var_len_off_mask, req->shift_dir,
+				      req->skip_size);
 }
 
 int rvu_mbox_handler_npc_read_base_steer_rule(struct rvu *rvu,
@@ -4358,6 +4434,55 @@ int rvu_mbox_handler_npc_mcam_entry_stats(struct rvu *rvu,
 
 	mutex_unlock(&mcam->lock);
 
+	return 0;
+}
+
+int rvu_mbox_handler_npc_mcam_mul_stats(struct rvu *rvu,
+					struct npc_mcam_get_mul_stats_req *req,
+					struct npc_mcam_get_mul_stats_rsp *rsp)
+{
+	struct npc_mcam *mcam = &rvu->hw->mcam;
+	u16 pcifunc = req->hdr.pcifunc;
+	u16 index, cntr, entry;
+	int blkaddr;
+	u64 regval;
+	u32 bank;
+
+	if (!req->cnt || req->cnt > 256) {
+		dev_err(rvu->dev, "%s invalid request cnt=%d\n",
+			__func__, req->cnt);
+		return -EINVAL;
+	}
+
+	blkaddr = rvu_get_blkaddr(rvu, BLKTYPE_NPC, 0);
+	if (blkaddr < 0)
+		return NPC_MCAM_INVALID_REQ;
+
+	mutex_lock(&mcam->lock);
+
+	for (int i = 0; i < req->cnt; i++) {
+		entry = npc_cn20k_vidx2idx(req->entry[i]);
+
+		if (npc_mcam_verify_entry(mcam, pcifunc, entry)) {
+			dev_err(rvu->dev, "%s invalid mcam index=%d\n",
+				__func__, req->entry[i]);
+			return -EINVAL;
+		}
+
+		index = entry & (mcam->banksize - 1);
+		bank = npc_get_bank(mcam, entry);
+
+		/* read MCAM entry STAT_ACT register */
+		regval = rvu_read64(rvu, blkaddr, NPC_AF_MCAMEX_BANKX_STAT_ACT(index, bank));
+		cntr = regval & 0x1FF;
+
+		rsp->stat[i] = rvu_read64(rvu, blkaddr, NPC_AF_MATCH_STATX(cntr));
+		rsp->stat[i] &= BIT_ULL(48) - 1;
+	}
+
+	rsp->cnt = req->cnt;
+
+	mutex_unlock(&mcam->lock);
 	return 0;
 }
 

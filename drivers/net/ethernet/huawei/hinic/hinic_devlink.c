@@ -20,14 +20,25 @@
 #include "hinic_devlink.h"
 #include "hinic_hw_dev.h"
 
-static bool check_image_valid(struct hinic_devlink_priv *priv, const u8 *buf,
-			      u32 image_size, struct host_image_st *host_image)
+static bool hinic_fw_section_valid(u32 fw_len, u32 offset, u32 len)
 {
-	struct fw_image_st *fw_image = NULL;
+	return offset <= fw_len && len <= fw_len - offset;
+}
+
+static bool check_image_valid(struct hinic_devlink_priv *priv, const u8 *buf,
+			      size_t image_size, struct host_image_st *host_image)
+{
+	const struct fw_image_st *fw_image;
 	u32 len = 0;
 	u32 i;
 
-	fw_image = (struct fw_image_st *)buf;
+	if (image_size < UPDATEFW_IMAGE_HEAD_SIZE) {
+		dev_err(&priv->hwdev->hwif->pdev->dev,
+			"Wrong image size read from file\n");
+		return false;
+	}
+
+	fw_image = (const struct fw_image_st *)buf;
 
 	if (fw_image->fw_magic != HINIC_MAGIC_NUM) {
 		dev_err(&priv->hwdev->hwif->pdev->dev, "Wrong fw_magic read from file, fw_magic: 0x%x\n",
@@ -41,14 +52,44 @@ static bool check_image_valid(struct hinic_devlink_priv *priv, const u8 *buf,
 		return false;
 	}
 
-	for (i = 0; i < fw_image->fw_info.fw_section_cnt; i++) {
-		len += fw_image->fw_section_info[i].fw_section_len;
-		host_image->image_section_info[i] = fw_image->fw_section_info[i];
+	if (fw_image->fw_len != image_size - UPDATEFW_IMAGE_HEAD_SIZE) {
+		dev_err(&priv->hwdev->hwif->pdev->dev,
+			"Wrong data size read from file\n");
+		return false;
 	}
 
-	if (len != fw_image->fw_len ||
-	    (fw_image->fw_len + UPDATEFW_IMAGE_HEAD_SIZE) != image_size) {
-		dev_err(&priv->hwdev->hwif->pdev->dev, "Wrong data size read from file\n");
+	for (i = 0; i < fw_image->fw_info.fw_section_cnt; i++) {
+		const struct fw_section_info_st *section =
+			&fw_image->fw_section_info[i];
+
+		if (section->fw_section_type >= FILE_TYPE_TOTAL_NUM) {
+			dev_err(&priv->hwdev->hwif->pdev->dev,
+				"Wrong section type read from file: %u\n",
+				section->fw_section_type);
+			return false;
+		}
+
+		if (!hinic_fw_section_valid(fw_image->fw_len,
+					    section->fw_section_offset,
+					    section->fw_section_len)) {
+			dev_err(&priv->hwdev->hwif->pdev->dev,
+				"Wrong section size read from file\n");
+			return false;
+		}
+
+		if (section->fw_section_len > fw_image->fw_len - len) {
+			dev_err(&priv->hwdev->hwif->pdev->dev,
+				"Wrong data size read from file\n");
+			return false;
+		}
+
+		len += section->fw_section_len;
+		host_image->image_section_info[i] = *section;
+	}
+
+	if (len != fw_image->fw_len) {
+		dev_err(&priv->hwdev->hwif->pdev->dev,
+			"Wrong data size read from file\n");
 		return false;
 	}
 

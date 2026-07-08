@@ -119,7 +119,7 @@ static int st_nci_spi_read(struct st_nci_spi_phy *phy,
 {
 	int r;
 	u8 len;
-	u8 buf[ST_NCI_SPI_MAX_SIZE];
+	u8 buf[ST_NCI_SPI_MAX_SIZE] __aligned(2);
 	struct spi_device *dev = phy->spi_dev;
 	struct spi_transfer spi_xfer = {
 		.rx_buf = buf,

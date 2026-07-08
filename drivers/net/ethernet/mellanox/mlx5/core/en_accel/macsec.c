@@ -406,11 +406,13 @@ destroy_macsec_object:
 }
 
 static struct mlx5e_macsec_rx_sc *
-mlx5e_macsec_get_rx_sc_from_sc_list(const struct list_head *list, sci_t sci)
+mlx5e_macsec_get_rx_sc_from_sc_list(struct mlx5e_macsec *macsec,
+				    const struct list_head *list, sci_t sci)
 {
 	struct mlx5e_macsec_rx_sc *iter;
 
-	list_for_each_entry_rcu(iter, list, rx_sc_list_element) {
+	list_for_each_entry_rcu(iter, list, rx_sc_list_element,
+				lockdep_is_held(&macsec->lock)) {
 		if (iter->sci == sci)
 			return iter;
 	}
@@ -474,14 +476,15 @@ static bool mlx5e_macsec_secy_features_validate(struct macsec_context *ctx)
 }
 
 static struct mlx5e_macsec_device *
-mlx5e_macsec_get_macsec_device_context(const struct mlx5e_macsec *macsec,
+mlx5e_macsec_get_macsec_device_context(struct mlx5e_macsec *macsec,
 				       const struct macsec_context *ctx)
 {
 	struct mlx5e_macsec_device *iter;
 	const struct list_head *list;
 
 	list = &macsec->macsec_device_list_head;
-	list_for_each_entry_rcu(iter, list, macsec_device_list_element) {
+	list_for_each_entry_rcu(iter, list, macsec_device_list_element,
+				lockdep_is_held(&macsec->lock)) {
 		if (iter->netdev == ctx->secy->netdev)
 			return iter;
 	}
@@ -693,7 +696,7 @@ static int mlx5e_macsec_add_rxsc(struct macsec_context *ctx)
 	}
 
 	rx_sc_list = &macsec_device->macsec_rx_sc_list_head;
-	rx_sc = mlx5e_macsec_get_rx_sc_from_sc_list(rx_sc_list, ctx_rx_sc->sci);
+	rx_sc = mlx5e_macsec_get_rx_sc_from_sc_list(macsec, rx_sc_list, ctx_rx_sc->sci);
 	if (rx_sc) {
 		netdev_err(ctx->netdev, "MACsec offload: rx_sc (sci %lld) already exists\n",
 			   ctx_rx_sc->sci);
@@ -785,7 +788,7 @@ static int mlx5e_macsec_upd_rxsc(struct macsec_context *ctx)
 	}
 
 	list = &macsec_device->macsec_rx_sc_list_head;
-	rx_sc = mlx5e_macsec_get_rx_sc_from_sc_list(list, ctx_rx_sc->sci);
+	rx_sc = mlx5e_macsec_get_rx_sc_from_sc_list(macsec, list, ctx_rx_sc->sci);
 	if (!rx_sc) {
 		err = -EINVAL;
 		goto out;
@@ -863,7 +866,7 @@ static int mlx5e_macsec_del_rxsc(struct macsec_context *ctx)
 	}
 
 	list = &macsec_device->macsec_rx_sc_list_head;
-	rx_sc = mlx5e_macsec_get_rx_sc_from_sc_list(list, ctx->rx_sc->sci);
+	rx_sc = mlx5e_macsec_get_rx_sc_from_sc_list(macsec, list, ctx->rx_sc->sci);
 	if (!rx_sc) {
 		netdev_err(ctx->netdev,
 			   "MACsec offload rx_sc sci %lld doesn't exist\n",
@@ -904,7 +907,7 @@ static int mlx5e_macsec_add_rxsa(struct macsec_context *ctx)
 	}
 
 	list = &macsec_device->macsec_rx_sc_list_head;
-	rx_sc = mlx5e_macsec_get_rx_sc_from_sc_list(list, sci);
+	rx_sc = mlx5e_macsec_get_rx_sc_from_sc_list(macsec, list, sci);
 	if (!rx_sc) {
 		netdev_err(ctx->netdev,
 			   "MACsec offload rx_sc sci %lld doesn't exist\n",
@@ -988,7 +991,7 @@ static int mlx5e_macsec_upd_rxsa(struct macsec_context *ctx)
 	}
 
 	list = &macsec_device->macsec_rx_sc_list_head;
-	rx_sc = mlx5e_macsec_get_rx_sc_from_sc_list(list, sci);
+	rx_sc = mlx5e_macsec_get_rx_sc_from_sc_list(macsec, list, sci);
 	if (!rx_sc) {
 		netdev_err(ctx->netdev,
 			   "MACsec offload rx_sc sci %lld doesn't exist\n",
@@ -1045,7 +1048,7 @@ static int mlx5e_macsec_del_rxsa(struct macsec_context *ctx)
 	}
 
 	list = &macsec_device->macsec_rx_sc_list_head;
-	rx_sc = mlx5e_macsec_get_rx_sc_from_sc_list(list, sci);
+	rx_sc = mlx5e_macsec_get_rx_sc_from_sc_list(macsec, list, sci);
 	if (!rx_sc) {
 		netdev_err(ctx->netdev,
 			   "MACsec offload rx_sc sci %lld doesn't exist\n",

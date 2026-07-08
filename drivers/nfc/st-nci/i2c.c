@@ -108,7 +108,7 @@ static int st_nci_i2c_read(struct st_nci_i2c_phy *phy,
 {
 	int r;
 	u8 len;
-	u8 buf[ST_NCI_I2C_MAX_SIZE];
+	u8 buf[ST_NCI_I2C_MAX_SIZE] __aligned(2);
 	struct i2c_client *client = phy->i2c_dev;
 
 	r = i2c_master_recv(client, buf, ST_NCI_I2C_MIN_SIZE);

@@ -1227,6 +1227,77 @@ end:
 	test_sockmap_pass_prog__destroy(skel);
 }
 
+static void test_sockmap_drop_after_partial_read(void)
+{
+	int map, err, sent, recvd, zero = 0, on = 1;
+	struct test_sockmap_drop_prog *skel;
+	int c0 = -1, p0 = -1, c1 = -1, p1 = -1;
+	struct tcp_zerocopy_receive zc = {};
+	socklen_t zc_len = sizeof(zc);
+	char buf[200] = {}, rcv[50], addr[100];
+	struct bpf_program *prog;
+
+	skel = test_sockmap_drop_prog__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+
+	if (create_socket_pairs(AF_INET, SOCK_STREAM, &c0, &c1, &p0, &p1))
+		goto end;
+
+	sent = xsend(c0, buf, sizeof(buf), 0);
+	if (!ASSERT_EQ(sent, sizeof(buf), "xsend(native)"))
+		goto end;
+
+	recvd = recv_timeout(p0, rcv, sizeof(rcv), MSG_DONTWAIT, 1);
+	if (!ASSERT_EQ(recvd, sizeof(rcv), "recv_timeout(partial)"))
+		goto end;
+
+	prog = skel->progs.prog_skb_verdict;
+	map = bpf_map__fd(skel->maps.sock_map_rx);
+	err = bpf_prog_attach(bpf_program__fd(prog), map,
+			      BPF_SK_SKB_STREAM_VERDICT, 0);
+	if (!ASSERT_OK(err, "bpf_prog_attach"))
+		goto end;
+
+	err = bpf_map_update_elem(map, &zero, &p0, BPF_NOEXIST);
+	if (!ASSERT_OK(err, "bpf_map_update_elem"))
+		goto end;
+
+	sent = xsend(c0, buf, 1, 0);
+	if (!ASSERT_EQ(sent, 1, "xsend(drop)"))
+		goto end;
+
+	err = bpf_map_delete_elem(map, &zero);
+	if (!ASSERT_OK(err, "bpf_map_delete_elem"))
+		goto end;
+
+	sent = xsend(c0, buf, 1, 0);
+	if (!ASSERT_EQ(sent, 1, "xsend(native again)"))
+		goto end;
+
+	err = setsockopt(p0, SOL_SOCKET, SO_ZEROCOPY, &on, sizeof(on));
+	if (!ASSERT_OK(err, "setsockopt(SO_ZEROCOPY)"))
+		goto end;
+
+	zc.copybuf_address = (__u64)(unsigned long)addr;
+	zc.copybuf_len = sizeof(addr);
+	err = getsockopt(p0, IPPROTO_TCP, TCP_ZEROCOPY_RECEIVE, &zc, &zc_len);
+	if (!ASSERT_OK(err, "getsockopt(TCP_ZEROCOPY_RECEIVE)"))
+		goto end;
+
+	ASSERT_EQ(zc.copybuf_len, 1, "TCP_ZEROCOPY_RECEIVE copied");
+end:
+	if (c0 >= 0)
+		close(c0);
+	if (p0 >= 0)
+		close(p0);
+	if (c1 >= 0)
+		close(c1);
+	if (p1 >= 0)
+		close(p1);
+	test_sockmap_drop_prog__destroy(skel);
+}
+
 /* Wait until FIONREAD returns the expected value or timeout */
 static int wait_for_fionread(int fd, int expected, unsigned int timeout_ms)
 {
@@ -1395,6 +1466,8 @@ void test_sockmap_basic(void)
 		test_sockmap_copied_seq(false);
 	if (test__start_subtest("sockmap recover with strp"))
 		test_sockmap_copied_seq(true);
+	if (test__start_subtest("sockmap drop after partial read"))
+		test_sockmap_drop_after_partial_read();
 	if (test__start_subtest("sockmap tcp multi channels"))
 		test_sockmap_multi_channels(SOCK_STREAM);
 	if (test__start_subtest("sockmap udp multi channels"))

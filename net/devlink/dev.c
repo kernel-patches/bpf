@@ -5,6 +5,7 @@
  */
 
 #include <linux/device.h>
+#include <linux/seq_buf.h>
 #include <net/genetlink.h>
 #include <net/sock.h>
 #include "devl_internal.h"
@@ -222,7 +223,7 @@ static void devlink_notify(struct devlink *devlink, enum devlink_command cmd)
 
 int devlink_nl_get_doit(struct sk_buff *skb, struct genl_info *info)
 {
-	struct devlink *devlink = info->user_ptr[0];
+	struct devlink *devlink = devlink_nl_ctx(info)->devlink;
 	struct sk_buff *msg;
 	int err;
 
@@ -519,7 +520,7 @@ free_msg:
 
 int devlink_nl_reload_doit(struct sk_buff *skb, struct genl_info *info)
 {
-	struct devlink *devlink = info->user_ptr[0];
+	struct devlink *devlink = devlink_nl_ctx(info)->devlink;
 	enum devlink_reload_action action;
 	enum devlink_reload_limit limit;
 	struct net *dest_net = NULL;
@@ -683,7 +684,7 @@ nla_put_failure:
 
 int devlink_nl_eswitch_get_doit(struct sk_buff *skb, struct genl_info *info)
 {
-	struct devlink *devlink = info->user_ptr[0];
+	struct devlink *devlink = devlink_nl_ctx(info)->devlink;
 	struct sk_buff *msg;
 	int err;
 
@@ -704,7 +705,7 @@ int devlink_nl_eswitch_get_doit(struct sk_buff *skb, struct genl_info *info)
 
 int devlink_nl_eswitch_set_doit(struct sk_buff *skb, struct genl_info *info)
 {
-	struct devlink *devlink = info->user_ptr[0];
+	struct devlink *devlink = devlink_nl_ctx(info)->devlink;
 	const struct devlink_ops *ops = devlink->ops;
 	enum devlink_eswitch_encap_mode encap_mode;
 	u8 inline_mode;
@@ -906,7 +907,7 @@ err_cancel_msg:
 
 int devlink_nl_info_get_doit(struct sk_buff *skb, struct genl_info *info)
 {
-	struct devlink *devlink = info->user_ptr[0];
+	struct devlink *devlink = devlink_nl_ctx(info)->devlink;
 	struct sk_buff *msg;
 	int err;
 
@@ -1134,7 +1135,7 @@ int devlink_nl_flash_update_doit(struct sk_buff *skb, struct genl_info *info)
 {
 	struct nlattr *nla_overwrite_mask, *nla_file_name;
 	struct devlink_flash_update_params params = {};
-	struct devlink *devlink = info->user_ptr[0];
+	struct devlink *devlink = devlink_nl_ctx(info)->devlink;
 	const char *file_name;
 	u32 supported_params;
 	int ret;
@@ -1188,8 +1189,10 @@ static void __devlink_compat_running_version(struct devlink *devlink,
 					     char *buf, size_t len)
 {
 	struct devlink_info_req req = {};
+	size_t used = strnlen(buf, len);
 	const struct nlattr *nlattr;
 	struct sk_buff *msg;
+	struct seq_buf sb;
 	int rem, err;
 
 	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
@@ -1201,6 +1204,8 @@ static void __devlink_compat_running_version(struct devlink *devlink,
 	if (err)
 		goto free_msg;
 
+	seq_buf_init(&sb, buf + used, len - used);
+
 	nla_for_each_attr_type(nlattr, DEVLINK_ATTR_INFO_VERSION_RUNNING,
 			       (void *)msg->data, msg->len, rem) {
 		const struct nlattr *kv;
@@ -1208,8 +1213,8 @@ static void __devlink_compat_running_version(struct devlink *devlink,
 
 		nla_for_each_nested_type(kv, DEVLINK_ATTR_INFO_VERSION_VALUE,
 					 nlattr, rem_kv) {
-			strlcat(buf, nla_data(kv), len);
-			strlcat(buf, " ", len);
+			seq_buf_printf(&sb, "%s ",
+				       (const char *)nla_data(kv));
 		}
 	}
 free_msg:
@@ -1302,7 +1307,7 @@ err_cancel_msg:
 
 int devlink_nl_selftests_get_doit(struct sk_buff *skb, struct genl_info *info)
 {
-	struct devlink *devlink = info->user_ptr[0];
+	struct devlink *devlink = devlink_nl_ctx(info)->devlink;
 	struct sk_buff *msg;
 	int err;
 
@@ -1372,7 +1377,7 @@ static const struct nla_policy devlink_selftest_nl_policy[DEVLINK_ATTR_SELFTEST_
 int devlink_nl_selftests_run_doit(struct sk_buff *skb, struct genl_info *info)
 {
 	struct nlattr *tb[DEVLINK_ATTR_SELFTEST_ID_MAX + 1];
-	struct devlink *devlink = info->user_ptr[0];
+	struct devlink *devlink = devlink_nl_ctx(info)->devlink;
 	struct nlattr *attrs, *selftests;
 	struct sk_buff *msg;
 	void *hdr;

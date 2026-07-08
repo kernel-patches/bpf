@@ -18,6 +18,7 @@
 #include <linux/of.h>
 #include <linux/of_net.h>
 #include <net/dsa_stubs.h>
+#include <net/netdev_lock.h>
 #include <net/sch_generic.h>
 
 #include "conduit.h"
@@ -1620,10 +1621,23 @@ void dsa_switch_shutdown(struct dsa_switch *ds)
 
 	rtnl_lock();
 
-	dsa_switch_for_each_cpu_port(dp, ds)
-		list_add(&dp->conduit->close_list, &close_list);
+	dsa_switch_for_each_cpu_port(dp, ds) {
+		if (!(dp->conduit->flags & IFF_UP))
+			continue;
+		list_add_tail(&dp->conduit->close_list, &close_list);
+		netdev_lock_ops(dp->conduit);
+	}
 
-	netif_close_many(&close_list, true);
+	netif_close_many(&close_list, false);
+
+	while (!list_empty(&close_list)) {
+		struct net_device *conduit;
+
+		conduit = list_first_entry(&close_list, struct net_device,
+					   close_list);
+		netdev_unlock_ops(conduit);
+		list_del_init(&conduit->close_list);
+	}
 
 	dsa_switch_for_each_user_port(dp, ds) {
 		conduit = dsa_port_to_conduit(dp);
@@ -1833,6 +1847,115 @@ int dsa_port_simple_hsr_leave(struct dsa_switch *ds, int port,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(dsa_port_simple_hsr_leave);
+
+void dsa_inband_init(struct dsa_inband *inband, u32 seqno_mask)
+{
+	init_completion(&inband->completion);
+	mutex_init(&inband->lock);
+	spin_lock_init(&inband->resp_lock);
+	inband->seqno_mask = seqno_mask;
+	inband->seqno = 0;
+}
+EXPORT_SYMBOL_GPL(dsa_inband_init);
+
+void dsa_inband_complete(struct dsa_inband *inband,
+			 void *resp, unsigned int resp_len,
+			 int err)
+{
+	inband->err = err;
+
+	if (!err) {
+		spin_lock_bh(&inband->resp_lock);
+		resp_len = min(inband->resp_len, resp_len);
+		if (inband->resp && resp)
+			memcpy(inband->resp, resp, resp_len);
+		spin_unlock_bh(&inband->resp_lock);
+		inband->err = resp_len;
+	}
+
+	complete(&inband->completion);
+}
+EXPORT_SYMBOL_GPL(dsa_inband_complete);
+
+int dsa_inband_wait_for_completion(struct dsa_inband *inband, int timeout_ms)
+{
+	unsigned long jiffies = msecs_to_jiffies(timeout_ms);
+
+	reinit_completion(&inband->completion);
+
+	return wait_for_completion_timeout(&inband->completion, jiffies);
+}
+EXPORT_SYMBOL_GPL(dsa_inband_wait_for_completion);
+
+/* dsa_inband_request - send an inband request frame and wait for the reply.
+ * @inband: inband state for the switch
+ * @skb: request frame; ownership is transferred to this function
+ * @insert_seqno: optional callback to stamp the sequence number into @skb
+ * @resp: buffer to receive the reply payload, or NULL if none is expected
+ * @resp_len: size of @resp in bytes
+ * @timeout_ms: how long to wait for the reply, in milliseconds
+ *
+ * Serialise against other inband operations, transmit @skb and wait for the
+ * matching reply handed back via dsa_inband_complete().
+ *
+ * Return the number of response bytes copied into @resp (0 when no response
+ * is expected) on success, or a negative errno (-EOPNOTSUPP if the conduit
+ * is down, -ETIMEDOUT if no reply arrived, or an error from the completer).
+ *
+ * Cannot use dsa_inband_wait_for_completion() since the completion needs to
+ * be reinitialised before the skb is queued, to avoid races.
+ */
+int dsa_inband_request(struct dsa_inband *inband, struct sk_buff *skb,
+		       void (*insert_seqno)(struct sk_buff *skb, u32 seqno),
+		       void *resp, unsigned int resp_len,
+		       int timeout_ms)
+{
+	unsigned long jiffies = msecs_to_jiffies(timeout_ms);
+	int ret;
+
+	if (!skb->dev) {
+		kfree_skb(skb);
+		return -EOPNOTSUPP;
+	}
+
+	mutex_lock(&inband->lock);
+
+	inband->err = 0;
+
+	spin_lock_bh(&inband->resp_lock);
+	inband->resp = resp;
+	inband->resp_len = resp_len;
+	spin_unlock_bh(&inband->resp_lock);
+
+	if (insert_seqno) {
+		WRITE_ONCE(inband->seqno, inband->seqno + 1);
+		insert_seqno(skb, inband->seqno & inband->seqno_mask);
+	}
+
+	reinit_completion(&inband->completion);
+
+	dev_queue_xmit(skb);
+
+	ret = wait_for_completion_timeout(&inband->completion, jiffies);
+
+	spin_lock_bh(&inband->resp_lock);
+	inband->resp = NULL;
+	inband->resp_len = 0;
+	spin_unlock_bh(&inband->resp_lock);
+	mutex_unlock(&inband->lock);
+
+	if (ret == 0)
+		return -ETIMEDOUT;
+
+	return inband->err;
+}
+EXPORT_SYMBOL_GPL(dsa_inband_request);
+
+u32 dsa_inband_seqno(struct dsa_inband *inband)
+{
+	return READ_ONCE(inband->seqno) & inband->seqno_mask;
+}
+EXPORT_SYMBOL_GPL(dsa_inband_seqno);
 
 static const struct dsa_stubs __dsa_stubs = {
 	.conduit_hwtstamp_validate = __dsa_conduit_hwtstamp_validate,

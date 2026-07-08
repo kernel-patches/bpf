@@ -171,9 +171,6 @@ struct rxrpc_sock {
 	const struct rxrpc_kernel_ops *app_ops;	/* Table of kernel app notification funcs */
 	struct rxrpc_local	*local;		/* local endpoint */
 	struct rxrpc_backlog	*backlog;	/* Preallocation for services */
-	struct sk_buff_head	recvmsg_oobq;	/* OOB messages for recvmsg to pick up */
-	struct rb_root		pending_oobq;	/* OOB messages awaiting userspace to respond to */
-	u64			oob_id_counter;	/* OOB message ID counter */
 	spinlock_t		incoming_lock;	/* Incoming call vs service shutdown lock */
 	struct list_head	sock_calls;	/* List of calls owned by this socket */
 	struct list_head	to_be_accepted;	/* calls awaiting acceptance */
@@ -184,7 +181,6 @@ struct rxrpc_sock {
 	struct rb_root		calls;		/* User ID -> call mapping */
 	unsigned long		flags;
 #define RXRPC_SOCK_CONNECTED		0	/* connect_srx is set */
-#define RXRPC_SOCK_MANAGE_RESPONSE	1	/* User wants to manage RESPONSE packets */
 	rwlock_t		call_lock;	/* lock for calls */
 	u32			min_sec_level;	/* minimum security level */
 #define RXRPC_SECURITY_MAX	RXRPC_SECURITY_ENCRYPT
@@ -241,7 +237,6 @@ struct rxrpc_skb_priv {
 			u8		reason;		/* Reason for ack */
 		} ack;
 		struct {
-			struct rxrpc_connection *conn;	/* Connection referred to */
 			union {
 				u32 rxkad_nonce;
 			};
@@ -309,13 +304,6 @@ struct rxrpc_security {
 	/* Validate a challenge packet */
 	bool (*validate_challenge)(struct rxrpc_connection *conn,
 				   struct sk_buff *skb);
-
-	/* Fill out the cmsg for recvmsg() to pass on a challenge to userspace.
-	 * The security class gets to add additional information.
-	 */
-	int (*challenge_to_recvmsg)(struct rxrpc_connection *conn,
-				    struct sk_buff *challenge,
-				    struct msghdr *msg);
 
 	/* Parse sendmsg() control message and respond to challenge. */
 	int (*sendmsg_respond_to_challenge)(struct sk_buff *challenge,
@@ -516,6 +504,7 @@ struct rxrpc_bundle {
 	struct rxrpc_local	*local;		/* Representation of local endpoint */
 	struct rxrpc_peer	*peer;		/* Remote endpoint */
 	struct key		*key;		/* Security details */
+	struct key		*app_data;	/* Security response app data */
 	struct list_head	proc_link;	/* Link in net->bundle_proc_list */
 	const struct rxrpc_security *security;	/* applied security module */
 	refcount_t		ref;
@@ -719,6 +708,7 @@ struct rxrpc_call {
 	struct rxrpc_sock __rcu	*socket;	/* socket responsible */
 	struct rxrpc_net	*rxnet;		/* Network namespace to which call belongs */
 	struct key		*key;		/* Security details */
+	struct key		*app_data;	/* Security response app data */
 	const struct rxrpc_security *security;	/* applied security module */
 	struct mutex		user_mutex;	/* User access mutex */
 	struct sockaddr_rxrpc	dest_srx;	/* Destination address */
@@ -913,6 +903,7 @@ enum rxrpc_command {
 };
 
 struct rxrpc_call_params {
+	struct key		*app_data;	/* Security response app data */
 	s64			tx_total_len;	/* Total Tx data length (if send data) */
 	unsigned long		user_call_ID;	/* User's call ID */
 	struct {
@@ -1374,13 +1365,6 @@ static inline struct rxrpc_net *rxrpc_net(struct net *net)
 {
 	return net_generic(net, rxrpc_net_id);
 }
-
-/*
- * oob.c
- */
-bool rxrpc_notify_socket_oob(struct rxrpc_call *call, struct sk_buff *skb);
-void rxrpc_add_pending_oob(struct rxrpc_sock *rx, struct sk_buff *skb);
-int rxrpc_sendmsg_oob(struct rxrpc_sock *rx, struct msghdr *msg, size_t len);
 
 /*
  * output.c

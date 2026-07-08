@@ -43,6 +43,13 @@
 #include "en_accel/macsec.h"
 #include "en/ptp.h"
 #include <net/ipv6.h>
+#include <linux/moduleparam.h>
+#include <linux/sched/clock.h>
+
+static unsigned int mlx5e_tx_cq_time_budget_us = 500;
+module_param_named(tx_cq_time_budget_us, mlx5e_tx_cq_time_budget_us, uint, 0644);
+MODULE_PARM_DESC(tx_cq_time_budget_us,
+		 "Max microseconds one TX CQ poll may spend before yielding (0 = unbounded)");
 
 static void mlx5e_dma_unmap_wqe_err(struct mlx5e_txqsq *sq, u8 num_dma)
 {
@@ -760,9 +767,12 @@ void mlx5e_txqsq_wake(struct mlx5e_txqsq *sq)
 bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq, int napi_budget)
 {
 	struct mlx5e_sq_stats *stats;
+	bool time_exceeded = false;
+	u64 time_budget_end = 0;
 	struct mlx5e_txqsq *sq;
 	struct mlx5_cqe64 *cqe;
 	u32 dma_fifo_cc;
+	u32 budget_us;
 	u32 nbytes;
 	u16 npkts;
 	u16 sqcc;
@@ -789,6 +799,10 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq, int napi_budget)
 
 	/* avoid dirtying sq cache line every cqe */
 	dma_fifo_cc = sq->dma_fifo_cc;
+
+	budget_us = READ_ONCE(mlx5e_tx_cq_time_budget_us);
+	if (budget_us)
+		time_budget_end = local_clock() + (u64)budget_us * NSEC_PER_USEC;
 
 	i = 0;
 	do {
@@ -842,7 +856,18 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq, int napi_budget)
 			stats->cqe_err++;
 		}
 
+		/* Check between CQEs only (sqcc/dma_fifo_cc must advance together). */
+		if (unlikely(time_budget_end && (i & 7) == 7 &&
+			     local_clock() >= time_budget_end)) {
+			time_exceeded = true;
+			i++;
+			break;
+		}
+
 	} while ((++i < MLX5E_TX_CQ_POLL_BUDGET) && (cqe = mlx5_cqwq_get_cqe(&cq->wq)));
+
+	if (unlikely(time_exceeded))
+		stats->time_budget_exit++;
 
 	stats->cqes += i;
 
@@ -858,7 +883,7 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq, int napi_budget)
 
 	mlx5e_txqsq_wake(sq);
 
-	return (i == MLX5E_TX_CQ_POLL_BUDGET);
+	return time_exceeded || (i == MLX5E_TX_CQ_POLL_BUDGET);
 }
 
 static void mlx5e_tx_wi_kfree_fifo_skbs(struct mlx5e_txqsq *sq, struct mlx5e_tx_wqe_info *wi)
@@ -879,6 +904,8 @@ void mlx5e_free_txqsq_descs(struct mlx5e_txqsq *sq)
 	dma_fifo_cc = sq->dma_fifo_cc;
 
 	while (sqcc != sq->pc) {
+		cond_resched();
+
 		ci = mlx5_wq_cyc_ctr2ix(&sq->wq, sqcc);
 		wi = &sq->db.wqe_info[ci];
 

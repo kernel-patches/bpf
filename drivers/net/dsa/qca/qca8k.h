@@ -16,7 +16,7 @@
 
 #define QCA8K_ETHERNET_MDIO_PRIORITY			7
 #define QCA8K_ETHERNET_PHY_PRIORITY			6
-#define QCA8K_ETHERNET_TIMEOUT				msecs_to_jiffies(5)
+#define QCA8K_ETHERNET_TIMEOUT				5
 
 #define QCA8K_NUM_PORTS					7
 #define QCA8K_NUM_CPU_PORTS				2
@@ -391,14 +391,6 @@ enum {
 	QCA8K_CPU_PORT6,
 };
 
-struct qca8k_mgmt_eth_data {
-	struct completion rw_done;
-	struct mutex mutex; /* Enforce one mdio read/write at time */
-	bool ack;
-	u32 seq;
-	u32 data[4];
-};
-
 struct qca8k_mib_eth_data {
 	struct completion rw_done;
 	struct mutex mutex; /* Process one command at time */
@@ -462,7 +454,7 @@ struct qca8k_priv {
 	struct device *dev;
 	struct gpio_desc *reset_gpio;
 	struct net_device *mgmt_conduit; /* Track if mdio/mib Ethernet is available */
-	struct qca8k_mgmt_eth_data mgmt_eth_data;
+	struct dsa_inband inband;
 	struct qca8k_mib_eth_data mib_eth_data;
 	struct qca8k_mdio_cache mdio_cache;
 	struct qca8k_pcs pcs_port_0;

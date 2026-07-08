@@ -318,6 +318,7 @@ EXPORT_SYMBOL(rxrpc_kernel_put_peer);
  * @sock: The socket on which to make the call
  * @peer: The peer to contact
  * @key: The security context to use (defaults to socket setting)
+ * @app_data: The security response application data (or NULL)
  * @user_call_ID: The ID to use
  * @tx_total_len: Total length of data to transmit during the call (or -1)
  * @hard_timeout: The maximum lifespan of the call in sec
@@ -340,6 +341,7 @@ EXPORT_SYMBOL(rxrpc_kernel_put_peer);
 struct rxrpc_call *rxrpc_kernel_begin_call(struct socket *sock,
 					   struct rxrpc_peer *peer,
 					   struct key *key,
+					   struct key *app_data,
 					   unsigned long user_call_ID,
 					   s64 tx_total_len,
 					   u32 hard_timeout,
@@ -368,6 +370,7 @@ struct rxrpc_call *rxrpc_kernel_begin_call(struct socket *sock,
 		key = NULL; /* a no-security key */
 
 	memset(&p, 0, sizeof(p));
+	p.app_data		= app_data;
 	p.user_call_ID		= user_call_ID;
 	p.tx_total_len		= tx_total_len;
 	p.interruptibility	= interruptibility;
@@ -595,10 +598,7 @@ static int rxrpc_sendmsg(struct socket *sock, struct msghdr *m, size_t len)
 		fallthrough;
 	case RXRPC_SERVER_BOUND:
 	case RXRPC_SERVER_LISTENING:
-		if (m->msg_flags & MSG_OOB)
-			ret = rxrpc_sendmsg_oob(rx, m, len);
-		else
-			ret = rxrpc_do_sendmsg(rx, m, len);
+		ret = rxrpc_do_sendmsg(rx, m, len);
 		/* The socket has been unlocked */
 		goto out;
 	default:
@@ -633,7 +633,7 @@ static int rxrpc_setsockopt(struct socket *sock, int level, int optname,
 			    sockptr_t optval, unsigned int optlen)
 {
 	struct rxrpc_sock *rx = rxrpc_sk(sock->sk);
-	unsigned int min_sec_level, val;
+	unsigned int min_sec_level;
 	u16 service_upgrade[2];
 	int ret;
 
@@ -710,23 +710,7 @@ static int rxrpc_setsockopt(struct socket *sock, int level, int optname,
 
 		case RXRPC_MANAGE_RESPONSE:
 			ret = -EINVAL;
-			if (optlen != sizeof(unsigned int))
-				goto error;
-			ret = -EISCONN;
-			if (rx->sk.sk_state != RXRPC_UNBOUND)
-				goto error;
-			ret = copy_safe_from_sockptr(&val, sizeof(val),
-						     optval, optlen);
-			if (ret)
-				goto error;
-			ret = -EINVAL;
-			if (val > 1)
-				goto error;
-			if (val)
-				set_bit(RXRPC_SOCK_MANAGE_RESPONSE, &rx->flags);
-			else
-				clear_bit(RXRPC_SOCK_MANAGE_RESPONSE, &rx->flags);
-			goto success;
+			goto error;
 
 		default:
 			break;
@@ -835,8 +819,6 @@ static int rxrpc_create(struct net *net, struct socket *sock, int protocol,
 	rx->calls = RB_ROOT;
 
 	spin_lock_init(&rx->incoming_lock);
-	skb_queue_head_init(&rx->recvmsg_oobq);
-	rx->pending_oobq = RB_ROOT;
 	INIT_LIST_HEAD(&rx->sock_calls);
 	INIT_LIST_HEAD(&rx->to_be_accepted);
 	INIT_LIST_HEAD(&rx->recvmsg_q);
@@ -885,30 +867,12 @@ static int rxrpc_shutdown(struct socket *sock, int flags)
 }
 
 /*
- * Purge the out-of-band queue.
- */
-static void rxrpc_purge_oob_queue(struct sock *sk)
-{
-	struct rxrpc_sock *rx = rxrpc_sk(sk);
-	struct sk_buff *skb;
-
-	while ((skb = skb_dequeue(&rx->recvmsg_oobq)))
-		rxrpc_kernel_free_oob(skb);
-	while (!RB_EMPTY_ROOT(&rx->pending_oobq)) {
-		skb = rb_entry(rx->pending_oobq.rb_node, struct sk_buff, rbnode);
-		rb_erase(&skb->rbnode, &rx->pending_oobq);
-		rxrpc_kernel_free_oob(skb);
-	}
-}
-
-/*
  * RxRPC socket destructor
  */
 static void rxrpc_sock_destructor(struct sock *sk)
 {
 	_enter("%p", sk);
 
-	rxrpc_purge_oob_queue(sk);
 	rxrpc_purge_queue(&sk->sk_receive_queue);
 
 	WARN_ON(refcount_read(&sk->sk_wmem_alloc));
@@ -961,7 +925,6 @@ static int rxrpc_release_sock(struct sock *sk)
 	rxrpc_discard_prealloc(rx);
 	rxrpc_release_calls_on_socket(rx);
 	flush_workqueue(rxrpc_workqueue);
-	rxrpc_purge_oob_queue(sk);
 	rxrpc_purge_queue(&sk->sk_receive_queue);
 
 	rxrpc_unuse_local(rx->local, rxrpc_local_unuse_release_sock);

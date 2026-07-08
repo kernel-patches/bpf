@@ -499,7 +499,7 @@ void qca8k_get_ethtool_stats(struct dsa_switch *ds, int port,
 	u32 hi = 0;
 	int ret;
 
-	if (priv->mgmt_conduit && priv->info->ops->autocast_mib &&
+	if (READ_ONCE(priv->mgmt_conduit) && priv->info->ops->autocast_mib &&
 	    priv->info->ops->autocast_mib(ds, port, data) > 0)
 		return;
 

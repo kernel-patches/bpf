@@ -7,6 +7,7 @@
 #ifndef __LINUX_NET_DSA_H
 #define __LINUX_NET_DSA_H
 
+#include <linux/completion.h>
 #include <linux/if.h>
 #include <linux/if_ether.h>
 #include <linux/list.h>
@@ -59,6 +60,7 @@ struct tc_action;
 #define DSA_TAG_PROTO_MXL_GSW1XX_VALUE		31
 #define DSA_TAG_PROTO_MXL862_VALUE		32
 #define DSA_TAG_PROTO_NETC_VALUE		33
+#define DSA_TAG_PROTO_LAN9645X_VALUE		34
 
 enum dsa_tag_protocol {
 	DSA_TAG_PROTO_NONE		= DSA_TAG_PROTO_NONE_VALUE,
@@ -95,6 +97,7 @@ enum dsa_tag_protocol {
 	DSA_TAG_PROTO_MXL_GSW1XX	= DSA_TAG_PROTO_MXL_GSW1XX_VALUE,
 	DSA_TAG_PROTO_MXL862		= DSA_TAG_PROTO_MXL862_VALUE,
 	DSA_TAG_PROTO_NETC		= DSA_TAG_PROTO_NETC_VALUE,
+	DSA_TAG_PROTO_LAN9645X		= DSA_TAG_PROTO_LAN9645X_VALUE,
 };
 
 struct dsa_switch;
@@ -189,6 +192,9 @@ struct dsa_switch_tree {
 static inline struct dsa_lag *dsa_lag_by_id(struct dsa_switch_tree *dst,
 					    unsigned int id)
 {
+	if (unlikely(id == 0 || id > dst->lags_len))
+		return NULL;
+
 	/* DSA LAG IDs are one-based, dst->lags is zero-based */
 	return dst->lags[id - 1];
 }
@@ -1346,6 +1352,38 @@ int dsa_port_simple_hsr_join(struct dsa_switch *ds, int port,
 			     struct netlink_ext_ack *extack);
 int dsa_port_simple_hsr_leave(struct dsa_switch *ds, int port,
 			      struct net_device *hsr);
+
+/* Perform operations on a switch by sending it request in Ethernet
+ * frames and expecting a response in a frame.
+ *
+ * resp_lock protects resp and resp_len to ensure they are consistent.
+ * If there is a thread waiting for the response, resp will point to a
+ * buffer to copy the response to. If the thread has given up waiting,
+ * resp will be a NULL pointer.
+ *
+ * The lock is used to serialise all inband operations. It also protects
+ * the seqno, which is incremented while holding the lock.
+ */
+struct dsa_inband {
+	struct mutex lock; /* Serialise operations */
+	struct completion completion;
+	u32 seqno;
+	u32 seqno_mask;
+	int err;
+	spinlock_t resp_lock;
+	void *resp;
+	unsigned int resp_len;
+};
+
+void dsa_inband_init(struct dsa_inband *inband, u32 seqno_mask);
+void dsa_inband_complete(struct dsa_inband *inband,
+		      void *resp, unsigned int resp_len, int err);
+int dsa_inband_request(struct dsa_inband *inband, struct sk_buff *skb,
+		       void (*insert_seqno)(struct sk_buff *skb, u32 seqno),
+		       void *resp, unsigned int resp_len,
+		       int timeout_ms);
+int dsa_inband_wait_for_completion(struct dsa_inband *inband, int timeout_ms);
+u32 dsa_inband_seqno(struct dsa_inband *inband);
 
 /* Keep inline for faster access in hot path */
 static inline bool netdev_uses_dsa(const struct net_device *dev)

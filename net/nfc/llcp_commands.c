@@ -193,16 +193,20 @@ int nfc_llcp_parse_gb_tlv(struct nfc_llcp_local *local,
 			  const u8 *tlv_array, u16 tlv_array_len)
 {
 	const u8 *tlv = tlv_array;
-	u8 type, length, offset = 0;
+	const u8 *tlv_end = tlv_array + tlv_array_len;
+	u8 type, length;
 
 	pr_debug("TLV array length %d\n", tlv_array_len);
 
 	if (local == NULL)
 		return -ENODEV;
 
-	while (offset < tlv_array_len) {
+	while (tlv + 2 < tlv_end) {
 		type = tlv[0];
 		length = tlv[1];
+
+		if (tlv + 2 + length > tlv_end)
+			break;
 
 		pr_debug("type 0x%x length %d\n", type, length);
 
@@ -227,7 +231,6 @@ int nfc_llcp_parse_gb_tlv(struct nfc_llcp_local *local,
 			break;
 		}
 
-		offset += length + 2;
 		tlv += length + 2;
 	}
 
@@ -243,16 +246,20 @@ int nfc_llcp_parse_connection_tlv(struct nfc_llcp_sock *sock,
 				  const u8 *tlv_array, u16 tlv_array_len)
 {
 	const u8 *tlv = tlv_array;
-	u8 type, length, offset = 0;
+	const u8 *tlv_end = tlv_array + tlv_array_len;
+	u8 type, length;
 
 	pr_debug("TLV array length %d\n", tlv_array_len);
 
 	if (sock == NULL)
 		return -ENOTCONN;
 
-	while (offset < tlv_array_len) {
+	while (tlv + 2 < tlv_end) {
 		type = tlv[0];
 		length = tlv[1];
+
+		if (tlv + 2 + length > tlv_end)
+			break;
 
 		pr_debug("type 0x%x length %d\n", type, length);
 
@@ -270,7 +277,6 @@ int nfc_llcp_parse_connection_tlv(struct nfc_llcp_sock *sock,
 			break;
 		}
 
-		offset += length + 2;
 		tlv += length + 2;
 	}
 

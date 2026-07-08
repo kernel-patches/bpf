@@ -48,6 +48,11 @@ int tipc_udp_nl_dump_remoteip(struct sk_buff *skb, struct netlink_callback *cb);
 /* check if configured MTU is too low for tipc headers */
 static inline bool tipc_udp_mtu_bad(u32 mtu)
 {
+	if (mtu > U16_MAX) {
+		pr_warn("MTU too large for tipc bearer\n");
+		return true;
+	}
+
 	if (mtu >= (TIPC_MIN_BEARER_MTU + sizeof(struct iphdr) +
 	    sizeof(struct udphdr)))
 		return false;

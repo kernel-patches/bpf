@@ -44,6 +44,20 @@ static inline struct net_device *dsa_conduit_find_user(struct net_device *dev,
 	return NULL;
 }
 
+static inline struct dsa_switch *dsa_conduit_find_switch(struct net_device *dev,
+							 int device)
+{
+	struct dsa_port *cpu_dp = dev->dsa_ptr;
+	struct dsa_switch_tree *dst = cpu_dp->dst;
+	struct dsa_port *dp;
+
+	list_for_each_entry(dp, &dst->ports, list)
+		if (dp->ds->index == device)
+			return dp->ds;
+
+	return NULL;
+}
+
 /**
  * dsa_software_untag_vlan_aware_bridge: Software untagging for VLAN-aware bridge
  * @skb: Pointer to received socket buffer (packet)

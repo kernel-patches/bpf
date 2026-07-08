@@ -740,21 +740,55 @@ qlcnic_has_mn(struct qlcnic_adapter *adapter)
 	return 0;
 }
 
-static
-struct uni_table_desc *qlcnic_get_table_desc(const u8 *unirom, int section)
+#define QLCNIC_UNI_DIR_TYPE_OFF		8
+#define QLCNIC_UNI_DIR_ENTRY_MIN_SIZE \
+	((QLCNIC_UNI_DIR_TYPE_OFF + 1) * sizeof(__le32))
+#define QLCNIC_UNI_PRODUCT_ENTRY_MIN_SIZE \
+	((QLCNIC_UNI_FIRMWARE_IDX_OFF + 1) * sizeof(__le32))
+
+static bool qlcnic_rom_range_valid(size_t fw_size, u32 offset, u32 len)
 {
-	u32 i, entries;
+	return offset <= fw_size && len <= fw_size - offset;
+}
+
+static bool qlcnic_rom_table_valid(size_t size, u32 off, u32 n, u32 esz)
+{
+	if (off > size)
+		return false;
+	if (!esz)
+		return n == 0;
+
+	return n <= (size - off) / esz;
+}
+
+static bool qlcnic_rom_entry_valid(size_t size, u32 off, u32 esz, u32 idx)
+{
+	if (!esz || off > size)
+		return false;
+
+	return idx < (size - off) / esz;
+}
+
+static struct uni_table_desc *qlcnic_get_table_desc(const u8 *unirom,
+						    size_t fw_size, int section)
+{
 	struct uni_table_desc *directory = (struct uni_table_desc *) &unirom[0];
-	entries = le32_to_cpu(directory->num_entries);
+	u32 entries = le32_to_cpu(directory->num_entries);
+	u32 entry_size = le32_to_cpu(directory->entry_size);
+	u32 findex = le32_to_cpu(directory->findex);
+	u32 i;
+
+	if (entry_size < QLCNIC_UNI_DIR_ENTRY_MIN_SIZE ||
+	    !qlcnic_rom_table_valid(fw_size, findex, entries, entry_size))
+		return NULL;
 
 	for (i = 0; i < entries; i++) {
-
-		u32 offs = le32_to_cpu(directory->findex) +
-			   i * le32_to_cpu(directory->entry_size);
-		u32 tab_type = le32_to_cpu(*((__le32 *)&unirom[offs] + 8));
+		size_t offs = findex + (size_t)i * entry_size;
+		u32 tab_type = le32_to_cpu(*((__le32 *)&unirom[offs] +
+						QLCNIC_UNI_DIR_TYPE_OFF));
 
 		if (tab_type == section)
-			return (struct uni_table_desc *) &unirom[offs];
+			return (struct uni_table_desc *)&unirom[offs];
 	}
 
 	return NULL;
@@ -766,19 +800,18 @@ static int
 qlcnic_validate_header(struct qlcnic_adapter *adapter)
 {
 	const u8 *unirom = adapter->fw->data;
-	struct uni_table_desc *directory = (struct uni_table_desc *) &unirom[0];
-	u32 entries, entry_size, tab_size, fw_file_size;
-
-	fw_file_size = adapter->fw->size;
+	struct uni_table_desc *directory = (struct uni_table_desc *)&unirom[0];
+	u32 fw_file_size = adapter->fw->size;
+	u32 entries, entry_size, findex;
 
 	if (fw_file_size < FILEHEADER_SIZE)
 		return -EINVAL;
 
 	entries = le32_to_cpu(directory->num_entries);
 	entry_size = le32_to_cpu(directory->entry_size);
-	tab_size = le32_to_cpu(directory->findex) + (entries * entry_size);
+	findex = le32_to_cpu(directory->findex);
 
-	if (fw_file_size < tab_size)
+	if (!qlcnic_rom_table_valid(fw_file_size, findex, entries, entry_size))
 		return -EINVAL;
 
 	return 0;
@@ -789,31 +822,33 @@ qlcnic_validate_bootld(struct qlcnic_adapter *adapter)
 {
 	struct uni_table_desc *tab_desc;
 	struct uni_data_desc *descr;
-	u32 offs, tab_size, data_size, idx;
 	const u8 *unirom = adapter->fw->data;
+	size_t offs;
+	u32 data_len, data_off, entry_size, findex, idx;
 	__le32 temp;
 
 	temp = *((__le32 *)&unirom[adapter->file_prd_off] +
 		 QLCNIC_UNI_BOOTLD_IDX_OFF);
 	idx = le32_to_cpu(temp);
-	tab_desc = qlcnic_get_table_desc(unirom, QLCNIC_UNI_DIR_SECT_BOOTLD);
+	tab_desc = qlcnic_get_table_desc(unirom, adapter->fw->size,
+					 QLCNIC_UNI_DIR_SECT_BOOTLD);
 
 	if (!tab_desc)
 		return -EINVAL;
 
-	tab_size = le32_to_cpu(tab_desc->findex) +
-		   le32_to_cpu(tab_desc->entry_size) * (idx + 1);
-
-	if (adapter->fw->size < tab_size)
+	entry_size = le32_to_cpu(tab_desc->entry_size);
+	findex = le32_to_cpu(tab_desc->findex);
+	if (entry_size < sizeof(*descr) ||
+	    !qlcnic_rom_entry_valid(adapter->fw->size, findex, entry_size,
+				     idx))
 		return -EINVAL;
 
-	offs = le32_to_cpu(tab_desc->findex) +
-	       le32_to_cpu(tab_desc->entry_size) * idx;
+	offs = findex + (size_t)entry_size * idx;
 	descr = (struct uni_data_desc *)&unirom[offs];
+	data_off = le32_to_cpu(descr->findex);
+	data_len = le32_to_cpu(descr->size);
 
-	data_size = le32_to_cpu(descr->findex) + le32_to_cpu(descr->size);
-
-	if (adapter->fw->size < data_size)
+	if (!qlcnic_rom_range_valid(adapter->fw->size, data_off, data_len))
 		return -EINVAL;
 
 	return 0;
@@ -825,29 +860,31 @@ qlcnic_validate_fw(struct qlcnic_adapter *adapter)
 	struct uni_table_desc *tab_desc;
 	struct uni_data_desc *descr;
 	const u8 *unirom = adapter->fw->data;
-	u32 offs, tab_size, data_size, idx;
+	size_t offs;
+	u32 data_len, data_off, entry_size, findex, idx;
 	__le32 temp;
 
 	temp = *((__le32 *)&unirom[adapter->file_prd_off] +
 		 QLCNIC_UNI_FIRMWARE_IDX_OFF);
 	idx = le32_to_cpu(temp);
-	tab_desc = qlcnic_get_table_desc(unirom, QLCNIC_UNI_DIR_SECT_FW);
+	tab_desc = qlcnic_get_table_desc(unirom, adapter->fw->size,
+					 QLCNIC_UNI_DIR_SECT_FW);
 
 	if (!tab_desc)
 		return -EINVAL;
 
-	tab_size = le32_to_cpu(tab_desc->findex) +
-		   le32_to_cpu(tab_desc->entry_size) * (idx + 1);
-
-	if (adapter->fw->size < tab_size)
+	entry_size = le32_to_cpu(tab_desc->entry_size);
+	findex = le32_to_cpu(tab_desc->findex);
+	if (entry_size < sizeof(*descr) ||
+	    !qlcnic_rom_entry_valid(adapter->fw->size, findex, entry_size,
+				     idx))
 		return -EINVAL;
 
-	offs = le32_to_cpu(tab_desc->findex) +
-	       le32_to_cpu(tab_desc->entry_size) * idx;
+	offs = findex + (size_t)entry_size * idx;
 	descr = (struct uni_data_desc *)&unirom[offs];
-	data_size = le32_to_cpu(descr->findex) + le32_to_cpu(descr->size);
-
-	if (adapter->fw->size < data_size)
+	data_off = le32_to_cpu(descr->findex);
+	data_len = le32_to_cpu(descr->size);
+	if (!qlcnic_rom_range_valid(adapter->fw->size, data_off, data_len))
 		return -EINVAL;
 
 	return 0;
@@ -859,30 +896,30 @@ qlcnic_validate_product_offs(struct qlcnic_adapter *adapter)
 	struct uni_table_desc *ptab_descr;
 	const u8 *unirom = adapter->fw->data;
 	int mn_present = qlcnic_has_mn(adapter);
-	u32 entries, entry_size, tab_size, i;
+	u32 entries, entry_size, findex, i;
+	u32 section = QLCNIC_UNI_DIR_SECT_PRODUCT_TBL;
 	__le32 temp;
 
-	ptab_descr = qlcnic_get_table_desc(unirom,
-				QLCNIC_UNI_DIR_SECT_PRODUCT_TBL);
+	ptab_descr = qlcnic_get_table_desc(unirom, adapter->fw->size, section);
 	if (!ptab_descr)
 		return -EINVAL;
 
 	entries = le32_to_cpu(ptab_descr->num_entries);
 	entry_size = le32_to_cpu(ptab_descr->entry_size);
-	tab_size = le32_to_cpu(ptab_descr->findex) + (entries * entry_size);
-
-	if (adapter->fw->size < tab_size)
+	findex = le32_to_cpu(ptab_descr->findex);
+	if (entry_size < QLCNIC_UNI_PRODUCT_ENTRY_MIN_SIZE ||
+	    !qlcnic_rom_table_valid(adapter->fw->size, findex, entries,
+				     entry_size))
 		return -EINVAL;
 
 nomn:
 	for (i = 0; i < entries; i++) {
-
-		u32 flags, file_chiprev, offs;
+		size_t offs;
+		u32 flags, file_chiprev;
 		u8 chiprev = adapter->ahw->revision_id;
 		u32 flagbit;
 
-		offs = le32_to_cpu(ptab_descr->findex) +
-		       i * le32_to_cpu(ptab_descr->entry_size);
+		offs = findex + (size_t)i * entry_size;
 		temp = *((__le32 *)&unirom[offs] + QLCNIC_UNI_FLAGS_OFF);
 		flags = le32_to_cpu(temp);
 		temp = *((__le32 *)&unirom[offs] + QLCNIC_UNI_CHIP_REV_OFF);
@@ -891,7 +928,7 @@ nomn:
 		flagbit = mn_present ? 1 : 2;
 
 		if ((chiprev == file_chiprev) &&
-					((1ULL << flagbit) & flags)) {
+		    ((1ULL << flagbit) & flags)) {
 			adapter->file_prd_off = offs;
 			return 0;
 		}
@@ -945,7 +982,7 @@ struct uni_data_desc *qlcnic_get_data_desc(struct qlcnic_adapter *adapter,
 	temp = *((__le32 *)&unirom[adapter->file_prd_off] + idx_offset);
 	idx = le32_to_cpu(temp);
 
-	tab_desc = qlcnic_get_table_desc(unirom, section);
+	tab_desc = qlcnic_get_table_desc(unirom, adapter->fw->size, section);
 
 	if (tab_desc == NULL)
 		return NULL;

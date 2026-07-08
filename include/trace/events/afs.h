@@ -148,6 +148,7 @@ enum yfs_cm_operation {
 	EM(afs_server_trace_unuse_slist_isort,	"UNU isort") \
 	EM(afs_server_trace_update,		"UPDATE   ") \
 	EM(afs_server_trace_use_by_uuid,	"USE uuid ") \
+	EM(afs_server_trace_use_call,		"USE call ") \
 	EM(afs_server_trace_use_cm_call,	"USE cm-cl") \
 	EM(afs_server_trace_use_get_caps,	"USE gcaps") \
 	EM(afs_server_trace_use_give_up_cb,	"USE gvupc") \
@@ -937,9 +938,9 @@ TRACE_EVENT(afs_send_data,
 	    );
 
 TRACE_EVENT(afs_sent_data,
-	    TP_PROTO(struct afs_call *call, struct msghdr *msg, int ret),
+	    TP_PROTO(unsigned int call_debug_id, struct msghdr *msg, int ret),
 
-	    TP_ARGS(call, msg, ret),
+	    TP_ARGS(call_debug_id, msg, ret),
 
 	    TP_STRUCT__entry(
 		    __field(unsigned int,		call)
@@ -949,7 +950,7 @@ TRACE_EVENT(afs_sent_data,
 			     ),
 
 	    TP_fast_assign(
-		    __entry->call = call->debug_id;
+		    __entry->call = call_debug_id;
 		    __entry->ret = ret;
 		    __entry->offset = msg->msg_iter.xarray_start + msg->msg_iter.iov_offset;
 		    __entry->count = iov_iter_count(&msg->msg_iter);

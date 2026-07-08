@@ -729,11 +729,15 @@ static void smcr_conn_save_peer_info(struct smc_sock *smc,
 {
 	int bufsize = smc_uncompress_bufsize(clc->r0.rmbe_size);
 
-	smc->conn.peer_rmbe_idx = clc->r0.rmbe_idx;
+	/* Linux uses exactly one RMBE per RMB (always index 1); ignore the
+	 * peer-supplied rmbe_idx to prevent a malicious peer from setting an
+	 * out-of-bounds tx_off.
+	 */
+	smc->conn.peer_rmbe_idx = 1;
 	smc->conn.local_tx_ctrl.token = ntohl(clc->r0.rmbe_alert_token);
 	smc->conn.peer_rmbe_size = bufsize;
 	atomic_set(&smc->conn.peer_rmbe_space, smc->conn.peer_rmbe_size);
-	smc->conn.tx_off = bufsize * (smc->conn.peer_rmbe_idx - 1);
+	smc->conn.tx_off = 0;
 }
 
 static void smcd_conn_save_peer_info(struct smc_sock *smc,
@@ -741,12 +745,16 @@ static void smcd_conn_save_peer_info(struct smc_sock *smc,
 {
 	int bufsize = smc_uncompress_bufsize(clc->d0.dmbe_size);
 
-	smc->conn.peer_rmbe_idx = clc->d0.dmbe_idx;
+	/* Linux uses exactly one DMBE per DMB (always index 0); ignore the
+	 * peer-supplied dmbe_idx to prevent a malicious peer from deriving an
+	 * out-of-bounds tx_off that causes an OOB write.
+	 */
+	smc->conn.peer_rmbe_idx = 0;
 	smc->conn.peer_token = ntohll(clc->d0.token);
 	/* msg header takes up space in the buffer */
 	smc->conn.peer_rmbe_size = bufsize - sizeof(struct smcd_cdc_msg);
 	atomic_set(&smc->conn.peer_rmbe_space, smc->conn.peer_rmbe_size);
-	smc->conn.tx_off = bufsize * smc->conn.peer_rmbe_idx;
+	smc->conn.tx_off = 0;
 }
 
 static void smc_conn_save_peer_info(struct smc_sock *smc,

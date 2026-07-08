@@ -14,11 +14,19 @@ properties:
     enum:
       - samsung,s3fwrn5-i2c
       - samsung,s3fwrn82
+      - samsung,s3nrn4v
 
   en-gpios:
     maxItems: 1
     description:
       Output GPIO pin used for enabling/disabling the chip
+
+  clk-req-gpios:
+    maxItems: 1
+    description:
+      Input GPIO pin connected to the controller's CLK_REQ output, which the
+      controller asserts for as long as it requires its external reference
+      clock.
 
   interrupts:
     maxItems: 1
@@ -28,6 +36,9 @@ properties:
 
   clocks:
     maxItems: 1
+
+  pvdd-supply:
+    description: PVDD power supply
 
   wake-gpios:
     maxItems: 1
@@ -53,16 +64,44 @@ required:
   - en-gpios
   - wake-gpios
 
+# The clock-request handshake gates an external clock, so it needs one.
+dependencies:
+  clk-req-gpios: [ clocks ]
+
 allOf:
   - if:
       properties:
         compatible:
           contains:
-            const: samsung,s3fwrn5-i2c
+            enum:
+              - samsung,s3fwrn5-i2c
+              - samsung,s3nrn4v
     then:
       required:
         - interrupts
         - reg
+
+  # No user of the clock-request handshake is known on the other parts.
+  - if:
+      not:
+        properties:
+          compatible:
+            contains:
+              const: samsung,s3nrn4v
+    then:
+      properties:
+        clk-req-gpios: false
+
+  # Deployed DTs for the older parts never described a supply, so PVDD is
+  # only required for the new device.
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: samsung,s3nrn4v
+    then:
+      required:
+        - pvdd-supply
 
 examples:
   - |
@@ -95,5 +134,29 @@ examples:
             en-gpios = <&gpio 20 GPIO_ACTIVE_HIGH>;
             wake-gpios = <&gpio 16 GPIO_ACTIVE_HIGH>;
 
+        };
+    };
+  # S3NRN4V with a clock-request gated external clock
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        nfc@27 {
+            compatible = "samsung,s3nrn4v";
+            reg = <0x27>;
+
+            interrupt-parent = <&tlmm>;
+            interrupts = <31 IRQ_TYPE_EDGE_RISING>;
+
+            en-gpios = <&tlmm 56 GPIO_ACTIVE_HIGH>;
+            wake-gpios = <&tlmm 7 GPIO_ACTIVE_HIGH>;
+            clk-req-gpios = <&tlmm 6 GPIO_ACTIVE_HIGH>;
+
+            clocks = <&rpmhcc 4>;
+            pvdd-supply = <&nfc_pvdd>;
         };
     };

@@ -15,6 +15,7 @@
 #include <linux/of_net.h>
 #include <linux/mfd/syscon.h>
 #include <linux/regmap.h>
+#include <linux/rtnetlink.h>
 
 #define SC_PPE_RESET_DREQ		0x026C
 
@@ -761,6 +762,13 @@ static int hip04_mac_stop(struct net_device *ndev)
 
 	napi_disable(&priv->napi);
 	netif_stop_queue(ndev);
+
+	/* Cancel the TX-coalesce timer after the arming paths (xmit via the
+	 * queue, rx poll via NAPI) are disabled, so a pending tx_done()
+	 * (which dereferences priv) is drained before the device is freed.
+	 */
+	hrtimer_cancel(&priv->tx_coalesce_timer);
+
 	hip04_mac_disable(ndev);
 	hip04_tx_reclaim(ndev, true);
 	hip04_reset_ppe(priv);
@@ -791,8 +799,15 @@ static void hip04_tx_timeout_task(struct work_struct *work)
 	struct hip04_priv *priv;
 
 	priv = container_of(work, struct hip04_priv, tx_timeout_task);
+
+	rtnl_lock();
+	if (!netif_running(priv->ndev))
+		goto out;
+
 	hip04_mac_stop(priv->ndev);
 	hip04_mac_open(priv->ndev);
+out:
+	rtnl_unlock();
 }
 
 static int hip04_get_coalesce(struct net_device *netdev,
@@ -1029,10 +1044,15 @@ static void hip04_remove(struct platform_device *pdev)
 	if (priv->phy)
 		phy_disconnect(priv->phy);
 
-	hip04_free_ring(ndev, d);
 	unregister_netdev(ndev);
-	of_node_put(priv->phy_node);
 	cancel_work_sync(&priv->tx_timeout_task);
+	hrtimer_cancel(&priv->tx_coalesce_timer);
+	/* Free the rings only after the interface is stopped (.ndo_stop via
+	 * unregister_netdev) and the work/timer are drained; the TX/NAPI
+	 * paths touch them while the device is up.
+	 */
+	hip04_free_ring(ndev, d);
+	of_node_put(priv->phy_node);
 	free_netdev(ndev);
 }
 

@@ -133,58 +133,94 @@ static const struct mana_stats_desc mana_phy_stats[] = {
 	{ "hc_tc7_tx_pause_phy", offsetof(struct mana_ethtool_phy_stats, tx_pause_tc7_phy) },
 };
 
+static const char mana_priv_flags[MANA_PRIV_FLAG_MAX][ETH_GSTRING_LEN] = {
+	[MANA_PRIV_FLAG_USE_FULL_PAGE_RXBUF] = "full-page-rx"
+};
+
 static int mana_get_sset_count(struct net_device *ndev, int stringset)
 {
 	struct mana_port_context *apc = netdev_priv(ndev);
 	unsigned int num_queues = apc->num_queues;
 
-	if (stringset != ETH_SS_STATS)
-		return -EINVAL;
+	switch (stringset) {
+	case ETH_SS_STATS:
+		return ARRAY_SIZE(mana_eth_stats) +
+		       ARRAY_SIZE(mana_phy_stats) +
+		       ARRAY_SIZE(mana_hc_stats)  +
+		       num_queues * (MANA_STATS_RX_COUNT + MANA_STATS_TX_COUNT);
 
-	return ARRAY_SIZE(mana_eth_stats) + ARRAY_SIZE(mana_phy_stats) + ARRAY_SIZE(mana_hc_stats) +
-			num_queues * (MANA_STATS_RX_COUNT + MANA_STATS_TX_COUNT);
+	case ETH_SS_PRIV_FLAGS:
+		return MANA_PRIV_FLAG_MAX;
+
+	default:
+		return -EINVAL;
+	}
+}
+
+static void mana_get_strings_stats(struct mana_port_context *apc, u8 **data)
+{
+	unsigned int num_queues = apc->num_queues;
+	int i, j;
+
+	for (i = 0; i < ARRAY_SIZE(mana_eth_stats); i++)
+		ethtool_puts(data, mana_eth_stats[i].name);
+
+	for (i = 0; i < ARRAY_SIZE(mana_hc_stats); i++)
+		ethtool_puts(data, mana_hc_stats[i].name);
+
+	for (i = 0; i < ARRAY_SIZE(mana_phy_stats); i++)
+		ethtool_puts(data, mana_phy_stats[i].name);
+
+	for (i = 0; i < num_queues; i++) {
+		ethtool_sprintf(data, "rx_%d_packets", i);
+		ethtool_sprintf(data, "rx_%d_bytes", i);
+		ethtool_sprintf(data, "rx_%d_xdp_drop", i);
+		ethtool_sprintf(data, "rx_%d_xdp_tx", i);
+		ethtool_sprintf(data, "rx_%d_xdp_redirect", i);
+		ethtool_sprintf(data, "rx_%d_pkt_len0_err", i);
+		for (j = 0; j < MANA_RXCOMP_OOB_NUM_PPI - 1; j++)
+			ethtool_sprintf(data,
+					"rx_%d_coalesced_cqe_%d",
+					i,
+					j + 2);
+	}
+
+	for (i = 0; i < num_queues; i++) {
+		ethtool_sprintf(data, "tx_%d_packets", i);
+		ethtool_sprintf(data, "tx_%d_bytes", i);
+		ethtool_sprintf(data, "tx_%d_xdp_xmit", i);
+		ethtool_sprintf(data, "tx_%d_tso_packets", i);
+		ethtool_sprintf(data, "tx_%d_tso_bytes", i);
+		ethtool_sprintf(data, "tx_%d_tso_inner_packets", i);
+		ethtool_sprintf(data, "tx_%d_tso_inner_bytes", i);
+		ethtool_sprintf(data, "tx_%d_long_pkt_fmt", i);
+		ethtool_sprintf(data, "tx_%d_short_pkt_fmt", i);
+		ethtool_sprintf(data, "tx_%d_csum_partial", i);
+		ethtool_sprintf(data, "tx_%d_mana_map_err", i);
+	}
+}
+
+static void mana_get_strings_priv_flags(u8 **data)
+{
+	int i;
+
+	for (i = 0; i < MANA_PRIV_FLAG_MAX; i++)
+		ethtool_puts(data, mana_priv_flags[i]);
 }
 
 static void mana_get_strings(struct net_device *ndev, u32 stringset, u8 *data)
 {
 	struct mana_port_context *apc = netdev_priv(ndev);
-	unsigned int num_queues = apc->num_queues;
-	int i, j;
 
-	if (stringset != ETH_SS_STATS)
-		return;
-	for (i = 0; i < ARRAY_SIZE(mana_eth_stats); i++)
-		ethtool_puts(&data, mana_eth_stats[i].name);
-
-	for (i = 0; i < ARRAY_SIZE(mana_hc_stats); i++)
-		ethtool_puts(&data, mana_hc_stats[i].name);
-
-	for (i = 0; i < ARRAY_SIZE(mana_phy_stats); i++)
-		ethtool_puts(&data, mana_phy_stats[i].name);
-
-	for (i = 0; i < num_queues; i++) {
-		ethtool_sprintf(&data, "rx_%d_packets", i);
-		ethtool_sprintf(&data, "rx_%d_bytes", i);
-		ethtool_sprintf(&data, "rx_%d_xdp_drop", i);
-		ethtool_sprintf(&data, "rx_%d_xdp_tx", i);
-		ethtool_sprintf(&data, "rx_%d_xdp_redirect", i);
-		ethtool_sprintf(&data, "rx_%d_pkt_len0_err", i);
-		for (j = 0; j < MANA_RXCOMP_OOB_NUM_PPI - 1; j++)
-			ethtool_sprintf(&data, "rx_%d_coalesced_cqe_%d", i, j + 2);
-	}
-
-	for (i = 0; i < num_queues; i++) {
-		ethtool_sprintf(&data, "tx_%d_packets", i);
-		ethtool_sprintf(&data, "tx_%d_bytes", i);
-		ethtool_sprintf(&data, "tx_%d_xdp_xmit", i);
-		ethtool_sprintf(&data, "tx_%d_tso_packets", i);
-		ethtool_sprintf(&data, "tx_%d_tso_bytes", i);
-		ethtool_sprintf(&data, "tx_%d_tso_inner_packets", i);
-		ethtool_sprintf(&data, "tx_%d_tso_inner_bytes", i);
-		ethtool_sprintf(&data, "tx_%d_long_pkt_fmt", i);
-		ethtool_sprintf(&data, "tx_%d_short_pkt_fmt", i);
-		ethtool_sprintf(&data, "tx_%d_csum_partial", i);
-		ethtool_sprintf(&data, "tx_%d_mana_map_err", i);
+	switch (stringset) {
+	case ETH_SS_STATS:
+		mana_get_strings_stats(apc, &data);
+		break;
+	case ETH_SS_PRIV_FLAGS:
+		mana_get_strings_priv_flags(&data);
+		break;
+	default:
+		break;
 	}
 }
 
@@ -419,6 +455,15 @@ static int mana_get_coalesce(struct net_device *ndev,
 	    !kernel_coal->rx_cqe_nsecs)
 		kernel_coal->rx_cqe_nsecs = MANA_RX_CQE_NSEC_DEF;
 
+	ec->rx_coalesce_usecs = apc->intr_modr_rx_usec;
+	ec->rx_max_coalesced_frames = apc->intr_modr_rx_comp;
+
+	ec->tx_coalesce_usecs = apc->intr_modr_tx_usec;
+	ec->tx_max_coalesced_frames = apc->intr_modr_tx_comp;
+
+	ec->use_adaptive_rx_coalesce = apc->rx_dim_enabled;
+	ec->use_adaptive_tx_coalesce = apc->tx_dim_enabled;
+
 	return 0;
 }
 
@@ -428,8 +473,33 @@ static int mana_set_coalesce(struct net_device *ndev,
 			     struct netlink_ext_ack *extack)
 {
 	struct mana_port_context *apc = netdev_priv(ndev);
-	u8 saved_cqe_coalescing_enable;
+	struct {
+		u16 intr_modr_rx_usec;
+		u16 intr_modr_rx_comp;
+		u16 intr_modr_tx_usec;
+		u16 intr_modr_tx_comp;
+		u8 cqe_coalescing_enable;
+		bool rx_dim_enabled;
+		bool tx_dim_enabled;
+	} saved;
+	bool modr_changed = false;
+	bool dim_changed = false;
+	struct gdma_context *gc;
 	int err;
+
+	gc = apc->ac->gdma_dev->gdma_context;
+
+	/* Both static and dynamic interrupt moderation (DIM) rely on the
+	 * same HW capability advertised by the PF.
+	 */
+	if ((ec->use_adaptive_rx_coalesce || ec->use_adaptive_tx_coalesce ||
+	     ec->rx_coalesce_usecs || ec->tx_coalesce_usecs ||
+	     ec->rx_max_coalesced_frames || ec->tx_max_coalesced_frames) &&
+	    !(gc->pf_cap_flags1 & GDMA_PF_CAP_FLAG_1_DYN_INTERRUPT_MODERATION)) {
+		NL_SET_ERR_MSG(extack,
+			       "Interrupt Moderation is not supported by HW");
+		return -EOPNOTSUPP;
+	}
 
 	if (kernel_coal->rx_cqe_frames != 1 &&
 	    kernel_coal->rx_cqe_frames != MANA_RXCOMP_OOB_NUM_PPI) {
@@ -440,18 +510,129 @@ static int mana_set_coalesce(struct net_device *ndev,
 		return -EINVAL;
 	}
 
-	saved_cqe_coalescing_enable = apc->cqe_coalescing_enable;
+	if (ec->rx_coalesce_usecs > MANA_INTR_MODR_USEC_MAX ||
+	    ec->tx_coalesce_usecs > MANA_INTR_MODR_USEC_MAX) {
+		NL_SET_ERR_MSG_FMT(extack,
+				   "coalesce usecs must be <= %lu",
+				   MANA_INTR_MODR_USEC_MAX);
+		return -EINVAL;
+	}
+
+	if (ec->rx_max_coalesced_frames > MANA_INTR_MODR_COMP_MAX ||
+	    ec->tx_max_coalesced_frames > MANA_INTR_MODR_COMP_MAX) {
+		NL_SET_ERR_MSG_FMT(extack,
+				   "coalesce frames must be <= %lu",
+				   MANA_INTR_MODR_COMP_MAX);
+		return -EINVAL;
+	}
+
+	if (ec->rx_coalesce_usecs != apc->intr_modr_rx_usec ||
+	    ec->rx_max_coalesced_frames != apc->intr_modr_rx_comp ||
+	    ec->tx_coalesce_usecs != apc->intr_modr_tx_usec ||
+	    ec->tx_max_coalesced_frames != apc->intr_modr_tx_comp)
+		modr_changed = true;
+
+	saved.intr_modr_rx_usec = apc->intr_modr_rx_usec;
+	saved.intr_modr_rx_comp = apc->intr_modr_rx_comp;
+	saved.intr_modr_tx_usec = apc->intr_modr_tx_usec;
+	saved.intr_modr_tx_comp = apc->intr_modr_tx_comp;
+
+	apc->intr_modr_rx_usec = ec->rx_coalesce_usecs;
+	apc->intr_modr_rx_comp = ec->rx_max_coalesced_frames;
+	apc->intr_modr_tx_usec = ec->tx_coalesce_usecs;
+	apc->intr_modr_tx_comp = ec->tx_max_coalesced_frames;
+
+	if (!!ec->use_adaptive_rx_coalesce != apc->rx_dim_enabled ||
+	    !!ec->use_adaptive_tx_coalesce != apc->tx_dim_enabled)
+		dim_changed = true;
+
+	saved.rx_dim_enabled = apc->rx_dim_enabled;
+	saved.tx_dim_enabled = apc->tx_dim_enabled;
+
+	saved.cqe_coalescing_enable = apc->cqe_coalescing_enable;
 	apc->cqe_coalescing_enable =
 		kernel_coal->rx_cqe_frames == MANA_RXCOMP_OOB_NUM_PPI;
 
-	if (!apc->port_is_up)
+	if (!apc->port_is_up) {
+		WRITE_ONCE(apc->rx_dim_enabled, !!ec->use_adaptive_rx_coalesce);
+		WRITE_ONCE(apc->tx_dim_enabled, !!ec->use_adaptive_tx_coalesce);
 		return 0;
+	}
 
-	err = mana_config_rss(apc, TRI_STATE_TRUE, false, false);
-	if (err)
-		apc->cqe_coalescing_enable = saved_cqe_coalescing_enable;
+	if (apc->cqe_coalescing_enable != saved.cqe_coalescing_enable) {
+		/* CQE coalescing setting is applied via RSS configuration. */
+		err = mana_config_rss(apc, TRI_STATE_TRUE, false, false);
+		if (err) {
+			netdev_err(ndev, "Change CQE coalescing failed: %d\n",
+				   err);
+			apc->cqe_coalescing_enable =
+				saved.cqe_coalescing_enable;
+			apc->intr_modr_rx_usec = saved.intr_modr_rx_usec;
+			apc->intr_modr_rx_comp = saved.intr_modr_rx_comp;
+			apc->intr_modr_tx_usec = saved.intr_modr_tx_usec;
+			apc->intr_modr_tx_comp = saved.intr_modr_tx_comp;
+			return err;
+		}
+	}
 
-	return err;
+	if (modr_changed || dim_changed) {
+		bool new_rx_dim = !!ec->use_adaptive_rx_coalesce;
+		bool new_tx_dim = !!ec->use_adaptive_tx_coalesce;
+		bool disable_rx_dim = saved.rx_dim_enabled && !new_rx_dim;
+		bool disable_tx_dim = saved.tx_dim_enabled && !new_tx_dim;
+		bool enable_rx_dim = !saved.rx_dim_enabled && new_rx_dim;
+		bool enable_tx_dim = !saved.tx_dim_enabled && new_tx_dim;
+		int q;
+
+		/* On disable: clear the per-port flag first and
+		 * synchronize_net() so any in-flight NAPI poll observes
+		 * the new value and will not schedule further DIM work;
+		 * then drain pending work and restore the static
+		 * moderation values.
+		 */
+		if (disable_rx_dim)
+			WRITE_ONCE(apc->rx_dim_enabled, false);
+		if (disable_tx_dim)
+			WRITE_ONCE(apc->tx_dim_enabled, false);
+		if (disable_rx_dim || disable_tx_dim)
+			synchronize_net();
+
+		for (q = 0; q < apc->num_queues; q++) {
+			struct mana_cq *rx_cq = &apc->rxqs[q]->rx_cq;
+			struct mana_cq *tx_cq = &apc->tx_qp[q]->tx_cq;
+
+			if (disable_rx_dim)
+				mana_dim_change(rx_cq, false);
+			else if (enable_rx_dim)
+				mana_dim_change(rx_cq, true);
+			else if (!new_rx_dim && modr_changed)
+				mana_gd_ring_dim(rx_cq->gdma_cq,
+						 apc->intr_modr_rx_usec, true,
+						 apc->intr_modr_rx_comp, true);
+
+			if (disable_tx_dim)
+				mana_dim_change(tx_cq, false);
+			else if (enable_tx_dim)
+				mana_dim_change(tx_cq, true);
+			else if (!new_tx_dim && modr_changed)
+				mana_gd_ring_dim(tx_cq->gdma_cq,
+						 apc->intr_modr_tx_usec, true,
+						 apc->intr_modr_tx_comp, true);
+		}
+
+		/* Publish the enable flag with release semantics so a
+		 * concurrent NAPI poll that observes it set also sees the DIM
+		 * (re)init done by mana_dim_change() above.
+		 */
+		if (enable_rx_dim)
+			/* pairs with smp_load_acquire() in mana_update_rx_dim() */
+			smp_store_release(&apc->rx_dim_enabled, true);
+		if (enable_tx_dim)
+			/* pairs with smp_load_acquire() in mana_update_tx_dim() */
+			smp_store_release(&apc->tx_dim_enabled, true);
+	}
+
+	return 0;
 }
 
 /* mana_set_channels - change the number of queues on a port
@@ -594,8 +775,96 @@ static int mana_get_link_ksettings(struct net_device *ndev,
 	return 0;
 }
 
+static u32 mana_get_priv_flags(struct net_device *ndev)
+{
+	struct mana_port_context *apc = netdev_priv(ndev);
+
+	return apc->priv_flags;
+}
+
+static int mana_set_priv_flags(struct net_device *ndev, u32 priv_flags)
+{
+	struct mana_port_context *apc = netdev_priv(ndev);
+	u32 changed = apc->priv_flags ^ priv_flags;
+	u32 old_priv_flags = apc->priv_flags;
+	bool schedule_port_reset = false;
+	int err = 0;
+
+	if (!changed)
+		return 0;
+
+	/* Reject unknown bits */
+	if (priv_flags & ~GENMASK(MANA_PRIV_FLAG_MAX - 1, 0))
+		return -EINVAL;
+
+	if (changed & BIT(MANA_PRIV_FLAG_USE_FULL_PAGE_RXBUF)) {
+		apc->priv_flags = priv_flags;
+
+		if (!apc->port_is_up) {
+			/* Port is down, flag updated to apply on next up
+			 * so just return.
+			 */
+			return 0;
+		}
+
+		/* Pre-allocate buffers to prevent failure in mana_attach
+		 * later
+		 */
+		err = mana_pre_alloc_rxbufs(apc, ndev->mtu, apc->num_queues);
+		if (err) {
+			netdev_err(ndev,
+				   "Insufficient memory for new allocations\n");
+			apc->priv_flags = old_priv_flags;
+			return err;
+		}
+
+		err = mana_detach(ndev, false);
+		if (err) {
+			netdev_err(ndev, "mana_detach failed: %d\n", err);
+			apc->priv_flags = old_priv_flags;
+
+			/* Port is in an inconsistent state. Restore
+			 * 'port_is_up' so that queue reset work handler
+			 * can properly detach and re-attach.
+			 */
+			apc->port_is_up = true;
+			schedule_port_reset = true;
+			goto out;
+		}
+
+		err = mana_attach(ndev);
+		if (err) {
+			netdev_err(ndev, "mana_attach failed: %d\n", err);
+			apc->priv_flags = old_priv_flags;
+
+			/* Restore 'port_is_up' so the reset work handler
+			 * can properly detach/attach. Without this,
+			 * the handler sees port_is_up=false and skips
+			 * queue allocation, leaving the port dead.
+			 */
+			apc->port_is_up = true;
+			schedule_port_reset = true;
+		}
+	}
+
+out:
+	mana_pre_dealloc_rxbufs(apc);
+
+	if (schedule_port_reset)
+		queue_work(apc->ac->per_port_queue_reset_wq,
+			   &apc->queue_reset_work);
+
+	return err;
+}
+
 const struct ethtool_ops mana_ethtool_ops = {
-	.supported_coalesce_params = ETHTOOL_COALESCE_RX_CQE_FRAMES,
+	.supported_coalesce_params = ETHTOOL_COALESCE_RX_CQE_FRAMES |
+				     ETHTOOL_COALESCE_RX_USECS |
+				     ETHTOOL_COALESCE_RX_MAX_FRAMES |
+				     ETHTOOL_COALESCE_TX_USECS |
+				     ETHTOOL_COALESCE_TX_MAX_FRAMES |
+				     ETHTOOL_COALESCE_USE_ADAPTIVE_RX |
+				     ETHTOOL_COALESCE_USE_ADAPTIVE_TX,
 	.op_needs_rtnl		= ETHTOOL_OP_NEEDS_RTNL_SCHANNELS |
 				  ETHTOOL_OP_NEEDS_RTNL_SRINGPARAM |
 				  ETHTOOL_OP_NEEDS_RTNL_GLINK,
@@ -615,4 +884,6 @@ const struct ethtool_ops mana_ethtool_ops = {
 	.set_ringparam          = mana_set_ringparam,
 	.get_link_ksettings	= mana_get_link_ksettings,
 	.get_link		= ethtool_op_get_link,
+	.get_priv_flags		= mana_get_priv_flags,
+	.set_priv_flags		= mana_set_priv_flags,
 };

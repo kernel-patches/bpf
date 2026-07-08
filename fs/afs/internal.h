@@ -283,7 +283,6 @@ struct afs_net {
 	struct socket		*socket;
 	struct afs_call		*spare_incoming_call;
 	struct work_struct	charge_preallocation_work;
-	struct work_struct	rx_oob_work;
 	struct mutex		socket_mutex;
 	atomic_t		nr_outstanding_calls;
 	atomic_t		nr_superblocks;
@@ -547,7 +546,7 @@ struct afs_server {
 	struct work_struct	destroyer;	/* Work item to try and destroy a server */
 	struct timer_list	timer;		/* Management timer */
 	struct mutex		cm_token_lock;	/* Lock governing creation of appdata */
-	struct krb5_buffer	cm_rxgk_appdata; /* Appdata to be included in RESPONSE packet */
+	struct key		*cm_rxgk_appdata; /* Appdata to be included in RESPONSE packet */
 	time64_t		unuse_time;	/* Time at which last unused */
 	unsigned long		flags;
 #define AFS_SERVER_FL_RESPONDING 0		/* The server is responding */
@@ -559,6 +558,7 @@ struct afs_server {
 #define AFS_SERVER_FL_NOT_FOUND	6		/* VL server says no such server */
 #define AFS_SERVER_FL_VL_FAIL	7		/* Failed to access VL server */
 #define AFS_SERVER_FL_MAY_HAVE_CB 8		/* May have callbacks on this fileserver */
+#define AFS_SERVER_FL_APPDATA	9		/* Set if appdata created */
 #define AFS_SERVER_FL_IS_YFS	16		/* Server is YFS not AFS */
 #define AFS_SERVER_FL_NO_IBULK	17		/* Fileserver doesn't support FS.InlineBulkStatus */
 #define AFS_SERVER_FL_NO_RM2	18		/* Fileserver doesn't support YFS.RemoveFile2 */
@@ -1090,7 +1090,7 @@ extern bool afs_cm_incoming_call(struct afs_call *);
 /*
  * cm_security.c
  */
-void afs_process_oob_queue(struct work_struct *work);
+int afs_create_server_appdata(struct afs_server *server, struct key *key);
 #ifdef CONFIG_RXGK
 int afs_create_token_key(struct afs_net *net, struct socket *socket);
 #else
@@ -1415,21 +1415,6 @@ static inline void afs_see_call(struct afs_call *call, enum afs_call_trace why)
 	trace_afs_call(call->debug_id, why, r,
 		       atomic_read(&call->net->nr_outstanding_calls),
 		       __builtin_return_address(0));
-}
-
-static inline void afs_make_op_call(struct afs_operation *op, struct afs_call *call,
-				    gfp_t gfp)
-{
-	struct afs_addr_list *alist = op->estate->addresses;
-
-	op->call	= call;
-	op->type	= call->type;
-	call->op	= op;
-	call->key	= op->key;
-	call->intr	= !(op->flags & AFS_OPERATION_UNINTR);
-	call->peer	= rxrpc_kernel_get_peer(alist->addrs[op->addr_index].peer);
-	call->service_id = op->server->service_id;
-	afs_make_call(call, gfp);
 }
 
 static inline void afs_extract_begin(struct afs_call *call, void *buf, size_t size)
@@ -1761,6 +1746,22 @@ static inline struct afs_vnode *AFS_FS_I(struct inode *inode)
 static inline struct inode *AFS_VNODE_TO_I(struct afs_vnode *vnode)
 {
 	return &vnode->netfs.inode;
+}
+
+static inline void afs_make_op_call(struct afs_operation *op, struct afs_call *call,
+				    gfp_t gfp)
+{
+	struct afs_addr_list *alist = op->estate->addresses;
+
+	op->call	= call;
+	op->type	= call->type;
+	call->op	= op;
+	call->server	= afs_use_server(op->server, false, afs_server_trace_use_call);
+	call->key	= op->key;
+	call->intr	= !(op->flags & AFS_OPERATION_UNINTR);
+	call->peer	= rxrpc_kernel_get_peer(alist->addrs[op->addr_index].peer);
+	call->service_id = op->server->service_id;
+	afs_make_call(call, gfp);
 }
 
 /*

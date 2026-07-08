@@ -448,6 +448,12 @@ attribute-sets:
       -
         name: hds-thresh-max
         type: u32
+      -
+        name: pacing-offload-horizon
+        type: u32
+      -
+        name: pacing-offload-horizon-max
+        type: u32
 
   -
     name: mm-stat

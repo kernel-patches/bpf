@@ -81,6 +81,7 @@ static struct rxrpc_bundle *rxrpc_alloc_bundle(struct rxrpc_call *call,
 		bundle->local		= call->local;
 		bundle->peer		= rxrpc_get_peer(call->peer, rxrpc_peer_get_bundle);
 		bundle->key		= key_get(call->key);
+		bundle->app_data	= key_get(call->app_data);
 		bundle->security	= call->security;
 		bundle->exclusive	= test_bit(RXRPC_CALL_EXCLUSIVE, &call->flags);
 		bundle->upgrade		= test_bit(RXRPC_CALL_UPGRADE, &call->flags);
@@ -118,6 +119,7 @@ static void rxrpc_free_bundle(struct rxrpc_bundle *bundle)
 	write_unlock(&bundle->local->rxnet->conn_lock);
 	rxrpc_put_peer(bundle->peer, rxrpc_peer_put_bundle);
 	key_put(bundle->key);
+	key_put(bundle->app_data);
 	kfree(bundle);
 }
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /* Copyright (c) 2021, Microsoft Corporation. */
 
+#include <linux/bitfield.h>
 #include <linux/debugfs.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -466,6 +467,7 @@ static int mana_gd_disable_queue(struct gdma_queue *queue)
 #define DOORBELL_OFFSET_RQ	0x400
 #define DOORBELL_OFFSET_CQ	0x800
 #define DOORBELL_OFFSET_EQ	0xFF8
+#define DOORBELL_OFFSET_DIM	0x820
 
 static void mana_gd_ring_doorbell(struct gdma_context *gc, u32 db_index,
 				  enum gdma_queue_type q_type, u32 qid,
@@ -506,6 +508,16 @@ static void mana_gd_ring_doorbell(struct gdma_context *gc, u32 db_index,
 		addr += DOORBELL_OFFSET_SQ;
 		break;
 
+	case GDMA_DIM:
+		e.dim.id = qid;
+		e.dim.mod_usec = FIELD_GET(MANA_INTR_MODR_USEC_MAX, tail_ptr);
+		e.dim.mod_usec_vld = !!(tail_ptr & MANA_INTR_MODR_USEC_VLD);
+		e.dim.mod_comps = FIELD_GET(MANA_INTR_MODR_COMP_MASK, tail_ptr);
+		e.dim.mod_comps_vld = num_req;
+
+		addr += DOORBELL_OFFSET_DIM;
+		break;
+
 	default:
 		WARN_ON(1);
 		return;
@@ -539,6 +551,23 @@ void mana_gd_ring_cq(struct gdma_queue *cq, u8 arm_bit)
 			      head, arm_bit);
 }
 EXPORT_SYMBOL_NS(mana_gd_ring_cq, "NET_MANA");
+
+void mana_gd_ring_dim(struct gdma_queue *cq, u32 mod_usec, bool mod_usec_vld,
+		      u32 mod_comps, bool mod_comps_vld)
+{
+	struct gdma_context *gc = cq->gdma_dev->gdma_context;
+	u32 dim_val;
+
+	/* Convert the DIM values to doorbell parameters */
+	dim_val = FIELD_PREP(MANA_INTR_MODR_USEC_MAX, mod_usec) |
+		  FIELD_PREP(MANA_INTR_MODR_COMP_MASK, mod_comps);
+	if (mod_usec_vld)
+		dim_val |= MANA_INTR_MODR_USEC_VLD;
+
+	mana_gd_ring_doorbell(gc, cq->gdma_dev->doorbell, GDMA_DIM, cq->id,
+			      dim_val, mod_comps_vld);
+}
+EXPORT_SYMBOL_NS(mana_gd_ring_dim, "NET_MANA");
 
 #define MANA_SERVICE_PERIOD 10
 
@@ -2496,6 +2525,20 @@ static void mana_gd_shutdown(struct pci_dev *pdev)
 	pci_disable_device(pdev);
 }
 
+static int mana_sriov_configure(struct pci_dev *pdev, int numvfs)
+{
+	int err = 0;
+
+	dev_info(&pdev->dev, "Requested num VFs: %d\n", numvfs);
+
+	if (numvfs > 0)
+		err = pci_enable_sriov(pdev, numvfs);
+	else
+		pci_disable_sriov(pdev);
+
+	return err ? err : numvfs;
+}
+
 static const struct pci_device_id mana_id_table[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_MICROSOFT, MANA_PF_DEVICE_ID) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_MICROSOFT, MANA_PF2_DEVICE_ID) },
@@ -2511,6 +2554,7 @@ static struct pci_driver mana_driver = {
 	.suspend	= mana_gd_suspend,
 	.resume		= mana_gd_resume,
 	.shutdown	= mana_gd_shutdown,
+	.sriov_configure = mana_sriov_configure,
 };
 
 static int __init mana_driver_init(void)

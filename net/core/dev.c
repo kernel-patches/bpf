@@ -1802,6 +1802,7 @@ void netif_close_many(struct list_head *head, bool unlink)
 	__dev_close_many(head);
 
 	list_for_each_entry_safe(dev, tmp, head, close_list) {
+		netdev_assert_locked_ops_compat(dev);
 		rtmsg_ifinfo(RTM_NEWLINK, dev, IFF_UP | IFF_RUNNING, GFP_KERNEL, 0, NULL);
 		call_netdevice_notifiers(NETDEV_DOWN, dev);
 		if (unlink)
@@ -1912,9 +1913,11 @@ static void call_netdevice_unregister_notifiers(struct notifier_block *nb,
 						struct net_device *dev)
 {
 	if (dev->flags & IFF_UP) {
+		netdev_lock_ops(dev);
 		call_netdevice_notifier(nb, NETDEV_GOING_DOWN,
 					dev);
 		call_netdevice_notifier(nb, NETDEV_DOWN, dev);
+		netdev_unlock_ops(dev);
 	}
 	call_netdevice_notifier(nb, NETDEV_UNREGISTER, dev);
 }
@@ -5426,6 +5429,38 @@ bad_dev:
 	return NET_RX_DROP;
 }
 
+static inline int netif_rps(struct sk_buff *skb)
+{
+#ifdef CONFIG_RPS
+	if (static_branch_unlikely(&rps_needed)) {
+		struct rps_dev_flow voidflow, *rflow = &voidflow;
+		int cpu = get_rps_cpu(skb->dev, skb, &rflow);
+
+		if (cpu >= 0)
+			return enqueue_to_backlog(skb, cpu, &rflow->last_qtail);
+	}
+#endif
+	return NET_RX_UNHANDLED;
+}
+
+static inline void netif_rps_list(struct list_head *head)
+{
+#ifdef CONFIG_RPS
+	struct sk_buff *skb, *next;
+	LIST_HEAD(undo_list);
+
+	if (!static_branch_unlikely(&rps_needed))
+		return;
+
+	list_for_each_entry_safe(skb, next, head, list) {
+		skb_list_del_init(skb);
+		if (netif_rps(skb) == NET_RX_UNHANDLED)
+			list_add_tail(&skb->list, &undo_list);
+	}
+	list_splice_init(&undo_list, head);
+#endif
+}
+
 static struct netdev_rx_queue *netif_get_rxqueue(struct sk_buff *skb)
 {
 	struct net_device *dev = skb->dev;
@@ -5695,33 +5730,20 @@ EXPORT_SYMBOL_GPL(do_xdp_generic);
 
 static int netif_rx_internal(struct sk_buff *skb)
 {
-	int ret;
+	int ret = NET_RX_UNHANDLED;
+	unsigned int qtail;
 
 	net_timestamp_check(READ_ONCE(net_hotdata.tstamp_prequeue), skb);
 
 	trace_netif_rx(skb);
 
-#ifdef CONFIG_RPS
-	if (static_branch_unlikely(&rps_needed)) {
-		struct rps_dev_flow voidflow, *rflow = &voidflow;
-		int cpu;
+	scoped_guard(rcu)
+		ret = netif_rps(skb);
+	if (ret != NET_RX_UNHANDLED)
+		return ret;
 
-		rcu_read_lock();
+	ret = enqueue_to_backlog(skb, smp_processor_id(), &qtail);
 
-		cpu = get_rps_cpu(skb->dev, skb, &rflow);
-		if (cpu < 0)
-			cpu = smp_processor_id();
-
-		ret = enqueue_to_backlog(skb, cpu, &rflow->last_qtail);
-
-		rcu_read_unlock();
-	} else
-#endif
-	{
-		unsigned int qtail;
-
-		ret = enqueue_to_backlog(skb, smp_processor_id(), &qtail);
-	}
 	return ret;
 }
 
@@ -6389,21 +6411,12 @@ static int netif_receive_skb_internal(struct sk_buff *skb)
 	if (skb_defer_rx_timestamp(skb))
 		return NET_RX_SUCCESS;
 
-	rcu_read_lock();
-#ifdef CONFIG_RPS
-	if (static_branch_unlikely(&rps_needed)) {
-		struct rps_dev_flow voidflow, *rflow = &voidflow;
-		int cpu = get_rps_cpu(skb->dev, skb, &rflow);
+	guard(rcu)();
+	ret = netif_rps(skb);
+	if (ret != NET_RX_UNHANDLED)
+		return ret;
 
-		if (cpu >= 0) {
-			ret = enqueue_to_backlog(skb, cpu, &rflow->last_qtail);
-			rcu_read_unlock();
-			return ret;
-		}
-	}
-#endif
 	ret = __netif_receive_skb(skb);
-	rcu_read_unlock();
 	return ret;
 }
 
@@ -6421,23 +6434,9 @@ void netif_receive_skb_list_internal(struct list_head *head)
 	}
 	list_splice_init(&sublist, head);
 
-	rcu_read_lock();
-#ifdef CONFIG_RPS
-	if (static_branch_unlikely(&rps_needed)) {
-		list_for_each_entry_safe(skb, next, head, list) {
-			struct rps_dev_flow voidflow, *rflow = &voidflow;
-			int cpu = get_rps_cpu(skb->dev, skb, &rflow);
-
-			if (cpu >= 0) {
-				/* Will be handled, remove from list */
-				skb_list_del_init(skb);
-				enqueue_to_backlog(skb, cpu, &rflow->last_qtail);
-			}
-		}
-	}
-#endif
+	guard(rcu)();
+	netif_rps_list(head);
 	__netif_receive_skb_list(head);
-	rcu_read_unlock();
 }
 
 /**
@@ -9784,6 +9783,8 @@ void __dev_notify_flags(struct net_device *dev, unsigned int old_flags,
 			const struct nlmsghdr *nlh)
 {
 	unsigned int changes = dev->flags ^ old_flags;
+
+	netdev_assert_locked_ops_compat(dev);
 
 	if (gchanges)
 		rtmsg_ifinfo(RTM_NEWLINK, dev, gchanges, GFP_ATOMIC, portid, nlh);

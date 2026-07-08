@@ -24,6 +24,7 @@
 #include <net/tcp.h>
 #include <net/tcp_ecn.h>
 #include <net/rstreason.h>
+#include <trace/events/tcp.h>
 
 static u32 tcp_clamp_rto_to_user_timeout(const struct sock *sk)
 {
@@ -467,6 +468,7 @@ static void tcp_fastopen_synack_timer(struct sock *sk, struct request_sock *req)
 	 */
 	max_retries = READ_ONCE(icsk->icsk_syn_retries) ? :
 		READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_synack_retries) + 1;
+	max_retries = min_t(int, max_retries, MAX_TCP_SYNACK_RETRIES);
 
 	if (req->num_timeout >= max_retries) {
 		tcp_write_err(sk);
@@ -488,7 +490,7 @@ static void tcp_fastopen_synack_timer(struct sock *sk, struct request_sock *req)
 	if (!tp->retrans_stamp)
 		tp->retrans_stamp = tcp_time_stamp_ts(tp);
 	tcp_reset_xmit_timer(sk, ICSK_TIME_RETRANS,
-			  req->timeout << req->num_timeout, false);
+			     tcp_reqsk_timeout_sk(sk, req), false);
 }
 
 static bool tcp_rtx_probe0_timed_out(const struct sock *sk,
@@ -753,6 +755,8 @@ void tcp_syn_ack_timeout(const struct request_sock *req)
 	struct net *net = read_pnet(&inet_rsk(req)->ireq_net);
 
 	__NET_INC_STATS(net, LINUX_MIB_TCPTIMEOUTS);
+
+	trace_tcp_syn_ack_timeout(req);
 }
 
 void tcp_reset_keepalive_timer(struct sock *sk, unsigned long len)

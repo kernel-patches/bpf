@@ -25,14 +25,12 @@ static void afs_process_async_call(struct work_struct *);
 static void afs_rx_new_call(struct sock *, struct rxrpc_call *, unsigned long);
 static void afs_rx_discard_new_call(struct rxrpc_call *, unsigned long);
 static void afs_rx_attach(struct rxrpc_call *rxcall, unsigned long user_call_ID);
-static void afs_rx_notify_oob(struct sock *sk, struct sk_buff *oob);
 static int afs_deliver_cm_op_id(struct afs_call *);
 
 static const struct rxrpc_kernel_ops afs_rxrpc_callback_ops = {
 	.notify_new_call	= afs_rx_new_call,
 	.discard_new_call	= afs_rx_discard_new_call,
 	.user_attach_call	= afs_rx_attach,
-	.notify_oob		= afs_rx_notify_oob,
 };
 
 /* asynchronous incoming call initial processing */
@@ -71,10 +69,6 @@ int afs_open_socket(struct afs_net *net)
 
 	ret = rxrpc_sock_set_min_security_level(socket->sk,
 						RXRPC_SECURITY_ENCRYPT);
-	if (ret < 0)
-		goto error_2;
-
-	ret = rxrpc_sock_set_manage_response(socket->sk, true);
 	if (ret < 0)
 		goto error_2;
 
@@ -128,7 +122,6 @@ void afs_close_socket(struct afs_net *net)
 	_enter("");
 
 	cancel_work_sync(&net->charge_preallocation_work);
-	cancel_work_sync(&net->rx_oob_work);
 	/* Future work items should now see ->live is false. */
 
 	kernel_listen(net->socket, 0);
@@ -149,7 +142,6 @@ void afs_close_socket(struct afs_net *net)
 
 	kernel_sock_shutdown(net->socket, SHUT_RDWR);
 	flush_workqueue(afs_async_calls);
-	cancel_work_sync(&net->rx_oob_work);
 	net->socket->sk->sk_user_data = NULL;
 	sock_release(net->socket);
 	key_put(net->fs_cm_token_key);
@@ -347,7 +339,10 @@ void afs_make_call(struct afs_call *call, gfp_t gfp)
 	struct rxrpc_call *rxcall;
 	struct msghdr msg;
 	struct kvec iov[1];
+	unsigned int debug_id = call->debug_id;
+	struct key *app_data = NULL;
 	size_t len;
+	bool write_iter = call->write_iter;
 	s64 tx_total_len;
 	int ret;
 
@@ -378,8 +373,25 @@ void afs_make_call(struct afs_call *call, gfp_t gfp)
 		call->drop_ref = true;
 	}
 
+	if (call->key && call->server) {
+		u32 krb5_enctype = 0;
+		u8 security_index = 0;
+
+		rxrpc_kernel_query_key(call->key, &security_index, &krb5_enctype);
+		switch (security_index) {
+#ifdef CONFIG_RXGK
+		case RXRPC_SECURITY_YFS_RXGK:
+			app_data = call->server->cm_rxgk_appdata;
+			break;
+#endif
+		default:
+			break;
+		}
+	}
+
 	/* create a call */
-	rxcall = rxrpc_kernel_begin_call(call->net->socket, call->peer, call->key,
+	rxcall = rxrpc_kernel_begin_call(call->net->socket, call->peer,
+					 call->key, app_data,
 					 (unsigned long)call,
 					 tx_total_len,
 					 call->max_lifespan,
@@ -410,7 +422,7 @@ void afs_make_call(struct afs_call *call, gfp_t gfp)
 	iov_iter_kvec(&msg.msg_iter, ITER_SOURCE, iov, 1, call->request_size);
 	msg.msg_control		= NULL;
 	msg.msg_controllen	= 0;
-	msg.msg_flags		= MSG_WAITALL | (call->write_iter ? MSG_MORE : 0);
+	msg.msg_flags		= MSG_WAITALL | (write_iter ? MSG_MORE : 0);
 
 	ret = rxrpc_kernel_send_data(call->net->socket, rxcall,
 				     &msg, call->request_size,
@@ -418,7 +430,9 @@ void afs_make_call(struct afs_call *call, gfp_t gfp)
 	if (ret < 0)
 		goto error_do_abort;
 
-	if (call->write_iter) {
+	/* We lost our ref on call if MSG_MORE was set. */
+
+	if (write_iter) {
 		msg.msg_iter = *call->write_iter;
 		msg.msg_flags &= ~MSG_MORE;
 		trace_afs_send_data(call, &msg);
@@ -427,9 +441,9 @@ void afs_make_call(struct afs_call *call, gfp_t gfp)
 					     call->rxcall, &msg,
 					     iov_iter_count(&msg.msg_iter),
 					     afs_notify_end_request_tx);
-		*call->write_iter = msg.msg_iter;
+		/* We lost our ref on call. */
 
-		trace_afs_sent_data(call, &msg, ret);
+		trace_afs_sent_data(debug_id, &msg, ret);
 		if (ret < 0)
 			goto error_do_abort;
 	}
@@ -982,15 +996,4 @@ noinline int afs_protocol_error(struct afs_call *call,
 	if (call)
 		call->unmarshalling_error = true;
 	return -EBADMSG;
-}
-
-/*
- * Wake up OOB notification processing.
- */
-static void afs_rx_notify_oob(struct sock *sk, struct sk_buff *oob)
-{
-	struct afs_net *net = sk->sk_user_data;
-
-	if (READ_ONCE(net->live))
-		queue_work(afs_wq, &net->rx_oob_work);
 }
