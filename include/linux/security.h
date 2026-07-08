@@ -68,6 +68,11 @@ struct watch;
 struct watch_notification;
 struct lsm_ctx;
 
+struct lsm_xattrs {
+	struct xattr *xattrs;
+	unsigned int xattr_count;
+};
+
 /* Default (no) options for the capable function */
 #define CAP_OPT_NONE 0x0
 /* If capable should audit the security request */
@@ -401,6 +406,9 @@ void security_inode_free(struct inode *inode);
 int security_inode_init_security(struct inode *inode, struct inode *dir,
 				 const struct qstr *qstr,
 				 initxattrs initxattrs, void *fs_data);
+int security_lsmxattr_add(struct lsm_xattrs *xattrs, u64 lsm_id,
+			  const char *name, const void *value,
+			  size_t value_len);
 int security_inode_init_security_anon(struct inode *inode,
 				      const struct qstr *name,
 				      const struct inode *context_inode);
@@ -893,6 +901,13 @@ static inline int security_inode_init_security(struct inode *inode,
 						void *fs_data)
 {
 	return 0;
+}
+
+static inline int security_lsmxattr_add(struct lsm_xattrs *xattrs, u64 lsm_id,
+					const char *name, const void *value,
+					size_t value_len)
+{
+	return -EOPNOTSUPP;
 }
 
 static inline int security_inode_init_security_anon(struct inode *inode,

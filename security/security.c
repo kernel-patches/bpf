@@ -12,6 +12,7 @@
 #define pr_fmt(fmt) "LSM: " fmt
 
 #include <linux/bpf.h>
+#include <linux/bpf_lsm.h>
 #include <linux/capability.h>
 #include <linux/dcache.h>
 #include <linux/export.h>
@@ -1333,8 +1334,8 @@ int security_inode_init_security(struct inode *inode, struct inode *dir,
 				 const initxattrs initxattrs, void *fs_data)
 {
 	struct lsm_static_call *scall;
-	struct xattr *new_xattrs = NULL;
-	int ret = -EOPNOTSUPP, xattr_count = 0;
+	struct lsm_xattrs xattrs = {};
+	int ret = -EOPNOTSUPP;
 
 	if (unlikely(IS_PRIVATE(inode)))
 		return 0;
@@ -1344,15 +1345,15 @@ int security_inode_init_security(struct inode *inode, struct inode *dir,
 
 	if (initxattrs) {
 		/* Allocate +1 as terminator. */
-		new_xattrs = kcalloc(blob_sizes.lbs_xattr_count + 1,
-				     sizeof(*new_xattrs), GFP_NOFS);
-		if (!new_xattrs)
+		xattrs.xattrs = kcalloc(blob_sizes.lbs_xattr_count + 1,
+					sizeof(*xattrs.xattrs), GFP_NOFS);
+		if (!xattrs.xattrs)
 			return -ENOMEM;
 	}
 
 	lsm_for_each_hook(scall, inode_init_security) {
-		ret = scall->hl->hook.inode_init_security(inode, dir, qstr, new_xattrs,
-						  &xattr_count);
+		ret = scall->hl->hook.inode_init_security(inode, dir, qstr,
+							  &xattrs);
 		if (ret && ret != -EOPNOTSUPP)
 			goto out;
 		/*
@@ -1364,17 +1365,100 @@ int security_inode_init_security(struct inode *inode, struct inode *dir,
 	}
 
 	/* If initxattrs() is NULL, xattr_count is zero, skip the call. */
-	if (!xattr_count)
+	if (!xattrs.xattr_count)
 		goto out;
 
-	ret = initxattrs(inode, new_xattrs, fs_data);
+	ret = initxattrs(inode, xattrs.xattrs, fs_data);
 out:
-	for (; xattr_count > 0; xattr_count--)
-		kfree(new_xattrs[xattr_count - 1].value);
-	kfree(new_xattrs);
+	for (; xattrs.xattr_count > 0; xattrs.xattr_count--)
+		kfree(xattrs.xattrs[xattrs.xattr_count - 1].value);
+	kfree(xattrs.xattrs);
 	return (ret == -EOPNOTSUPP) ? 0 : ret;
 }
 EXPORT_SYMBOL(security_inode_init_security);
+
+#ifdef CONFIG_BPF_LSM
+static unsigned int lsm_xattrs_used(const struct lsm_xattrs *xattrs,
+				    const char *prefix)
+{
+	size_t prefix_len = strlen(prefix);
+	unsigned int i, n = 0;
+
+	for (i = 0; i < xattrs->xattr_count; i++) {
+		const char *name = xattrs->xattrs[i].name;
+
+		if (name && !strncmp(name, prefix, prefix_len))
+			n++;
+	}
+	return n;
+}
+#endif /* CONFIG_BPF_LSM */
+
+/**
+ * security_lsmxattr_add() - Add an xattr during inode_init_security
+ * @xattrs: xattr state shared by inode_init_security hooks
+ * @lsm_id: LSM_ID_* value identifying the calling LSM
+ * @name: xattr name suffix
+ * @value: xattr value
+ * @value_len: length of @value
+ *
+ * Claim an xattr slot in @xattrs on behalf of the LSM identified by
+ * @lsm_id and fill it with a copy of @name and @value. Callers can invoke
+ * this function from non-sleepable context.
+ *
+ * Return: Returns 0 on success, -ENOSPC if the calling LSM's slot budget
+ *         is exhausted, negative values on other errors.
+ */
+int security_lsmxattr_add(struct lsm_xattrs *xattrs, u64 lsm_id,
+			  const char *name, const void *value,
+			  size_t value_len)
+{
+	struct xattr *xattr;
+	void *xattr_value;
+	size_t name_len;
+
+	if (!xattrs || !xattrs->xattrs || !name || !value)
+		return -EINVAL;
+
+	name_len = strlen(name);
+	if (name_len == 0 || name_len > XATTR_NAME_MAX)
+		return -EINVAL;
+	if (value_len == 0 || value_len > XATTR_SIZE_MAX)
+		return -EINVAL;
+
+	switch (lsm_id) {
+#ifdef CONFIG_BPF_LSM
+	case LSM_ID_BPF:
+		if (lsm_xattrs_used(xattrs, XATTR_BPF_LSM_SUFFIX) >=
+		    BPF_LSM_INODE_INIT_XATTRS)
+			return -ENOSPC;
+		break;
+#endif /* CONFIG_BPF_LSM */
+	default:
+		return -EINVAL;
+	}
+
+	/* Combine xattr value + name into one allocation. */
+	xattr_value = kmalloc(value_len + name_len + 1, GFP_NOWAIT);
+	if (!xattr_value)
+		return -ENOMEM;
+
+	memcpy(xattr_value, value, value_len);
+	memcpy(xattr_value + value_len, name, name_len);
+	((char *)xattr_value)[value_len + name_len] = '\0';
+
+	xattr = lsm_get_xattr_slot(xattrs);
+	if (!xattr) {
+		kfree(xattr_value);
+		return -ENOSPC;
+	}
+
+	xattr->value = xattr_value;
+	xattr->name = (const char *)xattr_value + value_len;
+	xattr->value_len = value_len;
+
+	return 0;
+}
 
 /**
  * security_inode_init_security_anon() - Initialize an anonymous inode
