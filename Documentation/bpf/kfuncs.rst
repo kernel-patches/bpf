@@ -501,6 +501,42 @@ is also covered by this recovery. A kfunc handed an arena pointer may
 therefore access up to ``GUARD_SZ / 2`` past it without bounds-checking
 against the arena. Larger accesses must verify the range explicitly.
 
+2.9 kfunc Return Values
+-----------------------
+
+A kfunc may return a scalar, a pointer, or a small struct or union by
+value. A scalar or pointer of up to 8 bytes is returned in R0, as usual.
+
+A struct or union returned by value must be composed only of scalars
+(recursively). Its bytes are handed back to the program as the raw contents
+of R0 (and R2), so a pointer field would otherwise be laundered into a scalar
+and escape the verifier's pointer provenance and reference tracking. Such a
+struct or union is therefore rejected at load time.
+
+A kfunc may also return a value larger than 8 bytes and up to 16 bytes -- a
+16-byte scalar-only struct or union, or an ``__int128``. Such a value is
+returned in the register pair R0:R2, matching the convention LLVM uses for
+the BPF target: the low 64 bits in R0 and the high 64 bits in R2. A struct
+or union of 8 bytes or less is returned in R0 alone.
+
+::
+
+        struct bpf_pair { __u64 a, b; };   /* 16 bytes */
+
+        __bpf_kfunc struct bpf_pair bpf_kfunc_get_pair(void)
+        {
+                struct bpf_pair p = { .a = 1, .b = 2 };
+
+                return p;      /* p.a in R0, p.b in R2 */
+        }
+
+Returning a value in the R0:R2 pair requires the JIT to place the second
+half of the return value into R2, which not every architecture supports
+right now. A kfunc with a return value larger than 8 bytes is therefore
+rejected at load time on a JIT that does not advertise this capability (see
+``bpf_jit_supports_kfunc_ret_reg_pair()``), and such a program is never run
+by the interpreter. A return value larger than 16 bytes is not supported.
+
 .. _BPF_kfunc_lifecycle_expectations:
 
 3. kfunc lifecycle expectations
