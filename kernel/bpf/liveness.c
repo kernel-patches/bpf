@@ -2062,7 +2062,8 @@ struct insn_live_regs {
 /* Compute info->{use,def} fields for the instruction */
 static void compute_insn_live_regs(struct bpf_verifier_env *env,
 				   struct bpf_insn *insn,
-				   struct insn_live_regs *info)
+				   struct insn_live_regs *info,
+				   int subprog)
 {
 	struct bpf_call_summary cs;
 	u8 class = BPF_CLASS(insn->code);
@@ -2175,6 +2176,8 @@ static void compute_insn_live_regs(struct bpf_verifier_env *env,
 		case BPF_EXIT:
 			def = 0;
 			use = r0;
+			if (bpf_ret_reg_pair(env, subprog))
+				use |= BIT(BPF_REG_2);
 			break;
 		case BPF_CALL:
 			def = ALL_CALLER_SAVED_REGS;
@@ -2237,8 +2240,12 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 		goto out;
 	}
 
-	for (i = 0; i < insn_cnt; ++i)
-		compute_insn_live_regs(env, &insns[i], &state[i]);
+	for (i = 0, j = 0; i < insn_cnt; ++i) {
+		/* Advance to the subprog that contains instruction i. */
+		while (j + 1 < env->subprog_cnt && env->subprog_info[j + 1].start <= i)
+			j++;
+		compute_insn_live_regs(env, &insns[i], &state[i], j);
+	}
 
 	/* Forward pass: resolve stack access through FP-derived pointers */
 	err = bpf_compute_subprog_arg_access(env);
