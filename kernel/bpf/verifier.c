@@ -11055,7 +11055,6 @@ enum kfunc_ptr_arg_type {
 	KF_ARG_PTR_TO_LIST_NODE,
 	KF_ARG_PTR_TO_BTF_ID,	       /* Also covers reg2btf_ids conversions */
 	KF_ARG_PTR_TO_MEM,
-	KF_ARG_PTR_TO_MEM_SIZE,	       /* Size derived from next argument, skip it */
 	KF_ARG_PTR_TO_CALLBACK,
 	KF_ARG_PTR_TO_RB_ROOT,
 	KF_ARG_PTR_TO_RB_NODE,
@@ -11421,7 +11420,7 @@ get_kfunc_ptr_arg_type(struct bpf_verifier_env *env, struct bpf_func_state *call
 			btf_type_str(ref_t), ref_tname, arg_mem_size ? "void, " : "");
 		return -EINVAL;
 	}
-	return arg_mem_size ? KF_ARG_PTR_TO_MEM_SIZE : KF_ARG_PTR_TO_MEM;
+	return arg_mem_size ? KF_ARG_PTR_TO_MEM : KF_ARG_PTR_TO_MEM | MEM_FIXED_SIZE;
 }
 
 static int process_kf_arg_ptr_to_btf_id(struct bpf_verifier_env *env,
@@ -12137,7 +12136,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			ref_tname = btf_name_by_offset(btf, ref_t->name_off);
 		}
 
-		switch (kf_arg_type) {
+		switch (base_type(kf_arg_type)) {
 		case KF_ARG_PTR_TO_ALLOC_BTF_ID:
 		case KF_ARG_PTR_TO_BTF_ID:
 			if (!is_trusted_reg(env, reg)) {
@@ -12160,7 +12159,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		case KF_ARG_PTR_TO_RB_ROOT:
 		case KF_ARG_PTR_TO_RB_NODE:
 		case KF_ARG_PTR_TO_MEM:
-		case KF_ARG_PTR_TO_MEM_SIZE:
 		case KF_ARG_PTR_TO_CALLBACK:
 		case KF_ARG_PTR_TO_CONST_STR:
 		case KF_ARG_PTR_TO_WORKQUEUE:
@@ -12191,7 +12189,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		if (ret < 0)
 			return ret;
 
-		switch (kf_arg_type) {
+		switch (base_type(kf_arg_type)) {
 		case KF_ARG_PTR_TO_CTX:
 			if (reg->type != PTR_TO_CTX) {
 				verbose(env, "%s expected pointer to ctx, but got %s\n",
@@ -12387,34 +12385,32 @@ check_ok:
 				return ret;
 			break;
 		case KF_ARG_PTR_TO_MEM:
-			resolve_ret = btf_resolve_size(btf, ref_t, &type_size);
-			if (IS_ERR(resolve_ret)) {
-				verbose(env, "%s reference type('%s %s') size cannot be determined: %ld\n",
-					reg_arg_name(env, argno), btf_type_str(ref_t),
-					ref_tname, PTR_ERR(resolve_ret));
-				return -EINVAL;
-			}
-			ret = check_mem_reg(env, reg, argno, type_size, BPF_READ | BPF_WRITE, meta);
-			if (ret < 0)
-				return ret;
-			break;
-		case KF_ARG_PTR_TO_MEM_SIZE:
-		{
-			struct bpf_reg_state *buff_reg = reg;
-			struct bpf_reg_state *size_reg = get_func_arg_reg(caller, regs, i + 1);
-			const struct btf_param *size_arg = &args[i + 1];
-			argno_t next_argno = argno_from_arg(i + 2);
+			if (kf_arg_type & MEM_FIXED_SIZE) {
+				resolve_ret = btf_resolve_size(btf, ref_t, &type_size);
+				if (IS_ERR(resolve_ret)) {
+					verbose(env, "%s reference type('%s %s') size cannot be determined: %ld\n",
+						reg_arg_name(env, argno), btf_type_str(ref_t),
+						ref_tname, PTR_ERR(resolve_ret));
+					return -EINVAL;
+				}
+				ret = check_mem_reg(env, reg, argno, type_size, BPF_READ | BPF_WRITE, meta);
+				if (ret < 0)
+					return ret;
+			} else {
+				struct bpf_reg_state *buff_reg = reg;
+				struct bpf_reg_state *size_reg = get_func_arg_reg(caller, regs, i + 1);
+				argno_t next_argno = argno_from_arg(i + 2);
 
-			ret = check_mem_size_reg(env, buff_reg, size_reg, argno, next_argno,
-						 BPF_READ | BPF_WRITE, true, meta);
-			if (ret < 0) {
-				verbose(env, "%s and ", reg_arg_name(env, argno));
-				verbose(env, "%s memory, len pair leads to invalid memory access\n",
-					reg_arg_name(env, next_argno));
-				return ret;
+				ret = check_mem_size_reg(env, buff_reg, size_reg, argno, next_argno,
+							 BPF_READ | BPF_WRITE, true, meta);
+				if (ret < 0) {
+					verbose(env, "%s and ", reg_arg_name(env, argno));
+					verbose(env, "%s memory, len pair leads to invalid memory access\n",
+						reg_arg_name(env, next_argno));
+					return ret;
+				}
 			}
 			break;
-		}
 		case KF_ARG_PTR_TO_CALLBACK:
 			if (reg->type != PTR_TO_FUNC) {
 				verbose(env, "%s expected pointer to func\n", reg_arg_name(env, argno));
