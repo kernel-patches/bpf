@@ -305,7 +305,7 @@ int bpf_prog_calc_tag(struct bpf_prog *fp)
 	bool was_ld_map;
 	u32 i;
 
-	dst = vmalloc(size);
+	dst = __vmalloc(size, GFP_KERNEL_ACCOUNT);
 	if (!dst)
 		return -ENOMEM;
 
