@@ -8,6 +8,7 @@
 #include "aggregate_ret_run.skel.h"
 #include "aggregate_ret_func.skel.h"
 #include "aggregate_ret_kfunc.skel.h"
+#include "aggregate_ret_trace.skel.h"
 
 /*
  * Run one program and check its result. The program returns 0 on success, or
@@ -35,6 +36,131 @@ static void run_prog(struct bpf_program *prog, bool may_skip)
 	}
 
 	ASSERT_EQ(topts.retval, 0, "aggregate_ret_result");
+}
+
+/*
+ * Multi-attach (BPF_TRACE_*_MULTI) requires CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS,
+ * which today only x86_64 selects. Otherwise bpf_tracing_multi_attach() returns
+ * -EOPNOTSUPP unconditionally.
+ */
+static bool tracing_multi_supported(struct bpf_program *prog)
+{
+	const char *small_pat = "bpf_testmod:bpf_testmod_trampoline_count_test";
+	struct bpf_link *link;
+
+	link = bpf_program__attach_tracing_multi(prog, small_pat, NULL);
+	if (libbpf_get_error(link) == -EOPNOTSUPP)
+		return false;
+	bpf_link__destroy(link);
+	return true;
+}
+
+static void test_tracing_attach_types(void)
+{
+	const char *i128_pat = "bpf_testmod:bpf_testmod_aggregate_ret_i128_fn";
+	int err;
+
+	if (test__start_subtest("trace_fentry")) {
+		struct aggregate_ret_trace *trace = NULL;
+
+		trace = aggregate_ret_trace__open();
+		if (!ASSERT_OK_PTR(trace, "trace_fentry_open"))
+			return;
+
+		bpf_program__set_autoload(trace->progs.fexit_bpf_testmod_aggregate_ret_fn, false);
+		bpf_program__set_autoload(trace->progs.fentry_multi, false);
+		bpf_program__set_autoload(trace->progs.fexit_multi, false);
+
+		err = aggregate_ret_trace__load(trace);
+		if (!ASSERT_OK(err, "trace_fentry_load"))
+			goto destroy_trace_fentry;
+
+		err = aggregate_ret_trace__attach(trace);
+		if (!ASSERT_OK(err, "trace_fentry_attach"))
+			goto destroy_trace_fentry;
+
+		ASSERT_OK(trigger_module_test_read(1), "trace_fentry_trigger");
+		ASSERT_EQ(trace->bss->fentry_hit, 1, "trace_fentry_hit");
+
+destroy_trace_fentry:
+		aggregate_ret_trace__destroy(trace);
+	}
+
+	if (test__start_subtest("trace_fexit_reject")) {
+		struct aggregate_ret_trace *trace = NULL;
+
+		trace = aggregate_ret_trace__open();
+		if (!ASSERT_OK_PTR(trace, "trace_fexit_open"))
+			return;
+
+		bpf_program__set_autoload(trace->progs.fentry_bpf_testmod_aggregate_ret_fn, false);
+		bpf_program__set_autoload(trace->progs.fentry_multi, false);
+		bpf_program__set_autoload(trace->progs.fexit_multi, false);
+
+		err = aggregate_ret_trace__load(trace);
+		ASSERT_EQ(err, -EOPNOTSUPP, "trace_fexit_load");
+
+		aggregate_ret_trace__destroy(trace);
+	}
+
+	if (test__start_subtest("trace_fentry_multi")) {
+		struct aggregate_ret_trace *trace = NULL;
+		struct bpf_link *link;
+
+		trace = aggregate_ret_trace__open();
+		if (!ASSERT_OK_PTR(trace, "trace_fentry_multi_open"))
+			return;
+
+		bpf_program__set_autoload(trace->progs.fentry_bpf_testmod_aggregate_ret_fn, false);
+		bpf_program__set_autoload(trace->progs.fexit_bpf_testmod_aggregate_ret_fn, false);
+		bpf_program__set_autoload(trace->progs.fexit_multi, false);
+
+		if (!ASSERT_OK(aggregate_ret_trace__load(trace), "trace_fentry_multi_load"))
+			goto destroy_fentry_multi;
+
+		if (!tracing_multi_supported(trace->progs.fentry_multi)) {
+			test__skip();
+			goto destroy_fentry_multi;
+		}
+
+		link = bpf_program__attach_tracing_multi(trace->progs.fentry_multi, i128_pat, NULL);
+		if (!ASSERT_OK_PTR(link, "trace_fentry_multi_attach"))
+			goto destroy_fentry_multi;
+
+		ASSERT_OK(trigger_module_test_read(1), "trace_fentry_multi_trigger");
+		ASSERT_EQ(trace->bss->fentry_multi_hit, 1, "trace_fentry_multi_hit");
+
+		bpf_link__destroy(link);
+destroy_fentry_multi:
+		aggregate_ret_trace__destroy(trace);
+	}
+
+	if (test__start_subtest("trace_fexit_multi_reject")) {
+		struct aggregate_ret_trace *trace = NULL;
+		struct bpf_link *link;
+
+		trace = aggregate_ret_trace__open();
+		if (!ASSERT_OK_PTR(trace, "trace_fexit_multi_open"))
+			return;
+
+		bpf_program__set_autoload(trace->progs.fentry_bpf_testmod_aggregate_ret_fn, false);
+		bpf_program__set_autoload(trace->progs.fexit_bpf_testmod_aggregate_ret_fn, false);
+		bpf_program__set_autoload(trace->progs.fentry_multi, false);
+
+		if (!ASSERT_OK(aggregate_ret_trace__load(trace), "trace_fexit_multi_load"))
+			goto destroy_fexit_multi;
+
+		if (!tracing_multi_supported(trace->progs.fexit_multi)) {
+			test__skip();
+			goto destroy_fexit_multi;
+		}
+
+		link = bpf_program__attach_tracing_multi(trace->progs.fexit_multi, i128_pat, NULL);
+		ASSERT_EQ(libbpf_get_error(link), -EOPNOTSUPP, "trace_fexit_multi_reject");
+		bpf_link__destroy(link);
+destroy_fexit_multi:
+		aggregate_ret_trace__destroy(trace);
+	}
 }
 
 void test_aggregate_ret(void)
@@ -118,4 +244,6 @@ void test_aggregate_ret(void)
 
 	RUN_TESTS(aggregate_ret_func);
 	RUN_TESTS(aggregate_ret_kfunc);
+
+	test_tracing_attach_types();
 }

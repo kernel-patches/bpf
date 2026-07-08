@@ -469,10 +469,32 @@ noinline void bpf_testmod_stacktrace_test_1(void)
 }
 
 int bpf_testmod_fentry_ok;
+u64 bpf_testmod_aggregate_ret_seen;
 
 noinline int bpf_testmod_trampoline_count_test(void)
 {
 	return 0;
+}
+
+__noclone noinline struct bpf_testmod_aggregate_ret
+bpf_testmod_aggregate_ret_fn(u64 lo, u64 hi)
+{
+	struct bpf_testmod_aggregate_ret ret = {
+		.lo = lo,
+		.hi = hi,
+	};
+
+	bpf_testmod_aggregate_ret_seen += lo + hi;
+	return ret;
+}
+
+__noclone noinline __int128
+bpf_testmod_aggregate_ret_i128_fn(u64 lo, u64 hi)
+{
+	__int128 ret = ((__int128)hi << 64) | lo;
+
+	bpf_testmod_aggregate_ret_seen += lo + hi;
+	return ret;
 }
 
 noinline ssize_t
@@ -492,6 +514,8 @@ bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 	struct bpf_testmod_struct_arg_5 struct_arg5 = {23, 24, 25, 26};
 	union bpf_testmod_union_arg_1 union_arg1 = { .arg = {1} };
 	union bpf_testmod_union_arg_2 union_arg2 = { .arg = {2, 3} };
+	struct bpf_testmod_aggregate_ret agg_ret;
+	__int128 agg_i128;
 	int i = 1;
 
 	while (bpf_testmod_return_ptr(i))
@@ -533,6 +557,14 @@ bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 		trace_bpf_testmod_test_read(current, &ctx);
 
 	trace_bpf_testmod_test_nullable_bare_tp(NULL);
+
+	agg_ret = bpf_testmod_aggregate_ret_fn(len, off);
+	if (agg_ret.lo == U64_MAX && agg_ret.hi == U64_MAX)
+		goto out;
+
+	agg_i128 = bpf_testmod_aggregate_ret_i128_fn(len, off);
+	if (agg_i128 == (__int128)-1)
+		goto out;
 
 	/* Magic number to enable writable tp */
 	if (len == 64) {
