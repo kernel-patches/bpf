@@ -1403,4 +1403,46 @@ __naked void partial_fill_from_cleaned_pointer_spill(void)
 		      ::: __clobber_all);
 }
 
+/* check valid spill/fill, ptr to tp buffer */
+SEC("raw_tracepoint.w")
+__success
+__naked void spill_fill_ptr_to_tp_buffer(void)
+{
+	asm volatile (
+	"r6 = *(u64*)(r1 + 0);"	/* r6 is the writable tracepoint buffer */
+	"*(u64*)(r10 - 8) = r6;"
+	"r7 = *(u64*)(r10 - 8);"
+	"r0 = 0;"
+	"*(u64*)(r7 + 0) = r0;"	/* should be able to write through the buffer */
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+__noinline int spill_fill_dynptr_subprog(struct bpf_dynptr *dptr)
+{
+	long *p;
+
+	asm volatile ("*(u64 *)(r10 - 8) = %[dptr];" /* spill the CONST_PTR_TO_DYNPTR argument */
+		      "%[dptr] = *(u64 *)(r10 - 8);"
+		      : [dptr] "+r"(dptr) :: "memory");
+	p = bpf_dynptr_data(dptr, 0, sizeof(*p));
+	if (!p)
+		return 0;
+	return 0;
+}
+
+static char dptr_mem_buf[16];
+
+/* check valid spill/fill, const ptr to dynptr */
+SEC("socket")
+__success
+int spill_fill_const_ptr_to_dynptr(void)
+{
+	struct bpf_dynptr ptr;
+
+	bpf_dynptr_from_mem(dptr_mem_buf, sizeof(dptr_mem_buf), 0, &ptr);
+	return spill_fill_dynptr_subprog(&ptr);
+}
+
 char _license[] SEC("license") = "GPL";
