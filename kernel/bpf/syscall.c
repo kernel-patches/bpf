@@ -40,7 +40,6 @@
 #include <linux/tracepoint.h>
 #include <linux/overflow.h>
 #include <linux/cookie.h>
-#include <linux/verification.h>
 #include <linux/btf_ids.h>
 
 #include <net/netfilter/nf_bpf_link.h>
@@ -2886,64 +2885,6 @@ static bool is_perfmon_prog_type(enum bpf_prog_type prog_type)
 	}
 }
 
-static enum bpf_sig_keyring bpf_classify_keyring(s32 keyring_id)
-{
-	switch (keyring_id) {
-	case 0:
-		return BPF_SIG_KEYRING_BUILTIN;
-	case (s32)(unsigned long)VERIFY_USE_SECONDARY_KEYRING:
-		return BPF_SIG_KEYRING_SECONDARY;
-	case (s32)(unsigned long)VERIFY_USE_PLATFORM_KEYRING:
-		return BPF_SIG_KEYRING_PLATFORM;
-	default:
-		return BPF_SIG_KEYRING_USER;
-	}
-}
-
-static int bpf_prog_verify_signature(struct bpf_prog *prog, union bpf_attr *attr,
-				     bool is_kernel, s32 *keyring_serial)
-{
-	bpfptr_t usig = make_bpfptr(attr->signature, is_kernel);
-	struct bpf_dynptr_kern sig_ptr, insns_ptr;
-	struct bpf_key *key = NULL;
-	void *sig;
-	int err = 0;
-
-	/*
-	 * Don't attempt to use kmalloc_large or vmalloc for signatures.
-	 * Practical signature for BPF program should be below this limit.
-	 */
-	if (attr->signature_size > KMALLOC_MAX_CACHE_SIZE)
-		return -EINVAL;
-
-	if (system_keyring_id_check(attr->keyring_id) == 0)
-		key = bpf_lookup_system_key(attr->keyring_id);
-	else
-		key = bpf_lookup_user_key(attr->keyring_id, 0);
-
-	if (!key)
-		return -EINVAL;
-
-	sig = kvmemdup_bpfptr(usig, attr->signature_size);
-	if (IS_ERR(sig)) {
-		bpf_key_put(key);
-		return PTR_ERR(sig);
-	}
-
-	bpf_dynptr_init(&sig_ptr, sig, BPF_DYNPTR_TYPE_LOCAL, 0,
-			attr->signature_size);
-	bpf_dynptr_init(&insns_ptr, prog->insnsi, BPF_DYNPTR_TYPE_LOCAL, 0,
-			prog->len * sizeof(struct bpf_insn));
-
-	err = bpf_verify_pkcs7_signature((struct bpf_dynptr *)&insns_ptr,
-					 (struct bpf_dynptr *)&sig_ptr, key);
-	if (!err)
-		*keyring_serial = bpf_key_serial(key);
-	bpf_key_put(key);
-	kvfree(sig);
-	return err;
-}
-
 static int bpf_prog_mark_insn_arrays_ready(struct bpf_prog *prog)
 {
 	int err;
@@ -3133,17 +3074,8 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 
 	/* eBPF programs must be GPL compatible to use GPL-ed functions */
 	prog->gpl_compatible = license_is_gpl_compatible(license) ? 1 : 0;
-	if (attr->signature) {
-		err = bpf_prog_verify_signature(prog, attr, uattr.is_kernel,
-						&prog->aux->sig.keyring_serial);
-		if (err)
-			goto free_prog;
-		prog->aux->sig.keyring_type = bpf_classify_keyring(attr->keyring_id);
-		prog->aux->sig.verdict = BPF_SIG_VERIFIED;
-	} else {
-		prog->aux->sig.keyring_type = BPF_SIG_KEYRING_NONE;
-		prog->aux->sig.verdict = BPF_SIG_UNSIGNED;
-	}
+	prog->aux->sig.keyring_type = BPF_SIG_KEYRING_NONE;
+	prog->aux->sig.verdict = BPF_SIG_UNSIGNED;
 	prog->orig_prog = NULL;
 	prog->jited = 0;
 
@@ -3187,10 +3119,6 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 	err = bpf_obj_name_cpy(prog->aux->name, attr->prog_name,
 			       sizeof(attr->prog_name));
 	if (err < 0)
-		goto free_prog;
-
-	err = security_bpf_prog_load(prog, attr, token, uattr.is_kernel);
-	if (err)
 		goto free_prog;
 
 	/* run eBPF verifier */
