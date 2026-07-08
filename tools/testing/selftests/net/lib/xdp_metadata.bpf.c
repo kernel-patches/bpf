@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include <stddef.h>
+#include <stdbool.h>
 #include <linux/bpf.h>
 #include <linux/in.h>
 #include <linux/if_ether.h>
@@ -40,6 +41,24 @@ struct {
 	__uint(max_entries, 4);
 } map_rss SEC(".maps");
 
+/* RX checksum results: key 0 = ip_summed bitmask, key 1 = hw cksum value,
+ * key 2 = cksum level, key 3 = packet count, key 4 = error count.
+ */
+enum {
+	CSUM_KEY_IP_SUMMED = 0,
+	CSUM_KEY_CKSUM = 1,
+	CSUM_KEY_LEVEL = 2,
+	CSUM_KEY_PKT_CNT = 3,
+	CSUM_KEY_ERR_CNT = 4,
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__type(key, __u32);
+	__type(value, __u32);
+	__uint(max_entries, 5);
+} map_csum SEC(".maps");
+
 /* Mirror of enum xdp_rss_hash_type from include/net/xdp.h.
  * Needed because the enum is not part of UAPI headers.
  */
@@ -55,8 +74,20 @@ enum xdp_rss_hash_type {
 	XDP_RSS_L4_ICMP = 1U << 8,
 };
 
+/* Mirror of enum xdp_checksum from include/net/xdp.h.
+ * Needed because the enum is not part of UAPI headers.
+ */
+enum xdp_checksum {
+	XDP_CHECKSUM_NONE = 1U << 0,
+	XDP_CHECKSUM_UNNECESSARY = 1U << 1,
+	XDP_CHECKSUM_COMPLETE = 1U << 2,
+};
+
 extern int bpf_xdp_metadata_rx_hash(const struct xdp_md *ctx, __u32 *hash,
 				    enum xdp_rss_hash_type *rss_type) __ksym;
+extern int bpf_xdp_metadata_rx_checksum(const struct xdp_md *ctx,
+					enum xdp_checksum *ip_summed,
+					__u32 *cksum, __u8 *cksum_level) __ksym;
 
 static __always_inline __u16 get_dest_port(void *l4, void *data_end,
 					   __u8 protocol)
@@ -78,41 +109,39 @@ static __always_inline __u16 get_dest_port(void *l4, void *data_end,
 	return 0;
 }
 
-SEC("xdp")
-int xdp_rss_hash(struct xdp_md *ctx)
+/* Return true when the packet matches the L4 protocol and destination
+ * port configured in map_xdp_setup (zero/unset filters match anything).
+ */
+static __always_inline bool xdp_match_setup(struct xdp_md *ctx)
 {
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
-	enum xdp_rss_hash_type rss_type = 0;
 	struct ethhdr *eth = data;
 	__u8 l4_proto = 0;
-	__u32 hash = 0;
-	__u32 key, val;
 	void *l4 = NULL;
-	__u32 *cnt;
-	int ret;
+	__u32 key;
 
 	if ((void *)(eth + 1) > data_end)
-		return XDP_PASS;
+		return false;
 
 	if (eth->h_proto == bpf_htons(ETH_P_IP)) {
 		struct iphdr *iph = (void *)(eth + 1);
 
 		if ((void *)(iph + 1) > data_end)
-			return XDP_PASS;
+			return false;
 		l4_proto = iph->protocol;
 		l4 = (void *)(iph + 1);
 	} else if (eth->h_proto == bpf_htons(ETH_P_IPV6)) {
 		struct ipv6hdr *ip6h = (void *)(eth + 1);
 
 		if ((void *)(ip6h + 1) > data_end)
-			return XDP_PASS;
+			return false;
 		l4_proto = ip6h->nexthdr;
 		l4 = (void *)(ip6h + 1);
 	}
 
 	if (!l4)
-		return XDP_PASS;
+		return false;
 
 	/* Filter on the configured protocol (map_xdp_setup key XDP_PROTO).
 	 * When set, only process packets matching the requested L4 protocol.
@@ -121,7 +150,7 @@ int xdp_rss_hash(struct xdp_md *ctx)
 	__s32 *proto_cfg = bpf_map_lookup_elem(&map_xdp_setup, &key);
 
 	if (proto_cfg && *proto_cfg != 0 && l4_proto != (__u8)*proto_cfg)
-		return XDP_PASS;
+		return false;
 
 	/* Filter on the configured port (map_xdp_setup key XDP_PORT).
 	 * Only applies to protocols with ports (UDP, TCP).
@@ -133,8 +162,23 @@ int xdp_rss_hash(struct xdp_md *ctx)
 		__u16 dest = get_dest_port(l4, data_end, l4_proto);
 
 		if (!dest || bpf_ntohs(dest) != (__u16)*port_cfg)
-			return XDP_PASS;
+			return false;
 	}
+
+	return true;
+}
+
+SEC("xdp")
+int xdp_rss_hash(struct xdp_md *ctx)
+{
+	enum xdp_rss_hash_type rss_type = 0;
+	__u32 hash = 0;
+	__u32 key, val;
+	__u32 *cnt;
+	int ret;
+
+	if (!xdp_match_setup(ctx))
+		return XDP_PASS;
 
 	ret = bpf_xdp_metadata_rx_hash(ctx, &hash, &rss_type);
 	if (ret < 0) {
@@ -154,6 +198,48 @@ int xdp_rss_hash(struct xdp_md *ctx)
 
 	key = RSS_KEY_PKT_CNT;
 	cnt = bpf_map_lookup_elem(&map_rss, &key);
+	if (cnt)
+		__sync_fetch_and_add(cnt, 1);
+
+	return XDP_PASS;
+}
+
+SEC("xdp")
+int xdp_rx_csum(struct xdp_md *ctx)
+{
+	enum xdp_checksum ip_summed = 0;
+	__u8 cksum_level = 0;
+	__u32 cksum = 0;
+	__u32 key, val;
+	__u32 *cnt;
+	int ret;
+
+	if (!xdp_match_setup(ctx))
+		return XDP_PASS;
+
+	ret = bpf_xdp_metadata_rx_checksum(ctx, &ip_summed, &cksum,
+					   &cksum_level);
+	if (ret < 0) {
+		key = CSUM_KEY_ERR_CNT;
+		cnt = bpf_map_lookup_elem(&map_csum, &key);
+		if (cnt)
+			__sync_fetch_and_add(cnt, 1);
+		return XDP_PASS;
+	}
+
+	key = CSUM_KEY_IP_SUMMED;
+	val = (__u32)ip_summed;
+	bpf_map_update_elem(&map_csum, &key, &val, BPF_ANY);
+
+	key = CSUM_KEY_CKSUM;
+	bpf_map_update_elem(&map_csum, &key, &cksum, BPF_ANY);
+
+	key = CSUM_KEY_LEVEL;
+	val = cksum_level;
+	bpf_map_update_elem(&map_csum, &key, &val, BPF_ANY);
+
+	key = CSUM_KEY_PKT_CNT;
+	cnt = bpf_map_lookup_elem(&map_csum, &key);
 	if (cnt)
 		__sync_fetch_and_add(cnt, 1);
 
