@@ -837,6 +837,36 @@ __bpf_kfunc struct bpf_kfunc_ret_ll bpf_kfunc_call_test_ret_ll(u64 a, u64 b)
 	return r;
 }
 
+__bpf_kfunc struct bpf_kfunc_ret_li bpf_kfunc_call_test_ret_li(u64 a, int b)
+{
+	struct bpf_kfunc_ret_li r = { .a = a, .b = b };
+
+	return r;
+}
+
+__bpf_kfunc struct bpf_kfunc_ret_ii bpf_kfunc_call_test_ret_ii(int a, int b)
+{
+	struct bpf_kfunc_ret_ii r = { .a = a, .b = b };
+
+	return r;
+}
+
+__bpf_kfunc union bpf_kfunc_ret_uu bpf_kfunc_call_test_ret_uu(u64 a, u64 b)
+{
+	union bpf_kfunc_ret_uu r;
+
+	r.halves[0] = a;
+	r.halves[1] = b;
+	return r;
+}
+
+__bpf_kfunc struct bpf_kfunc_ret_ptr bpf_kfunc_call_test_ret_ptr(u64 tag)
+{
+	struct bpf_kfunc_ret_ptr r = { .p = NULL, .tag = tag };
+
+	return r;
+}
+
 __bpf_kfunc u64 bpf_kfunc_call_stack_arg(u64 a, u64 b, u64 c, u64 d,
 					 u64 e, u64 f, u64 g, u64 h,
 					 u64 i, u64 j)
@@ -1372,6 +1402,10 @@ BTF_ID_FLAGS(func, bpf_kfunc_call_test4)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test5)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_ll)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_li)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_ii)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_uu)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_ptr)
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg)
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg_ptr)
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg_mix)

@@ -5,6 +5,9 @@
 #include "aggregate_ret_int128_c.skel.h"
 #include "aggregate_ret_struct_c.skel.h"
 #include "aggregate_ret_union_c.skel.h"
+#include "aggregate_ret_run.skel.h"
+#include "aggregate_ret_func.skel.h"
+#include "aggregate_ret_kfunc.skel.h"
 
 /*
  * Run one program and check its result. The program returns 0 on success, or
@@ -39,6 +42,7 @@ void test_aggregate_ret(void)
 	struct aggregate_ret_struct_c *skel_struct_c;
 	struct aggregate_ret_union_c *skel_union_c;
 	struct aggregate_ret_int128_c *skel_c;
+	struct aggregate_ret_run *skel_run;
 
 	skel_c = aggregate_ret_int128_c__open_and_load();
 	if (!ASSERT_OK_PTR(skel_c, "skel_c_open_load"))
@@ -93,4 +97,25 @@ void test_aggregate_ret(void)
 		run_prog(skel_union_c->progs.aggregate_ret_union_c_test, true);
 
 	aggregate_ret_union_c__destroy(skel_union_c);
+
+	skel_run = aggregate_ret_run__open_and_load();
+	if (!ASSERT_OK_PTR(skel_run, "skel_run_open_load"))
+		return;
+
+	/* Inline-asm variant: compiler-version independent, always runs. */
+	if (test__start_subtest("asm"))
+		run_prog(skel_run->progs.aggregate_ret_asm_test, false);
+
+	/* Struct-by-value kfunc returns, also compiler-version independent. */
+	if (test__start_subtest("struct"))
+		run_prog(skel_run->progs.aggregate_ret_struct_test, false);
+
+	/* Union-by-value kfunc return, compiler-version independent. */
+	if (test__start_subtest("union"))
+		run_prog(skel_run->progs.aggregate_ret_union_test, false);
+
+	aggregate_ret_run__destroy(skel_run);
+
+	RUN_TESTS(aggregate_ret_func);
+	RUN_TESTS(aggregate_ret_kfunc);
 }

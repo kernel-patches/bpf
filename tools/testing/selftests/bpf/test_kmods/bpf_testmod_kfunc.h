@@ -64,6 +64,29 @@ struct bpf_kfunc_ret_ll {	/* 16 bytes: R0:R2 */
 	__u64 b;
 };
 
+struct bpf_kfunc_ret_li {	/* 16 bytes: R0:R2 */
+	__u64 a;
+	int b;
+};
+
+struct bpf_kfunc_ret_ii {	/* 8 bytes: R0 only */
+	int a;
+	int b;
+};
+
+union bpf_kfunc_ret_uu {	/* 16 bytes: R0:R2 */
+	__u64 halves[2];
+	struct {
+		__u64 lo;
+		__u64 hi;
+	} parts;
+};
+
+struct bpf_kfunc_ret_ptr {	/* 16 bytes: contains a pointer */
+	void *p;
+	__u64 tag;
+};
+
 struct prog_test_fail1 {
 	void *p;
 	int x;
@@ -129,6 +152,10 @@ long bpf_kfunc_call_test4(signed char a, short b, int c, long d) __ksym;
 int bpf_kfunc_call_test5(__u8 a, __u16 b, __u32 c) __ksym;
 __int128 bpf_kfunc_call_test_i128(__u64 a, __u64 b) __ksym;
 struct bpf_kfunc_ret_ll bpf_kfunc_call_test_ret_ll(__u64 a, __u64 b) __ksym;
+struct bpf_kfunc_ret_li bpf_kfunc_call_test_ret_li(__u64 a, int b) __ksym;
+struct bpf_kfunc_ret_ii bpf_kfunc_call_test_ret_ii(int a, int b) __ksym;
+union bpf_kfunc_ret_uu bpf_kfunc_call_test_ret_uu(__u64 a, __u64 b) __ksym;
+struct bpf_kfunc_ret_ptr bpf_kfunc_call_test_ret_ptr(__u64 tag) __ksym;
 __u64 bpf_kfunc_call_stack_arg(__u64 a, __u64 b, __u64 c, __u64 d,
 			       __u64 e, __u64 f, __u64 g, __u64 h,
 			       __u64 i, __u64 j) __ksym;
