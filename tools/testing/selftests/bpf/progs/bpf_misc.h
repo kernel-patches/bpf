@@ -43,6 +43,10 @@
  * __msg_unpriv      Same as __msg but for unprivileged mode.
  * __not_msg_unpriv  Same as __not_msg but for unprivileged mode.
  *
+ * __msg_next        Same as __msg but expects the match to be on the next
+ * __msg_next_unpriv log line compared to the last match, not just some line
+ *                   after the last match.
+ *
  * __stderr          Message expected to be found in bpf stderr stream. The
  *                   same regex rules apply like __msg.
  * __stderr_unpriv   Same as __stderr but for unpriveleged mode.
@@ -145,6 +149,7 @@
 
 #define __msg(msg)		__test_tag("test_expect_msg=" msg)
 #define __not_msg(msg)		__test_tag("test_expect_not_msg=" msg)
+#define __msg_next(msg)		__test_tag("test_expect_msg_next=" msg)
 #define __xlated(msg)		__test_tag("test_expect_xlated=" msg)
 #define __jited(msg)		__test_tag("test_jited=" msg)
 #define __failure		__test_tag("test_expect_failure")
@@ -153,6 +158,7 @@
 #define __skip(reason)		__test_tag("test_skip=" reason)
 #define __msg_unpriv(msg)	__test_tag("test_expect_msg_unpriv=" msg)
 #define __not_msg_unpriv(msg)	__test_tag("test_expect_not_msg_unpriv=" msg)
+#define __msg_next_unpriv(msg)	__test_tag("test_expect_msg_next_unpriv=" msg)
 #define __xlated_unpriv(msg)	__test_tag("test_expect_xlated_unpriv=" msg)
 #define __jited_unpriv(msg)	__test_tag("test_jited_unpriv=" msg)
 #define __failure_unpriv	__test_tag("test_expect_failure_unpriv")
