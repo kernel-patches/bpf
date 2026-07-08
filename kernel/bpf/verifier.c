@@ -454,6 +454,15 @@ bool bpf_ret_reg_pair(struct bpf_verifier_env *env, int subprog)
 	return false;
 }
 
+static bool bpf_ret_reg_pair_mark(struct bpf_verifier_env *env, int subprog)
+{
+	if (!bpf_ret_reg_pair(env, subprog))
+		return false;
+
+	env->prog->aux->ret_reg_pair = true;
+	return true;
+}
+
 static const char *subprog_name(const struct bpf_verifier_env *env, int subprog)
 {
 	struct bpf_func_info *info;
@@ -9878,7 +9887,7 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	} else {
 		/* return to the caller whatever r0 had in the callee */
 		caller->regs[BPF_REG_0] = *r0;
-		if (bpf_ret_reg_pair(env, callee->subprogno)) {
+		if (bpf_ret_reg_pair_mark(env, callee->subprogno)) {
 			if (callee->regs[BPF_REG_2].type == PTR_TO_STACK) {
 				verbose(env, "cannot return stack pointer to the caller\n");
 				return -EINVAL;
@@ -16807,7 +16816,7 @@ static int check_global_subprog_return_code(struct bpf_verifier_env *env)
 	if (err)
 		return err;
 
-	if (!bpf_ret_reg_pair(env, subprog))
+	if (!bpf_ret_reg_pair_mark(env, subprog))
 		return 0;
 
 	return check_global_ret_scalar_reg(env, BPF_REG_2);

@@ -1780,6 +1780,7 @@ struct bpf_prog_aux {
 	bool changes_pkt_data;
 	bool might_sleep;
 	bool kprobe_write_ctx;
+	bool ret_reg_pair;
 	struct {
 		s32 keyring_serial;
 		u8 keyring_type;
