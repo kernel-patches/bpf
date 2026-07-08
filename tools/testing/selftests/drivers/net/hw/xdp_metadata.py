@@ -8,6 +8,8 @@ These tests load device-bound XDP programs from xdp_metadata.bpf.o
 that call metadata kfuncs, send traffic, and verify the extracted
 metadata via BPF maps.
 """
+import time
+
 from lib.py import ksft_run, ksft_eq, ksft_exit, ksft_ge, ksft_ne, ksft_pr
 from lib.py import KsftNamedVariant, ksft_variants
 from lib.py import CmdExitFailure, KsftSkipEx, NetDrvEpEnv
@@ -81,7 +83,21 @@ _RSS_KEY_TYPE = 1
 _RSS_KEY_PKT_CNT = 2
 _RSS_KEY_ERR_CNT = 3
 
+_CSUM_KEY_IP_SUMMED = 0
+_CSUM_KEY_CKSUM = 1
+_CSUM_KEY_LEVEL = 2
+_CSUM_KEY_PKT_CNT = 3
+_CSUM_KEY_ERR_CNT = 4
+
 XDP_RSS_L4 = 0x8  # BIT(3) from enum xdp_rss_hash_type
+
+# Mirror of enum xdp_checksum from include/net/xdp.h
+XDP_CHECKSUM_NONE = 0x1
+XDP_CHECKSUM_UNNECESSARY = 0x2
+XDP_CHECKSUM_COMPLETE = 0x4
+
+# Fixed destination port of the net/lib csum tool
+_CSUM_TOOL_PORT = 34000
 
 
 @ksft_variants([
@@ -130,6 +146,91 @@ def test_xdp_rss_hash(cfg, proto):
             f"RSS hash type should include L4 for {proto.upper()} traffic")
 
 
+def _require_rx_csum_meta(cfg):
+    """Skip unless the device exposes XDP RX checksum metadata."""
+    dev_info = cfg.netnl.dev_get({"ifindex": cfg.ifindex})
+    rx_meta = dev_info.get("xdp-rx-metadata-features", [])
+    if "checksum" not in rx_meta:
+        raise KsftSkipEx("device does not support XDP rx checksum metadata")
+
+
+@ksft_variants([
+    KsftNamedVariant("tcp", "tcp"),
+    KsftNamedVariant("udp", "udp"),
+])
+def test_xdp_rx_csum_valid(cfg, proto):
+    """Test RX checksum metadata for packets with a correct checksum.
+
+    Loads the xdp_rx_csum program, sends traffic with a valid L4 checksum
+    from the remote endpoint, and verifies that the device reported a
+    usable checksum verdict (CHECKSUM_UNNECESSARY and/or a
+    CHECKSUM_COMPLETE value) via bpf_xdp_metadata_rx_checksum().
+    """
+    _require_rx_csum_meta(cfg)
+
+    prog_info = _load_xdp_metadata_prog(cfg, "xdp_rx_csum")
+
+    port = rand_port()
+    bpf_map_set("map_xdp_setup", _SETUP_KEY_PORT, port)
+
+    csum_map_id = prog_info["maps"]["map_csum"]
+
+    _send_probe(cfg, port, proto=proto)
+
+    csum = bpf_map_dump(csum_map_id)
+
+    pkt_cnt = csum.get(_CSUM_KEY_PKT_CNT, 0)
+    err_cnt = csum.get(_CSUM_KEY_ERR_CNT, 0)
+    ip_summed = csum.get(_CSUM_KEY_IP_SUMMED, 0)
+
+    ksft_ge(pkt_cnt, 1, comment="should have received at least one packet")
+    ksft_eq(err_cnt, 0, comment=f"RX checksum error count: {err_cnt}")
+
+    ksft_pr(f"  ip_summed: {ip_summed:#x} cksum: "
+            f"{csum.get(_CSUM_KEY_CKSUM, 0):#010x} "
+            f"level: {csum.get(_CSUM_KEY_LEVEL, 0)}")
+    ksft_ne(ip_summed & (XDP_CHECKSUM_UNNECESSARY | XDP_CHECKSUM_COMPLETE), 0,
+            "device should report a checksum verdict for a valid packet")
+
+
+def test_xdp_rx_csum_invalid(cfg):
+    """Test RX checksum metadata for packets with a corrupted checksum.
+
+    Sends UDP packets with an intentionally bad L4 checksum using the
+    net/lib csum tool and verifies the device does not claim it validated
+    them: the CHECKSUM_UNNECESSARY bit must not be set.
+    """
+    _require_rx_csum_meta(cfg)
+
+    ipver = cfg.addr_ipver
+    bin_remote = cfg.remote.deploy(cfg.net_lib_dir / "csum")
+
+    prog_info = _load_xdp_metadata_prog(cfg, "xdp_rx_csum")
+
+    bpf_map_set("map_xdp_setup", _SETUP_KEY_PORT, _CSUM_TOOL_PORT)
+
+    csum_map_id = prog_info["maps"]["map_csum"]
+
+    cmd(f"{bin_remote} -i {cfg.remote_ifname} -n 20 -{ipver} "
+        f"-S {cfg.remote_addr} -D {cfg.addr} -r 1 -T -E",
+        host=cfg.remote)
+
+    # no receiver to synchronize against; let NAPI drain the last packets
+    time.sleep(1)
+
+    csum = bpf_map_dump(csum_map_id)
+
+    pkt_cnt = csum.get(_CSUM_KEY_PKT_CNT, 0)
+    ip_summed = csum.get(_CSUM_KEY_IP_SUMMED, 0)
+
+    ksft_ge(pkt_cnt, 1, comment="should have received at least one packet")
+
+    ksft_pr(f"  ip_summed: {ip_summed:#x}")
+    ksft_eq(ip_summed & XDP_CHECKSUM_UNNECESSARY, 0,
+            "device must not report CHECKSUM_UNNECESSARY for a corrupted "
+            "checksum")
+
+
 def main():
     """Run XDP metadata kfunc tests against a real device."""
     with NetDrvEpEnv(__file__) as cfg:
@@ -137,6 +238,8 @@ def main():
         ksft_run(
             [
                 test_xdp_rss_hash,
+                test_xdp_rx_csum_valid,
+                test_xdp_rx_csum_invalid,
             ],
             args=(cfg,))
     ksft_exit()
