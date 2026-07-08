@@ -324,6 +324,7 @@ static const char *btf_type_name(const struct btf *btf, u32 id)
 }
 
 static DEFINE_MUTEX(bpf_verifier_lock);
+static DEFINE_MUTEX(btf_vmlinux_lock);
 static DEFINE_MUTEX(bpf_percpu_ma_lock);
 
 __printf(2, 3) static void verbose(void *private_data, const char *fmt, ...)
@@ -19563,7 +19564,7 @@ struct btf *bpf_get_btf_vmlinux(void)
 	struct btf *btf = smp_load_acquire(&btf_vmlinux);
 
 	if (!btf && IS_ENABLED(CONFIG_DEBUG_INFO_BTF)) {
-		mutex_lock(&bpf_verifier_lock);
+		mutex_lock(&btf_vmlinux_lock);
 		btf = btf_vmlinux;
 		if (!btf) {
 			btf = btf_parse_vmlinux();
@@ -19575,7 +19576,7 @@ struct btf *bpf_get_btf_vmlinux(void)
 			 */
 			smp_store_release(&btf_vmlinux, btf);
 		}
-		mutex_unlock(&bpf_verifier_lock);
+		mutex_unlock(&btf_vmlinux_lock);
 	}
 	return btf;
 }
@@ -20089,7 +20090,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 
 	bpf_get_btf_vmlinux();
 
-	/* grab the mutex to protect few globals used by verifier */
+	/* Serialize verification of unprivileged programs. */
 	if (!is_priv)
 		mutex_lock(&bpf_verifier_lock);
 
