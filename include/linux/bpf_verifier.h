@@ -1433,6 +1433,8 @@ void bpf_fmt_stack_mask(char *buf, ssize_t buf_sz, u64 stack_mask);
 bool bpf_subprog_is_global(const struct bpf_verifier_env *env, int subprog);
 bool bpf_ret_reg_pair(struct bpf_verifier_env *env, int subprog);
 int bpf_get_kfunc_ret_size(const struct bpf_prog *prog, u32 func_id, u16 offset);
+bool __btf_type_is_scalar_struct(struct bpf_verifier_env *env, const struct btf *btf,
+				 const struct btf_type *t, int rec);
 
 int bpf_find_subprog(struct bpf_verifier_env *env, int off);
 bool bpf_is_throw_kfunc(struct bpf_insn *insn);

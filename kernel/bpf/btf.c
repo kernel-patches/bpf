@@ -7572,7 +7572,12 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 		return -EINVAL;
 	}
 	ret = __get_type_size(btf, func->type, &t);
-	if (ret < 0 || btf_type_is_struct(t)) {
+	/*
+	 * __get_type_size() already restricts a non-negative ret to void, a
+	 * pointer, an int, an enum or a struct/union, so only the size is checked
+	 * here.
+	 */
+	if (ret < 0 || ret > 16) {
 		bpf_log(log,
 			"The function %s return type %s is unsupported.\n",
 			tname, btf_type_str(t));
@@ -7968,6 +7973,9 @@ static int btf_validate_return_type(struct bpf_verifier_env *env, struct btf *bt
 	if (btf_type_is_void(t) || btf_type_is_int(t) || btf_is_any_enum(t))
 		return 0;
 
+	if (btf_type_is_struct(t) && t->size <= 16 && __btf_type_is_scalar_struct(env, btf, t, 0))
+		return 0;
+
 	return -EOPNOTSUPP;
 }
 
@@ -8059,8 +8067,8 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	if (err) {
 		if (is_global) {
 			bpf_log(log,
-				"Global function %s() return value not void or scalar. "
-				"Only those are supported.\n",
+				"Global function %s() has unsupported return type. "
+				"Only void, scalar, or a scalar-only struct/union up to 16 bytes is supported.\n",
 				tname);
 		}
 		return err;
