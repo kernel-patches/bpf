@@ -326,6 +326,8 @@ static void signature_enforced(void)
 		fd = load_loader(f.gopts.insns, f.gopts.insns_sz, -1, junk,
 				 sizeof(junk), KEY_SPEC_SESSION_KEYRING, 0);
 		ASSERT_EQ(fd, -EBADMSG, "invalid signature rejected at load");
+		if (fd >= 0)
+			close(fd);
 	}
 	gen_loader_fixture_fini(&f);
 }
@@ -575,6 +577,8 @@ static void signature_too_large(void)
 		fd = load_loader(f.gopts.insns, f.gopts.insns_sz, -1, junk,
 				 64 << 20, KEY_SPEC_SESSION_KEYRING, 0);
 		ASSERT_EQ(fd, -EINVAL, "oversized signature rejected");
+		if (fd >= 0)
+			close(fd);
 	}
 	gen_loader_fixture_fini(&f);
 }
@@ -594,6 +598,8 @@ static void signature_zero_size(void)
 		fd = load_loader(f.gopts.insns, f.gopts.insns_sz, -1, junk,
 				 0, KEY_SPEC_SESSION_KEYRING, 0);
 		ASSERT_EQ(fd, -EINVAL, "zero-size signature rejected");
+		if (fd >= 0)
+			close(fd);
 	}
 	gen_loader_fixture_fini(&f);
 }
@@ -614,6 +620,8 @@ static void signature_bad_keyring(void)
 		fd = load_loader(f.gopts.insns, f.gopts.insns_sz, -1, junk,
 				 sizeof(junk), INT_MAX, 0);
 		ASSERT_EQ(fd, -EINVAL, "signature with bad keyring_id rejected");
+		if (fd >= 0)
+			close(fd);
 	}
 	gen_loader_fixture_fini(&f);
 }
