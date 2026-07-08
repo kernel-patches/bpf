@@ -2852,6 +2852,11 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	err = btf_distill_func_proto(&env->log, kfunc.btf, kfunc.proto, kfunc.name, &func_model);
 	if (err)
 		return err;
+	if (func_model.ret_size > 8 && !bpf_jit_supports_kfunc_ret_reg_pair()) {
+		verbose(env, "kfunc %s with >8-byte return is not supported by JIT\n",
+			kfunc.name);
+		return -EOPNOTSUPP;
+	}
 
 	desc = &tab->descs[tab->nr_descs++];
 	desc->func_id = func_id;
