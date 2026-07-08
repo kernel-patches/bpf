@@ -424,6 +424,8 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 				 */
 				verifier_bug_if(idx + 1 != subseq_idx, env,
 						"extra insn from subprog");
+				if (bpf_ret_reg_pair(env, subprog))
+					bt_clear_reg(bt, BPF_REG_2);
 				/* r1-r5 are invalidated after subprog call,
 				 * so for global func call it shouldn't be set
 				 * anymore
@@ -507,6 +509,12 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 				return -ENOTSUPP;
 			/* regular helper call sets R0 */
 			bt_clear_reg(bt, BPF_REG_0);
+			/* On error the return is negative, R2 stays set, and the
+			 * check below catches it as an unexpected register.
+			 */
+			if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
+			    bpf_get_kfunc_ret_size(env->prog, insn->imm, insn->off) > 8)
+				bt_clear_reg(bt, BPF_REG_2);
 			if (bt_reg_mask(bt) & BPF_REGMASK_ARGS) {
 				/* if backtracking was looking for registers R1-R5
 				 * they should have been found already.
@@ -521,7 +529,25 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 					return -EFAULT;
 			}
 		} else if (opcode == BPF_EXIT) {
-			bool r0_precise;
+			bool r0_precise, r2_precise = false;
+
+			/* A subprog returning a value larger than 8 bytes (a
+			 * struct/union or an __int128) uses R2 as a second
+			 * return register alongside R0. When exiting such a
+			 * subprog, R2 is a return register rather than a
+			 * leftover argument, so handle it like R0 below.
+			 */
+			if (subseq_idx - 1 >= 0 &&
+			    bpf_pseudo_call(&env->prog->insnsi[subseq_idx - 1])) {
+				int call_idx = subseq_idx - 1;
+				int tgt = call_idx + env->prog->insnsi[call_idx].imm + 1;
+				int subprog = bpf_find_subprog(env, tgt);
+
+				if (subprog >= 0 &&
+				    bpf_ret_reg_pair(env, subprog) &&
+				    bt_is_reg_set(bt, BPF_REG_2))
+					r2_precise = true;
+			}
 
 			/* Backtracking to a nested function call, 'idx' is a part of
 			 * the inner frame 'subseq_idx' is a part of the outer frame.
@@ -534,6 +560,8 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			if (subseq_idx >= 0 && bpf_calls_callback(env, subseq_idx))
 				for (i = BPF_REG_1; i <= BPF_REG_5; i++)
 					bt_clear_reg(bt, i);
+			if (r2_precise)
+				bt_clear_reg(bt, BPF_REG_2);
 			if (bt_reg_mask(bt) & BPF_REGMASK_ARGS) {
 				verifier_bug(env, "backtracking exit unexpected regs %x",
 					     bt_reg_mask(bt));
@@ -558,6 +586,8 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 
 			if (r0_precise)
 				bt_set_reg(bt, BPF_REG_0);
+			if (r2_precise)
+				bt_set_reg(bt, BPF_REG_2);
 			/* r6-r9 and stack slots will stay set in caller frame
 			 * bitmasks until we return back from callee(s)
 			 */

@@ -425,7 +425,7 @@ static bool subprog_returns_void(struct bpf_verifier_env *env, int subprog)
 	return btf_type_is_void(type);
 }
 
-static bool bpf_ret_reg_pair(struct bpf_verifier_env *env, int subprog)
+bool bpf_ret_reg_pair(struct bpf_verifier_env *env, int subprog)
 {
 	const struct btf_type *type, *func, *func_proto;
 	const struct btf *btf = env->prog->aux->btf;
@@ -2520,6 +2520,17 @@ int bpf_get_kfunc_addr(const struct bpf_prog *prog, u32 func_id,
 
 	*func_addr = (u8 *)desc->addr;
 	return 0;
+}
+
+int bpf_get_kfunc_ret_size(const struct bpf_prog *prog, u32 func_id, u16 offset)
+{
+	const struct bpf_kfunc_desc *desc;
+
+	desc = find_kfunc_desc(prog, func_id, offset);
+	if (!desc)
+		return -EFAULT;
+
+	return desc->func_model.ret_size;
 }
 
 #define BPF_FD_SLOT_BTF	1UL
