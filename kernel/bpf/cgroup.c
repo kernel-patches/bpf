@@ -1138,6 +1138,24 @@ static int effective_prog_pos(struct cgroup *cgrp,
 	return pos;
 }
 
+static int bpf_cgroup_array_update_safe_at(struct bpf_prog_array *array, int index,
+					   struct bpf_prog_list *pl,
+					   enum cgroup_bpf_attach_type atype)
+{
+	struct bpf_prog_array_item *item;
+
+	for (item = array->items; item->prog; item++) {
+		if (item->prog == bpf_cgroup_array_dummy(atype))
+			continue;
+		if (!index) {
+			prog_list_replace_item(pl, item);
+			return 0;
+		}
+		index--;
+	}
+	return -ENOENT;
+}
+
 /* Swap updated BPF program for given link in effective program arrays across
  * all descendant cgroups. This function is guaranteed to succeed.
  */
@@ -1145,7 +1163,6 @@ static void replace_effective_prog(struct cgroup *cgrp,
 				   enum cgroup_bpf_attach_type atype,
 				   struct bpf_prog_list *pl)
 {
-	struct bpf_prog_array_item *item;
 	struct cgroup_subsys_state *css;
 	struct bpf_prog_array *progs;
 	int pos;
@@ -1163,8 +1180,7 @@ static void replace_effective_prog(struct cgroup *cgrp,
 		progs = rcu_dereference_protected(
 				desc->bpf.effective[atype],
 				lockdep_is_held(&cgroup_mutex));
-		item = &progs->items[pos];
-		prog_list_replace_item(pl, item);
+		WARN_ON_ONCE(bpf_cgroup_array_update_safe_at(progs, pos, pl, atype));
 	}
 }
 
