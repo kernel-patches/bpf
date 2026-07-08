@@ -20096,7 +20096,8 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 
 	len = env->prog->len;
 	env->insn_aux_data =
-		vzalloc(array_size(sizeof(struct bpf_insn_aux_data), len));
+		__vmalloc(array_size(sizeof(struct bpf_insn_aux_data), len),
+			  GFP_KERNEL_ACCOUNT | __GFP_ZERO);
 	ret = -ENOMEM;
 	if (!env->insn_aux_data)
 		goto skip_full_check;
