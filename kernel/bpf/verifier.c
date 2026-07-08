@@ -425,6 +425,35 @@ static bool subprog_returns_void(struct bpf_verifier_env *env, int subprog)
 	return btf_type_is_void(type);
 }
 
+static bool bpf_ret_reg_pair(struct bpf_verifier_env *env, int subprog)
+{
+	const struct btf_type *type, *func, *func_proto;
+	const struct btf *btf = env->prog->aux->btf;
+	u32 btf_id;
+
+	if (!btf || !env->prog->aux->func_info)
+		return false;
+
+	btf_id = env->prog->aux->func_info[subprog].type_id;
+
+	func = btf_type_by_id(btf, btf_id);
+	if (!func)
+		return false;
+
+	func_proto = btf_type_by_id(btf, func->type);
+	if (!func_proto)
+		return false;
+
+	type = btf_type_skip_modifiers(btf, func_proto->type, NULL);
+	if (!type)
+		return false;
+
+	if (btf_type_is_struct(type) || btf_type_is_scalar(type))
+		return type->size > 8 && type->size <= 16;
+
+	return false;
+}
+
 static const char *subprog_name(const struct bpf_verifier_env *env, int subprog)
 {
 	struct bpf_func_info *info;
@@ -9460,10 +9489,17 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		clear_caller_saved_regs(env, caller->regs);
 		invalidate_outgoing_stack_args(env, cur_func(env));
 
-		/* All non-void global functions return a 64-bit SCALAR_VALUE. */
+		/*
+		 * A non-void global function returns a 64-bit SCALAR_VALUE in
+		 * R0, or a >8 byte SCALAR_VALUE in the R0:R2 register pair.
+		 */
 		if (!subprog_returns_void(env, subprog)) {
 			mark_reg_unknown(env, caller->regs, BPF_REG_0);
 			caller->regs[BPF_REG_0].subreg_def = DEF_NOT_SUBREG;
+			if (bpf_ret_reg_pair(env, subprog)) {
+				mark_reg_unknown(env, caller->regs, BPF_REG_2);
+				caller->regs[BPF_REG_2].subreg_def = DEF_NOT_SUBREG;
+			}
 		}
 
 		if (env->subprog_info[subprog].might_throw) {
@@ -9826,6 +9862,13 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	} else {
 		/* return to the caller whatever r0 had in the callee */
 		caller->regs[BPF_REG_0] = *r0;
+		if (bpf_ret_reg_pair(env, callee->subprogno)) {
+			if (callee->regs[BPF_REG_2].type == PTR_TO_STACK) {
+				verbose(env, "cannot return stack pointer to the caller\n");
+				return -EINVAL;
+			}
+			caller->regs[BPF_REG_2] = callee->regs[BPF_REG_2];
+		}
 	}
 
 	/* for callbacks like bpf_loop or bpf_for_each_map_elem go back to callsite,
@@ -10744,6 +10787,18 @@ static void mark_btf_func_reg_size(struct bpf_verifier_env *env, u32 regno,
 				   size_t reg_size)
 {
 	return __mark_btf_func_reg_size(env, cur_regs(env), regno, reg_size);
+}
+
+static void mark_kfunc_ret_reg_size(struct bpf_verifier_env *env,
+				    struct bpf_reg_state *regs, u32 size)
+{
+	if (size > 8) {
+		mark_btf_func_reg_size(env, BPF_REG_0, 8);
+		mark_reg_unknown(env, regs, BPF_REG_2);
+		regs[BPF_REG_2].subreg_def = DEF_NOT_SUBREG;
+	} else {
+		mark_btf_func_reg_size(env, BPF_REG_0, size);
+	}
 }
 
 static bool is_kfunc_acquire(struct bpf_kfunc_call_arg_meta *meta)
@@ -13209,7 +13264,22 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		if (meta.btf == btf_vmlinux && (meta.func_id == special_kfunc_list[KF_bpf_res_spin_lock] ||
 		    meta.func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave]))
 			__mark_reg_const_zero(env, &regs[BPF_REG_0]);
-		mark_btf_func_reg_size(env, BPF_REG_0, t->size);
+		mark_kfunc_ret_reg_size(env, regs, t->size);
+	} else if (btf_type_is_struct(t)) {
+		/*
+		 * The returned struct comes back as raw register bits modeled
+		 * as an unknown scalar, so it must contain only scalars:
+		 * otherwise a pointer field would be laundered into a scalar
+		 * and escape provenance and reference tracking.
+		 */
+		if (!__btf_type_is_scalar_struct(env, desc_btf, t, 0)) {
+			verbose(env, "kernel function %s returns %s %s that is not composed of scalars\n",
+				func_name, btf_type_str(t),
+				btf_name_by_offset(desc_btf, t->name_off));
+			return -EINVAL;
+		}
+		mark_reg_unknown(env, regs, BPF_REG_0);
+		mark_kfunc_ret_reg_size(env, regs, t->size);
 	} else if (btf_type_is_ptr(t)) {
 		ptr_type = btf_type_skip_modifiers(desc_btf, t->type, &ptr_type_id);
 		err = check_special_kfunc(env, &meta, regs, insn_aux, ptr_type, desc_btf);
@@ -16712,11 +16782,19 @@ static int check_global_subprog_return_code(struct bpf_verifier_env *env)
 {
 	struct bpf_func_state *cur_frame = cur_func(env);
 	u32 subprog = cur_frame->subprogno;
+	int err;
 
 	if (subprog_returns_void(env, subprog))
 		return 0;
 
-	return check_global_ret_scalar_reg(env, BPF_REG_0);
+	err = check_global_ret_scalar_reg(env, BPF_REG_0);
+	if (err)
+		return err;
+
+	if (!bpf_ret_reg_pair(env, subprog))
+		return 0;
+
+	return check_global_ret_scalar_reg(env, BPF_REG_2);
 }
 
 /* Bitmask with 1s for all caller saved registers */
@@ -17206,10 +17284,15 @@ static int process_bpf_exit_full(struct bpf_verifier_env *env,
 	 */
 	if (cur_frame->subprogno &&
 	    !cur_frame->in_async_callback_fn &&
-	    !cur_frame->in_exception_callback_fn)
+	    !cur_frame->in_exception_callback_fn) {
 		err = check_global_subprog_return_code(env);
-	else
+	} else {
+		if (!cur_frame->subprogno && bpf_ret_reg_pair(env, 0)) {
+			verbose(env, "return value larger than 8 bytes is not supported at program exit\n");
+			return -EINVAL;
+		}
 		err = check_return_code(env, BPF_REG_0, "R0");
+	}
 	if (err)
 		return err;
 	return PROCESS_BPF_EXIT;
