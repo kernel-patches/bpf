@@ -1576,17 +1576,31 @@ static int emit_atomic_rmw_index(u8 **pprog, u32 atomic_op, u32 size,
 	return 0;
 }
 
-static int emit_atomic_ld_st(u8 **pprog, u32 atomic_op, u32 dst_reg,
-			     u32 src_reg, s16 off, u8 bpf_size)
+static int emit_atomic_ld_st(struct bpf_verifier_env *env, u8 **pprog,
+			     struct bpf_insn *insn, u8 *ip, u32 dst_reg,
+			     u32 src_reg, bool accesses_stack_only)
 {
+	u32 atomic_op = insn->imm;
+	int err;
+
 	switch (atomic_op) {
 	case BPF_LOAD_ACQ:
+		err = emit_kasan_check(env, pprog, src_reg, insn, ip, false,
+				       accesses_stack_only);
+		if (err)
+			return err;
 		/* dst_reg = smp_load_acquire(src_reg + off16) */
-		emit_ldx(pprog, bpf_size, dst_reg, src_reg, off);
+		emit_ldx(pprog, BPF_SIZE(insn->code), dst_reg, src_reg,
+			 insn->off);
 		break;
 	case BPF_STORE_REL:
+		err = emit_kasan_check(env, pprog, dst_reg, insn, ip, true,
+				       accesses_stack_only);
+		if (err)
+			return err;
 		/* smp_store_release(dst_reg + off16, src_reg) */
-		emit_stx(pprog, bpf_size, dst_reg, src_reg, off);
+		emit_stx(pprog, BPF_SIZE(insn->code), dst_reg, src_reg,
+			 insn->off);
 		break;
 	default:
 		pr_err("bpf_jit: unknown atomic load/store opcode %02x\n",
@@ -1964,10 +1978,12 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 		const s32 imm32 = insn->imm;
 		u32 dst_reg = insn->dst_reg;
 		u32 src_reg = insn->src_reg;
+		bool accesses_stack_only;
 		u8 b2 = 0, b3 = 0;
 		u8 *start_of_ldx;
 		s64 jmp_offset;
 		s32 insn_off;
+		int insn_idx;
 		u8 jmp_cond;
 		u8 *func;
 		int nops;
@@ -1984,6 +2000,10 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 			EMIT_ENDBR();
 
 		ip = image + addrs[i - 1] + (prog - temp);
+		insn_idx = i - 1 + bpf_prog->aux->subprog_start;
+		accesses_stack_only =
+			env ? !env->insn_aux_data[insn_idx].non_stack_access :
+			      false;
 
 		switch (insn->code) {
 			/* ALU */
@@ -2364,6 +2384,11 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 		case BPF_ST | BPF_MEM | BPF_H:
 		case BPF_ST | BPF_MEM | BPF_W:
 		case BPF_ST | BPF_MEM | BPF_DW:
+			err = emit_kasan_check(env, &prog, dst_reg, insn, ip,
+					       true, accesses_stack_only);
+			if (err)
+				return err;
+
 			emit_st(&prog, insn, dst_reg, outgoing_arg_base,
 				outgoing_rsp);
 			break;
@@ -2383,6 +2408,10 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 				insn_off = outgoing_arg_base - outgoing_rsp - insn_off - 16;
 				dst_reg = BPF_REG_FP;
 			}
+			err = emit_kasan_check(env, &prog, dst_reg, insn, ip,
+					       true, accesses_stack_only);
+			if (err)
+				return err;
 			emit_stx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn_off);
 			break;
 
@@ -2544,6 +2573,12 @@ populate_extable:
 				/* populate jmp_offset for JAE above to jump to start_of_ldx */
 				start_of_ldx = prog;
 				end_of_jmp[-1] = start_of_ldx - end_of_jmp;
+			} else {
+				err = emit_kasan_check(env, &prog, src_reg,
+						       insn, ip, false,
+						       accesses_stack_only);
+				if (err)
+					return err;
 			}
 			if (BPF_MODE(insn->code) == BPF_PROBE_MEMSX ||
 			    BPF_MODE(insn->code) == BPF_MEMSX)
@@ -2605,15 +2640,16 @@ populate_extable:
 			}
 			fallthrough;
 		case BPF_STX | BPF_ATOMIC | BPF_W:
-		case BPF_STX | BPF_ATOMIC | BPF_DW:
-			if (insn->imm == (BPF_AND | BPF_FETCH) ||
-			    insn->imm == (BPF_OR | BPF_FETCH) ||
-			    insn->imm == (BPF_XOR | BPF_FETCH)) {
-				bool is64 = BPF_SIZE(insn->code) == BPF_DW;
-				u32 real_src_reg = src_reg;
-				u32 real_dst_reg = dst_reg;
-				u8 *branch_target;
-
+		case BPF_STX | BPF_ATOMIC | BPF_DW: {
+			bool is64 = BPF_SIZE(insn->code) == BPF_DW;
+			u32 real_src_reg = src_reg;
+			u32 real_dst_reg = dst_reg;
+			u8 *branch_target;
+			bool is_atomic_fetch =
+				(insn->imm == (BPF_AND | BPF_FETCH) ||
+				 insn->imm == (BPF_OR | BPF_FETCH) ||
+				 insn->imm == (BPF_XOR | BPF_FETCH));
+			if (is_atomic_fetch) {
 				/*
 				 * Can't be implemented with a single x86 insn.
 				 * Need to do a CMPXCHG loop.
@@ -2626,7 +2662,17 @@ populate_extable:
 				if (dst_reg == BPF_REG_0)
 					real_dst_reg = BPF_REG_AX;
 
+				ip += 3;
+			}
+			if (!bpf_atomic_is_load_store(insn)) {
+				err = emit_kasan_check(env, &prog, real_dst_reg,
+						       insn, ip, true,
+						       accesses_stack_only);
+				if (err)
+					return err;
 				branch_target = prog;
+			}
+			if (is_atomic_fetch) {
 				/* Load old value */
 				emit_ldx(&prog, BPF_SIZE(insn->code),
 					 BPF_REG_0, real_dst_reg, insn->off);
@@ -2658,15 +2704,16 @@ populate_extable:
 			}
 
 			if (bpf_atomic_is_load_store(insn))
-				err = emit_atomic_ld_st(&prog, insn->imm, dst_reg, src_reg,
-							insn->off, BPF_SIZE(insn->code));
+				err = emit_atomic_ld_st(env, &prog, insn, ip,
+							dst_reg, src_reg,
+							accesses_stack_only);
 			else
 				err = emit_atomic_rmw(&prog, insn->imm, dst_reg, src_reg,
 						      insn->off, BPF_SIZE(insn->code));
 			if (err)
 				return err;
 			break;
-
+		}
 		case BPF_STX | BPF_PROBE_ATOMIC | BPF_B:
 		case BPF_STX | BPF_PROBE_ATOMIC | BPF_H:
 			if (!bpf_atomic_is_load_store(insn)) {
