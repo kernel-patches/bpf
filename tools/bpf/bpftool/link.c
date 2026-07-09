@@ -422,12 +422,30 @@ show_uprobe_multi_json(struct bpf_link_info *info, json_writer_t *wtr)
 	jsonw_end_array(json_wtr);
 }
 
+#define BPF_PROG_PREFIX		"bpf_prog_"
+#define BPF_PROG_PREFIX_LEN	(sizeof(BPF_PROG_PREFIX) - 1)
+
+static const char *
+sym_name_trim_prefix(struct kernel_sym *sym, bool is_prog)
+{
+	int prefix_len;
+
+	if (!is_prog)
+		return sym->name;
+
+	/* Ref kernel/bpf/core.c::bpf_prog_ksym_set_name() */
+	prefix_len  = BPF_PROG_PREFIX_LEN;
+	prefix_len += BPF_TAG_SIZE * 2;
+	prefix_len += 1;			/* skip the '_' */
+	return sym->name + prefix_len;
+}
+
 static void
 show_tracing_multi_json(struct bpf_link_info *info, json_writer_t *wtr)
 {
-	bool is_ibt_enabled = is_x86_ibt_enabled(), show_symbol;
+	bool is_ibt_enabled = is_x86_ibt_enabled(), show_symbol, tgt_progs;
 	__u64 *addrs, *cookies;
-	__u32 i, *ids;
+	__u32 i, *ids, *fids;
 
 	if (!dd.sym_count)
 		kernel_syms_load(&dd);
@@ -443,6 +461,8 @@ show_tracing_multi_json(struct bpf_link_info *info, json_writer_t *wtr)
 	ids = u64_to_u32_arr(info->tracing_multi.ids);
 	addrs = u64_to_arr(info->tracing_multi.addrs);
 	cookies = u64_to_arr(info->tracing_multi.cookies);
+	fids = u64_to_u32_arr(info->tracing_multi.func_btf_ids);
+	tgt_progs = info->tracing_multi.tgt_progs;
 
 	for (i = 0; i < info->tracing_multi.count; i++) {
 		struct kernel_sym *sym;
@@ -451,10 +471,12 @@ show_tracing_multi_json(struct bpf_link_info *info, json_writer_t *wtr)
 		sym = show_symbol ? find_kernel_sym_by_addr(addr, is_ibt_enabled) : NULL;
 
 		jsonw_start_object(wtr);
-		jsonw_uint_field(wtr, "id", ids[i]);
+		jsonw_uint_field(wtr, tgt_progs ? "prog_id" : "id", ids[i]);
+		if (tgt_progs)
+			jsonw_uint_field(wtr, "func_btf_id", fids[i]);
 		jsonw_uint_field(wtr, "addr", addr);
 		if (sym) {
-			jsonw_string_field(wtr, "func", sym->name);
+			jsonw_string_field(wtr, "func", sym_name_trim_prefix(sym, tgt_progs));
 			if (sym->module[0] == '\0') {
 				jsonw_name(wtr, "module");
 				jsonw_null(wtr);
@@ -903,9 +925,9 @@ static void show_uprobe_multi_plain(struct bpf_link_info *info)
 
 static void show_tracing_multi_plain(struct bpf_link_info *info)
 {
-	bool is_ibt_enabled = is_x86_ibt_enabled(), show_symbol;
+	bool is_ibt_enabled = is_x86_ibt_enabled(), show_symbol, tgt_progs;
 	__u64 *addrs, *cookies;
-	__u32 i, *ids;
+	__u32 i, *ids, *fids;
 
 	if (!info->tracing_multi.count)
 		return;
@@ -919,12 +941,18 @@ static void show_tracing_multi_plain(struct bpf_link_info *info)
 	printf("btf_obj_id %u  ", info->tracing_multi.btf_obj_id);
 	printf("count %u  ", info->tracing_multi.count);
 
-	printf("\n\t%-16s %-16s %-16s %s",
-	       "btf_id", "addr", "cookie", "func [module]");
+	tgt_progs = info->tracing_multi.tgt_progs;
+	if (tgt_progs)
+		printf("\n\t%-16s %-16s %-16s %-16s %s",
+		       "prog_id", "func_btf_id", "addr", "cookie", "func [module]");
+	else
+		printf("\n\t%-16s %-16s %-16s %s",
+		       "btf_id", "addr", "cookie", "func [module]");
 
 	ids = u64_to_u32_arr(info->tracing_multi.ids);
 	addrs = u64_to_arr(info->tracing_multi.addrs);
 	cookies = u64_to_arr(info->tracing_multi.cookies);
+	fids = u64_to_u32_arr(info->tracing_multi.func_btf_ids);
 
 	for (i = 0; i < info->tracing_multi.count; i++) {
 		__u64 addr = addrs[i];
@@ -932,9 +960,12 @@ static void show_tracing_multi_plain(struct bpf_link_info *info)
 
 		sym = show_symbol ? find_kernel_sym_by_addr(addr, is_ibt_enabled) : NULL;
 
-		printf("\n\t%-16u %016llx %-16llu", ids[i], addr, cookies[i]);
+		if (tgt_progs)
+			printf("\n\t%-16u %-16u %016llx %-16llu", ids[i], fids[i], addr, cookies[i]);
+		else
+			printf("\n\t%-16u %016llx %-16llu", ids[i], addr, cookies[i]);
 		if (sym) {
-			printf(" %s", sym->name);
+			printf(" %s", sym_name_trim_prefix(sym, tgt_progs));
 			if (sym->module[0] != '\0')
 				printf(" [%s]", sym->module);
 		}
@@ -1140,7 +1171,7 @@ static int show_link_close_plain(int fd, struct bpf_link_info *info)
 static int do_show_link(int fd)
 {
 	__u64 *ref_ctr_offsets = NULL, *offsets = NULL, *cookies = NULL;
-	__u32 *ids = NULL;
+	__u32 *ids = NULL, *func_btf_ids = NULL;
 	struct bpf_link_info info;
 	__u32 len = sizeof(info);
 	char path_buf[PATH_MAX];
@@ -1232,9 +1263,11 @@ again:
 			ids = calloc(count, sizeof(__u32));
 			addrs = calloc(count, sizeof(__u64));
 			cookies = calloc(count, sizeof(__u64));
-			if (!ids || !addrs || !cookies) {
+			func_btf_ids = info.tracing_multi.tgt_progs ? calloc(count, sizeof(__u32)) : NULL;
+			if (!ids || !addrs || !cookies || (info.tracing_multi.tgt_progs && !func_btf_ids)) {
 				p_err("mem alloc failed");
 				close(fd);
+				free(func_btf_ids);
 				free(cookies);
 				free(addrs);
 				free(ids);
@@ -1243,6 +1276,7 @@ again:
 			info.tracing_multi.ids = ptr_to_u64(ids);
 			info.tracing_multi.addrs = ptr_to_u64(addrs);
 			info.tracing_multi.cookies = ptr_to_u64(cookies);
+			info.tracing_multi.func_btf_ids = ptr_to_u64(func_btf_ids);
 			goto again;
 		}
 	}
@@ -1282,6 +1316,7 @@ again:
 		show_link_close_plain(fd, &info);
 
 	free(ref_ctr_offsets);
+	free(func_btf_ids);
 	free(cookies);
 	free(offsets);
 	free(addrs);

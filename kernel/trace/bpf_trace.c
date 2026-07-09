@@ -3707,15 +3707,16 @@ static void bpf_tracing_multi_link_dealloc(struct bpf_link *link)
 static int bpf_tracing_multi_link_fill_link_info(const struct bpf_link *link,
 						 struct bpf_link_info *info)
 {
+	u32 __user *fids = u64_to_user_ptr(info->tracing_multi.func_btf_ids);
 	u64 __user *ucookies = u64_to_user_ptr(info->tracing_multi.cookies);
 	u64 __user *uaddrs = u64_to_user_ptr(info->tracing_multi.addrs);
 	u32 __user *uids = u64_to_user_ptr(info->tracing_multi.ids);
 	struct bpf_tracing_multi_link *tr_link;
 	u32 ucount = info->tracing_multi.count;
-	bool has_cookies, show_addrs;
+	bool has_cookies, show_addrs, has_progs;
 	int err = 0;
 
-	if ((uids || ucookies || uaddrs) && !ucount)
+	if ((uids || ucookies || uaddrs || fids) && !ucount)
 		return -EINVAL;
 
 	tr_link = container_of(link, struct bpf_tracing_multi_link, link);
@@ -3723,9 +3724,12 @@ static int bpf_tracing_multi_link_fill_link_info(const struct bpf_link *link,
 	info->tracing_multi.attach_type = tr_link->link.attach_type;
 	info->tracing_multi.count = tr_link->nodes_cnt;
 	info->tracing_multi.btf_obj_id = btf_obj_id(tr_link->link.prog->aux->attach_btf);
+	info->tracing_multi.tgt_progs = has_progs = !!tr_link->progs;
 
-	if (!uids && !ucookies && !uaddrs)
+	if (!uids && !ucookies && !uaddrs && !fids)
 		return 0;
+	if (has_progs != !!fids)
+		return -EINVAL;
 
 	if (ucount < tr_link->nodes_cnt)
 		err = -ENOSPC;
@@ -3737,19 +3741,26 @@ static int bpf_tracing_multi_link_fill_link_info(const struct bpf_link *link,
 
 	for (int i = 0; i < ucount; i++) {
 		struct bpf_tracing_multi_node *mnode = &tr_link->nodes[i];
+		u32 prog_id, btf_id;
 		u64 addr, cookie;
-		u32 id;
 
-		bpf_trampoline_unpack_key(mnode->trampoline->key, NULL, &id);
+		bpf_trampoline_unpack_key(mnode->trampoline->key, &prog_id, &btf_id);
 
-		addr = show_addrs ? mnode->trampoline->ip : 0;
+		if (!show_addrs)
+			addr = 0;
+		else if (has_progs)
+			addr = (u64) mnode->trampoline->func.addr;
+		else
+			addr = mnode->trampoline->ip;
 		cookie = has_cookies ? tr_link->cookies[i] : 0;
 
-		if (uids && put_user(id, uids + i))
+		if (uids && put_user(has_progs ? prog_id : btf_id, uids + i))
 			return -EFAULT;
 		if (uaddrs && put_user(addr, uaddrs + i))
 			return -EFAULT;
 		if (ucookies && put_user(cookie, ucookies + i))
+			return -EFAULT;
+		if (has_progs && put_user((u32) mnode->trampoline->key, fids + i))
 			return -EFAULT;
 
 		cond_resched();
