@@ -122,8 +122,12 @@ struct p9_client {
 		struct {
 			u16 port;
 			bool privport;
-
 		} tcp;
+#if IS_ENABLED(CONFIG_NET_9P_VSOCK)
+		struct {
+			u32 port;
+		} vsock;
+#endif
 	} trans_opts;
 
 	struct idr fids;
@@ -151,13 +155,13 @@ struct p9_client_opts {
  * struct p9_fd_opts - per-transport options for fd transport
  * @rfd: file descriptor for reading (trans=fd)
  * @wfd: file descriptor for writing (trans=fd)
- * @port: port to connect to (trans=tcp)
+ * @port: port to connect to (trans=tcp, trans=vsock)
  * @privport: port is privileged
  */
 struct p9_fd_opts {
 	int rfd;
 	int wfd;
-	u16 port;
+	u32 port;
 	bool privport;
 };
 
