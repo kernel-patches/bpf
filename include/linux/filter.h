@@ -1210,13 +1210,17 @@ struct bpf_prog *bpf_patch_insn_single(struct bpf_prog *prog, u32 off,
 
 #ifdef CONFIG_BPF_SYSCALL
 struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
-				     const struct bpf_insn *patch, u32 len);
+				     const struct bpf_insn *patch, u32 len,
+				     s32 insn_off_in_patch);
 struct bpf_insn_aux_data *bpf_dup_insn_aux_data(struct bpf_verifier_env *env);
 void bpf_restore_insn_aux_data(struct bpf_verifier_env *env,
 			       struct bpf_insn_aux_data *orig_insn_aux);
 #else
-static inline struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
-						   const struct bpf_insn *patch, u32 len)
+static inline struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env,
+						   u32 off,
+						   const struct bpf_insn *patch,
+						   u32 len,
+						   s32 insn_off_in_patch)
 {
 	return ERR_PTR(-ENOTSUPP);
 }
