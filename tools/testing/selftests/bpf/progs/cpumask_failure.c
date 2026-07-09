@@ -231,7 +231,7 @@ int BPF_PROG(test_populate_invalid_destination, struct task_struct *task, u64 cl
 	u64 bits;
 	int ret;
 
-	ret = bpf_cpumask_populate((struct cpumask *)invalid, &bits, sizeof(bits));
+	ret = bpf_cpumask_populate(invalid, &bits, sizeof(bits));
 	if (!ret)
 		err = 2;
 
@@ -252,11 +252,30 @@ int BPF_PROG(test_populate_invalid_source, struct task_struct *task, u64 clone_f
 		return 0;
 	}
 
-	ret = bpf_cpumask_populate((struct cpumask *)local, garbage, 8);
+	ret = bpf_cpumask_populate(local, garbage, 8);
 	if (!ret)
 		err = 2;
 
 	bpf_cpumask_release(local);
+
+	return 0;
+}
+
+SEC("tp_btf/task_newtask")
+__failure __msg("expected pointer to STRUCT bpf_cpumask but R1 has a pointer to STRUCT cpumask")
+int BPF_PROG(test_populate_borrowed_destination, struct task_struct *task, u64 clone_flags)
+{
+	u64 bits;
+	int ret;
+
+	/*
+	 * task->cpus_ptr is a borrowed, read-only struct cpumask *, not an
+	 * owned struct bpf_cpumask *. The verifier must reject it as a
+	 * writable destination for bpf_cpumask_populate().
+	 */
+	ret = bpf_cpumask_populate((struct bpf_cpumask *)task->cpus_ptr, &bits, sizeof(bits));
+	if (!ret)
+		err = 2;
 
 	return 0;
 }
