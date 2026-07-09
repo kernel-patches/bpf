@@ -6817,6 +6817,10 @@ struct sk_reuseport_md {
 
 #define BPF_TAG_SIZE	8
 
+enum {
+	BPF_F_TRACING_MULTI_TGT_PROGS = (1U << 0),
+};
+
 struct bpf_prog_info {
 	__u32 type;
 	__u32 id;
@@ -6976,10 +6980,11 @@ struct bpf_link_info {
 			__u32 attach_type;
 			__u32 count; /* in/out: tracing_multi target count */
 			__u32 btf_obj_id;
-			__u32 :32;
+			__u32 flags;
 			__aligned_u64 ids;
 			__aligned_u64 addrs;
 			__aligned_u64 cookies;
+			__aligned_u64 func_btf_ids;
 		} tracing_multi;
 		struct {
 			__u32 type; /* enum bpf_perf_event_type */
