@@ -169,6 +169,49 @@ static void run_icmp_test(struct icmp_send *skel, int af, const char *ip,
 	}
 }
 
+static void run_icmp_no_route_test(struct icmp_send *skel, int af)
+{
+	union {
+		struct ipv4_packet v4;
+		struct ipv6_packet v6;
+	} pkt;
+	DECLARE_LIBBPF_OPTS(bpf_test_run_opts, opts,
+		.data_in = &pkt,
+	);
+	int err;
+
+	switch (af) {
+	case AF_INET:
+		pkt.v4 = pkt_v4;
+		pkt.v4.iph.version = 4;
+		pkt.v4.iph.daddr = htonl(INADDR_LOOPBACK);
+		pkt.v4.tcp.dest = htons(80);
+		opts.data_size_in = sizeof(pkt.v4);
+		skel->bss->unreach_type = ICMP_DEST_UNREACH;
+		break;
+	case AF_INET6:
+		pkt.v6 = pkt_v6;
+		pkt.v6.iph.version = 6;
+		pkt.v6.iph.daddr = in6addr_loopback;
+		pkt.v6.tcp.dest = htons(80);
+		opts.data_size_in = sizeof(pkt.v6);
+		skel->bss->unreach_type = ICMPV6_DEST_UNREACH;
+		break;
+	default:
+		ASSERT_FAIL("af_not_supported");
+		return;
+	}
+
+	skel->bss->server_port = 80;
+	skel->data->kfunc_ret = KFUNC_RET_UNSET;
+
+	err = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.egress), &opts);
+	if (!ASSERT_OK(err, "test_run"))
+		return;
+
+	ASSERT_EQ(skel->data->kfunc_ret, -ENETUNREACH, "kfunc_ret_no_route");
+}
+
 void test_icmp_send_unreach_cgroup(void)
 {
 	struct icmp_send *skel;
@@ -192,6 +235,12 @@ void test_icmp_send_unreach_cgroup(void)
 
 	if (test__start_subtest("ipv6"))
 		run_icmp_test(skel, AF_INET6, "::1", ICMPV6_REJECT_ROUTE);
+
+	if (test__start_subtest("no_route_ipv4"))
+		run_icmp_no_route_test(skel, AF_INET);
+
+	if (test__start_subtest("no_route_ipv6"))
+		run_icmp_no_route_test(skel, AF_INET6);
 
 cleanup:
 	icmp_send__destroy(skel);
