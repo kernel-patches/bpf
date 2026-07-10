@@ -377,6 +377,65 @@ static void test_cookies_bpf_prog(void)
 	__test_link_api_bpf_prog(true);
 }
 
+static void test_rollback_bpf_prog(void)
+{
+	int token_fd, prog_fd, fd = -1, pre_fd = -1;
+	LIBBPF_OPTS(bpf_link_create_opts, lopts);
+	struct tracing_multi_bpf *skel = NULL;
+	__u32 target_ids[2], ids[2];
+	int target_fds[2], fds[2];
+	int first, second;
+
+	skel = tracing_multi_bpf__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "tracing_multi_bpf__open_and_load"))
+		return;
+
+	token_fd = bpf_object__token_fd(skel->obj);
+	token_fd = token_fd < 0 ? 0 : token_fd;
+	target_fds[0] = bpf_program__fd(skel->progs.target_1);
+	target_fds[1] = bpf_program__fd(skel->progs.target_2);
+	target_ids[0] = libbpf_find_prog_btf_id("target_1", target_fds[0], token_fd);
+	if (!ASSERT_GT(target_ids[0], 0, "target_1_btf_id"))
+		goto cleanup;
+	target_ids[1] = libbpf_find_prog_btf_id("target_2", target_fds[1], token_fd);
+	if (!ASSERT_GT(target_ids[1], 0, "target_2_btf_id"))
+		goto cleanup;
+
+	first = target_fds[0] < target_fds[1] ? 0 : 1;
+	second = 1 - first;
+	fds[0] = target_fds[first];
+	fds[1] = target_fds[second];
+	ids[0] = target_ids[first];
+	ids[1] = target_ids[second];
+
+	prog_fd = bpf_program__fd(skel->progs.test_fentry);
+	lopts.tracing_multi.ids = &ids[1];
+	lopts.tracing_multi.fds = &fds[1];
+	lopts.tracing_multi.cnt = 1;
+	pre_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_FENTRY_MULTI, &lopts);
+	if (!ASSERT_GE(pre_fd, 0, "pre_attach"))
+		goto cleanup;
+
+	lopts.tracing_multi.ids = ids;
+	lopts.tracing_multi.fds = fds;
+	lopts.tracing_multi.cnt = ARRAY_SIZE(ids);
+
+	fd = bpf_link_create(prog_fd, 0, BPF_TRACE_FENTRY_MULTI, &lopts);
+	if (!ASSERT_EQ(fd, -EBUSY, "bpf_link_create"))
+		goto cleanup;
+
+	if (run_bpf_target(skel->progs.target_1, first + 1, "rollback_target"))
+		goto cleanup;
+	ASSERT_EQ(skel->bss->test_result_fentry, 0, "test_result_fentry");
+
+cleanup:
+	if (fd >= 0)
+		close(fd);
+	if (pre_fd >= 0)
+		close(pre_fd);
+	tracing_multi_bpf__destroy(skel);
+}
+
 static void test_module_skel_api(void)
 {
 	struct tracing_multi_module *skel = NULL;
@@ -1219,4 +1278,6 @@ void test_tracing_multi_test(void)
 		test_attach_api_bpf_prog_fails();
 	if (test__start_subtest("cookies_bpf_prog"))
 		test_cookies_bpf_prog();
+	if (test__start_subtest("rollback_bpf_prog"))
+		test_rollback_bpf_prog();
 }
