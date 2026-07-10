@@ -1044,9 +1044,12 @@ static int run_bpf_target(struct bpf_program *prog, __u32 retval, const char *na
 	return 0;
 }
 
-static void test_link_api_bpf_prog(void)
+static void test_link_api_bpf_prog(bool test_cookies)
 {
 	const char *funcs[] = { "target_1", "target_2" };
+	__u64 fentry_cookies[] = { 0xfeed01, 0xfeed02 };
+	__u64 fexit_cookies[] = { 0xfeed11, 0xfeed12 };
+	__u64 fsession_cookies[] = { 0xfeed21, 0xfeed22 };
 	LIBBPF_OPTS(bpf_tracing_multi_opts, opts);
 	struct tracing_multi_bpf *skel = NULL;
 	int fds[ARRAY_SIZE(funcs)];
@@ -1059,27 +1062,39 @@ static void test_link_api_bpf_prog(void)
 	fds[0] = bpf_program__fd(skel->progs.target_1);
 	fds[1] = bpf_program__fd(skel->progs.target_2);
 
+	skel->bss->test_cookies = test_cookies;
+
 	opts.fds = fds;
 	opts.funcs = funcs;
 	opts.cnt = ARRAY_SIZE(fds);
 
+	opts.cookies = test_cookies ? fentry_cookies : NULL;
 	link = bpf_program__attach_tracing_multi(skel->progs.test_fentry, NULL, &opts);
 	if (!ASSERT_OK_PTR(link, "attach_fentry"))
 		goto cleanup;
 	skel->links.test_fentry = link;
 
+	opts.cookies = test_cookies ? fexit_cookies : NULL;
 	link = bpf_program__attach_tracing_multi(skel->progs.test_fexit, NULL, &opts);
 	if (!ASSERT_OK_PTR(link, "attach_fexit"))
 		goto cleanup;
 	skel->links.test_fexit = link;
 
+	opts.cookies = test_cookies ? fsession_cookies : NULL;
 	link = bpf_program__attach_tracing_multi(skel->progs.test_fsession, NULL, &opts);
 	if (!ASSERT_OK_PTR(link, "attach_fsession"))
 		goto cleanup;
 	skel->links.test_fsession = link;
 
+	skel->bss->fentry_cookie = fentry_cookies[0];
+	skel->bss->fexit_cookie = fexit_cookies[0];
+	skel->bss->fsession_cookie = fsession_cookies[0];
 	if (run_bpf_target(skel->progs.target_1, 1, "target_1"))
 		goto cleanup;
+
+	skel->bss->fentry_cookie = fentry_cookies[1];
+	skel->bss->fexit_cookie = fexit_cookies[1];
+	skel->bss->fsession_cookie = fsession_cookies[1];
 	if (run_bpf_target(skel->progs.target_2, 2, "target_2"))
 		goto cleanup;
 
@@ -1197,7 +1212,9 @@ cleanup:
 void test_tracing_multi_prog_test(void)
 {
 	if (test__start_subtest("link_api"))
-		test_link_api_bpf_prog();
+		test_link_api_bpf_prog(false);
 	if (test__start_subtest("attach_api_fails"))
 		test_attach_api_bpf_prog_fails();
+	if (test__start_subtest("cookies"))
+		test_link_api_bpf_prog(true);
 }
