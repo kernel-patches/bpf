@@ -9114,6 +9114,26 @@ u32 *btf_kfunc_flags(const struct btf *btf, u32 kfunc_btf_id, const struct bpf_p
 	return btf_kfunc_id_set_contains(btf, hook, kfunc_btf_id);
 }
 
+/*
+ * Return the union of a kfunc's flags across all hooks.
+ * Unlike btf_kfunc_flags(), not restricted to a calling
+ * program's hook. Used when attaching to a kfunc for tracing.
+ */
+u32 btf_kfunc_accumulated_flags(const struct btf *btf, u32 kfunc_btf_id)
+{
+	enum btf_kfunc_hook hook;
+	u32 *hook_flags;
+	u32 flags = 0;
+
+	for (hook = 0; hook < BTF_KFUNC_HOOK_MAX; hook++) {
+		hook_flags = btf_kfunc_id_set_contains(btf, hook, kfunc_btf_id);
+		if (hook_flags)
+			flags |= *hook_flags;
+	}
+
+	return flags;
+}
+
 u32 *btf_kfunc_is_modify_return(const struct btf *btf, u32 kfunc_btf_id,
 				const struct bpf_prog *prog)
 {
