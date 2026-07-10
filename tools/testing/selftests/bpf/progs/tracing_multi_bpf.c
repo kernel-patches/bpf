@@ -5,6 +5,10 @@
 
 char _license[] SEC("license") = "GPL";
 
+bool test_cookies;
+__u64 fentry_cookie;
+__u64 fexit_cookie;
+__u64 fsession_cookie;
 __u64 test_result_fentry;
 __u64 test_result_fexit;
 __u64 test_result_fsession_entry;
@@ -29,20 +33,25 @@ int target_2(void *ctx)
 SEC("fentry.multi")
 int BPF_PROG(test_fentry)
 {
-	test_result_fentry++;
+	if (!test_cookies || bpf_get_attach_cookie(ctx) == fentry_cookie)
+		test_result_fentry++;
 	return 0;
 }
 
 SEC("fexit.multi")
 int BPF_PROG(test_fexit)
 {
-	test_result_fexit++;
+	if (!test_cookies || bpf_get_attach_cookie(ctx) == fexit_cookie)
+		test_result_fexit++;
 	return 0;
 }
 
 SEC("fsession.multi")
 int BPF_PROG(test_fsession)
 {
+	if (test_cookies && bpf_get_attach_cookie(ctx) != fsession_cookie)
+		return 0;
+
 	if (bpf_session_is_return(ctx))
 		test_result_fsession_exit++;
 	else
