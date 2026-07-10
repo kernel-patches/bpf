@@ -4694,13 +4694,14 @@ union bpf_attr {
  *		* **BPF_RB_RING_SIZE**: The size of ring buffer.
  *		* **BPF_RB_CONS_POS**: Consumer position (can wrap around).
  *		* **BPF_RB_PROD_POS**: Producer(s) position (can wrap around).
+ *		* **BPF_RB_OVERWRITE_POS**: Overwrite position (can wrap around).
  *
  *		Data returned is just a momentary snapshot of actual values
  *		and could be inaccurate, so this facility should be used to
  *		power heuristics and for reporting, not to make 100% correct
  *		calculation.
  *	Return
- *		Requested value, or 0, if *flags* are not recognized.
+ *		Requested value on success. **-EINVAL** if *flags* are not recognized.
  *
  * long bpf_csum_level(struct sk_buff *skb, u64 level)
  * 	Description

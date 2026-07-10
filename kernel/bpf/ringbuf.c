@@ -656,7 +656,7 @@ BPF_CALL_2(bpf_ringbuf_query, struct bpf_map *, map, u64, flags)
 	case BPF_RB_OVERWRITE_POS:
 		return smp_load_acquire(&rb->overwrite_pos);
 	default:
-		return 0;
+		return -EINVAL;
 	}
 }
 
