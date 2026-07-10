@@ -76,6 +76,14 @@ static void test_fexit_noreturns(void)
 			       "Attaching fexit/fsession/fmod_ret to __noreturn function 'do_exit' is rejected.");
 }
 
+#ifdef __SIZEOF_INT128__
+static void test_fexit_int128_ret(void)
+{
+	test_tracing_fail_prog("fexit_int128_ret",
+			       "with a >8 byte return value is not supported for this attach type");
+}
+#endif
+
 void test_tracing_failure(void)
 {
 	if (test__start_subtest("bpf_spin_lock"))
@@ -86,4 +94,8 @@ void test_tracing_failure(void)
 		test_tracing_deny();
 	if (test__start_subtest("fexit_noreturns"))
 		test_fexit_noreturns();
+#ifdef __SIZEOF_INT128__
+	if (test__start_subtest("fexit_int128_ret"))
+		test_fexit_int128_ret();
+#endif
 }

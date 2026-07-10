@@ -161,6 +161,15 @@ bpf_testmod_test_arg_ptr_to_struct(struct bpf_testmod_struct_arg_1 *a) {
 	return bpf_testmod_test_struct_arg_result;
 }
 
+#ifdef __SIZEOF_INT128__
+noinline __int128
+bpf_testmod_test_int128_ret(int a)
+{
+	bpf_testmod_test_struct_arg_result = a;
+	return (__int128)a;
+}
+#endif
+
 __weak noinline void bpf_testmod_looooooooooooooooooooooooooooooong_name(void)
 {
 }
@@ -513,6 +522,10 @@ bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 	(void)bpf_testmod_test_union_arg_2(6, union_arg2);
 
 	(void)bpf_testmod_test_arg_ptr_to_struct(&struct_arg1_2);
+
+#ifdef __SIZEOF_INT128__
+	(void)bpf_testmod_test_int128_ret(i);
+#endif
 
 	(void)trace_bpf_testmod_test_raw_tp_null_tp(NULL);
 
