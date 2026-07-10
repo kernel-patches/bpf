@@ -228,8 +228,13 @@ static int submit_write_reloc(struct tegra_drm_context *context, struct gather_b
 			      struct drm_tegra_submit_buf *buf, struct tegra_drm_mapping *mapping)
 {
 	/* TODO check that target_offset is within bounds */
-	dma_addr_t iova = mapping->iova + buf->reloc.target_offset;
+	dma_addr_t iova = buf->reloc.target_offset;
 	u32 written_ptr;
+
+	if (mapping->bo_map)
+		iova += mapping->iova;
+	else
+		iova += mapping->ctx_map->mapping->phys;
 
 #ifdef CONFIG_ARCH_DMA_ADDR_T_64BIT
 	if (buf->flags & DRM_TEGRA_SUBMIT_RELOC_SECTOR_LAYOUT)
@@ -492,11 +497,13 @@ static void release_job(struct host1x_job *job)
 	struct tegra_drm_submit_data *job_data = job->user_data;
 	u32 i;
 
-	if (job->memory_context)
-		host1x_memory_context_put(job->memory_context);
-
 	for (i = 0; i < job_data->num_used_mappings; i++)
 		tegra_drm_mapping_put(job_data->used_mappings[i].mapping);
+
+	if (job->memory_context) {
+		host1x_memory_context_inactive(job->memory_context);
+		host1x_memory_context_put(job->memory_context);
+	}
 
 	kfree(job_data->used_mappings);
 	kfree(job_data);
@@ -508,6 +515,7 @@ static void release_job(struct host1x_job *job)
 int tegra_drm_ioctl_channel_submit(struct drm_device *drm, void *data,
 				   struct drm_file *file)
 {
+	struct host1x_memory_context *active_memctx = NULL;
 	struct tegra_drm_file *fpriv = file->driver_priv;
 	struct drm_tegra_channel_submit *args = data;
 	struct tegra_drm_submit_data *job_data;
@@ -526,6 +534,17 @@ int tegra_drm_ioctl_channel_submit(struct drm_device *drm, void *data,
 		pr_err_ratelimited("%s: %s: invalid channel context '%#x'", __func__,
 				   current->comm, args->context);
 		return -EINVAL;
+	}
+
+	if (context->memory_context) {
+		err = host1x_memory_context_active(context->memory_context);
+		if (err) {
+			mutex_unlock(&fpriv->lock);
+			SUBMIT_ERR(context, "failed to activate memory context");
+			return err;
+		}
+
+		active_memctx = context->memory_context;
 	}
 
 	if (args->syncobj_in) {
@@ -604,7 +623,8 @@ int tegra_drm_ioctl_channel_submit(struct drm_device *drm, void *data,
 		}
 
 		if (supported) {
-			job->memory_context = context->memory_context;
+			job->memory_context = active_memctx;
+			active_memctx = NULL;
 			host1x_memory_context_get(job->memory_context);
 		}
 	} else if (context->client->ops->get_streamid_offset) {
@@ -657,8 +677,10 @@ int tegra_drm_ioctl_channel_submit(struct drm_device *drm, void *data,
 	goto put_job;
 
 put_memory_context:
-	if (job->memory_context)
+	if (job->memory_context) {
+		host1x_memory_context_inactive(job->memory_context);
 		host1x_memory_context_put(job->memory_context);
+	}
 unpin_job:
 	host1x_job_unpin(job);
 put_job:
@@ -677,6 +699,8 @@ put_bo:
 unlock:
 	if (syncobj)
 		drm_syncobj_put(syncobj);
+	if (active_memctx)
+		host1x_memory_context_inactive(active_memctx);
 
 	mutex_unlock(&fpriv->lock);
 	return err;
