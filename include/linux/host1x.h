@@ -469,6 +469,7 @@ struct host1x_memory_context {
 	struct pid *pid;
 
 	refcount_t ref;
+	bool static_alloc;
 
 	struct host1x_hw_memory_context *hw;
 	struct list_head entry; /* Entry in hw_memory_context's list */
