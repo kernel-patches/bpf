@@ -12,6 +12,7 @@
 #include "tracing_multi_verifier.skel.h"
 #include "tracing_multi_bench.skel.h"
 #include "tracing_multi_rollback.skel.h"
+#include "tracing_multi_bpf.skel.h"
 #include "trace_helpers.h"
 
 static __u64 bpf_fentry_test_cookies[] = {
@@ -286,6 +287,73 @@ static void test_link_api_ids(bool test_cookies)
 cleanup:
 	tracing_multi__destroy(skel);
 	free(ids);
+}
+
+static int run_bpf_target(struct bpf_program *prog, __u32 retval, const char *name)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	int err;
+
+	err = bpf_prog_test_run_opts(bpf_program__fd(prog), &topts);
+	if (!ASSERT_OK(err, name))
+		return err;
+
+	if (!ASSERT_EQ(topts.retval, retval, name))
+		return -EINVAL;
+
+	return 0;
+}
+
+static void test_link_api_bpf_prog(void)
+{
+	const char *funcs[] = { "target_1", "target_2" };
+	LIBBPF_OPTS(bpf_tracing_multi_opts, opts);
+	struct tracing_multi_bpf *skel = NULL;
+	int fds[ARRAY_SIZE(funcs)];
+	struct bpf_link *link;
+
+	skel = tracing_multi_bpf__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "tracing_multi_bpf__open_and_load"))
+		return;
+
+	fds[0] = bpf_program__fd(skel->progs.target_1);
+	fds[1] = bpf_program__fd(skel->progs.target_2);
+
+	opts.fds = fds;
+	opts.funcs = funcs;
+	opts.cnt = ARRAY_SIZE(fds);
+
+	link = bpf_program__attach_tracing_multi(skel->progs.test_fentry, NULL, &opts);
+	if (!ASSERT_OK_PTR(link, "attach_fentry"))
+		goto cleanup;
+	skel->links.test_fentry = link;
+
+	link = bpf_program__attach_tracing_multi(skel->progs.test_fexit, NULL, &opts);
+	if (!ASSERT_OK_PTR(link, "attach_fexit"))
+		goto cleanup;
+	skel->links.test_fexit = link;
+
+	link = bpf_program__attach_tracing_multi(skel->progs.test_fsession, NULL, &opts);
+	if (!ASSERT_OK_PTR(link, "attach_fsession"))
+		goto cleanup;
+	skel->links.test_fsession = link;
+
+	if (run_bpf_target(skel->progs.target_1, 1, "target_1"))
+		goto cleanup;
+	if (run_bpf_target(skel->progs.target_2, 2, "target_2"))
+		goto cleanup;
+
+	ASSERT_EQ(skel->bss->target_1_result, 1, "target_1_result");
+	ASSERT_EQ(skel->bss->target_2_result, 1, "target_2_result");
+	ASSERT_EQ(skel->bss->test_result_fentry, ARRAY_SIZE(funcs), "test_result_fentry");
+	ASSERT_EQ(skel->bss->test_result_fexit, ARRAY_SIZE(funcs), "test_result_fexit");
+	ASSERT_EQ(skel->bss->test_result_fsession_entry, ARRAY_SIZE(funcs),
+		  "test_result_fsession_entry");
+	ASSERT_EQ(skel->bss->test_result_fsession_exit, ARRAY_SIZE(funcs),
+		  "test_result_fsession_exit");
+
+cleanup:
+	tracing_multi_bpf__destroy(skel);
 }
 
 static void test_module_skel_api(void)
@@ -1026,4 +1094,6 @@ void test_tracing_multi_test(void)
 	RUN_TESTS(tracing_multi_verifier);
 	if (test__start_subtest("fentry_after_multi"))
 		test_fentry_after_multi();
+	if (test__start_subtest("link_api_bpf_prog"))
+		test_link_api_bpf_prog();
 }
