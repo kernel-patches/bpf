@@ -548,7 +548,11 @@ void bpf_prog_kallsyms_del_all(struct bpf_prog *fp)
 /* All BPF JIT sysctl knobs here. */
 int bpf_jit_enable   __read_mostly = IS_BUILTIN(CONFIG_BPF_JIT_DEFAULT_ON);
 int bpf_jit_kallsyms __read_mostly = IS_BUILTIN(CONFIG_BPF_JIT_DEFAULT_ON);
-int bpf_jit_harden   __read_mostly;
+/* Enable hardening by default when x86_64 CFI is enabled to prevent CFI
+ * hashes and endbr64 instructions from being crafted.
+ */
+int bpf_jit_harden   __read_mostly = IS_ENABLED(CONFIG_X86_64) &&
+					IS_ENABLED(CONFIG_CFI);
 long bpf_jit_limit   __read_mostly;
 long bpf_jit_limit_max __read_mostly;
 
