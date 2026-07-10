@@ -499,10 +499,8 @@ int rocket_job_init(struct rocket_core *core)
 					rocket_job_irq_handler_thread,
 					IRQF_SHARED, dev_name(core->dev),
 					core);
-	if (ret) {
-		dev_err(core->dev, "failed to request job irq");
+	if (ret)
 		return ret;
-	}
 
 	core->reset.wq = alloc_ordered_workqueue("rocket-reset-%d", 0, core->index);
 	if (!core->reset.wq)
