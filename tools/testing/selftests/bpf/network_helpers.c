@@ -14,6 +14,7 @@
 #include <sys/types.h>
 #include <sys/un.h>
 #include <sys/eventfd.h>
+#include <sys/poll.h>
 
 #include <linux/err.h>
 #include <linux/in.h>
@@ -39,6 +40,8 @@
 #ifndef IPPROTO_MPTCP
 #define IPPROTO_MPTCP 262
 #endif
+
+#define CONNECTION_IN_PROGRESS_TIMEOUT_MS	3000
 
 #define clean_errno() (errno == 0 ? "None" : strerror(errno))
 #define log_err(MSG, ...) ({						\
@@ -294,7 +297,8 @@ error_close:
 int connect_to_addr(int type, const struct sockaddr_storage *addr, socklen_t addrlen,
 		    const struct network_helper_opts *opts)
 {
-	int fd;
+	socklen_t errlen;
+	int fd, err;
 
 	if (!opts)
 		opts = &default_opts;
@@ -305,13 +309,42 @@ int connect_to_addr(int type, const struct sockaddr_storage *addr, socklen_t add
 		return -1;
 	}
 
-	if (connect(fd, (const struct sockaddr *)addr, addrlen)) {
-		log_err("Failed to connect to server");
-		save_errno_close(fd);
-		return -1;
+	err = connect(fd, (const struct sockaddr *)addr, addrlen);
+	if (err && errno == EINPROGRESS) {
+		struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+
+		err = 0;
+		err = poll(&pfd, 1, CONNECTION_IN_PROGRESS_TIMEOUT_MS);
+
+		if (err <= 0) {
+			if (err == 0) {
+				log_err("Connection timeout");
+				errno = ETIMEDOUT;
+			} else {
+				log_err("Failed to poll connection status");
+			}
+			goto close;
+		}
+
+		errlen = sizeof(err);
+		if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen) < 0) {
+			log_err("Failed to getsockopt");
+			goto close;
+		}
+
+		if (err) {
+			log_err("Failed to connect to server");
+			errno = err;
+			goto close;
+		}
+	} else if (err) {
+		goto close;
 	}
 
 	return fd;
+close:
+	save_errno_close(fd);
+	return -1;
 }
 
 int connect_to_addr_str(int family, int type, const char *addr_str, __u16 port,
