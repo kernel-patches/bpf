@@ -1453,6 +1453,9 @@ static struct btf *btf_parse_elf(const char *path, struct btf *base_btf,
 	int err = 0, fd = -1;
 	Elf *elf = NULL;
 
+	if (btf_ext)
+		*btf_ext = NULL;
+
 	if (elf_version(EV_CURRENT) == EV_NONE) {
 		pr_warn("failed to init libelf for %s\n", path);
 		return ERR_PTR(-LIBBPF_ERRNO__LIBELF);
