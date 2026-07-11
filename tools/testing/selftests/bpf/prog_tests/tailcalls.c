@@ -12,6 +12,7 @@
 #include "tailcall_cgrp_storage_no_storage.skel.h"
 #include "tailcall_cgrp_storage.skel.h"
 #include "tailcall_sleepable.skel.h"
+#include "tailcall_callback.skel.h"
 
 /* test_tailcall_1 checks basic functionality by patching multiple locations
  * in a single program for a single tail call slot with nop->jmp, jmp->nop
@@ -1901,6 +1902,11 @@ out:
 	tailcall_sleepable__destroy(skel);
 }
 
+static void test_tailcall_callback(void)
+{
+	RUN_TESTS(tailcall_callback);
+}
+
 void test_tailcalls(void)
 {
 	if (test__start_subtest("tailcall_1"))
@@ -1967,4 +1973,5 @@ void test_tailcalls(void)
 		test_tailcall_cgrp_storage_no_storage_leaf();
 	if (test__start_subtest("tailcall_cgrp_storage_no_storage_bridge"))
 		test_tailcall_cgrp_storage_no_storage_bridge();
+	test_tailcall_callback();
 }
