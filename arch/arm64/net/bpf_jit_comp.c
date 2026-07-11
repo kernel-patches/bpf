@@ -1325,6 +1325,9 @@ static int build_insn(const struct bpf_verifier_env *env, const struct bpf_insn 
 	int ret;
 	bool sign_extend;
 
+	if (bpf_insn_is_hmul(insn))
+		return -EOPNOTSUPP;
+
 	if (bpf_insn_is_indirect_target(env, ctx->prog, i))
 		emit_bti(A64_BTI_J, ctx);
 
