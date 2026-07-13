@@ -16135,6 +16135,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		}
 		if (env->log.level & BPF_LOG_LEVEL)
 			print_insn_state(env, this_branch, this_branch->curframe);
+		err = bpf_diag_record_branch(env, *insn_idx, true);
+		if (err)
+			return err;
 		*insn_idx += insn->off;
 		return 0;
 	} else if (pred == 0) {
@@ -16150,7 +16153,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		}
 		if (env->log.level & BPF_LOG_LEVEL)
 			print_insn_state(env, this_branch, this_branch->curframe);
-		return 0;
+		return bpf_diag_record_branch(env, *insn_idx, false);
 	}
 
 	/* Push scalar registers sharing same ID to jump history,
@@ -16182,6 +16185,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	other_branch_regs[insn->dst_reg] = env->true_reg1;
 	if (BPF_SRC(insn->code) == BPF_X)
 		other_branch_regs[insn->src_reg] = env->true_reg2;
+	err = bpf_diag_record_branch(env, *insn_idx, false);
+	if (err)
+		return err;
 
 	if (BPF_SRC(insn->code) == BPF_X &&
 	    src_reg->type == SCALAR_VALUE && src_reg->id &&
@@ -17437,6 +17443,10 @@ static int do_check(struct bpf_verifier_env *env)
 		/* reset current history entry on each new instruction */
 		env->cur_hist_ent = NULL;
 
+		err = bpf_diag_error(env);
+		if (err)
+			return err;
+
 		env->prev_insn_idx = prev_insn_idx;
 		if (env->insn_idx >= insn_cnt) {
 			verbose(env, "invalid insn idx %d insn_cnt %d\n",
@@ -17547,6 +17557,12 @@ static int do_check(struct bpf_verifier_env *env)
 			goto process_bpf_exit;
 
 		err = do_check_insn(env, &do_print_state);
+		if (err >= 0) {
+			int diag_err = bpf_diag_error(env);
+
+			if (diag_err)
+				return diag_err;
+		}
 		if (error_recoverable_with_nospec(err) && state->speculative) {
 			/* Prevent this speculative path from ever reaching the
 			 * insn that would have been unsafe to execute.
@@ -17604,7 +17620,7 @@ process_bpf_exit:
 		}
 	}
 
-	return 0;
+	return bpf_diag_error(env);
 }
 
 static int find_btf_percpu_datasec(struct btf *btf)
