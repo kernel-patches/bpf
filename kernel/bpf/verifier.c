@@ -1834,6 +1834,50 @@ static const int caller_saved[CALLER_SAVED_REGS] = {
 	BPF_REG_0, BPF_REG_1, BPF_REG_2, BPF_REG_3, BPF_REG_4, BPF_REG_5
 };
 
+static void bpf_diag_save_caller_saved_regs(struct bpf_verifier_env *env,
+					    struct bpf_reg_state *regs)
+{
+	struct bpf_reg_state *old_reg;
+	int i;
+
+	for (i = 0; i < CALLER_SAVED_REGS; i++) {
+		old_reg = bpf_diag_reg_scratch(env, i);
+		if (!old_reg)
+			return;
+		*old_reg = regs[caller_saved[i]];
+	}
+}
+
+static void bpf_diag_record_caller_saved_invals(struct bpf_verifier_env *env, u32 insn_idx,
+						struct bpf_reg_state *regs)
+{
+	struct bpf_reg_state *old_reg;
+	u32 frameno = env->cur_state->curframe;
+	int i;
+
+	for (i = 1; i < CALLER_SAVED_REGS; i++) {
+		old_reg = bpf_diag_reg_scratch(env, i);
+		if (!old_reg)
+			return;
+		if (old_reg->type == NOT_INIT && regs[caller_saved[i]].type == NOT_INIT)
+			continue;
+		bpf_diag_record_mod(env, insn_idx, bpf_diag_reg_target(frameno, caller_saved[i]),
+				    BPF_DIAG_MOD_CALLER_SAVED, old_reg, &regs[caller_saved[i]],
+				    NULL);
+	}
+}
+
+static void bpf_diag_record_call_ret(struct bpf_verifier_env *env, u32 insn_idx,
+				     struct bpf_reg_state *regs)
+{
+	struct bpf_reg_state *old_reg = bpf_diag_reg_scratch(env, 0);
+
+	if (!old_reg)
+		return;
+	bpf_diag_record_mod(env, insn_idx, bpf_diag_reg_target(env->cur_state->curframe, BPF_REG_0),
+			    BPF_DIAG_MOD_WRITE, old_reg, &regs[BPF_REG_0], NULL);
+}
+
 /* This helper doesn't clear reg->id */
 static void ___mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 {
@@ -3448,6 +3492,22 @@ static void assign_scalar_id_before_mov(struct bpf_verifier_env *env,
 		src_reg->id = ++env->id_gen;
 }
 
+static int bpf_diag_stack_slot(const struct bpf_func_state *state,
+			       const struct bpf_stack_state *stack)
+{
+	unsigned long start, end, addr;
+
+	if (!stack)
+		return -1;
+
+	addr = (unsigned long)stack;
+	start = (unsigned long)state->stack;
+	end = (unsigned long)(state->stack + state->allocated_stack / BPF_REG_SIZE);
+	if (addr < start || addr >= end)
+		return -1;
+	return stack - state->stack;
+}
+
 static void save_register_state(struct bpf_verifier_env *env,
 				struct bpf_func_state *state,
 				int spi, struct bpf_reg_state *reg,
@@ -3525,8 +3585,14 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 	int i, slot = -off - 1, spi = slot / BPF_REG_SIZE, err;
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
 	struct bpf_reg_state *reg = NULL;
+	struct bpf_reg_state *old_spill;
 	int insn_flags = INSN_F_STACK_ACCESS;
 	int hist_spi = spi, hist_frame = state->frameno;
+	bool old_was_spill = bpf_is_spilled_reg(&state->stack[spi]);
+
+	old_spill = bpf_diag_reg_scratch(env, 0);
+	if (old_spill)
+		*old_spill = state->stack[spi].spilled_ptr;
 
 	/* caller checked that off % size == 0 and -MAX_BPF_STACK <= off < 0,
 	 * so it's aligned access and [off, off + size) are within stack limits
@@ -3620,6 +3686,15 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 		for (i = 0; i < size; i++)
 			state->stack[spi].slot_type[(slot - i) % BPF_REG_SIZE] = type;
 		insn_flags = 0; /* not a register spill */
+	}
+
+	if (old_spill && (old_was_spill || bpf_is_spilled_reg(&state->stack[spi]))) {
+		enum bpf_diag_mod_reason reason = bpf_is_spilled_reg(&state->stack[spi]) ?
+							  BPF_DIAG_MOD_SPILL :
+							  BPF_DIAG_MOD_WRITE;
+
+		bpf_diag_record_mod(env, insn_idx, bpf_diag_stack_slot_target(state->frameno, spi),
+				    reason, old_spill, &state->stack[spi].spilled_ptr, NULL);
 	}
 
 	if (insn_flags)
@@ -3759,6 +3834,9 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 		if (err)
 			return err;
 	}
+	bpf_diag_record_mod(env, insn_idx,
+			    bpf_diag_stack_range_target(state->frameno, min_off, max_off),
+			    BPF_DIAG_MOD_VAR_WRITE, NULL, NULL, NULL);
 	return 0;
 }
 
@@ -4135,6 +4213,8 @@ static int check_stack_arg_write(struct bpf_verifier_env *env, struct bpf_func_s
 	struct bpf_subprog_info *subprog = &env->subprog_info[state->subprogno];
 	int spi = -off / BPF_REG_SIZE - 1;
 	struct bpf_reg_state *arg;
+	struct bpf_reg_state *old_arg;
+	bool slot_exists;
 	int err;
 
 	if (spi >= max_stack_arg_regs) {
@@ -4143,6 +4223,7 @@ static int check_stack_arg_write(struct bpf_verifier_env *env, struct bpf_func_s
 		return -EINVAL;
 	}
 
+	slot_exists = spi < state->out_stack_arg_cnt;
 	err = grow_stack_arg_slots(env, state, spi + 1);
 	if (err)
 		return err;
@@ -4151,14 +4232,26 @@ static int check_stack_arg_write(struct bpf_verifier_env *env, struct bpf_func_s
 	if (spi + 1 > subprog->max_out_stack_arg_cnt)
 		subprog->max_out_stack_arg_cnt = spi + 1;
 
+	arg = &state->stack_arg_regs[spi];
+	old_arg = bpf_diag_reg_scratch(env, 0);
+	if (old_arg) {
+		if (slot_exists)
+			*old_arg = *arg;
+		else
+			bpf_mark_reg_not_init(env, old_arg);
+	}
+
 	if (value_reg) {
 		state->stack_arg_regs[spi] = *value_reg;
 	} else {
 		/* BPF_ST: store immediate, treat as scalar */
-		arg = &state->stack_arg_regs[spi];
 		arg->type = SCALAR_VALUE;
 		__mark_reg_known(arg, env->prog->insnsi[env->insn_idx].imm);
 	}
+	if (old_arg)
+		bpf_diag_record_mod(env, env->insn_idx,
+				    bpf_diag_stack_arg_target(state->frameno, spi),
+				    BPF_DIAG_MOD_WRITE, old_arg, arg, NULL);
 	state->no_stack_arg_load = true;
 	return bpf_push_jmp_history(env, env->cur_state,
 				    INSN_F_STACK_ARG_ACCESS, spi, 0, 0);
@@ -6445,6 +6538,31 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 static int save_aux_ptr_type(struct bpf_verifier_env *env, enum bpf_reg_type type,
 			     bool allow_trust_mismatch);
 
+static bool diag_is_single_slot_stack_read(struct bpf_verifier_env *env,
+					   const struct bpf_reg_state *reg, int off, int size,
+					   u32 *frameno, u16 *spi)
+{
+	struct bpf_func_state *state;
+	int first_slot, last_slot;
+
+	if (reg->type != PTR_TO_STACK || !tnum_is_const(reg->var_off))
+		return false;
+
+	off += reg->var_off.value;
+	if (off >= 0 || off + size > 0)
+		return false;
+
+	first_slot = -off - 1;
+	last_slot = -off - size;
+	if (first_slot / BPF_REG_SIZE != last_slot / BPF_REG_SIZE)
+		return false;
+
+	state = bpf_func(env, reg);
+	*frameno = state->frameno;
+	*spi = first_slot / BPF_REG_SIZE;
+	return true;
+}
+
 static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			  bool strict_alignment_once, bool is_ldsx,
 			  bool allow_trust_mismatch, const char *ctx)
@@ -6452,15 +6570,37 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	struct bpf_verifier_state *vstate = env->cur_state;
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
 	struct bpf_reg_state *regs = cur_regs(env);
+	struct bpf_diag_mod_target origin;
+	struct bpf_reg_state *old_dst;
 	enum bpf_reg_type src_reg_type;
+	u32 stack_frameno = 0;
+	u16 stack_spi = 0;
+	bool have_old_dst;
+	bool stack_origin;
+	int size;
 	int err;
+
+	old_dst = bpf_diag_reg_scratch(env, 0);
+	have_old_dst = old_dst && insn->dst_reg < MAX_BPF_REG;
+	if (have_old_dst)
+		*old_dst = regs[insn->dst_reg];
 
 	/* Handle stack arg read */
 	if (is_stack_arg_ldx(insn)) {
 		err = check_reg_arg(env, insn->dst_reg, DST_OP_NO_MARK);
 		if (err)
 			return err;
-		return check_stack_arg_read(env, state, insn->off, insn->dst_reg);
+		err = check_stack_arg_read(env, state, insn->off, insn->dst_reg);
+		if (!err && have_old_dst) {
+			origin = bpf_diag_stack_arg_target(
+				vstate->frame[vstate->curframe - 1]->frameno,
+				insn->off / BPF_REG_SIZE - 1);
+			bpf_diag_record_mod(env, env->insn_idx,
+					    bpf_diag_reg_target(state->frameno, insn->dst_reg),
+					    BPF_DIAG_MOD_WRITE, old_dst, &regs[insn->dst_reg],
+					    &origin);
+		}
+		return err;
 	}
 
 	/* check src operand */
@@ -6474,6 +6614,10 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return err;
 
 	src_reg_type = regs[insn->src_reg].type;
+	size = bpf_size_to_bytes(BPF_SIZE(insn->code));
+	stack_origin = have_old_dst &&
+		       diag_is_single_slot_stack_read(env, regs + insn->src_reg, insn->off, size,
+						      &stack_frameno, &stack_spi);
 
 	/* Check if (src_reg + off) is readable. The state of dst_reg will be
 	 * updated by this call.
@@ -6484,6 +6628,20 @@ static int check_load_mem(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	err = err ?: save_aux_ptr_type(env, src_reg_type,
 				       allow_trust_mismatch);
 	err = err ?: reg_bounds_sanity_check(env, &regs[insn->dst_reg], ctx);
+	if (!err && have_old_dst) {
+		if (stack_origin) {
+			origin = bpf_diag_stack_slot_target(stack_frameno, stack_spi);
+			bpf_diag_record_mod(env, env->insn_idx,
+					    bpf_diag_reg_target(state->frameno, insn->dst_reg),
+					    BPF_DIAG_MOD_WRITE, old_dst, &regs[insn->dst_reg],
+					    &origin);
+		} else {
+			bpf_diag_record_mod(env, env->insn_idx,
+					    bpf_diag_reg_target(state->frameno, insn->dst_reg),
+					    BPF_DIAG_MOD_WRITE, old_dst, &regs[insn->dst_reg],
+					    NULL);
+		}
+	}
 
 	return err;
 }
@@ -8965,6 +9123,56 @@ static int check_func_proto(const struct bpf_func_proto *fn, struct bpf_call_arg
 	       check_btf_id_ok(fn) ? 0 : -EINVAL;
 }
 
+static int bpf_diag_stack_arg_slot(const struct bpf_func_state *state,
+				   const struct bpf_reg_state *reg)
+{
+	unsigned long start, end, addr;
+
+	if (!state->stack_arg_regs)
+		return -1;
+
+	addr = (unsigned long)reg;
+	start = (unsigned long)state->stack_arg_regs;
+	end = (unsigned long)(state->stack_arg_regs + state->out_stack_arg_cnt);
+	if (addr < start || addr >= end)
+		return -1;
+	return reg - state->stack_arg_regs;
+}
+
+static int bpf_diag_func_regno(const struct bpf_func_state *state, const struct bpf_reg_state *reg)
+{
+	unsigned long start = (unsigned long)state->regs;
+	unsigned long end = (unsigned long)(state->regs + MAX_BPF_REG);
+	unsigned long addr = (unsigned long)reg;
+
+	if (addr < start || addr >= end)
+		return -1;
+	return reg - state->regs;
+}
+
+static bool diag_mod_target(const struct bpf_func_state *state, const struct bpf_reg_state *reg,
+			    const struct bpf_stack_state *stack, struct bpf_diag_mod_target *target)
+{
+	int id;
+
+	id = bpf_diag_func_regno(state, reg);
+	if (id >= 0) {
+		*target = bpf_diag_reg_target(state->frameno, id);
+		return true;
+	}
+	id = bpf_diag_stack_arg_slot(state, reg);
+	if (id >= 0) {
+		*target = bpf_diag_stack_arg_target(state->frameno, id);
+		return true;
+	}
+	id = bpf_diag_stack_slot(state, stack);
+	if (id >= 0) {
+		*target = bpf_diag_stack_slot_target(state->frameno, id);
+		return true;
+	}
+	return false;
+}
+
 /* Packet data might have moved, any old PTR_TO_PACKET[_META,_END]
  * are now invalid, so turn them into unknown SCALAR_VALUE.
  *
@@ -8973,13 +9181,29 @@ static int check_func_proto(const struct bpf_func_proto *fn, struct bpf_call_arg
  */
 static void clear_all_pkt_pointers(struct bpf_verifier_env *env)
 {
+	struct bpf_stack_state *stack;
 	struct bpf_func_state *state;
 	struct bpf_reg_state *reg;
 
-	bpf_for_each_reg_in_vstate(env->cur_state, state, reg, ({
-		if (reg_is_pkt_pointer_any(reg) || reg_is_dynptr_slice_pkt(reg))
-			mark_reg_invalid(env, reg);
-	}));
+	bpf_for_each_reg_in_vstate_mask(
+		env->cur_state, state, reg, stack, 1 << STACK_SPILL, ({
+			if (reg_is_pkt_pointer_any(reg) || reg_is_dynptr_slice_pkt(reg)) {
+				struct bpf_diag_mod_target target;
+				struct bpf_reg_state *old_reg;
+				bool tracked;
+
+				tracked = diag_mod_target(state, reg, stack, &target);
+				old_reg = bpf_diag_reg_scratch(env, 0);
+				if (old_reg)
+					*old_reg = *reg;
+				mark_reg_invalid(env, reg);
+				if (tracked && old_reg)
+					bpf_diag_record_mod(env, env->insn_idx, target,
+							    BPF_DIAG_MOD_PKT_DATA_CHANGE, old_reg,
+							    reg, NULL);
+			}
+		}))
+		;
 }
 
 enum {
@@ -9083,22 +9307,69 @@ static int release_reference(struct bpf_verifier_env *env, int id)
 			return -EINVAL;
 		}
 
-		bpf_for_each_reg_in_vstate_mask(vstate, state, reg, stack, mask, ({
-			if (reg->id != id && reg->parent_id != id)
-				continue;
+		bpf_for_each_reg_in_vstate_mask(
+			vstate, state, reg, stack, mask, ({
+				struct bpf_diag_mod_target target;
+				struct bpf_reg_state *old_reg, *old_reg2;
+				bool tracked;
 
-			/* Free objects derived from the current object */
-			if (reg->parent_id == id) {
-				err = idstack_push(idstack, reg->id);
-				if (err)
-					return err;
-			}
+				if (reg->id != id && reg->parent_id != id)
+					continue;
 
-			if (!stack || stack->slot_type[BPF_REG_SIZE - 1] == STACK_SPILL)
-				mark_reg_invalid(env, reg);
-			else if (stack->slot_type[BPF_REG_SIZE - 1] == STACK_DYNPTR)
-				invalidate_dynptr(env, stack);
-		}));
+				/* Free objects derived from the current object */
+				if (reg->parent_id == id) {
+					err = idstack_push(idstack, reg->id);
+					if (err)
+						return err;
+				}
+
+				old_reg = bpf_diag_reg_scratch(env, 0);
+				if (old_reg)
+					*old_reg = *reg;
+				tracked = diag_mod_target(state, reg, stack, &target);
+				if (!stack || stack->slot_type[BPF_REG_SIZE - 1] == STACK_SPILL) {
+					mark_reg_invalid(env, reg);
+				} else if (stack->slot_type[BPF_REG_SIZE - 1] == STACK_DYNPTR) {
+					struct bpf_stack_state *dyn_stack = stack;
+					int dyn_spi = stack - state->stack;
+
+					if (reg->dynptr.first_slot) {
+						dyn_stack--;
+						dyn_spi--;
+					}
+
+					old_reg2 = bpf_diag_reg_scratch(env, 1);
+					if (old_reg)
+						*old_reg = dyn_stack[0].spilled_ptr;
+					if (old_reg2)
+						*old_reg2 = dyn_stack[1].spilled_ptr;
+					invalidate_dynptr(env, dyn_stack);
+					if (old_reg) {
+						target = bpf_diag_stack_slot_target(state->frameno,
+										    dyn_spi);
+						bpf_diag_record_mod(env, env->insn_idx, target,
+								    BPF_DIAG_MOD_REF_RELEASE,
+								    old_reg,
+								    &dyn_stack[0].spilled_ptr,
+								    NULL);
+					}
+					if (old_reg2) {
+						target = bpf_diag_stack_slot_target(state->frameno,
+										    dyn_spi + 1);
+						bpf_diag_record_mod(env, env->insn_idx, target,
+								    BPF_DIAG_MOD_REF_RELEASE,
+								    old_reg2,
+								    &dyn_stack[1].spilled_ptr,
+								    NULL);
+					}
+					continue;
+				}
+				if (tracked && old_reg)
+					bpf_diag_record_mod(env, env->insn_idx, target,
+							    BPF_DIAG_MOD_REF_RELEASE, old_reg, reg,
+							    NULL);
+			}))
+			;
 	}
 
 	return 0;
@@ -9106,13 +9377,29 @@ static int release_reference(struct bpf_verifier_env *env, int id)
 
 static void invalidate_non_owning_refs(struct bpf_verifier_env *env)
 {
-	struct bpf_func_state *unused;
+	struct bpf_stack_state *stack;
+	struct bpf_func_state *state;
 	struct bpf_reg_state *reg;
 
-	bpf_for_each_reg_in_vstate(env->cur_state, unused, reg, ({
-		if (type_is_non_owning_ref(reg->type))
-			mark_reg_invalid(env, reg);
-	}));
+	bpf_for_each_reg_in_vstate_mask(
+		env->cur_state, state, reg, stack, 1 << STACK_SPILL, ({
+			if (type_is_non_owning_ref(reg->type)) {
+				struct bpf_diag_mod_target target;
+				struct bpf_reg_state *old_reg;
+				bool tracked;
+
+				tracked = diag_mod_target(state, reg, stack, &target);
+				old_reg = bpf_diag_reg_scratch(env, 0);
+				if (old_reg)
+					*old_reg = *reg;
+				mark_reg_invalid(env, reg);
+				if (tracked && old_reg)
+					bpf_diag_record_mod(env, env->insn_idx, target,
+							    BPF_DIAG_MOD_NON_OWN_REF, old_reg, reg,
+							    NULL);
+			}
+		}))
+		;
 }
 
 static void invalidate_rcu_protected_refs(struct bpf_verifier_env *env)
@@ -10512,10 +10799,12 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		return err;
 
 	/* reset caller saved regs */
+	bpf_diag_save_caller_saved_regs(env, regs);
 	for (i = 0; i < CALLER_SAVED_REGS; i++) {
 		bpf_mark_reg_not_init(env, &regs[caller_saved[i]]);
 		check_reg_arg(env, caller_saved[i], DST_OP_NO_MARK);
 	}
+	bpf_diag_record_caller_saved_invals(env, insn_idx, regs);
 	invalidate_outgoing_stack_args(env, cur_func(env));
 
 	/* helper call returns 64-bit value. */
@@ -10700,6 +10989,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	err = do_refine_retval_range(env, regs, fn->ret_type, func_id, &meta);
 	if (err)
 		return err;
+
+	bpf_diag_record_call_ret(env, insn_idx, regs);
 
 	err = check_map_func_compatibility(env, meta.map.ptr, func_id);
 	if (err)
@@ -13224,12 +13515,14 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 	}
 
+	bpf_diag_save_caller_saved_regs(env, regs);
 	for (i = 0; i < CALLER_SAVED_REGS; i++) {
 		u32 regno = caller_saved[i];
 
 		bpf_mark_reg_not_init(env, &regs[regno]);
 		regs[regno].subreg_def = DEF_NOT_SUBREG;
 	}
+	bpf_diag_record_caller_saved_invals(env, insn_idx, regs);
 	invalidate_outgoing_stack_args(env, cur_func(env));
 
 	/* Check return type */
@@ -13391,6 +13684,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		if (err)
 			return err;
 	}
+
+	bpf_diag_record_call_ret(env, insn_idx, regs);
 
 	if (meta.func_id == special_kfunc_list[KF_bpf_session_cookie])
 		env->prog->call_session_cookie = true;
@@ -15025,9 +15320,17 @@ clear_id:
 /* check validity of 32-bit and 64-bit arithmetic operations */
 static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
+	struct bpf_func_state *state = cur_func(env);
 	struct bpf_reg_state *regs = cur_regs(env);
+	struct bpf_reg_state *old_dst;
 	u8 opcode = BPF_OP(insn->code);
+	bool have_old_dst;
 	int err;
+
+	old_dst = bpf_diag_reg_scratch(env, 0);
+	have_old_dst = old_dst && insn->dst_reg < MAX_BPF_REG;
+	if (have_old_dst)
+		*old_dst = regs[insn->dst_reg];
 
 	if (opcode == BPF_END || opcode == BPF_NEG) {
 		/* check src operand */
@@ -15209,7 +15512,15 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			return err;
 	}
 
-	return reg_bounds_sanity_check(env, &regs[insn->dst_reg], "alu");
+	err = reg_bounds_sanity_check(env, &regs[insn->dst_reg], "alu");
+	if (err)
+		return err;
+
+	if (have_old_dst)
+		bpf_diag_record_mod(env, env->insn_idx,
+				    bpf_diag_reg_target(state->frameno, insn->dst_reg),
+				    BPF_DIAG_MOD_WRITE, old_dst, &regs[insn->dst_reg], NULL);
+	return 0;
 }
 
 static void find_good_pkt_pointers(struct bpf_verifier_state *vstate,
