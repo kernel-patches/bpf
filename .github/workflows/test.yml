@@ -76,3 +76,22 @@ jobs:
       is_netdev: ${{ matrix.is_netdev }}
     secrets:
       AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+
+  doc-build:
+    runs-on: ubuntu-slim
+    needs: [build-and-test]
+    permissions: read-all
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            include
+            scripts
+            tools
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y python3-docutils
+      - name: Build docs
+        run: make -C tools/testing/selftests/bpf docs
+      - name: Clean docs
+        run: make -C tools/testing/selftests/bpf docs-clean
+
