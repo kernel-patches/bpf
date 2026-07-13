@@ -189,11 +189,15 @@ struct bpf_verifier_stack_elem {
 	 * and after processing instruction 'prev_insn_idx'
 	 */
 	struct bpf_verifier_state st;
+	/* Only conditional-branch states have a queued diagnostic branch. */
+	u8 diag_branch_valid : 1;
+	u8 diag_branch_cond_true : 1;
 	int insn_idx;
 	int prev_insn_idx;
 	struct bpf_verifier_stack_elem *next;
 	/* length of verifier log at the time this state was pushed on stack */
 	u32 log_pos;
+	u32 diag_log_pos;
 };
 
 #define BPF_COMPLEXITY_LIMIT_JMP_SEQ	8192
@@ -1706,8 +1710,8 @@ void bpf_free_backedges(struct bpf_scc_visit *visit)
 	visit->backedges = NULL;
 }
 
-static int pop_stack(struct bpf_verifier_env *env, int *prev_insn_idx,
-		     int *insn_idx, bool pop_log)
+static int pop_stack(struct bpf_verifier_env *env, int *prev_insn_idx, int *insn_idx, bool pop_log,
+		     bool activate_diag_branch)
 {
 	struct bpf_verifier_state *cur = env->cur_state;
 	struct bpf_verifier_stack_elem *elem, *head = env->head;
@@ -1723,6 +1727,12 @@ static int pop_stack(struct bpf_verifier_env *env, int *prev_insn_idx,
 	}
 	if (pop_log)
 		bpf_vlog_reset(&env->log, head->log_pos);
+	bpf_diag_event_log_reset(env, head->diag_log_pos);
+	if (activate_diag_branch && head->diag_branch_valid) {
+		err = bpf_diag_record_branch(env, head->prev_insn_idx, head->diag_branch_cond_true);
+		if (err)
+			return err;
+	}
 	if (insn_idx)
 		*insn_idx = head->insn_idx;
 	if (prev_insn_idx)
@@ -1763,6 +1773,7 @@ static struct bpf_verifier_state *push_stack(struct bpf_verifier_env *env,
 	elem->prev_insn_idx = prev_insn_idx;
 	elem->next = env->head;
 	elem->log_pos = env->log.end_pos;
+	elem->diag_log_pos = bpf_diag_event_log_pos(env);
 	env->head = elem;
 	env->stack_size++;
 	err = bpf_copy_verifier_state(&elem->st, cur);
@@ -1787,6 +1798,20 @@ static struct bpf_verifier_state *push_stack(struct bpf_verifier_env *env,
 		 */
 	}
 	return &elem->st;
+}
+
+static struct bpf_verifier_state *push_stack_with_branch_diag(struct bpf_verifier_env *env,
+							      int insn_idx, int prev_insn_idx,
+							      bool speculative, bool cond_true)
+{
+	struct bpf_verifier_state *st;
+
+	st = push_stack(env, insn_idx, prev_insn_idx, speculative);
+	if (!IS_ERR(st)) {
+		env->head->diag_branch_valid = true;
+		env->head->diag_branch_cond_true = cond_true;
+	}
+	return st;
 }
 
 static const char *reg_arg_name(struct bpf_verifier_env *env, argno_t argno)
@@ -2287,6 +2312,7 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 	elem->prev_insn_idx = prev_insn_idx;
 	elem->next = env->head;
 	elem->log_pos = env->log.end_pos;
+	elem->diag_log_pos = bpf_diag_event_log_pos(env);
 	env->head = elem;
 	env->stack_size++;
 	if (env->stack_size > BPF_COMPLEXITY_LIMIT_JMP_SEQ) {
@@ -16171,7 +16197,8 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			return err;
 	}
 
-	other_branch = push_stack(env, *insn_idx + insn->off + 1, *insn_idx, false);
+	other_branch =
+		push_stack_with_branch_diag(env, *insn_idx + insn->off + 1, *insn_idx, false, true);
 	if (IS_ERR(other_branch))
 		return PTR_ERR(other_branch);
 	other_branch_regs = other_branch->frame[other_branch->curframe]->regs;
@@ -17607,8 +17634,7 @@ process_bpf_exit:
 			err = bpf_update_branch_counts(env, env->cur_state);
 			if (err)
 				return err;
-			err = pop_stack(env, &prev_insn_idx, &env->insn_idx,
-					pop_log);
+			err = pop_stack(env, &prev_insn_idx, &env->insn_idx, pop_log, true);
 			if (err < 0) {
 				if (err != -ENOENT)
 					return err;
@@ -18464,7 +18490,8 @@ static void free_states(struct bpf_verifier_env *env)
 
 	bpf_free_verifier_state(env->cur_state, true);
 	env->cur_state = NULL;
-	while (!pop_stack(env, NULL, NULL, false));
+	while (!pop_stack(env, NULL, NULL, false, false))
+		;
 
 	list_for_each_safe(pos, tmp, &env->free_list) {
 		sl = container_of(pos, struct bpf_verifier_state_list, node);
@@ -18643,8 +18670,11 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 
 	ret = do_check(env);
 out:
-	if (!ret && pop_log)
-		bpf_vlog_reset(&env->log, 0);
+	if (!ret) {
+		if (pop_log)
+			bpf_vlog_reset(&env->log, 0);
+		bpf_diag_event_log_reset(env, 0);
+	}
 	free_states(env);
 	return ret;
 }
