@@ -1346,6 +1346,56 @@ source:
 	diag_report_suggestion(env, "%s", suggestion);
 }
 
+static void diag_internal_error(struct bpf_verifier_env *env, u32 insn_idx, const char *problem,
+				const char *reason)
+{
+	bpf_diag_report_header(env, CATEGORY_VERIFIER_INTERNAL_ERROR, problem);
+	diag_report_reason(env, "The verifier hit an internal error: %s", reason);
+
+	diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, "error", "%s", problem);
+
+	diag_report_suggestion(env, "Report this problem to bpf@vger.kernel.org with the full "
+				    "verifier log and program.");
+}
+
+void bpf_verifier_log_bug(struct bpf_verifier_env *env, const char *fmt, ...)
+{
+	const char *fallback = "the verifier could not format details for this invariant violation";
+	va_list args, copy;
+	char *reason;
+	size_t len;
+
+	va_start(args, fmt);
+	if (bpf_verifier_log_needed(&env->log)) {
+		bpf_verifier_log_write(env, "verifier bug: ");
+		va_copy(copy, args);
+		bpf_verifier_vlog(&env->log, fmt, copy);
+		va_end(copy);
+		bpf_verifier_log_write(env, "\n");
+	}
+
+	if (!bpf_diag_enabled(env))
+		goto out;
+
+	va_copy(copy, args);
+	reason = kvasprintf(GFP_KERNEL_ACCOUNT, fmt, copy);
+	va_end(copy);
+	if (!reason) {
+		diag_internal_error(env, env->insn_idx, "verifier invariant violation", fallback);
+		goto out;
+	}
+
+	len = strlen(reason);
+	while (len && reason[len - 1] == '\n')
+		reason[--len] = '\0';
+	diag_internal_error(env, env->insn_idx, "verifier invariant violation",
+			    *reason ? reason : fallback);
+	kfree(reason);
+out:
+	va_end(args);
+}
+
 void bpf_diag_report_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx, int regno,
 				   const char *reg_name, const struct bpf_reg_state *reg,
 				   enum bpf_diag_invalid_deref_kind kind, s64 offset)

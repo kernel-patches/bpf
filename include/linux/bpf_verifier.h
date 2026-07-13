@@ -1090,6 +1090,8 @@ __printf(3, 4) void verbose_linfo(struct bpf_verifier_env *env,
 				  u32 insn_off,
 				  const char *prefix_fmt, ...);
 
+__printf(2, 3) void bpf_verifier_log_bug(struct bpf_verifier_env *env, const char *fmt, ...);
+
 #define verifier_bug_if(cond, env, fmt, args...)						\
 	({											\
 		bool __cond = (cond);								\
@@ -1097,10 +1099,10 @@ __printf(3, 4) void verbose_linfo(struct bpf_verifier_env *env,
 			verifier_bug(env, fmt " (" #cond ")", ##args);				\
 		(__cond);									\
 	})
-#define verifier_bug(env, fmt, args...)								\
-	({											\
-		BPF_WARN_ONCE(1, "verifier bug: " fmt "\n", ##args);				\
-		bpf_log(&env->log, "verifier bug: " fmt "\n", ##args);				\
+#define verifier_bug(env, fmt, args...)                              \
+	({                                                           \
+		BPF_WARN_ONCE(1, "verifier bug: " fmt "\n", ##args); \
+		bpf_verifier_log_bug(env, fmt, ##args);              \
 	})
 
 static inline void mark_prune_point(struct bpf_verifier_env *env, int idx)

@@ -8650,9 +8650,8 @@ found:
 				return -EACCES;
 		} else {
 			if (arg_btf_id == BPF_PTR_POISON) {
-				verbose(env, "verifier internal error:");
-				verbose(env, "%s has non-overwritten BPF_PTR_POISON type\n",
-					reg_arg_name(env, argno));
+				verifier_bug(env, "%s has non-overwritten BPF_PTR_POISON type",
+					     reg_arg_name(env, argno));
 				return -EACCES;
 			}
 
@@ -12748,14 +12747,14 @@ static bool check_kfunc_is_graph_node_api(struct bpf_verifier_env *env,
 		       kfunc_btf_id == special_kfunc_list[KF_bpf_rbtree_right]);
 		break;
 	default:
-		verbose(env, "verifier internal error: unexpected graph node argument type %s\n",
-			btf_field_type_name(node_field_type));
+		verifier_bug(env, "unexpected graph node argument type %s",
+			     btf_field_type_name(node_field_type));
 		return false;
 	}
 
 	if (!ret)
-		verbose(env, "verifier internal error: %s node arg for unknown kfunc\n",
-			btf_field_type_name(node_field_type));
+		verifier_bug(env, "%s node arg for unknown kfunc",
+			     btf_field_type_name(node_field_type));
 	return ret;
 }
 
