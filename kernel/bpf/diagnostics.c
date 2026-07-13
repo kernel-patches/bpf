@@ -1157,6 +1157,19 @@ void bpf_diag_program_structure(struct bpf_verifier_env *env, u32 insn_idx,
 
 	diag_suggestion(env, "%s", suggestion);
 }
+
+void bpf_diag_policy(struct bpf_verifier_env *env, u32 insn_idx, const char *operation,
+		     const char *reason, const char *suggestion)
+{
+	bpf_diag_header(env, POLICY, "operation is not allowed");
+	diag_reason(env, "The %s is not allowed: %s.", operation, reason);
+
+	diag_section(env, "At");
+	bpf_diag_source(env, insn_idx, "error", "policy check failed for %s", operation);
+
+	diag_suggestion(env, "%s", suggestion);
+}
+
 void bpf_diag_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx, int regno,
 				   const char *reg_name, const struct bpf_reg_state *reg,
 				   enum bpf_diag_invalid_deref_kind kind, s64 offset)
