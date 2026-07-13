@@ -2963,6 +2963,12 @@ static int add_subprog_and_kfunc(struct bpf_verifier_env *env)
 
 		if (!env->bpf_capable) {
 			verbose(env, "loading/calling other bpf or kernel functions are allowed for CAP_BPF and CAP_SYS_ADMIN\n");
+			bpf_diag_report_policy(env, i, "bpf-to-bpf or kernel function call",
+					       "loading or calling other BPF or kernel functions "
+					       "requires CAP_BPF or CAP_SYS_ADMIN",
+					       "Load this program with the required capability, or "
+					       "avoid bpf-to-bpf and kernel function calls in "
+					       "unprivileged programs.");
 			return -EPERM;
 		}
 
@@ -11030,17 +11036,35 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	if (err) {
 		verbose(env, "program of this type cannot use helper %s#%d\n",
 			func_id_name(func_id), func_id);
+		operation = bpf_diag_scratch_printf(env, 1, "helper %s#%d", func_id_name(func_id),
+						    func_id);
+		bpf_diag_report_policy(env, insn_idx, operation,
+				       "this program type does not allow the helper",
+				       "Use a helper allowed for this program type, or move the "
+				       "logic to a compatible program type.");
 		return err;
 	}
 
 	/* eBPF programs must be GPL compatible to use GPL-ed functions */
 	if (!env->prog->gpl_compatible && fn->gpl_only) {
 		verbose(env, "cannot call GPL-restricted function from non-GPL compatible program\n");
+		operation = bpf_diag_scratch_printf(env, 1, "helper %s#%d", func_id_name(func_id),
+						    func_id);
+		bpf_diag_report_policy(env, insn_idx, operation,
+				       "this helper is restricted to GPL-compatible programs",
+				       "Use a GPL-compatible license, or replace the helper with "
+				       "one that is available to non-GPL programs.");
 		return -EINVAL;
 	}
 
 	if (fn->allowed && !fn->allowed(env->prog)) {
 		verbose(env, "helper call is not allowed in probe\n");
+		operation = bpf_diag_scratch_printf(env, 1, "helper %s#%d", func_id_name(func_id),
+						    func_id);
+		bpf_diag_report_policy(env, insn_idx, operation,
+				       "the helper-specific policy callback rejected this program",
+				       "Use the helper only from an allowed attach point or "
+				       "program configuration.");
 		return -EINVAL;
 	}
 
@@ -13961,8 +13985,14 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return 0;
 
 	err = bpf_fetch_kfunc_arg_meta(env, insn->imm, insn->off, &meta);
-	if (err == -EACCES && meta.func_name)
+	if (err == -EACCES && meta.func_name) {
 		verbose(env, "calling kernel function %s is not allowed\n", meta.func_name);
+		operation = bpf_diag_scratch_printf(env, 1, "kfunc %s", meta.func_name);
+		bpf_diag_report_policy(env, insn_idx, operation,
+				       "this program cannot call the kfunc",
+				       "Use a kfunc allowed for this program type and attach "
+				       "point, or change the program context.");
+	}
 	if (err)
 		return err;
 	desc_btf = meta.btf;
@@ -14003,6 +14033,11 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 	if (is_kfunc_destructive(&meta) && !capable(CAP_SYS_BOOT)) {
 		verbose(env, "destructive kfunc calls require CAP_SYS_BOOT capability\n");
+		operation = bpf_diag_scratch_printf(env, 1, "destructive kfunc %s", meta.func_name);
+		bpf_diag_report_policy(env, insn_idx, operation,
+				       "destructive kfuncs require CAP_SYS_BOOT",
+				       "Load the program with CAP_SYS_BOOT, or avoid destructive "
+				       "kfuncs.");
 		return -EACCES;
 	}
 

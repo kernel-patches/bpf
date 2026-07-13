@@ -171,6 +171,8 @@ void bpf_diag_ctx(struct bpf_verifier_env *env, enum bpf_diag_ctx_report report,
 void bpf_diag_report_program_structure(struct bpf_verifier_env *env, u32 insn_idx,
 				       const char *problem, const char *suggestion,
 				       const char *reason_fmt, ...) __printf(5, 6);
+void bpf_diag_report_policy(struct bpf_verifier_env *env, u32 insn_idx, const char *operation,
+			    const char *reason, const char *suggestion);
 int bpf_diag_record_branch(struct bpf_verifier_env *env, u32 insn_idx, bool cond_true);
 void bpf_diag_record_mod(struct bpf_verifier_env *env, u32 insn_idx,
 			 struct bpf_diag_mod_target target, enum bpf_diag_mod_reason reason,
