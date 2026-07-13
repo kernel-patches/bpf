@@ -103,5 +103,7 @@ void bpf_diag_record_scrub(struct bpf_verifier_env *env, const struct bpf_reg_st
 			   enum bpf_diag_mod_reason reason);
 void bpf_diag_record_scrub_stack(struct bpf_verifier_env *env, u32 frameno, s16 min_off,
 				 s16 max_off, enum bpf_diag_mod_reason reason);
+void bpf_diag_record_ref_acquire(struct bpf_verifier_env *env, u32 insn_idx, u32 ref_id);
+void bpf_diag_record_ref_release(struct bpf_verifier_env *env, u32 insn_idx, u32 ref_id);
 
 #endif /* __BPF_DIAGNOSTICS_H */
