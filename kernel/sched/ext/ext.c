@@ -508,12 +508,13 @@ static inline void scx_call_op_set_cpumask(struct scx_sched *sch, struct rq *rq,
 	if (scx_is_cid_type()) {
 		struct scx_cmask *kern_va = *this_cpu_ptr(sch->set_cmask_scratch);
 		/*
-		 * Build the per-CPU arena cmask and hand BPF its arena address.
-		 * Caller holds the rq lock with IRQs disabled, which makes us
-		 * the sole user of the scratch area.
+		 * Build the per-CPU arena cmask and pass its kernel address.
+		 * The BPF side translates it to an arena pointer. Caller holds
+		 * the rq lock with IRQs disabled, which makes us the sole user
+		 * of the scratch area.
 		 */
 		scx_cpumask_to_cmask(cpumask, kern_va);
-		sch->ops_cid.set_cmask(task, scx_kaddr_to_arena(sch, kern_va));
+		sch->ops_cid.set_cmask(task, kern_va);
 	} else {
 		sch->ops.set_cpumask(task, cpumask);
 	}
@@ -8130,7 +8131,7 @@ static struct bpf_struct_ops bpf_sched_ext_ops = {
  * set_cmask needs a fresh stub since the second argument type differs.
  */
 static void sched_ext_ops_cid__set_cmask(struct task_struct *p,
-					 const struct scx_cmask *cmask) {}
+					 const struct scx_cmask *cmask__arena) {}
 
 static struct sched_ext_ops_cid __bpf_ops_sched_ext_ops_cid = {
 	.select_cid		= sched_ext_ops__select_cpu,

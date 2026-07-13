@@ -1125,8 +1125,7 @@ struct scx_sched {
 	 *
 	 * @arena_pool sub-allocates @arena_map. Each gen_pool chunk is added
 	 * at the kernel-side mapping address. @arena_kern_base is the start
-	 * of the arena's kern_vm range. See scx_arena_to_kaddr() and
-	 * scx_kaddr_to_arena().
+	 * of the arena's kern_vm range. See scx_arena_to_kaddr().
 	 */
 	struct bpf_map		*arena_map;
 	struct gen_pool		*arena_pool;
@@ -1135,7 +1134,8 @@ struct scx_sched {
 	/*
 	 * Per-CPU arena cmask used by scx_call_op_set_cpumask() to hand a cmask
 	 * to ops_cid.set_cmask(). The kernel writes through the stored kern_va
-	 * and hands BPF its arena pointer via scx_kaddr_to_arena().
+	 * and passes it as the callback argument; the struct_ops entry prologue
+	 * rebases it to the program's arena pointer.
 	 */
 	struct scx_cmask * __percpu *set_cmask_scratch;
 
@@ -1225,16 +1225,6 @@ struct scx_sched {
 static inline void *scx_arena_to_kaddr(struct scx_sched *sch, const void *bpf_ptr)
 {
 	return (void *)(sch->arena_kern_base + (u32)(uintptr_t)bpf_ptr);
-}
-
-/**
- * scx_kaddr_to_arena - Translate a kernel arena address to its BPF form
- * @sch: scheduler whose arena hosts @kaddr
- * @kaddr: kernel-side arena address, supplied by trusted kernel code
- */
-static inline void *scx_kaddr_to_arena(struct scx_sched *sch, const void *kaddr)
-{
-	return (void *)((uintptr_t)kaddr - sch->arena_kern_base);
 }
 
 enum scx_wake_flags {
