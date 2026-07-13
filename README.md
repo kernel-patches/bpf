@@ -1,3 +1,8 @@
+```
+OUT="$PWD/.selftests-bpf-veristat-final" ./script.sh
+sudo .selftests-bpf-veristat-final/veristat /Users/javierhonduco/src/bpf/.selftests-bpf-veristat-final/lightswitch_bpf/profiler.bpf.o
+```
+
 # BPF CI GitHub Actions worfklows
 
 This repository contains GitHub Actions workflow definitions, scripts and configuration files used by those workflows.

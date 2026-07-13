@@ -1,0 +1,20 @@
+#ifndef __LIGHTSWITCH_LINUX_PAGE_CONSTANTS__
+#define __LIGHTSWITCH_LINUX_PAGE_CONSTANTS__
+
+#define PAGE_SIZE (1UL << 12)  // 4KB
+#define PAGE_MASK ~(PAGE_SIZE - 1)
+
+// Values for x86_64 as of 6.0.18-200.
+#define TOP_OF_KERNEL_STACK_PADDING 0
+#define THREAD_SIZE_ORDER           2
+#define THREAD_SIZE                 (PAGE_SIZE << THREAD_SIZE_ORDER)
+
+#endif
+
+#ifndef __LIGHTSWITCH_ERROR_CONSTANTS__
+#define __LIGHTSWITCH_ERROR_CONSTANTS__
+
+#define EFAULT 14
+#define EEXIST 17
+
+#endif

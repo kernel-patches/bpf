@@ -123,6 +123,7 @@ TEST_FILES = xsk_prereqs.sh $(wildcard progs/btf_dump_test_case_*.c)
 
 # Order correspond to 'make run_tests' order
 TEST_PROGS := test_kmod.sh \
+	test_lightswitch_bpf_build.sh \
 	test_lirc_mode2.sh \
 	test_bpftool_build.sh \
 	test_doc_build.sh \
@@ -149,6 +150,11 @@ TEST_GEN_PROGS_EXTENDED = \
 	xskxceiver
 
 TEST_GEN_FILES += $(TEST_KMODS) liburandom_read.so urandom_read sign-file uprobe_multi
+
+LIGHTSWITCH_BPF_DIR ?= $(CURDIR)/progs/lightswitch
+LIGHTSWITCH_BPF_SRCS := $(wildcard $(LIGHTSWITCH_BPF_DIR)/*.bpf.c)
+LIGHTSWITCH_BPF_OBJS := $(patsubst %.bpf.c,lightswitch_bpf/%.bpf.o,$(notdir $(LIGHTSWITCH_BPF_SRCS)))
+TEST_GEN_FILES += $(LIGHTSWITCH_BPF_OBJS)
 
 ifneq ($(V),1)
 submake_extras := feature_display=0
@@ -495,6 +501,18 @@ define CLANG_BPF_BUILD_RULE
 	$(Q)$(CLANG) $3 -O2 $(BPF_TARGET_ENDIAN) -c $1 -mcpu=v3 -o $2 $(if $(PERMISSIVE),|| \
 		($(RM) $2; printf '  %-12s %s\n' 'SKIP-BPF' '$(notdir $2)' 1>&2))
 endef
+
+$(OUTPUT)/lightswitch_bpf:
+	$(call msg,MKDIR,,$@)
+	$(Q)mkdir -p $@
+
+$(OUTPUT)/lightswitch_bpf/%.bpf.o: $(LIGHTSWITCH_BPF_DIR)/%.bpf.c	\
+				     $(LIGHTSWITCH_BPF_DIR)/*.h		\
+				     $(INCLUDE_DIR)/vmlinux.h		\
+				     $(BPFOBJ) | $(OUTPUT)/lightswitch_bpf
+	$(call msg,CLNG-BPF,lightswitch_bpf,$@)
+	$(Q)$(CLANG) $(BPF_CFLAGS) $(CLANG_CFLAGS) -Wno-unused-function -I$(LIGHTSWITCH_BPF_DIR) -O2 $(BPF_TARGET_ENDIAN) -c $< -mcpu=v3 -o $@
+
 # Similar to CLANG_BPF_BUILD_RULE, but with disabled alu32
 define CLANG_NOALU32_BPF_BUILD_RULE
 	$(call msg,CLNG-BPF,$4,$2)
