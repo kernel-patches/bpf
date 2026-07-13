@@ -10,7 +10,15 @@
 struct bpf_verifier_env;
 
 bool bpf_diag_enabled(const struct bpf_verifier_env *env);
+int bpf_diag_init(struct bpf_verifier_env *env);
+char *bpf_diag_fmt_buf(struct bpf_verifier_env *env, size_t size);
+const char *bpf_diag_vfmt(struct bpf_verifier_env *env, const char *fmt, va_list args)
+	__printf(2, 0);
+const char *bpf_diag_fmt(struct bpf_verifier_env *env, const char *fmt, ...) __printf(2, 3);
+void bpf_diag_free(struct bpf_verifier_env *env);
 void bpf_diag_header(struct bpf_verifier_env *env, const char *category,
 			    const char *problem);
+void bpf_diag_source(struct bpf_verifier_env *env, u32 insn_idx, const char *label,
+			    const char *fmt, ...) __printf(4, 5);
 
 #endif /* __BPF_DIAGNOSTICS_H */
