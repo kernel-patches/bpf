@@ -680,6 +680,64 @@ apply_patch_buffer:
 	return 0;
 }
 
+/*
+ * Rebase every PTR_TO_ARENA struct_ops ctx argument to the arena pointer
+ * form once at entry: arena = (u32)(kaddr - kern_vm_start), NULL preserved.
+ * Keyed by argument position (ctx_arg_info.offset), so the source ctx slot
+ * is converted once and every later load sees it.
+ *
+ * Runs post-verification, so the ctx store and the kern_vm_start constant
+ * need no re-verification. Constant blinding (on under bpf_jit_harden)
+ * forces the safe form: the constant in R0 (an AX-destined LD_IMM64 would
+ * be corrupted), NULL tested against BPF_REG_AX = 0. Off, the cheaper AX
+ * constant and immediate test are used.
+ *
+ * Return the prologue length, INSN_BUF_SIZE if it would not fit, or 0 if
+ * there is nothing to do.
+ */
+static int gen_arena_arg_prologue(struct bpf_verifier_env *env,
+				  struct bpf_insn *insn_buf)
+{
+	struct bpf_prog_aux *aux = env->prog->aux;
+	bool blinding = env->prog->blinding_requested;
+	int base_reg = blinding ? BPF_REG_0 : BPF_REG_AX;
+	struct bpf_insn ld[2] = {
+		BPF_LD_IMM64(base_reg, bpf_arena_get_kern_vm_start(aux->arena))
+	};
+	int i, cnt = 0, nslots = 0;
+
+	for (i = 0; i < aux->ctx_arg_info_size; i++)
+		if (base_type(aux->ctx_arg_info[i].reg_type) == PTR_TO_ARENA)
+			nslots++;
+	if (!nslots)
+		return 0;
+	/* LD_IMM64(2) + MOV(1) + 5 per slot + chained entry insn(1) */
+	if (4 + 5 * nslots > INSN_BUF_SIZE)
+		return INSN_BUF_SIZE;
+
+	insn_buf[cnt++] = ld[0];
+	insn_buf[cnt++] = ld[1];
+	if (blinding)
+		insn_buf[cnt++] = BPF_MOV64_IMM(BPF_REG_AX, 0);
+
+	for (i = 0; i < aux->ctx_arg_info_size; i++) {
+		int off;
+
+		if (base_type(aux->ctx_arg_info[i].reg_type) != PTR_TO_ARENA)
+			continue;
+		off = aux->ctx_arg_info[i].offset;
+		insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, off);
+		insn_buf[cnt++] = blinding ?
+			BPF_JMP_REG(BPF_JEQ, BPF_REG_2, BPF_REG_AX, 2) :
+			BPF_JMP_IMM(BPF_JEQ, BPF_REG_2, 0, 2);
+		insn_buf[cnt++] = BPF_ALU64_REG(BPF_SUB, BPF_REG_2, base_reg);
+		insn_buf[cnt++] = BPF_ZEXT_REG(BPF_REG_2);
+		insn_buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_2, off);
+	}
+	insn_buf[cnt++] = env->prog->insnsi[0];
+	return cnt;
+}
+
 /* convert load instructions that access fields of a context type into a
  * sequence of instructions that access fields of the underlying structure:
  *     struct __sk_buff    -> struct sk_buff
@@ -747,6 +805,18 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			if (ret < 0)
 				return ret;
 		}
+	}
+
+	cnt = gen_arena_arg_prologue(env, insn_buf);
+	if (cnt >= INSN_BUF_SIZE) {
+		verifier_bug(env, "arena arg prologue is too long");
+		return -EFAULT;
+	} else if (cnt) {
+		new_prog = bpf_patch_insn_data(env, 0, insn_buf, cnt);
+		if (!new_prog)
+			return -ENOMEM;
+		env->prog = new_prog;
+		delta += cnt - 1;
 	}
 
 	if (delta)

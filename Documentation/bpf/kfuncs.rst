@@ -270,6 +270,11 @@ Calling such a kfunc requires the program to use an arena map. The program
 can pass any value without compromising the kernel. A value that does not
 point into the arena is a program bug.
 
+The suffix has the same meaning on the arguments of struct_ops stub
+functions. The kernel caller passes the kernel arena address and the
+argument arrives in the BPF program as an arena pointer that can be
+dereferenced directly, with NULL preserved.
+
 .. _BPF_kfunc_nodef:
 
 2.4 Using an existing kernel function
