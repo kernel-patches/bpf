@@ -8,6 +8,8 @@
 #include <linux/slab.h>
 #include <linux/sort.h>
 
+#include "diagnostics.h"
+
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
 struct per_frame_masks {
@@ -1856,6 +1858,10 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 	if (++env->liveness->subprog_calls > 10000) {
 		verbose(env, "liveness analysis exceeded complexity limit (%d calls)\n",
 			env->liveness->subprog_calls);
+		bpf_diag_limit(
+			env, start, "liveness analysis complexity",
+			"Reduce the number of distinct call paths or argument patterns reaching these subprograms.",
+			"The verifier recomputed subprogram liveness too many times while tracking stack and register reads across call paths");
 		return -E2BIG;
 	}
 
