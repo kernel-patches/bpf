@@ -5509,7 +5509,9 @@ process_func:
 	 * of caller's stack as shown on the example above.
 	 */
 	if (idx && subprog[idx].has_tail_call && depth >= 256) {
-		char *chain = bpf_diag_alloc_subprog_call_chain(env, dinfo, idx);
+		char *chain = bpf_diag_enabled(env) ?
+				      bpf_diag_alloc_subprog_call_chain(env, dinfo, idx) :
+				      NULL;
 
 		verbose(env,
 			"tail_calls are not allowed when call stack of previous frames is %d bytes. Too large\n",
@@ -5543,11 +5545,12 @@ process_func:
 		if (subprog_depth > env->max_stack_depth)
 			env->max_stack_depth = subprog_depth;
 		if (subprog_depth > MAX_BPF_STACK) {
-			char *chain;
+			char *chain = NULL;
 
 			verbose(env, "stack size of subprog %d is %d. Too large\n",
 				idx, subprog_depth);
-			chain = bpf_diag_alloc_subprog_call_chain(env, dinfo, idx);
+			if (bpf_diag_enabled(env))
+				chain = bpf_diag_alloc_subprog_call_chain(env, dinfo, idx);
 			bpf_diag_report_limit(env, subprog[idx].start, "subprogram stack depth",
 					      "Reduce stack usage in this subprogram, or move "
 					      "large data out of the BPF stack.",
@@ -5571,9 +5574,10 @@ process_func:
 			verbose(env, "combined stack size of %d calls is %d. Too large\n",
 				total, depth);
 			{
-				char *chain;
+				char *chain = NULL;
 
-				chain = bpf_diag_alloc_subprog_call_chain(env, dinfo, idx);
+				if (bpf_diag_enabled(env))
+					chain = bpf_diag_alloc_subprog_call_chain(env, dinfo, idx);
 				bpf_diag_report_limit(env, subprog[idx].start,
 						      "combined call stack depth",
 						      "Reduce stack usage or call depth along this "
@@ -5654,11 +5658,12 @@ continue_func:
 
 		frame = bpf_subprog_is_global(env, idx) ? 0 : frame + 1;
 		if (frame >= MAX_CALL_FRAMES) {
-			char *chain;
+			char *chain = NULL;
 
 			verbose(env, "the call stack of %d frames is too deep !\n",
 				frame);
-			chain = bpf_diag_alloc_subprog_call_chain(env, dinfo, idx);
+			if (bpf_diag_enabled(env))
+				chain = bpf_diag_alloc_subprog_call_chain(env, dinfo, idx);
 			bpf_diag_report_limit(env, call_insn, "bpf2bpf call frames",
 					      "Reduce the number of nested bpf2bpf calls on this "
 					      "path.",
@@ -9963,11 +9968,12 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	int err;
 
 	if (state->curframe + 1 >= MAX_CALL_FRAMES) {
-		char *chain;
+		char *chain = NULL;
 
 		verbose(env, "the call stack of %d frames is too deep\n",
 			state->curframe + 2);
-		chain = bpf_diag_alloc_state_call_chain(env, state, subprog);
+		if (bpf_diag_enabled(env))
+			chain = bpf_diag_alloc_state_call_chain(env, state, subprog);
 		bpf_diag_report_limit(env, callsite, "bpf2bpf call frames",
 				      "Reduce the number of nested bpf2bpf calls on this path.",
 				      "Call chain %s would create %d verifier call frames, "
