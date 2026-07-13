@@ -1347,6 +1347,18 @@ static inline bool type_is_non_owning_ref(u32 type)
 	return type_is_ptr_alloc_obj(type) && type_flag(type) & NON_OWN_REF;
 }
 
+static inline bool type_is_map_ptr(enum bpf_reg_type type)
+{
+	switch (base_type(type)) {
+	case CONST_PTR_TO_MAP:
+	case PTR_TO_MAP_KEY:
+	case PTR_TO_MAP_VALUE:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static inline bool type_is_pkt_pointer(enum bpf_reg_type type)
 {
 	type = base_type(type);

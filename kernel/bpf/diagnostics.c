@@ -30,15 +30,23 @@
 #define BPF_DIAG_CONTEXT_CNT (1 + BPF_DIAG_CONTEXT * 2)
 #define BPF_DIAG_SOURCE_LANE_WIDTH 88
 #define BPF_DIAG_TAB_WIDTH 8
-#define BPF_DIAG_REG_DESC_LEN 512
-#define BPF_DIAG_REG_TMP_LEN 192
 #define BPF_DIAG_FMT_CHUNK_SIZE 1024
 #define BPF_DIAG_FMT_BUF_SIZE 256
 #define BPF_DIAG_EVENT_LOG_MAX_SIZE (1U << 20)
 #define DISASM_LINE_LEN 160
 
+struct bpf_diag_reg_snapshot {
+	u32 type;
+	u32 btf_id;
+	const struct bpf_map *map_ptr;
+	const struct btf *btf;
+	struct tnum var_off;
+	struct cnum64 r64;
+};
+
 enum bpf_diag_history_kind {
 	BPF_DIAG_HISTORY_BRANCH,
+	BPF_DIAG_HISTORY_MOD,
 };
 
 struct bpf_diag_history_event {
@@ -49,6 +57,13 @@ struct bpf_diag_history_event {
 		struct {
 			bool cond_true;
 		} branch;
+		struct {
+			struct bpf_diag_mod_target target;
+			struct bpf_diag_mod_target origin;
+			struct bpf_diag_reg_snapshot old, new;
+			u8 reason;
+			bool origin_valid;
+		} mod;
 	};
 };
 
@@ -87,10 +102,21 @@ struct bpf_diag_scratch {
 	struct disasm_line disasm_lines[BPF_DIAG_CONTEXT_CNT];
 };
 
+struct bpf_diag_mod_scope {
+	struct bpf_reg_state target_reg_snapshot;
+	struct bpf_diag_mod_target target;
+	struct bpf_diag_mod_target origin;
+	enum bpf_diag_mod_reason reason;
+	u32 insn_idx;
+	bool active;
+	bool origin_valid;
+};
+
 struct bpf_diag {
 	struct bpf_diag_log log;
 	struct bpf_diag_scratch scratch;
 	struct list_head fmt_chunks;
+	struct bpf_diag_mod_scope mod;
 };
 
 bool bpf_diag_enabled(const struct bpf_verifier_env *env)
@@ -373,6 +399,34 @@ static void diag_print_wrapped_prefixed(struct bpf_verifier_env *env, const char
 
 		prefix = next_prefix;
 	}
+}
+
+static void bpf_diag_format_btf_type(char *buf, size_t size, const struct btf *btf, u32 type_id)
+{
+	size_t len;
+	int ret;
+
+	buf[0] = '\0';
+	ret = btf_type_snprintf_show_name(btf, type_id, buf, size);
+	if (ret < 0 || !buf[0]) {
+		scnprintf(buf, size, "BTF type ID %u", type_id);
+		return;
+	}
+
+	len = strlen(buf);
+	if (len && buf[len - 1] == '{')
+		buf[len - 1] = '\0';
+}
+
+const char *bpf_diag_fmt_btf_type(struct bpf_verifier_env *env, const struct btf *btf, u32 type_id)
+{
+	char *buf = bpf_diag_fmt_buf(env, BPF_DIAG_FMT_BUF_SIZE);
+
+	if (!buf)
+		return "";
+
+	bpf_diag_format_btf_type(buf, BPF_DIAG_FMT_BUF_SIZE, btf, type_id);
+	return buf;
 }
 
 static int diag_line_width(unsigned int line)
@@ -671,4 +725,217 @@ void bpf_diag_record_branch(struct bpf_verifier_env *env, u32 insn_idx, bool con
 	};
 
 	diag_append_history(env, &event);
+}
+
+static void diag_snapshot_reg(struct bpf_diag_reg_snapshot *snapshot,
+			      const struct bpf_reg_state *reg)
+{
+	snapshot->type = reg->type;
+	if (type_is_map_ptr(reg->type))
+		snapshot->map_ptr = reg->map_ptr;
+	if (base_type(reg->type) == PTR_TO_BTF_ID && reg->btf && reg->btf_id) {
+		snapshot->btf_id = reg->btf_id;
+		snapshot->btf = reg->btf;
+	}
+	snapshot->var_off = reg->var_off;
+	snapshot->r64 = reg->r64;
+}
+
+static bool diag_snapshot_eq(const struct bpf_diag_reg_snapshot *old,
+			     const struct bpf_diag_reg_snapshot *new)
+{
+	return old->type == new->type && old->map_ptr == new->map_ptr && old->btf == new->btf &&
+	       old->btf_id == new->btf_id && old->var_off.value == new->var_off.value &&
+	       old->var_off.mask == new->var_off.mask && old->r64.base == new->r64.base &&
+	       old->r64.size == new->r64.size;
+}
+
+static bool diag_mod_insn_origin(struct bpf_verifier_env *env, u32 insn_idx,
+				 const struct bpf_diag_mod_target *target,
+				 struct bpf_diag_mod_target *origin)
+{
+	const struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
+	u8 class = BPF_CLASS(insn->code);
+	u32 frameno;
+
+	if (target->kind == BPF_DIAG_MOD_TARGET_REG && (class == BPF_ALU || class == BPF_ALU64) &&
+	    BPF_OP(insn->code) == BPF_MOV && BPF_SRC(insn->code) == BPF_X) {
+		*origin = bpf_diag_reg_target(target->frameno, insn->src_reg);
+		return true;
+	}
+
+	if ((target->kind != BPF_DIAG_MOD_TARGET_STACK_ARG &&
+	     target->kind != BPF_DIAG_MOD_TARGET_STACK_SLOT) ||
+	    class != BPF_STX)
+		return false;
+
+	frameno = env->cur_state->frame[env->cur_state->curframe]->frameno;
+	*origin = bpf_diag_reg_target(frameno, insn->src_reg);
+	return true;
+}
+
+static void bpf_diag_record_mod(struct bpf_verifier_env *env, u32 insn_idx,
+				struct bpf_diag_mod_target target,
+				enum bpf_diag_mod_reason reason,
+				const struct bpf_reg_state *old_reg,
+				const struct bpf_reg_state *new_reg,
+				const struct bpf_diag_mod_target *origin)
+{
+	struct bpf_diag_history_event event = {
+		.insn_idx = insn_idx,
+		.kind = BPF_DIAG_HISTORY_MOD,
+		.mod = {
+			.target = target,
+			.reason = reason,
+		},
+	};
+
+	if (old_reg)
+		diag_snapshot_reg(&event.mod.old, old_reg);
+	if (new_reg)
+		diag_snapshot_reg(&event.mod.new, new_reg);
+	if (old_reg && new_reg &&
+	    (reason == BPF_DIAG_MOD_WRITE || reason == BPF_DIAG_MOD_SPILL) &&
+	    diag_snapshot_eq(&event.mod.old, &event.mod.new))
+		return;
+	if (origin) {
+		event.mod.origin = *origin;
+		event.mod.origin_valid = true;
+	} else if (diag_mod_insn_origin(env, insn_idx, &target, &event.mod.origin)) {
+		event.mod.origin_valid = true;
+	}
+
+	diag_append_history(env, &event);
+}
+
+static struct bpf_func_state *diag_func_state(struct bpf_verifier_env *env, u32 frameno)
+{
+	struct bpf_verifier_state *vstate = env->cur_state;
+	int frame;
+
+	for (frame = 0; frame <= vstate->curframe; frame++) {
+		if (vstate->frame[frame]->frameno == frameno)
+			return vstate->frame[frame];
+	}
+	return NULL;
+}
+
+static struct bpf_reg_state *target_to_reg(struct bpf_verifier_env *env,
+					   const struct bpf_diag_mod_target *target)
+{
+	struct bpf_func_state *state = diag_func_state(env, target->frameno);
+
+	if (!state)
+		return NULL;
+
+	switch (target->kind) {
+	case BPF_DIAG_MOD_TARGET_REG:
+		if (target->regno >= MAX_BPF_REG)
+			return NULL;
+		return &state->regs[target->regno];
+	case BPF_DIAG_MOD_TARGET_STACK_ARG:
+		if (target->stack_arg >= state->out_stack_arg_cnt)
+			return NULL;
+		return &state->stack_arg_regs[target->stack_arg];
+	case BPF_DIAG_MOD_TARGET_STACK_SLOT:
+		if (target->spi >= state->allocated_stack / BPF_REG_SIZE)
+			return NULL;
+		return &state->stack[target->spi].spilled_ptr;
+	default:
+		return NULL;
+	}
+}
+
+static bool reg_to_target(struct bpf_verifier_env *env, const struct bpf_reg_state *reg,
+			  struct bpf_diag_mod_target *target)
+{
+	struct bpf_verifier_state *vstate = env->cur_state;
+	unsigned long addr = (unsigned long)reg;
+	int frame;
+
+	for (frame = 0; frame <= vstate->curframe; frame++) {
+		struct bpf_func_state *state = vstate->frame[frame];
+		unsigned long start, end;
+		u32 nslots = state->allocated_stack / BPF_REG_SIZE;
+		int spi;
+
+		start = (unsigned long)state->regs;
+		end = (unsigned long)(state->regs + MAX_BPF_REG);
+		if (addr >= start && addr < end) {
+			*target = bpf_diag_reg_target(state->frameno, reg - state->regs);
+			return true;
+		}
+
+		start = (unsigned long)state->stack_arg_regs;
+		end = (unsigned long)(state->stack_arg_regs + state->out_stack_arg_cnt);
+		if (state->out_stack_arg_cnt && addr >= start && addr < end) {
+			*target = bpf_diag_stack_arg_target(state->frameno,
+							    reg - state->stack_arg_regs);
+			return true;
+		}
+
+		start = (unsigned long)state->stack;
+		end = (unsigned long)(state->stack + nslots);
+		if (nslots && addr >= start && addr < end) {
+			spi = ((const char *)reg - (const char *)state->stack) /
+			      sizeof(*state->stack);
+			*target = bpf_diag_stack_slot_target(state->frameno, spi);
+			return true;
+		}
+	}
+	return false;
+}
+
+void bpf_diag_mod_begin(struct bpf_verifier_env *env, const struct bpf_reg_state *reg,
+			const struct bpf_reg_state *origin, enum bpf_diag_mod_reason reason)
+{
+	struct bpf_diag *diag = diag_env(env);
+
+	if (!diag)
+		return;
+	diag->mod.active = reg_to_target(env, reg, &diag->mod.target);
+	if (!diag->mod.active)
+		return;
+	diag->mod.target_reg_snapshot = *reg;
+	diag->mod.insn_idx = env->insn_idx;
+	diag->mod.reason = reason;
+	diag->mod.origin_valid = origin && reg_to_target(env, origin, &diag->mod.origin);
+}
+
+void bpf_diag_mod_end(struct bpf_verifier_env *env)
+{
+	struct bpf_diag *diag = diag_env(env);
+	const struct bpf_reg_state *new_reg;
+
+	if (!diag || !diag->mod.active)
+		return;
+	diag->mod.active = false;
+	/*
+	 * Resolve the target again because the enclosing function state's stack
+	 * may have been reallocated while the modification was in progress.
+	 */
+	new_reg = target_to_reg(env, &diag->mod.target);
+	if (!new_reg)
+		return;
+	bpf_diag_record_mod(env, diag->mod.insn_idx, diag->mod.target, diag->mod.reason,
+			    &diag->mod.target_reg_snapshot, new_reg,
+			    diag->mod.origin_valid ? &diag->mod.origin : NULL);
+}
+
+void bpf_diag_record_scrub(struct bpf_verifier_env *env, const struct bpf_reg_state *reg,
+			   enum bpf_diag_mod_reason reason)
+{
+	struct bpf_diag_mod_target target;
+
+	if (!diag_env(env) || reg->type == NOT_INIT || !reg_to_target(env, reg, &target))
+		return;
+	bpf_diag_record_mod(env, env->insn_idx, target, reason, reg, NULL, NULL);
+}
+
+void bpf_diag_record_scrub_stack(struct bpf_verifier_env *env, u32 frameno, s16 min_off,
+				 s16 max_off, enum bpf_diag_mod_reason reason)
+{
+	bpf_diag_record_mod(env, env->insn_idx,
+			    bpf_diag_stack_range_target(frameno, min_off, max_off), reason,
+			    NULL, NULL, NULL);
 }
