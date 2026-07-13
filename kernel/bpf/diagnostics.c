@@ -1277,6 +1277,25 @@ void bpf_diag_ctx(struct bpf_verifier_env *env, enum bpf_diag_ctx_report report,
 		return;
 	}
 }
+
+void bpf_diag_report_program_structure(struct bpf_verifier_env *env, u32 insn_idx,
+				       const char *problem, const char *suggestion,
+				       const char *reason_fmt, ...)
+{
+	va_list args;
+
+	bpf_diag_report_header(env, CATEGORY_PROGRAM_STRUCTURE, problem);
+	diag_report_section(env, "Reason");
+
+	va_start(args, reason_fmt);
+	diag_vprint_indented(env, reason_fmt, args);
+	va_end(args);
+
+	diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, "error", "%s", problem);
+
+	diag_report_suggestion(env, "%s", suggestion);
+}
 void bpf_diag_report_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx, int regno,
 				   const char *reg_name, const struct bpf_reg_state *reg,
 				   enum bpf_diag_invalid_deref_kind kind, s64 offset)
