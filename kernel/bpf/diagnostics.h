@@ -6,6 +6,7 @@
 
 #include <linux/bpf.h>
 #include <linux/compiler_attributes.h>
+#include <linux/stdarg.h>
 #include <linux/types.h>
 
 struct bpf_reference_state;
@@ -113,6 +114,10 @@ bool bpf_diag_enabled(const struct bpf_verifier_env *env);
 int bpf_diag_init(struct bpf_verifier_env *env);
 char *bpf_diag_scratch_buf(struct bpf_verifier_env *env, unsigned int slot, size_t *size);
 struct bpf_reg_state *bpf_diag_reg_scratch(struct bpf_verifier_env *env, unsigned int slot);
+char *bpf_diag_fmt_buf(struct bpf_verifier_env *env, size_t size);
+const char *bpf_diag_vfmt(struct bpf_verifier_env *env, const char *fmt, va_list args);
+const char *bpf_diag_fmt(struct bpf_verifier_env *env, const char *fmt, ...) __printf(2, 3);
+const char *bpf_diag_fmt_btf_type(struct bpf_verifier_env *env, const struct btf *btf, u32 type_id);
 const char *bpf_diag_scratch_strcpy(struct bpf_verifier_env *env, unsigned int slot,
 				    const char *str);
 const char *bpf_diag_scratch_printf(struct bpf_verifier_env *env, unsigned int slot,
@@ -151,6 +156,9 @@ void bpf_diag_lock(struct bpf_verifier_env *env, u32 insn_idx, const char *probl
 void bpf_diag_irq(struct bpf_verifier_env *env, u32 insn_idx, const char *problem,
 		  const char *reason, const char *suggestion, u32 depth);
 void bpf_diag_leak(struct bpf_verifier_env *env, u32 ref_id, u32 alloc_insn, u32 fail_insn);
+void bpf_diag_report_call_type(struct bpf_verifier_env *env, u32 insn_idx, int argno, int regno,
+			       int stack_arg_slot, const char *call_name, const char *arg_name,
+			       const char *reason, const char *suggestion);
 int bpf_diag_record_branch(struct bpf_verifier_env *env, u32 insn_idx, bool cond_true);
 void bpf_diag_record_mod(struct bpf_verifier_env *env, u32 insn_idx,
 			 struct bpf_diag_mod_target target, enum bpf_diag_mod_reason reason,

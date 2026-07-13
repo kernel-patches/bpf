@@ -8349,10 +8349,69 @@ static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 	[ARG_PTR_TO_DYNPTR]		= &dynptr_types,
 };
 
+static void bpf_diag_report_call_arg(struct bpf_verifier_env *env, u32 insn_idx, argno_t argno,
+				     const char *call_name, const char *reason,
+				     const char *suggestion)
+{
+	int arg = arg_from_argno(argno);
+	int stack_slot = -1;
+
+	if (arg > MAX_BPF_FUNC_REG_ARGS)
+		stack_slot = arg - MAX_BPF_FUNC_REG_ARGS - 1;
+
+	bpf_diag_report_call_type(env, insn_idx, arg, reg_from_argno(argno), stack_slot,
+				  call_name && *call_name ? call_name : "call",
+				  reg_arg_name(env, argno), reason, suggestion);
+}
+
+static const char *diag_btf_type_name(struct bpf_verifier_env *env, const struct btf *btf,
+				      u32 type_id)
+{
+	return bpf_diag_fmt_btf_type(env, btf, type_id);
+}
+
+static const char *diag_arg_name(struct bpf_verifier_env *env, argno_t argno)
+{
+	return bpf_diag_fmt(env, "%s", reg_arg_name(env, argno));
+}
+
+__printf(6, 7) static void diag_call_arg_fmt(struct bpf_verifier_env *env, u32 insn_idx,
+					     argno_t argno, const char *call_name,
+					     const char *suggestion, const char *fmt, ...)
+{
+	const char *reason;
+	va_list args;
+
+	va_start(args, fmt);
+	reason = bpf_diag_vfmt(env, fmt, args);
+	va_end(args);
+
+	bpf_diag_report_call_arg(env, insn_idx, argno, call_name, reason, suggestion);
+}
+
+static const char *diag_expected_reg_types(struct bpf_verifier_env *env,
+					   const enum bpf_reg_type *types, int count)
+{
+	size_t len = 0, size = 1;
+	char *buf;
+	int i;
+
+	for (i = 0; i < count; i++)
+		size += strlen(reg_type_str(env, types[i])) + (i ? 2 : 0);
+
+	buf = bpf_diag_fmt_buf(env, size);
+	if (!buf)
+		return "";
+
+	for (i = 0; i < count; i++)
+		len += scnprintf(buf + len, size - len, "%s%s", i ? ", " : "",
+				 reg_type_str(env, types[i]));
+	return buf;
+}
+
 static int check_reg_type(struct bpf_verifier_env *env, struct bpf_reg_state *reg, argno_t argno,
-			  enum bpf_arg_type arg_type,
-			  const u32 *arg_btf_id,
-			  struct bpf_call_arg_meta *meta)
+			  enum bpf_arg_type arg_type, const u32 *arg_btf_id,
+			  struct bpf_call_arg_meta *meta, const char *call_name)
 {
 	enum bpf_reg_type expected, type = reg->type;
 	const struct bpf_reg_types *compatible;
@@ -8402,6 +8461,12 @@ static int check_reg_type(struct bpf_verifier_env *env, struct bpf_reg_state *re
 	for (j = 0; j + 1 < i; j++)
 		verbose(env, "%s, ", reg_type_str(env, compatible->types[j]));
 	verbose(env, "%s\n", reg_type_str(env, compatible->types[j]));
+	diag_call_arg_fmt(env, env->insn_idx, argno, call_name,
+			  "Pass a value with one of the accepted pointer or scalar types for this "
+			  "call.",
+			  "it has type %s, but this argument accepts %s",
+			  bpf_diag_reg_type_plain(env, reg->type),
+			  diag_expected_reg_types(env, compatible->types, i));
 	return -EACCES;
 
 found:
@@ -8438,6 +8503,12 @@ found:
 		    (!type_may_be_null(arg_type) || arg_type_is_release(arg_type))) {
 			verbose(env, "Possibly NULL pointer passed to helper %s\n",
 				reg_arg_name(env, argno));
+			bpf_diag_report_call_arg(env, env->insn_idx, argno,
+						 func_id_name(meta->func_id),
+						 "the pointer may be NULL, but this helper "
+						 "requires a non-NULL pointer",
+						 "Add a NULL check and call the helper only on the "
+						 "non-NULL path.");
 			return -EACCES;
 		}
 
@@ -8780,7 +8851,8 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	    base_type(arg_type) == ARG_PTR_TO_SPIN_LOCK)
 		arg_btf_id = fn->arg_btf_id[arg];
 
-	err = check_reg_type(env, reg, argno_from_reg(regno), arg_type, arg_btf_id, meta);
+	err = check_reg_type(env, reg, argno, arg_type, arg_btf_id, meta,
+			     func_id_name(meta->func_id));
 	if (err)
 		return err;
 
@@ -8793,6 +8865,13 @@ skip_type_check:
 	    !reg_is_referenced(env, reg) && !bpf_register_is_null(reg)) {
 		verbose(env, "release helper %s expects referenced PTR_TO_BTF_ID passed to %s\n",
 			func_id_name(meta->func_id), reg_arg_name(env, argno));
+		bpf_diag_report_call_arg(env, insn_idx, argno, func_id_name(meta->func_id),
+					 "release helpers require a value that owns a live "
+					 "resource returned by a matching acquire helper",
+					 "Pass the resource-owning pointer returned by the "
+					 "matching acquire helper, and avoid calling the release "
+					 "helper after ownership has already been transferred or "
+					 "released.");
 		return -EINVAL;
 	}
 
@@ -9888,7 +9967,8 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 				continue;
 
 			memset(&meta, 0, sizeof(meta)); /* leave func_id as zero */
-			err = check_reg_type(env, reg, argno, arg->arg_type, &arg->btf_id, &meta);
+			err = check_reg_type(env, reg, argno, arg->arg_type, &arg->btf_id, &meta,
+					     bpf_verifier_subprog_name(env, subprog));
 			err = err ?: check_func_arg_reg_off(env, reg, argno, arg->arg_type);
 			if (err)
 				return err;
@@ -11927,8 +12007,8 @@ static enum kfunc_ptr_arg_type
 get_kfunc_ptr_arg_type(struct bpf_verifier_env *env, struct bpf_func_state *caller,
 		       struct bpf_reg_state *regs, struct bpf_kfunc_call_arg_meta *meta,
 		       const struct btf_type *t, const struct btf_type *ref_t,
-		       const char *ref_tname, const struct btf_param *args,
-		       int arg, int nargs, argno_t argno, struct bpf_reg_state *reg)
+		       const char *ref_tname, u32 ref_id, const struct btf_param *args, int arg,
+		       int nargs, argno_t argno, struct bpf_reg_state *reg)
 {
 	bool arg_mem_size = false;
 
@@ -12019,9 +12099,18 @@ get_kfunc_ptr_arg_type(struct bpf_verifier_env *env, struct bpf_func_state *call
 	 */
 	if (!btf_type_is_scalar(ref_t) && !__btf_type_is_scalar_struct(env, meta->btf, ref_t, 0) &&
 	    (arg_mem_size ? !btf_type_is_void(ref_t) : 1)) {
+		const char *expected_type;
+
+		expected_type = diag_btf_type_name(env, meta->btf, ref_id);
 		verbose(env, "%s pointer type %s %s must point to %sscalar, or struct with scalar\n",
 			reg_arg_name(env, argno),
 			btf_type_str(ref_t), ref_tname, arg_mem_size ? "void, " : "");
+		diag_call_arg_fmt(env, env->insn_idx, argno, meta->func_name,
+				  "Pass a verifier-tracked pointer to the expected kernel object "
+				  "type, not a pointer to stack storage or another memory buffer.",
+				  "the kfunc expects a pointer to %s, but this argument is %s and "
+				  "cannot be used as that kernel object pointer",
+				  expected_type, bpf_diag_reg_type_plain(env, reg->type));
 		return -EINVAL;
 	}
 	return arg_mem_size ? KF_ARG_PTR_TO_MEM_SIZE : KF_ARG_PTR_TO_MEM;
@@ -12676,6 +12765,13 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		if (btf_type_is_scalar(t)) {
 			if (reg->type != SCALAR_VALUE) {
 				verbose(env, "%s is not a scalar\n", reg_arg_name(env, argno));
+				diag_call_arg_fmt(env, insn_idx, argno, func_name,
+						  "Pass an integer scalar value for this argument, "
+						  "not a pointer or resource object.",
+						  "the kfunc expects an integer scalar, but %s is "
+						  "%s",
+						  reg_arg_name(env, argno),
+						  bpf_diag_reg_type_plain(env, reg->type));
 				return -EINVAL;
 			}
 
@@ -12687,6 +12783,14 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				if (!tnum_is_const(reg->var_off)) {
 					verbose(env, "%s must be a known constant\n",
 						reg_arg_name(env, argno));
+					diag_call_arg_fmt(env, insn_idx, argno, func_name,
+							  "Pass a compile-time constant or a value "
+							  "the verifier can prove is constant at "
+							  "this call.",
+							  "the kfunc requires this scalar argument "
+							  "to be a verifier-known constant, but %s "
+							  "is variable on this path",
+							  reg_arg_name(env, argno));
 					return -EINVAL;
 				}
 				if (regno >= 0)
@@ -12713,6 +12817,13 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 				if (!tnum_is_const(reg->var_off)) {
 					verbose(env, "%s is not a const\n",
 						reg_arg_name(env, argno));
+					diag_call_arg_fmt(env, insn_idx, argno, func_name,
+							  "Pass a verifier-known constant size for "
+							  "this kfunc buffer argument.",
+							  "the kfunc uses this argument as a "
+							  "return-buffer size, but %s is variable "
+							  "on this path",
+							  reg_arg_name(env, argno));
 					return -EINVAL;
 				}
 
@@ -12738,28 +12849,48 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			return -EINVAL;
 		}
 
+		ref_t = btf_type_skip_modifiers(btf, t->type, &ref_id);
+		ref_tname = btf_name_by_offset(btf, ref_t->name_off);
+
 		if ((bpf_register_is_null(reg) || type_may_be_null(reg->type)) &&
 		    !is_kfunc_arg_nullable(meta->btf, &args[i])) {
+			const char *expected_type;
+
+			expected_type = diag_btf_type_name(env, btf, ref_id);
 			verbose(env, "Possibly NULL pointer passed to trusted %s\n",
 				reg_arg_name(env, argno));
+			diag_call_arg_fmt(env, insn_idx, argno, func_name,
+					  "Add a NULL check and call the kfunc only on the "
+					  "non-NULL path.",
+					  "the pointer may be NULL, but this kfunc requires a "
+					  "non-NULL pointer to %s",
+					  expected_type);
 			return -EACCES;
 		}
 
 		if (regno == meta->release_regno && !is_kfunc_arg_dynptr(meta->btf, &args[i]) &&
 		    !reg_is_referenced(env, reg) && !bpf_register_is_null(reg)) {
+			const char *expected_type;
+
+			expected_type = diag_btf_type_name(env, btf, ref_id);
 			verbose(env, "release kfunc %s expects referenced PTR_TO_BTF_ID passed to %s\n",
 				func_name, reg_arg_name(env, argno));
+			diag_call_arg_fmt(env, insn_idx, argno, func_name,
+					  "Pass the resource-owning pointer returned by the "
+					  "matching acquire kfunc, and avoid calling the release "
+					  "kfunc after ownership has already been transferred or "
+					  "released.",
+					  "release kfuncs require a resource-owning pointer to %s "
+					  "returned by a matching acquire kfunc",
+					  expected_type);
 			return -EINVAL;
 		}
 
 		if (reg_is_referenced(env, reg))
 			update_ref_obj(&meta->ref_obj, reg);
 
-		ref_t = btf_type_skip_modifiers(btf, t->type, &ref_id);
-		ref_tname = btf_name_by_offset(btf, ref_t->name_off);
-
 		kf_arg_type = get_kfunc_ptr_arg_type(env, caller, regs, meta, t, ref_t, ref_tname,
-						     args, i, nargs, argno, reg);
+						     ref_id, args, i, nargs, argno, reg);
 		if (kf_arg_type < 0)
 			return kf_arg_type;
 
@@ -12807,13 +12938,36 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 		case KF_ARG_PTR_TO_BTF_ID:
 			if (!is_trusted_reg(env, reg)) {
 				if (!is_kfunc_rcu(meta)) {
+					const char *expected_type;
+
+					expected_type = diag_btf_type_name(env, btf, ref_id);
 					verbose(env, "%s must be referenced or trusted\n",
 						reg_arg_name(env, argno));
+					diag_call_arg_fmt(env, insn_idx, argno, func_name,
+							  "Pass a pointer acquired from a "
+							  "verifier-tracked source, or call this "
+							  "kfunc only inside the required "
+							  "protection if it accepts RCU pointers.",
+							  "the kfunc requires a trusted or "
+							  "resource-owning pointer to %s, but %s "
+							  "is %s",
+							  expected_type, reg_arg_name(env, argno),
+							  bpf_diag_reg_type_plain(env, reg->type));
 					return -EINVAL;
 				}
 				if (!is_rcu_reg(reg)) {
+					const char *expected_type;
+
+					expected_type = diag_btf_type_name(env, btf, ref_id);
 					verbose(env, "%s must be a rcu pointer\n",
 						reg_arg_name(env, argno));
+					diag_call_arg_fmt(env, insn_idx, argno, func_name,
+							  "Use this kfunc with a pointer that is "
+							  "valid in an RCU read lock region.",
+							  "the kfunc requires an RCU-protected "
+							  "pointer to %s, but %s is %s",
+							  expected_type, reg_arg_name(env, argno),
+							  bpf_diag_reg_type_plain(env, reg->type));
 					return -EINVAL;
 				}
 			}
@@ -12860,6 +13014,13 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			if (reg->type != PTR_TO_CTX) {
 				verbose(env, "%s expected pointer to ctx, but got %s\n",
 					reg_arg_name(env, argno), reg_type_str(env, reg->type));
+				diag_call_arg_fmt(env, insn_idx, argno, func_name,
+						  "Pass the original program context pointer or "
+						  "preserve it before modifying registers.",
+						  "the kfunc expects a context pointer, but %s is "
+						  "%s",
+						  reg_arg_name(env, argno),
+						  bpf_diag_reg_type_plain(env, reg->type));
 				return -EINVAL;
 			}
 
@@ -12886,10 +13047,24 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			} else {
 				verbose(env, "%s expected pointer to allocated object\n",
 					reg_arg_name(env, argno));
+				diag_call_arg_fmt(env, insn_idx, argno, func_name,
+						  "Pass a pointer returned by the matching BPF "
+						  "object allocation path.",
+						  "the kfunc expects an allocated object pointer, "
+						  "but %s is %s",
+						  reg_arg_name(env, argno),
+						  bpf_diag_reg_type_plain(env, reg->type));
 				return -EINVAL;
 			}
 			if (!reg_is_referenced(env, reg)) {
 				verbose(env, "allocated object must be referenced\n");
+				diag_call_arg_fmt(env, insn_idx, argno, func_name,
+						  "Pass the owned object pointer before it is "
+						  "released or transferred.",
+						  "the allocated object pointer in %s must still "
+						  "carry verifier-tracked ownership, but this "
+						  "pointer no longer owns a live resource",
+						  reg_arg_name(env, argno));
 				return -EINVAL;
 			}
 			if (meta->btf == btf_vmlinux) {
@@ -13055,8 +13230,20 @@ check_ok:
 				return -EINVAL;
 			}
 			ret = check_mem_reg(env, reg, argno, type_size);
-			if (ret < 0)
+			if (ret < 0) {
+				const char *expected_type;
+
+				expected_type = diag_btf_type_name(env, btf, ref_id);
+				diag_call_arg_fmt(env, insn_idx, argno, func_name,
+						  "Pass stack, map, context, or other "
+						  "verifier-known memory of the expected type and "
+						  "size, not an integer cast to a pointer.",
+						  "the kfunc expects %u bytes of memory for %s, "
+						  "but it is %s and not verifier-known memory",
+						  type_size, expected_type,
+						  bpf_diag_reg_type_plain(env, reg->type));
 				return ret;
+			}
 			break;
 		case KF_ARG_PTR_TO_MEM_SIZE:
 		{
@@ -13070,9 +13257,26 @@ check_ok:
 				ret = check_kfunc_mem_size_reg(env, buff_reg, size_reg,
 							       argno, next_argno);
 				if (ret < 0) {
-					verbose(env, "%s and ", reg_arg_name(env, argno));
-					verbose(env, "%s memory, len pair leads to invalid memory access\n",
-						reg_arg_name(env, next_argno));
+					const char *mem_arg, *size_arg_name;
+
+					mem_arg = diag_arg_name(env, argno);
+					size_arg_name = diag_arg_name(env, next_argno);
+					verbose(env, "%s and ", mem_arg);
+					verbose(env,
+						"%s memory, len pair leads to invalid memory "
+						"access\n",
+						size_arg_name);
+					diag_call_arg_fmt(env, insn_idx, argno, func_name,
+							  "Pass a stack, map, context, or other "
+							  "verifier-known memory pointer, and keep "
+							  "the paired length within that object.",
+							  "it is the memory pointer in a "
+							  "memory/length pair with %s, but it is "
+							  "%s and does not point to "
+							  "verifier-readable memory for the "
+							  "requested length",
+							  size_arg_name,
+							  bpf_diag_reg_type_plain(env, reg->type));
 					return ret;
 				}
 			}
@@ -13085,6 +13289,15 @@ check_ok:
 				if (!tnum_is_const(size_reg->var_off)) {
 					verbose(env, "%s must be a known constant\n",
 						reg_arg_name(env, next_argno));
+					diag_call_arg_fmt(env, insn_idx, next_argno, func_name,
+							  "Pass a compile-time constant or "
+							  "verifier-known constant for this memory "
+							  "size argument.",
+							  "the kfunc requires the paired memory "
+							  "size argument %s to be a verifier-known "
+							  "constant, but it is variable on this "
+							  "path",
+							  reg_arg_name(env, next_argno));
 					return -EINVAL;
 				}
 				meta->arg_constant.found = true;
@@ -13104,8 +13317,19 @@ check_ok:
 			break;
 		case KF_ARG_PTR_TO_REFCOUNTED_KPTR:
 			if (!type_is_ptr_alloc_obj(reg->type)) {
+				const char *expected_type;
+
+				expected_type = diag_btf_type_name(env, btf, ref_id);
 				verbose(env, "%s is neither owning or non-owning ref\n",
 					reg_arg_name(env, argno));
+				diag_call_arg_fmt(env, insn_idx, argno, func_name,
+						  "Pass a pointer returned by the matching BPF "
+						  "object allocation or lookup operation for this "
+						  "kfunc.",
+						  "the kfunc expects a pointer to BPF-managed "
+						  "refcounted object type %s, but this argument is "
+						  "not such an object pointer",
+						  expected_type);
 				return -EINVAL;
 			}
 			if (!type_is_non_owning_ref(reg->type))
@@ -13130,6 +13354,15 @@ check_ok:
 			if (reg->type != PTR_TO_MAP_VALUE) {
 				verbose(env, "%s doesn't point to a const string\n",
 					reg_arg_name(env, argno));
+				diag_call_arg_fmt(env, insn_idx, argno, func_name,
+						  "Pass a constant string pointer that the "
+						  "verifier recognizes, such as a string stored in "
+						  "a read-only map value.",
+						  "the kfunc expects a pointer to a constant "
+						  "string stored in verifier-known memory, but %s "
+						  "is %s",
+						  reg_arg_name(env, argno),
+						  bpf_diag_reg_type_plain(env, reg->type));
 				return -EINVAL;
 			}
 			ret = check_arg_const_str(env, reg, argno);
@@ -13170,6 +13403,14 @@ check_ok:
 			if (reg->type != PTR_TO_STACK) {
 				verbose(env, "%s doesn't point to an irq flag on stack\n",
 					reg_arg_name(env, argno));
+				diag_call_arg_fmt(env, insn_idx, argno, func_name,
+						  "Pass the same stack slot used by "
+						  "bpf_local_irq_save() or "
+						  "bpf_res_spin_lock_irqsave().",
+						  "the kfunc expects a stack pointer to an IRQ "
+						  "flag slot, but %s is %s",
+						  reg_arg_name(env, argno),
+						  bpf_diag_reg_type_plain(env, reg->type));
 				return -EINVAL;
 			}
 			ret = process_irq_flag(env, reg, argno, meta);

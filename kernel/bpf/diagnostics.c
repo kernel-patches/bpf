@@ -7,6 +7,7 @@
 #include <linux/btf.h>
 #include <linux/ctype.h>
 #include <linux/kernel.h>
+#include <linux/list.h>
 #include <linux/overflow.h>
 #include <linux/slab.h>
 #include <linux/stdarg.h>
@@ -154,6 +155,11 @@ struct bpf_diag_reg_fmt {
 	char umax_buf[32];
 };
 
+struct bpf_diag_fmt_buf {
+	struct list_head node;
+	char data[];
+};
+
 struct bpf_diag_scratch {
 	char str[BPF_DIAG_SCRATCH_STR_CNT][BPF_DIAG_SCRATCH_STR_LEN];
 	struct bpf_reg_state regs[BPF_DIAG_SCRATCH_REG_CNT];
@@ -168,6 +174,7 @@ struct bpf_diag_scratch {
 struct bpf_diag {
 	struct bpf_diag_log log;
 	struct bpf_diag_scratch scratch;
+	struct list_head fmt_bufs;
 };
 
 bool bpf_diag_enabled(const struct bpf_verifier_env *env)
@@ -186,7 +193,11 @@ int bpf_diag_init(struct bpf_verifier_env *env)
 		return 0;
 
 	env->diag = kzalloc_obj(struct bpf_diag, GFP_KERNEL_ACCOUNT);
-	return env->diag ? 0 : -ENOMEM;
+	if (!env->diag)
+		return -ENOMEM;
+
+	INIT_LIST_HEAD(&env->diag->fmt_bufs);
+	return 0;
 }
 
 static struct bpf_diag_scratch *diag_scratch(struct bpf_verifier_env *env)
@@ -215,6 +226,100 @@ out:
 	if (size)
 		*size = buf_size;
 	return buf;
+}
+
+static void diag_fmt_set_error(struct bpf_diag *diag, int error)
+{
+	if (!diag->log.error)
+		diag->log.error = error;
+}
+
+static char *diag_fmt_alloc(struct bpf_verifier_env *env, size_t size)
+{
+	struct bpf_diag *diag = diag_env(env);
+	struct bpf_diag_fmt_buf *buf;
+
+	if (!diag)
+		return NULL;
+
+	buf = kmalloc(struct_size(buf, data, size), GFP_KERNEL_ACCOUNT);
+	if (!buf) {
+		diag_fmt_set_error(diag, -ENOMEM);
+		return NULL;
+	}
+	list_add_tail(&buf->node, &diag->fmt_bufs);
+	return buf->data;
+}
+
+char *bpf_diag_fmt_buf(struct bpf_verifier_env *env, size_t size)
+{
+	char *buf;
+
+	if (!size)
+		return NULL;
+
+	buf = diag_fmt_alloc(env, size);
+	if (buf)
+		buf[0] = '\0';
+	return buf;
+}
+
+const char *bpf_diag_vfmt(struct bpf_verifier_env *env, const char *fmt, va_list args)
+{
+	struct bpf_diag *diag = diag_env(env);
+	va_list copy;
+	char *buf;
+	int len;
+
+	va_copy(copy, args);
+	len = vsnprintf(NULL, 0, fmt, copy);
+	va_end(copy);
+	if (len < 0 || len == INT_MAX) {
+		if (diag)
+			diag_fmt_set_error(diag, -EOVERFLOW);
+		return "";
+	}
+
+	buf = diag_fmt_alloc(env, len + 1);
+	if (buf)
+		vsnprintf(buf, len + 1, fmt, args);
+	return buf ?: "";
+}
+
+const char *bpf_diag_fmt(struct bpf_verifier_env *env, const char *fmt, ...)
+{
+	const char *buf;
+	va_list args;
+
+	va_start(args, fmt);
+	buf = bpf_diag_vfmt(env, fmt, args);
+	va_end(args);
+	return buf;
+}
+
+const char *bpf_diag_fmt_btf_type(struct bpf_verifier_env *env, const struct btf *btf, u32 type_id)
+{
+	char *buf = bpf_diag_fmt_buf(env, BPF_DIAG_SCRATCH_STR_LEN);
+
+	if (!buf)
+		return "";
+
+	bpf_diag_format_btf_type(buf, BPF_DIAG_SCRATCH_STR_LEN, btf, type_id);
+	return buf;
+}
+
+static void diag_fmt_free(struct bpf_verifier_env *env)
+{
+	struct bpf_diag *diag = diag_env(env);
+	struct bpf_diag_fmt_buf *buf, *tmp;
+
+	if (!diag)
+		return;
+
+	list_for_each_entry_safe(buf, tmp, &diag->fmt_bufs, node) {
+		list_del(&buf->node);
+		kfree(buf);
+	}
 }
 
 const char *bpf_diag_scratch_strcpy(struct bpf_verifier_env *env, unsigned int slot,
@@ -319,6 +424,7 @@ void bpf_diag_free(struct bpf_verifier_env *env)
 	if (!diag)
 		return;
 
+	diag_fmt_free(env);
 	kfree(diag->log.events);
 	kfree(diag->scratch.history_bitmap);
 	kfree(diag);
@@ -944,6 +1050,50 @@ static const char *diag_arg_ordinal(int argno)
 	default:
 		return NULL;
 	}
+}
+
+void bpf_diag_report_call_type(struct bpf_verifier_env *env, u32 insn_idx, int argno, int regno,
+			       int stack_arg_slot, const char *call_name, const char *arg_name,
+			       const char *reason, const char *suggestion)
+{
+	struct bpf_diag_history_opts opts = {
+		.frameno = diag_current_frameno(env),
+	};
+	const char *ordinal = diag_arg_ordinal(argno);
+	const char *arg_desc;
+	bool print_history = true;
+
+	if (regno >= 0) {
+		opts.scope = BPF_DIAG_HISTORY_SCOPE_REG;
+		opts.regno = regno;
+	} else if (stack_arg_slot >= 0) {
+		opts.scope = BPF_DIAG_HISTORY_SCOPE_STACK_ARG;
+		opts.stack_arg_slot = stack_arg_slot;
+	} else {
+		print_history = false;
+	}
+
+	if (ordinal && arg_name)
+		arg_desc = bpf_diag_fmt(env, "%s argument (%s)", ordinal, arg_name);
+	else if (ordinal)
+		arg_desc = bpf_diag_fmt(env, "%s argument", ordinal);
+	else if (arg_name)
+		arg_desc = bpf_diag_fmt(env, "argument %s", arg_name);
+	else
+		arg_desc = "argument";
+
+	bpf_diag_report_header(env, CATEGORY_CALL_TYPE_SAFETY, "invalid call argument");
+	diag_report_reason(env, "The %s to %s does not satisfy the verifier contract: %s.",
+			   arg_desc, call_name, reason);
+
+	diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, "error", "invalid %s for %s", arg_desc, call_name);
+
+	if (print_history)
+		diag_print_history(env, &opts);
+
+	diag_report_suggestion(env, "%s", suggestion);
+	diag_fmt_free(env);
 }
 
 void bpf_diag_report_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx, int regno,
