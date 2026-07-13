@@ -853,6 +853,255 @@ out_free_msg:
 	kfree(msg);
 }
 
+static u32 diag_current_frameno(const struct bpf_verifier_env *env)
+{
+	return env->cur_state->frame[env->cur_state->curframe]->frameno;
+}
+
+void bpf_diag_report_register_type(struct bpf_verifier_env *env, u32 insn_idx, int regno,
+				   const char *problem, const char *reason, const char *suggestion)
+{
+	struct bpf_diag_history_opts opts = {
+		.scope = BPF_DIAG_HISTORY_SCOPE_REG,
+		.frameno = diag_current_frameno(env),
+		.regno = regno,
+	};
+
+	bpf_diag_report_header(env, CATEGORY_REGISTER_TYPE_SAFETY, problem);
+	diag_report_reason(env, "%s", reason);
+
+	diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, "error", "%s", problem);
+
+	if (regno >= 0)
+		diag_print_history(env, &opts);
+
+	diag_report_suggestion(env, "%s", suggestion);
+}
+
+const char *bpf_diag_reg_type_plain(struct bpf_verifier_env *env, enum bpf_reg_type type)
+{
+	switch (base_type(type)) {
+	case NOT_INIT:
+		return "an uninitialized value";
+	case SCALAR_VALUE:
+		return "an integer scalar";
+	case PTR_TO_CTX:
+		return "a context pointer";
+	case PTR_TO_STACK:
+		return "a stack pointer";
+	case PTR_TO_MAP_VALUE:
+		if (type_may_be_null(type))
+			return "a nullable map value pointer";
+		return "a map value pointer";
+	case PTR_TO_MEM:
+		if (type_may_be_null(type))
+			return "a nullable memory pointer";
+		return "a memory pointer";
+	case PTR_TO_BTF_ID:
+		if (type_may_be_null(type))
+			return "a nullable kernel object pointer";
+		if (type_is_non_owning_ref(type))
+			return "a borrowed allocated object pointer";
+		if (type_is_ptr_alloc_obj(type))
+			return "an owned allocated object pointer";
+		if (type_flag(type) & PTR_UNTRUSTED)
+			return "an untrusted kernel object pointer";
+		return "a kernel object pointer";
+	default:
+		return reg_type_str(env, type);
+	}
+}
+
+static const char *diag_arg_ordinal(int argno)
+{
+	switch (argno) {
+	case 1:
+		return "first";
+	case 2:
+		return "second";
+	case 3:
+		return "third";
+	case 4:
+		return "fourth";
+	case 5:
+		return "fifth";
+	case 6:
+		return "sixth";
+	case 7:
+		return "seventh";
+	case 8:
+		return "eighth";
+	case 9:
+		return "ninth";
+	case 10:
+		return "tenth";
+	case 11:
+		return "eleventh";
+	case 12:
+		return "twelfth";
+	default:
+		return NULL;
+	}
+}
+
+void bpf_diag_report_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx, int regno,
+				   const char *reg_name, const struct bpf_reg_state *reg,
+				   enum bpf_diag_invalid_deref_kind kind, s64 offset)
+{
+	struct bpf_diag_history_opts opts = {
+		.scope = BPF_DIAG_HISTORY_SCOPE_REG,
+		.frameno = diag_current_frameno(env),
+		.regno = regno,
+	};
+	const char *type_name = bpf_diag_reg_type_plain(env, reg->type);
+
+	bpf_diag_report_header(env, CATEGORY_REGISTER_TYPE_SAFETY, "invalid dereference");
+
+	switch (kind) {
+	case BPF_DIAG_DEREF_SCALAR:
+		diag_report_reason(env, "%s is an integer scalar here, not a pointer to memory.",
+				   reg_name);
+		break;
+	case BPF_DIAG_DEREF_NULLABLE_PTR:
+		diag_report_reason(env,
+				   "%s may be NULL here (%s). The program could dereference NULL "
+				   "on this path, so the verifier cannot prove this access is "
+				   "safe.",
+				   reg_name, type_name);
+		break;
+	case BPF_DIAG_DEREF_MODIFIED_PTR:
+		diag_report_reason(env,
+				   "%s has offset %lld here, but this pointer type must be "
+				   "dereferenced in its original form.",
+				   reg_name, offset);
+		break;
+	case BPF_DIAG_DEREF_INVALID_PTR:
+	default:
+		diag_report_reason(env,
+				   "%s has type %s here, which is not valid for this memory "
+				   "access.",
+				   reg_name, type_name);
+		break;
+	}
+
+	diag_report_section(env, "At");
+	if (kind == BPF_DIAG_DEREF_MODIFIED_PTR)
+		bpf_diag_report_source(env, insn_idx, "error",
+				       "dereference requires the original %s pointer", type_name);
+	else
+		bpf_diag_report_source(env, insn_idx, "error", "invalid dereference of %s (%s)",
+				       reg_name, type_name);
+
+	if (regno >= 0)
+		diag_print_history(env, &opts);
+
+	switch (kind) {
+	case BPF_DIAG_DEREF_NULLABLE_PTR:
+		diag_report_suggestion(env, "Add a NULL check before the access and dereference "
+					    "the pointer only on the non-NULL path.");
+		break;
+	case BPF_DIAG_DEREF_MODIFIED_PTR:
+		diag_report_suggestion(env, "Preserve the original pointer in another register, or "
+					    "use only offsets this pointer type permits before "
+					    "dereferencing it.");
+		break;
+	case BPF_DIAG_DEREF_SCALAR:
+	case BPF_DIAG_DEREF_INVALID_PTR:
+	default:
+		diag_report_suggestion(env, "Preserve a pointer-valued register where needed, or "
+					    "reload and revalidate the pointer after scalar "
+					    "arithmetic, helper calls, or other operations that "
+					    "can invalidate it.");
+		break;
+	}
+}
+
+void bpf_diag_report_unreadable_reg(struct bpf_verifier_env *env, u32 insn_idx, int regno)
+{
+	struct bpf_diag_history_opts opts = {
+		.scope = BPF_DIAG_HISTORY_SCOPE_REG,
+		.frameno = diag_current_frameno(env),
+		.regno = regno,
+	};
+
+	bpf_diag_report_header(env, CATEGORY_REGISTER_TYPE_SAFETY, "unreadable register");
+	diag_report_reason(env,
+			   "R%d is not readable here. A previous operation may have invalidated "
+			   "this register, so the verifier cannot use it as an input.",
+			   regno);
+
+	diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, "error", "R%d is not readable", regno);
+
+	if (regno >= 0)
+		diag_print_history(env, &opts);
+
+	diag_report_suggestion(env, "Avoid using the register after it is invalidated, or reload "
+				    "and revalidate a fresh pointer before this instruction.");
+}
+
+static int diag_stack_argno(u8 slot)
+{
+	return MAX_BPF_FUNC_REG_ARGS + slot + 1;
+}
+
+static void diag_format_stack_arg(char *buf, size_t size, u8 slot, const char *arg_name)
+{
+	int argno = diag_stack_argno(slot);
+	const char *ordinal = diag_arg_ordinal(argno);
+
+	if (ordinal && arg_name)
+		scnprintf(buf, size, "outgoing stack argument %u (%s argument, %s)", slot + 1,
+			  ordinal, arg_name);
+	else if (ordinal)
+		scnprintf(buf, size, "outgoing stack argument %u (%s argument)", slot + 1, ordinal);
+	else if (arg_name)
+		scnprintf(buf, size, "outgoing stack argument %u (%s)", slot + 1, arg_name);
+	else
+		scnprintf(buf, size, "outgoing stack argument %u", slot + 1);
+}
+
+void bpf_diag_report_stack_arg_uninit(struct bpf_verifier_env *env, u32 insn_idx, int nargs,
+				      int stack_arg_slot, const char *callee_name,
+				      const char *arg_name)
+{
+	struct bpf_diag_history_opts opts = {
+		.scope = BPF_DIAG_HISTORY_SCOPE_STACK_ARG,
+		.frameno = diag_current_frameno(env),
+		.stack_arg_slot = stack_arg_slot,
+	};
+	const char *arg_buf;
+
+	arg_buf = bpf_diag_scratch_buf(env, 1, NULL);
+	if (arg_buf)
+		diag_format_stack_arg((char *)arg_buf, BPF_DIAG_SCRATCH_STR_LEN, stack_arg_slot,
+				      arg_name);
+	else
+		arg_buf = "";
+	bpf_diag_report_header(env, CATEGORY_REGISTER_TYPE_SAFETY, "missing stack argument");
+	if (callee_name && *callee_name)
+		diag_report_reason(env,
+				   "Function %s expects %d arguments, but %s is not initialized at "
+				   "this call.",
+				   callee_name, nargs, arg_buf);
+	else
+		diag_report_reason(env,
+				   "The callee expects %d arguments, but %s is not initialized at "
+				   "this call.",
+				   nargs, arg_buf);
+
+	diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, "error", "%s is not initialized", arg_buf);
+
+	if (stack_arg_slot >= 0)
+		diag_print_history(env, &opts);
+
+	diag_report_suggestion(env, "Write the outgoing stack argument after any operation that "
+				    "may invalidate stored pointer values, and before making this "
+				    "call.");
+}
+
 int bpf_diag_record_branch(struct bpf_verifier_env *env, u32 insn_idx, bool cond_true)
 {
 	struct bpf_diag_history_event event = {
