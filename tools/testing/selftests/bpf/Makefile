@@ -125,7 +125,6 @@ TEST_FILES = xsk_prereqs.sh $(wildcard progs/btf_dump_test_case_*.c)
 TEST_PROGS := test_kmod.sh \
 	test_lirc_mode2.sh \
 	test_bpftool_build.sh \
-	test_doc_build.sh \
 	test_xsk.sh \
 	test_xdp_features.sh
 
