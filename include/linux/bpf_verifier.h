@@ -690,6 +690,8 @@ struct bpf_insn_aux_data {
 	 */
 	u8 fastcall_spills_num:3;
 	u8 arg_prog:4;
+	/* bitmask of R1-R5 kfunc args to rebase to arena kernel addresses */
+	u8 arg_arena_regs;
 
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */

@@ -250,6 +250,26 @@ Or::
                 ...
         }
 
+2.3.7 __arena Annotation
+------------------------
+
+This annotation is used to indicate that the pointer argument points into
+the program's arena. The verifier translates it to a directly
+dereferenceable kernel address before the call, subject to the access
+rules described in :ref:`BPF_kfunc_arena_access`. NULL is preserved and the
+kfunc is responsible for checking for NULL before dereferencing.
+
+An example is given below::
+
+        __bpf_kfunc int bpf_process_item(struct item *item__arena)
+        {
+        ...
+        }
+
+Calling such a kfunc requires the program to use an arena map. The program
+can pass any value without compromising the kernel. A value that does not
+point into the arena is a program bug.
+
 .. _BPF_kfunc_nodef:
 
 2.4 Using an existing kernel function
@@ -486,6 +506,8 @@ nf_conn *`` (e.g. ``bpf_ct_change_timeout()``).
 In order to accommodate such requirements, the verifier will enforce strict
 PTR_TO_BTF_ID type matching if two types have the exact same name, with one
 being suffixed with ``___init``.
+
+.. _BPF_kfunc_arena_access:
 
 2.8 Accessing arena memory through kfunc arguments
 --------------------------------------------------

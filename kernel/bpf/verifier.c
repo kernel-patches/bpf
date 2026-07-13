@@ -10856,6 +10856,11 @@ static bool is_kfunc_arg_irq_flag(const struct btf *btf, const struct btf_param 
 	return btf_param_match_suffix(btf, arg, "__irq_flag");
 }
 
+static bool is_kfunc_arg_arena(const struct btf *btf, const struct btf_param *arg)
+{
+	return btf_param_match_suffix(btf, arg, "__arena");
+}
+
 static bool is_kfunc_arg_scalar_with_name(const struct btf *btf,
 					  const struct btf_param *arg,
 					  const char *name)
@@ -12057,6 +12062,32 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_kfunc_call_
 			}
 			meta->arg_prog = true;
 			cur_aux(env)->arg_prog = regno;
+			continue;
+		}
+
+		if (is_kfunc_arg_arena(btf, &args[i])) {
+			t = btf_type_skip_modifiers(btf, args[i].type, NULL);
+			if (verifier_bug_if(!btf_type_is_ptr(t), env,
+					    "kfunc %s arg#%d has __arena tag on non-pointer",
+					    func_name, i))
+				return -EFAULT;
+			if (!env->prog->aux->arena) {
+				verbose(env,
+					"%s arena pointer requires a program with an associated arena\n",
+					reg_arg_name(env, argno));
+				return -EINVAL;
+			}
+			if (regno < 0) {
+				verbose(env, "%s arena pointer cannot be a stack argument\n",
+					reg_arg_name(env, argno));
+				return -EINVAL;
+			}
+			if (reg->type != PTR_TO_ARENA && reg->type != SCALAR_VALUE) {
+				verbose(env, "%s is not a pointer to arena or scalar\n",
+					reg_arg_name(env, argno));
+				return -EINVAL;
+			}
+			cur_aux(env)->arg_arena_regs |= BIT(regno - BPF_REG_1);
 			continue;
 		}
 
@@ -19890,13 +19921,58 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		*cnt = 6;
 	}
 
-	if (env->insn_aux_data[insn_idx].arg_prog) {
-		u32 regno = env->insn_aux_data[insn_idx].arg_prog;
-		struct bpf_insn ld_addrs[2] = { BPF_LD_IMM64(regno, (long)env->prog->aux) };
+	if (env->insn_aux_data[insn_idx].arg_prog ||
+	    env->insn_aux_data[insn_idx].arg_arena_regs) {
+		unsigned long arena_regs = env->insn_aux_data[insn_idx].arg_arena_regs;
+		u64 kern_vm_start = bpf_arena_get_kern_vm_start(env->prog->aux->arena);
+		u32 prog_regno = env->insn_aux_data[insn_idx].arg_prog;
 		int idx = *cnt;
+		int bit;
 
-		insn_buf[idx++] = ld_addrs[0];
-		insn_buf[idx++] = ld_addrs[1];
+		if (verifier_bug_if(idx, env, "kfunc call at %d already patched", insn_idx))
+			return -EFAULT;
+
+		/*
+		 * A kfunc may take both an __arena arg and the __prog aux. Emit
+		 * each present fixup, then append the call once.
+		 */
+		if (arena_regs) {
+			bool blinding = env->prog->blinding_requested;
+			int base_reg = blinding ? BPF_REG_0 : BPF_REG_AX;
+			struct bpf_insn ld[2] = { BPF_LD_IMM64(base_reg, kern_vm_start) };
+
+			/*
+			 * rN = kern_vm_start + (u32)rN, NULL left as 0.
+			 * Constant blinding rewrites immediate-carrying insns
+			 * unless they use BPF_REG_AX. With hardening, the
+			 * constant sits in R0 (an AX-destined LD_IMM64 would be
+			 * corrupted) and NULL is tested against AX = 0. Without
+			 * hardening, use the cheaper AX constant and immediate
+			 * test.
+			 */
+			insn_buf[idx++] = ld[0];
+			insn_buf[idx++] = ld[1];
+			if (blinding)
+				insn_buf[idx++] = BPF_MOV64_IMM(BPF_REG_AX, 0);
+
+			for_each_set_bit(bit, &arena_regs, MAX_BPF_FUNC_REG_ARGS) {
+				int regno = BPF_REG_1 + bit;
+
+				insn_buf[idx++] = BPF_ZEXT_REG(regno);
+				insn_buf[idx++] = blinding ?
+					BPF_JMP_REG(BPF_JEQ, regno, BPF_REG_AX, 1) :
+					BPF_JMP_IMM(BPF_JEQ, regno, 0, 1);
+				insn_buf[idx++] = BPF_ALU64_REG(BPF_ADD, regno, base_reg);
+			}
+		}
+		if (prog_regno) {
+			struct bpf_insn ld_addrs[2] = {
+				BPF_LD_IMM64(prog_regno, (long)env->prog->aux)
+			};
+
+			insn_buf[idx++] = ld_addrs[0];
+			insn_buf[idx++] = ld_addrs[1];
+		}
 		insn_buf[idx++] = *insn;
 		*cnt = idx;
 	}
