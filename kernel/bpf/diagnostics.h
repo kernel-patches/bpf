@@ -106,5 +106,7 @@ void bpf_diag_record_mod(struct bpf_verifier_env *env, u32 insn_idx,
 			 struct bpf_diag_mod_target target, enum bpf_diag_mod_reason reason,
 			 const struct bpf_reg_state *old_reg, const struct bpf_reg_state *new_reg,
 			 const struct bpf_diag_mod_target *origin);
+void bpf_diag_record_ref_acquire(struct bpf_verifier_env *env, u32 insn_idx, u32 ref_id);
+void bpf_diag_record_ref_release(struct bpf_verifier_env *env, u32 insn_idx, u32 ref_id);
 
 #endif /* __BPF_DIAGNOSTICS_H */
