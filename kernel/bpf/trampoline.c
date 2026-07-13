@@ -1573,12 +1573,11 @@ static int update_fentry_multi(struct bpf_trampoline *tr, u32 orig_flags,
 			       struct bpf_tracing_multi_data *data)
 {
 	unsigned long addr = (unsigned long)(im ? im->image : tr->cur_image->image);
-	unsigned long ip = ftrace_location(tr->ip);
 
 	if (bpf_trampoline_use_jmp(tr->flags))
 		addr = ftrace_jmp_set(addr);
 
-	ftrace_hash_add(hash, data->entry, ip, addr);
+	ftrace_hash_add(hash, data->entry, tr->ip, addr);
 	tr->cur_image = im;
 	return 0;
 }
