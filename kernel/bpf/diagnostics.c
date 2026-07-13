@@ -1309,6 +1309,43 @@ void bpf_diag_report_policy(struct bpf_verifier_env *env, u32 insn_idx, const ch
 	diag_report_suggestion(env, "%s", suggestion);
 }
 
+void bpf_diag_report_limit(struct bpf_verifier_env *env, u32 insn_idx, const char *limit,
+			   const char *suggestion, const char *reason_fmt, ...)
+{
+	char *reason, *text;
+	va_list args;
+
+	if (!bpf_diag_enabled(env))
+		return;
+
+	bpf_diag_report_header(env, CATEGORY_VERIFIER_LIMIT, "limit exceeded");
+	diag_report_section(env, "Reason");
+
+	va_start(args, reason_fmt);
+	reason = kvasprintf(GFP_KERNEL_ACCOUNT, reason_fmt, args);
+	va_end(args);
+	if (!reason) {
+		diag_write(env, "%s<failed to allocate diagnostic text>\n", BPF_DIAG_TEXT_INDENT);
+		goto source;
+	}
+
+	text = kasprintf(GFP_KERNEL_ACCOUNT, "The %s limit was exceeded: %s.", limit, reason);
+	kfree(reason);
+	if (!text) {
+		diag_write(env, "%s<failed to allocate diagnostic text>\n", BPF_DIAG_TEXT_INDENT);
+		goto source;
+	}
+
+	diag_print_wrapped_text(env, text);
+	kfree(text);
+
+source:
+	diag_report_section(env, "At");
+	bpf_diag_report_source(env, insn_idx, "error", "limit exceeded: %s", limit);
+
+	diag_report_suggestion(env, "%s", suggestion);
+}
+
 void bpf_diag_report_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx, int regno,
 				   const char *reg_name, const struct bpf_reg_state *reg,
 				   enum bpf_diag_invalid_deref_kind kind, s64 offset)

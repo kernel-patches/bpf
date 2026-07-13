@@ -5431,6 +5431,42 @@ struct bpf_subprog_call_depth_info {
 	int frame; /* # of consecutive static call stack frames on top of stack */
 };
 
+static char *bpf_diag_append_subprog_chain(const struct bpf_verifier_env *env, char *chain,
+					   int subprog)
+{
+	const char *prefix = chain && *chain ? " -> " : "";
+	const char *name = bpf_verifier_subprog_name(env, subprog);
+	const char *old = chain ?: "";
+	char *next;
+
+	if (name && *name)
+		next = kasprintf(GFP_KERNEL_ACCOUNT, "%s%s%s", old, prefix, name);
+	else
+		next = kasprintf(GFP_KERNEL_ACCOUNT, "%s%ssubprogram %d", old, prefix, subprog);
+	if (!next)
+		return chain;
+
+	kfree(chain);
+	return next;
+}
+
+static char *bpf_diag_alloc_subprog_call_chain(const struct bpf_verifier_env *env,
+					       struct bpf_subprog_call_depth_info *dinfo, int idx)
+{
+	int call_chain[MAX_CALL_FRAMES + 1];
+	int i, subprog, cnt = 0;
+	char *chain = NULL;
+
+	for (subprog = idx; subprog >= 0 && cnt < ARRAY_SIZE(call_chain);
+	     subprog = dinfo[subprog].caller)
+		call_chain[cnt++] = subprog;
+
+	for (i = cnt - 1; i >= 0; i--)
+		chain = bpf_diag_append_subprog_chain(env, chain, call_chain[i]);
+
+	return chain;
+}
+
 /* starting from main bpf function walk all instructions of the function
  * and recursively walk all callees that given function can call.
  * Ignore jump and exit insns.
@@ -5473,9 +5509,19 @@ process_func:
 	 * of caller's stack as shown on the example above.
 	 */
 	if (idx && subprog[idx].has_tail_call && depth >= 256) {
+		char *chain = bpf_diag_alloc_subprog_call_chain(env, dinfo, idx);
+
 		verbose(env,
 			"tail_calls are not allowed when call stack of previous frames is %d bytes. Too large\n",
 			depth);
+		bpf_diag_report_limit(env, subprog[idx].start, "call stack with tail calls",
+				      "Reduce stack usage in caller frames, or avoid combining "
+				      "deep bpf2bpf calls with tail calls.",
+				      "Call chain %s reaches a subprogram with tail calls after "
+				      "caller frames already use %d bytes; tail-call paths are "
+				      "limited to 256 bytes in caller frames",
+				      chain ?: "the current call chain", depth);
+		kfree(chain);
 		return -EACCES;
 	}
 
@@ -5497,8 +5543,20 @@ process_func:
 		if (subprog_depth > env->max_stack_depth)
 			env->max_stack_depth = subprog_depth;
 		if (subprog_depth > MAX_BPF_STACK) {
+			char *chain;
+
 			verbose(env, "stack size of subprog %d is %d. Too large\n",
 				idx, subprog_depth);
+			chain = bpf_diag_alloc_subprog_call_chain(env, dinfo, idx);
+			bpf_diag_report_limit(env, subprog[idx].start, "subprogram stack depth",
+					      "Reduce stack usage in this subprogram, or move "
+					      "large data out of the BPF stack.",
+					      "Call chain %s reaches a subprogram that uses %d "
+					      "bytes of stack, exceeding the %d byte limit for one "
+					      "BPF stack frame",
+					      chain ?: "the current call chain", subprog_depth,
+					      MAX_BPF_STACK);
+			kfree(chain);
 			return -EACCES;
 		}
 	} else {
@@ -5512,13 +5570,28 @@ process_func:
 
 			verbose(env, "combined stack size of %d calls is %d. Too large\n",
 				total, depth);
+			{
+				char *chain;
+
+				chain = bpf_diag_alloc_subprog_call_chain(env, dinfo, idx);
+				bpf_diag_report_limit(env, subprog[idx].start,
+						      "combined call stack depth",
+						      "Reduce stack usage or call depth along this "
+						      "call chain.",
+						      "Call chain %s uses %d bytes of stack across "
+						      "%d nested calls, exceeding the %d byte "
+						      "limit",
+						      chain ?: "the current call chain", depth,
+						      total, MAX_BPF_STACK);
+				kfree(chain);
+			}
 			return -EACCES;
 		}
 	}
 continue_func:
 	subprog_end = subprog[idx + 1].start;
 	for (; i < subprog_end; i++) {
-		int next_insn, sidx;
+		int next_insn, call_insn, sidx;
 
 		if (bpf_pseudo_kfunc_call(insn + i) && !insn[i].off) {
 			bool err = false;
@@ -5569,6 +5642,7 @@ continue_func:
 		/* push caller idx into callee's dinfo */
 		dinfo[sidx].caller = idx;
 
+		call_insn = i;
 		i = next_insn;
 
 		idx = sidx;
@@ -5580,8 +5654,19 @@ continue_func:
 
 		frame = bpf_subprog_is_global(env, idx) ? 0 : frame + 1;
 		if (frame >= MAX_CALL_FRAMES) {
+			char *chain;
+
 			verbose(env, "the call stack of %d frames is too deep !\n",
 				frame);
+			chain = bpf_diag_alloc_subprog_call_chain(env, dinfo, idx);
+			bpf_diag_report_limit(env, call_insn, "bpf2bpf call frames",
+					      "Reduce the number of nested bpf2bpf calls on this "
+					      "path.",
+					      "Call chain %s reaches %d static bpf2bpf call "
+					      "frames, exceeding the %d frame limit",
+					      chain ?: "the current call chain", frame,
+					      MAX_CALL_FRAMES);
+			kfree(chain);
 			return -E2BIG;
 		}
 		goto process_func;
@@ -9851,6 +9936,22 @@ typedef int (*set_callee_state_fn)(struct bpf_verifier_env *env,
 				   struct bpf_func_state *callee,
 				   int insn_idx);
 
+static char *bpf_diag_alloc_state_call_chain(const struct bpf_verifier_env *env,
+					     const struct bpf_verifier_state *state,
+					     int next_subprog)
+{
+	char *chain = NULL;
+	int i;
+
+	for (i = 0; i <= state->curframe; i++)
+		chain = bpf_diag_append_subprog_chain(env, chain, state->frame[i]->subprogno);
+
+	if (next_subprog >= 0)
+		chain = bpf_diag_append_subprog_chain(env, chain, next_subprog);
+
+	return chain;
+}
+
 static int set_callee_state(struct bpf_verifier_env *env,
 			    struct bpf_func_state *caller,
 			    struct bpf_func_state *callee, int insn_idx);
@@ -9863,8 +9964,18 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	int err;
 
 	if (state->curframe + 1 >= MAX_CALL_FRAMES) {
+		char *chain;
+
 		verbose(env, "the call stack of %d frames is too deep\n",
 			state->curframe + 2);
+		chain = bpf_diag_alloc_state_call_chain(env, state, subprog);
+		bpf_diag_report_limit(env, callsite, "bpf2bpf call frames",
+				      "Reduce the number of nested bpf2bpf calls on this path.",
+				      "Call chain %s would create %d verifier call frames, "
+				      "exceeding the %d frame limit",
+				      chain ?: "the current call chain", state->curframe + 2,
+				      MAX_CALL_FRAMES);
+		kfree(chain);
 		return -E2BIG;
 	}
 
@@ -18597,6 +18708,12 @@ static int do_check(struct bpf_verifier_env *env)
 			verbose(env,
 				"BPF program is too large. Processed %d insn\n",
 				env->insn_processed);
+			bpf_diag_report_limit(env, env->insn_idx,
+					      "processed instruction complexity",
+					      "Simplify control flow, reduce branching, or split "
+					      "the program into smaller pieces.",
+					      "The verifier explored more instructions than the "
+					      "complexity limit allows");
 			return -E2BIG;
 		}
 
