@@ -153,8 +153,7 @@ restart:
 			skel->rodata->immed_stress_nth = strtoul(optarg, NULL, 0);
 			break;
 		case 'C': {
-			u32 nr_cpus = libbpf_num_possible_cpus();
-			u32 mode, i;
+			u32 mode;
 
 			if (!strcmp(optarg, "shuffle"))
 				mode = 1;
@@ -167,18 +166,6 @@ restart:
 				return 1;
 			}
 			skel->rodata->cid_override_mode = mode;
-
-			/* shuffle: reversed cpu_to_cid, bad-dup: dup cid 0, bad-range: identity */
-			for (i = 0; i < nr_cpus; i++) {
-				if (mode == 1)
-					skel->bss->cid_override_cpu_to_cid[i] = nr_cpus - 1 - i;
-				else
-					skel->bss->cid_override_cpu_to_cid[i] = i;
-			}
-			if (mode == 2 && nr_cpus >= 2)
-				skel->bss->cid_override_cpu_to_cid[1] = 0;
-			if (mode == 3)
-				skel->bss->cid_override_cpu_to_cid[0] = (s32)nr_cpus;
 			break;
 		}
 		case 'v':
@@ -191,9 +178,33 @@ restart:
 	}
 
 	SCX_OPS_LOAD(skel, qmap_ops, scx_qmap, uei);
-	link = SCX_OPS_ATTACH(skel, qmap_ops, scx_qmap);
 
 	qa = &skel->arena->qa;
+
+	/*
+	 * The cid-override array lives in the arena, which is mmapped at load.
+	 * Populate it before qmap_init() consumes it at attach.
+	 */
+	if (skel->rodata->cid_override_mode) {
+		u32 mode = skel->rodata->cid_override_mode;
+		u32 nr_cpus = libbpf_num_possible_cpus();
+		u32 i;
+
+		/* shuffle: reversed cpu_to_cid, bad-dup: dup cid 0, bad-range: identity */
+		for (i = 0; i < nr_cpus; i++) {
+			if (mode == 1)
+				qa->cid_override_cpu_to_cid[i] = nr_cpus - 1 - i;
+			else
+				qa->cid_override_cpu_to_cid[i] = i;
+		}
+		if (mode == 2 && nr_cpus >= 2)
+			qa->cid_override_cpu_to_cid[1] = 0;
+		if (mode == 3)
+			qa->cid_override_cpu_to_cid[0] = (s32)nr_cpus;
+	}
+
+	link = SCX_OPS_ATTACH(skel, qmap_ops, scx_qmap);
+
 	qa->test_error_cnt = test_error_cnt;
 
 	while (!exit_req && !UEI_EXITED(skel, uei)) {

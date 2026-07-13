@@ -278,8 +278,8 @@ __bpf_kfunc_start_defs();
 
 /**
  * scx_bpf_cid_override - Install an explicit cpu->cid mapping
- * @cpu_to_cid: array of nr_cpu_ids s32 entries (cid for each cpu)
- * @cpu_to_cid__sz: must be nr_cpu_ids * sizeof(s32) bytes
+ * @cpu_to_cid__arena: arena array of nr_cpu_ids s32 entries (cid for each cpu)
+ * @cnt: number of entries, must be nr_cpu_ids
  * @aux: implicit BPF argument to access bpf_prog_aux hidden from BPF progs
  *
  * May only be called from ops.init() of the root scheduler. Replace the
@@ -287,7 +287,7 @@ __bpf_kfunc_start_defs();
  * must map to a unique cid in [0, num_possible_cpus()). Topo info is cleared.
  * On invalid input, trigger scx_error() to abort the scheduler.
  */
-__bpf_kfunc void scx_bpf_cid_override(const s32 *cpu_to_cid, u32 cpu_to_cid__sz,
+__bpf_kfunc void scx_bpf_cid_override(const s32 *cpu_to_cid__arena, u32 cnt,
 				      const struct bpf_prog_aux *aux)
 {
 	cpumask_var_t seen __free(free_cpumask_var) = CPUMASK_VAR_NULL;
@@ -314,14 +314,24 @@ __bpf_kfunc void scx_bpf_cid_override(const s32 *cpu_to_cid, u32 cpu_to_cid__sz,
 		return;
 	}
 
-	if (cpu_to_cid__sz != nr_cpu_ids * sizeof(s32)) {
-		scx_error(sch, "scx_bpf_cid_override: expected %zu bytes, got %u",
-			  nr_cpu_ids * sizeof(s32), cpu_to_cid__sz);
+	if (!cpu_to_cid__arena) {
+		scx_error(sch, "scx_bpf_cid_override: NULL cpu_to_cid");
 		return;
 	}
 
+	if (cnt != nr_cpu_ids) {
+		scx_error(sch, "scx_bpf_cid_override: expected %u entries, got %u",
+			  nr_cpu_ids, cnt);
+		return;
+	}
+
+	/*
+	 * @cpu_to_cid__arena arrives rebased to the arena kernel mapping.
+	 * nr_cpu_ids * sizeof(s32) stays within the guard region covered by
+	 * arena fault recovery, so no explicit bounds check is needed.
+	 */
 	for_each_possible_cpu(cpu) {
-		s32 c = cpu_to_cid[cpu];
+		s32 c = cpu_to_cid__arena[cpu];
 
 		if (!cid_valid(sch, c))
 			return;

@@ -63,13 +63,6 @@ const volatile u32 max_tasks;
  *   3 = invalid: out-of-range cid
  */
 const volatile u32 cid_override_mode;
-/*
- * Array lives in bss (writable) because scx_bpf_cid_override()'s BPF
- * verifier signature treats its len-paired pointer as read/write - rodata
- * fails verification with "write into map forbidden". Userspace populates
- * it before SCX_OPS_LOAD, same as rodata, and nothing writes it after.
- */
-s32 cid_override_cpu_to_cid[SCX_QMAP_MAX_CPUS];
 
 UEI_DEFINE(uei);
 
@@ -1094,10 +1087,8 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(qmap_init)
 	 * cid space (scx_bpf_nr_cids, cmask_init, etc.). On invalid input,
 	 * the kfunc calls scx_error() which aborts the scheduler.
 	 */
-	if (cid_override_mode) {
-		scx_bpf_cid_override((const s32 *)cid_override_cpu_to_cid,
-				     nr_cpu_ids * sizeof(s32));
-	}
+	if (cid_override_mode)
+		scx_bpf_cid_override(qa.cid_override_cpu_to_cid, nr_cpu_ids);
 
 	/*
 	 * Allocate the task_ctx slab in arena and thread the entire slab onto

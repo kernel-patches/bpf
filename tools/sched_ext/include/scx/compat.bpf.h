@@ -7,6 +7,8 @@
 #ifndef __SCX_COMPAT_BPF_H
 #define __SCX_COMPAT_BPF_H
 
+#include "bpf_arena_common.bpf.h"
+
 #define __COMPAT_ENUM_OR_ZERO(__type, __ent)					\
 ({										\
 	__type __ret = 0;							\
@@ -125,12 +127,12 @@ static inline bool scx_bpf_sub_dispatch(u64 cgroup_id)
  * v7.2: scx_bpf_cid_override() for explicit cpu->cid mapping. Ignore if
  * missing.
  */
-void scx_bpf_cid_override___compat(const s32 *cpu_to_cid, u32 cpu_to_cid__sz) __ksym __weak;
+void scx_bpf_cid_override___compat(const s32 __arena *cpu_to_cid, u32 cnt) __ksym __weak;
 
-static inline void scx_bpf_cid_override(const s32 *cpu_to_cid, u32 cpu_to_cid__sz)
+static inline void scx_bpf_cid_override(const s32 __arena *cpu_to_cid, u32 cnt)
 {
 	if (bpf_ksym_exists(scx_bpf_cid_override___compat))
-		return scx_bpf_cid_override___compat(cpu_to_cid, cpu_to_cid__sz);
+		return scx_bpf_cid_override___compat(cpu_to_cid, cnt);
 }
 
 /**
