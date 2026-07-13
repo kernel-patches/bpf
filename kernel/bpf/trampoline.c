@@ -1568,47 +1568,41 @@ static void ftrace_hash_add(struct ftrace_hash *hash, struct ftrace_func_entry *
 	add_ftrace_hash_entry(hash, entry);
 }
 
-static int register_fentry_multi(struct bpf_trampoline *tr, struct bpf_tramp_image *im, void *ptr)
+static int update_fentry_multi(struct bpf_trampoline *tr, u32 orig_flags,
+			       struct bpf_tramp_image *im, struct ftrace_hash *hash,
+			       struct bpf_tracing_multi_data *data)
 {
-	unsigned long addr = (unsigned long) im->image;
+	unsigned long addr = (unsigned long)(im ? im->image : tr->cur_image->image);
 	unsigned long ip = ftrace_location(tr->ip);
-	struct bpf_tracing_multi_data *data = ptr;
 
 	if (bpf_trampoline_use_jmp(tr->flags))
 		addr = ftrace_jmp_set(addr);
 
-	ftrace_hash_add(data->reg, data->entry, ip, addr);
+	ftrace_hash_add(hash, data->entry, ip, addr);
 	tr->cur_image = im;
 	return 0;
 }
 
-static int unregister_fentry_multi(struct bpf_trampoline *tr, u32 orig_flags, void *ptr)
+static int register_fentry_multi(struct bpf_trampoline *tr, struct bpf_tramp_image *im, void *ptr)
 {
-	unsigned long addr = (unsigned long) tr->cur_image->image;
-	unsigned long ip = ftrace_location(tr->ip);
 	struct bpf_tracing_multi_data *data = ptr;
 
-	if (bpf_trampoline_use_jmp(tr->flags))
-		addr = ftrace_jmp_set(addr);
+	return update_fentry_multi(tr, 0, im, data->reg, data);
+}
 
-	ftrace_hash_add(data->unreg, data->entry, ip, addr);
-	tr->cur_image = NULL;
-	return 0;
+static int unregister_fentry_multi(struct bpf_trampoline *tr, u32 orig_flags, void *ptr)
+{
+	struct bpf_tracing_multi_data *data = ptr;
+
+	return update_fentry_multi(tr, orig_flags, NULL, data->unreg, data);
 }
 
 static int modify_fentry_multi(struct bpf_trampoline *tr, u32 orig_flags, struct bpf_tramp_image *im,
 			       bool lock_direct_mutex, void *ptr)
 {
-	unsigned long addr = (unsigned long) im->image;
-	unsigned long ip = ftrace_location(tr->ip);
 	struct bpf_tracing_multi_data *data = ptr;
 
-	if (bpf_trampoline_use_jmp(tr->flags))
-		addr = ftrace_jmp_set(addr);
-
-	ftrace_hash_add(data->modify, data->entry, ip, addr);
-	tr->cur_image = im;
-	return 0;
+	return update_fentry_multi(tr, orig_flags, im, data->modify, data);
 }
 
 static const struct bpf_trampoline_ops trampoline_multi_ops = {
