@@ -9,6 +9,7 @@
 
 struct bpf_reg_state;
 struct bpf_verifier_env;
+struct bpf_verifier_state;
 struct btf;
 
 void bpf_diag_format_btf_type(char *buf, size_t size, const struct btf *btf, u32 type_id);
@@ -83,6 +84,20 @@ static inline struct bpf_diag_mod_target bpf_diag_stack_range_target(u32 frameno
 	};
 }
 
+enum bpf_diag_context_kind {
+	BPF_DIAG_CONTEXT_NONE,
+	BPF_DIAG_CONTEXT_RCU,
+	BPF_DIAG_CONTEXT_PREEMPT,
+	BPF_DIAG_CONTEXT_IRQ,
+	BPF_DIAG_CONTEXT_LOCK,
+};
+
+enum bpf_diag_context_event_kind {
+	BPF_DIAG_CONTEXT_EVENT_RCU = BPF_DIAG_CONTEXT_RCU,
+	BPF_DIAG_CONTEXT_EVENT_PREEMPT = BPF_DIAG_CONTEXT_PREEMPT,
+	BPF_DIAG_CONTEXT_EVENT_IRQ = BPF_DIAG_CONTEXT_IRQ,
+	BPF_DIAG_CONTEXT_EVENT_LOCK = BPF_DIAG_CONTEXT_LOCK,
+};
 bool bpf_diag_enabled(const struct bpf_verifier_env *env);
 int bpf_diag_init(struct bpf_verifier_env *env);
 char *bpf_diag_scratch_buf(struct bpf_verifier_env *env, unsigned int slot, size_t *size);
@@ -96,6 +111,7 @@ const char *bpf_diag_format_btf_type_scratch(struct bpf_verifier_env *env, unsig
 u32 bpf_diag_event_log_pos(struct bpf_verifier_env *env);
 void bpf_diag_event_log_reset(struct bpf_verifier_env *env, u32 pos);
 int bpf_diag_error(const struct bpf_verifier_env *env);
+u32 bpf_diag_irq_depth(const struct bpf_verifier_state *state);
 void bpf_diag_free(struct bpf_verifier_env *env);
 void bpf_diag_report_header(struct bpf_verifier_env *env, const char *category,
 			    const char *problem);
@@ -108,5 +124,7 @@ void bpf_diag_record_mod(struct bpf_verifier_env *env, u32 insn_idx,
 			 const struct bpf_diag_mod_target *origin);
 void bpf_diag_record_ref_acquire(struct bpf_verifier_env *env, u32 insn_idx, u32 ref_id);
 void bpf_diag_record_ref_release(struct bpf_verifier_env *env, u32 insn_idx, u32 ref_id);
+void bpf_diag_record_context(struct bpf_verifier_env *env, u32 insn_idx,
+			     enum bpf_diag_context_event_kind ctx_kind, bool enter, u32 depth);
 
 #endif /* __BPF_DIAGNOSTICS_H */

@@ -52,6 +52,7 @@ enum bpf_diag_history_kind {
 	BPF_DIAG_HISTORY_MOD,
 	BPF_DIAG_HISTORY_REF_ACQUIRE,
 	BPF_DIAG_HISTORY_REF_RELEASE,
+	BPF_DIAG_HISTORY_CONTEXT,
 };
 
 struct bpf_diag_event_hdr {
@@ -81,6 +82,12 @@ struct bpf_diag_history_event {
 			struct bpf_diag_event_hdr hdr;
 			u32 ref_id;
 		} ref;
+		struct {
+			struct bpf_diag_event_hdr hdr;
+			u32 depth;
+			u8 kind;
+			bool enter;
+		} ctx;
 	};
 };
 
@@ -89,6 +96,7 @@ enum bpf_diag_history_scope {
 	BPF_DIAG_HISTORY_SCOPE_REG,
 	BPF_DIAG_HISTORY_SCOPE_STACK_ARG,
 	BPF_DIAG_HISTORY_SCOPE_REF,
+	BPF_DIAG_HISTORY_SCOPE_CONTEXT,
 };
 
 struct bpf_diag_history_opts {
@@ -97,6 +105,8 @@ struct bpf_diag_history_opts {
 	int regno;
 	int stack_arg_slot;
 	u32 ref_id;
+	enum bpf_diag_context_kind ctx_kind;
+	u32 ctx_depth;
 };
 
 static void diag_print_history(struct bpf_verifier_env *env,
@@ -286,6 +296,19 @@ void bpf_diag_event_log_reset(struct bpf_verifier_env *env, u32 pos)
 		pos = end;
 
 	log->cnt = pos;
+}
+
+u32 bpf_diag_irq_depth(const struct bpf_verifier_state *state)
+{
+	u32 depth = 0;
+	int i;
+
+	for (i = 0; i < state->acquired_refs; i++) {
+		if (state->refs[i].type == REF_TYPE_IRQ)
+			depth++;
+	}
+
+	return depth;
 }
 
 void bpf_diag_free(struct bpf_verifier_env *env)
@@ -956,6 +979,54 @@ void bpf_diag_record_ref_release(struct bpf_verifier_env *env, u32 insn_idx, u32
 	diag_record_ref(env, insn_idx, BPF_DIAG_HISTORY_REF_RELEASE, ref_id);
 }
 
+void bpf_diag_record_context(struct bpf_verifier_env *env, u32 insn_idx,
+			     enum bpf_diag_context_event_kind ctx_kind, bool enter, u32 depth)
+{
+	/*
+	 * Keep leave events so context rendering can stop at a depth-zero exit
+	 * and show nested-region depth accurately for the active path.
+	 */
+	struct bpf_diag_history_event event = {
+		.ctx = {
+			.hdr = {
+				.insn_idx = insn_idx,
+				.kind = BPF_DIAG_HISTORY_CONTEXT,
+			},
+			.kind = ctx_kind,
+			.enter = enter,
+			.depth = depth,
+		},
+	};
+
+	diag_append_history(env, &event);
+}
+
+static int diag_history_context_start_idx(const struct bpf_diag_log *log,
+					  const struct bpf_diag_history_opts *opts)
+{
+	int i;
+
+	if (!opts->ctx_depth)
+		return 0;
+
+	/* Find the most recent outermost entry, or a depth-zero exit. */
+	for (i = log->cnt; i > 0; i--) {
+		const struct bpf_diag_history_event *event;
+
+		event = diag_history_event(log, i - 1);
+
+		if (event->kind != BPF_DIAG_HISTORY_CONTEXT || event->ctx.kind != opts->ctx_kind)
+			continue;
+
+		if (event->ctx.enter && event->ctx.depth == 1)
+			return i - 1;
+		if (!event->ctx.enter && event->ctx.depth == 0)
+			return 0;
+	}
+
+	return 0;
+}
+
 struct bpf_diag_history_filter {
 	const struct bpf_diag_history_opts *opts;
 	unsigned long *lineage;
@@ -1111,6 +1182,8 @@ static int diag_history_start_idx(const struct bpf_diag_log *log,
 
 	if (!opts || opts->scope == BPF_DIAG_HISTORY_SCOPE_ALL)
 		return 0;
+	if (opts->scope == BPF_DIAG_HISTORY_SCOPE_CONTEXT)
+		return diag_history_context_start_idx(log, opts);
 	if (filter->lineage_valid)
 		return filter->lineage_start;
 	if (opts->scope != BPF_DIAG_HISTORY_SCOPE_REF)
@@ -1134,7 +1207,7 @@ static bool diag_history_event_visible(const struct bpf_diag_history_event *even
 	const struct bpf_diag_history_opts *opts = filter->opts;
 
 	if (!opts || opts->scope == BPF_DIAG_HISTORY_SCOPE_ALL)
-		return true;
+		return event->kind != BPF_DIAG_HISTORY_CONTEXT;
 
 	switch (event->kind) {
 	case BPF_DIAG_HISTORY_BRANCH:
@@ -1145,6 +1218,9 @@ static bool diag_history_event_visible(const struct bpf_diag_history_event *even
 	case BPF_DIAG_HISTORY_REF_RELEASE:
 		return opts->scope == BPF_DIAG_HISTORY_SCOPE_REF &&
 		       event->ref.ref_id == opts->ref_id;
+	case BPF_DIAG_HISTORY_CONTEXT:
+		return opts->scope == BPF_DIAG_HISTORY_SCOPE_CONTEXT &&
+		       event->ctx.kind == opts->ctx_kind;
 	default:
 		return false;
 	}
@@ -1442,6 +1518,31 @@ static void diag_print_ref_event(struct bpf_verifier_env *env,
 			       event->ref.ref_id);
 }
 
+static const char *diag_context_name(enum bpf_diag_context_kind kind)
+{
+	switch (kind) {
+	case BPF_DIAG_CONTEXT_RCU:
+		return "RCU read lock region";
+	case BPF_DIAG_CONTEXT_PREEMPT:
+		return "non-preemptible region";
+	case BPF_DIAG_CONTEXT_IRQ:
+		return "IRQ-disabled region";
+	case BPF_DIAG_CONTEXT_LOCK:
+		return "lock region";
+	case BPF_DIAG_CONTEXT_NONE:
+	default:
+		return "context";
+	}
+}
+
+static void diag_print_context_event(struct bpf_verifier_env *env,
+				     const struct bpf_diag_history_event *event)
+{
+	bpf_diag_report_source(env, event->insn_idx, "context", "%s %s; depth is now %u",
+			       event->ctx.enter ? "entered" : "left",
+			       diag_context_name(event->ctx.kind), event->ctx.depth);
+}
+
 static void diag_print_history(struct bpf_verifier_env *env,
 			       const struct bpf_diag_history_opts *opts)
 {
@@ -1504,6 +1605,9 @@ static void diag_print_history(struct bpf_verifier_env *env,
 		case BPF_DIAG_HISTORY_REF_ACQUIRE:
 		case BPF_DIAG_HISTORY_REF_RELEASE:
 			diag_print_ref_event(env, event);
+			break;
+		case BPF_DIAG_HISTORY_CONTEXT:
+			diag_print_context_event(env, event);
 			break;
 		default:
 			break;
