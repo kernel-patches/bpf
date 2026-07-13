@@ -14,6 +14,7 @@ struct bpf_verifier_state;
 struct btf;
 
 void bpf_diag_format_btf_type(char *buf, size_t size, const struct btf *btf, u32 type_id);
+void bpf_diag_format_s64_sum(char *buf, size_t size, s64 value, int addend);
 
 enum bpf_diag_mod_reason {
 	BPF_DIAG_MOD_WRITE,
@@ -136,6 +137,11 @@ void bpf_diag_report_unreadable_reg(struct bpf_verifier_env *env, u32 insn_idx, 
 void bpf_diag_report_stack_arg_uninit(struct bpf_verifier_env *env, u32 insn_idx, int nargs,
 				      int stack_arg_slot, const char *callee_name,
 				      const char *arg_name);
+void bpf_diag_report_memory(struct bpf_verifier_env *env, u32 insn_idx, const char *problem,
+			    const char *reason, const char *suggestion);
+void bpf_diag_report_mem_bounds(struct bpf_verifier_env *env, u32 insn_idx, int regno,
+				const char *reg_name, const char *type_name, const char *proof,
+				int off, int size, u32 mem_size, const struct bpf_reg_state *reg);
 int bpf_diag_record_branch(struct bpf_verifier_env *env, u32 insn_idx, bool cond_true);
 void bpf_diag_record_mod(struct bpf_verifier_env *env, u32 insn_idx,
 			 struct bpf_diag_mod_target target, enum bpf_diag_mod_reason reason,
