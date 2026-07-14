@@ -2857,6 +2857,7 @@ static inline void bpf_map_dec_elem_count(struct bpf_map *map)
 }
 
 extern int sysctl_unprivileged_bpf_disabled;
+extern bool bpf_iter_num_inline_enabled;
 
 bool bpf_token_capable(const struct bpf_token *token, int cap);
 

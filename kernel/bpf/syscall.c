@@ -6700,6 +6700,13 @@ static const struct ctl_table bpf_syscall_table[] = {
 		.mode		= 0644,
 		.proc_handler	= bpf_stats_handler,
 	},
+	{
+		.procname	= "bpf_iter_num_inline",
+		.data		= &bpf_iter_num_inline_enabled,
+		.maxlen		= sizeof(bpf_iter_num_inline_enabled),
+		.mode		= 0644,
+		.proc_handler	= proc_dobool,
+	},
 };
 
 static int __init bpf_syscall_sysctl_init(void)

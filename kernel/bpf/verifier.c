@@ -19818,6 +19818,14 @@ static void __fixup_collection_insert_kfunc(struct bpf_insn_aux_data *insn_aux,
 }
 
 /*
+ * Debug knob (kernel.bpf_iter_num_inline sysctl) to toggle inlining of the
+ * bpf_iter_num_{new,next,destroy}() kfuncs. Enabled by default; clearing it makes subsequently
+ * loaded programs call the kfuncs instead, which is useful for A/B measuring the impact of the
+ * inlining. Only affects programs loaded after the value is changed.
+ */
+bool bpf_iter_num_inline_enabled __read_mostly = true;
+
+/*
  * Inline bpf_iter_num_new(). R1 holds the pointer to the iterator, R2 and R3 hold the (int)
  * start and end arguments. Keep in sync with the kfunc in kernel/bpf/bpf_iter.c.
  */
@@ -20049,12 +20057,15 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[4] = BPF_ALU64_REG(BPF_SUB, BPF_REG_0, BPF_REG_1);
 		insn_buf[5] = BPF_ALU64_IMM(BPF_NEG, BPF_REG_0, 0);
 		*cnt = 6;
-	} else if (desc->func_id == special_kfunc_list[KF_bpf_iter_num_new]) {
+	} else if (bpf_iter_num_inline_enabled &&
+		   desc->func_id == special_kfunc_list[KF_bpf_iter_num_new]) {
 		*cnt = inline_bpf_iter_num_new(insn_buf,
 					       &env->insn_aux_data[insn_idx].iter_num_new_state);
-	} else if (desc->func_id == special_kfunc_list[KF_bpf_iter_num_next]) {
+	} else if (bpf_iter_num_inline_enabled &&
+		   desc->func_id == special_kfunc_list[KF_bpf_iter_num_next]) {
 		*cnt = inline_bpf_iter_num_next(insn_buf);
-	} else if (desc->func_id == special_kfunc_list[KF_bpf_iter_num_destroy]) {
+	} else if (bpf_iter_num_inline_enabled &&
+		   desc->func_id == special_kfunc_list[KF_bpf_iter_num_destroy]) {
 		*cnt = inline_bpf_iter_num_destroy(insn_buf);
 	}
 
