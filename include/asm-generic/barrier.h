@@ -352,6 +352,46 @@ do {									\
 })
 #endif
 
+/**
+ * smp_cond_load_acquire_timeout() - (Spin) wait for cond until a timeout
+ * expires. ACQUIRE ordering when @cond_expr is satisfied.
+ * @ptr: pointer to the variable to wait on.
+ * @cond_expr: boolean expression to wait for.
+ * @time_expr_ns: monotonic expression that evaluates to time in ns or,
+ *  on failure, returns a negative value.
+ * @timeout_ns: timeout value in ns
+ * (Both of the above are assumed to be compatible with s64.)
+ *
+ * Equivalent to using smp_cond_load_acquire() on the condition variable with
+ * a timeout.
+ */
+#ifndef smp_cond_load_acquire_timeout
+#define smp_cond_load_acquire_timeout(ptr, cond_expr,			\
+				      time_expr_ns, timeout_ns)		\
+({									\
+	__unqual_scalar_typeof(*(ptr)) VAL;				\
+	VAL = smp_cond_load_relaxed_timeout(ptr, cond_expr,		\
+					     time_expr_ns,		\
+					     timeout_ns);		\
+	/*								\
+	 * We arrive here once the loop condition is hit, on timeout,	\
+	 * or, if we hit both the timeout and the loop condition.	\
+	 *								\
+	 * The last case is low probability, but possible in the last	\
+	 * iteration, especially on architectures with waiting		\
+	 * cpu_poll_relax() implementations (ex. arm64).		\
+	 * Now since the loop condition is not evaluated on timeout,	\
+	 * we have a missed control dependency.				\
+	 *								\
+	 * So, force a re-evaluation of the control dependency to	\
+	 * provide an ACQUIRE ordering for that case as well.		\
+	 */								\
+	if (cond_expr)							\
+		smp_acquire__after_ctrl_dep();				\
+	(typeof(*(ptr)))VAL;						\
+})
+#endif
+
 /*
  * pmem_wmb() ensures that all stores for which the modification
  * are written to persistent storage by preceding instructions have
