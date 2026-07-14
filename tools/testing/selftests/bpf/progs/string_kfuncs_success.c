@@ -6,6 +6,7 @@
 #include "errno.h"
 
 char str[] = "hello world";
+char buf[32] = "hello";
 
 #define __test(retval) SEC("syscall") __success __retval(retval)
 
@@ -59,5 +60,7 @@ __test(-ENOENT) int test_strncasestr_notfound1(void *ctx) { return bpf_strncases
 __test(-ENOENT) int test_strncasestr_notfound2(void *ctx) { return bpf_strncasestr(str, "hello", 4); }
 __test(-ENOENT) int test_strncasestr_notfound3(void *ctx) { return bpf_strncasestr("", "a", 0); }
 __test(0) int test_strncasestr_empty(void *ctx) { return bpf_strncasestr(str, "", 1); }
+__test(5) int test_strcat_success(void *ctx) { return bpf_strcat(buf, sizeof(buf), "world"); }
+__test(3) int test_strncat_success(void *ctx) { return bpf_strncat(buf, sizeof(buf), "world", 3); }
 
 char _license[] SEC("license") = "GPL";
