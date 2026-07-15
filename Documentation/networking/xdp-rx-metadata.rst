@@ -90,6 +90,11 @@ conversion, and the XDP metadata is not used by the kernel when building
 ``skbs``. However, TC-BPF programs can access the XDP metadata area using
 the ``data_meta`` pointer.
 
+If a driver is running in XDP mode, any existing hardware RX checksum
+(``CHECKSUM_UNNECESSARY`` or ``CHECKSUM_COMPLETE``) must be invalidated
+by setting ``skb->ip_summed`` to ``CHECKSUM_NONE`` before passing the
+skb to the kernel, since XDP may have modified the packet data.
+
 In the future, we'd like to support a case where an XDP program
 can override some of the metadata used for building ``skbs``.
 

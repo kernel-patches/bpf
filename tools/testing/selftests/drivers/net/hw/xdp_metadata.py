@@ -8,12 +8,13 @@ These tests load device-bound XDP programs from xdp_metadata.bpf.o
 that call metadata kfuncs, send traffic, and verify the extracted
 metadata via BPF maps.
 """
+import json
 from lib.py import ksft_run, ksft_eq, ksft_exit, ksft_ge, ksft_ne, ksft_pr
 from lib.py import KsftNamedVariant, ksft_variants
 from lib.py import CmdExitFailure, KsftSkipEx, NetDrvEpEnv
 from lib.py import NetdevFamily
 from lib.py import bkg, cmd, rand_port, wait_port_listen
-from lib.py import ip, bpftool, defer
+from lib.py import ip, bpftool, defer, ethtool
 from lib.py import bpf_map_set, bpf_map_dump, bpf_prog_map_ids
 
 
@@ -130,6 +131,57 @@ def test_xdp_rss_hash(cfg, proto):
             f"RSS hash type should include L4 for {proto.upper()} traffic")
 
 
+def test_xdp_pass_rx_csum(cfg):
+    """Test xdp_pass sets CHECKSUM_NONE on the resulting skb.
+
+    Attaches an XDP program that returns XDP_PASS and a TC ingress
+    program that checks skb->ip_summed via bpf_skb_rx_checksum().
+    Verifies the value is CHECKSUM_NONE.
+    """
+
+    bpf_obj = cfg.net_lib_dir / "skb_metadata_csum.bpf.o"
+    xdp_obj = cfg.net_lib_dir / "xdp_dummy.bpf.o"
+
+    # GRO may overwrite skb->ip_summed after the driver sets it,
+    # so disable it to preserve the checksum set by the driver.
+    ethtool(f"-K {cfg.ifname} gro off")
+    defer(ethtool, f"-K {cfg.ifname} gro on")
+    ip(f"link set dev {cfg.ifname} xdp obj {xdp_obj} sec xdp")
+    defer(ip, f"link set dev {cfg.ifname} xdp off")
+
+    qdiscs = json.loads(cmd(f"tc -j qdisc show dev {cfg.ifname}").stdout)
+    if not any(q['kind'] == 'clsact' for q in qdiscs):
+        cmd(f"tc qdisc add dev {cfg.ifname} clsact")
+        defer(cmd, f"tc qdisc del dev {cfg.ifname} clsact")
+    cmd(f"tc filter add dev {cfg.ifname} ingress bpf da obj {bpf_obj} sec tc")
+
+    progs = bpftool("prog list", json=True)
+    tc_prog_id = None
+    for p in progs:
+        if p.get("name") == "tc_check_csum":
+            tc_prog_id = p["id"]
+            break
+
+    if tc_prog_id is None:
+        raise KsftSkipEx("Could not find tc_check_csum BPF program")
+
+    maps = bpf_prog_map_ids(tc_prog_id)
+    csum_map_id = maps.get("map_csum_result")
+    if csum_map_id is None:
+        raise KsftSkipEx("Could not find map_csum_result map")
+
+    for _ in range(10):
+        _send_probe(cfg, 12345, proto="udp")
+
+    result = bpf_map_dump(csum_map_id)
+    csum_none = result.get(0, 0)
+    csum_unnecessary = result.get(1, 0)
+    csum_complete = result.get(2, 0)
+    ksft_ge(csum_none, 1, "skb->ip_summed should be CHECKSUM_NONE after XDP_PASS")
+    ksft_eq(csum_unnecessary, 0, "CHECKSUM_UNNECESSARY should not be set")
+    ksft_eq(csum_complete, 0, "CHECKSUM_COMPLETE should not be set")
+
+
 def main():
     """Run XDP metadata kfunc tests against a real device."""
     with NetDrvEpEnv(__file__) as cfg:
@@ -137,6 +189,7 @@ def main():
         ksft_run(
             [
                 test_xdp_rss_hash,
+                test_xdp_pass_rx_csum,
             ],
             args=(cfg,))
     ksft_exit()
