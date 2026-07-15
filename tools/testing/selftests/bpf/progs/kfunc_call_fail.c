@@ -104,6 +104,33 @@ int kfunc_call_test_get_mem_fail_oob(struct __sk_buff *skb)
 }
 
 SEC("?tc")
+int kfunc_call_test_get_mem_fail_zero_size(struct __sk_buff *skb)
+{
+	struct prog_test_ref_kfunc *pt;
+	unsigned long s = 0;
+	int *p = NULL;
+	int ret = 0;
+
+	pt = bpf_kfunc_call_test_acquire(&s);
+	if (pt) {
+		/*
+		 * An explicit rdwr_buf_size of 0 gives R0 a zero-sized buffer,
+		 * so any access is out of bounds, hence -EACCES. Previously the
+		 * verifier treated a zero size as "no size argument" and sized
+		 * R0 after the pointed-to return type, wrongly allowing the read.
+		 */
+		p = bpf_kfunc_call_test_get_rdwr_mem(pt, 0);
+		if (p)
+			ret = p[0];
+		else
+			ret = -1;
+
+		bpf_kfunc_call_test_release(pt);
+	}
+	return ret;
+}
+
+SEC("?tc")
 int kfunc_call_test_get_mem_fail_oversized(struct __sk_buff *skb)
 {
 	struct prog_test_ref_kfunc *pt;
