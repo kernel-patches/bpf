@@ -12713,6 +12713,36 @@ __bpf_kfunc int bpf_icmp_send(struct __sk_buff *skb_ctx, int type, int code)
 	return 0;
 }
 
+/**
+ * bpf_skb_rx_checksum() - Read skb RX checksum info.
+ * @skb_: socket buffer to read from
+ * @ip_summed: return value for skb->ip_summed
+ * @csum_meta: checksum metadata
+ *
+ * Reads the checksum-related fields from a socket buffer. For
+ * %CHECKSUM_COMPLETE, csum_meta reports the hardware checksum value.
+ * For %CHECKSUM_UNNECESSARY, csum_meta reports the checksum level.
+ * For %CHECKSUM_NONE, csum_meta is zero.
+ *
+ * Return:
+ * * %0 - success
+ */
+__bpf_kfunc int bpf_skb_rx_checksum(struct __sk_buff *skb_, u32 *ip_summed,
+				    u32 *csum_meta)
+{
+	struct sk_buff *skb = (struct sk_buff *)skb_;
+
+	*ip_summed = skb->ip_summed;
+	if (skb->ip_summed == CHECKSUM_COMPLETE)
+		*csum_meta = skb->csum;
+	else if (skb->ip_summed == CHECKSUM_UNNECESSARY)
+		*csum_meta = skb->csum_level;
+	else
+		*csum_meta = 0;
+
+	return 0;
+}
+
 __bpf_kfunc_end_defs();
 
 int bpf_dynptr_from_skb_rdonly(struct __sk_buff *skb, u64 flags,
@@ -12732,6 +12762,7 @@ int bpf_dynptr_from_skb_rdonly(struct __sk_buff *skb, u64 flags,
 
 BTF_KFUNCS_START(bpf_kfunc_check_set_skb)
 BTF_ID_FLAGS(func, bpf_dynptr_from_skb)
+BTF_ID_FLAGS(func, bpf_skb_rx_checksum)
 BTF_KFUNCS_END(bpf_kfunc_check_set_skb)
 
 BTF_KFUNCS_START(bpf_kfunc_check_set_skb_meta)
