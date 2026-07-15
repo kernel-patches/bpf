@@ -5619,6 +5619,8 @@ int bpf_map_direct_read(struct bpf_map *map, int off, int size, u64 *val,
 	u64 addr;
 	int err;
 
+	if (map->map_type == BPF_MAP_TYPE_INSN_ARRAY || map->map_type == BPF_MAP_TYPE_PERCPU_ARRAY)
+		return -EINVAL;
 	err = map->ops->map_direct_value_addr(map, &addr, off);
 	if (err)
 		return err;
@@ -6178,6 +6180,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 			if (tnum_is_const(reg->var_off) &&
 			    bpf_map_is_rdonly(map) &&
 			    map->ops->map_direct_value_addr &&
+			    map->map_type != BPF_MAP_TYPE_PERCPU_ARRAY &&
 			    map->map_type != BPF_MAP_TYPE_INSN_ARRAY) {
 				int map_off = off + reg->var_off.value;
 				u64 val = 0;
@@ -8176,6 +8179,12 @@ static int check_arg_const_str(struct bpf_verifier_env *env,
 
 	if (map->map_type == BPF_MAP_TYPE_INSN_ARRAY) {
 		verbose(env, "%s points to insn_array map which cannot be used as const string\n",
+			reg_arg_name(env, argno));
+		return -EACCES;
+	}
+
+	if (map->map_type == BPF_MAP_TYPE_PERCPU_ARRAY) {
+		verbose(env, "%s points to percpu_array map which cannot be used as const string\n",
 			reg_arg_name(env, argno));
 		return -EACCES;
 	}
@@ -18291,6 +18300,12 @@ static int check_and_resolve_insns(struct bpf_verifier_env *env)
 				if (!map->ops->map_direct_value_addr) {
 					verbose(env, "no direct value access support for this map type\n");
 					return -EINVAL;
+				}
+
+				if (map->map_type == BPF_MAP_TYPE_PERCPU_ARRAY &&
+				    !env->prog->jit_requested) {
+					verbose(env, "JIT is required to use global percpu data\n");
+					return -EOPNOTSUPP;
 				}
 
 				err = map->ops->map_direct_value_addr(map, &addr, off);
