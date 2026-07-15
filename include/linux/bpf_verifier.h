@@ -1479,18 +1479,23 @@ struct ret_mem_desc {
 	bool found;
 };
 
-struct bpf_kfunc_call_arg_meta {
-	/* In parameters */
+struct bpf_call_arg_meta {
+	/* Common */
 	struct btf *btf;
 	u32 func_id;
+	u8 release_regno;
+	u32 ret_btf_id;
+	u32 subprogno;
+	struct bpf_map_desc map;
+	struct bpf_dynptr_desc dynptr;
+	struct ref_obj_desc ref_obj;
+	struct ret_mem_desc ret_mem;
+
+	/* Only set by kfunc */
+	bool r0_rdonly;
 	u32 kfunc_flags;
 	const struct btf_type *func_proto;
 	const char *func_name;
-	/* Out parameters */
-	u8 release_regno;
-	bool r0_rdonly;
-	u32 ret_btf_id;
-	u32 subprogno;
 	struct {
 		u64 value;
 		bool found;
@@ -1521,28 +1526,31 @@ struct bpf_kfunc_call_arg_meta {
 		u8 spi;
 		u8 frameno;
 	} iter;
-	struct bpf_map_desc map;
-	struct bpf_dynptr_desc dynptr;
-	struct ref_obj_desc ref_obj;
-	struct ret_mem_desc ret_mem;
+
+	/* Only set by helper */
+	u64 msize_max_value;
+	s64 const_map_key;
+	struct btf *ret_btf;
+	struct btf_field *kptr_field;
+	struct arg_raw_mem_desc arg_raw_mem;
 };
 
 int bpf_get_helper_proto(struct bpf_verifier_env *env, int func_id,
 			 const struct bpf_func_proto **ptr);
 int bpf_fetch_kfunc_arg_meta(struct bpf_verifier_env *env, s32 func_id,
-			     s16 offset, struct bpf_kfunc_call_arg_meta *meta);
+			     s16 offset, struct bpf_call_arg_meta *meta);
 bool bpf_is_async_callback_calling_insn(struct bpf_insn *insn);
 bool bpf_is_sync_callback_calling_insn(struct bpf_insn *insn);
-static inline bool bpf_is_iter_next_kfunc(struct bpf_kfunc_call_arg_meta *meta)
+static inline bool bpf_is_iter_next_kfunc(struct bpf_call_arg_meta *meta)
 {
 	return meta->kfunc_flags & KF_ITER_NEXT;
 }
 
-static inline bool bpf_is_kfunc_sleepable(struct bpf_kfunc_call_arg_meta *meta)
+static inline bool bpf_is_kfunc_sleepable(struct bpf_call_arg_meta *meta)
 {
 	return meta->kfunc_flags & KF_SLEEPABLE;
 }
-bool bpf_is_kfunc_pkt_changing(struct bpf_kfunc_call_arg_meta *meta);
+bool bpf_is_kfunc_pkt_changing(struct bpf_call_arg_meta *meta);
 struct bpf_iarray *bpf_iarray_realloc(struct bpf_iarray *old, size_t n_elem);
 int bpf_copy_insn_array_uniq(struct bpf_map *map, u32 start, u32 end, u32 *off);
 bool bpf_insn_is_cond_jump(u8 code);
