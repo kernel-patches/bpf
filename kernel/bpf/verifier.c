@@ -19721,6 +19721,40 @@ static void __fixup_collection_insert_kfunc(struct bpf_insn_aux_data *insn_aux,
 	*cnt = 4;
 }
 
+/*
+ * Inline bpf_iter_num_new(). R1 holds the pointer to the iterator, R2 and R3
+ * hold the (int) start and end arguments. Keep in sync with the kfunc in
+ * kernel/bpf/bpf_iter.c.
+ */
+static int inline_bpf_iter_num_new(struct bpf_insn *insn_buf)
+{
+	/* if (start > end) goto einval; */
+	insn_buf[0] = BPF_JMP32_REG(BPF_JSGT, BPF_REG_2, BPF_REG_3, 9);
+	/* r0 = (s64)end - (s64)start; */
+	insn_buf[1] = BPF_MOVSX64_REG(BPF_REG_0, BPF_REG_3, 32);
+	insn_buf[2] = BPF_MOVSX64_REG(BPF_REG_4, BPF_REG_2, 32);
+	insn_buf[3] = BPF_ALU64_REG(BPF_SUB, BPF_REG_0, BPF_REG_4);
+	/* if (r0 > BPF_MAX_LOOPS) goto e2big; */
+	insn_buf[4] = BPF_JMP_IMM(BPF_JSGT, BPF_REG_0, BPF_MAX_LOOPS, 8);
+	/* s->cur = start - 1; */
+	insn_buf[5] = BPF_ALU32_IMM(BPF_ADD, BPF_REG_2, -1);
+	insn_buf[6] = BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_2, 0);
+	/* s->end = end; */
+	insn_buf[7] = BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_3, 4);
+	/* return 0; */
+	insn_buf[8] = BPF_MOV64_IMM(BPF_REG_0, 0);
+	insn_buf[9] = BPF_JMP_A(5);
+	/* einval: s->cur = s->end = 0; return -EINVAL; */
+	insn_buf[10] = BPF_ST_MEM(BPF_DW, BPF_REG_1, 0, 0);
+	insn_buf[11] = BPF_MOV64_IMM(BPF_REG_0, -EINVAL);
+	insn_buf[12] = BPF_JMP_A(2);
+	/* e2big: s->cur = s->end = 0; return -E2BIG; */
+	insn_buf[13] = BPF_ST_MEM(BPF_DW, BPF_REG_1, 0, 0);
+	insn_buf[14] = BPF_MOV64_IMM(BPF_REG_0, -E2BIG);
+
+	return 15;
+}
+
 int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		     struct bpf_insn *insn_buf, int insn_idx, int *cnt)
 {
@@ -19850,6 +19884,8 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[4] = BPF_ALU64_REG(BPF_SUB, BPF_REG_0, BPF_REG_1);
 		insn_buf[5] = BPF_ALU64_IMM(BPF_NEG, BPF_REG_0, 0);
 		*cnt = 6;
+	} else if (desc->func_id == special_kfunc_list[KF_bpf_iter_num_new]) {
+		*cnt = inline_bpf_iter_num_new(insn_buf);
 	}
 
 	if (env->insn_aux_data[insn_idx].arg_prog) {
