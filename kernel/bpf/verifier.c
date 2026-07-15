@@ -8275,7 +8275,7 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	u32 regno = BPF_REG_1 + arg;
 	struct bpf_reg_state *reg = reg_state(env, regno);
 	enum bpf_arg_type arg_type = fn->arg_type[arg];
-	argno_t argno = argno_from_arg(arg + 1);
+	argno_t argno = argno_from_reg(regno);
 	enum bpf_reg_type type = reg->type;
 	u32 *arg_btf_id = NULL;
 	u32 key_size;
@@ -8320,11 +8320,11 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	    base_type(arg_type) == ARG_PTR_TO_SPIN_LOCK)
 		arg_btf_id = fn->arg_btf_id[arg];
 
-	err = check_reg_type(env, reg, argno_from_reg(regno), arg_type, arg_btf_id, meta);
+	err = check_reg_type(env, reg, argno, arg_type, arg_btf_id, meta);
 	if (err)
 		return err;
 
-	err = check_func_arg_reg_off(env, reg, argno_from_reg(regno), arg_type);
+	err = check_func_arg_reg_off(env, reg, argno, arg_type);
 	if (err)
 		return err;
 
@@ -8381,7 +8381,7 @@ skip_type_check:
 			return -EFAULT;
 		}
 		key_size = meta->map.ptr->key_size;
-		err = check_helper_mem_access(env, reg, argno_from_reg(regno), key_size, BPF_READ, false, NULL);
+		err = check_helper_mem_access(env, reg, argno, key_size, BPF_READ, false, NULL);
 		if (err)
 			return err;
 		if (can_elide_value_nullness(meta->map.ptr)) {
@@ -8407,7 +8407,7 @@ skip_type_check:
 			verifier_bug(env, "invalid map_ptr to access map->value");
 			return -EFAULT;
 		}
-		err = check_helper_mem_access(env, reg, argno_from_reg(regno), meta->map.ptr->value_size,
+		err = check_helper_mem_access(env, reg, argno, meta->map.ptr->value_size,
 					      arg_type & MEM_WRITE ? BPF_WRITE : BPF_READ,
 					      false, meta);
 		break;
@@ -8425,11 +8425,11 @@ skip_type_check:
 			return -EACCES;
 		}
 		if (meta->func_id == BPF_FUNC_spin_lock) {
-			err = process_spin_lock(env, reg, argno_from_reg(regno), PROCESS_SPIN_LOCK);
+			err = process_spin_lock(env, reg, argno, PROCESS_SPIN_LOCK);
 			if (err)
 				return err;
 		} else if (meta->func_id == BPF_FUNC_spin_unlock) {
-			err = process_spin_lock(env, reg, argno_from_reg(regno), 0);
+			err = process_spin_lock(env, reg, argno, 0);
 			if (err)
 				return err;
 		} else {
@@ -8438,7 +8438,7 @@ skip_type_check:
 		}
 		break;
 	case ARG_PTR_TO_TIMER:
-		err = process_timer_helper(env, reg, argno_from_reg(regno), meta);
+		err = process_timer_helper(env, reg, argno, meta);
 		if (err)
 			return err;
 		break;
@@ -8450,7 +8450,7 @@ skip_type_check:
 		 * next is_mem_size argument below.
 		 */
 		if (arg_type & MEM_FIXED_SIZE) {
-			err = check_helper_mem_access(env, reg, argno_from_reg(regno), fn->arg_size[arg],
+			err = check_helper_mem_access(env, reg, argno, fn->arg_size[arg],
 						      arg_type & MEM_WRITE ? BPF_WRITE : BPF_READ,
 						      false, meta);
 			if (err)
@@ -8460,21 +8460,19 @@ skip_type_check:
 		}
 		break;
 	case ARG_CONST_SIZE:
-		err = check_mem_size_reg(env, reg_state(env, regno - 1), reg, argno_from_reg(regno - 1),
-					 argno_from_reg(regno),
-					 fn->arg_type[arg - 1] & MEM_WRITE ?
-					 BPF_WRITE : BPF_READ,
+		err = check_mem_size_reg(env, reg_state(env, regno - 1), reg,
+					 argno_from_reg(regno - 1), argno,
+					 fn->arg_type[arg - 1] & MEM_WRITE ? BPF_WRITE : BPF_READ,
 					 false, meta);
 		break;
 	case ARG_CONST_SIZE_OR_ZERO:
-		err = check_mem_size_reg(env, reg_state(env, regno - 1), reg, argno_from_reg(regno - 1),
-					 argno_from_reg(regno),
-					 fn->arg_type[arg - 1] & MEM_WRITE ?
-					 BPF_WRITE : BPF_READ,
+		err = check_mem_size_reg(env, reg_state(env, regno - 1), reg,
+					 argno_from_reg(regno - 1), argno,
+					 fn->arg_type[arg - 1] & MEM_WRITE ? BPF_WRITE : BPF_READ,
 					 true, meta);
 		break;
 	case ARG_PTR_TO_DYNPTR:
-		err = process_dynptr_func(env, reg, argno_from_reg(regno), insn_idx, arg_type, &meta->ref_obj,
+		err = process_dynptr_func(env, reg, argno, insn_idx, arg_type, &meta->ref_obj,
 					  &meta->dynptr);
 		if (err)
 			return err;
@@ -8492,7 +8490,7 @@ skip_type_check:
 		break;
 	case ARG_PTR_TO_CONST_STR:
 	{
-		err = check_arg_const_str(env, reg, argno_from_reg(regno));
+		err = check_arg_const_str(env, reg, argno);
 		if (err)
 			return err;
 		break;
