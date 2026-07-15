@@ -64,6 +64,14 @@ struct bpf_tcp_req_attrs;
 extern int bpf_sk_assign_tcp_reqsk(struct __sk_buff *skb, struct sock *sk,
 				   struct bpf_tcp_req_attrs *attrs, int attrs__sz) __ksym;
 
+/* Description
+ *  Read skb RX checksum info (ip_summed and csum_meta).
+ * Returns
+ *  0 on success
+ */
+extern int bpf_skb_rx_checksum(struct __sk_buff *skb, __u32 *ip_summed,
+			       __u32 *csum_meta) __ksym;
+
 void *bpf_cast_to_kern_ctx(void *) __ksym;
 
 extern void *bpf_rdonly_cast(const void *obj, __u32 btf_id) __ksym __weak;
