@@ -258,7 +258,6 @@ struct bpf_call_arg_meta {
 	struct ref_obj_desc ref_obj;
 	struct arg_raw_mem_desc arg_raw_mem;
 	struct ret_mem_desc ret_mem;
-	bool pkt_access;
 	u8 release_regno;
 	u64 msize_max_value;
 	int func_id;
@@ -4673,7 +4672,7 @@ static int check_map_access(struct bpf_verifier_env *env, struct bpf_reg_state *
 }
 
 static bool may_access_direct_pkt_data(struct bpf_verifier_env *env,
-			       const struct bpf_call_arg_meta *meta,
+			       const struct bpf_func_proto *fn,
 			       enum bpf_access_type t)
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
@@ -4697,8 +4696,8 @@ static bool may_access_direct_pkt_data(struct bpf_verifier_env *env,
 	case BPF_PROG_TYPE_LWT_XMIT:
 	case BPF_PROG_TYPE_SK_SKB:
 	case BPF_PROG_TYPE_SK_MSG:
-		if (meta)
-			return meta->pkt_access;
+		if (fn)
+			return fn->pkt_access;
 
 		env->seen_direct_write = true;
 		return true;
@@ -8332,7 +8331,7 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	}
 
 	if (type_is_pkt_pointer(type) &&
-	    !may_access_direct_pkt_data(env, meta, BPF_READ)) {
+	    !may_access_direct_pkt_data(env, fn, BPF_READ)) {
 		verbose(env, "helper access to the packet is not allowed\n");
 		return -EACCES;
 	}
@@ -10285,7 +10284,6 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	}
 
 	memset(&meta, 0, sizeof(meta));
-	meta.pkt_access = fn->pkt_access;
 
 	err = check_func_proto(fn, &meta);
 	if (err) {
