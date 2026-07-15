@@ -419,6 +419,19 @@ static int setup_netns(void)
 {
 	int err;
 
+	/*
+	 * a new netns copies the IPv4 conf from init_net, so on a host with
+	 * forwarding enabled the arms that expect FWD_DISABLED would see the
+	 * lookup succeed instead; pin it off here and enable it per device
+	 */
+	err = write_sysctl("/proc/sys/net/ipv4/conf/all/forwarding", "0");
+	if (!ASSERT_OK(err, "write_sysctl(net.ipv4.conf.all.forwarding)"))
+		goto fail;
+
+	err = write_sysctl("/proc/sys/net/ipv4/conf/default/forwarding", "0");
+	if (!ASSERT_OK(err, "write_sysctl(net.ipv4.conf.default.forwarding)"))
+		goto fail;
+
 	SYS(fail, "ip link add veth1 type veth peer name veth2");
 	SYS(fail, "ip link set dev veth1 up");
 	SYS(fail, "ip link set dev veth2 up");
@@ -896,6 +909,14 @@ void test_fib_lookup_vlan_netns(void)
 	parent_idx = if_nametoindex("veth7");
 	if (!ASSERT_NEQ(parent_idx, 0, "if_nametoindex(veth7)"))
 		goto fail;
+
+	/*
+	 * give this netns a route to the destination: the lookup below runs
+	 * against this FIB, so without the route a kernel that resolved the
+	 * moved device anyway would still return NOT_FWDED and the arm would
+	 * pass for the wrong reason
+	 */
+	SYS(fail, "ip route add %s/32 dev veth7", IPV4_VLAN_NETNS_DST);
 
 	/*
 	 * input: the moved device is still in veth7's VLAN group, but it
