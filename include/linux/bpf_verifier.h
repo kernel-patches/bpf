@@ -1464,6 +1464,15 @@ struct ref_obj_desc {
 	u8 cnt;
 };
 
+/*
+ * A memory argument a call fills in. The verifier allows the stack to be uninitialized if
+ * the range is a known constant. Stack slots are marked as STACK_MISC by check_mem_access().
+ */
+struct arg_raw_mem_desc {
+	u8 regno;
+	int size;
+};
+
 struct bpf_kfunc_call_arg_meta {
 	/* In parameters */
 	struct btf *btf;

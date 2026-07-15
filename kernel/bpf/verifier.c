@@ -256,11 +256,9 @@ struct bpf_call_arg_meta {
 	struct bpf_map_desc map;
 	struct bpf_dynptr_desc dynptr;
 	struct ref_obj_desc ref_obj;
-	bool raw_mode;
+	struct arg_raw_mem_desc arg_raw_mem;
 	bool pkt_access;
 	u8 release_regno;
-	int regno;
-	int access_size;
 	int mem_size;
 	u64 msize_max_value;
 	int func_id;
@@ -6690,6 +6688,8 @@ static int check_stack_range_initialized(
 	 * but BTF based global subprog validation isn't accurate enough.
 	 */
 	bool allow_poison = access_size < 0 || clobber;
+	/* The call will initialize the memory; uninitialized stack allowed */
+	bool raw_mode = meta && meta->arg_raw_mem.regno == reg_from_argno(argno);
 
 	access_size = abs(access_size);
 
@@ -6725,16 +6725,14 @@ static int check_stack_range_initialized(
 		 * helper return since specific bounds are unknown what may
 		 * cause uninitialized stack leaking.
 		 */
-		if (meta && meta->raw_mode)
-			meta = NULL;
+		raw_mode = false;
 
 		min_off = reg_smin(reg) + off;
 		max_off = reg_smax(reg) + off;
 	}
 
-	if (meta && meta->raw_mode) {
-		meta->access_size = access_size;
-		meta->regno = reg_from_argno(argno);
+	if (raw_mode) {
+		meta->arg_raw_mem.size = access_size;
 		return 0;
 	}
 
@@ -7727,7 +7725,13 @@ static bool arg_type_is_mem_size(enum bpf_arg_type type)
 
 static bool arg_type_is_raw_mem(enum bpf_arg_type type)
 {
-	return base_type(type) == ARG_PTR_TO_MEM &&
+	/*
+	 * A map value output buffer (e.g. bpf_map_pop_elem) is also a raw
+	 * (uninitialized) memory argument, and like ARG_PTR_TO_MEM it may be
+	 * passed as a PTR_TO_STACK that reaches check_stack_range_initialized().
+	 */
+	return (base_type(type) == ARG_PTR_TO_MEM ||
+		base_type(type) == ARG_PTR_TO_MAP_VALUE) &&
 	       type & MEM_UNINIT;
 }
 
@@ -8403,7 +8407,6 @@ skip_type_check:
 			verifier_bug(env, "invalid map_ptr to access map->value");
 			return -EFAULT;
 		}
-		meta->raw_mode = arg_type & MEM_UNINIT;
 		err = check_helper_mem_access(env, reg, argno_from_reg(regno), meta->map.ptr->value_size,
 					      arg_type & MEM_WRITE ? BPF_WRITE : BPF_READ,
 					      false, meta);
@@ -8446,7 +8449,6 @@ skip_type_check:
 		/* The access to this pointer is only checked when we hit the
 		 * next is_mem_size argument below.
 		 */
-		meta->raw_mode = arg_type & MEM_UNINIT;
 		if (arg_type & MEM_FIXED_SIZE) {
 			err = check_helper_mem_access(env, reg, argno_from_reg(regno), fn->arg_size[arg],
 						      arg_type & MEM_WRITE ? BPF_WRITE : BPF_READ,
@@ -8797,26 +8799,19 @@ error:
 	return -EINVAL;
 }
 
-static bool check_raw_mode_ok(const struct bpf_func_proto *fn)
+static bool check_raw_mode_ok(const struct bpf_func_proto *fn, struct bpf_call_arg_meta *meta)
 {
-	int count = 0;
+	int i;
 
-	if (arg_type_is_raw_mem(fn->arg1_type))
-		count++;
-	if (arg_type_is_raw_mem(fn->arg2_type))
-		count++;
-	if (arg_type_is_raw_mem(fn->arg3_type))
-		count++;
-	if (arg_type_is_raw_mem(fn->arg4_type))
-		count++;
-	if (arg_type_is_raw_mem(fn->arg5_type))
-		count++;
+	for (i = 0; i < ARRAY_SIZE(fn->arg_type); i++) {
+		if (!arg_type_is_raw_mem(fn->arg_type[i]))
+			continue;
+		if (meta->arg_raw_mem.regno)
+			return false;
+		meta->arg_raw_mem.regno = i + 1;
+	}
 
-	/* We only support one arg being in raw mode at the moment,
-	 * which is sufficient for the helper functions we have
-	 * right now.
-	 */
-	return count <= 1;
+	return true;
 }
 
 static bool check_args_pair_invalid(const struct bpf_func_proto *fn, int arg)
@@ -8906,7 +8901,7 @@ static bool check_proto_release_reg(const struct bpf_func_proto *fn, struct bpf_
 
 static int check_func_proto(const struct bpf_func_proto *fn, struct bpf_call_arg_meta *meta)
 {
-	return check_raw_mode_ok(fn) &&
+	return check_raw_mode_ok(fn, meta) &&
 	       check_arg_pair_ok(fn) &&
 	       check_mem_arg_rw_flag_ok(fn) &&
 	       check_proto_release_reg(fn, meta) &&
@@ -10303,8 +10298,9 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	/* Mark slots with STACK_MISC in case of raw mode, stack offset
 	 * is inferred from register state.
 	 */
-	for (i = 0; i < meta.access_size; i++) {
-		err = check_mem_access(env, insn_idx, regs + meta.regno, argno_from_reg(meta.regno), i, BPF_B,
+	for (i = 0; i < meta.arg_raw_mem.size; i++) {
+		err = check_mem_access(env, insn_idx, regs + meta.arg_raw_mem.regno,
+				       argno_from_reg(meta.arg_raw_mem.regno), i, BPF_B,
 				       BPF_WRITE, -1, false, false);
 		if (err)
 			return err;
