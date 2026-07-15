@@ -1652,6 +1652,19 @@ bool bpf_insn_is_indirect_target(const struct bpf_verifier_env *env, const struc
 	return env->insn_aux_data[insn_idx].indirect_target;
 }
 
+struct bpf_jit_arena_args bpf_kfunc_arena_args(const struct bpf_verifier_env *env,
+					       const struct bpf_prog *prog, int insn_idx)
+{
+	struct bpf_jit_arena_args args = {};
+
+	if (!env)
+		return args;
+	insn_idx += prog->aux->subprog_start;
+	args.regs = env->insn_aux_data[insn_idx].arg_arena_regs;
+	args.nullable_regs = env->insn_aux_data[insn_idx].arg_arena_nullable_regs;
+	return args;
+}
+
 u16 bpf_out_stack_arg_cnt(const struct bpf_verifier_env *env, const struct bpf_prog *prog)
 {
 	const struct bpf_subprog_info *sub;
@@ -3304,6 +3317,11 @@ bool __weak bpf_jit_supports_kfunc_call(void)
 }
 
 bool __weak bpf_jit_supports_stack_args(void)
+{
+	return false;
+}
+
+bool __weak bpf_jit_supports_arena_args(void)
 {
 	return false;
 }

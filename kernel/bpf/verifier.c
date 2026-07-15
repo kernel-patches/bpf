@@ -10846,6 +10846,16 @@ static bool is_kfunc_arg_irq_flag(const struct btf *btf, const struct btf_param 
 	return btf_param_match_suffix(btf, arg, "__irq_flag");
 }
 
+static bool is_kfunc_arg_arena(const struct btf *btf, const struct btf_param *arg)
+{
+	return btf_param_match_suffix(btf, arg, "__arena");
+}
+
+static bool is_kfunc_arg_arena_nullable(const struct btf *btf, const struct btf_param *arg)
+{
+	return btf_param_match_suffix(btf, arg, "__arena_nullable");
+}
+
 static bool is_kfunc_arg_scalar_with_name(const struct btf *btf,
 					  const struct btf_param *arg,
 					  const char *name)
@@ -12054,6 +12064,38 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			continue;
 
 		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
+
+		if (is_kfunc_arg_arena(btf, &args[i]) || is_kfunc_arg_arena_nullable(btf, &args[i])) {
+			if (verifier_bug_if(!btf_type_is_ptr(t), env,
+					    "kfunc %s arg#%d has __arena tag on non-pointer",
+					    func_name, i))
+				return -EFAULT;
+			if (!bpf_jit_supports_arena_args()) {
+				verbose(env, "JIT does not support kfunc %s() with arena pointer arguments\n",
+					func_name);
+				return -ENOTSUPP;
+			}
+			if (!env->prog->aux->arena) {
+				verbose(env,
+					"%s arena pointer requires a program with an associated arena\n",
+					reg_arg_name(env, argno));
+				return -EINVAL;
+			}
+			if (regno < 0) {
+				verbose(env, "%s arena pointer cannot be a stack argument\n",
+					reg_arg_name(env, argno));
+				return -EINVAL;
+			}
+			if (reg->type != PTR_TO_ARENA && reg->type != SCALAR_VALUE) {
+				verbose(env, "%s is not a pointer to arena or scalar\n",
+					reg_arg_name(env, argno));
+				return -EINVAL;
+			}
+			cur_aux(env)->arg_arena_regs |= BIT(regno - BPF_REG_1);
+			if (is_kfunc_arg_arena_nullable(btf, &args[i]))
+				cur_aux(env)->arg_arena_nullable_regs |= BIT(regno - BPF_REG_1);
+			continue;
+		}
 
 		if (btf_type_is_scalar(t)) {
 			if (reg->type != SCALAR_VALUE) {
