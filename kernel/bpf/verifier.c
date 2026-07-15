@@ -12567,11 +12567,12 @@ int bpf_fetch_kfunc_arg_meta(struct bpf_verifier_env *env,
 	struct bpf_kfunc_meta kfunc;
 	int err;
 
+	memset(meta, 0, sizeof(*meta));
+
 	err = fetch_kfunc_meta(env, func_id, offset, &kfunc);
 	if (err)
 		return err;
 
-	memset(meta, 0, sizeof(*meta));
 	meta->btf = kfunc.btf;
 	meta->func_id = kfunc.id;
 	meta->func_proto = kfunc.proto;
