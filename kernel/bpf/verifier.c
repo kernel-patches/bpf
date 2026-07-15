@@ -8418,6 +8418,15 @@ skip_type_check:
 			verifier_bug(env, "invalid map_ptr to access map->value");
 			return -EFAULT;
 		}
+
+		/*
+		 * Disable raw mode for bpf_map_peek_elem() on a bloom filter. The helper reads
+		 * the value buffer as an input rather than filling it.
+		 */
+		if (meta->func_id == BPF_FUNC_map_peek_elem &&
+		    meta->map.ptr->map_type == BPF_MAP_TYPE_BLOOM_FILTER)
+			meta->arg_raw_mem.regno = 0;
+
 		err = check_helper_mem_access(env, reg, argno, meta->map.ptr->value_size,
 					      arg_type & MEM_WRITE ? BPF_WRITE : BPF_READ,
 					      false, meta);
