@@ -25,7 +25,7 @@ all:
 		#SUBDIR test prog name should be in the form: SUBDIR_test.sh \
 		TEST=$$DIR"_test.sh"; \
 		if [ -e $$DIR/$$TEST ]; then \
-			rsync -a $$DIR/$$TEST $$BUILD_TARGET/; \
+			rsync -a --no-owner --no-group $$DIR/$$TEST $$BUILD_TARGET/; \
 		fi \
 	done
 

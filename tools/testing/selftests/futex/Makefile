@@ -11,7 +11,7 @@ all:
 		mkdir $$BUILD_TARGET  -p;	\
 		$(MAKE) OUTPUT=$$BUILD_TARGET -C $$DIR $@;\
 		if [ -e $$DIR/$(TEST_PROGS) ]; then \
-			rsync -a $$DIR/$(TEST_PROGS) $$BUILD_TARGET/; \
+			rsync -a --no-owner --no-group $$DIR/$(TEST_PROGS) $$BUILD_TARGET/; \
 		fi \
 	done
 
