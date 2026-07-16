@@ -2141,10 +2141,8 @@ static int idt_init_isr(struct idt_ntb_dev *ndev)
 	/* Set the IRQ handler */
 	ret = devm_request_threaded_irq(&pdev->dev, ret, NULL, idt_thread_isr,
 					IRQF_ONESHOT, NTB_IRQNAME, ndev);
-	if (ret != 0) {
-		dev_err(&pdev->dev, "Failed to set MSI IRQ handler, %d", ret);
+	if (ret != 0)
 		goto err_free_vectors;
-	}
 
 	/* Unmask Message/Doorbell/SE interrupts */
 	ntint_mask = idt_nt_read(ndev, IDT_NT_NTINTMSK) & ~IDT_NTINTMSK_ALL;
