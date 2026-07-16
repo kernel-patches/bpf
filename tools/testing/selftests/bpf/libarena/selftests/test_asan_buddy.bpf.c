@@ -163,7 +163,7 @@ __weak int asan_test_buddy_oob(void)
 		return ret;
 	}
 
-	for (i = zero; i < sizeof(sizes) / sizeof(sizes[0]) && can_loop; i++) {
+	for (i = zero; i < ARRAY_SIZE(sizes) && can_loop; i++) {
 		barrier_var(i);
 		ret = asan_test_buddy_oob_single(sizes[i]);
 		if (ret) {
@@ -201,7 +201,7 @@ __weak int asan_test_buddy_uaf(void)
 		return ret;
 	}
 
-	for (i = zero; i < sizeof(sizes) / sizeof(sizes[0]) && can_loop; i++) {
+	for (i = zero; i < ARRAY_SIZE(sizes) && can_loop; i++) {
 		barrier_var(i);
 		ret = asan_test_buddy_uaf_single(sizes[i]);
 		if (ret) {
