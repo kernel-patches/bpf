@@ -4195,6 +4195,97 @@ __bpf_kfunc int bpf_strncasestr(const char *s1__ign, const char *s2__ign,
 	return __bpf_strnstr(s1__ign, s2__ign, len, true);
 }
 
+static int __bpf_strncat(char *dst, u32 dsz, const char *src, u32 sz)
+{
+	int dlen, slen, space, copied;
+	char cs;
+
+	if (!copy_from_kernel_nofault_allowed(dst, 1) ||
+	    !copy_from_kernel_nofault_allowed(src, 1)) {
+		return -ERANGE;
+	}
+
+	dlen = bpf_strnlen(dst, dsz);
+	if (dlen < 0)
+		return dlen;
+	slen = bpf_strnlen(src, sz);
+	if (slen < 0)
+		return slen;
+
+	if (dlen >= dsz || sz == 0 || dsz == 0)
+		return -EINVAL;
+
+	space = dsz - dlen;
+	if (space <= 1 || space < min(slen, sz) + 1)
+		return -E2BIG;
+
+	guard(pagefault)();
+
+	copied = strncpy_from_kernel_nofault(dst + dlen, src,
+				      min(space, sz + 1));
+	if (copied < 0)
+		return copied;
+	else if (copied == 0 || copied == 1)
+		return dlen;
+
+	/* The copied character count includes '\0'. */
+	copied--;
+
+	if (copied < sz) {
+		__get_kernel_nofault(&cs, src + copied, char, err_out);
+		if (cs != '\0' && sz > copied)
+			return -E2BIG;
+	}
+
+	return dlen + copied;
+err_out:
+	return -EFAULT;
+}
+
+/**
+ * bpf_strcat - Append non-null bytes from a source string, and null-terminate
+ *              the result
+ * @dst: Destination string.
+ * @dst__sz: Maximum bytes of @dst__ign, includes the trailing NUL.
+ * @src__ign: Source string.
+ *
+ * Return:
+ * * >=0      - Length of the concatenated string.
+ *
+ * * %-EINVAL - String @dst__ign is invalid.
+ * * %-EFAULT - Cannot read or write one of the strings.
+ * * %-E2BIG  - String @src__ign is too large or the remaining space in
+ *              @dst__ign is too small.
+ * * %-ERANGE - One of the strings is outside of kernel address space
+ */
+__bpf_kfunc int bpf_strcat(char *dst, u32 dst__sz, const char *src__ign)
+{
+	return __bpf_strncat(dst, dst__sz, src__ign, XATTR_SIZE_MAX);
+}
+
+/**
+ * bpf_strncat - Append non-null bytes from a source string, and null-terminate
+ *               the result
+ * @dst: Destination string.
+ * @dst__sz: Maximum bytes of @dst__ign, includes the trailing NUL.
+ * @src__ign: Source string.
+ * @len: the maximum number of characters to concatenate
+ *
+ * Return:
+ * * >=0      - Length of the concatenated string.
+ *
+ * * %-EINVAL - String @dst__ign is invalid.
+ * * %-EFAULT - Cannot read or write one of the strings.
+ * * %-E2BIG  - String @src__ign is too large or the remaining space in
+ *              @dst__ign is too small.
+ * * %-ERANGE - One of the strings is outside of kernel address space
+ */
+__bpf_kfunc int bpf_strncat(char *dst, u32 dst__sz, const char *src__ign,
+			    u32 len)
+{
+	return __bpf_strncat(dst, dst__sz, src__ign, len);
+}
+
 #ifdef CONFIG_KEYS
 /**
  * bpf_lookup_user_key - lookup a key by its serial
@@ -4958,6 +5049,8 @@ BTF_ID_FLAGS(func, bpf_strstr);
 BTF_ID_FLAGS(func, bpf_strcasestr);
 BTF_ID_FLAGS(func, bpf_strnstr);
 BTF_ID_FLAGS(func, bpf_strncasestr);
+BTF_ID_FLAGS(func, bpf_strcat);
+BTF_ID_FLAGS(func, bpf_strncat);
 #if defined(CONFIG_BPF_LSM) && defined(CONFIG_CGROUPS)
 BTF_ID_FLAGS(func, bpf_cgroup_read_xattr, KF_RCU)
 #endif
