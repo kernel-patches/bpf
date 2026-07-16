@@ -26,6 +26,22 @@ HOSTAR  ?= ar
 HOSTPKG_CONFIG ?= pkg-config
 CROSS_COMPILE =
 
+# If OUTPUT was inherited from a parent build's command line (e.g. from
+# kselftest), it points to the wrong directory and may lack a trailing
+# slash.  The tools/build Makefile.build concatenates $(OUTPUT) with
+# filenames without a separating slash ($(OUTPUT)%.o), so a missing
+# trailing '/' produces corrupted paths such as "mmmain.o" instead of
+# "mm/main.o", and the linker cannot find resolve_btfids-in.o.
+#
+# When built via the kernel build system, OUTPUT is set by
+# scripts/Makefile.include (origin "file") from the O= parameter, which
+# is correct.  Only a command-line origin indicates leakage from a
+# parent build and needs to be reset.  Both "command line" and
+# "environment" origins indicate leakage; "file" (set by Makefile.include
+# from O=) and "undefined" are legitimate and must not be overridden.
+ifneq ($(filter command line environment,$(origin OUTPUT)),)
+override OUTPUT := $(srctree)/tools/bpf/resolve_btfids/
+endif
 OUTPUT ?= $(srctree)/tools/bpf/resolve_btfids/
 
 LIBBPF_SRC := $(srctree)/tools/lib/bpf/
