@@ -1015,7 +1015,8 @@ static void bpf_fd_array_map_clear(struct bpf_map *map, bool need_defer)
 
 	for (i = 0; i < array->map.max_entries; i++) {
 		__fd_array_map_delete_elem(map, &i, need_defer);
-		cond_resched();
+		/* cond_resched() is a noop with preempt; unblock RCU */
+		cond_resched_tasks_rcu_qs();
 	}
 }
 
