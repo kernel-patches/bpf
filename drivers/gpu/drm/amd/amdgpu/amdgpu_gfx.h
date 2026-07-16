@@ -232,6 +232,7 @@ struct amdgpu_gfx_config {
 	unsigned max_tile_pipes;
 	unsigned max_cu_per_sh;
 	unsigned max_sh_per_se;
+	unsigned max_cu_per_se;
 	unsigned max_backends_per_se;
 	unsigned max_texture_channel_caches;
 	unsigned max_gprs;

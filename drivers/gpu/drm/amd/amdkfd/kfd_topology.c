@@ -466,6 +466,8 @@ static ssize_t node_show(struct kobject *kobj, struct attribute *attr,
 			      dev->node_props.cu_per_simd_array);
 	sysfs_show_32bit_prop(buffer, offs, "simd_per_cu",
 			      dev->node_props.simd_per_cu);
+	sysfs_show_32bit_prop(buffer, offs, "max_cu_per_engine",
+			      dev->node_props.max_cu_per_engine);
 	sysfs_show_32bit_prop(buffer, offs, "max_slots_scratch_cu",
 			      dev->node_props.max_slots_scratch_cu);
 	sysfs_show_32bit_prop(buffer, offs, "gfx_target_version",
@@ -2095,6 +2097,8 @@ int kfd_topology_add_device(struct kfd_node *gpu)
 
 	dev->node_props.simd_arrays_per_engine =
 		gfx_info->max_sh_per_se;
+
+	dev->node_props.max_cu_per_engine = gpu->adev->gfx.config.max_cu_per_se;
 
 	dev->node_props.gfx_target_version =
 				gpu->kfd->device_info.gfx_target_version;

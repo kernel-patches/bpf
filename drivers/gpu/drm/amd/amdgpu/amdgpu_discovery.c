@@ -2155,6 +2155,8 @@ static int amdgpu_discovery_get_gfx_info(struct amdgpu_device *adev)
 		adev->gfx.config.max_cu_per_sh = 2 * (le32_to_cpu(gc_info->v1.gc_num_wgp0_per_sa) +
 					      le32_to_cpu(gc_info->v1.gc_num_wgp1_per_sa));
 		adev->gfx.config.max_sh_per_se = le32_to_cpu(gc_info->v1.gc_num_sa_per_se);
+		adev->gfx.config.max_cu_per_se =
+			adev->gfx.config.max_sh_per_se * adev->gfx.config.max_cu_per_sh;
 		adev->gfx.config.max_backends_per_se = le32_to_cpu(gc_info->v1.gc_num_rb_per_se);
 		adev->gfx.config.max_texture_channel_caches = le32_to_cpu(gc_info->v1.gc_num_gl2c);
 		adev->gfx.config.max_gprs = le32_to_cpu(gc_info->v1.gc_num_gprs);
@@ -2195,6 +2197,7 @@ static int amdgpu_discovery_get_gfx_info(struct amdgpu_device *adev)
 					   le32_to_cpu(gc_info->v1_4.gc_num_twgp1_per_sa1);
 			adev->gfx.config.max_cu_per_sh = 2 * (num_wgps_per_sa >= num_wgps_per_sa1 ?
 							      num_wgps_per_sa : num_wgps_per_sa1);
+			adev->gfx.config.max_cu_per_se = 2 * (num_wgps_per_sa + num_wgps_per_sa1);
 		} else if (le16_to_cpu(gc_info->v1.header.version_minor) >= 3) {
 			adev->gfx.config.gc_tcp_size_per_cu = le32_to_cpu(gc_info->v1_3.gc_tcp_size_per_cu);
 			adev->gfx.config.gc_tcp_cache_line_size = le32_to_cpu(gc_info->v1_3.gc_tcp_cache_line_size);
@@ -2216,12 +2219,15 @@ static int amdgpu_discovery_get_gfx_info(struct amdgpu_device *adev)
 					   le32_to_cpu(gc_info->v1_5.gc_num_wgp1_per_sa1);
 			adev->gfx.config.max_cu_per_sh = num_wgps_per_sa >= num_wgps_per_sa1 ?
 							 num_wgps_per_sa : num_wgps_per_sa1;
+			adev->gfx.config.max_cu_per_se = 2 * (num_wgps_per_sa + num_wgps_per_sa1);
 		}
 		break;
 	case 2:
 		adev->gfx.config.max_shader_engines = le32_to_cpu(gc_info->v2.gc_num_se);
 		adev->gfx.config.max_cu_per_sh = le32_to_cpu(gc_info->v2.gc_num_cu_per_sh);
 		adev->gfx.config.max_sh_per_se = le32_to_cpu(gc_info->v2.gc_num_sh_per_se);
+		adev->gfx.config.max_cu_per_se =
+			adev->gfx.config.max_sh_per_se * adev->gfx.config.max_cu_per_sh;
 		adev->gfx.config.max_backends_per_se = le32_to_cpu(gc_info->v2.gc_num_rb_per_se);
 		adev->gfx.config.max_texture_channel_caches = le32_to_cpu(gc_info->v2.gc_num_tccs);
 		adev->gfx.config.max_gprs = le32_to_cpu(gc_info->v2.gc_num_gprs);
