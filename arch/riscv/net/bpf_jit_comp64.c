@@ -1986,10 +1986,14 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 		else
 			ret = emit_atomic_rmw(rd, rs, insn, ctx);
 
-		ret = ret ?: add_exception_handler(insn, REG_DONT_CLEAR_MARKER, ctx);
-		if (ret)
-			return ret;
-		break;
+		/* ret can be 1 (skip-zext); extable entry still needs to be added */
+		if (ret >= 0) {
+			int err = add_exception_handler(insn, REG_DONT_CLEAR_MARKER, ctx);
+
+			if (err)
+				return err;
+		}
+		return ret;
 
 	default:
 		pr_err("bpf-jit: unknown opcode %02x\n", code);
