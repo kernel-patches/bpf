@@ -202,7 +202,7 @@ static void run_libarena_parallel_test(struct libarena *skel, struct bpf_program
 	run_libarena_parallel_fini(skel, name, prefixlen);
 }
 
-void test_libarena(void)
+void serial_test_libarena(void)
 {
 	struct arena_alloc_reserve_args args;
 	struct libarena *skel;
