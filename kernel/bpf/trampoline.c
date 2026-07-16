@@ -1723,7 +1723,7 @@ int bpf_trampoline_multi_detach(struct bpf_prog *prog, struct bpf_tracing_multi_
 {
 	struct bpf_tracing_multi_data *data = &link->data;
 	struct bpf_tracing_multi_node *mnode;
-	int i;
+	int i, err_unreg = 0, err_mod = 0;
 
 	trampoline_lock_all();
 
@@ -1734,13 +1734,41 @@ int bpf_trampoline_multi_detach(struct bpf_prog *prog, struct bpf_tracing_multi_
 					NULL, &trampoline_multi_ops, data));
 	}
 
-	if (ftrace_hash_count(data->unreg))
-		WARN_ON_ONCE(update_ftrace_direct_del(&direct_ops, data->unreg));
-	if (ftrace_hash_count(data->modify))
-		WARN_ON_ONCE(update_ftrace_direct_mod(&direct_ops, data->modify, true));
+	if (ftrace_hash_count(data->unreg)) {
+		err_unreg = update_ftrace_direct_del(&direct_ops, data->unreg);
+		WARN_ON_ONCE(err_unreg);
+	}
+	if (ftrace_hash_count(data->modify)) {
+		err_mod = update_ftrace_direct_mod(&direct_ops, data->modify, true);
+		WARN_ON_ONCE(err_mod);
+	}
 
-	for_each_mnode(mnode, link)
-		bpf_trampoline_multi_attach_free(mnode->trampoline);
+	for_each_mnode(mnode, link) {
+		struct bpf_trampoline *tr = mnode->trampoline;
+
+		/* If the batch ftrace update failed for this mnode's path,
+		 * ftrace still points to old_image. Use rollback to restore
+		 * cur_image to old_image (putting the new cur_image if any)
+		 * so the trampoline keeps the image ftrace is calling.
+		 *
+		 * This relies on update_ftrace_direct_del/mod being atomic:
+		 * on failure, NO IPs in the hash are modified in ftrace (all
+		 * validation/allocation happens before any ftrace record is
+		 * touched). If this assumption is broken in the future (i.e.,
+		 * partial success becomes possible), this rollback logic would
+		 * need to be revisited.
+		 *
+		 * cur_image == NULL indicates the unreg path (total == 0);
+		 * cur_image != NULL indicates the modify path (total > 0).
+		 */
+		if (tr->multi_attach.old_image &&
+		    tr->multi_attach.old_image != tr->cur_image &&
+		    ((err_unreg && !tr->cur_image) ||
+		     (err_mod && tr->cur_image)))
+			bpf_trampoline_multi_attach_rollback(tr);
+		else
+			bpf_trampoline_multi_attach_free(tr);
+	}
 
 	trampoline_unlock_all();
 
