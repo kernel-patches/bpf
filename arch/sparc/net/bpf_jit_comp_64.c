@@ -149,6 +149,8 @@ static u32 WDISP10(u32 off)
 #define MULX		F3(2, 0x09)
 #define UDIVX		F3(2, 0x0d)
 #define DIV		F3(2, 0x0e)
+#define SDIV		F3(2, 0x0f)
+#define SDIVX		F3(2, 0x2d)
 #define SLL		F3(2, 0x25)
 #define SLLX		(F3(2, 0x25)|(1<<12))
 #define SRA		F3(2, 0x27)
@@ -941,32 +943,69 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	case BPF_ALU64 | BPF_MUL | BPF_X:
 		emit_alu(MULX, src, dst, ctx);
 		break;
-	case BPF_ALU | BPF_DIV | BPF_X:
+	case BPF_ALU | BPF_DIV | BPF_X: {
+		const bool is_signed = (off == 1);
+
+		if (is_signed) {
+			const u8 tmp = bpf2sparc[TMP_REG_1];
+
+			ctx->tmp_1_used = true;
+
+			/* Sign-extend dst into %y for 32-bit sdiv. */
+			emit_alu3_K(SRA, dst, 31, tmp, ctx);
+			emit_write_y(tmp, ctx);
+			emit_alu(SDIV, src, dst, ctx);
+			/*
+			 * SDIV does not guarantee the zero-extension that
+			 * the unsigned DIV path relies on, so clear bits
+			 * 63:32 through the shared truncation instead of
+			 * consuming the verifier's zext marker, as the
+			 * other ALU32 ops do.
+			 */
+			goto do_alu32_trunc;
+		}
 		emit_write_y(G0, ctx);
 		emit_alu(DIV, src, dst, ctx);
 		if (insn_is_zext(&insn[1]))
 			return 1;
 		break;
+	}
 	case BPF_ALU64 | BPF_DIV | BPF_X:
-		emit_alu(UDIVX, src, dst, ctx);
+		if (off == 1)
+			emit_alu(SDIVX, src, dst, ctx);
+		else
+			emit_alu(UDIVX, src, dst, ctx);
 		break;
 	case BPF_ALU | BPF_MOD | BPF_X: {
 		const u8 tmp = bpf2sparc[TMP_REG_1];
+		const bool is_signed = (off == 1);
 
 		ctx->tmp_1_used = true;
 
-		emit_write_y(G0, ctx);
-		emit_alu3(DIV, dst, src, tmp, ctx);
+		if (is_signed) {
+			const u8 tmp2 = bpf2sparc[TMP_REG_2];
+
+			ctx->tmp_2_used = true;
+
+			/* Sign-extend dst into %y for 32-bit sdiv. */
+			emit_alu3_K(SRA, dst, 31, tmp2, ctx);
+			emit_write_y(tmp2, ctx);
+			emit_alu3(SDIV, dst, src, tmp, ctx);
+		} else {
+			emit_write_y(G0, ctx);
+			emit_alu3(DIV, dst, src, tmp, ctx);
+		}
 		emit_alu3(MULX, tmp, src, tmp, ctx);
 		emit_alu3(SUB, dst, tmp, dst, ctx);
 		goto do_alu32_trunc;
 	}
 	case BPF_ALU64 | BPF_MOD | BPF_X: {
 		const u8 tmp = bpf2sparc[TMP_REG_1];
+		const unsigned int mod = (off == 1) ? SDIVX : UDIVX;
 
 		ctx->tmp_1_used = true;
 
-		emit_alu3(UDIVX, dst, src, tmp, ctx);
+		emit_alu3(mod, dst, src, tmp, ctx);
 		emit_alu3(MULX, tmp, src, tmp, ctx);
 		emit_alu3(SUB, dst, tmp, dst, ctx);
 		break;
@@ -1096,33 +1135,62 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	case BPF_ALU64 | BPF_MUL | BPF_K:
 		emit_alu_K(MULX, dst, imm, ctx);
 		break;
-	case BPF_ALU | BPF_DIV | BPF_K:
+	case BPF_ALU | BPF_DIV | BPF_K: {
+		const bool is_signed = (off == 1);
+
 		if (imm == 0)
 			return -EINVAL;
 
-		emit_write_y(G0, ctx);
-		emit_alu_K(DIV, dst, imm, ctx);
+		if (is_signed) {
+			const u8 tmp = bpf2sparc[TMP_REG_2];
+
+			ctx->tmp_2_used = true;
+
+			/* Sign-extend dst into %y for 32-bit sdiv. */
+			emit_alu3_K(SRA, dst, 31, tmp, ctx);
+			emit_write_y(tmp, ctx);
+			emit_alu_K(SDIV, dst, imm, ctx);
+		} else {
+			emit_write_y(G0, ctx);
+			emit_alu_K(DIV, dst, imm, ctx);
+		}
 		goto do_alu32_trunc;
+	}
 	case BPF_ALU64 | BPF_DIV | BPF_K:
 		if (imm == 0)
 			return -EINVAL;
 
-		emit_alu_K(UDIVX, dst, imm, ctx);
+		emit_alu_K((off == 1) ? SDIVX : UDIVX, dst, imm, ctx);
 		break;
 	case BPF_ALU64 | BPF_MOD | BPF_K:
 	case BPF_ALU | BPF_MOD | BPF_K: {
 		const u8 tmp = bpf2sparc[TMP_REG_2];
+		const bool is_signed = (off == 1);
 		unsigned int div;
 
 		if (imm == 0)
 			return -EINVAL;
 
-		div = (BPF_CLASS(code) == BPF_ALU64) ? UDIVX : DIV;
+		if (BPF_CLASS(code) == BPF_ALU64)
+			div = is_signed ? SDIVX : UDIVX;
+		else
+			div = is_signed ? SDIV : DIV;
 
 		ctx->tmp_2_used = true;
 
-		if (BPF_CLASS(code) != BPF_ALU64)
-			emit_write_y(G0, ctx);
+		if (BPF_CLASS(code) != BPF_ALU64) {
+			if (is_signed) {
+				const u8 tmp3 = bpf2sparc[TMP_REG_3];
+
+				ctx->tmp_3_used = true;
+
+				/* Sign-extend dst into %y for 32-bit sdiv. */
+				emit_alu3_K(SRA, dst, 31, tmp3, ctx);
+				emit_write_y(tmp3, ctx);
+			} else {
+				emit_write_y(G0, ctx);
+			}
+		}
 		if (is_simm13(imm)) {
 			emit(div | IMMED | RS1(dst) | S13(imm) | RD(tmp), ctx);
 			emit(MULX | IMMED | RS1(tmp) | S13(imm) | RD(tmp), ctx);
