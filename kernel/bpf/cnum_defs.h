@@ -44,6 +44,9 @@ static inline bool FN(urange_overflow)(struct cnum_t cnum)
  * cnum{T}_umin / cnum{T}_umax query an unsigned range represented by this cnum.
  * If cnum represents a range crossing the UT_MAX/0 boundary, the unbound range
  * [0..UT_MAX] is returned.
+ *
+ * The empty cnum doesn't produce any meaningful value, so you should avoid
+ * calling cnum{T}_umin / cnum{T}_umax with it.
  */
 ut FN(umin)(struct cnum_t cnum)
 {
@@ -67,19 +70,18 @@ static inline bool FN(srange_overflow)(struct cnum_t cnum)
  * cnum{T}_smin / cnum{T}_smax query a signed range represented by this cnum.
  * If cnum represents a range crossing the ST_MAX/ST_MIN boundary, the unbound range
  * [ST_MIN..ST_MAX] is returned.
+ *
+ * The empty cnum doesn't produce any meaningful value, so you should avoid
+ * calling cnum{T}_smin / cnum{T}_smax with it.
  */
 st FN(smin)(struct cnum_t cnum)
 {
-	return FN(srange_overflow)(cnum)
-	       ? ST_MIN
-	       : min((st)cnum.base, (st)(cnum.base + cnum.size));
+	return FN(srange_overflow)(cnum) ? ST_MIN : (st)cnum.base;
 }
 
 st FN(smax)(struct cnum_t cnum)
 {
-	return FN(srange_overflow)(cnum)
-	       ? ST_MAX
-	       : max((st)cnum.base, (st)(cnum.base + cnum.size));
+	return FN(srange_overflow)(cnum) ? ST_MAX : (st)(cnum.base + cnum.size);
 }
 
 /*
