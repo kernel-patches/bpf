@@ -275,7 +275,7 @@ clean_up_noalloc_tree(struct rbtree __arena *rbtree)
 
 int insert_many(enum rbtree_alloc alloc, enum rbtree_insert_mode insert)
 {
-	const size_t numkeys = sizeof(keys) / sizeof(keys[0]);
+	const size_t numkeys = ARRAY_SIZE(keys);
 	node_ctx nodec;
 	u64 key, value;
 	int ret;
@@ -373,7 +373,7 @@ __weak int test_rbtree_remove_one(void)
 
 static __always_inline int remove_many_verify_all_present(struct rbtree __arena *rbtree)
 {
-	const size_t numkeys = sizeof(morekeys) / sizeof(morekeys[0]);
+	const size_t numkeys = ARRAY_SIZE(morekeys);
 	u64 value;
 	int ret;
 	int i;
@@ -394,7 +394,7 @@ static __always_inline int remove_many_verify_all_present(struct rbtree __arena 
 
 static __always_inline int remove_many_verify_remaining(struct rbtree __arena *rbtree)
 {
-	const size_t numkeys = sizeof(morekeys) / sizeof(morekeys[0]);
+	const size_t numkeys = ARRAY_SIZE(morekeys);
 	u64 value;
 	int ret;
 	int i;
@@ -434,7 +434,7 @@ static __always_inline int remove_many_verify_remaining(struct rbtree __arena *r
 
 static __noinline int remove_many_alloc(struct rbtree __arena *rbtree)
 {
-	const size_t numkeys = sizeof(morekeys) / sizeof(morekeys[0]);
+	const size_t numkeys = ARRAY_SIZE(morekeys);
 	u64 value;
 	int ret;
 	int i;
@@ -482,7 +482,7 @@ static __noinline int remove_many_alloc(struct rbtree __arena *rbtree)
 
 static __noinline int remove_many_noalloc(struct rbtree __arena *rbtree)
 {
-	const size_t numkeys = sizeof(morekeys) / sizeof(morekeys[0]);
+	const size_t numkeys = ARRAY_SIZE(morekeys);
 	node_ctx first = NULL, last = NULL;
 	u64 value;
 	int ret;
