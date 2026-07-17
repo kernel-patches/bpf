@@ -625,30 +625,37 @@ BPF_CALL_3(bpf_get_stackid, struct pt_regs *, regs, struct bpf_map *, map,
 	struct perf_callchain_entry *trace;
 	struct stackid stackid;
 	bool kernel = !user;
+	int err = -EFAULT;
 	u32 max_depth;
-	int err;
 
 	if (unlikely(flags & ~(BPF_F_SKIP_FIELD_MASK | BPF_F_USER_STACK |
 			       BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID)))
 		return -EINVAL;
 
 	max_depth = stack_map_calculate_max_depth(map->value_size, elem_size, flags);
+
+	preempt_disable();
 	trace = get_perf_callchain(regs, kernel, user, max_depth,
 				   false, false, 0);
 
 	if (unlikely(!trace))
 		/* couldn't fetch the stack trace */
-		return -EFAULT;
+		goto out;
 
 	err = stackid_fastpath(&stackid, map, trace, flags);
 	if (err != -ENOENT)
-		return err;
+		goto out;
 
 	new_bucket = stackid_new_bucket(&stackid, map, trace, flags);
-	if (!new_bucket)
-		return -ENOMEM;
+	if (new_bucket) {
+		preempt_enable();
+		return stackid_install(&stackid, map, new_bucket, flags);
+	}
+	err = -ENOMEM;
 
-	return stackid_install(&stackid, map, new_bucket, flags);
+out:
+	preempt_enable();
+	return err;
 }
 
 const struct bpf_func_proto bpf_get_stackid_proto = {
