@@ -19807,6 +19807,34 @@ static int inline_bpf_iter_num_new(struct bpf_insn *insn_buf)
 	return i;
 }
 
+/*
+ * Inline bpf_iter_num_next(). R1 holds the pointer to the iterator. Keep in sync with the
+ * kfunc in kernel/bpf/bpf_iter.c.
+ */
+static int inline_bpf_iter_num_next(struct bpf_insn *insn_buf)
+{
+	int i = 0;
+
+	/*
+	 * s->cur and s->end are int, so the (s64)(s->cur + 1) >= s->end check is equivalent to a
+	 * signed 32-bit comparison of (s->cur + 1) against s->end and needs no sign extension.
+	 */
+	insn_buf[i++] = BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1, 0);
+	insn_buf[i++] = BPF_ALU32_IMM(BPF_ADD, BPF_REG_0, 1);
+	insn_buf[i++] = BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, 4);
+	/* if ((s32)(s->cur + 1) >= (s32)s->end) goto done; */
+	insn_buf[i++] = BPF_JMP32_REG(BPF_JSGE, BPF_REG_0, BPF_REG_2, 3);
+	/* s->cur++; return &s->cur; */
+	insn_buf[i++] = BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_0, 0);
+	insn_buf[i++] = BPF_MOV64_REG(BPF_REG_0, BPF_REG_1);
+	insn_buf[i++] = BPF_JMP_A(2);
+	/* done: s->cur = s->end = 0; return NULL; */
+	insn_buf[i++] = BPF_ST_MEM(BPF_DW, BPF_REG_1, 0, 0);
+	insn_buf[i++] = BPF_MOV64_IMM(BPF_REG_0, 0);
+
+	return i;
+}
+
 int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		     struct bpf_insn *insn_buf, int insn_idx, int *cnt)
 {
@@ -19938,6 +19966,8 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		*cnt = 6;
 	} else if (desc->func_id == special_kfunc_list[KF_bpf_iter_num_new]) {
 		*cnt = inline_bpf_iter_num_new(insn_buf);
+	} else if (desc->func_id == special_kfunc_list[KF_bpf_iter_num_next]) {
+		*cnt = inline_bpf_iter_num_next(insn_buf);
 	}
 
 	if (env->insn_aux_data[insn_idx].arg_prog) {
