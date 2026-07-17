@@ -19835,6 +19835,20 @@ static int inline_bpf_iter_num_next(struct bpf_insn *insn_buf)
 	return i;
 }
 
+/*
+ * Inline bpf_iter_num_destroy(). R1 holds the pointer to the iterator. Keep in sync with
+ * the kfunc in kernel/bpf/bpf_iter.c.
+ */
+static int inline_bpf_iter_num_destroy(struct bpf_insn *insn_buf)
+{
+	int i = 0;
+
+	/* s->cur = s->end = 0; */
+	insn_buf[i++] = BPF_ST_MEM(BPF_DW, BPF_REG_1, 0, 0);
+
+	return i;
+}
+
 int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		     struct bpf_insn *insn_buf, int insn_idx, int *cnt)
 {
@@ -19968,6 +19982,8 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		*cnt = inline_bpf_iter_num_new(insn_buf);
 	} else if (desc->func_id == special_kfunc_list[KF_bpf_iter_num_next]) {
 		*cnt = inline_bpf_iter_num_next(insn_buf);
+	} else if (desc->func_id == special_kfunc_list[KF_bpf_iter_num_destroy]) {
+		*cnt = inline_bpf_iter_num_destroy(insn_buf);
 	}
 
 	if (env->insn_aux_data[insn_idx].arg_prog) {
