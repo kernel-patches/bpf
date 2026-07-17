@@ -143,14 +143,14 @@ static long compute_pgoff(struct bpf_arena *arena, long uaddr)
 }
 
 struct apply_range_data {
+	struct bpf_arena *arena;
 	struct page **pages;
-	struct page *scratch_page;
 	int i;
 };
 
 struct clear_range_data {
+	struct bpf_arena *arena;
 	struct llist_head *free_pages;
-	struct page *scratch_page;
 };
 
 static int apply_range_set_cb(pte_t *pte, unsigned long addr, void *data)
@@ -180,7 +180,7 @@ static int apply_range_set_cb(pte_t *pte, unsigned long addr, void *data)
 
 		if (pte_none(old))
 			continue;
-		if (WARN_ON_ONCE(pte_page(old) != d->scratch_page))
+		if (WARN_ON_ONCE(pte_page(old) != d->arena->scratch_page))
 			return -EBUSY;
 		ptep_get_and_clear(&init_mm, addr, pte);
 		flush_tlb_before_set(addr);
@@ -227,7 +227,7 @@ static int apply_range_clear_cb(pte_t *pte, unsigned long addr, void *data)
 	 * scratches its PTE. A later bpf_arena_free_pages() over that range walks
 	 * here. Without the skip, scratch_page would be freed.
 	 */
-	if (page == d->scratch_page)
+	if (page == d->arena->scratch_page)
 		return 0;
 
 	__llist_add(&page->pcp_llist, d->free_pages);
@@ -506,8 +506,7 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	if (ret)
 		goto out_sigsegv_memcg;
 
-	struct apply_range_data data = { .pages = &page, .i = 0,
-					 .scratch_page = arena->scratch_page };
+	struct apply_range_data data = { .arena = arena, .pages = &page, .i = 0 };
 	/* Account into memcg of the process that created bpf_arena */
 	ret = bpf_map_alloc_pages(map, NUMA_NO_NODE, 1, &page);
 	if (ret) {
@@ -696,8 +695,8 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 		bpf_map_memcg_exit(old_memcg, new_memcg);
 		return 0;
 	}
+	data.arena = arena;
 	data.pages = pages;
-	data.scratch_page = arena->scratch_page;
 
 	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags))
 		goto out_free_pages;
@@ -873,8 +872,8 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 	range_tree_set(&arena->rt, pgoff, page_cnt);
 
 	init_llist_head(&free_pages);
+	cdata.arena = arena;
 	cdata.free_pages = &free_pages;
-	cdata.scratch_page = arena->scratch_page;
 	/* clear ptes and collect struct pages */
 	apply_to_existing_page_range(&init_mm, kaddr, page_cnt << PAGE_SHIFT,
 				     apply_range_clear_cb, &cdata);
@@ -981,8 +980,8 @@ static void arena_free_worker(struct work_struct *work)
 	bpf_map_memcg_enter(&arena->map, &old_memcg, &new_memcg);
 
 	init_llist_head(&free_pages);
+	cdata.arena = arena;
 	cdata.free_pages = &free_pages;
-	cdata.scratch_page = arena->scratch_page;
 	arena_vm_start = bpf_arena_get_kern_vm_start(arena);
 	user_vm_start = bpf_arena_get_user_vm_start(arena);
 
