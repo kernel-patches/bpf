@@ -55,8 +55,10 @@ struct bpf_arena {
 	struct vm_struct *kern_vm;
 	struct page *scratch_page;
 	struct range_tree rt;
-	/* protects rt */
+	/* protects rt and nr_pages */
 	rqspinlock_t spinlock;
+	/* number of pages currently populated in the arena */
+	u64 nr_pages;
 	struct list_head vma_list;
 	/* protects vma_list */
 	struct mutex lock;
@@ -196,6 +198,7 @@ static int apply_range_set_cb(pte_t *pte, unsigned long addr, void *data)
 	set_pte_at(&init_mm, addr, pte, pteval);
 #endif
 	d->i++;
+	WRITE_ONCE(d->arena->nr_pages, d->arena->nr_pages + 1);
 	return 0;
 }
 
@@ -231,6 +234,7 @@ static int apply_range_clear_cb(pte_t *pte, unsigned long addr, void *data)
 		return 0;
 
 	__llist_add(&page->pcp_llist, d->free_pages);
+	WRITE_ONCE(d->arena->nr_pages, d->arena->nr_pages - 1);
 	return 0;
 }
 
@@ -413,7 +417,9 @@ static int arena_map_check_btf(struct bpf_map *map, const struct btf *btf,
 
 static u64 arena_map_mem_usage(const struct bpf_map *map)
 {
-	return 0;
+	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+
+	return (u64)READ_ONCE(arena->nr_pages) << PAGE_SHIFT;
 }
 
 struct vma_list {
