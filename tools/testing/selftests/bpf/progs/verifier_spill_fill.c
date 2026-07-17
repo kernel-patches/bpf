@@ -11,6 +11,13 @@ struct {
 	__uint(max_entries, 4096);
 } map_ringbuf SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u8);
+} map_partial_spill SEC(".maps");
+
 SEC("socket")
 __description("check valid spill/fill")
 __success __failure_unpriv __msg_unpriv("R0 leaks addr")
@@ -1304,6 +1311,33 @@ __naked void stack_noperfmon_spill_32bit_onto_64bit_slot(void)
 	exit;						\
 "	:
 	:
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("helper read must reject an invalid sibling of a narrow spill")
+__success
+__caps_unpriv(CAP_BPF)
+__failure_unpriv __msg_unpriv("invalid read from stack R3 off -7+0 size 1")
+__naked void helper_read_invalid_partial_spill_sibling(void)
+{
+	asm volatile ("					\
+	r5 = 1;						\
+	*(u8 *)(r10 - 8) = r5;				\
+	r2 = 0;						\
+	*(u32 *)(r10 - 16) = r2;			\
+	r1 = %[map_partial_spill] ll;			\
+	r2 = r10;					\
+	r2 += -16;					\
+	r3 = r10;					\
+	r3 += -7;					\
+	r4 = 0;						\
+	call %[bpf_map_update_elem];			\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_map_update_elem),
+	  __imm_addr(map_partial_spill)
 	: __clobber_all);
 }
 
