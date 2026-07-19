@@ -127,11 +127,10 @@ long refcount_acquire_list_node_offset(void *ctx)
 	return 0;
 }
 
-SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
+SEC("?lsm.s/bpf")
 __failure __msg("function calls are not allowed while holding a lock")
 int BPF_PROG(rbtree_fail_sleepable_lock_across_rcu,
-	     struct file *file, struct kobject *kobj,
-	     struct bin_attribute *bin_attr, char *buf, loff_t off, size_t len)
+	     int cmd, union bpf_attr *attr, unsigned int size, bool kernel)
 {
 	struct node_acquire *n;
 

@@ -7,6 +7,7 @@
 
 static void do_test_normal_map_btf(void)
 {
+	LIBBPF_OPTS(bpf_test_run_opts, opts);
 	struct normal_map_btf *skel;
 	int i, err, new_fd = -1;
 	int map_fd_arr[64];
@@ -15,12 +16,10 @@ static void do_test_normal_map_btf(void)
 	if (!ASSERT_OK_PTR(skel, "open_load"))
 		return;
 
-	err = normal_map_btf__attach(skel);
-	if (!ASSERT_OK(err, "attach"))
-		goto out;
-
 	skel->bss->pid = getpid();
-	usleep(1);
+	err = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.add_to_list_in_array), &opts);
+	if (!ASSERT_OK(err, "test_run"))
+		goto out;
 	ASSERT_TRUE(skel->bss->done, "done");
 
 	/* Use percpu_array to slow bpf_map_free_deferred() down.
@@ -55,6 +54,7 @@ out:
 
 static void do_test_map_in_map_btf(void)
 {
+	LIBBPF_OPTS(bpf_test_run_opts, opts);
 	int err, zero = 0, new_fd = -1;
 	struct map_in_map_btf *skel;
 
@@ -62,12 +62,11 @@ static void do_test_map_in_map_btf(void)
 	if (!ASSERT_OK_PTR(skel, "open_load"))
 		return;
 
-	err = map_in_map_btf__attach(skel);
-	if (!ASSERT_OK(err, "attach"))
-		goto out;
-
 	skel->bss->pid = getpid();
-	usleep(1);
+	err = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.add_to_list_in_inner_array),
+				     &opts);
+	if (!ASSERT_OK(err, "test_run"))
+		goto out;
 	ASSERT_TRUE(skel->bss->done, "done");
 
 	/* Close inner_array fd later */

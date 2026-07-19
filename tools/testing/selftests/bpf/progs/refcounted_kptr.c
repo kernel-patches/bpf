@@ -921,11 +921,10 @@ long rbtree_wrong_owner_remove_fail_a2(void *ctx)
 	return 0;
 }
 
-SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
+SEC("?lsm.s/bpf")
 __success
 int BPF_PROG(rbtree_sleepable_rcu,
-	     struct file *file, struct kobject *kobj,
-	     struct bin_attribute *bin_attr, char *buf, loff_t off, size_t len)
+	     int cmd, union bpf_attr *attr, unsigned int size, bool kernel)
 {
 	struct bpf_rb_node *rb;
 	struct node_data *n, *m = NULL;
@@ -955,11 +954,10 @@ err_out:
 	return 0;
 }
 
-SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
+SEC("?lsm.s/bpf")
 __success
 int BPF_PROG(rbtree_sleepable_rcu_no_explicit_rcu_lock,
-	     struct file *file, struct kobject *kobj,
-	     struct bin_attribute *bin_attr, char *buf, loff_t off, size_t len)
+	     int cmd, union bpf_attr *attr, unsigned int size, bool kernel)
 {
 	struct bpf_rb_node *rb;
 	struct node_data *n, *m = NULL;

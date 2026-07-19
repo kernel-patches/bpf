@@ -87,6 +87,7 @@ __naked void in_bpf_prog_type_kprobe_3(void)
 	call %[bpf_map_lookup_elem];			\
 	if r0 == 0 goto l0_%=;				\
 	r1 = r0;					\
+	r1 += 4;					\
 	call %[bpf_spin_lock];				\
 l0_%=:	exit;						\
 "	:
@@ -110,6 +111,7 @@ __naked void in_bpf_prog_type_tracepoint_3(void)
 	call %[bpf_map_lookup_elem];			\
 	if r0 == 0 goto l0_%=;				\
 	r1 = r0;					\
+	r1 += 4;					\
 	call %[bpf_spin_lock];				\
 l0_%=:	exit;						\
 "	:
@@ -133,6 +135,7 @@ __naked void bpf_prog_type_perf_event_3(void)
 	call %[bpf_map_lookup_elem];			\
 	if r0 == 0 goto l0_%=;				\
 	r1 = r0;					\
+	r1 += 4;					\
 	call %[bpf_spin_lock];				\
 l0_%=:	exit;						\
 "	:
@@ -156,6 +159,7 @@ __naked void bpf_prog_type_raw_tracepoint_3(void)
 	call %[bpf_map_lookup_elem];			\
 	if r0 == 0 goto l0_%=;				\
 	r1 = r0;					\
+	r1 += 4;					\
 	call %[bpf_spin_lock];				\
 l0_%=:	exit;						\
 "	:
