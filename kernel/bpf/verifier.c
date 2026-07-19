@@ -207,7 +207,7 @@ static int release_reference_nomark(struct bpf_verifier_state *state, int id);
 static int release_reference(struct bpf_verifier_env *env, int id);
 static void invalidate_non_owning_refs(struct bpf_verifier_env *env);
 static bool in_rbtree_lock_required_cb(struct bpf_verifier_env *env);
-static bool is_tracing_prog_type(enum bpf_prog_type type);
+static bool is_tracing_prog_type(struct bpf_prog *prog);
 static int ref_set_non_owning(struct bpf_verifier_env *env,
 			      struct bpf_reg_state *reg);
 static bool is_trusted_reg(struct bpf_verifier_env *env, const struct bpf_reg_state *reg);
@@ -7089,6 +7089,12 @@ static int process_spin_lock(struct bpf_verifier_env *env, struct bpf_reg_state 
 			val, lock_str, spin_lock_off);
 		return -EINVAL;
 	}
+
+	if (is_tracing_prog_type(env->prog) && !is_res_lock) {
+		verbose(env, "tracing progs cannot use bpf_spin_lock yet\n");
+		return -EINVAL;
+	}
+
 	if (is_lock) {
 		void *ptr;
 		int type;
@@ -12317,6 +12323,10 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 				verbose(env, "allocated object must be referenced\n");
 				return -EINVAL;
 			}
+			if (is_tracing_prog_type(env->prog)) {
+				verbose(env, "tracing progs cannot use bpf_{list_head,rb_root} yet\n");
+				return -EINVAL;
+			}
 			ret = process_kf_arg_ptr_to_list_head(env, reg, argno, meta);
 			if (ret < 0)
 				return ret;
@@ -12331,6 +12341,10 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			if (reg->type == (PTR_TO_BTF_ID | MEM_ALLOC) &&
 			    !reg_is_referenced(env, reg)) {
 				verbose(env, "allocated object must be referenced\n");
+				return -EINVAL;
+			}
+			if (is_tracing_prog_type(env->prog)) {
+				verbose(env, "tracing progs cannot use bpf_{list_head,rb_root} yet\n");
 				return -EINVAL;
 			}
 			ret = process_kf_arg_ptr_to_rbtree_root(env, reg, argno, meta);
@@ -13044,10 +13058,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return err;
 
 	if ((is_bpf_obj_drop_kfunc(meta.func_id) ||
-	     is_bpf_percpu_obj_drop_kfunc(meta.func_id)) && (is_tracing_prog_type(prog_type) ||
-	     /* is_tracing_prog_type() for now doesn't cover non-iterator tracing progs. */
-	     (prog_type == BPF_PROG_TYPE_TRACING && env->prog->expected_attach_type != BPF_TRACE_ITER
-	      && !env->prog->sleepable))) {
+	     is_bpf_percpu_obj_drop_kfunc(meta.func_id)) && (is_tracing_prog_type(env->prog)
+	     && !env->prog->sleepable)) {
 		struct btf_struct_meta *struct_meta;
 
 		struct_meta = btf_find_struct_meta(meta.arg_btf, meta.arg_btf_id);
@@ -17769,9 +17781,11 @@ static int check_pseudo_btf_id(struct bpf_verifier_env *env,
 	return __add_used_btf(env, btf);
 }
 
-static bool is_tracing_prog_type(enum bpf_prog_type type)
+static bool is_tracing_prog_type(struct bpf_prog *prog)
 {
-	switch (type) {
+	switch (resolve_prog_type(prog)) {
+	case BPF_PROG_TYPE_TRACING:
+		return prog->expected_attach_type != BPF_TRACE_ITER;
 	case BPF_PROG_TYPE_KPROBE:
 	case BPF_PROG_TYPE_TRACEPOINT:
 	case BPF_PROG_TYPE_PERF_EVENT:
@@ -17802,14 +17816,6 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	if (btf_record_has_field(map->record, BPF_LIST_HEAD) ||
-	    btf_record_has_field(map->record, BPF_RB_ROOT)) {
-		if (is_tracing_prog_type(prog_type)) {
-			verbose(env, "tracing progs cannot use bpf_{list_head,rb_root} yet\n");
-			return -EINVAL;
-		}
-	}
-
 	if (btf_record_has_field(map->record, BPF_SPIN_LOCK | BPF_RES_SPIN_LOCK)) {
 		if (prog_type == BPF_PROG_TYPE_SOCKET_FILTER) {
 			verbose(env, "socket filter progs cannot use bpf_spin_lock yet\n");
@@ -17817,12 +17823,11 @@ static int check_map_prog_compatibility(struct bpf_verifier_env *env,
 		}
 	}
 
-	if (btf_record_has_field(map->record, BPF_SPIN_LOCK)) {
-		if (is_tracing_prog_type(prog_type)) {
-			verbose(env, "tracing progs cannot use bpf_spin_lock yet\n");
-			return -EINVAL;
-		}
-	}
+	/*
+	 * Restrictions on using BPF list,rbtree,spin_lock is checked later upon
+	 * use, since rejecting accesing map containing them in programs is too
+	 * conservative.
+	 */
 
 	if ((bpf_prog_is_offloaded(prog->aux) || bpf_map_is_offloaded(map)) &&
 	    !bpf_offload_prog_map_match(prog, map)) {
