@@ -3124,7 +3124,7 @@ void bpf_prog_free(struct bpf_prog *fp)
 		bpf_prog_put(aux->dst_prog);
 	bpf_token_put(aux->token);
 	INIT_WORK(&aux->work, bpf_prog_free_deferred);
-	schedule_work(&aux->work);
+	queue_work(system_dfl_long_wq, &aux->work);
 }
 EXPORT_SYMBOL_GPL(bpf_prog_free);
 
