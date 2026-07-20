@@ -59,5 +59,15 @@ __test(-ENOENT) int test_strncasestr_notfound1(void *ctx) { return bpf_strncases
 __test(-ENOENT) int test_strncasestr_notfound2(void *ctx) { return bpf_strncasestr(str, "hello", 4); }
 __test(-ENOENT) int test_strncasestr_notfound3(void *ctx) { return bpf_strncasestr("", "a", 0); }
 __test(0) int test_strncasestr_empty(void *ctx) { return bpf_strncasestr(str, "", 1); }
+__test(0) int test_strcat_success(void *ctx) {
+	char buf[32] = "hello";
+	bpf_strcat(buf, sizeof(buf), str);
+	return bpf_strcmp(buf, "hellohello world");
+}
+__test(8) int test_strncat_success(void *ctx) {
+	char buf[32] = "hello";
+	bpf_strncat(buf, sizeof(buf), str, 3);
+	return bpf_strcmp(buf, "hellohe");
+}
 
 char _license[] SEC("license") = "GPL";
