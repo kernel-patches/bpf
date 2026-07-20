@@ -6,7 +6,7 @@
 
 static int bpf_mprog_link(struct bpf_tuple *tuple,
 			  u32 id_or_fd, u32 flags,
-			  enum bpf_prog_type type)
+			  enum bpf_link_type type)
 {
 	struct bpf_link *link = ERR_PTR(-EINVAL);
 	bool id = flags & BPF_F_ID;
@@ -17,7 +17,7 @@ static int bpf_mprog_link(struct bpf_tuple *tuple,
 		link = bpf_link_get_from_fd(id_or_fd);
 	if (IS_ERR(link))
 		return PTR_ERR(link);
-	if (type && link->prog->type != type) {
+	if (type && link->type != type) {
 		bpf_link_put(link);
 		return -EINVAL;
 	}
@@ -52,21 +52,22 @@ static int bpf_mprog_prog(struct bpf_tuple *tuple,
 
 static int bpf_mprog_tuple_relative(struct bpf_tuple *tuple,
 				    u32 id_or_fd, u32 flags,
-				    enum bpf_prog_type type)
+				    enum bpf_link_type ltype,
+				    enum bpf_prog_type ptype)
 {
 	bool link = flags & BPF_F_LINK;
 	bool id = flags & BPF_F_ID;
 
 	memset(tuple, 0, sizeof(*tuple));
 	if (link)
-		return bpf_mprog_link(tuple, id_or_fd, flags, type);
+		return bpf_mprog_link(tuple, id_or_fd, flags, ltype);
 	/* If no relevant flag is set and no id_or_fd was passed, then
 	 * tuple link/prog is just NULLed. This is the case when before/
 	 * after selects first/last position without passing fd.
 	 */
 	if (!id && !id_or_fd)
 		return 0;
-	return bpf_mprog_prog(tuple, id_or_fd, flags, type);
+	return bpf_mprog_prog(tuple, id_or_fd, flags, ptype);
 }
 
 static void bpf_mprog_tuple_put(struct bpf_tuple *tuple)
@@ -243,6 +244,8 @@ int bpf_mprog_attach(struct bpf_mprog_entry *entry,
 		return -EEXIST;
 	ret = bpf_mprog_tuple_relative(&rtuple, id_or_fd,
 				       flags & ~BPF_F_REPLACE,
+				       link ? link->type :
+				       BPF_LINK_TYPE_UNSPEC,
 				       prog_new->type);
 	if (ret)
 		return ret;
@@ -343,6 +346,8 @@ int bpf_mprog_detach(struct bpf_mprog_entry *entry,
 	if (!bpf_mprog_total(entry))
 		return -ENOENT;
 	ret = bpf_mprog_tuple_relative(&rtuple, id_or_fd, flags,
+				       link ? link->type :
+				       BPF_LINK_TYPE_UNSPEC,
 				       prog ? prog->type :
 				       BPF_PROG_TYPE_UNSPEC);
 	if (ret)
