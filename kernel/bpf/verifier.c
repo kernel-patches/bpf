@@ -13796,11 +13796,14 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	/* In case of 'scalar += pointer', dst_reg inherits pointer type and id.
-	 * The id may be overwritten later if we create a new variable offset.
+	/* In case of 'scalar += pointer', dst_reg inherits pointer type, id,
+	 * and for stack pointers also the frame number. The id may be overwritten
+	 * later if we create a new variable offset.
 	 */
 	dst_reg->type = ptr_reg->type;
 	dst_reg->id = ptr_reg->id;
+	if (base_type(ptr_reg->type) == PTR_TO_STACK)
+		dst_reg->frameno = ptr_reg->frameno;
 
 	if (!check_reg_sane_offset_scalar(env, off_reg, ptr_reg->type) ||
 	    !check_reg_sane_offset_ptr(env, ptr_reg, ptr_reg->type))
