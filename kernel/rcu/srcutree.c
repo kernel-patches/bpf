@@ -1481,7 +1481,7 @@ static unsigned long srcu_gp_start_if_needed(struct srcu_struct *ssp,
  * later, via check_init_srcu_struct() from the __call_srcu() the drain invokes.
  */
 static void __call_srcu(struct srcu_struct *ssp, struct rcu_head *rhp,
-			rcu_callback_t func, bool do_norm)
+			rcu_callback_t func, bool do_norm, unsigned long ip)
 {
 	/* NMI callers cannot touch the srcu_cblist or its lock; defer. */
 	if (in_nmi()) {
@@ -1499,6 +1499,9 @@ static void __call_srcu(struct srcu_struct *ssp, struct rcu_head *rhp,
 			struct srcu_nmi_defer *sndp = this_cpu_ptr(&srcu_nmi_defer);
 
 			sdp->ssp = ssp;
+#ifdef CONFIG_PROVE_RCU
+			sdp->nmi_ip = ip;
+#endif
 			if (llist_add(&sdp->nmi_link, &sndp->list))
 				irq_work_queue(&sndp->iw);
 		}
@@ -1508,7 +1511,8 @@ static void __call_srcu(struct srcu_struct *ssp, struct rcu_head *rhp,
 	if (debug_rcu_head_queue(rhp)) {
 		/* Probable double call_srcu(), so leak the callback. */
 		WRITE_ONCE(rhp->func, srcu_leak_callback);
-		WARN_ONCE(1, "call_srcu(): Leaked duplicate callback\n");
+		WARN_ONCE(1, "call_srcu(): Leaked duplicate callback from %pS\n",
+			  (void *)ip);
 		return;
 	}
 	rhp->func = func;
@@ -1535,7 +1539,7 @@ static void srcu_nmi_drain(struct irq_work *iw)
 		llist_for_each_safe(cnode, cnext, cnode) {
 			struct rcu_head *rhp = (struct rcu_head *)cnode;
 
-			__call_srcu(ssp, rhp, rhp->func, true);
+			__call_srcu(ssp, rhp, rhp->func, true, _THIS_IP_);
 		}
 	}
 }
@@ -1564,7 +1568,7 @@ static void srcu_nmi_drain(struct irq_work *iw)
 void call_srcu(struct srcu_struct *ssp, struct rcu_head *rhp,
 	       rcu_callback_t func)
 {
-	__call_srcu(ssp, rhp, func, true);
+	__call_srcu(ssp, rhp, func, true, _RET_IP_);
 }
 EXPORT_SYMBOL_GPL(call_srcu);
 
@@ -1589,7 +1593,7 @@ static void __synchronize_srcu(struct srcu_struct *ssp, bool do_norm)
 	check_init_srcu_struct(ssp);
 	init_completion(&rcu.completion);
 	init_rcu_head_on_stack(&rcu.head);
-	__call_srcu(ssp, &rcu.head, wakeme_after_rcu, do_norm);
+	__call_srcu(ssp, &rcu.head, wakeme_after_rcu, do_norm, _RET_IP_);
 	wait_for_completion(&rcu.completion);
 	destroy_rcu_head_on_stack(&rcu.head);
 
@@ -1859,7 +1863,8 @@ static void srcu_expedite_current_cb(struct rcu_head *rhp)
 	raw_spin_unlock_irqrestore_rcu_node(sdp, flags);
 	// If needed, requeue ourselves as an expedited SRCU callback.
 	if (needcb)
-		__call_srcu(sdp->ssp, &sdp->srcu_ec_head, srcu_expedite_current_cb, false);
+		__call_srcu(sdp->ssp, &sdp->srcu_ec_head, srcu_expedite_current_cb,
+			    false, _RET_IP_);
 }
 
 /**
@@ -1892,7 +1897,8 @@ void srcu_expedite_current(struct srcu_struct *ssp)
 	raw_spin_unlock_irqrestore_rcu_node(sdp, flags);
 	// If needed, queue an expedited SRCU callback.
 	if (needcb)
-		__call_srcu(ssp, &sdp->srcu_ec_head, srcu_expedite_current_cb, false);
+		__call_srcu(ssp, &sdp->srcu_ec_head, srcu_expedite_current_cb,
+			    false, _RET_IP_);
 	migrate_enable();
 }
 EXPORT_SYMBOL_GPL(srcu_expedite_current);
