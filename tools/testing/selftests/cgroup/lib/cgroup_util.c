@@ -54,6 +54,54 @@ ssize_t write_text(const char *path, char *buf, ssize_t len)
 	return len < 0 ? -errno : len;
 }
 
+/*
+ * cg_get_id - return the kernfs id of a cgroup directory
+ * @cgroup: absolute path to the cgroup directory
+ *
+ * Returns the cgroup's kernfs node id (cgrp->kn->id) -- the same value the
+ * kernel exposes to BPF as cgrp->kn->id and via bpf_get_current_cgroup_id().
+ * This is obtained from the cgroupfs file handle and is NOT the directory's
+ * st_ino.  Returns 0 (an invalid id) on failure.
+ */
+unsigned long long cg_get_id(const char *cgroup)
+{
+	union {
+		unsigned long long id;
+		unsigned char raw[8];
+	} handle;
+	struct file_handle *fhp, *fhp2;
+	int mount_id, fhsize, err;
+	unsigned long long ret = 0;
+
+	fhsize = sizeof(*fhp);
+	fhp = calloc(1, fhsize);
+	if (!fhp)
+		return 0;
+
+	/*
+	 * The probe call is expected to fail (EOVERFLOW) and report the real
+	 * handle size in fhp->handle_bytes; a cgroupfs handle is always 8 bytes.
+	 */
+	err = name_to_handle_at(AT_FDCWD, cgroup, fhp, &mount_id, 0);
+	if (err >= 0 || fhp->handle_bytes != 8)
+		goto out;
+
+	fhsize = sizeof(*fhp) + fhp->handle_bytes;
+	fhp2 = realloc(fhp, fhsize);
+	if (!fhp2)
+		goto out;
+	fhp = fhp2;
+
+	if (name_to_handle_at(AT_FDCWD, cgroup, fhp, &mount_id, 0) < 0)
+		goto out;
+
+	memcpy(handle.raw, fhp->f_handle, 8);
+	ret = handle.id;
+out:
+	free(fhp);
+	return ret;
+}
+
 char *cg_name(const char *root, const char *name)
 {
 	size_t len = strlen(root) + strlen(name) + 2;
