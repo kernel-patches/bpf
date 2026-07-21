@@ -30,6 +30,7 @@ properties:
           - mediatek,mt8195-mtu3
           - mediatek,mt8196-mtu3
           - mediatek,mt8365-mtu3
+          - mediatek,mt8512-mtu3
       - const: mediatek,mtu3
 
   reg:
