@@ -10,6 +10,7 @@
 
 #include <linux/export.h>
 #include <linux/irq_work.h>
+#include <linux/llist.h>
 #include <linux/mutex.h>
 #include <linux/preempt.h>
 #include <linux/rcupdate_wait.h>
@@ -43,6 +44,8 @@ static int init_srcu_struct_fields(struct srcu_struct *ssp)
 	INIT_WORK(&ssp->srcu_work, srcu_drive_gp);
 	INIT_LIST_HEAD(&ssp->srcu_work.entry);
 	init_irq_work(&ssp->srcu_irq_work, srcu_tiny_irq_work);
+	init_llist_head(&ssp->nmi_cbs);
+	init_irq_work(&ssp->nmi_iw, srcu_nmi_drain);
 	return 0;
 }
 
@@ -216,10 +219,43 @@ static void srcu_gp_start_if_needed(struct srcu_struct *ssp)
  * Enqueue an SRCU callback on the specified srcu_struct structure,
  * initiating grace-period processing if it is not already running.
  */
+/*
+ * call_srcu() cannot be invoked from NMI context: its enqueue runs under
+ * local_irq_save() (which does not mask NMIs) and appends to the callback list
+ * with a non-atomic multi-store that an NMI could corrupt.
+ *
+ * When called from NMI, stage the callback on this srcu_struct's lockless list
+ * (llist_add() is a single cmpxchg and hence NMI-safe) and schedule an irq_work
+ * (its local enqueue is NMI-safe) that hands it back to call_srcu() from
+ * ordinary context.
+ */
+void srcu_nmi_drain(struct irq_work *iw)
+{
+	struct srcu_struct *ssp = container_of(iw, struct srcu_struct, nmi_iw);
+	struct llist_node *node, *next;
+
+	/* llist_add() prepends, so reverse to preserve call_srcu() order. */
+	node = llist_reverse_order(llist_del_all(&ssp->nmi_cbs));
+	llist_for_each_safe(node, next, node) {
+		struct rcu_head *rhp = (struct rcu_head *)node;
+
+		call_srcu(ssp, rhp, rhp->func);
+	}
+}
+EXPORT_SYMBOL_GPL(srcu_nmi_drain);
+
 void call_srcu(struct srcu_struct *ssp, struct rcu_head *rhp,
 	       rcu_callback_t func)
 {
 	unsigned long flags;
+
+	/* NMI callers cannot touch the callback list; defer via irq_work. */
+	if (in_nmi()) {
+		rhp->func = func;
+		if (llist_add((struct llist_node *)rhp, &ssp->nmi_cbs))
+			irq_work_queue(&ssp->nmi_iw);
+		return;
+	}
 
 	rhp->func = func;
 	rhp->next = NULL;
@@ -259,6 +295,17 @@ void synchronize_srcu(struct srcu_struct *ssp)
 	destroy_rcu_head_on_stack(&rs.head);
 }
 EXPORT_SYMBOL_GPL(synchronize_srcu);
+
+/*
+ * Wait for in-flight call_srcu() callbacks, including any staged from NMI
+ * context, which are first handed to call_srcu() via irq_work_sync().
+ */
+void srcu_barrier(struct srcu_struct *ssp)
+{
+	irq_work_sync(&ssp->nmi_iw);
+	synchronize_srcu(ssp);
+}
+EXPORT_SYMBOL_GPL(srcu_barrier);
 
 /*
  * get_state_synchronize_srcu - Provide an end-of-grace-period cookie

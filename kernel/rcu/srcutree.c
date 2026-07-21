@@ -20,6 +20,7 @@
 #include <linux/percpu.h>
 #include <linux/preempt.h>
 #include <linux/irq_work.h>
+#include <linux/llist.h>
 #include <linux/rcupdate_wait.h>
 #include <linux/sched.h>
 #include <linux/smp.h>
@@ -79,6 +80,25 @@ static void process_srcu(struct work_struct *work);
 static void srcu_irq_work(struct irq_work *work);
 static void srcu_delay_timer(struct timer_list *t);
 
+static void srcu_nmi_drain(struct irq_work *iw);
+
+/*
+ * NMI-safe deferral for call_srcu().  A callback queued from NMI is staged on
+ * its srcu_data's ->nmi_cbs, and that srcu_data is chained (via ->nmi_link)
+ * onto this per-CPU list, which a single statically-initialized irq_work drains
+ * from ordinary context.  Making the irq_work global (one per CPU rather than
+ * one per srcu_struct) means it needs no per-srcu_struct initialization, so the
+ * NMI path never has to run check_init_srcu_struct().
+ */
+struct srcu_nmi_defer {
+	struct llist_head	list;
+	struct irq_work		iw;
+};
+
+static DEFINE_PER_CPU(struct srcu_nmi_defer, srcu_nmi_defer) = {
+	.iw = IRQ_WORK_INIT(srcu_nmi_drain),
+};
+
 /*
  * Initialize SRCU per-CPU data.  Note that statically allocated
  * srcu_struct structures might already have srcu_read_lock() and
@@ -107,6 +127,12 @@ static void init_srcu_struct_data(struct srcu_struct *ssp)
 		sdp->cpu = cpu;
 		INIT_WORK(&sdp->work, srcu_invoke_callbacks);
 		timer_setup(&sdp->delay_work, srcu_delay_timer, 0);
+		/*
+		 * ->nmi_cbs and ->nmi_link are not initialized here: both are
+		 * valid when zeroed, and initializing them at this (possibly
+		 * lazy) point could clobber state an NMI already staged.  See
+		 * __call_srcu().
+		 */
 		sdp->ssp = ssp;
 	}
 }
@@ -721,6 +747,9 @@ void cleanup_srcu_struct(struct srcu_struct *ssp)
 		return; /* Just leak it! */
 	/* Wait for irq_work to finish first as it may queue a new work. */
 	irq_work_sync(&sup->irq_work);
+	/* Drain any NMI-staged callbacks (shared irq_work) before freeing ->sda. */
+	for_each_possible_cpu(cpu)
+		irq_work_sync(&per_cpu(srcu_nmi_defer, cpu).iw);
 	flush_delayed_work(&sup->work);
 	for_each_possible_cpu(cpu) {
 		struct srcu_data *sdp = per_cpu_ptr(ssp->sda, cpu);
@@ -1430,9 +1459,52 @@ static unsigned long srcu_gp_start_if_needed(struct srcu_struct *ssp,
  * srcu_read_lock(), and srcu_read_unlock() that are all passed the same
  * srcu_struct structure.
  */
+/*
+ * call_srcu() cannot be invoked from NMI context: srcu_gp_start_if_needed()
+ * runs under local_irq_save() (which does not mask NMIs) and appends to the
+ * per-CPU srcu_cblist under a raw spinlock -- an NMI could corrupt the list or
+ * deadlock on the lock.
+ *
+ * When called from NMI, stage the callback on the target srcu_data's lockless
+ * ->nmi_cbs list (llist_add() is a single cmpxchg and hence NMI-safe), chain
+ * that srcu_data onto this CPU's global NMI-drain list, and kick the per-CPU
+ * srcu_nmi_defer irq_work (its local enqueue is NMI-safe).  The irq_work hands
+ * each staged callback to the ordinary __call_srcu() from benign context.  As
+ * call_rcu_tasks_trace() is call_srcu() on a dedicated srcu_struct, it becomes
+ * NMI-safe too.
+ *
+ * The NMI path never runs check_init_srcu_struct() (it takes a lock and, on
+ * first use, allocates).  It needs only ssp->sda -- populated for the lifetime
+ * of any defined or init_srcu_struct()'d srcu_struct -- and it records ssp in
+ * the queued srcu_data (->ssp) so the drain can find the srcu_struct even
+ * before the lazy init_srcu_struct_data() has run.  Full initialization happens
+ * later, via check_init_srcu_struct() from the __call_srcu() the drain invokes.
+ */
 static void __call_srcu(struct srcu_struct *ssp, struct rcu_head *rhp,
 			rcu_callback_t func, bool do_norm)
 {
+	/* NMI callers cannot touch the srcu_cblist or its lock; defer. */
+	if (in_nmi()) {
+		struct srcu_data *sdp = this_cpu_ptr(ssp->sda);
+
+		rhp->func = func;
+		if (llist_add((struct llist_node *)rhp, &sdp->nmi_cbs)) {
+			/*
+			 * This srcu_data had no pending NMI callbacks, so record
+			 * the srcu_struct the drain will need and chain it onto
+			 * this CPU's drain list.  ->ssp is only ever set to this
+			 * same value, so the store is safe against a concurrent
+			 * init_srcu_struct_data().
+			 */
+			struct srcu_nmi_defer *sndp = this_cpu_ptr(&srcu_nmi_defer);
+
+			sdp->ssp = ssp;
+			if (llist_add(&sdp->nmi_link, &sndp->list))
+				irq_work_queue(&sndp->iw);
+		}
+		return;
+	}
+
 	if (debug_rcu_head_queue(rhp)) {
 		/* Probable double call_srcu(), so leak the callback. */
 		WRITE_ONCE(rhp->func, srcu_leak_callback);
@@ -1441,6 +1513,31 @@ static void __call_srcu(struct srcu_struct *ssp, struct rcu_head *rhp,
 	}
 	rhp->func = func;
 	(void)srcu_gp_start_if_needed(ssp, rhp, do_norm);
+}
+
+/*
+ * Drain this CPU's NMI-staged callbacks: for each queued srcu_data, hand its
+ * callbacks to the ordinary __call_srcu(), which does the deferred checking and
+ * initialization.  Runs from irq_work context, where __call_srcu() is safe.
+ */
+static void srcu_nmi_drain(struct irq_work *iw)
+{
+	struct srcu_nmi_defer *sndp = container_of(iw, struct srcu_nmi_defer, iw);
+	struct llist_node *snode, *snext;
+
+	llist_for_each_safe(snode, snext, llist_del_all(&sndp->list)) {
+		struct srcu_data *sdp = container_of(snode, struct srcu_data, nmi_link);
+		struct srcu_struct *ssp = sdp->ssp;
+		struct llist_node *cnode, *cnext;
+
+		/* llist_add() prepends, so reverse to preserve call_srcu() order. */
+		cnode = llist_reverse_order(llist_del_all(&sdp->nmi_cbs));
+		llist_for_each_safe(cnode, cnext, cnode) {
+			struct rcu_head *rhp = (struct rcu_head *)cnode;
+
+			__call_srcu(ssp, rhp, rhp->func, true);
+		}
+	}
 }
 
 /**
@@ -1697,9 +1794,21 @@ void srcu_barrier(struct srcu_struct *ssp)
 {
 	int cpu;
 	int idx;
-	unsigned long s = rcu_seq_snap(&ssp->srcu_sup->srcu_barrier_seq);
+	unsigned long s;
 
 	check_init_srcu_struct(ssp);
+
+	/*
+	 * Hand any callbacks staged from NMI context to __call_srcu() before
+	 * snapshotting the barrier sequence, so that they are covered whether
+	 * we do the barrier ourselves or piggyback on a concurrent one.  The
+	 * drain irq_work is shared by all srcu_structs, so this may also drain
+	 * other srcu_structs' NMI callbacks, which is harmless.
+	 */
+	for_each_possible_cpu(cpu)
+		irq_work_sync(&per_cpu(srcu_nmi_defer, cpu).iw);
+
+	s = rcu_seq_snap(&ssp->srcu_sup->srcu_barrier_seq);
 	mutex_lock(&ssp->srcu_sup->srcu_barrier_mutex);
 	if (rcu_seq_done(&ssp->srcu_sup->srcu_barrier_seq, s)) {
 		smp_mb(); /* Force ordering following return. */
