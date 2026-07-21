@@ -8482,9 +8482,6 @@ skip_type_check:
 		meta->subprogno = reg->subprogno;
 		break;
 	case ARG_PTR_TO_MEM:
-		/* The access to this pointer is only checked when we hit the
-		 * next is_mem_size argument below.
-		 */
 		if (arg_type & MEM_FIXED_SIZE) {
 			err = check_mem_reg(env, reg, argno_from_reg(regno), fn->arg_size[arg],
 					    arg_type & MEM_WRITE ? BPF_WRITE : BPF_READ, meta);
@@ -8492,13 +8489,14 @@ skip_type_check:
 				return err;
 			if (arg_type & MEM_ALIGNED)
 				err = check_ptr_alignment(env, reg, 0, fn->arg_size[arg], true);
+		} else {
+			struct bpf_reg_state *size_reg = reg_state(env, regno + 1);
+
+			err = check_mem_size_reg(env, reg, size_reg, argno,
+						 argno_from_reg(regno + 1),
+						 arg_type & MEM_WRITE ? BPF_WRITE : BPF_READ,
+						 fn->arg_type[arg + 1] & SCALAR_MAYBE_ZERO, meta);
 		}
-		break;
-	case ARG_MEM_SIZE:
-		err = check_mem_size_reg(env, reg_state(env, regno - 1), reg,
-					 argno_from_reg(regno - 1), argno,
-					 fn->arg_type[arg - 1] & MEM_WRITE ? BPF_WRITE : BPF_READ,
-					 arg_type & SCALAR_MAYBE_ZERO, meta);
 		break;
 	case ARG_PTR_TO_DYNPTR:
 		err = process_dynptr_func(env, reg, argno, insn_idx, arg_type, &meta->ref_obj,
