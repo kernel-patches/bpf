@@ -1188,6 +1188,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			    u32 btf_id,
 			    struct bpf_attach_target_info *tgt_info);
 void bpf_free_kfunc_btf_tab(struct bpf_kfunc_btf_tab *tab);
+void bpf_free_kfunc_desc_tab(struct bpf_kfunc_desc_tab *tab);
 
 int mark_chain_precision(struct bpf_verifier_env *env, int regno);
 
@@ -1305,8 +1306,19 @@ static inline u32 type_flag(u32 type)
 /* only use after check_attach_btf_id() */
 static inline enum bpf_prog_type resolve_prog_type(const struct bpf_prog *prog)
 {
-	return (prog->type == BPF_PROG_TYPE_EXT && prog->aux->saved_dst_prog_type) ?
-		prog->aux->saved_dst_prog_type : prog->type;
+	if (prog->type == BPF_PROG_TYPE_EXT) {
+		/*
+		 * saved_dst_prog_type is only set once check_attach_btf_id()
+		 * runs. Before that -- e.g. when generating kfunc prototypes at
+		 * add-call time -- fall back to the attach target's type, which
+		 * is available from load time and holds the same value.
+		 */
+		if (prog->aux->saved_dst_prog_type)
+			return prog->aux->saved_dst_prog_type;
+		if (prog->aux->dst_prog)
+			return prog->aux->dst_prog->type;
+	}
+	return prog->type;
 }
 
 static inline bool bpf_prog_check_recur(const struct bpf_prog *prog)
@@ -1483,6 +1495,7 @@ struct bpf_call_arg_meta {
 	/* Common */
 	struct btf *btf;
 	u32 func_id;
+	const struct bpf_func_proto *fn;
 	u8 release_regno;
 	u32 ret_btf_id;
 	u32 subprogno;
@@ -1614,6 +1627,7 @@ enum bpf_reg_arg_type {
 
 struct bpf_kfunc_desc {
 	struct btf_func_model func_model;
+	struct bpf_func_proto *proto;
 	u32 func_id;
 	s32 imm;
 	u16 offset;

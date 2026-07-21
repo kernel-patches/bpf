@@ -2719,8 +2719,26 @@ static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static int gen_kfunc_arg_proto(struct bpf_verifier_env *env,
+			       struct bpf_call_arg_meta *meta,
+			       struct bpf_func_proto *proto);
+
+void bpf_free_kfunc_desc_tab(struct bpf_kfunc_desc_tab *tab)
+{
+	u32 i;
+
+	if (!tab)
+		return;
+	for (i = 0; i < tab->nr_descs; i++)
+		kfree(tab->descs[i].proto);
+	kfree(tab);
+}
+
 int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 {
+	struct bpf_call_arg_meta meta;
+	struct bpf_kfunc_proto *kfunc_proto;
+	struct bpf_func_proto *proto;
 	struct bpf_kfunc_btf_tab *btf_tab;
 	struct btf_func_model func_model;
 	struct bpf_kfunc_desc_tab *tab;
@@ -2728,7 +2746,7 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	struct bpf_kfunc_meta kfunc;
 	struct bpf_kfunc_desc *desc;
 	unsigned long addr;
-	int err;
+	int i, err;
 
 	prog_aux = env->prog->aux;
 	tab = prog_aux->kfunc_tab;
@@ -2806,11 +2824,33 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	if (err)
 		return err;
 
+	kfunc_proto = kzalloc(sizeof(*kfunc_proto), GFP_KERNEL_ACCOUNT);
+	if (!kfunc_proto)
+		return -ENOMEM;
+
+	proto = &kfunc_proto->proto;
+	for (i = 0; i < MAX_BPF_FUNC_ARGS; i++)
+		proto->arg_btf_id[i] = &kfunc_proto->arg_btf_id[i];
+
+	memset(&meta, 0, sizeof(meta));
+	meta.btf = kfunc.btf;
+	meta.func_id = kfunc.id;
+	meta.func_proto = kfunc.proto;
+	meta.func_name = kfunc.name;
+	meta.kfunc_flags = kfunc.flags ? *kfunc.flags : 0;
+
+	err = gen_kfunc_arg_proto(env, &meta, proto);
+	if (err) {
+		kfree(proto);
+		return err;
+	}
+
 	desc = &tab->descs[tab->nr_descs++];
 	desc->func_id = func_id;
 	desc->offset = offset;
 	desc->addr = addr;
 	desc->func_model = func_model;
+	desc->proto = proto;
 	sort(tab->descs, tab->nr_descs, sizeof(tab->descs[0]),
 	     kfunc_desc_cmp_by_id_off, NULL);
 	return 0;
@@ -8329,9 +8369,9 @@ static int process_map_ptr_arg(struct bpf_verifier_env *env, struct bpf_reg_stat
 
 static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 			  struct bpf_call_arg_meta *meta,
-			  const struct bpf_func_proto *fn,
 			  int insn_idx)
 {
+	const struct bpf_func_proto *fn = meta->fn;
 	u32 regno = BPF_REG_1 + arg;
 	struct bpf_reg_state *reg = reg_state(env, regno);
 	enum bpf_arg_type arg_type = fn->arg_type[arg];
@@ -10309,9 +10349,10 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		env->insn_aux_data[insn_idx].non_sleepable = true;
 
 	meta.func_id = func_id;
+	meta.fn = fn;
 	/* check args */
 	for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++) {
-		err = check_func_arg(env, i, &meta, fn, insn_idx);
+		err = check_func_arg(env, i, &meta, insn_idx);
 		if (err)
 			return err;
 	}
@@ -11338,11 +11379,13 @@ bool bpf_is_kfunc_pkt_changing(struct bpf_call_arg_meta *meta)
 
 static enum kfunc_ptr_arg_type
 get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
-		   const struct btf_type *t, const struct btf_type *ref_t,
-		   const char *ref_tname, const struct btf_param *args,
-		   int arg, int nargs, argno_t argno)
+		   const struct btf_param *args, int arg, int nargs, argno_t argno)
 {
+	const struct btf_type *t, *ref_t = NULL;
+	const char *ref_tname = NULL;
 	bool arg_mem_size = false;
+
+	t = btf_type_skip_modifiers(meta->btf, args[arg].type, NULL);
 
 	/* Scalar arguments are classified from their BTF suffix/name alone. */
 	if (btf_type_is_scalar(t)) {
@@ -11363,6 +11406,9 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 			reg_arg_name(env, argno), btf_type_str(t));
 		return -EINVAL;
 	}
+
+	ref_t = btf_type_skip_modifiers(meta->btf, t->type, NULL);
+	ref_tname = btf_name_by_offset(meta->btf, ref_t->name_off);
 
 	if (meta->func_id == special_kfunc_list[KF_bpf_cast_to_kern_ctx] ||
 	    meta->func_id == special_kfunc_list[KF_bpf_session_is_return] ||
@@ -11450,6 +11496,44 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 		return -EINVAL;
 	}
 	return arg_mem_size ? KF_ARG_PTR_TO_MEM : KF_ARG_PTR_TO_MEM | MEM_FIXED_SIZE;
+}
+
+static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
+			       struct bpf_func_proto *proto)
+{
+	const struct btf *btf = meta->btf;
+	const struct btf_param *args;
+	u32 i, nargs;
+	int kf_arg_type;
+
+	args = (const struct btf_param *)(meta->func_proto + 1);
+	nargs = btf_type_vlen(meta->func_proto);
+	if (nargs > MAX_BPF_FUNC_ARGS) {
+		verbose(env, "Function %s has %d > %d args\n", meta->func_name,
+			nargs, MAX_BPF_FUNC_ARGS);
+		return -EINVAL;
+	}
+	if (nargs > MAX_BPF_FUNC_REG_ARGS && !bpf_jit_supports_stack_args()) {
+		verbose(env, "JIT does not support kfunc %s() with %d args\n",
+			meta->func_name, nargs);
+		return -ENOTSUPP;
+	}
+
+	for (i = 0; i < nargs; i++) {
+		argno_t argno = argno_from_arg(i + 1);
+
+		if (is_kfunc_arg_prog_aux(btf, &args[i]) ||
+		    is_kfunc_arg_ignore(btf, &args[i]) ||
+		    is_kfunc_arg_implicit(meta, i))
+			continue;
+
+		kf_arg_type = get_kfunc_arg_type(env, meta, args, i, nargs, argno);
+		if (kf_arg_type < 0)
+			return kf_arg_type;
+		proto->arg_type[i] = kf_arg_type;
+	}
+
+	return 0;
 }
 
 static int process_kf_arg_ptr_to_btf_id(struct bpf_verifier_env *env,
@@ -12035,16 +12119,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 
 	args = (const struct btf_param *)(meta->func_proto + 1);
 	nargs = btf_type_vlen(meta->func_proto);
-	if (nargs > MAX_BPF_FUNC_ARGS) {
-		verbose(env, "Function %s has %d > %d args\n", func_name, nargs,
-			MAX_BPF_FUNC_ARGS);
-		return -EINVAL;
-	}
-	if (nargs > MAX_BPF_FUNC_REG_ARGS && !bpf_jit_supports_stack_args()) {
-		verbose(env, "JIT does not support kfunc %s() with %d args\n",
-			func_name, nargs);
-		return -ENOTSUPP;
-	}
 
 	ret = check_outgoing_stack_args(env, caller, nargs);
 	if (ret)
@@ -12061,8 +12135,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		int regno = reg_from_argno(argno);
 		bool btf_id_fixed_off_ok = true;
 		u32 ref_id, type_size;
-		bool is_ret_buf_sz = false;
-		int kf_arg_type;
+		int kf_arg_type = meta->fn->arg_type[i];
 
 		if (is_kfunc_arg_prog_aux(btf, &args[i])) {
 			/* Reject repeated use bpf_prog_aux */
@@ -12109,11 +12182,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 
 		if (is_kfunc_arg_nullable(meta->btf, &args[i]) && bpf_register_is_null(reg))
 			continue;
-
-		kf_arg_type = get_kfunc_ptr_arg_type(env, meta, t, ref_t, ref_tname,
-						     args, i, nargs, argno);
-		if (kf_arg_type < 0)
-			return kf_arg_type;
 
 		if (is_kfunc_arg_map(btf, &args[i])) {
 			ref_id = *reg2btf_ids[CONST_PTR_TO_MAP];
@@ -13000,6 +13068,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	int err, insn_idx = *insn_idx_p;
 	const struct btf_param *args;
 	u32 i, nargs, ptr_type_id;
+	struct bpf_kfunc_desc *desc;
 	struct btf *desc_btf;
 	int id;
 
@@ -13015,6 +13084,14 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	desc_btf = meta.btf;
 	func_name = meta.func_name;
 	insn_aux = &env->insn_aux_data[insn_idx];
+
+	/* The tab is still sorted by func_id/offset during do_check(). */
+	desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+	if (!desc) {
+		verifier_bug(env, "kfunc descriptor not found for func_id %u", insn->imm);
+		return -EFAULT;
+	}
+	meta.fn = desc->proto;
 
 	insn_aux->is_iter_next = bpf_is_iter_next_kfunc(&meta);
 
