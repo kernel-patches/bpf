@@ -12962,6 +12962,47 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_call_arg
 
 static int check_return_code(struct bpf_verifier_env *env, int regno, const char *reg_name);
 
+/*
+ * bpf_iter_num_new() can be inlined more tightly when its start and end arguments are constant,
+ * as the range checks and their error paths can then be resolved at rewrite time. Record, per
+ * call site, whether both arguments are constant with the same value on every visit.
+ */
+static int update_iter_num_new_state(struct bpf_verifier_env *env)
+{
+	struct bpf_iter_num_new_state *state = &cur_aux(env)->iter_num_new_state;
+	struct bpf_reg_state *start_reg = &cur_regs(env)[BPF_REG_2];
+	struct bpf_reg_state *end_reg = &cur_regs(env)[BPF_REG_3];
+	bool known = tnum_is_const(start_reg->var_off) && tnum_is_const(end_reg->var_off);
+	s32 start = start_reg->var_off.value;
+	s32 end = end_reg->var_off.value;
+	int err;
+
+	if (!state->initialized) {
+		state->initialized = 1;
+		state->fit_for_inline = known;
+		state->start = start;
+		state->end = end;
+	} else if (state->fit_for_inline) {
+		state->fit_for_inline = known && state->start == start && state->end == end;
+	}
+
+	/*
+	 * While folding is still viable the decision relies on the exact constant values, so mark
+	 * the registers precise; otherwise the verifier could prune a path that reaches this call
+	 * with different constants and the folded code would run with a stale value.
+	 */
+	if (state->fit_for_inline) {
+		err = mark_chain_precision(env, BPF_REG_2);
+		if (err)
+			return err;
+		err = mark_chain_precision(env, BPF_REG_3);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    int *insn_idx_p)
 {
@@ -13161,6 +13202,12 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			if (err < 0)
 				return err;
 		}
+	}
+
+	if (meta.func_id == special_kfunc_list[KF_bpf_iter_num_new]) {
+		err = update_iter_num_new_state(env);
+		if (err)
+			return err;
 	}
 
 	for (i = 0; i < CALLER_SAVED_REGS; i++) {
@@ -19774,9 +19821,33 @@ static void __fixup_collection_insert_kfunc(struct bpf_insn_aux_data *insn_aux,
  * Inline bpf_iter_num_new(). R1 holds the pointer to the iterator, R2 and R3 hold the (int)
  * start and end arguments. Keep in sync with the kfunc in kernel/bpf/bpf_iter.c.
  */
-static int inline_bpf_iter_num_new(struct bpf_insn *insn_buf)
+static int inline_bpf_iter_num_new(struct bpf_insn *insn_buf, struct bpf_iter_num_new_state *state)
 {
 	int i = 0;
+
+	/*
+	 * When start and end are constant the range checks and their error paths fold away,
+	 * leaving just the state init or the error result.
+	 */
+	if (state->fit_for_inline) {
+		s32 start = state->start, end = state->end;
+
+		if (start > end) {
+			/* s->cur = s->end = 0; return -EINVAL; */
+			insn_buf[i++] = BPF_ST_MEM(BPF_DW, BPF_REG_1, 0, 0);
+			insn_buf[i++] = BPF_MOV64_IMM(BPF_REG_0, -EINVAL);
+		} else if ((s64)end - (s64)start > BPF_MAX_LOOPS) {
+			/* s->cur = s->end = 0; return -E2BIG; */
+			insn_buf[i++] = BPF_ST_MEM(BPF_DW, BPF_REG_1, 0, 0);
+			insn_buf[i++] = BPF_MOV64_IMM(BPF_REG_0, -E2BIG);
+		} else {
+			/* s->cur = start - 1; s->end = end; return 0; */
+			insn_buf[i++] = BPF_ST_MEM(BPF_W, BPF_REG_1, 0, start - 1);
+			insn_buf[i++] = BPF_ST_MEM(BPF_W, BPF_REG_1, 4, end);
+			insn_buf[i++] = BPF_MOV64_IMM(BPF_REG_0, 0);
+		}
+		return i;
+	}
 
 	/* if (start > end) goto einval; */
 	insn_buf[i++] = BPF_JMP32_REG(BPF_JSGT, BPF_REG_2, BPF_REG_3, 8);
@@ -19979,7 +20050,8 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		insn_buf[5] = BPF_ALU64_IMM(BPF_NEG, BPF_REG_0, 0);
 		*cnt = 6;
 	} else if (desc->func_id == special_kfunc_list[KF_bpf_iter_num_new]) {
-		*cnt = inline_bpf_iter_num_new(insn_buf);
+		*cnt = inline_bpf_iter_num_new(insn_buf,
+					       &env->insn_aux_data[insn_idx].iter_num_new_state);
 	} else if (desc->func_id == special_kfunc_list[KF_bpf_iter_num_next]) {
 		*cnt = inline_bpf_iter_num_next(insn_buf);
 	} else if (desc->func_id == special_kfunc_list[KF_bpf_iter_num_destroy]) {
