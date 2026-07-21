@@ -206,18 +206,18 @@ $(SKELS): $(RDIR)/%.skel.h: $(RDIR)/%.bpf.o $(BPFTOOL) $(GEN_SKEL) | $(RDIR)
 		--skel $@ --subskel $(@:.skel.h=.subskel.h) $<		\
 		$(call skip_on_fail,SKEL,$(@:.skel.h=.subskel.h))
 
-$(LSKELS_H): $(RDIR)/%.lskel.h: $(RDIR)/%.bpf.o $(BPFTOOL) $(GEN_SKEL) | $(RDIR)
-	$(call msg,GEN-SKEL,$(BINARY),$@)
-	$(Q)$(GEN_SKEL) --name $*_lskel --lskel				\
-		--skel $@ $< $(call skip_on_fail,SKEL)
-
-$(LSKELS_SIGNED_H): $(RDIR)/%.lskel.h: $(RDIR)/%.bpf.o $(BPFTOOL)	\
-		    $(GEN_SKEL) $(PRIVATE_KEY) $(VERIFICATION_CERT) | $(RDIR)
-	$(call msg,GEN-SKEL,$(BINARY) (signed),$@)
-	$(Q)PRIVATE_KEY=$(PRIVATE_KEY)					\
-		VERIFICATION_CERT=$(VERIFICATION_CERT)			\
-		$(GEN_SKEL) --sign --name $*_lskel			\
-		--skel $@ $< $(call skip_on_fail,SKEL)
+# Signed light skeletons differ from plain ones only in the --sign
+# flag and the extra key/cert prerequisites; one rule serves both.
+# gen_bpf_skel.sh --sign reads the key/cert paths from the environment
+# (exported in Makefile.buildvars).
+lskel_signed = $(filter $@,$(LSKELS_SIGNED_H))
+$(LSKELS_SIGNED_H): $(PRIVATE_KEY) $(VERIFICATION_CERT)
+$(LSKELS_H) $(LSKELS_SIGNED_H): $(RDIR)/%.lskel.h: $(RDIR)/%.bpf.o	\
+		    $(BPFTOOL) $(GEN_SKEL) | $(RDIR)
+	$(call msg,GEN-SKEL,$(BINARY)$(if $(lskel_signed), (signed)),$@)
+	$(Q)$(GEN_SKEL) $(if $(lskel_signed),--sign,--lskel)		\
+		--name $*_lskel						\
+		--skel $@ $(RDIR)/$*.bpf.o $(call skip_on_fail,SKEL)
 
 .SECONDEXPANSION:
 $(LINKED_SKELS_H): $(RDIR)/%.skel.h: $$(addprefix $(RDIR)/,$$($$*.skel.h-deps)) \

@@ -164,6 +164,8 @@ VERIFY_SIG_SETUP := $(CURDIR)/verify_sig_setup.sh
 VERIFY_SIG_HDR := verification_cert.h
 VERIFICATION_CERT   := $(BUILD_DIR)/signing_key.der
 PRIVATE_KEY := $(BUILD_DIR)/signing_key.pem
+# gen_bpf_skel.sh --sign reads both paths from the environment.
+export PRIVATE_KEY VERIFICATION_CERT
 
 LIBARENA_SKEL := libarena/libarena.skel.h
 
