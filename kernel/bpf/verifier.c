@@ -11350,134 +11350,14 @@ bool bpf_is_kfunc_pkt_changing(struct bpf_call_arg_meta *meta)
 	return meta->func_id == special_kfunc_list[KF_bpf_xdp_pull_data];
 }
 
-static int
-get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
-		   const struct btf_param *args, int arg, int nargs, argno_t argno)
-{
-	const struct btf_type *t, *ref_t = NULL;
-	const char *ref_tname = NULL;
-	bool arg_mem_size = false;
-
-	t = btf_type_skip_modifiers(meta->btf, args[arg].type, NULL);
-
-	/* Scalar arguments are classified from their BTF suffix/name alone. */
-	if (btf_type_is_scalar(t)) {
-		if (is_kfunc_arg_constant(meta->btf, &args[arg]))
-			return ARG_CONST_BTF_ID;
-		if (is_kfunc_arg_const_mem_size(meta->btf, &args[arg]))
-			return ARG_CONST_MEM_SIZE;
-		if (is_kfunc_arg_mem_size(meta->btf, &args[arg]))
-			return ARG_MEM_SIZE;
-		if (is_kfunc_arg_scalar_with_name(meta->btf, &args[arg], "rdonly_buf_size") ||
-		    is_kfunc_arg_scalar_with_name(meta->btf, &args[arg], "rdwr_buf_size"))
-			return ARG_CONST_ALLOC_SIZE_OR_ZERO;
-		return ARG_ANYTHING;
-	}
-
-	if (!btf_type_is_ptr(t)) {
-		verbose(env, "Unrecognized %s type %s\n",
-			reg_arg_name(env, argno), btf_type_str(t));
-		return -EINVAL;
-	}
-
-	ref_t = btf_type_skip_modifiers(meta->btf, t->type, NULL);
-	ref_tname = btf_name_by_offset(meta->btf, ref_t->name_off);
-
-	if (meta->func_id == special_kfunc_list[KF_bpf_cast_to_kern_ctx] ||
-	    meta->func_id == special_kfunc_list[KF_bpf_session_is_return] ||
-	    meta->func_id == special_kfunc_list[KF_bpf_session_cookie])
-		return ARG_PTR_TO_CTX;
-
-	/* In this function, we verify the kfunc's BTF as per the argument type,
-	 * leaving the rest of the verification with respect to the register
-	 * type to our caller. When a set of conditions hold in the BTF type of
-	 * arguments, we resolve it to a known bpf_arg_type.
-	 */
-	if (btf_is_prog_ctx_type(&env->log, meta->btf, t, resolve_prog_type(env->prog), arg))
-		return ARG_PTR_TO_CTX;
-
-	if (is_kfunc_arg_alloc_obj(meta->btf, &args[arg]))
-		return ARG_PTR_TO_ALLOC_BTF_ID;
-
-	if (is_kfunc_arg_refcounted_kptr(meta->btf, &args[arg]))
-		return ARG_PTR_TO_REFCOUNTED_KPTR;
-
-	if (is_kfunc_arg_dynptr(meta->btf, &args[arg]))
-		return ARG_PTR_TO_DYNPTR;
-
-	if (is_kfunc_arg_iter(meta, arg, &args[arg]))
-		return ARG_PTR_TO_ITER;
-
-	if (is_kfunc_arg_list_head(meta->btf, &args[arg]))
-		return ARG_PTR_TO_LIST_HEAD;
-
-	if (is_kfunc_arg_list_node(meta->btf, &args[arg]))
-		return ARG_PTR_TO_LIST_NODE;
-
-	if (is_kfunc_arg_rbtree_root(meta->btf, &args[arg]))
-		return ARG_PTR_TO_RB_ROOT;
-
-	if (is_kfunc_arg_rbtree_node(meta->btf, &args[arg]))
-		return ARG_PTR_TO_RB_NODE;
-
-	if (is_kfunc_arg_const_str(meta->btf, &args[arg]))
-		return ARG_PTR_TO_CONST_STR;
-
-	if (is_kfunc_arg_const_map(meta->btf, &args[arg]))
-		return ARG_CONST_MAP_PTR;
-
-	if (is_kfunc_arg_map(meta->btf, &args[arg]))
-		return ARG_PTR_TO_BTF_ID;
-
-	if (is_kfunc_arg_wq(meta->btf, &args[arg]))
-		return ARG_PTR_TO_WORKQUEUE;
-
-	if (is_kfunc_arg_timer(meta->btf, &args[arg]))
-		return ARG_PTR_TO_TIMER;
-
-	if (is_kfunc_arg_task_work(meta->btf, &args[arg]))
-		return ARG_PTR_TO_TASK_WORK;
-
-	if (is_kfunc_arg_irq_flag(meta->btf, &args[arg]))
-		return ARG_PTR_TO_IRQ_FLAG;
-
-	if (is_kfunc_arg_res_spin_lock(meta->btf, &args[arg]))
-		return ARG_PTR_TO_RES_SPIN_LOCK;
-
-	if (is_kfunc_arg_callback(env, meta->btf, &args[arg]))
-		return ARG_PTR_TO_FUNC;
-
-	if (arg + 1 < nargs &&
-	    (is_kfunc_arg_mem_size(meta->btf, &args[arg + 1]) ||
-	     is_kfunc_arg_const_mem_size(meta->btf, &args[arg + 1])))
-		arg_mem_size = true;
-
-	/* A pointer to a struct without a size argument is classified as KF_ARG_PTR_TO_BTF_ID */
-	if (btf_type_is_struct(ref_t) && !arg_mem_size)
-		return ARG_PTR_TO_BTF_ID;
-
-	/*
-	 * Otherwise this is a memory buffer supported by check_helper_mem_access(): a pointer
-	 * to a scalar, or to void when paired with a size argument. The access size is derived
-	 * from the pointed-to BTF type unless a size argument follows.
-	 */
-	if (!btf_type_is_scalar(ref_t) && !__btf_type_is_scalar_struct(env, meta->btf, ref_t, 0) &&
-	    (arg_mem_size ? !btf_type_is_void(ref_t) : 1)) {
-		verbose(env, "%s pointer type %s %s must point to %sscalar, or struct with scalar\n",
-			reg_arg_name(env, argno),
-			btf_type_str(ref_t), ref_tname, arg_mem_size ? "void, " : "");
-		return -EINVAL;
-	}
-	return arg_mem_size ? ARG_PTR_TO_MEM : ARG_PTR_TO_MEM | MEM_FIXED_SIZE;
-}
-
 static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 			       struct bpf_func_proto *proto)
 {
 	const struct btf *btf = meta->btf;
+	const struct btf_type *t, *ref_t = NULL;
 	const struct btf_param *args;
-	u32 i, nargs;
-	int kf_arg_type;
+	const char *ref_tname = NULL;
+	u32 i, nargs, ref_id;
 
 	args = (const struct btf_param *)(meta->func_proto + 1);
 	nargs = btf_type_vlen(meta->func_proto);
@@ -11494,16 +11374,112 @@ static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg
 
 	for (i = 0; i < nargs; i++) {
 		argno_t argno = argno_from_arg(i + 1);
+		bool arg_mem_size = false;
+		enum bpf_arg_type arg_type;
 
 		if (is_kfunc_arg_prog_aux(btf, &args[i]) ||
 		    is_kfunc_arg_ignore(btf, &args[i]) ||
 		    is_kfunc_arg_implicit(meta, i))
 			continue;
 
-		kf_arg_type = get_kfunc_arg_type(env, meta, args, i, nargs, argno);
-		if (kf_arg_type < 0)
-			return kf_arg_type;
-		proto->arg_type[i] = kf_arg_type;
+		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
+
+		/* Scalar arguments are classified from their BTF suffix/name alone. */
+		if (btf_type_is_scalar(t)) {
+			if (is_kfunc_arg_constant(btf, &args[i]))
+				arg_type = ARG_CONST_BTF_ID;
+			else if (is_kfunc_arg_const_mem_size(btf, &args[i]))
+				arg_type = ARG_CONST_MEM_SIZE;
+			else if (is_kfunc_arg_mem_size(btf, &args[i]))
+				arg_type = ARG_MEM_SIZE;
+			else if (is_kfunc_arg_scalar_with_name(btf, &args[i], "rdonly_buf_size") ||
+				 is_kfunc_arg_scalar_with_name(btf, &args[i], "rdwr_buf_size"))
+				arg_type = ARG_CONST_ALLOC_SIZE_OR_ZERO;
+			else
+				arg_type = ARG_ANYTHING;
+
+			proto->arg_type[i] = arg_type;
+			continue;
+		}
+
+		if (!btf_type_is_ptr(t)) {
+			verbose(env, "Unrecognized %s type %s\n",
+				reg_arg_name(env, argno), btf_type_str(t));
+			return -EINVAL;
+		}
+
+		ref_t = btf_type_skip_modifiers(btf, t->type, &ref_id);
+		ref_tname = btf_name_by_offset(btf, ref_t->name_off);
+
+		/* Classify the pointer argument from the kfunc's BTF alone; the
+		 * register is resolved against this later in check_kfunc_args().
+		 */
+		if (meta->func_id == special_kfunc_list[KF_bpf_cast_to_kern_ctx] ||
+		    meta->func_id == special_kfunc_list[KF_bpf_session_is_return] ||
+		    meta->func_id == special_kfunc_list[KF_bpf_session_cookie] ||
+		    btf_is_prog_ctx_type(&env->log, btf, t, resolve_prog_type(env->prog), i))
+			arg_type = ARG_PTR_TO_CTX;
+		else if (is_kfunc_arg_alloc_obj(btf, &args[i]))
+			arg_type = ARG_PTR_TO_ALLOC_BTF_ID;
+		else if (is_kfunc_arg_refcounted_kptr(btf, &args[i]))
+			arg_type = ARG_PTR_TO_REFCOUNTED_KPTR;
+		else if (is_kfunc_arg_dynptr(btf, &args[i]))
+			arg_type = ARG_PTR_TO_DYNPTR;
+		else if (is_kfunc_arg_iter(meta, i, &args[i]))
+			arg_type = ARG_PTR_TO_ITER;
+		else if (is_kfunc_arg_list_head(btf, &args[i]))
+			arg_type = ARG_PTR_TO_LIST_HEAD;
+		else if (is_kfunc_arg_list_node(btf, &args[i]))
+			arg_type = ARG_PTR_TO_LIST_NODE;
+		else if (is_kfunc_arg_rbtree_root(btf, &args[i]))
+			arg_type = ARG_PTR_TO_RB_ROOT;
+		else if (is_kfunc_arg_rbtree_node(btf, &args[i]))
+			arg_type = ARG_PTR_TO_RB_NODE;
+		else if (is_kfunc_arg_const_str(btf, &args[i]))
+			arg_type = ARG_PTR_TO_CONST_STR;
+		else if (is_kfunc_arg_const_map(btf, &args[i]))
+			arg_type = ARG_CONST_MAP_PTR;
+		else if (is_kfunc_arg_map(btf, &args[i]))
+			arg_type = ARG_PTR_TO_BTF_ID;
+		else if (is_kfunc_arg_wq(btf, &args[i]))
+			arg_type = ARG_PTR_TO_WORKQUEUE;
+		else if (is_kfunc_arg_timer(btf, &args[i]))
+			arg_type = ARG_PTR_TO_TIMER;
+		else if (is_kfunc_arg_task_work(btf, &args[i]))
+			arg_type = ARG_PTR_TO_TASK_WORK;
+		else if (is_kfunc_arg_irq_flag(btf, &args[i]))
+			arg_type = ARG_PTR_TO_IRQ_FLAG;
+		else if (is_kfunc_arg_res_spin_lock(btf, &args[i]))
+			arg_type = ARG_PTR_TO_RES_SPIN_LOCK;
+		else if (is_kfunc_arg_callback(env, btf, &args[i]))
+			arg_type = ARG_PTR_TO_FUNC;
+		else {
+			if (i + 1 < nargs &&
+			    (is_kfunc_arg_mem_size(btf, &args[i + 1]) ||
+			     is_kfunc_arg_const_mem_size(btf, &args[i + 1])))
+				arg_mem_size = true;
+
+			/* A pointer to a struct without a size argument is a
+			 * BTF_ID; a struct composed of scalars (or a pointer to
+			 * scalar, or void when paired with a size) is a memory
+			 * buffer sized from the BTF type unless a size follows.
+			 */
+			if (btf_type_is_struct(ref_t) && !arg_mem_size) {
+				arg_type = ARG_PTR_TO_BTF_ID;
+			} else if (!btf_type_is_scalar(ref_t) &&
+				   !__btf_type_is_scalar_struct(env, btf, ref_t, 0) &&
+				   (arg_mem_size ? !btf_type_is_void(ref_t) : 1)) {
+				verbose(env, "%s pointer type %s %s must point to %sscalar, or struct with scalar\n",
+					reg_arg_name(env, argno),
+					btf_type_str(ref_t), ref_tname, arg_mem_size ? "void, " : "");
+				return -EINVAL;
+			} else {
+				arg_type = arg_mem_size ? ARG_PTR_TO_MEM :
+					   ARG_PTR_TO_MEM | MEM_FIXED_SIZE;
+			}
+		}
+
+		proto->arg_type[i] = arg_type;
 	}
 
 	return 0;
