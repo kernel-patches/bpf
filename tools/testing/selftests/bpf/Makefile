@@ -527,27 +527,26 @@ $(OUTPUT)/test_maps: $(RUNNER_PREREQS) map_tests/tests.h default-skels FORCE
 DEFAULT_BPF_OBJS := $(patsubst progs/%.c,$(OUTPUT)/%.bpf.o,$(wildcard progs/*.c))
 TEST_GEN_FILES += $(DEFAULT_BPF_OBJS)
 
-BENCH_SKELS := $(addprefix $(OUTPUT)/,					\
-	       test_overhead.skel.h trigger_bench.skel.h		\
-	       ringbuf_bench.skel.h perfbuf_bench.skel.h		\
-	       bloom_filter_bench.skel.h bpf_loop_bench.skel.h		\
-	       strncmp_bench.skel.h bpf_hashmap_full_update_bench.skel.h\
-	       local_storage_bench.skel.h				\
-	       local_storage_rcu_tasks_trace_bench.skel.h		\
-	       bench_local_storage_create.skel.h			\
-	       bpf_hashmap_lookup.skel.h htab_mem_bench.skel.h		\
-	       crypto_bench.skel.h bench_sockmap_prog.skel.h		\
-	       lpm_trie_bench.skel.h lpm_trie_map.skel.h		\
-	       bpf_nop_bench.skel.h xdp_lb_bench.skel.h)
-TOP_SKELS := $(addprefix $(OUTPUT)/,xsk_xdp_progs.skel.h		\
-	     xdp_hw_metadata.skel.h xdp_features.skel.h			\
-	     test_core_extern.skel.h) $(BENCH_SKELS)
+# Skeleton headers get the same over-approximated shape: any progs/%.c
+# may produce a %.skel.h in the default flavor's output. Names the
+# runner never generates (blacklisted or lskel-only sources) only cost
+# a delegation rule nothing depends on. Light and linked skeletons are
+# not covered - no target in this Makefile consumes one; a future
+# consumer fails loudly ("No rule to make target") and extends this
+# list.
+DEFAULT_SKEL_HDRS := \
+	$(patsubst progs/%.c,$(OUTPUT)/%.skel.h,$(wildcard progs/*.c))
 
 # Empty-recipe delegation: "default-skels" (re)builds the file via the
 # runner sub-make, after which make re-stats the target, so dependents
 # see fresh timestamps within the same invocation. Dependents still
 # rebuild on mtime only - the phony prerequisite does not cascade.
-$(DEFAULT_BPF_OBJS) $(TOP_SKELS): default-skels ;
+# The bare $(notdir ...) names are covered too: compiler-generated .d
+# fragments record a quote-include as the compiler found it, which for
+# a source living in this directory (test_cpp.cpp) is the bare
+# skeleton name rather than the $(OUTPUT)-prefixed path.
+$(DEFAULT_BPF_OBJS) $(DEFAULT_SKEL_HDRS)				\
+	$(notdir $(DEFAULT_SKEL_HDRS)): default-skels ;
 
 # ---------------------------------------------------------------------
 # Standalone test binaries
@@ -586,9 +585,13 @@ $(OUTPUT)/xdp_features: xdp_features.c $(OUTPUT)/network_helpers.o $(OUTPUT)/xdp
 CXXFLAGS += $(CFLAGS)
 CXXFLAGS := $(subst -D_GNU_SOURCE=,,$(CXXFLAGS))
 CXXFLAGS := $(subst -std=gnu11,-std=gnu++11,$(CXXFLAGS))
-$(OUTPUT)/test_cpp: test_cpp.cpp $(OUTPUT)/test_core_extern.skel.h $(BPFOBJ)
+# Skeleton-header dependencies come from the compiler (-MMD, as for
+# the benchmarks); default-skels orders the first build.
+$(OUTPUT)/test_cpp: test_cpp.cpp $(BPFOBJ) | default-skels
 	$(call msg,CXX,,$@)
-	$(Q)$(CXX) $(CXXFLAGS) $(filter %.a %.o %.cpp,$^) $(LDLIBS) -o $@
+	$(Q)$(CXX) $(CXXFLAGS) -MMD -MP $(filter %.a %.o %.cpp,$^) $(LDLIBS) -o $@
+
+-include $(OUTPUT)/test_cpp.d
 
 # ---------------------------------------------------------------------
 # Benchmark runner. The benchmark list is defined by the files in
@@ -597,30 +600,20 @@ $(OUTPUT)/test_cpp: test_cpp.cpp $(OUTPUT)/test_core_extern.skel.h $(BPFOBJ)
 
 BENCH_OBJS := $(sort $(patsubst benchs/%.c,$(OUTPUT)/%.o,$(wildcard benchs/bench_*.c)))
 
+# The compiler records every header each benchmark compile actually
+# read - generated skeletons and plain headers alike - in a .d
+# fragment next to the object (-MMD); make reads the fragments back on
+# the next parse, so rebuilds depend on exactly the right headers with
+# no hand-maintained lists. A first build needs no dependency
+# information at all: every bench object waits for default-skels,
+# which generates all skeletons. -MP adds phony targets so a renamed
+# or deleted header does not break the next build.
 $(OUTPUT)/bench_%.o: benchs/bench_%.c bench.h $(BPFOBJ) | default-skels
 	$(call msg,CC,,$@)
-	$(Q)$(CC) $(CFLAGS) -O2 -c $(filter %.c,$^) -o $@ $(call skip_on_fail,BENCH)
+	$(Q)$(CC) $(CFLAGS) -O2 -MMD -MP -c $(filter %.c,$^) -o $@	\
+		$(call skip_on_fail,BENCH,$(@:.o=.d))
 
-# benchmark-specific generated-skeleton dependencies
-$(OUTPUT)/bench_rename.o: $(OUTPUT)/test_overhead.skel.h
-$(OUTPUT)/bench_trigger.o: $(OUTPUT)/trigger_bench.skel.h
-$(OUTPUT)/bench_ringbufs.o: $(OUTPUT)/ringbuf_bench.skel.h \
-			    $(OUTPUT)/perfbuf_bench.skel.h
-$(OUTPUT)/bench_bloom_filter_map.o: $(OUTPUT)/bloom_filter_bench.skel.h
-$(OUTPUT)/bench_bpf_loop.o: $(OUTPUT)/bpf_loop_bench.skel.h
-$(OUTPUT)/bench_strncmp.o: $(OUTPUT)/strncmp_bench.skel.h
-$(OUTPUT)/bench_bpf_hashmap_full_update.o: $(OUTPUT)/bpf_hashmap_full_update_bench.skel.h
-$(OUTPUT)/bench_local_storage.o: $(OUTPUT)/local_storage_bench.skel.h
-$(OUTPUT)/bench_local_storage_rcu_tasks_trace.o: $(OUTPUT)/local_storage_rcu_tasks_trace_bench.skel.h
-$(OUTPUT)/bench_local_storage_create.o: $(OUTPUT)/bench_local_storage_create.skel.h
-$(OUTPUT)/bench_bpf_hashmap_lookup.o: $(OUTPUT)/bpf_hashmap_lookup.skel.h
-$(OUTPUT)/bench_htab_mem.o: $(OUTPUT)/htab_mem_bench.skel.h
-$(OUTPUT)/bench_bpf_crypto.o: $(OUTPUT)/crypto_bench.skel.h
-$(OUTPUT)/bench_sockmap.o: $(OUTPUT)/bench_sockmap_prog.skel.h
-$(OUTPUT)/bench_lpm_trie_map.o: $(OUTPUT)/lpm_trie_bench.skel.h $(OUTPUT)/lpm_trie_map.skel.h
-$(OUTPUT)/bench_bpf_nop.o: $(OUTPUT)/bpf_nop_bench.skel.h bench_bpf_timing.h
-$(OUTPUT)/bench_xdp_lb.o: $(OUTPUT)/xdp_lb_bench.skel.h bench_bpf_timing.h
-$(OUTPUT)/bench_bpf_timing.o: bench_bpf_timing.h
+-include $(BENCH_OBJS:.o=.d)
 
 $(OUTPUT)/bench.o: bench.h testing_helpers.h $(BPFOBJ)
 $(OUTPUT)/bench: LDLIBS += -lm
