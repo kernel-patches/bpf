@@ -24,6 +24,7 @@
 #include <linux/smp.h>
 #include <linux/rcupdate_wait.h>
 #include <linux/interrupt.h>
+#include <linux/llist.h>
 #include <linux/sched.h>
 #include <linux/sched/debug.h>
 #include <linux/nmi.h>
@@ -3126,6 +3127,78 @@ static void check_cb_ovld(struct rcu_data *rdp)
 	raw_spin_unlock_rcu_node(rnp);
 }
 
+/*
+ * call_rcu() cannot be invoked from NMI context: its callback-queuing path
+ * runs under local_irq_save() (which does not mask NMIs) and appends to the
+ * per-CPU rcu_segcblist with a non-atomic multi-store and, on offloaded CPUs,
+ * a raw spinlock -- an NMI could corrupt the list or deadlock on the lock.
+ *
+ * When called from NMI, the callback is instead staged on a per-CPU lockless
+ * list -- llist_add() is a single cmpxchg and hence NMI-safe -- and an irq_work
+ * (its local enqueue is NMI-safe) hands it back to call_rcu_hurry() from
+ * ordinary context, where all of call_rcu()'s checks and machinery run
+ * normally.  The hurry flavor is used because a deferred callback has already
+ * incurred latency and should not be delayed further by lazy batching.
+ */
+struct rcu_nmi_queue {
+	struct llist_head	list;
+	struct irq_work		iw;
+};
+
+static void rcu_nmi_drain(struct irq_work *iw);
+
+static DEFINE_PER_CPU(struct rcu_nmi_queue, rcu_nmi_queue) = {
+	.list	= LLIST_HEAD_INIT(rcu_nmi_queue.list),
+	.iw	= IRQ_WORK_INIT(rcu_nmi_drain),
+};
+
+static atomic_long_t rcu_nmi_pending;
+
+static void rcu_nmi_drain(struct irq_work *iw)
+{
+	struct rcu_nmi_queue *rnq = container_of(iw, struct rcu_nmi_queue, iw);
+	struct llist_node *node, *next;
+
+	/* llist_add() prepends, so reverse to preserve call_rcu() order. */
+	node = llist_reverse_order(llist_del_all(&rnq->list));
+	llist_for_each_safe(node, next, node) {
+		struct rcu_head *head = (struct rcu_head *)node;
+
+		call_rcu_hurry(head, head->func);
+		atomic_long_dec(&rcu_nmi_pending);
+	}
+}
+
+/*
+ * Stage @head from NMI context; handed to call_rcu_hurry() from the irq_work.
+ * Called only with in_nmi() true, so the CPU is stable without preempt_disable.
+ */
+static void call_rcu_nmi(struct rcu_head *head, rcu_callback_t func)
+{
+	struct rcu_nmi_queue *rnq = this_cpu_ptr(&rcu_nmi_queue);
+
+	head->func = func;
+	atomic_long_inc(&rcu_nmi_pending);
+	if (llist_add((struct llist_node *)head, &rnq->list))
+		irq_work_queue(&rnq->iw);
+}
+
+/*
+ * Drain every CPU's NMI-staged callbacks into call_rcu() so that a following
+ * rcu_barrier() waits for them.  Callbacks staged on a CPU that has since gone
+ * offline were already drained by the irq_work flush during CPU teardown.  The
+ * pending count keeps this a single load when call_rcu() is never used in NMI.
+ */
+static void rcu_nmi_flush(void)
+{
+	int cpu;
+
+	if (!atomic_long_read(&rcu_nmi_pending))
+		return;
+	for_each_possible_cpu(cpu)
+		irq_work_sync(&per_cpu_ptr(&rcu_nmi_queue, cpu)->iw);
+}
+
 static void
 __call_rcu_common(struct rcu_head *head, rcu_callback_t func, bool lazy_in)
 {
@@ -3140,6 +3213,12 @@ __call_rcu_common(struct rcu_head *head, rcu_callback_t func, bool lazy_in)
 	/* Avoid NULL dereference if callback is NULL. */
 	if (WARN_ON_ONCE(!func))
 		return;
+
+	/* NMI callers cannot touch the segmented list or nocb locks; defer. */
+	if (in_nmi()) {
+		call_rcu_nmi(head, func);
+		return;
+	}
 
 	if (debug_rcu_head_queue(head)) {
 		/*
@@ -3849,8 +3928,18 @@ void rcu_barrier(void)
 	unsigned long flags;
 	unsigned long gseq;
 	struct rcu_data *rdp;
-	unsigned long s = rcu_seq_snap(&rcu_state.barrier_sequence);
+	unsigned long s;
 
+	/*
+	 * Hand any callbacks staged from NMI context to call_rcu() before
+	 * snapshotting the barrier sequence, so that they are covered whether
+	 * we do the barrier ourselves or piggyback on a concurrent one via the
+	 * early-exit path below (that barrier started after our flush, and so
+	 * observed the flushed callbacks).
+	 */
+	rcu_nmi_flush();
+
+	s = rcu_seq_snap(&rcu_state.barrier_sequence);
 	rcu_barrier_trace(TPS("Begin"), -1, s);
 
 	/* Take mutex to serialize concurrent rcu_barrier() requests. */

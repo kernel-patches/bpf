@@ -11,6 +11,8 @@
  */
 #include <linux/completion.h>
 #include <linux/interrupt.h>
+#include <linux/irq_work.h>
+#include <linux/llist.h>
 #include <linux/notifier.h>
 #include <linux/rcupdate_wait.h>
 #include <linux/kernel.h>
@@ -42,8 +44,36 @@ static struct rcu_ctrlblk rcu_ctrlblk = {
 	.gp_seq		= 0 - 300UL,
 };
 
+/*
+ * call_rcu() cannot be invoked from NMI context: its callback-queuing path
+ * runs under local_irq_save() (which does not mask NMIs) and appends to the
+ * callback list with a non-atomic multi-store that an NMI could corrupt.
+ *
+ * When called from NMI, stage the callback on a lockless list (llist_add() is
+ * a single cmpxchg and hence NMI-safe) and schedule an irq_work (its local
+ * enqueue is NMI-safe) that hands it to call_rcu_hurry() from ordinary context.
+ */
+static void rcu_nmi_drain(struct irq_work *iw);
+static LLIST_HEAD(rcu_nmi_list);
+static DEFINE_IRQ_WORK(rcu_nmi_iw, rcu_nmi_drain);
+
+static void rcu_nmi_drain(struct irq_work *iw)
+{
+	struct llist_node *node, *next;
+
+	/* llist_add() prepends, so reverse to preserve call_rcu() order. */
+	node = llist_reverse_order(llist_del_all(&rcu_nmi_list));
+	llist_for_each_safe(node, next, node) {
+		struct rcu_head *head = (struct rcu_head *)node;
+
+		call_rcu_hurry(head, head->func);
+	}
+}
+
 void rcu_barrier(void)
 {
+	/* Register any callbacks staged from NMI context first. */
+	irq_work_sync(&rcu_nmi_iw);
 	wait_rcu_gp(call_rcu_hurry);
 }
 EXPORT_SYMBOL(rcu_barrier);
@@ -159,6 +189,14 @@ void call_rcu(struct rcu_head *head, rcu_callback_t func)
 {
 	static atomic_t doublefrees;
 	unsigned long flags;
+
+	/* NMI callers cannot touch the callback list; defer via irq_work. */
+	if (in_nmi()) {
+		head->func = func;
+		if (llist_add((struct llist_node *)head, &rcu_nmi_list))
+			irq_work_queue(&rcu_nmi_iw);
+		return;
+	}
 
 	if (debug_rcu_head_queue(head)) {
 		if (atomic_inc_return(&doublefrees) < 4) {
