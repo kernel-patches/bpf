@@ -38,7 +38,7 @@ int tcx_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	}
 	ret = bpf_mprog_attach(entry, &entry_new, prog, NULL, replace_prog,
 			       attr->attach_flags, attr->relative_fd,
-			       attr->expected_revision);
+			       attr->expected_revision, BPF_LINK_TYPE_TCX);
 	if (!ret) {
 		if (entry != entry_new) {
 			tcx_entry_update(dev, entry_new, ingress);
@@ -76,7 +76,7 @@ int tcx_prog_detach(const union bpf_attr *attr, struct bpf_prog *prog)
 		goto out;
 	}
 	ret = bpf_mprog_detach(entry, &entry_new, prog, NULL, attr->attach_flags,
-			       attr->relative_fd, attr->expected_revision);
+			       attr->relative_fd, attr->expected_revision, BPF_LINK_TYPE_TCX);
 	if (!ret) {
 		if (!tcx_entry_is_active(entry_new))
 			entry_new = NULL;
@@ -152,7 +152,7 @@ static int tcx_link_prog_attach(struct bpf_link *link, u32 flags, u32 id_or_fd,
 	if (!entry)
 		return -ENOMEM;
 	ret = bpf_mprog_attach(entry, &entry_new, link->prog, link, NULL, flags,
-			       id_or_fd, revision);
+			       id_or_fd, revision, BPF_LINK_TYPE_TCX);
 	if (!ret) {
 		if (entry != entry_new) {
 			tcx_entry_update(dev, entry_new, ingress);
@@ -183,7 +183,7 @@ static void tcx_link_release(struct bpf_link *link)
 		ret = -ENOENT;
 		goto out;
 	}
-	ret = bpf_mprog_detach(entry, &entry_new, link->prog, link, 0, 0, 0);
+	ret = bpf_mprog_detach(entry, &entry_new, link->prog, link, 0, 0, 0, BPF_LINK_TYPE_TCX);
 	if (!ret) {
 		if (!tcx_entry_is_active(entry_new))
 			entry_new = NULL;
@@ -229,9 +229,8 @@ static int tcx_link_update(struct bpf_link *link, struct bpf_prog *nprog,
 		ret = -ENOENT;
 		goto out;
 	}
-	ret = bpf_mprog_attach(entry, &entry_new, nprog, link, oprog,
-			       BPF_F_REPLACE | BPF_F_ID,
-			       link->prog->aux->id, 0);
+	ret = bpf_mprog_attach(entry, &entry_new, nprog, link, oprog, BPF_F_REPLACE | BPF_F_ID,
+			       link->prog->aux->id, 0, BPF_LINK_TYPE_TCX);
 	if (!ret) {
 		WARN_ON_ONCE(entry != entry_new);
 		oprog = xchg(&link->prog, nprog);

@@ -768,7 +768,7 @@ int netkit_prog_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	}
 	ret = bpf_mprog_attach(entry, &entry_new, prog, NULL, replace_prog,
 			       attr->attach_flags, attr->relative_fd,
-			       attr->expected_revision);
+			       attr->expected_revision, BPF_LINK_TYPE_NETKIT);
 	if (!ret) {
 		if (entry != entry_new) {
 			netkit_entry_update(dev, entry_new);
@@ -802,7 +802,7 @@ int netkit_prog_detach(const union bpf_attr *attr, struct bpf_prog *prog)
 		goto out;
 	}
 	ret = bpf_mprog_detach(entry, &entry_new, prog, NULL, attr->attach_flags,
-			       attr->relative_fd, attr->expected_revision);
+			       attr->relative_fd, attr->expected_revision, BPF_LINK_TYPE_NETKIT);
 	if (!ret) {
 		if (!bpf_mprog_total(entry_new))
 			entry_new = NULL;
@@ -850,7 +850,7 @@ static int netkit_link_prog_attach(struct bpf_link *link, u32 flags,
 	ASSERT_RTNL();
 	entry = netkit_entry_fetch(dev, true);
 	ret = bpf_mprog_attach(entry, &entry_new, link->prog, link, NULL, flags,
-			       id_or_fd, revision);
+			       id_or_fd, revision, BPF_LINK_TYPE_NETKIT);
 	if (!ret) {
 		if (entry != entry_new) {
 			netkit_entry_update(dev, entry_new);
@@ -877,7 +877,7 @@ static void netkit_link_release(struct bpf_link *link)
 		ret = -ENOENT;
 		goto out;
 	}
-	ret = bpf_mprog_detach(entry, &entry_new, link->prog, link, 0, 0, 0);
+	ret = bpf_mprog_detach(entry, &entry_new, link->prog, link, 0, 0, 0, BPF_LINK_TYPE_NETKIT);
 	if (!ret) {
 		if (!bpf_mprog_total(entry_new))
 			entry_new = NULL;
@@ -919,9 +919,8 @@ static int netkit_link_update(struct bpf_link *link, struct bpf_prog *nprog,
 		ret = -ENOENT;
 		goto out;
 	}
-	ret = bpf_mprog_attach(entry, &entry_new, nprog, link, oprog,
-			       BPF_F_REPLACE | BPF_F_ID,
-			       link->prog->aux->id, 0);
+	ret = bpf_mprog_attach(entry, &entry_new, nprog, link, oprog, BPF_F_REPLACE | BPF_F_ID,
+			       link->prog->aux->id, 0, BPF_LINK_TYPE_NETKIT);
 	if (!ret) {
 		WARN_ON_ONCE(entry != entry_new);
 		oprog = xchg(&link->prog, nprog);

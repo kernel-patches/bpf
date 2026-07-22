@@ -321,12 +321,14 @@ int bpf_mprog_attach(struct bpf_mprog_entry *entry,
 		     struct bpf_mprog_entry **entry_new,
 		     struct bpf_prog *prog_new, struct bpf_link *link,
 		     struct bpf_prog *prog_old,
-		     u32 flags, u32 id_or_fd, u64 revision);
+		     u32 flags, u32 id_or_fd, u64 revision,
+		     enum bpf_link_type expected_link_type);
 
 int bpf_mprog_detach(struct bpf_mprog_entry *entry,
 		     struct bpf_mprog_entry **entry_new,
 		     struct bpf_prog *prog, struct bpf_link *link,
-		     u32 flags, u32 id_or_fd, u64 revision);
+		     u32 flags, u32 id_or_fd, u64 revision,
+		     enum bpf_link_type expected_link_type);
 
 int bpf_mprog_query(const union bpf_attr *attr, union bpf_attr __user *uattr,
 		    struct bpf_mprog_entry *entry);
