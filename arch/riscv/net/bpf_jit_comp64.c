@@ -56,6 +56,29 @@ static const int pt_regmap[] = {
 	[RV_REG_T0] = offsetof(struct pt_regs, t0),
 };
 
+/* Full set of RISC-V callee-saved GP registers (ra, s0-s11) saved by a program
+ * acting as an exception boundary, in the order they are stored on the stack.
+ * RA and FP come first so the saved ra/fp pair forms a valid stackframe record
+ * at [FP-8]/[FP-16] for the unwinder. The exception callback reuses the
+ * boundary program's frame and restores this same set in its epilogue, so both
+ * paths must agree on the contents and ordering of this list.
+ */
+static const int rv_exception_csave_regs[] = {
+	RV_REG_RA,
+	RV_REG_FP,
+	RV_REG_S1,
+	RV_REG_S2,
+	RV_REG_S3,
+	RV_REG_S4,
+	RV_REG_S5,
+	RV_REG_S6,
+	RV_REG_S7,
+	RV_REG_S8,
+	RV_REG_S9,
+	RV_REG_S10,
+	RV_REG_S11,
+};
+
 enum {
 	RV_CTX_F_SEEN_CALL =		RV_REG_RA,
 	RV_CTX_F_SEEN_S1 =		RV_REG_S1,
@@ -312,11 +335,67 @@ static void emit_normal_restore(struct rv_jit_context *ctx, int stack_adjust)
 	emit_ld(RV_REG_TCC, ctx->tcc_offset, RV_REG_SP, ctx);
 }
 
+static bool is_exception_prog(const struct bpf_prog *prog)
+{
+	return prog->aux->exception_boundary || prog->aux->exception_cb;
+}
+
+static void emit_exception_boundary_prologue(struct rv_jit_context *ctx,
+					     int stack_adjust)
+{
+	int store_offset = stack_adjust - 8;
+	int i;
+
+	emit_addi(RV_REG_SP, RV_REG_SP, -stack_adjust, ctx);
+	for (i = 0; i < ARRAY_SIZE(rv_exception_csave_regs); i++) {
+		emit_sd(RV_REG_SP, store_offset, rv_exception_csave_regs[i], ctx);
+		store_offset -= 8;
+	}
+
+	/* store TCC from RV_REG_TCC to stack */
+	emit_sd(RV_REG_SP, store_offset, RV_REG_TCC, ctx);
+	ctx->tcc_offset = store_offset;
+
+	emit_addi(RV_REG_FP, RV_REG_SP, stack_adjust, ctx);
+}
+
+/* reuses the boundary program's frame, whose frame pointer
+ * is passed in a2 (since it's the third argument from bpf_throw()).
+ * Setting SP = FP - stack_adjust lines the epilogue's loads up with
+ * the registers the boundary saved.
+ */
+static void emit_exception_cb_prologue(struct rv_jit_context *ctx,
+				       int stack_adjust)
+{
+	emit_mv(RV_REG_FP, RV_REG_A2, ctx);
+	emit_addi(RV_REG_SP, RV_REG_FP, -stack_adjust, ctx);
+	ctx->tcc_offset = stack_adjust - 8 - ARRAY_SIZE(rv_exception_csave_regs) * 8;
+}
+
+/* Used by both the boundary program and the exception callback alike, since the
+ * callback runs on the boundary's frame.
+ */
+static void emit_exception_restore(struct rv_jit_context *ctx, int stack_adjust)
+{
+	int store_offset = stack_adjust - 8;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(rv_exception_csave_regs); i++) {
+		emit_ld(rv_exception_csave_regs[i], store_offset, RV_REG_SP, ctx);
+		store_offset -= 8;
+	}
+	/* restore TCC from stack to RV_REG_TCC */
+	emit_ld(RV_REG_TCC, ctx->tcc_offset, RV_REG_SP, ctx);
+}
+
 static void __build_epilogue(bool is_tail_call, struct rv_jit_context *ctx)
 {
 	int stack_adjust = ctx->stack_size;
 
-	emit_normal_restore(ctx, stack_adjust);
+	if (is_exception_prog(ctx->prog))
+		emit_exception_restore(ctx, stack_adjust);
+	else
+		emit_normal_restore(ctx, stack_adjust);
 
 	emit_addi(RV_REG_SP, RV_REG_SP, stack_adjust, ctx);
 	/* Set return value. */
@@ -2086,6 +2165,15 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 	return 0;
 }
 
+static int exception_stack_adjust(void)
+{
+	int stack_adjust = 0;
+
+	stack_adjust += 8; /* RV_REG_TCC */
+	stack_adjust += ARRAY_SIZE(rv_exception_csave_regs) * 8;
+	return round_up(stack_adjust, STACK_ALIGN);
+}
+
 void bpf_jit_build_prologue(struct rv_jit_context *ctx, bool is_subprog)
 {
 	int i, stack_adjust, bpf_stack_adjust;
@@ -2106,8 +2194,17 @@ void bpf_jit_build_prologue(struct rv_jit_context *ctx, bool is_subprog)
 	if (!is_subprog)
 		emit(rv_addi(RV_REG_TCC, RV_REG_ZERO, MAX_TAIL_CALL_CNT), ctx);
 
-	stack_adjust = normal_stack_adjust(ctx) + bpf_stack_adjust;
-	emit_normal_prologue(ctx, stack_adjust);
+	if (is_exception_prog(ctx->prog)) {
+		stack_adjust = exception_stack_adjust() + bpf_stack_adjust;
+
+		if (ctx->prog->aux->exception_cb)
+			emit_exception_cb_prologue(ctx, stack_adjust);
+		else
+			emit_exception_boundary_prologue(ctx, stack_adjust);
+	} else {
+		stack_adjust = normal_stack_adjust(ctx) + bpf_stack_adjust;
+		emit_normal_prologue(ctx, stack_adjust);
+	}
 
 	if (bpf_stack_adjust)
 		emit_addi(RV_REG_S5, RV_REG_SP, bpf_stack_adjust, ctx);
@@ -2182,4 +2279,13 @@ bool bpf_jit_supports_fsession(void)
 bool bpf_jit_supports_subprog_tailcalls(void)
 {
 	return true;
+}
+
+bool bpf_jit_supports_exceptions(void)
+{
+	/* bpf_throw() unwinds by walking the frame-pointer chain from inside
+	 * the kernel back into the BPF frames (see arch_bpf_stack_walk()), so
+	 * exceptions require the frame-pointer unwinder to be enabled.
+	 */
+	return IS_ENABLED(CONFIG_FRAME_POINTER);
 }
