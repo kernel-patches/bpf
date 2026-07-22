@@ -730,11 +730,14 @@ int compare_map_keys(int map1_fd, int map2_fd)
 int compare_stack_ips(int smap_fd, int amap_fd, int stack_trace_len)
 {
 	__u32 key, next_key, *cur_key_p, *next_key_p;
-	char *val_buf1, *val_buf2;
-	int i, err = 0;
+	char *val_buf1 = NULL, *val_buf2 = NULL;
+	int i, err = -ENOMEM;
 
 	val_buf1 = malloc(stack_trace_len);
 	val_buf2 = malloc(stack_trace_len);
+	if (!val_buf1 || !val_buf2)
+		goto out;
+	err = 0;
 	cur_key_p = NULL;
 	next_key_p = &key;
 	while (bpf_map_get_next_key(smap_fd, cur_key_p, next_key_p) == 0) {
@@ -1514,6 +1517,8 @@ static int dispatch_thread_send_subtests(int sock_fd, struct test_state *state)
 	int subtest_num = state->subtest_num;
 
 	state->subtest_states = malloc(subtest_num * sizeof(*subtest_state));
+	if (!state->subtest_states)
+		return -ENOMEM;
 
 	for (int i = 0; i < subtest_num; i++) {
 		subtest_state = &state->subtest_states[i];
@@ -1732,9 +1737,24 @@ static void server_main(void)
 	sigaction(SIGINT, &sigact_int, NULL);
 
 	dispatcher_threads = calloc(sizeof(pthread_t), env.workers);
+	if (!dispatcher_threads) {
+		perror("Failed to calloc dispatcher_threads");
+		exit(EXIT_ERR_SETUP_INFRA);
+	}
 	data = calloc(sizeof(struct dispatch_data), env.workers);
+	if (!data) {
+		perror("Failed to calloc data");
+		free(dispatcher_threads);
+		exit(EXIT_ERR_SETUP_INFRA);
+	}
 
 	env.worker_current_test = calloc(sizeof(int), env.workers);
+	if (!env.worker_current_test) {
+		perror("Failed to calloc env.worker_current_test");
+		free(data);
+		free(dispatcher_threads);
+		exit(EXIT_ERR_SETUP_INFRA);
+	}
 	for (i = 0; i < env.workers; i++) {
 		int rc;
 
@@ -2094,7 +2114,16 @@ int main(int argc, char **argv)
 	env.worker_id = -1; /* main process */
 	if (env.workers) {
 		env.worker_pids = calloc(sizeof(pid_t), env.workers);
+		if (!env.worker_pids) {
+			perror("Failed to calloc worker_pids");
+			return -ENOMEM;
+		}
 		env.worker_socks = calloc(sizeof(int), env.workers);
+		if (!env.worker_socks) {
+			perror("Failed to calloc worker_socks");
+			free(env.worker_pids);
+			return -ENOMEM;
+		}
 		if (env.debug)
 			fprintf(stdout, "Launching %d workers.\n", env.workers);
 		for (i = 0; i < env.workers; i++) {
