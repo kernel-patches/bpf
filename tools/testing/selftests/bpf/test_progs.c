@@ -1882,7 +1882,8 @@ static int worker_main_send_subtests(int sock, struct test_state *state)
 
 		msg.subtest_done.num = i;
 
-		strscpy(msg.subtest_done.name, subtest_state->name, MAX_SUBTEST_NAME);
+		const char *name = subtest_state->name ? : "";
+		strscpy(msg.subtest_done.name, name, MAX_SUBTEST_NAME);
 
 		msg.subtest_done.error_cnt = subtest_state->error_cnt;
 		msg.subtest_done.skipped = subtest_state->skipped;
