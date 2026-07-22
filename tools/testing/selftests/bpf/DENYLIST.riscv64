@@ -1,2 +1,0 @@
-# riscv64 deny list for BPF CI and local vmtest
-exceptions					# JIT does not support exceptions
