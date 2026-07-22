@@ -612,6 +612,15 @@ struct bpf_loop_inline_state {
 	u32 callback_subprogno; /* valid when fit_for_inline is true */
 };
 
+struct bpf_iter_num_new_state {
+	unsigned int initialized:1; /* set to true upon first entry */
+	unsigned int fit_for_inline:1; /* true if start and end are constant
+					* with the same value at each call
+					*/
+	s32 start; /* valid when fit_for_inline is true */
+	s32 end;   /* valid when fit_for_inline is true */
+};
+
 /* pointer and state for maps */
 struct bpf_map_ptr_state {
 	struct bpf_map *map_ptr;
@@ -661,6 +670,10 @@ struct bpf_insn_aux_data {
 		 * the state of the relevant registers to make decision about inlining
 		 */
 		struct bpf_loop_inline_state loop_inline_state;
+		/* if instruction is a call to bpf_iter_num_new this field tracks its start/end
+		 * arguments to make a decision about eliding the range checks when inlining
+		 */
+		struct bpf_iter_num_new_state iter_num_new_state;
 	};
 	union {
 		/* remember the size of type passed to bpf_obj_new to rewrite R1 */
