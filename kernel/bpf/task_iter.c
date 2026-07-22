@@ -755,7 +755,6 @@ BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
 {
 	struct mmap_unlock_irq_work *work = NULL;
 	struct vm_area_struct *vma;
-	bool irq_work_busy = false;
 	bool __maybe_unused mmput_needed = false;
 	struct mm_struct *mm;
 	int ret = -ENOENT;
@@ -792,9 +791,7 @@ BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
 	if (!mm)
 		return -ENOENT;
 
-	irq_work_busy = bpf_mmap_unlock_get_irq_work(&work);
-
-	if (irq_work_busy || !mmap_read_trylock(mm)) {
+	if (!bpf_mmap_read_trylock(mm, &work)) {
 		ret = -EBUSY;
 		goto out;
 	}
@@ -1191,6 +1188,8 @@ static void do_mmap_read_unlock(struct irq_work *entry)
 
 	work = container_of(entry, struct mmap_unlock_irq_work, irq_work);
 	mmap_read_unlock_non_owner(work->mm);
+	work->mm = NULL;
+	bpf_mmap_unlock_put_irq_work(work);
 }
 
 static int __init task_iter_init(void)
