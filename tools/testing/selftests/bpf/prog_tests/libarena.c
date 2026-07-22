@@ -112,13 +112,28 @@ static int run_libarena_parallel_test_workers(struct libarena *skel,
 
 
 	for (i = 0; i < nthreads; i++) {
+		int worker_err;
+
 		ret = pthread_join(threads[i], &thread_ret);
 		if (!ASSERT_OK(ret, "pthread_join")) {
 			err = err ?: ret;
 			continue;
 		}
 
-		err = err ?: (long)thread_ret;
+		worker_err = (long)thread_ret;
+		if (!worker_err)
+			continue;
+
+		/*
+		 * A worker that bails out because another one already gave up
+		 * reports -EINTR. That is collateral damage, so let any other
+		 * error win: it tells us what actually went wrong.
+		 */
+		if (!err || err == -EINTR)
+			err = worker_err;
+
+		fprintf(stdout, "%.*s__%d returned %d\n", (int)prefixlen, name,
+			i, worker_err);
 	}
 
 	free(threads);
