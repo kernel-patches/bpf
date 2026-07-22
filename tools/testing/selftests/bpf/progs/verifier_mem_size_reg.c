@@ -9,10 +9,7 @@ char _license[] SEC("license") = "GPL";
 
 /*
  * The __szk size of a kfunc memory/size pair must be marked precise even when
- * the nullable buffer is passed as NULL. In that case check_mem_size_reg() -
- * which would otherwise mark the size precise - is skipped, so the size must be
- * marked precise through the scalar argument path instead. bpf_dynptr_slice()'s
- * buffer is nullable and its size (R4) is __szk.
+ * the nullable buffer is passed as NULL.
  */
 SEC("?tc")
 __success __log_level(2)
@@ -23,7 +20,8 @@ int dynptr_slice_null_buf_size_precise(struct __sk_buff *skb)
 	char *p;
 
 	bpf_dynptr_from_skb(skb, 0, &dptr);
-	/* NULL buffer: check_mem_size_reg() is skipped, but the __szk size must
+	/*
+	 * NULL buffer: check_mem_size_reg() is skipped, but the __szk size must
 	 * still be marked precise via the scalar arg path.
 	 */
 	p = bpf_dynptr_slice(&dptr, 0, NULL, 8);
