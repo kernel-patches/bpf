@@ -198,9 +198,84 @@ static void emit_imm(u8 rd, s64 val, struct rv_jit_context *ctx)
 		emit_addi(rd, rd, lower, ctx);
 }
 
-static void __build_epilogue(bool is_tail_call, struct rv_jit_context *ctx)
+/* Stack space for the callee-saved registers a normal program spills,
+ * excluding the BPF stack itself.
+ */
+static int normal_stack_adjust(struct rv_jit_context *ctx)
 {
-	int stack_adjust = ctx->stack_size, store_offset = stack_adjust - 8;
+	int stack_adjust = 0;
+
+	if (seen_reg(RV_REG_RA, ctx))
+		stack_adjust += 8;
+	stack_adjust += 8; /* RV_REG_FP */
+	if (seen_reg(RV_REG_S1, ctx))
+		stack_adjust += 8;
+	if (seen_reg(RV_REG_S2, ctx))
+		stack_adjust += 8;
+	if (seen_reg(RV_REG_S3, ctx))
+		stack_adjust += 8;
+	if (seen_reg(RV_REG_S4, ctx))
+		stack_adjust += 8;
+	if (seen_reg(RV_REG_S5, ctx))
+		stack_adjust += 8;
+	if (ctx->arena_vm_start)
+		stack_adjust += 8;
+	stack_adjust += 8; /* RV_REG_TCC */
+
+	return round_up(stack_adjust, STACK_ALIGN);
+}
+
+/* Allocate the frame and save the callee-saved registers the program
+ * actually clobbers, then point FP at the frame top.
+ */
+static void emit_normal_prologue(struct rv_jit_context *ctx, int stack_adjust)
+{
+	int store_offset = stack_adjust - 8;
+	/* tailcall starts here, emit insn before it must be fixed */
+
+	emit_addi(RV_REG_SP, RV_REG_SP, -stack_adjust, ctx);
+
+	if (seen_reg(RV_REG_RA, ctx)) {
+		emit_sd(RV_REG_SP, store_offset, RV_REG_RA, ctx);
+		store_offset -= 8;
+	}
+	emit_sd(RV_REG_SP, store_offset, RV_REG_FP, ctx);
+	store_offset -= 8;
+	if (seen_reg(RV_REG_S1, ctx)) {
+		emit_sd(RV_REG_SP, store_offset, RV_REG_S1, ctx);
+		store_offset -= 8;
+	}
+	if (seen_reg(RV_REG_S2, ctx)) {
+		emit_sd(RV_REG_SP, store_offset, RV_REG_S2, ctx);
+		store_offset -= 8;
+	}
+	if (seen_reg(RV_REG_S3, ctx)) {
+		emit_sd(RV_REG_SP, store_offset, RV_REG_S3, ctx);
+		store_offset -= 8;
+	}
+	if (seen_reg(RV_REG_S4, ctx)) {
+		emit_sd(RV_REG_SP, store_offset, RV_REG_S4, ctx);
+		store_offset -= 8;
+	}
+	if (seen_reg(RV_REG_S5, ctx)) {
+		emit_sd(RV_REG_SP, store_offset, RV_REG_S5, ctx);
+		store_offset -= 8;
+	}
+	if (ctx->arena_vm_start) {
+		emit_sd(RV_REG_SP, store_offset, RV_REG_ARENA, ctx);
+		store_offset -= 8;
+	}
+
+	/* store TCC from RV_REG_TCC to stack */
+	emit_sd(RV_REG_SP, store_offset, RV_REG_TCC, ctx);
+	ctx->tcc_offset = store_offset;
+
+	emit_addi(RV_REG_FP, RV_REG_SP, stack_adjust, ctx);
+}
+
+static void emit_normal_restore(struct rv_jit_context *ctx, int stack_adjust)
+{
+	int store_offset = stack_adjust - 8;
 
 	if (seen_reg(RV_REG_RA, ctx)) {
 		emit_ld(RV_REG_RA, store_offset, RV_REG_SP, ctx);
@@ -235,6 +310,13 @@ static void __build_epilogue(bool is_tail_call, struct rv_jit_context *ctx)
 
 	/* restore TCC from stack to RV_REG_TCC */
 	emit_ld(RV_REG_TCC, ctx->tcc_offset, RV_REG_SP, ctx);
+}
+
+static void __build_epilogue(bool is_tail_call, struct rv_jit_context *ctx)
+{
+	int stack_adjust = ctx->stack_size;
+
+	emit_normal_restore(ctx, stack_adjust);
 
 	emit_addi(RV_REG_SP, RV_REG_SP, stack_adjust, ctx);
 	/* Set return value. */
@@ -2006,33 +2088,11 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 
 void bpf_jit_build_prologue(struct rv_jit_context *ctx, bool is_subprog)
 {
-	int i, stack_adjust = 0, store_offset, bpf_stack_adjust;
+	int i, stack_adjust, bpf_stack_adjust;
 
 	bpf_stack_adjust = round_up(ctx->prog->aux->stack_depth, STACK_ALIGN);
 	if (bpf_stack_adjust)
 		mark_fp(ctx);
-
-	if (seen_reg(RV_REG_RA, ctx))
-		stack_adjust += 8;
-	stack_adjust += 8; /* RV_REG_FP */
-	if (seen_reg(RV_REG_S1, ctx))
-		stack_adjust += 8;
-	if (seen_reg(RV_REG_S2, ctx))
-		stack_adjust += 8;
-	if (seen_reg(RV_REG_S3, ctx))
-		stack_adjust += 8;
-	if (seen_reg(RV_REG_S4, ctx))
-		stack_adjust += 8;
-	if (seen_reg(RV_REG_S5, ctx))
-		stack_adjust += 8;
-	if (ctx->arena_vm_start)
-		stack_adjust += 8;
-	stack_adjust += 8; /* RV_REG_TCC */
-
-	stack_adjust = round_up(stack_adjust, STACK_ALIGN);
-	stack_adjust += bpf_stack_adjust;
-
-	store_offset = stack_adjust - 8;
 
 	/* emit kcfi type preamble immediately before the  first insn */
 	emit_kcfi(is_subprog ? cfi_bpf_subprog_hash : cfi_bpf_hash, ctx);
@@ -2046,46 +2106,8 @@ void bpf_jit_build_prologue(struct rv_jit_context *ctx, bool is_subprog)
 	if (!is_subprog)
 		emit(rv_addi(RV_REG_TCC, RV_REG_ZERO, MAX_TAIL_CALL_CNT), ctx);
 
-	/* tailcall starts here, emit insn before it must be fixed */
-
-	emit_addi(RV_REG_SP, RV_REG_SP, -stack_adjust, ctx);
-
-	if (seen_reg(RV_REG_RA, ctx)) {
-		emit_sd(RV_REG_SP, store_offset, RV_REG_RA, ctx);
-		store_offset -= 8;
-	}
-	emit_sd(RV_REG_SP, store_offset, RV_REG_FP, ctx);
-	store_offset -= 8;
-	if (seen_reg(RV_REG_S1, ctx)) {
-		emit_sd(RV_REG_SP, store_offset, RV_REG_S1, ctx);
-		store_offset -= 8;
-	}
-	if (seen_reg(RV_REG_S2, ctx)) {
-		emit_sd(RV_REG_SP, store_offset, RV_REG_S2, ctx);
-		store_offset -= 8;
-	}
-	if (seen_reg(RV_REG_S3, ctx)) {
-		emit_sd(RV_REG_SP, store_offset, RV_REG_S3, ctx);
-		store_offset -= 8;
-	}
-	if (seen_reg(RV_REG_S4, ctx)) {
-		emit_sd(RV_REG_SP, store_offset, RV_REG_S4, ctx);
-		store_offset -= 8;
-	}
-	if (seen_reg(RV_REG_S5, ctx)) {
-		emit_sd(RV_REG_SP, store_offset, RV_REG_S5, ctx);
-		store_offset -= 8;
-	}
-	if (ctx->arena_vm_start) {
-		emit_sd(RV_REG_SP, store_offset, RV_REG_ARENA, ctx);
-		store_offset -= 8;
-	}
-
-	/* store TCC from RV_REG_TCC to stack */
-	emit_sd(RV_REG_SP, store_offset, RV_REG_TCC, ctx);
-	ctx->tcc_offset = store_offset;
-
-	emit_addi(RV_REG_FP, RV_REG_SP, stack_adjust, ctx);
+	stack_adjust = normal_stack_adjust(ctx) + bpf_stack_adjust;
+	emit_normal_prologue(ctx, stack_adjust);
 
 	if (bpf_stack_adjust)
 		emit_addi(RV_REG_S5, RV_REG_SP, bpf_stack_adjust, ctx);
