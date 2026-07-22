@@ -5,6 +5,7 @@
  */
 
 #include <linux/export.h>
+#include <linux/filter.h>
 #include <linux/kallsyms.h>
 #include <linux/sched.h>
 #include <linux/sched/debug.h>
@@ -102,6 +103,30 @@ void notrace walk_stackframe(struct task_struct *task, struct pt_regs *regs,
 		}
 
 	}
+}
+
+struct bpf_unwind_consume_entry_data {
+	bool (*consume_entry)(void *cookie, u64 ip, u64 sp, u64 fp);
+	void *cookie;
+};
+
+static bool bpf_unwind_consume_entry(void *arg, unsigned long pc,
+				     unsigned long sp, unsigned long fp)
+{
+	struct bpf_unwind_consume_entry_data *data = arg;
+
+	return data->consume_entry(data->cookie, pc, sp, fp);
+}
+
+void notrace arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp),
+				 void *cookie)
+{
+	struct bpf_unwind_consume_entry_data data = {
+		.consume_entry = consume_fn,
+		.cookie = cookie,
+	};
+
+	walk_stackframe(current, NULL, bpf_unwind_consume_entry, &data);
 }
 
 #else /* !CONFIG_FRAME_POINTER */
