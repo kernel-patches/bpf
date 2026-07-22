@@ -154,7 +154,7 @@ skip_init_ctx:
 
 	if (!prog->is_func || extra_pass) {
 		if (WARN_ON(bpf_jit_binary_pack_finalize(jit_data->ro_header, jit_data->header))) {
-			/* ro_header has been freed */
+			bpf_jit_binary_pack_free(jit_data->ro_header, NULL);
 			jit_data->ro_header = NULL;
 			jit_data->header = NULL;
 			goto out_free_hdr;

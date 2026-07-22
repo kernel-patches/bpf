@@ -1249,10 +1249,9 @@ int bpf_jit_binary_pack_finalize(struct bpf_binary_header *ro_header,
 
 	kvfree(rw_header);
 
-	if (IS_ERR(ptr)) {
-		bpf_prog_pack_free(ro_header, ro_header->size);
+	if (IS_ERR(ptr))
 		return PTR_ERR(ptr);
-	}
+
 	return 0;
 }
 

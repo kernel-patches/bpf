@@ -3987,7 +3987,7 @@ out_image:
 			 * Both cases are serious bugs and justify WARN_ON.
 			 */
 			if (WARN_ON(bpf_jit_binary_pack_finalize(header, rw_header))) {
-				/* header has been freed */
+				bpf_jit_binary_pack_free(header, NULL);
 				header = NULL;
 				goto out_image;
 			}

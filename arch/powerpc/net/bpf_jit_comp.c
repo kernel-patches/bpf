@@ -339,8 +339,10 @@ skip_init_ctx:
 #endif
 
 	if (!fp->is_func || extra_pass) {
-		if (bpf_jit_binary_pack_finalize(fhdr, hdr))
+		if (bpf_jit_binary_pack_finalize(fhdr, hdr)) {
+			bpf_jit_binary_pack_free(fhdr, NULL);
 			goto out_err;
+		}
 	}
 
 	fp->bpf_func = (void *)fimage;

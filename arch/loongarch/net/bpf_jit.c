@@ -2298,7 +2298,7 @@ skip_init_ctx:
 			goto out_free;
 		}
 		if (WARN_ON(bpf_jit_binary_pack_finalize(ro_header, header))) {
-			/* ro_header and header have been freed */
+			bpf_jit_binary_pack_free(ro_header, NULL);
 			ro_header = NULL;
 			header = NULL;
 			goto out_free;
