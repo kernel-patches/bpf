@@ -118,7 +118,7 @@ struct htab_elem {
 			};
 		};
 	};
-	u32 hash;
+	u32 hash; /* Only when htab_has_hash() */
 } __aligned(8);
 
 struct htab_elem_lru {
@@ -151,12 +151,13 @@ struct htab_elem_pcpu {
 		};
 	};
 	void *ptr_to_pptr;
-	u32 hash;
+	u32 hash; /* Only when htab_has_hash() */
 } __aligned(8);
 
 struct htab_btf_record {
 	struct btf_record *record;
 	u32 key_size;
+	u32 key_offset;
 };
 
 static inline bool htab_is_prealloc(const struct bpf_htab *htab)
@@ -257,6 +258,11 @@ static struct htab_elem *get_htab_elem(struct bpf_htab *htab, int i)
 	return (struct htab_elem *) (htab->elems + i * (u64)htab->elem_size);
 }
 
+static inline bool htab_has_hash(const struct bpf_htab *htab)
+{
+	return htab_is_lru(htab) || htab->map.key_size > 8;
+}
+
 static inline u32 htab_elem_hash(struct bpf_htab *htab, struct htab_elem *l)
 {
 	if (htab_is_lru(htab))
@@ -269,6 +275,8 @@ static inline u32 htab_elem_hash(struct bpf_htab *htab, struct htab_elem *l)
 
 static inline void htab_elem_set_hash(struct bpf_htab *htab, struct htab_elem *l, u32 hash)
 {
+	if (!htab_has_hash(htab))
+		return;
 	if (htab_is_lru(htab))
 		((struct htab_elem_lru *)l)->hash = hash;
 	else if (htab_is_percpu(htab) && !htab_is_prealloc(htab))
@@ -561,7 +569,7 @@ static void htab_mem_dtor(void *obj, void *ctx)
 	if (IS_ERR_OR_NULL(hrec->record))
 		return;
 
-	map_value = (void *)elem + sizeof(struct htab_elem) + round_up(hrec->key_size, 8);
+	map_value = (void *)elem + hrec->key_offset + round_up(hrec->key_size, 8);
 	bpf_obj_free_fields(hrec->record, map_value);
 }
 
@@ -587,7 +595,7 @@ static void htab_dtor_ctx_free(void *ctx)
 }
 
 static int bpf_ma_set_dtor(struct bpf_map *map, struct bpf_mem_alloc *ma,
-			   void (*dtor)(void *, void *))
+			   void (*dtor)(void *, void *), u32 key_offset)
 {
 	struct htab_btf_record *hrec;
 	int err;
@@ -600,6 +608,7 @@ static int bpf_ma_set_dtor(struct bpf_map *map, struct bpf_mem_alloc *ma,
 	if (!hrec)
 		return -ENOMEM;
 	hrec->key_size = map->key_size;
+	hrec->key_offset = key_offset;
 	hrec->record = btf_record_dup(map->record);
 	if (IS_ERR(hrec->record)) {
 		err = PTR_ERR(hrec->record);
@@ -622,9 +631,9 @@ static int htab_map_check_btf(struct bpf_map *map, const struct btf *btf,
 	 * populated in htab_map_alloc(), so it will always appear as NULL.
 	 */
 	if (htab_is_percpu(htab))
-		return bpf_ma_set_dtor(map, &htab->pcpu_ma, htab_pcpu_mem_dtor);
+		return bpf_ma_set_dtor(map, &htab->pcpu_ma, htab_pcpu_mem_dtor, htab->key_offset);
 	else
-		return bpf_ma_set_dtor(map, &htab->ma, htab_mem_dtor);
+		return bpf_ma_set_dtor(map, &htab->ma, htab_mem_dtor, htab->key_offset);
 }
 
 static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
@@ -671,9 +680,13 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 	if (htab_is_lru(htab))
 		htab->key_offset = sizeof(struct htab_elem_lru);
 	else if (percpu && !prealloc)
-		htab->key_offset = sizeof(struct htab_elem_pcpu);
+		htab->key_offset = round_up(htab_has_hash(htab) ?
+					    sizeof(struct htab_elem_pcpu) :
+					    offsetof(struct htab_elem_pcpu, hash), 8);
 	else
-		htab->key_offset = sizeof(struct htab_elem);
+		htab->key_offset = round_up(htab_has_hash(htab) ?
+					    sizeof(struct htab_elem) :
+					    offsetof(struct htab_elem, hash), 8);
 
 	htab->elem_size = htab->key_offset + round_up(htab->map.key_size, 8);
 	if (percpu)
@@ -791,7 +804,7 @@ static struct htab_elem *lookup_elem_raw(struct bpf_htab *htab,
 	struct htab_elem *l;
 
 	hlist_nulls_for_each_entry_rcu(l, n, head, hash_node)
-		if (htab_elem_hash(htab, l) == hash &&
+		if ((!htab_has_hash(htab) || htab_elem_hash(htab, l) == hash) &&
 		    !memcmp(htab_elem_key(htab, l), key, key_size))
 			return l;
 
@@ -812,7 +825,7 @@ static struct htab_elem *lookup_nulls_elem_raw(struct bpf_htab *htab,
 
 again:
 	hlist_nulls_for_each_entry_rcu(l, n, head, hash_node)
-		if (htab_elem_hash(htab, l) == hash &&
+		if ((!htab_has_hash(htab) || htab_elem_hash(htab, l) == hash) &&
 		    !memcmp(htab_elem_key(htab, l), key, key_size))
 			return l;
 
@@ -3219,7 +3232,7 @@ static int rhtab_map_check_btf(struct bpf_map *map, const struct btf *btf,
 {
 	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
 
-	return bpf_ma_set_dtor(map, &rhtab->ma, rhtab_mem_dtor);
+	return bpf_ma_set_dtor(map, &rhtab->ma, rhtab_mem_dtor, offsetof(struct rhtab_elem, data));
 }
 
 static void rhtab_map_free_internal_structs(struct bpf_map *map)
