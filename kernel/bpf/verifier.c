@@ -13726,11 +13726,14 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 	s64 smin_val = reg_smin(off_reg), smax_val = reg_smax(off_reg);
 	u64 umin_val = reg_umin(off_reg), umax_val = reg_umax(off_reg);
 	struct bpf_sanitize_info info = {};
+	const struct bpf_reg_state *orig_off_reg = off_reg;
+	bool ptr_is_dst_reg;
 	u8 opcode = BPF_OP(insn->code);
 	u32 dst = insn->dst_reg;
 	int ret, bounds_ret;
 
 	dst_reg = &regs[dst];
+	ptr_is_dst_reg = ptr_reg == dst_reg;
 
 	if ((known && (smin_val != smax_val || umin_val != umax_val)) ||
 	    smin_val > smax_val || umin_val > umax_val) {
@@ -13796,11 +13799,15 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 		return -EACCES;
 	}
 
-	/* In case of 'scalar += pointer', dst_reg inherits pointer type and id.
-	 * The id may be overwritten later if we create a new variable offset.
+	/* For 'scalar += pointer', dst_reg inherits the complete pointer
+	 * register state. Individual fields may be adjusted later by pointer
+	 * arithmetic.
 	 */
-	dst_reg->type = ptr_reg->type;
-	dst_reg->id = ptr_reg->id;
+	if (!ptr_is_dst_reg) {
+		env->fake_reg[0] = *off_reg;
+		off_reg = &env->fake_reg[0];
+		*dst_reg = *ptr_reg;
+	}
 
 	if (!check_reg_sane_offset_scalar(env, off_reg, ptr_reg->type) ||
 	    !check_reg_sane_offset_ptr(env, ptr_reg, ptr_reg->type))
@@ -13813,7 +13820,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 		ret = sanitize_ptr_alu(env, insn, ptr_reg, off_reg, dst_reg,
 				       &info, false);
 		if (ret < 0)
-			return sanitize_err(env, insn, ret, off_reg, dst_reg);
+			return sanitize_err(env, insn, ret, orig_off_reg, dst_reg);
 	}
 
 	switch (opcode) {
@@ -13843,7 +13850,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 		}
 		break;
 	case BPF_SUB:
-		if (dst_reg == off_reg) {
+		if (!ptr_is_dst_reg) {
 			/* scalar -= pointer.  Creates an unknown scalar */
 			verbose(env, "R%d tried to subtract pointer from scalar\n",
 				dst);
@@ -13906,7 +13913,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env,
 			return -EFAULT;
 		}
 		if (ret < 0)
-			return sanitize_err(env, insn, ret, off_reg, dst_reg);
+			return sanitize_err(env, insn, ret, orig_off_reg, dst_reg);
 	}
 
 	return 0;
