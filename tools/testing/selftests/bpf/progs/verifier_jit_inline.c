@@ -25,6 +25,8 @@ SEC("fentry/bpf_fentry_test2")
 __success __retval(0)
 __arch_loongarch
 __jited("	ld.wu	$a5, $tp, 16")
+__arch_riscv64
+__jited("	lw	a5, 0x20(tp)")
 int inline_bpf_get_smp_processor_id(void)
 {
 	bpf_get_smp_processor_id();
