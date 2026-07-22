@@ -11,8 +11,11 @@ struct stackframe {
 	unsigned long ra;
 };
 
+typedef bool (*walk_stackframe_fn)(void *arg, unsigned long pc,
+				   unsigned long sp, unsigned long fp);
+
 extern void notrace walk_stackframe(struct task_struct *task, struct pt_regs *regs,
-				    bool (*fn)(void *, unsigned long), void *arg);
+				    walk_stackframe_fn fn, void *arg);
 extern void dump_backtrace(struct pt_regs *regs, struct task_struct *task,
 			   const char *loglvl);
 

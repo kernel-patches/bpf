@@ -46,7 +46,7 @@ static inline int fp_is_valid(unsigned long fp, unsigned long sp)
 }
 
 void notrace walk_stackframe(struct task_struct *task, struct pt_regs *regs,
-			     bool (*fn)(void *, unsigned long), void *arg)
+			     walk_stackframe_fn fn, void *arg)
 {
 	unsigned long fp, sp, pc;
 	int graph_idx = 0;
@@ -71,7 +71,9 @@ void notrace walk_stackframe(struct task_struct *task, struct pt_regs *regs,
 	for (;;) {
 		struct stackframe *frame;
 
-		if (unlikely(!__kernel_text_address(pc) || (level++ >= 0 && !fn(arg, pc))))
+		/* pc belongs to the function whose frame pointer is fp */
+		if (unlikely(!__kernel_text_address(pc) ||
+			     (level++ >= 0 && !fn(arg, pc, sp, fp))))
 			break;
 
 		if (unlikely(!fp_is_valid(fp, sp)))
@@ -91,7 +93,7 @@ void notrace walk_stackframe(struct task_struct *task, struct pt_regs *regs,
 						   &frame->ra);
 			if (pc >= (unsigned long)handle_exception &&
 			    pc < (unsigned long)&ret_from_exception_end) {
-				if (unlikely(!fn(arg, pc)))
+				if (unlikely(!fn(arg, pc, sp, fp)))
 					break;
 
 				pc = ((struct pt_regs *)sp)->epc;
@@ -105,7 +107,7 @@ void notrace walk_stackframe(struct task_struct *task, struct pt_regs *regs,
 #else /* !CONFIG_FRAME_POINTER */
 
 void notrace walk_stackframe(struct task_struct *task,
-	struct pt_regs *regs, bool (*fn)(void *, unsigned long), void *arg)
+	struct pt_regs *regs, walk_stackframe_fn fn, void *arg)
 {
 	unsigned long sp, pc;
 	unsigned long *ksp;
@@ -127,7 +129,8 @@ void notrace walk_stackframe(struct task_struct *task,
 
 	ksp = (unsigned long *)sp;
 	while (!kstack_end(ksp)) {
-		if (__kernel_text_address(pc) && unlikely(!fn(arg, pc)))
+		if (__kernel_text_address(pc) &&
+		    unlikely(!fn(arg, pc, (unsigned long)ksp, 0)))
 			break;
 		pc = READ_ONCE_NOCHECK(*ksp++);
 	}
@@ -135,7 +138,8 @@ void notrace walk_stackframe(struct task_struct *task,
 
 #endif /* CONFIG_FRAME_POINTER */
 
-static bool print_trace_address(void *arg, unsigned long pc)
+static bool print_trace_address(void *arg, unsigned long pc,
+				unsigned long sp, unsigned long fp)
 {
 	const char *loglvl = arg;
 
@@ -155,7 +159,8 @@ void show_stack(struct task_struct *task, unsigned long *sp, const char *loglvl)
 	dump_backtrace(NULL, task, loglvl);
 }
 
-static bool save_wchan(void *arg, unsigned long pc)
+static bool save_wchan(void *arg, unsigned long pc,
+		       unsigned long sp, unsigned long fp)
 {
 	if (!in_sched_functions(pc)) {
 		unsigned long *p = arg;
@@ -176,10 +181,28 @@ unsigned long __get_wchan(struct task_struct *task)
 	return pc;
 }
 
+struct walk_stackframe_consume_entry_data {
+	stack_trace_consume_fn consume_entry;
+	void *cookie;
+};
+
+static bool walk_stackframe_consume_entry(void *arg, unsigned long pc,
+					  unsigned long sp, unsigned long fp)
+{
+	struct walk_stackframe_consume_entry_data *data = arg;
+
+	return data->consume_entry(data->cookie, pc);
+}
+
 noinline noinstr void arch_stack_walk(stack_trace_consume_fn consume_entry, void *cookie,
 		     struct task_struct *task, struct pt_regs *regs)
 {
-	walk_stackframe(task, regs, consume_entry, cookie);
+	struct walk_stackframe_consume_entry_data data = {
+		.consume_entry = consume_entry,
+		.cookie = cookie,
+	};
+
+	walk_stackframe(task, regs, walk_stackframe_consume_entry, &data);
 }
 
 /*
