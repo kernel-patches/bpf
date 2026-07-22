@@ -287,6 +287,7 @@ extern struct argp bench_crypto_argp;
 extern struct argp bench_sockmap_argp;
 extern struct argp bench_lpm_trie_map_argp;
 extern struct argp bench_xdp_lb_argp;
+extern struct argp bench_arraymap_mmap_argp;
 
 static const struct argp_child bench_parsers[] = {
 	{ &bench_ringbufs_argp, 0, "Ring buffers benchmark", 0 },
@@ -304,6 +305,7 @@ static const struct argp_child bench_parsers[] = {
 	{ &bench_sockmap_argp, 0, "bpf sockmap benchmark", 0 },
 	{ &bench_lpm_trie_map_argp, 0, "LPM trie map benchmark", 0 },
 	{ &bench_xdp_lb_argp, 0, "XDP load-balancer benchmark", 0 },
+	{ &bench_arraymap_mmap_argp, 0, "arraymap-mmap benchmark", 0 },
 	{},
 };
 
@@ -582,6 +584,7 @@ extern const struct bench bench_lpm_trie_delete;
 extern const struct bench bench_lpm_trie_free;
 extern const struct bench bench_bpf_nop;
 extern const struct bench bench_xdp_lb;
+extern const struct bench bench_arraymap_mmap;
 
 static const struct bench *benchs[] = {
 	&bench_count_global,
@@ -665,6 +668,7 @@ static const struct bench *benchs[] = {
 	&bench_lpm_trie_free,
 	&bench_bpf_nop,
 	&bench_xdp_lb,
+	&bench_arraymap_mmap,
 };
 
 static void find_benchmark(void)
