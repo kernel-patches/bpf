@@ -10525,6 +10525,17 @@ static int bpf_object__collect_st_ops_relos(struct bpf_object *obj,
 			return -EINVAL;
 		}
 
+		/* the shadow pointer stored below is sizeof(struct bpf_program *)
+		 * bytes wide, so the whole write must fit within st_ops->data,
+		 * which is only map->def.value_size bytes long. A malformed BTF
+		 * can place a member near the end of the value and overflow it.
+		 */
+		if (moff + sizeof(struct bpf_program *) > map->def.value_size) {
+			pr_warn("struct_ops reloc %s: member %s at moff %u overflows map value size %u\n",
+				map->name, name, moff, map->def.value_size);
+			return -EINVAL;
+		}
+
 		prog = find_prog_by_sec_insn(obj, shdr_idx, insn_idx);
 		if (!prog) {
 			pr_warn("struct_ops reloc %s: cannot find prog at shdr_idx %u to relocate func ptr %s\n",
