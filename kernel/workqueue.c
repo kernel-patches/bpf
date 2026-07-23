@@ -8498,6 +8498,14 @@ struct bpf_iter_workqueue_kern {
 	struct workqueue_struct *pos;
 } __aligned(8);
 
+struct bpf_iter_worker_pool {
+	__u64 __opaque[1];
+} __aligned(8);
+
+struct bpf_iter_worker_pool_kern {
+	int id;		/* next worker_pool_idr id to search from */
+} __aligned(8);
+
 __bpf_kfunc_start_defs();
 
 /**
@@ -8552,12 +8560,64 @@ __bpf_kfunc void bpf_iter_workqueue_destroy(struct bpf_iter_workqueue *it)
 	/* No references taken; RCU is held by the caller. */
 }
 
+/**
+ * bpf_iter_worker_pool_new() - Initialize a worker_pool iterator
+ * @it: The new bpf_iter_worker_pool to initialize
+ *
+ * Iterates every worker_pool in the system (worker_pool_idr) in ascending
+ * pool-id order.
+ * The caller should hold RCU read lock.
+ */
+__bpf_kfunc int bpf_iter_worker_pool_new(struct bpf_iter_worker_pool *it)
+{
+	struct bpf_iter_worker_pool_kern *kit = (void *)it;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_worker_pool_kern) >
+		     sizeof(struct bpf_iter_worker_pool));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_worker_pool_kern) !=
+		     __alignof__(struct bpf_iter_worker_pool));
+
+	kit->id = 0;
+	return 0;
+}
+
+/**
+ * bpf_iter_worker_pool_next() - Get the next worker_pool
+ * @it: The bpf_iter_worker_pool
+ *
+ * Returns a pointer to the next struct worker_pool, or NULL when done.
+ */
+__bpf_kfunc struct worker_pool *
+bpf_iter_worker_pool_next(struct bpf_iter_worker_pool *it)
+{
+	struct bpf_iter_worker_pool_kern *kit = (void *)it;
+	struct worker_pool *pool;
+
+	/* idr_get_next() is RCU-safe; see the for_each_pool() lock legend. */
+	pool = idr_get_next(&worker_pool_idr, &kit->id);
+	if (pool)
+		kit->id++;	/* advance past this pool for the next call */
+	return pool;
+}
+
+/**
+ * bpf_iter_worker_pool_destroy() - Destroy a worker_pool iterator
+ * @it: The bpf_iter_worker_pool to destroy
+ */
+__bpf_kfunc void bpf_iter_worker_pool_destroy(struct bpf_iter_worker_pool *it)
+{
+	/* Nothing to be done; RCU is held by the caller. */
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(workqueue_iter_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_iter_workqueue_new, KF_ITER_NEW | KF_RCU_PROTECTED)
 BTF_ID_FLAGS(func, bpf_iter_workqueue_next, KF_ITER_NEXT | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_iter_workqueue_destroy, KF_ITER_DESTROY)
+BTF_ID_FLAGS(func, bpf_iter_worker_pool_new, KF_ITER_NEW | KF_RCU_PROTECTED)
+BTF_ID_FLAGS(func, bpf_iter_worker_pool_next, KF_ITER_NEXT | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_iter_worker_pool_destroy, KF_ITER_DESTROY)
 BTF_KFUNCS_END(workqueue_iter_kfunc_ids)
 
 static const struct btf_kfunc_id_set workqueue_iter_kfunc_set = {
