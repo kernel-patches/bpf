@@ -443,12 +443,14 @@ more_data:
 			psock->cork = kzalloc_obj(*psock->cork,
 						  GFP_ATOMIC | __GFP_NOWARN);
 			if (!psock->cork) {
+				psock->cork_bytes = 0;
 				sk_msg_free(sk, msg);
 				*copied = 0;
 				return -ENOMEM;
 			}
 		}
-		memcpy(psock->cork, msg, sizeof(*msg));
+		if (psock->cork != msg)
+			memcpy(psock->cork, msg, sizeof(*msg));
 		return 0;
 	}
 
@@ -495,14 +497,15 @@ more_data:
 		if (unlikely(ret < 0)) {
 			int free = sk_msg_free(sk, msg);
 
-			if (!cork)
+			if (cork)
+				*copied = 0;
+			else
 				*copied -= free;
 		}
 		if (cork) {
 			sk_msg_free(sk, msg);
 			kfree(msg);
 			msg = NULL;
-			ret = 0;
 		}
 		break;
 	case __SK_DROP:
@@ -579,6 +582,7 @@ static int tcp_bpf_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 					       copy);
 		if (ret < 0) {
 			sk_msg_trim(sk, msg_tx, osize);
+			err = ret;
 			goto out_err;
 		}
 
@@ -603,13 +607,12 @@ wait_for_sndbuf:
 		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
 wait_for_memory:
 		err = sk_stream_wait_memory(sk, &timeo);
-		if (err) {
-			if (msg_tx && msg_tx != psock->cork)
-				sk_msg_free(sk, msg_tx);
+		if (err)
 			goto out_err;
-		}
 	}
 out_err:
+	if (msg_tx == &tmp)
+		sk_msg_free(sk, msg_tx);
 	if (err < 0)
 		err = sk_stream_error(sk, msg->msg_flags, err);
 	release_sock(sk);
