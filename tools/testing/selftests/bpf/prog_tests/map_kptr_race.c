@@ -28,6 +28,15 @@ static int read_refs(struct map_kptr_race *skel)
 	return skel->bss->num_of_refs;
 }
 
+static void wait_for_refs(struct map_kptr_race *skel)
+{
+	for (int i = 0; i < 500; i++) {
+		if (read_refs(skel) == 2)
+			return;
+		usleep(10 * 1000);
+	}
+}
+
 static void test_htab_leak(void)
 {
 	LIBBPF_OPTS(bpf_test_run_opts, opts,
@@ -73,6 +82,7 @@ static void test_htab_leak(void)
 		sched_yield();
 
 	ASSERT_EQ(watcher->bss->map_freed, 1, "map_freed");
+	wait_for_refs(watcher);
 	ASSERT_EQ(read_refs(watcher), 2, "htab refcount");
 
 out_watcher:
@@ -134,6 +144,7 @@ static void test_percpu_htab_leak(void)
 		sched_yield();
 
 	ASSERT_EQ(watcher->bss->map_freed, 1, "map_freed");
+	wait_for_refs(watcher);
 	ASSERT_EQ(read_refs(watcher), 2, "percpu_htab refcount");
 
 out_watcher:
@@ -195,6 +206,7 @@ static void test_sk_ls_leak(void)
 		sched_yield();
 
 	ASSERT_EQ(watcher->bss->map_freed, 1, "map_freed");
+	wait_for_refs(watcher);
 	ASSERT_EQ(read_refs(watcher), 2, "sk_ls refcount");
 
 out_watcher:
