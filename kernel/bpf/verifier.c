@@ -11105,6 +11105,11 @@ enum kfunc_ptr_arg_type {
 	KF_ARG_PTR_TO_IRQ_FLAG,
 	KF_ARG_PTR_TO_RES_SPIN_LOCK,
 	KF_ARG_PTR_TO_TASK_WORK,
+	KF_ARG_CONST_BTF_ID,	       /* const scalar carrying a BTF type id */
+	KF_ARG_CONST_MEM_SIZE,	       /* const scalar sizing a preceding memory arg */
+	KF_ARG_CONST_ALLOC_SIZE_OR_ZERO, /* const scalar sizing a returned buffer */
+	KF_ARG_MEM_SIZE,	       /* scalar sizing a preceding memory arg */
+	KF_ARG_ANYTHING,	       /* unconstrained scalar */
 };
 
 enum special_kfunc_type {
@@ -11361,13 +11366,33 @@ bool bpf_is_kfunc_pkt_changing(struct bpf_call_arg_meta *meta)
 }
 
 static int
-get_kfunc_ptr_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
-		       const struct btf_type *t, const struct btf_type *ref_t,
-		       const char *ref_tname, const struct btf_param *args,
-		       int arg, int nargs, argno_t argno)
+get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
+		   const struct btf_type *t, const struct btf_type *ref_t,
+		   const char *ref_tname, const struct btf_param *args,
+		   int arg, int nargs, argno_t argno)
 {
 	bool arg_mem_size = false;
 	int arg_type;
+
+	/* Scalar arguments are classified from their BTF suffix/name alone. */
+	if (btf_type_is_scalar(t)) {
+		if (is_kfunc_arg_constant(meta->btf, &args[arg]))
+			return KF_ARG_CONST_BTF_ID;
+		if (is_kfunc_arg_const_mem_size(meta->btf, &args[arg]))
+			return KF_ARG_CONST_MEM_SIZE;
+		if (is_kfunc_arg_mem_size(meta->btf, &args[arg]))
+			return KF_ARG_MEM_SIZE;
+		if (is_kfunc_arg_scalar_with_name(meta->btf, &args[arg], "rdonly_buf_size") ||
+		    is_kfunc_arg_scalar_with_name(meta->btf, &args[arg], "rdwr_buf_size"))
+			return KF_ARG_CONST_ALLOC_SIZE_OR_ZERO;
+		return KF_ARG_ANYTHING;
+	}
+
+	if (!btf_type_is_ptr(t)) {
+		verbose(env, "Unrecognized %s type %s\n",
+			reg_arg_name(env, argno), btf_type_str(t));
+		return -EINVAL;
+	}
 
 	/* In this function, we verify the kfunc's BTF as per the argument type,
 	 * leaving the rest of the verification with respect to the register
@@ -12057,7 +12082,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		int regno = reg_from_argno(argno);
 		bool btf_id_fixed_off_ok = true;
 		u32 ref_id, type_size;
-		bool is_ret_buf_sz = false;
 		int kf_arg_type;
 
 		if (is_kfunc_arg_prog_aux(btf, &args[i])) {
@@ -12081,39 +12105,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 
 		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
 
-		if (btf_type_is_scalar(t)) {
-			if (reg->type != SCALAR_VALUE) {
-				verbose(env, "%s is not a scalar\n", reg_arg_name(env, argno));
-				return -EINVAL;
-			}
-
-			if (is_kfunc_arg_constant(meta->btf, &args[i]) ||
-			    is_kfunc_arg_const_mem_size(meta->btf, &args[i])) {
-				ret = process_const_arg(env, reg, argno, meta);
-				if (ret < 0)
-					return ret;
-			} else if (is_kfunc_arg_scalar_with_name(btf, &args[i], "rdonly_buf_size")) {
-				meta->r0_rdonly = true;
-				is_ret_buf_sz = true;
-			} else if (is_kfunc_arg_scalar_with_name(btf, &args[i], "rdwr_buf_size")) {
-				is_ret_buf_sz = true;
-			}
-
-			if (is_ret_buf_sz) {
-				ret = process_const_alloc_mem_size(env, reg, argno, &meta->ret_mem);
-				if (ret < 0)
-					return ret;
-			}
-			continue;
-		}
-
-		if (!btf_type_is_ptr(t)) {
-			verbose(env, "Unrecognized %s type %s\n",
-				reg_arg_name(env, argno), btf_type_str(t));
-			return -EINVAL;
-		}
-
-		if ((bpf_register_is_null(reg) || type_may_be_null(reg->type)) &&
+		if (btf_type_is_ptr(t) && (bpf_register_is_null(reg) || type_may_be_null(reg->type)) &&
 		    !is_kfunc_arg_nullable(meta->btf, &args[i])) {
 			verbose(env, "Possibly NULL pointer passed to trusted %s\n",
 				reg_arg_name(env, argno));
@@ -12130,11 +12122,13 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		if (reg_is_referenced(env, reg))
 			update_ref_obj(&meta->ref_obj, reg);
 
-		ref_t = btf_type_skip_modifiers(btf, t->type, &ref_id);
-		ref_tname = btf_name_by_offset(btf, ref_t->name_off);
+		if (btf_type_is_ptr(t)) {
+			ref_t = btf_type_skip_modifiers(btf, t->type, &ref_id);
+			ref_tname = btf_name_by_offset(btf, ref_t->name_off);
+		}
 
-		kf_arg_type = get_kfunc_ptr_arg_type(env, meta, t, ref_t, ref_tname,
-						     args, i, nargs, argno);
+		kf_arg_type = get_kfunc_arg_type(env, meta, t, ref_t, ref_tname,
+						 args, i, nargs, argno);
 		if (kf_arg_type < 0)
 			return kf_arg_type;
 
@@ -12148,6 +12142,9 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		}
 
 		switch (base_type(kf_arg_type)) {
+		case KF_ARG_CONST_BTF_ID:
+		case KF_ARG_CONST_ALLOC_SIZE_OR_ZERO:
+		case KF_ARG_ANYTHING:
 		case KF_ARG_PTR_TO_ALLOC_BTF_ID:
 		case KF_ARG_PTR_TO_BTF_ID:
 		case KF_ARG_CONST_MAP_PTR:
@@ -12157,6 +12154,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		case KF_ARG_PTR_TO_RB_ROOT:
 		case KF_ARG_PTR_TO_RB_NODE:
 		case KF_ARG_PTR_TO_MEM:
+		case KF_ARG_CONST_MEM_SIZE:
+		case KF_ARG_MEM_SIZE:
 		case KF_ARG_PTR_TO_CALLBACK:
 		case KF_ARG_PTR_TO_CONST_STR:
 		case KF_ARG_PTR_TO_WORKQUEUE:
@@ -12188,6 +12187,34 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			return ret;
 
 		switch (base_type(kf_arg_type)) {
+		case KF_ARG_CONST_BTF_ID:
+			if (reg->type != SCALAR_VALUE) {
+				verbose(env, "%s is not a scalar\n", reg_arg_name(env, argno));
+				return -EINVAL;
+			}
+
+			ret = process_const_arg(env, reg, argno, meta);
+			if (ret < 0)
+				return ret;
+			break;
+		case KF_ARG_CONST_ALLOC_SIZE_OR_ZERO:
+			if (reg->type != SCALAR_VALUE) {
+				verbose(env, "%s is not a scalar\n", reg_arg_name(env, argno));
+				return -EINVAL;
+			}
+
+			if (is_kfunc_arg_scalar_with_name(btf, &args[i], "rdonly_buf_size"))
+				meta->r0_rdonly = true;
+			ret = process_const_alloc_mem_size(env, reg, argno, &meta->ret_mem);
+			if (ret < 0)
+				return ret;
+			break;
+		case KF_ARG_ANYTHING:
+			if (reg->type != SCALAR_VALUE) {
+				verbose(env, "%s is not a scalar\n", reg_arg_name(env, argno));
+				return -EINVAL;
+			}
+			break;
 		case KF_ARG_PTR_TO_CTX:
 			if (reg->type != PTR_TO_CTX) {
 				verbose(env, "%s expected pointer to ctx, but got %s\n",
@@ -12434,6 +12461,19 @@ check_ok:
 					return ret;
 				}
 			}
+			break;
+		case KF_ARG_CONST_MEM_SIZE:
+			if (reg->type != SCALAR_VALUE) {
+				verbose(env, "%s is not a scalar\n", reg_arg_name(env, argno));
+				return -EINVAL;
+			}
+
+			ret = process_const_arg(env, reg, argno, meta);
+			if (ret < 0)
+				return ret;
+
+			fallthrough;
+		case KF_ARG_MEM_SIZE:
 			break;
 		case KF_ARG_PTR_TO_CALLBACK:
 			if (reg->type != PTR_TO_FUNC) {
