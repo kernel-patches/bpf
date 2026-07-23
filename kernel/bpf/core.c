@@ -198,7 +198,9 @@ void bpf_prog_jit_attempt_done(struct bpf_prog *prog)
 		prog->aux->jited_linfo = NULL;
 	}
 
-	kfree(prog->aux->kfunc_tab);
+#ifdef CONFIG_BPF_SYSCALL
+	bpf_free_kfunc_desc_tab(prog->aux->kfunc_tab);
+#endif
 	prog->aux->kfunc_tab = NULL;
 }
 
