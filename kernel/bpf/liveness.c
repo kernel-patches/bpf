@@ -607,6 +607,31 @@ enum arg_track_state {
 	ARG_IMPRECISE	= -3,	/* lost identity; .mask is arg bitmask */
 };
 
+static struct arg_track arg_track_state(s8 frame)
+{
+	return (struct arg_track){ .frame = frame };
+}
+
+static struct arg_track arg_track_none(void)
+{
+	return arg_track_state(ARG_NONE);
+}
+
+static struct arg_track arg_track_unvisited(void)
+{
+	return arg_track_state(ARG_UNVISITED);
+}
+
+static struct arg_track arg_track_off_imprecise(s8 frame)
+{
+	return arg_track_state(frame);
+}
+
+static struct arg_track arg_track_imprecise(u16 mask)
+{
+	return (struct arg_track){ .mask = mask, .frame = ARG_IMPRECISE };
+}
+
 /* Track callee stack slots fp-8 through fp-512 (64 slots of 8 bytes each) */
 #define MAX_ARG_SPILL_SLOTS 64
 
@@ -693,8 +718,8 @@ static struct arg_track arg_single(s8 arg, s16 off)
  */
 static struct arg_track arg_merge_offsets(struct arg_track a, struct arg_track b)
 {
-	struct arg_track result = { .frame = a.frame };
-	struct arg_track imp = { .frame = a.frame };
+	struct arg_track result = arg_track_state(a.frame);
+	struct arg_track imp = arg_track_off_imprecise(a.frame);
 	int i = 0, j = 0, k = 0;
 
 	while (i < a.off_cnt && j < b.off_cnt) {
@@ -747,7 +772,7 @@ static struct arg_track arg_join_imprecise(struct arg_track a, struct arg_track 
 	else if (b.frame == ARG_IMPRECISE)
 		m |= b.mask;
 
-	return (struct arg_track){ .mask = m, .frame = ARG_IMPRECISE };
+	return arg_track_imprecise(m);
 }
 
 /* Join two arg_track values at merge points */
@@ -760,7 +785,7 @@ static struct arg_track __arg_track_join(struct arg_track a, struct arg_track b)
 	if (a.frame == b.frame && a.frame >= 0) {
 		/* Both offset-imprecise: stay imprecise */
 		if (a.off_cnt == 0 || b.off_cnt == 0)
-			return (struct arg_track){ .frame = a.frame };
+			return arg_track_off_imprecise(a.frame);
 		/* Merge offset sets; falls back to off_cnt=0 if >4 */
 		return arg_merge_offsets(a, b);
 	}
@@ -837,7 +862,7 @@ static void arg_track_alu64(struct arg_track *dst, const struct arg_track *src)
 		 * rX += rY where rY is not arg derived
 		 * rX += rX
 		 */
-		dst->off_cnt = 0;
+		*dst = arg_track_off_imprecise(dst->frame);
 		return;
 	}
 	if (src->frame >= 0 && dst->frame == ARG_NONE) {
@@ -845,8 +870,7 @@ static void arg_track_alu64(struct arg_track *dst, const struct arg_track *src)
 		 * rX += rY where rX is not arg derived
 		 * rY identity leaks into rX
 		 */
-		dst->off_cnt = 0;
-		dst->frame = src->frame;
+		*dst = arg_track_off_imprecise(src->frame);
 		return;
 	}
 
@@ -875,7 +899,7 @@ static void arg_padd(struct arg_track *at, s64 delta)
 		s16 new_off;
 
 		if (arg_add(at->off[i], delta, &new_off)) {
-			at->off_cnt = 0;
+			*at = arg_track_off_imprecise(at->frame);
 			return;
 		}
 		at->off[i] = new_off;
@@ -901,11 +925,8 @@ static struct arg_track fill_from_stack(struct bpf_insn *insn,
 					struct arg_track *at_stack_out,
 					int depth)
 {
-	struct arg_track imp = {
-		.mask = (1u << (depth + 1)) - 1,
-		.frame = ARG_IMPRECISE
-	};
-	struct arg_track result = { .frame = ARG_NONE };
+	struct arg_track imp = arg_track_imprecise((1u << (depth + 1)) - 1);
+	struct arg_track result = arg_track_state(ARG_NONE);
 	int cnt, i;
 
 	if (reg == BPF_REG_FP) {
@@ -940,7 +961,7 @@ static void spill_to_stack(struct bpf_insn *insn, struct arg_track *at_out,
 			   int reg, struct arg_track *at_stack_out,
 			   struct arg_track *val, u32 sz)
 {
-	struct arg_track none = { .frame = ARG_NONE };
+	struct arg_track none = arg_track_none();
 	struct arg_track new_val = sz == 8 ? *val : none;
 	int cnt, i;
 
@@ -979,7 +1000,7 @@ static void spill_to_stack(struct bpf_insn *insn, struct arg_track *at_out,
  */
 static void clear_overlapping_stack_slots(struct arg_track *at_stack, s16 off, u32 sz, int cnt)
 {
-	struct arg_track none = { .frame = ARG_NONE };
+	struct arg_track none = arg_track_none();
 
 	if (cnt == 0) {
 		for (int i = 0; i < MAX_ARG_SPILL_SLOTS; i++)
@@ -1103,7 +1124,7 @@ static void arg_track_xfer(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	u8 code = BPF_OP(insn->code);
 	struct arg_track *dst = &at_out[insn->dst_reg];
 	struct arg_track *src = &at_out[insn->src_reg];
-	struct arg_track none = { .frame = ARG_NONE };
+	struct arg_track none = arg_track_none();
 	int r, slot;
 
 	/* Handle stack arg stores and loads. */
@@ -1128,7 +1149,7 @@ static void arg_track_xfer(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				arg_padd(dst, -(s64)insn->imm);
 			else
 				/* Any other 64-bit alu on the pointer makes it imprecise */
-				dst->off_cnt = 0;
+				*dst = arg_track_off_imprecise(dst->frame);
 		} /* else if dst->frame is imprecise it stays so */
 	} else if (class == BPF_ALU64 && BPF_SRC(insn->code) == BPF_X) {
 		if (code == BPF_MOV) {
@@ -1379,11 +1400,11 @@ static int record_load_store_access(struct bpf_verifier_env *env,
 
 	/* Resolve offsets: fold insn->off into arg_track */
 	if (ptr->off_cnt > 0) {
+		resolved = arg_track_state(ptr->frame);
 		resolved.off_cnt = ptr->off_cnt;
-		resolved.frame = ptr->frame;
 		for (oi = 0; oi < ptr->off_cnt; oi++) {
 			if (arg_add(ptr->off[oi], insn->off, &resolved.off[oi])) {
-				resolved.off_cnt = 0;
+				resolved = arg_track_off_imprecise(ptr->frame);
 				break;
 			}
 		}
@@ -1630,8 +1651,8 @@ static int compute_subprog_args(struct bpf_verifier_env *env,
 	struct arg_track (*at_stack_in)[MAX_ARG_SPILL_SLOTS] = NULL;
 	struct arg_track *at_stack_out = NULL;
 	struct arg_track at_stack_arg_entry[MAX_STACK_ARG_SLOTS];
-	struct arg_track unvisited = { .frame = ARG_UNVISITED };
-	struct arg_track none = { .frame = ARG_NONE };
+	struct arg_track unvisited = arg_track_unvisited();
+	struct arg_track none = arg_track_none();
 	bool changed;
 	int i, p, r, err = -ENOMEM;
 
@@ -1895,7 +1916,7 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 	for (int p = po_start; p < po_end; p++) {
 		int idx = env->cfg.insn_postorder[p];
 		struct arg_track callee_args[MAX_AT_TRACK_REGS] = {};
-		struct arg_track none = { .frame = ARG_NONE };
+		struct arg_track none = arg_track_none();
 		struct bpf_insn *insn = &insns[idx];
 		struct func_instance *callee_instance;
 		int callee, target;
