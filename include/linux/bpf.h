@@ -748,6 +748,7 @@ extern const struct bpf_map_ops bpf_map_offload_ops;
 enum bpf_type_flag {
 	/* PTR may be NULL. */
 	PTR_MAYBE_NULL		= BIT(0 + BPF_BASE_TYPE_BITS),
+	SCALAR_MAYBE_ZERO	= PTR_MAYBE_NULL,
 
 	/* MEM is read-only. When applied on bpf_arg, it indicates the arg is
 	 * compatible with both mutable and immutable memory.
@@ -889,7 +890,6 @@ enum bpf_arg_type {
 	ARG_PTR_TO_ARENA,
 
 	ARG_CONST_SIZE,		/* number of bytes accessed from memory */
-	ARG_CONST_SIZE_OR_ZERO,	/* number of bytes accessed from memory or 0 */
 
 	ARG_PTR_TO_CTX,		/* pointer to context */
 	ARG_ANYTHING,		/* any (initialized) argument is ok */
@@ -922,6 +922,8 @@ enum bpf_arg_type {
 	ARG_PTR_TO_UNINIT_MEM		= MEM_UNINIT | MEM_WRITE | ARG_PTR_TO_MEM,
 	/* Pointer to valid memory of size known at compile time. */
 	ARG_PTR_TO_FIXED_SIZE_MEM	= MEM_FIXED_SIZE | ARG_PTR_TO_MEM,
+	/* Number of bytes accessed from memory, or 0. */
+	ARG_CONST_SIZE_OR_ZERO		= SCALAR_MAYBE_ZERO | ARG_CONST_SIZE,
 
 	/* This must be the last entry. Its purpose is to ensure the enum is
 	 * wide enough to hold the higher bits reserved for bpf_type_flag.
