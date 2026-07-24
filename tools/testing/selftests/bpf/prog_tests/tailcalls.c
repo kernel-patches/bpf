@@ -15,6 +15,7 @@
 #include "tailcall_callback.skel.h"
 #include "tailcall_bpf2bpf2.skel.h"
 #include "tailcall_bpf2bpf_fexit.skel.h"
+#include "tracing_multi_bpf.skel.h"
 
 /* test_tailcall_1 checks basic functionality by patching multiple locations
  * in a single program for a single tail call slot with nop->jmp, jmp->nop
@@ -1953,6 +1954,65 @@ out:
 	tailcall_bpf2bpf2__destroy(skel_tc);
 }
 
+/*
+ * Verify that a tail call from a BPF subprog works when the subprog is
+ * traced by fentry.multi.
+ */
+static void test_tailcall_bpf2bpf_fentry_multi(void)
+{
+	struct tracing_multi_bpf *skel_tracing = NULL;
+	LIBBPF_OPTS(bpf_tracing_multi_opts, opts);
+	const char *funcs[] = { "subprog_tail" };
+	struct tailcall_bpf2bpf2 *skel_tc;
+	struct bpf_link *link = NULL;
+	int fds[ARRAY_SIZE(funcs)];
+	char buff[128] = {};
+	int err, key = 0;
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		.data_in = buff,
+		.data_size_in = sizeof(buff),
+		.repeat = 1,
+	);
+
+#ifndef __x86_64__
+	test__skip();
+	return;
+#endif
+
+	skel_tc = tailcall_bpf2bpf2__open_and_load();
+	if (!ASSERT_OK_PTR(skel_tc, "tailcall_bpf2bpf2__open_and_load"))
+		return;
+
+	skel_tracing = tracing_multi_bpf__open_and_load();
+	if (!ASSERT_OK_PTR(skel_tracing, "tracing_multi_bpf__open_and_load"))
+		goto out;
+
+	fds[0] = bpf_program__fd(skel_tc->progs.classifier_0);
+	err = bpf_map_update_elem(bpf_map__fd(skel_tc->maps.jmp_table), &key, &fds[0], BPF_ANY);
+	if (!ASSERT_OK(err, "bpf_map_update_elem"))
+		goto out;
+
+	opts.fds = fds;
+	opts.funcs = funcs;
+	opts.cnt = ARRAY_SIZE(fds);
+	link = bpf_program__attach_tracing_multi(skel_tracing->progs.test_fentry, NULL, &opts);
+	if (!ASSERT_OK_PTR(link, "bpf_program__attach_tracing_multi"))
+		goto out;
+
+	err = bpf_prog_test_run_opts(bpf_program__fd(skel_tc->progs.entry), &topts);
+	if (!ASSERT_OK(err, "bpf_prog_test_run_opts"))
+		goto out;
+
+	ASSERT_EQ(topts.retval, 1, "retval");
+	ASSERT_EQ(skel_tc->bss->count, 33, "count");
+	ASSERT_EQ(skel_tracing->bss->test_result_fentry, 33, "fentry.multi count");
+
+out:
+	bpf_link__destroy(link);
+	tracing_multi_bpf__destroy(skel_tracing);
+	tailcall_bpf2bpf2__destroy(skel_tc);
+}
+
 void test_tailcalls(void)
 {
 	if (test__start_subtest("tailcall_1"))
@@ -2022,4 +2082,6 @@ void test_tailcalls(void)
 	test_tailcall_callback();
 	if (test__start_subtest("tailcall_bpf2bpf_fexit_links"))
 		test_tailcall_bpf2bpf_fexit_links();
+	if (test__start_subtest("tailcall_bpf2bpf_fentry_multi"))
+		test_tailcall_bpf2bpf_fentry_multi();
 }
