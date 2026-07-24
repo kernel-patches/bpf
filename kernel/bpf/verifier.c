@@ -18936,13 +18936,16 @@ static bool is_tracing_multi_id(const struct bpf_prog *prog, u32 btf_id)
 }
 
 static int btf_id_allow_sleepable(u32 btf_id, unsigned long addr, const struct bpf_prog *prog,
-				  const struct btf *btf)
+				  const struct btf *btf, const struct bpf_prog *tgt_prog)
 {
 	const struct btf_type *t;
 	const char *tname;
 
 	switch (prog->type) {
 	case BPF_PROG_TYPE_TRACING:
+		if (tgt_prog)
+			return -EINVAL;
+
 		t = btf_type_by_id(btf, btf_id);
 		if (!t)
 			return -EINVAL;
@@ -19325,7 +19328,7 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		}
 
 		if (prog->sleepable) {
-			ret = btf_id_allow_sleepable(btf_id, addr, prog, btf);
+			ret = btf_id_allow_sleepable(btf_id, addr, prog, btf, tgt_prog);
 			if (ret) {
 				module_put(mod);
 				bpf_log(log, "%s is not sleepable\n", tname);
@@ -19576,7 +19579,7 @@ int bpf_check_attach_btf_id_multi(struct btf *btf, struct bpf_prog *prog, u32 bt
 
 	/* Check sleepable program attachment. */
 	if (prog->sleepable) {
-		err = btf_id_allow_sleepable(btf_id, addr, prog, btf);
+		err = btf_id_allow_sleepable(btf_id, addr, prog, btf, NULL);
 		if (err)
 			return err;
 	}
