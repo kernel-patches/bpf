@@ -10,12 +10,46 @@ struct val {
 	struct bpf_spin_lock l;
 };
 
+struct bpf_res_spin_lock {
+	__u32 val;
+};
+
+struct res_val {
+	int cnt;
+	struct bpf_res_spin_lock l;
+};
+
+extern int bpf_res_spin_lock(struct bpf_res_spin_lock *lock) __ksym;
+extern void bpf_res_spin_unlock(struct bpf_res_spin_lock *lock) __ksym;
+
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, int);
 	__type(value, struct val);
 } map_spin_lock SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, int);
+	__type(value, struct res_val);
+} map_res_spin_lock SEC(".maps");
+
+static __always_inline int use_res_spin_lock(void)
+{
+	struct res_val *val;
+	int key = 0;
+
+	val = bpf_map_lookup_elem(&map_res_spin_lock, &key);
+	if (!val)
+		return 0;
+	if (bpf_res_spin_lock(&val->l))
+		return 0;
+	val->cnt++;
+	bpf_res_spin_unlock(&val->l);
+	return 0;
+}
 
 SEC("kprobe")
 __description("bpf_ktime_get_coarse_ns is forbidden in BPF_PROG_TYPE_KPROBE")
@@ -163,6 +197,38 @@ l0_%=:	exit;						\
 	  __imm(bpf_spin_lock),
 	  __imm_addr(map_spin_lock)
 	: __clobber_all);
+}
+
+SEC("kprobe")
+__description("bpf_res_spin_lock is allowed in BPF_PROG_TYPE_KPROBE")
+__success
+int res_spin_lock_bpf_prog_type_kprobe(void *ctx)
+{
+	return use_res_spin_lock();
+}
+
+SEC("tracepoint")
+__description("bpf_res_spin_lock is allowed in BPF_PROG_TYPE_TRACEPOINT")
+__success
+int res_spin_lock_bpf_prog_type_tracepoint(void *ctx)
+{
+	return use_res_spin_lock();
+}
+
+SEC("perf_event")
+__description("bpf_res_spin_lock is allowed in BPF_PROG_TYPE_PERF_EVENT")
+__success
+int res_spin_lock_bpf_prog_type_perf_event(void *ctx)
+{
+	return use_res_spin_lock();
+}
+
+SEC("raw_tracepoint")
+__description("bpf_res_spin_lock is allowed in BPF_PROG_TYPE_RAW_TRACEPOINT")
+__success
+int res_spin_lock_bpf_prog_type_raw_tracepoint(void *ctx)
+{
+	return use_res_spin_lock();
 }
 
 char _license[] SEC("license") = "GPL";
