@@ -12470,8 +12470,7 @@ check_ok:
 					reg_arg_name(env, argno));
 				return -EINVAL;
 			}
-			if (!type_is_non_owning_ref(reg->type))
-				meta->arg_owning_ref = true;
+			meta->arg_owning_ref = reg_is_referenced(env, reg);
 
 			rec = reg_btf_record(reg);
 			if (!rec) {
