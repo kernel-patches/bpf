@@ -156,6 +156,9 @@ static bool glob_match(const char *str, const char *pat)
 #define EXIT_NO_TEST		2
 #define EXIT_ERR_SETUP_INFRA	3
 
+/* How long the watchdog waits after SIGSEGV before force-exiting. */
+#define WATCHDOG_EXIT_GRACE_SECS	30
+
 /* defined in test_progs.h */
 struct test_env env = {};
 
@@ -219,6 +222,31 @@ static void watchdog_timer_func(union sigval sigval)
 			"WATCHDOG: test case %s executes for %d seconds, terminating with SIGSEGV\n",
 			test_name, env.secs_till_kill);
 		pthread_kill(env.main_thread, SIGSEGV);
+		/* The SIGSEGV above cannot kill a test thread that is
+		 * blocked in an uninterruptible syscall, and the crash
+		 * handler restores the default disposition only after it
+		 * returns, so a test that keeps not crashing keeps
+		 * running. Give the handler a grace period to report,
+		 * then take the whole process down so the run fails fast
+		 * with its output flushed instead of hanging until an
+		 * outer timeout that reports nothing.
+		 */
+		timeout.it_value.tv_sec = WATCHDOG_EXIT_GRACE_SECS;
+		env.watchdog_state = WD_EXIT;
+		err = timer_settime(env.watchdog, 0, &timeout, NULL);
+		if (err)
+			fprintf(env.stderr_saved, "Failed to arm watchdog timer\n");
+		break;
+	case WD_EXIT:
+		fprintf(env.stderr_saved,
+			"WATCHDOG: test case %s did not exit %d seconds after SIGSEGV, force-exiting\n",
+			test_name, WATCHDOG_EXIT_GRACE_SECS);
+		fflush(env.stderr_saved);
+		fflush(env.stdout_saved);
+		/* Not exit(): atexit/cleanup handlers may need locks the
+		 * stuck thread holds.
+		 */
+		_exit(EXIT_ERR_SETUP_INFRA);
 		break;
 	}
 }
@@ -2020,6 +2048,14 @@ int main(int argc, char **argv)
 		.sa_handler = crash_handler,
 		.sa_flags = SA_RESETHAND,
 	};
+	void *bt[1];
+
+	/* backtrace() loads libgcc on first use, taking the dynamic
+	 * loader lock plus malloc locks; if a signal interrupts a thread
+	 * holding one of those, calling it from crash_handler deadlocks.
+	 * Trigger the loading here, outside signal context.
+	 */
+	backtrace(bt, ARRAY_SIZE(bt));
 	sigaction(SIGSEGV, &sigact, NULL);
 #endif
 

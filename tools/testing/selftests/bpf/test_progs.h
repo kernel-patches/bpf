@@ -138,7 +138,7 @@ struct test_env {
 	int secs_till_notify;
 	int secs_till_kill;
 	timer_t watchdog; /* watch for stalled tests/subtests */
-	enum { WD_NOTIFY, WD_KILL } watchdog_state;
+	enum { WD_NOTIFY, WD_KILL, WD_EXIT } watchdog_state;
 };
 
 #define MAX_LOG_TRUNK_SIZE 8192
