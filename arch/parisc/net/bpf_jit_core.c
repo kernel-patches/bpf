@@ -178,6 +178,25 @@ out_err:
 	goto out_offset;
 }
 
+void bpf_jit_free(struct bpf_prog *fp)
+{
+	if (fp->jited) {
+		struct bpf_jit_data *jit_data = fp->aux->jit_data;
+		struct bpf_binary_header *hdr = bpf_jit_binary_hdr(fp);
+
+		/* Cleanup for earlier subprogs if jit_subprogs() aborts */
+		if (jit_data) {
+			kfree(jit_data->ctx.offset);
+			kfree(jit_data);
+		}
+
+		bpf_jit_binary_free(hdr);
+		WARN_ON_ONCE(!bpf_prog_kallsyms_verify_off(fp));
+	}
+
+	bpf_prog_unlock_free(fp);
+}
+
 u64 hppa_div64(u64 div, u64 divisor)
 {
 	div = div64_u64(div, divisor);
