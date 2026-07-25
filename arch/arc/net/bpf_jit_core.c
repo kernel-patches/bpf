@@ -1412,3 +1412,22 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 
 	return prog;
 }
+
+void bpf_jit_free(struct bpf_prog *fp)
+{
+        if (fp->jited) {
+		struct bpf_jit_data *jit_data = fp->aux->jit_data;
+                struct bpf_binary_header *hdr = bpf_jit_binary_hdr(fp);
+
+		/* Cleanup for earlier subprogs if jit_subprogs() aborts */
+		if (jit_data) {
+			kfree(jit_data->bpf2insn)
+			kfree(jit_data);
+		}
+
+                bpf_jit_binary_free(hdr);
+                WARN_ON_ONCE(!bpf_prog_kallsyms_verify_off(fp));
+        }
+
+        bpf_prog_unlock_free(fp);
+}
