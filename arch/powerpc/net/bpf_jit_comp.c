@@ -314,7 +314,6 @@ skip_init_ctx:
 		bpf_jit_build_prologue(code_base, &cgctx);
 		if (bpf_jit_build_body(fp, code_base, fcode_base, &cgctx, addrs, pass,
 				       extra_pass)) {
-			bpf_arch_text_copy(&fhdr->size, &hdr->size, sizeof(hdr->size));
 			bpf_jit_binary_pack_free(fhdr, hdr);
 			goto out_err;
 		}
@@ -339,8 +338,10 @@ skip_init_ctx:
 #endif
 
 	if (!fp->is_func || extra_pass) {
-		if (bpf_jit_binary_pack_finalize(fhdr, hdr))
+		if (bpf_jit_binary_pack_finalize(fhdr, hdr)) {
+			bpf_jit_binary_pack_free(fhdr, NULL);
 			goto out_err;
+		}
 	}
 
 	fp->bpf_func = (void *)fimage;
