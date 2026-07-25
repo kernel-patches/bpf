@@ -19019,6 +19019,9 @@ static int btf_id_allow_sleepable(u32 btf_id, unsigned long addr, const struct b
 
 	switch (prog->type) {
 	case BPF_PROG_TYPE_TRACING:
+		if (!btf_is_kernel(btf))
+			return -EINVAL;
+
 		t = btf_type_by_id(btf, btf_id);
 		if (!t)
 			return -EINVAL;
