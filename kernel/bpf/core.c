@@ -1286,7 +1286,7 @@ bpf_jit_binary_pack_hdr(const struct bpf_prog *fp)
 	return (void *)addr;
 }
 
-static inline struct bpf_binary_header *
+struct bpf_binary_header *
 bpf_jit_binary_hdr(const struct bpf_prog *fp)
 {
 	unsigned long real_start = (unsigned long)fp->bpf_func;
