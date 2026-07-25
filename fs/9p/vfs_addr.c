@@ -166,13 +166,16 @@ static int v9fs_init_request(struct netfs_io_request *rreq, struct file *file)
 			goto no_fid;
 		p9_fid_get(fid);
 	} else if (S_ISLNK(rreq->inode->i_mode)) {
+		/* racing unlink/rename can make this fail with -ENOENT;
+		 * that's expected, not a kernel bug, so don't WARN
+		 */
 		dentry = d_find_any_alias(rreq->inode);
 		if (!dentry)
 			goto no_fid;
 		fid = v9fs_fid_lookup(dentry);
 		dput(dentry);
 		if (IS_ERR(fid))
-			goto no_fid;
+			return PTR_ERR(fid);
 	} else {
 		fid = v9fs_fid_find_inode(rreq->inode, writing, INVALID_UID, true);
 		if (!fid)
