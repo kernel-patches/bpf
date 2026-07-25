@@ -2311,6 +2311,7 @@ out_free_hdr:
 		bpf_arch_text_copy(&ro_header->size, &header->size,
 				   sizeof(header->size));
 		bpf_jit_binary_pack_free(ro_header, header);
+		ro_header = NULL;
 	}
 	goto out_off;
 }
