@@ -1218,6 +1218,13 @@ bpf_jit_binary_pack_alloc(unsigned int proglen, u8 **image_ptr,
 		return NULL;
 	}
 
+	/* Initialize ro_header->size to ensure it is valid during free */
+	if (IS_ERR(bpf_arch_text_copy(&ro_header->size, &size, sizeof(size)))) {
+		bpf_prog_pack_free(ro_header, size);
+		bpf_jit_uncharge_modmem(size);
+		return NULL;
+	}
+
 	*rw_header = kvmalloc(size, GFP_KERNEL);
 	if (!*rw_header) {
 		bpf_prog_pack_free(ro_header, size);
@@ -1249,10 +1256,9 @@ int bpf_jit_binary_pack_finalize(struct bpf_binary_header *ro_header,
 
 	kvfree(rw_header);
 
-	if (IS_ERR(ptr)) {
-		bpf_prog_pack_free(ro_header, ro_header->size);
+	if (IS_ERR(ptr))
 		return PTR_ERR(ptr);
-	}
+
 	return 0;
 }
 
@@ -1260,11 +1266,6 @@ int bpf_jit_binary_pack_finalize(struct bpf_binary_header *ro_header,
  *   1) when the program is freed after;
  *   2) when the JIT engine fails (before bpf_jit_binary_pack_finalize).
  * For case 2), we need to free both the RO memory and the RW buffer.
- *
- * bpf_jit_binary_pack_free requires proper ro_header->size. However,
- * bpf_jit_binary_pack_alloc does not set it. Therefore, ro_header->size
- * must be set with either bpf_jit_binary_pack_finalize (normal path) or
- * bpf_arch_text_copy (when jit fails).
  */
 void bpf_jit_binary_pack_free(struct bpf_binary_header *ro_header,
 			      struct bpf_binary_header *rw_header)
