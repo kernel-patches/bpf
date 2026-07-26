@@ -597,7 +597,7 @@ static void test_tracing_multi_fill_link_info(struct test_fill_link_info *skel,
 	struct bpf_link *link;
 	int link_fd, err, i;
 
-#ifndef __x86_64__
+#if !ARCH_SUPPORTS_TRACING_MULTI_LINK
 	test__skip();
 	return;
 #endif

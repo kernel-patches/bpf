@@ -567,4 +567,10 @@ void validate_msgs(const char *log_buf, struct expected_msgs *msgs,
 void free_msgs(struct expected_msgs *msgs);
 void verify_test_stderr(struct bpf_object *obj, struct bpf_program *prog);
 
+#if defined(__x86_64__) || defined(__aarch64__)
+#define ARCH_SUPPORTS_TRACING_MULTI_LINK 1
+#else
+#define ARCH_SUPPORTS_TRACING_MULTI_LINK 0
+#endif
+
 #endif /* __TEST_PROGS_H */
