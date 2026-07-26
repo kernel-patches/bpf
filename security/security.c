@@ -5480,6 +5480,33 @@ int security_policy_kptr_from_fd(u64 lsmid, int fd,
 }
 
 /**
+ * security_policy_kptr_put() - Put a reference on an LSM policy object
+ * @lsmid: LSM_ID_* value of the LSM owning @policy
+ * @policy: the policy object, in the member of the LSM identified by
+ *          @lsmid
+ *
+ * Release a reference previously obtained with
+ * security_policy_kptr_from_fd().  Only the hook implementation
+ * of the LSM identified by @lsmid is called, and @policy must have
+ * been obtained from that same LSM.  An implementation must support
+ * being called from a context that cannot sleep: the release of BPF
+ * managed references may be driven from object destructors.
+ */
+void security_policy_kptr_put(u64 lsmid, union lsm_policy_kptr *policy)
+{
+	struct lsm_static_call *scall;
+
+	lsm_for_each_hook(scall, policy_kptr_put) {
+		if (scall->hl->lsmid->id != lsmid)
+			continue;
+		scall->hl->hook.policy_kptr_put(policy);
+		return;
+	}
+	/* A held reference implies the matching LSM implements the hook. */
+	WARN_ON_ONCE(1);
+}
+
+/**
  * security_bpf_map_free() - Free a bpf map's LSM blob
  * @map: bpf map
  *
