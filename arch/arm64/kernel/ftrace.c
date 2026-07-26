@@ -301,8 +301,7 @@ static bool ftrace_find_callable_addr(struct dyn_ftrace *rec,
 
 	/*
 	 * If a custom trampoline is unreachable, rely on the ftrace_caller
-	 * trampoline which knows how to indirectly reach that trampoline
-	 * through ops->direct_call.
+	 * trampoline which knows how to indirectly reach that trampoline.
 	 */
 	if (*addr != FTRACE_ADDR && !reachable_by_bl(*addr, pc))
 		*addr = FTRACE_ADDR;
