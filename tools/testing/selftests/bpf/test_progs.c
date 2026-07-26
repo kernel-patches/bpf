@@ -2206,7 +2206,7 @@ int main(int argc, char **argv)
 	env.stdout_saved = stdout;
 	env.stderr_saved = stderr;
 
-	env.secs_till_notify = 10;
+	env.secs_till_notify = 3;
 	env.secs_till_kill = 120;
 	err = argp_parse(&argp, argc, argv, 0, NULL, &env);
 	if (err)
