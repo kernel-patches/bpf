@@ -5507,6 +5507,47 @@ void security_policy_kptr_put(u64 lsmid, union lsm_policy_kptr *policy)
 }
 
 /**
+ * security_bprm_enforce_policy_kptr() - Enforce a policy on exec credentials
+ * @lsmid: LSM_ID_* value of the LSM owning @policy
+ * @bprm: execution context providing the prepared credentials to restrict
+ * @policy: the policy object to enforce, in the member of the LSM
+ *          identified by @lsmid
+ * @flags: LSM-specific enforcement flags
+ *
+ * Ask the LSM identified by @lsmid to restrict the credentials
+ * prepared in @bprm with @policy, so that the executed task starts
+ * confined by it.  @policy must have been obtained from the same LSM
+ * with security_policy_kptr_from_fd(); the hook borrows the
+ * reference and the caller remains responsible for releasing it.
+ * Only the hook implementation of the LSM identified by @lsmid is
+ * called: an LSM never receives a policy object meant for another LSM.
+ *
+ * This hook may only be called from an exec security context where
+ * @bprm's credentials are prepared but not yet committed, i.e. from a
+ * bprm_creds_for_exec() or bprm_creds_from_file() hook.
+ *
+ * How @policy composes with restrictions the credentials already
+ * carry is defined by the implementing LSM, as is the meaning of
+ * @flags, unsupported values of which it must reject with -EINVAL.
+ *
+ * Return: Returns 0 on success, -EOPNOTSUPP if the LSM does not
+ * implement the hook, negative values on other failures.
+ */
+int security_bprm_enforce_policy_kptr(u64 lsmid, struct linux_binprm *bprm,
+				      union lsm_policy_kptr *policy, u32 flags)
+{
+	struct lsm_static_call *scall;
+
+	lsm_for_each_hook(scall, bprm_enforce_policy_kptr) {
+		if (scall->hl->lsmid->id != lsmid)
+			continue;
+		return scall->hl->hook.bprm_enforce_policy_kptr(bprm, policy,
+								 flags);
+	}
+	return LSM_RET_DEFAULT(bprm_enforce_policy_kptr);
+}
+
+/**
  * security_bpf_map_free() - Free a bpf map's LSM blob
  * @map: bpf map
  *
