@@ -8,13 +8,145 @@
  */
 
 #include <linux/binfmts.h>
+#include <linux/bits.h>
 #include <linux/cred.h>
+#include <linux/err.h>
+#include <linux/errno.h>
 #include <linux/lsm_hooks.h>
+#include <linux/mutex.h>
+#include <uapi/linux/landlock.h>
 
 #include "common.h"
 #include "cred.h"
+#include "domain.h"
 #include "ruleset.h"
 #include "setup.h"
+
+#include <trace/events/landlock.h>
+
+/**
+ * landlock_prepare_restriction - Compute a credential restriction
+ *
+ * @llcred: Landlock credentials to restrict: provides the parent domain and
+ *          the previous log configuration.  Not modified.
+ * @ruleset: Ruleset to enforce, or NULL for a log-configuration-only change.
+ * @flags: landlock_restrict_self(2) flags.  The caller is responsible for
+ *         validating them against the set of flags it supports.
+ * @restriction: Computed restriction.  On success, holds a reference on
+ *               @restriction->domain (if any), which
+ *               landlock_apply_restriction() transfers to the restricted
+ *               credentials.
+ *
+ * The restriction builds on @llcred's current state: the caller must apply
+ * it to (or stage it for) these same credentials.
+ *
+ * Return: 0 on success, -errno on failure.
+ */
+int landlock_prepare_restriction(
+	const struct landlock_cred_security *const llcred,
+	struct landlock_ruleset *const ruleset, const u32 flags,
+	struct landlock_restriction *const restriction)
+{
+	struct landlock_domain *new_dom;
+#ifdef CONFIG_SECURITY_LANDLOCK_LOG
+	/* Translates "off" and "on" flags to booleans. */
+	const bool log_same_exec =
+		!(flags & LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF);
+	const bool log_new_exec =
+		!!(flags & LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON);
+	const bool prev_log_subdomains = !llcred->log_subdomains_off;
+#endif /* CONFIG_SECURITY_LANDLOCK_LOG */
+
+	*restriction = (struct landlock_restriction){
+		.flags = flags,
+	};
+
+	if (!ruleset)
+		return 0;
+
+	mutex_lock(&ruleset->lock);
+	new_dom = landlock_merge_ruleset(llcred->domain, ruleset);
+	if (IS_ERR(new_dom)) {
+		mutex_unlock(&ruleset->lock);
+		return PTR_ERR(new_dom);
+	}
+	/*
+	 * Emits the domain-creation event while @ruleset->lock is still
+	 * held, right after the merge, so an eBPF program attached to
+	 * the tracepoint reads the exact ruleset that was merged into
+	 * the domain: a consistent snapshot that a concurrent
+	 * landlock_add_rule() (which holds the same lock) cannot
+	 * modify.
+	 *
+	 * This must not be delayed past the return of this function.
+	 * Holding @ruleset->lock across
+	 * landlock_restrict_sibling_threads() would hang: a sibling
+	 * thread blocked in landlock_add_rule() on the same
+	 * @ruleset->lock cannot run the task_work that thread-sync
+	 * waits for (the lock wait is uninterruptible).  Emitting here
+	 * keeps the lock off the thread-sync path.
+	 *
+	 * The trade-off is that the event fires for a domain that may
+	 * never be enforced: a later (rare) thread-sync failure or an
+	 * aborted execution drops it.  Those paths free the domain,
+	 * which emits the matching free_domain event so the create/free
+	 * pair stays balanced.
+	 */
+	trace_landlock_create_domain(new_dom, ruleset);
+	mutex_unlock(&ruleset->lock);
+
+#ifdef CONFIG_SECURITY_LANDLOCK_LOG
+	new_dom->hierarchy->log_same_exec = log_same_exec;
+	new_dom->hierarchy->log_new_exec = log_new_exec;
+	/*
+	 * The creation event fired above, so move the domain out of
+	 * LANDLOCK_LOG_UNCOMMITTED: its free_domain event must fire
+	 * too, even if the domain is dropped before being enforced.
+	 * Audit logging may still be disabled (DISABLED); tracing
+	 * observes it anyway.
+	 */
+	if ((!log_same_exec && !log_new_exec) || !prev_log_subdomains)
+		new_dom->hierarchy->log_status = LANDLOCK_LOG_DISABLED;
+	else
+		new_dom->hierarchy->log_status = LANDLOCK_LOG_PENDING;
+#endif /* CONFIG_SECURITY_LANDLOCK_LOG */
+
+	restriction->domain = new_dom;
+	return 0;
+}
+
+/**
+ * landlock_apply_restriction - Enforce a computed restriction on credentials
+ *
+ * @llcred: Landlock credentials to restrict, exclusively owned by the caller
+ *          (prepared and not yet committed).
+ * @restriction: Restriction computed by landlock_prepare_restriction()
+ *               against the same credential state; its domain reference is
+ *               transferred to @llcred.
+ *
+ * Cannot fail, so that a caller may apply a restriction past its last point
+ * of failure, e.g. an exec point of no return.
+ */
+void landlock_apply_restriction(struct landlock_cred_security *const llcred,
+				struct landlock_restriction *const restriction)
+{
+#ifdef CONFIG_SECURITY_LANDLOCK_LOG
+	if (restriction->flags & LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF)
+		llcred->log_subdomains_off = true;
+#endif /* CONFIG_SECURITY_LANDLOCK_LOG */
+
+	if (!restriction->domain)
+		return;
+
+	/* Replaces the old domain. */
+	landlock_put_domain(llcred->domain);
+	llcred->domain = restriction->domain;
+	restriction->domain = NULL;
+
+#ifdef CONFIG_SECURITY_LANDLOCK_LOG
+	llcred->domain_exec |= BIT(llcred->domain->num_layers - 1);
+#endif /* CONFIG_SECURITY_LANDLOCK_LOG */
+}
 
 static void hook_cred_transfer(struct cred *const new,
 			       const struct cred *const old)
