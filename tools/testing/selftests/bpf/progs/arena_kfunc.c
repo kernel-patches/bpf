@@ -235,16 +235,26 @@ int arena_arg_bad_reg(void *ctx)
 	return 0;
 }
 
+#if defined(__BPF_FEATURE_ADDR_SPACE_CAST) && \
+	defined(__BPF_FEATURE_STACK_ARGUMENT)
 SEC("syscall")
 __arch_x86_64
 __failure __msg("arena pointer cannot be a stack argument")
 int arena_arg_stack(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
 	bpf_kfunc_arena_stack_arg_test(1, 2, 3, 4, 5, (u64 *)1);
-#endif
 	return 0;
 }
+#else
+SEC("syscall")
+__arch_x86_64
+__description("arena_arg_stack: not supported, dummy test")
+__success
+int arena_arg_stack(void *ctx)
+{
+	return 0;
+}
+#endif
 
 char _license[] SEC("license") = "GPL";
