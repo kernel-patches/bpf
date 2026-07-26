@@ -5442,6 +5442,44 @@ int security_bpf_token_capable(const struct bpf_token *token, int cap)
 }
 
 /**
+ * security_policy_kptr_from_fd() - Get an LSM policy object from a fd
+ * @lsmid: LSM_ID_* value of the LSM asked to interpret @fd
+ * @fd: file descriptor referring to a policy object, resolved in the
+ *      calling task's file descriptor table
+ * @policy: receives the referenced policy object in the member of the
+ *          LSM identified by @lsmid
+ *
+ * Ask the LSM identified by @lsmid to translate @fd into a reference
+ * counted policy object.  The caller must not dereference the
+ * returned handle, must only hand it back to the same LSM, e.g.
+ * through security_bprm_enforce_policy_kptr(), and must release it
+ * with security_policy_kptr_put().  Only the hook implementation of
+ * the LSM identified by @lsmid is called.  The hook is only called
+ * from a context that may sleep.
+ *
+ * An implementation must fill its own member of @policy with a
+ * reference that remains valid until it is released through the
+ * policy_kptr_put hook, and must not assume anything about @fd beyond
+ * what its own userspace API created it with.
+ *
+ * Return: Returns 0 if @policy holds a reference counted policy
+ * object, -EOPNOTSUPP if the LSM does not implement the hook, negative
+ * values on other failures.
+ */
+int security_policy_kptr_from_fd(u64 lsmid, int fd,
+				 union lsm_policy_kptr *policy)
+{
+	struct lsm_static_call *scall;
+
+	lsm_for_each_hook(scall, policy_kptr_from_fd) {
+		if (scall->hl->lsmid->id != lsmid)
+			continue;
+		return scall->hl->hook.policy_kptr_from_fd(fd, policy);
+	}
+	return LSM_RET_DEFAULT(policy_kptr_from_fd);
+}
+
+/**
  * security_bpf_map_free() - Free a bpf map's LSM blob
  * @map: bpf map
  *
