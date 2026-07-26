@@ -39,6 +39,20 @@ class Compiler(str, Enum):
     LLVM = "llvm"
 
 
+# Runner pools of the same architecture can differ sharply in capacity:
+# a week of s390x fleet data showed one pool failing 6.5% of test jobs
+# on host-CPU-starvation flakes (green jobs 2x slower than on the other
+# pool) while the other pool sat at 0.5%. When enough runners carrying
+# the arch's preferred label are online, route test jobs to them;
+# otherwise fall back to the generic arch label. Until the runner
+# operators add the preferred label to the healthy pool this resolves
+# to the generic label, i.e. it is a no-op.
+PREFERRED_RUNNER_LABELS: Final[Dict[Arch, str]] = {
+    Arch.S390X: "s390x-perf",
+}
+MIN_PREFERRED_RUNNERS_ONLINE: Final[int] = 2
+
+
 def query_runners_from_github() -> List[Dict[str, Any]]:
     if "GITHUB_TOKEN" not in os.environ:
         return []
@@ -112,6 +126,20 @@ def runners_by_arch(arch: Arch) -> List[Dict[str, Any]]:
     return [r for r in runners if arch.value in runner_labels(r)]
 
 
+def preferred_runner_label(arch: Arch) -> Optional[str]:
+    label = PREFERRED_RUNNER_LABELS.get(arch)
+    if label is None:
+        return None
+    online = [
+        r
+        for r in runners_by_arch(arch)
+        if label in runner_labels(r) and r["status"] == "online"
+    ]
+    if len(online) >= MIN_PREFERRED_RUNNERS_ONLINE:
+        return label
+    return None
+
+
 def count_by_status(runners: List[Dict[str, Any]]) -> Dict[str, int]:
     result = {"busy": 0, "idle": 0, "offline": 0}
     for runner in runners:
@@ -140,7 +168,8 @@ class BuildConfig:
     @property
     def runs_on(self) -> List[str]:
         if is_managed_repo():
-            return DEFAULT_SELF_HOSTED_RUNNER_TAGS + [self.arch.value]
+            label = preferred_runner_label(self.arch) or self.arch.value
+            return DEFAULT_SELF_HOSTED_RUNNER_TAGS + [label]
         else:
             return [DEFAULT_GITHUB_HOSTED_RUNNER]
 
