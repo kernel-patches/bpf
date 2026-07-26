@@ -23,6 +23,18 @@
 #include "network_helpers.h"
 #include "verification_cert.h"
 
+/* GCC defines __SANITIZE_ADDRESS__ under -fsanitize=address; clang
+ * does not - it exposes the same fact via __has_feature. Mirror the
+ * kernel's include/linux/compiler-clang.h so the ASAN-conditional code
+ * below (leave crash handling to ASAN's own signal handlers, hook
+ * __asan_on_error for the test-log dump) engages under clang too.
+ */
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer) && !defined(__SANITIZE_ADDRESS__)
+#define __SANITIZE_ADDRESS__
+#endif
+#endif
+
 /* backtrace() and backtrace_symbols_fd() are glibc specific,
  * use header file when glibc is available and provide stub
  * implementations when another libc implementation is used.
