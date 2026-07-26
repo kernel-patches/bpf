@@ -1338,10 +1338,82 @@ static void dump_crash_log(void)
 
 #define MAX_BACKTRACE_SZ 128
 
-void crash_handler(int signum)
+/* The test_progs (or -j worker) process whose crashes the handler
+ * below reports. Forked children of tests must not report: some tests
+ * fork processes that crash on purpose and assert the termination
+ * signal, which the reporting would change.
+ */
+static pid_t crash_report_pid;
+
+/* Async-signal-safe output for the crash handler: everything below
+ * writes straight to the real stderr fd with write(2). The full report
+ * (backtrace, log dump) involves the unwinder and stdio, which can
+ * themselves fault or deadlock on a corrupted process state (observed
+ * on s390x in BPF CI, where test_progs died without any output), so
+ * the essential facts must already be out by then.
+ */
+static void write_safe(const char *s)
+{
+	if (write(STDERR_FILENO, s, strlen(s)) < 0)
+		; /* nothing to be done about it in a signal handler */
+}
+
+static void write_num_safe(unsigned long long v, unsigned int base)
+{
+	char buf[2 + 2 * sizeof(v) * 8 / 3], *p = buf + sizeof(buf);
+
+	do {
+		*--p = "0123456789abcdef"[v % base];
+		v /= base;
+	} while (v);
+	if (base == 16) {
+		*--p = 'x';
+		*--p = '0';
+	}
+	if (write(STDERR_FILENO, p, buf + sizeof(buf) - p) < 0)
+		; /* nothing to be done about it in a signal handler */
+}
+
+void crash_handler(int signum, siginfo_t *info, void *ucontext)
 {
 	void *bt[MAX_BACKTRACE_SZ];
 	size_t sz;
+
+	/* In a forked child, re-raise instead of reporting: SA_RESETHAND
+	 * has already restored the default disposition, so the child
+	 * dies with the original signal, as the parent test may assert.
+	 * (Returning is not enough: a kernel-sent signal - e.g. the
+	 * SIGILL uprobe_syscall expects - does not re-trigger on return
+	 * the way a re-executed faulting instruction does; the child
+	 * would keep running in a corrupted state and die of something
+	 * else.)
+	 */
+	if (getpid() != crash_report_pid) {
+		raise(signum);
+		return;
+	}
+
+	write_safe("\nCaught signal #");
+	write_num_safe(signum, 10);
+	write_safe(" (si_code ");
+	if (info->si_code < 0) {
+		/* negative si_code = synthetic signal, e.g. the watchdog's
+		 * pthread_kill (SI_TKILL)
+		 */
+		write_safe("-");
+		write_num_safe(-(long long)info->si_code, 10);
+	} else {
+		write_num_safe(info->si_code, 10);
+	}
+	write_safe(", addr ");
+	write_num_safe((unsigned long)info->si_addr, 16);
+	write_safe(") in test ");
+	write_safe(env.test ? env.test->test_name : "<none>");
+	if (env.subtest_state && env.subtest_state->name) {
+		write_safe("/");
+		write_safe(env.subtest_state->name);
+	}
+	write_safe("\n");
 
 	sz = backtrace(bt, ARRAY_SIZE(bt));
 
@@ -1931,6 +2003,8 @@ out:
 
 static int worker_main(int sock)
 {
+	/* workers report their own crashes */
+	crash_report_pid = getpid();
 	save_netns();
 	watchdog_init();
 
@@ -2044,9 +2118,14 @@ int main(int argc, char **argv)
 	int err, i;
 
 #ifndef __SANITIZE_ADDRESS__
+	static char crash_altstack[16 * 1024];
+	stack_t altstack = {
+		.ss_sp = crash_altstack,
+		.ss_size = sizeof(crash_altstack),
+	};
 	struct sigaction sigact = {
-		.sa_handler = crash_handler,
-		.sa_flags = SA_RESETHAND,
+		.sa_sigaction = crash_handler,
+		.sa_flags = SA_RESETHAND | SA_SIGINFO | SA_ONSTACK,
 	};
 	void *bt[1];
 
@@ -2056,7 +2135,17 @@ int main(int argc, char **argv)
 	 * Trigger the loading here, outside signal context.
 	 */
 	backtrace(bt, ARRAY_SIZE(bt));
+	/* The handler runs on its own stack so that a stack overflow or
+	 * a corrupted stack pointer still gets a report; SIGILL, SIGBUS
+	 * and SIGFPE get the same treatment as SIGSEGV - all have been
+	 * observed killing test_progs silently in CI.
+	 */
+	crash_report_pid = getpid();
+	sigaltstack(&altstack, NULL);
 	sigaction(SIGSEGV, &sigact, NULL);
+	sigaction(SIGILL, &sigact, NULL);
+	sigaction(SIGBUS, &sigact, NULL);
+	sigaction(SIGFPE, &sigact, NULL);
 #endif
 
 	env.stdout_saved = stdout;
