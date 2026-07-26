@@ -188,6 +188,44 @@ int usleep(useconds_t usec)
 	return syscall(__NR_nanosleep, &ts, NULL);
 }
 
+/* /proc/stat "cpu" line: user nice system idle iowait irq softirq steal */
+static int read_cpu_times(unsigned long long *total, unsigned long long *steal)
+{
+	unsigned long long v[8];
+	FILE *f;
+	int n;
+
+	f = fopen("/proc/stat", "r");
+	if (!f)
+		return -1;
+	n = fscanf(f, "cpu %llu %llu %llu %llu %llu %llu %llu %llu",
+		   &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]);
+	fclose(f);
+	if (n != 8)
+		return -1;
+	*total = v[0] + v[1] + v[2] + v[3] + v[4] + v[5] + v[6] + v[7];
+	*steal = v[7];
+	return 0;
+}
+
+/* A watchdog event on a virtualized runner is often the host starving
+ * the guest rather than the test misbehaving; report how much of the
+ * test's wall time the host stole so the two are distinguishable.
+ */
+static void format_steal_note(char *buf, size_t sz)
+{
+	unsigned long long total, steal;
+
+	buf[0] = '\0';
+	if (!env.test_start_cpu_total ||
+	    read_cpu_times(&total, &steal) ||
+	    total <= env.test_start_cpu_total)
+		return;
+	snprintf(buf, sz, " (host cpu steal since test start: %llu%%)",
+		 100 * (steal - env.test_start_cpu_steal) /
+		 (total - env.test_start_cpu_total));
+}
+
 /* Watchdog timer is started by watchdog_start() and stopped by watchdog_stop().
  * If timer is active for longer than env.secs_till_notify,
  * it prints the name of the current test to the stderr.
@@ -197,6 +235,7 @@ int usleep(useconds_t usec)
 static void watchdog_timer_func(union sigval sigval)
 {
 	struct itimerspec timeout = {};
+	char steal_note[64];
 	char test_name[256];
 	int err;
 
@@ -207,10 +246,12 @@ static void watchdog_timer_func(union sigval sigval)
 		snprintf(test_name, sizeof(test_name), "%s",
 			 env.test->test_name);
 
+	format_steal_note(steal_note, sizeof(steal_note));
+
 	switch (env.watchdog_state) {
 	case WD_NOTIFY:
-		fprintf(env.stderr_saved, "WATCHDOG: test case %s executes for %d seconds...\n",
-			test_name, env.secs_till_notify);
+		fprintf(env.stderr_saved, "WATCHDOG: test case %s executes for %d seconds%s...\n",
+			test_name, env.secs_till_notify, steal_note);
 		timeout.it_value.tv_sec = env.secs_till_kill - env.secs_till_notify;
 		env.watchdog_state = WD_KILL;
 		err = timer_settime(env.watchdog, 0, &timeout, NULL);
@@ -219,8 +260,8 @@ static void watchdog_timer_func(union sigval sigval)
 		break;
 	case WD_KILL:
 		fprintf(env.stderr_saved,
-			"WATCHDOG: test case %s executes for %d seconds, terminating with SIGSEGV\n",
-			test_name, env.secs_till_kill);
+			"WATCHDOG: test case %s executes for %d seconds%s, terminating with SIGSEGV\n",
+			test_name, env.secs_till_kill, steal_note);
 		pthread_kill(env.main_thread, SIGSEGV);
 		/* The SIGSEGV above cannot kill a test thread that is
 		 * blocked in an uninterruptible syscall, and the crash
@@ -239,8 +280,8 @@ static void watchdog_timer_func(union sigval sigval)
 		break;
 	case WD_EXIT:
 		fprintf(env.stderr_saved,
-			"WATCHDOG: test case %s did not exit %d seconds after SIGSEGV, force-exiting\n",
-			test_name, WATCHDOG_EXIT_GRACE_SECS);
+			"WATCHDOG: test case %s did not exit %d seconds after SIGSEGV%s, force-exiting\n",
+			test_name, WATCHDOG_EXIT_GRACE_SECS, steal_note);
 		fflush(env.stderr_saved);
 		fflush(env.stdout_saved);
 		/* Not exit(): atexit/cleanup handlers may need locks the
@@ -258,6 +299,8 @@ static void watchdog_start(void)
 
 	if (env.secs_till_kill == 0)
 		return;
+	if (read_cpu_times(&env.test_start_cpu_total, &env.test_start_cpu_steal))
+		env.test_start_cpu_total = 0;
 	if (env.secs_till_notify > 0) {
 		env.watchdog_state = WD_NOTIFY;
 		timeout.it_value.tv_sec = env.secs_till_notify;
