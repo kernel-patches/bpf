@@ -7541,6 +7541,22 @@ static u8 __get_type_fmodel_flags(const struct btf_type *t)
 	return flags;
 }
 
+static u8 __get_arg_fmodel_flags(const struct btf *btf,
+				 const struct btf_param *arg,
+				 const struct btf_type *t)
+{
+	u8 flags = __get_type_fmodel_flags(t);
+
+	if (btf_param_match_suffix(btf, arg, "__arena") ||
+	    btf_param_match_suffix(btf, arg, "__arena_nullable"))
+		flags |= BTF_FMODEL_ARENA_ARG;
+	if (btf_param_match_suffix(btf, arg, "__nullable") ||
+	    btf_param_match_suffix(btf, arg, "__arena_nullable"))
+		flags |= BTF_FMODEL_NULLABLE_ARG;
+
+	return flags;
+}
+
 int btf_distill_func_proto(struct bpf_verifier_log *log,
 			   struct btf *btf,
 			   const struct btf_type *func,
@@ -7606,7 +7622,7 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 			return -EINVAL;
 		}
 		m->arg_size[i] = ret;
-		m->arg_flags[i] = __get_type_fmodel_flags(t);
+		m->arg_flags[i] = __get_arg_fmodel_flags(btf, &args[i], t);
 	}
 	m->nr_args = nargs;
 	return 0;
