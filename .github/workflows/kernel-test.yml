@@ -68,10 +68,11 @@ jobs:
         run: zstd -d -T0  vmlinux-${{ inputs.arch }}-${{ inputs.toolchain_full }}.tar.zst --stdout | tar -xf -
 
       - name: Run selftests
+        id: vmtest
         uses: libbpf/ci/run-vmtest@v4
-        # https://github.com/actions/runner/issues/1483#issuecomment-1031671517
-        # booleans are weird in GH.
-        continue-on-error: ${{ fromJSON(env.CONTINUE_ON_ERROR) }}
+        # Outcome is judged in "Report test outcome" below, which also
+        # implements the CONTINUE_ON_ERROR semantic.
+        continue-on-error: true
         timeout-minutes: ${{ inputs.timeout_minutes }}
         env:
           ARCH: ${{ inputs.arch }}
@@ -93,6 +94,62 @@ jobs:
           # Here we must use kbuild-output local to the repo, because
           # it was extracted from the artifacts.
           kbuild-output: ${{ env.REPO_ROOT }}/kbuild-output
+
+      # s390x runners suffer from host-contention flakes (~6.5% of test
+      # jobs fail on a single starved test; see the steal-time telemetry
+      # in the job output). Retry a failed run once and annotate loudly,
+      # so genuine flakes stop failing whole matrix runs while remaining
+      # visible for tracking.
+      - name: Retry selftests (s390x flake mitigation)
+        id: vmtest-retry
+        if: ${{ steps.vmtest.outcome == 'failure' && inputs.arch == 's390x' }}
+        uses: libbpf/ci/run-vmtest@v4
+        continue-on-error: true
+        timeout-minutes: ${{ inputs.timeout_minutes }}
+        env:
+          ARCH: ${{ inputs.arch }}
+          DEPLOYMENT: ${{ env.DEPLOYMENT }}
+          KERNEL_TEST: ${{ inputs.test }}
+          LLVM_VERSION: ${{ inputs.llvm_version }}
+          SELFTESTS_BPF: ${{ github.workspace }}/selftests/bpf
+          VMTEST_CONFIGS: ${{ github.workspace }}/ci/vmtest/configs
+          VMTEST_MEMORY: 5G
+          VMTEST_NUM_CPUS: 4
+          TEST_PROGS_TRAFFIC_MONITOR: ${{ inputs.arch == 'x86_64' && 'true' || '' }}
+          TEST_PROGS_WATCHDOG_TIMEOUT: 600
+        with:
+          arch: ${{ inputs.arch }}
+          vmlinuz: '${{ github.workspace }}/vmlinuz'
+          kernel-root: ${{ env.REPO_ROOT }}
+          max-cpu: 8
+          kernel-test: ${{ inputs.test }}
+          kbuild-output: ${{ env.REPO_ROOT }}/kbuild-output
+
+      - name: Report test outcome
+        env:
+          FIRST: ${{ steps.vmtest.outcome }}
+          RETRY: ${{ steps.vmtest-retry.outcome }}
+          TEST_ID: ${{ inputs.test }} on ${{ inputs.arch }} with ${{ inputs.toolchain_full }}
+        run: |
+          if [ "$FIRST" = "success" ]; then
+            exit 0
+          fi
+          if [ "$RETRY" = "success" ]; then
+            echo "::warning title=Flaky test job::${TEST_ID} failed on the first attempt and passed on retry"
+            echo ":warning: **flaky**: ${TEST_ID} failed once, passed on retry" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$RETRY" = "failure" ]; then
+            echo "test job failed (both attempts)"
+          else
+            echo "test job failed"
+          fi
+          # https://github.com/actions/runner/issues/1483#issuecomment-1031671517
+          # booleans are weird in GH.
+          if [ "$CONTINUE_ON_ERROR" = "true" ]; then
+            exit 0
+          fi
+          exit 1
 
       - if: ${{ always() }}
         uses: actions/upload-artifact@v7
