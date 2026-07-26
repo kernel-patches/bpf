@@ -21,6 +21,31 @@
 #include "setup.h"
 
 /**
+ * struct landlock_restriction - Computed credential restriction
+ *
+ * The result of landlock_prepare_restriction(): the new state that
+ * enforcing a ruleset with a set of landlock_restrict_self(2) flags
+ * gives to a credential, decoupled from its application.  It is
+ * enforced with landlock_apply_restriction(), either right away
+ * (landlock_restrict_self(2)) or after a staging period (restriction
+ * of an execution).
+ */
+struct landlock_restriction {
+	/**
+	 * @domain: New domain to enforce, owning a reference.  NULL if the
+	 * restriction only carries a log configuration change.
+	 */
+	struct landlock_ruleset *domain;
+#ifdef CONFIG_AUDIT
+	/**
+	 * @log_subdomains_off: New value of the credentials'
+	 * @landlock_cred_security.log_subdomains_off.
+	 */
+	u8 log_subdomains_off : 1;
+#endif /* CONFIG_AUDIT */
+};
+
+/**
  * struct landlock_cred_security - Credential security blob
  *
  * This structure is packed to minimize the size of struct
@@ -152,6 +177,14 @@ landlock_get_applicable_subject(const struct cred *const cred,
 
 	return NULL;
 }
+
+int landlock_prepare_restriction(
+	const struct landlock_cred_security *const llcred,
+	struct landlock_ruleset *const ruleset, const u32 flags,
+	struct landlock_restriction *const restriction);
+
+void landlock_apply_restriction(struct landlock_cred_security *const llcred,
+				struct landlock_restriction *const restriction);
 
 __init void landlock_add_cred_hooks(void);
 
