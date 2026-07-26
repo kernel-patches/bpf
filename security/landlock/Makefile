@@ -16,3 +16,5 @@ landlock-$(CONFIG_AUDIT) += \
 	id.o \
 	audit.o \
 	domain.o
+
+landlock-$(CONFIG_BPF_LSM) += bpf.o

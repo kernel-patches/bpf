@@ -124,6 +124,12 @@ static void hook_cred_transfer(struct cred *const new,
 
 	landlock_get_ruleset(old_llcred->domain);
 	*landlock_cred(new) = *old_llcred;
+
+#ifdef CONFIG_BPF_LSM
+	/* Only bprm credentials own a staged restriction: never copied. */
+	WARN_ON_ONCE(landlock_cred(new)->staged.domain);
+	landlock_cred(new)->staged = (struct landlock_restriction){};
+#endif /* CONFIG_BPF_LSM */
 }
 
 static int hook_cred_prepare(struct cred *const new,
@@ -135,10 +141,14 @@ static int hook_cred_prepare(struct cred *const new,
 
 static void hook_cred_free(struct cred *const cred)
 {
-	struct landlock_ruleset *const dom = landlock_cred(cred)->domain;
+	struct landlock_cred_security *const llcred = landlock_cred(cred);
 
-	if (dom)
-		landlock_put_ruleset_deferred(dom);
+	landlock_put_ruleset_deferred(llcred->domain);
+
+#ifdef CONFIG_BPF_LSM
+	/* Releases a restriction staged for an aborted execution. */
+	landlock_put_ruleset_deferred(llcred->staged.domain);
+#endif /* CONFIG_BPF_LSM */
 }
 
 #ifdef CONFIG_AUDIT

@@ -60,6 +60,18 @@ struct landlock_cred_security {
 	 */
 	struct landlock_ruleset *domain;
 
+#ifdef CONFIG_BPF_LSM
+	/**
+	 * @staged: Restriction staged by the bprm_enforce_policy_kptr() hook,
+	 * owning its domain reference and applied at the point of no return of
+	 * the execution (bprm_committing_creds).  Only ever set on the
+	 * credentials prepared for an execution, between the staging and
+	 * either the application or the release of the aborted credentials;
+	 * committed task credentials never carry a staged restriction.
+	 */
+	struct landlock_restriction staged;
+#endif /* CONFIG_BPF_LSM */
+
 #ifdef CONFIG_AUDIT
 	/**
 	 * @domain_exec: Bitmask identifying the domain layers that were enforced by
@@ -100,6 +112,12 @@ static inline void landlock_cred_copy(struct landlock_cred_security *dst,
 	*dst = *src;
 
 	landlock_get_ruleset(src->domain);
+
+#ifdef CONFIG_BPF_LSM
+	/* Only bprm credentials own a staged restriction: never copied. */
+	WARN_ON_ONCE(src->staged.domain);
+	dst->staged = (struct landlock_restriction){};
+#endif /* CONFIG_BPF_LSM */
 }
 
 static inline struct landlock_ruleset *landlock_get_current_domain(void)
