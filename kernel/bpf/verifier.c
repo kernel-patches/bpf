@@ -12414,6 +12414,11 @@ check_ok:
 			meta->subprogno = reg->subprogno;
 			break;
 		case KF_ARG_PTR_TO_REFCOUNTED_KPTR:
+			if (reg->type & PTR_UNTRUSTED) {
+				verbose(env, "%s is an untrusted refcounted kptr\n",
+					reg_arg_name(env, argno));
+				return -EACCES;
+			}
 			if (!type_is_ptr_alloc_obj(reg->type)) {
 				verbose(env, "%s is neither owning or non-owning ref\n",
 					reg_arg_name(env, argno));
