@@ -19,6 +19,11 @@ struct elem {
 	int val;
 };
 
+struct special_elem {
+	struct task_struct __kptr * task;
+	int val;
+};
+
 struct {
 	__uint(type, BPF_MAP_TYPE_RHASH);
 	__uint(map_flags, BPF_F_NO_PREALLOC);
@@ -26,6 +31,17 @@ struct {
 	__type(key, int);
 	__type(value, struct elem);
 } rhmap SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RHASH);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__uint(max_entries, 4);
+	__type(key, int);
+	__type(value, struct special_elem);
+} special_fields SEC(".maps");
+
+struct task_struct *bpf_task_acquire(struct task_struct *p) __ksym;
+void bpf_task_release(struct task_struct *p) __ksym;
 
 SEC("syscall")
 int test_rhash_lookup_update(void *ctx)
@@ -242,6 +258,71 @@ int test_rhash_delete_nonexistent(void *ctx)
 	ret = bpf_map_delete_elem(&rhmap, &key);
 	if (ret != -ENOENT)
 		return 1;
+
+	err = 0;
+	return 0;
+}
+
+SEC("syscall")
+int test_rhash_special_fields_recycle(void *ctx)
+{
+	struct special_elem val1 = { .val = 1 };
+	struct special_elem val2 = { .val = 2 };
+	struct task_struct *task, *old;
+	struct special_elem *elem;
+	int key = 0;
+
+	err = 1;
+	if (bpf_map_update_elem(&special_fields, &key, &val1, BPF_NOEXIST))
+		return 1;
+
+	err = 2;
+	elem = bpf_map_lookup_elem(&special_fields, &key);
+	if (!elem)
+		return 2;
+
+	err = 3;
+	task = bpf_task_acquire(bpf_get_current_task_btf());
+	if (!task)
+		return 3;
+
+	err = 4;
+	old = bpf_kptr_xchg(&elem->task, task);
+	if (old) {
+		bpf_task_release(old);
+		return 4;
+	}
+
+	err = 5;
+	if (bpf_map_update_elem(&special_fields, &key, &val2, BPF_EXIST))
+		return 5;
+
+	err = 6;
+	elem = bpf_map_lookup_elem(&special_fields, &key);
+	if (!elem)
+		return 6;
+
+	err = 7;
+	task = bpf_kptr_xchg(&elem->task, NULL);
+	if (!task)
+		return 7;
+	bpf_task_release(task);
+
+	err = 8;
+	task = bpf_task_acquire(bpf_get_current_task_btf());
+	if (!task)
+		return 8;
+
+	err = 9;
+	old = bpf_kptr_xchg(&elem->task, task);
+	if (old) {
+		bpf_task_release(old);
+		return 9;
+	}
+
+	err = 10;
+	if (bpf_map_delete_elem(&special_fields, &key))
+		return 10;
 
 	err = 0;
 	return 0;

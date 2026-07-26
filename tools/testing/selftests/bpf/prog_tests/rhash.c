@@ -180,4 +180,7 @@ void test_rhash(void)
 
 	if (test__start_subtest("test_rhash_iter"))
 		rhash_iter_test();
+
+	if (test__start_subtest("test_rhash_special_fields_recycle"))
+		rhash_run("test_rhash_special_fields_recycle");
 }
