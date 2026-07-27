@@ -582,6 +582,7 @@ extern const struct bench bench_lpm_trie_delete;
 extern const struct bench bench_lpm_trie_free;
 extern const struct bench bench_bpf_nop;
 extern const struct bench bench_xdp_lb;
+extern const struct bench bench_bpf_str_kfuncs;
 
 static const struct bench *benchs[] = {
 	&bench_count_global,
@@ -665,6 +666,7 @@ static const struct bench *benchs[] = {
 	&bench_lpm_trie_free,
 	&bench_bpf_nop,
 	&bench_xdp_lb,
+	&bench_bpf_str_kfuncs,
 };
 
 static void find_benchmark(void)
@@ -790,6 +792,15 @@ int main(int argc, char **argv)
 
 	find_benchmark();
 	parse_cmdline_args_final(argc, argv);
+
+	if (bench->run) {
+		if (bench->validate)
+			bench->validate();
+		if (bench->setup)
+			bench->setup();
+		bench->run();
+		return 0;
+	}
 
 	setup_benchmark();
 
