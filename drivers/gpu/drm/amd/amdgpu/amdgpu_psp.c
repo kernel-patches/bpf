@@ -296,6 +296,7 @@ static int psp_early_init(struct amdgpu_ip_block *ip_block)
 		psp->boot_time_tmr = false;
 		break;
 	case IP_VERSION(15, 0, 3):
+		adev->psp.sup_ifwi_up = !amdgpu_sriov_vf(adev);
 		psp_v15_0_3_set_psp_funcs(psp);
 		break;
 	case IP_VERSION(15, 0, 8):
