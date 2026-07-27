@@ -4281,11 +4281,90 @@ __bpf_kfunc int bpf_strcspn(const char *s__ign, const char *reject__ign)
 	return __bpf_strspn(s__ign, reject__ign, true);
 }
 
-static int __bpf_strnstr(const char *s1, const char *s2, size_t len,
-			 bool ignore_case)
+#define bpf_str_match_byte(byte1, byte2, ignore_case)	\
+do {							\
+	char __c1 = (byte1);				\
+	char __c2 = (byte2);				\
+							\
+	if (ignore_case) {				\
+		__c1 = tolower(__c1);			\
+		__c2 = tolower(__c2);			\
+	}						\
+	if (__c1 == '\0')				\
+		return -ENOENT;				\
+	if (__c1 != __c2)				\
+		return 0;				\
+} while (0)
+
+static __always_inline int
+bpf_str_match_at(const char *s1, const char *s2, size_t limit, bool ignore_case)
 {
-	char c1, c2;
-	int i, j;
+	const struct word_at_a_time constants = WORD_AT_A_TIME_CONSTANTS;
+	unsigned char byte1, byte2, *bytes1, *bytes2;
+	unsigned long word1, word2, data;
+	size_t pos = 0, word_end, i;
+
+	if (IS_ENABLED(CONFIG_KMSAN) ||
+	    !IS_ALIGNED((unsigned long)s1 ^ (unsigned long)s2, sizeof(word1)))
+		goto byte_at_a_time;
+
+	while (pos < limit && !IS_ALIGNED((unsigned long)(s1 + pos), sizeof(word1))) {
+		__get_kernel_nofault(&byte2, s2 + pos, unsigned char, err_out);
+		if (byte2 == '\0')
+			return 1;
+		__get_kernel_nofault(&byte1, s1 + pos, unsigned char, err_out);
+		bpf_str_match_byte(byte1, byte2, ignore_case);
+		pos++;
+	}
+
+	word_end = pos + round_down(limit - pos, sizeof(word1));
+	while (pos < word_end) {
+		__get_kernel_nofault(&word2, s2 + pos, unsigned long, byte_at_a_time);
+		if (has_zero(word2, &data, &constants))
+			goto byte_at_a_time;
+		__get_kernel_nofault(&word1, s1 + pos, unsigned long, byte_at_a_time);
+		if (word1 == word2) {
+			pos += sizeof(word1);
+			continue;
+		}
+
+		bytes1 = (unsigned char *)&word1;
+		bytes2 = (unsigned char *)&word2;
+		for (i = 0; i < sizeof(word1); i++)
+			bpf_str_match_byte(bytes1[i], bytes2[i], ignore_case);
+		pos += sizeof(word1);
+	}
+
+byte_at_a_time:
+	for (; pos < limit; pos++) {
+		__get_kernel_nofault(&byte2, s2 + pos, unsigned char, err_out);
+		if (byte2 == '\0')
+			return 1;
+		__get_kernel_nofault(&byte1, s1 + pos, unsigned char, err_out);
+		bpf_str_match_byte(byte1, byte2, ignore_case);
+	}
+
+	if (limit == XATTR_SIZE_MAX)
+		return -E2BIG;
+
+	/*
+	 * Read one extra byte from s2 to cover the case when it is a suffix
+	 * of the first limit bytes of s1.
+	 */
+	__get_kernel_nofault(&byte2, s2 + limit, unsigned char, err_out);
+	return byte2 == '\0' ? 1 : -ENOENT;
+
+err_out:
+	return -EFAULT;
+}
+
+#undef bpf_str_match_byte
+
+static int __bpf_strnstr(const char *s1, const char *s2, size_t len, bool ignore_case)
+{
+	unsigned char first, candidate;
+	size_t pos = 0, limit;
+	int ret, offset;
 
 	if (!copy_from_kernel_nofault_allowed(s1, 1) ||
 	    !copy_from_kernel_nofault_allowed(s2, 1)) {
@@ -4293,37 +4372,38 @@ static int __bpf_strnstr(const char *s1, const char *s2, size_t len,
 	}
 
 	guard(pagefault)();
-	for (i = 0; i < XATTR_SIZE_MAX; i++) {
-		for (j = 0; i + j <= len && j < XATTR_SIZE_MAX; j++) {
-			__get_kernel_nofault(&c2, s2 + j, char, err_out);
-			if (c2 == '\0')
-				return i;
-			/*
-			 * We allow reading an extra byte from s2 (note the
-			 * `i + j <= len` above) to cover the case when s2 is
-			 * a suffix of the first len chars of s1.
-			 */
-			if (i + j == len)
-				break;
-			__get_kernel_nofault(&c1, s1 + j, char, err_out);
+	__get_kernel_nofault(&first, s2, unsigned char, err_out);
+	if (first == '\0')
+		return 0;
 
-			if (ignore_case) {
-				c1 = tolower(c1);
-				c2 = tolower(c2);
-			}
-
-			if (c1 == '\0')
-				return -ENOENT;
-			if (c1 != c2)
-				break;
+	while (pos < XATTR_SIZE_MAX && pos < len) {
+		limit = min_t(size_t, len - pos, XATTR_SIZE_MAX - pos);
+		offset = bpf_str_find(s1 + pos, limit, first, ignore_case, true);
+		if (offset < 0) {
+			if (offset == -ENOENT && limit == XATTR_SIZE_MAX - pos)
+				return -E2BIG;
+			return offset;
 		}
-		if (j == XATTR_SIZE_MAX)
-			return -E2BIG;
-		if (i + j == len)
+		pos += offset;
+
+		/*
+		 * bpf_str_find() also returns the position of a terminating
+		 * NUL. Distinguish it from a first-character match.
+		 */
+		__get_kernel_nofault(&candidate, s1 + pos, unsigned char, err_out);
+		if (candidate == '\0')
 			return -ENOENT;
-		s1++;
+
+		limit = min_t(size_t, len - pos, XATTR_SIZE_MAX);
+		ret = bpf_str_match_at(s1 + pos, s2, limit, ignore_case);
+		if (ret > 0)
+			return pos;
+		if (ret < 0)
+			return ret;
+		pos++;
 	}
-	return -E2BIG;
+	return pos == XATTR_SIZE_MAX ? -E2BIG : -ENOENT;
+
 err_out:
 	return -EFAULT;
 }
