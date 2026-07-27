@@ -169,8 +169,10 @@ static int bpf_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 
 static int xmit_check_hhlen(struct sk_buff *skb, int hh_len)
 {
-	if (skb_headroom(skb) < hh_len) {
-		int nhead = HH_DATA_ALIGN(hh_len - skb_headroom(skb));
+	int hh_alen = HH_DATA_ALIGN(hh_len);
+
+	if (skb_headroom(skb) < hh_alen) {
+		int nhead = HH_DATA_ALIGN(hh_alen - skb_headroom(skb));
 
 		if (pskb_expand_head(skb, nhead, 0, GFP_ATOMIC))
 			return -ENOMEM;
