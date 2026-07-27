@@ -4447,7 +4447,7 @@ static void bpf_task_work_cancel(struct bpf_task_work_ctx *ctx)
 		bpf_task_work_ctx_put(ctx);
 }
 
-static void bpf_task_work_callback(struct callback_head *cb)
+static __bpfcall void bpf_task_work_callback(struct callback_head *cb)
 {
 	struct bpf_task_work_ctx *ctx = container_of(cb, struct bpf_task_work_ctx, work);
 	enum bpf_task_work_state state;
