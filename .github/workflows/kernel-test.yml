@@ -90,10 +90,7 @@ jobs:
           vmlinuz: '${{ github.workspace }}/vmlinuz'
           kernel-root: ${{ env.REPO_ROOT }}
           max-cpu: 8
-          # DEBUG DO-NOT-SEND: force the first attempt of the plain
-          # s390x test_progs job to fail inside the VM (bogus test
-          # name) to demonstrate the retry + flaky-annotation path.
-          kernel-test: ${{ (inputs.arch == 's390x' && inputs.test == 'test_progs') && 'test_progs_debugflake' || inputs.test }}
+          kernel-test: ${{ inputs.test }}
           # Here we must use kbuild-output local to the repo, because
           # it was extracted from the artifacts.
           kbuild-output: ${{ env.REPO_ROOT }}/kbuild-output
