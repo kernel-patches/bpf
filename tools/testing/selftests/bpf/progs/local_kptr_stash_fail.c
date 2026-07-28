@@ -8,14 +8,22 @@
 #include "../bpf_experimental.h"
 #include "bpf_misc.h"
 
+extern void bpf_rcu_read_lock(void) __ksym;
+extern void bpf_rcu_read_unlock(void) __ksym;
+
 struct node_data {
 	long key;
 	long data;
 	struct bpf_rb_node node;
 };
 
+struct plain_data {
+	long key;
+};
+
 struct map_value {
 	struct node_data __kptr *node;
+	struct plain_data __kptr *plain;
 };
 
 struct node_data2 {
@@ -31,6 +39,7 @@ struct node_data2 {
  * [35] TYPE_TAG 'kptr_ref' type_id=34
  */
 struct node_data *just_here_because_btf_bug;
+struct plain_data *just_here_because_btf_bug2;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -80,6 +89,55 @@ long drop_rb_node_off(void *ctx)
 	/* Try releasing with graph node offset */
 	bpf_obj_drop(&res->node);
 	return 0;
+}
+
+SEC("?tc")
+__failure __msg("only read is supported")
+long write_untrusted_alloc_obj(void *ctx)
+{
+	struct map_value *mapval;
+	struct node_data *res;
+	int idx = 0;
+
+	mapval = bpf_map_lookup_elem(&some_nodes, &idx);
+	if (!mapval)
+		return 1;
+
+	bpf_rcu_read_lock();
+	res = mapval->node;
+	if (!res) {
+		bpf_rcu_read_unlock();
+		return 2;
+	}
+	barrier_var(res);
+	bpf_rcu_read_unlock();
+
+	res->key = 42;
+	return 0;
+}
+
+SEC("?tc")
+__success
+long read_untrusted_alloc_obj(void *ctx)
+{
+	struct map_value *mapval;
+	struct plain_data *res;
+	int idx = 0;
+
+	mapval = bpf_map_lookup_elem(&some_nodes, &idx);
+	if (!mapval)
+		return 1;
+
+	bpf_rcu_read_lock();
+	res = mapval->plain;
+	if (!res) {
+		bpf_rcu_read_unlock();
+		return 2;
+	}
+	barrier_var(res);
+	bpf_rcu_read_unlock();
+
+	return res->key;
 }
 
 char _license[] SEC("license") = "GPL";

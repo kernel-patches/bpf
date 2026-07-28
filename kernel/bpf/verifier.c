@@ -5804,13 +5804,15 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		 * program allocated objects (which always have id > 0),
 		 * but not for untrusted PTR_TO_BTF_ID | MEM_ALLOC.
 		 */
-		if (atype != BPF_READ && !type_is_ptr_alloc_obj(reg->type)) {
+		if (atype != BPF_READ &&
+		    (!type_is_ptr_alloc_obj(reg->type) || reg->type & PTR_UNTRUSTED)) {
 			verbose(env, "only read is supported\n");
 			return -EACCES;
 		}
 
 		if (type_is_alloc(reg->type) && !type_is_non_owning_ref(reg->type) &&
-		    !(reg->type & MEM_RCU) && !reg_is_referenced(env, reg)) {
+		    !(reg->type & (MEM_RCU | PTR_UNTRUSTED)) &&
+		    !reg_is_referenced(env, reg)) {
 			verifier_bug(env, "allocated object must have a referenced id");
 			return -EFAULT;
 		}
