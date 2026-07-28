@@ -579,6 +579,14 @@ static int emit_atomic_ld_st(const struct bpf_insn *insn, struct jit_ctx *ctx)
 			break;
 		}
 		emit_insn(ctx, dbar, 0b10100);
+
+		/*
+		 * If the next insn is a redundant zext, return 1 to tell
+		 * build_body() to skip it, as atomic load-acquires always
+		 * zero-extend sub-word results.
+		 */
+		if (BPF_SIZE(insn->code) != BPF_DW && insn_is_zext(&insn[1]))
+			return 1;
 		break;
 	/* store_release(dst_reg + off16, src_reg) */
 	case BPF_STORE_REL:
@@ -1328,6 +1336,14 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 		ret = add_exception_handler(insn, ctx, dst);
 		if (ret)
 			return ret;
+
+		/*
+		 * If the next insn is a redundant zext, and this is a standard
+		 * unsigned sub-word load where hardware already zero-extends,
+		 * return 1 to tell build_body() to skip it.
+		 */
+		if (BPF_SIZE(code) != BPF_DW && !sign_extend && insn_is_zext(&insn[1]))
+			return 1;
 		break;
 
 	/* *(size *)(dst + off) = imm */
@@ -2403,6 +2419,11 @@ bool bpf_jit_supports_fsession(void)
 
 /* Indicate the JIT backend supports mixing bpf2bpf and tailcalls. */
 bool bpf_jit_supports_subprog_tailcalls(void)
+{
+	return true;
+}
+
+bool bpf_jit_needs_zext(void)
 {
 	return true;
 }
