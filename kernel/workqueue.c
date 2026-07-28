@@ -8732,6 +8732,107 @@ static struct bpf_iter_reg workqueue_iter_reg_info = {
 	.seq_info		= &workqueue_iter_seq_info,
 };
 
+/*
+ * seq_file form of the worker_pool iterator; same RCU-per-chunk scheme as the
+ * workqueue one, reusing the open-coded bpf_iter_worker_pool_next().
+ */
+union worker_pool_iter_priv {
+	struct bpf_iter_worker_pool it;
+	struct bpf_iter_worker_pool_kern kit;
+};
+
+struct bpf_iter__worker_pool {
+	__bpf_md_ptr(struct bpf_iter_meta *, meta);
+	__bpf_md_ptr(struct worker_pool *, pool);
+};
+
+static void *worker_pool_iter_seq_start(struct seq_file *seq, loff_t *pos)
+{
+	union worker_pool_iter_priv *p = seq->private;
+	struct worker_pool *pool;
+	loff_t cnt = 0;
+	int id = 0;
+
+	rcu_read_lock();
+	while ((pool = idr_get_next(&worker_pool_idr, &id))) {
+		if (cnt == *pos) {
+			p->kit.id = id + 1;
+			return pool;
+		}
+		cnt++;
+		id++;
+	}
+	return NULL;
+}
+
+static void *worker_pool_iter_seq_next(struct seq_file *seq, void *v, loff_t *pos)
+{
+	union worker_pool_iter_priv *p = seq->private;
+
+	++*pos;
+	return bpf_iter_worker_pool_next(&p->it);
+}
+
+static int worker_pool_iter_seq_show(struct seq_file *seq, void *v)
+{
+	struct bpf_iter__worker_pool ctx;
+	struct bpf_iter_meta meta;
+	struct bpf_prog *prog;
+
+	meta.seq = seq;
+	prog = bpf_iter_get_info(&meta, false);
+	if (!prog)
+		return 0;
+	ctx.meta = &meta;
+	ctx.pool = v;
+	return bpf_iter_run_prog(prog, &ctx);
+}
+
+static void worker_pool_iter_seq_stop(struct seq_file *seq, void *v)
+{
+	struct bpf_iter__worker_pool ctx;
+	struct bpf_iter_meta meta;
+	struct bpf_prog *prog;
+
+	if (!v) {
+		meta.seq = seq;
+		prog = bpf_iter_get_info(&meta, true);
+		if (prog) {
+			ctx.meta = &meta;
+			ctx.pool = NULL;
+			bpf_iter_run_prog(prog, &ctx);
+		}
+	}
+	rcu_read_unlock();
+}
+
+static const struct seq_operations worker_pool_iter_seq_ops = {
+	.start	= worker_pool_iter_seq_start,
+	.next	= worker_pool_iter_seq_next,
+	.stop	= worker_pool_iter_seq_stop,
+	.show	= worker_pool_iter_seq_show,
+};
+
+DEFINE_BPF_ITER_FUNC(worker_pool, struct bpf_iter_meta *meta,
+		     struct worker_pool *pool)
+
+static const struct bpf_iter_seq_info worker_pool_iter_seq_info = {
+	.seq_ops	= &worker_pool_iter_seq_ops,
+	.seq_priv_size	= sizeof(union worker_pool_iter_priv),
+};
+
+BTF_ID_LIST_SINGLE(worker_pool_btf_id, struct, worker_pool)
+
+static struct bpf_iter_reg worker_pool_iter_reg_info = {
+	.target			= "worker_pool",
+	.ctx_arg_info_size	= 1,
+	.ctx_arg_info		= {
+		{ offsetof(struct bpf_iter__worker_pool, pool),
+		  PTR_TO_BTF_ID_OR_NULL | PTR_TRUSTED },
+	},
+	.seq_info		= &worker_pool_iter_seq_info,
+};
+
 static int __init bpf_workqueue_iter_init(void)
 {
 	int ret;
@@ -8746,7 +8847,12 @@ static int __init bpf_workqueue_iter_init(void)
 		return ret;
 
 	workqueue_iter_reg_info.ctx_arg_info[0].btf_id = workqueue_btf_id[0];
-	return bpf_iter_reg_target(&workqueue_iter_reg_info);
+	ret = bpf_iter_reg_target(&workqueue_iter_reg_info);
+	if (ret)
+		return ret;
+
+	worker_pool_iter_reg_info.ctx_arg_info[0].btf_id = worker_pool_btf_id[0];
+	return bpf_iter_reg_target(&worker_pool_iter_reg_info);
 }
 late_initcall(bpf_workqueue_iter_init);
 
