@@ -56,6 +56,7 @@
 #include <linux/kvm_para.h>
 #include <linux/delay.h>
 #include <linux/irq_work.h>
+#include <linux/btf_ids.h>
 
 #include "workqueue_internal.h"
 
@@ -8473,3 +8474,105 @@ static int __init workqueue_unbound_cpus_setup(char *str)
 	return 1;
 }
 __setup("workqueue.unbound_cpus=", workqueue_unbound_cpus_setup);
+
+#ifdef CONFIG_BPF_SYSCALL
+
+/*
+ * BPF open-coded iterator over all workqueues.
+ *
+ * Walks the global @workqueues list, letting BPF programs read live workqueue
+ * state.
+ *
+ * The caller must hold bpf_rcu_read_lock() across new()->next()->destroy().
+ */
+
+/* Sentinel for "new() done, next() not yet called" vs "iteration ended". */
+#define BPF_WQ_ITER_START ((void *)1L)
+
+struct bpf_iter_workqueue {
+	__u64 __opaque[1];
+} __aligned(8);
+
+struct bpf_iter_workqueue_kern {
+	struct workqueue_struct *pos;
+} __aligned(8);
+
+__bpf_kfunc_start_defs();
+
+/**
+ * bpf_iter_workqueue_new() - Initialize a workqueue iterator
+ * @it: The new bpf_iter_workqueue to initialize
+ *
+ * Iterates every workqueue on the global @workqueues list. Must be used inside
+ * a bpf_rcu_read_lock() region (KF_RCU_PROTECTED).
+ */
+__bpf_kfunc int bpf_iter_workqueue_new(struct bpf_iter_workqueue *it)
+{
+	struct bpf_iter_workqueue_kern *kit = (void *)it;
+
+	BUILD_BUG_ON(sizeof(struct bpf_iter_workqueue_kern) >
+		     sizeof(struct bpf_iter_workqueue));
+	BUILD_BUG_ON(__alignof__(struct bpf_iter_workqueue_kern) !=
+		     __alignof__(struct bpf_iter_workqueue));
+
+	kit->pos = BPF_WQ_ITER_START;
+	return 0;
+}
+
+/**
+ * bpf_iter_workqueue_next() - Get the next workqueue
+ * @it: The bpf_iter_workqueue
+ *
+ * Returns a pointer to the next struct workqueue_struct, or NULL when done.
+ */
+__bpf_kfunc struct workqueue_struct *
+bpf_iter_workqueue_next(struct bpf_iter_workqueue *it)
+{
+	struct bpf_iter_workqueue_kern *kit = (void *)it;
+
+	if (!kit->pos)			/* already reached the end */
+		return NULL;
+
+	if (kit->pos == BPF_WQ_ITER_START)
+		kit->pos = list_first_or_null_rcu(&workqueues,
+						  struct workqueue_struct, list);
+	else
+		kit->pos = list_next_or_null_rcu(&workqueues, &kit->pos->list,
+						 struct workqueue_struct, list);
+	return kit->pos;
+}
+
+/**
+ * bpf_iter_workqueue_destroy() - Destroy a workqueue iterator
+ * @it: The bpf_iter_workqueue to destroy
+ */
+__bpf_kfunc void bpf_iter_workqueue_destroy(struct bpf_iter_workqueue *it)
+{
+	/* No references taken; RCU is held by the caller. */
+}
+
+__bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(workqueue_iter_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_iter_workqueue_new, KF_ITER_NEW | KF_RCU_PROTECTED)
+BTF_ID_FLAGS(func, bpf_iter_workqueue_next, KF_ITER_NEXT | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_iter_workqueue_destroy, KF_ITER_DESTROY)
+BTF_KFUNCS_END(workqueue_iter_kfunc_ids)
+
+static const struct btf_kfunc_id_set workqueue_iter_kfunc_set = {
+	.owner	= THIS_MODULE,
+	.set	= &workqueue_iter_kfunc_ids,
+};
+
+static int __init bpf_workqueue_iter_init(void)
+{
+	int ret;
+
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING,
+					&workqueue_iter_kfunc_set);
+	return ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
+						&workqueue_iter_kfunc_set);
+}
+late_initcall(bpf_workqueue_iter_init);
+
+#endif /* CONFIG_BPF_SYSCALL */
