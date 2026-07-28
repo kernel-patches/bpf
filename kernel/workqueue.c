@@ -57,6 +57,7 @@
 #include <linux/delay.h>
 #include <linux/irq_work.h>
 #include <linux/btf_ids.h>
+#include <linux/bpf.h>
 
 #include "workqueue_internal.h"
 
@@ -8564,14 +8565,128 @@ static const struct btf_kfunc_id_set workqueue_iter_kfunc_set = {
 	.set	= &workqueue_iter_kfunc_ids,
 };
 
+/*
+ * seq_file form of the workqueue iterator. It reuses the open-coded
+ * bpf_iter_workqueue_next().
+ *
+ * Since the open-coded next() is KF_RCU_PROTECTED, the seq path supplies
+ * the RCU section itself.
+ * seq_start() takes rcu_read_lock() and holds it across the whole read chunk
+ * (start..stop). Position is re-derived from *pos on each start, so nothing
+ * is dereferenced across the rcu gap between chunks. The attached BPF program
+ * must be non-sleepable.
+ */
+union workqueue_iter_priv {
+	struct bpf_iter_workqueue it;
+	struct bpf_iter_workqueue_kern kit;
+};
+
+struct bpf_iter__workqueue {
+	__bpf_md_ptr(struct bpf_iter_meta *, meta);
+	__bpf_md_ptr(struct workqueue_struct *, wq);
+};
+
+static void *workqueue_iter_seq_start(struct seq_file *seq, loff_t *pos)
+{
+	union workqueue_iter_priv *p = seq->private;
+	struct workqueue_struct *wq;
+	loff_t cnt = 0;
+
+	rcu_read_lock();	/* held until seq_stop() */
+	list_for_each_entry_rcu(wq, &workqueues, list) {
+		if (cnt == *pos) {
+			p->kit.pos = wq;
+			return wq;
+		}
+		cnt++;
+	}
+	p->kit.pos = NULL;
+	return NULL;
+}
+
+static void *workqueue_iter_seq_next(struct seq_file *seq, void *v, loff_t *pos)
+{
+	union workqueue_iter_priv *p = seq->private;
+
+	++*pos;
+	return bpf_iter_workqueue_next(&p->it);
+}
+
+static int workqueue_iter_seq_show(struct seq_file *seq, void *v)
+{
+	struct bpf_iter__workqueue ctx;
+	struct bpf_iter_meta meta;
+	struct bpf_prog *prog;
+
+	meta.seq = seq;
+	prog = bpf_iter_get_info(&meta, false);
+	if (!prog)
+		return 0;
+	ctx.meta = &meta;
+	ctx.wq = v;
+	return bpf_iter_run_prog(prog, &ctx);
+}
+
+static void workqueue_iter_seq_stop(struct seq_file *seq, void *v)
+{
+	struct bpf_iter__workqueue ctx;
+	struct bpf_iter_meta meta;
+	struct bpf_prog *prog;
+
+	if (!v) {
+		meta.seq = seq;
+		prog = bpf_iter_get_info(&meta, true);
+		if (prog) {
+			ctx.meta = &meta;
+			ctx.wq = NULL;
+			bpf_iter_run_prog(prog, &ctx);
+		}
+	}
+	rcu_read_unlock();	/* paired with seq_start() */
+}
+
+static const struct seq_operations workqueue_iter_seq_ops = {
+	.start	= workqueue_iter_seq_start,
+	.next	= workqueue_iter_seq_next,
+	.stop	= workqueue_iter_seq_stop,
+	.show	= workqueue_iter_seq_show,
+};
+
+DEFINE_BPF_ITER_FUNC(workqueue, struct bpf_iter_meta *meta,
+		     struct workqueue_struct *wq)
+
+static const struct bpf_iter_seq_info workqueue_iter_seq_info = {
+	.seq_ops	= &workqueue_iter_seq_ops,
+	.seq_priv_size	= sizeof(union workqueue_iter_priv),
+};
+
+BTF_ID_LIST_SINGLE(workqueue_btf_id, struct, workqueue_struct)
+
+static struct bpf_iter_reg workqueue_iter_reg_info = {
+	.target			= "workqueue",
+	.ctx_arg_info_size	= 1,
+	.ctx_arg_info		= {
+		{ offsetof(struct bpf_iter__workqueue, wq),
+		  PTR_TO_BTF_ID_OR_NULL | PTR_TRUSTED },
+	},
+	.seq_info		= &workqueue_iter_seq_info,
+};
+
 static int __init bpf_workqueue_iter_init(void)
 {
 	int ret;
 
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING,
 					&workqueue_iter_kfunc_set);
-	return ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
-						&workqueue_iter_kfunc_set);
+	if (ret)
+		return ret;
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
+					&workqueue_iter_kfunc_set);
+	if (ret)
+		return ret;
+
+	workqueue_iter_reg_info.ctx_arg_info[0].btf_id = workqueue_btf_id[0];
+	return bpf_iter_reg_target(&workqueue_iter_reg_info);
 }
 late_initcall(bpf_workqueue_iter_init);
 
