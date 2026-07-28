@@ -30,6 +30,8 @@
 #include <linux/irq_work.h>
 #include <linux/buildid.h>
 
+#include <asm/word-at-a-time.h>
+
 #include "../../lib/kstrtox.h"
 
 /* If kernel subsystem is allowing eBPF programs to call this function,
@@ -3727,6 +3729,95 @@ __bpf_kfunc void __bpf_trap(void)
  * __get_kernel_nofault instead of plain dereference to make them safe.
  */
 
+/* Abstract the common unaligned-byte, aligned-word, and byte-fallback scan. */
+#define bpf_str_for_each_word(s, limit, pos, word, byte, byte_label,	\
+			      byte_action, word_action, err_label)	\
+do {									\
+	__label__ byte_label;						\
+	size_t __word_end;						\
+									\
+	if (IS_ENABLED(CONFIG_KMSAN))					\
+		goto byte_label;					\
+									\
+	for (; (pos) < (limit) &&					\
+	       !IS_ALIGNED((unsigned long)((s) + (pos)), sizeof(word));	\
+	     (pos)++) {							\
+		__get_kernel_nofault(&(byte), (s) + (pos),		\
+				     unsigned char, err_label);		\
+		byte_action;						\
+	}								\
+									\
+	__word_end = (pos) + round_down((limit) - (pos), sizeof(word));	\
+	for (; (pos) < __word_end; (pos) += sizeof(word)) {		\
+		__get_kernel_nofault(&(word), (s) + (pos),		\
+				     unsigned long, byte_label);	\
+		word_action;						\
+	}								\
+									\
+byte_label:								\
+	for (; (pos) < (limit); (pos)++) {				\
+		__get_kernel_nofault(&(byte), (s) + (pos),		\
+				     unsigned char, err_label);		\
+		byte_action;						\
+	}								\
+} while (0)
+
+static __always_inline int bpf_str_find(const char *s, size_t limit, unsigned char c,
+					bool ignore_case, bool nul_is_match)
+{
+	const struct word_at_a_time constants = WORD_AT_A_TIME_CONSTANTS;
+	const unsigned char match_c = ignore_case ? tolower(c) : c;
+	const unsigned char alt_c = ignore_case && islower(match_c) ?
+				    toupper(match_c) : match_c;
+	const unsigned long repeated_c = REPEAT_BYTE(match_c);
+	const unsigned long repeated_alt = REPEAT_BYTE(alt_c);
+	unsigned long word, zero_data, char_data, alt_data;
+	unsigned long zero_at, char_at, alt_at;
+	const bool has_alt = alt_c != match_c;
+	unsigned char sc;
+	size_t pos = 0;
+
+	bpf_str_for_each_word(s, limit, pos, word, sc, byte_at_a_time, ({
+		if (sc == match_c || (has_alt && sc == alt_c))
+			return pos;
+		if (sc == '\0')
+			return nul_is_match ? pos : -ENOENT;
+	}), ({
+		zero_at = has_zero(word, &zero_data, &constants);
+		char_at = has_zero(word ^ repeated_c, &char_data, &constants);
+		alt_at = has_alt ? has_zero(word ^ repeated_alt, &alt_data, &constants) : 0;
+		if (!zero_at && !char_at && !alt_at)
+			continue;
+
+		if (zero_at) {
+			zero_data = prep_zero_mask(word, zero_data, &constants);
+			zero_at = find_zero(create_zero_mask(zero_data));
+		} else {
+			zero_at = sizeof(word);
+		}
+		if (char_at) {
+			char_data = prep_zero_mask(word ^ repeated_c, char_data, &constants);
+			char_at = find_zero(create_zero_mask(char_data));
+		} else {
+			char_at = sizeof(word);
+		}
+		if (alt_at) {
+			alt_data = prep_zero_mask(word ^ repeated_alt, alt_data, &constants);
+			alt_at = find_zero(create_zero_mask(alt_data));
+			char_at = min(char_at, alt_at);
+		}
+
+		if (char_at <= zero_at)
+			return pos + char_at;
+		return nul_is_match ? pos + zero_at : -ENOENT;
+	}), err_out);
+
+	return pos == XATTR_SIZE_MAX ? -E2BIG : -ENOENT;
+
+err_out:
+	return -EFAULT;
+}
+
 static int __bpf_strncasecmp(const char *s1, const char *s2, bool ignore_case, size_t len)
 {
 	char c1, c2;
@@ -3830,24 +3921,14 @@ __bpf_kfunc int bpf_strncasecmp(const char *s1__ign, const char *s2__ign, size_t
  */
 __bpf_kfunc int bpf_strnchr(const char *s__ign, size_t count, char c)
 {
-	char sc;
-	int i;
+	size_t limit;
 
 	if (!copy_from_kernel_nofault_allowed(s__ign, 1))
 		return -ERANGE;
 
+	limit = min_t(size_t, count, XATTR_SIZE_MAX);
 	guard(pagefault)();
-	for (i = 0; i < count && i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&sc, s__ign, char, err_out);
-		if (sc == c)
-			return i;
-		if (sc == '\0')
-			return -ENOENT;
-		s__ign++;
-	}
-	return i == XATTR_SIZE_MAX ? -E2BIG : -ENOENT;
-err_out:
-	return -EFAULT;
+	return bpf_str_find(s__ign, limit, (unsigned char)c, false, false);
 }
 
 /**
@@ -3884,22 +3965,11 @@ __bpf_kfunc int bpf_strchr(const char *s__ign, char c)
  */
 __bpf_kfunc int bpf_strchrnul(const char *s__ign, char c)
 {
-	char sc;
-	int i;
-
 	if (!copy_from_kernel_nofault_allowed(s__ign, 1))
 		return -ERANGE;
 
 	guard(pagefault)();
-	for (i = 0; i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&sc, s__ign, char, err_out);
-		if (sc == '\0' || sc == c)
-			return i;
-		s__ign++;
-	}
-	return -E2BIG;
-err_out:
-	return -EFAULT;
+	return bpf_str_find(s__ign, XATTR_SIZE_MAX, (unsigned char)c, false, true);
 }
 
 /**
@@ -3916,22 +3986,44 @@ err_out:
  */
 __bpf_kfunc int bpf_strrchr(const char *s__ign, int c)
 {
+	const struct word_at_a_time constants = WORD_AT_A_TIME_CONSTANTS;
+	const unsigned char uc = (unsigned char)(char)c;
+	const unsigned long repeated_c = REPEAT_BYTE(uc);
+	const bool char_matches = c == (char)c;
+	unsigned char byte, *bytes;
+	unsigned long word, data;
+	size_t pos = 0, i;
 	char sc;
-	int i, last = -ENOENT;
+	int last = -ENOENT;
 
 	if (!copy_from_kernel_nofault_allowed(s__ign, 1))
 		return -ERANGE;
 
 	guard(pagefault)();
-	for (i = 0; i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&sc, s__ign, char, err_out);
+
+	bpf_str_for_each_word(s__ign, XATTR_SIZE_MAX, pos, word, byte, byte_at_a_time, ({
+		sc = byte;
 		if (sc == c)
-			last = i;
+			last = pos;
 		if (sc == '\0')
 			return last;
-		s__ign++;
-	}
+	}), ({
+		if (!has_zero(word, &data, &constants) &&
+		    (!char_matches || !has_zero(word ^ repeated_c, &data, &constants)))
+			continue;
+
+		bytes = (unsigned char *)&word;
+		for (i = 0; i < sizeof(word); i++) {
+			sc = bytes[i];
+			if (sc == c)
+				last = pos + i;
+			if (sc == '\0')
+				return last;
+		}
+	}), err_out);
+
 	return -E2BIG;
+
 err_out:
 	return -EFAULT;
 }
@@ -3949,20 +4041,30 @@ err_out:
  */
 __bpf_kfunc int bpf_strnlen(const char *s__ign, size_t count)
 {
-	char c;
-	int i;
+	const struct word_at_a_time constants = WORD_AT_A_TIME_CONSTANTS;
+	unsigned long word, data;
+	size_t limit, pos = 0;
+	unsigned char c;
 
 	if (!copy_from_kernel_nofault_allowed(s__ign, 1))
 		return -ERANGE;
 
+	limit = min_t(size_t, count, XATTR_SIZE_MAX);
 	guard(pagefault)();
-	for (i = 0; i < count && i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&c, s__ign, char, err_out);
+
+	bpf_str_for_each_word(s__ign, limit, pos, word, c, byte_at_a_time, ({
 		if (c == '\0')
-			return i;
-		s__ign++;
-	}
-	return i == XATTR_SIZE_MAX ? -E2BIG : i;
+			return pos;
+	}), ({
+		if (!has_zero(word, &data, &constants))
+			continue;
+
+		data = prep_zero_mask(word, data, &constants);
+		return pos + find_zero(create_zero_mask(data));
+	}), err_out);
+
+	return pos == XATTR_SIZE_MAX ? -E2BIG : pos;
+
 err_out:
 	return -EFAULT;
 }
