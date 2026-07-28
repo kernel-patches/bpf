@@ -10,6 +10,8 @@ static int bpf_mprog_link(struct bpf_tuple *tuple,
 {
 	struct bpf_link *link = ERR_PTR(-EINVAL);
 	bool id = flags & BPF_F_ID;
+	bool type_mismatch = false;
+	struct bpf_prog *prog;
 
 	if (id)
 		link = bpf_link_by_id(id_or_fd);
@@ -17,13 +19,20 @@ static int bpf_mprog_link(struct bpf_tuple *tuple,
 		link = bpf_link_get_from_fd(id_or_fd);
 	if (IS_ERR(link))
 		return PTR_ERR(link);
-	if (type && link->prog->type != type) {
+
+	rcu_read_lock();
+	prog = READ_ONCE(link->prog);
+	if (!prog || (type && prog->type != type))
+		type_mismatch = true;
+	rcu_read_unlock();
+
+	if (type_mismatch) {
 		bpf_link_put(link);
 		return -EINVAL;
 	}
 
 	tuple->link = link;
-	tuple->prog = link->prog;
+	tuple->prog = prog;
 	return 0;
 }
 
@@ -343,8 +352,8 @@ int bpf_mprog_detach(struct bpf_mprog_entry *entry,
 	if (!bpf_mprog_total(entry))
 		return -ENOENT;
 	ret = bpf_mprog_tuple_relative(&rtuple, id_or_fd, flags,
-				       prog ? prog->type :
-				       BPF_PROG_TYPE_UNSPEC);
+				       /* Use UNSPEC as wildcard when prog is NULL */
+				       prog ? prog->type : BPF_PROG_TYPE_UNSPEC);
 	if (ret)
 		return ret;
 	if (dtuple.prog) {
