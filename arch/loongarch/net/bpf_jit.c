@@ -209,7 +209,7 @@ static void build_prologue(struct jit_ctx *ctx)
 	ctx->stack_size = stack_adjust;
 
 	if (ctx->arena_vm_start)
-		move_imm(ctx, REG_ARENA, ctx->arena_vm_start, false);
+		move_imm(ctx, REG_ARENA, ctx->arena_vm_start);
 }
 
 static void __build_epilogue(struct jit_ctx *ctx, bool is_tail_call)
@@ -361,7 +361,7 @@ toofar:
 
 static void emit_store_stack_imm64(struct jit_ctx *ctx, int reg, int stack_off, u64 imm64)
 {
-	move_imm(ctx, reg, imm64, false);
+	move_imm(ctx, reg, imm64);
 	emit_insn(ctx, std, reg, LOONGARCH_GPR_FP, stack_off);
 }
 
@@ -377,7 +377,7 @@ static int emit_atomic_rmw(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	const s32 imm = insn->imm;
 	const bool isdw = BPF_SIZE(insn->code) == BPF_DW;
 
-	move_imm(ctx, t1, off, false);
+	move_imm(ctx, t1, off);
 	emit_insn(ctx, addd, t1, dst, t1);
 	move_reg(ctx, t3, src);
 
@@ -549,7 +549,7 @@ static int emit_atomic_ld_st(const struct bpf_insn *insn, struct jit_ctx *ctx)
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, ldbu, dst, src, off);
 			} else {
-				move_imm(ctx, t1, off, false);
+				move_imm(ctx, t1, off);
 				emit_insn(ctx, ldxbu, dst, src, t1);
 			}
 			break;
@@ -557,7 +557,7 @@ static int emit_atomic_ld_st(const struct bpf_insn *insn, struct jit_ctx *ctx)
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, ldhu, dst, src, off);
 			} else {
-				move_imm(ctx, t1, off, false);
+				move_imm(ctx, t1, off);
 				emit_insn(ctx, ldxhu, dst, src, t1);
 			}
 			break;
@@ -565,7 +565,7 @@ static int emit_atomic_ld_st(const struct bpf_insn *insn, struct jit_ctx *ctx)
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, ldwu, dst, src, off);
 			} else {
-				move_imm(ctx, t1, off, false);
+				move_imm(ctx, t1, off);
 				emit_insn(ctx, ldxwu, dst, src, t1);
 			}
 			break;
@@ -573,7 +573,7 @@ static int emit_atomic_ld_st(const struct bpf_insn *insn, struct jit_ctx *ctx)
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, ldd, dst, src, off);
 			} else {
-				move_imm(ctx, t1, off, false);
+				move_imm(ctx, t1, off);
 				emit_insn(ctx, ldxd, dst, src, t1);
 			}
 			break;
@@ -588,7 +588,7 @@ static int emit_atomic_ld_st(const struct bpf_insn *insn, struct jit_ctx *ctx)
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, stb, src, dst, off);
 			} else {
-				move_imm(ctx, t1, off, false);
+				move_imm(ctx, t1, off);
 				emit_insn(ctx, stxb, src, dst, t1);
 			}
 			break;
@@ -596,7 +596,7 @@ static int emit_atomic_ld_st(const struct bpf_insn *insn, struct jit_ctx *ctx)
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, sth, src, dst, off);
 			} else {
-				move_imm(ctx, t1, off, false);
+				move_imm(ctx, t1, off);
 				emit_insn(ctx, stxh, src, dst, t1);
 			}
 			break;
@@ -604,7 +604,7 @@ static int emit_atomic_ld_st(const struct bpf_insn *insn, struct jit_ctx *ctx)
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, stw, src, dst, off);
 			} else {
-				move_imm(ctx, t1, off, false);
+				move_imm(ctx, t1, off);
 				emit_insn(ctx, stxw, src, dst, t1);
 			}
 			break;
@@ -612,7 +612,7 @@ static int emit_atomic_ld_st(const struct bpf_insn *insn, struct jit_ctx *ctx)
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, std, src, dst, off);
 			} else {
-				move_imm(ctx, t1, off, false);
+				move_imm(ctx, t1, off);
 				emit_insn(ctx, stxd, src, dst, t1);
 			}
 			break;
@@ -737,7 +737,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 		if (insn_is_cast_user(insn)) {
 			move_reg(ctx, t1, src);
 			emit_zext_32(ctx, t1, true);
-			move_imm(ctx, dst, (ctx->user_vm_start >> 32) << 32, false);
+			move_imm(ctx, dst, (ctx->user_vm_start >> 32) << 32);
 			emit_insn(ctx, beq, t1, LOONGARCH_GPR_ZERO, 1);
 			emit_insn(ctx, or, t1, dst, t1);
 			move_reg(ctx, dst, t1);
@@ -765,7 +765,8 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 	/* dst = imm */
 	case BPF_ALU | BPF_MOV | BPF_K:
 	case BPF_ALU64 | BPF_MOV | BPF_K:
-		move_imm(ctx, dst, imm, is32);
+		move_imm(ctx, dst, imm);
+		emit_zext_32(ctx, dst, is32);
 		break;
 
 	/* dst = dst + src */
@@ -781,7 +782,8 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 		if (is_signed_imm12(imm)) {
 			emit_insn(ctx, addid, dst, dst, imm);
 		} else {
-			move_imm(ctx, t1, imm, is32);
+			move_imm(ctx, t1, imm);
+			emit_zext_32(ctx, t1, is32);
 			emit_insn(ctx, addd, dst, dst, t1);
 		}
 		emit_zext_32(ctx, dst, is32);
@@ -800,7 +802,8 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 		if (is_signed_imm12(-imm)) {
 			emit_insn(ctx, addid, dst, dst, -imm);
 		} else {
-			move_imm(ctx, t1, imm, is32);
+			move_imm(ctx, t1, imm);
+			emit_zext_32(ctx, t1, is32);
 			emit_insn(ctx, subd, dst, dst, t1);
 		}
 		emit_zext_32(ctx, dst, is32);
@@ -816,7 +819,8 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 	/* dst = dst * imm */
 	case BPF_ALU | BPF_MUL | BPF_K:
 	case BPF_ALU64 | BPF_MUL | BPF_K:
-		move_imm(ctx, t1, imm, is32);
+		move_imm(ctx, t1, imm);
+		emit_zext_32(ctx, t1, is32);
 		emit_insn(ctx, muld, dst, dst, t1);
 		emit_zext_32(ctx, dst, is32);
 		break;
@@ -843,12 +847,13 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 	case BPF_ALU | BPF_DIV | BPF_K:
 	case BPF_ALU64 | BPF_DIV | BPF_K:
 		if (!off) {
-			move_imm(ctx, t1, imm, is32);
+			move_imm(ctx, t1, imm);
+			emit_zext_32(ctx, t1, is32);
 			emit_zext_32(ctx, dst, is32);
 			emit_insn(ctx, divdu, dst, dst, t1);
 			emit_zext_32(ctx, dst, is32);
 		} else {
-			move_imm(ctx, t1, imm, false);
+			move_imm(ctx, t1, imm);
 			emit_sext_32(ctx, t1, is32);
 			emit_sext_32(ctx, dst, is32);
 			emit_insn(ctx, divd, dst, dst, t1);
@@ -878,12 +883,13 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 	case BPF_ALU | BPF_MOD | BPF_K:
 	case BPF_ALU64 | BPF_MOD | BPF_K:
 		if (!off) {
-			move_imm(ctx, t1, imm, is32);
+			move_imm(ctx, t1, imm);
+			emit_zext_32(ctx, t1, is32);
 			emit_zext_32(ctx, dst, is32);
 			emit_insn(ctx, moddu, dst, dst, t1);
 			emit_zext_32(ctx, dst, is32);
 		} else {
-			move_imm(ctx, t1, imm, false);
+			move_imm(ctx, t1, imm);
 			emit_sext_32(ctx, t1, is32);
 			emit_sext_32(ctx, dst, is32);
 			emit_insn(ctx, modd, dst, dst, t1);
@@ -912,7 +918,8 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 		if (is_unsigned_imm12(imm)) {
 			emit_insn(ctx, andi, dst, dst, imm);
 		} else {
-			move_imm(ctx, t1, imm, is32);
+			move_imm(ctx, t1, imm);
+			emit_zext_32(ctx, t1, is32);
 			emit_insn(ctx, and, dst, dst, t1);
 		}
 		emit_zext_32(ctx, dst, is32);
@@ -931,7 +938,8 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 		if (is_unsigned_imm12(imm)) {
 			emit_insn(ctx, ori, dst, dst, imm);
 		} else {
-			move_imm(ctx, t1, imm, is32);
+			move_imm(ctx, t1, imm);
+			emit_zext_32(ctx, t1, is32);
 			emit_insn(ctx, or, dst, dst, t1);
 		}
 		emit_zext_32(ctx, dst, is32);
@@ -950,7 +958,8 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 		if (is_unsigned_imm12(imm)) {
 			emit_insn(ctx, xori, dst, dst, imm);
 		} else {
-			move_imm(ctx, t1, imm, is32);
+			move_imm(ctx, t1, imm);
+			emit_zext_32(ctx, t1, is32);
 			emit_insn(ctx, xor, dst, dst, t1);
 		}
 		emit_zext_32(ctx, dst, is32);
@@ -1110,7 +1119,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 	case BPF_JMP32 | BPF_JSLE | BPF_K:
 		jmp_offset = bpf2la_offset(i, off, ctx);
 		if (imm) {
-			move_imm(ctx, t1, imm, false);
+			move_imm(ctx, t1, imm);
 			tm = t1;
 		} else {
 			/* If imm is 0, simply use zero register. */
@@ -1142,7 +1151,8 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 	case BPF_JMP | BPF_JSET | BPF_K:
 	case BPF_JMP32 | BPF_JSET | BPF_K:
 		jmp_offset = bpf2la_offset(i, off, ctx);
-		move_imm(ctx, t1, imm, is32);
+		move_imm(ctx, t1, imm);
+		emit_zext_32(ctx, t1, is32);
 		emit_insn(ctx, and, t1, dst, t1);
 		emit_zext_32(ctx, t1, is32);
 		if (emit_cond_jmp(ctx, cond, t1, LOONGARCH_GPR_ZERO, jmp_offset) < 0)
@@ -1233,7 +1243,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 		if (bpf_pseudo_func(insn))
 			move_addr(ctx, dst, imm64);
 		else
-			move_imm(ctx, dst, imm64, is32);
+			move_imm(ctx, dst, imm64);
 		return 1;
 	}
 
@@ -1274,7 +1284,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 				else
 					emit_insn(ctx, ldbu, dst, src, off);
 			} else {
-				move_imm(ctx, t1, off, is32);
+				move_imm(ctx, t1, off);
 				if (sign_extend)
 					emit_insn(ctx, ldxb, dst, src, t1);
 				else
@@ -1288,7 +1298,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 				else
 					emit_insn(ctx, ldhu, dst, src, off);
 			} else {
-				move_imm(ctx, t1, off, is32);
+				move_imm(ctx, t1, off);
 				if (sign_extend)
 					emit_insn(ctx, ldxh, dst, src, t1);
 				else
@@ -1302,7 +1312,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 				else
 					emit_insn(ctx, ldwu, dst, src, off);
 			} else {
-				move_imm(ctx, t1, off, is32);
+				move_imm(ctx, t1, off);
 				if (sign_extend)
 					emit_insn(ctx, ldxw, dst, src, t1);
 				else
@@ -1310,7 +1320,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 			}
 			break;
 		case BPF_DW:
-			move_imm(ctx, t1, off, is32);
+			move_imm(ctx, t1, off);
 			emit_insn(ctx, ldxd, dst, src, t1);
 			break;
 		}
@@ -1337,42 +1347,42 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 
 		switch (BPF_SIZE(code)) {
 		case BPF_B:
-			move_imm(ctx, t1, imm, is32);
+			move_imm(ctx, t1, imm);
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, stb, t1, dst, off);
 			} else {
-				move_imm(ctx, t2, off, is32);
+				move_imm(ctx, t2, off);
 				emit_insn(ctx, stxb, t1, dst, t2);
 			}
 			break;
 		case BPF_H:
-			move_imm(ctx, t1, imm, is32);
+			move_imm(ctx, t1, imm);
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, sth, t1, dst, off);
 			} else {
-				move_imm(ctx, t2, off, is32);
+				move_imm(ctx, t2, off);
 				emit_insn(ctx, stxh, t1, dst, t2);
 			}
 			break;
 		case BPF_W:
-			move_imm(ctx, t1, imm, is32);
+			move_imm(ctx, t1, imm);
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, stw, t1, dst, off);
 			} else if (is_signed_imm14(off)) {
 				emit_insn(ctx, stptrw, t1, dst, off);
 			} else {
-				move_imm(ctx, t2, off, is32);
+				move_imm(ctx, t2, off);
 				emit_insn(ctx, stxw, t1, dst, t2);
 			}
 			break;
 		case BPF_DW:
-			move_imm(ctx, t1, imm, is32);
+			move_imm(ctx, t1, imm);
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, std, t1, dst, off);
 			} else if (is_signed_imm14(off)) {
 				emit_insn(ctx, stptrd, t1, dst, off);
 			} else {
-				move_imm(ctx, t2, off, is32);
+				move_imm(ctx, t2, off);
 				emit_insn(ctx, stxd, t1, dst, t2);
 			}
 			break;
@@ -1403,7 +1413,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, stb, src, dst, off);
 			} else {
-				move_imm(ctx, t1, off, is32);
+				move_imm(ctx, t1, off);
 				emit_insn(ctx, stxb, src, dst, t1);
 			}
 			break;
@@ -1411,7 +1421,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 			if (is_signed_imm12(off)) {
 				emit_insn(ctx, sth, src, dst, off);
 			} else {
-				move_imm(ctx, t1, off, is32);
+				move_imm(ctx, t1, off);
 				emit_insn(ctx, stxh, src, dst, t1);
 			}
 			break;
@@ -1421,7 +1431,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 			} else if (is_signed_imm14(off)) {
 				emit_insn(ctx, stptrw, src, dst, off);
 			} else {
-				move_imm(ctx, t1, off, is32);
+				move_imm(ctx, t1, off);
 				emit_insn(ctx, stxw, src, dst, t1);
 			}
 			break;
@@ -1431,7 +1441,7 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 			} else if (is_signed_imm14(off)) {
 				emit_insn(ctx, stptrd, src, dst, off);
 			} else {
-				move_imm(ctx, t1, off, is32);
+				move_imm(ctx, t1, off);
 				emit_insn(ctx, stxd, src, dst, t1);
 			}
 			break;
@@ -1543,7 +1553,7 @@ static int emit_jump_and_link(struct jit_ctx *ctx, u8 rd, u64 target)
 		return -EFAULT;
 	}
 
-	move_imm(ctx, LOONGARCH_GPR_T1, target, false);
+	move_imm(ctx, LOONGARCH_GPR_T1, target);
 	emit_insn(ctx, jirl, rd, LOONGARCH_GPR_T1, 0);
 
 	return 0;
@@ -1717,7 +1727,7 @@ static int invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_node *n,
 		emit_insn(ctx, std, LOONGARCH_GPR_ZERO, LOONGARCH_GPR_FP, -run_ctx_off + cookie_off);
 
 	/* arg1: prog */
-	move_imm(ctx, LOONGARCH_GPR_A0, (const s64)p, false);
+	move_imm(ctx, LOONGARCH_GPR_A0, (const s64)p);
 	/* arg2: &run_ctx */
 	emit_insn(ctx, addid, LOONGARCH_GPR_A1, LOONGARCH_GPR_FP, -run_ctx_off);
 	ret = emit_call(ctx, (const u64)bpf_trampoline_enter(p));
@@ -1738,7 +1748,7 @@ static int invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_node *n,
 	/* arg1: &args_off */
 	emit_insn(ctx, addid, LOONGARCH_GPR_A0, LOONGARCH_GPR_FP, -args_off);
 	if (!p->jited)
-		move_imm(ctx, LOONGARCH_GPR_A1, (const s64)p->insnsi, false);
+		move_imm(ctx, LOONGARCH_GPR_A1, (const s64)p->insnsi);
 	ret = emit_call(ctx, (const u64)p->bpf_func);
 	if (ret)
 		return ret;
@@ -1755,7 +1765,7 @@ static int invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_node *n,
 	}
 
 	/* arg1: prog */
-	move_imm(ctx, LOONGARCH_GPR_A0, (const s64)p, false);
+	move_imm(ctx, LOONGARCH_GPR_A0, (const s64)p);
 	/* arg2: prog start time */
 	move_reg(ctx, LOONGARCH_GPR_A1, LOONGARCH_GPR_S1);
 	/* arg3: &run_ctx */
