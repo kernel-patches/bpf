@@ -181,7 +181,7 @@ void FN(intersect_with_srange)(struct cnum_t *dst, st min, st max)
 
 static inline struct cnum_t FN(normalize)(struct cnum_t cnum)
 {
-	if (cnum.size == UT_MAX && cnum.base != 0 && cnum.base != (ut)ST_MAX)
+	if (cnum.size == UT_MAX && cnum.base != 0)
 		cnum.base = 0;
 	return cnum;
 }
@@ -210,12 +210,7 @@ bool FN(is_empty)(struct cnum_t cnum)
 
 bool FN(contains)(struct cnum_t cnum, ut v)
 {
-	if (FN(is_empty)(cnum))
-		return false;
-	if (FN(urange_overflow)(cnum))
-		return v >= cnum.base || v <= (ut)cnum.base + cnum.size;
-	else
-		return v >= cnum.base && v <= (ut)cnum.base + cnum.size;
+	return !FN(is_empty)(cnum) && v - cnum.base <= cnum.size;
 }
 
 bool FN(is_const)(struct cnum_t cnum)
