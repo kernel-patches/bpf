@@ -361,6 +361,16 @@ extern int bpf_iter_dmabuf_new(struct bpf_iter_dmabuf *it) __weak __ksym;
 extern struct dma_buf *bpf_iter_dmabuf_next(struct bpf_iter_dmabuf *it) __weak __ksym;
 extern void bpf_iter_dmabuf_destroy(struct bpf_iter_dmabuf *it) __weak __ksym;
 
+struct bpf_iter_workqueue;
+extern int bpf_iter_workqueue_new(struct bpf_iter_workqueue *it) __weak __ksym;
+extern struct workqueue_struct *bpf_iter_workqueue_next(struct bpf_iter_workqueue *it) __weak __ksym;
+extern void bpf_iter_workqueue_destroy(struct bpf_iter_workqueue *it) __weak __ksym;
+
+struct bpf_iter_worker_pool;
+extern int bpf_iter_worker_pool_new(struct bpf_iter_worker_pool *it) __weak __ksym;
+extern struct worker_pool *bpf_iter_worker_pool_next(struct bpf_iter_worker_pool *it) __weak __ksym;
+extern void bpf_iter_worker_pool_destroy(struct bpf_iter_worker_pool *it) __weak __ksym;
+
 extern int bpf_cgroup_read_xattr(struct cgroup *cgroup, const char *name__str,
 				 struct bpf_dynptr *value_p) __weak __ksym;
 
