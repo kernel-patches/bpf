@@ -4126,6 +4126,125 @@ __bpf_kfunc int bpf_strlen(const char *s__ign)
 	return bpf_strnlen(s__ign, XATTR_SIZE_MAX);
 }
 
+static __always_inline bool
+bpf_str_set_contains(const unsigned long *set_bits, unsigned char c)
+{
+	return set_bits[c / BITS_PER_LONG] & BIT(c % BITS_PER_LONG);
+}
+
+static __always_inline int
+bpf_str_set_lookup(const char *set, unsigned long *set_bits, size_t *set_pos, bool *set_complete,
+		   unsigned char *set_first, unsigned char c)
+{
+	unsigned char set_c;
+
+	if (bpf_str_set_contains(set_bits, c))
+		return 1;
+	if (*set_complete)
+		return 0;
+
+	while (*set_pos < XATTR_SIZE_MAX) {
+		__get_kernel_nofault(&set_c, set + *set_pos, unsigned char, err_out);
+		if (set_c == '\0') {
+			*set_complete = true;
+			return 0;
+		}
+
+		if (*set_pos == 0)
+			*set_first = set_c;
+		set_bits[set_c / BITS_PER_LONG] |= BIT(set_c % BITS_PER_LONG);
+		(*set_pos)++;
+		if (set_c == c)
+			return 1;
+	}
+	return -E2BIG;
+
+err_out:
+	return -EFAULT;
+}
+
+static __always_inline int
+bpf_strcspn_single(const char *s, size_t pos, unsigned char reject)
+{
+	int ret;
+
+	ret = bpf_str_find(s + pos, XATTR_SIZE_MAX - pos, reject, false, true);
+	if (ret >= 0)
+		return pos + ret;
+	return ret == -ENOENT ? -E2BIG : ret;
+}
+
+static int __bpf_strspn(const char *s, const char *set, bool reject)
+{
+	unsigned long set_bits[256 / BITS_PER_LONG] = {};
+	size_t pos = 0, word_end, i, set_pos = 0;
+	unsigned char c, set_first = 0, *bytes;
+	bool set_complete = false;
+	unsigned long word;
+	int ret;
+
+	if (!copy_from_kernel_nofault_allowed(s, 1) ||
+	    !copy_from_kernel_nofault_allowed(set, 1))
+		return -ERANGE;
+
+	guard(pagefault)();
+
+	if (IS_ENABLED(CONFIG_KMSAN))
+		goto byte_at_a_time;
+
+	while (!IS_ALIGNED((unsigned long)(s + pos), sizeof(word))) {
+		__get_kernel_nofault(&c, s + pos, unsigned char, err_out);
+		if (c == '\0')
+			return pos;
+		ret = bpf_str_set_lookup(set, set_bits, &set_pos, &set_complete, &set_first, c);
+		if (ret < 0)
+			return ret;
+		if (ret == reject)
+			return pos;
+		pos++;
+		if (reject && set_complete && set_pos == 1)
+			return bpf_strcspn_single(s, pos, set_first);
+	}
+
+	word_end = pos + round_down(XATTR_SIZE_MAX - pos, sizeof(word));
+	while (pos < word_end) {
+		__get_kernel_nofault(&word, s + pos, unsigned long, byte_at_a_time);
+		bytes = (unsigned char *)&word;
+		for (i = 0; i < sizeof(word); i++) {
+			c = bytes[i];
+			if (c == '\0')
+				return pos + i;
+			ret = bpf_str_set_lookup(set, set_bits, &set_pos, &set_complete,
+						 &set_first, c);
+			if (ret < 0)
+				return ret;
+			if (ret == reject)
+				return pos + i;
+			if (reject && set_complete && set_pos == 1)
+				return bpf_strcspn_single(s, pos + i + 1, set_first);
+		}
+		pos += sizeof(word);
+	}
+
+byte_at_a_time:
+	for (; pos < XATTR_SIZE_MAX; pos++) {
+		__get_kernel_nofault(&c, s + pos, unsigned char, err_out);
+		if (c == '\0')
+			return pos;
+		ret = bpf_str_set_lookup(set, set_bits, &set_pos, &set_complete, &set_first, c);
+		if (ret < 0)
+			return ret;
+		if (ret == reject)
+			return pos;
+		if (reject && set_complete && set_pos == 1)
+			return bpf_strcspn_single(s, pos + 1, set_first);
+	}
+	return -E2BIG;
+
+err_out:
+	return -EFAULT;
+}
+
 /**
  * bpf_strspn - Calculate the length of the initial substring of @s__ign which
  *              only contains letters in @accept__ign
@@ -4141,33 +4260,7 @@ __bpf_kfunc int bpf_strlen(const char *s__ign)
  */
 __bpf_kfunc int bpf_strspn(const char *s__ign, const char *accept__ign)
 {
-	char cs, ca;
-	int i, j;
-
-	if (!copy_from_kernel_nofault_allowed(s__ign, 1) ||
-	    !copy_from_kernel_nofault_allowed(accept__ign, 1)) {
-		return -ERANGE;
-	}
-
-	guard(pagefault)();
-	for (i = 0; i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&cs, s__ign, char, err_out);
-		if (cs == '\0')
-			return i;
-		for (j = 0; j < XATTR_SIZE_MAX; j++) {
-			__get_kernel_nofault(&ca, accept__ign + j, char, err_out);
-			if (cs == ca || ca == '\0')
-				break;
-		}
-		if (j == XATTR_SIZE_MAX)
-			return -E2BIG;
-		if (ca == '\0')
-			return i;
-		s__ign++;
-	}
-	return -E2BIG;
-err_out:
-	return -EFAULT;
+	return __bpf_strspn(s__ign, accept__ign, false);
 }
 
 /**
@@ -4185,33 +4278,7 @@ err_out:
  */
 __bpf_kfunc int bpf_strcspn(const char *s__ign, const char *reject__ign)
 {
-	char cs, cr;
-	int i, j;
-
-	if (!copy_from_kernel_nofault_allowed(s__ign, 1) ||
-	    !copy_from_kernel_nofault_allowed(reject__ign, 1)) {
-		return -ERANGE;
-	}
-
-	guard(pagefault)();
-	for (i = 0; i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&cs, s__ign, char, err_out);
-		if (cs == '\0')
-			return i;
-		for (j = 0; j < XATTR_SIZE_MAX; j++) {
-			__get_kernel_nofault(&cr, reject__ign + j, char, err_out);
-			if (cs == cr || cr == '\0')
-				break;
-		}
-		if (j == XATTR_SIZE_MAX)
-			return -E2BIG;
-		if (cr != '\0')
-			return i;
-		s__ign++;
-	}
-	return -E2BIG;
-err_out:
-	return -EFAULT;
+	return __bpf_strspn(s__ign, reject__ign, true);
 }
 
 static int __bpf_strnstr(const char *s1, const char *s2, size_t len,
