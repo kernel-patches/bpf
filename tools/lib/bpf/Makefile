@@ -231,7 +231,7 @@ endef
 install_lib: all_cmd
 	$(call QUIET_INSTALL, $(LIB_TARGET)) \
 		$(call do_install_mkdir,$(libdir_SQ)); \
-		cp -fpR $(LIB_FILE) $(DESTDIR)$(libdir_SQ)
+		cp -fR --preserve=mode,timestamps $(LIB_FILE) $(DESTDIR)$(libdir_SQ)
 
 SRC_HDRS := bpf.h libbpf.h btf.h libbpf_common.h libbpf_legacy.h	     \
 	    bpf_helpers.h bpf_tracing.h bpf_endian.h bpf_core_read.h	     \
