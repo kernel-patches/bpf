@@ -3818,32 +3818,74 @@ err_out:
 	return -EFAULT;
 }
 
+static __always_inline bool
+bpf_str_cmp_byte(unsigned char byte1, unsigned char byte2, bool ignore_case, int *ret)
+{
+	char c1 = byte1, c2 = byte2;
+
+	if (ignore_case) {
+		c1 = tolower(c1);
+		c2 = tolower(c2);
+	}
+	if (c1 != c2) {
+		*ret = c1 < c2 ? -1 : 1;
+		return true;
+	}
+	if (c1 == '\0') {
+		*ret = 0;
+		return true;
+	}
+	return false;
+}
+
 static int __bpf_strncasecmp(const char *s1, const char *s2, bool ignore_case, size_t len)
 {
-	char c1, c2;
-	int i;
+	const struct word_at_a_time constants = WORD_AT_A_TIME_CONSTANTS;
+	unsigned char byte1, byte2, *bytes1, *bytes2;
+	unsigned long word1, word2, data;
+	size_t limit, pos = 0, i;
+	int ret;
 
 	if (!copy_from_kernel_nofault_allowed(s1, 1) ||
 	    !copy_from_kernel_nofault_allowed(s2, 1)) {
 		return -ERANGE;
 	}
 
+	limit = min_t(size_t, len, XATTR_SIZE_MAX);
 	guard(pagefault)();
-	for (i = 0; i < len && i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&c1, s1, char, err_out);
-		__get_kernel_nofault(&c2, s2, char, err_out);
-		if (ignore_case) {
-			c1 = tolower(c1);
-			c2 = tolower(c2);
+
+	if (!IS_ALIGNED((unsigned long)s1 ^ (unsigned long)s2, sizeof(word1))) {
+		for (; pos < limit; pos++) {
+			__get_kernel_nofault(&byte1, s1 + pos, unsigned char, err_out);
+			__get_kernel_nofault(&byte2, s2 + pos, unsigned char, err_out);
+			if (bpf_str_cmp_byte(byte1, byte2, ignore_case, &ret))
+				return ret;
 		}
-		if (c1 != c2)
-			return c1 < c2 ? -1 : 1;
-		if (c1 == '\0')
-			return 0;
-		s1++;
-		s2++;
+		return pos == XATTR_SIZE_MAX ? -E2BIG : 0;
 	}
-	return i == XATTR_SIZE_MAX ? -E2BIG : 0;
+
+	bpf_str_for_each_word(s1, limit, pos, word1, byte1, byte_at_a_time, ({
+		__get_kernel_nofault(&byte2, s2 + pos, unsigned char, err_out);
+		if (bpf_str_cmp_byte(byte1, byte2, ignore_case, &ret))
+			return ret;
+	}), ({
+		__get_kernel_nofault(&word2, s2 + pos, unsigned long, byte_at_a_time);
+		if (word1 == word2) {
+			if (has_zero(word1, &data, &constants))
+				return 0;
+			continue;
+		}
+
+		bytes1 = (unsigned char *)&word1;
+		bytes2 = (unsigned char *)&word2;
+		for (i = 0; i < sizeof(word1); i++) {
+			if (bpf_str_cmp_byte(bytes1[i], bytes2[i], ignore_case, &ret))
+				return ret;
+		}
+	}), err_out);
+
+	return pos == XATTR_SIZE_MAX ? -E2BIG : 0;
+
 err_out:
 	return -EFAULT;
 }
