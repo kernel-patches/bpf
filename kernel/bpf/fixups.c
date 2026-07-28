@@ -1057,6 +1057,8 @@ static u32 *bpf_dup_subprog_starts(struct bpf_verifier_env *env)
 
 static void bpf_restore_subprog_starts(struct bpf_verifier_env *env, u32 *orig_starts)
 {
+	if (!orig_starts)
+		return;
 	for (int i = 0; i < env->subprog_cnt; i++)
 		env->subprog_info[i].start = orig_starts[i];
 	/* restore the start of fake 'exit' subprog as well */
@@ -1334,35 +1336,33 @@ out_undo_insn:
 int bpf_jit_subprogs(struct bpf_verifier_env *env)
 {
 	int err, i;
-	bool blinded = false;
 	struct bpf_insn *insn;
 	struct bpf_prog *prog, *orig_prog;
-	u32 *orig_subprog_starts;
+	u32 *orig_subprog_starts = NULL;
+	bool cloned = false;
 
 	if (env->subprog_cnt <= 1)
 		return 0;
 
 	prog = orig_prog = env->prog;
 	if (bpf_prog_need_blind(prog)) {
-		orig_subprog_starts = bpf_dup_subprog_starts(env);
-		if (!orig_subprog_starts) {
-			err = -ENOMEM;
-			goto out_cleanup;
+		if (!prog->jit_required) {
+			orig_subprog_starts = bpf_dup_subprog_starts(env);
+			if (!orig_subprog_starts) {
+				err = -ENOMEM;
+				goto out_cleanup;
+			}
 		}
-		prog = bpf_jit_blind_constants(env, prog);
-		if (IS_ERR(prog)) {
-			err = -ENOMEM;
-			prog = orig_prog;
+		err = bpf_jit_blind_constants(env, &prog, !prog->jit_required, &cloned);
+		if (err)
 			goto out_restore;
-		}
-		blinded = true;
 	}
 
 	err = jit_subprogs(env);
 	if (err)
 		goto out_jit_err;
 
-	if (blinded) {
+	if (cloned) {
 		bpf_jit_prog_release_other(prog, orig_prog);
 		kvfree(orig_subprog_starts);
 	}
@@ -1370,13 +1370,13 @@ int bpf_jit_subprogs(struct bpf_verifier_env *env)
 	return 0;
 
 out_jit_err:
-	if (blinded) {
+	if (cloned) {
 		bpf_jit_prog_release_other(orig_prog, prog);
 		/* roll back to the clean original prog */
 		prog = env->prog = orig_prog;
 		goto out_restore;
 	} else {
-		if (err != -EFAULT) {
+		if (err != -EFAULT && !prog->jit_required) {
 			/*
 			 * We will fall back to interpreter mode when err is not -EFAULT, before
 			 * that, insn->off and insn->imm should be restored to their original
@@ -1405,8 +1405,7 @@ out_cleanup:
 int bpf_fixup_call_args(struct bpf_verifier_env *env)
 {
 #ifndef CONFIG_BPF_JIT_ALWAYS_ON
-	struct bpf_prog *prog = env->prog;
-	struct bpf_insn *insn = prog->insnsi;
+	struct bpf_insn *insn;
 	int depth;
 #endif
 	int i, err = 0;
@@ -1432,7 +1431,7 @@ int bpf_fixup_call_args(struct bpf_verifier_env *env)
 			return err;
 	}
 #ifndef CONFIG_BPF_JIT_ALWAYS_ON
-	if (prog->jit_required) {
+	if (env->prog->jit_required) {
 		verbose(env, "program requires BPF JIT compiler but it is not available\n");
 		return -EINVAL;
 	}
@@ -1449,7 +1448,7 @@ int bpf_fixup_call_args(struct bpf_verifier_env *env)
 		verbose(env, "tail_calls are not allowed in non-JITed programs with bpf-to-bpf calls\n");
 		return -EINVAL;
 	}
-	for (i = 0; i < prog->len; i++, insn++) {
+	for (i = 0, insn = env->prog->insnsi; i < env->prog->len; i++, insn++) {
 		if (bpf_pseudo_func(insn)) {
 			/* When JIT fails the progs with callback calls
 			 * have to be rejected, since interpreter doesn't support them yet.

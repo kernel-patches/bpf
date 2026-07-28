@@ -1564,27 +1564,34 @@ void bpf_jit_prog_release_other(struct bpf_prog *fp, struct bpf_prog *fp_other)
  * Now this function is used only to blind the main prog and must be invoked only when
  * bpf_prog_need_blind() returns true.
  */
-struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bpf_prog *prog)
+int bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bpf_prog **pprog,
+			    bool clone_needed, bool *cloned)
 {
 	struct bpf_insn insn_buff[16], aux[2];
-	struct bpf_prog *clone, *tmp;
+	struct bpf_prog *prog, *orig_prog, *tmp;
 	int insn_delta, insn_cnt;
 	struct bpf_insn *insn;
 	int i, rewritten;
 
-	if (WARN_ON_ONCE(env && env->prog != prog))
-		return ERR_PTR(-EINVAL);
+	*cloned = false;
+	if (WARN_ON_ONCE(env && env->prog != *pprog))
+		return -EINVAL;
 
-	clone = bpf_prog_clone_create(prog, GFP_USER);
-	if (!clone)
-		return ERR_PTR(-ENOMEM);
+	prog = orig_prog = *pprog;
+	/* only clone the prog when we can fall back to the interpreter */
+	if (clone_needed) {
+		prog = bpf_prog_clone_create(orig_prog, GFP_USER);
+		if (!prog)
+			return -ENOMEM;
 
-	/* make sure bpf_patch_insn_data() patches the correct prog */
-	if (env)
-		env->prog = clone;
+		*cloned = true;
+		/* make sure bpf_patch_insn_data() patches the correct prog */
+		if (env)
+			env->prog = prog;
+	}
 
-	insn_cnt = clone->len;
-	insn = clone->insnsi;
+	insn_cnt = prog->len;
+	insn = prog->insnsi;
 
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		if (bpf_pseudo_func(insn)) {
@@ -1605,42 +1612,49 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bp
 		    insn[1].code == 0)
 			memcpy(aux, insn, sizeof(aux));
 
-		rewritten = bpf_jit_blind_insn(insn, aux, insn_buff,
-						clone->aux->verifier_zext);
+		rewritten = bpf_jit_blind_insn(insn, aux, insn_buff, prog->aux->verifier_zext);
 		if (!rewritten)
 			continue;
 
 		if (env)
 			tmp = bpf_patch_insn_data(env, i, insn_buff, rewritten);
 		else
-			tmp = bpf_patch_insn_single(clone, i, insn_buff, rewritten);
+			tmp = bpf_patch_insn_single(prog, i, insn_buff, rewritten);
 
 		if (IS_ERR_OR_NULL(tmp)) {
-			if (env)
-				/* restore the original prog */
-				env->prog = prog;
-			/* Patching may have repointed aux->prog during
-			 * realloc from the original one, so we need to
-			 * fix it up here on error.
-			 */
-			bpf_jit_prog_release_other(prog, clone);
-			return IS_ERR(tmp) ? tmp : ERR_PTR(-ENOMEM);
+			if (*cloned) {
+				/* roll back to the original prog */
+				*pprog = orig_prog;
+				if (env)
+					env->prog = orig_prog;
+				/* Patching may have repointed aux->prog during
+				 * realloc from the original one, so we need to
+				 * fix it up here on error.
+				 */
+				bpf_jit_prog_release_other(orig_prog, prog);
+			} else {
+				/* just keep the latest successfully patched prog */
+				*pprog = prog;
+			}
+			return IS_ERR(tmp) ? PTR_ERR(tmp) : -ENOMEM;
 		}
 
-		clone = tmp;
+		prog = tmp;
 		insn_delta = rewritten - 1;
 
 		if (env)
-			env->prog = clone;
+			env->prog = prog;
 
 		/* Walk new program and skip insns we just inserted. */
-		insn = clone->insnsi + i + insn_delta;
+		insn = prog->insnsi + i + insn_delta;
 		insn_cnt += insn_delta;
 		i        += insn_delta;
 	}
 
-	clone->blinded = 1;
-	return clone;
+	prog->blinded = 1;
+	*pprog = prog;
+
+	return 0;
 }
 
 bool bpf_insn_is_indirect_target(const struct bpf_verifier_env *env, const struct bpf_prog *prog,
@@ -2630,33 +2644,33 @@ static bool bpf_prog_select_interpreter(struct bpf_prog *fp)
 	return select_interpreter;
 }
 
-static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
+static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog,
+					     bool jit_needed)
 {
 #ifdef CONFIG_BPF_JIT
+	int err;
+	bool cloned = false;
 	struct bpf_prog *orig_prog;
 
 	if (!bpf_prog_need_blind(prog))
 		return bpf_int_jit_compile(env, prog);
 
 	orig_prog = prog;
-	prog = bpf_jit_blind_constants(env, prog);
-	/*
-	 * If blinding was requested and we failed during blinding, we must fall
-	 * back to the interpreter.
-	 */
-	if (IS_ERR(prog))
-		goto out_restore;
+	err = bpf_jit_blind_constants(env, &prog, !jit_needed, &cloned);
+	if (err)
+		goto out;
 
 	prog = bpf_int_jit_compile(env, prog);
-	if (prog->jited) {
-		bpf_jit_prog_release_other(prog, orig_prog);
-		return prog;
+	if (cloned) {
+		if (prog->jited) {
+			bpf_jit_prog_release_other(prog, orig_prog);
+		} else {
+			bpf_jit_prog_release_other(orig_prog, prog);
+			prog = orig_prog;
+		}
 	}
 
-	bpf_jit_prog_release_other(orig_prog, prog);
-
-out_restore:
-	prog = orig_prog;
+out:
 #endif
 	return prog;
 }
@@ -2686,7 +2700,7 @@ struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env, struct 
 		if (*err)
 			return fp;
 
-		fp = bpf_prog_jit_compile(env, fp);
+		fp = bpf_prog_jit_compile(env, fp, jit_needed);
 		bpf_prog_jit_attempt_done(fp);
 		if (!fp->jited && jit_needed) {
 			*err = -ENOTSUPP;

@@ -1388,7 +1388,8 @@ int bpf_jit_get_func_addr(const struct bpf_prog *prog,
 
 const char *bpf_jit_get_prog_name(struct bpf_prog *prog);
 
-struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bpf_prog *prog);
+int bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bpf_prog **pprog,
+			    bool clone_needed, bool *cloned);
 void bpf_jit_prog_release_other(struct bpf_prog *fp, struct bpf_prog *fp_other);
 
 static inline bool bpf_prog_need_blind(const struct bpf_prog *prog)
@@ -1540,9 +1541,11 @@ static inline bool bpf_prog_need_blind(const struct bpf_prog *prog)
 }
 
 static inline
-struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bpf_prog *prog)
+int bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bpf_prog **pprog,
+			    bool clone_needed, bool *cloned)
 {
-	return prog;
+	*cloned = false;
+	return 0;
 }
 
 static inline void bpf_jit_prog_release_other(struct bpf_prog *fp, struct bpf_prog *fp_other)
