@@ -55,6 +55,8 @@ struct bench {
 	const struct argp *argp;
 	void (*validate)(void);
 	void (*setup)(void);
+	/* Run a synchronous benchmark without producer or consumer threads. */
+	void (*run)(void);
 	void *(*producer_thread)(void *ctx);
 	void *(*consumer_thread)(void *ctx);
 	void (*measure)(struct bench_res* res);
