@@ -602,7 +602,8 @@ static int psp_v15_0_3_exec_spi_cmd(struct psp_context *psp, int cmd)
 	/* Ring the doorbell */
 	WREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_73, 1);
 
-	if (cmd == C2PMSG_CMD_SPI_UPDATE_FLASH_IMAGE)
+	if (cmd == C2PMSG_CMD_SPI_UPDATE_FLASH_IMAGE ||
+	    cmd == C2PMSG_CMD_SPI_GET_FLASH_IMAGE)
 		ret = psp_wait_for_spirom_update(psp, SOC15_REG_OFFSET(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_115),
 						 MBOX_READY_FLAG, MBOX_READY_MASK, PSP_SPIROM_UPDATE_TIMEOUT);
 	else
@@ -610,9 +611,6 @@ static int psp_v15_0_3_exec_spi_cmd(struct psp_context *psp, int cmd)
 			psp, SOC15_REG_OFFSET(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_115),
 			MBOX_READY_FLAG, MBOX_READY_MASK, 0);
 
-	ret = psp_wait_for(psp,
-			   SOC15_REG_OFFSET(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_115),
-			   MBOX_READY_FLAG, MBOX_READY_MASK, 0);
 	if (ret) {
 		dev_err(adev->dev, "SPI cmd %x timed out, ret = %d", cmd, ret);
 		return ret;
@@ -626,6 +624,37 @@ static int psp_v15_0_3_exec_spi_cmd(struct psp_context *psp, int cmd)
 	}
 
 	return 0;
+}
+
+static int psp_v15_0_3_dump_spirom(struct psp_context *psp,
+				   uint64_t fw_pri_mc_addr)
+{
+	struct amdgpu_device *adev = psp->adev;
+	int ret;
+
+	/* Confirm PSP is ready to start */
+	ret = psp_wait_for(psp, SOC15_REG_OFFSET(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_115),
+			   MBOX_READY_FLAG, MBOX_READY_MASK, 0);
+	if (ret) {
+		dev_err(adev->dev, "PSP Not ready to start processing, ret = %d", ret);
+		return ret;
+	}
+
+	WREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_116, lower_32_bits(fw_pri_mc_addr));
+
+	ret = psp_v15_0_3_exec_spi_cmd(psp, C2PMSG_CMD_SPI_GET_ROM_IMAGE_ADDR_LO);
+	if (ret)
+		return ret;
+
+	WREG32_SOC15(MP0, 0, regMPASP_PCRU0_MPASP_C2PMSG_116, upper_32_bits(fw_pri_mc_addr));
+
+	ret = psp_v15_0_3_exec_spi_cmd(psp, C2PMSG_CMD_SPI_GET_ROM_IMAGE_ADDR_HI);
+	if (ret)
+		return ret;
+
+	ret = psp_v15_0_3_exec_spi_cmd(psp, C2PMSG_CMD_SPI_GET_FLASH_IMAGE);
+
+	return ret;
 }
 
 static int psp_v15_0_3_update_spirom(struct psp_context *psp,
@@ -826,6 +855,7 @@ static const struct psp_funcs psp_v15_0_3_funcs = {
 	.load_usbc_pd_fw = psp_v15_0_3_load_usbc_pd_fw,
 	.read_usbc_pd_fw = psp_v15_0_3_read_usbc_pd_fw,
 	.update_spirom = psp_v15_0_3_update_spirom,
+	.dump_spirom = psp_v15_0_3_dump_spirom,
 	.vbflash_stat = psp_v15_0_3_vbflash_status,
 	.get_fw_type = psp_v15_0_3_get_fw_type,
 };
