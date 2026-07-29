@@ -12,7 +12,7 @@ struct {
 	__type(value, long long);
 } map_hash_8b SEC(".maps");
 
-#if (defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64)) && \
+#if (defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_riscv)) && \
 	defined(__BPF_FEATURE_STACK_ARGUMENT)
 
 __noinline __used
