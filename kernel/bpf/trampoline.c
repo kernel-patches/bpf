@@ -224,6 +224,8 @@ void bpf_image_ksym_del(struct bpf_ksym *ksym)
  */
 struct ftrace_ops direct_ops = {
 	.ops_func = bpf_tramp_ftrace_ops_func,
+	/* Same protection livepatch gives its own ftrace_ops. */
+	.flags = FTRACE_OPS_FL_PERMANENT,
 };
 
 static int direct_ops_alloc(struct bpf_trampoline *tr)
@@ -303,6 +305,8 @@ static int direct_ops_alloc(struct bpf_trampoline *tr)
 		return -ENOMEM;
 	tr->fops->private = tr;
 	tr->fops->ops_func = bpf_tramp_ftrace_ops_func;
+	/* See the direct_ops initializer above for why. */
+	tr->fops->flags |= FTRACE_OPS_FL_PERMANENT;
 	return 0;
 }
 
