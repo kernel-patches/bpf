@@ -125,11 +125,11 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          # Optional pin: set the repo variable GCC_BPF_RELEASE_TAG (Settings ->
-          # Secrets and variables -> Actions -> Variables) to a specific
-          # theihor/gcc-bpf release tag. When unset it is empty and the download
-          # falls back to the latest release (previous behavior).
-          GCC_BPF_RELEASE_TAG: ${{ vars.GCC_BPF_RELEASE_TAG }}
+          # gcc-16 experiment: hardcode the theihor/gcc-bpf gcc-16 release tag
+          # (overrides the repo variable) so this run is deterministic and differs
+          # from the gcc-15 baseline only in the compiler.
+          # TODO: replace with the real gcc-16 tag once it is published.
+          GCC_BPF_RELEASE_TAG: gcc-16-20260725-binutils-with-gold-2.47.50-933a5bf7193
         run: .github/scripts/download-gh-release.sh theihor/gcc-bpf ${{ github.workspace }}/gcc-bpf "$GCC_BPF_RELEASE_TAG"
 
       - name: Build selftests/bpf
