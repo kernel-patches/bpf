@@ -820,6 +820,7 @@ static long __bpf_get_stack(struct pt_regs *regs, struct task_struct *task,
 
 	if (may_fault)
 		rcu_read_lock(); /* need RCU for perf's callchain below */
+	preempt_disable();
 
 	if (kernel && task) {
 		trace = get_callchain_entry_for_task(task, max_depth);
@@ -831,6 +832,7 @@ static long __bpf_get_stack(struct pt_regs *regs, struct task_struct *task,
 	if (unlikely(!trace) || trace->nr < skip) {
 		if (may_fault)
 			rcu_read_unlock();
+		preempt_enable();
 		goto err_fault;
 	}
 
@@ -839,6 +841,7 @@ static long __bpf_get_stack(struct pt_regs *regs, struct task_struct *task,
 	/* trace should not be dereferenced after this point */
 	if (may_fault)
 		rcu_read_unlock();
+	preempt_enable();
 
 	return callchain_finalize(buf, size, trace_nr, elem_size, user_build_id, user, may_fault);
 
