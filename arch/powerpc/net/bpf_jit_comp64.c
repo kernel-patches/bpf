@@ -472,7 +472,7 @@ int bpf_jit_emit_func_call_rel(u32 *image, u32 *fimage, struct codegen_context *
 {
 	unsigned long func_addr = func ? ppc_function_entry((void *)func) : 0;
 	long __maybe_unused reladdr;
-	int ret;
+	int __maybe_unused ret;
 
 	/* bpf to bpf call, func is not known in the initial pass. Emit 5 nops as a placeholder */
 	if (!func) {
