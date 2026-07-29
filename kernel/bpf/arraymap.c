@@ -7,6 +7,7 @@
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
+#include <linux/overflow.h>
 #include <linux/filter.h>
 #include <linux/perf_event.h>
 #include <uapi/linux/btf.h>
@@ -576,17 +577,118 @@ static int array_map_check_btf(struct bpf_map *map,
 static int array_map_mmap(struct bpf_map *map, struct vm_area_struct *vma)
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
-	pgoff_t pgoff = PAGE_ALIGN(sizeof(*array)) >> PAGE_SHIFT;
 
 	if (!(map->map_flags & BPF_F_MMAPABLE))
 		return -EINVAL;
 
-	if (vma->vm_pgoff * PAGE_SIZE + (vma->vm_end - vma->vm_start) >
+	/* use u64 math so the offset cannot overflow on 32-bit archs */
+	if ((u64)vma->vm_pgoff * PAGE_SIZE + (vma->vm_end - vma->vm_start) >
 	    PAGE_ALIGN((u64)array->map.max_entries * array->elem_size))
 		return -EINVAL;
 
-	return remap_vmalloc_range(vma, array_map_vmalloc_addr(array),
-				   vma->vm_pgoff + pgoff);
+	/*
+	 * The backing memory is vmalloc'ed up front, so instead of wiring up
+	 * every PTE here we let the fault handlers insert pages on demand.
+	 * remap_vmalloc_range_partial() used to set these flags for us; keep
+	 * them to preserve behavior (no VMA expansion, excluded from coredump).
+	 */
+	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP);
+
+	return 0;
+}
+
+/* Resolve the vmalloc page backing the value-area offset of a fault. */
+static struct page *array_map_fault_page(struct bpf_array *array, pgoff_t pgoff)
+{
+	u64 array_size, off;
+
+	array_size = PAGE_ALIGN((u64)array->map.max_entries * array->elem_size);
+
+	/*
+	 * pgoff is the faulting page's offset into the mapped value area (the
+	 * bpf_array header precedes array->value and is not mapped). Guard the
+	 * shift and the bounds explicitly, the same way that
+	 * remap_vmalloc_range_partial() does for the eager path, instead of
+	 * relying on the mmap()-time bounds check alone.
+	 */
+	if (check_shl_overflow(pgoff, PAGE_SHIFT, &off))
+		return NULL;
+	if (off >= array_size)
+		return NULL;
+
+	return vmalloc_to_page(array->value + off);
+}
+
+static vm_fault_t array_map_mmap_fault(struct bpf_map *map,
+				       struct vm_fault *vmf)
+{
+	struct bpf_array *array = container_of(map, struct bpf_array, map);
+	struct page *page;
+
+	page = array_map_fault_page(array, vmf->pgoff);
+	if (!page)
+		return VM_FAULT_SIGBUS;
+
+	get_page(page);
+	vmf->page = page;
+
+	return 0;
+}
+
+/*
+ * Fault-around handler: install PTEs for the whole [start_pgoff, end_pgoff]
+ * window under a single page-table lock, so that populating a large mapping
+ * (e.g. mmap(MAP_POPULATE) or a linear access pattern) does not take one full
+ * fault per page.
+ */
+static vm_fault_t array_map_mmap_pages(struct bpf_map *map, struct vm_fault *vmf,
+				       pgoff_t start_pgoff, pgoff_t end_pgoff)
+{
+	struct bpf_array *array = container_of(map, struct bpf_array, map);
+	struct vm_area_struct *vma = vmf->vma;
+	unsigned long addr, rss = 0;
+	vm_fault_t ret = 0;
+	pte_t *start_pte;
+	pgoff_t pgoff;
+
+	/*
+	 * The PTE table for this PMD must already exist; installing it needs
+	 * mm-internal helpers. If it is missing, let the regular ->fault path
+	 * install it and rely on the next fault-around to batch the rest.
+	 */
+	if (pmd_none(*vmf->pmd))
+		return 0;
+
+	addr = vma->vm_start + ((start_pgoff - vma->vm_pgoff) << PAGE_SHIFT);
+	start_pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd, addr, &vmf->ptl);
+	if (!start_pte)
+		return 0;
+	vmf->pte = start_pte;
+
+	for (pgoff = start_pgoff; pgoff <= end_pgoff;
+	     pgoff++, vmf->pte++, addr += PAGE_SIZE) {
+		struct folio *folio;
+		struct page *page;
+
+		if (!pte_none(ptep_get(vmf->pte)))
+			continue;
+
+		page = array_map_fault_page(array, pgoff);
+		if (!page)
+			continue;
+
+		folio = page_folio(page);
+		folio_get(folio);
+		set_pte_range(vmf, folio, page, 1, addr);
+		rss++;
+		if (addr == vmf->address)
+			ret = VM_FAULT_NOPAGE;
+	}
+
+	add_mm_counter(vma->vm_mm, MM_FILEPAGES, rss);
+	pte_unmap_unlock(start_pte, vmf->ptl);
+
+	return ret;
 }
 
 static bool array_map_meta_equal(const struct bpf_map *meta0,
@@ -812,6 +914,8 @@ const struct bpf_map_ops array_map_ops = {
 	.map_direct_value_addr = array_map_direct_value_addr,
 	.map_direct_value_meta = array_map_direct_value_meta,
 	.map_mmap = array_map_mmap,
+	.map_mmap_fault = array_map_mmap_fault,
+	.map_mmap_pages = array_map_mmap_pages,
 	.map_seq_show_elem = array_map_seq_show_elem,
 	.map_check_btf = array_map_check_btf,
 	.map_lookup_batch = generic_map_lookup_batch,
