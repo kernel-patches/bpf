@@ -120,11 +120,25 @@ jobs:
           max-make-jobs: 32
           llvm-version: ${{ inputs.llvm_version }}
 
+      - if: ${{ inputs.arch == 'x86_64' }}
+        name: Download GCC BPF compiler
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Optional pin: set the repo variable GCC_BPF_RELEASE_TAG (Settings ->
+          # Secrets and variables -> Actions -> Variables) to a specific
+          # theihor/gcc-bpf release tag. When unset it is empty and the download
+          # falls back to the latest release (previous behavior).
+          GCC_BPF_RELEASE_TAG: ${{ vars.GCC_BPF_RELEASE_TAG }}
+        run: .github/scripts/download-gh-release.sh theihor/gcc-bpf ${{ github.workspace }}/gcc-bpf "$GCC_BPF_RELEASE_TAG"
+
       - name: Build selftests/bpf
         uses: libbpf/ci/build-selftests@v4
         env:
           MAX_MAKE_JOBS: 32
           RELEASE: ${{ inputs.release && '1' || '' }}
+          # Build test_progs-bpf_gcc on x86_64 so the vmtest runner has a binary to run.
+          BPF_GCC: ${{ inputs.arch == 'x86_64' && format('{0}/gcc-bpf', github.workspace) || '' }}
         with:
           arch: ${{ inputs.arch }}
           kernel-root: ${{ env.KERNEL_ROOT }}
