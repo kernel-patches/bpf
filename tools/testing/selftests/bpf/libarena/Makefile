@@ -27,10 +27,14 @@ BPFDIR=$(abspath $(LIBARENA)/..)
 INCLUDE_DIR ?= $(BPFDIR)/tools/include
 LIBBPF_INCLUDE ?= $(INCLUDE_DIR)
 
+# Build output directory; defaults to in-tree for standalone builds.
+OUTPUT ?= .
+$(shell mkdir -p $(OUTPUT))
+
 # Scan src/ and selftests/ to generate the final binaries
 LIBARENA_SOURCES = $(wildcard $(LIBARENA)/src/*.bpf.c) $(wildcard $(LIBARENA)/selftests/*.bpf.c)
-LIBARENA_OBJECTS = $(notdir $(LIBARENA_SOURCES:.bpf.c=.bpf.o))
-LIBARENA_OBJECTS_ASAN = $(notdir $(LIBARENA_SOURCES:.bpf.c=_asan.bpf.o))
+LIBARENA_OBJECTS = $(addprefix $(OUTPUT)/,$(notdir $(LIBARENA_SOURCES:.bpf.c=.bpf.o)))
+LIBARENA_OBJECTS_ASAN = $(addprefix $(OUTPUT)/,$(notdir $(LIBARENA_SOURCES:.bpf.c=_asan.bpf.o)))
 
 INCLUDES = -I$(LIBARENA)/include -I$(BPFDIR)
 ifneq ($(INCLUDE_DIR),)
@@ -61,32 +65,32 @@ CFLAGS += $(INCLUDES)
 vpath %.bpf.c $(LIBARENA)/src $(LIBARENA)/selftests
 vpath %.c $(LIBARENA)/src $(LIBARENA)/selftests
 
-skeletons: libarena.skel.h libarena_asan.skel.h
+skeletons: $(OUTPUT)/libarena.skel.h $(OUTPUT)/libarena_asan.skel.h
 .PHONY: skeletons
 
-libarena_asan.skel.h: libarena_asan.bpf.o
+$(OUTPUT)/libarena_asan.skel.h: $(OUTPUT)/libarena_asan.bpf.o
 	$(call msg,GEN-SKEL,libarena,$@)
 	$(Q)$(BPFTOOL) gen skeleton $< name "libarena_asan" > $@
 
-libarena.skel.h: libarena.bpf.o
+$(OUTPUT)/libarena.skel.h: $(OUTPUT)/libarena.bpf.o
 	$(call msg,GEN-SKEL,libarena,$@)
 	$(Q)$(BPFTOOL) gen skeleton $< name "libarena" > $@
 
-libarena_asan.bpf.o: $(LIBARENA_OBJECTS_ASAN)
+$(OUTPUT)/libarena_asan.bpf.o: $(LIBARENA_OBJECTS_ASAN)
 	$(call msg,GEN-OBJ,libarena,$@)
 	$(Q)$(BPFTOOL) gen object $@ $^
 
-libarena.bpf.o: $(LIBARENA_OBJECTS)
+$(OUTPUT)/libarena.bpf.o: $(LIBARENA_OBJECTS)
 	$(call msg,GEN-OBJ,libarena,$@)
 	$(Q)$(BPFTOOL) gen object $@ $^
 
-%_asan.bpf.o: %.bpf.c
+$(OUTPUT)/%_asan.bpf.o: %.bpf.c
 	$(call msg,CLNG-BPF,libarena,$@)
 	$(Q)$(CLANG) $(BPF_CFLAGS) $(ASAN_FLAGS) -DBPF_ARENA_ASAN $(BPF_TARGET_ENDIAN) -c $< -o $@
 
-%.bpf.o: %.bpf.c
+$(OUTPUT)/%.bpf.o: %.bpf.c
 	$(call msg,CLNG-BPF,libarena,$@)
 	$(Q)$(CLANG) $(BPF_CFLAGS) $(BPF_TARGET_ENDIAN) -c $< -o $@
 
 clean:
-	$(Q)rm -f *.skel.h *.bpf.o *.linked*.o
+	$(Q)rm -f $(OUTPUT)/*.skel.h $(OUTPUT)/*.bpf.o $(OUTPUT)/*.linked*.o

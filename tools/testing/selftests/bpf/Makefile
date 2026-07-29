@@ -824,7 +824,8 @@ LIBARENA_MAKE_ARGS = \
 		CLANG="$(CLANG)" \
 		BPF_CFLAGS="$(BPF_CFLAGS) $(CLANG_CFLAGS)" \
 		BPF_TARGET_ENDIAN="$(BPF_TARGET_ENDIAN)" \
-		Q="$(Q)"
+		Q="$(Q)" \
+		OUTPUT="$(OUTPUT)/libarena"
 
 LIBARENA_BPF_DEPS := $(wildcard libarena/Makefile		\
 				 libarena/include/*		\
@@ -833,17 +834,17 @@ LIBARENA_BPF_DEPS := $(wildcard libarena/Makefile		\
 				 libarena/selftests/*		\
 				 libarena/*.bpf.o)
 
-LIBARENA_SKEL := libarena/libarena.skel.h
+LIBARENA_SKEL := $(OUTPUT)/libarena/libarena.skel.h
 
 $(LIBARENA_SKEL): $(INCLUDE_DIR)/vmlinux.h $(BPFOBJ) $(LIBARENA_BPF_DEPS)
-	+$(MAKE) -C libarena libarena.skel.h $(LIBARENA_MAKE_ARGS)
+	+$(MAKE) -C libarena $(LIBARENA_SKEL) $(LIBARENA_MAKE_ARGS)
 
 ifneq ($(CLANG_HAS_ARENA_ASAN),)
-LIBARENA_ASAN_SKEL := libarena/libarena_asan.skel.h
+LIBARENA_ASAN_SKEL := $(OUTPUT)/libarena/libarena_asan.skel.h
 CFLAGS += -DHAS_BPF_ARENA_ASAN
 
 $(LIBARENA_ASAN_SKEL): $(INCLUDE_DIR)/vmlinux.h $(BPFOBJ) $(LIBARENA_BPF_DEPS)
-	+$(MAKE) -C libarena libarena_asan.skel.h $(LIBARENA_MAKE_ARGS)
+	+$(MAKE) -C libarena $(LIBARENA_ASAN_SKEL) $(LIBARENA_MAKE_ARGS)
 endif
 
 # Define test_progs test runner.
