@@ -802,12 +802,14 @@ __bpf_kfunc int *bpf_iter_num_next(struct bpf_iter_num* it)
 {
 	struct bpf_iter_num_kern *s = (void *)it;
 
-	/* check failed initialization or if we are done (same behavior);
-	 * need to be careful about overflow, so convert to s64 for checks,
-	 * e.g., if s->cur == s->end == INT_MAX, we can't just do
-	 * s->cur + 1 >= s->end
+	/* Detect the end of the range, or a failed/empty iterator: all of these
+	 * leave s->cur + 1 >= s->end. bpf_iter_num_new() set s->cur to start - 1
+	 * (which wraps to INT_MAX when start == INT_MIN), so the s->cur + 1 below
+	 * is a deliberate 32-bit wraparound that recovers start. As s->cur and
+	 * s->end are int, this is an ordinary signed 32-bit compare, exactly what
+	 * the inlined bpf_iter_num_next() emits.
 	 */
-	if ((s64)(s->cur + 1) >= s->end) {
+	if (s->cur + 1 >= s->end) {
 		s->cur = s->end = 0;
 		return NULL;
 	}
