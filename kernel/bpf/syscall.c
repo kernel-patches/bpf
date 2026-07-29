@@ -1077,9 +1077,39 @@ static void bpf_map_mmap_close(struct vm_area_struct *vma)
 		bpf_map_write_active_dec(map);
 }
 
+/*
+ * Called for maps that populate their memory-mapped region lazily, i.e. that
+ * return without wiring up any PTEs from their ->map_mmap callback. Maps that
+ * populate the whole VMA eagerly (e.g. via remap_vmalloc_range()) never reach
+ * here.
+ */
+static vm_fault_t bpf_map_mmap_fault(struct vm_fault *vmf)
+{
+	struct bpf_map *map = vmf->vma->vm_private_data;
+
+	if (!map->ops->map_mmap_fault)
+		return VM_FAULT_SIGBUS;
+
+	return map->ops->map_mmap_fault(map, vmf);
+}
+
+/* Fault-around: batch-populate PTEs around the faulting address. */
+static vm_fault_t bpf_map_mmap_pages(struct vm_fault *vmf,
+				     pgoff_t start_pgoff, pgoff_t end_pgoff)
+{
+	struct bpf_map *map = vmf->vma->vm_private_data;
+
+	if (!map->ops->map_mmap_pages)
+		return 0;
+
+	return map->ops->map_mmap_pages(map, vmf, start_pgoff, end_pgoff);
+}
+
 static const struct vm_operations_struct bpf_map_default_vmops = {
 	.open		= bpf_map_mmap_open,
 	.close		= bpf_map_mmap_close,
+	.fault		= bpf_map_mmap_fault,
+	.map_pages	= bpf_map_mmap_pages,
 };
 
 static int bpf_map_mmap(struct file *filp, struct vm_area_struct *vma)
