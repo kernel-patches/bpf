@@ -942,9 +942,9 @@ BPF_CALL_4(bpf_get_stack_pe, struct bpf_perf_event_data_kern *, ctx,
 	struct pt_regs *regs = (struct pt_regs *)(ctx->regs);
 	struct perf_event *event = ctx->event;
 	struct perf_callchain_entry *trace;
+	__u64 nr, nr_kernel;
 	bool kernel, user;
 	int err = -EINVAL;
-	__u64 nr_kernel;
 
 	if (!(event->attr.sample_type & PERF_SAMPLE_CALLCHAIN))
 		return __bpf_get_stack(regs, NULL, NULL, buf, size, flags, false /* !may_fault */);
@@ -962,15 +962,12 @@ BPF_CALL_4(bpf_get_stack_pe, struct bpf_perf_event_data_kern *, ctx,
 		goto clear;
 
 	nr_kernel = count_kernel_ip(trace);
+	nr = trace->nr;
 
 	if (kernel) {
-		__u64 nr = trace->nr;
-
 		trace->nr = nr_kernel;
 		err = __bpf_get_stack(regs, NULL, trace, buf, size, flags, false /* !may_fault */);
 
-		/* restore nr */
-		trace->nr = nr;
 	} else { /* user */
 		u64 skip = flags & BPF_F_SKIP_FIELD_MASK;
 
@@ -981,12 +978,13 @@ BPF_CALL_4(bpf_get_stack_pe, struct bpf_perf_event_data_kern *, ctx,
 		flags = (flags & ~BPF_F_SKIP_FIELD_MASK) | skip;
 		err = __bpf_get_stack(regs, NULL, trace, buf, size, flags, false /* !may_fault */);
 	}
-	return err;
 
+	/* restore nr */
+	trace->nr = nr;
 clear:
-	memset(buf, 0, size);
+	if (err < 0)
+		memset(buf, 0, size);
 	return err;
-
 }
 
 const struct bpf_func_proto bpf_get_stack_proto_pe = {
