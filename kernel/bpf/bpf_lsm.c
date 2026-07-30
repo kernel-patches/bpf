@@ -473,3 +473,53 @@ int bpf_lsm_get_retval_range(const struct bpf_prog *prog,
 	}
 	return 0;
 }
+
+/* LSM policy kfuncs */
+
+/*
+ * Opaque handle for a Landlock ruleset.  Only Landlock resolves it.
+ */
+struct bpf_landlock_ruleset {};
+
+BTF_KFUNCS_START(bpf_landlock_kfunc_ids)
+BTF_KFUNCS_END(bpf_landlock_kfunc_ids)
+
+/*
+ * BPF_PROG_TYPE_LSM and BPF_PROG_TYPE_SYSCALL share their kfunc
+ * lookup buckets with other program types, so restricting the LSM
+ * policy kfuncs requires a filter.
+ */
+static int bpf_landlock_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	if (!btf_id_set8_contains(&bpf_landlock_kfunc_ids, kfunc_id))
+		return 0;
+
+	switch (prog->type) {
+	case BPF_PROG_TYPE_SYSCALL:
+		return 0;
+	case BPF_PROG_TYPE_LSM:
+		return 0;
+	default:
+		return -EACCES;
+	}
+}
+
+static const struct btf_kfunc_id_set bpf_landlock_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &bpf_landlock_kfunc_ids,
+	.filter = bpf_landlock_kfunc_filter,
+};
+
+static int __init bpf_lsm_policy_kfunc_init(void)
+{
+	int ret;
+
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_LSM,
+					&bpf_landlock_kfunc_set);
+	if (ret)
+		return ret;
+
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
+					&bpf_landlock_kfunc_set);
+}
+late_initcall(bpf_lsm_policy_kfunc_init);
