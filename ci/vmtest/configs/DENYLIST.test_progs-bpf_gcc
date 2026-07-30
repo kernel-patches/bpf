@@ -1,1 +1,3 @@
 # Emptied for the gcc-bpf CI failure-rate experiment.
+arena_htab/arena_htab_asm
+bpf_iter
