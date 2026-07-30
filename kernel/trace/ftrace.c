@@ -9357,7 +9357,7 @@ static void ftrace_startup_sysctl(void)
 	}
 }
 
-static void ftrace_shutdown_sysctl(void)
+static void __maybe_unused ftrace_shutdown_sysctl(void)
 {
 	int command;
 
@@ -9377,7 +9377,7 @@ static void ftrace_shutdown_sysctl(void)
 # define ftrace_shutdown_sysctl()      do { } while (0)
 #endif /* CONFIG_DYNAMIC_FTRACE */
 
-static bool is_permanent_ops_registered(void)
+static bool __maybe_unused is_permanent_ops_registered(void)
 {
 	struct ftrace_ops *op;
 
@@ -9415,15 +9415,12 @@ ftrace_enable_sysctl(const struct ctl_table *table, int write,
 		ftrace_startup_sysctl();
 
 	} else {
-		if (is_permanent_ops_registered()) {
-			ftrace_enabled = true;
-			return -EBUSY;
-		}
-
-		/* stopping ftrace calls (just send to ftrace_stub) */
-		ftrace_trace_function = ftrace_stub;
-
-		ftrace_shutdown_sysctl();
+		/*
+		 * Disabling ftrace at runtime via this knob is deprecated.
+		 */
+		ftrace_enabled = true;
+		pr_warn_once("The ftrace_enabled file is deprecated and no longer disables ftrace\n");
+		return -EOPNOTSUPP;
 	}
 
 	last_ftrace_enabled = !!ftrace_enabled;
