@@ -237,6 +237,8 @@ void host1x_syncpt_release_vblank_reservation(struct host1x_client *client,
 struct dma_fence *host1x_fence_create(struct host1x_syncpt *sp, u32 threshold,
 				      bool timeout);
 void host1x_fence_cancel(struct dma_fence *fence);
+int host1x_fence_extract(struct dma_fence *fence, struct host1x **host1x,
+			 u32 *id, u32 *threshold);
 
 /*
  * host1x channel
