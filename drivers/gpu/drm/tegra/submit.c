@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2020 NVIDIA Corporation */
 
-#include <linux/dma-fence-array.h>
 #include <linux/dma-mapping.h>
 #include <linux/file.h>
 #include <linux/host1x.h>
@@ -12,7 +11,6 @@
 #include <linux/pm_runtime.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
-#include <linux/sync_file.h>
 
 #include <drm/drm_drv.h>
 #include <drm/drm_file.h>
