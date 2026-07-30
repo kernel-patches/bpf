@@ -12,6 +12,9 @@
 #include <linux/bpf_verifier.h>
 #include <linux/lsm_hooks.h>
 
+/* max bpf xattrs per inode */
+#define BPF_LSM_INODE_INIT_XATTRS 4
+
 #ifdef CONFIG_BPF_LSM
 
 extern bool bpf_lsm_initialized __ro_after_init;

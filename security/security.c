@@ -12,6 +12,7 @@
 #define pr_fmt(fmt) "LSM: " fmt
 
 #include <linux/bpf.h>
+#include <linux/bpf_lsm.h>
 #include <linux/capability.h>
 #include <linux/dcache.h>
 #include <linux/export.h>
@@ -1375,6 +1376,101 @@ out:
 	return (ret == -EOPNOTSUPP) ? 0 : ret;
 }
 EXPORT_SYMBOL(security_inode_init_security);
+
+static unsigned int lsm_xattrs_used(const struct lsm_xattrs *xattrs,
+				    const char *prefix)
+{
+	size_t prefix_len = strlen(prefix);
+	unsigned int i, n = 0;
+
+	for (i = 0; i < xattrs->xattr_count; i++) {
+		const char *name = xattrs->xattrs[i].name;
+
+		if (name && !strncmp(name, prefix, prefix_len))
+			n++;
+	}
+	return n;
+}
+
+/**
+ * security_lsmxattr_add() - Add an xattr during inode_init_security
+ * @xattrs: xattr state shared by inode_init_security hooks
+ * @lsm_id: LSM_ID_* value identifying the calling LSM
+ * @name_extra: xattr name components beyond the calling LSM's standard
+ *              xattr suffix, NULL if the standard suffix is the full name
+ * @value: xattr value
+ * @value_len: length of @value
+ *
+ * Claim an xattr slot in @xattrs on behalf of the LSM identified by
+ * @lsm_id and fill it with a copy of @value. The xattr name is built from
+ * the standard xattr suffix of the calling LSM, followed by @name_extra.
+ * Callers can invoke this function from non-sleepable context.
+ *
+ * Return: Returns 0 on success or if the filesystem does not accept xattrs
+ *         at inode creation, -ENOSPC if the calling LSM's slot budget is
+ *         exhausted, negative values on other errors.
+ */
+int security_lsmxattr_add(struct lsm_xattrs *xattrs, u64 lsm_id,
+			  const char *name_extra, const void *value,
+			  size_t value_len)
+{
+	struct xattr *xattr;
+	void *xattr_value;
+	const char *suffix;
+	size_t suffix_len, extra_len, name_len;
+
+	if (!xattrs || !value)
+		return -EINVAL;
+
+	/* The filesystem did not provide an initxattrs callback. */
+	if (!xattrs->xattrs)
+		return 0;
+
+	switch (lsm_id) {
+	case LSM_ID_BPF:
+		if (!name_extra || !name_extra[0])
+			return -EINVAL;
+		suffix = XATTR_BPF_LSM_SUFFIX;
+		if (lsm_xattrs_used(xattrs, XATTR_BPF_LSM_SUFFIX) >=
+		    BPF_LSM_INODE_INIT_XATTRS)
+			return -ENOSPC;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	suffix_len = strlen(suffix);
+	extra_len = name_extra ? strlen(name_extra) : 0;
+	name_len = suffix_len + extra_len;
+	if (name_len > XATTR_NAME_MAX)
+		return -EINVAL;
+	if (value_len == 0 || value_len > XATTR_SIZE_MAX)
+		return -EINVAL;
+
+	/* Combine xattr value + name into one allocation. */
+	xattr_value = kmalloc(value_len + name_len + 1, GFP_NOWAIT);
+	if (!xattr_value)
+		return -ENOMEM;
+
+	memcpy(xattr_value, value, value_len);
+	memcpy(xattr_value + value_len, suffix, suffix_len);
+	if (extra_len)
+		memcpy(xattr_value + value_len + suffix_len, name_extra,
+		       extra_len);
+	((char *)xattr_value)[value_len + name_len] = '\0';
+
+	xattr = lsm_get_xattr_slot(xattrs);
+	if (!xattr) {
+		kfree(xattr_value);
+		return -ENOSPC;
+	}
+
+	xattr->value = xattr_value;
+	xattr->name = (const char *)xattr_value + value_len;
+	xattr->value_len = value_len;
+
+	return 0;
+}
 
 /**
  * security_inode_init_security_anon() - Initialize an anonymous inode
