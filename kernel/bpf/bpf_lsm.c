@@ -14,8 +14,10 @@
 #include <net/bpf_sk_storage.h>
 #include <linux/bpf_local_storage.h>
 #include <linux/btf_ids.h>
+#include <linux/cfi.h>
 #include <linux/ima.h>
 #include <linux/bpf-cgroup.h>
+#include <uapi/linux/lsm.h>
 
 /* For every LSM hook that allows attachment of BPF programs, declare a nop
  * function where a BPF program can be attached. Notably, we qualify each with
@@ -481,8 +483,48 @@ int bpf_lsm_get_retval_range(const struct bpf_prog *prog,
  */
 struct bpf_landlock_ruleset {};
 
+/*
+ * The sleepable LSM hooks bpf_landlock_put_ruleset() may be called
+ * from.
+ */
+BTF_SET_START(bpf_landlock_kfunc_hooks)
+BTF_ID(func, bpf_lsm_bprm_creds_for_exec)
+BTF_ID(func, bpf_lsm_bprm_creds_from_file)
+BTF_SET_END(bpf_landlock_kfunc_hooks)
+
+__bpf_kfunc_start_defs();
+
+/**
+ * bpf_landlock_put_ruleset - Put a Landlock ruleset
+ * @ruleset: Landlock ruleset to put
+ *
+ * Release an acquired reference on a Landlock ruleset.
+ */
+__bpf_kfunc void bpf_landlock_put_ruleset(struct bpf_landlock_ruleset *ruleset)
+{
+	union lsm_policy_kptr policy = { .landlock.ruleset = ruleset };
+
+	security_policy_kptr_put(LSM_ID_LANDLOCK, &policy);
+}
+
+/* Destructor for referenced bpf_landlock_ruleset kptrs. */
+__bpf_kfunc void bpf_landlock_put_ruleset_dtor(void *ruleset)
+{
+	union lsm_policy_kptr policy = { .landlock.ruleset = ruleset };
+
+	security_policy_kptr_put(LSM_ID_LANDLOCK, &policy);
+}
+CFI_NOSEAL(bpf_landlock_put_ruleset_dtor);
+
+__bpf_kfunc_end_defs();
+
 BTF_KFUNCS_START(bpf_landlock_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_landlock_put_ruleset, KF_RELEASE | KF_SLEEPABLE)
 BTF_KFUNCS_END(bpf_landlock_kfunc_ids)
+
+BTF_ID_LIST(bpf_landlock_dtor_ids)
+BTF_ID(struct, bpf_landlock_ruleset)
+BTF_ID(func, bpf_landlock_put_ruleset_dtor)
 
 /*
  * BPF_PROG_TYPE_LSM and BPF_PROG_TYPE_SYSCALL share their kfunc
@@ -498,6 +540,17 @@ static int bpf_landlock_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
 	case BPF_PROG_TYPE_SYSCALL:
 		return 0;
 	case BPF_PROG_TYPE_LSM:
+		/*
+		 * BPF_LSM_CGROUP programs run under classic RCU and
+		 * cannot sleep.
+		 */
+		if (prog->expected_attach_type == BPF_LSM_CGROUP)
+			return -EACCES;
+
+		if (!btf_id_set_contains(&bpf_landlock_kfunc_hooks,
+					 prog->aux->attach_btf_id))
+			return -EACCES;
+
 		return 0;
 	default:
 		return -EACCES;
@@ -512,6 +565,12 @@ static const struct btf_kfunc_id_set bpf_landlock_kfunc_set = {
 
 static int __init bpf_lsm_policy_kfunc_init(void)
 {
+	const struct btf_id_dtor_kfunc bpf_landlock_dtors[] = {
+		{
+			.btf_id = bpf_landlock_dtor_ids[0],
+			.kfunc_btf_id = bpf_landlock_dtor_ids[1],
+		},
+	};
 	int ret;
 
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_LSM,
@@ -519,7 +578,13 @@ static int __init bpf_lsm_policy_kfunc_init(void)
 	if (ret)
 		return ret;
 
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
 					&bpf_landlock_kfunc_set);
+	if (ret)
+		return ret;
+
+	return register_btf_id_dtor_kfuncs(bpf_landlock_dtors,
+					   ARRAY_SIZE(bpf_landlock_dtors),
+					   THIS_MODULE);
 }
 late_initcall(bpf_lsm_policy_kfunc_init);
