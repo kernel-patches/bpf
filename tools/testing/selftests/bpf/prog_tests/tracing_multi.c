@@ -679,6 +679,11 @@ void serial_test_tracing_multi_bench_attach(void)
 	struct btf *btf;
 	int err;
 
+	if (!test__is_explicit()) {
+		test__skip();
+		return;
+	}
+
 #ifndef __x86_64__
 	test__skip();
 	return;

@@ -105,6 +105,7 @@ struct test_env {
 	struct test_selector tmon_selector;
 	bool verifier_stats;
 	bool debug;
+	bool explicit_selection;
 	enum verbosity verbosity;
 
 	bool jit_enabled;
@@ -187,6 +188,7 @@ bool test__start_subtest(const char *name);
 void test__end_subtest(void);
 void test__skip(void);
 void test__fail(void);
+bool test__is_explicit(void);
 int test__join_cgroup(const char *path);
 void hexdump(const char *prefix, const void *buf, size_t len);
 

@@ -688,6 +688,11 @@ int test__join_cgroup(const char *path)
 	return fd;
 }
 
+bool test__is_explicit(void)
+{
+	return env.explicit_selection;
+}
+
 int bpf_find_map(const char *test, struct bpf_object *obj, const char *name)
 {
 	struct bpf_map *map;
@@ -1038,6 +1043,7 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 	case ARG_TEST_NUM: {
 		char *subtest_str = strchr(arg, '/');
 
+		env->explicit_selection = true;
 		if (subtest_str) {
 			*subtest_str = '\0';
 			if (parse_num_list(subtest_str + 1,
@@ -1057,6 +1063,8 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 	}
 	case ARG_TEST_NAME_GLOB_ALLOWLIST:
 	case ARG_TEST_NAME: {
+		if (key == ARG_TEST_NAME)
+			env->explicit_selection = true;
 		if (arg[0] == '@')
 			err = parse_test_list_file(arg + 1,
 						   &env->test_selector.whitelist,
