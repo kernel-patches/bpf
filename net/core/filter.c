@@ -7032,6 +7032,13 @@ static struct sock *sk_lookup(struct net *net, struct bpf_sock_tuple *tuple,
 		WARN_ONCE(1, "Found non-RCU, unreferenced socket!");
 		sk = NULL;
 	}
+
+	/* Always take a reference, even if the lookup skipped one;
+	 * bpf_sk_release() always puts one.
+	 */
+	if (sk && !refcounted && !refcount_inc_not_zero(&sk->sk_refcnt))
+		sk = NULL;
+
 	return sk;
 }
 
@@ -7080,6 +7087,31 @@ out:
 }
 
 static struct sock *
+bpf_sk_lookup_full_sk(struct sock *sk)
+{
+	struct sock *sk2 = sk_to_full_sk(sk);
+
+	/* sk_to_full_sk() may return sk->rsk_listener, make sure the original
+	 * sk sock refcnt is decremented to prevent a request_sock leak.
+	 */
+	if (sk2 != sk) {
+		sock_gen_put(sk);
+		if (unlikely(sk2 && !sock_flag(sk2, SOCK_RCU_FREE))) {
+			WARN_ONCE(1, "Found non-RCU, unreferenced socket!");
+			return NULL;
+		}
+		/* sk2 is RCU-free, but take a reference anyway;
+		 * bpf_sk_release() puts.
+		 */
+		if (sk2 && !refcount_inc_not_zero(&sk2->sk_refcnt))
+			sk2 = NULL;
+		sk = sk2;
+	}
+
+	return sk;
+}
+
+static struct sock *
 __bpf_sk_lookup(struct sk_buff *skb, struct bpf_sock_tuple *tuple, u32 len,
 		struct net *caller_net, u32 ifindex, u8 proto, u64 netns_id,
 		u64 flags, int sdif)
@@ -7088,22 +7120,8 @@ __bpf_sk_lookup(struct sk_buff *skb, struct bpf_sock_tuple *tuple, u32 len,
 					   ifindex, proto, netns_id, flags,
 					   sdif);
 
-	if (sk) {
-		struct sock *sk2 = sk_to_full_sk(sk);
-
-		/* sk_to_full_sk() may return (sk)->rsk_listener, so make sure the original sk
-		 * sock refcnt is decremented to prevent a request_sock leak.
-		 */
-		if (sk2 != sk) {
-			sock_gen_put(sk);
-			/* Ensure there is no need to bump sk2 refcnt */
-			if (unlikely(sk2 && !sock_flag(sk2, SOCK_RCU_FREE))) {
-				WARN_ONCE(1, "Found non-RCU, unreferenced socket!");
-				return NULL;
-			}
-			sk = sk2;
-		}
-	}
+	if (sk)
+		sk = bpf_sk_lookup_full_sk(sk);
 
 	return sk;
 }
@@ -7134,22 +7152,8 @@ bpf_sk_lookup(struct sk_buff *skb, struct bpf_sock_tuple *tuple, u32 len,
 	struct sock *sk = bpf_skc_lookup(skb, tuple, len, proto, netns_id,
 					 flags);
 
-	if (sk) {
-		struct sock *sk2 = sk_to_full_sk(sk);
-
-		/* sk_to_full_sk() may return (sk)->rsk_listener, so make sure the original sk
-		 * sock refcnt is decremented to prevent a request_sock leak.
-		 */
-		if (sk2 != sk) {
-			sock_gen_put(sk);
-			/* Ensure there is no need to bump sk2 refcnt */
-			if (unlikely(sk2 && !sock_flag(sk2, SOCK_RCU_FREE))) {
-				WARN_ONCE(1, "Found non-RCU, unreferenced socket!");
-				return NULL;
-			}
-			sk = sk2;
-		}
-	}
+	if (sk)
+		sk = bpf_sk_lookup_full_sk(sk);
 
 	return sk;
 }
@@ -7285,7 +7289,7 @@ static const struct bpf_func_proto bpf_tc_sk_lookup_udp_proto = {
 
 BPF_CALL_1(bpf_sk_release, struct sock *, sk)
 {
-	if (sk && sk_is_refcounted(sk))
+	if (sk)
 		sock_gen_put(sk);
 	return 0;
 }
@@ -11577,11 +11581,13 @@ BPF_CALL_4(sk_select_reuseport, struct sk_reuseport_kern *, reuse_kern,
 	bool is_sockarray = map->map_type == BPF_MAP_TYPE_REUSEPORT_SOCKARRAY;
 	struct sock_reuseport *reuse;
 	struct sock *selected_sk;
-	int err;
+	int err = 0;
 
 	selected_sk = map->ops->map_lookup_elem(map, key);
 	if (!selected_sk)
 		return -ENOENT;
+	if (!is_sockarray)
+		sock_put(selected_sk);
 
 	reuse = rcu_dereference(selected_sk->sk_reuseport_cb);
 	if (!reuse) {
@@ -11611,13 +11617,7 @@ BPF_CALL_4(sk_select_reuseport, struct sk_reuseport_kern *, reuse_kern,
 	}
 
 	reuse_kern->selected_sk = selected_sk;
-
-	return 0;
 error:
-	/* Lookup in sock_map can return TCP ESTABLISHED sockets. */
-	if (sk_is_refcounted(selected_sk))
-		sock_put(selected_sk);
-
 	return err;
 }
 
