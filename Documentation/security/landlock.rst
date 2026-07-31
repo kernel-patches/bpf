@@ -129,6 +129,31 @@ The reasoning is:
   restrictions, because access within the same scope is already
   allowed based on ``LANDLOCK_ACCESS_FS_RESOLVE_UNIX``.
 
+BPF kfuncs
+==========
+
+BPF programs can apply a userspace-created Landlock ruleset to an
+execution.  A syscall program (``BPF_PROG_TYPE_SYSCALL``), running in
+the context of the process that set the ruleset up, acquires the
+ruleset from its file descriptor and typically hands it over through
+a map kptr field; a sleepable LSM BPF program attached to the
+``bprm_creds_for_exec`` or ``bprm_creds_from_file`` hooks then
+enforces it on an execution.
+
+This can be used to inspect the runtime context of a pending execution,
+and enforce a Landlock policy through BPF.
+
+The restriction is staged in the Landlock blob of the
+credentials prepared for the execution and committed past the exec
+point of no return, so a failed execution leaves the calling task
+untouched.  The ``landlock_restrict_self(2)`` flags apply, with the
+exception of ``LANDLOCK_RESTRICT_SELF_TSYNC``.
+
+.. kernel-doc:: kernel/bpf/bpf_lsm.c
+    :identifiers: bpf_landlock_get_ruleset_from_fd
+                  bpf_landlock_put_ruleset
+                  bpf_landlock_restrict_binprm
+
 Tests
 =====
 
