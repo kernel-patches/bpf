@@ -168,6 +168,23 @@ struct lsm_prop {
 	struct lsm_prop_bpf bpf;
 };
 
+struct bpf_landlock_ruleset;
+
+struct lsm_policy_landlock {
+	struct bpf_landlock_ruleset *ruleset;
+};
+
+/*
+ * A reference to an LSM policy object, tagged by the LSM_ID_* value
+ * passed alongside: only the matching LSM's member is valid.  The
+ * members are not guarded by the LSMs' CONFIG options: the callers
+ * are built independently of any individual LSM and a call for a
+ * missing LSM must fail at runtime, not at build time.
+ */
+union lsm_policy_kptr {
+	struct lsm_policy_landlock landlock;
+};
+
 extern const char *const lockdown_reasons[LOCKDOWN_CONFIDENTIALITY_MAX+1];
 
 /* These functions are in security/commoncap.c */
@@ -2312,6 +2329,8 @@ extern int security_bpf_token_create(struct bpf_token *token, union bpf_attr *at
 extern void security_bpf_token_free(struct bpf_token *token);
 extern int security_bpf_token_cmd(const struct bpf_token *token, enum bpf_cmd cmd);
 extern int security_bpf_token_capable(const struct bpf_token *token, int cap);
+extern int security_policy_kptr_from_fd(u64 lsmid, int fd,
+					union lsm_policy_kptr *policy);
 #else
 static inline int security_bpf(int cmd, union bpf_attr *attr,
 			       unsigned int size, bool kernel)
@@ -2364,6 +2383,12 @@ static inline int security_bpf_token_cmd(const struct bpf_token *token, enum bpf
 static inline int security_bpf_token_capable(const struct bpf_token *token, int cap)
 {
 	return 0;
+}
+
+static inline int security_policy_kptr_from_fd(u64 lsmid, int fd,
+					       union lsm_policy_kptr *policy)
+{
+	return -EOPNOTSUPP;
 }
 #endif /* CONFIG_SECURITY */
 #endif /* CONFIG_BPF_SYSCALL */
