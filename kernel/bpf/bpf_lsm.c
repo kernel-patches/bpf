@@ -486,8 +486,8 @@ int bpf_lsm_get_retval_range(const struct bpf_prog *prog,
 struct bpf_landlock_ruleset {};
 
 /*
- * The sleepable LSM hooks bpf_landlock_put_ruleset() may be called
- * from.
+ * The sleepable LSM hooks bpf_landlock_restrict_binprm() and
+ * bpf_landlock_put_ruleset() may be called from.
  */
 BTF_SET_START(bpf_landlock_kfunc_hooks)
 BTF_ID(func, bpf_lsm_bprm_creds_for_exec)
@@ -535,6 +535,42 @@ __bpf_kfunc void bpf_landlock_put_ruleset(struct bpf_landlock_ruleset *ruleset)
 	security_policy_kptr_put(LSM_ID_LANDLOCK, &policy);
 }
 
+/**
+ * bpf_landlock_restrict_binprm - Enforce a Landlock ruleset on exec
+ *                                credentials
+ * @bprm: execution context providing the prepared credentials to
+ *        restrict
+ * @ruleset: Landlock ruleset to enforce
+ * @flags: landlock_restrict_self(2) flags, except
+ *         %LANDLOCK_RESTRICT_SELF_TSYNC
+ *
+ * Restrict the credentials prepared in @bprm with @ruleset, so that
+ * the executed task starts confined by it, following the same domain
+ * composition rules as landlock_restrict_self(2).  The restriction is
+ * staged and only committed at the execution's point of no return: an
+ * execution that fails before that point is unaffected, and a later
+ * call on the same execution replaces a previously staged
+ * restriction.  @ruleset is only borrowed: the caller keeps its
+ * reference.
+ *
+ * The landlock_restrict_self(2) flags apply with their usual
+ * semantics.  Only %LANDLOCK_RESTRICT_SELF_TSYNC is rejected, as it
+ * targets the calling threads rather than the execution.
+ *
+ * Return: 0 on success, -EOPNOTSUPP if the Landlock LSM is not
+ * enabled, -EINVAL if @flags contains an unsupported flag, other
+ * negative values on failure as for landlock_restrict_self(2).
+ */
+__bpf_kfunc int bpf_landlock_restrict_binprm(struct linux_binprm *bprm,
+					     struct bpf_landlock_ruleset *ruleset,
+					     u32 flags)
+{
+	union lsm_policy_kptr policy = { .landlock.ruleset = ruleset };
+
+	return security_bprm_enforce_policy_kptr(LSM_ID_LANDLOCK, bprm,
+						 &policy, flags);
+}
+
 /* Destructor for referenced bpf_landlock_ruleset kptrs. */
 __bpf_kfunc void bpf_landlock_put_ruleset_dtor(void *ruleset)
 {
@@ -550,6 +586,7 @@ BTF_KFUNCS_START(bpf_landlock_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_landlock_get_ruleset_from_fd,
 	     KF_ACQUIRE | KF_RET_NULL | KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_landlock_put_ruleset, KF_RELEASE | KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_landlock_restrict_binprm, KF_SLEEPABLE)
 BTF_KFUNCS_END(bpf_landlock_kfunc_ids)
 
 BTF_ID_LIST(bpf_landlock_dtor_ids)
@@ -558,6 +595,8 @@ BTF_ID(func, bpf_landlock_put_ruleset_dtor)
 
 BTF_ID_LIST_SINGLE(bpf_landlock_get_ruleset_ids, func,
 		   bpf_landlock_get_ruleset_from_fd)
+BTF_ID_LIST_SINGLE(bpf_landlock_restrict_binprm_ids, func,
+		   bpf_landlock_restrict_binprm)
 
 /*
  * BPF_PROG_TYPE_LSM and BPF_PROG_TYPE_SYSCALL share their kfunc
@@ -566,7 +605,10 @@ BTF_ID_LIST_SINGLE(bpf_landlock_get_ruleset_ids, func,
  * in the fd table of the task that set the ruleset up, so
  * bpf_landlock_get_ruleset_from_fd() is exclusive to syscall
  * programs, which run in that task's context; an LSM program runs in
- * the context of the task it mediates.
+ * the context of the task it mediates.  Enforcement is exclusive to
+ * the sleepable bprm LSM hooks the policy operation is specified
+ * for, and the release kfunc is allowed wherever a reference can be
+ * held.
  */
 static int bpf_landlock_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
@@ -575,6 +617,8 @@ static int bpf_landlock_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
 
 	switch (prog->type) {
 	case BPF_PROG_TYPE_SYSCALL:
+		if (kfunc_id == bpf_landlock_restrict_binprm_ids[0])
+			return -EACCES;
 		return 0;
 	case BPF_PROG_TYPE_LSM:
 		if (kfunc_id == bpf_landlock_get_ruleset_ids[0])
