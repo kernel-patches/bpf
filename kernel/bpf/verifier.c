@@ -3028,11 +3028,10 @@ static void mark_stack_slots_scratched(struct bpf_verifier_env *env,
 }
 
 /* This function is supposed to be used by the following 32-bit optimization
- * code only. It returns TRUE if the source or destination register operates
- * on 64-bit, otherwise return FALSE.
+ * code only. It returns TRUE if the destination register operates on 64-bit,
+ * otherwise return FALSE.
  */
-bool bpf_is_reg64(struct bpf_insn *insn,
-	      u32 regno, struct bpf_reg_state *reg, enum bpf_reg_arg_type t)
+bool bpf_is_reg64(struct bpf_insn *insn)
 {
 	u8 code, class, op;
 
@@ -3053,11 +3052,6 @@ bool bpf_is_reg64(struct bpf_insn *insn,
 			 */
 			if (insn->src_reg == BPF_PSEUDO_CALL)
 				return false;
-			/* Helper call will reach here because of arg type
-			 * check, conservatively return TRUE.
-			 */
-			if (t == SRC_OP)
-				return true;
 
 			return false;
 		}
@@ -3073,22 +3067,11 @@ bool bpf_is_reg64(struct bpf_insn *insn,
 	if (class == BPF_ALU || class == BPF_JMP32)
 		return false;
 
-	if (class == BPF_LDX) {
-		if (t != SRC_OP)
-			return BPF_SIZE(code) == BPF_DW || BPF_MODE(code) == BPF_MEMSX;
-		/* LDX source must be ptr. */
-		return true;
-	}
+	if (class == BPF_LDX)
+		return BPF_SIZE(code) == BPF_DW || BPF_MODE(code) == BPF_MEMSX;
 
-	if (class == BPF_STX) {
-		/* BPF_STX (including atomic variants) has one or more source
-		 * operands, one of which is a ptr. Check whether the caller is
-		 * asking about it.
-		 */
-		if (t == SRC_OP && reg->type != SCALAR_VALUE)
-			return true;
+	if (class == BPF_STX)
 		return BPF_SIZE(code) == BPF_DW;
-	}
 
 	if (class == BPF_LD) {
 		u8 mode = BPF_MODE(code);
@@ -3098,15 +3081,7 @@ bool bpf_is_reg64(struct bpf_insn *insn,
 			return true;
 
 		/* Both LD_IND and LD_ABS return 32-bit data. */
-		if (t != SRC_OP)
-			return  false;
-
-		/* Implicit ctx ptr. */
-		if (regno == BPF_REG_6)
-			return true;
-
-		/* Explicit source could be any width. */
-		return true;
+		return false;
 	}
 
 	if (class == BPF_ST)
