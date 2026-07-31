@@ -1050,6 +1050,8 @@ static inline struct bpf_subprog_info *subprog_info(struct bpf_verifier_env *env
 }
 
 struct bpf_call_summary {
+	const struct btf *btf;
+	const struct btf_type *func_proto;
 	u8 num_params;
 	bool is_void;
 	bool fastcall;
