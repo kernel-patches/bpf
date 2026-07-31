@@ -162,11 +162,6 @@ struct bpf_reg_state {
 	 * pointing to bpf_func_state.
 	 */
 	u32 frameno;
-	/* Tracks subreg definition. The stored value is the insn_idx of the
-	 * writing insn. This is safe because subreg_def is used before any insn
-	 * patching which only happens after main verification finished.
-	 */
-	s32 subreg_def;
 	/* if (!precise && SCALAR_VALUE) min/max/tnum don't affect safety */
 	bool precise;
 };
@@ -1657,5 +1652,6 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env);
 int bpf_jit_subprogs(struct bpf_verifier_env *env);
 int bpf_fixup_call_args(struct bpf_verifier_env *env);
 int bpf_do_misc_fixups(struct bpf_verifier_env *env);
+int bpf_insn_def32(struct bpf_insn *insn);
 
 #endif /* _LINUX_BPF_VERIFIER_H */
