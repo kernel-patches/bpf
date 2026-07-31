@@ -2331,6 +2331,7 @@ extern int security_bpf_token_cmd(const struct bpf_token *token, enum bpf_cmd cm
 extern int security_bpf_token_capable(const struct bpf_token *token, int cap);
 extern int security_policy_kptr_from_fd(u64 lsmid, int fd,
 					union lsm_policy_kptr *policy);
+extern void security_policy_kptr_put(u64 lsmid, union lsm_policy_kptr *policy);
 #else
 static inline int security_bpf(int cmd, union bpf_attr *attr,
 			       unsigned int size, bool kernel)
@@ -2389,6 +2390,11 @@ static inline int security_policy_kptr_from_fd(u64 lsmid, int fd,
 					       union lsm_policy_kptr *policy)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline void security_policy_kptr_put(u64 lsmid,
+					    union lsm_policy_kptr *policy)
+{
 }
 #endif /* CONFIG_SECURITY */
 #endif /* CONFIG_BPF_SYSCALL */
