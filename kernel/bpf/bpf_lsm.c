@@ -479,7 +479,9 @@ int bpf_lsm_get_retval_range(const struct bpf_prog *prog,
 /* LSM policy kfuncs */
 
 /*
- * Opaque handle for a Landlock ruleset.  Only Landlock resolves it.
+ * Opaque handle for a Landlock ruleset.  Only
+ * bpf_landlock_get_ruleset_from_fd() produces one, and only Landlock
+ * resolves it.
  */
 struct bpf_landlock_ruleset {};
 
@@ -495,10 +497,36 @@ BTF_SET_END(bpf_landlock_kfunc_hooks)
 __bpf_kfunc_start_defs();
 
 /**
+ * bpf_landlock_get_ruleset_from_fd - Get a Landlock ruleset from a fd
+ * @fd: file descriptor of a Landlock ruleset, resolved in the file
+ *      descriptor table of the task running the program
+ *
+ * Acquire a reference on the Landlock ruleset referred to by @fd, as
+ * created by landlock_create_ruleset(2) and populated with
+ * landlock_add_rule(2).  Only syscall programs may call this kfunc:
+ * they run in the context of the task invoking them, where the
+ * ruleset fd is meaningful.  The acquired ruleset can be handed to an
+ * enforcement program through a map kptr field.  The reference must
+ * be released with bpf_landlock_put_ruleset().
+ *
+ * Return: A referenced ruleset handle, or NULL if @fd is not a
+ * readable Landlock ruleset fd or the Landlock LSM is not enabled.
+ */
+__bpf_kfunc struct bpf_landlock_ruleset *
+bpf_landlock_get_ruleset_from_fd(int fd)
+{
+	union lsm_policy_kptr policy;
+
+	if (security_policy_kptr_from_fd(LSM_ID_LANDLOCK, fd, &policy))
+		return NULL;
+	return policy.landlock.ruleset;
+}
+
+/**
  * bpf_landlock_put_ruleset - Put a Landlock ruleset
  * @ruleset: Landlock ruleset to put
  *
- * Release an acquired reference on a Landlock ruleset.
+ * Release a reference acquired with bpf_landlock_get_ruleset_from_fd().
  */
 __bpf_kfunc void bpf_landlock_put_ruleset(struct bpf_landlock_ruleset *ruleset)
 {
@@ -519,6 +547,8 @@ CFI_NOSEAL(bpf_landlock_put_ruleset_dtor);
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(bpf_landlock_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_landlock_get_ruleset_from_fd,
+	     KF_ACQUIRE | KF_RET_NULL | KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_landlock_put_ruleset, KF_RELEASE | KF_SLEEPABLE)
 BTF_KFUNCS_END(bpf_landlock_kfunc_ids)
 
@@ -526,10 +556,17 @@ BTF_ID_LIST(bpf_landlock_dtor_ids)
 BTF_ID(struct, bpf_landlock_ruleset)
 BTF_ID(func, bpf_landlock_put_ruleset_dtor)
 
+BTF_ID_LIST_SINGLE(bpf_landlock_get_ruleset_ids, func,
+		   bpf_landlock_get_ruleset_from_fd)
+
 /*
  * BPF_PROG_TYPE_LSM and BPF_PROG_TYPE_SYSCALL share their kfunc
  * lookup buckets with other program types, so restricting the LSM
- * policy kfuncs requires a filter.
+ * policy kfuncs requires a filter.  A ruleset fd is only meaningful
+ * in the fd table of the task that set the ruleset up, so
+ * bpf_landlock_get_ruleset_from_fd() is exclusive to syscall
+ * programs, which run in that task's context; an LSM program runs in
+ * the context of the task it mediates.
  */
 static int bpf_landlock_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
@@ -540,6 +577,9 @@ static int bpf_landlock_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
 	case BPF_PROG_TYPE_SYSCALL:
 		return 0;
 	case BPF_PROG_TYPE_LSM:
+		if (kfunc_id == bpf_landlock_get_ruleset_ids[0])
+			return -EACCES;
+
 		/*
 		 * BPF_LSM_CGROUP programs run under classic RCU and
 		 * cannot sleep.
