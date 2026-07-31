@@ -698,7 +698,8 @@ static int tcpci_init(struct tcpc_dev *tcpc)
 
 	reg = TCPC_ALERT_TX_SUCCESS | TCPC_ALERT_TX_FAILED |
 		TCPC_ALERT_TX_DISCARDED | TCPC_ALERT_RX_STATUS |
-		TCPC_ALERT_RX_HARD_RST | TCPC_ALERT_CC_STATUS;
+		TCPC_ALERT_RX_HARD_RST | TCPC_ALERT_CC_STATUS |
+		TCPC_ALERT_FAULT;
 	if (tcpci->controls_vbus)
 		reg |= TCPC_ALERT_POWER_STATUS;
 	/* Enable VSAFE0V status interrupt when detecting VSAFE0V is supported */
@@ -726,6 +727,19 @@ irqreturn_t tcpci_irq(struct tcpci *tcpci)
 	irq_ret = status & tcpci->alert_mask;
 
 process_status:
+	/*
+	 * Handle nested fault before clearing the alert status to not
+	 * re-trigger a fault alert immediately again.
+	 */
+	if (status & TCPC_ALERT_FAULT) {
+		unsigned int fault;
+
+		/* TODO: Add a proper over-current and over-voltage handling */
+		ret = regmap_read(tcpci->regmap, TCPC_FAULT_STATUS, &fault);
+		if (!ret)
+			regmap_write(tcpci->regmap, TCPC_FAULT_STATUS, fault);
+	}
+
 	/*
 	 * Clear alert status for everything except RX_STATUS, which shouldn't
 	 * be cleared until we have successfully retrieved message.
