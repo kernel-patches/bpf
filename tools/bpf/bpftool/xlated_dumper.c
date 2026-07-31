@@ -129,16 +129,10 @@ print_insn_for_graph(void *private_data, const char *fmt, ...)
 static void __printf(2, 3)
 print_insn_json(void *private_data, const char *fmt, ...)
 {
-	unsigned int l = strlen(fmt);
-	char chomped_fmt[l];
 	va_list args;
 
 	va_start(args, fmt);
-	if (l > 0) {
-		strncpy(chomped_fmt, fmt, l - 1);
-		chomped_fmt[l - 1] = '\0';
-	}
-	jsonw_vprintf_enquote(json_wtr, chomped_fmt, args);
+	jsonw_vprintf_enquote(json_wtr, fmt, args);
 	va_end(args);
 }
 
@@ -351,6 +345,7 @@ void dump_xlated_plain(struct dump_data *dd, void *buf, unsigned int len,
 
 		printf("%4u: ", i);
 		print_bpf_insn(&cbs, insn + i, true);
+		printf("\n");
 
 		if (opcodes) {
 			printf("       ");
@@ -417,6 +412,7 @@ void dump_xlated_for_graph(struct dump_data *dd, void *buf_start, void *buf_end,
 
 		printf("%u: ", insn_off);
 		print_bpf_insn(&cbs, cur, true);
+		printf("\\l\\\n");
 
 		if (opcodes) {
 			printf("\\ \\ \\ \\ ");
