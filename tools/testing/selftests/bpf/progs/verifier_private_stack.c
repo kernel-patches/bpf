@@ -86,7 +86,8 @@ __naked static void cumulative_stack_depth_subprog(void)
 SEC("kprobe")
 __description("Private stack, subtree > MAX_BPF_STACK")
 __success
-__log_level(4) __msg("stack depth 512+32 max 512")
+__log_level(4)
+__msg("stack depth private_stack_nested_1=512 cumulative_stack_depth_subprog=32 max=512")
 __arch_x86_64
 /* private stack fp for the main prog */
 __jited("	movabsq	$0x{{.*}}, %r9")
@@ -331,7 +332,8 @@ SEC("fentry/bpf_fentry_test9")
 __description("Private stack, async callback, potential nesting")
 __success __retval(0)
 __load_if_JITed()
-__log_level(4) __msg("stack depth 8+0+256+0 max 272")
+__log_level(4)
+__msg("stack depth private_stack_async_callback_2=8 timer_cb1=0 subprog1=256 subprog2=0 max=272")
 __arch_x86_64
 __jited("	subq	$0x100, %rsp")
 __arch_arm64
@@ -355,7 +357,8 @@ int private_stack_async_callback_2(void)
 SEC("fentry/bpf_fentry_test9")
 __description("private stack, max stack depth is private stack")
 __success
-__log_level(4) __msg("stack depth 8+256+0 max 256")
+__log_level(4)
+__msg("stack depth private_stack_max_depth=8 subprog1=256 subprog2=0 max=256")
 int private_stack_max_depth(void)
 {
 	int x = 0;
