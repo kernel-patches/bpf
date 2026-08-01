@@ -997,9 +997,10 @@ static char verif_log_buf[64 * 1024];
 
 static int parse_verif_log(char * const buf, size_t buf_sz, struct verif_stats *s)
 {
-	const char *cur;
-	int pos, lines, sub_stack, cnt = 0;
-	char *state = NULL, *token, stack[512];
+	long stack_total, sub_stack;
+	const char *cur, *p;
+	int pos, lines;
+	char *end;
 
 	buf[buf_sz - 1] = '\0';
 
@@ -1025,13 +1026,19 @@ static int parse_verif_log(char * const buf, size_t buf_sz, struct verif_stats *
 				&s->stats[MARK_READ_MAX_LEN]))
 			continue;
 
-		if (2 == sscanf(cur, "stack depth %511s max %ld", stack, &s->stats[MAX_STACK]))
+		if (strncmp(cur, "stack depth ", sizeof("stack depth ") - 1))
 			continue;
-	}
-	while ((token = strtok_r(cnt++ ? NULL : stack, "+", &state))) {
-		if (sscanf(token, "%d", &sub_stack) == 0)
-			break;
-		s->stats[STACK] += sub_stack;
+
+		stack_total = 0;
+		for (p = cur + sizeof("stack depth ") - 1; (p = strchr(p, '=')); p = end) {
+			sub_stack = strtol(p + 1, &end, 10);
+			if (*end == '\n') {
+				s->stats[STACK] = stack_total;
+				s->stats[MAX_STACK] = sub_stack;
+				break;
+			}
+			stack_total += sub_stack;
+		}
 	}
 	return 0;
 }
