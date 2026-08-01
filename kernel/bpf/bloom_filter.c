@@ -33,6 +33,22 @@ static u32 hash(struct bpf_bloom_filter *bloom, void *value,
 	return h & bloom->bitset_mask;
 }
 
+/*
+ * Some 32-bit architectures take a signed long bit number in bitops. Split
+ * the full u32 hash into a word pointer and an in-word bit number so upper
+ * half hashes cannot become negative offsets.
+ */
+static bool bloom_test_bit(struct bpf_bloom_filter *bloom, u32 bit)
+{
+	return test_bit(bit % BITS_PER_LONG,
+			bloom->bitset + BIT_WORD(bit));
+}
+
+static void bloom_set_bit(struct bpf_bloom_filter *bloom, u32 bit)
+{
+	set_bit(bit % BITS_PER_LONG, bloom->bitset + BIT_WORD(bit));
+}
+
 static long bloom_map_peek_elem(struct bpf_map *map, void *value)
 {
 	struct bpf_bloom_filter *bloom =
@@ -41,7 +57,7 @@ static long bloom_map_peek_elem(struct bpf_map *map, void *value)
 
 	for (i = 0; i < bloom->nr_hash_funcs; i++) {
 		h = hash(bloom, value, map->value_size, i);
-		if (!test_bit(h, bloom->bitset))
+		if (!bloom_test_bit(bloom, h))
 			return -ENOENT;
 	}
 
@@ -59,7 +75,7 @@ static long bloom_map_push_elem(struct bpf_map *map, void *value, u64 flags)
 
 	for (i = 0; i < bloom->nr_hash_funcs; i++) {
 		h = hash(bloom, value, map->value_size, i);
-		set_bit(h, bloom->bitset);
+		bloom_set_bit(bloom, h);
 	}
 
 	return 0;
@@ -94,9 +110,10 @@ static int bloom_map_alloc_check(union bpf_attr *attr)
 
 static struct bpf_map *bloom_map_alloc(union bpf_attr *attr)
 {
-	u32 bitset_bytes, bitset_mask, nr_hash_funcs, nr_bits;
+	u32 bitset_mask, nr_hash_funcs, nr_bits;
 	int numa_node = bpf_map_attr_numa_node(attr);
 	struct bpf_bloom_filter *bloom;
+	u64 bitset_bytes;
 
 	if (attr->key_size != 0 || attr->value_size == 0 ||
 	    attr->max_entries == 0 ||
@@ -127,21 +144,16 @@ static struct bpf_map *bloom_map_alloc(union bpf_attr *attr)
 	if (check_mul_overflow(attr->max_entries, nr_hash_funcs, &nr_bits) ||
 	    check_mul_overflow(nr_bits / 5, (u32)7, &nr_bits) ||
 	    nr_bits > (1UL << 31)) {
-		/* The bit array size is 2^32 bits but to avoid overflowing the
-		 * u32, we use U32_MAX, which will round up to the equivalent
-		 * number of bytes
-		 */
-		bitset_bytes = BITS_TO_BYTES(U32_MAX);
 		bitset_mask = U32_MAX;
 	} else {
 		if (nr_bits <= BITS_PER_LONG)
 			nr_bits = BITS_PER_LONG;
 		else
 			nr_bits = roundup_pow_of_two(nr_bits);
-		bitset_bytes = BITS_TO_BYTES(nr_bits);
 		bitset_mask = nr_bits - 1;
 	}
 
+	bitset_bytes = BITS_TO_BYTES((u64)bitset_mask + 1);
 	bitset_bytes = roundup(bitset_bytes, sizeof(unsigned long));
 	bloom = bpf_map_area_alloc(sizeof(*bloom) + bitset_bytes, numa_node);
 
