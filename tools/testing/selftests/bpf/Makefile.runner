@@ -257,7 +257,7 @@ $(RDIR)/resolve_btfids.test.o: private TEST_NEEDS_BTFIDS = 1
 # compilation when headers change.
 $(TEST_OBJS): $(RDIR)/%.test.o: $(TESTS_DIR)/%.c | $(RDIR)/%.test.d
 	$(call msg,TEST-OBJ,$(BINARY),$@)
-	$(Q)(cd $(@D) && $(CC) -I. $(CFLAGS) -MMD -MT $@ -c $(CURDIR)/$< -o $(@F)) \
+	$(Q)(cd $(@D) && $(CC) -I. $(CFLAGS) -MMD -MP -MT $@ -c $(CURDIR)/$< -o $(@F)) \
 		$(if $(PERMISSIVE_TESTS),$(call skip_on_fail,TEST))
 	$(if $(TEST_NEEDS_BTFIDS),					\
 		$(Q)if [ -f $@ ]; then					\
@@ -266,20 +266,33 @@ $(TEST_OBJS): $(RDIR)/%.test.o: $(TESTS_DIR)/%.c | $(RDIR)/%.test.d
 		$(RESOLVE_BTFIDS) --patch_btfids $@.BTF_ids $@;		\
 		fi)
 
-$(TEST_DEPS): $(RDIR)/%.test.d: $(TESTS_DIR)/%.c $(EXTRA_HDRS) $(BPFOBJ) \
-	      | $(RDIR) $(ALL_SKELS)
+# Pure ordering: the fragments appear as a side effect of the first
+# compile; until then the test object must wait for every skeleton.
+# (Normal prerequisites here would be inert anyway - the rule has no
+# recipe and its only consumers order-only.)
+$(TEST_DEPS): | $(RDIR) $(ALL_SKELS)
 
 include $(wildcard $(TEST_DEPS))
 
 $(RDIR)/jit_disasm_helpers.o: CFLAGS += $(LLVM_CFLAGS)
 
-$(EXTRA_OBJS): $(RDIR)/%.o: %.c $(EXTRA_HDRS) $(TESTS_HDR) $(BPFOBJ) | $(RDIR)
+# The compiler records each helper's exact header usage (-MMD),
+# replacing the blanket every-helper-depends-on-every-extra-header
+# prerequisites; order-only entries just guarantee the generated
+# headers exist for a first build (the top-level make refreshes them
+# before the runners start, so the recorded paths handle rebuilds by
+# mtime).
+$(EXTRA_OBJS): $(RDIR)/%.o: %.c $(BPFOBJ) | $(EXTRA_HDRS) $(TESTS_HDR) $(RDIR)
 	$(call msg,EXT-OBJ,$(BINARY),$@)
-	$(Q)$(CC) $(CFLAGS) -c $< -o $@
+	$(Q)$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+-include $(EXTRA_OBJS:.o=.d)
 
 $(LIB_OBJS): $(RDIR)/%.o: $(TOOLSDIR)/lib/%.c | $(RDIR)
 	$(call msg,LIB-OBJ,$(BINARY),$@)
-	$(Q)$(CC) $(CFLAGS) -c $< -o $@
+	$(Q)$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+-include $(LIB_OBJS:.o=.d)
 
 # Non-flavored in-srctree builds receive special treatment, in particular
 # we do not need to copy extra resources (see e.g. test_btf_dump_case()).
