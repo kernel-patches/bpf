@@ -262,13 +262,13 @@ do {	*prog++ = BR_OPC | WDISP22(OFF);		\
 	*prog++ = (SUBCC | RS1(R1) | RS2(R2) | RD(G0))
 
 #define emit_cmpi(R1, IMM) \
-	*prog++ = (SUBCC | IMMED | RS1(R1) | S13(IMM) | RD(G0));
+	*prog++ = (SUBCC | IMMED | RS1(R1) | S13(IMM) | RD(G0))
 
 #define emit_btst(R1, R2) \
 	*prog++ = (ANDCC | RS1(R1) | RS2(R2) | RD(G0))
 
 #define emit_btsti(R1, IMM) \
-	*prog++ = (ANDCC | IMMED | RS1(R1) | S13(IMM) | RD(G0));
+	*prog++ = (ANDCC | IMMED | RS1(R1) | S13(IMM) | RD(G0))
 
 #define emit_sub(R1, R2, R3) \
 	*prog++ = (SUB | RS1(R1) | RS2(R2) | RD(R3))
