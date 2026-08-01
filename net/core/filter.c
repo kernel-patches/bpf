@@ -7683,6 +7683,9 @@ BPF_CALL_5(bpf_tcp_check_syncookie, struct sock *, sk, void *, iph, u32, iph_len
 	if (unlikely(!sk || th_len < sizeof(*th)))
 		return -EINVAL;
 
+	if (!sk_fullsock(sk))
+		return -EINVAL;
+
 	/* sk_listener() allows TCP_NEW_SYN_RECV, which makes no sense here. */
 	if (sk->sk_protocol != IPPROTO_TCP || sk->sk_state != TCP_LISTEN)
 		return -EINVAL;
@@ -7755,6 +7758,9 @@ BPF_CALL_5(bpf_tcp_gen_syncookie, struct sock *, sk, void *, iph, u32, iph_len,
 	u16 mss;
 
 	if (unlikely(!sk || th_len < sizeof(*th) || th_len != th->doff * 4))
+		return -EINVAL;
+
+	if (!sk_fullsock(sk))
 		return -EINVAL;
 
 	if (sk->sk_protocol != IPPROTO_TCP || sk->sk_state != TCP_LISTEN)
