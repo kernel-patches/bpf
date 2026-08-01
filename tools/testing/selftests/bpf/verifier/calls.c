@@ -1091,7 +1091,9 @@
 	/* stack_main=32, stack_A=256, stack_B=64
 	 * and max(main+A, main+A+B) < 512
 	 */
-	.result = ACCEPT,
+	.result = VERBOSE_ACCEPT,
+	.errstr = "stack depth subprog[0]=32 subprog[1]=256 subprog[2]=64 max=352",
+	.log_level = DEFAULT_LIBBPF_LOG_LEVEL,
 },
 {
 	"calls: stack depth check using three frames. test2",
