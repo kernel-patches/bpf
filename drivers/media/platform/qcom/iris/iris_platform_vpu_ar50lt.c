@@ -103,6 +103,7 @@ const struct iris_platform_data qcm2290_data = {
 	.inst_iris_fmts = iris_fmts_ar50lt_dec,
 	.inst_iris_fmts_size = ARRAY_SIZE(iris_fmts_ar50lt_dec),
 	.inst_caps = &platform_inst_cap_ar50lt,
+	.slice_caps = &iris_ar50lt_slice_caps,
 	.tz_cp_config_data = tz_cp_config_ar50lt,
 	.tz_cp_config_data_size = ARRAY_SIZE(tz_cp_config_ar50lt),
 	.num_vpp_pipe = 1,
