@@ -51,6 +51,12 @@ int prog_skb_parser_partial(struct __sk_buff *skb)
 }
 
 SEC("sk_skb/stream_parser")
+int prog_skb_parser_one(struct __sk_buff *skb)
+{
+	return 1;
+}
+
+SEC("sk_skb/stream_parser")
 int prog_skb_parser_resize(struct __sk_buff *skb)
 {
 	bpf_skb_change_tail(skb, skb->len, 0);
