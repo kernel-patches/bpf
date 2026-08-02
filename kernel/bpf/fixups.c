@@ -45,6 +45,49 @@ static int insn_def_regno(const struct bpf_insn *insn)
 }
 
 /*
+ * For use only in combination with insn_def_regno() >= 0.
+ * Returns TRUE if the destination register operates on 64-bit,
+ * otherwise return FALSE.
+ */
+static bool bpf_is_reg64(struct bpf_insn *insn)
+{
+	u8 class = BPF_CLASS(insn->code);
+	u8 mode = BPF_MODE(insn->code);
+	u8 size = BPF_SIZE(insn->code);
+	u8 op = BPF_OP(insn->code);
+	bool mode_mem;
+
+	/* subregister endiness swap */
+	if ((class == BPF_ALU || class == BPF_ALU64) && op == BPF_END && insn->imm != 64)
+		return false;
+
+	/* w0 += 1 */
+	if (class == BPF_ALU && op != BPF_END)
+		return false;
+
+	/* cast from as(1) to as(0), PTR_TO_ARENA is 32-bit */
+	if (insn->code == (BPF_ALU64 | BPF_MOV | BPF_X) &&
+	    insn->off == BPF_ADDR_SPACE_CAST && insn->imm == 1)
+		return false;
+
+	/* non 64-bit, non signed extended loads */
+	mode_mem = mode == BPF_MEM || mode == BPF_PROBE_MEM || mode == BPF_PROBE_MEM32;
+	if (class == BPF_LDX && mode_mem && size != BPF_DW)
+		return false;
+
+	/* atomics, see insn_def_regno() */
+	if (class == BPF_STX && size != BPF_DW)
+		return false;
+
+	/* both LD_IND and LD_ABS return 32-bit data. */
+	if (class == BPF_LD && (mode == BPF_IND || mode == BPF_ABS))
+		return false;
+
+	/* Conservatively return true at default. */
+	return true;
+}
+
+/*
  * Return the 32-bit subregister defined by INSN, or -1 if INSN does not
  * explicitly define a 32-bit value.
  */
@@ -52,7 +95,7 @@ int bpf_insn_def32(struct bpf_insn *insn)
 {
 	int dst_reg = insn_def_regno(insn);
 
-	if (dst_reg < 0 || bpf_is_reg64(insn, dst_reg, NULL, DST_OP))
+	if (dst_reg < 0 || bpf_is_reg64(insn))
 		return -1;
 
 	return dst_reg;
@@ -619,11 +662,7 @@ int bpf_opt_subreg_zext_lo32_rnd_hi32(struct bpf_verifier_env *env,
 			if (load_reg == -1)
 				continue;
 
-			/* NOTE: arg "reg" (the fourth one) is only used for
-			 *       BPF_STX + SRC_OP, so it is safe to pass NULL
-			 *       here.
-			 */
-			if (bpf_is_reg64(&insn, load_reg, NULL, DST_OP)) {
+			if (bpf_is_reg64(&insn)) {
 				if (class == BPF_LD &&
 				    BPF_MODE(code) == BPF_IMM)
 					i++;
