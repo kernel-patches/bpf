@@ -149,7 +149,7 @@ int reject_bad_type_match(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("R1 type=untrusted_ptr_or_null_ expected=percpu_ptr_")
+__failure __msg("Possibly NULL pointer passed to trusted R1")
 int marked_as_untrusted_or_null(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -217,7 +217,7 @@ int reject_kptr_xchg_on_unref(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("R1 type=rcu_ptr_or_null_ expected=percpu_ptr_")
+__failure __msg("Possibly NULL pointer passed to trusted R1")
 int mark_ref_as_untrusted_or_null(struct __sk_buff *ctx)
 {
 	struct map_value *v;
@@ -364,7 +364,7 @@ int kptr_xchg_ref_state(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
-__failure __msg("Possibly NULL pointer passed to helper R2")
+__failure __msg("Possibly NULL pointer passed to trusted R2")
 int kptr_xchg_possibly_null(struct __sk_buff *ctx)
 {
 	struct prog_test_ref_kfunc *p;

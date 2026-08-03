@@ -110,7 +110,7 @@ l0_%=:	r0 = *(u32*)(r1 + %[bpf_sock_type]);		\
 
 SEC("cgroup/skb")
 __description("bpf_sk_fullsock(skb->sk): no !skb->sk check")
-__failure __msg("type=sock_common_or_null expected=sock_common")
+__failure __msg("Possibly NULL pointer passed to trusted R1")
 __failure_unpriv
 __naked void sk_no_skb_sk_check_1(void)
 {
@@ -466,7 +466,7 @@ l1_%=:	r0 = *(u32*)(r0 + %[bpf_sock_rx_queue_mapping__end]);\
 
 SEC("cgroup/skb")
 __description("bpf_tcp_sock(skb->sk): no !skb->sk check")
-__failure __msg("type=sock_common_or_null expected=sock_common")
+__failure __msg("Possibly NULL pointer passed to trusted R1")
 __failure_unpriv
 __naked void sk_no_skb_sk_check_2(void)
 {
