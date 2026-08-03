@@ -390,13 +390,22 @@ __failure __msg("invalid kptr access, R")
 int reject_scalar_store_to_kptr(struct __sk_buff *ctx)
 {
 	struct map_value *v;
+	u64 val = 0xBADC0DE;
 	int key = 0;
 
 	v = bpf_map_lookup_elem(&array_map, &key);
 	if (!v)
 		return 0;
 
-	*(volatile u64 *)&v->unref_ptr = 0xBADC0DE;
+	/*
+	 * Keep the value in a register so this stays a BPF_STX and keeps
+	 * exercising map_kptr_match_type(). Compilers that fold the constant
+	 * into a BPF_ST (store immediate) instead - bpf-gcc, and clang from
+	 * -mcpu=v4 - would be rejected by the far weaker "BPF_ST imm must be
+	 * 0" check, which verifier/map_kptr.c already covers.
+	 */
+	barrier_var(val);
+	*(volatile u64 *)&v->unref_ptr = val;
 	return 0;
 }
 
