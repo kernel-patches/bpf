@@ -1091,7 +1091,11 @@
 	/* stack_main=32, stack_A=256, stack_B=64
 	 * and max(main+A, main+A+B) < 512
 	 */
-	.result = ACCEPT,
+	.result = VERBOSE_ACCEPT,
+	.errstr = "stack depth max 352\t"
+		  "stack depth subprog 0 <unknown> 32\t"
+		  "stack depth subprog 1 <unknown> 256\t"
+		  "stack depth subprog 2 <unknown> 64",
 },
 {
 	"calls: stack depth check using three frames. test2",
