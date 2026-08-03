@@ -24,6 +24,7 @@
 #include <linux/key.h>
 #include <linux/namei.h>
 #include <linux/file.h>
+#include <linux/lockdep.h>
 
 #include <net/bpf_sk_storage.h>
 
@@ -110,6 +111,7 @@ static u64 bpf_uprobe_multi_entry_ip(struct bpf_run_ctx *ctx);
  */
 unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 {
+	bool no_lockdep = call->flags & TRACE_EVENT_FL_BPF_NO_LOCKDEP;
 	unsigned int ret;
 
 	cant_sleep();
@@ -144,8 +146,12 @@ unsigned int trace_call_bpf(struct trace_event_call *call, void *ctx)
 	 * rcu_dereference() which is accepted risk.
 	 */
 	rcu_read_lock();
+	if (no_lockdep)
+		lockdep_off();
 	ret = bpf_prog_run_array(rcu_dereference(call->prog_array),
 				 ctx, bpf_prog_run);
+	if (no_lockdep)
+		lockdep_on();
 	rcu_read_unlock();
 
  out:

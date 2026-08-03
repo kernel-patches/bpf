@@ -72,6 +72,8 @@ DEFINE_EVENT(lock, lock_release,
 	TP_ARGS(lock, ip)
 );
 
+TRACE_EVENT_FLAGS(lock_release, TRACE_EVENT_FL_BPF_NO_LOCKDEP);
+
 #ifdef CONFIG_LOCK_STAT
 
 DEFINE_EVENT(lock, lock_contended,

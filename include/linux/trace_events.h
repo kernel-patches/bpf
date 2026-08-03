@@ -330,6 +330,7 @@ enum {
 	TRACE_EVENT_FL_FPROBE_BIT,
 	TRACE_EVENT_FL_CUSTOM_BIT,
 	TRACE_EVENT_FL_TEST_STR_BIT,
+	TRACE_EVENT_FL_BPF_NO_LOCKDEP_BIT,
 };
 
 /*
@@ -347,6 +348,7 @@ enum {
  *                   This is set when the custom event has not been attached
  *                   to a tracepoint yet, then it is cleared when it is.
  *  TEST_STR      - The event has a "%s" that points to a string outside the event
+ *  BPF_NO_LOCKDEP - Disable lockdep while running attached BPF programs
  */
 enum {
 	TRACE_EVENT_FL_CAP_ANY		= (1 << TRACE_EVENT_FL_CAP_ANY_BIT),
@@ -360,6 +362,7 @@ enum {
 	TRACE_EVENT_FL_FPROBE		= (1 << TRACE_EVENT_FL_FPROBE_BIT),
 	TRACE_EVENT_FL_CUSTOM		= (1 << TRACE_EVENT_FL_CUSTOM_BIT),
 	TRACE_EVENT_FL_TEST_STR		= (1 << TRACE_EVENT_FL_TEST_STR_BIT),
+	TRACE_EVENT_FL_BPF_NO_LOCKDEP	= (1 << TRACE_EVENT_FL_BPF_NO_LOCKDEP_BIT),
 };
 
 #define TRACE_EVENT_FL_UKPROBE (TRACE_EVENT_FL_KPROBE | TRACE_EVENT_FL_UPROBE)
