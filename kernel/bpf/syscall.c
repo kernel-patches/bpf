@@ -3415,6 +3415,7 @@ static void bpf_link_show_fdinfo(struct seq_file *m, struct file *filp)
 		seq_printf(m, "link_type:\t<%u>\n", type);
 	}
 	seq_printf(m, "link_id:\t%u\n", link->id);
+	seq_printf(m, "sealed:\t%d\n", READ_ONCE(link->sealed) ? 1 : 0);
 
 	rcu_read_lock();
 	prog = READ_ONCE(link->prog);
@@ -5780,17 +5781,41 @@ err_put:
 	return err;
 }
 
+/* Seal the just-created link: take a self-reference that is never released. */
+static void link_seal_fd(int fd)
+{
+	struct bpf_link *link;
+
+	link = bpf_link_get_from_fd(fd);
+	if (IS_ERR(link))
+		return;
+
+	if (!READ_ONCE(link->sealed)) {
+		bpf_link_inc(link);
+		WRITE_ONCE(link->sealed, true);
+	}
+
+	bpf_link_put_direct(link);
+}
+
 #define BPF_LINK_CREATE_LAST_FIELD link_create.uprobe_multi.path_fd
 static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 {
 	struct bpf_prog *prog;
+	bool seal;
 	int ret;
 
 	if (CHECK_ATTR(BPF_LINK_CREATE))
 		return -EINVAL;
 
-	if (attr->link_create.attach_type == BPF_STRUCT_OPS)
-		return bpf_struct_ops_link_create(attr);
+	/* Strip BPF_F_SEALED before per-type flag validation. */
+	seal = attr->link_create.flags & BPF_F_SEALED;
+	attr->link_create.flags &= ~BPF_F_SEALED;
+
+	if (attr->link_create.attach_type == BPF_STRUCT_OPS) {
+		ret = bpf_struct_ops_link_create(attr);
+		goto out_seal;
+	}
 
 	prog = bpf_prog_get(attr->link_create.prog_fd);
 	if (IS_ERR(prog))
@@ -5884,6 +5909,9 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 out:
 	if (ret < 0)
 		bpf_prog_put(prog);
+out_seal:
+	if (ret >= 0 && seal)
+		link_seal_fd(ret);
 	return ret;
 }
 
@@ -5935,6 +5963,11 @@ static int link_update(union bpf_attr *attr)
 	link = bpf_link_get_from_fd(attr->link_update.link_fd);
 	if (IS_ERR(link))
 		return PTR_ERR(link);
+
+	if (READ_ONCE(link->sealed)) {
+		ret = -EPERM;
+		goto out_put_link;
+	}
 
 	if (link->ops->update_map) {
 		ret = link_update_map(link, attr);
@@ -5988,7 +6021,9 @@ static int link_detach(union bpf_attr *attr)
 	if (IS_ERR(link))
 		return PTR_ERR(link);
 
-	if (link->ops->detach)
+	if (READ_ONCE(link->sealed))
+		ret = -EPERM;
+	else if (link->ops->detach)
 		ret = link->ops->detach(link);
 	else
 		ret = -EOPNOTSUPP;
