@@ -5809,7 +5809,13 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 			return -EACCES;
 		}
 
-		if (type_is_alloc(reg->type) && !type_is_non_owning_ref(reg->type) &&
+		/*
+		 * Skip this referenced-ID sanity check for untrusted allocated objects;
+		 * the access check above already rejects writes through them.
+		 */
+		if (type_is_alloc(reg->type) &&
+		    !type_is_untrusted_ptr_alloc_obj(reg->type) &&
+		    !type_is_non_owning_ref(reg->type) &&
 		    !(reg->type & MEM_RCU) && !reg_is_referenced(env, reg)) {
 			verifier_bug(env, "allocated object must have a referenced id");
 			return -EFAULT;
