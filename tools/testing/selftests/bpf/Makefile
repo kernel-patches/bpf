@@ -6,7 +6,6 @@ include ../../../scripts/Makefile.include
 CXX ?= $(CROSS_COMPILE)g++
 OBJCOPY ?= $(CROSS_COMPILE)objcopy
 
-CURDIR := $(abspath .)
 TOOLSDIR := $(abspath ../../..)
 LIBDIR := $(TOOLSDIR)/lib
 BPFDIR := $(LIBDIR)/bpf
@@ -480,11 +479,14 @@ BPF_CFLAGS = -g -Wall -Werror -D__TARGET_ARCH_$(SRCARCH) $(MENDIAN)	\
 
 CLANG_CFLAGS = $(CLANG_SYS_INCLUDES)
 
-$(OUTPUT)/test_l4lb_noinline.o: BPF_CFLAGS += -fno-inline
-$(OUTPUT)/test_xdp_noinline.o: BPF_CFLAGS += -fno-inline
+$(OUTPUT)/flow_dissector_load: flow_dissector_load.h
 
-$(OUTPUT)/flow_dissector_load.o: flow_dissector_load.h
-$(OUTPUT)/cgroup_getset_retval_hooks.o: cgroup_getset_retval_hooks.h
+# progs/cgroup_getset_retval_hooks.c includes this top-directory header,
+# which the progs/*.h prerequisite of the BPF object rules does not
+# cover.
+$(addprefix $(OUTPUT)/,cgroup_getset_retval_hooks.bpf.o \
+	$(addsuffix /cgroup_getset_retval_hooks.bpf.o,$(TEST_INST_SUBDIRS))): \
+	cgroup_getset_retval_hooks.h
 
 # Build BPF object using Clang
 # $1 - input .c file
