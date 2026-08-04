@@ -5,6 +5,7 @@
 #include "exceptions.skel.h"
 #include "exceptions_ext.skel.h"
 #include "exceptions_fail.skel.h"
+#include "exceptions_ret_pair_fail.skel.h"
 #include "exceptions_assert.skel.h"
 
 static char log_buf[1024 * 1024];
@@ -12,6 +13,7 @@ static char log_buf[1024 * 1024];
 static void test_exceptions_failure(void)
 {
 	RUN_TESTS(exceptions_fail);
+	RUN_TESTS(exceptions_ret_pair_fail);
 }
 
 static void test_exceptions_success(void)
