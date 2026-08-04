@@ -13562,6 +13562,7 @@ static int sanitize_err(struct bpf_verifier_env *env, const struct bpf_insn *ins
 	static const char *err = "pointer arithmetic with it prohibited for !root";
 	const char *op = BPF_OP(insn->code) == BPF_ADD ? "add" : "sub";
 	u32 dst = insn->dst_reg, src = insn->src_reg;
+	bool src_is_imm = BPF_SRC(insn->code) == BPF_K;
 	struct bpf_reg_state *regs = cur_regs(env);
 
 	switch (reason) {
@@ -13571,7 +13572,7 @@ static int sanitize_err(struct bpf_verifier_env *env, const struct bpf_insn *ins
 		break;
 	case REASON_TYPE:
 		verbose(env, "R%d has pointer with unsupported alu operation, %s\n",
-			regs[src].type == SCALAR_VALUE ? dst : src, err);
+			src_is_imm || regs[src].type == SCALAR_VALUE ? dst : src, err);
 		break;
 	case REASON_PATHS:
 		verbose(env, "R%d tried to %s from different maps, paths or scalars, %s\n",
