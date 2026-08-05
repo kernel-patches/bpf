@@ -529,6 +529,53 @@ bpf_trampoline_get_progs(const struct bpf_trampoline *tr, int *total, bool *ip_a
 	return tnodes;
 }
 
+static bool bpf_prog_has_arena_ctx_arg(const struct bpf_prog *prog)
+{
+	int i;
+
+	for (i = 0; i < prog->aux->ctx_arg_info_size; i++)
+		if (base_type(prog->aux->ctx_arg_info[i].reg_type) == PTR_TO_ARENA)
+			return true;
+	return false;
+}
+
+/*
+ * Collect which ctx slots of a struct_ops trampoline hold arena kernel
+ * pointers that save_args() must convert to the arena pointer form. Only
+ * the struct_ops indirect trampoline converts: it dispatches to a single
+ * prog whose arena is known at generation time. Return false when there
+ * is nothing to convert.
+ */
+bool bpf_tramp_collect_arena_args(struct bpf_tramp_nodes *tnodes, u32 flags,
+				  struct bpf_tramp_arena_args *aargs)
+{
+	const struct bpf_prog *prog;
+	int i;
+
+	memset(aargs, 0, sizeof(*aargs));
+
+	if (!(flags & BPF_TRAMP_F_INDIRECT) ||
+	    tnodes[BPF_TRAMP_FENTRY].nr_nodes != 1)
+		return false;
+
+	prog = tnodes[BPF_TRAMP_FENTRY].nodes[0]->link->prog;
+	for (i = 0; i < prog->aux->ctx_arg_info_size; i++) {
+		const struct bpf_ctx_arg_aux *info = &prog->aux->ctx_arg_info[i];
+
+		if (base_type(info->reg_type) != PTR_TO_ARENA)
+			continue;
+		aargs->slots |= BIT(info->offset / 8);
+		if (info->arena_nullable)
+			aargs->nullable_slots |= BIT(info->offset / 8);
+	}
+	if (!aargs->slots)
+		return false;
+	if (WARN_ON_ONCE(!prog->aux->arena))
+		return false;
+	aargs->kern_vm_start = bpf_arena_get_kern_vm_start(prog->aux->arena);
+	return true;
+}
+
 static void bpf_tramp_image_free(struct bpf_tramp_image *im)
 {
 	bpf_image_ksym_del(&im->ksym);
@@ -920,6 +967,13 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_node *node,
 	int cnt = 0, i;
 
 	kind = bpf_attach_type_to_tramp(node->link->prog);
+	/*
+	 * Arena ctx args are converted only by struct_ops indirect
+	 * trampolines. They must never be attached to a generic trampoline.
+	 */
+	if (WARN_ON_ONCE(bpf_prog_has_arena_ctx_arg(node->link->prog)))
+		return -ENOTSUPP;
+
 	if (tr->extension_prog)
 		/* cannot attach fentry/fexit if extension prog is attached.
 		 * cannot overwrite extension prog either.
