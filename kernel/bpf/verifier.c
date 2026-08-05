@@ -4452,8 +4452,9 @@ static bool in_sleepable(struct bpf_verifier_env *env)
 static bool in_rcu_cs(struct bpf_verifier_env *env)
 {
 	return env->cur_state->active_rcu_locks ||
-	       env->cur_state->active_locks ||
-	       !in_sleepable(env);
+	       env->cur_state->active_irq_id ||
+	       env->cur_state->active_preempt_locks ||
+	       env->cur_state->active_locks || !in_sleepable(env);
 }
 
 /* Once GCC supports btf_type_tag the following mechanism will be replaced with tag check */
@@ -11663,6 +11664,9 @@ static int process_irq_flag(struct bpf_verifier_env *env, struct bpf_reg_state *
 		err = unmark_stack_slot_irq_flag(env, reg, kfunc_class);
 		if (err)
 			return err;
+
+		if (!in_rcu_cs(env))
+			invalidate_rcu_protected_refs(env);
 	}
 	return 0;
 }
@@ -13181,7 +13185,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			verbose(env, "unmatched rcu read unlock (kernel function %s)\n", func_name);
 			return -EINVAL;
 		}
-		if (--env->cur_state->active_rcu_locks == 0)
+		env->cur_state->active_rcu_locks--;
+		if (!in_rcu_cs(env))
 			invalidate_rcu_protected_refs(env);
 	} else if (preempt_disable) {
 		env->cur_state->active_preempt_locks++;
@@ -13191,6 +13196,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			return -EINVAL;
 		}
 		env->cur_state->active_preempt_locks--;
+		if (!in_rcu_cs(env))
+			invalidate_rcu_protected_refs(env);
 	}
 
 	if (sleepable && !in_sleepable_context(env)) {
