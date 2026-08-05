@@ -3172,11 +3172,14 @@ static void mark_insn_zext(struct bpf_verifier_env *env,
  * which is only ever read as a sub-register also gets its definition marked,
  * at the cost of a zero extension that is not needed.
  *
- * Only scalars are considered since a live_regs_before bit does not imply that
- * the register holds a readable value: the caller saved regs of a frame below
+ * Scalars and arena pointers are considered, the two types that carry a
+ * subreg_def and can still be read as a full 64-bit value past this point.
+ * The arena case matters on a pure bpf_jit_needs_zext() architecture. Other
+ * types are skipped since a live_regs_before bit does not imply that the
+ * register holds a readable value: the caller saved regs of a frame below
  * the current one are clobbered to NOT_INIT at the call while keeping the
- * subreg_def of the call insn. Such a definition must not be marked, the call
- * insn has no destination register to zero extend.
+ * subreg_def of the call insn. Such a definition must not be marked, the
+ * call insn has no destination register to zero extend.
  */
 void bpf_mark_live_subregs_zext(struct bpf_verifier_env *env,
 				struct bpf_verifier_state *vstate)
@@ -3192,7 +3195,8 @@ void bpf_mark_live_subregs_zext(struct bpf_verifier_env *env,
 		for (j = 0; j < BPF_REG_FP; j++) {
 			if (!(live_regs & BIT(j)))
 				continue;
-			if (func->regs[j].type != SCALAR_VALUE)
+			if (func->regs[j].type != SCALAR_VALUE &&
+			    func->regs[j].type != PTR_TO_ARENA)
 				continue;
 			mark_insn_zext(env, &func->regs[j]);
 		}
