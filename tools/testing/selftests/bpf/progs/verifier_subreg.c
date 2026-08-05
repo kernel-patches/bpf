@@ -3,6 +3,7 @@
 
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
+#include "../../../include/linux/filter.h"
 #include "bpf_misc.h"
 
 /* This file contains sub-register zero extension checks for insns defining
@@ -987,6 +988,93 @@ l0_%=:	r0 = r6;					\
 	exit;						\
 "	:
 	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("subreg zero extend check across state pruning")
+__flag(BPF_F_TEST_RND_HI32)
+__flag(BPF_F_TEST_STATE_FREQ)
+__success __retval(0)
+__naked void subreg_zero_extend_check_pruning(void)
+{
+	asm volatile ("					\
+	r7 = *(u32 *)(r1 + %[__sk_buff_len]);		\
+	r6 = 0;			/* 64-bit define */	\
+	if r7 != 0 goto l1_%=;				\
+	goto l0_%=;					\
+l1_%=:	w6 = 0;			/* 32-bit define */	\
+l0_%=:	r0 = r6;		/* 64-bit read */	\
+	r0 >>= 32;					\
+	exit;						\
+"	:
+	: __imm_const(__sk_buff_len, offsetof(struct __sk_buff, len))
+	: __clobber_all);
+}
+
+/*
+ * Same as the previous test, but with the pruning point inside a callee. The
+ * marking then also walks the caller frames, whose caller saved registers are
+ * NOT_INIT while the callee runs, and must not mark the call insn.
+ */
+SEC("socket")
+__description("subreg zero extend check across state pruning in a callee")
+__flag(BPF_F_TEST_RND_HI32)
+__flag(BPF_F_TEST_STATE_FREQ)
+__success __retval(0)
+__naked void subreg_zero_extend_check_pruning_callee(void)
+{
+	asm volatile ("					\
+	r1 = *(u32 *)(r1 + %[__sk_buff_len]);		\
+	call subreg_zero_extend_check_pruning_subprog;	\
+	r0 >>= 32;					\
+	exit;						\
+"	:
+	: __imm_const(__sk_buff_len, offsetof(struct __sk_buff, len))
+	: __clobber_all);
+}
+
+static __used __naked void subreg_zero_extend_check_pruning_subprog(void)
+{
+	asm volatile ("					\
+	r0 = 0;			/* 64-bit define */	\
+	if r1 != 0 goto l1_%=;				\
+	goto l0_%=;					\
+l1_%=:	w0 = 0;			/* 32-bit define */	\
+l0_%=:	exit;			/* 64-bit read */	\
+"	::: __clobber_all);
+}
+
+/*
+ * Same as the first test, but with the 32-bit define coming from a BPF_CMPXCHG
+ * fetching into r0. Unlike the other definitions this one is patched even where
+ * the JIT does not ask for zero extension, see bpf_opt_subreg_zext_lo32_rnd_hi32().
+ * The stack slot is left as STACK_MISC by the initial 32-bit store so that the
+ * cmpxchg does not alter it, otherwise the two paths would not converge.
+ */
+SEC("socket")
+__description("subreg zero extend check across state pruning with cmpxchg")
+__flag(BPF_F_TEST_RND_HI32)
+__flag(BPF_F_TEST_STATE_FREQ)
+__success __retval(0)
+__naked void subreg_zero_extend_check_pruning_cmpxchg(void)
+{
+	asm volatile ("					\
+	r7 = *(u32 *)(r1 + %[__sk_buff_len]);		\
+	r1 = 1;						\
+	*(u32 *)(r10 - 4) = r1;				\
+	call %[bpf_get_prandom_u32];	/* 64-bit define */\
+	if r7 != 0 goto l1_%=;				\
+	goto l0_%=;					\
+l1_%=:	r2 = 2;						\
+	.8byte %[cmpxchg32];		/* 32-bit define */\
+l0_%=:	r0 >>= 32;			/* 64-bit read */\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_const(__sk_buff_len, offsetof(struct __sk_buff, len)),
+	  __imm_insn(cmpxchg32,
+		     BPF_ATOMIC_OP(BPF_W, BPF_CMPXCHG, BPF_REG_10, BPF_REG_2, -4))
 	: __clobber_all);
 }
 
