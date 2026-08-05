@@ -288,7 +288,6 @@ static int prepare_arg_info(struct btf *btf,
 			 * precision around it, since it has no safety implication.
 			 */
 			info->reg_type = PTR_TO_ARENA;
-			info->arena_nullable = is_arena_nullable;
 			model->arg_flags[arg_no] |= BTF_FMODEL_ARENA_ARG;
 			if (is_arena_nullable)
 				model->arg_flags[arg_no] |= BTF_FMODEL_NULLABLE_ARG;

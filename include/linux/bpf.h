@@ -1275,18 +1275,13 @@ struct bpf_tramp_nodes {
 };
 
 /*
- * Which 8-byte ctx slots of a struct_ops trampoline hold arena kernel
- * pointers that save_args() converts to the arena pointer form,
- * ctx[slot] = (u32)(kaddr - kern_vm_start).
+ * The arena base against which a struct_ops trampoline converts the
+ * arguments marked with BTF_FMODEL_ARENA_ARG while saving them into the BPF
+ * ctx, ctx[arg] = (u32)(kaddr - kern_vm_start). Zero when the trampoline
+ * converts nothing.
  */
-struct bpf_tramp_arena_args {
-	u32 slots;
-	u32 nullable_slots;	/* subset of @slots where NULL is preserved */
-	u64 kern_vm_start;
-};
-
-bool bpf_tramp_collect_arena_args(struct bpf_tramp_nodes *tnodes, u32 flags,
-				  struct bpf_tramp_arena_args *aargs);
+u64 bpf_tramp_arena_base(const struct btf_func_model *m,
+			 struct bpf_tramp_nodes *tnodes, u32 flags);
 
 struct bpf_tramp_run_ctx;
 
@@ -1689,11 +1684,6 @@ struct bpf_ctx_arg_aux {
 	u32 btf_id;
 	u32 ref_id;
 	bool refcounted;
-	/*
-	 * We don't encode NULL-ness in the type for the program, but still need
-	 * to distinguish it for the purposes of telling JITs what sequence to emit.
-	 */
-	bool arena_nullable;
 };
 
 struct btf_mod_pair {

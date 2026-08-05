@@ -540,40 +540,33 @@ static bool bpf_prog_has_arena_ctx_arg(const struct bpf_prog *prog)
 }
 
 /*
- * Collect which ctx slots of a struct_ops trampoline hold arena kernel
- * pointers that save_args() must convert to the arena pointer form. Only
- * the struct_ops indirect trampoline converts: it dispatches to a single
- * prog whose arena is known at generation time. Return false when there
- * is nothing to convert.
+ * The arena base against which save_args() converts the arguments marked
+ * with BTF_FMODEL_ARENA_ARG. Only the struct_ops indirect trampoline
+ * converts: it dispatches to a single prog whose arena is known at
+ * generation time. Return 0 when there is nothing to convert.
  */
-bool bpf_tramp_collect_arena_args(struct bpf_tramp_nodes *tnodes, u32 flags,
-				  struct bpf_tramp_arena_args *aargs)
+u64 bpf_tramp_arena_base(const struct btf_func_model *m,
+			 struct bpf_tramp_nodes *tnodes, u32 flags)
 {
 	const struct bpf_prog *prog;
 	int i;
 
-	memset(aargs, 0, sizeof(*aargs));
-
 	if (!(flags & BPF_TRAMP_F_INDIRECT) ||
 	    tnodes[BPF_TRAMP_FENTRY].nr_nodes != 1)
-		return false;
+		return 0;
 
+	for (i = 0; i < m->nr_args; i++)
+		if (m->arg_flags[i] & BTF_FMODEL_ARENA_ARG)
+			break;
+	if (i == m->nr_args)
+		return 0;
+
+	/* Verification rejects an arena argument without an arena. */
 	prog = tnodes[BPF_TRAMP_FENTRY].nodes[0]->link->prog;
-	for (i = 0; i < prog->aux->ctx_arg_info_size; i++) {
-		const struct bpf_ctx_arg_aux *info = &prog->aux->ctx_arg_info[i];
-
-		if (base_type(info->reg_type) != PTR_TO_ARENA)
-			continue;
-		aargs->slots |= BIT(info->offset / 8);
-		if (info->arena_nullable)
-			aargs->nullable_slots |= BIT(info->offset / 8);
-	}
-	if (!aargs->slots)
-		return false;
 	if (WARN_ON_ONCE(!prog->aux->arena))
-		return false;
-	aargs->kern_vm_start = bpf_arena_get_kern_vm_start(prog->aux->arena);
-	return true;
+		return 0;
+
+	return bpf_arena_get_kern_vm_start(prog->aux->arena);
 }
 
 static void bpf_tramp_image_free(struct bpf_tramp_image *im)
