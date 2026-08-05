@@ -635,6 +635,41 @@ int non_arena_ptr_add_to_arena_ptr(void *ctx)
 	return 0;
 }
 
+/*
+ * The verifier walks from a sub-register definition to its 64-bit read to mark
+ * the definition for zero extension. When the walk stops at a pruned state, the
+ * definitions live at that point must be marked there instead, and that set
+ * includes PTR_TO_ARENA: on a pure bpf_jit_needs_zext() architecture such as
+ * s390 the addr_space_cast defining an arena pointer emits no zero extension
+ * of its own and relies solely on the mark driven zero extension, so a missing
+ * mark otherwise leaves the pointer's upper half undefined.
+ */
+SEC("socket")
+__description("subreg zero extend check across state pruning with arena pointer")
+__flag(BPF_F_TEST_RND_HI32)
+__flag(BPF_F_TEST_STATE_FREQ)
+__success __retval(0)
+__naked void subreg_zero_extend_check_pruning_arena(void)
+{
+	asm volatile ("					\
+	r7 = *(u32 *)(r1 + %[__sk_buff_len]);		\
+	r9 = %[arena] ll;				\
+	r2 = 0;						\
+	r2 = addr_space_cast(r2, 0x0, 0x1);		\
+	r6 = r2;		/* 64-bit define */	\
+	if r7 != 0 goto l1_%=;				\
+	goto l0_%=;					\
+l1_%=:	r6 = 0;			/* 32-bit define */	\
+	r6 = addr_space_cast(r6, 0x0, 0x1);		\
+l0_%=:	r0 = *(u32 *)(r6 + 0);	/* 64-bit read */	\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_addr(arena),
+	  __imm_const(__sk_buff_len, offsetof(struct __sk_buff, len))
+	: __clobber_all);
+}
+
 #endif
 
 static __noinline
