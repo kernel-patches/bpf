@@ -161,8 +161,12 @@ struct object {
 	u32 addr_syms_cap;
 };
 
+#define KF_ARENA_RET	(1 << 13)
+#define KF_ARENA_ARG1	(1 << 14)
+#define KF_ARENA_ARG2	(1 << 15)
 #define KF_IMPLICIT_ARGS (1 << 16)
 #define KF_IMPL_SUFFIX "_impl"
+#define TYPE_ATTR_ARENA "address_space(1)"
 
 struct kfunc {
 	struct rb_node rb_node;
@@ -1280,6 +1284,133 @@ add_new_proto:
 	return 0;
 }
 
+static s32 arena_tag_ptr(struct btf *btf, u32 ptr_id)
+{
+	const struct btf_type *ptr = btf__type_by_id(btf, ptr_id);
+	s32 tag_id;
+
+	if (!btf_is_ptr(ptr))
+		return -EINVAL;
+
+	tag_id = btf__add_type_attr(btf, TYPE_ATTR_ARENA, ptr->type);
+	if (tag_id < 0)
+		return tag_id;
+
+	return btf__add_ptr(btf, tag_id);
+}
+
+/*
+ * Add a FUNC_PROTO for @kfunc with each relevant pointer tagged with
+ * an "address_space(1)" attribute. The original proto may be shared
+ * with other FUNCs, so it is never modified in place.
+ */
+static s32 add_arena_tagged_proto(struct btf *btf, struct kfunc *kfunc)
+{
+	const struct btf_type *func = btf__type_by_id(btf, kfunc->btf_id);
+	u32 proto_id = func->type;
+	const struct btf_type *proto = btf__type_by_id(btf, proto_id);
+	const struct btf_param *params = btf_params(proto);
+	u32 nr_params = btf_vlen(proto);
+	s32 arg0_type_id = nr_params > 0 ? (s32)params[0].type : -1;
+	s32 arg1_type_id = nr_params > 1 ? (s32)params[1].type : -1;
+	s32 new_proto_id, id, param_type_id;
+	s32 ret_type_id = proto->type;
+	const char *name;
+	int err;
+
+	if (kfunc->flags & KF_ARENA_RET) {
+		id = arena_tag_ptr(btf, ret_type_id);
+		if (id < 0) {
+			pr_err("ERROR: resolve_btfids: kfunc %s: KF_ARENA_RET but return type is not a pointer\n",
+			       kfunc->name);
+			return id;
+		}
+		ret_type_id = id;
+	}
+
+	if (kfunc->flags & KF_ARENA_ARG1) {
+		if (nr_params < 1) {
+			pr_err("ERROR: resolve_btfids: kfunc %s: KF_ARENA_ARG1 but it has no argument 1\n",
+			       kfunc->name);
+			return -EINVAL;
+		}
+		id = arena_tag_ptr(btf, arg0_type_id);
+		if (id < 0) {
+			pr_err("ERROR: resolve_btfids: kfunc %s: KF_ARENA_ARG1 but argument 1 is not a pointer\n",
+			       kfunc->name);
+			return id;
+		}
+		arg0_type_id = id;
+	}
+
+	if (kfunc->flags & KF_ARENA_ARG2) {
+		if (nr_params < 2) {
+			pr_err("ERROR: resolve_btfids: kfunc %s: KF_ARENA_ARG2 but it has no argument 2\n",
+			       kfunc->name);
+			return -EINVAL;
+		}
+		id = arena_tag_ptr(btf, arg1_type_id);
+		if (id < 0) {
+			pr_err("ERROR: resolve_btfids: kfunc %s: KF_ARENA_ARG2 but argument 2 is not a pointer\n",
+			       kfunc->name);
+			return id;
+		}
+		arg1_type_id = id;
+	}
+
+	new_proto_id = btf__add_func_proto(btf, ret_type_id);
+	if (new_proto_id < 0) {
+		pr_err("ERROR: resolve_btfids: kfunc %s: failed to add a func proto to BTF\n",
+		       kfunc->name);
+		return new_proto_id;
+	}
+
+	for (u32 i = 0; i < nr_params; i++) {
+		proto = btf__type_by_id(btf, proto_id);
+		params = btf_params(proto);
+		name = btf__name_by_offset(btf, params[i].name_off);
+
+		switch (i) {
+		case 0:
+			param_type_id = arg0_type_id;
+			break;
+		case 1:
+			param_type_id = arg1_type_id;
+			break;
+		default:
+			param_type_id = params[i].type;
+			break;
+		}
+
+		err = btf__add_func_param(btf, name ?: "", param_type_id);
+		if (err < 0) {
+			pr_err("ERROR: resolve_btfids: kfunc %s: failed to add a proto param to BTF\n",
+			       kfunc->name);
+			return err;
+		}
+	}
+
+	pr_debug("added arena-tagged proto for kfunc %s: %d\n", kfunc->name, new_proto_id);
+
+	return new_proto_id;
+}
+
+static int process_kfunc_with_arena_flags(struct btf2btf_context *ctx,
+					  struct kfunc *kfunc)
+{
+	struct btf_type *t;
+	s32 proto_id;
+
+	proto_id = add_arena_tagged_proto(ctx->btf, kfunc);
+	if (proto_id < 0)
+		return proto_id;
+
+	t = (struct btf_type *)btf__type_by_id(ctx->btf, kfunc->btf_id);
+	t->type = proto_id;
+
+	return 0;
+}
+
 static int btf2btf(struct object *obj)
 {
 	struct btf2btf_context ctx = {};
@@ -1293,12 +1424,17 @@ static int btf2btf(struct object *obj)
 	for (next = rb_first(&ctx.kfuncs); next; next = rb_next(next)) {
 		struct kfunc *kfunc = rb_entry(next, struct kfunc, rb_node);
 
-		if (!(kfunc->flags & KF_IMPLICIT_ARGS))
-			continue;
+		if (kfunc->flags & KF_IMPLICIT_ARGS) {
+			err = process_kfunc_with_implicit_args(&ctx, kfunc);
+			if (err)
+				goto out;
+		}
 
-		err = process_kfunc_with_implicit_args(&ctx, kfunc);
-		if (err)
-			goto out;
+		if (kfunc->flags & (KF_ARENA_RET | KF_ARENA_ARG1 | KF_ARENA_ARG2)) {
+			err = process_kfunc_with_arena_flags(&ctx, kfunc);
+			if (err)
+				goto out;
+		}
 	}
 
 	err = 0;
