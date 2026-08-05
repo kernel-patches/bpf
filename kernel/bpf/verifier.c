@@ -8797,6 +8797,8 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		cur_aux(env)->arg_prog = regno;
 		return 0;
 	}
+	if (arg_type == ARG_IGNORE)
+		return 0;
 
 	err = check_reg_arg(env, regno, SRC_OP);
 	if (err)
@@ -12086,6 +12088,9 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	if (is_kfunc_arg_prog_aux(meta->btf, &args[arg]))
 		return ARG_PTR_TO_PROG_AUX;
 
+	if (is_kfunc_arg_ignore(meta->btf, &args[arg]) || is_kfunc_arg_implicit(meta, arg))
+		return ARG_IGNORE;
+
 	t = btf_type_skip_modifiers(meta->btf, args[arg].type, NULL);
 
 	/* Scalar arguments are classified from their BTF suffix/name alone. */
@@ -12215,7 +12220,6 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 			       struct bpf_func_proto *proto)
 {
-	const struct btf *btf = meta->btf;
 	const struct btf_param *args;
 	u32 i, nargs;
 	int arg_type;
@@ -12234,9 +12238,6 @@ static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg
 	}
 
 	for (i = 0; i < nargs; i++) {
-		if (is_kfunc_arg_ignore(btf, &args[i]) || is_kfunc_arg_implicit(meta, i))
-			continue;
-
 		arg_type = get_kfunc_arg_type(env, meta, args, i, nargs);
 		if (arg_type < 0)
 			return arg_type;
@@ -12844,7 +12845,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			continue;
 		}
 
-		if (is_kfunc_arg_ignore(btf, &args[i]) || is_kfunc_arg_implicit(meta, i))
+		if (arg_type == ARG_IGNORE)
 			continue;
 
 		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
