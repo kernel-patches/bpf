@@ -1705,7 +1705,7 @@ int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
 	struct btf *btf = prog->aux->attach_btf;
 	struct bpf_tracing_multi_node *mnode;
 	struct bpf_trampoline *tr;
-	int i, err, rollback_cnt;
+	int i, err, rollback_cnt, err_undo_reg = 0;
 	u64 key;
 
 	for_each_mnode(mnode, link) {
@@ -1765,8 +1765,10 @@ int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
 	if (ftrace_hash_count(data->modify)) {
 		err = update_ftrace_direct_mod(&direct_ops, data->modify, true);
 		if (err) {
-			if (ftrace_hash_count(data->reg))
-				WARN_ON_ONCE(update_ftrace_direct_del(&direct_ops, data->reg));
+			if (ftrace_hash_count(data->reg)) {
+				err_undo_reg = update_ftrace_direct_del(&direct_ops, data->reg);
+				WARN_ON_ONCE(err_undo_reg);
+			}
 			goto rollback_unlink;
 		}
 	}
@@ -1781,8 +1783,47 @@ int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
 
 rollback_unlink:
 	for_each_mnode_cnt(mnode, link, rollback_cnt) {
-		bpf_trampoline_remove_prog(mnode->trampoline, &mnode->node);
-		bpf_trampoline_multi_attach_rollback(mnode->trampoline);
+		struct bpf_trampoline *rtr = mnode->trampoline;
+		/*
+		 * register_fentry_multi()/modify_fentry_multi() set
+		 * rtr->cur_image before any ftrace call is made, and
+		 * bpf_trampoline_multi_attach_init() captured whatever was
+		 * live before that into rtr->multi_attach.old_image. A NULL
+		 * old_image means this ip had no prior direct caller, i.e.
+		 * this mnode went through the "register" (data->reg) path
+		 * rather than "modify" (data->modify).
+		 */
+		bool via_register = !rtr->multi_attach.old_image;
+
+		bpf_trampoline_remove_prog(rtr, &mnode->node);
+
+		/*
+		 * If this mnode used the register path and the
+		 * update_ftrace_direct_del() above meant to undo its
+		 * earlier, successful update_ftrace_direct_add() failed,
+		 * ftrace is still actually calling into rtr->cur_image
+		 * (which has @prog's call baked into its machine code) even
+		 * though this attach is being reported as failed. Freeing
+		 * rtr->cur_image via the normal rollback (which would also
+		 * let the caller free @prog once this function returns its
+		 * error) would be a use-after-free, so instead pin @prog on
+		 * it and leave rtr->cur_image untouched: rtr->multi_attach
+		 * is a scratch area only meaningful between _init() and
+		 * _free()/_rollback(), so skipping _rollback() here does
+		 * not leave it in an inconsistent state (old_image is NULL
+		 * on the register path anyway). This image (and the pinned
+		 * prog reference) is subsequently either properly retired by
+		 * a later, successful update on the same trampoline, or
+		 * safely leaked when the trampoline is torn down - see
+		 * bpf_trampoline_multi_attach_free() and bpf_trampoline_put().
+		 */
+		if (via_register && err_undo_reg && rtr->cur_image) {
+			WARN_ON_ONCE(rtr->cur_image->pinned_prog);
+			bpf_prog_inc(prog);
+			rtr->cur_image->pinned_prog = prog;
+		} else {
+			bpf_trampoline_multi_attach_rollback(rtr);
+		}
 	}
 
 	trampoline_unlock_all();
