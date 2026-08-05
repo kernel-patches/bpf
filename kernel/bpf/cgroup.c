@@ -1069,6 +1069,10 @@ static int __cgroup_bpf_replace(struct cgroup *cgrp,
 	if (link->link.prog->type != new_prog->type)
 		return -EINVAL;
 
+	if (new_prog->type == BPF_PROG_TYPE_CGROUP_SOCK_ADDR &&
+	    link->link.attach_type != new_prog->expected_attach_type)
+		return -EINVAL;
+
 	hlist_for_each_entry(pl, progs, node) {
 		if (pl->link == link) {
 			found = true;
