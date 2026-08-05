@@ -565,6 +565,14 @@ static void bpf_tramp_image_free(struct bpf_tramp_image *im)
 	arch_free_bpf_trampoline(im->image, im->size);
 	bpf_jit_uncharge_modmem(im->size);
 	percpu_ref_exit(&im->pcref);
+	/*
+	 * This image is confirmed no longer reachable from ftrace (that's
+	 * why we're freeing it), so it's now safe to drop the reference we
+	 * pinned on its behalf while it may have still been live - see
+	 * bpf_trampoline_multi_attach()/_detach().
+	 */
+	if (im->pinned_prog)
+		bpf_prog_put(im->pinned_prog);
 	kfree_rcu(im, rcu);
 }
 
@@ -1253,6 +1261,28 @@ void bpf_trampoline_put(struct bpf_trampoline *tr)
 	 */
 	hlist_del(&tr->hlist_key);
 	hlist_del(&tr->hlist_ip);
+
+	/*
+	 * tr->cur_image should already be NULL here. A non-NULL value means
+	 * bpf_trampoline_multi_attach_rollback() left an image behind
+	 * because a required ftrace direct-call update failed (see
+	 * bpf_trampoline_multi_detach()), so ftrace may still be calling
+	 * into it - and, in turn, into the bpf_prog pinned in
+	 * tr->cur_image->pinned_prog. We have no reliable way to confirm
+	 * ftrace has since stopped referencing it, so freeing
+	 * tr->cur_image (and dropping the pinned prog's reference) here
+	 * would risk a use-after-free.
+	 *
+	 * tr has just been unlinked from the lookup tables above, so any
+	 * future attach to this function allocates a fresh trampoline;
+	 * this one, its stuck image, and the pinned prog reference are
+	 * deliberately leaked instead of freed. This is rare (it only
+	 * happens after a genuine ftrace direct-call update failure) and
+	 * bounded (at most one image), so it is far preferable to a UAF.
+	 */
+	if (WARN_ON_ONCE(tr->cur_image))
+		goto out;
+
 	direct_ops_free(tr);
 	kfree(tr);
 out:
@@ -1632,7 +1662,18 @@ static void bpf_trampoline_multi_attach_init(struct bpf_trampoline *tr)
 
 static void bpf_trampoline_multi_attach_free(struct bpf_trampoline *tr)
 {
-	if (tr->multi_attach.old_image)
+	/*
+	 * Only free old_image if it is no longer the active image.
+	 * When bpf_trampoline_update() fails before modify_fentry_multi()/
+	 * unregister_fentry_multi() is called, cur_image is unchanged
+	 * (cur_image == old_image) and ftrace still points to it. Freeing
+	 * it would cause a UAF when ftrace calls into the freed memory.
+	 * On success, cur_image is either a new image or NULL, so
+	 * old_image != cur_image correctly identifies a stale image that
+	 * is safe to free.
+	 */
+	if (tr->multi_attach.old_image &&
+	    tr->multi_attach.old_image != tr->cur_image)
 		bpf_tramp_image_put(tr->multi_attach.old_image);
 
 	tr->multi_attach.old_image = NULL;
@@ -1756,11 +1797,11 @@ rollback_put:
 	return err;
 }
 
-int bpf_trampoline_multi_detach(struct bpf_prog *prog, struct bpf_tracing_multi_link *link)
+void bpf_trampoline_multi_detach(struct bpf_prog *prog, struct bpf_tracing_multi_link *link)
 {
 	struct bpf_tracing_multi_data *data = &link->data;
 	struct bpf_tracing_multi_node *mnode;
-	int i, err;
+	int i, err, err_unreg = 0, err_mod = 0;
 
 	trampoline_lock_all();
 
@@ -1772,13 +1813,65 @@ int bpf_trampoline_multi_detach(struct bpf_prog *prog, struct bpf_tracing_multi_
 		WARN_ONCE(err, "__bpf_trampoline_unlink_prog failed: %d\n", err);
 	}
 
-	if (ftrace_hash_count(data->unreg))
-		WARN_ON_ONCE(update_ftrace_direct_del(&direct_ops, data->unreg));
-	if (ftrace_hash_count(data->modify))
-		WARN_ON_ONCE(update_ftrace_direct_mod(&direct_ops, data->modify, true));
+	if (ftrace_hash_count(data->unreg)) {
+		err_unreg = update_ftrace_direct_del(&direct_ops, data->unreg);
+		WARN_ON_ONCE(err_unreg);
+	}
+	if (ftrace_hash_count(data->modify)) {
+		err_mod = update_ftrace_direct_mod(&direct_ops, data->modify, true);
+		WARN_ON_ONCE(err_mod);
+	}
 
-	for_each_mnode(mnode, link)
-		bpf_trampoline_multi_attach_free(mnode->trampoline);
+	for_each_mnode(mnode, link) {
+		struct bpf_trampoline *tr = mnode->trampoline;
+
+		/* If the batch ftrace update failed for this mnode's path,
+		 * ftrace still points to old_image. Use rollback to restore
+		 * cur_image to old_image (putting the new cur_image if any)
+		 * so the trampoline keeps the image ftrace is calling.
+		 *
+		 * A link only reaches detach after a successful attach, so
+		 * tr->cur_image (captured above as old_image) is always
+		 * non-NULL here; the NULL check only mirrors the one in
+		 * bpf_trampoline_multi_attach_free()/_rollback()'s shared
+		 * pattern and guards against tr->multi_attach being reused
+		 * without a prior _init() call.
+		 *
+		 * This relies on update_ftrace_direct_del/mod being atomic:
+		 * on failure, NO IPs in the hash are modified in ftrace (all
+		 * validation/allocation happens before any ftrace record is
+		 * touched). If this assumption is broken in the future (i.e.,
+		 * partial success becomes possible), this rollback logic would
+		 * need to be revisited.
+		 *
+		 * cur_image == NULL indicates the unreg path (total == 0);
+		 * cur_image != NULL indicates the modify path (total > 0).
+		 *
+		 * Rollback alone only prevents freeing the trampoline image
+		 * while ftrace may still branch into it; it does not keep
+		 * the underlying bpf_prog alive, and the caller tears down
+		 * link->prog once this function returns. So pin @prog (whose
+		 * call is baked into old_image's machine code) on old_image
+		 * before restoring it as cur_image: the pin is released once
+		 * old_image is eventually retired for real by a later,
+		 * successful update on this trampoline (see
+		 * bpf_trampoline_multi_attach_free() and
+		 * bpf_tramp_image_free()), or safely leaked alongside the
+		 * image if the trampoline is torn down first instead (see
+		 * bpf_trampoline_put()).
+		 */
+		if (tr->multi_attach.old_image &&
+		    tr->multi_attach.old_image != tr->cur_image &&
+		    ((err_unreg && !tr->cur_image) ||
+		     (err_mod && tr->cur_image))) {
+			WARN_ON_ONCE(tr->multi_attach.old_image->pinned_prog);
+			bpf_prog_inc(prog);
+			tr->multi_attach.old_image->pinned_prog = prog;
+			bpf_trampoline_multi_attach_rollback(tr);
+		} else {
+			bpf_trampoline_multi_attach_free(tr);
+		}
+	}
 
 	trampoline_unlock_all();
 
@@ -1786,7 +1879,6 @@ int bpf_trampoline_multi_detach(struct bpf_prog *prog, struct bpf_tracing_multi_
 		bpf_trampoline_put(mnode->trampoline);
 
 	clear_tracing_multi_data(data);
-	return 0;
 }
 
 #undef for_each_mnode_cnt

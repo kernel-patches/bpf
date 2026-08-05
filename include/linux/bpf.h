@@ -1372,6 +1372,17 @@ struct bpf_tramp_image {
 		struct rcu_head rcu;
 		struct work_struct work;
 	};
+	/*
+	 * Extra reference on the bpf_prog whose call is baked into this
+	 * image's machine code, held only when a required ftrace
+	 * direct-call update failed while retiring/replacing this image
+	 * (see bpf_trampoline_multi_attach()/_detach() in trampoline.c).
+	 * ftrace may still be directing calls into this image, so neither
+	 * the image nor the pinned prog can be freed until a later,
+	 * successful ftrace update proves this image is no longer in use.
+	 * Released in bpf_tramp_image_free() alongside the image itself.
+	 */
+	struct bpf_prog *pinned_prog;
 };
 
 struct bpf_trampoline {
@@ -1518,8 +1529,8 @@ int arch_prepare_bpf_dispatcher(void *image, void *buf, s64 *funcs, int num_func
 
 int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
 				struct bpf_tracing_multi_link *link);
-int bpf_trampoline_multi_detach(struct bpf_prog *prog,
-				struct bpf_tracing_multi_link *link);
+void bpf_trampoline_multi_detach(struct bpf_prog *prog,
+				 struct bpf_tracing_multi_link *link);
 void bpf_trampoline_set_flags(struct bpf_trampoline *tr, u32 flags);
 
 /*
@@ -1639,10 +1650,9 @@ static inline int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
 {
 	return -ENOTSUPP;
 }
-static inline int bpf_trampoline_multi_detach(struct bpf_prog *prog,
-					      struct bpf_tracing_multi_link *link)
+static inline void bpf_trampoline_multi_detach(struct bpf_prog *prog,
+					       struct bpf_tracing_multi_link *link)
 {
-	return -ENOTSUPP;
 }
 static inline void bpf_trampoline_set_flags(struct bpf_trampoline *tr, u32 flags) {}
 #endif
