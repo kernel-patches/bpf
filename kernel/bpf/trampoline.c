@@ -529,16 +529,6 @@ bpf_trampoline_get_progs(const struct bpf_trampoline *tr, int *total, bool *ip_a
 	return tnodes;
 }
 
-static bool bpf_prog_has_arena_ctx_arg(const struct bpf_prog *prog)
-{
-	int i;
-
-	for (i = 0; i < prog->aux->ctx_arg_info_size; i++)
-		if (base_type(prog->aux->ctx_arg_info[i].reg_type) == PTR_TO_ARENA)
-			return true;
-	return false;
-}
-
 /*
  * The arena base against which save_args() converts the arguments marked
  * with BTF_FMODEL_ARENA_ARG. Only the struct_ops indirect trampoline

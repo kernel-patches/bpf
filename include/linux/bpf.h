@@ -2352,6 +2352,7 @@ static inline int bpf_fsession_cookie_cnt(struct bpf_tramp_nodes *nodes)
 
 int bpf_prog_ctx_arg_info_init(struct bpf_prog *prog,
 			       const struct bpf_ctx_arg_aux *info, u32 cnt);
+bool bpf_prog_has_arena_ctx_arg(const struct bpf_prog *prog);
 
 #if defined(CONFIG_CGROUP_BPF) && defined(CONFIG_BPF_LSM)
 int bpf_trampoline_link_cgroup_shim(struct bpf_prog *prog,

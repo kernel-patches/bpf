@@ -18877,6 +18877,16 @@ int bpf_prog_ctx_arg_info_init(struct bpf_prog *prog,
 	return prog->aux->ctx_arg_info ? 0 : -ENOMEM;
 }
 
+bool bpf_prog_has_arena_ctx_arg(const struct bpf_prog *prog)
+{
+	int i;
+
+	for (i = 0; i < prog->aux->ctx_arg_info_size; i++)
+		if (base_type(prog->aux->ctx_arg_info[i].reg_type) == PTR_TO_ARENA)
+			return true;
+	return false;
+}
+
 static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 {
 	const struct btf_type *t, *func_proto;
@@ -19263,6 +19273,17 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		if (subprog == -1) {
 			bpf_log(log, "Subprog %s doesn't exist\n", tname);
 			return -EINVAL;
+		}
+		/*
+		 * A struct_ops indirect trampoline converts arena arguments
+		 * before invoking its program. A tracing program attached to the
+		 * main program would see the converted offset as a regular BTF
+		 * pointer.
+		 */
+		if (prog_tracing && subprog == 0 &&
+		    bpf_prog_has_arena_ctx_arg(tgt_prog)) {
+			bpf_log(log, "Cannot trace a target with arena context arguments\n");
+			return -EOPNOTSUPP;
 		}
 		if (aux->func && aux->func[subprog]->aux->exception_cb) {
 			bpf_log(log,
