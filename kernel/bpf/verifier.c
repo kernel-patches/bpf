@@ -1632,6 +1632,9 @@ int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
 	dst_state->callback_unroll_depth = src->callback_unroll_depth;
 	dst_state->may_goto_depth = src->may_goto_depth;
 	dst_state->equal_state = src->equal_state;
+	memcpy(dst_state->async_stats_subprog_ids, src->async_stats_subprog_ids,
+	       sizeof(dst_state->async_stats_subprog_ids));
+	dst_state->async_stats_subprog_cnt = src->async_stats_subprog_cnt;
 	for (i = 0; i <= src->curframe; i++) {
 		dst = dst_state->frame[i];
 		if (!dst) {
@@ -2261,6 +2264,8 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 {
 	struct bpf_verifier_stack_elem *elem;
 	struct bpf_func_state *frame;
+	int i;
+	u32 cnt;
 
 	elem = kzalloc_obj(struct bpf_verifier_stack_elem, GFP_KERNEL_ACCOUNT);
 	if (!elem)
@@ -2293,6 +2298,12 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 			0 /* frameno within this callchain */,
 			subprog /* subprog number within this prog */);
 	elem->st.frame[0] = frame;
+	cnt = env->cur_state->async_stats_subprog_cnt;
+	memcpy(elem->st.async_stats_subprog_ids, env->cur_state->async_stats_subprog_ids,
+	       cnt * sizeof(elem->st.async_stats_subprog_ids[0]));
+	for (i = 0; i <= env->cur_state->curframe; i++)
+		elem->st.async_stats_subprog_ids[cnt++] = env->cur_state->frame[i]->subprogno;
+	elem->st.async_stats_subprog_cnt = cnt;
 	return &elem->st;
 }
 
@@ -9843,9 +9854,9 @@ static void account_processed_insn(struct bpf_verifier_env *env)
 	env->subprog_info[frame->subprogno].insns_own++;
 }
 
-static void account_processed_insns(struct bpf_verifier_env *env,
-				    struct bpf_func_state *callee,
-				    struct bpf_func_state *caller)
+static u32 account_processed_insns(struct bpf_verifier_env *env,
+				   struct bpf_func_state *callee,
+				   struct bpf_func_state *caller)
 {
 	u32 insns = callee->insns_subtotal;
 
@@ -9853,16 +9864,24 @@ static void account_processed_insns(struct bpf_verifier_env *env,
 	if (caller)
 		caller->insns_subtotal += insns;
 	callee->insns_subtotal = 0;
+	return insns;
 }
 
 static void account_current_path(struct bpf_verifier_env *env)
 {
 	struct bpf_verifier_state *state = env->cur_state;
-	int frame;
+	u32 insns;
+	int frame, i;
 
 	for (frame = state->curframe; frame >= 0; frame--)
-		account_processed_insns(env, state->frame[frame],
-					frame ? state->frame[frame - 1] : NULL);
+		insns = account_processed_insns(env, state->frame[frame],
+						frame ? state->frame[frame - 1] : NULL);
+
+	if (!state->async_stats_subprog_cnt)
+		return;
+
+	for (i = 0; i < state->async_stats_subprog_cnt; i++)
+		env->subprog_info[state->async_stats_subprog_ids[i]].insns_total += insns;
 }
 
 /* Are we currently verifying the callback for a rbtree helper that must

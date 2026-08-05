@@ -447,6 +447,8 @@ static_assert(MAX_BPF_STACK / 8 <= (1 << 6));
 struct bpf_verifier_state {
 	/* call stack tracking */
 	struct bpf_func_state *frame[MAX_CALL_FRAMES];
+	u32 async_stats_subprog_ids[MAX_CALL_FRAMES];
+	u32 async_stats_subprog_cnt;
 	struct bpf_verifier_state *parent;
 	/* Acquired reference states */
 	struct bpf_reference_state *refs;
