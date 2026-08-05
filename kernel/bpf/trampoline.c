@@ -1028,7 +1028,25 @@ static int __bpf_trampoline_unlink_prog(struct bpf_tramp_node *node,
 		return err;
 	}
 	bpf_trampoline_remove_prog(tr, node);
-	return bpf_trampoline_update(tr, true /* lock_direct_mutex */, ops, data);
+	err = bpf_trampoline_update(tr, true /* lock_direct_mutex */, ops, data);
+	/*
+	 * If the update above failed, tr->cur_image is unchanged, i.e. ftrace
+	 * (or the direct jump, for the standard ops) is still actually
+	 * calling into an image with node->link->prog's call baked into its
+	 * machine code, even though this unlink is being reported as failed.
+	 * Every caller of this function only WARN_ON_ONCE()'s a failure here
+	 * and then unconditionally frees the underlying bpf_prog, which
+	 * would be a use-after-free the next time that image is executed.
+	 * Pin an extra reference on the prog onto tr->cur_image so it
+	 * outlives this link, mirroring the fix applied to
+	 * bpf_trampoline_multi_attach()/bpf_trampoline_multi_detach().
+	 */
+	if (err && tr->cur_image) {
+		WARN_ON_ONCE(tr->cur_image->pinned_prog);
+		bpf_prog_inc(node->link->prog);
+		tr->cur_image->pinned_prog = node->link->prog;
+	}
+	return err;
 }
 
 /* bpf_trampoline_unlink_prog() should never fail. */
