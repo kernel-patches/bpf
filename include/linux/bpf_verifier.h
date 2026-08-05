@@ -1212,6 +1212,8 @@ void bpf_clear_singular_ids(struct bpf_verifier_env *env, struct bpf_verifier_st
 int bpf_mark_chain_precision(struct bpf_verifier_env *env,
 			     struct bpf_verifier_state *starting_state,
 			     int regno, bool *changed);
+void bpf_mark_live_subregs_zext(struct bpf_verifier_env *env,
+				struct bpf_verifier_state *vstate);
 
 static inline int bpf_get_spi(s32 off)
 {

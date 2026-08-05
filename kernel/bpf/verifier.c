@@ -3161,6 +3161,44 @@ static void mark_insn_zext(struct bpf_verifier_env *env,
 	reg->subreg_def = DEF_NOT_SUBREG;
 }
 
+/*
+ * Reaching a state equivalent to an already explored one stops the walk, so a
+ * register that still carries a subreg_def may have its only 64-bit read on
+ * the path that is no longer walked, and without the mark the JIT of an
+ * architecture that needs explicit zero extension leaves the upper half of the
+ * definition undefined. Mark the definitions of the registers live at this
+ * instruction, i.e. the ones the equivalence was decided on and thus the only
+ * ones that can still be read. This is conservative in that a live register
+ * which is only ever read as a sub-register also gets its definition marked,
+ * at the cost of a zero extension that is not needed.
+ *
+ * Only scalars are considered since a live_regs_before bit does not imply that
+ * the register holds a readable value: the caller saved regs of a frame below
+ * the current one are clobbered to NOT_INIT at the call while keeping the
+ * subreg_def of the call insn. Such a definition must not be marked, the call
+ * insn has no destination register to zero extend.
+ */
+void bpf_mark_live_subregs_zext(struct bpf_verifier_env *env,
+				struct bpf_verifier_state *vstate)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_func_state *func;
+	u16 live_regs;
+	int i, j;
+
+	for (i = vstate->curframe; i >= 0; i--) {
+		live_regs = aux[bpf_frame_insn_idx(vstate, i)].live_regs_before;
+		func = vstate->frame[i];
+		for (j = 0; j < BPF_REG_FP; j++) {
+			if (!(live_regs & BIT(j)))
+				continue;
+			if (func->regs[j].type != SCALAR_VALUE)
+				continue;
+			mark_insn_zext(env, &func->regs[j]);
+		}
+	}
+}
+
 static int __check_reg_arg(struct bpf_verifier_env *env, struct bpf_reg_state *regs, u32 regno,
 			   enum bpf_reg_arg_type t)
 {

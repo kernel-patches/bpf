@@ -1405,6 +1405,8 @@ skip_inf_loop_check:
 hit:
 			sl->hit_cnt++;
 
+			bpf_mark_live_subregs_zext(env, cur);
+
 			/* if previous state reached the exit with precision and
 			 * current state is equivalent to it (except precision marks)
 			 * the precision needs to be propagated back in
