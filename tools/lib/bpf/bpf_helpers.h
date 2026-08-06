@@ -188,6 +188,20 @@ enum libbpf_tristate {
 	TRI_MODULE = 2,
 };
 
+/* Helper typedef for declaring kernel module names that need BTF loading.
+ *
+ * Usage: define an array in the ".kmod_btfs" ELF section to specify
+ * which modules need BTF loading:
+ *
+ *   DEFINE_KMOD_BTFS(_needed_kmods)= { "module1", "module2", ... };
+ *
+ * This avoids unnecessary BTF loading and speeds up the BPF program
+ * load process.
+ */
+#define KMOD_NAME_LEN 64
+#define DEFINE_KMOD_BTFS(name) \
+	SEC(".kmod_btfs") char name[][KMOD_NAME_LEN]
+
 #define __kconfig __attribute__((section(".kconfig")))
 #define __ksym __attribute__((section(".ksyms")))
 #define __kptr_untrusted __attribute__((btf_type_tag("kptr_untrusted")))
