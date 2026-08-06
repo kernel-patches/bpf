@@ -916,4 +916,25 @@ int BPF_PROG(tp_kfree_meta_read, struct sk_buff *skb)
 	return 0;
 }
 
+#define NF_ACCEPT 1
+
+SEC("netfilter")
+int nf_meta_read(struct bpf_nf_ctx *ctx)
+{
+	struct __sk_buff *skb = (struct __sk_buff *)ctx->skb;
+	__u8 *meta_have;
+
+	if (!skb)
+		return NF_ACCEPT;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &skb);
+	if (!meta_have)
+		return NF_ACCEPT;
+	if (!check_metadata(meta_have))
+		return NF_ACCEPT;
+
+	test_pass = true;
+	return NF_ACCEPT;
+}
+
 char _license[] SEC("license") = "GPL";
