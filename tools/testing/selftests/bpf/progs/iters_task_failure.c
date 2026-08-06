@@ -13,6 +13,8 @@ struct cgroup *bpf_cgroup_from_id(u64 cgid) __ksym;
 void bpf_cgroup_release(struct cgroup *p) __ksym;
 void bpf_rcu_read_lock(void) __ksym;
 void bpf_rcu_read_unlock(void) __ksym;
+void bpf_local_irq_save(unsigned long *flags) __weak __ksym;
+void bpf_local_irq_restore(unsigned long *flags) __weak __ksym;
 
 SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
 __failure __msg("kernel func bpf_iter_task_new requires RCU critical section protection")
@@ -80,6 +82,157 @@ int BPF_PROG(iter_css_lock_and_unlock)
 		bpf_rcu_read_lock();
 	}
 	bpf_rcu_read_unlock();
+	bpf_cgroup_release(cgrp);
+	return 0;
+}
+
+SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
+__success
+int BPF_PROG(iter_css_preempt)
+{
+	u64 cg_id = bpf_get_current_cgroup_id();
+	struct cgroup *cgrp = bpf_cgroup_from_id(cg_id);
+	struct cgroup_subsys_state *root_css, *pos;
+
+	if (!cgrp)
+		return 0;
+	root_css = &cgrp->self;
+
+	bpf_preempt_disable();
+	bpf_for_each(css, pos, root_css, BPF_CGROUP_ITER_DESCENDANTS_POST) {}
+	bpf_preempt_enable();
+	bpf_cgroup_release(cgrp);
+	return 0;
+}
+
+SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
+__success
+int BPF_PROG(iter_css_irq)
+{
+	u64 cg_id = bpf_get_current_cgroup_id();
+	struct cgroup *cgrp = bpf_cgroup_from_id(cg_id);
+	struct cgroup_subsys_state *root_css, *pos;
+	unsigned long flags;
+
+	if (!cgrp)
+		return 0;
+	root_css = &cgrp->self;
+
+	bpf_local_irq_save(&flags);
+	bpf_for_each(css, pos, root_css, BPF_CGROUP_ITER_DESCENDANTS_POST) {}
+	bpf_local_irq_restore(&flags);
+	bpf_cgroup_release(cgrp);
+	return 0;
+}
+
+SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
+__failure __msg("R2 must be referenced or trusted")
+int BPF_PROG(iter_css_preempt_escape)
+{
+	u64 cg_id = bpf_get_current_cgroup_id();
+	struct cgroup *cgrp = bpf_cgroup_from_id(cg_id);
+	struct cgroup_subsys_state *root_css, *pos;
+	struct task_struct *task;
+
+	if (!cgrp)
+		return 0;
+	root_css = &cgrp->self;
+
+	bpf_preempt_disable();
+	bpf_for_each(css, pos, root_css, BPF_CGROUP_ITER_DESCENDANTS_POST) {
+		break;
+	}
+	bpf_preempt_enable();
+	if (pos) {
+		bpf_for_each(css_task, task, pos, CSS_TASK_ITER_PROCS) {}
+	}
+	bpf_cgroup_release(cgrp);
+	return 0;
+}
+
+SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
+__failure __msg("R2 must be referenced or trusted")
+int BPF_PROG(iter_css_irq_escape)
+{
+	u64 cg_id = bpf_get_current_cgroup_id();
+	struct cgroup *cgrp = bpf_cgroup_from_id(cg_id);
+	struct cgroup_subsys_state *root_css, *pos;
+	struct task_struct *task;
+	unsigned long flags;
+
+	if (!cgrp)
+		return 0;
+	root_css = &cgrp->self;
+
+	bpf_local_irq_save(&flags);
+	bpf_for_each(css, pos, root_css, BPF_CGROUP_ITER_DESCENDANTS_POST) {
+		break;
+	}
+	bpf_local_irq_restore(&flags);
+	if (pos) {
+		bpf_for_each(css_task, task, pos, CSS_TASK_ITER_PROCS) {}
+	}
+	bpf_cgroup_release(cgrp);
+	return 0;
+}
+
+SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
+__failure __msg("css_task_iter is only allowed in bpf_lsm, bpf_iter and sleepable progs")
+int BPF_PROG(iter_css_task_rcu)
+{
+	u64 cg_id = bpf_get_current_cgroup_id();
+	struct cgroup *cgrp = bpf_cgroup_from_id(cg_id);
+	struct cgroup_subsys_state *css;
+	struct task_struct *task;
+
+	if (!cgrp)
+		return 0;
+	css = &cgrp->self;
+
+	bpf_rcu_read_lock();
+	bpf_for_each(css_task, task, css, CSS_TASK_ITER_PROCS) {}
+	bpf_rcu_read_unlock();
+	bpf_cgroup_release(cgrp);
+	return 0;
+}
+
+SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
+__failure __msg("css_task_iter is only allowed in bpf_lsm, bpf_iter and sleepable progs")
+int BPF_PROG(iter_css_task_preempt)
+{
+	u64 cg_id = bpf_get_current_cgroup_id();
+	struct cgroup *cgrp = bpf_cgroup_from_id(cg_id);
+	struct cgroup_subsys_state *css;
+	struct task_struct *task;
+
+	if (!cgrp)
+		return 0;
+	css = &cgrp->self;
+
+	bpf_preempt_disable();
+	bpf_for_each(css_task, task, css, CSS_TASK_ITER_PROCS) {}
+	bpf_preempt_enable();
+	bpf_cgroup_release(cgrp);
+	return 0;
+}
+
+SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
+__failure __msg("css_task_iter is only allowed in bpf_lsm, bpf_iter and sleepable progs")
+int BPF_PROG(iter_css_task_irq)
+{
+	u64 cg_id = bpf_get_current_cgroup_id();
+	struct cgroup *cgrp = bpf_cgroup_from_id(cg_id);
+	struct cgroup_subsys_state *css;
+	struct task_struct *task;
+	unsigned long flags;
+
+	if (!cgrp)
+		return 0;
+	css = &cgrp->self;
+
+	bpf_local_irq_save(&flags);
+	bpf_for_each(css_task, task, css, CSS_TASK_ITER_PROCS) {}
+	bpf_local_irq_restore(&flags);
 	bpf_cgroup_release(cgrp);
 	return 0;
 }
