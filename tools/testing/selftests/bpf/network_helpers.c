@@ -1142,10 +1142,13 @@ static void encode_test_name(char *buf, size_t len, const char *test_name, const
 		snprintf(buf, len, "%s__%s", test_name, subtest_name);
 	else
 		snprintf(buf, len, "%s", test_name);
-	while ((p = strchr(buf, '/')))
-		*p = '_';
-	while ((p = strchr(buf, ' ')))
-		*p = '_';
+	/* Test names are free form, so replace anything that is awkward in a
+	 * file name. Besides the path separator, this covers the characters
+	 * rejected by CI systems collecting these logs as artifacts.
+	 */
+	for (p = buf; *p; p++)
+		if (strchr("/ \":<>|*?\r\n", *p))
+			*p = '_';
 }
 
 #define PCAP_DIR "/tmp/tmon_pcap"
