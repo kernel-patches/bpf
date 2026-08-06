@@ -1066,4 +1066,27 @@ int BPF_PROG(tp_kfree_skb_ext_read, struct sk_buff *skb)
 	return 0;
 }
 
+#define NF_ACCEPT 1
+
+SEC("netfilter")
+int nf_skb_ext_read(struct bpf_nf_ctx *ctx)
+{
+	struct __sk_buff *skb = (struct __sk_buff *)ctx->skb;
+	__u8 meta_have[META_SIZE];
+	struct bpf_dynptr meta;
+
+	if (!skb)
+		return NF_ACCEPT;
+
+	if (bpf_dynptr_from_skb_ext(skb, 0, 0, &meta))
+		return NF_ACCEPT;
+	if (bpf_dynptr_read(meta_have, META_SIZE, &meta, 0, 0))
+		return NF_ACCEPT;
+	if (!check_metadata(meta_have))
+		return NF_ACCEPT;
+
+	test_pass = true;
+	return NF_ACCEPT;
+}
+
 char _license[] SEC("license") = "GPL";
