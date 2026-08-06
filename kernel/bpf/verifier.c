@@ -4441,11 +4441,6 @@ bad_type:
 	return -EINVAL;
 }
 
-static bool in_sleepable(struct bpf_verifier_env *env)
-{
-	return env->cur_state->in_sleepable;
-}
-
 /* The non-sleepable programs and sleepable programs with explicit bpf_rcu_read_lock()
  * can dereference RCU protected pointers and result is PTR_TRUSTED.
  */
@@ -4455,7 +4450,7 @@ static bool in_rcu_cs(struct bpf_verifier_env *env)
 	       env->cur_state->active_preempt_locks ||
 	       env->cur_state->active_locks ||
 	       env->cur_state->active_irq_id ||
-	       !in_sleepable(env);
+	       !env->cur_state->in_sleepable;
 }
 
 /* Once GCC supports btf_type_tag the following mechanism will be replaced with tag check */
@@ -10283,7 +10278,7 @@ static inline bool in_sleepable_context(struct bpf_verifier_env *env)
 	       !env->cur_state->active_preempt_locks &&
 	       !env->cur_state->active_locks &&
 	       !env->cur_state->active_irq_id &&
-	       in_sleepable(env);
+	       env->cur_state->in_sleepable;
 }
 
 static const char *non_sleepable_context_description(struct bpf_verifier_env *env)
@@ -12108,7 +12103,7 @@ static bool check_css_task_iter_allowlist(struct bpf_verifier_env *env)
 			return true;
 		fallthrough;
 	default:
-		return in_sleepable(env);
+		return in_sleepable_context(env);
 	}
 }
 
@@ -13115,7 +13110,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	}
 
 	sleepable = bpf_is_kfunc_sleepable(&meta);
-	if (sleepable && !in_sleepable(env)) {
+	if (sleepable && !in_sleepable_context(env)) {
 		verbose(env, "program must be sleepable to call sleepable kfunc %s\n", func_name);
 		return -EACCES;
 	}
