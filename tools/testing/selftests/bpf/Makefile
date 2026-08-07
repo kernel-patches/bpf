@@ -135,6 +135,9 @@ TEST_PROGS_EXTENDED := \
 TEST_KMODS := bpf_testmod.ko bpf_test_no_cfi.ko bpf_test_modorder_x.ko \
 	bpf_test_modorder_y.ko bpf_test_rqspinlock.ko
 TEST_KMOD_TARGETS = $(addprefix $(OUTPUT)/,$(TEST_KMODS))
+# Build directory for kernel modules: routed to $(OUTPUT)/test_kmods when
+# OUTPUT is set so that kbuild intermediates stay out of the source tree.
+TEST_KMODS_OUTDIR := $(if $(OUTPUT),$(OUTPUT)/test_kmods,test_kmods)
 
 # Compile but not part of 'make run_tests'
 TEST_GEN_PROGS_EXTENDED = \
@@ -163,8 +166,8 @@ override define CLEAN
 	$(Q)$(RM) -r $(TEST_GEN_FILES)
 	$(Q)$(RM) -r $(TEST_KMODS)
 	$(Q)$(RM) -r $(EXTRA_CLEAN)
-	$(Q)$(MAKE) -C test_kmods clean
-	$(Q)$(MAKE) -C libarena clean
+	$(Q)$(MAKE) -C test_kmods $(if $(OUTPUT),OUTPUT=$(OUTPUT)/test_kmods) clean
+	$(Q)$(MAKE) -C libarena $(if $(OUTPUT),OUTPUT=$(OUTPUT)/libarena) clean
 	$(Q)$(MAKE) docs-clean
 endef
 
@@ -301,17 +304,18 @@ $(OUTPUT)/sign-file: ../../../../scripts/sign-file.c
 # support that for regular rules. However, pattern matching rules are implicitly
 # treated as grouped even with older versions of make, so as a workaround, the
 # subst() turns the rule into a pattern matching rule
-$(addprefix test_kmods/,$(subst .ko,%ko,$(TEST_KMODS))): $(VMLINUX_BTF) $(RESOLVE_BTFIDS) $(wildcard test_kmods/Makefile test_kmods/*.[ch])
-	$(Q)$(RM) test_kmods/*.ko test_kmods/*.mod.o # force re-compilation
+$(addprefix $(TEST_KMODS_OUTDIR)/,$(subst .ko,%ko,$(TEST_KMODS))): $(VMLINUX_BTF) $(RESOLVE_BTFIDS) $(wildcard test_kmods/Makefile test_kmods/*.[ch])
+	$(Q)$(RM) $(TEST_KMODS_OUTDIR)/*.ko $(TEST_KMODS_OUTDIR)/*.mod.o # force re-compilation
 	$(Q)$(MAKE) $(submake_extras) -C test_kmods				\
 		$(if $(O),O=$(abspath $(O)))					\
 		$(if $(KBUILD_OUTPUT),KBUILD_OUTPUT=$(abspath $(KBUILD_OUTPUT)))\
+		$(if $(OUTPUT),OUTPUT=$(OUTPUT)/test_kmods)			\
 		RESOLVE_BTFIDS=$(RESOLVE_BTFIDS)				\
 		EXTRA_CFLAGS='' EXTRA_LDFLAGS=''
 
-$(TEST_KMOD_TARGETS): $(addprefix test_kmods/,$(TEST_KMODS))
+$(TEST_KMOD_TARGETS): $(addprefix $(TEST_KMODS_OUTDIR)/,$(TEST_KMODS))
 	$(call msg,MOD,,$@)
-	$(Q)$(if $(PERMISSIVE),if [ -f test_kmods/$(@F) ]; then )cp test_kmods/$(@F) $@$(if $(PERMISSIVE),; fi)
+	$(Q)$(if $(PERMISSIVE),if [ -f $(TEST_KMODS_OUTDIR)/$(@F) ]; then )cp $(TEST_KMODS_OUTDIR)/$(@F) $@$(if $(PERMISSIVE),; fi)
 
 
 DEFAULT_BPFTOOL := $(HOST_SCRATCH_DIR)/sbin/bpftool
@@ -578,7 +582,7 @@ TRUNNER_EXTRA_OBJS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.o,		\
 TRUNNER_LIB_OBJS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.o,		\
 				 $$(filter %.c,$(TRUNNER_LIB_SOURCES)))
 TRUNNER_EXTRA_HDRS := $$(filter %.h,$(TRUNNER_EXTRA_SOURCES))
-TRUNNER_TESTS_HDR := $(TRUNNER_TESTS_DIR)/tests.h
+TRUNNER_TESTS_HDR := $(OUTPUT)/$(TRUNNER_TESTS_DIR)/tests.h
 TRUNNER_BPF_SRCS := $$(notdir $$(wildcard $(TRUNNER_BPF_PROGS_DIR)/*.c))
 TRUNNER_BPF_OBJS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.bpf.o, $$(TRUNNER_BPF_SRCS))
 TRUNNER_BPF_SKELS := $$(patsubst %.c,$$(TRUNNER_OUTPUT)/%.skel.h,	\
@@ -718,9 +722,9 @@ endif
 # ensure we set up tests.h header generation rule just once
 ifeq ($($(TRUNNER_TESTS_DIR)-tests-hdr),)
 $(TRUNNER_TESTS_DIR)-tests-hdr := y
-$(TRUNNER_TESTS_HDR): $(TRUNNER_TESTS_DIR)/*.c
+$(TRUNNER_TESTS_HDR): $(TRUNNER_TESTS_DIR)/*.c | $(TRUNNER_OUTPUT)
 	$$(call msg,TEST-HDR,$(TRUNNER_BINARY),$$@)
-	$$(shell (echo '/* Generated header, do not edit */';					\
+	$$(shell mkdir -p $$(dir $$@) && (echo '/* Generated header, do not edit */';			\
 		  sed -n -E 's/^void (serial_)?test_([a-zA-Z0-9_]+)\((void)?\).*/DEFINE_TEST(\2)/p'	\
 			$(TRUNNER_TESTS_DIR)/*.c | sort ;	\
 		 ) > $$@)
@@ -800,7 +804,7 @@ $(OUTPUT)/$(TRUNNER_BINARY): $(if $(filter test_progs%,$1),$(if $(PERMISSIVE),$$
 endef
 
 VERIFY_SIG_SETUP := $(CURDIR)/verify_sig_setup.sh
-VERIFY_SIG_HDR := verification_cert.h
+VERIFY_SIG_HDR := $(OUTPUT)/verification_cert.h
 VERIFICATION_CERT   := $(BUILD_DIR)/signing_key.der
 PRIVATE_KEY := $(BUILD_DIR)/signing_key.pem
 
@@ -824,7 +828,8 @@ LIBARENA_MAKE_ARGS = \
 		CLANG="$(CLANG)" \
 		BPF_CFLAGS="$(BPF_CFLAGS) $(CLANG_CFLAGS)" \
 		BPF_TARGET_ENDIAN="$(BPF_TARGET_ENDIAN)" \
-		Q="$(Q)"
+		Q="$(Q)" \
+		OUTPUT="$(OUTPUT)/libarena"
 
 LIBARENA_BPF_DEPS := $(wildcard libarena/Makefile		\
 				 libarena/include/*		\
@@ -833,17 +838,17 @@ LIBARENA_BPF_DEPS := $(wildcard libarena/Makefile		\
 				 libarena/selftests/*		\
 				 libarena/*.bpf.o)
 
-LIBARENA_SKEL := libarena/libarena.skel.h
+LIBARENA_SKEL := $(OUTPUT)/libarena/libarena.skel.h
 
 $(LIBARENA_SKEL): $(INCLUDE_DIR)/vmlinux.h $(BPFOBJ) $(LIBARENA_BPF_DEPS)
-	+$(MAKE) -C libarena libarena.skel.h $(LIBARENA_MAKE_ARGS)
+	+$(MAKE) -C libarena $(LIBARENA_SKEL) $(LIBARENA_MAKE_ARGS)
 
 ifneq ($(CLANG_HAS_ARENA_ASAN),)
-LIBARENA_ASAN_SKEL := libarena/libarena_asan.skel.h
+LIBARENA_ASAN_SKEL := $(OUTPUT)/libarena/libarena_asan.skel.h
 CFLAGS += -DHAS_BPF_ARENA_ASAN
 
 $(LIBARENA_ASAN_SKEL): $(INCLUDE_DIR)/vmlinux.h $(BPFOBJ) $(LIBARENA_BPF_DEPS)
-	+$(MAKE) -C libarena libarena_asan.skel.h $(LIBARENA_MAKE_ARGS)
+	+$(MAKE) -C libarena $(LIBARENA_ASAN_SKEL) $(LIBARENA_MAKE_ARGS)
 endif
 
 # Define test_progs test runner.
@@ -921,14 +926,14 @@ $(eval $(call DEFINE_TEST_RUNNER,test_maps))
 # It is much simpler than test_maps/test_progs and sufficiently different from
 # them (e.g., test.h is using completely pattern), that it's worth just
 # explicitly defining all the rules explicitly.
-verifier/tests.h: verifier/*.c
-	$(shell ( cd verifier/; \
+$(OUTPUT)/verifier/tests.h: verifier/*.c | $(OUTPUT)
+	$(shell mkdir -p $(OUTPUT)/verifier && ( \
 		  echo '/* Generated header, do not edit */'; \
 		  echo '#ifdef FILL_ARRAY'; \
-		  ls *.c 2> /dev/null | sed -e 's@\(.*\)@#include \"\1\"@'; \
+		  ls verifier/*.c 2> /dev/null | sed -e 's@\(.*\)@#include "$(CURDIR)/\1"@'; \
 		  echo '#endif' \
-		) > verifier/tests.h)
-$(OUTPUT)/test_verifier: test_verifier.c verifier/tests.h $(BPFOBJ) | $(OUTPUT)
+		) > $(OUTPUT)/verifier/tests.h)
+$(OUTPUT)/test_verifier: test_verifier.c $(OUTPUT)/verifier/tests.h $(BPFOBJ) | $(OUTPUT)
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) $(LDLIBS) -o $@
 

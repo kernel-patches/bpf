@@ -32,14 +32,17 @@ PERMISSIVE := $(filter 0,$(BPF_STRICT_BUILD))
 all:
 ifeq ($(PERMISSIVE),)
 	$(Q)$(MAKE) -C $(KDIR) $(if $(KMOD_O_VALID),O=$(KMOD_O_VALID) KBUILD_OUTPUT=$(KMOD_O_VALID),KBUILD_OUTPUT=) \
+		$(if $(OUTPUT),MO=$(OUTPUT)) \
 		M=$(TEST_KMOD_DIR) modules
 else ifneq ("$(wildcard $(KDIR))", "")
 	$(Q)$(MAKE) -C $(KDIR) $(if $(KMOD_O_VALID),O=$(KMOD_O_VALID) KBUILD_OUTPUT=$(KMOD_O_VALID),KBUILD_OUTPUT=) \
+		$(if $(OUTPUT),MO=$(OUTPUT)) \
 		M=$(TEST_KMOD_DIR) modules
 endif
 
 clean:
 ifneq ("$(wildcard $(KDIR))", "")
 	$(Q)$(MAKE) -C $(KDIR) $(if $(KMOD_O_VALID),O=$(KMOD_O_VALID) KBUILD_OUTPUT=$(KMOD_O_VALID),KBUILD_OUTPUT=) \
+		$(if $(OUTPUT),MO=$(OUTPUT)) \
 		M=$(TEST_KMOD_DIR) clean
 endif
