@@ -10,7 +10,7 @@
 
 struct {
 	__uint(type, BPF_MAP_TYPE_XSKMAP);
-	__uint(max_entries, 2);
+	__uint(max_entries, MAX_SOCKETS);
 	__uint(key_size, sizeof(int));
 	__uint(value_size, sizeof(int));
 } xsk SEC(".maps");
@@ -73,6 +73,23 @@ SEC("xdp") int xsk_xdp_shared_umem(struct xdp_md *xdp)
 		return XDP_DROP;
 
 	return bpf_redirect_map(&xsk, idx, XDP_DROP);
+}
+
+SEC("xdp") int xsk_xdp_shared_umem_length_based(struct xdp_md *xdp)
+{
+	void *data = (void *)(long)xdp->data;
+	void *data_end = (void *)(long)xdp->data_end;
+	__u32 pkt_len = data_end - data;
+
+	/* 
+	 * Route packets by total XDP-visible packet length (data_end - data):
+	 * - Socket 0: packets <= SHARED_UMEM_LEN_SPLIT bytes
+	 * - Socket 1: packets > SHARED_UMEM_LEN_SPLIT bytes
+	 */
+	if (pkt_len <= SHARED_UMEM_LEN_SPLIT)
+		return bpf_redirect_map(&xsk, 0, XDP_DROP);
+	else
+		return bpf_redirect_map(&xsk, 1, XDP_DROP);
 }
 
 SEC("xdp.frags") int xsk_xdp_adjust_tail(struct xdp_md *xdp)
