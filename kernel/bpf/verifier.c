@@ -4849,7 +4849,7 @@ static int check_map_access(struct bpf_verifier_env *env, struct bpf_reg_state *
 }
 
 static bool may_access_direct_pkt_data(struct bpf_verifier_env *env,
-			       const struct bpf_func_proto *fn,
+			       const struct bpf_call_arg_meta *meta,
 			       enum bpf_access_type t)
 {
 	enum bpf_prog_type prog_type = resolve_prog_type(env->prog);
@@ -4873,10 +4873,11 @@ static bool may_access_direct_pkt_data(struct bpf_verifier_env *env,
 	case BPF_PROG_TYPE_LWT_XMIT:
 	case BPF_PROG_TYPE_SK_SKB:
 	case BPF_PROG_TYPE_SK_MSG:
-		if (fn)
-			return fn->pkt_access;
+		if (meta && !meta->btf && meta->func_id)
+			return meta->fn->pkt_access;
 
-		env->seen_direct_write = true;
+		if (t == BPF_WRITE)
+			env->seen_direct_write = true;
 		return true;
 
 	case BPF_PROG_TYPE_CGROUP_SOCKOPT:
@@ -7048,6 +7049,10 @@ static int check_helper_mem_access(struct bpf_verifier_env *env, struct bpf_reg_
 	switch (base_type(reg->type)) {
 	case PTR_TO_PACKET:
 	case PTR_TO_PACKET_META:
+		if (!may_access_direct_pkt_data(env, meta, access_type)) {
+			verbose(env, "function access to the packet is not allowed\n");
+			return -EACCES;
+		}
 		return check_packet_access(env, reg, argno, 0, access_size,
 					   zero_size_allowed);
 	case PTR_TO_MAP_KEY:
@@ -7164,7 +7169,7 @@ static int check_mem_size_reg(struct bpf_verifier_env *env,
 	 * the memory that the helper could just partially fill up.
 	 */
 	if (!tnum_is_const(size_reg->var_off))
-		meta = NULL;
+		meta->arg_raw_mem.regno = 0;
 
 	if (reg_smin(size_reg) < 0) {
 		verbose(env, "%s min value is negative, either use unsigned or 'var &= const'\n",
@@ -8773,7 +8778,6 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	struct bpf_reg_state *reg = get_func_arg_reg(caller, regs, arg);
 	enum bpf_arg_type arg_type = fn->arg_type[arg];
 	int regno = reg_from_argno(argno);
-	enum bpf_reg_type type = reg->type;
 	u32 arg_size = arg_type & MEM_FIXED_SIZE ? fn->arg_size[arg] : 0;
 	u32 key_size;
 	int err = 0;
@@ -8796,12 +8800,6 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 			return -EACCES;
 		}
 		return 0;
-	}
-
-	if (type_is_pkt_pointer(type) &&
-	    !may_access_direct_pkt_data(env, fn, BPF_READ)) {
-		verbose(env, "helper access to the packet is not allowed\n");
-		return -EACCES;
 	}
 
 	err = resolve_func_arg_type(env, reg, arg, meta, &arg_type, &arg_size);
@@ -8876,7 +8874,7 @@ skip_type_check:
 			return -EFAULT;
 		}
 		key_size = meta->map.ptr->key_size;
-		err = check_helper_mem_access(env, reg, argno, key_size, BPF_READ, false, NULL,
+		err = check_helper_mem_access(env, reg, argno, key_size, BPF_READ, false, meta,
 					      NULL);
 		if (err)
 			return err;
