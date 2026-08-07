@@ -937,4 +937,39 @@ int nf_meta_read(struct bpf_nf_ctx *ctx)
 	return NF_ACCEPT;
 }
 
+SEC("lwt_in")
+int lwt_in_meta_read(struct __sk_buff *ctx)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &ctx);
+	if (!meta_have)
+		return BPF_OK;
+	if (!check_metadata(meta_have))
+		return BPF_OK;
+
+	test_pass = true;
+	return BPF_OK;
+}
+
+SEC("lwt_out")
+int lwt_out_meta_write(struct __sk_buff *ctx)
+{
+	if (!is_test_packet_tc(ctx))
+		return BPF_OK;
+	write_meta(ctx, &meta_map);
+
+	return BPF_OK;
+}
+
+SEC("lwt_xmit")
+int lwt_xmit_meta_write(struct __sk_buff *ctx)
+{
+	if (!is_test_packet_tc(ctx))
+		return BPF_OK;
+	write_meta(ctx, &meta_map);
+
+	return BPF_OK;
+}
+
 char _license[] SEC("license") = "GPL";

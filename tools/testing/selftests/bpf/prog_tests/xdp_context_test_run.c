@@ -1437,6 +1437,115 @@ cleanup_netns:
 	netns_free(ns);
 }
 
+#define LWT_EXT_PIN_PATH "/sys/fs/bpf/skb_trace_lwt"
+
+/*
+ * Test metadata passing across LWT hooks on loopback.
+ *
+ * @lwt_prog:  BPF program to pin and attach via ip route encap
+ * @encap_dir: "in", "out", or "xmit"
+ * @writer:    true if lwt_prog tags the skb (reader on TC ingress),
+ *             false if lwt_prog reads the metadata (writer on TC ingress)
+ */
+static void test_skb_trace__lwt(struct test_xdp_meta *skel, const char *name,
+				struct bpf_program *lwt_prog,
+				const char *encap_dir, bool writer)
+{
+	LIBBPF_OPTS(bpf_tc_hook, tc_hook,
+		    .ifindex = 1 /* IFINDEX_LO */,
+		    .attach_point = BPF_TC_INGRESS);
+	LIBBPF_OPTS(bpf_tc_opts, tc_opts, .handle = 1, .priority = 1);
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+	};
+	struct bpf_program *tc_prog;
+	struct bpf_link *tp_link = NULL;
+	char buf[TEST_PAYLOAD_LEN];
+	struct netns_obj *ns = NULL;
+	int server_fd;
+	int fd;
+	int port;
+	int ret;
+	int i;
+
+	reset_skb_trace_test_state(skel);
+
+	ns = netns_new(name, true);
+	if (!ASSERT_OK_PTR(ns, "netns_new"))
+		return;
+
+	tp_link = bpf_program__attach(skel->progs.skb_free);
+	if (!ASSERT_OK_PTR(tp_link, "tp_attach"))
+		goto cleanup_netns;
+
+	unlink(LWT_EXT_PIN_PATH);
+	ret = bpf_program__pin(lwt_prog, LWT_EXT_PIN_PATH);
+	if (!ASSERT_OK(ret, "pin lwt"))
+		goto cleanup_tp;
+
+	SYS(cleanup_pin, "ip addr add 10.0.0.1/32 dev lo");
+	SYS(cleanup_pin, "ip route replace table local local 10.0.0.1 "
+	     "encap bpf %s pinned " LWT_EXT_PIN_PATH " dev lo",
+	     encap_dir);
+
+	server_fd = start_server(AF_INET, SOCK_DGRAM, "10.0.0.1", 0, 0);
+	if (!ASSERT_GE(server_fd, 0, "start_server"))
+		goto cleanup_pin;
+
+	ret = bpf_tc_hook_create(&tc_hook);
+	if (!ASSERT_OK(ret, "bpf_tc_hook_create"))
+		goto cleanup_server;
+
+	/* When LWT writes, TC ingress reads; when LWT reads, TC ingress writes */
+	tc_prog = writer ? skel->progs.tc_meta_read
+			 : skel->progs.tc_meta_write;
+	tc_opts.prog_fd = bpf_program__fd(tc_prog);
+	ret = bpf_tc_attach(&tc_hook, &tc_opts);
+	if (!ASSERT_OK(ret, "bpf_tc_attach"))
+		goto cleanup_tc;
+
+	port = get_socket_local_port(server_fd);
+	if (!ASSERT_GE(port, 0, "get_port"))
+		goto cleanup_tc;
+
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (!ASSERT_GE(fd, 0, "socket"))
+		goto cleanup_tc;
+
+	inet_pton(AF_INET, "10.0.0.1", &addr.sin_addr);
+	addr.sin_port = port;
+	ret = sendto(fd, test_payload, TEST_PAYLOAD_LEN, 0,
+		     (void *)&addr, sizeof(addr));
+	if (!ASSERT_EQ(ret, TEST_PAYLOAD_LEN, "sendto"))
+		goto cleanup_fd;
+	ret = recvfrom(server_fd, buf, sizeof(buf), 0, NULL, NULL);
+	ASSERT_EQ(ret, TEST_PAYLOAD_LEN, "recvfrom");
+
+	/* Poll every 10 msec up to 1 sec */
+	for (i = 0; i < 100 && !skel->bss->test_pass; i++)
+		usleep(10000);
+	ASSERT_TRUE(skel->bss->test_pass, "test_pass");
+
+	/* Wait for the free tp to drain all tagged skbs from the stash */
+	for (i = 0; i < 100 && !is_map_empty(skel->maps.meta_map); i++)
+		usleep(10000);
+	ASSERT_TRUE(is_map_empty(skel->maps.meta_map), "stash drained");
+	ASSERT_GE(skel->bss->free_count, 1, "free_count");
+
+cleanup_fd:
+	close(fd);
+cleanup_tc:
+	bpf_tc_hook_destroy(&tc_hook);
+cleanup_server:
+	close(server_fd);
+cleanup_pin:
+	unlink(LWT_EXT_PIN_PATH);
+cleanup_tp:
+	bpf_link__destroy(tp_link);
+cleanup_netns:
+	netns_free(ns);
+}
+
 void test_skb_trace_cross_hook(void)
 {
 	struct test_xdp_meta *skel = NULL;
@@ -1457,6 +1566,15 @@ void test_skb_trace_cross_hook(void)
 		test_cgrp_egress_to_kfree_skb(skel);
 	if (test__start_subtest("tc_to_nf"))
 		test_skb_trace__nf(skel, "tc_to_nf");
+	if (test__start_subtest("tc_to_lwt_in"))
+		test_skb_trace__lwt(skel, "tc_to_lwt_in",
+				    skel->progs.lwt_in_meta_read, "in", false);
+	if (test__start_subtest("lwt_out_to_tc"))
+		test_skb_trace__lwt(skel, "lwt_out_to_tc",
+				    skel->progs.lwt_out_meta_write, "out", true);
+	if (test__start_subtest("lwt_xmit_to_tc"))
+		test_skb_trace__lwt(skel, "lwt_xmit_to_tc",
+				    skel->progs.lwt_xmit_meta_write, "xmit", true);
 
 	test_xdp_meta__destroy(skel);
 }
