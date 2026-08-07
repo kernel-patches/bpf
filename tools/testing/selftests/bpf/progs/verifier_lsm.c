@@ -5,6 +5,10 @@
 #include <bpf/bpf_tracing.h>
 #include "bpf_misc.h"
 
+extern int bpf_copy_from_user_mm(void *dst, u32 dst__sz,
+				const void *unsafe_ptr__ign,
+				struct mm_struct *mm, u64 flags) __ksym;
+
 SEC("lsm/file_permission")
 __description("lsm bpf prog with -4095~0 retval. test 1")
 __success
@@ -210,6 +214,33 @@ __naked int retval_load_resets_bounds(void *ctx)
 	"r0 = 0;"
 	"exit;"
 	::: __clobber_all);
+}
+
+SEC("lsm.s/bprm_check_security")
+__description("null checking trusted-or-null linux_binprm mm")
+__success
+int BPF_PROG(copy_from_user_mm_with_null_check, struct linux_binprm *bprm, int ret)
+{
+	struct mm_struct *mm;
+	char dst[8];
+
+	mm = bprm->mm;
+	if (!mm)
+		return 0;
+
+	bpf_copy_from_user_mm(dst, sizeof(dst), (void *)bprm->p, mm, 0);
+	return 0;
+}
+
+SEC("lsm.s/bprm_check_security")
+__description("not null checking trusted-or-null linux_binprm mm")
+__failure __msg("Possibly NULL pointer passed to trusted R4")
+int BPF_PROG(copy_from_user_mm_without_null_check, struct linux_binprm *bprm, int ret)
+{
+	char dst[8];
+
+	bpf_copy_from_user_mm(dst, sizeof(dst), (void *)bprm->p, bprm->mm, 0);
+	return 0;
 }
 
 char _license[] SEC("license") = "GPL";
