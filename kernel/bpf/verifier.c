@@ -12239,6 +12239,14 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	if (is_kfunc_release(meta) && arg == 0)
 		arg_type |= OBJ_RELEASE;
 
+	/*
+	 * A KF_RCU kfunc accepts an RCU-protected pointer where it would
+	 * otherwise demand a referenced or trusted one. Only ARG_PTR_TO_BTF_ID
+	 * looks at where its register came from, so leave the other kinds alone.
+	 */
+	if (base_type(arg_type) == ARG_PTR_TO_BTF_ID && is_kfunc_rcu(meta))
+		arg_type |= MEM_RCU;
+
 	return arg_type;
 }
 
@@ -13174,7 +13182,7 @@ check_ok:
 			    reg2btf_ids[base_type(reg->type)]) {
 				if (!is_trusted_reg(env, reg) ||
 				    bpf_type_has_unsafe_modifiers(reg->type)) {
-					if (!is_kfunc_rcu(meta)) {
+					if (!(arg_type & MEM_RCU)) {
 						const char *expected_type;
 
 						expected_type = bpf_diag_fmt_btf_type(env, btf, ref_id);
