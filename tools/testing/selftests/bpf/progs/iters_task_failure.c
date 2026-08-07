@@ -62,6 +62,33 @@ int BPF_PROG(iter_tasks_lock_and_unlock)
 }
 
 SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
+__failure __msg("expected an RCU CS when using bpf_iter_task_next")
+__flag(BPF_F_TEST_STATE_FREQ)
+int BPF_PROG(iter_tasks_rcu_state_pruning)
+{
+	struct bpf_iter_task it;
+
+	bpf_rcu_read_lock();
+	bpf_iter_task_new(&it, NULL, BPF_TASK_ITER_ALL_PROCS);
+
+	if (likely(bpf_get_prandom_u32())) {
+		/* Keep the outer RCU lock active. */
+		bpf_rcu_read_lock();
+		bpf_rcu_read_unlock();
+	} else {
+		/* Create an unprotected gap. */
+		bpf_rcu_read_unlock();
+		bpf_rcu_read_lock();
+	}
+
+	bpf_iter_task_next(&it);
+	bpf_iter_task_destroy(&it);
+	bpf_rcu_read_unlock();
+
+	return 0;
+}
+
+SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
 __failure __msg("expected an RCU CS when using bpf_iter_css_next")
 int BPF_PROG(iter_css_lock_and_unlock)
 {
