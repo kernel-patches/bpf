@@ -1483,6 +1483,28 @@ static int validate_tx_invalid_descs(struct ifobject *ifobject)
 	return TEST_PASS;
 }
 
+static void xsk_delete_socket_batch(struct ifobject *ifobject, u32 count)
+{
+	u32 i;
+
+	if (!ifobject)
+		return;
+
+	for (i = count; i > 0; i--)
+		xsk_delete_socket(&ifobject->xsk_arr[i - 1]);
+}
+
+static void xsk_configure_rollback(struct ifobject *ifobject, int last)
+{
+	u32 count;
+
+	if (!ifobject || last < 0)
+		return;
+
+	count = last + 1;
+	xsk_delete_socket_batch(ifobject, count);
+}
+
 static int xsk_configure(struct test_spec *test, struct ifobject *ifobject,
 			  struct xsk_umem_info *umem, bool tx)
 {
@@ -1499,14 +1521,18 @@ static int xsk_configure(struct test_spec *test, struct ifobject *ifobject,
 				break;
 
 			/* Retry if it fails as xsk_socket__create() is asynchronous */
-			if (ctr >= SOCK_RECONF_CTR)
+			if (ctr >= SOCK_RECONF_CTR) {
+				xsk_configure_rollback(ifobject, i);
 				return ret;
+			}
 			usleep(USLEEP_MAX);
 		}
 		if (ifobject->busy_poll) {
 			ret = enable_busy_poll(&ifobject->xsk_arr[i]);
-			if (ret)
+			if (ret) {
+				xsk_configure_rollback(ifobject, i);
 				return ret;
+			}
 		}
 	}
 
@@ -1763,17 +1789,6 @@ void xsk_delete_socket(struct xsk_socket_info *xsk)
 		umem->buffer = NULL;
 		umem->mmap_size = 0;
 	}
-}
-
-static void xsk_delete_socket_batch(struct ifobject *ifobject, u32 count)
-{
-	u32 i;
-
-	if (!ifobject)
-		return;
-
-	for (i = count; i > 0; i--)
-		xsk_delete_socket(&ifobject->xsk_arr[i - 1]);
 }
 
 static void xsk_delete_all_ifobj_sockets(struct test_spec *test, struct ifobject *ifobj)
