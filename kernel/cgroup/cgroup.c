@@ -3042,6 +3042,19 @@ int cgroup_attach_task(struct cgroup *dst_cgrp, struct task_struct *leader,
 	return ret;
 }
 
+int cgroup_kthread_attach(struct cgroup *cgrp, struct task_struct *task)
+{
+	int ret;
+
+	cgroup_lock();
+	cgroup_attach_lock(CGRP_ATTACH_LOCK_GLOBAL, NULL);
+	ret = cgroup_attach_task(cgrp, task, false);
+	cgroup_attach_unlock(CGRP_ATTACH_LOCK_GLOBAL, NULL);
+	cgroup_unlock();
+
+	return ret;
+}
+
 struct task_struct *cgroup_procs_write_start(char *buf, bool threadgroup,
 					     enum cgroup_attach_lock_mode *lock_mode)
 {

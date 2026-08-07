@@ -477,6 +477,7 @@ static bool is_async_callback_calling_kfunc(u32 btf_id);
 static bool is_callback_calling_kfunc(u32 btf_id);
 
 static bool is_bpf_wq_set_callback_kfunc(u32 btf_id);
+static bool is_bpf_thread_wq_set_callback_kfunc(u32 btf_id);
 static bool is_task_work_add_kfunc(u32 func_id);
 
 static bool is_sync_callback_calling_function(enum bpf_func_id func_id)
@@ -516,9 +517,11 @@ static bool is_async_cb_sleepable(struct bpf_verifier_env *env, struct bpf_insn 
 	if (bpf_helper_call(insn) && insn->imm == BPF_FUNC_timer_set_callback)
 		return false;
 
-	/* bpf_wq and bpf_task_work callbacks are always sleepable. */
+	/* bpf_wq, bpf_thread_wq and bpf_task_work callbacks are always sleepable. */
 	if (bpf_pseudo_kfunc_call(insn) && insn->off == 0 &&
-	    (is_bpf_wq_set_callback_kfunc(insn->imm) || is_task_work_add_kfunc(insn->imm)))
+	    (is_bpf_wq_set_callback_kfunc(insn->imm) ||
+	     is_bpf_thread_wq_set_callback_kfunc(insn->imm) ||
+	     is_task_work_add_kfunc(insn->imm)))
 		return true;
 
 	verifier_bug(env, "unhandled async callback in is_async_cb_sleepable");
@@ -1871,7 +1874,10 @@ static void refine_map_lookup_value(struct bpf_reg_state *reg)
 		 * as UID of the inner map.
 		 */
 		if (btf_record_has_field(map->inner_map_meta->record,
-					 BPF_TIMER | BPF_WORKQUEUE | BPF_TASK_WORK))
+					 BPF_TIMER |
+					 BPF_WORKQUEUE |
+					 BPF_TASK_WORK |
+					 BPF_THREAD_WQ))
 			reg->map_uid = reg->id;
 	} else if (map->map_type == BPF_MAP_TYPE_XSKMAP) {
 		reg->type = PTR_TO_XDP_SOCK | maybe_null;
@@ -7268,6 +7274,9 @@ static int check_map_field_pointer(struct bpf_verifier_env *env, struct bpf_reg_
 	case BPF_WORKQUEUE:
 		field_off = map->record->wq_off;
 		break;
+	case BPF_THREAD_WQ:
+		field_off = map->record->thread_wq_off;
+		break;
 	default:
 		verifier_bug(env, "unsupported BTF field type: %s\n", struct_name);
 		return -EINVAL;
@@ -10965,6 +10974,7 @@ enum {
 	KF_ARG_WORKQUEUE_ID,
 	KF_ARG_RES_SPIN_LOCK_ID,
 	KF_ARG_TASK_WORK_ID,
+	KF_ARG_THREAD_WQ_ID,
 	KF_ARG_PROG_AUX_ID,
 	KF_ARG_TIMER_ID
 };
@@ -10978,6 +10988,7 @@ BTF_ID(struct, bpf_rb_node)
 BTF_ID(struct, bpf_wq)
 BTF_ID(struct, bpf_res_spin_lock)
 BTF_ID(struct, bpf_task_work)
+BTF_ID(struct, bpf_thread_wq)
 BTF_ID(struct, bpf_prog_aux)
 BTF_ID(struct, bpf_timer)
 
@@ -11036,6 +11047,11 @@ static bool is_kfunc_arg_wq(const struct btf *btf, const struct btf_param *arg)
 static bool is_kfunc_arg_task_work(const struct btf *btf, const struct btf_param *arg)
 {
 	return __is_kfunc_ptr_arg_type(btf, arg, KF_ARG_TASK_WORK_ID);
+}
+
+static bool is_kfunc_arg_thread_wq(const struct btf *btf, const struct btf_param *arg)
+{
+	return __is_kfunc_ptr_arg_type(btf, arg, KF_ARG_THREAD_WQ_ID);
 }
 
 static bool is_kfunc_arg_res_spin_lock(const struct btf *btf, const struct btf_param *arg)
@@ -11157,6 +11173,7 @@ enum kfunc_ptr_arg_type {
 	KF_ARG_PTR_TO_IRQ_FLAG,
 	KF_ARG_PTR_TO_RES_SPIN_LOCK,
 	KF_ARG_PTR_TO_TASK_WORK,
+	KF_ARG_PTR_TO_THREAD_WQ,
 };
 
 enum special_kfunc_type {
@@ -11203,6 +11220,7 @@ enum special_kfunc_type {
 	KF_bpf_percpu_obj_drop,
 	KF_bpf_throw,
 	KF_bpf_wq_set_callback,
+	KF_bpf_thread_wq_set_callback,
 	KF_bpf_preempt_disable,
 	KF_bpf_preempt_enable,
 	KF_bpf_iter_css_task_new,
@@ -11283,6 +11301,7 @@ BTF_ID(func, bpf_percpu_obj_drop_impl)
 BTF_ID(func, bpf_percpu_obj_drop)
 BTF_ID(func, bpf_throw)
 BTF_ID(func, bpf_wq_set_callback)
+BTF_ID(func, bpf_thread_wq_set_callback)
 BTF_ID(func, bpf_preempt_disable)
 BTF_ID(func, bpf_preempt_enable)
 #ifdef CONFIG_CGROUPS
@@ -11485,6 +11504,8 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 		arg_type = KF_ARG_PTR_TO_TIMER;
 	else if (is_kfunc_arg_task_work(meta->btf, &args[arg]))
 		arg_type = KF_ARG_PTR_TO_TASK_WORK;
+	else if (is_kfunc_arg_thread_wq(meta->btf, &args[arg]))
+		arg_type = KF_ARG_PTR_TO_THREAD_WQ;
 	else if (is_kfunc_arg_irq_flag(meta->btf, &args[arg]))
 		arg_type = KF_ARG_PTR_TO_IRQ_FLAG;
 	else if (is_kfunc_arg_res_spin_lock(meta->btf, &args[arg]))
@@ -11858,6 +11879,7 @@ static bool is_sync_callback_calling_kfunc(u32 btf_id)
 static bool is_async_callback_calling_kfunc(u32 btf_id)
 {
 	return is_bpf_wq_set_callback_kfunc(btf_id) ||
+	       is_bpf_thread_wq_set_callback_kfunc(btf_id) ||
 	       is_task_work_add_kfunc(btf_id);
 }
 
@@ -11870,6 +11892,11 @@ bool bpf_is_throw_kfunc(struct bpf_insn *insn)
 static bool is_bpf_wq_set_callback_kfunc(u32 btf_id)
 {
 	return btf_id == special_kfunc_list[KF_bpf_wq_set_callback];
+}
+
+static bool is_bpf_thread_wq_set_callback_kfunc(u32 btf_id)
+{
+	return btf_id == special_kfunc_list[KF_bpf_thread_wq_set_callback];
 }
 
 static bool is_callback_calling_kfunc(u32 btf_id)
@@ -12217,6 +12244,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		case KF_ARG_PTR_TO_WORKQUEUE:
 		case KF_ARG_PTR_TO_TIMER:
 		case KF_ARG_PTR_TO_TASK_WORK:
+		case KF_ARG_PTR_TO_THREAD_WQ:
 		case KF_ARG_PTR_TO_IRQ_FLAG:
 		case KF_ARG_PTR_TO_RES_SPIN_LOCK:
 			break;
@@ -13155,6 +13183,16 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	}
 
 	if (is_bpf_wq_set_callback_kfunc(meta.func_id)) {
+		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
+					 set_timer_callback_state);
+		if (err) {
+			verbose(env, "kfunc %s#%d failed callback verification\n",
+				func_name, meta.func_id);
+			return err;
+		}
+	}
+
+	if (is_bpf_thread_wq_set_callback_kfunc(meta.func_id)) {
 		err = push_callback_call(env, insn, insn_idx, meta.subprogno,
 					 set_timer_callback_state);
 		if (err) {

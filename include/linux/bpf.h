@@ -213,6 +213,7 @@ enum btf_field_type {
 	BPF_UPTR       = (1 << 11),
 	BPF_RES_SPIN_LOCK = (1 << 12),
 	BPF_TASK_WORK  = (1 << 13),
+	BPF_THREAD_WQ  = (1 << 14),
 };
 
 enum bpf_cgroup_storage_type {
@@ -267,6 +268,7 @@ struct btf_record {
 	int wq_off;
 	int refcount_off;
 	int task_work_off;
+	int thread_wq_off;
 	struct btf_field fields[];
 };
 
@@ -372,6 +374,8 @@ static inline const char *btf_field_type_name(enum btf_field_type type)
 		return "bpf_refcount";
 	case BPF_TASK_WORK:
 		return "bpf_task_work";
+	case BPF_THREAD_WQ:
+		return "bpf_thread_wq";
 	default:
 		WARN_ON_ONCE(1);
 		return "unknown";
@@ -412,6 +416,8 @@ static inline u32 btf_field_type_size(enum btf_field_type type)
 		return sizeof(struct bpf_refcount);
 	case BPF_TASK_WORK:
 		return sizeof(struct bpf_task_work);
+	case BPF_THREAD_WQ:
+		return sizeof(struct bpf_thread_wq);
 	default:
 		WARN_ON_ONCE(1);
 		return 0;
@@ -446,6 +452,8 @@ static inline u32 btf_field_type_align(enum btf_field_type type)
 		return __alignof__(struct bpf_refcount);
 	case BPF_TASK_WORK:
 		return __alignof__(struct bpf_task_work);
+	case BPF_THREAD_WQ:
+		return __alignof__(struct bpf_thread_wq);
 	default:
 		WARN_ON_ONCE(1);
 		return 0;
@@ -478,6 +486,7 @@ static inline void bpf_obj_init_field(const struct btf_field *field, void *addr)
 	case BPF_KPTR_PERCPU:
 	case BPF_UPTR:
 	case BPF_TASK_WORK:
+	case BPF_THREAD_WQ:
 		break;
 	default:
 		WARN_ON_ONCE(1);
@@ -502,6 +511,7 @@ static inline bool btf_field_is_nmi_safe(enum btf_field_type type)
 	case BPF_TASK_WORK:
 	case BPF_KPTR_UNREF:
 	case BPF_REFCOUNT:
+	case BPF_THREAD_WQ:
 		return true;
 	default:
 		return false;
@@ -644,6 +654,7 @@ void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
 void bpf_timer_cancel_and_free(void *timer);
 void bpf_wq_cancel_and_free(void *timer);
 void bpf_task_work_cancel_and_free(void *timer);
+void bpf_thread_wq_cancel_and_free(void *val);
 void bpf_list_head_free(const struct btf_field *field, void *list_head,
 			struct bpf_spin_lock *spin_lock);
 void bpf_rb_root_free(const struct btf_field *field, void *rb_root,
@@ -701,7 +712,8 @@ bool bpf_map_meta_equal(const struct bpf_map *meta0,
 
 static inline bool bpf_map_has_internal_structs(struct bpf_map *map)
 {
-	return btf_record_has_field(map->record, BPF_TIMER | BPF_WORKQUEUE | BPF_TASK_WORK);
+	return btf_record_has_field(map->record, BPF_TIMER | BPF_WORKQUEUE |
+						 BPF_TASK_WORK | BPF_THREAD_WQ);
 }
 
 void bpf_map_free_internal_structs(struct bpf_map *map, void *obj);
@@ -2710,6 +2722,7 @@ bool btf_record_equal(const struct btf_record *rec_a, const struct btf_record *r
 void bpf_obj_free_timer(const struct btf_record *rec, void *obj);
 void bpf_obj_free_workqueue(const struct btf_record *rec, void *obj);
 void bpf_obj_free_task_work(const struct btf_record *rec, void *obj);
+void bpf_obj_free_thread_wq(const struct btf_record *rec, void *obj);
 void bpf_obj_cancel_fields(struct bpf_map *map, void *obj);
 void bpf_obj_free_fields(const struct btf_record *rec, void *obj);
 void __bpf_obj_drop_impl(void *p, const struct btf_record *rec, bool percpu);

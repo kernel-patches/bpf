@@ -688,6 +688,7 @@ void btf_record_free(struct btf_record *rec)
 		case BPF_REFCOUNT:
 		case BPF_WORKQUEUE:
 		case BPF_TASK_WORK:
+		case BPF_THREAD_WQ:
 			/* Nothing to release */
 			break;
 		default:
@@ -742,6 +743,7 @@ struct btf_record *btf_record_dup(const struct btf_record *rec)
 		case BPF_REFCOUNT:
 		case BPF_WORKQUEUE:
 		case BPF_TASK_WORK:
+		case BPF_THREAD_WQ:
 			/* Nothing to acquire */
 			break;
 		default:
@@ -807,6 +809,13 @@ void bpf_obj_free_task_work(const struct btf_record *rec, void *obj)
 	bpf_task_work_cancel_and_free(obj + rec->task_work_off);
 }
 
+void bpf_obj_free_thread_wq(const struct btf_record *rec, void *obj)
+{
+	if (WARN_ON_ONCE(!btf_record_has_field(rec, BPF_THREAD_WQ)))
+		return;
+	bpf_thread_wq_cancel_and_free(obj + rec->thread_wq_off);
+}
+
 void bpf_obj_cancel_fields(struct bpf_map *map, void *obj)
 {
 	bpf_map_free_internal_structs(map, obj);
@@ -838,6 +847,9 @@ void bpf_obj_free_fields(const struct btf_record *rec, void *obj)
 			break;
 		case BPF_TASK_WORK:
 			bpf_task_work_cancel_and_free(field_ptr);
+			break;
+		case BPF_THREAD_WQ:
+			bpf_thread_wq_cancel_and_free(field_ptr);
 			break;
 		case BPF_KPTR_UNREF:
 			WRITE_ONCE(*(u64 *)field_ptr, 0);
@@ -1265,7 +1277,7 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 	map->record = btf_parse_fields(btf, value_type,
 				       BPF_SPIN_LOCK | BPF_RES_SPIN_LOCK | BPF_TIMER | BPF_KPTR | BPF_LIST_HEAD |
 				       BPF_RB_ROOT | BPF_REFCOUNT | BPF_WORKQUEUE | BPF_UPTR |
-				       BPF_TASK_WORK,
+				       BPF_TASK_WORK | BPF_THREAD_WQ,
 				       map->value_size);
 	if (!IS_ERR_OR_NULL(map->record)) {
 		int i;
@@ -1299,6 +1311,7 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 			case BPF_TIMER:
 			case BPF_WORKQUEUE:
 			case BPF_TASK_WORK:
+			case BPF_THREAD_WQ:
 				if (map->map_type != BPF_MAP_TYPE_HASH &&
 				    map->map_type != BPF_MAP_TYPE_RHASH &&
 				    map->map_type != BPF_MAP_TYPE_LRU_HASH &&

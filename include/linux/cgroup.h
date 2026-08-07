@@ -923,4 +923,6 @@ struct cgroup *task_get_cgroup1(struct task_struct *tsk, int hierarchy_id);
 
 struct cgroup_of_peak *of_peak(struct kernfs_open_file *of);
 
+int cgroup_kthread_attach(struct cgroup *cgrp, struct task_struct *task);
+
 #endif /* _LINUX_CGROUP_H */
