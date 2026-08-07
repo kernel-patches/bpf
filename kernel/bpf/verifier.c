@@ -8769,10 +8769,12 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 			  int insn_idx)
 {
 	const struct bpf_func_proto *fn = meta->fn;
-	u32 regno = BPF_REG_1 + arg;
-	struct bpf_reg_state *reg = reg_state(env, regno);
+	struct bpf_func_state *caller = cur_func(env);
+	struct bpf_reg_state *regs = cur_regs(env);
+	argno_t argno = argno_from_arg(arg + 1);
+	struct bpf_reg_state *reg = get_func_arg_reg(caller, regs, arg);
 	enum bpf_arg_type arg_type = fn->arg_type[arg];
-	argno_t argno = argno_from_reg(regno);
+	int regno = reg_from_argno(argno);
 	enum bpf_reg_type type = reg->type;
 	u32 *arg_btf_id = NULL;
 	u32 key_size;
@@ -8786,9 +8788,9 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		return err;
 
 	if (arg_type == ARG_ANYTHING) {
-		if (is_pointer_value(env, regno)) {
-			verbose(env, "R%d leaks addr into helper function\n",
-				regno);
+		if (__is_pointer_value(env->allow_ptr_leaks, reg)) {
+			verbose(env, "%s leaks addr into helper function\n",
+				reg_arg_name(env, argno));
 			return -EACCES;
 		}
 		return 0;
@@ -8904,7 +8906,8 @@ skip_type_check:
 		break;
 	case ARG_PTR_TO_PERCPU_BTF_ID:
 		if (!reg->btf_id) {
-			verbose(env, "Helper has invalid btf_id in R%d\n", regno);
+			verbose(env, "Helper has invalid btf_id in %s\n",
+				reg_arg_name(env, argno));
 			return -EACCES;
 		}
 		meta->ret_btf = reg->btf;
@@ -8941,7 +8944,7 @@ skip_type_check:
 		 * next is_mem_size argument below.
 		 */
 		if (arg_type & MEM_FIXED_SIZE) {
-			err = check_mem_reg(env, reg, argno_from_reg(regno), fn->arg_size[arg],
+			err = check_mem_reg(env, reg, argno, fn->arg_size[arg],
 					    arg_type & MEM_WRITE ? BPF_WRITE : BPF_READ, meta, NULL);
 			if (err)
 				return err;
@@ -8950,14 +8953,14 @@ skip_type_check:
 		}
 		break;
 	case ARG_MEM_SIZE:
-		err = check_mem_size_reg(env, reg_state(env, regno - 1), reg,
-					 argno_from_reg(regno - 1), argno,
+		err = check_mem_size_reg(env, get_func_arg_reg(caller, regs, arg - 1), reg,
+					 argno_from_arg(arg), argno,
 					 fn->arg_type[arg - 1] & MEM_WRITE ? BPF_WRITE : BPF_READ,
 					 false, meta, NULL);
 		break;
 	case ARG_MEM_SIZE_OR_ZERO:
-		err = check_mem_size_reg(env, reg_state(env, regno - 1), reg,
-					 argno_from_reg(regno - 1), argno,
+		err = check_mem_size_reg(env, get_func_arg_reg(caller, regs, arg - 1), reg,
+					 argno_from_arg(arg), argno,
 					 fn->arg_type[arg - 1] & MEM_WRITE ? BPF_WRITE : BPF_READ,
 					 true, meta, NULL);
 		break;
