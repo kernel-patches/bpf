@@ -438,6 +438,21 @@ static void bpf_compute_subprog_ret_regs(struct bpf_verifier_env *env)
 	}
 }
 
+/*
+ * A >8 byte BPF return changes the calling convention to R0:R2, so the
+ * verifier can only allow it while the subprogram's prototype remains
+ * reliable. Once BTF is marked unreliable, reject the feature instead of
+ * silently falling back to R0-only semantics.
+ */
+static bool subprog_ret_pair_unreliable(struct bpf_verifier_env *env, int subprog)
+{
+	struct bpf_prog_aux *aux = env->prog->aux;
+
+	return bpf_ret_reg_pair(env, subprog) &&
+	       aux->func_info_aux &&
+	       aux->func_info_aux[subprog].unreliable;
+}
+
 static const char *subprog_name(const struct bpf_verifier_env *env, int subprog)
 {
 	struct bpf_func_info *info;
@@ -9459,6 +9474,11 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	err = btf_check_subprog_call(env, subprog, caller->regs);
 	if (err == -EFAULT)
 		return err;
+	if (subprog_ret_pair_unreliable(env, subprog)) {
+		verbose(env, "Func#%d ('%s') returns >8 bytes, which requires reliable BTF\n",
+			subprog, subprog_name(env, subprog));
+		return -EINVAL;
+	}
 	if (bpf_subprog_is_global(env, subprog)) {
 		const char *sub_name = subprog_name(env, subprog);
 
@@ -9832,6 +9852,11 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 
 	callee = state->frame[state->curframe];
 	r0 = &callee->regs[BPF_REG_0];
+	if (subprog_ret_pair_unreliable(env, callee->subprogno)) {
+		verbose(env, "Func#%d ('%s') returns >8 bytes, which requires reliable BTF\n",
+			callee->subprogno, subprog_name(env, callee->subprogno));
+		return -EINVAL;
+	}
 	nregs = bpf_ret_reg_pair(env, callee->subprogno) ? 2 : 1;
 	if (nregs > 1)
 		env->prog->jit_required = 1;
