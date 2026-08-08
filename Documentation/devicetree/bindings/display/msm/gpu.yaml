@@ -414,6 +414,7 @@ allOf:
           contains:
             enum:
               - qcom,adreno-44010000
+              - qcom,adreno-44050001
               - qcom,adreno-44050a01
               - qcom,adreno-44070001
     then:
@@ -451,6 +452,7 @@ allOf:
               - qcom,adreno-43050c01
               - qcom,adreno-43051401
               - qcom,adreno-44010000
+              - qcom,adreno-44050001
               - qcom,adreno-44050a01
               - qcom,adreno-44070001
 

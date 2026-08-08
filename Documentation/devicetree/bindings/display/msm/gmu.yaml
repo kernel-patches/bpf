@@ -305,7 +305,9 @@ allOf:
       properties:
         compatible:
           contains:
-            const: qcom,adreno-gmu-810.0
+            enum:
+              - qcom,adreno-gmu-810.0
+              - qcom,adreno-gmu-830.1
     then:
       properties:
         reg:
