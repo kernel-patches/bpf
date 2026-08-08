@@ -419,6 +419,9 @@ static u32 ret_regs_cnt(u32 size)
 	return size > 8 && size <= 16 ? 2 : 1;
 }
 
+/* Registers holding a function return value, in order. See ret_regs_cnt(). */
+static const int ret_regs[] = { BPF_REG_0, BPF_REG_2 };
+
 /*
  * Resolve the return convention of every subprogram once, so that
  * bpf_ret_reg_pair() is a plain flag test on the hot paths that use it.
@@ -9444,6 +9447,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	u16 callee_incoming, stack_arg_cnt;
 	struct bpf_func_state *caller;
 	int err, subprog, target_insn;
+	u32 i, nregs;
 
 	target_insn = *insn_idx + insn->imm + 1;
 	subprog = bpf_find_subprog(env, target_insn);
@@ -9486,9 +9490,22 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		clear_caller_saved_regs(env, caller->regs);
 		invalidate_outgoing_stack_args(env, cur_func(env));
 
-		/* All non-void global functions return a 64-bit SCALAR_VALUE. */
+		/*
+		 * A non-void global function returns a 64-bit SCALAR_VALUE in
+		 * R0, or a >8 byte SCALAR_VALUE in the R0:R2 register pair.
+		 */
 		if (!subprog_returns_void(env, subprog)) {
-			mark_reg_unknown(env, caller->regs, BPF_REG_0);
+			nregs = bpf_ret_reg_pair(env, subprog) ? 2 : 1;
+			/*
+			 * The R0:R2 return convention is only implemented in the
+			 * JIT: the interpreter propagates BPF_R0 alone out of a
+			 * subprogram, so a caller reading R2 would see a stale
+			 * value. Force the JIT once a caller can observe the pair.
+			 */
+			if (nregs > 1)
+				env->prog->jit_required = 1;
+			for (i = 0; i < nregs; i++)
+				mark_reg_unknown(env, caller->regs, ret_regs[i]);
 		}
 
 		if (env->subprog_info[subprog].might_throw) {
@@ -9810,10 +9827,14 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	struct bpf_func_state *caller, *callee;
 	struct bpf_reg_state *r0;
 	bool in_callback_fn;
+	u32 i, nregs;
 	int err;
 
 	callee = state->frame[state->curframe];
 	r0 = &callee->regs[BPF_REG_0];
+	nregs = bpf_ret_reg_pair(env, callee->subprogno) ? 2 : 1;
+	if (nregs > 1)
+		env->prog->jit_required = 1;
 	if (r0->type == PTR_TO_STACK) {
 		/* technically it's ok to return caller's stack pointer
 		 * (or caller's caller's pointer) back to the caller,
@@ -9849,8 +9870,21 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 			return -EFAULT;
 		}
 	} else {
-		/* return to the caller whatever r0 had in the callee */
-		caller->regs[BPF_REG_0] = *r0;
+		/* return to the caller whatever the callee had in the
+		 * return register(s)
+		 */
+		for (i = 0; i < nregs; i++)
+			caller->regs[ret_regs[i]] = callee->regs[ret_regs[i]];
+
+		/* R2 carries only the upper half of a register pair return
+		 * value. A stack pointer must not escape the callee (see the
+		 * R0 case above), but there is no need to reject the whole
+		 * program for it: hand the caller an uninitialized R2 instead,
+		 * so that only a caller actually using the returned pointer
+		 * fails.
+		 */
+		if (nregs > 1 && caller->regs[BPF_REG_2].type == PTR_TO_STACK)
+			bpf_mark_reg_not_init(env, &caller->regs[BPF_REG_2]);
 	}
 
 	/* for callbacks like bpf_loop or bpf_for_each_map_elem go back to callsite,
@@ -10745,6 +10779,18 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	if (changes_data)
 		clear_all_pkt_pointers(env);
 	return 0;
+}
+
+/* Mark the register(s) holding a @size byte kfunc return value as unknown
+ * scalars. Both halves of a register pair are treated the same way.
+ */
+static void mark_kfunc_ret_regs(struct bpf_verifier_env *env,
+				struct bpf_reg_state *regs, u32 size)
+{
+	u32 i, nregs = ret_regs_cnt(size);
+
+	for (i = 0; i < nregs; i++)
+		mark_reg_unknown(env, regs, ret_regs[i]);
 }
 
 static bool is_kfunc_acquire(struct bpf_call_arg_meta *meta)
@@ -13223,10 +13269,25 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	}
 
 	if (btf_type_is_scalar(t)) {
-		mark_reg_unknown(env, regs, BPF_REG_0);
+		mark_kfunc_ret_regs(env, regs, t->size);
 		if (meta.btf == btf_vmlinux && (meta.func_id == special_kfunc_list[KF_bpf_res_spin_lock] ||
 		    meta.func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave]))
 			__mark_reg_const_zero(env, &regs[BPF_REG_0]);
+	} else if (btf_type_is_struct(t)) {
+		/*
+		 * The returned struct comes back as raw register bits modeled
+		 * as an unknown scalar, so it must contain only scalars:
+		 * otherwise a pointer field would be laundered into a scalar
+		 * and escape provenance and reference tracking.
+		 */
+		if (!__btf_type_is_scalar_struct(env, desc_btf, t, 0)) {
+			verbose(env,
+				"kernel function %s returns %s %s that is not composed of scalars\n",
+				func_name, btf_type_str(t),
+				btf_name_by_offset(desc_btf, t->name_off));
+			return -EINVAL;
+		}
+		mark_kfunc_ret_regs(env, regs, t->size);
 	} else if (btf_type_is_ptr(t)) {
 		ptr_type = btf_type_skip_modifiers(desc_btf, t->type, &ptr_type_id);
 		err = check_special_kfunc(env, &meta, regs, insn_aux, ptr_type, desc_btf);
@@ -16678,7 +16739,8 @@ enforce_retval:
 	return 0;
 }
 
-static int check_global_ret_scalar_reg(struct bpf_verifier_env *env, u32 regno)
+static int check_global_ret_scalar_reg(struct bpf_verifier_env *env, u32 regno,
+				       bool allow_arena_ptr_return)
 {
 	struct bpf_reg_state *reg;
 	int err;
@@ -16688,7 +16750,7 @@ static int check_global_ret_scalar_reg(struct bpf_verifier_env *env, u32 regno)
 		return err;
 
 	/* Pointers to arena are safe to pass between subprograms. */
-	if (is_arena_reg(env, regno))
+	if (allow_arena_ptr_return && is_arena_reg(env, regno))
 		return 0;
 
 	if (is_pointer_value(env, regno)) {
@@ -16710,11 +16772,26 @@ static int check_global_subprog_return_code(struct bpf_verifier_env *env)
 {
 	struct bpf_func_state *cur_frame = cur_func(env);
 	u32 subprog = cur_frame->subprogno;
+	u32 i, nregs;
+	int err;
 
 	if (subprog_returns_void(env, subprog))
 		return 0;
 
-	return check_global_ret_scalar_reg(env, BPF_REG_0);
+	/*
+	 * An arena pointer is only a legitimate return value when it is the
+	 * whole of it, that is when it is returned in R0 alone. Both halves of
+	 * a register pair carry a piece of a >8 byte scalar, so an arena
+	 * pointer in either of them is a leak.
+	 */
+	nregs = bpf_ret_reg_pair(env, subprog) ? 2 : 1;
+	for (i = 0; i < nregs; i++) {
+		err = check_global_ret_scalar_reg(env, ret_regs[i], nregs == 1);
+		if (err)
+			return err;
+	}
+
+	return 0;
 }
 
 /* Bitmask with 1s for all caller saved registers */
@@ -17203,10 +17280,16 @@ static int process_bpf_exit_full(struct bpf_verifier_env *env,
 	 */
 	if (cur_frame->subprogno &&
 	    !cur_frame->in_async_callback_fn &&
-	    !cur_frame->in_exception_callback_fn)
+	    !cur_frame->in_exception_callback_fn) {
 		err = check_global_subprog_return_code(env);
-	else
+	} else {
+		if (!cur_frame->subprogno && bpf_ret_reg_pair(env, 0)) {
+			verbose(env,
+				"return value larger than 8 bytes is not supported at program exit\n");
+			return -EINVAL;
+		}
 		err = check_return_code(env, BPF_REG_0, "R0");
+	}
 	if (err)
 		return err;
 	return PROCESS_BPF_EXIT;
@@ -19362,6 +19445,22 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 		    attach_uses_trampoline_retval(prog->expected_attach_type)) {
 			bpf_log(log,
 				"Attach to function %s with a >8 byte return value is not supported for this attach type\n",
+				tname);
+			return -EOPNOTSUPP;
+		}
+
+		/*
+		 * An extension replaces the target outright, so it has to match
+		 * the target's return convention. Its own return value is capped
+		 * at 8 bytes (a >8 byte program return is rejected at BPF_EXIT),
+		 * so it can never fill the R0:R2 pair the target's callers read.
+		 * This cannot be left to btf_check_type_match() above, which
+		 * compares return types by btf_type->info only: an int carries no
+		 * vlen, so a 16-byte __int128 and an 8-byte long compare equal.
+		 */
+		if (prog_extension && tgt_info->fmodel.ret_size > 8) {
+			bpf_log(log,
+				"Cannot replace function %s with a >8 byte return value\n",
 				tname);
 			return -EOPNOTSUPP;
 		}
