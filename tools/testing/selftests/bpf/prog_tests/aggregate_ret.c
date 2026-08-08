@@ -5,6 +5,9 @@
 #include "aggregate_ret_struct_c.skel.h"
 #include "aggregate_ret_union_c.skel.h"
 #include "aggregate_ret_kfunc_c.skel.h"
+#include "aggregate_ret_run.skel.h"
+#include "aggregate_ret_func.skel.h"
+#include "aggregate_ret_kfunc.skel.h"
 
 static void run_prog(struct bpf_program *prog, bool supported)
 {
@@ -113,10 +116,58 @@ out:
 	aggregate_ret_kfunc_c__destroy(skel);
 }
 
+static void test_run(void)
+{
+	struct aggregate_ret_run *skel;
+	bool kfunc_ok = true;
+	int err;
+
+	skel = aggregate_ret_run__open();
+	if (!ASSERT_OK_PTR(skel, "skel_run_open"))
+		return;
+
+	err = aggregate_ret_run__load(skel);
+	if (err == -EOPNOTSUPP) {
+		kfunc_ok = false;
+		aggregate_ret_run__destroy(skel);
+
+		skel = aggregate_ret_run__open();
+		if (!ASSERT_OK_PTR(skel, "skel_run_reopen"))
+			return;
+
+		bpf_program__set_autoload(skel->progs.aggregate_ret_asm_kfunc_test, false);
+		bpf_program__set_autoload(skel->progs.aggregate_ret_struct_test, false);
+		bpf_program__set_autoload(skel->progs.aggregate_ret_union_test, false);
+
+		err = aggregate_ret_run__load(skel);
+	}
+	if (!ASSERT_OK(err, "skel_run_load"))
+		goto out;
+
+	if (test__start_subtest("asm"))
+		run_prog(skel->progs.aggregate_ret_asm_test, true);
+
+	if (test__start_subtest("asm_kfunc"))
+		run_prog(skel->progs.aggregate_ret_asm_kfunc_test, kfunc_ok);
+
+	if (test__start_subtest("struct"))
+		run_prog(skel->progs.aggregate_ret_struct_test, kfunc_ok);
+
+	if (test__start_subtest("union"))
+		run_prog(skel->progs.aggregate_ret_union_test, kfunc_ok);
+
+out:
+	aggregate_ret_run__destroy(skel);
+}
+
 void test_aggregate_ret(void)
 {
 	test_int128_c();
 	test_struct_c();
 	test_union_c();
 	test_kfunc_c();
+	test_run();
+
+	RUN_TESTS(aggregate_ret_func);
+	RUN_TESTS(aggregate_ret_kfunc);
 }

@@ -441,6 +441,19 @@ static void test_func_replace_int_with_void(void)
 				     " doesn't match type INT of global_func2()");
 }
 
+static void test_func_replace_ret_pair(void)
+{
+	const char *msg = "Cannot replace function agg_ret_target_func with a >8 byte return";
+
+	/*
+	 * An extension cannot replace a function whose return value comes back
+	 * in the R0:R2 pair: the extension's own return is capped at 8 bytes,
+	 * so it would leave R2 stale for the target's callers.
+	 */
+	test_obj_load_failure_common("freplace_ret_pair.bpf.o",
+				     "./aggregate_ret_target.bpf.o", msg);
+}
+
 static int find_prog_btf_id(const char *name, __u32 attach_prog_fd)
 {
 	struct bpf_prog_info info = {};
@@ -660,6 +673,8 @@ void serial_test_fexit_bpf2bpf(void)
 		test_func_replace_progmap();
 	if (test__start_subtest("freplace_int_with_void"))
 		test_func_replace_int_with_void();
+	if (test__start_subtest("freplace_ret_pair"))
+		test_func_replace_ret_pair();
 	if (test__start_subtest("freplace_void"))
 		test_func_replace_void();
 	if (test__start_subtest("sleepable_fentry_to_xdp"))
