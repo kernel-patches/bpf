@@ -6,6 +6,7 @@
 #include <sys/syscall.h>
 #include "timer.skel.h"
 #include "timer_failure.skel.h"
+#include "timer_ret_pair_fail.skel.h"
 #include "timer_interrupt.skel.h"
 
 #define NUM_THR 8
@@ -285,6 +286,7 @@ void serial_test_timer(void)
 	test_timer(timer);
 
 	RUN_TESTS(timer_failure);
+	RUN_TESTS(timer_ret_pair_fail);
 }
 
 void serial_test_timer_stress(void)
