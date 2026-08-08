@@ -382,27 +382,57 @@ bool bpf_subprog_is_global(const struct bpf_verifier_env *env, int subprog)
 	return aux && aux[subprog].linkage == BTF_FUNC_GLOBAL;
 }
 
-static bool subprog_returns_void(struct bpf_verifier_env *env, int subprog)
+/* Return type of a subprogram, NULL if it cannot be resolved */
+static const struct btf_type *subprog_ret_type(struct bpf_verifier_env *env, int subprog)
 {
-	const struct btf_type *type, *func, *func_proto;
+	const struct btf_type *func, *func_proto;
 	const struct btf *btf = env->prog->aux->btf;
 	u32 btf_id;
 
+	if (!btf || !env->prog->aux->func_info)
+		return NULL;
+
 	btf_id = env->prog->aux->func_info[subprog].type_id;
 
+	/* Both already validated by prepare_btf_func() at prog load. */
 	func = btf_type_by_id(btf, btf_id);
-	if (verifier_bug_if(!func, env, "btf_id %u not found", btf_id))
-		return false;
-
 	func_proto = btf_type_by_id(btf, func->type);
-	if (!func_proto)
-		return false;
 
-	type = btf_type_skip_modifiers(btf, func_proto->type, NULL);
-	if (!type)
-		return false;
+	return btf_type_skip_modifiers(btf, func_proto->type, NULL);
+}
 
-	return btf_type_is_void(type);
+static bool subprog_returns_void(struct bpf_verifier_env *env, int subprog)
+{
+	const struct btf_type *type = subprog_ret_type(env, subprog);
+
+	return type && btf_type_is_void(type);
+}
+
+/*
+ * Number of registers holding a function return value: a value of up to 8
+ * bytes is returned in R0, a value of more than 8 bytes and no more than 16
+ * bytes (an __int128 or a struct/union of such size) is returned in the R0:R2
+ * register pair, with R2 holding the upper half.
+ */
+static u32 ret_regs_cnt(u32 size)
+{
+	return size > 8 && size <= 16 ? 2 : 1;
+}
+
+/*
+ * Resolve the return convention of every subprogram once, so that
+ * bpf_ret_reg_pair() is a plain flag test on the hot paths that use it.
+ */
+static void bpf_compute_subprog_ret_regs(struct bpf_verifier_env *env)
+{
+	const struct btf_type *type;
+	int subprog;
+
+	for (subprog = 0; subprog < env->subprog_cnt; subprog++) {
+		type = subprog_ret_type(env, subprog);
+		if (type && (btf_type_is_struct(type) || btf_type_is_scalar(type)))
+			subprog_info(env, subprog)->ret_reg_pair = ret_regs_cnt(type->size) > 1;
+	}
 }
 
 static const char *subprog_name(const struct bpf_verifier_env *env, int subprog)
@@ -20287,6 +20317,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	ret = bpf_compute_scc(env);
 	if (ret < 0)
 		goto skip_full_check;
+
+	/* must precede the first bpf_ret_reg_pair() user below */
+	bpf_compute_subprog_ret_regs(env);
 
 	ret = bpf_compute_live_registers(env);
 	if (ret < 0)
