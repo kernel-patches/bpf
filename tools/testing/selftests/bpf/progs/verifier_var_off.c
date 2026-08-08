@@ -198,7 +198,9 @@ __success
 /* Check that the maximum stack depth is correctly maintained according to the
  * maximum possible variable offset.
  */
-__log_level(4) __msg("stack depth 16")
+__log_level(4)
+__msg("subprog 0 (stack_write_priv_vs_unpriv) main insns_self {{[0-9]+}} "
+      "insns_total {{[0-9]+}} stack 16")
 __failure_unpriv
 /* Variable stack access is rejected for unprivileged.
  */
@@ -238,7 +240,9 @@ __success
 /* Check that the maximum stack depth is correctly maintained according to the
  * maximum possible variable offset.
  */
-__log_level(4) __msg("stack depth 16")
+__log_level(4)
+__msg("subprog 0 (stack_write_followed_by_read) main insns_self {{[0-9]+}} "
+      "insns_total {{[0-9]+}} stack 16")
 __failure_unpriv
 __msg_unpriv("R2 variable stack access prohibited for !root")
 __retval(0)
