@@ -16306,6 +16306,11 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 			verbose(env, "callback function not static\n");
 			return -EINVAL;
 		}
+		if (bpf_ret_reg_pair(env, subprogno)) {
+			verbose(env,
+				"callback function with >8-byte return value is not supported\n");
+			return -EINVAL;
+		}
 
 		dst_reg->type = PTR_TO_FUNC;
 		dst_reg->subprogno = subprogno;
@@ -18525,6 +18530,12 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 			 */
 			if (subprog_returns_void(env, subprog)) {
 				verbose(env, "exception cb cannot return void\n");
+				ret = -EINVAL;
+				goto out;
+			}
+			if (bpf_ret_reg_pair(env, subprog)) {
+				verbose(env,
+					"exception cb cannot return value larger than 8 bytes\n");
 				ret = -EINVAL;
 				goto out;
 			}
