@@ -1572,12 +1572,23 @@ static int update_fentry_multi(struct bpf_trampoline *tr, u32 orig_flags,
 			       struct bpf_tramp_image *im, struct ftrace_hash *hash,
 			       struct bpf_tracing_multi_data *data)
 {
-	unsigned long addr = (unsigned long)(im ? im->image : tr->cur_image->image);
+	if (tr->func.ftrace_managed) {
+		unsigned long addr = (unsigned long)(im ? im->image : tr->cur_image->image);
 
-	if (bpf_trampoline_use_jmp(tr->flags))
-		addr = ftrace_jmp_set(addr);
+		if (bpf_trampoline_use_jmp(tr->flags))
+			addr = ftrace_jmp_set(addr);
 
-	ftrace_hash_add(hash, data->entry, tr->ip, addr);
+		ftrace_hash_add(hash, data->entry, tr->ip, addr);
+	} else {
+		void *old_addr = tr->cur_image ? tr->cur_image->image : NULL;
+		void *new_addr = im ? im->image : NULL;
+		int ret;
+
+		ret = bpf_trampoline_update_fentry(tr, orig_flags, old_addr, new_addr);
+		if (ret)
+			return ret;
+	}
+
 	tr->cur_image = im;
 	return 0;
 }
@@ -1627,6 +1638,18 @@ static void bpf_trampoline_multi_attach_free(struct bpf_trampoline *tr)
 
 static void bpf_trampoline_multi_attach_rollback(struct bpf_trampoline *tr)
 {
+	if (!tr->func.ftrace_managed) {
+		void *failed_addr = tr->cur_image ? tr->cur_image->image : NULL;
+		void *old_addr = tr->multi_attach.old_image ?
+				 tr->multi_attach.old_image->image : NULL;
+		u32 orig_flags = tr->flags;
+		int ret;
+
+		tr->flags = tr->multi_attach.old_flags;
+		ret = bpf_trampoline_update_fentry(tr, orig_flags, failed_addr, old_addr);
+		WARN_ONCE(ret, "bpf_trampoline_update_fentry failed: %d\n", ret);
+	}
+
 	if (tr->cur_image)
 		bpf_tramp_image_put(tr->cur_image);
 	tr->cur_image = tr->multi_attach.old_image;
@@ -1643,6 +1666,7 @@ static void bpf_trampoline_multi_attach_rollback(struct bpf_trampoline *tr)
 	for_each_mnode_cnt(mnode, link, link->nodes_cnt)
 
 int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
+				u64 *keys, struct bpf_prog **progs,
 				struct bpf_tracing_multi_link *link)
 {
 	struct bpf_tracing_multi_data *data = &link->data;
@@ -1651,18 +1675,18 @@ int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
 	struct bpf_tracing_multi_node *mnode;
 	struct bpf_trampoline *tr;
 	int i, err, rollback_cnt;
-	u64 key;
 
 	for_each_mnode(mnode, link) {
 		rollback_cnt = i;
 
-		err = bpf_check_attach_btf_id_multi(btf, prog, ids[i], &tgt_info);
+		if (progs)
+			err = bpf_check_attach_target(NULL, prog, progs[i], ids[i], &tgt_info);
+		else
+			err = bpf_check_attach_btf_id_multi(btf, prog, ids[i], &tgt_info);
 		if (err)
 			goto rollback_put;
 
-		key = bpf_trampoline_compute_key(NULL, btf, ids[i]);
-
-		tr = bpf_trampoline_get(key, &tgt_info);
+		tr = bpf_trampoline_get(keys[i], &tgt_info);
 		if (!tr) {
 			err = -ENOMEM;
 			goto rollback_put;
@@ -1690,6 +1714,9 @@ int bpf_trampoline_multi_attach(struct bpf_prog *prog, u32 *ids,
 
 	for_each_mnode(mnode, link) {
 		bpf_trampoline_multi_attach_init(mnode->trampoline);
+
+		if (progs && progs[i]->aux->tail_call_reachable)
+			mnode->trampoline->flags |= BPF_TRAMP_F_TAIL_CALL_CTX;
 
 		data->entry = &mnode->entry;
 		err = __bpf_trampoline_link_prog(&mnode->node, mnode->trampoline, NULL,
