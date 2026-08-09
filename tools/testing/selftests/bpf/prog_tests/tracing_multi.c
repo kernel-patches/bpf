@@ -730,6 +730,104 @@ cleanup:
 	free(ids2);
 }
 
+static void test_attach_api_bpf_prog_fails(void)
+{
+	static const char * const kfuncs[] = {
+		"bpf_fentry_test1",
+	};
+	const char *bpf_funcs[] = { "target_1" };
+	LIBBPF_OPTS(bpf_tracing_multi_opts, opts);
+	LIBBPF_OPTS(bpf_link_create_opts, lopts);
+	struct tracing_multi_bpf *skel = NULL;
+	int fd, target_id, token_fd;
+	int fds[2], dup_fd = -1;
+	struct bpf_link *link;
+	__u32 target_ids[2];
+	__u32 *ids = NULL;
+	long err;
+
+	skel = tracing_multi_bpf__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "tracing_multi_bpf__open_and_load"))
+		return;
+
+	ids = get_ids(kfuncs, ARRAY_SIZE(kfuncs), NULL);
+	if (!ASSERT_OK_PTR(ids, "get_ids"))
+		goto cleanup;
+
+	fds[0] = bpf_program__fd(skel->progs.target_1);
+
+	/* fail#1 (libbpf) kernel ids and BPF prog fds */
+	LIBBPF_OPTS_RESET(opts,
+		.ids = ids,
+		.fds = fds,
+		.funcs = bpf_funcs,
+		.cnt = ARRAY_SIZE(bpf_funcs),
+	);
+
+	link = bpf_program__attach_tracing_multi(skel->progs.test_fentry, NULL, &opts);
+	err = libbpf_get_error(link);
+	if (!ASSERT_EQ(err, -EINVAL, "libbpf_ids_fds")) {
+		if (!err)
+			bpf_link__destroy(link);
+		goto cleanup;
+	}
+
+	/* fail#2 (libbpf) kernel pattern and BPF prog fds */
+	LIBBPF_OPTS_RESET(opts,
+		.fds = fds,
+		.funcs = bpf_funcs,
+		.cnt = ARRAY_SIZE(bpf_funcs),
+	);
+
+	link = bpf_program__attach_tracing_multi(skel->progs.test_fentry,
+						"bpf_fentry_test*", &opts);
+	err = libbpf_get_error(link);
+	if (!ASSERT_EQ(err, -EINVAL, "libbpf_pattern_fds")) {
+		if (!err)
+			bpf_link__destroy(link);
+		goto cleanup;
+	}
+
+	/* fail#3 (kernel) kernel id with BPF prog fd */
+	lopts.tracing_multi.ids = ids;
+	lopts.tracing_multi.fds = fds;
+	lopts.tracing_multi.cnt = ARRAY_SIZE(bpf_funcs);
+	fd = bpf_link_create(bpf_program__fd(skel->progs.test_fentry), 0,
+			     BPF_TRACE_FENTRY_MULTI, &lopts);
+	ASSERT_EQ(fd, -EINVAL, "kernel_id_bpf_fd");
+	if (fd >= 0)
+		close(fd);
+
+	/* fail#4 (kernel) duplicate target through different fds */
+	token_fd = bpf_object__token_fd(skel->obj);
+	token_fd = token_fd < 0 ? 0 : token_fd;
+	target_id = libbpf_find_prog_btf_id("target_1", fds[0], token_fd);
+	if (!ASSERT_GT(target_id, 0, "target_1_btf_id"))
+		goto cleanup;
+
+	dup_fd = dup(fds[0]);
+	if (!ASSERT_GE(dup_fd, 0, "dup_target_fd"))
+		goto cleanup;
+
+	fds[1] = dup_fd;
+	target_ids[0] = target_id;
+	target_ids[1] = target_id;
+	lopts.tracing_multi.ids = target_ids;
+	lopts.tracing_multi.fds = fds;
+	lopts.tracing_multi.cnt = ARRAY_SIZE(fds);
+	fd = bpf_link_create(bpf_program__fd(skel->progs.test_fentry), 0,
+			     BPF_TRACE_FENTRY_MULTI, &lopts);
+	ASSERT_EQ(fd, -EINVAL, "duplicate_bpf_target");
+	if (fd >= 0)
+		close(fd);
+
+cleanup:
+	if (dup_fd >= 0)
+		close(dup_fd);
+	tracing_multi_bpf__destroy(skel);
+	free(ids);
+}
+
 void serial_test_tracing_multi_bench_attach(void)
 {
 	LIBBPF_OPTS(bpf_tracing_multi_opts, opts);
@@ -1096,4 +1194,6 @@ void test_tracing_multi_test(void)
 		test_fentry_after_multi();
 	if (test__start_subtest("link_api_bpf_prog"))
 		test_link_api_bpf_prog();
+	if (test__start_subtest("attach_api_bpf_prog_fails"))
+		test_attach_api_bpf_prog_fails();
 }
