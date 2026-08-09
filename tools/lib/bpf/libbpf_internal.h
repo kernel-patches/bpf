@@ -436,6 +436,7 @@ int btf_load_into_kernel(struct btf *btf,
 			 char *log_buf, size_t log_sz, __u32 log_level,
 			 int token_fd);
 struct btf *btf_load_from_kernel(__u32 id, struct btf *base_btf, int token_fd);
+int libbpf_find_prog_btf_id(const char *name, __u32 attach_prog_fd, int token_fd);
 
 struct btf *btf_get_from_fd(int btf_fd, struct btf *base_btf);
 void btf_get_kernel_prefix_kind(enum bpf_attach_type attach_type,
