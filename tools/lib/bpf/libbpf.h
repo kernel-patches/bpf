@@ -732,10 +732,12 @@ struct bpf_tracing_multi_opts {
 	const __u32 *ids;
 	const __u64 *cookies;
 	size_t cnt;
+	const int *fds;
+	const char **funcs;
 	size_t :0;
 };
 
-#define bpf_tracing_multi_opts__last_field cnt
+#define bpf_tracing_multi_opts__last_field funcs
 
 LIBBPF_API struct bpf_link *
 bpf_program__attach_tracing_multi(const struct bpf_program *prog, const char *pattern,
