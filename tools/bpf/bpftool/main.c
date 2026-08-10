@@ -367,11 +367,27 @@ static int do_batch(int argc, char **argv)
 	if (json_output)
 		jsonw_start_array(json_wtr);
 	while (fgets(buf, sizeof(buf), fp)) {
+		bool truncated = !memchr(buf, '\n', sizeof(buf) - 1) && !feof(fp);
+
+		if (truncated) {
+			/*
+			 * fgets() filled the buffer. If the very next byte is
+			 * a newline, the line fits the buffer exactly and is
+			 * not truncated.
+			 */
+			int c = fgetc(fp);
+
+			if (c == '\n')
+				truncated = false;
+			else if (c != EOF)
+				ungetc(c, fp);
+		}
+
 		cp = strchr(buf, '#');
 		if (cp)
 			*cp = '\0';
 
-		if (strlen(buf) == sizeof(buf) - 1) {
+		if (truncated) {
 			line_too_long = true;
 			break;
 		}
@@ -380,6 +396,8 @@ static int do_batch(int argc, char **argv)
 		 * with '\' in the batch file).
 		 */
 		while ((cp = strstr(buf, "\\\n")) != NULL) {
+			bool cont_truncated;
+
 			if (!fgets(contline, sizeof(contline), fp) ||
 			    strlen(contline) == 0) {
 				p_err("missing continuation line on command %u",
@@ -388,11 +406,15 @@ static int do_batch(int argc, char **argv)
 				goto err_close;
 			}
 
+			cont_truncated = !memchr(contline, '\n', sizeof(contline) - 1) &&
+					 !feof(fp);
+
 			cp = strchr(contline, '#');
 			if (cp)
 				*cp = '\0';
 
-			if (strlen(buf) + strlen(contline) + 1 > sizeof(buf)) {
+			if (cont_truncated ||
+			    strlen(buf) + strlen(contline) + 1 > sizeof(buf)) {
 				p_err("command %u is too long", lines);
 				err = -1;
 				goto err_close;
