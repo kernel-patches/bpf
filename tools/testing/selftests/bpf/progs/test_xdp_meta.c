@@ -972,4 +972,20 @@ int lwt_xmit_meta_write(struct __sk_buff *ctx)
 	return BPF_OK;
 }
 
+/* Read stashed metadata from seg6local End.BPF */
+SEC("lwt_seg6local")
+int seg6local_meta_read(struct __sk_buff *ctx)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &ctx);
+	if (!meta_have)
+		return BPF_OK;
+	if (!check_metadata(meta_have))
+		return BPF_OK;
+
+	test_pass = true;
+	return BPF_OK;
+}
+
 char _license[] SEC("license") = "GPL";
