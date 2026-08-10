@@ -2,6 +2,8 @@
 #include <test_progs.h>
 #include <network_helpers.h>
 
+#define U32_MAX ((u32)UINT_MAX)
+
 enum {
 	QUEUE,
 	STACK,
@@ -101,8 +103,55 @@ out:
 	bpf_object__close(obj);
 }
 
+static void test_queue_stack_map_alloc_check(void)
+{
+	LIBBPF_OPTS(bpf_map_create_opts, opts);
+	const __u32 big_value = 1 << 20; /* 1MB */
+	int fd, saved_errno;
+
+	/*
+	 * Regression test for the u32 index overflow in queue/stack maps:
+	 * a map whose element storage (max_entries * value_size) exceeds
+	 * U32_MAX bytes must be rejected at creation time, otherwise the
+	 * u32 head/tail index multiplication wraps and push/peek/pop
+	 * address the wrong element. 8192 * 1MB = 8GB > U32_MAX.
+	 */
+	fd = bpf_map_create(BPF_MAP_TYPE_QUEUE, NULL, 0, big_value, 8192, &opts);
+	saved_errno = errno;
+	ASSERT_LT(fd, 0, "queue_oversize_fd");
+	ASSERT_EQ(saved_errno, E2BIG, "queue_oversize_errno");
+	if (fd >= 0)
+		close(fd);
+
+	/*
+	 * max_entries == U32_MAX would make the u32 capacity counter
+	 * qs->size (max_entries + 1) wrap to 0, permanently breaking the
+	 * map, so it must be rejected as well.
+	 */
+	fd = bpf_map_create(BPF_MAP_TYPE_QUEUE, NULL, 0, 1, U32_MAX, &opts);
+	saved_errno = errno;
+	ASSERT_LT(fd, 0, "queue_u32max_fd");
+	ASSERT_EQ(saved_errno, E2BIG, "queue_u32max_errno");
+	if (fd >= 0)
+		close(fd);
+
+	fd = bpf_map_create(BPF_MAP_TYPE_STACK, NULL, 0, big_value, 8192, &opts);
+	saved_errno = errno;
+	ASSERT_LT(fd, 0, "stack_oversize_fd");
+	ASSERT_EQ(saved_errno, E2BIG, "stack_oversize_errno");
+	if (fd >= 0)
+		close(fd);
+
+	/* A normal-sized map must still be created successfully. */
+	fd = bpf_map_create(BPF_MAP_TYPE_QUEUE, NULL, 0, 64, 100, &opts);
+	ASSERT_GE(fd, 0, "queue_normal_fd");
+	if (fd >= 0)
+		close(fd);
+}
+
 void test_queue_stack_map(void)
 {
 	test_queue_stack_map_by_type(QUEUE);
 	test_queue_stack_map_by_type(STACK);
+	test_queue_stack_map_alloc_check();
 }
