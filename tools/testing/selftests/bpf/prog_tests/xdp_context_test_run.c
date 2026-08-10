@@ -1392,6 +1392,174 @@ cleanup:
 		unlink(LWT_EXT_PIN_PATH);
 }
 
+#define SEG6_PIN_PATH "/sys/fs/bpf/skb_ext_seg6local"
+
+/*
+ * Test skb_ext survival across TC egress -> seg6local End.BPF hook.
+ *
+ * Topology:
+ *
+ *     NS1           NS2            NS3
+ *   lo veth1 <-> veth2 veth3 <-> veth4 lo
+ *
+ * NS1 encaps fb01::2 with SRH (segments fd01::1,fd01::2) on output and
+ * writes skb_ext at TC egress on veth1. NS2 runs End.BPF for fd01::1,
+ * which reads skb_ext, then forwards to NS3 (seg6_lookup_nexthop
+ * rejects loopback routes with local_delivery=false, so End.BPF
+ * cannot deliver locally). NS3 has fd01::2 local, decapsulates, and
+ * delivers the inner UDP (dst=fb01::2) to a local socket for test
+ * synchronization.
+ *
+ * The TC program drops non-test packets, so NDP is bypassed with a
+ * static neighbor entry on the NS1->NS2 hop.
+ */
+static void test_skb_ext_seg6local(struct test_xdp_meta *skel)
+{
+	LIBBPF_OPTS(bpf_tc_hook, tc_hook, .attach_point = BPF_TC_EGRESS);
+	LIBBPF_OPTS(bpf_tc_opts, tc_opts, .handle = 1, .priority = 1);
+	struct nstoken *nstoken = NULL;
+	struct sockaddr_in6 dst = {};
+	char buf[TEST_PAYLOAD_LEN];
+	bool pinned = false;
+	int client_fd = -1;
+	int server_fd = -1;
+	ssize_t bytes;
+	int ret;
+
+	unlink(SEG6_PIN_PATH);
+	ret = bpf_program__pin(skel->progs.seg6local_skb_ext_read,
+			       SEG6_PIN_PATH);
+	if (!ASSERT_OK(ret, "pin seg6local"))
+		return;
+	pinned = true;
+
+	skel->bss->test_pass = false;
+
+	SYS(cleanup, "ip netns add seg6_1");
+	SYS(cleanup, "ip netns add seg6_2");
+	SYS(cleanup, "ip netns add seg6_3");
+
+	/* NS1 <-> NS2 veth pair; static NDP since TC drops NS/NA */
+	SYS(cleanup, "ip -n seg6_1 link add veth1 type veth peer name veth2 netns seg6_2");
+	SYS(cleanup, "ip -n seg6_1 link set dev veth1 up");
+	SYS(cleanup, "ip -n seg6_2 link set dev veth2 address 02:00:00:00:00:02");
+	SYS(cleanup, "ip -n seg6_2 link set dev veth2 up");
+	SYS(cleanup, "ip -n seg6_1 -6 addr add fb00::12/16 dev veth1 scope link nodad");
+	SYS(cleanup, "ip -n seg6_2 -6 addr add fb00::21/16 dev veth2 scope link nodad");
+	SYS(cleanup, "ip -n seg6_1 -6 neigh add fb00::21 lladdr 02:00:00:00:00:02 "
+		     "nud permanent dev veth1");
+
+	/* NS2 <-> NS3 veth pair */
+	SYS(cleanup, "ip -n seg6_2 link add veth3 type veth peer name veth4 netns seg6_3");
+	SYS(cleanup, "ip -n seg6_2 link set dev veth3 up");
+	SYS(cleanup, "ip -n seg6_3 link set dev veth4 up");
+	SYS(cleanup, "ip -n seg6_2 -6 addr add fb00::34/16 dev veth3 scope link nodad");
+	SYS(cleanup, "ip -n seg6_3 -6 addr add fb00::43/16 dev veth4 scope link nodad");
+
+	/* NS1: source address + SRH encap on output + route for fd01::/16 */
+	SYS(cleanup, "ip -n seg6_1 link set dev lo up");
+	SYS(cleanup, "ip -n seg6_1 -6 addr add fb01::1/128 dev lo nodad");
+	SYS(cleanup, "ip -n seg6_1 -6 route add fb01::2 encap seg6 mode encap "
+		     "segs fd01::1,fd01::2 dev veth1 via fb00::21");
+	SYS(cleanup, "ip -n seg6_1 -6 route add fd01::/16 dev veth1 via fb00::21");
+
+	/* NS2: seg6local End.BPF for fd01::1, then forward to NS3.
+	 * Use open_netns so the pinned prog on bpffs is accessible.
+	 */
+	nstoken = open_netns("seg6_2");
+	if (!ASSERT_OK_PTR(nstoken, "open seg6_2"))
+		goto cleanup;
+
+	SYS(cleanup, "ip link set dev lo up");
+	SYS(cleanup, "sysctl -wq net.ipv6.conf.all.forwarding=1");
+	SYS(cleanup, "ip -6 route add fd01::2/128 dev veth3 via fb00::43");
+	SYS(cleanup, "ip -6 route add fd01::1 encap seg6local "
+		     "action End.BPF endpoint pinned " SEG6_PIN_PATH " dev veth2");
+
+	close_netns(nstoken);
+	nstoken = NULL;
+
+	/* NS3: decap point + UDP server.
+	 * fd01::2 local triggers SRH decap (segments_left=0).
+	 * fb01::2 local delivers the inner UDP to the socket.
+	 */
+	nstoken = open_netns("seg6_3");
+	if (!ASSERT_OK_PTR(nstoken, "open seg6_3"))
+		goto cleanup;
+
+	SYS(cleanup, "ip link set dev lo up");
+	SYS(cleanup, "sysctl -wq net.ipv6.conf.all.seg6_enabled=1");
+	SYS(cleanup, "sysctl -wq net.ipv6.conf.lo.seg6_enabled=1");
+	SYS(cleanup, "sysctl -wq net.ipv6.conf.veth4.seg6_enabled=1");
+	SYS(cleanup, "ip -6 addr add fd01::2/128 dev lo nodad");
+	SYS(cleanup, "ip -6 addr add fb01::2/128 dev lo nodad");
+
+	server_fd = start_server(AF_INET6, SOCK_DGRAM, "fb01::2", 1234, 0);
+	if (!ASSERT_GE(server_fd, 0, "start_server"))
+		goto cleanup;
+
+	close_netns(nstoken);
+	nstoken = NULL;
+
+	/* NS1: write skb_ext at TC egress on veth1, then send.
+	 * TC egress fires after seg6 encap, on the encapped packet.
+	 */
+	nstoken = open_netns("seg6_1");
+	if (!ASSERT_OK_PTR(nstoken, "open seg6_1"))
+		goto cleanup;
+
+	tc_hook.ifindex = if_nametoindex("veth1");
+	if (!ASSERT_GE(tc_hook.ifindex, 0, "ifindex veth1"))
+		goto cleanup;
+
+	ret = bpf_tc_hook_create(&tc_hook);
+	if (!ASSERT_OK(ret, "bpf_tc_hook_create"))
+		goto cleanup;
+
+	tc_opts.prog_fd = bpf_program__fd(skel->progs.tc_skb_ext_write);
+	ret = bpf_tc_attach(&tc_hook, &tc_opts);
+	if (!ASSERT_OK(ret, "bpf_tc_attach"))
+		goto cleanup;
+
+	client_fd = socket(AF_INET6, SOCK_DGRAM, 0);
+	if (!ASSERT_GE(client_fd, 0, "socket"))
+		goto cleanup;
+
+	dst.sin6_family = AF_INET6;
+	dst.sin6_port = htons(1234);
+	inet_pton(AF_INET6, "fb01::2", &dst.sin6_addr);
+
+	bytes = sendto(client_fd, test_payload, TEST_PAYLOAD_LEN, 0,
+		       (void *)&dst, sizeof(dst));
+
+	close_netns(nstoken);
+	nstoken = NULL;
+
+	if (!ASSERT_EQ(bytes, TEST_PAYLOAD_LEN, "sendto"))
+		goto cleanup;
+
+	/* Receive decapsulated packet -- synchronizes with seg6local */
+	nstoken = open_netns("seg6_3");
+	if (!ASSERT_OK_PTR(nstoken, "open seg6_3"))
+		goto cleanup;
+
+	bytes = recvfrom(server_fd, buf, sizeof(buf), 0, NULL, NULL);
+	ASSERT_EQ(bytes, TEST_PAYLOAD_LEN, "recvfrom");
+	ASSERT_TRUE(skel->bss->test_pass, "test_pass");
+
+cleanup:
+	close_netns(nstoken);
+	if (server_fd >= 0)
+		close(server_fd);
+	if (client_fd >= 0)
+		close(client_fd);
+	SYS_NOFAIL("ip netns del seg6_3");
+	SYS_NOFAIL("ip netns del seg6_2");
+	SYS_NOFAIL("ip netns del seg6_1");
+	if (pinned)
+		unlink(SEG6_PIN_PATH);
+}
+
 void test_skb_ext_cross_hook(void)
 {
 	struct test_xdp_meta *skel = NULL;
@@ -1421,6 +1589,8 @@ void test_skb_ext_cross_hook(void)
 	if (test__start_subtest("lwt_xmit_to_tc"))
 		test_skb_ext_lwt(skel, "lwt_xmit_to_tc",
 				 skel->progs.lwt_xmit_skb_ext_write, "xmit", true);
+	if (test__start_subtest("tc_to_seg6local"))
+		test_skb_ext_seg6local(skel);
 
 	test_xdp_meta__destroy(skel);
 }
