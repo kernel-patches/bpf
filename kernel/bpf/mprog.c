@@ -222,6 +222,14 @@ static int bpf_mprog_pos_after(struct bpf_mprog_entry *entry,
 	return tuple->prog ? -ENOENT : bpf_mprog_total(entry);
 }
 
+static int bpf_mprog_check_prog(const struct bpf_prog *prog)
+{
+	if (prog->type == BPF_PROG_TYPE_SCHED_CLS &&
+	    bpf_prog_is_offloaded(prog->aux))
+		return -EINVAL;
+	return 0;
+}
+
 int bpf_mprog_attach(struct bpf_mprog_entry *entry,
 		     struct bpf_mprog_entry **entry_new,
 		     struct bpf_prog *prog_new, struct bpf_link *link,
@@ -237,6 +245,9 @@ int bpf_mprog_attach(struct bpf_mprog_entry *entry,
 	};
 	int ret, idx = -ERANGE, tidx;
 
+	ret = bpf_mprog_check_prog(prog_new);
+	if (ret)
+		return ret;
 	if (revision && revision != bpf_mprog_revision(entry))
 		return -ESTALE;
 	if (bpf_mprog_exists(entry, prog_new))
