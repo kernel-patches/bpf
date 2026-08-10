@@ -367,11 +367,13 @@ static int do_batch(int argc, char **argv)
 	if (json_output)
 		jsonw_start_array(json_wtr);
 	while (fgets(buf, sizeof(buf), fp)) {
+		bool truncated = strlen(buf) == sizeof(buf) - 1;
+
 		cp = strchr(buf, '#');
 		if (cp)
 			*cp = '\0';
 
-		if (strlen(buf) == sizeof(buf) - 1) {
+		if (truncated) {
 			line_too_long = true;
 			break;
 		}
