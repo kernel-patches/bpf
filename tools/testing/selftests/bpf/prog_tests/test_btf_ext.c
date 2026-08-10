@@ -1,8 +1,30 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2025 Meta Platforms Inc. */
 #include <test_progs.h>
+#include "bpf/libbpf_internal.h"
 #include "test_btf_ext.skel.h"
 #include "btf_helpers.h"
+
+static void subtest_invalid_info_len(void)
+{
+	struct {
+		struct btf_ext_header hdr;
+		__u32 record_size;
+	} raw = {
+		.hdr = {
+			.magic = BTF_MAGIC,
+			.version = BTF_VERSION,
+			.hdr_len = sizeof(raw.hdr),
+			.func_info_len = UINT32_MAX - 7,
+		},
+		.record_size = sizeof(struct bpf_func_info_min),
+	};
+	struct btf_ext *btf_ext;
+
+	btf_ext = btf_ext__new((void *)&raw, sizeof(raw));
+	if (!ASSERT_ERR_PTR(btf_ext, "invalid_info_len"))
+		btf_ext__free(btf_ext);
+}
 
 static void subtest_line_func_info(void)
 {
@@ -59,6 +81,8 @@ out:
 
 void test_btf_ext(void)
 {
+	if (test__start_subtest("invalid_info_len"))
+		subtest_invalid_info_len();
 	if (test__start_subtest("line_func_info"))
 		subtest_line_func_info();
 }
