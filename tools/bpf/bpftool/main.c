@@ -336,6 +336,7 @@ static int do_batch(int argc, char **argv)
 	char buf[BATCH_LINE_LEN_MAX], contline[BATCH_LINE_LEN_MAX];
 	char *n_argv[BATCH_ARG_NB_MAX];
 	unsigned int lines = 0;
+	bool line_too_long = false;
 	int n_argc;
 	FILE *fp;
 	char *cp;
@@ -371,7 +372,7 @@ static int do_batch(int argc, char **argv)
 			*cp = '\0';
 
 		if (strlen(buf) == sizeof(buf) - 1) {
-			errno = E2BIG;
+			line_too_long = true;
 			break;
 		}
 
@@ -429,7 +430,10 @@ static int do_batch(int argc, char **argv)
 		lines++;
 	}
 
-	if (errno && errno != ENOENT) {
+	if (line_too_long) {
+		p_err("reading batch file failed: %s", strerror(E2BIG));
+		err = -1;
+	} else if (ferror(fp)) {
 		p_err("reading batch file failed: %s", strerror(errno));
 		err = -1;
 	} else {
@@ -466,16 +470,6 @@ int main(int argc, char **argv)
 	int opt, ret;
 
 	setlinebuf(stdout);
-
-#ifdef USE_LIBCAP
-	/* Libcap < 2.63 hooks before main() to compute the number of
-	 * capabilities of the running kernel, and doing so it calls prctl()
-	 * which may fail and set errno to non-zero.
-	 * Let's reset errno to make sure this does not interfere with the
-	 * batch mode.
-	 */
-	errno = 0;
-#endif
 
 	last_do_help = do_help;
 	pretty_output = false;
