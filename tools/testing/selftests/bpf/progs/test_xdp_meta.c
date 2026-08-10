@@ -1134,4 +1134,22 @@ int lwt_xmit_skb_ext_write(struct __sk_buff *ctx)
 	return BPF_OK;
 }
 
+/* Read skb_ext from seg6local End.BPF -- tests TC -> seg6local path */
+SEC("lwt_seg6local")
+int seg6local_skb_ext_read(struct __sk_buff *ctx)
+{
+	__u8 meta_have[META_SIZE];
+	struct bpf_dynptr meta;
+
+	if (bpf_dynptr_from_skb_ext(ctx, 0, 0, &meta))
+		return BPF_OK;
+	if (bpf_dynptr_read(meta_have, META_SIZE, &meta, 0, 0))
+		return BPF_OK;
+	if (!check_metadata(meta_have))
+		return BPF_OK;
+
+	test_pass = true;
+	return BPF_OK;
+}
+
 char _license[] SEC("license") = "GPL";
