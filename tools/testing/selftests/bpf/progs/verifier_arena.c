@@ -704,4 +704,42 @@ int check_arena_arg_ret(void *ctx)
 	return 0;
 }
 
+struct arena_ret_pair {
+	__u64 lo;
+	__u64 hi;
+};
+
+/*
+ * A 16-byte value is returned in the R0:R2 register pair. A global subprogram
+ * may return an arena pointer in R0, but R2 holds the upper half of a scalar
+ * pair, so an arena pointer there is not a valid return value. The ld_imm64 of
+ * the arena map is what links the arena to the program, without which the
+ * addr_space_cast insn is not allowed.
+ */
+__naked struct arena_ret_pair global_ret_arena_ptr_in_r2(void)
+{
+	asm volatile (
+		"r1 = %[arena] ll;"
+		"r2 = 8192;"
+		"r2 = addr_space_cast(r2, 0x0, 0x1);"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm_addr(arena)
+		: __clobber_all);
+}
+
+SEC("syscall")
+__failure __msg("At subprogram exit the register R2 is not a scalar value (arena)")
+__naked int check_global_ret_arena_ptr_in_r2(void)
+{
+	asm volatile (
+		"call %[global_ret_arena_ptr_in_r2];"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm(global_ret_arena_ptr_in_r2)
+		: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
