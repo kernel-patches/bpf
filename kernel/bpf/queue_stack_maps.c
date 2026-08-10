@@ -59,6 +59,16 @@ static int queue_stack_map_alloc_check(union bpf_attr *attr)
 		 */
 		return -E2BIG;
 
+	/*
+	 * The u32 head/tail index is multiplied by value_size to address
+	 * elements[], and qs->size (max_entries + 1) is stored in a u32.
+	 * Bound the map size so neither the product nor the capacity
+	 * counter can overflow.
+	 */
+	if ((u64)attr->max_entries * attr->value_size > U32_MAX ||
+	    attr->max_entries == U32_MAX)
+		return -E2BIG;
+
 	return 0;
 }
 
