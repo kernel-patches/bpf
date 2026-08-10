@@ -379,8 +379,9 @@ int exception_bad_assert_range_with(struct __sk_buff *ctx)
 	return 1;
 }
 
-#if (defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64)) \
-	&& defined(__BPF_FEATURE_STACK_ARGUMENT)
+#if (defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64) || \
+	(defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64)) && \
+	defined(__BPF_FEATURE_STACK_ARGUMENT)
 
 const volatile bool has_stack_arg = true;
 
