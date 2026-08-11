@@ -939,6 +939,34 @@ __bpf_kfunc int bpf_kfunc_call_test5(u8 a, u16 b, u32 c)
 	return 0;
 }
 
+/*
+ * A kfunc is only usable where the ABI hands its return value back in
+ * registers. s390x, for example, returns a by-value struct or union through a
+ * hidden pointer argument (sret) whatever its size. That pointer shifts every
+ * declared argument by one register, and pahole, which maps parameters to
+ * registers positionally, then skips the function with "unexpected register
+ * usage for parameter". resolve_btfids reports "no BTF func for kfunc" and
+ * leaves the ID at 0, which makes register_btf_kfunc_id_set() fail at module
+ * init, so the module does not load at all.
+ *
+ * Restrict these kfuncs to the architectures where the return value comes back
+ * in registers. A kfunc taking no argument has nothing for the sret pointer to
+ * displace and needs no guard, whatever it returns.
+ */
+#if defined(__x86_64__) || defined(__aarch64__)
+__bpf_kfunc __int128 bpf_kfunc_call_test_i128(u64 a, u64 b)
+{
+	return (__int128)(((unsigned __int128)(a + b) << 64) | (a - b));
+}
+
+__bpf_kfunc struct prog_test_ret_pair bpf_kfunc_call_test_ret_pair(u64 a, u64 b)
+{
+	struct prog_test_ret_pair r = { .hi = a + b, .lo = a - b };
+
+	return r;
+}
+#endif /* __x86_64__ || __aarch64__ */
+
 __bpf_kfunc u64 bpf_kfunc_call_stack_arg(u64 a, u64 b, u64 c, u64 d,
 					 u64 e, u64 f, u64 g, u64 h,
 					 u64 i, u64 j)
@@ -1472,6 +1500,10 @@ BTF_ID_FLAGS(func, bpf_kfunc_call_test2)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test3)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test4)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test5)
+#if defined(__x86_64__) || defined(__aarch64__)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_pair)
+#endif
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg)
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg_ptr)
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg_mix)
