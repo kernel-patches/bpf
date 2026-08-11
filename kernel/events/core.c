@@ -10753,6 +10753,7 @@ static int __perf_event_overflow(struct perf_event *event,
 {
 	int events = atomic_read(&event->event_limit);
 	int ret = 0;
+	struct bpf_prog *prog;
 
 	/*
 	 * Non-sampling counters might still use the PMI to fold short
@@ -10766,7 +10767,8 @@ static int __perf_event_overflow(struct perf_event *event,
 	if (event->attr.aux_pause)
 		perf_event_aux_pause(event->aux_event, true);
 
-	if (event->prog && event->prog->type == BPF_PROG_TYPE_PERF_EVENT &&
+	prog = READ_ONCE(event->prog);
+	if (prog && prog->type == BPF_PROG_TYPE_PERF_EVENT &&
 	    !bpf_overflow_handler(event, data, regs))
 		goto out;
 

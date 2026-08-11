@@ -2018,7 +2018,7 @@ void perf_event_detach_bpf_prog(struct perf_event *event)
 
 put:
 	prog = event->prog;
-	event->prog = NULL;
+	WRITE_ONCE(event->prog, NULL);
 
 unlock:
 	mutex_unlock(&bpf_event_mutex);
