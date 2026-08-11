@@ -4192,6 +4192,15 @@ enum bpf_text_poke_type {
 	BPF_MOD_JUMP,
 };
 
+struct bpf_text_poke {
+	void *ip;
+	void *old_addr;
+	void *new_addr;
+	enum bpf_text_poke_type old_t;
+	enum bpf_text_poke_type new_t;
+};
+
+int bpf_arch_text_poke_batch(struct bpf_text_poke **pokes, u32 cnt);
 int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 		       enum bpf_text_poke_type new_t, void *old_addr,
 		       void *new_addr);
