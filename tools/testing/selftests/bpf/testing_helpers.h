@@ -52,6 +52,15 @@ static inline __u64 get_time_ns(void)
 	return (u64)t.tv_sec * 1000000000 + t.tv_nsec;
 }
 
+static inline __u64 get_time_ms(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_MONOTONIC, &t);
+
+	return (u64)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
 struct bpf_insn;
 /* Request BPF program instructions after all rewrites are applied,
  * e.g. verifier.c:convert_ctx_access() is done.

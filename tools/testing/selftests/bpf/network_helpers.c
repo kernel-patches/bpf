@@ -14,6 +14,7 @@
 #include <sys/types.h>
 #include <sys/un.h>
 #include <sys/eventfd.h>
+#include <sys/poll.h>
 
 #include <linux/err.h>
 #include <linux/in.h>
@@ -294,7 +295,10 @@ error_close:
 int connect_to_addr(int type, const struct sockaddr_storage *addr, socklen_t addrlen,
 		    const struct network_helper_opts *opts)
 {
-	int fd;
+	__u64 start_ms, duration_ms;
+	__u64 remaining_ms;
+	socklen_t errlen;
+	int fd, err, ret;
 
 	if (!opts)
 		opts = &default_opts;
@@ -305,13 +309,69 @@ int connect_to_addr(int type, const struct sockaddr_storage *addr, socklen_t add
 		return -1;
 	}
 
-	if (connect(fd, (const struct sockaddr *)addr, addrlen)) {
+	start_ms = get_time_ms();
+	err = connect(fd, (const struct sockaddr *)addr, addrlen);
+
+	if (!err)
+		return fd;
+
+	if (errno != EINPROGRESS) {
 		log_err("Failed to connect to server");
-		save_errno_close(fd);
-		return -1;
+		goto close;
 	}
 
-	return fd;
+	duration_ms = get_time_ms() - start_ms;
+	remaining_ms = duration_ms < opts->timeout_ms ?
+			       opts->timeout_ms - duration_ms :
+			       0;
+	if (!remaining_ms) {
+		errno = ETIMEDOUT;
+		log_err("Can not poll connection, already in timeout");
+		goto close;
+	}
+
+	while (remaining_ms) {
+		struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+
+		start_ms = get_time_ms();
+		ret = poll(&pfd, 1, remaining_ms);
+
+		if (ret == 0) {
+			errno = ETIMEDOUT;
+			log_err("Connection timeout while polling");
+			goto close;
+		} else if (ret < 0 && errno == EINTR) {
+			duration_ms = get_time_ms() - start_ms;
+			remaining_ms = duration_ms < remaining_ms ?
+					       remaining_ms - duration_ms :
+					       0;
+			if (!remaining_ms) {
+				errno = ETIMEDOUT;
+				log_err("Connection timeout after signal");
+				goto close;
+			}
+		} else if (ret < 0) {
+			log_err("Failed to poll connect status");
+			goto close;
+		}
+
+		errlen = sizeof(err);
+		if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen) < 0) {
+			log_err("Failed to getsockopt");
+			goto close;
+		}
+
+		if (err) {
+			errno = err;
+			log_err("Eventually failed to connect to server");
+			goto close;
+		}
+		return fd;
+	}
+
+close:
+	save_errno_close(fd);
+	return -1;
 }
 
 int connect_to_addr_str(int family, int type, const char *addr_str, __u16 port,
