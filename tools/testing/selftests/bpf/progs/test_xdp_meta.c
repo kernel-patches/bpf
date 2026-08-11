@@ -1152,4 +1152,22 @@ int seg6local_skb_ext_read(struct __sk_buff *ctx)
 	return BPF_OK;
 }
 
+/* Read skb_ext from sk_skb stream verdict hook */
+SEC("sk_skb/stream_verdict")
+int sk_skb_skb_ext_read(struct __sk_buff *ctx)
+{
+	__u8 meta_have[META_SIZE];
+	struct bpf_dynptr meta;
+
+	if (bpf_dynptr_from_skb_ext(ctx, 0, 0, &meta))
+		return SK_PASS;
+	if (bpf_dynptr_read(meta_have, META_SIZE, &meta, 0, 0))
+		return SK_PASS;
+	if (!check_metadata(meta_have))
+		return SK_PASS;
+
+	test_pass = true;
+	return SK_PASS;
+}
+
 char _license[] SEC("license") = "GPL";
