@@ -5,6 +5,9 @@
 #include "aggregate_ret_struct_c.skel.h"
 #include "aggregate_ret_union_c.skel.h"
 #include "aggregate_ret_kfunc_c.skel.h"
+#include "aggregate_ret_run.skel.h"
+#include "aggregate_ret_func.skel.h"
+#include "aggregate_ret_kfunc.skel.h"
 
 /*
  * The bpf_testmod kfuncs returning more than 8 bytes are only built on x86_64
@@ -139,10 +142,65 @@ out:
 	aggregate_ret_kfunc_c__destroy(skel);
 }
 
+static void test_run(void)
+{
+	struct aggregate_ret_run *skel;
+	bool kfunc_ok = true;
+	int err;
+
+	/*
+	 * Every program in this object shares __kfunc_btf_root(), so where the
+	 * testmod kfuncs are absent the object cannot load at all -- including
+	 * for the kfunc-free "asm" subtest.
+	 */
+	if (!has_ret_pair_kfuncs()) {
+		run_subtest("asm", NULL, false);
+		run_subtest("asm_kfunc", NULL, false);
+		run_subtest("struct", NULL, false);
+		run_subtest("union", NULL, false);
+		return;
+	}
+
+	skel = aggregate_ret_run__open();
+	if (!ASSERT_OK_PTR(skel, "skel_run_open"))
+		return;
+
+	err = aggregate_ret_run__load(skel);
+	if (err == -EOPNOTSUPP) {
+		kfunc_ok = false;
+		aggregate_ret_run__destroy(skel);
+
+		skel = aggregate_ret_run__open();
+		if (!ASSERT_OK_PTR(skel, "skel_run_reopen"))
+			return;
+
+		bpf_program__set_autoload(skel->progs.aggregate_ret_asm_kfunc_test, false);
+		bpf_program__set_autoload(skel->progs.aggregate_ret_struct_test, false);
+		bpf_program__set_autoload(skel->progs.aggregate_ret_union_test, false);
+
+		err = aggregate_ret_run__load(skel);
+	}
+	if (!ASSERT_OK(err, "skel_run_load"))
+		goto out;
+
+	run_subtest("asm", skel->progs.aggregate_ret_asm_test, true);
+	run_subtest("asm_kfunc", skel->progs.aggregate_ret_asm_kfunc_test, kfunc_ok);
+	run_subtest("struct", skel->progs.aggregate_ret_struct_test, kfunc_ok);
+	run_subtest("union", skel->progs.aggregate_ret_union_test, kfunc_ok);
+
+out:
+	aggregate_ret_run__destroy(skel);
+}
+
 void test_aggregate_ret(void)
 {
 	test_int128_c();
 	test_struct_c();
 	test_union_c();
 	test_kfunc_c();
+	test_run();
+
+	RUN_TESTS(aggregate_ret_func);
+	if (has_ret_pair_kfuncs())
+		RUN_TESTS(aggregate_ret_kfunc);
 }

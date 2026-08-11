@@ -965,7 +965,56 @@ __bpf_kfunc struct prog_test_ret_pair bpf_kfunc_call_test_ret_pair(u64 a, u64 b)
 
 	return r;
 }
+
+__bpf_kfunc struct prog_test_ret_pair bpf_kfunc_call_test_ret_fastcall(u64 a, u64 b)
+{
+	struct prog_test_ret_pair r = { .hi = a + b, .lo = a - b };
+
+	return r;
+}
+
+__bpf_kfunc struct prog_test_ret_li bpf_kfunc_call_test_ret_li(u64 a, int b)
+{
+	struct prog_test_ret_li r = { .a = a, .b = ~b };
+
+	return r;
+}
+
+__bpf_kfunc union prog_test_ret_uu bpf_kfunc_call_test_ret_uu(u64 a, u64 b)
+{
+	union prog_test_ret_uu r;
+
+	r.halves[0] = a + b;
+	r.halves[1] = a - b;
+	return r;
+}
+
+__bpf_kfunc struct prog_test_ret_ptr bpf_kfunc_call_test_ret_ptr(u64 tag)
+{
+	struct prog_test_ret_ptr r = { .p = NULL, .tag = tag };
+
+	return r;
+}
+
+__bpf_kfunc struct prog_test_ret_ii bpf_kfunc_call_test_ret_ii(int a, int b)
+{
+	struct prog_test_ret_ii r = { .a = a, .b = b };
+
+	return r;
+}
 #endif /* __x86_64__ || __aarch64__ */
+
+/*
+ * Takes no argument on purpose: with no arguments there is nothing for the sret
+ * pointer to displace, so this needs no architecture guard even though it
+ * returns 24 bytes. See the comment on bpf_kfunc_call_test_i128() above.
+ */
+__bpf_kfunc struct prog_test_ret_big bpf_kfunc_call_test_ret_big(void)
+{
+	struct prog_test_ret_big r = { .a = 1, .b = 2, .c = 3 };
+
+	return r;
+}
 
 __bpf_kfunc u64 bpf_kfunc_call_stack_arg(u64 a, u64 b, u64 c, u64 d,
 					 u64 e, u64 f, u64 g, u64 h,
@@ -1503,7 +1552,13 @@ BTF_ID_FLAGS(func, bpf_kfunc_call_test5)
 #if defined(__x86_64__) || defined(__aarch64__)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_pair)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_fastcall, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_li)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_uu)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_ptr)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_ii)
 #endif
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_big)
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg)
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg_ptr)
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg_mix)
