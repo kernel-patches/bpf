@@ -2865,14 +2865,23 @@ static int rhtab_map_alloc_check(union bpf_attr *attr)
 	return htab_map_alloc_check(attr);
 }
 
-static void rhtab_check_and_free_fields(struct bpf_rhtab *rhtab,
-					struct rhtab_elem *elem)
+static void rhtab_cancel_fields(struct bpf_rhtab *rhtab,
+				struct rhtab_elem *elem)
 {
 	if (IS_ERR_OR_NULL(rhtab->map.record))
 		return;
 
-	bpf_obj_free_fields(rhtab->map.record,
-			    rhtab_elem_value(elem, rhtab->map.key_size));
+	/*
+	 * Only cancel NMI-safe fields (timer, workqueue, task_work) here.
+	 * kptr/uptr/list/rbtree destruction must not run from arbitrary BPF
+	 * execution contexts (e.g. NMI), so leave those fields attached to
+	 * the recycled element and let rhtab_mem_dtor() destroy them once the
+	 * element is eventually freed. This matches the hash map semantics
+	 * introduced by a3a81d247651 ("bpf: Cancel special fields on map value
+	 * recycle").
+	 */
+	bpf_map_free_internal_structs(&rhtab->map,
+				      rhtab_elem_value(elem, rhtab->map.key_size));
 }
 
 static void rhtab_mem_dtor(void *obj, void *ctx)
@@ -2964,8 +2973,8 @@ static int rhtab_delete_elem(struct bpf_rhtab *rhtab, struct rhtab_elem *elem, v
 		rhtab_read_elem_value(&rhtab->map, copy, elem, flags);
 		check_and_init_map_value(&rhtab->map, copy);
 	}
-	/* Release internal structs: kptr, bpf_timer, task_work, wq */
-	rhtab_check_and_free_fields(rhtab, elem);
+	/* Cancel NMI-safe fields; full destruction happens in rhtab_mem_dtor */
+	rhtab_cancel_fields(rhtab, elem);
 	bpf_mem_cache_free_rcu(&rhtab->ma, elem);
 	return 0;
 }
@@ -3024,10 +3033,11 @@ static long rhtab_map_update_existing(struct bpf_map *map, struct rhtab_elem *el
 	 * BPF_F_LOCK, matching arraymap semantics.
 	 *
 	 * copy_map_value() skips special-field offsets, so old timers/
-	 * kptrs/etc. still sit in the slot. Cancel them after the copy
-	 * to match arraymap's update semantics.
+	 * kptrs/etc. still sit in the slot. Cancel the NMI-safe ones after
+	 * the copy to match arraymap's update semantics; referenced kptrs
+	 * stay attached and are destroyed by rhtab_mem_dtor().
 	 */
-	rhtab_check_and_free_fields(rhtab, elem);
+	rhtab_cancel_fields(rhtab, elem);
 	return 0;
 }
 
