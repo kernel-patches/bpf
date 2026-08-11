@@ -2500,6 +2500,19 @@ int bpf_get_kfunc_addr(const struct bpf_prog *prog, u32 func_id,
 	return 0;
 }
 
+int bpf_get_kfunc_ret_size(const struct bpf_prog *prog, u32 func_id,
+			   u16 btf_fd_idx, u8 *ret_size)
+{
+	const struct bpf_kfunc_desc *desc;
+
+	desc = find_kfunc_desc(prog, func_id, btf_fd_idx);
+	if (!desc)
+		return -EFAULT;
+
+	*ret_size = desc->func_model.ret_size;
+	return 0;
+}
+
 #define BPF_FD_SLOT_BTF	1UL
 
 static void fd_slot_set_map(struct bpf_fd_array *slot, struct bpf_map *map)
