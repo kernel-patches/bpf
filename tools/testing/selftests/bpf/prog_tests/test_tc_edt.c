@@ -109,7 +109,7 @@ static void run_test(void)
 	nstoken = open_netns(CLIENT_NS);
 	if (!ASSERT_OK_PTR(nstoken, "open client ns"))
 		return;
-	client_fd = connect_to_fd(server_fd, 0);
+	client_fd = connect_to_fd(server_fd, TIMEOUT_MS);
 	if (!ASSERT_OK_FD(client_fd, "connect client"))
 		return;
 
