@@ -2666,6 +2666,22 @@ populate_extable:
 				return -EINVAL;
 			if (priv_frame_ptr)
 				pop_r9(&prog);
+			if (src_reg == BPF_PSEUDO_KFUNC_CALL) {
+				const struct btf_func_model *fm;
+
+				/*
+				 * A kfunc returning a >8 byte aggregate hands the
+				 * second half back in RDX (the native ABI's second
+				 * return reg), but BPF expects it in R0:R2. BPF R0
+				 * is RAX (no move needed), while BPF R2 is RSI, so
+				 * copy RDX into RSI.
+				 */
+				fm = bpf_jit_find_kfunc_model(bpf_prog, insn);
+				if (!fm)
+					return -EFAULT;
+				if (fm->ret_size > 8)
+					emit_mov_reg(&prog, true, BPF_REG_2, BPF_REG_3);
+			}
 			break;
 		}
 
@@ -4152,6 +4168,11 @@ out_priv_stack:
 }
 
 bool bpf_jit_supports_kfunc_call(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_kfunc_ret_reg_pair(void)
 {
 	return true;
 }
