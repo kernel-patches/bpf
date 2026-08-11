@@ -988,4 +988,20 @@ int seg6local_meta_read(struct __sk_buff *ctx)
 	return BPF_OK;
 }
 
+/* Read stashed metadata from sk_skb stream verdict hook */
+SEC("sk_skb/stream_verdict")
+int sk_skb_meta_read(struct __sk_buff *ctx)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &ctx);
+	if (!meta_have)
+		return SK_PASS;
+	if (!check_metadata(meta_have))
+		return SK_PASS;
+
+	test_pass = true;
+	return SK_PASS;
+}
+
 char _license[] SEC("license") = "GPL";
