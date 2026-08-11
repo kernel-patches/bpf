@@ -111,6 +111,7 @@
 #include "verifier_tailcall.skel.h"
 #include "verifier_tailcall_jit.skel.h"
 #include "verifier_typedef.skel.h"
+#include "verifier_hmul.skel.h"
 #include "verifier_uninit.skel.h"
 #include "verifier_unpriv.skel.h"
 #include "verifier_unpriv_perf.skel.h"
@@ -274,6 +275,7 @@ void test_verifier_subreg(void)               { RUN(verifier_subreg); }
 void test_verifier_tailcall(void)             { RUN(verifier_tailcall); }
 void test_verifier_tailcall_jit(void)         { RUN(verifier_tailcall_jit); }
 void test_verifier_typedef(void)              { RUN(verifier_typedef); }
+void test_verifier_hmul(void)                 { RUN(verifier_hmul); }
 void test_verifier_uninit(void)               { RUN(verifier_uninit); }
 void test_verifier_unpriv(void)               { RUN(verifier_unpriv); }
 void test_verifier_unpriv_perf(void)          { RUN(verifier_unpriv_perf); }
