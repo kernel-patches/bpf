@@ -34,7 +34,23 @@
 #define BPF_DIAG_REG_TMP_LEN 192
 #define BPF_DIAG_FMT_CHUNK_SIZE 1024
 #define BPF_DIAG_FMT_BUF_SIZE 256
+#define BPF_DIAG_EVENT_LOG_MAX_SIZE (1U << 20)
 #define DISASM_LINE_LEN 160
+
+enum bpf_diag_history_kind {
+	BPF_DIAG_HISTORY_BRANCH,
+};
+
+struct bpf_diag_history_event {
+	u32 insn_idx : 24;
+	u32 kind : 8;
+	u8 in_lineage : 1;
+	union {
+		struct {
+			bool cond_true;
+		} branch;
+	};
+};
 
 struct disasm_line {
 	char text[DISASM_LINE_LEN];
@@ -58,12 +74,21 @@ struct diag_fmt_mark {
 	size_t len;
 };
 
+struct bpf_diag_log {
+	struct bpf_diag_history_event *events;
+	u32 cnt;
+	u32 cap;
+	u32 dropped;
+	bool capped;
+};
+
 struct bpf_diag_scratch {
 	struct bpf_linfo_source source_lines[BPF_DIAG_CONTEXT_CNT];
 	struct disasm_line disasm_lines[BPF_DIAG_CONTEXT_CNT];
 };
 
 struct bpf_diag {
+	struct bpf_diag_log log;
 	struct bpf_diag_scratch scratch;
 	struct list_head fmt_chunks;
 };
@@ -229,6 +254,7 @@ void bpf_diag_free(struct bpf_verifier_env *env)
 		return;
 
 	diag_fmt_free(env);
+	kvfree(diag->log.events);
 	kfree(diag);
 	env->diag = NULL;
 }
@@ -243,6 +269,75 @@ static void diag_write(struct bpf_verifier_env *env, const char *fmt, ...)
 	va_start(args, fmt);
 	bpf_verifier_vlog(&env->log, fmt, args);
 	va_end(args);
+}
+
+static struct bpf_diag_log *diag_event_log(struct bpf_verifier_env *env)
+{
+	struct bpf_diag *diag = diag_env(env);
+
+	return diag ? &diag->log : NULL;
+}
+
+u32 bpf_diag_event_log_pos(struct bpf_verifier_env *env)
+{
+	struct bpf_diag *diag = diag_env(env);
+
+	if (!diag)
+		return 0;
+	return diag->log.cnt;
+}
+
+void bpf_diag_event_log_reset(struct bpf_verifier_env *env, u32 pos)
+{
+	struct bpf_diag *diag = env->diag;
+	struct bpf_diag_log *log;
+	u32 end;
+
+	if (!diag)
+		return;
+
+	log = &diag->log;
+	end = log->cnt;
+	if (WARN_ON_ONCE(pos > end))
+		pos = end;
+
+	log->cnt = pos;
+}
+
+static void diag_append_history(struct bpf_verifier_env *env,
+				const struct bpf_diag_history_event *event)
+{
+	struct bpf_diag_history_event *events;
+	struct bpf_diag_log *log;
+	u32 cap, max_events;
+
+	log = diag_event_log(env);
+	if (!log)
+		return;
+
+	if (log->cnt < log->cap) {
+		log->events[log->cnt++] = *event;
+		return;
+	}
+
+	max_events = BPF_DIAG_EVENT_LOG_MAX_SIZE / sizeof(*events);
+	if (log->capped || log->cap == max_events) {
+		if (log->dropped != U32_MAX)
+			log->dropped++;
+		return;
+	}
+
+	cap = min_t(u32, log->cap ? log->cap * 2 : 64, max_events);
+	events = kvrealloc(log->events, array_size(cap, sizeof(*events)), GFP_KERNEL_ACCOUNT);
+	if (!events) {
+		log->capped = true;
+		if (log->dropped != U32_MAX)
+			log->dropped++;
+		return;
+	}
+	log->events = events;
+	log->cap = cap;
+	log->events[log->cnt++] = *event;
 }
 
 static void diag_print_wrapped_prefixed(struct bpf_verifier_env *env, const char *first_prefix,
@@ -563,4 +658,17 @@ void bpf_diag_source(struct bpf_verifier_env *env, u32 insn_idx, const char *lab
 
 out_restore:
 	diag_fmt_restore(env, mark);
+}
+
+void bpf_diag_record_branch(struct bpf_verifier_env *env, u32 insn_idx, bool cond_true)
+{
+	struct bpf_diag_history_event event = {
+		.insn_idx = insn_idx,
+		.kind = BPF_DIAG_HISTORY_BRANCH,
+		.branch = {
+			.cond_true = cond_true,
+		},
+	};
+
+	diag_append_history(env, &event);
 }
