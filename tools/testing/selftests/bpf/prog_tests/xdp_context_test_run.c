@@ -717,6 +717,20 @@ static bool is_map_empty(struct bpf_map *map)
 	       errno == ENOENT;
 }
 
+static void reset_skb_trace_test_state(struct test_xdp_meta *skel)
+{
+	int fd = bpf_map__fd(skel->maps.meta_map);
+	void *key;
+
+	while (!bpf_map_get_next_key(fd, NULL, &key))
+		bpf_map_delete_elem(fd, &key);
+
+	skel->bss->test_pass = false;
+	skel->bss->free_count = 0;
+	skel->bss->copy_done = false;
+	skel->bss->write_done = false;
+}
+
 static void test_skb_trace__tuntap(struct test_xdp_meta *skel)
 {
 	struct bpf_link *link;
@@ -1031,6 +1045,146 @@ void test_skb_trace_basic(void)
 		test_skb_trace__veth(skel);
 	if (test__start_subtest("survives_gre"))
 		test_skb_trace__gre(skel);
+
+	test_xdp_meta__destroy(skel);
+}
+
+/* Send test_payload over loopback UDP to recv_fd */
+static int send_loopback_udp(int recv_fd)
+{
+	struct sockaddr_in addr = {
+		.sin_family = AF_INET,
+		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+	};
+	char buf[TEST_PAYLOAD_LEN];
+	int ret = -1;
+	int fd = -1;
+	int port;
+
+	port = get_socket_local_port(recv_fd);
+	if (!ASSERT_GE(port, 0, "get_port"))
+		goto out;
+
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (!ASSERT_GE(fd, 0, "socket"))
+		goto out;
+
+	addr.sin_port = port;
+	sendto(fd, test_payload, TEST_PAYLOAD_LEN, 0,
+	       (void *)&addr, sizeof(addr));
+	recvfrom(recv_fd, buf, sizeof(buf), 0, NULL, NULL);
+	ret = 0;
+out:
+	if (fd >= 0)
+		close(fd);
+	return ret;
+}
+
+enum udp_reader_type {
+	READER_CGRP_SKB,
+	READER_SK_FILTER,
+};
+
+/* Test metadata passing across TC ingress -> UDP reader hook */
+static void test_skb_trace__udp(struct test_xdp_meta *skel, const char *name,
+				enum udp_reader_type reader)
+{
+	LIBBPF_OPTS(bpf_tc_hook, tc_hook,
+		    .ifindex = 1 /* IFINDEX_LO */,
+		    .attach_point = BPF_TC_INGRESS);
+	LIBBPF_OPTS(bpf_tc_opts, tc_opts, .handle = 1, .priority = 1);
+	struct bpf_link *reader_link = NULL;
+	struct bpf_link *tp_link = NULL;
+	struct netns_obj *ns = NULL;
+	int server_fd;
+	int cgroup_fd;
+	int filter_fd;
+	int ret;
+	int i;
+
+	reset_skb_trace_test_state(skel);
+
+	ns = netns_new(name, true);
+	if (!ASSERT_OK_PTR(ns, "netns_new"))
+		return;
+
+	tp_link = bpf_program__attach(skel->progs.skb_free);
+	if (!ASSERT_OK_PTR(tp_link, "tp_attach"))
+		goto cleanup_netns;
+
+	cgroup_fd = test__join_cgroup("/skb_ext_udp");
+	if (!ASSERT_GE(cgroup_fd, 0, "join_cgroup"))
+		goto cleanup_tp;
+
+	server_fd = start_server(AF_INET, SOCK_DGRAM, "127.0.0.1", 0, 0);
+	if (!ASSERT_GE(server_fd, 0, "start_server"))
+		goto cleanup_cgroup;
+
+	ret = bpf_tc_hook_create(&tc_hook);
+	if (!ASSERT_OK(ret, "bpf_tc_hook_create"))
+		goto cleanup_server;
+
+	tc_opts.prog_fd = bpf_program__fd(skel->progs.tc_meta_write);
+	ret = bpf_tc_attach(&tc_hook, &tc_opts);
+	if (!ASSERT_OK(ret, "bpf_tc_attach"))
+		goto cleanup_tc;
+
+	switch (reader) {
+	case READER_CGRP_SKB:
+		reader_link = bpf_program__attach_cgroup(skel->progs.cgrp_meta_read,
+							 cgroup_fd);
+		if (!ASSERT_OK_PTR(reader_link, "attach_cgroup"))
+			goto cleanup_tc;
+		break;
+	case READER_SK_FILTER:
+		filter_fd = bpf_program__fd(skel->progs.sk_filter_meta_read);
+		ret = setsockopt(server_fd, SOL_SOCKET, SO_ATTACH_BPF,
+				 &filter_fd, sizeof(filter_fd));
+		if (!ASSERT_OK(ret, "attach_socket_filter"))
+			goto cleanup_tc;
+		break;
+	}
+
+	if (send_loopback_udp(server_fd))
+		goto cleanup_reader;
+
+	/* Poll every 10 msec up to 1 sec */
+	for (i = 0; i < 100 && !skel->bss->test_pass; i++)
+		usleep(10000);
+	ASSERT_TRUE(skel->bss->test_pass, "test_pass");
+
+	/* Wait for the free tp to drain all tagged skbs from the stash */
+	for (i = 0; i < 100 && !is_map_empty(skel->maps.meta_map); i++)
+		usleep(10000);
+	ASSERT_TRUE(is_map_empty(skel->maps.meta_map), "stash drained");
+	ASSERT_GE(skel->bss->free_count, 1, "free_count");
+
+cleanup_reader:
+	bpf_link__destroy(reader_link);
+cleanup_tc:
+	bpf_tc_hook_destroy(&tc_hook);
+cleanup_server:
+	close(server_fd);
+cleanup_cgroup:
+	close(cgroup_fd);
+cleanup_tp:
+	bpf_link__destroy(tp_link);
+cleanup_netns:
+	netns_free(ns);
+}
+
+void test_skb_trace_cross_hook(void)
+{
+	struct test_xdp_meta *skel = NULL;
+
+	skel = test_xdp_meta__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open and load skeleton"))
+		return;
+
+	if (test__start_subtest("tc_to_cgrp_ingress"))
+		test_skb_trace__udp(skel, "tc_to_cgrp_ingress", READER_CGRP_SKB);
+	if (test__start_subtest("tc_to_sk_filter"))
+		test_skb_trace__udp(skel, "tc_to_sk_filter", READER_SK_FILTER);
 
 	test_xdp_meta__destroy(skel);
 }
