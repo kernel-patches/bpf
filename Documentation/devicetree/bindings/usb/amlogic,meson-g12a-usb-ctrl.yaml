@@ -53,7 +53,7 @@ properties:
     maxItems: 3
 
   resets:
-    minItems: 1
+    maxItems: 1
 
   reg:
     maxItems: 1
