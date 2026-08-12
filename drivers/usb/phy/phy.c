@@ -534,10 +534,8 @@ struct  usb_phy *devm_usb_get_phy_by_node(struct device *dev,
 	unsigned long	flags;
 
 	ptr = devres_alloc(devm_usb_phy_release2, sizeof(*ptr), GFP_KERNEL);
-	if (!ptr) {
-		dev_dbg(dev, "failed to allocate memory for devres\n");
+	if (!ptr)
 		goto err0;
-	}
 
 	spin_lock_irqsave(&phy_lock, flags);
 
