@@ -10,6 +10,10 @@
 #define TX_NAME "veth1"
 #define TX_NETNS "xdp_context_tx"
 #define RX_NETNS "xdp_context_rx"
+#define SKB_TRACE_RX_NAME "skb_trace_veth0"
+#define SKB_TRACE_TX_NAME "skb_trace_veth1"
+#define SKB_TRACE_TX_NETNS "skb_trace_tx"
+#define SKB_TRACE_RX_NETNS "skb_trace_rx"
 #define RX_MAC "02:00:00:00:00:01"
 #define TX_MAC "02:00:00:00:00:02"
 #define TAP_NAME "tap0"
@@ -827,6 +831,190 @@ close:
 	netns_free(ns);
 }
 
+/* Test if skb_ext survives veth cross-netns forward */
+static void test_skb_trace__veth(struct test_xdp_meta *skel)
+{
+	LIBBPF_OPTS(bpf_tc_hook, tx_hook, .attach_point = BPF_TC_EGRESS);
+	LIBBPF_OPTS(bpf_tc_opts, tx_opts, .handle = 1, .priority = 1);
+	LIBBPF_OPTS(bpf_tc_hook, rx_hook, .attach_point = BPF_TC_INGRESS);
+	LIBBPF_OPTS(bpf_tc_opts, rx_opts, .handle = 1, .priority = 1);
+	struct netns_obj *rx_ns = NULL, *tx_ns = NULL;
+	struct bpf_link *put_link = NULL;
+	struct nstoken *nstoken = NULL;
+	int rx_ifindex, tx_ifindex;
+	int ret;
+	int i;
+
+	put_link = bpf_program__attach(skel->progs.skb_free);
+	if (!ASSERT_OK_PTR(put_link, "put_attach"))
+		return;
+
+	tx_ns = netns_new(SKB_TRACE_TX_NETNS, false);
+	if (!ASSERT_OK_PTR(tx_ns, "create tx_ns"))
+		goto close;
+
+	rx_ns = netns_new(SKB_TRACE_RX_NETNS, false);
+	if (!ASSERT_OK_PTR(rx_ns, "create rx_ns"))
+		goto close;
+
+	SYS(close, "ip link add " SKB_TRACE_RX_NAME " netns " SKB_TRACE_RX_NETNS
+	    " type veth peer name " SKB_TRACE_TX_NAME " netns " SKB_TRACE_TX_NETNS);
+
+	/* Setup RX side: TC ingress reader */
+	nstoken = open_netns(SKB_TRACE_RX_NETNS);
+	if (!ASSERT_OK_PTR(nstoken, "setns rx_ns"))
+		goto close;
+
+	SYS(close, "ip link set dev " SKB_TRACE_RX_NAME " up");
+
+	rx_ifindex = if_nametoindex(SKB_TRACE_RX_NAME);
+	if (!ASSERT_GT(rx_ifindex, 0, "if_nametoindex rx"))
+		goto close;
+
+	rx_hook.ifindex = rx_ifindex;
+	ret = bpf_tc_hook_create(&rx_hook);
+	if (!ASSERT_OK(ret, "bpf_tc_hook_create rx"))
+		goto close;
+
+	rx_opts.prog_fd = bpf_program__fd(skel->progs.tc_meta_read);
+	ret = bpf_tc_attach(&rx_hook, &rx_opts);
+	if (!ASSERT_OK(ret, "bpf_tc_attach rx"))
+		goto close;
+
+	close_netns(nstoken);
+
+	/* Setup TX side: TC egress writer */
+	nstoken = open_netns(SKB_TRACE_TX_NETNS);
+	if (!ASSERT_OK_PTR(nstoken, "setns tx_ns"))
+		goto close;
+
+	SYS(close, "ip link set dev " SKB_TRACE_TX_NAME " up");
+
+	tx_ifindex = if_nametoindex(SKB_TRACE_TX_NAME);
+	if (!ASSERT_GT(tx_ifindex, 0, "if_nametoindex tx"))
+		goto close;
+
+	tx_hook.ifindex = tx_ifindex;
+	ret = bpf_tc_hook_create(&tx_hook);
+	if (!ASSERT_OK(ret, "bpf_tc_hook_create tx"))
+		goto close;
+
+	tx_opts.prog_fd = bpf_program__fd(skel->progs.tc_meta_write);
+	ret = bpf_tc_attach(&tx_hook, &tx_opts);
+	if (!ASSERT_OK(ret, "bpf_tc_attach tx"))
+		goto close;
+
+	skel->bss->test_pass = false;
+	skel->bss->free_count = 0;
+
+	ret = send_test_packet(tx_ifindex);
+	if (!ASSERT_OK(ret, "send_test_packet"))
+		goto close;
+
+	/* Poll every 10 msec up to 1 sec */
+	for (i = 0; i < 100 && !skel->bss->test_pass; i++)
+		usleep(10000);
+	ASSERT_TRUE(skel->bss->test_pass, "test_pass");
+
+	/* Wait for the free tp to drain all tagged skbs from the stash */
+	for (i = 0; i < 100 && !is_map_empty(skel->maps.meta_map); i++)
+		usleep(10000);
+	ASSERT_TRUE(is_map_empty(skel->maps.meta_map), "stash drained");
+	ASSERT_GE(skel->bss->free_count, 1, "free_count");
+
+close:
+	bpf_link__destroy(put_link);
+	close_netns(nstoken);
+	netns_free(rx_ns);
+	netns_free(tx_ns);
+}
+
+/* Test if skb_ext survives GRE tunnel encap+decap */
+static void test_skb_trace__gre(struct test_xdp_meta *skel)
+{
+	LIBBPF_OPTS(bpf_tc_hook, tx_hook, .attach_point = BPF_TC_EGRESS);
+	LIBBPF_OPTS(bpf_tc_opts, tx_opts, .handle = 1, .priority = 1);
+	LIBBPF_OPTS(bpf_tc_hook, rx_hook, .attach_point = BPF_TC_INGRESS);
+	LIBBPF_OPTS(bpf_tc_opts, rx_opts, .handle = 1, .priority = 1);
+	struct bpf_link *put_link = NULL;
+	struct netns_obj *ns = NULL;
+	int tx_ifindex;
+	int rx_ifindex;
+	int ret;
+	int i;
+
+	put_link = bpf_program__attach(skel->progs.skb_free);
+	if (!ASSERT_OK_PTR(put_link, "put_attach"))
+		return;
+
+	ns = netns_new("gre_test", true);
+	if (!ASSERT_OK_PTR(ns, "netns_new"))
+		goto close;
+
+	/* Setup: gre_tx -> lo -> gre_rx */
+	SYS(close, "ip link set lo up");
+	SYS(close, "ip link add gre_tx type gretap"
+	    " local 127.0.0.1 remote 127.0.0.2");
+	SYS(close, "ip link set gre_tx up");
+	SYS(close, "ip addr add 127.0.0.2/8 dev lo");
+	SYS(close, "ip link add gre_rx type gretap"
+	    " local 127.0.0.2 remote 127.0.0.1");
+	SYS(close, "ip link set gre_rx up");
+
+	/* Write skb_ext on TC egress on GRE tx */
+	tx_ifindex = if_nametoindex("gre_tx");
+	if (!ASSERT_GT(tx_ifindex, 0, "tx_ifindex"))
+		goto close;
+
+	tx_hook.ifindex = tx_ifindex;
+	ret = bpf_tc_hook_create(&tx_hook);
+	if (!ASSERT_OK(ret, "tx_hook_create"))
+		goto close;
+
+	tx_opts.prog_fd = bpf_program__fd(skel->progs.tc_meta_write);
+	ret = bpf_tc_attach(&tx_hook, &tx_opts);
+	if (!ASSERT_OK(ret, "tx_attach"))
+		goto close;
+
+	/* Read skb_ext on TC ingress on GRE rx */
+	rx_ifindex = if_nametoindex("gre_rx");
+	if (!ASSERT_GT(rx_ifindex, 0, "rx_ifindex"))
+		goto close;
+
+	rx_hook.ifindex = rx_ifindex;
+	ret = bpf_tc_hook_create(&rx_hook);
+	if (!ASSERT_OK(ret, "rx_hook_create"))
+		goto close;
+
+	rx_opts.prog_fd = bpf_program__fd(skel->progs.tc_meta_read);
+	ret = bpf_tc_attach(&rx_hook, &rx_opts);
+	if (!ASSERT_OK(ret, "rx_attach"))
+		goto close;
+
+	/* Then use send_test_packet on GRE tx */
+	skel->bss->test_pass = false;
+	skel->bss->free_count = 0;
+
+	ret = send_test_packet(tx_ifindex);
+	if (!ASSERT_OK(ret, "send_test_packet"))
+		goto close;
+
+	/* Poll every 10 msec up to 1 sec */
+	for (i = 0; i < 100 && !skel->bss->test_pass; i++)
+		usleep(10000);
+	ASSERT_TRUE(skel->bss->test_pass, "test_pass");
+
+	/* Wait for the free tp to drain all tagged skbs from the stash */
+	for (i = 0; i < 100 && !is_map_empty(skel->maps.meta_map); i++)
+		usleep(10000);
+	ASSERT_TRUE(is_map_empty(skel->maps.meta_map), "stash drained");
+	ASSERT_GE(skel->bss->free_count, 1, "free_count");
+
+close:
+	bpf_link__destroy(put_link);
+	netns_free(ns);
+}
+
 void test_skb_trace_basic(void)
 {
 	struct test_xdp_meta *skel = NULL;
@@ -839,6 +1027,10 @@ void test_skb_trace_basic(void)
 		test_skb_trace__tuntap(skel);
 	if (test__start_subtest("clone_read"))
 		test_skb_trace__mirred_clone(skel);
+	if (test__start_subtest("survives_veth"))
+		test_skb_trace__veth(skel);
+	if (test__start_subtest("survives_gre"))
+		test_skb_trace__gre(skel);
 
 	test_xdp_meta__destroy(skel);
 }
