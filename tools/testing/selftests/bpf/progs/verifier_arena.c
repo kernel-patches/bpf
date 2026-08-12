@@ -711,7 +711,6 @@ struct arena_ret_pair {
 	__u64 hi;
 };
 
-
 /*
  * A 16-byte value is returned in the R0:R2 register pair. A global subprogram
  * may return an arena pointer in R0, but R2 holds the upper half of a scalar
