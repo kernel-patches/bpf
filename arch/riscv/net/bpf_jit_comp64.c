@@ -1815,17 +1815,38 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			const struct btf_func_model *fm;
-			int idx;
+			int idx, nargs;
 
 			fm = bpf_jit_find_kfunc_model(ctx->prog, insn);
 			if (!fm)
 				return -EINVAL;
 
-			for (idx = 0; idx < fm->nr_args; idx++) {
+			nargs = min_t(int, fm->nr_args, MAX_BPF_FUNC_REG_ARGS);
+			for (idx = 0; idx < nargs; idx++) {
 				u8 reg = bpf_to_rv_reg(BPF_REG_1 + idx, ctx);
 
 				if (fm->arg_size[idx] == sizeof(int))
 					emit_sextw(reg, reg, ctx);
+			}
+
+			/* BPF stack args -> RISC-V ABI: args 6-8 in A5-A7, 9+ at SP+0 */
+			if (fm->nr_args > MAX_BPF_FUNC_REG_ARGS) {
+				int n_stack = fm->nr_args - MAX_BPF_FUNC_REG_ARGS;
+				int n_reg = min_t(int, n_stack,
+						  RV_MAX_REG_ARGS - MAX_BPF_FUNC_REG_ARGS);
+
+				for (idx = 0; idx < n_reg; idx++) {
+					int sz = fm->arg_size[MAX_BPF_FUNC_REG_ARGS + idx];
+
+					emit_ld(RV_REG_A5 + idx, idx * 8, RV_REG_SP, ctx);
+					if (sz == sizeof(int))
+						emit_sextw(RV_REG_A5 + idx, RV_REG_A5 + idx, ctx);
+				}
+
+				for (idx = 0; idx < n_stack - n_reg; idx++) {
+					emit_ld(RV_REG_T1, (n_reg + idx) * 8, RV_REG_SP, ctx);
+					emit_sd(RV_REG_SP, idx * 8, RV_REG_T1, ctx);
+				}
 			}
 		}
 
@@ -1891,6 +1912,21 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 	case BPF_LDX | BPF_MEM | BPF_H:
 	case BPF_LDX | BPF_MEM | BPF_W:
 	case BPF_LDX | BPF_MEM | BPF_DW:
+		if (insn->src_reg == BPF_REG_PARAMS) {
+			int idx = off / 8 - 1;
+
+			if (is_12b_int(idx * 8)) {
+				emit_ldx_insn(rd, idx * 8, RV_REG_FP, BPF_SIZE(code), false, ctx);
+			} else {
+				emit_imm(RV_REG_T1, idx * 8, ctx);
+				emit_add(RV_REG_T1, RV_REG_T1, RV_REG_FP, ctx);
+				emit_ldx_insn(rd, 0, RV_REG_T1, BPF_SIZE(code), false, ctx);
+			}
+			if (BPF_SIZE(code) != BPF_DW && insn_is_zext(&insn[1]))
+				return 1;
+			break;
+		}
+		fallthrough;
 	case BPF_LDX | BPF_PROBE_MEM | BPF_B:
 	case BPF_LDX | BPF_PROBE_MEM | BPF_H:
 	case BPF_LDX | BPF_PROBE_MEM | BPF_W:
@@ -1938,6 +1974,20 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 	case BPF_ST | BPF_MEM | BPF_H:
 	case BPF_ST | BPF_MEM | BPF_W:
 	case BPF_ST | BPF_MEM | BPF_DW:
+		if (insn->dst_reg == BPF_REG_PARAMS) {
+			int idx = -off / 8 - 1;
+
+			emit_imm(RV_REG_T1, imm, ctx);
+			if (is_12b_int(idx * 8)) {
+				emit_stx_insn(RV_REG_SP, idx * 8, RV_REG_T1, BPF_SIZE(code), ctx);
+			} else {
+				emit_imm(RV_REG_T2, idx * 8, ctx);
+				emit_add(RV_REG_T2, RV_REG_SP, RV_REG_T2, ctx);
+				emit_stx_insn(RV_REG_T2, 0, RV_REG_T1, BPF_SIZE(code), ctx);
+			}
+			break;
+		}
+		fallthrough;
 	/* ST | PROBE_MEM32: *(size *)(dst + RV_REG_ARENA + off) = imm */
 	case BPF_ST | BPF_PROBE_MEM32 | BPF_B:
 	case BPF_ST | BPF_PROBE_MEM32 | BPF_H:
@@ -1960,6 +2010,19 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 	case BPF_STX | BPF_MEM | BPF_H:
 	case BPF_STX | BPF_MEM | BPF_W:
 	case BPF_STX | BPF_MEM | BPF_DW:
+		if (insn->dst_reg == BPF_REG_PARAMS) {
+			int idx = -off / 8 - 1;
+
+			if (is_12b_int(idx * 8)) {
+				emit_stx_insn(RV_REG_SP, idx * 8, rs, BPF_SIZE(code), ctx);
+			} else {
+				emit_imm(RV_REG_T1, idx * 8, ctx);
+				emit_add(RV_REG_T1, RV_REG_SP, RV_REG_T1, ctx);
+				emit_stx_insn(RV_REG_T1, 0, rs, BPF_SIZE(code), ctx);
+			}
+			break;
+		}
+		fallthrough;
 	/* STX | PROBE_MEM32: *(size *)(dst + RV_REG_ARENA + off) = src */
 	case BPF_STX | BPF_PROBE_MEM32 | BPF_B:
 	case BPF_STX | BPF_PROBE_MEM32 | BPF_H:
@@ -2045,6 +2108,7 @@ void bpf_jit_build_prologue(struct rv_jit_context *ctx, bool is_subprog)
 
 	stack_adjust = round_up(stack_adjust, STACK_ALIGN);
 	stack_adjust += bpf_stack_adjust;
+	stack_adjust += ctx->stack_arg_size;
 
 	store_offset = stack_adjust - 8;
 
@@ -2102,7 +2166,7 @@ void bpf_jit_build_prologue(struct rv_jit_context *ctx, bool is_subprog)
 	emit_addi(RV_REG_FP, RV_REG_SP, stack_adjust, ctx);
 
 	if (bpf_stack_adjust)
-		emit_addi(RV_REG_S5, RV_REG_SP, bpf_stack_adjust, ctx);
+		emit_addi(RV_REG_S5, RV_REG_SP, ctx->stack_arg_size + bpf_stack_adjust, ctx);
 
 	ctx->stack_size = stack_adjust;
 
@@ -2177,6 +2241,11 @@ bool bpf_jit_supports_subprog_tailcalls(void)
 }
 
 bool bpf_jit_supports_timed_may_goto(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_stack_args(void)
 {
 	return true;
 }
