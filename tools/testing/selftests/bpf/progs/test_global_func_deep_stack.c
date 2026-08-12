@@ -89,6 +89,7 @@ int global_func_deep_stack_success(struct __sk_buff *skb)
  */
 SEC("syscall")
 __failure __msg("combined stack size of 34 calls")
+__msg("Call chain ... -> f16")
 int global_func_deep_stack_fail(struct __sk_buff *skb)
 {
 	return f32(123);
