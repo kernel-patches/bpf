@@ -175,7 +175,6 @@ int bpf_diag_init(struct bpf_verifier_env *env)
 	env->diag = kzalloc_obj(struct bpf_diag, GFP_KERNEL_ACCOUNT);
 	if (!env->diag)
 		return -ENOMEM;
-
 	INIT_LIST_HEAD(&env->diag->fmt_chunks);
 	return 0;
 }
@@ -927,6 +926,49 @@ static const char *diag_arg_ordinal(int argno)
 	}
 }
 
+void bpf_diag_call_type(struct bpf_verifier_env *env, u32 insn_idx, int argno, int regno,
+			       int stack_arg_slot, const char *call_name, const char *arg_name,
+			       const char *reason, const char *suggestion)
+{
+	struct bpf_diag_history_opts opts = {
+		.frameno = diag_current_frameno(env),
+	};
+	const char *ordinal = diag_arg_ordinal(argno);
+	const char *arg_desc;
+	bool print_history = true;
+
+	if (regno >= 0) {
+		opts.scope = BPF_DIAG_HISTORY_SCOPE_REG;
+		opts.regno = regno;
+	} else if (stack_arg_slot >= 0) {
+		opts.scope = BPF_DIAG_HISTORY_SCOPE_STACK_ARG;
+		opts.stack_arg_slot = stack_arg_slot;
+	} else {
+		print_history = false;
+	}
+
+	if (ordinal && arg_name)
+		arg_desc = bpf_diag_fmt(env, "%s argument (%s)", ordinal, arg_name);
+	else if (ordinal)
+		arg_desc = bpf_diag_fmt(env, "%s argument", ordinal);
+	else if (arg_name)
+		arg_desc = bpf_diag_fmt(env, "argument %s", arg_name);
+	else
+		arg_desc = "argument";
+
+	bpf_diag_header(env, CALL_TYPE_SAFETY, "invalid call argument");
+	diag_reason(env, "The %s to %s does not satisfy the verifier contract: %s.",
+			   arg_desc, call_name, reason);
+
+	diag_section(env, "At");
+	bpf_diag_source(env, insn_idx, "error", "invalid %s for %s", arg_desc, call_name);
+
+	if (print_history)
+		diag_print_history(env, &opts);
+
+	diag_suggestion(env, "%s", suggestion);
+}
+
 void bpf_diag_invalid_deref(struct bpf_verifier_env *env, u32 insn_idx, int regno,
 				   const char *reg_name, const struct bpf_reg_state *reg,
 				   enum bpf_diag_invalid_deref_kind kind, s64 offset)
@@ -1085,15 +1127,13 @@ void bpf_diag_stack_arg_uninit(struct bpf_verifier_env *env, u32 insn_idx, int n
 		arg_buf = "";
 	bpf_diag_header(env, REGISTER_TYPE_SAFETY, "missing stack argument");
 	if (callee_name && *callee_name)
-		diag_reason(env,
-				   "Function %s expects %d arguments, but %s is not initialized at "
-				   "this call.",
-				   callee_name, nargs, arg_buf);
+		diag_reason(
+			env, "Function %s expects %d arguments, but %s is not initialized at this call.",
+			callee_name, nargs, arg_buf);
 	else
-		diag_reason(env,
-				   "The callee expects %d arguments, but %s is not initialized at "
-				   "this call.",
-				   nargs, arg_buf);
+		diag_reason(
+			env, "The callee expects %d arguments, but %s is not initialized at this call.",
+			nargs, arg_buf);
 
 	diag_section(env, "At");
 	bpf_diag_source(env, insn_idx, "error", "%s is not initialized", arg_buf);
@@ -1101,9 +1141,8 @@ void bpf_diag_stack_arg_uninit(struct bpf_verifier_env *env, u32 insn_idx, int n
 	if (stack_arg_slot >= 0)
 		diag_print_history(env, &opts);
 
-	diag_suggestion(env, "Write the outgoing stack argument after any operation that "
-				    "may invalidate stored pointer values, and before making this "
-				    "call.");
+	diag_suggestion(
+		env, "Write the outgoing stack argument after any operation that may invalidate stored pointer values, and before making this call.");
 }
 
 void bpf_diag_memory(struct bpf_verifier_env *env, u32 insn_idx, const char *problem,
