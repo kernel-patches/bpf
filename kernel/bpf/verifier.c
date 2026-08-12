@@ -34,6 +34,7 @@
 #include <linux/trace_events.h>
 #include <linux/kallsyms.h>
 
+#include "diagnostics.h"
 #include "disasm.h"
 
 static const struct bpf_verifier_ops * const bpf_verifier_ops[] = {
@@ -405,7 +406,7 @@ static bool subprog_returns_void(struct bpf_verifier_env *env, int subprog)
 	return btf_type_is_void(type);
 }
 
-static const char *subprog_name(const struct bpf_verifier_env *env, int subprog)
+const char *bpf_subprog_name(const struct bpf_verifier_env *env, int subprog)
 {
 	struct bpf_func_info *info;
 
@@ -3032,8 +3033,8 @@ static int sort_subprogs_topo(struct bpf_verifier_env *env)
 					if (bpf_pseudo_func(&insn[idx]))
 						continue;
 					verbose(env, "recursive call from %s() to %s()\n",
-						subprog_name(env, cur),
-						subprog_name(env, callee));
+						bpf_subprog_name(env, cur),
+						bpf_subprog_name(env, callee));
 					ret = -EINVAL;
 					goto out;
 				}
@@ -3053,8 +3054,8 @@ static int sort_subprogs_topo(struct bpf_verifier_env *env)
 
 	if (env->log.level & BPF_LOG_LEVEL2)
 		for (i = 0; i < cnt; i++)
-			verbose(env, "topo_order[%d] = %s\n",
-				i, subprog_name(env, env->subprog_topo_order[i]));
+			verbose(env, "topo_order[%d] = %s\n", i,
+				bpf_subprog_name(env, env->subprog_topo_order[i]));
 out:
 	kvfree(dfs_stack);
 	kvfree(color);
@@ -3198,7 +3199,7 @@ static void linked_regs_unpack(u64 val, struct linked_regs *s)
 	}
 }
 
-static const char *disasm_kfunc_name(void *data, const struct bpf_insn *insn)
+const char *bpf_disasm_kfunc_name(void *data, const struct bpf_insn *insn)
 {
 	const struct btf_type *func;
 	struct btf *desc_btf;
@@ -3217,9 +3218,9 @@ static const char *disasm_kfunc_name(void *data, const struct bpf_insn *insn)
 void bpf_verbose_insn(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
 	const struct bpf_insn_cbs cbs = {
-		.cb_call	= disasm_kfunc_name,
-		.cb_print	= verbose,
-		.private_data	= env,
+		.cb_call = bpf_disasm_kfunc_name,
+		.cb_print = verbose,
+		.private_data = env,
 	};
 
 	print_bpf_insn(&cbs, insn, env->allow_ptr_leaks);
@@ -9391,7 +9392,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (err == -EFAULT)
 		return err;
 	if (bpf_subprog_is_global(env, subprog)) {
-		const char *sub_name = subprog_name(env, subprog);
+		const char *sub_name = bpf_subprog_name(env, subprog);
 
 		if (env->cur_state->active_locks) {
 			verbose(env, "global function calls are not allowed while holding a lock,\n"
@@ -18433,7 +18434,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 
 	regs = state->frame[state->curframe]->regs;
 	if (subprog || env->prog->type == BPF_PROG_TYPE_EXT) {
-		const char *sub_name = subprog_name(env, subprog);
+		const char *sub_name = bpf_subprog_name(env, subprog);
 		struct bpf_subprog_arg_info *arg;
 		struct bpf_reg_state *reg;
 
@@ -18603,8 +18604,9 @@ again:
 		if (ret) {
 			return ret;
 		} else if (env->log.level & BPF_LOG_LEVEL) {
-			verbose(env, "Func#%d ('%s') is safe for any args that match its prototype\n",
-				i, subprog_name(env, i));
+			verbose(env,
+				"Func#%d ('%s') is safe for any args that match its prototype\n", i,
+				bpf_subprog_name(env, i));
 		}
 
 		/* We verified new global subprog, it might have called some
@@ -20134,6 +20136,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	ret = bpf_vlog_init(&env->log, attr_log->level, attr_log->ubuf, attr_log->size);
 	if (ret)
 		goto err_free_env;
+	ret = bpf_diag_init(env);
+	if (ret)
+		goto err_prep;
 	if (env->signature) {
 		ret = bpf_prog_calc_tag(env->prog);
 		if (ret < 0)
@@ -20424,6 +20429,7 @@ err_free_env:
 	kvfree(env->scc_info);
 	kvfree(env->succ);
 	kvfree(env->gotox_tmp_buf);
+	bpf_diag_free(env);
 	kvfree(env);
 	return ret;
 }
