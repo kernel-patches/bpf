@@ -7,7 +7,7 @@
 
 BEGIN {
 	usage = "If some fields are empty or look unusual you may have an old version.\n"
-	usage = usage "Compare to the current minimal requirements in Documentation/process/changes.rst\n"
+	usage = usage "Compare to the current minimal requirements in Documentation/process/software-requirements.rst\n"
 	print usage
 
 	system("uname -a")

@@ -105,7 +105,7 @@ linux-api@vger.kernel.org に送ることを勧めます。
     ています。 カーネルに関して初めての人はここからスタートすると良い
     でしょう。
 
-  :ref:`Documentation/process/changes.rst <changes>`
+  :ref:`Documentation/process/software-requirements.rst <software-requirements.rst>`
     このファイルはカーネルをうまく生成(訳注 build )し、走らせるのに最
     小限のレベルで必要な数々のソフトウェアパッケージの一覧を示してい
     ます。

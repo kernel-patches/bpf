@@ -92,7 +92,7 @@ required reading:
     what is necessary to do to configure and build the kernel.  People
     who are new to the kernel should start here.
 
-  :ref:`Documentation/process/changes.rst <changes>`
+  :ref:`Documentation/process/software-requirements.rst <software-requirements>`
     This file gives a list of the minimum levels of various software
     packages that are necessary to build and run the kernel
     successfully.

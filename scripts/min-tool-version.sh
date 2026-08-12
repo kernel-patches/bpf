@@ -3,7 +3,7 @@
 #
 # Print the minimum supported version of the given tool.
 # When you raise the minimum version, please update
-# Documentation/process/changes.rst as well.
+# Documentation/process/software-requirements.rst as well.
 
 set -e
 

@@ -96,7 +96,7 @@ Di seguito una lista di file che sono presenti nei sorgente del kernel e che
     minimo necessario per configurare e generare il kernel. I novizi
     del kernel dovrebbero iniziare da qui.
 
-  :ref:`Documentation/translations/it_IT/process/changes.rst <it_changes>`
+  :ref:`Documentation/translations/it_IT/process/software-requirements.rst <itsoftware-requirements>`
 
     Questo file fornisce una lista dei pacchetti software necessari
     a compilare e far funzionare il kernel con successo.

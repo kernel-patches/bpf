@@ -90,7 +90,7 @@ Linux內核代碼中包含有大量的文檔。這些文檔對於學習如何與
     新用戶應該從這裡開始。
 
 
-  :ref:`Documentation/process/changes.rst <changes>`
+  :ref:`Documentation/process/software-requirements.rst <software-requirements>`
     文件給出了用來編譯和使用內核所需要的最小軟體包列表。
 
   :ref:`Documentation/translations/zh_TW/process/coding-style.rst <tw_codingstyle>`

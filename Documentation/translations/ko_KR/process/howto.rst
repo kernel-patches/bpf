@@ -114,7 +114,7 @@ mtk.manpages@gmail.com의 메인테이너에게 보낼 것을 권장한다.
     빌드하기 위해 필요한 것을 설명한다. 커널에 입문하는 사람들은 여기서
     시작해야 한다.
 
-  :ref:`Documentation/process/changes.rst <changes>`
+  :ref:`Documentation/process/software-requirements.rst <software-requirements>`
     이 파일은 커널을 성공적으로 빌드하고 실행시키기 위해 필요한 다양한
     소프트웨어 패키지들의 최소 버젼을 나열한다.
 

@@ -140,7 +140,7 @@ becoming harder to do that on modern distributions, as it is not
 possible to install with Python 3.13 and above.
 
 Testing with the lowest supported Python version as defined at
-Documentation/process/changes.rst can be done by creating
+Documentation/process/software-requirements.rst can be done by creating
 a venv with it with, and install minimal requirements with::
 
 	/usr/bin/python3.9 -m venv sphinx_min

@@ -23,7 +23,7 @@ forever.
 
 This should not cause problems for anybody, since everybody using a
 2.1.x kernel should have updated their C library to a suitable version
-anyway (see the file "Documentation/process/changes.rst".)
+anyway (see the file "Documentation/process/software-requirements.rst".)
 
 1.2 Allow Mixed Locks Again
 ---------------------------

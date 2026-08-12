@@ -52,7 +52,7 @@ Linux内核6.x版本 <http://kernel.org/>
 
  - 文档/子目录中有各种自述文件：例如，这些文件通常包含一些特定驱动程序的
    内核安装说明。请阅读
-   :ref:`Documentation/process/changes.rst <changes>` 文件，它包含了升级内核
+   :ref:`Documentation/process/software-requirements.rst <software-requirements>` 文件，它包含了升级内核
    可能会导致的问题的相关信息。
 
 安装内核源代码
@@ -104,7 +104,7 @@ Linux内核6.x版本 <http://kernel.org/>
 ---------
 
    编译和运行6.x内核需要各种软件包的最新版本。请参考
-   :ref:`Documentation/process/changes.rst <changes>`
+   :ref:`Documentation/process/software-requirements.rst <software-requirements>`
    来了解最低版本要求以及如何升级软件包。请注意，使用过旧版本的这些包可能会
    导致很难追踪的间接错误，因此不要以为在生成或操作过程中出现明显问题时可以
    只更新包。
@@ -225,7 +225,7 @@ Linux内核6.x版本 <http://kernel.org/>
 ---------
 
  - 确保您至少有gcc 8.1可用。
-   有关更多信息，请参阅 :ref:`Documentation/process/changes.rst <changes>` 。
+   有关更多信息，请参阅 :ref:`Documentation/process/software-requirements.rst <software-requirements>` 。
 
  - 执行 ``make`` 来创建压缩内核映像。如果您安装了lilo以适配内核makefile，
    那么也可以进行 ``make install`` ，但是您可能需要先检查特定的lilo设置。

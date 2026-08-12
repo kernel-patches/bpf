@@ -91,7 +91,7 @@ de obligada lectura:
     describe lo que es necesario hacer para configurar y compilar el
     kernel. Quienes sean nuevos en el kernel deben comenzar aquí.
 
-  :ref:`Documentation/process/changes.rst <changes>`
+  :ref:`Documentation/process/software-requirements.rst <software-requirements>`
     Este archivo proporciona una lista de los niveles mínimos de varios
     paquetes que son necesarios para construir y ejecutar el kernel
     exitosamente.

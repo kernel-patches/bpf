@@ -52,7 +52,7 @@ Documentation
  - There are various README files in the Documentation/ subdirectory:
    these typically contain kernel-specific installation notes for some
    drivers for example. Please read the
-   :ref:`Documentation/process/changes.rst <changes>` file, as it
+   :ref:`Documentation/process/software-requirements.rst <software-requirements>` file, as it
    contains information about the problems which may result from upgrading
    your kernel.
 
@@ -116,7 +116,7 @@ Software requirements
 
    Compiling and running the 6.x kernels requires up-to-date
    versions of various software packages.  Consult
-   :ref:`Documentation/process/changes.rst <changes>` for the minimum version numbers
+   :ref:`Documentation/process/software-requirements.rst <software-requirements>` for the minimum version numbers
    required and how to get updates for these packages.  Beware that using
    excessively old versions of these packages can cause indirect
    errors that are very difficult to track down, so don't assume that
@@ -260,7 +260,7 @@ Compiling the kernel
 --------------------
 
  - Make sure you have at least gcc 8.1 available.
-   For more information, refer to :ref:`Documentation/process/changes.rst <changes>`.
+   For more information, refer to :ref:`Documentation/process/software-requirements.rst <software-requirements>`.
 
  - Do a ``make`` to create a compressed kernel image. It is also possible to do
    ``make install`` if you have lilo installed or if your distribution has an

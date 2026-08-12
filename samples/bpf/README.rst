@@ -18,7 +18,7 @@ Compiling requires having installed:
  * llvm
  * pahole
 
-Consult :ref:`Documentation/process/changes.rst <changes>` for the minimum
+Consult :ref:`Documentation/process/software-requirements.rst <software-requirements>` for the minimum
 version numbers required and how to update them. Note that LLVM's tool
 'llc' must support target 'bpf', list version and supported targets with
 command: ``llc --version``

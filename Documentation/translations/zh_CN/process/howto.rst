@@ -87,7 +87,7 @@ Linux内核代码中包含有大量的文档。这些文档对于学习如何与
     新用户应该从这里开始。
 
 
-  :ref:`Documentation/process/changes.rst <changes>`
+  :ref:`Documentation/process/software-requirements.rst <software-requirements>`
     文件给出了用来编译和使用内核所需要的最小软件包列表。
 
   :ref:`Documentation/translations/zh_CN/process/coding-style.rst <cn_codingstyle>`
