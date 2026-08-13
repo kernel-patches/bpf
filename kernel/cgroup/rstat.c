@@ -752,6 +752,48 @@ void cgroup_base_stat_cputime_show(struct seq_file *seq)
 	cgroup_force_idle_show(seq, &bstat);
 }
 
+#ifdef CONFIG_BPF_SYSCALL
+
+__bpf_kfunc_start_defs();
+
+/**
+ * bpf_cpu_cgroup_cputime - Read a cgroup's base CPU-time data
+ * @cgrp: cgroup to read from
+ * @out: the data in microseconds. Zero it first: the verifier reads the
+ *       whole struct.
+ *
+ * Adjust once and fill all values.
+ */
+__bpf_kfunc void bpf_cpu_cgroup_cputime(struct cgroup *cgrp,
+					struct cpu_cgroup_cputime *out)
+{
+	struct cgroup_base_stat bstat;
+
+	if (cgroup_parent(cgrp)) {
+		__css_rstat_lock(&cgrp->self, -1);
+		bstat = cgrp->bstat;
+		cputime_adjust(&cgrp->bstat.cputime, &cgrp->prev_cputime,
+			       &bstat.cputime.utime, &bstat.cputime.stime);
+		__css_rstat_unlock(&cgrp->self, -1);
+	} else {
+		root_cgroup_cputime(&bstat);
+	}
+
+	out->usage_usec = div_u64(bstat.cputime.sum_exec_runtime, NSEC_PER_USEC);
+	out->user_usec = div_u64(bstat.cputime.utime, NSEC_PER_USEC);
+	out->system_usec = div_u64(bstat.cputime.stime, NSEC_PER_USEC);
+	out->nice_usec = div_u64(bstat.ntime, NSEC_PER_USEC);
+#ifdef CONFIG_SCHED_CORE
+	out->forceidle_usec = div_u64(bstat.forceidle_sum, NSEC_PER_USEC);
+#else
+	out->forceidle_usec = 0;
+#endif
+}
+
+__bpf_kfunc_end_defs();
+
+#endif /* CONFIG_BPF_SYSCALL */
+
 /* Add bpf kfuncs for css_rstat_updated() and css_rstat_flush() */
 BTF_KFUNCS_START(bpf_rstat_kfunc_ids)
 BTF_ID_FLAGS(func, css_rstat_updated)

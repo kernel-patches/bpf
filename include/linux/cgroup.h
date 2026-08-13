@@ -923,4 +923,19 @@ struct cgroup *task_get_cgroup1(struct task_struct *tsk, int hierarchy_id);
 
 struct cgroup_of_peak *of_peak(struct kernfs_open_file *of);
 
+/* A cgroup's base CPU-time counters in microseconds, as cpu.stat prints them */
+struct cpu_cgroup_cputime {
+	u64 usage_usec;
+	u64 user_usec;
+	u64 system_usec;
+	u64 nice_usec;
+	u64 forceidle_usec;	/* 0 without CONFIG_SCHED_CORE */
+};
+
+/* A task_group's own throttled time in nanoseconds; see cpu.stat.local */
+struct task_group;
+#ifdef CONFIG_CFS_BANDWIDTH
+u64 throttled_time_self(struct task_group *tg);
+#endif
+
 #endif /* _LINUX_CGROUP_H */

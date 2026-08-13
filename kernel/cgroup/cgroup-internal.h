@@ -271,6 +271,9 @@ int css_rstat_init(struct cgroup_subsys_state *css);
 void css_rstat_exit(struct cgroup_subsys_state *css);
 int ss_rstat_init(struct cgroup_subsys *ss);
 void cgroup_base_stat_cputime_show(struct seq_file *seq);
+#ifdef CONFIG_BPF_SYSCALL
+void bpf_cpu_cgroup_cputime(struct cgroup *cgrp, struct cpu_cgroup_cputime *out);
+#endif
 
 /*
  * namespace.c

@@ -10032,7 +10032,7 @@ static int cpu_cfs_stat_show(struct seq_file *sf, void *v)
 	return 0;
 }
 
-static u64 throttled_time_self(struct task_group *tg)
+u64 throttled_time_self(struct task_group *tg)
 {
 	int i;
 	u64 total = 0;
