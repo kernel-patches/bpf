@@ -39,17 +39,6 @@ if ARCH_MULTI_V6
 
 comment "ARM1136 platforms"
 
-config SOC_IMX31
-	bool "i.MX31 support (DEPRECATED)"
-	depends on !SMP
-	select CPU_ARM1136R0
-	select MXC_AVIC
-	help
-	  This enables support for Freescale i.MX31 processor
-
-	  This SoC is scheduled for removal in early 2027,
-	  since it uses the ARM1136r0 CPU revision.
-
 config SOC_IMX35
 	bool "i.MX35 support"
 	select CPU_ARM1136R1
