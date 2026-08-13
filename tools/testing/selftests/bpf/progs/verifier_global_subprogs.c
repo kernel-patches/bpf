@@ -25,9 +25,22 @@ __noinline long global_bad(void)
 	return arr[unkn_idx]; /* BOOM */
 }
 
-__noinline long global_good(void)
+/* Insn counts asserted in chained_global_func_calls_success() depend on
+ * the exact instruction sequences of this function and its callers, so
+ * they are written in inline asm to be independent of compiler codegen.
+ */
+__naked __noinline long global_good(void)
 {
-	return arr[0];
+	/* return (long)arr[0]; 5 insns (ld_imm64 counts as one) */
+	asm volatile (
+		"r1 = %[arr] ll;"
+		"r0 = *(u32 *)(r1 + 0);"
+		"r0 <<= 32;"
+		"r0 s>>= 32;"
+		"exit;"
+		:
+		: __imm_addr(arr)
+		: __clobber_all);
 }
 
 __noinline long global_calls_bad(void)
@@ -35,9 +48,13 @@ __noinline long global_calls_bad(void)
 	return global_good() + global_bad() /* does BOOM indirectly */;
 }
 
-__noinline long global_calls_good_only(void)
+__naked __noinline long global_calls_good_only(void)
 {
-	return global_good();
+	/* return global_good(); 2 insns */
+	asm volatile (
+		"call global_good;"
+		"exit;"
+		::: __clobber_all);
 }
 
 __noinline long global_dead(void)
@@ -56,13 +73,30 @@ __msg("subprog 0 (chained_global_func_calls_success) main insns_self 7 insns_tot
 __msg("subprog {{[0-9]+}} (global_calls_good_only) global insns_self 2 insns_total 2 stack")
 __msg("subprog {{[0-9]+}} (global_good) global insns_self 5 insns_total 5 stack")
 __msg("processed 14 insns")
-int chained_global_func_calls_success(void)
+__naked int chained_global_func_calls_success(void)
 {
-	int sum = 0;
-
-	if (call_dead_subprog)
-		sum += global_dead();
-	return global_calls_good_only() + sum;
+	/* int sum = 0;
+	 * if (call_dead_subprog)
+	 *	sum += global_dead();
+	 * return global_calls_good_only() + sum;
+	 *
+	 * call_dead_subprog is known false, so 7 insns are processed:
+	 * the branch to l0 is always taken and global_dead() is dead code.
+	 */
+	asm volatile (
+		"r6 = 0;"
+		"r1 = %[call_dead_subprog] ll;"
+		"r1 = *(u8 *)(r1 + 0);"
+		"if r1 == 0 goto l0_%=;"
+		"call global_dead;"
+		"r6 = r0;"
+	"l0_%=:"
+		"call global_calls_good_only;"
+		"r0 += r6;"
+		"exit;"
+		:
+		: __imm_addr(call_dead_subprog)
+		: __clobber_all);
 }
 
 SEC("?raw_tp")
