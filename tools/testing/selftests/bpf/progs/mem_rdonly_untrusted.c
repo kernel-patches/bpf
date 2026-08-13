@@ -3,6 +3,7 @@
 #include <vmlinux.h>
 #include <bpf/bpf_core_read.h>
 #include "bpf_misc.h"
+#include "bpf_kfuncs.h"
 #include "../test_kmods/bpf_testmod_kfunc.h"
 
 SEC("tp_btf/sys_enter")
@@ -162,6 +163,188 @@ int mixed_mem_type(void *ctx)
 	/* Try to avoid compiler hoisting load to if branches by using __noinline func. */
 	p = get_some_addr();
 	return *p;
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 4096);
+} ringbuf SEC(".maps");
+
+int zero;
+
+static __noinline u64 *get_mem_or_untrusted_addr(u64 *mem)
+{
+	/*
+	 * Try to avoid compiler hoisting load to if branches by using
+	 * __noinline func.
+	 */
+	if (zero)
+		return mem;
+	else
+		return bpf_rdonly_cast(0, bpf_core_type_id_kernel(struct sock));
+}
+
+SEC("socket")
+__success
+__log_level(2)
+__msg("= *(u64 *)(r{{[0-9]}} +0){{.*}}=untrusted_ptr_sock")
+__msg("= *(u64 *)(r{{[0-9]}} +0){{.*}}=ringbuf_mem")
+__retval(0)
+int mixed_mem_untrusted_btf_id_type(void *ctx)
+{
+	u64 *p, v;
+
+	p = bpf_ringbuf_reserve(&ringbuf, sizeof(*p), 0);
+	if (!p)
+		return 1;
+	*p = 42;
+	/*
+	 * The load below is reached with PTR_TO_MEM | MEM_RINGBUF on one
+	 * path and with PTR_TO_BTF_ID | PTR_UNTRUSTED on the other. The
+	 * merged type has to keep the BPF_PROBE_MEM rewrite, otherwise
+	 * the NULL deref taken at runtime panics the kernel instead of
+	 * returning 0.
+	 */
+	v = *get_mem_or_untrusted_addr(p);
+	bpf_ringbuf_discard(p, 0);
+	return v;
+}
+
+static __noinline u32 *get_mem_or_btf_id_addr(u32 *mem)
+{
+	struct task_struct *task;
+
+	/*
+	 * Try to avoid compiler hoisting load to if branches by using
+	 * __noinline func.
+	 */
+	if (zero)
+		return mem;
+
+	task = bpf_get_current_task_btf();
+	/*
+	 * A plain BTF pointer walk yields a bare PTR_TO_BTF_ID, and
+	 * task->nameidata is NULL unless the task currently is in the
+	 * middle of a path lookup.
+	 */
+	return (u32 *)&task->nameidata->flags;
+}
+
+SEC("socket")
+__success
+__log_level(2)
+__msg("= *(u32 *)(r{{[0-9]}} +0){{.*}}=ptr_nameidata")
+__msg("= *(u32 *)(r{{[0-9]}} +0){{.*}}=ringbuf_mem")
+__retval(0)
+int mixed_mem_btf_id_type(void *ctx)
+{
+	u32 *p, v;
+
+	p = bpf_ringbuf_reserve(&ringbuf, sizeof(*p), 0);
+	if (!p)
+		return 1;
+	*p = 42;
+	/*
+	 * Same as above, except that the other path yields a bare
+	 * PTR_TO_BTF_ID. Merging it with PTR_TO_MEM used to drop the
+	 * BPF_PROBE_MEM rewrite the bare PTR_TO_BTF_ID would have
+	 * gotten on its own.
+	 */
+	v = *get_mem_or_btf_id_addr(p);
+	bpf_ringbuf_discard(p, 0);
+	return v;
+}
+
+char dynptr_data[8];
+
+static __noinline u32 *get_rdonly_mem_or_btf_id_addr(u32 *mem)
+{
+	struct task_struct *task;
+
+	/*
+	 * Try to avoid compiler hoisting load to if branches by using
+	 * __noinline func.
+	 */
+	if (zero)
+		return mem;
+
+	task = bpf_get_current_task_btf();
+	return (u32 *)&task->nameidata->flags;
+}
+
+SEC("socket")
+__success
+__log_level(2)
+__msg("r8 = *(u32 *)(r7 +0){{.*}}R7=ptr_nameidata")
+__msg("r8 = *(u32 *)(r7 +0){{.*}}R7=rdonly_mem")
+__retval(0)
+int mixed_rdonly_mem_btf_id_type(void *ctx)
+{
+	struct bpf_dynptr dptr;
+	char buf[sizeof(u32)];
+	u32 *p;
+	u64 v;
+
+	if (bpf_dynptr_from_mem(dynptr_data, sizeof(dynptr_data), 0, &dptr))
+		return 1;
+	p = bpf_dynptr_slice(&dptr, 0, buf, sizeof(buf));
+	if (!p)
+		return 1;
+	/*
+	 * Same as above, except that the PTR_TO_MEM side already carries
+	 * MEM_RDONLY. Merging it with a bare PTR_TO_BTF_ID used to yield
+	 * PTR_TO_MEM | MEM_RDONLY, which is not rewritten either since
+	 * only its PTR_UNTRUSTED variant is.
+	 */
+	p = get_rdonly_mem_or_btf_id_addr(p);
+	/* asm block to have reliable match target for __msg. */
+	asm volatile (
+	"r7 = %[p];"
+	"r8 = *(u32 *)(r7 + 0);"
+	"%[v] = r8;"
+	: [v]"=r"(v)
+	: [p]"r"(p)
+	: "r7", "r8");
+	return v;
+}
+
+static __noinline u64 *get_mem_or_rdonly_untrusted_mem_addr(u64 *mem)
+{
+	u64 *p = bpf_rdonly_cast(0, 0);
+
+	/*
+	 * Hoist the cast above the branch so that the PTR_TO_MEM |
+	 * MEM_RINGBUF path is verified first and thus gets its type
+	 * recorded first.
+	 */
+	if (zero == 0)
+		return p;
+	return mem;
+}
+
+SEC("socket")
+__success
+__log_level(2)
+__msg("= *(u64 *)(r{{[0-9]}} +0){{.*}}=ringbuf_mem")
+__msg("= *(u64 *)(r{{[0-9]}} +0){{.*}}=rdonly_untrusted_mem")
+__retval(0)
+int mixed_mem_mem_type(void *ctx)
+{
+	u64 *p, v;
+
+	p = bpf_ringbuf_reserve(&ringbuf, sizeof(*p), 0);
+	if (!p)
+		return 1;
+	*p = 42;
+	/*
+	 * Both paths are PTR_TO_MEM based, so they do not trip the type
+	 * mismatch check and used to skip the merge altogether, leaving
+	 * the insn with the PTR_TO_MEM | MEM_RINGBUF recorded first and
+	 * hence without the BPF_PROBE_MEM rewrite the other path needs.
+	 */
+	v = *get_mem_or_rdonly_untrusted_mem_addr(p);
+	bpf_ringbuf_discard(p, 0);
+	return v;
 }
 
 __attribute__((__aligned__(8)))
