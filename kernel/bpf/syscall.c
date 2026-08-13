@@ -41,6 +41,7 @@
 #include <linux/overflow.h>
 #include <linux/cookie.h>
 #include <linux/btf_ids.h>
+#include <linux/kernel_read_file.h>
 
 #include <net/netfilter/nf_bpf_link.h>
 #include <net/netkit.h>
@@ -6291,6 +6292,336 @@ put_prog:
 	return ret;
 }
 
+#define BPF_LOADER_PROG_SEC "__loader.prog"
+#define BPF_LOADER_MAP_SEC "__loader.map"
+#define BPF_LOADER_LICENSE_SEC "license"
+#define BPF_LOADER_MAX_SIZE (8U << 20) /* 8MB */
+
+struct elf_info {
+	Elf64_Ehdr *hdr;
+	unsigned long len;
+	Elf64_Shdr *sechdrs;
+	char *secstrings;
+};
+
+static int bpf_validate_section_offset(const struct elf_info *info, Elf64_Shdr *shdr)
+{
+	unsigned long long secend;
+
+	/*
+	 * Check for both overflow and offset/size being
+	 * too large.
+	 */
+	secend = shdr->sh_offset + shdr->sh_size;
+	if (secend < shdr->sh_offset || secend > info->len)
+		return -ENOEXEC;
+
+	return 0;
+}
+
+static int bpf_elf_validity_ehdr(const struct elf_info *info)
+{
+	if (info->len < sizeof(*(info->hdr))) {
+		pr_err("Invalid ELF header len %lu\n", info->len);
+		return -ENOEXEC;
+	}
+	if (memcmp(info->hdr->e_ident, ELFMAG, SELFMAG) != 0) {
+		pr_err("Invalid ELF header magic: != %s\n", ELFMAG);
+		return -ENOEXEC;
+	}
+	if (info->hdr->e_ident[EI_CLASS] != ELFCLASS64) {
+		pr_err("Only 64-bit ELF is supported\n");
+		return -ENOEXEC;
+	}
+	if (info->hdr->e_type != ET_REL) {
+		pr_err("Invalid ELF header type: %u != %u\n",
+		       info->hdr->e_type, ET_REL);
+		return -ENOEXEC;
+	}
+	if (info->hdr->e_machine != EM_BPF) {
+		pr_err("Invalid ELF machine type: %u != %u\n",
+		       info->hdr->e_machine, EM_BPF);
+		return -ENOEXEC;
+	}
+	return 0;
+}
+
+static int bpf_elf_validity_cache_sechdrs(struct elf_info *info)
+{
+	Elf64_Shdr *sechdrs;
+	Elf64_Shdr *shdr;
+	int i;
+	int err;
+
+	err = bpf_elf_validity_ehdr(info);
+	if (err < 0)
+		return err;
+
+	if (info->hdr->e_shentsize != sizeof(Elf64_Shdr)) {
+		pr_err("Invalid ELF section header size\n");
+		return -ENOEXEC;
+	}
+
+	/*
+	 * e_shnum is 16 bits, and sizeof(Elf64_Shdr) is
+	 * known and small. So e_shnum * sizeof(Elf64_Shdr)
+	 * will not overflow unsigned long on any platform.
+	 */
+	if (info->hdr->e_shoff >= info->len
+	    || (info->hdr->e_shnum * sizeof(Elf64_Shdr) >
+		info->len - info->hdr->e_shoff)) {
+		pr_err("Invalid ELF section header overflow\n");
+		return -ENOEXEC;
+	}
+
+	sechdrs = (void *)info->hdr + info->hdr->e_shoff;
+
+	/*
+	 * The code assumes that section 0 has a length of zero and
+	 * an addr of zero, so check for it.
+	 */
+	if (sechdrs[0].sh_type != SHT_NULL
+	    || sechdrs[0].sh_size != 0
+	    || sechdrs[0].sh_addr != 0) {
+		pr_err("ELF Spec violation: section 0 type(%d)!=SH_NULL or non-zero len or addr\n",
+		       sechdrs[0].sh_type);
+		return -ENOEXEC;
+	}
+
+	/* Validate contents are inbounds */
+	for (i = 1; i < info->hdr->e_shnum; i++) {
+		shdr = &sechdrs[i];
+		switch (shdr->sh_type) {
+		case SHT_NULL:
+		case SHT_NOBITS:
+			/* No contents, offset/size don't mean anything */
+			continue;
+		default:
+			err = bpf_validate_section_offset(info, shdr);
+			if (err < 0) {
+				pr_err("Invalid ELF section in BPF loader (section %u type %u)\n",
+				       i, shdr->sh_type);
+				return err;
+			}
+		}
+	}
+
+	info->sechdrs = sechdrs;
+
+	return 0;
+}
+
+static int bpf_elf_validity_cache_secstrings(struct elf_info *info)
+{
+	Elf64_Shdr *strhdr, *shdr;
+	char *secstrings;
+	int i;
+
+	/*
+	 * Verify if the section name table index is valid.
+	 */
+	if (info->hdr->e_shstrndx == SHN_UNDEF
+	    || info->hdr->e_shstrndx >= info->hdr->e_shnum) {
+		pr_err("Invalid ELF section name index: %d || e_shstrndx (%d) >= e_shnum (%d)\n",
+		       info->hdr->e_shstrndx, info->hdr->e_shstrndx,
+		       info->hdr->e_shnum);
+		return -ENOEXEC;
+	}
+
+	strhdr = &info->sechdrs[info->hdr->e_shstrndx];
+
+	if (strhdr->sh_type != SHT_STRTAB) {
+		pr_err("Invalid ELF section name table type: %u\n", strhdr->sh_type);
+		return -ENOEXEC;
+	}
+
+	/*
+	 * The section name table must be NUL-terminated, as required
+	 * by the spec. This makes strcmp and pr_* calls that access
+	 * strings in the section safe.
+	 */
+	secstrings = (void *)info->hdr + strhdr->sh_offset;
+	if (strhdr->sh_size == 0) {
+		pr_err("empty section name table\n");
+		return -ENOEXEC;
+	}
+	if (secstrings[strhdr->sh_size - 1] != '\0') {
+		pr_err("ELF Spec violation: section name table isn't null terminated\n");
+		return -ENOEXEC;
+	}
+
+	for (i = 0; i < info->hdr->e_shnum; i++) {
+		shdr = &info->sechdrs[i];
+		/* SHT_NULL means sh_name has an undefined value */
+		if (shdr->sh_type == SHT_NULL)
+			continue;
+		if (shdr->sh_name >= strhdr->sh_size) {
+			pr_err("Invalid ELF section name in BPF loader (section %u type %u)\n",
+			       i, shdr->sh_type);
+			return -ENOEXEC;
+		}
+	}
+
+	info->secstrings = secstrings;
+	return 0;
+}
+
+static int find_elf_section(const struct elf_info *info,
+			       const char *sect_name, void **sect, int *sect_sz)
+{
+	Elf64_Shdr *shdr;
+
+	for (int i = 1; i < info->hdr->e_shnum; i++) {
+		shdr = &info->sechdrs[i];
+		if (shdr->sh_type == SHT_NULL || shdr->sh_type == SHT_NOBITS)
+			continue;
+		if (strcmp(sect_name, info->secstrings + shdr->sh_name) == 0) {
+			*sect = (void *)info->hdr + shdr->sh_offset;
+			*sect_sz = shdr->sh_size;
+			return 0;
+		}
+	}
+
+	return -EINVAL;
+}
+
+/* To shut up -Wmissing-prototypes.
+ * This function is used by the kernel light skeleton
+ * to load bpf programs when modules are loaded or during kernel boot.
+ * See tools/lib/bpf/skel_internal.h
+ */
+int kern_sys_bpf(int cmd, union bpf_attr *attr, unsigned int size);
+
+#define BPF_LOADER_LOAD_FD_LAST_FIELD load_fd.ctx_size
+
+static int loader_load_fd(union bpf_attr *attr)
+{
+	void *buf = NULL, *insns = NULL, *data = NULL, *license = NULL;
+	void *kctx = NULL;
+	int len, err = 0;
+	int insns_sz = 0, data_sz = 0, license_sz = 0;
+	int map_fd, prog_fd;
+	size_t ctx_sz;
+	union bpf_attr sattr = { 0 };
+	unsigned int zero = 0;
+
+	if (!capable(CAP_BPF))
+		return -EPERM;
+
+	if (CHECK_ATTR(BPF_LOADER_LOAD_FD))
+		return -EINVAL;
+
+	if (attr->load_fd.ctx_size > U16_MAX)
+		return -EINVAL;
+
+	CLASS(fd, f)(attr->load_fd.loader_fd);
+	if (fd_empty(f))
+		return -EINVAL;
+
+	len = kernel_read_file(fd_file(f), 0, &buf, BPF_LOADER_MAX_SIZE, NULL,
+			       READING_BPF_LOADER);
+	if (len < 0) {
+		err = len;
+		goto out;
+	}
+
+	struct elf_info elf_info = {
+		.hdr = (Elf64_Ehdr *) buf,
+		.len = len,
+	};
+
+	err = bpf_elf_validity_cache_sechdrs(&elf_info);
+	if (err)
+		goto out_free_buf;
+
+	err = bpf_elf_validity_cache_secstrings(&elf_info);
+	if (err)
+		goto out_free_buf;
+
+	err = find_elf_section(&elf_info, BPF_LOADER_PROG_SEC, &insns, &insns_sz);
+	if (err)
+		goto out_free_buf;
+
+	err = find_elf_section(&elf_info, BPF_LOADER_MAP_SEC, &data, &data_sz);
+	if (err)
+		goto out_free_buf;
+
+	err = find_elf_section(&elf_info, BPF_LOADER_LICENSE_SEC, &license, &license_sz);
+	if (err)
+		goto out_free_buf;
+
+	if (license_sz == 0 || ((char *)license)[license_sz - 1] != '\0') {
+		pr_err("ELF Spec violation: license section isn't null terminated\n");
+		err = -ENOEXEC;
+		goto out_free_buf;
+	}
+
+	memset(&sattr, 0, sizeof(sattr));
+	sattr.map_type = BPF_MAP_TYPE_ARRAY;
+	sattr.key_size = sizeof(unsigned int);
+	sattr.value_size = data_sz;
+	sattr.max_entries = 1;
+	map_fd = kern_sys_bpf(BPF_MAP_CREATE, &sattr, sizeof(sattr));
+	if (map_fd < 0) {
+		err = map_fd;
+		goto out_free_buf;
+	}
+
+	memset(&sattr, 0, sizeof(sattr));
+	sattr.map_fd = map_fd;
+	sattr.key = (unsigned long) &zero;
+	sattr.value = (unsigned long) data;
+	err = kern_sys_bpf(BPF_MAP_UPDATE_ELEM, &sattr, sizeof(sattr));
+	if (err < 0)
+		goto close_map_err;
+
+	memset(&sattr, 0, sizeof(sattr));
+	sattr.prog_type = BPF_PROG_TYPE_SYSCALL;
+	sattr.license = (unsigned long) license;
+	sattr.insns = (unsigned long) insns;
+	sattr.insn_cnt = insns_sz / sizeof(struct bpf_insn);
+	sattr.fd_array = (unsigned long) &map_fd;
+	sattr.prog_flags = BPF_F_SLEEPABLE;
+	strscpy(sattr.prog_name, BPF_LOADER_PROG_SEC, sizeof(BPF_LOADER_PROG_SEC));
+	prog_fd = kern_sys_bpf(BPF_PROG_LOAD, &sattr, sizeof(sattr));
+	if (prog_fd < 0) {
+		err = prog_fd;
+		goto close_map_err;
+	}
+
+	memset(&sattr, 0, sizeof(sattr));
+	ctx_sz = attr->load_fd.ctx_size;
+	kctx = kzalloc(ctx_sz, GFP_KERNEL);
+	if (kctx == NULL) {
+		err = -ENOMEM;
+		goto close_prog_err;
+	}
+	sattr.test.prog_fd = prog_fd;
+	sattr.test.ctx_in = (unsigned long) kctx;
+	sattr.test.ctx_size_in = ctx_sz;
+	err = kern_sys_bpf(BPF_PROG_TEST_RUN, &sattr, sizeof(sattr));
+	if (err < 0)
+		goto free_ctx;
+	err = sattr.test.retval;
+	if (err < 0)
+		goto free_ctx;
+
+	if (copy_to_user((void *) attr->load_fd.ctx, kctx, ctx_sz) != 0)
+		err = -EFAULT;
+
+free_ctx:
+	kfree(kctx);
+close_prog_err:
+	close_fd(prog_fd);
+close_map_err:
+	close_fd(map_fd);
+out_free_buf:
+	vfree(buf);
+out:
+	return err;
+}
+
+
 static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size,
 		     bpfptr_t uattr_common, unsigned int size_common)
 {
@@ -6463,6 +6794,9 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size,
 	case BPF_PROG_ASSOC_STRUCT_OPS:
 		err = prog_assoc_struct_ops(&attr);
 		break;
+	case BPF_LOADER_LOAD_FD:
+		err = loader_load_fd(&attr);
+		break;
 	default:
 		err = -EINVAL;
 		break;
@@ -6507,13 +6841,6 @@ BPF_CALL_3(bpf_sys_bpf, int, cmd, union bpf_attr *, attr, u32, attr_size)
 	return __sys_bpf(cmd, KERNEL_BPFPTR(attr), attr_size, KERNEL_BPFPTR(NULL), 0);
 }
 
-
-/* To shut up -Wmissing-prototypes.
- * This function is used by the kernel light skeleton
- * to load bpf programs when modules are loaded or during kernel boot.
- * See tools/lib/bpf/skel_internal.h
- */
-int kern_sys_bpf(int cmd, union bpf_attr *attr, unsigned int size);
 
 int kern_sys_bpf(int cmd, union bpf_attr *attr, unsigned int size)
 {

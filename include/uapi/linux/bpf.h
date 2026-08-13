@@ -993,6 +993,7 @@ enum bpf_cmd {
 	BPF_TOKEN_CREATE,
 	BPF_PROG_STREAM_READ_BY_FD,
 	BPF_PROG_ASSOC_STRUCT_OPS,
+	BPF_LOADER_LOAD_FD,
 	__MAX_BPF_CMD,
 	BPF_COMMON_ATTRS = 1 << 16, /* Indicate carrying syscall common attrs. */
 };
@@ -1949,6 +1950,12 @@ union bpf_attr {
 		__u32		prog_fd;
 		__u32		flags;
 	} prog_assoc_struct_ops;
+
+	struct { /* struct used by BPF_LOADER_LOAD_FD command */
+		__u32           loader_fd;
+		__aligned_u64   ctx;
+		__u32           ctx_size;
+	} load_fd;
 
 } __attribute__((aligned(8)));
 
