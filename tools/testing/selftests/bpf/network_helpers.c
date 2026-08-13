@@ -49,6 +49,8 @@
 			errno = __save;					\
 })
 
+#define CONNECT_MIN_TIMEOUT_MS	5000
+
 struct ipv4_packet pkt_v4 = {
 	.eth.h_proto = __bpf_constant_htons(ETH_P_IP),
 	.iph.ihl = 5,
@@ -291,6 +293,12 @@ error_close:
 	return -1;
 }
 
+static int connect_timeout_ms(const struct network_helper_opts *opts)
+{
+	/* Enforce a minimum connect timeout value */
+	return MAX(opts->timeout_ms, CONNECT_MIN_TIMEOUT_MS);
+}
+
 int connect_to_addr(int type, const struct sockaddr_storage *addr, socklen_t addrlen,
 		    const struct network_helper_opts *opts)
 {
@@ -305,13 +313,33 @@ int connect_to_addr(int type, const struct sockaddr_storage *addr, socklen_t add
 		return -1;
 	}
 
+	/* Override timeout configuration with a larger value for the
+	 * connection
+	 */
+	if (settimeo(fd, connect_timeout_ms(opts))) {
+		log_err("Failed to set connect timeout");
+		goto close;
+	}
+
 	if (connect(fd, (const struct sockaddr *)addr, addrlen)) {
-		log_err("Failed to connect to server");
-		save_errno_close(fd);
-		return -1;
+		log_err("Failed to connect");
+		goto close;
+	}
+
+	/* If the timeout configured by the test is different from the
+	 * connect timeout, restore it
+	 */
+	if (opts->timeout_ms != CONNECT_MIN_TIMEOUT_MS &&
+	    settimeo(fd, opts->timeout_ms)) {
+		log_err("Failed to set timeout for connected socket");
+		goto close;
 	}
 
 	return fd;
+
+close:
+	save_errno_close(fd);
+	return -1;
 }
 
 int connect_to_addr_str(int family, int type, const char *addr_str, __u16 port,
