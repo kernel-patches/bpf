@@ -1620,13 +1620,25 @@ static int emit_kfunc_call(const struct bpf_prog *bpf_prog, u8 *end_addr,
 		/* add esp,"bytes_in_stack" */
 		end_addr -= 3;
 
-	/* mov dword ptr [ebp+off],edx */
-	if (fm->ret_size > sizeof(u32))
+	switch (fm->ret_size) {
+	case 0:
+		break;
+	case sizeof(u8):
+	case sizeof(u16):
+		/* mov[s|z]x eax,[a]x */
 		end_addr -= 3;
-
-	/* mov dword ptr [ebp+off],eax */
-	if (fm->ret_size)
-		end_addr -= 3;
+		fallthrough;
+	case sizeof(u32):
+		/* cdq or xor edx,edx */
+		end_addr -= fm->ret_flags & BTF_FMODEL_SIGNED_ARG ? 1 : 2;
+		fallthrough;
+	case sizeof(u64):
+		/* Store EDX:EAX in R0. */
+		end_addr -= 6;
+		break;
+	default:
+		return -EINVAL;
+	}
 
 	jmp_offset = (u8 *)__bpf_call_base + insn->imm - end_addr;
 	if (!is_simm32(jmp_offset)) {
@@ -1637,15 +1649,38 @@ static int emit_kfunc_call(const struct bpf_prog *bpf_prog, u8 *end_addr,
 
 	EMIT1_off32(0xE8, jmp_offset);
 
-	if (fm->ret_size)
+	switch (fm->ret_size) {
+	case sizeof(u8):
+		/* mov[s|z]x eax,al */
+		EMIT3(0x0F, fm->ret_flags & BTF_FMODEL_SIGNED_ARG ? 0xBE : 0xB6,
+		      add_2reg(0xC0, IA32_EAX, IA32_EAX));
+		break;
+	case sizeof(u16):
+		/* mov[s|z]x eax,ax */
+		EMIT3(0x0F, fm->ret_flags & BTF_FMODEL_SIGNED_ARG ? 0xBF : 0xB7,
+		      add_2reg(0xC0, IA32_EAX, IA32_EAX));
+		break;
+	default:
+		break;
+	}
+
+	if (fm->ret_size && fm->ret_size <= sizeof(u32)) {
+		if (fm->ret_flags & BTF_FMODEL_SIGNED_ARG)
+			/* cdq */
+			EMIT1(0x99);
+		else
+			/* xor edx,edx */
+			EMIT2(0x31, add_2reg(0xC0, IA32_EDX, IA32_EDX));
+	}
+
+	if (fm->ret_size) {
 		/* mov dword ptr [ebp+off],eax */
 		EMIT3(0x89, add_2reg(0x40, IA32_EBP, IA32_EAX),
 		      STACK_VAR(bpf2ia32[BPF_REG_0][0]));
-
-	if (fm->ret_size > sizeof(u32))
 		/* mov dword ptr [ebp+off],edx */
 		EMIT3(0x89, add_2reg(0x40, IA32_EBP, IA32_EDX),
 		      STACK_VAR(bpf2ia32[BPF_REG_0][1]));
+	}
 
 	if (bytes_in_stack)
 		/* add esp,"bytes_in_stack" */
