@@ -7646,6 +7646,7 @@ struct bpf_sockopt {
 	__s32	optname;
 	__s32	optlen;
 	__s32	retval;
+	__s32	is_compat;
 };
 
 struct bpf_pidns_info {

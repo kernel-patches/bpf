@@ -138,14 +138,15 @@ int __cgroup_bpf_run_filter_sysctl(struct ctl_table_header *head,
 				   char **buf, size_t *pcount, loff_t *ppos,
 				   enum cgroup_bpf_attach_type atype);
 
-int __cgroup_bpf_run_filter_setsockopt(struct sock *sock, int *level,
-				       int *optname, sockptr_t optval,
-				       int *optlen, char **kernel_optval);
+int __cgroup_bpf_run_filter_setsockopt(struct sock *sock, bool compat,
+				       int *level, int *optname,
+				       sockptr_t optval, int *optlen,
+				       char **kernel_optval);
 
-int __cgroup_bpf_run_filter_getsockopt(struct sock *sk, int level,
-				       int optname, sockptr_t optval,
-				       sockptr_t optlen, int max_optlen,
-				       int retval);
+int __cgroup_bpf_run_filter_getsockopt(struct sock *sk, bool compat,
+				       int level, int optname,
+				       sockptr_t optval, sockptr_t optlen,
+				       int max_optlen, int retval);
 
 int __cgroup_bpf_run_filter_getsockopt_kern(struct sock *sk, int level,
 					    int optname, void *optval,
@@ -376,21 +377,21 @@ static inline bool cgroup_bpf_sock_enabled(struct sock *sk,
 	__ret;								       \
 })
 
-#define BPF_CGROUP_RUN_PROG_SETSOCKOPT(sock, level, optname, optval, optlen,   \
-				       kernel_optval)			       \
+#define BPF_CGROUP_RUN_PROG_SETSOCKOPT(sock, compat, level, optname, optval,   \
+				       optlen, kernel_optval)		       \
 ({									       \
 	int __ret = 0;							       \
 	if (cgroup_bpf_enabled(CGROUP_SETSOCKOPT) &&			       \
 	    cgroup_bpf_sock_enabled(sock, CGROUP_SETSOCKOPT))		       \
-		__ret = __cgroup_bpf_run_filter_setsockopt(sock, level,	       \
-							   optname, optval,    \
-							   optlen,	       \
+		__ret = __cgroup_bpf_run_filter_setsockopt(sock, compat,       \
+							   level, optname,     \
+							   optval, optlen,     \
 							   kernel_optval);     \
 	__ret;								       \
 })
 
-#define BPF_CGROUP_RUN_PROG_GETSOCKOPT(sock, level, optname, optval, optlen,   \
-				       max_optlen, retval)		       \
+#define BPF_CGROUP_RUN_PROG_GETSOCKOPT(sock, compat, level, optname, optval,   \
+				       optlen, max_optlen, retval)	       \
 ({									       \
 	int __ret = retval;						       \
 	if (cgroup_bpf_enabled(CGROUP_GETSOCKOPT) &&			       \
@@ -400,7 +401,7 @@ static inline bool cgroup_bpf_sock_enabled(struct sock *sk,
 					tcp_bpf_bypass_getsockopt,	       \
 					level, optname))		       \
 			__ret = __cgroup_bpf_run_filter_getsockopt(	       \
-				sock, level, optname, optval, optlen,	       \
+				sock, compat, level, optname, optval, optlen,  \
 				max_optlen, retval);			       \
 	__ret;								       \
 })
@@ -504,11 +505,11 @@ static inline int bpf_percpu_cgroup_storage_update(struct bpf_map *map,
 #define BPF_CGROUP_RUN_PROG_SOCK_OPS(sock_ops) ({ 0; })
 #define BPF_CGROUP_RUN_PROG_DEVICE_CGROUP(atype, major, minor, access) ({ 0; })
 #define BPF_CGROUP_RUN_PROG_SYSCTL(head,table,write,buf,count,pos) ({ 0; })
-#define BPF_CGROUP_RUN_PROG_GETSOCKOPT(sock, level, optname, optval, \
+#define BPF_CGROUP_RUN_PROG_GETSOCKOPT(sock, compat, level, optname, optval, \
 				       optlen, max_optlen, retval) ({ retval; })
 #define BPF_CGROUP_RUN_PROG_GETSOCKOPT_KERN(sock, level, optname, optval, \
 					    optlen, retval) ({ retval; })
-#define BPF_CGROUP_RUN_PROG_SETSOCKOPT(sock, level, optname, optval, optlen, \
+#define BPF_CGROUP_RUN_PROG_SETSOCKOPT(sock, compat, level, optname, optval, optlen, \
 				       kernel_optval) ({ 0; })
 
 #endif /* CONFIG_CGROUP_BPF */

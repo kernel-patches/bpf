@@ -2055,7 +2055,7 @@ static bool sockopt_buf_allocated(struct bpf_sockopt_kern *ctx,
 	return ctx->optval != buf->data;
 }
 
-int __cgroup_bpf_run_filter_setsockopt(struct sock *sk, int *level,
+int __cgroup_bpf_run_filter_setsockopt(struct sock *sk, bool compat, int *level,
 				       int *optname, sockptr_t optval,
 				       int *optlen, char **kernel_optval)
 {
@@ -2065,6 +2065,7 @@ int __cgroup_bpf_run_filter_setsockopt(struct sock *sk, int *level,
 		.sk = sk,
 		.level = *level,
 		.optname = *optname,
+		.is_compat = compat,
 	};
 	int ret, max_optlen;
 
@@ -2146,7 +2147,7 @@ out:
 	return ret;
 }
 
-int __cgroup_bpf_run_filter_getsockopt(struct sock *sk, int level,
+int __cgroup_bpf_run_filter_getsockopt(struct sock *sk, bool compat, int level,
 				       int optname, sockptr_t optval,
 				       sockptr_t optlen, int max_optlen,
 				       int retval)
@@ -2157,6 +2158,7 @@ int __cgroup_bpf_run_filter_getsockopt(struct sock *sk, int level,
 		.sk = sk,
 		.level = level,
 		.optname = optname,
+		.is_compat = compat,
 		.current_task = current,
 	};
 	int orig_optlen;
@@ -2704,6 +2706,9 @@ static u32 cg_sockopt_convert_ctx_access(enum bpf_access_type type,
 			*insn++ = CG_SOCKOPT_WRITE_FIELD(optlen);
 		else
 			*insn++ = CG_SOCKOPT_READ_FIELD(optlen);
+		break;
+	case offsetof(struct bpf_sockopt, is_compat):
+		*insn++ = CG_SOCKOPT_READ_FIELD(is_compat);
 		break;
 	case offsetof(struct bpf_sockopt, retval):
 		BUILD_BUG_ON(offsetof(struct bpf_cg_run_ctx, run_ctx) != 0);
