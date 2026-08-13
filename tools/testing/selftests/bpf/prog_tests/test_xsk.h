@@ -4,6 +4,7 @@
 
 #include <linux/ethtool.h>
 #include <linux/if_xdp.h>
+#include <linux/refcount.h>
 
 #include "../kselftest.h"
 #include "xsk.h"
@@ -93,6 +94,7 @@ struct xsk_socket_info {
 	u8 dst_mac[ETH_ALEN];
 	u8 src_mac[ETH_ALEN];
 	bool check_consumer;
+	bool umem_ref; /* true if this slot holds a counted UMEM reference */
 };
 
 int kick_rx(struct xsk_socket_info *xsk);
@@ -104,6 +106,7 @@ struct xsk_umem_info {
 	struct xsk_umem *umem;
 	u64 next_buffer;
 	u64 mmap_size;
+	refcount_t users;
 	u32 num_frames;
 	u32 frame_headroom;
 	void *buffer;
@@ -159,7 +162,7 @@ int init_iface(struct ifobject *ifobj, thread_func_t func_ptr);
 int xsk_configure_umem(struct ifobject *ifobj, struct xsk_umem_info *umem, void *buffer, u64 size);
 int xsk_configure_socket(struct xsk_socket_info *xsk, struct xsk_umem_info *umem,
 			 struct ifobject *ifobject, bool shared);
-
+void xsk_delete_socket(struct xsk_socket_info *xsk);
 
 struct pkt {
 	int offset;
