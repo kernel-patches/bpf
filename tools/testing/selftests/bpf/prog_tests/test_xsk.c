@@ -224,6 +224,12 @@ int hw_ring_size_reset(struct ifobject *ifobj)
 static void __test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
 			     struct ifobject *ifobj_rx)
 {
+	/*
+	 * Keep the same default as xskxceiver startup: when TX and RX share the same netdev,
+	 * shared UMEM is the baseline mode for this test harness. Individual tests can still
+	 * override this as needed.
+	 */
+	bool shared_default = ifobj_tx->ifindex == ifobj_rx->ifindex;
 	u32 i, j;
 
 	for (i = 0; i < MAX_INTERFACES; i++) {
@@ -235,6 +241,7 @@ static void __test_spec_init(struct test_spec *test, struct ifobject *ifobj_tx,
 		ifobj->use_fill_ring = true;
 		ifobj->release_rx = true;
 		ifobj->validation_func = NULL;
+		ifobj->shared_umem = shared_default;
 		ifobj->use_metadata = false;
 
 		if (i == 0) {
@@ -615,6 +622,86 @@ static int pkt_stream_even_odd_sequence(struct test_spec *test)
 	}
 
 	return 0;
+}
+
+static int pkt_stream_len_seq(struct test_spec *test, u32 short_len, u32 long_len)
+{
+	struct pkt_stream *tx_streams[MAX_SOCKETS] = {};
+	struct pkt_stream *rx_streams[MAX_SOCKETS] = {};
+	struct pkt_stream *pkt_stream;
+	u32 i;
+
+	for (i = 0; i < test->nb_sockets; i++) {
+		u32 pkt_len = i ? long_len : short_len;
+
+		pkt_stream = test->ifobj_tx->xsk_arr[i].pkt_stream;
+		tx_streams[i] = __pkt_stream_generate(pkt_stream->nb_pkts / 2, pkt_len, i, 2);
+		if (!tx_streams[i])
+			goto err;
+
+		pkt_stream = test->ifobj_rx->xsk_arr[i].pkt_stream;
+		rx_streams[i] = __pkt_stream_generate(pkt_stream->nb_pkts / 2, pkt_len, i, 2);
+		if (!rx_streams[i])
+			goto err;
+	}
+
+	for (i = 0; i < test->nb_sockets; i++) {
+		test->ifobj_tx->xsk_arr[i].pkt_stream = tx_streams[i];
+		test->ifobj_rx->xsk_arr[i].pkt_stream = rx_streams[i];
+	}
+
+	return 0;
+
+err:
+	for (i = 0; i < test->nb_sockets; i++) {
+		if (tx_streams[i])
+			pkt_stream_delete(tx_streams[i]);
+		if (rx_streams[i])
+			pkt_stream_delete(rx_streams[i]);
+	}
+
+	return -ENOMEM;
+}
+
+static int pkt_stream_uneven_dist_seq(struct test_spec *test, u32 total_pkts, u32 pkt_len)
+{
+	struct pkt_stream *tx_streams[MAX_SOCKETS] = {};
+	struct pkt_stream *rx_streams[MAX_SOCKETS] = {};
+	u32 i, pkts_sock0;
+
+	if (test->nb_sockets < 2 || total_pkts < 4)
+		return -EINVAL;
+
+	pkts_sock0 = total_pkts / 4;
+
+	for (i = 0; i < test->nb_sockets; i++) {
+		u32 nb_pkts = (i == 0) ? pkts_sock0 : (total_pkts - pkts_sock0);
+
+		tx_streams[i] = __pkt_stream_generate(nb_pkts, pkt_len, i, 2);
+		if (!tx_streams[i])
+			goto err;
+
+		rx_streams[i] = __pkt_stream_generate(nb_pkts, pkt_len, i, 2);
+		if (!rx_streams[i])
+			goto err;
+	}
+
+	for (i = 0; i < test->nb_sockets; i++) {
+		test->ifobj_tx->xsk_arr[i].pkt_stream = tx_streams[i];
+		test->ifobj_rx->xsk_arr[i].pkt_stream = rx_streams[i];
+	}
+
+	return 0;
+
+err:
+	for (i = 0; i < test->nb_sockets; i++) {
+		if (tx_streams[i])
+			pkt_stream_delete(tx_streams[i]);
+		if (rx_streams[i])
+			pkt_stream_delete(rx_streams[i]);
+	}
+
+	return -ENOMEM;
 }
 
 static void release_even_odd_sequence(struct test_spec *test)
@@ -2284,6 +2371,168 @@ int testapp_xdp_shared_umem(struct test_spec *test)
 	ret = testapp_validate_traffic(test);
 
 	release_even_odd_sequence(test);
+
+	return ret;
+}
+
+static int shared_umem_test_prepare(struct test_spec *test)
+{
+	u32 i;
+
+	if (test->nb_sockets > MAX_SOCKETS) {
+		ksft_print_msg("ERROR: [%s] invalid socket count %u\n", __func__, test->nb_sockets);
+		return TEST_FAILURE;
+	}
+
+	for (i = 0; i < test->nb_sockets; i++) {
+		if (!test->ifobj_rx->xsk_arr[i].pkt_stream ||
+		    !test->ifobj_tx->xsk_arr[i].pkt_stream) {
+			ksft_print_msg("ERROR: [%s] missing stream for socket %u\n", __func__, i);
+			return TEST_FAILURE;
+		}
+	}
+
+	return TEST_PASS;
+}
+
+static int shared_umem_seq_even_odd(struct test_spec *test, const void *ctx)
+{
+	(void)ctx;
+
+	return pkt_stream_even_odd_sequence(test) ? TEST_FAILURE : TEST_PASS;
+}
+
+static int shared_umem_seq_len(struct test_spec *test, const void *ctx)
+{
+	const struct shared_umem_len_ctx *cfg = ctx;
+
+	return pkt_stream_len_seq(test, cfg->short_len, cfg->long_len) ? TEST_FAILURE : TEST_PASS;
+}
+
+static int shared_umem_seq_uneven_dist(struct test_spec *test, const void *ctx)
+{
+	const struct shared_umem_uneven_dist_ctx *cfg = ctx;
+
+	return pkt_stream_uneven_dist_seq(test, cfg->total_pkts,
+					 cfg->pkt_len) ? TEST_FAILURE : TEST_PASS;
+}
+
+static int shared_umem_post_uneven_dist(struct test_spec *test, int ret, const void *ctx)
+{
+	struct pkt_stream *tx_stream_0, *tx_stream_1;
+	struct pkt_stream *rx_stream_0, *rx_stream_1;
+
+	(void)ctx;
+
+	tx_stream_0 = test->ifobj_tx->xsk_arr[0].pkt_stream;
+	tx_stream_1 = test->ifobj_tx->xsk_arr[1].pkt_stream;
+	rx_stream_0 = test->ifobj_rx->xsk_arr[0].pkt_stream;
+	rx_stream_1 = test->ifobj_rx->xsk_arr[1].pkt_stream;
+
+	if (tx_stream_1->nb_valid_entries <= tx_stream_0->nb_valid_entries)
+		return TEST_FAILURE;
+
+	if (!ret && rx_stream_1->nb_rx_pkts <= rx_stream_0->nb_rx_pkts) {
+		ksft_print_msg("ERROR: socket1 rx_pkts (%u) not greater than socket0 (%u)\n",
+			       rx_stream_1->nb_rx_pkts, rx_stream_0->nb_rx_pkts);
+		ret = TEST_FAILURE;
+	}
+
+	return ret;
+}
+
+static int run_shared_umem_test(struct test_spec *test, struct bpf_program *xdp_prog_rx,
+				struct bpf_program *xdp_prog_tx, struct bpf_map *xskmap_rx,
+				struct bpf_map *xskmap_tx, u32 nb_sockets,
+				shared_umem_seq_fn seq_fn, shared_umem_post_fn post_fn,
+				const void *ctx)
+{
+	int ret;
+
+	test->total_steps = 1;
+	test->nb_sockets = nb_sockets;
+
+	test_spec_set_xdp_prog(test, xdp_prog_rx, xdp_prog_tx, xskmap_rx, xskmap_tx);
+
+	ret = shared_umem_test_prepare(test);
+	if (ret)
+		return ret;
+
+	ret = seq_fn(test, ctx);
+	if (ret)
+		return ret;
+
+	ret = testapp_validate_traffic(test);
+	if (post_fn)
+		ret = post_fn(test, ret, ctx);
+
+	release_even_odd_sequence(test);
+
+	return ret;
+}
+
+int testapp_shared_umem_4_sockets(struct test_spec *test)
+{
+	struct xsk_xdp_progs *skel_rx = test->ifobj_rx->xdp_progs;
+	struct xsk_xdp_progs *skel_tx = test->ifobj_tx->xdp_progs;
+
+	return run_shared_umem_test(test, skel_rx->progs.xsk_xdp_shared_umem,
+				    skel_tx->progs.xsk_xdp_shared_umem, skel_rx->maps.xsk,
+				    skel_tx->maps.xsk, 4, shared_umem_seq_even_odd, NULL, NULL);
+}
+
+int testapp_shared_umem_length_based(struct test_spec *test)
+{
+	struct xsk_xdp_progs *skel_rx = test->ifobj_rx->xdp_progs;
+	struct xsk_xdp_progs *skel_tx = test->ifobj_tx->xdp_progs;
+	const struct shared_umem_len_ctx len_ctx = {
+		.short_len = MIN_PKT_SIZE,
+		.long_len = MIN_PKT_SIZE * 2,
+	};
+
+	return run_shared_umem_test(test, skel_rx->progs.xsk_xdp_shared_umem_length_based,
+				    skel_tx->progs.xsk_xdp_shared_umem_length_based,
+				    skel_rx->maps.xsk, skel_tx->maps.xsk, 2, shared_umem_seq_len,
+				    NULL, &len_ctx);
+}
+
+int testapp_shared_umem_uneven_dist(struct test_spec *test)
+{
+	struct xsk_xdp_progs *skel_rx = test->ifobj_rx->xdp_progs;
+	struct xsk_xdp_progs *skel_tx = test->ifobj_tx->xdp_progs;
+	const struct shared_umem_uneven_dist_ctx uneven_dist_ctx = {
+		.total_pkts = DEFAULT_PKT_CNT * 4,
+		.pkt_len = MIN_PKT_SIZE,
+	};
+
+	return run_shared_umem_test(test, skel_rx->progs.xsk_xdp_shared_umem,
+				    skel_tx->progs.xsk_xdp_shared_umem, skel_rx->maps.xsk,
+				    skel_tx->maps.xsk, 2, shared_umem_seq_uneven_dist,
+				    shared_umem_post_uneven_dist, &uneven_dist_ctx);
+}
+
+int testapp_shared_umem_unaligned(struct test_spec *test)
+{
+	struct xsk_xdp_progs *skel_rx = test->ifobj_rx->xdp_progs;
+	struct xsk_xdp_progs *skel_tx = test->ifobj_tx->xdp_progs;
+	struct xsk_umem_info *tx_umem = test->ifobj_tx && test->ifobj_tx->xsk ?
+		test->ifobj_tx->xsk->umem : NULL;
+	struct xsk_umem_info *rx_umem = test->ifobj_rx && test->ifobj_rx->xsk ?
+		test->ifobj_rx->xsk->umem : NULL;
+	bool tx_unaligned = tx_umem ? tx_umem->unaligned_mode : false;
+	bool rx_unaligned = rx_umem ? rx_umem->unaligned_mode : false;
+	int ret;
+
+	test_spec_set_unaligned(test);
+
+	ret = run_shared_umem_test(test, skel_rx->progs.xsk_xdp_shared_umem,
+				   skel_tx->progs.xsk_xdp_shared_umem, skel_rx->maps.xsk,
+				   skel_tx->maps.xsk, 2, shared_umem_seq_even_odd, NULL, NULL);
+
+	if (tx_umem)
+		tx_umem->unaligned_mode = tx_unaligned;
+	if (rx_umem)
+		rx_umem->unaligned_mode = rx_unaligned;
 
 	return ret;
 }
