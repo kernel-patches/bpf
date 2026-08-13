@@ -17096,6 +17096,17 @@ static int save_aux_ptr_type(struct bpf_verifier_env *env, enum bpf_reg_type typ
 		 * save type to validate intersecting paths
 		 */
 		*prev_type = type;
+	} else if (*prev_type != type && allow_trust_mismatch &&
+		   is_ptr_to_mem_or_btf_id(type) &&
+		   is_ptr_to_mem_or_btf_id(*prev_type)) {
+		/*
+		 * Have to support a use case when one path through the
+		 * program yields a TRUSTED pointer while another is
+		 * UNTRUSTED. Merge them into a type which keeps the
+		 * BPF_PROBE_MEM/BPF_PROBE_MEMSX rewrite when either
+		 * side needs it.
+		 */
+		*prev_type = merge_ptr_types(type, *prev_type);
 	} else if (reg_type_mismatch(type, *prev_type)) {
 		/* Abuser program is trying to use the same insn
 		 * dst_reg = *(u32*) (src_reg + off)
@@ -17104,21 +17115,8 @@ static int save_aux_ptr_type(struct bpf_verifier_env *env, enum bpf_reg_type typ
 		 * src_reg == stack|map in some other branch.
 		 * Reject it.
 		 */
-		if (allow_trust_mismatch &&
-		    is_ptr_to_mem_or_btf_id(type) &&
-		    is_ptr_to_mem_or_btf_id(*prev_type)) {
-			/*
-			 * Have to support a use case when one path through
-			 * the program yields a TRUSTED pointer while another
-			 * is UNTRUSTED. Merge them into a type which keeps
-			 * the BPF_PROBE_MEM/BPF_PROBE_MEMSX rewrite when
-			 * either side needs it.
-			 */
-			*prev_type = merge_ptr_types(type, *prev_type);
-		} else {
-			verbose(env, "same insn cannot be used with different pointers\n");
-			return -EINVAL;
-		}
+		verbose(env, "same insn cannot be used with different pointers\n");
+		return -EINVAL;
 	}
 
 	return 0;
