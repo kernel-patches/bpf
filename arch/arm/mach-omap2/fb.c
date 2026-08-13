@@ -27,15 +27,6 @@
  * The first memory resource is the register region for VRFB,
  * the rest are VRFB virtual memory areas for each VRFB context.
  */
-
-static const struct resource omap2_vrfb_resources[] = {
-	DEFINE_RES_MEM_NAMED(0x68008000u, 0x40, "vrfb-regs"),
-	DEFINE_RES_MEM_NAMED(0x70000000u, 0x4000000, "vrfb-area-0"),
-	DEFINE_RES_MEM_NAMED(0x74000000u, 0x4000000, "vrfb-area-1"),
-	DEFINE_RES_MEM_NAMED(0x78000000u, 0x4000000, "vrfb-area-2"),
-	DEFINE_RES_MEM_NAMED(0x7c000000u, 0x4000000, "vrfb-area-3"),
-};
-
 static const struct resource omap3_vrfb_resources[] = {
 	DEFINE_RES_MEM_NAMED(0x6C000180u, 0xc0, "vrfb-regs"),
 	DEFINE_RES_MEM_NAMED(0x70000000u, 0x4000000, "vrfb-area-0"),
@@ -58,10 +49,7 @@ int __init omap_init_vrfb(void)
 	const struct resource *res;
 	unsigned int num_res;
 
-	if (cpu_is_omap24xx()) {
-		res = omap2_vrfb_resources;
-		num_res = ARRAY_SIZE(omap2_vrfb_resources);
-	} else if (cpu_is_omap34xx()) {
+	if (cpu_is_omap34xx()) {
 		res = omap3_vrfb_resources;
 		num_res = ARRAY_SIZE(omap3_vrfb_resources);
 	} else {

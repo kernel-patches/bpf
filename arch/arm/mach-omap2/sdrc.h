@@ -90,17 +90,7 @@ struct memory_timings {
 	u32 base_cs;		/* base chip select to use for calculations */
 };
 
-extern void omap2xxx_sdrc_init_params(u32 force_lock_to_unlock_mode);
-
-u32 omap2xxx_sdrc_dll_is_unlocked(void);
-u32 omap2xxx_sdrc_reprogram(u32 level, u32 force);
-
-
 #else
-#define OMAP242X_SDRC_REGADDR(reg)					\
-			OMAP2_L3_IO_ADDRESS(OMAP2420_SDRC_BASE + (reg))
-#define OMAP243X_SDRC_REGADDR(reg)					\
-			OMAP2_L3_IO_ADDRESS(OMAP243X_SDRC_BASE + (reg))
 #define OMAP34XX_SDRC_REGADDR(reg)					\
 			OMAP2_L3_IO_ADDRESS(OMAP343X_SDRC_BASE + (reg))
 
@@ -183,17 +173,6 @@ u32 omap2xxx_sdrc_reprogram(u32 level, u32 force);
 #define SDRC_RFR_CTRL_110MHz	(0x0002da01 | 1) /* Need to calc */
 #define SDRC_RFR_CTRL_BYPASS	(0x00005000 | 1) /* Need to calc */
 
-
-/*
- * SMS register access
- */
-
-#define OMAP242X_SMS_REGADDR(reg)					\
-		(void __iomem *)OMAP2_L3_IO_ADDRESS(OMAP2420_SMS_BASE + reg)
-#define OMAP243X_SMS_REGADDR(reg)					\
-		(void __iomem *)OMAP2_L3_IO_ADDRESS(OMAP243X_SMS_BASE + reg)
-#define OMAP343X_SMS_REGADDR(reg)					\
-		(void __iomem *)OMAP2_L3_IO_ADDRESS(OMAP343X_SMS_BASE + reg)
 
 /* SMS register offsets - read/write with sms_{read,write}_reg() */
 

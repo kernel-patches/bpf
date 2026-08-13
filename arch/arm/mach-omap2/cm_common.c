@@ -15,7 +15,6 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 
-#include "cm2xxx.h"
 #include "cm3xxx.h"
 #include "cm33xx.h"
 #include "cm44xx.h"
@@ -230,14 +229,6 @@ static struct omap_prcm_init_data cm2_data __initdata = {
 };
 #endif
 
-#ifdef CONFIG_ARCH_OMAP2
-static struct omap_prcm_init_data omap2_prcm_data __initdata = {
-	.index = TI_CLKM_CM,
-	.init = omap2xxx_cm_init,
-	.flags = CM_NO_CLOCKS | CM_SINGLE_INSTANCE,
-};
-#endif
-
 #ifdef CONFIG_ARCH_OMAP3
 static struct omap_prcm_init_data omap3_cm_data __initdata = {
 	.index = TI_CLKM_CM,
@@ -269,9 +260,6 @@ static struct omap_prcm_init_data am4_prcm_data __initdata = {
 #endif
 
 static const struct of_device_id omap_cm_dt_match_table[] __initconst = {
-#ifdef CONFIG_ARCH_OMAP2
-	{ .compatible = "ti,omap2-prcm", .data = &omap2_prcm_data },
-#endif
 #ifdef CONFIG_ARCH_OMAP3
 	{ .compatible = "ti,omap3-cm", .data = &omap3_cm_data },
 #endif

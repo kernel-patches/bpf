@@ -83,39 +83,6 @@ static unsigned configure_dma_errata(void)
 	unsigned errata = 0;
 
 	/*
-	 * Errata applicable for OMAP2430ES1.0 and all omap2420
-	 *
-	 * I.
-	 * Erratum ID: Not Available
-	 * Inter Frame DMA buffering issue DMA will wrongly
-	 * buffer elements if packing and bursting is enabled. This might
-	 * result in data gets stalled in FIFO at the end of the block.
-	 * Workaround: DMA channels must have BUFFERING_DISABLED bit set to
-	 * guarantee no data will stay in the DMA FIFO in case inter frame
-	 * buffering occurs
-	 *
-	 * II.
-	 * Erratum ID: Not Available
-	 * DMA may hang when several channels are used in parallel
-	 * In the following configuration, DMA channel hanging can occur:
-	 * a. Channel i, hardware synchronized, is enabled
-	 * b. Another channel (Channel x), software synchronized, is enabled.
-	 * c. Channel i is disabled before end of transfer
-	 * d. Channel i is reenabled.
-	 * e. Steps 1 to 4 are repeated a certain number of times.
-	 * f. A third channel (Channel y), software synchronized, is enabled.
-	 * Channel x and Channel y may hang immediately after step 'f'.
-	 * Workaround:
-	 * For any channel used - make sure NextLCH_ID is set to the value j.
-	 */
-	if (cpu_is_omap2420() || (cpu_is_omap2430() &&
-				(omap_type() == OMAP2430_REV_ES1_0))) {
-
-		SET_DMA_ERRATA(DMA_ERRATA_IFRAME_BUFFERING);
-		SET_DMA_ERRATA(DMA_ERRATA_PARALLEL_CHANNELS);
-	}
-
-	/*
 	 * Erratum ID: i378: OMAP2+: sDMA Channel is not disabled
 	 * after a transaction error.
 	 * Workaround: SW should explicitely disable the channel.
@@ -162,16 +129,6 @@ static unsigned configure_dma_errata(void)
 	return errata;
 }
 
-static const struct dma_slave_map omap24xx_sdma_dt_map[] = {
-	/* external DMA requests when tusb6010 is used */
-	{ "musb-hdrc.1.auto", "dmareq0", SDMA_FILTER_PARAM(2) },
-	{ "musb-hdrc.1.auto", "dmareq1", SDMA_FILTER_PARAM(3) },
-	{ "musb-hdrc.1.auto", "dmareq2", SDMA_FILTER_PARAM(14) }, /* OMAP2420 only */
-	{ "musb-hdrc.1.auto", "dmareq3", SDMA_FILTER_PARAM(15) }, /* OMAP2420 only */
-	{ "musb-hdrc.1.auto", "dmareq4", SDMA_FILTER_PARAM(16) }, /* OMAP2420 only */
-	{ "musb-hdrc.1.auto", "dmareq5", SDMA_FILTER_PARAM(64) }, /* OMAP2420 only */
-};
-
 static struct omap_dma_dev_attr dma_attr = {
 	.dev_caps = RESERVE_CHANNEL | DMA_LINKED_LCH | GLOBAL_PRIORITY |
 		    IS_CSSA_32 | IS_CDSA_32,
@@ -188,15 +145,7 @@ struct omap_system_dma_plat_info dma_plat_info = {
 static int __init omap2_system_dma_init(void)
 {
 	dma_plat_info.errata = configure_dma_errata();
-
-	if (soc_is_omap24xx()) {
-		/* DMA slave map for drivers not yet converted to DT */
-		dma_plat_info.slave_map = omap24xx_sdma_dt_map;
-		dma_plat_info.slavecnt = ARRAY_SIZE(omap24xx_sdma_dt_map);
-	}
-
-	if (!soc_is_omap242x())
-		dma_attr.dev_caps |= IS_RW_PRIORITY;
+	dma_attr.dev_caps |= IS_RW_PRIORITY;
 
 	if (soc_is_omap34xx() && (omap_type() != OMAP2_DEVICE_TYPE_GP))
 		dma_attr.dev_caps |= HS_CHANNELS_RESERVED;

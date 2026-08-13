@@ -26,7 +26,6 @@
 
 #include "soc.h"
 #include "prm2xxx_3xxx.h"
-#include "prm2xxx.h"
 #include "prm3xxx.h"
 #include "prm33xx.h"
 #include "prm44xx.h"
@@ -582,13 +581,6 @@ int prm_unregister(struct prm_ll_data *pld)
 	return 0;
 }
 
-#ifdef CONFIG_ARCH_OMAP2
-static struct omap_prcm_init_data omap2_prm_data __initdata = {
-	.index = TI_CLKM_PRM,
-	.init = omap2xxx_prm_init,
-};
-#endif
-
 #ifdef CONFIG_ARCH_OMAP3
 static struct omap_prcm_init_data omap3_prm_data __initdata = {
 	.index = TI_CLKM_PRM,
@@ -669,9 +661,6 @@ static const struct of_device_id omap_prcm_dt_match_table[] __initconst = {
 	{ .compatible = "ti,dm814-prcm", .data = &am3_prm_data },
 	{ .compatible = "ti,dm814-pllss", .data = &dm814_pllss_data },
 	{ .compatible = "ti,dm816-prcm", .data = &am3_prm_data },
-#endif
-#ifdef CONFIG_ARCH_OMAP2
-	{ .compatible = "ti,omap2-prcm", .data = &omap2_prm_data },
 #endif
 #ifdef CONFIG_ARCH_OMAP3
 	{ .compatible = "ti,omap3-prm", .data = &omap3_prm_data },

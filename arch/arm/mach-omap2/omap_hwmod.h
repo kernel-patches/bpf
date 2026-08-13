@@ -663,8 +663,6 @@ omap_hwmod_for_each_by_class(const char *classname,
  * Chip variant-specific hwmod init routines - XXX should be converted
  * to use initcalls once the initial boot ordering is straightened out
  */
-extern int omap2420_hwmod_init(void);
-extern int omap2430_hwmod_init(void);
 extern int omap3xxx_hwmod_init(void);
 extern int dm814x_hwmod_init(void);
 extern int dm816x_hwmod_init(void);

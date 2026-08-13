@@ -30,9 +30,7 @@
 #include "clockdomain.h"
 #include "clock.h"
 #include "cm.h"
-#include "cm2xxx.h"
 #include "cm3xxx.h"
-#include "cm-regbits-24xx.h"
 #include "cm-regbits-34xx.h"
 #include "common.h"
 
@@ -94,11 +92,7 @@ void __init ti_clk_init_features(void)
 	}
 
 	/* Bypass value setup for DPLLs */
-	if (cpu_is_omap24xx()) {
-		features.dpll_bypass_vals |=
-			(1 << OMAP2XXX_EN_DPLL_LPBYPASS) |
-			(1 << OMAP2XXX_EN_DPLL_FRBYPASS);
-	} else if (cpu_is_omap34xx()) {
+	if (cpu_is_omap34xx()) {
 		features.dpll_bypass_vals |=
 			(1 << OMAP3XXX_EN_DPLL_LPBYPASS) |
 			(1 << OMAP3XXX_EN_DPLL_FRBYPASS);
@@ -122,9 +116,7 @@ void __init ti_clk_init_features(void)
 	 * 34xx reverses this, just to keep us on our toes
 	 * AM35xx uses both, depending on the module.
 	 */
-	if (cpu_is_omap24xx())
-		features.cm_idlest_val = OMAP24XX_CM_IDLEST_VAL;
-	else if (cpu_is_omap34xx())
+	if (cpu_is_omap34xx())
 		features.cm_idlest_val = OMAP34XX_CM_IDLEST_VAL;
 
 	/* On OMAP3430 ES1.0, DPLL4 can't be re-programmed */

@@ -39,7 +39,7 @@ int omap_i2c_reset(struct omap_hwmod *oh)
 	u16 i2c_con;
 	int c = 0;
 
-	if (soc_is_omap24xx() || soc_is_omap34xx() || soc_is_am35xx())
+	if (soc_is_omap34xx() || soc_is_am35xx())
 		i2c_con = OMAP2_I2C_CON_OFFSET;
 	else
 		i2c_con = OMAP4_I2C_CON_OFFSET;

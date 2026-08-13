@@ -50,52 +50,6 @@
 
 /*
  * ----------------------------------------------------------------------------
- * Omap2 specific IO mapping
- * ----------------------------------------------------------------------------
- */
-
-/* We map both L3 and L4 on OMAP2 */
-#define L3_24XX_PHYS	L3_24XX_BASE	/* 0x68000000 --> 0xf8000000*/
-#define L3_24XX_VIRT	(L3_24XX_PHYS + OMAP2_L3_IO_OFFSET)
-#define L3_24XX_SIZE	SZ_1M		/* 44kB of 128MB used, want 1MB sect */
-#define L4_24XX_PHYS	L4_24XX_BASE	/* 0x48000000 --> 0xfa000000 */
-#define L4_24XX_VIRT	(L4_24XX_PHYS + OMAP2_L4_IO_OFFSET)
-#define L4_24XX_SIZE	SZ_1M		/* 1MB of 128MB used, want 1MB sect */
-
-#define L4_WK_243X_PHYS		L4_WK_243X_BASE	/* 0x49000000 --> 0xfb000000 */
-#define L4_WK_243X_VIRT		(L4_WK_243X_PHYS + OMAP2_L4_IO_OFFSET)
-#define L4_WK_243X_SIZE		SZ_1M
-#define OMAP243X_GPMC_PHYS	OMAP243X_GPMC_BASE
-#define OMAP243X_GPMC_VIRT	(OMAP243X_GPMC_PHYS + OMAP2_L3_IO_OFFSET)
-						/* 0x6e000000 --> 0xfe000000 */
-#define OMAP243X_GPMC_SIZE	SZ_1M
-#define OMAP243X_SDRC_PHYS	OMAP243X_SDRC_BASE
-						/* 0x6D000000 --> 0xfd000000 */
-#define OMAP243X_SDRC_VIRT	(OMAP243X_SDRC_PHYS + OMAP2_L3_IO_OFFSET)
-#define OMAP243X_SDRC_SIZE	SZ_1M
-#define OMAP243X_SMS_PHYS	OMAP243X_SMS_BASE
-						/* 0x6c000000 --> 0xfc000000 */
-#define OMAP243X_SMS_VIRT	(OMAP243X_SMS_PHYS + OMAP2_L3_IO_OFFSET)
-#define OMAP243X_SMS_SIZE	SZ_1M
-
-/* 2420 IVA */
-#define DSP_MEM_2420_PHYS	OMAP2420_DSP_MEM_BASE
-						/* 0x58000000 --> 0xfc100000 */
-#define DSP_MEM_2420_VIRT	0xfc100000
-#define DSP_MEM_2420_SIZE	0x28000
-#define DSP_IPI_2420_PHYS	OMAP2420_DSP_IPI_BASE
-						/* 0x59000000 --> 0xfc128000 */
-#define DSP_IPI_2420_VIRT	0xfc128000
-#define DSP_IPI_2420_SIZE	SZ_4K
-#define DSP_MMU_2420_PHYS	OMAP2420_DSP_MMU_BASE
-						/* 0x5a000000 --> 0xfc129000 */
-#define DSP_MMU_2420_VIRT	0xfc129000
-#define DSP_MMU_2420_SIZE	SZ_4K
-
-/* 2430 IVA2.1 - currently unmapped */
-
-/*
- * ----------------------------------------------------------------------------
  * Omap3 specific IO mapping
  * ----------------------------------------------------------------------------
  */
