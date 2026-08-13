@@ -1026,6 +1026,7 @@ static void pcpu_copy_value(struct bpf_htab *htab, void __percpu *pptr,
 	} else {
 		u32 size = round_up(htab->map.value_size, 8);
 		void *val;
+		int off = 0;
 		int cpu;
 
 		if (map_flags & BPF_F_CPU) {
@@ -1038,9 +1039,10 @@ static void pcpu_copy_value(struct bpf_htab *htab, void __percpu *pptr,
 
 		for_each_possible_cpu(cpu) {
 			ptr = per_cpu_ptr(pptr, cpu);
-			val = (map_flags & BPF_F_ALL_CPUS) ? value : value + size * cpu;
+			val = (map_flags & BPF_F_ALL_CPUS) ? value : value + off;
 			copy_map_value(&htab->map, ptr, val);
 			bpf_obj_cancel_fields(&htab->map, ptr);
+			off += size;
 		}
 	}
 }
