@@ -159,7 +159,7 @@ config ARM
 	select TIMER_OF if OF
 	select HAVE_ARCH_VMAP_STACK if MMU && ARM_HAS_GROUP_RELOCS
 	select TRACE_IRQFLAGS_SUPPORT if !CPU_V7M
-	select USE_OF if !(ARCH_FOOTBRIDGE || ARCH_RPC || ARCH_SA1100)
+	select USE_OF if !(ARCH_FOOTBRIDGE || ARCH_RPC)
 	# Above selects are sorted alphabetically; please add new ones
 	# according to that.  Thanks.
 	help
@@ -259,9 +259,6 @@ config GENERIC_ISA_DMA
 config FIQ
 	bool
 
-config ARCH_MTD_XIP
-	bool
-
 config ARM_PATCH_PHYS_VIRT
 	bool "Patch physical to virtual translations at runtime" if !ARCH_MULTIPLATFORM
 	default y
@@ -299,7 +296,7 @@ config PHYS_OFFSET
 	default 0x00000000 if ARCH_FOOTBRIDGE
 	default 0x10000000 if ARCH_OMAP1 || ARCH_RPC
 	default 0xa0000000 if ARCH_PXA
-	default 0xc0000000 if ARCH_EP93XX || ARCH_SA1100
+	default 0xc0000000 if ARCH_EP93XX
 	default 0
 	help
 	  Please provide the physical address corresponding to the
@@ -339,7 +336,7 @@ config ARCH_MMAP_RND_BITS_MAX
 
 config ARCH_MULTIPLATFORM
 	bool "Require kernel to be portable to multiple machines" if EXPERT
-	depends on MMU && !(ARCH_FOOTBRIDGE || ARCH_RPC || ARCH_SA1100)
+	depends on MMU && !(ARCH_FOOTBRIDGE || ARCH_RPC)
 	default y
 	help
 	  In general, all Arm machines can be supported in a single
@@ -442,8 +439,6 @@ source "arch/arm/mach-rockchip/Kconfig"
 source "arch/arm/mach-s3c/Kconfig"
 
 source "arch/arm/mach-s5pv210/Kconfig"
-
-source "arch/arm/mach-sa1100/Kconfig"
 
 source "arch/arm/mach-shmobile/Kconfig"
 
@@ -1199,7 +1194,7 @@ config ARCH_SELECT_MEMORY_MODEL
 	def_bool y
 
 config ARCH_FLATMEM_ENABLE
-	def_bool !(ARCH_RPC || ARCH_SA1100)
+	def_bool !ARCH_RPC
 
 config ARCH_SPARSEMEM_ENABLE
 	def_bool !ARCH_FOOTBRIDGE
@@ -1291,7 +1286,6 @@ config ARM_MODULE_PLTS
 config ARCH_FORCE_MAX_ORDER
 	int "Order of maximal physically contiguous allocations"
 	default "11" if SOC_AM33XX
-	default "8" if SA1111
 	default "10"
 	help
 	  The kernel page allocator limits the size of maximal physically
@@ -1603,7 +1597,7 @@ config ARCH_DEFAULT_CRASH_DUMP
 
 config AUTO_ZRELADDR
 	bool "Auto calculation of the decompressed kernel image address" if !ARCH_MULTIPLATFORM
-	default !(ARCH_FOOTBRIDGE || ARCH_RPC || ARCH_SA1100)
+	default !(ARCH_FOOTBRIDGE || ARCH_RPC)
 	help
 	  ZRELADDR is the physical address where the decompressed kernel
 	  image will be placed. If AUTO_ZRELADDR is selected, the address

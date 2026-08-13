@@ -1048,14 +1048,6 @@ choice
 		  their output to UART 3. The port must have been initialised
 		  by the boot-loader before use.
 
-	config DEBUG_SA1100
-		depends on ARCH_SA1100
-		bool "Use SA1100 UARTs for low-level debug"
-		help
-		  Say Y here if you want kernel low-level debugging support
-		  on SA-11x0 UART ports. The kernel will check for the first
-		  enabled UART in a sequence 3-1-2.
-
 	config DEBUG_SD5203_UART
 		bool "Hisilicon SD5203 Debug UART"
 		depends on ARCH_SD5203
@@ -1479,7 +1471,6 @@ config DEBUG_UART_FLOW_CONTROL
 
 config DEBUG_LL_INCLUDE
 	string
-	default "debug/sa1100.S" if DEBUG_SA1100
 	default "debug/palmchip.S" if DEBUG_UART_8250_PALMCHIP
 	default "debug/8250.S" if DEBUG_LL_UART_8250 || DEBUG_UART_8250
 	default "debug/at91.S" if DEBUG_AT91_UART
@@ -1807,7 +1798,7 @@ config DEBUG_UART_8250_PALMCHIP
 config DEBUG_UNCOMPRESS
 	bool "Enable decompressor debugging via DEBUG_LL output"
 	depends on !ARCH_MULTIPLATFORM
-	depends on !(ARCH_FOOTBRIDGE || ARCH_RPC || ARCH_SA1100)
+	depends on !(ARCH_FOOTBRIDGE || ARCH_RPC)
 	depends on DEBUG_LL && !DEBUG_OMAP2PLUS_UART && \
 		     (!DEBUG_TEGRA_UART || !ZBOOT_ROM) && \
 		     !DEBUG_BRCMSTB_UART && !DEBUG_SEMIHOSTING
@@ -1817,7 +1808,7 @@ config DEBUG_UNCOMPRESS
 
 config UNCOMPRESS_INCLUDE
 	string
-	default "mach/uncompress.h" if ARCH_FOOTBRIDGE || ARCH_RPC || ARCH_SA1100
+	default "mach/uncompress.h" if ARCH_FOOTBRIDGE || ARCH_RPC
 	default "debug/uncompress.h"
 
 config EARLY_PRINTK
