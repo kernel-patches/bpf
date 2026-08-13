@@ -59,7 +59,6 @@ static const char * const vf610_dt_compat[] __initconst = {
 	"fsl,vf510",
 	"fsl,vf600",
 	"fsl,vf610",
-	"fsl,vf610m4",
 	NULL,
 };
 
