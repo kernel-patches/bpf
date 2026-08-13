@@ -10652,20 +10652,19 @@ static inline bool sample_is_allowed(struct perf_event *event, struct pt_regs *r
 #ifdef CONFIG_BPF_SYSCALL
 static int bpf_overflow_handler(struct perf_event *event,
 				struct perf_sample_data *data,
-				struct pt_regs *regs)
+				struct pt_regs *regs,
+				struct bpf_prog *prog)
 {
 	struct bpf_perf_event_data_kern ctx = {
 		.data = data,
 		.event = event,
 	};
-	struct bpf_prog *prog;
 	int ret = 0;
 
 	ctx.regs = perf_arch_bpf_user_pt_regs(regs);
 	if (unlikely(__this_cpu_inc_return(bpf_prog_active) != 1))
 		goto out;
 	rcu_read_lock();
-	prog = READ_ONCE(event->prog);
 	if (prog) {
 		perf_prepare_sample(data, event, regs);
 		ret = bpf_prog_run(prog, &ctx);
@@ -10708,7 +10707,7 @@ static inline int perf_event_set_bpf_handler(struct perf_event *event,
 		return -EPROTO;
 	}
 
-	event->prog = prog;
+	WRITE_ONCE(event->prog, prog);
 	event->bpf_cookie = bpf_cookie;
 	return 0;
 }
@@ -10720,7 +10719,7 @@ static inline void perf_event_free_bpf_handler(struct perf_event *event)
 	if (!prog)
 		return;
 
-	event->prog = NULL;
+	WRITE_ONCE(event->prog, NULL);
 	bpf_prog_put(prog);
 }
 #else
@@ -10753,6 +10752,7 @@ static int __perf_event_overflow(struct perf_event *event,
 {
 	int events = atomic_read(&event->event_limit);
 	int ret = 0;
+	struct bpf_prog *prog;
 
 	/*
 	 * Non-sampling counters might still use the PMI to fold short
@@ -10766,8 +10766,9 @@ static int __perf_event_overflow(struct perf_event *event,
 	if (event->attr.aux_pause)
 		perf_event_aux_pause(event->aux_event, true);
 
-	if (event->prog && event->prog->type == BPF_PROG_TYPE_PERF_EVENT &&
-	    !bpf_overflow_handler(event, data, regs))
+	prog = READ_ONCE(event->prog);
+	if (prog && prog->type == BPF_PROG_TYPE_PERF_EVENT &&
+	    !bpf_overflow_handler(event, data, regs, prog))
 		goto out;
 
 	/*
@@ -13433,12 +13434,15 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
 		overflow_handler = parent_event->overflow_handler;
 		context = parent_event->overflow_handler_context;
 #if defined(CONFIG_BPF_SYSCALL) && defined(CONFIG_EVENT_TRACING)
-		if (parent_event->prog) {
-			struct bpf_prog *prog = parent_event->prog;
+		struct bpf_prog *prog;
 
+		mutex_lock(&bpf_event_mutex);
+		prog = parent_event->prog;
+		if (prog) {
 			bpf_prog_inc(prog);
 			event->prog = prog;
 		}
+		mutex_unlock(&bpf_event_mutex);
 #endif
 	}
 
