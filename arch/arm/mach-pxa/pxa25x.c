@@ -25,7 +25,6 @@
 #include <linux/syscore_ops.h>
 #include <linux/irq.h>
 #include <linux/irqchip.h>
-#include <linux/platform_data/mmp_dma.h>
 #include <linux/soc/pxa/cpu.h>
 #include <linux/soc/pxa/smemc.h>
 
@@ -39,7 +38,6 @@
 #include "smemc.h"
 
 #include "generic.h"
-#include "devices.h"
 
 /*
  * Various clock factors driven by the CCCR register.
@@ -178,53 +176,6 @@ void __init pxa25x_map_io(void)
 	pxa25x_get_clk_frequency_khz(1);
 }
 
-static struct platform_device *pxa25x_devices[] __initdata = {
-	&pxa25x_device_gpio,
-	&pxa25x_device_udc,
-	&pxa_device_pmu,
-	&pxa_device_i2s,
-	&sa1100_device_rtc,
-	&pxa25x_device_ssp,
-	&pxa25x_device_nssp,
-	&pxa25x_device_assp,
-	&pxa25x_device_pwm0,
-	&pxa25x_device_pwm1,
-	&pxa_device_asoc_platform,
-};
-
-static const struct dma_slave_map pxa25x_slave_map[] = {
-	/* PXA25x, PXA27x and PXA3xx common entries */
-	{ "pxa2xx-ac97", "pcm_pcm_mic_mono", PDMA_FILTER_PARAM(LOWEST, 8) },
-	{ "pxa2xx-ac97", "pcm_pcm_aux_mono_in", PDMA_FILTER_PARAM(LOWEST, 9) },
-	{ "pxa2xx-ac97", "pcm_pcm_aux_mono_out",
-	  PDMA_FILTER_PARAM(LOWEST, 10) },
-	{ "pxa2xx-ac97", "pcm_pcm_stereo_in", PDMA_FILTER_PARAM(LOWEST, 11) },
-	{ "pxa2xx-ac97", "pcm_pcm_stereo_out", PDMA_FILTER_PARAM(LOWEST, 12) },
-	{ "pxa-ssp-dai.1", "rx", PDMA_FILTER_PARAM(LOWEST, 13) },
-	{ "pxa-ssp-dai.1", "tx", PDMA_FILTER_PARAM(LOWEST, 14) },
-	{ "pxa-ssp-dai.2", "rx", PDMA_FILTER_PARAM(LOWEST, 15) },
-	{ "pxa-ssp-dai.2", "tx", PDMA_FILTER_PARAM(LOWEST, 16) },
-	{ "pxa2xx-ir", "rx", PDMA_FILTER_PARAM(LOWEST, 17) },
-	{ "pxa2xx-ir", "tx", PDMA_FILTER_PARAM(LOWEST, 18) },
-	{ "pxa2xx-mci.0", "rx", PDMA_FILTER_PARAM(LOWEST, 21) },
-	{ "pxa2xx-mci.0", "tx", PDMA_FILTER_PARAM(LOWEST, 22) },
-
-	/* PXA25x specific map */
-	{ "pxa25x-ssp.0", "rx", PDMA_FILTER_PARAM(LOWEST, 13) },
-	{ "pxa25x-ssp.0", "tx", PDMA_FILTER_PARAM(LOWEST, 14) },
-	{ "pxa25x-nssp.1", "rx", PDMA_FILTER_PARAM(LOWEST, 15) },
-	{ "pxa25x-nssp.1", "tx", PDMA_FILTER_PARAM(LOWEST, 16) },
-	{ "pxa25x-nssp.2", "rx", PDMA_FILTER_PARAM(LOWEST, 23) },
-	{ "pxa25x-nssp.2", "tx", PDMA_FILTER_PARAM(LOWEST, 24) },
-};
-
-static struct mmp_dma_platdata pxa25x_dma_pdata = {
-	.dma_channels	= 16,
-	.nb_requestors	= 40,
-	.slave_map	= pxa25x_slave_map,
-	.slave_map_cnt	= ARRAY_SIZE(pxa25x_slave_map),
-};
-
 static int __init pxa25x_init(void)
 {
 	int ret = 0;
@@ -237,16 +188,6 @@ static int __init pxa25x_init(void)
 
 		register_syscore(&pxa_irq_syscore);
 		register_syscore(&pxa2xx_mfp_syscore);
-
-		if (!of_have_populated_dt()) {
-			software_node_register(&pxa2xx_gpiochip_node);
-			pxa25x_device_gpio.dev.fwnode = software_node_fwnode(
-								&pxa2xx_gpiochip_node);
-
-			pxa2xx_set_dmac_info(&pxa25x_dma_pdata);
-			ret = platform_add_devices(pxa25x_devices,
-						   ARRAY_SIZE(pxa25x_devices));
-		}
 	}
 
 	return ret;

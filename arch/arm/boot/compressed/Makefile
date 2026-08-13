@@ -33,10 +33,6 @@ ifeq ($(CONFIG_CPU_XSCALE),y)
 OBJS		+= head-xscale.o
 endif
 
-ifeq ($(CONFIG_PXA_SHARPSL_DETECT_MACH_ID),y)
-OBJS		+= head-sharpsl.o
-endif
-
 #
 # We now have a PIC decompressor implementation.  Decompressors running
 # from RAM should not define ZTEXTADDR.  Decompressors running directly

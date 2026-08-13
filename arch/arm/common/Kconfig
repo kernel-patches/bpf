@@ -1,9 +1,3 @@
 # SPDX-License-Identifier: GPL-2.0
 config KRAIT_L2_ACCESSORS
 	bool
-
-config SHARP_PARAM
-	bool
-
-config SHARP_SCOOP
-	bool

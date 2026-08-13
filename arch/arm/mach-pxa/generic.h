@@ -38,11 +38,6 @@ extern struct syscore pxa_irq_syscore;
 extern struct syscore pxa2xx_mfp_syscore;
 extern struct syscore pxa3xx_mfp_syscore;
 
-void __init pxa_set_ffuart_info(void *info);
-void __init pxa_set_btuart_info(void *info);
-void __init pxa_set_stuart_info(void *info);
-void __init pxa_set_hwuart_info(void *info);
-
 void pxa_restart(enum reboot_mode, const char *);
 
 #if defined(CONFIG_PXA25x) || defined(CONFIG_PXA27x)
