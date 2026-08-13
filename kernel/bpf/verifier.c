@@ -9071,6 +9071,9 @@ static void invalidate_rcu_protected_refs(struct bpf_verifier_env *env)
 		if (reg->type & MEM_RCU) {
 			reg->type &= ~(MEM_RCU | PTR_MAYBE_NULL);
 			reg->type |= PTR_UNTRUSTED;
+			/* An untrusted PTR_TO_MEM has to be MEM_RDONLY. */
+			if (base_type(reg->type) == PTR_TO_MEM)
+				reg->type |= MEM_RDONLY;
 		}
 	}));
 }
