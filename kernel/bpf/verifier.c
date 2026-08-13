@@ -382,27 +382,60 @@ bool bpf_subprog_is_global(const struct bpf_verifier_env *env, int subprog)
 	return aux && aux[subprog].linkage == BTF_FUNC_GLOBAL;
 }
 
-static bool subprog_returns_void(struct bpf_verifier_env *env, int subprog)
+static const struct btf_type *subprog_ret_type(struct bpf_verifier_env *env, int subprog)
 {
-	const struct btf_type *type, *func, *func_proto;
+	const struct btf_type *func, *func_proto;
 	const struct btf *btf = env->prog->aux->btf;
 	u32 btf_id;
 
+	if (!btf || !env->prog->aux->func_info)
+		return NULL;
+
 	btf_id = env->prog->aux->func_info[subprog].type_id;
 
+	/* Both already validated by prepare_btf_func() at prog load. */
 	func = btf_type_by_id(btf, btf_id);
-	if (verifier_bug_if(!func, env, "btf_id %u not found", btf_id))
-		return false;
-
 	func_proto = btf_type_by_id(btf, func->type);
-	if (!func_proto)
-		return false;
 
-	type = btf_type_skip_modifiers(btf, func_proto->type, NULL);
-	if (!type)
-		return false;
+	return btf_type_skip_modifiers(btf, func_proto->type, NULL);
+}
 
-	return btf_type_is_void(type);
+static bool subprog_returns_void(struct bpf_verifier_env *env, int subprog)
+{
+	const struct btf_type *type = subprog_ret_type(env, subprog);
+
+	return type && btf_type_is_void(type);
+}
+
+static u32 ret_regs_cnt(u32 size)
+{
+	return size > 8 && size <= 16 ? 2 : 1;
+}
+
+static void bpf_compute_subprog_ret_regs(struct bpf_verifier_env *env)
+{
+	const struct btf *btf = env->prog->aux->btf;
+	const struct btf_type *type;
+	int subprog;
+	u32 size;
+
+	for (subprog = 0; subprog < env->subprog_cnt; subprog++) {
+		type = subprog_ret_type(env, subprog);
+		if (!type || !(btf_type_is_struct(type) || btf_type_is_scalar(type)))
+			continue;
+		if (IS_ERR(btf_resolve_size(btf, type, &size)))
+			continue;
+		if (ret_regs_cnt(size) > 1) {
+			subprog_info(env, subprog)->ret_reg_pair = true;
+			/*
+			 * The R0:R2 return convention is only implemented in
+			 * the JIT: the interpreter propagates BPF_R0 alone out
+			 * of a subprogram, so a caller reading R2 would see a
+			 * stale value.
+			 */
+			env->prog->jit_required = 1;
+		}
+	}
 }
 
 static const char *subprog_name(const struct bpf_verifier_env *env, int subprog)
@@ -2454,6 +2487,21 @@ find_kfunc_desc(const struct bpf_prog *prog, u32 func_id, u16 offset)
 	tab = prog->aux->kfunc_tab;
 	return bsearch(&desc, tab->descs, tab->nr_descs,
 		       sizeof(tab->descs[0]), kfunc_desc_cmp_by_id_off);
+}
+
+/*
+ * True if the kfunc called by @insn returns its value in the R0:R2 pair.
+ * Reads the same btf_func_model.ret_size that bpf_add_kfunc_call() validated
+ * and that the JIT keys the second return register off, so the verifier and
+ * the generated code cannot disagree about the convention.
+ */
+bool bpf_kfunc_ret_reg_pair(struct bpf_verifier_env *env, struct bpf_insn *insn)
+{
+	const struct bpf_kfunc_desc *desc;
+
+	desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+
+	return desc && ret_regs_cnt(desc->func_model.ret_size) > 1;
 }
 
 int bpf_get_kfunc_addr(const struct bpf_prog *prog, u32 func_id,
@@ -20332,6 +20380,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	ret = bpf_compute_scc(env);
 	if (ret < 0)
 		goto skip_full_check;
+
+	/* must precede the first bpf_ret_reg_pair() user below */
+	bpf_compute_subprog_ret_regs(env);
 
 	ret = bpf_compute_live_registers(env);
 	if (ret < 0)
