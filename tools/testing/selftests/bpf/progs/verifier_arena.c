@@ -25,6 +25,15 @@ struct {
 	__ulong(map_extra, ARENA_VM_START); /* start of mmap() region */
 } arena SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u64);
+} atomic_map SEC(".maps");
+
+static __u64 arena_atomic_target SEC(".addr_space.1");
+
 SEC("socket")
 __success __retval(0)
 int basic_alloc1_nosleep(void *ctx)
@@ -636,6 +645,41 @@ int non_arena_ptr_add_to_arena_ptr(void *ctx)
 }
 
 #endif
+
+SEC("socket")
+__description("arena and map value atomic at the same instruction")
+__failure __msg("same insn cannot be used with different pointers")
+__arch_x86_64
+__load_if_JITed()
+__naked void mixed_arena_map_value_atomic(void)
+{
+	asm volatile ("					\
+	r1 = 0;					\
+	*(u32 *)(r10 - 4) = r1;			\
+	r2 = r10;					\
+	r2 += -4;					\
+	r1 = %[atomic_map] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto 1f;				\
+	r6 = r0;					\
+	r7 = %[arena_atomic_target] ll;			\
+	.byte 0xbf; .byte 0x77; .short 1; .long 1;	\
+	call %[bpf_get_prandom_u32];			\
+	if w0 != 0 goto 2f;				\
+	r8 = r6;					\
+	goto 3f;					\
+2:	r8 = r7;					\
+3:	r9 = 1;					\
+	lock *(u64 *)(r8 + 0) += r9;			\
+1:	r0 = 0;					\
+	exit;						\
+"	:
+	: __imm_addr(atomic_map),
+	  __imm_addr(arena_atomic_target),
+	  __imm(bpf_map_lookup_elem),
+	  __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
 
 static __noinline
 u32 __arena *check_arena_arg_nonglobal(u32 __arena *arg)
