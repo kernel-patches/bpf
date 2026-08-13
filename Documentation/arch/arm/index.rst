@@ -38,7 +38,6 @@ SoC-specific documents
    marvell
    microchip
 
-   netwinder
    nwfpe/index
 
    keystone/overview

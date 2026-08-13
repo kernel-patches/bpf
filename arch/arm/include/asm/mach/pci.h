@@ -62,25 +62,11 @@ static inline void pci_common_init(struct hw_pci *hw)
 }
 
 /*
- * Setup early fixed I/O mapping.
- */
-#if defined(CONFIG_PCI)
-extern void pci_map_io_early(unsigned long pfn);
-#else
-static inline void pci_map_io_early(unsigned long pfn) {}
-#endif
-
-/*
  * PCI controllers
  */
 extern struct pci_ops iop3xx_ops;
 extern int iop3xx_pci_setup(int nr, struct pci_sys_data *);
 extern void iop3xx_pci_preinit(void);
 extern void iop3xx_pci_preinit_cond(void);
-
-extern struct pci_ops dc21285_ops;
-extern int dc21285_setup(int nr, struct pci_sys_data *);
-extern void dc21285_preinit(void);
-extern void dc21285_postinit(void);
 
 #endif /* __ASM_MACH_PCI_H */
