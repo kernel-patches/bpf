@@ -65,7 +65,7 @@ const struct security_class_mapping secclass_map[] = {
 	  { "ipc_info", "syslog_read", "syslog_mod", "syslog_console",
 	    "module_request", "module_load", "firmware_load",
 	    "kexec_image_load", "kexec_initramfs_load", "policy_load",
-	    "x509_certificate_load", NULL } },
+	    "x509_certificate_load", "bpf_load", NULL } },
 	{ "capability", { COMMON_CAP_PERMS, NULL } },
 	{ "filesystem",
 	  { "mount", "remount", "unmount", "getattr", "relabelfrom",
