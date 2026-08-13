@@ -129,6 +129,7 @@
 #include "verifier_set_retval.skel.h"
 #include "verifier_lsm.skel.h"
 #include "verifier_jit_inline.skel.h"
+#include "verifier_kfunc_return.skel.h"
 #include "irq.skel.h"
 #include "verifier_ctx_ptr_param.skel.h"
 #include "verifier_zext.skel.h"
@@ -293,6 +294,7 @@ void test_verifier_lsm(void)                  { RUN(verifier_lsm); }
 void test_irq(void)			      { RUN(irq); }
 void test_verifier_mtu(void)		      { RUN(verifier_mtu); }
 void test_verifier_jit_inline(void)               { RUN(verifier_jit_inline); }
+void test_verifier_kfunc_return(void)             { RUN(verifier_kfunc_return); }
 void test_verifier_ctx_ptr_param(void)       { RUN(verifier_ctx_ptr_param); }
 void test_verifier_zext(void)                 { RUN_TESTS(verifier_zext); }
 

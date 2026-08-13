@@ -375,16 +375,19 @@ static const char **collect_decl_tags(struct btf *btf, int id, int *cnt)
 enum arch {
 	ARCH_UNKNOWN	= 0x1,
 	ARCH_X86_64	= 0x2,
-	ARCH_ARM64	= 0x4,
-	ARCH_RISCV64	= 0x8,
-	ARCH_S390X	= 0x10,
-	ARCH_LOONGARCH	= 0x20,
+	ARCH_X86_32	= 0x4,
+	ARCH_ARM64	= 0x8,
+	ARCH_RISCV64	= 0x10,
+	ARCH_S390X	= 0x20,
+	ARCH_LOONGARCH	= 0x40,
 };
 
 static int get_current_arch(void)
 {
 #if defined(__x86_64__)
 	return ARCH_X86_64;
+#elif defined(__i386__)
+	return ARCH_X86_32;
 #elif defined(__aarch64__)
 	return ARCH_ARM64;
 #elif defined(__riscv) && __riscv_xlen == 64
@@ -580,6 +583,8 @@ static int parse_test_spec(struct test_loader *tester,
 		} else if ((val = str_has_pfx(s, "test_arch="))) {
 			if (strcmp(val, "X86_64") == 0) {
 				arch = ARCH_X86_64;
+			} else if (strcmp(val, "X86_32") == 0) {
+				arch = ARCH_X86_32;
 			} else if (strcmp(val, "ARM64") == 0) {
 				arch = ARCH_ARM64;
 			} else if (strcmp(val, "RISCV64") == 0) {

@@ -161,6 +161,7 @@
 #define __btf_func_path(path)	__test_tag("test_btf_func_path=" path)
 #define __arch(arch)		__test_tag("test_arch=" arch)
 #define __arch_x86_64		__arch("X86_64")
+#define __arch_x86_32		__arch("X86_32")
 #define __arch_arm64		__arch("ARM64")
 #define __arch_riscv64		__arch("RISCV64")
 #define __arch_s390x		__arch("s390x")
