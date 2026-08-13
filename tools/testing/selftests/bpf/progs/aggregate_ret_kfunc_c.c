@@ -50,6 +50,66 @@ int aggregate_ret_kfunc_struct_c_test(struct __sk_buff *skb)
 	return 0;
 }
 
+/* struct { u64 a; int b; }: 16 bytes, R0 = a, R2 = b. */
+SEC("tc")
+__arch_x86_64 __arch_arm64
+__load_if_JITed()
+__success __retval(0)
+int aggregate_ret_kfunc_li_c_test(struct __sk_buff *skb)
+{
+	__u64 a = skb->len ^ MIX_A;
+	int b = skb->len ^ MIX_B;
+	struct prog_test_ret_li r;
+
+	r = bpf_kfunc_call_test_ret_li(a, b);
+	if (r.a != a)
+		return 1;
+	if (r.b != ~b)
+		return 2;
+
+	return 0;
+}
+
+/* struct { int a; int b; }: 8 bytes, packed into R0; R2 is not a return reg. */
+SEC("tc")
+__arch_x86_64 __arch_arm64
+__load_if_JITed()
+__success __retval(0)
+int aggregate_ret_kfunc_ii_c_test(struct __sk_buff *skb)
+{
+	int a = skb->len ^ MIX_A;
+	int b = skb->len ^ MIX_B;
+	struct prog_test_ret_ii r;
+
+	r = bpf_kfunc_call_test_ret_ii(a, b);
+	if (r.a != a)
+		return 1;
+	if (r.b != b)
+		return 2;
+
+	return 0;
+}
+
+/* A union of 16 bytes takes the same R0:R2 path as a struct. */
+SEC("tc")
+__arch_x86_64 __arch_arm64
+__load_if_JITed()
+__success __retval(0)
+int aggregate_ret_kfunc_uu_c_test(struct __sk_buff *skb)
+{
+	__u64 a = skb->len ^ MIX_A;
+	__u64 b = skb->len ^ MIX_B;
+	union prog_test_ret_uu r;
+
+	r = bpf_kfunc_call_test_ret_uu(a, b);
+	if (r.parts.lo != a + b)
+		return 1;
+	if (r.parts.hi != a - b)
+		return 2;
+
+	return 0;
+}
+
 #else
 
 SEC("socket")
