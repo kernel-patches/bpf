@@ -217,6 +217,49 @@ static struct sockopt_test {
 		.get_optlen = 1,
 	},
 	{
+		.descr = "getsockopt: read ctx->is_compat",
+		.insns = {
+			/* r6 = ctx->is_compat */
+			BPF_LDX_MEM(BPF_W, BPF_REG_6, BPF_REG_1,
+				    offsetof(struct bpf_sockopt, is_compat)),
+
+			/* if (ctx->is_compat == 0) { */
+			BPF_JMP_IMM(BPF_JNE, BPF_REG_6, 0, 4),
+			/* ctx->retval = 0 */
+			BPF_MOV64_IMM(BPF_REG_0, 0),
+			BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_0,
+				    offsetof(struct bpf_sockopt, retval)),
+			/* return 1 */
+			BPF_MOV64_IMM(BPF_REG_0, 1),
+			BPF_JMP_A(1),
+			/* } else { */
+			/* return 0 */
+			BPF_MOV64_IMM(BPF_REG_0, 0),
+			/* } */
+			BPF_EXIT_INSN(),
+		},
+		.attach_type = BPF_CGROUP_GETSOCKOPT,
+		.expected_attach_type = BPF_CGROUP_GETSOCKOPT,
+
+		.get_level = SOL_IP,
+		.get_optname = IP_TOS,
+		.get_optlen = 1,
+	},
+	{
+		.descr = "getsockopt: deny writing to ctx->is_compat",
+		.insns = {
+			/* ctx->is_compat = 1 */
+			BPF_MOV64_IMM(BPF_REG_0, 1),
+			BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_0,
+				    offsetof(struct bpf_sockopt, is_compat)),
+			BPF_EXIT_INSN(),
+		},
+		.attach_type = BPF_CGROUP_GETSOCKOPT,
+		.expected_attach_type = BPF_CGROUP_GETSOCKOPT,
+
+		.error = DENY_LOAD,
+	},
+	{
 		.descr = "getsockopt: deny writing to ctx->optname",
 		.insns = {
 			/* ctx->optname = 1 */
@@ -630,6 +673,49 @@ static struct sockopt_test {
 		.set_optlen = 1,
 		.get_optval = { 1 << 3 },
 		.get_optlen = 1,
+	},
+	{
+		.descr = "setsockopt: read ctx->is_compat",
+		.insns = {
+			/* r6 = ctx->is_compat */
+			BPF_LDX_MEM(BPF_W, BPF_REG_6, BPF_REG_1,
+				    offsetof(struct bpf_sockopt, is_compat)),
+
+			/* if (ctx->is_compat == 0) { */
+			BPF_JMP_IMM(BPF_JNE, BPF_REG_6, 0, 4),
+			/* ctx->optlen = -1 */
+			BPF_MOV64_IMM(BPF_REG_0, -1),
+			BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_0,
+				    offsetof(struct bpf_sockopt, optlen)),
+			/* return 1 */
+			BPF_MOV64_IMM(BPF_REG_0, 1),
+			BPF_JMP_A(1),
+			/* } else { */
+			/* return 0 */
+			BPF_MOV64_IMM(BPF_REG_0, 0),
+			/* } */
+			BPF_EXIT_INSN(),
+		},
+		.attach_type = BPF_CGROUP_SETSOCKOPT,
+		.expected_attach_type = BPF_CGROUP_SETSOCKOPT,
+
+		.set_optname = 123,
+		.set_optlen = 1,
+		.io_uring_support = true,
+	},
+	{
+		.descr = "setsockopt: deny writing to ctx->is_compat",
+		.insns = {
+			/* ctx->is_compat = 1 */
+			BPF_MOV64_IMM(BPF_REG_0, 1),
+			BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_0,
+				    offsetof(struct bpf_sockopt, is_compat)),
+			BPF_EXIT_INSN(),
+		},
+		.attach_type = BPF_CGROUP_SETSOCKOPT,
+		.expected_attach_type = BPF_CGROUP_SETSOCKOPT,
+
+		.error = DENY_LOAD,
 	},
 	{
 		.descr = "setsockopt: read ctx->optlen",
