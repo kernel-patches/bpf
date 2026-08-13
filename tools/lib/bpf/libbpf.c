@@ -548,6 +548,7 @@ struct bpf_struct_ops {
 #define STRUCT_OPS_SEC ".struct_ops"
 #define STRUCT_OPS_LINK_SEC ".struct_ops.link"
 #define ARENA_SEC ".addr_space.1"
+#define KMODS_BTFS_SEC ".kmod_btfs"
 
 enum libbpf_map_type {
 	LIBBPF_MAP_UNSPEC,
@@ -703,6 +704,9 @@ enum bpf_object_state {
 	OBJ_LOADED,
 };
 
+/* Should match the definition in bpf_helpers.h */
+#define KMOD_NAME_LEN 64
+
 struct bpf_object {
 	char name[BPF_OBJ_NAME_LEN];
 	char license[64];
@@ -778,6 +782,14 @@ struct bpf_object {
 	struct kern_feature_cache *feat_cache;
 	char *token_path;
 	int token_fd;
+
+	/* kernel module BTFs to load, declared in ".kmod_btfs" ELF section */
+	struct {
+		char (*data)[KMOD_NAME_LEN];
+		size_t nr_names;
+		size_t nr_loaded;
+		struct hashmap *hashmap;
+	} *kmod_btfs;
 
 	char path[];
 };
@@ -899,6 +911,75 @@ errout:
 	pr_warn("sec '%s': failed to allocate memory for prog '%s'\n", sec_name, name);
 	bpf_program__exit(prog);
 	return -ENOMEM;
+}
+
+static size_t mod_name_hash_fn(long key, void *ctx)
+{
+	return str_hash((char *)key);
+}
+
+static bool mod_name_equal_fn(long key1, long key2, void *ctx)
+{
+	return strcmp((char *)key1, (char *)key2) == 0;
+}
+
+static int
+bpf_object__collect_kmod_btf_names(struct bpf_object *obj, Elf_Data *sec_data,
+				   const char *sec_name)
+{
+	int module_cnt, i, err = 0;
+
+	if (obj->kmod_btfs) {
+		pr_warn("sec '%s': duplicate sections detected\n", sec_name);
+		return -EEXIST;
+	}
+
+	if (sec_data->d_size % KMOD_NAME_LEN != 0) {
+		pr_warn("sec '%s': size %zu should be multiple of %d\n",
+			sec_name, sec_data->d_size, KMOD_NAME_LEN);
+		return -EINVAL;
+	}
+
+	module_cnt = sec_data->d_size / KMOD_NAME_LEN;
+	obj->kmod_btfs = calloc(1, sizeof(*obj->kmod_btfs));
+	if (!obj->kmod_btfs)
+		return -ENOMEM;
+
+	obj->kmod_btfs->data = calloc(module_cnt, KMOD_NAME_LEN);
+	if (!obj->kmod_btfs->data) {
+		err = -ENOMEM;
+		goto err_out;
+	}
+	memcpy(obj->kmod_btfs->data, sec_data->d_buf, sec_data->d_size);
+
+	obj->kmod_btfs->hashmap = hashmap__new(mod_name_hash_fn,
+					       mod_name_equal_fn, NULL);
+	if (IS_ERR(obj->kmod_btfs->hashmap)) {
+		err = PTR_ERR(obj->kmod_btfs->hashmap);
+		goto err_out;
+	}
+
+	for (i = 0; i < module_cnt; i++) {
+		obj->kmod_btfs->data[i][KMOD_NAME_LEN - 1] = '\0';
+		if (hashmap__find(obj->kmod_btfs->hashmap,
+				  obj->kmod_btfs->data[i], NULL)) {
+			pr_warn("sec '%s': ignored duplicate module '%s'\n",
+				sec_name, obj->kmod_btfs->data[i]);
+			continue;
+		}
+		err = hashmap__set(obj->kmod_btfs->hashmap, obj->kmod_btfs->data[i],
+				   0, NULL, NULL);
+		if (err)
+			goto err_out;
+		obj->kmod_btfs->nr_names++;
+	}
+	return 0;
+
+err_out:
+	hashmap__free(obj->kmod_btfs->hashmap);
+	zfree(&obj->kmod_btfs->data);
+	zfree(&obj->kmod_btfs);
+	return err;
 }
 
 static int
@@ -4034,6 +4115,10 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 				memcpy(obj->jumptables_data, data->d_buf, data->d_size);
 				obj->jumptables_data_sz = data->d_size;
 				obj->efile.jumptables_data_shndx = idx;
+			} else if (strcmp(name, KMODS_BTFS_SEC) == 0) {
+				err = bpf_object__collect_kmod_btf_names(obj, data, name);
+				if (err)
+					return err;
 			} else {
 				pr_info("elf: skipping unrecognized data section(%d) %s\n",
 					idx, name);
@@ -5803,6 +5888,11 @@ int bpf_core_add_cands(struct bpf_core_cand *local_cand,
 	return 0;
 }
 
+static bool is_kmod_btf_needed(struct bpf_object *obj, const char *name)
+{
+	return hashmap_find(obj->kmod_btfs->hashmap, (long)name, NULL);
+}
+
 static int load_module_btfs(struct bpf_object *obj)
 {
 	struct bpf_btf_info info;
@@ -5867,6 +5957,12 @@ static int load_module_btfs(struct bpf_object *obj)
 			continue;
 		}
 
+		if (obj->kmod_btfs && obj->kmod_btfs->hashmap &&
+		    !is_kmod_btf_needed(obj, name)) {
+			close(fd);
+			continue;
+		}
+
 		btf = btf_get_from_fd(fd, obj->btf_vmlinux);
 		err = libbpf_get_error(btf);
 		if (err) {
@@ -5891,6 +5987,10 @@ static int load_module_btfs(struct bpf_object *obj)
 			break;
 		}
 		obj->btf_module_cnt++;
+
+		if (obj->kmod_btfs &&
+		    obj->kmod_btfs->nr_names == obj->kmod_btfs->nr_loaded)
+			break;
 	}
 
 	if (err) {
@@ -9030,6 +9130,12 @@ static void bpf_object_cleanup_btf(struct bpf_object *obj)
 	/* clean up vmlinux BTF */
 	btf__free(obj->btf_vmlinux);
 	obj->btf_vmlinux = NULL;
+
+	if (obj->kmod_btfs) {
+		hashmap__free(obj->kmod_btfs->hashmap);
+		zfree(&obj->kmod_btfs->data);
+		zfree(&obj->kmod_btfs);
+	}
 }
 
 static void bpf_object_post_load_cleanup(struct bpf_object *obj)
