@@ -441,6 +441,23 @@ static void bpf_compute_subprog_ret_regs(struct bpf_verifier_env *env)
 	}
 }
 
+/*
+ * A >8 byte BPF return changes the calling convention to R0:R2, and the
+ * verifier derives that convention from the subprogram's BTF prototype
+ * alone. Once that prototype is marked unreliable it is known not to
+ * describe the compiled code, so the convention read from it cannot be
+ * trusted either: reject the call rather than keep tracking R2 on the
+ * strength of a signature the verifier has already discarded.
+ */
+static bool subprog_ret_pair_unreliable(struct bpf_verifier_env *env, int subprog)
+{
+	struct bpf_prog_aux *aux = env->prog->aux;
+
+	return bpf_ret_reg_pair(env, subprog) &&
+	       aux->func_info_aux &&
+	       aux->func_info_aux[subprog].unreliable;
+}
+
 static const char *subprog_name(const struct bpf_verifier_env *env, int subprog)
 {
 	struct bpf_func_info *info;
@@ -9525,6 +9542,12 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 		/* continue with next insn after call */
 		return 0;
+	}
+
+	if (subprog_ret_pair_unreliable(env, subprog)) {
+		verbose(env, "Func#%d ('%s') returns >8 bytes, which requires reliable BTF\n",
+			subprog, subprog_name(env, subprog));
+		return -EINVAL;
 	}
 
 	/*
