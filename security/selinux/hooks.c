@@ -7181,7 +7181,7 @@ static int selinux_ib_alloc_security(void *ib_sec)
 static int selinux_bpf(int cmd, union bpf_attr *attr,
 		       unsigned int size, bool kernel)
 {
-	u32 sid = current_sid();
+	u32 sid = kernel ? SECINITSID_KERNEL : current_sid();
 	int ret;
 
 	if (selinux_policycap_bpf_token_perms())
@@ -7296,7 +7296,7 @@ static int selinux_bpf_map_create(struct bpf_map *map, union bpf_attr *attr,
 	bpfsec->sid = current_sid();
 
 	if (!token)
-		ssid = bpfsec->sid;
+		ssid = kernel ? SECINITSID_KERNEL : bpfsec->sid;
 	else
 		ssid = selinux_bpffs_creator_sid(attr->map_token_fd);
 
@@ -7314,7 +7314,7 @@ static int selinux_bpf_prog_load(struct bpf_prog *prog, union bpf_attr *attr,
 	bpfsec->sid = current_sid();
 
 	if (!token)
-		ssid = bpfsec->sid;
+		ssid = kernel ? SECINITSID_KERNEL : bpfsec->sid;
 	else
 		ssid = selinux_bpffs_creator_sid(attr->prog_token_fd);
 
