@@ -583,7 +583,7 @@ choice
 
 	config DEBUG_MVEBU_UART0_ALTERNATE
 		bool "Kernel low-level debugging messages via MVEBU UART0 (new bootloaders)"
-		depends on ARCH_MVEBU || ARCH_DOVE || ARCH_MV78XX0 || ARCH_ORION5X
+		depends on ARCH_MVEBU || ARCH_ORION5X
 		select DEBUG_UART_8250
 		help
 		  Say Y here if you want kernel low-level debugging support

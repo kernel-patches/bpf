@@ -17,8 +17,6 @@
 #include <asm/system_misc.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
-#include <plat/irq.h>
-#include <plat/time.h>
 #include "orion5x.h"
 #include "bridge-regs.h"
 #include "common.h"
@@ -39,7 +37,7 @@ static void __init orion5x_dt_init(void)
 	u32 dev, rev;
 
 	orion5x_id(&dev, &rev, &dev_name);
-	printk(KERN_INFO "Orion ID: %s. TCLK=%d.\n", dev_name, orion5x_tclk);
+	printk(KERN_INFO "Orion ID: %s.\n", dev_name);
 
 	BUG_ON(mvebu_mbus_dt_init(false));
 
