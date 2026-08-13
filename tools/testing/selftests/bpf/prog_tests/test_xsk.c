@@ -602,26 +602,41 @@ static int pkt_stream_receive_half(struct test_spec *test)
 
 static int pkt_stream_even_odd_sequence(struct test_spec *test)
 {
+	struct pkt_stream *tx_streams[MAX_SOCKETS] = {};
+	struct pkt_stream *rx_streams[MAX_SOCKETS] = {};
 	struct pkt_stream *pkt_stream;
 	u32 i;
 
 	for (i = 0; i < test->nb_sockets; i++) {
 		pkt_stream = test->ifobj_tx->xsk_arr[i].pkt_stream;
-		pkt_stream = __pkt_stream_generate(pkt_stream->nb_pkts / 2,
-						   pkt_stream->pkts[0].len, i, 2);
-		if (!pkt_stream)
-			return -ENOMEM;
-		test->ifobj_tx->xsk_arr[i].pkt_stream = pkt_stream;
+		tx_streams[i] = __pkt_stream_generate(pkt_stream->nb_pkts / 2,
+						      pkt_stream->pkts[0].len, i, 2);
+		if (!tx_streams[i])
+			goto err;
 
 		pkt_stream = test->ifobj_rx->xsk_arr[i].pkt_stream;
-		pkt_stream = __pkt_stream_generate(pkt_stream->nb_pkts / 2,
-						   pkt_stream->pkts[0].len, i, 2);
-		if (!pkt_stream)
-			return -ENOMEM;
-		test->ifobj_rx->xsk_arr[i].pkt_stream = pkt_stream;
+		rx_streams[i] = __pkt_stream_generate(pkt_stream->nb_pkts / 2,
+						      pkt_stream->pkts[0].len, i, 2);
+		if (!rx_streams[i])
+			goto err;
+	}
+
+	for (i = 0; i < test->nb_sockets; i++) {
+		test->ifobj_tx->xsk_arr[i].pkt_stream = tx_streams[i];
+		test->ifobj_rx->xsk_arr[i].pkt_stream = rx_streams[i];
 	}
 
 	return 0;
+
+err:
+	for (i = 0; i < test->nb_sockets; i++) {
+		if (tx_streams[i])
+			pkt_stream_delete(tx_streams[i]);
+		if (rx_streams[i])
+			pkt_stream_delete(rx_streams[i]);
+	}
+
+	return -ENOMEM;
 }
 
 static int pkt_stream_len_seq(struct test_spec *test, u32 short_len, u32 long_len)
