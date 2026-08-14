@@ -54,6 +54,89 @@ ssize_t write_text(const char *path, char *buf, ssize_t len)
 	return len < 0 ? -errno : len;
 }
 
+/**
+ * cg_get_id - return the kernfs id of a cgroup directory
+ * @cgroup: absolute path to the cgroup directory
+ *
+ * This is what the kernel gives BPF as cgrp->kn->id, taken from the cgroupfs
+ * file handle.  It is not the directory's st_ino.
+ *
+ * Return: The cgroup id, or 0 on failure.
+ */
+unsigned long long cg_get_id(const char *cgroup)
+{
+	union {
+		unsigned long long id;
+		unsigned char raw[8];
+	} handle;
+	struct file_handle *fhp, *fhp2;
+	int mount_id, fhsize, err;
+	unsigned long long ret = 0;
+
+	fhsize = sizeof(*fhp);
+	fhp = calloc(1, fhsize);
+	if (!fhp)
+		return 0;
+
+	/* The probe fails and reports the size; a cgroupfs handle is 8 bytes. */
+	err = name_to_handle_at(AT_FDCWD, cgroup, fhp, &mount_id, 0);
+	if (err >= 0 || fhp->handle_bytes != 8)
+		goto out;
+
+	fhsize = sizeof(*fhp) + fhp->handle_bytes;
+	fhp2 = realloc(fhp, fhsize);
+	if (!fhp2)
+		goto out;
+	fhp = fhp2;
+
+	if (name_to_handle_at(AT_FDCWD, cgroup, fhp, &mount_id, 0) < 0)
+		goto out;
+
+	memcpy(handle.raw, fhp->f_handle, 8);
+	ret = handle.id;
+out:
+	free(fhp);
+	return ret;
+}
+
+/**
+ * cg_touch_pages - write to every page of a region so it becomes resident
+ * @buf: start of the region
+ * @size: length of the region in bytes
+ *
+ * The pages are charged to the calling task's cgroup, on the cpu it runs on.
+ */
+void cg_touch_pages(char *buf, size_t size)
+{
+	long page_size = sysconf(_SC_PAGESIZE);
+	char *ptr;
+
+	if (page_size <= 0)
+		page_size = BUF_SIZE;
+
+	for (ptr = buf; ptr < buf + size; ptr += page_size)
+		*ptr = 0;
+}
+
+/**
+ * cg_alloc_anon - allocate anonymous memory and fault it in
+ * @size: bytes to allocate
+ *
+ * Return: The region, to be released with free(), or NULL.
+ */
+char *cg_alloc_anon(size_t size)
+{
+	char *buf = malloc(size);
+
+	if (!buf) {
+		fprintf(stderr, "malloc() failed\n");
+		return NULL;
+	}
+
+	cg_touch_pages(buf, size);
+	return buf;
+}
+
 char *cg_name(const char *root, const char *name)
 {
 	size_t len = strlen(root) + strlen(name) + 2;

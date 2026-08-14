@@ -26,7 +26,6 @@
 
 static bool has_localevents;
 static bool has_recursiveprot;
-static int page_size;
 
 int get_temp_fd(void)
 {
@@ -56,28 +55,12 @@ cleanup:
 	return -1;
 }
 
-static char *alloc_and_populate_anon(size_t size)
-{
-	char *buf, *ptr;
-
-	buf = malloc(size);
-	if (buf == NULL) {
-		fprintf(stderr, "malloc() failed\n");
-		return NULL;
-	}
-
-	for (ptr = buf; ptr < buf + size; ptr += page_size)
-		*ptr = 0;
-
-	return buf;
-}
-
 int alloc_anon(const char *cgroup, void *arg)
 {
 	size_t size = (unsigned long)arg;
 	char *buf;
 
-	buf = alloc_and_populate_anon(size);
+	buf = cg_alloc_anon(size);
 	if (!buf)
 		return -1;
 
@@ -195,7 +178,7 @@ static int alloc_anon_50M_check(const char *cgroup, void *arg)
 	long anon, current;
 	int ret = -1;
 
-	buf = alloc_and_populate_anon(size);
+	buf = cg_alloc_anon(size);
 	if (!buf)
 		return -1;
 
@@ -420,7 +403,7 @@ static int alloc_anon_noexit(const char *cgroup, void *arg)
 	size_t size = (unsigned long)arg;
 	char *buf;
 
-	buf = alloc_and_populate_anon(size);
+	buf = cg_alloc_anon(size);
 	if (!buf)
 		return -1;
 
@@ -1001,7 +984,7 @@ static int alloc_anon_50M_check_swap(const char *cgroup, void *arg)
 	long mem_current, swap_current;
 	int ret = -1;
 
-	buf = alloc_and_populate_anon(size);
+	buf = cg_alloc_anon(size);
 	if (!buf)
 		return -1;
 
@@ -1792,10 +1775,6 @@ int main(int argc, char **argv)
 {
 	char root[PATH_MAX];
 	int i, proc_status;
-
-	page_size = sysconf(_SC_PAGE_SIZE);
-	if (page_size <= 0)
-		page_size = BUF_SIZE;
 
 	ksft_print_header();
 	ksft_set_plan(ARRAY_SIZE(tests));
