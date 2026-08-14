@@ -12113,7 +12113,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			ref_tname = btf_name_by_offset(btf, ref_t->name_off);
 		}
 
-
 		if (bpf_register_is_null(reg) && type_may_be_null(kf_arg_type))
 			continue;
 
