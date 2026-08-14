@@ -303,7 +303,7 @@ static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
 		return -errno;
 
 	bpf_object__for_each_map(map, obj) {
-		/* only generate definitions for memory-mapped internal maps */
+		/* only generate definitions for skel data maps */
 		if (!is_skel_data(map, map_ident, sizeof(map_ident)))
 			continue;
 
@@ -510,7 +510,7 @@ static size_t bpf_map_mmap_sz(const struct bpf_map *map)
 	return map_sz;
 }
 
-/* Emit type size asserts for all top-level fields in memory-mapped internal maps. */
+/* Emit type size asserts for all top-level fields in skel data maps. */
 static void codegen_asserts(struct bpf_object *obj, const char *obj_name)
 {
 	struct btf *btf = bpf_object__btf(obj);

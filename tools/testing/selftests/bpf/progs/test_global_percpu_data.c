@@ -8,9 +8,11 @@ int loong SEC(".percpu.looooooooong");
 int data3 SEC(".data.percpu");
 int data2 SEC(".percpu.data");
 
+/* Used for testing bpf_map__set_value_size(). */
+int arr[1] SEC(".percpu.arr");
+
 int run;
-/* cpu_id as array to verify map value resizing. */
-int cpu_id[1] SEC(".percpu");
+int cpu_id SEC(".percpu");
 int data SEC(".percpu") = -1;
 int nums[7] SEC(".percpu");
 bool set SEC(".percpu") = false;
@@ -34,7 +36,7 @@ int update_percpu_data(void *ctx)
 	data = 1;
 	run++;
 	set = true;
-	cpu_id[0] = bpf_get_smp_processor_id();
+	cpu_id = bpf_get_smp_processor_id();
 	return 0;
 }
 
@@ -62,9 +64,9 @@ int verifier_snprintf(void *ctx)
 }
 
 volatile const __u32 num_cpus = 0;
-volatile const int offsetof_num;
+volatile const int num_off;
 volatile const int elem_sz;
-__u32 percpu_data_sum = 0;
+__u32 sum = 0;
 bool run_iter = false;
 
 SEC("iter/bpf_map_elem")
@@ -80,7 +82,7 @@ int dump_percpu_data(struct bpf_iter__bpf_map_elem *ctx)
 	run_iter = true;
 
 	for (i = 0; i < num_cpus; i++) {
-		percpu_data_sum += *(int *) (pptr + offsetof_num);
+		sum += *(int *) (pptr + num_off);
 		pptr += elem_sz;
 	}
 	return 0;
