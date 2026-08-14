@@ -711,4 +711,119 @@ l_exit_%=:							\
 	: __clobber_all);
 }
 
+/*
+ * A 32-bit zero-extending mov (w7 = w6) from a source with unknown high bits
+ * shares only the low 32 bits (w7.lo == w6.lo, w7.hi == 0). A later narrowing of
+ * the source's low 32 bits must propagate to the destination via the
+ * BPF_FLAG_SUBREG_ZEXT (low-32-only) link. This is the pattern bpf-gcc emits when it
+ * reuses "w0 = idx" for "return 0" on the idx==0 path of a callback.
+ */
+SEC("socket")
+__success
+__naked void subreg_eq_zext_mov_narrow(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;		/* r6 = 64-bit unknown (helper ret is unbounded) */ \
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;		/* r0 = unknown high bits */	\
+	r6 |= r0;		/* still 64-bit unknown; makes it explicit */ \
+	w7 = w6;		/* 32-bit zero-extend mov, wide src */	\
+	if w6 != 0 goto l_out_%=;	/* w6 low == 0 on fall-through */ \
+	/* w7 = zext32(w6 low) must be 0 here */		\
+	if w7 == 0 goto l_out_%=;	/* provably 0 iff linked */	\
+	r0 /= 0;		/* reached only if w7 not deduced 0 */	\
+l_out_%=:							\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A 32-bit zero-extending mov (w7 = w5) whose SOURCE is a wide ADD_CONST-linked
+ * register (r5 = base + K) must NOT disturb that source. Forming the low-32
+ * BPF_FLAG_SUBREG_ZEXT link on the destination would need assign_scalar_id_before_mov()
+ * on the source, which clears its base+delta link -- and a combined
+ * subreg+delta link isn't modeled anyway (sync_linked_regs() skips it). So for a
+ * wide ADD_CONST src the mov leaves the source's link intact and just clears the
+ * destination.
+ *
+ * Here r5 = r6 + 3 (ADD_CONST, wide). After the mov, narrowing the base r6 must
+ * still reach r5 through the preserved link: r6 in [0, 10] => r5 in [3, 13], so
+ * the guarded div-by-zero is unreachable. Had the mov cleared r5's link (calling
+ * assign_scalar_id_before_mov() unconditionally), r5 would stay unbounded and the
+ * div would be reachable (rejected).
+ *
+ * Note this is a no-regression guard rather than coverage of the new link:
+ * before this feature the wide-source path also left the source untouched, so
+ * the test passes either way. What it pins is the choice not to call
+ * assign_scalar_id_before_mov() unconditionally.
+ *
+ * Written in asm so the bytecode is identical regardless of the host BPF compiler.
+ */
+SEC("socket")
+__success
+__naked void zext_mov_keeps_add_const_src(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;		/* r6 low = unknown u32 */	\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;		/* r6 = full 64-bit unknown (base) */ \
+	r5 = r6;		/* r5, r6 linked (shared id) */	\
+	r5 += 3;		/* r5 = base + 3: ADD_CONST, still wide */ \
+	w7 = w5;		/* 32-bit zext mov, wide ADD_CONST src */ \
+	if r6 > 10 goto l_out_%=;/* r6 in [0, 10] */		\
+	/* r5 = r6 + 3 must be in [3, 13] here (needs the kept link) */ \
+	if r5 > 13 goto l_err_%=;/* taken only if r5 not narrowed */ \
+	goto l_out_%=;						\
+l_err_%=:							\
+	r0 /= 0;		/* reachable iff r5's link was cleared */ \
+l_out_%=:							\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Dest-driven direction, zero-extend flavour: narrowing the LINKED register
+ * must not narrow the wide base.
+ *
+ * w7 = w6 shares only r6's low 32 bits; r7's high half is zero, r6's is
+ * unknown. Learning r7 == 0 therefore says nothing about r6, and
+ * sync_linked_regs() must not copy r7's state onto it. Rejected iff the base
+ * is left alone.
+ *
+ * This is the shape that catches a lost BPF_FLAG_SUBREG_ZEXT: if the flag is
+ * dropped while the shared ->id survives, the pair looks like a full 64-bit
+ * equality, the dest-driven guard is bypassed and r6 wrongly becomes 0.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void zext_dest_driven_does_not_narrow_base(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;		/* r6 low = unknown u32 */	\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;		/* r6 = full 64-bit unknown (base) */ \
+	w7 = w6;		/* low-32 ZEXT link */		\
+	if r7 != 0 goto l_out_%=;/* r7 == 0: low 32 bits are 0 */ \
+	if r6 != 0 goto l_out_%=;/* r6 may still have high bits set */ \
+	r0 /= 0;		/* must stay reachable */	\
+l_out_%=:							\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
