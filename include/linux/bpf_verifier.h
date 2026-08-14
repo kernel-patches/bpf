@@ -136,16 +136,13 @@ struct bpf_reg_state {
 	 * to a specific instance of bpf_iter.
 	 */
 	/*
-	 * Upper bit of ID is used to remember relationship between "linked"
-	 * registers. Example:
+	 * ->id identifies a set of "linked" registers; how a given member
+	 * relates to the others is recorded in ->flags. Example:
 	 * r1 = r2;    both will have r1->id == r2->id == N
-	 * r1 += 10;   r1->id == N | BPF_ADD_CONST and r1->delta == 10
+	 * r1 += 10;   r1 gets BPF_FLAG_ADD_CONST64 and r1->delta == 10
 	 * r3 = r2;    both will have r3->id == r2->id == N
-	 * w3 += 10;   r3->id == N | BPF_ADD_CONST32 and r3->delta == 10
+	 * w3 += 10;   r3 gets BPF_FLAG_ADD_CONST32 and r3->delta == 10
 	 */
-#define BPF_ADD_CONST64 (1U << 31)
-#define BPF_ADD_CONST32 (1U << 30)
-#define BPF_ADD_CONST (BPF_ADD_CONST64 | BPF_ADD_CONST32)
 	u32 id;
 	/*
 	 * Tracks the parent object this register was derived from.
@@ -166,11 +163,16 @@ struct bpf_reg_state {
 	 * Register state flags.
 	 * BPF_FLAG_PRECISE: if unset, and this is a SCALAR_VALUE, then
 	 * min/max/tnum don't affect safety.
-	 *
 	 * PRECISE is a property of this register alone, so it is placed at bit 7,
 	 * apart from the link flags, which grow up from bit 0 and are cleared as
 	 * a group -- a clear-the-link-bits mask can then never reach it.
+	 *
+	 * BPF_FLAG_ADD_CONST{32,64}: this register is (base + ->delta) within
+	 * its ->id set, computed with a 32- or 64-bit ALU add.
 	 */
+#define BPF_FLAG_ADD_CONST32	(1U << 0)
+#define BPF_FLAG_ADD_CONST64	(1U << 1)
+#define BPF_FLAG_ADD_CONST	(BPF_FLAG_ADD_CONST32 | BPF_FLAG_ADD_CONST64)
 #define BPF_FLAG_PRECISE	(1U << 7)
 	u8 flags;
 };

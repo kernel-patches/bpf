@@ -349,8 +349,9 @@ l0_%=:							\
 }
 
 /*
- * Test that sync_linked_regs() checks reg->id (the linked target register)
- * for BPF_ADD_CONST32 rather than known_reg->id (the branch register).
+ * Test that sync_linked_regs() consults reg->flags (the linked target
+ * register) for BPF_FLAG_ADD_CONST32, not just known_reg->flags (the branch
+ * register): the gate is (reg->flags | known_reg->flags).
  */
 SEC("socket")
 __success
@@ -360,7 +361,7 @@ __naked void scalars_alu32_zext_linked_reg(void)
 	call %[bpf_get_prandom_u32];				\
 	w6 = w0;		/* r6 in [0, 0xFFFFFFFF] */	\
 	r7 = r6;		/* linked: same id as r6 */	\
-	w7 += 1;		/* alu32: r7.id |= BPF_ADD_CONST32 */ \
+	w7 += 1;		/* alu32: r7.flags |= BPF_FLAG_ADD_CONST32 */ \
 	r8 = 0xFFFFffff ll;					\
 	if r6 < r8 goto l0_%=;					\
 	/* r6 in [0xFFFFFFFF, 0xFFFFFFFF] */			\
@@ -381,7 +382,7 @@ l0_%=:								\
 
 /*
  * Test that sync_linked_regs() skips propagation when one register used
- * alu32 (BPF_ADD_CONST32) and the other used alu64 (BPF_ADD_CONST64).
+ * alu32 (BPF_FLAG_ADD_CONST32) and the other used alu64 (BPF_FLAG_ADD_CONST64).
  * The delta relationship doesn't hold across different ALU widths.
  */
 SEC("socket")
@@ -392,9 +393,9 @@ __naked void scalars_alu32_alu64_cross_type(void)
 	call %[bpf_get_prandom_u32];				\
 	w6 = w0;		/* r6 in [0, 0xFFFFFFFF] */	\
 	r7 = r6;		/* linked: same id as r6 */	\
-	w7 += 1;		/* alu32: BPF_ADD_CONST32, delta = 1 */ \
+	w7 += 1;		/* alu32: BPF_FLAG_ADD_CONST32, delta = 1 */ \
 	r8 = r6;		/* linked: same id as r6 */	\
-	r8 += 2;		/* alu64: BPF_ADD_CONST64, delta = 2 */ \
+	r8 += 2;		/* alu64: BPF_FLAG_ADD_CONST64, delta = 2 */ \
 	r9 = 0xFFFFffff ll;					\
 	if r7 < r9 goto l0_%=;					\
 	/* r7 = 0xFFFFFFFF */					\
@@ -416,7 +417,7 @@ l0_%=:								\
 /*
  * Test that regsafe() prevents pruning when two paths reach the same program
  * point with linked registers carrying different ADD_CONST flags (one
- * BPF_ADD_CONST32 from alu32, another BPF_ADD_CONST64 from alu64).
+ * BPF_FLAG_ADD_CONST32 from alu32, another BPF_FLAG_ADD_CONST64 from alu64).
  */
 SEC("socket")
 __failure __msg("div by zero")
@@ -431,11 +432,11 @@ __naked void scalars_alu32_alu64_regsafe_pruning(void)
 	call %[bpf_get_prandom_u32];				\
 	if r0 > 0 goto l_pathb_%=;				\
 	/* Path A: alu32 */					\
-	w7 += 1;		/* BPF_ADD_CONST32, delta = 1 */\
+	w7 += 1;		/* BPF_FLAG_ADD_CONST32, delta = 1 */\
 	goto l_merge_%=;					\
 l_pathb_%=:							\
 	/* Path B: alu64 */					\
-	r7 += 1;		/* BPF_ADD_CONST64, delta = 1 */\
+	r7 += 1;		/* BPF_FLAG_ADD_CONST64, delta = 1 */\
 l_merge_%=:							\
 	/* Merge point: regsafe() compares path B against cached path A. */ \
 	/* Narrow r6 to trigger sync_linked_regs for r7 */	\
@@ -593,7 +594,7 @@ l_exit_%=:							\
 }
 
 /*
- * Test that stale delta from a cleared BPF_ADD_CONST does not leak
+ * Test that stale delta from a cleared BPF_FLAG_ADD_CONST does not leak
  * through assign_scalar_id_before_mov() into a new id, causing
  * sync_linked_regs() to compute an incorrect offset.
  */
@@ -648,7 +649,7 @@ l_exit_%=:							\
 }
 
 /*
- * Test that regsafe() verifies base_id consistency for BPF_ADD_CONST
+ * Test that regsafe() verifies base_id consistency for BPF_FLAG_ADD_CONST
  * linked scalars during state pruning.
  *
  * The false branch (explored first) links R3 to R2 via ADD_CONST.
