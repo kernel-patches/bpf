@@ -319,8 +319,14 @@ static unsigned long ringbuf_avail_data_sz(struct bpf_ringbuf *rb)
 	cons_pos = smp_load_acquire(&rb->consumer_pos);
 
 	if (unlikely(rb->overwrite_mode)) {
-		over_pos = smp_load_acquire(&rb->overwrite_pos);
+		/*
+		 * Read producer_pos first: its release store in
+		 * __bpf_ringbuf_reserve() is what publishes the matching
+		 * overwrite_pos.
+		 */
 		prod_pos = smp_load_acquire(&rb->producer_pos);
+		/* Ordered after the acquire load above, per that contract. */
+		over_pos = smp_load_acquire(&rb->overwrite_pos);
 		return min(prod_pos - cons_pos, prod_pos - over_pos);
 	} else {
 		prod_pos = smp_load_acquire(&rb->producer_pos);
