@@ -1830,7 +1830,9 @@ static void __mark_reg_const_zero(const struct bpf_verifier_env *env, struct bpf
 	/* all scalars are assumed imprecise initially (unless unprivileged,
 	 * in which case everything is forced to be precise)
 	 */
-	reg->precise = !env->bpf_capable;
+	reg->flags &= ~BPF_FLAG_PRECISE;
+	if (!env->bpf_capable)
+		reg->flags |= BPF_FLAG_PRECISE;
 }
 
 static void mark_reg_known_zero(struct bpf_verifier_env *env,
@@ -2139,13 +2141,14 @@ void bpf_mark_reg_unknown_imprecise(struct bpf_reg_state *reg)
 }
 
 /* Mark a register as having a completely unknown (scalar) value,
- * initialize .precise as true when not bpf capable.
+ * set BPF_FLAG_PRECISE when not bpf capable.
  */
 static void __mark_reg_unknown(const struct bpf_verifier_env *env,
 			       struct bpf_reg_state *reg)
 {
 	bpf_mark_reg_unknown_imprecise(reg);
-	reg->precise = !env->bpf_capable;
+	if (!env->bpf_capable)
+		reg->flags |= BPF_FLAG_PRECISE;
 }
 
 static void mark_reg_unknown(struct bpf_verifier_env *env,
@@ -7506,7 +7509,8 @@ static void maybe_widen_reg(struct bpf_verifier_env *env,
 		return;
 	if (rold->type != rcur->type)
 		return;
-	if (rold->precise || rcur->precise || scalars_exact_for_widen(rold, rcur))
+	if (reg_is_precise(rold) || reg_is_precise(rcur) ||
+	    scalars_exact_for_widen(rold, rcur))
 		return;
 	__mark_reg_unknown(env, rcur);
 }
@@ -14876,7 +14880,7 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 				return err;
 			return adjust_ptr_min_max_vals(env, insn,
 						       dst_reg, src_reg);
-		} else if (dst_reg->precise) {
+		} else if (reg_is_precise(dst_reg)) {
 			/* if dst_reg is precise, src_reg should be precise as well */
 			err = mark_chain_precision(env, insn->src_reg);
 			if (err)

@@ -548,7 +548,7 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 			return memcmp(rold, rcur, offsetof(struct bpf_reg_state, id)) == 0 &&
 			       check_scalar_ids(rold->id, rcur->id, idmap);
 		}
-		if (!rold->precise && exact == NOT_EXACT)
+		if (!reg_is_precise(rold) && exact == NOT_EXACT)
 			return true;
 		/*
 		 * Linked register tracking uses rold->id to detect relationships.
@@ -1034,7 +1034,7 @@ static int propagate_precision(struct bpf_verifier_env *env,
 		first = true;
 		for (i = 0; i < BPF_REG_FP; i++, state_reg++) {
 			if (state_reg->type != SCALAR_VALUE ||
-			    !state_reg->precise)
+			    !reg_is_precise(state_reg))
 				continue;
 			if (env->log.level & BPF_LOG_LEVEL2) {
 				if (first)
@@ -1051,7 +1051,7 @@ static int propagate_precision(struct bpf_verifier_env *env,
 				continue;
 			state_reg = &state->stack[i].spilled_ptr;
 			if (state_reg->type != SCALAR_VALUE ||
-			    !state_reg->precise)
+			    !reg_is_precise(state_reg))
 				continue;
 			if (env->log.level & BPF_LOG_LEVEL2) {
 				if (first)
@@ -1223,7 +1223,7 @@ static void mark_all_scalars_imprecise(struct bpf_verifier_env *env, struct bpf_
 			reg = &func->regs[j];
 			if (reg->type != SCALAR_VALUE)
 				continue;
-			reg->precise = false;
+			reg->flags &= ~BPF_FLAG_PRECISE;
 		}
 		for (j = 0; j < func->allocated_stack / BPF_REG_SIZE; j++) {
 			if (!bpf_is_spilled_reg(&func->stack[j]))
@@ -1231,7 +1231,7 @@ static void mark_all_scalars_imprecise(struct bpf_verifier_env *env, struct bpf_
 			reg = &func->stack[j].spilled_ptr;
 			if (reg->type != SCALAR_VALUE)
 				continue;
-			reg->precise = false;
+			reg->flags &= ~BPF_FLAG_PRECISE;
 		}
 	}
 }

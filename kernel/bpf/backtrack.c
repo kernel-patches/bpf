@@ -675,9 +675,9 @@ void bpf_mark_all_scalars_precise(struct bpf_verifier_env *env,
 			func = st->frame[i];
 			for (j = 0; j < BPF_REG_FP; j++) {
 				reg = &func->regs[j];
-				if (reg->type != SCALAR_VALUE || reg->precise)
+				if (reg->type != SCALAR_VALUE || reg_is_precise(reg))
 					continue;
-				reg->precise = true;
+				reg->flags |= BPF_FLAG_PRECISE;
 				if (env->log.level & BPF_LOG_LEVEL2) {
 					verbose(env, "force_precise: frame%d: forcing r%d to be precise\n",
 						i, j);
@@ -687,9 +687,9 @@ void bpf_mark_all_scalars_precise(struct bpf_verifier_env *env,
 				if (!bpf_is_spilled_reg(&func->stack[j]))
 					continue;
 				reg = &func->stack[j].spilled_ptr;
-				if (reg->type != SCALAR_VALUE || reg->precise)
+				if (reg->type != SCALAR_VALUE || reg_is_precise(reg))
 					continue;
-				reg->precise = true;
+				reg->flags |= BPF_FLAG_PRECISE;
 				if (env->log.level & BPF_LOG_LEVEL2) {
 					verbose(env, "force_precise: frame%d: forcing fp%d to be precise\n",
 						i, -(j + 1) * 8);
@@ -851,7 +851,7 @@ int bpf_mark_chain_precision(struct bpf_verifier_env *env,
 					reg = &st->frame[0]->regs[i];
 					bt_clear_reg(bt, i);
 					if (reg->type == SCALAR_VALUE) {
-						reg->precise = true;
+						reg->flags |= BPF_FLAG_PRECISE;
 						*changed = true;
 					}
 				}
@@ -912,10 +912,10 @@ int bpf_mark_chain_precision(struct bpf_verifier_env *env,
 					bt_clear_frame_reg(bt, fr, i);
 					continue;
 				}
-				if (reg->precise) {
+				if (reg_is_precise(reg)) {
 					bt_clear_frame_reg(bt, fr, i);
 				} else {
-					reg->precise = true;
+					reg->flags |= BPF_FLAG_PRECISE;
 					*changed = true;
 				}
 			}
@@ -932,10 +932,10 @@ int bpf_mark_chain_precision(struct bpf_verifier_env *env,
 					continue;
 				}
 				reg = &func->stack[i].spilled_ptr;
-				if (reg->precise) {
+				if (reg_is_precise(reg)) {
 					bt_clear_frame_slot(bt, fr, i);
 				} else {
-					reg->precise = true;
+					reg->flags |= BPF_FLAG_PRECISE;
 					*changed = true;
 				}
 			}
@@ -943,10 +943,10 @@ int bpf_mark_chain_precision(struct bpf_verifier_env *env,
 				if (!bt_is_frame_stack_arg_slot_set(bt, fr, i))
 					continue;
 				reg = &func->stack_arg_regs[i];
-				if (reg->type != SCALAR_VALUE || reg->precise) {
+				if (reg->type != SCALAR_VALUE || reg_is_precise(reg)) {
 					bt_clear_frame_stack_arg_slot(bt, fr, i);
 				} else {
-					reg->precise = true;
+					reg->flags |= BPF_FLAG_PRECISE;
 					*changed = true;
 				}
 			}
