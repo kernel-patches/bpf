@@ -562,6 +562,8 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		 * semantics than a full/ADD_CONST equality. check_scalar_ids()
 		 * only ever sees the plain ->id and never looks at ->flags, so a
 		 * mismatch must be rejected explicitly.
+		 * The two flavours also differ from each other, in how the high
+		 * half is rebuilt (zero-extension vs reconstruct_sext32()).
 		 * Check it here, before the explore_alu_limits and !precise
 		 * short-circuits below (neither of which tests it). Note the
 		 * pre-existing BPF_FLAG_ADD_CONST check sits after those
@@ -570,9 +572,18 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		 * on a path that predates this series, which is a pruning change
 		 * that wants measuring on its own; it is deliberately left
 		 * alone here.
+		 *
+		 * Only demand a match when the old state carries a link at all.
+		 * These flags are only ever set together with an ->id, so
+		 * rold->id == 0 implies none is set, and the only case this
+		 * admits is "old knows no low-32 relationship, cur does" -- cur
+		 * is then strictly more constrained than old, which is the safe
+		 * direction for pruning. The reverse is still rejected. Without
+		 * this a register that first acquires a link inside a loop would
+		 * never match its pre-loop state and pruning would not converge.
 		 */
 		if (rold->id &&
-		    (rold->flags & BPF_FLAG_SUBREG_ZEXT) != (rcur->flags & BPF_FLAG_SUBREG_ZEXT))
+		    (rold->flags & BPF_FLAG_SUBREG) != (rcur->flags & BPF_FLAG_SUBREG))
 			return false;
 
 		if (env->explore_alu_limits) {

@@ -173,6 +173,10 @@ struct bpf_reg_state {
 	 * full equality implied by a bare shared ->id): this register shares
 	 * only the base's low 32 bits, and its high bits are zero (32-bit
 	 * zero-extending mov).
+	 * BPF_FLAG_SUBREG_SEXT is the same for a 32-bit sign extension
+	 * (r0 = (s32)r0); the two differ in how the high half is rebuilt.
+	 * Only 32-bit sign extension is tracked -- (s8)/(s16) do not form a
+	 * link -- so the flag alone carries the width.
 	 * sync_linked_regs() propagates the low 32-bit subrange and rebuilds
 	 * the high half accordingly, so this is sound even when the base has
 	 * unknown high bits.
@@ -181,8 +185,11 @@ struct bpf_reg_state {
 #define BPF_FLAG_ADD_CONST64	(1U << 1)
 #define BPF_FLAG_ADD_CONST	(BPF_FLAG_ADD_CONST32 | BPF_FLAG_ADD_CONST64)
 #define BPF_FLAG_SUBREG_ZEXT	(1U << 2)
+#define BPF_FLAG_SUBREG_SEXT	(1U << 3)
+/* A low-32-only link, of either flavour. */
+#define BPF_FLAG_SUBREG		(BPF_FLAG_SUBREG_ZEXT | BPF_FLAG_SUBREG_SEXT)
 /* Every flag describing how this register relates to its ->id set. */
-#define BPF_FLAG_LINK		(BPF_FLAG_ADD_CONST | BPF_FLAG_SUBREG_ZEXT)
+#define BPF_FLAG_LINK		(BPF_FLAG_ADD_CONST | BPF_FLAG_SUBREG)
 #define BPF_FLAG_PRECISE	(1U << 7)
 	u8 flags;
 };
