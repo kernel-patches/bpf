@@ -490,6 +490,9 @@ static int clean_verifier_state(struct bpf_verifier_env *env,
  *
  * Only meaningful when rold carries an id: the flags are only ever set
  * together with one, so rold->id == 0 implies none of them is set.
+ *
+ * BPF_FLAG_LINK covers every flavour, so this widens automatically as new
+ * ones are added.
  */
 static bool link_flags_match(const struct bpf_reg_state *rold,
 			     const struct bpf_reg_state *rcur)
@@ -497,7 +500,7 @@ static bool link_flags_match(const struct bpf_reg_state *rold,
 	if (!rold->id)
 		return true;
 
-	return (rold->flags & BPF_FLAG_ADD_CONST) == (rcur->flags & BPF_FLAG_ADD_CONST);
+	return (rold->flags & BPF_FLAG_LINK) == (rcur->flags & BPF_FLAG_LINK);
 }
 
 static bool regs_exact(const struct bpf_reg_state *rold,
@@ -554,6 +557,24 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 
 	switch (base_type(rold->type)) {
 	case SCALAR_VALUE:
+		/*
+		 * A low-32-bit-only link has different sync_linked_regs()
+		 * semantics than a full/ADD_CONST equality. check_scalar_ids()
+		 * only ever sees the plain ->id and never looks at ->flags, so a
+		 * mismatch must be rejected explicitly.
+		 * Check it here, before the explore_alu_limits and !precise
+		 * short-circuits below (neither of which tests it). Note the
+		 * pre-existing BPF_FLAG_ADD_CONST check sits after those
+		 * short-circuits instead. The argument for checking early
+		 * applies to it equally, but moving it makes regsafe() stricter
+		 * on a path that predates this series, which is a pruning change
+		 * that wants measuring on its own; it is deliberately left
+		 * alone here.
+		 */
+		if (rold->id &&
+		    (rold->flags & BPF_FLAG_SUBREG_ZEXT) != (rcur->flags & BPF_FLAG_SUBREG_ZEXT))
+			return false;
+
 		if (env->explore_alu_limits) {
 			/* explore_alu_limits disables tnum_in() and range_within()
 			 * logic and requires everything to be strict

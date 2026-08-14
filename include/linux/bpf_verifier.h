@@ -169,10 +169,20 @@ struct bpf_reg_state {
 	 *
 	 * BPF_FLAG_ADD_CONST{32,64}: this register is (base + ->delta) within
 	 * its ->id set, computed with a 32- or 64-bit ALU add.
+	 * BPF_FLAG_SUBREG_ZEXT: low-32-bit-only equality (as opposed to the
+	 * full equality implied by a bare shared ->id): this register shares
+	 * only the base's low 32 bits, and its high bits are zero (32-bit
+	 * zero-extending mov).
+	 * sync_linked_regs() propagates the low 32-bit subrange and rebuilds
+	 * the high half accordingly, so this is sound even when the base has
+	 * unknown high bits.
 	 */
 #define BPF_FLAG_ADD_CONST32	(1U << 0)
 #define BPF_FLAG_ADD_CONST64	(1U << 1)
 #define BPF_FLAG_ADD_CONST	(BPF_FLAG_ADD_CONST32 | BPF_FLAG_ADD_CONST64)
+#define BPF_FLAG_SUBREG_ZEXT	(1U << 2)
+/* Every flag describing how this register relates to its ->id set. */
+#define BPF_FLAG_LINK		(BPF_FLAG_ADD_CONST | BPF_FLAG_SUBREG_ZEXT)
 #define BPF_FLAG_PRECISE	(1U << 7)
 	u8 flags;
 };
