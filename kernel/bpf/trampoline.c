@@ -806,9 +806,11 @@ static enum bpf_tramp_prog_type bpf_attach_type_to_tramp(struct bpf_prog *prog)
 	}
 }
 
-static int bpf_freplace_check_tgt_prog(struct bpf_prog *tgt_prog)
+static int bpf_freplace_check_tgt_prog(struct bpf_prog *tgt_prog,
+				       struct bpf_prog *prog)
 {
 	struct bpf_prog_aux *aux = tgt_prog->aux;
+	enum bpf_cgroup_storage_type i;
 
 	guard(mutex)(&aux->ext_mutex);
 	if (aux->prog_array_member_cnt)
@@ -821,6 +823,20 @@ static int bpf_freplace_check_tgt_prog(struct bpf_prog *tgt_prog)
 		return -EBUSY;
 
 	aux->is_extended = true;
+
+	/* At runtime the extension program inherits the target program's
+	 * cgroup storage context (via prog_item->cgroup_storage), while the
+	 * verifier bounds its accesses by its own map's value_size. A
+	 * value_size mismatch leads to slab out-of-bounds access.
+	 */
+	for_each_cgroup_storage_type(i) {
+		struct bpf_map *tgt_map = tgt_prog->aux->cgroup_storage[i];
+		struct bpf_map *prog_map = prog->aux->cgroup_storage[i];
+
+		if (prog_map && (!tgt_map || prog_map->value_size != tgt_map->value_size))
+			return -EINVAL;
+	}
+
 	return 0;
 }
 
@@ -926,7 +942,7 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_node *node,
 		/* Cannot attach extension if fentry/fexit are in use. */
 		if (cnt)
 			return -EBUSY;
-		err = bpf_freplace_check_tgt_prog(tgt_prog);
+		err = bpf_freplace_check_tgt_prog(tgt_prog, node->link->prog);
 		if (err)
 			return err;
 		tr->extension_prog = node->link->prog;
