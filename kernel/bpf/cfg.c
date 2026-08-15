@@ -287,7 +287,7 @@ err_free:
  * combined jump table in jt->items (allocated with kvcalloc)
  */
 static struct bpf_iarray *jt_from_subprog(struct bpf_verifier_env *env,
-					  int subprog_start, int subprog_end)
+					  int insn_idx, int subprog_start, int subprog_end)
 {
 	struct bpf_iarray *jt = NULL;
 	struct bpf_map *map;
@@ -327,7 +327,7 @@ static struct bpf_iarray *jt_from_subprog(struct bpf_verifier_env *env,
 	if (!jt) {
 		verbose(env, "no jump tables found for subprog starting at %u\n", subprog_start);
 		bpf_diag_program_structure(
-			env, subprog_start, "missing jump table",
+			env, insn_idx, "missing jump table",
 			"Make sure subprograms containing gotox instructions are accompanied by jump tables referencing these subprograms.",
 			"No jump table was found for the subprogram that starts at instruction %u.",
 			subprog_start);
@@ -349,7 +349,7 @@ create_jt(int t, struct bpf_verifier_env *env)
 	subprog = bpf_find_containing_subprog(env, t);
 	subprog_start = subprog->start;
 	subprog_end = (subprog + 1)->start;
-	jt = jt_from_subprog(env, subprog_start, subprog_end);
+	jt = jt_from_subprog(env, t, subprog_start, subprog_end);
 	if (IS_ERR(jt))
 		return jt;
 
