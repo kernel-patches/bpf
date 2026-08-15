@@ -36,7 +36,12 @@ struct {
 } array SEC(".maps");
 
 #define ENOSPC 28
+#define E2BIG 7
 #define _STR "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+#define _X64 "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+/* 1024 bytes: truncated by bstr_printf, must return -E2BIG. */
+#define _BIG_STR (_X64 _X64 _X64 _X64 _X64 _X64 _X64 _X64 \
+		  _X64 _X64 _X64 _X64 _X64 _X64 _X64 _X64)
 
 int size;
 u64 fault_addr;
@@ -117,6 +122,13 @@ int stream_syscall(void *ctx)
 {
 	bpf_stream_printk(BPF_STDOUT, "foo");
 	return 0;
+}
+
+SEC("syscall")
+__success __retval(-E2BIG)
+int stream_oversize(void *ctx)
+{
+	return bpf_stream_printk(BPF_STDOUT, _BIG_STR);
 }
 
 SEC("syscall")
