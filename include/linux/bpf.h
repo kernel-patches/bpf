@@ -1376,6 +1376,11 @@ struct bpf_tramp_image {
 		struct rcu_head rcu;
 		struct work_struct work;
 	};
+#ifdef CONFIG_PREEMPTION
+	/* Programs called from this image must outlive deferred image freeing. */
+	struct bpf_prog *progs[BPF_MAX_TRAMP_LINKS];
+	int nr_progs;
+#endif
 };
 
 struct bpf_trampoline {

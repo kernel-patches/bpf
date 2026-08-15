@@ -531,6 +531,13 @@ bpf_trampoline_get_progs(const struct bpf_trampoline *tr, int *total, bool *ip_a
 
 static void bpf_tramp_image_free(struct bpf_tramp_image *im)
 {
+#ifdef CONFIG_PREEMPTION
+	int i;
+
+	for (i = 0; i < im->nr_progs; i++)
+		bpf_prog_put(im->progs[i]);
+#endif
+
 	bpf_image_ksym_del(&im->ksym);
 	arch_free_bpf_trampoline(im->image, im->size);
 	bpf_jit_uncharge_modmem(im->size);
@@ -678,6 +685,9 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mut
 	u32 orig_flags = tr->flags;
 	bool ip_arg = false;
 	int err, total, size;
+#ifdef CONFIG_PREEMPTION
+	int i, kind;
+#endif
 
 	tnodes = bpf_trampoline_get_progs(tr, &total, &ip_arg);
 	if (IS_ERR(tnodes))
@@ -739,6 +749,16 @@ again:
 		err = PTR_ERR(im);
 		goto out;
 	}
+
+#ifdef CONFIG_PREEMPTION
+	for (kind = 0; kind < BPF_TRAMP_MAX; kind++)
+		for (i = 0; i < tnodes[kind].nr_nodes; i++) {
+			struct bpf_prog *prog = tnodes[kind].nodes[i]->link->prog;
+
+			bpf_prog_inc(prog);
+			im->progs[im->nr_progs++] = prog;
+		}
+#endif
 
 	err = arch_prepare_bpf_trampoline(im, im->image, im->image + size,
 					  &tr->func.model, tr->flags, tnodes,
