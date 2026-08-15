@@ -139,6 +139,7 @@ SEC("tracepoint")
 __description("bounded recursion")
 __failure
 __msg("recursive call from")
+__msg("The call from bounded_recursion__1() to bounded_recursion__1() would make")
 __naked void bounded_recursion(void)
 {
 	asm volatile ("					\
