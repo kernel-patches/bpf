@@ -86,6 +86,7 @@
 #include <net/inet_dscp.h>
 
 #include "dev.h"
+#include "netmem_priv.h"
 
 /* Keep the struct bpf_fib_lookup small so that it fits into a cacheline */
 static_assert(sizeof(struct bpf_fib_lookup) == 64, "struct bpf_fib_lookup size check");
@@ -4288,6 +4289,14 @@ static bool bpf_xdp_shrink_data(struct xdp_buff *xdp, skb_frag_t *frag,
 	if (mem_type == MEM_TYPE_XSK_BUFF_POOL) {
 		netmem = 0;
 		zc_frag = bpf_xdp_shrink_data_zc(xdp, shrink, tail, release);
+	} else if (netmem_is_pp(netmem)) {
+		/* The rxq mem model does not always describe how a released
+		 * frag must be freed: the generic-XDP and veth paths run the
+		 * program on a shared rxq while the frag has been cow'd into
+		 * page_pool memory. Trust the page itself and return a
+		 * page_pool frag to its pool regardless of rxq->mem.type.
+		 */
+		mem_type = MEM_TYPE_PAGE_POOL;
 	}
 
 	if (release) {
