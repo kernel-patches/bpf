@@ -28,6 +28,13 @@ static int subprog_7args(int a, int b, int c, int d, int e, int f, int g)
 }
 
 __noinline __used
+static int callback_9args(__u32 index, void *ctx, long a3, long a4,
+			  long a5, long a6, long a7, long a8, long a9)
+{
+	return a9;
+}
+
+__noinline __used
 static long subprog_deref_arg6(long a, long b, long c, long d, long e, long *f)
 {
 	return *f;
@@ -76,6 +83,32 @@ __naked void stack_arg_two_subprogs(void)
 		"r0 += r6;"
 		"exit;"
 		::: __clobber_all
+	);
+}
+
+SEC("tc")
+__description("stack_arg: callback with incoming stack args")
+__failure
+__msg("callback subprog cannot have stack args")
+__naked void stack_arg_callback_many_args(void)
+{
+	asm volatile (
+		"r6 = 0;"
+		"*(u64 *)(r11 - 32) = 0;"
+		"*(u64 *)(r11 - 24) = 0;"
+		"*(u64 *)(r11 - 16) = 0;"
+		"*(u64 *)(r11 - 8) = 0;"
+		"r1 = 1;"
+		"r2 = %[callback_9args];"
+		"r3 = 0;"
+		"r4 = 0;"
+		"call %[bpf_loop];"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm_ptr(callback_9args),
+		  __imm(bpf_loop)
+		: __clobber_all
 	);
 }
 
