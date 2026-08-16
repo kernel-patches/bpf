@@ -1083,7 +1083,9 @@ void bpf_diag_ctx_forbidden(struct bpf_verifier_env *env, u32 insn_idx,
 	const char *constraint, *context;
 	u32 depth;
 
-	if (env->cur_state->active_rcu_locks)
+	if (!env->cur_state->in_sleepable)
+		ctx_kind = BPF_DIAG_CONTEXT_NONE;
+	else if (env->cur_state->active_rcu_locks)
 		ctx_kind = BPF_DIAG_CONTEXT_RCU;
 	else if (env->cur_state->active_preempt_locks)
 		ctx_kind = BPF_DIAG_CONTEXT_PREEMPT;
