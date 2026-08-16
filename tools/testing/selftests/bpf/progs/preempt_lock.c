@@ -6,6 +6,8 @@
 #include "bpf_experimental.h"
 
 extern int bpf_copy_from_user_str(void *dst, u32 dst__sz, const void *unsafe_ptr__ign, u64 flags) __weak __ksym;
+extern void bpf_rcu_read_lock(void) __ksym;
+extern void bpf_rcu_read_unlock(void) __ksym;
 
 SEC("?tc")
 __failure __msg("BPF_EXIT instruction in main prog cannot be used inside bpf_preempt_disable-ed region")
@@ -124,6 +126,19 @@ int preempt_sleepable_kfunc(void *ctx)
 	bpf_preempt_disable();
 	bpf_copy_from_user_str(&data, sizeof(data), NULL, 0);
 	bpf_preempt_enable();
+	return 0;
+}
+
+SEC("?fentry/" SYS_PREFIX "sys_getpgid")
+__failure __msg("program must be sleepable to call sleepable kfunc bpf_copy_from_user_str")
+__msg("cannot be used in non-sleepable program")
+int non_sleepable_kfunc_in_rcu(void *ctx)
+{
+	u32 data;
+
+	bpf_rcu_read_lock();
+	bpf_copy_from_user_str(&data, sizeof(data), NULL, 0);
+	bpf_rcu_read_unlock();
 	return 0;
 }
 
