@@ -2995,15 +2995,13 @@ static int add_kfuncs(struct bpf_verifier_env *env)
 	return 0;
 }
 
-static int check_subprogs(struct bpf_verifier_env *env)
+static void find_subprog_properties(struct bpf_verifier_env *env)
 {
-	int i, subprog_start, subprog_end, off, cur_subprog = 0;
+	int i, subprog_end, cur_subprog = 0;
 	struct bpf_subprog_info *subprog = env->subprog_info;
 	struct bpf_insn *insn = env->prog->insnsi;
 	int insn_cnt = env->prog->len;
 
-	/* now check that all jumps are within the same subprog */
-	subprog_start = subprog[cur_subprog].start;
 	subprog_end = subprog[cur_subprog + 1].start;
 	for (i = 0; i < insn_cnt; i++) {
 		u8 code = insn[i].code;
@@ -3017,6 +3015,27 @@ static int check_subprogs(struct bpf_verifier_env *env)
 		if (BPF_CLASS(code) == BPF_LD &&
 		    (BPF_MODE(code) == BPF_ABS || BPF_MODE(code) == BPF_IND))
 			subprog[cur_subprog].has_ld_abs = true;
+		if (i == subprog_end - 1) {
+			cur_subprog++;
+			if (cur_subprog < env->subprog_cnt)
+				subprog_end = subprog[cur_subprog + 1].start;
+		}
+	}
+}
+
+static int check_subprogs(struct bpf_verifier_env *env)
+{
+	int i, subprog_start, subprog_end, off, cur_subprog = 0;
+	struct bpf_subprog_info *subprog = env->subprog_info;
+	struct bpf_insn *insn = env->prog->insnsi;
+	int insn_cnt = env->prog->len;
+
+	/* now check that all jumps are within the same subprog */
+	subprog_start = subprog[cur_subprog].start;
+	subprog_end = subprog[cur_subprog + 1].start;
+	for (i = 0; i < insn_cnt; i++) {
+		u8 code = insn[i].code;
+
 		if (BPF_CLASS(code) != BPF_JMP && BPF_CLASS(code) != BPF_JMP32)
 			goto next;
 		if (BPF_OP(code) == BPF_CALL)
@@ -3038,9 +3057,10 @@ static int check_subprogs(struct bpf_verifier_env *env)
 		}
 next:
 		if (i == subprog_end - 1) {
-			/* to avoid fall-through from one subprog into another
+			/*
+			 * To avoid fall-through from one subprog into another,
 			 * the last insn of the subprog should be either exit
-			 * or unconditional jump back or bpf_throw call
+			 * or unconditional jump back or bpf_throw call.
 			 */
 			if (code != (BPF_JMP | BPF_EXIT) &&
 			    code != (BPF_JMP32 | BPF_JA) &&
@@ -3126,8 +3146,9 @@ static int sort_subprogs_topo(struct bpf_verifier_env *env)
 					bpf_diag_program_structure(
 						env, idx, "recursive subprogram call",
 						"Rewrite the recursion as an explicit bounded loop, or split the logic so subprogram calls do not form a cycle.",
-						"This bpf2bpf call would make the subprogram call graph recursive. "
-						"The verifier requires a finite, acyclic call graph so it can bound stack depth and analysis.");
+						"The call from %s() to %s() would make the subprogram call graph recursive. "
+						"The verifier requires a finite, acyclic call graph so it can bound stack depth and analysis.",
+						bpf_subprog_name(env, cur), bpf_subprog_name(env, callee));
 					ret = -EINVAL;
 					goto out;
 				}
@@ -21124,17 +21145,19 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
-	/* Discover all subprograms before validating their layout and BTF. */
+	/* Discover all subprograms and collect the properties needed by BTF validation. */
 	ret = add_subprogs(env);
 	if (ret < 0)
 		goto skip_full_check;
 
-	ret = check_subprogs(env);
+	find_subprog_properties(env);
+
+	/* Validate BTF and apply CO-RE before reporting subprogram layout errors. */
+	ret = bpf_check_btf_info(env, attr, uattr);
 	if (ret < 0)
 		goto skip_full_check;
 
-	/* Validate BTF against the complete subprogram layout and apply CO-RE. */
-	ret = bpf_check_btf_info(env, attr, uattr);
+	ret = check_subprogs(env);
 	if (ret < 0)
 		goto skip_full_check;
 
