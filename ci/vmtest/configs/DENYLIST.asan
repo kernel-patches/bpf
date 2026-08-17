@@ -1,0 +1,6 @@
+# ASAN-only denylist (merged when SELFTESTS_BPF_ASAN is set; see ci/vmtest/configs/run-vmtest.env).
+# exit() in fork()'d children runs LeakSanitizer's atexit leak check, which overrides the child
+# exit code; the parent then sees a spurious failure even though the BPF operations succeeded.
+# Non-ASAN runs keep full coverage of these tests. Drop once the upstream _exit() fix lands.
+token       # vmtest#473
+test_bpffs  # vmtest#473
