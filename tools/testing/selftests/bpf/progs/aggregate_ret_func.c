@@ -172,6 +172,8 @@ __naked int aggregate_ret_global_precise(void)
 	: __clobber_all);
 }
 
+#if defined(__clang_major__) && __clang_major__ >= 23
+
 /* A by-value struct that smuggles a pointer, which must be rejected. */
 struct with_ptr {
 	void *p;
@@ -227,5 +229,7 @@ __naked int aggregate_ret_global_union_ptr_fail(void)
 	: __imm(global_ret_union_ptr)
 	: __clobber_all);
 }
+
+#endif
 
 char _license[] SEC("license") = "GPL";
