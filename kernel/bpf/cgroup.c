@@ -1544,7 +1544,7 @@ int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	struct cgroup *cgrp;
 	int err;
 
-	if (attr->link_create.flags & (~BPF_F_LINK_ATTACH_MASK))
+	if (attr->link_create.flags & ~(BPF_F_LINK_ATTACH_MASK | BPF_F_LINK_SEALED))
 		return -EINVAL;
 
 	cgrp = cgroup_get_from_fd(attr->link_create.target_fd);
@@ -1558,6 +1558,7 @@ int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	}
 	bpf_link_init(&link->link, BPF_LINK_TYPE_CGROUP, &bpf_cgroup_link_lops,
 		      prog, attr->link_create.attach_type);
+	link->link.sealed = attr->link_create.flags & BPF_F_LINK_SEALED;
 	link->cgroup = cgrp;
 
 	err = bpf_link_prime(&link->link, &link_primer);
@@ -1567,7 +1568,9 @@ int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	}
 
 	err = cgroup_bpf_attach(cgrp, NULL, NULL, link,
-				link->link.attach_type, BPF_F_ALLOW_MULTI | attr->link_create.flags,
+				link->link.attach_type,
+				BPF_F_ALLOW_MULTI |
+				(attr->link_create.flags & ~BPF_F_LINK_SEALED),
 				attr->link_create.cgroup.relative_fd,
 				attr->link_create.cgroup.expected_revision);
 	if (err) {

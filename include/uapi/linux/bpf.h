@@ -1252,6 +1252,12 @@ enum bpf_perf_event_type {
 #define BPF_F_ID		(1U << 5)
 #define BPF_F_PREORDER		(1U << 6)
 #define BPF_F_LINK		BPF_F_LINK /* 1 << 13 */
+/* Create the link permanently sealed. Sealed links cannot be updated or
+ * detached and are never released, so they stay attached until reboot.
+ * Requires CAP_SYS_ADMIN. Only supported by link types that explicitly
+ * allow it; others reject the flag.
+ */
+#define BPF_F_LINK_SEALED	(1U << 31)
 
 /* If BPF_F_STRICT_ALIGNMENT is used in BPF_PROG_LOAD command, the
  * verifier will perform strict alignment checking as if the kernel

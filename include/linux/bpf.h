@@ -1931,6 +1931,14 @@ struct bpf_link {
 	 * link's semantics is determined by target attach hook
 	 */
 	bool sleepable;
+	/* Set from BPF_F_LINK_SEALED before the link is installed into the fd
+	 * table, and never cleared afterwards. A sealed link rejects
+	 * BPF_LINK_UPDATE and BPF_LINK_DETACH and holds a self-reference that
+	 * is never dropped, so it stays attached until the machine reboots.
+	 * Immutable once the link is reachable from user space, so readers
+	 * need no synchronization.
+	 */
+	bool sealed;
 };
 
 struct bpf_link_ops {

@@ -512,7 +512,8 @@ int bpf_iter_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 	bpfptr_t ulinfo;
 	int err;
 
-	if (attr->link_create.target_fd || attr->link_create.flags)
+	if (attr->link_create.target_fd ||
+	    (attr->link_create.flags & ~BPF_F_LINK_SEALED))
 		return -EINVAL;
 
 	memset(&linfo, 0, sizeof(union bpf_iter_link_info));
@@ -554,6 +555,7 @@ int bpf_iter_link_attach(const union bpf_attr *attr, bpfptr_t uattr,
 
 	bpf_link_init(&link->link, BPF_LINK_TYPE_ITER, &bpf_iter_link_lops, prog,
 		      attr->link_create.attach_type);
+	link->link.sealed = attr->link_create.flags & BPF_F_LINK_SEALED;
 	link->tinfo = tinfo;
 
 	err = bpf_link_prime(&link->link, &link_primer);
