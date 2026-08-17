@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <error.h>
+#include <linux/inet_diag.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
+#include <linux/sock_diag.h>
 #include <netinet/tcp.h>
 #include <test_progs.h>
 #include "sockmap_helpers.h"
@@ -460,6 +464,171 @@ out:
 	test_sockmap_strp__destroy(strp);
 }
 
+/* Read sk_forward_alloc through inet_diag meminfo. */
+static int sockmap_strp_get_fwd_alloc(int sock, int *fwd_alloc)
+{
+	struct sockaddr_storage local = {}, peer = {};
+	struct sockaddr_in *local_in, *peer_in;
+	socklen_t addr_len = sizeof(local);
+	char buf[1024];
+	struct {
+		struct nlmsghdr nlh;
+		struct inet_diag_req_v2 req;
+	} req = {
+		.nlh = {
+			.nlmsg_len = sizeof(req),
+			.nlmsg_type = SOCK_DIAG_BY_FAMILY,
+			.nlmsg_flags = NLM_F_REQUEST,
+			.nlmsg_seq = 1,
+		},
+		.req = {
+			.sdiag_family = AF_INET,
+			.sdiag_protocol = IPPROTO_TCP,
+			.idiag_ext = 1 << (INET_DIAG_MEMINFO - 1),
+			.idiag_states = ~0U,
+			.id.idiag_cookie = {
+				INET_DIAG_NOCOOKIE,
+				INET_DIAG_NOCOOKIE,
+			},
+		},
+	};
+	int diag_fd, ret, err = -ENOENT;
+
+	if (getsockname(sock, (struct sockaddr *)&local, &addr_len))
+		return -errno;
+	addr_len = sizeof(peer);
+	if (getpeername(sock, (struct sockaddr *)&peer, &addr_len))
+		return -errno;
+
+	local_in = (struct sockaddr_in *)&local;
+	peer_in = (struct sockaddr_in *)&peer;
+	req.req.id.idiag_sport = local_in->sin_port;
+	req.req.id.idiag_dport = peer_in->sin_port;
+	req.req.id.idiag_src[0] = local_in->sin_addr.s_addr;
+	req.req.id.idiag_dst[0] = peer_in->sin_addr.s_addr;
+
+	diag_fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC,
+			 NETLINK_SOCK_DIAG);
+	if (diag_fd < 0)
+		return -errno;
+
+	ret = send(diag_fd, &req, sizeof(req), 0);
+	if (ret < 0) {
+		err = -errno;
+		goto out;
+	}
+	if (ret != sizeof(req)) {
+		err = -EIO;
+		goto out;
+	}
+
+	ret = recv(diag_fd, buf, sizeof(buf), 0);
+	if (ret < 0) {
+		err = -errno;
+		goto out;
+	}
+
+	for (struct nlmsghdr *nlh = (struct nlmsghdr *)buf;
+	     NLMSG_OK(nlh, ret); nlh = NLMSG_NEXT(nlh, ret)) {
+		struct inet_diag_msg *msg = NLMSG_DATA(nlh);
+		struct rtattr *attr;
+		int len;
+
+		if (nlh->nlmsg_type == NLMSG_ERROR) {
+			err = -EINVAL;
+			goto out;
+		}
+		if (nlh->nlmsg_type == NLMSG_DONE)
+			break;
+
+		len = nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*msg));
+		for (attr = (struct rtattr *)(msg + 1); RTA_OK(attr, len);
+		     attr = RTA_NEXT(attr, len)) {
+			struct inet_diag_meminfo *minfo;
+
+			if (attr->rta_type != INET_DIAG_MEMINFO)
+				continue;
+			minfo = RTA_DATA(attr);
+			*fwd_alloc = (__s32)minfo->idiag_fmem;
+			err = 0;
+			goto out;
+		}
+	}
+
+out:
+	close(diag_fd);
+	return err;
+}
+
+/* Test strparser SK_PASS delivery to the same socket. */
+static void test_sockmap_strp_self_pass_fwd_alloc(void)
+{
+	struct test_sockmap_strp *strp = NULL;
+	char snd[4 * 1024];
+	int c = -1, p = -1;
+	int fwd_alloc;
+	int sndbuf = sizeof(snd);
+	int zero = 0;
+	char rcv;
+	int sent, recvd;
+	int map;
+	int err;
+
+	memset(snd, 0xa5, sizeof(snd));
+
+	strp = test_sockmap_strp__open_and_load();
+	if (!ASSERT_OK_PTR(strp, "test_sockmap_strp__open_and_load"))
+		return;
+
+	map = bpf_map__fd(strp->maps.sock_map);
+	err = xbpf_prog_attach(bpf_program__fd(strp->progs.prog_skb_parser_one),
+			       map, BPF_SK_SKB_STREAM_PARSER, 0);
+	if (err)
+		goto out_destroy;
+
+	err = xbpf_prog_attach(bpf_program__fd(strp->progs.prog_skb_verdict_pass),
+			       map, BPF_SK_SKB_STREAM_VERDICT, 0);
+	if (err)
+		goto out_destroy;
+
+	err = create_pair(AF_INET, SOCK_STREAM, &c, &p);
+	if (!ASSERT_OK(err, "create_pair"))
+		goto out_destroy;
+
+	err = xsetsockopt(c, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+	if (err)
+		goto out_destroy;
+
+	err = xsetsockopt(p, SOL_SOCKET, SO_RCVBUF, &sndbuf, sizeof(sndbuf));
+	if (err)
+		goto out_destroy;
+
+	err = xbpf_map_update_elem(map, &zero, &p, BPF_NOEXIST);
+	if (err)
+		goto out_destroy;
+
+	sent = send(c, snd, sizeof(snd), MSG_DONTWAIT);
+	if (!ASSERT_EQ(sent, sizeof(snd), "send"))
+		goto out_destroy;
+
+	recvd = recv_timeout(p, &rcv, sizeof(rcv), MSG_DONTWAIT,
+			     IO_TIMEOUT_SEC);
+	if (!ASSERT_EQ(recvd, sizeof(rcv), "recv_timeout") ||
+	    !ASSERT_EQ(rcv, snd[0], "data mismatch"))
+		goto out_destroy;
+
+	err = sockmap_strp_get_fwd_alloc(p, &fwd_alloc);
+	if (!ASSERT_OK(err, "sockmap_strp_get_fwd_alloc") ||
+	    !ASSERT_GE(fwd_alloc, 0, "sk_forward_alloc"))
+		goto out_destroy;
+out_destroy:
+	test_sockmap_strp__destroy(strp);
+	if (c >= 0)
+		close(c);
+	if (p >= 0)
+		close(p);
+}
+
 void test_sockmap_strp(void)
 {
 	if (test__start_subtest("sockmap strp tcp pass"))
@@ -482,4 +651,6 @@ void test_sockmap_strp(void)
 		test_sockmap_strp_dispatch_pkt(AF_INET, SOCK_STREAM);
 	if (test__start_subtest("sockmap strp parser reject pkt mod"))
 		test_sockmap_strp_parser_reject();
+	if (test__start_subtest("sockmap strp self pass fwd alloc"))
+		test_sockmap_strp_self_pass_fwd_alloc();
 }
