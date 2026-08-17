@@ -187,6 +187,8 @@ int bpf_kfunc_call_sock_sendmsg(struct sendmsg_args *args) __ksym;
 int bpf_kfunc_call_kernel_getsockname(struct addr_args *args) __ksym;
 int bpf_kfunc_call_kernel_getpeername(struct addr_args *args) __ksym;
 
+int bpf_kfunc_link_force_unseal(int link_fd) __ksym;
+
 void bpf_kfunc_dynptr_test(struct bpf_dynptr *ptr, struct bpf_dynptr *ptr__nullable) __ksym;
 
 struct bpf_testmod_ctx *bpf_testmod_ctx_create(int *err) __ksym;
