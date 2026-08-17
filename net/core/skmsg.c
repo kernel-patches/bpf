@@ -586,21 +586,24 @@ static int sk_psock_skb_ingress_enqueue(struct sk_buff *skb,
 }
 
 static int sk_psock_skb_ingress_self(struct sk_psock *psock, struct sk_buff *skb,
-				     u32 off, u32 len, bool take_ref);
+				     u32 off, u32 len, bool take_ref,
+				     bool settle_fwd_alloc);
+static int sk_psock_skb_ingress_self_backlog(struct sk_psock *psock,
+					     struct sk_buff *skb,
+					     u32 off, u32 len, bool take_ref,
+					     bool settle_fwd_alloc);
 
 static int sk_psock_skb_ingress(struct sk_psock *psock, struct sk_buff *skb,
-				u32 off, u32 len)
+				u32 off, u32 len, bool settle_fwd_alloc)
 {
 	struct sock *sk = psock->sk;
 	struct sk_msg *msg;
 	int err;
 
-	/* If we are receiving on the same sock skb->sk is already assigned,
-	 * skip memory accounting and owner transition seeing it already set
-	 * correctly.
-	 */
 	if (unlikely(skb->sk == sk))
-		return sk_psock_skb_ingress_self(psock, skb, off, len, true);
+		return sk_psock_skb_ingress_self_backlog(psock, skb, off,
+							 len, true,
+							 settle_fwd_alloc);
 	msg = sk_psock_create_ingress_msg(sk, skb);
 	if (!msg)
 		return -EAGAIN;
@@ -618,34 +621,100 @@ static int sk_psock_skb_ingress(struct sk_psock *psock, struct sk_buff *skb,
 	return err;
 }
 
-/* Puts an skb on the ingress queue of the socket already assigned to the
- * skb. In this case we do not need to check memory limits or skb_set_owner_r
- * because the skb is already accounted for here.
+static int sk_psock_skb_ingress_self_assign(struct sock *sk,
+					    struct sk_buff *skb,
+					    bool settle_fwd_alloc)
+{
+	/* Leave skbs already receive-accounted to sk untouched. */
+	if (skb->sk == sk && skb->destructor == sock_rfree)
+		return 0;
+
+	if (settle_fwd_alloc) {
+		sock_owned_by_me(sk);
+
+		if (!sk_rmem_schedule(sk, skb, 0))
+			return -EAGAIN;
+	}
+
+	skb_set_owner_r(skb, sk);
+	return 0;
+}
+
+/* Puts an skb on the ingress queue for psock->sk.
+ *
+ * If the skb already has receive ownership for this socket, leave socket
+ * memory accounting untouched. Otherwise, before assigning receive ownership
+ * to an unowned strparser SK_PASS skb, settle any existing sk_forward_alloc
+ * deficit from earlier clone charges.
  */
 static int sk_psock_skb_ingress_self(struct sk_psock *psock, struct sk_buff *skb,
-				     u32 off, u32 len, bool take_ref)
+				     u32 off, u32 len, bool take_ref,
+				     bool settle_fwd_alloc)
 {
-	struct sk_msg *msg = alloc_sk_msg(GFP_ATOMIC);
 	struct sock *sk = psock->sk;
+	struct sk_msg *msg = alloc_sk_msg(GFP_ATOMIC);
 	int err;
 
 	if (unlikely(!msg))
 		return -EAGAIN;
-	skb_set_owner_r(skb, sk);
+
+	err = sk_psock_skb_ingress_self_assign(sk, skb, settle_fwd_alloc);
+	if (err)
+		goto free;
 
 	/* This is used in tcp_bpf_recvmsg_parser() to determine whether the
 	 * data originates from the socket's own protocol stack. No need to
 	 * refcount sk because msg's lifetime is bound to sk via the ingress_msg.
 	 */
 	msg->sk = sk;
-	err = sk_psock_skb_ingress_enqueue(skb, off, len, psock, sk, msg, take_ref);
+	err = sk_psock_skb_ingress_enqueue(skb, off, len, psock, sk, msg,
+					   take_ref);
 	if (err < 0)
-		kfree(msg);
+		goto free;
+
+	return err;
+free:
+	kfree(msg);
+	return err;
+}
+
+static int sk_psock_skb_ingress_self_backlog(struct sk_psock *psock,
+					     struct sk_buff *skb,
+					     u32 off, u32 len, bool take_ref,
+					     bool settle_fwd_alloc)
+{
+	struct sock *sk = psock->sk;
+	struct sk_msg *msg = alloc_sk_msg(GFP_ATOMIC);
+	int err;
+
+	if (unlikely(!msg))
+		return -EAGAIN;
+
+	lock_sock(sk);
+	err = sk_psock_skb_ingress_self_assign(sk, skb, settle_fwd_alloc);
+	release_sock(sk);
+	if (err)
+		goto free;
+
+	/* This is used in tcp_bpf_recvmsg_parser() to determine whether the
+	 * data originates from the socket's own protocol stack. No need to
+	 * refcount sk because msg's lifetime is bound to sk via the ingress_msg.
+	 */
+	msg->sk = sk;
+	err = sk_psock_skb_ingress_enqueue(skb, off, len, psock, sk, msg,
+					   take_ref);
+	if (err < 0)
+		goto free;
+
+	return err;
+free:
+	kfree(msg);
 	return err;
 }
 
 static int sk_psock_handle_skb(struct sk_psock *psock, struct sk_buff *skb,
-			       u32 off, u32 len, bool ingress)
+			       u32 off, u32 len, bool ingress,
+			       bool self_pass, bool strparser)
 {
 	if (!ingress) {
 		if (!sock_writeable(psock->sk))
@@ -653,7 +722,11 @@ static int sk_psock_handle_skb(struct sk_psock *psock, struct sk_buff *skb,
 		return skb_send_sock(psock->sk, skb, off, len);
 	}
 
-	return sk_psock_skb_ingress(psock, skb, off, len);
+	if (self_pass)
+		return sk_psock_skb_ingress_self_backlog(psock, skb, off,
+							 len, true, strparser);
+
+	return sk_psock_skb_ingress(psock, skb, off, len, strparser);
 }
 
 static void sk_psock_skb_state(struct sk_psock *psock,
@@ -694,9 +767,14 @@ static void sk_psock_backlog(struct work_struct *work)
 		return;
 	mutex_lock(&psock->work_mutex);
 	while ((skb = skb_peek(&psock->ingress_skb))) {
+		unsigned long saved_redir;
+		bool strparser;
+		bool self_pass;
+
 		len = skb->len;
 		off = 0;
-		if (skb_bpf_strparser(skb)) {
+		strparser = skb_bpf_strparser(skb);
+		if (strparser) {
 			struct strp_msg *stm = strp_msg(skb);
 
 			off = stm->offset;
@@ -710,17 +788,20 @@ static void sk_psock_backlog(struct work_struct *work)
 		}
 
 		ingress = skb_bpf_ingress(skb);
+		self_pass = ingress && !skb_bpf_redirect_fetch(skb);
+		saved_redir = skb->_sk_redir;
 		skb_bpf_redirect_clear(skb);
 		do {
 			ret = -EIO;
 			if (!sock_flag(psock->sk, SOCK_DEAD))
 				ret = sk_psock_handle_skb(psock, skb, off,
-							  len, ingress);
+							  len, ingress,
+							  self_pass, strparser);
 			if (ret <= 0) {
 				if (ret == -EAGAIN) {
 					sk_psock_skb_state(psock, state, len, off);
 					/* Restore redir info we cleared before */
-					skb_bpf_set_redir(skb, psock->sk, ingress);
+					skb->_sk_redir = saved_redir;
 					/* Delay slightly to prioritize any
 					 * other work that might be here.
 					 */
@@ -1017,6 +1098,8 @@ static int sk_psock_verdict_apply(struct sk_psock *psock, struct sk_buff *skb,
 		 * retrying later from workqueue.
 		 */
 		if (skb_queue_empty(&psock->ingress_skb)) {
+			bool settle_fwd_alloc = false;
+
 			len = skb->len;
 			off = 0;
 			if (skb_bpf_strparser(skb)) {
@@ -1024,8 +1107,10 @@ static int sk_psock_verdict_apply(struct sk_psock *psock, struct sk_buff *skb,
 
 				off = stm->offset;
 				len = stm->full_len;
+				settle_fwd_alloc = true;
 			}
-			err = sk_psock_skb_ingress_self(psock, skb, off, len, false);
+			err = sk_psock_skb_ingress_self(psock, skb, off, len,
+							false, settle_fwd_alloc);
 		}
 		if (err < 0) {
 			spin_lock_bh(&psock->ingress_lock);
