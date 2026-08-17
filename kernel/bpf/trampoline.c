@@ -843,9 +843,11 @@ static enum bpf_tramp_prog_type bpf_attach_type_to_tramp(struct bpf_prog *prog)
 	}
 }
 
-static int bpf_freplace_check_tgt_prog(struct bpf_prog *tgt_prog)
+static int bpf_freplace_check_tgt_prog(struct bpf_prog *tgt_prog,
+				       struct bpf_prog *prog)
 {
 	struct bpf_prog_aux *aux = tgt_prog->aux;
+	enum bpf_cgroup_storage_type i;
 
 	guard(mutex)(&aux->ext_mutex);
 	if (aux->prog_array_member_cnt)
@@ -858,6 +860,23 @@ static int bpf_freplace_check_tgt_prog(struct bpf_prog *tgt_prog)
 		return -EBUSY;
 
 	aux->is_extended = true;
+
+	/*
+	 * At runtime the extension program inherits the target program's
+	 * cgroup storage context (via prog_item->cgroup_storage), so its
+	 * own map never provides storage; the verifier, however, bounds
+	 * its accesses (size, flags, layout) by that map. Require both
+	 * programs to reference the same map, matching the cookie
+	 * semantics of the prog-array path.
+	 */
+	for_each_cgroup_storage_type(i) {
+		struct bpf_map *tgt_map = tgt_prog->aux->cgroup_storage[i];
+		struct bpf_map *prog_map = prog->aux->cgroup_storage[i];
+
+		if (prog_map && prog_map != tgt_map)
+			return -EINVAL;
+	}
+
 	return 0;
 }
 
@@ -970,7 +989,7 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_node *node,
 		/* Cannot attach extension if fentry/fexit are in use. */
 		if (cnt)
 			return -EBUSY;
-		err = bpf_freplace_check_tgt_prog(tgt_prog);
+		err = bpf_freplace_check_tgt_prog(tgt_prog, node->link->prog);
 		if (err)
 			return err;
 		tr->extension_prog = node->link->prog;
