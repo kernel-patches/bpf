@@ -1086,7 +1086,7 @@ static void blkcg_rstat_flush(struct cgroup_subsys_state *css, int cpu)
  * flushing the root cgroup's stats by explicitly filling in the iostat
  * with disk level statistics.
  */
-static void blkcg_fill_root_iostats(void)
+void blkcg_fill_root_iostats(void)
 {
 	struct class_dev_iter iter;
 	struct device *dev;
