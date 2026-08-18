@@ -473,7 +473,7 @@ static void join_thread(struct thread *t)
 {
 	int ret = pthread_join(t->id, NULL);
 
-	if (ret < 0)
+	if (ret)
 		err("%s: joining thread", t->filename);
 	else
 		debug("%s: joined\n", t->filename);
