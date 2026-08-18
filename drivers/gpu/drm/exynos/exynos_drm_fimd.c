@@ -1325,6 +1325,7 @@ static int exynos_fimd_resume(struct device *dev)
 		DRM_DEV_ERROR(dev,
 			      "Failed to prepare_enable the lcd clk [%d]\n",
 			      ret);
+		clk_disable_unprepare(ctx->bus_clk);
 		return ret;
 	}
 
