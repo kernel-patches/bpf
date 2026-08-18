@@ -3139,7 +3139,7 @@ static int uprobe_prog_run(struct bpf_uprobe *uprobe,
 	struct bpf_prog *prog = link->link.prog;
 	bool sleepable = prog->sleepable;
 	struct bpf_run_ctx *old_run_ctx;
-	int err;
+	int err = 0;
 
 	if (link->task && !same_thread_group(current, link->task))
 		return 0;
@@ -3151,10 +3151,17 @@ static int uprobe_prog_run(struct bpf_uprobe *uprobe,
 
 	migrate_disable();
 
+	if (unlikely(!bpf_prog_get_recursion_context(prog))) {
+		bpf_prog_inc_misses_counter(prog);
+		goto out;
+	}
+
 	old_run_ctx = bpf_set_run_ctx(&run_ctx.session_ctx.run_ctx);
-	err = bpf_prog_run(link->link.prog, regs);
+	err = bpf_prog_run(prog, regs);
 	bpf_reset_run_ctx(old_run_ctx);
 
+out:
+	bpf_prog_put_recursion_context(prog);
 	migrate_enable();
 
 	if (sleepable)

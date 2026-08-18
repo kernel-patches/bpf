@@ -2577,6 +2577,14 @@ static inline void bpf_reset_run_ctx(struct bpf_run_ctx *old_ctx)
 
 typedef u32 (*bpf_prog_run_fn)(const struct bpf_prog *prog, const void *ctx);
 
+#ifdef CONFIG_BPF_SYSCALL
+void notrace bpf_prog_inc_misses_counter(struct bpf_prog *prog);
+#else
+static inline void bpf_prog_inc_misses_counter(struct bpf_prog *prog)
+{
+}
+#endif
+
 static __always_inline u32
 bpf_prog_run_array(const struct bpf_prog_array *array,
 		   const void *ctx, bpf_prog_run_fn run_prog)
@@ -2622,7 +2630,7 @@ bpf_prog_run_array_uprobe(const struct bpf_prog_array *array,
 			  const void *ctx, bpf_prog_run_fn run_prog)
 {
 	const struct bpf_prog_array_item *item;
-	const struct bpf_prog *prog;
+	struct bpf_prog *prog;
 	struct bpf_run_ctx *old_run_ctx;
 	struct bpf_trace_run_ctx run_ctx;
 	u32 ret = 1;
@@ -2640,15 +2648,30 @@ bpf_prog_run_array_uprobe(const struct bpf_prog_array *array,
 	old_run_ctx = bpf_set_run_ctx(&run_ctx.run_ctx);
 	item = &array->items[0];
 	while ((prog = READ_ONCE(item->prog))) {
+		/* dummy_bpf_prog has no recursion state. */
+		if (unlikely(!prog->len)) {
+			item++;
+			continue;
+		}
+
+		if (unlikely(!bpf_prog_get_recursion_context(prog))) {
+			bpf_prog_inc_misses_counter(prog);
+			bpf_prog_put_recursion_context(prog);
+			item++;
+			continue;
+		}
+
 		if (!prog->sleepable)
 			rcu_read_lock();
 
 		run_ctx.bpf_cookie = item->bpf_cookie;
 		ret &= run_prog(prog, ctx);
-		item++;
 
 		if (!prog->sleepable)
 			rcu_read_unlock();
+
+		bpf_prog_put_recursion_context(prog);
+		item++;
 	}
 	bpf_reset_run_ctx(old_run_ctx);
 	migrate_enable();
@@ -3212,8 +3235,6 @@ static inline bool has_current_bpf_ctx(void)
 	return !!current->bpf_ctx;
 }
 
-void notrace bpf_prog_inc_misses_counter(struct bpf_prog *prog);
-
 void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data,
 		     enum bpf_dynptr_type type, u32 offset, u32 size);
 void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr);
@@ -3535,10 +3556,6 @@ static inline bool unprivileged_ebpf_enabled(void)
 static inline bool has_current_bpf_ctx(void)
 {
 	return false;
-}
-
-static inline void bpf_prog_inc_misses_counter(struct bpf_prog *prog)
-{
 }
 
 static inline void bpf_cgrp_storage_free(struct cgroup *cgroup)
