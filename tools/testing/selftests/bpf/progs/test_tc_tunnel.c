@@ -16,6 +16,11 @@ static const int cfg_port = 8000;
 
 static const int cfg_udp_src = 20000;
 
+__u64 decap_validation_seen;
+__u64 decap_gso_validation_seen;
+__u64 decap_large_send_validation_seen;
+__u32 decap_expect_large_send;
+
 #define ETH_P_MPLS_UC	0x8847
 #define ETH_P_TEB	0x6558
 
@@ -690,7 +695,21 @@ static int decap_internal(struct __sk_buff *skb, int off, int len, char proto,
 
 	kskb = bpf_cast_to_kern_ctx(skb);
 	shinfo = bpf_core_cast(kskb->head + kskb->end, struct skb_shared_info);
+
+	if (flags & (BPF_F_ADJ_ROOM_DECAP_L4_MASK |
+		     BPF_F_ADJ_ROOM_DECAP_IPXIP_MASK))
+		decap_validation_seen++;
+
+	if ((flags & (BPF_F_ADJ_ROOM_DECAP_L4_MASK |
+		      BPF_F_ADJ_ROOM_DECAP_IPXIP_MASK)) &&
+	    decap_expect_large_send)
+		decap_large_send_validation_seen++;
+
 	if (shinfo->gso_size) {
+		if (flags & (BPF_F_ADJ_ROOM_DECAP_L4_MASK |
+			     BPF_F_ADJ_ROOM_DECAP_IPXIP_MASK))
+			decap_gso_validation_seen++;
+
 		if ((flags & BPF_F_ADJ_ROOM_DECAP_L4_UDP) &&
 		    (shinfo->gso_type & SKB_GSO_UDP_TUNNEL_MASK))
 			return TC_ACT_SHOT;

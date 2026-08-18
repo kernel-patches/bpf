@@ -206,7 +206,7 @@ static void disconnect_client_from_server(struct subtest_cfg *cfg,
 	free(conn);
 }
 
-static int send_and_test_data(struct subtest_cfg *cfg)
+static int send_and_test_data(struct subtest_cfg *cfg, struct test_tc_tunnel *skel)
 {
 	struct connection *conn;
 	int err, res = -1;
@@ -215,6 +215,7 @@ static int send_and_test_data(struct subtest_cfg *cfg)
 	if (!ASSERT_OK_PTR(conn, "connect to server"))
 		return -1;
 
+	skel->bss->decap_expect_large_send = 0;
 	err = send(conn->client_fd, tx_buffer, DEFAULT_TEST_DATA_SIZE, 0);
 	if (!ASSERT_EQ(err, DEFAULT_TEST_DATA_SIZE, "send data from client"))
 		goto end;
@@ -226,14 +227,17 @@ static int send_and_test_data(struct subtest_cfg *cfg)
 		goto end;
 	}
 
+	skel->bss->decap_expect_large_send = 1;
 	err = send(conn->client_fd, tx_buffer, GSO_TEST_DATA_SIZE, 0);
 	if (!ASSERT_EQ(err, GSO_TEST_DATA_SIZE, "send (large) data from client"))
 		goto end;
 	if (check_server_rx_data(cfg, conn, DEFAULT_TEST_DATA_SIZE))
 		goto end;
+	skel->bss->decap_expect_large_send = 0;
 
 	res = 0;
 end:
+	skel->bss->decap_expect_large_send = 0;
 	disconnect_client_from_server(cfg, conn);
 	return res;
 }
@@ -374,9 +378,14 @@ fail:
 	return ret;
 }
 
-static void run_test(struct subtest_cfg *cfg)
+static void run_test(struct subtest_cfg *cfg, struct test_tc_tunnel *skel)
 {
 	struct nstoken *nstoken;
+
+	skel->bss->decap_validation_seen = 0;
+	skel->bss->decap_gso_validation_seen = 0;
+	skel->bss->decap_large_send_validation_seen = 0;
+	skel->bss->decap_expect_large_send = 0;
 
 	if (!ASSERT_OK(run_server(cfg), "run server"))
 		return;
@@ -386,7 +395,7 @@ static void run_test(struct subtest_cfg *cfg)
 		goto fail;
 
 	/* Basic communication must work */
-	if (!ASSERT_OK(send_and_test_data(cfg), "connect without any encap"))
+	if (!ASSERT_OK(send_and_test_data(cfg, skel), "connect without any encap"))
 		goto fail;
 
 	/* Attach encapsulation program to client */
@@ -398,7 +407,7 @@ static void run_test(struct subtest_cfg *cfg)
 		if (!ASSERT_OK(configure_kernel_decapsulation(cfg),
 					"configure kernel decapsulation"))
 			goto fail;
-		if (!ASSERT_OK(send_and_test_data(cfg),
+		if (!ASSERT_OK(send_and_test_data(cfg, skel),
 			       "connect with encap prog and kern decap"))
 			goto fail;
 	}
@@ -406,7 +415,18 @@ static void run_test(struct subtest_cfg *cfg)
 	/* Replace kernel decapsulation with BPF decapsulation, test must pass */
 	if (!ASSERT_OK(configure_ebpf_decapsulation(cfg), "configure ebpf decapsulation"))
 		goto fail;
-	ASSERT_OK(send_and_test_data(cfg), "connect with encap and decap progs");
+	if (!ASSERT_OK(send_and_test_data(cfg, skel), "connect with encap and decap progs"))
+		goto fail;
+	if (!ASSERT_NEQ(skel->bss->decap_validation_seen, 0,
+			"decap validation executed"))
+		goto fail;
+	if (!ASSERT_EQ(skel->bss->decap_expect_large_send, 0,
+		       "decap large-send marker reset"))
+		goto fail;
+	if (cfg->test_gso) {
+		ASSERT_NEQ(skel->bss->decap_large_send_validation_seen, 0,
+			   "decap validation executed for large send");
+	}
 
 fail:
 	close_netns(nstoken);
@@ -438,6 +458,7 @@ static int setup(void)
 	SYS(fail_close_ns_client, "ip link add %s type veth peer name %s",
 	    "veth1 mtu 1500 netns " CLIENT_NS " address " MAC_ADDR_VETH1,
 	    "veth2 mtu 1500 netns " SERVER_NS " address " MAC_ADDR_VETH2);
+	SYS(fail_close_ns_client, "ethtool -K veth1 tso off");
 	SYS(fail_close_ns_client, "ip link set veth1 up");
 	nstoken_server = open_netns(SERVER_NS);
 	if (!ASSERT_OK_PTR(nstoken_server, "open server ns"))
@@ -701,7 +722,7 @@ void test_tc_tunnel(void)
 		if (ret < 0 || !test__start_subtest(cfg->name))
 			continue;
 		if (subtest_setup(skel, cfg) == 0)
-			run_test(cfg);
+			run_test(cfg, skel);
 		subtest_cleanup(cfg);
 	}
 	cleanup();
