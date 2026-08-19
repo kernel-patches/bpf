@@ -560,7 +560,16 @@ static inline void bpf_long_memcpy(void *dst, const void *src, u32 size)
 		data_race(*ldst++ = *lsrc++);
 }
 
-/* copy everything but bpf_spin_lock, bpf_timer, and kptrs. There could be one of each. */
+/*
+ * Copy everything but bpf_spin_lock, bpf_timer, and kptrs. There could
+ * be one of each.
+ *
+ * Map value copies can race with unlocked updates from BPF programs or
+ * syscalls. Such copies are best effort and may be torn, so annotate the
+ * ordinary byte copies as intentional data races. Callers that require a
+ * consistent value must provide synchronization or use BPF_F_LOCK where
+ * supported.
+ */
 static inline void bpf_obj_memcpy(struct btf_record *rec,
 				  void *dst, void *src, u32 size,
 				  bool long_memcpy)
@@ -572,7 +581,7 @@ static inline void bpf_obj_memcpy(struct btf_record *rec,
 		if (long_memcpy)
 			bpf_long_memcpy(dst, src, size);
 		else
-			memcpy(dst, src, size);
+			data_race(memcpy(dst, src, size));
 		return;
 	}
 
@@ -580,10 +589,10 @@ static inline void bpf_obj_memcpy(struct btf_record *rec,
 		u32 next_off = rec->fields[i].offset;
 		u32 sz = next_off - curr_off;
 
-		memcpy(dst + curr_off, src + curr_off, sz);
+		data_race(memcpy(dst + curr_off, src + curr_off, sz));
 		curr_off += rec->fields[i].size + sz;
 	}
-	memcpy(dst + curr_off, src + curr_off, size - curr_off);
+	data_race(memcpy(dst + curr_off, src + curr_off, size - curr_off));
 }
 
 static inline void copy_map_value(struct bpf_map *map, void *dst, void *src)
