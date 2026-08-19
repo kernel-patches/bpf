@@ -1699,12 +1699,15 @@ void *worker_testapp_validate_rx(void *arg)
 				       strerror(-err));
 	}
 
+	/* Publish setup failure before releasing the main thread from the barrier. */
+	if (err)
+		test->fail = true;
+
 	if (test->use_barrier)
 		pthread_barrier_wait(&barr);
 
 	/* We leave only now in case of error to avoid getting stuck in the barrier */
 	if (err) {
-		test->fail = true;
 		pthread_exit(NULL);
 	}
 
@@ -1907,7 +1910,7 @@ static int __testapp_validate_traffic(struct test_spec *test, struct ifobject *i
 		}
 	}
 
-	if (ifobj2) {
+	if (ifobj2 && !test->fail) {
 		/*Spawn TX thread */
 		pthread_create(&t1, NULL, ifobj2->func_ptr, test);
 		pthread_join(t1, NULL);
