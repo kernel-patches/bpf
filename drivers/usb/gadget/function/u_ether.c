@@ -779,7 +779,7 @@ struct eth_dev *gether_setup_name(struct usb_gadget *g,
 			"using random %s ethernet address\n", "host");
 
 	if (ethaddr)
-		memcpy(ethaddr, dev->host_mac, ETH_ALEN);
+		ether_addr_copy(ethaddr, dev->host_mac);
 
 	net->netdev_ops = &eth_netdev_ops;
 
@@ -929,7 +929,7 @@ int gether_set_dev_addr(struct net_device *net, const char *dev_addr)
 	dev = netdev_priv(net);
 	if (get_ether_addr(dev_addr, new_addr))
 		return -EINVAL;
-	memcpy(dev->dev_mac, new_addr, ETH_ALEN);
+	ether_addr_copy(dev->dev_mac, new_addr);
 	net->addr_assign_type = NET_ADDR_SET;
 	return 0;
 }
@@ -959,7 +959,7 @@ int gether_set_host_addr(struct net_device *net, const char *host_addr)
 	dev = netdev_priv(net);
 	if (get_ether_addr(host_addr, new_addr))
 		return -EINVAL;
-	memcpy(dev->host_mac, new_addr, ETH_ALEN);
+	ether_addr_copy(dev->host_mac, new_addr);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(gether_set_host_addr);
@@ -1001,7 +1001,7 @@ void gether_get_host_addr_u8(struct net_device *net, u8 host_mac[ETH_ALEN])
 	struct eth_dev *dev;
 
 	dev = netdev_priv(net);
-	memcpy(host_mac, dev->host_mac, ETH_ALEN);
+	ether_addr_copy(host_mac, dev->host_mac);
 }
 EXPORT_SYMBOL_GPL(gether_get_host_addr_u8);
 
