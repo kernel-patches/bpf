@@ -120,17 +120,47 @@ static void emit_zext_ver(struct jit_context *ctx, u8 dst)
 		emit_zext(ctx, dst);
 }
 
-/* Register move operation (32-bit) */
-static void emit_mov_r32(struct jit_context *ctx, u8 dst, u8 src)
+/* Register move operation (32-bit), optionally with sign extension */
+static void emit_mov_r32(struct jit_context *ctx, u8 dst, u8 src, s16 off)
 {
-	emit_mov_r(ctx, dst, src);
+	switch (off) {
+	case 8:
+		emit(ctx, dsll32, dst, src, 24);
+		emit(ctx, dsra32, dst, dst, 24);
+		clobber_reg(ctx, dst);
+		break;
+	case 16:
+		emit(ctx, dsll32, dst, src, 16);
+		emit(ctx, dsra32, dst, dst, 16);
+		clobber_reg(ctx, dst);
+		break;
+	default:
+		emit_mov_r(ctx, dst, src);
+		break;
+	}
 	emit_zext_ver(ctx, dst);
 }
 
-/* Register move operation (64-bit) */
-static void emit_mov_r64(struct jit_context *ctx, u8 dst, u8 src)
+/* Register move operation (64-bit), optionally with sign extension */
+static void emit_mov_r64(struct jit_context *ctx, u8 dst, u8 src, s16 off)
 {
-	emit_mov_r(ctx, dst, src);
+	switch (off) {
+	case 8:
+		emit(ctx, dsll32, dst, src, 24);
+		emit(ctx, dsra32, dst, dst, 24);
+		break;
+	case 16:
+		emit(ctx, dsll32, dst, src, 16);
+		emit(ctx, dsra32, dst, dst, 16);
+		break;
+	case 32:
+		emit(ctx, sll, dst, src, 0);
+		break;
+	default:
+		emit_mov_r(ctx, dst, src);
+		return;
+	}
+	clobber_reg(ctx, dst);
 }
 
 /* dst = imm (64-bit) */
@@ -669,7 +699,7 @@ int build_insn(const struct bpf_insn *insn, struct jit_context *ctx)
 			/* Special mov32 for zext */
 			emit_zext(ctx, dst);
 		} else {
-			emit_mov_r32(ctx, dst, src);
+			emit_mov_r32(ctx, dst, src, off);
 		}
 		break;
 	/* dst = -dst */
@@ -754,7 +784,7 @@ int build_insn(const struct bpf_insn *insn, struct jit_context *ctx)
 		break;
 	/* dst = src (64-bit) */
 	case BPF_ALU64 | BPF_MOV | BPF_X:
-		emit_mov_r64(ctx, dst, src);
+		emit_mov_r64(ctx, dst, src, off);
 		break;
 	/* dst = -dst (64-bit) */
 	case BPF_ALU64 | BPF_NEG:
