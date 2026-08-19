@@ -117,12 +117,12 @@ static void __exit_with_error(int error, const char *file, const char *func, int
 
 #define exit_with_error(error) __exit_with_error(error, __FILE__, __func__, __LINE__)
 
-static bool ifobj_zc_avail(struct ifobject *ifobject)
+static bool ifobj_zc_avail(struct ifobject *ifobj)
 {
 	size_t umem_sz = DEFAULT_UMEM_BUFFERS * XSK_UMEM__DEFAULT_FRAME_SIZE;
 	int mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
-	struct xsk_socket_info *xsk;
-	struct xsk_umem_info *umem;
+	struct xsk_socket_info xsk = {};
+	struct xsk_umem_info umem = {};
 	bool zc_avail = false;
 	void *bufs;
 	int ret;
@@ -131,32 +131,26 @@ static bool ifobj_zc_avail(struct ifobject *ifobject)
 	if (bufs == MAP_FAILED)
 		exit_with_error(errno);
 
-	umem = calloc(1, sizeof(struct xsk_umem_info));
-	if (!umem) {
-		munmap(bufs, umem_sz);
-		exit_with_error(ENOMEM);
-	}
-	umem->frame_size = XSK_UMEM__DEFAULT_FRAME_SIZE;
-	ret = xsk_configure_umem(ifobject, umem, bufs, umem_sz);
+	umem.mmap_size = umem_sz;
+	umem.frame_size = XSK_UMEM__DEFAULT_FRAME_SIZE;
+	ret = xsk_configure_umem(ifobj, &umem, bufs, umem_sz);
 	if (ret)
 		exit_with_error(-ret);
 
-	xsk = calloc(1, sizeof(struct xsk_socket_info));
-	if (!xsk)
-		goto out;
-	ifobject->bind_flags = XDP_USE_NEED_WAKEUP | XDP_ZEROCOPY;
-	ifobject->rx_on = true;
-	xsk->rxqsize = XSK_RING_CONS__DEFAULT_NUM_DESCS;
-	ret = xsk_configure_socket(xsk, umem, ifobject, false);
+	xsk.umem_ref = true;
+
+	ifobj->bind_flags = XDP_USE_NEED_WAKEUP | XDP_ZEROCOPY;
+	ifobj->rx_on = true;
+	xsk.rxqsize = XSK_RING_CONS__DEFAULT_NUM_DESCS;
+	ret = xsk_configure_socket(&xsk, &umem, ifobj, false);
 	if (!ret)
 		zc_avail = true;
 
-	xsk_socket__delete(xsk->xsk);
-	free(xsk);
-out:
-	munmap(umem->buffer, umem_sz);
-	xsk_umem__delete(umem->umem);
-	free(umem);
+	/* Use the same refcount-based teardown path for both success and failure. */
+	ret = xsk_delete_socket(&xsk);
+	if (ret)
+		exit_with_error(-ret);
+
 	return zc_avail;
 }
 

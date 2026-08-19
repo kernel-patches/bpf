@@ -101,6 +101,7 @@ int xsk_configure_umem(struct ifobject *ifobj, struct xsk_umem_info *umem, void 
 		return ret;
 
 	umem->buffer = buffer;
+	refcount_set(&umem->users, 1);
 	if (ifobj->shared_umem && ifobj->rx_on) {
 		umem->base_addr = umem_size(umem);
 		umem->next_buffer = umem_size(umem);
@@ -154,6 +155,7 @@ int xsk_configure_socket(struct xsk_socket_info *xsk, struct xsk_umem_info *umem
 	struct xsk_socket_config cfg = {};
 	struct xsk_ring_cons *rxr;
 	struct xsk_ring_prod *txr;
+	int ret;
 
 	xsk->umem = umem;
 	cfg.rx_size = xsk->rxqsize;
@@ -170,7 +172,26 @@ int xsk_configure_socket(struct xsk_socket_info *xsk, struct xsk_umem_info *umem
 
 	txr = ifobject->tx_on ? &xsk->tx : NULL;
 	rxr = ifobject->rx_on ? &xsk->rx : NULL;
-	return xsk_socket__create(&xsk->xsk, ifobject->ifindex, 0, umem->umem, rxr, txr, &cfg);
+	ret = xsk_socket__create(&xsk->xsk, ifobject->ifindex, 0, umem->umem, rxr, txr, &cfg);
+	if (ret) {
+		/*
+		 * For shared sockets refcount_inc hasn't run yet, so clear umem to mark this slot
+		 * as having no reference. For the owner (non-shared) the reference was taken by
+		 * xsk_configure_umem; leave umem set so the caller's rollback path can release it
+		 * via umem_ref.
+		 */
+		if (shared)
+			xsk->umem = NULL;
+		xsk->xsk = NULL;
+		return ret;
+	}
+
+	if (shared) {
+		refcount_inc(&umem->users);
+		xsk->umem_ref = true;
+	}
+
+	return ret;
 }
 
 static int set_ring_size(struct ifobject *ifobj)
@@ -1508,8 +1529,15 @@ static int thread_common_ops_tx(struct test_spec *test, struct ifobject *ifobjec
 	}
 
 	umem_rx = test->ifobj_rx->xsk_arr[0].umem;
+	/* Non-owning view used only for TX buffer arithmetic; the sockets below bind to
+	 * the RX-owned UMEM, so the handle, cq and refcount stay in one place.
+	 */
 	umem_tx = ifobject->xsk_arr[0].umem_real;
-	memcpy(umem_tx, umem_rx, sizeof(*umem_tx));
+	umem_tx->num_frames = umem_rx->num_frames;
+	umem_tx->frame_headroom = umem_rx->frame_headroom;
+	umem_tx->buffer = umem_rx->buffer;
+	umem_tx->frame_size = umem_rx->frame_size;
+	umem_tx->unaligned_mode = umem_rx->unaligned_mode;
 	umem_tx->base_addr = 0;
 	umem_tx->next_buffer = 0;
 
@@ -1599,6 +1627,8 @@ static int thread_common_ops(struct test_spec *test, struct ifobject *ifobject)
 	ret = xsk_configure_umem(ifobject, umem, bufs, umem_sz);
 	if (ret)
 		return ret;
+	/* Mark before xsk_configure so rollback can release the UMEM if it fails. */
+	ifobject->xsk->umem_ref = true;
 
 	ret = xsk_configure(test, ifobject, umem, false);
 	if (ret)
@@ -1701,12 +1731,65 @@ void *worker_testapp_validate_rx(void *arg)
 	pthread_exit(NULL);
 }
 
-static void testapp_clean_xsk_umem(struct ifobject *ifobj)
+int xsk_delete_socket(struct xsk_socket_info *xsk)
 {
-	struct xsk_umem_info *umem = ifobj->xsk->umem;
+	struct xsk_umem_info *umem = xsk->umem;
 
-	xsk_umem__delete(umem->umem);
-	munmap(umem->buffer, umem->mmap_size);
+	if (!umem)
+		return 0;
+
+	if (xsk->xsk)
+		xsk_socket__delete(xsk->xsk);
+	xsk->xsk = NULL;
+
+	/* Skip slots that never acquired a UMEM reference (pre-initialized but unconfigured). */
+	if (!xsk->umem_ref) {
+		xsk->umem = NULL;
+		return 0;
+	}
+
+	if (refcount_dec_and_test(&umem->users)) {
+		if (umem->umem) {
+			int err = xsk_umem__delete(umem->umem);
+
+			if (err) {
+				ksft_print_msg("xsk_umem__delete failed: %d (umem still busy?)\n",
+					       err);
+				/* Keep ownership explicit so a later cleanup pass can retry
+				 * delete.
+				 */
+				refcount_set(&umem->users, 1);
+				xsk->umem_ref = true;
+				xsk->umem = umem;
+				return err;
+			}
+			umem->umem = NULL;
+		}
+		if (umem->buffer && umem->mmap_size) {
+			munmap(umem->buffer, umem->mmap_size);
+			umem->buffer = NULL;
+			umem->mmap_size = 0;
+		}
+	}
+
+	xsk->umem_ref = false;
+	xsk->umem = NULL;
+	return 0;
+}
+
+static void xsk_delete_all_ifobj_sockets(struct test_spec *test, struct ifobject *ifobj)
+{
+	u32 i;
+
+	if (!ifobj)
+		return;
+
+	/* A UMEM that could not be deleted stays mapped until the process exits,
+	 * so record it rather than letting teardown drop the error.
+	 */
+	for (i = test->nb_sockets; i > 0; i--)
+		if (xsk_delete_socket(&ifobj->xsk_arr[i - 1]))
+			test->fail = true;
 }
 
 static bool xdp_prog_changed_rx(struct test_spec *test)
@@ -1768,27 +1851,6 @@ static int xsk_attach_xdp_progs(struct test_spec *test, struct ifobject *ifobj_r
 	return err;
 }
 
-static void clean_sockets(struct test_spec *test, struct ifobject *ifobj)
-{
-	u32 i;
-
-	if (!ifobj || !test)
-		return;
-
-	for (i = 0; i < test->nb_sockets; i++)
-		xsk_socket__delete(ifobj->xsk_arr[i].xsk);
-}
-
-static void clean_umem(struct test_spec *test, struct ifobject *ifobj1, struct ifobject *ifobj2)
-{
-	if (!ifobj1)
-		return;
-
-	testapp_clean_xsk_umem(ifobj1);
-	if (ifobj2 && !ifobj2->shared_umem)
-		testapp_clean_xsk_umem(ifobj2);
-}
-
 static int __testapp_validate_traffic(struct test_spec *test, struct ifobject *ifobj1,
 				      struct ifobject *ifobj2)
 {
@@ -1840,8 +1902,7 @@ static int __testapp_validate_traffic(struct test_spec *test, struct ifobject *i
 		if (pthread_barrier_destroy(&barr)) {
 			test->use_barrier = false;
 			pthread_join(t0, NULL);
-			clean_sockets(test, ifobj1);
-			clean_umem(test, ifobj1, NULL);
+			xsk_delete_all_ifobj_sockets(test, ifobj1);
 			return TEST_FAILURE;
 		}
 	}
@@ -1855,9 +1916,8 @@ static int __testapp_validate_traffic(struct test_spec *test, struct ifobject *i
 	pthread_join(t0, NULL);
 
 	if (test->total_steps == test->current_step || test->fail) {
-		clean_sockets(test, ifobj1);
-		clean_sockets(test, ifobj2);
-		clean_umem(test, ifobj1, ifobj2);
+		xsk_delete_all_ifobj_sockets(test, ifobj2);
+		xsk_delete_all_ifobj_sockets(test, ifobj1);
 	}
 
 	if (test->fail)
@@ -1966,9 +2026,8 @@ int testapp_xdp_prog_cleanup(struct test_spec *test)
 		return TEST_FAILURE;
 
 	if (swap_xsk_resources(test)) {
-		clean_sockets(test, test->ifobj_rx);
-		clean_sockets(test, test->ifobj_tx);
-		clean_umem(test, test->ifobj_rx, test->ifobj_tx);
+		xsk_delete_all_ifobj_sockets(test, test->ifobj_tx);
+		xsk_delete_all_ifobj_sockets(test, test->ifobj_rx);
 		return TEST_FAILURE;
 	}
 
@@ -2506,9 +2565,8 @@ int testapp_hw_sw_max_ring_size(struct test_spec *test)
 	test->ifobj_tx->xsk->batch_size = test->ifobj_tx->ring.tx_max_pending - 8;
 	test->ifobj_rx->xsk->batch_size = test->ifobj_tx->ring.tx_max_pending - 8;
 	if (pkt_stream_replace(test, max_descs, MIN_PKT_SIZE)) {
-		clean_sockets(test, test->ifobj_tx);
-		clean_sockets(test, test->ifobj_rx);
-		clean_umem(test, test->ifobj_rx, test->ifobj_tx);
+		xsk_delete_all_ifobj_sockets(test, test->ifobj_tx);
+		xsk_delete_all_ifobj_sockets(test, test->ifobj_rx);
 		return TEST_FAILURE;
 	}
 
