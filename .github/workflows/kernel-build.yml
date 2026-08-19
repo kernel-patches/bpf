@@ -122,7 +122,7 @@ jobs:
 
       - if: ${{ !inputs.release }}
         name: Test bpftool build
-        uses: libbpf/ci/build-bpftool@v4
+        uses: Tropicao/libbpf-ci/build-bpftool@test_bpftool_build_in_ci
         env:
           MAX_MAKE_JOBS: 32
         with:
