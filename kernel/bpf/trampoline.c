@@ -561,10 +561,14 @@ u64 bpf_tramp_arena_base(const struct btf_func_model *m,
 
 static void bpf_tramp_image_free(struct bpf_tramp_image *im)
 {
+	int i;
+
 	bpf_image_ksym_del(&im->ksym);
 	arch_free_bpf_trampoline(im->image, im->size);
 	bpf_jit_uncharge_modmem(im->size);
 	percpu_ref_exit(&im->pcref);
+	for (i = 0; i < im->progs_cnt; i++)
+		bpf_prog_put(im->progs[i]);
 	kfree_rcu(im, rcu);
 }
 
@@ -618,12 +622,11 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 	 * rcu tasks to protect trampoline asm not covered by percpu_ref
 	 * (which are few asm insns before __bpf_tramp_enter and
 	 *  after __bpf_tramp_exit)
+	 * im->progs refs to keep the progs alive as long as the image
 	 *
 	 * The trampoline is unreachable before bpf_tramp_image_put().
 	 *
 	 * First, patch the trampoline to avoid calling into fexit progs.
-	 * The progs will be freed even if the original function is still
-	 * executing or sleeping.
 	 * In case of CONFIG_PREEMPT=y use call_rcu_tasks() to wait on
 	 * first few asm instructions to execute and call into
 	 * __bpf_tramp_enter->percpu_ref_get.
@@ -658,16 +661,20 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 	call_rcu_tasks_trace(&im->rcu, __bpf_tramp_image_put_rcu_tasks);
 }
 
-static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size)
+static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size,
+						     struct bpf_tramp_nodes *tnodes,
+						     int progs_cnt)
 {
 	struct bpf_tramp_image *im;
 	struct bpf_ksym *ksym;
-	void *image;
+	int kind, i, n = 0;
 	int err = -ENOMEM;
+	void *image;
 
-	im = kzalloc_obj(*im);
+	im = kzalloc_flex(*im, progs, progs_cnt);
 	if (!im)
 		goto out;
+	im->progs_cnt = progs_cnt;
 
 	err = bpf_jit_charge_modmem(size);
 	if (err)
@@ -688,6 +695,15 @@ static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size)
 	snprintf(ksym->name, KSYM_NAME_LEN, "bpf_trampoline_%llu", key);
 	bpf_image_ksym_init(image, size, ksym);
 	bpf_image_ksym_add(ksym);
+
+	for (kind = 0; kind < BPF_TRAMP_MAX; kind++) {
+		for (i = 0; i < tnodes[kind].nr_nodes; i++) {
+			struct bpf_prog *prog = tnodes[kind].nodes[i]->link->prog;
+
+			bpf_prog_inc(prog);
+			im->progs[n++] = prog;
+		}
+	}
 	return im;
 
 out_free_image:
@@ -771,7 +787,7 @@ again:
 		goto out;
 	}
 
-	im = bpf_tramp_image_alloc(tr->key, size);
+	im = bpf_tramp_image_alloc(tr->key, size, tnodes, total);
 	if (IS_ERR(im)) {
 		err = PTR_ERR(im);
 		goto out;
