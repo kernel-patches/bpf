@@ -77,9 +77,13 @@ enum test_mode {
 
 struct ifobject;
 struct test_spec;
+struct pkt_stream;
 typedef int (*validation_func_t)(struct ifobject *ifobj);
 typedef void *(*thread_func_t)(void *arg);
 typedef int (*test_func_t)(struct test_spec *test);
+typedef int (*shared_umem_seq_fn)(struct test_spec *test, const void *ctx);
+typedef void (*pkt_stream_dims_fn)(struct pkt_stream *orig, u32 sock_id, const void *ctx,
+				   u32 *nb_pkts, u32 *pkt_len);
 
 struct xsk_socket_info {
 	struct xsk_ring_cons rx;
@@ -182,6 +186,16 @@ struct pkt_stream {
 	bool verbatim;
 };
 
+struct shared_umem_len_ctx {
+	u32 short_len;
+	u32 long_len;
+};
+
+struct shared_umem_uneven_dist_ctx {
+	u32 total_pkts;
+	u32 pkt_len;
+};
+
 static inline bool pkt_continues(u32 options)
 {
 	return options & XDP_PKT_CONTD;
@@ -271,6 +285,10 @@ int testapp_xdp_metadata(struct test_spec *test);
 int testapp_xdp_metadata_mb(struct test_spec *test);
 int testapp_xdp_prog_cleanup(struct test_spec *test);
 int testapp_xdp_shared_umem(struct test_spec *test);
+int testapp_shared_umem_4_sockets(struct test_spec *test);
+int testapp_shared_umem_length_based(struct test_spec *test);
+int testapp_shared_umem_uneven_dist(struct test_spec *test);
+int testapp_shared_umem_unaligned(struct test_spec *test);
 
 void *worker_testapp_validate_rx(void *arg);
 void *worker_testapp_validate_tx(void *arg);
@@ -294,6 +312,10 @@ static const struct test_spec tests[] = {
 	{.name = "XDP_PROG_CLEANUP", .test_func = testapp_xdp_prog_cleanup},
 	{.name = "XDP_DROP_HALF", .test_func = testapp_xdp_drop},
 	{.name = "XDP_SHARED_UMEM", .test_func = testapp_xdp_shared_umem},
+	{.name = "SHARED_UMEM_4_SOCKETS", .test_func = testapp_shared_umem_4_sockets},
+	{.name = "SHARED_UMEM_LENGTH_BASED", .test_func = testapp_shared_umem_length_based},
+	{.name = "SHARED_UMEM_UNEVEN_DIST", .test_func = testapp_shared_umem_uneven_dist},
+	{.name = "SHARED_UMEM_UNALIGNED", .test_func = testapp_shared_umem_unaligned},
 	{.name = "XDP_METADATA_COPY", .test_func = testapp_xdp_metadata},
 	{.name = "XDP_METADATA_COPY_MULTI_BUFF", .test_func = testapp_xdp_metadata_mb},
 	{.name = "ALIGNED_INV_DESC_MULTI_BUFF", .test_func = testapp_aligned_inv_desc_mb},
