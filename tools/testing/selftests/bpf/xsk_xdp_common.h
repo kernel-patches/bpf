@@ -3,7 +3,8 @@
 #ifndef XSK_XDP_COMMON_H_
 #define XSK_XDP_COMMON_H_
 
-#define MAX_SOCKETS 2
+#define MAX_SOCKETS 4
+#define SHARED_UMEM_LEN_SPLIT 64
 #define PKT_HDR_ALIGN (sizeof(struct ethhdr) + 2) /* Just to align the data in the packet */
 
 struct xdp_info {
