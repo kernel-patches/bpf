@@ -782,6 +782,13 @@ struct bpf_object {
 	char *token_path;
 	int token_fd;
 
+	/* kernel module BTFs to load, as specified via bpf_object_open_opts */
+	struct {
+		char **names;
+		size_t nr_names;
+		struct hashmap *names_map;
+	} *kmod_btfs;
+
 	char path[];
 };
 
@@ -5851,6 +5858,121 @@ int bpf_core_add_cands(struct bpf_core_cand *local_cand,
 	return 0;
 }
 
+static size_t mod_name_hash_fn(long key, void *ctx)
+{
+	return str_hash((char *)key);
+}
+
+static bool mod_name_equal_fn(long key1, long key2, void *ctx)
+{
+	return strcmp((char *)key1, (char *)key2) == 0;
+}
+
+static void bpf_object__free_kmod_btfs(struct bpf_object *obj)
+{
+	size_t i;
+
+	if (!obj->kmod_btfs)
+		return;
+
+	if (obj->kmod_btfs->names) {
+		for (i = 0; i < obj->kmod_btfs->nr_names; i++)
+			zfree(&obj->kmod_btfs->names[i]);
+		zfree(&obj->kmod_btfs->names);
+	}
+	hashmap__free(obj->kmod_btfs->names_map);
+	zfree(&obj->kmod_btfs);
+}
+
+static int bpf_object__init_kmod_btfs(struct bpf_object *obj,
+				      const struct bpf_object_open_opts *opts)
+{
+	const char **kmod_btf_names;
+	size_t i, kmod_btf_names_cnt;
+	int err;
+
+	kmod_btf_names = OPTS_GET(opts, kmod_btf_names, NULL);
+	if (!kmod_btf_names)
+		return 0;
+
+	kmod_btf_names_cnt = OPTS_GET(opts, kmod_btf_names_cnt, 0);
+	if (!kmod_btf_names_cnt) {
+		pr_warn("kmod_btf_names_cnt must be set when kmod_btf_names is provided\n");
+		return -EINVAL;
+	}
+
+	obj->kmod_btfs = calloc(1, sizeof(*obj->kmod_btfs));
+	if (!obj->kmod_btfs)
+		return -ENOMEM;
+
+	obj->kmod_btfs->names = calloc(kmod_btf_names_cnt, sizeof(char *));
+	if (!obj->kmod_btfs->names) {
+		err = -ENOMEM;
+		goto err_out;
+	}
+
+	obj->kmod_btfs->names_map = hashmap__new(mod_name_hash_fn,
+						 mod_name_equal_fn, NULL);
+	if (IS_ERR(obj->kmod_btfs->names_map)) {
+		err = PTR_ERR(obj->kmod_btfs->names_map);
+		obj->kmod_btfs->names_map = NULL;
+		goto err_out;
+	}
+
+	for (i = 0; i < kmod_btf_names_cnt; i++) {
+		size_t idx = obj->kmod_btfs->nr_names;
+
+		if (!kmod_btf_names[i] || !kmod_btf_names[i][0]) {
+			pr_warn("invalid kernel module BTF name at index %zu\n", i);
+			err = -EINVAL;
+			goto err_out;
+		}
+
+		obj->kmod_btfs->names[idx] = strdup(kmod_btf_names[i]);
+		if (!obj->kmod_btfs->names[idx]) {
+			err = -ENOMEM;
+			goto err_out;
+		}
+
+		err = hashmap__add(obj->kmod_btfs->names_map,
+				   obj->kmod_btfs->names[idx], 0);
+		if (err) {
+			zfree(&obj->kmod_btfs->names[idx]);
+			if (err == -EEXIST) {
+				pr_warn("duplicate kmod BTF name '%s' ignored\n",
+					kmod_btf_names[i]);
+				continue;
+			}
+			goto err_out;
+		}
+		obj->kmod_btfs->nr_names++;
+	}
+	return 0;
+
+err_out:
+	bpf_object__free_kmod_btfs(obj);
+	return err;
+}
+
+static bool is_kmod_btf_needed(struct bpf_object *obj, const char *name)
+{
+	if (!obj->kmod_btfs || !obj->kmod_btfs->names_map)
+		return true;
+
+	if (hashmap__find(obj->kmod_btfs->names_map, name, NULL))
+		return true;
+
+	pr_debug("skipping module BTF '%s', not in kmod_btf_names\n", name);
+	return false;
+}
+
+static bool all_needed_kmod_btfs_loaded(const struct bpf_object *obj)
+{
+	return obj->kmod_btfs &&
+	       obj->kmod_btfs->nr_names > 0 &&
+	       obj->kmod_btfs->nr_names == obj->btf_module_cnt;
+}
+
 static int load_module_btfs(struct bpf_object *obj)
 {
 	struct bpf_btf_info info;
@@ -5915,6 +6037,11 @@ static int load_module_btfs(struct bpf_object *obj)
 			continue;
 		}
 
+		if (!is_kmod_btf_needed(obj, name)) {
+			close(fd);
+			continue;
+		}
+
 		btf = btf_get_from_fd(fd, obj->btf_vmlinux);
 		err = libbpf_get_error(btf);
 		if (err) {
@@ -5939,6 +6066,9 @@ static int load_module_btfs(struct bpf_object *obj)
 			break;
 		}
 		obj->btf_module_cnt++;
+
+		if (all_needed_kmod_btfs_loaded(obj))
+			break;
 	}
 
 	if (err) {
@@ -8563,6 +8693,7 @@ static struct bpf_object *bpf_object_open(const char *path, const void *obj_buf,
 	err = err ? : bpf_object__init_maps(obj, opts);
 	err = err ? : bpf_object_init_progs(obj, opts);
 	err = err ? : bpf_object__collect_relos(obj);
+	err = err ? : bpf_object__init_kmod_btfs(obj, opts);
 	if (err)
 		goto out;
 
@@ -9676,6 +9807,8 @@ void bpf_object__close(struct bpf_object *obj)
 	for (i = 0; i < obj->jumptable_map_cnt; i++)
 		close(obj->jumptable_maps[i].fd);
 	zfree(&obj->jumptable_maps);
+
+	bpf_object__free_kmod_btfs(obj);
 
 	free(obj);
 }

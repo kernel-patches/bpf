@@ -224,10 +224,24 @@ struct bpf_object_open_opts {
 	 * point (/sys/fs/bpf), in case this default behavior is undesirable.
 	 */
 	const char *bpf_token_path;
+	/*
+	 * Optional list of kernel module names whose BTFs should be loaded.
+	 * kmod_btf_names_cnt specifies the number of entries in
+	 * kmod_btf_names.
+	 *
+	 * If kmod_btf_names is NULL, all module BTFs are loaded, preserving
+	 * the default behavior. Otherwise, only the specified module BTFs
+	 * are loaded.
+	 *
+	 * kmod_btf_names_cnt must be non-zero when kmod_btf_names is
+	 * non-NULL; otherwise -EINVAL is returned.
+	 */
+	const char **kmod_btf_names;
+	size_t kmod_btf_names_cnt;
 
 	size_t :0;
 };
-#define bpf_object_open_opts__last_field bpf_token_path
+#define bpf_object_open_opts__last_field kmod_btf_names_cnt
 
 /**
  * @brief **bpf_object__open()** creates a bpf_object by opening
