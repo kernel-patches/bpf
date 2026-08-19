@@ -120,6 +120,16 @@ jobs:
           max-make-jobs: 32
           llvm-version: ${{ inputs.llvm_version }}
 
+      - if: ${{ !inputs.release }}
+        name: Test bpftool build
+        # FIXME: use the canonical libbpf/ci action once test_bpftool_build.sh
+        # support lands upstream, instead of custom fork
+        uses: Tropicao/libbpf-ci/build-bpftool@test_bpftool_build
+        env:
+          MAX_MAKE_JOBS: 32
+        with:
+          kernel-root: ${{ env.KERNEL_ROOT }}
+
       - name: Build selftests/bpf
         uses: libbpf/ci/build-selftests@v4
         env:
