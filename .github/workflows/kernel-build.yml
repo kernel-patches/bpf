@@ -120,6 +120,14 @@ jobs:
           max-make-jobs: 32
           llvm-version: ${{ inputs.llvm_version }}
 
+      - if: ${{ !inputs.release }}
+        name: Test bpftool build
+        uses: libbpf/ci/build-bpftool@v4
+        env:
+          MAX_MAKE_JOBS: 32
+        with:
+          kernel-root: ${{ env.KERNEL_ROOT }}
+
       - name: Build selftests/bpf
         uses: libbpf/ci/build-selftests@v4
         env:
