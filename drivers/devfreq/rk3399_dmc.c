@@ -243,7 +243,7 @@ static int rk3399_dmcfreq_get_cur_freq(struct device *dev, unsigned long *freq)
 	return 0;
 }
 
-static __maybe_unused int rk3399_dmcfreq_suspend(struct device *dev)
+static int rk3399_dmcfreq_suspend(struct device *dev)
 {
 	struct rk3399_dmcfreq *dmcfreq = dev_get_drvdata(dev);
 	int ret = 0;
@@ -263,7 +263,7 @@ static __maybe_unused int rk3399_dmcfreq_suspend(struct device *dev)
 	return 0;
 }
 
-static __maybe_unused int rk3399_dmcfreq_resume(struct device *dev)
+static int rk3399_dmcfreq_resume(struct device *dev)
 {
 	struct rk3399_dmcfreq *dmcfreq = dev_get_drvdata(dev);
 	int ret = 0;
@@ -282,7 +282,7 @@ static __maybe_unused int rk3399_dmcfreq_resume(struct device *dev)
 	return ret;
 }
 
-static SIMPLE_DEV_PM_OPS(rk3399_dmcfreq_pm, rk3399_dmcfreq_suspend,
+static DEFINE_SIMPLE_DEV_PM_OPS(rk3399_dmcfreq_pm, rk3399_dmcfreq_suspend,
 			 rk3399_dmcfreq_resume);
 
 static int rk3399_dmcfreq_of_props(struct rk3399_dmcfreq *data,
@@ -477,7 +477,7 @@ static struct platform_driver rk3399_dmcfreq_driver = {
 	.remove = rk3399_dmcfreq_remove,
 	.driver = {
 		.name	= "rk3399-dmc-freq",
-		.pm	= &rk3399_dmcfreq_pm,
+		.pm	= pm_sleep_ptr(&rk3399_dmcfreq_pm),
 		.of_match_table = rk3399dmc_devfreq_of_match,
 	},
 };
