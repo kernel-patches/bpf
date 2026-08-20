@@ -79,6 +79,7 @@ static void trampoline_unlock_all(void)
 static void bpf_trampoline_multi_attach_init(struct bpf_trampoline *tr)
 {
 	tr->multi_attach.old_image = tr->cur_image;
+	tr->multi_attach.new_image = NULL;
 	tr->multi_attach.old_flags = tr->flags;
 }
 
@@ -1637,6 +1638,7 @@ static void bpf_trampoline_multi_attach_free(struct bpf_trampoline *tr)
 		bpf_tramp_image_put(tr->multi_attach.old_image);
 
 	tr->multi_attach.old_image = NULL;
+	tr->multi_attach.new_image = NULL;
 	tr->multi_attach.old_flags = 0;
 }
 
@@ -1648,6 +1650,7 @@ static void bpf_trampoline_multi_attach_rollback(struct bpf_trampoline *tr)
 	tr->flags = tr->multi_attach.old_flags;
 
 	tr->multi_attach.old_image = NULL;
+	tr->multi_attach.new_image = NULL;
 	tr->multi_attach.old_flags = 0;
 }
 
@@ -1846,6 +1849,214 @@ rollback:
 	}
 	return err;
 }
+
+static enum bpf_text_poke_type bpf_trampoline_poke_type(const struct bpf_tramp_image *im, u32 flags)
+{
+	if (!im)
+		return BPF_MOD_NOP;
+
+	return bpf_trampoline_use_jmp(flags) ? BPF_MOD_JUMP : BPF_MOD_CALL;
+}
+
+static void bpf_text_poke_init(struct bpf_text_poke *poke, struct bpf_trampoline *tr)
+{
+	struct bpf_tramp_image *old_image = tr->multi_attach.old_image;
+	struct bpf_tramp_image *new_image = tr->multi_attach.new_image;
+
+	poke->ip = tr->func.addr;
+	poke->old_addr = old_image ? old_image->image : NULL;
+	poke->new_addr = new_image ? new_image->image : NULL;
+	poke->old_t = bpf_trampoline_poke_type(old_image, tr->multi_attach.old_flags);
+	poke->new_t = bpf_trampoline_poke_type(new_image, tr->flags);
+}
+
+static int register_fentry_multi_prog(struct bpf_trampoline *tr,
+				      struct bpf_tramp_image *im,
+				      void *data __maybe_unused)
+{
+	tr->multi_attach.new_image = im;
+	return 0;
+}
+
+static int unregister_fentry_multi_prog(struct bpf_trampoline *tr,
+					u32 orig_flags __maybe_unused,
+					void *data __maybe_unused)
+{
+	tr->multi_attach.new_image = NULL;
+	return 0;
+}
+
+static int modify_fentry_multi_prog(struct bpf_trampoline *tr,
+				    u32 orig_flags __maybe_unused,
+				    struct bpf_tramp_image *im,
+				    bool lock_direct_mutex __maybe_unused,
+				    void *data __maybe_unused)
+{
+	tr->multi_attach.new_image = im;
+	return 0;
+}
+
+static const struct bpf_trampoline_ops trampoline_multi_prog_ops = {
+	.register_fentry   = register_fentry_multi_prog,
+	.unregister_fentry = unregister_fentry_multi_prog,
+	.modify_fentry     = modify_fentry_multi_prog,
+};
+
+static void bpf_trampoline_multi_prog_commit(struct bpf_trampoline *tr)
+{
+	struct bpf_tramp_image *old_image = tr->multi_attach.old_image;
+
+	tr->cur_image = tr->multi_attach.new_image;
+	tr->multi_attach.old_image = NULL;
+	tr->multi_attach.new_image = NULL;
+	tr->multi_attach.old_flags = 0;
+
+	if (old_image)
+		bpf_tramp_image_put(old_image);
+}
+
+static void bpf_trampoline_multi_prog_rollback(struct bpf_trampoline *tr)
+{
+	if (tr->multi_attach.new_image)
+		bpf_tramp_image_put(tr->multi_attach.new_image);
+
+	tr->flags = tr->multi_attach.old_flags;
+	tr->multi_attach.old_image = NULL;
+	tr->multi_attach.new_image = NULL;
+	tr->multi_attach.old_flags = 0;
+}
+
+#define for_each_mnode_cnt(mnode, link, cnt) \
+	for (i = 0, mnode = &link->nodes[i]; i < cnt; i++, mnode = &link->nodes[i])
+
+#define for_each_mnode(mnode, link) \
+	for_each_mnode_cnt(mnode, link, link->nodes_cnt)
+
+static int bpf_trampoline_multi_prog_prepare(struct bpf_prog *prog, u32 *ids, u64 *keys,
+					     struct bpf_tracing_multi_link *link)
+{
+	struct bpf_attach_target_info tgt_info = {};
+	struct bpf_tracing_multi_node *mnode;
+	struct bpf_trampoline *tr;
+	int i, cnt, err;
+
+	for_each_mnode(mnode, link) {
+		err = bpf_check_attach_target(NULL, prog, link->tgt_progs[i], ids[i], &tgt_info);
+		if (err)
+			goto put_trampolines;
+
+		tr = bpf_trampoline_get(keys[i], &tgt_info);
+		if (!tr) {
+			err = -ENOMEM;
+			goto put_trampolines;
+		}
+
+		mnode->trampoline = tr;
+		mnode->node.link = &link->link;
+		mnode->node.cookie = link->cookies ? link->cookies[i] : 0;
+
+		if (prog->expected_attach_type == BPF_TRACE_FSESSION_MULTI) {
+			link->fexits[i].link = &link->link;
+			link->fexits[i].cookie = link->cookies ? link->cookies[i] : 0;
+		}
+	}
+
+	return 0;
+
+put_trampolines:
+	cnt = i;
+	for_each_mnode_cnt(mnode, link, cnt)
+		bpf_trampoline_put(mnode->trampoline);
+	return err;
+}
+
+int bpf_trampoline_multi_prog_attach(struct bpf_prog *prog, u32 *ids, u64 *keys,
+				     struct bpf_tracing_multi_link *link)
+{
+	struct bpf_tracing_multi_node *mnode;
+	int i, err, linked_cnt = 0;
+
+	err = bpf_trampoline_multi_prog_prepare(prog, ids, keys, link);
+	if (err)
+		return err;
+
+	trampoline_lock_all();
+
+	for_each_mnode(mnode, link) {
+		bpf_trampoline_multi_attach_init(mnode->trampoline);
+
+		if (link->tgt_progs[i]->aux->tail_call_reachable)
+			mnode->trampoline->flags |= BPF_TRAMP_F_TAIL_CALL_CTX;
+
+		err = __bpf_trampoline_link_prog(&mnode->node, mnode->trampoline, NULL,
+						 &trampoline_multi_prog_ops, NULL);
+		if (err) {
+			bpf_trampoline_multi_prog_rollback(mnode->trampoline);
+			goto rollback;
+		}
+		linked_cnt++;
+	}
+
+	for_each_mnode(mnode, link) {
+		link->pokes[i] = &mnode->poke;
+		bpf_text_poke_init(link->pokes[i], mnode->trampoline);
+	}
+
+	err = bpf_text_poke_batch(link->pokes, link->nodes_cnt);
+	if (err)
+		goto rollback;
+
+	for_each_mnode(mnode, link)
+		bpf_trampoline_multi_prog_commit(mnode->trampoline);
+
+	trampoline_unlock_all();
+	return 0;
+
+rollback:
+	for_each_mnode_cnt(mnode, link, linked_cnt) {
+		bpf_trampoline_remove_prog(mnode->trampoline, &mnode->node);
+		bpf_trampoline_multi_prog_rollback(mnode->trampoline);
+	}
+
+	trampoline_unlock_all();
+
+	for_each_mnode(mnode, link)
+		bpf_trampoline_put(mnode->trampoline);
+	return err;
+}
+
+void bpf_trampoline_multi_prog_detach(struct bpf_tracing_multi_link *link)
+{
+	struct bpf_tracing_multi_node *mnode;
+	int i, err;
+
+	trampoline_lock_all();
+
+	for_each_mnode(mnode, link) {
+		bpf_trampoline_multi_attach_init(mnode->trampoline);
+		err = __bpf_trampoline_unlink_prog(&mnode->node, mnode->trampoline, NULL,
+						   &trampoline_multi_prog_ops, NULL);
+		WARN_ONCE(err, "__bpf_trampoline_unlink_prog failed: %d\n", err);
+	}
+
+	for_each_mnode(mnode, link) {
+		link->pokes[i] = &mnode->poke;
+		bpf_text_poke_init(link->pokes[i], mnode->trampoline);
+	}
+
+	WARN_ON_ONCE(bpf_text_poke_batch(link->pokes, link->nodes_cnt));
+
+	for_each_mnode(mnode, link)
+		bpf_trampoline_multi_prog_commit(mnode->trampoline);
+
+	trampoline_unlock_all();
+
+	for_each_mnode(mnode, link)
+		bpf_trampoline_put(mnode->trampoline);
+}
+
+#undef for_each_mnode_cnt
+#undef for_each_mnode
 
 static int __init init_trampolines(void)
 {
