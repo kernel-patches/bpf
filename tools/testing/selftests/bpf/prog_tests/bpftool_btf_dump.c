@@ -53,15 +53,18 @@ static char *dump_c(const char *path, bool sorted)
 
 /*
  * struct holey { int c; <32 bit hole> int tail; };
+ * enum { E0 = 1 }; enum { E1 = 2 }; enum { E2 = 3 };
+ * struct s { int f; };
+ * union u { int f; };
  *
  * One record with a hole, and a 4-byte long to pad it with. How records
- * themselves are rendered is already covered by the build, so the fixture does
- * not need to be more elaborate than that.
+ * themselves are rendered is already covered by the build.
+ * The anonymous enums matter to the sorting subtest.
  */
 static struct btf *mk_btf(void)
 {
 	struct btf *btf;
-	int id, err;
+	int id, err, i;
 
 	btf = btf__new_empty();
 	if (!ASSERT_OK_PTR(btf, "new_empty"))
@@ -87,12 +90,78 @@ static struct btf *mk_btf(void)
 	if (!ASSERT_OK(err, "holey_tail"))
 		goto err_out;
 
+	for (i = 0; i < 3; i++) {
+		char name[16];
+
+		snprintf(name, sizeof(name), "E%d", i);
+
+		id = btf__add_enum(btf, NULL, 4);
+		if (!ASSERT_GT(id, 0, "anon_enum"))
+			goto err_out;
+
+		err = btf__add_enum_value(btf, name, i + 1);
+		if (!ASSERT_OK(err, "enum_val"))
+			goto err_out;
+	}
+
+	id = btf__add_struct(btf, "s", 4);
+	if (!ASSERT_GT(id, 0, "struct_s"))
+		goto err_out;
+
+	err = btf__add_field(btf, "f", 1, 0, 0);
+	if (!ASSERT_OK(err, "s_field"))
+		goto err_out;
+
+	id = btf__add_union(btf, "u", 4);
+	if (!ASSERT_GT(id, 0, "union_u"))
+		goto err_out;
+
+	err = btf__add_field(btf, "f", 1, 0, 0);
+	if (!ASSERT_OK(err, "u_field"))
+		goto err_out;
+
 	btf__set_pointer_size(btf, 4);
 
 	return btf;
 err_out:
 	btf__free(btf);
 	return NULL;
+}
+
+static int count_substr(const char *haystack, const char *needle)
+{
+	const char *p = haystack;
+	int n = 0;
+
+	for (; (p = strstr(p, needle)); p++)
+		n++;
+
+	return n;
+}
+
+static void test_sort_preserves_types(const char *path)
+{
+	char *sorted = NULL, *unsorted = NULL;
+	int n_sorted, n_unsorted;
+
+	sorted = dump_c(path, true);
+	unsorted = dump_c(path, false);
+	if (!sorted || !unsorted)
+		goto out;
+
+	/*
+	 * Count definitions by the closing brace in their first column. Counting
+	 * "struct"/"union"/"enum" openers instead would also count forward
+	 * declarations, and which types need one depends on emission order.
+	 */
+	n_unsorted = count_substr(unsorted, "\n}");
+	n_sorted = count_substr(sorted, "\n}");
+	ASSERT_GT(n_unsorted, 0, "types_emitted");
+	ASSERT_EQ(n_sorted, n_unsorted, "same_type_count");
+
+out:
+	free(sorted);
+	free(unsorted);
 }
 
 /*
@@ -144,6 +213,9 @@ void test_bpftool_btf_dump(void)
 		test_dump(path, true);
 	if (test__start_subtest("c_unsorted"))
 		test_dump(path, false);
+
+	if (test__start_subtest("c_sort_preserves_types"))
+		test_sort_preserves_types(path);
 
 	unlink(path);
 out:
