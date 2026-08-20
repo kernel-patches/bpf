@@ -12341,7 +12341,10 @@ const struct bpf_func_proto bpf_skc_to_mptcp_sock_proto = {
 
 BPF_CALL_1(bpf_sock_from_file, struct file *, file)
 {
-	return (unsigned long)sock_from_file(file);
+	if (file)
+		return (unsigned long)sock_from_file(file);
+
+	return (unsigned long)NULL;
 }
 
 BTF_ID_LIST(bpf_sock_from_file_btf_ids)
