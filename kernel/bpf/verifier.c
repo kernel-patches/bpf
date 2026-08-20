@@ -15584,6 +15584,50 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static bool linked_base_fits_u32(const struct bpf_reg_state *reg)
+{
+	if (reg->id & BPF_ADD_CONST32)
+		return true;
+	return reg_smin(reg) >= (s64)reg->delta &&
+	       reg_smax(reg) <= (s64)U32_MAX + (s64)reg->delta;
+}
+
+static bool is_shift32_insn(const struct bpf_insn *insn, u8 op)
+{
+	return insn->code == (BPF_ALU64 | op | BPF_K) && insn->off == 0 && insn->imm == 32;
+}
+
+/* Handle "rX <<= 32; rX >>= 32", which zero extends the lower 32 bits. */
+static bool is_zext_pair_lsh(struct bpf_verifier_env *env, struct bpf_insn *insn,
+			     const struct bpf_reg_state *dst_reg)
+{
+	struct bpf_insn *next;
+	int insn_idx = env->insn_idx;
+
+	if (!dst_reg->id || !is_shift32_insn(insn, BPF_LSH))
+		return false;
+	/* check_subprogs() guarantees a shift is never the last insn. */
+	next = &env->prog->insnsi[insn_idx + 1];
+	if (!is_shift32_insn(next, BPF_RSH) || next->dst_reg != insn->dst_reg)
+		return false;
+	/* Ensure the next insn has a single incoming edge. */
+	return !bpf_is_prune_point(env, insn_idx + 1);
+}
+
+static bool is_zext_pair_rsh(struct bpf_verifier_env *env, struct bpf_insn *insn,
+			     const struct bpf_reg_state *dst_reg)
+{
+	struct bpf_insn *prev;
+	int insn_idx = env->insn_idx;
+
+	if (!dst_reg->id || insn_idx == 0 || env->prev_insn_idx != insn_idx - 1)
+		return false;
+	if (!is_shift32_insn(insn, BPF_RSH))
+		return false;
+	prev = &env->prog->insnsi[insn_idx - 1];
+	return is_shift32_insn(prev, BPF_LSH) && prev->dst_reg == insn->dst_reg;
+}
+
 /* Handles ALU ops other than BPF_END, BPF_NEG and BPF_MOV: computes new min/max
  * and var_off.
  */
@@ -15694,6 +15738,7 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 	 * alu32 ops will have zero-extended the result, making umax_value <= U32_MAX.
 	 */
 	u64 dst_umax = reg_umax(dst_reg);
+	bool base_fits_u32 = linked_base_fits_u32(dst_reg);
 
 	err = adjust_scalar_min_max_vals(env, insn, dst_reg, *src_reg);
 	if (err)
@@ -15743,6 +15788,11 @@ clear_id:
 				dst_reg->id |= BPF_ADD_CONST64;
 			dst_reg->delta = off;
 		}
+	} else if (base_fits_u32 && is_zext_pair_lsh(env, insn, dst_reg)) {
+		/* Keep id and delta, the next insn completes the pair. */
+	} else if (is_zext_pair_rsh(env, insn, dst_reg)) {
+		if (dst_reg->id & BPF_ADD_CONST64)
+			dst_reg->id = (dst_reg->id & ~BPF_ADD_CONST64) | BPF_ADD_CONST32;
 	} else {
 		/*
 		 * Make sure ID is cleared otherwise dst_reg min/max could be
