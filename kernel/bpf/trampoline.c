@@ -13,6 +13,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/bpf_lsm.h>
 #include <linux/delay.h>
+#include <linux/sort.h>
 
 /* dummy _ops. The verifier will operate on target program's ops. */
 const struct bpf_verifier_ops bpf_extension_verifier_ops = {
@@ -1795,6 +1796,56 @@ void bpf_trampoline_multi_detach(struct bpf_prog *prog,
 #endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS &&
 	  CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS &&
 	  CONFIG_BPF_SYSCALL */
+
+static int bpf_text_poke_cmp(const void *a, const void *b)
+{
+	const struct bpf_text_poke *pa = *(struct bpf_text_poke * const *)a;
+	const struct bpf_text_poke *pb = *(struct bpf_text_poke * const *)b;
+	unsigned long ipa = (unsigned long) pa->ip;
+	unsigned long ipb = (unsigned long) pb->ip;
+
+	return (ipa > ipb) - (ipa < ipb);
+}
+
+static int bpf_text_poke_batch(struct bpf_text_poke **pokes, u32 cnt)
+{
+	int i, err;
+
+	/*
+	 * Sort pokes for two purposes:
+	 * 1. Check duplicated poke target IPs.
+	 * 2. Sorted poke target IPs would be friendly for poking them on x86,
+	 *    see arch/x86/kernel/alternative.c::smp_text_poke_batch_add().
+	 */
+	sort_nonatomic(pokes, cnt, sizeof(*pokes), bpf_text_poke_cmp, NULL);
+
+	for (i = 1; i < cnt; i++)
+		if (pokes[i - 1]->ip == pokes[i]->ip)
+			return -EINVAL;
+
+	err = bpf_arch_text_poke_batch(pokes, cnt);
+	if (err != -EOPNOTSUPP)
+		return err;
+
+	for (i = 0; i < cnt; i++) {
+		struct bpf_text_poke *p = pokes[i];
+
+		err = bpf_arch_text_poke(p->ip, p->old_t, p->new_t, p->old_addr, p->new_addr);
+		if (err)
+			goto rollback;
+	}
+
+	return 0;
+
+rollback:
+	for (i--; i >= 0; i--) {
+		struct bpf_text_poke *p = pokes[i];
+
+		WARN_ON_ONCE(bpf_arch_text_poke(p->ip, p->new_t, p->old_t, p->new_addr,
+						p->old_addr));
+	}
+	return err;
+}
 
 static int __init init_trampolines(void)
 {
