@@ -41,7 +41,7 @@ extern int bpf_copy_from_user_bprm_str(void *dst, u32 dst__sz,
 				       u64 flags) __ksym;
 
 SEC("lsm.s/bprm_check_security")
-int BPF_PROG(check_exec_args, struct linux_binprm *bprm, int ret)
+int BPF_PROG(check_exec_args, struct linux_binprm *bprm)
 {
 	u32 pid = bpf_get_current_pid_tgid() >> 32;
 	char data[sizeof(expected_data)];
@@ -52,8 +52,8 @@ int BPF_PROG(check_exec_args, struct linux_binprm *bprm, int ret)
 	u64 offset = 0;
 	u64 data_len;
 
-	if (ret || pid != monitored_pid)
-		return ret;
+	if (pid != monitored_pid)
+		return 0;
 
 	bprm_argc = bprm->argc;
 	bprm_envc = bprm->envc;
