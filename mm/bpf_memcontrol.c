@@ -6,6 +6,7 @@
  */
 
 #include <linux/memcontrol.h>
+#include <linux/swap.h>
 #include <linux/bpf.h>
 
 __bpf_kfunc_start_defs();
@@ -159,6 +160,120 @@ __bpf_kfunc void bpf_mem_cgroup_flush_stats(struct mem_cgroup *memcg)
 	mem_cgroup_flush_stats(memcg);
 }
 
+/*
+ * Reclaim must not recurse. try_to_free_mem_cgroup_pages() unconditionally
+ * overwrites current->reclaim_state on entry and resets it to NULL on exit.
+ * So invoking it from an in-flight reclaim would clobber the outer reclaim
+ * state and corrupt its accounting.
+ *
+ * The guards are PF_MEMALLOC and current->reclaim_state. Every reclaim
+ * entry point marks the current task with PF_MEMALLOC for the whole
+ * reclaim window: try_to_free_mem_cgroup_pages() and __perform_reclaim()
+ * do so via memalloc_noreclaim_save(), and kswapd keeps it set for its
+ * entire lifetime. A hook inside the reclaim path (shrink_node,
+ * shrink_slab, ...) executes in the context of the reclaiming task, where
+ * current->flags already carries the flag. The page allocator, the memcg
+ * charging path and node_reclaim() rely on the same flag to avoid reclaim
+ * recursion.
+ *
+ * reclaim_state is checked in addition because it is set slightly before
+ * PF_MEMALLOC in try_to_free_mem_cgroup_pages(), with only a tracepoint
+ * call in between. A sleepable BPF program cannot attach to the tracepoint
+ * itself, but it can attach to the generated trace iterator function
+ * (__traceiter_mm_vmscan_memcg_reclaim_begin) via fentry, so PF_MEMALLOC
+ * alone would leave that window open.
+ *
+ * Also, PF_MEMALLOC is set in some non-reclaim contexts (e.g. direct compaction
+ * and vmalloc), where the kfunc conservatively refuses to reclaim as well.
+ */
+static bool bpf_in_reclaim_context(void)
+{
+	return (current->flags & PF_MEMALLOC) || current->reclaim_state;
+}
+
+/*
+ * Shared implementation of the proactive reclaim kfuncs: performs one
+ * reclaim pass on @memcg with @nr_pages as the goal, allowing swap, and
+ * @swappiness as the anon/file balance override (NULL to follow the
+ * cgroup's own swappiness setting). Returns the reclaimed amount in
+ * bytes, keeping the byte-based unit of the kfuncs' @size argument.
+ */
+static unsigned long
+bpf_proactive_reclaim_pages(struct mem_cgroup *memcg, unsigned long nr_pages,
+			    int *swappiness)
+{
+	unsigned long nr_reclaimed;
+
+	if (!nr_pages || unlikely(bpf_in_reclaim_context()))
+		return 0;
+
+	nr_reclaimed = try_to_free_mem_cgroup_pages(memcg, nr_pages, GFP_KERNEL,
+						    MEMCG_RECLAIM_MAY_SWAP |
+						    MEMCG_RECLAIM_PROACTIVE,
+						    swappiness);
+
+	return nr_reclaimed * PAGE_SIZE;
+}
+
+/**
+ * bpf_proactive_reclaim - proactively reclaim memory from a memory
+ *                         cgroup
+ * @memcg: the target memory cgroup to reclaim from
+ * @size:  the amount of memory to reclaim, in bytes
+ *
+ * Trigger one proactive reclaim pass on @memcg, similar to a write to
+ * the memory.reclaim cgroup file: pages are reclaimed according to the
+ * cgroup's own swappiness setting and swap is allowed. Note that,
+ * unlike memory.reclaim, this does not retry until @size is reached;
+ * callers can invoke it again if needed.
+ *
+ * The reclaim runs with GFP_KERNEL, so this function must not be called
+ * from a context that holds a filesystem lock (e.g. an LSM hook invoked
+ * with inode_lock held): the reclaim path may enter filesystem shrinkers
+ * and deadlock trying to reacquire the lock. Contexts that set
+ * PF_MEMALLOC_NOFS/NOIO are handled by the gfp context inheritance.
+ *
+ * Return:
+ *   The amount of memory actually reclaimed, in bytes (rounded to full
+ *   pages), or 0 if @size is smaller than a page or the calling task is
+ *   already in a reclaim/freeing context (PF_MEMALLOC).
+ */
+__bpf_kfunc unsigned long bpf_proactive_reclaim(struct mem_cgroup *memcg,
+						unsigned long size)
+{
+	return bpf_proactive_reclaim_pages(memcg, size / PAGE_SIZE, NULL);
+}
+
+/**
+ * bpf_proactive_reclaim_swappiness - proactively reclaim memory from a
+ *                                    memory cgroup with an explicit
+ *                                    swappiness
+ * @memcg:      the target memory cgroup to reclaim from
+ * @size:       the amount of memory to reclaim, in bytes
+ * @swappiness: swappiness override for this reclaim pass
+ *
+ * Same as bpf_proactive_reclaim(), except that the anon/file reclaim
+ * balance is controlled by @swappiness instead of the cgroup's
+ * swappiness setting. Valid values are [MIN_SWAPPINESS, MAX_SWAPPINESS]
+ * and SWAPPINESS_ANON_ONLY, which restricts reclaim to anon folios.
+ *
+ * Return:
+ *   The amount of memory actually reclaimed, in bytes (rounded to full
+ *   pages), (unsigned long)-1 if @swappiness is out of range, or 0 if
+ *   @size is smaller than a page or the calling task is already in a
+ *   reclaim/freeing context (PF_MEMALLOC).
+ */
+__bpf_kfunc unsigned long
+bpf_proactive_reclaim_swappiness(struct mem_cgroup *memcg, unsigned long size,
+				 int swappiness)
+{
+	if (swappiness < MIN_SWAPPINESS || swappiness > SWAPPINESS_ANON_ONLY)
+		return (unsigned long)-1;
+
+	return bpf_proactive_reclaim_pages(memcg, size / PAGE_SIZE,
+					   &swappiness);
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(bpf_memcontrol_kfuncs)
@@ -171,6 +286,9 @@ BTF_ID_FLAGS(func, bpf_mem_cgroup_memory_events)
 BTF_ID_FLAGS(func, bpf_mem_cgroup_usage)
 BTF_ID_FLAGS(func, bpf_mem_cgroup_page_state)
 BTF_ID_FLAGS(func, bpf_mem_cgroup_flush_stats, KF_SLEEPABLE)
+
+BTF_ID_FLAGS(func, bpf_proactive_reclaim, KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_proactive_reclaim_swappiness, KF_SLEEPABLE)
 
 BTF_KFUNCS_END(bpf_memcontrol_kfuncs)
 
