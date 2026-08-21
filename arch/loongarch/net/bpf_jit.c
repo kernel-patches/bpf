@@ -288,6 +288,11 @@ bool bpf_jit_supports_arena_kfunc_args(void)
 	return true;
 }
 
+bool bpf_jit_supports_arena_struct_ops_args(void)
+{
+	return true;
+}
+
 bool bpf_jit_supports_far_kfunc_call(void)
 {
 	return true;
@@ -1680,21 +1685,55 @@ int bpf_arch_text_invalidate(void *dst, size_t len)
 	return ret;
 }
 
-static void store_args(struct jit_ctx *ctx, int nr_arg_slots, int args_off, bool is_struct_ops)
+/*
+ * Convert an arena kernel address into a 32-bit arena offset while copying it
+ * into the BPF ctx. A nullable argument preserves a native NULL.
+ */
+static void emit_arena_arg_conv(struct jit_ctx *ctx, int dst, int src, bool nullable, int base)
+{
+	if (dst != src)
+		move_reg(ctx, dst, src);
+	if (nullable)
+		emit_insn(ctx, beq, dst, LOONGARCH_GPR_ZERO, 2);
+	emit_insn(ctx, subd, dst, dst, base);
+	emit_zext_32(ctx, dst, true);
+}
+
+static void store_args(struct jit_ctx *ctx, const struct btf_func_model *m, int args_off,
+		       bool is_struct_ops, u64 arena_base)
 {
 	int stack_args_off = is_struct_ops ? 0 : 16;
-	int i;
+	int i, slot = 0;
 
-	for (i = 0; i < nr_arg_slots; i++) {
-		if (i < LOONGARCH_MAX_REG_ARGS)
-			emit_insn(ctx, std, LOONGARCH_GPR_A0 + i, LOONGARCH_GPR_FP, -args_off);
-		else {
-			/* Skip the saved T0 and FP slots for a traced function. */
-			emit_insn(ctx, ldd, LOONGARCH_GPR_T1, LOONGARCH_GPR_FP,
-				  stack_args_off + (i - LOONGARCH_MAX_REG_ARGS) * 8);
-			emit_insn(ctx, std, LOONGARCH_GPR_T1, LOONGARCH_GPR_FP, -args_off);
+	if (arena_base)
+		move_imm(ctx, LOONGARCH_GPR_T2, arena_base, false);
+
+	for (i = 0; i < m->nr_args; i++) {
+		bool arena_arg = arena_base && (m->arg_flags[i] & BTF_FMODEL_ARENA_ARG);
+		bool nullable = m->arg_flags[i] & BTF_FMODEL_NULLABLE_ARG;
+		int slots = round_up(m->arg_size[i], 8) / 8;
+
+		while (slots-- > 0) {
+			int src;
+
+			if (slot < LOONGARCH_MAX_REG_ARGS) {
+				src = LOONGARCH_GPR_A0 + slot;
+			} else {
+				/* Skip the saved T0 and FP slots for a traced function. */
+				emit_insn(ctx, ldd, LOONGARCH_GPR_T1, LOONGARCH_GPR_FP,
+					  stack_args_off +
+					  (slot - LOONGARCH_MAX_REG_ARGS) * 8);
+				src = LOONGARCH_GPR_T1;
+			}
+			if (arena_arg) {
+				emit_arena_arg_conv(ctx, LOONGARCH_GPR_T1, src, nullable,
+						    LOONGARCH_GPR_T2);
+				src = LOONGARCH_GPR_T1;
+			}
+			emit_insn(ctx, std, src, LOONGARCH_GPR_FP, -args_off);
+			slot++;
+			args_off -= 8;
 		}
-		args_off -= 8;
 	}
 }
 
@@ -1868,6 +1907,7 @@ static int __arch_prepare_bpf_trampoline(struct jit_ctx *ctx, struct bpf_tramp_i
 	struct bpf_tramp_nodes *fexit = &tnodes[BPF_TRAMP_FEXIT];
 	struct bpf_tramp_nodes *fmod_ret = &tnodes[BPF_TRAMP_MODIFY_RETURN];
 	u32 **branches = NULL;
+	u64 arena_base;
 
 	/*
 	 * FP + 8       [ RA to parent func ] return address to parent
@@ -1921,6 +1961,15 @@ static int __arch_prepare_bpf_trampoline(struct jit_ctx *ctx, struct bpf_tramp_i
 
 	if (flags & (BPF_TRAMP_F_ORIG_STACK | BPF_TRAMP_F_SHARE_IPMODIFY))
 		return -ENOTSUPP;
+
+	/*
+	 * An indirect trampoline never calls the original function. Arena
+	 * conversion relies on this because the original takes kernel addresses.
+	 */
+	WARN_ON_ONCE((flags & BPF_TRAMP_F_INDIRECT) &&
+		     (flags & ~(BPF_TRAMP_F_INDIRECT | BPF_TRAMP_F_RET_FENTRY_RET)));
+
+	arena_base = bpf_tramp_arena_base(m, tnodes, flags);
 
 	/* Room of trampoline frame to store return address and frame pointer */
 	stack_size = 16;
@@ -2014,7 +2063,7 @@ static int __arch_prepare_bpf_trampoline(struct jit_ctx *ctx, struct bpf_tramp_i
 	func_meta = nr_arg_slots;
 	emit_store_stack_imm64(ctx, LOONGARCH_GPR_T1, -func_meta_off, func_meta);
 
-	store_args(ctx, nr_arg_slots, args_off, is_struct_ops);
+	store_args(ctx, m, args_off, is_struct_ops, arena_base);
 
 	if (bpf_fsession_cnt(tnodes)) {
 		/* clear all session cookies' value */
