@@ -519,6 +519,38 @@ bool is_jit_enabled(void)
 	return enabled;
 }
 
+int set_bpf_jit_harden(char *level)
+{
+	char old_level;
+	int err = -1;
+	int fd = -1;
+
+	fd = open("/proc/sys/net/core/bpf_jit_harden", O_RDWR | O_NONBLOCK);
+	if (fd < 0)
+		return -1;
+
+	err = read(fd, &old_level, 1);
+	if (err != 1) {
+		err = -1;
+		goto end;
+	}
+
+	lseek(fd, 0, SEEK_SET);
+
+	err = write(fd, level, 1);
+	if (err != 1) {
+		err = -1;
+		goto end;
+	}
+
+	err = 0;
+	*level = old_level;
+end:
+	if (fd >= 0)
+		close(fd);
+	return err;
+}
+
 int stack_mprotect(void)
 {
 	void *buf;
