@@ -624,8 +624,24 @@ static int prepare_for_kfunc_call(const struct bpf_prog *fp, u32 *image,
 	for (i = 0; i < m->nr_args; i++) {
 		/* Note that BPF ABI only allows up to 5 args for kfuncs */
 		u32 reg = bpf_to_ppc(BPF_REG_1 + i), size = m->arg_size[i];
+		u8 flags = m->arg_flags[i];
 
-		if (!(m->arg_flags[i] & BTF_FMODEL_SIGNED_ARG)) {
+		if (flags & BTF_FMODEL_ARENA_ARG) {
+			if (WARN_ON_ONCE(!ctx->arena_vm_start))
+				return -1;
+
+			/* rN = kern_vm_start + (u32)rN */
+			if (zero_extend(image, ctx, reg, reg, 4))
+				return -1;
+			if (flags & BTF_FMODEL_NULLABLE_ARG) {
+				EMIT(PPC_RAW_CMPLDI(reg, 0));
+				PPC_BCC_CONST_SHORT(COND_EQ, 8);
+			}
+			EMIT(PPC_RAW_ADD(reg, reg, bpf_to_ppc(ARENA_VM_START)));
+			continue;
+		}
+
+		if (!(flags & BTF_FMODEL_SIGNED_ARG)) {
 			if (zero_extend(image, ctx, reg, reg, size))
 				return -1;
 		} else {
