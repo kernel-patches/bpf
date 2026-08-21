@@ -888,20 +888,75 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 	return ret;
 }
 
-static void store_args(int nr_arg_slots, int args_off, int stack_args_off,
+/*
+ * Convert an arena kernel address into the arena pointer form on its way
+ * into the BPF ctx, dst = (u32)(src - kern_vm_start). A nullable arg
+ * preserves NULL, tested on the full 64-bit kernel pointer. The final
+ * zero-extension makes the stored value satisfy the JIT invariant for arena
+ * pointer registers.
+ */
+static void emit_arena_arg_conv(u8 dst, u8 src, bool nullable, u8 base,
+				struct rv_jit_context *ctx)
+{
+	int branch_off = 0;
+
+	if (nullable) {
+		if (dst != src)
+			emit_mv(dst, src, ctx);
+		branch_off = ctx->ninsns;
+		/* Patched below once the variable-length conversion is emitted. */
+		emit(rv_nop(), ctx);
+		src = dst;
+	}
+
+	emit_sub(dst, src, base, ctx);
+	emit_zextw(dst, dst, ctx);
+
+	if (nullable && ctx->insns) {
+		u32 insn = rv_beq(dst, RV_REG_ZERO, ctx->ninsns - branch_off);
+
+		*(u32 *)(ctx->insns + branch_off) = insn;
+	}
+}
+
+static void store_args(const struct btf_func_model *m, int args_off,
+		       int stack_args_off, u64 arena_base,
 		       struct rv_jit_context *ctx)
 {
-	int i;
+	int i, j, slot = 0;
 
-	for (i = 0; i < nr_arg_slots; i++) {
-		if (i < RV_MAX_REG_ARGS) {
-			emit_sd(RV_REG_FP, -args_off, RV_REG_A0 + i, ctx);
-		} else {
-			emit_ld(RV_REG_T1, stack_args_off +
-				(i - RV_MAX_REG_ARGS) * 8, RV_REG_FP, ctx);
-			emit_sd(RV_REG_FP, -args_off, RV_REG_T1, ctx);
+	/* Only the low 32 bits of the base take part in the subtraction. */
+	if (arena_base)
+		emit_imm(RV_REG_T2, (s32)(u32)arena_base, ctx);
+
+	/*
+	 * Walk arguments and slots together so a 16-byte argument consumes two
+	 * ABI locations before the flags for the following argument are used.
+	 */
+	for (i = 0; i < m->nr_args; i++) {
+		bool arena_arg = arena_base && (m->arg_flags[i] & BTF_FMODEL_ARENA_ARG);
+		bool nullable = m->arg_flags[i] & BTF_FMODEL_NULLABLE_ARG;
+		int slots = round_up(m->arg_size[i], 8) / 8;
+
+		for (j = 0; j < slots; j++, slot++) {
+			u8 src;
+
+			if (slot < RV_MAX_REG_ARGS) {
+				src = RV_REG_A0 + slot;
+			} else {
+				emit_ld(RV_REG_T1, stack_args_off +
+					(slot - RV_MAX_REG_ARGS) * 8, RV_REG_FP, ctx);
+				src = RV_REG_T1;
+			}
+
+			if (arena_arg) {
+				emit_arena_arg_conv(RV_REG_T1, src, nullable,
+						    RV_REG_T2, ctx);
+				src = RV_REG_T1;
+			}
+			emit_sd(RV_REG_FP, -args_off, src, ctx);
+			args_off -= 8;
 		}
-		args_off -= 8;
 	}
 }
 
@@ -1039,8 +1094,19 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	bool is_struct_ops = is_struct_ops_tramp(fentry);
 	void *orig_call = func_addr;
 	bool save_ret;
+	u64 arena_base;
 	u64 func_meta;
 	u32 insn;
+
+	/*
+	 * F_INDIRECT is only compatible with F_RET_FENTRY_RET. In particular,
+	 * an indirect trampoline never calls the original function with the
+	 * arena arguments converted into their BPF representation.
+	 */
+	WARN_ON_ONCE((flags & BPF_TRAMP_F_INDIRECT) &&
+		     (flags & ~(BPF_TRAMP_F_INDIRECT | BPF_TRAMP_F_RET_FENTRY_RET)));
+
+	arena_base = bpf_tramp_arena_base(m, tnodes, flags);
 
 	/* Two types of generated trampoline stack layout:
 	 *
@@ -1189,7 +1255,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	 * SP, which the trampoline keeps as FP. The fentry path pushes the
 	 * parent frame first, so its incoming stack arguments start at FP + 16.
 	 */
-	store_args(nr_arg_slots, args_off, is_struct_ops ? 0 : 16, ctx);
+	store_args(m, args_off, is_struct_ops ? 0 : 16, arena_base, ctx);
 
 	if (bpf_fsession_cnt(tnodes)) {
 		/* clear all session cookies' value */
@@ -2168,6 +2234,11 @@ bool bpf_jit_supports_kfunc_ret_reg_pair(void)
 }
 
 bool bpf_jit_supports_arena_kfunc_args(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_arena_struct_ops_args(void)
 {
 	return true;
 }
