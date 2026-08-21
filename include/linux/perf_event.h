@@ -2136,4 +2136,6 @@ static inline void perf_lopwr_cb(bool mode)
 }
 #endif
 
+extern struct mutex bpf_event_mutex;
+
 #endif /* _LINUX_PERF_EVENT_H */
