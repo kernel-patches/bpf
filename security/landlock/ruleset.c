@@ -23,6 +23,7 @@
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
 #include <uapi/linux/landlock.h>
+#include <uapi/linux/lsm.h>
 
 #include "access.h"
 #include "id.h"
@@ -50,6 +51,11 @@ landlock_create_ruleset(const access_mask_t fs_access_mask,
 	refcount_set(&new_ruleset->usage, 1);
 	mutex_init(&new_ruleset->lock);
 	new_ruleset->rules.root_inode = RB_ROOT;
+
+#ifdef CONFIG_BPF_LSM
+	new_ruleset->policy_object.lsmid = LSM_ID_LANDLOCK;
+	new_ruleset->policy_object.type = LANDLOCK_POLICY_TYPE_RULESET;
+#endif /* CONFIG_BPF_LSM */
 
 #if IS_ENABLED(CONFIG_INET)
 	new_ruleset->rules.root_net_port = RB_ROOT;

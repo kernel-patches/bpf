@@ -151,11 +151,7 @@ void landlock_apply_restriction(struct landlock_cred_security *const llcred,
 static void hook_cred_transfer(struct cred *const new,
 			       const struct cred *const old)
 {
-	const struct landlock_cred_security *const old_llcred =
-		landlock_cred(old);
-
-	landlock_get_domain(old_llcred->domain);
-	*landlock_cred(new) = *old_llcred;
+	landlock_cred_copy(landlock_cred(new), landlock_cred(old));
 }
 
 static int hook_cred_prepare(struct cred *const new,
@@ -167,10 +163,14 @@ static int hook_cred_prepare(struct cred *const new,
 
 static void hook_cred_free(struct cred *const cred)
 {
-	struct landlock_domain *const dom = landlock_cred(cred)->domain;
+	struct landlock_cred_security *const llcred = landlock_cred(cred);
 
-	if (dom)
-		landlock_put_domain_deferred(dom);
+	landlock_put_domain_deferred(llcred->domain);
+
+#ifdef CONFIG_BPF_LSM
+	/* Releases a restriction staged for an aborted execution. */
+	landlock_put_domain_deferred(llcred->staged.domain);
+#endif /* CONFIG_BPF_LSM */
 }
 
 #ifdef CONFIG_SECURITY_LANDLOCK_LOG
