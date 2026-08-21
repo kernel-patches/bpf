@@ -177,8 +177,6 @@ struct object {
 
 #define KF_FASTCALL	(1 << 12)
 #define KF_ARENA_RET	(1 << 13)
-#define KF_ARENA_ARG1	(1 << 14)
-#define KF_ARENA_ARG2	(1 << 15)
 #define KF_IMPLICIT_ARGS (1 << 16)
 #define KF_IMPL_SUFFIX "_impl"
 #define TYPE_ATTR_ARENA "address_space(1)"
@@ -1317,22 +1315,6 @@ add_new_proto:
 	return 0;
 }
 
-static bool is_arena_arg(const struct btf *btf, const struct kfunc *kfunc,
-			 const struct btf_param *param, u32 idx)
-{
-	if (is_arena_param(btf, param))
-		return true;
-
-	switch (idx) {
-	case 0:
-		return kfunc->flags & KF_ARENA_ARG1;
-	case 1:
-		return kfunc->flags & KF_ARENA_ARG2;
-	default:
-		return false;
-	}
-}
-
 static s32 arena_tag_ptr(struct btf *btf, u32 ptr_id, struct kfunc *kfunc)
 {
 	const struct btf_type *ptr = btf__type_by_id(btf, ptr_id);
@@ -1382,7 +1364,7 @@ static s32 add_arena_tagged_proto(struct btf *btf, struct kfunc *kfunc)
 	int err, i;
 
 	for (i = 0; i < nr_params; i++) {
-		if (is_arena_arg(btf, kfunc, &params[i], i)) {
+		if (is_arena_param(btf, &params[i])) {
 			has_arena_arg = true;
 			break;
 		}
@@ -1420,7 +1402,7 @@ static s32 add_arena_tagged_proto(struct btf *btf, struct kfunc *kfunc)
 	for (i = 0; i < nr_params; i++) {
 		t = btf__type_by_id(btf, new_proto_id);
 		tag_params = btf_params(t);
-		if (!is_arena_arg(btf, kfunc, &tag_params[i], i))
+		if (!is_arena_param(btf, &tag_params[i]))
 			continue;
 
 		id = arena_tag_ptr(btf, tag_params[i].type, kfunc);

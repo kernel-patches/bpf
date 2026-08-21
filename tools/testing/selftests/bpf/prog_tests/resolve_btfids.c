@@ -23,13 +23,6 @@
 #ifndef KF_ARENA_RET
 #define KF_ARENA_RET  (1 << 13)
 #endif
-#ifndef KF_ARENA_ARG1
-#define KF_ARENA_ARG1 (1 << 14)
-#endif
-#ifndef KF_ARENA_ARG2
-#define KF_ARENA_ARG2 (1 << 15)
-#endif
-
 struct symbol {
 	const char	*name;
 	int		 type;
@@ -57,9 +50,8 @@ struct kfunc_symbol {
 static struct kfunc_symbol kfunc_symbols[] = {
 	{ "kfunc_a", -1, 0, 0, false },
 	{ "kfunc_b", -1, KF_FASTCALL, 0, false },
-	{ "kfunc_c", -1, KF_ARENA_RET | KF_ARENA_ARG1 | KF_ARENA_ARG2,
-	  ARENA_ARG(0) | ARENA_ARG(1), true },
-	{ "kfunc_d", -1, KF_ARENA_ARG2, ARENA_ARG(1), false },
+	{ "kfunc_c", -1, KF_ARENA_RET, 0, true },
+	{ "kfunc_d", -1, 0, 0, false },
 	{ "kfunc_e", -1, 0, ARENA_ARG(0) | ARENA_ARG(1) | ARENA_ARG(2) |
 	  ARENA_ARG(3) | ARENA_ARG(4), false },
 	{ "kfunc_f", -1, 0, ARENA_ARG(1), false },
@@ -111,8 +103,8 @@ BTF_SET_END(test_set)
 BTF_KFUNCS_START(test_kfunc_set)
 BTF_ID_FLAGS(func, kfunc_a)
 BTF_ID_FLAGS(func, kfunc_b, KF_FASTCALL)
-BTF_ID_FLAGS(func, kfunc_c, KF_ARENA_RET | KF_ARENA_ARG1 | KF_ARENA_ARG2)
-BTF_ID_FLAGS(func, kfunc_d, KF_ARENA_ARG2)
+BTF_ID_FLAGS(func, kfunc_c, KF_ARENA_RET)
+BTF_ID_FLAGS(func, kfunc_d)
 BTF_ID_FLAGS(func, kfunc_e)
 BTF_ID_FLAGS(func, kfunc_f)
 BTF_ID_FLAGS(func, kfunc_g, KF_ARENA_RET)
@@ -126,8 +118,8 @@ BTF_KFUNCS_START(test_kfunc_set_rev)
 BTF_ID_FLAGS(func, kfunc_g, KF_ARENA_RET)
 BTF_ID_FLAGS(func, kfunc_f)
 BTF_ID_FLAGS(func, kfunc_e)
-BTF_ID_FLAGS(func, kfunc_d, KF_ARENA_ARG2)
-BTF_ID_FLAGS(func, kfunc_c, KF_ARENA_RET | KF_ARENA_ARG1 | KF_ARENA_ARG2)
+BTF_ID_FLAGS(func, kfunc_d)
+BTF_ID_FLAGS(func, kfunc_c, KF_ARENA_RET)
 BTF_ID_FLAGS(func, kfunc_b, KF_FASTCALL)
 BTF_ID_FLAGS(func, kfunc_a)
 BTF_KFUNCS_END(test_kfunc_set_rev)
@@ -315,7 +307,7 @@ void test_resolve_btfids(void)
 	}
 
 	/*
-	 * Check resolve_btfids wrapped exactly the arena-flagged or suffixed
+	 * Check resolve_btfids wrapped exactly the arena return or suffixed
 	 * return/args with the address_space(1) type attribute, and left other
 	 * pointers/returns untouched.
 	 */
