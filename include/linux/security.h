@@ -168,6 +168,17 @@ struct lsm_prop {
 	struct lsm_prop_bpf bpf;
 };
 
+/*
+ * Identity of a policy object an LSM shares with BPF programs,
+ * embedded in the LSM's own object.  @lsmid identifies the owning
+ * LSM; @type discriminates that LSM's policy object types, with 0
+ * reserved as "unset".
+ */
+struct lsm_policy_object {
+	u64 lsmid;
+	u32 type;
+};
+
 extern const char *const lockdown_reasons[LOCKDOWN_CONFIDENTIALITY_MAX+1];
 
 /* These functions are in security/commoncap.c */
