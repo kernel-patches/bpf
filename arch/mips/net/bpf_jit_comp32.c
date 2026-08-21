@@ -652,16 +652,23 @@ static void emit_trunc_r64(struct jit_context *ctx, const u8 dst[], u32 width)
 
 /* Narrow load operation: dst = *(size *)(src + off) */
 static void emit_ldx_narrow(struct jit_context *ctx,
-			    u8 dst, u8 src, s16 off, u8 size)
+			    u8 dst, u8 src, s16 off, u8 size,
+			    bool sign_extend)
 {
 	switch (size) {
 	/* Load a byte */
 	case BPF_B:
-		emit(ctx, lbu, dst, off, src);
+		if (sign_extend)
+			emit(ctx, lb, dst, off, src);
+		else
+			emit(ctx, lbu, dst, off, src);
 		break;
 	/* Load a half word */
 	case BPF_H:
-		emit(ctx, lhu, dst, off, src);
+		if (sign_extend)
+			emit(ctx, lh, dst, off, src);
+		else
+			emit(ctx, lhu, dst, off, src);
 		break;
 	/* Load a word */
 	case BPF_W:
@@ -679,7 +686,7 @@ static void emit_ldx(struct jit_context *ctx,
 	case BPF_B:
 	case BPF_H:
 	case BPF_W:
-		emit_ldx_narrow(ctx, lo(dst), src, off, size);
+		emit_ldx_narrow(ctx, lo(dst), src, off, size, false);
 		emit(ctx, move, hi(dst), MIPS_R_ZERO);
 		break;
 	/* Load a double word */
@@ -694,6 +701,16 @@ static void emit_ldx(struct jit_context *ctx,
 		emit_load_delay(ctx);
 		break;
 	}
+	clobber_reg64(ctx, dst);
+}
+
+/* Load operation with sign extension: dst = *(signed size *)(src + off) */
+static void emit_ldsx(struct jit_context *ctx,
+		      const u8 dst[], u8 src, s16 off, u8 size)
+{
+	emit_ldx_narrow(ctx, lo(dst), src, off, size, true);
+	emit_load_delay(ctx);
+	emit(ctx, sra, hi(dst), lo(dst), 31);
 	clobber_reg64(ctx, dst);
 }
 
@@ -1669,6 +1686,12 @@ int build_insn(const struct bpf_insn *insn, struct jit_context *ctx)
 	case BPF_LDX | BPF_MEM | BPF_B:
 	case BPF_LDX | BPF_MEM | BPF_DW:
 		emit_ldx(ctx, dst, lo(src), off, BPF_SIZE(code));
+		break;
+	/* LDSX: dst = *(signed size *)(src + off) */
+	case BPF_LDX | BPF_MEMSX | BPF_W:
+	case BPF_LDX | BPF_MEMSX | BPF_H:
+	case BPF_LDX | BPF_MEMSX | BPF_B:
+		emit_ldsx(ctx, dst, lo(src), off, BPF_SIZE(code));
 		break;
 	/* ST: *(size *)(dst + off) = imm */
 	case BPF_ST | BPF_MEM | BPF_W:
