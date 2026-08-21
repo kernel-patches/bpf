@@ -3297,7 +3297,12 @@ bool __weak bpf_jit_supports_stack_args(void)
 	return false;
 }
 
-bool __weak bpf_jit_supports_arena_args(void)
+bool __weak bpf_jit_supports_arena_kfunc_args(void)
+{
+	return false;
+}
+
+bool __weak bpf_jit_supports_arena_struct_ops_args(void)
 {
 	return false;
 }

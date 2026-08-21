@@ -12013,7 +12013,7 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	else if (is_kfunc_arg_callback(env, meta->btf, &args[arg]))
 		arg_type = KF_ARG_PTR_TO_CALLBACK;
 	else if (is_kfunc_arg_arena(meta->btf, &args[arg])) {
-		if (!bpf_jit_supports_arena_args()) {
+		if (!bpf_jit_supports_arena_kfunc_args()) {
 			verbose(env, "JIT does not support kfunc %s() with arena pointer arguments\n",
 				meta->func_name);
 			return -ENOTSUPP;
@@ -19778,7 +19778,7 @@ static int check_struct_ops_btf_id(struct bpf_verifier_env *env)
 		if (info->refcounted)
 			has_refcounted_arg = true;
 		if (base_type(info->reg_type) == PTR_TO_ARENA) {
-			if (!bpf_jit_supports_arena_args()) {
+			if (!bpf_jit_supports_arena_struct_ops_args()) {
 				verbose(env, "JIT does not support arena arguments\n");
 				return -ENOTSUPP;
 			}

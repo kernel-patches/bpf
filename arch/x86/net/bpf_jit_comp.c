@@ -4174,7 +4174,12 @@ bool bpf_jit_supports_stack_args(void)
 	return true;
 }
 
-bool bpf_jit_supports_arena_args(void)
+bool bpf_jit_supports_arena_kfunc_args(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_arena_struct_ops_args(void)
 {
 	return true;
 }
