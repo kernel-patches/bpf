@@ -413,7 +413,7 @@ static struct clk *devm_aspeed_peci_register_clk_div(struct device *dev, struct 
 						     struct aspeed_peci *priv)
 {
 	struct clk_aspeed_peci *peci_clk;
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 	const char *parent_name;
 	char name[32];
 	int ret;
