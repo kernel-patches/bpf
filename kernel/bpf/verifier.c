@@ -21018,21 +21018,28 @@ static int bpf_prog_verify_signature(struct bpf_verifier_env *env,
 	if (!attr->signature_size ||
 	    attr->signature_size > KMALLOC_MAX_CACHE_SIZE)
 		return -EINVAL;
-	if (attr->keyring_id == VERIFY_USE_BPF_KEYRING) {
-		key = bpf_lookup_keyring();
-		if (!key) {
-			verbose(env, "the bpf keyring is empty or has not been restricted\n");
-			return -ENOKEY;
-		}
-	} else if (system_keyring_id_check(attr->keyring_id) == 0) {
+	if (!system_keyring_id_check(attr->keyring_id)) {
 		key = bpf_lookup_system_key(attr->keyring_id);
 	} else {
-		key = bpf_lookup_user_key(attr->keyring_id, 0);
+		if (attr->keyring_id != VERIFY_USE_BPF_KEYRING) {
+			if (bpf_keyring_enforced()) {
+				verbose(env, "caller-supplied keyring refused, use bpf keyring\n");
+				return -EPERM;
+			}
+			key = bpf_lookup_user_key(attr->keyring_id, 0);
+		} else {
+			key = bpf_lookup_keyring();
+		}
 	}
 	if (!key) {
-		verbose(env, "cannot resolve signing keyring with keyring_id %d\n",
-			attr->keyring_id);
-		return -EINVAL;
+		if (attr->keyring_id == VERIFY_USE_BPF_KEYRING) {
+			verbose(env, "the bpf keyring is empty or has not been restricted\n");
+			return -ENOKEY;
+		} else {
+			verbose(env, "cannot resolve signing keyring with keyring_id %d\n",
+				attr->keyring_id);
+			return -EINVAL;
+		}
 	}
 
 	sig = kvmemdup_bpfptr(usig, attr->signature_size);
