@@ -6,7 +6,13 @@
 #include "struct_ops_arena_attach.skel.h"
 #include "struct_ops_arena_fail.skel.h"
 
-#if defined(__x86_64__) || defined(__aarch64__)
+#if defined(__x86_64__) || defined(__aarch64__) || \
+	(defined(__riscv) && __riscv_xlen == 64) || defined(__s390x__) || \
+	defined(__loongarch__)
+#define HAVE_ARENA_STRUCT_OPS_ARGS
+#endif
+
+#ifdef HAVE_ARENA_STRUCT_OPS_ARGS
 /*
  * Attach callbacks with __arena and __arena__nullable arguments and drive
  * them through the bpf_testmod_ops3_call_test_arena*() kfuncs.
@@ -111,11 +117,11 @@ static void arena_arg_attach(void)
 void serial_test_struct_ops_arena(void)
 {
 	/*
-	 * Arena struct_ops arguments need JIT support, currently x86-64 and
-	 * arm64 only. Elsewhere verification fails with "JIT does not support
-	 * arena arguments", so the programs cannot even load.
+	 * Arena struct_ops arguments need JIT support. Elsewhere verification
+	 * fails with "JIT does not support arena arguments", so the programs
+	 * cannot even load.
 	 */
-#if defined(__x86_64__) || defined(__aarch64__)
+#ifdef HAVE_ARENA_STRUCT_OPS_ARGS
 	if (test__start_subtest("arena_arg"))
 		arena_arg();
 	if (test__start_subtest("arena_arg_fail"))
