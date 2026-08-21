@@ -947,6 +947,48 @@ static int sign_zero_extend(struct bpf_jit *jit, int r, u8 size, u8 flags)
 }
 
 /*
+ * Rebase the __arena args of a kfunc call to arena kernel addresses,
+ * rN = kern_vm_start + (u32)rN. A nullable arg preserves NULL by skipping
+ * the add, tested on the truncated value as arena NULL is offset 0.
+ */
+static int emit_kfunc_arena_args(struct bpf_jit *jit, struct bpf_prog *fp,
+				 const struct btf_func_model *m)
+{
+	bool base_loaded = false;
+	int i;
+
+	for (i = 0; i < min_t(int, m->nr_args, MAX_BPF_FUNC_REG_ARGS); i++) {
+		u8 flags = m->arg_flags[i];
+		int arg = BPF_REG_1 + i;
+
+		if (!(flags & BTF_FMODEL_ARENA_ARG))
+			continue;
+		if (WARN_ON_ONCE(!fp->aux->arena))
+			return -EINVAL;
+
+		if (!base_loaded) {
+			/* lgrl %w0,kern_arena */
+			EMIT6_PCREL_RILB(0xc4080000, REG_W0, jit->kern_arena);
+			base_loaded = true;
+		}
+
+		/* llgfr %arg,%arg: truncate and clear the upper 32 bits */
+		EMIT4(0xb9160000, arg, arg);
+		if (flags & BTF_FMODEL_NULLABLE_ARG) {
+			/* ltgr %arg,%arg */
+			EMIT4(0xb9020000, arg, arg);
+			/* brc 8,1f */
+			EMIT4_PCREL_RIC(0xa7040000, 8, jit->prg + 8);
+		}
+		/* agr %arg,%w0 */
+		EMIT4(0xb9080000, arg, REG_W0);
+		/* 1: */
+	}
+
+	return 0;
+}
+
+/*
  * Compile one eBPF instruction into s390x code
  *
  * NOTE: Use noinline because for gcov (-fprofile-arcs) gcc allocates a lot of
@@ -1867,6 +1909,8 @@ static noinline int bpf_jit_insn(struct bpf_jit *jit, struct bpf_prog *fp,
 						     m->arg_flags[j]))
 					return -1;
 			}
+			if (emit_kfunc_arena_args(jit, fp, m))
+				return -1;
 		}
 
 		if ((void *)func == arch_bpf_timed_may_goto) {
@@ -2455,6 +2499,11 @@ out_err:
 }
 
 bool bpf_jit_supports_kfunc_call(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_arena_kfunc_args(void)
 {
 	return true;
 }
