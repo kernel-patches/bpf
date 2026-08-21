@@ -15610,6 +15610,14 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static bool linked_base_fits_u32(const struct bpf_reg_state *reg)
+{
+	if (reg->id & BPF_ADD_CONST32)
+		return true;
+	return reg_smin(reg) >= (s64)reg->delta &&
+	       reg_smax(reg) <= (s64)U32_MAX + (s64)reg->delta;
+}
+
 /* Handles ALU ops other than BPF_END, BPF_NEG and BPF_MOV: computes new min/max
  * and var_off.
  */
@@ -15878,7 +15886,12 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 						insn->src_reg);
 					return -EACCES;
 				} else if (src_reg->type == SCALAR_VALUE) {
-					if (insn->off == 0) {
+					if (insn->off == 0 && insn->src_reg == insn->dst_reg &&
+					    (dst_reg->id & BPF_ADD_CONST) &&
+					    linked_base_fits_u32(dst_reg)) {
+						dst_reg->id = (dst_reg->id & ~BPF_ADD_CONST64) |
+							      BPF_ADD_CONST32;
+					} else if (insn->off == 0) {
 						bool is_src_reg_u32 = get_reg_width(src_reg) <= 32;
 
 						if (is_src_reg_u32)
@@ -19183,6 +19196,36 @@ next_insn:
 	return 0;
 }
 
+static bool is_shift_by_32(const struct bpf_insn *insn, u8 op)
+{
+	return insn->code == (BPF_ALU64 | op | BPF_K) && insn->off == 0 && insn->imm == 32;
+}
+
+/* 'rX <<= 32; rX >>= 32' => 'wX = wX; wX = wX' */
+static void bpf_rewrite_zext_shifts(struct bpf_verifier_env *env)
+{
+	struct bpf_insn *insn = env->prog->insnsi;
+	int i;
+
+	for (i = 0; i < env->prog->len - 1; i++) {
+		if (!is_shift_by_32(&insn[i], BPF_LSH) ||
+		    !is_shift_by_32(&insn[i + 1], BPF_RSH) ||
+		    insn[i].dst_reg != insn[i + 1].dst_reg)
+			continue;
+		if (bpf_is_jmp_point(env, i + 1))
+			continue;
+		/*
+		 * The second mov is redundant, but a nop (goto pc+0) cannot
+		 * be used here. A 'goto pc+0' is a jump, and the extra jump
+		 * may change where checkpoints are placed, see
+		 * bpf_is_state_visited(). The second mov avoids that.
+		 */
+		insn[i] = BPF_MOV32_REG(insn[i].dst_reg, insn[i].dst_reg);
+		insn[i + 1] = insn[i];
+		i++;
+	}
+}
+
 /* drop refcnt of maps used by the rejected program */
 static void release_maps(struct bpf_verifier_env *env)
 {
@@ -21148,6 +21191,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	ret = bpf_check_cfg(env);
 	if (ret < 0)
 		goto skip_full_check;
+
+	/* Needs the jump point marks left by bpf_check_cfg(). */
+	bpf_rewrite_zext_shifts(env);
 
 	ret = bpf_compute_postorder(env);
 	if (ret < 0)
