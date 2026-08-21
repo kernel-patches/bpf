@@ -714,6 +714,37 @@ static int sign_extend(u8 rd, u8 rs, u8 sz, bool sign, struct rv_jit_context *ct
 	return 0;
 }
 
+/*
+ * Rebase the __arena args of a kfunc call to arena kernel addresses,
+ * aN = kern_vm_start + (u32)aN, with RV_REG_ARENA holding kern_vm_start.
+ * A nullable arg preserves NULL by skipping the add, tested on the
+ * truncated value as arena NULL is offset 0.
+ */
+static int emit_kfunc_arena_args(struct rv_jit_context *ctx,
+				 const struct btf_func_model *fm)
+{
+	int i;
+
+	for (i = 0; i < min_t(int, fm->nr_args, MAX_BPF_FUNC_REG_ARGS); i++) {
+		u8 flags = fm->arg_flags[i];
+		u8 reg = bpf_to_rv_reg(BPF_REG_1 + i, ctx);
+
+		if (!(flags & BTF_FMODEL_ARENA_ARG))
+			continue;
+		if (WARN_ON_ONCE(!ctx->arena_vm_start))
+			return -EINVAL;
+
+		emit_zextw(reg, reg, ctx);
+		if (flags & BTF_FMODEL_NULLABLE_ARG) {
+			/* Skip the fixed-width add so that NULL stays NULL. */
+			emit(rv_beq(reg, RV_REG_ZERO, 4), ctx);
+		}
+		emit(rv_add(reg, RV_REG_ARENA, reg), ctx);
+	}
+
+	return 0;
+}
+
 #define BPF_FIXUP_OFFSET_MASK   GENMASK(26, 0)
 #define BPF_FIXUP_REG_MASK      GENMASK(31, 27)
 #define REG_DONT_CLEAR_MARKER	0	/* RV_REG_ZERO unused in pt_regmap */
@@ -1834,6 +1865,10 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 				if (sign_extend(reg, reg, fm->arg_size[idx], sign, ctx))
 					return -EINVAL;
 			}
+
+			ret = emit_kfunc_arena_args(ctx, fm);
+			if (ret)
+				return ret;
 		}
 
 		/* restore TCC to RV_REG_TCC before bpf2bpf call */
@@ -2128,6 +2163,11 @@ bool bpf_jit_supports_kfunc_call(void)
 }
 
 bool bpf_jit_supports_kfunc_ret_reg_pair(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_arena_kfunc_args(void)
 {
 	return true;
 }
