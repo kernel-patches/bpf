@@ -283,6 +283,11 @@ bool bpf_jit_supports_kfunc_call(void)
 	return true;
 }
 
+bool bpf_jit_supports_arena_kfunc_args(void)
+{
+	return true;
+}
+
 bool bpf_jit_supports_far_kfunc_call(void)
 {
 	return true;
@@ -1195,9 +1200,22 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx, bool ext
 
 			for (i = 0; i < m->nr_args; i++) {
 				u8 reg = regmap[BPF_REG_1 + i];
-				bool sign = m->arg_flags[i] & BTF_FMODEL_SIGNED_ARG;
+				u8 flags = m->arg_flags[i];
 
-				emit_abi_ext(ctx, reg, m->arg_size[i], sign);
+				if (flags & BTF_FMODEL_ARENA_ARG) {
+					if (WARN_ON_ONCE(!ctx->arena_vm_start))
+						return -EINVAL;
+
+					/* rN = kern_vm_start + (u32)rN */
+					emit_zext_32(ctx, reg, true);
+					if (flags & BTF_FMODEL_NULLABLE_ARG)
+						emit_insn(ctx, beq, reg, LOONGARCH_GPR_ZERO, 2);
+					emit_insn(ctx, addd, reg, reg, REG_ARENA);
+					continue;
+				}
+
+				emit_abi_ext(ctx, reg, m->arg_size[i],
+					     flags & BTF_FMODEL_SIGNED_ARG);
 			}
 		}
 
