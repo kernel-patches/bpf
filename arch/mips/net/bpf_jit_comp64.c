@@ -330,8 +330,9 @@ static void emit_trunc_r64(struct jit_context *ctx, u8 dst, u32 width)
 	clobber_reg(ctx, dst);
 }
 
-/* Load operation: dst = *(size*)(src + off) */
-static void emit_ldx(struct jit_context *ctx, u8 dst, u8 src, s16 off, u8 size)
+/* Narrow load operation: dst = *(size *)(src + off) */
+static void emit_ldx_narrow(struct jit_context *ctx,
+			    u8 dst, u8 src, s16 off, u8 size)
 {
 	switch (size) {
 	/* Load a byte */
@@ -345,6 +346,19 @@ static void emit_ldx(struct jit_context *ctx, u8 dst, u8 src, s16 off, u8 size)
 	/* Load a word */
 	case BPF_W:
 		emit(ctx, lwu, dst, off, src);
+		break;
+	}
+}
+
+/* Load operation: dst = *(size *)(src + off) */
+static void emit_ldx(struct jit_context *ctx, u8 dst, u8 src, s16 off, u8 size)
+{
+	switch (size) {
+	/* Load a byte, half word or word */
+	case BPF_B:
+	case BPF_H:
+	case BPF_W:
+		emit_ldx_narrow(ctx, dst, src, off, size);
 		break;
 	/* Load a double word */
 	case BPF_DW:

@@ -650,24 +650,36 @@ static void emit_trunc_r64(struct jit_context *ctx, const u8 dst[], u32 width)
 	}
 }
 
-/* Load operation: dst = *(size*)(src + off) */
-static void emit_ldx(struct jit_context *ctx,
-		     const u8 dst[], u8 src, s16 off, u8 size)
+/* Narrow load operation: dst = *(size *)(src + off) */
+static void emit_ldx_narrow(struct jit_context *ctx,
+			    u8 dst, u8 src, s16 off, u8 size)
 {
 	switch (size) {
 	/* Load a byte */
 	case BPF_B:
-		emit(ctx, lbu, lo(dst), off, src);
-		emit(ctx, move, hi(dst), MIPS_R_ZERO);
+		emit(ctx, lbu, dst, off, src);
 		break;
 	/* Load a half word */
 	case BPF_H:
-		emit(ctx, lhu, lo(dst), off, src);
-		emit(ctx, move, hi(dst), MIPS_R_ZERO);
+		emit(ctx, lhu, dst, off, src);
 		break;
 	/* Load a word */
 	case BPF_W:
-		emit(ctx, lw, lo(dst), off, src);
+		emit(ctx, lw, dst, off, src);
+		break;
+	}
+}
+
+/* Load operation: dst = *(size *)(src + off) */
+static void emit_ldx(struct jit_context *ctx,
+		     const u8 dst[], u8 src, s16 off, u8 size)
+{
+	switch (size) {
+	/* Load a byte, half word or word */
+	case BPF_B:
+	case BPF_H:
+	case BPF_W:
+		emit_ldx_narrow(ctx, lo(dst), src, off, size);
 		emit(ctx, move, hi(dst), MIPS_R_ZERO);
 		break;
 	/* Load a double word */
