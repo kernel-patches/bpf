@@ -2607,6 +2607,34 @@ static void load_imm64(struct bpf_jit *jit, int dst_reg, u64 val)
 	EMIT6_IMM(0xc00d0000, dst_reg, val);
 }
 
+/*
+ * Convert an arena kernel address into the arena pointer form on its way
+ * into the BPF ctx, dst = (u32)(src - kern_vm_start). A nullable arg
+ * preserves NULL, tested on the full 64-bit kernel pointer. The 32-bit
+ * subtraction followed by zero-extension keeps the upper half clear.
+ */
+static void emit_arena_arg_conv(struct bpf_jit *jit, int dst, int src,
+				bool nullable, u32 base_lo)
+{
+	if (dst != src) {
+		/* lgr %dst,%src */
+		EMIT4(0xb9040000, dst, src);
+	}
+	if (nullable) {
+		/* ltgr %dst,%dst */
+		EMIT4(0xb9020000, dst, dst);
+		/* brc 8,1f */
+		EMIT4_PCREL_RIC(0xa7040000, 8, jit->prg + 16);
+	}
+	/* llilf %w1,base_lo */
+	EMIT6_IMM(0xc00f0000, REG_W1, base_lo);
+	/* sr %dst,%w1 */
+	EMIT2(0x1b00, dst, REG_W1);
+	/* llgfr %dst,%dst */
+	EMIT4(0xb9160000, dst, dst);
+	/* 1: */
+}
+
 static void emit_store_stack_imm64(struct bpf_jit *jit, int tmp_reg, int stack_off, u64 imm)
 {
 	load_imm64(jit, tmp_reg, imm);
@@ -2740,6 +2768,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	int cookie_cnt, cookie_off, fsession_cnt;
 	struct bpf_jit *jit = &tjit->common;
 	int arg, bpf_arg_off;
+	u64 arena_base;
 	u64 func_meta;
 	int i, j;
 
@@ -2748,6 +2777,16 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	nr_stack_args = m->nr_args - nr_reg_args;
 	if (nr_stack_args > MAX_NR_STACK_ARGS)
 		return -ENOTSUPP;
+
+	/*
+	 * F_INDIRECT is only compatible with F_RET_FENTRY_RET. Arena conversion
+	 * relies on the indirect trampoline never calling the original function
+	 * with converted arguments.
+	 */
+	WARN_ON_ONCE((flags & BPF_TRAMP_F_INDIRECT) &&
+		     (flags & ~(BPF_TRAMP_F_INDIRECT | BPF_TRAMP_F_RET_FENTRY_RET)));
+
+	arena_base = bpf_tramp_arena_base(m, tnodes, flags);
 
 	/* Return to %r14 in the struct_ops case. */
 	if (flags & BPF_TRAMP_F_INDIRECT)
@@ -2829,14 +2868,33 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 			      (i - MAX_NR_REG_ARGS) * sizeof(u64);
 		bpf_arg_off = tjit->bpf_args_off + j * sizeof(u64);
 		if (m->arg_size[i] <= 8) {
-			if (i < MAX_NR_REG_ARGS)
+			bool arena_arg = arena_base &&
+					 (m->arg_flags[i] & BTF_FMODEL_ARENA_ARG);
+			bool nullable = m->arg_flags[i] & BTF_FMODEL_NULLABLE_ARG;
+
+			if (arena_arg) {
+				if (i < MAX_NR_REG_ARGS) {
+					emit_arena_arg_conv(jit, REG_W0, arg, nullable,
+							    (u32)arena_base);
+				} else {
+					/* lg %w0,arg(%r15) */
+					EMIT6_DISP_LH(0xe3000000, 0x0004, REG_W0,
+						      REG_0, REG_15, arg);
+					emit_arena_arg_conv(jit, REG_W0, REG_W0,
+							    nullable, (u32)arena_base);
+				}
+				/* stg %w0,bpf_arg_off(%r15) */
+				EMIT6_DISP_LH(0xe3000000, 0x0024, REG_W0,
+						      REG_0, REG_15, bpf_arg_off);
+			} else if (i < MAX_NR_REG_ARGS) {
 				/* stg %arg,bpf_arg_off(%r15) */
 				EMIT6_DISP_LH(0xe3000000, 0x0024, arg,
-					      REG_0, REG_15, bpf_arg_off);
-			else
+						      REG_0, REG_15, bpf_arg_off);
+			} else {
 				/* mvc bpf_arg_off(8,%r15),arg(%r15) */
 				_EMIT6(0xd207f000 | bpf_arg_off,
 				       0xf000 | arg);
+			}
 			j += 1;
 		} else {
 			if (i < MAX_NR_REG_ARGS) {
@@ -3088,6 +3146,11 @@ int arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *image,
 }
 
 bool bpf_jit_supports_subprog_tailcalls(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_arena_struct_ops_args(void)
 {
 	return true;
 }
