@@ -32,7 +32,10 @@ enum {
 	BPF_SIG_KEYRING_SECONDARY,
 	BPF_SIG_KEYRING_PLATFORM,
 	BPF_SIG_KEYRING_USER,
+	BPF_SIG_KEYRING_BPF,
 };
+
+#define BPF_KEYRING_BPF		3
 
 static int load_loader(const void *insns, __u32 insns_sz, int map_fd,
 		       const void *sig, __u32 sig_sz, __s32 keyring_id,
@@ -621,6 +624,28 @@ static void signature_bad_keyring(void)
 		fd = load_loader(f.gopts.insns, f.gopts.insns_sz, -1, junk,
 				 sizeof(junk), INT_MAX, 0);
 		ASSERT_EQ(fd, -EINVAL, "signature with bad keyring_id rejected");
+		if (fd >= 0)
+			close(fd);
+	}
+	gen_loader_fixture_fini(&f);
+}
+
+static void bpf_keyring_sealed(void)
+{
+	static const __u8 junk[64] = {};
+	struct gen_loader_fixture f;
+	int fd;
+
+	if (gen_loader_fixture_init(&f) == 0) {
+		/*
+		 * Without bpf.keyring_unsealed=1 on the command line the bpf
+		 * keyring is sealed empty during boot, so it is never handed
+		 * out and a load naming it fails with -ENOKEY before the
+		 * signature bytes are examined.
+		 */
+		fd = load_loader(f.gopts.insns, f.gopts.insns_sz, -1, junk,
+				 sizeof(junk), BPF_KEYRING_BPF, 0);
+		ASSERT_EQ(fd, -ENOKEY, "sealed bpf keyring rejected");
 		if (fd >= 0)
 			close(fd);
 	}
@@ -1806,6 +1831,8 @@ void test_signed_loader(void)
 		signature_zero_size();
 	if (test__start_subtest("signature_bad_keyring"))
 		signature_bad_keyring();
+	if (test__start_subtest("bpf_keyring_sealed"))
+		bpf_keyring_sealed();
 	if (test__start_subtest("metadata_ctx_max_entries_ignored"))
 		metadata_ctx_max_entries_ignored();
 	if (test__start_subtest("metadata_ctx_initial_value_ignored"))
