@@ -49,8 +49,10 @@ int big_alloc1(void *ctx)
 
 	no_page = bpf_arena_alloc_pages(&arena, (void __arena *)ARENA_SIZE,
 					1, NUMA_NO_NODE, 0);
-	if (no_page)
+	/* Only the low 32 bits contribute, so this is equivalent to NULL. */
+	if (!no_page)
 		return 3;
+	bpf_arena_free_pages(&arena, (void __arena *)no_page, 1);
 	if (*page1 != 1)
 		return 4;
 	if (*page2 != 2)

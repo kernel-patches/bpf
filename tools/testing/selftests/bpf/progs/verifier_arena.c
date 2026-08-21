@@ -445,6 +445,8 @@ int iter_maps1(struct bpf_iter__bpf_map *ctx)
 
 	if (!map)
 		return 0;
+	/* Associate an arena before testing the generic map-pointer path. */
+	bpf_arena_reserve_pages(&arena, NULL, 0);
 	bpf_arena_alloc_pages(map, NULL, map->max_entries, 0, 0);
 	return 0;
 }
@@ -455,6 +457,8 @@ int iter_maps2(struct bpf_iter__bpf_map *ctx)
 {
 	struct seq_file *seq = ctx->meta->seq;
 
+	/* Associate an arena before testing the generic map-pointer path. */
+	bpf_arena_reserve_pages(&arena, NULL, 0);
 	bpf_arena_alloc_pages((void *)seq, NULL, 1, 0, 0);
 	return 0;
 }
@@ -467,6 +471,8 @@ int iter_maps3(struct bpf_iter__bpf_map *ctx)
 
 	if (!map)
 		return 0;
+	/* Associate an arena before testing the generic map-pointer path. */
+	bpf_arena_reserve_pages(&arena, NULL, 0);
 	bpf_arena_alloc_pages(map->inner_map_meta, NULL, map->max_entries, 0, 0);
 	return 0;
 }

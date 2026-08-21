@@ -76,8 +76,6 @@
 #define KF_RCU_PROTECTED (1 << 11) /* kfunc should be protected by rcu cs when they are invoked */
 #define KF_FASTCALL     (1 << 12) /* kfunc supports bpf_fastcall protocol */
 #define KF_ARENA_RET    (1 << 13) /* kfunc returns an arena pointer */
-#define KF_ARENA_ARG1   (1 << 14) /* kfunc takes an arena pointer as its first argument */
-#define KF_ARENA_ARG2   (1 << 15) /* kfunc takes an arena pointer as its second argument */
 #define KF_IMPLICIT_ARGS (1 << 16) /* kfunc has implicit arguments supplied by the verifier */
 #define KF_SPINLOCK_SAFE (1 << 17) /* kfunc is allowed inside bpf_spin_lock-ed region */
 
