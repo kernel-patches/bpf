@@ -4483,12 +4483,6 @@ static int bpf_prog_attach_check_attach_type(const struct bpf_prog *prog,
 	case BPF_PROG_TYPE_SK_LOOKUP:
 		return attach_type == prog->expected_attach_type ? 0 : -EINVAL;
 	case BPF_PROG_TYPE_CGROUP_SKB:
-		if (!bpf_token_capable(prog->aux->token, CAP_NET_ADMIN))
-			/* cg-skb progs can be loaded by unpriv user.
-			 * check permissions at attach time.
-			 */
-			return -EPERM;
-
 		ptype = attach_type_to_prog_type(attach_type);
 		if (prog->type != ptype)
 			return -EINVAL;
@@ -4540,6 +4534,19 @@ static int bpf_prog_attach_check_attach_type(const struct bpf_prog *prog,
 			return -EINVAL;
 		return 0;
 	}
+}
+
+static int bpf_prog_attach_check(const struct bpf_prog *prog,
+				 enum bpf_attach_type attach_type)
+{
+	if (prog->type == BPF_PROG_TYPE_CGROUP_SKB &&
+	    !bpf_token_capable(prog->aux->token, CAP_NET_ADMIN))
+		/* cg-skb progs can be loaded by unpriv user.
+		 * check permissions at attach time.
+		 */
+		return -EPERM;
+
+	return bpf_prog_attach_check_attach_type(prog, attach_type);
 }
 
 static bool is_cgroup_prog_type(enum bpf_prog_type ptype, enum bpf_attach_type atype,
@@ -4606,7 +4613,7 @@ static int bpf_prog_attach(const union bpf_attr *attr)
 	if (IS_ERR(prog))
 		return PTR_ERR(prog);
 
-	if (bpf_prog_attach_check_attach_type(prog, attr->attach_type)) {
+	if (bpf_prog_attach_check(prog, attr->attach_type)) {
 		bpf_prog_put(prog);
 		return -EINVAL;
 	}
@@ -5805,8 +5812,7 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr)
 	if (IS_ERR(prog))
 		return PTR_ERR(prog);
 
-	ret = bpf_prog_attach_check_attach_type(prog,
-						attr->link_create.attach_type);
+	ret = bpf_prog_attach_check(prog, attr->link_create.attach_type);
 	if (ret)
 		goto out;
 
@@ -5931,6 +5937,7 @@ static int link_update(union bpf_attr *attr)
 {
 	struct bpf_prog *old_prog = NULL, *new_prog;
 	struct bpf_link *link;
+	enum bpf_attach_type atype;
 	u32 flags;
 	int ret;
 
@@ -5966,6 +5973,22 @@ static int link_update(union bpf_attr *attr)
 	} else if (attr->link_update.old_prog_fd) {
 		ret = -EINVAL;
 		goto out_put_progs;
+	}
+
+	if (link->type == BPF_LINK_TYPE_CGROUP) {
+		atype = link->attach_type;
+		/*
+		 * BPF_LSM_MAC and BPF_LSM_CGROUP share BPF_PROG_TYPE_LSM, so
+		 * the helper's default prog-type check cannot distinguish them.
+		 */
+		if (new_prog->type == BPF_PROG_TYPE_LSM &&
+		    new_prog->expected_attach_type != atype)
+			ret = -EINVAL;
+		else
+			ret = bpf_prog_attach_check_attach_type(new_prog,
+								atype);
+		if (ret)
+			goto out_put_progs;
 	}
 
 	if (link->ops->update_prog)
