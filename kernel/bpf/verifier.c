@@ -5237,6 +5237,15 @@ static enum priv_stack_mode bpf_enable_priv_stack(struct bpf_prog *prog)
 	if (!bpf_jit_supports_private_stack())
 		return NO_PRIV_STACK;
 
+	/*
+	 * Sleepable programs can be preempted, allowing another task to run
+	 * the same program on the same CPU. Since private stack is per-CPU
+	 * and per-program, the second invocation would corrupt the first's
+	 * stack. Disable private stack for sleepable programs.
+	 */
+	if (prog->sleepable)
+		return NO_PRIV_STACK;
+
 	/* bpf_prog_check_recur() checks all prog types that use bpf trampoline
 	 * while kprobe/tp/perf_event/raw_tp don't use trampoline hence checked
 	 * explicitly.
