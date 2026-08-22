@@ -81,6 +81,10 @@ enum xdp_buff_flags {
 	 * XDP program is not attached.
 	 */
 	XDP_FLAGS_FRAGS_UNREADABLE	= BIT(2),
+	/* frags are page_pool memory even though rxq->mem.type is not: a
+	 * skb-backed XDP buff (generic XDP, veth) is cow'd into a page_pool.
+	 */
+	XDP_FLAGS_FRAGS_PAGE_POOL	= BIT(3),
 };
 
 struct xdp_buff {
@@ -129,6 +133,16 @@ static __always_inline void xdp_buff_set_frag_pfmemalloc(struct xdp_buff *xdp)
 static __always_inline void xdp_buff_set_frag_unreadable(struct xdp_buff *xdp)
 {
 	xdp->flags |= XDP_FLAGS_FRAGS_UNREADABLE;
+}
+
+static __always_inline void xdp_buff_set_frag_pp(struct xdp_buff *xdp)
+{
+	xdp->flags |= XDP_FLAGS_FRAGS_PAGE_POOL;
+}
+
+static __always_inline bool xdp_buff_is_frag_pp(const struct xdp_buff *xdp)
+{
+	return !!(xdp->flags & XDP_FLAGS_FRAGS_PAGE_POOL);
 }
 
 static __always_inline u32 xdp_buff_get_skb_flags(const struct xdp_buff *xdp)

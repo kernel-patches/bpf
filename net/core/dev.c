@@ -5532,6 +5532,11 @@ u32 bpf_prog_run_generic_xdp(struct sk_buff *skb, struct xdp_buff *xdp,
 	if (skb_is_nonlinear(skb)) {
 		skb_shinfo(skb)->xdp_frags_size = skb->data_len;
 		xdp_buff_set_frags_flag(xdp);
+		/* A nonlinear skb was cow'd into page_pool memory by
+		 * skb_cow_data_for_xdp() before we got here, so the frags must
+		 * be freed to that pool, not via the rxq's MEM_TYPE_PAGE_SHARED.
+		 */
+		xdp_buff_set_frag_pp(xdp);
 	} else {
 		xdp_buff_clear_frags_flag(xdp);
 	}

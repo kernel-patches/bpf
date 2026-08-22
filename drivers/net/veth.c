@@ -775,6 +775,11 @@ static int veth_convert_skb_to_xdp_buff(struct veth_rq *rq,
 	if (skb_shinfo(skb)->nr_frags) {
 		skb_shinfo(skb)->xdp_frags_size = skb->data_len;
 		xdp_buff_set_frags_flag(xdp);
+		/* A nonlinear skb was cow'd into rq->page_pool above, so the
+		 * frags must be freed to that pool, not via the rxq's
+		 * MEM_TYPE_PAGE_SHARED.
+		 */
+		xdp_buff_set_frag_pp(xdp);
 	} else {
 		xdp_buff_clear_frags_flag(xdp);
 	}
