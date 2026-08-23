@@ -599,7 +599,8 @@ err_out:
 static bool is_dwarf_sec_name(const char *name)
 {
 	/* approximation, but the actual list is too long */
-	return strncmp(name, ".debug_", sizeof(".debug_") - 1) == 0;
+	return strncmp(name, ".debug_", sizeof(".debug_") - 1) == 0 ||
+		   strcmp(name, ".eh_frame") == 0;
 }
 
 static bool is_ignored_sec(struct src_sec *sec)

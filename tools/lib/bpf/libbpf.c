@@ -3867,7 +3867,8 @@ static Elf64_Rel *elf_rel_by_idx(Elf_Data *data, size_t idx)
 static bool is_sec_name_dwarf(const char *name)
 {
 	/* approximation, but the actual list is too long */
-	return str_has_pfx(name, ".debug_");
+	return str_has_pfx(name, ".debug_") ||
+		   strcmp(name, ".eh_frame") == 0;
 }
 
 static bool ignore_elf_section(Elf64_Shdr *hdr, const char *name)
