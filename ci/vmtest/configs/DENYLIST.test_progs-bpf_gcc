@@ -1,0 +1,218 @@
+arena_htab/arena_htab_asm	# 1M runaway since v7.2-rc1
+arena_strsearch
+bad_struct_ops/invalid_prog_reuse
+bpf_cookie/perf_event		# flaky
+bpf_ip_check_defrag
+bpf_iter/bpf_sockmap_map_iter_fd
+bpf_iter/task_pid		# The sequence of 8193 jumps is too complex
+bpf_iter/task_pidfd		# The sequence of 8193 jumps is too complex
+bpf_iter/task_sleepable		# The sequence of 8193 jumps is too complex
+bpf_iter/task_tid		# The sequence of 8193 jumps is too complex
+bpf_iter/unix			# The sequence of 8193 jumps is too complex
+bpf_iter_setsockopt
+bpf_iter_setsockopt_unix
+bpf_mod_race
+bpf_sockmap_map_iter_fd
+bpf_tcp_ca/dctcp
+bpf_tcp_ca/dctcp_autoattach_map
+bpf_tcp_ca/dctcp_fallback
+bpftool_metadata
+btf_dump
+btf_map_in_map
+cgroup_tcp_skb
+cgrp_kfunc/cgrp_kfunc_acquire_trusted_walked
+cls_redirect/cls_redirect_dynptr
+connect_force_port
+core_autosize
+core_reloc/arrays___err_bad_signed_arr_elem_sz
+core_reloc/type_id
+core_reloc/type_id___missing_targets
+core_reloc_btfgen/arrays___err_bad_signed_arr_elem_sz
+core_reloc_btfgen/type_id
+core_reloc_btfgen/type_id___missing_targets
+cpumask/test_alloc_double_release
+cpumask/test_alloc_free_cpumask
+cpumask/test_and_or_xor
+cpumask/test_copy_any_anyand
+cpumask/test_cpumask_weight
+cpumask/test_first_firstzero_cpu
+cpumask/test_firstand_nocpu
+cpumask/test_global_mask_array_l2_rcu
+cpumask/test_global_mask_array_one_rcu
+cpumask/test_global_mask_array_rcu
+cpumask/test_global_mask_nested_deep_array_rcu
+cpumask/test_global_mask_nested_deep_rcu
+cpumask/test_global_mask_nested_rcu
+cpumask/test_global_mask_rcu
+cpumask/test_insert_leave
+cpumask/test_insert_remove_release
+cpumask/test_intersects_subset
+cpumask/test_populate
+cpumask/test_populate_reject_small_mask
+cpumask/test_populate_reject_unaligned
+cpumask/test_refcount_null_tracking
+cpumask/test_set_clear_cpu
+cpumask/test_setall_clear_cpu
+cpumask/test_test_and_set_clear
+dmabuf_iter
+dynptr/invalid_helper2
+dynptr/test_dynptr_skb_no_buff
+dynptr/test_dynptr_skb_tp_btf
+dynptr/test_read_write
+exceptions/check_assert_ge_neg
+exceptions/check_assert_ge_pos
+exceptions/check_assert_ge_zero
+exceptions/check_assert_generic
+exceptions/check_assert_gt_neg
+exceptions/check_assert_gt_pos
+exceptions/check_assert_gt_zero
+exceptions/check_assert_le_neg
+exceptions/check_assert_le_pos
+exceptions/check_assert_le_zero
+exceptions/check_assert_lt_neg
+exceptions/check_assert_lt_pos
+exceptions/check_assert_lt_zero
+exceptions/check_assert_range_s64
+exceptions/check_assert_range_u64
+exceptions/check_assert_single_range_s64
+exceptions/check_assert_single_range_u64
+exceptions/non-throwing extension -> main subprog
+exceptions/non-throwing extension -> non-throwing subprog
+exceptions/non-throwing extension -> throwing global subprog
+exceptions/non-throwing fmod_ret -> non-throwing global subprog
+exceptions/reject_subprog_with_lock
+exceptions/throwing extension -> main subprog
+exceptions/throwing extension -> non-throwing global subprog
+exceptions/throwing extension -> throwing global subprog
+fd_htab_lookup
+fexit_bpf2bpf/fmod_ret_freplace
+fexit_bpf2bpf/func_replace
+fexit_bpf2bpf/func_replace_global_func
+fexit_bpf2bpf/func_replace_multi
+fexit_bpf2bpf/target_yes_callees
+fs_kfuncs
+global_map_resize
+global_percpu_data		# crashing kernel: bad .percpu address
+inner_array_lookup
+iters/iter_err_unsafe_asm_loop
+kfree_skb
+ksock_lsm
+l4lb_all/l4lb_noinline
+l4lb_all/l4lb_noinline_dynptr
+linked_list
+linked_list_peek/test_back_spinlock_false
+linked_list_peek/test_front_spinlock_false
+log_buf/obj_load_log_buf
+log_fixup/bad_core_relo_subprog
+lru_bug
+lwt_seg6local
+map_btf/inner_array_btf
+map_in_map/acc_map_in_array
+map_in_map/acc_map_in_htab
+map_in_map/sleepable_acc_map_in_array
+map_in_map/sleepable_acc_map_in_htab
+map_ptr
+map_uninit_mem_exposure
+pkt_access
+prog_run_opts
+rbtree_fail/rbtree_api_nolock_add
+rbtree_fail/rbtree_api_nolock_first
+rbtree_fail/rbtree_api_nolock_remove
+rbtree_search/rbtree_search
+rbtree_search/test_left_spinlock_false
+rbtree_search/test_right_spinlock_false
+rbtree_search/test_root_spinlock_false
+rbtree_success
+recursion
+reference_tracking/sk_lookup_success
+res_spin_lock_success
+ringbuf_multi
+setget_sockopt
+sk_lookup
+skc_to_unix_sock
+sock_addr
+sock_fields
+sockmap_basic/sockhash copy
+sockmap_basic/sockmap copy
+sockmap_strp			# flaky
+spin_lock
+stream_arena_fault_address
+stream_oversize
+stream_partial_read
+stream_success/stream_arena_subprog_fault
+stream_syscall
+struct_ops_arena/arena_arg
+struct_ops_arena/arena_arg_attach
+syscall
+tailcalls/tailcall_6
+tailcalls/tailcall_bpf2bpf_2
+tailcalls/tailcall_bpf2bpf_3
+tailcalls/tailcall_bpf2bpf_fentry
+tailcalls/tailcall_bpf2bpf_fentry_entry
+tailcalls/tailcall_bpf2bpf_fentry_fexit
+tailcalls/tailcall_bpf2bpf_fexit
+tailcalls/tailcall_bpf2bpf_fexit_links
+tailcalls/tailcall_bpf2bpf_hierarchy_3
+task_local_data
+task_local_storage/uptr_no_null_check
+tc_bpf/tc_bpf_non_root
+tc_edt				# flaky
+tc_redirect/tc_redirect_dtime
+tcp_custom_syncookie
+tcp_hdr_options
+test_lsm/lsm_basic
+test_profiler
+test_strncmp/strncmp_bad_not_null_term_target
+timer_interrupt			# flaky
+timer_mim
+tp_btf_nullable/handle_tp_btf_nullable_bare1
+verif_scale_pyperf100
+verif_scale_pyperf180
+verif_scale_pyperf600_nounroll
+verif_scale_seg6_loop
+verif_scale_strobemeta
+verif_scale_strobemeta_nounroll1
+verif_scale_strobemeta_nounroll2
+verif_scale_strobemeta_subprogs
+verif_scale_sysctl_loop1
+verif_scale_sysctl_loop2
+verif_scale_xdp_loop
+verifier_arena/check_arena_arg_ret
+verifier_array_access/valid multiple map access into an array using constant without nullness
+verifier_iterating_callbacks/test1
+verifier_lsm/not null checking nullable pointer in bpf_lsm_mmap_file
+verifier_map_in_map/map_ptr_is_never_null_rb
+verifier_map_lookup_refine/mapofmaps_value_as_helper_fixed_mem
+verifier_map_lookup_refine/mapofmaps_value_as_helper_mem_buf
+verifier_map_lookup_refine/mapofmaps_value_as_kfunc_mem_buf
+verifier_private_stack/Private stack, async callback, not nested
+verifier_private_stack/Private stack, async callback, potential nesting
+verifier_private_stack/private stack, max stack depth is private stack
+verifier_sockmap_mutate/test_trace_iter
+verifier_spill_fill/partial_stack_load_preserves_zeros
+verifier_spill_fill/stack_load_preserves_const_precision
+verifier_spill_fill/stack_load_preserves_const_precision_subreg
+verifier_subprog_precision/callback_result_precise
+verifier_subprog_precision/fp_precise_subprog_result
+verifier_subprog_precision/global_subprog_result_precise
+verifier_subprog_precision/parent_callee_saved_reg_precise
+verifier_subprog_precision/parent_callee_saved_reg_precise_global
+verifier_subprog_precision/parent_callee_saved_reg_precise_with_callback
+verifier_subprog_precision/parent_stack_slot_precise
+verifier_subprog_precision/parent_stack_slot_precise_global
+verifier_subprog_precision/parent_stack_slot_precise_with_callback
+verifier_subprog_precision/sneaky_fp_precise_subprog_result
+verifier_subprog_precision/stack_slot_aliases_precision
+verifier_subprog_precision/subprog_arg_precise
+verifier_subprog_precision/subprog_result_precise
+verifier_subprog_precision/subprog_result_tail_call
+verifier_subprog_precision/subprog_spill_into_parent_stack_slot_precise
+verifier_tailcall_jit
+verify_pkcs7_sig
+veristat/set_global_vars_from_file_succeeds
+veristat/set_global_vars_succeeds
+xdp_context_lwt_encap
+xdp_context_tuntap
+xdp_context_veth
+xdp_pull_data
+xdp_synproxy
