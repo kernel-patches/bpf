@@ -787,7 +787,12 @@ VERIFY_SIG_HDR := verification_cert.h
 VERIFICATION_CERT   := $(BUILD_DIR)/signing_key.der
 PRIVATE_KEY := $(BUILD_DIR)/signing_key.pem
 
-$(VERIFICATION_CERT) $(PRIVATE_KEY): $(VERIFY_SIG_SETUP)
+# One genkey run produces both files. A plain two-target rule is not
+# grouped - if both files are stale make would run genkey twice, under
+# -j concurrently, and the openssl invocations race; the pattern form
+# is implicitly grouped even with make < 4.3. The stem only stands in
+# for 'signing' so that no other .pem/.der under $(BUILD_DIR) matches.
+$(BUILD_DIR)/%_key.pem $(BUILD_DIR)/%_key.der: $(VERIFY_SIG_SETUP)
 	$(Q)mkdir -p $(BUILD_DIR)
 	$(Q)$(VERIFY_SIG_SETUP) genkey $(BUILD_DIR)
 
