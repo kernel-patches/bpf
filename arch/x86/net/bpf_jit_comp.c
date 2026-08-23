@@ -1721,6 +1721,23 @@ static int emit_kfunc_arena_args(struct bpf_prog *bpf_prog,
 	return prog - start;
 }
 
+static int emit_kfunc_return(const struct bpf_prog *bpf_prog,
+			     const struct bpf_insn *insn, u8 **pprog)
+{
+	const struct btf_func_model *fm;
+
+	fm = bpf_jit_find_kfunc_model(bpf_prog, insn);
+	if (!fm)
+		return -EINVAL;
+	if (!(fm->ret_flags & BTF_FMODEL_SIGNED_ARG) || fm->ret_size == 8)
+		return 0;
+	if (fm->ret_size != 1 && fm->ret_size != 2 && fm->ret_size != 4)
+		return -EINVAL;
+
+	emit_movsx_reg(pprog, fm->ret_size * 8, true, BPF_REG_0, BPF_REG_0);
+	return 0;
+}
+
 static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 		  u8 *rw_image, int oldproglen, struct jit_context *ctx, bool jmp_padding)
 {
@@ -2664,6 +2681,11 @@ populate_extable:
 			ip += x86_call_depth_emit_accounting(&prog, func, ip);
 			if (emit_call(&prog, func, ip))
 				return -EINVAL;
+			if (src_reg == BPF_PSEUDO_KFUNC_CALL) {
+				err = emit_kfunc_return(bpf_prog, insn, &prog);
+				if (err)
+					return err;
+			}
 			if (priv_frame_ptr)
 				pop_r9(&prog);
 			/*
