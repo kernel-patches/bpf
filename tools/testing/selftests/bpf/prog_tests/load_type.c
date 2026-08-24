@@ -6,95 +6,161 @@
 
 void test_load_type(void)
 {
-	int duration = 0, err;
 	struct bpf_link *link;
 	struct test_load_type *skel;
+	int err;
 
 	skel = test_load_type__open();
-	if (CHECK(!skel, "skel_open", "failed to open skeleton\n"))
-		goto cleanup;
+	if (!ASSERT_OK_PTR(skel, "skel_open"))
+		return;
 
 	/* don't load prog1 */
 	bpf_program__set_load_type(skel->progs.prog1, BPF_PROG_LOAD_TYPE_DISABLED);
 
 	/* load and attach prog2 */
 	bpf_program__set_load_type(skel->progs.prog2, BPF_PROG_LOAD_TYPE_AUTO);
-	CHECK(!bpf_program__autoload(skel->progs.prog2), "prog2", "not autoload?!\n");
+	if (!ASSERT_TRUE(bpf_program__autoload(skel->progs.prog2), "prog2_autoload"))
+		goto cleanup;
 
 	err = bpf_program__set_load_type(skel->progs.prog3, BPF_PROG_LOAD_TYPE_DYNAMIC);
-	if (CHECK(err, "set_load_type", "set_load_type(DYNAMIC) failed: %d\n", err))
+	if (!ASSERT_OK(err, "set_load_type_dynamic"))
 		goto cleanup;
-	CHECK(bpf_program__load_type(skel->progs.prog3) != BPF_PROG_LOAD_TYPE_DYNAMIC,
-		"prog3", "didn't set type?!\n");
+	if (!ASSERT_EQ(bpf_program__load_type(skel->progs.prog3), BPF_PROG_LOAD_TYPE_DYNAMIC,
+		       "prog3_load_type"))
+		goto cleanup;
 
-	/* bpf_program__set_autoload(program, false) doesn't have effect if the program
-	 * type is not BPF_PROG_LOAD_TYPE_AUTO
+	/* bpf_program__set_autoload() is a thin forwarder to set_load_type(),
+	 * restricted to AUTO/DISABLED to preserve its original bool on/off
+	 * meaning; it does change the load type of a program that isn't
+	 * currently BPF_PROG_LOAD_TYPE_AUTO.
 	 */
 	err = bpf_program__set_autoload(skel->progs.prog3, false);
-	if (CHECK(err, "set_autoload", "set_autoload(false) failed: %d\n", err))
+	if (!ASSERT_OK(err, "set_autoload_false"))
 		goto cleanup;
 
-	CHECK(bpf_program__load_type(skel->progs.prog3) != BPF_PROG_LOAD_TYPE_DYNAMIC,
-		"prog3", "changed type?!\n");
+	if (!ASSERT_EQ(bpf_program__load_type(skel->progs.prog3), BPF_PROG_LOAD_TYPE_DISABLED,
+		       "prog3_load_type_after_false"))
+		goto cleanup;
 
 	err = bpf_program__set_autoload(skel->progs.prog3, true);
-	if (CHECK(err, "set_autoload", "set_autoload(true) failed: %d\n", err))
+	if (!ASSERT_OK(err, "set_autoload_true"))
 		goto cleanup;
 
-	CHECK(bpf_program__load_type(skel->progs.prog3) != BPF_PROG_LOAD_TYPE_AUTO,
-		"prog3", "didn't change type to auto?!\n");
+	if (!ASSERT_EQ(bpf_program__load_type(skel->progs.prog3), BPF_PROG_LOAD_TYPE_AUTO,
+		       "prog3_load_type_after_true"))
+		goto cleanup;
 
-	/* change the type back to BPF_PROG_LOAD_TYPE_DYNAMIC */
+	/* set_autoload() only accepts AUTO/DISABLED, to preserve its original
+	 * on/off meaning; DYNAMIC must go through set_load_type()
+	 */
+	err = bpf_program__set_autoload(skel->progs.prog3, BPF_PROG_LOAD_TYPE_DYNAMIC);
+	if (!ASSERT_ERR(err, "set_autoload_dynamic_rejected"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(bpf_program__load_type(skel->progs.prog3), BPF_PROG_LOAD_TYPE_AUTO,
+		       "prog3_load_type_unchanged_after_rejected_autoload"))
+		goto cleanup;
+
 	err = bpf_program__set_load_type(skel->progs.prog3, BPF_PROG_LOAD_TYPE_DYNAMIC);
-	if (CHECK(err, "set_load_type", "changing from AUTO to DYNAMIC failed: %d\n", err))
+	if (!ASSERT_OK(err, "set_load_type_dynamic_enum"))
 		goto cleanup;
 
-	CHECK(bpf_program__load_type(skel->progs.prog3) != BPF_PROG_LOAD_TYPE_DYNAMIC,
-		"prog3", "didn't change type from autoload to dynamic?!\n");
+	if (!ASSERT_EQ(bpf_program__load_type(skel->progs.prog3), BPF_PROG_LOAD_TYPE_DYNAMIC,
+		       "prog3_load_type_after_dynamic_enum"))
+		goto cleanup;
+
+	/* leaving DYNAMIC for AUTO must restore autoattach (regression test for
+	 * the autoattach residue bug: set_dynamicload() clears autoattach, and
+	 * nothing used to restore it on exit)
+	 */
+	err = bpf_program__set_load_type(skel->progs.prog3, BPF_PROG_LOAD_TYPE_AUTO);
+	if (!ASSERT_OK(err, "set_load_type_auto"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(bpf_program__load_type(skel->progs.prog3), BPF_PROG_LOAD_TYPE_AUTO,
+		       "prog3_load_type_auto"))
+		goto cleanup;
+
+	if (!ASSERT_TRUE(bpf_program__autoattach(skel->progs.prog3), "prog3_autoattach_restored"))
+		goto cleanup;
+
+	/* the same residue can relay through DISABLED and resurface on a later
+	 * DISABLED -> AUTO transition, so the fix must cover both exit edges
+	 */
+	err = bpf_program__set_load_type(skel->progs.prog3, BPF_PROG_LOAD_TYPE_DYNAMIC);
+	if (!ASSERT_OK(err, "set_load_type_dynamic_again"))
+		goto cleanup;
+
+	err = bpf_program__set_load_type(skel->progs.prog3, BPF_PROG_LOAD_TYPE_DISABLED);
+	if (!ASSERT_OK(err, "set_load_type_disabled"))
+		goto cleanup;
+
+	err = bpf_program__set_load_type(skel->progs.prog3, BPF_PROG_LOAD_TYPE_AUTO);
+	if (!ASSERT_OK(err, "set_load_type_auto_via_disabled"))
+		goto cleanup;
+
+	if (!ASSERT_TRUE(bpf_program__autoattach(skel->progs.prog3),
+			 "prog3_autoattach_restored_via_disabled"))
+		goto cleanup;
+
+	/* an out-of-range load type is rejected */
+	err = bpf_program__set_load_type(skel->progs.prog3, (enum bpf_prog_load_type)999);
+	if (!ASSERT_ERR(err, "set_load_type_invalid"))
+		goto cleanup;
+
+	/* change the type back to BPF_PROG_LOAD_TYPE_DYNAMIC for the rest of the test */
+	err = bpf_program__set_load_type(skel->progs.prog3, BPF_PROG_LOAD_TYPE_DYNAMIC);
+	if (!ASSERT_OK(err, "set_load_type_dynamic_final"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(bpf_program__load_type(skel->progs.prog3), BPF_PROG_LOAD_TYPE_DYNAMIC,
+		       "prog3_load_type_final"))
+		goto cleanup;
 
 	err = test_load_type__load(skel);
-	if (CHECK(err, "skel_load", "failed to load skeleton: %d\n", err))
+	if (!ASSERT_OK(err, "skel_load"))
 		goto cleanup;
 
-	CHECK(!bpf_program__autoattach(skel->progs.prog2), "prog2", "not autoattach?!\n");
-	CHECK(bpf_program__autoattach(skel->progs.prog3), "prog3", "autoattach?!\n");
+	if (!ASSERT_TRUE(bpf_program__autoattach(skel->progs.prog2), "prog2_autoattach"))
+		goto cleanup;
+	if (!ASSERT_FALSE(bpf_program__autoattach(skel->progs.prog3), "prog3_autoattach"))
+		goto cleanup;
 
 	/* loaded program type cannot be changed */
 	err = bpf_program__set_load_type(skel->progs.prog3, BPF_PROG_LOAD_TYPE_DISABLED);
-	CHECK(!err, "prog3", "changed type after load?!\n");
+	ASSERT_ERR(err, "set_load_type_after_load");
 
 	err = test_load_type__attach(skel);
-	if (CHECK(err, "skel_attach", "skeleton attach failed: %d\n", err))
+	if (!ASSERT_OK(err, "skel_attach"))
 		goto cleanup;
 
 	usleep(1);
 
-	CHECK(skel->bss->prog1_called, "prog1", "called?!\n");
-	CHECK(!skel->bss->prog2_called, "prog2", "not called\n");
-	CHECK(skel->bss->prog3_called, "prog3", "called?!\n");
+	ASSERT_FALSE(skel->bss->prog1_called, "prog1_called");
+	ASSERT_TRUE(skel->bss->prog2_called, "prog2_called");
+	ASSERT_FALSE(skel->bss->prog3_called, "prog3_called");
 
 	err = bpf_program__load_dynamically(skel->progs.prog3, 0);
-	if (CHECK(err, "load_dynamically", "load dynamically failed: %d\n", err))
+	if (!ASSERT_OK(err, "load_dynamically_1"))
 		goto cleanup;
 
 	err = bpf_program__load_dynamically(skel->progs.prog3, 0);
-	if (CHECK(err, "load_dynamically", "load dynamically failed: %d\n", err))
+	if (!ASSERT_OK(err, "load_dynamically_2"))
 		goto cleanup;
 
 	/* attach prog3 */
 	link = bpf_program__attach(skel->progs.prog3);
-	if (CHECK(libbpf_get_error(link), "attach", "attaching failed: %ld\n",
-		  libbpf_get_error(link)))
+	if (!ASSERT_OK_PTR(link, "attach"))
 		goto cleanup;
 
 	usleep(1);
 
-	CHECK(!skel->bss->prog3_called, "prog3", "not called?!\n");
+	if (!ASSERT_TRUE(skel->bss->prog3_called, "prog3_called_again"))
+		goto cleanup;
 
 	/* detach prog3 as test_load_type__destroy doesn't detach dynamically loaded programs */
 	err = bpf_link__destroy(link);
-	if (CHECK(err, "link__destroy", "link destroy failed: %d\n", err))
-		goto cleanup;
+	ASSERT_OK(err, "link_destroy");
 
 cleanup:
 	test_load_type__destroy(skel);

@@ -6,13 +6,13 @@
 
 void test_dynamicload(void)
 {
-	int duration = 0, err;
 	struct bpf_link *link;
 	struct test_dynamicload *skel;
+	int err;
 
 	skel = test_dynamicload__open();
-	if (CHECK(!skel, "skel_open", "failed to open skeleton\n"))
-		goto cleanup;
+	if (!ASSERT_OK_PTR(skel, "skel_open"))
+		return;
 
 	/* don't load prog1 */
 	bpf_program__set_load_type(skel->progs.prog1, BPF_PROG_LOAD_TYPE_DISABLED);
@@ -24,38 +24,38 @@ void test_dynamicload(void)
 	bpf_program__set_load_type(skel->progs.prog3, BPF_PROG_LOAD_TYPE_DYNAMIC);
 
 	err = test_dynamicload__load(skel);
-	if (CHECK(err, "skel_load", "failed to load skeleton: %d\n", err))
+	if (!ASSERT_OK(err, "skel_load"))
 		goto cleanup;
 
 	err = test_dynamicload__attach(skel);
-	if (CHECK(err, "skel_attach", "skeleton attach failed: %d\n", err))
+	if (!ASSERT_OK(err, "skel_attach"))
 		goto cleanup;
 
 	/* trigger the BPF programs */
 	usleep(1);
 
-	CHECK(skel->bss->prog1_called, "prog1", "called?!\n");
-	CHECK(!skel->bss->prog2_called, "prog2", "not called\n");
-	CHECK(skel->bss->prog3_called, "prog3", "called?!\n");
+	ASSERT_FALSE(skel->bss->prog1_called, "prog1_called");
+	ASSERT_TRUE(skel->bss->prog2_called, "prog2_called");
+	ASSERT_FALSE(skel->bss->prog3_called, "prog3_called");
 
 	/* prog1 is disabled for load */
 	err = bpf_program__load_dynamically(skel->progs.prog1, 0);
-	if (CHECK(!err, "load_dynamically", "disabled program loaded?!\n"))
+	if (!ASSERT_ERR(err, "load_dynamically_disabled"))
 		goto cleanup;
 
 	/* prog1 is disabled for load */
 	err = bpf_program__unload_dynamically(skel->progs.prog1);
-	if (CHECK(!err, "load_dynamically", "disabled program unloaded?!\n"))
+	if (!ASSERT_ERR(err, "unload_dynamically_disabled"))
 		goto cleanup;
 
 	/* prog2 is autoload */
-	err = bpf_program__load_dynamically(skel->progs.prog1, 0);
-	if (CHECK(!err, "load_dynamically", "autoload loaded dynamically?!\n"))
+	err = bpf_program__load_dynamically(skel->progs.prog2, 0);
+	if (!ASSERT_ERR(err, "load_dynamically_autoload"))
 		goto cleanup;
 
 	/* prog2 is autoload */
-	err = bpf_program__unload_dynamically(skel->progs.prog1);
-	if (CHECK(!err, "load_dynamically", "autoload unloaded dynamically?!\n"))
+	err = bpf_program__unload_dynamically(skel->progs.prog2);
+	if (!ASSERT_ERR(err, "unload_dynamically_autoload"))
 		goto cleanup;
 
 	/* reset the call flags */
@@ -64,28 +64,28 @@ void test_dynamicload(void)
 
 	usleep(1);
 
-	CHECK(skel->bss->prog1_called, "prog1", "called?!\n");
-	CHECK(!skel->bss->prog2_called, "prog2", "not called\n");
-	CHECK(skel->bss->prog3_called, "prog3", "called?!\n");
+	ASSERT_FALSE(skel->bss->prog1_called, "prog1_called");
+	ASSERT_TRUE(skel->bss->prog2_called, "prog2_called");
+	ASSERT_FALSE(skel->bss->prog3_called, "prog3_called");
 
 	/* load prog3 */
 	err = bpf_program__load_dynamically(skel->progs.prog3, 0);
-	if (CHECK(err, "load_dynamically", "dynamic loading failed: %d\n", err))
+	if (!ASSERT_OK(err, "load_dynamically"))
 		goto cleanup;
 
 	/* attach prog3 */
 	link = bpf_program__attach(skel->progs.prog3);
-	if (CHECK(libbpf_get_error(link), "attach", "attaching failed: %ld\n",
-		  libbpf_get_error(link)))
+	if (!ASSERT_OK_PTR(link, "attach"))
 		goto cleanup;
 
 	usleep(1);
 
-	CHECK(!skel->bss->prog3_called, "prog3", "not called\n");
+	if (!ASSERT_TRUE(skel->bss->prog3_called, "prog3_called"))
+		goto cleanup;
 
 	/* detach prog3 as test_dynamicload__destroy doesn't detach dynamically loaded programs */
 	err = bpf_link__destroy(link);
-	if (CHECK(err, "link__destroy", "link destroy failed: %d\n", err))
+	if (!ASSERT_OK(err, "link_destroy"))
 		goto cleanup;
 
 	/* reset the call flags after detach */
@@ -94,31 +94,32 @@ void test_dynamicload(void)
 
 	usleep(1);
 
-	CHECK(!skel->bss->prog2_called, "prog2", "not called\n");
-	CHECK(skel->bss->prog3_called, "prog3", "called?!\n");
+	ASSERT_TRUE(skel->bss->prog2_called, "prog2_called");
+	ASSERT_FALSE(skel->bss->prog3_called, "prog3_called");
 
 	/* unload prog3 */
 	err = bpf_program__unload_dynamically(skel->progs.prog3);
-	if (CHECK(err, "unload_dynamically", "unload dynamically failed: %d\n", err))
+	if (!ASSERT_OK(err, "unload_dynamically"))
 		goto cleanup;
 
 	/* reload prog3 */
 	err = bpf_program__load_dynamically(skel->progs.prog3, 0);
-	if (CHECK(err, "load_dynamically", "dynamic reloading failed: %d\n", err))
+	if (!ASSERT_OK(err, "load_dynamically_reload"))
 		goto cleanup;
 
 	/* reattach prog3 */
 	link = bpf_program__attach(skel->progs.prog3);
-	if (CHECK(libbpf_get_error(link), "attach", "reattaching failed: %d\n", err))
+	if (!ASSERT_OK_PTR(link, "reattach"))
 		goto cleanup;
 
 	usleep(1);
 
-	CHECK(!skel->bss->prog3_called, "prog3", "not called\n");
+	if (!ASSERT_TRUE(skel->bss->prog3_called, "prog3_called_reattach"))
+		goto cleanup;
 
 	/* detach prog3 as test_dynamicload__destroy doesn't detach dynamically loaded programs */
 	err = bpf_link__destroy(link);
-	if (CHECK(err, "link__destroy", "link destroy failed: %d\n", err))
+	if (!ASSERT_OK(err, "link_destroy_reattach"))
 		goto cleanup;
 
 	/* verify regular unload for dynamically loaded program,
@@ -132,13 +133,12 @@ void test_dynamicload(void)
 
 	usleep(1);
 
-	CHECK(!skel->bss->prog2_called, "prog2", "not called\n");
-	CHECK(skel->bss->prog3_called, "prog3", "called?!\n");
+	ASSERT_TRUE(skel->bss->prog2_called, "prog2_called");
+	ASSERT_FALSE(skel->bss->prog3_called, "prog3_called");
 
 	/* reloading prog3 must fail as it was unloaded as a regular program */
 	err = bpf_program__load_dynamically(skel->progs.prog3, 0);
-	if (CHECK(!err, "load_dynamically", "dynamic reloading succeeded?! %d\n", err))
-		goto cleanup;
+	ASSERT_ERR(err, "load_dynamically_after_regular_unload");
 
 cleanup:
 	test_dynamicload__destroy(skel);
