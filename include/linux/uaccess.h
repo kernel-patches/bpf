@@ -653,6 +653,10 @@ do {							\
 #define __end_kernel_nofault_bare()	do {} while (0)
 #endif
 
+DEFINE_LOCK_GUARD_0(__kernel_nofault_bare,
+		    __begin_kernel_nofault_bare(),
+		    __end_kernel_nofault_bare())
+
 /**
  * get_kernel_nofault(): safely attempt to read from a location
  * @val: read into this variable
