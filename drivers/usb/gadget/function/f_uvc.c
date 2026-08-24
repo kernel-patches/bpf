@@ -598,6 +598,12 @@ uvc_copy_descriptors(struct uvc_device *uvc, enum usb_device_speed speed)
 	}
 
 	list_for_each_entry(xu, uvc->desc.extension_units, list) {
+		/* Mismatched bLength would overflow the buffer sized after it */
+		if (xu->desc.bLength !=
+		    UVC_DT_EXTENSION_UNIT_SIZE(xu->desc.bNrInPins,
+					       xu->desc.bControlSize))
+			return ERR_PTR(-EINVAL);
+
 		control_size += xu->desc.bLength;
 		bytes += xu->desc.bLength;
 		n_desc++;
