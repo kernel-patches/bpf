@@ -364,6 +364,7 @@ static int existing_page_cb(pte_t *ptep, unsigned long addr, void *data)
 	 * the freed page. So it all relies on 1.
 	 */
 	__free_page(page);
+	cond_resched();
 	return 0;
 }
 
