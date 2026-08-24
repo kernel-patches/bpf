@@ -11623,10 +11623,14 @@ static bool is_kfunc_arg_implicit(const struct bpf_call_arg_meta *meta, u32 arg_
 	return argn <= arg_idx;
 }
 
-/* Returns true if struct is composed of scalars, 4 levels of nesting allowed */
-bool btf_type_is_scalar_struct(struct bpf_verifier_env *env,
-			       const struct btf *btf,
-			       const struct btf_type *t, int rec)
+/*
+ * Returns true if struct is composed of scalars, 4 levels of nesting allowed.
+ * On failure @bad, when given, names the member that made the answer no, so a
+ * diagnostic can point at it rather than at the whole type.
+ */
+static bool btf_scalar_struct_walk(struct bpf_verifier_env *env, const struct btf *btf,
+				   const struct btf_type *t, int rec,
+				   const struct btf_member **bad)
 {
 	const struct btf_type *member_type;
 	const struct btf_member *member;
@@ -11644,23 +11648,35 @@ bool btf_type_is_scalar_struct(struct bpf_verifier_env *env,
 				verbose(env, "max struct nesting depth exceeded\n");
 				return false;
 			}
-			if (!btf_type_is_scalar_struct(env, btf, member_type, rec + 1))
+			if (!btf_scalar_struct_walk(env, btf, member_type, rec + 1, bad))
 				return false;
 			continue;
 		}
 		if (btf_type_is_array(member_type)) {
 			array = btf_array(member_type);
 			if (!array->nelems)
-				return false;
+				goto bad_member;
 			member_type = btf_type_skip_modifiers(btf, array->type, NULL);
 			if (!btf_type_is_scalar(member_type))
-				return false;
+				goto bad_member;
 			continue;
 		}
 		if (!btf_type_is_scalar(member_type))
-			return false;
+			goto bad_member;
 	}
 	return true;
+
+bad_member:
+	if (bad)
+		*bad = member;
+	return false;
+}
+
+bool btf_type_is_scalar_struct(struct bpf_verifier_env *env,
+			       const struct btf *btf,
+			       const struct btf_type *t, int rec)
+{
+	return btf_scalar_struct_walk(env, btf, t, rec, NULL);
 }
 
 enum kfunc_ptr_arg_type {
@@ -14030,17 +14046,41 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		    meta.func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave]))
 			__mark_reg_const_zero(env, &regs[BPF_REG_0]);
 	} else if (btf_type_is_struct(t)) {
+		const struct btf_member *bad = NULL;
+
 		/*
 		 * The returned struct comes back as raw register bits modeled
 		 * as an unknown scalar, so it must contain only scalars:
 		 * otherwise a pointer field would be laundered into a scalar
 		 * and escape provenance and reference tracking.
 		 */
-		if (!btf_type_is_scalar_struct(env, desc_btf, t, 0)) {
+		if (!btf_scalar_struct_walk(env, desc_btf, t, 0, &bad)) {
+			const char *member_note = "";
+
 			verbose(env,
 				"kernel function %s returns %s %s that is not composed of scalars\n",
 				func_name, btf_type_str(t),
 				btf_name_by_offset(desc_btf, t->name_off));
+			if (bad) {
+				const char *bad_name = btf_name_by_offset(desc_btf, bad->name_off);
+				const struct btf_type *bad_type;
+
+				bad_type = btf_type_skip_modifiers(desc_btf, bad->type, NULL);
+				verbose(env, "member '%s' has type %s\n", bad_name,
+					btf_type_str(bad_type));
+				member_note = bpf_diag_fmt(
+					env, " Its member '%s' is %s, not a scalar.", bad_name,
+					btf_type_str(bad_type));
+			}
+			bpf_diag_program_structure(
+				env, insn_idx, "unsupported kernel function return type",
+				"Call a kernel function that returns only scalars by value.",
+				"%s() returns %s %s by value.%s "
+				"A by-value return arrives as raw register bits that the verifier "
+				"can only model as unknown scalars, so e.g. a pointer may lose "
+				"the provenance and reference tracking that make it safe to use.",
+				func_name, btf_type_str(t),
+				btf_name_by_offset(desc_btf, t->name_off), member_note);
 			return -EINVAL;
 		}
 		mark_kfunc_ret_regs(env, regs, t->size);
