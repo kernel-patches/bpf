@@ -295,15 +295,27 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 			verbose(cbs->private_data, "BUG_st_%02x", insn->code);
 		}
 	} else if (class == BPF_LDX) {
+		unsigned int array_size = ARRAY_SIZE(bpf_ldsx_string);
+		unsigned int size_idx = BPF_SIZE(insn->code) >> 3;
+
 		if (BPF_MODE(insn->code) != BPF_MEM && BPF_MODE(insn->code) != BPF_MEMSX) {
 			verbose(cbs->private_data, "BUG_ldx_%02x", insn->code);
 			return;
 		}
+
+		if (BPF_MODE(insn->code) == BPF_MEM)
+			array_size = ARRAY_SIZE(bpf_ldst_string);
+
+		if (size_idx >= array_size) {
+			verbose(cbs->private_data, "BUG_ldx_%02x", insn->code);
+			return;
+		}
+
 		verbose(cbs->private_data, "(%02x) r%d = *(%s *)(r%d %+d)",
 			insn->code, insn->dst_reg,
 			BPF_MODE(insn->code) == BPF_MEM ?
-				 bpf_ldst_string[BPF_SIZE(insn->code) >> 3] :
-				 bpf_ldsx_string[BPF_SIZE(insn->code) >> 3],
+				 bpf_ldst_string[size_idx] :
+				 bpf_ldsx_string[size_idx],
 			insn->src_reg, insn->off);
 	} else if (class == BPF_LD) {
 		if (BPF_MODE(insn->code) == BPF_ABS) {
