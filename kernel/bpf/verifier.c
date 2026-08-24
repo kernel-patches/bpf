@@ -10403,10 +10403,14 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 		 * return to the caller whatever the callee had in the
 		 * return register(s)
 		 */
-		bpf_diag_mod_begin(env, &caller->regs[BPF_REG_0], r0, BPF_DIAG_MOD_WRITE);
-		for (i = 0; i < nregs; i++)
-			caller->regs[ret_regs[i]] = callee->regs[ret_regs[i]];
-		bpf_diag_mod_end(env);
+		for (i = 0; i < nregs; i++) {
+			u32 regno = ret_regs[i];
+
+			bpf_diag_mod_begin(env, &caller->regs[regno], &callee->regs[regno],
+					   BPF_DIAG_MOD_WRITE);
+			caller->regs[regno] = callee->regs[regno];
+			bpf_diag_mod_end(env);
+		}
 	}
 
 	/* for callbacks like bpf_loop or bpf_for_each_map_elem go back to callsite,
