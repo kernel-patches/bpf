@@ -3726,7 +3726,8 @@ __bpf_kfunc void __bpf_trap(void)
  *
  * Since strings are not necessarily %NUL-terminated, we cannot directly call
  * in-kernel implementations. Instead, we open-code the implementations using
- * __get_kernel_nofault instead of plain dereference to make them safe.
+ * __get_kernel_nofault_bare under guard(__kernel_nofault_bare)() to make them
+ * safe.
  */
 
 static int __bpf_strncasecmp(const char *s1, const char *s2, bool ignore_case, size_t len)
@@ -3742,9 +3743,10 @@ static int __bpf_strncasecmp(const char *s1, const char *s2, bool ignore_case, s
 		return 0;
 
 	guard(pagefault)();
+	guard(__kernel_nofault_bare)();
 	for (i = 0; i < len && i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&c1, s1, char, err_out);
-		__get_kernel_nofault(&c2, s2, char, err_out);
+		__get_kernel_nofault_bare(&c1, s1, char, err_out);
+		__get_kernel_nofault_bare(&c2, s2, char, err_out);
 		if (ignore_case) {
 			c1 = tolower(c1);
 			c2 = tolower(c2);
@@ -3843,8 +3845,9 @@ __bpf_kfunc int bpf_strnchr(const char *s__ign, size_t count, char c)
 		return -ENOENT;
 
 	guard(pagefault)();
+	guard(__kernel_nofault_bare)();
 	for (i = 0; i < count && i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&sc, s__ign, char, err_out);
+		__get_kernel_nofault_bare(&sc, s__ign, char, err_out);
 		if (sc == c)
 			return i;
 		if (sc == '\0')
@@ -3897,8 +3900,9 @@ __bpf_kfunc int bpf_strchrnul(const char *s__ign, char c)
 		return -ERANGE;
 
 	guard(pagefault)();
+	guard(__kernel_nofault_bare)();
 	for (i = 0; i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&sc, s__ign, char, err_out);
+		__get_kernel_nofault_bare(&sc, s__ign, char, err_out);
 		if (sc == '\0' || sc == c)
 			return i;
 		s__ign++;
@@ -3929,8 +3933,9 @@ __bpf_kfunc int bpf_strrchr(const char *s__ign, int c)
 		return -ERANGE;
 
 	guard(pagefault)();
+	guard(__kernel_nofault_bare)();
 	for (i = 0; i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&sc, s__ign, char, err_out);
+		__get_kernel_nofault_bare(&sc, s__ign, char, err_out);
 		if (sc == c)
 			last = i;
 		if (sc == '\0')
@@ -3964,8 +3969,9 @@ __bpf_kfunc int bpf_strnlen(const char *s__ign, size_t count)
 		return 0;
 
 	guard(pagefault)();
+	guard(__kernel_nofault_bare)();
 	for (i = 0; i < count && i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&c, s__ign, char, err_out);
+		__get_kernel_nofault_bare(&c, s__ign, char, err_out);
 		if (c == '\0')
 			return i;
 		s__ign++;
@@ -4014,12 +4020,13 @@ __bpf_kfunc int bpf_strspn(const char *s__ign, const char *accept__ign)
 	}
 
 	guard(pagefault)();
+	guard(__kernel_nofault_bare)();
 	for (i = 0; i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&cs, s__ign, char, err_out);
+		__get_kernel_nofault_bare(&cs, s__ign, char, err_out);
 		if (cs == '\0')
 			return i;
 		for (j = 0; j < XATTR_SIZE_MAX; j++) {
-			__get_kernel_nofault(&ca, accept__ign + j, char, err_out);
+			__get_kernel_nofault_bare(&ca, accept__ign + j, char, err_out);
 			if (cs == ca || ca == '\0')
 				break;
 		}
@@ -4058,12 +4065,13 @@ __bpf_kfunc int bpf_strcspn(const char *s__ign, const char *reject__ign)
 	}
 
 	guard(pagefault)();
+	guard(__kernel_nofault_bare)();
 	for (i = 0; i < XATTR_SIZE_MAX; i++) {
-		__get_kernel_nofault(&cs, s__ign, char, err_out);
+		__get_kernel_nofault_bare(&cs, s__ign, char, err_out);
 		if (cs == '\0')
 			return i;
 		for (j = 0; j < XATTR_SIZE_MAX; j++) {
-			__get_kernel_nofault(&cr, reject__ign + j, char, err_out);
+			__get_kernel_nofault_bare(&cr, reject__ign + j, char, err_out);
 			if (cs == cr || cr == '\0')
 				break;
 		}
@@ -4090,9 +4098,10 @@ static int __bpf_strnstr(const char *s1, const char *s2, size_t len,
 	}
 
 	guard(pagefault)();
+	guard(__kernel_nofault_bare)();
 	for (i = 0; i < XATTR_SIZE_MAX; i++) {
 		for (j = 0; i + j <= len && j < XATTR_SIZE_MAX; j++) {
-			__get_kernel_nofault(&c2, s2 + j, char, err_out);
+			__get_kernel_nofault_bare(&c2, s2 + j, char, err_out);
 			if (c2 == '\0')
 				return i;
 			/*
@@ -4102,7 +4111,7 @@ static int __bpf_strnstr(const char *s1, const char *s2, size_t len,
 			 */
 			if (i + j == len)
 				break;
-			__get_kernel_nofault(&c1, s1 + j, char, err_out);
+			__get_kernel_nofault_bare(&c1, s1 + j, char, err_out);
 
 			if (ignore_case) {
 				c1 = tolower(c1);
