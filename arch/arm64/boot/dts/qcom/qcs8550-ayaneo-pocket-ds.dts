@@ -314,6 +314,17 @@
 		pinctrl-names = "default";
 	};
 
+	vreg_panel1_iovcc: panel1-iovcc-regulator {
+		compatible = "regulator-fixed";
+
+		regulator-name = "panel1_iovcc";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+
+		gpios = <&tca6408 0 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
+
 	vdd_fan_5v0: vdd-fan-5v0-regulator {
 		compatible = "regulator-fixed";
 
@@ -829,6 +840,38 @@
 
 		vcc-supply = <&tca6424_vcc>;
 	};
+
+	backlight: backlight@2e {
+		compatible = "silergy,sy7758";
+		reg = <0x2e>;
+
+		enable-gpios = <&tlmm 42 GPIO_ACTIVE_HIGH>;
+	};
+
+	sgm3804: regulator@3e {
+		compatible = "sgmicro,sgm3804";
+		reg = <0x3e>;
+
+		vin-supply = <&vph_pwr>;
+
+		sgm3804_pos: pos {
+			regulator-name = "panel1_avdd";
+			regulator-min-microvolt = <5200000>;
+			regulator-max-microvolt = <5200000>;
+
+			enable-gpios = <&tlmm 152 GPIO_ACTIVE_HIGH>;
+		};
+
+		sgm3804_neg: neg {
+			regulator-name = "panel1_avee";
+			regulator-min-microvolt = <5200000>;
+			regulator-max-microvolt = <5200000>;
+
+			enable-gpios = <&tlmm 153 GPIO_ACTIVE_HIGH>;
+
+			regulator-always-on;
+		};
+	};
 };
 
 &i2c2 {
@@ -958,6 +1001,45 @@
 
 &mdss_dp0_out {
 	data-lanes = <0 1 2 3>;
+};
+
+&mdss_dsi1 {
+	vdda-supply = <&vreg_l3e_1p2>;
+
+	status = "okay";
+
+	panel@0 {
+		compatible = "ayaneo,pocket-ds-lower-panel";
+		reg = <0>;
+
+		vcc-supply = <&sgm3804_pos>;
+		iovcc-supply = <&vreg_panel1_iovcc>;
+
+		reset-gpios = <&tca6408 2 GPIO_ACTIVE_LOW>;
+		backlight = <&backlight>;
+		rotation = <270>;
+
+		pinctrl-0 = <&sde_dsi1_active>;
+		pinctrl-1 = <&sde_dsi1_suspend>;
+		pinctrl-names = "default", "sleep";
+
+		port {
+			panel1_in: endpoint {
+				remote-endpoint = <&mdss_dsi1_out>;
+			};
+		};
+	};
+};
+
+&mdss_dsi1_out {
+	remote-endpoint = <&panel1_in>;
+	data-lanes = <0 1 2 3>;
+};
+
+&mdss_dsi1_phy {
+	vdds-supply = <&vreg_l1e_0p88>;
+
+	status = "okay";
 };
 
 &pcie0 {
@@ -1556,6 +1638,21 @@
 		function = "gpio";
 		drive-strength = <8>;
 		bias-disable;
+	};
+
+	sde_dsi1_active: sde-dsi1-active-state {
+		pins = "gpio137";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
+		output-high;
+	};
+
+	sde_dsi1_suspend: sde-dsi1-suspend-state {
+		pins = "gpio137";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-down;
 	};
 
 	ts2_reset: ts2-reset-state {
