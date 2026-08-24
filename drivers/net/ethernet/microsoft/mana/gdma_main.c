@@ -1352,7 +1352,7 @@ static int mana_gd_create_dma_region(struct gdma_dev *gd,
 	/* The caller must keep the HWC alive throughout queue creation. */
 	hwc = gc->hwc.driver_data;
 	req_msg_size = struct_size(req, page_addr_list, num_page);
-	if (req_msg_size > hwc->max_req_msg_size)
+	if (req_msg_size > mana_hwc_get_max_req_size(hwc))
 		return -EINVAL;
 
 	req = kzalloc(req_msg_size, GFP_KERNEL);

@@ -4,6 +4,8 @@
 #ifndef _HW_CHANNEL_H
 #define _HW_CHANNEL_H
 
+#include <linux/minmax.h>
+
 #define DEFAULT_LOG2_THROTTLING_FOR_ERROR_EQ  4
 
 #define HW_CHANNEL_MAX_REQUEST_SIZE  0x1000
@@ -195,8 +197,12 @@ struct hw_channel_context {
 
 	u16 num_inflight_msg;
 	u32 max_req_msg_size;
+	u32 max_resp_msg_size;
+	/* Immutable reported maxima for the final RQ and SQ directions. */
+	u32 rx_msg_size_limit;
+	u32 tx_msg_size_limit;
 
-	u16 hwc_init_q_depth_max;
+	u32 hwc_init_q_depth_max;
 	u32 hwc_init_max_req_msg_size;
 	u32 hwc_init_max_resp_msg_size;
 	u32 hwc_init_max_num_cqs;
@@ -226,12 +232,20 @@ struct hw_channel_context {
 	 * until it acknowledges DESTROY_HWC.
 	 */
 	bool setup_active;
+	bool teardown_failed;
 
 	/* mana_gd_send_request() callers, including waiters; under hwc_lock. */
 	unsigned int active_senders;
 
 	struct hwc_caller_ctx *caller_ctx;
 };
+
+/* Host-to-PF requests are bounded by the negotiated TX limit and SQ stride. */
+static inline u32
+mana_hwc_get_max_req_size(const struct hw_channel_context *hwc)
+{
+	return min(hwc->tx_msg_size_limit, hwc->max_resp_msg_size);
+}
 
 int mana_hwc_create_channel(struct gdma_context *gc);
 void mana_hwc_destroy_channel(struct gdma_context *gc);
