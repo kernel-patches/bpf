@@ -1682,6 +1682,184 @@ static int emit_spectre_bhb_barrier(u8 **pprog, u8 *ip,
 	return 0;
 }
 
+/* The SysV ABI hands the first six eightbytes of arguments to registers. */
+#define X86_NR_ARG_REGS 6
+
+static const u32 x86_arg_reg[X86_NR_ARG_REGS] = {
+	BPF_REG_1, BPF_REG_2, BPF_REG_3, BPF_REG_4, BPF_REG_5, X86_REG_R9,
+};
+
+/*
+ * Where the SysV ABI places each eightbyte of the arguments of @fm, written to
+ * @pos as an argument position: 0 to 5 are the argument registers, 6 + n is the
+ * nth eightbyte of the outgoing stack area. The BPF ABI numbers the slots it
+ * passes arguments in the same way, and the JIT hands slot n to position n, so
+ * an eightbyte whose position equals its slot is already in place.
+ *
+ * The two disagree over an argument of more than one eightbyte that the
+ * registers left cannot hold: SysV moves all of it to the stack and leaves the
+ * registers to the arguments that follow, while BPF splits it.
+ *
+ * Returns the number of eightbytes, or -EINVAL if they do not fit in @max.
+ */
+static int kfunc_sysv_layout(const struct btf_func_model *fm, u8 *pos, int max)
+{
+	int i, k, nregs = 0, nstack = 0, slot = 0;
+
+	for (i = 0; i < fm->nr_args; i++) {
+		int n = (fm->arg_size[i] + 7) / 8;
+
+		if (slot + n > max)
+			return -EINVAL;
+		if (nregs + n <= X86_NR_ARG_REGS)
+			for (k = 0; k < n; k++)
+				pos[slot++] = nregs++;
+		else
+			for (k = 0; k < n; k++)
+				pos[slot++] = X86_NR_ARG_REGS + nstack++;
+	}
+	return slot;
+}
+
+/* The outgoing stack eightbytes the SysV placement of @fm needs. */
+static int kfunc_sysv_stack_slots(const struct btf_func_model *fm)
+{
+	u8 pos[MAX_BPF_FUNC_ARGS];
+	int n, k, slots = 0;
+
+	n = kfunc_sysv_layout(fm, pos, ARRAY_SIZE(pos));
+	if (n < 0)
+		return 0;
+	for (k = 0; k < n; k++)
+		if (pos[k] >= X86_NR_ARG_REGS)
+			slots = max(slots, pos[k] - X86_NR_ARG_REGS + 1);
+	return slots;
+}
+
+/* The most outgoing stack eightbytes any kfunc call in @prog needs. */
+static u16 kfunc_sysv_stack_bytes(const struct bpf_prog *prog)
+{
+	const struct bpf_insn *insn = prog->insnsi;
+	int i, slots = 0;
+
+	for (i = 0; i < prog->len; i++, insn++) {
+		const struct btf_func_model *fm;
+
+		if (insn->code != (BPF_JMP | BPF_CALL) ||
+		    insn->src_reg != BPF_PSEUDO_KFUNC_CALL)
+			continue;
+		fm = bpf_jit_find_kfunc_model(prog, insn);
+		if (fm)
+			slots = max(slots, kfunc_sysv_stack_slots(fm));
+	}
+	return slots * 8;
+}
+
+/* Read argument position @pos into @reg. */
+static void emit_arg_pos_load(u8 **pprog, u32 reg, u8 pos, s32 stack_base)
+{
+	if (pos < X86_NR_ARG_REGS)
+		emit_mov_reg(pprog, true, reg, x86_arg_reg[pos]);
+	else
+		emit_ldx(pprog, BPF_DW, reg, BPF_REG_FP,
+			 stack_base + (pos - X86_NR_ARG_REGS) * 8);
+}
+
+/* Write @reg to argument position @pos. */
+static void emit_arg_pos_store(u8 **pprog, u8 pos, u32 reg, s32 stack_base)
+{
+	if (pos < X86_NR_ARG_REGS)
+		emit_mov_reg(pprog, true, x86_arg_reg[pos], reg);
+	else
+		emit_stx(pprog, BPF_DW, BPF_REG_FP, reg,
+			 stack_base + (pos - X86_NR_ARG_REGS) * 8);
+}
+
+/* Move argument position @from to @to, through AUX_REG if both are on stack. */
+static void emit_arg_pos_move(u8 **pprog, u8 to, u8 from, s32 stack_base)
+{
+	if (from < X86_NR_ARG_REGS) {
+		emit_arg_pos_store(pprog, to, x86_arg_reg[from], stack_base);
+		return;
+	}
+	if (to < X86_NR_ARG_REGS) {
+		emit_arg_pos_load(pprog, x86_arg_reg[to], from, stack_base);
+		return;
+	}
+	emit_arg_pos_load(pprog, AUX_REG, from, stack_base);
+	emit_arg_pos_store(pprog, to, AUX_REG, stack_base);
+}
+
+/*
+ * Put the arguments of a kfunc call where the SysV ABI expects them, given
+ * that the BPF ABI has already put them in its own slots. Returns the number
+ * of emitted bytes, or a negative error.
+ *
+ * The moves can form a cycle, as the register an argument leaves behind may be
+ * where a later one belongs, so one value at a time may wait in PARK_REG.
+ * AUX_REG carries a value between two stack positions and cannot be used for
+ * that, and RAX is dead before a call, being where the return value arrives.
+ */
+#define PARK_REG BPF_REG_0
+
+static int emit_kfunc_sysv_args(const struct btf_func_model *fm, u8 **pprog,
+				s32 stack_base)
+{
+	u8 *prog = *pprog, *start = prog;
+	bool done[MAX_BPF_FUNC_ARGS] = {};
+	u8 pos[MAX_BPF_FUNC_ARGS];
+	int i, j, n, todo = 0, parked = -1;
+
+	n = kfunc_sysv_layout(fm, pos, ARRAY_SIZE(pos));
+	if (n < 0)
+		return 0;
+	for (i = 0; i < n; i++)
+		if (pos[i] != i)
+			todo++;
+	if (!todo)
+		return 0;
+
+	while (todo) {
+		bool moved = false;
+
+		for (i = 0; i < n; i++) {
+			if (done[i] || pos[i] == i)
+				continue;
+			/* Writing there would lose a value still to be moved. */
+			for (j = 0; j < n; j++)
+				if (!done[j] && j != parked && pos[j] != j && j == pos[i])
+					break;
+			if (j < n)
+				continue;
+			if (i == parked) {
+				emit_arg_pos_store(&prog, pos[i], PARK_REG, stack_base);
+				parked = -1;
+			} else {
+				emit_arg_pos_move(&prog, pos[i], i, stack_base);
+			}
+			done[i] = true;
+			todo--;
+			moved = true;
+		}
+		if (moved)
+			continue;
+
+		/* Every move left would clobber a value: break a cycle. */
+		if (parked >= 0)
+			return -EFAULT;
+		for (i = 0; i < n; i++)
+			if (!done[i] && pos[i] != i)
+				break;
+		if (i == n)
+			return -EFAULT;
+		emit_arg_pos_load(&prog, PARK_REG, i, stack_base);
+		parked = i;
+	}
+
+	*pprog = prog;
+	return prog - start;
+}
+
 /*
  * Rebase the __arena args of a kfunc call to arena kernel addresses,
  * rN = kern_vm_start + (u32)rN, with R12 holding kern_vm_start. A nullable
@@ -1693,11 +1871,18 @@ static int emit_kfunc_arena_args(struct bpf_prog *bpf_prog,
 {
 	u8 *prog = *pprog;
 	u8 *start = prog;
-	int i;
+	int i, slot;
 
-	for (i = 0; i < min_t(int, fm->nr_args, MAX_BPF_FUNC_REG_ARGS); i++) {
+	for (i = 0, slot = 0; i < fm->nr_args; i++) {
+		u32 arg_regs = (fm->arg_size[i] + 7) / 8;
 		u8 flags = fm->arg_flags[i];
-		u32 reg = BPF_REG_1 + i;
+		u32 reg;
+
+		/* An argument passed by value can take more than one register. */
+		if (slot + arg_regs > MAX_BPF_FUNC_REG_ARGS)
+			break;
+		reg = BPF_REG_1 + slot;
+		slot += arg_regs;
 
 		if (!(flags & BTF_FMODEL_ARENA_ARG))
 			continue;
@@ -1832,6 +2017,12 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 	 * Arg 6 goes into r9 register, not on stack.
 	 */
 	outgoing_rsp = out_stack_arg_cnt > 1 ? (out_stack_arg_cnt - 1) * 8 : 0;
+	/*
+	 * A kfunc argument the BPF ABI splits between the last register and the
+	 * stack is moved wholly onto the stack before the call, which can need
+	 * more room than the BPF slots do.
+	 */
+	outgoing_rsp = max(outgoing_rsp, kfunc_sysv_stack_bytes(bpf_prog));
 	if (bpf_prog->aux->exception_boundary)
 		bpf_prog->aux->stack_arg_sp_adjust = outgoing_rsp;
 	emit_sub_rsp(&prog, outgoing_rsp);
@@ -2653,6 +2844,11 @@ populate_extable:
 				if (!fm)
 					return -EINVAL;
 				err = emit_kfunc_arena_args(bpf_prog, fm, &prog);
+				if (err < 0)
+					return err;
+				ip += err;
+				err = emit_kfunc_sysv_args(fm, &prog,
+							   outgoing_arg_base - outgoing_rsp);
 				if (err < 0)
 					return err;
 				ip += err;
@@ -4166,6 +4362,16 @@ bool bpf_jit_supports_kfunc_call(void)
 
 bool bpf_jit_supports_kfunc_ret_reg_pair(void)
 {
+	return true;
+}
+
+bool bpf_jit_supports_kfunc_arg_slot(u32 slot, u32 slots, u32 align)
+{
+	/*
+	 * emit_kfunc_sysv_args() moves an argument the two conventions place
+	 * differently, and the SysV ABI has no alignment rule for the argument
+	 * registers, so any placement works.
+	 */
 	return true;
 }
 

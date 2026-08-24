@@ -974,6 +974,33 @@ __bpf_kfunc struct prog_test_ret_pair bpf_kfunc_call_test_ret_fastcall(u64 a, u6
 	return r;
 }
 
+__bpf_kfunc u64 bpf_kfunc_call_test_pair_arg(u64 a, struct prog_test_pair_arg s, u64 b)
+{
+	return a + s.lo + s.hi + b;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_i128_arg(u64 a, __int128 v, u64 b)
+{
+	return a + (u64)((unsigned __int128)v >> 64) + (u64)v + b;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_pair_arg_nofit(u64 a, u64 b, u64 c, u64 d,
+						   struct prog_test_pair_arg s)
+{
+	return a + b + c + d + s.lo + s.hi;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_pair_arg_disorder(u64 a, u64 b, u64 c, u64 d, u64 e,
+						      struct prog_test_pair_arg s, u64 f)
+{
+	return a + b + c + d + e + s.lo + s.hi + f;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_ptr_arg(struct prog_test_ptr_arg s)
+{
+	return s.x;
+}
+
 __bpf_kfunc struct prog_test_ret_ptr bpf_kfunc_call_test_ret_ptr(u64 tag)
 {
 	struct prog_test_ret_ptr r = { .p = NULL, .tag = tag };
@@ -1540,6 +1567,11 @@ BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_pair)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_fastcall, KF_FASTCALL)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_ptr)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_ii)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg_nofit)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg_disorder)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ptr_arg)
 #endif
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_big)
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg)
