@@ -547,13 +547,28 @@ static int mana_gd_disable_queue(struct gdma_queue *queue)
 #define DOORBELL_OFFSET_EQ	0xFF8
 #define DOORBELL_OFFSET_DIM	0x820
 
+bool mana_gd_is_valid_doorbell(struct gdma_context *gc, u32 db_id)
+{
+	if (!gc->db_page_size || gc->db_page_off >= gc->bar0_size)
+		return false;
+
+	/* The page size comes from a 16-bit register field. */
+	return db_id != INVALID_DOORBELL &&
+	       gc->db_page_size * ((u64)db_id + 1) <=
+	       gc->bar0_size - gc->db_page_off;
+}
+
 static void mana_gd_ring_doorbell(struct gdma_context *gc, u32 db_index,
 				  enum gdma_queue_type q_type, u32 qid,
 				  u32 tail_ptr, u8 num_req, u8 client_offset)
 {
-	void __iomem *addr = gc->db_page_base + gc->db_page_size * db_index;
 	union gdma_doorbell_entry e = {};
+	void __iomem *addr;
 
+	if (unlikely(db_index == INVALID_DOORBELL))
+		return;
+
+	addr = gc->db_page_base + gc->db_page_size * db_index;
 	addr += client_offset;
 
 	switch (q_type) {
@@ -1538,13 +1553,7 @@ int mana_gd_register_device(struct gdma_dev *gd)
 		return err ? err : -EPROTO;
 	}
 
-	/* Validate that doorbell page for db_id is within the BAR0 region.
-	 * In mana_gd_ring_doorbell(), the address is calculated as:
-	 *   addr = db_page_base + db_page_size * db_id
-	 *        = (bar0_va + db_page_off) + (db_page_size * db_id)
-	 * So we need: db_page_off + db_page_size * (db_id + 1) <= bar0_size
-	 */
-	if (gc->db_page_off + gc->db_page_size * ((u64)resp.db_id + 1) > gc->bar0_size) {
+	if (!mana_gd_is_valid_doorbell(gc, resp.db_id)) {
 		dev_err(gc->dev, "Doorbell ID %u out of range\n", resp.db_id);
 		return -EPROTO;
 	}

@@ -1183,6 +1183,7 @@ int mana_gd_post_and_ring(struct gdma_queue *queue,
 int mana_gd_alloc_res_map(u32 res_avail, struct gdma_resource *r);
 void mana_gd_free_res_map(struct gdma_resource *r);
 
+bool mana_gd_is_valid_doorbell(struct gdma_context *gc, u32 db_id);
 void mana_gd_wq_ring_doorbell(struct gdma_context *gc,
 			      struct gdma_queue *queue);
 void mana_gd_wq_ring_doorbell_ext(struct gdma_context *gc, struct gdma_queue *queue,

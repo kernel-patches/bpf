@@ -186,6 +186,7 @@ struct hw_channel_context {
 	u32 hwc_init_max_req_msg_size;
 	u32 hwc_init_max_resp_msg_size;
 
+	int hwc_init_error;
 	struct completion hwc_init_eqe_comp;
 
 	struct hwc_wq *rxq;

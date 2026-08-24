@@ -123,6 +123,15 @@ static void mana_hwc_init_event_handler(void *ctx, struct gdma_queue *q_self,
 	switch (event->type) {
 	case GDMA_EQE_HWC_INIT_EQ_ID_DB:
 		eq_db.as_uint32 = event->details[0];
+		if (!mana_gd_is_valid_doorbell(gd->gdma_context,
+					       eq_db.doorbell)) {
+			dev_err(hwc->dev, "Invalid HWC doorbell %u\n",
+				eq_db.doorbell);
+			WRITE_ONCE(hwc->hwc_init_error, -EPROTO);
+			complete(&hwc->hwc_init_eqe_comp);
+			break;
+		}
+
 		hwc->cq->gdma_eq->id = eq_db.eq_id;
 		gd->doorbell = eq_db.doorbell;
 		break;
@@ -182,6 +191,10 @@ static void mana_hwc_init_event_handler(void *ctx, struct gdma_queue *q_self,
 		break;
 
 	case GDMA_EQE_HWC_INIT_DONE:
+		if (gd->doorbell == INVALID_DOORBELL) {
+			dev_err(hwc->dev, "Missing HWC doorbell\n");
+			WRITE_ONCE(hwc->hwc_init_error, -EPROTO);
+		}
 		complete(&hwc->hwc_init_eqe_comp);
 		break;
 
@@ -676,6 +689,8 @@ static int mana_hwc_establish_channel(struct gdma_context *gc, u16 *q_depth,
 	struct gdma_queue *cq = hwc->cq->gdma_cq;
 	int err;
 
+	gc->hwc.doorbell = INVALID_DOORBELL;
+	WRITE_ONCE(hwc->hwc_init_error, 0);
 	init_completion(&hwc->hwc_init_eqe_comp);
 
 	err = mana_smc_setup_hwc(&gc->shm_channel, false,
@@ -689,6 +704,10 @@ static int mana_hwc_establish_channel(struct gdma_context *gc, u16 *q_depth,
 
 	if (!wait_for_completion_timeout(&hwc->hwc_init_eqe_comp, 60 * HZ))
 		return -ETIMEDOUT;
+
+	err = READ_ONCE(hwc->hwc_init_error);
+	if (err)
+		return err;
 
 	*q_depth = hwc->hwc_init_q_depth_max;
 	*max_req_msg_size = hwc->hwc_init_max_req_msg_size;
