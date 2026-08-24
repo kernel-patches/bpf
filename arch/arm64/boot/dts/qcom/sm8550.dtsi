@@ -6176,7 +6176,7 @@
 			};
 		};
 
-		cpuss0-thermal {
+		thermal_cpuss0: cpuss0-thermal {
 			thermal-sensors = <&tsens0 1>;
 
 			trips {
@@ -6194,7 +6194,7 @@
 			};
 		};
 
-		cpuss1-thermal {
+		thermal_cpuss1: cpuss1-thermal {
 			thermal-sensors = <&tsens0 2>;
 
 			trips {
@@ -6212,7 +6212,7 @@
 			};
 		};
 
-		cpuss2-thermal {
+		thermal_cpuss2: cpuss2-thermal {
 			thermal-sensors = <&tsens0 3>;
 
 			trips {
@@ -6230,7 +6230,7 @@
 			};
 		};
 
-		cpuss3-thermal {
+		thermal_cpuss3: cpuss3-thermal {
 			thermal-sensors = <&tsens0 4>;
 
 			trips {
@@ -6440,7 +6440,7 @@
 			};
 		};
 
-		cpu7-top-thermal {
+		thermal_cpu7_top: cpu7-top-thermal {
 			thermal-sensors = <&tsens0 13>;
 
 			trips {
@@ -6948,7 +6948,7 @@
 			};
 		};
 
-		gpuss-0-thermal {
+		thermal_gpuss0: gpuss-0-thermal {
 			polling-delay-passive = <10>;
 
 			thermal-sensors = <&tsens2 1>;
@@ -6981,7 +6981,7 @@
 			};
 		};
 
-		gpuss-1-thermal {
+		thermal_gpuss1: gpuss-1-thermal {
 			polling-delay-passive = <10>;
 
 			thermal-sensors = <&tsens2 2>;
@@ -7014,7 +7014,7 @@
 			};
 		};
 
-		gpuss-2-thermal {
+		thermal_gpuss2: gpuss-2-thermal {
 			polling-delay-passive = <10>;
 
 			thermal-sensors = <&tsens2 3>;
@@ -7047,7 +7047,7 @@
 			};
 		};
 
-		gpuss-3-thermal {
+		thermal_gpuss3: gpuss-3-thermal {
 			polling-delay-passive = <10>;
 
 			thermal-sensors = <&tsens2 4>;
@@ -7080,7 +7080,7 @@
 			};
 		};
 
-		gpuss-4-thermal {
+		thermal_gpuss4: gpuss-4-thermal {
 			polling-delay-passive = <10>;
 
 			thermal-sensors = <&tsens2 5>;
@@ -7113,7 +7113,7 @@
 			};
 		};
 
-		gpuss-5-thermal {
+		thermal_gpuss5: gpuss-5-thermal {
 			polling-delay-passive = <10>;
 
 			thermal-sensors = <&tsens2 6>;
@@ -7146,7 +7146,7 @@
 			};
 		};
 
-		gpuss-6-thermal {
+		thermal_gpuss6: gpuss-6-thermal {
 			polling-delay-passive = <10>;
 
 			thermal-sensors = <&tsens2 7>;
@@ -7179,7 +7179,7 @@
 			};
 		};
 
-		gpuss-7-thermal {
+		thermal_gpuss7: gpuss-7-thermal {
 			polling-delay-passive = <10>;
 
 			thermal-sensors = <&tsens2 8>;
