@@ -270,26 +270,41 @@ do {									\
 #define get_user	__get_user
 
 /*
- * We must not call into the scheduler between __mte_enable_tco_async() and
- * __mte_disable_tco_async(). As `dst` and `src` may contain blocking
- * functions, we must evaluate these outside of the critical section.
+ * Nofault load without TCO management for use inside a
+ * __begin/__end_kernel_nofault_bare() region.
  */
-#define __get_kernel_nofault(dst, src, type, err_label)			\
+#define __get_kernel_nofault_bare(dst, src, type, err_label)		\
 do {									\
 	__typeof__(dst) __gkn_dst = (dst);				\
 	__typeof__(src) __gkn_src = (src);				\
 	do { 								\
 		__label__ __gkn_label;					\
-									\
-		__mte_enable_tco_async();				\
 		__raw_get_mem("ldr", *((type *)(__gkn_dst)),		\
 		      (__force type *)(__gkn_src), __gkn_label, K);	\
-		__mte_disable_tco_async();				\
 		break;							\
 	__gkn_label:							\
-		__mte_disable_tco_async();				\
 		goto err_label;						\
 	} while (0);							\
+} while (0)
+
+/*
+ * We must not call into the scheduler between __mte_enable_tco_async() and
+ * __mte_disable_tco_async(). As dst and src may contain blocking functions,
+ * evaluate them before overriding TCO.
+ */
+#define __get_kernel_nofault(dst, src, type, err_label)			\
+do {									\
+	__label__ __gkn_tco_err;					\
+	__typeof__(dst) __gkn_tco_dst = (dst);				\
+	__typeof__(src) __gkn_tco_src = (src);				\
+	__mte_enable_tco_async();					\
+	__get_kernel_nofault_bare(__gkn_tco_dst, __gkn_tco_src, type,	\
+				     __gkn_tco_err);			\
+	__mte_disable_tco_async();					\
+	break;								\
+__gkn_tco_err:								\
+	__mte_disable_tco_async();					\
+	goto err_label;							\
 } while (0)
 
 #define __put_mem_asm(store, reg, x, addr, label, type)			\
@@ -366,6 +381,22 @@ do {									\
 
 #define put_user	__put_user
 
+/* Nofault store without TCO management; see __get_kernel_nofault_bare. */
+#define __put_kernel_nofault_bare(dst, src, type, err_label)		\
+do {									\
+	__typeof__(dst) __pkn_dst = (dst);				\
+	__typeof__(src) __pkn_src = (src);				\
+									\
+	do {								\
+		__label__ __pkn_err;					\
+		__raw_put_mem("str", *((type *)(__pkn_src)),		\
+			      (__force type *)(__pkn_dst), __pkn_err, K);	\
+		break;							\
+	__pkn_err:							\
+		goto err_label;						\
+	} while (0);							\
+} while (0)
+
 /*
  * We must not call into the scheduler between __mte_enable_tco_async() and
  * __mte_disable_tco_async(). As `dst` and `src` may contain blocking
@@ -373,21 +404,25 @@ do {									\
  */
 #define __put_kernel_nofault(dst, src, type, err_label)			\
 do {									\
-	__typeof__(dst) __pkn_dst = (dst);				\
-	__typeof__(src) __pkn_src = (src);				\
-									\
-	do {								\
-		__label__ __pkn_err;					\
-		__mte_enable_tco_async();				\
-		__raw_put_mem("str", *((type *)(__pkn_src)),		\
-			      (__force type *)(__pkn_dst), __pkn_err, K);	\
-		__mte_disable_tco_async();				\
-		break;							\
-	__pkn_err:							\
-		__mte_disable_tco_async();				\
-		goto err_label;						\
-	} while (0);							\
-} while(0)
+	__label__ __pkn_tco_err;					\
+	__typeof__(dst) __pkn_tco_dst = (dst);				\
+	__typeof__(src) __pkn_tco_src = (src);				\
+	__mte_enable_tco_async();					\
+	__put_kernel_nofault_bare(__pkn_tco_dst, __pkn_tco_src, type,	\
+				     __pkn_tco_err);			\
+	__mte_disable_tco_async();					\
+	break;								\
+__pkn_tco_err:								\
+	__mte_disable_tco_async();					\
+	goto err_label;							\
+} while (0)
+
+/*
+ * A context switch re-enables tag checking, hence the no-scheduling
+ * requirement for a bare nofault region.
+ */
+#define __begin_kernel_nofault_bare()	__mte_enable_tco_async()
+#define __end_kernel_nofault_bare()	__mte_disable_tco_async()
 
 extern unsigned long __must_check __arch_copy_from_user(void *to, const void __user *from, unsigned long n);
 #define raw_copy_from_user(to, from, n)					\
