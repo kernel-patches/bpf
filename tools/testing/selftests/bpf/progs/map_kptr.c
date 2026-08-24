@@ -57,6 +57,14 @@ struct hash_malloc_map {
 	__uint(map_flags, BPF_F_NO_PREALLOC);
 } hash_malloc_map SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_RHASH);
+	__type(key, int);
+	__type(value, struct map_value);
+	__uint(max_entries, 1);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+} rhash_map SEC(".maps");
+
 struct pcpu_hash_malloc_map {
 	__uint(type, BPF_MAP_TYPE_PERCPU_HASH);
 	__type(key, int);
@@ -421,6 +429,7 @@ int test_map_kptr_ref1(struct __sk_buff *ctx)
 	bpf_map_update_elem(&hash_map, &key, &val, 0);
 	bpf_map_update_elem(&hash_malloc_map, &key, &val, 0);
 	bpf_map_update_elem(&lru_hash_map, &key, &val, 0);
+	bpf_map_update_elem(&rhash_map, &key, &val, 0);
 
 	bpf_map_update_elem(&pcpu_hash_map, &key, &val, 0);
 	bpf_map_update_elem(&pcpu_hash_malloc_map, &key, &val, 0);
@@ -430,6 +439,7 @@ int test_map_kptr_ref1(struct __sk_buff *ctx)
 	TEST(hash_map);
 	TEST(hash_malloc_map);
 	TEST(lru_hash_map);
+	TEST(rhash_map);
 
 	TEST_PCPU(pcpu_array_map);
 	TEST_PCPU(pcpu_hash_map);
@@ -468,6 +478,7 @@ int test_map_kptr_ref2(struct __sk_buff *ctx)
 	TEST(hash_map);
 	TEST(hash_malloc_map);
 	TEST(lru_hash_map);
+	TEST(rhash_map);
 
 	TEST_PCPU(pcpu_array_map);
 	TEST_PCPU(pcpu_hash_map);
@@ -599,6 +610,7 @@ int name(void *ctx)						\
 
 DEFINE_HASH_UPDATE_KPTR_TEST(test_hash_map_update_kptr, hash_map)
 DEFINE_HASH_UPDATE_KPTR_TEST(test_hash_malloc_map_update_kptr, hash_malloc_map)
+DEFINE_HASH_UPDATE_KPTR_TEST(test_rhash_map_update_kptr, rhash_map)
 
 SEC("syscall")
 int test_ls_map_kptr_ref1(void *ctx)

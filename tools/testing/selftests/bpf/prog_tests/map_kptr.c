@@ -98,6 +98,12 @@ static void test_map_kptr_success(bool test_run)
 	ASSERT_OK(ret, "test_map_kptr_ref3 refcount");
 	ASSERT_OK(opts.retval, "test_map_kptr_ref3 retval");
 
+	ret = bpf_map__delete_elem(skel->maps.rhash_map, &key, sizeof(key), 0);
+	ASSERT_OK(ret, "rhash_map delete");
+	ret = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.test_map_kptr_ref3), &opts);
+	ASSERT_OK(ret, "test_map_kptr_ref3 refcount");
+	ASSERT_OK(opts.retval, "test_map_kptr_ref3 retval");
+
 	ret = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.test_ls_map_kptr_ref_del), &lopts);
 	ASSERT_OK(ret, "test_ls_map_kptr_ref_del delete");
 	skel->data->ref--;
@@ -147,6 +153,7 @@ enum map_update_kptr_case {
 	MAP_UPDATE_KPTR_ARRAY,
 	MAP_UPDATE_KPTR_HASH,
 	MAP_UPDATE_KPTR_HASH_MALLOC,
+	MAP_UPDATE_KPTR_RHASH,
 };
 
 static struct bpf_program *map_update_kptr_prog(struct map_kptr *skel,
@@ -159,6 +166,8 @@ static struct bpf_program *map_update_kptr_prog(struct map_kptr *skel,
 		return skel->progs.test_hash_map_update_kptr;
 	case MAP_UPDATE_KPTR_HASH_MALLOC:
 		return skel->progs.test_hash_malloc_map_update_kptr;
+	case MAP_UPDATE_KPTR_RHASH:
+		return skel->progs.test_rhash_map_update_kptr;
 	}
 
 	return NULL;
@@ -204,6 +213,8 @@ void serial_test_map_kptr(void)
 		test_map_update_kptr(MAP_UPDATE_KPTR_HASH);
 	if (test__start_subtest("update_hash_malloc_map_kptr"))
 		test_map_update_kptr(MAP_UPDATE_KPTR_HASH_MALLOC);
+	if (test__start_subtest("update_rhash_map_kptr"))
+		test_map_update_kptr(MAP_UPDATE_KPTR_RHASH);
 
 	skel = rcu_tasks_trace_gp__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "rcu_tasks_trace_gp__open_and_load"))
