@@ -614,8 +614,25 @@ static bool has_nop_combo(int fd, long off)
 		return false;
 	return memcmp(buf, nop_combo, 11) == 0;
 }
+
+/*
+ * The kernel refuses to attach to a nop10 that crosses a page boundary,
+ * as it can't be atomically rewritten. Page offset of the probe is the
+ * same in the file and in any mapping, so this can be checked statically.
+ */
+static bool nop10_within_page(long off)
+{
+	long page_sz = getpagesize();
+
+	return off % page_sz + 10 <= page_sz;
+}
 #else
 static bool has_nop_combo(int fd, long off)
+{
+	return false;
+}
+
+static bool nop10_within_page(long off)
 {
 	return false;
 }
@@ -827,9 +844,11 @@ static int collect_usdt_targets(struct usdt_manager *man, struct elf_fd *elf_fd,
 		/*
 		 * We have uprobe syscall and usdt with nop,nop10 instructions combo,
 		 * so we can place the uprobe directly on nop10 (+1) and get this probe
-		 * optimized.
+		 * optimized. If the nop10 crosses a page boundary, keep the uprobe
+		 * on the preceding 1-byte nop, which the kernel accepts everywhere.
 		 */
-		if (man->has_uprobe_syscall && has_nop_combo(elf_fd->fd, usdt_rel_ip)) {
+		if (man->has_uprobe_syscall && has_nop_combo(elf_fd->fd, usdt_rel_ip) &&
+		    nop10_within_page(usdt_rel_ip + 1)) {
 			usdt_abs_ip++;
 			usdt_rel_ip++;
 		}
