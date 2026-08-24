@@ -224,10 +224,32 @@ struct bpf_object_open_opts {
 	 * point (/sys/fs/bpf), in case this default behavior is undesirable.
 	 */
 	const char *bpf_token_path;
+	/*
+	 * Optional list of kernel module names whose BTFs should be loaded.
+	 * nr_btf_module_names specifies the number of entries in
+	 * btf_module_names.
+	 *
+	 * If btf_module_names is NULL, all module BTFs are loaded,
+	 * preserving the default behavior. Otherwise, only the BTFs of
+	 * the listed modules are loaded. A non-NULL btf_module_names
+	 * with nr_btf_module_names equal to zero means that no module
+	 * BTFs are loaded.
+	 *
+	 * The list must not contain duplicate entries; otherwise
+	 * -EINVAL is returned.
+	 *
+	 * This affects:
+	 * - BPF CO-RE relocations against types defined in modules;
+	 * - BTF-based resolution of function attach targets for
+	 *   fentry/fexit/fmod_ret/freplace/LSM programs;
+	 * - extern (ksym) resolution for kernel symbols defined in modules.
+	 */
+	const char **btf_module_names;
+	size_t nr_btf_module_names;
 
 	size_t :0;
 };
-#define bpf_object_open_opts__last_field bpf_token_path
+#define bpf_object_open_opts__last_field nr_btf_module_names
 
 /**
  * @brief **bpf_object__open()** creates a bpf_object by opening
