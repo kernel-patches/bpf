@@ -19,7 +19,7 @@ bool __weak copy_from_kernel_nofault_allowed(const void *unsafe_src,
  */
 #define copy_from_kernel_nofault_loop(dst, src, len, type, err_label)	\
 	while (len >= sizeof(type)) {					\
-		__get_kernel_nofault(dst, src, type, err_label);	\
+		__get_kernel_nofault_bare(dst, src, type, err_label);	\
 		kmsan_check_memory(src, sizeof(type));			\
 		dst += sizeof(type);					\
 		src += sizeof(type);					\
@@ -39,13 +39,15 @@ long copy_from_kernel_nofault(void *dst, const void *src, size_t size)
 		return 0;
 
 	scoped_guard(pagefault) {
-		if (!(align & 7))
-			copy_from_kernel_nofault_loop(dst, src, size, u64, Efault);
-		if (!(align & 3))
-			copy_from_kernel_nofault_loop(dst, src, size, u32, Efault);
-		if (!(align & 1))
-			copy_from_kernel_nofault_loop(dst, src, size, u16, Efault);
-		copy_from_kernel_nofault_loop(dst, src, size, u8, Efault);
+		scoped_guard(__kernel_nofault_bare) {
+			if (!(align & 7))
+				copy_from_kernel_nofault_loop(dst, src, size, u64, Efault);
+			if (!(align & 3))
+				copy_from_kernel_nofault_loop(dst, src, size, u32, Efault);
+			if (!(align & 1))
+				copy_from_kernel_nofault_loop(dst, src, size, u16, Efault);
+			copy_from_kernel_nofault_loop(dst, src, size, u8, Efault);
+		}
 	}
 	return 0;
 Efault:
@@ -55,7 +57,7 @@ EXPORT_SYMBOL_GPL(copy_from_kernel_nofault);
 
 #define copy_to_kernel_nofault_loop(dst, src, len, type, err_label)	\
 	while (len >= sizeof(type)) {					\
-		__put_kernel_nofault(dst, src, type, err_label);	\
+		__put_kernel_nofault_bare(dst, src, type, err_label);	\
 		instrument_write(dst, sizeof(type));			\
 		dst += sizeof(type);					\
 		src += sizeof(type);					\
@@ -73,13 +75,15 @@ long copy_to_kernel_nofault(void *dst, const void *src, size_t size)
 		align = (unsigned long)dst | (unsigned long)src;
 
 	scoped_guard(pagefault) {
-		if (!(align & 7))
-			copy_to_kernel_nofault_loop(dst, src, size, u64, Efault);
-		if (!(align & 3))
-			copy_to_kernel_nofault_loop(dst, src, size, u32, Efault);
-		if (!(align & 1))
-			copy_to_kernel_nofault_loop(dst, src, size, u16, Efault);
-		copy_to_kernel_nofault_loop(dst, src, size, u8, Efault);
+		scoped_guard(__kernel_nofault_bare) {
+			if (!(align & 7))
+				copy_to_kernel_nofault_loop(dst, src, size, u64, Efault);
+			if (!(align & 3))
+				copy_to_kernel_nofault_loop(dst, src, size, u32, Efault);
+			if (!(align & 1))
+				copy_to_kernel_nofault_loop(dst, src, size, u16, Efault);
+			copy_to_kernel_nofault_loop(dst, src, size, u8, Efault);
+		}
 	}
 	return 0;
 Efault:
@@ -96,11 +100,13 @@ long strncpy_from_kernel_nofault(char *dst, const void *unsafe_addr, long count)
 		return -ERANGE;
 
 	scoped_guard(pagefault) {
-		do {
-			__get_kernel_nofault(dst, src, u8, Efault);
-			dst++;
-			src++;
-		} while (dst[-1] && src - unsafe_addr < count);
+		scoped_guard(__kernel_nofault_bare) {
+			do {
+				__get_kernel_nofault_bare(dst, src, u8, Efault);
+				dst++;
+				src++;
+			} while (dst[-1] && src - unsafe_addr < count);
+		}
 	}
 
 	dst[-1] = '\0';
