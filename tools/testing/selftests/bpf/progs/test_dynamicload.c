@@ -6,6 +6,7 @@
 bool prog1_called = false;
 bool prog2_called = false;
 bool prog3_called = false;
+bool prog4_called = false;
 
 SEC("raw_tp/sys_enter")
 int prog1(const void *ctx)
@@ -25,6 +26,14 @@ SEC("raw_tp/sys_enter")
 int prog3(const void *ctx)
 {
 	prog3_called = true;
+	return 0;
+}
+
+SEC("raw_tp/sys_enter")
+__load_dynamic
+int prog4(const void *ctx)
+{
+	prog4_called = true;
 	return 0;
 }
 
