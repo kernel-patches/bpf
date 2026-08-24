@@ -8735,12 +8735,69 @@ enum {
 	BTF_MODULE_F_LIVE = (1 << 0),
 };
 
+#if IS_ENABLED(CONFIG_SYSFS)
+struct bin_attribute *sysfs_btf_add(const char *name, void *data, size_t data_size)
+{
+	struct bin_attribute *attr;
+	int err;
+
+	attr = kzalloc_obj(*attr);
+	if (!attr)
+		return ERR_PTR(-ENOMEM);
+
+	sysfs_bin_attr_init(attr);
+	attr->attr.mode = 0444;
+	attr->size = data_size;
+	attr->private = data;
+	attr->read = sysfs_bin_attr_simple_read;
+	attr->attr.name = kstrdup(name, GFP_KERNEL);
+	if (!attr->attr.name) {
+		err = -ENOMEM;
+		goto err_free;
+	}
+	err = sysfs_create_bin_file(btf_kobj, attr);
+	if (err) {
+		pr_warn("failed to register [%s] BTF in sysfs: %d\n", name, err);
+		goto err_free;
+	}
+	return attr;
+
+err_free:
+	kfree(attr->attr.name);
+	kfree(attr);
+	return ERR_PTR(err);
+}
+
+#else
+struct bin_attribute *sysfs_btf_add(const char *name, void *data, size_t data_size)
+{
+	return NULL;
+}
+#endif
+
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+#if IS_ENABLED(CONFIG_SYSFS)
+static void sysfs_btf_remove(struct bin_attribute *attr)
+{
+	sysfs_remove_bin_file(btf_kobj, attr);
+	kfree(attr->attr.name);
+	kfree(attr);
+}
+#else
+static void sysfs_btf_remove(struct bin_attribute *attr)
+{
+}
+#endif
+
 struct btf_module {
 	struct list_head list;
 	struct module *module;
 	struct btf *btf;
 	struct bin_attribute *sysfs_attr;
+#if IS_ENABLED(CONFIG_DEBUG_INFO_BTF_INLINE)
+	struct bin_attribute *sysfs_inline_attr;
+	void *btf_inline_data;
+#endif
 	int flags;
 };
 
@@ -8754,6 +8811,7 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 {
 	struct btf_module *btf_mod, *tmp;
 	struct module *mod = module;
+	struct bin_attribute *attr;
 	struct btf *btf;
 	int err = 0;
 
@@ -8796,31 +8854,35 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 		list_add(&btf_mod->list, &btf_modules);
 		mutex_unlock(&btf_module_mutex);
 
-		if (IS_ENABLED(CONFIG_SYSFS)) {
-			struct bin_attribute *attr;
+		attr = sysfs_btf_add(btf->name, btf->data, btf->data_size);
+		if (IS_ERR(attr)) {
+			err = 0;
+			goto out;
+		}
+		btf_mod->sysfs_attr = attr;
 
-			attr = kzalloc_obj(*attr);
-			if (!attr)
-				goto out;
+#if IS_ENABLED(CONFIG_DEBUG_INFO_BTF_INLINE)
+		if (mod->btf_inline_data_size > 0) {
+			char name[MODULE_NAME_LEN + sizeof(".inline")];
+			void *data;
 
-			sysfs_bin_attr_init(attr);
-			attr->attr.name = btf->name;
-			attr->attr.mode = 0444;
-			attr->size = btf->data_size;
-			attr->private = btf->data;
-			attr->read = sysfs_bin_attr_simple_read;
-
-			err = sysfs_create_bin_file(btf_kobj, attr);
-			if (err) {
-				pr_warn("failed to register module [%s] BTF in sysfs: %d\n",
-					mod->name, err);
-				kfree(attr);
+			data = kvmemdup(mod->btf_inline_data, mod->btf_inline_data_size,
+					GFP_KERNEL | __GFP_NOWARN);
+			if (!data) {
 				err = 0;
 				goto out;
 			}
-
-			btf_mod->sysfs_attr = attr;
+			snprintf(name, sizeof(name), "%s.inline", mod->name);
+			attr = sysfs_btf_add(name, data, mod->btf_inline_data_size);
+			if (IS_ERR(attr)) {
+				err = 0;
+				kvfree(data);
+				goto out;
+			}
+			btf_mod->btf_inline_data = data;
+			btf_mod->sysfs_inline_attr = attr;
 		}
+#endif
 
 		break;
 	case MODULE_STATE_LIVE:
@@ -8849,10 +8911,15 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			btf_free_id(btf_mod->btf);
 			list_del(&btf_mod->list);
 			if (btf_mod->sysfs_attr)
-				sysfs_remove_bin_file(btf_kobj, btf_mod->sysfs_attr);
+				sysfs_btf_remove(btf_mod->sysfs_attr);
+#if IS_ENABLED(CONFIG_DEBUG_INFO_BTF_INLINE)
+			if (btf_mod->sysfs_inline_attr) {
+				sysfs_btf_remove(btf_mod->sysfs_inline_attr);
+				kvfree(btf_mod->btf_inline_data);
+			}
+#endif
 			purge_cand_cache(btf_mod->btf);
 			btf_put(btf_mod->btf);
-			kfree(btf_mod->sysfs_attr);
 			kfree(btf_mod);
 			break;
 		}
