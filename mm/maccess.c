@@ -35,6 +35,8 @@ long copy_from_kernel_nofault(void *dst, const void *src, size_t size)
 
 	if (!copy_from_kernel_nofault_allowed(src, size))
 		return -ERANGE;
+	if (!size)
+		return 0;
 
 	pagefault_disable();
 	if (!(align & 7))
@@ -64,6 +66,9 @@ EXPORT_SYMBOL_GPL(copy_from_kernel_nofault);
 long copy_to_kernel_nofault(void *dst, const void *src, size_t size)
 {
 	unsigned long align = 0;
+
+	if (!size)
+		return 0;
 
 	if (!IS_ENABLED(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS))
 		align = (unsigned long)dst | (unsigned long)src;
