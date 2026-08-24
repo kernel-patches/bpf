@@ -7535,11 +7535,40 @@ static u8 __get_type_fmodel_flags(const struct btf_type *t)
 	return flags;
 }
 
+/*
+ * Whether the calling convention aligns @t to 16 bytes, which only a 128-bit
+ * integer, or an aggregate built around one, asks for.
+ */
+static bool __btf_type_align16(const struct btf *btf, const struct btf_type *t, int rec)
+{
+	const struct btf_member *member;
+	u32 i;
+
+	if (btf_type_is_int(t))
+		return t->size > 8;
+	if (rec >= 4)
+		return false;
+	if (btf_type_is_array(t))
+		return __btf_type_align16(btf, btf_type_skip_modifiers(btf, btf_array(t)->type,
+								       NULL), rec + 1);
+	if (!btf_type_is_struct(t))
+		return false;
+
+	for_each_member(i, t, member)
+		if (__btf_type_align16(btf, btf_type_skip_modifiers(btf, member->type, NULL),
+				       rec + 1))
+			return true;
+	return false;
+}
+
 static u8 __get_arg_fmodel_flags(const struct btf *btf,
 				 const struct btf_param *arg,
 				 const struct btf_type *t)
 {
 	u8 flags = __get_type_fmodel_flags(t);
+
+	if (__btf_type_align16(btf, t, 0))
+		flags |= BTF_FMODEL_ALIGN16_ARG;
 
 	if (btf_param_match_suffix(btf, arg, "__arena__nullable"))
 		flags |= BTF_FMODEL_ARENA_ARG | BTF_FMODEL_NULLABLE_ARG;
@@ -8021,7 +8050,7 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	const struct btf_param *args;
 	const struct btf_type *t, *ref_t, *fn_t;
 	int err;
-	u32 i, nargs, btf_id;
+	u32 i, j, nargs, btf_id;
 	const char *tname;
 
 	if (sub->args_cached)
@@ -8099,9 +8128,24 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 
 	/* Convert BTF function arguments into verifier types.
 	 * Only PTR_TO_CTX and SCALAR are supported atm.
+	 *
+	 * 'i' walks the BTF parameters while 'j' walks the argument slots the
+	 * calling convention assigns to them: one register, or one stack slot
+	 * past the argument registers, per eightbyte. The two differ once a
+	 * parameter is passed by value in more than one register.
 	 */
-	for (i = 0; i < nargs; i++) {
+	for (i = 0, j = 0; i < nargs; i++) {
 		u32 tags = 0;
+
+		/* A parameter can take more slots than there are parameters. */
+		if (j >= MAX_BPF_FUNC_ARGS) {
+			if (!is_global)
+				return -EINVAL;
+			bpf_log(log, "Arguments of %s() need more than %d argument slots\n",
+				tname, MAX_BPF_FUNC_ARGS);
+			return -EINVAL;
+		}
+
 		err = btf_scan_decl_tags(env, btf, fn_t, i, is_global, &tags);
 		if (err)
 			return err;
@@ -8125,7 +8169,7 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 			    btf_validate_prog_ctx_type(log, btf, t, i, prog_type,
 						       prog->expected_attach_type))
 				return -EINVAL;
-			sub->args[i].arg_type = ARG_PTR_TO_CTX;
+			sub->args[j++].arg_type = ARG_PTR_TO_CTX;
 			continue;
 		}
 		if (btf_is_dynptr_ptr(btf, t)) {
@@ -8133,7 +8177,7 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 				bpf_log(log, "arg#%d has invalid combination of tags\n", i);
 				return -EINVAL;
 			}
-			sub->args[i].arg_type = ARG_PTR_TO_DYNPTR;
+			sub->args[j++].arg_type = ARG_PTR_TO_DYNPTR;
 			continue;
 		}
 		if (tags & ARG_TAG_TRUSTED) {
@@ -8148,10 +8192,11 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 			if (kern_type_id < 0)
 				return kern_type_id;
 
-			sub->args[i].arg_type = ARG_PTR_TO_BTF_ID | PTR_TRUSTED;
+			sub->args[j].arg_type = ARG_PTR_TO_BTF_ID | PTR_TRUSTED;
 			if (tags & ARG_TAG_NULLABLE)
-				sub->args[i].arg_type |= PTR_MAYBE_NULL;
-			sub->args[i].btf_id = kern_type_id;
+				sub->args[j].arg_type |= PTR_MAYBE_NULL;
+			sub->args[j].btf_id = kern_type_id;
+			j++;
 			continue;
 		}
 		if (tags & ARG_TAG_UNTRUSTED) {
@@ -8165,8 +8210,9 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 
 			ref_t = btf_type_skip_modifiers(btf, t->type, NULL);
 			if (btf_type_is_void(ref_t) || btf_type_is_primitive(ref_t)) {
-				sub->args[i].arg_type = ARG_PTR_TO_MEM | MEM_RDONLY | PTR_UNTRUSTED;
-				sub->args[i].mem_size = 0;
+				sub->args[j].arg_type = ARG_PTR_TO_MEM | MEM_RDONLY | PTR_UNTRUSTED;
+				sub->args[j].mem_size = 0;
+				j++;
 				continue;
 			}
 
@@ -8182,8 +8228,9 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 					i, btf_type_str(ref_t), tname);
 				return -EINVAL;
 			}
-			sub->args[i].arg_type = ARG_PTR_TO_BTF_ID | PTR_UNTRUSTED;
-			sub->args[i].btf_id = kern_type_id;
+			sub->args[j].arg_type = ARG_PTR_TO_BTF_ID | PTR_UNTRUSTED;
+			sub->args[j].btf_id = kern_type_id;
+			j++;
 			continue;
 		}
 		if (tags & ARG_TAG_ARENA) {
@@ -8191,7 +8238,7 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 				bpf_log(log, "arg#%d arena cannot be combined with any other tags\n", i);
 				return -EINVAL;
 			}
-			sub->args[i].arg_type = ARG_PTR_TO_ARENA;
+			sub->args[j++].arg_type = ARG_PTR_TO_ARENA;
 			continue;
 		}
 		if (is_global) { /* generic user data pointer */
@@ -8211,10 +8258,11 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 				return -EINVAL;
 			}
 
-			sub->args[i].arg_type = ARG_PTR_TO_MEM | PTR_MAYBE_NULL;
+			sub->args[j].arg_type = ARG_PTR_TO_MEM | PTR_MAYBE_NULL;
 			if (tags & ARG_TAG_NONNULL)
-				sub->args[i].arg_type &= ~PTR_MAYBE_NULL;
-			sub->args[i].mem_size = mem_size;
+				sub->args[j].arg_type &= ~PTR_MAYBE_NULL;
+			sub->args[j].mem_size = mem_size;
+			j++;
 			continue;
 		}
 
@@ -8223,8 +8271,47 @@ skip_pointer:
 			bpf_log(log, "arg#%d has pointer tag, but is not a pointer type\n", i);
 			return -EINVAL;
 		}
-		if (btf_type_is_int(t) || btf_is_any_enum(t)) {
-			sub->args[i].arg_type = ARG_ANYTHING;
+		if (btf_type_is_int(t) || btf_is_any_enum(t) || btf_type_is_struct(t)) {
+			u32 slots;
+
+			/*
+			 * An integer, an enum, or a struct or union passed by
+			 * value takes one argument register per eightbyte, so a
+			 * 16-byte value such as an __int128 or a two-eightbyte
+			 * struct arrives in two consecutive registers. A struct
+			 * may only hold scalars: a floating-point member
+			 * travels in a floating-point register, which BPF does
+			 * not model, and a pointer member would arrive as an
+			 * opaque scalar, losing the provenance and reference
+			 * tracking that make it safe to use. Anything larger is
+			 * passed by reference, which is not supported yet.
+			 */
+			if (!t->size || t->size > 2 * BPF_REG_SIZE) {
+				if (!is_global)
+					return -EINVAL;
+				bpf_log(log,
+					"Arg#%d type %s in %s() has size %u, only 1 to %d bytes "
+					"can be passed by value\n",
+					i, btf_type_str(t), tname, t->size, 2 * BPF_REG_SIZE);
+				return -EINVAL;
+			}
+			if (btf_type_is_struct(t) && !btf_type_is_scalar_struct(env, btf, t, 0)) {
+				if (!is_global)
+					return -EINVAL;
+				bpf_log(log, "Arg#%d type %s in %s() is not composed of scalars\n",
+					i, btf_type_str(t), tname);
+				return -EINVAL;
+			}
+
+			/*
+			 * The slots of a value are independent of each other,
+			 * so one may straddle the last argument register and
+			 * the stack, or land wholly past the registers, as the
+			 * compiler is willing to place it.
+			 */
+			slots = (t->size + BPF_REG_SIZE - 1) / BPF_REG_SIZE;
+			while (slots--)
+				sub->args[j++].arg_type = ARG_ANYTHING;
 			continue;
 		}
 		if (!is_global)
@@ -8233,6 +8320,28 @@ skip_pointer:
 			i, btf_type_str(t), tname);
 		return -EINVAL;
 	}
+
+	/*
+	 * A by-value struct takes an argument slot per eightbyte, so the slots
+	 * consumed can exceed the parameter count checked before the loop.
+	 * Recompute what the caller and the callee have to agree on.
+	 */
+	if (j > MAX_BPF_FUNC_REG_ARGS) {
+		if (is_global) {
+			bpf_log(log,
+				"global function %s() needs %d > %d argument slots, "
+				"stack args not supported\n",
+				tname, j, MAX_BPF_FUNC_REG_ARGS);
+			return -EINVAL;
+		}
+		if (!bpf_jit_supports_stack_args()) {
+			bpf_log(log, "JIT does not support function %s() with %d argument slots\n",
+				tname, j);
+			return -EFAULT;
+		}
+		sub->stack_arg_cnt = j - MAX_BPF_FUNC_REG_ARGS;
+	}
+	sub->arg_cnt = j;
 
 	sub->args_cached = true;
 

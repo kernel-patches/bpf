@@ -974,6 +974,41 @@ __bpf_kfunc struct prog_test_ret_pair bpf_kfunc_call_test_ret_fastcall(u64 a, u6
 	return r;
 }
 
+__bpf_kfunc u64 bpf_kfunc_call_test_pair_arg(u64 a, struct prog_test_pair_arg s, u64 b)
+{
+	return a + s.lo + s.hi + b;
+}
+
+/*
+ * The __int128 is the last argument for the reason given above
+ * bpf_testmod_test_int128_arg(): on arm64 a 16-byte argument starts in an
+ * even-numbered register pair, and pahole, which maps parameters to registers
+ * positionally, skips BTF encoding of a function whose parameters do not land
+ * where it expects, leaving the kfunc unusable. After two single-register
+ * scalars the pair is even (x2:x3) and the two views agree.
+ */
+__bpf_kfunc u64 bpf_kfunc_call_test_i128_arg(u64 a, u64 b, __int128 v)
+{
+	return a + b + (u64)((unsigned __int128)v >> 64) + (u64)v;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_pair_arg_nofit(u64 a, u64 b, u64 c, u64 d,
+						   struct prog_test_pair_arg s)
+{
+	return a + b + c + d + s.lo + s.hi;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_pair_arg_disorder(u64 a, u64 b, u64 c, u64 d, u64 e,
+						      struct prog_test_pair_arg s, u64 f)
+{
+	return a + b + c + d + e + s.lo + s.hi + f;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_ptr_arg(struct prog_test_ptr_arg s)
+{
+	return s.x;
+}
+
 __bpf_kfunc struct prog_test_ret_ptr bpf_kfunc_call_test_ret_ptr(u64 tag)
 {
 	struct prog_test_ret_ptr r = { .p = NULL, .tag = tag };
@@ -1540,6 +1575,11 @@ BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_pair)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_fastcall, KF_FASTCALL)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_ptr)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_ii)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg_nofit)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg_disorder)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ptr_arg)
 #endif
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_big)
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg)
