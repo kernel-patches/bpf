@@ -135,7 +135,7 @@ static int qat_alg_do_precomputes(struct icp_qat_hw_auth_algo_blk *hash,
 		return 0;
 	}
 	default:
-		return -EFAULT;
+		return -EOPNOTSUPP;
 	}
 }
 
@@ -186,7 +186,7 @@ static int qat_alg_aead_init_enc_session(struct crypto_aead *aead_tfm,
 		cpu_to_be32(ctx->hash_blocksize);
 
 	if (qat_alg_do_precomputes(hash, ctx, keys->authkey, keys->authkeylen))
-		return -EFAULT;
+		return -EOPNOTSUPP;
 
 	/* Request setup */
 	qat_alg_init_common_hdr(header);
@@ -273,7 +273,7 @@ static int qat_alg_aead_init_dec_session(struct crypto_aead *aead_tfm,
 		cpu_to_be32(ctx->hash_blocksize);
 
 	if (qat_alg_do_precomputes(hash, ctx, keys->authkey, keys->authkeylen))
-		return -EFAULT;
+		return -EOPNOTSUPP;
 
 	/* Request setup */
 	qat_alg_init_common_hdr(header);
@@ -471,28 +471,25 @@ static int qat_alg_aead_init_sessions(struct crypto_aead *tfm, const u8 *key,
 				      unsigned int keylen,  int mode)
 {
 	struct crypto_authenc_keys keys;
-	int alg;
+	int alg, ret;
 
-	if (crypto_authenc_extractkeys(&keys, key, keylen))
-		goto bad_key;
-
-	if (qat_alg_validate_key(keys.enckeylen, &alg, mode))
-		goto bad_key;
-
-	if (qat_alg_aead_init_enc_session(tfm, alg, &keys, mode))
+	ret = crypto_authenc_extractkeys(&keys, key, keylen);
+	if (ret)
 		goto error;
 
-	if (qat_alg_aead_init_dec_session(tfm, alg, &keys, mode))
+	ret = qat_alg_validate_key(keys.enckeylen, &alg, mode);
+	if (ret)
 		goto error;
 
-	memzero_explicit(&keys, sizeof(keys));
-	return 0;
-bad_key:
-	memzero_explicit(&keys, sizeof(keys));
-	return -EINVAL;
+	ret = qat_alg_aead_init_enc_session(tfm, alg, &keys, mode);
+	if (ret)
+		goto error;
+
+	ret = qat_alg_aead_init_dec_session(tfm, alg, &keys, mode);
+
 error:
 	memzero_explicit(&keys, sizeof(keys));
-	return -EFAULT;
+	return ret;
 }
 
 static int qat_alg_skcipher_init_sessions(struct qat_alg_skcipher_ctx *ctx,
