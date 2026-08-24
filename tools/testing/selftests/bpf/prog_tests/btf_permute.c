@@ -235,10 +235,138 @@ cleanup:
 	btf__free(base_btf);
 }
 
+/* Ensure selected types can be moved into a split BTF while permuting. */
+static void test_permute_transfer(void)
+{
+	struct btf *btf = NULL, *transfer_btf = NULL;
+	LIBBPF_OPTS(btf_permute_opts, opts);
+	__u32 permute_ids[11];
+	int err, id, foo_name_off = -1, shared_name_off, foo_funcs = 0, shared_funcs = 0;
+
+	btf = btf__new_empty();
+	if (!ASSERT_OK_PTR(btf, "empty_main_btf"))
+		return;
+
+	btf__add_int(btf, "int", 4, BTF_INT_SIGNED); /* [1] int */
+	btf__add_func_proto(btf, 1);                  /* [2] int (*)(void) */
+	btf__add_func(btf, "foo", BTF_FUNC_STATIC, 2); /* [3] int foo(void) */
+	btf__add_loc_param(btf, 4, BTF_LOC_PARAM_SIGNED); /* [4] location */
+	btf__add_loc_param_value(btf, 0);
+	btf__add_loc_proto(btf);                       /* [5] location proto */
+	btf__add_loc_proto_param(btf, 4);
+	btf__add_locsec(btf, ".locs");                /* [6] location section */
+	btf__add_locsec_loc(btf, 3, 5, 128);
+	btf__add_locsec_loc(btf, 3, 5, 0);
+	btf__add_int(btf, "long", 8, BTF_INT_SIGNED); /* [7] long */
+	btf__add_func(btf, "foo", BTF_FUNC_STATIC, 2);    /* [8] another foo */
+	btf__add_func(btf, "shared", BTF_FUNC_STATIC, 2); /* [9] shared string */
+	btf__add_struct(btf, "shared", 4);                /* [10] retains string */
+
+	permute_ids[0] = 0;
+	permute_ids[1] = 1;
+	permute_ids[2] = BTF_PERMUTE_ID_TRANSFER | 2;
+	permute_ids[3] = BTF_PERMUTE_ID_TRANSFER | 3;
+	permute_ids[4] = BTF_PERMUTE_ID_TRANSFER | 5;
+	permute_ids[5] = BTF_PERMUTE_ID_TRANSFER | 6;
+	permute_ids[6] = BTF_PERMUTE_ID_TRANSFER | 7;
+	permute_ids[7] = 4;
+	permute_ids[8] = BTF_PERMUTE_ID_TRANSFER | 8;
+	permute_ids[9] = BTF_PERMUTE_ID_TRANSFER | 9;
+	permute_ids[10] = 10;
+	opts.transfer_btf = &transfer_btf;
+	err = btf__permute(btf, permute_ids, ARRAY_SIZE(permute_ids), &opts);
+	if (!ASSERT_OK(err, "btf__permute_transfer") ||
+	    !ASSERT_OK_PTR(transfer_btf, "transfer_btf"))
+		goto cleanup;
+
+	ASSERT_EQ(4, btf__type_cnt(btf), "base_type_cnt");
+	ASSERT_EQ(-ENOENT, btf__find_str(btf, "foo"), "func_name_not_in_base");
+	shared_name_off = btf__find_str(btf, "shared");
+	if (!ASSERT_GE(shared_name_off, 0, "shared_name_in_base"))
+		goto cleanup;
+	for (id = btf__type_cnt(btf); id < btf__type_cnt(transfer_btf); id++) {
+		const struct btf_type *t = btf__type_by_id(transfer_btf, id);
+
+		if (!btf_is_func(t))
+			continue;
+		if (!strcmp(btf__name_by_offset(transfer_btf, t->name_off), "foo")) {
+			foo_funcs++;
+			if (foo_name_off < 0)
+				foo_name_off = t->name_off;
+			else if (!ASSERT_EQ(foo_name_off, t->name_off, "local_foo_dedup"))
+				goto cleanup;
+		} else if (!strcmp(btf__name_by_offset(transfer_btf, t->name_off), "shared")) {
+			shared_funcs++;
+			if (!ASSERT_EQ(shared_name_off, t->name_off, "shared_name_reuses_base"))
+				goto cleanup;
+		}
+	}
+	if (!ASSERT_GE(foo_name_off, 0, "local_foo_name"))
+		goto cleanup;
+	if (!ASSERT_EQ(2, foo_funcs, "local_foo_count") ||
+	    !ASSERT_EQ(1, shared_funcs, "shared_func_count"))
+		goto cleanup;
+	VALIDATE_RAW_BTF(
+		transfer_btf,
+		"[1] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+		"[2] INT 'long' size=8 bits_offset=0 nr_bits=64 encoding=SIGNED",
+		"[3] STRUCT 'shared' size=4 vlen=0",
+		"[4] FUNC_PROTO '(anon)' ret_type_id=1 vlen=0",
+		"[5] FUNC 'foo' type_id=4 linkage=static",
+		"[6] LOC_PARAM '(anon)' size=4 flags=0x1 vlen=1\n"
+		"\tvalue=0",
+		"[7] LOC_PROTO '(anon)' vlen=1\n"
+		"\ttype_id=6",
+		"[8] LOCSEC '.locs' vlen=2\n"
+		"\tfunc_type_id=5 loc_proto_type_id=7 offset=128\n"
+		"\tfunc_type_id=5 loc_proto_type_id=7 offset=0",
+		"[9] FUNC 'foo' type_id=4 linkage=static",
+		"[10] FUNC 'shared' type_id=4 linkage=static");
+cleanup:
+	btf__free(transfer_btf);
+	btf__free(btf);
+}
+
+/* Permuting BTF with a layout section must keep section offsets in sync. */
+static void test_permute_layout(void)
+{
+	LIBBPF_OPTS(btf_new_opts, opts, .add_layout = true);
+	LIBBPF_OPTS(btf_permute_opts, permute_opts);
+	struct btf *btf, *parsed, *transfer_btf = NULL;
+	const void *raw;
+	__u32 raw_sz;
+	__u32 permute_ids[] = { 0, 1, BTF_PERMUTE_ID_TRANSFER | 2 };
+	int err;
+
+	btf = btf__new_empty_opts(&opts);
+	if (!ASSERT_OK_PTR(btf, "empty_layout_btf"))
+		return;
+
+	btf__add_int(btf, "int", 4, BTF_INT_SIGNED);
+	btf__add_ptr(btf, 1);
+	permute_opts.transfer_btf = &transfer_btf;
+	err = btf__permute(btf, permute_ids, ARRAY_SIZE(permute_ids), &permute_opts);
+	if (!ASSERT_OK(err, "btf__permute_layout"))
+		goto cleanup;
+
+	raw = btf__raw_data(btf, &raw_sz);
+	parsed = btf__new(raw, raw_sz);
+	if (!ASSERT_OK_PTR(parsed, "parse_permuted_layout"))
+		goto cleanup;
+	btf__free(parsed);
+cleanup:
+	btf__free(transfer_btf);
+	btf__free(btf);
+}
+
 void test_btf_permute(void)
 {
 	if (test__start_subtest("permute_base"))
 		test_permute_base();
 	if (test__start_subtest("permute_split"))
 		test_permute_split();
+	if (test__start_subtest("permute_transfer"))
+		test_permute_transfer();
+	if (test__start_subtest("permute_layout"))
+		test_permute_layout();
 }
