@@ -596,15 +596,9 @@ static void bpf_map_release_memcg(struct bpf_map *map)
 }
 #endif
 
-static bool can_alloc_pages(void)
-{
-	return preempt_count() == 0 && !irqs_disabled() &&
-		!IS_ENABLED(CONFIG_PREEMPT_RT);
-}
-
 static struct page *__bpf_alloc_page(int nid)
 {
-	if (!can_alloc_pages())
+	if (is_bpf_alloc_nonsleepable())
 		return alloc_pages_nolock(__GFP_ACCOUNT, nid, 0);
 
 	return alloc_pages_node(nid,

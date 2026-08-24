@@ -683,8 +683,73 @@ static int arena_adjust_tree(struct bpf_arena *arena, long uaddr, long page_cnt,
 	return range_tree_clear(&arena->rt, *pgoff, page_cnt);
 }
 
-static long arena_alloc_pages_internal(struct bpf_arena *arena, long page_cnt,
-		long uaddr, long pgoff, int node_id, bool sleepable)
+static long arena_alloc_pages_sleepable(struct bpf_arena *arena, long page_cnt,
+		long uaddr, long pgoff, int node_id)
+{
+	u64 kern_vm_start = bpf_arena_get_kern_vm_start(arena);
+	struct apply_range_data data;
+	struct page **pages = NULL;
+	unsigned long flags;
+	u32 uaddr32;
+	int ret, i;
+
+	pages = kvcalloc(page_cnt, sizeof(struct page *), GFP_KERNEL_ACCOUNT);
+	if (!pages)
+		return 0;
+
+	ret = bpf_map_alloc_pages(&arena->map, node_id, page_cnt, pages);
+	if (ret) {
+		kvfree(pages);
+		return 0;
+	}
+
+	data.i = 0;
+	data.pages = pages;
+	data.arena = arena;
+
+	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags))
+		goto out_free_pages;
+
+	ret = arena_adjust_tree(arena, uaddr, page_cnt, &pgoff);
+	if (ret) {
+		raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+		goto out_free_pages;
+	}
+
+	uaddr32 = (u32)(arena->user_vm_start + pgoff * PAGE_SIZE);
+
+	ret = apply_to_page_range(&init_mm, kern_vm_start + uaddr32,
+			page_cnt << PAGE_SHIFT, apply_range_set_cb, &data);
+
+	if (ret)
+		goto out_unmap;
+
+	flush_vmap_cache(kern_vm_start + uaddr32, page_cnt << PAGE_SHIFT);
+	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+
+	kvfree(pages);
+
+	return clear_lo32(arena->user_vm_start) + uaddr32;
+
+out_unmap:
+	/* data.i pages were mapped, undo only those who failed to map */
+	flush_vmap_cache(kern_vm_start + uaddr32, data.i << PAGE_SHIFT);
+	range_tree_set(&arena->rt, pgoff + data.i, page_cnt - data.i);
+
+	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+
+	arena_free_pages(arena, uaddr32, data.i, true);
+
+out_free_pages:
+	for (i = data.i; i < page_cnt; i++)
+		__free_page(pages[i]);
+
+	kvfree(pages);
+	return 0;
+}
+
+static long arena_alloc_pages_non_sleepable(struct bpf_arena *arena, long page_cnt,
+		long uaddr, long pgoff, int node_id)
 {
 	u64 kern_vm_start = bpf_arena_get_kern_vm_start(arena);
 	struct apply_range_data data;
@@ -762,7 +827,7 @@ out_unmap:
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 	if (mapped) {
 		flush_vmap_cache(kern_vm_start + uaddr32, mapped << PAGE_SHIFT);
-		arena_free_pages(arena, uaddr32, mapped, sleepable);
+		arena_free_pages(arena, uaddr32, mapped, false);
 	}
 
 out_free_pages:
@@ -802,7 +867,10 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 
 	bpf_map_memcg_enter(&arena->map, &old_memcg, &new_memcg);
 
-	addr = arena_alloc_pages_internal(arena, page_cnt, uaddr, pgoff, node_id, sleepable);
+	if (sleepable && !is_bpf_alloc_nonsleepable())
+		addr = arena_alloc_pages_sleepable(arena, page_cnt, uaddr, pgoff, node_id);
+	else
+		addr = arena_alloc_pages_non_sleepable(arena, page_cnt, uaddr, pgoff, node_id);
 
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 
