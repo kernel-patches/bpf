@@ -350,15 +350,21 @@ int bpf_stream_stage_commit(struct bpf_stream_stage *ss, struct bpf_prog *prog,
 	if (!stream)
 		return -EINVAL;
 
+	if (!ss->len)
+		return 0;
+
 	ret = bpf_stream_consume_capacity(stream, ss->len);
 	if (ret)
 		return ret;
 
 	list = llist_del_all(&ss->log);
-	head = tail = list;
-
-	if (!list)
+	if (!list) {
+		bpf_stream_release_capacity(stream, ss->len);
 		return 0;
+	}
+
+	head = list;
+	tail = list;
 	while (llist_next(list)) {
 		tail = llist_next(list);
 		list = tail;
