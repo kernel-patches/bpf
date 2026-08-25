@@ -14090,12 +14090,12 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		const char *member_note = "";
 
 		/*
-		 * The returned struct comes back as raw register bits modeled
-		 * as an unknown scalar, so it must contain only scalars:
-		 * otherwise a pointer field would be laundered into a scalar
-		 * and escape provenance and reference tracking.
+		 * The returned struct may only contain scalars and arena pointers
+		 * as its members. Otherwise, any other pointer would be laundered
+		 * into a scalar and escape provenance and reference tracking.
 		 */
-		if (!btf_struct_member_walk(env, desc_btf, t, BTF_MEMBER_SCALAR, 0, &path)) {
+		if (!btf_struct_member_walk(env, desc_btf, t,
+					    BTF_MEMBER_SCALAR | BTF_MEMBER_ARENA_PTR, 0, &path)) {
 			if (path.too_deep) {
 				member_note = bpf_diag_fmt(
 					env, " It nests structs more than %d levels deep.",
@@ -14106,7 +14106,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				const struct btf_type *bad_type;
 
 				verbose(env,
-					"kernel function %s returns %s %s that is not composed of scalars\n",
+					"kernel function %s returns %s %s that is not composed of scalars or arena pointers\n",
 					func_name, btf_type_str(t),
 					btf_name_by_offset(desc_btf, t->name_off));
 				btf_member_path_str(desc_btf, &path, bad_name, sizeof(bad_name));
@@ -14114,15 +14114,16 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				verbose(env, "member '%s' has type %s\n", bad_name,
 					btf_type_str(bad_type));
 				member_note = bpf_diag_fmt(
-					env, " Its member '%s' is %s, not a scalar.", bad_name,
-					btf_type_str(bad_type));
+					env,
+					" Its member '%s' is %s, not a scalar or an arena pointer.",
+					bad_name, btf_type_str(bad_type));
 			}
 			bpf_diag_program_structure(
 				env, insn_idx, "unsupported kernel function return type",
-				"Call a kernel function that returns only scalars by value.",
+				"Call a kernel function that returns only scalars or arena pointers by value.",
 				"%s() returns %s %s by value.%s "
-				"Only kfuncs returning scalar values, or "
-				"structures composed of scalar values are "
+				"Only kfuncs returning scalar values or arena pointers, or "
+				"structures composed of scalar values and arena pointers are "
 				"supported.",
 				func_name, btf_type_str(t),
 				btf_name_by_offset(desc_btf, t->name_off), member_note);
