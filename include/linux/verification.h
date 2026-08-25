@@ -18,6 +18,16 @@
 #define VERIFY_USE_SECONDARY_KEYRING ((struct key *)1UL)
 #define VERIFY_USE_PLATFORM_KEYRING  ((struct key *)2UL)
 
+/*
+ * The id of BPF's ".bpf" keyring, reserved from the same space. It is
+ * explicitly not a sentinel like the two above as BPF resolves it to
+ * the keyring itself and passes that, so verify_pkcs7_signature() never
+ * sees this value, and system_keyring_id_check() must keep rejecting it.
+ * Left as a plain integer so that handing it over as @trusted_keys does
+ * not compile.
+ */
+#define VERIFY_USE_BPF_KEYRING	3
+
 static inline int system_keyring_id_check(u64 id)
 {
 	if (id > (unsigned long)VERIFY_USE_PLATFORM_KEYRING)
