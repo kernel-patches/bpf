@@ -7972,14 +7972,18 @@ static int btf_validate_return_type(struct bpf_verifier_env *env, struct btf *bt
 
 	if (btf_type_is_struct(t) && t->size <= 16) {
 		/*
-		 * A global function's caller models the return as an opaque
-		 * scalar pair, so it may only return scalars by value. A local
-		 * function is verified inline, so a pointer field stays tracked
-		 * and needs no such restriction.
+		 * A global function may return a struct with scalar(s) or arena
+		 * pointer(s) as its members. A local function is verified inline,
+		 * so its caller receives the real register state and any member
+		 * is fine.
 		 */
 		bool local_func = subprog && !is_global;
+		u32 member_kinds = BTF_MEMBER_SCALAR;
 
-		if (local_func || btf_struct_is_composed_of(env, btf, t, BTF_MEMBER_SCALAR))
+		if (subprog)
+			member_kinds |= BTF_MEMBER_ARENA_PTR;
+
+		if (local_func || btf_struct_is_composed_of(env, btf, t, member_kinds))
 			return 0;
 	}
 
@@ -8075,7 +8079,8 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 		if (is_global) {
 			bpf_log(log,
 				"Global function %s() has unsupported return type. "
-				"Only void, scalar, or a scalar-only struct/union up to 16 bytes is supported.\n",
+				"Only void, a scalar, an arena pointer, or a struct/union of "
+				"those up to 16 bytes is supported.\n",
 				tname);
 		}
 		return err;
