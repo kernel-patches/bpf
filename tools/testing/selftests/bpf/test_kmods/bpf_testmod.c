@@ -981,6 +981,20 @@ __bpf_kfunc struct prog_test_ret_ptr bpf_kfunc_call_test_ret_ptr(u64 tag)
 	return r;
 }
 
+__bpf_kfunc struct prog_test_ret_arena bpf_kfunc_call_test_ret_arena(void)
+{
+	struct prog_test_ret_arena r = { .a = NULL, .b = NULL };
+
+	return r;
+}
+
+__bpf_kfunc struct prog_test_ret_arena_mixed bpf_kfunc_call_test_ret_arena_mixed(u64 tag)
+{
+	struct prog_test_ret_arena_mixed r = { .p = NULL, .tag = tag };
+
+	return r;
+}
+
 __bpf_kfunc struct prog_test_ret_nested bpf_kfunc_call_test_ret_nested(u64 tag)
 {
 	struct prog_test_ret_nested r = { .in = { .p = NULL }, .tag = tag };
@@ -1553,6 +1567,8 @@ BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_pair)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_fastcall, KF_FASTCALL)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_ptr)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_arena)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_arena_mixed)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_nested)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_deep)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_ii)

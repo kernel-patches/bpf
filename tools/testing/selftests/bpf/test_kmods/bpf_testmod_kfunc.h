@@ -26,6 +26,12 @@ struct prog_test_ref_kfunc {
 };
 #endif
 
+#if __has_attribute(btf_type_tag)
+#define __arena_tag __attribute__((btf_type_tag("arena")))
+#else
+#define __arena_tag
+#endif
+
 struct bpf_iter_testmod_seq;
 
 struct prog_test_pass1 {
@@ -67,6 +73,16 @@ struct prog_test_ret_ii {	/* 8 bytes: R0 only */
 
 struct prog_test_ret_ptr {	/* 16 bytes: contains a pointer */
 	void *p;
+	__u64 tag;
+};
+
+struct prog_test_ret_arena {	/* 16 bytes: two arena pointers */
+	void __arena_tag *a;
+	void __arena_tag *b;
+};
+
+struct prog_test_ret_arena_mixed {	/* 16 bytes: an arena pointer and a scalar */
+	void __arena_tag *p;
 	__u64 tag;
 };
 
@@ -179,6 +195,8 @@ struct prog_test_ret_pair bpf_kfunc_call_test_ret_fastcall(__u64 a, __u64 b) __k
 struct prog_test_ret_ii bpf_kfunc_call_test_ret_ii(int a, int b) __ksym;
 struct prog_test_ret_ptr bpf_kfunc_call_test_ret_ptr(__u64 tag) __ksym;
 struct prog_test_ret_nested bpf_kfunc_call_test_ret_nested(__u64 tag) __ksym;
+struct prog_test_ret_arena bpf_kfunc_call_test_ret_arena(void) __ksym;
+struct prog_test_ret_arena_mixed bpf_kfunc_call_test_ret_arena_mixed(__u64 tag) __ksym;
 struct prog_test_ret_deep bpf_kfunc_call_test_ret_deep(__u64 v) __ksym;
 struct prog_test_ret_big bpf_kfunc_call_test_ret_big(void) __ksym;
 __u64 bpf_kfunc_call_stack_arg(__u64 a, __u64 b, __u64 c, __u64 d,
