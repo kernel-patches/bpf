@@ -60,7 +60,7 @@ __noinline int exception_cb_ok_arg_small(int a)
 
 SEC("?tc")
 __exception_cb(exception_cb_bad_ret_type1)
-__failure __msg("Only void, scalar, or a scalar-only struct/union up to 16 bytes is supported.")
+__failure __msg("Only void, a scalar, an arena pointer, or a struct/union of those")
 int reject_exception_cb_type_1(struct __sk_buff *ctx)
 {
 	bpf_throw(0);
