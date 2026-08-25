@@ -1612,19 +1612,18 @@ static int xsk_bind(struct socket *sock, struct sockaddr_unsized *addr, int addr
 		return -EINVAL;
 
 	rtnl_lock();
-	mutex_lock(&xs->mutex);
-	if (xs->state != XSK_READY) {
-		err = -EBUSY;
-		goto out_release;
-	}
-
 	dev = dev_get_by_index(sock_net(sk), sxdp->sxdp_ifindex);
 	if (!dev) {
 		err = -ENODEV;
-		goto out_release;
+		goto out_rtnl_unlock;
 	}
 
 	netdev_lock_ops(dev);
+	mutex_lock(&xs->mutex);
+	if (xs->state != XSK_READY) {
+		err = -EBUSY;
+		goto out_unlock;
+	}
 
 	if (!xs->rx && !xs->tx) {
 		err = -EINVAL;
@@ -1771,9 +1770,9 @@ out_unlock:
 		smp_wmb();
 		WRITE_ONCE(xs->state, XSK_BOUND);
 	}
-	netdev_unlock_ops(dev);
-out_release:
 	mutex_unlock(&xs->mutex);
+	netdev_unlock_ops(dev);
+out_rtnl_unlock:
 	rtnl_unlock();
 	return err;
 }
