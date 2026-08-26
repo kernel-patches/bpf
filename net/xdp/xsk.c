@@ -2106,6 +2106,7 @@ static int xsk_notifier(struct notifier_block *this,
 		mutex_lock(&net->xdp.lock);
 		sk_for_each(sk, &net->xdp.list) {
 			struct xdp_sock *xs = xdp_sk(sk);
+			struct xsk_buff_pool *pool = NULL;
 
 			mutex_lock(&xs->mutex);
 			if (xs->dev == dev) {
@@ -2113,12 +2114,16 @@ static int xsk_notifier(struct notifier_block *this,
 				if (!sock_flag(sk, SOCK_DEAD))
 					sk_error_report(sk);
 
+				pool = xs->pool;
 				xsk_unbind_dev(xs);
-
-				/* Clear device references. */
-				xp_clear_dev(xs->pool);
 			}
 			mutex_unlock(&xs->mutex);
+
+			/* Clear device references outside xs->mutex to avoid
+			 * lock inversion with netdev_lock_ops().
+			 */
+			if (pool)
+				xp_clear_dev(pool);
 		}
 		mutex_unlock(&net->xdp.lock);
 		break;
