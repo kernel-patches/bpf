@@ -464,4 +464,6 @@ LIBBPF_1.8.0 {
 		btf__new_empty_opts;
 		bpf_program__load_type;
 		bpf_program__set_load_type;
+		bpf_program__load_dynamically;
+		bpf_program__unload_dynamically;
 } LIBBPF_1.7.0;
