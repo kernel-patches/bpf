@@ -782,6 +782,9 @@ struct bpf_object {
 	char *token_path;
 	int token_fd;
 
+	char **btf_module_names;
+	size_t nr_btf_module_names;
+
 	char path[];
 };
 
@@ -5851,6 +5854,99 @@ int bpf_core_add_cands(struct bpf_core_cand *local_cand,
 	return 0;
 }
 
+static void bpf_object_free_btf_module_names(struct bpf_object *obj)
+{
+	size_t i;
+
+	if (!obj->btf_module_names)
+		return;
+
+	for (i = 0; i < obj->nr_btf_module_names; i++)
+		zfree(&obj->btf_module_names[i]);
+	zfree(&obj->btf_module_names);
+	obj->nr_btf_module_names = 0;
+}
+
+static int bpf_object_init_btf_module_names(struct bpf_object *obj,
+					    const struct bpf_object_open_opts *opts)
+{
+	const char **names;
+	size_t i, j, cnt;
+	int err;
+
+	names = OPTS_GET(opts, btf_module_names, NULL);
+	if (!names)
+		return 0;
+
+	cnt = OPTS_GET(opts, nr_btf_module_names, 0);
+
+	/*
+	 * Allocate one entry for an empty list to distinguish it from the
+	 * default behavior.
+	 */
+	obj->btf_module_names = calloc(cnt ?: 1,
+				       sizeof(*obj->btf_module_names));
+	if (!obj->btf_module_names)
+		return -ENOMEM;
+
+	for (i = 0; i < cnt; i++) {
+		if (!names[i] || !names[i][0]) {
+			pr_warn("invalid kernel module BTF name at index %zu\n", i);
+			err = -EINVAL;
+			goto err_out;
+		}
+
+		for (j = 0; j < i; j++) {
+			if (strcmp(obj->btf_module_names[j], names[i]) == 0) {
+				pr_warn("duplicate kernel module BTF name '%s'\n",
+					names[i]);
+				err = -EINVAL;
+				goto err_out;
+			}
+		}
+
+		obj->btf_module_names[i] = strdup(names[i]);
+		if (!obj->btf_module_names[i]) {
+			err = -ENOMEM;
+			goto err_out;
+		}
+
+		obj->nr_btf_module_names++;
+	}
+	return 0;
+
+err_out:
+	bpf_object_free_btf_module_names(obj);
+	return err;
+}
+
+static bool is_module_btf_needed(const struct bpf_object *obj, const char *name)
+{
+	size_t i;
+
+	if (!obj->btf_module_names)
+		return true;
+
+	for (i = 0; i < obj->nr_btf_module_names; i++) {
+		if (strcmp(obj->btf_module_names[i], name) == 0)
+			return true;
+	}
+
+	pr_debug("skipping module BTF '%s', not in btf_module_names\n", name);
+	return false;
+}
+
+static bool no_module_btfs_needed(const struct bpf_object *obj)
+{
+	return obj->btf_module_names && !obj->nr_btf_module_names;
+}
+
+static bool all_needed_module_btfs_loaded(const struct bpf_object *obj)
+{
+	return obj->btf_module_names &&
+	       obj->nr_btf_module_names == obj->btf_module_cnt;
+}
+
 static int load_module_btfs(struct bpf_object *obj)
 {
 	struct bpf_btf_info info;
@@ -5871,6 +5967,9 @@ static int load_module_btfs(struct bpf_object *obj)
 
 	/* kernel too old to support module BTFs */
 	if (!kernel_supports(obj, FEAT_MODULE_BTF))
+		return 0;
+
+	if (no_module_btfs_needed(obj))
 		return 0;
 
 	while (true) {
@@ -5915,6 +6014,11 @@ static int load_module_btfs(struct bpf_object *obj)
 			continue;
 		}
 
+		if (!is_module_btf_needed(obj, name)) {
+			close(fd);
+			continue;
+		}
+
 		btf = btf_get_from_fd(fd, obj->btf_vmlinux);
 		err = libbpf_get_error(btf);
 		if (err) {
@@ -5939,6 +6043,9 @@ static int load_module_btfs(struct bpf_object *obj)
 			break;
 		}
 		obj->btf_module_cnt++;
+
+		if (all_needed_module_btfs_loaded(obj))
+			break;
 	}
 
 	if (err) {
@@ -8556,6 +8663,10 @@ static struct bpf_object *bpf_object_open(const char *path, const void *obj_buf,
 		}
 	}
 
+	err = bpf_object_init_btf_module_names(obj, opts);
+	if (err)
+		goto out;
+
 	err = bpf_object__elf_init(obj);
 	err = err ? : bpf_object__elf_collect(obj);
 	err = err ? : bpf_object__collect_externs(obj);
@@ -9676,6 +9787,8 @@ void bpf_object__close(struct bpf_object *obj)
 	for (i = 0; i < obj->jumptable_map_cnt; i++)
 		close(obj->jumptable_maps[i].fd);
 	zfree(&obj->jumptable_maps);
+
+	bpf_object_free_btf_module_names(obj);
 
 	free(obj);
 }
