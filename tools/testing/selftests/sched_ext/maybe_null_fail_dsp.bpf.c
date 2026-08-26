@@ -7,14 +7,13 @@
 
 char _license[] SEC("license") = "GPL";
 
-u64 vtime_test;
-
 void BPF_STRUCT_OPS(maybe_null_running, struct task_struct *p)
 {}
 
 void BPF_STRUCT_OPS(maybe_null_fail_dispatch, s32 cpu, struct task_struct *p)
 {
-	vtime_test = p->scx.dsq_vtime;
+	/* Pointer arithmetic on a trusted-or-NULL pointer must be rejected. */
+	asm volatile("%[p] += 0" : [p] "+r"(p));
 }
 
 SEC(".struct_ops.link")
