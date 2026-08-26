@@ -9821,18 +9821,12 @@ bool bpf_program__autoload(const struct bpf_program *prog)
 	return prog->load_type == BPF_PROG_LOAD_TYPE_AUTO;
 }
 
-int bpf_program__set_autoload(struct bpf_program *prog, bool autoload)
+int bpf_program__set_autoload(struct bpf_program *prog, enum bpf_prog_load_type autoload)
 {
-	enum bpf_prog_load_type type = prog->load_type;
+	if (autoload != BPF_PROG_LOAD_TYPE_AUTO && autoload != BPF_PROG_LOAD_TYPE_DISABLED)
+		return libbpf_err(-EINVAL);
 
-	if (autoload)
-		type = BPF_PROG_LOAD_TYPE_AUTO;
-	else if (prog->load_type == BPF_PROG_LOAD_TYPE_AUTO)
-		type = BPF_PROG_LOAD_TYPE_DISABLED;
-	else
-		return 0; /* Otherwise, keep the current load type. */
-
-	return bpf_program__set_load_type(prog, type);
+	return bpf_program__set_load_type(prog, autoload);
 }
 
 bool bpf_program__autoattach(const struct bpf_program *prog)
@@ -15303,15 +15297,28 @@ static int bpf_program__set_dynamicload(struct bpf_program *prog)
 
 int bpf_program__set_load_type(struct bpf_program *prog, enum bpf_prog_load_type type)
 {
+	if (!prog)
+		return libbpf_err(-EINVAL);
+
 	if (prog->obj->state >= OBJ_LOADED)
 		return libbpf_err(-EINVAL);
 
 	switch (type) {
 	case BPF_PROG_LOAD_TYPE_DYNAMIC:
 		return bpf_program__set_dynamicload(prog);
-	default:
+	case BPF_PROG_LOAD_TYPE_AUTO:
+	case BPF_PROG_LOAD_TYPE_DISABLED:
+		/*
+		 * Leaving the dynamic state: set_dynamicload() cleared
+		 * autoattach because dynamically loaded programs are attached
+		 * explicitly. Restore the default for the target load type.
+		 */
+		if (prog->load_type == BPF_PROG_LOAD_TYPE_DYNAMIC)
+			prog->autoattach = true;
 		prog->load_type = type;
 		break;
+	default:
+		return libbpf_err(-EINVAL);
 	}
 
 	return 0;
