@@ -25,11 +25,11 @@ static enum scx_test_status run(void *ctx)
 	maybe_null__destroy(skel);
 
 	fail_dsp = maybe_null_fail_dsp__open_and_load();
-	if (fail_dsp) {
-		maybe_null_fail_dsp__destroy(fail_dsp);
-		SCX_ERR("Should failed to open and load maybe_null_fail_dsp skel");
+	if (!fail_dsp) {
+		SCX_ERR("Failed to open and load maybe_null_fail_dsp skel");
 		return SCX_TEST_FAIL;
 	}
+	maybe_null_fail_dsp__destroy(fail_dsp);
 
 	fail_yld = maybe_null_fail_yld__open_and_load();
 	if (fail_yld) {

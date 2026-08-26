@@ -162,13 +162,13 @@ __naked int disabled_hook_test3(void *ctx)
 
 SEC("lsm/mmap_file")
 __description("not null checking nullable pointer in bpf_lsm_mmap_file")
-__failure __msg("R1 invalid mem access 'trusted_ptr_or_null_'")
+__success
 int BPF_PROG(no_null_check, struct file *file)
 {
-	struct inode *inode;
+	ino_t ino;
 
-	inode = file->f_inode;
-	__sink(inode);
+	ino = file->f_inode->i_ino;
+	__sink(ino);
 
 	return 0;
 }
@@ -185,6 +185,17 @@ int BPF_PROG(null_check, struct file *file)
 		__sink(inode);
 	}
 
+	return 0;
+}
+
+SEC("lsm.s/bprm_check_security")
+__description("store through trusted-or-null bprm->mm is rejected")
+__failure
+__msg("R{{[0-9]+}} invalid mem access 'trusted_ptr_or_null_'")
+int BPF_PROG(store_through_trusted_or_null_bprm_mm,
+	     struct linux_binprm *bprm)
+{
+	bprm->mm->task_size = 0;
 	return 0;
 }
 
