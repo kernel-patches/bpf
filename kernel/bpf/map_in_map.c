@@ -7,6 +7,15 @@
 
 #include "map_in_map.h"
 
+static bool bpf_map_type_is_htab(enum bpf_map_type type)
+{
+	return type == BPF_MAP_TYPE_HASH ||
+	       type == BPF_MAP_TYPE_PERCPU_HASH ||
+	       type == BPF_MAP_TYPE_LRU_HASH ||
+	       type == BPF_MAP_TYPE_LRU_PERCPU_HASH ||
+	       type == BPF_MAP_TYPE_HASH_OF_MAPS;
+}
+
 struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 {
 	struct bpf_map *inner_map, *inner_map_meta;
@@ -29,6 +38,8 @@ struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 	/* In some cases verifier needs to access beyond just base map. */
 	if (inner_map->ops == &array_map_ops || inner_map->ops == &percpu_array_map_ops)
 		inner_map_meta_size = sizeof(struct bpf_array);
+	else if (bpf_map_type_is_htab(inner_map->map_type))
+		inner_map_meta_size = bpf_htab_map_meta_size();
 
 	inner_map_meta = kzalloc(inner_map_meta_size, GFP_USER);
 	if (!inner_map_meta)
@@ -70,6 +81,8 @@ struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 		inner_array_meta->index_mask = inner_array->index_mask;
 		inner_array_meta->elem_size = inner_array->elem_size;
 		inner_map_meta->bypass_spec_v1 = inner_map->bypass_spec_v1;
+	} else if (bpf_map_type_is_htab(inner_map->map_type)) {
+		bpf_htab_map_meta_init(inner_map_meta, inner_map);
 	}
 	return inner_map_meta;
 }
