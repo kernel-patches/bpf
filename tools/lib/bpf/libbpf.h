@@ -2083,15 +2083,19 @@ LIBBPF_API int bpf_program__clone(struct bpf_program *prog, const struct bpf_pro
  *
  * - BPF_PROG_LOAD_TYPE_DISABLED: the program is not loaded.
  * - BPF_PROG_LOAD_TYPE_AUTO: the program is autoloaded when the bpf_object is loaded.
+ * - BPF_PROG_LOAD_TYPE_DYNAMIC: the program is loaded and attached dynamically.
  */
 enum bpf_prog_load_type {
 	BPF_PROG_LOAD_TYPE_DISABLED = 0,
 	BPF_PROG_LOAD_TYPE_AUTO,
+	BPF_PROG_LOAD_TYPE_DYNAMIC,
 };
 
 LIBBPF_API int bpf_program__set_load_type(struct bpf_program *prog,
 					  enum bpf_prog_load_type loadtype);
 LIBBPF_API enum bpf_prog_load_type bpf_program__load_type(const struct bpf_program *prog);
+LIBBPF_API int bpf_program__load_dynamically(struct bpf_program *prog, int extra_log_level);
+LIBBPF_API int bpf_program__unload_dynamically(struct bpf_program *prog);
 
 #ifdef __cplusplus
 } /* extern "C" */
