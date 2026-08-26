@@ -25,6 +25,11 @@
 struct folio_batch;
 struct hstate;
 
+#ifdef CONFIG_BPF_SYSCALL
+int __copy_remote_mm_str(struct mm_struct *mm, unsigned long addr,
+			 void *buf, int len, unsigned int gup_flags);
+#endif
+
 struct huge_bootmem_page {
 	struct list_head list;
 	struct hstate *hstate;
