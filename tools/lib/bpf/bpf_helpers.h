@@ -218,6 +218,11 @@ enum libbpf_tristate {
 #define __arg_untrusted __attribute((btf_decl_tag("arg:untrusted")))
 #define __arg_arena __attribute((btf_decl_tag("arg:arena")))
 
+/* Mark a BPF program to be loaded dynamically instead of autoloaded,
+ * equivalent to bpf_program__set_load_type(prog, BPF_PROG_LOAD_TYPE_DYNAMIC).
+ */
+#define __load_dynamic __attribute__((btf_decl_tag("loadtype:dynamic")))
+
 #ifndef ___bpf_concat
 #define ___bpf_concat(a, b) a ## b
 #endif
