@@ -110,7 +110,9 @@ struct bpf_mem_cache {
 	struct llist_node *free_by_rcu_tail;
 	struct llist_head waiting_for_gp;
 	struct llist_node *waiting_for_gp_tail;
+	struct llist_node *waiting_for_reclaim_gp;
 	struct rcu_head rcu;
+	struct rcu_head rcu_reclaim;
 	atomic_t call_rcu_in_progress;
 	struct llist_head free_llist_extra_rcu;
 
@@ -276,12 +278,28 @@ static int free_all(struct bpf_mem_cache *c, struct llist_node *llnode, bool per
 	return cnt;
 }
 
+static void __free_final_rcu(struct rcu_head *head)
+{
+	struct bpf_mem_cache *c = container_of(head, struct bpf_mem_cache, rcu);
+	struct llist_node *llnode = c->waiting_for_reclaim_gp;
+
+	c->waiting_for_reclaim_gp = NULL;
+	free_all(c, llnode, !!c->percpu_size);
+	atomic_set(&c->call_rcu_ttrace_in_progress, 0);
+}
+
 static void __free_rcu(struct rcu_head *head)
 {
 	struct bpf_mem_cache *c = container_of(head, struct bpf_mem_cache, rcu_ttrace);
+	struct llist_node *llnode = llist_del_all(&c->waiting_for_gp_ttrace);
 
-	free_all(c, llist_del_all(&c->waiting_for_gp_ttrace), !!c->percpu_size);
-	atomic_set(&c->call_rcu_ttrace_in_progress, 0);
+	if (!llnode) {
+		atomic_set(&c->call_rcu_ttrace_in_progress, 0);
+		return;
+	}
+
+	c->waiting_for_reclaim_gp = llnode;
+	call_rcu(&c->rcu_reclaim, __free_final_rcu);
 }
 
 static void enque_to_free(struct bpf_mem_cache *c, void *obj)
