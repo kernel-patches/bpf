@@ -2069,9 +2069,9 @@ struct profile_metric {
 	bool selected;
 
 	/* calculate ratios like instructions per cycle */
-	const int ratio_metric; /* 0 for N/A, 1 for index 0 (cycles) */
+	const int ratio_metric; /* 0 for run_cnt, 1 for index 0 (cycles) */
 	const char *ratio_desc;
-	const float ratio_mul;
+	const double ratio_mul;
 } metrics[] = {
 	{
 		.name = "cycles",
@@ -2080,6 +2080,9 @@ struct profile_metric {
 			.config = PERF_COUNT_HW_CPU_CYCLES,
 			.exclude_user = 1,
 		},
+		.ratio_metric = 0,
+		.ratio_desc = "cycles per run",
+		.ratio_mul = 1.0,
 	},
 	{
 		.name = "instructions",
@@ -2256,17 +2259,18 @@ static void profile_print_readings_plain(void)
 	for (m = 0; m < ARRAY_SIZE(metrics); m++) {
 		struct bpf_perf_event_value *val = &metrics[m].val;
 		int r;
+		__u64 ratio;
 
 		if (!metrics[m].selected)
 			continue;
 		printf("%18llu %-20s", val->counter, metrics[m].name);
 
-		r = metrics[m].ratio_metric - 1;
-		if (r >= 0 && metrics[r].selected &&
-		    metrics[r].val.counter > 0) {
+		r = metrics[m].ratio_metric;
+		/* r == 0 is a special case for run_cnt */
+		ratio = r ? metrics[r - 1].val.counter : profile_total_count;
+		if (metrics[m].ratio_desc && ratio) {
 			printf("# %8.2f %-30s",
-			       val->counter * metrics[m].ratio_mul /
-			       metrics[r].val.counter,
+			       val->counter * metrics[m].ratio_mul / ratio,
 			       metrics[m].ratio_desc);
 		} else {
 			printf("%-41s", "");
