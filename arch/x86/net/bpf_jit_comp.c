@@ -702,10 +702,10 @@ static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 	return 1;
 }
 
-int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
-		       enum bpf_text_poke_type new_t, void *old_addr,
-		       void *new_addr)
+static int bpf_arch_text_poke_check_ip(void **ipp)
 {
+	void *ip = *ipp;
+
 	if (!is_kernel_text((long)ip) &&
 	    !is_bpf_text_address((long)ip))
 		/* BPF poking in modules is not supported */
@@ -716,7 +716,20 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 	 * with an ENDBR instruction.
 	 */
 	if (is_endbr(ip))
-		ip += ENDBR_INSN_SIZE;
+		*ipp += ENDBR_INSN_SIZE;
+
+	return 0;
+}
+
+int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
+		       enum bpf_text_poke_type new_t, void *old_addr,
+		       void *new_addr)
+{
+	int ret;
+
+	ret = bpf_arch_text_poke_check_ip(&ip);
+	if (ret)
+		return ret;
 
 	return __bpf_arch_text_poke(ip, old_t, new_t, old_addr, new_addr);
 }
