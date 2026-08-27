@@ -23,8 +23,6 @@
 
 static int __initdata_or_module debug_callthunks;
 
-#define MAX_PATCH_LEN (255-1)
-
 #define prdbg(fmt, args...)					\
 do {								\
 	if (debug_callthunks)					\
@@ -298,10 +296,9 @@ static bool is_callthunk(void *addr)
 	return !bcmp(pad, insn_buff, tmpl_size);
 }
 
-int x86_call_depth_emit_accounting(u8 **pprog, void *func, void *ip)
+int x86_call_depth_emit_accounting(u8 *insn_buff, void *func, void *ip)
 {
 	unsigned int tmpl_size = SKL_TMPL_SIZE;
-	u8 insn_buff[MAX_PATCH_LEN];
 
 	if (!thunks_initialized)
 		return 0;
@@ -313,8 +310,6 @@ int x86_call_depth_emit_accounting(u8 **pprog, void *func, void *ip)
 	memcpy(insn_buff, skl_call_thunk_template, tmpl_size);
 	text_poke_apply_relocation(insn_buff, ip, tmpl_size, skl_call_thunk_template, tmpl_size);
 
-	memcpy(*pprog, insn_buff, tmpl_size);
-	*pprog += tmpl_size;
 	return tmpl_size;
 }
 #endif

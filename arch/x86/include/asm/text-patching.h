@@ -13,6 +13,8 @@
  */
 #define TEXT_POKE_MAX_OPCODE_SIZE	5
 
+#define MAX_PATCH_LEN	(255-1)
+
 extern void text_poke_early(void *addr, const void *opcode, size_t len);
 
 extern void text_poke_apply_relocation(u8 *buf, const u8 * const instr, size_t instrlen, u8 *repl, size_t repl_len);

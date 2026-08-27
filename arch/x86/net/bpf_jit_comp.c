@@ -149,6 +149,18 @@ static int bpf_size_to_x86_bytes(int bpf_size)
 		return 0;
 }
 
+static int bpf_call_depth_emit_accounting(u8 **pprog, void *func, void *ip)
+{
+	u8 insn_buff[MAX_PATCH_LEN];
+	int size;
+
+	size = x86_call_depth_emit_accounting(insn_buff, func, ip);
+	memcpy(*pprog, insn_buff, size);
+
+	*pprog += size;
+	return size;
+}
+
 /*
  * List of x86 cond jumps opcodes (. + s8)
  * Add 0x10 (and an extra 0x0f) to generate far jumps (. + s32)
@@ -608,7 +620,7 @@ static int emit_call(u8 **pprog, void *func, void *ip)
 static int emit_rsb_call(u8 **pprog, void *func, void *ip)
 {
 	OPTIMIZER_HIDE_VAR(func);
-	ip += x86_call_depth_emit_accounting(pprog, func, ip);
+	ip += bpf_call_depth_emit_accounting(pprog, func, ip);
 	return emit_patch(pprog, func, ip, 0xE8);
 }
 
@@ -1653,7 +1665,7 @@ static int emit_spectre_bhb_barrier(u8 **pprog, u8 *ip,
 		ip += 2;
 
 		func = (u8 *)clear_bhb_loop;
-		ip += x86_call_depth_emit_accounting(&prog, func, ip);
+		ip += bpf_call_depth_emit_accounting(&prog, func, ip);
 
 		if (emit_call(&prog, func, ip))
 			return -EINVAL;
@@ -2661,7 +2673,7 @@ populate_extable:
 				push_r9(&prog);
 				ip += 2;
 			}
-			ip += x86_call_depth_emit_accounting(&prog, func, ip);
+			ip += bpf_call_depth_emit_accounting(&prog, func, ip);
 			if (emit_call(&prog, func, ip))
 				return -EINVAL;
 			if (priv_frame_ptr)
@@ -3598,7 +3610,7 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im, void *rw_im
 		 * Direct-call fentry stub, as such it needs accounting for the
 		 * __fentry__ call.
 		 */
-		x86_call_depth_emit_accounting(&prog, NULL, image);
+		bpf_call_depth_emit_accounting(&prog, NULL, image);
 	}
 	EMIT1(0x55);		 /* push rbp */
 	EMIT3(0x48, 0x89, 0xE5); /* mov rbp, rsp */
