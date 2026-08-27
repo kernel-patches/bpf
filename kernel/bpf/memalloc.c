@@ -119,6 +119,7 @@ struct bpf_mem_cache {
 	struct llist_head waiting_for_gp_ttrace;
 	struct rcu_head rcu_ttrace;
 	atomic_t call_rcu_ttrace_in_progress;
+	raw_spinlock_t lock;
 };
 
 struct bpf_mem_caches {
@@ -207,6 +208,7 @@ static void add_obj_to_free_list(struct bpf_mem_cache *c, void *obj)
 static void alloc_bulk(struct bpf_mem_cache *c, int cnt, int node, bool atomic)
 {
 	struct mem_cgroup *memcg = NULL, *old_memcg;
+	unsigned long flags;
 	gfp_t gfp;
 	void *obj;
 	int i;
@@ -228,12 +230,14 @@ static void alloc_bulk(struct bpf_mem_cache *c, int cnt, int node, bool atomic)
 	if (i >= cnt)
 		return;
 
+	raw_spin_lock_irqsave(&c->lock, flags);
 	for (; i < cnt; i++) {
-		obj = llist_del_first(&c->waiting_for_gp_ttrace);
+		obj = __llist_del_first(&c->waiting_for_gp_ttrace);
 		if (!obj)
 			break;
 		add_obj_to_free_list(c, obj);
 	}
+	raw_spin_unlock_irqrestore(&c->lock, flags);
 	if (i >= cnt)
 		return;
 
@@ -279,8 +283,14 @@ static int free_all(struct bpf_mem_cache *c, struct llist_node *llnode, bool per
 static void __free_rcu(struct rcu_head *head)
 {
 	struct bpf_mem_cache *c = container_of(head, struct bpf_mem_cache, rcu_ttrace);
+	struct llist_node *llnode;
+	unsigned long flags;
 
-	free_all(c, llist_del_all(&c->waiting_for_gp_ttrace), !!c->percpu_size);
+	raw_spin_lock_irqsave(&c->lock, flags);
+	llnode = __llist_del_all(&c->waiting_for_gp_ttrace);
+	raw_spin_unlock_irqrestore(&c->lock, flags);
+
+	free_all(c, llnode, !!c->percpu_size);
 	atomic_set(&c->call_rcu_ttrace_in_progress, 0);
 }
 
@@ -297,6 +307,7 @@ static void enque_to_free(struct bpf_mem_cache *c, void *obj)
 static void do_call_rcu_ttrace(struct bpf_mem_cache *c)
 {
 	struct llist_node *llnode, *t;
+	unsigned long flags;
 
 	if (atomic_xchg(&c->call_rcu_ttrace_in_progress, 1)) {
 		if (unlikely(READ_ONCE(c->draining))) {
@@ -307,8 +318,10 @@ static void do_call_rcu_ttrace(struct bpf_mem_cache *c)
 	}
 
 	WARN_ON_ONCE(!llist_empty(&c->waiting_for_gp_ttrace));
+	raw_spin_lock_irqsave(&c->lock, flags);
 	llist_for_each_safe(llnode, t, llist_del_all(&c->free_by_rcu_ttrace))
-		llist_add(llnode, &c->waiting_for_gp_ttrace);
+		__llist_add(llnode, &c->waiting_for_gp_ttrace);
+	raw_spin_unlock_irqrestore(&c->lock, flags);
 
 	if (unlikely(READ_ONCE(c->draining))) {
 		__free_rcu(&c->rcu_ttrace);
@@ -535,6 +548,7 @@ int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu)
 			c->objcg = objcg;
 			c->percpu_size = percpu_size;
 			c->tgt = c;
+			raw_spin_lock_init(&c->lock);
 			init_refill_work(c);
 			prefill_mem_cache(c, cpu);
 		}
@@ -557,7 +571,7 @@ int bpf_mem_alloc_init(struct bpf_mem_alloc *ma, int size, bool percpu)
 			c->objcg = objcg;
 			c->percpu_size = percpu_size;
 			c->tgt = c;
-
+			raw_spin_lock_init(&c->lock);
 			init_refill_work(c);
 			prefill_mem_cache(c, cpu);
 		}
@@ -609,7 +623,7 @@ int bpf_mem_alloc_percpu_unit_init(struct bpf_mem_alloc *ma, int size)
 		c->objcg = objcg;
 		c->percpu_size = percpu_size;
 		c->tgt = c;
-
+		raw_spin_lock_init(&c->lock);
 		init_refill_work(c);
 		prefill_mem_cache(c, cpu);
 	}
@@ -620,6 +634,8 @@ int bpf_mem_alloc_percpu_unit_init(struct bpf_mem_alloc *ma, int size)
 static void drain_mem_cache(struct bpf_mem_cache *c)
 {
 	bool percpu = !!c->percpu_size;
+	struct llist_node *llnode;
+	unsigned long flags;
 
 	/* No progs are using this bpf_mem_cache, but htab_map_free() called
 	 * bpf_mem_cache_free() for all remaining elements and they can be in
@@ -629,7 +645,10 @@ static void drain_mem_cache(struct bpf_mem_cache *c)
 	 * on these lists, so it is safe to use __llist_del_all().
 	 */
 	free_all(c, llist_del_all(&c->free_by_rcu_ttrace), percpu);
-	free_all(c, llist_del_all(&c->waiting_for_gp_ttrace), percpu);
+	raw_spin_lock_irqsave(&c->lock, flags);
+	llnode = __llist_del_all(&c->waiting_for_gp_ttrace);
+	raw_spin_unlock_irqrestore(&c->lock, flags);
+	free_all(c, llnode, percpu);
 	free_all(c, __llist_del_all(&c->free_llist), percpu);
 	free_all(c, __llist_del_all(&c->free_llist_extra), percpu);
 	free_all(c, __llist_del_all(&c->free_by_rcu), percpu);
