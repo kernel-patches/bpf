@@ -18,8 +18,6 @@ int __read_mostly alternatives_patched;
 
 EXPORT_SYMBOL_GPL(alternatives_patched);
 
-#define MAX_PATCH_LEN (255-1)
-
 #define DA_ALL		(~0)
 #define DA_ALT		0x01
 #define DA_RET		0x02
