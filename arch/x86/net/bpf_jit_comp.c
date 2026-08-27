@@ -645,13 +645,12 @@ static int emit_jump(u8 **pprog, void *func, void *ip)
 	return emit_patch(pprog, func, ip, 0xE9);
 }
 
-static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
-				enum bpf_text_poke_type new_t,
-				void *old_addr, void *new_addr)
+static int bpf_arch_text_poke_prepare_insns(void *ip, enum bpf_text_poke_type old_t,
+					    enum bpf_text_poke_type new_t,
+					    void *old_addr, void *new_addr,
+					    u8 *old_insn, u8 *new_insn)
 {
 	const u8 *nop_insn = x86_nops[5];
-	u8 old_insn[X86_PATCH_SIZE];
-	u8 new_insn[X86_PATCH_SIZE];
 	u8 *prog;
 	int ret;
 
@@ -675,18 +674,32 @@ static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 			return ret;
 	}
 
-	ret = -EBUSY;
-	mutex_lock(&text_mutex);
+	return 0;
+}
+
+static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
+				enum bpf_text_poke_type new_t,
+				void *old_addr, void *new_addr)
+{
+	const u8 *nop_insn = x86_nops[5];
+	u8 old_insn[X86_PATCH_SIZE];
+	u8 new_insn[X86_PATCH_SIZE];
+	int ret;
+
+	ret = bpf_arch_text_poke_prepare_insns(ip, old_t, new_t, old_addr, new_addr, old_insn,
+					       new_insn);
+	if (ret)
+		return ret;
+
+	guard(mutex)(&text_mutex);
+
 	if (memcmp(ip, old_insn, X86_PATCH_SIZE))
-		goto out;
-	ret = 1;
+		return -EBUSY;
 	if (memcmp(ip, new_insn, X86_PATCH_SIZE)) {
 		smp_text_poke_single(ip, new_insn, X86_PATCH_SIZE, NULL);
-		ret = 0;
+		return 0;
 	}
-out:
-	mutex_unlock(&text_mutex);
-	return ret;
+	return 1;
 }
 
 int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
