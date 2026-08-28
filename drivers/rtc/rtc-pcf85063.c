@@ -495,12 +495,13 @@ static const struct clk_ops pcf85063_clkout_ops = {
 	.set_rate = pcf85063_clkout_set_rate,
 };
 
-static struct clk *pcf85063_clkout_register_clk(struct pcf85063 *pcf85063)
+static int pcf85063_clkout_register_clk(struct pcf85063 *pcf85063)
 {
-	struct clk *clk;
+	struct device *dev = pcf85063->rtc->dev.parent;
 	struct clk_init_data init = {};
-	struct device_node *node = pcf85063->rtc->dev.parent->of_node;
+	struct device_node *node = dev->of_node;
 	struct device_node *fixed_clock;
+	int ret;
 
 	fixed_clock = of_get_child_by_name(node, "clock");
 	if (fixed_clock) {
@@ -510,7 +511,7 @@ static struct clk *pcf85063_clkout_register_clk(struct pcf85063 *pcf85063)
 		 * registered automatically when being referenced.
 		 */
 		of_node_put(fixed_clock);
-		return NULL;
+		return 0;
 	}
 
 	init.name = "pcf85063-clkout";
@@ -524,12 +525,12 @@ static struct clk *pcf85063_clkout_register_clk(struct pcf85063 *pcf85063)
 	of_property_read_string(node, "clock-output-names", &init.name);
 
 	/* register the clock */
-	clk = devm_clk_register(&pcf85063->rtc->dev, &pcf85063->clkout_hw);
+	ret = devm_clk_hw_register(dev, &pcf85063->clkout_hw);
+	if (ret)
+		return ret;
 
-	if (!IS_ERR(clk))
-		of_clk_add_provider(node, of_clk_src_simple_get, clk);
-
-	return clk;
+	return devm_of_clk_add_hw_provider(dev, of_clk_hw_simple_get,
+					   &pcf85063->clkout_hw);
 }
 #endif
 
