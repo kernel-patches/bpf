@@ -3,11 +3,16 @@
 #include <test_progs.h>
 #include <string.h>
 #include <stdio.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include "rhash.skel.h"
 #include "bpf_iter_bpf_rhash_map.skel.h"
 #include <linux/bpf.h>
 #include <linux/perf_event.h>
 #include <sys/syscall.h>
+
+#define RHASH_STRESS_KEYS		4096
+#define RHASH_STRESS_DURATION_NS	(3ULL * 1000000000ULL)
 
 static void rhash_run(const char *prog_name)
 {
@@ -51,6 +56,94 @@ static int rhash_map_create(__u32 max_entries, __u64 map_extra)
 
 	return bpf_map_create(BPF_MAP_TYPE_RHASH, "rhash_extra",
 			      sizeof(__u32), sizeof(__u64), max_entries, &opts);
+}
+
+struct rhash_stress_arg {
+	int map_fd;
+	atomic_bool *stop;
+	__u32 seed;
+};
+
+static void *rhash_stress_update(void *data)
+{
+	struct rhash_stress_arg *arg = data;
+	__u64 value = 0;
+	__u32 key;
+	int i;
+
+	while (!atomic_load(arg->stop)) {
+		for (i = 0; i < RHASH_STRESS_KEYS && !atomic_load(arg->stop); i++) {
+			key = ((__u32)i * 2654435761U + arg->seed) % RHASH_STRESS_KEYS;
+			bpf_map_update_elem(arg->map_fd, &key, &value, BPF_ANY);
+		}
+		for (i = 0; i < RHASH_STRESS_KEYS && !atomic_load(arg->stop); i++) {
+			key = ((__u32)i * 2654435761U + arg->seed) % RHASH_STRESS_KEYS;
+			bpf_map_delete_elem(arg->map_fd, &key);
+		}
+	}
+
+	return NULL;
+}
+
+static void rhash_iter_stress(void)
+{
+	struct rhash *skel = NULL;
+	struct rhash_stress_arg args[2];
+	LIBBPF_OPTS(bpf_test_run_opts, opts);
+	atomic_bool stop = false;
+	__u64 start;
+	__u32 max_entries;
+	pthread_t threads[2];
+	bool created[2] = {};
+	struct bpf_program *prog;
+	int map_fd, err, i;
+
+	skel = rhash__open();
+	if (!ASSERT_OK_PTR(skel, "rhash__open stress"))
+		return;
+
+	prog = bpf_object__find_program_by_name(skel->obj,
+						"test_rhash_iter_stress");
+	if (!ASSERT_OK_PTR(prog, "find stress program"))
+		goto cleanup;
+	bpf_program__set_autoload(prog, true);
+
+	err = rhash__load(skel);
+	if (!ASSERT_OK(err, "stress skel_load"))
+		goto cleanup;
+
+	map_fd = bpf_map__fd(skel->maps.stress_rhmap);
+	max_entries = bpf_map__max_entries(skel->maps.stress_rhmap);
+	for (i = 0; i < ARRAY_SIZE(threads); i++) {
+		args[i].map_fd = map_fd;
+		args[i].stop = &stop;
+		args[i].seed = i * 977;
+		err = pthread_create(&threads[i], NULL, rhash_stress_update,
+				     &args[i]);
+		if (!ASSERT_OK(err, "pthread_create"))
+			goto stop_threads;
+		created[i] = true;
+	}
+
+	start = get_time_ns();
+	while (get_time_ns() - start < RHASH_STRESS_DURATION_NS) {
+		err = bpf_prog_test_run_opts(bpf_program__fd(prog), &opts);
+		if (!ASSERT_OK(err, "stress prog run"))
+			break;
+	}
+
+stop_threads:
+	atomic_store(&stop, true);
+	for (i = 0; i < ARRAY_SIZE(threads); i++)
+		if (created[i])
+			pthread_join(threads[i], NULL);
+
+	ASSERT_GT(skel->bss->stress_max_visits, 0, "stress callback visits");
+	ASSERT_EQ(skel->bss->stress_overruns, 0, "stress callback bound");
+	printf("stress max callback visits: %llu (limit %u)\n",
+	       (unsigned long long)skel->bss->stress_max_visits, max_entries);
+cleanup:
+	rhash__destroy(skel);
 }
 
 static void rhash_map_extra_presize(void)
@@ -180,4 +273,8 @@ void test_rhash(void)
 
 	if (test__start_subtest("test_rhash_iter"))
 		rhash_iter_test();
+
+	if (test__start_subtest("test_rhash_iter_stress"))
+		rhash_iter_stress();
+
 }

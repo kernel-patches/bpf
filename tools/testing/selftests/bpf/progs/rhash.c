@@ -9,10 +9,14 @@
 
 #define ENOENT 2
 #define EEXIST 17
+#define RHASH_STRESS_MAX_ENTRIES 4096
 
 char _license[] SEC("license") = "GPL";
 
 int err;
+
+volatile __u64 stress_max_visits;
+volatile __u64 stress_overruns;
 
 struct elem {
 	char arr[128];
@@ -26,6 +30,20 @@ struct {
 	__type(key, int);
 	__type(value, struct elem);
 } rhmap SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RHASH);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__uint(max_entries, RHASH_STRESS_MAX_ENTRIES);
+	__type(key, __u32);
+	__type(value, __u64);
+} stress_rhmap SEC(".maps");
+
+static __u64 stress_iter_cb(struct bpf_map *map, __u32 *key, __u64 *val,
+			    void *ctx)
+{
+	return 0;
+}
 
 SEC("syscall")
 int test_rhash_lookup_update(void *ctx)
@@ -244,5 +262,23 @@ int test_rhash_delete_nonexistent(void *ctx)
 		return 1;
 
 	err = 0;
+	return 0;
+}
+
+SEC("syscall")
+int test_rhash_iter_stress(void *ctx)
+{
+	/*
+	 * Concurrent rehash may produce duplicate visits. Check that the
+	 * helper still gives one walk a finite callback bound; no snapshot
+	 * or unique-visit guarantee is expected here.
+	 */
+	long visits;
+
+	visits = bpf_for_each_map_elem(&stress_rhmap, stress_iter_cb, NULL, 0);
+	if (visits > stress_max_visits)
+		stress_max_visits = visits;
+	if (visits > RHASH_STRESS_MAX_ENTRIES)
+		stress_overruns++;
 	return 0;
 }
