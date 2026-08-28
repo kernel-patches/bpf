@@ -431,7 +431,8 @@ static int pcf85063_clkout_set_rate(struct clk_hw *hw, unsigned long rate,
 		if (clkout_rates[i] == rate)
 			return regmap_update_bits(pcf85063->regmap,
 				PCF85063_REG_CTRL2,
-				PCF85063_REG_CLKO_F_MASK, i);
+				PCF85063_REG_CLKO_F_MASK | PCF85063_CTRL2_AF,
+				i | PCF85063_CTRL2_AF);
 
 	return -EINVAL;
 }
@@ -460,7 +461,8 @@ static int pcf85063_clkout_control(struct clk_hw *hw, bool enable)
 	}
 
 	return regmap_update_bits(pcf85063->regmap, PCF85063_REG_CTRL2,
-					PCF85063_REG_CLKO_F_MASK, buf);
+				  PCF85063_REG_CLKO_F_MASK | PCF85063_CTRL2_AF,
+				  buf | PCF85063_CTRL2_AF);
 }
 
 static int pcf85063_clkout_prepare(struct clk_hw *hw)
