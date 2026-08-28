@@ -8229,6 +8229,10 @@ static void btf_type_show(const struct btf *btf, u32 type_id, void *obj,
 	memset(&show->state, 0, sizeof(show->state));
 	memset(&show->obj, 0, sizeof(show->obj));
 
+	/* A void type (e.g. type_id 0) has no show op, don't deref NULL. */
+	if (!t || !btf_type_ops(t))
+		return;
+
 	btf_type_ops(t)->show(btf, t, type_id, obj, 0, show);
 }
 
