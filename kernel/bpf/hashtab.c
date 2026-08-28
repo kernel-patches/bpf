@@ -3199,7 +3199,7 @@ static long bpf_each_rhash_elem(struct bpf_map *map, bpf_callback_t callback_fn,
 	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
 	void *prev_key = NULL;
 	struct rhtab_elem *elem;
-	int num_elems = 0;
+	u32 num_elems = 0;
 	u64 ret = 0;
 
 	cant_migrate();
@@ -3213,7 +3213,8 @@ static long bpf_each_rhash_elem(struct bpf_map *map, bpf_callback_t callback_fn,
 	 * elements are deleted/inserted, there may be missed or duplicate
 	 * elements visited.
 	 */
-	while ((elem = rhashtable_next_key(&rhtab->ht, prev_key))) {
+	while (num_elems < map->max_entries &&
+	       (elem = rhashtable_next_key(&rhtab->ht, prev_key))) {
 		if (IS_ERR(elem))
 			break;
 		num_elems++;
