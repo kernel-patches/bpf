@@ -589,6 +589,9 @@ noinline int bpf_testmod_trampoline_count_test(void)
 	return 0;
 }
 
+struct bpf_testmod_ops;
+static struct bpf_testmod_ops *st_ops_trampoline;
+
 noinline ssize_t
 bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 		      const struct bin_attribute *bin_attr,
@@ -636,6 +639,9 @@ bpf_testmod_test_read(struct file *file, struct kobject *kobj,
 	(void)trace_bpf_testmod_test_raw_tp_null_tp(NULL);
 
 	bpf_testmod_test_struct_ops3();
+
+	if (st_ops_trampoline && st_ops_trampoline->test_trampoline)
+		st_ops_trampoline->test_trampoline(1, 2, 3, 4, 5, 6, 7, 8, 9999);
 
 	struct_arg3 = kmalloc((sizeof(struct bpf_testmod_struct_arg_3) +
 				sizeof(int)), GFP_KERNEL);
@@ -1691,6 +1697,10 @@ static int bpf_testmod_ops_init_member(const struct btf_type *t,
 		((struct bpf_testmod_ops *)kdata)->data = ((struct bpf_testmod_ops *)udata)->data;
 		return 1;
 	}
+
+	if (member->offset == offsetof(struct bpf_testmod_ops, test_trampoline) * 8)
+		st_ops_trampoline = (struct bpf_testmod_ops *)kdata;
+
 	return 0;
 }
 
@@ -1766,6 +1776,13 @@ bpf_testmod_ops__test_return_ref_kptr(int dummy, struct task_struct *task__ref,
 	return NULL;
 }
 
+static int bpf_testmod_ops__test_trampoline(int arg1, int arg2, int arg3,
+					    int arg4, int arg5, int arg6,
+					    int arg7, int arg8, int arg9)
+{
+	return arg9;
+}
+
 static struct bpf_testmod_ops __bpf_testmod_ops = {
 	.test_1 = bpf_testmod_test_1,
 	.test_2 = bpf_testmod_test_2,
@@ -1773,6 +1790,7 @@ static struct bpf_testmod_ops __bpf_testmod_ops = {
 	.test_refcounted = bpf_testmod_ops__test_refcounted,
 	.test_refcounted_multi = bpf_testmod_ops__test_refcounted_multi,
 	.test_return_ref_kptr = bpf_testmod_ops__test_return_ref_kptr,
+	.test_trampoline = bpf_testmod_ops__test_trampoline,
 };
 
 struct bpf_struct_ops bpf_bpf_testmod_ops = {

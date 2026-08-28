@@ -46,6 +46,11 @@ struct bpf_testmod_ops {
 	struct task_struct *(*test_return_ref_kptr)(int dummy, struct task_struct *task,
 						    struct cgroup *cgrp);
 
+	/* Used to test indirect struct_ops trampolines stack-passed arguments (>8 args). */
+	int (*test_trampoline)(int arg1, int arg2, int arg3,
+			       int arg4, int arg5, int arg6,
+			       int arg7, int arg8, int arg9);
+
 	/* The following fields are used to test shadow copies. */
 	char onebyte;
 	struct {
