@@ -575,7 +575,7 @@ static int tcm_mem_map(struct rproc *rproc,
 		return -ENOMEM;
 
 	/* Update memory entry va */
-	mem->va = (void *)va;
+	mem->va = (__force void *)va;
 
 	/* clear TCMs */
 	memset_io(va, 0, mem->len);
@@ -753,7 +753,7 @@ static struct resource_table *zynqmp_r5_get_loaded_rsc_table(struct rproc *rproc
 
 	*size = r5_core->rsc_tbl_size;
 
-	return (struct resource_table *)r5_core->rsc_tbl_va;
+	return (__force struct resource_table *)r5_core->rsc_tbl_va;
 }
 
 static int zynqmp_r5_get_rsc_table_va(struct zynqmp_r5_core *r5_core)
@@ -777,7 +777,7 @@ static int zynqmp_r5_get_rsc_table_va(struct zynqmp_r5_core *r5_core)
 		return -EINVAL;
 	}
 
-	rsc_data_va = (struct rsc_tbl_data *)ioremap_wc(res_mem.start,
+	rsc_data_va = (__force struct rsc_tbl_data *)ioremap_wc(res_mem.start,
 							sizeof(struct rsc_tbl_data));
 	if (!rsc_data_va) {
 		dev_err(dev, "failed to map resource table data address\n");
@@ -801,7 +801,7 @@ static int zynqmp_r5_get_rsc_table_va(struct zynqmp_r5_core *r5_core)
 		return -EINVAL;
 	}
 
-	rsc_tbl_addr = (struct resource_table *)r5_core->rsc_tbl_va;
+	rsc_tbl_addr = (__force struct resource_table *)r5_core->rsc_tbl_va;
 
 	/*
 	 * As of now resource table version 1 is expected. Don't fail to attach
@@ -841,7 +841,7 @@ static int zynqmp_r5_handle_rsc(struct rproc *rproc, u32 rsc_type, void *rsc,
 				int offset, int avail)
 {
 	struct zynqmp_r5_core *r5_core = rproc->priv;
-	void *rsc_offset = (r5_core->rsc_tbl_va + offset);
+	void *rsc_offset = (__force void *)(r5_core->rsc_tbl_va + offset);
 
 	if (rsc_type != XLNX_RPROC_FW_CRASH_REPORT)
 		return RSC_IGNORED;
