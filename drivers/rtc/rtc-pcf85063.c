@@ -238,8 +238,7 @@ static irqreturn_t pcf85063_rtc_handle_irq(int irq, void *dev_id)
 	if (val & PCF85063_CTRL2_AF) {
 		rtc_update_irq(pcf85063->rtc, 1, RTC_IRQF | RTC_AF);
 		regmap_update_bits(pcf85063->regmap, PCF85063_REG_CTRL2,
-				   PCF85063_CTRL2_AIE | PCF85063_CTRL2_AF,
-				   0);
+				   PCF85063_CTRL2_AF, 0);
 		return IRQ_HANDLED;
 	}
 
