@@ -75,6 +75,16 @@ union bpf_testmod_union_arg_2 {
 	struct bpf_testmod_struct_arg_2 arg;
 };
 
+struct bpf_testmod_oob {
+	__u8 data;
+	union {
+		__u8 redzone_1;
+		__u16 redzone_2;
+		__u32 redzone_4;
+		__u64 redzone_8;
+	};
+};
+
 __bpf_hook_start();
 
 noinline int
@@ -334,6 +344,47 @@ __bpf_kfunc void bpf_kfunc_put_default_trusted_ptr_test(struct prog_test_member 
 	 * semantics. We're simply wanting to simulate a BPF kfunc that takes a
 	 * struct prog_test_member pointer as an argument.
 	 */
+}
+
+#ifdef CONFIG_BPF_JIT_KASAN
+
+extern void kasan_poison(const void *addr, size_t size, u8 value, bool init);
+
+#define KASAN_SLAB_FREE 0xFB
+
+__bpf_kfunc void bpf_kfunc_kasan_poison(void *mem, u32 mem__sz)
+{
+	kasan_poison(mem, mem__sz, KASAN_SLAB_FREE, false);
+}
+
+__bpf_kfunc void bpf_kfunc_kasan_unpoison(void *mem, u32 mem__sz)
+{
+	kasan_poison(mem, mem__sz, 0x00, false);
+}
+#else
+__bpf_kfunc void bpf_kfunc_kasan_poison(void *mem, u32 mem__sz) { }
+__bpf_kfunc void bpf_kfunc_kasan_unpoison(void *mem, u32 mem__sz) { }
+#endif
+
+__bpf_kfunc struct bpf_testmod_oob *bpf_testmod_oob_alloc(void)
+{
+	struct bpf_testmod_oob *p;
+
+	/*
+	 * Only allocate size of data (and so, voluntarily use kmalloc
+	 * instead of kmalloc_obj), not the rest of the structure, so
+	 * that programs under test trying to access the rest of the
+	 * structure trigger OoB accesses
+	 */
+	p = kmalloc(sizeof(p->data), GFP_ATOMIC);
+	if (!p)
+		return NULL;
+	return p;
+}
+
+__bpf_kfunc void bpf_testmod_oob_free(struct bpf_testmod_oob *oob)
+{
+	kfree(oob);
 }
 
 __bpf_kfunc struct bpf_testmod_ctx *
@@ -869,6 +920,10 @@ BTF_ID_FLAGS(func, bpf_testmod_ops3_call_test_arena_stack)
 BTF_ID_FLAGS(func, bpf_testmod_ops3_call_test_arena_multislot)
 BTF_ID_FLAGS(func, bpf_kfunc_get_default_trusted_ptr_test);
 BTF_ID_FLAGS(func, bpf_kfunc_put_default_trusted_ptr_test);
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_poison)
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_unpoison)
+BTF_ID_FLAGS(func, bpf_testmod_oob_alloc, KF_ACQUIRE | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_testmod_oob_free, KF_RELEASE)
 BTF_KFUNCS_END(bpf_testmod_common_kfunc_ids)
 
 BTF_ID_LIST(bpf_testmod_dtor_ids)
