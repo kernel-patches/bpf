@@ -2176,6 +2176,7 @@ static int ibmvmc_init_crq_queue(struct crq_server_adapter *adapter)
 	rc = vio_enable_interrupts(vdev);
 	if (rc != 0) {
 		dev_err(adapter->dev, "Error %d enabling interrupts!!!\n", rc);
+		free_irq(vdev->irq, (void *)adapter);
 		goto req_irq_failed;
 	}
 
