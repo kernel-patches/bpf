@@ -1364,17 +1364,17 @@
 			compatible = "nvidia,tegra194-hsp";
 			reg = <0x0 0x03c00000 0x0 0xa0000>;
 			interrupts = <GIC_SPI 176 IRQ_TYPE_LEVEL_HIGH>,
-			             <GIC_SPI 120 IRQ_TYPE_LEVEL_HIGH>,
-			             <GIC_SPI 121 IRQ_TYPE_LEVEL_HIGH>,
-			             <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>,
-			             <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>,
-			             <GIC_SPI 124 IRQ_TYPE_LEVEL_HIGH>,
-			             <GIC_SPI 125 IRQ_TYPE_LEVEL_HIGH>,
-			             <GIC_SPI 126 IRQ_TYPE_LEVEL_HIGH>,
-			             <GIC_SPI 127 IRQ_TYPE_LEVEL_HIGH>;
+				     <GIC_SPI 120 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 121 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 122 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 123 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 124 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 125 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 126 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 127 IRQ_TYPE_LEVEL_HIGH>;
 			interrupt-names = "doorbell", "shared0", "shared1", "shared2",
-			                  "shared3", "shared4", "shared5", "shared6",
-			                  "shared7";
+					  "shared3", "shared4", "shared5", "shared6",
+					  "shared7";
 			#mbox-cells = <2>;
 		};
 
@@ -1560,9 +1560,9 @@
 			compatible = "nvidia,tegra194-hsp";
 			reg = <0x0 0x0c150000 0x0 0x90000>;
 			interrupts = <GIC_SPI 133 IRQ_TYPE_LEVEL_HIGH>,
-			             <GIC_SPI 134 IRQ_TYPE_LEVEL_HIGH>,
-			             <GIC_SPI 135 IRQ_TYPE_LEVEL_HIGH>,
-			             <GIC_SPI 136 IRQ_TYPE_LEVEL_HIGH>;
+				     <GIC_SPI 134 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 135 IRQ_TYPE_LEVEL_HIGH>,
+				     <GIC_SPI 136 IRQ_TYPE_LEVEL_HIGH>;
 			/*
 			 * Shared interrupt 0 is routed only to AON/SPE, so
 			 * we only have 4 shared interrupts for the CCPLEX.

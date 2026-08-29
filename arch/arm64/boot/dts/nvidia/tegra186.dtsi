@@ -1517,7 +1517,7 @@
 		      <0x0 0x13e10000 0x0 0x10000>;
 		reg-names = "hypervisor", "vm";
 		interrupts = <GIC_SPI 265 IRQ_TYPE_LEVEL_HIGH>,
-		             <GIC_SPI 263 IRQ_TYPE_LEVEL_HIGH>;
+			     <GIC_SPI 263 IRQ_TYPE_LEVEL_HIGH>;
 		interrupt-names = "syncpt", "host1x";
 		clocks = <&bpmp TEGRA186_CLK_HOST1X>;
 		clock-names = "host1x";

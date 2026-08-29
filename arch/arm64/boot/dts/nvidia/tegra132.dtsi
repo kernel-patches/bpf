@@ -644,7 +644,7 @@
 		reg = <0x0 0x70030000 0x0 0x10000>;
 		interrupts = <GIC_SPI 81 IRQ_TYPE_LEVEL_HIGH>;
 		clocks = <&tegra_car TEGRA124_CLK_HDA>,
-		         <&tegra_car TEGRA124_CLK_HDA2HDMI>,
+			 <&tegra_car TEGRA124_CLK_HDA2HDMI>,
 			 <&tegra_car TEGRA124_CLK_HDA2CODEC_2X>;
 		clock-names = "hda", "hda2hdmi", "hda2codec_2x";
 		resets = <&tegra_car 125>, /* hda */
@@ -872,7 +872,7 @@
 			     <GIC_SPI 51 IRQ_TYPE_LEVEL_HIGH>;
 		interrupt-names = "thermal", "edp";
 		clocks = <&tegra_car TEGRA124_CLK_TSENSOR>,
-		         <&tegra_car TEGRA124_CLK_SOC_THERM>;
+			 <&tegra_car TEGRA124_CLK_SOC_THERM>;
 		clock-names = "tsensor", "soctherm";
 		resets = <&tegra_car 78>;
 		reset-names = "soctherm";
