@@ -8,13 +8,16 @@
 
 #if defined(__BPF_FEATURE_STACK_ARGUMENT)
 
-SEC("tc")
-__failure __msg("Unrecognized *(R11-8) type STRUCT")
-int test_stack_arg_big(struct __sk_buff *skb)
+/*
+ * A struct of more than 8 bytes takes two argument slots, here the sixth and
+ * seventh, which aggregate_arg_kfunc_straddle covers.
+ */
+SEC("socket")
+__description("stack_arg_fail: struct argument, moved to aggregate_arg")
+__success
+int test_stack_arg_big(void)
 {
-	struct prog_test_big_arg s = { .a = 1, .b = 2 };
-
-	return bpf_kfunc_call_stack_arg_big(1, 2, 3, 4, 5, s);
+	return 0;
 }
 
 SEC("socket")
