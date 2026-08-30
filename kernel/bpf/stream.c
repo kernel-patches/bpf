@@ -6,6 +6,7 @@
 #include <linux/filter.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/gfp.h>
+#include <linux/irq_work.h>
 #include <linux/memory.h>
 #include <linux/mutex.h>
 #include <linux/poll.h>
@@ -76,6 +77,17 @@ static void bpf_stream_release_capacity(struct bpf_stream *stream, int len)
 	atomic_sub(len, &stream->capacity);
 }
 
+static void bpf_stream_notify(struct irq_work *work)
+{
+	struct bpf_stream *stream = container_of(work, struct bpf_stream, notify_work);
+
+	/*
+	 * Stream writers can run in NMI context, while wait queue callbacks may
+	 * acquire locks. Defer those callbacks to irq_work context.
+	 */
+	wake_up_interruptible_poll(&stream->waitq, EPOLLIN | EPOLLRDNORM);
+}
+
 static int bpf_stream_push_str(struct bpf_stream *stream, const char *str, int len)
 {
 	int ret = bpf_stream_consume_capacity(stream, len);
@@ -87,7 +99,7 @@ static int bpf_stream_push_str(struct bpf_stream *stream, const char *str, int l
 	if (ret)
 		bpf_stream_release_capacity(stream, len);
 	else if (len)
-		wake_up_interruptible_poll(&stream->waitq, EPOLLIN | EPOLLRDNORM);
+		irq_work_queue(&stream->notify_work);
 
 	return ret;
 }
@@ -230,6 +242,7 @@ static void bpf_stream_put(struct bpf_stream *stream)
 	if (refcount_dec_and_test(&stream->refcnt)) {
 		struct llist_node *list;
 
+		irq_work_sync(&stream->notify_work);
 		list = llist_del_all(&stream->log);
 		bpf_stream_free_list(list);
 		bpf_stream_free_list(stream->backlog_head);
@@ -402,6 +415,7 @@ int bpf_prog_stream_init(struct bpf_prog *prog, gfp_t gfp_extra_flags)
 		init_llist_head(&stream->log);
 		mutex_init(&stream->lock);
 		init_waitqueue_head(&stream->waitq);
+		init_irq_work(&stream->notify_work, bpf_stream_notify);
 		prog->aux->stream[i] = stream;
 	}
 	return 0;
@@ -482,7 +496,7 @@ int bpf_stream_stage_commit(struct bpf_stream_stage *ss, struct bpf_prog *prog,
 		list = tail;
 	}
 	llist_add_batch(head, tail, &stream->log);
-	wake_up_interruptible_poll(&stream->waitq, EPOLLIN | EPOLLRDNORM);
+	irq_work_queue(&stream->notify_work);
 	return 0;
 }
 

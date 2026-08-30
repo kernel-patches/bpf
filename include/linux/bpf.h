@@ -17,6 +17,7 @@
 #include <linux/numa.h>
 #include <linux/mm_types.h>
 #include <linux/wait.h>
+#include <linux/irq_work_types.h>
 #include <linux/refcount.h>
 #include <linux/mutex.h>
 #include <linux/module.h>
@@ -1719,6 +1720,7 @@ struct bpf_stream {
 	struct llist_node *backlog_head; /* list of in-flight stream elements in FIFO order */
 	struct llist_node *backlog_tail; /* tail of the list above */
 	wait_queue_head_t waitq;
+	struct irq_work notify_work;
 	bool dead;
 };
 
