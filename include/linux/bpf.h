@@ -1713,7 +1713,8 @@ enum {
 
 struct bpf_stream {
 	refcount_t refcnt;
-	atomic_t capacity;
+	atomic_t capacity;	/* bytes reserved against the stream limit */
+	atomic_t readable;	/* published bytes available to readers */
 	struct llist_head log;	/* list of in-flight stream elements in LIFO order */
 
 	struct mutex lock;  /* lock protecting backlog_{head,tail} */

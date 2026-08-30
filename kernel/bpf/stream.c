@@ -88,6 +88,21 @@ static void bpf_stream_notify(struct irq_work *work)
 	wake_up_interruptible_poll(&stream->waitq, EPOLLIN | EPOLLRDNORM);
 }
 
+static int bpf_stream_readable_bytes(struct bpf_stream *stream)
+{
+	return atomic_read_acquire(&stream->readable);
+}
+
+static void bpf_stream_publish(struct bpf_stream *stream, int len)
+{
+	if (!len)
+		return;
+
+	/* Pairs with atomic_read_acquire() in bpf_stream_readable_bytes(). */
+	(void)atomic_add_return_release(len, &stream->readable);
+	irq_work_queue(&stream->notify_work);
+}
+
 static int bpf_stream_push_str(struct bpf_stream *stream, const char *str, int len)
 {
 	int ret = bpf_stream_consume_capacity(stream, len);
@@ -98,8 +113,8 @@ static int bpf_stream_push_str(struct bpf_stream *stream, const char *str, int l
 	ret = __bpf_stream_push_str(&stream->log, str, len);
 	if (ret)
 		bpf_stream_release_capacity(stream, len);
-	else if (len)
-		irq_work_queue(&stream->notify_work);
+	else
+		bpf_stream_publish(stream, len);
 
 	return ret;
 }
@@ -176,14 +191,16 @@ static bool bpf_stream_consume_elem(struct bpf_stream_elem *elem, int *len)
 
 static int bpf_stream_read(struct bpf_stream *stream, void __user *buf, int len)
 {
-	int rem_len = len, cons_len, ret = 0;
+	int read_len, rem_len, cons_len, ret = 0;
 	struct bpf_stream_elem *elem = NULL;
 	struct llist_node *node;
 
 	mutex_lock(&stream->lock);
+	read_len = min(len, bpf_stream_readable_bytes(stream));
+	rem_len = read_len;
 
 	while (rem_len) {
-		int pos = len - rem_len;
+		int pos = read_len - rem_len;
 		int chunk, n;
 		bool cont;
 
@@ -205,7 +222,7 @@ static int bpf_stream_read(struct bpf_stream *stream, void __user *buf, int len)
 			/* Keep any successfully copied bytes; -EFAULT only if none. */
 			elem->consumed_len -= n;
 			rem_len += n;
-			ret = (len == rem_len) ? -EFAULT : 0;
+			ret = (read_len == rem_len) ? -EFAULT : 0;
 			break;
 		}
 
@@ -216,8 +233,9 @@ static int bpf_stream_read(struct bpf_stream *stream, void __user *buf, int len)
 		bpf_stream_free_elem(elem);
 	}
 
+	atomic_sub(read_len - rem_len, &stream->readable);
 	mutex_unlock(&stream->lock);
-	return ret ? ret : len - rem_len;
+	return ret ? ret : read_len - rem_len;
 }
 
 int bpf_prog_stream_read(struct bpf_prog *prog, enum bpf_stream_id stream_id, void __user *buf, u32 len)
@@ -234,7 +252,7 @@ int bpf_prog_stream_read(struct bpf_prog *prog, enum bpf_stream_id stream_id, vo
 
 static bool bpf_stream_has_data(struct bpf_stream *stream)
 {
-	return atomic_read(&stream->capacity) > 0;
+	return bpf_stream_readable_bytes(stream) > 0;
 }
 
 static void bpf_stream_put(struct bpf_stream *stream)
@@ -412,6 +430,7 @@ int bpf_prog_stream_init(struct bpf_prog *prog, gfp_t gfp_extra_flags)
 
 		refcount_set(&stream->refcnt, 1);
 		atomic_set(&stream->capacity, 0);
+		atomic_set(&stream->readable, 0);
 		init_llist_head(&stream->log);
 		mutex_init(&stream->lock);
 		init_waitqueue_head(&stream->waitq);
@@ -496,7 +515,7 @@ int bpf_stream_stage_commit(struct bpf_stream_stage *ss, struct bpf_prog *prog,
 		list = tail;
 	}
 	llist_add_batch(head, tail, &stream->log);
-	irq_work_queue(&stream->notify_work);
+	bpf_stream_publish(stream, ss->len);
 	return 0;
 }
 
