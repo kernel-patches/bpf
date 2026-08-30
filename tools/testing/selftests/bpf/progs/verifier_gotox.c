@@ -47,6 +47,61 @@ DEFINE_SIMPLE_JUMP_TABLE_PROG(reserved_field_src_reg,      BPF_REG_1, 0, 0, __fa
 DEFINE_SIMPLE_JUMP_TABLE_PROG(reserved_field_non_zero_off, BPF_REG_0, 1, 0, __failure __msg("BPF_JA|BPF_X uses reserved fields"))
 DEFINE_SIMPLE_JUMP_TABLE_PROG(reserved_field_non_zero_imm, BPF_REG_0, 0, 1, __failure __msg("BPF_JA|BPF_X uses reserved fields"))
 
+SEC("socket")
+__success __retval(0)
+__naked void jump_table_compiler_layout(void)
+{
+	asm volatile ("						        \
+	.pushsection .jumptables,\"\",@progbits;			\
+jt_l1_%=:								\
+	.quad l1_%= - socket;						\
+	.size jt_l1_%=, 8;						\
+	.global jt_l1_%=;						\
+jt_l2_%=:								\
+	.quad l2_%= - socket;						\
+	.size jt_l2_%=, 8;						\
+	.global jt_l2_%=;						\
+	.popsection;							\
+									\
+	*(u64 *)(r10 - 8) = r1;						\
+	*(u32 *)(r10 - 20) = 0;						\
+	r1 = *(u64 *)(r10 - 8);						\
+	if r1 == 0 goto select_l2_%=;					\
+	goto select_l1_%=;						\
+select_l1_%=:								\
+	r1 = jt_l1_%= ll;						\
+	r1 = *(u64 *)(r1 + 0);						\
+	*(u64 *)(r10 - 16) = r1;					\
+	goto selected_%=;						\
+select_l2_%=:								\
+	r1 = jt_l2_%= ll;						\
+	r1 = *(u64 *)(r1 + 0);						\
+	*(u64 *)(r10 - 16) = r1;					\
+	goto selected_%=;						\
+selected_%=:								\
+	r1 = *(u64 *)(r10 - 16);					\
+	*(u64 *)(r10 - 32) = r1;					\
+	goto dispatch_%=;						\
+l1_%=:									\
+	w1 = *(u32 *)(r10 - 20);					\
+	w1 += 1;							\
+	*(u32 *)(r10 - 20) = w1;					\
+	goto l2_%=;							\
+l2_%=:									\
+	w1 = *(u32 *)(r10 - 20);					\
+	w1 += 2;							\
+	*(u32 *)(r10 - 20) = w1;					\
+	w0 = 0;								\
+	exit;								\
+dispatch_%=:								\
+	r1 = *(u64 *)(r10 - 32);					\
+	.8byte %[gotox_r1];						\
+"	:
+	: __imm_insn(gotox_r1, BPF_RAW_INSN(BPF_JMP | BPF_JA | BPF_X,
+					    BPF_REG_1, 0, 0, 0))
+	: __clobber_all);
+}
+
 /*
  * Gotox is forbidden when there is no jump table loaded
  * which points to the sub-function where the gotox is used
