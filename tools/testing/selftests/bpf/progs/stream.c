@@ -44,6 +44,7 @@ struct {
 		  _X64 _X64 _X64 _X64 _X64 _X64 _X64 _X64)
 
 int size;
+int nmi_stream_prints;
 u64 fault_addr;
 void *arena_ptr;
 
@@ -122,6 +123,15 @@ int stream_syscall(void *ctx)
 {
 	bpf_stream_printk(BPF_STDOUT, "foo");
 	return 0;
+}
+
+SEC("perf_event")
+int stream_nmi(void *ctx)
+{
+	if (nmi_stream_prints)
+		return 0;
+	nmi_stream_prints = 1;
+	return bpf_stream_printk(BPF_STDOUT, "nmi");
 }
 
 SEC("syscall")
