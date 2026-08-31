@@ -8,6 +8,7 @@
  */
 
 #include <linux/compat.h>
+#include <linux/bpf_lsm.h>
 #include <linux/etherdevice.h>
 #include <linux/module.h>
 #include <linux/types.h>
@@ -3329,6 +3330,10 @@ dev_ethtool_locked(struct net *net, struct net_device *dev,
 	}
 
 	netdev_assert_locked_ops_compat(dev);
+
+	rc = bpf_lsm_hook(ethtool_ioctl, dev, ethcmd, sub_cmd);
+	if (rc)
+		return rc;
 
 	if (dev->dev.parent)
 		pm_runtime_get_sync(dev->dev.parent);

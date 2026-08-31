@@ -237,6 +237,9 @@ int ethnl_set_features(struct sk_buff *skb, struct genl_info *info)
 
 	rtnl_lock();
 	netdev_lock_ops(dev);
+	ret = ethnl_bpf_lsm_doit(&req_info, info->genlhdr->cmd);
+	if (ret)
+		goto out_unlock;
 	ret = ethnl_ops_begin(dev);
 	if (ret < 0)
 		goto out_unlock;

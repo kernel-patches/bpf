@@ -352,6 +352,10 @@ static int ethnl_tsinfo_dump_one_phydev(struct sk_buff *skb,
 					struct netlink_callback *cb)
 {
 	struct ethnl_tsinfo_dump_ctx *ctx = (void *)cb->ctx;
+	struct ethnl_req_info hook_req_info = {
+		.dev = dev,
+		.phy_index = phydev->phyindex,
+	};
 	struct tsinfo_reply_data *reply_data;
 	struct tsinfo_req_info *req_info;
 	void *ehdr = NULL;
@@ -362,6 +366,11 @@ static int ethnl_tsinfo_dump_one_phydev(struct sk_buff *skb,
 
 	reply_data = ctx->reply_data;
 	req_info = ctx->req_info;
+	ret = ethnl_bpf_lsm_dump(dev, hook_req_info.phy_index,
+				 ETHTOOL_MSG_TSINFO_GET);
+	if (ret)
+		return ret;
+
 	ehdr = ethnl_tsinfo_prepare_dump(skb, dev, reply_data, cb);
 	if (IS_ERR(ehdr))
 		return PTR_ERR(ehdr);
@@ -401,6 +410,10 @@ static int ethnl_tsinfo_dump_one_netdev(struct sk_buff *skb,
 
 	reply_data = ctx->reply_data;
 	req_info = ctx->req_info;
+	ret = ethnl_bpf_lsm_dump(dev, 0, ETHTOOL_MSG_TSINFO_GET);
+	if (ret)
+		return ret;
+
 	for (; ctx->pos_phcqualifier < HWTSTAMP_PROVIDER_QUALIFIER_CNT;
 	     ctx->pos_phcqualifier++) {
 		if (!net_support_hwtstamp_qualifier(dev,

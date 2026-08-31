@@ -10,4 +10,9 @@
 LSM_HOOK(int, 0, genl_family_rcv_msg, const struct genl_family *family,
 	 const struct net *net, u32 cmd, u16 nlmsg_flags)
 
+LSM_HOOK(int, 0, ethtool_ioctl, const struct net_device *dev, u32 cmd, u32 sub_cmd)
+LSM_HOOK(int, 0, ethtool_netlink_doit, const struct net_device *dev__nullable, u32 cmd,
+	 u32 phy_index)
+LSM_HOOK(int, 0, ethtool_netlink_dump, const struct net_device *dev, u32 cmd, u32 phy_index)
+
 #endif /* CONFIG_NET */

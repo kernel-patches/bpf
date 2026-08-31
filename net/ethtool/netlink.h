@@ -5,6 +5,7 @@
 
 #include <linux/ethtool_netlink.h>
 #include <linux/netdevice.h>
+#include <linux/bpf_lsm.h>
 #include <net/genetlink.h>
 #include <net/sock.h>
 
@@ -353,6 +354,30 @@ struct ethnl_sock_priv {
 
 int ethnl_sock_priv_set(struct sk_buff *skb, struct net *net, u32 portid,
 			enum ethnl_sock_type type);
+
+static inline int ethnl_bpf_lsm_doit(const struct ethnl_req_info *req_info, u32 cmd)
+{
+	return bpf_lsm_hook(ethtool_netlink_doit, req_info->dev, cmd, req_info->phy_index);
+}
+
+static inline int ethnl_bpf_lsm_dump(const struct net_device *dev,
+				     u32 phy_index,
+				     u32 cmd)
+{
+	int ret;
+
+	ret = bpf_lsm_hook(ethtool_netlink_dump, dev, cmd, phy_index);
+
+	/*
+	 * For a BPF policy this doesn't make any sense to return -EOPNOTSUPP.
+	 * But if it does, it will not be treated as an error by ethtool code,
+	 * so patch it here.
+	 */
+	if (ret == -EOPNOTSUPP)
+		ret = -EPERM;
+
+	return ret;
+}
 
 /**
  * struct ethnl_request_ops - unified handling of GET and SET requests

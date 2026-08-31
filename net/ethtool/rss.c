@@ -475,6 +475,10 @@ int ethnl_rss_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 		if (ctx->match_ifindex && ctx->match_ifindex != ctx->ifindex)
 			break;
 
+		ret = ethnl_bpf_lsm_dump(dev, 0, ETHTOOL_MSG_RSS_GET);
+		if (ret)
+			break;
+
 		ret = rss_dump_one_dev(skb, cb, dev);
 		if (ret)
 			break;
@@ -1035,6 +1039,9 @@ int ethnl_rss_create_doit(struct sk_buff *skb, struct genl_info *info)
 		goto exit_free_dev;
 
 	netdev_lock_ops_compat(dev);
+	ret = ethnl_bpf_lsm_doit(&req.base, info->genlhdr->cmd);
+	if (ret)
+		goto exit_dev_unlock;
 
 	ret = ethnl_ops_begin(dev);
 	if (ret < 0)
@@ -1176,6 +1183,9 @@ int ethnl_rss_delete_doit(struct sk_buff *skb, struct genl_info *info)
 	}
 
 	netdev_lock_ops_compat(dev);
+	ret = ethnl_bpf_lsm_doit(&req, info->genlhdr->cmd);
+	if (ret)
+		goto exit_dev_unlock;
 
 	ret = ethnl_ops_begin(dev);
 	if (ret < 0)

@@ -74,6 +74,9 @@ int ethnl_act_cable_test(struct sk_buff *skb, struct genl_info *info)
 	dev = req_info.dev;
 
 	netdev_lock_ops_compat(dev);
+	ret = ethnl_bpf_lsm_doit(&req_info, info->genlhdr->cmd);
+	if (ret)
+		goto out_unlock;
 	phydev = ethnl_req_get_phydev(&req_info, tb,
 				      ETHTOOL_A_CABLE_TEST_HEADER,
 				      info->extack);
@@ -341,6 +344,9 @@ int ethnl_act_cable_test_tdr(struct sk_buff *skb, struct genl_info *info)
 		goto out_dev_put;
 
 	netdev_lock_ops_compat(dev);
+	ret = ethnl_bpf_lsm_doit(&req_info, info->genlhdr->cmd);
+	if (ret)
+		goto out_unlock;
 	phydev = ethnl_req_get_phydev(&req_info, tb,
 				      ETHTOOL_A_CABLE_TEST_TDR_HEADER,
 				      info->extack);

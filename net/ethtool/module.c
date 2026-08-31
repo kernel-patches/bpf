@@ -430,6 +430,9 @@ int ethnl_act_module_fw_flash(struct sk_buff *skb, struct genl_info *info)
 	dev = req_info.dev;
 
 	netdev_lock_ops_compat(dev);
+	ret = ethnl_bpf_lsm_doit(&req_info, info->genlhdr->cmd);
+	if (ret)
+		goto out_unlock;
 	ret = ethnl_ops_begin(dev);
 	if (ret < 0)
 		goto out_unlock;
