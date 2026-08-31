@@ -2252,12 +2252,20 @@ static bool tcp_nagle_check(bool partial, const struct tcp_sock *tp,
  * in bigger TSO bursts. We we cut the RTT-based allowance in half
  * for every 2^9 usec (aka 512 us) of RTT, so that the RTT-based allowance
  * is below 1500 bytes after 6 * ~500 usec = 3ms.
+ *
+ * The min_tso_segs is floored to 1 to avoid surprising conversion. Also,
+ * BPF callers may pass mss_now == 0. In that case the function returns the
+ * sanitized min_tso_segs value and skips autosizing.
  */
-u32 tcp_tso_autosize(const struct sock *sk, unsigned int mss_now,
-		     int min_tso_segs)
+__bpf_kfunc u32 tcp_tso_autosize(const struct sock *sk, unsigned int mss_now,
+				 int min_tso_segs)
 {
+	u32 min_tso = max(min_tso_segs, 1);
 	unsigned long bytes;
 	u32 r;
+
+	if (unlikely(!mss_now))
+		return min_tso;
 
 	bytes = READ_ONCE(sk->sk_pacing_rate) >> READ_ONCE(sk->sk_pacing_shift);
 
@@ -2267,7 +2275,7 @@ u32 tcp_tso_autosize(const struct sock *sk, unsigned int mss_now,
 
 	bytes = min_t(unsigned long, bytes, sk->sk_gso_max_size);
 
-	return max_t(u32, bytes / mss_now, min_tso_segs);
+	return max_t(u32, bytes / mss_now, min_tso);
 }
 EXPORT_SYMBOL_GPL(tcp_tso_autosize);
 
