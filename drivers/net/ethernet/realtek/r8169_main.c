@@ -114,6 +114,7 @@
 #define RTL_INT_HW_ID		0xd006
 #define RTL_INT_HW_ID_MASK	0x00ff
 #define RTL_INT_HW_ID_8116AF	0x0000
+#define RTL_PM_CTRL_D3HOT	0x03
 
 static const struct rtl_chip_info {
 	u32 mask;
@@ -3773,6 +3774,41 @@ static void rtl_hw_start_8168ep_3(struct rtl8169_private *tp)
 	r8168_mac_ocp_modify(tp, 0xe860, 0x0000, 0x0080);
 }
 
+static void rtl_lowpower_hidden_functions(struct pci_dev *pdev)
+{
+	unsigned int slot = PCI_SLOT(pdev->devfn);
+	struct pci_bus *bus = pdev->bus;
+	int func, pos;
+	u16 val;
+
+	for (func = 2; func < 8; func++) {
+		unsigned int devfn = PCI_DEVFN(slot, func);
+
+		pos = pci_bus_find_capability(bus, devfn, PCI_CAP_ID_EXP);
+		if (pos) {
+			pci_bus_read_config_word(bus, devfn, pos + PCI_EXP_LNKCTL, &val);
+
+			if (PCI_POSSIBLE_ERROR(val))
+				continue;
+
+			val |= (PCI_EXP_LNKCTL_ASPMC | PCI_EXP_LNKCTL_CLKREQ_EN);
+			pci_bus_write_config_word(bus, devfn, pos + PCI_EXP_LNKCTL, val);
+		}
+
+		pos = pci_bus_find_capability(bus, devfn, PCI_CAP_ID_PM);
+		if (pos) {
+			pci_bus_read_config_word(bus, devfn, pos + PCI_PM_CTRL, &val);
+
+			if (PCI_POSSIBLE_ERROR(val))
+				continue;
+
+			val &= ~PCI_PM_CTRL_STATE_MASK;
+			val |= (RTL_PM_CTRL_D3HOT | PCI_PM_CTRL_PME_STATUS);
+			pci_bus_write_config_word(bus, devfn, pos + PCI_PM_CTRL, val);
+		}
+	}
+}
+
 static void rtl_hw_start_8117(struct rtl8169_private *tp)
 {
 	static const struct ephy_info e_info_8117[] = {
@@ -5326,6 +5362,9 @@ static int rtl8169_resume(struct device *device)
 	/* Some chip versions may truncate packets without this initialization */
 	rtl_init_rxcfg(tp);
 
+	if (rtl_is_8116af(tp))
+		rtl_lowpower_hidden_functions(tp->pci_dev);
+
 	return rtl8169_runtime_resume(device);
 }
 
@@ -6189,6 +6228,9 @@ static int rtl_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 			    tp->dash_enabled ? "enabled" : "disabled");
 		rtl8168_driver_start(tp);
 	}
+
+	if (rtl_is_8116af(tp))
+		rtl_lowpower_hidden_functions(tp->pci_dev);
 
 	if (pci_dev_run_wake(pdev))
 		pm_runtime_put_sync(&pdev->dev);
