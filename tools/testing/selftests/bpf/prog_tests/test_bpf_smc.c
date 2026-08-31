@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <test_progs.h>
 #include <linux/genetlink.h>
+#include "netlink_helpers.h"
 #include "network_helpers.h"
 #include "bpf_smc.skel.h"
 
@@ -44,105 +45,28 @@ enum {
 	SMC_NLA_EID_TABLE_ENTRY,    /* string */
 };
 
-struct msgtemplate {
-	struct nlmsghdr n;
-	struct genlmsghdr g;
-	char buf[1024];
-};
-
-#define GENLMSG_DATA(glh)	((void *)(NLMSG_DATA(glh) + GENL_HDRLEN))
-#define GENLMSG_PAYLOAD(glh)	(NLMSG_PAYLOAD(glh, 0) - GENL_HDRLEN)
-#define NLA_DATA(na)		((void *)((char *)(na) + NLA_HDRLEN))
-#define NLA_PAYLOAD(len)	((len) - NLA_HDRLEN)
-
 #define SMC_GENL_FAMILY_NAME	"SMC_GEN_NETLINK"
+#define SMC_GENL_FAMILY_VERSION	1
 #define SMC_BPFTEST_UEID	"SMC-BPFTEST-UEID"
+#define SMC_BPFTEST_UEID_LEN	32
 
-static uint16_t smc_nl_family_id = -1;
-
-static int send_cmd(int fd, __u16 nlmsg_type, __u32 nlmsg_pid,
-		    __u16 nlmsg_flags, __u8 genl_cmd, __u16 nla_type,
-		    void *nla_data, int nla_len)
-{
-	struct nlattr *na;
-	struct sockaddr_nl nladdr;
-	int r, buflen;
-	char *buf;
-
-	struct msgtemplate msg = {0};
-
-	msg.n.nlmsg_len = NLMSG_LENGTH(GENL_HDRLEN);
-	msg.n.nlmsg_type = nlmsg_type;
-	msg.n.nlmsg_flags = nlmsg_flags;
-	msg.n.nlmsg_seq = 0;
-	msg.n.nlmsg_pid = nlmsg_pid;
-	msg.g.cmd = genl_cmd;
-	msg.g.version = 1;
-	na = (struct nlattr *)GENLMSG_DATA(&msg);
-	na->nla_type = nla_type;
-	na->nla_len = nla_len + 1 + NLA_HDRLEN;
-	memcpy(NLA_DATA(na), nla_data, nla_len);
-	msg.n.nlmsg_len += NLMSG_ALIGN(na->nla_len);
-
-	buf = (char *)&msg;
-	buflen = msg.n.nlmsg_len;
-	memset(&nladdr, 0, sizeof(nladdr));
-	nladdr.nl_family = AF_NETLINK;
-
-	while ((r = sendto(fd, buf, buflen, 0, (struct sockaddr *)&nladdr,
-			   sizeof(nladdr))) < buflen) {
-		if (r > 0) {
-			buf += r;
-			buflen -= r;
-		} else if (errno != EAGAIN) {
-			return -1;
-		}
-	}
-	return 0;
-}
+static __u16 smc_nl_family_id;
 
 static bool get_smc_nl_family_id(void)
 {
-	struct sockaddr_nl nl_src;
-	struct msgtemplate msg;
-	struct nlattr *nl;
 	int fd, ret;
 	pid_t pid;
 
-	fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
+	pid = getpid();
+	fd = genl_open(pid);
 	if (!ASSERT_OK_FD(fd, "nl_family socket"))
 		return false;
 
-	pid = getpid();
-
-	memset(&nl_src, 0, sizeof(nl_src));
-	nl_src.nl_family = AF_NETLINK;
-	nl_src.nl_pid = pid;
-
-	ret = bind(fd, (struct sockaddr *)&nl_src, sizeof(nl_src));
-	if (!ASSERT_OK(ret, "nl_family bind"))
+	ret = genl_resolve_family(fd, SMC_GENL_FAMILY_NAME);
+	if (!ASSERT_GT(ret, 0, "nl_family query"))
 		goto fail;
 
-	ret = send_cmd(fd, GENL_ID_CTRL, pid,
-		       NLM_F_REQUEST, CTRL_CMD_GETFAMILY,
-		       CTRL_ATTR_FAMILY_NAME, (void *)SMC_GENL_FAMILY_NAME,
-		       strlen(SMC_GENL_FAMILY_NAME));
-	if (!ASSERT_OK(ret, "nl_family query"))
-		goto fail;
-
-	ret = recv(fd, &msg, sizeof(msg), 0);
-	if (msg.n.nlmsg_type == NLMSG_ERROR)
-		goto fail;
-	if (!ASSERT_FALSE(ret < 0 || !NLMSG_OK(&msg.n, ret),
-			  "nl_family response"))
-		goto fail;
-
-	nl = (struct nlattr *)GENLMSG_DATA(&msg);
-	nl = (struct nlattr *)((char *)nl + NLA_ALIGN(nl->nla_len));
-	if (!ASSERT_EQ(nl->nla_type, CTRL_ATTR_FAMILY_ID, "nl_family nla type"))
-		goto fail;
-
-	smc_nl_family_id = *(uint16_t *)NLA_DATA(nl);
+	smc_nl_family_id = ret;
 	close(fd);
 	return true;
 fail:
@@ -152,56 +76,48 @@ fail:
 
 static bool smc_ueid(int op)
 {
-	struct sockaddr_nl nl_src;
-	struct msgtemplate msg;
-	struct nlmsgerr *err;
-	char test_ueid[32];
+	char test_ueid[SMC_BPFTEST_UEID_LEN + 1] = {};
+	struct genl_req req = {};
 	int fd, ret;
 	pid_t pid;
 
 	/* UEID required */
-	memset(test_ueid, '\x20', sizeof(test_ueid));
-	memcpy(test_ueid, SMC_BPFTEST_UEID, strlen(SMC_BPFTEST_UEID));
-	fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_GENERIC);
+	memset(test_ueid, ' ', SMC_BPFTEST_UEID_LEN);
+	memcpy(test_ueid, SMC_BPFTEST_UEID, sizeof(SMC_BPFTEST_UEID) - 1);
+	pid = getpid();
+	fd = genl_open(pid);
 	if (!ASSERT_OK_FD(fd, "ueid socket"))
 		return false;
 
-	pid = getpid();
-	memset(&nl_src, 0, sizeof(nl_src));
-	nl_src.nl_family = AF_NETLINK;
-	nl_src.nl_pid = pid;
-
-	ret = bind(fd, (struct sockaddr *)&nl_src, sizeof(nl_src));
-	if (!ASSERT_OK(ret, "ueid bind"))
+	req.nlh.nlmsg_len = NLMSG_LENGTH(GENL_HDRLEN);
+	req.nlh.nlmsg_type = smc_nl_family_id;
+	req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+	req.nlh.nlmsg_pid = pid;
+	req.genl.cmd = op;
+	req.genl.version = SMC_GENL_FAMILY_VERSION;
+	ret = addattrstrz(&req.nlh, sizeof(req), SMC_NLA_EID_TABLE_ENTRY,
+			  test_ueid);
+	if (!ASSERT_OK(ret, "ueid attribute"))
 		goto fail;
 
-	ret = send_cmd(fd, smc_nl_family_id, pid,
-		       NLM_F_REQUEST | NLM_F_ACK, op, SMC_NLA_EID_TABLE_ENTRY,
-		       (void *)test_ueid, sizeof(test_ueid));
+	ret = genl_send(fd, &req.nlh);
 	if (!ASSERT_OK(ret, "ueid cmd"))
 		goto fail;
 
-	ret = recv(fd, &msg, sizeof(msg), 0);
-	if (!ASSERT_FALSE(ret < 0 ||
-			  !NLMSG_OK(&msg.n, ret), "ueid response"))
-		goto fail;
-
-	if (msg.n.nlmsg_type == NLMSG_ERROR) {
-		err = NLMSG_DATA(&msg);
-		switch (op) {
-		case SMC_NETLINK_REMOVE_UEID:
-			if (!ASSERT_FALSE((err->error && err->error != -ENOENT),
-					  "ueid remove"))
-				goto fail;
-			break;
-		case SMC_NETLINK_ADD_UEID:
-			if (!ASSERT_OK(err->error, "ueid add"))
-				goto fail;
-			break;
-		default:
-			break;
-		}
+	ret = genl_recv(fd, req.nlh.nlmsg_seq, smc_nl_family_id, false);
+	switch (op) {
+	case SMC_NETLINK_REMOVE_UEID:
+		if (!ASSERT_FALSE(ret && ret != -ENOENT, "ueid remove"))
+			goto fail;
+		break;
+	case SMC_NETLINK_ADD_UEID:
+		if (!ASSERT_OK(ret, "ueid add"))
+			goto fail;
+		break;
+	default:
+		break;
 	}
+
 	close(fd);
 	return true;
 fail:

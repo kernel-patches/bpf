@@ -3,8 +3,20 @@
 #define NETLINK_HELPERS_H
 
 #include <string.h>
+#include <linux/genetlink.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
+
+struct genl_req {
+	struct nlmsghdr nlh;
+	struct genlmsghdr genl;
+	char attrs[256];
+};
+
+int genl_open(__u32 pid);
+int genl_send(int fd, const struct nlmsghdr *nlh);
+int genl_recv(int fd, __u32 seq, __u16 family_id, bool dump);
+int genl_resolve_family(int fd, const char *name);
 
 struct rtnl_handle {
 	int			fd;

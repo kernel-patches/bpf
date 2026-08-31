@@ -8,10 +8,186 @@
 #include <errno.h>
 #include <time.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 
 #include "netlink_helpers.h"
 
 static int rcvbuf = 1024 * 1024;
+
+int genl_open(__u32 pid)
+{
+	struct sockaddr_nl local = {
+		.nl_family = AF_NETLINK,
+		.nl_pid = pid,
+	};
+	struct timeval timeout = {
+		.tv_sec = 1
+	};
+	int ret;
+	int fd;
+
+	fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_GENERIC);
+	if (fd < 0)
+		return -1;
+
+	if (bind(fd, (void *)&local, sizeof(local)))
+		goto err_close;
+
+	if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)))
+		goto err_close;
+
+	return fd;
+
+err_close:
+	ret = -errno;
+	close(fd);
+	return ret;
+}
+
+int genl_send(int fd, const struct nlmsghdr *nlh)
+{
+	struct sockaddr_nl kernel = {
+		.nl_family = AF_NETLINK
+	};
+	ssize_t sent;
+
+	sent = sendto(fd, nlh, nlh->nlmsg_len, 0, (void *)&kernel, sizeof(kernel));
+	if (sent < 0)
+		return -errno;
+	if (sent != nlh->nlmsg_len)
+		return -EIO;
+
+	return 0;
+}
+
+int genl_recv(int fd, __u32 seq, __u16 family_id, bool dump)
+{
+	char buf[64 * 1024];
+
+	for (;;) {
+		struct nlmsghdr *nlh;
+		int remaining;
+		ssize_t len;
+
+		len = recv(fd, buf, sizeof(buf), 0);
+		if (len < 0)
+			return -errno;
+		if (!len)
+			return -ENODATA;
+
+		remaining = len;
+		for (nlh = (struct nlmsghdr *)buf;
+		     NLMSG_OK(nlh, remaining);
+		     nlh = NLMSG_NEXT(nlh, remaining)) {
+			if (nlh->nlmsg_seq != seq)
+				continue;
+
+			if (nlh->nlmsg_type == NLMSG_ERROR) {
+				const struct nlmsgerr *nlerr = NLMSG_DATA(nlh);
+
+				if (NLMSG_PAYLOAD(nlh, 0) < sizeof(*nlerr))
+					return -EBADMSG;
+				if (nlerr->error || !dump)
+					return nlerr->error;
+				continue;
+			}
+
+			if (nlh->nlmsg_type == NLMSG_DONE) {
+				int done_err = 0;
+
+				if (NLMSG_PAYLOAD(nlh, 0) >= sizeof(done_err))
+					memcpy(&done_err, NLMSG_DATA(nlh),
+					       sizeof(done_err));
+				if (done_err)
+					return done_err;
+				return 0;
+			}
+
+			if (nlh->nlmsg_type == family_id) {
+				if (!dump)
+					return 0;
+			}
+		}
+		if (remaining)
+			return -EBADMSG;
+	}
+}
+
+int genl_resolve_family(int fd, const char *name)
+{
+	struct genl_req req = {};
+	char buf[4096];
+	struct nlmsghdr *nlh;
+	int remaining;
+	ssize_t len;
+	int err;
+
+	req.nlh.nlmsg_len = NLMSG_LENGTH(GENL_HDRLEN);
+	req.nlh.nlmsg_type = GENL_ID_CTRL;
+	req.nlh.nlmsg_flags = NLM_F_REQUEST;
+	req.nlh.nlmsg_seq = 1;
+	req.genl.cmd = CTRL_CMD_GETFAMILY;
+	req.genl.version = 2;
+	if (addattrstrz(&req.nlh, sizeof(req), CTRL_ATTR_FAMILY_NAME, name))
+		return -EMSGSIZE;
+
+	err = genl_send(fd, &req.nlh);
+	if (err)
+		return err;
+
+	len = recv(fd, buf, sizeof(buf), 0);
+	if (len < 0)
+		return -errno;
+	if (!len)
+		return -ENODATA;
+
+	remaining = len;
+	for (nlh = (struct nlmsghdr *)buf;
+	     NLMSG_OK(nlh, remaining);
+	     nlh = NLMSG_NEXT(nlh, remaining)) {
+		struct nlattr *attr;
+		int attr_len;
+
+		if (nlh->nlmsg_seq != req.nlh.nlmsg_seq)
+			continue;
+
+		if (nlh->nlmsg_type == NLMSG_ERROR) {
+			const struct nlmsgerr *nlerr = NLMSG_DATA(nlh);
+
+			if (NLMSG_PAYLOAD(nlh, 0) < sizeof(*nlerr))
+				return -EBADMSG;
+			return nlerr->error ?: -ENOENT;
+		}
+		if (nlh->nlmsg_type != GENL_ID_CTRL)
+			continue;
+		if (NLMSG_PAYLOAD(nlh, 0) < GENL_HDRLEN)
+			return -EBADMSG;
+
+		attr = (struct nlattr *)((char *)NLMSG_DATA(nlh) +
+					 GENL_HDRLEN);
+		attr_len = NLMSG_PAYLOAD(nlh, GENL_HDRLEN);
+		while (attr_len >= (int)sizeof(*attr) &&
+		       attr->nla_len >= sizeof(*attr) &&
+		       attr->nla_len <= attr_len) {
+			__u16 family_id;
+			int step;
+
+			if ((attr->nla_type & NLA_TYPE_MASK) ==
+			    CTRL_ATTR_FAMILY_ID &&
+			    attr->nla_len >= NLA_HDRLEN + sizeof(family_id)) {
+				memcpy(&family_id, (char *)attr + NLA_HDRLEN,
+				       sizeof(family_id));
+				return family_id;
+			}
+
+			step = NLA_ALIGN(attr->nla_len);
+			attr_len -= step;
+			attr = (struct nlattr *)((char *)attr + step);
+		}
+	}
+
+	return remaining ? -EBADMSG : -ENOENT;
+}
 
 void rtnl_close(struct rtnl_handle *rth)
 {
