@@ -1419,7 +1419,7 @@ irqreturn_t mei_me_irq_thread_handler(int irq, void *dev_id)
 }
 EXPORT_SYMBOL_GPL(mei_me_irq_thread_handler);
 
-#define MEI_POLL_ACTIVE_MS 100
+#define MEI_POLL_ACTIVE_MS 20
 #define MEI_POLL_IDLE_MS   500
 
 /**
