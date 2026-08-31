@@ -1441,9 +1441,9 @@ int mei_me_polling_thread(void *_dev)
 		struct mei_me_hw *hw = to_me_hw(dev);
 		u32 hcsr;
 
-		wait_event_timeout(hw->wait_active,
-				   hw->is_active || kthread_should_stop(),
-				   msecs_to_jiffies(MEI_POLLING_TIMEOUT_IDLE));
+		wait_event_interruptible_timeout(hw->wait_active,
+						 hw->is_active || kthread_should_stop(),
+						 msecs_to_jiffies(MEI_POLLING_TIMEOUT_IDLE));
 
 		if (kthread_should_stop())
 			break;
