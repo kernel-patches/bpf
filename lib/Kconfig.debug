@@ -2551,6 +2551,16 @@ config FFS_KUNIT_TEST
 	  For more information on KUnit and unit tests in general,
 	  please refer to Documentation/dev-tools/kunit/.
 
+config BARRIER_TIMEOUT_KUNIT_TEST
+	tristate "KUnit tests for smp_cond_load_*_timeout()" if !KUNIT_ALL_TESTS
+	depends on KUNIT
+	default KUNIT_ALL_TESTS
+	help
+	  Builds KUnit tests that validate wake-up and timeout handling paths in
+	  smp_cond_load_relaxed_timeout() and smp_cond_load_acquire_timeout().
+
+	  If unsure, say N.
+
 config TEST_KSTRTOX
 	tristate "Test kstrto*() family of functions at runtime"
 
