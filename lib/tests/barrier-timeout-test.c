@@ -156,7 +156,7 @@ static void expiry_param_to_desc(const struct smp_cond_expiry_params *p, char *d
 
 	snprintf(desc, KUNIT_PARAM_DESC_SIZE,
 		 "smp_cond_*_timeout: clock=%s,  timeout=%s, iterations %s",
-		 "synthetic", p->desc, iters);
+		 "synthetic/failing", p->desc, iters);
 }
 
 static void test_smp_cond_relaxed(struct kunit *test)
@@ -194,10 +194,56 @@ static void test_smp_cond_relaxed(struct kunit *test)
 		KUNIT_EXPECT_GE(test, runtime, p->timeout_ns);
 }
 
+/*
+ * Use a clock similar to the one used in rqspinlock where it start
+ * returning failure value once it goes beyond the timeout.
+ */
+static s64 failing_clock(const struct smp_cond_expiry_params *p,
+			 struct clock_state *clk)
+{
+	clk->end_time += clk->extra;
+	clk->niters++;
+
+	if ((u64)clk->end_time >= (u64)p->timeout_ns)
+		return -ETIMEDOUT;
+
+	return clk->end_time;
+}
+
+static void test_smp_cond_acquire_error(struct kunit *test)
+{
+	const struct smp_cond_expiry_params *p = test->param_value;
+	struct clock_state clk = {
+		.start_time = 0,
+		.end_time = 0,
+		.extra = p->clk_unit,
+		.niters = 0,
+	};
+	s64 ret = -ETIMEDOUT;
+
+	flag = 0;
+	smp_cond_load_acquire_timeout(&flag,
+				      0,
+				      (ret = failing_clock(p, &clk)),
+				      p->timeout_ns);
+
+	if (p->miniters != -1)
+		KUNIT_EXPECT_GE(test, clk.niters, p->miniters);
+	if (p->maxiters != -1)
+		KUNIT_EXPECT_LE(test, clk.niters, p->maxiters);
+
+	/*
+	 * flag is never updated so the clock should eventually
+	 * hit the timeout and error out.
+	 */
+	KUNIT_EXPECT_EQ(test, ret, -ETIMEDOUT);
+}
+
 KUNIT_ARRAY_PARAM(smp_cond_expiry_params, expiry_params_list, expiry_param_to_desc);
 static struct kunit_case barrier_timeout_test_cases[] = {
 	KUNIT_CASE_PARAM(test_smp_cond_timeout, smp_cond_update_params_gen_params),
 	KUNIT_CASE_PARAM(test_smp_cond_relaxed, smp_cond_expiry_params_gen_params),
+	KUNIT_CASE_PARAM(test_smp_cond_acquire_error, smp_cond_expiry_params_gen_params),
 	{}
 };
 
