@@ -530,6 +530,10 @@ static int htab_map_check_btf(struct bpf_map *map, const struct btf *btf,
 {
 	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
 
+	/* Hash maps have no use for a key-less BTF. */
+	if (btf_type_is_void(key_type))
+		return -EINVAL;
+
 	if (htab_is_prealloc(htab))
 		return 0;
 	/*
@@ -3110,6 +3114,10 @@ static int rhtab_map_check_btf(struct bpf_map *map, const struct btf *btf,
 			       const struct btf_type *value_type)
 {
 	struct bpf_rhtab *rhtab = container_of(map, struct bpf_rhtab, map);
+
+	/* Hash maps have no use for a key-less BTF. */
+	if (btf_type_is_void(key_type))
+		return -EINVAL;
 
 	return bpf_ma_set_dtor(map, &rhtab->ma, rhtab_mem_dtor);
 }
