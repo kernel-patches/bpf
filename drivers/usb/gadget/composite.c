@@ -2151,7 +2151,7 @@ unknown:
 		    w_index == WEBUSB_GET_URL &&
 		    w_value == WEBUSB_LANDING_PAGE_PRESENT &&
 		    ctrl->bRequest == cdev->b_webusb_vendor_code) {
-			unsigned int	landing_page_length;
+			unsigned int	url_length;
 			unsigned int	landing_page_offset;
 			struct webusb_url_descriptor *url_descriptor =
 					(struct webusb_url_descriptor *)cdev->req->buf;
@@ -2169,24 +2169,27 @@ unknown:
 				url_descriptor->bScheme = WEBUSB_URL_SCHEME_NONE;
 			}
 
-			landing_page_length = strnlen(cdev->landing_page,
-				sizeof(url_descriptor->URL)
-				- WEBUSB_URL_DESCRIPTOR_HEADER_LENGTH + landing_page_offset);
-
-			if (w_length < WEBUSB_URL_DESCRIPTOR_HEADER_LENGTH)
-				landing_page_length = landing_page_offset;
-			else if (w_length <
-				 WEBUSB_URL_DESCRIPTOR_HEADER_LENGTH + landing_page_length)
-				landing_page_length = w_length
-				- WEBUSB_URL_DESCRIPTOR_HEADER_LENGTH + landing_page_offset;
+			/*
+			 * The scheme prefix is encoded in bScheme and is not
+			 * emitted, so URL[] bounds what is left of the URL.
+			 */
+			url_length = strnlen(cdev->landing_page,
+					     sizeof(cdev->landing_page));
+			url_length -= landing_page_offset;
+			if (url_length > sizeof(url_descriptor->URL))
+				url_length = sizeof(url_descriptor->URL);
 
 			memcpy(url_descriptor->URL,
 				cdev->landing_page + landing_page_offset,
-				landing_page_length - landing_page_offset);
-			url_descriptor->bLength = landing_page_length
-				- landing_page_offset + WEBUSB_URL_DESCRIPTOR_HEADER_LENGTH;
+				url_length);
+			url_descriptor->bLength = url_length
+				+ WEBUSB_URL_DESCRIPTOR_HEADER_LENGTH;
 
-			value = url_descriptor->bLength;
+			/*
+			 * bLength describes the descriptor, not the transfer,
+			 * so only the reply is shortened to what was asked for.
+			 */
+			value = min_t(u16, w_length, url_descriptor->bLength);
 
 			goto check_value;
 		}
