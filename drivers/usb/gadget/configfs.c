@@ -1062,15 +1062,13 @@ static ssize_t webusb_landingPage_store(struct config_item *item, const char *pa
 				     size_t len)
 {
 	struct gadget_info *gi = webusb_item_to_gadget_info(item);
-	unsigned int bytes_to_strip = 0;
+	unsigned int scheme_len;
 	int l = len;
 
 	if (!len)
 		return len;
-	if (page[l - 1] == '\n') {
+	if (page[l - 1] == '\n')
 		--l;
-		++bytes_to_strip;
-	}
 
 	if (l > WEBUSB_URL_RAW_MAX_LENGTH) {
 		pr_err("webusb: landingPage URL too long\n");
@@ -1079,15 +1077,15 @@ static ssize_t webusb_landingPage_store(struct config_item *item, const char *pa
 
 	// validation
 	if (strncasecmp(page, "https://",  8) == 0)
-		bytes_to_strip = 8;
+		scheme_len = 8;
 	else if (strncasecmp(page, "http://", 7) == 0)
-		bytes_to_strip = 7;
+		scheme_len = 7;
 	else
-		bytes_to_strip = 0;
+		scheme_len = 0;
 
-	if (l > U8_MAX - WEBUSB_URL_DESCRIPTOR_HEADER_LENGTH + bytes_to_strip) {
+	if (l > U8_MAX - WEBUSB_URL_DESCRIPTOR_HEADER_LENGTH + scheme_len) {
 		pr_err("webusb: landingPage URL %d bytes too long for given URL scheme\n",
-			l - U8_MAX + WEBUSB_URL_DESCRIPTOR_HEADER_LENGTH - bytes_to_strip);
+			l - U8_MAX + WEBUSB_URL_DESCRIPTOR_HEADER_LENGTH - scheme_len);
 		return -EINVAL;
 	}
 
