@@ -55,7 +55,7 @@ struct gadget_info {
 	bool use_webusb;
 	u16 bcd_webusb_version;
 	u8 b_webusb_vendor_code;
-	char landing_page[WEBUSB_URL_RAW_MAX_LENGTH];
+	char landing_page[WEBUSB_URL_RAW_MAX_LENGTH + 1];
 
 	spinlock_t spinlock;
 	bool unbind;
@@ -1072,7 +1072,7 @@ static ssize_t webusb_landingPage_store(struct config_item *item, const char *pa
 		++bytes_to_strip;
 	}
 
-	if (l > sizeof(gi->landing_page)) {
+	if (l > WEBUSB_URL_RAW_MAX_LENGTH) {
 		pr_err("webusb: landingPage URL too long\n");
 		return -EINVAL;
 	}
@@ -1742,7 +1742,7 @@ static int configfs_composite_bind(struct usb_gadget *gadget,
 		cdev->use_webusb = true;
 		cdev->bcd_webusb_version = gi->bcd_webusb_version;
 		cdev->b_webusb_vendor_code = gi->b_webusb_vendor_code;
-		memcpy(cdev->landing_page, gi->landing_page, WEBUSB_URL_RAW_MAX_LENGTH);
+		memcpy(cdev->landing_page, gi->landing_page, sizeof(cdev->landing_page));
 	}
 
 	if (gi->use_os_desc) {
