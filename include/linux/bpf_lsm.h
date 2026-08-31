@@ -12,6 +12,8 @@
 #include <linux/bpf_verifier.h>
 #include <linux/lsm_hooks.h>
 
+struct genl_family; /* for the bpf_lsm_genl_family_rcv_msg hook */
+
 #ifdef CONFIG_BPF_LSM
 
 extern bool bpf_lsm_initialized __ro_after_init;

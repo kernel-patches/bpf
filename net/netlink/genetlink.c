@@ -17,6 +17,7 @@
 #include <linux/skbuff.h>
 #include <linux/mutex.h>
 #include <linux/bitmap.h>
+#include <linux/bpf_lsm.h>
 #include <linux/rwsem.h>
 #include <linux/idr.h>
 #include <net/sock.h>
@@ -1161,6 +1162,7 @@ static int genl_family_rcv_msg(const struct genl_family *family,
 	struct genlmsghdr *hdr = nlmsg_data(nlh);
 	struct genl_split_ops op;
 	int hdrlen;
+	int err;
 	u8 flags;
 
 	/* this family doesn't exist in this netns */
@@ -1186,6 +1188,10 @@ static int genl_family_rcv_msg(const struct genl_family *family,
 	if ((op.flags & GENL_UNS_ADMIN_PERM) &&
 	    !netlink_ns_capable(skb, net->user_ns, CAP_NET_ADMIN))
 		return -EPERM;
+
+	err = bpf_lsm_hook(genl_family_rcv_msg, family, net, hdr->cmd, nlh->nlmsg_flags);
+	if (err)
+		return err;
 
 	if (flags & GENL_CMD_CAP_DUMP)
 		return genl_family_rcv_msg_dumpit(family, skb, nlh, extack,
