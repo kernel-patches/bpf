@@ -29,7 +29,20 @@ int test_refcounted_multi(unsigned long long *ctx)
 	return 0;
 }
 
+__u64 got_arg9 = 0;
+
+SEC("struct_ops/test_trampoline_stack_args")
+int BPF_PROG(test_trampoline_stack_args, int arg1, int arg2, int arg3,
+					 int arg4, int arg5, int arg6,
+					 int arg7, int arg8, int arg9)
+{
+	got_arg9 = arg9;
+
+	return 0;
+}
+
 SEC(".struct_ops.link")
 struct bpf_testmod_ops testmod_ref_acquire = {
 	.test_refcounted_multi = (void *)test_refcounted_multi,
+	.test_trampoline_stack_args = (void *)test_trampoline_stack_args,
 };
