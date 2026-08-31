@@ -11,6 +11,7 @@
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/interrupt.h>
+#include <linux/kthread.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/pci.h>
@@ -25,6 +26,10 @@
 #include "mei-trace.h"
 
 #define MEI_CSC_HECI2_OFFSET 0x1000
+
+static bool use_polling = true;
+module_param(use_polling, bool, 0600);
+MODULE_PARM_DESC(use_polling, "Use polling instead of interrupts");
 
 static int mei_csc_read_fws(const struct mei_device *mdev, int where, const char *name, u32 *val)
 {
@@ -87,20 +92,40 @@ static int mei_csc_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	pci_set_drvdata(pdev, mdev);
 
-	err = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_INTX | PCI_IRQ_MSI);
-	if (err < 0) {
-		dev_err_probe(dev, err, "Failed to allocate IRQ.\n");
-		goto err_mei_unreg;
+	if (use_polling) {
+		dev_dbg(dev, "Using polling thread\n");
+		hw->irq = -1;
 	}
 
-	hw->irq = pci_irq_vector(pdev, 0);
+	/* use polling */
+	if (mei_me_hw_use_polling(hw)) {
+		mei_disable_interrupts(mdev);
+		mei_clear_interrupts(mdev);
+		init_waitqueue_head(&hw->wait_active);
+		hw->is_active = true; /* start in active mode for initialization */
+		hw->polling_thread = kthread_run(mei_me_polling_thread, mdev,
+						 "kmecscirqd/%s", dev_name(dev));
+		if (IS_ERR(hw->polling_thread)) {
+			err = PTR_ERR(hw->polling_thread);
+			dev_err_probe(dev, err, "unable to create kernel thread.\n");
+			goto err_mei_unreg;
+		}
+	} else {
+		err = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_INTX | PCI_IRQ_MSI);
+		if (err < 0) {
+			dev_err_probe(dev, err, "Failed to allocate IRQ.\n");
+			goto err_mei_unreg;
+		}
 
-	/* request and enable interrupt */
-	err = request_threaded_irq(hw->irq,
-				   mei_me_irq_quick_handler, mei_me_irq_thread_handler,
-				   IRQF_SHARED | IRQF_ONESHOT, KBUILD_MODNAME, mdev);
-	if (err)
-		goto err_free_irq_vectors;
+		hw->irq = pci_irq_vector(pdev, 0);
+
+		/* request and enable interrupt */
+		err = request_threaded_irq(hw->irq,
+					   mei_me_irq_quick_handler, mei_me_irq_thread_handler,
+					   IRQF_SHARED | IRQF_ONESHOT, KBUILD_MODNAME, mdev);
+		if (err)
+			goto err_free_irq_vectors;
+	}
 
 	/*
 	 * Continue to char device setup in spite of firmware handshake failure.
@@ -126,7 +151,8 @@ static int mei_csc_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	return 0;
 
 err_free_irq_vectors:
-	pci_free_irq_vectors(pdev);
+	if (!mei_me_hw_use_polling(hw))
+		pci_free_irq_vectors(pdev);
 err_mei_unreg:
 	mei_deregister(mdev);
 	return err;
@@ -141,9 +167,14 @@ static void mei_csc_shutdown(struct pci_dev *pdev)
 
 	mei_stop(mdev);
 
+	if (mei_me_hw_use_polling(hw))
+		kthread_stop(hw->polling_thread);
+
 	mei_disable_interrupts(mdev);
-	free_irq(hw->irq, mdev);
-	pci_free_irq_vectors(pdev);
+	if (!mei_me_hw_use_polling(hw)) {
+		free_irq(hw->irq, mdev);
+		pci_free_irq_vectors(pdev);
+	}
 }
 
 static void mei_csc_remove(struct pci_dev *pdev)
@@ -210,6 +241,9 @@ static int mei_csc_pm_runtime_suspend(struct device *dev)
 		return -EAGAIN;
 
 	hw->pg_state = MEI_PG_ON;
+	if (mei_me_hw_use_polling(hw))
+		hw->is_active = false;
+
 	return 0;
 }
 
@@ -219,8 +253,13 @@ static int mei_csc_pm_runtime_resume(struct device *dev)
 	struct mei_me_hw *hw = to_me_hw(mdev);
 	irqreturn_t irq_ret;
 
-	scoped_guard(mutex, &mdev->device_lock)
+	scoped_guard(mutex, &mdev->device_lock) {
 		hw->pg_state = MEI_PG_OFF;
+		if (mei_me_hw_use_polling(hw)) {
+			hw->is_active = true;
+			wake_up_interruptible(&hw->wait_active);
+		}
+	}
 
 	/* Process all queues that wait for resume */
 	irq_ret = mei_me_irq_thread_handler(1, mdev);
