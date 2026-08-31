@@ -16,9 +16,19 @@
 
 extern bool bpf_lsm_initialized __ro_after_init;
 
+/*
+ * Technically, checking bpf_lsm_initialized is not necessary.
+ * But if it is off, then this means that all security_* calls
+ * do not call BPF, and it doesn't look reasonable to enable
+ * only "non-LSM" bpf hooks...
+ */
+#define bpf_lsm_hook(NAME, ...) \
+	(bpf_lsm_initialized ? bpf_lsm_##NAME(__VA_ARGS__) : 0)
+
 #define LSM_HOOK(RET, DEFAULT, NAME, ...) \
 	RET bpf_lsm_##NAME(__VA_ARGS__);
 #include <linux/lsm_hook_defs.h>
+#include <linux/bpf_lsm_hook_defs.h>
 #undef LSM_HOOK
 
 struct bpf_storage_blob {
@@ -114,6 +124,8 @@ static inline bool bpf_lsm_hook_returns_errno(u32 btf_id)
 {
 	return true;
 }
+
+#define bpf_lsm_hook(NAME, ...) 0
 #endif /* CONFIG_BPF_LSM */
 
 #endif /* _LINUX_BPF_LSM_H */
