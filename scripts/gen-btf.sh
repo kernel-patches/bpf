@@ -93,7 +93,16 @@ gen_btf_o()
 		--set-section-flags .BTF=alloc,readonly ${btf_data}
 	ONLY_SEC="--only-section=.BTF"
 	btf_inline=${ELF_FILE}.BTF.inline
-	if [ -n "${BTF_INLINE}" ] && [ -f "${btf_inline}" ]; then
+	if [ "${BTF_INLINE}" = "m" ]; then
+		# vmlinux BTF is generated from a temporary ELF.  Retain its
+		# vmlinux-relative inline BTF for btf_vmlinux_inline.ko.
+		if [ -f "${btf_inline}" ]; then
+			cp "${btf_inline}" "${objtree}/vmlinux.BTF.inline"
+		else
+			rm -f "${objtree}/vmlinux.BTF.inline"
+		fi
+	fi
+	if [ "${BTF_INLINE}" = "y" ] && [ -f "${btf_inline}" ]; then
 		${OBJCOPY} --add-section .BTF.inline=${btf_inline} \
 			--set-section-flags .BTF.inline=alloc,readonly ${btf_data}
 		ONLY_SEC="${ONLY_SEC} --only-section=.BTF.inline"
@@ -120,6 +129,13 @@ embed_btf_data()
 		${OBJCOPY} --add-section .BTF.base=${btf_base} ${ELF_FILE}
 	fi
 	btf_inline=${ELF_FILE}.BTF.inline
+	case "${ELF_FILE}" in
+	*/btf_vmlinux_inline.ko)
+		# With CONFIG_DEBUG_INFO_BTF_INLINE=m, deliver vmlinux
+		# .BTF.inline via module
+		btf_inline=${BTF_BASE}.BTF.inline
+		;;
+	esac
 	if [ -n "${BTF_INLINE}" ] && [ -f "${btf_inline}" ]; then
 		${OBJCOPY} --add-section .BTF.inline=${btf_inline} ${ELF_FILE}
 	fi

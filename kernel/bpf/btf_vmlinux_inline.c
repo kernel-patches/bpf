@@ -26,5 +26,12 @@ static int __init btf_vmlinux_inline_init(void)
 }
 subsys_initcall(btf_vmlinux_inline_init);
 
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF_INLINE)
+static void __exit btf_vmlinux_inline_fini(void)
+{
+}
+module_exit(btf_vmlinux_inline_fini);
+#endif
+
 MODULE_DESCRIPTION("BTF inline information for vmlinux");
 MODULE_LICENSE("GPL");
