@@ -12,6 +12,7 @@
 #include <linux/kasan-checks.h>
 
 #include <asm/alternative-macros.h>
+#include <asm/vdso/processor.h>
 
 #define __nops(n)	".rept	" #n "\nnop\n.endr\n"
 #define nops(n)		asm volatile(__nops(n))
@@ -218,6 +219,25 @@ do {									\
 	}								\
 	(typeof(*ptr))VAL;						\
 })
+
+/* Re-declared here to avoid include dependency. */
+extern bool arch_timer_evtstrm_available(void);
+
+/*
+ * In the common case, cpu_poll_relax() sits waiting in __cmpwait_relaxed()
+ * for @ptr value to change.
+ *
+ * State this by defining CPU_POLL_RELAX_WAITS which enables a time-check
+ * optimization in smp_cond_load_{relaxed,acquire}_timeout().
+ */
+#define CPU_POLL_RELAX_WAITS
+
+#define cpu_poll_relax(ptr, val, timeout_ns) do {			\
+	if (arch_timer_evtstrm_available())				\
+		__cmpwait_relaxed(ptr, val);				\
+	else								\
+		cpu_relax();						\
+} while (0)
 
 #include <asm-generic/barrier.h>
 
