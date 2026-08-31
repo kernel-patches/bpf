@@ -862,6 +862,7 @@ TRUNNER_EXTRA_SOURCES := test_progs.c		\
 			 unpriv_helpers.c 	\
 			 sysctl_helpers.c	\
 			 netlink_helpers.c	\
+			 netdevsim_helpers.c	\
 			 jit_disasm_helpers.c	\
 			 io_helpers.c		\
 			 test_loader.c		\
