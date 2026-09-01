@@ -450,7 +450,8 @@ void bnge_init_ring_struct(struct bnge_net *bn)
 		struct bnge_tx_ring_info *txr;
 		struct bnge_ring_struct *ring;
 
-		bnge_init_nq_ring_struct(bn, &bnapi->nq_ring);
+		if (!BNGE_NQ0_NAPI(bnapi))
+			bnge_init_nq_ring_struct(bn, &bnapi->nq_ring);
 
 		rxr = bnapi->rx_ring;
 		if (!rxr)

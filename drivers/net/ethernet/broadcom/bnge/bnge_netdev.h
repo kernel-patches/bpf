@@ -543,6 +543,7 @@ struct bnge_tx_ring_info {
 
 enum bnge_napi_flag {
 	BNGE_NAPI_FLAG_NQ0,
+	BNGE_NAPI_FLAG_NQ0_QUIESCED,
 };
 
 #define BNGE_NQ0_NAPI(bnapi)	(test_bit(BNGE_NAPI_FLAG_NQ0, &(bnapi)->flags))
