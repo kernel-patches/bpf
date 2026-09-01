@@ -346,7 +346,7 @@ static void bnge_get_ethtool_stats(struct net_device *dev,
 	u32 tpa_stats;
 	u32 i, j = 0;
 
-	if (!bn->bnapi) {
+	if (!netif_running(dev)) {
 		j += bnge_get_num_ring_stats(bd);
 		goto skip_ring_stats;
 	}

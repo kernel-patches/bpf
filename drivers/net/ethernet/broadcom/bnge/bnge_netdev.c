@@ -1176,20 +1176,26 @@ static void bnge_free_ring_grps(struct bnge_net *bn)
 	bn->grp_info = NULL;
 }
 
-static int bnge_init_ring_grps(struct bnge_net *bn)
+static int bnge_init_ring_grps(struct bnge_net *bn, bool irq_re_init)
 {
 	struct bnge_dev *bd = bn->bd;
 	int i;
 
-	bn->grp_info = kzalloc_objs(struct bnge_ring_grp_info, bd->nq_nr_rings);
-	if (!bn->grp_info)
-		return -ENOMEM;
+	if (irq_re_init) {
+		bn->grp_info = kzalloc_objs(struct bnge_ring_grp_info,
+					    bd->nq_nr_rings);
+		if (!bn->grp_info)
+			return -ENOMEM;
+	}
+
 	for (i = 0; i < bd->nq_nr_rings; i++) {
-		bn->grp_info[i].fw_stats_ctx = INVALID_HW_RING_ID;
 		bn->grp_info[i].fw_grp_id = INVALID_HW_RING_ID;
 		bn->grp_info[i].rx_fw_ring_id = INVALID_HW_RING_ID;
 		bn->grp_info[i].agg_fw_ring_id = INVALID_HW_RING_ID;
 		bn->grp_info[i].nq_fw_ring_id = INVALID_HW_RING_ID;
+
+		if (irq_re_init)
+			bn->grp_info[i].fw_stats_ctx = INVALID_HW_RING_ID;
 	}
 
 	return 0;
@@ -1199,25 +1205,6 @@ static void bnge_free_bnapi_mem(struct bnge_net *bn)
 {
 	kfree(bn->bnapi);
 	bn->bnapi = NULL;
-}
-
-static void bnge_free_core(struct bnge_net *bn)
-{
-	bnge_free_vnic_attributes(bn);
-	bnge_free_tx_rings(bn);
-	bnge_free_rx_rings(bn);
-	bnge_free_nq_tree(bn);
-	bnge_free_nq_arrays(bn);
-	bnge_free_ring_stats(bn);
-	bnge_free_ring_grps(bn);
-	bnge_free_vnics(bn);
-	kfree(bn->tx_ring_map);
-	bn->tx_ring_map = NULL;
-	kfree(bn->tx_ring);
-	bn->tx_ring = NULL;
-	kfree(bn->rx_ring);
-	bn->rx_ring = NULL;
-	bnge_free_bnapi_mem(bn);
 }
 
 static int bnge_alloc_bnapi_mem(struct bnge_net *bn)
@@ -1248,16 +1235,52 @@ static int bnge_alloc_bnapi_mem(struct bnge_net *bn)
 	return 0;
 }
 
+static void bnge_clear_bnapi_queues(struct bnge_net *bn)
+{
+	struct bnge_dev *bd = bn->bd;
+	int i;
+
+	if (!bn->bnapi)
+		return;
+
+	for (i = 0; i < bd->nq_nr_rings; i++) {
+		struct bnge_napi *bnapi = bn->bnapi[i];
+		int j;
+
+		if (!bnapi)
+			continue;
+
+		bnapi->rx_ring = NULL;
+		for (j = 0; j < BNGE_MAX_TXR_PER_NAPI; j++)
+			bnapi->tx_ring[j] = NULL;
+	}
+}
+
+static void bnge_free_core(struct bnge_net *bn)
+{
+	bnge_free_vnic_attributes(bn);
+	bnge_free_tx_rings(bn);
+	bnge_free_rx_rings(bn);
+	bnge_free_nq_tree(bn);
+	bnge_free_nq_arrays(bn);
+	bnge_free_ring_stats(bn);
+	bnge_free_vnics(bn);
+
+	kfree(bn->tx_ring_map);
+	bn->tx_ring_map = NULL;
+	kfree(bn->tx_ring);
+	bn->tx_ring = NULL;
+	kfree(bn->rx_ring);
+	bn->rx_ring = NULL;
+
+	bnge_clear_bnapi_queues(bn);
+}
+
 static int bnge_alloc_core(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
-	int i, j, rc;
+	int i, j, rc = -ENOMEM;
 
-	rc = bnge_alloc_bnapi_mem(bn);
-	if (rc)
-		return rc;
-
-	rc = -ENOMEM;
 	bn->rx_ring = kzalloc_objs(struct bnge_rx_ring_info, bd->rx_nr_rings);
 	if (!bn->rx_ring)
 		goto err_free_core;
@@ -1393,6 +1416,7 @@ static void bnge_init_nq_tree(struct bnge_net *bn)
 		struct bnge_nq_ring_info *nqr = &bn->bnapi[i]->nq_ring;
 		struct bnge_ring_struct *ring = &nqr->ring_struct;
 
+		nqr->nq_raw_cons = 0;
 		ring->fw_ring_id = INVALID_HW_RING_ID_32BIT;
 		for (j = 0; j < nqr->cp_ring_count; j++) {
 			struct bnge_cp_ring_info *cpr = &nqr->cp_ring_arr[j];
@@ -2834,9 +2858,7 @@ static int bnge_init_nic(struct bnge_net *bn)
 
 	bnge_init_tx_rings(bn);
 
-	rc = bnge_init_ring_grps(bn);
-	if (rc)
-		goto err_free_rx_ring_pair_bufs;
+	bnge_init_ring_grps(bn, false);
 
 	bnge_init_vnics(bn);
 
@@ -2847,7 +2869,6 @@ static int bnge_init_nic(struct bnge_net *bn)
 
 err_free_ring_grps:
 	bnge_free_ring_grps(bn);
-err_free_rx_ring_pair_bufs:
 	bnge_free_rx_ring_pair_bufs(bn);
 	return rc;
 }
@@ -3222,7 +3243,7 @@ static void bnge_get_queue_stats_rx(struct net_device *dev, int i,
 	struct bnge_nq_ring_info *nqr;
 	u64 *sw;
 
-	if (!bn->bnapi)
+	if (!netif_running(dev))
 		return;
 
 	nqr = &bn->bnapi[i]->nq_ring;
@@ -3544,14 +3565,27 @@ int bnge_netdev_alloc(struct bnge_dev *bd, int max_irqs)
 	spin_lock_init(&bn->stats_lock);
 
 	netdev->request_ops_lock = true;
+
+	rc = bnge_alloc_bnapi_mem(bn);
+	if (rc)
+		goto err_free_port_stats;
+
+	rc = bnge_init_ring_grps(bn, true);
+	if (rc)
+		goto err_free_bnapi_mem;
+
 	rc = register_netdev(netdev);
 	if (rc) {
 		dev_err(bd->dev, "Register netdev failed rc: %d\n", rc);
-		goto err_free_port_stats;
+		goto err_free_ring_grps;
 	}
 
 	return 0;
 
+err_free_ring_grps:
+	bnge_free_ring_grps(bn);
+err_free_bnapi_mem:
+	bnge_free_bnapi_mem(bn);
 err_free_port_stats:
 	bnge_free_port_stats(bn);
 err_free_workq:
@@ -3576,6 +3610,8 @@ void bnge_netdev_free(struct bnge_dev *bd)
 	destroy_workqueue(bn->bnge_pf_wq);
 
 	bnge_free_port_stats(bn);
+	bnge_free_ring_grps(bn);
+	bnge_free_bnapi_mem(bn);
 
 	free_netdev(netdev);
 	bd->netdev = NULL;
