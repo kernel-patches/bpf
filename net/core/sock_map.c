@@ -641,7 +641,7 @@ const struct bpf_func_proto bpf_sock_map_update_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_CONST_MAP_PTR,
 	.arg3_type	= ARG_PTR_TO_MAP_KEY,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };
 
 BPF_CALL_4(bpf_sk_redirect_map, struct sk_buff *, skb,
@@ -668,8 +668,8 @@ const struct bpf_func_proto bpf_sk_redirect_map_proto = {
 	.ret_type       = RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type      = ARG_CONST_MAP_PTR,
-	.arg3_type      = ARG_ANYTHING,
-	.arg4_type      = ARG_ANYTHING,
+	.arg3_type      = ARG_SCALAR,
+	.arg4_type      = ARG_SCALAR,
 };
 
 BPF_CALL_4(bpf_msg_redirect_map, struct sk_msg *, msg,
@@ -699,8 +699,8 @@ const struct bpf_func_proto bpf_msg_redirect_map_proto = {
 	.ret_type       = RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type      = ARG_CONST_MAP_PTR,
-	.arg3_type      = ARG_ANYTHING,
-	.arg4_type      = ARG_ANYTHING,
+	.arg3_type      = ARG_SCALAR,
+	.arg4_type      = ARG_SCALAR,
 };
 
 struct sock_map_seq_info {
@@ -1247,7 +1247,7 @@ const struct bpf_func_proto bpf_sock_hash_update_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_CONST_MAP_PTR,
 	.arg3_type	= ARG_PTR_TO_MAP_KEY,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };
 
 BPF_CALL_4(bpf_sk_redirect_hash, struct sk_buff *, skb,
@@ -1275,7 +1275,7 @@ const struct bpf_func_proto bpf_sk_redirect_hash_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type      = ARG_CONST_MAP_PTR,
 	.arg3_type      = ARG_PTR_TO_MAP_KEY,
-	.arg4_type      = ARG_ANYTHING,
+	.arg4_type      = ARG_SCALAR,
 };
 
 BPF_CALL_4(bpf_msg_redirect_hash, struct sk_msg *, msg,
@@ -1306,7 +1306,7 @@ const struct bpf_func_proto bpf_msg_redirect_hash_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type      = ARG_CONST_MAP_PTR,
 	.arg3_type      = ARG_PTR_TO_MAP_KEY,
-	.arg4_type      = ARG_ANYTHING,
+	.arg4_type      = ARG_SCALAR,
 };
 
 struct sock_hash_seq_info {

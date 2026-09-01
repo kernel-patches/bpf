@@ -553,7 +553,7 @@ const struct bpf_func_proto bpf_ringbuf_reserve_proto = {
 	.ret_type	= RET_PTR_TO_RINGBUF_MEM_OR_NULL,
 	.arg1_type	= ARG_CONST_MAP_PTR,
 	.arg2_type	= ARG_CONST_ALLOC_SIZE_OR_ZERO,
-	.arg3_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_SCALAR,
 };
 
 static void bpf_ringbuf_commit(void *sample, u64 flags, bool discard)
@@ -594,7 +594,7 @@ const struct bpf_func_proto bpf_ringbuf_submit_proto = {
 	.func		= bpf_ringbuf_submit,
 	.ret_type	= RET_VOID,
 	.arg1_type	= ARG_PTR_TO_RINGBUF_MEM | OBJ_RELEASE,
-	.arg2_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_SCALAR,
 };
 
 BPF_CALL_2(bpf_ringbuf_discard, void *, sample, u64, flags)
@@ -607,7 +607,7 @@ const struct bpf_func_proto bpf_ringbuf_discard_proto = {
 	.func		= bpf_ringbuf_discard,
 	.ret_type	= RET_VOID,
 	.arg1_type	= ARG_PTR_TO_RINGBUF_MEM | OBJ_RELEASE,
-	.arg2_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_SCALAR,
 };
 
 BPF_CALL_4(bpf_ringbuf_output, struct bpf_map *, map, void *, data, u64, size,
@@ -635,7 +635,7 @@ const struct bpf_func_proto bpf_ringbuf_output_proto = {
 	.arg1_type	= ARG_CONST_MAP_PTR,
 	.arg2_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
 	.arg3_type	= ARG_MEM_SIZE_OR_ZERO,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };
 
 BPF_CALL_2(bpf_ringbuf_query, struct bpf_map *, map, u64, flags)
@@ -664,7 +664,7 @@ const struct bpf_func_proto bpf_ringbuf_query_proto = {
 	.func		= bpf_ringbuf_query,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_CONST_MAP_PTR,
-	.arg2_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_SCALAR,
 };
 
 BPF_CALL_4(bpf_ringbuf_reserve_dynptr, struct bpf_map *, map, u32, size, u64, flags,
@@ -702,8 +702,8 @@ const struct bpf_func_proto bpf_ringbuf_reserve_dynptr_proto = {
 	.func		= bpf_ringbuf_reserve_dynptr,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_CONST_MAP_PTR,
-	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_SCALAR,
+	.arg3_type	= ARG_SCALAR,
 	.arg4_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_RINGBUF | MEM_UNINIT | MEM_WRITE,
 };
 
@@ -723,7 +723,7 @@ const struct bpf_func_proto bpf_ringbuf_submit_dynptr_proto = {
 	.func		= bpf_ringbuf_submit_dynptr,
 	.ret_type	= RET_VOID,
 	.arg1_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_RINGBUF | OBJ_RELEASE,
-	.arg2_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_SCALAR,
 };
 
 BPF_CALL_2(bpf_ringbuf_discard_dynptr, struct bpf_dynptr_kern *, ptr, u64, flags)
@@ -742,7 +742,7 @@ const struct bpf_func_proto bpf_ringbuf_discard_dynptr_proto = {
 	.func		= bpf_ringbuf_discard_dynptr,
 	.ret_type	= RET_VOID,
 	.arg1_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_RINGBUF | OBJ_RELEASE,
-	.arg2_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_SCALAR,
 };
 
 static int __bpf_user_ringbuf_peek(struct bpf_ringbuf *rb, void **sample, u32 *size)
@@ -876,5 +876,5 @@ const struct bpf_func_proto bpf_user_ringbuf_drain_proto = {
 	.arg1_type	= ARG_CONST_MAP_PTR,
 	.arg2_type	= ARG_PTR_TO_FUNC,
 	.arg3_type	= ARG_PTR_TO_STACK_OR_NULL,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };

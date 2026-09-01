@@ -874,7 +874,7 @@ enum bpf_type_flag {
 
 /* function argument constraints */
 enum bpf_arg_type {
-	ARG_DONTCARE = 0,	/* unused argument in helper function */
+	ARG_UNUSED = 0,	/* unused argument; terminates argument iteration */
 
 	/* the following constraints used to prototype
 	 * bpf_map_lookup/update/delete_elem() functions
@@ -893,7 +893,7 @@ enum bpf_arg_type {
 	ARG_MEM_SIZE_OR_ZERO,	/* number of bytes accessed from memory or 0 */
 
 	ARG_PTR_TO_CTX,		/* pointer to context */
-	ARG_ANYTHING,		/* any (initialized) argument is ok */
+	ARG_SCALAR,		/* any (initialized) scalar is ok */
 	ARG_PTR_TO_SPIN_LOCK,	/* pointer to bpf_spin_lock */
 	ARG_PTR_TO_SOCK_COMMON,	/* pointer to sock_common */
 	ARG_PTR_TO_SOCKET,	/* pointer to bpf_sock (fullsock) */

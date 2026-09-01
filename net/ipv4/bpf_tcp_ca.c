@@ -132,7 +132,7 @@ static const struct bpf_func_proto bpf_tcp_send_ack_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_BTF_ID,
 	.arg1_btf_id	= &tcp_sock_id,
-	.arg2_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_SCALAR,
 };
 
 static u32 prog_ops_moff(const struct bpf_prog *prog)

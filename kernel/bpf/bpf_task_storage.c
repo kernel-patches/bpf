@@ -243,7 +243,7 @@ const struct bpf_func_proto bpf_task_storage_get_proto = {
 	.arg2_type = ARG_PTR_TO_BTF_ID_OR_NULL,
 	.arg2_btf_id = &btf_tracing_ids[BTF_TRACING_TYPE_TASK],
 	.arg3_type = ARG_PTR_TO_MAP_VALUE_OR_NULL,
-	.arg4_type = ARG_ANYTHING,
+	.arg4_type = ARG_SCALAR,
 };
 
 const struct bpf_func_proto bpf_task_storage_delete_proto = {
