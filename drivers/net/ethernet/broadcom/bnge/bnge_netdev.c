@@ -85,9 +85,6 @@ static void bnge_free_ring_stats(struct bnge_net *bn)
 	struct bnge_dev *bd = bn->bd;
 	int i;
 
-	if (!bn->bnapi)
-		return;
-
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		struct bnge_napi *bnapi = bn->bnapi[i];
 		struct bnge_nq_ring_info *nqr = &bnapi->nq_ring;
@@ -1240,9 +1237,6 @@ static void bnge_clear_bnapi_queues(struct bnge_net *bn)
 	struct bnge_dev *bd = bn->bd;
 	int i;
 
-	if (!bn->bnapi)
-		return;
-
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		struct bnge_napi *bnapi = bn->bnapi[i];
 		int j;
@@ -2371,9 +2365,6 @@ static void bnge_disable_int(struct bnge_net *bn)
 	struct bnge_dev *bd = bn->bd;
 	int i;
 
-	if (!bn->bnapi)
-		return;
-
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		struct bnge_napi *bnapi = bn->bnapi[i];
 		struct bnge_nq_ring_info *nqr;
@@ -2564,9 +2555,6 @@ static void bnge_hwrm_ring_free(struct bnge_net *bn, bool close_path)
 {
 	struct bnge_dev *bd = bn->bd;
 	int i;
-
-	if (!bn->bnapi)
-		return;
 
 	for (i = 0; i < bd->tx_nr_rings; i++)
 		bnge_hwrm_tx_ring_free(bn, &bn->tx_ring[i], close_path);
