@@ -675,12 +675,23 @@
 /*
  * .BTF
  */
+#ifdef CONFIG_DEBUG_INFO_BTF_INLINE
+#define BTF_INLINE							\
+	. = ALIGN(PAGE_SIZE);						\
+	.BTF.inline : AT(ADDR(.BTF.inline) - LOAD_OFFSET) {		\
+		BOUNDED_SECTION_BY(.BTF.inline, _BTF_inline)		\
+	}
+#else
+#define BTF_INLINE
+#endif
+
 #ifdef CONFIG_DEBUG_INFO_BTF
 #define BTF								\
 	. = ALIGN(PAGE_SIZE);						\
 	.BTF : AT(ADDR(.BTF) - LOAD_OFFSET) {				\
 		BOUNDED_SECTION_BY(.BTF, _BTF)				\
 	}								\
+	BTF_INLINE							\
 	. = ALIGN(PAGE_SIZE);						\
 	.BTF_ids : AT(ADDR(.BTF_ids) - LOAD_OFFSET) {			\
 		*(.BTF_ids)						\
