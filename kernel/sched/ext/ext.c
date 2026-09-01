@@ -1356,7 +1356,8 @@ static bool scx_dsq_priq_less(struct rb_node *node_a,
 	const struct task_struct *b =
 		container_of(node_b, struct task_struct, scx.dsq_priq);
 
-	return time_before64(a->scx.dsq_vtime, b->scx.dsq_vtime);
+	/* dsq_vtime is arbitrary BPF input: keep a total order */
+	return a->scx.dsq_vtime < b->scx.dsq_vtime;
 }
 
 static void dsq_inc_nr(struct scx_dispatch_q *dsq, struct task_struct *p, u64 enq_flags)
