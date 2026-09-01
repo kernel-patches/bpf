@@ -8791,6 +8791,11 @@ struct scx_bpf_dsq_insert_vtime_args {
  * wrapping. A numerically larger vtime may indicate an earlier position in the
  * ordering and vice-versa.
  *
+ * vtime is a rolling cursor and should be treated as a virtual timestamp
+ * that advances monotonically. Values used for ordering within a given DSQ
+ * should stay within half the u64 range (2^63) of each other so that
+ * time_before64() ordering remains well-defined.
+ *
  * A DSQ can only be used as a FIFO or priority queue at any given time and this
  * function must not be called on a DSQ which already has one or more FIFO tasks
  * queued and vice-versa. Also, the built-in DSQs (SCX_DSQ_LOCAL and
