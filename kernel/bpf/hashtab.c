@@ -2864,16 +2864,6 @@ static int rhtab_map_alloc_check(union bpf_attr *attr)
 	return htab_map_alloc_check(attr);
 }
 
-static void rhtab_check_and_free_fields(struct bpf_rhtab *rhtab,
-					struct rhtab_elem *elem)
-{
-	if (IS_ERR_OR_NULL(rhtab->map.record))
-		return;
-
-	bpf_obj_free_fields(rhtab->map.record,
-			    rhtab_elem_value(elem, rhtab->map.key_size));
-}
-
 static void rhtab_mem_dtor(void *obj, void *ctx)
 {
 	struct htab_btf_record *hrec = ctx;
@@ -2963,8 +2953,9 @@ static int rhtab_delete_elem(struct bpf_rhtab *rhtab, struct rhtab_elem *elem, v
 		rhtab_read_elem_value(&rhtab->map, copy, elem, flags);
 		check_and_init_map_value(&rhtab->map, copy);
 	}
-	/* Release internal structs: kptr, bpf_timer, task_work, wq */
-	rhtab_check_and_free_fields(rhtab, elem);
+	/* Cancel NMI-safe fields; full destruction happens in rhtab_mem_dtor */
+	bpf_obj_cancel_fields(&rhtab->map,
+			      rhtab_elem_value(elem, rhtab->map.key_size));
 	bpf_mem_cache_free_rcu(&rhtab->ma, elem);
 	return 0;
 }
@@ -3022,10 +3013,12 @@ static long rhtab_map_update_existing(struct bpf_map *map, struct rhtab_elem *el
 	 * BPF_F_LOCK, matching arraymap semantics.
 	 *
 	 * copy_map_value() skips special-field offsets, so old timers/
-	 * kptrs/etc. still sit in the slot. Cancel them after the copy
-	 * to match arraymap's update semantics.
+	 * kptrs/etc. still sit in the slot. Cancel the NMI-safe ones after
+	 * the copy to match arraymap's update semantics; referenced kptrs
+	 * stay attached and are destroyed by rhtab_mem_dtor().
 	 */
-	rhtab_check_and_free_fields(rhtab, elem);
+	bpf_obj_cancel_fields(&rhtab->map,
+			      rhtab_elem_value(elem, rhtab->map.key_size));
 	return 0;
 }
 
@@ -3066,7 +3059,14 @@ static long rhtab_map_update_elem(struct bpf_map *map, void *key, void *value, u
 
 	memcpy(elem->data, key, map->key_size);
 	copy_map_value(map, rhtab_elem_value(elem, map->key_size), value);
-	check_and_init_map_value(map, rhtab_elem_value(elem, map->key_size));
+	/*
+	 * No explicit special-field initialization, matching the hash map's
+	 * non-prealloc path: fresh elements come zeroed from the bpf mem
+	 * allocator, and recycled elements had their timer/workqueue/task_work
+	 * slots reset by bpf_obj_cancel_fields() on delete. kptr slots are
+	 * left untouched so a recycled element keeps owning its reference
+	 * until rhtab_mem_dtor() releases it.
+	 */
 
 	/* Prevent deadlock for NMI programs attempting to take bucket lock */
 	bpf_disable_instrumentation();
