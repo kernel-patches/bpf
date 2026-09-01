@@ -331,7 +331,13 @@ static int mana_gd_query_hwc_timeout(struct pci_dev *pdev, u32 *timeout_val)
 	if (err || resp.hdr.status)
 		return err ? err : -EPROTO;
 
-	*timeout_val = resp.timeout_ms;
+	/* Zero is the driver's own "do not wait, do not log" sentinel, set by
+	 * mana_serv_reset() when the HWC has stopped responding.  A zero from
+	 * the device would enter that state instead: ignore it and keep the
+	 * caller's positive value.
+	 */
+	if (resp.timeout_ms)
+		*timeout_val = resp.timeout_ms;
 
 	return 0;
 }
