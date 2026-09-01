@@ -394,10 +394,8 @@ static void bnge_sp_task(struct work_struct *work)
 	struct bnge_dev *bd = bn->bd;
 
 	netdev_lock(bn->netdev);
-	if (!test_bit(BNGE_STATE_OPEN, &bd->state)) {
-		netdev_unlock(bn->netdev);
-		return;
-	}
+	if (!test_bit(BNGE_STATE_OPEN, &bd->state))
+		goto async_evt;
 
 	if (test_and_clear_bit(BNGE_PERIODIC_STATS_SP_EVENT, &bn->sp_event)) {
 		bnge_hwrm_port_qstats(bd, 0);
@@ -405,6 +403,7 @@ static void bnge_sp_task(struct work_struct *work)
 		bnge_accumulate_all_stats(bd);
 	}
 
+async_evt:
 	if (test_and_clear_bit(BNGE_UPDATE_PHY_SP_EVENT, &bn->sp_event)) {
 		int rc;
 
