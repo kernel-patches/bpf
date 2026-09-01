@@ -199,6 +199,16 @@ struct hw_channel_context {
 	u32 pf_dest_vrcq_id;
 	u32 hwc_timeout;
 
+	/* True once mana_smc_setup_hwc() has handed the ESTABLISH_HWC message
+	 * to the PF, so the device may DMA into the HWC buffers.  That
+	 * function clears it on entry and sets it at the handover, so only a
+	 * failure before the handover leaves it false; a failure after it --
+	 * including one reported by mana_hwc_establish_channel() -- leaves it
+	 * set, which is what makes teardown attempt DESTROY_HWC.  Cleared
+	 * again once that teardown succeeds.
+	 */
+	bool setup_active;
+
 	struct hwc_caller_ctx *caller_ctx;
 };
 

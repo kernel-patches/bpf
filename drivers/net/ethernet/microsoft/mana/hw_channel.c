@@ -683,7 +683,7 @@ static int mana_hwc_establish_channel(struct gdma_context *gc, u16 *q_depth,
 				 cq->mem_info.dma_handle,
 				 rq->mem_info.dma_handle,
 				 sq->mem_info.dma_handle,
-				 eq->eq.msix_index);
+				 eq->eq.msix_index, &hwc->setup_active);
 	if (err)
 		return err;
 
@@ -815,13 +815,20 @@ void mana_hwc_destroy_channel(struct gdma_context *gc)
 	if (!hwc)
 		return;
 
-	/* gc->max_num_cqs is set in mana_hwc_init_event_handler(). If it's
-	 * non-zero, the HWC worked and we should tear down the HWC here.
+	/* Tear down only if setup_hwc() handed the queues to the PF.  Until
+	 * then the device never saw them, so there is nothing to undo.
 	 */
-	if (gc->max_num_cqs > 0) {
-		mana_smc_teardown_hwc(&gc->shm_channel, false);
-		gc->max_num_cqs = 0;
+	if (hwc->setup_active) {
+		/* Only a successful teardown invalidates the MST entries.  If
+		 * it fails the device may still be using the queues, so leave
+		 * the flag set rather than record a clean teardown.
+		 */
+		if (!mana_smc_teardown_hwc(&gc->shm_channel, false))
+			hwc->setup_active = false;
+		else
+			dev_err(hwc->dev, "Failed to tear down HWC\n");
 	}
+	gc->max_num_cqs = 0;
 
 	if (hwc->txq)
 		mana_hwc_destroy_wq(hwc, hwc->txq);
