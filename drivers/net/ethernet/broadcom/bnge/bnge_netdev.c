@@ -1195,6 +1195,12 @@ static int bnge_init_ring_grps(struct bnge_net *bn)
 	return 0;
 }
 
+static void bnge_free_bnapi_mem(struct bnge_net *bn)
+{
+	kfree(bn->bnapi);
+	bn->bnapi = NULL;
+}
+
 static void bnge_free_core(struct bnge_net *bn)
 {
 	bnge_free_vnic_attributes(bn);
@@ -1211,15 +1217,13 @@ static void bnge_free_core(struct bnge_net *bn)
 	bn->tx_ring = NULL;
 	kfree(bn->rx_ring);
 	bn->rx_ring = NULL;
-	kfree(bn->bnapi);
-	bn->bnapi = NULL;
+	bnge_free_bnapi_mem(bn);
 }
 
-static int bnge_alloc_core(struct bnge_net *bn)
+static int bnge_alloc_bnapi_mem(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
-	int i, j, size, arr_size;
-	int rc = -ENOMEM;
+	int i, size, arr_size;
 	void *bnapi;
 
 	arr_size = L1_CACHE_ALIGN(sizeof(struct bnge_napi *) *
@@ -1227,7 +1231,7 @@ static int bnge_alloc_core(struct bnge_net *bn)
 	size = L1_CACHE_ALIGN(sizeof(struct bnge_napi));
 	bnapi = kzalloc(arr_size + size * bd->nq_nr_rings, GFP_KERNEL);
 	if (!bnapi)
-		return rc;
+		return -ENOMEM;
 
 	bn->bnapi = bnapi;
 	bnapi += arr_size;
@@ -1241,6 +1245,19 @@ static int bnge_alloc_core(struct bnge_net *bn)
 		nqr->ring_struct.ring_mem.flags = BNGE_RMEM_RING_PTE_FLAG;
 	}
 
+	return 0;
+}
+
+static int bnge_alloc_core(struct bnge_net *bn)
+{
+	struct bnge_dev *bd = bn->bd;
+	int i, j, rc;
+
+	rc = bnge_alloc_bnapi_mem(bn);
+	if (rc)
+		return rc;
+
+	rc = -ENOMEM;
 	bn->rx_ring = kzalloc_objs(struct bnge_rx_ring_info, bd->rx_nr_rings);
 	if (!bn->rx_ring)
 		goto err_free_core;
