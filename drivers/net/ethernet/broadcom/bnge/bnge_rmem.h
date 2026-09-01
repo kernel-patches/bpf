@@ -7,6 +7,7 @@
 struct bnge_ctx_mem_type;
 struct bnge_dev;
 struct bnge_net;
+struct bnge_nq_ring_info;
 
 #define PTU_PTE_VALID             0x1UL
 #define PTU_PTE_LAST              0x2UL
@@ -198,5 +199,6 @@ void bnge_free_ring(struct bnge_dev *bd, struct bnge_ring_mem_info *rmem);
 int bnge_alloc_ctx_mem(struct bnge_dev *bd);
 void bnge_free_ctx_mem(struct bnge_dev *bd);
 void bnge_init_ring_struct(struct bnge_net *bn);
-
+void bnge_init_nq_ring_struct(struct bnge_net *bn,
+			      struct bnge_nq_ring_info *nqr);
 #endif /* _BNGE_RMEM_H_ */
