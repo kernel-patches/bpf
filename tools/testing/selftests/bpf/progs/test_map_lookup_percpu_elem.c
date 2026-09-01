@@ -7,7 +7,7 @@
 __u64 percpu_array_elem_sum = 0;
 __u64 percpu_hash_elem_sum = 0;
 __u64 percpu_lru_hash_elem_sum = 0;
-const volatile int nr_cpus;
+const volatile int nr_cpu_ids;
 const volatile int my_pid;
 
 struct {
@@ -57,17 +57,17 @@ int sysenter_getuid(const void *ctx)
 
 	map_ctx.map = &percpu_array_map;
 	map_ctx.sum = 0;
-	bpf_loop(nr_cpus, read_percpu_elem_callback, &map_ctx, 0);
+	bpf_loop(nr_cpu_ids, read_percpu_elem_callback, &map_ctx, 0);
 	percpu_array_elem_sum = map_ctx.sum;
 
 	map_ctx.map = &percpu_hash_map;
 	map_ctx.sum = 0;
-	bpf_loop(nr_cpus, read_percpu_elem_callback, &map_ctx, 0);
+	bpf_loop(nr_cpu_ids, read_percpu_elem_callback, &map_ctx, 0);
 	percpu_hash_elem_sum = map_ctx.sum;
 
 	map_ctx.map = &percpu_lru_hash_map;
 	map_ctx.sum = 0;
-	bpf_loop(nr_cpus, read_percpu_elem_callback, &map_ctx, 0);
+	bpf_loop(nr_cpu_ids, read_percpu_elem_callback, &map_ctx, 0);
 	percpu_lru_hash_elem_sum = map_ctx.sum;
 
 	return 0;

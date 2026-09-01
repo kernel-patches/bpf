@@ -2,29 +2,45 @@
 /* Copyright (c) 2022 Bytedance */
 
 #include <test_progs.h>
+#include "bpf/libbpf_internal.h"
 #include "test_map_lookup_percpu_elem.skel.h"
 
 void test_map_lookup_percpu_elem(void)
 {
 	struct test_map_lookup_percpu_elem *skel;
-	__u64 key = 0, sum;
-	int ret, i, nr_cpus = libbpf_num_possible_cpus();
+	bool *possible = NULL;
+	__u64 key = 0, sum = 0;
+	int cpu, nr_cpu_ids, nr_cpus, ret, slot = 0;
 	__u64 *buf;
 
-	buf = malloc(nr_cpus*sizeof(__u64));
-	if (!ASSERT_OK_PTR(buf, "malloc"))
+	ret = parse_cpu_mask_file("/sys/devices/system/cpu/possible", &possible,
+				  &nr_cpu_ids);
+	if (!ASSERT_OK(ret, "parse possible CPU mask"))
 		return;
 
-	for (i = 0; i < nr_cpus; i++)
-		buf[i] = i;
-	sum = (nr_cpus - 1) * nr_cpus / 2;
+	nr_cpus = libbpf_num_possible_cpus();
+	if (!ASSERT_GT(nr_cpus, 0, "libbpf_num_possible_cpus"))
+		goto free_mask;
+
+	buf = malloc(nr_cpus * sizeof(*buf));
+	if (!ASSERT_OK_PTR(buf, "malloc"))
+		goto free_mask;
+
+	for (cpu = 0; cpu < nr_cpu_ids; cpu++) {
+		if (!possible[cpu])
+			continue;
+		buf[slot++] = cpu;
+		sum += cpu;
+	}
+	if (!ASSERT_EQ(slot, nr_cpus, "possible CPU mask weight"))
+		goto exit;
 
 	skel = test_map_lookup_percpu_elem__open();
 	if (!ASSERT_OK_PTR(skel, "test_map_lookup_percpu_elem__open"))
 		goto exit;
 
 	skel->rodata->my_pid = getpid();
-	skel->rodata->nr_cpus = nr_cpus;
+	skel->rodata->nr_cpu_ids = nr_cpu_ids;
 
 	ret = test_map_lookup_percpu_elem__load(skel);
 	if (!ASSERT_OK(ret, "test_map_lookup_percpu_elem__load"))
@@ -55,4 +71,6 @@ cleanup:
 	test_map_lookup_percpu_elem__destroy(skel);
 exit:
 	free(buf);
+free_mask:
+	free(possible);
 }
