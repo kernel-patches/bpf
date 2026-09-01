@@ -162,6 +162,8 @@ static int mana_gd_init_registers(struct pci_dev *pdev)
 bool mana_need_log(struct gdma_context *gc, int err)
 {
 	struct hw_channel_context *hwc;
+	bool need_log = true;
+	unsigned long flags;
 
 	if (err != -ETIMEDOUT)
 		return true;
@@ -169,11 +171,13 @@ bool mana_need_log(struct gdma_context *gc, int err)
 	if (!gc)
 		return true;
 
+	spin_lock_irqsave(&gc->hwc_lock, flags);
 	hwc = gc->hwc.driver_data;
 	if (hwc && hwc->hwc_timeout == 0)
-		return false;
+		need_log = false;
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
 
-	return true;
+	return need_log;
 }
 
 static int mana_gd_query_max_resources(struct pci_dev *pdev)
@@ -393,9 +397,27 @@ static int mana_gd_detect_devices(struct pci_dev *pdev)
 int mana_gd_send_request(struct gdma_context *gc, u32 req_len, const void *req,
 			 u32 resp_len, void *resp)
 {
-	struct hw_channel_context *hwc = gc->hwc.driver_data;
+	struct hw_channel_context *hwc;
+	unsigned long flags;
+	int err;
 
-	return mana_hwc_send_request(hwc, req_len, req, resp_len, resp);
+	spin_lock_irqsave(&gc->hwc_lock, flags);
+	hwc = gc->hwc.driver_data;
+	if (!hwc) {
+		spin_unlock_irqrestore(&gc->hwc_lock, flags);
+		return -ENODEV;
+	}
+	hwc->active_senders++;
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
+
+	err = mana_hwc_send_request(hwc, req_len, req, resp_len, resp);
+
+	spin_lock_irqsave(&gc->hwc_lock, flags);
+	if (--hwc->active_senders == 0)
+		wake_up(&gc->hwc_drain_waitq);
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
+
+	return err;
 }
 EXPORT_SYMBOL_NS(mana_gd_send_request, "NET_MANA");
 
@@ -716,6 +738,7 @@ static void mana_serv_reset(struct pci_dev *pdev)
 {
 	struct gdma_context *gc = pci_get_drvdata(pdev);
 	struct hw_channel_context *hwc;
+	unsigned long flags;
 	int ret;
 
 	if (!gc) {
@@ -725,14 +748,17 @@ static void mana_serv_reset(struct pci_dev *pdev)
 		return;
 	}
 
+	spin_lock_irqsave(&gc->hwc_lock, flags);
 	hwc = gc->hwc.driver_data;
 	if (!hwc) {
+		spin_unlock_irqrestore(&gc->hwc_lock, flags);
 		dev_err(&pdev->dev, "MANA service: no HWC\n");
 		goto out;
 	}
 
 	/* HWC is not responding in this case, so don't wait */
 	hwc->hwc_timeout = 0;
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
 
 	dev_info(&pdev->dev, "MANA reset cycle start\n");
 
@@ -1339,6 +1365,16 @@ static int mana_gd_create_dma_region(struct gdma_dev *gd,
 	if (gmi->nr_pages == 0 && !MANA_PAGE_ALIGNED(gmi->virt_addr))
 		return -EINVAL;
 
+	/* No RCU needed: this runs only on the data-path queue-creation
+	 * path (mana_gd_create_mana_eq/mana_gd_create_mana_wq_cq, called
+	 * by mana_en under RTNL and by mana_ib RDMA verbs, or during
+	 * init).  Every teardown path — mana_gd_remove, mana_gd_suspend,
+	 * and the HWC reset/service path (which goes through
+	 * mana_gd_suspend) — drains those consumers via mana_rdma_remove()
+	 * + mana_remove() before mana_hwc_destroy_channel() clears
+	 * gc->hwc.driver_data, so no concurrent destroy can race with
+	 * this dereference.
+	 */
 	hwc = gc->hwc.driver_data;
 	req_msg_size = struct_size(req, page_addr_list, num_page);
 	if (req_msg_size > hwc->max_req_msg_size)
@@ -1544,7 +1580,17 @@ int mana_gd_verify_vf_version(struct pci_dev *pdev)
 	struct hw_channel_context *hwc;
 	int err;
 
+	/* No RCU needed: this runs only inside mana_gd_setup, on the
+	 * probe and resume paths.  The PCI/PM core holds device_lock
+	 * across .probe/.resume and .remove/.suspend, so setup cannot
+	 * overlap teardown of the same device.  The HWC reset/service
+	 * path is additionally serialized by GC_IN_SERVICE and runs
+	 * suspend (destroy) then resume (this) sequentially in one work
+	 * item.  driver_data was just set by mana_hwc_create_channel
+	 * earlier in this same setup call, so it is live here.
+	 */
 	hwc = gc->hwc.driver_data;
+
 	mana_gd_init_req_hdr(&req.hdr, GDMA_VERIFY_VF_DRIVER_VERSION,
 			     sizeof(req), sizeof(resp));
 
@@ -2538,6 +2584,7 @@ static int mana_gd_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	mutex_init(&gc->eq_test_event_mutex);
 	mutex_init(&gc->gic_mutex);
+	spin_lock_init(&gc->hwc_lock);
 	pci_set_drvdata(pdev, gc);
 	gc->bar0_pa = pci_resource_start(pdev, 0);
 	gc->bar0_size = pci_resource_len(pdev, 0);

@@ -6,7 +6,11 @@
 #include <net/mana/hw_channel.h>
 #include <linux/vmalloc.h>
 
-/* Acquire a free inflight message slot, waiting for one if all are in use. */
+/* Acquire a free message slot from the inflight bitmap, waiting for one if
+ * all are in use.  Returns -ENODEV if the channel is being torn down, or
+ * -ETIMEDOUT if a prior HWC command has timed out (preserving the error
+ * code callers expect).
+ */
 static int mana_hwc_get_msg_index(struct hw_channel_context *hwc, u16 *msg_id)
 {
 	struct gdma_resource *r = &hwc->inflight_msg_res;
@@ -14,12 +18,32 @@ static int mana_hwc_get_msg_index(struct hw_channel_context *hwc, u16 *msg_id)
 	unsigned long flags;
 	u32 index;
 
-	down(&hwc->sema);
+	/* Bounded wait for a slot.  A timed-out request keeps its slot until
+	 * the device answers for it, so the semaphore is never posted back
+	 * for that slot and a caller expires here rather than blocking on a
+	 * release that is not coming.  Teardown reclaims those slots, which
+	 * posts the semaphore and releases anyone waiting below.
+	 */
+	if (down_timeout(&hwc->sema, msecs_to_jiffies(hwc->hwc_timeout)))
+		return -ETIMEDOUT;
 
 	spin_lock_irqsave(&r->lock, flags);
 
-	index = find_first_zero_bit(hwc->inflight_msg_res.map,
-				    hwc->inflight_msg_res.size);
+	if (!hwc->channel_up) {
+		spin_unlock_irqrestore(&r->lock, flags);
+		up(&hwc->sema);
+		return -ENODEV;
+	}
+
+	/* The semaphore admits at most r->size holders at a time, so a slot
+	 * acquired above always has a free bit waiting for it here.
+	 */
+	index = find_first_zero_bit(r->map, r->size);
+	if (WARN_ON_ONCE(index >= r->size)) {
+		spin_unlock_irqrestore(&r->lock, flags);
+		up(&hwc->sema);
+		return -EIO;
+	}
 
 	ctx = &hwc->caller_ctx[index];
 	reinit_completion(&ctx->comp_event);
@@ -28,11 +52,12 @@ static int mana_hwc_get_msg_index(struct hw_channel_context *hwc, u16 *msg_id)
 	 */
 	refcount_set(&ctx->refcnt, 2);
 	ctx->responded = false;
+	ctx->resp_pending = true;
 	ctx->msg_id = index;
 	ctx->error = -EINPROGRESS;
 
 	/* Publish the slot last, after it is fully initialised. */
-	bitmap_set(hwc->inflight_msg_res.map, index, 1);
+	bitmap_set(r->map, index, 1);
 
 	spin_unlock_irqrestore(&r->lock, flags);
 
@@ -101,6 +126,7 @@ static void mana_hwc_handle_resp(struct hw_channel_context *hwc, u32 resp_len,
 {
 	const struct gdma_resp_hdr *resp_msg = rx_req->buf_va;
 	struct hwc_caller_ctx *ctx;
+	bool release;
 	int err;
 
 	if (!test_bit(msg_id, hwc->inflight_msg_res.map)) {
@@ -113,13 +139,30 @@ static void mana_hwc_handle_resp(struct hw_channel_context *hwc, u32 resp_len,
 
 	spin_lock(&ctx->lock);
 
-	/* Honour a response only while the sender owns the slot (output_buf
-	 * published) and has not already been answered; otherwise drop it as
-	 * premature, stale or duplicate without touching the refcount.
+	/* The sender has not published its buffer yet, so nothing asked for
+	 * this response.  Keep the slot reserved and drop the message.
 	 */
-	if (!ctx->output_buf || ctx->responded) {
+	if (!ctx->output_buf && !ctx->responded) {
 		spin_unlock(&ctx->lock);
 		mana_hwc_post_rx_wqe(hwc->rxq, rx_req);
+		return;
+	}
+
+	/* Take the response-side reference away exactly once: releasing it
+	 * is what frees a slot whose sender has already given up.
+	 */
+	release = ctx->resp_pending;
+	ctx->resp_pending = false;
+
+	if (ctx->responded) {
+		/* The sender timed out and abandoned the slot, or a response
+		 * was already applied.  Consume this one without writing
+		 * anything, then release the slot it was holding.
+		 */
+		spin_unlock(&ctx->lock);
+		mana_hwc_post_rx_wqe(hwc->rxq, rx_req);
+		if (release)
+			hwc_ctx_put(hwc, ctx);
 		return;
 	}
 	ctx->responded = true;
@@ -138,7 +181,8 @@ static void mana_hwc_handle_resp(struct hw_channel_context *hwc, u32 resp_len,
 	complete(&ctx->comp_event);
 	spin_unlock(&ctx->lock);
 
-	hwc_ctx_put(hwc, ctx);
+	if (release)
+		hwc_ctx_put(hwc, ctx);
 }
 
 static void mana_hwc_init_event_handler(void *ctx, struct gdma_queue *q_self,
@@ -593,6 +637,7 @@ static int mana_hwc_create_wq(struct hw_channel_context *hwc,
 	hwc_wq->gdma_wq = queue;
 	hwc_wq->queue_depth = q_depth;
 	hwc_wq->hwc_cq = hwc_cq;
+	spin_lock_init(&hwc_wq->lock);
 
 	err = mana_hwc_alloc_dma_buf(hwc, q_depth, max_msg_size,
 				     &hwc_wq->msg_buf);
@@ -610,7 +655,7 @@ out:
 	return err;
 }
 
-static int mana_hwc_post_tx_wqe(const struct hwc_wq *hwc_txq,
+static int mana_hwc_post_tx_wqe(struct hwc_wq *hwc_txq,
 				struct hwc_work_request *req,
 				u32 dest_virt_rq_id, u32 dest_virt_rcq_id,
 				bool dest_pf)
@@ -649,7 +694,11 @@ static int mana_hwc_post_tx_wqe(const struct hwc_wq *hwc_txq,
 	req->wqe_req.inline_oob_data = tx_oob;
 	req->wqe_req.client_data_unit = 0;
 
+	/* Serialize WQE posting — multiple senders may call concurrently. */
+	spin_lock(&hwc_txq->lock);
 	err = mana_gd_post_and_ring(hwc_txq->gdma_wq, &req->wqe_req, NULL);
+	spin_unlock(&hwc_txq->lock);
+
 	if (err)
 		dev_err(dev, "Failed to post WQE on HWC SQ: %d\n", err);
 	return err;
@@ -660,6 +709,9 @@ static int mana_hwc_init_inflight_msg(struct hw_channel_context *hwc,
 {
 	int err;
 
+	/* One permit per slot; a permit is returned only when the slot is
+	 * released, so the count always mirrors the free slots.
+	 */
 	sema_init(&hwc->sema, num_msg);
 
 	err = mana_gd_alloc_res_map(num_msg, &hwc->inflight_msg_res);
@@ -675,6 +727,7 @@ static int mana_hwc_test_channel(struct hw_channel_context *hwc, u16 q_depth,
 	struct hwc_wq *hwc_rxq = hwc->rxq;
 	struct hwc_work_request *req;
 	struct hwc_caller_ctx *ctx;
+	unsigned long flags;
 	int err;
 	int i;
 
@@ -697,7 +750,34 @@ static int mana_hwc_test_channel(struct hw_channel_context *hwc, u16 q_depth,
 
 	hwc->caller_ctx = ctx;
 
-	return mana_gd_test_eq(gc, hwc->cq->gdma_eq);
+	/* channel_up must be set before the test EQ request, because
+	 * the request goes through mana_hwc_get_msg_index() which
+	 * checks channel_up.  caller_ctx is allocated above, so
+	 * concurrent access to a NULL caller_ctx is not possible.
+	 *
+	 * Publish it under the bitmap lock, the same one the waiters and
+	 * mana_hwc_destroy_channel() use, so the flag is never stored
+	 * concurrently with the teardown that clears it.
+	 */
+	spin_lock_irqsave(&hwc->inflight_msg_res.lock, flags);
+	hwc->channel_up = true;
+	spin_unlock_irqrestore(&hwc->inflight_msg_res.lock, flags);
+
+	err = mana_gd_test_eq(gc, hwc->cq->gdma_eq);
+	if (err) {
+		/* Clear channel_up under the bitmap lock, mirroring
+		 * mana_hwc_destroy_channel().  Any sender already waiting on
+		 * the semaphore is released by the slot holder that posts it,
+		 * or by the teardown the caller runs on this error; each
+		 * released waiter finds the flag clear and posts the permit
+		 * straight back, so one permit walks the whole queue.
+		 */
+		spin_lock_irqsave(&hwc->inflight_msg_res.lock, flags);
+		hwc->channel_up = false;
+		spin_unlock_irqrestore(&hwc->inflight_msg_res.lock, flags);
+	}
+
+	return err;
 }
 
 static int mana_hwc_establish_channel(struct gdma_context *gc, u16 *q_depth,
@@ -797,6 +877,7 @@ int mana_hwc_create_channel(struct gdma_context *gc)
 	u32 max_req_msg_size, max_resp_msg_size;
 	struct gdma_dev *gd = &gc->hwc;
 	struct hw_channel_context *hwc;
+	unsigned long flags;
 	u16 q_depth_max;
 	int err;
 
@@ -805,10 +886,11 @@ int mana_hwc_create_channel(struct gdma_context *gc)
 		return -ENOMEM;
 
 	gd->gdma_context = gc;
-	gd->driver_data = hwc;
 	hwc->gdma_dev = gd;
 	hwc->dev = gc->dev;
 	hwc->hwc_timeout = HW_CHANNEL_WAIT_RESOURCE_TIMEOUT_MS;
+	hwc->active_senders = 0;
+	init_waitqueue_head(&gc->hwc_drain_waitq);
 
 	/* HWC's instance number is always 0. */
 	gd->dev_id.as_uint32 = 0;
@@ -816,6 +898,15 @@ int mana_hwc_create_channel(struct gdma_context *gc)
 
 	gd->pdid = INVALID_PDID;
 	gd->doorbell = INVALID_DOORBELL;
+
+	/* Publish driver_data last, under hwc_lock: the lock orders the hwc
+	 * initialisation above before the pointer becomes visible and
+	 * serialises the publish against the control-plane readers in
+	 * mana_gd_send_request(), mana_need_log() and mana_serv_reset().
+	 */
+	spin_lock_irqsave(&gc->hwc_lock, flags);
+	gc->hwc.driver_data = hwc;
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
 
 	/* mana_hwc_init_queues() only creates the required data structures,
 	 * and doesn't touch the HWC device.
@@ -851,10 +942,119 @@ out:
 
 void mana_hwc_destroy_channel(struct gdma_context *gc)
 {
+	/* This is the only destroy entry point.  driver_data is read
+	 * plainly here (teardown is serialised against other teardown);
+	 * it is cleared under hwc_lock below before hwc is freed.
+	 */
 	struct hw_channel_context *hwc = gc->hwc.driver_data;
+	unsigned long flags;
 
 	if (!hwc)
 		return;
+
+	/* Prevent new requests from starting.  Clear channel_up under the
+	 * bitmap lock so get_msg_index() cannot acquire a slot and increment
+	 * active_senders after this point.  Senders already waiting on the
+	 * semaphore are released by the force-completion loop below, which
+	 * returns every in-flight slot -- including the ones a timed-out
+	 * request was holding; each released waiter sees the flag clear and
+	 * posts its permit straight back, so they drain in turn.
+	 *
+	 * Gate on the bitmap rather than on channel_up: reading the flag
+	 * unlocked and only then taking the lock would let a concurrent
+	 * setup publish it in between and leave the channel up.  A zero
+	 * num_inflight_msg means mana_gd_alloc_res_map() never ran, so the
+	 * lock is not initialised yet -- and no sender can exist either.
+	 */
+	if (hwc->num_inflight_msg) {
+		spin_lock_irqsave(&hwc->inflight_msg_res.lock, flags);
+		hwc->channel_up = false;
+		spin_unlock_irqrestore(&hwc->inflight_msg_res.lock, flags);
+	}
+
+	/* Clear the pointer under hwc_lock so new callers in
+	 * mana_gd_send_request() see NULL and return -ENODEV.  The lock
+	 * makes the readers' "load driver_data + active_senders++"
+	 * atomic against this store, so once it returns no new sender can
+	 * take a reference; the active_senders drain below waits out those
+	 * that already did, before their hwc is freed.
+	 */
+	spin_lock_irqsave(&gc->hwc_lock, flags);
+	gc->hwc.driver_data = NULL;
+	spin_unlock_irqrestore(&gc->hwc_lock, flags);
+
+	/* Force-complete any in-flight senders so they observe -ENODEV,
+	 * return, and drop their references.  This runs before the HWC
+	 * hardware teardown below, so a live interrupt may still deliver
+	 * a real response via handle_resp() concurrently — that is safe
+	 * because the per-slot refcount model tolerates a concurrent
+	 * complete() and both paths (handle_resp and this loop) drop
+	 * their refs without double-releasing the slot.
+	 */
+	if (hwc->caller_ctx) {
+		struct hwc_caller_ctx *ctx;
+		bool drop_resp_ref;
+		int i;
+
+		for (i = 0; i < hwc->num_inflight_msg; i++) {
+			if (!test_bit(i, hwc->inflight_msg_res.map))
+				continue;
+
+			ctx = &hwc->caller_ctx[i];
+
+			/* Wake senders blocked on wait_for_completion.
+			 * Set error under lock to avoid racing with
+			 * handle_resp() which writes error under the
+			 * same lock.  The sender NULLs output_buf
+			 * after waking — doing it here would race
+			 * with a sender that hasn't set output_buf yet.
+			 *
+			 * Latch ->responded so that a response still in
+			 * flight cannot overwrite -ENODEV and report
+			 * success for a request the channel is abandoning.
+			 * handle_resp() then drops that response without
+			 * touching the refcount, so release the
+			 * response-side reference here instead.
+			 */
+			spin_lock_irqsave(&ctx->lock, flags);
+			/* Do not clobber a response mana_hwc_handle_resp() has
+			 * already delivered: its payload is in the caller's
+			 * buffer and the command really did complete, so
+			 * reporting -ENODEV would make the caller treat a
+			 * hardware object it now owns as never created.
+			 */
+			if (!ctx->responded)
+				ctx->error = -ENODEV;
+			drop_resp_ref = ctx->resp_pending;
+			ctx->resp_pending = false;
+			ctx->responded = true;
+			complete(&ctx->comp_event);
+			spin_unlock_irqrestore(&ctx->lock, flags);
+
+			if (drop_resp_ref)
+				hwc_ctx_put(hwc, ctx);
+		}
+	}
+
+	/* Wait for all sender threads to finish and drop their refs
+	 * before touching the hardware or freeing anything, so no
+	 * in-flight sender is still running when this function returns;
+	 * otherwise a stranded sender would dereference gc->hwc_lock /
+	 * gc->hwc_drain_waitq after the caller frees gc.
+	 * After this, only slots held by timed-out senders whose
+	 * handle_resp() never ran remain in the bitmap.
+	 *
+	 * active_senders is only ever modified under hwc_lock, and the
+	 * last sender's wake_up() runs under that lock before it is
+	 * released.  Evaluating the condition under hwc_lock therefore
+	 * guarantees that once we observe 0 the waking sender has
+	 * already dropped the lock -- i.e. finished touching gc -- so it
+	 * cannot race the caller freeing gc after this returns.
+	 */
+	spin_lock_irq(&gc->hwc_lock);
+	wait_event_lock_irq(gc->hwc_drain_waitq,
+			    hwc->active_senders == 0, gc->hwc_lock);
+	spin_unlock_irq(&gc->hwc_lock);
 
 	/* Tear down only if setup_hwc() handed the queues to the PF.  Until
 	 * then the device never saw them, so there is nothing to undo.
@@ -871,14 +1071,36 @@ void mana_hwc_destroy_channel(struct gdma_context *gc)
 	}
 	gc->max_num_cqs = 0;
 
+	/* Destroy the HWC CQ object before the TXQ and RQ.  The
+	 * active_senders drain above already guarantees no sender is
+	 * still reaching the CQ through txq->hwc_cq.
+	 */
+	if (hwc->cq)
+		mana_hwc_destroy_cq(hwc->gdma_dev->gdma_context, hwc->cq);
+
 	if (hwc->txq)
 		mana_hwc_destroy_wq(hwc, hwc->txq);
 
 	if (hwc->rxq)
 		mana_hwc_destroy_wq(hwc, hwc->rxq);
 
-	if (hwc->cq)
-		mana_hwc_destroy_cq(hwc->gdma_dev->gdma_context, hwc->cq);
+	/* Safety net: the force-complete loop above dropped the
+	 * response-side reference of every occupied slot and the sender
+	 * drain released the matching sender references, so nothing should
+	 * still be set here.  Release anything that is, rather than leak it.
+	 */
+	if (hwc->caller_ctx) {
+		struct hwc_caller_ctx *ctx;
+		int i;
+
+		for (i = 0; i < hwc->num_inflight_msg; i++) {
+			if (!test_bit(i, hwc->inflight_msg_res.map))
+				continue;
+
+			ctx = &hwc->caller_ctx[i];
+			hwc_ctx_put(hwc, ctx);
+		}
+	}
 
 	kfree(hwc->caller_ctx);
 	hwc->caller_ctx = NULL;
@@ -893,7 +1115,6 @@ void mana_hwc_destroy_channel(struct gdma_context *gc)
 	hwc->hwc_timeout = 0;
 
 	kfree(hwc);
-	gc->hwc.driver_data = NULL;
 	gc->hwc.gdma_context = NULL;
 
 	vfree(gc->cq_table);
@@ -910,6 +1131,8 @@ int mana_hwc_send_request(struct hw_channel_context *hwc, u32 req_len,
 	struct hwc_caller_ctx *ctx;
 	unsigned long flags;
 	bool drop_resp_ref;
+	bool abandoned = false;
+	bool cancelled;
 	u32 dest_vrcq = 0;
 	u32 dest_vrq = 0;
 	u32 command;
@@ -955,7 +1178,25 @@ int mana_hwc_send_request(struct hw_channel_context *hwc, u32 req_len,
 	/* The response-side reference (from get_msg_index) keeps the slot
 	 * alive if hardware responds right after the doorbell.
 	 */
-	err = mana_hwc_post_tx_wqe(txq, tx_wr, dest_vrq, dest_vrcq, false);
+	/* Submit under the slot lock, so mana_hwc_destroy_channel() cannot
+	 * cancel this request between the check and the doorbell: it takes
+	 * the same lock, so it either cancels before this runs -- and the
+	 * request is never handed to the device -- or after, when the
+	 * request is genuinely in flight.  Posting is a WQE write plus a
+	 * doorbell, so it does not sleep.
+	 */
+	spin_lock_irqsave(&ctx->lock, flags);
+	cancelled = ctx->responded;
+	if (cancelled)
+		err = ctx->error;
+	else
+		err = mana_hwc_post_tx_wqe(txq, tx_wr, dest_vrq, dest_vrcq,
+					   false);
+	spin_unlock_irqrestore(&ctx->lock, flags);
+
+	if (cancelled)
+		goto out;
+
 	if (err) {
 		dev_err(hwc->dev, "HWC: Failed to post send WQE: %d\n", err);
 		goto out;
@@ -972,9 +1213,23 @@ int mana_hwc_send_request(struct hw_channel_context *hwc, u32 req_len,
 		ctx->output_buf = NULL;
 		err = ctx->error;
 		status = ctx->status_code;
+		if (err == -EINPROGRESS) {
+			/* Give up on this request in the same critical section
+			 * that clears output_buf, so a response can never
+			 * observe the slot as "sender has not published yet"
+			 * and be discarded as premature -- that would strand
+			 * the slot, because only a response frees it.
+			 *
+			 * Keep the response-side reference: the device may
+			 * still answer, so the slot stays taken until it does
+			 * and must not be handed to another request.
+			 */
+			ctx->responded = true;
+			abandoned = true;
+		}
 		spin_unlock_irqrestore(&ctx->lock, flags);
 
-		if (err != -EINPROGRESS) {
+		if (!abandoned) {
 			/* A response raced in just after the timeout, so the
 			 * hardware is alive: keep the channel and report what
 			 * that response said rather than a timeout.  It may
@@ -986,29 +1241,25 @@ int mana_hwc_send_request(struct hw_channel_context *hwc, u32 req_len,
 			goto check_status;
 		}
 
-		if (wait_ms != 0)
+		if (wait_ms != 0) {
 			dev_err(hwc->dev, "Command 0x%x timed out: %u ms\n",
 				command, wait_ms);
 
+			/* Genuine timeout: shorten later waits so subsequent
+			 * commands fail fast instead of each draining the
+			 * full timeout.
+			 */
+			if (hwc->hwc_timeout > 1)
+				hwc->hwc_timeout = 1;
+		}
+
 		err = -ETIMEDOUT;
 
-		/* No-wait teardown (hwc_timeout == 0) is expected to expire;
-		 * just release the slot so the next teardown command can reuse
-		 * it.
+		/* Drop only the sender's reference; the response-side one is
+		 * what keeps the slot reserved.
 		 */
-		if (wait_ms == 0)
-			goto out;
-
-		/* Genuine timeout: shorten later waits so subsequent commands
-		 * fail fast instead of each draining the full timeout.
-		 */
-		if (hwc->hwc_timeout > 1)
-			hwc->hwc_timeout = 1;
-
-		/* Release the slot via out:; a late response no longer touches
-		 * it, so the sender must drop the reference here.
-		 */
-		goto out;
+		hwc_ctx_put(hwc, ctx);
+		goto done;
 	}
 
 	/* Clear output_buf and read the result under the lock; the slot may
@@ -1041,14 +1292,15 @@ check_status:
 	err = 0;
 	goto done;
 out:
-	/* Error, no-wait teardown, or timeout: drop the sender's and the
-	 * response-side references.  Latch ->responded so a racing response
-	 * is a no-op, and only drop the response-side ref if it has not.
+	/* Only reached before the request reached the hardware, so no
+	 * response can ever arrive for it: latch ->responded and drop both
+	 * the response-side and the sender's reference, freeing the slot.
 	 */
 	ctx = hwc->caller_ctx + msg_id;
 	spin_lock_irqsave(&ctx->lock, flags);
 	ctx->output_buf = NULL;
-	drop_resp_ref = !ctx->responded;
+	drop_resp_ref = ctx->resp_pending;
+	ctx->resp_pending = false;
 	ctx->responded = true;
 	spin_unlock_irqrestore(&ctx->lock, flags);
 	if (drop_resp_ref)
