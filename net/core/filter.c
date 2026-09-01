@@ -7018,15 +7018,16 @@ static void bpf_update_srh_state(struct sk_buff *skb)
 {
 	struct seg6_bpf_srh_state *srh_state =
 		this_cpu_ptr(&seg6_bpf_srh_states);
-	int srhoff = 0;
+	struct ipv6_sr_hdr *srh;
 
-	if (ipv6_find_hdr(skb, &srhoff, IPPROTO_ROUTING, NULL, NULL) < 0) {
-		srh_state->srh = NULL;
-	} else {
-		srh_state->srh = (struct ipv6_sr_hdr *)(skb->data + srhoff);
-		srh_state->hdrlen = srh_state->srh->hdrlen << 3;
-		srh_state->valid = true;
-	}
+	srh = seg6_get_srh(skb, 0);
+	bpf_compute_data_pointers(skb);
+	srh_state->srh = srh;
+	if (!srh)
+		return;
+
+	srh_state->hdrlen = srh->hdrlen << 3;
+	srh_state->valid = true;
 }
 
 BPF_CALL_4(bpf_lwt_seg6_action, struct sk_buff *, skb,
@@ -7059,15 +7060,18 @@ BPF_CALL_4(bpf_lwt_seg6_action, struct sk_buff *, skb,
 
 		if (ipv6_find_hdr(skb, &hdroff, IPPROTO_IPV6, NULL, NULL) < 0)
 			return -EBADMSG;
-		if (!pskb_pull(skb, hdroff))
+		if (!pskb_may_pull(skb, hdroff + sizeof(struct ipv6hdr))) {
+			srh_state->srh = NULL;
+			bpf_compute_data_pointers(skb);
 			return -EBADMSG;
+		}
+		__skb_pull(skb, hdroff);
 
 		skb_postpull_rcsum(skb, skb_network_header(skb), hdroff);
 		skb_reset_network_header(skb);
 		skb_reset_transport_header(skb);
 		skb->encapsulation = 0;
 
-		bpf_compute_data_pointers(skb);
 		bpf_update_srh_state(skb);
 		return seg6_lookup_nexthop(skb, NULL, *(int *)param);
 	case SEG6_LOCAL_ACTION_END_B6:
@@ -7075,8 +7079,7 @@ BPF_CALL_4(bpf_lwt_seg6_action, struct sk_buff *, skb,
 			return -EBADMSG;
 		err = bpf_push_seg6_encap(skb, BPF_LWT_ENCAP_SEG6_INLINE,
 					  param, param_len);
-		if (!err)
-			bpf_update_srh_state(skb);
+		bpf_update_srh_state(skb);
 
 		return err;
 	case SEG6_LOCAL_ACTION_END_B6_ENCAP:
@@ -7084,8 +7087,7 @@ BPF_CALL_4(bpf_lwt_seg6_action, struct sk_buff *, skb,
 			return -EBADMSG;
 		err = bpf_push_seg6_encap(skb, BPF_LWT_ENCAP_SEG6,
 					  param, param_len);
-		if (!err)
-			bpf_update_srh_state(skb);
+		bpf_update_srh_state(skb);
 
 		return err;
 	default:
