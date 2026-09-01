@@ -439,9 +439,10 @@ config DEBUG_INFO_BTF_MODULES
 	  Generate compact split BTF type information for kernel modules.
 
 config DEBUG_INFO_BTF_INLINE
-	bool "Provide information about inline sites in BTF"
+	tristate "Provide information about inline sites in BTF"
 	default n
 	depends on DEBUG_INFO_BTF && PAHOLE_HAS_INLINE && SYSFS
+	select DEBUG_INFO_BTF_MODULES if MODULES
 	help
 	  Generate information about inline sites in .BTF.inline sections.
 	  These sections contain split BTF relative to the kernel or module BTF
