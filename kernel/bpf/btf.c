@@ -8244,7 +8244,7 @@ skip_pointer:
 			return -EINVAL;
 		}
 		if (btf_type_is_int(t) || btf_is_any_enum(t)) {
-			sub->args[i].arg_type = ARG_ANYTHING;
+			sub->args[i].arg_type = ARG_SCALAR;
 			continue;
 		}
 		if (!is_global)
