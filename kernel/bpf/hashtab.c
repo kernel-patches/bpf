@@ -493,11 +493,76 @@ static void htab_pcpu_mem_dtor(void *obj, void *ctx)
 		bpf_obj_free_fields(hrec->record, per_cpu_ptr(pptr, cpu));
 }
 
+/*
+ * The duplicated record borrows program BTFs, but is freed from a deferred
+ * workqueue that may run after the program BTF is gone. Hold a reference for
+ * the record's lifetime and snapshot the borrowed BTFs, since
+ * btf_record_free() frees the record.
+ */
+
+/* Program BTF borrowed by the field, or NULL. */
+static struct btf *htab_field_borrowed_btf(const struct btf_field *field)
+{
+	struct btf *btf = NULL;
+
+	switch (field->type) {
+	case BPF_KPTR_UNREF:
+	case BPF_KPTR_REF:
+	case BPF_KPTR_PERCPU:
+	case BPF_UPTR:
+		btf = field->kptr.btf;
+		break;
+	case BPF_LIST_HEAD:
+	case BPF_RB_ROOT:
+		btf = field->graph_root.btf;
+		break;
+	default:
+		break;
+	}
+
+	if (btf && !btf_is_kernel(btf))
+		return btf;
+	return NULL;
+}
+
+/* Snapshot the program BTFs @rec borrows into @btfs; returns their count. */
+static int htab_record_prog_btfs_snapshot(struct btf_record *rec,
+					  struct btf **btfs)
+{
+	int i, n = 0;
+
+	if (IS_ERR_OR_NULL(rec))
+		return 0;
+
+	for (i = 0; i < rec->cnt; i++) {
+		struct btf *btf = htab_field_borrowed_btf(&rec->fields[i]);
+
+		if (btf)
+			btfs[n++] = btf;
+	}
+	return n;
+}
+
+static void htab_record_prog_btf_get(struct btf_record *rec)
+{
+	struct btf *btfs[BTF_FIELDS_MAX];
+	int i, n;
+
+	n = htab_record_prog_btfs_snapshot(rec, btfs);
+	for (i = 0; i < n; i++)
+		btf_get(btfs[i]);
+}
+
 static void htab_dtor_ctx_free(void *ctx)
 {
 	struct htab_btf_record *hrec = ctx;
+	struct btf *btfs[BTF_FIELDS_MAX];
+	int i, n;
 
+	n = htab_record_prog_btfs_snapshot(hrec->record, btfs);
 	btf_record_free(hrec->record);
+	for (i = 0; i < n; i++)
+		btf_put(btfs[i]);
 	kfree(ctx);
 }
 
@@ -521,6 +586,7 @@ static int bpf_ma_set_dtor(struct bpf_map *map, struct bpf_mem_alloc *ma,
 		kfree(hrec);
 		return err;
 	}
+	htab_record_prog_btf_get(hrec->record);
 	bpf_mem_alloc_set_dtor(ma, dtor, htab_dtor_ctx_free, hrec);
 	return 0;
 }
