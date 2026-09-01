@@ -731,9 +731,8 @@ bool ex_handler_bpf(const struct exception_table_entry *ex,
 	return true;
 }
 
-/* For accesses to BTF pointers, add an entry to the exception table */
-static int add_exception_handler(const struct bpf_insn *insn, int dst_reg,
-				 struct rv_jit_context *ctx)
+/* Add an entry to the exception table for a faulting probe insn */
+static int add_exception_handler(int dst_reg, struct rv_jit_context *ctx)
 {
 	struct exception_table_entry *ex;
 	unsigned long pc;
@@ -742,14 +741,6 @@ static int add_exception_handler(const struct bpf_insn *insn, int dst_reg,
 
 	if (!ctx->insns || !ctx->ro_insns || !ctx->prog->aux->extable ||
 	    ctx->ex_insn_off <= 0 || ctx->ex_jmp_off <= 0)
-		return 0;
-
-	if (BPF_MODE(insn->code) != BPF_PROBE_MEM &&
-	    BPF_MODE(insn->code) != BPF_PROBE_MEMSX &&
-	    BPF_MODE(insn->code) != BPF_PROBE_MEM32 &&
-	    !(BPF_MODE(insn->code) == BPF_PROBE_MEM32SX &&
-	      BPF_CLASS(insn->code) == BPF_LDX) &&
-	    BPF_MODE(insn->code) != BPF_PROBE_ATOMIC)
 		return 0;
 
 	if (WARN_ON_ONCE(ctx->nexentries >= ctx->prog->aux->num_exentries))
@@ -1360,6 +1351,15 @@ out:
 	return ret < 0 ? ret : size;
 }
 
+/* Probe loads fault on unmapped memory and need an exception table entry */
+static bool insn_is_probe_ldx(const struct bpf_insn *insn)
+{
+	return BPF_MODE(insn->code) == BPF_PROBE_MEM ||
+	       BPF_MODE(insn->code) == BPF_PROBE_MEMSX ||
+	       BPF_MODE(insn->code) == BPF_PROBE_MEM32 ||
+	       BPF_MODE(insn->code) == BPF_PROBE_MEM32SX;
+}
+
 int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 		      bool extra_pass)
 {
@@ -1929,9 +1929,11 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 
 		emit_ldx(rd, off, rs, BPF_SIZE(code), sign_ext, ctx);
 
-		ret = add_exception_handler(insn, rd, ctx);
-		if (ret)
-			return ret;
+		if (insn_is_probe_ldx(insn)) {
+			ret = add_exception_handler(rd, ctx);
+			if (ret)
+				return ret;
+		}
 
 		if (BPF_SIZE(code) != BPF_DW && insn_is_zext(&insn[1]))
 			return 1;
@@ -1959,9 +1961,11 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 
 		emit_st(rd, off, imm, BPF_SIZE(code), ctx);
 
-		ret = add_exception_handler(insn, REG_DONT_CLEAR_MARKER, ctx);
-		if (ret)
-			return ret;
+		if (BPF_MODE(insn->code) == BPF_PROBE_MEM32) {
+			ret = add_exception_handler(REG_DONT_CLEAR_MARKER, ctx);
+			if (ret)
+				return ret;
+		}
 		break;
 
 	/* STX: *(size *)(dst + off) = src */
@@ -1981,9 +1985,11 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 
 		emit_stx(rd, off, rs, BPF_SIZE(code), ctx);
 
-		ret = add_exception_handler(insn, REG_DONT_CLEAR_MARKER, ctx);
-		if (ret)
-			return ret;
+		if (BPF_MODE(insn->code) == BPF_PROBE_MEM32) {
+			ret = add_exception_handler(REG_DONT_CLEAR_MARKER, ctx);
+			if (ret)
+				return ret;
+		}
 		break;
 
 	/* Atomics */
@@ -2001,7 +2007,7 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 			ret = emit_atomic_rmw(rd, rs, insn, ctx);
 
 		/* ret can be 1 (skip-zext); extable entry still needs to be added */
-		if (ret >= 0) {
+		if (ret >= 0 && BPF_MODE(insn->code) == BPF_PROBE_ATOMIC) {
 			/*
 			 * A load-acquire reads into dst_reg, and a read-modify-write
 			 * carrying BPF_FETCH reads the old value into src_reg, or into
@@ -2010,7 +2016,7 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 			 */
 			int load_reg = bpf_atomic_load_reg(insn);
 
-			ret = add_exception_handler(insn, load_reg < 0 ?
+			ret = add_exception_handler(load_reg < 0 ?
 					REG_DONT_CLEAR_MARKER : regmap[load_reg],
 					ctx) ?: ret;
 		}
