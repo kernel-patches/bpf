@@ -49,6 +49,21 @@ config COREBOOT_TABLE
 	  device tree node /firmware/coreboot.
 	  If unsure say N.
 
+config COREBOOT_CFR
+	tristate "coreboot CFR firmware attributes"
+	depends on EFI
+	depends on COREBOOT_TABLE
+	depends on HAS_IOPORT
+	select CRC32
+	select FW_ATTR_CLASS
+	help
+	  This driver parses the coreboot CFR table and exposes runtime EFI
+	  variable-backed options through the firmware-attributes sysfs
+	  interface.
+
+	  If you have a system running coreboot with CFR runtime
+	  configuration support, say Y or M here.
+
 config COREBOOT_MEMCONSOLE_COMMON
 	tristate
 	depends on GOOGLE_MEMCONSOLE_X86_LEGACY || COREBOOT_MEMCONSOLE
