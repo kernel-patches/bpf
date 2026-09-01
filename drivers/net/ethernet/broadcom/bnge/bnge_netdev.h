@@ -539,6 +539,14 @@ struct bnge_tx_ring_info {
 	struct bnge_ring_struct	tx_ring_struct;
 };
 
+#define BNGE_NQ0_NAPI_IDX	0
+
+enum bnge_napi_flag {
+	BNGE_NAPI_FLAG_NQ0,
+};
+
+#define BNGE_NQ0_NAPI(bnapi)	(test_bit(BNGE_NAPI_FLAG_NQ0, &(bnapi)->flags))
+
 struct bnge_napi {
 	struct napi_struct		napi;
 	struct bnge_net			*bn;
@@ -555,6 +563,8 @@ struct bnge_napi {
 #define BNGE_TX_CMP_EVENT		0x10
 	bool				in_reset;
 	bool				tx_fault;
+
+	unsigned long			flags;
 };
 
 #define INVALID_STATS_CTX_ID	-1
