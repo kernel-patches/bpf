@@ -321,9 +321,17 @@ struct btf_permute_opts {
 	size_t sz;
 	/* optional .BTF.ext info along the main BTF info */
 	struct btf_ext *btf_ext;
+	/*
+	 * If set, types whose map entry has BTF_PERMUTE_ID_TRANSFER set are
+	 * removed from @btf and returned in a new split BTF based on @btf.
+	 */
+	struct btf **transfer_btf;
 	size_t :0;
 };
-#define btf_permute_opts__last_field btf_ext
+#define btf_permute_opts__last_field transfer_btf
+
+/* Mark an id_map entry as a type to be moved to .transfer_btf. */
+#define BTF_PERMUTE_ID_TRANSFER (1U << 31)
 
 /**
  * @brief **btf__permute()** rearranges BTF types in-place according to a specified ID mapping
@@ -348,6 +356,12 @@ struct btf_permute_opts {
  * - @id_map_cnt must be `btf__type_cnt(btf) - btf__type_cnt(btf__base_btf(btf))`
  * - Mapping is defined as `id_map[original_id - start_id] = new_id`
  * - `start_id` equals `btf__type_cnt(btf__base_btf(btf))`
+ *
+ * An @id_map entry can be ORed with BTF_PERMUTE_ID_TRANSFER to move that
+ * type to a newly-created split BTF returned through @opts->transfer_btf.
+ * The low bits still specify the type's position in the requested ordering.
+ * The id map is updated to contain the final IDs in the base and returned
+ * split BTF.
  *
  * After permutation, all type references within the BTF data and optional
  * BTF extension (if provided via @opts) are updated automatically.

@@ -2147,16 +2147,9 @@ int btf__find_str(struct btf *btf, const char *s)
  *   - > 0 offset into string section, on success;
  *   - < 0, on error.
  */
-int btf__add_str(struct btf *btf, const char *s)
+static int btf_add_local_str(struct btf *btf, const char *s)
 {
-	int off;
-	int err;
-
-	if (btf->base_btf) {
-		off = btf__find_str(btf->base_btf, s);
-		if (off != -ENOENT)
-			return off;
-	}
+	int off, err;
 
 	err = btf_ensure_modifiable(btf);
 	if (err)
@@ -2167,8 +2160,22 @@ int btf__add_str(struct btf *btf, const char *s)
 		return libbpf_err(off);
 
 	btf->hdr.str_len = strset__data_size(btf->strs_set);
+	btf->strs_deduped = false;
 
 	return btf->start_str_off + off;
+}
+
+int btf__add_str(struct btf *btf, const char *s)
+{
+	int off;
+
+	if (btf->base_btf) {
+		off = btf__find_str(btf->base_btf, s);
+		if (off != -ENOENT)
+			return off;
+	}
+
+	return btf_add_local_str(btf, s);
 }
 
 static void *btf_add_type_mem(struct btf *btf, size_t add_sz)
@@ -2218,6 +2225,7 @@ struct btf_pipe {
 	const struct btf *src;
 	struct btf *dst;
 	struct hashmap *str_off_map; /* map string offsets from src to dst */
+	bool force_local_strs;
 };
 
 static int btf_rewrite_str(struct btf_pipe *p, __u32 *str_off)
@@ -2234,7 +2242,10 @@ static int btf_rewrite_str(struct btf_pipe *p, __u32 *str_off)
 		return 0;
 	}
 
-	off = btf__add_str(p->dst, btf__str_by_offset(p->src, *str_off));
+	if (p->force_local_strs)
+		off = btf_add_local_str(p->dst, btf__str_by_offset(p->src, *str_off));
+	else
+		off = btf__add_str(p->dst, btf__str_by_offset(p->src, *str_off));
 	if (off < 0)
 		return off;
 
@@ -4513,6 +4524,19 @@ err_out:
 	return err;
 }
 
+/* Compact strings after a type-only transformation such as btf__permute(). */
+static int btf_compact_strings(struct btf *btf, struct btf_ext *btf_ext)
+{
+	struct btf_dedup d = {
+		.btf = btf,
+		.btf_ext = btf_ext,
+	};
+
+	/* Types may have been removed since the last string compaction. */
+	btf->strs_deduped = false;
+	return btf_dedup_strings(&d);
+}
+
 /*
  * Calculate type signature hash of TYPEDEF, ignoring referenced type IDs,
  * as referenced type IDs equivalence is established separately during type
@@ -6617,7 +6641,14 @@ struct btf_permute {
 	struct btf *btf;
 	__u32 *id_map;
 	__u32 start_offs;
+	__u32 transfer_start_id;
+	bool reject_transfer;
 };
+
+static bool btf_permute_id_is_transfer(__u32 id)
+{
+	return id & BTF_PERMUTE_ID_TRANSFER;
+}
 
 /* Callback function to remap individual type ID references */
 static int btf_permute_remap_type_id(__u32 *type_id, void *ctx)
@@ -6633,18 +6664,54 @@ static int btf_permute_remap_type_id(__u32 *type_id, void *ctx)
 		return -EINVAL;
 
 	*type_id = p->id_map[new_id - p->btf->start_id + p->start_offs];
+	if (p->reject_transfer && *type_id >= p->transfer_start_id)
+		return -EINVAL;
+	return 0;
+}
+
+/*
+ * String offsets in a split BTF are absolute.  If its parent string table is
+ * compacted after the split was populated, move its local string offsets to
+ * start at the parent's new end.
+ */
+static int btf_permute_rebase_split_strs(struct btf *split_btf, __u32 old_start_str_off)
+{
+	__s64 delta = split_btf->base_btf->start_str_off + split_btf->base_btf->hdr.str_len -
+		      old_start_str_off;
+	int i;
+
+	for (i = 0; i < split_btf->nr_types; i++) {
+		struct btf_field_iter it;
+		struct btf_type *t = btf_type_by_id(split_btf,
+						    split_btf->start_id + i);
+		__u32 *str_off;
+		int err;
+
+		err = btf_field_iter_init(&it, t, BTF_FIELD_ITER_STRS);
+		if (err)
+			return err;
+		while ((str_off = btf_field_iter_next(&it))) {
+			if (*str_off >= old_start_str_off)
+				*str_off += delta;
+		}
+	}
+
+	btf_set_base_btf(split_btf, split_btf->base_btf);
 	return 0;
 }
 
 int btf__permute(struct btf *btf, __u32 *id_map, __u32 id_map_cnt,
 		 const struct btf_permute_opts *opts)
 {
-	struct btf_permute p;
-	struct btf_ext *btf_ext;
+	__u32 n, start_offs = 0, nr_transfer = 0, nr_base_types;
+	__u32 next_base_id, next_transfer_id, old_str_off = 0;
+	struct btf **transfer_btfp, *transfer_btf = NULL;
+	__u32 *new_id_map = NULL, *order_map = NULL;
 	void *nt, *new_types = NULL;
-	__u32 *order_map = NULL;
+	struct btf_ext *btf_ext;
+	bool committed = false;
+	struct btf_permute p;
 	int err = 0, i;
-	__u32 n, id, start_offs = 0;
 
 	if (!OPTS_VALID(opts, btf_permute_opts))
 		return libbpf_err(-EINVAL);
@@ -6661,7 +6728,21 @@ int btf__permute(struct btf *btf, __u32 *id_map, __u32 id_map_cnt,
 	if (id_map_cnt != n)
 		return libbpf_err(-EINVAL);
 
-	/* record the sequence of types */
+	transfer_btfp = OPTS_GET(opts, transfer_btf, NULL);
+	if (transfer_btfp)
+		*transfer_btfp = NULL;
+
+	/*
+	 * Make a working copy of the id map; it will be modified (such as
+	 * removing transfer flags) unlike the caller-passed original.
+	 */
+	new_id_map = calloc(id_map_cnt, sizeof(*new_id_map));
+	if (!new_id_map) {
+		err = -ENOMEM;
+		goto done;
+	}
+	memcpy(new_id_map, id_map, id_map_cnt * sizeof(*new_id_map));
+
 	order_map = calloc(id_map_cnt, sizeof(*id_map));
 	if (!order_map) {
 		err = -ENOMEM;
@@ -6678,33 +6759,82 @@ int btf__permute(struct btf *btf, __u32 *id_map, __u32 id_map_cnt,
 	if (err)
 		goto done;
 
+	/*
+	 * Build the inverse map: for each requested destination ID, record the
+	 * original type ID that will occupy it. order_map is indexed by the
+	 * destination ID relative to the first ID represented by id_map. The
+	 * caller id_map maps old IDs to requested destinations, but BTF types
+	 * must be emitted in destination-ID order; the inverse map supplies the
+	 * old type to copy for each output slot without repeatedly searching
+         * id_map.
+         */
 	for (i = start_offs; i < id_map_cnt; i++) {
-		id = id_map[i];
-		if (id < btf->start_id || id >= btf__type_cnt(btf)) {
+		__u32 requested_id = new_id_map[i];
+		__u32 order_idx;
+
+		if (btf_permute_id_is_transfer(requested_id)) {
+			if (!transfer_btfp) {
+				err = -EINVAL;
+				goto done;
+			}
+			requested_id &= ~BTF_PERMUTE_ID_TRANSFER;
+			nr_transfer++;
+		}
+		if (requested_id < btf->start_id || requested_id >= btf__type_cnt(btf)) {
 			err = -EINVAL;
 			goto done;
 		}
-		id -= btf->start_id - start_offs;
+		order_idx = requested_id - btf->start_id + start_offs;
 		/* cannot be mapped to the same ID */
-		if (order_map[id]) {
+		if (order_map[order_idx]) {
 			err = -EINVAL;
 			goto done;
 		}
-		order_map[id] = i + btf->start_id - start_offs;
+		order_map[order_idx] = i + btf->start_id - start_offs;
 	}
 
+	/*
+	 * Turn requested destination IDs into final IDs. Retained types
+	 * occupy the compacted parent BTF first; transferred types immediately
+	 * follow them, which is where they will start in returned split BTF.
+	 */
+	nr_base_types = n - nr_transfer - start_offs;
+	next_base_id = btf->start_id;
+	next_transfer_id = btf->start_id + nr_base_types;
+	for (i = start_offs; i < id_map_cnt; i++) {
+		__u32 old_id = order_map[i];
+		__u32 old_id_idx = old_id - btf->start_id + start_offs;
+
+		if (btf_permute_id_is_transfer(new_id_map[old_id_idx]))
+			new_id_map[old_id_idx] = next_transfer_id++;
+		else
+			new_id_map[old_id_idx] = next_base_id++;
+	}
+
+	/*
+	 * Copy retained types and reject references into the split (transfer)
+	 * BTF from the original BTF.
+	 */
 	p.btf = btf;
-	p.id_map = id_map;
+	p.id_map = new_id_map;
 	p.start_offs = start_offs;
+	p.transfer_start_id = btf->start_id + nr_base_types;
+	p.reject_transfer = true;
 	nt = new_types;
 	for (i = start_offs; i < id_map_cnt; i++) {
 		struct btf_field_iter it;
 		const struct btf_type *t;
 		__u32 *type_id;
+		__u32 old_id;
+		__u32 old_id_idx;
 		int type_size;
 
-		id = order_map[i];
-		t = btf__type_by_id(btf, id);
+		old_id = order_map[i];
+		old_id_idx = old_id - btf->start_id + start_offs;
+
+		if (new_id_map[old_id_idx] >= btf->start_id + nr_base_types)
+			continue;
+		t = btf__type_by_id(btf, old_id);
 		type_size = btf_type_size(btf, t);
 		memcpy(nt, t, type_size);
 
@@ -6714,14 +6844,71 @@ int btf__permute(struct btf *btf, __u32 *id_map, __u32 id_map_cnt,
 			goto done;
 		while ((type_id = btf_field_iter_next(&it))) {
 			err = btf_permute_remap_type_id(type_id, &p);
-			if (err)
+			if (err < 0)
 				goto done;
 		}
 
 		nt += type_size;
 	}
 
-	/* fix up referenced IDs for btf_ext */
+	/*
+	 * Copy transferred types into a split BTF. They can reference both
+	 * retained parent types and other transferred types, so do not reject
+	 * final IDs in the split-ID range while rewriting their references.
+	 */
+	if (nr_transfer) {
+		struct btf_permute transfer_p;
+
+		transfer_btf = btf__new_empty_split(btf);
+		if (!transfer_btf) {
+			err = -errno;
+			goto done;
+		}
+		old_str_off = transfer_btf->start_str_off;
+
+		transfer_p = p;
+		/* Split transfer types may refer to other split types */
+		transfer_p.reject_transfer = false;
+		for (i = start_offs; i < id_map_cnt; i++) {
+			struct btf_field_iter it;
+			struct btf_pipe pipe = {
+				.src = btf,
+				.dst = transfer_btf,
+				.force_local_strs = true,
+			};
+			const struct btf_type *t;
+			struct btf_type *new_t;
+			__u32 *type_id;
+			__u32 old_id;
+			__u32 old_id_idx;
+			int new_id;
+
+			old_id = order_map[i];
+			old_id_idx = old_id - btf->start_id + start_offs;
+
+			if (!btf_permute_id_is_transfer(id_map[old_id_idx]))
+				continue;
+			t = btf__type_by_id(btf, old_id);
+			new_id = btf_add_type(&pipe, t);
+			if (new_id < 0) {
+				err = new_id;
+				goto done;
+			}
+			new_t = btf_type_by_id(transfer_btf, new_id);
+			err = btf_field_iter_init(&it, new_t, BTF_FIELD_ITER_IDS);
+			if (!err) {
+				while ((type_id = btf_field_iter_next(&it))) {
+					err = btf_permute_remap_type_id(type_id, &transfer_p);
+					if (err)
+						break;
+				}
+			}
+			if (err < 0)
+				goto done;
+		}
+	}
+
+	/* Rewrite optional .BTF.ext references to retained type IDs. */
 	btf_ext = OPTS_GET(opts, btf_ext, NULL);
 	if (btf_ext) {
 		err = btf_ext_visit_type_ids(btf_ext, btf_permute_remap_type_id, &p);
@@ -6729,18 +6916,58 @@ int btf__permute(struct btf *btf, __u32 *id_map, __u32 id_map_cnt,
 			goto done;
 	}
 
-	for (nt = new_types, i = 0; i < id_map_cnt - start_offs; i++) {
+	/* Install the compacted parent types and rebuild their index. */
+	for (nt = new_types, i = 0; i < nr_base_types; i++) {
 		btf->type_offs[i] = nt - new_types;
 		nt += btf_type_size(btf, nt);
 	}
-
-	free(order_map);
 	free(btf->types_data);
 	btf->types_data = new_types;
+	committed = true;
+	btf_hdr_update_type_len(btf, nt - new_types);
+	btf->nr_types = nr_base_types;
+
+	/*
+	 * An important goal is to also transfer strings to the transfer
+	 * BTF where they do not have duplicates in BTF. This is important
+	 * for cases like inline BTF where inline function names could
+	 * comprise a significant portion of the string table. The approach
+	 * is to first compact the set of strings in the base now transfer
+	 * is complete; this will remove unreferenced strings. Then
+	 * local references in the transfer BTF have to be moved downwards
+	 * based upon that compaction. Finally also compact transfer BTF
+	 * references so that we replace duplicate references in split with
+	 * base references where present.
+	 *
+	 * Once all this is done, we end up with transfer-only strings in
+	 * transfer split BTF and shared strings in BTF. The result is
+	 * a transfer BTF with a lot of transfer-only strings will not
+	 * pollute the string table of the non-transfer BTF.
+	 */
+	if (transfer_btf) {
+		err = btf_compact_strings(btf, btf_ext);
+		if (err)
+			goto done;
+		err = btf_permute_rebase_split_strs(transfer_btf, old_str_off);
+		if (err)
+			goto done;
+		err = btf_compact_strings(transfer_btf, NULL);
+		if (err)
+			goto done;
+		*transfer_btfp = transfer_btf;
+	}
+
+	/* On success return the final old-to-new type-ID map to the caller. */
+	memcpy(id_map, new_id_map, id_map_cnt * sizeof(*id_map));
+	free(new_id_map);
+	free(order_map);
 	return 0;
 
 done:
+	free(new_id_map);
 	free(order_map);
-	free(new_types);
+	if (!committed)
+		free(new_types);
+	btf__free(transfer_btf);
 	return libbpf_err(err);
 }
