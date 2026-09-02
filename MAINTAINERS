@@ -25154,6 +25154,7 @@ M:	Ali Rouhi <arouhi@sitime.com>
 L:	netdev@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/dpll/sitime,sit95316.yaml
+F:	drivers/dpll/sit9531x/
 
 SL28 CPLD MFD DRIVER
 M:	Michael Walle <mwalle@kernel.org>
