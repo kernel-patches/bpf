@@ -871,7 +871,10 @@ static int bpf_send_signal_common(u32 sig, enum pid_type type, struct task_struc
 	 */
 	if (unlikely(task->flags & (PF_KTHREAD | PF_EXITING)))
 		return -EPERM;
-	if (unlikely(!nmi_uaccess_okay()))
+	/* Since nmi_uaccess_okay() is only for the current
+	 * task, check if task is current.
+	 */
+	if (task == current && unlikely(!nmi_uaccess_okay()))
 		return -EPERM;
 	/* Task should not be pid=1 to avoid kernel panic. */
 	if (unlikely(is_global_init(task)))
