@@ -529,6 +529,52 @@ sit9531x_dpll_input_pin_prio_set(const struct dpll_pin *pin, void *pin_priv,
 }
 
 /*
+ * sit9531x_dpll_input_pin_phase_offset_get - read phase offset
+ *
+ * reads the TDC (Time-to-Digital Converter) hardware
+ * to measure the phase difference in picoseconds via
+ * sit9531x_phase_offset_read().
+ */
+/*
+ * sit9531x_dpll_input_pin_ffo_get - read the input's frequency offset
+ *
+ * The offset is derived from how far the PLL's running DIVN sits from
+ * its configured one, which only says something about the reference the
+ * PLL is actually tracking.  For every other input there is no
+ * measurement, and -ENODATA leaves the attribute out rather than
+ * reporting the active reference's figure against the wrong pin.
+ */
+static int
+sit9531x_dpll_input_pin_ffo_get(const struct dpll_pin *pin, void *pin_priv,
+				const struct dpll_device *dpll, void *dpll_priv,
+				struct dpll_ffo_param *ffo,
+				struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+
+	/*
+	 * The periodic worker updates selected_ref under the same lock, so
+	 * test it here rather than before taking it: otherwise the
+	 * reference can change in between and the measurement gets
+	 * attributed to the wrong pin.
+	 */
+	if (sitdev->chan[sitdpll->id].selected_ref != dpin->id) {
+		mutex_unlock(&sitdev->multiop_lock);
+		return -ENODATA;
+	}
+
+	rc = sit9531x_pll_ffo_ppt(sitdev, sitdpll->id, &ffo->ffo);
+	mutex_unlock(&sitdev->multiop_lock);
+
+	return rc;
+}
+
+/*
  * sit9531x_dpll_input_pin_phase_offset_get - phase offset of a reference
  *
  * What this reports, and what it deliberately does not:
@@ -641,6 +687,7 @@ static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
 	 * rather than a port rate.
 	 */
 	.supported_ffo		= BIT(DPLL_FFO_PIN_DEVICE),
+	.ffo_get		= sit9531x_dpll_input_pin_ffo_get,
 };
 
 /*

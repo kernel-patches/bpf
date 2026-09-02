@@ -932,6 +932,61 @@ static int sit9531x_is_xo_doubler_enabled(struct sit9531x_dev *sitdev)
 }
 
 /*
+ * sit9531x_dbg_sample - latch and read a signal pathway debug sample
+ * @sitdev:	device pointer
+ * @pll_idx:	PLL index (0-3)
+ * @read_code:	which tap of the pathway to sample
+ * @buf:	result, least significant byte first
+ * @len:	bytes to read, at most SIT9531X_DBG_DATA_BYTES
+ *
+ * Return: 0 on success, <0 on error
+ */
+static int sit9531x_dbg_sample(struct sit9531x_dev *sitdev, u8 pll_idx,
+			       u8 read_code, u8 *buf, unsigned int len)
+{
+	unsigned int i;
+	int rc;
+	u8 v;
+
+	if (len > SIT9531X_DBG_DATA_BYTES)
+		return -EINVAL;
+
+	rc = sit9531x_write_pll_u8(sitdev, pll_idx, SIT9531X_PLL_REG_DEBUG,
+				   SIT9531X_PLL_DEBUG_UNLOCK);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_write_pll_u8(sitdev, pll_idx,
+				   SIT9531X_PLL_REG_DBG_READ_CODE, read_code);
+	if (rc)
+		return rc;
+
+	/*
+	 * Reading the trigger latches a sample of the selected tap.  Read it
+	 * three times, as the vendor phase-difference procedure does and as
+	 * sit9531x_phase_offset_read() already did: a single read returns
+	 * the previous latch, so a caller sampling repeatedly gets the same
+	 * value back however much the tap has moved.
+	 */
+	for (i = 0; i < SIT9531X_DBG_LATCH_READS; i++) {
+		rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+					  SIT9531X_PLL_REG_DBG_TRIGGER, &v);
+		if (rc)
+			return rc;
+	}
+
+	for (i = 0; i < len; i++) {
+		rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+					  SIT9531X_PLL_REG_DBG_DATA_0 + i,
+					  &buf[i]);
+		if (rc)
+			return rc;
+	}
+
+	return 0;
+}
+
+/*
  * DIVN as a fixed-point value: int_part plus fracn/fracd, carried with
  * SIT9531X_DIVN_SCALE steps per unit.  The scale keeps a whole DIVN
  * well inside s64 while resolving far below the parts-per-trillion the
@@ -994,6 +1049,102 @@ static int sit9531x_divn_static(struct sit9531x_dev *sitdev, u8 pll_idx,
 
 	*divn = sit9531x_divn_fixed(int_part, (s32)fracn_raw,
 				    (u64)fracd_raw + 1);
+
+	return 0;
+}
+
+/*
+ * sit9531x_divn_runtime - read the DIVN the digital loop is commanding
+ * @sitdev:	device pointer
+ * @pll_idx:	PLL index (0-3)
+ * @divn:	result, fixed point as per sit9531x_divn_fixed()
+ *
+ * Same quantity as sit9531x_divn_static(), but sampled from the running
+ * loop rather than from the configuration registers, and carried at a
+ * wider precision: the numerator is 48 bits, two's complement, the
+ * denominator 49.  The integer part shares its tap with the numerator.
+ *
+ * Return: 0 on success, <0 on error
+ */
+static int sit9531x_divn_runtime(struct sit9531x_dev *sitdev, u8 pll_idx,
+				 s64 *divn)
+{
+	u8 buf[SIT9531X_DBG_DATA_BYTES];
+	u64 fracn_raw = 0, fracd = 0;
+	u32 int_part;
+	int rc, i;
+
+	rc = sit9531x_dbg_sample(sitdev, pll_idx, SIT9531X_DBG_READ_CODE_DIVN,
+				 buf, SIT9531X_DBG_DATA_BYTES);
+	if (rc)
+		return rc;
+
+	for (i = 5; i >= 0; i--)
+		fracn_raw = (fracn_raw << 8) | buf[i];
+
+	int_part = buf[6] | ((u32)(buf[7] & SIT9531X_DIVN_RT_INT_HI_BIT) << 8);
+
+	rc = sit9531x_dbg_sample(sitdev, pll_idx,
+				 SIT9531X_DBG_READ_CODE_DIVN_DEN, buf,
+				 SIT9531X_DBG_DATA_BYTES);
+	if (rc)
+		return rc;
+
+	for (i = 5; i >= 0; i--)
+		fracd = (fracd << 8) | buf[i];
+
+	fracd |= (u64)(buf[6] & SIT9531X_DIVN_RT_INT_HI_BIT) << 48;
+
+	*divn = sit9531x_divn_fixed(int_part,
+				    sign_extend64(fracn_raw,
+						  SIT9531X_DIVN_RT_NUM_BITS - 1),
+				    fracd);
+
+	return 0;
+}
+
+/**
+ * sit9531x_pll_ffo_ppt - fractional frequency offset of a PLL's reference
+ * @sitdev:	device pointer
+ * @pll_idx:	PLL index (0-3)
+ * @ffo:	result in parts per trillion
+ *
+ * A locked PLL commands whatever DIVN keeps its VCO tracking the
+ * reference.  How far that sits from the configured DIVN is how far the
+ * reference sits from the local oscillator, which is the fractional
+ * frequency offset the DPLL ABI reports for the pin feeding the device.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ *
+ * Return: 0 on success, -ENODATA when DIVN is not programmed, <0 on
+ * error.
+ */
+int sit9531x_pll_ffo_ppt(struct sit9531x_dev *sitdev, u8 pll_idx, s64 *ffo)
+{
+	s64 configured, running, delta;
+	u64 magnitude;
+	int rc;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	rc = sit9531x_divn_static(sitdev, pll_idx, &configured);
+	if (rc)
+		return rc;
+	if (configured <= 0)
+		return -ENODATA;
+
+	rc = sit9531x_divn_runtime(sitdev, pll_idx, &running);
+	if (rc)
+		return rc;
+
+	delta = running - configured;
+	magnitude = mul_u64_u64_div_u64(abs(delta), SIT9531X_PPT_PER_UNIT,
+					(u64)configured);
+
+	*ffo = delta < 0 ? -(s64)magnitude : (s64)magnitude;
 
 	return 0;
 }

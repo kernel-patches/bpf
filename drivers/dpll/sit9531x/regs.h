@@ -293,6 +293,18 @@
 #define SIT9531X_TDC_SIGN_BIT		3
 
 /*
+ * Read codes of the running DIVN taps.  Unlike the configuration
+ * registers these report what the digital loop currently commands, so
+ * they carry the correction the loop applies to track its reference.
+ * The integer part and the numerator share one tap, the denominator
+ * has its own.
+ */
+#define SIT9531X_DBG_READ_CODE_DIVN		0x57
+#define SIT9531X_DBG_READ_CODE_DIVN_DEN	0x56
+#define SIT9531X_DIVN_RT_NUM_BITS		48
+#define SIT9531X_DIVN_RT_INT_HI_BIT		BIT(0)
+
+/*
  * DIVN carried as fixed point, and the unit the DPLL ABI wants the
  * fractional frequency offset in.  Equal in value, distinct in meaning.
  */
