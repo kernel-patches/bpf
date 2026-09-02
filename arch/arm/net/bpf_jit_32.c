@@ -1611,6 +1611,9 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
 } while (0)
 #define check_imm24(imm) check_imm(24, imm)
 
+	if (bpf_insn_is_hmul(insn))
+		goto notyet;
+
 	switch (code) {
 	/* ALU operations */
 
