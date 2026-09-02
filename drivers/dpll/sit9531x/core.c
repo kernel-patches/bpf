@@ -415,6 +415,49 @@ static int sit9531x_prio_prg_commit(struct sit9531x_dev *sitdev)
 }
 
 /*
+ * sit9531x_input_prio_get - read an input's priority slot for a PLL
+ * @input_idx:	input source in hardware encoding (see
+ *		sit9531x_input_hw_src())
+ * @prio:	output slot position (0 = highest); set to
+ *		SIT9531X_PRIO_MAX_SLOTS when the source is not in the table
+ *
+ * Scans the PLL's 12-slot priority table on Page 1 and returns the
+ * highest-priority (lowest-numbered) slot that references the source.
+ * This reads the value the chip actually holds rather than a cached
+ * default, so pin-get reflects the real hardware priority.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_input_prio_get(struct sit9531x_dev *sitdev, u8 pll_idx,
+			    u8 input_idx, u8 *prio)
+{
+	u8 val, slot, src;
+	int rc;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	for (slot = 0; slot < SIT9531X_PRIO_MAX_SLOTS; slot++) {
+		rc = sit9531x_read_u8(sitdev,
+				      sit9531x_prio_reg(pll_idx, slot), &val);
+		if (rc)
+			return rc;
+
+		src = sit9531x_prio_slot_get(val, slot);
+
+		if (src == input_idx) {
+			*prio = slot;
+			return 0;
+		}
+	}
+
+	*prio = SIT9531X_PRIO_MAX_SLOTS;
+	return 0;
+}
+
+/*
  * Rebuild a PLL's membership mask from the source codes of its priority
  * table.  The mask is what the pin state getters test, so it is refreshed
  * from exactly the values the table holds -- here after a write, and once
