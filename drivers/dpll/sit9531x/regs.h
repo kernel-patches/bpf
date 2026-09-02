@@ -132,6 +132,10 @@
 #define SIT9531X_REG_GLOBAL_UPDATE		SIT9531X_REG(0x00, 0x0F)
 #define SIT9531X_SMALL_UPDATE_CMD		0x02
 
+/* PLL holdover control (PLL page offset) */
+#define SIT9531X_PLL_REG_HO_CTRL		0x6F
+#define SIT9531X_PLL_HO_FORCE_BIT		4
+
 /* One bit per input PAIR (bit 0 = CLKIN0, ..., bit 3 = CLKIN3) */
 #define SIT9531X_REG_IN_DE_FORCE		SIT9531X_REG(0x02, 0xE8)
 #define SIT9531X_REG_IN_DE_STATE		SIT9531X_REG(0x02, 0xE9)
