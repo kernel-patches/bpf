@@ -485,18 +485,14 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	struct page *page;
 	long kbase, kaddr;
 	unsigned long flags;
+	vm_fault_t ret_fault;
 	int ret;
 
 	kbase = bpf_arena_get_kern_vm_start(arena);
 	kaddr = kbase + (u32)(vmf->address);
 
 	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags))
-		/*
-		 * A failed lock means a possible deadlock was detected. Don't
-		 * return VM_FAULT_RETRY: this handler never took mmap_lock, but
-		 * the fault path would re-take it on retry and deadlock. Fail.
-		 */
-		return VM_FAULT_SIGBUS;
+		goto retry;
 
 	page = vmalloc_to_page((void *)kaddr);
 	if (page) {
@@ -514,6 +510,14 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 		goto out_sigsegv_memcg;
 
 	ret = range_tree_clear(&arena->rt, vmf->pgoff, 1);
+	/* If a range is unavailable, try again. */
+	if (ret == -EAGAIN) {
+		raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+		bpf_map_memcg_exit(old_memcg, new_memcg);
+
+		goto retry;
+	}
+
 	if (ret)
 		goto out_sigsegv_memcg;
 
@@ -534,15 +538,41 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	flush_vmap_cache(kaddr, PAGE_SIZE);
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 out:
-	page_ref_add(page, 1);
+	/* Reserve the page while installing its user PTE without the arena lock. */
+	bpf_map_memcg_enter(&arena->map, &old_memcg, &new_memcg);
+	ret = range_tree_set_unavail(&arena->rt, vmf->pgoff, 1);
+	bpf_map_memcg_exit(old_memcg, new_memcg);
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
-	vmf->page = page;
-	return 0;
+	if (ret) {
+		if (ret == -EAGAIN)
+			goto retry;
+		return VM_FAULT_OOM;
+	}
+
+	ret_fault = vmf_insert_page(vmf->vma, vmf->address, page);
+
+	while (raw_res_spin_lock_irqsave(&arena->spinlock, flags))
+		cond_resched();
+	ret = range_tree_remove_unavail(&arena->rt, vmf->pgoff, 1);
+	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+	WARN_ON_ONCE(ret);
+	return ret_fault;
 out_sigsegv_memcg:
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 out_sigsegv:
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 	return VM_FAULT_SIGSEGV;
+
+retry:
+
+	/* Only for special cases (GUP/device drivers). */
+	if (!(vmf->flags & FAULT_FLAG_ALLOW_RETRY))
+		return VM_FAULT_SIGBUS;
+
+	if (!(vmf->flags & FAULT_FLAG_RETRY_NOWAIT))
+		release_fault_lock(vmf);
+
+	return VM_FAULT_RETRY;
 }
 
 static const struct vm_operations_struct arena_vm_ops = {
@@ -622,7 +652,7 @@ static int arena_map_mmap(struct bpf_map *map, struct vm_area_struct *vma)
 	 * of user_vm_start. Set VM_DONTCOPY to prevent arena VMA from
 	 * being copied into the child process on fork.
 	 */
-	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTCOPY);
+	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTCOPY | VM_MIXEDMAP);
 	vma->vm_ops = &arena_vm_ops;
 	return 0;
 }
@@ -888,7 +918,9 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 		raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 		if (ret == -ENOMEM)
 			goto defer;
-		WARN_ON_ONCE(ret);
+		/* An overlapping fault reserves the range before installing its PTE. */
+		if (ret != -EAGAIN)
+			WARN_ON_ONCE(ret);
 		bpf_map_memcg_exit(old_memcg, new_memcg);
 		return;
 	}
@@ -1043,7 +1075,7 @@ static void arena_free_worker(struct work_struct *work)
 			 * the defer: path of arena_free_pages(). Do not treat
 			 * the leak as a bug.
 			 */
-			if (ret != -ENOMEM)
+			if (ret != -ENOMEM && ret != -EAGAIN)
 				WARN_ON_ONCE(ret);
 
 			kfree_nolock(s);
