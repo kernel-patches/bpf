@@ -788,11 +788,11 @@ static int ksz_ptp_gettime(struct ptp_clock_info *ptp, struct timespec64 *ts)
 	return ret;
 }
 
-static int ksz_ptp_restart_perout(struct ksz_device *dev)
+static int ksz_ptp_prepare_restart_perout(struct ksz_device *dev,
+					  struct ptp_perout_request *request)
 {
 	struct ksz_ptp_data *ptp_data = &dev->ptp_data;
 	s64 now_ns, first_ns, period_ns, next_ns;
-	struct ptp_perout_request request;
 	struct timespec64 next;
 	struct timespec64 now;
 	unsigned int count;
@@ -823,12 +823,24 @@ static int ksz_ptp_restart_perout(struct ksz_device *dev)
 
 	/* Restart periodic output signal */
 	next = ns_to_timespec64(next_ns);
-	request.start.sec  = next.tv_sec;
-	request.start.nsec = next.tv_nsec;
-	request.period.sec  = ptp_data->perout_period.tv_sec;
-	request.period.nsec = ptp_data->perout_period.tv_nsec;
-	request.index = 0;
-	request.flags = 0;
+	request->start.sec  = next.tv_sec;
+	request->start.nsec = next.tv_nsec;
+	request->period.sec  = ptp_data->perout_period.tv_sec;
+	request->period.nsec = ptp_data->perout_period.tv_nsec;
+	request->index = 0;
+	request->flags = 0;
+
+	return 0;
+}
+
+static int ksz_ptp_restart_perout(struct ksz_device *dev)
+{
+	struct ptp_perout_request request;
+	int ret;
+
+	ret = ksz_ptp_prepare_restart_perout(dev, &request);
+	if (ret)
+		return ret;
 
 	return ksz_ptp_enable_perout(dev, &request, 1);
 }
