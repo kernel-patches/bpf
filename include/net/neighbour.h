@@ -31,6 +31,8 @@
 #include <net/rtnetlink.h>
 #include <net/neighbour_tables.h>
 
+extern int sysctl_neigh_inherit_init_net;
+
 /*
  * NUD stands for "neighbor unreachability detection"
  */
@@ -341,8 +343,6 @@ static inline void neigh_confirm(struct neighbour *n)
 
 int neigh_table_register(struct net *net, struct neigh_table *tbl, int index);
 void neigh_table_unregister(struct net *net, int index);
-void neigh_table_init(struct neigh_table *tbl);
-int neigh_table_clear(struct neigh_table *tbl);
 struct neighbour *neigh_lookup(struct neigh_table *tbl, const void *pkey,
 			       struct net_device *dev);
 struct neighbour *__neigh_create(struct neigh_table *tbl, const void *pkey,
