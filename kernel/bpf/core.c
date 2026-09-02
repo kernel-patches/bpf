@@ -1936,7 +1936,50 @@ select_insn:
 	ALU(AND,  &)
 	ALU(OR,   |)
 	ALU(XOR,  ^)
-	ALU(MUL,  *)
+	/*
+	 * MUL needs explicit handlers because ALU64 insn->off selects
+	 * low-half, unsigned high-half, or signed high-half multiplication.
+	 */
+	ALU64_MUL_X:
+		switch (OFF) {
+		case BPF_MUL_VARIANT_LO:
+			DST = DST * SRC;
+			break;
+		case BPF_MUL_VARIANT_UHMUL:
+			DST = bpf_uhmul64(DST, SRC);
+			break;
+		case BPF_MUL_VARIANT_SHMUL:
+			DST = bpf_shmul64((s64)DST, (s64)SRC);
+			break;
+		default:
+			goto default_label;
+		}
+		CONT;
+	ALU_MUL_X:
+		if (OFF != BPF_MUL_VARIANT_LO)
+			goto default_label;
+		DST = (u32) DST * (u32) SRC;
+		CONT;
+	ALU64_MUL_K:
+		switch (OFF) {
+		case BPF_MUL_VARIANT_LO:
+			DST = DST * IMM;
+			break;
+		case BPF_MUL_VARIANT_UHMUL:
+			DST = bpf_uhmul64(DST, (u64)IMM);
+			break;
+		case BPF_MUL_VARIANT_SHMUL:
+			DST = bpf_shmul64((s64)DST, (s32)IMM);
+			break;
+		default:
+			goto default_label;
+		}
+		CONT;
+	ALU_MUL_K:
+		if (OFF != BPF_MUL_VARIANT_LO)
+			goto default_label;
+		DST = (u32) DST * (u32) IMM;
+		CONT;
 	SHT(LSH, <<)
 	SHT(RSH, >>)
 #undef SHT
