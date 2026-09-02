@@ -33,6 +33,7 @@ struct ksz_ptp_data {
 	struct timespec64 perout_period;
 };
 
+void ksz_ptp_set_caps(struct dsa_switch *ds);
 int ksz_ptp_clock_register(struct dsa_switch *ds);
 
 void ksz_ptp_clock_unregister(struct dsa_switch *ds);
@@ -65,6 +66,7 @@ struct ksz_ptp_data {
 	struct mutex lock;
 };
 
+static inline void ksz_ptp_set_caps(struct dsa_switch *ds) { }
 static inline int ksz_ptp_clock_register(struct dsa_switch *ds)
 {
 	return 0;
