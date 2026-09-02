@@ -269,6 +269,77 @@ static int mei_csc_pm_runtime_resume(struct device *dev)
 	return 0;
 }
 
+static pci_ers_result_t mei_csc_pci_error_detected(struct pci_dev *pdev, pci_channel_state_t state)
+{
+	struct mei_device *mdev = pci_get_drvdata(pdev);
+	struct mei_me_hw *hw = to_me_hw(mdev);
+
+	dev_info(&pdev->dev, "error recovery: error detected. state %d\n", state);
+
+	scoped_guard(mutex, &mdev->device_lock)
+		if (mei_me_hw_use_polling(hw))
+			hw->is_active = false;
+
+	mei_synchronize_irq(mdev);
+	mei_stop_fast(mdev);
+	pci_disable_device(pdev);
+
+	switch (state) {
+	case pci_channel_io_normal:
+		return PCI_ERS_RESULT_CAN_RECOVER;
+	case pci_channel_io_perm_failure:
+		return PCI_ERS_RESULT_DISCONNECT;
+	case pci_channel_io_frozen:
+		return PCI_ERS_RESULT_NEED_RESET;
+	default:
+		dev_err(&pdev->dev, "Unknown state %d\n", state);
+		return PCI_ERS_RESULT_NEED_RESET;
+	}
+}
+
+static pci_ers_result_t mei_csc_pci_error_slot_reset(struct pci_dev *pdev)
+{
+	int err;
+
+	pci_restore_state(pdev);
+	pci_set_master(pdev);
+
+	err = pci_enable_device(pdev);
+	if (err < 0) {
+		dev_err(&pdev->dev, "Cannot re-enable PCI device after reset. err = %d\n", err);
+		return PCI_ERS_RESULT_DISCONNECT;
+	}
+
+	return PCI_ERS_RESULT_RECOVERED;
+}
+
+static void mei_csc_pci_error_resume(struct pci_dev *pdev)
+{
+	struct mei_device *mdev = pci_get_drvdata(pdev);
+	struct mei_me_hw *hw = to_me_hw(mdev);
+
+	dev_info(&pdev->dev, "error recovery: resume\n");
+
+	scoped_guard(mutex, &mdev->device_lock) {
+		if (mei_me_hw_use_polling(hw)) {
+			hw->is_active = true;
+			wake_up_interruptible(&hw->wait_active);
+		}
+	}
+
+	if (mei_restart(mdev))
+		return;
+
+	/* Start timer if stopped in error */
+	schedule_delayed_work(&mdev->timer_work, HZ);
+}
+
+static const struct pci_error_handlers mei_csc_pci_error_handlers = {
+	.error_detected = mei_csc_pci_error_detected,
+	.slot_reset     = mei_csc_pci_error_slot_reset,
+	.resume         = mei_csc_pci_error_resume,
+};
+
 static const struct dev_pm_ops mei_csc_pm_ops = {
 	.prepare = pm_sleep_ptr(mei_csc_pci_prepare),
 	.complete = pm_sleep_ptr(mei_csc_pci_complete),
@@ -289,6 +360,7 @@ static struct pci_driver mei_csc_driver = {
 	.probe = mei_csc_probe,
 	.remove = mei_csc_remove,
 	.shutdown = mei_csc_shutdown,
+	.err_handler = &mei_csc_pci_error_handlers,
 	.driver = {
 		.pm = &mei_csc_pm_ops,
 		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
