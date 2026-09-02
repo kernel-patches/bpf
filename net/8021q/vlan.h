@@ -56,11 +56,9 @@ static inline struct net_device *__vlan_group_get_device(struct vlan_group *vg,
 {
 	struct net_device __rcu **array;
 
-	array = vg->vlan_devices_arrays[pidx]
-				       [vlan_id / VLAN_GROUP_ARRAY_PART_LEN];
-
-	/* paired with smp_wmb() in vlan_group_prealloc_vid() */
-	smp_rmb();
+	/* Pairs with smp_store_release() in vlan_group_prealloc_vid() */
+	array = smp_load_acquire(&vg->vlan_devices_arrays[pidx]
+				 [vlan_id / VLAN_GROUP_ARRAY_PART_LEN]);
 
 	return array ? rcu_dereference_raw(array[vlan_id % VLAN_GROUP_ARRAY_PART_LEN]) : NULL;
 }
