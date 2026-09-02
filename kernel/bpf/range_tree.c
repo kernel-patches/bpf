@@ -180,12 +180,21 @@ int range_tree_clear(struct range_tree *rt, u32 start, u32 len)
 int is_range_tree_set(struct range_tree *rt, u32 start, u32 len)
 {
 	u32 last = start + len - 1;
-	struct range_node *left;
+	struct range_node *rn;
 
-	/* Is this whole range set ? */
-	left = range_it_iter_first(rt, start, last);
-	if (left && left->rn_start <= start && left->rn_last >= last)
-		return 0;
+	while ((rn = range_it_iter_first(rt, start, last))) {
+		/* Make sure the range covers the start */
+		if (rn->rn_start > start)
+			return -ESRCH;
+
+		/* If it covers the entire range we're done. */
+		if (rn->rn_last >= last)
+			return 0;
+
+		start = rn->rn_last + 1;
+	}
+
+	/* No range to cover [start, last] */
 	return -ESRCH;
 }
 
