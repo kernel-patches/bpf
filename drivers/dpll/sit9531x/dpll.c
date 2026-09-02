@@ -42,6 +42,20 @@ static inline bool sit9531x_dpll_is_input_pin(const struct sit9531x_dpll_pin *pi
 }
 
 static inline bool
+sit9531x_dpll_is_intsync_pin(const struct sit9531x_dpll_pin *pin)
+{
+	return sit9531x_dpll_is_input_pin(pin) &&
+	       pin->id == SIT9531X_INTSYNC_PIN_ID;
+}
+
+static inline bool
+sit9531x_dpll_is_intsync_src_pin(const struct sit9531x_dpll_pin *pin)
+{
+	return !sit9531x_dpll_is_input_pin(pin) &&
+	       pin->id == SIT9531X_INTSYNC_OUT_PIN_ID;
+}
+
+static inline bool
 sit9531x_dpll_is_xo_pin(const struct sit9531x_dpll_pin *pin)
 {
 	return sit9531x_dpll_is_input_pin(pin) &&
@@ -717,7 +731,213 @@ sit9531x_dpll_output_pin_direction_get(const struct dpll_pin *pin,
 				       enum dpll_pin_direction *direction,
 				       struct netlink_ext_ack *extack);
 
+static int
+sit9531x_dpll_intsync_src_state_on_dpll_get(const struct dpll_pin *pin,
+					    void *pin_priv,
+					    const struct dpll_device *dpll,
+					    void *dpll_priv,
+					    enum dpll_pin_state *state,
+					    struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+
+	mutex_lock(&sitdev->multiop_lock);
+	if (sitdev->intsync_src == sitdpll->id)
+		*state = DPLL_PIN_STATE_CONNECTED;
+	else
+		*state = DPLL_PIN_STATE_DISCONNECTED;
+	mutex_unlock(&sitdev->multiop_lock);
+
+	return 0;
+}
+
+/*
+ * sit9531x_dpll_intsync_src_state_on_dpll_set - drive INTSYNC from a PLL
+ *
+ *   CONNECTED    -> this PLL drives the INTSYNC net
+ *   DISCONNECTED -> stop driving INTSYNC if this PLL drives it
+ *
+ * SELECTABLE is rejected: driving the net is an explicit output routing,
+ * not an automatic-selection candidate, matching the regular output pin.
+ */
+static int
+sit9531x_dpll_intsync_src_state_on_dpll_set(const struct dpll_pin *pin,
+					    void *pin_priv,
+					    const struct dpll_device *dpll,
+					    void *dpll_priv,
+					    enum dpll_pin_state state,
+					    struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	int rc = 0;
+	u8 prio;
+
+	mutex_lock(&sitdev->multiop_lock);
+
+	switch (state) {
+	case DPLL_PIN_STATE_CONNECTED:
+		if (sitdev->intsync_src == sitdpll->id)
+			break;
+		if (sitdev->intsync_src >= 0) {
+			NL_SET_ERR_MSG(extack,
+				       "INTSYNC is already sourced by another PLL");
+			rc = -EBUSY;
+			break;
+		}
+		/*
+		 * A PLL that already lists INTSYNC among its references must
+		 * not also drive it: the destination side refuses the mirror
+		 * of this, and without the check here the net could be routed
+		 * back into the PLL feeding it.
+		 */
+		rc = sit9531x_input_prio_get(sitdev, sitdpll->id,
+					     sit9531x_input_hw_src(SIT9531X_INTSYNC_PIN_ID),
+					     &prio);
+		if (rc)
+			break;
+		if (prio < SIT9531X_PRIO_MAX_SLOTS) {
+			NL_SET_ERR_MSG(extack,
+				       "PLL selects INTSYNC as a reference; it cannot drive it");
+			rc = -EBUSY;
+			break;
+		}
+		rc = sit9531x_intsync_enable(sitdev, sitdpll->id);
+		if (!rc)
+			sitdev->intsync_src = sitdpll->id;
+		break;
+	case DPLL_PIN_STATE_DISCONNECTED:
+		if (sitdev->intsync_src != sitdpll->id)
+			break;
+		rc = sit9531x_intsync_disable(sitdev, sitdpll->id);
+		if (!rc)
+			sitdev->intsync_src = -1;
+		break;
+	default:
+		rc = -EINVAL;
+		break;
+	}
+
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc && rc != -EBUSY)
+		NL_SET_ERR_MSG(extack, "Failed to set INTSYNC source state");
+
+	return rc;
+}
+
+static const struct dpll_pin_ops sit9531x_dpll_intsync_src_pin_ops = {
+	.direction_get		= sit9531x_dpll_output_pin_direction_get,
+	.state_on_dpll_get	= sit9531x_dpll_intsync_src_state_on_dpll_get,
+	.state_on_dpll_set	= sit9531x_dpll_intsync_src_state_on_dpll_set,
+};
+
 /* ---- INTSYNC destination (input) pin ---- */
+
+/*
+ * sit9531x_dpll_intsync_dst_state_on_dpll_get - INTSYNC reference state
+ *
+ * Selection role, so the contract above decides this exactly as it does
+ * for a physical input: the priority table is the eligibility record, and
+ * whether a source PLL happens to be driving the net right now is no more
+ * a state than a momentary LOS is on an external reference.  The one
+ * addition is that the PLL driving INTSYNC is never its own destination.
+ */
+static int
+sit9531x_dpll_intsync_dst_state_on_dpll_get(const struct dpll_pin *pin,
+					    void *pin_priv,
+					    const struct dpll_device *dpll,
+					    void *dpll_priv,
+					    enum dpll_pin_state *state,
+					    struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+
+	mutex_lock(&sitdev->multiop_lock);
+	if (sitdev->intsync_src == sitdpll->id)
+		*state = DPLL_PIN_STATE_DISCONNECTED;
+	else
+		sit9531x_dpll_selection_state_get(sitdev, sitdpll,
+						  SIT9531X_INTSYNC_PIN_ID,
+						  state);
+	mutex_unlock(&sitdev->multiop_lock);
+
+	return 0;
+}
+
+/*
+ * sit9531x_dpll_intsync_dst_state_on_dpll_set - lock a PLL to INTSYNC
+ *
+ * Selection role, so this accepts and refuses what a physical input does,
+ * CONNECTED included: the device pins no reference on request whichever
+ * source is asked for.  INTSYNC is an internal net with no physical
+ * receiver, so only the per-PLL priority table is touched; the source pin
+ * controls generation.
+ */
+static int
+sit9531x_dpll_intsync_dst_state_on_dpll_set(const struct dpll_pin *pin,
+					    void *pin_priv,
+					    const struct dpll_device *dpll,
+					    void *dpll_priv,
+					    enum dpll_pin_state state,
+					    struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	u8 hw_src = sit9531x_input_hw_src(SIT9531X_INTSYNC_PIN_ID);
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+
+	switch (state) {
+	case DPLL_PIN_STATE_DISCONNECTED:
+		rc = sit9531x_input_prio_remove(sitdev, sitdpll->id, hw_src);
+		break;
+	case DPLL_PIN_STATE_CONNECTED:
+		NL_SET_ERR_MSG(extack,
+			       "Device selects its reference by priority; use selectable");
+		rc = -EOPNOTSUPP;
+		break;
+	case DPLL_PIN_STATE_SELECTABLE:
+		if (sitdev->intsync_src == sitdpll->id) {
+			NL_SET_ERR_MSG(extack,
+				       "PLL cannot lock to the INTSYNC it drives");
+			rc = -EINVAL;
+			break;
+		}
+		rc = sit9531x_input_prio_add(sitdev, sitdpll->id, hw_src);
+		break;
+	default:
+		rc = -EINVAL;
+		break;
+	}
+
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc == -EBUSY)
+		NL_SET_ERR_MSG(extack,
+			       "Only source left in the priority table; it cannot be emptied");
+	else if (rc && rc != -EINVAL && rc != -EOPNOTSUPP)
+		NL_SET_ERR_MSG(extack, "Failed to set INTSYNC input state");
+
+	return rc;
+}
+
+/*
+ * Do not add .frequency_get / the generic input state getter here: the
+ * destination pin id is SIT9531X_INTSYNC_PIN_ID, one past the end of the
+ * ref[] array (INTSYNC is an internal net with no ref[] entry).  The ops
+ * below only ever key on chan[] and the priority table, never ref[id].
+ */
+static const struct dpll_pin_ops sit9531x_dpll_intsync_dst_pin_ops = {
+	.direction_get		= sit9531x_dpll_input_pin_direction_get,
+	.state_on_dpll_get	= sit9531x_dpll_intsync_dst_state_on_dpll_get,
+	.state_on_dpll_set	= sit9531x_dpll_intsync_dst_state_on_dpll_set,
+	.prio_get		= sit9531x_dpll_input_pin_prio_get,
+	.prio_set		= sit9531x_dpll_input_pin_prio_set,
+};
 
 /*
  * XO (crystal oscillator) pin ops
@@ -1044,8 +1264,13 @@ static const struct dpll_pin_ops sit9531x_dpll_output_pin_ops = {
 const struct dpll_pin_ops *
 sit9531x_dpll_pin_ops_get(const struct sit9531x_dpll_pin *pin)
 {
-	if (!sit9531x_dpll_is_input_pin(pin))
+	if (!sit9531x_dpll_is_input_pin(pin)) {
+		if (sit9531x_dpll_is_intsync_src_pin(pin))
+			return &sit9531x_dpll_intsync_src_pin_ops;
 		return &sit9531x_dpll_output_pin_ops;
+	}
+	if (sit9531x_dpll_is_intsync_pin(pin))
+		return &sit9531x_dpll_intsync_dst_pin_ops;
 	if (sit9531x_dpll_is_xo_pin(pin))
 		return &sit9531x_dpll_xo_pin_ops;
 	return &sit9531x_dpll_input_pin_ops;

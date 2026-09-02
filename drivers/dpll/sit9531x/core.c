@@ -1687,6 +1687,160 @@ int sit9531x_clear_notifications(struct sit9531x_dev *sitdev)
 }
 
 /*
+ * INTSYNC configuration register values.
+ * These are written to the source PLL's EXT page to enable/disable
+ * inter-PLL synchronization (lock frequency PLL to phase PLL).
+ */
+struct sit9531x_intsync_reg {
+	u8 offset;
+	u8 en_val;
+	u8 dis_val;
+};
+
+static const struct sit9531x_intsync_reg intsync_config[] = {
+	{ 0x2D, 0x02, 0x00 },
+	{ 0x50, 0x08, 0x00 },
+	{ 0x51, 0x04, 0x00 },
+	{ 0x54, 0x02, 0x00 },
+	{ 0x55, 0x28, 0x20 },
+	{ 0x5C, 0x0F, 0x00 },
+	{ 0x5D, 0xFF, 0x00 },
+	{ 0x6C, 0xDD, 0x00 },
+};
+
+/*
+ * sit9531x_intsync_enable - enable inter-PLL synchronization
+ * @src_pll_idx: source (frequency) PLL index (0-3)
+ *
+ * Enables INTSYNC global bit, unlocks the source PLL's EXT page
+ * debug registers, writes configuration, and triggers a small
+ * update on the source PLL.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_intsync_enable(struct sit9531x_dev *sitdev, u8 src_pll_idx)
+{
+	u8 ext_page, val;
+	int rc, i;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (src_pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	ext_page = SIT9531X_PLL_EXT_PAGE(src_pll_idx);
+
+	rc = sit9531x_read_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL, &val);
+	if (rc)
+		return rc;
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL,
+			       val | BIT(SIT9531X_INTSYNC_EN_BIT));
+	if (rc)
+		return rc;
+
+	/* Small update on Page 0 */
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_GLOBAL_UPDATE,
+			       SIT9531X_SMALL_UPDATE_CMD);
+	if (rc)
+		goto err_disable;
+
+	/* Unlock debug on EXT page */
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG(ext_page, SIT9531X_PLL_REG_DEBUG),
+			       SIT9531X_PLL_DEBUG_UNLOCK);
+	if (rc)
+		goto err_disable;
+
+	for (i = 0; i < ARRAY_SIZE(intsync_config); i++) {
+		rc = sit9531x_write_u8(sitdev,
+				       SIT9531X_REG(ext_page,
+						    intsync_config[i].offset),
+				       intsync_config[i].en_val);
+		if (rc)
+			goto err_disable;
+	}
+
+	/* Small update on source PLL */
+	rc = sit9531x_write_pll_u8(sitdev, src_pll_idx,
+				   SIT9531X_PLL_REG_SMALL_UPDATE,
+				   SIT9531X_SMALL_UPDATE_CMD);
+	if (rc)
+		goto err_disable;
+
+	return 0;
+
+err_disable:
+	/*
+	 * The global enable is already set at this point.  The caller only
+	 * records the source PLL when this function succeeds, so nothing
+	 * else will ever clear the bit: undo it here rather than leave the
+	 * net asserted with a half-written EXT page.
+	 */
+	sit9531x_intsync_disable(sitdev, src_pll_idx);
+
+	return rc;
+}
+
+/*
+ * sit9531x_intsync_disable - disable inter-PLL synchronization
+ * @src_pll_idx: source (frequency) PLL index (0-3)
+ *
+ * Clears INTSYNC global bit, writes disable values to the source
+ * PLL's EXT page, and triggers a small update.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_intsync_disable(struct sit9531x_dev *sitdev, u8 src_pll_idx)
+{
+	u8 ext_page, val;
+	int rc, i;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (src_pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	ext_page = SIT9531X_PLL_EXT_PAGE(src_pll_idx);
+
+	rc = sit9531x_read_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL, &val);
+	if (rc)
+		return rc;
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL,
+			       val & ~BIT(SIT9531X_INTSYNC_EN_BIT));
+	if (rc)
+		return rc;
+
+	/* Small update on Page 0 */
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_GLOBAL_UPDATE,
+			       SIT9531X_SMALL_UPDATE_CMD);
+	if (rc)
+		return rc;
+
+	/* Unlock debug on EXT page */
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG(ext_page, SIT9531X_PLL_REG_DEBUG),
+			       SIT9531X_PLL_DEBUG_UNLOCK);
+	if (rc)
+		return rc;
+
+	for (i = 0; i < ARRAY_SIZE(intsync_config); i++) {
+		rc = sit9531x_write_u8(sitdev,
+				       SIT9531X_REG(ext_page,
+						    intsync_config[i].offset),
+				       intsync_config[i].dis_val);
+		if (rc)
+			return rc;
+	}
+
+	/* Small update on source PLL */
+	rc = sit9531x_write_pll_u8(sitdev, src_pll_idx,
+				   SIT9531X_PLL_REG_SMALL_UPDATE,
+				   SIT9531X_SMALL_UPDATE_CMD);
+	if (rc)
+		return rc;
+
+	return 0;
+}
+
+/*
  * sit9531x_output_pulse_ctrl_set - program per-output PULSE_CTRL byte
  * @out_idx:	logical output index (translated to chip slot internally)
  * @pulse_ctrl:	8-bit PULSE_CTRL value (PROG0)

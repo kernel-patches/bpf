@@ -317,6 +317,9 @@
 #define SIT9531X_PLL_REG_ZDB1		0x1E
 #define SIT9531X_PLL_ZDB_EN_BIT		BIT(4)  /* zero-delay buffer enabled */
 
+/* PLL EXT page INTSYNC configuration registers */
+#define SIT9531X_PLL_EXT_PAGE(_idx)		(SIT9531X_PAGE_PLLA_EXT + (_idx))
+
 /* PLL STATUS register bits */
 #define SIT9531X_PLL_STATUS_LOCK		BIT(0)
 #define SIT9531X_PLL_STATUS_OUTER_DIS	BIT(5)
