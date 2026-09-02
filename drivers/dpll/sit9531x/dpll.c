@@ -303,6 +303,28 @@ sit9531x_dpll_input_pin_direction_get(const struct dpll_pin *pin,
 }
 
 /*
+ * sit9531x_dpll_input_pin_frequency_get - read input pin frequency
+ *
+ * returns cached frequency from DT or last set.
+ */
+static int
+sit9531x_dpll_input_pin_frequency_get(const struct dpll_pin *pin,
+				      void *pin_priv,
+				      const struct dpll_device *dpll,
+				      void *dpll_priv, u64 *frequency,
+				      struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	const struct sit9531x_ref *ref;
+
+	ref = sit9531x_ref_state_get(sitdpll->dev, dpin->id);
+	*frequency = ref->freq;
+
+	return 0;
+}
+
+/*
  * sit9531x_dpll_input_pin_state_on_dpll_get - get input pin DPLL state
  *
  * Selection role; see the pin-state contract above.
@@ -497,6 +519,7 @@ sit9531x_dpll_input_pin_prio_set(const struct dpll_pin *pin, void *pin_priv,
 
 static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
 	.direction_get		= sit9531x_dpll_input_pin_direction_get,
+	.frequency_get		= sit9531x_dpll_input_pin_frequency_get,
 	.state_on_dpll_get	= sit9531x_dpll_input_pin_state_on_dpll_get,
 	.state_on_dpll_set	= sit9531x_dpll_input_pin_state_on_dpll_set,
 	.prio_get		= sit9531x_dpll_input_pin_prio_get,
@@ -561,6 +584,7 @@ sit9531x_dpll_xo_pin_state_on_dpll_get(const struct dpll_pin *pin,
 
 static const struct dpll_pin_ops sit9531x_dpll_xo_pin_ops = {
 	.direction_get		= sit9531x_dpll_input_pin_direction_get,
+	.frequency_get		= sit9531x_dpll_input_pin_frequency_get,
 	.state_on_dpll_get	= sit9531x_dpll_xo_pin_state_on_dpll_get,
 };
 
@@ -576,8 +600,79 @@ sit9531x_dpll_output_pin_direction_get(const struct dpll_pin *pin,
 	return 0;
 }
 
+/*
+ * sit9531x_dpll_output_pin_frequency_get - read output pin frequency
+ *
+ * Reads the DIVO divider back from the chip and computes the live
+ * frequency as Fvco / DIVO.  Falls back to the cached value when the
+ * output is not resolvable through the divider chain (e.g. not mapped
+ * to a PLL), so a netlink dump never fails on such pins.
+ */
+static int
+sit9531x_dpll_output_pin_frequency_get(const struct dpll_pin *pin,
+				       void *pin_priv,
+				       const struct dpll_device *dpll,
+				       void *dpll_priv, u64 *frequency,
+				       struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_output_freq_get(sitdev, dpin->id, frequency);
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc)
+		*frequency = sit9531x_out_state_get(sitdev, dpin->id)->freq;
+
+	return 0;
+}
+
+/*
+ * sit9531x_dpll_output_pin_frequency_set - set output pin frequency
+ *
+ * computes DIVO = Fvco / frequency and writes the
+ * 34-bit output divider to the output system registers via
+ * sit9531x_output_freq_set().
+ */
+static int
+sit9531x_dpll_output_pin_frequency_set(const struct dpll_pin *pin,
+				       void *pin_priv,
+				       const struct dpll_device *dpll,
+				       void *dpll_priv, u64 frequency,
+				       struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	u8 actual_pll;
+	int rc;
+
+	/*
+	 * Read the PLL that drives this output from its OUT_MAP state
+	 * (populated by out_state_fetch from the chip's OUT_MAP registers).
+	 * That is the index the output register programming below is keyed
+	 * by; the output is registered under the DPLL matching this PLL.
+	 */
+	actual_pll = sitdev->out[dpin->id].pll_idx;
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_output_freq_set(sitdev, dpin->id, actual_pll,
+				      frequency);
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc)
+		NL_SET_ERR_MSG(extack, "Output frequency set failed");
+
+	return rc;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_output_pin_ops = {
 	.direction_get		= sit9531x_dpll_output_pin_direction_get,
+	.frequency_get		= sit9531x_dpll_output_pin_frequency_get,
+	.frequency_set		= sit9531x_dpll_output_pin_frequency_set,
 };
 
 const struct dpll_pin_ops *
