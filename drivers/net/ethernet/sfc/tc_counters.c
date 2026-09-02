@@ -116,7 +116,7 @@ static void efx_tc_counter_work(struct work_struct *work)
 					 encap->neigh->egdev);
 		else
 #if IS_ENABLED(CONFIG_IPV6)
-			n = neigh_lookup(&nd_tbl,
+			n = neigh_lookup(nd_table(net),
 					 &encap->neigh->dst_ip6,
 					 encap->neigh->egdev);
 #else

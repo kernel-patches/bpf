@@ -17,26 +17,27 @@
 #include "fs_core.h"
 #include "diag/en_rep_tracepoint.h"
 
-static unsigned long mlx5e_rep_ipv6_interval(void)
+static unsigned long mlx5e_rep_ipv6_interval(struct net *net)
 {
 	if (IS_ENABLED(CONFIG_IPV6) && ipv6_mod_enabled())
-		return NEIGH_VAR(&nd_tbl.parms, DELAY_PROBE_TIME);
+		return NEIGH_VAR(&nd_table(net)->parms, DELAY_PROBE_TIME);
 
 	return ~0UL;
 }
 
 static void mlx5e_rep_neigh_update_init_interval(struct mlx5e_rep_priv *rpriv)
 {
-	unsigned long ipv6_interval = mlx5e_rep_ipv6_interval();
 	struct net_device *netdev = rpriv->netdev;
 	struct net *net = dev_net(netdev);
 	unsigned long ipv4_interval;
+	unsigned long ipv6_interval;
 	struct neigh_table *tbl;
 	struct mlx5e_priv *priv;
 
 	priv = netdev_priv(netdev);
 	tbl = arp_table(net);
 	ipv4_interval = NEIGH_VAR(&tbl->parms, DELAY_PROBE_TIME);
+	ipv6_interval = mlx5e_rep_ipv6_interval(net);
 
 	rpriv->neigh_update.min_interval = min_t(unsigned long, ipv6_interval, ipv4_interval);
 	mlx5_fc_update_sampling_interval(priv->mdev, rpriv->neigh_update.min_interval);

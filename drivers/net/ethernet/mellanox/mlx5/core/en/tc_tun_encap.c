@@ -445,7 +445,7 @@ void mlx5e_tc_update_neigh_used_value(struct mlx5e_neigh_hash_entry *nhe)
 
 #if IS_ENABLED(CONFIG_IPV6)
 		if (m_neigh->family != AF_INET)
-			tbl = &nd_tbl;
+			tbl = nd_table(net);
 		else
 #endif
 			tbl = arp_table(net);

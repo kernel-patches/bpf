@@ -530,7 +530,7 @@ static int efx_neigh_event(struct efx_nic *efx, struct neighbour *n)
 	if (n->tbl->family == AF_INET) {
 		keysize = sizeof(keys.dst_ip);
 #if IS_ENABLED(CONFIG_IPV6)
-	} else if (n->tbl == &nd_tbl) {
+	} else if (n->tbl->family == AF_INET6) {
 		ipv6 = true;
 		keysize = sizeof(keys.dst_ip6);
 #endif
