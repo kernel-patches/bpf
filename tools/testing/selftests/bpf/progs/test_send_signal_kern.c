@@ -60,6 +60,32 @@ int send_signal_tp_sched(void *ctx)
 	return bpf_send_signal_test(ctx);
 }
 
+/* Send a signal to a task other than current, from a context where current
+ * is a kernel thread. No filtering on current is possible here, so this is
+ * driven entirely by target_pid.
+ */
+SEC("tp_btf/workqueue_execute_start")
+int send_signal_kworker(void *ctx)
+{
+	struct task_struct *target_task;
+	int ret;
+
+	if (status != 0 || target_pid == 0)
+		return 0;
+
+	target_task = bpf_task_from_pid(target_pid);
+	if (!target_task)
+		return 0;
+
+	ret = bpf_send_signal_task(target_task, sig, PIDTYPE_TGID, 8);
+	bpf_task_release(target_task);
+
+	if (ret == 0)
+		status = 1;
+
+	return 0;
+}
+
 SEC("perf_event")
 int send_signal_perf(void *ctx)
 {
