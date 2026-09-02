@@ -1591,9 +1591,7 @@ BPF_CALL_1(bpf_timer_cancel, struct bpf_async_kern *, async)
 	 */
 	if (!cur_t)
 		goto drop;
-	atomic_inc(&t->cancelling);
-	/* Need full barrier after relaxed atomic_inc */
-	smp_mb__after_atomic();
+	atomic_fetch_inc(&t->cancelling);
 	inc = true;
 	if (atomic_read(&cur_t->cancelling)) {
 		/* We're cancelling timer t, while some other timer callback is
