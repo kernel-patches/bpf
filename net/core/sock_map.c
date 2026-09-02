@@ -390,9 +390,7 @@ static void *sock_map_lookup(struct bpf_map *map, void *key)
 	struct sock *sk;
 
 	sk = __sock_map_lookup_elem(map, *(u32 *)key);
-	if (!sk)
-		return NULL;
-	if (sk_is_refcounted(sk))
+	if (sk)
 		sock_hold(sk);
 	return sk;
 }
@@ -1216,9 +1214,7 @@ static void *sock_hash_lookup(struct bpf_map *map, void *key)
 	struct sock *sk;
 
 	sk = __sock_hash_lookup_elem(map, key);
-	if (!sk)
-		return NULL;
-	if (sk_is_refcounted(sk))
+	if (sk)
 		sock_hold(sk);
 	return sk;
 }
