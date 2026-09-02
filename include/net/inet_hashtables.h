@@ -474,10 +474,11 @@ struct sock *inet_steal_sock(struct net *net, struct sk_buff *skb, int doff,
 	if (!reuse_sk)
 		return sk;
 
-	/* We've chosen a new reuseport sock which is never refcounted. This
-	 * implies that sk also isn't refcounted.
-	 */
-	WARN_ON_ONCE(*refcounted);
+	/* New reuseport sock is never refcounted; drop the old sk's ref. */
+	if (*refcounted) {
+		sock_put(sk);
+		*refcounted = false;
+	}
 
 	return reuse_sk;
 }

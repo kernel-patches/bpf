@@ -113,7 +113,7 @@ static inline struct sock *skb_steal_sock(struct sk_buff *skb,
 			return sk;
 		}
 #endif
-		*refcounted = sk_is_refcounted(sk);
+		*refcounted = !skb_sk_is_prefetched_noref(skb);
 	} else {
 		*refcounted = true;
 	}

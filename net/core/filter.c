@@ -7989,8 +7989,20 @@ static const struct bpf_func_proto bpf_tcp_gen_syncookie_proto = {
 	.arg5_type	= ARG_MEM_SIZE,
 };
 
+/*
+ * skb destructor set by TC bpf_sk_assign(), refcounted path only.
+ * Acts as a "prefetched by bpf, ref taken" marker.
+ */
+void sock_pfree_refcounted(struct sk_buff *skb)
+{
+	sock_gen_put(skb->sk);
+}
+EXPORT_SYMBOL(sock_pfree_refcounted);
+
 BPF_CALL_3(bpf_sk_assign, struct sk_buff *, skb, struct sock *, sk, u64, flags)
 {
+	bool refcounted;
+
 	if (!sk || flags != 0)
 		return -EINVAL;
 	if (!skb_at_tc_ingress(skb))
@@ -7999,13 +8011,14 @@ BPF_CALL_3(bpf_sk_assign, struct sk_buff *, skb, struct sock *, sk, u64, flags)
 		return -ENETUNREACH;
 	if (sk_unhashed(sk))
 		return -EOPNOTSUPP;
-	if (sk_is_refcounted(sk) &&
-	    unlikely(!refcount_inc_not_zero(&sk->sk_refcnt)))
+
+	refcounted = sk_is_refcounted(sk);
+	if (refcounted && unlikely(!refcount_inc_not_zero(&sk->sk_refcnt)))
 		return -ENOENT;
 
 	skb_orphan(skb);
 	skb->sk = sk;
-	skb->destructor = sock_pfree;
+	skb->destructor = refcounted ? sock_pfree_refcounted : sock_pfree;
 
 	return 0;
 }
