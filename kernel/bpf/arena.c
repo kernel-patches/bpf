@@ -5,6 +5,7 @@
 #include <linux/cacheflush.h>
 #include <linux/err.h>
 #include <linux/irq_work.h>
+#include <linux/delay.h>
 #include "linux/filter.h"
 #include <linux/llist.h>
 #include <linux/btf_ids.h>
@@ -67,6 +68,8 @@ struct bpf_arena {
 	struct irq_work     free_irq;
 	struct work_struct  free_work;
 	struct llist_head   free_spans;
+	/* set under spinlock during map free; stops the worker retry loop */
+	bool dying;
 };
 
 static void arena_free_worker(struct work_struct *work);
@@ -370,6 +373,9 @@ static int existing_page_cb(pte_t *ptep, unsigned long addr, void *data)
 static void arena_map_free(struct bpf_map *map)
 {
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+	struct llist_node *list, *pos, *t;
+	unsigned long flags;
+	int ret, i;
 
 	/*
 	 * Check that user vma-s are not around when bpf map is freed.
@@ -380,7 +386,40 @@ static void arena_map_free(struct bpf_map *map)
 	if (WARN_ON_ONCE(!list_empty(&arena->vma_list)))
 		return;
 
-	/* Ensure no pending deferred frees */
+	/*
+	 * No fallback if this fails, so retry a few times for a long but
+	 * finite hold; -EDEADLK can't be waited out. Cap the retries:
+	 * leaking the arena is better than hanging map free.
+	 */
+	for (i = 0; i < 10; i++) {
+		ret = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
+		if (!ret || ret == -EDEADLK)
+			break;
+		msleep(1);
+	}
+	if (ret) {
+		WARN_ONCE(1, "bpf_arena: spinlock acquire failed %d\n", ret);
+		return;
+	}
+	/*
+	 * Set @dying before draining: the worker checks it under this
+	 * spinlock before requeueing, so a failed span is either stolen
+	 * here or dropped by the worker.
+	 */
+	arena->dying = true;
+	list = llist_del_all(&arena->free_spans);
+	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+
+	llist_for_each_safe(pos, t, list)
+		kfree_nolock(llist_entry(pos, struct arena_free_span, node));
+
+	/*
+	 * flush_work() lets the running worker observe @dying so it stops
+	 * requeueing; irq_work_sync() retires anything queued before that;
+	 * the final flush_work() runs the instance which the retired
+	 * irq_work's callback may have scheduled.
+	 */
+	flush_work(&arena->free_work);
 	irq_work_sync(&arena->free_irq);
 	flush_work(&arena->free_work);
 
@@ -766,7 +805,9 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 	return clear_lo32(arena->user_vm_start) + uaddr32;
 out:
-	range_tree_set(&arena->rt, pgoff + mapped, page_cnt - mapped);
+	if (range_tree_set(&arena->rt, pgoff + mapped, page_cnt - mapped))
+		pr_warn_ratelimited("bpf_arena: leak range %ld+%ld on failed alloc\n",
+				    pgoff + mapped, page_cnt - mapped);
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 	if (mapped) {
 		flush_vmap_cache(kern_vm_start + uaddr32, mapped << PAGE_SHIFT);
@@ -881,7 +922,20 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 	if (ret)
 		goto defer;
 
-	range_tree_set(&arena->rt, pgoff, page_cnt);
+	ret = range_tree_set(&arena->rt, pgoff, page_cnt);
+	if (ret) {
+		/*
+		 * range_tree_set() is failure-atomic, so -ENOMEM leaves the
+		 * range allocated and the pages mapped; abort the free rather
+		 * than release pages the tree does not track. Nothing retries
+		 * the free; the program can free the range again.
+		 */
+		pr_warn_ratelimited("bpf_arena: free of %lx+%ld failed\n",
+				    uaddr, page_cnt);
+		raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+		bpf_map_memcg_exit(old_memcg, new_memcg);
+		return;
+	}
 
 	init_llist_head(&free_pages);
 	cdata.arena = arena;
@@ -977,12 +1031,13 @@ static void arena_free_worker(struct work_struct *work)
 	struct llist_node *list, *pos, *t;
 	struct arena_free_span *s;
 	u64 arena_vm_start, user_vm_start;
-	struct llist_head free_pages;
+	struct llist_head free_pages, cleared;
 	struct clear_range_data cdata;
 	struct page *page;
 	unsigned long full_uaddr;
 	long kaddr, page_cnt, pgoff;
 	unsigned long flags;
+	bool retry = false;
 
 	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags)) {
 		schedule_work(work);
@@ -992,28 +1047,52 @@ static void arena_free_worker(struct work_struct *work)
 	bpf_map_memcg_enter(&arena->map, &old_memcg, &new_memcg);
 
 	init_llist_head(&free_pages);
+	init_llist_head(&cleared);
 	cdata.arena = arena;
 	cdata.free_pages = &free_pages;
 	arena_vm_start = bpf_arena_get_kern_vm_start(arena);
 	user_vm_start = bpf_arena_get_user_vm_start(arena);
 
 	list = llist_del_all(&arena->free_spans);
-	llist_for_each(pos, list) {
+	llist_for_each_safe(pos, t, list) {
 		s = llist_entry(pos, struct arena_free_span, node);
 		page_cnt = s->page_cnt;
 		kaddr = arena_vm_start + s->uaddr;
 		pgoff = compute_pgoff(arena, s->uaddr);
 
+		/*
+		 * Set the range free before clearing PTEs, and requeue the
+		 * span on failure: the PTEs stay intact and the free is
+		 * retried later. Only spans moved to @cleared (PTE clearing
+		 * actually ran) reach the flush/zap/release loop below.
+		 */
+		if (range_tree_set(&arena->rt, pgoff, page_cnt)) {
+			if (arena->dying) {
+				/*
+				 * The map is being freed. PTEs stay intact
+				 * and the pages are reclaimed by
+				 * arena_map_free() via existing_page_cb().
+				 */
+				kfree_nolock(s);
+				continue;
+			}
+			llist_add(&s->node, &arena->free_spans);
+			retry = true;
+			continue;
+		}
+
 		/* clear ptes and collect pages in free_pages llist */
 		apply_to_existing_page_range(&init_mm, kaddr, page_cnt << PAGE_SHIFT,
 					     apply_range_clear_cb, &cdata);
-
-		range_tree_set(&arena->rt, pgoff, page_cnt);
+		llist_add(&s->node, &cleared);
 	}
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 
+	if (retry)
+		irq_work_queue(&arena->free_irq);
+
 	/* Iterate the list again without holding spinlock to do the tlb flush and zap_pages */
-	llist_for_each_safe(pos, t, list) {
+	llist_for_each_safe(pos, t, cleared.first) {
 		s = llist_entry(pos, struct arena_free_span, node);
 		page_cnt = s->page_cnt;
 		full_uaddr = clear_lo32(user_vm_start) + s->uaddr;
