@@ -76,6 +76,7 @@ struct arena_free_span {
 	struct llist_node node;
 	unsigned long uaddr;
 	u32 page_cnt;
+	bool release_only;
 };
 
 u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena)
@@ -855,6 +856,7 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 	struct arena_free_span *s;
 	struct clear_range_data cdata;
 	unsigned long flags;
+	bool release_only = false;
 	int ret = 0;
 
 	/* only aligned lower 32-bit are relevant */
@@ -881,7 +883,15 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 	if (ret)
 		goto defer;
 
-	range_tree_set_avail(&arena->rt, pgoff, page_cnt);
+	ret = range_tree_set_unavail(&arena->rt, pgoff, page_cnt);
+	if (ret) {
+		raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+		if (ret == -ENOMEM)
+			goto defer;
+		WARN_ON_ONCE(ret);
+		bpf_map_memcg_exit(old_memcg, new_memcg);
+		return;
+	}
 
 	init_llist_head(&free_pages);
 	cdata.arena = arena;
@@ -911,6 +921,16 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 			zap_pages(arena, full_uaddr, 1);
 		__free_page(page);
 	}
+
+	ret = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
+	if (ret) {
+		release_only = true;
+		goto defer;
+	}
+
+	ret = range_tree_make_avail(&arena->rt, pgoff, page_cnt);
+	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+	WARN_ON_ONCE(ret);
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 
 	return;
@@ -928,6 +948,7 @@ defer:
 
 	s->page_cnt = page_cnt;
 	s->uaddr = uaddr;
+	s->release_only = release_only;
 	llist_add(&s->node, &arena->free_spans);
 	irq_work_queue(&arena->free_irq);
 }
@@ -977,12 +998,13 @@ static void arena_free_worker(struct work_struct *work)
 	struct llist_node *list, *pos, *t;
 	struct arena_free_span *s;
 	u64 arena_vm_start, user_vm_start;
-	struct llist_head free_pages;
+	struct llist_head free_pages, teardown_spans, release_spans;
 	struct clear_range_data cdata;
 	struct page *page;
 	unsigned long full_uaddr;
 	long kaddr, page_cnt, pgoff;
 	unsigned long flags;
+	int ret;
 
 	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags)) {
 		schedule_work(work);
@@ -992,28 +1014,51 @@ static void arena_free_worker(struct work_struct *work)
 	bpf_map_memcg_enter(&arena->map, &old_memcg, &new_memcg);
 
 	init_llist_head(&free_pages);
+	init_llist_head(&teardown_spans);
+	init_llist_head(&release_spans);
 	cdata.arena = arena;
 	cdata.free_pages = &free_pages;
 	arena_vm_start = bpf_arena_get_kern_vm_start(arena);
 	user_vm_start = bpf_arena_get_user_vm_start(arena);
 
 	list = llist_del_all(&arena->free_spans);
-	llist_for_each(pos, list) {
+	llist_for_each_safe(pos, t, list) {
 		s = llist_entry(pos, struct arena_free_span, node);
 		page_cnt = s->page_cnt;
-		kaddr = arena_vm_start + s->uaddr;
 		pgoff = compute_pgoff(arena, s->uaddr);
+
+		if (s->release_only) {
+			ret = range_tree_make_avail(&arena->rt, pgoff, page_cnt);
+			WARN_ON_ONCE(ret);
+			kfree_nolock(s);
+			continue;
+		}
+
+		kaddr = arena_vm_start + s->uaddr;
+
+		ret = range_tree_set_unavail(&arena->rt, pgoff, page_cnt);
+		if (ret) {
+			/*
+			 * An -ENOMEM failure is the same failure mode as in
+			 * the defer: path of arena_free_pages(). Do not treat
+			 * the leak as a bug.
+			 */
+			if (ret != -ENOMEM)
+				WARN_ON_ONCE(ret);
+
+			kfree_nolock(s);
+			continue;
+		}
 
 		/* clear ptes and collect pages in free_pages llist */
 		apply_to_existing_page_range(&init_mm, kaddr, page_cnt << PAGE_SHIFT,
 					     apply_range_clear_cb, &cdata);
-
-		range_tree_set_avail(&arena->rt, pgoff, page_cnt);
+		__llist_add(pos, &teardown_spans);
 	}
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 
-	/* Iterate the list again without holding spinlock to do the tlb flush and zap_pages */
-	llist_for_each_safe(pos, t, list) {
+	/* Keep ranges unavailable until their stale translations are gone. */
+	llist_for_each_safe(pos, t, __llist_del_all(&teardown_spans)) {
 		s = llist_entry(pos, struct arena_free_span, node);
 		page_cnt = s->page_cnt;
 		full_uaddr = clear_lo32(user_vm_start) + s->uaddr;
@@ -1025,13 +1070,44 @@ static void arena_free_worker(struct work_struct *work)
 		/* remove pages from user vmas */
 		zap_pages(arena, full_uaddr, page_cnt);
 
-		kfree_nolock(s);
+		__llist_add(pos, &release_spans);
 	}
 
 	/* free all pages collected by apply_to_existing_page_range() in the first loop */
 	llist_for_each_safe(pos, t, __llist_del_all(&free_pages)) {
 		page = llist_entry(pos, struct page, pcp_llist);
 		__free_page(page);
+	}
+
+	if (!llist_empty(&release_spans)) {
+		if (raw_res_spin_lock_irqsave(&arena->spinlock, flags)) {
+			llist_for_each_safe(pos, t, __llist_del_all(&release_spans)) {
+				s = llist_entry(pos, struct arena_free_span, node);
+				s->release_only = true;
+				llist_add(pos, &arena->free_spans);
+			}
+
+			schedule_work(work);
+			bpf_map_memcg_exit(old_memcg, new_memcg);
+			return;
+		}
+
+		llist_for_each_safe(pos, t, __llist_del_all(&release_spans)) {
+			s = llist_entry(pos, struct arena_free_span, node);
+			page_cnt = s->page_cnt;
+			pgoff = compute_pgoff(arena, s->uaddr);
+			/*
+			 * This range tree operation does not allocate memory,
+			 * and so should never fail regardless of contention
+			 * or memory pressure. This is in contrast to regular
+			 * inserts that _can_ fail under memory pressure and
+			 * force us to defer the free.
+			 */
+			ret = range_tree_make_avail(&arena->rt, pgoff, page_cnt);
+			WARN_ON_ONCE(ret);
+			kfree_nolock(s);
+		}
+		raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 	}
 
 	bpf_map_memcg_exit(old_memcg, new_memcg);
