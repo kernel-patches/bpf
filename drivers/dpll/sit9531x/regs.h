@@ -190,6 +190,32 @@
 #define SIT9531X_DEBUG_UNLOCK_VAL		0xC3
 
 /*
+ * Per-output programmable phase delay: 34-bit coarse (in VCO clock
+ * cycles) plus a 3-bit fine field with fixed 30 ps steps.  Each output
+ * has a five-byte block PROG6..PROG2:
+ *
+ *   base + 0  PROG6  [7:5] OPSTG_VCASC_BUMP (preserve via RMW)
+ *                    [4:2] PRG_RST_FINE_DELAY[2:0]
+ *                    [1:0] PRG_RST_DELAY[33:32]
+ *   base + 1  PROG5  [7:0] PRG_RST_DELAY[31:24]
+ *   base + 2  PROG4  [7:0] PRG_RST_DELAY[23:16]
+ *   base + 3  PROG3  [7:0] PRG_RST_DELAY[15:8]
+ *   base + 4  PROG2  [7:0] PRG_RST_DELAY[7:0]
+ *
+ * Outputs 0-5 are on Page 3, outputs 6-11 on Page 4.  The block base
+ * within a page is 0x15 + 16 * (out_idx % 6).
+ */
+#define SIT9531X_OUT_PRG_DELAY_BASE		0x15
+#define SIT9531X_OUT_PRG_SLOT_STRIDE		0x10
+#define SIT9531X_OUT_PRG_OPSTG_MASK		0xE0	/* bits [7:5], preserve */
+#define SIT9531X_OUT_PRG_FINE_SHIFT		2
+#define SIT9531X_OUT_PRG_FINE_MASK		0x1C	/* bits [4:2] */
+#define SIT9531X_OUT_PRG_COARSE_HI_MASK		0x03	/* bits [1:0] */
+#define SIT9531X_OUT_PRG_FINE_STEP_PS		30
+#define SIT9531X_OUT_PRG_FINE_MAX		7	/* 3-bit field */
+#define SIT9531X_OUT_PRG_COARSE_BITS		34
+
+/*
  * On-demand phase-flush fired from a register rather than a GPIO pin.
  * DIVO_PHASE_SEL_REG selects the in-register trigger source and
  * DIVO_PHASE_TRIG flushes the output phase when pulsed high then low.

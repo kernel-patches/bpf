@@ -1342,6 +1342,149 @@ int sit9531x_output_freq_get(struct sit9531x_dev *sitdev, u8 out_idx,
  * output period, which is identical for a periodic signal.
  */
 
+int sit9531x_output_phase_adjust_set(struct sit9531x_dev *sitdev,
+				     u8 out_idx, s32 phase_ps)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	u64 abs_ps, fvco, coarse, coarse_ps, rem_ps;
+	u8 page, base, prog6_val, fine = 0;
+	u8 pll_idx, slot;
+	u32 freq;
+	int rc, ret;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (out_idx >= info->num_outputs)
+		return -EINVAL;
+
+	pll_idx = sitdev->out[out_idx].pll_idx;
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	freq = sitdev->out[out_idx].freq;
+	if (!freq)
+		return -EINVAL;
+
+	fvco = sit9531x_get_fvco(sitdev, pll_idx);
+	if (!fvco)
+		return -EIO;
+
+	/*
+	 * Convert to unsigned absolute delay.  Negative phase (advance)
+	 * is rendered as T_out - |phase|, modulo the output period.
+	 */
+	if (phase_ps == 0) {
+		abs_ps = 0;
+	} else if (phase_ps > 0) {
+		abs_ps = (u64)phase_ps;
+	} else {
+		u64 t_out_ps = div64_u64(1000000000000ULL, freq);
+		u64 advance = (u64)(-(s64)phase_ps);
+
+		if (t_out_ps == 0)
+			return -EINVAL;
+		/*
+		 * div64_u64_rem() rather than the % operator: a 64-bit
+		 * modulo has no compiler helper on 32-bit targets and
+		 * leaves the module with an undefined __umoddi3.
+		 */
+		div64_u64_rem(advance, t_out_ps, &advance);
+		abs_ps = (advance == 0) ? 0 : (t_out_ps - advance);
+	}
+
+	/*
+	 * coarse_cycles = abs_ps * Fvco / 1e12 ps/s.
+	 * mul_u64_u64_div_u64() avoids overflow when abs_ps approaches
+	 * one second of 1 PPS wrap-around.
+	 */
+	coarse = mul_u64_u64_div_u64(abs_ps, fvco, 1000000000000ULL);
+	if (coarse >= (1ULL << SIT9531X_OUT_PRG_COARSE_BITS))
+		return -ERANGE;
+
+	/* Fine delay = round((abs_ps - coarse * vco_period_ps) / 30 ps) */
+	coarse_ps = mul_u64_u64_div_u64(coarse, 1000000000000ULL, fvco);
+	rem_ps = (abs_ps > coarse_ps) ? (abs_ps - coarse_ps) : 0;
+	if (rem_ps) {
+		u64 steps;
+
+		steps = div64_u64(rem_ps + SIT9531X_OUT_PRG_FINE_STEP_PS / 2,
+				  SIT9531X_OUT_PRG_FINE_STEP_PS);
+		if (steps > SIT9531X_OUT_PRG_FINE_MAX)
+			steps = SIT9531X_OUT_PRG_FINE_MAX;
+		fine = (u8)steps;
+	}
+
+	/*
+	 * Map logical output index to the chip's physical output slot.
+	 * On SiT95317 the eight logical outputs land on chip slots
+	 * {0, 3, 4, 5, 7, 8, 9, 11}; on SiT95316 the map is identity.
+	 * Page/base must address the slot, not the logical index.
+	 */
+	slot = info->clkout_map[out_idx];
+	page = (slot > SIT9531X_PAGE_OUTSYS0_SLOT_MAX) ?
+	       SIT9531X_PAGE_OUTSYS1 : SIT9531X_PAGE_OUTSYS0;
+	base = SIT9531X_OUT_PRG_DELAY_BASE +
+	       SIT9531X_OUT_PRG_SLOT_STRIDE * (slot % 6);
+
+	/*
+	 * The PRG_RST_DELAY bytes live in the output system, so the writes
+	 * only take effect when made inside the PRG_CMD programming state and
+	 * committed to the NVM shadow, exactly like sit9531x_output_freq_set().
+	 */
+	rc = sit9531x_prg_enter(sitdev);
+	if (rc)
+		return rc;
+
+	/* PROG6 RMW: preserve OPSTG_VCASC_BUMP in [7:5] */
+	rc = sit9531x_read_u8(sitdev, SIT9531X_REG(page, base),
+			      &prog6_val);
+	if (rc)
+		goto commit;
+
+	prog6_val &= SIT9531X_OUT_PRG_OPSTG_MASK;
+	prog6_val |= (fine << SIT9531X_OUT_PRG_FINE_SHIFT) &
+		     SIT9531X_OUT_PRG_FINE_MASK;
+	prog6_val |= (u8)((coarse >> 32) & SIT9531X_OUT_PRG_COARSE_HI_MASK);
+
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG(page, base),
+			       prog6_val);
+	if (rc)
+		goto commit;
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG(page, base + 1),
+			       (u8)((coarse >> 24) & 0xFF));
+	if (rc)
+		goto commit;
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG(page, base + 2),
+			       (u8)((coarse >> 16) & 0xFF));
+	if (rc)
+		goto commit;
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG(page, base + 3),
+			       (u8)((coarse >> 8) & 0xFF));
+	if (rc)
+		goto commit;
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG(page, base + 4),
+			       (u8)(coarse & 0xFF));
+
+commit:
+	/*
+	 * Always leave the PRG_CMD state via prg_commit(), even on a
+	 * mid-sequence write failure, so the output loops are re-locked rather
+	 * than stranded unlocked; keep the first error.
+	 */
+	ret = sit9531x_prg_commit(sitdev);
+	if (ret && !rc)
+		rc = ret;
+	if (rc)
+		return rc;
+
+	/*
+	 * Restart the output divider phase so the freshly programmed delay is
+	 * applied against a known edge instead of the divider's arbitrary
+	 * running phase.
+	 */
+	return sit9531x_output_phase_flush(sitdev, pll_idx);
+}
+
 /*
  * sit9531x_clear_notifications - clear all notification registers
  *

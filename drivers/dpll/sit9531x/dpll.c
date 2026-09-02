@@ -736,12 +736,63 @@ sit9531x_dpll_output_pin_state_on_dpll_set(const struct dpll_pin *pin,
 	return rc;
 }
 
+/*
+ * sit9531x_dpll_output_pin_phase_adjust_get - read output phase adjustment
+ *
+ * returns cached value.
+ */
+static int
+sit9531x_dpll_output_pin_phase_adjust_get(const struct dpll_pin *pin,
+					  void *pin_priv,
+					  const struct dpll_device *dpll,
+					  void *dpll_priv, s32 *phase_adjust,
+					  struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+
+	*phase_adjust = dpin->phase_adjust;
+	return 0;
+}
+
+/*
+ * sit9531x_dpll_output_pin_phase_adjust_set - set output phase adjustment
+ *
+ * Programs the per-output PRG_RST_DELAY registers for deterministic
+ * phase offset; see sit9531x_output_phase_adjust_set() in core.c.
+ */
+static int
+sit9531x_dpll_output_pin_phase_adjust_set(const struct dpll_pin *pin,
+					  void *pin_priv,
+					  const struct dpll_device *dpll,
+					  void *dpll_priv, s32 phase_adjust,
+					  struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_output_phase_adjust_set(sitdev, dpin->id, phase_adjust);
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc) {
+		NL_SET_ERR_MSG(extack, "Phase adjust failed");
+		return rc;
+	}
+
+	dpin->phase_adjust = phase_adjust;
+	return 0;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_output_pin_ops = {
 	.direction_get		= sit9531x_dpll_output_pin_direction_get,
 	.frequency_get		= sit9531x_dpll_output_pin_frequency_get,
 	.frequency_set		= sit9531x_dpll_output_pin_frequency_set,
 	.state_on_dpll_get	= sit9531x_dpll_output_pin_state_on_dpll_get,
 	.state_on_dpll_set	= sit9531x_dpll_output_pin_state_on_dpll_set,
+	.phase_adjust_get	= sit9531x_dpll_output_pin_phase_adjust_get,
+	.phase_adjust_set	= sit9531x_dpll_output_pin_phase_adjust_set,
 };
 
 const struct dpll_pin_ops *
