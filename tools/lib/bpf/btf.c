@@ -421,6 +421,7 @@ static int btf_type_size_unknown(const struct btf *btf, const struct btf_type *t
 {
 	__u32 l_cnt = btf->hdr.layout_len / sizeof(struct btf_layout);
 	struct btf_layout *l = btf->layout;
+	size_t type_size;
 	__u32 vlen = btf_vlen(t);
 	__u32 kind = btf_kind(t);
 
@@ -448,7 +449,15 @@ static int btf_type_size_unknown(const struct btf *btf, const struct btf_type *t
 		return -EINVAL;
 	}
 
-	return sizeof(struct btf_type) + l[kind].info_sz + vlen * l[kind].elem_sz;
+	type_size = sizeof(struct btf_type) + l[kind].info_sz +
+		    (size_t)vlen * l[kind].elem_sz;
+	if (type_size > INT_MAX) {
+		pr_debug("BTF type size %zu for kind %u is too large\n",
+			 type_size, kind);
+		return -E2BIG;
+	}
+
+	return type_size;
 }
 
 static int btf_type_size(const struct btf *btf, const struct btf_type *t)

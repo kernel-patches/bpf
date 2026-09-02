@@ -217,10 +217,49 @@ out:
 	btf__free(btf);
 }
 
+static void test_btf_kind_size_overflow(void)
+{
+	/* Max vlen and aligned u8 layout sizes produce type size 0xfc00000c. */
+	struct {
+		struct btf_header hdr;
+		struct btf_type type;
+		struct btf_layout layouts[NR_BTF_KINDS + 1];
+		char strs[1];
+	} __packed raw_btf = {
+		.hdr = {
+			.magic = BTF_MAGIC,
+			.version = BTF_VERSION,
+			.hdr_len = sizeof(struct btf_header),
+			.type_len = sizeof(struct btf_type),
+			.layout_off = sizeof(struct btf_type),
+			.layout_len = sizeof(struct btf_layout) * (NR_BTF_KINDS + 1),
+			.str_off = sizeof(struct btf_type) +
+				   sizeof(struct btf_layout) * (NR_BTF_KINDS + 1),
+			.str_len = 1,
+		},
+		.type.info = (NR_BTF_KINDS << 24) | BTF_MAX_VLEN,
+		.layouts[NR_BTF_KINDS] = {
+			.info_sz = 252,
+			.elem_sz = 252,
+		},
+	};
+	struct btf *btf;
+	int err;
+
+	errno = 0;
+	btf = btf__new(&raw_btf, sizeof(raw_btf));
+	err = libbpf_get_error(btf);
+	if (!ASSERT_EQ(err, -E2BIG, "size_overflow_err"))
+		return;
+	ASSERT_NULL(btf, "size_overflow_btf");
+}
+
 void test_btf_kind(void)
 {
 	if (test__start_subtest("btf_kind_encoding"))
 		test_btf_kind_encoding();
 	if (test__start_subtest("btf_kind_decoding"))
 		test_btf_kind_decoding();
+	if (test__start_subtest("btf_kind_size_overflow"))
+		test_btf_kind_size_overflow();
 }
