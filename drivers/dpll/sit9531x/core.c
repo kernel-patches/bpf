@@ -3158,6 +3158,43 @@ static u64 sit9531x_derive_clock_id(struct sit9531x_dev *sitdev)
 	return clkid;
 }
 
+/*
+ * Board-config overrides for fixed efuse/blob routing the chip registers do
+ * not describe unambiguously.  Absent properties leave pll_fvco[] zeroed
+ * (derive from DIVN) and out_pll_map_valid false (use the OUT_MAP registers).
+ */
+static void sit9531x_parse_board_config(struct sit9531x_dev *sitdev)
+{
+	u32 map[SIT9531X_MAX_OUTPUTS];
+	int n, i;
+
+	device_property_read_u64_array(sitdev->dev, "sitime,pll-fvco",
+				       sitdev->pll_fvco, SIT9531X_NUM_PLLS);
+
+	if (!device_property_present(sitdev->dev, "sitime,output-pll-map"))
+		return;
+
+	/*
+	 * Any 1..MAX_OUTPUTS length is accepted so the 8-output SiT95317 need
+	 * not pad to 12; variant detection has not run yet and entries past
+	 * the detected num_outputs are never indexed.  Trailing entries of a
+	 * short map must read as unmapped rather than 0 (== PLLA), which
+	 * would mark unrouted outputs active in sit9531x_out_state_fetch().
+	 */
+	memset(sitdev->out_pll_map, SIT9531X_OUT_PLL_UNMAPPED,
+	       sizeof(sitdev->out_pll_map));
+
+	n = device_property_count_u32(sitdev->dev, "sitime,output-pll-map");
+	if (n <= 0 || n > SIT9531X_MAX_OUTPUTS ||
+	    device_property_read_u32_array(sitdev->dev, "sitime,output-pll-map",
+					   map, n))
+		return;
+
+	for (i = 0; i < n; i++)
+		sitdev->out_pll_map[i] = map[i];
+	sitdev->out_pll_map_valid = true;
+}
+
 int sit9531x_dev_probe(struct sit9531x_dev *sitdev)
 {
 	struct clk *xtal_clk;
@@ -3191,6 +3228,8 @@ int sit9531x_dev_probe(struct sit9531x_dev *sitdev)
 				     "Failed to request reset gpio\n");
 	if (sitdev->reset_gpio)
 		fsleep(10000);	/* internal boot after release */
+
+	sit9531x_parse_board_config(sitdev);
 
 	rc = sit9531x_read_variant_id(sitdev, &variant_id);
 	if (rc)
