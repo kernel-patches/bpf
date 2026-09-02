@@ -203,12 +203,49 @@ static int ksz_ptp_get_pin(struct ksz_device *dev,
 	return pin;
 }
 
+static int ksz_ptp_compute_perout_cycle(struct ksz_device *dev,
+					struct ptp_perout_request const *request,
+					u64 *cycle_width_ns)
+{
+	struct ksz_ptp_data *ptp_data = &dev->ptp_data;
+
+	ptp_data->perout_target_time_first.tv_sec  = request->start.sec;
+	ptp_data->perout_target_time_first.tv_nsec = request->start.nsec;
+
+	ptp_data->perout_period.tv_sec = request->period.sec;
+	ptp_data->perout_period.tv_nsec = request->period.nsec;
+
+	*cycle_width_ns = timespec64_to_ns(&ptp_data->perout_period);
+	if ((*cycle_width_ns & TRIG_CYCLE_WIDTH_M) != *cycle_width_ns) {
+		*cycle_width_ns = 0;
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static u64 ksz_ptp_compute_perout_pulse(struct ksz_device *dev,
+					struct ptp_perout_request const *request,
+					u64 max_pulse_width)
+{
+	u64 req_pulse_width_ns;
+
+	if (request->flags & PTP_PEROUT_DUTY_CYCLE)
+		return request->on.sec * NSEC_PER_SEC +	request->on.nsec;
+
+	/* Use a duty cycle of 50%. Maximum pulse width supported by the
+	 * hardware is a little bit more than 125 ms.
+	 */
+	req_pulse_width_ns = (request->period.sec * NSEC_PER_SEC +
+			      request->period.nsec) / 2;
+	return min_t(u64, req_pulse_width_ns, max_pulse_width);
+}
+
 static int ksz_ptp_enable_perout(struct ksz_device *dev,
 				 struct ptp_perout_request const *request,
 				 int on)
 {
 	struct ksz_ptp_data *ptp_data = &dev->ptp_data;
-	u64 req_pulse_width_ns;
 	u64 cycle_width_ns;
 	u64 pulse_width_ns;
 	int pin = 0;
@@ -234,29 +271,11 @@ static int ksz_ptp_enable_perout(struct ksz_device *dev,
 		ptp_data->tou_mode = KSZ_PTP_TOU_IDLE;
 		return 0;
 	}
-
-	ptp_data->perout_target_time_first.tv_sec  = request->start.sec;
-	ptp_data->perout_target_time_first.tv_nsec = request->start.nsec;
-
-	ptp_data->perout_period.tv_sec = request->period.sec;
-	ptp_data->perout_period.tv_nsec = request->period.nsec;
-
-	cycle_width_ns = timespec64_to_ns(&ptp_data->perout_period);
-	if ((cycle_width_ns & TRIG_CYCLE_WIDTH_M) != cycle_width_ns)
-		return -EINVAL;
-
-	if (request->flags & PTP_PEROUT_DUTY_CYCLE) {
-		pulse_width_ns = request->on.sec * NSEC_PER_SEC +
-			request->on.nsec;
-	} else {
-		/* Use a duty cycle of 50%. Maximum pulse width supported by the
-		 * hardware is a little bit more than 125 ms.
-		 */
-		req_pulse_width_ns = (request->period.sec * NSEC_PER_SEC +
-				      request->period.nsec) / 2;
-		pulse_width_ns = min_t(u64, req_pulse_width_ns,
-				       KSZ_MAX_PULSE_WIDTH);
-	}
+	ret = ksz_ptp_compute_perout_cycle(dev, request, &cycle_width_ns);
+	if (ret)
+		return ret;
+	pulse_width_ns = ksz_ptp_compute_perout_pulse(dev, request,
+						      KSZ_MAX_PULSE_WIDTH);
 
 	ret = ksz_ptp_tou_pulse_verify(pulse_width_ns, TRIG_PULSE_WIDTH_M);
 	if (ret)
