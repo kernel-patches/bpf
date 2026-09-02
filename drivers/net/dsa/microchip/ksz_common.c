@@ -1195,6 +1195,7 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.wr_table = &ksz8563_register_set,
 		.rd_table = &ksz8563_register_set,
 		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[KSZ8795] = {
@@ -1416,6 +1417,7 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.wr_table = &ksz9477_register_set,
 		.rd_table = &ksz9477_register_set,
 		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[KSZ9896] = {
@@ -1547,6 +1549,7 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.gbit_capable = {true, true, true},
 		.ptp_capable = true,
 		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[KSZ8567] = {
@@ -1585,6 +1588,7 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 				   true, true},
 		.ptp_capable = true,
 		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[KSZ9567] = {
@@ -1620,6 +1624,7 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.gbit_capable	= {true, true, true, true, true, true, true},
 		.ptp_capable = true,
 		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[LAN9370] = {
@@ -1652,6 +1657,7 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.internal_phy = {true, true, true, true, false},
 		.ptp_capable = true,
 		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[LAN9371] = {
@@ -1684,6 +1690,7 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.internal_phy = {true, true, true, true, false, false},
 		.ptp_capable = true,
 		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[LAN9372] = {
@@ -1720,6 +1727,7 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 				   false, false, true, true},
 		.ptp_capable = true,
 		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[LAN9373] = {
@@ -1756,6 +1764,7 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 				   false, false, true, true},
 		.ptp_capable = true,
 		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[LAN9374] = {
@@ -1792,6 +1801,7 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 				   false, false, true, true},
 		.ptp_capable = true,
 		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[LAN9646] = {
