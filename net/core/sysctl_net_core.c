@@ -211,6 +211,7 @@ unlock:
 	kvfree_rcu_mightsleep(tofree);
 	return ret;
 }
+
 #endif /* CONFIG_RPS */
 
 #ifdef CONFIG_NET_FLOW_LIMIT
@@ -554,6 +555,13 @@ static struct ctl_table net_core_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= rps_sock_flow_sysctl
+	},
+	{
+		.procname	= "rps_feat_llc_affinity",
+		.data		= &rps_feat_llc_affinity.key,
+		.maxlen		= sizeof(rps_feat_llc_affinity.key),
+		.mode		= 0644,
+		.proc_handler	= proc_do_static_key
 	},
 #endif
 #ifdef CONFIG_NET_FLOW_LIMIT
