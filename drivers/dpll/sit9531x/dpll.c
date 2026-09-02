@@ -669,10 +669,79 @@ sit9531x_dpll_output_pin_frequency_set(const struct dpll_pin *pin,
 	return rc;
 }
 
+/*
+ * sit9531x_dpll_output_pin_state_on_dpll_get - get output pin state
+ *
+ * reports CONNECTED when the output is driven and
+ * DISCONNECTED when it has been muted via sit9531x_output_disable().
+ */
+static int
+sit9531x_dpll_output_pin_state_on_dpll_get(const struct dpll_pin *pin,
+					   void *pin_priv,
+					   const struct dpll_device *dpll,
+					   void *dpll_priv,
+					   enum dpll_pin_state *state,
+					   struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	const struct sit9531x_out *out;
+
+	out = sit9531x_out_state_get(sitdpll->dev, dpin->id);
+	*state = out->enabled ? DPLL_PIN_STATE_CONNECTED
+			      : DPLL_PIN_STATE_DISCONNECTED;
+	return 0;
+}
+
+/*
+ * sit9531x_dpll_output_pin_state_on_dpll_set - mute/un-mute an output
+ *
+ * forces Hi-Z on the output pin via the Page 0x03
+ * force/state register pair.
+ *   CONNECTED    -> enable (release force, back to factory default)
+ *   DISCONNECTED -> disable (force Hi-Z)
+ */
+static int
+sit9531x_dpll_output_pin_state_on_dpll_set(const struct dpll_pin *pin,
+					   void *pin_priv,
+					   const struct dpll_device *dpll,
+					   void *dpll_priv,
+					   enum dpll_pin_state state,
+					   struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+
+	switch (state) {
+	case DPLL_PIN_STATE_CONNECTED:
+		rc = sit9531x_output_enable(sitdev, dpin->id);
+		break;
+	case DPLL_PIN_STATE_DISCONNECTED:
+		rc = sit9531x_output_disable(sitdev, dpin->id);
+		break;
+	default:
+		rc = -EINVAL;
+		break;
+	}
+
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc)
+		NL_SET_ERR_MSG(extack, "Failed to set output pin state");
+
+	return rc;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_output_pin_ops = {
 	.direction_get		= sit9531x_dpll_output_pin_direction_get,
 	.frequency_get		= sit9531x_dpll_output_pin_frequency_get,
 	.frequency_set		= sit9531x_dpll_output_pin_frequency_set,
+	.state_on_dpll_get	= sit9531x_dpll_output_pin_state_on_dpll_get,
+	.state_on_dpll_set	= sit9531x_dpll_output_pin_state_on_dpll_set,
 };
 
 const struct dpll_pin_ops *

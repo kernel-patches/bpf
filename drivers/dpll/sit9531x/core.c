@@ -339,6 +339,40 @@ static int sit9531x_output_forced_hiz(struct sit9531x_dev *sitdev, u8 slot,
 	return 0;
 }
 
+static int sit9531x_hiz_set_bit(struct sit9531x_dev *sitdev,
+				unsigned int reg, u8 bit, bool set)
+{
+	u8 cur, new_val;
+	int rc;
+
+	rc = sit9531x_read_u8(sitdev, reg, &cur);
+	if (rc)
+		return rc;
+
+	new_val = set ? (cur | BIT(bit)) : (cur & ~BIT(bit));
+
+	return sit9531x_write_u8(sitdev, reg, new_val);
+}
+
+/*
+ * Enter the output-system programming state: unlock the debug
+ * registers on Page 3 and issue the PRG_CMD state command.  Register
+ * writes that reconfigure the output system only take effect when
+ * they are made inside this state.
+ */
+static int sit9531x_prg_enter(struct sit9531x_dev *sitdev)
+{
+	int rc;
+
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_OUTSYS_DEBUG,
+			       SIT9531X_DEBUG_UNLOCK_VAL);
+	if (rc)
+		return rc;
+
+	return sit9531x_write_u8(sitdev, SIT9531X_REG_PRG_DIR_GEN,
+				 SIT9531X_PRG_CMD_STATE);
+}
+
 /*
  * Commit a programming sequence started by sit9531x_prg_enter():
  * update the NVM shadow and re-lock the loops.  The sleep gives the
@@ -366,6 +400,115 @@ static int sit9531x_prg_commit(struct sit9531x_dev *sitdev)
 	msleep(100);
 
 	return rc ? rc : rc2;
+}
+
+/*
+ * sit9531x_output_disable - mute an output (force Hi-Z)
+ * @index:	logical output index (0..info->num_outputs-1)
+ *
+ * Sets MASK+STATE on BOTH the DIFF and SE register pairs so that the
+ * output is muted regardless of its electrical configuration.  The
+ * writes are wrapped in the PRG_CMD / NVM update / loop lock sequence
+ * so the new state is applied by the hardware.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_output_disable(struct sit9531x_dev *sitdev, u8 index)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	struct sit9531x_hiz_regs r;
+	u8 slot;
+	int rc, ret;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (index >= info->num_outputs)
+		return -EINVAL;
+
+	slot = info->clkout_map[index];
+	sit9531x_output_get_hiz_regs(slot, &r);
+
+	rc = sit9531x_prg_enter(sitdev);
+	if (rc)
+		return rc;
+
+	/* Take control (MASK=1) and mute (STATE=0) on both DIFF and SE */
+	rc = sit9531x_hiz_set_bit(sitdev, r.diff_mask, r.bit, true);
+	if (rc)
+		goto commit;
+	rc = sit9531x_hiz_set_bit(sitdev, r.diff_state, r.bit, false);
+	if (rc)
+		goto commit;
+	rc = sit9531x_hiz_set_bit(sitdev, r.se_mask, r.bit, true);
+	if (rc)
+		goto commit;
+	rc = sit9531x_hiz_set_bit(sitdev, r.se_state, r.bit, false);
+
+commit:
+	/*
+	 * Always leave the PRG_CMD programming state, even on a mid-sequence
+	 * write failure: prg_enter() unlocked the output loops, so returning
+	 * without prg_commit() would strand the chip in the programming state
+	 * with the loops unlocked.  Best effort -- keep the first error.
+	 */
+	ret = sit9531x_prg_commit(sitdev);
+	if (ret && !rc)
+		rc = ret;
+	if (!rc)
+		sitdev->out[index].enabled = false;
+
+	return rc;
+}
+
+/*
+ * sit9531x_output_enable - un-mute an output (active state)
+ * @index:	logical output index (0..info->num_outputs-1)
+ *
+ * Releases MASK on BOTH register pairs so the output returns to
+ * whatever the initial_config blob programmed.  The writes are wrapped
+ * in the PRG_CMD / NVM update / loop lock sequence so the new state is
+ * applied by the hardware.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_output_enable(struct sit9531x_dev *sitdev, u8 index)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	struct sit9531x_hiz_regs r;
+	u8 slot;
+	int rc, ret;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (index >= info->num_outputs)
+		return -EINVAL;
+
+	slot = info->clkout_map[index];
+	sit9531x_output_get_hiz_regs(slot, &r);
+
+	rc = sit9531x_prg_enter(sitdev);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_hiz_set_bit(sitdev, r.diff_mask, r.bit, false);
+	if (rc)
+		goto commit;
+	rc = sit9531x_hiz_set_bit(sitdev, r.se_mask, r.bit, false);
+
+commit:
+	/*
+	 * Always leave the PRG_CMD programming state, even on a mid-sequence
+	 * write failure: prg_enter() unlocked the output loops, so returning
+	 * without prg_commit() would strand the chip in the programming state
+	 * with the loops unlocked.  Best effort -- keep the first error.
+	 */
+	ret = sit9531x_prg_commit(sitdev);
+	if (ret && !rc)
+		rc = ret;
+	if (!rc)
+		sitdev->out[index].enabled = true;
+
+	return rc;
 }
 
 /*
