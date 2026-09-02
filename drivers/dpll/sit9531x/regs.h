@@ -216,6 +216,13 @@
 #define SIT9531X_OUT_PRG_COARSE_BITS		34
 
 /*
+ * Per-output pulse-count control byte used in SYSREF / SYNCB modes.
+ * Slot N within a page sits at 0x1B + 16 * (slot % 6).  Same page
+ * mapping as PRG_RST_DELAY: slots 0-5 on Page 3, slots 6-11 on Page 4.
+ */
+#define SIT9531X_OUT_PROG0_BASE		0x1B
+
+/*
  * On-demand phase-flush fired from a register rather than a GPIO pin.
  * DIVO_PHASE_SEL_REG selects the in-register trigger source and
  * DIVO_PHASE_TRIG flushes the output phase when pulsed high then low.

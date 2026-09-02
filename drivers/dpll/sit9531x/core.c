@@ -1536,6 +1536,57 @@ int sit9531x_clear_notifications(struct sit9531x_dev *sitdev)
 }
 
 /*
+ * sit9531x_output_pulse_ctrl_set - program per-output PULSE_CTRL byte
+ * @out_idx:	logical output index (translated to chip slot internally)
+ * @pulse_ctrl:	8-bit PULSE_CTRL value (PROG0)
+ *
+ * Writes ODRn_PROG0 on the output page (Page 3 for slots 0..5,
+ * Page 4 for slots 6..11) at offset 0x1B + 16 * (slot % 6).
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_output_pulse_ctrl_set(struct sit9531x_dev *sitdev,
+				   u8 out_idx, u8 pulse_ctrl)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	u8 slot, page, reg;
+	int rc, ret;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (out_idx >= info->num_outputs)
+		return -EINVAL;
+
+	slot = info->clkout_map[out_idx];
+	page = (slot > SIT9531X_PAGE_OUTSYS0_SLOT_MAX) ?
+		SIT9531X_PAGE_OUTSYS1 : SIT9531X_PAGE_OUTSYS0;
+	reg = SIT9531X_OUT_PROG0_BASE +
+	      SIT9531X_OUT_PRG_SLOT_STRIDE * (slot % 6);
+
+	/*
+	 * PROG0 lives in the output system, so like the DIVO and
+	 * PRG_RST_DELAY writes it only takes effect inside the PRG_CMD
+	 * programming state committed to the NVM shadow.
+	 */
+	rc = sit9531x_prg_enter(sitdev);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG(page, reg), pulse_ctrl);
+
+	/*
+	 * Always leave the PRG_CMD state via prg_commit(), even if the write
+	 * failed, so the output loops are re-locked rather than stranded
+	 * unlocked; keep the first error.
+	 */
+	ret = sit9531x_prg_commit(sitdev);
+	if (ret && !rc)
+		rc = ret;
+
+	return rc;
+}
+
+/*
  * sit9531x_ref_state_fetch - read input reference status from hardware
  * @index:	logical input index
  *
