@@ -27,10 +27,16 @@ static unsigned long mlx5e_rep_ipv6_interval(void)
 
 static void mlx5e_rep_neigh_update_init_interval(struct mlx5e_rep_priv *rpriv)
 {
-	unsigned long ipv4_interval = NEIGH_VAR(&arp_tbl.parms, DELAY_PROBE_TIME);
 	unsigned long ipv6_interval = mlx5e_rep_ipv6_interval();
 	struct net_device *netdev = rpriv->netdev;
-	struct mlx5e_priv *priv = netdev_priv(netdev);
+	struct net *net = dev_net(netdev);
+	unsigned long ipv4_interval;
+	struct neigh_table *tbl;
+	struct mlx5e_priv *priv;
+
+	priv = netdev_priv(netdev);
+	tbl = arp_table(net);
+	ipv4_interval = NEIGH_VAR(&tbl->parms, DELAY_PROBE_TIME);
 
 	rpriv->neigh_update.min_interval = min_t(unsigned long, ipv6_interval, ipv4_interval);
 	mlx5_fc_update_sampling_interval(priv->mdev, rpriv->neigh_update.min_interval);
@@ -217,12 +223,6 @@ static int mlx5e_rep_netevent_event(struct notifier_block *nb,
 	switch (event) {
 	case NETEVENT_NEIGH_UPDATE:
 		n = ptr;
-#if IS_ENABLED(CONFIG_IPV6)
-		if (n->tbl != &nd_tbl && n->tbl != &arp_tbl)
-#else
-		if (n->tbl != &arp_tbl)
-#endif
-			return NOTIFY_DONE;
 
 		update_work = mlx5e_alloc_neigh_update_work(priv, n);
 		if (!update_work)
@@ -238,11 +238,7 @@ static int mlx5e_rep_netevent_event(struct notifier_block *nb,
 		 * changes in the default table, we only care about changes
 		 * done per device delay prob time parameter.
 		 */
-#if IS_ENABLED(CONFIG_IPV6)
-		if (!p->dev || (p->tbl != &nd_tbl && p->tbl != &arp_tbl))
-#else
-		if (!p->dev || p->tbl != &arp_tbl)
-#endif
+		if (!p->dev)
 			return NOTIFY_DONE;
 
 		rcu_read_lock();
