@@ -291,6 +291,12 @@ static void fbnic_mbx_process_tx_msgs(struct fbnic_dev *fbd)
 		if (!(desc & FBNIC_IPC_MBX_DESC_FW_CMPL))
 			break;
 
+		if (desc & FBNIC_IPC_MBX_DESC_FW_ERR) {
+			tx_mbx->resp_error++;
+			dev_warn(fbd->dev,
+				 "FW completed a Tx mailbox request with an error\n");
+		}
+
 		fbnic_mbx_unmap_and_free_msg(fbd, FBNIC_IPC_MBX_TX_IDX, head);
 
 		head++;
@@ -1672,6 +1678,13 @@ static void fbnic_mbx_process_rx_msgs(struct fbnic_dev *fbd)
 		if (!(desc & FBNIC_IPC_MBX_DESC_FW_CMPL))
 			break;
 
+		if (desc & FBNIC_IPC_MBX_DESC_FW_ERR) {
+			rx_mbx->resp_error++;
+			dev_warn(fbd->dev,
+				 "FW reported an error on an Rx mailbox message; dropping\n");
+			goto next_page;
+		}
+
 		dma_sync_single_for_cpu(fbd->dev, rx_mbx->buf_info[head].addr,
 					FBNIC_RX_PAGE_SIZE, DMA_FROM_DEVICE);
 
@@ -1743,6 +1756,7 @@ int fbnic_mbx_poll_tx_ready(struct fbnic_dev *fbd)
 {
 	struct fbnic_fw_mbx *tx_mbx = &fbd->mbx[FBNIC_IPC_MBX_TX_IDX];
 	unsigned long timeout = jiffies + 10 * HZ + 1;
+	u64 resp_error;
 	int err, i;
 
 	do {
@@ -1773,6 +1787,8 @@ int fbnic_mbx_poll_tx_ready(struct fbnic_dev *fbd)
 	 * mgmt.version once we get the actual version from the firmware
 	 * in the capabilities request message.
 	 */
+send_cap_req:
+	resp_error = tx_mbx->resp_error;
 	err = fbnic_fw_xmit_simple_msg(fbd, FBNIC_TLV_MSG_ID_HOST_CAP_REQ);
 	if (err)
 		goto clean_mbx;
@@ -1791,8 +1807,17 @@ int fbnic_mbx_poll_tx_ready(struct fbnic_dev *fbd)
 		fbnic_mbx_poll(fbd);
 
 		/* set err, but wait till mgmt.version check to report it */
-		if (!time_is_after_jiffies(timeout))
+		if (!time_is_after_jiffies(timeout)) {
 			err = -ETIMEDOUT;
+			continue;
+		}
+
+		/* If the FW completed our capabilities request with an error
+		 * (FW_ERR) it produced no response; the ring is not wedged, so
+		 * re-issue the request instead of timing out.
+		 */
+		if (tx_mbx->resp_error != resp_error)
+			goto send_cap_req;
 	}
 
 	return 0;
