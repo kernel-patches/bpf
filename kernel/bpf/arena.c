@@ -317,7 +317,7 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 		goto err_free_arena;
 
 	range_tree_init(&arena->rt);
-	err = range_tree_set(&arena->rt, 0, attr->max_entries);
+	err = range_tree_set_avail(&arena->rt, 0, attr->max_entries);
 	if (err)
 		goto err_free_scratch;
 	mutex_init(&arena->lock);
@@ -520,13 +520,13 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	/* Account into memcg of the process that created bpf_arena */
 	ret = bpf_map_alloc_pages(map, NUMA_NO_NODE, 1, &page);
 	if (ret) {
-		range_tree_set(&arena->rt, vmf->pgoff, 1);
+		range_tree_set_avail(&arena->rt, vmf->pgoff, 1);
 		goto out_sigsegv_memcg;
 	}
 
 	ret = apply_to_page_range(&init_mm, kaddr, PAGE_SIZE, apply_range_set_cb, &data);
 	if (ret) {
-		range_tree_set(&arena->rt, vmf->pgoff, 1);
+		range_tree_set_avail(&arena->rt, vmf->pgoff, 1);
 		free_pages_nolock(page, 0);
 		goto out_sigsegv_memcg;
 	}
@@ -766,7 +766,7 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 	return clear_lo32(arena->user_vm_start) + uaddr32;
 out:
-	range_tree_set(&arena->rt, pgoff + mapped, page_cnt - mapped);
+	range_tree_set_avail(&arena->rt, pgoff + mapped, page_cnt - mapped);
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 	if (mapped) {
 		flush_vmap_cache(kern_vm_start + uaddr32, mapped << PAGE_SHIFT);
@@ -881,7 +881,7 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 	if (ret)
 		goto defer;
 
-	range_tree_set(&arena->rt, pgoff, page_cnt);
+	range_tree_set_avail(&arena->rt, pgoff, page_cnt);
 
 	init_llist_head(&free_pages);
 	cdata.arena = arena;
@@ -1008,7 +1008,7 @@ static void arena_free_worker(struct work_struct *work)
 		apply_to_existing_page_range(&init_mm, kaddr, page_cnt << PAGE_SHIFT,
 					     apply_range_clear_cb, &cdata);
 
-		range_tree_set(&arena->rt, pgoff, page_cnt);
+		range_tree_set_avail(&arena->rt, pgoff, page_cnt);
 	}
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 
