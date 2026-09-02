@@ -1587,6 +1587,131 @@ int sit9531x_output_pulse_ctrl_set(struct sit9531x_dev *sitdev,
 }
 
 /*
+ * sit9531x_phase_offset_read - read phase difference via TDC
+ * @phase_ps:	output phase difference in picoseconds
+ *
+ * Reads the Time-to-Digital Converter (TDC) 40-bit code from the
+ * PLL page registers, then converts to picoseconds using the VCO
+ * frequency: phase_diff = tdc_code / fvco.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_phase_offset_read(struct sit9531x_dev *sitdev, u8 pll_idx,
+			       s64 *phase_ps)
+{
+	u64 fvco, fvco_mhz;
+	s64 tdc_signed;
+	u64 tdc_raw;
+	int rc, i;
+	bool sign;
+	u8 v;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	/* Unlock the debug page so the TDC registers are accessible. */
+	rc = sit9531x_write_pll_u8(sitdev, pll_idx,
+				   SIT9531X_PLL_REG_DEBUG,
+				   SIT9531X_PLL_DEBUG_UNLOCK);
+	if (rc)
+		return rc;
+
+	/*
+	 * Select the debug clock for taps below 200 kHz, then point the
+	 * readback at the TDC.  Only the one bit is touched: writing the
+	 * modifier register whole would clear the fields belonging to
+	 * other taps.
+	 */
+	rc = sit9531x_update_pll_u8(sitdev, pll_idx,
+				    SIT9531X_PLL_REG_DBG_WRITE_CODE,
+				    SIT9531X_DBG_LOW_FREQ_CLK_BIT,
+				    SIT9531X_DBG_LOW_FREQ_CLK_BIT);
+	if (rc)
+		return rc;
+	rc = sit9531x_write_pll_u8(sitdev, pll_idx,
+				   SIT9531X_PLL_REG_DBG_READ_CODE,
+				   SIT9531X_DBG_READ_CODE_TDC);
+	if (rc)
+		return rc;
+
+	/* Latch a sample by reading the trigger register; see dbg_sample(). */
+	for (i = 0; i < SIT9531X_DBG_LATCH_READS; i++) {
+		rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+					  SIT9531X_PLL_REG_DBG_TRIGGER, &v);
+		if (rc)
+			return rc;
+	}
+
+	tdc_raw = 0;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_4, &v);
+	if (rc)
+		return rc;
+	sign = !!(v & BIT(SIT9531X_TDC_SIGN_BIT));
+	tdc_raw = (u64)(v & 0x07) << 32;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_3, &v);
+	if (rc)
+		return rc;
+	tdc_raw |= (u64)v << 24;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_2, &v);
+	if (rc)
+		return rc;
+	tdc_raw |= (u64)v << 16;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_1, &v);
+	if (rc)
+		return rc;
+	tdc_raw |= (u64)v << 8;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_0, &v);
+	if (rc)
+		return rc;
+	tdc_raw |= v;
+
+	/*
+	 * Apply sign.  Per the vendor reference the sign bit is active-high
+	 * for a positive offset: bit set -> +code, bit clear -> -code.
+	 */
+	tdc_signed = sign ? (s64)tdc_raw : -(s64)tdc_raw;
+
+	/*
+	 * Get VCO frequency for conversion.  Fvco==0 means DIVN is not
+	 * programmed (PLL unused on this board) -- skip silently rather
+	 * than spamming the log on every poll cycle.
+	 */
+	fvco = sit9531x_get_fvco(sitdev, pll_idx);
+	if (!fvco) {
+		dev_dbg(sitdev->dev, "PLL%c: Fvco unknown, skip TDC\n",
+			'A' + pll_idx);
+		return -ENODEV;
+	}
+
+	/*
+	 * phase_diff (seconds) = tdc_code / fvco
+	 * phase_diff (ps) = tdc_code * 1e12 / fvco
+	 *
+	 * To avoid 64-bit overflow:
+	 *   phase_ps = tdc_code * 1e6 / (fvco / 1e6)
+	 */
+	fvco_mhz = div64_u64(fvco, 1000000ULL);
+	if (!fvco_mhz)
+		return -EIO;
+
+	*phase_ps = div64_s64(tdc_signed * 1000000LL, (s64)fvco_mhz);
+
+	return 0;
+}
+
+/*
  * sit9531x_ref_state_fetch - read input reference status from hardware
  * @index:	logical input index
  *

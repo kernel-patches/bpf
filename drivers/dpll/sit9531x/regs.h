@@ -256,6 +256,42 @@
 #define SIT9531X_PLL_REG_DIVN_NUM		0x32  /* 4 bytes (0x32-0x35) */
 #define SIT9531X_PLL_REG_DIVN_DEN		0x38  /* 4 bytes (0x38-0x3B) */
 
+/* Debug register unlock */
+#define SIT9531X_PLL_REG_DEBUG		0xBD
+#define SIT9531X_PLL_DEBUG_UNLOCK		0xC3
+
+/*
+ * Signal pathway debug readback -- PLL page.  Dig_Sys_ReadCode selects
+ * which point of the pathway is tapped, Dig_Sys_WriteCode carries the
+ * modifiers for that read, Dig_Sys_read7..read0 hold the sampled bytes
+ * and the trigger register latches a sample.  The TDC phase
+ * measurement is one tap among several, reached through read code 69.
+ */
+#define SIT9531X_PLL_REG_DBG_READ_CODE	0xB3
+#define SIT9531X_PLL_REG_DBG_WRITE_CODE	0xB4
+#define SIT9531X_DBG_LOW_FREQ_CLK_BIT	BIT(7)
+#define SIT9531X_PLL_REG_DBG_DATA_0		0xB5  /* [7:0] */
+#define SIT9531X_PLL_REG_DBG_DATA_1		0xB6  /* [15:8] */
+#define SIT9531X_PLL_REG_DBG_DATA_2		0xB7  /* [23:16] */
+#define SIT9531X_PLL_REG_DBG_DATA_3		0xB8  /* [31:24] */
+#define SIT9531X_PLL_REG_DBG_DATA_4		0xB9  /* [39:32] + sign */
+#define SIT9531X_PLL_REG_DBG_DATA_5		0xBA  /* [47:40] */
+#define SIT9531X_PLL_REG_DBG_DATA_6		0xBB
+#define SIT9531X_PLL_REG_DBG_DATA_7		0xBC
+#define SIT9531X_PLL_REG_DBG_TRIGGER		0xD0  /* read to latch a sample */
+
+/*
+ * Reads of the trigger needed to latch a fresh sample.  One returns the
+ * previous latch, which the vendor procedures work around by reading it
+ * three times.
+ */
+#define SIT9531X_DBG_LATCH_READS		3
+#define SIT9531X_DBG_DATA_BYTES		8
+
+/* Read code of the TDC phase tap, and the sign bit of its sample */
+#define SIT9531X_DBG_READ_CODE_TDC		69
+#define SIT9531X_TDC_SIGN_BIT		3
+
 /*
  * DIVN carried as fixed point, and the unit the DPLL ABI wants the
  * fractional frequency offset in.  Equal in value, distinct in meaning.

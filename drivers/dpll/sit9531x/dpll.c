@@ -528,6 +528,105 @@ sit9531x_dpll_input_pin_prio_set(const struct dpll_pin *pin, void *pin_priv,
 	return 0;
 }
 
+/*
+ * sit9531x_dpll_input_pin_phase_offset_get - phase offset of a reference
+ *
+ * What this reports, and what it deliberately does not:
+ *
+ * The ABI defines the attribute as the phase difference between the signal
+ * on a pin and its parent DPLL device, so this is the loop's own residual
+ * error, sampled with the loop closed.  On a locked DPLL it therefore
+ * trends small -- that is the measurement, not an artefact of it.  The
+ * framework expects successive values to be averaged, which suits a
+ * closed-loop residual and not a one-shot open-loop capture.
+ *
+ * The chip can also measure the reference against the local oscillator
+ * with the outer loop's correction frozen, which is a different quantity
+ * and the one the vendor's phase-difference procedure produces.  That
+ * needs the digital loop filter held (and, on the 1PPS PLL, the automatic
+ * phase- and frequency-lock helpers held off), which leaves the PLL
+ * undisciplined until it is released.  A netlink read must not do that,
+ * so the open-loop measurement lives behind a debugfs operation that owns
+ * the freeze and restores it; it is not this callback.
+ *
+ * Precondition, which this callback cannot create: the TDC compares
+ * against a signal the PLL drives, so a PLL driving no output with its
+ * zero-delay buffer off has nothing to measure.  SiTime confirms this is
+ * a property of the hardware rather than of their measurement script.
+ * The script satisfies it by mapping a spare output and restarting the
+ * PLL -- side effects that do not belong in a getter, so a reading taken
+ * in that state is simply not meaningful.
+ *
+ * Non-selected pins and a PLL with no programmed divider report zero
+ * rather than an error: the DPLL core propagates any error from this
+ * callback and fails the whole pin dump with it, unlike the frequency
+ * offset getter, where -ENODATA makes the core omit the attribute.  There
+ * is no per-pin "no data" for phase offset, so it is a value or no
+ * callback at all.
+ */
+static int
+sit9531x_dpll_input_pin_phase_offset_get(const struct dpll_pin *pin,
+					 void *pin_priv,
+					 const struct dpll_device *dpll,
+					 void *dpll_priv, s64 *phase_offset,
+					 struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	s64 offset;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+
+	/*
+	 * The on-chip TDC is a per-PLL resource that always measures the
+	 * phase difference between the VCO and the PLL's currently
+	 * selected reference; it cannot be pointed at an arbitrary input.
+	 * For any input that is not the active reference there is no
+	 * meaningful per-pin phase offset, so report 0 instead of the
+	 * active reference's value.
+	 */
+	if (sitdev->chan[sitdpll->id].selected_ref != dpin->id) {
+		mutex_unlock(&sitdev->multiop_lock);
+		dpin->phase_offset = 0;
+		*phase_offset = 0;
+		return 0;
+	}
+
+	rc = sit9531x_phase_offset_read(sitdev, sitdpll->id, &offset);
+	mutex_unlock(&sitdev->multiop_lock);
+
+	/*
+	 * -ENODEV means the PLL has no programmed DIVN (unused on this
+	 * board); report phase_offset = 0 so a full pin-get dump does not
+	 * fail just because one DPLL is dormant.
+	 */
+	if (rc == -ENODEV) {
+		dpin->phase_offset = 0;
+		*phase_offset = 0;
+		return 0;
+	}
+	if (rc) {
+		NL_SET_ERR_MSG(extack, "TDC phase readback failed");
+		return rc;
+	}
+
+	/*
+	 * The ABI reports phase offset in units of 1/DPLL_PHASE_OFFSET_DIVIDER
+	 * picoseconds: the integer part of the attribute is the value divided
+	 * by the divider, the remainder is the fraction.  The TDC resolves one
+	 * VCO period (hundreds of picoseconds), so the fractional digits are
+	 * always zero here, but the magnitude still has to be scaled or every
+	 * reading would be reported a thousand times too small.
+	 */
+	offset *= DPLL_PHASE_OFFSET_DIVIDER;
+
+	dpin->phase_offset = offset;
+	*phase_offset = offset;
+	return 0;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
 	.direction_get		= sit9531x_dpll_input_pin_direction_get,
 	.frequency_get		= sit9531x_dpll_input_pin_frequency_get,
@@ -535,6 +634,7 @@ static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
 	.state_on_dpll_set	= sit9531x_dpll_input_pin_state_on_dpll_set,
 	.prio_get		= sit9531x_dpll_input_pin_prio_get,
 	.prio_set		= sit9531x_dpll_input_pin_prio_set,
+	.phase_offset_get	= sit9531x_dpll_input_pin_phase_offset_get,
 	/*
 	 * The measurement compares the PLL's running feedback divider with
 	 * its configured one, so it describes the device's own reference
