@@ -1220,6 +1220,10 @@ extern void *vmbus_alloc_buffer(struct vmbus_channel *channel,
 
 extern void vmbus_free_buffer(void *addr, struct page **chunks, u32 chunk_cnt);
 
+extern void vmbus_leak_buffer(void **addr,
+			      struct page ***chunks,
+			      u32 *chunk_cnt);
+
 void vmbus_reset_channel_cb(struct vmbus_channel *channel);
 
 extern int vmbus_recvpacket(struct vmbus_channel *channel,

@@ -649,6 +649,32 @@ void vmbus_free_buffer(void *addr, struct page **chunks, u32 chunk_cnt)
 EXPORT_SYMBOL_GPL(vmbus_free_buffer);
 
 /**
+ * vmbus_leak_buffer - set up a buffer to be leaked by vmbus_free_buffer().
+ *
+ * @addr: buffer address
+ * @chunks: chunks array from vmbus_alloc_buffer()
+ * @chunk_cnt: number of entries in @chunks
+ *
+ * When @chunks is NULL the buffer is a plain vzalloc() allocation and
+ * the buffer is leaked by setting @addr to NULL. Otherwise set
+ * @chunk_cnt to 0 so that vmbus_free_buffer() does not try to re-encrypt
+ * or free the buffer memory, but still releases the vmap address and
+ * the chunks memory.
+ *
+ * This function may be called in a context where the buffer is still
+ * being accessed. It must not remove any kernel virtual addresses of
+ * the buffer or change its encryption status.
+ */
+void vmbus_leak_buffer(void **addr, struct page ***chunks, u32 *chunk_cnt)
+{
+	if (*chunks)
+		*chunk_cnt = 0;
+	else
+		*addr = NULL;
+}
+EXPORT_SYMBOL_GPL(vmbus_leak_buffer);
+
+/**
  * vmbus_alloc_buffer - allocate a host-visible, virtually-contiguous buffer.
  *
  * @channel: the channel the buffer will be attached to
