@@ -3721,6 +3721,20 @@ static void rvu_remove(struct pci_dev *pdev)
 	rvu_unregister_dl(rvu);
 	rvu_unregister_interrupts(rvu);
 	rvu_flr_wq_destroy(rvu);
+	if (rvu->rep_evt_wq) {
+		struct workqueue_struct *rep_wq = rvu->rep_evt_wq;
+
+		/* NULL the pointer before flushing mbox_wq.  Any mbox handler
+		 * still in flight will snapshot NULL via READ_ONCE() and return
+		 * -EINVAL without calling queue_work(), so no new items can be
+		 * added to rep_wq after flush_workqueue(mbox_wq) returns.
+		 */
+		WRITE_ONCE(rvu->rep_evt_wq, NULL);
+		flush_workqueue(rvu->afpf_wq_info.mbox_wq);
+		destroy_workqueue(rep_wq);
+	} else {
+		flush_workqueue(rvu->afpf_wq_info.mbox_wq);
+	}
 	rvu_cgx_exit(rvu);
 	rvu_fwdata_exit(rvu);
 	rvu_mcs_exit(rvu);

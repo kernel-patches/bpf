@@ -12,11 +12,18 @@ void rvu_switch_enable_lbk_link(struct rvu *rvu, u16 pcifunc, bool enable)
 {
 	struct rvu_pfvf *pfvf = rvu_get_pfvf(rvu, pcifunc);
 	struct nix_hw *nix_hw;
+	int blkaddr;
 
-	nix_hw = get_nix_hw(rvu->hw, pfvf->nix_blkaddr);
+	mutex_lock(&rvu->rsrc_lock);
+	blkaddr = pfvf->nix_blkaddr;
+	nix_hw = get_nix_hw(rvu->hw, blkaddr);
 	/* Enable LBK links with channel 63 for TX MCAM rule */
-	rvu_nix_tx_tl2_cfg(rvu, pfvf->nix_blkaddr, pcifunc,
+	if (!nix_hw)
+		goto unlock;
+	rvu_nix_tx_tl2_cfg(rvu, blkaddr, pcifunc,
 			   &nix_hw->txsch[NIX_TXSCH_LVL_TL2], enable);
+unlock:
+	mutex_unlock(&rvu->rsrc_lock);
 }
 
 static int rvu_switch_install_rx_rule(struct rvu *rvu, u16 pcifunc,
@@ -229,8 +236,20 @@ void rvu_switch_disable(struct rvu *rvu)
 	if (!rswitch->used_entries)
 		return;
 
-	if (rvu->rep_mode)
+	if (rvu->rep_mode) {
+		for (pf = 1; pf < hw->total_pfs; pf++) {
+			if (!is_pf_cgxmapped(rvu, pf))
+				continue;
+			pcifunc = rvu_make_pcifunc(rvu->pdev, pf, 0);
+			rvu_switch_enable_lbk_link(rvu, pcifunc, false);
+			rvu_get_pf_numvfs(rvu, pf, &numvfs, NULL);
+			for (vf = 0; vf < numvfs; vf++) {
+				pcifunc = rvu_make_pcifunc(rvu->pdev, pf, vf + 1);
+				rvu_switch_enable_lbk_link(rvu, pcifunc, false);
+			}
+		}
 		goto free_ents;
+	}
 
 	for (pf = 1; pf < hw->total_pfs; pf++) {
 		if (!is_pf_cgxmapped(rvu, pf))
