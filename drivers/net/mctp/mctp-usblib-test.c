@@ -867,6 +867,47 @@ static void mctp_usblib_test_tx_multi_push(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, i, ARRAY_SIZE(sends));
 }
 
+static void mctp_usblib_test_tx_overflow(struct kunit *test)
+{
+	struct mctp_usblib_test_ctx *ctx;
+	struct mctp_usblib_tx_ops ops;
+	struct pcpu_dstats *dstats;
+	struct mctp_usblib_tx *tx;
+	struct net_device *ndev;
+	struct sk_buff *skb;
+	unsigned int start;
+	size_t len, i;
+	u64 stats;
+	u8 *buf;
+	int rc;
+
+	len = 200;
+
+	ctx = mctp_usblib_test_init(test);
+	ndev = ctx->dev->ndev;
+
+	ops.send = mctp_usblib_test_tx_send_fail;
+
+	tx = mctp_usblib_test_tx_init(test, &ops, ctx, false);
+	buf = mctp_usblib_test_init_buf(test, len);
+
+	dstats = get_cpu_ptr(ndev->dstats);
+	for (i = 0; i < 3; i++) {
+		skb = mctp_usblib_test_init_skb(test, len, ndev, buf);
+
+		rc = mctp_usblib_tx_push(ndev, tx, skb, i != 2);
+		KUNIT_EXPECT_EQ(test, rc, 0);
+	}
+
+	do {
+		start = u64_stats_fetch_begin(&dstats->syncp);
+		stats = u64_stats_read(&dstats->tx_drops);
+	} while (u64_stats_fetch_retry(&dstats->syncp, start));
+	put_cpu_ptr(dstats);
+
+	KUNIT_EXPECT_EQ(test, stats, 3);
+}
+
 static struct kunit_case mctp_usblib_test_cases[] = {
 	KUNIT_CASE(mctp_usblib_test_rx_single),
 	KUNIT_CASE_PARAM(mctp_usblib_test_rx_pkt_span,
@@ -879,6 +920,7 @@ static struct kunit_case mctp_usblib_test_cases[] = {
 	KUNIT_CASE(mctp_usblib_test_tx_pkt_span),
 	KUNIT_CASE(mctp_usblib_test_tx_multi_push),
 	KUNIT_CASE(mctp_usblib_test_tx_failing_send),
+	KUNIT_CASE(mctp_usblib_test_tx_overflow),
 	{}
 };
 
