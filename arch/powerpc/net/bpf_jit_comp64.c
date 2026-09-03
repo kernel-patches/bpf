@@ -992,6 +992,9 @@ int bpf_jit_build_body(struct bpf_prog *fp, u32 *image, u32 *fimage, struct code
 		u32 tmp_idx;
 		u32 jmp_off;
 
+		if (bpf_insn_is_hmul(insn))
+			return -EOPNOTSUPP;
+
 		/*
 		 * addrs[] maps a BPF bytecode address into a real offset from
 		 * the start of the body code.

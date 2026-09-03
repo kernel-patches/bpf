@@ -1683,6 +1683,9 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 		int ilen;
 		u8 *func;
 
+		if (bpf_insn_is_hmul(insn))
+			goto notyet;
+
 		switch (code) {
 		/* ALU operations */
 		/* dst = src */

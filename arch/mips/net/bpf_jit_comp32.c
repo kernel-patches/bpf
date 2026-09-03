@@ -1472,6 +1472,9 @@ int build_insn(const struct bpf_insn *insn, struct jit_context *ctx)
 	s32 val, rel;
 	u8 alu, jmp;
 
+	if (bpf_insn_is_hmul(insn))
+		goto notyet;
+
 	switch (code) {
 	/* ALU operations */
 	/* dst = imm */

@@ -185,9 +185,9 @@ __naked void flow_keys_illegal_variable_offset_alu(void)
 	: __clobber_all);
 }
 
-#define DEFINE_BAD_OFFSET_TEST(name, op, off, imm)	\
+#define __DEFINE_BAD_OFFSET_TEST(name, op, off, imm, msg)	\
 	SEC("socket")					\
-	__failure __msg("BPF_ALU uses reserved fields") \
+	__failure __failure_unpriv __msg(msg)		\
 	__naked void name(void)				\
 	{						\
 		asm volatile(				\
@@ -200,9 +200,18 @@ __naked void flow_keys_illegal_variable_offset_alu(void)
 		: __clobber_all);			\
 	}
 
+#define DEFINE_BAD_OFFSET_TEST(name, op, off, imm)		\
+	__DEFINE_BAD_OFFSET_TEST(name, op, off, imm,		\
+				 "BPF_ALU uses reserved fields")
+
+#define DEFINE_BAD_MUL_VARIANT_TEST(name, op, off)		\
+	__DEFINE_BAD_OFFSET_TEST(name, op, off, 0,		\
+				 "UHMUL/SHMUL not supported on BPF_ALU class")
+
 /*
  * Offset fields of 0 and 1 are legal for BPF_{DIV,MOD} instructions.
- * Offset fields of 0 are legal for the rest of ALU instructions.
+ * Offset fields of 0, 1 and 2 are legal for BPF_ALU64 | BPF_MUL.
+ * Only offset 0 is legal for BPF_ALU | BPF_MUL.
  * Test that error is reported for illegal offsets, assuming that tests
  * for legal offsets exist.
  */
@@ -212,5 +221,12 @@ DEFINE_BAD_OFFSET_TEST(bad_offset_addx, BPF_ALU64 | BPF_ADD | BPF_X, -1, 0)
 DEFINE_BAD_OFFSET_TEST(bad_offset_divx2, BPF_ALU64 | BPF_DIV | BPF_X, 2, 0)
 DEFINE_BAD_OFFSET_TEST(bad_offset_modk2, BPF_ALU64 | BPF_MOD | BPF_K, 2, 1)
 DEFINE_BAD_OFFSET_TEST(bad_offset_addx2, BPF_ALU64 | BPF_ADD | BPF_X, 1, 0)
+DEFINE_BAD_OFFSET_TEST(bad_offset_mulx, BPF_ALU64 | BPF_MUL | BPF_X, -1, 0)
+DEFINE_BAD_OFFSET_TEST(bad_offset_mulk, BPF_ALU64 | BPF_MUL | BPF_K, 3, 0)
+
+DEFINE_BAD_MUL_VARIANT_TEST(bad_uhmul32_x, BPF_ALU | BPF_MUL | BPF_X,
+			    BPF_MUL_VARIANT_UHMUL)
+DEFINE_BAD_MUL_VARIANT_TEST(bad_shmul32_k, BPF_ALU | BPF_MUL | BPF_K,
+			    BPF_MUL_VARIANT_SHMUL)
 
 char _license[] SEC("license") = "GPL";

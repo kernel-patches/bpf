@@ -34,6 +34,16 @@
 #define BPF_FROM_LE	BPF_TO_LE
 #define BPF_FROM_BE	BPF_TO_BE
 
+/*
+ * BPF_MUL variants selected by the off field.
+ * UHMUL and SHMUL are only valid for BPF_ALU64.
+ */
+enum bpf_mul_variant {
+	BPF_MUL_VARIANT_LO    = 0,
+	BPF_MUL_VARIANT_UHMUL = 1,
+	BPF_MUL_VARIANT_SHMUL = 2,
+};
+
 /* jmp encodings */
 #define BPF_JNE		0x50	/* jump != */
 #define BPF_JLT		0xa0	/* LT is unsigned, '<' */

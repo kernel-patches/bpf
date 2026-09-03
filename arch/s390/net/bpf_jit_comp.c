@@ -969,6 +969,9 @@ static noinline int bpf_jit_insn(struct bpf_jit *jit, struct bpf_prog *fp,
 
 	bpf_jit_probe_init(&probe);
 
+	if (bpf_insn_is_hmul(insn))
+		return -EOPNOTSUPP;
+
 	switch (insn->code) {
 	/*
 	 * BPF_MOV

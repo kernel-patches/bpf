@@ -3,6 +3,7 @@
 
 #include <linux/bpf.h>
 #include <linux/bpf_verifier.h>
+#include <linux/filter.h>
 #include <linux/kernel.h>
 #include <linux/netdevice.h>
 #include <linux/pkt_cls.h>
@@ -560,6 +561,11 @@ nfp_bpf_check_alu(struct nfp_prog *nfp_prog, struct nfp_insn_meta *meta,
 		cur_regs(env) + meta->insn.src_reg;
 	const struct bpf_reg_state *dreg =
 		cur_regs(env) + meta->insn.dst_reg;
+
+	if (bpf_insn_is_hmul(&meta->insn)) {
+		pr_vlog(env, "UHMUL/SHMUL are not supported\n");
+		return -EOPNOTSUPP;
+	}
 
 	meta->umin_src = min(meta->umin_src, reg_umin(sreg));
 	meta->umax_src = max(meta->umax_src, reg_umax(sreg));
