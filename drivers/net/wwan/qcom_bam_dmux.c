@@ -6,12 +6,14 @@
 
 #include <linux/atomic.h>
 #include <linux/bitops.h>
+#include <linux/cleanup.h>
 #include <linux/completion.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
 #include <linux/if_arp.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/netdevice.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
@@ -64,15 +66,23 @@ struct bam_dmux_skb_dma {
 	dma_addr_t addr;
 };
 
+enum bam_dmux_pc_vote {
+	BAM_DMUX_PC_VOTE_INACTIVE, /* pc_vote = false */
+	BAM_DMUX_PC_VOTE_ACTIVE, /* pc_vote = true */
+	BAM_DMUX_PC_VOTE_DOWN_PENDING, /* pc = false while host vote active */
+};
+
 struct bam_dmux {
 	struct device *dev;
 
-	int pc_irq;
+	int pc_irq, pc_ack_irq;
 	bool pc_state, pc_ack_state;
 	struct qcom_smem_state *pc, *pc_ack;
 	u32 pc_mask, pc_ack_mask;
 	wait_queue_head_t pc_wait;
 	struct completion pc_ack_completion;
+	struct mutex power_lock; /* Protect power-control state */
+	enum bam_dmux_pc_vote pc_vote;
 
 	struct dma_chan *rx, *tx;
 	struct bam_dmux_skb_dma rx_skbs[BAM_DMUX_NUM_SKB];
@@ -97,6 +107,24 @@ static void bam_dmux_pc_vote(struct bam_dmux *dmux, bool enable)
 	reinit_completion(&dmux->pc_ack_completion);
 	qcom_smem_state_update_bits(dmux->pc, dmux->pc_mask,
 				    enable ? dmux->pc_mask : 0);
+}
+
+static void bam_dmux_pc_vote_locked(struct bam_dmux *dmux, bool enable)
+{
+	lockdep_assert_held(&dmux->power_lock);
+
+	if (enable)
+		dmux->pc_vote = BAM_DMUX_PC_VOTE_ACTIVE;
+	else if (dmux->pc_vote != BAM_DMUX_PC_VOTE_DOWN_PENDING)
+		dmux->pc_vote = BAM_DMUX_PC_VOTE_INACTIVE;
+	bam_dmux_pc_vote(dmux, enable);
+}
+
+static void bam_dmux_pc_vote_protected(struct bam_dmux *dmux, bool enable)
+{
+	mutex_lock(&dmux->power_lock);
+	bam_dmux_pc_vote_locked(dmux, enable);
+	mutex_unlock(&dmux->power_lock);
 }
 
 static void bam_dmux_pc_ack(struct bam_dmux *dmux)
@@ -655,6 +683,8 @@ static void bam_dmux_free_skbs(struct bam_dmux_skb_dma skbs[],
 
 static void bam_dmux_power_off(struct bam_dmux *dmux)
 {
+	lockdep_assert_held(&dmux->power_lock);
+
 	if (dmux->tx) {
 		dmaengine_terminate_sync(dmux->tx);
 		dma_release_channel(dmux->tx);
@@ -670,10 +700,24 @@ static void bam_dmux_power_off(struct bam_dmux *dmux)
 	bam_dmux_free_skbs(dmux->rx_skbs, DMA_FROM_DEVICE);
 }
 
-static irqreturn_t bam_dmux_pc_irq(int irq, void *data)
+static void bam_dmux_complete_pc_down(struct bam_dmux *dmux)
 {
-	struct bam_dmux *dmux = data;
-	bool new_state = !dmux->pc_state;
+	lockdep_assert_held(&dmux->power_lock);
+
+	bam_dmux_power_off(dmux);
+	bam_dmux_pc_ack(dmux);
+	WRITE_ONCE(dmux->pc_state, false);
+}
+
+static bool bam_dmux_handle_pc(struct bam_dmux *dmux, bool new_state)
+{
+	lockdep_assert_held(&dmux->power_lock);
+
+	if (new_state == dmux->pc_state) {
+		if (new_state && dmux->pc_vote == BAM_DMUX_PC_VOTE_DOWN_PENDING)
+			dmux->pc_vote = BAM_DMUX_PC_VOTE_ACTIVE;
+		return false;
+	}
 
 	dev_dbg(dmux->dev, "pc: %u\n", new_state);
 
@@ -682,13 +726,40 @@ static irqreturn_t bam_dmux_pc_irq(int irq, void *data)
 			bam_dmux_pc_ack(dmux);
 		else
 			bam_dmux_power_off(dmux);
+	} else if (dmux->tx && dmux->pc_vote != BAM_DMUX_PC_VOTE_INACTIVE) {
+		/* The modem must keep the DMA engine on until pc is acked. */
+		dmux->pc_vote = BAM_DMUX_PC_VOTE_DOWN_PENDING;
+		dev_err_ratelimited(dmux->dev,
+				    "refusing pc down while host vote is active\n");
+		return false;
 	} else {
-		bam_dmux_power_off(dmux);
-		bam_dmux_pc_ack(dmux);
+		bam_dmux_complete_pc_down(dmux);
 	}
 
-	dmux->pc_state = new_state;
-	wake_up_all(&dmux->pc_wait);
+	if (new_state)
+		WRITE_ONCE(dmux->pc_state, true);
+	return true;
+}
+
+static irqreturn_t bam_dmux_pc_irq(int irq, void *data)
+{
+	struct bam_dmux *dmux = data;
+	bool new_state, wake;
+	int ret;
+
+	mutex_lock(&dmux->power_lock);
+	ret = irq_get_irqchip_state(dmux->pc_irq, IRQCHIP_STATE_LINE_LEVEL,
+				    &new_state);
+	if (ret) {
+		mutex_unlock(&dmux->power_lock);
+		dev_err_ratelimited(dmux->dev, "failed to read pc state: %d\n", ret);
+		return IRQ_HANDLED;
+	}
+
+	wake = bam_dmux_handle_pc(dmux, new_state);
+	mutex_unlock(&dmux->power_lock);
+	if (wake)
+		wake_up_all(&dmux->pc_wait);
 
 	return IRQ_HANDLED;
 }
@@ -696,9 +767,27 @@ static irqreturn_t bam_dmux_pc_irq(int irq, void *data)
 static irqreturn_t bam_dmux_pc_ack_irq(int irq, void *data)
 {
 	struct bam_dmux *dmux = data;
+	bool new_state, wake = false;
+	int ret;
 
 	dev_dbg(dmux->dev, "pc ack\n");
+
+	/* Process an earlier pc edge before publishing the host-vote ack. */
+	synchronize_irq(dmux->pc_irq);
+	mutex_lock(&dmux->power_lock);
+	ret = irq_get_irqchip_state(dmux->pc_irq, IRQCHIP_STATE_LINE_LEVEL,
+				    &new_state);
+	if (ret) {
+		mutex_unlock(&dmux->power_lock);
+		dev_err_ratelimited(dmux->dev, "failed to read pc state: %d\n", ret);
+		return IRQ_HANDLED;
+	}
+
+	wake = bam_dmux_handle_pc(dmux, new_state);
 	complete_all(&dmux->pc_ack_completion);
+	mutex_unlock(&dmux->power_lock);
+	if (wake)
+		wake_up_all(&dmux->pc_wait);
 
 	return IRQ_HANDLED;
 }
@@ -706,9 +795,47 @@ static irqreturn_t bam_dmux_pc_ack_irq(int irq, void *data)
 static int bam_dmux_runtime_suspend(struct device *dev)
 {
 	struct bam_dmux *dmux = dev_get_drvdata(dev);
+	bool wake = false;
 
 	dev_dbg(dev, "runtime suspend\n");
-	bam_dmux_pc_vote(dmux, false);
+
+	scoped_guard(mutex, &dmux->power_lock) {
+		bam_dmux_pc_vote_locked(dmux, false);
+		if (dmux->pc_vote == BAM_DMUX_PC_VOTE_DOWN_PENDING) {
+			dmux->pc_vote = BAM_DMUX_PC_VOTE_INACTIVE;
+			bam_dmux_complete_pc_down(dmux);
+			wake = true;
+		} else if (!dmux->pc_state) {
+			bam_dmux_power_off(dmux);
+		}
+	}
+	if (wake)
+		wake_up_all(&dmux->pc_wait);
+
+	return 0;
+}
+
+static int bam_dmux_request_tx(struct bam_dmux *dmux)
+{
+	struct device *dev = dmux->dev;
+
+	scoped_guard(mutex, &dmux->power_lock) {
+		/* Ensure that we actually initialized successfully */
+		if (!dmux->rx)
+			return -ENXIO;
+
+		/* Request TX channel if necessary */
+		if (dmux->tx)
+			return 0;
+
+		dmux->tx = dma_request_chan(dev, "tx");
+		if (IS_ERR(dmux->tx)) {
+			dev_err(dev, "Failed to request TX DMA channel: %pe\n",
+				dmux->tx);
+			dmux->tx = NULL;
+			return -ENXIO;
+		}
+	}
 
 	return 0;
 }
@@ -716,6 +843,7 @@ static int bam_dmux_runtime_suspend(struct device *dev)
 static int __maybe_unused bam_dmux_runtime_resume(struct device *dev)
 {
 	struct bam_dmux *dmux = dev_get_drvdata(dev);
+	int ret;
 
 	dev_dbg(dev, "runtime resume\n");
 
@@ -724,50 +852,41 @@ static int __maybe_unused bam_dmux_runtime_resume(struct device *dev)
 					 BAM_DMUX_REMOTE_TIMEOUT))
 		return -ETIMEDOUT;
 
+	synchronize_irq(dmux->pc_irq);
+
 	/* Vote for power state */
-	bam_dmux_pc_vote(dmux, true);
+	bam_dmux_pc_vote_protected(dmux, true);
 
 	/* Wait for ack */
 	if (!wait_for_completion_timeout(&dmux->pc_ack_completion,
 					 BAM_DMUX_REMOTE_TIMEOUT)) {
-		bam_dmux_pc_vote(dmux, false);
+		bam_dmux_runtime_suspend(dev);
 		return -ETIMEDOUT;
 	}
+
+	synchronize_irq(dmux->pc_irq);
 
 	/* Wait until we're up */
-	if (!wait_event_timeout(dmux->pc_wait, dmux->pc_state,
+	if (!wait_event_timeout(dmux->pc_wait, READ_ONCE(dmux->pc_state),
 				BAM_DMUX_REMOTE_TIMEOUT)) {
-		bam_dmux_pc_vote(dmux, false);
+		bam_dmux_runtime_suspend(dev);
 		return -ETIMEDOUT;
 	}
 
-	/* Ensure that we actually initialized successfully */
-	if (!dmux->rx) {
-		bam_dmux_pc_vote(dmux, false);
-		return -ENXIO;
-	}
-
-	/* Request TX channel if necessary */
-	if (dmux->tx)
-		return 0;
-
-	dmux->tx = dma_request_chan(dev, "tx");
-	if (IS_ERR(dmux->tx)) {
-		dev_err(dev, "Failed to request TX DMA channel: %pe\n", dmux->tx);
-		dmux->tx = NULL;
+	ret = bam_dmux_request_tx(dmux);
+	if (ret)
 		bam_dmux_runtime_suspend(dev);
-		return -ENXIO;
-	}
 
-	return 0;
+	return ret;
 }
 
 static int bam_dmux_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct bam_dmux *dmux;
-	int ret, pc_ack_irq, i;
 	unsigned int bit;
+	bool pc_state;
+	int ret, i;
 
 	dmux = devm_kzalloc(dev, sizeof(*dmux), GFP_KERNEL);
 	if (!dmux)
@@ -780,9 +899,9 @@ static int bam_dmux_probe(struct platform_device *pdev)
 	if (dmux->pc_irq < 0)
 		return dmux->pc_irq;
 
-	pc_ack_irq = platform_get_irq_byname(pdev, "pc-ack");
-	if (pc_ack_irq < 0)
-		return pc_ack_irq;
+	dmux->pc_ack_irq = platform_get_irq_byname(pdev, "pc-ack");
+	if (dmux->pc_ack_irq < 0)
+		return dmux->pc_ack_irq;
 
 	dmux->pc = devm_qcom_smem_state_get(dev, "pc", &bit);
 	if (IS_ERR(dmux->pc))
@@ -799,6 +918,9 @@ static int bam_dmux_probe(struct platform_device *pdev)
 	init_waitqueue_head(&dmux->pc_wait);
 	init_completion(&dmux->pc_ack_completion);
 	complete_all(&dmux->pc_ack_completion);
+	ret = devm_mutex_init(dev, &dmux->power_lock);
+	if (ret)
+		return ret;
 
 	spin_lock_init(&dmux->tx_lock);
 	INIT_WORK(&dmux->tx_wakeup_work, bam_dmux_tx_wakeup_work);
@@ -817,31 +939,40 @@ static int bam_dmux_probe(struct platform_device *pdev)
 	pm_runtime_use_autosuspend(dev);
 	pm_runtime_enable(dev);
 
-	ret = devm_request_threaded_irq(dev, pc_ack_irq, NULL, bam_dmux_pc_ack_irq,
-					IRQF_ONESHOT, NULL, dmux);
+	ret = devm_request_threaded_irq(dev, dmux->pc_ack_irq, NULL,
+					bam_dmux_pc_ack_irq,
+					IRQF_ONESHOT | IRQF_NO_AUTOEN,
+					NULL, dmux);
 	if (ret)
 		goto err_disable_pm;
 
 	ret = devm_request_threaded_irq(dev, dmux->pc_irq, NULL, bam_dmux_pc_irq,
-					IRQF_ONESHOT, NULL, dmux);
+					IRQF_ONESHOT | IRQF_NO_AUTOEN, NULL, dmux);
 	if (ret)
-		goto err_disable_pm;
+		goto err_power_off;
 
+	mutex_lock(&dmux->power_lock);
 	ret = irq_get_irqchip_state(dmux->pc_irq, IRQCHIP_STATE_LINE_LEVEL,
-				    &dmux->pc_state);
-	if (ret)
-		goto err_disable_pm;
+				    &pc_state);
+	if (ret) {
+		mutex_unlock(&dmux->power_lock);
+		goto err_power_off;
+	}
 
 	/* Check if remote finished initialization before us */
-	if (dmux->pc_state) {
-		if (bam_dmux_power_on(dmux))
-			bam_dmux_pc_ack(dmux);
-		else
-			bam_dmux_power_off(dmux);
-	}
+	bam_dmux_handle_pc(dmux, pc_state);
+	mutex_unlock(&dmux->power_lock);
+
+	/* Start handling state changes after the initial state is processed. */
+	enable_irq(dmux->pc_ack_irq);
+	enable_irq(dmux->pc_irq);
 
 	return 0;
 
+err_power_off:
+	mutex_lock(&dmux->power_lock);
+	bam_dmux_power_off(dmux);
+	mutex_unlock(&dmux->power_lock);
 err_disable_pm:
 	pm_runtime_disable(dev);
 	pm_runtime_dont_use_autosuspend(dev);
@@ -872,12 +1003,16 @@ static void bam_dmux_remove(struct platform_device *pdev)
 	pm_runtime_set_suspended(dev);
 
 	/* Try to wait for remote side to drop power vote */
-	if (!wait_event_timeout(dmux->pc_wait, !dmux->rx, BAM_DMUX_REMOTE_TIMEOUT))
+	if (!wait_event_timeout(dmux->pc_wait, !READ_ONCE(dmux->rx),
+				BAM_DMUX_REMOTE_TIMEOUT))
 		dev_err(dev, "Timed out waiting for remote side to suspend\n");
 
 	/* Make sure everything is cleaned up before we return */
+	disable_irq(dmux->pc_ack_irq);
 	disable_irq(dmux->pc_irq);
+	mutex_lock(&dmux->power_lock);
 	bam_dmux_power_off(dmux);
+	mutex_unlock(&dmux->power_lock);
 	bam_dmux_free_skbs(dmux->tx_skbs, DMA_TO_DEVICE);
 }
 
