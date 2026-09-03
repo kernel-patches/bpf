@@ -256,9 +256,12 @@ static void otx2_free_rcv_seg(struct otx2_nic *pfvf, struct nix_cqe_rx_s *cqe,
 	while (start < end) {
 		sg = (struct nix_rx_sg_s *)start;
 		seg_addr = &sg->seg_addr;
-		for (seg = 0; seg < sg->segs; seg++, seg_addr++)
+		for (seg = 0; seg < sg->segs; seg++, seg_addr++) {
+			if (unlikely(!*seg_addr))
+				return;
 			pfvf->hw_ops->aura_freeptr(pfvf, qidx,
 						   *seg_addr & ~0x07ULL);
+		}
 		start += sizeof(*sg);
 	}
 }
