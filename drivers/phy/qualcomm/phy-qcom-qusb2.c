@@ -3,6 +3,7 @@
  * Copyright (c) 2017, 2019, The Linux Foundation. All rights reserved.
  */
 
+#include <linux/bitfield.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/err.h>
@@ -64,26 +65,20 @@
 
 /* QUSB2PHY_IMP_CTRL1 register bits */
 #define IMP_RES_OFFSET_MASK			GENMASK(5, 0)
-#define IMP_RES_OFFSET_SHIFT			0x0
 
 /* QUSB2PHY_PLL_BIAS_CONTROL_2 register bits */
 #define BIAS_CTRL2_RES_OFFSET_MASK		GENMASK(5, 0)
-#define BIAS_CTRL2_RES_OFFSET_SHIFT		0x0
 
 /* QUSB2PHY_CHG_CONTROL_2 register bits */
 #define CHG_CTRL2_OFFSET_MASK			GENMASK(5, 4)
-#define CHG_CTRL2_OFFSET_SHIFT			0x4
 
 /* QUSB2PHY_PORT_TUNE1 register bits */
 #define HSTX_TRIM_MASK				GENMASK(7, 4)
-#define HSTX_TRIM_SHIFT				0x4
 #define PREEMPH_WIDTH_HALF_BIT			BIT(2)
 #define PREEMPHASIS_EN_MASK			GENMASK(1, 0)
-#define PREEMPHASIS_EN_SHIFT			0x0
 
 /* QUSB2PHY_PORT_TUNE2 register bits */
 #define HSDISC_TRIM_MASK			GENMASK(1, 0)
-#define HSDISC_TRIM_SHIFT			0x0
 
 #define QUSB2PHY_PLL_ANALOG_CONTROLS_TWO	0x04
 #define QUSB2PHY_PLL_CLOCK_INVERTERS		0x18c
@@ -545,28 +540,28 @@ static void qusb2_phy_override_phy_params(struct qusb2_phy *qphy)
 
 	if (or->imp_res_offset.override)
 		qusb2_write_mask(qphy->base, QUSB2PHY_IMP_CTRL1,
-		or->imp_res_offset.value << IMP_RES_OFFSET_SHIFT,
-			     IMP_RES_OFFSET_MASK);
+				 FIELD_PREP(IMP_RES_OFFSET_MASK, or->imp_res_offset.value),
+				 IMP_RES_OFFSET_MASK);
 
 	if (or->bias_ctrl.override)
 		qusb2_write_mask(qphy->base, QUSB2PHY_PLL_BIAS_CONTROL_2,
-		or->bias_ctrl.value << BIAS_CTRL2_RES_OFFSET_SHIFT,
-			   BIAS_CTRL2_RES_OFFSET_MASK);
+				 FIELD_PREP(BIAS_CTRL2_RES_OFFSET_MASK, or->bias_ctrl.value),
+				 BIAS_CTRL2_RES_OFFSET_MASK);
 
 	if (or->charge_ctrl.override)
 		qusb2_write_mask(qphy->base, QUSB2PHY_CHG_CTRL2,
-		or->charge_ctrl.value << CHG_CTRL2_OFFSET_SHIFT,
-			     CHG_CTRL2_OFFSET_MASK);
+				 FIELD_PREP(CHG_CTRL2_OFFSET_MASK, or->charge_ctrl.value),
+				 CHG_CTRL2_OFFSET_MASK);
 
 	if (or->hstx_trim.override)
 		qusb2_write_mask(qphy->base, cfg->regs[QUSB2PHY_PORT_TUNE1],
-		or->hstx_trim.value << HSTX_TRIM_SHIFT,
+				 FIELD_PREP(HSTX_TRIM_MASK, or->hstx_trim.value),
 				 HSTX_TRIM_MASK);
 
 	if (or->preemphasis.override)
 		qusb2_write_mask(qphy->base, cfg->regs[QUSB2PHY_PORT_TUNE1],
-		or->preemphasis.value << PREEMPHASIS_EN_SHIFT,
-				PREEMPHASIS_EN_MASK);
+				 FIELD_PREP(PREEMPHASIS_EN_MASK, or->preemphasis.value),
+				 PREEMPHASIS_EN_MASK);
 
 	if (or->preemphasis_width.override) {
 		if (or->preemphasis_width.value ==
@@ -582,7 +577,7 @@ static void qusb2_phy_override_phy_params(struct qusb2_phy *qphy)
 
 	if (or->hsdisc_trim.override)
 		qusb2_write_mask(qphy->base, cfg->regs[QUSB2PHY_PORT_TUNE2],
-		or->hsdisc_trim.value << HSDISC_TRIM_SHIFT,
+				 FIELD_PREP(HSDISC_TRIM_MASK, or->hsdisc_trim.value),
 				 HSDISC_TRIM_MASK);
 }
 
@@ -623,10 +618,12 @@ static void qusb2_phy_set_tune2_param(struct qusb2_phy *qphy)
 	/* Fused TUNE1/2 value is the higher nibble only */
 	if (cfg->update_tune1_with_efuse)
 		qusb2_write_mask(qphy->base, cfg->regs[QUSB2PHY_PORT_TUNE1],
-				 hstx_trim << HSTX_TRIM_SHIFT, HSTX_TRIM_MASK);
+				 FIELD_PREP(HSTX_TRIM_MASK, hstx_trim),
+				 HSTX_TRIM_MASK);
 	else
 		qusb2_write_mask(qphy->base, cfg->regs[QUSB2PHY_PORT_TUNE2],
-				 hstx_trim << HSTX_TRIM_SHIFT, HSTX_TRIM_MASK);
+				 FIELD_PREP(HSTX_TRIM_MASK, hstx_trim),
+				 HSTX_TRIM_MASK);
 }
 
 static int qusb2_phy_set_mode(struct phy *phy,
