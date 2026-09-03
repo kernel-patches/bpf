@@ -619,6 +619,40 @@ static int fbnic_fw_parse_bmc_addrs(u8 bmc_mac_addr[][ETH_ALEN],
 	return 0;
 }
 
+static int fbnic_fw_parse_bmc_cap(struct fbnic_dev *fbd,
+				  struct fbnic_tlv_msg **results,
+				  bool *bmc_present, u32 *all_multi)
+{
+	struct fbnic_tlv_msg *attr;
+	int err;
+
+	/* The FW reports the BMC present as soon as its NC-SI channel is
+	 * enabled, which is before the BMC has been assigned a MAC address.
+	 * In that window the message carries no MAC array; there is nothing
+	 * to program, so treat the BMC as absent. On any absence clear the
+	 * stored BMC MAC addresses and report the BMC as not present.
+	 */
+	if (!results[FBNIC_FW_CAP_RESP_BMC_PRESENT])
+		goto no_bmc;
+
+	attr = results[FBNIC_FW_CAP_RESP_BMC_MAC_ARRAY];
+	if (!attr)
+		goto no_bmc;
+
+	err = fbnic_fw_parse_bmc_addrs(fbd->fw_cap.bmc_mac_addr, attr, 4);
+	if (err)
+		return err;
+
+	*all_multi = fta_get_uint(results, FBNIC_FW_CAP_RESP_BMC_ALL_MULTI);
+	*bmc_present = true;
+	return 0;
+
+no_bmc:
+	memset(fbd->fw_cap.bmc_mac_addr, 0, sizeof(fbd->fw_cap.bmc_mac_addr));
+	*bmc_present = false;
+	return 0;
+}
+
 static int fbnic_fw_parse_cap_resp(void *opaque, struct fbnic_tlv_msg **results)
 {
 	u32 all_multi = 0, version = 0;
@@ -683,25 +717,9 @@ static int fbnic_fw_parse_cap_resp(void *opaque, struct fbnic_tlv_msg **results)
 	fbd->fw_cap.link_fec =
 		fta_get_uint(results, FBNIC_FW_CAP_RESP_FW_LINK_FEC);
 
-	bmc_present = !!results[FBNIC_FW_CAP_RESP_BMC_PRESENT];
-	if (bmc_present) {
-		struct fbnic_tlv_msg *attr;
-
-		attr = results[FBNIC_FW_CAP_RESP_BMC_MAC_ARRAY];
-		if (!attr)
-			return -EINVAL;
-
-		err = fbnic_fw_parse_bmc_addrs(fbd->fw_cap.bmc_mac_addr,
-					       attr, 4);
-		if (err)
-			return err;
-
-		all_multi =
-			fta_get_uint(results, FBNIC_FW_CAP_RESP_BMC_ALL_MULTI);
-	} else {
-		memset(fbd->fw_cap.bmc_mac_addr, 0,
-		       sizeof(fbd->fw_cap.bmc_mac_addr));
-	}
+	err = fbnic_fw_parse_bmc_cap(fbd, results, &bmc_present, &all_multi);
+	if (err)
+		return err;
 
 	fbd->fw_cap.bmc_present = bmc_present;
 
