@@ -190,20 +190,58 @@ static void emit_zext_ver(struct jit_context *ctx, const u8 dst[])
 	}
 }
 
-/* Register move operation (32-bit) */
+/* Register move operation (32-bit), optionally with sign extension */
 static void emit_mov_r32(struct jit_context *ctx, const u8 dst[],
-			 const u8 src[])
+			 const u8 src[], s16 off)
 {
-	emit_mov_r(ctx, lo(dst), lo(src));
+	int shift;
+
+	switch (off) {
+	case 8:
+	case 16:
+		shift = 32 - off;
+		emit(ctx, sll, lo(dst), lo(src), shift);
+		emit(ctx, sra, lo(dst), lo(dst), shift);
+		break;
+	default:
+		/* off == 0 is MOV; the verifier rejects other offsets. */
+		emit_mov_r(ctx, lo(dst), lo(src));
+		break;
+	}
+	clobber_reg(ctx, lo(dst));
 	emit_zext_ver(ctx, dst);
 }
 
-/* Register move operation (64-bit) */
+/* Register move operation (64-bit), optionally with sign extension */
 static void emit_mov_r64(struct jit_context *ctx, const u8 dst[],
-			 const u8 src[])
+			 const u8 src[], s16 off)
 {
-	emit_mov_r(ctx, lo(dst), lo(src));
-	emit_mov_r(ctx, hi(dst), hi(src));
+	int shift;
+
+	switch (off) {
+	case 8:
+	case 16:
+		shift = 32 - off;
+		emit(ctx, sll, lo(dst), lo(src), shift);
+		emit(ctx, sra, lo(dst), lo(dst), shift);
+		emit(ctx, sra, hi(dst), lo(dst), 31);
+		break;
+	case 32:
+		emit(ctx, move, lo(dst), lo(src));
+		emit(ctx, sra, hi(dst), lo(dst), 31);
+		break;
+	default:
+		/*
+		 * off == 0 is ordinary MOV. The verifier rejects other
+		 * offsets; defined exceptions require
+		 * bpf_jit_supports_percpu_insn() or bpf_jit_supports_arena(),
+		 * neither implemented by MIPS.
+		 */
+		emit_mov_r(ctx, lo(dst), lo(src));
+		emit_mov_r(ctx, hi(dst), hi(src));
+		break;
+	}
+	clobber_reg64(ctx, dst);
 }
 
 /* Load delay slot, if ISA mandates it */
@@ -1501,7 +1539,7 @@ int build_insn(const struct bpf_insn *insn, struct jit_context *ctx)
 			/* Special mov32 for zext */
 			emit_mov_i(ctx, hi(dst), 0);
 		} else {
-			emit_mov_r32(ctx, dst, src);
+			emit_mov_r32(ctx, dst, src, off);
 		}
 		break;
 	/* dst = -dst */
@@ -1570,7 +1608,7 @@ int build_insn(const struct bpf_insn *insn, struct jit_context *ctx)
 		break;
 	/* dst = src (64-bit) */
 	case BPF_ALU64 | BPF_MOV | BPF_X:
-		emit_mov_r64(ctx, dst, src);
+		emit_mov_r64(ctx, dst, src, off);
 		break;
 	/* dst = -dst (64-bit) */
 	case BPF_ALU64 | BPF_NEG:
