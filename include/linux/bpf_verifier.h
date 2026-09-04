@@ -706,6 +706,7 @@ struct bpf_insn_aux_data {
 	 */
 	u32 calls_callback:1;
 	u32 indirect_target:1; /* if it is an indirect jump target */
+	u32 non_stack_access:1; /* instruction can access non-stack memory */
 	/*
 	 * CFG strongly connected component this instruction belongs to,
 	 * zero if it is a singleton SCC.
@@ -1669,6 +1670,21 @@ static inline bool bpf_map_key_unseen(const struct bpf_insn_aux_data *aux)
 static inline u64 bpf_map_key_immediate(const struct bpf_insn_aux_data *aux)
 {
 	return aux->map_key_state & ~(BPF_MAP_KEY_SEEN | BPF_MAP_KEY_POISON);
+}
+
+static inline bool bpf_is_mem_insn(struct bpf_insn *insn)
+{
+	if (BPF_CLASS(insn->code) != BPF_ST &&
+	    BPF_CLASS(insn->code) != BPF_STX &&
+	    BPF_CLASS(insn->code) != BPF_LDX)
+		return false;
+
+	if (insn->code == (BPF_ST | BPF_NOSPEC))
+		return false;
+
+	return (BPF_MODE(insn->code) == BPF_MEM ||
+		BPF_MODE(insn->code) == BPF_MEMSX ||
+		BPF_MODE(insn->code) == BPF_ATOMIC);
 }
 
 #define MAX_PACKET_OFF 0xffff
