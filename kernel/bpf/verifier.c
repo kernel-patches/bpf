@@ -11758,6 +11758,31 @@ bool btf_struct_is_composed_of(struct bpf_verifier_env *env,
 	return btf_struct_member_walk(env, btf, t, member_kinds, 0, NULL);
 }
 
+int btf_type_align16(const struct btf *btf, const struct btf_type *t, int rec)
+{
+	const struct btf_member *member;
+	int ret;
+	u32 i;
+
+	while (btf_type_is_array(t))
+		t = btf_type_skip_modifiers(btf, btf_array(t)->type, NULL);
+
+	if (btf_type_is_int(t))
+		return t->size > 8;
+	if (!btf_type_is_struct(t))
+		return 0;
+	if (rec >= BTF_MEMBER_MAX_DEPTH)
+		return -E2BIG;
+
+	for_each_member(i, t, member) {
+		ret = btf_type_align16(btf, btf_type_skip_modifiers(btf, member->type, NULL),
+				       rec + 1);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
 static bool btf_type_is_scalar_struct(struct bpf_verifier_env *env,
 				      const struct btf *btf,
 				      const struct btf_type *t)

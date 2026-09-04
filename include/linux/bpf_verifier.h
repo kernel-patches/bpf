@@ -1498,6 +1498,7 @@ enum btf_member_kind {
 
 bool btf_struct_is_composed_of(struct bpf_verifier_env *env, const struct btf *btf,
 			       const struct btf_type *t, u32 member_kinds);
+int btf_type_align16(const struct btf *btf, const struct btf_type *t, int rec);
 
 int bpf_find_subprog(struct bpf_verifier_env *env, int off);
 bool bpf_is_throw_kfunc(struct bpf_insn *insn);

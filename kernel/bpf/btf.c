@@ -7576,7 +7576,7 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 	const struct btf_param *args;
 	const struct btf_type *t;
 	u32 i, nargs;
-	int ret;
+	int align16, ret;
 
 	if (!func) {
 		/* BTF function prototype doesn't match the verifier types.
@@ -7633,6 +7633,15 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 		}
 		m->arg_size[i] = ret;
 		m->arg_flags[i] = __get_arg_fmodel_flags(btf, &args[i], t);
+
+		align16 = btf_type_align16(btf, t, 0);
+		if (align16 < 0) {
+			bpf_log(log, "The function %s arg%d type %s has unknown alignment.\n",
+				tname, i, btf_type_str(t));
+			return -EINVAL;
+		} else if (align16) {
+			m->arg_flags[i] |= BTF_FMODEL_ALIGN16_ARG;
+		}
 	}
 	m->nr_args = nargs;
 	return 0;
