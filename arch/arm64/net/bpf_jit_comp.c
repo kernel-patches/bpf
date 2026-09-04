@@ -1256,6 +1256,93 @@ static void emit_stack_arg_store_imm(s32 imm, s16 bpf_off, const u8 tmp, struct 
 	}
 }
 
+/* The kernel ABI hands the first eight eightbytes of arguments to registers. */
+static const u8 a64_arg_reg[8] = {
+	A64_R(0), A64_R(1), A64_R(2), A64_R(3),
+	A64_R(4), A64_R(5), A64_R(6), A64_R(7),
+};
+
+static int kfunc_arg_layout(const struct btf_func_model *fm, u8 *pos, int max)
+{
+	int i, k, ngrn = 0, nsaa = 0, slot = 0;
+
+	for (i = 0; i < fm->nr_args; i++) {
+		bool align16 = fm->arg_flags[i] & BTF_FMODEL_ALIGN16_ARG;
+		int n = (fm->arg_size[i] + 7) / 8;
+
+		if (slot + n > max)
+			return -EINVAL;
+		if (align16)
+			ngrn = round_up(ngrn, 2);
+		if (ngrn + n <= 8) {
+			for (k = 0; k < n; k++)
+				pos[slot++] = ngrn++;
+			continue;
+		}
+		/* Nothing that follows gets a register either. */
+		ngrn = 8;
+		if (align16)
+			nsaa = round_up(nsaa, 2);
+		for (k = 0; k < n; k++)
+			pos[slot++] = 8 + nsaa++;
+	}
+	return slot;
+}
+
+static u16 kfunc_arg_stack_bytes(const struct bpf_prog *prog)
+{
+	u16 slots = bpf_jit_kfunc_stack_slots(prog, 8, kfunc_arg_layout);
+
+	return round_up(slots * sizeof(u64), 16);
+}
+
+static void emit_arg_pos_load(u8 reg, u8 pos, struct jit_ctx *ctx)
+{
+	if (pos < 8)
+		emit(A64_MOV(1, reg, a64_arg_reg[pos]), ctx);
+	else
+		emit(A64_LDR64I(reg, A64_SP, (pos - 8) * sizeof(u64)), ctx);
+}
+
+static void emit_arg_pos_store(u8 pos, u8 reg, struct jit_ctx *ctx)
+{
+	if (pos < 8)
+		emit(A64_MOV(1, a64_arg_reg[pos], reg), ctx);
+	else
+		emit(A64_STR64I(reg, A64_SP, (pos - 8) * sizeof(u64)), ctx);
+}
+
+static int emit_kfunc_args(const struct bpf_insn *insn, struct jit_ctx *ctx)
+{
+	const u8 tmp = bpf2a64[TMP_REG_1];
+	const struct btf_func_model *fm;
+	u8 pos[MAX_BPF_FUNC_ARGS];
+	int i, n;
+
+	fm = bpf_jit_find_kfunc_model(ctx->prog, insn);
+	if (!fm)
+		return -EINVAL;
+
+	n = kfunc_arg_layout(fm, pos, ARRAY_SIZE(pos));
+	if (n < 0)
+		return 0;
+
+	for (i = n - 1; i >= 0; i--) {
+		if (pos[i] == i)
+			continue;
+		if (WARN_ON_ONCE(pos[i] < i))
+			return -EFAULT;
+		if (pos[i] < 8) {
+			/* into a register, read straight from the slot */
+			emit_arg_pos_load(a64_arg_reg[pos[i]], i, ctx);
+		} else {
+			emit_arg_pos_load(tmp, i, ctx);
+			emit_arg_pos_store(pos[i], tmp, ctx);
+		}
+	}
+	return 0;
+}
+
 /*
  * Rebase the __arena args of a kfunc call to arena kernel addresses,
  * xN = kern_vm_start + (u32)xN, with the arena base register holding
@@ -1266,15 +1353,25 @@ static int emit_kfunc_arena_args(struct jit_ctx *ctx, const struct bpf_insn *ins
 {
 	const u8 arena_vm_base = bpf2a64[ARENA_VM_START];
 	const struct btf_func_model *fm;
-	int i;
+	int i, slot;
 
 	fm = bpf_jit_find_kfunc_model(ctx->prog, insn);
 	if (!fm)
 		return -EINVAL;
 
-	for (i = 0; i < min_t(int, fm->nr_args, MAX_BPF_FUNC_REG_ARGS); i++) {
-		const u8 reg = bpf2a64[BPF_REG_1 + i];
+	for (i = 0, slot = 0; i < fm->nr_args; i++) {
+		u32 arg_regs = (fm->arg_size[i] + 7) / 8;
 		u8 flags = fm->arg_flags[i];
+		u8 reg;
+
+		if (slot + arg_regs > MAX_BPF_FUNC_REG_ARGS) {
+			/* The verifier refuses an arena pointer past the registers. */
+			if (WARN_ON_ONCE(flags & BTF_FMODEL_ARENA_ARG))
+				return -EFAULT;
+			break;
+		}
+		reg = bpf2a64[BPF_REG_1 + slot];
+		slot += arg_regs;
 
 		if (!(flags & BTF_FMODEL_ARENA_ARG))
 			continue;
@@ -1717,6 +1814,9 @@ emit_cond_jmp:
 			return ret;
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			ret = emit_kfunc_arena_args(ctx, insn);
+			if (ret < 0)
+				return ret;
+			ret = emit_kfunc_args(insn, ctx);
 			if (ret < 0)
 				return ret;
 		}
@@ -2223,6 +2323,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 		if (nr_on_stack > 0)
 			ctx.stack_arg_size = round_up(nr_on_stack * sizeof(u64), 16);
 	}
+	ctx.stack_arg_size = max(ctx.stack_arg_size, kfunc_arg_stack_bytes(prog));
 
 	if (priv_stack_ptr)
 		ctx.priv_sp_used = true;
@@ -2389,6 +2490,11 @@ bool bpf_jit_supports_kfunc_call(void)
 }
 
 bool bpf_jit_supports_kfunc_ret_reg_pair(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_kfunc_arg_slot(u32 slots_used, u32 nslots, u32 align)
 {
 	return true;
 }
