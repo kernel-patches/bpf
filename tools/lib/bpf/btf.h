@@ -274,6 +274,20 @@ LIBBPF_API int btf__add_decl_tag(struct btf *btf, const char *value, int ref_typ
 LIBBPF_API int btf__add_decl_attr(struct btf *btf, const char *value, int ref_type_id,
 				  int component_idx);
 
+/* location construction APIs */
+LIBBPF_API int btf__add_loc_param(struct btf *btf, __u32 size, __u32 flags);
+
+LIBBPF_API int btf__add_loc_param_value(struct btf *btf, __u32 value);
+
+LIBBPF_API int btf__add_loc_proto(struct btf *btf);
+
+LIBBPF_API int btf__add_loc_proto_param(struct btf *btf, __u32 id);
+
+LIBBPF_API int btf__add_locsec(struct btf *btf, const char *name);
+
+LIBBPF_API int btf__add_locsec_loc(struct btf *btf, __u32 func, __u32 loc_proto,
+				   __u32 offset);
+
 struct btf_dedup_opts {
 	size_t sz;
 	/* optional .BTF.ext info to dedup along the main BTF info */
@@ -307,9 +321,17 @@ struct btf_permute_opts {
 	size_t sz;
 	/* optional .BTF.ext info along the main BTF info */
 	struct btf_ext *btf_ext;
+	/*
+	 * If set, types whose map entry has BTF_PERMUTE_ID_TRANSFER set are
+	 * removed from @btf and returned in a new split BTF based on @btf.
+	 */
+	struct btf **transfer_btf;
 	size_t :0;
 };
-#define btf_permute_opts__last_field btf_ext
+#define btf_permute_opts__last_field transfer_btf
+
+/* Mark an id_map entry as a type to be moved to .transfer_btf. */
+#define BTF_PERMUTE_ID_TRANSFER (1U << 31)
 
 /**
  * @brief **btf__permute()** rearranges BTF types in-place according to a specified ID mapping
@@ -334,6 +356,12 @@ struct btf_permute_opts {
  * - @id_map_cnt must be `btf__type_cnt(btf) - btf__type_cnt(btf__base_btf(btf))`
  * - Mapping is defined as `id_map[original_id - start_id] = new_id`
  * - `start_id` equals `btf__type_cnt(btf__base_btf(btf))`
+ *
+ * An @id_map entry can be ORed with BTF_PERMUTE_ID_TRANSFER to move that
+ * type to a newly-created split BTF returned through @opts->transfer_btf.
+ * The low bits still specify the type's position in the requested ordering.
+ * The id map is updated to contain the final IDs in the base and returned
+ * split BTF.
  *
  * After permutation, all type references within the BTF data and optional
  * BTF extension (if provided via @opts) are updated automatically.
@@ -431,6 +459,12 @@ btf_dump__dump_type_data(struct btf_dump *d, __u32 id,
 #define BTF_KIND_DECL_TAG	17	/* Decl Tag */
 #define BTF_KIND_TYPE_TAG	18	/* Type Tag */
 #define BTF_KIND_ENUM64		19	/* Enum for up-to 64bit values */
+#define BTF_KIND_LOC_PARAM	20	/* Parameter at location */
+#define BTF_KIND_LOC_PROTO	21	/* Parameter set at location */
+#define BTF_KIND_LOCSEC		22	/* Section containing location info */
+
+struct btf_loc_param;
+struct btf_loc;
 
 static inline __u16 btf_kind(const struct btf_type *t)
 {
@@ -569,6 +603,21 @@ static inline bool btf_is_any_enum(const struct btf_type *t)
 	return btf_is_enum(t) || btf_is_enum64(t);
 }
 
+static inline bool btf_is_loc_param(const struct btf_type *t)
+{
+	return btf_kind(t) == BTF_KIND_LOC_PARAM;
+}
+
+static inline bool btf_is_loc_proto(const struct btf_type *t)
+{
+	return btf_kind(t) == BTF_KIND_LOC_PROTO;
+}
+
+static inline bool btf_is_locsec(const struct btf_type *t)
+{
+	return btf_kind(t) == BTF_KIND_LOCSEC;
+}
+
 static inline bool btf_kind_core_compat(const struct btf_type *t1,
 					const struct btf_type *t2)
 {
@@ -681,6 +730,21 @@ struct btf_decl_tag;
 static inline struct btf_decl_tag *btf_decl_tag(const struct btf_type *t)
 {
 	return (struct btf_decl_tag *)(t + 1);
+}
+
+static inline struct btf_loc_param *btf_loc_param(const struct btf_type *t)
+{
+	return (struct btf_loc_param *)(t + 1);
+}
+
+static inline __u32 *btf_loc_proto_params(const struct btf_type *t)
+{
+	return (__u32 *)(t + 1);
+}
+
+static inline struct btf_loc *btf_locsec_locs(const struct btf_type *t)
+{
+	return (struct btf_loc *)(t + 1);
 }
 
 #ifdef __cplusplus

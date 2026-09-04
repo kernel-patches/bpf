@@ -142,7 +142,9 @@ struct object {
 
 	struct btf *btf;
 	struct btf *base_btf;
+	struct btf *inline_btf;
 	bool distill_base;
+	bool extract_inline;
 
 	struct {
 		int		 fd;
@@ -154,6 +156,10 @@ struct object {
 		size_t		 strtabidx;
 		unsigned long	 idlist_addr;
 		int		 encoding;
+		const char	**func_symbols;
+		u32		 func_symbols_cnt;
+		u32		 func_symbols_cap;
+		bool		 func_symbols_collected;
 	} efile;
 
 	struct rb_root	sets;
@@ -570,6 +576,58 @@ static const char *find_name_by_addr(struct object *obj, Elf64_Addr addr)
 	res = bsearch(&key, obj->addr_syms, obj->addr_syms_cnt,
 		      sizeof(*obj->addr_syms), cmp_addr_sym);
 	return res ? res->name : NULL;
+}
+
+static int cmp_func_symbol(const void *a, const void *b)
+{
+	const char * const *name = a;
+	const char * const *other = b;
+
+	return strcmp(*name, *other);
+}
+
+static int collect_func_symbols(struct object *obj)
+{
+	Elf_Scn *scn;
+	GElf_Shdr sh;
+	int n, i;
+
+	if (obj->efile.symbols_shndx == -1)
+		return 0;
+
+	scn = elf_getscn(obj->efile.elf, obj->efile.symbols_shndx);
+	if (!scn || gelf_getshdr(scn, &sh) != &sh)
+		return -EINVAL;
+	n = sh.sh_size / sh.sh_entsize;
+
+	for (i = 0; i < n; i++) {
+		GElf_Sym sym;
+		const char *name;
+
+		if (!gelf_getsym(obj->efile.symbols, i, &sym))
+			return -EINVAL;
+		if (GELF_ST_TYPE(sym.st_info) != STT_FUNC ||
+		    sym.st_shndx == SHN_UNDEF || !sym.st_name)
+			continue;
+		name = elf_strptr(obj->efile.elf, obj->efile.strtabidx, sym.st_name);
+		if (!name)
+			return -EINVAL;
+		if (ensure_mem(&obj->efile.func_symbols, &obj->efile.func_symbols_cap,
+			       obj->efile.func_symbols_cnt + 1))
+			return -ENOMEM;
+		obj->efile.func_symbols[obj->efile.func_symbols_cnt++] = name;
+	}
+
+	qsort(obj->efile.func_symbols, obj->efile.func_symbols_cnt,
+	      sizeof(*obj->efile.func_symbols), cmp_func_symbol);
+	obj->efile.func_symbols_collected = true;
+	return 0;
+}
+
+static bool has_func_symbol(const struct object *obj, const char *name)
+{
+	return bsearch(&name, obj->efile.func_symbols, obj->efile.func_symbols_cnt,
+		       sizeof(*obj->efile.func_symbols), cmp_func_symbol) != NULL;
 }
 
 static int symbols_collect(struct object *obj)
@@ -1514,13 +1572,192 @@ out:
  * Sort types by name in ascending order resulting in all
  * anonymous types being placed before named types.
  */
+struct btf_name_sort {
+	struct btf *btf;
+	bool extract_inline;
+	bool *transfer_funcs;
+	bool *transfer_protos;
+};
+
+static int btf_inline_kind_order(const struct btf_type *t, bool transfer_func,
+				 bool transfer_proto)
+{
+	if (transfer_func)
+		return 1;
+	if (transfer_proto)
+		return 2;
+	if (btf_is_loc_param(t))
+		return 3;
+	if (btf_is_loc_proto(t))
+		return 4;
+	if (btf_is_locsec(t))
+		return 5;
+	return 0;
+}
+
+enum inline_ref_kind {
+	INLINE_REF_FUNC,
+	INLINE_REF_FUNC_PROTO,
+};
+
+static void mark_inline_ref(struct btf *btf, bool *refs, int start_id,
+			    int type_cnt, __u32 type_id, enum inline_ref_kind ref_kind)
+{
+	const struct btf_type *t;
+
+	if (type_id < start_id || type_id >= type_cnt)
+		return;
+	t = btf__type_by_id(btf, type_id);
+	if ((ref_kind == INLINE_REF_FUNC && btf_is_func(t)) ||
+	    (ref_kind == INLINE_REF_FUNC_PROTO && btf_is_func_proto(t)))
+		refs[type_id] = true;
+}
+
+static void mark_inline_type_refs(struct btf *btf, bool *refs, int start_id,
+				  int type_cnt, const struct btf_type *t,
+				  enum inline_ref_kind ref_kind)
+{
+	/*
+	 * These are the only BTF kinds that can directly reference a FUNC or
+	 * FUNC_PROTO (aside from LOCSEC).
+	 */
+	switch (btf_kind(t)) {
+	case BTF_KIND_CONST:
+	case BTF_KIND_VOLATILE:
+	case BTF_KIND_RESTRICT:
+	case BTF_KIND_PTR:
+	case BTF_KIND_TYPEDEF:
+	case BTF_KIND_FUNC:
+	case BTF_KIND_VAR:
+	case BTF_KIND_DECL_TAG:
+	case BTF_KIND_TYPE_TAG:
+		mark_inline_ref(btf, refs, start_id, type_cnt, t->type, ref_kind);
+		break;
+	default:
+		return;
+	}
+}
+
+/* A FUNC can move to inline BTF only when LOCSEC is its sole BTF user. */
+static int find_inline_funcs(struct object *obj, bool **transfer_funcsp,
+			     bool **transfer_protosp)
+{
+	bool *locsec_refs, *other_refs, *proto_candidates, *proto_base_refs;
+	int i, type_cnt, start_id = 0;
+	struct btf *btf = obj->btf;
+
+	type_cnt = btf__type_cnt(btf);
+	*transfer_funcsp = NULL;
+	*transfer_protosp = NULL;
+	if (btf__base_btf(btf))
+		start_id = btf__type_cnt(btf__base_btf(btf));
+
+	locsec_refs = calloc(type_cnt, sizeof(*locsec_refs));
+	other_refs = calloc(type_cnt, sizeof(*other_refs));
+	proto_candidates = calloc(type_cnt, sizeof(*proto_candidates));
+	proto_base_refs = calloc(type_cnt, sizeof(*proto_base_refs));
+	if (!locsec_refs || !other_refs || !proto_candidates || !proto_base_refs)
+		goto err;
+
+	/* First identify locsec FUNC references */
+	for (i = start_id; i < type_cnt; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+		const struct btf_loc *loc;
+		int j;
+
+		if (!btf_is_locsec(t))
+			continue;
+		loc = btf_locsec_locs(t);
+		for (j = 0; j < btf_vlen(t); j++, loc++) {
+			if (loc->func >= start_id && loc->func < type_cnt &&
+			    btf_is_func(btf__type_by_id(btf, loc->func)))
+				locsec_refs[loc->func] = true;
+		}
+	}
+
+	/*
+	 * Then mark any additional references to them; references outside
+	 * of LOCSEC make the FUNC ineligible for transfer.
+	 */
+	for (i = start_id; i < type_cnt; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+
+		if (btf_is_locsec(t))
+			continue;
+		mark_inline_type_refs(btf, other_refs, start_id, type_cnt, t,
+				      INLINE_REF_FUNC);
+	}
+
+	for (i = start_id; i < type_cnt; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+		const char *name;
+
+		/* If there are no locsec references, or we find additional
+		 * non-locsec references, skip as ineligible.
+		 */
+		if (!locsec_refs[i] || other_refs[i])
+			continue;
+		name = btf__name_by_offset(btf, t->name_off);
+		/* Keep out-of-line functions and BTF ID users in the main BTF. */
+		if (!obj->efile.func_symbols_collected || has_func_symbol(obj, name) ||
+		    btf_id__find(&obj->funcs, name))
+			locsec_refs[i] = false;
+	}
+
+	for (i = start_id; i < type_cnt; i++) {
+		const struct btf_type *t;
+
+		if (!locsec_refs[i])
+			continue;
+		t = btf__type_by_id(btf, i);
+		proto_candidates[t->type] = true;
+	}
+
+	/* Mark every FUNC_PROTO directly needed by retained base BTF types. */
+	for (i = start_id; i < type_cnt; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+
+		if (locsec_refs[i] || proto_candidates[i] ||
+		    btf_is_loc_param(t) || btf_is_loc_proto(t) ||
+		    btf_is_locsec(t))
+			continue;
+		mark_inline_type_refs(btf, proto_base_refs, start_id, type_cnt, t,
+				      INLINE_REF_FUNC_PROTO);
+	}
+	for (i = start_id; i < type_cnt; i++)
+		proto_candidates[i] &= !proto_base_refs[i];
+
+	free(other_refs);
+	*transfer_funcsp = locsec_refs;
+	*transfer_protosp = proto_candidates;
+	free(proto_base_refs);
+	return 0;
+err:
+	free(locsec_refs);
+	free(other_refs);
+	free(proto_candidates);
+	free(proto_base_refs);
+	return -ENOMEM;
+}
+
 static int cmp_type_names(const void *a, const void *b, void *priv)
 {
-	struct btf *btf = (struct btf *)priv;
+	struct btf_name_sort *sort = priv;
+	struct btf *btf = sort->btf;
 	const struct btf_type *ta = btf__type_by_id(btf, *(__u32 *)a);
 	const struct btf_type *tb = btf__type_by_id(btf, *(__u32 *)b);
 	const char *na, *nb;
+	int inline_order;
 	int r;
+
+	if (sort->extract_inline) {
+		inline_order = btf_inline_kind_order(ta, sort->transfer_funcs[*(__u32 *)a],
+					     sort->transfer_protos[*(__u32 *)a]) -
+			       btf_inline_kind_order(tb, sort->transfer_funcs[*(__u32 *)b],
+					     sort->transfer_protos[*(__u32 *)b]);
+		if (inline_order)
+			return inline_order;
+	}
 
 	na = btf__str_by_offset(btf, ta->name_off);
 	nb = btf__str_by_offset(btf, tb->name_off);
@@ -1532,8 +1769,60 @@ static int cmp_type_names(const void *a, const void *b, void *priv)
 	return *(__u32 *)a < *(__u32 *)b ? -1 : 1;
 }
 
-static int sort_btf_by_name(struct btf *btf)
+struct loc_sort {
+	const __u32 *id_map;
+	__u32 start_id;
+};
+
+static __u32 projected_type_id(const struct loc_sort *sort, __u32 id)
 {
+	if (id < sort->start_id)
+		return id;
+	return sort->id_map[id - sort->start_id] & ~BTF_PERMUTE_ID_TRANSFER;
+}
+
+static int cmp_loc(const void *a, const void *b, void *priv)
+{
+	const struct loc_sort *sort = priv;
+	const struct btf_loc *la = a, *lb = b;
+	__u32 afunc = projected_type_id(sort, la->func);
+	__u32 bfunc = projected_type_id(sort, lb->func);
+	__u32 aproto = projected_type_id(sort, la->loc_proto);
+	__u32 bproto = projected_type_id(sort, lb->loc_proto);
+
+	if (afunc != bfunc)
+		return afunc < bfunc ? -1 : 1;
+	if (la->offset != lb->offset)
+		return la->offset < lb->offset ? -1 : 1;
+	if (aproto != bproto)
+		return aproto < bproto ? -1 : 1;
+	return 0;
+}
+
+static void sort_locsecs(struct btf *btf, const __u32 *id_map, __u32 start_id,
+			 int nr_types)
+{
+	struct loc_sort sort = { .id_map = id_map, .start_id = start_id };
+	int i;
+
+	for (i = 0; i < nr_types; i++) {
+		struct btf_type *t = (struct btf_type *)btf__type_by_id(btf, start_id + i);
+
+		if (btf_is_locsec(t))
+			qsort_r(btf_locsec_locs(t), btf_vlen(t), sizeof(struct btf_loc),
+				cmp_loc, &sort);
+	}
+}
+
+static int sort_btf_by_name(struct object *obj)
+{
+	struct btf *btf = obj->btf;
+	bool *transfer_funcs = NULL, *transfer_protos = NULL;
+	struct btf_name_sort sort = {
+		.btf = btf,
+		.extract_inline = obj->extract_inline,
+	};
+	LIBBPF_OPTS(btf_permute_opts, opts);
 	__u32 *permute_ids = NULL, *id_map = NULL;
 	int nr_types, i, err = 0;
 	__u32 start_id = 0, id;
@@ -1541,6 +1830,13 @@ static int sort_btf_by_name(struct btf *btf)
 	if (btf__base_btf(btf))
 		start_id = btf__type_cnt(btf__base_btf(btf));
 	nr_types = btf__type_cnt(btf) - start_id;
+	if (obj->extract_inline) {
+		err = find_inline_funcs(obj, &transfer_funcs, &transfer_protos);
+		if (err)
+			goto out;
+		sort.transfer_funcs = transfer_funcs;
+		sort.transfer_protos = transfer_protos;
+	}
 
 	permute_ids = calloc(nr_types, sizeof(*permute_ids));
 	if (!permute_ids) {
@@ -1557,21 +1853,37 @@ static int sort_btf_by_name(struct btf *btf)
 	for (i = 0, id = start_id; i < nr_types; i++, id++)
 		permute_ids[i] = id;
 
-	qsort_r(permute_ids, nr_types, sizeof(*permute_ids), cmp_type_names,
-		btf);
+	qsort_r(permute_ids, nr_types, sizeof(*permute_ids), cmp_type_names, &sort);
 
 	for (i = 0; i < nr_types; i++) {
 		id = permute_ids[i] - start_id;
 		id_map[id] = i + start_id;
+		if (obj->extract_inline &&
+		    btf_inline_kind_order(btf__type_by_id(btf, permute_ids[i]),
+					  transfer_funcs[permute_ids[i]],
+					  transfer_protos[permute_ids[i]]))
+			id_map[id] |= BTF_PERMUTE_ID_TRANSFER;
 	}
 
-	err = btf__permute(btf, id_map, nr_types, NULL);
+	/*
+	 * Key LOCSEC records by their post-permutation function ID and offset
+	 * since the tracer pattern will be to look up FUNC by name, then
+	 * find LOCSEC records for that function.
+	 */
+	sort_locsecs(btf, id_map, start_id, nr_types);
+
+	if (obj->extract_inline)
+		opts.transfer_btf = &obj->inline_btf;
+	err = btf__permute(btf, id_map, nr_types,
+			   obj->extract_inline ? &opts : NULL);
 	if (err)
 		pr_err("FAILED: btf permute: %s\n", strerror(-err));
 
 out:
 	free(permute_ids);
 	free(id_map);
+	free(transfer_funcs);
+	free(transfer_protos);
 	return err;
 }
 
@@ -1599,7 +1911,7 @@ static int finalize_btf(struct object *obj)
 		obj->btf = btf;
 	}
 
-	err = sort_btf_by_name(obj->btf);
+	err = sort_btf_by_name(obj);
 	if (err) {
 		pr_err("FAILED to sort BTF: %s\n", strerror(errno));
 		goto out_err;
@@ -1773,6 +2085,8 @@ int main(int argc, const char **argv)
 			    "turn warnings into errors"),
 		OPT_BOOLEAN(0, "distill_base", &obj.distill_base,
 			    "distill --btf_base and emit .BTF.base section data"),
+		OPT_BOOLEAN(0, "inline", &obj.extract_inline,
+			    "extract location BTF into a .BTF.inline file"),
 		OPT_STRING(0, "patch_btfids", &btfids_path, "file",
 			   "path to .BTF_ids section data blob to patch into ELF file"),
 		OPT_END()
@@ -1790,6 +2104,8 @@ int main(int argc, const char **argv)
 		return patch_btfids(btfids_path, obj.path);
 
 	if (elf_collect(&obj))
+		goto out;
+	if (obj.extract_inline && collect_func_symbols(&obj))
 		goto out;
 
 	/*
@@ -1841,11 +2157,18 @@ dump_btf:
 		if (err)
 			goto out;
 	}
+	if (obj.inline_btf) {
+		err = make_out_path(out_path, sizeof(out_path), obj.path, BTF_ELF_SEC ".inline");
+		err = err ?: dump_raw_btf(obj.inline_btf, out_path);
+		if (err)
+			goto out;
+	}
 
 	if (!(fatal_warnings && warnings))
 		err = 0;
 out:
 	btf__free(obj.base_btf);
+	btf__free(obj.inline_btf);
 	btf__free(obj.btf);
 	btf_id__free_all(&obj.structs);
 	btf_id__free_all(&obj.unions);
@@ -1853,6 +2176,7 @@ out:
 	btf_id__free_all(&obj.funcs);
 	btf_id__free_all(&obj.sets);
 	free(obj.addr_syms);
+	free(obj.efile.func_symbols);
 	if (obj.efile.elf) {
 		elf_end(obj.efile.elf);
 		close(obj.efile.fd);
