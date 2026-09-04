@@ -3292,6 +3292,48 @@ bool __weak bpf_jit_supports_kfunc_ret_reg_pair(void)
 	return false;
 }
 
+/*
+ * Whether an argument of @nslots eightbytes and @align alignment, coming after
+ * @slots_used slots, lands where the kernel calling convention expects it. The
+ * JIT maps slots to argument positions in order, registers first, so the two
+ * agree unless the calling convention places the argument elsewhere.
+ */
+bool __weak bpf_jit_supports_kfunc_arg_slot(u32 slots_used, u32 nslots, u32 align)
+{
+	return false;
+}
+
+/*
+ * The most outgoing stack eightbytes any kfunc call in @prog needs, given
+ * @layout, which writes where the kernel calling convention places each
+ * eightbyte of a call, and @nr_regs, the positions below which are registers.
+ */
+u16 bpf_jit_kfunc_stack_slots(const struct bpf_prog *prog, u32 nr_regs,
+			      int (*layout)(const struct btf_func_model *fm, u8 *pos, int max))
+{
+	const struct bpf_insn *insn = prog->insnsi;
+	u8 pos[MAX_BPF_FUNC_ARGS];
+	int i, k, n, slots = 0;
+
+	for (i = 0; i < prog->len; i++, insn++) {
+		const struct btf_func_model *fm;
+
+		if (insn->code != (BPF_JMP | BPF_CALL) ||
+		    insn->src_reg != BPF_PSEUDO_KFUNC_CALL)
+			continue;
+		fm = bpf_jit_find_kfunc_model(prog, insn);
+		if (!fm)
+			continue;
+		n = layout(fm, pos, ARRAY_SIZE(pos));
+		if (n < 0)
+			continue;
+		for (k = 0; k < n; k++)
+			if (pos[k] >= nr_regs)
+				slots = max(slots, pos[k] - (int)nr_regs + 1);
+	}
+	return slots;
+}
+
 bool __weak bpf_jit_supports_stack_args(void)
 {
 	return false;
