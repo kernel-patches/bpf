@@ -3292,6 +3292,17 @@ bool __weak bpf_jit_supports_kfunc_ret_reg_pair(void)
 	return false;
 }
 
+/*
+ * Whether an argument of @nslots eightbytes and @align alignment, coming after
+ * @slots_used slots, lands where the kernel calling convention expects it. The
+ * JIT maps slots to argument positions in order, registers first, so the two
+ * agree unless the calling convention places the argument elsewhere.
+ */
+bool __weak bpf_jit_supports_kfunc_arg_slot(u32 slots_used, u32 nslots, u32 align)
+{
+	return false;
+}
+
 bool __weak bpf_jit_supports_stack_args(void)
 {
 	return false;
