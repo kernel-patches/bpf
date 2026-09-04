@@ -33,6 +33,8 @@ struct rcu_graph_node {
 	long data;
 };
 
+struct rcu_graph_node *just_here_because_btf_bug;
+
 struct map_value_rcu_graph {
 	struct rcu_graph_node __kptr *node;
 };
