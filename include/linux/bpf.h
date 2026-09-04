@@ -17,6 +17,7 @@
 #include <linux/numa.h>
 #include <linux/mm_types.h>
 #include <linux/wait.h>
+#include <linux/irq_work_types.h>
 #include <linux/refcount.h>
 #include <linux/mutex.h>
 #include <linux/module.h>
@@ -1711,12 +1712,17 @@ enum {
 };
 
 struct bpf_stream {
-	atomic_t capacity;
+	refcount_t refcnt;
+	atomic_t capacity;	/* bytes reserved against the stream limit */
+	atomic_t readable;	/* published bytes available to readers */
 	struct llist_head log;	/* list of in-flight stream elements in LIFO order */
 
 	struct mutex lock;  /* lock protecting backlog_{head,tail} */
 	struct llist_node *backlog_head; /* list of in-flight stream elements in FIFO order */
 	struct llist_node *backlog_tail; /* tail of the list above */
+	wait_queue_head_t waitq;
+	struct irq_work notify_work;
+	bool dead;
 };
 
 struct bpf_stream_stage {
@@ -1855,7 +1861,7 @@ struct bpf_prog_aux {
 		struct work_struct work;
 		struct rcu_head	rcu;
 	};
-	struct bpf_stream stream[2];
+	struct bpf_stream *stream[2];
 	struct mutex st_ops_assoc_mutex;
 	struct bpf_map __rcu *st_ops_assoc;
 };
@@ -4112,9 +4118,10 @@ void bpf_bprintf_cleanup(struct bpf_bprintf_data *data);
 int bpf_try_get_buffers(struct bpf_bprintf_buffers **bufs);
 void bpf_put_buffers(void);
 
-void bpf_prog_stream_init(struct bpf_prog *prog);
+int bpf_prog_stream_init(struct bpf_prog *prog, gfp_t gfp_extra_flags);
 void bpf_prog_stream_free(struct bpf_prog *prog);
 int bpf_prog_stream_read(struct bpf_prog *prog, enum bpf_stream_id stream_id, void __user *buf, u32 len);
+int bpf_prog_stream_new_fd(struct bpf_prog *prog, enum bpf_stream_id stream_id, u32 flags);
 void bpf_stream_stage_init(struct bpf_stream_stage *ss);
 void bpf_stream_stage_free(struct bpf_stream_stage *ss);
 __printf(2, 3)

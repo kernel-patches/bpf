@@ -2,11 +2,15 @@
 /* Copyright (c) 2025 Meta Platforms, Inc. and affiliates. */
 
 #include <linux/bpf.h>
+#include <linux/anon_inodes.h>
 #include <linux/filter.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/gfp.h>
+#include <linux/irq_work.h>
 #include <linux/memory.h>
 #include <linux/mutex.h>
+#include <linux/poll.h>
+#include <linux/refcount.h>
 
 static void bpf_stream_elem_init(struct bpf_stream_elem *elem, int len)
 {
@@ -73,6 +77,32 @@ static void bpf_stream_release_capacity(struct bpf_stream *stream, int len)
 	atomic_sub(len, &stream->capacity);
 }
 
+static void bpf_stream_notify(struct irq_work *work)
+{
+	struct bpf_stream *stream = container_of(work, struct bpf_stream, notify_work);
+
+	/*
+	 * Stream writers can run in NMI context, while wait queue callbacks may
+	 * acquire locks. Defer those callbacks to irq_work context.
+	 */
+	wake_up_interruptible_poll(&stream->waitq, EPOLLIN | EPOLLRDNORM);
+}
+
+static int bpf_stream_readable_bytes(struct bpf_stream *stream)
+{
+	return atomic_read_acquire(&stream->readable);
+}
+
+static void bpf_stream_publish(struct bpf_stream *stream, int len)
+{
+	if (!len)
+		return;
+
+	/* Pairs with atomic_read_acquire() in bpf_stream_readable_bytes(). */
+	(void)atomic_add_return_release(len, &stream->readable);
+	irq_work_queue(&stream->notify_work);
+}
+
 static int bpf_stream_push_str(struct bpf_stream *stream, const char *str, int len)
 {
 	int ret = bpf_stream_consume_capacity(stream, len);
@@ -83,6 +113,8 @@ static int bpf_stream_push_str(struct bpf_stream *stream, const char *str, int l
 	ret = __bpf_stream_push_str(&stream->log, str, len);
 	if (ret)
 		bpf_stream_release_capacity(stream, len);
+	else
+		bpf_stream_publish(stream, len);
 
 	return ret;
 }
@@ -91,7 +123,7 @@ static struct bpf_stream *bpf_stream_get(enum bpf_stream_id stream_id, struct bp
 {
 	if (stream_id != BPF_STDOUT && stream_id != BPF_STDERR)
 		return NULL;
-	return &aux->stream[stream_id - 1];
+	return aux->stream[stream_id - 1];
 }
 
 static void bpf_stream_free_elem(struct bpf_stream_elem *elem)
@@ -159,14 +191,16 @@ static bool bpf_stream_consume_elem(struct bpf_stream_elem *elem, int *len)
 
 static int bpf_stream_read(struct bpf_stream *stream, void __user *buf, int len)
 {
-	int rem_len = len, cons_len, ret = 0;
+	int read_len, rem_len, cons_len, ret = 0;
 	struct bpf_stream_elem *elem = NULL;
 	struct llist_node *node;
 
 	mutex_lock(&stream->lock);
+	read_len = min(len, bpf_stream_readable_bytes(stream));
+	rem_len = read_len;
 
 	while (rem_len) {
-		int pos = len - rem_len;
+		int pos = read_len - rem_len;
 		int chunk, n;
 		bool cont;
 
@@ -188,7 +222,7 @@ static int bpf_stream_read(struct bpf_stream *stream, void __user *buf, int len)
 			/* Keep any successfully copied bytes; -EFAULT only if none. */
 			elem->consumed_len -= n;
 			rem_len += n;
-			ret = (len == rem_len) ? -EFAULT : 0;
+			ret = (read_len == rem_len) ? -EFAULT : 0;
 			break;
 		}
 
@@ -199,8 +233,9 @@ static int bpf_stream_read(struct bpf_stream *stream, void __user *buf, int len)
 		bpf_stream_free_elem(elem);
 	}
 
+	atomic_sub(read_len - rem_len, &stream->readable);
 	mutex_unlock(&stream->lock);
-	return ret ? ret : len - rem_len;
+	return ret ? ret : read_len - rem_len;
 }
 
 int bpf_prog_stream_read(struct bpf_prog *prog, enum bpf_stream_id stream_id, void __user *buf, u32 len)
@@ -213,6 +248,103 @@ int bpf_prog_stream_read(struct bpf_prog *prog, enum bpf_stream_id stream_id, vo
 	if (len > INT_MAX)
 		return -EINVAL;
 	return bpf_stream_read(stream, buf, len);
+}
+
+static bool bpf_stream_has_data(struct bpf_stream *stream)
+{
+	return bpf_stream_readable_bytes(stream) > 0;
+}
+
+static void bpf_stream_put(struct bpf_stream *stream)
+{
+	if (refcount_dec_and_test(&stream->refcnt)) {
+		struct llist_node *list;
+
+		irq_work_sync(&stream->notify_work);
+		list = llist_del_all(&stream->log);
+		bpf_stream_free_list(list);
+		bpf_stream_free_list(stream->backlog_head);
+		mutex_destroy(&stream->lock);
+		kfree(stream);
+	}
+}
+
+static int bpf_stream_release(struct inode *inode, struct file *file)
+{
+	bpf_stream_put(file->private_data);
+	return 0;
+}
+
+static ssize_t bpf_stream_file_read(struct file *file, char __user *buf, size_t len,
+				    loff_t *ppos)
+{
+	struct bpf_stream *stream = file->private_data;
+	int ret;
+
+	if (len > INT_MAX)
+		return -EINVAL;
+	if (!len)
+		return 0;
+
+	for (;;) {
+		ret = bpf_stream_read(stream, buf, len);
+		if (ret)
+			return ret;
+		if (READ_ONCE(stream->dead))
+			return 0;
+		if (file->f_flags & O_NONBLOCK)
+			return -EAGAIN;
+
+		ret = wait_event_interruptible(stream->waitq,
+					       bpf_stream_has_data(stream) ||
+					       READ_ONCE(stream->dead));
+		if (ret)
+			return ret;
+	}
+}
+
+static __poll_t bpf_stream_poll(struct file *file, struct poll_table_struct *pts)
+{
+	struct bpf_stream *stream = file->private_data;
+	__poll_t events = 0;
+
+	/*
+	 * poll_wait() only registers the wait queue callback. Register before
+	 * checking persistent state so a concurrent publication or teardown is
+	 * observed either by the callback or by the checks below.
+	 */
+	poll_wait(file, &stream->waitq, pts);
+	if (bpf_stream_has_data(stream))
+		events |= EPOLLIN | EPOLLRDNORM;
+	if (READ_ONCE(stream->dead))
+		events |= EPOLLHUP;
+	return events;
+}
+
+static const struct file_operations bpf_stream_fops = {
+	.release = bpf_stream_release,
+	.read = bpf_stream_file_read,
+	.poll = bpf_stream_poll,
+	.llseek = noop_llseek,
+};
+
+int bpf_prog_stream_new_fd(struct bpf_prog *prog, enum bpf_stream_id stream_id, u32 flags)
+{
+	struct bpf_stream *stream;
+	int fd_flags = O_RDONLY | O_CLOEXEC;
+	int fd;
+
+	stream = bpf_stream_get(stream_id, prog->aux);
+	if (!stream)
+		return -ENOENT;
+	if (flags & BPF_F_STREAM_NONBLOCK)
+		fd_flags |= O_NONBLOCK;
+
+	refcount_inc(&stream->refcnt);
+	fd = anon_inode_getfd("bpf-stream", &bpf_stream_fops, stream, fd_flags);
+	if (fd < 0)
+		bpf_stream_put(stream);
+	return fd;
 }
 
 __bpf_kfunc_start_defs();
@@ -282,28 +414,45 @@ __bpf_kfunc_end_defs();
 
 /* Added kfunc to common_btf_ids */
 
-void bpf_prog_stream_init(struct bpf_prog *prog)
+int bpf_prog_stream_init(struct bpf_prog *prog, gfp_t gfp_extra_flags)
 {
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(prog->aux->stream); i++) {
-		atomic_set(&prog->aux->stream[i].capacity, 0);
-		init_llist_head(&prog->aux->stream[i].log);
-		mutex_init(&prog->aux->stream[i].lock);
-		prog->aux->stream[i].backlog_head = NULL;
-		prog->aux->stream[i].backlog_tail = NULL;
+		struct bpf_stream *stream;
+
+		stream = kzalloc_obj(*stream,
+				     bpf_memcg_flags(GFP_KERNEL | gfp_extra_flags));
+		if (!stream) {
+			bpf_prog_stream_free(prog);
+			return -ENOMEM;
+		}
+
+		refcount_set(&stream->refcnt, 1);
+		atomic_set(&stream->capacity, 0);
+		atomic_set(&stream->readable, 0);
+		init_llist_head(&stream->log);
+		mutex_init(&stream->lock);
+		init_waitqueue_head(&stream->waitq);
+		init_irq_work(&stream->notify_work, bpf_stream_notify);
+		prog->aux->stream[i] = stream;
 	}
+	return 0;
 }
 
 void bpf_prog_stream_free(struct bpf_prog *prog)
 {
-	struct llist_node *list;
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(prog->aux->stream); i++) {
-		list = llist_del_all(&prog->aux->stream[i].log);
-		bpf_stream_free_list(list);
-		bpf_stream_free_list(prog->aux->stream[i].backlog_head);
+		struct bpf_stream *stream = prog->aux->stream[i];
+
+		if (!stream)
+			continue;
+		WRITE_ONCE(stream->dead, true);
+		wake_up_interruptible_poll(&stream->waitq, EPOLLHUP);
+		bpf_stream_put(stream);
+		prog->aux->stream[i] = NULL;
 	}
 }
 
@@ -366,6 +515,7 @@ int bpf_stream_stage_commit(struct bpf_stream_stage *ss, struct bpf_prog *prog,
 		list = tail;
 	}
 	llist_add_batch(head, tail, &stream->log);
+	bpf_stream_publish(stream, ss->len);
 	return 0;
 }
 

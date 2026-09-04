@@ -1125,14 +1125,27 @@ prog_tracelog_stream(int prog_fd, enum prog_tracelog_mode mode)
 	FILE *file = mode == TRACE_STDOUT ? stdout : stderr;
 	int stream_id = mode == TRACE_STDOUT ? 1 : 2;
 	char buf[512];
-	int ret;
+	int fd, ret;
 
-	ret = 0;
-	do {
-		ret = bpf_prog_stream_read(prog_fd, stream_id, buf, sizeof(buf), NULL);
-		if (ret > 0)
-			fwrite(buf, sizeof(buf[0]), ret, file);
-	} while (ret > 0);
+	fd = bpf_prog_stream_open(prog_fd, stream_id, NULL);
+	if (fd == -EINVAL) {
+		do {
+			ret = bpf_prog_stream_read(prog_fd, stream_id, buf, sizeof(buf), NULL);
+			if (ret > 0)
+				fwrite(buf, sizeof(buf[0]), ret, file);
+		} while (ret > 0);
+	} else {
+		if (fd < 0)
+			return -1;
+		do {
+			ret = read(fd, buf, sizeof(buf));
+			if (ret > 0) {
+				fwrite(buf, sizeof(buf[0]), ret, file);
+				fflush(file);
+			}
+		} while (ret > 0);
+		close(fd);
+	}
 
 	fflush(file);
 	return ret ? -1 : 0;
