@@ -8542,9 +8542,11 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 		if (IS_ERR(btf)) {
 			kfree(btf_mod);
 			if (!IS_ENABLED(CONFIG_MODULE_ALLOW_BTF_MISMATCH)) {
-				pr_warn("failed to validate module [%s] BTF: %ld\n",
-					mod->name, PTR_ERR(btf));
 				err = PTR_ERR(btf);
+				pr_warn("failed to validate module [%s] BTF: %d; refusing to load it\n",
+					mod->name, err);
+				if (err == -EINVAL)
+					pr_warn_once("module BTF does not match this kernel build; the modules on disk are most likely from a different build than the running kernel (kernel package upgraded without rebooting?). Build with CONFIG_MODULE_ALLOW_BTF_MISMATCH=y to load such modules without their BTF.\n");
 			} else {
 				pr_warn_once("Kernel module BTF mismatch detected, BTF debug info may be unavailable for some modules\n");
 			}
