@@ -56,6 +56,10 @@ BTF_ID(func, bpf_lsm_xfrm_decode_session)
 #endif
 BTF_ID(func, bpf_lsm_ismaclabel)
 BTF_ID(func, bpf_lsm_file_alloc_security)
+BTF_ID(func, bpf_lsm_bprm_apply_policy_object)
+BTF_ID(func, bpf_lsm_policy_object_from_fd)
+BTF_ID(func, bpf_lsm_policy_object_get)
+BTF_ID(func, bpf_lsm_policy_object_put)
 BTF_SET_END(bpf_lsm_disabled_hooks)
 
 /* List of LSM hooks that should operate on 'current' cgroup regardless

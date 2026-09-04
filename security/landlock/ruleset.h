@@ -4,6 +4,7 @@
  *
  * Copyright © 2016-2020 Mickaël Salaün <mic@digikod.net>
  * Copyright © 2018-2020 ANSSI
+ * Copyright © 2026 Cloudflare, Inc.
  */
 
 #ifndef _SECURITY_LANDLOCK_RULESET_H
@@ -14,13 +15,12 @@
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/refcount.h>
+#include <linux/security.h>
 #include <linux/workqueue.h>
 
 #include "access.h"
 #include "limits.h"
 #include "object.h"
-
-struct landlock_hierarchy;
 
 /**
  * struct landlock_layer - Access rights for a given layer
@@ -68,13 +68,12 @@ union landlock_key {
  */
 enum landlock_key_type {
 	/**
-	 * @LANDLOCK_KEY_INODE: Type of &landlock_ruleset.root_inode's node
-	 * keys.
+	 * @LANDLOCK_KEY_INODE: Type of &landlock_rules.root_inode's node keys.
 	 */
 	LANDLOCK_KEY_INODE = 1,
 	/**
-	 * @LANDLOCK_KEY_NET_PORT: Type of &landlock_ruleset.root_net_port's
-	 * node keys.
+	 * @LANDLOCK_KEY_NET_PORT: Type of &landlock_rules.root_net_port's node
+	 * keys.
 	 */
 	LANDLOCK_KEY_NET_PORT,
 };
@@ -122,6 +121,43 @@ struct landlock_rule {
 };
 
 /**
+ * struct landlock_rules - Red-black tree storage for Landlock rules
+ *
+ * This structure holds the rule trees shared by both rulesets and domains.
+ */
+struct landlock_rules {
+	/**
+	 * @root_inode: Root of a red-black tree containing &struct
+	 * landlock_rule nodes with inode object.  Immutable for domains.
+	 */
+	struct rb_root root_inode;
+
+#if IS_ENABLED(CONFIG_INET)
+	/**
+	 * @root_net_port: Root of a red-black tree containing &struct
+	 * landlock_rule nodes with network port.  Immutable for domains.
+	 */
+	struct rb_root root_net_port;
+#endif /* IS_ENABLED(CONFIG_INET) */
+
+	/**
+	 * @num_rules: Number of non-overlapping (i.e. not for the same object)
+	 * rules in this tree storage.
+	 */
+	u32 num_rules;
+};
+
+#ifdef CONFIG_BPF_LSM
+/*
+ * Landlock's lsm_policy_object types.  The namespace is private to
+ * Landlock; 0 stays reserved as "unset".
+ */
+enum landlock_policy_type {
+	LANDLOCK_POLICY_TYPE_RULESET = 1,
+};
+#endif /* CONFIG_BPF_LSM */
+
+/**
  * struct landlock_ruleset - Landlock ruleset
  *
  * This data structure must contain unique entries, be updatable, and quick to
@@ -129,60 +165,59 @@ struct landlock_rule {
  */
 struct landlock_ruleset {
 	/**
-	 * @root_inode: Root of a red-black tree containing &struct
-	 * landlock_rule nodes with inode object.  Once a ruleset is tied to a
-	 * process (i.e. as a domain), this tree is immutable until @usage
-	 * reaches zero.
+	 * @rules: Red-black tree storage for rules.
 	 */
-	struct rb_root root_inode;
+	struct landlock_rules rules;
 
-#if IS_ENABLED(CONFIG_INET)
+#ifdef CONFIG_BPF_LSM
 	/**
-	 * @root_net_port: Root of a red-black tree containing &struct
-	 * landlock_rule nodes with network port. Once a ruleset is tied to a
-	 * process (i.e. as a domain), this tree is immutable until @usage
-	 * reaches zero.
+	 * @policy_object: Identity under which the ruleset is handed out
+	 * to BPF programs as a referenced kptr: the LSM policy kfuncs
+	 * dispatch back to Landlock through its lsmid.  Kept outside the
+	 * union with @work_free: RCU readers may read its lsmid while a
+	 * queued free waits out the grace period.
 	 */
-	struct rb_root root_net_port;
-#endif /* IS_ENABLED(CONFIG_INET) */
+	struct lsm_policy_object policy_object;
+#endif /* CONFIG_BPF_LSM */
+	/**
+	 * @usage: Number of file descriptors referencing this ruleset.  Kept
+	 * outside the union with @work_free: RCU readers may still call
+	 * refcount_inc_not_zero() while a queued free waits out the grace
+	 * period.
+	 */
+	refcount_t usage;
 
+#ifdef CONFIG_TRACEPOINTS
 	/**
-	 * @hierarchy: Enables hierarchy identification even when a parent
-	 * domain vanishes.  This is needed for the ptrace protection.
+	 * @version: Counter incremented on each successful
+	 * landlock_add_rule(2), including when it only extends an existing
+	 * rule's access rights.  Used by tracepoints to correlate a domain with
+	 * the exact ruleset state it was created from.  Protected by @lock.
 	 */
-	struct landlock_hierarchy *hierarchy;
+	u32 version;
+	/**
+	 * @id: Unique identifier for this ruleset, used for tracing.  Kept
+	 * outside the union with @work_free: the free_ruleset trace event
+	 * reads it after the free has been queued.
+	 */
+	u64 id;
+#endif /* CONFIG_TRACEPOINTS */
+
 	union {
 		/**
-		 * @work_free: Enables to free a ruleset within a lockless
-		 * section.  This is only used by
-		 * landlock_put_ruleset_deferred() when @usage reaches zero.
-		 * The fields @lock, @usage, @num_rules, @num_layers,
-		 * @quiet_masks and @access_masks are then unused.
+		 * @work_free: Enables to free a ruleset after an RCU grace
+		 * period, within a lockless section.  This is queued by
+		 * landlock_put_ruleset() when @usage reaches zero.  The
+		 * fields @lock, @quiet_masks and @handled_masks are then
+		 * unused.
 		 */
-		struct work_struct work_free;
+		struct rcu_work work_free;
 		struct {
 			/**
 			 * @lock: Protects against concurrent modifications of
-			 * @root, if @usage is greater than zero.
+			 * @rules, if @usage is greater than zero.
 			 */
 			struct mutex lock;
-			/**
-			 * @usage: Number of processes (i.e. domains) or file
-			 * descriptors referencing this ruleset.
-			 */
-			refcount_t usage;
-			/**
-			 * @num_rules: Number of non-overlapping (i.e. not for
-			 * the same object) rules in this ruleset.
-			 */
-			u32 num_rules;
-			/**
-			 * @num_layers: Number of layers that are used in this
-			 * ruleset.  This enables to check that all the layers
-			 * allow an access request.  A value of 0 identifies a
-			 * non-merged ruleset (i.e. not a domain).
-			 */
-			u32 num_layers;
 			/**
 			 * @quiet_masks: Stores the quiet flags for an unmerged
 			 * ruleset.  For a merged domain, this is stored in each
@@ -190,18 +225,10 @@ struct landlock_ruleset {
 			 */
 			struct access_masks quiet_masks;
 			/**
-			 * @access_masks: Contains the subset of filesystem and
-			 * network actions that are restricted by a ruleset.
-			 * A domain saves all layers of merged rulesets in a
-			 * stack (FAM), starting from the first layer to the
-			 * last one.  These layers are used when merging
-			 * rulesets, for user space backward compatibility
-			 * (i.e. future-proof), and to properly handle merged
-			 * rulesets without overlapping access rights.  These
-			 * layers are set once and never changed for the
-			 * lifetime of the ruleset.
+			 * @handled_masks: Contains the subset of filesystem and
+			 * network actions that are handled by this ruleset.
 			 */
-			struct access_masks access_masks[];
+			struct access_masks handled_masks;
 		};
 	};
 };
@@ -212,7 +239,6 @@ landlock_create_ruleset(const access_mask_t access_mask_fs,
 			const access_mask_t scope_mask);
 
 void landlock_put_ruleset(struct landlock_ruleset *const ruleset);
-void landlock_put_ruleset_deferred(struct landlock_ruleset *const ruleset);
 
 DEFINE_FREE(landlock_put_ruleset, struct landlock_ruleset *,
 	    if (!IS_ERR_OR_NULL(_T)) landlock_put_ruleset(_T))
@@ -221,110 +247,47 @@ int landlock_insert_rule(struct landlock_ruleset *const ruleset,
 			 const struct landlock_id id,
 			 const access_mask_t access, const u32 flags);
 
-struct landlock_ruleset *
-landlock_merge_ruleset(struct landlock_ruleset *const parent,
-		       struct landlock_ruleset *const ruleset);
+int landlock_store_rule(struct landlock_rules *const rules,
+			const struct landlock_id id,
+			const struct landlock_layer (*layers)[],
+			const size_t num_layers);
 
-const struct landlock_rule *
-landlock_find_rule(const struct landlock_ruleset *const ruleset,
-		   const struct landlock_id id);
+void landlock_free_rules(struct landlock_rules *const rules);
+
+struct landlock_ruleset *landlock_get_ruleset_from_fd(const int fd,
+						      const fmode_t mode);
+
+/**
+ * landlock_get_rule_root - Get the root of a rule tree by key type
+ *
+ * @rules: The rules storage to look up.
+ * @key_type: The type of key to select the tree for.
+ *
+ * Return: A pointer to the rb_root, or ERR_PTR(-EINVAL) on unknown type.
+ */
+static inline struct rb_root *
+landlock_get_rule_root(struct landlock_rules *const rules,
+		       const enum landlock_key_type key_type)
+{
+	switch (key_type) {
+	case LANDLOCK_KEY_INODE:
+		return &rules->root_inode;
+
+#if IS_ENABLED(CONFIG_INET)
+	case LANDLOCK_KEY_NET_PORT:
+		return &rules->root_net_port;
+#endif /* IS_ENABLED(CONFIG_INET) */
+
+	default:
+		WARN_ON_ONCE(1);
+		return ERR_PTR(-EINVAL);
+	}
+}
 
 static inline void landlock_get_ruleset(struct landlock_ruleset *const ruleset)
 {
 	if (ruleset)
 		refcount_inc(&ruleset->usage);
 }
-
-/**
- * landlock_union_access_masks - Return all access rights handled in the
- *				 domain
- *
- * @domain: Landlock ruleset (used as a domain)
- *
- * Return: An access_masks result of the OR of all the domain's access masks.
- */
-static inline struct access_masks
-landlock_union_access_masks(const struct landlock_ruleset *const domain)
-{
-	union access_masks_all matches = {};
-	size_t layer_level;
-
-	for (layer_level = 0; layer_level < domain->num_layers; layer_level++) {
-		union access_masks_all layer = {
-			.masks = domain->access_masks[layer_level],
-		};
-
-		matches.all |= layer.all;
-	}
-
-	return matches.masks;
-}
-
-static inline void
-landlock_add_fs_access_mask(struct landlock_ruleset *const ruleset,
-			    const access_mask_t fs_access_mask,
-			    const u16 layer_level)
-{
-	access_mask_t fs_mask = fs_access_mask & LANDLOCK_MASK_ACCESS_FS;
-
-	/* Should already be checked in sys_landlock_create_ruleset(). */
-	WARN_ON_ONCE(fs_access_mask != fs_mask);
-	ruleset->access_masks[layer_level].fs |= fs_mask;
-}
-
-static inline void
-landlock_add_net_access_mask(struct landlock_ruleset *const ruleset,
-			     const access_mask_t net_access_mask,
-			     const u16 layer_level)
-{
-	access_mask_t net_mask = net_access_mask & LANDLOCK_MASK_ACCESS_NET;
-
-	/* Should already be checked in sys_landlock_create_ruleset(). */
-	WARN_ON_ONCE(net_access_mask != net_mask);
-	ruleset->access_masks[layer_level].net |= net_mask;
-}
-
-static inline void
-landlock_add_scope_mask(struct landlock_ruleset *const ruleset,
-			const access_mask_t scope_mask, const u16 layer_level)
-{
-	access_mask_t mask = scope_mask & LANDLOCK_MASK_SCOPE;
-
-	/* Should already be checked in sys_landlock_create_ruleset(). */
-	WARN_ON_ONCE(scope_mask != mask);
-	ruleset->access_masks[layer_level].scope |= mask;
-}
-
-static inline access_mask_t
-landlock_get_fs_access_mask(const struct landlock_ruleset *const ruleset,
-			    const u16 layer_level)
-{
-	/* Handles all initially denied by default access rights. */
-	return ruleset->access_masks[layer_level].fs |
-	       _LANDLOCK_ACCESS_FS_INITIALLY_DENIED;
-}
-
-static inline access_mask_t
-landlock_get_net_access_mask(const struct landlock_ruleset *const ruleset,
-			     const u16 layer_level)
-{
-	return ruleset->access_masks[layer_level].net;
-}
-
-static inline access_mask_t
-landlock_get_scope_mask(const struct landlock_ruleset *const ruleset,
-			const u16 layer_level)
-{
-	return ruleset->access_masks[layer_level].scope;
-}
-
-bool landlock_unmask_layers(const struct landlock_rule *const rule,
-			    struct layer_masks *masks);
-
-access_mask_t
-landlock_init_layer_masks(const struct landlock_ruleset *const domain,
-			  const access_mask_t access_request,
-			  struct layer_masks *masks,
-			  const enum landlock_key_type key_type);
 
 #endif /* _SECURITY_LANDLOCK_RULESET_H */

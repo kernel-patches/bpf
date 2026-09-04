@@ -452,6 +452,12 @@ LSM_HOOK(int, 0, bpf_token_create, struct bpf_token *token, union bpf_attr *attr
 LSM_HOOK(void, LSM_RET_VOID, bpf_token_free, struct bpf_token *token)
 LSM_HOOK(int, 0, bpf_token_cmd, const struct bpf_token *token, enum bpf_cmd cmd)
 LSM_HOOK(int, 0, bpf_token_capable, const struct bpf_token *token, int cap)
+LSM_HOOK(int, -EOPNOTSUPP, bprm_apply_policy_object, struct linux_binprm *bprm,
+	 struct lsm_policy_object *object, u32 flags)
+LSM_HOOK(int, -EOPNOTSUPP, policy_object_from_fd, int fd,
+	 struct lsm_policy_object **object)
+LSM_HOOK(int, -EOPNOTSUPP, policy_object_get, struct lsm_policy_object *object)
+LSM_HOOK(void, LSM_RET_VOID, policy_object_put, struct lsm_policy_object *object)
 #endif /* CONFIG_BPF_SYSCALL */
 
 LSM_HOOK(int, 0, locked_down, enum lockdown_reason what)

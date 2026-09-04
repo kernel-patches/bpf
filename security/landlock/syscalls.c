@@ -9,7 +9,6 @@
 
 #include <asm/current.h>
 #include <linux/anon_inodes.h>
-#include <linux/bitops.h>
 #include <linux/build_bug.h>
 #include <linux/capability.h>
 #include <linux/cleanup.h>
@@ -22,6 +21,7 @@
 #include <linux/mount.h>
 #include <linux/path.h>
 #include <linux/sched.h>
+#include <linux/sched/signal.h>
 #include <linux/security.h>
 #include <linux/stddef.h>
 #include <linux/syscalls.h>
@@ -30,13 +30,14 @@
 #include <uapi/linux/landlock.h>
 
 #include "cred.h"
-#include "domain.h"
 #include "fs.h"
 #include "limits.h"
 #include "net.h"
 #include "ruleset.h"
 #include "setup.h"
 #include "tsync.h"
+
+#include <trace/events/landlock.h>
 
 static bool is_initialized(void)
 {
@@ -169,7 +170,7 @@ static const struct file_operations ruleset_fops = {
  * If the change involves a fix that requires userspace awareness, also update
  * the errata documentation in Documentation/userspace-api/landlock.rst .
  */
-const int landlock_abi_version = 10;
+const int landlock_abi_version = 11;
 
 /**
  * sys_landlock_create_ruleset - Create a new ruleset
@@ -281,6 +282,15 @@ SYSCALL_DEFINE3(landlock_create_ruleset,
 	ruleset->quiet_masks.net = ruleset_attr.quiet_access_net;
 	ruleset->quiet_masks.scope = ruleset_attr.quiet_scoped;
 
+	/*
+	 * Emits before anon_inode_getfd() installs the file descriptor, while
+	 * the ruleset is still private to this thread: no lock is needed, and
+	 * the event cannot race a concurrent close() freeing the ruleset under
+	 * the tracepoint's BTF read.  This is the last point at which the
+	 * ruleset is guaranteed alive and unshared.
+	 */
+	trace_landlock_create_ruleset(ruleset);
+
 	/* Creates anonymous FD referring to the ruleset. */
 	ruleset_fd = anon_inode_getfd("[landlock-ruleset]", &ruleset_fops,
 				      ruleset, O_RDWR | O_CLOEXEC);
@@ -293,8 +303,8 @@ SYSCALL_DEFINE3(landlock_create_ruleset,
  * Returns an owned ruleset from a FD. It is thus needed to call
  * landlock_put_ruleset() on the return value.
  */
-static struct landlock_ruleset *get_ruleset_from_fd(const int fd,
-						    const fmode_t mode)
+struct landlock_ruleset *landlock_get_ruleset_from_fd(const int fd,
+						      const fmode_t mode)
 {
 	CLASS(fd, ruleset_f)(fd);
 	struct landlock_ruleset *ruleset;
@@ -308,8 +318,6 @@ static struct landlock_ruleset *get_ruleset_from_fd(const int fd,
 	if (!(fd_file(ruleset_f)->f_mode & mode))
 		return ERR_PTR(-EPERM);
 	ruleset = fd_file(ruleset_f)->private_data;
-	if (WARN_ON_ONCE(ruleset->num_layers != 1))
-		return ERR_PTR(-EINVAL);
 	landlock_get_ruleset(ruleset);
 	return ruleset;
 }
@@ -367,7 +375,7 @@ static int add_rule_path_beneath(struct landlock_ruleset *const ruleset,
 		return -ENOMSG;
 
 	/* Checks that allowed_access matches the @ruleset constraints. */
-	mask = ruleset->access_masks[0].fs;
+	mask = ruleset->handled_masks.fs;
 	if ((path_beneath_attr.allowed_access | mask) != mask)
 		return -EINVAL;
 
@@ -408,7 +416,7 @@ static int add_rule_net_port(struct landlock_ruleset *ruleset,
 		return -ENOMSG;
 
 	/* Checks that allowed_access matches the @ruleset constraints. */
-	mask = landlock_get_net_access_mask(ruleset, 0);
+	mask = ruleset->handled_masks.net;
 	if ((net_port_attr.allowed_access | mask) != mask)
 		return -EINVAL;
 
@@ -476,7 +484,7 @@ SYSCALL_DEFINE4(landlock_add_rule, const int, ruleset_fd,
 		return -EINVAL;
 
 	/* Gets and checks the ruleset. */
-	ruleset = get_ruleset_from_fd(ruleset_fd, FMODE_CAN_WRITE);
+	ruleset = landlock_get_ruleset_from_fd(ruleset_fd, FMODE_CAN_WRITE);
 	if (IS_ERR(ruleset))
 		return PTR_ERR(ruleset);
 
@@ -502,11 +510,17 @@ SYSCALL_DEFINE4(landlock_add_rule, const int, ruleset_fd,
  *         - %LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON
  *         - %LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF
  *         - %LANDLOCK_RESTRICT_SELF_TSYNC
+ *         - %LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS
  *
  * This system call enforces a Landlock ruleset on the current thread.
  * Enforcing a ruleset requires that the task has %CAP_SYS_ADMIN in its
  * namespace or is running with no_new_privs.  This avoids scenarios where
  * unprivileged tasks can affect the behavior of privileged children.
+ *
+ * With %LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS, the no_new_privs attribute of the
+ * calling thread is set only once the enforcement of the ruleset succeeded,
+ * which fulfills the above requirement: no_new_privs is set if and only if the
+ * call succeeds.
  *
  * Return: 0 on success, or -errno on failure.  Possible returned errors are:
  *
@@ -514,9 +528,10 @@ SYSCALL_DEFINE4(landlock_add_rule, const int, ruleset_fd,
  * - %EINVAL: @flags contains an unknown bit.
  * - %EBADF: @ruleset_fd is not a file descriptor for the current thread;
  * - %EBADFD: @ruleset_fd is not a ruleset file descriptor;
- * - %EPERM: @ruleset_fd has no read access to the underlying ruleset, or the
- *   current thread is not running with no_new_privs, or it doesn't have
- *   %CAP_SYS_ADMIN in its namespace.
+ * - %EPERM: @ruleset_fd has no read access to the underlying ruleset, or
+ *   %LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS is not set while the current thread
+ *   is not running with no_new_privs and doesn't have %CAP_SYS_ADMIN in its
+ *   namespace.
  * - %E2BIG: The maximum number of stacked rulesets is reached for the current
  *   thread.
  *
@@ -527,32 +542,28 @@ SYSCALL_DEFINE2(landlock_restrict_self, const int, ruleset_fd, const __u32,
 		flags)
 {
 	struct landlock_ruleset *ruleset __free(landlock_put_ruleset) = NULL;
+	struct landlock_domain *new_dom = NULL;
 	struct cred *new_cred;
-	struct landlock_cred_security *new_llcred;
-	bool __maybe_unused log_same_exec, log_new_exec, log_subdomains,
-		prev_log_subdomains;
+	struct landlock_restriction restriction;
+	bool process_wide;
+	int err;
 
 	if (!is_initialized())
 		return -EOPNOTSUPP;
-
-	/*
-	 * Similar checks as for seccomp(2), except that an -EPERM may be
-	 * returned.
-	 */
-	if (!task_no_new_privs(current) &&
-	    !ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN))
-		return -EPERM;
 
 	if ((flags | LANDLOCK_MASK_RESTRICT_SELF) !=
 	    LANDLOCK_MASK_RESTRICT_SELF)
 		return -EINVAL;
 
-	/* Translates "off" flag to boolean. */
-	log_same_exec = !(flags & LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF);
-	/* Translates "on" flag to boolean. */
-	log_new_exec = !!(flags & LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON);
-	/* Translates "off" flag to boolean. */
-	log_subdomains = !(flags & LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF);
+	/*
+	 * Similar checks as for seccomp(2), except that an -EPERM may be
+	 * returned.  LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS fulfills this
+	 * requirement.
+	 */
+	if (!(flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS) &&
+	    !task_no_new_privs(current) &&
+	    !ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN))
+		return -EPERM;
 
 	/*
 	 * It is allowed to set LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF with
@@ -564,7 +575,8 @@ SYSCALL_DEFINE2(landlock_restrict_self, const int, ruleset_fd, const __u32,
 	      (flags & ~LANDLOCK_RESTRICT_SELF_TSYNC) ==
 		      LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF)) {
 		/* Gets and checks the ruleset. */
-		ruleset = get_ruleset_from_fd(ruleset_fd, FMODE_CAN_READ);
+		ruleset = landlock_get_ruleset_from_fd(ruleset_fd,
+						       FMODE_CAN_READ);
 		if (IS_ERR(ruleset))
 			return PTR_ERR(ruleset);
 	}
@@ -574,58 +586,56 @@ SYSCALL_DEFINE2(landlock_restrict_self, const int, ruleset_fd, const __u32,
 	if (!new_cred)
 		return -ENOMEM;
 
-	new_llcred = landlock_cred(new_cred);
-
-#ifdef CONFIG_AUDIT
-	prev_log_subdomains = !new_llcred->log_subdomains_off;
-	new_llcred->log_subdomains_off = !prev_log_subdomains ||
-					 !log_subdomains;
-#endif /* CONFIG_AUDIT */
-
 	/*
 	 * The only case when a ruleset may not be set is if
 	 * LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF is set (optionally with
 	 * LANDLOCK_RESTRICT_SELF_TSYNC) and ruleset_fd is -1.  We could
 	 * optimize this case by not calling commit_creds() if this flag was
 	 * already set, but it is not worth the complexity.
+	 *
+	 * There is no possible race condition while copying and manipulating
+	 * the current credentials because they are dedicated per thread.
 	 */
-	if (ruleset) {
-		/*
-		 * There is no possible race condition while copying and
-		 * manipulating the current credentials because they are
-		 * dedicated per thread.
-		 */
-		struct landlock_ruleset *const new_dom =
-			landlock_merge_ruleset(new_llcred->domain, ruleset);
-		if (IS_ERR(new_dom)) {
-			abort_creds(new_cred);
-			return PTR_ERR(new_dom);
-		}
-
-#ifdef CONFIG_AUDIT
-		new_dom->hierarchy->log_same_exec = log_same_exec;
-		new_dom->hierarchy->log_new_exec = log_new_exec;
-		if ((!log_same_exec && !log_new_exec) || !prev_log_subdomains)
-			new_dom->hierarchy->log_status = LANDLOCK_LOG_DISABLED;
-#endif /* CONFIG_AUDIT */
-
-		/* Replaces the old (prepared) domain. */
-		landlock_put_ruleset(new_llcred->domain);
-		new_llcred->domain = new_dom;
-
-#ifdef CONFIG_AUDIT
-		new_llcred->domain_exec |= BIT(new_dom->num_layers - 1);
-#endif /* CONFIG_AUDIT */
+	err = landlock_prepare_restriction(landlock_cred(new_cred), ruleset,
+					   flags, &restriction);
+	if (err) {
+		abort_creds(new_cred);
+		return err;
 	}
 
+	new_dom = restriction.domain;
+	landlock_apply_restriction(landlock_cred(new_cred), &restriction);
+
 	if (flags & LANDLOCK_RESTRICT_SELF_TSYNC) {
-		const int err = landlock_restrict_sibling_threads(
-			current_cred(), new_cred);
+		err = landlock_restrict_sibling_threads(current_cred(), new_cred,
+							flags);
 		if (err) {
+			/*
+			 * Thread-sync failed (rare), so the new domain is
+			 * aborted instead of committed.  Its creation event
+			 * already fired above, so the imminent free must emit
+			 * the matching free_domain event to keep the
+			 * create/free pair balanced; no special log_status is
+			 * set here.
+			 */
 			abort_creds(new_cred);
 			return err;
 		}
 	}
 
-	return commit_creds(new_cred);
+	/* Sets no_new_privs past the last point of failure. */
+	if (flags & LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS)
+		task_set_no_new_privs(current);
+
+	/* Whole process: thread-sync swept siblings, or single-threaded. */
+	process_wide = (flags & LANDLOCK_RESTRICT_SELF_TSYNC) ||
+		       get_nr_threads(current) == 1;
+	commit_creds(new_cred);
+
+	/* The caller commits last, so its event concludes the operation. */
+	if (ruleset)
+		trace_landlock_enforce_domain(new_dom, true, process_wide,
+					      task_no_new_privs(current));
+
+	return 0;
 }
