@@ -494,7 +494,7 @@ struct bpf_program {
 	struct bpf_object *obj;
 
 	int fd;
-	bool autoload;
+	enum bpf_prog_load_type load_type;
 	bool autoattach;
 	bool sym_global;
 	bool mark_btf_static;
@@ -725,6 +725,7 @@ struct bpf_object {
 
 	bool has_subcalls;
 	bool has_rodata;
+	bool has_dynload_progs;
 
 	struct bpf_gen *gen_loader;
 
@@ -872,11 +873,11 @@ bpf_object__init_prog(struct bpf_object *obj, struct bpf_program *prog,
 	 * autoload set to false.
 	 */
 	if (sec_name[0] == '?') {
-		prog->autoload = false;
+		prog->load_type = BPF_PROG_LOAD_TYPE_DISABLED;
 		/* from now on forget there was ? in section name */
 		sec_name++;
 	} else {
-		prog->autoload = true;
+		prog->load_type = BPF_PROG_LOAD_TYPE_AUTO;
 	}
 
 	prog->autoattach = true;
@@ -1125,9 +1126,10 @@ static bool is_valid_st_ops_program(struct bpf_object *obj,
 }
 
 /* For each struct_ops program P, referenced from some struct_ops map M,
- * enable P.autoload if there are Ms for which M.autocreate is true,
- * disable P.autoload if for all Ms M.autocreate is false.
- * Don't change P.autoload for programs that are not referenced from any maps.
+ * set P's load type to BPF_PROG_LOAD_TYPE_AUTO if there are Ms for which
+ * M.autocreate is true, or to BPF_PROG_LOAD_TYPE_DISABLED if for all Ms
+ * M.autocreate is false.
+ * Don't change P's load type for programs that are not referenced from any maps.
  */
 static int bpf_object_adjust_struct_ops_autoload(struct bpf_object *obj)
 {
@@ -1163,7 +1165,8 @@ static int bpf_object_adjust_struct_ops_autoload(struct bpf_object *obj)
 			}
 		}
 		if (use_cnt)
-			prog->autoload = should_load;
+			prog->load_type = should_load ? BPF_PROG_LOAD_TYPE_AUTO
+				: BPF_PROG_LOAD_TYPE_DISABLED;
 	}
 
 	return 0;
@@ -1242,13 +1245,14 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 
 			if (st_ops->progs[i]) {
 				/* If we had declaratively set struct_ops callback, we need to
-				 * force its autoload to false, because it doesn't have
-				 * a chance of succeeding from POV of the current struct_ops map.
-				 * If this program is still referenced somewhere else, though,
-				 * then bpf_object_adjust_struct_ops_autoload() will update its
-				 * autoload accordingly.
+				 * force its load type to BPF_PROG_LOAD_TYPE_DISABLED, because
+				 * it doesn't have a chance of succeeding from POV of the
+				 * current struct_ops map. If this program is still referenced
+				 * somewhere else, though, then
+				 * bpf_object_adjust_struct_ops_autoload() will update its
+				 * load type accordingly.
 				 */
-				st_ops->progs[i]->autoload = false;
+				st_ops->progs[i]->load_type = BPF_PROG_LOAD_TYPE_DISABLED;
 				st_ops->progs[i] = NULL;
 			}
 
@@ -1287,7 +1291,7 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 			 * if user replaced it with another program or NULL
 			 */
 			if (st_ops->progs[i] && st_ops->progs[i] != prog)
-				st_ops->progs[i]->autoload = false;
+				st_ops->progs[i]->load_type = BPF_PROG_LOAD_TYPE_DISABLED;
 
 			/* Update the value from the shadow type */
 			st_ops->progs[i] = prog;
@@ -3600,7 +3604,7 @@ static bool obj_needs_vmlinux_btf(const struct bpf_object *obj)
 	}
 
 	bpf_object__for_each_program(prog, obj) {
-		if (!prog->autoload)
+		if (prog->load_type == BPF_PROG_LOAD_TYPE_DISABLED)
 			continue;
 		if (prog_needs_vmlinux_btf(prog))
 			return true;
@@ -6194,7 +6198,7 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 			/* no need to apply CO-RE relocation if the program is
 			 * not going to be loaded
 			 */
-			if (!prog->autoload)
+			if (prog->load_type == BPF_PROG_LOAD_TYPE_DISABLED)
 				continue;
 
 			/* adjust insn_idx from section frame of reference to the local
@@ -7154,6 +7158,50 @@ static int bpf_prog_assign_exc_cb(struct bpf_object *obj, struct bpf_program *pr
 	return 0;
 }
 
+#define DYNLOAD_DECL_TAG "loadtype:dynamic"
+
+/*
+ * Check whether a BPF program is annotated with the DYNLOAD_DECL_TAG BTF
+ * decl tag, requesting that it be loaded dynamically after the object load.
+ *
+ * Returns 1 if the tag is present, 0 if it is not, negative error otherwise.
+ */
+static int prog_has_dynload_tag(struct bpf_object *obj, struct bpf_program *prog)
+{
+	int i, n;
+
+	if (!obj->btf)
+		return 0;
+
+	n = btf__type_cnt(obj->btf);
+	for (i = 1; i < n; i++) {
+		const struct btf_type *tag_t, *fn_t;
+
+		tag_t = btf__type_by_id(obj->btf, i);
+		if (!btf_is_decl_tag(tag_t) || btf_decl_tag(tag_t)->component_idx != -1)
+			continue;
+		if (strcmp(btf__str_by_offset(obj->btf, tag_t->name_off),
+			   DYNLOAD_DECL_TAG) != 0)
+			continue;
+
+		/* a decl tag's type field points at the entity it decorates */
+		fn_t = btf__type_by_id(obj->btf, tag_t->type);
+		if (!btf_is_func(fn_t) || btf_func_linkage(fn_t) != BTF_FUNC_GLOBAL) {
+			pr_warn("prog '%s': " DYNLOAD_DECL_TAG
+				" decl tag must be applied to a global function\n",
+				prog->name);
+			return -EINVAL;
+		}
+
+		if (strcmp(btf__str_by_offset(obj->btf, fn_t->name_off), prog->name) != 0)
+			continue;   /* tag belongs to a different program */
+
+		return 1;
+	}
+
+	return 0;
+}
+
 static struct {
 	enum bpf_prog_type prog_type;
 	const char *ctx_name;
@@ -7530,7 +7578,7 @@ static int bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_pat
 		 */
 		if (prog_is_subprog(obj, prog))
 			continue;
-		if (!prog->autoload)
+		if (prog->load_type == BPF_PROG_LOAD_TYPE_DISABLED)
 			continue;
 
 		err = bpf_object__relocate_calls(obj, prog);
@@ -7566,7 +7614,7 @@ static int bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_pat
 		prog = &obj->programs[i];
 		if (prog_is_subprog(obj, prog))
 			continue;
-		if (!prog->autoload)
+		if (prog->load_type == BPF_PROG_LOAD_TYPE_DISABLED)
 			continue;
 
 		/* Process data relos for main programs */
@@ -8062,7 +8110,7 @@ retry_load:
 			log_buf = prog->log_buf;
 			log_buf_size = prog->log_size;
 			own_log_buf = false;
-		} else if (obj->log_buf) {
+		} else if (obj->log_buf && prog->load_type != BPF_PROG_LOAD_TYPE_DYNAMIC) {
 			log_buf = obj->log_buf;
 			log_buf_size = obj->log_size;
 			own_log_buf = false;
@@ -8405,10 +8453,14 @@ bpf_object__load_progs(struct bpf_object *obj, int log_level)
 		prog = &obj->programs[i];
 		if (prog_is_subprog(obj, prog))
 			continue;
-		if (!prog->autoload) {
-			pr_debug("prog '%s': skipped loading\n", prog->name);
+		if (prog->load_type != BPF_PROG_LOAD_TYPE_AUTO) {
+			pr_debug("prog '%s': skipped loading, load type is %s\n",
+				 prog->name,
+				 prog->load_type == BPF_PROG_LOAD_TYPE_DYNAMIC ?
+				 "dynamic" : "disabled");
 			continue;
 		}
+
 		prog->log_level |= log_level;
 
 		if (obj->gen_loader)
@@ -8467,6 +8519,22 @@ static int bpf_object_init_progs(struct bpf_object *obj, const struct bpf_object
 			err = prog->sec_def->prog_setup_fn(prog, prog->sec_def->cookie);
 			if (err < 0) {
 				pr_warn("prog '%s': failed to initialize: %s\n",
+					prog->name, errstr(err));
+				return err;
+			}
+		}
+
+		if (prog_is_subprog(obj, prog))
+			continue;
+
+		err = prog_has_dynload_tag(obj, prog);
+		if (err < 0)
+			return err;
+		if (err > 0) {
+			err = bpf_program__set_load_type(prog, BPF_PROG_LOAD_TYPE_DYNAMIC);
+			if (err) {
+				pr_warn("prog '%s': failed to apply " DYNLOAD_DECL_TAG
+					" decl tag: %s\n",
 					prog->name, errstr(err));
 				return err;
 			}
@@ -9082,15 +9150,22 @@ static void bpf_object_cleanup_btf(struct bpf_object *obj)
 	obj->btf_modules_loaded = false;
 	zfree(&obj->btf_modules);
 
-	/* clean up vmlinux BTF */
-	btf__free(obj->btf_vmlinux);
-	obj->btf_vmlinux = NULL;
+	/* The btf_vmlinux data is needed for dynamically loaded programs,
+	 * so defer freeing it in that case to the end of the object lifetime.
+	 */
+	if (!obj->has_dynload_progs) {
+		btf__free(obj->btf_vmlinux);
+		obj->btf_vmlinux = NULL;
+	}
 }
 
 static void bpf_object_post_load_cleanup(struct bpf_object *obj)
 {
-	/* clean up fd_array */
-	zfree(&obj->fd_array);
+	/* The fd array is needed for dynamically loaded programs,
+	 * so defer freeing it in that case to the end of the object lifetime.
+	 */
+	if (!obj->has_dynload_progs || !obj->fd_array_cnt)
+		zfree(&obj->fd_array);
 
 	/* clean up BTF */
 	bpf_object_cleanup_btf(obj);
@@ -9684,6 +9759,8 @@ void bpf_object__close(struct bpf_object *obj)
 		close(obj->jumptable_maps[i].fd);
 	zfree(&obj->jumptable_maps);
 
+	zfree(&obj->fd_array);
+
 	free(obj);
 }
 
@@ -9806,16 +9883,15 @@ const char *bpf_program__section_name(const struct bpf_program *prog)
 
 bool bpf_program__autoload(const struct bpf_program *prog)
 {
-	return prog->autoload;
+	return prog->load_type == BPF_PROG_LOAD_TYPE_AUTO;
 }
 
-int bpf_program__set_autoload(struct bpf_program *prog, bool autoload)
+int bpf_program__set_autoload(struct bpf_program *prog, enum bpf_prog_load_type autoload)
 {
-	if (prog->obj->state >= OBJ_LOADED)
+	if (autoload != BPF_PROG_LOAD_TYPE_AUTO && autoload != BPF_PROG_LOAD_TYPE_DISABLED)
 		return libbpf_err(-EINVAL);
 
-	prog->autoload = autoload;
-	return 0;
+	return bpf_program__set_load_type(prog, autoload);
 }
 
 bool bpf_program__autoattach(const struct bpf_program *prog)
@@ -15119,7 +15195,7 @@ int bpf_object__attach_skeleton(struct bpf_object_skeleton *s)
 		struct bpf_program *prog = *prog_skel->prog;
 		struct bpf_link **link = prog_skel->link;
 
-		if (!prog->autoload || !prog->autoattach)
+		if (prog->load_type != BPF_PROG_LOAD_TYPE_AUTO || !prog->autoattach)
 			continue;
 
 		/* auto-attaching not supported for this program */
@@ -15228,4 +15304,137 @@ void bpf_object__destroy_skeleton(struct bpf_object_skeleton *s)
 	free(s->maps);
 	free(s->progs);
 	free(s);
+}
+
+static int bpf_program__set_dynamicload(struct bpf_program *prog)
+{
+	struct bpf_object *obj;
+	const char *attach_name;
+
+	obj = prog->obj;
+	if (!obj)
+		return libbpf_err(-EINVAL);
+
+	/* Dynamically-loaded programs are not supported for gen_loader.
+	 * This is because bpf_object_load_prog is not called for
+	 * dynamicload programs, so dynamicload programs are not visible
+	 * to gen_loader. For this reason, prevent calling
+	 * bpf_program__set_dynamicload when gen_loader was used to
+	 * generate a BPF object loader.
+	 * A gen_loader implementation is being called for programs with
+	 * load type BPF_PROG_LOAD_TYPE_AUTO and defines its own model for
+	 * loading BPF programs.
+	 */
+	if (obj->gen_loader)
+		return libbpf_err(-ENOTSUP);
+
+	if (prog_is_subprog(obj, prog))
+		return libbpf_err(-EINVAL);
+
+	attach_name = strchr(prog->sec_name, '/');
+	if (!attach_name || strchr(attach_name, ':')) {
+		/* Only reject programs that require BTF-based attach target
+		 * resolution (indicated by the SEC_ATTACH_BTF flag). Such
+		 * programs need the section name parsed for the attach target
+		 * function name (after '/') and optionally the module name
+		 * (before ':') for libbpf_find_attach_btf_id.
+		 *
+		 * Programs like SEC("classifier"), SEC("socket"), etc. do
+		 * not require BTF attach resolution and can safely use
+		 * dynamic loading despite having no '/' in their section
+		 * name. The BTF guard in libbpf_prepare_prog_load (checking
+		 * SEC_ATTACH_BTF) is the authoritative check; this is an
+		 * early-reject for programs that would fail there.
+		 */
+		long flags = prog->sec_def ?
+			(long)prog->sec_def->cookie : SEC_ATTACH_BTF;
+		if ((flags & SEC_ATTACH_BTF) && !prog->attach_btf_id)
+			return libbpf_err(-EINVAL);
+	}
+
+	obj->has_dynload_progs = true;
+	prog->load_type = BPF_PROG_LOAD_TYPE_DYNAMIC;
+	prog->autoattach = false;
+
+	return 0;
+}
+
+int bpf_program__set_load_type(struct bpf_program *prog, enum bpf_prog_load_type type)
+{
+	if (!prog)
+		return libbpf_err(-EINVAL);
+
+	if (prog->obj->state >= OBJ_LOADED)
+		return libbpf_err(-EINVAL);
+
+	switch (type) {
+	case BPF_PROG_LOAD_TYPE_DYNAMIC:
+		return bpf_program__set_dynamicload(prog);
+	case BPF_PROG_LOAD_TYPE_AUTO:
+	case BPF_PROG_LOAD_TYPE_DISABLED:
+		/*
+		 * Leaving the dynamic state: set_dynamicload() cleared
+		 * autoattach because dynamically loaded programs are attached
+		 * explicitly. Restore the default for the target load type.
+		 */
+		if (prog->load_type == BPF_PROG_LOAD_TYPE_DYNAMIC)
+			prog->autoattach = true;
+		prog->load_type = type;
+		break;
+	default:
+		return libbpf_err(-EINVAL);
+	}
+
+	return 0;
+}
+
+enum bpf_prog_load_type bpf_program__load_type(const struct bpf_program *prog)
+{
+	return prog->load_type;
+}
+
+/*
+ * This function must be called after bpf_object__load_progs.
+ * Dynamically-loaded program data is initialized on object load.
+ * Post-load initialization is not supported.
+ */
+int
+bpf_program__load_dynamically(struct bpf_program *prog, int extra_log_level)
+{
+	int err;
+	struct bpf_object *obj;
+
+	obj = prog->obj;
+	if (!obj || obj->state < OBJ_LOADED)
+		return libbpf_err(-EINVAL);
+
+	if (prog_is_subprog(obj, prog) || prog->load_type != BPF_PROG_LOAD_TYPE_DYNAMIC)
+		return libbpf_err(-EINVAL);
+
+	prog->log_level |= extra_log_level;
+
+	err = bpf_object_load_prog(obj, prog, prog->insns, prog->insns_cnt,
+				   obj->license, obj->kern_version, &prog->fd);
+	if (err) {
+		pr_warn("prog '%s': failed to dynamically load: %d\n", prog->name, err);
+		prog->log_level &= ~extra_log_level;
+		return err;
+	}
+
+	prog->log_level &= ~extra_log_level;
+	return 0;
+}
+
+int bpf_program__unload_dynamically(struct bpf_program *prog)
+{
+	int err;
+
+	if (!prog || prog->load_type != BPF_PROG_LOAD_TYPE_DYNAMIC)
+		return libbpf_err(-EINVAL);
+
+	/* Close the file descriptor but retain the program's data to
+	 * support reloading the program if it is required again.
+	 */
+	err = zclose(prog->fd);
+	return err ? libbpf_err(-errno) : 0;
 }

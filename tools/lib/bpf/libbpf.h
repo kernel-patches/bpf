@@ -356,6 +356,19 @@ LIBBPF_API int libbpf_attach_type_by_name(const char *name,
 LIBBPF_API int libbpf_find_vmlinux_btf_id(const char *name,
 					  enum bpf_attach_type attach_type);
 
+/*
+ * The program load type:
+ *
+ * - BPF_PROG_LOAD_TYPE_DISABLED: the program is not loaded.
+ * - BPF_PROG_LOAD_TYPE_AUTO: the program is autoloaded when the bpf_object is loaded.
+ * - BPF_PROG_LOAD_TYPE_DYNAMIC: the program is loaded and attached dynamically.
+ */
+enum bpf_prog_load_type {
+	BPF_PROG_LOAD_TYPE_DISABLED = 0,
+	BPF_PROG_LOAD_TYPE_AUTO,
+	BPF_PROG_LOAD_TYPE_DYNAMIC,
+};
+
 /* Accessors of bpf_program */
 struct bpf_program;
 
@@ -376,7 +389,18 @@ LIBBPF_API void bpf_program__set_ifindex(struct bpf_program *prog,
 LIBBPF_API const char *bpf_program__name(const struct bpf_program *prog);
 LIBBPF_API const char *bpf_program__section_name(const struct bpf_program *prog);
 LIBBPF_API bool bpf_program__autoload(const struct bpf_program *prog);
-LIBBPF_API int bpf_program__set_autoload(struct bpf_program *prog, bool autoload);
+/**
+ * @brief **bpf_program__set_autoload()** is retained for backwards
+ * compatibility; **bpf_program__set_load_type()** is the preferred API.
+ * The enum's numbering (DISABLED=0, AUTO=1, DYNAMIC=2) matches the previous
+ * bool semantics (false=0, true=1), so existing bool callers keep compiling
+ * and behaving unchanged. Only BPF_PROG_LOAD_TYPE_AUTO and
+ * BPF_PROG_LOAD_TYPE_DISABLED are accepted, preserving the original
+ * autoload on/off meaning; use bpf_program__set_load_type() to set
+ * BPF_PROG_LOAD_TYPE_DYNAMIC.
+ */
+LIBBPF_API int bpf_program__set_autoload(struct bpf_program *prog,
+					 enum bpf_prog_load_type autoload);
 LIBBPF_API bool bpf_program__autoattach(const struct bpf_program *prog);
 LIBBPF_API void bpf_program__set_autoattach(struct bpf_program *prog, bool autoattach);
 
@@ -2077,6 +2101,12 @@ LIBBPF_API int libbpf_unregister_prog_handler(int handler_id);
  * @return program FD (>= 0) on success; negative error code on failure
  */
 LIBBPF_API int bpf_program__clone(struct bpf_program *prog, const struct bpf_prog_load_opts *opts);
+
+LIBBPF_API int bpf_program__set_load_type(struct bpf_program *prog,
+					  enum bpf_prog_load_type loadtype);
+LIBBPF_API enum bpf_prog_load_type bpf_program__load_type(const struct bpf_program *prog);
+LIBBPF_API int bpf_program__load_dynamically(struct bpf_program *prog, int extra_log_level);
+LIBBPF_API int bpf_program__unload_dynamically(struct bpf_program *prog);
 
 #ifdef __cplusplus
 } /* extern "C" */
