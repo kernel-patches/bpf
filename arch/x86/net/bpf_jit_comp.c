@@ -1838,6 +1838,164 @@ static int emit_spectre_bhb_barrier(u8 **pprog, u8 *ip,
 	return 0;
 }
 
+/* The kernel ABI hands the first six eightbytes of arguments to registers. */
+static const u32 x86_arg_reg[6] = {
+	BPF_REG_1, BPF_REG_2, BPF_REG_3, BPF_REG_4, BPF_REG_5, X86_REG_R9,
+};
+
+/* Fill argument positions based on the kernel calling convention. */
+static int kfunc_arg_layout(const struct btf_func_model *fm, u8 *pos, int max)
+{
+	int i, k, nregs = 0, nstack = 0, slot = 0;
+
+	for (i = 0; i < fm->nr_args; i++) {
+		int n = (fm->arg_size[i] + 7) / 8;
+
+		if (slot + n > max)
+			return -EINVAL;
+		if (nregs + n <= 6)
+			for (k = 0; k < n; k++)
+				pos[slot++] = nregs++;
+		else
+			for (k = 0; k < n; k++)
+				pos[slot++] = 6 + nstack++;
+	}
+	return slot;
+}
+
+static u16 kfunc_arg_stack_bytes(const struct bpf_prog *prog)
+{
+	return bpf_jit_kfunc_stack_slots(prog, 6, kfunc_arg_layout) * 8;
+}
+
+static void emit_arg_pos_load(u8 **pprog, u32 reg, u8 pos, s32 stack_base)
+{
+	if (pos < 6)
+		emit_mov_reg(pprog, true, reg, x86_arg_reg[pos]);
+	else
+		emit_ldx(pprog, BPF_DW, reg, BPF_REG_FP,
+			 stack_base + (pos - 6) * 8);
+}
+
+static void emit_arg_pos_store(u8 **pprog, u8 pos, u32 reg, s32 stack_base)
+{
+	if (pos < 6)
+		emit_mov_reg(pprog, true, x86_arg_reg[pos], reg);
+	else
+		emit_stx(pprog, BPF_DW, BPF_REG_FP, reg,
+			 stack_base + (pos - 6) * 8);
+}
+
+static void emit_arg_pos_move(u8 **pprog, u8 to, u8 from, s32 stack_base)
+{
+	if (from < 6) {
+		emit_arg_pos_store(pprog, to, x86_arg_reg[from], stack_base);
+		return;
+	}
+	if (to < 6) {
+		emit_arg_pos_load(pprog, x86_arg_reg[to], from, stack_base);
+		return;
+	}
+	emit_arg_pos_load(pprog, AUX_REG, from, stack_base);
+	emit_arg_pos_store(pprog, to, AUX_REG, stack_base);
+}
+
+/*
+ * Put the arguments of a kfunc call where the kernel ABI expects them, given
+ * that the BPF ABI has already put them in its own slots. Returns the number
+ * of emitted bytes, or a negative error.
+ *
+ * This is the parallel move problem: emit every move whose destination no
+ * longer holds a value, then break each remaining cycle with one temporary.
+ * See Rideau, Serpette and Leroy, "Tilting at Windmills with Coq: Formal
+ * Verification of a Compilation Algorithm for Parallel Moves", Journal of
+ * Automated Reasoning 45(2), 2010.
+ *
+ * For
+ *
+ *   u64 f(u64 a, u64 b, u64 c, u64 d, u64 e, struct pair s);
+ *
+ *     slot     0 1 2 3 4 5 6
+ *     position 0 1 2 3 4 6 7
+ *     final    0 1 2 3 4 ? 6 7
+ *
+ * the BPF ABI splits s between the last register and the stack while the
+ * kernel one takes it wholly on the stack, so each of its eightbytes moves up
+ * one position, the last one first, and position 5 (R9) is left unused.
+ * Adding an argument after s,
+ *
+ *   u64 g(u64 a, u64 b, u64 c, u64 d, u64 e, struct pair s, u64 f);
+ *
+ *     slot     0 1 2 3 4 5 6 7
+ *     position 0 1 2 3 4 6 7 5
+ *     final    0 1 2 3 4 5 6 7
+ *
+ * gives f the register s vacated, and 5 -> 6 -> 7 -> 5 is a cycle: slot 5
+ * waits in PARK_REG while slots 7 and 6 move, and is stored last. AUX_REG
+ * carries a value between two stack positions and cannot be the one that
+ * waits, while RAX is dead before a call, being where the return value
+ * arrives.
+ */
+#define PARK_REG BPF_REG_0
+
+static int emit_kfunc_args(const struct btf_func_model *fm, u8 **pprog,
+			   s32 stack_base)
+{
+	u8 *prog = *pprog, *start = prog;
+	bool done[MAX_BPF_FUNC_ARGS] = {};
+	u8 pos[MAX_BPF_FUNC_ARGS];
+	int i, j, n, todo = 0, parked = -1;
+
+	n = kfunc_arg_layout(fm, pos, ARRAY_SIZE(pos));
+	if (n < 0)
+		return 0;
+	for (i = 0; i < n; i++)
+		if (pos[i] != i)
+			todo++;
+	if (!todo)
+		return 0;
+
+	while (todo) {
+		bool moved = false;
+
+		for (i = 0; i < n; i++) {
+			if (done[i] || pos[i] == i)
+				continue;
+			/* Writing there would lose a value still to be moved. */
+			for (j = 0; j < n; j++)
+				if (!done[j] && j != parked && pos[j] != j && j == pos[i])
+					break;
+			if (j < n)
+				continue;
+			if (i == parked) {
+				emit_arg_pos_store(&prog, pos[i], PARK_REG, stack_base);
+				parked = -1;
+			} else {
+				emit_arg_pos_move(&prog, pos[i], i, stack_base);
+			}
+			done[i] = true;
+			todo--;
+			moved = true;
+		}
+		if (moved)
+			continue;
+
+		/* Every move left would clobber a value: break a cycle. */
+		if (parked >= 0)
+			return -EFAULT;
+		for (i = 0; i < n; i++)
+			if (!done[i] && pos[i] != i)
+				break;
+		if (i == n)
+			return -EFAULT;
+		emit_arg_pos_load(&prog, PARK_REG, i, stack_base);
+		parked = i;
+	}
+
+	*pprog = prog;
+	return prog - start;
+}
+
 /*
  * Rebase the __arena args of a kfunc call to arena kernel addresses,
  * rN = kern_vm_start + (u32)rN, with R12 holding kern_vm_start. A nullable
@@ -1849,11 +2007,21 @@ static int emit_kfunc_arena_args(struct bpf_prog *bpf_prog,
 {
 	u8 *prog = *pprog;
 	u8 *start = prog;
-	int i;
+	int i, slot;
 
-	for (i = 0; i < min_t(int, fm->nr_args, MAX_BPF_FUNC_REG_ARGS); i++) {
+	for (i = 0, slot = 0; i < fm->nr_args; i++) {
+		u32 arg_regs = (fm->arg_size[i] + 7) / 8;
 		u8 flags = fm->arg_flags[i];
-		u32 reg = BPF_REG_1 + i;
+		u32 reg;
+
+		if (slot + arg_regs > MAX_BPF_FUNC_REG_ARGS) {
+			/* The verifier refuses an arena pointer past the registers. */
+			if (WARN_ON_ONCE(flags & BTF_FMODEL_ARENA_ARG))
+				return -EFAULT;
+			break;
+		}
+		reg = BPF_REG_1 + slot;
+		slot += arg_regs;
 
 		if (!(flags & BTF_FMODEL_ARENA_ARG))
 			continue;
@@ -1988,6 +2156,7 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 	 * Arg 6 goes into r9 register, not on stack.
 	 */
 	outgoing_rsp = out_stack_arg_cnt > 1 ? (out_stack_arg_cnt - 1) * 8 : 0;
+	outgoing_rsp = max(outgoing_rsp, kfunc_arg_stack_bytes(bpf_prog));
 	if (bpf_prog->aux->exception_boundary)
 		bpf_prog->aux->stack_arg_sp_adjust = outgoing_rsp;
 	emit_sub_rsp(&prog, outgoing_rsp);
@@ -2833,6 +3002,11 @@ populate_extable:
 				if (!fm)
 					return -EINVAL;
 				err = emit_kfunc_arena_args(bpf_prog, fm, &prog);
+				if (err < 0)
+					return err;
+				ip += err;
+				err = emit_kfunc_args(fm, &prog,
+						      outgoing_arg_base - outgoing_rsp);
 				if (err < 0)
 					return err;
 				ip += err;
@@ -4345,6 +4519,11 @@ bool bpf_jit_supports_kfunc_call(void)
 }
 
 bool bpf_jit_supports_kfunc_ret_reg_pair(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_kfunc_arg_slot(u32 slots_used, u32 nslots, u32 align)
 {
 	return true;
 }
