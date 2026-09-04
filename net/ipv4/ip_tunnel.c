@@ -512,14 +512,15 @@ EXPORT_SYMBOL_GPL(ip_tunnel_encap_setup);
 static int tnl_update_pmtu(struct net_device *dev, struct sk_buff *skb,
 			    struct rtable *rt, __be16 df,
 			    const struct iphdr *inner_iph,
-			    int tunnel_hlen, __be32 dst, bool md)
+			    int tunnel_hlen, __be32 dst, bool md,
+			    int encap_hlen)
 {
 	struct ip_tunnel *tunnel = netdev_priv(dev);
 	int pkt_size;
 	int mtu;
 
 	tunnel_hlen = md ? tunnel_hlen : tunnel->hlen;
-	pkt_size = skb->len - tunnel_hlen;
+	pkt_size = skb->len + encap_hlen - tunnel_hlen;
 	pkt_size -= dev->type == ARPHRD_ETHER ? dev->hard_header_len : 0;
 
 	if (df) {
@@ -629,7 +630,7 @@ void ip_md_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 	if (test_bit(IP_TUNNEL_DONT_FRAGMENT_BIT, key->tun_flags))
 		df = htons(IP_DF);
 	if (tnl_update_pmtu(dev, skb, rt, df, inner_iph, tunnel_hlen,
-			    key->u.ipv4.dst, true)) {
+			    key->u.ipv4.dst, true, 0)) {
 		ip_rt_put(rt);
 		goto tx_error;
 	}
@@ -671,6 +672,7 @@ void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 {
 	struct ip_tunnel *tunnel = netdev_priv(dev);
 	struct ip_tunnel_info *tun_info = NULL;
+	struct ip_tunnel_encap ipencap;
 	const struct iphdr *inner_iph;
 	unsigned int max_headroom;	/* The extra header space needed */
 	struct rtable *rt = NULL;		/* Route to the other host */
@@ -680,6 +682,7 @@ void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 	bool md = false;
 	bool connected;
 	int err_count;
+	int encap_hlen;
 	u8 tos, ttl;
 	__be32 dst;
 	__be16 df;
@@ -765,7 +768,10 @@ void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 			    tunnel->net, READ_ONCE(tunnel->parms.link),
 			    tunnel->fwmark, skb_get_hash(skb), 0);
 
-	if (ip_tunnel_encap(skb, &tunnel->encap, &protocol, &fl4) < 0)
+	/* Snapshot encap; ipgre_changelink() can update it concurrently. */
+	ipencap = data_race(tunnel->encap);
+	encap_hlen = ip_encap_hlen(&ipencap);
+	if (encap_hlen < 0)
 		goto tx_error;
 
 	if (connected && md) {
@@ -803,7 +809,8 @@ void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 	if (payload_protocol == htons(ETH_P_IP) && !tunnel->ignore_df)
 		df |= (inner_iph->frag_off & htons(IP_DF));
 
-	if (tnl_update_pmtu(dev, skb, rt, df, inner_iph, 0, 0, false)) {
+	if (tnl_update_pmtu(dev, skb, rt, df, inner_iph, 0, 0, false,
+			    encap_hlen)) {
 		ip_rt_put(rt);
 		goto tx_error;
 	}
@@ -834,7 +841,7 @@ void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 	}
 
 	max_headroom = LL_RESERVED_SPACE(rt->dst.dev) + sizeof(struct iphdr)
-			+ rt->dst.header_len + ip_encap_hlen(&tunnel->encap);
+			+ rt->dst.header_len + encap_hlen;
 
 	if (skb_cow_head(skb, max_headroom)) {
 		ip_rt_put(rt);
@@ -844,6 +851,11 @@ void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 	}
 
 	ip_tunnel_adj_headroom(dev, max_headroom);
+
+	if (ip_tunnel_encap(skb, &ipencap, &protocol, &fl4) < 0) {
+		ip_rt_put(rt);
+		goto tx_error;
+	}
 
 	iptunnel_xmit(NULL, rt, skb, fl4.saddr, fl4.daddr, protocol, tos, ttl,
 		      df, !net_eq(tunnel->net, dev_net(dev)), 0);
