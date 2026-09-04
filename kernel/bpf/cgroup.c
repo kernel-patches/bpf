@@ -814,7 +814,7 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 	struct bpf_cgroup_storage *storage[MAX_BPF_CGROUP_STORAGE_TYPE] = {};
 	struct bpf_cgroup_storage *new_storage[MAX_BPF_CGROUP_STORAGE_TYPE] = {};
 	struct bpf_cgroup_storage *old_storage[MAX_BPF_CGROUP_STORAGE_TYPE] = {};
-	struct bpf_prog *new_prog = prog ? : link->link.prog;
+	struct bpf_prog *new_prog = prog ? : (link ? link->link.prog : NULL);
 	enum cgroup_bpf_attach_type atype;
 	u32 old_flags, old_pl_flags;
 	struct bpf_prog_list *pl;
@@ -833,6 +833,8 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 		return -EINVAL;
 	if (!!replace_prog != !!(flags & BPF_F_REPLACE))
 		/* replace_prog implies BPF_F_REPLACE, and vice versa */
+		return -EINVAL;
+	if (!new_prog)
 		return -EINVAL;
 
 	atype = bpf_cgroup_atype_find(type, new_prog->aux->attach_btf_id);
