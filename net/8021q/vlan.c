@@ -218,7 +218,7 @@ static int register_vlan_device(struct net_device *real_dev, u16 vlan_id)
 	struct net *net = dev_net(real_dev);
 	struct vlan_net *vn = net_generic(net, vlan_net_id);
 	char name[IFNAMSIZ];
-	int err;
+	int err, len;
 
 	if (vlan_id >= VLAN_VID_MASK)
 		return -ERANGE;
@@ -232,7 +232,9 @@ static int register_vlan_device(struct net_device *real_dev, u16 vlan_id)
 	switch (vn->name_type) {
 	case VLAN_NAME_TYPE_RAW_PLUS_VID:
 		/* name will look like:	 eth1.0005 */
-		snprintf(name, IFNAMSIZ, "%s.%.4i", real_dev->name, vlan_id);
+		len = snprintf(name, IFNAMSIZ, "%s.%.4i", real_dev->name, vlan_id);
+		if (len >= sizeof(name))
+			err = -ENAMETOOLONG;
 		break;
 	case VLAN_NAME_TYPE_PLUS_VID_NO_PAD:
 		/* Put our vlan.VID in the name.
@@ -244,7 +246,9 @@ static int register_vlan_device(struct net_device *real_dev, u16 vlan_id)
 		/* Put our vlan.VID in the name.
 		 * Name will look like:	 eth0.5
 		 */
-		snprintf(name, IFNAMSIZ, "%s.%i", real_dev->name, vlan_id);
+		len = snprintf(name, IFNAMSIZ, "%s.%i", real_dev->name, vlan_id);
+		if (len >= sizeof(name))
+			err = -ENAMETOOLONG;
 		break;
 	case VLAN_NAME_TYPE_PLUS_VID:
 		/* Put our vlan.VID in the name.
@@ -253,6 +257,9 @@ static int register_vlan_device(struct net_device *real_dev, u16 vlan_id)
 	default:
 		snprintf(name, IFNAMSIZ, "vlan%.4i", vlan_id);
 	}
+
+	if (err)
+		return err;
 
 	new_dev = alloc_netdev(sizeof(struct vlan_dev_priv), name,
 			       NET_NAME_UNKNOWN, vlan_setup);
