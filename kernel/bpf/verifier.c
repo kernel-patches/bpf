@@ -8469,16 +8469,8 @@ found:
 	if (base_type(reg->type) != PTR_TO_BTF_ID)
 		return 0;
 
-	if (compatible == &mem_types) {
-		if (!(arg_type & MEM_RDONLY)) {
-			verbose(env,
-				"%s() may write into memory pointed by %s type=%s\n",
-				meta->func_name,
-				reg_arg_name(env, argno), reg_type_str(env, reg->type));
-			return -EACCES;
-		}
+	if (compatible == &mem_types)
 		return 0;
-	}
 
 	switch ((int)reg->type) {
 	case PTR_TO_BTF_ID:
