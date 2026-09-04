@@ -58,6 +58,19 @@ properties:
           - mediatek,mt8188-vencsys
           - mediatek,mt8188-wpesys
           - mediatek,mt8188-wpesys-vpp0
+          - mediatek,mt8189-dbg-ao
+          - mediatek,mt8189-dem
+          - mediatek,mt8189-dvfsrc-top
+          - mediatek,mt8189-iic-wrap-e
+          - mediatek,mt8189-iic-wrap-en
+          - mediatek,mt8189-iic-wrap-s
+          - mediatek,mt8189-iic-wrap-ws
+          - mediatek,mt8189-scp-clk
+          - mediatek,mt8189-scp-i2c-clk
+          - mediatek,mt8189-ufscfg-ao
+          - mediatek,mt8189-ufscfg-pdn
+          - mediatek,mt8189-vlpcfg
+          - mediatek,mt8189-vlpcfg-ao
           - mediatek,mt8192-camsys
           - mediatek,mt8192-camsys_rawa
           - mediatek,mt8192-camsys_rawb
@@ -134,6 +147,8 @@ allOf:
               - mediatek,mt8188-imgsys1-dip-nr
               - mediatek,mt8188-imgsys1-dip-top
               - mediatek,mt8188-ipesys
+              - mediatek,mt8189-ufscfg-ao
+              - mediatek,mt8189-ufscfg-pdn
     then:
       required:
         - '#reset-cells'

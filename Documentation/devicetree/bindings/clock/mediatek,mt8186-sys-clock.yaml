@@ -35,6 +35,11 @@ properties:
           - mediatek,mt8188-infracfg-ao
           - mediatek,mt8188-pericfg-ao
           - mediatek,mt8188-topckgen
+          - mediatek,mt8189-apmixedsys
+          - mediatek,mt8189-infra-ao
+          - mediatek,mt8189-peri-ao
+          - mediatek,mt8189-topckgen
+          - mediatek,mt8189-vlpckgen
           - mediatek,mt8192-apmixedsys
           - mediatek,mt8192-infracfg
           - mediatek,mt8192-pericfg
