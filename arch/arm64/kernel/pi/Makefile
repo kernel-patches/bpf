@@ -18,6 +18,8 @@ CFLAGS_map_range.o += -mstrict-align
 KBUILD_CFLAGS	:= $(filter-out $(CC_FLAGS_SCS), $(KBUILD_CFLAGS))
 # disable LTO
 KBUILD_CFLAGS	:= $(filter-out $(CC_FLAGS_LTO), $(KBUILD_CFLAGS))
+# the discard section holds absolute relocations, which relacheck rejects
+KBUILD_CFLAGS	:= $(filter-out $(CFI_PREFIX_CFLAGS), $(KBUILD_CFLAGS))
 
 hostprogs	:= relacheck
 

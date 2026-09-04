@@ -189,7 +189,8 @@ config ARM64
 	select HAVE_DYNAMIC_FTRACE_WITH_DIRECT_CALLS \
 		if DYNAMIC_FTRACE_WITH_ARGS
 	select HAVE_DYNAMIC_FTRACE_WITH_CALL_OPS \
-		if (DYNAMIC_FTRACE_WITH_ARGS && !CFI && \
+		if (DYNAMIC_FTRACE_WITH_ARGS && \
+		    (!CFI || ARM64_CFI_PERMITS_CALL_OPS) && \
 		    (CC_IS_CLANG || !CC_OPTIMIZE_FOR_SIZE))
 	select FTRACE_MCOUNT_USE_PATCHABLE_FUNCTION_ENTRY \
 		if DYNAMIC_FTRACE_WITH_ARGS
@@ -275,8 +276,20 @@ config GCC_SUPPORTS_DYNAMIC_FTRACE_WITH_ARGS
 	def_bool CC_IS_GCC
 	depends on $(cc-option,-fpatchable-function-entry=2)
 
+config CC_HAS_PATCHABLE_FUNCTION_ENTRY_SECTION
+	# The section argument needs clang 21 or later:
+	# https://github.com/llvm/llvm-project/pull/131230
+	def_bool $(cc-option,-fpatchable-function-entry=1$(comma)1$(comma).discard.patchable_function_entries)
+
+config ARM64_CFI_PERMITS_CALL_OPS
+	def_bool y
+	depends on CFI
+	depends on CC_HAS_PATCHABLE_FUNCTION_ENTRY_SECTION
+	depends on !RUST
+
 config ARM64_FUNCTION_PREFIX_NOPS
 	int
+	default 3 if DYNAMIC_FTRACE_WITH_CALL_OPS && CFI
 	default 2 if DYNAMIC_FTRACE_WITH_CALL_OPS
 	default 0
 
