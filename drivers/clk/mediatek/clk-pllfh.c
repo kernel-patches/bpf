@@ -244,6 +244,14 @@ static void mtk_clk_cleanup_pllfhs(void __iomem *iomem_base,
 		clk_data->hws[pll->id] = ERR_PTR(-ENOENT);
 	}
 
+	for (i = 0; i < num_fhs; i++) {
+		struct mtk_pllfh_data *pllfh = &pllfhs[i];
+
+		pllfh->state.fh_enable = 0;
+		pllfh->state.ssc_rate = 0;
+		pllfh->state.base = NULL;
+	}
+
 	if (fhctl_base)
 		iounmap(fhctl_base);
 
