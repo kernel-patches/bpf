@@ -428,7 +428,7 @@ void tcp_ao_time_wait(struct tcp_timewait_sock *tcptw, struct tcp_sock *tp)
 			omem += tcp_ao_sizeof_key(key);
 		}
 
-		refcount_inc(&ao_info->refcnt);
+		rcu_assign_pointer(tp->ao_info, NULL);
 		atomic_sub(omem, &(((struct sock *)tp)->sk_omem_alloc));
 		rcu_assign_pointer(tcptw->ao_info, ao_info);
 	} else {
