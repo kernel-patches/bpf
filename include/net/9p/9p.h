@@ -120,7 +120,7 @@ void _p9_debug(enum p9_debug_flags level, const char *func,
  * @P9_RCREATE: response with file access information
  * @P9_TREAD: request to transfer data from a file or directory
  * @P9_RREAD: response with data requested
- * @P9_TWRITE: reuqest to transfer data to a file
+ * @P9_TWRITE: request to transfer data to a file
  * @P9_RWRITE: response with out much data was transferred to file
  * @P9_TCLUNK: forget about a handle to an entity within the file system
  * @P9_RCLUNK: response when server has forgotten about the handle

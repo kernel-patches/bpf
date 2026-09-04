@@ -97,7 +97,7 @@ struct p9_req_t {
  * @proto_version: 9P protocol version to use
  * @trans_mod: module API instantiated with this client
  * @status: connection state
- * @trans: tranport instance state and API
+ * @trans: transport instance state and API
  * @fids: All active FID handles
  * @reqs: All active requests.
  * @name: node name used as client id
