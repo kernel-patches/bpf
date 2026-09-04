@@ -151,8 +151,7 @@ static int clk_mt6795_apmixed_probe(struct platform_device *pdev)
 	if (!clk_data)
 		return -ENOMEM;
 
-	fhctl_parse_dt(fhctl_node, pllfhs, ARRAY_SIZE(pllfhs));
-	ret = mtk_clk_register_pllfhs(dev, plls, ARRAY_SIZE(plls),
+	ret = mtk_clk_register_pllfhs(dev, fhctl_node, plls, ARRAY_SIZE(plls),
 				      pllfhs, ARRAY_SIZE(pllfhs), clk_data);
 	if (ret)
 		goto free_clk_data;

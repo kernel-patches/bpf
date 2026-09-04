@@ -156,9 +156,8 @@ static int clk_mt8173_apmixed_probe(struct platform_device *pdev)
 		goto unmap_io;
 	}
 
-	fhctl_parse_dt(fhctl_node, pllfhs, ARRAY_SIZE(pllfhs));
-	r = mtk_clk_register_pllfhs(dev, plls, ARRAY_SIZE(plls), pllfhs,
-				    ARRAY_SIZE(pllfhs), clk_data);
+	r = mtk_clk_register_pllfhs(dev, fhctl_node, plls, ARRAY_SIZE(plls),
+				    pllfhs, ARRAY_SIZE(pllfhs), clk_data);
 	if (r)
 		goto free_clk_data;
 

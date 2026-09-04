@@ -69,8 +69,9 @@ static struct mtk_pllfh_data *get_pllfh_by_id(struct mtk_pllfh_data *pllfhs,
 	return NULL;
 }
 
-void fhctl_parse_dt(const u8 *compatible_node, struct mtk_pllfh_data *pllfhs,
-		    int num_fhs)
+static void fhctl_parse_dt(const u8 *compatible_node,
+			   struct mtk_pllfh_data *pllfhs,
+			   int num_fhs)
 {
 	void __iomem *base;
 	struct device_node *node;
@@ -121,7 +122,6 @@ err:
 	iounmap(base);
 	goto out_node_put;
 }
-EXPORT_SYMBOL_GPL(fhctl_parse_dt);
 
 static int pllfh_init(struct mtk_fh *fh, struct mtk_pllfh_data *pllfh_data)
 {
@@ -252,7 +252,7 @@ static void mtk_clk_cleanup_pllfhs(void __iomem *iomem_base,
 }
 
 
-int mtk_clk_register_pllfhs(struct device *dev,
+int mtk_clk_register_pllfhs(struct device *dev, const u8 *fhctl_node,
 			    const struct mtk_pll_data *plls, int num_plls,
 			    struct mtk_pllfh_data *pllfhs, int num_fhs,
 			    struct clk_hw_onecell_data *clk_data)
@@ -260,6 +260,8 @@ int mtk_clk_register_pllfhs(struct device *dev,
 	void __iomem *base, *fhctl_base = NULL;
 	int i;
 	struct clk_hw *hw;
+
+	fhctl_parse_dt(fhctl_node, pllfhs, num_fhs);
 
 	base = of_iomap(dev->of_node, 0);
 	if (!base) {
