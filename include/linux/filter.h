@@ -1239,6 +1239,8 @@ bool bpf_jit_supports_percpu_insn(void);
 bool bpf_jit_supports_kfunc_call(void);
 bool bpf_jit_supports_kfunc_ret_reg_pair(void);
 bool bpf_jit_supports_kfunc_arg_slot(u32 slots_used, u32 nslots, u32 align);
+u16 bpf_jit_kfunc_stack_slots(const struct bpf_prog *prog, u32 nr_regs,
+			      int (*layout)(const struct btf_func_model *fm, u8 *pos, int max));
 bool bpf_jit_supports_stack_args(void);
 bool bpf_jit_supports_arena_args(void);
 bool bpf_jit_supports_far_kfunc_call(void);

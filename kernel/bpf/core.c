@@ -3303,6 +3303,37 @@ bool __weak bpf_jit_supports_kfunc_arg_slot(u32 slots_used, u32 nslots, u32 alig
 	return false;
 }
 
+/*
+ * The most outgoing stack eightbytes any kfunc call in @prog needs.
+ * @layout writes a position per eightbyte and returns how many, or an error.
+ * @nr_regs is how many of those positions are argument registers.
+ */
+u16 bpf_jit_kfunc_stack_slots(const struct bpf_prog *prog, u32 nr_regs,
+			      int (*layout)(const struct btf_func_model *fm, u8 *pos, int max))
+{
+	const struct bpf_insn *insn = prog->insnsi;
+	u8 pos[MAX_BPF_FUNC_ARGS];
+	int i, k, n, slots = 0;
+
+	for (i = 0; i < prog->len; i++, insn++) {
+		const struct btf_func_model *fm;
+
+		if (insn->code != (BPF_JMP | BPF_CALL) ||
+		    insn->src_reg != BPF_PSEUDO_KFUNC_CALL)
+			continue;
+		fm = bpf_jit_find_kfunc_model(prog, insn);
+		if (!fm)
+			continue;
+		n = layout(fm, pos, ARRAY_SIZE(pos));
+		if (n < 0)
+			continue;
+		for (k = 0; k < n; k++)
+			if (pos[k] >= nr_regs)
+				slots = max(slots, pos[k] - (int)nr_regs + 1);
+	}
+	return slots;
+}
+
 bool __weak bpf_jit_supports_stack_args(void)
 {
 	return false;
