@@ -8103,6 +8103,14 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	for (i = 0, slots_used = 0; i < nargs; i++) {
 		u32 tags = 0;
 
+		if (slots_used >= MAX_BPF_FUNC_ARGS) {
+			if (!is_global)
+				return -EINVAL;
+			bpf_log(log, "Arguments of %s() need more than %d argument slots\n",
+				tname, MAX_BPF_FUNC_ARGS);
+			return -EINVAL;
+		}
+
 		err = btf_scan_decl_tags(env, btf, fn_t, i, is_global, &tags);
 		if (err)
 			return err;
@@ -8231,6 +8239,31 @@ skip_pointer:
 			sub->args[slots_used++].arg_type = ARG_ANYTHING;
 			continue;
 		}
+		if (btf_type_is_struct(t)) {
+			u32 nslots;
+
+			if (!t->size || t->size > 2 * BPF_REG_SIZE) {
+				if (!is_global)
+					return -EINVAL;
+				bpf_log(log,
+					"Arg#%d type %s in %s() has size %u, only 1 to %d bytes "
+					"can be passed by value\n",
+					i, btf_type_str(t), tname, t->size, 2 * BPF_REG_SIZE);
+				return -EINVAL;
+			}
+			if (!btf_struct_is_composed_of(env, btf, t, BTF_MEMBER_SCALAR)) {
+				if (!is_global)
+					return -EINVAL;
+				bpf_log(log, "Arg#%d type %s in %s() is not composed of scalars\n",
+					i, btf_type_str(t), tname);
+				return -EINVAL;
+			}
+
+			nslots = (t->size + BPF_REG_SIZE - 1) / BPF_REG_SIZE;
+			while (nslots--)
+				sub->args[slots_used++].arg_type = ARG_ANYTHING;
+			continue;
+		}
 		if (!is_global)
 			return -EINVAL;
 		bpf_log(log, "Arg#%d type %s in %s() is not supported yet.\n",
@@ -8238,6 +8271,21 @@ skip_pointer:
 		return -EINVAL;
 	}
 
+	if (slots_used > MAX_BPF_FUNC_REG_ARGS) {
+		if (is_global) {
+			bpf_log(log,
+				"global function %s() needs %d > %d argument slots, "
+				"stack args not supported\n",
+				tname, slots_used, MAX_BPF_FUNC_REG_ARGS);
+			return -EINVAL;
+		}
+		if (!bpf_jit_supports_stack_args()) {
+			bpf_log(log, "JIT does not support function %s() with %d argument slots\n",
+				tname, slots_used);
+			return -EFAULT;
+		}
+		sub->stack_arg_cnt = slots_used - MAX_BPF_FUNC_REG_ARGS;
+	}
 	sub->arg_cnt = slots_used;
 
 	sub->args_cached = true;
