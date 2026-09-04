@@ -1340,6 +1340,12 @@ static int do_skeleton(int argc, char **argv)
 	}
 	bpf_object__for_each_program(prog, obj) {
 		prog_cnt++;
+
+		if (use_loader && !bpf_program__autoload(prog)) {
+			p_err("program '%s' is marked as non-autoload, which is not supported for light skeletons",
+			      bpf_program__name(prog));
+			return -1;
+		}
 	}
 
 	get_header_guard(header_guard, obj_name, "SKEL_H");
