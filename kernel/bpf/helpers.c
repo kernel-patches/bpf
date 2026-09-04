@@ -4676,6 +4676,139 @@ __bpf_kfunc int bpf_task_work_schedule_resume(struct task_struct *task, struct b
 	return bpf_task_work_schedule(task, tw, map__const_map, callback, aux, TWA_RESUME);
 }
 
+typedef int (*bpf_rcu_callback_t)(struct bpf_map *map, void *key, void *value);
+
+/* Actual type for struct bpf_rcu_head */
+struct bpf_rcu_head_kern {
+	struct rcu_head rcu;
+	bpf_callback_t callback_fn;
+	struct bpf_map *map;
+	struct bpf_prog *prog;
+	u32 armed;
+} __aligned(8);
+
+static void bpf_rcu_run_callback(struct rcu_head *rcu)
+{
+	struct bpf_rcu_head_kern *rh = container_of(rcu, struct bpf_rcu_head_kern, rcu);
+	bpf_callback_t callback_fn = rh->callback_fn;
+	struct bpf_prog *prog = rh->prog;
+	struct bpf_map *map = rh->map;
+	void *value, *key;
+	u32 idx;
+
+	value = (void *)rh - map->record->rcu_head_off;
+	key = map_key_from_value(map, value, &idx);
+
+	/*
+	 * rh is off RCU's list, so the callback may queue it again.  The
+	 * release keeps the reads above ahead of the store, so a re-arm on
+	 * another CPU cannot overwrite them first.  Pairs with the cmpxchg()
+	 * that arms rh.
+	 */
+	smp_store_release(&rh->armed, 0);
+
+	/*
+	 * Callbacks are invoked with BH disabled, which already blocks a
+	 * grace period and pins the CPU, but be explicit at the boundary
+	 * rather than depending on how RCU happens to invoke us.
+	 */
+	rcu_read_lock();
+	migrate_disable();
+
+	callback_fn((u64)(long)map, (u64)(long)key, (u64)(long)value, 0, 0);
+
+	migrate_enable();
+	rcu_read_unlock();
+
+	bpf_prog_put(prog);
+}
+
+static int __bpf_call_rcu(struct bpf_rcu_head *rh, struct bpf_map *map,
+			  void *callback, struct bpf_prog_aux *aux, bool trace)
+{
+	struct bpf_rcu_head_kern *rhk = (void *)rh;
+	struct bpf_prog *prog;
+
+	BUILD_BUG_ON(sizeof(struct bpf_rcu_head_kern) > sizeof(struct bpf_rcu_head));
+	BUILD_BUG_ON(__alignof__(struct bpf_rcu_head_kern) != __alignof__(struct bpf_rcu_head));
+	BTF_TYPE_EMIT(struct bpf_rcu_head);
+
+	/*
+	 * An RCU callback cannot be cancelled, so refusing to arm is the only
+	 * way to stop a callback that re-arms itself: every arm takes a new
+	 * program reference before the running callback drops its own, which
+	 * would keep the program, and the map it holds in used_maps, alive
+	 * for good.  bpf_timer and bpf_task_work make the same policy choice.
+	 */
+	if (!atomic64_read(&map->usercnt))
+		return -EPERM;
+
+	/* Queueing the same rcu_head twice would corrupt RCU's callback list. */
+	if (cmpxchg(&rhk->armed, 0, 1))
+		return -EBUSY;
+
+	/*
+	 * The callback is this program's text, so hold the program until the
+	 * callback has run.  This also stops a dying program from queueing
+	 * more work.
+	 */
+	prog = bpf_prog_inc_not_zero(aux->prog);
+	if (IS_ERR(prog)) {
+		WRITE_ONCE(rhk->armed, 0);
+		return PTR_ERR(prog);
+	}
+
+	rhk->callback_fn = (bpf_callback_t)callback;
+	rhk->map = map;
+	rhk->prog = prog;
+	if (trace)
+		call_rcu_tasks_trace(&rhk->rcu, bpf_rcu_run_callback);
+	else
+		call_rcu(&rhk->rcu, bpf_rcu_run_callback);
+	return 0;
+}
+
+/**
+ * bpf_call_rcu - Invoke a BPF callback after an RCU grace period
+ * @rh: Pointer to struct bpf_rcu_head in a BPF map value
+ * @map__const_map: bpf_map that embeds struct bpf_rcu_head in the values
+ * @callback: pointer to BPF subprogram to call
+ * @aux: pointer to bpf_prog_aux of the caller BPF program, implicitly set by the verifier
+ *
+ * The callback runs as callback(map, key, value) for the map value @rh is
+ * embedded in.
+ *
+ * Return: 0 on success, -EBUSY if @rh is already queued, -EPERM if @map is no
+ * longer held by userspace or bpffs, -ENOENT if the calling program is going
+ * away.
+ */
+__bpf_kfunc int bpf_call_rcu(struct bpf_rcu_head *rh, void *map__const_map,
+			     bpf_rcu_callback_t callback, struct bpf_prog_aux *aux)
+{
+	return __bpf_call_rcu(rh, map__const_map, callback, aux, false);
+}
+
+/**
+ * bpf_call_rcu_tasks_trace - Invoke a BPF callback after an RCU tasks trace
+ * grace period
+ * @rh: Pointer to struct bpf_rcu_head in a BPF map value
+ * @map__const_map: bpf_map that embeds struct bpf_rcu_head in the values
+ * @callback: pointer to BPF subprogram to call
+ * @aux: pointer to bpf_prog_aux of the caller BPF program, implicitly set by the verifier
+ *
+ * Waits for sleepable BPF programs to finish, unlike bpf_call_rcu().  The
+ * callback itself is not sleepable in either case.
+ *
+ * Return: 0 on success, -EBUSY if @rh is already queued, -EPERM if @map is no
+ * longer held by userspace or bpffs, -ENOENT if the calling program is going
+ * away.
+ */
+__bpf_kfunc int bpf_call_rcu_tasks_trace(struct bpf_rcu_head *rh, void *map__const_map,
+					 bpf_rcu_callback_t callback, struct bpf_prog_aux *aux)
+{
+	return __bpf_call_rcu(rh, map__const_map, callback, aux, true);
+}
+
 static int make_file_dynptr(struct file *file, u32 flags, bool may_sleep,
 			    struct bpf_dynptr_kern *ptr)
 {
@@ -4969,6 +5102,8 @@ BTF_ID_FLAGS(func, bpf_stream_vprintk, KF_IMPLICIT_ARGS | KF_SPINLOCK_SAFE)
 BTF_ID_FLAGS(func, bpf_stream_print_stack, KF_IMPLICIT_ARGS | KF_SPINLOCK_SAFE)
 BTF_ID_FLAGS(func, bpf_task_work_schedule_signal, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_task_work_schedule_resume, KF_IMPLICIT_ARGS)
+BTF_ID_FLAGS(func, bpf_call_rcu, KF_IMPLICIT_ARGS)
+BTF_ID_FLAGS(func, bpf_call_rcu_tasks_trace, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_dynptr_from_file)
 BTF_ID_FLAGS(func, bpf_dynptr_file_discard, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_timer_cancel_async)

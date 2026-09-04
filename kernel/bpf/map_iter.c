@@ -117,6 +117,18 @@ static int bpf_iter_attach_map(struct bpf_prog *prog,
 		goto put_map;
 	}
 
+	/*
+	 * The value ctx arg is not MEM_RDONLY and, for a non-percpu map,
+	 * points at the live element, so a program can write anywhere in it
+	 * without check_map_access() vetting the btf_record fields.  An armed
+	 * bpf_rcu_head is linked into RCU's callback list, so let it nowhere
+	 * near that.
+	 */
+	if (btf_record_has_field(map->record, BPF_RCU_HEAD)) {
+		err = -EOPNOTSUPP;
+		goto put_map;
+	}
+
 	if (map->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
 	    map->map_type == BPF_MAP_TYPE_LRU_PERCPU_HASH ||
 	    map->map_type == BPF_MAP_TYPE_PERCPU_ARRAY)
