@@ -431,7 +431,10 @@ rusttest-macros: $(src)/macros/lib.rs \
 	+$(call if_changed,rustdoc_test)
 
 ifdef CONFIG_CC_IS_CLANG
-bindgen_c_flags = $(c_flags)
+# bindgen generates no code, and its libclang may predate the section
+# argument of -fpatchable-function-entry that a kCFI kernel with CALL_OPS
+# passes on arm64.
+bindgen_c_flags = $(filter-out -fpatchable-function-entry=%,$(c_flags))
 else
 # bindgen relies on libclang to parse C. Ideally, bindgen would support a GCC
 # plugin backend and/or the Clang driver would be perfectly compatible with GCC.
