@@ -70,6 +70,25 @@ __naked void no_private_stack_nested(void)
 "	::: __clobber_all);
 }
 
+SEC("fentry/bpf_fentry_test9")
+__description("Private stack, timed may_goto")
+__success __retval(0)
+__arch_x86_64
+__jited("	movabsq	$0x{{.*}}, %r9")
+__jited("...")
+__jited("	movq	%r9, %r10")
+__arch_arm64
+__jited("	mov	x9, x25")
+int private_stack_timed_may_goto(void)
+{
+	volatile __u64 stack_space[16] = {};
+
+	while (can_loop)
+		;
+
+	return stack_space[0];
+}
+
 __used
 __naked static void cumulative_stack_depth_subprog(void)
 {
