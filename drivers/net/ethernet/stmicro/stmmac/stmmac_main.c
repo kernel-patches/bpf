@@ -4192,6 +4192,7 @@ irq_error:
 
 	stmmac_release_ptp(priv);
 init_error:
+	memset(&priv->dma_conf, 0, sizeof(priv->dma_conf));
 	return ret;
 }
 
