@@ -8235,11 +8235,7 @@ skip_pointer:
 			bpf_log(log, "arg#%d has pointer tag, but is not a pointer type\n", i);
 			return -EINVAL;
 		}
-		if (btf_type_is_int(t) || btf_is_any_enum(t)) {
-			sub->args[slots_used++].arg_type = ARG_ANYTHING;
-			continue;
-		}
-		if (btf_type_is_struct(t)) {
+		if (btf_type_is_int(t) || btf_is_any_enum(t) || btf_type_is_struct(t)) {
 			u32 nslots;
 
 			if (!t->size || t->size > 2 * BPF_REG_SIZE) {
@@ -8251,7 +8247,8 @@ skip_pointer:
 					i, btf_type_str(t), tname, t->size, 2 * BPF_REG_SIZE);
 				return -EINVAL;
 			}
-			if (!btf_struct_is_composed_of(env, btf, t, BTF_MEMBER_SCALAR)) {
+			if (btf_type_is_struct(t) &&
+			    !btf_struct_is_composed_of(env, btf, t, BTF_MEMBER_SCALAR)) {
 				if (!is_global)
 					return -EINVAL;
 				bpf_log(log, "Arg#%d type %s in %s() is not composed of scalars\n",
