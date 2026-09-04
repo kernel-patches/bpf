@@ -275,6 +275,11 @@ config GCC_SUPPORTS_DYNAMIC_FTRACE_WITH_ARGS
 	def_bool CC_IS_GCC
 	depends on $(cc-option,-fpatchable-function-entry=2)
 
+config ARM64_FUNCTION_PREFIX_NOPS
+	int
+	default 2 if DYNAMIC_FTRACE_WITH_CALL_OPS
+	default 0
+
 config 64BIT
 	def_bool y
 

@@ -60,6 +60,73 @@ int ftrace_regs_query_register_offset(const char *name)
 }
 #endif
 
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_CALL_OPS
+/*
+ * The address of the ops literal for a callsite whose `BL <caller>` is at
+ * @pc, exactly as ftrace_caller derives it from the return address.
+ */
+static unsigned long ftrace_call_ops_literal(unsigned long pc)
+{
+	return ALIGN_DOWN(pc + AARCH64_INSN_SIZE, 8) - FTRACE_CALL_OPS_BIAS;
+}
+
+/*
+ * addr is the first of the FTRACE_PREFIX_NOPS NOPs before a function:
+ *
+ * addr-04:		.word		// kCFI type hash, address-taken and non-local only
+ * addr+00:		NOP		// FTRACE_PREFIX_NOPS of these, two hold the literal
+ * func+00:	func:	BTI	C	// only if BTI and the function may be called indirectly
+ * func+04:		NOP		// patched to MOV X9, LR
+ * func+08:		NOP		// patched to BL <caller>
+ *
+ * The compiler aligns whatever comes first to 8 bytes. ftrace_caller reads
+ * the literal at ALIGN_DOWN(LR, 8) - FTRACE_CALL_OPS_BIAS, with LR at
+ * func+8, or func+12 after a BTI:
+ *
+ *	NOPs	BIAS	literal at
+ *	2	16	func - 8
+ *	3	16	func - 8, or func - 12 if func % 8 == 4 (no hash, no BTI)
+ *	5	24	func - 16, or func - 12 / func - 20 if func % 8 == 4
+ *
+ * Return the address of the NOP to be patched to BL, or 0 when the two
+ * NOPs are not there or the literal would fall outside the prefix.
+ */
+static unsigned long ftrace_call_ops_adjust(unsigned long addr)
+{
+	unsigned long func = addr + FTRACE_PREFIX_NOPS * AARCH64_INSN_SIZE;
+	unsigned long pc = func + AARCH64_INSN_SIZE;
+	unsigned long literal;
+	u32 nop = aarch64_insn_gen_nop();
+
+	if (IS_ENABLED(CONFIG_ARM64_BTI_KERNEL) &&
+	    aarch64_insn_is_bti(le32_to_cpu(*(__le32 *)func)))
+		pc += AARCH64_INSN_SIZE;
+
+	/* Objects built with only the prefix NOPs have nothing to patch. */
+	if (le32_to_cpu(*(__le32 *)(pc - AARCH64_INSN_SIZE)) != nop ||
+	    le32_to_cpu(*(__le32 *)pc) != nop) {
+		pr_warn_ratelimited("ftrace: no patchable entry at %ps\n",
+				    (void *)func);
+		return 0;
+	}
+
+	/* The literal would overlap the type hash or the entry point. */
+	literal = ftrace_call_ops_literal(pc);
+	if (literal < addr || literal + sizeof(u64) > func) {
+		pr_warn_ratelimited("ftrace: cannot trace %ps: no room for the ops literal\n",
+				    (void *)func);
+		return 0;
+	}
+
+	return pc;
+}
+#else
+static unsigned long ftrace_call_ops_adjust(unsigned long addr)
+{
+	return 0;
+}
+#endif /* CONFIG_DYNAMIC_FTRACE_WITH_CALL_OPS */
+
 unsigned long ftrace_call_adjust(unsigned long addr)
 {
 	/*
@@ -91,56 +158,7 @@ unsigned long ftrace_call_adjust(unsigned long addr)
 	if (!IS_ENABLED(CONFIG_DYNAMIC_FTRACE_WITH_CALL_OPS))
 		return addr + AARCH64_INSN_SIZE;
 
-	/*
-	 * When using patchable-function-entry with pre-function NOPs, addr is
-	 * the address of the first pre-function NOP.
-	 *
-	 * Starting from an 8-byte aligned base, the compiler has either
-	 * generated:
-	 *
-	 * addr+00:		NOP		// Literal (first 32 bits)
-	 * addr+04:		NOP		// Literal (last 32 bits)
-	 * addr+08:	func:	NOP		// To be patched to MOV X9, LR
-	 * addr+12:		NOP		// To be patched to BL <caller>
-	 *
-	 * Or:
-	 *
-	 * addr+00:		NOP		// Literal (first 32 bits)
-	 * addr+04:		NOP		// Literal (last 32 bits)
-	 * addr+08:	func:	BTI	C
-	 * addr+12:		NOP		// To be patched to MOV X9, LR
-	 * addr+16:		NOP		// To be patched to BL <caller>
-	 *
-	 * We must adjust addr to the address of the NOP which will be patched
-	 * to `BL <caller>`, which is at either addr+12 or addr+16 depending on
-	 * whether there is a BTI.
-	 */
-
-	if (!IS_ALIGNED(addr, sizeof(unsigned long))) {
-		WARN_RATELIMIT(1, "Misaligned patch-site %pS\n",
-			       (void *)(addr + 8));
-		return 0;
-	}
-
-	/* Skip the NOPs placed before the function entry point */
-	addr += 2 * AARCH64_INSN_SIZE;
-
-	/* Skip any BTI */
-	if (IS_ENABLED(CONFIG_ARM64_BTI_KERNEL)) {
-		u32 insn = le32_to_cpu(*(__le32 *)addr);
-
-		if (aarch64_insn_is_bti(insn)) {
-			addr += AARCH64_INSN_SIZE;
-		} else if (insn != aarch64_insn_gen_nop()) {
-			WARN_RATELIMIT(1, "unexpected insn in patch-site %pS: 0x%08x\n",
-				       (void *)addr, insn);
-		}
-	}
-
-	/* Skip the first NOP after function entry */
-	addr += AARCH64_INSN_SIZE;
-
-	return addr;
+	return ftrace_call_ops_adjust(addr);
 }
 
 /* Convert fentry_ip to the symbol address without kallsyms */
@@ -368,7 +386,7 @@ static const struct ftrace_ops *arm64_rec_get_ops(struct dyn_ftrace *rec)
 static int ftrace_rec_set_ops(const struct dyn_ftrace *rec,
 			      const struct ftrace_ops *ops)
 {
-	unsigned long literal = ALIGN_DOWN(rec->ip - 12, 8);
+	unsigned long literal = ftrace_call_ops_literal(rec->ip);
 	return aarch64_insn_write_literal_u64((void *)literal,
 					      (unsigned long)ops);
 }
