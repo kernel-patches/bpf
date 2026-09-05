@@ -908,6 +908,20 @@ enum bpf_arg_type {
 	ARG_PTR_TO_TIMER,	/* pointer to bpf_timer */
 	ARG_KPTR_XCHG_DEST,	/* pointer to destination that kptrs are bpf_kptr_xchg'd into */
 	ARG_PTR_TO_DYNPTR,      /* pointer to bpf_dynptr. See bpf_type_flag for dynptr type */
+
+	ARG_CONST_SCALAR,	/* scalar known at verification time */
+	ARG_CONST_MEM_SIZE,	/* ARG_MEM_SIZE that must be constant */
+	ARG_PTR_TO_ALLOC_BTF_ID,	/* pointer to an allocated object */
+	ARG_PTR_TO_REFCOUNTED_KPTR,	/* pointer to a refcounted local kptr */
+	ARG_PTR_TO_ITER,	/* pointer to an iterator */
+	ARG_PTR_TO_LIST_HEAD,	/* pointer to bpf_list_head */
+	ARG_PTR_TO_LIST_NODE,	/* pointer to bpf_list_node */
+	ARG_PTR_TO_RB_ROOT,	/* pointer to bpf_rb_root */
+	ARG_PTR_TO_RB_NODE,	/* pointer to bpf_rb_node */
+	ARG_PTR_TO_WORKQUEUE,	/* pointer to bpf_wq */
+	ARG_PTR_TO_TASK_WORK,	/* pointer to bpf_task_work */
+	ARG_PTR_TO_IRQ_FLAG,	/* pointer to saved IRQ flags on the stack */
+	ARG_PTR_TO_RES_SPIN_LOCK,	/* pointer to bpf_res_spin_lock */
 	__BPF_ARG_TYPE_MAX,
 
 	/* Extended arg_types. */
