@@ -1585,7 +1585,6 @@ struct bpf_call_arg_meta {
 	struct btf *arg_btf;
 	u32 arg_btf_id;
 	bool arg_owning_ref;
-	bool arg_prog;
 
 	struct {
 		struct btf_field *field;

@@ -922,6 +922,7 @@ enum bpf_arg_type {
 	ARG_PTR_TO_TASK_WORK,	/* pointer to bpf_task_work */
 	ARG_PTR_TO_IRQ_FLAG,	/* pointer to saved IRQ flags on the stack */
 	ARG_PTR_TO_RES_SPIN_LOCK,	/* pointer to bpf_res_spin_lock */
+	ARG_PTR_TO_PROG_AUX,	/* pointer to the caller's bpf_prog_aux */
 	__BPF_ARG_TYPE_MAX,
 
 	/* Extended arg_types. */

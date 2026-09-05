@@ -8737,6 +8737,7 @@ static int get_constant_map_key(struct bpf_verifier_env *env,
 }
 
 static bool can_elide_value_nullness(const struct bpf_map *map);
+static struct bpf_insn_aux_data *cur_aux(const struct bpf_verifier_env *env);
 
 static int process_map_ptr_arg(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 			       argno_t argno, struct bpf_call_arg_meta *meta)
@@ -8791,6 +8792,11 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	u32 *arg_btf_id = NULL;
 	u32 key_size;
 	int err = 0;
+
+	if (arg_type == ARG_PTR_TO_PROG_AUX) {
+		cur_aux(env)->arg_prog = regno;
+		return 0;
+	}
 
 	err = check_reg_arg(env, regno, SRC_OP);
 	if (err)
@@ -9400,9 +9406,42 @@ static bool check_proto_release_reg(const struct bpf_func_proto *fn, struct bpf_
 	return true;
 }
 
-static int check_func_proto(const struct bpf_func_proto *fn, struct bpf_call_arg_meta *meta)
+static bool check_arg_prog_aux(struct bpf_verifier_env *env,
+			       const struct bpf_func_proto *proto)
 {
-	return check_raw_mode_ok(fn, meta) &&
+	bool seen = false;
+	argno_t argno;
+	u32 i;
+
+	for (i = 0; i < ARRAY_SIZE(proto->arg_type); i++) {
+		if (proto->arg_type[i] == ARG_UNUSED)
+			break;
+		if (proto->arg_type[i] != ARG_PTR_TO_PROG_AUX)
+			continue;
+
+		if (seen) {
+			verifier_bug(env, "Only 1 prog->aux argument supported");
+			return false;
+		}
+
+		argno = argno_from_arg(i + 1);
+		if (reg_from_argno(argno) < 0) {
+			verbose(env, "%s prog->aux cannot be a stack argument\n",
+				reg_arg_name(env, argno));
+			return false;
+		}
+
+		seen = true;
+	}
+
+	return true;
+}
+
+static int check_func_proto(struct bpf_verifier_env *env, const struct bpf_func_proto *fn,
+			    struct bpf_call_arg_meta *meta)
+{
+	return check_arg_prog_aux(env, fn) &&
+	       check_raw_mode_ok(fn, meta) &&
 	       check_arg_pair_ok(fn) &&
 	       check_mem_arg_rw_flag_ok(fn) &&
 	       check_proto_release_reg(fn, meta) &&
@@ -10916,7 +10955,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 
 	memset(&meta, 0, sizeof(meta));
 
-	err = check_func_proto(fn, &meta);
+	err = check_func_proto(env, fn, &meta);
 	if (err) {
 		verifier_bug(env, "incorrect func proto %s#%d", func_id_name(func_id), func_id);
 		return err;
@@ -12044,6 +12083,9 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	const char *ref_tname = NULL;
 	int arg_type;
 
+	if (is_kfunc_arg_prog_aux(meta->btf, &args[arg]))
+		return ARG_PTR_TO_PROG_AUX;
+
 	t = btf_type_skip_modifiers(meta->btf, args[arg].type, NULL);
 
 	/* Scalar arguments are classified from their BTF suffix/name alone. */
@@ -12192,9 +12234,7 @@ static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg
 	}
 
 	for (i = 0; i < nargs; i++) {
-		if (is_kfunc_arg_prog_aux(btf, &args[i]) ||
-		    is_kfunc_arg_ignore(btf, &args[i]) ||
-		    is_kfunc_arg_implicit(meta, i))
+		if (is_kfunc_arg_ignore(btf, &args[i]) || is_kfunc_arg_implicit(meta, i))
 			continue;
 
 		arg_type = get_kfunc_arg_type(env, meta, args, i, nargs);
@@ -12204,7 +12244,7 @@ static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg
 		proto->arg_type[i] = arg_type;
 	}
 
-	return 0;
+	return check_arg_prog_aux(env, proto) ? 0 : -EINVAL;
 }
 
 static int process_kf_arg_ptr_to_btf_id(struct bpf_verifier_env *env,
@@ -12799,18 +12839,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		int regno = reg_from_argno(argno);
 		u32 ref_id = args[i].type, type_size;
 
-		if (is_kfunc_arg_prog_aux(btf, &args[i])) {
-			/* Reject repeated use bpf_prog_aux */
-			if (meta->arg_prog) {
-				verifier_bug(env, "Only 1 prog->aux argument supported per-kfunc");
-				return -EFAULT;
-			}
-			if (regno < 0) {
-				verbose(env, "%s prog->aux cannot be a stack argument\n",
-					reg_arg_name(env, argno));
-				return -EINVAL;
-			}
-			meta->arg_prog = true;
+		if (arg_type == ARG_PTR_TO_PROG_AUX) {
 			cur_aux(env)->arg_prog = regno;
 			continue;
 		}
