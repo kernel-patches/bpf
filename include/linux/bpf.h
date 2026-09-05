@@ -923,6 +923,7 @@ enum bpf_arg_type {
 	ARG_PTR_TO_IRQ_FLAG,	/* pointer to saved IRQ flags on the stack */
 	ARG_PTR_TO_RES_SPIN_LOCK,	/* pointer to bpf_res_spin_lock */
 	ARG_PTR_TO_PROG_AUX,	/* pointer to the caller's bpf_prog_aux */
+	ARG_IGNORE,		/* argument the verifier does not check at all */
 	__BPF_ARG_TYPE_MAX,
 
 	/* Extended arg_types. */
