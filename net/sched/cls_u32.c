@@ -1180,8 +1180,11 @@ static int u32_change(struct net *net, struct sk_buff *in_skb,
 	}
 #endif
 
+	/* u32_set_parms() may drop rtnl; keep ht alive across it */
+	refcount_inc(&ht->refcnt);
 	err = u32_set_parms(net, tp, n, tb, tca[TCA_RATE],
 			    flags, n->flags, extack);
+	refcount_dec(&ht->refcnt);
 
 	u32_bind_filter(tp, n, base, tb);
 
