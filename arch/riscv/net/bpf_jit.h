@@ -82,6 +82,7 @@ struct rv_jit_context {
 	unsigned long flags;
 	int stack_size;
 	int tcc_offset;
+	int stack_arg_sz;
 	u64 arena_vm_start;
 	u64 user_vm_start;
 };

@@ -498,6 +498,18 @@ static void emit_ldx(u8 rd, s16 off, u8 rs, u8 size, bool sign_ext,
 	ctx->ex_jmp_off = ctx->ninsns;
 }
 
+static void emit_stack_arg_ldx(u8 rd, s16 off, struct rv_jit_context *ctx)
+{
+	int idx = off / 8 - 1;
+
+	if (idx < 3) {
+		emit_mv(rd, RV_REG_A5 + idx, ctx);
+		return;
+	}
+
+	emit_ldx_insn(rd, (idx - 3) * 8, RV_REG_FP, BPF_DW, false, ctx);
+}
+
 static void emit_st(u8 rd, s16 off, s32 imm, u8 size, struct rv_jit_context *ctx)
 {
 	emit_imm(RV_REG_T1, imm, ctx);
@@ -515,6 +527,19 @@ static void emit_st(u8 rd, s16 off, s32 imm, u8 size, struct rv_jit_context *ctx
 	ctx->ex_jmp_off = ctx->ninsns;
 }
 
+static void emit_stack_arg_st(s16 off, s32 imm, struct rv_jit_context *ctx)
+{
+	int idx = -off / 8 - 1;
+
+	emit_imm(RV_REG_T1, imm, ctx);
+	if (idx < 3) {
+		emit_mv(RV_REG_A5 + idx, RV_REG_T1, ctx);
+		return;
+	}
+
+	emit_stx_insn(RV_REG_SP, (idx - 3) * 8, RV_REG_T1, BPF_DW, ctx);
+}
+
 static void emit_stx(u8 rd, s16 off, u8 rs, u8 size, struct rv_jit_context *ctx)
 {
 	if (is_12b_int(off)) {
@@ -529,6 +554,18 @@ static void emit_stx(u8 rd, s16 off, u8 rs, u8 size, struct rv_jit_context *ctx)
 	ctx->ex_insn_off = ctx->ninsns;
 	emit_stx_insn(RV_REG_T1, 0, rs, size, ctx);
 	ctx->ex_jmp_off = ctx->ninsns;
+}
+
+static void emit_stack_arg_stx(s16 off, u8 rs, struct rv_jit_context *ctx)
+{
+	int idx = -off / 8 - 1;
+
+	if (idx < 3) {
+		emit_mv(RV_REG_A5 + idx, rs, ctx);
+		return;
+	}
+
+	emit_stx_insn(RV_REG_SP, (idx - 3) * 8, rs, BPF_DW, ctx);
 }
 
 static int emit_atomic_ld_st(u8 rd, u8 rs, const struct bpf_insn *insn,
@@ -1824,11 +1861,21 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 				return -EINVAL;
 
 			for (idx = 0; idx < fm->nr_args; idx++) {
-				u8 reg = bpf_to_rv_reg(BPF_REG_1 + idx, ctx);
 				bool sign = fm->arg_flags[idx] & BTF_FMODEL_SIGNED_ARG;
+				u8 arg_sz = fm->arg_size[idx];
 
-				if (sign_extend(reg, reg, fm->arg_size[idx], sign, ctx))
-					return -EINVAL;
+				if (arg_sz == 8 || (arg_sz != 4 && !sign))
+					continue;
+
+				if (idx < RV_MAX_REG_ARGS) {
+					if (sign_extend(RV_REG_A0 + idx, RV_REG_A0 + idx, arg_sz, sign, ctx))
+						return -EINVAL;
+				} else {
+					emit_ld(RV_REG_T1, (idx - RV_MAX_REG_ARGS) * 8, RV_REG_SP, ctx);
+					if (sign_extend(RV_REG_T1, RV_REG_T1, arg_sz, sign, ctx))
+						return -EINVAL;
+					emit_sd(RV_REG_SP, (idx - RV_MAX_REG_ARGS) * 8, RV_REG_T1, ctx);
+				}
 			}
 		}
 
@@ -1927,7 +1974,10 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 			rs = RV_REG_T2;
 		}
 
-		emit_ldx(rd, off, rs, BPF_SIZE(code), sign_ext, ctx);
+		if (is_stack_arg_ldx(insn))
+			emit_stack_arg_ldx(rd, off, ctx);
+		else
+			emit_ldx(rd, off, rs, BPF_SIZE(code), sign_ext, ctx);
 
 		ret = add_exception_handler(insn, rd, ctx);
 		if (ret)
@@ -1957,7 +2007,10 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 			rd = RV_REG_T3;
 		}
 
-		emit_st(rd, off, imm, BPF_SIZE(code), ctx);
+		if (is_stack_arg_st(insn))
+			emit_stack_arg_st(off, imm, ctx);
+		else
+			emit_st(rd, off, imm, BPF_SIZE(code), ctx);
 
 		ret = add_exception_handler(insn, REG_DONT_CLEAR_MARKER, ctx);
 		if (ret)
@@ -1979,7 +2032,10 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 			rd = RV_REG_T2;
 		}
 
-		emit_stx(rd, off, rs, BPF_SIZE(code), ctx);
+		if (is_stack_arg_stx(insn))
+			emit_stack_arg_stx(off, rs, ctx);
+		else
+			emit_stx(rd, off, rs, BPF_SIZE(code), ctx);
 
 		ret = add_exception_handler(insn, REG_DONT_CLEAR_MARKER, ctx);
 		if (ret)
@@ -2029,9 +2085,9 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 
 void bpf_jit_build_prologue(struct rv_jit_context *ctx, bool is_subprog)
 {
-	int i, stack_adjust = 0, store_offset, bpf_stack_adjust;
+	int i, stack_adjust = 0, store_offset, bpf_stack_adjust = ctx->stack_arg_sz;
 
-	bpf_stack_adjust = round_up(ctx->prog->aux->stack_depth, STACK_ALIGN);
+	bpf_stack_adjust += round_up(ctx->prog->aux->stack_depth, STACK_ALIGN);
 	if (bpf_stack_adjust)
 		mark_fp(ctx);
 
@@ -2187,6 +2243,11 @@ bool bpf_jit_supports_subprog_tailcalls(void)
 }
 
 bool bpf_jit_supports_timed_may_goto(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_stack_args(void)
 {
 	return true;
 }
