@@ -8141,6 +8141,11 @@ static bool is_helper_call(const struct bpf_call_arg_meta *meta, enum bpf_func_i
 	return !meta->btf && meta->func_id == func_id;
 }
 
+static bool is_kfunc_call(const struct bpf_call_arg_meta *meta, u32 btf_id)
+{
+	return meta->btf && meta->func_id == btf_id;
+}
+
 static int resolve_map_arg_type(struct bpf_verifier_env *env,
 				 const struct bpf_call_arg_meta *meta,
 				 enum bpf_arg_type *arg_type)
@@ -12041,27 +12046,27 @@ static bool is_kfunc_ret_null(struct bpf_call_arg_meta *meta)
 
 static bool is_kfunc_bpf_rcu_read_lock(struct bpf_call_arg_meta *meta)
 {
-	return meta->func_id == special_kfunc_list[KF_bpf_rcu_read_lock];
+	return is_kfunc_call(meta, special_kfunc_list[KF_bpf_rcu_read_lock]);
 }
 
 static bool is_kfunc_bpf_rcu_read_unlock(struct bpf_call_arg_meta *meta)
 {
-	return meta->func_id == special_kfunc_list[KF_bpf_rcu_read_unlock];
+	return is_kfunc_call(meta, special_kfunc_list[KF_bpf_rcu_read_unlock]);
 }
 
 static bool is_kfunc_bpf_preempt_disable(struct bpf_call_arg_meta *meta)
 {
-	return meta->func_id == special_kfunc_list[KF_bpf_preempt_disable];
+	return is_kfunc_call(meta, special_kfunc_list[KF_bpf_preempt_disable]);
 }
 
 static bool is_kfunc_bpf_preempt_enable(struct bpf_call_arg_meta *meta)
 {
-	return meta->func_id == special_kfunc_list[KF_bpf_preempt_enable];
+	return is_kfunc_call(meta, special_kfunc_list[KF_bpf_preempt_enable]);
 }
 
 bool bpf_is_kfunc_pkt_changing(struct bpf_call_arg_meta *meta)
 {
-	return meta->func_id == special_kfunc_list[KF_bpf_xdp_pull_data];
+	return is_kfunc_call(meta, special_kfunc_list[KF_bpf_xdp_pull_data]);
 }
 
 static int
@@ -12102,9 +12107,9 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	 * type to our caller. When a set of conditions hold in the BTF type of
 	 * arguments, we resolve it to a known kfunc_ptr_arg_type.
 	 */
-	if (meta->func_id == special_kfunc_list[KF_bpf_cast_to_kern_ctx] ||
-	    meta->func_id == special_kfunc_list[KF_bpf_session_is_return] ||
-	    meta->func_id == special_kfunc_list[KF_bpf_session_cookie])
+	if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_cast_to_kern_ctx]) ||
+	    is_kfunc_call(meta, special_kfunc_list[KF_bpf_session_is_return]) ||
+	    is_kfunc_call(meta, special_kfunc_list[KF_bpf_session_cookie]))
 		arg_type = KF_ARG_PTR_TO_CTX;
 	else if (btf_is_prog_ctx_type(&env->log, meta->btf, t, resolve_prog_type(env->prog), arg))
 		arg_type = KF_ARG_PTR_TO_CTX;
@@ -12315,15 +12320,15 @@ static int process_irq_flag(struct bpf_verifier_env *env, struct bpf_reg_state *
 	int err, spi, kfunc_class = IRQ_NATIVE_KFUNC;
 	bool irq_save;
 
-	if (meta->func_id == special_kfunc_list[KF_bpf_local_irq_save] ||
-	    meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave]) {
+	if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_local_irq_save]) ||
+	    is_kfunc_call(meta, special_kfunc_list[KF_bpf_res_spin_lock_irqsave])) {
 		irq_save = true;
-		if (meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave])
+		if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_res_spin_lock_irqsave]))
 			kfunc_class = IRQ_LOCK_KFUNC;
-	} else if (meta->func_id == special_kfunc_list[KF_bpf_local_irq_restore] ||
-		   meta->func_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore]) {
+	} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_local_irq_restore]) ||
+		   is_kfunc_call(meta, special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore])) {
 		irq_save = false;
-		if (meta->func_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore])
+		if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore]))
 			kfunc_class = IRQ_LOCK_KFUNC;
 	} else {
 		verifier_bug(env, "unknown irq flags kfunc");
@@ -13011,7 +13016,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 				return -EINVAL;
 			}
 
-			if (meta->func_id == special_kfunc_list[KF_bpf_cast_to_kern_ctx]) {
+			if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_cast_to_kern_ctx])) {
 				ret = get_kern_ctx_btf_id(&env->log, resolve_prog_type(env->prog));
 				if (ret < 0)
 					return -EINVAL;
@@ -13068,17 +13073,17 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			if (is_kfunc_arg_uninit(btf, &args[i]))
 				dynptr_arg_type |= MEM_UNINIT;
 
-			if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb]) {
+			if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_from_skb])) {
 				dynptr_arg_type |= DYNPTR_TYPE_SKB;
-			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_xdp]) {
+			} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_from_xdp])) {
 				dynptr_arg_type |= DYNPTR_TYPE_XDP;
-			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_skb_meta]) {
+			} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_from_skb_meta])) {
 				dynptr_arg_type |= DYNPTR_TYPE_SKB_META;
-			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_file]) {
+			} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_from_file])) {
 				dynptr_arg_type |= DYNPTR_TYPE_FILE;
-			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_file_discard]) {
+			} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_file_discard])) {
 				dynptr_arg_type |= DYNPTR_TYPE_FILE | OBJ_RELEASE;
-			} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_clone] &&
+			} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_clone]) &&
 				   (dynptr_arg_type & MEM_UNINIT)) {
 				enum bpf_dynptr_type parent_type = meta->dynptr.type;
 
@@ -13097,7 +13102,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			break;
 		}
 		case KF_ARG_PTR_TO_ITER:
-			if (meta->func_id == special_kfunc_list[KF_bpf_iter_css_task_new]) {
+			if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_iter_css_task_new])) {
 				if (!check_css_task_iter_allowlist(env)) {
 					verbose(env, "css_task_iter is only allowed in bpf_lsm, bpf_iter and sleepable progs\n");
 					return -EINVAL;
@@ -13473,11 +13478,12 @@ check_ok:
 
 			if (!is_bpf_res_spin_lock_kfunc(meta->func_id))
 				return -EFAULT;
-			if (meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock] ||
-			    meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave])
+			if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_res_spin_lock]) ||
+			    is_kfunc_call(meta, special_kfunc_list[KF_bpf_res_spin_lock_irqsave]))
 				flags |= PROCESS_SPIN_LOCK;
-			if (meta->func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave] ||
-			    meta->func_id == special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore])
+			if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_res_spin_lock_irqsave]) ||
+			    is_kfunc_call(meta,
+					  special_kfunc_list[KF_bpf_res_spin_unlock_irqrestore]))
 				flags |= PROCESS_LOCK_IRQ;
 			ret = process_spin_lock(env, reg, argno, flags);
 			if (ret < 0)
@@ -13820,12 +13826,12 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_call_arg
 		struct btf_field *field = meta->arg_rbtree_root.field;
 
 		mark_reg_graph_node(regs, BPF_REG_0, &field->graph_root);
-	} else if (meta->func_id == special_kfunc_list[KF_bpf_cast_to_kern_ctx]) {
+	} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_cast_to_kern_ctx])) {
 		mark_reg_known_zero(env, regs, BPF_REG_0);
 		regs[BPF_REG_0].type = PTR_TO_BTF_ID | PTR_TRUSTED;
 		regs[BPF_REG_0].btf = desc_btf;
 		regs[BPF_REG_0].btf_id = meta->ret_btf_id;
-	} else if (meta->func_id == special_kfunc_list[KF_bpf_rdonly_cast]) {
+	} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_rdonly_cast])) {
 		ret_t = btf_type_by_id(desc_btf, meta->arg_constant.value);
 		if (!ret_t) {
 			verbose(env, "Unknown type ID %lld passed to kfunc bpf_rdonly_cast\n",
@@ -13845,8 +13851,8 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_call_arg
 				"kfunc bpf_rdonly_cast type ID argument must be of a struct or void\n");
 			return -EINVAL;
 		}
-	} else if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_slice] ||
-		   meta->func_id == special_kfunc_list[KF_bpf_dynptr_slice_rdwr]) {
+	} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_slice]) ||
+		   is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_slice_rdwr])) {
 		enum bpf_type_flag type_flag = get_dynptr_type_flag(meta->dynptr.type);
 
 		mark_reg_known_zero(env, regs, BPF_REG_0);
@@ -13861,7 +13867,7 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_call_arg
 		/* PTR_MAYBE_NULL will be added when is_kfunc_ret_null is checked */
 		regs[BPF_REG_0].type = PTR_TO_MEM | type_flag;
 
-		if (meta->func_id == special_kfunc_list[KF_bpf_dynptr_slice]) {
+		if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_slice])) {
 			regs[BPF_REG_0].type |= MEM_RDONLY;
 		} else {
 			/* this will set env->seen_direct_write to true */
