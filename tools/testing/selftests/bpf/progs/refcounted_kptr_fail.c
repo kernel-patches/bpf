@@ -82,8 +82,8 @@ long refcount_acquire_maybe_null(void *ctx)
 }
 
 SEC("?tc")
-__failure __msg("R1 is neither owning or non-owning ref")
-__msg("expects a pointer to a BPF-managed refcounted object, but R1 is a context pointer")
+__failure __msg("R1 type=ctx expected=ptr_, ptr_, rcu_ptr_")
+__msg("type ctx, but this argument accepts ptr_, ptr_, rcu_ptr_")
 long refcount_acquire_non_object(void *ctx)
 {
 	return bpf_refcount_acquire(ctx) != NULL;

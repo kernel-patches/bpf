@@ -5134,18 +5134,6 @@ static u32 *reg2btf_ids[__BPF_REG_TYPE_MAX] = {
 	[CONST_PTR_TO_MAP] = btf_bpf_map_id,
 };
 
-static enum bpf_reg_type lookup_reg2btf_ids(u32 ref_id)
-{
-	enum bpf_reg_type type;
-
-	for (type = 0; type < __BPF_REG_TYPE_MAX; type++) {
-		if (reg2btf_ids[type] && *reg2btf_ids[type] == ref_id)
-			return type;
-	}
-
-	return NOT_INIT;
-}
-
 static bool is_trusted_reg(struct bpf_verifier_env *env, const struct bpf_reg_state *reg)
 {
 	/* A referenced register is always trusted. */
@@ -8201,7 +8189,7 @@ static int resolve_map_arg_type(struct bpf_verifier_env *env,
 
 static int resolve_func_arg_type(struct bpf_verifier_env *env,
 				 struct bpf_reg_state *reg, u32 arg,
-				 struct bpf_call_arg_meta *meta, int insn_idx,
+				 struct bpf_call_arg_meta *meta,
 				 enum bpf_arg_type *arg_type, u32 *arg_size);
 static int process_arg_ptr_to_btf_id(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 				     argno_t argno, enum bpf_arg_type arg_type,
@@ -8251,7 +8239,7 @@ static const struct bpf_reg_types mem_types = {
 	},
 };
 
-static const struct bpf_reg_types spin_lock_types = {
+static const struct bpf_reg_types map_value_or_alloc_obj_types = {
 	.types = {
 		PTR_TO_MAP_VALUE,
 		PTR_TO_BTF_ID | MEM_ALLOC,
@@ -8280,7 +8268,29 @@ static const struct bpf_reg_types percpu_btf_ptr_types = {
 static const struct bpf_reg_types func_ptr_types = { .types = { PTR_TO_FUNC } };
 static const struct bpf_reg_types stack_ptr_types = { .types = { PTR_TO_STACK } };
 static const struct bpf_reg_types const_str_ptr_types = { .types = { PTR_TO_MAP_VALUE } };
-static const struct bpf_reg_types timer_types = { .types = { PTR_TO_MAP_VALUE } };
+static const struct bpf_reg_types map_value_types = { .types = { PTR_TO_MAP_VALUE } };
+static const struct bpf_reg_types arena_types = {
+	.types = {
+		PTR_TO_ARENA,
+		SCALAR_VALUE,
+	}
+};
+
+static const struct bpf_reg_types alloc_obj_types = {
+	.types = {
+		PTR_TO_BTF_ID | MEM_ALLOC,
+		PTR_TO_BTF_ID | MEM_ALLOC | MEM_PERCPU,
+	}
+};
+
+static const struct bpf_reg_types alloc_obj_or_non_own_ref_types = {
+	.types = {
+		PTR_TO_BTF_ID | MEM_ALLOC,
+		PTR_TO_BTF_ID | MEM_ALLOC | NON_OWN_REF,
+		PTR_TO_BTF_ID | MEM_ALLOC | NON_OWN_REF | MEM_RCU,
+	}
+};
+
 static const struct bpf_reg_types kptr_xchg_dest_types = {
 	.types = {
 		PTR_TO_MAP_VALUE,
@@ -8310,16 +8320,32 @@ static const struct bpf_reg_types *compatible_reg_types[__BPF_ARG_TYPE_MAX] = {
 #endif
 	[ARG_PTR_TO_SOCKET]		= &fullsock_types,
 	[ARG_PTR_TO_BTF_ID]		= &btf_ptr_types,
-	[ARG_PTR_TO_SPIN_LOCK]		= &spin_lock_types,
+	[ARG_PTR_TO_SPIN_LOCK]		= &map_value_or_alloc_obj_types,
 	[ARG_PTR_TO_MEM]		= &mem_types,
 	[ARG_PTR_TO_RINGBUF_MEM]	= &ringbuf_mem_types,
 	[ARG_PTR_TO_PERCPU_BTF_ID]	= &percpu_btf_ptr_types,
 	[ARG_PTR_TO_FUNC]		= &func_ptr_types,
 	[ARG_PTR_TO_STACK]		= &stack_ptr_types,
 	[ARG_PTR_TO_CONST_STR]		= &const_str_ptr_types,
-	[ARG_PTR_TO_TIMER]		= &timer_types,
+	[ARG_PTR_TO_TIMER]		= &map_value_types,
 	[ARG_KPTR_XCHG_DEST]		= &kptr_xchg_dest_types,
 	[ARG_PTR_TO_DYNPTR]		= &dynptr_types,
+	/* Argument kinds only a kfunc can have. */
+	[ARG_SCALAR]			= &scalar_types,
+	[ARG_CONST_SCALAR]		= &scalar_types,
+	[ARG_CONST_MEM_SIZE]		= &scalar_types,
+	[ARG_PTR_TO_ALLOC_BTF_ID]	= &alloc_obj_types,
+	[ARG_PTR_TO_REFCOUNTED_KPTR]	= &alloc_obj_or_non_own_ref_types,
+	[ARG_PTR_TO_ITER]		= &stack_ptr_types,
+	[ARG_PTR_TO_LIST_HEAD]		= &map_value_or_alloc_obj_types,
+	[ARG_PTR_TO_LIST_NODE]		= &alloc_obj_or_non_own_ref_types,
+	[ARG_PTR_TO_RB_ROOT]		= &map_value_or_alloc_obj_types,
+	[ARG_PTR_TO_RB_NODE]		= &alloc_obj_or_non_own_ref_types,
+	[ARG_PTR_TO_RES_SPIN_LOCK]	= &map_value_or_alloc_obj_types,
+	[ARG_PTR_TO_WORKQUEUE]		= &map_value_types,
+	[ARG_PTR_TO_TASK_WORK]		= &map_value_types,
+	[ARG_PTR_TO_IRQ_FLAG]		= &stack_ptr_types,
+	[ARG_PTR_TO_ARENA]		= &arena_types,
 };
 
 static void bpf_diag_call_arg(struct bpf_verifier_env *env, u32 insn_idx, argno_t argno,
@@ -8420,6 +8446,9 @@ static int check_reg_type(struct bpf_verifier_env *env, struct bpf_reg_state *re
 		verifier_bug(env, "unsupported arg type %d", arg_type);
 		return -EFAULT;
 	}
+	if (meta->btf && base_type(arg_type) == ARG_PTR_TO_BTF_ID &&
+	    (base_type(type) == PTR_TO_BTF_ID || reg2btf_ids[base_type(type)]))
+		goto found;
 
 	/* ARG_PTR_TO_MEM + RDONLY is compatible with PTR_TO_MEM and PTR_TO_MEM + RDONLY,
 	 * but ARG_PTR_TO_MEM is compatible only with PTR_TO_MEM and NOT with PTR_TO_MEM + RDONLY
@@ -8463,7 +8492,7 @@ static int check_reg_type(struct bpf_verifier_env *env, struct bpf_reg_state *re
 	actual = bpf_diag_fmt(env, "%s", reg_type_str(env, reg->type));
 	accepted = bpf_diag_expected_reg_types(env, compatible->types, i);
 	bpf_diag_call_arg_fmt(env, env->insn_idx, argno, meta->func_name,
-			      "Pass a value with one of the accepted pointer or scalar types for this call.",
+			      bpf_diag_fmt(env, "Pass %s.", bpf_diag_arg_type_plain(arg_type)),
 			      "it has type %s, but this argument accepts %s",
 			      actual, accepted);
 	return -EACCES;
@@ -8775,7 +8804,7 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		return -EACCES;
 	}
 
-	err = resolve_func_arg_type(env, reg, arg, meta, insn_idx, &arg_type, &arg_size);
+	err = resolve_func_arg_type(env, reg, arg, meta, &arg_type, &arg_size);
 	if (err)
 		return err;
 
@@ -11820,7 +11849,7 @@ static bool btf_type_is_scalar_struct(struct bpf_verifier_env *env,
 
 static int resolve_func_arg_type(struct bpf_verifier_env *env,
 				 struct bpf_reg_state *reg, u32 arg,
-				 struct bpf_call_arg_meta *meta, int insn_idx,
+				 struct bpf_call_arg_meta *meta,
 				 enum bpf_arg_type *arg_type, u32 *arg_size)
 {
 	argno_t argno = argno_from_arg(arg + 1);
@@ -11845,24 +11874,8 @@ static int resolve_func_arg_type(struct bpf_verifier_env *env,
 		ref_t = btf_type_skip_modifiers(btf, ref_id, &ref_id);
 		ref_tname = btf_name_by_offset(btf, ref_t->name_off);
 
-		if (!btf_type_is_scalar_struct(env, btf, ref_t)) {
-			enum bpf_reg_type reg2btf_type = lookup_reg2btf_ids(ref_id);
-			const char *expected_type;
-
-			verbose(env, "%s is %s expected %s %s",
-				reg_arg_name(env, argno), reg_type_str(env, reg->type),
-				btf_type_str(ref_t), ref_tname);
-			if (reg2btf_type != NOT_INIT)
-				verbose(env, " or %s", reg_type_str(env, reg2btf_type));
-			verbose(env, "\n");
-			expected_type = bpf_diag_fmt_btf_type(env, btf, ref_id);
-			bpf_diag_call_arg_fmt(env, insn_idx, argno, meta->func_name,
-					      "Pass a verifier-tracked pointer to the expected kernel object type, not a pointer to stack storage or another memory buffer.",
-					      "the function expects a pointer to %s, but this argument is %s and cannot be used as that kernel object pointer",
-					      expected_type,
-					      bpf_diag_reg_type_plain(env, reg->type));
-			return -EINVAL;
-		}
+		if (!btf_type_is_scalar_struct(env, btf, ref_t))
+			return 0;
 
 		resolve_ret = btf_resolve_size(btf, ref_t, arg_size);
 		if (IS_ERR(resolve_ret)) {
@@ -13002,25 +13015,20 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		if (base_type(arg_type) == ARG_PTR_TO_BTF_ID)
 			ref_id = *meta->fn->arg_btf_id[i];
 
-		ret = resolve_func_arg_type(env, reg, i, meta, insn_idx, &arg_type, &arg_size);
+		ret = resolve_func_arg_type(env, reg, i, meta, &arg_type, &arg_size);
 		if (ret < 0)
 			return ret;
+
+		ret = check_reg_type(env, reg, argno, arg_type, meta);
+		if (ret < 0)
+			return ret;
+
 		ret = check_func_arg_reg_off(env, reg, argno, arg_type);
 		if (ret < 0)
 			return ret;
 
 		switch (base_type(arg_type)) {
 		case ARG_CONST_SCALAR:
-			if (reg->type != SCALAR_VALUE) {
-				verbose(env, "%s is not a scalar\n", reg_arg_name(env, argno));
-				bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-						      "Pass an integer scalar value for this argument, not a pointer or resource object.",
-						      "the kfunc expects an integer scalar, but %s is %s",
-						      reg_arg_name(env, argno),
-						      bpf_diag_reg_type_plain(env, reg->type));
-				return -EINVAL;
-			}
-
 			ret = process_const_arg(env, reg, argno, meta);
 			if (ret < 0) {
 				if (ret == -EINVAL)
@@ -13032,27 +13040,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			}
 			break;
 		case ARG_SCALAR:
-			if (reg->type != SCALAR_VALUE) {
-				verbose(env, "%s is not a scalar\n", reg_arg_name(env, argno));
-				bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-						      "Pass an integer scalar value for this argument, not a pointer or resource object.",
-						      "the kfunc expects an integer scalar, but %s is %s",
-						      reg_arg_name(env, argno),
-						      bpf_diag_reg_type_plain(env, reg->type));
-				return -EINVAL;
-			}
 			break;
 		case ARG_CONST_ALLOC_SIZE_OR_ZERO:
-			if (reg->type != SCALAR_VALUE) {
-				verbose(env, "%s is not a scalar\n", reg_arg_name(env, argno));
-				bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-						      "Pass an integer scalar value for this argument, not a pointer or resource object.",
-						      "the kfunc expects an integer scalar, but %s is %s",
-						      reg_arg_name(env, argno),
-						      bpf_diag_reg_type_plain(env, reg->type));
-				return -EINVAL;
-			}
-
 			if (is_kfunc_arg_scalar_with_name(btf, &args[i], "rdonly_buf_size"))
 				meta->r0_rdonly = true;
 			ret = process_const_alloc_mem_size(env, reg, argno, &meta->ret_mem);
@@ -13066,17 +13055,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			}
 			break;
 		case ARG_PTR_TO_CTX:
-			if (reg->type != PTR_TO_CTX) {
-				verbose(env, "%s expected pointer to ctx, but got %s\n",
-					reg_arg_name(env, argno), reg_type_str(env, reg->type));
-				bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-						      "Pass the original program context pointer or preserve it before modifying registers.",
-						      "the kfunc expects a context pointer, but %s is %s",
-						      reg_arg_name(env, argno),
-						      bpf_diag_reg_type_plain(env, reg->type));
-				return -EINVAL;
-			}
-
 			if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_cast_to_kern_ctx])) {
 				ret = get_kern_ctx_btf_id(&env->log, resolve_prog_type(env->prog));
 				if (ret < 0)
@@ -13085,11 +13063,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			}
 			break;
 		case ARG_PTR_TO_ARENA:
-			if (reg->type != PTR_TO_ARENA && reg->type != SCALAR_VALUE) {
-				verbose(env, "%s is not a pointer to arena or scalar\n",
-					reg_arg_name(env, argno));
-				return -EINVAL;
-			}
 			break;
 		case ARG_PTR_TO_ALLOC_BTF_ID:
 			if (reg->type == (PTR_TO_BTF_ID | MEM_ALLOC)) {
@@ -13104,15 +13077,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 						reg_arg_name(env, argno));
 					return -EINVAL;
 				}
-			} else {
-				verbose(env, "%s expected pointer to allocated object\n",
-					reg_arg_name(env, argno));
-				bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-						      "Pass a pointer returned by the matching BPF object allocation path.",
-						      "the kfunc expects an allocated object pointer, but %s is %s",
-						      reg_arg_name(env, argno),
-						      bpf_diag_reg_type_plain(env, reg->type));
-				return -EINVAL;
 			}
 			if (!reg_is_referenced(env, reg)) {
 				verbose(env, "allocated object must be referenced\n");
@@ -13161,12 +13125,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 				return ret;
 			break;
 		case ARG_PTR_TO_LIST_HEAD:
-			if (reg->type != PTR_TO_MAP_VALUE &&
-			    reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
-				verbose(env, "%s expected pointer to map value or allocated object\n",
-					reg_arg_name(env, argno));
-				return -EINVAL;
-			}
 			if (reg->type == (PTR_TO_BTF_ID | MEM_ALLOC) &&
 			    !reg_is_referenced(env, reg)) {
 				verbose(env, "allocated object must be referenced\n");
@@ -13177,12 +13135,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 				return ret;
 			break;
 		case ARG_PTR_TO_RB_ROOT:
-			if (reg->type != PTR_TO_MAP_VALUE &&
-			    reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
-				verbose(env, "%s expected pointer to map value or allocated object\n",
-					reg_arg_name(env, argno));
-				return -EINVAL;
-			}
 			if (reg->type == (PTR_TO_BTF_ID | MEM_ALLOC) &&
 			    !reg_is_referenced(env, reg)) {
 				verbose(env, "allocated object must be referenced\n");
@@ -13242,12 +13194,6 @@ check_ok:
 				return ret;
 			break;
 		case ARG_CONST_MAP_PTR:
-			if (base_type(reg->type) != CONST_PTR_TO_MAP ||
-			    type_may_be_null(reg->type)) {
-				verbose(env, "pointer in %s isn't map pointer\n",
-					reg_arg_name(env, argno));
-				return -EINVAL;
-			}
 			ret = process_map_ptr_arg(env, reg, argno, meta);
 			if (ret < 0)
 				return ret;
@@ -13336,16 +13282,6 @@ check_ok:
 			argno_t buff_argno = argno_from_arg(i);
 			enum bpf_mem_size_failure failure;
 
-			if (reg->type != SCALAR_VALUE) {
-				verbose(env, "%s is not a scalar\n", reg_arg_name(env, argno));
-				bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-						      "Pass an integer scalar length for this memory argument.",
-						      "the kfunc expects a scalar memory size, but %s is %s",
-						      reg_arg_name(env, argno),
-						      bpf_diag_reg_type_plain(env, reg->type));
-				return -EINVAL;
-			}
-
 			if (bpf_register_is_null(buff_reg))
 				break;
 
@@ -13383,23 +13319,9 @@ check_ok:
 			break;
 		}
 		case ARG_PTR_TO_FUNC:
-			if (reg->type != PTR_TO_FUNC) {
-				verbose(env, "%s expected pointer to func\n", reg_arg_name(env, argno));
-				return -EINVAL;
-			}
 			meta->subprogno = reg->subprogno;
 			break;
 		case ARG_PTR_TO_REFCOUNTED_KPTR:
-			if (!type_is_ptr_alloc_obj(reg->type)) {
-				verbose(env, "%s is neither owning or non-owning ref\n",
-					reg_arg_name(env, argno));
-				bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-						      "Pass an owning or non-owning pointer to a BPF-managed object containing a bpf_refcount field.",
-						      "the kfunc expects a pointer to a BPF-managed refcounted object, but %s is %s",
-						      reg_arg_name(env, argno),
-						      bpf_diag_reg_type_plain(env, reg->type));
-				return -EINVAL;
-			}
 			if (!type_is_non_owning_ref(reg->type))
 				meta->arg_owning_ref = true;
 
@@ -13419,61 +13341,26 @@ check_ok:
 			meta->arg_btf_id = reg->btf_id;
 			break;
 		case ARG_PTR_TO_CONST_STR:
-			if (reg->type != PTR_TO_MAP_VALUE) {
-				verbose(env, "%s doesn't point to a const string\n",
-					reg_arg_name(env, argno));
-				bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-						      "Pass a constant string pointer that the verifier recognizes, such as a string stored in a read-only map value.",
-						      "the kfunc expects a pointer to a constant string stored in verifier-known memory, but %s is %s",
-						      reg_arg_name(env, argno),
-						      bpf_diag_reg_type_plain(env, reg->type));
-				return -EINVAL;
-			}
 			ret = check_arg_const_str(env, reg, argno);
 			if (ret)
 				return ret;
 			break;
 		case ARG_PTR_TO_WORKQUEUE:
-			if (reg->type != PTR_TO_MAP_VALUE) {
-				verbose(env, "%s doesn't point to a map value\n",
-					reg_arg_name(env, argno));
-				return -EINVAL;
-			}
 			ret = check_map_field_pointer(env, reg, argno, BPF_WORKQUEUE, &meta->map);
 			if (ret < 0)
 				return ret;
 			break;
 		case ARG_PTR_TO_TIMER:
-			if (reg->type != PTR_TO_MAP_VALUE) {
-				verbose(env, "%s doesn't point to a map value\n",
-					reg_arg_name(env, argno));
-				return -EINVAL;
-			}
 			ret = process_timer_func(env, reg, argno, &meta->map);
 			if (ret < 0)
 				return ret;
 			break;
 		case ARG_PTR_TO_TASK_WORK:
-			if (reg->type != PTR_TO_MAP_VALUE) {
-				verbose(env, "%s doesn't point to a map value\n",
-					reg_arg_name(env, argno));
-				return -EINVAL;
-			}
 			ret = check_map_field_pointer(env, reg, argno, BPF_TASK_WORK, &meta->map);
 			if (ret < 0)
 				return ret;
 			break;
 		case ARG_PTR_TO_IRQ_FLAG:
-			if (reg->type != PTR_TO_STACK) {
-				verbose(env, "%s doesn't point to an irq flag on stack\n",
-					reg_arg_name(env, argno));
-				bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-						      "Pass the same stack slot used by bpf_local_irq_save() or bpf_res_spin_lock_irqsave().",
-						      "the kfunc expects a stack pointer to an IRQ flag slot, but %s is %s",
-						      reg_arg_name(env, argno),
-						      bpf_diag_reg_type_plain(env, reg->type));
-				return -EINVAL;
-			}
 			ret = process_irq_flag(env, reg, argno, meta);
 			if (ret < 0)
 				return ret;
@@ -13481,12 +13368,6 @@ check_ok:
 		case ARG_PTR_TO_RES_SPIN_LOCK:
 		{
 			int flags = PROCESS_RES_LOCK;
-
-			if (reg->type != PTR_TO_MAP_VALUE && reg->type != (PTR_TO_BTF_ID | MEM_ALLOC)) {
-				verbose(env, "%s doesn't point to map value or allocated object\n",
-					reg_arg_name(env, argno));
-				return -EINVAL;
-			}
 
 			if (!is_bpf_res_spin_lock_kfunc(meta->func_id))
 				return -EFAULT;
