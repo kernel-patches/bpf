@@ -1020,13 +1020,13 @@ struct bpf_func_proto {
 	};
 	union {
 		struct {
-			u32 *arg1_btf_id;
-			u32 *arg2_btf_id;
-			u32 *arg3_btf_id;
-			u32 *arg4_btf_id;
-			u32 *arg5_btf_id;
+			const u32 *arg1_btf_id;
+			const u32 *arg2_btf_id;
+			const u32 *arg3_btf_id;
+			const u32 *arg4_btf_id;
+			const u32 *arg5_btf_id;
 		};
-		u32 *arg_btf_id[MAX_BPF_FUNC_ARGS];
+		const u32 *arg_btf_id[MAX_BPF_FUNC_ARGS];
 		struct {
 			size_t arg1_size;
 			size_t arg2_size;
