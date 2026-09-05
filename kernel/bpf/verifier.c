@@ -8131,6 +8131,16 @@ static bool arg_type_is_dynptr(enum bpf_arg_type type)
 	return base_type(type) == ARG_PTR_TO_DYNPTR;
 }
 
+/*
+ * A kfunc is named by a BTF ID, which can take the same numeric value as an
+ * enum bpf_func_id. Only test meta->func_id against a BPF_FUNC_* once the call
+ * is known to be to a helper; meta->btf is set only for a kfunc.
+ */
+static bool is_helper_call(const struct bpf_call_arg_meta *meta, enum bpf_func_id func_id)
+{
+	return !meta->btf && meta->func_id == func_id;
+}
+
 static int resolve_map_arg_type(struct bpf_verifier_env *env,
 				 const struct bpf_call_arg_meta *meta,
 				 enum bpf_arg_type *arg_type)
@@ -8152,7 +8162,7 @@ static int resolve_map_arg_type(struct bpf_verifier_env *env,
 		}
 		break;
 	case BPF_MAP_TYPE_BLOOM_FILTER:
-		if (meta->func_id == BPF_FUNC_map_peek_elem)
+		if (is_helper_call(meta, BPF_FUNC_map_peek_elem))
 			*arg_type = ARG_PTR_TO_MAP_VALUE;
 		break;
 	default:
@@ -8367,7 +8377,8 @@ static int check_reg_type(struct bpf_verifier_env *env, struct bpf_reg_state *re
 		type &= ~DYNPTR_TYPE_FLAG_MASK;
 
 	/* Local kptr types are allowed as the source argument of bpf_kptr_xchg */
-	if (meta->func_id == BPF_FUNC_kptr_xchg && type_is_alloc(type) && reg_from_argno(argno) == BPF_REG_2) {
+	if (is_helper_call(meta, BPF_FUNC_kptr_xchg) && type_is_alloc(type) &&
+	    reg_from_argno(argno) == BPF_REG_2) {
 		type &= ~MEM_ALLOC;
 		type &= ~MEM_PERCPU;
 	}
@@ -8421,7 +8432,7 @@ found:
 		 * allows bpf_sk_release to work for multiple socket types.
 		 */
 		bool strict_type_match = arg_type_is_release(arg_type) &&
-					 meta->func_id != BPF_FUNC_sk_release;
+					 !is_helper_call(meta, BPF_FUNC_sk_release);
 
 		if (type_may_be_null(reg->type) &&
 		    (!type_may_be_null(arg_type) || arg_type_is_release(arg_type))) {
@@ -8442,7 +8453,7 @@ found:
 			arg_btf_id = compatible->btf_id;
 		}
 
-		if (meta->func_id == BPF_FUNC_kptr_xchg) {
+		if (is_helper_call(meta, BPF_FUNC_kptr_xchg)) {
 			if (map_kptr_match_type(env, meta->kptr_field, reg, reg_from_argno(argno)))
 				return -EACCES;
 		} else {
@@ -8473,13 +8484,14 @@ found:
 	case PTR_TO_BTF_ID | MEM_PERCPU | MEM_ALLOC:
 	case PTR_TO_BTF_ID | MEM_ALLOC | NON_OWN_REF:
 	case PTR_TO_BTF_ID | MEM_ALLOC | NON_OWN_REF | MEM_RCU:
-		if (meta->func_id != BPF_FUNC_spin_lock && meta->func_id != BPF_FUNC_spin_unlock &&
-		    meta->func_id != BPF_FUNC_kptr_xchg) {
+		if (!is_helper_call(meta, BPF_FUNC_spin_lock) &&
+		    !is_helper_call(meta, BPF_FUNC_spin_unlock) &&
+		    !is_helper_call(meta, BPF_FUNC_kptr_xchg)) {
 			verifier_bug(env, "unimplemented handling of MEM_ALLOC");
 			return -EFAULT;
 		}
 		/* Check if local kptr in src arg matches kptr in dst arg */
-		if (meta->func_id == BPF_FUNC_kptr_xchg) {
+		if (is_helper_call(meta, BPF_FUNC_kptr_xchg)) {
 			int regno = reg_from_argno(argno);
 
 			if (regno == BPF_REG_2 &&
@@ -8896,7 +8908,7 @@ skip_type_check:
 		 * Disable raw mode for bpf_map_peek_elem() on a bloom filter. The helper reads
 		 * the value buffer as an input rather than filling it.
 		 */
-		if (meta->func_id == BPF_FUNC_map_peek_elem &&
+		if (is_helper_call(meta, BPF_FUNC_map_peek_elem) &&
 		    meta->map.ptr->map_type == BPF_MAP_TYPE_BLOOM_FILTER)
 			meta->arg_raw_mem.regno = 0;
 
@@ -8918,11 +8930,11 @@ skip_type_check:
 			verbose(env, "can't spin_{lock,unlock} in rbtree cb\n");
 			return -EACCES;
 		}
-		if (meta->func_id == BPF_FUNC_spin_lock) {
+		if (is_helper_call(meta, BPF_FUNC_spin_lock)) {
 			err = process_spin_lock(env, reg, argno, PROCESS_SPIN_LOCK);
 			if (err)
 				return err;
-		} else if (meta->func_id == BPF_FUNC_spin_unlock) {
+		} else if (is_helper_call(meta, BPF_FUNC_spin_unlock)) {
 			err = process_spin_lock(env, reg, argno, 0);
 			if (err)
 				return err;
