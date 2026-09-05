@@ -8418,6 +8418,43 @@ static int check_func_arg_nullability(struct bpf_verifier_env *env,
 	return -EACCES;
 }
 
+static int check_func_arg_release(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
+				  argno_t argno, enum bpf_arg_type arg_type,
+				  struct bpf_call_arg_meta *meta, int insn_idx)
+{
+	const char *expected_type = "pointer";
+
+	if (!arg_type_is_release(arg_type))
+		return 0;
+
+	if (arg_type_is_dynptr(arg_type) || reg_is_referenced(env, reg) ||
+	    bpf_register_is_null(reg))
+		return 0;
+
+	verbose(env, "release function %s expects referenced PTR_TO_BTF_ID passed to %s\n",
+		meta->func_name, reg_arg_name(env, argno));
+
+	if (meta->btf) {
+		const struct btf_param *btf_arg;
+		const struct btf_type *t;
+		u32 ref_id;
+
+		btf_arg = &btf_params(meta->func_proto)[arg_idx_from_argno(argno)];
+		ref_id = btf_arg->type;
+		t = btf_type_skip_modifiers(meta->btf, btf_arg->type, NULL);
+		if (btf_type_is_ptr(t))
+			btf_type_skip_modifiers(meta->btf, t->type, &ref_id);
+		expected_type = bpf_diag_fmt(env, "value of type %s",
+					     bpf_diag_fmt_btf_type(env, meta->btf, ref_id));
+	}
+
+	bpf_diag_call_arg_fmt(env, insn_idx, argno, meta->func_name,
+			      bpf_diag_fmt(env, "Pass the resource-owning %s returned by the matching acquire call, or avoid the release function after ownership has already been transferred or released.",
+					   expected_type),
+			      "release functions require a value that owns a live resource returned by a matching acquire function");
+	return -EINVAL;
+}
+
 static const char *bpf_diag_expected_reg_types(struct bpf_verifier_env *env,
 					       const enum bpf_reg_type *types, int count)
 {
@@ -8825,29 +8862,9 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		return err;
 
 skip_type_check:
-	if (arg_type_is_release(arg_type)) {
-		if (type_may_be_null(reg->type)) {
-			verbose(env, "Possibly NULL pointer passed to trusted %s\n",
-				reg_arg_name(env, argno));
-			bpf_diag_call_arg(
-				env, insn_idx, argno, meta->func_name,
-				"the pointer may be NULL, but this call requires a non-NULL pointer",
-				"Add a NULL check and make the call only on the non-NULL path.");
-			return -EACCES;
-		}
-
-		if (!arg_type_is_dynptr(arg_type) &&
-		    !reg_is_referenced(env, reg) && !bpf_register_is_null(reg)) {
-			verbose(env,
-				"release helper %s expects referenced PTR_TO_BTF_ID passed to %s\n",
-				meta->func_name, reg_arg_name(env, argno));
-			bpf_diag_call_arg(
-				env, insn_idx, argno, meta->func_name,
-				"release helpers require a value that owns a live resource returned by a matching acquire helper",
-				"Pass the resource-owning pointer returned by the matching acquire helper, and avoid calling the release helper after ownership has already been transferred or released.");
-			return -EINVAL;
-		}
-	}
+	err = check_func_arg_release(env, reg, argno, arg_type, meta, insn_idx);
+	if (err)
+		return err;
 
 	if (reg_is_referenced(env, reg))
 		update_ref_obj(&meta->ref_obj, reg);
@@ -12990,19 +13007,9 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		if (ret < 0)
 			return ret;
 
-		if (regno == meta->release_regno && !is_kfunc_arg_dynptr(meta->btf, &args[i]) &&
-		    !reg_is_referenced(env, reg) && !bpf_register_is_null(reg)) {
-			const char *expected_type;
-
-			expected_type = bpf_diag_fmt_btf_type(env, btf, ref_id);
-			verbose(env, "release kfunc %s expects referenced PTR_TO_BTF_ID passed to %s\n",
-				func_name, reg_arg_name(env, argno));
-			bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-					      "Pass the resource-owning pointer returned by the matching acquire kfunc, and avoid calling the release kfunc after ownership has already been transferred or released.",
-					      "release kfuncs require a resource-owning value of type %s returned by a matching acquire kfunc",
-					      expected_type);
-			return -EINVAL;
-		}
+		ret = check_func_arg_release(env, reg, argno, arg_type, meta, insn_idx);
+		if (ret < 0)
+			return ret;
 
 		if (reg_is_referenced(env, reg))
 			update_ref_obj(&meta->ref_obj, reg);
