@@ -4313,20 +4313,28 @@ static int btf_owned_type_idx(const struct btf *btf, struct btf_struct_metas *ta
 	struct btf_struct_meta *meta;
 	u32 btf_id;
 
-	if (!(field->type & BPF_GRAPH_ROOT))
+	if (field->type & BPF_GRAPH_ROOT) {
+		btf_id = field->graph_root.value_btf_id;
+	} else if (field->type == BPF_KPTR_REF || field->type == BPF_KPTR_PERCPU) {
+		if (btf_is_kernel(field->kptr.btf))
+			return -ENOENT;
+		btf_id = field->kptr.btf_id;
+	} else {
 		return -ENOENT;
-	btf_id = field->graph_root.value_btf_id;
+	}
+
 	meta = btf_find_struct_meta(btf, btf_id);
 	if (!meta)
-		return -EFAULT;
+		return field->type & BPF_GRAPH_ROOT ? -EFAULT : -ENOENT;
 	return meta - tab->types;
 }
 
 /*
- * Each graph ownership edge adds kernel frames through
- * bpf_obj_free_fields() and __bpf_obj_drop_impl(). Keep the bound
- * deliberately small because object destruction can itself run below a BPF
- * call chain.
+ * Each ownership edge adds kernel frames through bpf_obj_free_fields() and
+ * __bpf_obj_drop_impl(). Keep the bound deliberately small because object
+ * destruction can itself run below a BPF call chain. A final pointee without
+ * special fields is not present in the struct metadata table and adds only a
+ * non-recursing drop.
  */
 #define BTF_MAX_OWNERSHIP_DEPTH 8
 
