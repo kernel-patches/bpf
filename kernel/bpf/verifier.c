@@ -7618,11 +7618,11 @@ __printf(6, 7) static void bpf_diag_call_arg_fmt(struct bpf_verifier_env *env, u
 /*
  * Validate dynptr arguments for helper, kfunc and subprog.
  *
- * @dynptr is both input and output. It is populated when the argument is
- * tagged with MEM_UNINIT (i.e., the dynptr argument that will be constructed)
- * and consumed when the argument is expecting to be an initialized dynptr.
- * @parent_id is used to track the referenced parent object (e.g., file or skb in
- * qdisc program) when constructing a dynptr.
+ * @meta carries the dynptr and referenced-object state. The dynptr is populated
+ * when the argument is tagged with MEM_UNINIT (i.e., the dynptr argument that
+ * will be constructed) and consumed when the argument is expected to be an
+ * initialized dynptr. The reference tracks the parent object (e.g., file or skb
+ * in qdisc program) when constructing a dynptr.
  *
  * There are two register types representing a bpf_dynptr, one is PTR_TO_STACK
  * which points to a stack slot, and the other is CONST_PTR_TO_DYNPTR.
@@ -7639,9 +7639,8 @@ __printf(6, 7) static void bpf_diag_call_arg_fmt(struct bpf_verifier_env *env, u
  * and checked dynamically during runtime.
  */
 static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
-			       argno_t argno, int insn_idx, const char *call_name,
-			       enum bpf_arg_type arg_type,
-			       struct ref_obj_desc *ref_obj, struct bpf_dynptr_desc *dynptr)
+			       argno_t argno, int insn_idx, enum bpf_arg_type arg_type,
+			       struct bpf_call_arg_meta *meta)
 {
 	int spi, err = 0;
 
@@ -7650,7 +7649,7 @@ static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_stat
 			"%s expected pointer to stack or const struct bpf_dynptr\n",
 			reg_arg_name(env, argno));
 		bpf_diag_call_arg_fmt(
-			env, insn_idx, argno, call_name,
+			env, insn_idx, argno, meta->func_name,
 			"Pass the address of a stack dynptr object, or use a const dynptr pointer returned by the verifier-supported path.",
 			"a dynptr argument must be a pointer to a dynptr stack slot or a verifier-provided const struct bpf_dynptr, but %s is %s",
 			reg_arg_name(env, argno), bpf_diag_reg_type_plain(env, reg->type));
@@ -7691,7 +7690,8 @@ static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_stat
 				return err;
 		}
 
-		err = mark_stack_slots_dynptr(env, reg, arg_type, insn_idx, ref_obj, dynptr);
+		err = mark_stack_slots_dynptr(env, reg, arg_type, insn_idx,
+					      &meta->ref_obj, &meta->dynptr);
 	} else /* OBJ_RELEASE and None case from above */ {
 		/* For the reg->type == PTR_TO_STACK case, bpf_dynptr is never const */
 		if (reg->type == CONST_PTR_TO_DYNPTR && (arg_type & OBJ_RELEASE)) {
@@ -7721,7 +7721,7 @@ static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_stat
 			verbose(env, "Expected a dynptr of type %s as %s\n",
 				dynptr_type_str(expected_type), reg_arg_name(env, argno));
 			bpf_diag_call_arg_fmt(
-				env, insn_idx, argno, call_name,
+				env, insn_idx, argno, meta->func_name,
 				"Use a dynptr constructor that matches this operation, or call an operation that accepts the dynptr's current type.",
 				"the dynptr is initialized with backing object type %s, but this operation expects dynptr type %s",
 				dynptr_type_str(actual_type), dynptr_type_str(expected_type));
@@ -7740,11 +7740,9 @@ static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_stat
 			reg = &state->stack[spi].spilled_ptr;
 		}
 
-		if (dynptr) {
-			dynptr->type = reg->dynptr.type;
-			dynptr->id = reg->id;
-			dynptr->parent_id = reg->parent_id;
-		}
+		meta->dynptr.type = reg->dynptr.type;
+		meta->dynptr.id = reg->id;
+		meta->dynptr.parent_id = reg->parent_id;
 	}
 	return err;
 }
@@ -8336,7 +8334,7 @@ static const char *bpf_diag_expected_reg_types(struct bpf_verifier_env *env,
 
 static int check_reg_type(struct bpf_verifier_env *env, struct bpf_reg_state *reg, argno_t argno,
 			  enum bpf_arg_type arg_type, const u32 *arg_btf_id,
-			  struct bpf_call_arg_meta *meta, const char *call_name)
+			  struct bpf_call_arg_meta *meta)
 {
 	enum bpf_reg_type expected, type = reg->type;
 	const struct bpf_reg_types *compatible;
@@ -8389,7 +8387,7 @@ static int check_reg_type(struct bpf_verifier_env *env, struct bpf_reg_state *re
 	verbose(env, "%s\n", reg_type_str(env, compatible->types[j]));
 	actual = bpf_diag_fmt(env, "%s", reg_type_str(env, reg->type));
 	accepted = bpf_diag_expected_reg_types(env, compatible->types, i);
-	bpf_diag_call_arg_fmt(env, env->insn_idx, argno, call_name,
+	bpf_diag_call_arg_fmt(env, env->insn_idx, argno, meta->func_name,
 			      "Pass a value with one of the accepted pointer or scalar types for this call.",
 			      "it has type %s, but this argument accepts %s",
 			      actual, accepted);
@@ -8403,7 +8401,7 @@ found:
 		if (!(arg_type & MEM_RDONLY)) {
 			verbose(env,
 				"%s() may write into memory pointed by %s type=%s\n",
-				func_id_name(meta->func_id),
+				meta->func_name,
 				reg_arg_name(env, argno), reg_type_str(env, reg->type));
 			return -EACCES;
 		}
@@ -8430,7 +8428,7 @@ found:
 			verbose(env, "Possibly NULL pointer passed to helper %s\n",
 				reg_arg_name(env, argno));
 			bpf_diag_call_arg(
-				env, env->insn_idx, argno, call_name,
+				env, env->insn_idx, argno, meta->func_name,
 				"the pointer may be NULL, but this call requires a non-NULL pointer",
 				"Add a NULL check and make the call only on the non-NULL path.");
 			return -EACCES;
@@ -8819,8 +8817,7 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	    base_type(arg_type) == ARG_PTR_TO_SPIN_LOCK)
 		arg_btf_id = fn->arg_btf_id[arg];
 
-	err = check_reg_type(env, reg, argno, arg_type, arg_btf_id, meta,
-			     func_id_name(meta->func_id));
+	err = check_reg_type(env, reg, argno, arg_type, arg_btf_id, meta);
 	if (err)
 		return err;
 
@@ -8832,9 +8829,9 @@ skip_type_check:
 	if (arg_type_is_release(arg_type) && !arg_type_is_dynptr(arg_type) &&
 	    !reg_is_referenced(env, reg) && !bpf_register_is_null(reg)) {
 		verbose(env, "release helper %s expects referenced PTR_TO_BTF_ID passed to %s\n",
-			func_id_name(meta->func_id), reg_arg_name(env, argno));
+			meta->func_name, reg_arg_name(env, argno));
 		bpf_diag_call_arg(
-			env, insn_idx, argno, func_id_name(meta->func_id),
+			env, insn_idx, argno, meta->func_name,
 			"release helpers require a value that owns a live resource returned by a matching acquire helper",
 			"Pass the resource-owning pointer returned by the matching acquire helper, and avoid calling the release helper after ownership has already been transferred or released.");
 		return -EINVAL;
@@ -8965,8 +8962,7 @@ skip_type_check:
 					 true, meta, NULL);
 		break;
 	case ARG_PTR_TO_DYNPTR:
-		err = process_dynptr_func(env, reg, argno, insn_idx, func_id_name(meta->func_id),
-					  arg_type, &meta->ref_obj, &meta->dynptr);
+		err = process_dynptr_func(env, reg, argno, insn_idx, arg_type, meta);
 		if (err)
 			return err;
 		break;
@@ -9713,11 +9709,15 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 	struct bpf_subprog_info *sub = subprog_info(env, subprog);
 	struct bpf_func_state *caller = cur_func(env);
 	struct bpf_verifier_log *log = &env->log;
-	struct ref_obj_desc ref_obj = {};
 	const struct btf_param *args;
 	const struct btf_type *func, *func_proto;
+	struct bpf_call_arg_meta meta;
 	u32 i;
 	int ret, err;
+
+	/* Leave btf and func_id zero: this is neither a helper nor a kfunc. */
+	memset(&meta, 0, sizeof(meta));
+	meta.func_name = bpf_subprog_name(env, subprog);
 
 	ret = btf_prepare_func_args(env, subprog);
 	if (ret) {
@@ -9802,20 +9802,16 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 				return ret;
 
 			ret = process_dynptr_func(env, reg, argno, env->insn_idx,
-						  bpf_subprog_name(env, subprog), arg->arg_type,
-						  &ref_obj, NULL);
+						  arg->arg_type, &meta);
 			if (ret)
 				return ret;
 		} else if (base_type(arg->arg_type) == ARG_PTR_TO_BTF_ID) {
-			struct bpf_call_arg_meta meta;
 			int err;
 
 			if (bpf_register_is_null(reg) && type_may_be_null(arg->arg_type))
 				continue;
 
-			memset(&meta, 0, sizeof(meta)); /* leave func_id as zero */
-			err = check_reg_type(env, reg, argno, arg->arg_type, &arg->btf_id, &meta,
-					     bpf_subprog_name(env, subprog));
+			err = check_reg_type(env, reg, argno, arg->arg_type, &arg->btf_id, &meta);
 			err = err ?: check_func_arg_reg_off(env, reg, argno, arg->arg_type);
 			if (err)
 				return err;
@@ -10929,6 +10925,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		env->insn_aux_data[insn_idx].non_sleepable = true;
 
 	meta.func_id = func_id;
+	meta.func_name = func_id_name(func_id);
 	meta.fn = fn;
 	/* check args */
 	for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++) {
@@ -13078,8 +13075,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 				dynptr_arg_type |= (unsigned int)get_dynptr_type_flag(parent_type);
 			}
 
-			ret = process_dynptr_func(env, reg, argno, insn_idx, func_name,
-						  dynptr_arg_type, &meta->ref_obj, &meta->dynptr);
+			ret = process_dynptr_func(env, reg, argno, insn_idx,
+						  dynptr_arg_type, meta);
 			if (ret < 0)
 				return ret;
 			break;
