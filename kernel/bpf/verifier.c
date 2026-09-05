@@ -12085,11 +12085,11 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 		   const struct btf_param *args, int arg, int nargs,
 		   struct bpf_func_proto *proto)
 {
-	const struct btf_type *t, *ref_t = NULL;
+	const struct btf_type *t, *ref_t = NULL, *resolve_ret;
 	const u32 *ref_id_ptr = NULL;
 	argno_t argno = argno_from_arg(arg + 1);
 	const char *ref_tname = NULL;
-	u32 ref_id;
+	u32 ref_id, type_size;
 	int arg_type;
 
 	proto->arg_btf_id[arg] = NULL;
@@ -12232,6 +12232,15 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 				reg_arg_name(env, argno), btf_type_str(ref_t), ref_tname);
 			return -EINVAL;
 		}
+		resolve_ret = btf_resolve_size(meta->btf, ref_t, &type_size);
+		if (IS_ERR(resolve_ret)) {
+			verbose(env,
+				"%s reference type('%s %s') size cannot be determined: %ld\n",
+				reg_arg_name(env, argno), btf_type_str(ref_t),
+				ref_tname, PTR_ERR(resolve_ret));
+			return -EINVAL;
+		}
+		proto->arg_size[arg] = type_size;
 		arg_type = ARG_PTR_TO_MEM | MEM_FIXED_SIZE;
 	}
 
@@ -12888,7 +12897,8 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		const struct btf_type *t, *ref_t, *resolve_ret;
 		argno_t argno = argno_from_arg(i + 1);
 		int regno = reg_from_argno(argno);
-		u32 ref_id = args[i].type, type_size;
+		u32 ref_id = args[i].type;
+		u32 arg_size = arg_type & MEM_FIXED_SIZE ? meta->fn->arg_size[i] : 0;
 
 		if (arg_type == ARG_PTR_TO_PROG_AUX) {
 			cur_aux(env)->arg_prog = regno;
@@ -13265,20 +13275,21 @@ check_ok:
 			 * If the register does not contain btf id but the argument type is a pointer to
 			 * scalar-only struct, allow verifying it as a fixed size memory.
 			 */
+			resolve_ret = btf_resolve_size(btf, ref_t, &arg_size);
+			if (IS_ERR(resolve_ret)) {
+				verbose(env,
+					"%s reference type('%s %s') size cannot be determined: %ld\n",
+					reg_arg_name(env, argno), btf_type_str(ref_t),
+					ref_tname, PTR_ERR(resolve_ret));
+				return -EINVAL;
+			}
 			arg_type = ARG_PTR_TO_MEM | MEM_FIXED_SIZE;
 			fallthrough;
 		case ARG_PTR_TO_MEM:
 			if (arg_type & MEM_FIXED_SIZE) {
 				bool known_memory;
 
-				resolve_ret = btf_resolve_size(btf, ref_t, &type_size);
-				if (IS_ERR(resolve_ret)) {
-					verbose(env, "%s reference type('%s %s') size cannot be determined: %ld\n",
-						reg_arg_name(env, argno), btf_type_str(ref_t),
-						ref_tname, PTR_ERR(resolve_ret));
-					return -EINVAL;
-				}
-				ret = check_mem_reg(env, reg, argno, type_size, BPF_READ | BPF_WRITE,
+				ret = check_mem_reg(env, reg, argno, arg_size, BPF_READ | BPF_WRITE,
 						    meta, &known_memory);
 				if (ret < 0) {
 					const char *expected_type;
@@ -13289,14 +13300,14 @@ check_ok:
 							env, insn_idx, argno, func_name,
 							"Pass memory with at least the required number of accessible bytes and suitable read and write access.",
 							"the kfunc expects %u bytes of memory for %s, but the verifier cannot prove that %s provides a readable and writable range of that size",
-							type_size, expected_type,
+							arg_size, expected_type,
 							bpf_diag_reg_type_plain(env, reg->type));
 					else
 						bpf_diag_call_arg_fmt(
 							env, insn_idx, argno, func_name,
 							"Pass stack, map, context, or other verifier-known memory of the expected type and size, not an integer cast to a pointer.",
 							"the kfunc expects %u bytes of memory for %s, but it is %s and not verifier-known memory",
-							type_size, expected_type,
+							arg_size, expected_type,
 							bpf_diag_reg_type_plain(env, reg->type));
 					return ret;
 				}
