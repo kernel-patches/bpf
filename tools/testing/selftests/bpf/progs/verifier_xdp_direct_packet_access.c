@@ -6,6 +6,50 @@
 #include "bpf_misc.h"
 
 SEC("xdp")
+__description("XDP pkt regsafe preserves packet pointer class displacement")
+__failure __msg("R2 min value is outside of the allowed memory range")
+__flag(BPF_F_ANY_ALIGNMENT)
+__naked void pkt_regsafe_class_displacement(void)
+{
+	asm volatile ("\
+	r8 = *(u32 *)(r1 + %[xdp_md_data_end]);\
+	r9 = *(u32 *)(r1 + %[xdp_md_data]);\
+	r6 = r9;\
+	r6 += 8;\
+	if r6 > r8 goto l_exit_%=;\
+	r0 = *(u64 *)(r9 + 0);\
+	r4 = r0;\
+	r4 &= 15;\
+	r7 = r0;\
+	r7 >>= 63;\
+	if r7 != 0 goto l_path_b_%=;\
+	r2 = r9;\
+	r2 += r4;\
+	r3 = r2;\
+	r3 += 4;\
+	goto l_join_%=;\
+l_path_b_%=: \
+	r4 &= 3;\
+	r4 += 8;\
+	r2 = r9;\
+	r2 += r4;\
+	r3 = r2;\
+	r3 -= 4;\
+l_join_%=: \
+	r5 = r3;\
+	r5 += 4;\
+	if r5 > r8 goto l_exit_%=;\
+	r0 = *(u64 *)(r2 + 0);\
+l_exit_%=: \
+	r0 = 0;\
+	exit;\
+"	:
+	: __imm_const(xdp_md_data, offsetof(struct xdp_md, data)),
+	  __imm_const(xdp_md_data_end, offsetof(struct xdp_md, data_end))
+	: __clobber_all);
+}
+
+SEC("xdp")
 __description("XDP pkt read, pkt_end mangling, bad access 1")
 __failure __msg("R3 pointer arithmetic on pkt_end")
 __naked void end_mangling_bad_access_1(void)
