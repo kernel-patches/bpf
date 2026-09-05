@@ -867,9 +867,9 @@ static int bcm_sf2_cfp_rule_insert(struct dsa_switch *ds, int port,
 	port_num = ring_cookie / SF2_NUM_EGRESS_QUEUES;
 
 	if (ring_cookie == RX_CLS_FLOW_DISC ||
+	    port_num >= priv->hw_params.num_ports ||
 	    !(dsa_is_user_port(ds, port_num) ||
-	      dsa_is_cpu_port(ds, port_num)) ||
-	    port_num >= priv->hw_params.num_ports)
+	      dsa_is_cpu_port(ds, port_num)))
 		return -EINVAL;
 
 	/* If the rule is matching a particular VLAN, make sure that we honor
