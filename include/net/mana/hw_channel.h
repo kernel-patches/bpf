@@ -11,6 +11,13 @@
 
 #define HW_CHANNEL_VF_BOOTSTRAP_QUEUE_DEPTH 1
 
+/* Upper bound on the device-reported HWC queue depth.  The HWC is a
+ * control channel, so a modest depth already keeps enough management
+ * commands in flight, while the depth directly scales two coherent DMA
+ * buffers of q_depth * max_msg_size bytes each.
+ */
+#define HW_CHANNEL_MAX_QUEUE_DEPTH 128
+
 #define HWC_INIT_DATA_CQID		1
 #define HWC_INIT_DATA_RQID		2
 #define HWC_INIT_DATA_SQID		3
@@ -164,6 +171,9 @@ struct hwc_wq {
 	u16 queue_depth;
 
 	struct hwc_cq *hwc_cq;
+
+	/* Serializes concurrent mana_gd_post_and_ring() calls. */
+	spinlock_t lock;
 };
 
 struct hwc_caller_ctx {
@@ -171,8 +181,30 @@ struct hwc_caller_ctx {
 	void *output_buf;
 	u32 output_buflen;
 
-	u32 error; /* Linux error code */
+	int error; /* Linux error code (negative errno or 0) */
 	u32 status_code;
+
+	/* Protects output_buf against concurrent access from
+	 * handle_resp() (CQ interrupt) and the sender timeout path.
+	 */
+	spinlock_t lock;
+
+	/* Tracks sender + handle_resp ownership.  The last put
+	 * (refcount reaches 0) releases the bitmap slot.
+	 */
+	refcount_t refcnt;
+	u16 msg_id;
+
+	/* Set by the first handle_resp(), or by the sender's timeout path,
+	 * so a later or duplicate response is dropped.
+	 */
+	bool responded;
+
+	/* True while the response-side reference is still held, i.e. while a
+	 * response for this acquisition may still arrive.  Dropped exactly
+	 * once, by whoever establishes that no further response is coming.
+	 */
+	bool resp_pending;
 };
 
 struct hw_channel_context {
@@ -180,9 +212,10 @@ struct hw_channel_context {
 	struct device *dev;
 
 	u16 num_inflight_msg;
+
 	u32 max_req_msg_size;
 
-	u16 hwc_init_q_depth_max;
+	u32 hwc_init_q_depth_max;
 	u32 hwc_init_max_req_msg_size;
 	u32 hwc_init_max_resp_msg_size;
 
@@ -192,12 +225,39 @@ struct hw_channel_context {
 	struct hwc_wq *txq;
 	struct hwc_cq *cq;
 
+	/* Counts the message slots that are free to acquire.  A slot held by
+	 * a timed-out request is never posted back, so the count falls
+	 * permanently until the response that owns it arrives or teardown
+	 * reclaims it; a sender then expires in down_timeout() instead of
+	 * blocking on a slot nothing will release.
+	 */
 	struct semaphore sema;
 	struct gdma_resource inflight_msg_res;
 
 	u32 pf_dest_vrq_id;
 	u32 pf_dest_vrcq_id;
 	u32 hwc_timeout;
+
+	/* Set after channel is fully established; cleared on teardown to
+	 * abort waiters in mana_hwc_get_msg_index() and reject new sends.
+	 */
+	bool channel_up;
+
+	/* True once mana_smc_setup_hwc() has handed the ESTABLISH_HWC message
+	 * to the PF, so the device may DMA into the HWC buffers.  That
+	 * function clears it on entry and sets it at the handover, so only a
+	 * failure before the handover leaves it false; a failure after it --
+	 * including one reported by mana_hwc_establish_channel() -- leaves it
+	 * set, which is what makes teardown attempt DESTROY_HWC.  Cleared
+	 * again once that teardown succeeds.
+	 */
+	bool setup_active;
+
+	/* Count of in-flight mana_gd_send_request() callers.  Protected
+	 * by gc->hwc_lock; the last sender to drop it to zero wakes
+	 * gc->hwc_drain_waitq for the mana_hwc_destroy_channel() drain.
+	 */
+	unsigned int active_senders;
 
 	struct hwc_caller_ctx *caller_ctx;
 };

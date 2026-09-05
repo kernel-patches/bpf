@@ -46,6 +46,7 @@ void rds_inc_init(struct rds_incoming *inc, struct rds_connection *conn,
 {
 	refcount_set(&inc->i_refcount, 1);
 	INIT_LIST_HEAD(&inc->i_item);
+	rds_conn_get(conn);	/* put in rds_inc_put() */
 	inc->i_conn = conn;
 	inc->i_conn_path = NULL;
 	inc->i_saddr = *saddr;
@@ -61,6 +62,7 @@ void rds_inc_path_init(struct rds_incoming *inc, struct rds_conn_path *cp,
 {
 	refcount_set(&inc->i_refcount, 1);
 	INIT_LIST_HEAD(&inc->i_item);
+	rds_conn_get(cp->cp_conn);	/* put in rds_inc_put() */
 	inc->i_conn = cp->cp_conn;
 	inc->i_conn_path = cp;
 	inc->i_saddr = *saddr;
@@ -81,9 +83,19 @@ void rds_inc_put(struct rds_incoming *inc)
 {
 	rdsdebug("put inc %p ref %d\n", inc, refcount_read(&inc->i_refcount));
 	if (refcount_dec_and_test(&inc->i_refcount)) {
+		struct rds_connection *conn = inc->i_conn;
+
 		BUG_ON(!list_empty(&inc->i_item));
 
-		inc->i_conn->c_trans->inc_free(inc);
+		/* inc_free() can free the memory @inc lives in, so the
+		 * connection reference has to be dropped through the
+		 * copy taken above.
+		 */
+		conn->c_trans->inc_free(inc);
+		/* get in rds_inc_init(), rds_inc_path_init() or
+		 * rds_recv_incoming()
+		 */
+		rds_conn_put(conn);
 	}
 }
 EXPORT_SYMBOL_GPL(rds_inc_put);
@@ -325,6 +337,13 @@ void rds_recv_incoming(struct rds_connection *conn, struct in6_addr *saddr,
 	unsigned long flags;
 	struct rds_conn_path *cp;
 
+	/* every caller initialized @inc with rds_inc_init() or
+	 * rds_inc_path_init() first, so i_conn already holds a reference.
+	 * Take the new one before dropping the old, so that re-pointing an
+	 * inc at the connection it already refers to cannot free it.
+	 */
+	rds_conn_get(conn);
+	rds_conn_put(inc->i_conn);
 	inc->i_conn = conn;
 	inc->i_rx_jiffies = jiffies;
 	if (conn->c_trans->t_mp_capable)

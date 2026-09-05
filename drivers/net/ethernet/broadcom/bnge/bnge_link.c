@@ -402,6 +402,9 @@ static char *bnge_report_fec(struct bnge_link_info *link_info)
 
 void bnge_report_link(struct bnge_dev *bd)
 {
+	if (!netif_running(bd->netdev))
+		return;
+
 	if (BNGE_LINK_IS_UP(bd)) {
 		const char *signal = "";
 		const char *flow_ctrl;

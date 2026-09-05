@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -985,4 +986,12 @@ XFAIL_ADD(tun_vnet_udptnl, 6in4_over_maxbytes, recv_gso_packet);
 XFAIL_ADD(tun_vnet_udptnl, 4in6_over_maxbytes, recv_gso_packet);
 XFAIL_ADD(tun_vnet_udptnl, 6in6_over_maxbytes, recv_gso_packet);
 
-TEST_HARNESS_MAIN
+int main(int argc, char **argv)
+{
+	if (unshare(CLONE_NEWNET) < 0) {
+		perror("unshare(CLONE_NEWNET)");
+		return 1;
+	}
+
+	return test_harness_run(argc, argv);
+}

@@ -238,9 +238,90 @@ void fbnic_bmc_rpc_init(struct fbnic_dev *fbd)
 	act_tcam->state = FBNIC_TCAM_S_UPDATE;
 }
 
+/**
+ * fbnic_bmc_rules_present - is the BMC currently programmed into the filters?
+ * @fbd: Pointer to fbnic device struct
+ *
+ * The BMC tag is only ever set on a MACDA entry while a BMC is present, so its
+ * presence tells us the BMC routing rules are in place without having to keep a
+ * separate state flag.
+ *
+ * Return: true if any MACDA entry carries the BMC tag, false otherwise.
+ */
+static bool fbnic_bmc_rules_present(struct fbnic_dev *fbd)
+{
+	int idx;
+
+	for (idx = ARRAY_SIZE(fbd->mac_addr); idx--;) {
+		struct fbnic_mac_addr *mac_addr = &fbd->mac_addr[idx];
+
+		if (mac_addr->state == FBNIC_TCAM_S_DISABLED)
+			continue;
+
+		if (test_bit(FBNIC_MAC_ADDR_T_BMC, mac_addr->act_tcam))
+			return true;
+	}
+
+	return false;
+}
+
+/**
+ * fbnic_bmc_rpc_disable - remove the BMC MAC and action rules
+ * @fbd: Pointer to fbnic device struct
+ *
+ * Undo fbnic_bmc_rpc_init(). The BMC can disable its NC-SI channel while the
+ * host interface stays up; when it does its routing rules must be torn down so
+ * we stop directing traffic to a BMC that is no longer there.
+ *
+ * Clear the MAC entries before the action rule. The action rule matches on a
+ * MAC entry index, so removing the entries first ensures the rule is never left
+ * pointing at an entry that is already gone. The hardware is updated by the
+ * __fbnic_set_rx_mode() call that follows this one.
+ */
+static void fbnic_bmc_rpc_disable(struct fbnic_dev *fbd)
+{
+	struct fbnic_act_tcam *act_tcam;
+	int idx;
+
+	/* Drop the BMC's claim on each MAC entry. An entry used only by the BMC
+	 * is deleted; one also used by the host is left in place.
+	 */
+	for (idx = ARRAY_SIZE(fbd->mac_addr); idx--;) {
+		struct fbnic_mac_addr *mac_addr = &fbd->mac_addr[idx];
+
+		if (mac_addr->state == FBNIC_TCAM_S_DISABLED)
+			continue;
+
+		__fbnic_xc_unsync(mac_addr, FBNIC_MAC_ADDR_T_BMC);
+	}
+
+	/* Then remove the action rule that steered traffic to the BMC. */
+	act_tcam = &fbd->act_tcam[FBNIC_RPC_ACT_TBL_BMC_OFFSET];
+	if (act_tcam->state == FBNIC_TCAM_S_VALID)
+		act_tcam->state = FBNIC_TCAM_S_DELETE;
+}
+
 void fbnic_bmc_rpc_check(struct fbnic_dev *fbd)
 {
 	int err;
+
+	/* The BMC went away while its rules are still programmed; remove them
+	 * now instead of waiting until the interface goes down. The enable
+	 * direction is handled by the need_bmc_tcam_reinit path below.
+	 */
+	if (!fbnic_bmc_present(fbd) && fbnic_bmc_rules_present(fbd)) {
+		struct fbnic_net *fbn = netdev_priv(fbd->netdev);
+
+		fbnic_bmc_rpc_disable(fbd);
+		/* Recompute the RSS actions so the multicast/broadcast copies
+		 * to the now absent BMC are cleared as well.
+		 */
+		fbnic_rss_reinit(fbd, fbn);
+		netif_addr_lock_bh(fbd->netdev);
+		__fbnic_set_rx_mode(fbd, &fbd->netdev->uc, &fbd->netdev->mc);
+		netif_addr_unlock_bh(fbd->netdev);
+		fbd->fw_cap.need_bmc_tcam_reinit = false;
+	}
 
 	if (fbd->fw_cap.need_bmc_tcam_reinit) {
 		fbnic_bmc_rpc_init(fbd);

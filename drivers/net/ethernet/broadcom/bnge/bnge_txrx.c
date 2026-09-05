@@ -1375,6 +1375,21 @@ int bnge_napi_poll(struct napi_struct *napi, int budget)
 				break;
 
 			idx = BNGE_NQ_HDL_IDX(idx);
+
+			/* NQ0 keeps running while administratively down to
+			 * process async events, but its cp_ring_arr is torn
+			 * down (and cp_ring_count zeroed) by
+			 * bnge_free_nq_tree() while down. Guard against a
+			 * stray/late CQ notification arriving in that state
+			 * instead of dereferencing a freed or out-of-range
+			 * cp_ring_arr.
+			 */
+			if (unlikely(!nqr->cp_ring_arr ||
+				     idx >= nqr->cp_ring_count)) {
+				raw_cons = NEXT_RAW_CMP(raw_cons);
+				continue;
+			}
+
 			cpr = &nqr->cp_ring_arr[idx];
 			cpr->had_nqe_notify = 1;
 			cpr->toggle = NQE_CN_TOGGLE(type);

@@ -66,7 +66,7 @@ void gve_rx_write_doorbell_dqo(const struct gve_priv *priv, int queue_idx);
 void gve_xdp_tx_flush_dqo(struct gve_priv *priv, u32 xdp_qid);
 
 static inline void
-gve_tx_put_doorbell_dqo(const struct gve_priv *priv,
+gve_tx_put_doorbell_dqo(struct gve_priv *priv,
 			const struct gve_queue_resources *q_resources, u32 val)
 {
 	u64 index;

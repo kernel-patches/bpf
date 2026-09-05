@@ -477,13 +477,15 @@ static int bnep_tx_frame(struct bnep_session *s, struct sk_buff *skb)
 	}
 
 send:
+	if (skb_linearize(skb)) {
+		kfree_skb(skb);
+		return -ENOMEM;
+	}
+
 	iv[il++] = (struct kvec) { skb->data, skb->len };
 	len += skb->len;
 
-	/* FIXME: linearize skb */
-	{
-		len = kernel_sendmsg(sock, &s->msg, iv, il, len);
-	}
+	len = kernel_sendmsg(sock, &s->msg, iv, il, len);
 	kfree_skb(skb);
 
 	if (len > 0) {

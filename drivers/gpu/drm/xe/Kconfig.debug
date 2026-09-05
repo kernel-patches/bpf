@@ -76,7 +76,6 @@ config DRM_XE_DEBUG_MEM
 config DRM_XE_KUNIT_TEST
         tristate "KUnit tests for the drm xe driver" if !KUNIT_ALL_TESTS
 	depends on DRM_XE && KUNIT && DEBUG_FS
-	default KUNIT_ALL_TESTS
 	select DRM_EXPORT_FOR_TESTS if m
 	help
 	  Choose this option to allow the driver to perform selftests under
@@ -84,6 +83,22 @@ config DRM_XE_KUNIT_TEST
 
 	  Recommended for driver developers only.
 
+	  If in doubt, say "N".
+
+config DRM_XE_DEBUG_PAGE_SIZE
+	bool "Enable debug control for user BO page-size allocation"
+	depends on DRM_XE_DEBUG && DEBUG_FS
+	help
+	  Expose a debugfs knob to override user BO page-size allocation
+	  handling for validation and debug. Supported modes include forced
+	  2M, forced 1G, and a mixed mode that exercises 4K, 64K, 2M, and
+	  1G page-size paths on platforms that support them.
+
+	  This is an unstable debugfs interface intended for development and
+	  validation only. Its layout, contents, and existence may change or
+	  be removed at any time with no regression warranty.
+
+	  Recommended for driver developers only.
 	  If in doubt, say "N".
 
 config DRM_XE_DEBUG_GUC

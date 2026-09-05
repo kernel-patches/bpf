@@ -829,11 +829,12 @@ int __tipc_nl_add_monitor(struct net *net, struct tipc_nl_msg *msg,
 {
 	struct tipc_monitor *mon = tipc_monitor(net, bearer_id);
 	char bearer_name[TIPC_MAX_BEARER_NAME];
+	size_t name_len = sizeof(bearer_name);
 	struct nlattr *attrs;
 	void *hdr;
 	int ret;
 
-	ret = tipc_bearer_get_name(net, bearer_name, bearer_id);
+	ret = tipc_bearer_get_name(net, bearer_name, name_len, bearer_id);
 	if (ret || !mon)
 		return 0;
 

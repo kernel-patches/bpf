@@ -188,6 +188,12 @@ config NET_DSA_TAG_RZN1_A5PSW
 	  Renesas RZ/N1 embedded switch that uses an 8 byte tag located after
 	  destination MAC address.
 
+config NET_DSA_TAG_SDSA
+	tristate "Tag driver for SoC-e switches using EtherType SDSA headers"
+	help
+	  Say Y or M if you want to enable support for tagging frames for the
+	  SoC-e switches.
+
 config NET_DSA_TAG_LAN9303
 	tristate "Tag driver for SMSC/Microchip LAN9303 family of switches"
 	help

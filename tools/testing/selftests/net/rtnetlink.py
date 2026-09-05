@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0
 
+import errno
 import socket
 import struct
 import time
 from lib.py import bkg, ip, ksft_exit, ksft_run, ksft_eq, ksft_ge, ksft_true, KsftSkipEx
-from lib.py import ksft_not_in, ksft_not_none
-from lib.py import CmdExitFailure, NetNS, NetNSEnter, RtnlAddrFamily, RtnlRouteFamily
+from lib.py import ksft_in, ksft_not_in, ksft_not_none
+from lib.py import CmdExitFailure, NetNS, NetNSEnter, NlError, RtnlAddrFamily, RtnlRouteFamily
 from lib.py import defer
 
 IPV4_ALL_HOSTS_MULTICAST = b'\xe0\x00\x00\x01'
 IPV4_TEST_MULTICAST = b'\xef\x01\x01\x01'
 IPV6_TEST_MULTICAST = bytes.fromhex('ff020000000000000000000000000123')
+ETH_ALL_HOSTS_MULTICAST = bytes.fromhex('01005e000001')
+ETH_TEST_MULTICAST_STR = '01:00:5e:01:01:01'
+ETH_TEST_MULTICAST = bytes.fromhex(ETH_TEST_MULTICAST_STR.replace(':', ''))
 
 
 def _users_for(rtnl: RtnlAddrFamily, family: int, grp: bytes, ifindex: int):
@@ -103,6 +107,53 @@ def dump_mcaddr6_check() -> None:
             finally:
                 s1.close()
                 s2.close()
+
+
+def dump_mcaddr_l2_check() -> None:
+    """
+    Verify link-layer multicast addresses in an AF_PACKET RTM_GETMULTICAST
+    dump: the ifa-index filter, mc-users and the permanent flag.
+    """
+
+    with NetNS() as ns:
+        with NetNSEnter(str(ns)):
+            for ifname in ("dummy1", "dummy2"):
+                ip(f"link add name {ifname} type dummy")
+                ip(f"link set {ifname} up")
+            dev_idx = socket.if_nametoindex("dummy1")
+            ip(f"maddr add {ETH_TEST_MULTICAST_STR} dev dummy1")
+
+            rtnl = RtnlAddrFamily()
+            try:
+                addresses = rtnl.getmulticast(
+                    {"ifa-family": socket.AF_PACKET, "ifa-index": dev_idx},
+                    dump=True)
+            except NlError as e:
+                if e.error == errno.EOPNOTSUPP:
+                    raise KsftSkipEx(
+                        "kernel does not support AF_PACKET multicast dump")
+                raise
+
+            # dummy2 has entries as well, only dummy1 may be listed
+            ksft_eq({addr['ifa-index'] for addr in addresses}, {dev_idx},
+                    "AF_PACKET multicast dump ignored ifa-index filter")
+
+            entries = {addr['multicast']: addr for addr in addresses}
+
+            # Bringing an Ethernet device up joins 224.0.0.1, which maps
+            # to 01:00:5e:00:00:01 in the device multicast list.
+            ksft_in(ETH_ALL_HOSTS_MULTICAST, entries,
+                    "dummy1 does not have the all-hosts link-layer address")
+            ksft_not_in('permanent',
+                        entries[ETH_ALL_HOSTS_MULTICAST]['ifa-flags'],
+                        "protocol entry is permanent")
+
+            ksft_in(ETH_TEST_MULTICAST, entries,
+                    "dummy1 does not have the SIOCADDMULTI address")
+            ksft_eq(entries[ETH_TEST_MULTICAST]['mc-users'], 1,
+                    "unexpected mc-users for the SIOCADDMULTI address")
+            ksft_in('permanent', entries[ETH_TEST_MULTICAST]['ifa-flags'],
+                    "SIOCADDMULTI entry is not permanent")
 
 
 def ipv4_devconf_notify() -> None:
@@ -315,7 +366,8 @@ def ipv6_route_del_reason_absent() -> None:
 
 
 def main() -> None:
-    ksft_run([dump_mcaddr_check, dump_mcaddr6_check, ipv4_devconf_notify,
+    ksft_run([dump_mcaddr_check, dump_mcaddr6_check, dump_mcaddr_l2_check,
+              ipv4_devconf_notify,
               ipv6_route_del_reason_expired,
               ipv6_route_del_reason_ra_withdrawn,
               ipv6_route_del_reason_absent])

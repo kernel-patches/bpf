@@ -522,6 +522,16 @@ skb_vlan_inet_prepare(struct sk_buff *skb, bool inner_proto_inherit)
 	return SKB_NOT_DROPPED_YET;
 }
 
+static inline void
+ip_tunnel_encap_snapshot(struct ip_tunnel_encap *dst,
+			 const struct ip_tunnel_encap *src)
+{
+	dst->type = READ_ONCE(src->type);
+	dst->flags = READ_ONCE(src->flags);
+	dst->sport = READ_ONCE(src->sport);
+	dst->dport = READ_ONCE(src->dport);
+}
+
 static inline int ip_encap_hlen(struct ip_tunnel_encap *e)
 {
 	const struct ip_tunnel_encap_ops *ops;

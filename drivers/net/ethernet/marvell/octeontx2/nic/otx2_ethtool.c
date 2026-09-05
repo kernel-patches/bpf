@@ -287,6 +287,14 @@ static int otx2_set_channels(struct net_device *dev,
 		return -EINVAL;
 	}
 
+	if (pfvf->mqprio.rate_limit &&
+	    (channel->tx_count != pfvf->hw.tx_queues ||
+	     channel->rx_count != pfvf->hw.rx_queues)) {
+		netdev_info(dev,
+			    "Not permitted to change channel count while MQ prio is active\n");
+		return -EINVAL;
+	}
+
 	if (if_up)
 		dev->netdev_ops->ndo_stop(dev);
 
@@ -939,7 +947,8 @@ static int otx2_get_rxfh(struct net_device *dev,
 
 	for (idx = 0; idx < rss->rss_size; idx++) {
 		/* Ignore if the rx queue is AF_XDP zero copy enabled */
-		if (test_bit(rss->ind_tbl[idx], pfvf->af_xdp_zc_qidx))
+		if (pfvf->af_xdp_zc_qidx &&
+		    test_bit(rss->ind_tbl[idx], pfvf->af_xdp_zc_qidx))
 			continue;
 		indir[idx] = rss->ind_tbl[idx];
 	}
@@ -1217,19 +1226,23 @@ static int otx2_get_link_ksettings(struct net_device *netdev,
 	if (IS_ERR(rsp))
 		return PTR_ERR(rsp);
 
-	if (rsp->fwdata.supported_an)
-		ethtool_link_ksettings_add_link_mode(cmd,
-						     supported,
-						     Autoneg);
-
 	otx2_get_link_mode_info(rsp->fwdata.advertised_link_modes,
 				OTX2_MODE_ADVERTISED, cmd);
 	otx2_get_fec_info(rsp->fwdata.advertised_fec,
 			  OTX2_MODE_ADVERTISED, cmd);
+	if (rsp->fwdata.advertised_an)
+		ethtool_link_ksettings_add_link_mode(cmd,
+						     advertising,
+						     Autoneg);
+
 	otx2_get_link_mode_info(rsp->fwdata.supported_link_modes,
 				OTX2_MODE_SUPPORTED, cmd);
 	otx2_get_fec_info(rsp->fwdata.supported_fec,
 			  OTX2_MODE_SUPPORTED, cmd);
+	if (rsp->fwdata.supported_an)
+		ethtool_link_ksettings_add_link_mode(cmd,
+						     supported,
+						     Autoneg);
 	return 0;
 }
 

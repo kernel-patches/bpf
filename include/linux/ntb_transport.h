@@ -50,6 +50,8 @@
 
 struct ntb_transport_qp;
 
+#define NTB_TRANSPORT_MAX_META	0x00ffffffU
+
 struct ntb_transport_client {
 	struct device_driver driver;
 	int (*probe)(struct device *client_dev);
@@ -63,7 +65,7 @@ void ntb_transport_unregister_client_dev(char *device_name);
 
 struct ntb_queue_handlers {
 	void (*rx_handler)(struct ntb_transport_qp *qp, void *qp_data,
-			   void *data, int len);
+			   void *data, int len, unsigned int meta);
 	void (*tx_handler)(struct ntb_transport_qp *qp, void *qp_data,
 			   void *data, int len);
 	void (*event_handler)(void *data, int status);
@@ -78,7 +80,7 @@ void ntb_transport_free_queue(struct ntb_transport_qp *qp);
 int ntb_transport_rx_enqueue(struct ntb_transport_qp *qp, void *cb, void *data,
 			     unsigned int len);
 int ntb_transport_tx_enqueue(struct ntb_transport_qp *qp, void *cb, void *data,
-			     unsigned int len);
+			     unsigned int len, unsigned int meta);
 void *ntb_transport_rx_remove(struct ntb_transport_qp *qp, unsigned int *len);
 void ntb_transport_link_up(struct ntb_transport_qp *qp);
 void ntb_transport_link_down(struct ntb_transport_qp *qp);

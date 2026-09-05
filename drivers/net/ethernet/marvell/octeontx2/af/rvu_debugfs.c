@@ -829,19 +829,25 @@ static int rvu_dbg_rvu_pf_cgx_map_display(struct seq_file *filp, void *unused)
 	int pf, domain, blkid;
 	u8 cgx_id, lmac_id;
 	u16 pcifunc;
+	u8 start;
 
-	domain = 2;
+	domain = pci_domain_nr(rvu->pdev->bus);
 	mac_ops = get_mac_ops(rvu_first_cgx_pdata(rvu));
 	/* There can be no CGX devices at all */
 	if (!mac_ops)
 		return 0;
 	seq_printf(filp, "PCI dev\t\tRVU PF Func\tNIX block\t%s\tLMAC\tCHAN\n",
 		   mac_ops->name);
+
+	/* All the PF devices are on contiguous PCI bus numbers, but the PF0(AF)
+	 * may not start from 1 always. Hence get domain and bus from PCI device.
+	 */
+	start = rvu->pdev->bus->number;
 	for (pf = 0; pf < rvu->hw->total_pfs; pf++) {
 		if (!is_pf_cgxmapped(rvu, pf))
 			continue;
 
-		pdev =  pci_get_domain_bus_and_slot(domain, pf + 1, 0);
+		pdev =  pci_get_domain_bus_and_slot(domain, pf + start, 0);
 		if (!pdev)
 			continue;
 
@@ -1697,6 +1703,12 @@ static int rvu_dbg_nix_tm_tree_display(struct seq_file *m, void *unused)
 		return -EINVAL;
 
 	pfvf = rvu_get_pfvf(rvu, pcifunc);
+
+	if (!pfvf->sq_ctx) {
+		seq_printf(m, "SQ context is not initialized for pcifunc 0x%x\n", pcifunc);
+		return -EINVAL;
+	}
+
 	max_id = pfvf->sq_ctx->qsize;
 
 	memset(&aq_req, 0, sizeof(struct nix_aq_enq_req));
@@ -2957,8 +2969,10 @@ static int cgx_print_dmac_flt(struct seq_file *s, int lmac_id)
 	struct rvu_cgx_lmac_dbgfs_ctx *dctx = s->private;
 	struct rvu *rvu = dctx->rvu;
 	struct pci_dev *pdev = NULL;
+	struct mac_ops *mac_ops;
 	void *cgxd = dctx->cgxd;
 	char *bcast, *mcast;
+	u64 drop_cnt;
 	u16 index, domain;
 	u8 dmac[ETH_ALEN];
 	u64 cfg, mac;
@@ -2995,6 +3009,12 @@ static int cgx_print_dmac_flt(struct seq_file *s, int lmac_id)
 			u64_to_ether_addr(mac, dmac);
 			seq_printf(s, "%7d     %pM\n", index, dmac);
 		}
+	}
+
+	mac_ops = get_mac_ops(cgxd);
+	if (mac_ops && mac_ops->get_dmacflt_dropped_pktcnt) {
+		drop_cnt = rvu_cgx_get_dmacflt_dropped_pktcnt(cgxd, lmac_id);
+		seq_printf(s, "\nDMAC filter drop count: %llu\n", drop_cnt);
 	}
 
 	pci_dev_put(pdev);

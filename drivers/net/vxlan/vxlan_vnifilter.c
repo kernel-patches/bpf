@@ -718,6 +718,8 @@ static void vxlan_vni_free(struct vxlan_vni_node *vninode)
 	kfree(vninode);
 }
 
+static void vxlan_vni_node_rcu_free(struct rcu_head *rcu);
+
 static int vxlan_vni_add(struct vxlan_dev *vxlan,
 			 struct vxlan_vni_group *vg,
 			 u32 vni, union vxlan_addr *group,
@@ -756,9 +758,21 @@ static int vxlan_vni_add(struct vxlan_dev *vxlan,
 
 	err = vxlan_vni_update_group(vxlan, vninode, group, true, &changed,
 				     extack);
+	if (err)
+		goto err_vni_del;
 
 	vxlan_vnifilter_notify(vxlan, vninode, RTM_NEWTUNNEL);
 
+	return 0;
+
+err_vni_del:
+	vxlan_vni_delete_group(vxlan, vninode);
+	rhashtable_remove_fast(&vg->vni_hash, &vninode->vnode,
+			       vxlan_vni_rht_params);
+	__vxlan_vni_del_list(vg, vninode);
+	if (vxlan->dev->flags & IFF_UP)
+		vxlan_vs_add_del_vninode(vxlan, vninode, true);
+	call_rcu(&vninode->rcu, vxlan_vni_node_rcu_free);
 	return err;
 }
 

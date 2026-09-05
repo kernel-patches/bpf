@@ -63,6 +63,7 @@
 /* Media-dependent registers. */
 #define MDIO_PMA_10GBT_SWAPPOL	130	/* 10GBASE-T pair swap & polarity */
 #define MDIO_PMA_10GBT_TXPWR	131	/* 10GBASE-T TX power control */
+#define MDIO_PMA_10GBT_TESTMODE 132	/* Test mode control */
 #define MDIO_PMA_10GBT_SNR	133	/* 10GBASE-T SNR margin, lane A.
 					 * Lanes B-D are numbered 134-136. */
 #define MDIO_PMA_10GBR_FSRT_CSR	147	/* 10GBASE-R fast retrain status and control */
@@ -319,6 +320,17 @@
 
 /* PMA 10GBASE-R Fast Retrain status and control register. */
 #define MDIO_PMA_10GBR_FSRT_ENABLE	0x0001	/* Fast retrain enable */
+
+/* PMA 10GBASE-R/-T Template Test Mode Register*/
+#define MDIO_PMA_10GBT_TESTMODE_TEMPLATE 0xE000 /* Template test mode */
+#define MDIO_PMA_10GBT_TESTMODE_NORMAL 0x0000 /* Template Normal */
+#define MDIO_PMA_10GBT_TESTMODE_1 0x2000 /* Template TestMode1 */
+#define MDIO_PMA_10GBT_TESTMODE_2 0x4000 /* Template TestMode2 */
+#define MDIO_PMA_10GBT_TESTMODE_3 0x6000 /* Template TestMode3 */
+#define MDIO_PMA_10GBT_TESTMODE_4 0x8000 /* Template TestMode4 */
+#define MDIO_PMA_10GBT_TESTMODE_5 0xa000 /* Template TestMode5 */
+#define MDIO_PMA_10GBT_TESTMODE_6 0xc000 /* Template TestMode6 */
+#define MDIO_PMA_10GBT_TESTMODE_7 0xe000 /* Template TestMode7 */
 
 /* PCS 10GBASE-R/-T status register 1. */
 #define MDIO_PCS_10GBRT_STAT1_BLKLK	0x0001	/* Block lock attained */

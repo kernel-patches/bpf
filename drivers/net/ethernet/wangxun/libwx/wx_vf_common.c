@@ -16,9 +16,16 @@ int wxvf_suspend(struct device *dev_d)
 	struct pci_dev *pdev = to_pci_dev(dev_d);
 	struct wx *wx = pci_get_drvdata(pdev);
 
+	rtnl_lock();
 	netif_device_detach(wx->netdev);
+	if (netif_running(wx->netdev))
+		wxvf_close(wx->netdev);
 	wx_clear_interrupt_scheme(wx);
+	pci_clear_master(pdev);
 	pci_disable_device(pdev);
+	rtnl_unlock();
+	timer_delete_sync(&wx->service_timer);
+	cancel_work_sync(&wx->service_task);
 
 	return 0;
 }
@@ -34,11 +41,25 @@ int wxvf_resume(struct device *dev_d)
 {
 	struct pci_dev *pdev = to_pci_dev(dev_d);
 	struct wx *wx = pci_get_drvdata(pdev);
+	int err;
 
-	pci_set_master(pdev);
-	wx_init_interrupt_scheme(wx);
-	netif_device_attach(wx->netdev);
+	err = pci_enable_device_mem(pdev);
+	if (err) {
+		dev_err(&pdev->dev, "Cannot enable PCI device from suspend\n");
+		return err;
+	}
 
+	rtnl_lock();
+	if (netif_running(wx->netdev)) {
+		clear_bit(WX_STATE_DOWN, wx->state);
+		clear_bit(WX_STATE_SERVICE_SCHED, wx->state);
+		mod_timer(&wx->service_timer, jiffies + HZ);
+		set_bit(WX_FLAG_NEED_REOPEN, wx->flags);
+	} else {
+		pci_set_master(pdev);
+		netif_device_attach(wx->netdev);
+	}
+	rtnl_unlock();
 	return 0;
 }
 EXPORT_SYMBOL(wxvf_resume);
@@ -388,6 +409,9 @@ static void wxvf_link_config_subtask(struct wx *wx)
 {
 	struct net_device *netdev = wx->netdev;
 
+	if (test_bit(WX_STATE_DOWN, wx->state))
+		return;
+
 	wxvf_watchdog_update_link(wx);
 	if (wx->link) {
 		if (netif_carrier_ok(netdev))
@@ -403,10 +427,37 @@ static void wxvf_link_config_subtask(struct wx *wx)
 	}
 }
 
+static void wxvf_reopen_subtask(struct wx *wx)
+{
+	if (!test_bit(WX_FLAG_NEED_REOPEN, wx->flags))
+		return;
+
+	rtnl_lock();
+	pci_set_master(wx->pdev);
+	if (wx_init_interrupt_scheme(wx))
+		goto out;
+	if (wxvf_open(wx->netdev))
+		goto out_clear_scheme;
+	clear_bit(WX_FLAG_NEED_REOPEN, wx->flags);
+	netif_device_attach(wx->netdev);
+	rtnl_unlock();
+	return;
+
+out_clear_scheme:
+	wx_clear_interrupt_scheme(wx);
+out:
+	pci_clear_master(wx->pdev);
+	clear_bit(WX_FLAG_NEED_REOPEN, wx->flags);
+	set_bit(WX_STATE_DOWN, wx->state);
+	rtnl_unlock();
+	dev_err(&wx->pdev->dev, "Failed to reopen device\n");
+}
+
 static void wxvf_service_task(struct work_struct *work)
 {
 	struct wx *wx = container_of(work, struct wx, service_task);
 
+	wxvf_reopen_subtask(wx);
 	wxvf_link_config_subtask(wx);
 	wxvf_reset_subtask(wx);
 	wx_service_event_complete(wx);

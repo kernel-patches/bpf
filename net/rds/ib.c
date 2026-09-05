@@ -162,12 +162,12 @@ static int rds_ib_add_one(struct ib_device *device)
 		   IB_ODP_SUPPORT_READ);
 
 	rds_ibdev->max_1m_mrs = device->attrs.max_mr ?
-		min_t(unsigned int, (device->attrs.max_mr / 2),
-		      rds_ib_mr_1m_pool_size) : rds_ib_mr_1m_pool_size;
+		min(device->attrs.max_mr / 2,
+		    rds_ib_mr_1m_pool_size) : rds_ib_mr_1m_pool_size;
 
 	rds_ibdev->max_8k_mrs = device->attrs.max_mr ?
-		min_t(unsigned int, ((device->attrs.max_mr / 2) * RDS_MR_8K_SCALE),
-		      rds_ib_mr_8k_pool_size) : rds_ib_mr_8k_pool_size;
+		min((device->attrs.max_mr / 2) * RDS_MR_8K_SCALE,
+		    rds_ib_mr_8k_pool_size) : rds_ib_mr_8k_pool_size;
 
 	rds_ibdev->max_initiator_depth = device->attrs.max_qp_init_rd_atom;
 	rds_ibdev->max_responder_resources = device->attrs.max_qp_rd_atom;
@@ -204,7 +204,7 @@ static int rds_ib_add_one(struct ib_device *device)
 		goto put_dev;
 	}
 
-	rdsdebug("RDS/IB: max_mr = %d, max_wrs = %d, max_sge = %d, max_1m_mrs = %d, max_8k_mrs = %d\n",
+	rdsdebug("RDS/IB: max_mr = %u, max_wrs = %d, max_sge = %d, max_1m_mrs = %d, max_8k_mrs = %d\n",
 		 device->attrs.max_mr, rds_ibdev->max_wrs, rds_ibdev->max_sge,
 		 rds_ibdev->max_1m_mrs, rds_ibdev->max_8k_mrs);
 
@@ -525,10 +525,7 @@ static void rds_ib_set_unloading(void)
 
 static bool rds_ib_is_unloading(struct rds_connection *conn)
 {
-	struct rds_conn_path *cp = &conn->c_path[0];
-
-	return (test_bit(RDS_DESTROY_PENDING, &cp->cp_flags) ||
-		atomic_read(&rds_ib_unloading) != 0);
+	return atomic_read(&rds_ib_unloading) != 0;
 }
 
 void rds_ib_exit(void)
@@ -541,6 +538,15 @@ void rds_ib_exit(void)
 #endif
 	rds_ib_unregister_client();
 	rds_ib_destroy_nodev_conns();
+	rds_conn_wait_conns_freed(&rds_ib_transport);
+
+	/* Tearing down the last connection may have dropped the final
+	 * reference on a device, deferring rds_ib_dev_free() to rds_wq.
+	 * Drain it before the module goes away; it queues nothing
+	 * further on rds_wq.
+	 */
+	flush_workqueue(rds_wq);
+
 	rds_ib_sysctl_exit();
 	rds_ib_recv_exit();
 	rds_trans_unregister(&rds_ib_transport);

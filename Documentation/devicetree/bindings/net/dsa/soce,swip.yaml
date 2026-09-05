@@ -1,0 +1,161 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/dsa/soce,swip.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: SoC-e ethernet switch IP core for FPGAs
+
+maintainers:
+  - Vasilij Strassheim <v.strassheim@linutronix.de>
+
+description:
+  SoC-e Ethernet switch IP cores are FPGA-based switches whose features
+  and number of ports are selected at synthesis time. Ports can connect
+  to CPUs, external PHYs, FPGA logic, or other switch cores. The
+  integrated MDIO controller provides multiple independently selectable
+  external outputs.
+
+$ref: dsa.yaml#
+
+properties:
+  compatible:
+    const: soce,swip-00-04-0c-10
+    description:
+      Register layout with the core version register at offset 0x00 and
+      feature identification registers at offsets 0x04, 0x0c, and 0x10.
+      Switch instances using this register layout are autodetected from
+      these registers and use this compatible regardless of their
+      synthesis-time feature and port configuration.
+
+  reg:
+    maxItems: 1
+
+  mdios:
+    type: object
+    additionalProperties: false
+    description:
+      External MDIO buses provided by the integrated MDIO controller.
+      Each child bus selects one controller output.
+
+    properties:
+      '#address-cells':
+        const: 1
+      '#size-cells':
+        const: 0
+
+    patternProperties:
+      '^mdio@[0-9a-f]+$':
+        $ref: /schemas/net/mdio.yaml#
+        unevaluatedProperties: false
+
+        properties:
+          reg:
+            maximum: 30
+            description:
+              MDIO controller output index, which must be lower than the
+              number of implemented switch ports.
+
+        required:
+          - reg
+
+    required:
+      - '#address-cells'
+      - '#size-cells'
+
+patternProperties:
+  '^(ethernet-)?ports$':
+    patternProperties:
+      '^(ethernet-)?port@[0-9a-f]+$':
+        $ref: dsa-port.yaml#
+        unevaluatedProperties: false
+
+        properties:
+          reg:
+            maximum: 30
+            description:
+              Switch port index. Supported switch configurations have
+              up to 31 ports, numbered from 0 through 30.
+
+          phy-mode:
+            enum:
+              - mii
+              - gmii
+              - rmii
+              - rgmii
+              - rgmii-id
+              - rgmii-rxid
+              - rgmii-txid
+
+        required:
+          - phy-mode
+
+required:
+  - compatible
+  - reg
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    ethernet-switch@80020000 {
+        compatible = "soce,swip-00-04-0c-10";
+        reg = <0x80020000 0x10000>;
+
+        ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            port@0 {
+                reg = <0>;
+                label = "lan0";
+                phy-handle = <&switchphy0>;
+                phy-mode = "rgmii-id";
+            };
+
+            port@1 {
+                reg = <1>;
+                label = "lan1";
+                phy-handle = <&switchphy1>;
+                phy-mode = "rgmii-id";
+            };
+
+            port@2 {
+                reg = <2>;
+                ethernet = <&eth0>;
+                phy-mode = "gmii";
+
+                fixed-link {
+                    speed = <1000>;
+                    full-duplex;
+                };
+            };
+        };
+
+        mdios {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            mdio@0 {
+                reg = <0>;
+                #address-cells = <1>;
+                #size-cells = <0>;
+
+                switchphy0: ethernet-phy@1 {
+                    compatible = "ethernet-phy-ieee802.3-c22";
+                    reg = <1>;
+                };
+            };
+
+            mdio@1 {
+                reg = <1>;
+                #address-cells = <1>;
+                #size-cells = <0>;
+
+                switchphy1: ethernet-phy@1 {
+                    compatible = "ethernet-phy-ieee802.3-c22";
+                    reg = <1>;
+                };
+            };
+        };
+    };
