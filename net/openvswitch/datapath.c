@@ -285,6 +285,7 @@ void ovs_dp_process_packet(struct sk_buff *skb, struct sw_flow_key *key)
 			consume_skb(skb);
 			break;
 		default:
+			skb_tx_error(skb);
 			kfree_skb(skb);
 			break;
 		}
@@ -467,6 +468,9 @@ static int queue_userspace_packet(struct datapath *dp, struct sk_buff *skb,
 	if (!dp_ifindex)
 		return -ENODEV;
 
+	if (!skb_frags_readable(skb))
+		return -EFAULT;
+
 	if (skb_vlan_tag_present(skb)) {
 		nskb = skb_clone(skb, GFP_ATOMIC);
 		if (!nskb)
@@ -601,8 +605,6 @@ static int queue_userspace_packet(struct datapath *dp, struct sk_buff *skb,
 	err = genlmsg_unicast(ovs_dp_get_net(dp), user_skb, upcall_info->portid);
 	user_skb = NULL;
 out:
-	if (err)
-		skb_tx_error(skb);
 	consume_skb(user_skb);
 	consume_skb(nskb);
 
@@ -1919,6 +1921,10 @@ static int ovs_dp_cmd_new(struct sk_buff *skb, struct genl_info *info)
 
 	ovs_unlock();
 
+	/* Start periodic mask rebalancing if it wasn't already. */
+	schedule_delayed_work(&ovs_net->masks_rebalance,
+			      DP_MASKS_REBALANCE_INTERVAL);
+
 	ovs_notify(&dp_datapath_genl_family, reply, info);
 	return 0;
 
@@ -2596,16 +2602,20 @@ static void ovs_dp_masks_rebalance(struct work_struct *work)
 	struct ovs_net *ovs_net = container_of(work, struct ovs_net,
 					       masks_rebalance.work);
 	struct datapath *dp;
+	bool rearm;
 
 	ovs_lock();
 
 	list_for_each_entry(dp, &ovs_net->dps, list_node)
 		ovs_flow_masks_rebalance(&dp->table);
 
+	rearm = !list_empty(&ovs_net->dps);
+
 	ovs_unlock();
 
-	schedule_delayed_work(&ovs_net->masks_rebalance,
-			      msecs_to_jiffies(DP_MASKS_REBALANCE_INTERVAL));
+	if (rearm)
+		schedule_delayed_work(&ovs_net->masks_rebalance,
+				      DP_MASKS_REBALANCE_INTERVAL);
 }
 
 static const struct nla_policy vport_policy[OVS_VPORT_ATTR_MAX + 1] = {
@@ -2711,8 +2721,6 @@ static int __net_init ovs_init_net(struct net *net)
 	if (err)
 		return err;
 
-	schedule_delayed_work(&ovs_net->masks_rebalance,
-			      msecs_to_jiffies(DP_MASKS_REBALANCE_INTERVAL));
 	return 0;
 }
 
@@ -2739,6 +2747,13 @@ static void __net_exit list_vports_from_net(struct net *net, struct net *dnet,
 	}
 }
 
+static void __net_exit ovs_pre_exit_net(struct net *dnet)
+{
+	ovs_lock();
+	ovs_ct_exit_start(dnet);
+	ovs_unlock();
+}
+
 static void __net_exit ovs_exit_net(struct net *dnet)
 {
 	struct datapath *dp, *dp_next;
@@ -2749,7 +2764,7 @@ static void __net_exit ovs_exit_net(struct net *dnet)
 
 	ovs_lock();
 
-	ovs_ct_exit(dnet);
+	ovs_ct_exit_finish(dnet);
 
 	list_for_each_entry_safe(dp, dp_next, &ovs_net->dps, list_node)
 		__dp_destroy(dp);
@@ -2773,6 +2788,7 @@ static void __net_exit ovs_exit_net(struct net *dnet)
 
 static struct pernet_operations ovs_net_ops = {
 	.init = ovs_init_net,
+	.pre_exit = ovs_pre_exit_net,
 	.exit = ovs_exit_net,
 	.id   = &ovs_net_id,
 	.size = sizeof(struct ovs_net),

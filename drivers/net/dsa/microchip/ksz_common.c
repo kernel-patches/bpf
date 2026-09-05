@@ -1161,6 +1161,8 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.supports_mii = {false, false, true},
 		.supports_rmii = {false, false, true},
 		.internal_phy = {true, true, false},
+		.n_pins = 12,
+		.n_per_out = 12,
 	},
 
 	[KSZ8563] = {
@@ -1194,6 +1196,8 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.ptp_capable = true,
 		.wr_table = &ksz8563_register_set,
 		.rd_table = &ksz8563_register_set,
+		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[KSZ8795] = {
@@ -1414,6 +1418,8 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.sgmii_port = 7,
 		.wr_table = &ksz9477_register_set,
 		.rd_table = &ksz9477_register_set,
+		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[KSZ9896] = {
@@ -1486,6 +1492,41 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.gbit_capable	= {true, true, true, true, true, true, true},
 	},
 
+	[KSZ9897S] = {
+		.chip_id = KSZ9897S_CHIP_ID,
+		.dev_name = "KSZ9897S",
+		.num_vlans = 4096,
+		.num_alus = 4096,
+		.num_statics = 16,
+		.cpu_ports = 0x7F,	/* can be configured as cpu port */
+		.port_cnt = 7,		/* total physical port count */
+		.port_nirqs = 2,
+		.num_tx_queues = 4,
+		.num_ipms = 8,
+		.ops = &ksz9477_dev_ops,
+		.switch_ops = &ksz9477_switch_ops,
+		.phylink_mac_ops = &ksz9477_phylink_mac_ops,
+		.phy_errata_9477 = true,
+		.mib_names = ksz9477_mib_names,
+		.mib_cnt = ARRAY_SIZE(ksz9477_mib_names),
+		.reg_mib_cnt = MIB_COUNTER_NUM,
+		.regs = ksz9477_regs,
+		.masks = ksz9477_masks,
+		.shifts = ksz9477_shifts,
+		.xmii_ctrl0 = ksz9477_xmii_ctrl0,
+		.xmii_ctrl1 = ksz9477_xmii_ctrl1,
+		.supports_mii	= {false, false, false, false,
+				   false, true, false},
+		.supports_rmii	= {false, false, false, false,
+				   false, true, false},
+		.supports_rgmii = {false, false, false, false,
+				   false, true, false},
+		.internal_phy	= {true, true, true, true,
+				   true, false, false},
+		.gbit_capable	= {true, true, true, true, true, true, true},
+		.sgmii_port = 7,
+	},
+
 	[KSZ9893] = {
 		.chip_id = KSZ9893_CHIP_ID,
 		.dev_name = "KSZ9893",
@@ -1544,6 +1585,8 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.internal_phy = {true, true, false},
 		.gbit_capable = {true, true, true},
 		.ptp_capable = true,
+		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[KSZ8567] = {
@@ -1581,6 +1624,8 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.gbit_capable	= {false, false, false, false, false,
 				   true, true},
 		.ptp_capable = true,
+		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[KSZ9567] = {
@@ -1615,6 +1660,8 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 				   true, false, false},
 		.gbit_capable	= {true, true, true, true, true, true, true},
 		.ptp_capable = true,
+		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[LAN9370] = {
@@ -1646,6 +1693,8 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.supports_rgmii = {false, false, false, false, true},
 		.internal_phy = {true, true, true, true, false},
 		.ptp_capable = true,
+		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[LAN9371] = {
@@ -1677,6 +1726,8 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.supports_rgmii = {false, false, false, false, true, true},
 		.internal_phy = {true, true, true, true, false, false},
 		.ptp_capable = true,
+		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[LAN9372] = {
@@ -1712,6 +1763,8 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.internal_phy	= {true, true, true, true,
 				   false, false, true, true},
 		.ptp_capable = true,
+		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[LAN9373] = {
@@ -1747,6 +1800,8 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.internal_phy	= {true, true, true, false,
 				   false, false, true, true},
 		.ptp_capable = true,
+		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[LAN9374] = {
@@ -1782,6 +1837,8 @@ const struct ksz_chip_data ksz_switch_chips[] = {
 		.internal_phy	= {true, true, true, true,
 				   false, false, true, true},
 		.ptp_capable = true,
+		.n_pins = 2,
+		.n_per_out = 3,
 	},
 
 	[LAN9646] = {
@@ -3897,6 +3954,7 @@ int ksz_switch_register(struct ksz_device *dev)
 	struct device_node *ports;
 	phy_interface_t interface;
 	unsigned int port_num;
+	u32 lookup_chip_id;
 	int ret;
 	int i;
 
@@ -3933,7 +3991,30 @@ int ksz_switch_register(struct ksz_device *dev)
 	if (ret)
 		return ret;
 
-	info = ksz_lookup_info(dev->chip_id);
+	lookup_chip_id = dev->chip_id;
+
+	/* The KSZ9897S and the KSZ9897R report the same chip ID and differ
+	 * only in chip_data: only the S has the SGMII port 7, the R has a
+	 * second RGMII port instead. Bit 7 of the port 7 XMII control 0
+	 * register is read-only and tells them apart; it reads one on the S.
+	 * Compare the KSZ9897S data sheet DS00002394C section 5.2.4.1 with
+	 * the KSZ9897R data sheet DS00002330D section 5.2.3.1.
+	 *
+	 * Only the chip_data entry differs, so dev->chip_id keeps the shared
+	 * chip ID and nothing else has to know about the variant.
+	 */
+	if (dev->chip_id == KSZ9897_CHIP_ID) {
+		u8 val;
+
+		ret = ksz_read8(dev, KSZ9897_REG_PORT7_XMII_CTRL_0, &val);
+		if (ret)
+			return ret;
+
+		if (val & KSZ9897_PORT7_SGMII_SEL)
+			lookup_chip_id = KSZ9897S_CHIP_ID;
+	}
+
+	info = ksz_lookup_info(lookup_chip_id);
 	if (!info)
 		return -ENODEV;
 

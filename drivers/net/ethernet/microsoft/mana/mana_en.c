@@ -2986,6 +2986,10 @@ static int mana_alloc_rx_wqe(struct mana_port_context *apc,
 		*cq_size += COMP_ENTRY_SIZE;
 	}
 
+	/* Reserve an extra slot for Fence completion
+	 * event (CQE_RX_OBJECT_FENCE) in case RX CQ is full.
+	 */
+	*cq_size += COMP_ENTRY_SIZE;
 	return 0;
 }
 
@@ -3080,7 +3084,7 @@ static struct mana_rxq *mana_create_rxq(struct mana_port_context *apc,
 		goto out;
 
 	rq_size = MANA_PAGE_ALIGN(rq_size);
-	cq_size = MANA_PAGE_ALIGN(cq_size);
+	cq_size = MANA_PAGE_ALIGN(roundup_pow_of_two(cq_size));
 
 	/* Create RQ */
 	memset(&spec, 0, sizeof(spec));
@@ -3304,6 +3308,28 @@ static void mana_rss_table_init(struct mana_port_context *apc)
 	for (i = 0; i < apc->indir_table_sz; i++)
 		apc->indir_table[i] =
 			ethtool_rxfh_indir_default(i, apc->num_queues);
+}
+
+/* Whether the current indirection table can be kept for apc->num_queues,
+ * rather than rebuilt from the driver default.
+ *
+ * Only a user table ("ethtool -X") is worth keeping; a driver-generated one
+ * is rebuilt so that it spreads over every queue. An entry pointing past the
+ * last queue cannot be kept: mana_config_rss() uses these entries to index
+ * apc->rxqs[], which holds apc->num_queues pointers.
+ */
+static bool mana_rss_table_keep(struct mana_port_context *apc)
+{
+	u32 i;
+
+	if (!netif_is_rxfh_configured(apc->ndev))
+		return false;
+
+	for (i = 0; i < apc->indir_table_sz; i++)
+		if (apc->indir_table[i] >= apc->num_queues)
+			return false;
+
+	return true;
 }
 
 int mana_disable_vport_rx(struct mana_port_context *apc)
@@ -3621,7 +3647,20 @@ int mana_alloc_queues(struct net_device *ndev)
 		goto destroy_rxq;
 	}
 
-	mana_rss_table_init(apc);
+	/* Keep a user-configured table across the rebuild: its entries are
+	 * queue indices and stay meaningful while they are all still in range.
+	 * Only a driver-generated table is regenerated here.
+	 *
+	 * A table that cannot be kept is replaced by the default without
+	 * telling the core, which keeps reporting the table as user
+	 * configured. That is what this function did for every table before,
+	 * and reporting it here is not an option: ethtool_rxfh_indir_lost()
+	 * sends ETHTOOL_MSG_RSS_NTF, which requires the netdev instance lock,
+	 * and this runs both with that lock held (ndo_open) and without it
+	 * (mana_attach() from the reset and resume paths).
+	 */
+	if (!mana_rss_table_keep(apc))
+		mana_rss_table_init(apc);
 
 	err = mana_config_rss(apc, TRI_STATE_TRUE, true, true);
 	if (err) {
@@ -3983,7 +4022,8 @@ static void mana_rdma_service_handle(struct work_struct *work)
 	struct device *dev = gd->gdma_context->dev;
 	int ret;
 
-	if (READ_ONCE(gd->rdma_teardown))
+	/* Pairs with the smp_store_release() in mana_rdma_probe(). */
+	if (smp_load_acquire(&gd->rdma_teardown))
 		goto out;
 
 	switch (serv_work->event) {
@@ -4278,6 +4318,21 @@ int mana_rdma_probe(struct gdma_dev *gd)
 	err = mana_gd_register_device(gd);
 	if (err)
 		return err;
+
+	/* Clear the state left by a previous mana_rdma_remove() so servicing
+	 * events are handled again after a reset cycle.
+	 */
+	gd->is_suspended = false;
+
+	/* Publish is_suspended before re-opening the gate, so the handler
+	 * cannot observe an open gate with a stale is_suspended.  Pairs
+	 * with the smp_load_acquire() in mana_rdma_service_handle().  This
+	 * matters on the reset path, where mana_rdma_remove() closed the
+	 * gate and drained the workqueue; on the initial probe path the
+	 * gate was never closed and both flags are already clear.  It does
+	 * not order gd->adev, which add_adev() publishes below.
+	 */
+	smp_store_release(&gd->rdma_teardown, false);
 
 	err = add_adev(gd, "rdma");
 	if (err)

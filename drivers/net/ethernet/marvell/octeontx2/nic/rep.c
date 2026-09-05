@@ -301,6 +301,12 @@ static void rvu_rep_state_evt_handler(struct otx2_nic *priv,
 	int rep_id;
 
 	rep_id = rvu_rep_get_repid(priv, info->pcifunc);
+	if (rep_id < 0) {
+		dev_warn_ratelimited(priv->dev,
+				     "REP state event for unknown pcifunc 0x%x (err %d)\n",
+				     info->pcifunc, rep_id);
+		return;
+	}
 	rep = priv->reps[rep_id];
 	if (info->evt_data.vf_state)
 		rep->flags |= RVU_REP_VF_INITIALIZED;
@@ -459,6 +465,9 @@ static int rvu_rep_open(struct net_device *dev)
 	netif_carrier_on(dev);
 	netif_tx_start_all_queues(dev);
 
+	if (rep->pcifunc & RVU_PFVF_FUNC_MASK)
+		return 0;
+
 	evt.event = RVU_EVENT_PORT_STATE;
 	evt.evt_data.port_state = 1;
 	evt.pcifunc = rep->pcifunc;
@@ -477,6 +486,9 @@ static int rvu_rep_stop(struct net_device *dev)
 
 	netif_carrier_off(dev);
 	netif_tx_disable(dev);
+
+	if (rep->pcifunc & RVU_PFVF_FUNC_MASK)
+		return 0;
 
 	evt.event = RVU_EVENT_PORT_STATE;
 	evt.pcifunc = rep->pcifunc;

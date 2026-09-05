@@ -275,6 +275,7 @@ static int pptp_rcv_core(struct sock *sk, struct sk_buff *skb)
 	struct pppox_sock *po = pppox_sk(sk);
 	struct pptp_opt *opt = &po->proto.pptp;
 	int headersize, payload_len, seq;
+	unsigned int payload_avail;
 	__u8 *payload;
 	struct pptp_gre_header *header;
 
@@ -314,23 +315,34 @@ static int pptp_rcv_core(struct sock *sk, struct sk_buff *skb)
 	if (!pskb_may_pull(skb, headersize + payload_len))
 		goto drop;
 
-	payload = skb->data + headersize;
+	payload_avail = skb->len - headersize;
 	/* check for expected sequence number */
 	if (seq < opt->seq_recv + 1 || WRAPPED(opt->seq_recv, seq)) {
-		if ((payload[0] == PPP_ALLSTATIONS) && (payload[1] == PPP_UI) &&
-				(PPP_PROTOCOL(payload) == PPP_LCP) &&
-				((payload[4] == PPP_LCP_ECHOREQ) || (payload[4] == PPP_LCP_ECHOREP)))
-			goto allow_packet;
+		if (payload_avail >= PPP_HDRLEN + 1) {
+			if (!pskb_may_pull(skb, headersize + PPP_HDRLEN + 1))
+				goto drop;
+
+			payload = skb->data + headersize;
+			if (payload[0] == PPP_ALLSTATIONS && payload[1] == PPP_UI &&
+			    PPP_PROTOCOL(payload) == PPP_LCP &&
+			    (payload[4] == PPP_LCP_ECHOREQ || payload[4] == PPP_LCP_ECHOREP))
+				goto allow_packet;
+		}
 	} else {
 		opt->seq_recv = seq;
 allow_packet:
 		skb_pull(skb, headersize);
 
-		if (payload[0] == PPP_ALLSTATIONS && payload[1] == PPP_UI) {
-			/* chop off address/control */
-			if (skb->len < 3)
+		if (payload_avail >= 2) {
+			if (!pskb_may_pull(skb, 2))
 				goto drop;
-			skb_pull(skb, 2);
+
+			if (skb->data[0] == PPP_ALLSTATIONS && skb->data[1] == PPP_UI) {
+				/* chop off address/control */
+				if (skb->len < 3)
+					goto drop;
+				skb_pull(skb, 2);
+			}
 		}
 
 		skb->ip_summed = CHECKSUM_NONE;

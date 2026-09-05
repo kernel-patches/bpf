@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config SIT9531X_DPLL
+	tristate "SiTime SiT9531x DPLL driver"
+	depends on I2C && NET
+	select DPLL
+	select REGMAP_I2C
+	help
+	  Driver for SiTime SiT9531x family clock generators
+	  (SiT95317, SiT95316).
+
+	  This driver registers each on-chip PLL as a DPLL device
+	  and exposes input/output clocks as DPLL pins, providing
+	  runtime configuration via Generic Netlink.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called sit9531x.

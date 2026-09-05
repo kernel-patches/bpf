@@ -1,0 +1,171 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/dpll/sitime,sit95316.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: SiTime SiT95316/SiT95317 DPLL Clock Generator
+
+maintainers:
+  - Ali Rouhi <arouhi@sitime.com>
+
+description: |
+  SiTime SiT95316 and SiT95317 are I2C-controlled programmable clock
+  generators with integrated DPLL for synchronization applications.  Both
+  variants contain four PLLs with automatic/manual reference selection,
+  DCO frequency adjustment, and phase offset measurement via an on-chip
+  TDC (Time-to-Digital Converter).
+
+  Both parts have 4 differential input pairs whose lanes can also be
+  driven independently as single-ended references, so 8 inputs are
+  individually selectable.  SiT95317 drives 8 outputs, SiT95316
+  drives 12.
+
+properties:
+  compatible:
+    enum:
+      - sitime,sit95316
+      - sitime,sit95317
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+
+  clock-names:
+    items:
+      - const: xtal
+
+  reset-gpios:
+    maxItems: 1
+    description:
+      GPIO connected to the chip's active-low reset pin (RESETB).
+
+  interrupts:
+    maxItems: 1
+    description:
+      Interrupt from the chip's active-low INTRB output.  Asserted when
+      the device detects a status change such as lock acquisition or loss.
+
+  sitime,pll-fvco:
+    $ref: /schemas/types.yaml#/definitions/uint64-array
+    minItems: 4
+    maxItems: 4
+    description:
+      Per-PLL VCO frequency in Hz for PLLA, PLLB, PLLC, PLLD.  Neither
+      standard frequency suffix fits.  The VCO bands are 4915.2 MHz to
+      5898.24 MHz and 6875 MHz to 7812.5 MHz, so every valid value
+      exceeds the 32 bits "-hz" allows, and the band edges are not
+      whole megahertz either, so "-mhz" cannot express them.  Hence a
+      plain uint64-array.  Override where the standard
+      Fvco = Fref * DIVN derivation does not match the running VCO --
+      for example a PLL operating in INTSYNC mode.  A value of 0 keeps
+      the register-derived computation for that PLL.
+
+  sitime,output-pll-map:
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 8
+    maxItems: 12
+    items:
+      enum: [0, 1, 2, 3, 255]
+    description:
+      Source PLL index (0=PLLA .. 3=PLLD) for each output 0..11.  The
+      value 255 (0xff) marks an output as unmapped and prevents the
+      driver from registering it as a DPLL pin.  Override for
+      configurations where the chip's per-PLL OUTPUT_ENABLE bitmaps do
+      not unambiguously describe output-to-PLL routing.
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - clock-names
+
+allOf:
+  - $ref: /schemas/dpll/dpll-device.yaml#
+  # SiT95317 exposes 8 outputs, SiT95316 exposes 12.  Bound the
+  # output-pll-map length to the variant so a SiT95317 node cannot
+  # describe more outputs than the part has.
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: sitime,sit95317
+    then:
+      properties:
+        sitime,output-pll-map:
+          maxItems: 8
+  # SiT95316 has 12 outputs.  When the map is supplied it must describe
+  # all of them, otherwise the trailing outputs are left ambiguous.
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: sitime,sit95316
+    then:
+      properties:
+        sitime,output-pll-map:
+          minItems: 12
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        dpll@68 {
+            compatible = "sitime,sit95316";
+            reg = <0x68>;
+            clocks = <&xo2>;
+            clock-names = "xtal";
+            reset-gpios = <&gpio 78 GPIO_ACTIVE_LOW>;
+            interrupts = <12 IRQ_TYPE_LEVEL_LOW>;
+            dpll-types = "eec", "eec", "eec", "eec";
+            sitime,pll-fvco = /bits/ 64 <6900000000 0 0 0>;
+            sitime,output-pll-map = <0 0 0 0 0 0 0 0 0 0 0 0>;
+
+            input-pins {
+                #address-cells = <1>;
+                #size-cells = <0>;
+
+                pin@0 {
+                    reg = <0>;
+                    label = "clkin0";
+                    connection-type = "ext";
+                    supported-frequencies-hz = /bits/ 64 <10000000>;
+                };
+
+                pin@1 {
+                    reg = <1>;
+                    label = "clkin1";
+                    connection-type = "synce";
+                    supported-frequencies-hz = /bits/ 64 <156250000>;
+                };
+            };
+
+            output-pins {
+                #address-cells = <1>;
+                #size-cells = <0>;
+
+                pin@0 {
+                    reg = <0>;
+                    label = "clkout0";
+                    esync-control;
+                    supported-frequencies-hz = /bits/ 64 <156250000>;
+                };
+
+                pin@1 {
+                    reg = <1>;
+                    label = "clkout1";
+                    supported-frequencies-hz = /bits/ 64 <25000000>;
+                };
+            };
+        };
+    };
+...

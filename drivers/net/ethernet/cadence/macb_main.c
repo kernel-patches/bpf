@@ -1322,8 +1322,8 @@ static void macb_tx_error_task(struct work_struct *work)
 				bp->netdev->stats.tx_packets++;
 				queue->stats.tx_packets++;
 				packets++;
-				bp->netdev->stats.tx_bytes += skb->len;
-				queue->stats.tx_bytes += skb->len;
+				bp->netdev->stats.tx_bytes += skb->len - tx_skb->fcs_len;
+				queue->stats.tx_bytes += skb->len - tx_skb->fcs_len;
 				bytes += skb->len;
 			}
 		} else {
@@ -1450,8 +1450,8 @@ static int macb_tx_complete(struct macb_queue *queue, int budget)
 					    skb->data);
 				bp->netdev->stats.tx_packets++;
 				queue->stats.tx_packets++;
-				bp->netdev->stats.tx_bytes += skb->len;
-				queue->stats.tx_bytes += skb->len;
+				bp->netdev->stats.tx_bytes += skb->len - tx_skb->fcs_len;
+				queue->stats.tx_bytes += skb->len - tx_skb->fcs_len;
 				packets++;
 				bytes += skb->len;
 			}
@@ -2199,7 +2199,8 @@ static void macb_poll_controller(struct net_device *netdev)
 static unsigned int macb_tx_map(struct macb *bp,
 				struct macb_queue *queue,
 				struct sk_buff *skb,
-				unsigned int hdrlen)
+				unsigned int hdrlen,
+				u8 fcs_len)
 {
 	unsigned int f, nr_frags = skb_shinfo(skb)->nr_frags;
 	unsigned int len, i, tx_head = queue->tx_head;
@@ -2284,6 +2285,7 @@ static unsigned int macb_tx_map(struct macb *bp,
 
 	/* This is the last buffer of the frame: save socket buffer */
 	tx_skb->skb = skb;
+	tx_skb->fcs_len = fcs_len;
 
 	/* Update TX ring: update buffer descriptors in reverse order
 	 * to avoid race condition
@@ -2417,6 +2419,7 @@ static inline int macb_clear_csum(struct sk_buff *skb)
 	return 0;
 }
 
+/* Returns a negative errno, or the FCS bytes appended (0 or ETH_FCS_LEN). */
 static int macb_pad_and_fcs(struct sk_buff **skb, struct net_device *netdev)
 {
 	bool cloned = skb_cloned(*skb) || skb_header_cloned(*skb) ||
@@ -2465,7 +2468,7 @@ add_fcs:
 	skb_put_u8(*skb, (fcs >> 16)	& 0xff);
 	skb_put_u8(*skb, (fcs >> 24)	& 0xff);
 
-	return 0;
+	return ETH_FCS_LEN;
 }
 
 static netdev_tx_t macb_start_xmit(struct sk_buff *skb,
@@ -2478,6 +2481,7 @@ static netdev_tx_t macb_start_xmit(struct sk_buff *skb,
 	netdev_tx_t ret = NETDEV_TX_OK;
 	unsigned int hdrlen;
 	unsigned long flags;
+	int fcs_len;
 	bool is_lso;
 
 	if (macb_clear_csum(skb)) {
@@ -2485,7 +2489,8 @@ static netdev_tx_t macb_start_xmit(struct sk_buff *skb,
 		return ret;
 	}
 
-	if (macb_pad_and_fcs(&skb, netdev)) {
+	fcs_len = macb_pad_and_fcs(&skb, netdev);
+	if (fcs_len < 0) {
 		dev_kfree_skb_any(skb);
 		return ret;
 	}
@@ -2548,7 +2553,7 @@ static netdev_tx_t macb_start_xmit(struct sk_buff *skb,
 	}
 
 	/* Map socket buffer for DMA transfer */
-	if (macb_tx_map(bp, queue, skb, hdrlen)) {
+	if (macb_tx_map(bp, queue, skb, hdrlen, fcs_len)) {
 		dev_kfree_skb_any(skb);
 		goto unlock;
 	}
@@ -4295,9 +4300,9 @@ static int macb_taprio_setup_replace(struct net_device *netdev,
 	u64 total_on_time = 0, start_time_sec = 0, start_time = conf->base_time;
 	u32 configured_queues = 0, speed = 0, start_time_nsec;
 	struct macb_queue_enst_config *enst_queue;
-	struct tc_taprio_sched_entry *entry;
+	struct ethtool_link_ksettings kset = {};
 	struct macb *bp = netdev_priv(netdev);
-	struct ethtool_link_ksettings kset;
+	struct tc_taprio_sched_entry *entry;
 	struct macb_queue *queue;
 	u32 queue_mask;
 	u8 queue_id;
@@ -4324,8 +4329,8 @@ static int macb_taprio_setup_replace(struct net_device *netdev,
 	}
 
 	speed = kset.base.speed;
-	if (unlikely(speed <= 0)) {
-		netdev_err(netdev, "Invalid speed: %d\n", speed);
+	if (unlikely(speed == SPEED_UNKNOWN || !speed)) {
+		netdev_err(netdev, "Invalid speed %d, link-down?\n", speed);
 		return -EINVAL;
 	}
 
@@ -4926,7 +4931,6 @@ static const struct macb_usrio_config at91_default_usrio = {
 	.clken = MACB_BIT(CLKEN),
 };
 
-#if defined(CONFIG_OF)
 /* 1518 rounded up */
 #define AT91ETHER_MAX_RBUFF_SZ	0x600
 /* max number of receive buffers */
@@ -5376,7 +5380,7 @@ static int fu540_c000_clk_init(struct platform_device *pdev, struct clk **pclk,
 			       struct clk **hclk, struct clk **tx_clk,
 			       struct clk **rx_clk, struct clk **tsu_clk)
 {
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 	int err = 0;
 
 	err = macb_clk_init_dflt(pdev, pclk, hclk, tx_clk, rx_clk, tsu_clk);
@@ -5754,7 +5758,6 @@ static const struct of_device_id macb_dt_ids[] = {
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, macb_dt_ids);
-#endif /* CONFIG_OF */
 
 static const struct macb_config default_gem_config = {
 	.caps = MACB_CAPS_GIGABIT_MODE_AVAILABLE |
@@ -5878,6 +5881,7 @@ static int macb_probe(struct platform_device *pdev)
 	}
 	spin_lock_init(&bp->lock);
 	spin_lock_init(&bp->stats_lock);
+	spin_lock_init(&bp->tsu_clk_lock);
 
 	/* setup capabilities */
 	macb_configure_caps(bp, macb_config);
@@ -5973,8 +5977,10 @@ err_out_free_tieoff:
 	macb_free_tieoff(bp);
 
 err_out_unregister_mdio:
-	mdiobus_unregister(bp->mii_bus);
-	mdiobus_free(bp->mii_bus);
+	if (bp->mii_bus) {
+		mdiobus_unregister(bp->mii_bus);
+		mdiobus_free(bp->mii_bus);
+	}
 
 err_out_phy_exit:
 	phy_exit(bp->phy);
@@ -6003,8 +6009,10 @@ static void macb_remove(struct platform_device *pdev)
 		unregister_netdev(netdev);
 		macb_free_tieoff(bp);
 		phy_exit(bp->phy);
-		mdiobus_unregister(bp->mii_bus);
-		mdiobus_free(bp->mii_bus);
+		if (bp->mii_bus) {
+			mdiobus_unregister(bp->mii_bus);
+			mdiobus_free(bp->mii_bus);
+		}
 
 		device_set_wakeup_enable(&bp->pdev->dev, 0);
 		cancel_delayed_work_sync(&bp->tx_lpi_work);
@@ -6267,7 +6275,7 @@ static struct platform_driver macb_driver = {
 	.remove		= macb_remove,
 	.driver		= {
 		.name		= "macb",
-		.of_match_table	= of_match_ptr(macb_dt_ids),
+		.of_match_table	= macb_dt_ids,
 		.pm	= &macb_pm_ops,
 	},
 	.shutdown	= macb_shutdown,

@@ -215,24 +215,6 @@ static struct sk_buff *stmmac_test_get_udp_skb(struct stmmac_priv *priv,
 	return skb;
 }
 
-static struct sk_buff *stmmac_test_get_arp_skb(struct stmmac_priv *priv,
-					       struct stmmac_packet_attrs *attr)
-{
-	__be32 ip_src = htonl(attr->ip_src);
-	__be32 ip_dst = htonl(attr->ip_dst);
-	struct sk_buff *skb = NULL;
-
-	skb = arp_create(ARPOP_REQUEST, ETH_P_ARP, ip_dst, priv->dev, ip_src,
-			 NULL, attr->src, attr->dst);
-	if (!skb)
-		return NULL;
-
-	skb->pkt_type = PACKET_HOST;
-	skb->dev = priv->dev;
-
-	return skb;
-}
-
 struct stmmac_test_priv {
 	struct stmmac_packet_attrs *packet;
 	struct packet_type pt;
@@ -395,11 +377,17 @@ static int stmmac_test_mmc(struct stmmac_priv *priv)
 	stmmac_mmc_read(priv, priv->mmcaddr, &final);
 
 	/*
-	 * The number of MMC counters available depends on HW configuration
-	 * so we just use this one to validate the feature. I hope there is
-	 * not a version without this counter.
+	 * The number of MMC counters available depends on HW configuration,
+	 * and there doesn't seem to be a way to enumerate the implemented
+	 * counters.
+	 *
+	 * Let's check a hand-picked set of counters, knowing that :
+	 *  - Starfive JH7110 doesn't implement mmc_tx_framecount_g
+	 *  - Amlogic SM1 doesn't implement any mmc_tx_*
+	 *
 	 */
-	if (final.mmc_tx_framecount_g <= initial.mmc_tx_framecount_g)
+	if (final.mmc_tx_framecount_g <= initial.mmc_tx_framecount_g &&
+	    final.mmc_rx_framecount_gb <= initial.mmc_rx_framecount_gb)
 		return -EINVAL;
 
 	return 0;
@@ -471,6 +459,21 @@ static int stmmac_filter_check(struct stmmac_priv *priv)
 
 	netdev_warn(priv->dev, "Test can't be run in promiscuous mode!\n");
 	return -EOPNOTSUPP;
+}
+
+static int stmmac_uc_filter_check(struct stmmac_priv *priv)
+{
+	/* For tests involving the UC filter, we need at least one empty
+	 * slot in the UC filter. The UC filters contains netdev_uc_count() + 1
+	 * entries: The dev->uc list + one entry for the HW address.
+	 *
+	 * Having an empty slot therefore means netdev_uc_count() + 2 entries
+	 * can fit in the filter
+	 */
+	if (netdev_uc_count(priv->dev) + 2 > priv->hw->unicast_filter_entries)
+		return -EOPNOTSUPP;
+
+	return 0;
 }
 
 static bool stmmac_hash_check(struct stmmac_priv *priv, unsigned char *addr)
@@ -564,7 +567,7 @@ static int stmmac_test_pfilt(struct stmmac_priv *priv)
 
 	if (stmmac_filter_check(priv))
 		return -EOPNOTSUPP;
-	if (netdev_uc_count(priv->dev) >= priv->hw->unicast_filter_entries)
+	if (stmmac_uc_filter_check(priv))
 		return -EOPNOTSUPP;
 
 	while (--tries) {
@@ -608,7 +611,7 @@ static int stmmac_test_mcfilt(struct stmmac_priv *priv)
 
 	if (stmmac_filter_check(priv))
 		return -EOPNOTSUPP;
-	if (netdev_uc_count(priv->dev) >= priv->hw->unicast_filter_entries)
+	if (stmmac_uc_filter_check(priv))
 		return -EOPNOTSUPP;
 	if (netdev_mc_count(priv->dev) >= priv->hw->multicast_filter_bins)
 		return -EOPNOTSUPP;
@@ -654,7 +657,7 @@ static int stmmac_test_ucfilt(struct stmmac_priv *priv)
 
 	if (stmmac_filter_check(priv))
 		return -EOPNOTSUPP;
-	if (netdev_uc_count(priv->dev) >= priv->hw->unicast_filter_entries)
+	if (stmmac_uc_filter_check(priv))
 		return -EOPNOTSUPP;
 	if (netdev_mc_count(priv->dev) >= priv->hw->multicast_filter_bins)
 		return -EOPNOTSUPP;
@@ -718,10 +721,22 @@ static int stmmac_test_flowctrl(struct stmmac_priv *priv)
 	u32 rx_cnt = priv->plat->rx_queues_to_use;
 	struct mac_device_info *mac = priv->hw;
 	struct stmmac_test_priv *tpriv;
+	unsigned int rx_fifo_size;
 	unsigned int pkt_count;
 	int i, ret = 0;
 
 	if (!(mac->link.caps & MAC_SYM_PAUSE))
+		return -EOPNOTSUPP;
+
+	rx_fifo_size = priv->plat->rx_fifo_size;
+	if (!rx_fifo_size)
+		rx_fifo_size = priv->dma_cap.rx_fifo_size;
+
+	/* No pause frame is emitted if we don't have at least 4096 bytes per
+	 * queue, except on dwmac100.
+	 */
+	if (priv->plat->core_type != DWMAC_CORE_MAC100 &&
+	    rx_fifo_size / priv->plat->rx_queues_to_use < 4096)
 		return -EOPNOTSUPP;
 
 	tpriv = kzalloc_obj(*tpriv);
@@ -737,9 +752,7 @@ static int stmmac_test_flowctrl(struct stmmac_priv *priv)
 	dev_add_pack(&tpriv->pt);
 
 	/* Compute minimum number of packets to make FIFO full */
-	pkt_count = priv->plat->rx_fifo_size;
-	if (!pkt_count)
-		pkt_count = priv->dma_cap.rx_fifo_size;
+	pkt_count = rx_fifo_size;
 	pkt_count /= 1400;
 	pkt_count *= 2;
 
@@ -1432,11 +1445,11 @@ static int __stmmac_test_l4filt(struct stmmac_priv *priv, u32 dst, u32 src,
 	struct {
 		struct flow_dissector_key_basic bkey;
 		struct flow_dissector_key_ports key;
-	} __aligned(BITS_PER_LONG / 8) keys;
+	} __aligned(BITS_PER_LONG / 8) keys = { };
 	struct {
 		struct flow_dissector_key_basic bmask;
 		struct flow_dissector_key_ports mask;
-	} __aligned(BITS_PER_LONG / 8) masks;
+	} __aligned(BITS_PER_LONG / 8) masks = { };
 	unsigned long dummy_cookie = 0xdeadbeef;
 	struct stmmac_packet_attrs attr = { };
 	struct flow_dissector *dissector;
@@ -1489,6 +1502,8 @@ static int __stmmac_test_l4filt(struct stmmac_priv *priv, u32 dst, u32 src,
 	keys.bkey.ip_proto = udp ? IPPROTO_UDP : IPPROTO_TCP;
 	keys.key.src = htons(src);
 	keys.key.dst = htons(dst);
+	/* Match the full IP proto field */
+	masks.bmask.ip_proto = 0xff;
 	masks.mask.src = src_mask;
 	masks.mask.dst = dst_mask;
 
@@ -1568,97 +1583,6 @@ static int stmmac_test_l4filt_sa_udp(struct stmmac_priv *priv)
 	u16 dummy_port = 0x123;
 
 	return __stmmac_test_l4filt(priv, 0, dummy_port, 0, ~0, true);
-}
-
-static int stmmac_test_arp_validate(struct sk_buff *skb,
-				    struct net_device *ndev,
-				    struct packet_type *pt,
-				    struct net_device *orig_ndev)
-{
-	struct stmmac_test_priv *tpriv = pt->af_packet_priv;
-	struct ethhdr *ehdr;
-	struct arphdr *ahdr;
-
-	ehdr = (struct ethhdr *)skb_mac_header(skb);
-	if (!ether_addr_equal_unaligned(ehdr->h_dest, tpriv->packet->src))
-		goto out;
-
-	ahdr = arp_hdr(skb);
-	if (ahdr->ar_op != htons(ARPOP_REPLY))
-		goto out;
-
-	tpriv->ok = true;
-	complete(&tpriv->comp);
-out:
-	kfree_skb(skb);
-	return 0;
-}
-
-static int stmmac_test_arpoffload(struct stmmac_priv *priv)
-{
-	unsigned char src[ETH_ALEN] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06};
-	unsigned char dst[ETH_ALEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-	struct stmmac_packet_attrs attr = { };
-	struct stmmac_test_priv *tpriv;
-	struct sk_buff *skb = NULL;
-	u32 ip_addr = 0xdeadcafe;
-	u32 ip_src = 0xdeadbeef;
-	int ret;
-
-	if (!priv->dma_cap.arpoffsel)
-		return -EOPNOTSUPP;
-
-	tpriv = kzalloc_obj(*tpriv);
-	if (!tpriv)
-		return -ENOMEM;
-
-	tpriv->ok = false;
-	init_completion(&tpriv->comp);
-
-	tpriv->pt.type = htons(ETH_P_ARP);
-	tpriv->pt.func = stmmac_test_arp_validate;
-	tpriv->pt.dev = priv->dev;
-	tpriv->pt.af_packet_priv = tpriv;
-	tpriv->packet = &attr;
-	dev_add_pack(&tpriv->pt);
-
-	attr.src = src;
-	attr.ip_src = ip_src;
-	attr.dst = dst;
-	attr.ip_dst = ip_addr;
-
-	skb = stmmac_test_get_arp_skb(priv, &attr);
-	if (!skb) {
-		ret = -ENOMEM;
-		goto cleanup;
-	}
-
-	ret = stmmac_set_arp_offload(priv, priv->hw, true, ip_addr);
-	if (ret) {
-		kfree_skb(skb);
-		goto cleanup;
-	}
-
-	ret = dev_set_promiscuity(priv->dev, 1);
-	if (ret) {
-		kfree_skb(skb);
-		goto cleanup;
-	}
-
-	ret = dev_direct_xmit(skb, 0);
-	if (ret)
-		goto cleanup_promisc;
-
-	wait_for_completion_timeout(&tpriv->comp, STMMAC_LB_TIMEOUT);
-	ret = tpriv->ok ? 0 : -ETIMEDOUT;
-
-cleanup_promisc:
-	dev_set_promiscuity(priv->dev, -1);
-cleanup:
-	stmmac_set_arp_offload(priv, priv->hw, false, 0x0);
-	dev_remove_pack(&tpriv->pt);
-	kfree(tpriv);
-	return ret;
 }
 
 static int __stmmac_test_jumbo(struct stmmac_priv *priv, u16 queue)
@@ -1878,9 +1802,6 @@ static const struct stmmac_test {
 	}, {
 		.name = "L4 SA UDP Filtering        ",
 		.fn = stmmac_test_l4filt_sa_udp,
-	}, {
-		.name = "ARP Offload                ",
-		.fn = stmmac_test_arpoffload,
 	}, {
 		.name = "Jumbo Frame                ",
 		.fn = stmmac_test_jumbo,

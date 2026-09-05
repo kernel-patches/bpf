@@ -85,9 +85,6 @@ static void bnge_free_ring_stats(struct bnge_net *bn)
 	struct bnge_dev *bd = bn->bd;
 	int i;
 
-	if (!bn->bnapi)
-		return;
-
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		struct bnge_napi *bnapi = bn->bnapi[i];
 		struct bnge_nq_ring_info *nqr = &bnapi->nq_ring;
@@ -397,10 +394,8 @@ static void bnge_sp_task(struct work_struct *work)
 	struct bnge_dev *bd = bn->bd;
 
 	netdev_lock(bn->netdev);
-	if (!test_bit(BNGE_STATE_OPEN, &bd->state)) {
-		netdev_unlock(bn->netdev);
-		return;
-	}
+	if (!test_bit(BNGE_STATE_OPEN, &bd->state))
+		goto async_evt;
 
 	if (test_and_clear_bit(BNGE_PERIODIC_STATS_SP_EVENT, &bn->sp_event)) {
 		bnge_hwrm_port_qstats(bd, 0);
@@ -408,6 +403,7 @@ static void bnge_sp_task(struct work_struct *work)
 		bnge_accumulate_all_stats(bd);
 	}
 
+async_evt:
 	if (test_and_clear_bit(BNGE_UPDATE_PHY_SP_EVENT, &bn->sp_event)) {
 		int rc;
 
@@ -443,6 +439,25 @@ static void bnge_sp_task(struct work_struct *work)
 	}
 
 	netdev_unlock(bn->netdev);
+}
+
+static void bnge_db_nq_arm(struct bnge_net *bn,
+			   struct bnge_db_info *db, u32 idx)
+{
+	bnge_writeq(bn->bd, db->db_key64 | DBR_TYPE_NQ_ARM |
+		    DB_RING_IDX(db, idx), db->doorbell);
+}
+
+static void bnge_db_nq(struct bnge_net *bn, struct bnge_db_info *db, u32 idx)
+{
+	bnge_writeq(bn->bd, db->db_key64 | DBR_TYPE_NQ_MASK |
+		    DB_RING_IDX(db, idx), db->doorbell);
+}
+
+static void bnge_db_cq(struct bnge_net *bn, struct bnge_db_info *db, u32 idx)
+{
+	bnge_writeq(bn->bd, db->db_key64 | DBR_TYPE_CQ_ARMALL |
+		    DB_RING_IDX(db, idx), db->doorbell);
 }
 
 static void bnge_free_nq_desc_arr(struct bnge_nq_ring_info *nqr)
@@ -511,6 +526,9 @@ static void bnge_free_nq_arrays(struct bnge_net *bn)
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		struct bnge_napi *bnapi = bn->bnapi[i];
 
+		if (BNGE_NQ0_NAPI(bnapi))
+			continue;
+
 		bnge_free_nq_desc_arr(&bnapi->nq_ring);
 	}
 }
@@ -522,6 +540,9 @@ static int bnge_alloc_nq_arrays(struct bnge_net *bn)
 
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		struct bnge_napi *bnapi = bn->bnapi[i];
+
+		if (BNGE_NQ0_NAPI(bnapi))
+			continue;
 
 		rc = bnge_alloc_nq_desc_arr(&bnapi->nq_ring, bn->cp_nr_pages);
 		if (rc)
@@ -548,7 +569,8 @@ static void bnge_free_nq_tree(struct bnge_net *bn)
 		nqr = &bnapi->nq_ring;
 		ring = &nqr->ring_struct;
 
-		bnge_free_ring(bd, &ring->ring_mem);
+		if (!BNGE_NQ0_NAPI(bnapi))
+			bnge_free_ring(bd, &ring->ring_mem);
 
 		if (!nqr->cp_ring_arr)
 			continue;
@@ -564,6 +586,40 @@ static void bnge_free_nq_tree(struct bnge_net *bn)
 		nqr->cp_ring_arr = NULL;
 		nqr->cp_ring_count = 0;
 	}
+}
+
+static void bnge_quiesce_nq0(struct bnge_net *bn)
+{
+	struct bnge_napi *bnapi = bn->bnapi[BNGE_NQ0_NAPI_IDX];
+	struct bnge_nq_ring_info *nqr = &bnapi->nq_ring;
+	struct bnge_ring_struct *ring;
+	struct bnge_dev *bd = bn->bd;
+
+	if (!BNGE_NQ0_NAPI(bnapi))
+		return;
+
+	if (test_and_set_bit(BNGE_NAPI_FLAG_NQ0_QUIESCED, &bnapi->flags))
+		return;
+
+	ring = &nqr->ring_struct;
+	bnge_db_nq(bn, &nqr->nq_db, nqr->nq_raw_cons);
+	synchronize_irq(bd->irq_tbl[ring->map_idx].vector);
+	napi_disable_locked(&bnapi->napi);
+}
+
+static void bnge_resume_nq0(struct bnge_net *bn)
+{
+	struct bnge_napi *bnapi = bn->bnapi[BNGE_NQ0_NAPI_IDX];
+	struct bnge_nq_ring_info *nqr = &bnapi->nq_ring;
+
+	if (!BNGE_NQ0_NAPI(bnapi))
+		return;
+
+	if (!test_and_clear_bit(BNGE_NAPI_FLAG_NQ0_QUIESCED, &bnapi->flags))
+		return;
+
+	napi_enable_locked(&bnapi->napi);
+	bnge_db_nq_arm(bn, &nqr->nq_db, nqr->nq_raw_cons);
 }
 
 static int alloc_one_cp_ring(struct bnge_net *bn,
@@ -614,11 +670,13 @@ static int bnge_alloc_nq_tree(struct bnge_net *bn)
 		nqr->bnapi = bnapi;
 		ring = &nqr->ring_struct;
 
-		rc = bnge_alloc_ring(bd, &ring->ring_mem);
-		if (rc)
-			goto err_free_nq_tree;
+		if (!BNGE_NQ0_NAPI(bnapi)) {
+			rc = bnge_alloc_ring(bd, &ring->ring_mem);
+			if (rc)
+				goto err_free_nq_tree;
 
-		ring->map_idx = ulp_msix + i;
+			ring->map_idx = ulp_msix + i;
+		}
 
 		if (i < bd->rx_nr_rings) {
 			cp_count++;
@@ -1176,50 +1234,45 @@ static void bnge_free_ring_grps(struct bnge_net *bn)
 	bn->grp_info = NULL;
 }
 
-static int bnge_init_ring_grps(struct bnge_net *bn)
+static int bnge_init_ring_grps(struct bnge_net *bn, bool irq_re_init)
 {
 	struct bnge_dev *bd = bn->bd;
 	int i;
 
-	bn->grp_info = kzalloc_objs(struct bnge_ring_grp_info, bd->nq_nr_rings);
-	if (!bn->grp_info)
-		return -ENOMEM;
+	if (irq_re_init) {
+		bn->grp_info = kzalloc_objs(struct bnge_ring_grp_info,
+					    bd->nq_nr_rings);
+		if (!bn->grp_info)
+			return -ENOMEM;
+	}
+
 	for (i = 0; i < bd->nq_nr_rings; i++) {
-		bn->grp_info[i].fw_stats_ctx = INVALID_HW_RING_ID;
 		bn->grp_info[i].fw_grp_id = INVALID_HW_RING_ID;
 		bn->grp_info[i].rx_fw_ring_id = INVALID_HW_RING_ID;
 		bn->grp_info[i].agg_fw_ring_id = INVALID_HW_RING_ID;
+
+		if (irq_re_init)
+			bn->grp_info[i].fw_stats_ctx = INVALID_HW_RING_ID;
+
+		if (BNGE_NQ0_NAPI(bn->bnapi[i]))
+			continue;
+
 		bn->grp_info[i].nq_fw_ring_id = INVALID_HW_RING_ID;
 	}
 
 	return 0;
 }
 
-static void bnge_free_core(struct bnge_net *bn)
+static void bnge_free_bnapi_mem(struct bnge_net *bn)
 {
-	bnge_free_vnic_attributes(bn);
-	bnge_free_tx_rings(bn);
-	bnge_free_rx_rings(bn);
-	bnge_free_nq_tree(bn);
-	bnge_free_nq_arrays(bn);
-	bnge_free_ring_stats(bn);
-	bnge_free_ring_grps(bn);
-	bnge_free_vnics(bn);
-	kfree(bn->tx_ring_map);
-	bn->tx_ring_map = NULL;
-	kfree(bn->tx_ring);
-	bn->tx_ring = NULL;
-	kfree(bn->rx_ring);
-	bn->rx_ring = NULL;
 	kfree(bn->bnapi);
 	bn->bnapi = NULL;
 }
 
-static int bnge_alloc_core(struct bnge_net *bn)
+static int bnge_alloc_bnapi_mem(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
-	int i, j, size, arr_size;
-	int rc = -ENOMEM;
+	int i, size, arr_size;
 	void *bnapi;
 
 	arr_size = L1_CACHE_ALIGN(sizeof(struct bnge_napi *) *
@@ -1227,7 +1280,7 @@ static int bnge_alloc_core(struct bnge_net *bn)
 	size = L1_CACHE_ALIGN(sizeof(struct bnge_napi));
 	bnapi = kzalloc(arr_size + size * bd->nq_nr_rings, GFP_KERNEL);
 	if (!bnapi)
-		return rc;
+		return -ENOMEM;
 
 	bn->bnapi = bnapi;
 	bnapi += arr_size;
@@ -1240,6 +1293,54 @@ static int bnge_alloc_core(struct bnge_net *bn)
 		nqr = &bn->bnapi[i]->nq_ring;
 		nqr->ring_struct.ring_mem.flags = BNGE_RMEM_RING_PTE_FLAG;
 	}
+
+	return 0;
+}
+
+static void bnge_clear_bnapi_queues(struct bnge_net *bn)
+{
+	struct bnge_dev *bd = bn->bd;
+	int i;
+
+	for (i = 0; i < bd->nq_nr_rings; i++) {
+		struct bnge_napi *bnapi = bn->bnapi[i];
+		int j;
+
+		if (!bnapi)
+			continue;
+
+		bnapi->rx_ring = NULL;
+		for (j = 0; j < BNGE_MAX_TXR_PER_NAPI; j++)
+			bnapi->tx_ring[j] = NULL;
+	}
+}
+
+static void bnge_free_core(struct bnge_net *bn)
+{
+	bnge_free_vnic_attributes(bn);
+	bnge_quiesce_nq0(bn);
+	bnge_free_tx_rings(bn);
+	bnge_free_rx_rings(bn);
+	bnge_free_nq_tree(bn);
+	bnge_free_nq_arrays(bn);
+	bnge_free_ring_stats(bn);
+	bnge_free_vnics(bn);
+
+	kfree(bn->tx_ring_map);
+	bn->tx_ring_map = NULL;
+	kfree(bn->tx_ring);
+	bn->tx_ring = NULL;
+	kfree(bn->rx_ring);
+	bn->rx_ring = NULL;
+
+	bnge_clear_bnapi_queues(bn);
+	bnge_resume_nq0(bn);
+}
+
+static int bnge_alloc_core(struct bnge_net *bn)
+{
+	struct bnge_dev *bd = bn->bd;
+	int i, j, rc = -ENOMEM;
 
 	bn->rx_ring = kzalloc_objs(struct bnge_rx_ring_info, bd->rx_nr_rings);
 	if (!bn->rx_ring)
@@ -1311,7 +1412,9 @@ static int bnge_alloc_core(struct bnge_net *bn)
 	if (rc)
 		goto err_free_core;
 
+	bnge_quiesce_nq0(bn);
 	rc = bnge_alloc_nq_tree(bn);
+	bnge_resume_nq0(bn);
 	if (rc)
 		goto err_free_core;
 
@@ -1338,25 +1441,6 @@ u32 bnge_cp_ring_for_tx(struct bnge_tx_ring_info *txr)
 	return txr->tx_cpr->ring_struct.fw_ring_id;
 }
 
-static void bnge_db_nq_arm(struct bnge_net *bn,
-			   struct bnge_db_info *db, u32 idx)
-{
-	bnge_writeq(bn->bd, db->db_key64 | DBR_TYPE_NQ_ARM |
-		    DB_RING_IDX(db, idx), db->doorbell);
-}
-
-static void bnge_db_nq(struct bnge_net *bn, struct bnge_db_info *db, u32 idx)
-{
-	bnge_writeq(bn->bd, db->db_key64 | DBR_TYPE_NQ_MASK |
-		    DB_RING_IDX(db, idx), db->doorbell);
-}
-
-static void bnge_db_cq(struct bnge_net *bn, struct bnge_db_info *db, u32 idx)
-{
-	bnge_writeq(bn->bd, db->db_key64 | DBR_TYPE_CQ_ARMALL |
-		    DB_RING_IDX(db, idx), db->doorbell);
-}
-
 static int bnge_cp_num_to_irq_num(struct bnge_net *bn, int n)
 {
 	struct bnge_napi *bnapi = bn->bnapi[n];
@@ -1376,7 +1460,11 @@ static void bnge_init_nq_tree(struct bnge_net *bn)
 		struct bnge_nq_ring_info *nqr = &bn->bnapi[i]->nq_ring;
 		struct bnge_ring_struct *ring = &nqr->ring_struct;
 
-		ring->fw_ring_id = INVALID_HW_RING_ID_32BIT;
+		if (!BNGE_NQ0_NAPI(bn->bnapi[i])) {
+			nqr->nq_raw_cons = 0;
+			ring->fw_ring_id = INVALID_HW_RING_ID_32BIT;
+		}
+
 		for (j = 0; j < nqr->cp_ring_count; j++) {
 			struct bnge_cp_ring_info *cpr = &nqr->cp_ring_arr[j];
 
@@ -1892,6 +1980,40 @@ static int bnge_hwrm_rx_ring_alloc(struct bnge_net *bn,
 	return 0;
 }
 
+static int bnge_hwrm_nq_ring_alloc(struct bnge_net *bn, int index)
+{
+	struct bnge_napi *bnapi = bn->bnapi[index];
+	struct bnge_nq_ring_info *nqr = &bnapi->nq_ring;
+	struct bnge_ring_struct *ring = &nqr->ring_struct;
+	u32 type = HWRM_RING_ALLOC_NQ;
+	struct bnge_dev *bd = bn->bd;
+	u32 map_idx = ring->map_idx;
+	unsigned int vector;
+	int rc;
+
+	if (BNGE_NQ0_NAPI(bnapi))
+		return 0;
+
+	vector = bd->irq_tbl[map_idx].vector;
+	disable_irq_nosync(vector);
+	rc = hwrm_ring_alloc_send_msg(bn, ring, type, map_idx);
+	if (rc) {
+		enable_irq(vector);
+		return rc;
+	}
+	bnge_set_db(bn, &nqr->nq_db, type, map_idx, ring->fw_ring_id);
+	bnge_db_nq(bn, &nqr->nq_db, nqr->nq_raw_cons);
+	enable_irq(vector);
+	bn->grp_info[index].nq_fw_ring_id = (u16)ring->fw_ring_id;
+	if (!index) {
+		rc = bnge_hwrm_set_async_event_cr(bd, ring->fw_ring_id);
+		if (rc)
+			netdev_warn(bn->netdev, "Failed to set async event completion ring.\n");
+	}
+
+	return 0;
+}
+
 static int bnge_hwrm_ring_alloc(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
@@ -1900,30 +2022,9 @@ static int bnge_hwrm_ring_alloc(struct bnge_net *bn)
 
 	agg_rings = !!(bnge_is_agg_reqd(bd));
 	for (i = 0; i < bd->nq_nr_rings; i++) {
-		struct bnge_napi *bnapi = bn->bnapi[i];
-		struct bnge_nq_ring_info *nqr = &bnapi->nq_ring;
-		struct bnge_ring_struct *ring = &nqr->ring_struct;
-		u32 type = HWRM_RING_ALLOC_NQ;
-		u32 map_idx = ring->map_idx;
-		unsigned int vector;
-
-		vector = bd->irq_tbl[map_idx].vector;
-		disable_irq_nosync(vector);
-		rc = hwrm_ring_alloc_send_msg(bn, ring, type, map_idx);
-		if (rc) {
-			enable_irq(vector);
+		rc = bnge_hwrm_nq_ring_alloc(bn, i);
+		if (rc)
 			goto err_out;
-		}
-		bnge_set_db(bn, &nqr->nq_db, type, map_idx, ring->fw_ring_id);
-		bnge_db_nq(bn, &nqr->nq_db, nqr->nq_raw_cons);
-		enable_irq(vector);
-		bn->grp_info[i].nq_fw_ring_id = (u16)ring->fw_ring_id;
-
-		if (!i) {
-			rc = bnge_hwrm_set_async_event_cr(bd, ring->fw_ring_id);
-			if (rc)
-				netdev_warn(bn->netdev, "Failed to set async event completion ring.\n");
-		}
 	}
 
 	for (i = 0; i < bd->tx_nr_rings; i++) {
@@ -2320,13 +2421,13 @@ static void bnge_disable_int(struct bnge_net *bn)
 	struct bnge_dev *bd = bn->bd;
 	int i;
 
-	if (!bn->bnapi)
-		return;
-
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		struct bnge_napi *bnapi = bn->bnapi[i];
 		struct bnge_nq_ring_info *nqr;
 		struct bnge_ring_struct *ring;
+
+		if (BNGE_NQ0_NAPI(bnapi))
+			continue;
 
 		nqr = &bnapi->nq_ring;
 		ring = &nqr->ring_struct;
@@ -2343,9 +2444,10 @@ static void bnge_disable_int_sync(struct bnge_net *bn)
 
 	bnge_disable_int(bn);
 	for (i = 0; i < bd->nq_nr_rings; i++) {
-		int map_idx = bnge_cp_num_to_irq_num(bn, i);
+		if (BNGE_NQ0_NAPI(bn->bnapi[i]))
+			continue;
 
-		synchronize_irq(bd->irq_tbl[map_idx].vector);
+		synchronize_irq(bd->irq_tbl[bnge_cp_num_to_irq_num(bn, i)].vector);
 	}
 }
 
@@ -2357,6 +2459,9 @@ static void bnge_enable_int(struct bnge_net *bn)
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		struct bnge_napi *bnapi = bn->bnapi[i];
 		struct bnge_nq_ring_info *nqr;
+
+		if (BNGE_NQ0_NAPI(bnapi))
+			continue;
 
 		nqr = &bnapi->nq_ring;
 		bnge_db_nq_arm(bn, &nqr->nq_db, nqr->nq_raw_cons);
@@ -2374,6 +2479,8 @@ static void bnge_disable_napi(struct bnge_net *bn)
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		struct bnge_napi *bnapi = bn->bnapi[i];
 
+		if (BNGE_NQ0_NAPI(bnapi))
+			continue;
 		napi_disable_locked(&bnapi->napi);
 	}
 }
@@ -2390,6 +2497,8 @@ static void bnge_enable_napi(struct bnge_net *bn)
 		bnapi->in_reset = false;
 		bnapi->tx_fault = 0;
 
+		if (BNGE_NQ0_NAPI(bnapi))
+			continue;
 		napi_enable_locked(&bnapi->napi);
 	}
 }
@@ -2514,9 +2623,6 @@ static void bnge_hwrm_ring_free(struct bnge_net *bn, bool close_path)
 	struct bnge_dev *bd = bn->bd;
 	int i;
 
-	if (!bn->bnapi)
-		return;
-
 	for (i = 0; i < bd->tx_nr_rings; i++)
 		bnge_hwrm_tx_ring_free(bn, &bn->tx_ring[i], close_path);
 
@@ -2540,6 +2646,9 @@ static void bnge_hwrm_ring_free(struct bnge_net *bn, bool close_path)
 		nqr = &bnapi->nq_ring;
 		for (j = 0; j < nqr->cp_ring_count && nqr->cp_ring_arr; j++)
 			bnge_hwrm_cp_ring_free(bn, &nqr->cp_ring_arr[j]);
+
+		if (BNGE_NQ0_NAPI(bnapi))
+			continue;
 
 		ring = &nqr->ring_struct;
 		if (ring->fw_ring_id != INVALID_HW_RING_ID_32BIT) {
@@ -2602,6 +2711,9 @@ static void bnge_free_irq(struct bnge_net *bn)
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		int map_idx = bnge_cp_num_to_irq_num(bn, i);
 
+		if (BNGE_NQ0_NAPI(bn->bnapi[i]))
+			continue;
+
 		irq = &bd->irq_tbl[map_idx];
 		if (irq->requested) {
 			if (irq->have_cpumask) {
@@ -2629,6 +2741,9 @@ static int bnge_request_irq(struct bnge_net *bn)
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		int map_idx = bnge_cp_num_to_irq_num(bn, i);
 		struct bnge_irq *irq = &bd->irq_tbl[map_idx];
+
+		if (BNGE_NQ0_NAPI(bn->bnapi[i]))
+			continue;
 
 		rc = request_irq(irq->vector, irq->handler, 0, irq->name,
 				 bn->bnapi[i]);
@@ -2769,6 +2884,10 @@ static void bnge_init_napi(struct bnge_net *bn)
 
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		bnapi = bn->bnapi[i];
+
+		if (BNGE_NQ0_NAPI(bnapi))
+			continue;
+
 		netif_napi_add_config_locked(bn->netdev, &bnapi->napi,
 					     bnge_napi_poll, bnapi->index);
 	}
@@ -2786,6 +2905,9 @@ static void bnge_del_napi(struct bnge_net *bn)
 
 	for (i = 0; i < bd->nq_nr_rings; i++) {
 		struct bnge_napi *bnapi = bn->bnapi[i];
+
+		if (BNGE_NQ0_NAPI(bnapi))
+			continue;
 
 		__netif_napi_del_locked(&bnapi->napi);
 	}
@@ -2807,9 +2929,7 @@ static int bnge_init_nic(struct bnge_net *bn)
 
 	bnge_init_tx_rings(bn);
 
-	rc = bnge_init_ring_grps(bn);
-	if (rc)
-		goto err_free_rx_ring_pair_bufs;
+	bnge_init_ring_grps(bn, false);
 
 	bnge_init_vnics(bn);
 
@@ -2820,7 +2940,6 @@ static int bnge_init_nic(struct bnge_net *bn)
 
 err_free_ring_grps:
 	bnge_free_ring_grps(bn);
-err_free_rx_ring_pair_bufs:
 	bnge_free_rx_ring_pair_bufs(bn);
 	return rc;
 }
@@ -3169,6 +3288,8 @@ static void bnge_close_core(struct bnge_net *bn)
 	clear_bit(BNGE_STATE_STATS_ENABLE, &bn->state);
 	spin_unlock_bh(&bn->stats_lock);
 
+	bnge_quiesce_nq0(bn);
+
 	bnge_free_all_rings_bufs(bn);
 	bnge_free_irq(bn);
 	bnge_del_napi(bn);
@@ -3195,7 +3316,7 @@ static void bnge_get_queue_stats_rx(struct net_device *dev, int i,
 	struct bnge_nq_ring_info *nqr;
 	u64 *sw;
 
-	if (!bn->bnapi)
+	if (!netif_running(dev))
 		return;
 
 	nqr = &bn->bnapi[i]->nq_ring;
@@ -3399,6 +3520,159 @@ static void bnge_init_ring_params(struct bnge_net *bn)
 	bn->netdev->cfg->hds_thresh = max(BNGE_DEFAULT_RX_COPYBREAK, rx_size);
 }
 
+static void bnge_free_nq0(struct bnge_net *bn)
+{
+	struct bnge_nq_ring_info *nqr;
+	struct bnge_ring_struct *ring;
+	struct bnge_dev *bd = bn->bd;
+	struct bnge_napi *bnapi;
+	struct bnge_irq *irq;
+
+	bnapi = bn->bnapi[BNGE_NQ0_NAPI_IDX];
+	nqr = &bnapi->nq_ring;
+	ring = &nqr->ring_struct;
+	irq = &bd->irq_tbl[ring->map_idx];
+
+	if (!BNGE_NQ0_NAPI(bnapi)) {
+		/* A previous bnge_setup_nq0() could have failed
+		 * leaving behind an active irq.
+		 */
+		goto free_irq;
+	}
+
+	clear_bit(BNGE_NAPI_FLAG_NQ0, &bnapi->flags);
+	clear_bit(BNGE_NAPI_FLAG_NQ0_QUIESCED, &bnapi->flags);
+
+	/* Unlike the other NQs, NQ0's NAPI is left enabled by bnge_disable_napi()
+	 * so it can keep processing async events while the interface is
+	 * administratively down. It is explicitly disabled below, or was never
+	 * enabled if netdev was never opened (netif_napi_add default).
+	 */
+	bnge_db_nq(bn, &nqr->nq_db, nqr->nq_raw_cons);
+	synchronize_irq(irq->vector);
+
+	hwrm_ring_free_send_msg(bn, ring,
+				RING_FREE_REQ_RING_TYPE_NQ,
+				INVALID_HW_RING_ID);
+	ring->fw_ring_id = INVALID_HW_RING_ID;
+	bn->grp_info[0].nq_fw_ring_id = INVALID_HW_RING_ID;
+
+free_irq:
+	if (irq->requested) {
+		if (irq->have_cpumask) {
+			irq_set_affinity_hint(irq->vector, NULL);
+			free_cpumask_var(irq->cpu_mask);
+			irq->have_cpumask = 0;
+		}
+		free_irq(irq->vector, bnapi);
+		irq->requested = 0;
+
+		netdev_lock(bn->netdev);
+		napi_disable_locked(&bnapi->napi);
+		__netif_napi_del_locked(&bnapi->napi);
+		netdev_unlock(bn->netdev);
+
+		/* We called __netif_napi_del_locked(), we need
+		 * grace period before freeing napi structures.
+		 */
+		synchronize_net();
+	}
+
+	bnge_free_ring(bd, &ring->ring_mem);
+	bnge_free_nq_desc_arr(nqr);
+}
+
+static int bnge_setup_nq0(struct bnge_net *bn)
+{
+	struct bnge_nq_ring_info *nqr;
+	struct bnge_ring_struct *ring;
+	struct bnge_dev *bd = bn->bd;
+	struct bnge_napi *bnapi;
+	struct bnge_irq *irq;
+	int map_idx, rc;
+
+	bnapi = bn->bnapi[BNGE_NQ0_NAPI_IDX];
+	if (BNGE_NQ0_NAPI(bnapi))
+		return 0;
+
+	nqr = &bnapi->nq_ring;
+	ring = &nqr->ring_struct;
+	rc = bnge_alloc_nq_desc_arr(&bnapi->nq_ring, bn->cp_nr_pages);
+	if (rc)
+		return -ENOMEM;
+
+	bnge_init_nq_ring_struct(bn, nqr);
+	rc = bnge_alloc_ring(bd, &ring->ring_mem);
+	if (rc)
+		goto err_free_nq_desc_arr;
+
+	map_idx = bnge_aux_get_msix(bd);
+	ring->map_idx = map_idx;
+	irq = &bd->irq_tbl[map_idx];
+	irq->handler = bnge_msix;
+
+	netdev_lock(bn->netdev);
+	netif_napi_add_config_locked(bn->netdev, &bnapi->napi,
+				     bnge_napi_poll, bnapi->index);
+	netdev_unlock(bn->netdev);
+
+	snprintf(irq->name, sizeof(bd->irq_tbl[0].name), "%s-%s-%d", "bnge",
+		 "nq", map_idx);
+	rc = request_irq(irq->vector, irq->handler, 0, irq->name, bnapi);
+	if (rc)
+		goto err_del_napi;
+
+	netdev_lock(bn->netdev);
+	netif_napi_set_irq_locked(&bnapi->napi, irq->vector);
+	netdev_unlock(bn->netdev);
+	irq->requested = 1;
+
+	if (zalloc_cpumask_var(&irq->cpu_mask, GFP_KERNEL)) {
+		int numa_node = dev_to_node(&bd->pdev->dev);
+
+		irq->have_cpumask = 1;
+		cpumask_set_cpu(cpumask_local_spread(BNGE_NQ0_NAPI_IDX, numa_node),
+				irq->cpu_mask);
+		rc = irq_set_affinity_hint(irq->vector, irq->cpu_mask);
+		if (rc) {
+			netdev_warn(bn->netdev,
+				    "Set affinity failed, IRQ = %d\n",
+				    irq->vector);
+			goto err_free_irq;
+		}
+	}
+
+	rc = bnge_hwrm_nq_ring_alloc(bn, BNGE_NQ0_NAPI_IDX);
+	if (rc)
+		goto err_free_irq;
+
+	netdev_lock(bn->netdev);
+	napi_enable_locked(&bnapi->napi);
+	netdev_unlock(bn->netdev);
+	bnge_db_nq_arm(bn, &nqr->nq_db, nqr->nq_raw_cons);
+
+	set_bit(BNGE_NAPI_FLAG_NQ0, &bnapi->flags);
+
+	return 0;
+
+err_free_irq:
+	if (irq->have_cpumask) {
+		irq_set_affinity_hint(irq->vector, NULL);
+		free_cpumask_var(irq->cpu_mask);
+		irq->have_cpumask = 0;
+	}
+	free_irq(irq->vector, bnapi);
+	irq->requested = 0;
+err_del_napi:
+	netdev_lock(bn->netdev);
+	__netif_napi_del_locked(&bnapi->napi);
+	netdev_unlock(bn->netdev);
+	bnge_free_ring(bd, &ring->ring_mem);
+err_free_nq_desc_arr:
+	bnge_free_nq_desc_arr(nqr);
+	return rc;
+}
+
 int bnge_netdev_alloc(struct bnge_dev *bd, int max_irqs)
 {
 	struct net_device *netdev;
@@ -3517,14 +3791,33 @@ int bnge_netdev_alloc(struct bnge_dev *bd, int max_irqs)
 	spin_lock_init(&bn->stats_lock);
 
 	netdev->request_ops_lock = true;
+
+	rc = bnge_alloc_bnapi_mem(bn);
+	if (rc)
+		goto err_free_port_stats;
+
+	rc = bnge_init_ring_grps(bn, true);
+	if (rc)
+		goto err_free_bnapi_mem;
+
+	rc = bnge_setup_nq0(bn);
+	if (rc)
+		goto err_free_ring_grps;
+
 	rc = register_netdev(netdev);
 	if (rc) {
 		dev_err(bd->dev, "Register netdev failed rc: %d\n", rc);
-		goto err_free_port_stats;
+		goto err_free_nq0;
 	}
 
 	return 0;
 
+err_free_nq0:
+	bnge_free_nq0(bn);
+err_free_ring_grps:
+	bnge_free_ring_grps(bn);
+err_free_bnapi_mem:
+	bnge_free_bnapi_mem(bn);
 err_free_port_stats:
 	bnge_free_port_stats(bn);
 err_free_workq:
@@ -3543,12 +3836,16 @@ void bnge_netdev_free(struct bnge_dev *bd)
 
 	unregister_netdev(netdev);
 
+	bnge_free_nq0(bn);
+
 	timer_shutdown_sync(&bn->timer);
 	cancel_work_sync(&bn->sp_task);
 	bn->sp_event = 0;
 	destroy_workqueue(bn->bnge_pf_wq);
 
 	bnge_free_port_stats(bn);
+	bnge_free_ring_grps(bn);
+	bnge_free_bnapi_mem(bn);
 
 	free_netdev(netdev);
 	bd->netdev = NULL;

@@ -17081,7 +17081,8 @@ static int tg3_get_device_address(struct tg3 *tp, u8 *addr)
 		addr[5] = (lo >>  0) & 0xff;
 
 		/* Some old bootcode may report a 0 MAC address in SRAM */
-		addr_ok = is_valid_ether_addr(addr);
+		addr_ok = is_valid_ether_addr(addr) &&
+			  !tg3_is_default_mac_address(addr);
 	}
 	if (!addr_ok) {
 		__be32 be_hi, be_lo;

@@ -132,7 +132,7 @@ struct ntb_queue_entry {
 };
 
 struct ntb_rx_info {
-	unsigned int entry;
+	__le32 entry;
 };
 
 struct ntb_transport_qp {
@@ -167,7 +167,7 @@ struct ntb_transport_qp {
 	unsigned int tx_max_frame;
 
 	void (*rx_handler)(struct ntb_transport_qp *qp, void *qp_data,
-			   void *data, int len);
+			   void *data, int len, unsigned int meta);
 	struct list_head rx_post_q;
 	struct list_head rx_pend_q;
 	struct list_head rx_free_q;
@@ -264,10 +264,14 @@ enum {
 	LINK_DOWN_FLAG = BIT(1),
 };
 
+/* Reserve the low byte for transport flags. */
+#define DESC_META_SHIFT		8
+#define DESC_META_MASK		(~0U << DESC_META_SHIFT)
+
 struct ntb_payload_header {
-	unsigned int ver;
-	unsigned int len;
-	unsigned int flags;
+	__le32 ver;
+	__le32 len;
+	__le32 flags;
 };
 
 enum {
@@ -514,7 +518,8 @@ static int ntb_qp_debugfs_stats_show(struct seq_file *s, void *v)
 	seq_printf(s, "tx_err_no_buf - %llu\n", qp->tx_err_no_buf);
 	seq_printf(s, "tx_mw - \t0x%p\n", qp->tx_mw);
 	seq_printf(s, "tx_index (H) - \t%u\n", qp->tx_index);
-	seq_printf(s, "RRI (T) - \t%u\n", qp->remote_rx_info->entry);
+	seq_printf(s, "RRI (T) - \t%u\n",
+		   le32_to_cpu(qp->remote_rx_info->entry));
 	seq_printf(s, "tx_max_entry - \t%u\n", qp->tx_max_entry);
 	seq_printf(s, "free tx - \t%u\n", ntb_transport_tx_free_entry(qp));
 	seq_putc(s, '\n');
@@ -633,7 +638,7 @@ static int ntb_transport_setup_qp_mw(struct ntb_transport_ctx *nt,
 		qp->rx_alloc_entry++;
 	}
 
-	qp->remote_rx_info->entry = qp->rx_max_entry - 1;
+	qp->remote_rx_info->entry = cpu_to_le32(qp->rx_max_entry - 1);
 
 	/* setup the hdr offsets with 0's */
 	for (i = 0; i < qp->rx_max_entry; i++) {
@@ -919,7 +924,7 @@ static void ntb_qp_link_down_reset(struct ntb_transport_qp *qp)
 {
 	ntb_qp_link_context_reset(qp);
 	if (qp->remote_rx_info)
-		qp->remote_rx_info->entry = qp->rx_max_entry - 1;
+		qp->remote_rx_info->entry = cpu_to_le32(qp->rx_max_entry - 1);
 }
 
 static void ntb_qp_link_cleanup(struct ntb_transport_qp *qp)
@@ -1435,6 +1440,7 @@ static void ntb_complete_rxc(struct ntb_transport_qp *qp)
 	struct ntb_queue_entry *entry;
 	void *cb_data;
 	unsigned int len;
+	unsigned int meta;
 	unsigned long irqflags;
 
 	spin_lock_irqsave(&qp->ntb_rx_q_lock, irqflags);
@@ -1445,18 +1451,19 @@ static void ntb_complete_rxc(struct ntb_transport_qp *qp)
 		if (!(entry->flags & DESC_DONE_FLAG))
 			break;
 
-		entry->rx_hdr->flags = 0;
+		entry->rx_hdr->flags = cpu_to_le32(0);
 		iowrite32(entry->rx_index, &qp->rx_info->entry);
 
 		cb_data = entry->cb_data;
 		len = entry->len;
+		meta = entry->flags >> DESC_META_SHIFT;
 
 		list_move_tail(&entry->entry, &qp->rx_free_q);
 
 		spin_unlock_irqrestore(&qp->ntb_rx_q_lock, irqflags);
 
 		if (qp->rx_handler && qp->client_ready)
-			qp->rx_handler(qp, qp->cb_data, cb_data, len);
+			qp->rx_handler(qp, qp->cb_data, cb_data, len, meta);
 
 		spin_lock_irqsave(&qp->ntb_rx_q_lock, irqflags);
 	}
@@ -1610,30 +1617,38 @@ static int ntb_process_rxc(struct ntb_transport_qp *qp)
 	struct ntb_payload_header *hdr;
 	struct ntb_queue_entry *entry;
 	void *offset;
+	u32 flags;
+	u32 len;
+	u32 ver;
 
 	offset = qp->rx_buff + qp->rx_max_frame * qp->rx_index;
 	hdr = offset + qp->rx_max_frame - sizeof(struct ntb_payload_header);
 
-	dev_dbg(&qp->ndev->pdev->dev, "qp %d: RX ver %u len %d flags %x\n",
-		qp->qp_num, hdr->ver, hdr->len, hdr->flags);
-
-	if (!(hdr->flags & DESC_DONE_FLAG)) {
+	flags = le32_to_cpu(READ_ONCE(hdr->flags));
+	if (!(flags & DESC_DONE_FLAG)) {
 		dev_dbg(&qp->ndev->pdev->dev, "done flag not set\n");
 		qp->rx_ring_empty++;
 		return -EAGAIN;
 	}
 
-	if (hdr->flags & LINK_DOWN_FLAG) {
+	dma_rmb();
+	ver = le32_to_cpu(READ_ONCE(hdr->ver));
+	len = le32_to_cpu(READ_ONCE(hdr->len));
+
+	dev_dbg(&qp->ndev->pdev->dev, "qp %d: RX ver %u len %d flags %x\n",
+		qp->qp_num, ver, len, flags);
+
+	if (flags & LINK_DOWN_FLAG) {
 		dev_dbg(&qp->ndev->pdev->dev, "link down flag set\n");
 		ntb_qp_link_down(qp);
-		hdr->flags = 0;
+		hdr->flags = cpu_to_le32(0);
 		return -EAGAIN;
 	}
 
-	if (hdr->ver != (u32)qp->rx_pkts) {
+	if (ver != (u32)qp->rx_pkts) {
 		dev_dbg(&qp->ndev->pdev->dev,
 			"version mismatch, expected %llu - got %u\n",
-			qp->rx_pkts, hdr->ver);
+			qp->rx_pkts, ver);
 		qp->rx_err_ver++;
 		return -EIO;
 	}
@@ -1647,11 +1662,12 @@ static int ntb_process_rxc(struct ntb_transport_qp *qp)
 
 	entry->rx_hdr = hdr;
 	entry->rx_index = qp->rx_index;
+	entry->flags = flags & DESC_META_MASK;
 
-	if (hdr->len > entry->len) {
+	if (len > entry->len) {
 		dev_dbg(&qp->ndev->pdev->dev,
 			"receive buffer overflow! Wanted %d got %d\n",
-			hdr->len, entry->len);
+			len, entry->len);
 		qp->rx_err_oflow++;
 
 		entry->len = -EIO;
@@ -1661,12 +1677,12 @@ static int ntb_process_rxc(struct ntb_transport_qp *qp)
 	} else {
 		dev_dbg(&qp->ndev->pdev->dev,
 			"RX OK index %u ver %u size %d into buf size %d\n",
-			qp->rx_index, hdr->ver, hdr->len, entry->len);
+			qp->rx_index, ver, len, entry->len);
 
-		qp->rx_bytes += hdr->len;
+		qp->rx_bytes += len;
 		qp->rx_pkts++;
 
-		entry->len = hdr->len;
+		entry->len = len;
 
 		ntb_async_rx(entry, offset);
 	}
@@ -1719,9 +1735,16 @@ static void ntb_transport_rxc_db(unsigned long data)
 static void ntb_tx_copy_callback(void *data,
 				 const struct dmaengine_result *res)
 {
+	struct ntb_payload_header __iomem *hdr;
 	struct ntb_queue_entry *entry = data;
-	struct ntb_transport_qp *qp = entry->qp;
-	struct ntb_payload_header __iomem *hdr = entry->tx_hdr;
+	struct ntb_transport_qp *qp;
+	unsigned int len;
+	void *cb_data;
+
+	qp = entry->qp;
+	hdr = entry->tx_hdr;
+	cb_data = entry->cb_data;
+	len = entry->len;
 
 	/* we need to check DMA results if we are using DMA */
 	if (res) {
@@ -1768,15 +1791,13 @@ static void ntb_tx_copy_callback(void *data,
 	 * "link down" or similar.  Since no payload is being sent in these
 	 * cases, there is nothing to add to the completion queue.
 	 */
-	if (entry->len > 0) {
-		qp->tx_bytes += entry->len;
-
-		if (qp->tx_handler)
-			qp->tx_handler(qp, qp->cb_data, entry->cb_data,
-				       entry->len);
-	}
+	if (len > 0)
+		qp->tx_bytes += len;
 
 	ntb_list_add(&qp->ntb_tx_free_q_lock, &entry->entry, &qp->tx_free_q);
+
+	if (len > 0 && qp->tx_handler)
+		qp->tx_handler(qp, qp->cb_data, cb_data, len);
 }
 
 static void ntb_memcpy_tx_on_stack(struct ntb_queue_entry *entry, void __iomem *offset)
@@ -1948,15 +1969,6 @@ static int ntb_process_tx(struct ntb_transport_qp *qp,
 	if (!ntb_transport_tx_free_entry(qp)) {
 		qp->tx_ring_full++;
 		return -EAGAIN;
-	}
-
-	if (entry->len > qp->tx_max_frame - sizeof(struct ntb_payload_header)) {
-		if (qp->tx_handler)
-			qp->tx_handler(qp, qp->cb_data, NULL, -EIO);
-
-		ntb_list_add(&qp->ntb_tx_free_q_lock, &entry->entry,
-			     &qp->tx_free_q);
-		return 0;
 	}
 
 	ntb_async_tx(qp, entry);
@@ -2332,6 +2344,7 @@ EXPORT_SYMBOL_GPL(ntb_transport_rx_enqueue);
  * @cb: per buffer pointer for callback function to use
  * @data: pointer to data buffer that will be sent
  * @len: length of the data buffer
+ * @meta: client metadata to send with the buffer
  *
  * Enqueue a new transmit buffer onto the transport queue from which a NTB
  * payload will be transmitted.  This assumes that a lock is being held to
@@ -2340,17 +2353,19 @@ EXPORT_SYMBOL_GPL(ntb_transport_rx_enqueue);
  * RETURNS: An appropriate -ERRNO error value on error, or zero for success.
  */
 int ntb_transport_tx_enqueue(struct ntb_transport_qp *qp, void *cb, void *data,
-			     unsigned int len)
+			     unsigned int len, unsigned int meta)
 {
 	struct ntb_queue_entry *entry;
 	int rc;
 
-	if (!qp || !len)
+	if (!qp || !len || meta > NTB_TRANSPORT_MAX_META)
 		return -EINVAL;
 
-	/* If the qp link is down already, just ignore. */
 	if (!qp->link_is_up)
-		return 0;
+		return -ENOLINK;
+
+	if (len > qp->tx_max_frame - sizeof(struct ntb_payload_header))
+		return -EMSGSIZE;
 
 	entry = ntb_list_rm(&qp->ntb_tx_free_q_lock, &qp->tx_free_q);
 	if (!entry) {
@@ -2361,7 +2376,7 @@ int ntb_transport_tx_enqueue(struct ntb_transport_qp *qp, void *cb, void *data,
 	entry->cb_data = cb;
 	entry->buf = data;
 	entry->len = len;
-	entry->flags = 0;
+	entry->flags = meta << DESC_META_SHIFT;
 	entry->errors = 0;
 	entry->tx_index = 0;
 
@@ -2488,7 +2503,9 @@ EXPORT_SYMBOL_GPL(ntb_transport_max_size);
 unsigned int ntb_transport_tx_free_entry(struct ntb_transport_qp *qp)
 {
 	unsigned int head = qp->tx_index;
-	unsigned int tail = qp->remote_rx_info->entry;
+	unsigned int tail;
+
+	tail = le32_to_cpu(READ_ONCE(qp->remote_rx_info->entry));
 
 	return tail >= head ? tail - head : qp->tx_max_entry + tail - head;
 }

@@ -60,8 +60,14 @@ static void fbnic_mbx_reset_desc_ring(struct fbnic_dev *fbd, int mbx_idx)
 	 */
 	switch (mbx_idx) {
 	case FBNIC_IPC_MBX_RX_IDX:
+		/* The write path only terminates outstanding requests when
+		 * both FLUSH and FLUSH_MODE are set. With FLUSH alone the
+		 * writes still obey the halt asserted by clearing BME, so
+		 * nothing drains and AW_FLUSH_DONE never asserts.
+		 */
 		wr32(fbd, FBNIC_PUL_OB_TLP_HDR_AW_CFG,
-		     FBNIC_PUL_OB_TLP_HDR_AW_CFG_FLUSH);
+		     FBNIC_PUL_OB_TLP_HDR_AW_CFG_FLUSH |
+		     FBNIC_PUL_OB_TLP_HDR_AW_CFG_FLUSH_MODE);
 		break;
 	case FBNIC_IPC_MBX_TX_IDX:
 		wr32(fbd, FBNIC_PUL_OB_TLP_HDR_AR_CFG,
@@ -284,6 +290,12 @@ static void fbnic_mbx_process_tx_msgs(struct fbnic_dev *fbd)
 		desc = __fbnic_mbx_rd_desc(fbd, FBNIC_IPC_MBX_TX_IDX, head);
 		if (!(desc & FBNIC_IPC_MBX_DESC_FW_CMPL))
 			break;
+
+		if (desc & FBNIC_IPC_MBX_DESC_FW_ERR) {
+			tx_mbx->resp_error++;
+			dev_warn(fbd->dev,
+				 "FW completed a Tx mailbox request with an error\n");
+		}
 
 		fbnic_mbx_unmap_and_free_msg(fbd, FBNIC_IPC_MBX_TX_IDX, head);
 
@@ -607,6 +619,40 @@ static int fbnic_fw_parse_bmc_addrs(u8 bmc_mac_addr[][ETH_ALEN],
 	return 0;
 }
 
+static int fbnic_fw_parse_bmc_cap(struct fbnic_dev *fbd,
+				  struct fbnic_tlv_msg **results,
+				  bool *bmc_present, u32 *all_multi)
+{
+	struct fbnic_tlv_msg *attr;
+	int err;
+
+	/* The FW reports the BMC present as soon as its NC-SI channel is
+	 * enabled, which is before the BMC has been assigned a MAC address.
+	 * In that window the message carries no MAC array; there is nothing
+	 * to program, so treat the BMC as absent. On any absence clear the
+	 * stored BMC MAC addresses and report the BMC as not present.
+	 */
+	if (!results[FBNIC_FW_CAP_RESP_BMC_PRESENT])
+		goto no_bmc;
+
+	attr = results[FBNIC_FW_CAP_RESP_BMC_MAC_ARRAY];
+	if (!attr)
+		goto no_bmc;
+
+	err = fbnic_fw_parse_bmc_addrs(fbd->fw_cap.bmc_mac_addr, attr, 4);
+	if (err)
+		return err;
+
+	*all_multi = fta_get_uint(results, FBNIC_FW_CAP_RESP_BMC_ALL_MULTI);
+	*bmc_present = true;
+	return 0;
+
+no_bmc:
+	memset(fbd->fw_cap.bmc_mac_addr, 0, sizeof(fbd->fw_cap.bmc_mac_addr));
+	*bmc_present = false;
+	return 0;
+}
+
 static int fbnic_fw_parse_cap_resp(void *opaque, struct fbnic_tlv_msg **results)
 {
 	u32 all_multi = 0, version = 0;
@@ -671,25 +717,9 @@ static int fbnic_fw_parse_cap_resp(void *opaque, struct fbnic_tlv_msg **results)
 	fbd->fw_cap.link_fec =
 		fta_get_uint(results, FBNIC_FW_CAP_RESP_FW_LINK_FEC);
 
-	bmc_present = !!results[FBNIC_FW_CAP_RESP_BMC_PRESENT];
-	if (bmc_present) {
-		struct fbnic_tlv_msg *attr;
-
-		attr = results[FBNIC_FW_CAP_RESP_BMC_MAC_ARRAY];
-		if (!attr)
-			return -EINVAL;
-
-		err = fbnic_fw_parse_bmc_addrs(fbd->fw_cap.bmc_mac_addr,
-					       attr, 4);
-		if (err)
-			return err;
-
-		all_multi =
-			fta_get_uint(results, FBNIC_FW_CAP_RESP_BMC_ALL_MULTI);
-	} else {
-		memset(fbd->fw_cap.bmc_mac_addr, 0,
-		       sizeof(fbd->fw_cap.bmc_mac_addr));
-	}
+	err = fbnic_fw_parse_bmc_cap(fbd, results, &bmc_present, &all_multi);
+	if (err)
+		return err;
 
 	fbd->fw_cap.bmc_present = bmc_present;
 
@@ -1666,6 +1696,13 @@ static void fbnic_mbx_process_rx_msgs(struct fbnic_dev *fbd)
 		if (!(desc & FBNIC_IPC_MBX_DESC_FW_CMPL))
 			break;
 
+		if (desc & FBNIC_IPC_MBX_DESC_FW_ERR) {
+			rx_mbx->resp_error++;
+			dev_warn(fbd->dev,
+				 "FW reported an error on an Rx mailbox message; dropping\n");
+			goto next_page;
+		}
+
 		dma_sync_single_for_cpu(fbd->dev, rx_mbx->buf_info[head].addr,
 					FBNIC_RX_PAGE_SIZE, DMA_FROM_DEVICE);
 
@@ -1677,16 +1714,19 @@ static void fbnic_mbx_process_rx_msgs(struct fbnic_dev *fbd)
 		if (!length)
 			goto next_page;
 
-		/* Report descriptors with length greater than page size */
-		if (length > PAGE_SIZE) {
+		/* Report descriptors with invalid message extents. */
+		if (length < sizeof(msg->hdr) || length > PAGE_SIZE) {
 			dev_warn(fbd->dev,
 				 "Invalid mailbox descriptor length: %lld\n",
 				 length);
 			goto next_page;
 		}
 
-		if (le16_to_cpu(msg->hdr.len) * sizeof(u32) > length)
+		if (!le16_to_cpu(msg->hdr.len) ||
+		    le16_to_cpu(msg->hdr.len) * sizeof(u32) > length) {
 			dev_warn(fbd->dev, "Mailbox message length mismatch\n");
+			goto next_page;
+		}
 
 		/* If parsing fails dump contents of message to dmesg */
 		err = fbnic_tlv_msg_parse(fbd, msg, fbnic_fw_tlv_parser);
@@ -1734,6 +1774,7 @@ int fbnic_mbx_poll_tx_ready(struct fbnic_dev *fbd)
 {
 	struct fbnic_fw_mbx *tx_mbx = &fbd->mbx[FBNIC_IPC_MBX_TX_IDX];
 	unsigned long timeout = jiffies + 10 * HZ + 1;
+	u64 resp_error;
 	int err, i;
 
 	do {
@@ -1764,6 +1805,8 @@ int fbnic_mbx_poll_tx_ready(struct fbnic_dev *fbd)
 	 * mgmt.version once we get the actual version from the firmware
 	 * in the capabilities request message.
 	 */
+send_cap_req:
+	resp_error = tx_mbx->resp_error;
 	err = fbnic_fw_xmit_simple_msg(fbd, FBNIC_TLV_MSG_ID_HOST_CAP_REQ);
 	if (err)
 		goto clean_mbx;
@@ -1782,8 +1825,17 @@ int fbnic_mbx_poll_tx_ready(struct fbnic_dev *fbd)
 		fbnic_mbx_poll(fbd);
 
 		/* set err, but wait till mgmt.version check to report it */
-		if (!time_is_after_jiffies(timeout))
+		if (!time_is_after_jiffies(timeout)) {
 			err = -ETIMEDOUT;
+			continue;
+		}
+
+		/* If the FW completed our capabilities request with an error
+		 * (FW_ERR) it produced no response; the ring is not wedged, so
+		 * re-issue the request instead of timing out.
+		 */
+		if (tx_mbx->resp_error != resp_error)
+			goto send_cap_req;
 	}
 
 	return 0;

@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
 include ../Makefile.deps
+include ../../../scripts/Makefile.include
 
 INSTALL	?= install
 prefix  ?= /usr
 
-CC := gcc
-CFLAGS := -Wall -Wextra -Werror -O2
+CFLAGS += -Wall -Wextra -Werror -O2
 ifeq ("$(DEBUG)","1")
   CFLAGS += -g -fsanitize=address -fsanitize=leak -static-libasan
 endif
