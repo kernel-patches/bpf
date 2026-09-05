@@ -51,6 +51,14 @@
 	.result = REJECT,
 },
 {
+	"test5 ld_imm64: truncated",
+	.insns = {
+	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 0),
+	},
+	.errstr = "invalid bpf_ld_imm64 insn",
+	.result = REJECT,
+},
+{
 	"test6 ld_imm64",
 	.insns = {
 	BPF_RAW_INSN(BPF_LD | BPF_IMM | BPF_DW, 0, 0, 0, 0),
