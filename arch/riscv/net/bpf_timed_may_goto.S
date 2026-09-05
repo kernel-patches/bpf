@@ -21,7 +21,7 @@ SYM_FUNC_START(arch_bpf_timed_may_goto)
 	addi	s0, sp, 8*SZREG
 
 	/* Save BPF registers R0-R5 (a5, a0-a4) */
-	REG_S	a5, 5*SZREG(sp)
+	REG_S	t6, 5*SZREG(sp)
 	REG_S	a0, 4*SZREG(sp)
 	REG_S	a1, 3*SZREG(sp)
 	REG_S	a2, 2*SZREG(sp)
@@ -38,7 +38,7 @@ SYM_FUNC_START(arch_bpf_timed_may_goto)
 	REG_L	a2, 2*SZREG(sp)
 	REG_L	a1, 3*SZREG(sp)
 	REG_L	a0, 4*SZREG(sp)
-	REG_L	a5, 5*SZREG(sp)
+	REG_L	t6, 5*SZREG(sp)
 
 	REG_L	s0, 6*SZREG(sp)
 	REG_L	ra, 7*SZREG(sp)
