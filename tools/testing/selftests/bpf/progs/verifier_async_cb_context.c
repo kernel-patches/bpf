@@ -9,6 +9,11 @@
 
 char _license[] SEC("license") = "GPL";
 
+struct task_struct *bpf_task_acquire(struct task_struct *p) __ksym;
+void bpf_task_release(struct task_struct *p) __ksym;
+void bpf_rcu_read_lock(void) __ksym;
+void bpf_rcu_read_unlock(void) __ksym;
+
 /* Timer tests */
 
 struct timer_elem {
@@ -66,6 +71,7 @@ int timer_sleepable_prog(void *ctx)
 
 struct wq_elem {
 	struct bpf_wq w;
+	struct task_struct __kptr *task;
 };
 
 struct {
@@ -116,6 +122,106 @@ int wq_sleepable_prog(void *ctx)
 		return 0;
 	if (bpf_wq_set_callback(&val->w, wq_cb, 0) != 0)
 		return 0;
+	return 0;
+}
+
+__noinline int wq_global_acquire(void)
+{
+	struct task_struct *task, *acquired;
+	struct wq_elem *val;
+	int key = 0;
+
+	val = bpf_map_lookup_elem(&wq_map, &key);
+	if (!val)
+		return 0;
+
+	task = val->task;
+	if (!task)
+		return 0;
+
+	acquired = bpf_task_acquire(task);
+	if (acquired)
+		bpf_task_release(acquired);
+	return 0;
+}
+
+static int wq_global_rcu_cb(void *map, int *key, void *value)
+{
+	wq_global_acquire();
+	return 0;
+}
+
+SEC("fentry/bpf_fentry_test1")
+__failure __msg("R1 must be a rcu pointer")
+int wq_global_rcu_prog(void *ctx)
+{
+	struct wq_elem *val;
+	int key = 0;
+
+	val = bpf_map_lookup_elem(&wq_map, &key);
+	if (!val)
+		return 0;
+
+	bpf_wq_init(&val->w, &wq_map, 0);
+	bpf_wq_set_callback(&val->w, wq_global_rcu_cb, 0);
+	return 0;
+}
+
+static int wq_global_rcu_lock_cb(void *map, int *key, void *value)
+{
+	bpf_rcu_read_lock();
+	wq_global_acquire();
+	bpf_rcu_read_unlock();
+	return 0;
+}
+
+SEC("fentry/bpf_fentry_test1")
+__success
+int wq_global_rcu_lock_prog(void *ctx)
+{
+	struct wq_elem *val;
+	int key = 0;
+
+	/* Verify the same global subprog in non-sleepable and protected contexts. */
+	wq_global_acquire();
+
+	val = bpf_map_lookup_elem(&wq_map, &key);
+	if (!val)
+		return 0;
+
+	bpf_wq_init(&val->w, &wq_map, 0);
+	bpf_wq_set_callback(&val->w, wq_global_rcu_lock_cb, 0);
+	return 0;
+}
+
+__noinline int wq_global_no_rcu(void)
+{
+	barrier();
+	return 0;
+}
+
+static int wq_global_no_rcu_cb(void *map, int *key, void *value)
+{
+	wq_global_no_rcu();
+	return 0;
+}
+
+SEC("fentry/bpf_fentry_test1")
+__success
+int wq_global_no_rcu_prog(void *ctx)
+{
+	struct wq_elem *val;
+	int key = 0;
+
+	/* Verify the same global in non-sleepable and unprotected contexts. */
+	wq_global_no_rcu();
+
+	val = bpf_map_lookup_elem(&wq_map, &key);
+	if (!val)
+		return 0;
+
+	bpf_wq_init(&val->w, &wq_map, 0);
+	bpf_wq_set_callback(&val->w, wq_global_no_rcu_cb, 0);
 	return 0;
 }
 
@@ -177,5 +283,31 @@ int task_work_sleepable_prog(void *ctx)
 		return 0;
 
 	bpf_task_work_schedule_resume(task, &val->tw, &task_work_map, task_work_cb);
+	return 0;
+}
+
+static int task_work_global_rcu_cb(struct bpf_map *map, void *key, void *value)
+{
+	return wq_global_acquire();
+}
+
+SEC("fentry/bpf_fentry_test1")
+__failure __msg("R1 must be a rcu pointer")
+int task_work_global_rcu_prog(void *ctx)
+{
+	struct task_work_elem *val;
+	struct task_struct *task;
+	int key = 0;
+
+	val = bpf_map_lookup_elem(&task_work_map, &key);
+	if (!val)
+		return 0;
+
+	task = bpf_get_current_task_btf();
+	if (!task)
+		return 0;
+
+	bpf_task_work_schedule_resume(task, &val->tw, &task_work_map,
+				      task_work_global_rcu_cb);
 	return 0;
 }
