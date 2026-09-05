@@ -854,6 +854,8 @@ struct backtrack_state {
 struct bpf_id_pair {
 	u32 old;
 	u32 cur;
+	s32 pkt_ptr_delta;
+	bool pkt_ptr_delta_set;
 };
 
 struct bpf_idmap {

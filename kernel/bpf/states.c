@@ -339,6 +339,7 @@ static bool check_ids(u32 old_id, u32 cur_id, struct bpf_idmap *idmap)
 	if (idmap->cnt < BPF_ID_MAP_SIZE) {
 		map[idmap->cnt].old = old_id;
 		map[idmap->cnt].cur = cur_id;
+		map[idmap->cnt].pkt_ptr_delta_set = false;
 		idmap->cnt++;
 		return true;
 	}
@@ -349,6 +350,43 @@ static bool check_ids(u32 old_id, u32 cur_id, struct bpf_idmap *idmap)
 	 * not live in either, so the map can be exhausted. Since it is unlikely,
 	 * fail the verification by treating the states as not equivalent.
 	 */
+	return false;
+}
+
+static bool check_pkt_ptr_ids(const struct bpf_reg_state *old,
+			      const struct bpf_reg_state *cur,
+			      struct bpf_idmap *idmap)
+{
+	struct bpf_id_pair *map = idmap->map;
+	s64 delta;
+	unsigned int i;
+
+	if (!check_ids(old->id, cur->id, idmap))
+		return false;
+	if (!old->id)
+		return true;
+
+	/*
+	 * Packet range is shared by all pointers with the same ID. Preserve
+	 * their relative displacement, while allowing the whole class to move.
+	 * Packet pointer offsets are bounded by BPF_MAX_VAR_OFF, so the delta
+	 * between two valid offsets fits in s32.
+	 */
+	delta = (s64)(cur->r64.base - old->r64.base);
+	if (delta < S32_MIN || delta > S32_MAX)
+		return false;
+
+	for (i = 0; i < idmap->cnt; i++) {
+		if (map[i].old != old->id)
+			continue;
+		if (!map[i].pkt_ptr_delta_set) {
+			map[i].pkt_ptr_delta = delta;
+			map[i].pkt_ptr_delta_set = true;
+			return true;
+		}
+		return map[i].pkt_ptr_delta == delta;
+	}
+
 	return false;
 }
 
@@ -632,8 +670,8 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		} else if (rold->range > rcur->range) {
 			return false;
 		}
-		/* id relations must be preserved */
-		if (!check_ids(rold->id, rcur->id, idmap))
+		/* id relations and intra-class displacement must be preserved */
+		if (!check_pkt_ptr_ids(rold, rcur, idmap))
 			return false;
 		/* new val must satisfy old val knowledge */
 		return range_within(rold, rcur) &&
