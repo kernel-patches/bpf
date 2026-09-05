@@ -10,8 +10,8 @@ static char log_buf[1024 * 1024];
 
 static struct {
 	const char *prog_name;
-	const char *err_msg;
-} spin_lock_fail_tests[] = {
+	const char *err_msg; /* NULL if loading should succeed. */
+} spin_lock_tests[] = {
 	{ "lock_id_kptr_preserve",
 	  "[0-9]\\+: (bf) r1 = r0                       ; R0=ptr_foo(id=2)"
 	  " R1=ptr_foo(id=2) refs=2\n"
@@ -54,6 +54,22 @@ static struct {
 	{ "lock_global_sleepable_helper_subprog", "global function calls are not allowed while holding a lock" },
 	{ "lock_global_sleepable_kfunc_subprog", "global function calls are not allowed while holding a lock" },
 	{ "lock_global_sleepable_subprog_indirect", "global function calls are not allowed while holding a lock" },
+	{ "callback_value_lock_identity", "bpf_spin_unlock of different lock" },
+	{ "callback_inner_map_value_lock_identity", "bpf_spin_unlock of different lock" },
+	{ "callback_value_lock_identity_same", NULL },
+	{ "callback_single_value_lock_identity_same", NULL },
+	{ "lock_id_timer_preserve",
+	  "R1=map_value(id=[1-9][0-9]*,map=async_lock_map,[^\n]*\n"
+	  "[0-9]\\+: (85) call bpf_this_cpu_ptr#154\n"
+	  "R1 type=map_value expected=percpu_ptr_" },
+	{ "lock_id_wq_preserve",
+	  "R1=map_value(id=[1-9][0-9]*,map=async_lock_map,[^\n]*\n"
+	  "[0-9]\\+: (85) call bpf_this_cpu_ptr#154\n"
+	  "R1 type=map_value expected=percpu_ptr_" },
+	{ "lock_id_task_work_preserve",
+	  "R1=map_value(id=[1-9][0-9]*,map=async_lock_map,[^\n]*\n"
+	  "[0-9]\\+: (85) call bpf_this_cpu_ptr#154\n"
+	  "R1 type=map_value expected=percpu_ptr_" },
 };
 
 static int match_regex(const char *pattern, const char *string)
@@ -74,7 +90,7 @@ static int match_regex(const char *pattern, const char *string)
 	return rc == 0 ? 1 : 0;
 }
 
-static void test_spin_lock_fail_prog(const char *prog_name, const char *err_msg)
+static void test_spin_lock_prog(const char *prog_name, const char *err_msg)
 {
 	LIBBPF_OPTS(bpf_object_open_opts, opts, .kernel_log_buf = log_buf,
 						.kernel_log_size = sizeof(log_buf),
@@ -94,6 +110,10 @@ static void test_spin_lock_fail_prog(const char *prog_name, const char *err_msg)
 	bpf_program__set_autoload(prog, true);
 
 	ret = test_spin_lock_fail__load(skel);
+	if (!err_msg) {
+		ASSERT_OK(ret, "test_spin_lock_fail__load");
+		goto end;
+	}
 	if (!ASSERT_ERR(ret, "test_spin_lock_fail__load must fail"))
 		goto end;
 
@@ -166,10 +186,9 @@ void test_spin_lock(void)
 
 	test_spin_lock_success();
 
-	for (i = 0; i < ARRAY_SIZE(spin_lock_fail_tests); i++) {
-		if (!test__start_subtest(spin_lock_fail_tests[i].prog_name))
+	for (i = 0; i < ARRAY_SIZE(spin_lock_tests); i++) {
+		if (!test__start_subtest(spin_lock_tests[i].prog_name))
 			continue;
-		test_spin_lock_fail_prog(spin_lock_fail_tests[i].prog_name,
-					 spin_lock_fail_tests[i].err_msg);
+		test_spin_lock_prog(spin_lock_tests[i].prog_name, spin_lock_tests[i].err_msg);
 	}
 }
