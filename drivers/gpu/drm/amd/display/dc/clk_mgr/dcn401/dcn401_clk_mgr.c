@@ -5,11 +5,12 @@
 #include "dccg.h"
 #include "clk_mgr_internal.h"
 #include "dcn401/dcn401_clk_mgr_smu_msg.h"
+#include "dcn10/dcn10_clk_mgr.h"
 #include "dcn20/dcn20_clk_mgr.h"
-#include "dce100/dce_clk_mgr.h"
 #include "dcn31/dcn31_clk_mgr.h"
 #include "dcn32/dcn32_clk_mgr.h"
 #include "dcn401/dcn401_clk_mgr.h"
+#include "hw_sequencer.h"
 #include "reg_helper.h"
 #include "core_types.h"
 #include "dm_helpers.h"
@@ -357,37 +358,37 @@ static void dcn401_dump_clk_registers(struct clk_state_registers_and_bypass *reg
 		fclk_did = REG_READ(CLK2_CLK2_DFS_CNTL);
 
 		/* Convert DISPCLK DFS Slice DID to divider*/
-		target_div = dentist_get_divider_from_did(dispclk_did);
+		target_div = dcn10_dentist_get_divider_from_did(dispclk_did);
 		//Get dispclk in khz
 		regs_and_bypass->dispclk = (DENTIST_DIVIDER_RANGE_SCALE_FACTOR
 				* clk_mgr->base.dentist_vco_freq_khz) / target_div;
 
 		/* Convert DISPCLK DFS Slice DID to divider*/
-		target_div = dentist_get_divider_from_did(dppclk_did);
+		target_div = dcn10_dentist_get_divider_from_did(dppclk_did);
 		//Get dppclk in khz
 		regs_and_bypass->dppclk = (DENTIST_DIVIDER_RANGE_SCALE_FACTOR
 				* clk_mgr->base.dentist_vco_freq_khz) / target_div;
 
 		/* Convert DPREFCLK DFS Slice DID to divider*/
-		target_div = dentist_get_divider_from_did(dprefclk_did);
+		target_div = dcn10_dentist_get_divider_from_did(dprefclk_did);
 		//Get dprefclk in khz
 		regs_and_bypass->dprefclk = (DENTIST_DIVIDER_RANGE_SCALE_FACTOR
 				* clk_mgr->base.dentist_vco_freq_khz) / target_div;
 
 		/* Convert DCFCLK DFS Slice DID to divider*/
-		target_div = dentist_get_divider_from_did(dcfclk_did);
+		target_div = dcn10_dentist_get_divider_from_did(dcfclk_did);
 		//Get dcfclk in khz
 		regs_and_bypass->dcfclk = (DENTIST_DIVIDER_RANGE_SCALE_FACTOR
 				* clk_mgr->base.dentist_vco_freq_khz) / target_div;
 
 		/* Convert DTBCLK DFS Slice DID to divider*/
-		target_div = dentist_get_divider_from_did(dtbclk_did);
+		target_div = dcn10_dentist_get_divider_from_did(dtbclk_did);
 		//Get dtbclk in khz
 		regs_and_bypass->dtbclk = (DENTIST_DIVIDER_RANGE_SCALE_FACTOR
 				* clk_mgr->base.dentist_vco_freq_khz) / target_div;
 
 		/* Convert DTBCLK DFS Slice DID to divider*/
-		target_div = dentist_get_divider_from_did(fclk_did);
+		target_div = dcn10_dentist_get_divider_from_did(fclk_did);
 		//Get fclk in khz
 		regs_and_bypass->fclk = (DENTIST_DIVIDER_RANGE_SCALE_FACTOR
 				* clk_mgr->base.dentist_vco_freq_khz) / target_div;
@@ -1085,7 +1086,8 @@ static unsigned int dcn401_build_update_display_clocks_sequence(
 		struct clk_mgr *clk_mgr_base,
 		struct dc_state *context,
 		struct dc_clocks *new_clocks,
-		bool safe_to_lower)
+		bool safe_to_lower,
+		unsigned int num_steps_start)
 {
 	struct clk_mgr_internal *clk_mgr_internal = TO_CLK_MGR_INTERNAL(clk_mgr_base);
 	struct dcn401_clk_mgr *clk_mgr401 = TO_DCN401_CLK_MGR(clk_mgr_internal);
@@ -1100,7 +1102,7 @@ static unsigned int dcn401_build_update_display_clocks_sequence(
 	bool frl_present = false;
 	unsigned int i;
 
-	unsigned int num_steps = 0;
+	unsigned int num_steps = num_steps_start;
 
 	/* CLK_MGR401_READ_CLOCKS_FROM_DENTIST */
 	if (clk_mgr_base->clks.dispclk_khz == 0 ||
@@ -1239,6 +1241,44 @@ static unsigned int dcn401_build_update_display_clocks_sequence(
 	return num_steps;
 }
 
+/*
+ * Build-for-BLS functions.
+ * These build both bandwidth and display clock sequences into the clk_mgr's
+ * internal block sequence array, then add a single CLK_MGR_UPDATE_CLOCKS step
+ * to the HWSS block sequence whose executor will call
+ * execute_clk_mgr_block_sequence to dispatch all accumulated steps.
+ */
+void dcn401_build_clock_update_for_bls(
+		struct clk_mgr *clk_mgr_base,
+		struct dc_state *context,
+		bool safe_to_lower,
+		struct block_sequence_state *seq_state)
+{
+	struct clk_mgr_internal *clk_mgr_internal = TO_CLK_MGR_INTERNAL(clk_mgr_base);
+	struct dcn401_clk_mgr *clk_mgr401 = TO_DCN401_CLK_MGR(clk_mgr_internal);
+	unsigned int num_bw_steps;
+	unsigned int total_steps;
+
+	/* Build bandwidth clocks sequence starting at index 0 */
+	num_bw_steps = dcn401_build_update_bandwidth_clocks_sequence(clk_mgr_base,
+			context,
+			&context->bw_ctx.bw.dcn.clk,
+			safe_to_lower);
+
+	/* Build display clocks sequence appended after bandwidth steps */
+	total_steps = dcn401_build_update_display_clocks_sequence(clk_mgr_base,
+			context,
+			&context->bw_ctx.bw.dcn.clk,
+			safe_to_lower,
+			num_bw_steps);
+
+	/* Store total step count for the executor */
+	clk_mgr401->num_block_sequence_steps = total_steps;
+
+	/* Add single HWSS step that will execute all clk_mgr block sequence steps */
+	hwss_add_clk_mgr_update_clocks(seq_state, clk_mgr_base);
+}
+
 static void dcn401_update_clocks(struct clk_mgr *clk_mgr_base,
 		struct dc_state *context,
 		bool safe_to_lower)
@@ -1260,7 +1300,8 @@ static void dcn401_update_clocks(struct clk_mgr *clk_mgr_base,
 	num_steps = dcn401_build_update_display_clocks_sequence(clk_mgr_base,
 			context,
 			&context->bw_ctx.bw.dcn.clk,
-			safe_to_lower);
+			safe_to_lower,
+			0);
 
 	/* execute sequence */
 	dcn401_execute_block_sequence(clk_mgr_base,	num_steps);
@@ -1511,7 +1552,7 @@ static int dcn401_get_dispclk_from_dentist(struct clk_mgr *clk_mgr_base)
 	unsigned int disp_divider;
 
 	REG_GET(DENTIST_DISPCLK_CNTL, DENTIST_DISPCLK_WDIVIDER, &dispclk_wdivider);
-	disp_divider = dentist_get_divider_from_did(dispclk_wdivider);
+	disp_divider = dcn10_dentist_get_divider_from_did(dispclk_wdivider);
 
 	/* Return DISPCLK freq in Khz */
 	if (disp_divider)
@@ -1549,8 +1590,16 @@ unsigned int dcn401_get_max_clock_khz(struct clk_mgr *clk_mgr_base, enum clk_typ
 	return 0;
 }
 
+static void dcn401_execute_clk_mgr_block_sequence_bls(struct clk_mgr *clk_mgr_base)
+{
+	struct clk_mgr_internal *clk_mgr_internal = TO_CLK_MGR_INTERNAL(clk_mgr_base);
+	struct dcn401_clk_mgr *clk_mgr401 = TO_DCN401_CLK_MGR(clk_mgr_internal);
+
+	dcn401_execute_block_sequence(clk_mgr_base, clk_mgr401->num_block_sequence_steps);
+}
+
 static struct clk_mgr_funcs dcn401_funcs = {
-		.get_dp_ref_clk_frequency = dce12_get_dp_ref_freq_khz,
+		.get_dp_ref_clk_frequency = dcn10_get_dp_ref_freq_khz,
 		.get_dtb_ref_clk_frequency = dcn401_get_dtb_ref_freq_khz,
 		.update_clocks = dcn401_update_clocks,
 		.dump_clk_registers = dcn401_dump_clk_registers,
@@ -1566,6 +1615,8 @@ static struct clk_mgr_funcs dcn401_funcs = {
 		.get_hard_min_fclk = dcn401_get_hard_min_fclk,
 		.is_dc_mode_present = dcn401_is_dc_mode_present,
 		.get_max_clock_khz = dcn401_get_max_clock_khz,
+		.build_clock_update_for_bls = dcn401_build_clock_update_for_bls,
+		.execute_clk_mgr_block_sequence = dcn401_execute_clk_mgr_block_sequence_bls,
 };
 
 struct clk_mgr_internal *dcn401_clk_mgr_construct(

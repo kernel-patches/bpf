@@ -36,6 +36,7 @@
 #include "cikd.h"
 #include "atom.h"
 #include "amd_pcie.h"
+#include "amdgpu_video_codecs.h"
 
 #include "cik.h"
 #include "gmc_v7_0.h"
@@ -1876,12 +1877,6 @@ static void cik_invalidate_hdp(struct amdgpu_device *adev,
 	}
 }
 
-static bool cik_need_full_reset(struct amdgpu_device *adev)
-{
-	/* change this when we support soft reset */
-	return true;
-}
-
 static void cik_get_pcie_usage(struct amdgpu_device *adev, uint64_t *count0,
 			       uint64_t *count1)
 {
@@ -1971,7 +1966,6 @@ static const struct amdgpu_asic_funcs cik_asic_funcs =
 	.get_config_memsize = &cik_get_config_memsize,
 	.flush_hdp = &cik_flush_hdp,
 	.invalidate_hdp = &cik_invalidate_hdp,
-	.need_full_reset = &cik_need_full_reset,
 	.init_doorbell_index = &legacy_doorbell_index_init,
 	.get_pcie_usage = &cik_get_pcie_usage,
 	.need_reset_on_init = &cik_need_reset_on_init,
@@ -2143,12 +2137,6 @@ static int cik_common_resume(struct amdgpu_ip_block *ip_block)
 	return cik_common_hw_init(ip_block);
 }
 
-static bool cik_common_is_idle(struct amdgpu_ip_block *ip_block)
-{
-	return true;
-}
-
-
 
 static int cik_common_soft_reset(struct amdgpu_ip_block *ip_block)
 {
@@ -2174,7 +2162,6 @@ static const struct amd_ip_funcs cik_common_ip_funcs = {
 	.hw_init = cik_common_hw_init,
 	.hw_fini = cik_common_hw_fini,
 	.resume = cik_common_resume,
-	.is_idle = cik_common_is_idle,
 	.soft_reset = cik_common_soft_reset,
 	.set_clockgating_state = cik_common_set_clockgating_state,
 	.set_powergating_state = cik_common_set_powergating_state,

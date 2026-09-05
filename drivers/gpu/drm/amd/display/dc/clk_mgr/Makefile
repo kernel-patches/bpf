@@ -29,6 +29,7 @@ AMD_DAL_CLK_MGR = $(addprefix $(AMDDALPATH)/dc/clk_mgr/,$(CLK_MGR))
 
 AMD_DISPLAY_FILES += $(AMD_DAL_CLK_MGR)
 
+ifdef CONFIG_DRM_AMD_DC_DCE
 ###############################################################################
 # DCE 100 and DCE8x
 ###############################################################################
@@ -62,6 +63,13 @@ CLK_MGR_DCE120 = dce120_clk_mgr.o
 AMD_DAL_CLK_MGR_DCE120 = $(addprefix $(AMDDALPATH)/dc/clk_mgr/dce120/,$(CLK_MGR_DCE120))
 
 AMD_DISPLAY_FILES += $(AMD_DAL_CLK_MGR_DCE120)
+endif # CONFIG_DRM_AMD_DC_DCE
+
+# Shared clock helpers used by both the DCE and DCN clock managers. Built
+# unconditionally (not gated on CONFIG_DRM_AMD_DC_FP) so non-FP configs that
+# still build the DCE clock managers can resolve them.
+AMD_DISPLAY_FILES += $(AMDDALPATH)/dc/clk_mgr/dcn10/dcn10_clk_mgr.o
+
 ifdef CONFIG_DRM_AMD_DC_FP
 ###############################################################################
 # DCN10
@@ -195,4 +203,13 @@ AMD_DAL_CLK_MGR_DCN42B = $(addprefix $(AMDDALPATH)/dc/clk_mgr/dcn42b/,$(CLK_MGR_
 
 AMD_DISPLAY_FILES += $(AMD_DAL_CLK_MGR_DCN42B)
 
+
+###############################################################################
+# DCN60
+###############################################################################
+CLK_MGR_DCN60 = dcn60_clk_mgr.o dcn60_clk_mgr_smu_msg.o
+
+AMD_DAL_CLK_MGR_DCN60 = $(addprefix $(AMDDALPATH)/dc/clk_mgr/dcn60/,$(CLK_MGR_DCN60))
+
+AMD_DISPLAY_FILES += $(AMD_DAL_CLK_MGR_DCN60)
 endif

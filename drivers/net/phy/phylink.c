@@ -964,7 +964,7 @@ static unsigned int phylink_inband_caps(struct phylink *pl,
 		return 0;
 
 	pcs = pl->mac_ops->mac_select_pcs(pl->config, interface);
-	if (!pcs)
+	if (IS_ERR_OR_NULL(pcs))
 		return 0;
 
 	return phylink_pcs_inband_caps(pcs, interface);
@@ -4357,6 +4357,11 @@ void phylink_mii_c45_pcs_get_state(struct mdio_device *pcs,
 	switch (state->interface) {
 	case PHY_INTERFACE_MODE_10GBASER:
 		state->speed = SPEED_10000;
+		state->duplex = DUPLEX_FULL;
+		break;
+
+	case PHY_INTERFACE_MODE_25GBASER:
+		state->speed = SPEED_25000;
 		state->duplex = DUPLEX_FULL;
 		break;
 

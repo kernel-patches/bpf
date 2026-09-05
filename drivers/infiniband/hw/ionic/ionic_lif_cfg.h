@@ -23,6 +23,7 @@ struct ionic_lif_cfg {
 	u64 __iomem *dbpage;
 	struct ionic_intr __iomem *intr_ctrl;
 	phys_addr_t db_phys;
+	void *phc_state;
 
 	u64 page_size_supported;
 	u32 npts_per_lif;
@@ -56,6 +57,7 @@ struct ionic_lif_cfg {
 	bool sq_expdb;
 	bool rq_expdb;
 	u8 expdb_mask;
+	u8 rcq_sign_bit;
 };
 
 void ionic_fill_lif_cfg(struct ionic_lif *lif, struct ionic_lif_cfg *cfg);

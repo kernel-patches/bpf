@@ -15,6 +15,7 @@
 #include <linux/errno.h>
 #include <linux/gfp_types.h>
 #include <linux/i2c.h>
+#include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/ioport.h>
 #include <linux/module.h>
@@ -337,11 +338,11 @@ static int amd_asf_probe(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
-		return dev_err_probe(dev, irq, "missing IRQ resources\n");
+		return irq;
 
 	ret = devm_request_irq(dev, irq, amd_asf_irq_handler, IRQF_SHARED, "amd_asf", asf_dev);
 	if (ret)
-		return dev_err_probe(dev, ret, "Unable to request irq: %d for use\n", irq);
+		return ret;
 
 	asf_dev->adap.owner = THIS_MODULE;
 	asf_dev->adap.algo = &amd_asf_smbus_algorithm;

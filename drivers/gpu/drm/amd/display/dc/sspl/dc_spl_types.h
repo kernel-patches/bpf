@@ -7,8 +7,64 @@
 
 #include "spl_debug.h"
 #include "spl_os_types.h"   // swap
-#include "spl_fixpt31_32.h"	// fixed31_32 and related functions
-#include "spl_custom_float.h" // custom float and related functions
+
+/*
+ * Fixed-point (spl_fixpt_*) and custom-float (spl_custom_float_*) are provided
+ * by parent repo.  The spl_* API is aliased onto the parent repo's own
+ * fixed-point and custom-float implementation; both share the same
+ * "struct fixed31_32" / "struct custom_float_format".
+ */
+
+#include "os_types.h"   /* ASSERT, div64_u64_rem, div64_s64, swap */
+
+#include "fixed31_32.h"
+
+#define spl_fixed31_32          fixed31_32
+
+#define spl_fixpt_zero          dc_fixpt_zero
+#define spl_fixpt_epsilon       dc_fixpt_epsilon
+#define spl_fixpt_half          dc_fixpt_half
+#define spl_fixpt_one           dc_fixpt_one
+
+#define spl_fixpt_from_fraction dc_fixpt_from_fraction
+#define spl_fixpt_from_int      dc_fixpt_from_int
+#define spl_fixpt_neg           dc_fixpt_neg
+#define spl_fixpt_abs           dc_fixpt_abs
+#define spl_fixpt_lt            dc_fixpt_lt
+#define spl_fixpt_le            dc_fixpt_le
+#define spl_fixpt_eq            dc_fixpt_eq
+#define spl_fixpt_min           dc_fixpt_min
+#define spl_fixpt_max           dc_fixpt_max
+#define spl_fixpt_clamp         dc_fixpt_clamp
+#define spl_fixpt_shl           dc_fixpt_shl
+#define spl_fixpt_shr           dc_fixpt_shr
+#define spl_fixpt_add           dc_fixpt_add
+#define spl_fixpt_add_int       dc_fixpt_add_int
+#define spl_fixpt_sub           dc_fixpt_sub
+#define spl_fixpt_sub_int       dc_fixpt_sub_int
+#define spl_fixpt_mul           dc_fixpt_mul
+#define spl_fixpt_mul_int       dc_fixpt_mul_int
+#define spl_fixpt_sqr           dc_fixpt_sqr
+#define spl_fixpt_div_int       dc_fixpt_div_int
+#define spl_fixpt_div           dc_fixpt_div
+#define spl_fixpt_recip         dc_fixpt_recip
+#define spl_fixpt_sinc          dc_fixpt_sinc
+#define spl_fixpt_sin           dc_fixpt_sin
+#define spl_fixpt_cos           dc_fixpt_cos
+#define spl_fixpt_exp           dc_fixpt_exp
+#define spl_fixpt_log           dc_fixpt_log
+#define spl_fixpt_pow           dc_fixpt_pow
+#define spl_fixpt_floor         dc_fixpt_floor
+#define spl_fixpt_round         dc_fixpt_round
+#define spl_fixpt_ceil          dc_fixpt_ceil
+#define spl_fixpt_u4d19         dc_fixpt_u4d19
+#define spl_fixpt_u3d19         dc_fixpt_u3d19
+#define spl_fixpt_u2d19         dc_fixpt_u2d19
+#define spl_fixpt_u0d19         dc_fixpt_u0d19
+#define spl_fixpt_clamp_u0d14   dc_fixpt_clamp_u0d14
+#define spl_fixpt_clamp_u0d10   dc_fixpt_clamp_u0d10
+#define spl_fixpt_s4d19         dc_fixpt_s4d19
+#define spl_fixpt_truncate      dc_fixpt_truncate
 
 struct spl_size {
 	uint32_t width;
@@ -62,17 +118,21 @@ enum spl_pixel_format {
 	/*video*/
 	SPL_PIXEL_FORMAT_420BPP8,
 	SPL_PIXEL_FORMAT_420BPP10,
+	SPL_PIXEL_FORMAT_422BPP8,
+	SPL_PIXEL_FORMAT_422BPP10,
+	SPL_PIXEL_FORMAT_422BPP12,
+	SPL_PIXEL_FORMAT_444BPP8,
+	SPL_PIXEL_FORMAT_444BPP10,
 	/*end of pixel format definition*/
 	SPL_PIXEL_FORMAT_GRPH_BEGIN = SPL_PIXEL_FORMAT_INDEX8,
 	SPL_PIXEL_FORMAT_GRPH_END = SPL_PIXEL_FORMAT_FP16,
 	SPL_PIXEL_FORMAT_SUBSAMPLED_BEGIN = SPL_PIXEL_FORMAT_420BPP8,
-	SPL_PIXEL_FORMAT_SUBSAMPLED_END = SPL_PIXEL_FORMAT_420BPP10,
+	SPL_PIXEL_FORMAT_SUBSAMPLED_END = SPL_PIXEL_FORMAT_422BPP12,
 	SPL_PIXEL_FORMAT_VIDEO_BEGIN = SPL_PIXEL_FORMAT_420BPP8,
-	SPL_PIXEL_FORMAT_VIDEO_END = SPL_PIXEL_FORMAT_420BPP10,
+	SPL_PIXEL_FORMAT_VIDEO_END = SPL_PIXEL_FORMAT_444BPP10,
 	SPL_PIXEL_FORMAT_INVALID,
 	SPL_PIXEL_FORMAT_UNKNOWN
 };
-
 enum lb_memory_config {
 	/* Enable all 3 pieces of memory */
 	LB_MEMORY_CONFIG_0 = 0,
@@ -88,7 +148,6 @@ enum lb_memory_config {
 	 */
 	LB_MEMORY_CONFIG_3 = 3
 };
-
 /* Rotation angle */
 enum spl_rotation_angle {
 	SPL_ROTATION_ANGLE_0 = 0,
@@ -126,6 +185,23 @@ enum chroma_cositing {
 	CHROMA_COSITING_LEFT,
 	CHROMA_COSITING_TOPLEFT,
 	CHROMA_COSITING_COUNT
+};
+
+enum upsp_mode {
+	UPSP_BYPASS = 0,
+	UPSP_HORIZONTAL_UPSAMPLING_ONLY,
+	UPSP_VERTICAL_UPSAMPLING_ONLY,
+	UPSP_HORIZONTAL_VERTICAL_UPSAMPLING
+};
+
+enum upsp_num_taps {
+	UPSP_2_TAPS,
+	UPSP_4_TAPS
+};
+
+enum upsp_boundary_mode {
+	UPSP_BOUNDARY_EDGE, //Replace out of bound samples with the edge samples
+	UPSP_BOUNDARY_BLACK //Replace out of bound samples with black as 12bpc(0x800)
 };
 
 // Scratch space for calculating scaler params
@@ -253,7 +329,7 @@ enum isharp_en	{
 #define ISHARP_LUT_TABLE_SIZE 32
 // Below struct holds values that can be directly used to program
 // hardware registers. No conversion/clamping is required
-struct dscl_prog_data {
+struct dscl_prog_data	{
 	struct spl_rect recout; // RECOUT - set based on scl_data.recout
 	struct mpc_size mpc_size;
 	uint32_t dscl_mode;
@@ -395,6 +471,33 @@ struct dscl_prog_data {
 	uint32_t easf_matrix_c1;
 	uint32_t easf_matrix_c2;
 	uint32_t easf_matrix_c3;
+	// UPSP registers
+	uint32_t upsp_mode;//UPSP_MODE
+	uint32_t upsp_v_num_taps;
+	uint32_t upsp_v_init_int;
+	uint32_t upsp_v_init_frac;
+	uint32_t upsp_h_num_taps;
+	uint32_t upsp_h_init_int;
+	uint32_t upsp_h_init_frac;
+	uint32_t upsp_boundary_mode;
+	uint32_t upsp_v_coef_tap0_p0;//UPSP_V_COEF_P0
+	uint32_t upsp_v_coef_tap1_p0;
+	uint32_t upsp_v_coef_tap2_p0;
+	uint32_t upsp_v_coef_tap3_p0;
+	uint32_t upsp_v_coef_tap0_p1;//UPSP_V_COEF_P1
+	uint32_t upsp_v_coef_tap1_p1;
+	uint32_t upsp_v_coef_tap2_p1;
+	uint32_t upsp_v_coef_tap3_p1;
+	uint32_t upsp_h_coef_tap0_p0;//UPSP_H_COEF_P0
+	uint32_t upsp_h_coef_tap1_p0;
+	uint32_t upsp_h_coef_tap2_p0;
+	uint32_t upsp_h_coef_tap3_p0;
+	uint32_t upsp_h_coef_tap0_p1;//UPSP_H_COEF_P1
+	uint32_t upsp_h_coef_tap1_p1;
+	uint32_t upsp_h_coef_tap2_p1;
+	uint32_t upsp_h_coef_tap3_p1;
+	uint32_t upsp_clamp_max;//UPSP_CLAMP
+	uint32_t upsp_clamp_min;
 	// iSharp
 	uint32_t isharp_en;     //      ISHARP_EN
 	struct isharp_noise_det isharp_noise_det;       //      ISHARP_NOISEDET
@@ -554,6 +657,7 @@ struct spl_in	{
 	int min_viewport_size;
 	int sdr_white_level_nits;
 	enum sharpen_policy sharpen_policy;
+	enum upsp_mode upsp_mode;
 };
 // end of SPL inputs
 

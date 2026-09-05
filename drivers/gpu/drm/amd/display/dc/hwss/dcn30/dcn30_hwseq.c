@@ -157,7 +157,7 @@ void dcn30_log_color_state(struct dc *dc,
 	DTN_INFO("DPP Color Caps: input_lut_shared:%d  icsc:%d"
 		 "  dgam_ram:%d  dgam_rom: srgb:%d,bt2020:%d,gamma2_2:%d,pq:%d,hlg:%d"
 		 "  post_csc:%d  gamcor:%d  dgam_rom_for_yuv:%d  3d_lut:%d"
-		 "  blnd_lut:%d  oscs:%d\n\n",
+		 "  upsp_pre_scaler:%d  blnd_lut:%d  oscs:%d\n\n",
 		 dc->caps.color.dpp.input_lut_shared,
 		 dc->caps.color.dpp.icsc,
 		 dc->caps.color.dpp.dgam_ram,
@@ -170,6 +170,7 @@ void dcn30_log_color_state(struct dc *dc,
 		 dc->caps.color.dpp.gamma_corr,
 		 dc->caps.color.dpp.dgam_rom_for_yuv,
 		 dc->caps.color.dpp.hw_3d_lut,
+		 dc->caps.color.dpp.upsp_pre_scaler,
 		 dc->caps.color.dpp.ogam_ram,
 		 dc->caps.color.dpp.ocsc);
 
@@ -233,34 +234,31 @@ void dcn30_log_color_state(struct dc *dc,
 }
 
 bool dcn30_set_blend_lut(
-	struct pipe_ctx *pipe_ctx, const struct dc_plane_state *plane_state)
+	struct dpp *dpp, struct dc_plane_state *plane_state)
 {
-	struct dpp *dpp_base = pipe_ctx->plane_res.dpp;
 	bool result = true;
 	const struct pwl_params *blend_lut = NULL;
 
-	if (plane_state->blend_tf.type == TF_TYPE_HWPWL)
-		blend_lut = &plane_state->blend_tf.pwl;
-	else if (plane_state->blend_tf.type == TF_TYPE_DISTRIBUTED_POINTS) {
-		result = cm3_helper_translate_curve_to_hw_format(plane_state->ctx,
-				&plane_state->blend_tf, &dpp_base->regamma_params, false);
+	if (plane_state->cm.blend_func.type == TF_TYPE_HWPWL)
+		blend_lut = &plane_state->cm.blend_func.pwl;
+	else if (plane_state->cm.blend_func.type == TF_TYPE_DISTRIBUTED_POINTS) {
+		result = cm3_helper_translate_curve_to_degamma_hw_format(
+				&plane_state->cm.blend_func,
+				&dpp->regamma_params);
 		if (!result)
 			return result;
 
-		blend_lut = &dpp_base->regamma_params;
+		blend_lut = &dpp->regamma_params;
 	}
-	result = dpp_base->funcs->dpp_program_blnd_lut(dpp_base, blend_lut);
+	result = dpp->funcs->dpp_program_blnd_lut(dpp, blend_lut);
 
 	return result;
 }
 
-static bool dcn30_set_mpc_shaper_3dlut(struct pipe_ctx *pipe_ctx,
-				       const struct dc_stream_state *stream)
+static bool dcn30_set_mpc_shaper_3dlut(struct dpp *dpp, struct mpc *mpc,
+				       int mpcc_id, const struct dc_stream_state *stream)
 {
-	struct dpp *dpp_base = pipe_ctx->plane_res.dpp;
-	int mpcc_id = pipe_ctx->plane_res.hubp->inst;
-	struct dc *dc = pipe_ctx->stream->ctx->dc;
-	struct mpc *mpc = pipe_ctx->stream_res.opp->ctx->dc->res_pool->mpc;
+	struct dc *dc = dpp->ctx->dc;
 	bool result = false;
 	uint32_t acquired_rmu = 0;
 	int mpcc_id_projected = 0;
@@ -272,8 +270,8 @@ static bool dcn30_set_mpc_shaper_3dlut(struct pipe_ctx *pipe_ctx,
 			shaper_lut = &stream->func_shaper->pwl;
 		} else if (stream->func_shaper->type == TF_TYPE_DISTRIBUTED_POINTS) {
 			cm_helper_translate_curve_to_hw_format(stream->ctx, stream->func_shaper,
-							       &dpp_base->shaper_params, true);
-			shaper_lut = &dpp_base->shaper_params;
+							       &dpp->shaper_params, true);
+			shaper_lut = &dpp->shaper_params;
 		}
 	}
 
@@ -314,17 +312,16 @@ static bool dcn30_set_mpc_shaper_3dlut(struct pipe_ctx *pipe_ctx,
 	return result;
 }
 
-bool dcn30_set_input_transfer_func(struct dc *dc,
-				struct pipe_ctx *pipe_ctx,
-				const struct dc_plane_state *plane_state)
+bool dcn30_set_input_transfer_func(struct set_input_transfer_func_params *params)
 {
-	struct dce_hwseq *hws = dc->hwseq;
-	struct dpp *dpp_base = pipe_ctx->plane_res.dpp;
+	struct dpp *dpp = params->dpp;
+	struct dce_hwseq *hws = params->dc->hwseq;
+	struct dc_plane_state *plane_state = params->plane_state;
 	enum dc_transfer_func_predefined tf;
 	bool result = true;
-	const struct pwl_params *params = NULL;
+	const struct pwl_params *pwl_params = NULL;
 
-	if (dpp_base == NULL || plane_state == NULL)
+	if (dpp == NULL || plane_state == NULL)
 		return false;
 
 	tf = TRANSFER_FUNCTION_UNITY;
@@ -332,83 +329,87 @@ bool dcn30_set_input_transfer_func(struct dc *dc,
 	if (plane_state->in_transfer_func.type == TF_TYPE_PREDEFINED)
 		tf = plane_state->in_transfer_func.tf;
 
-	dpp_base->funcs->dpp_set_pre_degam(dpp_base, tf);
+	dpp->funcs->dpp_set_pre_degam(dpp, tf);
 
 	if (plane_state->in_transfer_func.type == TF_TYPE_HWPWL)
-		params = &plane_state->in_transfer_func.pwl;
+		pwl_params = &plane_state->in_transfer_func.pwl;
 	else if (plane_state->in_transfer_func.type == TF_TYPE_DISTRIBUTED_POINTS &&
-		cm3_helper_translate_curve_to_hw_format(plane_state->ctx,
-							&plane_state->in_transfer_func,
-							&dpp_base->degamma_params, false))
-		params = &dpp_base->degamma_params;
+		cm3_helper_translate_curve_to_degamma_hw_format(&plane_state->in_transfer_func,
+								&dpp->degamma_params))
+		pwl_params = &dpp->degamma_params;
 
-	result = dpp_base->funcs->dpp_program_gamcor_lut(dpp_base, params);
+	result = dpp->funcs->dpp_program_gamcor_lut(dpp, pwl_params);
 
-	if (pipe_ctx->stream_res.opp && pipe_ctx->stream_res.opp->ctx) {
-		if (dpp_base->funcs->dpp_program_blnd_lut)
-			hws->funcs.set_blend_lut(pipe_ctx, plane_state);
-		if (dpp_base->funcs->dpp_program_shaper_lut &&
-				dpp_base->funcs->dpp_program_3dlut)
-			hws->funcs.set_shaper_3dlut(pipe_ctx, plane_state);
-	}
+	if (dpp->funcs->dpp_program_blnd_lut)
+		hws->funcs.set_blend_lut(dpp, plane_state);
+	if (dpp->funcs->dpp_program_shaper_lut &&
+			dpp->funcs->dpp_program_3dlut)
+		hws->funcs.set_shaper_3dlut(dpp, plane_state);
+
 
 	return result;
 }
 
-void dcn30_program_gamut_remap(struct pipe_ctx *pipe_ctx)
+void dcn30_program_gamut_remap(struct program_gamut_remap_params *params)
 {
+	struct dpp *dpp = params->dpp;
+	struct mpc *mpc = params->mpc;
+	int mpcc_id = params->mpcc_id;
+	const struct dc_stream_state *stream = params->stream;
+	const struct dc_plane_state *plane = params->plane;
+	bool is_top_pipe = params->is_top_pipe;
 	int i = 0;
 	struct dpp_grph_csc_adjustment dpp_adjust;
 	struct mpc_grph_gamut_adjustment mpc_adjust;
-	int mpcc_id = pipe_ctx->plane_res.hubp->inst;
-	struct mpc *mpc = pipe_ctx->stream_res.opp->ctx->dc->res_pool->mpc;
 
 	memset(&dpp_adjust, 0, sizeof(dpp_adjust));
 	dpp_adjust.gamut_adjust_type = GRAPHICS_GAMUT_ADJUST_TYPE_BYPASS;
 
-	if (pipe_ctx->plane_state &&
-	    pipe_ctx->plane_state->gamut_remap_matrix.enable_remap == true) {
+	if (plane &&
+	    plane->gamut_remap_matrix.enable_remap == true) {
 		dpp_adjust.gamut_adjust_type = GRAPHICS_GAMUT_ADJUST_TYPE_SW;
 		for (i = 0; i < CSC_TEMPERATURE_MATRIX_SIZE; i++)
 			dpp_adjust.temperature_matrix[i] =
-				pipe_ctx->plane_state->gamut_remap_matrix.matrix[i];
+				plane->gamut_remap_matrix.matrix[i];
 	}
 
-	pipe_ctx->plane_res.dpp->funcs->dpp_set_gamut_remap(pipe_ctx->plane_res.dpp,
+	dpp->funcs->dpp_set_gamut_remap(dpp,
 							    &dpp_adjust);
 
 	memset(&mpc_adjust, 0, sizeof(mpc_adjust));
 	mpc_adjust.gamut_adjust_type = GRAPHICS_GAMUT_ADJUST_TYPE_BYPASS;
 
-	if (pipe_ctx->top_pipe == NULL) {
-		if (pipe_ctx->stream->gamut_remap_matrix.enable_remap == true) {
+	if (is_top_pipe) {
+		if (stream->gamut_remap_matrix.enable_remap == true) {
 			mpc_adjust.gamut_adjust_type = GRAPHICS_GAMUT_ADJUST_TYPE_SW;
 			for (i = 0; i < CSC_TEMPERATURE_MATRIX_SIZE; i++)
 				mpc_adjust.temperature_matrix[i] =
-					pipe_ctx->stream->gamut_remap_matrix.matrix[i];
+					stream->gamut_remap_matrix.matrix[i];
 		}
 	}
 
 	mpc->funcs->set_gamut_remap(mpc, mpcc_id, &mpc_adjust);
 }
 
-bool dcn30_set_output_transfer_func(struct dc *dc,
-				struct pipe_ctx *pipe_ctx,
-				const struct dc_stream_state *stream)
+bool dcn30_set_output_transfer_func(struct set_output_transfer_func_params *otf_params)
 {
-	int mpcc_id = pipe_ctx->plane_res.hubp->inst;
-	struct mpc *mpc = pipe_ctx->stream_res.opp->ctx->dc->res_pool->mpc;
+	struct dpp *dpp = otf_params->dpp;
+	struct mpc *mpc = otf_params->mpc;
+	int mpcc_id = otf_params->mpcc_id;
+	bool is_top_pipe = otf_params->is_top_pipe;
+	const struct dc_stream_state *stream = otf_params->stream;
+	struct dc *dc = dpp->ctx->dc;
 	const struct pwl_params *params = NULL;
 	bool ret = false;
 
 	/* program OGAM or 3DLUT only for the top pipe*/
-	if (pipe_ctx->top_pipe == NULL) {
+	if (is_top_pipe) {
 		/*program rmu shaper and 3dlut in MPC*/
-		ret = dcn30_set_mpc_shaper_3dlut(pipe_ctx, stream);
+		ret = dcn30_set_mpc_shaper_3dlut(dpp, mpc, mpcc_id, stream);
 		if (ret == false && mpc->funcs->set_output_gamma) {
 			if (stream->out_transfer_func.type == TF_TYPE_HWPWL)
 				params = &stream->out_transfer_func.pwl;
-			else if (pipe_ctx->stream->out_transfer_func.type ==
+			else if (stream->out_transfer_func.type ==
 					TF_TYPE_DISTRIBUTED_POINTS &&
 					cm3_helper_translate_curve_to_hw_format(stream->ctx,
 					&stream->out_transfer_func,
@@ -960,6 +961,12 @@ enum dc_status dcn30_setup_hdmi_frl_link(
 		frl_phy_clock_source_id,
 		link->frl_link_settings.frl_link_rate);
 	link->phy_state.symclk_state = SYMCLK_ON_TX_ON;
+
+	/* Enable HPO link encoder */
+	link->hpo_frl_link_enc->funcs->setup_link_encoder(
+			link->hpo_frl_link_enc,
+			link->frl_link_settings.frl_num_lanes);
+
 	return status;
 }
 

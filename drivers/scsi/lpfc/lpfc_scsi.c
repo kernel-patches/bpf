@@ -21,6 +21,7 @@
  * included with this package.                                     *
  *******************************************************************/
 #include <linux/pci.h>
+#include <linux/seq_buf.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/export.h>
@@ -4271,7 +4272,7 @@ lpfc_fcp_io_cmd_wqe_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *pwqeIn,
 	if (vport->cfg_max_scsicmpl_time &&
 	    time_after(jiffies, lpfc_cmd->start_time +
 	    msecs_to_jiffies(vport->cfg_max_scsicmpl_time))) {
-		spin_lock_irqsave(shost->host_lock, flags);
+		spin_lock_irqsave(&shost->host_lock, flags);
 		if (ndlp) {
 			if (ndlp->cmd_qdepth >
 				atomic_read(&ndlp->cmd_pending) &&
@@ -4284,7 +4285,7 @@ lpfc_fcp_io_cmd_wqe_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *pwqeIn,
 
 			ndlp->last_change_time = jiffies;
 		}
-		spin_unlock_irqrestore(shost->host_lock, flags);
+		spin_unlock_irqrestore(&shost->host_lock, flags);
 	}
 	lpfc_scsi_unprep_dma_buf(phba, lpfc_cmd);
 
@@ -4551,7 +4552,7 @@ lpfc_scsi_cmd_iocb_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *pIocbIn,
 	if (vport->cfg_max_scsicmpl_time &&
 	   time_after(jiffies, lpfc_cmd->start_time +
 		msecs_to_jiffies(vport->cfg_max_scsicmpl_time))) {
-		spin_lock_irqsave(shost->host_lock, flags);
+		spin_lock_irqsave(&shost->host_lock, flags);
 		if (pnode) {
 			if (pnode->cmd_qdepth >
 				atomic_read(&pnode->cmd_pending) &&
@@ -4564,7 +4565,7 @@ lpfc_scsi_cmd_iocb_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *pIocbIn,
 
 			pnode->last_change_time = jiffies;
 		}
-		spin_unlock_irqrestore(shost->host_lock, flags);
+		spin_unlock_irqrestore(&shost->host_lock, flags);
 	}
 	lpfc_scsi_unprep_dma_buf(phba, lpfc_cmd);
 
@@ -5103,57 +5104,37 @@ lpfc_info(struct Scsi_Host *host)
 	struct lpfc_hba   *phba = vport->phba;
 	int link_speed = 0;
 	static char lpfcinfobuf[384];
-	char tmp[384] = {0};
+	struct seq_buf s;
 
 	memset(lpfcinfobuf, 0, sizeof(lpfcinfobuf));
+	seq_buf_init(&s, lpfcinfobuf, sizeof(lpfcinfobuf));
 	if (phba && phba->pcidev){
 		/* Model Description */
-		scnprintf(tmp, sizeof(tmp), phba->ModelDesc);
-		if (strlcat(lpfcinfobuf, tmp, sizeof(lpfcinfobuf)) >=
-		    sizeof(lpfcinfobuf))
-			goto buffer_done;
+		seq_buf_printf(&s, "%s", phba->ModelDesc);
 
 		/* PCI Info */
-		scnprintf(tmp, sizeof(tmp),
-			  " on PCI bus %02x device %02x irq %d",
-			  phba->pcidev->bus->number, phba->pcidev->devfn,
-			  phba->pcidev->irq);
-		if (strlcat(lpfcinfobuf, tmp, sizeof(lpfcinfobuf)) >=
-		    sizeof(lpfcinfobuf))
-			goto buffer_done;
+		seq_buf_printf(&s, " on PCI bus %02x device %02x irq %d",
+			       phba->pcidev->bus->number, phba->pcidev->devfn,
+			       phba->pcidev->irq);
 
 		/* Port Number */
-		if (phba->Port[0]) {
-			scnprintf(tmp, sizeof(tmp), " port %s", phba->Port);
-			if (strlcat(lpfcinfobuf, tmp, sizeof(lpfcinfobuf)) >=
-			    sizeof(lpfcinfobuf))
-				goto buffer_done;
-		}
+		if (phba->Port[0])
+			seq_buf_printf(&s, " port %s", phba->Port);
 
 		/* Link Speed */
 		link_speed = lpfc_sli_port_speed_get(phba);
-		if (link_speed != 0) {
-			scnprintf(tmp, sizeof(tmp),
-				  " Logical Link Speed: %d Mbps", link_speed);
-			if (strlcat(lpfcinfobuf, tmp, sizeof(lpfcinfobuf)) >=
-			    sizeof(lpfcinfobuf))
-				goto buffer_done;
-		}
+		if (link_speed != 0)
+			seq_buf_printf(&s, " Logical Link Speed: %d Mbps",
+				       link_speed);
 
 		/* Support for BSG ioctls */
-		scnprintf(tmp, sizeof(tmp), " BSG");
-		if (strlcat(lpfcinfobuf, tmp, sizeof(lpfcinfobuf)) >=
-		    sizeof(lpfcinfobuf))
-			goto buffer_done;
+		seq_buf_printf(&s, " BSG");
 
 		/* PCI resettable */
-		if (!lpfc_check_pci_resettable(phba)) {
-			scnprintf(tmp, sizeof(tmp), " PCI resettable");
-			strlcat(lpfcinfobuf, tmp, sizeof(lpfcinfobuf));
-		}
+		if (!lpfc_check_pci_resettable(phba))
+			seq_buf_printf(&s, " PCI resettable");
 	}
 
-buffer_done:
 	return lpfcinfobuf;
 }
 

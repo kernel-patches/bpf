@@ -382,7 +382,6 @@ enum { /* _ODM_Support_Ability_Definition */
 /* 	ODM_CMNINFO_INTERFACE */
 enum { /* tag_ODM_Support_Interface_Definition */
 	ODM_ITRF_SDIO	=	0x4,
-	ODM_ITRF_ALL	=	0x7,
 };
 
 /*  ODM_CMNINFO_IC_TYPE */
@@ -936,17 +935,6 @@ struct dm_odm_t { /* DM_Out_Source_Dynamic_Mechanism_Structure */
 	struct timer_list FastAntTrainingTimer;
 
 	/*  ODM relative workitem. */
-
-	#if (BEAMFORMING_SUPPORT == 1)
-	RT_BEAMFORMING_INFO BeamformingInfo;
-	#endif
-};
-
-enum odm_rf_content {
-	odm_radioa_txt = 0x1000,
-	odm_radiob_txt = 0x1001,
-	odm_radioc_txt = 0x1002,
-	odm_radiod_txt = 0x1003
 };
 
 enum ODM_BB_Config_Type {
@@ -1074,10 +1062,6 @@ u32 ODM_Get_Rate_Bitmap(
 	u32 ra_mask,
 	u8 rssi_level
 );
-
-#if (BEAMFORMING_SUPPORT == 1)
-BEAMFORMING_CAP Beamforming_GetEntryBeamCapByMacId(PMGNT_INFO pMgntInfo, u8 MacId);
-#endif
 
 void odm_TXPowerTrackingInit(struct dm_odm_t *pDM_Odm);
 

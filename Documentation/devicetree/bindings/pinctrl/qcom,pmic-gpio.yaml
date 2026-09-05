@@ -57,11 +57,13 @@ properties:
           - qcom,pm8994-gpio
           - qcom,pm8998-gpio
           - qcom,pma8084-gpio
+          - qcom,pmau0102-gpio
           - qcom,pmc8180-gpio
           - qcom,pmc8180c-gpio
           - qcom,pmc8380-gpio
           - qcom,pmcx0102-gpio
           - qcom,pmd8028-gpio
+          - qcom,pmg1110-gpio
           - qcom,pmh0101-gpio
           - qcom,pmh0104-gpio
           - qcom,pmh0110-gpio
@@ -155,6 +157,7 @@ allOf:
               - qcom,pm8450-gpio
               - qcom,pm8916-gpio
               - qcom,pmd8028-gpio
+              - qcom,pmg1110-gpio
               - qcom,pmk8350-gpio
               - qcom,pmr735a-gpio
               - qcom,pmr735b-gpio
@@ -279,6 +282,7 @@ allOf:
               - qcom,pm8150l-gpio
               - qcom,pm8550-gpio
               - qcom,pm8550b-gpio
+              - qcom,pmau0102-gpio
               - qcom,pmc8180c-gpio
               - qcom,pmp8074-gpio
               - qcom,pms405-gpio
@@ -494,8 +498,10 @@ $defs:
                  - gpio1-gpio22 for pm8994
                  - gpio1-gpio26 for pm8998
                  - gpio1-gpio22 for pma8084
+                 - gpio1-gpio12 for pmau0102
                  - gpio1-gpio14 for pmcx0102
                  - gpio1-gpio4 for pmd8028
+                 - gpio1-gpio4 for pmg1110
                  - gpio1-gpio18 for pmh0101
                  - gpio1-gpio8 for pmh0104
                  - gpio1-gpio14 for pmh0110

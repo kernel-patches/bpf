@@ -67,7 +67,7 @@ static void page_table_check_clear(unsigned long pfn, unsigned long pgcnt)
 	struct page *page;
 	bool anon;
 
-	if (!pfn_valid(pfn))
+	if (!pfn_valid(pfn) || is_zero_pfn(pfn) || is_huge_zero_pfn(pfn))
 		return;
 
 	page = pfn_to_page(pfn);
@@ -102,7 +102,7 @@ static void page_table_check_set(unsigned long pfn, unsigned long pgcnt,
 	struct page *page;
 	bool anon;
 
-	if (!pfn_valid(pfn))
+	if (!pfn_valid(pfn) || is_zero_pfn(pfn) || is_huge_zero_pfn(pfn))
 		return;
 
 	page = pfn_to_page(pfn);
@@ -199,8 +199,8 @@ static inline bool softleaf_cached_writable(softleaf_t entry)
 static void page_table_check_pte_flags(pte_t pte)
 {
 	if (pte_present(pte)) {
-		WARN_ON_ONCE(pte_uffd_wp(pte) && pte_write(pte));
-	} else if (pte_swp_uffd_wp(pte)) {
+		WARN_ON_ONCE(pte_uffd(pte) && pte_write(pte));
+	} else if (pte_swp_uffd(pte)) {
 		const softleaf_t entry = softleaf_from_pte(pte);
 
 		WARN_ON_ONCE(softleaf_cached_writable(entry));
@@ -227,9 +227,9 @@ EXPORT_SYMBOL(__page_table_check_ptes_set);
 static inline void page_table_check_pmd_flags(pmd_t pmd)
 {
 	if (pmd_present(pmd)) {
-		if (pmd_uffd_wp(pmd))
+		if (pmd_uffd(pmd))
 			WARN_ON_ONCE(pmd_write(pmd));
-	} else if (pmd_swp_uffd_wp(pmd)) {
+	} else if (pmd_swp_uffd(pmd)) {
 		const softleaf_t entry = softleaf_from_pmd(pmd);
 
 		WARN_ON_ONCE(softleaf_cached_writable(entry));
@@ -278,7 +278,7 @@ void __page_table_check_pte_clear_range(struct mm_struct *mm,
 	if (&init_mm == mm)
 		return;
 
-	if (!pmd_bad(pmd) && !pmd_leaf(pmd)) {
+	if (!pmd_none(pmd) && !pmd_bad(pmd) && !pmd_leaf(pmd)) {
 		pte_t *ptep = pte_offset_map(&pmd, addr);
 		unsigned long i;
 

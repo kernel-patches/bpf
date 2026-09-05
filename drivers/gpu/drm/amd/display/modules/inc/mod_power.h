@@ -174,6 +174,7 @@ enum replay_event {
 	replay_event_os_request_force_ffu = 0x2000000,
 	replay_event_os_override_hold = 0x4000000,
 	replay_event_crc_window_active = 0x8000000,
+	replay_event_waiting_stream_regen = 0x10000000,
 };
 
 enum replay_enable_option {
@@ -328,6 +329,17 @@ bool mod_power_is_abm_active(struct mod_power *mod_power,
 		const struct dc_link *link,
 		unsigned int inst);
 
+bool mod_power_is_abm_supported(struct mod_power *mod_power,
+		unsigned int inst);
+
+bool mod_power_abm_set_event(struct mod_power *mod_power,
+		unsigned int full_screen, unsigned int trans_info,
+		unsigned int hdr_mode, unsigned int scaling_enable,
+		unsigned int scaling_strength_map, unsigned int inst);
+
+bool mod_power_abm_set_strength(struct mod_power *mod_power,
+		unsigned int strength,
+		unsigned int inst);
 
 bool mod_power_set_psr_event(struct mod_power *mod_power,
 		struct dc_stream_state *stream, bool set_event,

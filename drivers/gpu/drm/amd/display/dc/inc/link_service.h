@@ -155,8 +155,8 @@ struct link_service {
 
 
 	/*************************** DPMS *************************************/
-	void (*set_dpms_on)(struct dc_state *state, struct pipe_ctx *pipe_ctx);
-	void (*set_dpms_off)(struct pipe_ctx *pipe_ctx);
+	enum dc_status (*set_dpms_on)(struct dc_state *state, struct pipe_ctx *pipe_ctx);
+	enum dc_status (*set_dpms_off)(struct pipe_ctx *pipe_ctx);
 	void (*resume)(struct dc_link *link);
 	void (*blank_all_dp_displays)(struct dc *dc);
 	void (*blank_all_edp_displays)(struct dc *dc);
@@ -193,6 +193,7 @@ struct link_service {
 			struct aux_payload *payload);
 	bool (*is_in_aux_transaction_mode)(struct ddc_service *ddc);
 	uint32_t (*get_aux_defer_delay)(struct ddc_service *ddc);
+	uint8_t (*get_ddc_aux_inst)(const struct dc_link *link);
 
 
 	/*************************** DP Capability ****************************/
@@ -308,13 +309,15 @@ struct link_service {
 	bool (*edp_receiver_ready_T7)(struct dc_link *link);
 	bool (*edp_power_alpm_dpcd_enable)(struct dc_link *link, bool enable);
 	bool (*dp_setup_replay)(struct dc_link *link, const struct dc_stream_state *stream);
-	bool (*dp_pr_get_panel_inst)(const struct dc *dc, const struct dc_link *link, unsigned int *inst_out);
+	bool (*dp_pr_get_pr_panel_inst)(const struct dc *dc, const struct dc_link *link, unsigned int *inst_out);
 	bool (*dp_pr_enable)(struct dc_link *link, bool enable);
 	bool (*dp_pr_update_state)(struct dc_link *link, struct dmub_cmd_pr_update_state_data *update_state_data);
 	bool (*dp_pr_set_general_cmd)(struct dc_link *link, struct dmub_cmd_pr_general_cmd_data *general_cmd_data);
 	bool (*dp_pr_get_state)(const struct dc_link *link, uint64_t *state);
 	void (*edp_set_panel_power)(struct dc_link *link, bool powerOn);
-
+	void (*edp_set_panel_polarity_enabled)(const struct dc_link *link, bool enable);
+	void (*edp_panel_polarity_reset)(struct dc_link *link);
+	bool (*edp_get_panel_polarity)(struct dc_link *link, int32_t *polarity);
 
 	/*************************** HDMI FRL *********************************/
 	bool (*hdmi_frl_poll_status_flag)(struct dc_link *link);
@@ -362,5 +365,6 @@ struct link_service {
 	uint64_t (*dp_trace_get_edp_poweroff_timestamp)(struct dc_link *link);
 	void (*dp_trace_source_sequence)(
 			struct dc_link *link, uint8_t dp_test_mode);
+
 };
 #endif /* __DC_LINK_HPD_H__ */

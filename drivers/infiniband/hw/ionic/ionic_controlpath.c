@@ -391,6 +391,16 @@ int ionic_alloc_ucontext(struct ib_ucontext *ibctx, struct ib_udata *udata)
 		goto err_mmap_dbell;
 	}
 
+	if (dev->lif_cfg.phc_state) {
+		ctx->mmap_phc = ionic_mmap_entry_insert(ctx, PAGE_SIZE, 0,
+							IONIC_MMAP_PHC,
+							&resp.phc_offset);
+		if (!ctx->mmap_phc) {
+			rc = -ENOMEM;
+			goto err_mmap_phc;
+		}
+	}
+
 	resp.page_shift = PAGE_SHIFT;
 
 	resp.dbell_offset = db_phys & ~PAGE_MASK;
@@ -408,6 +418,8 @@ int ionic_alloc_ucontext(struct ib_ucontext *ibctx, struct ib_udata *udata)
 
 	resp.udma_count = dev->lif_cfg.udma_count;
 	resp.expdb_mask = dev->lif_cfg.expdb_mask;
+	resp.rcq_sign_bit = dev->lif_cfg.rcq_sign_bit;
+	resp.comp_mask |= IONIC_CTX_CMASK_IONIC_FLAGS;
 
 	if (dev->lif_cfg.sq_expdb)
 		resp.expdb_qtypes |= IONIC_EXPDB_SQ;
@@ -421,6 +433,8 @@ int ionic_alloc_ucontext(struct ib_ucontext *ibctx, struct ib_udata *udata)
 	return 0;
 
 err_resp:
+	rdma_user_mmap_entry_remove(ctx->mmap_phc);
+err_mmap_phc:
 	rdma_user_mmap_entry_remove(ctx->mmap_dbell);
 err_mmap_dbell:
 	ionic_put_dbid(dev, ctx->dbid);
@@ -433,8 +447,24 @@ void ionic_dealloc_ucontext(struct ib_ucontext *ibctx)
 	struct ionic_ibdev *dev = to_ionic_ibdev(ibctx->device);
 	struct ionic_ctx *ctx = to_ionic_ctx(ibctx);
 
+	rdma_user_mmap_entry_remove(ctx->mmap_phc);
 	rdma_user_mmap_entry_remove(ctx->mmap_dbell);
 	ionic_put_dbid(dev, ctx->dbid);
+}
+
+static int ionic_mmap_phc_state(struct ionic_ibdev *dev,
+				struct vm_area_struct *vma)
+{
+	if (!(vma->vm_flags & VM_SHARED))
+		return -EINVAL;
+
+	if (vma->vm_flags & (VM_WRITE | VM_EXEC))
+		return -EPERM;
+
+	vm_flags_clear(vma, VM_MAYWRITE);
+
+	return vm_insert_page(vma, vma->vm_start,
+			      virt_to_page(dev->lif_cfg.phc_state));
 }
 
 int ionic_mmap(struct ib_ucontext *ibctx, struct vm_area_struct *vma)
@@ -454,6 +484,12 @@ int ionic_mmap(struct ib_ucontext *ibctx, struct vm_area_struct *vma)
 
 	ionic_entry = container_of(rdma_entry, struct ionic_mmap_entry,
 				   rdma_entry);
+
+	if (ionic_entry->mmap_flags & IONIC_MMAP_PHC) {
+		rc = ionic_mmap_phc_state(dev, vma);
+		rdma_user_mmap_entry_put(rdma_entry);
+		return rc;
+	}
 
 	ibdev_dbg(&dev->ibdev, "writecombine? %d\n",
 		  ionic_entry->mmap_flags & IONIC_MMAP_WC);
@@ -487,6 +523,11 @@ int ionic_alloc_pd(struct ib_pd *ibpd, struct ib_udata *udata)
 {
 	struct ionic_ibdev *dev = to_ionic_ibdev(ibpd->device);
 	struct ionic_pd *pd = to_ionic_pd(ibpd);
+	int rc;
+
+	rc = ib_no_udata_io(udata);
+	if (rc)
+		return rc;
 
 	return ionic_get_pdid(dev, &pd->pdid);
 }
@@ -495,6 +536,11 @@ int ionic_dealloc_pd(struct ib_pd *ibpd, struct ib_udata *udata)
 {
 	struct ionic_ibdev *dev = to_ionic_ibdev(ibpd->device);
 	struct ionic_pd *pd = to_ionic_pd(ibpd);
+	int rc;
+
+	rc = ib_no_udata_io(udata);
+	if (rc)
+		return rc;
 
 	ionic_put_pdid(dev, pd->pdid);
 
@@ -741,6 +787,10 @@ int ionic_create_ah(struct ib_ah *ibah, struct rdma_ah_init_attr *init_attr,
 	u32 flags = init_attr->flags;
 	int rc;
 
+	rc = ib_is_udata_in_empty(udata);
+	if (rc)
+		return rc;
+
 	rc = ionic_get_ahid(dev, &ah->ahid);
 	if (rc)
 		return rc;
@@ -877,6 +927,10 @@ struct ib_mr *ionic_reg_user_mr(struct ib_pd *ibpd, u64 start, u64 length,
 	unsigned long pg_sz;
 	int rc;
 
+	rc = ib_no_udata_io(udata);
+	if (rc)
+		return ERR_PTR(rc);
+
 	if (dmah)
 		return ERR_PTR(-EOPNOTSUPP);
 
@@ -1008,6 +1062,10 @@ int ionic_dereg_mr(struct ib_mr *ibmr, struct ib_udata *udata)
 	struct ionic_mr *mr = to_ionic_mr(ibmr);
 	int rc;
 
+	rc = ib_no_udata_io(udata);
+	if (rc)
+		return rc;
+
 	if (!mr->ibmr.lkey)
 		goto out;
 
@@ -1119,6 +1177,10 @@ int ionic_alloc_mw(struct ib_mw *ibmw, struct ib_udata *udata)
 	struct ionic_pd *pd = to_ionic_pd(ibmw->pd);
 	struct ionic_mr *mr = to_ionic_mw(ibmw);
 	int rc;
+
+	rc = ib_no_udata_io(udata);
+	if (rc)
+		return rc;
 
 	rc = ionic_get_mrid(dev, &mr->mrid);
 	if (rc)
@@ -1292,6 +1354,10 @@ int ionic_destroy_cq(struct ib_cq *ibcq, struct ib_udata *udata)
 	struct ionic_vcq *vcq = to_ionic_vcq(ibcq);
 	int udma_idx, rc_tmp, rc = 0;
 
+	rc = ib_no_udata_io(udata);
+	if (rc)
+		return rc;
+
 	for (udma_idx = dev->lif_cfg.udma_count; udma_idx; ) {
 		--udma_idx;
 
@@ -1324,7 +1390,8 @@ static int ionic_create_qp_cmd(struct ionic_ibdev *dev,
 			       struct ionic_qp *qp,
 			       struct ionic_tbl_buf *sq_buf,
 			       struct ionic_tbl_buf *rq_buf,
-			       struct ib_qp_init_attr *attr)
+			       struct ib_qp_init_attr *attr,
+			       u32 ionic_flags)
 {
 	const u16 dbid = ionic_obj_dbid(dev, pd->ibpd.uobject);
 	const u32 flags = to_ionic_qp_flags(0, 0,
@@ -1340,7 +1407,12 @@ static int ionic_create_qp_cmd(struct ionic_ibdev *dev,
 			.len = cpu_to_le16(IONIC_ADMIN_CREATE_QP_IN_V1_LEN),
 			.cmd.create_qp = {
 				.pd_id = cpu_to_le32(pd->pdid),
-				.priv_flags = cpu_to_be32(flags),
+				/* User-supplied ionic_flags are passed through to
+				 * firmware, which validates and rejects any
+				 * unsupported or unauthorized bits.
+				 */
+				.priv_flags = cpu_to_be32(flags |
+						(ionic_flags & IONIC_QP_USER_FLAGS_MASK)),
 				.type_state = to_ionic_qp_type(attr->qp_type),
 				.dbid_flags = cpu_to_le16(dbid),
 				.id_ver = cpu_to_le32(qp->qpid),
@@ -2157,6 +2229,12 @@ int ionic_create_qp(struct ib_qp *ibqp, struct ib_qp_init_attr *attr,
 		rc = ib_copy_validate_udata_in(udata, req, rsvd);
 		if (rc)
 			return rc;
+
+		if (req.ionic_flags & ~IONIC_QP_USER_FLAGS_MASK)
+			return -EINVAL;
+
+		if (req.rsvd_pad)
+			return -EINVAL;
 	} else {
 		req.sq_spec = IONIC_SPEC_HIGH;
 		req.rq_spec = IONIC_SPEC_HIGH;
@@ -2237,7 +2315,7 @@ int ionic_create_qp(struct ib_qp *ibqp, struct ib_qp_init_attr *attr,
 	rc = ionic_create_qp_cmd(dev, pd,
 				 to_ionic_vcq_cq(attr->send_cq, qp->udma_idx),
 				 to_ionic_vcq_cq(attr->recv_cq, qp->udma_idx),
-				 qp, &sq_buf, &rq_buf, attr);
+				 qp, &sq_buf, &rq_buf, attr, req.ionic_flags);
 	if (rc)
 		goto err_cmd;
 
@@ -2585,6 +2663,10 @@ int ionic_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr, int mask,
 	struct ionic_qp *qp = to_ionic_qp(ibqp);
 	int rc;
 
+	rc = ib_no_udata_io(udata);
+	if (rc)
+		return rc;
+
 	rc = ionic_check_modify_qp(qp, attr, mask);
 	if (rc)
 		return rc;
@@ -2657,6 +2739,10 @@ int ionic_destroy_qp(struct ib_qp *ibqp, struct ib_udata *udata)
 	unsigned long irqflags;
 	struct ionic_cq *cq;
 	int rc;
+
+	rc = ib_no_udata_io(udata);
+	if (rc)
+		return rc;
 
 	rc = ionic_destroy_qp_cmd(dev, qp->qpid);
 	if (rc)

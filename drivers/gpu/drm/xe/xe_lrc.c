@@ -1486,6 +1486,36 @@ void xe_lrc_set_multi_queue_priority(struct xe_lrc *lrc, enum xe_multi_queue_pri
 	lrc->desc |= FIELD_PREP(LRC_PRIORITY, xe_multi_queue_prio_to_lrc(lrc, priority));
 }
 
+static void xe_lrc_set_gpgpu_preemption_level(struct xe_lrc *lrc, struct xe_gt *gt)
+{
+	enum xe_gpgpu_preempt_level level = gt->gpgpu_preemption_level;
+	u32 level_bits;
+	u32 val;
+
+	if (level == XE_GPGPU_PREEMPT_DEFAULT)
+		return;
+
+	switch (level) {
+	case XE_GPGPU_PREEMPT_MID_THREAD:
+		level_bits = PREEMPT_GPGPU_MID_THREAD_LEVEL;
+		break;
+	case XE_GPGPU_PREEMPT_THREAD_GROUP:
+		level_bits = PREEMPT_GPGPU_THREAD_GROUP_LEVEL;
+		break;
+	case XE_GPGPU_PREEMPT_COMMAND:
+		level_bits = PREEMPT_GPGPU_COMMAND_LEVEL;
+		break;
+	default:
+		xe_gt_WARN(gt, true, "Invalid GPGPU preemption level: %d\n", level);
+		return;
+	}
+
+	val = xe_lrc_read_ctx_reg(lrc, CTX_CS_CHICKEN1);
+	val &= ~PREEMPT_GPGPU_LEVEL_MASK;
+	val |= REG_MASKED_FIELD(PREEMPT_GPGPU_LEVEL_MASK, level_bits);
+	xe_lrc_write_ctx_reg(lrc, CTX_CS_CHICKEN1, val);
+}
+
 static int xe_lrc_ctx_init(struct xe_lrc *lrc, struct xe_hw_engine *hwe, struct xe_vm *vm,
 			   void *replay_state, u16 msix_vec, u32 init_flags)
 {
@@ -1588,6 +1618,9 @@ static int xe_lrc_ctx_init(struct xe_lrc *lrc, struct xe_hw_engine *hwe, struct 
 
 	if (xe->info.has_asid && vm)
 		xe_lrc_write_ctx_reg(lrc, CTX_ASID, vm->usm.asid);
+
+	if (GRAPHICS_VER(xe) >= 20 && hwe->class == XE_ENGINE_CLASS_RENDER)
+		xe_lrc_set_gpgpu_preemption_level(lrc, gt);
 
 	lrc->desc = LRC_VALID;
 	lrc->desc |= FIELD_PREP(LRC_ADDRESSING_MODE, LRC_LEGACY_64B_CONTEXT);
@@ -2625,13 +2658,19 @@ void xe_lrc_snapshot_free(struct xe_lrc_snapshot *snapshot)
 	kfree(snapshot);
 }
 
+static bool engine_valid_for_utilization(struct xe_gt *gt, struct xe_hw_engine *hwe)
+{
+	/* The USM-reserved copy engine runs kernel migrate contexts queried here */
+	return hwe && (!xe_hw_engine_is_reserved(hwe) || xe_gt_is_usm_hwe(gt, hwe));
+}
+
 static struct xe_hw_engine *engine_id_to_hwe(struct xe_gt *gt, u32 engine_id)
 {
 	u16 class = REG_FIELD_GET(ENGINE_CLASS_ID, engine_id);
 	u16 instance = REG_FIELD_GET(ENGINE_INSTANCE_ID, engine_id);
 	struct xe_hw_engine *hwe = xe_gt_hw_engine(gt, class, instance, false);
 
-	if (xe_gt_WARN_ONCE(gt, !hwe || xe_hw_engine_is_reserved(hwe),
+	if (xe_gt_WARN_ONCE(gt, !engine_valid_for_utilization(gt, hwe),
 			    "Unexpected engine class:instance %d:%d for utilization\n",
 			    class, instance))
 		return NULL;

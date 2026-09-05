@@ -66,6 +66,7 @@ static struct {
 	const char *driver_name;
 	u8         hw_variant;
 	u32        fw_build_num;
+	u32        fw_sha;
 } coredump_info;
 
 const guid_t btintel_guid_dsm =
@@ -560,6 +561,7 @@ int btintel_version_info_tlv(struct hci_dev *hdev,
 
 	coredump_info.hw_variant = INTEL_HW_VARIANT(version->cnvi_bt);
 	coredump_info.fw_build_num = version->build_num;
+	coredump_info.fw_sha = version->git_sha1;
 
 	bt_dev_info(hdev, "%s timestamp %u.%u buildtype %u build %u", variant,
 		    2000 + (version->timestamp >> 8), version->timestamp & 0xff,
@@ -571,12 +573,44 @@ int btintel_version_info_tlv(struct hci_dev *hdev,
 }
 EXPORT_SYMBOL_GPL(btintel_version_info_tlv);
 
+static u8 btintel_version_tlv_min_len(u8 type)
+{
+	switch (type) {
+	case INTEL_TLV_CNVI_TOP:
+	case INTEL_TLV_CNVR_TOP:
+	case INTEL_TLV_CNVI_BT:
+	case INTEL_TLV_CNVR_BT:
+	case INTEL_TLV_BUILD_NUM:
+	case INTEL_TLV_GIT_SHA1:
+		return sizeof(u32);
+	case INTEL_TLV_DEV_REV_ID:
+	case INTEL_TLV_TIME_STAMP:
+		return sizeof(u16);
+	case INTEL_TLV_IMAGE_TYPE:
+	case INTEL_TLV_BUILD_TYPE:
+	case INTEL_TLV_SECURE_BOOT:
+	case INTEL_TLV_OTP_LOCK:
+	case INTEL_TLV_API_LOCK:
+	case INTEL_TLV_DEBUG_LOCK:
+	case INTEL_TLV_LIMITED_CCE:
+	case INTEL_TLV_SBE_TYPE:
+		return sizeof(u8);
+	case INTEL_TLV_MIN_FW:
+		return 3;
+	case INTEL_TLV_OTP_BDADDR:
+		return sizeof(bdaddr_t);
+	default:
+		return 0;
+	}
+}
+
 int btintel_parse_version_tlv(struct hci_dev *hdev,
 			      struct intel_version_tlv *version,
 			      struct sk_buff *skb)
 {
 	/* Consume Command Complete Status field */
-	skb_pull(skb, 1);
+	if (!skb_pull(skb, 1))
+		return -EINVAL;
 
 	/* Event parameters contain multiple TLVs. Read each of them
 	 * and only keep the required data. Also, it use existing legacy
@@ -594,6 +628,9 @@ int btintel_parse_version_tlv(struct hci_dev *hdev,
 
 		/* Make sure skb has a enough data */
 		if (skb->len < tlv->len + sizeof(*tlv))
+			return -EINVAL;
+
+		if (tlv->len < btintel_version_tlv_min_len(tlv->type))
 			return -EINVAL;
 
 		switch (tlv->type) {
@@ -667,7 +704,7 @@ int btintel_parse_version_tlv(struct hci_dev *hdev,
 			break;
 		case INTEL_TLV_FW_ID:
 			snprintf(version->fw_id, sizeof(version->fw_id),
-				 "%s", tlv->val);
+				 "%.*s", tlv->len, tlv->val);
 			break;
 		default:
 			/* Ignore rest of information */
@@ -686,6 +723,7 @@ static int btintel_read_version_tlv(struct hci_dev *hdev,
 {
 	struct sk_buff *skb;
 	const u8 param[1] = { 0xFF };
+	int err;
 
 	if (!version)
 		return -EINVAL;
@@ -704,10 +742,10 @@ static int btintel_read_version_tlv(struct hci_dev *hdev,
 		return -EIO;
 	}
 
-	btintel_parse_version_tlv(hdev, version, skb);
+	err = btintel_parse_version_tlv(hdev, version, skb);
 
 	kfree_skb(skb);
-	return 0;
+	return err;
 }
 
 /* ------- REGMAP IBT SUPPORT ------- */
@@ -2337,6 +2375,7 @@ static int btintel_prepare_fw_download_tlv(struct hci_dev *hdev,
 					   struct intel_version_tlv *ver,
 					   u32 *boot_param)
 {
+	struct btintel_data *intel_data = hci_get_priv(hdev);
 	const struct firmware *fw;
 	char fwname[128];
 	int err;
@@ -2449,6 +2488,7 @@ static int btintel_prepare_fw_download_tlv(struct hci_dev *hdev,
 		btintel_reset_to_bootloader(hdev);
 
 done:
+	intel_data->cnvi_bt = ver->cnvi_bt;
 	release_firmware(fw);
 	return err;
 }
@@ -3485,6 +3525,9 @@ int btintel_bootloader_setup_tlv(struct hci_dev *hdev,
 		return err;
 
 	btintel_version_info_tlv(hdev, &new_ver);
+
+	/* Update ver with the operational firmware version */
+	*ver = new_ver;
 
 finish:
 	/* Set the event mask for Intel specific vendor events. This enables

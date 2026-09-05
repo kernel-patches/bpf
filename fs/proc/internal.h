@@ -351,7 +351,7 @@ extern void proc_thread_self_init(void);
 /*
  * proc_sysctl.c
  */
-#ifdef CONFIG_PROC_SYSCTL
+#ifdef CONFIG_SYSCTL
 extern int proc_sys_init(void);
 extern void proc_sys_evict_inode(struct inode *inode,
 				 struct ctl_table_header *head);
@@ -385,10 +385,8 @@ struct mem_size_stats;
 
 struct proc_maps_locking_ctx {
 	struct mm_struct *mm;
-#ifdef CONFIG_PER_VMA_LOCK
 	bool mmap_locked;
 	struct vm_area_struct *locked_vma;
-#endif
 };
 
 struct proc_maps_private {

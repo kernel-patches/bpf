@@ -24,6 +24,7 @@
 #include <linux/dma-direction.h>
 #include <linux/dma-mapping.h>
 #include <linux/migrate.h>
+#include <linux/pagemap.h>
 #include "amdgpu_sync.h"
 #include "amdgpu_object.h"
 #include "amdgpu_vm.h"
@@ -68,8 +69,8 @@ svm_migrate_gart_map(struct amdgpu_ring *ring,
 				     AMDGPU_FENCE_OWNER_UNDEFINED,
 				     num_dw * 4 + num_bytes,
 				     AMDGPU_IB_POOL_DELAYED,
-				     &job,
-				     AMDGPU_KERNEL_JOB_ID_KFD_GART_MAP);
+				     AMDGPU_KERNEL_JOB_ID_KFD_GART_MAP,
+				     &job);
 	if (r)
 		return r;
 
@@ -134,7 +135,7 @@ svm_migrate_copy_memory_gart(struct amdgpu_device *adev, dma_addr_t *sys,
 	u64 gart_s, gart_d;
 	struct dma_fence *next;
 	u64 size;
-	int r;
+	int r = 0;
 
 	ring = to_amdgpu_ring(adev->mman.buffer_funcs_scheds[0]);
 	entity = &adev->mman.move_entities[0];
@@ -258,15 +259,6 @@ svm_migrate_get_sys_page(struct vm_area_struct *vma, unsigned long addr)
 	return page;
 }
 
-static void svm_migrate_put_sys_page(unsigned long addr)
-{
-	struct page *page;
-
-	page = pfn_to_page(addr >> PAGE_SHIFT);
-	unlock_page(page);
-	put_page(page);
-}
-
 static unsigned long svm_migrate_successful_pages(struct migrate_vma *migrate)
 {
 	unsigned long mpages = 0;
@@ -293,7 +285,7 @@ svm_migrate_copy_to_vram(struct kfd_node *node, struct svm_range *prange,
 	dma_addr_t *src;
 	u64 *dst;
 	u64 i, j;
-	int r;
+	int r = 0;
 
 	pr_debug("svms 0x%p [0x%lx 0x%lx 0x%llx]\n", prange->svms, prange->start,
 		 prange->last, ttm_res_offset);
@@ -319,6 +311,7 @@ svm_migrate_copy_to_vram(struct kfd_node *node, struct svm_range *prange,
 					      DMA_BIDIRECTIONAL);
 			r = dma_mapping_error(dev, src[i]);
 			if (r) {
+				src[i] = 0;
 				dev_err(dev, "%s: fail %d dma_map_page\n",
 					__func__, r);
 				goto out_free_vram_pages;
@@ -343,7 +336,8 @@ svm_migrate_copy_to_vram(struct kfd_node *node, struct svm_range *prange,
 		pr_debug_ratelimited("dma mapping src to 0x%llx, pfn 0x%lx\n",
 				     src[i] >> PAGE_SHIFT, page_to_pfn(spage));
 
-		if (j >= (cursor.size >> PAGE_SHIFT) - 1 && i < npages - 1) {
+		/* accumulated j + 1 pages reach end of current drm_buddy_block */
+		if (j + 1 >= (cursor.size >> PAGE_SHIFT)) {
 			r = svm_migrate_copy_memory_gart(adev, src + i - j,
 							 dst + i - j, j + 1,
 							 FROM_RAM_TO_VRAM,
@@ -357,7 +351,8 @@ svm_migrate_copy_to_vram(struct kfd_node *node, struct svm_range *prange,
 		}
 	}
 
-	r = svm_migrate_copy_memory_gart(adev, src + i - j, dst + i - j, j,
+	if (j > 0)
+		r = svm_migrate_copy_memory_gart(adev, src + i - j, dst + i - j, j,
 					 FROM_RAM_TO_VRAM, mfence);
 
 out_free_vram_pages:
@@ -390,6 +385,46 @@ out_free_vram_pages:
 	return r;
 }
 
+/* Check if a range of addresses is already resident in VRAM to avoid
+ * unnecessary migrations that would trigger MMU notifiers causing the range
+ * to be unmapped and faulted again unnecessarily.
+ *
+ * Called with prange->migrate_mutex held.
+ */
+static bool
+svm_range_window_resident(struct kfd_node *node, struct svm_range *prange,
+			  u64 start, u64 end)
+{
+	struct kfd_process *p = container_of(prange->svms, struct kfd_process, svms);
+	unsigned long i, offset, npages;
+	dma_addr_t *addr;
+	uint32_t gpuid;
+	int32_t gpuidx;
+
+	if (kfd_process_gpuid_from_node(p, node, &gpuid, &gpuidx))
+		return false;
+	if (prange->actual_loc != gpuid)
+		return false;
+
+	addr = prange->dma_addr[gpuidx];
+	if (!addr)
+		return false;
+
+	start = max(start >> PAGE_SHIFT, prange->start);
+	end = min(end >> PAGE_SHIFT, prange->last + 1);
+	if (end <= start)
+		return true;
+
+	offset = start - prange->start;
+	npages = end - start;
+
+	for (i = offset; i < offset + npages; i++)
+		if (!(addr[i] & SVM_RANGE_VRAM_DOMAIN))
+			return false;
+
+	return true;
+}
+
 static long
 svm_migrate_vma_to_vram(struct kfd_node *node, struct svm_range *prange,
 			struct vm_area_struct *vma, u64 start,
@@ -406,6 +441,12 @@ svm_migrate_vma_to_vram(struct kfd_node *node, struct svm_range *prange,
 	dma_addr_t *scratch;
 	void *buf;
 	int r = -ENOMEM;
+
+	/* Avoid unnecessary migrations and MMU notifiers if all the data is
+	 * already resident in VRAM.
+	 */
+	if (svm_range_window_resident(node, prange, start, end))
+		return 0;
 
 	memset(&migrate, 0, sizeof(migrate));
 	migrate.vma = vma;
@@ -591,9 +632,10 @@ svm_migrate_copy_to_ram(struct amdgpu_device *adev, struct svm_range *prange,
 			dma_addr_t *scratch, u64 npages)
 {
 	struct device *dev = adev->dev;
-	u64 *src;
+	struct page *dpage = NULL;
 	dma_addr_t *dst;
-	struct page *dpage;
+	u64 *src;
+
 	u64 i = 0, j;
 	u64 addr;
 	int r = 0;
@@ -647,6 +689,7 @@ svm_migrate_copy_to_ram(struct amdgpu_device *adev, struct svm_range *prange,
 		r = dma_mapping_error(dev, dst[i]);
 		if (r) {
 			dev_err(adev->dev, "%s: fail %d dma_map_page\n", __func__, r);
+			dst[i] = 0;
 			goto out_oom;
 		}
 
@@ -654,17 +697,39 @@ svm_migrate_copy_to_ram(struct amdgpu_device *adev, struct svm_range *prange,
 				     dst[i] >> PAGE_SHIFT, page_to_pfn(dpage));
 
 		migrate->dst[i] = migrate_pfn(page_to_pfn(dpage));
+
+		dpage = NULL;
 		j++;
 	}
 
-	r = svm_migrate_copy_memory_gart(adev, dst + i - j, src + i - j, j,
-					 FROM_VRAM_TO_RAM, mfence);
-
+	if (j > 0)
+		r = svm_migrate_copy_memory_gart(adev, dst + i - j, src + i - j, j,
+						 FROM_VRAM_TO_RAM, mfence);
 out_oom:
 	if (r) {
 		pr_debug("failed %d copy to ram\n", r);
+
+		/* first release current dpage when dma_map_page fail */
+		if (dpage) {
+			unlock_page(dpage);
+			put_page(dpage);
+		}
+
+		/* release previous allocated sys pages and unmap dma address */
 		while (i--) {
-			svm_migrate_put_sys_page(dst[i]);
+
+			if (dst[i]) {
+				dma_unmap_page(dev, dst[i], PAGE_SIZE,
+					       DMA_BIDIRECTIONAL);
+				dst[i] = 0;
+			}
+
+			dpage = migrate_pfn_to_page(migrate->dst[i]);
+			if (!dpage)
+				continue;
+
+			unlock_page(dpage);
+			put_page(dpage);
 			migrate->dst[i] = 0;
 		}
 	}
@@ -711,7 +776,7 @@ svm_migrate_vma_to_ram(struct kfd_node *node, struct svm_range *prange,
 	migrate.start = start;
 	migrate.end = end;
 	migrate.pgmap_owner = SVM_ADEV_PGMAP_OWNER(adev);
-	if (adev->gmc.xgmi.connected_to_cpu)
+	if (adev->kfd.pgmap.type == MEMORY_DEVICE_COHERENT)
 		migrate.flags = MIGRATE_VMA_SELECT_DEVICE_COHERENT;
 	else
 		migrate.flags = MIGRATE_VMA_SELECT_DEVICE_PRIVATE;
@@ -954,12 +1019,12 @@ static vm_fault_t svm_migrate_to_ram(struct vm_fault *vmf)
 		pr_debug("failed get device page at addr 0x%lx\n", addr);
 		return VM_FAULT_SIGBUS;
 	}
-	if (!mmget_not_zero(svm_bo->eviction_fence->mm)) {
+	if (!mmget_not_zero(svm_bo->mm)) {
 		pr_debug("addr 0x%lx of process mm is destroyed\n", addr);
 		return VM_FAULT_SIGBUS;
 	}
 
-	mm = svm_bo->eviction_fence->mm;
+	mm = svm_bo->mm;
 	if (mm != vmf->vma->vm_mm)
 		pr_debug("addr 0x%lx is COW mapping in child process\n", addr);
 
@@ -1045,7 +1110,8 @@ int kgd2kfd_init_zone_device(struct amdgpu_device *adev)
 	 * should remove reserved size
 	 */
 	size = ALIGN(adev->gmc.real_vram_size, 2ULL << 20);
-	if (adev->gmc.xgmi.connected_to_cpu) {
+	if (adev->gmc.xgmi.connected_to_cpu &&
+	    amdgpu_ip_version(adev, GC_HWIP, 0) != IP_VERSION(12, 1, 0)) {
 		pgmap->range.start = adev->gmc.aper_base;
 		pgmap->range.end = adev->gmc.aper_base + adev->gmc.aper_size - 1;
 		pgmap->type = MEMORY_DEVICE_COHERENT;

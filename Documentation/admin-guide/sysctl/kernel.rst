@@ -459,8 +459,9 @@ hung_task_warnings
 ==================
 
 The maximum number of warnings to report. During a check interval
-if a hung task is detected, this value is decreased by 1.
-When this value reaches 0, no more warnings will be reported.
+if a hung task is detected, the internal warning budget is decreased by 1.
+When this budget reaches 0, no more detailed warnings will be reported. The
+warning budget is reset to the configured limit when no hung task is found.
 This file shows up if ``CONFIG_DETECT_HUNG_TASK`` is enabled.
 
 -1: report an infinite number of warnings.
@@ -1609,8 +1610,10 @@ If a value outside of this range is written to ``threads-max`` an
 timer_migration
 ===============
 
-When set to a non-zero value, attempt to migrate timers away from idle cpus to
-allow them to remain in low power states longer.
+When set to a non-zero value, attempt to migrate high-resolution timers from
+nohz isolated (nohz_full) to housekeeping CPUs.
+See Documentation/admin-guide/cpu-isolation.rst
+and Documentation/admin-guide/kernel-parameters.rst.
 
 Default is set (1).
 

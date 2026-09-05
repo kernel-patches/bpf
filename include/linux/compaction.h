@@ -58,6 +58,7 @@ enum compact_result {
 };
 
 struct alloc_context; /* in mm/internal.h */
+struct capture_control; /* in mm/internal.h */
 
 /*
  * Number of free order-0 pages that should be available above given watermark
@@ -80,10 +81,6 @@ static inline unsigned long compact_gap(unsigned int order)
 	return min(2UL << order, COMPACT_CLUSTER_MAX);
 }
 
-static inline int current_is_kcompactd(void)
-{
-	return current->flags & PF_KCOMPACTD;
-}
 
 #ifdef CONFIG_COMPACTION
 
@@ -92,7 +89,7 @@ extern int fragmentation_index(struct zone *zone, unsigned int order);
 extern enum compact_result try_to_compact_pages(gfp_t gfp_mask,
 		unsigned int order, unsigned int alloc_flags,
 		const struct alloc_context *ac, enum compact_priority prio,
-		struct page **page);
+		struct capture_control *capc);
 extern void reset_isolation_suitable(pg_data_t *pgdat);
 extern bool compaction_suitable(struct zone *zone, int order,
 				unsigned long watermark, int highest_zoneidx);
@@ -102,7 +99,7 @@ extern void compaction_defer_reset(struct zone *zone, int order,
 
 bool compaction_zonelist_suitable(struct alloc_context *ac, int order,
 					int alloc_flags, gfp_t gfp_mask);
-
+bool current_is_kcompactd(void);
 extern void __meminit kcompactd_run(int nid);
 extern void __meminit kcompactd_stop(int nid);
 extern void wakeup_kcompactd(pg_data_t *pgdat, int order, int highest_zoneidx);
@@ -115,6 +112,11 @@ static inline void reset_isolation_suitable(pg_data_t *pgdat)
 static inline bool compaction_suitable(struct zone *zone, int order,
 				       unsigned long watermark,
 				       int highest_zoneidx)
+{
+	return false;
+}
+
+static inline bool current_is_kcompactd(void)
 {
 	return false;
 }

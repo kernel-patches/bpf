@@ -51,16 +51,16 @@ struct amdgpu_pasid_cb {
 
 /**
  * amdgpu_pasid_alloc - Allocate a PASID
- * @bits: Maximum width of the PASID in bits, must be at least 1
+ * @bits: Number of PASID bits supported by the hardware
+ * @fpriv: DRM file private to associate with the PASID
  *
- * Uses kernel's IDR cyclic allocator (same as PID allocation).
+ * Uses the kernel's XArray cyclic allocator.
  * Allocates sequentially with automatic wrap-around.
  *
- * Returns a positive integer on success. Returns %-EINVAL if bits==0.
- * Returns %-ENOSPC if no PASID was available. Returns %-ENOMEM on
- * memory allocation failure.
+ * Returns:
+ * Allocated PASID on success or a negative error code on failure.
  */
-int amdgpu_pasid_alloc(unsigned int bits)
+int amdgpu_pasid_alloc(unsigned int bits, struct amdgpu_fpriv *fpriv)
 {
 	u32 pasid;
 	int r;
@@ -68,9 +68,9 @@ int amdgpu_pasid_alloc(unsigned int bits)
 	if (bits == 0)
 		return -EINVAL;
 
-	r = xa_alloc_cyclic_irq(&amdgpu_pasid_xa, &pasid, xa_mk_value(0),
-			    XA_LIMIT(1, (1U << bits) - 1),
-			    &amdgpu_pasid_xa_next, GFP_KERNEL);
+	r = xa_alloc_cyclic_irq(&amdgpu_pasid_xa, &pasid, fpriv,
+				XA_LIMIT(1, (1U << bits) - 1),
+				&amdgpu_pasid_xa_next, GFP_KERNEL);
 	if (r < 0)
 		return r;
 
@@ -107,6 +107,71 @@ static void amdgpu_pasid_free_cb(struct dma_fence *fence,
 }
 
 /**
+ * amdgpu_pasid_clear_owner - Clear the owner associated with a PASID
+ * @pasid: PASID whose owner should be cleared
+ *
+ * Replace the stored owner with NULL while keeping the PASID allocated.
+ *
+ * This is used by the delayed PASID free path so that future PASID
+ * lookups cannot resolve a stale DRM file-private object while the PASID
+ * is still waiting for outstanding fences before being released.
+ */
+static void amdgpu_pasid_clear_owner(u32 pasid)
+{
+	unsigned long flags;
+
+	if (!pasid)
+		return;
+
+	xa_lock_irqsave(&amdgpu_pasid_xa, flags);
+	__xa_store(&amdgpu_pasid_xa, pasid, NULL, GFP_ATOMIC);
+	xa_unlock_irqrestore(&amdgpu_pasid_xa, flags);
+}
+
+/**
+ * amdgpu_pasid_lock - acquire the global PASID xarray lock
+ * @flags: storage for interrupt state
+ *
+ * Acquire the global PASID xarray lock with interrupts disabled.
+ * The saved interrupt state must be passed to
+ * amdgpu_pasid_unlock().
+ */
+void amdgpu_pasid_lock(unsigned long *flags)
+{
+	xa_lock_irqsave(&amdgpu_pasid_xa, *flags);
+}
+
+/**
+ * amdgpu_pasid_unlock - release the global PASID xarray lock
+ * @flags: interrupt state returned by amdgpu_pasid_lock()
+ *
+ * Release the global PASID xarray lock and restore the previous
+ * interrupt state.
+ */
+void amdgpu_pasid_unlock(unsigned long flags)
+{
+	xa_unlock_irqrestore(&amdgpu_pasid_xa, flags);
+}
+
+/**
+ * amdgpu_pasid_get_fpriv_locked - get the DRM owner of a PASID
+ * @pasid: PASID to resolve
+ *
+ * The caller must hold the PASID XArray lock.
+ *
+ * Returns:
+ * Pointer to the owning DRM file private, or %NULL if the PASID has no
+ * current owner.
+ *
+ * The returned pointer is only valid while the PASID lock remains held
+ * and must not be retained after calling amdgpu_pasid_unlock().
+ */
+struct amdgpu_fpriv *amdgpu_pasid_get_fpriv_locked(u32 pasid)
+{
+	return xa_load(&amdgpu_pasid_xa, pasid);
+}
+
+/**
  * amdgpu_pasid_free_delayed - free pasid when fences signal
  *
  * @resv: reservation object with the fences to wait for
@@ -120,6 +185,8 @@ void amdgpu_pasid_free_delayed(struct dma_resv *resv,
 	struct amdgpu_pasid_cb *cb;
 	struct dma_fence *fence;
 	int r;
+
+	amdgpu_pasid_clear_owner(pasid);
 
 	r = dma_resv_get_singleton(resv, DMA_RESV_USAGE_BOOKKEEP, &fence);
 	if (r)
@@ -558,9 +625,24 @@ void amdgpu_vmid_reset_all(struct amdgpu_device *adev)
 	for (i = 0; i < AMDGPU_MAX_VMHUBS; ++i) {
 		struct amdgpu_vmid_mgr *id_mgr =
 			&adev->vm_manager.id_mgr[i];
-
-		for (j = 1; j < id_mgr->num_ids; ++j)
+		for_each_set_bit(j, id_mgr->vmid_mask, AMDGPU_NUM_VMID)
 			amdgpu_vmid_reset(adev, i, j);
+	}
+}
+
+void amdgpu_vmid_mgr_set_vmid_mask(struct amdgpu_device *adev,
+				   unsigned long vmid_mask, bool for_mmhub)
+{
+	unsigned int i;
+
+	BUILD_BUG_ON(AMDGPU_NUM_VMID > BITS_PER_LONG);
+
+	for (i = 0; i < AMDGPU_MAX_VMHUBS; i++) {
+		bool is_mmhub = AMDGPU_IS_MMHUB0(i) || AMDGPU_IS_MMHUB1(i);
+
+		if (is_mmhub == for_mmhub)
+			bitmap_copy(adev->vm_manager.id_mgr[i].vmid_mask,
+				    &vmid_mask, AMDGPU_NUM_VMID);
 	}
 }
 
@@ -582,19 +664,8 @@ void amdgpu_vmid_mgr_init(struct amdgpu_device *adev)
 		mutex_init(&id_mgr->lock);
 		INIT_LIST_HEAD(&id_mgr->ids_lru);
 
-		/* for GC <10, SDMA uses MMHUB so use first_kfd_vmid for both GC and MM */
-		if (amdgpu_ip_version(adev, GC_HWIP, 0) < IP_VERSION(10, 0, 0))
-			/* manage only VMIDs not used by KFD */
-			id_mgr->num_ids = adev->vm_manager.first_kfd_vmid;
-		else if (AMDGPU_IS_MMHUB0(i) ||
-			 AMDGPU_IS_MMHUB1(i))
-			id_mgr->num_ids = 16;
-		else
-			/* manage only VMIDs not used by KFD */
-			id_mgr->num_ids = adev->vm_manager.first_kfd_vmid;
-
 		/* skip over VMID 0, since it is the system VM */
-		for (j = 1; j < id_mgr->num_ids; ++j) {
+		for_each_set_bit(j, id_mgr->vmid_mask, AMDGPU_NUM_VMID) {
 			amdgpu_vmid_reset(adev, i, j);
 			amdgpu_sync_create(&id_mgr->ids[j].active);
 			list_add_tail(&id_mgr->ids[j].list, &id_mgr->ids_lru);
@@ -618,6 +689,7 @@ void amdgpu_vmid_mgr_fini(struct amdgpu_device *adev)
 			&adev->vm_manager.id_mgr[i];
 
 		mutex_destroy(&id_mgr->lock);
+
 		for (j = 0; j < AMDGPU_NUM_VMID; ++j) {
 			struct amdgpu_vmid *id = &id_mgr->ids[j];
 

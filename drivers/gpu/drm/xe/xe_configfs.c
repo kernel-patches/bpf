@@ -61,7 +61,8 @@
  *	    ├── survivability_mode
  *	    ├── gt_types_allowed
  *	    ├── engines_allowed
- *	    └── enable_psmi
+ *	    ├── enable_psmi
+ *	    └── disable_vram_page_offline
  *
  * After configuring the attributes as per next section, the device can be
  * probed with::
@@ -159,6 +160,18 @@
  *
  * This attribute can only be set before binding to the device.
  *
+ * Disable VRAM page offline:
+ * ----------------------------
+ *
+ *  0, n, N, false - Do not disable (Offlining is active - default)
+ *  1, y, Y, true  - Disable vram page offline (Logging only)
+ *
+ *  Example to disable VRAM offline::
+ *
+ *      # echo 1 > /sys/kernel/config/xe/0000:03:00.0/disable_vram_page_offline
+ *
+ * This attribute can only be set on CRI before binding to the device.
+ *
  * Context restore BB
  * ------------------
  *
@@ -237,6 +250,18 @@
  *
  * This setting only takes effect when probing the device.
  *
+ * Enable multi-queue
+ * ------------------
+ *
+ * Multi-queue support on the device is enabled by default where the
+ * hardware supports it. Writing 0 force-disables multi-queue support:
+ * multi-queue exec-queue group creation via ioctl is refused, and the
+ * GuC feature is disabled::
+ *
+ *	# echo 0 > /sys/kernel/config/xe/0000:03:00.0/enable_multi_queue
+ *
+ * This attribute can only be set before binding to the device.
+ *
  * Remove devices
  * ==============
  *
@@ -262,6 +287,8 @@ struct xe_config_group_device {
 		struct wa_bb ctx_restore_mid_bb[XE_ENGINE_CLASS_MAX];
 		bool survivability_mode;
 		bool enable_psmi;
+		bool enable_multi_queue;
+		bool disable_vram_page_offline;
 		struct {
 			unsigned int max_vfs;
 			bool admin_only_pf;
@@ -281,6 +308,8 @@ static const struct xe_config_device device_defaults = {
 	.engines_allowed = U64_MAX,
 	.survivability_mode = false,
 	.enable_psmi = false,
+	.enable_multi_queue = true,
+	.disable_vram_page_offline = false,
 	.sriov = {
 		.max_vfs = XE_DEFAULT_MAX_VFS,
 		.admin_only_pf = XE_DEFAULT_ADMIN_ONLY_PF,
@@ -575,6 +604,60 @@ static ssize_t enable_psmi_store(struct config_item *item, const char *page, siz
 	return len;
 }
 
+static ssize_t enable_multi_queue_show(struct config_item *item, char *page)
+{
+	struct xe_config_device *dev = to_xe_config_device(item);
+
+	return sprintf(page, "%d\n", dev->enable_multi_queue);
+}
+
+static ssize_t enable_multi_queue_store(struct config_item *item, const char *page,
+					size_t len)
+{
+	struct xe_config_group_device *dev = to_xe_config_group_device(item);
+	bool val;
+	int ret;
+
+	ret = kstrtobool(page, &val);
+	if (ret)
+		return ret;
+
+	guard(mutex)(&dev->lock);
+	if (is_bound(dev))
+		return -EBUSY;
+
+	dev->config.enable_multi_queue = val;
+
+	return len;
+}
+
+static ssize_t disable_vram_page_offline_show(struct config_item *item, char *page)
+{
+	struct xe_config_device *dev = to_xe_config_device(item);
+
+	return sprintf(page, "%s\n", str_yes_no(dev->disable_vram_page_offline));
+}
+
+static ssize_t disable_vram_page_offline_store(struct config_item *item,
+					       const char *page, size_t len)
+{
+	struct xe_config_group_device *dev = to_xe_config_group_device(item);
+	bool val;
+	int ret;
+
+	ret = kstrtobool(page, &val);
+	if (ret)
+		return ret;
+
+	guard(mutex)(&dev->lock);
+	if (is_bound(dev))
+		return -EBUSY;
+
+	dev->config.disable_vram_page_offline = val;
+
+	return len;
+}
+
 static bool wa_bb_read_advance(bool dereference, char **p,
 			       const char *append, size_t len,
 			       size_t *max_size)
@@ -812,7 +895,9 @@ static ssize_t ctx_restore_post_bb_store(struct config_item *item,
 
 CONFIGFS_ATTR(, ctx_restore_mid_bb);
 CONFIGFS_ATTR(, ctx_restore_post_bb);
+CONFIGFS_ATTR(, enable_multi_queue);
 CONFIGFS_ATTR(, enable_psmi);
+CONFIGFS_ATTR(, disable_vram_page_offline);
 CONFIGFS_ATTR(, engines_allowed);
 CONFIGFS_ATTR(, gt_types_allowed);
 CONFIGFS_ATTR(, survivability_mode);
@@ -820,7 +905,9 @@ CONFIGFS_ATTR(, survivability_mode);
 static struct configfs_attribute *xe_config_device_attrs[] = {
 	&attr_ctx_restore_mid_bb,
 	&attr_ctx_restore_post_bb,
+	&attr_enable_multi_queue,
 	&attr_enable_psmi,
+	&attr_disable_vram_page_offline,
 	&attr_engines_allowed,
 	&attr_gt_types_allowed,
 	&attr_survivability_mode,
@@ -849,6 +936,11 @@ static bool xe_config_device_is_visible(struct config_item *item,
 
 	if (attr == &attr_survivability_mode) {
 		if (!dev->desc->is_dgfx || dev->desc->platform < XE_BATTLEMAGE)
+			return false;
+	}
+
+	if (attr == &attr_disable_vram_page_offline) {
+		if (!dev->desc->is_dgfx || dev->desc->platform != XE_CRESCENTISLAND)
 			return false;
 	}
 
@@ -1097,7 +1189,9 @@ static void dump_custom_dev_config(struct pci_dev *pdev,
 
 	PRI_CUSTOM_ATTR("%llx", gt_types_allowed);
 	PRI_CUSTOM_ATTR("%llx", engines_allowed);
+	PRI_CUSTOM_ATTR("%d", enable_multi_queue);
 	PRI_CUSTOM_ATTR("%d", enable_psmi);
+	PRI_CUSTOM_ATTR("%d", disable_vram_page_offline);
 	PRI_CUSTOM_ATTR("%d", survivability_mode);
 	PRI_CUSTOM_ATTR("%u", sriov.admin_only_pf);
 
@@ -1220,6 +1314,47 @@ bool xe_configfs_get_psmi_enabled(struct pci_dev *pdev)
 		return false;
 
 	ret = dev->config.enable_psmi;
+	config_group_put(&dev->group);
+
+	return ret;
+}
+
+/**
+ * xe_configfs_get_enable_multi_queue - get configfs enable_multi_queue setting
+ * @pdev: pci device
+ *
+ * Return: true if multi-queue is enabled for this device (the default),
+ * false if it has been force-disabled via configfs.
+ */
+bool xe_configfs_get_enable_multi_queue(struct pci_dev *pdev)
+{
+	struct xe_config_group_device *dev = find_xe_config_group_device(pdev);
+	bool ret;
+
+	if (!dev)
+		return true;
+
+	ret = dev->config.enable_multi_queue;
+	config_group_put(&dev->group);
+
+	return ret;
+}
+
+/**
+ * xe_configfs_get_disable_vram_page_offline - get configfs disable_vram_page_offline setting
+ * @pdev: pci device
+ *
+ * Return: disable_vram_page_offline setting in configfs
+ */
+bool xe_configfs_get_disable_vram_page_offline(struct pci_dev *pdev)
+{
+	struct xe_config_group_device *dev = find_xe_config_group_device(pdev);
+	bool ret;
+
+	if (!dev)
+		return device_defaults.disable_vram_page_offline;
+
+	ret = dev->config.disable_vram_page_offline;
 	config_group_put(&dev->group);
 
 	return ret;

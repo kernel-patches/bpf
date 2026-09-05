@@ -11,7 +11,6 @@
 #include <linux/bug.h>
 #include <linux/fs.h>
 #include <linux/mempool.h>
-#include <linux/pagemap.h>
 #include <linux/wait.h>
 #include <linux/writeback.h>
 #include <linux/slab.h>
@@ -313,8 +312,6 @@ int ceph_wait_for_latest_osdmap(struct ceph_client *client,
 
 /* pagevec.c */
 extern void ceph_release_page_vector(struct page **pages, int num_pages);
-extern void ceph_put_page_vector(struct page **pages, int num_pages,
-				 bool dirty);
 extern struct page **ceph_alloc_page_vector(int num_pages, gfp_t flags);
 extern void ceph_copy_from_page_vector(struct page **pages,
 				    void *data,

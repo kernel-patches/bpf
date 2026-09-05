@@ -10,6 +10,7 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/gpio/consumer.h>
+#include <linux/interrupt.h>
 #include <linux/log2.h>
 #include <linux/math.h>
 #include <linux/module.h>
@@ -743,7 +744,7 @@ static int ads1298_probe(struct spi_device *spi)
 }
 
 static const struct spi_device_id ads1298_id[] = {
-	{ "ads1298" },
+	{ .name = "ads1298" },
 	{ }
 };
 MODULE_DEVICE_TABLE(spi, ads1298_id);

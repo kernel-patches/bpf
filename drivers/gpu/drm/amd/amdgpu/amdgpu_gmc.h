@@ -114,6 +114,8 @@ struct amdgpu_gmc_fault {
 struct amdgpu_vmhub_funcs {
 	void (*print_l2_protection_fault_status)(struct amdgpu_device *adev,
 						 uint32_t status);
+	void (*print_l2_protection_fault_status_hi)(struct amdgpu_device *adev,
+						    uint32_t status);
 	uint32_t (*get_invalidate_req)(unsigned int vmid, uint32_t flush_type);
 };
 
@@ -125,6 +127,7 @@ struct amdgpu_vmhub {
 	uint32_t	vm_inv_eng0_ack;
 	uint32_t	vm_context0_cntl;
 	uint32_t	vm_l2_pro_fault_status;
+	uint32_t	vm_l2_pro_fault_status_hi;
 	uint32_t	vm_l2_pro_fault_cntl;
 
 	/*
@@ -286,7 +289,6 @@ struct amdgpu_gmc {
 	struct amdgpu_irq_src	vm_fault;
 	uint32_t		vram_type;
 	uint8_t			vram_vendor;
-	uint32_t                srbm_soft_reset;
 	bool			prt_warning;
 	uint32_t		sdpif_register;
 	/* apertures */
@@ -439,8 +441,6 @@ int amdgpu_gmc_handle_retry_fault(struct amdgpu_device *adev,
 				  u32 node_id,
 				  bool write_fault);
 int amdgpu_gmc_ras_sw_init(struct amdgpu_device *adev);
-int amdgpu_gmc_ras_late_init(struct amdgpu_device *adev);
-void amdgpu_gmc_ras_fini(struct amdgpu_device *adev);
 int amdgpu_gmc_allocate_vm_inv_eng(struct amdgpu_device *adev);
 void amdgpu_gmc_flush_gpu_tlb(struct amdgpu_device *adev, uint32_t vmid,
 			      uint32_t vmhub, uint32_t flush_type);

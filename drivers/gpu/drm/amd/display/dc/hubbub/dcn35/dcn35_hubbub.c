@@ -31,6 +31,7 @@
 #include "dcn35_hubbub.h"
 #include "dm_services.h"
 #include "reg_helper.h"
+#include "dc_dmub_srv.h"
 
 
 #define CTX \
@@ -571,7 +572,7 @@ void dcn35_dchvm_init(struct hubbub *hubbub)
 
 	if (riommu_active) {
 		// Disable gating and memory power requests
-		REG_UPDATE(DCHVM_MEM_CTRL, HVM_GPUVMRET_PWR_REQ_DIS, 1);
+		REG_UPDATE_2(DCHVM_MEM_CTRL, HVM_GPUVMRET_PWR_REQ_DIS, 1, HVM_GPUVMRET_FORCE_REQ, 0);
 		REG_UPDATE_4(DCHVM_CLK_CTRL,
 						HVM_DISPCLK_R_GATE_DIS, 1,
 						HVM_DISPCLK_G_GATE_DIS, 1,
@@ -580,7 +581,13 @@ void dcn35_dchvm_init(struct hubbub *hubbub)
 
 		//Reflect the power status of DCHUBBUB
 		REG_UPDATE(DCHVM_RIOMMU_CTRL0, HOSTVM_POWERSTATUS, 1);
+		udelay(5);
+	}
 
+	// generically re-allow the DCHVM<->rIOMMU SDP port to disconnect after powerstatus=1
+	dc_dmub_srv_hubbub_set_riommu_pctrl(hubbub->ctx, 0x20);
+
+	if (riommu_active) {
 		//Start rIOMMU prefetching
 		REG_UPDATE(DCHVM_RIOMMU_CTRL0, HOSTVM_PREFETCH_REQ, 1);
 

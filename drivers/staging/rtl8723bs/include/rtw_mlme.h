@@ -13,8 +13,8 @@
 /* define   MAX_JOIN_TIMEOUT	2500 */
 #define   MAX_JOIN_TIMEOUT	6500
 
-/* 	Commented by Albert 20101105 */
-/* 	Increase the scanning timeout because of increasing the SURVEY_TO value. */
+/* Commented by Albert 20101105 */
+/* Increase the scanning timeout because of increasing the SURVEY_TO value. */
 
 #define		SCANNING_TIMEOUT	8000
 
@@ -44,15 +44,15 @@
 
 
 enum {
- dot11AuthAlgrthm_Open = 0,
- dot11AuthAlgrthm_Shared,
- dot11AuthAlgrthm_8021X,
- dot11AuthAlgrthm_Auto,
- dot11AuthAlgrthm_WAPI,
- dot11AuthAlgrthm_MaxNum
+	dot11_auth_algrthm_open = 0,
+	dot11_auth_algrthm_shared,
+	dot11_auth_algrthm_8021x,
+	dot11_auth_algrthm_auto,
+	dot11_auth_algrthm_wapi,
+	dot11_auth_algrthm_maxnum
 };
 
-/*  Scan type including active and passive scan. */
+/* Scan type including active and passive scan. */
 enum rt_scan_type {
 	SCAN_PASSIVE,
 	SCAN_ACTIVE,
@@ -67,23 +67,22 @@ enum {
 };
 
 /*
-
-there are several "locks" in mlme_priv,
-since mlme_priv is a shared resource between many threads,
-like ISR/Call-Back functions, the OID handlers, and even timer functions.
-
-Each struct __queue has its own locks, already.
-Other items in mlme_priv are protected by mlme_priv.lock, while items in
-xmit_priv are protected by xmit_priv.lock.
-
-To avoid possible dead lock, any thread trying to modifying mlme_priv
-SHALL not lock up more than one locks at a time!
-
-The only exception is that queue functions which take the __queue.lock
-may be called with the xmit_priv.lock held. In this case the order
-MUST always be first lock xmit_priv.lock and then call any queue functions
-which take __queue.lock.
-*/
+ * There are several "locks" in mlme_priv,
+ * since mlme_priv is a shared resource between many threads,
+ * like ISR/Call-Back functions, the OID handlers, and even timer functions.
+ *
+ * Each struct __queue has its own locks, already.
+ * Other items in mlme_priv are protected by mlme_priv.lock, while items in
+ * xmit_priv are protected by xmit_priv.lock.
+ *
+ * To avoid possible dead lock, any thread trying to modifying mlme_priv
+ * SHALL not lock up more than one locks at a time!
+ *
+ * The only exception is that queue functions which take the __queue.lock
+ * may be called with the xmit_priv.lock held. In this case the order
+ * MUST always be first lock xmit_priv.lock and then call any queue functions
+ * which take __queue.lock.
+ */
 
 struct sitesurvey_ctrl {
 	u64	last_tx_pkts;
@@ -184,7 +183,8 @@ struct mlme_priv {
 	u32 wps_probe_req_ie_len;
 
 	/* Number of associated Non-ERP stations (i.e., stations using 802.11b
-	 * in 802.11g BSS) */
+	 * in 802.11g BSS)
+	 */
 	int num_sta_non_erp;
 
 	/* Number of associated stations that do not support Short Slot Time */
@@ -217,12 +217,12 @@ struct mlme_priv {
 	u8 *wps_beacon_ie;
 	/* u8 *wps_probe_req_ie; */
 	u8 *wps_probe_resp_ie;
-	u8 *wps_assoc_resp_ie; /*  for CONFIG_IOCTL_CFG80211, this IE could include p2p ie / wfd ie */
+	u8 *wps_assoc_resp_ie; /* this IE could include p2p ie / wfd ie */
 
 	u32 wps_beacon_ie_len;
 	/* u32 wps_probe_req_ie_len; */
 	u32 wps_probe_resp_ie_len;
-	u32 wps_assoc_resp_ie_len; /*  for CONFIG_IOCTL_CFG80211, this IE len could include p2p ie / wfd ie */
+	u32 wps_assoc_resp_ie_len; /* this IE len could include p2p ie / wfd ie */
 
 	u8 *p2p_beacon_ie;
 	u8 *p2p_probe_req_ie;
@@ -249,37 +249,36 @@ struct hostapd_priv {
 	struct adapter *padapter;
 };
 
-extern int hostapd_mode_init(struct adapter *padapter);
-extern void hostapd_mode_unload(struct adapter *padapter);
+int hostapd_mode_init(struct adapter *padapter);
+void hostapd_mode_unload(struct adapter *padapter);
 
-extern void rtw_joinbss_event_prehandle(struct adapter *adapter, u8 *pbuf);
-extern void rtw_survey_event_callback(struct adapter *adapter, u8 *pbuf);
-extern void rtw_surveydone_event_callback(struct adapter *adapter, u8 *pbuf);
-extern void rtw_joinbss_event_callback(struct adapter *adapter, u8 *pbuf);
-extern void rtw_stassoc_event_callback(struct adapter *adapter, u8 *pbuf);
-extern void rtw_stadel_event_callback(struct adapter *adapter, u8 *pbuf);
-extern void rtw_atimdone_event_callback(struct adapter *adapter, u8 *pbuf);
-extern void rtw_cpwm_event_callback(struct adapter *adapter, u8 *pbuf);
-extern void rtw_wmm_event_callback(struct adapter *padapter, u8 *pbuf);
+void rtw_joinbss_event_prehandle(struct adapter *adapter, u8 *pbuf);
+void rtw_survey_event_callback(struct adapter *adapter, u8 *pbuf);
+void rtw_surveydone_event_callback(struct adapter *adapter, u8 *pbuf);
+void rtw_joinbss_event_callback(struct adapter *adapter, u8 *pbuf);
+void rtw_stassoc_event_callback(struct adapter *adapter, u8 *pbuf);
+void rtw_stadel_event_callback(struct adapter *adapter, u8 *pbuf);
+void rtw_cpwm_event_callback(struct adapter *adapter, u8 *pbuf);
+void rtw_wmm_event_callback(struct adapter *padapter, u8 *pbuf);
 
-extern void rtw_join_timeout_handler(struct timer_list *t);
-extern void _rtw_scan_timeout_handler(struct timer_list *t);
+void rtw_join_timeout_handler(struct timer_list *t);
+void _rtw_scan_timeout_handler(struct timer_list *t);
 
 int event_thread(void *context);
 
-extern void rtw_free_network_queue(struct adapter *adapter, u8 isfreeall);
-extern int rtw_init_mlme_priv(struct adapter *adapter);/*  (struct mlme_priv *pmlmepriv); */
+void rtw_free_network_queue(struct adapter *adapter, u8 isfreeall);
+int rtw_init_mlme_priv(struct adapter *adapter);/*  (struct mlme_priv *pmlmepriv); */
 
-extern void rtw_free_mlme_priv(struct mlme_priv *pmlmepriv);
+void rtw_free_mlme_priv(struct mlme_priv *pmlmepriv);
 
 
-extern signed int rtw_select_and_join_from_scanned_queue(struct mlme_priv *pmlmepriv);
-extern signed int rtw_set_key(struct adapter *adapter, struct security_priv *psecuritypriv, signed int keyid, u8 set_tx, bool enqueue);
-extern signed int rtw_set_auth(struct adapter *adapter, struct security_priv *psecuritypriv);
+signed int rtw_select_and_join_from_scanned_queue(struct mlme_priv *pmlmepriv);
+signed int rtw_set_key(struct adapter *adapter, struct security_priv *psecuritypriv, signed int keyid, u8 set_tx, bool enqueue);
+signed int rtw_set_auth(struct adapter *adapter, struct security_priv *psecuritypriv);
 
 static inline u8 *get_bssid(struct mlme_priv *pmlmepriv)
 {	/* if sta_mode:pmlmepriv->cur_network.network.mac_address => bssid */
-	/*  if adhoc_mode:pmlmepriv->cur_network.network.mac_address => ibss mac address */
+	/* if adhoc_mode:pmlmepriv->cur_network.network.mac_address => ibss mac address */
 	return pmlmepriv->cur_network.network.mac_address;
 }
 
@@ -319,48 +318,48 @@ static inline void _clr_fwstate_(struct mlme_priv *pmlmepriv, signed int state)
 		pmlmepriv->bScanInProcess = false;
 }
 
-extern u16 rtw_get_capability(struct wlan_bssid_ex *bss);
-extern void rtw_update_scanned_network(struct adapter *adapter, struct wlan_bssid_ex *target);
-extern void rtw_disconnect_hdl_under_linked(struct adapter *adapter, struct sta_info *psta, u8 free_assoc);
-extern void rtw_generate_random_ibss(u8 *pibss);
-extern struct wlan_network *rtw_find_network(struct __queue *scanned_queue, u8 *addr);
-extern struct wlan_network *rtw_get_oldest_wlan_network(struct __queue *scanned_queue);
+u16 rtw_get_capability(struct wlan_bssid_ex *bss);
+void rtw_update_scanned_network(struct adapter *adapter, struct wlan_bssid_ex *target);
+void rtw_disconnect_hdl_under_linked(struct adapter *adapter, struct sta_info *psta, u8 free_assoc);
+void rtw_generate_random_ibss(u8 *pibss);
+struct wlan_network *rtw_find_network(struct __queue *scanned_queue, u8 *addr);
+struct wlan_network *rtw_get_oldest_wlan_network(struct __queue *scanned_queue);
 struct wlan_network *_rtw_find_same_network(struct __queue *scanned_queue, struct wlan_network *network);
 
-extern void rtw_free_assoc_resources(struct adapter *adapter, int lock_scanned_queue);
-extern void rtw_indicate_disconnect(struct adapter *adapter);
-extern void rtw_indicate_connect(struct adapter *adapter);
+void rtw_free_assoc_resources(struct adapter *adapter, int lock_scanned_queue);
+void rtw_indicate_disconnect(struct adapter *adapter);
+void rtw_indicate_connect(struct adapter *adapter);
 void rtw_indicate_scan_done(struct adapter *padapter, bool aborted);
 void rtw_scan_abort(struct adapter *adapter);
 
-extern int rtw_restruct_sec_ie(struct adapter *adapter, u8 *in_ie, u8 *out_ie, uint in_len);
-extern int rtw_restruct_wmm_ie(struct adapter *adapter, u8 *in_ie, u8 *out_ie, uint in_len, uint initial_out_len);
-extern void rtw_init_registrypriv_dev_network(struct adapter *adapter);
+int rtw_restruct_sec_ie(struct adapter *adapter, u8 *in_ie, u8 *out_ie, uint in_len);
+int rtw_restruct_wmm_ie(struct adapter *adapter, u8 *in_ie, u8 *out_ie, uint in_len, uint initial_out_len);
+void rtw_init_registrypriv_dev_network(struct adapter *adapter);
 
-extern void rtw_update_registrypriv_dev_network(struct adapter *adapter);
+void rtw_update_registrypriv_dev_network(struct adapter *adapter);
 
-extern void _rtw_join_timeout_handler(struct timer_list *t);
-extern void rtw_scan_timeout_handler(struct timer_list *t);
+void _rtw_join_timeout_handler(struct timer_list *t);
+void rtw_scan_timeout_handler(struct timer_list *t);
 
-extern void rtw_dynamic_check_timer_handler(struct adapter *adapter);
+void rtw_dynamic_check_timer_handler(struct adapter *adapter);
 bool rtw_is_scan_deny(struct adapter *adapter);
 void rtw_clear_scan_deny(struct adapter *adapter);
 void rtw_set_scan_deny(struct adapter *adapter, u32 ms);
 
 void rtw_free_mlme_priv_ie_data(struct mlme_priv *pmlmepriv);
 
-extern void _rtw_free_mlme_priv(struct mlme_priv *pmlmepriv);
+void _rtw_free_mlme_priv(struct mlme_priv *pmlmepriv);
 
 /* extern struct wlan_network* _rtw_dequeue_network(struct __queue *queue); */
 
-extern struct wlan_network *rtw_alloc_network(struct mlme_priv *pmlmepriv);
+struct wlan_network *rtw_alloc_network(struct mlme_priv *pmlmepriv);
 
 
-extern void _rtw_free_network(struct mlme_priv *pmlmepriv, struct wlan_network *pnetwork, u8 isfreeall);
-extern void _rtw_free_network_nolock(struct mlme_priv *pmlmepriv, struct wlan_network *pnetwork);
+void _rtw_free_network(struct mlme_priv *pmlmepriv, struct wlan_network *pnetwork, u8 isfreeall);
+void _rtw_free_network_nolock(struct mlme_priv *pmlmepriv, struct wlan_network *pnetwork);
 
 
-extern struct wlan_network *_rtw_find_network(struct __queue *scanned_queue, u8 *addr);
+struct wlan_network *_rtw_find_network(struct __queue *scanned_queue, u8 *addr);
 
 bool rtw_if_up(struct adapter *padapter);
 

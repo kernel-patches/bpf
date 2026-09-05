@@ -38,8 +38,10 @@
 #include <linux/slab.h>
 #include <linux/sunrpc/svc_xprt.h>
 #include <net/net_namespace.h>
+#include "auth.h"
 #include "idmap.h"
 #include "nfsd.h"
+#include "nfserr.h"
 #include "netns.h"
 #include "vfs.h"
 

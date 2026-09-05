@@ -21,7 +21,6 @@
 #ifndef __AMDGPU_UMC_H__
 #define __AMDGPU_UMC_H__
 #include "amdgpu_ras.h"
-#include "amdgpu_mca.h"
 /*
  * (addr / 256) * 4096, the higher 26 bits in ErrorAddr
  * is the index of 4KB block
@@ -45,12 +44,6 @@
 #define LOOP_UMC_INST(umc_inst) for ((umc_inst) = 0; (umc_inst) < adev->umc.umc_inst_num; (umc_inst)++)
 #define LOOP_UMC_CH_INST(ch_inst) for ((ch_inst) = 0; (ch_inst) < adev->umc.channel_inst_num; (ch_inst)++)
 #define LOOP_UMC_INST_AND_CH(umc_inst, ch_inst) LOOP_UMC_INST((umc_inst)) LOOP_UMC_CH_INST((ch_inst))
-
-#define LOOP_UMC_NODE_INST(node_inst) \
-		for_each_set_bit((node_inst), &(adev->umc.active_mask), adev->umc.node_inst_num)
-
-#define LOOP_UMC_EACH_NODE_INST_AND_CH(node_inst, umc_inst, ch_inst) \
-		LOOP_UMC_NODE_INST((node_inst)) LOOP_UMC_INST_AND_CH((umc_inst), (ch_inst))
 
 /* Page retirement tag */
 #define UMC_ECC_NEW_DETECTED_TAG       0x1
@@ -78,18 +71,6 @@
 #define UMC_NPS_SHIFT 40
 #define UMC_NPS_MASK 0xffULL
 
-/* three column bits and one row bit in MCA address flip
- * in bad page retirement
- */
-#define RETIRE_FLIP_BITS_NUM 4
-
-struct amdgpu_umc_flip_bits {
-	uint32_t flip_bits_in_pa[RETIRE_FLIP_BITS_NUM];
-	uint32_t flip_row_bit;
-	uint32_t r13_in_pa;
-	uint32_t bit_num;
-};
-
 typedef int (*umc_func)(struct amdgpu_device *adev, uint32_t node_inst,
 			uint32_t umc_inst, uint32_t ch_inst, void *data);
 
@@ -101,20 +82,6 @@ struct amdgpu_umc_ras {
 				      void *ras_error_status);
 	void (*ecc_info_query_ras_error_address)(struct amdgpu_device *adev,
 					void *ras_error_status);
-	bool (*check_ecc_err_status)(struct amdgpu_device *adev,
-			enum amdgpu_mca_error_type type, void *ras_error_status);
-	int (*update_ecc_status)(struct amdgpu_device *adev,
-			uint64_t status, uint64_t ipid, uint64_t addr);
-	int (*convert_ras_err_addr)(struct amdgpu_device *adev,
-			struct ras_err_data *err_data,
-			struct ta_ras_query_address_input *addr_in,
-			struct ta_ras_query_address_output *addr_out,
-			bool dump_addr);
-	uint32_t (*get_die_id_from_pa)(struct amdgpu_device *adev,
-			uint64_t mca_addr, uint64_t retired_page);
-	void (*get_retire_flip_bits)(struct amdgpu_device *adev);
-	void (*mca_ipid_parse)(struct amdgpu_device *adev, uint64_t ipid,
-			uint32_t *did, uint32_t *ch, uint32_t *umc_inst, uint32_t *sid);
 };
 
 struct amdgpu_umc_funcs {
@@ -144,9 +111,7 @@ struct amdgpu_umc {
 	struct amdgpu_umc_ras *ras;
 
 	/* active mask for umc node instance */
-	unsigned long active_mask;
-
-	struct amdgpu_umc_flip_bits flip_bits;
+	u64 active_mask;
 
 	unsigned long err_addr_cnt;
 };
@@ -179,21 +144,6 @@ int amdgpu_umc_page_retirement_mca(struct amdgpu_device *adev,
 int amdgpu_umc_loop_channels(struct amdgpu_device *adev,
 			umc_func func, void *data);
 
-int amdgpu_umc_update_ecc_status(struct amdgpu_device *adev,
-				uint64_t status, uint64_t ipid, uint64_t addr);
-int amdgpu_umc_logs_ecc_err(struct amdgpu_device *adev,
-		struct radix_tree_root *ecc_tree, struct ras_ecc_err *ecc_err);
-
 void amdgpu_umc_handle_bad_pages(struct amdgpu_device *adev,
 			void *ras_error_status);
-int amdgpu_umc_pages_in_a_row(struct amdgpu_device *adev,
-			struct ras_err_data *err_data, uint64_t pa_addr);
-int amdgpu_umc_lookup_bad_pages_in_a_row(struct amdgpu_device *adev,
-			uint64_t pa_addr, uint64_t *pfns, int len);
-int amdgpu_umc_mca_to_addr(struct amdgpu_device *adev,
-			uint64_t err_addr, uint32_t ch, uint32_t umc,
-			uint32_t node, uint32_t socket,
-			struct ta_ras_query_address_output *addr_out, bool dump_addr);
-int amdgpu_umc_pa2mca(struct amdgpu_device *adev,
-		uint64_t pa, uint64_t *mca, enum amdgpu_memory_partition nps);
 #endif

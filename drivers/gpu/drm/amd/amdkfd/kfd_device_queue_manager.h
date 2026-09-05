@@ -281,6 +281,7 @@ struct device_queue_manager {
 	uint32_t		wait_times;
 
 	wait_queue_head_t	destroy_wait;
+	struct delayed_work	notify_unmap_work;
 
 	/* for per-queue reset support */
 	struct dqm_detect_hang_info *detect_hang_info;
@@ -333,6 +334,8 @@ int debug_refresh_runlist(struct device_queue_manager *dqm);
 bool kfd_dqm_is_queue_in_process(struct device_queue_manager *dqm,
 				 struct qcm_process_device *qpd,
 				 int doorbell_off, u32 *queue_format);
+int kfd_reset_queue_mes(struct device_queue_manager *dqm, int queue_type,
+			int pipe, int queue, unsigned int db);
 size_t mqd_size_from_queue_type(struct device_queue_manager *dqm,
 				enum kfd_queue_type type);
 

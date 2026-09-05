@@ -646,12 +646,15 @@ static const struct kobj_type klp_ktype_patch = {
 
 static void klp_kobj_release_object(struct kobject *kobj)
 {
+	struct klp_patch *patch;
 	struct klp_object *obj;
 
 	obj = container_of(kobj, struct klp_object, kobj);
+	patch = obj->patch;
 
 	if (obj->dynamic)
 		klp_free_object_dynamic(obj);
+	kobject_put(&patch->kobj);
 }
 
 static const struct kobj_type klp_ktype_object = {
@@ -662,12 +665,15 @@ static const struct kobj_type klp_ktype_object = {
 
 static void klp_kobj_release_func(struct kobject *kobj)
 {
+	struct klp_object *obj;
 	struct klp_func *func;
 
 	func = container_of(kobj, struct klp_func, kobj);
+	obj = func->obj;
 
 	if (func->nop)
 		klp_free_func_nop(func);
+	kobject_put(&obj->kobj);
 }
 
 static const struct kobj_type klp_ktype_func = {
@@ -799,9 +805,6 @@ void klp_free_replaced_patches_async(struct klp_patch *new_patch)
 
 static int klp_init_func(struct klp_object *obj, struct klp_func *func)
 {
-	if (!func->old_name)
-		return -EINVAL;
-
 	/*
 	 * NOPs get the address later. The patched module must be loaded,
 	 * see klp_init_object_loaded().
@@ -946,7 +949,9 @@ static void klp_init_func_early(struct klp_object *obj,
 				struct klp_func *func)
 {
 	kobject_init(&func->kobj, &klp_ktype_func);
+	kobject_get(&obj->kobj);
 	list_add_tail(&func->node, &obj->func_list);
+	func->obj = obj;
 }
 
 static void klp_init_object_early(struct klp_patch *patch,
@@ -954,7 +959,9 @@ static void klp_init_object_early(struct klp_patch *patch,
 {
 	INIT_LIST_HEAD(&obj->func_list);
 	kobject_init(&obj->kobj, &klp_ktype_object);
+	kobject_get(&patch->kobj);
 	list_add_tail(&obj->node, &patch->obj_list);
+	obj->patch = patch;
 }
 
 static void klp_init_patch_early(struct klp_patch *patch)
@@ -1092,6 +1099,25 @@ err:
 	return ret;
 }
 
+static int klp_check_patch(struct klp_patch *patch)
+{
+	struct klp_object *obj;
+	struct klp_func *func;
+
+	if (!patch || !patch->mod || !patch->objs)
+		return -EINVAL;
+
+	klp_for_each_object_static(patch, obj) {
+		if (!obj->funcs)
+			return -EINVAL;
+		klp_for_each_func_static(obj, func) {
+			if (!func->old_name)
+				return -EINVAL;
+		}
+	}
+	return 0;
+}
+
 /**
  * klp_enable_patch() - enable the livepatch
  * @patch:	patch to be enabled
@@ -1108,16 +1134,10 @@ err:
 int klp_enable_patch(struct klp_patch *patch)
 {
 	int ret;
-	struct klp_object *obj;
 
-	if (!patch || !patch->mod || !patch->objs)
-		return -EINVAL;
-
-	klp_for_each_object_static(patch, obj) {
-		if (!obj->funcs)
-			return -EINVAL;
-	}
-
+	ret = klp_check_patch(patch);
+	if (ret)
+		return ret;
 
 	if (!is_livepatch_module(patch->mod)) {
 		pr_err("module %s is not marked as a livepatch module\n",

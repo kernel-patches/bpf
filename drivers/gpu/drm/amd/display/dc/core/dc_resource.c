@@ -55,11 +55,13 @@
 #if defined(CONFIG_DRM_AMD_DC_SI)
 #include "dce60/dce60_resource.h"
 #endif
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 #include "dce80/dce80_resource.h"
 #include "dce100/dce100_resource.h"
 #include "dce110/dce110_resource.h"
 #include "dce112/dce112_resource.h"
 #include "dce120/dce120_resource.h"
+#endif
 #include "dcn10/dcn10_resource.h"
 #include "dcn20/dcn20_resource.h"
 #include "dcn21/dcn21_resource.h"
@@ -80,6 +82,7 @@
 #include "dcn401/dcn401_resource.h"
 #include "dcn42/dcn42_resource.h"
 #include "dcn42b/dcn42b_resource.h"
+#include "dcn60/dcn60_resource.h"
 #if defined(CONFIG_DRM_AMD_DC_FP)
 #include "dc_spl_translate.h"
 #endif
@@ -99,7 +102,7 @@
 #define DC_LOGGER_INIT(logger)
 #include "link/hwss/link_hwss_hpo_frl.h"
 #include "dml/dml1_frl_cap_chk.h"
-#include "dml2_0/dml2_wrapper.h"
+#include "dml2_wrapper/dml2_wrapper.h"
 
 #define UNABLE_TO_SPLIT -1
 
@@ -261,6 +264,9 @@ enum dce_version resource_parse_asic_id(struct hw_asic_id asic_id)
 	case AMDGPU_FAMILY_GC_11_5_4:
 			dc_version = DCN_VERSION_4_2;
 	break;
+	case AMDGPU_FAMILY_GC_13_0_1:
+			dc_version = DCN_VERSION_6_0;
+		break;
 	default:
 		dc_version = DCE_VERSION_UNKNOWN;
 		break;
@@ -289,6 +295,7 @@ struct resource_pool *dc_create_resource_pool(struct dc  *dc,
 			init_data->num_virtual_links, dc);
 		break;
 #endif
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 	case DCE_VERSION_8_0:
 		res_pool = dce80_create_resource_pool(
 				(uint8_t)init_data->num_virtual_links, dc);
@@ -320,6 +327,7 @@ struct resource_pool *dc_create_resource_pool(struct dc  *dc,
 		res_pool = dce120_create_resource_pool(
 				(uint8_t)init_data->num_virtual_links, dc);
 		break;
+#endif
 
 #if defined(CONFIG_DRM_AMD_DC_FP)
 	case DCN_VERSION_1_0:
@@ -382,6 +390,9 @@ struct resource_pool *dc_create_resource_pool(struct dc  *dc,
 		break;
 	case DCN_VERSION_4_2B:
 		res_pool = dcn42b_create_resource_pool(init_data, dc);
+		break;
+	case DCN_VERSION_6_0:
+		res_pool = dcn60_create_resource_pool(init_data, dc);
 		break;
 #endif /* CONFIG_DRM_AMD_DC_FP */
 	default:
@@ -817,6 +828,36 @@ static enum dc_pixel_format convert_pixel_format_to_dalsurface(
 	case SURFACE_PIXEL_FORMAT_VIDEO_420_10bpc_YCbCr:
 	case SURFACE_PIXEL_FORMAT_VIDEO_420_10bpc_YCrCb:
 		dal_pixel_format = PIXEL_FORMAT_420BPP10;
+		break;
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_CrCb_P208:
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_CbCr_P208:
+		dal_pixel_format = PIXEL_FORMAT_422BPP8;
+		break;
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_CrCb_P210:
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_CbCr_P210:
+		dal_pixel_format = PIXEL_FORMAT_422BPP10;
+		break;
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_CrCb_P212:
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_CbCr_P212:
+		dal_pixel_format = PIXEL_FORMAT_422BPP12;
+		break;
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_YCrYCb:
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_YCbYCr:
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_CrYCbY:
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_CbYCrY:
+		dal_pixel_format = PIXEL_FORMAT_422BPP8;
+		break;
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_10bpc_YCrYCb:
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_10bpc_YCbYCr:
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_10bpc_CrYCbY:
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_10bpc_CbYCrY:
+		dal_pixel_format = PIXEL_FORMAT_422BPP10;
+		break;
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_12bpc_YCrYCb:
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_12bpc_YCbYCr:
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_12bpc_CrYCbY:
+	case SURFACE_PIXEL_FORMAT_VIDEO_422_12bpc_CbYCrY:
+		dal_pixel_format = PIXEL_FORMAT_422BPP12;
 		break;
 	case SURFACE_PIXEL_FORMAT_GRPH_ARGB16161616:
 	case SURFACE_PIXEL_FORMAT_GRPH_ABGR16161616:
@@ -1516,6 +1557,15 @@ void resource_build_test_pattern_params(struct resource_context *res_ctx,
 	}
 }
 
+enum upsp_mode resource_is_upsp_required(enum surface_pixel_format format)
+{
+	if (format >= SURFACE_PIXEL_FORMAT_VIDEO_BEGIN && format <= SURFACE_PIXEL_FORMAT_VIDEO_420_10bpc_YCrCb) //420 Formats
+		return UPSP_HORIZONTAL_VERTICAL_UPSAMPLING;
+	if (format > SURFACE_PIXEL_FORMAT_VIDEO_420_10bpc_YCrCb && format < SURFACE_PIXEL_FORMAT_SUBSAMPLE_END) //422 Formats
+		return UPSP_HORIZONTAL_UPSAMPLING_ONLY;
+	return UPSP_BYPASS;
+}
+
 bool resource_build_scaling_params(struct pipe_ctx *pipe_ctx)
 {
 	const struct dc_plane_state *plane_state = pipe_ctx->plane_state;
@@ -1561,6 +1611,7 @@ bool resource_build_scaling_params(struct pipe_ctx *pipe_ctx)
 			pipe_ctx->plane_res.scl_data.lb_params.depth = LB_PIXEL_DEPTH_30BPP;
 
 		pipe_ctx->plane_res.scl_data.lb_params.alpha_en = plane_state->per_pixel_alpha;
+		pipe_ctx->plane_res.scl_data.upsp = resource_is_upsp_required(plane_state->format);
 
 		// Convert pipe_ctx to respective input params for SPL
 		translate_SPL_in_params_from_pipe_ctx(pipe_ctx, spl_in);
@@ -1750,7 +1801,11 @@ bool resource_can_pipe_disable_cursor(struct pipe_ctx *pipe_ctx)
 		 * pipe-split, merge together per same height.
 		 */
 		for (split_pipe = pipe_ctx->top_pipe; split_pipe;
-		     split_pipe = split_pipe->top_pipe)
+		     split_pipe = split_pipe->top_pipe) {
+
+			if (split_pipe == test_pipe)
+				continue;
+
 			if (split_pipe->plane_state->layer_index == test_pipe->plane_state->layer_index) {
 				struct rect r2_half;
 
@@ -1762,6 +1817,7 @@ bool resource_can_pipe_disable_cursor(struct pipe_ctx *pipe_ctx)
 				r2_bottom = min(r2_bottom, r2_half.y + r2_half.height);
 				break;
 			}
+		}
 
 		if (r1.x >= r2.x && r1.y >= r2.y && r1_right <= r2_right && r1_bottom <= r2_bottom)
 			return true;
@@ -2951,6 +3007,11 @@ static inline int find_acquired_dio_link_enc_for_link(
 
 static inline int find_fixed_dio_link_enc(const struct dc_link *link)
 {
+	/* virtual links own their link encoder directly and are never
+	 * registered into pool->link_encoders[]. */
+	if (link->connector_signal == SIGNAL_TYPE_VIRTUAL)
+		return -1;
+
 	/* the 8b10b dp phy can only use fixed link encoder */
 	return link->eng_id;
 }
@@ -3096,6 +3157,8 @@ static bool add_dio_link_enc_to_ctx(const struct dc *dc,
 
 	if (enc_index >= 0)
 		pipe_ctx->link_res.dio_link_enc = pool->link_encoders[enc_index];
+	else
+		pipe_ctx->link_res.dio_link_enc = stream->link->link_enc;
 
 	return pipe_ctx->link_res.dio_link_enc != NULL;
 }
@@ -4325,8 +4388,7 @@ bool dc_resource_is_dsc_encoding_supported(const struct dc *dc)
 
 static bool planes_changed_for_existing_stream(struct dc_state *context,
 					       struct dc_stream_state *stream,
-					       const struct dc_validation_set set[],
-					       unsigned int set_count)
+					       const struct dc_validation_set *set)
 {
 	unsigned int i, j;
 	struct dc_stream_status *stream_status = NULL;
@@ -4343,18 +4405,18 @@ static bool planes_changed_for_existing_stream(struct dc_state *context,
 		return false;
 	}
 
-	for (i = 0; i < set_count; i++)
-		if (set[i].stream == stream)
+	for (i = 0; i < set->stream_count; i++)
+		if (set->streams[i].stream == stream)
 			break;
 
-	if (i == set_count)
+	if (i == set->stream_count)
 		ASSERT(0);
 
-	if (set[i].plane_count != stream_status->plane_count)
+	if (set->streams[i].plane_count != stream_status->plane_count)
 		return true;
 
-	for (j = 0; j < set[i].plane_count; j++)
-		if (set[i].plane_states[j] != stream_status->plane_states[j])
+	for (j = 0; j < set->streams[i].plane_count; j++)
+		if (set->streams[i].plane_states[j] != stream_status->plane_states[j])
 			return true;
 
 	return false;
@@ -4363,34 +4425,66 @@ static bool planes_changed_for_existing_stream(struct dc_state *context,
 static bool add_all_planes_for_stream(
 		const struct dc *dc,
 		struct dc_stream_state *stream,
-		const struct dc_validation_set set[],
-		unsigned int set_count,
+		const struct dc_validation_set *set,
 		struct dc_state *state)
 {
 	unsigned int i, j;
 
-	for (i = 0; i < set_count; i++)
-		if (set[i].stream == stream)
+	for (i = 0; i < set->stream_count; i++)
+		if (set->streams[i].stream == stream)
 			break;
 
-	if (i == set_count) {
+	if (i == set->stream_count) {
 		dm_error("Stream %p not found in set!\n", stream);
 		return false;
 	}
 
-	for (j = 0; j < set[i].plane_count; j++)
-		if (!dc_state_add_plane(dc, stream, set[i].plane_states[j], state))
+	for (j = 0; j < set->streams[i].plane_count; j++)
+		if (!dc_state_add_plane(dc, stream, set->streams[i].plane_states[j], state))
 			return false;
 
 	return true;
 }
 
 /**
+ * resource_validate_probe_set - Validate a probe descriptor set against the ASIC.
+ * @dc:          DC instance providing the HWSS capability hooks
+ * @probes:      desired probe descriptors
+ * @probe_count: number of valid entries in @probes
+ *
+ * Return: DC_OK if achievable, otherwise a DC error.
+ */
+enum dc_status resource_validate_probe_set(struct dc *dc,
+		const struct dc_probe_state *probes,
+		uint8_t probe_count)
+{
+	uint8_t i;
+
+	if (probe_count == 0)
+		return DC_OK;
+
+	if (!dc->hwss.program_perfmon)
+		return DC_NOT_SUPPORTED;
+
+	if (probe_count > MAX_PROBES)
+		return DC_NOT_SUPPORTED;
+
+	for (i = 0; i < probe_count; i++) {
+		if (probes[i].target_state == DC_PROBE_MEASURING)
+			return DC_NOT_SUPPORTED;
+
+		if (probes[i].scope.type != DC_PROBE_SCOPE_GLOBAL)
+			return DC_NOT_SUPPORTED;
+	}
+
+	return DC_OK;
+}
+
+/**
  * dc_validate_with_context - Validate and update the potential new stream in the context object
  *
  * @dc: Used to get the current state status
- * @set: An array of dc_validation_set with all the current streams reference
- * @set_count: Total of streams
+ * @set: Root validation object holding all streams and their planes
  * @context: New context
  * @validate_mode: identify the validation mode
  *
@@ -4404,22 +4498,20 @@ static bool add_all_planes_for_stream(
  * In case of success, return DC_OK (1), otherwise, return a DC error.
  */
 enum dc_status dc_validate_with_context(struct dc *dc,
-					const struct dc_validation_set set[],
-					unsigned int set_count,
+					const struct dc_validation_set *set,
 					struct dc_state *context,
 					enum dc_validate_mode validate_mode)
 {
 	struct dc_stream_state *unchanged_streams[MAX_PIPES] = { 0 };
 	struct dc_stream_state *del_streams[MAX_PIPES] = { 0 };
 	struct dc_stream_state *add_streams[MAX_PIPES] = { 0 };
-	int old_stream_count = context->stream_count;
+	unsigned int old_stream_count = context->stream_count;
 	enum dc_status res = DC_ERROR_UNEXPECTED;
-	int unchanged_streams_count = 0;
-	int del_streams_count = 0;
-	int add_streams_count = 0;
+	unsigned int unchanged_streams_count = 0;
+	unsigned int del_streams_count = 0;
+	unsigned int add_streams_count = 0;
 	bool found = false;
-	int i, j;
-	unsigned int k;
+	unsigned int i, j, k;
 
 	DC_LOGGER_INIT(dc->ctx->logger);
 
@@ -4427,8 +4519,8 @@ enum dc_status dc_validate_with_context(struct dc *dc,
 	for (i = 0; i < old_stream_count; i++) {
 		struct dc_stream_state *stream = context->streams[i];
 
-		for (j = 0; j < set_count; j++) {
-			if (stream == set[j].stream) {
+		for (j = 0; j < set->stream_count; j++) {
+			if (stream == set->streams[j].stream) {
 				found = true;
 				break;
 			}
@@ -4441,8 +4533,8 @@ enum dc_status dc_validate_with_context(struct dc *dc,
 	}
 
 	/* Second, build a list of new streams */
-	for (i = 0; i < set_count; i++) {
-		struct dc_stream_state *stream = set[i].stream;
+	for (i = 0; i < set->stream_count; i++) {
+		struct dc_stream_state *stream = set->streams[i].stream;
 
 		for (j = 0; j < old_stream_count; j++) {
 			if (stream == context->streams[j]) {
@@ -4460,10 +4552,10 @@ enum dc_status dc_validate_with_context(struct dc *dc,
 	/* Build a list of unchanged streams which is necessary for handling
 	 * planes change such as added, removed, and updated.
 	 */
-	for (i = 0; i < set_count; i++) {
+	for (i = 0; i < set->stream_count; i++) {
 		/* Check if stream is part of the delete list */
 		for (j = 0; j < del_streams_count; j++) {
-			if (set[i].stream == del_streams[j]) {
+			if (set->streams[i].stream == del_streams[j]) {
 				found = true;
 				break;
 			}
@@ -4472,7 +4564,7 @@ enum dc_status dc_validate_with_context(struct dc *dc,
 		if (!found) {
 			/* Check if stream is part of the add list */
 			for (j = 0; j < add_streams_count; j++) {
-				if (set[i].stream == add_streams[j]) {
+				if (set->streams[i].stream == add_streams[j]) {
 					found = true;
 					break;
 				}
@@ -4480,7 +4572,7 @@ enum dc_status dc_validate_with_context(struct dc *dc,
 		}
 
 		if (!found)
-			unchanged_streams[unchanged_streams_count++] = set[i].stream;
+			unchanged_streams[unchanged_streams_count++] = set->streams[i].stream;
 
 		found = false;
 	}
@@ -4489,8 +4581,7 @@ enum dc_status dc_validate_with_context(struct dc *dc,
 	for (i = 0; i < unchanged_streams_count; i++) {
 		if (planes_changed_for_existing_stream(context,
 						       unchanged_streams[i],
-						       set,
-						       set_count)) {
+						       set)) {
 
 			if (!dc_state_rem_all_planes_for_stream(dc,
 							  unchanged_streams[i],
@@ -4558,7 +4649,7 @@ enum dc_status dc_validate_with_context(struct dc *dc,
 		if (res != DC_OK)
 			goto fail;
 
-		if (!add_all_planes_for_stream(dc, add_streams[i], set, set_count, context)) {
+		if (!add_all_planes_for_stream(dc, add_streams[i], set, context)) {
 			res = DC_FAIL_ATTACH_SURFACES;
 			goto fail;
 		}
@@ -4568,9 +4659,8 @@ enum dc_status dc_validate_with_context(struct dc *dc,
 	for (i = 0; i < unchanged_streams_count; i++) {
 		if (planes_changed_for_existing_stream(context,
 						       unchanged_streams[i],
-						       set,
-						       set_count)) {
-			if (!add_all_planes_for_stream(dc, unchanged_streams[i], set, set_count, context)) {
+						       set)) {
+			if (!add_all_planes_for_stream(dc, unchanged_streams[i], set, context)) {
 				res = DC_FAIL_ATTACH_SURFACES;
 				goto fail;
 			}
@@ -4760,6 +4850,10 @@ enum dc_status dc_validate_global_state(
 
 	if (result == DC_OK)
 		result = dc->res_pool->funcs->validate_bandwidth(dc, new_ctx, validate_mode);
+
+	if (result == DC_OK)
+		result = resource_validate_probe_set(dc, new_ctx->probes,
+				(uint8_t)new_ctx->probe_count);
 
 	return result;
 }
@@ -5221,6 +5315,81 @@ void resource_build_info_frame(struct pipe_ctx *pipe_ctx)
 	}
 
 	patch_gamut_packet_checksum(&info->gamut);
+}
+
+/*
+ * Physical-clock resource mapping used by the DCE and DCN resource pools.
+ * Unit tests provide their own stub (see dc_resource_ut_helpers.c).
+ */
+enum {
+	CLK_SRC_PLL0 = 0,
+	CLK_SRC_PLL1,
+	CLK_SRC_PLL2,
+	CLK_SRC_PLL3,
+	CLK_SRC_PLL4,
+	CLK_SRC_PLL5,
+};
+
+static struct clock_source *find_matching_pll(
+		struct resource_context *res_ctx,
+		const struct resource_pool *pool,
+		const struct dc_stream_state *const stream)
+{
+	(void)res_ctx;
+	switch (stream->link->link_enc->transmitter) {
+	case TRANSMITTER_UNIPHY_A:
+		return pool->clock_sources[CLK_SRC_PLL0];
+	case TRANSMITTER_UNIPHY_B:
+		return pool->clock_sources[CLK_SRC_PLL1];
+	case TRANSMITTER_UNIPHY_C:
+		return pool->clock_sources[CLK_SRC_PLL2];
+	case TRANSMITTER_UNIPHY_D:
+		return pool->clock_sources[CLK_SRC_PLL3];
+	case TRANSMITTER_UNIPHY_E:
+		return pool->clock_sources[CLK_SRC_PLL4];
+	case TRANSMITTER_UNIPHY_F:
+		return pool->clock_sources[CLK_SRC_PLL5];
+	default:
+		return NULL;
+	}
+}
+
+enum dc_status resource_map_phy_clock_resources(
+		const struct dc *dc,
+		struct dc_state *context,
+		struct dc_stream_state *stream)
+{
+
+	/* acquire new resources */
+	struct pipe_ctx *pipe_ctx = resource_get_otg_master_for_stream(
+			&context->res_ctx, stream);
+
+	if (!pipe_ctx)
+		return DC_ERROR_UNEXPECTED;
+
+	if (dc_is_dp_signal(pipe_ctx->stream->signal)
+		|| dc_is_virtual_signal(pipe_ctx->stream->signal))
+		pipe_ctx->clock_source =
+				dc->res_pool->dp_clock_source;
+	else if (pipe_ctx->stream->signal == SIGNAL_TYPE_HDMI_FRL)
+			pipe_ctx->clock_source =
+				dc->res_pool->dp_clock_source;
+	else {
+		if (stream && stream->link && stream->link->link_enc)
+			pipe_ctx->clock_source = find_matching_pll(
+				&context->res_ctx, dc->res_pool,
+				stream);
+	}
+
+	if (pipe_ctx->clock_source == NULL)
+		return DC_NO_CLOCK_SOURCE_RESOURCE;
+
+	resource_reference_clock_source(
+		&context->res_ctx,
+		dc->res_pool,
+		pipe_ctx->clock_source);
+
+	return DC_OK;
 }
 
 enum dc_status resource_map_clock_resources(

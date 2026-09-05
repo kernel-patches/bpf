@@ -50,14 +50,6 @@ static inline void kvm_xen_sw_enable_lapic(struct kvm_vcpu *vcpu)
 		kvm_xen_inject_vcpu_vector(vcpu);
 }
 
-static inline bool kvm_xen_is_tsc_leaf(struct kvm_vcpu *vcpu, u32 function)
-{
-	return static_branch_unlikely(&kvm_xen_enabled.key) &&
-	       vcpu->arch.xen.cpuid.base &&
-	       function <= vcpu->arch.xen.cpuid.limit &&
-	       function == (vcpu->arch.xen.cpuid.base | XEN_CPUID_LEAF(3));
-}
-
 static inline bool kvm_xen_msr_enabled(struct kvm *kvm)
 {
 	return static_branch_unlikely(&kvm_xen_enabled.key) &&
@@ -177,11 +169,6 @@ static inline bool kvm_xen_timer_enabled(struct kvm_vcpu *vcpu)
 {
 	return false;
 }
-
-static inline bool kvm_xen_is_tsc_leaf(struct kvm_vcpu *vcpu, u32 function)
-{
-	return false;
-}
 #endif
 
 int kvm_xen_hypercall(struct kvm_vcpu *vcpu);
@@ -248,6 +235,11 @@ struct compat_shared_info {
 #define COMPAT_EVTCHN_2L_NR_CHANNELS (8 *				\
 				      sizeof_field(struct compat_shared_info, \
 						   evtchn_pending))
+
+/* Latched VM-wide mode; the KVM equivalent of Xen's !has_32bit_shinfo(). */
+#define kvm_xen_has_64bit_shinfo(kvm) \
+	(IS_ENABLED(CONFIG_64BIT) && READ_ONCE((kvm)->arch.xen.long_mode))
+
 struct compat_vcpu_runstate_info {
     int state;
     uint64_t state_entry_time;

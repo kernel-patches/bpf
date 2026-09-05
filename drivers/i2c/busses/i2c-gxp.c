@@ -4,6 +4,7 @@
 #include <linux/err.h>
 #include <linux/io.h>
 #include <linux/i2c.h>
+#include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
@@ -551,7 +552,7 @@ static int gxp_i2c_probe(struct platform_device *pdev)
 	rc = devm_request_irq(&pdev->dev, drvdata->irq, gxp_i2c_irq_handler,
 			      IRQF_SHARED, gxp_i2c_name[drvdata->engine], drvdata);
 	if (rc < 0)
-		return dev_err_probe(&pdev->dev, rc, "irq request failed\n");
+		return rc;
 
 	i2c_parse_fw_timings(&pdev->dev, &drvdata->t, true);
 

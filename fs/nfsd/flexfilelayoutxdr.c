@@ -6,6 +6,7 @@
 #include <linux/nfs4.h>
 
 #include "nfsd.h"
+#include "nfserr.h"
 #include "flexfilelayoutxdr.h"
 
 #define NFSDDBG_FACILITY	NFSDDBG_PNFS
@@ -30,19 +31,24 @@ nfsd4_ff_encode_layoutget(struct xdr_stream *xdr,
 	struct ff_idmap uid;
 	struct ff_idmap gid;
 
-	fh_len = 4 + fl->fh.size;
+	fh_len = 4 + xdr_align_size(fl->fh.fh_size);
 
-	uid.len = sprintf(uid.buf, "%u", from_kuid(&init_user_ns, fl->uid));
-	gid.len = sprintf(gid.buf, "%u", from_kgid(&init_user_ns, fl->gid));
+	uid.len = sprintf(uid.buf, "%u", fl->uid);
+	gid.len = sprintf(gid.buf, "%u", fl->gid);
 
-	/* 8 + len for recording the length, name, and padding */
-	ds_len = 20 + sizeof(stateid_opaque_t) + 4 + fh_len +
-		 8 + uid.len + 8 + gid.len;
+	/* data server entry: deviceid + efficiency + stateid + fh list +
+	 * user + group + flags + stats_collect_hint
+	 */
+	ds_len = 16 + 4 + 4 + sizeof(stateid_opaque_t) + 4 + fh_len +
+		 4 + xdr_align_size(uid.len) +
+		 4 + xdr_align_size(gid.len) +
+		 4 + 4;
 
+	/* mirror: ds_count + ds */
 	mirror_len = 4 + ds_len;
 
-	/* The layout segment */
-	len = 20 + mirror_len;
+	/* stripe_unit + mirror_count + mirror */
+	len = 12 + mirror_len;
 
 	p = xdr_reserve_space(xdr, sizeof(__be32) + len);
 	if (!p)
@@ -63,7 +69,7 @@ nfsd4_ff_encode_layoutget(struct xdr_stream *xdr,
 				    sizeof(stateid_opaque_t));
 
 	*p++ = cpu_to_be32(1);			/* single file handle */
-	p = xdr_encode_opaque(p, fl->fh.data, fl->fh.size);
+	p = xdr_encode_opaque(p, fl->fh.fh_raw, fl->fh.fh_size);
 
 	p = xdr_encode_opaque(p, uid.buf, uid.len);
 	p = xdr_encode_opaque(p, gid.buf, gid.len);
@@ -94,7 +100,8 @@ nfsd4_ff_encode_getdeviceinfo(struct xdr_stream *xdr,
 	}
 
 	/* len + padding for two strings */
-	addr_len = 16 + da->netaddr.netid_len + da->netaddr.addr_len;
+	addr_len = 8 + xdr_align_size(da->netaddr.netid_len) +
+		   xdr_align_size(da->netaddr.addr_len);
 	ver_len = 20;
 
 	len = 4 + ver_len + 4 + addr_len;

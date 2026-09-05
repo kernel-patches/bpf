@@ -17,13 +17,6 @@ static const struct dml2_soc_qos_parameters dml_dcn42b_variant_a_soc_qos_params 
 			.fclk_derate_percent = 80,
 			.dcfclk_derate_percent = 80,
 		},
-		.system_active_average = {
-			.dram_derate_percent_pixel = 30,
-			.dram_derate_percent_vm = 30,
-			.dram_derate_percent_pixel_and_vm = 30,
-			.fclk_derate_percent = 60,
-			.dcfclk_derate_percent = 60,
-		},
 		.dcn_mall_prefetch_urgent = {
 			.dram_derate_percent_pixel = 65,
 			.dram_derate_percent_vm = 30,
@@ -46,6 +39,17 @@ static const struct dml2_soc_qos_parameters dml_dcn42b_variant_a_soc_qos_params 
 			.dcfclk_derate_percent = 60,
 		},
 	},
+	.derate_table_per_dpm = {
+		.dram_per_dpm_derate_pixel = {
+			{.derate_percent = 30, .clk_upperbound_threshold_khz = 0},
+		},
+		.fclk_per_dpm_derate = {
+			{.derate_percent = 60, .clk_upperbound_threshold_khz = 0},
+		},
+		.dcfclk_per_dpm_derate = {
+			{.derate_percent = 60, .clk_upperbound_threshold_khz = 0},
+		},
+	},
 	.writeback = {
 		.base_latency_us = 12,
 		.scaling_factor_us = 0,
@@ -53,7 +57,6 @@ static const struct dml2_soc_qos_parameters dml_dcn42b_variant_a_soc_qos_params 
 	},
 	.qos_params = {
 		.dcn32x = {
-			.loaded_round_trip_latency_fclk_cycles = 106,
 			.urgent_latency_us = {
 				.base_latency_us = 4,
 				.base_latency_pixel_vm_us = 4,
@@ -61,8 +64,9 @@ static const struct dml2_soc_qos_parameters dml_dcn42b_variant_a_soc_qos_params 
 				.scaling_factor_fclk_us = 0,
 				.scaling_factor_mhz = 0,
 			},
-			.urgent_out_of_order_return_per_channel_pixel_and_vm_bytes = 4096,
+			.loaded_round_trip_latency_fclk_cycles = 106,
 			.urgent_out_of_order_return_per_channel_pixel_only_bytes = 4096,
+			.urgent_out_of_order_return_per_channel_pixel_and_vm_bytes = 4096,
 			.urgent_out_of_order_return_per_channel_vm_only_bytes = 4096,
 		},
 	},
@@ -75,7 +79,7 @@ static const struct dml2_soc_bb dml2_socbb_dcn42b = {
 				.clk_values_khz = {2},
 		},
 		.uclk = {
-				.clk_values_khz = {400000},
+				.clk_values_khz = {2400000},
 				.num_clk_values = 1,
 		},
 		.fclk = {
@@ -134,13 +138,6 @@ static const struct dml2_soc_bb dml2_socbb_dcn42b = {
 				.fclk_derate_percent = 80,
 				.dcfclk_derate_percent = 80,
 			},
-			.system_active_average = {
-				.dram_derate_percent_pixel = 30,
-				.dram_derate_percent_vm = 30,
-				.dram_derate_percent_pixel_and_vm = 30,
-				.fclk_derate_percent = 60,
-				.dcfclk_derate_percent = 60,
-			},
 			.dcn_mall_prefetch_urgent = {
 				.dram_derate_percent_pixel = 65,
 				.dram_derate_percent_vm = 30,
@@ -170,7 +167,6 @@ static const struct dml2_soc_bb dml2_socbb_dcn42b = {
 		},
 		.qos_params = {
 			.dcn32x = {
-				.loaded_round_trip_latency_fclk_cycles = 106,
 				.urgent_latency_us = {
 					.base_latency_us = 4,
 					.base_latency_pixel_vm_us = 4,
@@ -178,8 +174,9 @@ static const struct dml2_soc_bb dml2_socbb_dcn42b = {
 					.scaling_factor_fclk_us = 0,
 					.scaling_factor_mhz = 0,
 				},
-				.urgent_out_of_order_return_per_channel_pixel_and_vm_bytes = 4096,
+				.loaded_round_trip_latency_fclk_cycles = 106,
 				.urgent_out_of_order_return_per_channel_pixel_only_bytes = 4096,
+				.urgent_out_of_order_return_per_channel_pixel_and_vm_bytes = 4096,
 				.urgent_out_of_order_return_per_channel_vm_only_bytes = 4096,
 			},
 		},
@@ -210,9 +207,9 @@ static const struct dml2_soc_bb dml2_socbb_dcn42b = {
 	.fabric_datapath_to_dcn_data_return_bytes = 32,
 	.return_bus_width_bytes = 64,
 	.hostvm_min_page_size_kbytes = 4,
-	.gpuvm_min_page_size_kbytes = 256,
-	.gpuvm_max_page_table_levels = 1,
+	.gpuvm_min_page_size_kbytes = 4,
 	.hostvm_max_non_cached_page_table_levels = 2,
+	.gpuvm_max_page_table_levels = 1,
 	.phy_downspread_percent = 0.38,
 	.dcn_downspread_percent = 0.38,
 	.dispclk_dppclk_vco_speed_mhz = 3000,
@@ -222,6 +219,44 @@ static const struct dml2_soc_bb dml2_socbb_dcn42b = {
 	.mcache_size_bytes = 0,
 	.mcache_line_size_bytes = 0,
 	.max_fclk_for_uclk_dpm_khz = 2200 * 1000,
+};
+
+static const struct dml2_ip_capabilities dml2_dcn42b_max_ip_caps = {
+	.pipe_count = 4,
+	.otg_count = 3,
+	.num_dsc = 3,
+	.max_num_dp2p0_streams = 3,
+	.max_num_hdmi_frl_outputs = 0,
+	.max_num_dp2p0_outputs = 2,
+	.rob_buffer_size_kbytes = 64,
+	.config_return_buffer_size_in_kbytes = 1792,
+	.config_return_buffer_segment_size_in_kbytes = 64,
+	.meta_fifo_size_in_kentries = 32,
+	.compressed_buffer_segment_size_in_kbytes = 64,
+	.cursor_buffer_size = 42,
+	.max_flip_time_us = 110,
+	.max_flip_time_lines = 50,
+	.hostvm_mode = 0,
+	.subvp_drr_scheduling_margin_us = 100,
+	.subvp_prefetch_end_to_mall_start_us = 15,
+	.subvp_fw_processing_delay = 15,
+	.max_vactive_det_fill_delay_us = 400,
+
+	.fams2 = {
+		.max_allow_delay_us = 100 * 1000,
+		.scheduling_delay_us = 550,
+		.vertical_interrupt_ack_delay_us = 40,
+		.allow_programming_delay_us = 18,
+		.min_allow_width_us = 20,
+		.subvp_df_throttle_delay_us = 100,
+		.subvp_programming_delay_us = 200,
+		.subvp_prefetch_to_mall_delay_us = 18,
+		.drr_programming_delay_us = 35,
+
+		.lock_timeout_us = 5000,
+		.recovery_timeout_us = 5000,
+		.flip_programming_delay_us = 300,
+	},
 };
 
 #endif

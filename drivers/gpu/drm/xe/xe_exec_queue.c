@@ -207,9 +207,6 @@ static struct xe_exec_queue *__xe_exec_queue_alloc(struct xe_device *xe,
 	struct xe_gt *gt = hwe->gt;
 	int err;
 
-	/* only kernel queues can be permanent */
-	XE_WARN_ON((flags & EXEC_QUEUE_FLAG_PERMANENT) && !(flags & EXEC_QUEUE_FLAG_KERNEL));
-
 	q = kzalloc_flex(*q, lrc, width);
 	if (!q)
 		return ERR_PTR(-ENOMEM);
@@ -325,10 +322,66 @@ struct xe_lrc *xe_exec_queue_lrc(struct xe_exec_queue *q)
 	return q->lrc[0];
 }
 
+/*
+ * Publish the queue back-pointer in the LRC BOs.
+ *
+ * The BO holds no reference on the queue; the queue owns the LRCs, and
+ * therefore the BOs, instead. The back-pointer is made safe by two rules:
+ *
+ *  - It is published only once the queue is fully constructed and can no
+ *    longer be destroyed by an error path that bypasses the kref (see
+ *    xe_exec_queue_create()), so a reader that successfully takes a
+ *    reference can never be handed a queue that is freed without going
+ *    through xe_exec_queue_destroy().
+ *
+ *  - It is written and cleared under the BO dma_resv. Readers must hold
+ *    the same lock across both the read and
+ *    xe_exec_queue_get_unless_zero(), which serializes them against
+ *    xe_exec_queue_clear_lrc_bo_backpointer() below.
+ *
+ * For a multi-queue group the LRC BOs point at the primary queue, which is
+ * kept alive by the reference every secondary holds on it.
+ */
+static void xe_exec_queue_set_lrc_bo_backpointer(struct xe_exec_queue *q)
+{
+	struct xe_exec_queue *primary = xe_exec_queue_multi_queue_primary(q);
+	int i;
+
+	for (i = 0; i < q->width; ++i) {
+		struct xe_bo *bo = q->lrc[i]->bo;
+
+		xe_bo_lock(bo, false);
+		bo->q = primary;
+		xe_bo_unlock(bo);
+	}
+}
+
+/*
+ * Drop the queue back-pointer before anything belonging to the queue is
+ * torn down. This must happen before q->ops->fini(), otherwise a reader
+ * could take a reference and then operate on an already destroyed backend.
+ */
+static void xe_exec_queue_clear_lrc_bo_backpointer(struct xe_exec_queue *q)
+{
+	int i;
+
+	for (i = 0; i < q->width; ++i) {
+		struct xe_bo *bo = q->lrc[i] ? q->lrc[i]->bo : NULL;
+
+		if (!bo)
+			continue;
+
+		xe_bo_lock(bo, false);
+		bo->q = NULL;
+		xe_bo_unlock(bo);
+	}
+}
+
 static void __xe_exec_queue_fini(struct xe_exec_queue *q)
 {
 	int i;
 
+	xe_exec_queue_clear_lrc_bo_backpointer(q);
 	q->ops->fini(q);
 
 	for (i = 0; i < q->width; ++i)
@@ -453,6 +506,14 @@ struct xe_exec_queue *xe_exec_queue_create(struct xe_device *xe, struct xe_vm *v
 			goto err_post_init;
 	}
 
+	/*
+	 * Publish the LRC BO back-pointers last: past this point the queue can
+	 * only be destroyed through xe_exec_queue_destroy(), so a concurrent
+	 * reader that takes a reference via bo->q cannot race with the
+	 * kref-bypassing error paths below.
+	 */
+	xe_exec_queue_set_lrc_bo_backpointer(q);
+
 	return q;
 
 err_post_init:
@@ -530,10 +591,7 @@ struct xe_exec_queue *xe_exec_queue_create_bind(struct xe_device *xe,
 
 	migrate_vm = xe_migrate_get_vm(tile->migrate);
 	if (xe->info.has_usm) {
-		struct xe_hw_engine *hwe = xe_gt_hw_engine(gt,
-							   XE_ENGINE_CLASS_COPY,
-							   gt->usm.reserved_bcs_instance,
-							   false);
+		struct xe_hw_engine *hwe = gt->usm.paging_hwe0;
 
 		if (!hwe) {
 			xe_vm_put(migrate_vm);
@@ -845,6 +903,7 @@ static int xe_exec_queue_group_init(struct xe_device *xe, struct xe_exec_queue *
 	group->primary = q;
 	group->cgp_bo = bo;
 	INIT_LIST_HEAD(&group->list);
+	spin_lock_init(&group->suspend_lock);
 	xa_init_flags(&group->xa, XA_FLAGS_ALLOC1);
 	mutex_init(&group->list_lock);
 	q->multi_queue.group = group;
@@ -1059,6 +1118,7 @@ int xe_exec_queue_set_property_ioctl(struct drm_device *dev, void *data,
 
 static int exec_queue_user_ext_check(struct xe_exec_queue *q, u64 properties)
 {
+	struct xe_device *xe = gt_to_xe(q->gt);
 	u64 secondary_queue_valid_props = BIT_ULL(DRM_XE_EXEC_QUEUE_SET_PROPERTY_MULTI_GROUP) |
 				  BIT_ULL(DRM_XE_EXEC_QUEUE_SET_PROPERTY_MULTI_QUEUE_PRIORITY);
 
@@ -1068,6 +1128,16 @@ static int exec_queue_user_ext_check(struct xe_exec_queue *q, u64 properties)
 	 */
 	if (xe_exec_queue_is_multi_queue_secondary(q) &&
 	    properties & ~secondary_queue_valid_props)
+		return -EINVAL;
+
+	/*
+	 * HWDRM is the only supported PXP type today. It is display related and
+	 * hence can't work with multi-queue. Reject the combination. The secondary
+	 * queue path above already rejects any PXP property, so this also covers
+	 * the multi-queue primary which would otherwise allow it.
+	 */
+	if (XE_IOCTL_DBG(xe, (properties & BIT_ULL(DRM_XE_EXEC_QUEUE_SET_PROPERTY_MULTI_GROUP)) &&
+			 (properties & BIT_ULL(DRM_XE_EXEC_QUEUE_SET_PROPERTY_PXP_TYPE))))
 		return -EINVAL;
 
 	return 0;
@@ -1110,6 +1180,9 @@ static int exec_queue_user_ext_set_property(struct xe_device *xe,
 
 	idx = array_index_nospec(ext.property, ARRAY_SIZE(exec_queue_set_property_funcs));
 	if (!exec_queue_set_property_funcs[idx])
+		return -EINVAL;
+
+	if (XE_IOCTL_DBG(xe, *properties & BIT_ULL(idx)))
 		return -EINVAL;
 
 	*properties |= BIT_ULL(idx);
@@ -1557,8 +1630,12 @@ void xe_exec_queue_update_run_ticks(struct xe_exec_queue *q)
 	 * errors.
 	 */
 	lrc = q->lrc[0];
-	new_ts = xe_lrc_update_timestamp(lrc, &old_ts);
-	q->xef->run_ticks[q->class] += (new_ts - old_ts) * q->width;
+	xe_bo_lock(lrc->bo, false);
+	if (!xe_bo_is_purged(lrc->bo)) {
+		new_ts = xe_lrc_update_timestamp(lrc, &old_ts);
+		q->xef->run_ticks[q->class] += (new_ts - old_ts) * q->width;
+	}
+	xe_bo_unlock(lrc->bo);
 
 	drm_dev_exit(idx);
 }

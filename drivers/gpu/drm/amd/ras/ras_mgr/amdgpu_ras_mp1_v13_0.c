@@ -24,6 +24,7 @@
 #include "amdgpu_smu.h"
 #include "amdgpu_reset.h"
 #include "amdgpu_ras_mp1_v13_0.h"
+#include "smu13_driver_if_v13_0_6.h"
 
 #define RAS_MP1_MSG_QueryValidMcaCeCount  0x3A
 #define RAS_MP1_MSG_McaBankCeDumpDW       0x3B
@@ -37,6 +38,12 @@ static const enum smu_message_type pmfw_eeprom_msgs[] = {
 	[RAS_SMU_EraseRasTable] = SMU_MSG_EraseRasTable,
 	[RAS_SMU_GetBadPageMcaAddr] = SMU_MSG_GetBadPageMcaAddr,
 };
+
+static int mp1_v13_send_smu_msg(struct amdgpu_device *adev, enum smu_message_type msg,
+			uint32_t param, uint32_t *read_arg)
+{
+	return amdgpu_smu_ras_send_msg(adev, msg, &param, 1, read_arg, read_arg ? 1 : 0);
+}
 
 static int mp1_v13_0_get_valid_bank_count(struct ras_core_context *ras_core,
 					  u32 msg, u32 *count)
@@ -52,7 +59,7 @@ static int mp1_v13_0_get_valid_bank_count(struct ras_core_context *ras_core,
 			SMU_MSG_QueryValidMcaCeCount : SMU_MSG_QueryValidMcaCount;
 
 	if (down_read_trylock(&adev->reset_domain->sem)) {
-		ret = amdgpu_smu_ras_send_msg(adev, smu_msg, 0, count);
+		ret = mp1_v13_send_smu_msg(adev, smu_msg, 0, count);
 		up_read(&adev->reset_domain->sem);
 	} else {
 		ret = -RAS_CORE_GPU_IN_MODE1_RESET;
@@ -79,7 +86,7 @@ static int mp1_v13_0_dump_valid_bank(struct ras_core_context *ras_core,
 		offset = reg_idx * 8;
 		for (i = 0; i < ARRAY_SIZE(data); i++) {
 			param = ((idx & 0xffff) << 16) | ((offset + (i << 2)) & 0xfffc);
-			ret = amdgpu_smu_ras_send_msg(adev, smu_msg, param, &data[i]);
+			ret = mp1_v13_send_smu_msg(adev, smu_msg, param, &data[i]);
 			if (ret) {
 				RAS_DEV_ERR(adev, "ACA failed to read register[%d], offset:0x%x\n",
 					reg_idx, offset);
@@ -104,7 +111,7 @@ static int mp1_v13_0_eeprom_send_msg(struct ras_core_context *ras_core,
 	int ret = 0;
 
 	if (down_read_trylock(&adev->reset_domain->sem)) {
-		ret = amdgpu_smu_ras_send_msg(adev,
+		ret = mp1_v13_send_smu_msg(adev,
 			pmfw_eeprom_msgs[index], param, read_arg);
 		up_read(&adev->reset_domain->sem);
 	} else {
@@ -131,10 +138,24 @@ static int mp1_v13_0_get_ras_enabled_mask(struct ras_core_context *ras_core,
 	return ret;
 }
 
+static int mp1_v13_0_set_debug_mode(struct ras_core_context *ras_core, bool enable)
+{
+	struct amdgpu_device *adev = (struct amdgpu_device *)ras_core->dev;
+	u32 param = enable ? 0 : ClearMcaOnRead_UE_FLAG_MASK |
+		ClearMcaOnRead_CE_POLL_MASK;
+	int ret;
+	u32 smu_msg = SMU_MSG_ClearMcaOnRead;
+
+	ret = amdgpu_smu_ras_send_msg(adev, smu_msg,
+			&param, 1, NULL, 0);
+	return ret;
+}
+
 const struct ras_mp1_sys_func amdgpu_ras_mp1_sys_func_v13_0 = {
 	.mp1_get_valid_bank_count = mp1_v13_0_get_valid_bank_count,
 	.mp1_dump_valid_bank = mp1_v13_0_dump_valid_bank,
 	.mp1_send_eeprom_msg = mp1_v13_0_eeprom_send_msg,
 	.mp1_get_ras_enabled_mask = mp1_v13_0_get_ras_enabled_mask,
+	.mp1_set_debug_mode = mp1_v13_0_set_debug_mode,
 };
 

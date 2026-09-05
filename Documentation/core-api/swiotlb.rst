@@ -107,7 +107,7 @@ A single allocation from swiotlb is limited to IO_TLB_SIZE * IO_TLB_SEGSIZE
 bytes, which is 256 KiB with current definitions. When a device's DMA settings
 are such that the device might use swiotlb, the maximum size of a DMA segment
 must be limited to that 256 KiB. This value is communicated to higher-level
-kernel code via dma_map_mapping_size() and swiotlb_max_mapping_size(). If the
+kernel code via dma_max_mapping_size() and swiotlb_max_mapping_size(). If the
 higher-level code fails to account for this limit, it may make requests that
 are too large for swiotlb, and get a "swiotlb full" error.
 
@@ -140,8 +140,11 @@ Data structures concepts
 ------------------------
 Memory used for swiotlb bounce buffers is allocated from overall system memory
 as one or more "pools". The default pool is allocated during system boot with a
-default size of 64 MiB. The default pool size may be modified with the
-"swiotlb=" kernel boot line parameter. The default size may also be adjusted
+default size of 64 MiB, which can be changed at compile time via
+CONFIG_SWIOTLB_DEFAULT_SIZE_MB. The default pool size may also be
+modified at runtime with the "swiotlb=" kernel boot line parameter,
+which takes precedence over the compile-time default. The default size
+may also be adjusted
 due to other conditions, such as running in a CoCo VM, as described above. If
 CONFIG_SWIOTLB_DYNAMIC is enabled, additional pools may be allocated later in
 the life of the system. Each pool must be a contiguous range of physical

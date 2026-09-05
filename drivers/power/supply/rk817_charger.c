@@ -11,7 +11,7 @@
 #include <linux/unaligned.h>
 #include <linux/devm-helpers.h>
 #include <linux/mfd/rk808.h>
-#include <linux/irq.h>
+#include <linux/interrupt.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/power_supply.h>
@@ -1186,19 +1186,15 @@ static int rk817_charger_probe(struct platform_device *pdev)
 					rk817_plug_in_isr,
 					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
 					"rk817_plug_in", charger);
-	if (ret) {
-		return dev_err_probe(&pdev->dev, ret,
-				      "plug_in_irq request failed!\n");
-	}
+	if (ret)
+		return ret;
 
 	ret = devm_request_threaded_irq(charger->dev, plugout_irq, NULL,
 					rk817_plug_out_isr,
 					IRQF_TRIGGER_RISING | IRQF_ONESHOT,
 					"rk817_plug_out", charger);
-	if (ret) {
-		return dev_err_probe(&pdev->dev, ret,
-				     "plug_out_irq request failed!\n");
-	}
+	if (ret)
+		return ret;
 
 	ret = devm_delayed_work_autocancel(&pdev->dev, &charger->work,
 					   rk817_charging_monitor);

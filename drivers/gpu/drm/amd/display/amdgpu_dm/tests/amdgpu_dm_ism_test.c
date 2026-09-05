@@ -8,21 +8,11 @@
 #include <kunit/test.h>
 
 #include "dc.h"
+#include "amdgpu.h"
+#include "amdgpu_mode.h"
+#include "amdgpu_dm.h"
 #include "amdgpu_dm_ism.h"
-
-/*
- * Helper: allocate and zero-initialise a dc_stream_state for timing tests.
- * Only the timing sub-struct is accessed by the functions under test.
- */
-static struct dc_stream_state *alloc_test_stream(struct kunit *test)
-{
-	struct dc_stream_state *stream;
-
-	stream = kunit_kzalloc(test, sizeof(*stream), GFP_KERNEL);
-	KUNIT_ASSERT_NOT_NULL(test, stream);
-
-	return stream;
-}
+#include "amdgpu_dm_kunit_test_helpers.h"
 
 /*
  * Helper: allocate and zero-initialise an ISM instance.
@@ -275,7 +265,7 @@ static void dm_test_ism_sso_delay_null_stream(struct kunit *test)
 static void dm_test_ism_sso_delay_zero_frames(struct kunit *test)
 {
 	struct amdgpu_dm_ism *ism = alloc_test_ism(test);
-	struct dc_stream_state *stream = alloc_test_stream(test);
+	struct dc_stream_state *stream = dm_kunit_alloc_stream(test, NULL);
 
 	stream->timing.v_total = 1125;
 	stream->timing.h_total = 2200;
@@ -288,7 +278,7 @@ static void dm_test_ism_sso_delay_zero_frames(struct kunit *test)
 static void dm_test_ism_sso_delay_1080p60_3frames(struct kunit *test)
 {
 	struct amdgpu_dm_ism *ism = alloc_test_ism(test);
-	struct dc_stream_state *stream = alloc_test_stream(test);
+	struct dc_stream_state *stream = dm_kunit_alloc_stream(test, NULL);
 	uint64_t expected_one_frame_ns, expected;
 
 	/*
@@ -311,7 +301,7 @@ static void dm_test_ism_sso_delay_1080p60_3frames(struct kunit *test)
 static void dm_test_ism_sso_delay_4k60_1frame(struct kunit *test)
 {
 	struct amdgpu_dm_ism *ism = alloc_test_ism(test);
-	struct dc_stream_state *stream = alloc_test_stream(test);
+	struct dc_stream_state *stream = dm_kunit_alloc_stream(test, NULL);
 	uint64_t expected_one_frame_ns;
 
 	/*
@@ -347,7 +337,7 @@ static void dm_test_ism_idle_delay_null_stream(struct kunit *test)
 static void dm_test_ism_idle_delay_zero_filter_frames(struct kunit *test)
 {
 	struct amdgpu_dm_ism *ism = alloc_test_ism(test);
-	struct dc_stream_state *stream = alloc_test_stream(test);
+	struct dc_stream_state *stream = dm_kunit_alloc_stream(test, NULL);
 
 	stream->timing.v_total = 1125;
 	stream->timing.h_total = 2200;
@@ -361,7 +351,7 @@ static void dm_test_ism_idle_delay_zero_filter_frames(struct kunit *test)
 static void dm_test_ism_idle_delay_zero_entry_count(struct kunit *test)
 {
 	struct amdgpu_dm_ism *ism = alloc_test_ism(test);
-	struct dc_stream_state *stream = alloc_test_stream(test);
+	struct dc_stream_state *stream = dm_kunit_alloc_stream(test, NULL);
 
 	stream->timing.v_total = 1125;
 	stream->timing.h_total = 2200;
@@ -376,7 +366,7 @@ static void dm_test_ism_idle_delay_zero_entry_count(struct kunit *test)
 static void dm_test_ism_idle_delay_zero_delay_frames(struct kunit *test)
 {
 	struct amdgpu_dm_ism *ism = alloc_test_ism(test);
-	struct dc_stream_state *stream = alloc_test_stream(test);
+	struct dc_stream_state *stream = dm_kunit_alloc_stream(test, NULL);
 
 	stream->timing.v_total = 1125;
 	stream->timing.h_total = 2200;
@@ -392,7 +382,7 @@ static void dm_test_ism_idle_delay_zero_delay_frames(struct kunit *test)
 static void dm_test_ism_idle_delay_no_short_idles(struct kunit *test)
 {
 	struct amdgpu_dm_ism *ism = alloc_test_ism(test);
-	struct dc_stream_state *stream = alloc_test_stream(test);
+	struct dc_stream_state *stream = dm_kunit_alloc_stream(test, NULL);
 	uint64_t one_frame_ns;
 
 	/*
@@ -426,7 +416,7 @@ static void dm_test_ism_idle_delay_no_short_idles(struct kunit *test)
 static void dm_test_ism_idle_delay_enough_short_idles(struct kunit *test)
 {
 	struct amdgpu_dm_ism *ism = alloc_test_ism(test);
-	struct dc_stream_state *stream = alloc_test_stream(test);
+	struct dc_stream_state *stream = dm_kunit_alloc_stream(test, NULL);
 	uint64_t one_frame_ns, expected;
 
 	/*
@@ -461,7 +451,7 @@ static void dm_test_ism_idle_delay_enough_short_idles(struct kunit *test)
 static void dm_test_ism_idle_delay_wraps_around_buffer(struct kunit *test)
 {
 	struct amdgpu_dm_ism *ism = alloc_test_ism(test);
-	struct dc_stream_state *stream = alloc_test_stream(test);
+	struct dc_stream_state *stream = dm_kunit_alloc_stream(test, NULL);
 	uint64_t one_frame_ns, expected;
 
 	/*
@@ -497,7 +487,7 @@ static void dm_test_ism_idle_delay_wraps_around_buffer(struct kunit *test)
 static void dm_test_ism_idle_delay_old_history_cutoff(struct kunit *test)
 {
 	struct amdgpu_dm_ism *ism = alloc_test_ism(test);
-	struct dc_stream_state *stream = alloc_test_stream(test);
+	struct dc_stream_state *stream = dm_kunit_alloc_stream(test, NULL);
 	uint64_t one_frame_ns;
 
 	/*
@@ -545,7 +535,7 @@ static void dm_test_ism_idle_delay_old_history_cutoff(struct kunit *test)
 static void dm_test_ism_idle_delay_mixed_durations(struct kunit *test)
 {
 	struct amdgpu_dm_ism *ism = alloc_test_ism(test);
-	struct dc_stream_state *stream = alloc_test_stream(test);
+	struct dc_stream_state *stream = dm_kunit_alloc_stream(test, NULL);
 	uint64_t one_frame_ns;
 
 	/*
@@ -586,7 +576,7 @@ static void dm_test_ism_idle_delay_mixed_durations(struct kunit *test)
 static void dm_test_ism_idle_delay_entry_count_exceeds_history_size(struct kunit *test)
 {
 	struct amdgpu_dm_ism *ism = alloc_test_ism(test);
-	struct dc_stream_state *stream = alloc_test_stream(test);
+	struct dc_stream_state *stream = dm_kunit_alloc_stream(test, NULL);
 	uint64_t one_frame_ns, expected;
 
 	/*
@@ -861,6 +851,692 @@ static void dm_test_dispatch_next_event_no_action_state(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, (int)result, (int)DM_ISM_NUM_EVENTS);
 }
 
+/*
+ * Helper: allocate an amdgpu_crtc (which embeds the ISM) wired up to a
+ * minimally-populated amdgpu_device so that the container_of()/drm_to_adev()
+ * lookups inside the ISM event machinery resolve correctly.
+ *
+ * The amdgpu_device is large, so it must be heap-allocated via kunit_kzalloc.
+ * acrtc->base.dev points at the embedded &adev->ddev, which is what
+ * drm_to_adev() expects (it is a container_of of ddev).
+ */
+static struct amdgpu_crtc *alloc_test_acrtc(struct kunit *test,
+					    struct amdgpu_device **adev_out)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc;
+
+	adev = kunit_kzalloc(test, sizeof(*adev), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, adev);
+
+	acrtc = kunit_kzalloc(test, sizeof(*acrtc), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, acrtc);
+
+	adev->dm.dc = dm_kunit_alloc_dc_with_ctx(test);
+	adev->dm.ddev = &adev->ddev;
+	mutex_init(&adev->dm.dc_lock);
+
+	acrtc->base.dev = &adev->ddev;
+
+	if (adev_out)
+		*adev_out = adev;
+
+	return acrtc;
+}
+
+/*
+ * Helper: register an already-allocated amdgpu_crtc into the DRM device's
+ * crtc_list so that drm_for_each_crtc() iterates it. Only the list linkage is
+ * required for the ISM enable/disable/force-full-power helpers.
+ */
+static void register_test_acrtc(struct amdgpu_device *adev,
+				struct amdgpu_crtc *acrtc)
+{
+	INIT_LIST_HEAD(&adev->ddev.mode_config.crtc_list);
+	INIT_LIST_HEAD(&acrtc->base.head);
+	list_add_tail(&acrtc->base.head, &adev->ddev.mode_config.crtc_list);
+}
+
+/* ===== Tests for amdgpu_dm_ism_commit_event ===== */
+
+/**
+ * dm_test_ism_commit_event_no_state - commit_event returns early without a crtc state
+ * @test: KUnit test context
+ *
+ * When the CRTC has no atomic state (base.state == NULL) the function takes
+ * the NO_STATE early-return path and the FSM is left untouched.
+ */
+static void dm_test_ism_commit_event_no_state(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct amdgpu_dm_ism_config config = { 0 };
+
+	amdgpu_dm_ism_init(&acrtc->ism, &config);
+	acrtc->base.state = NULL;
+
+	guard(mutex)(&adev->dm.dc_lock);
+	amdgpu_dm_ism_commit_event(&acrtc->ism,
+				   DM_ISM_EVENT_BEGIN_CURSOR_UPDATE);
+
+	KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+			(int)DM_ISM_STATE_FULL_POWER_RUNNING);
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
+/**
+ * dm_test_ism_commit_event_cursor_transition - cursor begin/end drive FSM without DC work
+ * @test: KUnit test context
+ *
+ * BEGIN_CURSOR_UPDATE then END_CURSOR_UPDATE from FULL_POWER_RUNNING traverse
+ * the FULL_POWER_BUSY state. Neither transition reaches the idle-optimization
+ * commit path, so no DC hardware access occurs and the FSM returns to
+ * FULL_POWER_RUNNING.
+ */
+static void dm_test_ism_commit_event_cursor_transition(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct dm_crtc_state *dm_state;
+	struct amdgpu_dm_ism_config config = { 0 };
+
+	dm_state = kunit_kzalloc(test, sizeof(*dm_state), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, dm_state);
+
+	amdgpu_dm_ism_init(&acrtc->ism, &config);
+	acrtc->base.state = &dm_state->base;
+
+	guard(mutex)(&adev->dm.dc_lock);
+	amdgpu_dm_ism_commit_event(&acrtc->ism,
+				   DM_ISM_EVENT_BEGIN_CURSOR_UPDATE);
+	KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+			(int)DM_ISM_STATE_FULL_POWER_BUSY);
+
+	amdgpu_dm_ism_commit_event(&acrtc->ism,
+				   DM_ISM_EVENT_END_CURSOR_UPDATE);
+	KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+			(int)DM_ISM_STATE_FULL_POWER_RUNNING);
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
+/**
+ * dm_test_ism_commit_event_invalid_event - invalid event leaves FSM unchanged
+ * @test: KUnit test context
+ *
+ * EXIT_IDLE_REQUESTED is not a valid event from FULL_POWER_RUNNING, so the
+ * FSM does not transition and no power-state dispatch occurs.
+ */
+static void dm_test_ism_commit_event_invalid_event(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct dm_crtc_state *dm_state;
+	struct amdgpu_dm_ism_config config = { 0 };
+
+	dm_state = kunit_kzalloc(test, sizeof(*dm_state), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, dm_state);
+
+	amdgpu_dm_ism_init(&acrtc->ism, &config);
+	acrtc->base.state = &dm_state->base;
+
+	guard(mutex)(&adev->dm.dc_lock);
+	amdgpu_dm_ism_commit_event(&acrtc->ism,
+				   DM_ISM_EVENT_EXIT_IDLE_REQUESTED);
+
+	KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+			(int)DM_ISM_STATE_FULL_POWER_RUNNING);
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
+/* ===== Tests for amdgpu_dm_ism_force_full_power ===== */
+
+/**
+ * dm_test_ism_force_full_power - force-full-power sends EXIT_IDLE to every CRTC
+ * @test: KUnit test context
+ *
+ * From the initial FULL_POWER_RUNNING state EXIT_IDLE_REQUESTED is a no-op, so
+ * the FSM remains in FULL_POWER_RUNNING and no DC work is scheduled.
+ */
+static void dm_test_ism_force_full_power(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct dm_crtc_state *dm_state;
+	struct amdgpu_dm_ism_config config = { 0 };
+
+	dm_state = kunit_kzalloc(test, sizeof(*dm_state), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, dm_state);
+
+	amdgpu_dm_ism_init(&acrtc->ism, &config);
+	acrtc->base.state = &dm_state->base;
+	register_test_acrtc(adev, acrtc);
+
+	guard(mutex)(&adev->dm.dc_lock);
+	amdgpu_dm_ism_force_full_power(&adev->dm);
+
+	KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+			(int)DM_ISM_STATE_FULL_POWER_RUNNING);
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
+/* ===== Tests for amdgpu_dm_ism_disable / amdgpu_dm_ism_enable ===== */
+
+/**
+ * dm_test_ism_disable_enable_cycle - disable then enable quiesces and re-arms work
+ * @test: KUnit test context
+ *
+ * Walks every CRTC's ISM, disabling its delayed work (synchronously) and then
+ * re-enabling it. With no work ever scheduled both calls complete without
+ * touching the FSM state. disable must be called without dc_lock held.
+ */
+static void dm_test_ism_disable_enable_cycle(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct amdgpu_dm_ism_config config = { 0 };
+
+	amdgpu_dm_ism_init(&acrtc->ism, &config);
+	register_test_acrtc(adev, acrtc);
+
+	amdgpu_dm_ism_disable(&adev->dm);
+	amdgpu_dm_ism_enable(&adev->dm);
+
+	KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+			(int)DM_ISM_STATE_FULL_POWER_RUNNING);
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
+/* ===== Tests for dm_ism_dispatch_power_state (via commit_event) ===== */
+
+/*
+ * Build a config + history that makes dm_ism_get_idle_allow_delay() return a
+ * non-zero hysteresis delay. A non-zero delay keeps the FSM parked in
+ * HYSTERESIS_WAITING (the dispatcher returns DM_ISM_NUM_EVENTS instead of an
+ * immediate follow-up event), preventing the cascade into the DC-dependent
+ * OPTIMIZED_IDLE / *_SSO states.
+ */
+static void setup_idle_delay_history(struct amdgpu_dm_ism *ism,
+				     struct dc_stream_state *stream)
+{
+	uint64_t one_frame_ns;
+
+	stream->timing.v_total = 1125;
+	stream->timing.h_total = 2200;
+	stream->timing.pix_clk_100hz = 1485000;
+
+	one_frame_ns = div64_u64((uint64_t)1125 * 2200 * 10000000ULL, 1485000);
+
+	for (int i = 0; i < 8; i++) {
+		ism->records[i].duration_ns = one_frame_ns;
+		ism->records[i].timestamp_ns = 0;
+	}
+	ism->next_record_idx = 8;
+}
+
+/**
+ * dm_test_ism_dispatch_hysteresis_schedule_and_cancel - cover the HYSTERESIS_WAITING dispatch arms
+ * @test: KUnit test context
+ *
+ * ENTER_IDLE_REQUESTED moves FULL_POWER_RUNNING -> HYSTERESIS_WAITING. The
+ * current-state arm of dm_ism_dispatch_power_state() then records the idle
+ * timestamp, computes a (non-zero) idle-allow delay and schedules the delayed
+ * worker. A subsequent BEGIN_CURSOR_UPDATE (-> HYSTERESIS_BUSY) exercises the
+ * previous-state arm that cancels that pending worker. Neither arm reaches the
+ * DC-dependent idle-optimization commit path.
+ */
+static void dm_test_ism_dispatch_hysteresis_schedule_and_cancel(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct dm_crtc_state *dm_state;
+	struct dc_stream_state *stream;
+	struct amdgpu_dm_ism_config config = {
+		.filter_num_frames = 5,
+		.filter_entry_count = 3,
+		.activation_num_delay_frames = 10,
+		.filter_history_size = 8,
+		.filter_old_history_threshold = 0,
+		.sso_num_frames = 0,
+	};
+
+	dm_state = kunit_kzalloc(test, sizeof(*dm_state), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, dm_state);
+	stream = dm_kunit_alloc_stream(test, NULL);
+
+	amdgpu_dm_ism_init(&acrtc->ism, &config);
+	setup_idle_delay_history(&acrtc->ism, stream);
+	dm_state->stream = stream;
+	acrtc->base.state = &dm_state->base;
+
+	scoped_guard(mutex, &adev->dm.dc_lock) {
+		/* Enter HYSTERESIS_WAITING: schedules the idle-allow worker. */
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_ENTER_IDLE_REQUESTED);
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_HYSTERESIS_WAITING);
+
+		/* Cursor update cancels the pending worker (prev-state arm). */
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_BEGIN_CURSOR_UPDATE);
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_HYSTERESIS_BUSY);
+	}
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
+/**
+ * dm_test_ism_dispatch_optimized_idle_defers_sso - cover OPTIMIZED_IDLE dispatch without DC
+ * @test: KUnit test context
+ *
+ * With sso_num_frames < filter_num_frames the OPTIMIZED_IDLE current-state arm
+ * skips the idle-optimization commit and only schedules the SSO worker. Driving
+ * HYSTERESIS_WAITING -> OPTIMIZED_IDLE via TIMER_ELAPSED exercises that arm
+ * (get_sso_delay + the skip branch + mod_delayed_work) without any DC access.
+ */
+static void dm_test_ism_dispatch_optimized_idle_defers_sso(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct dm_crtc_state *dm_state;
+	struct dc_stream_state *stream;
+	struct amdgpu_dm_ism_config config = {
+		.filter_num_frames = 5,
+		.filter_entry_count = 3,
+		.activation_num_delay_frames = 10,
+		.filter_history_size = 8,
+		.filter_old_history_threshold = 0,
+		.sso_num_frames = 2,
+	};
+
+	dm_state = kunit_kzalloc(test, sizeof(*dm_state), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, dm_state);
+	stream = dm_kunit_alloc_stream(test, NULL);
+
+	amdgpu_dm_ism_init(&acrtc->ism, &config);
+	setup_idle_delay_history(&acrtc->ism, stream);
+	dm_state->stream = stream;
+	acrtc->base.state = &dm_state->base;
+
+	scoped_guard(mutex, &adev->dm.dc_lock) {
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_ENTER_IDLE_REQUESTED);
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_HYSTERESIS_WAITING);
+
+		/*
+		 * Timer fires: HYSTERESIS_WAITING -> OPTIMIZED_IDLE. sso_delay
+		 * is non-zero and sso_num_frames < filter_num_frames, so the
+		 * commit is deferred to the SSO worker and the FSM parks here.
+		 */
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_TIMER_ELAPSED);
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_OPTIMIZED_IDLE);
+
+		/* Cancel the scheduled SSO worker while still holding dc_lock. */
+		cancel_delayed_work(&acrtc->ism.sso_delayed_work);
+	}
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
+/*
+ * ===== Behavioural tests for dm_ism_commit_idle_optimization_state =====
+ *
+ * The commit path runs the real DC calls. dc_allow_idle_optimizations() only
+ * reaches hardware through dc->hwss.apply_idle_power_optimizations(), so the
+ * spy is installed there — DC's own seam — and the outcome is read back from
+ * dc->idle_optimizations_allowed. The callback fires only on an actual
+ * transition, so the call count is the number of idle state changes requested.
+ */
+
+static struct {
+	int calls;
+	bool last_allow;
+} dm_ism_test_idle;
+
+static bool dm_ism_test_apply_idle(struct dc *dc, bool allow)
+{
+	dm_ism_test_idle.calls++;
+	dm_ism_test_idle.last_allow = allow;
+
+	return true;
+}
+
+/*
+ * Initialise @acrtc's ISM against a stream with a non-NULL link (required by
+ * the static-screen arm) and make dc_allow_idle_optimizations() observable.
+ */
+static struct dc_stream_state *setup_commit_test(struct kunit *test,
+						 struct amdgpu_crtc *acrtc,
+						 struct amdgpu_dm_ism_config *config)
+{
+	struct amdgpu_device *adev = drm_to_adev(acrtc->base.dev);
+	struct dc_stream_state *stream;
+	struct dm_crtc_state *dm_state;
+	struct dal_logger *logger;
+	struct dc *dc = adev->dm.dc;
+
+	stream = dm_kunit_alloc_stream(test, dm_kunit_alloc_link(test));
+	stream->timing.v_total = 1125;
+	stream->timing.h_total = 2200;
+	stream->timing.pix_clk_100hz = 1485000;
+
+	dm_state = kunit_kzalloc(test, sizeof(*dm_state), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, dm_state);
+	dm_state->stream = stream;
+
+	logger = kunit_kzalloc(test, sizeof(*logger), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, logger);
+	logger->dev = &adev->ddev;
+	dc->ctx->logger = logger;
+	/* is_apu path avoids DC_LOG_DC()'s NULL-logger dereference. */
+	dc->caps.is_apu = true;
+	/* dc_allow() only calls apply() when clk_mgr is present. */
+	dc->clk_mgr = dm_kunit_alloc_clk_mgr(test);
+	dc->hwss.apply_idle_power_optimizations = dm_ism_test_apply_idle;
+	dm_ism_test_idle = (typeof(dm_ism_test_idle)){ };
+
+	amdgpu_dm_ism_init(&acrtc->ism, config);
+	acrtc->base.state = &dm_state->base;
+
+	return stream;
+}
+
+/**
+ * dm_test_ism_commit_allows_idle_on_optimized_idle - OPTIMIZED_IDLE commits idle-allow
+ * @test: KUnit test context
+ *
+ * With idle-allow filtering disabled (delay 0) ENTER_IDLE_REQUESTED cascades
+ * FULL_POWER_RUNNING -> HYSTERESIS_WAITING -> OPTIMIZED_IDLE. Because
+ * sso_num_frames >= filter_num_frames the OPTIMIZED_IDLE arm commits the idle
+ * state. With no active vblank and no SSO the commit must request allow-idle
+ * exactly once, without a preceding disallow.
+ */
+static void dm_test_ism_commit_allows_idle_on_optimized_idle(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct amdgpu_dm_ism_config config = {
+		.filter_num_frames = 0,
+		.sso_num_frames = 2,
+	};
+
+	setup_commit_test(test, acrtc, &config);
+
+	scoped_guard(mutex, &adev->dm.dc_lock) {
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_ENTER_IDLE_REQUESTED);
+
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_OPTIMIZED_IDLE);
+
+		/* vblank disabled + no SSO -> a single allow-idle transition. */
+		KUNIT_EXPECT_EQ(test, dm_ism_test_idle.calls, 1);
+		KUNIT_EXPECT_TRUE(test, dm_ism_test_idle.last_allow);
+		KUNIT_EXPECT_TRUE(test, adev->dm.dc->idle_optimizations_allowed);
+
+		cancel_delayed_work(&acrtc->ism.sso_delayed_work);
+	}
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
+/**
+ * dm_test_ism_commit_enables_sso_on_optimized_idle_sso - SSO arm re-arms idle
+ * @test: KUnit test context
+ *
+ * With both idle-allow and SSO delays disabled the FSM cascades through
+ * OPTIMIZED_IDLE into OPTIMIZED_IDLE_SSO, whose arm commits with
+ * allow_panel_sso = true. Engaging SSO must first disallow idle and then
+ * re-allow it, so starting from an idle-allowed DC yields two transitions.
+ */
+static void dm_test_ism_commit_enables_sso_on_optimized_idle_sso(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct amdgpu_dm_ism_config config = {
+		.filter_num_frames = 0,
+		.sso_num_frames = 0,
+	};
+
+	setup_commit_test(test, acrtc, &config);
+	adev->dm.dc->idle_optimizations_allowed = true;
+
+	scoped_guard(mutex, &adev->dm.dc_lock) {
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_ENTER_IDLE_REQUESTED);
+
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_OPTIMIZED_IDLE_SSO);
+
+		/* SSO engagement disallows idle, then re-allows it. */
+		KUNIT_EXPECT_EQ(test, dm_ism_test_idle.calls, 2);
+		KUNIT_EXPECT_TRUE(test, dm_ism_test_idle.last_allow);
+		KUNIT_EXPECT_TRUE(test, adev->dm.dc->idle_optimizations_allowed);
+	}
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
+/**
+ * dm_test_ism_commit_disallows_idle_on_timer_aborted - aborted timer disallows idle
+ * @test: KUnit test context
+ *
+ * A non-zero idle-allow delay parks the FSM in HYSTERESIS_WAITING.
+ * EXIT_IDLE_REQUESTED then drives HYSTERESIS_WAITING -> TIMER_ABORTED, whose
+ * arm commits with vblank_enabled = true: idle must be disallowed and, because
+ * vblank is active, never re-allowed. The FSM returns to FULL_POWER_RUNNING.
+ */
+static void dm_test_ism_commit_disallows_idle_on_timer_aborted(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct dc_stream_state *stream;
+	struct amdgpu_dm_ism_config config = {
+		.filter_num_frames = 5,
+		.filter_entry_count = 3,
+		.activation_num_delay_frames = 10,
+		.filter_history_size = 8,
+		.filter_old_history_threshold = 0,
+		.sso_num_frames = 0,
+	};
+
+	stream = setup_commit_test(test, acrtc, &config);
+	setup_idle_delay_history(&acrtc->ism, stream);
+	adev->dm.dc->idle_optimizations_allowed = true;
+
+	scoped_guard(mutex, &adev->dm.dc_lock) {
+		/* Non-zero delay parks the FSM in HYSTERESIS_WAITING. */
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_ENTER_IDLE_REQUESTED);
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_HYSTERESIS_WAITING);
+
+		/* Abort: HYSTERESIS_WAITING -> TIMER_ABORTED -> FULL_POWER_RUNNING. */
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_EXIT_IDLE_REQUESTED);
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_FULL_POWER_RUNNING);
+
+		/* TIMER_ABORTED commit runs with vblank_enabled=true. */
+		KUNIT_EXPECT_EQ(test, dm_ism_test_idle.calls, 1);
+		KUNIT_EXPECT_FALSE(test, dm_ism_test_idle.last_allow);
+		KUNIT_EXPECT_FALSE(test, adev->dm.dc->idle_optimizations_allowed);
+	}
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
+/**
+ * dm_test_ism_exit_from_optimized_idle_disallows_idle - leaving OPTIMIZED_IDLE
+ * @test: KUnit test context
+ *
+ * EXIT_IDLE_REQUESTED from OPTIMIZED_IDLE runs the previous-state arm of
+ * dm_ism_dispatch_power_state(): the pending SSO worker is cancelled, the idle
+ * period is recorded and the commit runs with vblank_enabled = true, which
+ * disallows idle again.
+ */
+static void dm_test_ism_exit_from_optimized_idle_disallows_idle(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct amdgpu_dm_ism_config config = {
+		.filter_num_frames = 0,
+		.sso_num_frames = 2,
+	};
+
+	setup_commit_test(test, acrtc, &config);
+
+	scoped_guard(mutex, &adev->dm.dc_lock) {
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_ENTER_IDLE_REQUESTED);
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_OPTIMIZED_IDLE);
+
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_EXIT_IDLE_REQUESTED);
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_FULL_POWER_RUNNING);
+
+		/* Allow on entry, disallow on exit. */
+		KUNIT_EXPECT_EQ(test, dm_ism_test_idle.calls, 2);
+		KUNIT_EXPECT_FALSE(test, dm_ism_test_idle.last_allow);
+		KUNIT_EXPECT_FALSE(test, adev->dm.dc->idle_optimizations_allowed);
+		/* The idle period was recorded on the way out. */
+		KUNIT_EXPECT_EQ(test, acrtc->ism.next_record_idx, 1);
+	}
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
+/**
+ * dm_test_ism_exit_from_sso_disallows_idle - leaving OPTIMIZED_IDLE_SSO
+ * @test: KUnit test context
+ *
+ * EXIT_IDLE_REQUESTED from OPTIMIZED_IDLE_SSO runs the SSO previous-state arm:
+ * the idle period is recorded and the commit disallows idle. Unlike the
+ * OPTIMIZED_IDLE arm there is no pending SSO worker left to cancel.
+ */
+static void dm_test_ism_exit_from_sso_disallows_idle(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct amdgpu_dm_ism_config config = {
+		.filter_num_frames = 0,
+		.sso_num_frames = 0,
+	};
+
+	setup_commit_test(test, acrtc, &config);
+
+	scoped_guard(mutex, &adev->dm.dc_lock) {
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_ENTER_IDLE_REQUESTED);
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_OPTIMIZED_IDLE_SSO);
+
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_EXIT_IDLE_REQUESTED);
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_FULL_POWER_RUNNING);
+
+		KUNIT_EXPECT_EQ(test, dm_ism_test_idle.calls, 2);
+		KUNIT_EXPECT_FALSE(test, dm_ism_test_idle.last_allow);
+		KUNIT_EXPECT_FALSE(test, adev->dm.dc->idle_optimizations_allowed);
+		KUNIT_EXPECT_EQ(test, acrtc->ism.next_record_idx, 1);
+	}
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
+/**
+ * dm_test_ism_delayed_work_runs_timer_elapsed - hysteresis worker fires
+ * @test: KUnit test context
+ *
+ * A non-zero idle-allow delay parks the FSM in HYSTERESIS_WAITING and arms the
+ * hysteresis worker. Flushing it runs dm_ism_delayed_work_func(), which takes
+ * dc_lock itself and posts TIMER_ELAPSED, cascading to OPTIMIZED_IDLE_SSO
+ * because the SSO delay is zero. The flush must happen without dc_lock held.
+ */
+static void dm_test_ism_delayed_work_runs_timer_elapsed(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct dc_stream_state *stream;
+	struct amdgpu_dm_ism_config config = {
+		.filter_num_frames = 5,
+		.filter_entry_count = 3,
+		.activation_num_delay_frames = 10,
+		.filter_history_size = 8,
+		.filter_old_history_threshold = 0,
+		.sso_num_frames = 0,
+	};
+
+	stream = setup_commit_test(test, acrtc, &config);
+	setup_idle_delay_history(&acrtc->ism, stream);
+
+	scoped_guard(mutex, &adev->dm.dc_lock) {
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_ENTER_IDLE_REQUESTED);
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_HYSTERESIS_WAITING);
+		KUNIT_EXPECT_EQ(test, dm_ism_test_idle.calls, 0);
+	}
+
+	flush_delayed_work(&acrtc->ism.delayed_work);
+
+	KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+			(int)DM_ISM_STATE_OPTIMIZED_IDLE_SSO);
+	KUNIT_EXPECT_EQ(test, dm_ism_test_idle.calls, 1);
+	KUNIT_EXPECT_TRUE(test, adev->dm.dc->idle_optimizations_allowed);
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
+/**
+ * dm_test_ism_sso_delayed_work_runs_sso_elapsed - SSO worker fires
+ * @test: KUnit test context
+ *
+ * With sso_num_frames >= filter_num_frames the OPTIMIZED_IDLE arm allows idle
+ * and arms the SSO worker. Flushing it runs dm_ism_sso_delayed_work_func(),
+ * which posts SSO_TIMER_ELAPSED; engaging SSO disallows and re-allows idle, so
+ * two further transitions follow the initial allow.
+ */
+static void dm_test_ism_sso_delayed_work_runs_sso_elapsed(struct kunit *test)
+{
+	struct amdgpu_device *adev;
+	struct amdgpu_crtc *acrtc = alloc_test_acrtc(test, &adev);
+	struct amdgpu_dm_ism_config config = {
+		.filter_num_frames = 0,
+		.sso_num_frames = 2,
+	};
+
+	setup_commit_test(test, acrtc, &config);
+
+	scoped_guard(mutex, &adev->dm.dc_lock) {
+		amdgpu_dm_ism_commit_event(&acrtc->ism,
+					   DM_ISM_EVENT_ENTER_IDLE_REQUESTED);
+		KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+				(int)DM_ISM_STATE_OPTIMIZED_IDLE);
+		KUNIT_EXPECT_EQ(test, dm_ism_test_idle.calls, 1);
+	}
+
+	flush_delayed_work(&acrtc->ism.sso_delayed_work);
+
+	KUNIT_EXPECT_EQ(test, (int)acrtc->ism.current_state,
+			(int)DM_ISM_STATE_OPTIMIZED_IDLE_SSO);
+	KUNIT_EXPECT_EQ(test, dm_ism_test_idle.calls, 3);
+	KUNIT_EXPECT_TRUE(test, adev->dm.dc->idle_optimizations_allowed);
+
+	amdgpu_dm_ism_fini(&acrtc->ism);
+}
+
 static struct kunit_case dm_ism_test_cases[] = {
 	/* dm_ism_next_state — FULL_POWER_RUNNING */
 	KUNIT_CASE(dm_test_ism_next_state_running_enter_idle),
@@ -923,6 +1599,27 @@ static struct kunit_case dm_ism_test_cases[] = {
 	KUNIT_CASE(dm_test_dispatch_next_event_opt_idle_with_sso_delay),
 	KUNIT_CASE(dm_test_dispatch_next_event_timer_aborted),
 	KUNIT_CASE(dm_test_dispatch_next_event_no_action_state),
+	/* amdgpu_dm_ism_commit_event */
+	KUNIT_CASE(dm_test_ism_commit_event_no_state),
+	KUNIT_CASE(dm_test_ism_commit_event_cursor_transition),
+	KUNIT_CASE(dm_test_ism_commit_event_invalid_event),
+	/* amdgpu_dm_ism_force_full_power */
+	KUNIT_CASE(dm_test_ism_force_full_power),
+	/* amdgpu_dm_ism_disable / amdgpu_dm_ism_enable */
+	KUNIT_CASE(dm_test_ism_disable_enable_cycle),
+	/* dm_ism_dispatch_power_state (via commit_event) */
+	KUNIT_CASE(dm_test_ism_dispatch_hysteresis_schedule_and_cancel),
+	KUNIT_CASE(dm_test_ism_dispatch_optimized_idle_defers_sso),
+	/* dm_ism_commit_idle_optimization_state (behavioural, via dc->hwss) */
+	KUNIT_CASE(dm_test_ism_commit_allows_idle_on_optimized_idle),
+	KUNIT_CASE(dm_test_ism_commit_enables_sso_on_optimized_idle_sso),
+	KUNIT_CASE(dm_test_ism_commit_disallows_idle_on_timer_aborted),
+	/* dm_ism_dispatch_power_state previous-state arms */
+	KUNIT_CASE(dm_test_ism_exit_from_optimized_idle_disallows_idle),
+	KUNIT_CASE(dm_test_ism_exit_from_sso_disallows_idle),
+	/* dm_ism_delayed_work_func / dm_ism_sso_delayed_work_func */
+	KUNIT_CASE(dm_test_ism_delayed_work_runs_timer_elapsed),
+	KUNIT_CASE(dm_test_ism_sso_delayed_work_runs_sso_elapsed),
 	{}
 };
 

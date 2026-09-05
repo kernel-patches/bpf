@@ -228,6 +228,17 @@ struct drm_gem_object_funcs {
 	size_t (*rss)(struct drm_gem_object *obj);
 
 	/**
+	 * @handle_free:
+	 *
+	 * This callback is called when the GEM handle count goes down to 0.
+	 * It is currently used by AMDGPU driver to release their exported BO
+	 * handles.
+	 *
+	 * This callback is optional.
+	 */
+	void (*handle_free)(struct drm_gem_object *obj);
+
+	/**
 	 * @vm_ops:
 	 *
 	 * Virtual memory operations used with mmap.
@@ -660,9 +671,6 @@ static inline bool drm_gem_is_imported(const struct drm_gem_object *obj)
  * @obj: the &drm_gem_object
  *
  * This initializes the &drm_gem_object's &drm_gpuvm_bo list.
- *
- * Calling this function is only necessary for drivers intending to support the
- * &drm_driver_feature DRIVER_GEM_GPUVA.
  *
  * See also drm_gem_gpuva_set_lock().
  */

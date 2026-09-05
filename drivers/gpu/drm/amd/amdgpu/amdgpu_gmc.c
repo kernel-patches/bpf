@@ -630,16 +630,6 @@ int amdgpu_gmc_ras_sw_init(struct amdgpu_device *adev)
 	return 0;
 }
 
-int amdgpu_gmc_ras_late_init(struct amdgpu_device *adev)
-{
-	return 0;
-}
-
-void amdgpu_gmc_ras_fini(struct amdgpu_device *adev)
-{
-
-}
-
 	/*
 	 * The latest engine allocation on gfx9/10 is:
 	 * Engine 2, 3: firmware
@@ -682,7 +672,8 @@ int amdgpu_gmc_allocate_vm_inv_eng(struct amdgpu_device *adev)
 			continue;
 
 		/* Skip if the ring is a shared ring */
-		if (amdgpu_sdma_is_shared_inv_eng(adev, ring))
+		if (amdgpu_sdma_is_shared_inv_eng(adev, ring) ||
+		    amdgpu_jpeg_is_shared_inv_eng(adev, ring))
 			continue;
 
 		inv_eng = ffs(vm_inv_engs[vmhub]);
@@ -712,6 +703,12 @@ int amdgpu_gmc_allocate_vm_inv_eng(struct amdgpu_device *adev)
 					ring->name, ring->vm_inv_eng, shared_ring->name, ring->vm_hub);
 			continue;
 		}
+
+		/* All decode rings within one JPEG instance share one VM
+		 * invalidation engine (no-op unless ring is a JPEG instance's
+		 * first ring).
+		 */
+		amdgpu_jpeg_set_shared_inv_eng(adev, ring);
 	}
 
 	return 0;
@@ -761,7 +758,8 @@ void amdgpu_gmc_flush_gpu_tlb(struct amdgpu_device *adev, uint32_t vmid,
 	r = amdgpu_job_alloc_with_ib(ring->adev, &adev->mman.default_entity.base,
 				     AMDGPU_FENCE_OWNER_UNDEFINED,
 				     16 * 4, AMDGPU_IB_POOL_IMMEDIATE,
-				     &job, AMDGPU_KERNEL_JOB_ID_FLUSH_GPU_TLB);
+				     AMDGPU_KERNEL_JOB_ID_FLUSH_GPU_TLB,
+				     &job);
 	if (r)
 		goto error_alloc;
 
@@ -1019,9 +1017,6 @@ void amdgpu_gmc_noretry_set(struct amdgpu_device *adev)
 				gc_ver == IP_VERSION(9, 5, 0) ||
 				gc_ver >= IP_VERSION(10, 1, 0));
 
-	/* For GFX12.1 B0, set xnack (retry) on as default */
-	if (gc_ver == IP_VERSION(12, 1, 0) && (adev->rev_id & 0xf) == 0x1)
-		noretry_default = false;
 	if (!amdgpu_sriov_xnack_support(adev))
 		gmc->noretry = 1;
 	else
@@ -1369,7 +1364,8 @@ int amdgpu_gmc_sysfs_init(struct amdgpu_device *adev)
 	if (!adev->gmc.gmc_funcs->query_mem_partition_mode)
 		return 0;
 
-	nps_switch_support = (hweight32(adev->gmc.supported_nps_modes &
+	nps_switch_support = !adev->gmc.xgmi.connected_to_cpu &&
+			     (hweight32(adev->gmc.supported_nps_modes &
 					AMDGPU_ALL_NPS_MASK) > 1);
 	if (!nps_switch_support)
 		dev_attr_current_memory_partition.attr.mode &=
@@ -1763,10 +1759,15 @@ int amdgpu_gmc_init_mem_ranges(struct amdgpu_device *adev)
 		valid = true;
 	else
 		valid = amdgpu_gmc_validate_partition_info(adev);
-	if (!valid) {
-		/* TODO: handle invalid case */
+	if (!valid)
 		dev_warn(adev->dev,
 			 "Mem ranges not matching with hardware config\n");
+
+	if (!adev->gmc.num_mem_partitions) {
+		dev_err(adev->dev, "num_mem_partitions is zero\n");
+		kfree(adev->gmc.mem_partitions);
+		adev->gmc.mem_partitions = NULL;
+		return -EINVAL;
 	}
 
 	return 0;

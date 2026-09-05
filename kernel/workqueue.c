@@ -226,6 +226,8 @@ struct worker_pool {
 						/* L: hash of busy workers */
 
 	struct worker		*manager;	/* L: purely informational */
+	/* L: last worker woken by kick_pool() */
+	struct worker		*last_woken_worker;
 	struct list_head	workers;	/* A: attached workers */
 
 	struct ida		worker_ida;	/* worker IDs for task name */
@@ -369,7 +371,7 @@ struct workqueue_struct {
 	int			saved_max_active; /* WQ: saved max_active */
 	int			saved_min_active; /* WQ: saved min_active */
 
-	struct workqueue_attrs	*unbound_attrs;	/* PW: only for unbound wqs */
+	struct workqueue_attrs	*attrs;	/* PW: workqueue attributes */
 	struct pool_workqueue __rcu *dfl_pwq;   /* PW: only for unbound wqs */
 
 #ifdef CONFIG_SYSFS
@@ -513,6 +515,9 @@ static struct workqueue_attrs *unbound_std_wq_attrs[NR_STD_WORKER_POOLS];
 
 /* I: attributes used when instantiating ordered pools on demand */
 static struct workqueue_attrs *ordered_wq_attrs[NR_STD_WORKER_POOLS];
+
+/* I: attributes of percpu workqueues, which are backed by the static pools */
+static struct workqueue_attrs *percpu_std_wq_attrs[NR_STD_WORKER_POOLS];
 
 /*
  * I: kthread_worker to release pwq's. pwq release needs to be bounced to a
@@ -737,7 +742,7 @@ static int worker_pool_assign_id(struct worker_pool *pool)
 }
 
 static struct pool_workqueue __rcu **
-unbound_pwq_slot(struct workqueue_struct *wq, int cpu)
+pwq_slot(struct workqueue_struct *wq, int cpu)
 {
        if (cpu >= 0)
                return per_cpu_ptr(wq->cpu_pwq, cpu);
@@ -746,9 +751,9 @@ unbound_pwq_slot(struct workqueue_struct *wq, int cpu)
 }
 
 /* @cpu < 0 for dfl_pwq */
-static struct pool_workqueue *unbound_pwq(struct workqueue_struct *wq, int cpu)
+static struct pool_workqueue *installed_pwq(struct workqueue_struct *wq, int cpu)
 {
-	return rcu_dereference_check(*unbound_pwq_slot(wq, cpu),
+	return rcu_dereference_check(*pwq_slot(wq, cpu),
 				     lockdep_is_held(&wq_pool_mutex) ||
 				     lockdep_is_held(&wq->mutex));
 }
@@ -757,13 +762,13 @@ static struct pool_workqueue *unbound_pwq(struct workqueue_struct *wq, int cpu)
  * unbound_effective_cpumask - effective cpumask of an unbound workqueue
  * @wq: workqueue of interest
  *
- * @wq->unbound_attrs->cpumask contains the cpumask requested by the user which
+ * @wq->attrs->cpumask contains the cpumask requested by the user which
  * is masked with wq_unbound_cpumask to determine the effective cpumask. The
  * default pwq is always mapped to the pool with the current effective cpumask.
  */
 static struct cpumask *unbound_effective_cpumask(struct workqueue_struct *wq)
 {
-	return unbound_pwq(wq, -1)->pool->attrs->__pod_cpumask;
+	return installed_pwq(wq, -1)->pool->attrs->__pod_cpumask;
 }
 
 static unsigned int work_color_to_flags(int color)
@@ -1258,18 +1263,26 @@ static void kick_bh_pool(struct worker_pool *pool)
 }
 
 /**
- * kick_pool - wake up an idle worker if necessary
+ * kick_pool_pick - select an idle worker to kick, deferring the wakeup
  * @pool: pool to kick
+ * @wakep: out-param, set to the task to wake after pool->lock is dropped
  *
- * @pool may have pending work items. Wake up worker if necessary. Returns
- * whether a worker was woken up.
+ * Like kick_pool() but, for a regular (non-BH) pool, returns the picked
+ * worker's task via @wakep instead of waking it, so the caller can issue the
+ * wakeup after dropping pool->lock (the wakeup takes rq->lock). Worker
+ * selection, wake_cpu setup and the BH kick still happen under the lock.
+ * Returns whether a worker was selected or kicked.
+ *
+ * Must be called with @pool->lock held.
  */
-static bool kick_pool(struct worker_pool *pool)
+static bool kick_pool_pick(struct worker_pool *pool, struct task_struct **wakep)
 {
 	struct worker *worker = first_idle_worker(pool);
 	struct task_struct *p;
 
 	lockdep_assert_held(&pool->lock);
+
+	*wakep = NULL;
 
 	if (!need_more_worker(pool) || !worker)
 		return false;
@@ -1299,19 +1312,40 @@ static bool kick_pool(struct worker_pool *pool)
 	 * its affinity scope. Repatriate.
 	 */
 	if (!pool->attrs->affn_strict &&
-	    !cpumask_test_cpu(p->wake_cpu, pool->attrs->__pod_cpumask)) {
+	    !cpumask_test_cpu(READ_ONCE(p->wake_cpu),
+			      pool->attrs->__pod_cpumask)) {
 		struct work_struct *work = list_first_entry(&pool->worklist,
 						struct work_struct, entry);
 		int wake_cpu = cpumask_any_and_distribute(pool->attrs->__pod_cpumask,
 							  cpu_online_mask);
 		if (wake_cpu < nr_cpu_ids) {
-			p->wake_cpu = wake_cpu;
+			WRITE_ONCE(p->wake_cpu, wake_cpu);
 			get_work_pwq(work)->stats[PWQ_STAT_REPATRIATED]++;
 		}
 	}
 #endif
-	wake_up_process(p);
+	/* Track the last idle worker woken, used for stall diagnostics. */
+	pool->last_woken_worker = worker;
+
+	*wakep = p;
 	return true;
+}
+
+/**
+ * kick_pool - wake up an idle worker if necessary
+ * @pool: pool to kick
+ *
+ * @pool may have pending work items. Wake up worker if necessary. Returns
+ * whether a worker was woken up.
+ */
+static bool kick_pool(struct worker_pool *pool)
+{
+	struct task_struct *p;
+	bool kicked = kick_pool_pick(pool, &p);
+
+	if (p)
+		wake_up_process(p);
+	return kicked;
 }
 
 #ifdef CONFIG_WQ_CPU_INTENSIVE_REPORT
@@ -1438,7 +1472,7 @@ void wq_worker_running(struct task_struct *task)
 	 * CPU intensive auto-detection cares about how long a work item hogged
 	 * CPU without sleeping. Reset the starting timestamp on wakeup.
 	 */
-	worker->current_at = worker->task->se.sum_exec_runtime;
+	worker->current_at = READ_ONCE(worker->task->se.sum_exec_runtime);
 
 	WRITE_ONCE(worker->sleeping, 0);
 }
@@ -1505,7 +1539,11 @@ void wq_worker_tick(struct task_struct *task)
 	if (!pwq)
 		return;
 
-	pwq->stats[PWQ_STAT_CPU_TIME] += TICK_USEC;
+	/*
+	 * @pwq is shared across CPUs for unbound wqs and this advisory stat is
+	 * bumped outside pool->lock, so the update is intentionally racy.
+	 */
+	data_race(pwq->stats[PWQ_STAT_CPU_TIME] += TICK_USEC);
 
 	if (!wq_cpu_intensive_thresh_us)
 		return;
@@ -1523,7 +1561,7 @@ void wq_worker_tick(struct task_struct *task)
 	 * We probably want to make this prettier in the future.
 	 */
 	if ((worker->flags & WORKER_NOT_RUNNING) || READ_ONCE(worker->sleeping) ||
-	    worker->task->se.sum_exec_runtime - worker->current_at <
+	    READ_ONCE(worker->task->se.sum_exec_runtime) - worker->current_at <
 	    wq_cpu_intensive_thresh_us * NSEC_PER_USEC)
 		return;
 
@@ -1570,14 +1608,19 @@ work_func_t wq_worker_last_func(struct task_struct *task)
 	return worker->last_func;
 }
 
+/* True if @pool is a static per-cpu pool rather than an unbound one. */
+static bool is_percpu_pool(struct worker_pool *pool)
+{
+	return pool->cpu >= 0;
+}
+
 /**
  * wq_node_nr_active - Determine wq_node_nr_active to use
  * @wq: workqueue of interest
  * @node: NUMA node, can be %NUMA_NO_NODE
  *
- * Determine wq_node_nr_active to use for @wq on @node. Returns:
- *
- * - %NULL for per-cpu workqueues as they don't need to use shared nr_active.
+ * Determine wq_node_nr_active to use for @wq on @node. @wq must be unbound.
+ * Returns:
  *
  * - node_nr_active[nr_node_ids] if @node is %NUMA_NO_NODE.
  *
@@ -1586,8 +1629,7 @@ work_func_t wq_worker_last_func(struct task_struct *task)
 static struct wq_node_nr_active *wq_node_nr_active(struct workqueue_struct *wq,
 						   int node)
 {
-	if (!(wq->flags & WQ_UNBOUND))
-		return NULL;
+	BUG_ON(!(wq->flags & WQ_UNBOUND));
 
 	if (node == NUMA_NO_NODE)
 		node = nr_node_ids;
@@ -1742,19 +1784,24 @@ static bool pwq_tryinc_nr_active(struct pool_workqueue *pwq, bool fill)
 {
 	struct workqueue_struct *wq = pwq->wq;
 	struct worker_pool *pool = pwq->pool;
-	struct wq_node_nr_active *nna = wq_node_nr_active(wq, pool->node);
+	struct wq_node_nr_active *nna;
 	bool obtained = false;
 
 	lockdep_assert_held(&pool->lock);
 
-	if (!nna) {
-		/* BH or per-cpu workqueue, pwq->nr_active is sufficient */
+	/*
+	 * A concurrency-managed per-cpu pool accounts nr_active per pwq, so
+	 * pwq->nr_active against wq->max_active is sufficient.
+	 */
+	if (is_percpu_pool(pool)) {
 		obtained = pwq->nr_active < READ_ONCE(wq->max_active);
 		goto out;
 	}
 
 	if (unlikely(pwq->plugged))
 		return false;
+
+	nna = wq_node_nr_active(wq, pool->node);
 
 	/*
 	 * Unbound workqueue uses per-node shared nr_active $nna. If @pwq is
@@ -1973,7 +2020,7 @@ out_unlock:
 static void pwq_dec_nr_active(struct pool_workqueue *pwq)
 {
 	struct worker_pool *pool = pwq->pool;
-	struct wq_node_nr_active *nna = wq_node_nr_active(pwq->wq, pool->node);
+	struct wq_node_nr_active *nna;
 
 	lockdep_assert_held(&pool->lock);
 
@@ -1984,13 +2031,15 @@ static void pwq_dec_nr_active(struct pool_workqueue *pwq)
 	pwq->nr_active--;
 
 	/*
-	 * For a percpu workqueue, it's simple. Just need to kick the first
+	 * A concurrency-managed per-cpu pool only needs to kick the first
 	 * inactive work item on @pwq itself.
 	 */
-	if (!nna) {
+	if (is_percpu_pool(pool)) {
 		pwq_activate_first_inactive(pwq, false);
 		return;
 	}
+
+	nna = wq_node_nr_active(pwq->wq, pool->node);
 
 	/*
 	 * If @pwq is for an unbound workqueue, it's more complicated because
@@ -2277,6 +2326,7 @@ static void __queue_work(int cpu, struct workqueue_struct *wq,
 {
 	struct pool_workqueue *pwq;
 	struct worker_pool *last_pool, *pool;
+	struct task_struct *wake_task = NULL;
 	unsigned int work_flags;
 	unsigned int req_cpu = cpu;
 
@@ -2399,7 +2449,7 @@ retry:
 
 		trace_workqueue_activate_work(work);
 		insert_work(pwq, work, &pool->worklist, work_flags);
-		kick_pool(pool);
+		kick_pool_pick(pool, &wake_task);
 	} else {
 		work_flags |= WORK_STRUCT_INACTIVE;
 		insert_work(pwq, work, &pwq->inactive_works, work_flags);
@@ -2407,6 +2457,8 @@ retry:
 
 out:
 	raw_spin_unlock(&pool->lock);
+	if (wake_task)
+		wake_up_process(wake_task);
 	rcu_read_unlock();
 }
 
@@ -2716,7 +2768,7 @@ static struct worker *alloc_worker(int node)
 
 static cpumask_t *pool_allowed_cpus(struct worker_pool *pool)
 {
-	if (pool->cpu < 0 && pool->attrs->affn_strict)
+	if (!is_percpu_pool(pool) && pool->attrs->affn_strict)
 		return pool->attrs->__pod_cpumask;
 	else
 		return pool->attrs->cpumask;
@@ -2948,6 +3000,13 @@ static void set_worker_dying(struct worker *worker, struct list_head *list)
 	pool->nr_workers--;
 	pool->nr_idle--;
 
+	/*
+	 * Clear last_woken_worker if it points to this worker, so that
+	 * show_cpu_pool_busy_workers() cannot dereference a freed worker.
+	 */
+	if (pool->last_woken_worker == worker)
+		pool->last_woken_worker = NULL;
+
 	worker->flags |= WORKER_DIE;
 
 	list_move(&worker->entry, list);
@@ -3141,7 +3200,16 @@ restart:
 #ifdef CONFIG_PREEMPT_RT
 static void worker_lock_callback(struct worker_pool *pool)
 {
-	spin_lock(&pool->cb_lock);
+	/*
+	 * SINGLE_DEPTH_NESTING is for a dead pool's bh_worker() running from
+	 * drain_dead_softirq_workfn() inside a live pool's bh_worker(). The
+	 * unlocked read is stable: the flag is only set while @pool's CPU is
+	 * dead, inside a serialized hotplug operation. data_race() as the value
+	 * only affects the lockdep annotation and the read can be elided when
+	 * lockdep is disabled.
+	 */
+	spin_lock_nested(&pool->cb_lock,
+			 data_race(pool->flags) & POOL_BH_DRAINING ? SINGLE_DEPTH_NESTING : 0);
 }
 
 static void worker_unlock_callback(struct worker_pool *pool)
@@ -3223,6 +3291,7 @@ __acquires(&pool->lock)
 {
 	struct pool_workqueue *pwq = get_work_pwq(work);
 	struct worker_pool *pool = worker->pool;
+	struct task_struct *wake_task = NULL;
 	unsigned long work_data;
 	int lockdep_start_depth, rcu_start_depth;
 	bool bh_draining = pool->flags & POOL_BH_DRAINING;
@@ -3249,7 +3318,7 @@ __acquires(&pool->lock)
 	worker->current_func = work->func;
 	worker->current_pwq = pwq;
 	if (worker->task)
-		worker->current_at = worker->task->se.sum_exec_runtime;
+		worker->current_at = READ_ONCE(worker->task->se.sum_exec_runtime);
 	worker->current_start = jiffies;
 	work_data = *work_data_bits(work);
 	worker->current_color = get_work_color(work_data);
@@ -3276,8 +3345,11 @@ __acquires(&pool->lock)
 	 * since nr_running would always be >= 1 at this point. This is used to
 	 * chain execution of the pending work items for WORKER_NOT_RUNNING
 	 * workers such as the UNBOUND and CPU_INTENSIVE ones.
+	 *
+	 * Select the worker under pool->lock; the wakeup is deferred until
+	 * after the lock is dropped, guarded by the rcu_read_lock() below.
 	 */
-	kick_pool(pool);
+	kick_pool_pick(pool, &wake_task);
 
 	/*
 	 * Record the last pool and clear PENDING which should be the last
@@ -3288,7 +3360,12 @@ __acquires(&pool->lock)
 	set_work_pool_and_clear_pending(work, pool->id, pool_offq_flags(pool));
 
 	pwq->stats[PWQ_STAT_STARTED]++;
+
+	rcu_read_lock();
 	raw_spin_unlock_irq(&pool->lock);
+	if (wake_task)
+		wake_up_process(wake_task);
+	rcu_read_unlock();
 
 	rcu_start_depth = rcu_preempt_depth();
 	lockdep_start_depth = lockdep_depth(current);
@@ -5033,7 +5110,7 @@ static void rcu_free_wq(struct rcu_head *rcu)
 
 	wq_free_lockdep(wq);
 	free_percpu(wq->cpu_pwq);
-	free_workqueue_attrs(wq->unbound_attrs);
+	free_workqueue_attrs(wq->attrs);
 	kfree(wq);
 }
 
@@ -5068,7 +5145,7 @@ static void put_unbound_pool(struct worker_pool *pool)
 		return;
 
 	/* sanity checks */
-	if (WARN_ON(!(pool->cpu < 0)) ||
+	if (WARN_ON(is_percpu_pool(pool)) ||
 	    WARN_ON(!list_empty(&pool->worklist)))
 		return;
 
@@ -5220,12 +5297,6 @@ static void pwq_release_workfn(struct kthread_work *work)
 		mutex_unlock(&wq->mutex);
 	}
 
-	if (wq->flags & WQ_UNBOUND) {
-		mutex_lock(&wq_pool_mutex);
-		put_unbound_pool(pool);
-		mutex_unlock(&wq_pool_mutex);
-	}
-
 	if (!list_empty(&pwq->pending_node)) {
 		struct wq_node_nr_active *nna =
 			wq_node_nr_active(pwq->wq, pwq->pool->node);
@@ -5233,6 +5304,12 @@ static void pwq_release_workfn(struct kthread_work *work)
 		raw_spin_lock_irq(&nna->lock);
 		list_del_init(&pwq->pending_node);
 		raw_spin_unlock_irq(&nna->lock);
+	}
+
+	if (!is_percpu_pool(pool)) {
+		mutex_lock(&wq_pool_mutex);
+		put_unbound_pool(pool);
+		mutex_unlock(&wq_pool_mutex);
 	}
 
 	kfree_rcu(pwq, rcu);
@@ -5297,27 +5374,60 @@ static void link_pwq(struct pool_workqueue *pwq)
 	list_add_tail_rcu(&pwq->pwqs_node, &wq->pwqs);
 }
 
-/* obtain a pool matching @attr and create a pwq associating the pool and @wq */
-static struct pool_workqueue *alloc_unbound_pwq(struct workqueue_struct *wq,
-					const struct workqueue_attrs *attrs)
+/* Return the static per-cpu worker_pool that backs @wq on @cpu. */
+static struct worker_pool *get_percpu_pool(struct workqueue_struct *wq, int cpu)
+{
+	struct worker_pool __percpu *pools;
+	bool highpri = wq->flags & WQ_HIGHPRI;
+
+	if (wq->flags & WQ_BH)
+		pools = bh_worker_pools;
+	else
+		pools = cpu_worker_pools;
+
+	return &per_cpu_ptr(pools, cpu)[highpri];
+}
+
+/*
+ * Obtain the pool backing @wq on @cpu and create a pwq associating the two.
+ * A WQ_PERCPU workqueue is backed by the static per-cpu pool of @cpu,
+ * everything else by a pool matching @attrs. @cpu < 0 is always unbound.
+ */
+static struct pool_workqueue *alloc_pwq(struct workqueue_struct *wq,
+					const struct workqueue_attrs *attrs,
+					int cpu)
 {
 	struct worker_pool *pool;
 	struct pool_workqueue *pwq;
 
 	lockdep_assert_held(&wq_pool_mutex);
 
-	pool = get_unbound_pool(attrs);
-	if (!pool)
-		return NULL;
+	WARN_ON_ONCE((wq->flags & WQ_PERCPU) && cpu < 0);
+
+	if (cpu >= 0 && (wq->flags & WQ_PERCPU)) {
+		pool = get_percpu_pool(wq, cpu);
+	} else {
+		pool = get_unbound_pool(attrs);
+		if (!pool)
+			return NULL;
+	}
 
 	pwq = kmem_cache_alloc_node(pwq_cache, GFP_KERNEL, pool->node);
 	if (!pwq) {
-		put_unbound_pool(pool);
+		if (!is_percpu_pool(pool))
+			put_unbound_pool(pool);
 		return NULL;
 	}
 
 	init_pwq(pwq, wq, pool);
 	return pwq;
+}
+
+/* create a pwq backed by an unbound pool matching @attrs */
+static struct pool_workqueue *alloc_unbound_pwq(struct workqueue_struct *wq,
+						const struct workqueue_attrs *attrs)
+{
+	return alloc_pwq(wq, attrs, -1);
 }
 
 /**
@@ -5349,10 +5459,10 @@ static void wq_calc_pod_cpumask(struct workqueue_attrs *attrs, int cpu)
 }
 
 /* install @pwq into @wq and return the old pwq, @cpu < 0 for dfl_pwq */
-static struct pool_workqueue *install_unbound_pwq(struct workqueue_struct *wq,
-					int cpu, struct pool_workqueue *pwq)
+static struct pool_workqueue *install_pwq(struct workqueue_struct *wq,
+					  int cpu, struct pool_workqueue *pwq)
 {
-	struct pool_workqueue __rcu **slot = unbound_pwq_slot(wq, cpu);
+	struct pool_workqueue __rcu **slot = pwq_slot(wq, cpu);
 	struct pool_workqueue *old_pwq;
 
 	lockdep_assert_held(&wq_pool_mutex);
@@ -5415,15 +5525,18 @@ apply_wqattrs_prepare(struct workqueue_struct *wq,
 
 	/*
 	 * If something goes wrong during CPU up/down, we'll fall back to
-	 * the default pwq covering whole @attrs->cpumask.  Always create
-	 * it even if we don't use it immediately.
+	 * the default pwq covering whole @attrs->cpumask.  Create it even
+	 * if we don't use it immediately.  A percpu workqueue has a pwq on
+	 * every possible CPU and never falls back, so it has no default.
 	 */
 	copy_workqueue_attrs(new_attrs, attrs);
 	wqattrs_actualize_cpumask(new_attrs, unbound_cpumask);
 	cpumask_copy(new_attrs->__pod_cpumask, new_attrs->cpumask);
-	ctx->dfl_pwq = alloc_unbound_pwq(wq, new_attrs);
-	if (!ctx->dfl_pwq)
-		goto out_free;
+	if (!(wq->flags & WQ_PERCPU)) {
+		ctx->dfl_pwq = alloc_unbound_pwq(wq, new_attrs);
+		if (!ctx->dfl_pwq)
+			goto out_free;
+	}
 
 	for_each_possible_cpu(cpu) {
 		if (new_attrs->ordered) {
@@ -5431,7 +5544,7 @@ apply_wqattrs_prepare(struct workqueue_struct *wq,
 			ctx->pwq_tbl[cpu] = ctx->dfl_pwq;
 		} else {
 			wq_calc_pod_cpumask(new_attrs, cpu);
-			ctx->pwq_tbl[cpu] = alloc_unbound_pwq(wq, new_attrs);
+			ctx->pwq_tbl[cpu] = alloc_pwq(wq, new_attrs, cpu);
 			if (!ctx->pwq_tbl[cpu])
 				goto out_free;
 		}
@@ -5469,16 +5582,18 @@ static void apply_wqattrs_commit(struct apply_wqattrs_ctx *ctx)
 	/* all pwqs have been created successfully, let's install'em */
 	mutex_lock(&ctx->wq->mutex);
 
-	copy_workqueue_attrs(ctx->wq->unbound_attrs, ctx->attrs);
+	copy_workqueue_attrs(ctx->wq->attrs, ctx->attrs);
 
 	/* save the previous pwqs and install the new ones */
 	for_each_possible_cpu(cpu)
-		ctx->pwq_tbl[cpu] = install_unbound_pwq(ctx->wq, cpu,
-							ctx->pwq_tbl[cpu]);
-	ctx->dfl_pwq = install_unbound_pwq(ctx->wq, -1, ctx->dfl_pwq);
+		ctx->pwq_tbl[cpu] = install_pwq(ctx->wq, cpu,
+						ctx->pwq_tbl[cpu]);
+	if (ctx->dfl_pwq)
+		ctx->dfl_pwq = install_pwq(ctx->wq, -1, ctx->dfl_pwq);
 
-	/* update node_nr_active->max */
-	wq_update_node_max_active(ctx->wq, -1);
+	/* update node_nr_active->max, which only unbound workqueues have */
+	if (ctx->wq->flags & WQ_UNBOUND)
+		wq_update_node_max_active(ctx->wq, -1);
 
 	mutex_unlock(&ctx->wq->mutex);
 }
@@ -5487,10 +5602,6 @@ static int apply_workqueue_attrs_locked(struct workqueue_struct *wq,
 					const struct workqueue_attrs *attrs)
 {
 	struct apply_wqattrs_ctx *ctx;
-
-	/* only unbound workqueues can change attributes */
-	if (WARN_ON(!(wq->flags & WQ_UNBOUND)))
-		return -EINVAL;
 
 	ctx = apply_wqattrs_prepare(wq, attrs, wq_unbound_cpumask);
 	if (IS_ERR(ctx))
@@ -5522,6 +5633,10 @@ int apply_workqueue_attrs(struct workqueue_struct *wq,
 			  const struct workqueue_attrs *attrs)
 {
 	int ret;
+
+	/* only unbound workqueues can change attributes */
+	if (WARN_ON(!(wq->flags & WQ_UNBOUND)))
+		return -EINVAL;
 
 	mutex_lock(&wq_pool_mutex);
 	ret = apply_workqueue_attrs_locked(wq, attrs);
@@ -5556,7 +5671,7 @@ static void unbound_wq_update_pwq(struct workqueue_struct *wq, int cpu)
 
 	lockdep_assert_held(&wq_pool_mutex);
 
-	if (!(wq->flags & WQ_UNBOUND) || wq->unbound_attrs->ordered)
+	if (!(wq->flags & WQ_UNBOUND) || wq->attrs->ordered)
 		return;
 
 	/*
@@ -5566,12 +5681,12 @@ static void unbound_wq_update_pwq(struct workqueue_struct *wq, int cpu)
 	 */
 	target_attrs = unbound_wq_update_pwq_attrs_buf;
 
-	copy_workqueue_attrs(target_attrs, wq->unbound_attrs);
+	copy_workqueue_attrs(target_attrs, wq->attrs);
 	wqattrs_actualize_cpumask(target_attrs, wq_unbound_cpumask);
 
 	/* nothing to do if the target cpumask matches the current pwq */
 	wq_calc_pod_cpumask(target_attrs, cpu);
-	if (wqattrs_equal(target_attrs, unbound_pwq(wq, cpu)->pool->attrs))
+	if (wqattrs_equal(target_attrs, installed_pwq(wq, cpu)->pool->attrs))
 		return;
 
 	/* create a new pwq */
@@ -5584,16 +5699,16 @@ static void unbound_wq_update_pwq(struct workqueue_struct *wq, int cpu)
 
 	/* Install the new pwq. */
 	mutex_lock(&wq->mutex);
-	old_pwq = install_unbound_pwq(wq, cpu, pwq);
+	old_pwq = install_pwq(wq, cpu, pwq);
 	goto out_unlock;
 
 use_dfl_pwq:
 	mutex_lock(&wq->mutex);
-	pwq = unbound_pwq(wq, -1);
+	pwq = installed_pwq(wq, -1);
 	raw_spin_lock_irq(&pwq->pool->lock);
 	get_pwq(pwq);
 	raw_spin_unlock_irq(&pwq->pool->lock);
-	old_pwq = install_unbound_pwq(wq, cpu, pwq);
+	old_pwq = install_pwq(wq, cpu, pwq);
 out_unlock:
 	mutex_unlock(&wq->mutex);
 	put_pwq_unlocked(old_pwq);
@@ -5602,44 +5717,17 @@ out_unlock:
 static int alloc_and_link_pwqs(struct workqueue_struct *wq)
 {
 	bool highpri = wq->flags & WQ_HIGHPRI;
-	int cpu, ret;
+	int ret;
 
 	lockdep_assert_held(&wq_pool_mutex);
 
-	wq->cpu_pwq = alloc_percpu(struct pool_workqueue *);
+	wq->cpu_pwq = alloc_percpu(struct pool_workqueue __rcu *);
 	if (!wq->cpu_pwq)
 		goto enomem;
 
 	if (!(wq->flags & WQ_UNBOUND)) {
-		struct worker_pool __percpu *pools;
-
-		if (wq->flags & WQ_BH)
-			pools = bh_worker_pools;
-		else
-			pools = cpu_worker_pools;
-
-		for_each_possible_cpu(cpu) {
-			struct pool_workqueue **pwq_p;
-			struct worker_pool *pool;
-
-			pool = &(per_cpu_ptr(pools, cpu)[highpri]);
-			pwq_p = per_cpu_ptr(wq->cpu_pwq, cpu);
-
-			*pwq_p = kmem_cache_alloc_node(pwq_cache, GFP_KERNEL,
-						       pool->node);
-			if (!*pwq_p)
-				goto enomem;
-
-			init_pwq(*pwq_p, wq, pool);
-
-			mutex_lock(&wq->mutex);
-			link_pwq(*pwq_p);
-			mutex_unlock(&wq->mutex);
-		}
-		return 0;
-	}
-
-	if (wq->flags & __WQ_ORDERED) {
+		ret = apply_workqueue_attrs_locked(wq, percpu_std_wq_attrs[highpri]);
+	} else if (wq->flags & __WQ_ORDERED) {
 		struct pool_workqueue *dfl_pwq;
 
 		ret = apply_workqueue_attrs_locked(wq, ordered_wq_attrs[highpri]);
@@ -5657,24 +5745,8 @@ static int alloc_and_link_pwqs(struct workqueue_struct *wq)
 	return 0;
 
 enomem:
-	if (wq->cpu_pwq) {
-		for_each_possible_cpu(cpu) {
-			struct pool_workqueue *pwq = *per_cpu_ptr(wq->cpu_pwq, cpu);
-
-			if (pwq) {
-				/*
-				 * Unlink pwq from wq->pwqs since link_pwq()
-				 * may have already added it. wq->mutex is not
-				 * needed as the wq has not been published yet.
-				 */
-				if (!list_empty(&pwq->pwqs_node))
-					list_del_rcu(&pwq->pwqs_node);
-				kmem_cache_free(pwq_cache, pwq);
-			}
-		}
-		free_percpu(wq->cpu_pwq);
-		wq->cpu_pwq = NULL;
-	}
+	free_percpu(wq->cpu_pwq);
+	wq->cpu_pwq = NULL;
 	return -ENOMEM;
 }
 
@@ -5828,11 +5900,9 @@ static struct workqueue_struct *__alloc_workqueue(const char *fmt,
 	if (!wq)
 		return NULL;
 
-	if (flags & WQ_UNBOUND) {
-		wq->unbound_attrs = alloc_workqueue_attrs_noprof();
-		if (!wq->unbound_attrs)
-			goto err_free_wq;
-	}
+	wq->attrs = alloc_workqueue_attrs_noprof();
+	if (!wq->attrs)
+		goto err_free_wq;
 
 	name_len = vsnprintf(wq->name, sizeof(wq->name), fmt, args);
 
@@ -5920,12 +5990,12 @@ err_unlock_free_node_nr_active:
 	 * flushing the pwq_release_worker ensures that the pwq_release_workfn()
 	 * completes before calling kfree(wq).
 	 */
-	if (wq->flags & WQ_UNBOUND) {
+	if (pwq_release_worker)
 		kthread_flush_worker(pwq_release_worker);
+	if (wq->flags & WQ_UNBOUND)
 		free_node_nr_active(wq->node_nr_active);
-	}
 err_free_wq:
-	free_workqueue_attrs(wq->unbound_attrs);
+	free_workqueue_attrs(wq->attrs);
 	kfree(wq);
 	return NULL;
 err_unlock_destroy:
@@ -6112,12 +6182,12 @@ void destroy_workqueue(struct workqueue_struct *wq)
 	rcu_read_lock();
 
 	for_each_possible_cpu(cpu) {
-		put_pwq_unlocked(unbound_pwq(wq, cpu));
-		RCU_INIT_POINTER(*unbound_pwq_slot(wq, cpu), NULL);
+		put_pwq_unlocked(installed_pwq(wq, cpu));
+		RCU_INIT_POINTER(*pwq_slot(wq, cpu), NULL);
 	}
 
-	put_pwq_unlocked(unbound_pwq(wq, -1));
-	RCU_INIT_POINTER(*unbound_pwq_slot(wq, -1), NULL);
+	put_pwq_unlocked(installed_pwq(wq, -1));
+	RCU_INIT_POINTER(*pwq_slot(wq, -1), NULL);
 
 	rcu_read_unlock();
 }
@@ -6216,6 +6286,30 @@ bool current_is_workqueue_rescuer(void)
 }
 
 /**
+ * current_is_workqueue_mem_reclaim - is %current a %WQ_MEM_RECLAIM worker?
+ *
+ * Determine whether %current is a workqueue worker executing on a workqueue
+ * created with %WQ_MEM_RECLAIM.  This mirrors the condition that
+ * check_flush_dependency() warns on: flushing (or otherwise waiting on) a
+ * !WQ_MEM_RECLAIM workqueue from such a context breaks the forward-progress
+ * guarantee and can deadlock.  Callers that may recurse into such a flush --
+ * e.g. NFS LOCALIO submitting into a stacked filesystem that flushes its own
+ * !WQ_MEM_RECLAIM workqueue -- can use this to decide whether they must defer
+ * the work to a !WQ_MEM_RECLAIM workqueue rather than run it inline.
+ *
+ * Return: %true if %current is a %WQ_MEM_RECLAIM worker.  %false otherwise.
+ */
+bool current_is_workqueue_mem_reclaim(void)
+{
+	struct worker *worker = current_wq_worker();
+
+	return worker &&
+		((worker->current_pwq->wq->flags &
+		  (WQ_MEM_RECLAIM | __WQ_LEGACY)) == WQ_MEM_RECLAIM);
+}
+EXPORT_SYMBOL_GPL(current_is_workqueue_mem_reclaim);
+
+/**
  * workqueue_congested - test whether a workqueue is congested
  * @cpu: CPU in question
  * @wq: target workqueue
@@ -6244,7 +6338,7 @@ bool workqueue_congested(int cpu, struct workqueue_struct *wq)
 	if (cpu == WORK_CPU_UNBOUND)
 		cpu = smp_processor_id();
 
-	pwq = *per_cpu_ptr(wq->cpu_pwq, cpu);
+	pwq = rcu_dereference_sched(*per_cpu_ptr(wq->cpu_pwq, cpu));
 	ret = !list_empty(&pwq->inactive_works);
 
 	preempt_enable();
@@ -6869,9 +6963,9 @@ int workqueue_online_cpu(unsigned int cpu)
 
 	/* update pod affinity of unbound workqueues */
 	list_for_each_entry(wq, &workqueues, list) {
-		struct workqueue_attrs *attrs = wq->unbound_attrs;
+		struct workqueue_attrs *attrs = wq->attrs;
 
-		if (attrs) {
+		if (wq->flags & WQ_UNBOUND) {
 			const struct wq_pod_type *pt = wqattrs_pod_type(attrs);
 			int tcpu;
 
@@ -6904,9 +6998,9 @@ int workqueue_offline_cpu(unsigned int cpu)
 	cpumask_clear_cpu(cpu, wq_online_cpumask);
 
 	list_for_each_entry(wq, &workqueues, list) {
-		struct workqueue_attrs *attrs = wq->unbound_attrs;
+		struct workqueue_attrs *attrs = wq->attrs;
 
-		if (attrs) {
+		if (wq->flags & WQ_UNBOUND) {
 			const struct wq_pod_type *pt = wqattrs_pod_type(attrs);
 			int tcpu;
 
@@ -7084,7 +7178,7 @@ static int workqueue_apply_unbound_cpumask(const cpumask_var_t unbound_cpumask)
 		if (!(wq->flags & WQ_UNBOUND) || (wq->flags & __WQ_DESTROYING))
 			continue;
 
-		ctx = apply_wqattrs_prepare(wq, wq->unbound_attrs, unbound_cpumask);
+		ctx = apply_wqattrs_prepare(wq, wq->attrs, unbound_cpumask);
 		if (IS_ERR(ctx)) {
 			ret = PTR_ERR(ctx);
 			break;
@@ -7302,7 +7396,7 @@ static ssize_t wq_nice_show(struct device *dev, struct device_attribute *attr,
 	int written;
 
 	mutex_lock(&wq->mutex);
-	written = scnprintf(buf, PAGE_SIZE, "%d\n", wq->unbound_attrs->nice);
+	written = scnprintf(buf, PAGE_SIZE, "%d\n", wq->attrs->nice);
 	mutex_unlock(&wq->mutex);
 
 	return written;
@@ -7319,7 +7413,7 @@ static struct workqueue_attrs *wq_sysfs_prep_attrs(struct workqueue_struct *wq)
 	if (!attrs)
 		return NULL;
 
-	copy_workqueue_attrs(attrs, wq->unbound_attrs);
+	copy_workqueue_attrs(attrs, wq->attrs);
 	return attrs;
 }
 
@@ -7356,7 +7450,7 @@ static ssize_t wq_cpumask_show(struct device *dev,
 
 	mutex_lock(&wq->mutex);
 	written = scnprintf(buf, PAGE_SIZE, "%*pb\n",
-			    cpumask_pr_args(wq->unbound_attrs->cpumask));
+			    cpumask_pr_args(wq->attrs->cpumask));
 	mutex_unlock(&wq->mutex);
 	return written;
 }
@@ -7392,13 +7486,13 @@ static ssize_t wq_affn_scope_show(struct device *dev,
 	int written;
 
 	mutex_lock(&wq->mutex);
-	if (wq->unbound_attrs->affn_scope == WQ_AFFN_DFL)
+	if (wq->attrs->affn_scope == WQ_AFFN_DFL)
 		written = scnprintf(buf, PAGE_SIZE, "%s (%s)\n",
 				    wq_affn_names[WQ_AFFN_DFL],
 				    wq_affn_names[wq_affn_dfl]);
 	else
 		written = scnprintf(buf, PAGE_SIZE, "%s\n",
-				    wq_affn_names[wq->unbound_attrs->affn_scope]);
+				    wq_affn_names[wq->attrs->affn_scope]);
 	mutex_unlock(&wq->mutex);
 
 	return written;
@@ -7433,7 +7527,7 @@ static ssize_t wq_affinity_strict_show(struct device *dev,
 	struct workqueue_struct *wq = dev_to_wq(dev);
 
 	return scnprintf(buf, PAGE_SIZE, "%d\n",
-			 wq->unbound_attrs->affn_strict);
+			 wq->attrs->affn_strict);
 }
 
 static ssize_t wq_affinity_strict_store(struct device *dev,
@@ -7606,7 +7700,7 @@ int workqueue_sysfs_register(struct workqueue_struct *wq)
 	dev_set_name(&wq_dev->dev, "%s", wq->name);
 
 	/*
-	 * unbound_attrs are created separately.  Suppress uevent until
+	 * attrs are created separately.  Suppress uevent until
 	 * everything is ready.
 	 */
 	dev_set_uevent_suppress(&wq_dev->dev, true);
@@ -7689,20 +7783,58 @@ module_param_named(panic_on_stall_time, wq_panic_on_stall_time, uint, 0644);
 MODULE_PARM_DESC(panic_on_stall_time, "Panic if stall exceeds this many seconds (0=disabled)");
 
 /*
- * Show workers that might prevent the processing of pending work items.
- * A busy worker that is not running on the CPU (e.g. sleeping in
- * wait_event_idle() with PF_WQ_WORKER cleared) can stall the pool just as
- * effectively as a CPU-bound one, so dump every in-flight worker.
+ * Report that a pool has no worker in running state, which is a sign that the
+ * pool may be stuck. Print pool info. Must be called with pool->lock held and
+ * inside a printk_deferred_enter/exit region.
+ */
+static void show_pool_no_running_worker(struct worker_pool *pool)
+{
+	lockdep_assert_held(&pool->lock);
+
+	printk_deferred_enter();
+	pr_info("pool %d: no worker in running state, cpu=%d is %s (nr_workers=%d nr_idle=%d)\n",
+		pool->id, pool->cpu,
+		idle_cpu(pool->cpu) ? "idle" : "busy",
+		pool->nr_workers, pool->nr_idle);
+	pr_info("The pool might have trouble waking an idle worker.\n");
+	/*
+	 * last_woken_worker and its task are valid here: set_worker_dying()
+	 * clears it under pool->lock before setting WORKER_DIE, so if
+	 * last_woken_worker is non-NULL the kthread has not yet exited and
+	 * worker->task is still alive.
+	 */
+	if (pool->last_woken_worker) {
+		pr_info("Backtrace of last woken worker:\n");
+		sched_show_task(pool->last_woken_worker->task);
+	} else {
+		pr_info("Last woken worker empty\n");
+	}
+	printk_deferred_exit();
+}
+
+/*
+ * Show running workers that might prevent the processing of pending work items.
+ * If no running worker is found, the pool may be stuck waiting for an idle
+ * worker to be woken, so report the pool state and the last woken worker.
  */
 static void show_cpu_pool_busy_workers(struct worker_pool *pool)
 {
+	bool found_running = false;
 	struct worker *worker;
 	unsigned long irq_flags;
-	int bkt;
+	int cpu, bkt;
 
 	raw_spin_lock_irqsave(&pool->lock, irq_flags);
 
+	/* Snapshot cpu inside the lock to safely use it after unlock. */
+	cpu = pool->cpu;
+
 	hash_for_each(pool->busy_hash, bkt, worker, hentry) {
+		/* Skip workers that are not actively running on the CPU. */
+		if (!task_is_running(worker->task))
+			continue;
+
+		found_running = true;
 		/*
 		 * Defer printing to avoid deadlocks in console
 		 * drivers that queue work while holding locks
@@ -7716,7 +7848,24 @@ static void show_cpu_pool_busy_workers(struct worker_pool *pool)
 		printk_deferred_exit();
 	}
 
+	/*
+	 * If no running worker was found, the pool is likely stuck. Print pool
+	 * state and the backtrace of the last woken worker, which is the prime
+	 * suspect for the stall.
+	 */
+	if (!found_running)
+		show_pool_no_running_worker(pool);
+
 	raw_spin_unlock_irqrestore(&pool->lock, irq_flags);
+
+	/*
+	 * Trigger a backtrace on the stalled CPU to capture what it is
+	 * currently executing. Skip an offline CPU, whose NMI is never acked
+	 * and would make the backtrace busy-wait until it times out. Done
+	 * after releasing the lock to avoid issues with NMI delivery.
+	 */
+	if (!found_running && cpu_online(cpu))
+		trigger_single_cpu_backtrace(cpu);
 }
 
 static void show_cpu_pools_busy_workers(void)
@@ -7832,7 +7981,7 @@ static void wq_watchdog_timer_fn(struct timer_list *unused)
 			lockup_detected = true;
 			stall_time = jiffies_to_msecs(now - pool_ts) / 1000;
 			max_stall_time = max(max_stall_time, stall_time);
-			if (pool->cpu >= 0 && !(pool->flags & POOL_BH)) {
+			if (is_percpu_pool(pool) && !(pool->flags & POOL_BH)) {
 				pool->cpu_stall = true;
 				cpu_pool_stall = true;
 			}
@@ -7893,6 +8042,9 @@ static int wq_watchdog_param_set_thresh(const char *val,
 	if (ret)
 		return ret;
 
+	if (thresh > MAX_JIFFY_OFFSET / HZ)
+		return -ERANGE;
+
 	if (system_percpu_wq)
 		wq_watchdog_set_thresh(thresh);
 	else
@@ -7923,12 +8075,12 @@ static inline void wq_watchdog_init(void) { }
 
 static void bh_pool_kick_normal(struct irq_work *irq_work)
 {
-	raise_softirq_irqoff(TASKLET_SOFTIRQ);
+	raise_softirq(TASKLET_SOFTIRQ);
 }
 
 static void bh_pool_kick_highpri(struct irq_work *irq_work)
 {
-	raise_softirq_irqoff(HI_SOFTIRQ);
+	raise_softirq(HI_SOFTIRQ);
 }
 
 static void __init restrict_unbound_cpumask(const char *name, const struct cpumask *mask)
@@ -8034,7 +8186,7 @@ void __init workqueue_init_early(void)
 			init_cpu_worker_pool(pool, cpu, std_nice[i++]);
 	}
 
-	/* create default unbound and ordered wq attrs */
+	/* create default unbound, ordered and percpu wq attrs */
 	for (i = 0; i < NR_STD_WORKER_POOLS; i++) {
 		struct workqueue_attrs *attrs;
 
@@ -8050,6 +8202,10 @@ void __init workqueue_init_early(void)
 		attrs->nice = std_nice[i];
 		attrs->ordered = true;
 		ordered_wq_attrs[i] = attrs;
+
+		BUG_ON(!(attrs = alloc_workqueue_attrs()));
+		attrs->nice = std_nice[i];
+		percpu_std_wq_attrs[i] = attrs;
 	}
 
 	system_wq = alloc_workqueue("events", WQ_PERCPU | __WQ_DEPRECATED, 0);

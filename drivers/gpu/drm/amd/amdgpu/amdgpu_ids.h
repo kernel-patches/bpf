@@ -26,6 +26,8 @@
 #include <linux/types.h>
 #include <linux/mutex.h>
 #include <linux/list.h>
+#include <linux/bitops.h>
+#include <linux/find.h>
 #include <linux/dma-fence.h>
 
 #include "amdgpu_sync.h"
@@ -33,7 +35,29 @@
 /* maximum number of VMIDs */
 #define AMDGPU_NUM_VMID	16
 
+/**
+ * for_each_vmid_and_zero - iterate over VMID 0 plus every VMID set in a hub's
+ *                          vmid_mask
+ * @vmid:	loop cursor (int / unsigned int)
+ * @adev:	struct amdgpu_device *
+ * @hub:	vmhub index into adev->vm_manager.id_mgr[]
+ *
+ * Equivalent to OR-ing BIT(0) into id_mgr[hub].vmid_mask and walking the
+ * result with for_each_set_bit(). Used by the gfx_v*_constants_init() paths
+ * which must always touch VMID 0 (system) in addition to the regular VMIDs
+ * owned by the hub.
+ *
+ * Relies on AMDGPU_NUM_VMID (16) fitting in a single unsigned long, i.e.
+ * vmid_mask[] being a 1-element bitmap.
+ */
+#define for_each_vmid_and_zero(vmid, adev, hub)				\
+	for (unsigned long __vmid_mask =				\
+		(adev)->vm_manager.id_mgr[(hub)].vmid_mask[0] | BIT(0);	\
+	     __vmid_mask; __vmid_mask = 0)				\
+		for_each_set_bit((vmid), &__vmid_mask, AMDGPU_NUM_VMID)
+
 struct amdgpu_device;
+struct amdgpu_fpriv;
 struct amdgpu_vm;
 struct amdgpu_ring;
 struct amdgpu_sync;
@@ -64,13 +88,16 @@ struct amdgpu_vmid {
 
 struct amdgpu_vmid_mgr {
 	struct mutex		lock;
-	unsigned		num_ids;
 	struct list_head	ids_lru;
 	struct amdgpu_vmid	ids[AMDGPU_NUM_VMID];
 	bool			reserved_vmid;
+	DECLARE_BITMAP(vmid_mask, AMDGPU_NUM_VMID);
 };
 
-int amdgpu_pasid_alloc(unsigned int bits);
+int amdgpu_pasid_alloc(unsigned int bits, struct amdgpu_fpriv *fpriv);
+void amdgpu_pasid_lock(unsigned long *flags);
+void amdgpu_pasid_unlock(unsigned long flags);
+struct amdgpu_fpriv *amdgpu_pasid_get_fpriv_locked(u32 pasid);
 void amdgpu_pasid_free(u32 pasid);
 void amdgpu_pasid_free_delayed(struct dma_resv *resv,
 			       u32 pasid);
@@ -91,5 +118,7 @@ void amdgpu_vmid_reset_all(struct amdgpu_device *adev);
 
 void amdgpu_vmid_mgr_init(struct amdgpu_device *adev);
 void amdgpu_vmid_mgr_fini(struct amdgpu_device *adev);
+void amdgpu_vmid_mgr_set_vmid_mask(struct amdgpu_device *adev,
+				   unsigned long vmid_mask, bool for_mmhub);
 
 #endif

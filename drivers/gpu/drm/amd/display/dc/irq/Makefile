@@ -41,6 +41,7 @@ AMD_DAL_IRQ_DCE60 = $(addprefix $(AMDDALPATH)/dc/irq/dce60/,$(IRQ_DCE60))
 AMD_DISPLAY_FILES += $(AMD_DAL_IRQ_DCE60)
 endif
 
+ifdef CONFIG_DRM_AMD_DC_DCE
 ###############################################################################
 # DCE 8x
 ###############################################################################
@@ -67,6 +68,7 @@ IRQ_DCE12 = irq_service_dce120.o
 AMD_DAL_IRQ_DCE12 = $(addprefix $(AMDDALPATH)/dc/irq/dce120/,$(IRQ_DCE12))
 
 AMD_DISPLAY_FILES += $(AMD_DAL_IRQ_DCE12)
+endif # CONFIG_DRM_AMD_DC_DCE
 
 ###############################################################################
 # DCN 1x
@@ -207,3 +209,12 @@ IRQ_DCN42 = irq_service_dcn42.o
 AMD_DAL_IRQ_DCN42= $(addprefix $(AMDDALPATH)/dc/irq/dcn42/,$(IRQ_DCN42))
 
 AMD_DISPLAY_FILES += $(AMD_DAL_IRQ_DCN42)
+
+###############################################################################
+# DCN 60
+###############################################################################
+IRQ_DCN60 = irq_service_dcn60.o
+
+AMD_DAL_IRQ_DCN60 = $(addprefix $(AMDDALPATH)/dc/irq/dcn60/,$(IRQ_DCN60))
+
+AMD_DISPLAY_FILES += $(AMD_DAL_IRQ_DCN60)

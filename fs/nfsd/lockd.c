@@ -10,6 +10,7 @@
 #include <linux/file.h>
 #include <linux/lockd/bind.h>
 #include "nfsd.h"
+#include "nfserr.h"
 #include "vfs.h"
 
 #define NFSDDBG_FACILITY		NFSDDBG_LOCKD
@@ -33,8 +34,7 @@ static int nlm_fopen(struct svc_rqst *rqstp, struct nfs_fh *f,
 	int		access;
 	struct svc_fh	fh;
 
-	/* must initialize before using! but maxsize doesn't matter */
-	fh_init(&fh,0);
+	fh_init(&fh, NFSD_FHSIZE_UNSPEC);
 	fh.fh_handle.fh_size = f->size;
 	memcpy(&fh.fh_handle.fh_raw, f->data, f->size);
 	fh.fh_export = NULL;
@@ -92,6 +92,7 @@ nlm_fclose(struct file *filp)
 }
 
 static const struct nlmsvc_binding nfsd_nlm_ops = {
+	.owner		= THIS_MODULE,
 	.fopen		= nlm_fopen,		/* open file for locking */
 	.fclose		= nlm_fclose,		/* close file */
 };
@@ -100,11 +101,12 @@ void
 nfsd_lockd_init(void)
 {
 	dprintk("nfsd: initializing lockd\n");
-	nlmsvc_ops = &nfsd_nlm_ops;
+	rcu_assign_pointer(nlmsvc_ops, &nfsd_nlm_ops);
 }
 
 void
 nfsd_lockd_shutdown(void)
 {
-	nlmsvc_ops = NULL;
+	RCU_INIT_POINTER(nlmsvc_ops, NULL);
+	synchronize_rcu();
 }

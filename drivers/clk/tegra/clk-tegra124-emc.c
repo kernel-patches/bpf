@@ -485,8 +485,8 @@ static const struct clk_ops tegra_clk_emc_ops = {
 struct clk *tegra124_clk_register_emc(void __iomem *base, struct device_node *np,
 				      spinlock_t *lock)
 {
+	struct clk_init_data init = {};
 	struct tegra_clk_emc *tegra;
-	struct clk_init_data init;
 	struct device_node *node;
 	u32 node_ram_code;
 	struct clk *clk;
@@ -537,6 +537,7 @@ struct clk *tegra124_clk_register_emc(void __iomem *base, struct device_node *np
 
 	clk = clk_register(NULL, &tegra->hw);
 	if (IS_ERR(clk)) {
+		of_node_put(tegra->emc_node);
 		kfree(tegra);
 		return clk;
 	}

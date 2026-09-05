@@ -9,6 +9,7 @@
 #define _TRACE_NFS_H
 
 #include <linux/tracepoint.h>
+#include <linux/pagemap.h>
 #include <linux/iversion.h>
 
 #include <trace/misc/fs.h>
@@ -33,7 +34,8 @@
 			{ NFS_INO_INVALID_XATTR, "INVALID_XATTR" }, \
 			{ NFS_INO_INVALID_NLINK, "INVALID_NLINK" }, \
 			{ NFS_INO_INVALID_MODE, "INVALID_MODE" }, \
-			{ NFS_INO_INVALID_BTIME, "INVALID_BTIME" })
+			{ NFS_INO_INVALID_BTIME, "INVALID_BTIME" }, \
+			{ NFS_INO_INVALID_UNCACHEABLE_FILE_DATA, "INVALID_UNCACHEABLE_FILE_DATA" })
 
 #define nfs_show_nfsi_flags(v) \
 	__print_flags(v, "|", \

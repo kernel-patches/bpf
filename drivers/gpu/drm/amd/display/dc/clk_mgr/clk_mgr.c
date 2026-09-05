@@ -30,10 +30,12 @@
 #include "dc_state_priv.h"
 #include "link_service.h"
 
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 #include "dce100/dce_clk_mgr.h"
 #include "dce110/dce110_clk_mgr.h"
 #include "dce112/dce112_clk_mgr.h"
 #include "dce120/dce120_clk_mgr.h"
+#endif
 #include "dcn10/rv1_clk_mgr.h"
 #include "dcn10/rv2_clk_mgr.h"
 #include "dcn20/dcn20_clk_mgr.h"
@@ -50,6 +52,7 @@
 #include "dcn401/dcn401_clk_mgr.h"
 #include "dcn42/dcn42_clk_mgr.h"
 #include "dcn42b/dcn42b_clk_mgr.h"
+#include "dcn60/dcn60_clk_mgr.h"
 
 int clk_mgr_helper_get_active_display_cnt(
 		struct dc *dc,
@@ -151,6 +154,7 @@ struct clk_mgr *dc_clk_mgr_create(struct dc_context *ctx, struct pp_smu_funcs *p
 	struct hw_asic_id asic_id = ctx->asic_id;
 
 	switch (asic_id.chip_family) {
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 	case FAMILY_SI:
 	case FAMILY_CI:
 	case FAMILY_KV: {
@@ -210,6 +214,7 @@ struct clk_mgr *dc_clk_mgr_create(struct dc_context *ctx, struct pp_smu_funcs *p
 			dce120_clk_mgr_construct(ctx, clk_mgr);
 		return &clk_mgr->base;
 	}
+#endif
 #if defined(CONFIG_DRM_AMD_DC_FP)
 	case FAMILY_RV: {
 		struct clk_mgr_internal *clk_mgr = kzalloc_obj(*clk_mgr);
@@ -387,6 +392,17 @@ struct clk_mgr *dc_clk_mgr_create(struct dc_context *ctx, struct pp_smu_funcs *p
 		return &clk_mgr->base.base;
 	}
 	break;
+	case AMDGPU_FAMILY_GC_13_0_1: {
+		struct clk_mgr_internal *clk_mgr = dcn60_clk_mgr_construct(ctx, dccg);
+
+		if (clk_mgr == NULL) {
+			BREAK_TO_DEBUGGER();
+			return NULL;
+		}
+
+		return &clk_mgr->base;
+	}
+
 #endif	/* CONFIG_DRM_AMD_DC_FP */
 	default:
 		ASSERT(0); /* Unknown Asic */
@@ -450,6 +466,9 @@ void dc_destroy_clk_mgr(struct clk_mgr *clk_mgr_base)
 		break;
 	case AMDGPU_FAMILY_GC_11_5_4:
 		dcn42_clk_mgr_destroy(clk_mgr);
+		break;
+	case AMDGPU_FAMILY_GC_13_0_1:
+		dcn60_clk_mgr_destroy(clk_mgr);
 		break;
 
 	default:

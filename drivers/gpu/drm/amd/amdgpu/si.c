@@ -35,6 +35,7 @@
 #include "amdgpu_vce.h"
 #include "atom.h"
 #include "amd_pcie.h"
+#include "amdgpu_video_codecs.h"
 
 #include "si_dpm.h"
 #include "sid.h"
@@ -1509,12 +1510,6 @@ static void si_invalidate_hdp(struct amdgpu_device *adev,
 	}
 }
 
-static bool si_need_full_reset(struct amdgpu_device *adev)
-{
-	/* change this when we support soft reset */
-	return true;
-}
-
 static bool si_need_reset_on_init(struct amdgpu_device *adev)
 {
 	return false;
@@ -2019,7 +2014,6 @@ static const struct amdgpu_asic_funcs si_asic_funcs =
 	.get_config_memsize = &si_get_config_memsize,
 	.flush_hdp = &si_flush_hdp,
 	.invalidate_hdp = &si_invalidate_hdp,
-	.need_full_reset = &si_need_full_reset,
 	.get_pcie_usage = &si_get_pcie_usage,
 	.need_reset_on_init = &si_need_reset_on_init,
 	.get_pcie_replay_count = &si_get_pcie_replay_count,
@@ -2224,7 +2218,7 @@ static void si_init_golden_registers(struct amdgpu_device *adev)
 
 
 	default:
-		BUG();
+		break;
 	}
 }
 
@@ -2653,11 +2647,6 @@ static int si_common_resume(struct amdgpu_ip_block *ip_block)
 	return si_common_hw_init(ip_block);
 }
 
-static bool si_common_is_idle(struct amdgpu_ip_block *ip_block)
-{
-	return true;
-}
-
 static int si_common_set_clockgating_state(struct amdgpu_ip_block *ip_block,
 					    enum amd_clockgating_state state)
 {
@@ -2676,7 +2665,6 @@ static const struct amd_ip_funcs si_common_ip_funcs = {
 	.hw_init = si_common_hw_init,
 	.hw_fini = si_common_hw_fini,
 	.resume = si_common_resume,
-	.is_idle = si_common_is_idle,
 	.set_clockgating_state = si_common_set_clockgating_state,
 	.set_powergating_state = si_common_set_powergating_state,
 };
@@ -2741,7 +2729,7 @@ int si_set_ip_blocks(struct amdgpu_device *adev)
 			amdgpu_device_ip_block_add(adev, &amdgpu_vkms_ip_block);
 		break;
 	default:
-		BUG();
+		break;
 	}
 	return 0;
 }

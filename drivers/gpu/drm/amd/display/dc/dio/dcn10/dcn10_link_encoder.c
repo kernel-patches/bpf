@@ -1166,6 +1166,10 @@ void dcn10_link_encoder_dp_set_phy_pattern(
 {
 	struct dcn10_link_encoder *enc10 = TO_DCN10_LINK_ENC(enc);
 
+	if (!param) {
+		ASSERT_CRITICAL(false);
+		return;
+	}
 	switch (param->dp_phy_pattern) {
 	case DP_TEST_PATTERN_TRAINING_PATTERN1:
 		dcn10_link_encoder_set_dp_phy_pattern_training_pattern(enc, 0);
@@ -1190,7 +1194,7 @@ void dcn10_link_encoder_dp_set_phy_pattern(
 		break;
 	case DP_TEST_PATTERN_80BIT_CUSTOM:
 		set_dp_phy_pattern_80bit_custom(
-			enc10, param->custom_pattern);
+				enc10, param->custom_pattern);
 		break;
 	case DP_TEST_PATTERN_CP2520_1:
 		set_dp_phy_pattern_hbr2_compliance_cp2520_2(enc10, 1);
@@ -1203,7 +1207,7 @@ void dcn10_link_encoder_dp_set_phy_pattern(
 		break;
 	case DP_TEST_PATTERN_VIDEO_MODE: {
 		set_dp_phy_pattern_passthrough_mode(
-			enc10, param->dp_panel_mode);
+				enc10, param->dp_panel_mode);
 		break;
 	}
 

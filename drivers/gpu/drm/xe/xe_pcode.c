@@ -11,10 +11,15 @@
 
 #include <drm/drm_managed.h>
 
+#include "regs/xe_pmt.h"
 #include "xe_assert.h"
 #include "xe_device.h"
+#include "xe_log.h"
 #include "xe_mmio.h"
 #include "xe_pcode_api.h"
+#include "xe_pm.h"
+#include "xe_printk.h"
+#include "xe_vsec.h"
 
 /**
  * DOC: PCODE
@@ -57,9 +62,7 @@ static int pcode_mailbox_status(struct xe_tile *tile)
 	}
 
 	if (err) {
-		drm_err(&tile_to_xe(tile)->drm, "PCODE Mailbox failed: %d %s",
-			err_decode, err_str);
-
+		xe_log_err(tile, PCODE, err_decode, "Mailbox failed: %s\n", err_str);
 		return err_decode;
 	}
 
@@ -132,12 +135,12 @@ int xe_pcode_write64_timeout(struct xe_tile *tile, u32 mbox, u32 data0, u32 data
 	return err;
 }
 
-int xe_pcode_read(struct xe_tile *tile, u32 mbox, u32 *val, u32 *val1)
+int xe_pcode_read(struct xe_tile *tile, u32 mbox, u32 *val0, u32 *val1)
 {
 	int err;
 
 	mutex_lock(&tile->pcode.lock);
-	err = pcode_mailbox_rw(tile, mbox, val, val1, 1, true, false);
+	err = pcode_mailbox_rw(tile, mbox, val0, val1, 1, true, false);
 	mutex_unlock(&tile->pcode.lock);
 
 	return err;
@@ -145,7 +148,7 @@ int xe_pcode_read(struct xe_tile *tile, u32 mbox, u32 *val, u32 *val1)
 
 static int pcode_try_request(struct xe_tile *tile, u32 mbox,
 			     u32 request, u32 reply_mask, u32 reply,
-			     u32 *status, bool atomic, int timeout_us, bool locked)
+			     int *status, bool atomic, int timeout_us, bool locked)
 {
 	int slept, wait = 10;
 
@@ -193,8 +196,7 @@ static int pcode_try_request(struct xe_tile *tile, u32 mbox,
 int xe_pcode_request(struct xe_tile *tile, u32 mbox, u32 request,
 		     u32 reply_mask, u32 reply, int timeout_base_ms)
 {
-	u32 status;
-	int ret;
+	int status, ret;
 
 	xe_tile_assert(tile, timeout_base_ms <= 3);
 
@@ -215,8 +217,7 @@ int xe_pcode_request(struct xe_tile *tile, u32 mbox, u32 request,
 	 * requests, and for any quirks of the PCODE firmware that delays
 	 * the request completion.
 	 */
-	drm_err(&tile_to_xe(tile)->drm,
-		"PCODE timeout, retrying with preemption disabled\n");
+	xe_log_err(tile, PCODE, ret, "timeout, retrying with preemption disabled\n");
 	preempt_disable();
 	ret = pcode_try_request(tile, mbox, request, reply_mask, reply, &status,
 				true, 50 * 1000, true);
@@ -293,10 +294,10 @@ unlock:
  */
 int xe_pcode_ready(struct xe_device *xe, bool locked)
 {
-	u32 status, request = DGFX_GET_INIT_STATUS;
 	struct xe_tile *tile = xe_device_get_root_tile(xe);
-	int timeout_us = 180000000; /* 3 min */
-	int ret;
+	long timeout_us = 3 * 60 * USEC_PER_SEC; /* 3 min */
+	u32 request = DGFX_GET_INIT_STATUS;
+	int status, ret;
 
 	if (xe->info.skip_pcode)
 		return 0;
@@ -316,22 +317,24 @@ int xe_pcode_ready(struct xe_device *xe, bool locked)
 		mutex_unlock(&tile->pcode.lock);
 
 	if (ret)
-		drm_err(&xe->drm,
-			"PCODE initialization timedout after: 3 min\n");
+		xe_log_err(tile, PCODE, ret, "initialization timedout after %ld seconds\n",
+			   timeout_us / USEC_PER_SEC);
 
 	return ret;
 }
 
 /**
- * xe_pcode_init: initialize components of PCODE
+ * xe_pcode_init_early() - Initialize components of PCODE
  * @tile: tile instance
  *
  * This function initializes the xe_pcode component.
  * To be called once only during probe.
+ *
+ * Return: 0 on success or a negative error code on failure.
  */
-void xe_pcode_init(struct xe_tile *tile)
+int xe_pcode_init_early(struct xe_tile *tile)
 {
-	drmm_mutex_init(&tile_to_xe(tile)->drm, &tile->pcode.lock);
+	return drmm_mutex_init(&tile_to_xe(tile)->drm, &tile->pcode.lock);
 }
 
 /**
@@ -348,3 +351,31 @@ int xe_pcode_probe_early(struct xe_device *xe)
 	return xe_pcode_ready(xe, false);
 }
 ALLOW_ERROR_INJECTION(xe_pcode_probe_early, ERRNO); /* See xe_pci_probe */
+
+/**
+ * xe_get_pcode_version - Read pcode version via PMT telemetry
+ * @xe: xe instance
+ * @version: pointer to struct xe_pcode_version to store version info
+ *
+ * Reads the pcode version from PMT telemetry and fills the
+ * provided @version structure.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int xe_get_pcode_version(struct xe_device *xe, struct xe_pcode_version *version)
+{
+	int ret = 0;
+
+	guard(xe_pm_runtime)(xe);
+
+	ret = xe_pmt_telem_read(xe->drm.dev,
+				xe_mmio_read32(xe_root_tile_mmio(xe), PUNIT_TELEMETRY_GUID),
+				(u64 *)version, PUNIT_VERSION_OFFSET, sizeof(*version));
+	if (ret != sizeof(*version)) {
+		xe_warn(xe, "pcode version read from PMT failed, ret %pe\n", ERR_PTR(ret));
+		return ret;
+	}
+	xe_dbg(xe, "pcode version major %u minor %u engg %u\n", version->major,
+	       version->minor, version->engg);
+	return 0;
+}

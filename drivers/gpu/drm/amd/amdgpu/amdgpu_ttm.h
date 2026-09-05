@@ -37,7 +37,9 @@
 #define AMDGPU_PL_PREEMPT	(TTM_PL_PRIV + 3)
 #define AMDGPU_PL_DOORBELL	(TTM_PL_PRIV + 4)
 #define AMDGPU_PL_MMIO_REMAP	(TTM_PL_PRIV + 5)
-#define __AMDGPU_PL_NUM	(TTM_PL_PRIV + 6)
+#define AMDGPU_PL_NPA		(TTM_PL_PRIV + 6)
+#define __AMDGPU_PL_NUM		(TTM_PL_PRIV + 7)
+
 
 #define AMDGPU_GTT_MAX_TRANSFER_SIZE	(1ULL << 22)
 
@@ -140,10 +142,12 @@ int amdgpu_gtt_mgr_init(struct amdgpu_device *adev, uint64_t gtt_size);
 void amdgpu_gtt_mgr_fini(struct amdgpu_device *adev);
 int amdgpu_preempt_mgr_init(struct amdgpu_device *adev);
 void amdgpu_preempt_mgr_fini(struct amdgpu_device *adev);
+void amdgpu_preempt_mgr_sysfs_fini(struct amdgpu_device *adev);
 int amdgpu_vram_mgr_init(struct amdgpu_device *adev);
 void amdgpu_vram_mgr_fini(struct amdgpu_device *adev);
 
 bool amdgpu_gtt_mgr_has_gart_addr(struct ttm_resource *mem);
+void amdgpu_gtt_mgr_mark_bo_teardown(struct ttm_buffer_object *tbo);
 void amdgpu_gtt_mgr_recover(struct amdgpu_gtt_mgr *mgr);
 
 int amdgpu_gtt_mgr_alloc_entries(struct amdgpu_gtt_mgr *mgr,

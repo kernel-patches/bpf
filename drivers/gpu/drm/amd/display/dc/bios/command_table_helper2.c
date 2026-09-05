@@ -45,6 +45,7 @@ bool dal_bios_parser_init_cmd_tbl_helper2(
 		return true;
 #endif
 
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 	case DCE_VERSION_8_0:
 	case DCE_VERSION_8_1:
 	case DCE_VERSION_8_3:
@@ -58,6 +59,7 @@ bool dal_bios_parser_init_cmd_tbl_helper2(
 	case DCE_VERSION_11_0:
 		*h = dal_cmd_tbl_helper_dce110_get_table();
 		return true;
+#endif
 
 	case DCE_VERSION_11_2:
 	case DCE_VERSION_11_22:
@@ -86,6 +88,7 @@ bool dal_bios_parser_init_cmd_tbl_helper2(
 	case DCN_VERSION_4_01:
 	case DCN_VERSION_4_2:
 	case DCN_VERSION_4_2B:
+	case DCN_VERSION_6_0:
 		*h = dal_cmd_tbl_helper_dce112_get_table2();
 		return true;
 

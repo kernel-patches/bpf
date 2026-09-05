@@ -337,8 +337,8 @@ static const struct regmap_config si514_regmap_config = {
 
 static int si514_probe(struct i2c_client *client)
 {
+	struct clk_init_data init = {};
 	struct clk_si514 *data;
-	struct clk_init_data init;
 	int err;
 
 	data = devm_kzalloc(&client->dev, sizeof(*data), GFP_KERNEL);
@@ -379,7 +379,7 @@ static int si514_probe(struct i2c_client *client)
 }
 
 static const struct i2c_device_id si514_id[] = {
-	{ "si514" },
+	{ .name = "si514" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, si514_id);

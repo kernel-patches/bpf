@@ -13,6 +13,7 @@
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
+#include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/property.h>
@@ -951,8 +952,9 @@ static ssize_t in_illuminance0_target_input_store(struct device *dev,
 	u16 value;
 	int ret;
 
-	if (kstrtou16(buf, 0, &value))
-		return -EINVAL;
+	ret = kstrtou16(buf, 0, &value);
+	if (ret)
+		return ret;
 
 	chip->settings.als_cal_target = value;
 	ret = tsl2772_invoke_change(indio_dev);
@@ -970,7 +972,10 @@ static ssize_t in_illuminance0_calibrate_store(struct device *dev,
 	bool value;
 	int ret;
 
-	if (kstrtobool(buf, &value) || !value)
+	ret = kstrtobool(buf, &value);
+	if (ret)
+		return ret;
+	if (!value)
 		return -EINVAL;
 
 	ret = tsl2772_als_calibrate(indio_dev);
@@ -1061,7 +1066,10 @@ static ssize_t in_proximity0_calibrate_store(struct device *dev,
 	bool value;
 	int ret;
 
-	if (kstrtobool(buf, &value) || !value)
+	ret = kstrtobool(buf, &value);
+	if (ret)
+		return ret;
+	if (!value)
 		return -EINVAL;
 
 	ret = tsl2772_prox_cal(indio_dev);
@@ -1274,7 +1282,7 @@ static int tsl2772_read_raw(struct iio_dev *indio_dev,
 		}
 		break;
 	case IIO_CHAN_INFO_CALIBSCALE:
-		if (chan->type == IIO_LIGHT)
+		if (chan->type == IIO_INTENSITY)
 			*val = tsl2772_als_gain[chip->settings.als_gain];
 		else
 			*val = tsl2772_prox_gain[chip->settings.prox_gain];
@@ -1849,11 +1857,8 @@ static int tsl2772_probe(struct i2c_client *clientp)
 						IRQF_ONESHOT,
 						"TSL2772_event",
 						indio_dev);
-		if (ret) {
-			dev_err(&clientp->dev,
-				"%s: irq request failed\n", __func__);
+		if (ret)
 			return ret;
-		}
 	} else {
 		indio_dev->channels = chip->chip_info->channel_without_events;
 	}

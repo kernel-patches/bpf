@@ -157,6 +157,27 @@ const struct iomap_ops exfat_iomap_ops = {
 	.iomap_next = exfat_iomap_next,
 };
 
+#ifdef CONFIG_SWAP
+static int exfat_swap_iomap_begin(struct inode *inode, loff_t offset,
+		loff_t length, unsigned int flags, struct iomap *iomap,
+		struct iomap *srcmap)
+{
+	/*
+	 * Swap activation needs the physical mappings of preallocated
+	 * ranges. Do not report the VDL tail as a hole.
+	 */
+	return __exfat_iomap_begin(inode, offset, length,
+			flags & ~IOMAP_REPORT, iomap, false);
+}
+
+static DEFINE_IOMAP_ITER_NEXT(exfat_swap_iomap_next,
+		exfat_swap_iomap_begin);
+
+static const struct iomap_ops exfat_swap_iomap_ops = {
+	.iomap_next = exfat_swap_iomap_next,
+};
+#endif
+
 /*
  * exfat_write_iomap_end - Update the state after write
  *
@@ -177,10 +198,17 @@ static int exfat_write_iomap_end(struct inode *inode, loff_t pos, loff_t length,
 
 	if (ei->valid_size < end) {
 		ei->valid_size = end;
-		if (ei->zeroed_size < end)
-			ei->zeroed_size = end;
 		dirtied = true;
 	}
+
+	/*
+	 * IOMAP_F_ZERO_TAIL zeroes the remainder of the last block. Track that
+	 * block as zeroed so later valid_size extensions do not zero it again.
+	 */
+	if (iomap->flags & IOMAP_F_ZERO_TAIL)
+		end = round_up(end, i_blocksize(inode));
+	if (ei->zeroed_size < end)
+		ei->zeroed_size = end;
 
 	if (dirtied || iomap->flags & IOMAP_F_SIZE_CHANGED)
 		mark_inode_dirty(inode);
@@ -268,5 +296,10 @@ const struct iomap_read_ops exfat_iomap_bio_read_ops = {
 int exfat_iomap_swap_activate(struct swap_info_struct *sis,
 			       struct file *file, sector_t *span)
 {
-	return iomap_swapfile_activate(sis, file, span, &exfat_iomap_ops);
+#ifdef CONFIG_SWAP
+	return iomap_swapfile_activate(sis, file, span,
+				       &exfat_swap_iomap_ops);
+#else
+	return -EIO;
+#endif
 }

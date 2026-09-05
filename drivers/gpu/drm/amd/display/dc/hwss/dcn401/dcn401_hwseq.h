@@ -32,17 +32,16 @@ struct ips_ono_region_state {
 	uint32_t current_pwr_state;
 };
 
-void dcn401_program_gamut_remap(struct pipe_ctx *pipe_ctx);
+void dcn401_program_gamut_remap(struct program_gamut_remap_params *params);
 
 void dcn401_init_hw(struct dc *dc);
 
-bool dcn401_set_mcm_luts(struct pipe_ctx *pipe_ctx,
-				const struct dc_plane_state *plane_state);
-bool dcn401_set_output_transfer_func(struct dc *dc,
-				struct pipe_ctx *pipe_ctx,
-				const struct dc_stream_state *stream);
-void dcn401_trigger_3dlut_dma_load(struct dc *dc,
-				struct pipe_ctx *pipe_ctx);
+bool dcn401_set_mcm_luts(struct dc *dc, struct dpp *dpp, struct hubp *hubp,
+				struct hubp *primary_hubp, struct mpc *mpc, int mpcc_id,
+				struct dc_stream_state *stream,
+				struct dc_plane_state *plane_state);
+bool dcn401_set_output_transfer_func(struct set_output_transfer_func_params *params);
+void dcn401_trigger_3dlut_dma_load(struct pipe_ctx *pipe_ctx);
 void dcn401_calculate_dccg_tmds_div_value(struct pipe_ctx *pipe_ctx,
 				unsigned int *tmds_div);
 enum dc_status dcn401_enable_stream_timing(
@@ -50,10 +49,6 @@ enum dc_status dcn401_enable_stream_timing(
 				struct dc_state *context,
 				struct dc *dc);
 void dcn401_enable_stream(struct pipe_ctx *pipe_ctx);
-void dcn401_populate_mcm_luts(struct dc *dc,
-		struct pipe_ctx *pipe_ctx,
-		struct dc_cm2_func_luts mcm_luts,
-		bool lut_bank_a);
 void dcn401_setup_hpo_hw_control(const struct dce_hwseq *hws, bool enable);
 
 void dcn401_disable_link_output(struct dc_link *link,
@@ -64,15 +59,24 @@ void dcn401_set_cursor_position(struct pipe_ctx *pipe_ctx);
 
 bool dcn401_apply_idle_power_optimizations(struct dc *dc, bool enable);
 
-void dcn401_wait_for_dcc_meta_propagation(const struct dc *dc,
-		const struct pipe_ctx *top_pipe_to_program);
+void dcn401_wait_for_dcc_meta_propagation(uint32_t delay);
 
 void dcn401_prepare_bandwidth(struct dc *dc,
 		struct dc_state *context);
 
+struct block_sequence_state;
+
+void dcn401_prepare_bandwidth_sequence(struct dc *dc,
+		struct dc_state *context,
+		struct block_sequence_state *seq_state);
+
 void dcn401_optimize_bandwidth(
 		struct dc *dc,
 		struct dc_state *context);
+
+void dcn401_optimize_bandwidth_sequence(struct dc *dc,
+		struct dc_state *context,
+		struct block_sequence_state *seq_state);
 
 void dcn401_dmub_hw_control_lock(struct dc *dc,
 		struct dc_state *context,
@@ -105,7 +109,8 @@ void dcn401_program_pipe_sequence(
 	struct pipe_ctx *pipe_ctx,
 	struct dc_state *context,
 	struct block_sequence_state *seq_state);
-void dcn401_perform_3dlut_wa_unlock(struct pipe_ctx *pipe_ctx);
+void dcn401_perform_3dlut_wa_unlock(struct timing_generator *tg,
+		struct hubp *primary_hubp);
 void dcn401_program_front_end_for_ctx(struct dc *dc, struct dc_state *context);
 void dcn401_post_unlock_program_front_end(struct dc *dc, struct dc_state *context);
 bool dcn401_update_bandwidth(struct dc *dc, struct dc_state *context);

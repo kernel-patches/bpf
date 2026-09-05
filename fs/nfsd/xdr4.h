@@ -38,7 +38,7 @@
 #define _LINUX_NFSD_XDR4_H
 
 #include "state.h"
-#include "nfsd.h"
+#include "vfs.h"
 
 #define NFSD4_MAX_TAGLEN	128
 #define XDR_LEN(n)                     (((n) + 3) & ~3)
@@ -49,134 +49,6 @@
 #define SET_CSTATE_FLAG(c, f) ((c)->sid_flags |= (f))
 #define HAS_CSTATE_FLAG(c, f) ((c)->sid_flags & (f))
 #define CLEAR_CSTATE_FLAG(c, f) ((c)->sid_flags &= ~(f))
-
-/**
- * nfsd4_encode_bool - Encode an XDR bool type result
- * @xdr: target XDR stream
- * @val: boolean value to encode
- *
- * Return values:
- *    %nfs_ok: @val encoded; @xdr advanced to next position
- *    %nfserr_resource: stream buffer space exhausted
- */
-static __always_inline __be32
-nfsd4_encode_bool(struct xdr_stream *xdr, bool val)
-{
-	__be32 *p = xdr_reserve_space(xdr, XDR_UNIT);
-
-	if (unlikely(p == NULL))
-		return nfserr_resource;
-	*p = val ? xdr_one : xdr_zero;
-	return nfs_ok;
-}
-
-/**
- * nfsd4_encode_uint32_t - Encode an XDR uint32_t type result
- * @xdr: target XDR stream
- * @val: integer value to encode
- *
- * Return values:
- *    %nfs_ok: @val encoded; @xdr advanced to next position
- *    %nfserr_resource: stream buffer space exhausted
- */
-static __always_inline __be32
-nfsd4_encode_uint32_t(struct xdr_stream *xdr, u32 val)
-{
-	__be32 *p = xdr_reserve_space(xdr, XDR_UNIT);
-
-	if (unlikely(p == NULL))
-		return nfserr_resource;
-	*p = cpu_to_be32(val);
-	return nfs_ok;
-}
-
-#define nfsd4_encode_aceflag4(x, v)	nfsd4_encode_uint32_t(x, v)
-#define nfsd4_encode_acemask4(x, v)	nfsd4_encode_uint32_t(x, v)
-#define nfsd4_encode_acetype4(x, v)	nfsd4_encode_uint32_t(x, v)
-#define nfsd4_encode_count4(x, v)	nfsd4_encode_uint32_t(x, v)
-#define nfsd4_encode_mode4(x, v)	nfsd4_encode_uint32_t(x, v)
-#define nfsd4_encode_nfs_lease4(x, v)	nfsd4_encode_uint32_t(x, v)
-#define nfsd4_encode_qop4(x, v)		nfsd4_encode_uint32_t(x, v)
-#define nfsd4_encode_sequenceid4(x, v)	nfsd4_encode_uint32_t(x, v)
-#define nfsd4_encode_slotid4(x, v)	nfsd4_encode_uint32_t(x, v)
-
-/**
- * nfsd4_encode_uint64_t - Encode an XDR uint64_t type result
- * @xdr: target XDR stream
- * @val: integer value to encode
- *
- * Return values:
- *    %nfs_ok: @val encoded; @xdr advanced to next position
- *    %nfserr_resource: stream buffer space exhausted
- */
-static __always_inline __be32
-nfsd4_encode_uint64_t(struct xdr_stream *xdr, u64 val)
-{
-	__be32 *p = xdr_reserve_space(xdr, XDR_UNIT * 2);
-
-	if (unlikely(p == NULL))
-		return nfserr_resource;
-	put_unaligned_be64(val, p);
-	return nfs_ok;
-}
-
-#define nfsd4_encode_changeid4(x, v)	nfsd4_encode_uint64_t(x, v)
-#define nfsd4_encode_nfs_cookie4(x, v)	nfsd4_encode_uint64_t(x, v)
-#define nfsd4_encode_length4(x, v)	nfsd4_encode_uint64_t(x, v)
-#define nfsd4_encode_offset4(x, v)	nfsd4_encode_uint64_t(x, v)
-
-/**
- * nfsd4_encode_opaque_fixed - Encode a fixed-length XDR opaque type result
- * @xdr: target XDR stream
- * @data: pointer to data
- * @size: length of data in bytes
- *
- * Return values:
- *    %nfs_ok: @data encoded; @xdr advanced to next position
- *    %nfserr_resource: stream buffer space exhausted
- */
-static __always_inline __be32
-nfsd4_encode_opaque_fixed(struct xdr_stream *xdr, const void *data,
-			  size_t size)
-{
-	__be32 *p = xdr_reserve_space(xdr, xdr_align_size(size));
-	size_t pad = xdr_pad_size(size);
-
-	if (unlikely(p == NULL))
-		return nfserr_resource;
-	memcpy(p, data, size);
-	if (pad)
-		memset((char *)p + size, 0, pad);
-	return nfs_ok;
-}
-
-/**
- * nfsd4_encode_opaque - Encode a variable-length XDR opaque type result
- * @xdr: target XDR stream
- * @data: pointer to data
- * @size: length of data in bytes
- *
- * Return values:
- *    %nfs_ok: @data encoded; @xdr advanced to next position
- *    %nfserr_resource: stream buffer space exhausted
- */
-static __always_inline __be32
-nfsd4_encode_opaque(struct xdr_stream *xdr, const void *data, size_t size)
-{
-	size_t pad = xdr_pad_size(size);
-	__be32 *p;
-
-	p = xdr_reserve_space(xdr, XDR_UNIT + xdr_align_size(size));
-	if (unlikely(p == NULL))
-		return nfserr_resource;
-	*p++ = cpu_to_be32(size);
-	memcpy(p, data, size);
-	if (pad)
-		memset((char *)p + size, 0, pad);
-	return nfs_ok;
-}
-
-#define nfsd4_encode_component4(x, d, s)	nfsd4_encode_opaque(x, d, s)
 
 struct nfsd4_compound_state {
 	struct svc_fh		current_fh;
@@ -642,17 +514,6 @@ svcxdr_decode_deviceid4(__be32 *p, struct nfsd4_deviceid *devid)
 	return p;
 }
 
-static inline __be32
-nfsd4_decode_deviceid4(struct xdr_stream *xdr, struct nfsd4_deviceid *devid)
-{
-	__be32 *p = xdr_inline_decode(xdr, NFS4_DEVICEID4_SIZE);
-
-	if (unlikely(!p))
-		return nfserr_bad_xdr;
-	svcxdr_decode_deviceid4(p, devid);
-	return nfs_ok;
-}
-
 struct nfsd4_layout_seg {
 	u32			iomode;
 	u64			offset;
@@ -736,6 +597,19 @@ struct nfsd4_cb_offload {
 	u32			co_referring_seqno;
 };
 
+struct nfsd4_ssc_umount_item {
+	struct list_head	nsui_list;
+	bool			nsui_busy;
+	/*
+	 * nsui_refcnt inited to 2, 1 on list and 1 for consumer. Entry
+	 * is removed when refcnt drops to 1 and nsui_expire expires.
+	 */
+	refcount_t		nsui_refcnt;
+	unsigned long		nsui_expire;
+	struct vfsmount		*nsui_vfsmount;
+	char			nsui_ipaddr[RPC_MAX_ADDRBUFLEN + 1];
+};
+
 struct nfsd4_copy {
 	/* request */
 	stateid_t		cp_src_stateid;
@@ -759,26 +633,36 @@ struct nfsd4_copy {
 	struct nfsd42_write_res	cp_res;
 	struct knfsd_fh		fh;
 
-	/* offload callback */
-	struct nfsd4_cb_offload	cp_cb_offload;
-
 	struct nfs4_client      *cp_clp;
 
 	struct nfsd_file        *nf_src;
 	struct nfsd_file        *nf_dst;
 	bool			attr_update;
 
-	copy_stateid_t		cp_stateid;
-
-	struct list_head	copies;
-	struct task_struct	*copy_task;
-	refcount_t		refcount;
-	unsigned int		cp_ttl;
-
 	struct nfsd4_ssc_umount_item *ss_nsui;
 	struct nfs_fh		c_fh;
 	nfs4_stateid		stateid;
 	struct nfsd_net		*cp_nn;
+};
+
+/*
+ * Durable state for an async (background) server-side COPY.
+ *
+ * struct nfsd4_copy is transient: it lives in the COMPOUND argument buffer
+ * and is reused once the op returns. An async COPY outlives the COMPOUND
+ * (worker kthread, reaper linkage, CB_OFFLOAD), so its params and result are
+ * snapshotted into the embedded cp_copy and it never points into the request
+ * buffer.
+ */
+struct nfsd4_async_copy {
+	struct nfs4_stid	cp_stid;	/* SC_TYPE_COPY, in cl_stateids */
+	struct nfsd4_copy	cp_copy;	/* operation params + result */
+
+	struct list_head	copies;		/* nfs4_client.async_copies */
+	struct task_struct	*copy_task;
+	refcount_t		refcount;
+	unsigned int		cp_ttl;
+	struct nfsd4_cb_offload	cp_cb_offload;
 };
 
 static inline void nfsd4_copy_set_sync(struct nfsd4_copy *copy, bool sync)
@@ -970,6 +854,11 @@ __be32 nfsd4_encode_fattr_to_buf(__be32 **p, int words,
 		struct svc_fh *fhp, struct svc_export *exp,
 		struct dentry *dentry,
 		u32 *bmval, struct svc_rqst *, int ignore_crossmnt);
+u8 *nfsd4_encode_notify_event(struct xdr_stream *xdr, struct nfsd_notify_event *nne,
+			      struct nfs4_delegation *dd, struct nfsd_file *nf,
+			      u32 *notify_mask);
+u8 *nfsd4_encode_dir_attr_change(struct xdr_stream *xdr, struct nfs4_delegation *dp,
+				 struct nfsd_file *nf);
 extern __be32 nfsd4_setclientid(struct svc_rqst *rqstp,
 		struct nfsd4_compound_state *, union nfsd4_op_u *u);
 extern __be32 nfsd4_setclientid_confirm(struct svc_rqst *rqstp,

@@ -1125,13 +1125,6 @@ static int an8811hb_probe(struct phy_device *phydev)
 	if (ret)
 		goto err_dev_create;
 
-	/* Configure led gpio pins as output */
-	ret = air_phy_buckpbus_reg_modify(phydev, AN8811HB_GPIO_OUTPUT,
-					  AN8811HB_GPIO_OUTPUT_345,
-					  AN8811HB_GPIO_OUTPUT_345);
-	if (ret < 0)
-		goto err_dev_create;
-
 	return 0;
 
 err_dev_create:
@@ -1171,13 +1164,6 @@ static int en8811h_probe(struct phy_device *phydev)
 	/* Co-Clock Output */
 	ret = en8811h_clk_provider_setup(&phydev->mdio.dev, &priv->hw);
 	if (ret)
-		return ret;
-
-	/* Configure led gpio pins as output */
-	ret = air_phy_buckpbus_reg_modify(phydev, EN8811H_GPIO_OUTPUT,
-					  EN8811H_GPIO_OUTPUT_345,
-					  EN8811H_GPIO_OUTPUT_345);
-	if (ret < 0)
 		return ret;
 
 	return 0;
@@ -1272,9 +1258,15 @@ static int an8811hb_config_init(struct phy_device *phydev)
 
 	ret = air_leds_init(phydev, EN8811H_LED_COUNT, AIR_PHY_LED_DUR,
 			    AIR_LED_MODE_USER_DEFINE);
-	if (ret < 0)
+	if (ret < 0) {
 		phydev_err(phydev, "Failed to initialize leds: %d\n", ret);
+		return ret;
+	}
 
+	/* Restore LED GPIO output enables after MCU initialization. */
+	ret = air_phy_buckpbus_reg_modify(phydev, AN8811HB_GPIO_OUTPUT,
+					  AN8811HB_GPIO_OUTPUT_345,
+					  AN8811HB_GPIO_OUTPUT_345);
 	return ret;
 }
 
@@ -1323,6 +1315,17 @@ static int en8811h_config_init(struct phy_device *phydev)
 		phydev_err(phydev, "Failed to initialize leds: %d\n", ret);
 		return ret;
 	}
+
+	/* Configure led gpio pins as output. Must be redone on every
+	 * .config_init(), not just once in .probe(): en8811h_restart_mcu()
+	 * resets buckpbus-mapped MCU state (incl. this register) on every
+	 * call after the first, e.g. on link renegotiation or ifup/ifdown.
+	 */
+	ret = air_phy_buckpbus_reg_modify(phydev, EN8811H_GPIO_OUTPUT,
+					  EN8811H_GPIO_OUTPUT_345,
+					  EN8811H_GPIO_OUTPUT_345);
+	if (ret < 0)
+		return ret;
 
 	return 0;
 }

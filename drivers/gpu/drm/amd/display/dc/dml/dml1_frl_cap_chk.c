@@ -630,17 +630,17 @@ enum frl_cap_chk_result dml1_frl_cap_chk(struct frl_cap_chk_params *params)
 {
 	struct frl_cap_chk_intermediates inter;
 
-#if defined (CONFIG_DRM_AMD_DC_FP)
-	if (params->compressed)
-		return dml1_frl_cap_chk_compressed(params, &inter);
-#endif
-
 	return dml1_frl_cap_chk_inter(params, &inter);
 }
 
 enum frl_cap_chk_result dml1_frl_cap_chk_inter(struct frl_cap_chk_params *params,
 					       struct frl_cap_chk_intermediates *inter)
 {
+#if defined (CONFIG_DRM_AMD_DC_FP)
+	if (params->compressed)
+		return dml1_frl_cap_chk_compressed(params, inter);
+#endif
+
 	return dml1_frl_cap_chk_uncompressed(params, inter);
 }
 
@@ -680,11 +680,17 @@ static double calculate_compressed_active_time(uint32_t h_active,
 		r_bit_nominal = 8.0e9;
 		break;
 	case FRL_LINK_RATE_10GBPS:
-	default:
 		r_bit_nominal = 10.0e9;
 		break;
 	case FRL_LINK_RATE_12GBPS:
 		r_bit_nominal = 12.0e9;
+		break;
+	case FRL_LINK_RATE_16GBPS:
+		r_bit_nominal = 16.0e9;
+		break;
+	case FRL_LINK_RATE_20GBPS:
+	default:
+		r_bit_nominal = 20.0e9;
 		break;
 	}
 

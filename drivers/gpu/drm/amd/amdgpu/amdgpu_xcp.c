@@ -381,7 +381,8 @@ int amdgpu_xcp_get_inst_details(struct amdgpu_xcp *xcp,
 				enum AMDGPU_XCP_IP_BLOCK ip,
 				uint32_t *inst_mask)
 {
-	if (!xcp->valid || !inst_mask || !(xcp->ip[ip].valid))
+	if (!xcp->valid || !inst_mask || ip >= AMDGPU_XCP_MAX_BLOCKS ||
+	    !(xcp->ip[ip].valid))
 		return -EINVAL;
 
 	*inst_mask = xcp->ip[ip].inst_mask;
@@ -466,16 +467,20 @@ int amdgpu_xcp_open_device(struct amdgpu_device *adev,
 void amdgpu_xcp_release_sched(struct amdgpu_device *adev,
 				  struct amdgpu_ctx_entity *entity)
 {
+	struct amdgpu_xcp_mgr *xcp_mgr = adev->xcp_mgr;
 	struct drm_gpu_scheduler *sched;
-	struct amdgpu_ring *ring;
 
-	if (!adev->xcp_mgr)
+	if (!xcp_mgr)
 		return;
 
 	sched = entity->entity.rq->sched;
 	if (drm_sched_wqueue_ready(sched)) {
-		ring = to_amdgpu_ring(entity->entity.rq->sched);
-		atomic_dec(&adev->xcp_mgr->xcp[ring->xcp_id].ref_cnt);
+		struct amdgpu_ring *ring = to_amdgpu_ring(sched);
+
+		mutex_lock(&xcp_mgr->xcp_lock);
+		if (ring->xcp_id < xcp_mgr->num_xcps && xcp_mgr->xcp[ring->xcp_id].valid)
+			atomic_dec(&xcp_mgr->xcp[ring->xcp_id].ref_cnt);
+		mutex_unlock(&xcp_mgr->xcp_lock);
 	}
 }
 
@@ -488,7 +493,9 @@ int amdgpu_xcp_select_scheds(struct amdgpu_device *adev,
 	u32 sel_xcp_id;
 	int i;
 	struct amdgpu_xcp_mgr *xcp_mgr = adev->xcp_mgr;
+	int r = 0;
 
+	mutex_lock(&xcp_mgr->xcp_lock);
 	if (fpriv->xcp_id == AMDGPU_XCP_NO_PARTITION) {
 		u32 least_ref_cnt = ~0;
 
@@ -505,19 +512,27 @@ int amdgpu_xcp_select_scheds(struct amdgpu_device *adev,
 	}
 	sel_xcp_id = fpriv->xcp_id;
 
+	if (sel_xcp_id >= xcp_mgr->num_xcps || !xcp_mgr->xcp[sel_xcp_id].valid) {
+		dev_err(adev->dev, "Selected partition #%d is not valid.", sel_xcp_id);
+		r = -ENODEV;
+		goto out;
+	}
+
 	if (xcp_mgr->xcp[sel_xcp_id].gpu_sched[hw_ip][hw_prio].num_scheds) {
 		*num_scheds =
-			xcp_mgr->xcp[fpriv->xcp_id].gpu_sched[hw_ip][hw_prio].num_scheds;
+			xcp_mgr->xcp[sel_xcp_id].gpu_sched[hw_ip][hw_prio].num_scheds;
 		*scheds =
-			xcp_mgr->xcp[fpriv->xcp_id].gpu_sched[hw_ip][hw_prio].sched;
-		atomic_inc(&adev->xcp_mgr->xcp[sel_xcp_id].ref_cnt);
+			xcp_mgr->xcp[sel_xcp_id].gpu_sched[hw_ip][hw_prio].sched;
+		atomic_inc(&xcp_mgr->xcp[sel_xcp_id].ref_cnt);
 		dev_dbg(adev->dev, "Selected partition #%d", sel_xcp_id);
 	} else {
 		dev_err(adev->dev, "Failed to schedule partition #%d.", sel_xcp_id);
-		return -ENOENT;
+		r = -ENOENT;
 	}
 
-	return 0;
+out:
+	mutex_unlock(&xcp_mgr->xcp_lock);
+	return r;
 }
 
 static void amdgpu_set_xcp_id(struct amdgpu_device *adev,
@@ -573,6 +588,9 @@ static void amdgpu_xcp_gpu_sched_update(struct amdgpu_device *adev,
 					unsigned int sel_xcp_id)
 {
 	unsigned int *num_gpu_sched;
+
+	if (sel_xcp_id >= MAX_XCP || sel_xcp_id == AMDGPU_XCP_NO_PARTITION)
+		return;
 
 	num_gpu_sched = &adev->xcp_mgr->xcp[sel_xcp_id]
 			.gpu_sched[ring->funcs->type][ring->hw_prio].num_scheds;
@@ -649,6 +667,11 @@ void amdgpu_xcp_update_supported_modes(struct amdgpu_xcp_mgr *xcp_mgr)
 		xcp_mgr->supp_xcp_modes = BIT(AMDGPU_SPX_PARTITION_MODE) |
 					  BIT(AMDGPU_TPX_PARTITION_MODE) |
 					  BIT(AMDGPU_CPX_PARTITION_MODE);
+
+		if (amdgpu_ip_version(adev, GC_HWIP, 0) != IP_VERSION(9, 4, 3) &&
+			amdgpu_ip_version(adev, GC_HWIP, 0) != IP_VERSION(9, 4, 4) &&
+			amdgpu_ip_version(adev, GC_HWIP, 0) != IP_VERSION(9, 5, 0))
+			xcp_mgr->supp_xcp_modes |= BIT(AMDGPU_DPX_PARTITION_MODE);
 		break;
 	case 4:
 		xcp_mgr->supp_xcp_modes = BIT(AMDGPU_SPX_PARTITION_MODE) |
@@ -903,7 +926,7 @@ static void amdgpu_xcp_cfg_sysfs_init(struct amdgpu_device *adev)
 {
 	struct amdgpu_xcp_res_details *xcp_res;
 	struct amdgpu_xcp_cfg *xcp_cfg;
-	int i, r, j, rid, mode;
+	int i, r, rid, mode;
 
 	if (!adev->xcp_mgr)
 		return;
@@ -949,14 +972,16 @@ static void amdgpu_xcp_cfg_sysfs_init(struct amdgpu_device *adev)
 					 &xcp_cfg_res_sysfs_ktype,
 					 &xcp_cfg->kobj, "%s",
 					 xcp_res_names[rid]);
-		if (r)
+		if (r) {
+			kobject_put(&xcp_res->kobj);
 			goto err;
+		}
 	}
 
 	adev->xcp_mgr->xcp_cfg = xcp_cfg;
 	return;
 err:
-	for (j = 0; j < i; j++) {
+	while (i--) {
 		xcp_res = &xcp_cfg->xcp_res[i];
 		kobject_put(&xcp_res->kobj);
 	}
@@ -1036,6 +1061,11 @@ static const struct kobj_type xcp_sysfs_ktype = {
 	.sysfs_ops = &kobj_sysfs_ops,
 };
 
+bool amdgpu_xcp_is_primary(struct amdgpu_xcp *xcp)
+{
+	return xcp->ddev == adev_to_drm(xcp->xcp_mgr->adev);
+}
+
 static void amdgpu_xcp_sysfs_entries_fini(struct amdgpu_xcp_mgr *xcp_mgr, int n)
 {
 	struct amdgpu_xcp *xcp;
@@ -1085,6 +1115,7 @@ static void amdgpu_xcp_sysfs_entries_update(struct amdgpu_xcp_mgr *xcp_mgr)
 		if (!xcp->ddev)
 			continue;
 		sysfs_update_group(&xcp->kobj, &amdgpu_xcp_attrs_group);
+		amdgpu_ualink_xcp_sysfs_update(xcp);
 	}
 
 	return;

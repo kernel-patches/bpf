@@ -39,9 +39,9 @@ static irqreturn_t a2091_intr(int irq, void *data)
 	if (!(status & (ISTR_INT_F | ISTR_INT_P)) || !(status & ISTR_INTS))
 		return IRQ_NONE;
 
-	spin_lock_irqsave(instance->host_lock, flags);
+	spin_lock_irqsave(&instance->host_lock, flags);
 	wd33c93_intr(instance);
-	spin_unlock_irqrestore(instance->host_lock, flags);
+	spin_unlock_irqrestore(&instance->host_lock, flags);
 	return IRQ_HANDLED;
 }
 
@@ -275,9 +275,9 @@ static void a2091_remove(struct zorro_dev *z)
 }
 
 static struct zorro_device_id a2091_zorro_tbl[] = {
-	{ ZORRO_PROD_CBM_A590_A2091_1 },
-	{ ZORRO_PROD_CBM_A590_A2091_2 },
-	{ 0 }
+	{ .id = ZORRO_PROD_CBM_A590_A2091_1 },
+	{ .id = ZORRO_PROD_CBM_A590_A2091_2 },
+	{ }
 };
 MODULE_DEVICE_TABLE(zorro, a2091_zorro_tbl);
 

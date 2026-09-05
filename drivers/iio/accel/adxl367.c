@@ -787,6 +787,13 @@ static bool adxl367_push_fifo_data(struct iio_dev *indio_dev, u8 status,
 	if (!FIELD_GET(ADXL367_STATUS_FIFO_FULL_MASK, status))
 		return false;
 
+	if (fifo_entries > ADXL367_FIFO_SIZE) {
+		dev_err_ratelimited(st->dev,
+				    "FIFO entry count %u exceeds FIFO size %u\n",
+				    fifo_entries, ADXL367_FIFO_SIZE);
+		return true;
+	}
+
 	fifo_entries -= fifo_entries % st->fifo_set_size;
 
 	ret = st->ops->read_fifo(st->context, st->fifo_buf, fifo_entries);
@@ -1486,7 +1493,7 @@ int adxl367_probe(struct device *dev, const struct adxl367_ops *ops,
 					adxl367_irq_handler, IRQF_ONESHOT,
 					indio_dev->name, indio_dev);
 	if (ret)
-		return dev_err_probe(st->dev, ret, "Failed to request irq\n");
+		return ret;
 
 	return devm_iio_device_register(dev, indio_dev);
 }

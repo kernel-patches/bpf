@@ -502,8 +502,8 @@ static irqreturn_t adxrs290_trigger_handler(int irq, void *p)
 		if (ret < 0)
 			break;
 
-		iio_push_to_buffers_with_timestamp(indio_dev, &st->buffer,
-						   pf->timestamp);
+		iio_push_to_buffers_with_ts(indio_dev, &st->buffer,
+					    sizeof(st->buffer), pf->timestamp);
 	} while (0);
 
 	iio_trigger_notify_done(indio_dev->trig);
@@ -585,9 +585,8 @@ static int adxrs290_probe_trigger(struct iio_dev *indio_dev)
 	ret = devm_request_irq(&st->spi->dev, st->spi->irq,
 			       &iio_trigger_generic_data_rdy_poll,
 			       IRQF_NO_THREAD, "adxrs290_irq", st->dready_trig);
-	if (ret < 0)
-		return dev_err_probe(&st->spi->dev, ret,
-				     "request irq %d failed\n", st->spi->irq);
+	if (ret)
+		return ret;
 
 	ret = devm_iio_trigger_register(&st->spi->dev, st->dready_trig);
 	if (ret) {

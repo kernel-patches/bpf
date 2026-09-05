@@ -265,7 +265,7 @@ static bool g2h_fence_needs_alloc(struct g2h_fence *g2h_fence)
 #define CTB_DESC_SIZE		ALIGN(sizeof(struct guc_ct_buffer_desc), SZ_2K)
 #define CTB_H2G_BUFFER_OFFSET	(CTB_DESC_SIZE * 2)
 #define CTB_G2H_BUFFER_OFFSET	(CTB_DESC_SIZE * 2)
-#define CTB_H2G_BUFFER_SIZE	(SZ_4K)
+#define CTB_H2G_BUFFER_SIZE	(SZ_16K)
 #define CTB_H2G_BUFFER_DWORDS	(CTB_H2G_BUFFER_SIZE / sizeof(u32))
 #define CTB_G2H_BUFFER_SIZE	(SZ_128K)
 #define CTB_G2H_BUFFER_DWORDS	(CTB_G2H_BUFFER_SIZE / sizeof(u32))
@@ -939,7 +939,7 @@ static bool vf_action_can_safely_fail(struct xe_device *xe, u32 action)
 #define H2G_CT_HEADERS (GUC_CTB_HDR_LEN + 1) /* one DW CTB header and one DW HxG header */
 
 static int h2g_write(struct xe_guc_ct *ct, const u32 *action, u32 len,
-		     u32 ct_fence_value, bool want_response)
+		     u32 ct_fence_value, bool want_response, bool defer_flush)
 {
 	struct xe_device *xe = ct_to_xe(ct);
 	struct xe_gt *gt = ct_to_gt(ct);
@@ -956,19 +956,12 @@ static int h2g_write(struct xe_guc_ct *ct, const u32 *action, u32 len,
 	xe_gt_assert(gt, full_len <= GUC_CTB_MSG_MAX_LEN);
 
 	if (IS_ENABLED(CONFIG_DRM_XE_DEBUG)) {
-		u32 desc_tail = desc_read(xe, h2g, tail);
 		u32 desc_head = desc_read(xe, h2g, head);
 		u32 desc_status;
 
 		desc_status = desc_read(xe, h2g, status);
 		if (desc_status) {
 			xe_gt_err(gt, "CT write: non-zero status: %u\n", desc_status);
-			goto corrupted;
-		}
-
-		if (tail != desc_tail) {
-			desc_write(xe, h2g, status, desc_status | GUC_CTB_STATUS_MISMATCH);
-			xe_gt_err(gt, "CT write: tail was modified %u != %u\n", desc_tail, tail);
 			goto corrupted;
 		}
 
@@ -993,7 +986,10 @@ static int h2g_write(struct xe_guc_ct *ct, const u32 *action, u32 len,
 			      (h2g->info.size - tail) * sizeof(u32));
 		h2g_reserve_space(ct, (h2g->info.size - tail));
 		h2g->info.tail = 0;
-		desc_write(xe, h2g, tail, h2g->info.tail);
+		if (!defer_flush) {
+			xe_device_wmb(xe);
+			desc_write(xe, h2g, tail, h2g->info.tail);
+		}
 
 		return -EAGAIN;
 	}
@@ -1024,14 +1020,15 @@ static int h2g_write(struct xe_guc_ct *ct, const u32 *action, u32 len,
 	/* Write H2G ensuring visible before descriptor update */
 	xe_map_memcpy_to(xe, &map, 0, cmd, H2G_CT_HEADERS * sizeof(u32));
 	xe_map_memcpy_to(xe, &map, H2G_CT_HEADERS * sizeof(u32), action, len * sizeof(u32));
-	xe_device_wmb(xe);
-
 	/* Update local copies */
 	h2g->info.tail = (tail + full_len) % h2g->info.size;
 	h2g_reserve_space(ct, full_len);
 
 	/* Update descriptor */
-	desc_write(xe, h2g, tail, h2g->info.tail);
+	if (!defer_flush) {
+		xe_device_wmb(xe);
+		desc_write(xe, h2g, tail, h2g->info.tail);
+	}
 
 	/*
 	 * desc_read() performs an VRAM read which serializes the CPU and drains
@@ -1052,7 +1049,7 @@ corrupted:
 
 static int __guc_ct_send_locked(struct xe_guc_ct *ct, const u32 *action,
 				u32 len, u32 g2h_len, u32 num_g2h,
-				struct g2h_fence *g2h_fence)
+				struct g2h_fence *g2h_fence, bool defer_flush)
 {
 	struct xe_gt *gt = ct_to_gt(ct);
 	u16 seqno;
@@ -1064,6 +1061,11 @@ static int __guc_ct_send_locked(struct xe_guc_ct *ct, const u32 *action,
 	xe_gt_assert(gt, !g2h_len || num_g2h);
 	xe_gt_assert(gt, g2h_len || !num_g2h);
 	lockdep_assert_held(&ct->lock);
+
+	if (xe_device_wedged(ct_to_xe(ct))) {
+		ret = -ENOTRECOVERABLE;
+		goto out;
+	}
 
 	if (unlikely(ct->ctbs.h2g.info.broken)) {
 		ret = -EPIPE;
@@ -1107,7 +1109,7 @@ retry:
 	if (unlikely(ret))
 		goto out_unlock;
 
-	ret = h2g_write(ct, action, len, seqno, !!g2h_fence);
+	ret = h2g_write(ct, action, len, seqno, !!g2h_fence, defer_flush);
 	if (unlikely(ret)) {
 		if (ret == -EAGAIN)
 			goto retry;
@@ -1115,7 +1117,8 @@ retry:
 	}
 
 	__g2h_reserve_space(ct, g2h_len, num_g2h);
-	xe_guc_notify(ct_to_guc(ct));
+	if (!defer_flush)
+		xe_guc_notify(ct_to_guc(ct));
 out_unlock:
 	if (g2h_len)
 		spin_unlock_irq(&ct->fast_lock);
@@ -1191,7 +1194,7 @@ static bool guc_ct_send_wait_for_retry(struct xe_guc_ct *ct, u32 len,
 
 static int guc_ct_send_locked(struct xe_guc_ct *ct, const u32 *action, u32 len,
 			      u32 g2h_len, u32 num_g2h,
-			      struct g2h_fence *g2h_fence)
+			      struct g2h_fence *g2h_fence, bool defer_flush)
 {
 	struct xe_gt *gt = ct_to_gt(ct);
 	unsigned int sleep_period_ms = 1;
@@ -1204,9 +1207,10 @@ static int guc_ct_send_locked(struct xe_guc_ct *ct, const u32 *action, u32 len,
 
 try_again:
 	ret = __guc_ct_send_locked(ct, action, len, g2h_len, num_g2h,
-				   g2h_fence);
+				   g2h_fence, defer_flush);
 
 	if (unlikely(ret == -EBUSY)) {
+		xe_guc_ct_send_flush(ct);
 		if (!guc_ct_send_wait_for_retry(ct, len, g2h_len, g2h_fence,
 						&sleep_period_ms, &sleep_total_ms))
 			goto broken;
@@ -1230,12 +1234,43 @@ static int guc_ct_send(struct xe_guc_ct *ct, const u32 *action, u32 len,
 	xe_gt_assert(ct_to_gt(ct), !g2h_len || !g2h_fence);
 
 	mutex_lock(&ct->lock);
-	ret = guc_ct_send_locked(ct, action, len, g2h_len, num_g2h, g2h_fence);
+	ret = guc_ct_send_locked(ct, action, len, g2h_len, num_g2h, g2h_fence,
+				 false);
 	mutex_unlock(&ct->lock);
 
 	return ret;
 }
 
+/**
+ * xe_guc_ct_send - Send an HXG message to the GuC over CT
+ * @ct: the &xe_guc_ct
+ * @action: dword array with the HXG message (can't be NULL)
+ * @len: length of the HXG message in dwords (can't be 0)
+ * @g2h_len: G2H response space to reserve in dwords, or 0
+ * @num_g2h: number of G2H messages expected, or 0
+ *
+ * Return codes from the non-blocking send helpers are:
+ *
+ * * -ENOTRECOVERABLE: the xe device is wedged. Stop submitting new GuC work; the
+ *   request cannot make progress until the device is recovered.
+ * * -EPIPE: the H2G CTB is marked broken. The channel stays unusable until the
+ *   CT is restarted, which clears the broken flag.
+ * * -ENODEV: the CT channel is disabled, messages not expected in this state.
+ *   Don't retry until it is enabled again.
+ * * -ECANCELED: the CT channel is stopped or a GT recovery is pending; the
+ *   message was dropped. Often benign. Cancel-tolerant callers (e.g. TLB
+ *   invalidations, GuC submission) rely on the stop/start flow to recover;
+ *   others should retry once the CT is re-enabled or the reset/recovery
+ *   completes.
+ * * -EDEADLK: no CTB room and the wait for space timed out. The send helpers
+ *   have already requested an async GT reset before returning this error.
+ *
+ * -ENOMEM may also be returned if an internal allocation fails; the blocking
+ * xe_guc_ct_send_recv() path retries that allocation. -EBUSY and
+ * -EAGAIN are internal flow-control results handled by the send helpers.
+ *
+ * Return: 0 on success, or a negative error code on failure.
+ */
 int xe_guc_ct_send(struct xe_guc_ct *ct, const u32 *action, u32 len,
 		   u32 g2h_len, u32 num_g2h)
 {
@@ -1248,16 +1283,67 @@ int xe_guc_ct_send(struct xe_guc_ct *ct, const u32 *action, u32 len,
 	return ret;
 }
 
+/**
+ * xe_guc_ct_send_locked() - submit a GuC CT H2G message with CT lock held
+ * @ct: GuC CT object
+ * @action: payload dwords (HxG header dword is expected at @action[-1])
+ * @len: number of payload dwords in @action
+ * @defer_flush: defer publishing/doorbell for batching
+ *
+ * Sends a single H2G message to the GuC CT buffer while the caller already
+ * holds @ct->lock.
+ *
+ * If @defer_flush is false, the function completes the submission immediately:
+ * it makes the payload visible to the device, updates the H2G descriptor and
+ * rings the GuC doorbell.
+ *
+ * If @defer_flush is true, the message payload is copied into the H2G ring and
+ * the software tail is advanced, but the descriptor update and doorbell are
+ * deferred so multiple messages can be batched. In this mode, the caller must
+ * eventually call xe_guc_ct_send_flush() (still holding @ct->lock) to publish
+ * the descriptor and notify the GuC. On internal retry paths (-EBUSY), the
+ * implementation may force a flush to ensure forward progress.
+ *
+ * Return: 0 on success, negative errno on failure.
+ *
+ * Locking:
+ *   Must be called with @ct->lock held.
+ */
 int xe_guc_ct_send_locked(struct xe_guc_ct *ct, const u32 *action, u32 len,
-			  u32 g2h_len, u32 num_g2h)
+			  bool defer_flush)
 {
 	int ret;
 
-	ret = guc_ct_send_locked(ct, action, len, g2h_len, num_g2h, NULL);
+	ret = guc_ct_send_locked(ct, action, len, 0, 0, NULL, defer_flush);
 	if (ret == -EDEADLK)
 		kick_reset(ct);
 
 	return ret;
+}
+
+/**
+ * xe_guc_ct_send_flush() - flush pending GuC CT H2G writes
+ * @ct: GuC CT instance
+ *
+ * Some callers batch multiple H2G writes using xe_guc_ct_send_locked() in
+ * "write-only" mode (i.e., queue the message payloads but defer ringing the
+ * doorbell / updating the CT descriptor). This helper completes the submission
+ * by ensuring the payload writes are visible to the device, updating the H2G
+ * descriptor, and ringing the GuC CT doorbell.
+ *
+ * Locking:
+ *   Must be called with @ct->lock held.
+ */
+void xe_guc_ct_send_flush(struct xe_guc_ct *ct)
+{
+	struct xe_device *xe = ct_to_xe(ct);
+	struct guc_ctb *h2g = &ct->ctbs.h2g;
+
+	lockdep_assert_held(&ct->lock);
+
+	xe_device_wmb(xe);
+	desc_write(xe, h2g, tail, h2g->info.tail);
+	xe_guc_notify(ct_to_guc(ct));
 }
 
 int xe_guc_ct_send_g2h_handler(struct xe_guc_ct *ct, const u32 *action, u32 len)
@@ -1266,7 +1352,7 @@ int xe_guc_ct_send_g2h_handler(struct xe_guc_ct *ct, const u32 *action, u32 len)
 
 	lockdep_assert_held(&ct->lock);
 
-	ret = guc_ct_send_locked(ct, action, len, 0, 0, NULL);
+	ret = guc_ct_send_locked(ct, action, len, 0, 0, NULL, false);
 	if (ret == -EDEADLK)
 		kick_reset(ct);
 
@@ -1388,7 +1474,7 @@ wait_again:
 	if (g2h_fence.fail) {
 		if (g2h_fence.cancel) {
 			xe_gt_dbg(gt, "H2G request %#x canceled!\n", action[0]);
-			ret = -ECANCELED;
+			ret = xe_device_wedged(ct_to_xe(ct)) ? -ENOTRECOVERABLE : -ECANCELED;
 			goto unlock;
 		}
 		xe_gt_err(gt, "H2G request %#x failed: error %#x hint %#x\n",
@@ -1661,6 +1747,9 @@ static int process_g2h_msg(struct xe_guc_ct *ct, u32 *msg, u32 len)
 		ret = xe_guc_exec_queue_memory_cat_error_handler(guc, payload,
 								 adj_len);
 		break;
+	case XE_GUC_ACTION_NOTIFY_UNCORRECTABLE_LOCAL_ERROR:
+		ret = xe_guc_uncorrectable_error_handler(guc, payload, adj_len);
+		break;
 	case XE_GUC_ACTION_REPORT_PAGE_FAULT_REQ_DESC:
 		ret = xe_guc_pagefault_handler(guc, payload, adj_len);
 		break;
@@ -1723,6 +1812,9 @@ static int g2h_read(struct xe_guc_ct *ct, u32 *msg, bool fast_path)
 
 	xe_gt_assert(gt, xe_guc_ct_initialized(ct));
 	lockdep_assert_held(&ct->fast_lock);
+
+	if (xe_device_wedged(xe))
+		return -ENOTRECOVERABLE;
 
 	if (ct->state == XE_GUC_CT_STATE_DISABLED)
 		return -ENODEV;

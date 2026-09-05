@@ -700,6 +700,8 @@ int xe_pm_runtime_resume(struct xe_device *xe)
 	if (xe->d3cold.allowed)
 		xe_sysctrl_pm_resume(xe);
 
+	xe_display_pm_runtime_resume_early(xe);
+
 	xe_irq_resume(xe);
 
 	for_each_gt(gt, xe, id) {
@@ -903,6 +905,11 @@ static bool xe_pm_suspending_or_resuming(struct xe_device *xe)
  * break scope-based handling, or when the lifetime of the runtime PM reference
  * does not match a specific scope (e.g., runtime PM obtained in one function
  * and released in a different one).
+ *
+ * This helper assumes the caller already holds a runtime PM reference and
+ * only warns when it cannot see one. After hot-unplug runtime PM is disabled
+ * and the check fails even when a reference is held, so callers that may run
+ * after unplug must guard it with drm_dev_enter()/drm_dev_exit() instead.
  */
 void xe_pm_runtime_get_noresume(struct xe_device *xe)
 {

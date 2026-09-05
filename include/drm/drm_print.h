@@ -28,6 +28,7 @@
 
 #include <linux/compiler.h>
 #include <linux/printk.h>
+#include <linux/string_choices.h>
 #include <linux/device.h>
 #include <linux/dynamic_debug.h>
 
@@ -87,7 +88,7 @@ extern unsigned long __drm_debug;
  *  - drm.debug=0x2 will enable DRIVER messages
  *  - drm.debug=0x3 will enable CORE and DRIVER messages
  *  - ...
- *  - drm.debug=0x1ff will enable all messages
+ *  - drm.debug=0x3ff will enable all messages
  *
  * An interesting feature is that it's possible to enable verbose logging at
  * run-time by echoing the debug value in its sysfs node::

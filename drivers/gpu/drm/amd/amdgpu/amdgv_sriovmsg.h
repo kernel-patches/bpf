@@ -164,7 +164,8 @@ union amd_sriov_msg_feature_flags {
 		uint32_t xgmi_connected_to_cpu  : 1;
 		uint32_t ptl_support		: 1;
 		uint32_t unitid_support		: 1;
-		uint32_t reserved		: 16;
+		uint32_t uniras_support		: 1;
+		uint32_t reserved		: 15;
 	} flags;
 	uint32_t all;
 };
@@ -208,6 +209,27 @@ union amd_sriov_ras_caps {
 		uint64_t reserved			: 42;
 	} bits;
 	uint64_t all;
+};
+
+struct amd_sriov_uniras_caps {
+	uint32_t ras_ext_ecc_type;
+	uint32_t ras_int_ecc_attributes;
+	uint64_t ras_en_block_mask;
+};
+
+/*
+ * PF2VF RAS capability words (16 bytes, layout matches legacy fields):
+ * ras_ext_ecc_type and ras_int_ecc_attributes are aliases ras_en_caps,
+ * ras_en_block_mask aliases ras_telemetry_en_caps.
+ */
+union amd_sriov_msg_pf2vf_ras_caps {
+	/* ras caps for uniras enabled case */
+	struct amd_sriov_uniras_caps uniras_caps;
+	/* ras caps for uniras disabled case*/
+	struct {
+		union amd_sriov_ras_caps ras_en_caps;
+		union amd_sriov_ras_caps ras_telemetry_en_caps;
+	};
 };
 
 union amd_sriov_msg_os_info {
@@ -314,8 +336,7 @@ struct amd_sriov_msg_pf2vf_info {
 	/* vf bdf on host pci tree for debug only */
 	uint32_t bdf_on_host;
 	uint32_t more_bp;	//Reserved for future use.
-	union amd_sriov_ras_caps ras_en_caps;
-	union amd_sriov_ras_caps ras_telemetry_en_caps;
+	union amd_sriov_msg_pf2vf_ras_caps pf2vf_ras_caps;
 	/* PTL status response for guest */
 	uint32_t ptl_enabled;        // PTL enable status: 0=disabled, 1=enabled
 	uint32_t ptl_pref_format1;   // Current preferred format 1
@@ -404,6 +425,9 @@ enum amd_sriov_mailbox_request_message {
 	MB_REQ_RAS_ERROR_COUNT = 203,
 	MB_REQ_RAS_CPER_DUMP = 204,
 	MB_REQ_RAS_BAD_PAGES = 205,
+	MB_REQ_RAS_CHK_CRITI = 206,
+	MB_REQ_RAS_REMOTE_CMD = 207,
+	MB_REQ_MSG_PTL_UPDATE = 208,
 };
 
 /* mailbox message send from host to guest  */
@@ -424,8 +448,32 @@ enum amd_sriov_mailbox_response_message {
 	MB_RES_MSG_RAS_BAD_PAGES_READY		= 15,
 	MB_RES_MSG_RAS_BAD_PAGES_NOTIFICATION	= 16,
 	MB_RES_MSG_UNRECOV_ERR_NOTIFICATION	= 17,
+	MB_RES_RAS_CHK_CRITI_READY		= 18,
+	MB_RES_RAS_REMOTE_CMD_READY		= 19,
+	MB_RES_MSG_PTL_UPDATE_READY		= 20,
 	MB_RES_MSG_TEXT_MESSAGE			= 255
 };
+
+/*
+ * Generic response status codes for mailbox data fields.
+ * Used in msg_data[1..N] to indicate operation result.
+ */
+enum amd_sriov_response_status {
+	AMD_SRIOV_RESP_SUCCESS		= 0,
+	AMD_SRIOV_RESP_FAIL		= 1,
+	AMD_SRIOV_RESP_UNSUPPORTED	= 2,
+};
+
+/*
+ * PTL mailbox data format:
+ * Request:  msg_data[1]=req_code, msg_data[2]=ptl_state, msg_data[3]=(fmt1<<16)|fmt2
+ * Response: msg_data[1]=(status<<16)|ptl_state, msg_data[2]=(fmt1<<16)|fmt2
+ */
+#define AMD_SRIOV_PTL_PACK_FORMATS(fmt1, fmt2)          ((((fmt1) & 0xFFFF) << 16) | ((fmt2) & 0xFFFF))
+#define AMD_SRIOV_PTL_UNPACK_STATUS(dw)                 (((dw) >> 16) & 0xFFFF)
+#define AMD_SRIOV_PTL_UNPACK_STATE(dw)                  ((dw) & 0xFFFF)
+#define AMD_SRIOV_PTL_UNPACK_FMT1(dw)                   (((dw) >> 16) & 0xFFFF)
+#define AMD_SRIOV_PTL_UNPACK_FMT2(dw)                   ((dw) & 0xFFFF)
 
 enum amd_sriov_ras_telemetry_gpu_block {
 	RAS_TELEMETRY_GPU_BLOCK_UMC		= 0,
@@ -480,12 +528,6 @@ struct amd_sriov_ras_chk_criti {
 	uint32_t hit;
 };
 
-union amd_sriov_ras_host_push {
-	struct amd_sriov_ras_telemetry_error_count error_count;
-	struct amd_sriov_ras_cper_dump cper_dump;
-	struct amd_sriov_ras_chk_criti chk_criti;
-};
-
 #define AMD_SRIOV_UNIRAS_BLOCKS_BUF_SIZE 4096
 #define AMD_SRIOV_UNIRAS_CMD_MAX_SIZE (4096 * 13)
 struct amd_sriov_uniras_shared_mem {
@@ -494,9 +536,19 @@ struct amd_sriov_uniras_shared_mem {
 };
 
 struct amdsriov_ras_telemetry {
-	struct amd_sriov_ras_telemetry_header header;
-	union amd_sriov_ras_host_push body;
-	struct amd_sriov_uniras_shared_mem uniras_shared_mem;
+	union {
+		struct {
+			struct amd_sriov_ras_telemetry_header header;
+
+			union {
+				struct amd_sriov_ras_telemetry_error_count error_count;
+				struct amd_sriov_ras_cper_dump cper_dump;
+				struct amd_sriov_ras_chk_criti chk_criti;
+			} body;
+		};
+
+		struct amd_sriov_uniras_shared_mem uniras_shared_mem;
+	};
 };
 
 /* version data stored in MAILBOX_MSGBUF_RCV_DW1 for future expansion */

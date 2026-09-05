@@ -422,6 +422,11 @@ static u32 mana_ib_wqe_size(u32 sge, u32 oob_size)
 	return ALIGN(wqe_size, GDMA_WQE_BU_SIZE);
 }
 
+static u32 mana_ib_fixed_wqe_size(u32 sge, u32 oob_size)
+{
+	return roundup_pow_of_two(mana_ib_wqe_size(sge, oob_size));
+}
+
 static u32 mana_ib_queue_size(struct ib_qp_init_attr *attr, u32 queue_type)
 {
 	u32 queue_size;
@@ -461,84 +466,89 @@ static enum gdma_queue_type mana_ib_queue_type(struct ib_qp_init_attr *attr, u32
 	return type;
 }
 
-static int mana_table_store_rc_qp(struct mana_ib_dev *mdev, struct mana_ib_qp *qp)
+static void mana_table_drain_qp_ref(struct mana_ib_qp *qp)
 {
-	return xa_insert_irq(&mdev->qp_table_wq, qp->ibqp.qp_num, qp,
-			     GFP_KERNEL);
+	mana_put_qp_ref(qp);
+	wait_for_completion(&qp->free);
 }
 
-static void mana_table_remove_rc_qp(struct mana_ib_dev *mdev, struct mana_ib_qp *qp)
+static int mana_table_store_qp_qid(struct mana_ib_dev *mdev, struct mana_ib_qp *qp,
+				   u32 qid, bool is_sq)
 {
-	xa_erase_irq(&mdev->qp_table_wq, qp->ibqp.qp_num);
+	/* Remove subtype bits */
+	qid &= ~MANA_QID_SUBTYPE_MASK;
+	if (is_sq)
+		qid |= MANA_SENDQ_MASK;
+
+	return xa_insert_irq(&mdev->qp_table_wq, qid, qp, GFP_KERNEL);
 }
 
-static int mana_table_store_ud_qp(struct mana_ib_dev *mdev, struct mana_ib_qp *qp)
+static void mana_table_remove_qp_qid(struct mana_ib_dev *mdev, u32 qid, bool is_sq)
 {
-	u32 qids = qp->ud_qp.queues[MANA_UD_SEND_QUEUE].id | MANA_SENDQ_MASK;
-	u32 qidr = qp->ud_qp.queues[MANA_UD_RECV_QUEUE].id;
-	int err;
+	/* Remove subtype bits */
+	qid &= ~MANA_QID_SUBTYPE_MASK;
+	if (is_sq)
+		qid |= MANA_SENDQ_MASK;
 
-	err = xa_insert_irq(&mdev->qp_table_wq, qids, qp, GFP_KERNEL);
-	if (err)
-		return err;
-
-	err = xa_insert_irq(&mdev->qp_table_wq, qidr, qp, GFP_KERNEL);
-	if (err)
-		goto remove_sq;
-
-	return 0;
-
-remove_sq:
-	xa_erase_irq(&mdev->qp_table_wq, qids);
-	return err;
-}
-
-static void mana_table_remove_ud_qp(struct mana_ib_dev *mdev, struct mana_ib_qp *qp)
-{
-	u32 qids = qp->ud_qp.queues[MANA_UD_SEND_QUEUE].id | MANA_SENDQ_MASK;
-	u32 qidr = qp->ud_qp.queues[MANA_UD_RECV_QUEUE].id;
-
-	xa_erase_irq(&mdev->qp_table_wq, qids);
-	xa_erase_irq(&mdev->qp_table_wq, qidr);
+	xa_erase_irq(&mdev->qp_table_wq, qid);
 }
 
 static int mana_table_store_qp(struct mana_ib_dev *mdev, struct mana_ib_qp *qp)
 {
+	struct mana_ib_queue *sq, *rq;
+	int err;
+
 	refcount_set(&qp->refcount, 1);
 	init_completion(&qp->free);
+	sq = mana_qp_get_sq(qp);
+	rq = mana_qp_get_rq(qp);
 
-	switch (qp->ibqp.qp_type) {
-	case IB_QPT_RC:
-		return mana_table_store_rc_qp(mdev, qp);
-	case IB_QPT_UD:
-	case IB_QPT_GSI:
-		return mana_table_store_ud_qp(mdev, qp);
-	default:
-		ibdev_dbg(&mdev->ib_dev, "Unknown QP type for storing in mana table, %d\n",
-			  qp->ibqp.qp_type);
+	if (!sq || !rq)
+		return -EINVAL;
+
+	err = mana_table_store_qp_qid(mdev, qp, sq->id, true);
+	if (err)
+		return err;
+
+	err = mana_table_store_qp_qid(mdev, qp, rq->id, false);
+	if (err)
+		goto err_remove_sq;
+
+	/* GSI QPs are additionally indexed by (port << 24 | MANA_GSI_QPN) so the
+	 * per-port GSI SQ drain can find each of them by iterating ports.
+	 */
+	if (qp->ibqp.qp_type == IB_QPT_GSI) {
+		err = mana_table_store_qp_qid(mdev, qp,
+					      (qp->port << 24) | MANA_GSI_QPN, false);
+		if (err)
+			goto err_remove_rq;
 	}
 
-	return -EINVAL;
+	return 0;
+
+err_remove_rq:
+	mana_table_remove_qp_qid(mdev, rq->id, false);
+err_remove_sq:
+	mana_table_remove_qp_qid(mdev, sq->id, true);
+	mana_table_drain_qp_ref(qp);
+	return err;
 }
 
-static void mana_table_remove_qp(struct mana_ib_dev *mdev,
-				 struct mana_ib_qp *qp)
+static void mana_table_remove_qp(struct mana_ib_dev *mdev, struct mana_ib_qp *qp)
 {
-	switch (qp->ibqp.qp_type) {
-	case IB_QPT_RC:
-		mana_table_remove_rc_qp(mdev, qp);
-		break;
-	case IB_QPT_UD:
-	case IB_QPT_GSI:
-		mana_table_remove_ud_qp(mdev, qp);
-		break;
-	default:
-		ibdev_dbg(&mdev->ib_dev, "Unknown QP type for removing from mana table, %d\n",
-			  qp->ibqp.qp_type);
+	struct mana_ib_queue *sq, *rq;
+
+	sq = mana_qp_get_sq(qp);
+	rq = mana_qp_get_rq(qp);
+
+	if (!sq || !rq)
 		return;
-	}
-	mana_put_qp_ref(qp);
-	wait_for_completion(&qp->free);
+
+	mana_table_remove_qp_qid(mdev, sq->id, true);
+	mana_table_remove_qp_qid(mdev, rq->id, false);
+	if (qp->ibqp.qp_type == IB_QPT_GSI)
+		mana_table_remove_qp_qid(mdev, (qp->port << 24) | MANA_GSI_QPN, false);
+	mana_table_drain_qp_ref(qp);
 }
 
 static int mana_ib_create_rc_qp(struct ib_qp *ibqp, struct ib_pd *ibpd,
@@ -558,25 +568,40 @@ static int mana_ib_create_rc_qp(struct ib_qp *ibqp, struct ib_pd *ibpd,
 
 	mana_ucontext = rdma_udata_to_drv_context(udata, struct mana_ib_ucontext, ibucontext);
 	doorbell = mana_ucontext->doorbell;
-	flags = MANA_RC_FLAG_NO_FMR;
-	err = ib_copy_validate_udata_in(udata, ucmd, queue_size);
+	flags = MANA_RC_FLAG_NO_MMQ;
+	err = ib_copy_validate_udata_in_cm(udata, ucmd, queue_size,
+					   MANA_IB_RC_QP_FIXED_WQE | MANA_IB_RC_MMQ_CREATE);
 	if (err)
 		return err;
 
 	for (i = 0, j = 0; i < MANA_RC_QUEUE_TYPE_MAX; ++i) {
-		/* skip FMR for user-level RC QPs */
-		if (i == MANA_RC_SEND_QUEUE_FMR) {
-			qp->rc_qp.queues[i].id = INVALID_QUEUE_ID;
-			qp->rc_qp.queues[i].gdma_region = GDMA_INVALID_DMA_REGION;
+		if (i == MANA_RC_SEND_QUEUE_MMQ) {
+			if (ucmd.comp_mask & MANA_IB_RC_MMQ_CREATE) {
+				flags &= ~MANA_RC_FLAG_NO_MMQ;
+				err = mana_ib_create_queue(mdev, ucmd.mmq_buf, ucmd.mmq_size,
+							   &qp->rc_qp.queues[i]);
+				if (err)
+					goto destroy_queues;
+			} else {
+				qp->rc_qp.queues[i].id = INVALID_QUEUE_ID;
+				qp->rc_qp.queues[i].gdma_region = GDMA_INVALID_DMA_REGION;
+			}
 			continue;
 		}
 		err = mana_ib_create_queue(mdev, ucmd.queue_buf[j], ucmd.queue_size[j],
 					   &qp->rc_qp.queues[i]);
-		if (err) {
-			ibdev_err(&mdev->ib_dev, "Failed to create queue %d, err %d\n", i, err);
+		if (err)
 			goto destroy_queues;
-		}
 		j++;
+	}
+
+	if (ucmd.comp_mask & MANA_IB_RC_QP_FIXED_WQE) {
+		u32 wqe_size = mana_ib_fixed_wqe_size(attr->cap.max_send_sge,
+						      INLINE_OOB_EXTRA_LARGE_SIZE);
+		flags |= MANA_RC_FLAG_FIXED_SIZE_WQE;
+		if (mdev->adapter_caps.feature_flags & MANA_IB_FEATURE_MSN_IN_WQE_SUPPORT)
+			flags |= MANA_RC_FLAG_MSN_IN_WQE;
+		qp->rc_qp.wqe_size_in_bu = wqe_size / GDMA_WQE_BU_SIZE;
 	}
 
 	err = mana_ib_gd_create_rc_qp(mdev, qp, attr, doorbell, flags);
@@ -589,8 +614,10 @@ static int mana_ib_create_rc_qp(struct ib_qp *ibqp, struct ib_pd *ibpd,
 
 	if (udata) {
 		for (i = 0, j = 0; i < MANA_RC_QUEUE_TYPE_MAX; ++i) {
-			if (i == MANA_RC_SEND_QUEUE_FMR)
+			if (i == MANA_RC_SEND_QUEUE_MMQ) {
+				resp.mmq_id = qp->rc_qp.queues[i].id;
 				continue;
+			}
 			resp.queue_id[j] = qp->rc_qp.queues[i].id;
 			j++;
 		}
@@ -606,10 +633,64 @@ static int mana_ib_create_rc_qp(struct ib_qp *ibqp, struct ib_pd *ibpd,
 	return 0;
 
 destroy_qp:
-	mana_ib_gd_destroy_rc_qp(mdev, qp);
+	mana_ib_gd_destroy_rnic_qp(mdev, qp);
 destroy_queues:
 	while (i-- > 0)
 		mana_ib_destroy_queue(mdev, &qp->rc_qp.queues[i]);
+	return err;
+}
+
+static int mana_ib_create_uc_qp(struct ib_qp *ibqp, struct ib_pd *ibpd,
+				struct ib_qp_init_attr *attr, struct ib_udata *udata)
+{
+	struct mana_ib_dev *mdev = container_of(ibpd->device, struct mana_ib_dev, ib_dev);
+	struct mana_ib_qp *qp = container_of(ibqp, struct mana_ib_qp, ibqp);
+	struct mana_ib_create_uc_qp_resp resp = {};
+	struct mana_ib_ucontext *mana_ucontext;
+	struct mana_ib_create_uc_qp ucmd;
+	u64 flags = 0;
+	u32 doorbell;
+	int err, i;
+
+	if (!udata)
+		return -EINVAL;
+
+	mana_ucontext = rdma_udata_to_drv_context(udata, struct mana_ib_ucontext, ibucontext);
+	doorbell = mana_ucontext->doorbell;
+	err = ib_copy_validate_udata_in_cm(udata, ucmd, comp_mask, 0);
+	if (err)
+		return err;
+
+	for (i = 0; i < MANA_UC_QUEUE_TYPE_MAX; ++i) {
+		err = mana_ib_create_queue(mdev, ucmd.queue_buf[i], ucmd.queue_size[i],
+					   &qp->uc_qp.queues[i]);
+		if (err)
+			goto destroy_queues;
+	}
+
+	err = mana_ib_gd_create_uc_qp(mdev, qp, attr, doorbell, flags);
+	if (err)
+		goto destroy_queues;
+
+	qp->ibqp.qp_num = qp->uc_qp.queues[MANA_UC_RECV_QUEUE_RESPONDER].id;
+	qp->port = attr->port_num;
+
+	for (i = 0; i < MANA_UC_QUEUE_TYPE_MAX; ++i)
+		resp.queue_id[i] = qp->uc_qp.queues[i].id;
+
+	err = ib_respond_udata(udata, resp);
+	if (err)
+		goto destroy_qp;
+
+	err = mana_table_store_qp(mdev, qp);
+	if (err)
+		goto destroy_qp;
+	return 0;
+destroy_qp:
+	mana_ib_gd_destroy_rnic_qp(mdev, qp);
+destroy_queues:
+	while (i-- > 0)
+		mana_ib_destroy_queue(mdev, &qp->uc_qp.queues[i]);
 	return err;
 }
 
@@ -651,10 +732,8 @@ static int mana_ib_create_ud_qp(struct ib_qp *ibqp, struct ib_pd *ibpd,
 	u32 doorbell, queue_size;
 	int i, err;
 
-	if (udata) {
-		ibdev_dbg(&mdev->ib_dev, "User-level UD QPs are not supported\n");
+	if (udata)
 		return -EOPNOTSUPP;
-	}
 
 	for (i = 0; i < MANA_UD_QUEUE_TYPE_MAX; ++i) {
 		queue_size = mana_ib_queue_size(attr, i);
@@ -686,7 +765,8 @@ static int mana_ib_create_ud_qp(struct ib_qp *ibqp, struct ib_pd *ibpd,
 		ibdev_err(&mdev->ib_dev, "Failed to create ud qp  %d\n", err);
 		goto destroy_shadow_queues;
 	}
-	qp->ibqp.qp_num = qp->ud_qp.queues[MANA_UD_RECV_QUEUE].id;
+	qp->ibqp.qp_num = (qp->ibqp.qp_type == IB_QPT_GSI) ?
+			  MANA_GSI_QPN : qp->ud_qp.queues[MANA_UD_RECV_QUEUE].id;
 	qp->port = attr->port_num;
 
 	for (i = 0; i < MANA_UD_QUEUE_TYPE_MAX; ++i)
@@ -724,6 +804,8 @@ int mana_ib_create_qp(struct ib_qp *ibqp, struct ib_qp_init_attr *attr,
 		return mana_ib_create_qp_raw(ibqp, ibqp->pd, attr, udata);
 	case IB_QPT_RC:
 		return mana_ib_create_rc_qp(ibqp, ibqp->pd, attr, udata);
+	case IB_QPT_UC:
+		return mana_ib_create_uc_qp(ibqp, ibqp->pd, attr, udata);
 	case IB_QPT_UD:
 	case IB_QPT_GSI:
 		return mana_ib_create_ud_qp(ibqp, ibqp->pd, attr, udata);
@@ -745,6 +827,11 @@ static int mana_ib_gd_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 	struct gdma_context *gc = mdev_to_gc(mdev);
 	struct mana_port_context *mpc;
 	struct net_device *ndev;
+	int err;
+
+	err = ib_no_udata_io(udata);
+	if (err)
+		return err;
 
 	mana_gd_init_req_hdr(&req.hdr, MANA_IB_SET_QP_STATE, sizeof(req), sizeof(resp));
 
@@ -797,7 +884,11 @@ static int mana_ib_gd_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 		req.ah_attr.flow_label = attr->ah_attr.grh.flow_label;
 	}
 
-	return mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
+	err = mana_gd_send_request(gc, sizeof(req), &req, sizeof(resp), &resp);
+	if (err)
+		return err;
+
+	return 0;
 }
 
 int mana_ib_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr,
@@ -805,6 +896,7 @@ int mana_ib_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 {
 	switch (ibqp->qp_type) {
 	case IB_QPT_RC:
+	case IB_QPT_UC:
 	case IB_QPT_UD:
 	case IB_QPT_GSI:
 		return mana_ib_gd_modify_qp(ibqp, attr, attr_mask, udata);
@@ -826,7 +918,11 @@ static int mana_ib_destroy_qp_rss(struct mana_ib_qp *qp,
 	struct mana_ib_pd *pd;
 	struct mana_ib_wq *wq;
 	struct ib_wq *ibwq;
-	int i;
+	int i, err;
+
+	err = ib_no_udata_io(udata);
+	if (err)
+		return err;
 
 	ndev = mana_ib_get_netdev(qp->ibqp.device, qp->port);
 	mpc = netdev_priv(ndev);
@@ -872,6 +968,11 @@ static int mana_ib_destroy_qp_raw(struct mana_ib_qp *qp, struct ib_udata *udata)
 	struct mana_port_context *mpc;
 	struct net_device *ndev;
 	struct mana_ib_pd *pd;
+	int err;
+
+	err = ib_no_udata_io(udata);
+	if (err)
+		return err;
 
 	ndev = mana_ib_get_netdev(qp->ibqp.device, qp->port);
 	mpc = netdev_priv(ndev);
@@ -890,16 +991,41 @@ static int mana_ib_destroy_rc_qp(struct mana_ib_qp *qp, struct ib_udata *udata)
 {
 	struct mana_ib_dev *mdev =
 		container_of(qp->ibqp.device, struct mana_ib_dev, ib_dev);
-	int i;
+	int i, err;
+
+	err = ib_no_udata_io(udata);
+	if (err)
+		return err;
 
 	mana_table_remove_qp(mdev, qp);
 
 	/* Ignore return code as there is not much we can do about it.
 	 * The error message is printed inside.
 	 */
-	mana_ib_gd_destroy_rc_qp(mdev, qp);
+	mana_ib_gd_destroy_rnic_qp(mdev, qp);
 	for (i = 0; i < MANA_RC_QUEUE_TYPE_MAX; ++i)
 		mana_ib_destroy_queue(mdev, &qp->rc_qp.queues[i]);
+
+	return 0;
+}
+
+static int mana_ib_destroy_uc_qp(struct mana_ib_qp *qp, struct ib_udata *udata)
+{
+	struct mana_ib_dev *mdev =
+		container_of(qp->ibqp.device, struct mana_ib_dev, ib_dev);
+	int i, err;
+
+	err = ib_no_udata_io(udata);
+	if (err)
+		return err;
+
+	mana_table_remove_qp(mdev, qp);
+	/* Ignore return code as there is not much we can do about it.
+	 * The error message is printed inside.
+	 */
+	mana_ib_gd_destroy_rnic_qp(mdev, qp);
+	for (i = 0; i < MANA_UC_QUEUE_TYPE_MAX; ++i)
+		mana_ib_destroy_queue(mdev, &qp->uc_qp.queues[i]);
 
 	return 0;
 }
@@ -908,7 +1034,11 @@ static int mana_ib_destroy_ud_qp(struct mana_ib_qp *qp, struct ib_udata *udata)
 {
 	struct mana_ib_dev *mdev =
 		container_of(qp->ibqp.device, struct mana_ib_dev, ib_dev);
-	int i;
+	int i, err;
+
+	err = ib_no_udata_io(udata);
+	if (err)
+		return err;
 
 	mana_remove_qp_from_cqs(qp);
 	mana_table_remove_qp(mdev, qp);
@@ -939,6 +1069,8 @@ int mana_ib_destroy_qp(struct ib_qp *ibqp, struct ib_udata *udata)
 		return mana_ib_destroy_qp_raw(qp, udata);
 	case IB_QPT_RC:
 		return mana_ib_destroy_rc_qp(qp, udata);
+	case IB_QPT_UC:
+		return mana_ib_destroy_uc_qp(qp, udata);
 	case IB_QPT_UD:
 	case IB_QPT_GSI:
 		return mana_ib_destroy_ud_qp(qp, udata);

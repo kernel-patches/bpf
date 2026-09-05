@@ -1166,7 +1166,7 @@ static irqreturn_t do_nsp32_isr(int irq, void *dev_id)
 	int handled = 0;
 	struct Scsi_Host *host = data->Host;
 
-	spin_lock_irqsave(host->host_lock, flags);
+	spin_lock_irqsave(&host->host_lock, flags);
 
 	/*
 	 * IRQ check, then enable IRQ mask
@@ -1433,7 +1433,7 @@ static irqreturn_t do_nsp32_isr(int irq, void *dev_id)
 	nsp32_write2(base, IRQ_CONTROL, 0);
 
  out2:
-	spin_unlock_irqrestore(host->host_lock, flags);
+	spin_unlock_irqrestore(&host->host_lock, flags);
 
 	nsp32_dbg(NSP32_DEBUG_INTR, "exit");
 
@@ -1470,7 +1470,7 @@ static int nsp32_show_info(struct seq_file *m, struct Scsi_Host *host)
 		   (nsp32_read2(base, INDEX_REG) >> 8) & 0xff);
 
 	mode_reg = nsp32_index_read1(base, CHIP_MODE);
-	model    = data->pci_devid->driver_data;
+	model    = data->model;
 
 #ifdef CONFIG_PM
 	seq_printf(m, "Power Management:      %s\n",
@@ -2886,14 +2886,14 @@ static int nsp32_eh_host_reset(struct scsi_cmnd *SCpnt)
 	nsp32_msg(KERN_INFO, "Host Reset");
 	nsp32_dbg(NSP32_DEBUG_BUSRESET, "SCpnt=0x%x", SCpnt);
 
-	spin_lock_irq(SCpnt->device->host->host_lock);
+	spin_lock_irq(&SCpnt->device->host->host_lock);
 
 	nsp32hw_init(data);
 	nsp32_write2(base, IRQ_CONTROL, IRQ_CONTROL_ALL_IRQ_MASK);
 	nsp32_do_bus_reset(data);
 	nsp32_write2(base, IRQ_CONTROL, 0);
 
-	spin_unlock_irq(SCpnt->device->host->host_lock);
+	spin_unlock_irq(&SCpnt->device->host->host_lock);
 	return SUCCESS;	/* Host reset is succeeded at any time. */
 }
 
@@ -2907,8 +2907,8 @@ static int nsp32_eh_host_reset(struct scsi_cmnd *SCpnt)
  */
 static int nsp32_getprom_param(nsp32_hw_data *data)
 {
-	int vendor = data->pci_devid->vendor;
-	int device = data->pci_devid->device;
+	int vendor = data->Pci->vendor;
+	int device = data->Pci->device;
 	int ret, i;
 	int __maybe_unused val;
 
@@ -3340,7 +3340,7 @@ static int nsp32_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 
 	data->Pci	  = pdev;
-	data->pci_devid   = id;
+	data->model       = id->driver_data;
 	data->IrqNumber   = pdev->irq;
 	data->BaseAddress = pci_resource_start(pdev, 0);
 	data->NumAddress  = pci_resource_len  (pdev, 0);

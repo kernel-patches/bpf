@@ -32,9 +32,36 @@
 #include "dm_services.h"
 #include "amdgpu.h"
 #include "amdgpu_dm.h"
+#include "amdgpu_dm_backlight.h"
 #include "amdgpu_dm_irq.h"
 #include "amdgpu_pm.h"
 #include "amdgpu_dm_trace.h"
+#include "dm_helpers.h"
+
+#if IS_ENABLED(CONFIG_DRM_AMD_DC_KUNIT_TEST)
+static const struct amdgpu_dm_services_kunit_ops amdgpu_dm_services_default_ops = {
+	.bo_create_kernel = amdgpu_bo_create_kernel,
+	.bo_free_kernel = amdgpu_bo_free_kernel,
+};
+
+static const struct amdgpu_dm_services_kunit_ops *amdgpu_dm_services_ops =
+	&amdgpu_dm_services_default_ops;
+
+void amdgpu_dm_services_kunit_set_ops(const struct amdgpu_dm_services_kunit_ops *ops)
+{
+	amdgpu_dm_services_ops = ops ? ops : &amdgpu_dm_services_default_ops;
+}
+EXPORT_IF_KUNIT(amdgpu_dm_services_kunit_set_ops);
+
+#define services_bo_create_kernel	amdgpu_dm_services_ops->bo_create_kernel
+#define services_bo_free_kernel		amdgpu_dm_services_ops->bo_free_kernel
+
+#else
+
+#define services_bo_create_kernel	amdgpu_bo_create_kernel
+#define services_bo_free_kernel		amdgpu_bo_free_kernel
+
+#endif
 
 	unsigned long long
 	dm_get_elapse_time_in_ns(struct dc_context *ctx,
@@ -43,6 +70,7 @@
 {
 	return current_time_stamp - last_time_stamp;
 }
+EXPORT_IF_KUNIT(dm_get_elapse_time_in_ns);
 
 void dm_perf_trace_timestamp(const char *func_name, unsigned int line, struct dc_context *ctx)
 {
@@ -52,14 +80,17 @@ void dm_perf_trace_timestamp(const char *func_name, unsigned int line, struct dc
 				    &ctx->perf_trace->last_entry_write,
 				    func_name, line);
 }
+EXPORT_IF_KUNIT(dm_perf_trace_timestamp);
 
 void dm_trace_smu_enter(uint32_t msg_id, uint32_t param_in, unsigned int delay, struct dc_context *ctx)
 {
 }
+EXPORT_IF_KUNIT(dm_trace_smu_enter);
 
 void dm_trace_smu_exit(bool success, uint32_t response, struct dc_context *ctx)
 {
 }
+EXPORT_IF_KUNIT(dm_trace_smu_exit);
 
 /**** power component interfaces ****/
 
@@ -89,3 +120,59 @@ bool dm_query_extended_brightness_caps(struct dc_context *ctx,
 			sizeof(struct dm_bl_data_point) * pCaps->num_data_points);
 	return true;
 }
+EXPORT_IF_KUNIT(dm_query_extended_brightness_caps);
+
+void*
+dm_allocate_gpu_mem(
+		struct amdgpu_device *adev,
+		enum dc_gpu_mem_alloc_type type,
+		size_t size,
+		long long *addr)
+{
+	struct dal_allocation *da;
+	u32 domain = (type == DC_MEM_ALLOC_TYPE_GART) ?
+		AMDGPU_GEM_DOMAIN_GTT : AMDGPU_GEM_DOMAIN_VRAM;
+	int ret;
+
+	da = kzalloc_obj(*da);
+	if (!da)
+		return NULL;
+
+	ret = services_bo_create_kernel(adev, size, PAGE_SIZE,
+					domain, &da->bo,
+					&da->gpu_addr, &da->cpu_ptr);
+
+	*addr = da->gpu_addr;
+
+	if (ret) {
+		kfree(da);
+		return NULL;
+	}
+
+	/* add da to list in dm */
+	list_add(&da->list, &adev->dm.da_list);
+
+	return da->cpu_ptr;
+}
+EXPORT_IF_KUNIT(dm_allocate_gpu_mem);
+
+void
+dm_free_gpu_mem(
+		struct amdgpu_device *adev,
+		enum dc_gpu_mem_alloc_type type,
+		void *pvMem)
+{
+	struct dal_allocation *da;
+
+	/* walk the da list in DM */
+	list_for_each_entry(da, &adev->dm.da_list, list) {
+		if (pvMem == da->cpu_ptr) {
+			services_bo_free_kernel(&da->bo, &da->gpu_addr, &da->cpu_ptr);
+			list_del(&da->list);
+			kfree(da);
+			break;
+		}
+	}
+
+}
+EXPORT_IF_KUNIT(dm_free_gpu_mem);

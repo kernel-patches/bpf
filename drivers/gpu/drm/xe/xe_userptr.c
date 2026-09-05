@@ -57,6 +57,23 @@ int __xe_vm_userptr_needs_repin(struct xe_vm *vm)
 		list_empty(&vm->userptr.invalidated)) ? 0 : -EAGAIN;
 }
 
+#if IS_ENABLED(CONFIG_PROVE_LOCKING)
+static bool __xe_vma_userptr_lockdep(struct xe_userptr_vma *uvma)
+{
+	struct xe_vma *vma = &uvma->vma;
+	struct xe_vm *vm = xe_vma_vm(vma);
+
+	return lockdep_is_held_type(&vm->lock, 0) ||
+		(lockdep_is_held_type(&vm->lock, 1) &&
+		 lockdep_is_held_type(&vma->fault_lock, 0));
+}
+
+#define xe_vma_userptr_lockdep(uvma)	\
+	lockdep_assert(__xe_vma_userptr_lockdep(uvma))
+#else
+#define xe_vma_userptr_lockdep(uvma)
+#endif
+
 int xe_vma_userptr_pin_pages(struct xe_userptr_vma *uvma)
 {
 	struct xe_vma *vma = &uvma->vma;
@@ -68,7 +85,7 @@ int xe_vma_userptr_pin_pages(struct xe_userptr_vma *uvma)
 		.allow_mixed = true,
 	};
 
-	lockdep_assert_held(&vm->lock);
+	xe_vma_userptr_lockdep(uvma);
 	xe_assert(xe, xe_vma_is_userptr(vma));
 
 	if (vma->gpuva.flags & XE_VMA_DESTROYED)
@@ -180,7 +197,7 @@ xe_vma_userptr_invalidate_pass1(struct xe_vm *vm, struct xe_userptr_vma *uvma)
 	dma_resv_iter_begin(&cursor, xe_vm_resv(vm),
 			    DMA_RESV_USAGE_BOOKKEEP);
 	dma_resv_for_each_fence_unlocked(&cursor, fence) {
-		dma_fence_enable_sw_signaling(fence);
+		dma_fence_enable_signaling(fence);
 		if (signaled && !dma_fence_is_signaled(fence))
 			signaled = false;
 	}
@@ -390,18 +407,19 @@ int xe_userptr_setup(struct xe_userptr_vma *uvma, unsigned long start,
 		     unsigned long range)
 {
 	struct xe_userptr *userptr = &uvma->userptr;
+	struct xe_vm *vm = xe_vma_vm(&uvma->vma);
 	int err;
 
 	INIT_LIST_HEAD(&userptr->invalidate_link);
 	INIT_LIST_HEAD(&userptr->repin_link);
+
+	drm_gpusvm_init_pages(&userptr->pages, &vm->xe->drm);
 
 	err = mmu_interval_notifier_insert(&userptr->notifier, current->mm,
 					   start, range,
 					   &vma_userptr_notifier_ops);
 	if (err)
 		return err;
-
-	userptr->pages.notifier_seq = LONG_MAX;
 
 	return 0;
 }

@@ -87,7 +87,7 @@ struct xe_migrate {
 #define MAX_PREEMPTDISABLE_TRANSFER SZ_8M /* Around 1ms. */
 #define MAX_CCS_LIMITED_TRANSFER SZ_4M /* XE_PAGE_SIZE * (FIELD_MAX(XE2_CCS_SIZE_MASK) + 1) */
 #define NUM_KERNEL_PDE 15
-#define NUM_PT_SLOTS 32
+#define NUM_PT_SLOTS 48
 #define LEVEL0_PAGE_TABLE_ENCODE_SIZE SZ_2M
 #define MAX_NUM_PTE 512
 #define IDENTITY_OFFSET 256ULL
@@ -117,6 +117,27 @@ static void xe_migrate_fini(void *arg)
 	xe_exec_queue_put(m->q);
 }
 
+static inline u16 xe_migrate_pat_index(struct xe_device *xe,
+				       enum ttm_caching caching,
+				       bool is_comp_pte)
+{
+	enum xe_cache_level cache_level;
+
+	/*
+	 * Select the appropriate PAT index for buffer object PTEs programmed
+	 * by emit_pte(). We choose not to mess with xe_migrate_prepare_vm()
+	 * yet, for simplicity.
+	 */
+	if (is_comp_pte && GRAPHICS_VERx100(xe) >= 2000)
+		cache_level = XE_CACHE_NONE_COMPRESSION;
+	else if (caching == ttm_cached)
+		cache_level = XE_CACHE_WB;
+	else
+		cache_level = XE_CACHE_NONE;
+
+	return xe_cache_pat_idx(xe, cache_level);
+}
+
 static u64 xe_migrate_vm_addr(u64 slot, u32 level)
 {
 	XE_WARN_ON(slot >= NUM_PT_SLOTS);
@@ -142,21 +163,19 @@ static u64 xe_migrate_vram_ofs(struct xe_device *xe, u64 addr, bool is_comp_pte)
 }
 
 static void xe_migrate_program_identity(struct xe_device *xe, struct xe_vm *vm, struct xe_bo *bo,
-					u64 map_ofs, u64 vram_offset, u16 pat_index, u64 pt_2m_ofs)
+					u64 map_ofs, u64 vram_offset, u16 pat_index, u64 pt_2m_ofs,
+					u64 pt_4k_ofs)
 {
 	struct xe_vram_region *vram = xe->mem.vram;
 	resource_size_t dpa_base = xe_vram_region_dpa_base(vram);
 	u64 pos, ofs, flags;
 	u64 entry;
-	/* XXX: Unclear if this should be usable_size? */
-	u64 vram_limit = xe_vram_region_actual_physical_size(vram) + dpa_base;
+	u64 vram_limit = xe_vram_region_usable_size(vram) + dpa_base;
 	u32 level = 2;
 
 	ofs = map_ofs + XE_PAGE_SIZE * level + vram_offset * 8;
 	flags = vm->pt_ops->pte_encode_addr(xe, 0, pat_index, level,
 					    true, 0);
-
-	xe_assert(xe, IS_ALIGNED(xe_vram_region_usable_size(vram), SZ_2M));
 
 	/*
 	 * Use 1GB pages when possible, last chunk always use 2M
@@ -175,8 +194,24 @@ static void xe_migrate_program_identity(struct xe_device *xe, struct xe_vm *vm, 
 							    true, 0);
 
 			for (ofs = pt_2m_ofs; pos < vram_limit;
-			     pos += SZ_2M, ofs += 8)
+			     pos += SZ_2M, ofs += 8) {
+				if (pos + SZ_2M > vram_limit) {
+					entry = vm->pt_ops->pde_encode_bo(bo, pt_4k_ofs);
+					xe_map_wr(xe, &bo->vmap, ofs, u64, entry);
+
+					flags = vm->pt_ops->pte_encode_addr(xe, 0,
+									    pat_index,
+									    level - 2,
+									    true, 0);
+
+					for (ofs = pt_4k_ofs; pos < vram_limit;
+					     pos += SZ_4K, ofs += 8)
+						xe_map_wr(xe, &bo->vmap, ofs, u64, pos | flags);
+					break;
+				}
+
 				xe_map_wr(xe, &bo->vmap, ofs, u64, pos | flags);
+			}
 			break;	/* Ensure pos == vram_limit assert correct */
 		}
 
@@ -221,16 +256,17 @@ static void xe_migrate_prepare_vm(struct xe_tile *tile, struct xe_migrate *m,
 	u16 pat_index = xe_cache_pat_idx(xe, XE_CACHE_WB);
 	u8 id = tile->id;
 	u32 num_entries = NUM_PT_SLOTS, num_level = vm->pt_root[id]->level;
-#define VRAM_IDENTITY_MAP_COUNT	2
-	u32 num_setup = num_level + VRAM_IDENTITY_MAP_COUNT;
-#undef VRAM_IDENTITY_MAP_COUNT
+#define VRAM_IDENTITY_MAP_PT_COUNT	4
+	u32 num_setup = num_level + VRAM_IDENTITY_MAP_PT_COUNT;
+#undef VRAM_IDENTITY_MAP_PT_COUNT
 	u32 map_ofs, level, i;
 	struct xe_bo *bo = m->pt_bo, *batch = tile->mem.kernel_bb_pool->bo;
-	u64 entry, pt29_ofs;
+	u64 entry;
 
-	/* PT30 & PT31 reserved for 2M identity map */
-	pt29_ofs = xe_bo_size(bo) - 3 * XE_PAGE_SIZE;
-	entry = vm->pt_ops->pde_encode_bo(bo, pt29_ofs);
+	/* PT44..PT47 reserved for 4K and 2M identity map */
+	u64 l1_pt_ofs = xe_bo_size(bo) - 5 * XE_PAGE_SIZE;
+
+	entry = vm->pt_ops->pde_encode_bo(bo, l1_pt_ofs);
 	xe_pt_write(xe, &vm->pt_root[id]->bo->vmap, 0, entry);
 
 	map_ofs = (num_entries - num_setup) * XE_PAGE_SIZE;
@@ -326,11 +362,12 @@ static void xe_migrate_prepare_vm(struct xe_tile *tile, struct xe_migrate *m,
 
 	/* Identity map the entire vram at 256GiB offset */
 	if (IS_DGFX(xe)) {
-		u64 pt30_ofs = xe_bo_size(bo) - 2 * XE_PAGE_SIZE;
+		u64 pt46_ofs = xe_bo_size(bo) - 2 * XE_PAGE_SIZE;
 		resource_size_t actual_phy_size = xe_vram_region_actual_physical_size(xe->mem.vram);
 
+		u64 pt44_ofs = xe_bo_size(bo) - 4 * XE_PAGE_SIZE;
 		xe_migrate_program_identity(xe, vm, bo, map_ofs, IDENTITY_OFFSET,
-					    pat_index, pt30_ofs);
+					    pat_index, pt46_ofs, pt44_ofs);
 		xe_assert(xe, actual_phy_size <= (MAX_NUM_PTE - IDENTITY_OFFSET) * SZ_1G);
 
 		/*
@@ -341,12 +378,13 @@ static void xe_migrate_prepare_vm(struct xe_tile *tile, struct xe_migrate *m,
 			u16 comp_pat_index = xe_cache_pat_idx(xe, XE_CACHE_NONE_COMPRESSION);
 			u64 vram_offset = IDENTITY_OFFSET +
 				DIV_ROUND_UP_ULL(actual_phy_size, SZ_1G);
-			u64 pt31_ofs = xe_bo_size(bo) - XE_PAGE_SIZE;
+			u64 pt47_ofs = xe_bo_size(bo) - XE_PAGE_SIZE;
 
 			xe_assert(xe, actual_phy_size <= (MAX_NUM_PTE - IDENTITY_OFFSET -
 							  IDENTITY_OFFSET / 2) * SZ_1G);
+			u64 pt45_ofs = xe_bo_size(bo) - 3 * XE_PAGE_SIZE;
 			xe_migrate_program_identity(xe, vm, bo, map_ofs, vram_offset,
-						    comp_pat_index, pt31_ofs);
+						    comp_pat_index, pt47_ofs, pt45_ofs);
 		}
 	}
 
@@ -360,8 +398,8 @@ static void xe_migrate_suballoc_manager_init(struct xe_migrate *m, u32 map_ofs)
 	 * Example layout created above, with root level = 3:
 	 * [PT0...PT7]: kernel PT's for copy/clear; 64 or 4KiB PTE's
 	 * [PT8]: Kernel PT for VM_BIND, 4 KiB PTE's
-	 * [PT9...PT26]: Userspace PT's for VM_BIND, 4 KiB PTE's
-	 * [PT27 = PDE 0] [PT28 = PDE 1] [PT29 = PDE 2] [PT30 & PT31 = 2M vram identity map]
+	 * [PT9...PT40]: Userspace PT's for VM_BIND, 4 KiB PTE's
+	 * [PT41 = PDE 0] [PT44...PT47 = 4K and 2M vram identity maps]
 	 *
 	 * This makes the lowest part of the VM point to the pagetables.
 	 * Hence the lowest 2M in the vm should point to itself, with a few writes
@@ -381,27 +419,6 @@ static void xe_migrate_suballoc_manager_init(struct xe_migrate *m, u32 map_ofs)
 	drm_suballoc_manager_init(&m->vm_update_sa,
 				  (size_t)(map_ofs / XE_PAGE_SIZE - NUM_KERNEL_PDE) *
 				  NUM_VMUSA_UNIT_PER_PAGE, 0);
-}
-
-/*
- * Including the reserved copy engine is required to avoid deadlocks due to
- * migrate jobs servicing the faults gets stuck behind the job that faulted.
- */
-static u32 xe_migrate_usm_logical_mask(struct xe_gt *gt)
-{
-	u32 logical_mask = 0;
-	struct xe_hw_engine *hwe;
-	enum xe_hw_engine_id id;
-
-	for_each_hw_engine(hwe, gt, id) {
-		if (hwe->class != XE_ENGINE_CLASS_COPY)
-			continue;
-
-		if (xe_gt_is_usm_hwe(gt, hwe))
-			logical_mask |= BIT(hwe->logical_instance);
-	}
-
-	return logical_mask;
 }
 
 static bool xe_migrate_needs_ccs_emit(struct xe_device *xe)
@@ -479,13 +496,10 @@ int xe_migrate_init(struct xe_migrate *m)
 		goto err_out;
 
 	if (xe->info.has_usm) {
-		struct xe_hw_engine *hwe = xe_gt_hw_engine(primary_gt,
-							   XE_ENGINE_CLASS_COPY,
-							   primary_gt->usm.reserved_bcs_instance,
-							   false);
-		u32 logical_mask = xe_migrate_usm_logical_mask(primary_gt);
+		struct xe_hw_engine *hwe0 = primary_gt->usm.paging_hwe0;
+		u32 logical_mask = primary_gt->usm.paging_logical_mask;
 
-		if (!hwe || !logical_mask) {
+		if (!hwe0 || !logical_mask) {
 			err = -EINVAL;
 			goto err_out;
 		}
@@ -494,9 +508,8 @@ int xe_migrate_init(struct xe_migrate *m)
 		 * XXX: Currently only reserving 1 (likely slow) BCS instance on
 		 * PVC, may want to revisit if performance is needed.
 		 */
-		m->q = xe_exec_queue_create(xe, vm, logical_mask, 1, hwe,
+		m->q = xe_exec_queue_create(xe, vm, logical_mask, 1, hwe0,
 					    EXEC_QUEUE_FLAG_KERNEL |
-					    EXEC_QUEUE_FLAG_PERMANENT |
 					    EXEC_QUEUE_FLAG_HIGH_PRIORITY |
 					    EXEC_QUEUE_FLAG_MIGRATE |
 					    EXEC_QUEUE_FLAG_LOW_LATENCY, 0);
@@ -504,7 +517,6 @@ int xe_migrate_init(struct xe_migrate *m)
 		m->q = xe_exec_queue_create_class(xe, primary_gt, vm,
 						  XE_ENGINE_CLASS_COPY,
 						  EXEC_QUEUE_FLAG_KERNEL |
-						  EXEC_QUEUE_FLAG_PERMANENT |
 						  EXEC_QUEUE_FLAG_MIGRATE, 0);
 	}
 	if (IS_ERR(m->q)) {
@@ -631,17 +643,17 @@ static void emit_pte(struct xe_migrate *m,
 {
 	struct xe_device *xe = tile_to_xe(m->tile);
 	struct xe_vm *vm = m->q->vm;
+	struct xe_bo *bo = ttm_to_xe_bo(res->bo);
+	enum ttm_caching caching = ttm_cached;
 	u16 pat_index;
 	u32 ptes;
 	u64 ofs = (u64)at_pt * XE_PAGE_SIZE;
 	u64 cur_ofs;
 
-	/* Indirect access needs compression enabled uncached PAT index */
-	if (GRAPHICS_VERx100(xe) >= 2000)
-		pat_index = is_comp_pte ? xe_cache_pat_idx(xe, XE_CACHE_NONE_COMPRESSION) :
-					  xe_cache_pat_idx(xe, XE_CACHE_WB);
-	else
-		pat_index = xe_cache_pat_idx(xe, XE_CACHE_WB);
+	if (!is_vram && bo->ttm.ttm)
+		caching = bo->ttm.ttm->caching;
+
+	pat_index = xe_migrate_pat_index(xe, caching, is_comp_pte);
 
 	ptes = DIV_ROUND_UP(size, XE_PAGE_SIZE);
 
@@ -2637,4 +2649,68 @@ void xe_migrate_job_lock_assert(struct xe_exec_queue *q)
 
 #if IS_ENABLED(CONFIG_DRM_XE_KUNIT_TEST)
 #include "tests/xe_migrate.c"
+#endif
+
+#if IS_ENABLED(CONFIG_DRM_XE_DEBUG_MEM)
+int xe_migrate_debug_ccs_overlap(struct xe_migrate *m,
+				 struct xe_bo *scratch_bo,
+				 bool write_to_ccs)
+{
+	struct xe_device *xe = tile_to_xe(m->tile);
+	struct xe_gt *gt = m->tile->primary_gt;
+	struct dma_fence *fence;
+	struct xe_bb *bb;
+	struct xe_sched_job *job;
+	u64 first_page_dpa, clear_L0_ofs, scratch_dpa, scratch_L0_ofs;
+
+	if (!xe_device_has_flat_ccs(xe))
+		return -EINVAL;
+
+	first_page_dpa = xe_vram_region_dpa_base(m->tile->mem.vram);
+	clear_L0_ofs = xe_migrate_vram_ofs(xe, first_page_dpa, true);
+
+	scratch_dpa = xe_bo_addr(scratch_bo, 0, XE_PAGE_SIZE);
+	scratch_L0_ofs = xe_migrate_vram_ofs(xe, scratch_dpa, false);
+
+	bb = xe_bb_new(gt, EMIT_COPY_CCS_DW + 1, xe->info.has_usm);
+	if (IS_ERR(bb)) {
+		drm_warn(&xe->drm, "Failed to create bb for VRAM overlap check\n");
+		return PTR_ERR(bb);
+	}
+
+	/* 4MB payload = 8KB CCS metadata */
+	if (write_to_ccs) {
+		emit_copy_ccs(gt, bb, clear_L0_ofs, true,
+			      scratch_L0_ofs, false, SZ_4M);
+	} else {
+		emit_copy_ccs(gt, bb, scratch_L0_ofs, false,
+			      clear_L0_ofs, true, SZ_4M);
+	}
+
+	bb->cs[bb->len++] = MI_BATCH_BUFFER_END;
+
+	job = xe_bb_create_migration_job(m->q, bb,
+					 xe_migrate_batch_base(m, xe->info.has_usm),
+					 0);
+	if (!IS_ERR(job)) {
+		xe_sched_job_add_migrate_flush(job, MI_FLUSH_DW_CCS);
+
+		mutex_lock(&m->job_mutex);
+		xe_sched_job_arm(job);
+
+		fence = dma_fence_get(&job->drm.s_fence->finished);
+		xe_sched_job_push(job);
+		mutex_unlock(&m->job_mutex);
+
+		dma_fence_wait(fence, false);
+		dma_fence_put(fence);
+	} else {
+		drm_warn(&xe->drm, "Failed to create job for VRAM overlap check\n");
+		xe_bb_free(bb, NULL);
+		return PTR_ERR(job);
+	}
+
+	xe_bb_free(bb, NULL);
+	return 0;
+}
 #endif

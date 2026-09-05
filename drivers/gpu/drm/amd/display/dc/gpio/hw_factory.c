@@ -43,9 +43,11 @@
 #if defined(CONFIG_DRM_AMD_DC_SI)
 #include "dce60/hw_factory_dce60.h"
 #endif
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 #include "dce80/hw_factory_dce80.h"
 #include "dce110/hw_factory_dce110.h"
 #include "dce120/hw_factory_dce120.h"
+#endif
 #include "dcn10/hw_factory_dcn10.h"
 #include "dcn20/hw_factory_dcn20.h"
 #include "dcn21/hw_factory_dcn21.h"
@@ -55,6 +57,7 @@
 #include "dcn401/hw_factory_dcn401.h"
 #include "dcn42/hw_factory_dcn42.h"
 #include "dcn42b/hw_factory_dcn42b.h"
+#include "dcn60/hw_factory_dcn60.h"
 
 bool dal_hw_factory_init(
 	struct hw_factory *factory,
@@ -70,6 +73,7 @@ bool dal_hw_factory_init(
 		dal_hw_factory_dce60_init(factory);
 		return true;
 #endif
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 	case DCE_VERSION_8_0:
 	case DCE_VERSION_8_1:
 	case DCE_VERSION_8_3:
@@ -88,6 +92,7 @@ bool dal_hw_factory_init(
 	case DCE_VERSION_12_1:
 		dal_hw_factory_dce120_init(factory);
 		return true;
+#endif
 	case DCN_VERSION_1_0:
 	case DCN_VERSION_1_01:
 		dal_hw_factory_dcn10_init(factory);
@@ -126,6 +131,9 @@ bool dal_hw_factory_init(
 		return true;
 	case DCN_VERSION_4_2B:
 		dal_hw_factory_dcn42b_init(factory);
+		return true;
+	case DCN_VERSION_6_0:
+		dal_hw_factory_dcn60_init(factory);
 		return true;
 	default:
 		ASSERT_CRITICAL(false);

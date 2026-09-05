@@ -29,8 +29,41 @@
 
 #include <drm/drm_writeback.h>
 
+struct amdgpu_display_manager;
+struct amdgpu_dm_wb_connector;
+struct amdgpu_bo;
+struct dma_resv;
+struct ttm_buffer_object;
+
 int amdgpu_dm_wb_connector_init(struct amdgpu_display_manager *dm,
 				struct amdgpu_dm_wb_connector *dm_wbcon,
 				uint32_t link_index);
+
+#if IS_ENABLED(CONFIG_DRM_AMD_DC_KUNIT_TEST)
+#include <drm/drm_connector.h>
+#include <drm/drm_crtc.h>
+
+struct amdgpu_dm_wb_kunit_ops {
+	int (*reserve)(struct amdgpu_bo *bo, bool interruptible);
+	int (*reserve_fences)(struct dma_resv *resv, unsigned int num_fences);
+	int (*pin)(struct amdgpu_bo *bo, u32 domain);
+	int (*alloc_gart)(struct ttm_buffer_object *tbo);
+	void (*unreserve)(struct amdgpu_bo *bo);
+	u64 (*gpu_offset)(struct amdgpu_bo *bo);
+	struct amdgpu_bo *(*ref)(struct amdgpu_bo *bo);
+	void (*unpin)(struct amdgpu_bo *bo);
+	void (*unref)(struct amdgpu_bo **bo);
+};
+
+int amdgpu_dm_wb_encoder_atomic_check(struct drm_encoder *encoder,
+				      struct drm_crtc_state *crtc_state,
+				      struct drm_connector_state *conn_state);
+int amdgpu_dm_wb_connector_get_modes(struct drm_connector *connector);
+int amdgpu_dm_wb_prepare_job(struct drm_writeback_connector *wb_connector,
+			     struct drm_writeback_job *job);
+void amdgpu_dm_wb_cleanup_job(struct drm_writeback_connector *connector,
+			      struct drm_writeback_job *job);
+void amdgpu_dm_wb_kunit_set_ops(const struct amdgpu_dm_wb_kunit_ops *ops);
+#endif
 
 #endif

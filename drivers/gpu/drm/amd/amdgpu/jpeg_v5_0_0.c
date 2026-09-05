@@ -625,7 +625,7 @@ static int jpeg_v5_0_0_set_interrupt_state(struct amdgpu_device *adev,
 	return 0;
 }
 
-static int jpeg_v5_0_0_process_interrupt(struct amdgpu_device *adev,
+int jpeg_v5_0_0_process_interrupt(struct amdgpu_device *adev,
 				      struct amdgpu_irq_src *source,
 				      struct amdgpu_iv_entry *entry)
 {
@@ -682,7 +682,6 @@ static const struct amd_ip_funcs jpeg_v5_0_0_ip_funcs = {
 	.hw_fini = jpeg_v5_0_0_hw_fini,
 	.suspend = jpeg_v5_0_0_suspend,
 	.resume = jpeg_v5_0_0_resume,
-	.is_idle = jpeg_v5_0_0_is_idle,
 	.wait_for_idle = jpeg_v5_0_0_wait_for_idle,
 	.set_clockgating_state = jpeg_v5_0_0_set_clockgating_state,
 	.set_powergating_state = jpeg_v5_0_0_set_powergating_state,

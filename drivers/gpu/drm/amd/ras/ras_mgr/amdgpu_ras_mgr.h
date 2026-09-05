@@ -53,6 +53,7 @@ struct amdgpu_ras_mgr {
 	void *virt_ras_cmd;
 	uint64_t last_poison_consumption_seqno;
 	bool ras_is_ready;
+	bool is_debug_mode;
 
 	bool is_paused;
 	struct completion ras_event_done;
@@ -60,13 +61,15 @@ struct amdgpu_ras_mgr {
 
 extern const struct amdgpu_ip_block_version ras_v1_0_ip_block;
 
+int amdgpu_ras_mgr_sw_init(struct amdgpu_device *adev,
+		struct ras_module_param *param);
+int amdgpu_ras_mgr_sw_fini(struct amdgpu_device *adev);
+int amdgpu_ras_mgr_early_init_service(struct amdgpu_device *adev);
 struct amdgpu_ras_mgr *amdgpu_ras_mgr_get_context(
 			struct amdgpu_device *adev);
 int amdgpu_enable_uniras(struct amdgpu_device *adev, bool enable);
 bool amdgpu_uniras_enabled(struct amdgpu_device *adev);
 int amdgpu_ras_mgr_handle_fatal_interrupt(struct amdgpu_device *adev, void *data);
-int amdgpu_ras_mgr_handle_controller_interrupt(struct amdgpu_device *adev, void *data);
-int amdgpu_ras_mgr_handle_consumer_interrupt(struct amdgpu_device *adev, void *data);
 int amdgpu_ras_mgr_dispatch_interrupt(struct amdgpu_device *adev, struct ras_ih_info *ih_info);
 int amdgpu_ras_mgr_update_ras_ecc(struct amdgpu_device *adev);
 int amdgpu_ras_mgr_reset_gpu(struct amdgpu_device *adev, uint32_t flags);
@@ -82,6 +85,11 @@ int amdgpu_ras_mgr_handle_ras_cmd(struct amdgpu_device *adev,
 		void *output, uint32_t out_size);
 int amdgpu_ras_mgr_pre_reset(struct amdgpu_device *adev);
 int amdgpu_ras_mgr_post_reset(struct amdgpu_device *adev);
+int amdgpu_ras_mgr_enable_feature(struct amdgpu_device *adev,
+		uint32_t ta_block_id, uint32_t ta_error_type, bool enable);
+int amdgpu_ras_mgr_resume_after_reset(struct amdgpu_device *adev);
 int amdgpu_ras_mgr_lookup_bad_pages_in_a_row(struct amdgpu_device *adev,
 		uint64_t addr, uint64_t *nps_page_addr, uint32_t max_page_count);
+int amdgpu_ras_mgr_set_debug_mode(struct amdgpu_device *adev, bool enable);
+bool amdgpu_ras_mgr_get_debug_mode(struct amdgpu_device *adev);
 #endif

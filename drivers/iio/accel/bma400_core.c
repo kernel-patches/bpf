@@ -6,8 +6,6 @@
  *
  * TODO:
  *  - Support for power management
- *  - Support events and interrupts
- *  - Create channel for step count
  *  - Create channel for sensor time
  */
 
@@ -1789,8 +1787,7 @@ int bma400_probe(struct device *dev, struct regmap *regmap, int irq,
 						IRQF_TRIGGER_RISING | IRQF_ONESHOT,
 						indio_dev->name, indio_dev);
 		if (ret)
-			return dev_err_probe(data->dev, ret,
-					     "request irq %d failed\n", irq);
+			return ret;
 	}
 
 	ret = devm_iio_triggered_buffer_setup(dev, indio_dev, NULL,

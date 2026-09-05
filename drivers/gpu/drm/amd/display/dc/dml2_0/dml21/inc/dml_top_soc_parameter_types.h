@@ -20,7 +20,6 @@ struct dml2_soc_derate_values {
 
 struct dml2_soc_derates {
 	struct dml2_soc_derate_values system_active_urgent;
-	struct dml2_soc_derate_values system_active_average;
 	struct dml2_soc_derate_values dcn_mall_prefetch_urgent;
 	struct dml2_soc_derate_values dcn_mall_prefetch_average;
 	struct dml2_soc_derate_values system_idle_average;
@@ -71,8 +70,30 @@ enum dml2_qos_param_type {
 	dml2_qos_param_type_dcn4x
 };
 
+// Per-DPM derate structure: each element pairs a derate percentage with its clock threshold
+// Requirements:
+// - Index 0 must always be populated (the base/default derate)
+// - Last populated entry must have clk_upperbound_threshold_khz = 0
+// - All clock arrays within a power state should have the same number of entries
+// - If a non-zero DPM index has derate_percent = 0, fall back to index 0
+// Unpopulated derates should fallback to the global derate value.
+// Each element pairs a derate percentage with its threshold
+struct dml2_soc_derate_values_per_dpm {
+	unsigned int derate_percent;
+	unsigned int clk_upperbound_threshold_khz;
+};
+
+// Per-DPM derate arrays for system_active_average (the only power state that varies by DPM)
+// Urgent derates are constant across DPMs and come from derate_table.system_active_urgent
+struct dml2_soc_derates_per_dpm {
+	struct dml2_soc_derate_values_per_dpm dram_per_dpm_derate_pixel[DML_MAX_CLK_TABLE_SIZE];
+	struct dml2_soc_derate_values_per_dpm fclk_per_dpm_derate[DML_MAX_CLK_TABLE_SIZE];
+	struct dml2_soc_derate_values_per_dpm dcfclk_per_dpm_derate[DML_MAX_CLK_TABLE_SIZE];
+};
+
 struct dml2_soc_qos_parameters {
-	struct dml2_soc_derates derate_table;
+	struct dml2_soc_derates derate_table; // Single-value derates (source of truth for urgent, idle, mall_prefetch)
+	struct dml2_soc_derates_per_dpm derate_table_per_dpm; // Per-DPM derates for system_active_average only
 	struct {
 		unsigned int base_latency_us;
 		unsigned int scaling_factor_us;
@@ -104,6 +125,7 @@ struct dml2_soc_power_management_parameters {
 	double g6_temp_read_blackout_us[DML_MAX_CLK_TABLE_SIZE];
 	double type_b_dram_clk_change_blackout_us;
 	double type_b_ppt_blackout_us;
+	unsigned int alternate_dram_carveout_size_mb; // size per aperture - assumed same for both apertures for now
 };
 
 struct dml2_clk_table {
@@ -200,6 +222,7 @@ struct dml2_ip_capabilities {
 	unsigned int ppt_max_allow_delay_us;
 	unsigned int temp_read_max_allow_delay_us;
 	unsigned int dummy_pstate_max_allow_delay_us;
+	unsigned int vblank_nom_default_us;
 	/* FAMS2 delays */
 	struct {
 		unsigned int max_allow_delay_us;

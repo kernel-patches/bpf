@@ -208,14 +208,14 @@ static int snd_rawmidi_runtime_free(struct snd_rawmidi_substream *substream)
 
 static inline void snd_rawmidi_output_trigger(struct snd_rawmidi_substream *substream, int up)
 {
-	if (!substream->opened)
+	if (!substream->opened || substream->disconnected)
 		return;
 	substream->ops->trigger(substream, up);
 }
 
 static void snd_rawmidi_input_trigger(struct snd_rawmidi_substream *substream, int up)
 {
-	if (!substream->opened)
+	if (!substream->opened || substream->disconnected)
 		return;
 	substream->ops->trigger(substream, up);
 	if (!up)
@@ -254,7 +254,8 @@ int snd_rawmidi_drain_output(struct snd_rawmidi_substream *substream)
 
 	scoped_guard(spinlock_irq, &substream->lock) {
 		runtime = substream->runtime;
-		if (!substream->opened || !runtime || !runtime->buffer)
+		if (!substream->opened || !runtime || !runtime->buffer ||
+		    substream->disconnected)
 			return -EINVAL;
 		snd_rawmidi_buffer_ref(runtime);
 		runtime->drain = 1;
@@ -537,7 +538,7 @@ static void close_substream(struct snd_rawmidi *rmidi,
 	if (--substream->use_count)
 		return;
 
-	if (cleanup) {
+	if (cleanup && !substream->disconnected) {
 		if (substream->stream == SNDRV_RAWMIDI_STREAM_INPUT)
 			snd_rawmidi_input_trigger(substream, 0);
 		else {
@@ -571,7 +572,6 @@ static void rawmidi_release_priv(struct snd_rawmidi_file *rfile)
 	struct snd_rawmidi *rmidi;
 
 	rmidi = rfile->rmidi;
-	guard(mutex)(&rmidi->open_mutex);
 	if (rfile->input) {
 		close_substream(rmidi, rfile->input, 1);
 		rfile->input = NULL;
@@ -585,7 +585,8 @@ static void rawmidi_release_priv(struct snd_rawmidi_file *rfile)
 }
 
 /* called from sound/core/seq/seq_midi.c */
-int snd_rawmidi_kernel_release(struct snd_rawmidi_file *rfile)
+int snd_rawmidi_kernel_release_nested(struct snd_rawmidi_file *rfile,
+				      int depth)
 {
 	struct snd_rawmidi *rmidi;
 
@@ -593,11 +594,13 @@ int snd_rawmidi_kernel_release(struct snd_rawmidi_file *rfile)
 		return -ENXIO;
 
 	rmidi = rfile->rmidi;
+	mutex_lock_nested(&rmidi->open_mutex, depth);
 	rawmidi_release_priv(rfile);
+	mutex_unlock(&rmidi->open_mutex);
 	module_put(rmidi->card->module);
 	return 0;
 }
-EXPORT_SYMBOL(snd_rawmidi_kernel_release);
+EXPORT_SYMBOL(snd_rawmidi_kernel_release_nested);
 
 static int snd_rawmidi_release(struct inode *inode, struct file *file)
 {
@@ -607,7 +610,8 @@ static int snd_rawmidi_release(struct inode *inode, struct file *file)
 
 	rfile = file->private_data;
 	rmidi = rfile->rmidi;
-	rawmidi_release_priv(rfile);
+	scoped_guard(mutex, &rmidi->open_mutex)
+		rawmidi_release_priv(rfile);
 	kfree(rfile);
 	module = rmidi->card->module;
 	snd_card_file_remove(rmidi->card, file);
@@ -782,7 +786,7 @@ int snd_rawmidi_input_params(struct snd_rawmidi_substream *substream,
 		substream->framing = framing;
 		substream->clock_type = clock_type;
 	}
-	return 0;
+	return err;
 }
 EXPORT_SYMBOL(snd_rawmidi_input_params);
 
@@ -1148,7 +1152,7 @@ int snd_rawmidi_receive(struct snd_rawmidi_substream *substream,
 	struct snd_rawmidi_runtime *runtime;
 
 	guard(spinlock_irqsave)(&substream->lock);
-	if (!substream->opened)
+	if (!substream->opened || substream->disconnected)
 		return -EBADFD;
 	runtime = substream->runtime;
 	if (!runtime || !runtime->buffer) {
@@ -2060,8 +2064,13 @@ static int snd_rawmidi_dev_disconnect(struct snd_device *device)
 		struct snd_rawmidi_substream *s;
 
 		list_for_each_entry(s, &rmidi->streams[dir].substreams, list) {
-			if (s->runtime)
+			scoped_guard(spinlock_irq, &s->lock)
+				s->disconnected = true;
+			if (s->runtime) {
+				s->ops->trigger(s, 0);
+				cancel_work_sync(&s->runtime->event_work);
 				wake_up(&s->runtime->sleep);
+			}
 		}
 	}
 

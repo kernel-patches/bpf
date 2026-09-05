@@ -36,7 +36,7 @@ struct xe_guc_exec_queue {
 	 * a message needs to sent through the GPU scheduler but memory
 	 * allocations are not allowed.
 	 */
-#define MAX_STATIC_MSG_TYPE	3
+#define MAX_STATIC_MSG_TYPE	4
 	struct xe_sched_msg static_msgs[MAX_STATIC_MSG_TYPE];
 	/** @destroy_async: do final destroy async from this worker */
 	struct work_struct destroy_async;
@@ -55,6 +55,13 @@ struct xe_guc_exec_queue {
 	/** @suspend_pending: a suspend of the exec_queue is pending */
 	bool suspend_pending;
 	/**
+	 * @suspend_count: Reference count of active suspend requests. The
+	 * exec_queue remains suspended while this is non-zero, allowing
+	 * multiple concurrent callers to independently hold a suspend without
+	 * prematurely re-enabling the queue. Protected by @sched.msg_lock.
+	 */
+	int suspend_count;
+	/**
 	 * @needs_cleanup: Needs a cleanup message during VF post migration
 	 * recovery.
 	 */
@@ -69,6 +76,36 @@ struct xe_guc_exec_queue {
 	 * recovery.
 	 */
 	bool needs_resume;
+	/** @multi_queue: multi-queue group CGP state for VF post migration recovery */
+	struct {
+		/**
+		 * @multi_queue.needs_cgp_sync: Needs a CGP_SYNC (dynamic CGP
+		 * update) message replayed during recovery.
+		 */
+		u8 needs_cgp_sync:1;
+		/**
+		 * @multi_queue.re_register: A registration-time CGP update was
+		 * interrupted by recovery; the queue must be re-registered.
+		 */
+		u8 re_register:1;
+		/**
+		 * @multi_queue.re_update: A dynamic CGP update was interrupted
+		 * by recovery; the CGP update must be replayed.
+		 */
+		u8 re_update:1;
+		/**
+		 * @multi_queue.registering_cgp: This queue's currently
+		 * outstanding CGP_SYNC is a registration (matched against
+		 * group->cgp_update_q in revert).
+		 */
+		u8 registering_cgp:1;
+		/**
+		 * @multi_queue.updating_cgp: This queue's currently outstanding
+		 * CGP_SYNC is a dynamic update (matched against
+		 * group->cgp_update_q in revert).
+		 */
+		u8 updating_cgp:1;
+	} multi_queue;
 };
 
 #endif

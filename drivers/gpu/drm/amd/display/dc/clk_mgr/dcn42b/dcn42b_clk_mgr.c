@@ -9,8 +9,8 @@
 #include "dccg.h"
 #include "clk_mgr_internal.h"
 
-// For dce12_get_dp_ref_freq_khz
-#include "dce100/dce_clk_mgr.h"
+// For dcn10_get_dp_ref_freq_khz
+#include "dcn10/dcn10_clk_mgr.h"
 
 // For dcn20_update_clocks_update_dpp_dto
 #include "dcn20/dcn20_clk_mgr.h"
@@ -221,10 +221,6 @@ static void init_clk_states(struct clk_mgr *clk_mgr)
 	clk_mgr->clks.zstate_support = DCN_ZSTATE_SUPPORT_UNKNOWN;
 }
 
-/* dcn42b_get_dpm_table_from_smu removed: reuse dcn42_get_dpm_table_from_smu.
- * Function is identical - only uses SMU calls, no hardware register differences.
- */
-
 void dcn42b_init_clocks(struct clk_mgr *clk_mgr_base)
 {
 	struct clk_mgr_internal *clk_mgr_int = TO_CLK_MGR_INTERNAL(clk_mgr_base);
@@ -238,7 +234,7 @@ void dcn42b_init_clocks(struct clk_mgr *clk_mgr_base)
 	// to adjust dp_dto reference clock if ssc is enable otherwise to apply dprefclk
 	if (dcn42_is_spll_ssc_enabled(clk_mgr_base))
 		clk_mgr_base->dp_dto_source_clock_in_khz =
-			dce_adjust_dp_ref_freq_for_ss(clk_mgr_int, clk_mgr_base->dprefclk_khz);
+			dcn10_adjust_dp_ref_freq_for_ss(clk_mgr_int, clk_mgr_base->dprefclk_khz);
 	else
 		clk_mgr_base->dp_dto_source_clock_in_khz = clk_mgr_base->dprefclk_khz;
 
@@ -393,14 +389,38 @@ uint32_t dcn42b_get_clock_freq_from_clkip(struct clk_mgr *clk_mgr_base, enum clo
 	return (uint32_t)clock_freq_mhz;
 }
 
-/* dcn42b_get_dispclk_from_dentist removed: reuse dcn42_get_dispclk_from_dentist.
- * DENTIST_DISPCLK_CNTL is a DCN register with the same offset on both dcn42 and dcn42b.
+#define DCN42B_MIN_DCFCLK_MHZ 200
+#define DCN42B_MAX_DCFCLK_MHZ 600
+
+/*
+ * dcn42b_update_clocks - DCN42B wrapper around dcn42_update_clocks.
+ *
+ * Sanitizes the user-requested force-min-DCFCLK override
+ * (DalForceMinDcFclkMhz -> dc->debug.force_min_dcfclk_mhz) to the DCN42B
+ * supported DCFCLK range before delegating to the shared dcn42_update_clocks(),
+ * which applies the floor to new_clocks->dcfclk_khz. Clamping here (rather than
+ * in the shared dcn42 path) keeps the [200, 600] MHz limit DCN42B-specific.
  */
+static void dcn42b_update_clocks(struct clk_mgr *clk_mgr_base,
+			struct dc_state *context,
+			bool safe_to_lower)
+{
+	struct dc *dc = clk_mgr_base->ctx->dc;
+
+	if (dc->debug.force_min_dcfclk_mhz > 0) {
+		if (dc->debug.force_min_dcfclk_mhz < DCN42B_MIN_DCFCLK_MHZ)
+			dc->debug.force_min_dcfclk_mhz = DCN42B_MIN_DCFCLK_MHZ;
+		else if (dc->debug.force_min_dcfclk_mhz > DCN42B_MAX_DCFCLK_MHZ)
+			dc->debug.force_min_dcfclk_mhz = DCN42B_MAX_DCFCLK_MHZ;
+	}
+
+	dcn42_update_clocks(clk_mgr_base, context, safe_to_lower);
+}
 
 static struct clk_mgr_funcs dcn42b_funcs = {
-	.get_dp_ref_clk_frequency = dce12_get_dp_ref_freq_khz,
+	.get_dp_ref_clk_frequency = dcn10_get_dp_ref_freq_khz,
 	.get_dtb_ref_clk_frequency = dcn31_get_dtb_ref_freq_khz,
-	.update_clocks = dcn42_update_clocks,
+	.update_clocks = dcn42b_update_clocks,
 	.init_clocks = dcn42b_init_clocks,
 	.enable_pme_wa = dcn42_enable_pme_wa,
 	.are_clock_states_equal = dcn42_are_clock_states_equal,
@@ -411,6 +431,176 @@ static struct clk_mgr_funcs dcn42b_funcs = {
 	.get_dispclk_from_dentist = dcn42_get_dispclk_from_dentist,
 	.is_smu_present = dcn42_is_smu_present,
 };
+
+typedef struct {
+	uint32_t DcfClocks[NUM_DCFCLK_DPM_LEVELS];
+	uint32_t DispClocks[NUM_DISPCLK_DPM_LEVELS];
+	uint32_t DppClocks[NUM_DPPCLK_DPM_LEVELS];
+	uint32_t SocClocks[NUM_SOCCLK_DPM_LEVELS];
+	uint32_t VPEClocks[NUM_VPE_DPM_LEVELS];
+	uint32_t FclkClocks_Freq[NUM_FCLK_DPM_LEVELS];
+	uint32_t FclkClocks_Voltage[NUM_FCLK_DPM_LEVELS];
+	uint32_t SocVoltage[NUM_SOC_VOLTAGE_LEVELS];
+	MemPstateTable_t MemPstateTable[NUM_MEM_PSTATE_LEVELS];
+
+	uint8_t  NumDcfClkLevelsEnabled;
+	uint8_t  NumDispClkLevelsEnabled; //Applies to both Dispclk and Dppclk
+	uint8_t  NumSocClkLevelsEnabled;
+	uint8_t  VpeClkLevelsEnabled;
+
+	uint8_t  NumMemPstatesEnabled;
+	uint8_t  NumFclkLevelsEnabled;
+	uint8_t  Spare1;
+	uint8_t  Spare2;
+
+	uint8_t  Spare3;
+	uint8_t  Spare4;
+	uint8_t  Spare5[2];
+
+	uint32_t MinGfxClk;
+	uint32_t MaxGfxClk;
+
+	uint32_t Spare6[8];
+	uint32_t Spare7[8];
+	uint32_t Spare8[8];
+	uint32_t Spare9[8];
+} DpmClocks_t_dcn42b;
+struct dcn42b_smu_dpm_clks {
+	DpmClocks_t_dcn42b *dpm_clks;
+	union large_integer mc_address;
+};
+
+static void dcn42b_get_dpm_table_from_smu(struct clk_mgr_internal *clk_mgr,
+		struct dcn42b_smu_dpm_clks *smu_dpm_clks)
+{
+	DpmClocks_t_dcn42b *table = smu_dpm_clks->dpm_clks;
+
+	if (!clk_mgr->smu_ver)
+		return;
+
+	if (!table || smu_dpm_clks->mc_address.quad_part == 0)
+		return;
+
+	memset(table, 0, sizeof(*table));
+
+	dcn42_smu_set_dram_addr_high(clk_mgr,
+			smu_dpm_clks->mc_address.high_part);
+	dcn42_smu_set_dram_addr_low(clk_mgr,
+			smu_dpm_clks->mc_address.low_part);
+	dcn42_smu_transfer_dpm_table_smu_2_dram(clk_mgr);
+}
+
+static void dcn42b_get_smu_clocks(struct clk_mgr_internal *clk_mgr_int)
+{
+	struct clk_mgr *clk_mgr_base = &clk_mgr_int->base;
+	struct dcn42b_smu_dpm_clks smu_dpm_clks = { 0 };
+
+	DC_LOGGER_INIT(clk_mgr_base->ctx->logger);
+	(void)dc_logger;
+
+	smu_dpm_clks.dpm_clks = (DpmClocks_t_dcn42b *)dm_helpers_allocate_gpu_mem(
+				clk_mgr_base->ctx,
+				DC_MEM_ALLOC_TYPE_GART,
+				sizeof(DpmClocks_t_dcn42b),
+				&smu_dpm_clks.mc_address.quad_part);
+
+	ASSERT(smu_dpm_clks.dpm_clks);
+	if (clk_mgr_base->ctx->dc->debug.pstate_enabled && smu_dpm_clks.mc_address.quad_part != 0) {
+		int i;
+		DpmClocks_t_dcn42b *dpm_clks = smu_dpm_clks.dpm_clks;
+
+		dcn42b_get_dpm_table_from_smu(clk_mgr_int, &smu_dpm_clks);
+		DC_LOG_SMU("NumDcfClkLevelsEnabled: %d\n"
+				   "NumDispClkLevelsEnabled: %d\n"
+				   "NumSocClkLevelsEnabled: %d\n"
+				   "VpeClkLevelsEnabled: %d\n"
+				   "FClkLevelsEnabled: %d\n"
+				   "NumMemPstatesEnabled: %d\n"
+				   "MinGfxClk: %d\n"
+				   "MaxGfxClk: %d\n",
+				   dpm_clks->NumDcfClkLevelsEnabled,
+				   dpm_clks->NumDispClkLevelsEnabled,
+				   dpm_clks->NumSocClkLevelsEnabled,
+				   dpm_clks->VpeClkLevelsEnabled,
+				   dpm_clks->NumFclkLevelsEnabled,
+				   dpm_clks->NumMemPstatesEnabled,
+				   dpm_clks->MinGfxClk,
+				   dpm_clks->MaxGfxClk);
+
+		for (i = 0; i < NUM_DCFCLK_DPM_LEVELS; i++)
+			DC_LOG_SMU("dpm_clks->DcfClocks[%d] = %d\n", i, dpm_clks->DcfClocks[i]);
+		for (i = 0; i < NUM_DISPCLK_DPM_LEVELS; i++)
+			DC_LOG_SMU("dpm_clks->DispClocks[%d] = %d\n", i, dpm_clks->DispClocks[i]);
+		for (i = 0; i < NUM_SOCCLK_DPM_LEVELS; i++)
+			DC_LOG_SMU("dpm_clks->SocClocks[%d] = %d\n", i, dpm_clks->SocClocks[i]);
+		for (i = 0; i < NUM_FCLK_DPM_LEVELS; i++) {
+			DC_LOG_SMU("dpm_clks->FclkClocks_Freq[%d] = %d\n", i, dpm_clks->FclkClocks_Freq[i]);
+			DC_LOG_SMU("dpm_clks->FclkClocks_Voltage[%d] = %d\n", i, dpm_clks->FclkClocks_Voltage[i]);
+		}
+		for (i = 0; i < NUM_SOCCLK_DPM_LEVELS; i++)
+			DC_LOG_SMU("dpm_clks->SocVoltage[%d] = %d\n", i, dpm_clks->SocVoltage[i]);
+
+		for (i = 0; i < NUM_MEM_PSTATE_LEVELS; i++)
+			DC_LOG_SMU("dpm_clks.MemPstateTable[%d].UClk = %d MemClk = %d Voltage = %d\n",
+					i, dpm_clks->MemPstateTable[i].UClk, dpm_clks->MemPstateTable[i].MemClk, dpm_clks->MemPstateTable[i].Voltage);
+
+		if (clk_mgr_base->ctx->dc_bios->integrated_info && clk_mgr_base->ctx->dc->config.use_default_clock_table == false) {
+			/* DCFCLK */
+			dcn42_init_single_clock(&clk_mgr_base->bw_params->clk_table.entries[0].dcfclk_mhz,
+					dpm_clks->DcfClocks,
+					dpm_clks->NumDcfClkLevelsEnabled);
+			clk_mgr_base->bw_params->clk_table.num_entries_per_clk.num_dcfclk_levels = dpm_clks->NumDcfClkLevelsEnabled;
+
+			/* SOCCLK */
+			dcn42_init_single_clock(&clk_mgr_base->bw_params->clk_table.entries[0].socclk_mhz,
+					dpm_clks->SocClocks,
+					dpm_clks->NumSocClkLevelsEnabled);
+			clk_mgr_base->bw_params->clk_table.num_entries_per_clk.num_socclk_levels = dpm_clks->NumSocClkLevelsEnabled;
+
+			/* DISPCLK */
+			dcn42_init_single_clock(&clk_mgr_base->bw_params->clk_table.entries[0].dispclk_mhz,
+					dpm_clks->DispClocks,
+					dpm_clks->NumDispClkLevelsEnabled);
+			clk_mgr_base->bw_params->clk_table.num_entries_per_clk.num_dispclk_levels = dpm_clks->NumDispClkLevelsEnabled;
+
+			/* DPPCLK */
+			dcn42_init_single_clock(&clk_mgr_base->bw_params->clk_table.entries[0].dppclk_mhz,
+					dpm_clks->DppClocks,
+					dpm_clks->NumDispClkLevelsEnabled);
+			clk_mgr_base->bw_params->clk_table.num_entries_per_clk.num_dppclk_levels = dpm_clks->NumDispClkLevelsEnabled;
+
+			/* FCLK */
+			dcn42_init_single_clock(&clk_mgr_base->bw_params->clk_table.entries[0].fclk_mhz,
+					dpm_clks->FclkClocks_Freq,
+					NUM_FCLK_DPM_LEVELS);
+			clk_mgr_base->bw_params->clk_table.num_entries_per_clk.num_fclk_levels = dpm_clks->NumFclkLevelsEnabled;
+			clk_mgr_base->bw_params->clk_table.num_entries = dpm_clks->NumFclkLevelsEnabled;
+
+			/* Memory Pstate table is in reverse order for dcn42. Proper way to map this is for pmfw to provide an fclk indexed uclk key since we consume fclk matched pairs.*/
+			ASSERT(dpm_clks->NumMemPstatesEnabled <= NUM_MEM_PSTATE_LEVELS);
+			if (dpm_clks->NumMemPstatesEnabled > NUM_MEM_PSTATE_LEVELS)
+				dpm_clks->NumMemPstatesEnabled = NUM_MEM_PSTATE_LEVELS;
+			for (i = 0; i < dpm_clks->NumDcfClkLevelsEnabled; i++) {
+				if (i < dpm_clks->NumMemPstatesEnabled) {
+					clk_mgr_base->bw_params->clk_table.entries[dpm_clks->NumMemPstatesEnabled - 1 - i].memclk_mhz = dpm_clks->MemPstateTable[i].MemClk;
+					clk_mgr_base->bw_params->clk_table.entries[dpm_clks->NumMemPstatesEnabled - 1 - i].wck_ratio = dcn42_convert_wck_ratio(dpm_clks->MemPstateTable[i].WckRatio);
+				} else {
+					clk_mgr_base->bw_params->clk_table.entries[i].memclk_mhz = dpm_clks->MemPstateTable[0].MemClk;
+					clk_mgr_base->bw_params->clk_table.entries[i].wck_ratio = dcn42_convert_wck_ratio(dpm_clks->MemPstateTable[0].WckRatio);
+				}
+			}
+
+			clk_mgr_base->bw_params->clk_table.num_entries_per_clk.num_memclk_levels = dpm_clks->NumDcfClkLevelsEnabled;
+
+			/* DTBCLK tied off in DCN42B */
+			clk_mgr_base->bw_params->clk_table.entries[0].dtbclk_mhz = 0;
+			clk_mgr_base->bw_params->clk_table.num_entries_per_clk.num_dtbclk_levels = 0;
+		}
+	}
+	if (smu_dpm_clks.dpm_clks && smu_dpm_clks.mc_address.quad_part != 0)
+		dm_helpers_free_gpu_mem(clk_mgr_base->ctx, DC_MEM_ALLOC_TYPE_GART,
+				smu_dpm_clks.dpm_clks);
+}
 
 void dcn42b_clk_mgr_construct(
 		struct dc_context *ctx,
@@ -428,6 +618,7 @@ void dcn42b_clk_mgr_construct(
 
 	clk_mgr->base.dccg = dccg;
 	clk_mgr->base.dfs_bypass_disp_clk = 0;
+	clk_mgr->max_bypass_clk_khz = 0;
 
 	clk_mgr->base.dprefclk_ss_percentage = 0;
 	clk_mgr->base.dprefclk_ss_divider = 1000;
@@ -467,17 +658,12 @@ void dcn42b_clk_mgr_construct(
 		/* Saved clocks configured at boot for debug purposes */
 		dcn42b_dump_clk_registers(&clk_mgr->base.base.boot_snapshot, clk_mgr);
 
-	dce_clock_read_ss_info(&clk_mgr->base);
+	dcn10_clock_read_ss_info(&clk_mgr->base);
 	/*when clk src is from FCH, it could have ss, same clock src as DPREF clk*/
 
 	dcn42b_read_ss_info_from_lut(&clk_mgr->base);
 
 	clk_mgr->base.base.bw_params = &dcn42b_bw_params;
-	if (clk_mgr->base.smu_present) {
-		dcn42_get_smu_clocks(&clk_mgr->base);
-		//overwrite values from dcn42_get_smu_clocks since dtbclk is tied off in DCN42B
-		clk_mgr->base.base.bw_params->clk_table.entries[0].dtbclk_mhz = 0;
-		clk_mgr->base.base.bw_params->clk_table.num_entries_per_clk.num_dtbclk_levels = 0;
-		clk_mgr->base.base.clks.ref_dtbclk_khz = 0;
-	}
+	if (clk_mgr->base.smu_present)
+		dcn42b_get_smu_clocks(&clk_mgr->base);
 }

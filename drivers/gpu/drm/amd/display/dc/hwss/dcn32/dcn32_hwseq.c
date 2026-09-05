@@ -443,13 +443,10 @@ void dcn32_subvp_pipe_control_lock_fast(union block_sequence_params *params)
 	}
 }
 
-bool dcn32_set_mpc_shaper_3dlut(
-	struct pipe_ctx *pipe_ctx, const struct dc_stream_state *stream)
+bool dcn32_set_mpc_shaper_3dlut(struct dpp *dpp, struct mpc *mpc,
+	int mpcc_id, const struct dc_stream_state *stream)
 {
-	struct dpp *dpp_base = pipe_ctx->plane_res.dpp;
-	int mpcc_id = pipe_ctx->plane_res.hubp->inst;
-	struct dc *dc = pipe_ctx->stream->ctx->dc;
-	struct mpc *mpc = pipe_ctx->stream_res.opp->ctx->dc->res_pool->mpc;
+	struct dc *dc = dpp->ctx->dc;
 	bool result = false;
 
 	const struct pwl_params *shaper_lut = NULL;
@@ -460,8 +457,8 @@ bool dcn32_set_mpc_shaper_3dlut(
 		else if (stream->func_shaper->type == TF_TYPE_DISTRIBUTED_POINTS) {
 			cm_helper_translate_curve_to_hw_format(stream->ctx,
 					stream->func_shaper,
-					&dpp_base->shaper_params, true);
-			shaper_lut = &dpp_base->shaper_params;
+					&dpp->shaper_params, true);
+			shaper_lut = &dpp->shaper_params;
 		}
 	}
 
@@ -480,65 +477,68 @@ bool dcn32_set_mpc_shaper_3dlut(
 	return result;
 }
 
-bool dcn32_set_mcm_luts(
-	struct pipe_ctx *pipe_ctx, const struct dc_plane_state *plane_state)
+bool dcn32_set_mcm_luts(struct dc *dc, struct dpp *dpp, struct hubp *hubp,
+	struct hubp *primary_hubp, struct mpc *mpc, int mpcc_id,
+	struct dc_stream_state *stream,
+	struct dc_plane_state *plane_state)
 {
-	struct dpp *dpp_base = pipe_ctx->plane_res.dpp;
-	int mpcc_id = pipe_ctx->plane_res.hubp->inst;
-	struct mpc *mpc = pipe_ctx->stream_res.opp->ctx->dc->res_pool->mpc;
 	bool rval, result;
 	const struct pwl_params *lut_params = NULL;
 
+	(void)dc;
+	(void)hubp;
+	(void)primary_hubp;
+	(void)stream;
+
 	// 1D LUT
-	if (plane_state->blend_tf.type == TF_TYPE_HWPWL)
-		lut_params = &plane_state->blend_tf.pwl;
-	else if (plane_state->blend_tf.type == TF_TYPE_DISTRIBUTED_POINTS) {
-		result = cm3_helper_translate_curve_to_hw_format(plane_state->ctx,
-								 &plane_state->blend_tf,
-								 &dpp_base->regamma_params, false);
+	if (plane_state->cm.blend_func.type == TF_TYPE_HWPWL)
+		lut_params = &plane_state->cm.blend_func.pwl;
+	else if (plane_state->cm.blend_func.type == TF_TYPE_DISTRIBUTED_POINTS) {
+		result = cm3_helper_translate_curve_to_degamma_hw_format(
+			&plane_state->cm.blend_func,
+			&dpp->regamma_params);
 		if (!result)
 			return result;
 
-		lut_params = &dpp_base->regamma_params;
+		lut_params = &dpp->regamma_params;
 	}
 	mpc->funcs->program_1dlut(mpc, lut_params, mpcc_id);
 	lut_params = NULL;
 
 	// Shaper
-	if (plane_state->in_shaper_func.type == TF_TYPE_HWPWL)
-		lut_params = &plane_state->in_shaper_func.pwl;
-	else if (plane_state->in_shaper_func.type == TF_TYPE_DISTRIBUTED_POINTS) {
-		// TODO: dpp_base replace
+	if (plane_state->cm.shaper_func.type == TF_TYPE_HWPWL)
+		lut_params = &plane_state->cm.shaper_func.pwl;
+	else if (plane_state->cm.shaper_func.type == TF_TYPE_DISTRIBUTED_POINTS) {
+		// TODO: dpp replace
 		rval = cm3_helper_translate_curve_to_hw_format(plane_state->ctx,
-							&plane_state->in_shaper_func,
-							&dpp_base->shaper_params, true);
-		lut_params = rval ? &dpp_base->shaper_params : NULL;
+			&plane_state->cm.shaper_func,
+			&dpp->shaper_params,
+			true);
+		lut_params = rval ? &dpp->shaper_params : NULL;
 	}
 
 	mpc->funcs->program_shaper(mpc, lut_params, mpcc_id);
 
 	// 3D
-	if (plane_state->lut3d_func.state.bits.initialized == 1)
-		result = mpc->funcs->program_3dlut(mpc, &plane_state->lut3d_func.lut_3d, mpcc_id);
+	if (plane_state->cm.lut3d_func.state.bits.initialized == 1)
+		result = mpc->funcs->program_3dlut(mpc, &plane_state->cm.lut3d_func.lut_3d, mpcc_id);
 	else
 		result = mpc->funcs->program_3dlut(mpc, NULL, mpcc_id);
 
 	return result;
 }
 
-bool dcn32_set_input_transfer_func(struct dc *dc,
-				struct pipe_ctx *pipe_ctx,
-				const struct dc_plane_state *plane_state)
+bool dcn32_set_input_transfer_func(struct set_input_transfer_func_params *params)
 {
-	struct dce_hwseq *hws = dc->hwseq;
-	struct mpc *mpc = dc->res_pool->mpc;
-	struct dpp *dpp_base = pipe_ctx->plane_res.dpp;
+	struct dce_hwseq *hws = params->dc->hwseq;
+	struct dpp *dpp = params->dpp;
+	struct dc_plane_state *plane_state = params->plane_state;
 
 	enum dc_transfer_func_predefined tf;
 	bool result = true;
-	const struct pwl_params *params = NULL;
+	const struct pwl_params *pwl_params = NULL;
 
-	if (mpc == NULL || plane_state == NULL)
+	if (params->mpc == NULL || plane_state == NULL)
 		return false;
 
 	tf = TRANSFER_FUNCTION_UNITY;
@@ -546,44 +546,46 @@ bool dcn32_set_input_transfer_func(struct dc *dc,
 	if (plane_state->in_transfer_func.type == TF_TYPE_PREDEFINED)
 		tf = plane_state->in_transfer_func.tf;
 
-	dpp_base->funcs->dpp_set_pre_degam(dpp_base, tf);
+	if (dpp->funcs->dpp_set_pregam_state)
+		dpp->funcs->dpp_set_pregam_state(dpp, tf, plane_state->scaling_linearity);
+	else
+		dpp->funcs->dpp_set_pre_degam(dpp, tf);
 
 	if (plane_state->in_transfer_func.type == TF_TYPE_HWPWL)
-		params = &plane_state->in_transfer_func.pwl;
+		pwl_params = &plane_state->in_transfer_func.pwl;
 	else if (plane_state->in_transfer_func.type == TF_TYPE_DISTRIBUTED_POINTS &&
-		cm3_helper_translate_curve_to_hw_format(plane_state->ctx,
-							&plane_state->in_transfer_func,
-							&dpp_base->degamma_params, false))
-		params = &dpp_base->degamma_params;
+		cm3_helper_translate_curve_to_degamma_hw_format(&plane_state->in_transfer_func,
+								&dpp->degamma_params))
+		pwl_params = &dpp->degamma_params;
 
-	dpp_base->funcs->dpp_program_gamcor_lut(dpp_base, params);
+	dpp->funcs->dpp_program_gamcor_lut(dpp, pwl_params);
 
-	if (pipe_ctx->stream_res.opp &&
-			pipe_ctx->stream_res.opp->ctx &&
-			hws->funcs.set_mcm_luts)
-		result = hws->funcs.set_mcm_luts(pipe_ctx, plane_state);
+	if (hws->funcs.set_mcm_luts)
+		result = hws->funcs.set_mcm_luts(params->dc, dpp, params->hubp,
+			params->primary_hubp, params->mpc, params->mpcc_id,
+			params->stream, plane_state);
 
 	return result;
 }
 
-bool dcn32_set_output_transfer_func(struct dc *dc,
-				struct pipe_ctx *pipe_ctx,
-				const struct dc_stream_state *stream)
+bool dcn32_set_output_transfer_func(struct set_output_transfer_func_params *otf_params)
 {
-	(void)dc;
-	int mpcc_id = pipe_ctx->plane_res.hubp->inst;
-	struct mpc *mpc = pipe_ctx->stream_res.opp->ctx->dc->res_pool->mpc;
+	struct dpp *dpp = otf_params->dpp;
+	struct mpc *mpc = otf_params->mpc;
+	int mpcc_id = otf_params->mpcc_id;
+	bool is_top_pipe = otf_params->is_top_pipe;
+	const struct dc_stream_state *stream = otf_params->stream;
 	const struct pwl_params *params = NULL;
 	bool ret = false;
 
 	/* program OGAM or 3DLUT only for the top pipe*/
-	if (resource_is_pipe_type(pipe_ctx, OPP_HEAD)) {
+	if (is_top_pipe) {
 		/*program shaper and 3dlut in MPC*/
-		ret = dcn32_set_mpc_shaper_3dlut(pipe_ctx, stream);
+		ret = dcn32_set_mpc_shaper_3dlut(dpp, mpc, mpcc_id, stream);
 		if (ret == false && mpc->funcs->set_output_gamma) {
 			if (stream->out_transfer_func.type == TF_TYPE_HWPWL)
 				params = &stream->out_transfer_func.pwl;
-			else if (pipe_ctx->stream->out_transfer_func.type ==
+			else if (stream->out_transfer_func.type ==
 					TF_TYPE_DISTRIBUTED_POINTS &&
 					cm3_helper_translate_curve_to_hw_format(stream->ctx,
 					&stream->out_transfer_func,
@@ -1432,8 +1434,11 @@ void dcn32_disable_link_output(struct dc_link *link,
 	else if (dmcu != NULL && dmcu->funcs->lock_phy)
 		dmcu->funcs->lock_phy(dmcu);
 
-	link_hwss->disable_link_output(link, link_res, signal);
-	link->phy_state.symclk_state = SYMCLK_OFF_TX_OFF;
+	if (!(signal == SIGNAL_TYPE_EDP &&
+		link->forced_psr_active)) {
+		link_hwss->disable_link_output(link, link_res, signal);
+		link->phy_state.symclk_state = SYMCLK_OFF_TX_OFF;
+	}
 	/*
 	 * Add the logic to extract BOTH power up and power down sequences
 	 * from enable/disable link output and only call edp panel control
@@ -1463,7 +1468,7 @@ void dcn32_update_phantom_vp_position(struct dc *dc,
 
 		if (pipe->stream && dc_state_get_pipe_subvp_type(context, pipe) == SUBVP_MAIN &&
 				dc_state_get_paired_subvp_stream(context, pipe->stream) == phantom_pipe->stream) {
-			if (pipe->plane_state && pipe->plane_state->update_flags.bits.position_change) {
+			if (pipe->plane_state && pipe->plane_state->update_bits.position_change) {
 
 				phantom_plane->src_rect.x = pipe->plane_state->src_rect.x;
 				phantom_plane->src_rect.y = pipe->plane_state->src_rect.y;
@@ -1471,7 +1476,7 @@ void dcn32_update_phantom_vp_position(struct dc *dc,
 				phantom_plane->dst_rect.x = pipe->plane_state->dst_rect.x;
 				phantom_plane->dst_rect.y = pipe->plane_state->dst_rect.y;
 
-				phantom_pipe->plane_state->update_flags.bits.position_change = 1;
+				phantom_pipe->plane_state->update_bits.position_change = 1;
 				resource_build_scaling_params(phantom_pipe);
 				return;
 			}
@@ -1862,9 +1867,9 @@ void dcn32_interdependent_update_lock(struct dc *dc,
 			continue;
 
 		if (lock)
-			dc->hwss.pipe_control_lock(dc, pipe, true);
+			hwss_pipe_control_lock(dc, pipe, true);
 		else
-			dc->hwss.pipe_control_lock(dc, pipe, false);
+			hwss_pipe_control_lock(dc, pipe, false);
 	}
 }
 

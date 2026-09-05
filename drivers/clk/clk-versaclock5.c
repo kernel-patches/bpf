@@ -1223,7 +1223,7 @@ static void vc5_remove(struct i2c_client *client)
 		clk_unregister_fixed_rate(vc5->pin_xin);
 }
 
-static int __maybe_unused vc5_suspend(struct device *dev)
+static int vc5_suspend(struct device *dev)
 {
 	struct vc5_driver_data *vc5 = dev_get_drvdata(dev);
 
@@ -1233,7 +1233,7 @@ static int __maybe_unused vc5_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused vc5_resume(struct device *dev)
+static int vc5_resume(struct device *dev)
 {
 	struct vc5_driver_data *vc5 = dev_get_drvdata(dev);
 	int ret;
@@ -1310,14 +1310,14 @@ static const struct vc5_chip_info idt_5p49v6975_info = {
 };
 
 static const struct i2c_device_id vc5_id[] = {
-	{ "5p49v5923", .driver_data = (kernel_ulong_t)&idt_5p49v5923_info },
-	{ "5p49v5925", .driver_data = (kernel_ulong_t)&idt_5p49v5925_info },
-	{ "5p49v5933", .driver_data = (kernel_ulong_t)&idt_5p49v5933_info },
-	{ "5p49v5935", .driver_data = (kernel_ulong_t)&idt_5p49v5935_info },
-	{ "5p49v60", .driver_data = (kernel_ulong_t)&idt_5p49v60_info },
-	{ "5p49v6901", .driver_data = (kernel_ulong_t)&idt_5p49v6901_info },
-	{ "5p49v6965", .driver_data = (kernel_ulong_t)&idt_5p49v6965_info },
-	{ "5p49v6975", .driver_data = (kernel_ulong_t)&idt_5p49v6975_info },
+	{ .name = "5p49v5923", .driver_data = (kernel_ulong_t)&idt_5p49v5923_info },
+	{ .name = "5p49v5925", .driver_data = (kernel_ulong_t)&idt_5p49v5925_info },
+	{ .name = "5p49v5933", .driver_data = (kernel_ulong_t)&idt_5p49v5933_info },
+	{ .name = "5p49v5935", .driver_data = (kernel_ulong_t)&idt_5p49v5935_info },
+	{ .name = "5p49v60", .driver_data = (kernel_ulong_t)&idt_5p49v60_info },
+	{ .name = "5p49v6901", .driver_data = (kernel_ulong_t)&idt_5p49v6901_info },
+	{ .name = "5p49v6965", .driver_data = (kernel_ulong_t)&idt_5p49v6965_info },
+	{ .name = "5p49v6975", .driver_data = (kernel_ulong_t)&idt_5p49v6975_info },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, vc5_id);
@@ -1335,12 +1335,12 @@ static const struct of_device_id clk_vc5_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, clk_vc5_of_match);
 
-static SIMPLE_DEV_PM_OPS(vc5_pm_ops, vc5_suspend, vc5_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(vc5_pm_ops, vc5_suspend, vc5_resume);
 
 static struct i2c_driver vc5_driver = {
 	.driver = {
 		.name = "vc5",
-		.pm	= &vc5_pm_ops,
+		.pm	= pm_sleep_ptr(&vc5_pm_ops),
 		.of_match_table = clk_vc5_of_match,
 	},
 	.probe		= vc5_probe,

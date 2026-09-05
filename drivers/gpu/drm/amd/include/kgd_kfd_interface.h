@@ -319,7 +319,8 @@ struct kfd2kgd_calls {
 			uint32_t sch_wave,
 			uint32_t que_sleep,
 			uint32_t *reg_offset,
-			uint32_t *reg_data);
+			uint32_t *reg_data,
+			uint32_t inst);
 	void (*get_cu_occupancy)(struct amdgpu_device *adev,
 				 struct kfd_cu_occupancy *cu_occupancy,
 				 int *max_waves_per_cu, uint32_t inst);
@@ -339,6 +340,9 @@ struct kfd2kgd_calls {
 			     uint32_t *ptl_state,
 			     enum amdgpu_ptl_fmt *fmt1,
 			     enum amdgpu_ptl_fmt *fmt2);
+	int (*hqd_sdma_get_counter)(struct amdgpu_device *adev,
+				    void *mqd, uint32_t num_sdma_queues_per_eng,
+				    uint64_t *val);
 };
 
 #endif	/* KGD_KFD_INTERFACE_H_INCLUDED */

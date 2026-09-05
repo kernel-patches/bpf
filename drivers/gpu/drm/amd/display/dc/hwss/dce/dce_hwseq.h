@@ -26,6 +26,7 @@
 #define __DCE_HWSEQ_H__
 
 #include "dc_types.h"
+#include "hw_sequencer_private.h"
 
 #define HWSEQ_DCEF_REG_LIST_DCE8() \
 	.DCFE_CLOCK_CONTROL[0] = mmCRTC0_CRTC_DCFE_CLOCK_CONTROL, \
@@ -702,6 +703,7 @@ struct dce_hwseq_registers {
 	uint32_t DOMAIN25_PG_STATUS;
 	uint32_t DOMAIN26_PG_CONFIG;
 	uint32_t DOMAIN26_PG_STATUS;
+	uint32_t HDCP_INTERRUPT_DEST;
 };
  /* set field name */
 #define HWS_SF(blk_name, reg_name, field_name, post_fix)\
@@ -1254,6 +1256,12 @@ struct dce_hwseq_registers {
 	type DOMAIN26_POWER_GATE; \
 	type DOMAIN26_PGFSM_PWR_STATUS;
 
+#define HWSEQ_DCN60_REG_FIELD_LIST(type) \
+	type DOUT_IHC_HDCP0_I2C_XFER_REQ_INTERRUPT_DEST; \
+	type DOUT_IHC_HDCP1_I2C_XFER_REQ_INTERRUPT_DEST; \
+	type DOUT_IHC_HDCP2_I2C_XFER_REQ_INTERRUPT_DEST; \
+	type DOUT_IHC_HDCP3_I2C_XFER_REQ_INTERRUPT_DEST;
+
 struct dce_hwseq_shift {
 	HWSEQ_REG_FIELD_LIST(uint8_t)
 	HWSEQ_DCN_REG_FIELD_LIST(uint8_t)
@@ -1263,6 +1271,7 @@ struct dce_hwseq_shift {
 	HWSEQ_DCN35_REG_FIELD_LIST(uint8_t)
 	HWSEQ_DCN401_REG_FIELD_LIST(uint8_t)
 	HWSEQ_DCN42_REG_FIELD_LIST(uint8_t)
+	HWSEQ_DCN60_REG_FIELD_LIST(uint8_t)
 };
 
 struct dce_hwseq_mask {
@@ -1274,6 +1283,7 @@ struct dce_hwseq_mask {
 	HWSEQ_DCN35_REG_FIELD_LIST(uint32_t)
 	HWSEQ_DCN401_REG_FIELD_LIST(uint32_t)
 	HWSEQ_DCN42_REG_FIELD_LIST(uint32_t)
+	HWSEQ_DCN60_REG_FIELD_LIST(uint32_t)
 };
 
 
@@ -1290,17 +1300,16 @@ struct clock_source;
 void dce_enable_fe_clock(struct dce_hwseq *hwss,
 		unsigned int inst, bool enable);
 
-void dce_pipe_control_lock(struct dc *dc,
-		struct pipe_ctx *pipe,
-		bool lock);
+bool dce_build_pipe_control_lock_sequence(struct dc *dc,
+		struct pipe_ctx *pipe, bool lock,
+		struct pipe_control_lock_params *params);
+void dce_tg_lock(struct tg_lock_params *params);
 
 void dce_set_blender_mode(struct dce_hwseq *hws,
 	unsigned int blnd_inst, enum blnd_mode mode);
 
 #if defined(CONFIG_DRM_AMD_DC_SI)
-void dce60_pipe_control_lock(struct dc *dc,
-		struct pipe_ctx *pipe,
-		bool lock);
+void dce60_tg_lock(struct tg_lock_params *params);
 #endif
 
 void dce_clock_gating_power_up(struct dce_hwseq *hws,

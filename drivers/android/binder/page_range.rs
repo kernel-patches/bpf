@@ -312,7 +312,7 @@ impl ShrinkablePageRange {
 
         // SAFETY: This just initializes the pages array.
         unsafe {
-            let self_ptr = self as *const ShrinkablePageRange;
+            let self_ptr = ptr::from_ref(self);
             for i in 0..num_pages {
                 let info = pages.as_mut_ptr().add(i);
                 (&raw mut (*info).range).write(self_ptr);
@@ -439,22 +439,9 @@ impl ShrinkablePageRange {
         // workqueue.
         let mm = MmWithUser::into_mmput_async(self.mm.mmget_not_zero().ok_or(ESRCH)?);
         {
-            let vma_read;
-            let mmap_read;
-            let vma = if let Some(ret) = mm.lock_vma_under_rcu(vma_addr) {
-                vma_read = ret;
-                check_vma(&vma_read, self)
-            } else {
-                mmap_read = mm.mmap_read_lock();
-                mmap_read
-                    .vma_lookup(vma_addr)
-                    .and_then(|vma| check_vma(vma, self))
-            };
-
-            match vma {
-                Some(vma) => vma.vm_insert_page(user_page_addr, &new_page)?,
-                None => return Err(ESRCH),
-            }
+            let vma_read_guard = mm.vma_start_read_unlocked(vma_addr).ok_or(ESRCH)?;
+            let vma = check_vma(&vma_read_guard, self).ok_or(ESRCH)?;
+            vma.vm_insert_page(user_page_addr, &new_page)?;
         }
 
         let inner = self.lock.lock();
@@ -571,7 +558,7 @@ impl ShrinkablePageRange {
         unsafe {
             self.iterate(offset, size_of::<T>(), |page, offset, to_copy| {
                 // SAFETY: The sum of `offset` and `to_copy` is bounded by the size of T.
-                let obj_ptr = (out.as_mut_ptr() as *mut u8).add(out_offset);
+                let obj_ptr = out.as_mut_ptr().cast::<u8>().add(out_offset);
                 // SAFETY: The pointer points is in-bounds of the `out` variable, so it is valid.
                 page.read_raw(obj_ptr, offset, to_copy)?;
                 out_offset += to_copy;
@@ -593,7 +580,7 @@ impl ShrinkablePageRange {
         unsafe {
             self.iterate(offset, size_of_val(obj), |page, offset, to_copy| {
                 // SAFETY: The sum of `offset` and `to_copy` is bounded by the size of T.
-                let obj_ptr = (obj as *const T as *const u8).add(obj_offset);
+                let obj_ptr = ptr::from_ref(obj).cast::<u8>().add(obj_offset);
                 // SAFETY: We have a reference to the object, so the pointer is valid.
                 page.write_raw(obj_ptr, offset, to_copy)?;
                 obj_offset += to_copy;
@@ -712,7 +699,7 @@ unsafe extern "C" fn rust_shrink_free_page(
 
     {
         // CAST: The `list_head` field is first in `PageInfo`.
-        let info = item as *mut PageInfo;
+        let info = item.cast::<PageInfo>();
         // SAFETY: The `range` field of `PageInfo` is immutable.
         range_ptr = unsafe { (*info).range };
         // SAFETY: The `range` outlives its `PageInfo` values.

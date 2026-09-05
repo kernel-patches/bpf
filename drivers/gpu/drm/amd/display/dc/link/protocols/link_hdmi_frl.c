@@ -144,6 +144,11 @@ void hdmi_frl_retrieve_link_cap(struct dc_link *link, struct dc_sink *sink)
 
 	if (link->link_enc->features.flags.bits.IS_FRL_12G_CAPABLE)
 		encoder_link_rate = HDMI_FRL_LINK_RATE_12GBPS;
+	if (link->link_enc->features.flags.bits.IS_FRL_16G_CAPABLE)
+		encoder_link_rate = HDMI_FRL_LINK_RATE_16GBPS;
+
+	if (link->link_enc->features.flags.bits.IS_FRL_20G_CAPABLE)
+		encoder_link_rate = HDMI_FRL_LINK_RATE_20GBPS;
 
 	if (link->dc->debug.max_frl_rate != 0 && encoder_link_rate > link->dc->debug.max_frl_rate)
 		encoder_link_rate = link->dc->debug.max_frl_rate;
@@ -410,6 +415,18 @@ void hdmi_frl_LTS_clear_Link_Setting(struct ddc_service *ddc_service)
 
 }
 
+static uint8_t hdmi_frl_get_max_ffe_level(struct dc_link *link,
+		struct dc_hdmi_frl_link_settings *link_settings)
+{
+	uint8_t max_ffe_level =
+			(link_settings->frl_link_rate > HDMI_FRL_LINK_RATE_12GBPS) ? 7 : 3;
+
+	if ((uint8_t)link->dc->debug.limit_ffe < max_ffe_level)
+		max_ffe_level = (uint8_t)link->dc->debug.limit_ffe;
+
+	return max_ffe_level;
+}
+
 static enum link_result hdmi_frl_perform_link_training(struct ddc_service *ddc_service,
 		struct dc_hdmi_frl_link_settings *link_settings)
 {
@@ -431,7 +448,7 @@ static enum link_result hdmi_frl_perform_link_training(struct ddc_service *ddc_s
 	struct hpo_frl_link_encoder *hpo_frl_link_enc = ddc_service->link->hpo_frl_link_enc;
 	struct link_encoder *dio_link_enc = ddc_service->link->link_enc;
 	uint8_t sink_version = 0;
-	uint8_t FFE_Levels = (uint8_t)ddc_service->link->dc->debug.limit_ffe;
+	uint8_t FFE_Levels = hdmi_frl_get_max_ffe_level(ddc_service->link, link_settings);
 	uint8_t current_FFE = 0;
 	bool override_FFE = false;
 	bool flt_no_timeout = false;
@@ -511,10 +528,10 @@ static enum link_result hdmi_frl_perform_link_training(struct ddc_service *ddc_s
 
 		FRL_INFO("FRL LINK TRAINING:  Poll for FLT_UPDATE.\n");
 		/*LTS:3: Start Link Training*/
-		/*Start FLT Timer = 200 ms*/
+		/*Start FLT Timer = 200 ms, or 300ms if link rate >= 16Gbps*/
 		num_polls = 0;
-		if (flt_no_timeout)
-			max_polls = 500;
+		if (link_settings->frl_link_rate >= HDMI_FRL_LINK_RATE_16GBPS)
+			max_polls = 155;
 
 		while (num_polls < max_polls) {
 			flt_poll_cur_time = dm_get_timestamp(ddc_service->ctx);
@@ -555,7 +572,7 @@ static enum link_result hdmi_frl_perform_link_training(struct ddc_service *ddc_s
 				FRL_INFO("FRL LINK TRAINING:  TxFFE = %d.\n", current_FFE);
 				override_FFE = false;
 			}
-			if (scdc_update.fields.FLT_UPDATE) {
+			if (scdc_update.fields.FLT_UPDATE || flt_no_timeout) {
 				offset = HDMI_SCDC_LTP_REQ;
 				link_query_ddc_data(ddc_service, slave_address,
 								&offset, sizeof(offset), ltp_req.byte,
@@ -611,7 +628,7 @@ static enum link_result hdmi_frl_perform_link_training(struct ddc_service *ddc_s
 						}
 						current_FFE++;
 						override_FFE = true;
-						if (current_FFE > 3)
+						if (current_FFE > FFE_Levels)
 							current_FFE = 0;
 						if (flt_no_timeout)
 							current_FFE = 0;
@@ -637,7 +654,7 @@ static enum link_result hdmi_frl_perform_link_training(struct ddc_service *ddc_s
 						}
 						current_FFE++;
 						override_FFE = true;
-						if (current_FFE > 3)
+						if (current_FFE > FFE_Levels)
 							current_FFE = 0;
 						if (flt_no_timeout)
 							current_FFE = 0;
@@ -663,21 +680,19 @@ static enum link_result hdmi_frl_perform_link_training(struct ddc_service *ddc_s
 				/* Workaround for DEDCN3AG-111
 				 * HDMI-FRL Incorrect Serialization Order for LTP4
 				 */
+				if (flt_no_timeout) {
+					return LINK_RESULT_SUCCESS;
+				}
 			}
-
 		}
-		if (flt_no_timeout) {
-			return LINK_RESULT_SUCCESS;
-		} else {
-			FRL_INFO("FRL LINK TRAINING:  FAILED - Timeout waiting for FLT_UPDATE to be set by sink.\n");
-			write_buffer[0] = HDMI_SCDC_CONFIG_1;
-			/*FRL_RATE*/
-			write_buffer[1] = HDMI_FRL_LINK_RATE_DISABLE | (0 << 4);
-			link_query_ddc_data(ddc_service, slave_address,
-					write_buffer, sizeof(write_buffer), NULL, 0);
-			hdmi_frl_LTS_clear_Link_Setting(ddc_service);
-			result = LINK_RESULT_TIMEOUT;
-		}
+		FRL_INFO("FRL LINK TRAINING:  FAILED - Timeout waiting for FLT_UPDATE to be set by sink.\n");
+		write_buffer[0] = HDMI_SCDC_CONFIG_1;
+		/*FRL_RATE*/
+		write_buffer[1] = HDMI_FRL_LINK_RATE_DISABLE | (0 << 4);
+		link_query_ddc_data(ddc_service, slave_address,
+				write_buffer, sizeof(write_buffer), NULL, 0);
+		hdmi_frl_LTS_clear_Link_Setting(ddc_service);
+		result = LINK_RESULT_TIMEOUT;
 	} else {
 		FRL_INFO("FRL LINK TRAINING:  FAILED - FLT_READY not set by sink.\n");
 		result = LINK_RESULT_TIMEOUT;
@@ -1090,7 +1105,7 @@ void hdmi_frl_decide_link_settings(struct dc_stream_state *stream,
 		&stream->link->frl_verified_link_cap);
 
 	if (stream->link->frl_flags.force_frl_rate != 0 &&
-		stream->link->frl_flags.force_frl_rate < stream->link->frl_verified_link_cap.frl_link_rate) {
+		stream->link->frl_flags.force_frl_rate <= stream->link->frl_verified_link_cap.frl_link_rate) {
 		switch (stream->link->frl_flags.force_frl_rate) {
 		case HDMI_FRL_LINK_RATE_3GBPS:
 			temp_settings.frl_link_rate = HDMI_FRL_LINK_RATE_3GBPS;

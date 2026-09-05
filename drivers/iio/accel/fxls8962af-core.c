@@ -16,6 +16,7 @@
 #include <linux/bitfield.h>
 #include <linux/i2c.h>
 #include <linux/irq.h>
+#include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/pm_runtime.h>
 #include <linux/property.h>
@@ -968,6 +969,8 @@ static int fxls8962af_fifo_flush(struct iio_dev *indio_dev)
 	count = reg & FXLS8962AF_BUF_STATUS_BUF_CNT;
 	if (!count)
 		return 0;
+
+	count = min(count, FXLS8962AF_FIFO_LENGTH);
 
 	data->old_timestamp = data->timestamp;
 	data->timestamp = iio_get_time_ns(indio_dev);

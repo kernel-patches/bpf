@@ -71,7 +71,7 @@
 
 bool intel_hdmi_is_frl(u32 clock)
 {
-	u32 rates[] = { 300000, 600000, 800000, 1000000, 1200000 };
+	static const u32 rates[] = { 300000, 600000, 800000, 1000000, 1200000 };
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(rates); i++)
@@ -2399,10 +2399,6 @@ int intel_hdmi_compute_config(struct intel_encoder *encoder,
 	if (!intel_link_bw_compute_pipe_bpp(pipe_config))
 		return -EINVAL;
 
-	pipe_config->has_audio =
-		intel_hdmi_has_audio(encoder, pipe_config, conn_state) &&
-		intel_audio_compute_config(encoder, pipe_config, conn_state);
-
 	/*
 	 * Try to respect downstream TMDS clock limits first, if
 	 * that fails assume the user might know something we don't.
@@ -2416,6 +2412,10 @@ int intel_hdmi_compute_config(struct intel_encoder *encoder,
 			    pipe_config->hw.adjusted_mode.crtc_clock);
 		return ret;
 	}
+
+	pipe_config->has_audio =
+		intel_hdmi_has_audio(encoder, pipe_config, conn_state) &&
+		intel_audio_compute_config(encoder, pipe_config, conn_state);
 
 	ret = intel_pfit_compute_config(pipe_config, conn_state);
 	if (ret)
@@ -2825,14 +2825,14 @@ static u8 bxt_encoder_to_ddc_pin(struct intel_encoder *encoder)
 
 	switch (port) {
 	case PORT_B:
-		ddc_pin = GMBUS_PIN_1_BXT;
+		ddc_pin = GMBUS_PIN_1;
 		break;
 	case PORT_C:
-		ddc_pin = GMBUS_PIN_2_BXT;
+		ddc_pin = GMBUS_PIN_2;
 		break;
 	default:
 		MISSING_CASE(port);
-		ddc_pin = GMBUS_PIN_1_BXT;
+		ddc_pin = GMBUS_PIN_1;
 		break;
 	}
 	return ddc_pin;
@@ -2845,20 +2845,17 @@ static u8 cnp_encoder_to_ddc_pin(struct intel_encoder *encoder)
 
 	switch (port) {
 	case PORT_B:
-		ddc_pin = GMBUS_PIN_1_BXT;
+		ddc_pin = GMBUS_PIN_1;
 		break;
 	case PORT_C:
-		ddc_pin = GMBUS_PIN_2_BXT;
+		ddc_pin = GMBUS_PIN_2;
 		break;
 	case PORT_D:
-		ddc_pin = GMBUS_PIN_4_CNP;
-		break;
-	case PORT_F:
-		ddc_pin = GMBUS_PIN_3_BXT;
+		ddc_pin = GMBUS_PIN_4;
 		break;
 	default:
 		MISSING_CASE(port);
-		ddc_pin = GMBUS_PIN_1_BXT;
+		ddc_pin = GMBUS_PIN_1;
 		break;
 	}
 	return ddc_pin;
@@ -2870,12 +2867,12 @@ static u8 icl_encoder_to_ddc_pin(struct intel_encoder *encoder)
 	enum port port = encoder->port;
 
 	if (intel_encoder_is_combo(encoder))
-		return GMBUS_PIN_1_BXT + port;
+		return GMBUS_PIN_1 + port;
 	else if (intel_encoder_is_tc(encoder))
-		return GMBUS_PIN_9_TC1_ICP + intel_encoder_to_tc(encoder);
+		return GMBUS_PIN_9_TC1 + intel_encoder_to_tc(encoder);
 
 	drm_WARN(display->drm, 1, "Unknown port:%c\n", port_name(port));
-	return GMBUS_PIN_2_BXT;
+	return GMBUS_PIN_2;
 }
 
 static u8 mcc_encoder_to_ddc_pin(struct intel_encoder *encoder)
@@ -2885,17 +2882,17 @@ static u8 mcc_encoder_to_ddc_pin(struct intel_encoder *encoder)
 
 	switch (phy) {
 	case PHY_A:
-		ddc_pin = GMBUS_PIN_1_BXT;
+		ddc_pin = GMBUS_PIN_1;
 		break;
 	case PHY_B:
-		ddc_pin = GMBUS_PIN_2_BXT;
+		ddc_pin = GMBUS_PIN_2;
 		break;
 	case PHY_C:
-		ddc_pin = GMBUS_PIN_9_TC1_ICP;
+		ddc_pin = GMBUS_PIN_9_TC1;
 		break;
 	default:
 		MISSING_CASE(phy);
-		ddc_pin = GMBUS_PIN_1_BXT;
+		ddc_pin = GMBUS_PIN_1;
 		break;
 	}
 	return ddc_pin;
@@ -2915,9 +2912,9 @@ static u8 rkl_encoder_to_ddc_pin(struct intel_encoder *encoder)
 	 * all outputs.
 	 */
 	if (INTEL_PCH_TYPE(display) >= PCH_TGP && phy >= PHY_C)
-		return GMBUS_PIN_9_TC1_ICP + phy - PHY_C;
+		return GMBUS_PIN_9_TC1 + phy - PHY_C;
 
-	return GMBUS_PIN_1_BXT + phy;
+	return GMBUS_PIN_1 + phy;
 }
 
 static u8 gen9bc_tgp_encoder_to_ddc_pin(struct intel_encoder *encoder)
@@ -2934,9 +2931,9 @@ static u8 gen9bc_tgp_encoder_to_ddc_pin(struct intel_encoder *encoder)
 	 * all outputs.
 	 */
 	if (INTEL_PCH_TYPE(display) >= PCH_TGP && phy >= PHY_C)
-		return GMBUS_PIN_9_TC1_ICP + phy - PHY_C;
+		return GMBUS_PIN_9_TC1 + phy - PHY_C;
 
-	return GMBUS_PIN_1_BXT + phy;
+	return GMBUS_PIN_1 + phy;
 }
 
 static u8 dg1_encoder_to_ddc_pin(struct intel_encoder *encoder)
@@ -2955,9 +2952,9 @@ static u8 adls_encoder_to_ddc_pin(struct intel_encoder *encoder)
 	 * except first combo output.
 	 */
 	if (phy == PHY_A)
-		return GMBUS_PIN_1_BXT;
+		return GMBUS_PIN_1;
 
-	return GMBUS_PIN_9_TC1_ICP + phy - PHY_B;
+	return GMBUS_PIN_9_TC1 + phy - PHY_B;
 }
 
 static u8 g4x_encoder_to_ddc_pin(struct intel_encoder *encoder)
@@ -3219,7 +3216,8 @@ int intel_hdmi_dsc_get_slice_height(int vactive)
  * intel_hdmi_dsc_get_num_slices - get no. of dsc slices based on dsc encoder
  * and dsc decoder capabilities
  *
- * @crtc_state: intel crtc_state
+ * @mode: drm_display_mode for which num of slices are needed
+ * @output_format : pipe output format
  * @src_max_slices: maximum slices supported by the DSC encoder
  * @src_max_slice_width: maximum slice width supported by DSC encoder
  * @hdmi_max_slices: maximum slices supported by sink DSC decoder
@@ -3229,7 +3227,8 @@ int intel_hdmi_dsc_get_slice_height(int vactive)
  * and decoder.
  */
 int
-intel_hdmi_dsc_get_num_slices(const struct intel_crtc_state *crtc_state,
+intel_hdmi_dsc_get_num_slices(const struct drm_display_mode *mode,
+			      enum intel_output_format output_format,
 			      int src_max_slices, int src_max_slice_width,
 			      int hdmi_max_slices, int hdmi_throughput)
 {
@@ -3251,7 +3250,7 @@ intel_hdmi_dsc_get_num_slices(const struct intel_crtc_state *crtc_state,
 	int max_throughput; /* max clock freq. in khz per slice */
 	int max_slice_width;
 	int slice_width;
-	int pixel_clock = crtc_state->hw.adjusted_mode.crtc_clock;
+	int pixel_clock = mode->crtc_clock;
 
 	if (!hdmi_throughput)
 		return 0;
@@ -3262,8 +3261,8 @@ intel_hdmi_dsc_get_num_slices(const struct intel_crtc_state *crtc_state,
 	 * for 4:4:4 is 1.0. Multiplying these factors by 10 and later
 	 * dividing adjusted clock value by 10.
 	 */
-	if (crtc_state->output_format == INTEL_OUTPUT_FORMAT_YCBCR444 ||
-	    crtc_state->output_format == INTEL_OUTPUT_FORMAT_RGB)
+	if (output_format == INTEL_OUTPUT_FORMAT_YCBCR444 ||
+	    output_format == INTEL_OUTPUT_FORMAT_RGB)
 		kslice_adjust = 10;
 	else
 		kslice_adjust = 5;
@@ -3318,7 +3317,7 @@ intel_hdmi_dsc_get_num_slices(const struct intel_crtc_state *crtc_state,
 		else
 			return 0;
 
-		slice_width = DIV_ROUND_UP(crtc_state->hw.adjusted_mode.hdisplay, target_slices);
+		slice_width = DIV_ROUND_UP(mode->hdisplay, target_slices);
 		if (slice_width >= max_slice_width)
 			min_slices = target_slices + 1;
 	} while (slice_width >= max_slice_width);
@@ -3334,6 +3333,7 @@ intel_hdmi_dsc_get_num_slices(const struct intel_crtc_state *crtc_state,
  * @slice_width: dsc slice width supported by the source and sink
  * @num_slices: num of slices supported by the source and sink
  * @output_format: video output format
+ * @bpc: bits per color
  * @hdmi_all_bpp: sink supports decoding of 1/16th bpp setting
  * @hdmi_max_chunk_bytes: max bytes in a line of chunks supported by sink
  *
@@ -3341,8 +3341,8 @@ intel_hdmi_dsc_get_num_slices(const struct intel_crtc_state *crtc_state,
  */
 int
 intel_hdmi_dsc_get_bpp(int src_fractional_bpp, int slice_width, int num_slices,
-		       int output_format, bool hdmi_all_bpp,
-		       int hdmi_max_chunk_bytes)
+		       enum intel_output_format output_format, int bpc,
+		       bool hdmi_all_bpp, int hdmi_max_chunk_bytes)
 {
 	int max_dsc_bpp, min_dsc_bpp;
 	int target_bytes;
@@ -3359,18 +3359,17 @@ intel_hdmi_dsc_get_bpp(int src_fractional_bpp, int slice_width, int num_slices,
 	 * for each bpp we check if no of bytes can be supported by HDMI sink
 	 */
 
-	/* Assuming: bpc as 8*/
 	if (output_format == INTEL_OUTPUT_FORMAT_YCBCR420) {
 		min_dsc_bpp = 6;
-		max_dsc_bpp = 3 * 4; /* 3*bpc/2 */
+		max_dsc_bpp = 3 * bpc / 2;
 	} else if (output_format == INTEL_OUTPUT_FORMAT_YCBCR444 ||
 		   output_format == INTEL_OUTPUT_FORMAT_RGB) {
 		min_dsc_bpp = 8;
-		max_dsc_bpp = 3 * 8; /* 3*bpc */
+		max_dsc_bpp = 3 * bpc;
 	} else {
 		/* Assuming 4:2:2 encoding */
 		min_dsc_bpp = 7;
-		max_dsc_bpp = 2 * 8; /* 2*bpc */
+		max_dsc_bpp = 2 * bpc;
 	}
 
 	/*
@@ -3422,4 +3421,23 @@ intel_hdmi_dsc_get_bpp(int src_fractional_bpp, int slice_width, int num_slices,
 		return bpp_target_x16;
 
 	return 0;
+}
+
+int intel_hdmi_sink_max_frl_rate(struct drm_connector *connector)
+{
+	int max_lanes = connector->display_info.hdmi.max_lanes;
+	int rate_per_lane = connector->display_info.hdmi.max_frl_rate_per_lane;
+
+	return max_lanes * rate_per_lane;
+}
+
+int intel_hdmi_sink_dsc_max_frl_rate(struct drm_connector *connector)
+{
+	int max_lanes = connector->display_info.hdmi.dsc_cap.max_lanes;
+	int rate_per_lane = connector->display_info.hdmi.dsc_cap.max_frl_rate_per_lane;
+
+	if (!max_lanes || !rate_per_lane)
+		return 0;
+
+	return max_lanes * rate_per_lane;
 }

@@ -122,8 +122,8 @@ static const struct of_device_id cs2000_of_match[] = {
 MODULE_DEVICE_TABLE(of, cs2000_of_match);
 
 static const struct i2c_device_id cs2000_id[] = {
-	{ "cs2000-cp", },
-	{}
+	{ .name = "cs2000-cp" },
+	{ }
 };
 MODULE_DEVICE_TABLE(i2c, cs2000_id);
 
@@ -404,11 +404,7 @@ static int cs2000_enable(struct clk_hw *hw)
 	if (ret < 0)
 		return ret;
 
-	ret = cs2000_wait_pll_lock(priv);
-	if (ret < 0)
-		return ret;
-
-	return ret;
+	return cs2000_wait_pll_lock(priv);
 }
 
 static void cs2000_disable(struct clk_hw *hw)
@@ -465,7 +461,7 @@ static int cs2000_clk_register(struct cs2000_priv *priv)
 {
 	struct device *dev = priv_to_dev(priv);
 	struct device_node *np = dev->of_node;
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 	const char *name = np->name;
 	static const char *parent_names[CLK_MAX];
 	u32 aux_out = 0;
