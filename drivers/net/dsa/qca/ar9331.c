@@ -1124,6 +1124,7 @@ static const struct of_device_id ar9331_sw_of_match[] = {
 	{ .compatible = "qca,ar9331-switch" },
 	{ },
 };
+MODULE_DEVICE_TABLE(of, ar9331_sw_of_match);
 
 static struct mdio_driver ar9331_sw_mdio_driver = {
 	.probe = ar9331_sw_probe,
