@@ -8793,7 +8793,7 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	enum bpf_arg_type arg_type = fn->arg_type[arg];
 	int regno = reg_from_argno(argno);
 	enum bpf_reg_type type = reg->type;
-	u32 *arg_btf_id = NULL;
+	const u32 *arg_btf_id = NULL;
 	u32 key_size;
 	int err = 0;
 
@@ -12082,12 +12082,17 @@ bool bpf_is_kfunc_pkt_changing(struct bpf_call_arg_meta *meta)
 
 static int
 get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
-		   const struct btf_param *args, int arg, int nargs)
+		   const struct btf_param *args, int arg, int nargs,
+		   struct bpf_func_proto *proto)
 {
 	const struct btf_type *t, *ref_t = NULL;
+	const u32 *ref_id_ptr = NULL;
 	argno_t argno = argno_from_arg(arg + 1);
 	const char *ref_tname = NULL;
+	u32 ref_id;
 	int arg_type;
+
+	proto->arg_btf_id[arg] = NULL;
 
 	if (is_kfunc_arg_prog_aux(meta->btf, &args[arg]))
 		return ARG_PTR_TO_PROG_AUX;
@@ -12116,7 +12121,11 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 			reg_arg_name(env, argno), btf_type_str(t));
 		return -EINVAL;
 	}
-	ref_t = btf_type_skip_modifiers(meta->btf, t->type, NULL);
+	/* Keep a pointer to the BTF field containing the resolved referent ID. */
+	ref_id_ptr = &t->type;
+	ref_t = btf_type_skip_modifiers(meta->btf, *ref_id_ptr, &ref_id);
+	while (*ref_id_ptr != ref_id)
+		ref_id_ptr = &btf_type_by_id(meta->btf, *ref_id_ptr)->type;
 	ref_tname = btf_name_by_offset(meta->btf, ref_t->name_off);
 
 	/* In this function, we verify the kfunc's BTF as per the argument type,
@@ -12239,13 +12248,21 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	if (is_kfunc_release(meta) && arg == 0)
 		arg_type |= OBJ_RELEASE;
 
-	/*
-	 * A KF_RCU kfunc accepts an RCU-protected pointer where it would
-	 * otherwise demand a referenced or trusted one. Only ARG_PTR_TO_BTF_ID
-	 * looks at where its register came from, so leave the other kinds alone.
-	 */
-	if (base_type(arg_type) == ARG_PTR_TO_BTF_ID && is_kfunc_rcu(meta))
-		arg_type |= MEM_RCU;
+	if (base_type(arg_type) == ARG_PTR_TO_BTF_ID) {
+		/* A __map argument names a vmlinux type rather than one from
+		 * the kfunc's own BTF.
+		 */
+		if (is_kfunc_arg_map(meta->btf, &args[arg]))
+			proto->arg_btf_id[arg] = reg2btf_ids[CONST_PTR_TO_MAP];
+		else
+			proto->arg_btf_id[arg] = ref_id_ptr;
+
+		/* A KF_RCU kfunc accepts an RCU-protected pointer where it would
+		 * otherwise demand a referenced or trusted one.
+		 */
+		if (is_kfunc_rcu(meta))
+			arg_type |= MEM_RCU;
+	}
 
 	return arg_type;
 }
@@ -12271,7 +12288,7 @@ static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg
 	}
 
 	for (i = 0; i < nargs; i++) {
-		arg_type = get_kfunc_arg_type(env, meta, args, i, nargs);
+		arg_type = get_kfunc_arg_type(env, meta, args, i, nargs, proto);
 		if (arg_type < 0)
 			return arg_type;
 
@@ -12923,10 +12940,17 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 		if (bpf_register_is_null(reg) && type_may_be_null(arg_type))
 			continue;
 
-		if (is_kfunc_arg_map(btf, &args[i])) {
-			ref_id = *reg2btf_ids[CONST_PTR_TO_MAP];
-			ref_t = btf_type_by_id(btf_vmlinux, ref_id);
-			ref_tname = btf_name_by_offset(btf, ref_t->name_off);
+		if (base_type(arg_type) == ARG_PTR_TO_BTF_ID) {
+			/*
+			 * gen_kfunc_arg_proto() resolved the expected BTF ID
+			 * once. A __map argument names a vmlinux type rather
+			 * than one from the kfunc's own BTF.
+			 */
+			ref_id = *meta->fn->arg_btf_id[i];
+			if (is_kfunc_arg_map(btf, &args[i])) {
+				ref_t = btf_type_by_id(btf_vmlinux, ref_id);
+				ref_tname = btf_name_by_offset(btf, ref_t->name_off);
+			}
 		}
 
 		ret = check_func_arg_reg_off(env, reg, argno, arg_type);
