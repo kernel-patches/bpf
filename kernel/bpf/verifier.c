@@ -19,6 +19,7 @@
 #include <linux/bsearch.h>
 #include <linux/sort.h>
 #include <linux/perf_event.h>
+#include <linux/sched/signal.h>
 #include <linux/ctype.h>
 #include <linux/error-injection.h>
 #include <linux/bpf_lsm.h>
@@ -21367,6 +21368,13 @@ skip_full_check:
 
 	if (ret == 0)
 		ret = bpf_fixup_call_args(env);
+	/*
+	 * JIT constant blinding treats instruction patching failures as a
+	 * request to fall back to the interpreter. Do not let such fallback
+	 * consume a fatal-signal cancellation from bpf_patch_insn_data().
+	 */
+	if (ret == 0 && fatal_signal_pending(current))
+		ret = -EINTR;
 
 	env->verification_time = ktime_get_ns() - start_time;
 	print_verification_stats(env);
@@ -21425,6 +21433,8 @@ skip_full_check:
 		env->prog->expected_attach_type = 0;
 
 	env->prog = __bpf_prog_select_runtime(env, env->prog, &ret);
+	if (ret == 0 && fatal_signal_pending(current))
+		ret = -EINTR;
 
 err_release_maps:
 	if (ret)
