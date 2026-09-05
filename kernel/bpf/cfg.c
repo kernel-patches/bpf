@@ -102,6 +102,7 @@ enum {
  */
 static int push_insn(int t, int w, int e, struct bpf_verifier_env *env)
 {
+	struct bpf_subprog_info *subprog;
 	int *insn_stack = env->cfg.insn_stack;
 	int *insn_state = env->cfg.insn_state;
 
@@ -119,6 +120,26 @@ static int push_insn(int t, int w, int e, struct bpf_verifier_env *env)
 			"Instruction %d jumps to instruction %d, but the program only contains instructions 0 through %d.",
 			t, w, env->prog->len - 1);
 		return -EINVAL;
+	}
+
+	/*
+	 * check_subprogs() prevents control flow from falling through a
+	 * subprogram boundary, but runs before CO-RE relocations can rewrite an
+	 * instruction. Reestablish the invariant on the final instruction stream
+	 * before constructing the CFG used by later per-subprogram passes.
+	 */
+	if (e == FALLTHROUGH) {
+		subprog = bpf_find_containing_subprog(env, t);
+		if (w < subprog->start || w >= (subprog + 1)->start) {
+			verbose_linfo(env, t, "%d: ", t);
+			verbose(env, "fall-through out of subprog from insn %d to %d\n", t, w);
+			bpf_diag_program_structure(
+				env, t, "fall-through leaves subprogram",
+				"Keep fall-through control flow inside the current subprogram.",
+				"Instruction %d falls through to instruction %d outside its subprogram.",
+				t, w);
+			return -EINVAL;
+		}
 	}
 
 	if (e == BRANCH) {
