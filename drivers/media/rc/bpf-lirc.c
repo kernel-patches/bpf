@@ -52,9 +52,9 @@ static const struct bpf_func_proto rc_keydown_proto = {
 	.gpl_only  = true, /* rc_keydown is EXPORT_SYMBOL_GPL */
 	.ret_type  = RET_INTEGER,
 	.arg1_type = ARG_PTR_TO_CTX,
-	.arg2_type = ARG_ANYTHING,
-	.arg3_type = ARG_ANYTHING,
-	.arg4_type = ARG_ANYTHING,
+	.arg2_type = ARG_SCALAR,
+	.arg3_type = ARG_SCALAR,
+	.arg4_type = ARG_SCALAR,
 };
 
 BPF_CALL_3(bpf_rc_pointer_rel, u32*, sample, s32, rel_x, s32, rel_y)
@@ -75,8 +75,8 @@ static const struct bpf_func_proto rc_pointer_rel_proto = {
 	.gpl_only  = true,
 	.ret_type  = RET_INTEGER,
 	.arg1_type = ARG_PTR_TO_CTX,
-	.arg2_type = ARG_ANYTHING,
-	.arg3_type = ARG_ANYTHING,
+	.arg2_type = ARG_SCALAR,
+	.arg3_type = ARG_SCALAR,
 };
 
 static const struct bpf_func_proto *

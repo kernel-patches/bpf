@@ -1840,7 +1840,7 @@ const struct bpf_func_proto bpf_get_local_storage_proto = {
 	.gpl_only	= false,
 	.ret_type	= RET_PTR_TO_MAP_VALUE,
 	.arg1_type	= ARG_CONST_MAP_PTR,
-	.arg2_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_SCALAR,
 };
 
 BPF_CALL_0(bpf_get_retval)
@@ -1870,7 +1870,7 @@ const struct bpf_func_proto bpf_set_retval_proto = {
 	.func		= bpf_set_retval,
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_ANYTHING,
+	.arg1_type	= ARG_SCALAR,
 };
 
 static const struct bpf_func_proto *
@@ -2331,7 +2331,7 @@ static const struct bpf_func_proto bpf_sysctl_get_name_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_PTR_TO_MEM | MEM_WRITE,
 	.arg3_type	= ARG_MEM_SIZE,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };
 
 static int copy_sysctl_value(char *dst, size_t dst_len, char *src,

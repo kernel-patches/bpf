@@ -634,7 +634,7 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
  * The approach of starting with precise=true for all registers and then
  * backtrack to mark a register as not precise when the verifier detects
  * that program doesn't care about specific value (e.g., when helper
- * takes register as ARG_ANYTHING parameter) is not safe.
+ * takes register as ARG_SCALAR parameter) is not safe.
  *
  * It's ok to walk single parentage chain of the verifier states.
  * It's possible that this backtracking will go all the way till 1st insn.

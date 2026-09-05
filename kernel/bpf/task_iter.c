@@ -824,10 +824,10 @@ const struct bpf_func_proto bpf_find_vma_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_BTF_ID,
 	.arg1_btf_id	= &btf_tracing_ids[BTF_TRACING_TYPE_TASK],
-	.arg2_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_SCALAR,
 	.arg3_type	= ARG_PTR_TO_FUNC,
 	.arg4_type	= ARG_PTR_TO_STACK_OR_NULL,
-	.arg5_type	= ARG_ANYTHING,
+	.arg5_type	= ARG_SCALAR,
 };
 
 static inline void bpf_iter_mmput_async(struct mm_struct *mm)

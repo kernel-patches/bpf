@@ -8797,14 +8797,11 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	u32 key_size;
 	int err = 0;
 
-	if (arg_type == ARG_DONTCARE)
-		return 0;
-
 	err = check_reg_arg(env, regno, SRC_OP);
 	if (err)
 		return err;
 
-	if (arg_type == ARG_ANYTHING) {
+	if (arg_type == ARG_SCALAR) {
 		if (__is_pointer_value(env->allow_ptr_leaks, reg)) {
 			verbose(env, "%s leaks addr into helper function\n",
 				reg_arg_name(env, argno));
@@ -9305,7 +9302,7 @@ static bool check_raw_mode_ok(const struct bpf_func_proto *fn, struct bpf_call_a
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(fn->arg_type); i++) {
-		if (fn->arg_type[i] == ARG_DONTCARE)
+		if (fn->arg_type[i] == ARG_UNUSED)
 			break;
 		if (!arg_type_is_raw_mem(fn->arg_type[i]))
 			continue;
@@ -9355,7 +9352,7 @@ static bool check_btf_id_ok(const struct bpf_func_proto *fn)
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(fn->arg_type); i++) {
-		if (fn->arg_type[i] == ARG_DONTCARE)
+		if (fn->arg_type[i] == ARG_UNUSED)
 			break;
 		if (base_type(fn->arg_type[i]) == ARG_PTR_TO_BTF_ID)
 			return !!fn->arg_btf_id[i];
@@ -9378,7 +9375,7 @@ static bool check_mem_arg_rw_flag_ok(const struct bpf_func_proto *fn)
 	for (i = 0; i < ARRAY_SIZE(fn->arg_type); i++) {
 		enum bpf_arg_type arg_type = fn->arg_type[i];
 
-		if (arg_type == ARG_DONTCARE)
+		if (arg_type == ARG_UNUSED)
 			break;
 		if (base_type(arg_type) != ARG_PTR_TO_MEM)
 			continue;
@@ -9396,7 +9393,7 @@ static bool check_proto_release_reg(const struct bpf_func_proto *fn, struct bpf_
 	for (i = 0; i < ARRAY_SIZE(fn->arg_type); i++) {
 		enum bpf_arg_type arg_type = fn->arg_type[i];
 
-		if (arg_type == ARG_DONTCARE)
+		if (arg_type == ARG_UNUSED)
 			break;
 		if (arg_type_is_release(arg_type)) {
 			if (meta->release_regno)
@@ -9767,7 +9764,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 		struct bpf_reg_state *reg = get_func_arg_reg(caller, regs, i);
 		struct bpf_subprog_arg_info *arg = &sub->args[i];
 
-		if (arg->arg_type == ARG_ANYTHING) {
+		if (arg->arg_type == ARG_SCALAR) {
 			if (reg->type != SCALAR_VALUE) {
 				bpf_log(log, "%s is not a scalar\n", reg_arg_name(env, argno));
 				return -EINVAL;
@@ -9791,7 +9788,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 				return -EINVAL;
 			}
 		} else if (base_type(arg->arg_type) == ARG_PTR_TO_MEM) {
-			ret = check_func_arg_reg_off(env, reg, argno, ARG_DONTCARE);
+			ret = check_func_arg_reg_off(env, reg, argno, ARG_PTR_TO_MEM);
 			if (ret < 0)
 				return ret;
 			if (check_mem_reg(env, reg, argno, arg->mem_size, BPF_READ | BPF_WRITE, NULL,
@@ -10949,6 +10946,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	meta.fn = fn;
 	/* check args */
 	for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++) {
+		if (fn->arg_type[i] == ARG_UNUSED)
+			break;
 		err = check_func_arg(env, i, &meta, insn_idx);
 		if (err)
 			return err;
@@ -12828,7 +12827,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 	for (i = 0; i < nargs; i++) {
 		struct bpf_reg_state *reg = get_func_arg_reg(caller, regs, i);
 		const struct btf_type *t, *ref_t, *resolve_ret;
-		enum bpf_arg_type arg_type = ARG_DONTCARE;
+		enum bpf_arg_type arg_type = ARG_UNUSED;
 		argno_t argno = argno_from_arg(i + 1);
 		int regno = reg_from_argno(argno);
 		bool btf_id_fixed_off_ok = true;
@@ -17841,7 +17840,7 @@ bool bpf_get_call_summary(struct bpf_verifier_env *env, struct bpf_insn *call,
 		cs->is_void = fn->ret_type == RET_VOID;
 		cs->num_params = 0;
 		for (i = 0; i < ARRAY_SIZE(fn->arg_type); ++i) {
-			if (fn->arg_type[i] == ARG_DONTCARE)
+			if (fn->arg_type[i] == ARG_UNUSED)
 				break;
 			cs->num_params++;
 		}
@@ -19637,7 +19636,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 			}
 
 			/* Also ensure the callback only has a single scalar argument. */
-			if (sub->arg_cnt != 1 || sub->args[0].arg_type != ARG_ANYTHING) {
+			if (sub->arg_cnt != 1 || sub->args[0].arg_type != ARG_SCALAR) {
 				verbose(env, "exception cb only supports single integer argument\n");
 				ret = -EINVAL;
 				goto out;
@@ -19650,7 +19649,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 			if (arg->arg_type == ARG_PTR_TO_CTX) {
 				reg->type = PTR_TO_CTX;
 				mark_reg_known_zero(env, regs, i);
-			} else if (arg->arg_type == ARG_ANYTHING) {
+			} else if (arg->arg_type == ARG_SCALAR) {
 				reg->type = SCALAR_VALUE;
 				mark_reg_unknown(env, regs, i);
 			} else if (arg->arg_type == ARG_PTR_TO_DYNPTR) {

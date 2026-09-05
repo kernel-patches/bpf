@@ -8222,7 +8222,7 @@ skip_pointer:
 			return -EINVAL;
 		}
 		if (btf_type_is_int(t) || btf_is_any_enum(t)) {
-			sub->args[i].arg_type = ARG_ANYTHING;
+			sub->args[i].arg_type = ARG_SCALAR;
 			continue;
 		}
 		if (!is_global)
@@ -8747,8 +8747,8 @@ const struct bpf_func_proto bpf_btf_find_by_name_kind_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
 	.arg2_type	= ARG_MEM_SIZE,
-	.arg3_type	= ARG_ANYTHING,
-	.arg4_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_SCALAR,
+	.arg4_type	= ARG_SCALAR,
 };
 
 BTF_ID_LIST_GLOBAL(btf_tracing_ids, MAX_BTF_TRACING_TYPE)

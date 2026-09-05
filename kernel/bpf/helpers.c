@@ -71,7 +71,7 @@ const struct bpf_func_proto bpf_map_update_elem_proto = {
 	.arg1_type	= ARG_CONST_MAP_PTR,
 	.arg2_type	= ARG_PTR_TO_MAP_KEY,
 	.arg3_type	= ARG_PTR_TO_MAP_VALUE,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };
 
 BPF_CALL_2(bpf_map_delete_elem, struct bpf_map *, map, void *, key)
@@ -101,7 +101,7 @@ const struct bpf_func_proto bpf_map_push_elem_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_CONST_MAP_PTR,
 	.arg2_type	= ARG_PTR_TO_MAP_VALUE,
-	.arg3_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_SCALAR,
 };
 
 BPF_CALL_2(bpf_map_pop_elem, struct bpf_map *, map, void *, value)
@@ -143,7 +143,7 @@ const struct bpf_func_proto bpf_map_lookup_percpu_elem_proto = {
 	.ret_type	= RET_PTR_TO_MAP_VALUE_OR_NULL,
 	.arg1_type	= ARG_CONST_MAP_PTR,
 	.arg2_type	= ARG_PTR_TO_MAP_KEY,
-	.arg3_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_SCALAR,
 };
 
 const struct bpf_func_proto bpf_get_prandom_u32_proto = {
@@ -441,7 +441,7 @@ const struct bpf_func_proto bpf_get_current_ancestor_cgroup_id_proto = {
 	.func		= bpf_get_current_ancestor_cgroup_id,
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_ANYTHING,
+	.arg1_type	= ARG_SCALAR,
 };
 #endif /* CONFIG_CGROUPS */
 
@@ -540,7 +540,7 @@ const struct bpf_func_proto bpf_strtol_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
 	.arg2_type	= ARG_MEM_SIZE,
-	.arg3_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_SCALAR,
 	.arg4_type	= ARG_PTR_TO_FIXED_SIZE_MEM | MEM_UNINIT | MEM_WRITE | MEM_ALIGNED,
 	.arg4_size	= sizeof(s64),
 };
@@ -568,7 +568,7 @@ const struct bpf_func_proto bpf_strtoul_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
 	.arg2_type	= ARG_MEM_SIZE,
-	.arg3_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_SCALAR,
 	.arg4_type	= ARG_PTR_TO_FIXED_SIZE_MEM | MEM_UNINIT | MEM_WRITE | MEM_ALIGNED,
 	.arg4_size	= sizeof(u64),
 };
@@ -624,8 +624,8 @@ const struct bpf_func_proto bpf_get_ns_current_pid_tgid_proto = {
 	.func		= bpf_get_ns_current_pid_tgid,
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_ANYTHING,
-	.arg2_type	= ARG_ANYTHING,
+	.arg1_type	= ARG_SCALAR,
+	.arg2_type	= ARG_SCALAR,
 	.arg3_type      = ARG_PTR_TO_UNINIT_MEM,
 	.arg4_type      = ARG_MEM_SIZE,
 };
@@ -651,7 +651,7 @@ const struct bpf_func_proto bpf_event_output_data_proto =  {
 	.ret_type       = RET_INTEGER,
 	.arg1_type      = ARG_PTR_TO_CTX,
 	.arg2_type      = ARG_CONST_MAP_PTR,
-	.arg3_type      = ARG_ANYTHING,
+	.arg3_type      = ARG_SCALAR,
 	.arg4_type      = ARG_PTR_TO_MEM | MEM_RDONLY,
 	.arg5_type      = ARG_MEM_SIZE_OR_ZERO,
 };
@@ -676,7 +676,7 @@ const struct bpf_func_proto bpf_copy_from_user_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg2_type	= ARG_MEM_SIZE_OR_ZERO,
-	.arg3_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_SCALAR,
 };
 
 BPF_CALL_5(bpf_copy_from_user_task, void *, dst, u32, size,
@@ -707,10 +707,10 @@ const struct bpf_func_proto bpf_copy_from_user_task_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg2_type	= ARG_MEM_SIZE_OR_ZERO,
-	.arg3_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_SCALAR,
 	.arg4_type	= ARG_PTR_TO_BTF_ID,
 	.arg4_btf_id	= &btf_tracing_ids[BTF_TRACING_TYPE_TASK],
-	.arg5_type	= ARG_ANYTHING
+	.arg5_type	= ARG_SCALAR
 };
 
 BPF_CALL_2(bpf_per_cpu_ptr, const void *, ptr, u32, cpu)
@@ -726,7 +726,7 @@ const struct bpf_func_proto bpf_per_cpu_ptr_proto = {
 	.gpl_only	= false,
 	.ret_type	= RET_PTR_TO_MEM_OR_BTF_ID | PTR_MAYBE_NULL | MEM_RDONLY,
 	.arg1_type	= ARG_PTR_TO_PERCPU_BTF_ID,
-	.arg2_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_SCALAR,
 };
 
 BPF_CALL_1(bpf_this_cpu_ptr, const void *, percpu_ptr)
@@ -1415,7 +1415,7 @@ static const struct bpf_func_proto bpf_timer_init_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_TIMER,
 	.arg2_type	= ARG_CONST_MAP_PTR,
-	.arg3_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_SCALAR,
 };
 
 static int bpf_async_update_prog_callback(struct bpf_async_cb *cb,
@@ -1558,8 +1558,8 @@ static const struct bpf_func_proto bpf_timer_start_proto = {
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_TIMER,
-	.arg2_type	= ARG_ANYTHING,
-	.arg3_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_SCALAR,
+	.arg3_type	= ARG_SCALAR,
 };
 
 BPF_CALL_1(bpf_timer_cancel, struct bpf_async_kern *, async)
@@ -1889,7 +1889,7 @@ static const struct bpf_func_proto bpf_dynptr_from_mem_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg2_type	= ARG_MEM_SIZE_OR_ZERO,
-	.arg3_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_SCALAR,
 	.arg4_type	= ARG_PTR_TO_DYNPTR | DYNPTR_TYPE_LOCAL | MEM_UNINIT | MEM_WRITE,
 };
 
@@ -1945,8 +1945,8 @@ static const struct bpf_func_proto bpf_dynptr_read_proto = {
 	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg2_type	= ARG_MEM_SIZE_OR_ZERO,
 	.arg3_type	= ARG_PTR_TO_DYNPTR,
-	.arg4_type	= ARG_ANYTHING,
-	.arg5_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
+	.arg5_type	= ARG_SCALAR,
 };
 
 int __bpf_dynptr_write(const struct bpf_dynptr_kern *dst, u64 offset, void *src,
@@ -2002,10 +2002,10 @@ static const struct bpf_func_proto bpf_dynptr_write_proto = {
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_DYNPTR,
-	.arg2_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_SCALAR,
 	.arg3_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
 	.arg4_type	= ARG_MEM_SIZE_OR_ZERO,
-	.arg5_type	= ARG_ANYTHING,
+	.arg5_type	= ARG_SCALAR,
 };
 
 BPF_CALL_3(bpf_dynptr_data, const struct bpf_dynptr_kern *, ptr, u64, offset, u64, len)
@@ -2045,7 +2045,7 @@ static const struct bpf_func_proto bpf_dynptr_data_proto = {
 	.gpl_only	= false,
 	.ret_type	= RET_PTR_TO_DYNPTR_MEM_OR_NULL,
 	.arg1_type	= ARG_PTR_TO_DYNPTR,
-	.arg2_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_SCALAR,
 	.arg3_type	= ARG_CONST_ALLOC_SIZE_OR_ZERO,
 };
 
@@ -2957,7 +2957,7 @@ const struct bpf_func_proto bpf_current_task_under_cgroup_proto = {
 	.gpl_only       = false,
 	.ret_type       = RET_INTEGER,
 	.arg1_type      = ARG_CONST_MAP_PTR,
-	.arg2_type      = ARG_ANYTHING,
+	.arg2_type      = ARG_SCALAR,
 };
 
 /**

@@ -220,7 +220,7 @@ const struct bpf_func_proto bpf_inode_storage_get_proto = {
 	.arg2_type	= ARG_PTR_TO_BTF_ID_OR_NULL,
 	.arg2_btf_id	= &bpf_inode_storage_btf_ids[0],
 	.arg3_type	= ARG_PTR_TO_MAP_VALUE_OR_NULL,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };
 
 const struct bpf_func_proto bpf_inode_storage_delete_proto = {
