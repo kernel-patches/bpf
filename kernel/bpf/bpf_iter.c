@@ -721,7 +721,7 @@ const struct bpf_func_proto bpf_for_each_map_elem_proto = {
 	.arg1_type	= ARG_CONST_MAP_PTR,
 	.arg2_type	= ARG_PTR_TO_FUNC,
 	.arg3_type	= ARG_PTR_TO_STACK_OR_NULL,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };
 
 BPF_CALL_4(bpf_loop, u32, nr_loops, void *, callback_fn, void *, callback_ctx,
@@ -754,10 +754,10 @@ const struct bpf_func_proto bpf_loop_proto = {
 	.func		= bpf_loop,
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_ANYTHING,
+	.arg1_type	= ARG_SCALAR,
 	.arg2_type	= ARG_PTR_TO_FUNC,
 	.arg3_type	= ARG_PTR_TO_STACK_OR_NULL,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };
 
 struct bpf_iter_num_kern {
