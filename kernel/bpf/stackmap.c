@@ -665,7 +665,7 @@ const struct bpf_func_proto bpf_get_stackid_proto = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_CONST_MAP_PTR,
-	.arg3_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_SCALAR,
 };
 
 static __u64 count_kernel_ip(const struct perf_callchain_entry *trace)
@@ -739,7 +739,7 @@ const struct bpf_func_proto bpf_get_stackid_proto_pe = {
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_CONST_MAP_PTR,
-	.arg3_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_SCALAR,
 };
 
 static u32 callchain_store(const struct perf_callchain_entry *trace, u32 trace_nr,
@@ -863,7 +863,7 @@ const struct bpf_func_proto bpf_get_stack_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg3_type	= ARG_MEM_SIZE_OR_ZERO,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };
 
 BPF_CALL_4(bpf_get_stack_sleepable, struct pt_regs *, regs, void *, buf, u32, size,
@@ -879,7 +879,7 @@ const struct bpf_func_proto bpf_get_stack_sleepable_proto = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg3_type	= ARG_MEM_SIZE_OR_ZERO,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };
 
 static long __bpf_get_task_stack(struct task_struct *task, void *buf, u32 size,
@@ -916,7 +916,7 @@ const struct bpf_func_proto bpf_get_task_stack_proto = {
 	.arg1_btf_id	= &btf_tracing_ids[BTF_TRACING_TYPE_TASK],
 	.arg2_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg3_type	= ARG_MEM_SIZE_OR_ZERO,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };
 
 BPF_CALL_4(bpf_get_task_stack_sleepable, struct task_struct *, task, void *, buf,
@@ -933,7 +933,7 @@ const struct bpf_func_proto bpf_get_task_stack_sleepable_proto = {
 	.arg1_btf_id	= &btf_tracing_ids[BTF_TRACING_TYPE_TASK],
 	.arg2_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg3_type	= ARG_MEM_SIZE_OR_ZERO,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };
 
 static int __bpf_get_stack_pe(const struct perf_callchain_entry *trace, u32 trace_nr,
@@ -1015,7 +1015,7 @@ const struct bpf_func_proto bpf_get_stack_proto_pe = {
 	.arg1_type	= ARG_PTR_TO_CTX,
 	.arg2_type	= ARG_PTR_TO_UNINIT_MEM,
 	.arg3_type	= ARG_MEM_SIZE_OR_ZERO,
-	.arg4_type	= ARG_ANYTHING,
+	.arg4_type	= ARG_SCALAR,
 };
 
 /* Called from eBPF program */
