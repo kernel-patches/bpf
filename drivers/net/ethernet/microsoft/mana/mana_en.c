@@ -3310,6 +3310,28 @@ static void mana_rss_table_init(struct mana_port_context *apc)
 			ethtool_rxfh_indir_default(i, apc->num_queues);
 }
 
+/* Whether the current indirection table can be kept for apc->num_queues,
+ * rather than rebuilt from the driver default.
+ *
+ * Only a user table ("ethtool -X") is worth keeping; a driver-generated one
+ * is rebuilt so that it spreads over every queue. An entry pointing past the
+ * last queue cannot be kept: mana_config_rss() uses these entries to index
+ * apc->rxqs[], which holds apc->num_queues pointers.
+ */
+static bool mana_rss_table_keep(struct mana_port_context *apc)
+{
+	u32 i;
+
+	if (!netif_is_rxfh_configured(apc->ndev))
+		return false;
+
+	for (i = 0; i < apc->indir_table_sz; i++)
+		if (apc->indir_table[i] >= apc->num_queues)
+			return false;
+
+	return true;
+}
+
 int mana_disable_vport_rx(struct mana_port_context *apc)
 {
 	return mana_cfg_vport_steering(apc, TRI_STATE_FALSE, false, false,
@@ -3625,7 +3647,20 @@ int mana_alloc_queues(struct net_device *ndev)
 		goto destroy_rxq;
 	}
 
-	mana_rss_table_init(apc);
+	/* Keep a user-configured table across the rebuild: its entries are
+	 * queue indices and stay meaningful while they are all still in range.
+	 * Only a driver-generated table is regenerated here.
+	 *
+	 * A table that cannot be kept is replaced by the default without
+	 * telling the core, which keeps reporting the table as user
+	 * configured. That is what this function did for every table before,
+	 * and reporting it here is not an option: ethtool_rxfh_indir_lost()
+	 * sends ETHTOOL_MSG_RSS_NTF, which requires the netdev instance lock,
+	 * and this runs both with that lock held (ndo_open) and without it
+	 * (mana_attach() from the reset and resume paths).
+	 */
+	if (!mana_rss_table_keep(apc))
+		mana_rss_table_init(apc);
 
 	err = mana_config_rss(apc, TRI_STATE_TRUE, true, true);
 	if (err) {
