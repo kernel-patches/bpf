@@ -344,7 +344,7 @@ __naked void potential_reference_to_system_key(void)
 
 SEC("tc")
 __description("reference tracking: release reference without check")
-__failure __msg("type=sock_or_null expected=sock")
+__failure __msg("Possibly NULL pointer passed to trusted R1")
 __naked void tracking_release_reference_without_check(void)
 {
 	asm volatile (
@@ -363,7 +363,7 @@ __naked void tracking_release_reference_without_check(void)
 
 SEC("tc")
 __description("reference tracking: release reference to sock_common without check")
-__failure __msg("type=sock_common_or_null expected=sock")
+__failure __msg("Possibly NULL pointer passed to trusted R1")
 __naked void to_sock_common_without_check(void)
 {
 	asm volatile (

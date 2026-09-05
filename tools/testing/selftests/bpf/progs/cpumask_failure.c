@@ -183,7 +183,7 @@ int BPF_PROG(test_global_mask_no_null_check, struct task_struct *task, u64 clone
 }
 
 SEC("tp_btf/task_newtask")
-__failure __msg("Possibly NULL pointer passed to helper R2")
+__failure __msg("Possibly NULL pointer passed to trusted R2")
 int BPF_PROG(test_global_mask_rcu_no_null_check, struct task_struct *task, u64 clone_flags)
 {
 	struct bpf_cpumask *prev, *curr;

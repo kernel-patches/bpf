@@ -311,7 +311,7 @@
 	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	.fixup_map_kptr = { 1 },
 	.result = REJECT,
-	.errstr = "R1 type=rcu_ptr_or_null_ expected=percpu_ptr_",
+	.errstr = "Possibly NULL pointer passed to trusted R1",
 },
 {
 	"map_kptr: ref: reject off != 0",

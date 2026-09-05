@@ -8136,6 +8136,25 @@ static bool arg_type_is_dynptr(enum bpf_arg_type type)
 }
 
 /*
+ * An argument that only ever takes a scalar, so a zero register passed to it
+ * is a value rather than a NULL pointer.
+ */
+static bool arg_type_is_scalar(enum bpf_arg_type type)
+{
+	switch (base_type(type)) {
+	case ARG_SCALAR:
+	case ARG_CONST_SCALAR:
+	case ARG_MEM_SIZE:
+	case ARG_MEM_SIZE_OR_ZERO:
+	case ARG_CONST_MEM_SIZE:
+	case ARG_CONST_ALLOC_SIZE_OR_ZERO:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/*
  * A kfunc is named by a BTF ID, which can take the same numeric value as an
  * enum bpf_func_id. Only test meta->func_id against a BPF_FUNC_* once the call
  * is known to be to a helper; meta->btf is set only for a kfunc.
@@ -8336,6 +8355,34 @@ __printf(6, 7) static void bpf_diag_call_arg_fmt(struct bpf_verifier_env *env, u
 	bpf_diag_call_arg(env, insn_idx, argno, call_name, reason, suggestion);
 }
 
+static int check_func_arg_nullability(struct bpf_verifier_env *env,
+				      struct bpf_reg_state *reg, argno_t argno,
+				      enum bpf_arg_type arg_type,
+				      struct bpf_call_arg_meta *meta, int insn_idx)
+{
+	const char *expected_type = "pointer";
+
+	if (arg_type_is_scalar(arg_type) || type_may_be_null(arg_type) ||
+	    (!bpf_register_is_null(reg) && !type_may_be_null(reg->type)))
+		return 0;
+
+	if (meta->btf) {
+		u32 arg_btf_id;
+
+		arg_btf_id = btf_params(meta->func_proto)[arg_idx_from_argno(argno)].type;
+		expected_type = bpf_diag_fmt(env, "value of type %s",
+					     bpf_diag_fmt_btf_type(env, meta->btf, arg_btf_id));
+	}
+
+	verbose(env, "Possibly NULL pointer passed to trusted %s\n",
+		reg_arg_name(env, argno));
+	bpf_diag_call_arg_fmt(env, insn_idx, argno, meta->func_name,
+			      "Add a NULL check and make the call only on the non-NULL path.",
+			      "the pointer may be NULL, but this call requires a non-NULL %s",
+			      expected_type);
+	return -EACCES;
+}
+
 static const char *bpf_diag_expected_reg_types(struct bpf_verifier_env *env,
 					       const enum bpf_reg_type *types, int count)
 {
@@ -8447,17 +8494,6 @@ found:
 		 */
 		bool strict_type_match = arg_type_is_release(arg_type) &&
 					 !is_helper_call(meta, BPF_FUNC_sk_release);
-
-		if (type_may_be_null(reg->type) &&
-		    (!type_may_be_null(arg_type) || arg_type_is_release(arg_type))) {
-			verbose(env, "Possibly NULL pointer passed to helper %s\n",
-				reg_arg_name(env, argno));
-			bpf_diag_call_arg(
-				env, env->insn_idx, argno, meta->func_name,
-				"the pointer may be NULL, but this call requires a non-NULL pointer",
-				"Add a NULL check and make the call only on the non-NULL path.");
-			return -EACCES;
-		}
 
 		if (!arg_btf_id) {
 			if (!compatible->btf_id) {
@@ -8839,6 +8875,10 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		 */
 		goto skip_type_check;
 
+	err = check_func_arg_nullability(env, reg, argno, arg_type, meta, insn_idx);
+	if (err)
+		return err;
+
 	/* arg_btf_id and arg_size are in a union. */
 	if (base_type(arg_type) == ARG_PTR_TO_BTF_ID ||
 	    base_type(arg_type) == ARG_PTR_TO_SPIN_LOCK)
@@ -8853,15 +8893,28 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		return err;
 
 skip_type_check:
-	if (arg_type_is_release(arg_type) && !arg_type_is_dynptr(arg_type) &&
-	    !reg_is_referenced(env, reg) && !bpf_register_is_null(reg)) {
-		verbose(env, "release helper %s expects referenced PTR_TO_BTF_ID passed to %s\n",
-			meta->func_name, reg_arg_name(env, argno));
-		bpf_diag_call_arg(
-			env, insn_idx, argno, meta->func_name,
-			"release helpers require a value that owns a live resource returned by a matching acquire helper",
-			"Pass the resource-owning pointer returned by the matching acquire helper, and avoid calling the release helper after ownership has already been transferred or released.");
-		return -EINVAL;
+	if (arg_type_is_release(arg_type)) {
+		if (type_may_be_null(reg->type)) {
+			verbose(env, "Possibly NULL pointer passed to trusted %s\n",
+				reg_arg_name(env, argno));
+			bpf_diag_call_arg(
+				env, insn_idx, argno, meta->func_name,
+				"the pointer may be NULL, but this call requires a non-NULL pointer",
+				"Add a NULL check and make the call only on the non-NULL path.");
+			return -EACCES;
+		}
+
+		if (!arg_type_is_dynptr(arg_type) &&
+		    !reg_is_referenced(env, reg) && !bpf_register_is_null(reg)) {
+			verbose(env,
+				"release helper %s expects referenced PTR_TO_BTF_ID passed to %s\n",
+				meta->func_name, reg_arg_name(env, argno));
+			bpf_diag_call_arg(
+				env, insn_idx, argno, meta->func_name,
+				"release helpers require a value that owns a live resource returned by a matching acquire helper",
+				"Pass the resource-owning pointer returned by the matching acquire helper, and avoid calling the release helper after ownership has already been transferred or released.");
+			return -EINVAL;
+		}
 	}
 
 	if (reg_is_referenced(env, reg))
@@ -12978,20 +13031,9 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			ref_tname = btf_name_by_offset(btf, ref_t->name_off);
 		}
 
-		if (btf_type_is_ptr(t) &&
-		    (bpf_register_is_null(reg) || type_may_be_null(reg->type)) &&
-		    !type_may_be_null(arg_type)) {
-			const char *expected_type;
-
-			expected_type = bpf_diag_fmt_btf_type(env, btf, args[i].type);
-			verbose(env, "Possibly NULL pointer passed to trusted %s\n",
-				reg_arg_name(env, argno));
-			bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-					      "Add a NULL check and call the kfunc only on the non-NULL path.",
-					      "the pointer may be NULL, but this kfunc requires a non-NULL value of type %s",
-					      expected_type);
-			return -EACCES;
-		}
+		ret = check_func_arg_nullability(env, reg, argno, arg_type, meta, insn_idx);
+		if (ret < 0)
+			return ret;
 
 		if (regno == meta->release_regno && !is_kfunc_arg_dynptr(meta->btf, &args[i]) &&
 		    !reg_is_referenced(env, reg) && !bpf_register_is_null(reg)) {
