@@ -100,6 +100,8 @@ int mtk_emi_icc_probe(struct platform_device *pdev)
 	if (!data)
 		return -ENOMEM;
 
+	data->num_nodes = desc->num_nodes;
+
 	provider->dev = dev;
 	provider->set = mtk_emi_icc_set;
 	provider->aggregate = mtk_emi_icc_aggregate;
@@ -126,7 +128,6 @@ int mtk_emi_icc_probe(struct platform_device *pdev)
 
 		data->nodes[i] = node;
 	}
-	data->num_nodes = desc->num_nodes;
 
 	ret = icc_provider_register(provider);
 	if (ret)
