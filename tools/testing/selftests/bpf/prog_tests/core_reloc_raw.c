@@ -14,6 +14,117 @@
 
 static char log[16 * 1024];
 
+static int load_core_relo_subprog(int btf_fd, int main_id, int sub_id,
+				  int enum_id, int access_str_off, bool relocate)
+{
+	struct bpf_insn insns[] = {
+		BPF_CALL_REL(2),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	struct bpf_func_info funcs[] = {
+		{ .insn_off = 0, .type_id = main_id },
+		{ .insn_off = 3, .type_id = sub_id },
+	};
+	struct bpf_core_relo relo = {
+		.insn_off = 2 * sizeof(struct bpf_insn),
+		.type_id = enum_id,
+		.access_str_off = access_str_off,
+		.kind = BPF_CORE_ENUMVAL_VALUE,
+	};
+	union bpf_attr attr = {
+		.prog_type = BPF_PROG_TYPE_SOCKET_FILTER,
+		.insn_cnt = ARRAY_SIZE(insns),
+		.insns = (__u64)insns,
+		.license = (__u64)"GPL",
+		.log_buf = (__u64)log,
+		.log_size = sizeof(log),
+		.log_level = 1,
+		.prog_btf_fd = btf_fd,
+		.func_info_rec_size = sizeof(struct bpf_func_info),
+		.func_info = (__u64)funcs,
+		.func_info_cnt = ARRAY_SIZE(funcs),
+	};
+
+	if (relocate) {
+		attr.core_relo_cnt = 1;
+		attr.core_relos = (__u64)&relo;
+		attr.core_relo_rec_size = sizeof(relo);
+	}
+	memset(log, 0, sizeof(log));
+	return sys_bpf_prog_load(&attr, sizeof(attr), 1);
+}
+
+static void test_poisoned_subprog_terminator(void)
+{
+	const void *raw_btf;
+	struct btf *btf = NULL;
+	__u32 raw_btf_size;
+	int access_str_off, btf_fd = -1, enum_id;
+	int int_id, main_id, prog_fd = -1, proto_id, sub_id;
+
+	btf = btf__new_empty();
+	if (!ASSERT_OK_PTR(btf, "btf_new_empty"))
+		return;
+	int_id = btf__add_int(btf, "int", 4, BTF_INT_SIGNED);
+	if (!ASSERT_GT(int_id, 0, "add_int"))
+		goto cleanup;
+	proto_id = btf__add_func_proto(btf, int_id);
+	if (!ASSERT_GT(proto_id, 0, "add_func_proto"))
+		goto cleanup;
+	main_id = btf__add_func(btf, "main_fn", BTF_FUNC_STATIC, proto_id);
+	if (!ASSERT_GT(main_id, 0, "add_main_func"))
+		goto cleanup;
+	sub_id = btf__add_func(btf, "sub_fn", BTF_FUNC_STATIC, proto_id);
+	if (!ASSERT_GT(sub_id, 0, "add_sub_func"))
+		goto cleanup;
+	enum_id = btf__add_enum(btf, "core_relo_subprog_poison_missing", 4);
+	if (!ASSERT_GT(enum_id, 0, "add_enum") ||
+	    !ASSERT_OK(btf__add_enum_value(btf, "value", 0), "add_enum_value"))
+		goto cleanup;
+	access_str_off = btf__add_str(btf, "0");
+	if (!ASSERT_GT(access_str_off, 0, "add_access_str"))
+		goto cleanup;
+
+	raw_btf = btf__raw_data(btf, &raw_btf_size);
+	if (!ASSERT_OK_PTR(raw_btf, "raw_btf"))
+		goto cleanup;
+	btf_fd = bpf_btf_load(raw_btf, raw_btf_size, NULL);
+	if (!ASSERT_GE(btf_fd, 0, "btf_load"))
+		goto cleanup;
+
+	/* The same two-subprogram program is valid before the relocation. */
+	prog_fd = load_core_relo_subprog(btf_fd, main_id, sub_id, enum_id,
+					 access_str_off, false);
+	if (!ASSERT_GE(prog_fd, 0, "control_load"))
+		goto cleanup;
+	close(prog_fd);
+	prog_fd = -1;
+
+	/*
+	 * Poison the first subprogram's terminal exit. The verifier must reject
+	 * the resulting control flow across the subprogram boundary in the CFG.
+	 */
+	prog_fd = load_core_relo_subprog(btf_fd, main_id, sub_id, enum_id,
+					 access_str_off, true);
+	if (!ASSERT_LT(prog_fd, 0, "poisoned_load"))
+		goto cleanup;
+	ASSERT_HAS_SUBSTR(log, "fall-through out of subprog from insn 2 to 3",
+			  "poisoned_load_log");
+
+cleanup:
+	if (env.verbosity > VERBOSE_NORMAL && log[0]) {
+		printf("-------- program load log start --------\n");
+		printf("%s", log);
+		printf("-------- program load log end ----------\n");
+	}
+	close(prog_fd);
+	close(btf_fd);
+	btf__free(btf);
+}
+
 /* Check that verifier rejects BPF program containing relocation
  * pointing to non-existent BTF type.
  */
@@ -120,6 +231,8 @@ out:
 
 void test_core_reloc_raw(void)
 {
+	if (test__start_subtest("poisoned_subprog_terminator"))
+		test_poisoned_subprog_terminator();
 	if (test__start_subtest("bad_local_id"))
 		test_bad_local_id();
 }
