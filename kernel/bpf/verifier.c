@@ -8151,8 +8151,8 @@ static bool is_kfunc_call(const struct bpf_call_arg_meta *meta, u32 btf_id)
 }
 
 static int resolve_map_arg_type(struct bpf_verifier_env *env,
-				 const struct bpf_call_arg_meta *meta,
-				 enum bpf_arg_type *arg_type)
+				const struct bpf_call_arg_meta *meta,
+				enum bpf_arg_type *arg_type)
 {
 	if (!meta->map.ptr) {
 		/* kernel subsystem misconfigured verifier */
@@ -8179,6 +8179,11 @@ static int resolve_map_arg_type(struct bpf_verifier_env *env,
 	}
 	return 0;
 }
+
+static int resolve_func_arg_type(struct bpf_verifier_env *env,
+				 struct bpf_reg_state *reg, u32 arg,
+				 struct bpf_call_arg_meta *meta, int insn_idx,
+				 enum bpf_arg_type *arg_type, u32 *arg_size);
 
 struct bpf_reg_types {
 	const enum bpf_reg_type types[10];
@@ -8794,6 +8799,7 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 	int regno = reg_from_argno(argno);
 	enum bpf_reg_type type = reg->type;
 	const u32 *arg_btf_id = NULL;
+	u32 arg_size = arg_type & MEM_FIXED_SIZE ? fn->arg_size[arg] : 0;
 	u32 key_size;
 	int err = 0;
 
@@ -8823,11 +8829,9 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg,
 		return -EACCES;
 	}
 
-	if (base_type(arg_type) == ARG_PTR_TO_MAP_VALUE) {
-		err = resolve_map_arg_type(env, meta, &arg_type);
-		if (err)
-			return err;
-	}
+	err = resolve_func_arg_type(env, reg, arg, meta, insn_idx, &arg_type, &arg_size);
+	if (err)
+		return err;
 
 	if (bpf_register_is_null(reg) && type_may_be_null(arg_type))
 		/* A NULL register has a SCALAR_VALUE type, so skip
@@ -8965,12 +8969,12 @@ skip_type_check:
 		 * next is_mem_size argument below.
 		 */
 		if (arg_type & MEM_FIXED_SIZE) {
-			err = check_mem_reg(env, reg, argno, fn->arg_size[arg],
+			err = check_mem_reg(env, reg, argno, arg_size,
 					    arg_type & MEM_WRITE ? BPF_WRITE : BPF_READ, meta, NULL);
 			if (err)
 				return err;
 			if (arg_type & MEM_ALIGNED)
-				err = check_ptr_alignment(env, reg, 0, fn->arg_size[arg], true);
+				err = check_ptr_alignment(env, reg, 0, arg_size, true);
 		}
 		break;
 	case ARG_MEM_SIZE:
@@ -11814,6 +11818,65 @@ static bool btf_type_is_scalar_struct(struct bpf_verifier_env *env,
 	return btf_struct_is_composed_of(env, btf, t, BTF_MEMBER_SCALAR);
 }
 
+static int resolve_func_arg_type(struct bpf_verifier_env *env,
+				 struct bpf_reg_state *reg, u32 arg,
+				 struct bpf_call_arg_meta *meta, int insn_idx,
+				 enum bpf_arg_type *arg_type, u32 *arg_size)
+{
+	argno_t argno = argno_from_arg(arg + 1);
+	const struct btf_param *args;
+	const struct btf_type *ref_t, *resolve_ret;
+	const struct btf *btf;
+	const char *ref_tname;
+	u32 ref_id;
+
+	if (base_type(*arg_type) == ARG_PTR_TO_MAP_VALUE)
+		return resolve_map_arg_type(env, meta, arg_type);
+
+	if (base_type(*arg_type) == ARG_PTR_TO_BTF_ID) {
+		if (!meta->btf || arg_type_is_release(*arg_type) ||
+		    base_type(reg->type) == PTR_TO_BTF_ID ||
+		    reg2btf_ids[base_type(reg->type)])
+			return 0;
+
+		args = btf_params(meta->func_proto);
+		ref_id = *meta->fn->arg_btf_id[arg];
+		btf = is_kfunc_arg_map(meta->btf, &args[arg]) ? btf_vmlinux : meta->btf;
+		ref_t = btf_type_skip_modifiers(btf, ref_id, &ref_id);
+		ref_tname = btf_name_by_offset(btf, ref_t->name_off);
+
+		if (!btf_type_is_scalar_struct(env, btf, ref_t)) {
+			enum bpf_reg_type reg2btf_type = lookup_reg2btf_ids(ref_id);
+			const char *expected_type;
+
+			verbose(env, "%s is %s expected %s %s",
+				reg_arg_name(env, argno), reg_type_str(env, reg->type),
+				btf_type_str(ref_t), ref_tname);
+			if (reg2btf_type != NOT_INIT)
+				verbose(env, " or %s", reg_type_str(env, reg2btf_type));
+			verbose(env, "\n");
+			expected_type = bpf_diag_fmt_btf_type(env, btf, ref_id);
+			bpf_diag_call_arg_fmt(env, insn_idx, argno, meta->func_name,
+					      "Pass a verifier-tracked pointer to the expected kernel object type, not a pointer to stack storage or another memory buffer.",
+					      "the function expects a pointer to %s, but this argument is %s and cannot be used as that kernel object pointer",
+					      expected_type,
+					      bpf_diag_reg_type_plain(env, reg->type));
+			return -EINVAL;
+		}
+
+		resolve_ret = btf_resolve_size(btf, ref_t, arg_size);
+		if (IS_ERR(resolve_ret)) {
+			verbose(env, "%s reference type('%s %s') size cannot be determined: %ld\n",
+				reg_arg_name(env, argno), btf_type_str(ref_t), ref_tname,
+				PTR_ERR(resolve_ret));
+			return -EINVAL;
+		}
+		*arg_type = ARG_PTR_TO_MEM | MEM_FIXED_SIZE | (*arg_type & PTR_MAYBE_NULL);
+	}
+
+	return 0;
+}
+
 static void btf_member_path_str(const struct btf *btf, const struct btf_member_path *path,
 				char *buf, size_t buf_sz)
 {
@@ -12894,7 +12957,7 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 	for (i = 0; i < nargs; i++) {
 		struct bpf_reg_state *reg = get_func_arg_reg(caller, regs, i);
 		enum bpf_arg_type arg_type = meta->fn->arg_type[i];
-		const struct btf_type *t, *ref_t, *resolve_ret;
+		const struct btf_type *t, *ref_t;
 		argno_t argno = argno_from_arg(i + 1);
 		int regno = reg_from_argno(argno);
 		u32 ref_id = args[i].type;
@@ -12951,18 +13014,13 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			continue;
 
 		if (base_type(arg_type) == ARG_PTR_TO_BTF_ID) {
-			/*
-			 * gen_kfunc_arg_proto() resolved the expected BTF ID
-			 * once. A __map argument names a vmlinux type rather
-			 * than one from the kfunc's own BTF.
-			 */
+			/* gen_kfunc_arg_proto() resolved the expected BTF ID once. */
 			ref_id = *meta->fn->arg_btf_id[i];
-			if (is_kfunc_arg_map(btf, &args[i])) {
-				ref_t = btf_type_by_id(btf_vmlinux, ref_id);
-				ref_tname = btf_name_by_offset(btf, ref_t->name_off);
-			}
 		}
 
+		ret = resolve_func_arg_type(env, reg, i, meta, insn_idx, &arg_type, &arg_size);
+		if (ret < 0)
+			return ret;
 		ret = check_func_arg_reg_off(env, reg, argno, arg_type);
 		if (ret < 0)
 			return ret;
@@ -13211,80 +13269,43 @@ check_ok:
 				return ret;
 			break;
 		case ARG_PTR_TO_BTF_ID:
-			/* Only base_type is checked, further checks are done here */
-			if (base_type(reg->type) == PTR_TO_BTF_ID ||
-			    reg2btf_ids[base_type(reg->type)]) {
-				if (!is_trusted_reg(env, reg) ||
-				    bpf_type_has_unsafe_modifiers(reg->type)) {
-					if (!(arg_type & MEM_RCU)) {
-						const char *expected_type;
+			if (!is_trusted_reg(env, reg) ||
+			    bpf_type_has_unsafe_modifiers(reg->type)) {
+				if (!(arg_type & MEM_RCU)) {
+					const char *actual_type, *arg_name, *expected_type;
 
-						expected_type = bpf_diag_fmt_btf_type(env, btf, ref_id);
-						verbose(env, "%s must be referenced or trusted\n",
-							reg_arg_name(env, argno));
-						bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-								      "Pass a pointer acquired from a verifier-tracked source, or call this kfunc only inside the required protection if it accepts RCU pointers.",
-								      "the kfunc requires a trusted or resource-owning pointer to %s, but %s is %s",
-								      expected_type,
-								      reg_arg_name(env, argno),
-								      bpf_diag_reg_type_plain(env, reg->type));
-						return -EINVAL;
-					}
-					if (!is_rcu_reg(reg)) {
-						const char *expected_type;
-
-						expected_type = bpf_diag_fmt_btf_type(env, btf, ref_id);
-						verbose(env, "%s must be a rcu pointer\n",
-							reg_arg_name(env, argno));
-						bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-								      "Use this kfunc with a pointer that is valid in an RCU read lock region.",
-								      "the kfunc requires an RCU-protected pointer to %s, but %s is %s",
-								      expected_type,
-								      reg_arg_name(env, argno),
-								      bpf_diag_reg_type_plain(env, reg->type));
-						return -EINVAL;
-					}
+					expected_type = bpf_diag_fmt_btf_type(env, btf, ref_id);
+					verbose(env, "%s must be referenced or trusted\n",
+						reg_arg_name(env, argno));
+					arg_name = reg_arg_name(env, argno);
+					actual_type = bpf_diag_reg_type_plain(env, reg->type);
+					bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
+							      "Pass a pointer acquired from a verifier-tracked source, or call this kfunc only inside the required protection if it accepts RCU pointers.",
+							      "the kfunc requires a trusted or resource-owning pointer to %s, but %s is %s",
+							      expected_type, arg_name, actual_type);
+					return -EINVAL;
 				}
+				if (!is_rcu_reg(reg)) {
+					const char *actual_type, *arg_name, *expected_type;
 
-				ret = process_kf_arg_ptr_to_btf_id(env, reg, ref_t, ref_tname, ref_id, meta, i, argno);
-				if (ret < 0)
-					return ret;
-				break;
+					expected_type = bpf_diag_fmt_btf_type(env, btf, ref_id);
+					verbose(env, "%s must be a rcu pointer\n",
+						reg_arg_name(env, argno));
+					arg_name = reg_arg_name(env, argno);
+					actual_type = bpf_diag_reg_type_plain(env, reg->type);
+					bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
+							      "Use this kfunc with a pointer that is valid in an RCU read lock region.",
+							      "the kfunc requires an RCU-protected pointer to %s, but %s is %s",
+							      expected_type, arg_name, actual_type);
+					return -EINVAL;
+				}
 			}
 
-			if (!btf_type_is_scalar_struct(env, meta->btf, ref_t)) {
-				enum bpf_reg_type reg2btf_type = lookup_reg2btf_ids(ref_id);
-				const char *expected_type;
-
-				verbose(env, "%s is %s expected %s %s",
-					reg_arg_name(env, argno), reg_type_str(env, reg->type),
-					btf_type_str(ref_t), ref_tname);
-				if (reg2btf_type != NOT_INIT)
-					verbose(env, " or %s", reg_type_str(env, reg2btf_type));
-				verbose(env, "\n");
-				expected_type = bpf_diag_fmt_btf_type(env, btf, ref_id);
-				bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-						      "Pass a verifier-tracked pointer to the expected kernel object type, not a pointer to stack storage or another memory buffer.",
-						      "the kfunc expects a pointer to %s, but this argument is %s and cannot be used as that kernel object pointer",
-						      expected_type,
-						      bpf_diag_reg_type_plain(env, reg->type));
-				return -EINVAL;
-			}
-
-			/*
-			 * If the register does not contain btf id but the argument type is a pointer to
-			 * scalar-only struct, allow verifying it as a fixed size memory.
-			 */
-			resolve_ret = btf_resolve_size(btf, ref_t, &arg_size);
-			if (IS_ERR(resolve_ret)) {
-				verbose(env,
-					"%s reference type('%s %s') size cannot be determined: %ld\n",
-					reg_arg_name(env, argno), btf_type_str(ref_t),
-					ref_tname, PTR_ERR(resolve_ret));
-				return -EINVAL;
-			}
-			arg_type = ARG_PTR_TO_MEM | MEM_FIXED_SIZE;
-			fallthrough;
+			ret = process_kf_arg_ptr_to_btf_id(env, reg, ref_t, ref_tname,
+							ref_id, meta, i, argno);
+			if (ret < 0)
+				return ret;
+			break;
 		case ARG_PTR_TO_MEM:
 			if (arg_type & MEM_FIXED_SIZE) {
 				bool known_memory;
