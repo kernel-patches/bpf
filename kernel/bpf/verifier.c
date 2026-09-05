@@ -951,8 +951,12 @@ static enum bpf_dynptr_type dynptr_reg_type(struct bpf_verifier_env *env, struct
 static bool is_dynptr_type_expected(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 				    enum bpf_arg_type arg_type)
 {
-	/* ARG_PTR_TO_DYNPTR takes any type of dynptr */
-	if (arg_type == ARG_PTR_TO_DYNPTR)
+	/*
+	 * ARG_PTR_TO_DYNPTR without a type flag takes any type of dynptr.
+	 * Test the flags rather than the whole arg_type, which may carry
+	 * unrelated ones such as PTR_MAYBE_NULL.
+	 */
+	if (!(arg_type & DYNPTR_TYPE_FLAG_MASK))
 		return true;
 
 	return dynptr_reg_type(env, reg) == arg_to_dynptr_type(arg_type);
@@ -12130,9 +12134,20 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 		arg_type = ARG_PTR_TO_ALLOC_BTF_ID;
 	else if (is_kfunc_arg_refcounted_kptr(meta->btf, &args[arg]))
 		arg_type = ARG_PTR_TO_REFCOUNTED_KPTR;
-	else if (is_kfunc_arg_dynptr(meta->btf, &args[arg]))
+	else if (is_kfunc_arg_dynptr(meta->btf, &args[arg])) {
 		arg_type = ARG_PTR_TO_DYNPTR;
-	else if (is_kfunc_arg_iter(meta, arg, &args[arg]))
+
+		if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_from_skb]))
+			arg_type |= DYNPTR_TYPE_SKB;
+		else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_from_xdp]))
+			arg_type |= DYNPTR_TYPE_XDP;
+		else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_from_skb_meta]))
+			arg_type |= DYNPTR_TYPE_SKB_META;
+		else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_from_file]) ||
+			 is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_file_discard]))
+			/* OBJ_RELEASE for the latter comes from KF_RELEASE below */
+			arg_type |= DYNPTR_TYPE_FILE;
+	} else if (is_kfunc_arg_iter(meta, arg, &args[arg]))
 		arg_type = ARG_PTR_TO_ITER;
 	else if (is_kfunc_arg_list_head(meta->btf, &args[arg]))
 		arg_type = ARG_PTR_TO_LIST_HEAD;
@@ -12210,6 +12225,9 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 		}
 		arg_type = ARG_PTR_TO_MEM | MEM_FIXED_SIZE;
 	}
+
+	if (is_kfunc_arg_uninit(meta->btf, &args[arg]))
+		arg_type |= MEM_UNINIT;
 
 	if (is_kfunc_arg_nullable(meta->btf, &args[arg]))
 		arg_type |= PTR_MAYBE_NULL;
@@ -13027,23 +13045,10 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			break;
 		case ARG_PTR_TO_DYNPTR:
 		{
-			enum bpf_arg_type dynptr_arg_type = ARG_PTR_TO_DYNPTR;
+			enum bpf_arg_type dynptr_arg_type = arg_type;
 
-			if (is_kfunc_arg_uninit(btf, &args[i]))
-				dynptr_arg_type |= MEM_UNINIT;
-
-			if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_from_skb])) {
-				dynptr_arg_type |= DYNPTR_TYPE_SKB;
-			} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_from_xdp])) {
-				dynptr_arg_type |= DYNPTR_TYPE_XDP;
-			} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_from_skb_meta])) {
-				dynptr_arg_type |= DYNPTR_TYPE_SKB_META;
-			} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_from_file])) {
-				dynptr_arg_type |= DYNPTR_TYPE_FILE;
-			} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_file_discard])) {
-				dynptr_arg_type |= DYNPTR_TYPE_FILE | OBJ_RELEASE;
-			} else if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_clone]) &&
-				   (dynptr_arg_type & MEM_UNINIT)) {
+			if (is_kfunc_call(meta, special_kfunc_list[KF_bpf_dynptr_clone]) &&
+			    (dynptr_arg_type & MEM_UNINIT)) {
 				enum bpf_dynptr_type parent_type = meta->dynptr.type;
 
 				if (parent_type == BPF_DYNPTR_TYPE_INVALID) {
