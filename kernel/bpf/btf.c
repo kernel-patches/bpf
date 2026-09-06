@@ -5797,7 +5797,7 @@ static int btf_parse_hdr(struct btf_verifier_env *env)
 	return btf_check_sec_info(env, btf_data_size);
 }
 
-static const char *alloc_obj_fields[] = {
+static const char * const alloc_obj_fields[] = {
 	"bpf_spin_lock",
 	"bpf_list_head",
 	"bpf_list_node",
