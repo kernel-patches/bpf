@@ -265,11 +265,11 @@ MODULE_PARM_DESC(qlen, "depth of loopback queue");
 
 module_param_named(ss_bulk_qlen, gzero_options.ss_bulk_qlen, uint,
 		S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(bulk_qlen, "depth of sourcesink queue for bulk transfer");
+MODULE_PARM_DESC(ss_bulk_qlen, "depth of sourcesink queue for bulk transfer");
 
 module_param_named(ss_iso_qlen, gzero_options.ss_iso_qlen, uint,
 		S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(iso_qlen, "depth of sourcesink queue for iso transfer");
+MODULE_PARM_DESC(ss_iso_qlen, "depth of sourcesink queue for iso transfer");
 
 static int zero_bind(struct usb_composite_dev *cdev)
 {
