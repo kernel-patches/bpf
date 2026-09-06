@@ -1,0 +1,299 @@
+From e02818a9fbb18549bda3c73cb62f1ac528f33473 Mon Sep 17 00:00:00 2001
+From: Sechang Lim <rhkrqnwk98@gmail.com>
+Date: Tue, 30 Jun 2026 14:54:06 +0000
+Subject: [PATCH 2/2] selftests/bpf: Drop tc/xdp/flow_dissector/socket_filter
+ sockmap mutation tests
+
+tc, xdp, socket_filter and flow_dissector programs can no longer update
+or delete a sockmap. Adjust the tests:
+
+ - verifier_sockmap_mutate: the tc, xdp, socket_filter and
+   flow_dissector cases now expect __failure with "cannot update sockmap
+   in this context".
+ - sockmap_basic: drop "sockmap update" / "sockhash update", which load
+   a SEC("tc") program that copies a sock between maps.
+ - fexit_bpf2bpf: drop "func_sockmap_update", whose freplace program
+   updates a sockmap in the tc cls_redirect context.
+
+Remove the now-unused test_sockmap_update.c and freplace_cls_redirect.c.
+
+Signed-off-by: Sechang Lim <rhkrqnwk98@gmail.com>
+Signed-off-by: Daniel Borkmann <daniel@iogearbox.net>
+Reviewed-by: John Fastabend <john.fastabend@gmail.com>
+Reviewed-by: Emil Tsalapatis <emil@etsalapatis.com>
+Link: https://lore.kernel.org/bpf/20260630145410.3648099-3-rhkrqnwk98@gmail.com
+Signed-off-by: Kumar Kartikeya Dwivedi <memxor@gmail.com>
+---
+ .../selftests/bpf/prog_tests/fexit_bpf2bpf.c  | 14 -----
+ .../selftests/bpf/prog_tests/sockmap_basic.c  | 52 -------------------
+ .../bpf/progs/freplace_cls_redirect.c         | 34 ------------
+ .../selftests/bpf/progs/test_sockmap_update.c | 48 -----------------
+ .../bpf/progs/verifier_sockmap_mutate.c       | 12 ++---
+ 5 files changed, 6 insertions(+), 154 deletions(-)
+ delete mode 100644 tools/testing/selftests/bpf/progs/freplace_cls_redirect.c
+ delete mode 100644 tools/testing/selftests/bpf/progs/test_sockmap_update.c
+
+diff --git a/tools/testing/selftests/bpf/prog_tests/fexit_bpf2bpf.c b/tools/testing/selftests/bpf/prog_tests/fexit_bpf2bpf.c
+index 92c20803ea76..4a87d7163c8c 100644
+--- a/tools/testing/selftests/bpf/prog_tests/fexit_bpf2bpf.c
++++ b/tools/testing/selftests/bpf/prog_tests/fexit_bpf2bpf.c
+@@ -335,18 +335,6 @@ static void test_fmod_ret_freplace(void)
+ 	bpf_object__close(pkt_obj);
+ }
+ 
+-
+-static void test_func_sockmap_update(void)
+-{
+-	const char *prog_name[] = {
+-		"freplace/cls_redirect",
+-	};
+-	test_fexit_bpf2bpf_common("./freplace_cls_redirect.bpf.o",
+-				  "./test_cls_redirect.bpf.o",
+-				  ARRAY_SIZE(prog_name),
+-				  prog_name, false, NULL);
+-}
+-
+ static void test_func_replace_void(void)
+ {
+ 	const char *prog_name[] = {
+@@ -599,8 +587,6 @@ void serial_test_fexit_bpf2bpf(void)
+ 		test_func_replace();
+ 	if (test__start_subtest("func_replace_verify"))
+ 		test_func_replace_verify();
+-	if (test__start_subtest("func_sockmap_update"))
+-		test_func_sockmap_update();
+ 	if (test__start_subtest("func_replace_return_code"))
+ 		test_func_replace_return_code();
+ 	if (test__start_subtest("func_map_prog_compatibility"))
+diff --git a/tools/testing/selftests/bpf/prog_tests/sockmap_basic.c b/tools/testing/selftests/bpf/prog_tests/sockmap_basic.c
+index e5fc038d747b..1fef6ec2ba7a 100644
+--- a/tools/testing/selftests/bpf/prog_tests/sockmap_basic.c
++++ b/tools/testing/selftests/bpf/prog_tests/sockmap_basic.c
+@@ -7,7 +7,6 @@
+ 
+ #include "test_progs.h"
+ #include "test_skmsg_load_helpers.skel.h"
+-#include "test_sockmap_update.skel.h"
+ #include "test_sockmap_invalid_update.skel.h"
+ #include "test_sockmap_skb_verdict_attach.skel.h"
+ #include "test_sockmap_progs_query.skel.h"
+@@ -235,53 +234,6 @@ static void test_skmsg_helpers_with_link(enum bpf_map_type map_type)
+ 	test_skmsg_load_helpers__destroy(skel);
+ }
+ 
+-static void test_sockmap_update(enum bpf_map_type map_type)
+-{
+-	int err, prog, src;
+-	struct test_sockmap_update *skel;
+-	struct bpf_map *dst_map;
+-	const __u32 zero = 0;
+-	char dummy[14] = {0};
+-	LIBBPF_OPTS(bpf_test_run_opts, topts,
+-		.data_in = dummy,
+-		.data_size_in = sizeof(dummy),
+-		.repeat = 1,
+-	);
+-	__s64 sk;
+-
+-	sk = connected_socket_v4();
+-	if (!ASSERT_NEQ(sk, -1, "connected_socket_v4"))
+-		return;
+-
+-	skel = test_sockmap_update__open_and_load();
+-	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+-		goto close_sk;
+-
+-	prog = bpf_program__fd(skel->progs.copy_sock_map);
+-	src = bpf_map__fd(skel->maps.src);
+-	if (map_type == BPF_MAP_TYPE_SOCKMAP)
+-		dst_map = skel->maps.dst_sock_map;
+-	else
+-		dst_map = skel->maps.dst_sock_hash;
+-
+-	err = bpf_map_update_elem(src, &zero, &sk, BPF_NOEXIST);
+-	if (!ASSERT_OK(err, "update_elem(src)"))
+-		goto out;
+-
+-	err = bpf_prog_test_run_opts(prog, &topts);
+-	if (!ASSERT_OK(err, "test_run"))
+-		goto out;
+-	if (!ASSERT_NEQ(topts.retval, 0, "test_run retval"))
+-		goto out;
+-
+-	compare_cookies(skel->maps.src, dst_map);
+-
+-out:
+-	test_sockmap_update__destroy(skel);
+-close_sk:
+-	close(sk);
+-}
+-
+ static void test_sockmap_invalid_update(void)
+ {
+ 	struct test_sockmap_invalid_update *skel;
+@@ -1422,10 +1374,6 @@ void test_sockmap_basic(void)
+ 		test_skmsg_helpers(BPF_MAP_TYPE_SOCKMAP);
+ 	if (test__start_subtest("sockhash sk_msg load helpers"))
+ 		test_skmsg_helpers(BPF_MAP_TYPE_SOCKHASH);
+-	if (test__start_subtest("sockmap update"))
+-		test_sockmap_update(BPF_MAP_TYPE_SOCKMAP);
+-	if (test__start_subtest("sockhash update"))
+-		test_sockmap_update(BPF_MAP_TYPE_SOCKHASH);
+ 	if (test__start_subtest("sockmap update in unsafe context"))
+ 		test_sockmap_invalid_update();
+ 	if (test__start_subtest("sockmap copy"))
+diff --git a/tools/testing/selftests/bpf/progs/freplace_cls_redirect.c b/tools/testing/selftests/bpf/progs/freplace_cls_redirect.c
+deleted file mode 100644
+index 7e94412d47a5..000000000000
+--- a/tools/testing/selftests/bpf/progs/freplace_cls_redirect.c
++++ /dev/null
+@@ -1,34 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-// Copyright (c) 2020 Facebook
+-
+-#include <linux/stddef.h>
+-#include <linux/bpf.h>
+-#include <linux/pkt_cls.h>
+-#include <bpf/bpf_endian.h>
+-#include <bpf/bpf_helpers.h>
+-
+-struct {
+-	__uint(type, BPF_MAP_TYPE_SOCKMAP);
+-	__type(key, int);
+-	__type(value, int);
+-	__uint(max_entries, 2);
+-} sock_map SEC(".maps");
+-
+-SEC("freplace/cls_redirect")
+-int freplace_cls_redirect_test(struct __sk_buff *skb)
+-{
+-	int ret = 0;
+-	const int zero = 0;
+-	struct bpf_sock *sk;
+-
+-	sk = bpf_map_lookup_elem(&sock_map, &zero);
+-	if (!sk)
+-		return TC_ACT_SHOT;
+-
+-	ret = bpf_map_update_elem(&sock_map, &zero, sk, 0);
+-	bpf_sk_release(sk);
+-
+-	return ret == 0 ? TC_ACT_OK : TC_ACT_SHOT;
+-}
+-
+-char _license[] SEC("license") = "GPL";
+diff --git a/tools/testing/selftests/bpf/progs/test_sockmap_update.c b/tools/testing/selftests/bpf/progs/test_sockmap_update.c
+deleted file mode 100644
+index 6d64ea536e3d..000000000000
+--- a/tools/testing/selftests/bpf/progs/test_sockmap_update.c
++++ /dev/null
+@@ -1,48 +0,0 @@
+-// SPDX-License-Identifier: GPL-2.0
+-// Copyright (c) 2020 Cloudflare
+-#include "vmlinux.h"
+-#include <bpf/bpf_helpers.h>
+-
+-struct {
+-	__uint(type, BPF_MAP_TYPE_SOCKMAP);
+-	__uint(max_entries, 1);
+-	__type(key, __u32);
+-	__type(value, __u64);
+-} src SEC(".maps");
+-
+-struct {
+-	__uint(type, BPF_MAP_TYPE_SOCKMAP);
+-	__uint(max_entries, 1);
+-	__type(key, __u32);
+-	__type(value, __u64);
+-} dst_sock_map SEC(".maps");
+-
+-struct {
+-	__uint(type, BPF_MAP_TYPE_SOCKHASH);
+-	__uint(max_entries, 1);
+-	__type(key, __u32);
+-	__type(value, __u64);
+-} dst_sock_hash SEC(".maps");
+-
+-SEC("tc")
+-int copy_sock_map(void *ctx)
+-{
+-	struct bpf_sock *sk;
+-	bool failed = false;
+-	__u32 key = 0;
+-
+-	sk = bpf_map_lookup_elem(&src, &key);
+-	if (!sk)
+-		return SK_DROP;
+-
+-	if (bpf_map_update_elem(&dst_sock_map, &key, sk, 0))
+-		failed = true;
+-
+-	if (bpf_map_update_elem(&dst_sock_hash, &key, sk, 0))
+-		failed = true;
+-
+-	bpf_sk_release(sk);
+-	return failed ? SK_DROP : SK_PASS;
+-}
+-
+-char _license[] SEC("license") = "GPL";
+diff --git a/tools/testing/selftests/bpf/progs/verifier_sockmap_mutate.c b/tools/testing/selftests/bpf/progs/verifier_sockmap_mutate.c
+index fe4b123187b8..20332a731d4e 100644
+--- a/tools/testing/selftests/bpf/progs/verifier_sockmap_mutate.c
++++ b/tools/testing/selftests/bpf/progs/verifier_sockmap_mutate.c
+@@ -74,7 +74,7 @@ static __always_inline void test_sockmap_lookup_and_mutate(void)
+ }
+ 
+ SEC("action")
+-__success
++__failure __msg("cannot update sockmap in this context")
+ int test_sched_act(struct __sk_buff *skb)
+ {
+ 	test_sockmap_mutate(skb->sk);
+@@ -82,7 +82,7 @@ int test_sched_act(struct __sk_buff *skb)
+ }
+ 
+ SEC("classifier")
+-__success
++__failure __msg("cannot update sockmap in this context")
+ int test_sched_cls(struct __sk_buff *skb)
+ {
+ 	test_sockmap_mutate(skb->sk);
+@@ -90,7 +90,7 @@ int test_sched_cls(struct __sk_buff *skb)
+ }
+ 
+ SEC("flow_dissector")
+-__success
++__failure __msg("cannot update sockmap in this context")
+ int test_flow_dissector_delete(struct __sk_buff *skb __always_unused)
+ {
+ 	test_sockmap_delete();
+@@ -98,7 +98,7 @@ int test_flow_dissector_delete(struct __sk_buff *skb __always_unused)
+ }
+ 
+ SEC("flow_dissector")
+-__failure __msg("program of this type cannot use helper bpf_sk_release")
++__failure __msg("cannot update sockmap in this context")
+ int test_flow_dissector_update(struct __sk_buff *skb __always_unused)
+ {
+ 	test_sockmap_lookup_and_update(); /* no access to skb->sk */
+@@ -146,7 +146,7 @@ int test_sk_reuseport(struct sk_reuseport_md *ctx)
+ }
+ 
+ SEC("socket")
+-__success
++__failure __msg("cannot update sockmap in this context")
+ int test_socket_filter(struct __sk_buff *skb)
+ {
+ 	test_sockmap_mutate(skb->sk);
+@@ -179,7 +179,7 @@ int test_sockops_update_dedicated(struct bpf_sock_ops *ctx)
+ }
+ 
+ SEC("xdp")
+-__success
++__failure __msg("cannot update sockmap in this context")
+ int test_xdp(struct xdp_md *ctx __always_unused)
+ {
+ 	test_sockmap_lookup_and_mutate();
+-- 
+2.55.0
+
