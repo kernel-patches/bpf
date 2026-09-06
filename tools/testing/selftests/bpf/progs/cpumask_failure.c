@@ -45,12 +45,14 @@ int BPF_PROG(test_alloc_no_release, struct task_struct *task, u64 clone_flags)
 }
 
 SEC("tp_btf/task_newtask")
-__failure __msg("NULL pointer passed to trusted R1")
+__failure __msg("release kfunc bpf_cpumask_release expects referenced PTR_TO_BTF_ID passed to R1")
 int BPF_PROG(test_alloc_double_release, struct task_struct *task, u64 clone_flags)
 {
 	struct bpf_cpumask *cpumask;
 
 	cpumask = create_cpumask();
+	if (!cpumask)
+		return 0;
 
 	/* cpumask is released twice. */
 	bpf_cpumask_release(cpumask);
