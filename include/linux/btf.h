@@ -329,6 +329,21 @@ static inline u64 btf_enum64_value(const struct btf_enum64 *e)
 	return ((u64)e->val_hi32 << 32) | e->val_lo32;
 }
 
+static inline struct btf_loc_param *btf_loc_param(const struct btf_type *t)
+{
+	return (struct btf_loc_param *)(t + 1);
+}
+
+static inline __u32 *btf_loc_params(const struct btf_type *t)
+{
+	return (__u32 *)(t + 1);
+}
+
+static inline struct btf_loc *btf_type_loc_secinfo(const struct btf_type *t)
+{
+	return (struct btf_loc *)(t + 1);
+}
+
 static inline bool btf_is_composite(const struct btf_type *t)
 {
 	u16 kind = btf_kind(t);
@@ -559,7 +574,7 @@ struct btf_field_desc {
 	/* member struct size, or zero, if no members */
 	int m_sz;
 	/* repeated per-member offsets */
-	int m_off_cnt, m_offs[1];
+	int m_off_cnt, m_offs[2];
 };
 
 struct btf_field_iter {
@@ -573,7 +588,8 @@ struct btf_field_iter {
 #ifdef CONFIG_BPF_SYSCALL
 const struct btf_type *btf_type_by_id(const struct btf *btf, u32 type_id);
 void btf_set_base_btf(struct btf *btf, const struct btf *base_btf);
-int btf_relocate(struct btf *btf, const struct btf *base_btf, __u32 **map_ids);
+int btf_relocate(struct btf *btf, const struct btf *base_btf, __u32 **map_ids,
+		 __u32 **map_strs);
 int btf_field_iter_init(struct btf_field_iter *it, struct btf_type *t,
 			enum btf_field_iter_kind iter_kind);
 __u32 *btf_field_iter_next(struct btf_field_iter *it);
@@ -602,6 +618,7 @@ int get_kern_ctx_btf_id(struct bpf_verifier_log *log, enum bpf_prog_type prog_ty
 bool btf_types_are_same(const struct btf *btf1, u32 id1,
 			const struct btf *btf2, u32 id2);
 int btf_check_iter_arg(struct btf *btf, const struct btf_type *func, int arg_idx);
+struct bin_attribute *sysfs_btf_add(const char *name, void *data, size_t data_size);
 
 static inline bool btf_type_is_struct_ptr(struct btf *btf, const struct btf_type *t)
 {
@@ -624,7 +641,7 @@ static inline void btf_set_base_btf(struct btf *btf, const struct btf *base_btf)
 }
 
 static inline int btf_relocate(void *log, struct btf *btf, const struct btf *base_btf,
-			       __u32 **map_ids)
+			       __u32 **map_ids, __u32 **map_strs)
 {
 	return -EOPNOTSUPP;
 }
