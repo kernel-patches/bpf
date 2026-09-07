@@ -76,7 +76,7 @@
  * @ingroup MRQ_Format
  *
  * Request an answer from the peer.
- * This should be set in mrq_request::flags for all requests targetted
+ * This should be set in mrq_request::flags for all requests targeted
  * at BPMP. For requests originating in BPMP, this flag is optional except
  * for messages targeting MCE, for which the field must be set.
  * When this flag is not set, the remote peer must not send a response
@@ -2728,7 +2728,7 @@ struct mrq_abi_ratchet_request {
  * @brief Response to #MRQ_ABI_RATCHET
  *
  * #ratchet shall be #BPMP_ABI_RATCHET_VALUE from the ABI header
- * against which BPMP firwmare was compiled.
+ * against which BPMP firmware was compiled.
  *
  * If #ratchet is less than the requester's #BPMP_ABI_RATCHET_VALUE,
  * the requster must either interoperate with BPMP according to an ABI
