@@ -11,7 +11,7 @@ various platforms, for example when a test bot has reported an issue which
 requires a specific version of a compiler or an external test suite.  While
 this can already be done by users who are familiar with containers, having a
 dedicated tool in the kernel tree lowers the barrier to entry by solving common
-problems once and for all (e.g. user id management).  It also makes it easier
+problems once and for all (e.g. user ID management).  It also makes it easier
 to share an exact command line leading to a particular result.  The main use
 case is likely to be kernel builds but virtually anything can be run: KUnit,
 checkpatch etc. provided a suitable image is available.
@@ -37,7 +37,7 @@ Available options:
 
 ``-g, --gid GID``
 
-    Group id to use inside the container.
+    Group ID to use inside the container.
 
 ``-i, --image IMAGE``
 
@@ -61,10 +61,10 @@ Available options:
 
 ``-u, --uid UID``
 
-    User id to use inside the container.
+    User ID to use inside the container.
 
-    If the ``-g`` option is not specified and no group id is defined in the
-    configuration file, the user id will also be set as the group id.
+    If the ``-g`` option is not specified and no group ID is defined in the
+    configuration file, the user ID will also be set as the group ID.
 
 ``-v, --verbose``
 
@@ -81,7 +81,7 @@ Usage
 It's entirely up to the user to choose which image to use and the ``CMD``
 arguments are passed directly as an arbitrary command line to run in the
 container.  The tool will take care of mounting the source tree as the current
-working directory and adjust the user and group id as needed.
+working directory and adjust the user and group ID as needed.
 
 The container image which would typically include a compiler toolchain is
 provided by the user and selected via the ``-i`` option.  The container runtime
@@ -145,22 +145,22 @@ User IDs
 
 This is an area where the behaviour will vary slightly depending on the
 container runtime.  The goal is to run commands as the user invoking the tool.
-With Podman, a namespace is created to map the current user id to a different
+With Podman, a namespace is created to map the current user ID to a different
 one in the container (1000 by default).  With Docker, while this is also
 possible with recent versions it requires a special feature to be enabled in
 the daemon so it's not used here for simplicity.  Instead, the container is run
-with the current user id directly.  In both cases, this will provide the same
+with the current user ID directly.  In both cases, this will provide the same
 file permissions for the kernel source tree mounted as a volume.  The only
-difference is that when using Docker without a namespace, the user id may not
+difference is that when using Docker without a namespace, the user ID may not
 be the same as the default one set in the image.
 
-Say, we're using an image which sets up a default user with id 1000 and the
-current user calling the ``container`` tool has id 1234.  The kernel source
+Say, we're using an image which sets up a default user with ID 1000 and the
+current user calling the ``container`` tool has ID 1234.  The kernel source
 tree was checked out by this same user so the files belong to user 1234.  With
-Podman, the container will be running as user id 1000 with a mapping to id 1234
-so that the files from the mounted volume appear to belong to id 1000 inside
+Podman, the container will be running as user ID 1000 with a mapping to ID 1234
+so that the files from the mounted volume appear to belong to ID 1000 inside
 the container.  With Docker and no namespace, the container will be running
-with user id 1234 which can access the files in the volume but not in the user
+with user ID 1234 which can access the files in the volume but not in the user
 1000 home directory.  This shouldn't be an issue when running commands only in
 the kernel tree but it is worth highlighting here as it might matter for
 special corner cases.
@@ -280,7 +280,7 @@ Supported options in each section are:
 
 ``uid`` / ``gid`` (integers)
 
-    User and group id numbers to use inside the container, equivalents to the
+    User and group ID numbers to use inside the container, equivalents to the
     ``-u`` and ``-g`` command line options respectively.
 
 
