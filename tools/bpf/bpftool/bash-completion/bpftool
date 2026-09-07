@@ -718,6 +718,10 @@ _bpftool()
                     esac
                     ;;
                 create)
+                    # Keep a flags list together if readline splits at commas.
+                    if [[ $COMP_WORDBREAKS == *,* && ( $cur == , || $prev == , ) ]]; then
+                        _get_comp_words_by_ref -n , cur prev
+                    fi
                     case $prev in
                         $command)
                             _filedir
@@ -729,7 +733,27 @@ _bpftool()
                             COMPREPLY=( $( compgen -W "$BPFTOOL_MAP_CREATE_TYPES" -- "$cur" ) )
                             return 0
                             ;;
-                        key|value|flags|entries)
+                        flags)
+                            compopt -o nospace
+                            local flags='BPF_F_NO_PREALLOC BPF_F_NO_COMMON_LRU
+                                BPF_F_NUMA_NODE BPF_F_RDONLY BPF_F_WRONLY
+                                BPF_F_STACK_BUILD_ID BPF_F_ZERO_SEED
+                                BPF_F_RDONLY_PROG BPF_F_WRONLY_PROG BPF_F_CLONE
+                                BPF_F_MMAPABLE BPF_F_PRESERVE_ELEMS BPF_F_INNER_MAP
+                                BPF_F_LINK BPF_F_VTYPE_BTF_OBJ_FD BPF_F_TOKEN_FD
+                                BPF_F_SEGV_ON_FAULT BPF_F_NO_USER_CONV
+                                BPF_F_RB_OVERWRITE'
+                            local prefix= flag
+                            # Readline replaces only the suffix after a word break.
+                            if [[ $cur == *,* && $COMP_WORDBREAKS != *,* ]]; then
+                                prefix="${cur%,*},"
+                            fi
+                            for flag in $(compgen -W "$flags" -- "${cur##*,}"); do
+                                COMPREPLY+=( "${prefix}${flag}" )
+                            done
+                            return 0
+                            ;;
+                        key|value|entries)
                             return 0
                             ;;
                         inner_map)
