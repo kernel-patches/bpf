@@ -89,12 +89,12 @@ static const struct drm_encoder_funcs amdgpu_dm_encoder_funcs = {
 	.destroy = amdgpu_dm_encoder_destroy,
 };
 
-STATIC_IFN_KUNIT void dm_encoder_helper_disable(struct drm_encoder *encoder)
+VISIBLE_IF_KUNIT void dm_encoder_helper_disable(struct drm_encoder *encoder)
 {
 }
 EXPORT_IF_KUNIT(dm_encoder_helper_disable);
 
-STATIC_IFN_KUNIT int dm_encoder_helper_atomic_check(struct drm_encoder *encoder,
+VISIBLE_IF_KUNIT int dm_encoder_helper_atomic_check(struct drm_encoder *encoder,
 					  struct drm_crtc_state *crtc_state,
 					  struct drm_connector_state *conn_state)
 {
@@ -217,7 +217,7 @@ int amdgpu_dm_encoder_init(struct drm_device *dev,
 }
 EXPORT_IF_KUNIT(amdgpu_dm_encoder_init);
 
-STATIC_IFN_KUNIT enum drm_mode_subconnector get_subconnector_type(struct dc_link *link)
+VISIBLE_IF_KUNIT enum drm_mode_subconnector get_subconnector_type(struct dc_link *link)
 {
 	switch (link->dpcd_caps.dongle_type) {
 	case DISPLAY_DONGLE_NONE:
@@ -237,7 +237,7 @@ STATIC_IFN_KUNIT enum drm_mode_subconnector get_subconnector_type(struct dc_link
 }
 EXPORT_IF_KUNIT(get_subconnector_type);
 
-STATIC_IFN_KUNIT void update_subconnector_property(struct amdgpu_dm_connector *aconnector)
+VISIBLE_IF_KUNIT void update_subconnector_property(struct amdgpu_dm_connector *aconnector)
 {
 	struct dc_link *link = aconnector->dc_link;
 	struct drm_connector *connector = &aconnector->base;
@@ -255,9 +255,9 @@ STATIC_IFN_KUNIT void update_subconnector_property(struct amdgpu_dm_connector *a
 }
 EXPORT_IF_KUNIT(update_subconnector_property);
 
-STATIC_IFN_KUNIT int amdgpu_dm_connector_get_modes(struct drm_connector *connector);
+VISIBLE_IF_KUNIT int amdgpu_dm_connector_get_modes(struct drm_connector *connector);
 
-STATIC_IFN_KUNIT void amdgpu_dm_fbc_init(struct drm_connector *connector)
+VISIBLE_IF_KUNIT void amdgpu_dm_fbc_init(struct drm_connector *connector)
 {
 	struct amdgpu_device *adev = drm_to_adev(connector->dev);
 	struct dm_compressor_info *compressor = &adev->dm.compressor;
@@ -335,7 +335,7 @@ int amdgpu_dm_detect_mst_link_for_all_connectors(struct drm_device *dev)
 }
 EXPORT_IF_KUNIT(amdgpu_dm_detect_mst_link_for_all_connectors);
 
-STATIC_IFN_KUNIT void hdmi_cec_unset_edid(struct amdgpu_dm_connector *aconnector)
+VISIBLE_IF_KUNIT void hdmi_cec_unset_edid(struct amdgpu_dm_connector *aconnector)
 {
 	struct cec_notifier *n = aconnector->notifier;
 
@@ -401,7 +401,7 @@ amdgpu_dm_find_first_crtc_matching_connector(struct drm_atomic_commit *state,
 }
 EXPORT_IF_KUNIT(amdgpu_dm_find_first_crtc_matching_connector);
 
-STATIC_IFN_KUNIT void amdgpu_dm_set_panel_type(struct amdgpu_dm_connector *aconnector)
+VISIBLE_IF_KUNIT void amdgpu_dm_set_panel_type(struct amdgpu_dm_connector *aconnector)
 {
 	struct drm_connector *connector = &aconnector->base;
 	struct drm_display_info *display_info = &connector->display_info;
@@ -470,7 +470,7 @@ STATIC_IFN_KUNIT void amdgpu_dm_set_panel_type(struct amdgpu_dm_connector *aconn
 }
 EXPORT_IF_KUNIT(amdgpu_dm_set_panel_type);
 
-STATIC_IFN_KUNIT void amdgpu_dm_update_cacp_caps(struct amdgpu_dm_connector *aconnector)
+VISIBLE_IF_KUNIT void amdgpu_dm_update_cacp_caps(struct amdgpu_dm_connector *aconnector)
 {
 	struct amdgpu_device *adev = drm_to_adev(aconnector->base.dev);
 	struct dc_link *link = aconnector->dc_link;
@@ -725,7 +725,7 @@ amdgpu_dm_convert_color_depth_from_display_info(const struct drm_connector *conn
 }
 EXPORT_IF_KUNIT(amdgpu_dm_convert_color_depth_from_display_info);
 
-STATIC_IFN_KUNIT enum dc_aspect_ratio
+VISIBLE_IF_KUNIT enum dc_aspect_ratio
 get_aspect_ratio(const struct drm_display_mode *mode_in)
 {
 	/* 1-1 mapping, since both enums follow the HDMI spec. */
@@ -797,7 +797,7 @@ amdgpu_dm_get_output_color_space(const struct dc_crtc_timing *dc_crtc_timing,
 }
 EXPORT_IF_KUNIT(amdgpu_dm_get_output_color_space);
 
-STATIC_IFN_KUNIT enum display_content_type
+VISIBLE_IF_KUNIT enum display_content_type
 get_output_content_type(const struct drm_connector_state *connector_state)
 {
 	switch (connector_state->content_type) {
@@ -816,7 +816,7 @@ get_output_content_type(const struct drm_connector_state *connector_state)
 }
 EXPORT_IF_KUNIT(get_output_content_type);
 
-STATIC_IFN_KUNIT bool adjust_colour_depth_from_display_info(
+VISIBLE_IF_KUNIT bool adjust_colour_depth_from_display_info(
 	struct dc_crtc_timing *timing_out,
 	const struct drm_display_info *info)
 {
@@ -854,7 +854,7 @@ STATIC_IFN_KUNIT bool adjust_colour_depth_from_display_info(
 }
 EXPORT_IF_KUNIT(adjust_colour_depth_from_display_info);
 
-STATIC_IFN_KUNIT void fill_stream_properties_from_drm_display_mode(
+VISIBLE_IF_KUNIT void fill_stream_properties_from_drm_display_mode(
 	struct dc_stream_state *stream,
 	const struct drm_display_mode *mode_in,
 	const struct drm_connector *connector,
@@ -969,7 +969,7 @@ STATIC_IFN_KUNIT void fill_stream_properties_from_drm_display_mode(
 }
 EXPORT_IF_KUNIT(fill_stream_properties_from_drm_display_mode);
 
-STATIC_IFN_KUNIT void
+VISIBLE_IF_KUNIT void
 copy_crtc_timing_for_drm_display_mode(const struct drm_display_mode *src_mode,
 				      struct drm_display_mode *dst_mode)
 {
@@ -990,7 +990,7 @@ copy_crtc_timing_for_drm_display_mode(const struct drm_display_mode *src_mode,
 }
 EXPORT_IF_KUNIT(copy_crtc_timing_for_drm_display_mode);
 
-STATIC_IFN_KUNIT void
+VISIBLE_IF_KUNIT void
 decide_crtc_timing_for_drm_display_mode(struct drm_display_mode *drm_mode,
 					const struct drm_display_mode *native_mode,
 					bool scale_enabled)
@@ -1430,7 +1430,7 @@ void amdgpu_dm_update_stream_scaling_settings(struct drm_device *dev,
 }
 EXPORT_IF_KUNIT(amdgpu_dm_update_stream_scaling_settings);
 
-STATIC_IFN_KUNIT struct dc_stream_state *
+VISIBLE_IF_KUNIT struct dc_stream_state *
 create_stream_for_sink(struct drm_connector *connector,
 		       const struct drm_display_mode *drm_mode,
 		       const struct dm_connector_state *dm_state,
@@ -1632,7 +1632,7 @@ EXPORT_IF_KUNIT(create_stream_for_sink);
  *
  * Return: The probed connector status (connected/disconnected/unknown).
  */
-STATIC_IFN_KUNIT enum drm_connector_status
+VISIBLE_IF_KUNIT enum drm_connector_status
 amdgpu_dm_connector_poll(struct amdgpu_dm_connector *aconnector, bool force)
 {
 	struct drm_connector *connector = &aconnector->base;
@@ -1741,7 +1741,7 @@ static bool amdgpu_dm_hide_secondary_tile_from_userspace(struct drm_connector *c
  * Return: The connector status (connected, disconnected, or unknown).
  *
  */
-STATIC_IFN_KUNIT enum drm_connector_status
+VISIBLE_IF_KUNIT enum drm_connector_status
 amdgpu_dm_connector_detect(struct drm_connector *connector, bool force)
 {
 	struct amdgpu_dm_connector *aconnector = to_amdgpu_dm_connector(connector);
@@ -1887,7 +1887,7 @@ int amdgpu_dm_connector_atomic_get_property(struct drm_connector *connector,
 }
 EXPORT_IF_KUNIT(amdgpu_dm_connector_atomic_get_property);
 
-STATIC_IFN_KUNIT void amdgpu_dm_connector_unregister(struct drm_connector *connector)
+VISIBLE_IF_KUNIT void amdgpu_dm_connector_unregister(struct drm_connector *connector)
 {
 	struct amdgpu_dm_connector *amdgpu_dm_connector = to_amdgpu_dm_connector(connector);
 
@@ -1899,7 +1899,7 @@ STATIC_IFN_KUNIT void amdgpu_dm_connector_unregister(struct drm_connector *conne
 }
 EXPORT_IF_KUNIT(amdgpu_dm_connector_unregister);
 
-STATIC_IFN_KUNIT void amdgpu_dm_connector_destroy(struct drm_connector *connector)
+VISIBLE_IF_KUNIT void amdgpu_dm_connector_destroy(struct drm_connector *connector)
 {
 	struct amdgpu_dm_connector *aconnector = to_amdgpu_dm_connector(connector);
 	struct amdgpu_device *adev = drm_to_adev(connector->dev);
@@ -2002,7 +2002,7 @@ amdgpu_dm_connector_atomic_duplicate_state(struct drm_connector *connector)
 }
 EXPORT_IF_KUNIT(amdgpu_dm_connector_atomic_duplicate_state);
 
-STATIC_IFN_KUNIT int
+VISIBLE_IF_KUNIT int
 amdgpu_dm_connector_late_register(struct drm_connector *connector)
 {
 	struct amdgpu_dm_connector *amdgpu_dm_connector =
@@ -2034,7 +2034,7 @@ amdgpu_dm_connector_late_register(struct drm_connector *connector)
 }
 EXPORT_IF_KUNIT(amdgpu_dm_connector_late_register);
 
-STATIC_IFN_KUNIT void amdgpu_dm_connector_funcs_force(struct drm_connector *connector)
+VISIBLE_IF_KUNIT void amdgpu_dm_connector_funcs_force(struct drm_connector *connector)
 {
 	struct amdgpu_dm_connector *aconnector = to_amdgpu_dm_connector(connector);
 	struct dc_link *dc_link = aconnector->dc_link;
@@ -2091,7 +2091,7 @@ static int get_modes(struct drm_connector *connector)
 	return amdgpu_dm_connector_get_modes(connector);
 }
 
-STATIC_IFN_KUNIT void create_eml_sink(struct amdgpu_dm_connector *aconnector)
+VISIBLE_IF_KUNIT void create_eml_sink(struct amdgpu_dm_connector *aconnector)
 {
 	struct drm_connector *connector = &aconnector->base;
 	struct dc_link *dc_link = aconnector->dc_link;
@@ -2138,7 +2138,7 @@ STATIC_IFN_KUNIT void create_eml_sink(struct amdgpu_dm_connector *aconnector)
 }
 EXPORT_IF_KUNIT(create_eml_sink);
 
-STATIC_IFN_KUNIT void handle_edid_mgmt(struct amdgpu_dm_connector *aconnector)
+VISIBLE_IF_KUNIT void handle_edid_mgmt(struct amdgpu_dm_connector *aconnector)
 {
 	struct dc_link *link = (struct dc_link *)aconnector->dc_link;
 
@@ -2155,7 +2155,7 @@ STATIC_IFN_KUNIT void handle_edid_mgmt(struct amdgpu_dm_connector *aconnector)
 }
 EXPORT_IF_KUNIT(handle_edid_mgmt);
 
-STATIC_IFN_KUNIT enum dc_status dm_validate_stream_and_context(struct dc *dc,
+VISIBLE_IF_KUNIT enum dc_status dm_validate_stream_and_context(struct dc *dc,
 						struct dc_stream_state *stream)
 {
 	enum dc_status dc_result = DC_ERROR_UNEXPECTED;
@@ -2585,7 +2585,7 @@ int amdgpu_dm_fill_hdr_info_packet(const struct drm_connector_state *state,
 }
 EXPORT_IF_KUNIT(amdgpu_dm_fill_hdr_info_packet);
 
-STATIC_IFN_KUNIT int
+VISIBLE_IF_KUNIT int
 amdgpu_dm_connector_atomic_check(struct drm_connector *conn,
 				 struct drm_atomic_commit *state)
 {
@@ -2703,7 +2703,7 @@ int amdgpu_dm_convert_dc_color_depth_into_bpc(enum dc_color_depth display_color_
 }
 EXPORT_IF_KUNIT(amdgpu_dm_convert_dc_color_depth_into_bpc);
 
-STATIC_IFN_KUNIT int to_drm_connector_type(enum signal_type st, uint32_t connector_id)
+VISIBLE_IF_KUNIT int to_drm_connector_type(enum signal_type st, uint32_t connector_id)
 {
 	switch (st) {
 	case SIGNAL_TYPE_HDMI_TYPE_A:
@@ -2739,7 +2739,7 @@ STATIC_IFN_KUNIT int to_drm_connector_type(enum signal_type st, uint32_t connect
 }
 EXPORT_IF_KUNIT(to_drm_connector_type);
 
-STATIC_IFN_KUNIT struct drm_encoder *amdgpu_dm_connector_to_encoder(struct drm_connector *connector)
+VISIBLE_IF_KUNIT struct drm_encoder *amdgpu_dm_connector_to_encoder(struct drm_connector *connector)
 {
 	struct drm_encoder *encoder;
 
@@ -2751,7 +2751,7 @@ STATIC_IFN_KUNIT struct drm_encoder *amdgpu_dm_connector_to_encoder(struct drm_c
 }
 EXPORT_IF_KUNIT(amdgpu_dm_connector_to_encoder);
 
-STATIC_IFN_KUNIT void amdgpu_dm_get_native_mode(struct drm_connector *connector)
+VISIBLE_IF_KUNIT void amdgpu_dm_get_native_mode(struct drm_connector *connector)
 {
 	struct drm_encoder *encoder;
 	struct amdgpu_encoder *amdgpu_encoder;
@@ -2781,7 +2781,7 @@ STATIC_IFN_KUNIT void amdgpu_dm_get_native_mode(struct drm_connector *connector)
 }
 EXPORT_IF_KUNIT(amdgpu_dm_get_native_mode);
 
-STATIC_IFN_KUNIT struct drm_display_mode *
+VISIBLE_IF_KUNIT struct drm_display_mode *
 amdgpu_dm_create_common_mode(struct drm_encoder *encoder,
 			     const char *name,
 			     int hdisplay, int vdisplay)
@@ -2824,7 +2824,7 @@ static const struct amdgpu_dm_mode_size {
 	{"1920x1200", 1920, 1200}
 };
 
-STATIC_IFN_KUNIT void amdgpu_dm_connector_add_common_modes(struct drm_encoder *encoder,
+VISIBLE_IF_KUNIT void amdgpu_dm_connector_add_common_modes(struct drm_encoder *encoder,
 						 struct drm_connector *connector)
 {
 	struct amdgpu_encoder *amdgpu_encoder = to_amdgpu_encoder(encoder);
@@ -2912,7 +2912,7 @@ EXPORT_IF_KUNIT(amdgpu_set_panel_orientation);
  * per-tile timing from the primary connector so compositors only pick the full
  * 5K mode.
  */
-STATIC_IFN_KUNIT void amdgpu_dm_prune_primary_tile_modes(struct drm_connector *connector)
+VISIBLE_IF_KUNIT void amdgpu_dm_prune_primary_tile_modes(struct drm_connector *connector)
 {
 	struct amdgpu_dm_connector *aconnector = to_amdgpu_dm_connector(connector);
 	struct drm_display_mode *mode, *t;
@@ -2947,7 +2947,7 @@ STATIC_IFN_KUNIT void amdgpu_dm_prune_primary_tile_modes(struct drm_connector *c
 }
 EXPORT_IF_KUNIT(amdgpu_dm_prune_primary_tile_modes);
 
-STATIC_IFN_KUNIT void amdgpu_dm_connector_ddc_get_modes(struct drm_connector *connector,
+VISIBLE_IF_KUNIT void amdgpu_dm_connector_ddc_get_modes(struct drm_connector *connector,
 					      const struct drm_edid *drm_edid)
 {
 	struct amdgpu_dm_connector *amdgpu_dm_connector =
@@ -2983,7 +2983,7 @@ STATIC_IFN_KUNIT void amdgpu_dm_connector_ddc_get_modes(struct drm_connector *co
 }
 EXPORT_IF_KUNIT(amdgpu_dm_connector_ddc_get_modes);
 
-STATIC_IFN_KUNIT bool is_duplicate_mode(struct amdgpu_dm_connector *aconnector,
+VISIBLE_IF_KUNIT bool is_duplicate_mode(struct amdgpu_dm_connector *aconnector,
 			      struct drm_display_mode *mode)
 {
 	struct drm_display_mode *m;
@@ -2997,7 +2997,7 @@ STATIC_IFN_KUNIT bool is_duplicate_mode(struct amdgpu_dm_connector *aconnector,
 }
 EXPORT_IF_KUNIT(is_duplicate_mode);
 
-STATIC_IFN_KUNIT uint add_fs_modes(struct amdgpu_dm_connector *aconnector)
+VISIBLE_IF_KUNIT uint add_fs_modes(struct amdgpu_dm_connector *aconnector)
 {
 	const struct drm_display_mode *m;
 	struct drm_display_mode *new_mode;
@@ -3074,7 +3074,7 @@ STATIC_IFN_KUNIT uint add_fs_modes(struct amdgpu_dm_connector *aconnector)
 }
 EXPORT_IF_KUNIT(add_fs_modes);
 
-STATIC_IFN_KUNIT void amdgpu_dm_connector_add_freesync_modes(struct drm_connector *connector,
+VISIBLE_IF_KUNIT void amdgpu_dm_connector_add_freesync_modes(struct drm_connector *connector,
 						   const struct drm_edid *drm_edid)
 {
 	struct amdgpu_dm_connector *amdgpu_dm_connector =
@@ -3099,7 +3099,7 @@ STATIC_IFN_KUNIT void amdgpu_dm_connector_add_freesync_modes(struct drm_connecto
 }
 EXPORT_IF_KUNIT(amdgpu_dm_connector_add_freesync_modes);
 
-STATIC_IFN_KUNIT int amdgpu_dm_connector_get_modes(struct drm_connector *connector)
+VISIBLE_IF_KUNIT int amdgpu_dm_connector_get_modes(struct drm_connector *connector)
 {
 	struct amdgpu_dm_connector *amdgpu_dm_connector =
 			to_amdgpu_dm_connector(connector);
@@ -3333,7 +3333,7 @@ void amdgpu_dm_connector_init_helper(struct amdgpu_display_manager *dm,
 }
 EXPORT_IF_KUNIT(amdgpu_dm_connector_init_helper);
 
-STATIC_IFN_KUNIT int amdgpu_dm_i2c_xfer(struct i2c_adapter *i2c_adap,
+VISIBLE_IF_KUNIT int amdgpu_dm_i2c_xfer(struct i2c_adapter *i2c_adap,
 			      struct i2c_msg *msgs, int num)
 {
 	struct amdgpu_i2c_adapter *i2c = i2c_get_adapdata(i2c_adap);
@@ -3379,7 +3379,7 @@ STATIC_IFN_KUNIT int amdgpu_dm_i2c_xfer(struct i2c_adapter *i2c_adap,
 }
 EXPORT_IF_KUNIT(amdgpu_dm_i2c_xfer);
 
-STATIC_IFN_KUNIT u32 amdgpu_dm_i2c_func(struct i2c_adapter *adap)
+VISIBLE_IF_KUNIT u32 amdgpu_dm_i2c_func(struct i2c_adapter *adap)
 {
 	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL;
 }
@@ -3516,7 +3516,7 @@ out_free:
 }
 EXPORT_IF_KUNIT(amdgpu_dm_connector_init);
 
-STATIC_IFN_KUNIT int dm_force_atomic_commit(struct drm_connector *connector)
+VISIBLE_IF_KUNIT int dm_force_atomic_commit(struct drm_connector *connector)
 {
 	int ret = 0;
 	struct drm_device *ddev = connector->dev;
@@ -3616,7 +3616,7 @@ void dm_restore_drm_connector_state(struct drm_device *dev,
 }
 EXPORT_IF_KUNIT(dm_restore_drm_connector_state);
 
-STATIC_IFN_KUNIT void parse_edid_displayid_vrr(struct drm_connector *connector,
+VISIBLE_IF_KUNIT void parse_edid_displayid_vrr(struct drm_connector *connector,
 				     const struct edid *edid)
 {
 	u8 *edid_ext = NULL;
@@ -3660,7 +3660,7 @@ STATIC_IFN_KUNIT void parse_edid_displayid_vrr(struct drm_connector *connector,
 }
 EXPORT_IF_KUNIT(parse_edid_displayid_vrr);
 
-STATIC_IFN_KUNIT int get_amd_vsdb(struct amdgpu_dm_connector *aconnector,
+VISIBLE_IF_KUNIT int get_amd_vsdb(struct amdgpu_dm_connector *aconnector,
 			struct amdgpu_hdmi_vsdb_info *vsdb_info)
 {
 	struct drm_connector *connector = &aconnector->base;
