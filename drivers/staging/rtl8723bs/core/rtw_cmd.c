@@ -252,12 +252,10 @@ static int _rtw_enqueue_cmd(struct __queue *queue, struct cmd_obj *obj)
 	if (!obj)
 		return 0;
 
-	/* spin_lock_bh(&queue->lock); */
 	spin_lock_irqsave(&queue->lock, irqL);
 
 	list_add_tail(&obj->list, &queue->queue);
 
-	/* spin_unlock_bh(&queue->lock); */
 	spin_unlock_irqrestore(&queue->lock, irqL);
 
 	return 0;
@@ -268,7 +266,6 @@ struct	cmd_obj	*_rtw_dequeue_cmd(struct __queue *queue)
 	unsigned long irqL;
 	struct cmd_obj *obj;
 
-	/* spin_lock_bh(&(queue->lock)); */
 	spin_lock_irqsave(&queue->lock, irqL);
 	if (list_empty(&queue->queue)) {
 		obj = NULL;
@@ -277,7 +274,6 @@ struct	cmd_obj	*_rtw_dequeue_cmd(struct __queue *queue)
 		list_del_init(&obj->list);
 	}
 
-	/* spin_unlock_bh(&(queue->lock)); */
 	spin_unlock_irqrestore(&queue->lock, irqL);
 
 	return obj;
@@ -546,7 +542,6 @@ u8 rtw_sitesurvey_cmd(struct adapter  *padapter, struct ndis_802_11_ssid *ssid, 
 
 	init_h2fwcmd_w_parm_no_rsp(ph2c, survey_para, SITE_SURVEY_CMD);
 
-	/* psurveyPara->bsslimit = 48; */
 	survey_para->scan_mode = pmlmepriv->scan_mode;
 
 	/* prepare ssid list */
@@ -588,7 +583,6 @@ u8 rtw_sitesurvey_cmd(struct adapter  *padapter, struct ndis_802_11_ssid *ssid, 
 
 void rtw_getbbrfreg_cmdrsp_callback(struct adapter *padapter,  struct cmd_obj *pcmd)
 {
-	/* rtw_free_cmd_obj(pcmd); */
 	kfree(pcmd->parmbuf);
 	kfree(pcmd);
 }
@@ -1000,7 +994,6 @@ u8 rtw_addbareq_cmd(struct adapter *padapter, u8 tid, u8 *addr)
 
 	init_h2fwcmd_w_parm_no_rsp(ph2c, paddbareq_parm, ADD_BA_REQ_CMD);
 
-	/* rtw_enqueue_cmd(pcmdpriv, ph2c); */
 	res = rtw_enqueue_cmd(pcmdpriv, ph2c);
 
 exit:
@@ -1034,7 +1027,6 @@ u8 rtw_reset_securitypriv_cmd(struct adapter *padapter)
 
 	init_h2fwcmd_w_parm_no_rsp(ph2c, pdrvextra_cmd_parm, SET_DRV_EXTRA_CMD);
 
-	/* rtw_enqueue_cmd(pcmdpriv, ph2c); */
 	res = rtw_enqueue_cmd(pcmdpriv, ph2c);
 exit:
 	return res;
@@ -1067,7 +1059,6 @@ u8 rtw_free_assoc_resources_cmd(struct adapter *padapter)
 
 	init_h2fwcmd_w_parm_no_rsp(ph2c, pdrvextra_cmd_parm, SET_DRV_EXTRA_CMD);
 
-	/* rtw_enqueue_cmd(pcmdpriv, ph2c); */
 	res = rtw_enqueue_cmd(pcmdpriv, ph2c);
 exit:
 	return res;
@@ -1100,7 +1091,6 @@ u8 rtw_dynamic_chk_wk_cmd(struct adapter *padapter)
 	pdrvextra_cmd_parm->pbuf = NULL;
 	init_h2fwcmd_w_parm_no_rsp(ph2c, pdrvextra_cmd_parm, SET_DRV_EXTRA_CMD);
 
-	/* rtw_enqueue_cmd(pcmdpriv, ph2c); */
 	res = rtw_enqueue_cmd(pcmdpriv, ph2c);
 exit:
 	return res;
@@ -1249,18 +1239,13 @@ static void dynamic_chk_wk_hdl(struct adapter *padapter)
 
 	/* for debug purpose */
 	_linked_info_dump(padapter);
-	/* if (check_fwstate(pmlmepriv, _FW_UNDER_LINKING|_FW_UNDER_SURVEY) ==false) */
 	{
 		linked_status_chk(padapter);
 		traffic_status_watchdog(padapter, false);
 	}
 	rtw_hal_dm_watchdog(padapter);
 
-	/* check_hw_pbc(padapter, pdrvextra_cmd->pbuf, pdrvextra_cmd->type); */
-
-	/*  */
 	/*  BT-Coexist */
-	/*  */
 	hal_btcoex_Handler(padapter);
 
 	/* always call rtw_ps_processor() at last one. */
@@ -1325,7 +1310,6 @@ u8 rtw_lps_ctrl_wk_cmd(struct adapter *padapter, u8 lps_ctrl_type, u8 enqueue)
 	struct cmd_obj	*ph2c;
 	struct drvextra_cmd_parm *pdrvextra_cmd_parm;
 	struct cmd_priv *pcmdpriv = &padapter->cmdpriv;
-	/* struct pwrctrl_priv *pwrctrlpriv = adapter_to_pwrctl(padapter); */
 	u8 res = _SUCCESS;
 
 	if (enqueue) {
@@ -1877,9 +1861,6 @@ void rtw_createbss_cmd_callback(struct adapter *padapter, struct cmd_obj *pcmd)
 
 		pnetwork->length = get_wlan_bssid_ex_sz(pnetwork);
 		memcpy(&pwlan->network, pnetwork, pnetwork->length);
-		/* pwlan->fixed = true; */
-
-		/* list_add_tail(&(pwlan->list), &pmlmepriv->scanned_queue.queue); */
 
 		/*  copy pdev_network information to	pmlmepriv->cur_network */
 		memcpy(&tgt_network->network, pnetwork, (get_wlan_bssid_ex_sz(pnetwork)));

@@ -108,11 +108,9 @@ void rtw_wep_decrypt(struct adapter  *padapter, u8 *precvframe)
 	/* start to decrypt recvframe */
 	if ((prxattrib->encrypt == _WEP40_) || (prxattrib->encrypt == _WEP104_)) {
 		iv = pframe + prxattrib->hdrlen;
-		/* keyindex =(iv[3]&0x3); */
 		keyindex = prxattrib->key_index;
 		keylength = psecuritypriv->dot11DefKeylen[keyindex];
 		memcpy(&wepkey[0], iv, 3);
-		/* memcpy(&wepkey[3], &psecuritypriv->dot11DefKey[psecuritypriv->dot11PrivacyKeyIndex].skey[0], keylength); */
 		memcpy(&wepkey[3], &psecuritypriv->dot11DefKey[keyindex].skey[0], keylength);
 		length = ((union recv_frame *)precvframe)->u.hdr.len - prxattrib->hdrlen - prxattrib->iv_len;
 
@@ -922,9 +920,6 @@ static signed int aes_cipher(u8 *key, uint hdrlen,
 u32 rtw_aes_encrypt(struct adapter *padapter, u8 *pxmitframe)
 {	/*  exclude ICV */
 
-	/*static*/
-	/* unsigned char message[MAX_MSG_SIZE]; */
-
 	/* Intermediate Buffers */
 	signed int curfragnum, length;
 	u8 *pframe, *prwskey;	/*  *payload,*iv */
@@ -1166,9 +1161,6 @@ static signed int aes_decipher(u8 *key, uint	hdrlen,
 
 u32 rtw_aes_decrypt(struct adapter *padapter, u8 *precvframe)
 {	/*  exclude ICV */
-
-	/*static*/
-	/* unsigned char message[MAX_MSG_SIZE]; */
 
 	/* Intermediate Buffers */
 

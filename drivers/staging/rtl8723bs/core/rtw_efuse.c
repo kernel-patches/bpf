@@ -87,7 +87,6 @@ u8 rtw_efuse_one_byte_read(struct adapter *padapter, u16 addr, u8 *data)
 
 	/*  <20130121, Kordan> For SMIC EFUSE specificatoin. */
 	/* 0x34[11]: SW force PGMEN input of efuse to high. (for the bank selected by 0x34[9:8]) */
-	/* PHY_SetMacReg(padapter, 0x34, BIT11, 0); */
 	rtw_write16(padapter, 0x34, rtw_read16(padapter, 0x34) & (~BIT(11)));
 
 	/*  -----------------e-fuse reg ctrl --------------------------------- */
@@ -173,6 +172,4 @@ void rtw_efuse_shadow_map_update(struct adapter *padapter, u8 efuse_type)
 	else
 		efuse_read_all_map(padapter, efuse_type, eeprom->efuse_eeprom_data);
 
-	/* PlatformMoveMemory((void *)&pHalData->EfuseMap[EFUSE_MODIFY_MAP][0], */
-	/* void *)&pHalData->EfuseMap[EFUSE_INIT_MAP][0], map_len); */
 } /*  rtw_efuse_shadow_map_update */

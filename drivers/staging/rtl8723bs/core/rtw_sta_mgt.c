@@ -14,9 +14,6 @@ void _rtw_init_stainfo(struct sta_info *psta)
 	spin_lock_init(&psta->lock);
 	INIT_LIST_HEAD(&psta->list);
 	INIT_LIST_HEAD(&psta->hash_list);
-	/* INIT_LIST_HEAD(&psta->asoc_list); */
-	/* INIT_LIST_HEAD(&psta->sleep_list); */
-	/* INIT_LIST_HEAD(&psta->wakeup_list); */
 
 	INIT_LIST_HEAD(&psta->sleep_q.queue);
 	spin_lock_init(&psta->sleep_q.lock);
@@ -171,7 +168,6 @@ u32 _rtw_free_sta_priv(struct	sta_priv *pstapriv)
 	return _SUCCESS;
 }
 
-/* struct	sta_info *rtw_alloc_stainfo(_queue *pfree_sta_queue, unsigned char *hwaddr) */
 struct	sta_info *rtw_alloc_stainfo(struct	sta_priv *pstapriv, u8 *hwaddr)
 {
 	s32	index;
@@ -184,18 +180,14 @@ struct	sta_info *rtw_alloc_stainfo(struct	sta_priv *pstapriv, u8 *hwaddr)
 
 	pfree_sta_queue = &pstapriv->free_sta_queue;
 
-	/* spin_lock_bh(&(pfree_sta_queue->lock)); */
 	spin_lock_bh(&pstapriv->sta_hash_lock);
 	if (list_empty(&pfree_sta_queue->queue)) {
-		/* spin_unlock_bh(&(pfree_sta_queue->lock)); */
 		spin_unlock_bh(&pstapriv->sta_hash_lock);
 		return NULL;
 	}
 	psta = container_of(get_next(&pfree_sta_queue->queue), struct sta_info, list);
 
 	list_del_init(&psta->list);
-
-	/* spin_unlock_bh(&(pfree_sta_queue->lock)); */
 
 	_rtw_init_stainfo(psta);
 
@@ -212,13 +204,9 @@ struct	sta_info *rtw_alloc_stainfo(struct	sta_priv *pstapriv, u8 *hwaddr)
 	}
 	phash_list = &pstapriv->sta_hash[index];
 
-	/* spin_lock_bh(&(pstapriv->sta_hash_lock)); */
-
 	list_add_tail(&psta->hash_list, phash_list);
 
 	pstapriv->asoc_sta_count++;
-
-	/* spin_unlock_bh(&(pstapriv->sta_hash_lock)); */
 
 	/*  Commented by Albert 2009/08/13 */
 	/*  For the SMC router, the sequence number of first packet of WPS handshake will be 0. */
@@ -240,7 +228,6 @@ struct	sta_info *rtw_alloc_stainfo(struct	sta_priv *pstapriv, u8 *hwaddr)
 
 		preorder_ctrl->indicate_seq = 0xffff;
 		preorder_ctrl->wend_b = 0xffff;
-		/* preorder_ctrl->wsize_b = (NR_RECVBUFF-2); */
 		preorder_ctrl->wsize_b = 64;/* 64; */
 
 		INIT_LIST_HEAD(&preorder_ctrl->pending_recvframe_queue.queue);
@@ -287,50 +274,38 @@ u32 rtw_free_stainfo(struct adapter *padapter, struct sta_info *psta)
 
 	pstaxmitpriv = &psta->sta_xmitpriv;
 
-	/* list_del_init(&psta->sleep_list); */
-
-	/* list_del_init(&psta->wakeup_list); */
-
 	spin_lock_bh(&pxmitpriv->lock);
 
 	rtw_free_xmitframe_queue(pxmitpriv, &psta->sleep_q);
 	psta->sleepq_len = 0;
 
 	/* vo */
-	/* spin_lock_bh(&(pxmitpriv->vo_pending.lock)); */
 	rtw_free_xmitframe_queue(pxmitpriv, &pstaxmitpriv->vo_q.sta_pending);
 	list_del_init(&pstaxmitpriv->vo_q.tx_pending);
 	phwxmit = pxmitpriv->hwxmits;
 	phwxmit->accnt -= pstaxmitpriv->vo_q.qcnt;
 	pstaxmitpriv->vo_q.qcnt = 0;
-	/* spin_unlock_bh(&(pxmitpriv->vo_pending.lock)); */
 
 	/* vi */
-	/* spin_lock_bh(&(pxmitpriv->vi_pending.lock)); */
 	rtw_free_xmitframe_queue(pxmitpriv, &pstaxmitpriv->vi_q.sta_pending);
 	list_del_init(&pstaxmitpriv->vi_q.tx_pending);
 	phwxmit = pxmitpriv->hwxmits + 1;
 	phwxmit->accnt -= pstaxmitpriv->vi_q.qcnt;
 	pstaxmitpriv->vi_q.qcnt = 0;
-	/* spin_unlock_bh(&(pxmitpriv->vi_pending.lock)); */
 
 	/* be */
-	/* spin_lock_bh(&(pxmitpriv->be_pending.lock)); */
 	rtw_free_xmitframe_queue(pxmitpriv, &pstaxmitpriv->be_q.sta_pending);
 	list_del_init(&pstaxmitpriv->be_q.tx_pending);
 	phwxmit = pxmitpriv->hwxmits + 2;
 	phwxmit->accnt -= pstaxmitpriv->be_q.qcnt;
 	pstaxmitpriv->be_q.qcnt = 0;
-	/* spin_unlock_bh(&(pxmitpriv->be_pending.lock)); */
 
 	/* bk */
-	/* spin_lock_bh(&(pxmitpriv->bk_pending.lock)); */
 	rtw_free_xmitframe_queue(pxmitpriv, &pstaxmitpriv->bk_q.sta_pending);
 	list_del_init(&pstaxmitpriv->bk_q.tx_pending);
 	phwxmit = pxmitpriv->hwxmits + 3;
 	phwxmit->accnt -= pstaxmitpriv->bk_q.qcnt;
 	pstaxmitpriv->bk_q.qcnt = 0;
-	/* spin_unlock_bh(&(pxmitpriv->bk_pending.lock)); */
 
 	spin_unlock_bh(&pxmitpriv->lock);
 
@@ -338,10 +313,6 @@ u32 rtw_free_stainfo(struct adapter *padapter, struct sta_info *psta)
 	list_del_init(&psta->hash_list);
 	pstapriv->asoc_sta_count--;
 	spin_unlock_bh(&pstapriv->sta_hash_lock);
-
-	/*  re-init sta_info; 20061114 will be init in alloc_stainfo */
-	/* _rtw_init_sta_xmit_priv(&psta->sta_xmitpriv); */
-	/* _rtw_init_sta_recv_priv(&psta->sta_recvpriv); */
 
 	timer_delete_sync(&psta->addba_retry_timer);
 
@@ -410,9 +381,7 @@ u32 rtw_free_stainfo(struct adapter *padapter, struct sta_info *psta)
 
 	psta->under_exist_checking = 0;
 
-	/* spin_lock_bh(&(pfree_sta_queue->lock)); */
 	list_add_tail(&psta->list, get_list_head(pfree_sta_queue));
-	/* spin_unlock_bh(&(pfree_sta_queue->lock)); */
 
 exit:
 	return _SUCCESS;
@@ -493,7 +462,6 @@ u32 rtw_init_bcmc_stainfo(struct adapter *padapter)
 	u8 bcast_addr[ETH_ALEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
 	struct	sta_priv *pstapriv = &padapter->stapriv;
-	/* struct __queue	*pstapending = &padapter->xmitpriv.bm_pending; */
 
 	psta = rtw_alloc_stainfo(pstapriv, bcast_addr);
 

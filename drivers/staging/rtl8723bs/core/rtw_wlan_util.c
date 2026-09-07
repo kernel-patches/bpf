@@ -655,7 +655,6 @@ void flush_all_cam_entry(struct adapter *padapter)
 
 int WMM_param_handler(struct adapter *padapter, struct ndis_80211_var_ie *pIE)
 {
-	/* struct registry_priv *pregpriv = &padapter->registrypriv; */
 	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
 	struct mlme_ext_priv *pmlmeext = &padapter->mlmeextpriv;
 	struct mlme_ext_info *pmlmeinfo = &pmlmeext->mlmext_info;
@@ -774,7 +773,6 @@ void WMMOnAssocRsp(struct adapter *padapter)
 
 			case 0x1:
 				rtw_hal_set_hwreg(padapter, HW_VAR_AC_PARAM_BK, (u8 *)(&acParm));
-				/* acm_mask |= (ACM? BIT(0):0); */
 				edca[XMIT_BK_QUEUE] = acParm;
 				break;
 
@@ -871,8 +869,6 @@ static void bwmode_update_check(struct adapter *padapter, struct ndis_80211_var_
 		struct sta_info *psta;
 		struct wlan_bssid_ex	*cur_network = &pmlmeinfo->network;
 		struct sta_priv *pstapriv = &padapter->stapriv;
-
-		/* set_channel_bwmode(padapter, pmlmeext->cur_channel, pmlmeext->cur_ch_offset, pmlmeext->cur_bwmode); */
 
 		/* update ap's stainfo */
 		psta = rtw_get_stainfo(pstapriv, cur_network->mac_address);
@@ -984,7 +980,6 @@ void HTOnAssocRsp(struct adapter *padapter)
 {
 	unsigned char max_AMPDU_len;
 	unsigned char min_MPDU_spacing;
-	/* struct registry_priv  *pregpriv = &padapter->registrypriv; */
 	struct mlme_ext_priv *pmlmeext = &padapter->mlmeextpriv;
 	struct mlme_ext_info *pmlmeinfo = &pmlmeext->mlmext_info;
 
@@ -992,7 +987,6 @@ void HTOnAssocRsp(struct adapter *padapter)
 		pmlmeinfo->HT_enable = 1;
 	} else {
 		pmlmeinfo->HT_enable = 0;
-		/* set_channel_bwmode(padapter, pmlmeext->cur_channel, pmlmeext->cur_ch_offset, pmlmeext->cur_bwmode); */
 		return;
 	}
 
@@ -1082,7 +1076,6 @@ int rtw_check_bcn_info(struct adapter *Adapter, u8 *pframe, u32 packet_len)
 	unsigned char *p;
 	unsigned short	val16, subtype;
 	struct wlan_network *cur_network = &Adapter->mlmepriv.cur_network;
-	/* u8 wpa_ie[255], rsn_ie[255]; */
 	u16 wpa_len = 0, rsn_len = 0;
 	u8 encryp_protocol = 0;
 	struct wlan_bssid_ex *bssid;
@@ -1154,7 +1147,6 @@ int rtw_check_bcn_info(struct adapter *Adapter, u8 *pframe, u32 packet_len)
 			cur_network->bcn_info.ht_info_infos_0 = ht_info_infos_0;
 			/* to do : need to check that whether modify related register of BB or not */
 		}
-		/* goto _mismatch; */
 	}
 
 	/* Checking for channel */
@@ -1281,7 +1273,6 @@ void update_beacon_info(struct adapter *padapter, u8 *pframe, uint pkt_len, stru
 			break;
 
 		case WLAN_EID_HT_OPERATION:	/* HT info */
-			/* HT_info_handler(padapter, pIE); */
 			bwmode_update_check(padapter, pIE);
 			break;
 
@@ -1392,10 +1383,7 @@ static u32 get_realtek_assoc_AP_vender(struct ndis_80211_var_ie *pIE)
 
 	if (pIE->length >= 5) {
 		if (pIE->data[4] == 1)
-			/* if (pIE->data[5] & RT_HT_CAP_USE_LONG_PREAMBLE) */
-			/* bssDesc->BssHT.RT2RT_HT_Mode |= RT_HT_CAP_USE_LONG_PREAMBLE; */
 			if (pIE->data[5] & RT_HT_CAP_USE_92SE)
-				/* bssDesc->BssHT.RT2RT_HT_Mode |= RT_HT_CAP_USE_92SE; */
 				Vender = HT_IOT_PEER_REALTEK_92SE;
 
 		if (pIE->data[5] & RT_HT_CAP_USE_SOFTAP)
@@ -1468,8 +1456,6 @@ void update_IOT_info(struct adapter *padapter)
 		switch_dm_func(padapter, ((u32)(~DYNAMIC_BB_DYNAMIC_TXPWR)), false);
 		break;
 	case HT_IOT_PEER_REALTEK:
-		/* rtw_write16(padapter, 0x4cc, 0xffff); */
-		/* rtw_write16(padapter, 0x546, 0x01c0); */
 		/* disable high power */
 		switch_dm_func(padapter, ((u32)(~DYNAMIC_BB_DYNAMIC_TXPWR)), false);
 		break;
@@ -1666,16 +1652,13 @@ void adaptive_early_32k(struct mlme_ext_priv *pmlmeext, u8 *pframe, uint len)
 	tsf |= le32_to_cpu(*pbuf);
 
 	/* delay = (timestamp mod 1024*100)/1000 (unit: ms) */
-	/* delay_ms = do_div(tsf, (pmlmeinfo->bcn_interval*1024))/1000; */
 	delay_ms = do_div(tsf, (pmlmeinfo->bcn_interval * 1024));
 	delay_ms = delay_ms / 1000;
 
 	if (delay_ms >= 8)
 		pmlmeext->bcn_delay_cnt[8]++;
-		/* pmlmeext->bcn_delay_ratio[8] = (pmlmeext->bcn_delay_cnt[8] * 100) /pmlmeext->bcn_cnt; */
 	else
 		pmlmeext->bcn_delay_cnt[delay_ms]++;
-		/* pmlmeext->bcn_delay_ratio[delay_ms] = (pmlmeext->bcn_delay_cnt[delay_ms] * 100) /pmlmeext->bcn_cnt; */
 	/* dump for  adaptive_early_32k */
 	if (pmlmeext->bcn_cnt > 100 && pmlmeext->adaptive_tsf_done) {
 		u8 ratio_20_delay, ratio_80_delay;
