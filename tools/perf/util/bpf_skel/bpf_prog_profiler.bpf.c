@@ -4,6 +4,11 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+struct profile_reading {
+	struct bpf_perf_event_value value;
+	bool armed;
+};
+
 /* map of perf event fds, num_cpu * num_metric entries */
 struct {
 	__uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
@@ -15,7 +20,7 @@ struct {
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(key_size, sizeof(__u32));
-	__uint(value_size, sizeof(struct bpf_perf_event_value));
+	__uint(value_size, sizeof(struct profile_reading));
 	__uint(max_entries, 1);
 } fentry_readings SEC(".maps");
 
@@ -33,7 +38,7 @@ SEC("fentry/XXX")
 int BPF_PROG(fentry_XXX)
 {
 	__u32 key = bpf_get_smp_processor_id();
-	struct bpf_perf_event_value *ptr;
+	struct profile_reading *ptr;
 	__u32 zero = 0;
 	long err;
 
@@ -42,9 +47,12 @@ int BPF_PROG(fentry_XXX)
 	if (!ptr)
 		return 0;
 
-	err = bpf_perf_event_read_value(&events, key, ptr, sizeof(*ptr));
+	ptr->armed = false;
+	err = bpf_perf_event_read_value(&events, key, &ptr->value,
+					sizeof(ptr->value));
 	if (err)
 		return 0;
+	ptr->armed = true;
 
 	return 0;
 }
@@ -52,17 +60,19 @@ int BPF_PROG(fentry_XXX)
 static inline void
 fexit_update_maps(struct bpf_perf_event_value *after)
 {
-	struct bpf_perf_event_value *before, diff;
+	struct profile_reading *before;
+	struct bpf_perf_event_value diff;
 	__u32 zero = 0;
 
 	before = bpf_map_lookup_elem(&fentry_readings, &zero);
 	/* only account samples with a valid fentry_reading */
-	if (before && before->counter) {
+	if (before && before->armed) {
 		struct bpf_perf_event_value *accum;
 
-		diff.counter = after->counter - before->counter;
-		diff.enabled = after->enabled - before->enabled;
-		diff.running = after->running - before->running;
+		before->armed = false;
+		diff.counter = after->counter - before->value.counter;
+		diff.enabled = after->enabled - before->value.enabled;
+		diff.running = after->running - before->value.running;
 
 		accum = bpf_map_lookup_elem(&accum_readings, &zero);
 		if (accum) {
