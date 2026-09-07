@@ -4437,6 +4437,7 @@ static const char * const tegra234_reset_sources[] = {
 };
 
 static const struct tegra_wake_event tegra234_wake_events[] = {
+	TEGRA_WAKE_GPIO("pcie-wake", 1, 0, TEGRA234_MAIN_GPIO(L, 2)),
 	TEGRA_WAKE_GPIO("sd-wake", 8, 0, TEGRA234_MAIN_GPIO(G, 7)),
 	TEGRA_WAKE_GPIO("eqos", 20, 0, TEGRA234_MAIN_GPIO(G, 4)),
 	TEGRA_WAKE_IRQ("pmu", 24, 209),
