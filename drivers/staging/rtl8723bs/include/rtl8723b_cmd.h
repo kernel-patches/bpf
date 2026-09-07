@@ -168,7 +168,6 @@ void rtl8723b_set_FwJoinBssRpt_cmd(struct adapter *padapter, u8 mstatus);
 void rtl8723b_set_rssi_cmd(struct adapter *padapter, u8 *param);
 void rtl8723b_Add_RateATid(struct adapter *padapter, u32 bitmap, u8 *arg, u8 rssi_level);
 void rtl8723b_fw_try_ap_cmd(struct adapter *padapter, u32 need_ack);
-/* s32 rtl8723b_set_lowpwr_lps_cmd(struct adapter *padapter, u8 enable); */
 void rtl8723b_set_FwPsTuneParam_cmd(struct adapter *padapter);
 void rtl8723b_set_FwMacIdConfig_cmd(struct adapter *padapter, u8 mac_id, u8 raid, u8 bw, u8 sgi, u32 mask);
 void rtl8723b_set_FwMediaStatusRpt_cmd(struct adapter *padapter, u8 mstatus, u8 macid);

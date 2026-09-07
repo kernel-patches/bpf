@@ -47,7 +47,6 @@ struct dm_priv {
 
 	u8 DMFlag;
 	u8 InitDMFlag;
-	/* u8   RSVD_1; */
 
 	u32 InitODMFlag;
 	/*  Upper and Lower Signal threshold for Rate Adaptive */
@@ -79,7 +78,6 @@ struct dm_priv {
 	u8 ThermalValue_IQK;
 	u8 ThermalValue_DPK;
 	u8 bRfPiEnable;
-	/* u8   RSVD_2; */
 
 	/* for APK */
 	u32 APKoutput[2][2];	/* path A/B; output1_1a/output1_2a */
@@ -88,9 +86,6 @@ struct dm_priv {
 	u8 bDPdone;
 	u8 bDPPathAOK;
 	u8 bDPPathBOK;
-	/* u8   RSVD_3; */
-	/* u8   RSVD_4; */
-	/* u8   RSVD_5; */
 
 	/* for IQK */
 	u32 ADDA_backup[IQK_ADDA_REG_NUM];
@@ -109,7 +104,6 @@ struct dm_priv {
 	u8 OFDM_index_HP[2];
 	u8 ThermalValue_HP[HP_THERMAL_NUM];
 	u8 ThermalValue_HP_index;
-	/* u8   RSVD_6; */
 
 	/* for TxPwrTracking2 */
 	s32	RegE94;

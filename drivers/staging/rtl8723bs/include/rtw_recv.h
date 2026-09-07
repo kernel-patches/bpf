@@ -206,15 +206,10 @@ struct recv_priv {
 	u8 signal_strength;
 	u8 signal_qual;
 	s8 rssi;	/* translate_percentage_to_dbm(ptarget_wlan->network.PhyInfo.SignalStrength); */
-	/* s8 rxpwdb; */
 	s16 noise;
-	/* int RxSNRdB[2]; */
-	/* s8 RxRssi[2]; */
-	/* int FalseAlmCnt_all; */
 
 	struct timer_list signal_stat_timer;
 	u32 signal_stat_sampling_interval;
-	/* u32 signal_stat_converging_constant; */
 	struct signal_stat signal_qual_data;
 	struct signal_stat signal_strength_data;
 };
@@ -226,15 +221,9 @@ struct sta_recv_priv {
 	spinlock_t lock;
 	signed int option;
 
-	/* struct __queue	blk_strms[MAX_RX_NUMBLKS]; */
 	struct __queue defrag_q;	 /* keeping the fragment frame until defrag */
 
 	struct stainfo_rxcache rxcache;
-
-	/* uint	sta_rx_bytes; */
-	/* uint	sta_rx_pkts; */
-	/* uint	sta_rx_fail; */
-
 };
 
 struct recv_buf {
@@ -310,9 +299,6 @@ union recv_frame {
 		struct recv_frame_hdr hdr;
 		uint mem[RECVFRAME_HDR_ALIGN>>2];
 	} u;
-
-	/* uint mem[MAX_RXSZ>>2]; */
-
 };
 
 enum {

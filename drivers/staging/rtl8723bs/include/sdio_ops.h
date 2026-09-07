@@ -11,8 +11,6 @@
 
 void sdio_set_intf_ops(struct adapter *padapter, struct _io_ops *pops);
 
-/* extern void sdio_func1cmd52_read(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, u8 *rmem); */
-/* extern void sdio_func1cmd52_write(struct intf_hdl *pintfhdl, u32 addr, u32 cnt, u8 *wmem); */
 u8 SdioLocalCmd52Read1Byte(struct adapter *padapter, u32 addr);
 void SdioLocalCmd52Write1Byte(struct adapter *padapter, u32 addr, u8 v);
 s32 sdio_local_read(struct adapter *padapter, u32 addr, u32 cnt, u8 *pbuf);

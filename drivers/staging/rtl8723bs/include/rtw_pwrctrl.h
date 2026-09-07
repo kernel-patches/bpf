@@ -192,7 +192,6 @@ struct pwrctrl_priv {
 	int		ps_flag; /* used by autosuspend */
 
 	enum rt_rf_power_state	rf_pwrstate;/* cur power state, only for IPS */
-	/* rt_rf_power_state	current_rfpwrstate; */
 	enum rt_rf_power_state	change_rfpwrstate;
 
 	u8 bHWPowerdown; /* power down mode selection. 0:radio off, 1:power down */

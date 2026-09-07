@@ -9,7 +9,6 @@
 
 void init_mlme_ap_info(struct adapter *padapter);
 void free_mlme_ap_info(struct adapter *padapter);
-/* void update_BCNTIM(struct adapter *padapter); */
 void update_beacon(struct adapter *padapter, u8 ie_id, u8 tx);
 void add_ratid(struct adapter *padapter, struct sta_info *psta, u8 rssi_level);
 void expire_timeout_chk(struct adapter *padapter);

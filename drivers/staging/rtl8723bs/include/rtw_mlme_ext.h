@@ -369,7 +369,6 @@ struct mlme_ext_priv {
 	u16 sa_query_seq;
 	u64 mgnt_80211w_IPN;
 	u64 mgnt_80211w_IPN_rx;
-	/* struct fw_priv fwpriv; */
 
 	unsigned char cur_channel;
 	unsigned char cur_bwmode;
@@ -389,7 +388,6 @@ struct mlme_ext_priv {
 	struct timer_list		survey_timer;
 	struct timer_list		link_timer;
 	struct timer_list		sa_query_timer;
-	/* struct timer_list		ADDBA_timer; */
 	u16 		chan_scan_time;
 	unsigned long last_scan_time;
 	u8 scan_abort;
@@ -423,8 +421,6 @@ void init_mlme_ext_priv(struct adapter *padapter);
 void init_hw_mlme_ext(struct adapter *padapter);
 void free_mlme_ext_priv(struct mlme_ext_priv *pmlmeext);
 struct xmit_frame *alloc_mgtxmitframe(struct xmit_priv *pxmitpriv);
-
-/* void fill_fwpriv(struct adapter *padapter, struct fw_priv *pfwpriv); */
 
 u8 networktype_to_raid_ex(struct adapter *adapter, struct sta_info *psta);
 
@@ -587,8 +583,6 @@ void survey_timer_hdl(struct timer_list *t);
 void link_timer_hdl(struct timer_list *t);
 void addba_timer_hdl(struct timer_list *t);
 void sa_query_timer_hdl(struct timer_list *t);
-/* void reauth_timer_hdl(struct adapter *padapter); */
-/* void reassoc_timer_hdl(struct adapter *padapter); */
 
 #define set_survey_timer(mlmeext, ms) \
 	do { \

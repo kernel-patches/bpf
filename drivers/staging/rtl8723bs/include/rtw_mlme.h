@@ -164,10 +164,6 @@ struct mlme_priv {
 	/* Number of non-HT AP/stations */
 	int num_sta_no_ht;
 
-	/* Number of HT AP/stations 20 MHz */
-	/* int num_sta_ht_20mhz; */
-
-
 	int num_FortyMHzIntolerant;
 
 	struct ht_priv htpriv;
@@ -198,9 +194,6 @@ struct mlme_priv {
 	/* Number of HT associated stations that do not support greenfield */
 	int num_sta_ht_no_gf;
 
-	/* Number of associated non-HT stations */
-	/* int num_sta_no_ht; */
-
 	/* Number of HT associated stations 20 MHz */
 	int num_sta_ht_20mhz;
 
@@ -215,12 +208,10 @@ struct mlme_priv {
 	u32 assoc_rsp_len;
 
 	u8 *wps_beacon_ie;
-	/* u8 *wps_probe_req_ie; */
 	u8 *wps_probe_resp_ie;
 	u8 *wps_assoc_resp_ie; /* this IE could include p2p ie / wfd ie */
 
 	u32 wps_beacon_ie_len;
-	/* u32 wps_probe_req_ie_len; */
 	u32 wps_probe_resp_ie_len;
 	u32 wps_assoc_resp_ie_len; /* this IE len could include p2p ie / wfd ie */
 
@@ -349,8 +340,6 @@ void rtw_set_scan_deny(struct adapter *adapter, u32 ms);
 void rtw_free_mlme_priv_ie_data(struct mlme_priv *pmlmepriv);
 
 void _rtw_free_mlme_priv(struct mlme_priv *pmlmepriv);
-
-/* extern struct wlan_network* _rtw_dequeue_network(struct __queue *queue); */
 
 struct wlan_network *rtw_alloc_network(struct mlme_priv *pmlmepriv);
 

@@ -49,7 +49,6 @@
 		u32 cmd_done_cnt;
 		u32 rsp_cnt;
 		atomic_t cmdthd_running;
-		/* u8 cmdthd_running; */
 		u8 stop_req;
 		struct adapter *padapter;
 		struct mutex sctx_mutex;
