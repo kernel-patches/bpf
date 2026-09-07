@@ -81,7 +81,6 @@ struct btc_board_info {
 	u8 btdmAntNum;	/*  ant number for btdm */
 	u8 btdmAntPos;		/* Bryant Add to indicate Antenna Position for (pgAntNum = 2) && (btdmAntNum = 1)  (DPDT+1Ant case) */
 	u8 singleAntPath;	/*  current used for 8723b only, 1 =>s0,  0 =>s1 */
-	/* bool				bBtExist; */
 };
 
 enum {
