@@ -79,7 +79,7 @@ VISIBLE_IF_KUNIT ssize_t dm_dp_aux_transfer_result(ssize_t result,
 
 	return result;
 }
-EXPORT_IF_KUNIT(dm_dp_aux_transfer_result);
+EXPORT_SYMBOL_IF_KUNIT(dm_dp_aux_transfer_result);
 
 /*
  * Derive the AUX payload transaction flags from a DP AUX request field.
@@ -93,7 +93,7 @@ VISIBLE_IF_KUNIT void dm_dp_aux_fill_payload_flags(u8 request,
 	payload->write_status_update =
 			(request & DP_AUX_I2C_WRITE_STATUS_UPDATE) != 0;
 }
-EXPORT_IF_KUNIT(dm_dp_aux_fill_payload_flags);
+EXPORT_SYMBOL_IF_KUNIT(dm_dp_aux_fill_payload_flags);
 
 /*
  * This function handles both native AUX and I2C-Over-AUX transactions.
@@ -166,7 +166,7 @@ VISIBLE_IF_KUNIT ssize_t dm_dp_aux_transfer(struct drm_dp_aux *aux,
 
 	return result;
 }
-EXPORT_IF_KUNIT(dm_dp_aux_transfer);
+EXPORT_SYMBOL_IF_KUNIT(dm_dp_aux_transfer);
 
 VISIBLE_IF_KUNIT void
 dm_dp_mst_connector_destroy(struct drm_connector *connector)
@@ -186,7 +186,7 @@ dm_dp_mst_connector_destroy(struct drm_connector *connector)
 	drm_dp_mst_put_port_malloc(aconnector->mst_output_port);
 	kfree(aconnector);
 }
-EXPORT_IF_KUNIT(dm_dp_mst_connector_destroy);
+EXPORT_SYMBOL_IF_KUNIT(dm_dp_mst_connector_destroy);
 
 VISIBLE_IF_KUNIT int
 amdgpu_dm_mst_connector_late_register(struct drm_connector *connector)
@@ -206,7 +206,7 @@ amdgpu_dm_mst_connector_late_register(struct drm_connector *connector)
 
 	return 0;
 }
-EXPORT_IF_KUNIT(amdgpu_dm_mst_connector_late_register);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_mst_connector_late_register);
 
 
 VISIBLE_IF_KUNIT void
@@ -218,7 +218,7 @@ amdgpu_dm_mst_reset_mst_connector_setting(struct amdgpu_dm_connector *aconnector
 	aconnector->mst_local_bw = 0;
 	aconnector->vc_full_pbn = 0;
 }
-EXPORT_IF_KUNIT(amdgpu_dm_mst_reset_mst_connector_setting);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_mst_reset_mst_connector_setting);
 
 VISIBLE_IF_KUNIT void
 amdgpu_dm_mst_connector_early_unregister(struct drm_connector *connector)
@@ -253,7 +253,7 @@ amdgpu_dm_mst_connector_early_unregister(struct drm_connector *connector)
 	aconnector->mst_status = MST_STATUS_DEFAULT;
 	drm_modeset_unlock(&root->mst_mgr.base.lock);
 }
-EXPORT_IF_KUNIT(amdgpu_dm_mst_connector_early_unregister);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_mst_connector_early_unregister);
 
 static const struct drm_connector_funcs dm_dp_mst_connector_funcs = {
 	.fill_modes = drm_helper_probe_single_connector_modes,
@@ -276,7 +276,7 @@ bool needs_dsc_aux_workaround(struct dc_link *link)
 
 	return false;
 }
-EXPORT_IF_KUNIT(needs_dsc_aux_workaround);
+EXPORT_SYMBOL_IF_KUNIT(needs_dsc_aux_workaround);
 
 #if defined(CONFIG_DRM_AMD_DC_FP) || IS_ENABLED(CONFIG_DRM_AMD_DC_KUNIT_TEST)
 VISIBLE_IF_KUNIT bool is_synaptics_cascaded_panamera(struct dc_link *link, struct drm_dp_mst_port *port)
@@ -293,7 +293,7 @@ VISIBLE_IF_KUNIT bool is_synaptics_cascaded_panamera(struct dc_link *link, struc
 
 	return false;
 }
-EXPORT_IF_KUNIT(is_synaptics_cascaded_panamera);
+EXPORT_SYMBOL_IF_KUNIT(is_synaptics_cascaded_panamera);
 
 VISIBLE_IF_KUNIT bool validate_dsc_caps_on_connector(struct amdgpu_dm_connector *aconnector)
 {
@@ -339,7 +339,7 @@ VISIBLE_IF_KUNIT bool validate_dsc_caps_on_connector(struct amdgpu_dm_connector 
 
 	return true;
 }
-EXPORT_IF_KUNIT(validate_dsc_caps_on_connector);
+EXPORT_SYMBOL_IF_KUNIT(validate_dsc_caps_on_connector);
 #endif
 
 VISIBLE_IF_KUNIT bool retrieve_downstream_port_device(struct amdgpu_dm_connector *aconnector)
@@ -360,7 +360,7 @@ VISIBLE_IF_KUNIT bool retrieve_downstream_port_device(struct amdgpu_dm_connector
 
 	return true;
 }
-EXPORT_IF_KUNIT(retrieve_downstream_port_device);
+EXPORT_SYMBOL_IF_KUNIT(retrieve_downstream_port_device);
 
 VISIBLE_IF_KUNIT bool retrieve_branch_specific_data(struct amdgpu_dm_connector *aconnector)
 {
@@ -389,7 +389,7 @@ VISIBLE_IF_KUNIT bool retrieve_branch_specific_data(struct amdgpu_dm_connector *
 
 	return true;
 }
-EXPORT_IF_KUNIT(retrieve_branch_specific_data);
+EXPORT_SYMBOL_IF_KUNIT(retrieve_branch_specific_data);
 
 VISIBLE_IF_KUNIT int dm_dp_mst_get_modes(struct drm_connector *connector)
 {
@@ -523,7 +523,7 @@ VISIBLE_IF_KUNIT int dm_dp_mst_get_modes(struct drm_connector *connector)
 
 	return ret;
 }
-EXPORT_IF_KUNIT(dm_dp_mst_get_modes);
+EXPORT_SYMBOL_IF_KUNIT(dm_dp_mst_get_modes);
 
 VISIBLE_IF_KUNIT struct drm_encoder *
 dm_mst_atomic_best_encoder(struct drm_connector *connector,
@@ -536,7 +536,7 @@ dm_mst_atomic_best_encoder(struct drm_connector *connector,
 
 	return &adev->dm.mst_encoders[acrtc->crtc_id].base;
 }
-EXPORT_IF_KUNIT(dm_mst_atomic_best_encoder);
+EXPORT_SYMBOL_IF_KUNIT(dm_mst_atomic_best_encoder);
 
 VISIBLE_IF_KUNIT int
 dm_dp_mst_detect(struct drm_connector *connector,
@@ -608,7 +608,7 @@ dm_dp_mst_detect(struct drm_connector *connector,
 
 	return connection_status;
 }
-EXPORT_IF_KUNIT(dm_dp_mst_detect);
+EXPORT_SYMBOL_IF_KUNIT(dm_dp_mst_detect);
 
 VISIBLE_IF_KUNIT int dm_dp_mst_atomic_check(struct drm_connector *connector,
 					    struct drm_atomic_commit *state)
@@ -619,7 +619,7 @@ VISIBLE_IF_KUNIT int dm_dp_mst_atomic_check(struct drm_connector *connector,
 
 	return drm_dp_atomic_release_time_slots(state, mst_mgr, mst_port);
 }
-EXPORT_IF_KUNIT(dm_dp_mst_atomic_check);
+EXPORT_SYMBOL_IF_KUNIT(dm_dp_mst_atomic_check);
 
 static const struct drm_connector_helper_funcs dm_dp_mst_connector_helper_funcs = {
 	.get_modes = dm_dp_mst_get_modes,
@@ -660,7 +660,7 @@ dm_dp_create_fake_mst_encoders(struct amdgpu_device *adev)
 		drm_encoder_helper_add(encoder, &amdgpu_dm_encoder_helper_funcs);
 	}
 }
-EXPORT_IF_KUNIT(dm_dp_create_fake_mst_encoders);
+EXPORT_SYMBOL_IF_KUNIT(dm_dp_create_fake_mst_encoders);
 
 VISIBLE_IF_KUNIT struct drm_connector *
 dm_dp_add_mst_connector(struct drm_dp_mst_topology_mgr *mgr,
@@ -744,7 +744,7 @@ dm_dp_add_mst_connector(struct drm_dp_mst_topology_mgr *mgr,
 
 	return connector;
 }
-EXPORT_IF_KUNIT(dm_dp_add_mst_connector);
+EXPORT_SYMBOL_IF_KUNIT(dm_dp_add_mst_connector);
 
 /*
  * Select the ESI[1] mask used to filter the MST sideband ready bits for a
@@ -764,7 +764,7 @@ VISIBLE_IF_KUNIT u8 dm_mst_msg_ready_mask(enum mst_msg_ready_type msg_rdy_type)
 		return DP_DOWN_REP_MSG_RDY | DP_UP_REQ_MSG_RDY;
 	}
 }
-EXPORT_IF_KUNIT(dm_mst_msg_ready_mask);
+EXPORT_SYMBOL_IF_KUNIT(dm_mst_msg_ready_mask);
 
 /*
  * Select the DPCD ESI address and read length based on the DPCD revision.
@@ -782,7 +782,7 @@ VISIBLE_IF_KUNIT void dm_mst_select_esi_dpcd(u8 dpcd_rev, int *dpcd_addr,
 		*dpcd_addr = DP_SINK_COUNT_ESI;
 	}
 }
-EXPORT_IF_KUNIT(dm_mst_select_esi_dpcd);
+EXPORT_SYMBOL_IF_KUNIT(dm_mst_select_esi_dpcd);
 
 void dm_handle_mst_sideband_msg_ready_event(
 	struct drm_dp_mst_topology_mgr *mgr,
@@ -867,13 +867,13 @@ void dm_handle_mst_sideband_msg_ready_event(
 	if (process_count == max_process_count)
 		DRM_DEBUG_DRIVER("Loop exceeded max iterations\n");
 }
-EXPORT_IF_KUNIT(dm_handle_mst_sideband_msg_ready_event);
+EXPORT_SYMBOL_IF_KUNIT(dm_handle_mst_sideband_msg_ready_event);
 
 VISIBLE_IF_KUNIT void dm_handle_mst_down_rep_msg_ready(struct drm_dp_mst_topology_mgr *mgr)
 {
 	dm_handle_mst_sideband_msg_ready_event(mgr, DOWN_REP_MSG_RDY_EVENT);
 }
-EXPORT_IF_KUNIT(dm_handle_mst_down_rep_msg_ready);
+EXPORT_SYMBOL_IF_KUNIT(dm_handle_mst_down_rep_msg_ready);
 
 static const struct drm_dp_mst_topology_cbs dm_mst_cbs = {
 	.add_connector = dm_dp_add_mst_connector,
@@ -908,7 +908,7 @@ void amdgpu_dm_initialize_dp_connector(struct amdgpu_display_manager *dm,
 
 	drm_connector_attach_dp_subconnector_property(&aconnector->base);
 }
-EXPORT_IF_KUNIT(amdgpu_dm_initialize_dp_connector);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_initialize_dp_connector);
 
 uint32_t dm_mst_get_pbn_divider(struct dc_link *link)
 {
@@ -925,7 +925,7 @@ uint32_t dm_mst_get_pbn_divider(struct dc_link *link)
 
 	return dfixed_const(pbn_div_x100) / 100;
 }
-EXPORT_IF_KUNIT(dm_mst_get_pbn_divider);
+EXPORT_SYMBOL_IF_KUNIT(dm_mst_get_pbn_divider);
 
 struct dsc_mst_fairness_params {
 	struct dc_crtc_timing *timing;
@@ -1258,7 +1258,7 @@ VISIBLE_IF_KUNIT bool get_conv_frl_bw(struct amdgpu_dm_connector *aconnector,
 
 	return *bw_in_kbps > 0; // Frl endpoint is detected
 }
-EXPORT_IF_KUNIT(get_conv_frl_bw);
+EXPORT_SYMBOL_IF_KUNIT(get_conv_frl_bw);
 
 static void build_frl_mst_dsc_params(struct amdgpu_dm_connector *aconnector,
 								struct dc_stream_state *stream,
@@ -1311,7 +1311,7 @@ VISIBLE_IF_KUNIT void log_dsc_params(int count, struct dsc_mst_fairness_vars *va
 		DRM_DEBUG_DRIVER("MST_DSC DSC params: stream #%d --- dsc_enabled = %d, bpp_x16 = %d, pbn = %d\n",
 				 i, vars[i + k].dsc_enabled, vars[i + k].bpp_x16, vars[i + k].pbn);
 }
-EXPORT_IF_KUNIT(log_dsc_params);
+EXPORT_SYMBOL_IF_KUNIT(log_dsc_params);
 
 static int compute_mst_dsc_configs_for_link(struct drm_atomic_commit *state,
 					    struct dc_state *dc_state,
@@ -1623,7 +1623,7 @@ out:
 
 	return is_dsc_need_re_compute;
 }
-EXPORT_IF_KUNIT(is_dsc_need_re_compute);
+EXPORT_SYMBOL_IF_KUNIT(is_dsc_need_re_compute);
 
 int compute_mst_dsc_configs_for_state(struct drm_atomic_commit *state,
 				      struct dc_state *dc_state,
@@ -1694,7 +1694,7 @@ int compute_mst_dsc_configs_for_state(struct drm_atomic_commit *state,
 
 	return ret;
 }
-EXPORT_IF_KUNIT(compute_mst_dsc_configs_for_state);
+EXPORT_SYMBOL_IF_KUNIT(compute_mst_dsc_configs_for_state);
 
 VISIBLE_IF_KUNIT int pre_compute_mst_dsc_configs_for_state(struct drm_atomic_commit *state,
 							   struct dc_state *dc_state,
@@ -1748,7 +1748,7 @@ VISIBLE_IF_KUNIT int pre_compute_mst_dsc_configs_for_state(struct drm_atomic_com
 
 	return ret;
 }
-EXPORT_IF_KUNIT(pre_compute_mst_dsc_configs_for_state);
+EXPORT_SYMBOL_IF_KUNIT(pre_compute_mst_dsc_configs_for_state);
 
 VISIBLE_IF_KUNIT int find_crtc_index_in_state_by_stream(struct drm_atomic_commit *state,
 							struct dc_stream_state *stream)
@@ -1765,7 +1765,7 @@ VISIBLE_IF_KUNIT int find_crtc_index_in_state_by_stream(struct drm_atomic_commit
 	}
 	return -1;
 }
-EXPORT_IF_KUNIT(find_crtc_index_in_state_by_stream);
+EXPORT_SYMBOL_IF_KUNIT(find_crtc_index_in_state_by_stream);
 
 static bool is_link_to_dschub(struct dc_link *dc_link)
 {
@@ -1802,7 +1802,7 @@ VISIBLE_IF_KUNIT bool is_dsc_precompute_needed(struct drm_atomic_commit *state)
 	}
 	return ret;
 }
-EXPORT_IF_KUNIT(is_dsc_precompute_needed);
+EXPORT_SYMBOL_IF_KUNIT(is_dsc_precompute_needed);
 
 int pre_validate_dsc(struct drm_atomic_commit *state,
 		     struct dm_atomic_state **dm_state_ptr,
@@ -1914,7 +1914,7 @@ clean_exit:
 
 	return ret;
 }
-EXPORT_IF_KUNIT(pre_validate_dsc);
+EXPORT_SYMBOL_IF_KUNIT(pre_validate_dsc);
 
 static uint32_t kbps_from_pbn(unsigned int pbn)
 {
@@ -2002,7 +2002,7 @@ VISIBLE_IF_KUNIT bool dp_get_link_current_set_bw(struct drm_dp_aux *aux, uint32_
 	*cur_link_bw = link_rate_per_lane_kbps * lane_count.bits.LANE_COUNT_SET / 10000 * total_data_bw_efficiency_x10000;
 	return true;
 }
-EXPORT_IF_KUNIT(dp_get_link_current_set_bw);
+EXPORT_SYMBOL_IF_KUNIT(dp_get_link_current_set_bw);
 #endif
 
 enum dc_status dm_dp_mst_is_port_support_mode(
@@ -2139,4 +2139,4 @@ enum dc_status dm_dp_mst_is_port_support_mode(
 #endif
 	return DC_OK;
 }
-EXPORT_IF_KUNIT(dm_dp_mst_is_port_support_mode);
+EXPORT_SYMBOL_IF_KUNIT(dm_dp_mst_is_port_support_mode);

@@ -97,7 +97,7 @@ VISIBLE_IF_KUNIT int amdgpu_dm_audio_component_bind(struct device *kdev,
 
 	return 0;
 }
-EXPORT_IF_KUNIT(amdgpu_dm_audio_component_bind);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_audio_component_bind);
 
 VISIBLE_IF_KUNIT void amdgpu_dm_audio_component_unbind(struct device *kdev,
 					  struct device *hda_kdev, void *data)
@@ -109,7 +109,7 @@ VISIBLE_IF_KUNIT void amdgpu_dm_audio_component_unbind(struct device *kdev,
 	acomp->dev = NULL;
 	adev->dm.audio_component = NULL;
 }
-EXPORT_IF_KUNIT(amdgpu_dm_audio_component_unbind);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_audio_component_unbind);
 
 static const struct component_ops amdgpu_dm_audio_component_bind_ops = {
 	.bind	= amdgpu_dm_audio_component_bind,
@@ -135,7 +135,7 @@ void amdgpu_dm_audio_init_pins(struct amdgpu_device *adev, int audio_count,
 		adev->mode_info.audio.pin[i].offset = 0;
 	}
 }
-EXPORT_IF_KUNIT(amdgpu_dm_audio_init_pins);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_audio_init_pins);
 
 int amdgpu_dm_audio_init(struct amdgpu_device *adev)
 {
@@ -161,7 +161,7 @@ int amdgpu_dm_audio_init(struct amdgpu_device *adev)
 
 	return 0;
 }
-EXPORT_IF_KUNIT(amdgpu_dm_audio_init);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_audio_init);
 
 void amdgpu_dm_audio_fini(struct amdgpu_device *adev)
 {
@@ -180,7 +180,7 @@ void amdgpu_dm_audio_fini(struct amdgpu_device *adev)
 
 	adev->mode_info.audio.enabled = false;
 }
-EXPORT_IF_KUNIT(amdgpu_dm_audio_fini);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_audio_fini);
 
 void amdgpu_dm_audio_eld_notify(struct amdgpu_device *adev, int pin)
 {
@@ -193,7 +193,7 @@ void amdgpu_dm_audio_eld_notify(struct amdgpu_device *adev, int pin)
 						 pin, -1);
 	}
 }
-EXPORT_IF_KUNIT(amdgpu_dm_audio_eld_notify);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_audio_eld_notify);
 
 void amdgpu_dm_fill_audio_info(struct audio_info *audio_info,
 		     const struct drm_connector *drm_connector,
@@ -239,7 +239,7 @@ void amdgpu_dm_fill_audio_info(struct audio_info *audio_info,
 	/* TODO: For DP, video and audio latency should be calculated from DPCD caps */
 
 }
-EXPORT_IF_KUNIT(amdgpu_dm_fill_audio_info);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_fill_audio_info);
 
 void amdgpu_dm_commit_audio(struct drm_device *dev,
 			    struct drm_atomic_commit *state)
@@ -321,18 +321,18 @@ notify:
 		amdgpu_dm_audio_eld_notify(adev, inst);
 	}
 }
-EXPORT_IF_KUNIT(amdgpu_dm_commit_audio);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_commit_audio);
 
 #if IS_ENABLED(CONFIG_DRM_AMD_DC_KUNIT_TEST)
 int amdgpu_dm_audio_get_param(void)
 {
 	return amdgpu_audio;
 }
-EXPORT_IF_KUNIT(amdgpu_dm_audio_get_param);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_audio_get_param);
 
 void amdgpu_dm_audio_set_param(int val)
 {
 	amdgpu_audio = val;
 }
-EXPORT_IF_KUNIT(amdgpu_dm_audio_set_param);
+EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_audio_set_param);
 #endif
