@@ -10,6 +10,11 @@ struct bpf_perf_event_value___local {
 	__u64 running;
 } __attribute__((preserve_access_index));
 
+struct profile_reading {
+	struct bpf_perf_event_value___local value;
+	bool armed;
+};
+
 /* map of perf event fds, num_cpu * num_metric entries */
 struct {
 	__uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
@@ -21,7 +26,7 @@ struct {
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(key_size, sizeof(u32));
-	__uint(value_size, sizeof(struct bpf_perf_event_value___local));
+	__uint(value_size, sizeof(struct profile_reading));
 } fentry_readings SEC(".maps");
 
 /* accumulated readings */
@@ -45,7 +50,7 @@ const volatile __u32 num_metric = 1;
 SEC("fentry/XXX")
 int BPF_PROG(fentry_XXX)
 {
-	struct bpf_perf_event_value___local *ptrs[MAX_NUM_METRICS];
+	struct profile_reading *ptrs[MAX_NUM_METRICS];
 	u32 key = bpf_get_smp_processor_id();
 	u32 i;
 
@@ -56,6 +61,7 @@ int BPF_PROG(fentry_XXX)
 		ptrs[i] = bpf_map_lookup_elem(&fentry_readings, &flag);
 		if (!ptrs[i])
 			return 0;
+		ptrs[i]->armed = false;
 	}
 
 	for (i = 0; i < num_metric && i < MAX_NUM_METRICS; i++) {
@@ -66,7 +72,8 @@ int BPF_PROG(fentry_XXX)
 						sizeof(reading));
 		if (err)
 			return 0;
-		*(ptrs[i]) = reading;
+		ptrs[i]->value = reading;
+		ptrs[i]->armed = true;
 		key += num_cpu;
 	}
 
@@ -76,16 +83,18 @@ int BPF_PROG(fentry_XXX)
 static inline void
 fexit_update_maps(u32 id, struct bpf_perf_event_value___local *after)
 {
-	struct bpf_perf_event_value___local *before, diff;
+	struct profile_reading *before;
+	struct bpf_perf_event_value___local diff;
 
 	before = bpf_map_lookup_elem(&fentry_readings, &id);
 	/* only account samples with a valid fentry_reading */
-	if (before && before->counter) {
+	if (before && before->armed) {
 		struct bpf_perf_event_value___local *accum;
 
-		diff.counter = after->counter - before->counter;
-		diff.enabled = after->enabled - before->enabled;
-		diff.running = after->running - before->running;
+		before->armed = false;
+		diff.counter = after->counter - before->value.counter;
+		diff.enabled = after->enabled - before->value.enabled;
+		diff.running = after->running - before->value.running;
 
 		accum = bpf_map_lookup_elem(&accum_readings, &id);
 		if (accum) {
