@@ -21,7 +21,7 @@
 
 struct lp3943_pwm {
 	struct lp3943 *lp3943;
-	struct lp3943_platform_data *pdata;
+	const struct lp3943_platform_data *pdata;
 	struct lp3943_pwm_map pwm_map[LP3943_NUM_PWMS];
 };
 
@@ -33,7 +33,7 @@ static inline struct lp3943_pwm *to_lp3943_pwm(struct pwm_chip *chip)
 static struct lp3943_pwm_map *
 lp3943_pwm_request_map(struct lp3943_pwm *lp3943_pwm, int hwpwm)
 {
-	struct lp3943_platform_data *pdata = lp3943_pwm->pdata;
+	const struct lp3943_platform_data *pdata = lp3943_pwm->pdata;
 	struct lp3943 *lp3943 = lp3943_pwm->lp3943;
 	struct lp3943_pwm_map *pwm_map = &lp3943_pwm->pwm_map[hwpwm];
 	int i, offset;
