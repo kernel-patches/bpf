@@ -114,6 +114,7 @@ struct hwc_work_request {
 	void *buf_sge_addr;
 	u32 buf_len;
 	u32 msg_size;
+	bool refill_needed;
 
 	struct gdma_wqe_request wqe_req;
 	struct hwc_tx_oob tx_oob;
@@ -168,13 +169,24 @@ struct hwc_wq {
 
 struct hwc_caller_ctx {
 	struct completion comp_event;
-	/* Protects initialization, output storage and response state. */
-	spinlock_t lock;
-	void *output_buf;
-	u32 output_buflen;
+	/* Completed RQ buffer, not yet consumed by the sender. */
+	struct hwc_work_request *reply;
+	u32 reply_len;
+	int error;
 
-	int error; /* Linux error code */
-	u32 status_code;
+	/* The ID and TX buffer belong to the sender until it has taken its
+	 * result, and to the device until the corresponding response arrives.
+	 */
+	bool sender;
+	bool pending;
+	unsigned long posted_at;
+	unsigned long deadline;
+};
+
+enum hwc_channel_state {
+	HWC_STOPPED,
+	HWC_READY,
+	HWC_TIMED_OUT,
 };
 
 struct hw_channel_context {
@@ -197,8 +209,13 @@ struct hw_channel_context {
 	struct hwc_wq *txq;
 	struct hwc_cq *cq;
 
-	struct semaphore sema;
+	wait_queue_head_t admission_waitq;
+	struct list_head submissions;
+	/* The map lock serializes slot ownership, SQ publication, response
+	 * delivery, timeout changes and the transition to a faulted channel.
+	 */
 	struct gdma_resource inflight_msg_res;
+	enum hwc_channel_state state;
 
 	u32 dest_vrq_id;
 	u32 dest_vrcq_id;
@@ -209,6 +226,10 @@ struct hw_channel_context {
 	 * until it acknowledges DESTROY_HWC.
 	 */
 	bool setup_active;
+
+	/* mana_gd_send_request() callers, including waiters; under hwc_lock. */
+	unsigned int active_senders;
+
 	struct hwc_caller_ctx *caller_ctx;
 };
 
@@ -217,6 +238,12 @@ void mana_hwc_destroy_channel(struct gdma_context *gc);
 void mana_hwc_free_retained_channel(struct gdma_context *gc);
 
 int mana_hwc_send_request(struct hw_channel_context *hwc, u32 req_len,
-			  const void *req, u32 resp_len, void *resp);
+			  const void *req, u32 resp_len, void *resp,
+			  bool teardown);
+int mana_gd_test_hwc_eq(struct hw_channel_context *hwc,
+			struct gdma_queue *eq);
+
+u32 mana_hwc_timeout_read(const struct hw_channel_context *hwc);
+void mana_hwc_timeout_update(struct hw_channel_context *hwc, u32 timeout_ms);
 
 #endif /* _HW_CHANNEL_H */

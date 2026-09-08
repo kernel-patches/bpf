@@ -14,7 +14,6 @@
 #include <linux/xarray.h>
 
 #include <net/mana/mana.h>
-#include <net/mana/hw_channel.h>
 
 struct mana_dev_recovery {
 	struct list_head list;
@@ -119,7 +118,6 @@ out:
 /* Return true if recovery needs to escalate to PCI re-enumeration. */
 static bool mana_serv_reset(struct pci_dev *pdev)
 {
-	struct hw_channel_context *hwc;
 	struct gdma_context *gc;
 	int ret;
 
@@ -128,14 +126,14 @@ static bool mana_serv_reset(struct pci_dev *pdev)
 		return false;
 
 	gc = pci_get_drvdata(pdev);
-	hwc = gc->hwc.driver_data;
-	if (!hwc) {
+	if (!gc->hwc.driver_data) {
 		dev_err(&pdev->dev, "MANA service: no HWC\n");
 		goto out;
 	}
 
-	/* HWC is not responding in this case, so don't wait */
-	hwc->hwc_timeout = 0;
+	/* A service notification is not a DMA fence. Keep the normal HWC
+	 * response window for cleanup, including when all slots are in use.
+	 */
 
 	dev_info(&pdev->dev, "MANA reset cycle start\n");
 
@@ -616,6 +614,8 @@ static int mana_gd_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	mutex_init(&gc->eq_test_event_mutex);
 	mutex_init(&gc->gic_mutex);
+	spin_lock_init(&gc->hwc_lock);
+	init_waitqueue_head(&gc->hwc_drain_waitq);
 	pci_set_drvdata(pdev, gc);
 	gc->bar0_pa = pci_resource_start(pdev, 0);
 	gc->bar0_size = pci_resource_len(pdev, 0);

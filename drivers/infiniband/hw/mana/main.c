@@ -100,7 +100,8 @@ static int mana_gd_destroy_pd(struct mana_ib_dev *mdev, u64 pd_handle)
 
 	req.pd_handle = pd_handle;
 
-	return mana_gd_send_request(mdev_to_gc(mdev), sizeof(req), &req, sizeof(resp), &resp);
+	return mana_gd_send_teardown_request(mdev_to_gc(mdev), sizeof(req),
+					     &req, sizeof(resp), &resp);
 }
 
 int mana_ib_alloc_pd(struct ib_pd *ibpd, struct ib_udata *udata)
