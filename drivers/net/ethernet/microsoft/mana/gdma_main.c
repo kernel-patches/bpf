@@ -331,7 +331,11 @@ static int mana_gd_query_hwc_timeout(struct pci_dev *pdev, u32 *timeout_val)
 	if (err || resp.hdr.status)
 		return err ? err : -EPROTO;
 
-	*timeout_val = resp.timeout_ms;
+	/* Keep the current timeout on a zero query reply. Asynchronous
+	 * HWC_DATA_CFG_HWC_TIMEOUT updates remain unfiltered.
+	 */
+	if (resp.timeout_ms)
+		*timeout_val = resp.timeout_ms;
 
 	return 0;
 }
