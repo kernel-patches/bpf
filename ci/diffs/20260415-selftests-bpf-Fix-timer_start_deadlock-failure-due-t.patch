@@ -1,0 +1,57 @@
+From 2259e42ebbeb7ba5d7e25d17c12c33a951b858c4 Mon Sep 17 00:00:00 2001
+From: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+Date: Wed, 15 Apr 2026 20:03:28 +0800
+Subject: [PATCH] selftests/bpf: Fix timer_start_deadlock failure due to
+ hrtimer change
+
+Since commit f2e388a019e4 ("hrtimer: Reduce trace noise in hrtimer_start()"),
+hrtimer_cancel tracepoint is no longer called when a hrtimer is re-armed. So
+instead of a hrtimer_cancel followed by hrtimer_start tracepoint events, there
+is now only a since hrtimer_start tracepoint event with the new was_armed field
+set to 1, to indicated that the hrtimer was previously armed.
+
+Update timer_start_deadlock accordingly so it traces hrtimer_start tracepoint
+instead, with was_armed used as guard.
+
+Signed-off-by: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+Tested-by: Mykyta Yatsenko <yatsenko@meta.com>
+Acked-by: Mykyta Yatsenko <yatsenko@meta.com>
+Link: https://lore.kernel.org/r/20260415120329.129192-1-shung-hsi.yu@suse.com
+Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+---
+ tools/testing/selftests/bpf/progs/timer_start_deadlock.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/tools/testing/selftests/bpf/progs/timer_start_deadlock.c b/tools/testing/selftests/bpf/progs/timer_start_deadlock.c
+index 019518ee18cd..afabd15bdac4 100644
+--- a/tools/testing/selftests/bpf/progs/timer_start_deadlock.c
++++ b/tools/testing/selftests/bpf/progs/timer_start_deadlock.c
+@@ -27,13 +27,13 @@ static int timer_cb(void *map, int *key, struct elem *value)
+ 	return 0;
+ }
+ 
+-SEC("tp_btf/hrtimer_cancel")
+-int BPF_PROG(tp_hrtimer_cancel, struct hrtimer *hrtimer)
++SEC("tp_btf/hrtimer_start")
++int BPF_PROG(tp_hrtimer_start, struct hrtimer *hrtimer, enum hrtimer_mode mode, bool was_armed)
+ {
+ 	struct bpf_timer *timer;
+ 	int key = 0;
+ 
+-	if (!in_timer_start)
++	if (!in_timer_start || !was_armed)
+ 		return 0;
+ 
+ 	tp_called = 1;
+@@ -60,7 +60,7 @@ int start_timer(void *ctx)
+ 
+ 	/*
+ 	 * call hrtimer_start() twice, so that 2nd call does
+-	 * remove_hrtimer() and trace_hrtimer_cancel() tracepoint.
++	 * trace_hrtimer_start(was_armed=1) tracepoint.
+ 	 */
+ 	in_timer_start = 1;
+ 	bpf_timer_start(timer, 1000000000, 0);
+-- 
+2.53.0
+
