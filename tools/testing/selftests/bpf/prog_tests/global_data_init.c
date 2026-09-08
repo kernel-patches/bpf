@@ -214,6 +214,8 @@ static void test_global_percpu_data_lskel(void)
 	lskel = test_global_percpu_data_lskel__open_and_load();
 	if (!ASSERT_OK_PTR(lskel, "test_global_percpu_data_lskel__open_and_load"))
 		goto out;
+	if (!ASSERT_GT(lskel->progs.dump_percpu_data.prog_fd, 0, "dump_percpu_data.prog_fd"))
+		goto out;
 
 	map_fd = lskel->maps.percpu.map_fd;
 	prog_fd = lskel->progs.update_percpu_data.prog_fd;
