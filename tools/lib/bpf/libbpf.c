@@ -3021,17 +3021,6 @@ static int init_arena_map_data(struct bpf_object *obj, struct bpf_map *map,
 			       const char *sec_name, int sec_idx,
 			       void *data, size_t data_sz)
 {
-	const long page_sz = sysconf(_SC_PAGE_SIZE);
-	const size_t data_alloc_sz = roundup(data_sz, page_sz);
-	size_t mmap_sz;
-
-	mmap_sz = bpf_map_mmap_sz(map);
-	if (data_alloc_sz > mmap_sz) {
-		pr_warn("elf: sec '%s': declared ARENA map size (%zu) is too small to hold global __arena variables of size %zu\n",
-			sec_name, mmap_sz, data_sz);
-		return -E2BIG;
-	}
-
 	obj->arena_data = malloc(data_sz);
 	if (!obj->arena_data)
 		return -ENOMEM;
@@ -5718,6 +5707,16 @@ retry:
 				if (err < 0)
 					goto err_out;
 			} else if (map->def.type == BPF_MAP_TYPE_ARENA) {
+				size_t mmap_sz = bpf_map_mmap_sz(map);
+
+				if (obj->arena_data &&
+				    roundup(obj->arena_data_sz, sysconf(_SC_PAGE_SIZE)) > mmap_sz) {
+					pr_warn("map '%s': declared ARENA map size (%zu) is too small to hold global __arena variables of size %zu\n",
+						map->name, mmap_sz, obj->arena_data_sz);
+					err = -E2BIG;
+					goto err_out;
+				}
+
 				map->mmaped = mmap((void *)(long)map->map_extra,
 						   bpf_map_mmap_sz(map), PROT_READ | PROT_WRITE,
 						   map->map_extra ? MAP_SHARED | MAP_FIXED : MAP_SHARED,
