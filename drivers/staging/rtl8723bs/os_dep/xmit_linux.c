@@ -165,7 +165,6 @@ static int rtw_mlcst2unicst(struct adapter *padapter, struct sk_buff *skb)
 			}
 		} else {
 			pxmitpriv->tx_drop++;
-			/* dev_kfree_skb_any(skb); */
 			return false;	/*  Caller shall tx this multicast frame via normal way. */
 		}
 	}

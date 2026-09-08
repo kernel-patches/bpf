@@ -204,7 +204,6 @@ struct cfg80211_bss *rtw_cfg80211_inform_bss(struct adapter *padapter, struct wl
 {
 	struct ieee80211_channel *notify_channel;
 	struct cfg80211_bss *bss = NULL;
-	/* struct ieee80211_supported_band *band; */
 	u16 channel;
 	u32 freq;
 	u64 notify_timestamp;
@@ -232,7 +231,6 @@ struct cfg80211_bss *rtw_cfg80211_inform_bss(struct adapter *padapter, struct wl
 	}
 
 	/* To reduce PBC Overlap rate */
-	/* spin_lock_bh(&pwdev_priv->scan_req_lock); */
 	if (adapter_wdev_data(padapter)->scan_request) {
 		u8 *psr = NULL, sr = 0;
 		struct ndis_802_11_ssid *pssid = &pnetwork->network.ssid;
@@ -258,7 +256,6 @@ struct cfg80211_bss *rtw_cfg80211_inform_bss(struct adapter *padapter, struct wl
 			}
 		}
 	}
-	/* spin_unlock_bh(&pwdev_priv->scan_req_lock); */
 
 	channel = pnetwork->network.configuration.ds_config;
 	freq = rtw_ieee80211_channel_to_frequency(channel);
@@ -285,7 +282,6 @@ struct cfg80211_bss *rtw_cfg80211_inform_bss(struct adapter *padapter, struct wl
 	*(fctrl) = 0;
 
 	SetSeqNum(pwlanhdr, 0/*pmlmeext->mgnt_seq*/);
-	/* pmlmeext->mgnt_seq++; */
 
 	if (pnetwork->network.reserved[0] == 1) { /*  WIFI_BEACON */
 		eth_broadcast_addr(pwlanhdr->addr1);
@@ -517,7 +513,6 @@ static int rtw_cfg80211_ap_set_encryption(struct net_device *dev, struct ieee_pa
 	} else {
 		psta = rtw_get_stainfo(pstapriv, param->sta_addr);
 		if (!psta)
-			/* ret = -EINVAL; */
 			goto exit;
 	}
 
@@ -782,7 +777,6 @@ static int rtw_cfg80211_set_encryption(struct net_device *dev, struct ieee_param
 						memcpy(psta->dot11tkiprxmickey.skey, &param->u.crypt.key[24], 8);
 
 						padapter->securitypriv.busetkipkey = false;
-						/* _set_timer(&padapter->securitypriv.tkip_timer, 50); */
 					}
 
 					rtw_setstakey_cmd(padapter, psta, true, true);
@@ -846,8 +840,6 @@ static int cfg80211_rtw_add_key(struct wiphy *wiphy, struct wireless_dev *wdev,
 
 	switch (params->cipher) {
 	case IW_AUTH_CIPHER_NONE:
-		/* todo: remove key */
-		/* remove = 1; */
 		alg_name = "none";
 		break;
 	case WLAN_CIPHER_SUITE_WEP40:
@@ -1125,7 +1117,6 @@ void rtw_cfg80211_surveydone_event_callback(struct adapter *padapter)
 		/* report network only if the current channel set contains the channel to which this network belongs */
 		if (rtw_ch_set_search_ch(padapter->mlmeextpriv.channel_set, pnetwork->network.configuration.ds_config) >= 0
 			&& true == rtw_validate_ssid(&pnetwork->network.ssid)) {
-			/* ev =translate_scan(padapter, a, pnetwork, ev, stop); */
 			rtw_cfg80211_inform_bss(padapter, pnetwork);
 		}
 	}
@@ -1330,7 +1321,6 @@ static int rtw_cfg80211_set_auth_type(struct security_priv *psecuritypriv,
 		break;
 	default:
 		psecuritypriv->dot11_auth_algrthm = dot11_auth_algrthm_open;
-		/* return -ENOTSUPP; */
 	}
 
 	return 0;
@@ -1376,9 +1366,6 @@ static int rtw_cfg80211_set_cipher(struct security_priv *psecuritypriv, u32 ciph
 
 	if (ucast) {
 		psecuritypriv->ndisencryptstatus = ndisencryptstatus;
-
-		/* if (psecuritypriv->dot11_privacy_algrthm >= _AES_) */
-		/*	psecuritypriv->ndisauthtype = Ndis802_11AuthModeWPA2PSK; */
 	}
 
 	return 0;
@@ -1387,7 +1374,6 @@ static int rtw_cfg80211_set_cipher(struct security_priv *psecuritypriv, u32 ciph
 static int rtw_cfg80211_set_key_mgt(struct security_priv *psecuritypriv, u32 key_mgt)
 {
 	if (key_mgt == WLAN_AKM_SUITE_8021X)
-		/* auth_type = UMAC_AUTH_TYPE_8021X; */
 		psecuritypriv->dot11_auth_algrthm = dot11_auth_algrthm_8021x;
 	else if (key_mgt == WLAN_AKM_SUITE_PSK) {
 		psecuritypriv->dot11_auth_algrthm = dot11_auth_algrthm_8021x;
@@ -1752,8 +1738,6 @@ static int cfg80211_rtw_connect(struct wiphy *wiphy, struct net_device *ndev,
 	authmode = psecuritypriv->ndisauthtype;
 	rtw_set_802_11_authentication_mode(padapter, authmode);
 
-	/* rtw_set_802_11_encryption_mode(padapter, padapter->securitypriv.ndisencryptstatus); */
-
 	if (!rtw_set_802_11_connect(padapter, (u8 *)sme->bssid, &ndis_ssid)) {
 		ret = -1;
 		goto exit;
@@ -2055,8 +2039,6 @@ static netdev_tx_t rtw_cfg80211_monitor_if_xmit_entry(struct sk_buff *skb, struc
 		struct xmit_frame		*pmgntframe;
 		struct pkt_attrib	*pattrib;
 		unsigned char *pframe;
-		/* u8 category, action, OUI_Subtype, dialogToken = 0; */
-		/* unsigned char *frame_body; */
 		struct ieee80211_hdr *pwlanhdr;
 		struct xmit_priv *pxmitpriv = &padapter->xmitpriv;
 		struct mlme_ext_priv *pmlmeext = &padapter->mlmeextpriv;
@@ -2476,7 +2458,6 @@ static int _cfg80211_rtw_mgmt_tx(struct adapter *padapter, u8 tx_ch, const u8 *b
 	/* starting alloc mgmt frame to dump it */
 	pmgntframe = alloc_mgtxmitframe(pxmitpriv);
 	if (!pmgntframe) {
-		/* ret = -ENOMEM; */
 		ret = _FAIL;
 		goto exit;
 	}
