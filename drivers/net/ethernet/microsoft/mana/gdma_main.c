@@ -1260,15 +1260,17 @@ static void mana_gd_create_cq(const struct gdma_queue_spec *spec,
 static void mana_gd_destroy_cq(struct gdma_context *gc,
 			       struct gdma_queue *queue)
 {
+	struct gdma_queue **cq_table = READ_ONCE(gc->cq_table);
 	u32 id = queue->id;
 
-	if (id >= gc->max_num_cqs)
+	/* HWC re-establishment can fail before allocating the CQ table. */
+	if (!cq_table || id >= gc->max_num_cqs)
 		return;
 
-	if (!gc->cq_table[id])
+	if (!cq_table[id])
 		return;
 
-	gc->cq_table[id] = NULL;
+	cq_table[id] = NULL;
 }
 
 int mana_gd_create_hwc_queue(struct gdma_dev *gd,
