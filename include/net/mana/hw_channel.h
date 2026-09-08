@@ -199,6 +199,9 @@ struct hw_channel_context {
 	u32 pf_dest_vrcq_id;
 	u32 hwc_timeout;
 
+	/* PF may own the queue mappings; state lasts only for this context. */
+	bool setup_active;
+
 	struct hwc_caller_ctx *caller_ctx;
 };
 
