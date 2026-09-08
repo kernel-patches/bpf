@@ -184,7 +184,9 @@ OPTIONS
 -L, --use-loader
     For skeletons, generate a "light" skeleton (also known as "loader"
     skeleton). A light skeleton contains a loader eBPF program. It does not use
-    the majority of the libbpf infrastructure, and does not need libelf.
+    the majority of the libbpf infrastructure, and does not need libelf. BPF
+    programs marked as non-autoload (e.g., via **SEC("?...")**) are skipped and
+    not included in the generated skeleton.
 
 -S, --sign
     For skeletons, generate a signed skeleton. This option must be used with
