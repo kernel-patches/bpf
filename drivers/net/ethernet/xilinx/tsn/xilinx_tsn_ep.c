@@ -29,6 +29,8 @@
 #include <linux/timer.h>
 #include <linux/types.h>
 
+#include <net/netdev_queues.h>
+
 #include "xilinx_tsn.h"
 
 #define DRIVER_NAME			"xilinx_tsn_ep"
@@ -82,6 +84,7 @@ struct skbuf_dma_descriptor {
  * @ring_tail: consumer index
  * @ring_size: number of slots in @skb_ring
  * @rx_lock: serialises @ring_head between the RX callback and the refill timer
+ * @tx_lock: serialises @ring_head and @ring_tail between xmit and TX completion
  * @rx_refill_timer: retries RX refill after an allocation failure
  * @is_tx: true for TX channels, false for RX
  */
@@ -94,6 +97,7 @@ struct xlnx_tsn_ep_dma_chan {
 	u32 ring_tail;
 	u32 ring_size;
 	spinlock_t rx_lock;	/* serialises @ring_head */
+	spinlock_t tx_lock;	/* serialises @ring_head and @ring_tail */
 	struct timer_list rx_refill_timer;
 	bool is_tx;
 };
@@ -300,8 +304,147 @@ submit_new:
 	ep_rx_refill(xchan, true);
 }
 
+static void ep_dma_tx_cb(void *data, const struct dmaengine_result *result)
+{
+	struct xlnx_tsn_ep_dma_chan *xchan = data;
+	struct skbuf_dma_descriptor *skbuf_dma;
+	struct netdev_queue *txq;
+	struct net_device *ndev;
+	struct scatterlist *sgl;
+	struct sk_buff *skb;
+	int sg_len;
+	int len;
+
+	scoped_guard(spinlock_bh, &xchan->tx_lock) {
+		skbuf_dma = ep_get_desc(xchan,
+					xchan->ring_tail & (xchan->ring_size - 1));
+		if (!skbuf_dma || !skbuf_dma->skb)
+			return;
+
+		skb = skbuf_dma->skb;
+		sgl = skbuf_dma->sgl;
+		sg_len = skbuf_dma->sg_len;
+
+		dma_unmap_sg(xchan->dma_dev, sgl, sg_len, DMA_TO_DEVICE);
+
+		skbuf_dma->skb = NULL;
+		WRITE_ONCE(xchan->ring_tail, xchan->ring_tail + 1);
+	}
+
+	ndev = skb->dev;
+	txq = netdev_get_tx_queue(ndev, skb_get_queue_mapping(skb));
+	len = skb->len;
+
+	if (unlikely(result->result != DMA_TRANS_NOERROR)) {
+		DEV_STATS_INC(ndev, tx_errors);
+	} else {
+		DEV_STATS_INC(ndev, tx_packets);
+		DEV_STATS_ADD(ndev, tx_bytes, len);
+	}
+
+	dev_consume_skb_any(skb);
+	netif_txq_completed_wake(txq, 1, len,
+				 CIRC_SPACE(READ_ONCE(xchan->ring_head),
+					    READ_ONCE(xchan->ring_tail),
+					    xchan->ring_size), 2);
+}
+
 static netdev_tx_t ep_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
+	struct dma_async_tx_descriptor *dma_tx_desc;
+	struct xlnx_tsn_ep *ep = netdev_priv(ndev);
+	struct skbuf_dma_descriptor *skbuf_dma;
+	int queue = skb_get_queue_mapping(skb);
+	struct xlnx_tsn_ep_dma_chan *xchan;
+	struct netdev_queue *txq;
+	int sg_len, nents, ret;
+	dma_cookie_t cookie;
+
+	if (unlikely(queue >= ep->num_tx_queues)) {
+		if (net_ratelimit())
+			netdev_warn(ndev, "Invalid TX queue %d (max %u)\n",
+				    queue, ep->num_tx_queues);
+		goto err_drop_skb;
+	}
+
+	if (ep->tx_dma_chan_map[queue] == TSN_DMA_CH_INVALID) {
+		if (net_ratelimit())
+			netdev_warn(ndev, "Logical TX queue %d has invalid DMA mapping\n",
+				    queue);
+		goto err_drop_skb;
+	}
+
+	xchan = ep->tx_chans[queue];
+
+	sg_len = skb_shinfo(skb)->nr_frags + 1;
+	txq = netdev_get_tx_queue(ndev, queue);
+
+	spin_lock_bh(&xchan->tx_lock);
+	if (CIRC_SPACE(xchan->ring_head, READ_ONCE(xchan->ring_tail),
+		       xchan->ring_size) <= 1) {
+		netif_txq_try_stop(txq,
+				   CIRC_SPACE(xchan->ring_head,
+					      READ_ONCE(xchan->ring_tail),
+					      xchan->ring_size),
+				   2);
+		spin_unlock_bh(&xchan->tx_lock);
+		if (net_ratelimit())
+			netdev_warn(ndev, "TSN TX ring full\n");
+
+		return NETDEV_TX_BUSY;
+	}
+
+	skbuf_dma = ep_get_desc(xchan, xchan->ring_head & (xchan->ring_size - 1));
+	if (!skbuf_dma) {
+		spin_unlock_bh(&xchan->tx_lock);
+		goto err_drop_skb;
+	}
+	spin_unlock_bh(&xchan->tx_lock);
+
+	sg_init_table(skbuf_dma->sgl, sg_len);
+	ret = skb_to_sgvec(skb, skbuf_dma->sgl, 0, skb->len);
+	if (ret < 0)
+		goto err_drop_skb;
+	sg_len = ret;
+
+	nents = dma_map_sg(xchan->dma_dev, skbuf_dma->sgl, sg_len, DMA_TO_DEVICE);
+	if (!nents)
+		goto err_drop_skb;
+
+	dma_tx_desc = dmaengine_prep_slave_sg(xchan->chan, skbuf_dma->sgl,
+					      nents, DMA_MEM_TO_DEV,
+					      DMA_PREP_INTERRUPT);
+	if (!dma_tx_desc)
+		goto err_unmap_sg;
+
+	skbuf_dma->skb = skb;
+	skbuf_dma->sg_len = sg_len;
+	dma_tx_desc->callback_param = xchan;
+	dma_tx_desc->callback_result = ep_dma_tx_cb;
+
+	spin_lock_bh(&xchan->tx_lock);
+	cookie = dmaengine_submit(dma_tx_desc);
+	if (dma_submit_error(cookie)) {
+		spin_unlock_bh(&xchan->tx_lock);
+		skbuf_dma->skb = NULL;
+		goto err_unmap_sg;
+	}
+	WRITE_ONCE(xchan->ring_head, xchan->ring_head + 1);
+	netdev_tx_sent_queue(txq, skb->len);
+	netif_txq_maybe_stop(txq,
+			     CIRC_SPACE(xchan->ring_head,
+					READ_ONCE(xchan->ring_tail),
+					xchan->ring_size),
+			     2, 2);
+	spin_unlock_bh(&xchan->tx_lock);
+
+	dma_async_issue_pending(xchan->chan);
+
+	return NETDEV_TX_OK;
+
+err_unmap_sg:
+	dma_unmap_sg(xchan->dma_dev, skbuf_dma->sgl, sg_len, DMA_TO_DEVICE);
+err_drop_skb:
 	dev_kfree_skb_any(skb);
 	DEV_STATS_INC(ndev, tx_dropped);
 	return NETDEV_TX_OK;
@@ -331,10 +474,13 @@ static int ep_open(struct net_device *ndev)
 static int ep_stop(struct net_device *ndev)
 {
 	struct xlnx_tsn_ep *ep = netdev_priv(ndev);
+	unsigned int i;
 
 	netif_tx_disable(ndev);
 	WRITE_ONCE(ep->closing, true);
 	ep_exit_dmaengine(ep);
+	for (i = 0; i < ndev->num_tx_queues; i++)
+		netdev_tx_reset_subqueue(ndev, i);
 
 	return 0;
 }
@@ -398,7 +544,9 @@ ep_alloc_dma_chan(struct xlnx_tsn_ep *ep, const char *name, bool is_tx,
 	chan->ep = ep;
 	chan->ring_size = ring_size;
 	chan->dma_dev = dmaengine_get_dma_device(chan->chan);
-	if (!is_tx) {
+	if (is_tx) {
+		spin_lock_init(&chan->tx_lock);
+	} else {
 		spin_lock_init(&chan->rx_lock);
 		timer_setup(&chan->rx_refill_timer, ep_rx_refill_timer, 0);
 	}
