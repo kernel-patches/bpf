@@ -19,7 +19,6 @@
 struct mana_dev_recovery {
 	struct list_head list;
 	struct pci_dev *pdev;
-	enum gdma_eqe_type type;
 };
 
 static struct mana_dev_recovery_work {
@@ -32,69 +31,103 @@ static struct mana_dev_recovery_work {
 
 static int mana_gd_suspend(struct pci_dev *pdev, pm_message_t state);
 static int mana_gd_resume(struct pci_dev *pdev);
+static struct pci_driver mana_driver;
 
 #define MANA_SERVICE_PERIOD 10
 
-static void mana_serv_rescan(struct pci_dev *pdev)
+enum mana_rescan_reason {
+	MANA_RESCAN_PROBE,
+	MANA_RESCAN_RESET,
+	MANA_RESCAN_FPGA,
+};
+
+/* The rescan/remove lock serializes service removals. A synchronous
+ * ->remove() on this task can veto the scan, including for a sibling
+ * removed along with the upstream bridge.
+ */
+static struct task_struct *mana_rescan_task;
+
+static int mana_check_unbound(struct pci_dev *pdev, void *data)
 {
+	bool *unbound = data;
+
+	if (READ_ONCE(pdev->driver) ||
+	    !pci_match_id(mana_driver.id_table, pdev))
+		return 0;
+
+	*unbound = true;
+	return 1;
+}
+
+static void mana_serv_rescan(struct pci_dev *pdev,
+			     enum mana_rescan_reason reason)
+{
+	struct pci_dev *target = pdev;
 	struct pci_bus *parent;
+	bool unbound = false;
 
 	pci_lock_rescan_remove();
+	if (!device_is_registered(&pdev->dev))
+		goto out;
 
-	parent = pdev->bus;
-	if (!parent) {
+	scoped_guard(device, &pdev->dev) {
+		if (reason == MANA_RESCAN_PROBE) {
+			if (pdev->dev.driver)
+				goto out;
+		} else if (pdev->driver != &mana_driver) {
+			goto out;
+		} else if (reason == MANA_RESCAN_FPGA) {
+			struct gdma_context *gc = pci_get_drvdata(pdev);
+
+			/* An unbound sibling cannot veto the bridge rescan in
+			 * ->remove(). Its last probe may have lost HWC DMA.
+			 */
+			target = pci_upstream_bridge(pdev);
+			if (target)
+				pci_walk_bus(target->subordinate,
+					     mana_check_unbound, &unbound);
+			if (unbound) {
+				dev_err(&pdev->dev,
+					"Unbound MANA function, skipping bridge rescan\n");
+				clear_bit(GC_IN_SERVICE, &gc->flags);
+				goto out;
+			}
+		}
+	}
+
+	if (!target || !target->bus) {
 		dev_err(&pdev->dev, "MANA service: no parent bus\n");
 		goto out;
 	}
 
-	pci_stop_and_remove_bus_device(pdev);
+	parent = target->bus;
+	WRITE_ONCE(mana_rescan_task, current);
+	pci_stop_and_remove_bus_device(target);
+	if (!READ_ONCE(mana_rescan_task))
+		goto out;
+	WRITE_ONCE(mana_rescan_task, NULL);
+
+	if (reason == MANA_RESCAN_FPGA)
+		msleep(MANA_SERVICE_PERIOD * 1000);
+
 	pci_rescan_bus(parent);
 
 out:
 	pci_unlock_rescan_remove();
 }
 
-static void mana_serv_fpga(struct pci_dev *pdev)
+/* Return true if recovery needs to escalate to PCI re-enumeration. */
+static bool mana_serv_reset(struct pci_dev *pdev)
 {
-	struct pci_bus *bus, *parent;
-
-	pci_lock_rescan_remove();
-
-	bus = pdev->bus;
-	if (!bus) {
-		dev_err(&pdev->dev, "MANA service: no bus\n");
-		goto out;
-	}
-
-	parent = bus->parent;
-	if (!parent) {
-		dev_err(&pdev->dev, "MANA service: no parent bus\n");
-		goto out;
-	}
-
-	pci_stop_and_remove_bus_device(bus->self);
-
-	msleep(MANA_SERVICE_PERIOD * 1000);
-
-	pci_rescan_bus(parent);
-
-out:
-	pci_unlock_rescan_remove();
-}
-
-static void mana_serv_reset(struct pci_dev *pdev)
-{
-	struct gdma_context *gc = pci_get_drvdata(pdev);
 	struct hw_channel_context *hwc;
+	struct gdma_context *gc;
 	int ret;
 
-	if (!gc) {
-		/* Perform PCI rescan on device if GC is not set up */
-		dev_err(&pdev->dev, "MANA service: GC not setup, rescanning\n");
-		mana_serv_rescan(pdev);
-		return;
-	}
+	guard(device)(&pdev->dev);
+	if (pdev->driver != &mana_driver)
+		return false;
 
+	gc = pci_get_drvdata(pdev);
 	hwc = gc->hwc.driver_data;
 	if (!hwc) {
 		dev_err(&pdev->dev, "MANA service: no HWC\n");
@@ -114,8 +147,7 @@ static void mana_serv_reset(struct pci_dev *pdev)
 	if (ret == -ETIMEDOUT || ret == -EPROTO) {
 		/* Perform PCI rescan on device if we failed on HWC */
 		dev_err(&pdev->dev, "MANA service: resume failed, rescanning\n");
-		mana_serv_rescan(pdev);
-		return;
+		return true;
 	}
 
 	if (ret)
@@ -125,17 +157,19 @@ static void mana_serv_reset(struct pci_dev *pdev)
 
 out:
 	clear_bit(GC_IN_SERVICE, &gc->flags);
+	return false;
 }
 
 static void mana_do_service(enum gdma_eqe_type type, struct pci_dev *pdev)
 {
 	switch (type) {
 	case GDMA_EQE_HWC_FPGA_RECONFIG:
-		mana_serv_fpga(pdev);
+		mana_serv_rescan(pdev, MANA_RESCAN_FPGA);
 		break;
 
 	case GDMA_EQE_HWC_RESET_REQUEST:
-		mana_serv_reset(pdev);
+		if (mana_serv_reset(pdev))
+			mana_serv_rescan(pdev, MANA_RESCAN_RESET);
 		break;
 
 	default:
@@ -160,7 +194,7 @@ static void mana_recovery_delayed_func(struct work_struct *w)
 		list_del(&dev->list);
 		spin_unlock_irqrestore(&work->lock, flags);
 
-		mana_do_service(dev->type, dev->pdev);
+		mana_serv_rescan(dev->pdev, MANA_RESCAN_PROBE);
 		pci_dev_put(dev->pdev);
 		kfree(dev);
 
@@ -632,8 +666,16 @@ unmap_bar:
 	xa_destroy(&gc->irq_contexts);
 	pci_iounmap(pdev, bar0_va);
 free_gc:
+	/* No binding remains to retry DESTROY. Do not start another probe
+	 * which could abandon another set of coherent allocations.
+	 */
+	if (gc->hwc.driver_data) {
+		dev_err(&pdev->dev,
+			"HWC teardown failed, disabling probe recovery\n");
+		err = -ENOTRECOVERABLE;
+	}
 	pci_set_drvdata(pdev, NULL);
-	vfree(gc);
+	mana_gd_free_context(gc);
 release_region:
 	pci_release_regions(pdev);
 disable_dev:
@@ -658,7 +700,6 @@ disable_dev:
 			return err;
 
 		dev->pdev = pci_dev_get(pdev);
-		dev->type = GDMA_EQE_HWC_RESET_REQUEST;
 
 		spin_lock_irqsave(&mana_dev_recovery_work.lock, flags);
 		list_add_tail(&dev->list, &mana_dev_recovery_work.dev_list);
@@ -682,11 +723,16 @@ static void mana_gd_remove(struct pci_dev *pdev)
 
 	mana_gd_cleanup(gc);
 
+	if (gc->hwc.driver_data && READ_ONCE(mana_rescan_task) == current) {
+		dev_err(gc->dev, "HWC teardown failed, skipping PCI rescan\n");
+		WRITE_ONCE(mana_rescan_task, NULL);
+	}
+
 	xa_destroy(&gc->irq_contexts);
 
 	pci_iounmap(pdev, gc->bar0_va);
 
-	vfree(gc);
+	mana_gd_free_context(gc);
 
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
@@ -714,7 +760,7 @@ static int mana_gd_resume(struct pci_dev *pdev)
 
 	err = mana_gd_setup(gc);
 	if (err)
-		return err;
+		goto check_hwc;
 
 	err = mana_probe(&gc->mana, true);
 	if (err)
@@ -728,6 +774,10 @@ static int mana_gd_resume(struct pci_dev *pdev)
 
 cleanup_gd:
 	mana_gd_cleanup(gc);
+check_hwc:
+	/* Keep the binding and DMA handles for a later DESTROY retry. */
+	if (gc->hwc.driver_data)
+		return -ENOTRECOVERABLE;
 	return err;
 }
 

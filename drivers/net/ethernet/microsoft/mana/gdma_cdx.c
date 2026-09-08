@@ -279,7 +279,7 @@ unmap_bar:
 	iounmap(bar0_va);
 free_gc:
 	dev_set_drvdata(&cdx_dev->dev, NULL);
-	vfree(gc);
+	mana_gd_free_context(gc);
 clear_master:
 	cdx_clear_master(cdx_dev);
 	return err;
@@ -298,7 +298,7 @@ static int mana_cdx_gd_remove(struct cdx_device *cdx_dev)
 	iounmap(gc->bar0_va);
 
 	dev_set_drvdata(&cdx_dev->dev, NULL);
-	vfree(gc);
+	mana_gd_free_context(gc);
 	return 0;
 }
 
