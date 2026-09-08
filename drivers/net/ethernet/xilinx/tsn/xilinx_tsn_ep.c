@@ -5,6 +5,7 @@
  * Copyright (C) 2026 Advanced Micro Devices, Inc.
  */
 
+#include <linux/bitfield.h>
 #include <linux/bitops.h>
 #include <linux/circ_buf.h>
 #include <linux/dma/xilinx_dma.h>
@@ -25,6 +26,7 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
+#include <linux/timer.h>
 #include <linux/types.h>
 
 #include "xilinx_tsn.h"
@@ -40,6 +42,19 @@
 
 #define TX_BD_NUM_DEFAULT		64
 #define RX_BD_NUM_DEFAULT		128
+
+#define EP_RX_REFILL_RETRY		msecs_to_jiffies(10)
+
+/*
+ * The DMA descriptor sideband status word packs TID/TDEST/TUSER together;
+ * TUSER occupies the low byte, TID/TDEST sit in the upper bits.
+ */
+#define TSN_TUSER_MASK			GENMASK(7, 0)
+/* TUSER Input Port ID field (bits [5:4] of the TUSER field) */
+#define TSN_TUSER_PORT_ID_MASK		GENMASK(5, 4)
+#define TSN_TUSER_PORT_EP		0x0
+#define TSN_TUSER_PORT_MAC1		0x1
+#define TSN_TUSER_PORT_MAC2		0x2
 
 /**
  * struct skbuf_dma_descriptor - skb container for each in-flight DMA descriptor
@@ -66,6 +81,8 @@ struct skbuf_dma_descriptor {
  * @ring_head: producer index
  * @ring_tail: consumer index
  * @ring_size: number of slots in @skb_ring
+ * @rx_lock: serialises @ring_head between the RX callback and the refill timer
+ * @rx_refill_timer: retries RX refill after an allocation failure
  * @is_tx: true for TX channels, false for RX
  */
 struct xlnx_tsn_ep_dma_chan {
@@ -76,6 +93,8 @@ struct xlnx_tsn_ep_dma_chan {
 	u32 ring_head;
 	u32 ring_tail;
 	u32 ring_size;
+	spinlock_t rx_lock;	/* serialises @ring_head */
+	struct timer_list rx_refill_timer;
 	bool is_tx;
 };
 
@@ -111,6 +130,174 @@ static inline struct skbuf_dma_descriptor *
 ep_get_desc(struct xlnx_tsn_ep_dma_chan *xchan, int idx)
 {
 	return xchan->skb_ring[idx];
+}
+
+static void ep_dma_rx_cb(void *data, const struct dmaengine_result *result);
+
+static int ep_rx_submit_desc(struct xlnx_tsn_ep_dma_chan *xchan)
+{
+	struct dma_async_tx_descriptor *dma_rx_desc;
+	struct skbuf_dma_descriptor *skbuf_dma;
+	struct xlnx_tsn_ep *ep = xchan->ep;
+	struct sk_buff *skb;
+	dma_addr_t addr;
+
+	skbuf_dma = ep_get_desc(xchan, xchan->ring_head & (xchan->ring_size - 1));
+	if (!skbuf_dma)
+		return -ENOSPC;
+
+	skb = dev_alloc_skb(ep->max_frm_size);
+	if (!skb)
+		return -ENOMEM;
+
+	sg_init_table(skbuf_dma->sgl, 1);
+	addr = dma_map_single(xchan->dma_dev, skb->data, ep->max_frm_size,
+			      DMA_FROM_DEVICE);
+	if (unlikely(dma_mapping_error(xchan->dma_dev, addr))) {
+		if (net_ratelimit())
+			dev_warn(ep->dev, "DMA mapping error on RX submit\n");
+
+		goto err_free_skb;
+	}
+	sg_dma_address(skbuf_dma->sgl) = addr;
+	sg_dma_len(skbuf_dma->sgl) = ep->max_frm_size;
+	dma_rx_desc = dmaengine_prep_slave_sg(xchan->chan, skbuf_dma->sgl,
+					      1, DMA_DEV_TO_MEM,
+					      DMA_PREP_INTERRUPT);
+	if (!dma_rx_desc)
+		goto err_unmap_skb;
+
+	skbuf_dma->skb = skb;
+	skbuf_dma->dma_address = sg_dma_address(skbuf_dma->sgl);
+	skbuf_dma->desc = dma_rx_desc;
+	dma_rx_desc->callback_param = xchan;
+	dma_rx_desc->callback_result = ep_dma_rx_cb;
+	xchan->ring_head++;
+	dmaengine_submit(dma_rx_desc);
+
+	return 0;
+
+err_unmap_skb:
+	dma_unmap_single(xchan->dma_dev, addr, ep->max_frm_size, DMA_FROM_DEVICE);
+err_free_skb:
+	dev_kfree_skb(skb);
+	return -ENOMEM;
+}
+
+static bool ep_rx_refill(struct xlnx_tsn_ep_dma_chan *xchan, bool arm_timer)
+{
+	int avail, i;
+
+	guard(spinlock_bh)(&xchan->rx_lock);
+
+	if (READ_ONCE(xchan->ep->closing))
+		return false;
+
+	avail = CIRC_SPACE(xchan->ring_head, READ_ONCE(xchan->ring_tail),
+			   xchan->ring_size);
+	for (i = 0; i < avail; i++) {
+		if (ep_rx_submit_desc(xchan))
+			break;
+	}
+	dma_async_issue_pending(xchan->chan);
+
+	if (xchan->ring_head != READ_ONCE(xchan->ring_tail))
+		return true;
+
+	if (arm_timer)
+		mod_timer(&xchan->rx_refill_timer, jiffies + EP_RX_REFILL_RETRY);
+
+	return false;
+}
+
+static void ep_rx_refill_timer(struct timer_list *t)
+{
+	struct xlnx_tsn_ep_dma_chan *xchan = timer_container_of(xchan, t,
+							       rx_refill_timer);
+
+	ep_rx_refill(xchan, true);
+}
+
+static void ep_dma_rx_cb(void *data, const struct dmaengine_result *result)
+{
+	struct xlnx_tsn_ep_dma_chan *xchan = data;
+	struct skbuf_dma_descriptor *skbuf_dma;
+	size_t meta_len, meta_max_len, rx_len;
+	struct xlnx_tsn_ep *ep = xchan->ep;
+	struct net_device *ndev = ep->ndev;
+	struct sk_buff *skb;
+	u32 port_id, tuser;
+	u32 *metadata;
+
+	skbuf_dma = ep_get_desc(xchan, xchan->ring_tail & (xchan->ring_size - 1));
+	WRITE_ONCE(xchan->ring_tail, xchan->ring_tail + 1);
+	skb = skbuf_dma->skb;
+	skbuf_dma->skb = NULL;
+
+	dma_unmap_single(xchan->dma_dev, skbuf_dma->dma_address,
+			 ep->max_frm_size, DMA_FROM_DEVICE);
+
+	if (result->result != DMA_TRANS_NOERROR) {
+		if (net_ratelimit())
+			dev_warn(ep->dev, "RX DMA transfer error %d\n",
+				 result->result);
+
+		dev_kfree_skb_any(skb);
+		DEV_STATS_INC(ndev, rx_dropped);
+		DEV_STATS_INC(ndev, rx_errors);
+		goto submit_new;
+	}
+
+	metadata = dmaengine_desc_get_metadata_ptr(skbuf_dma->desc,
+						   &meta_len,
+						   &meta_max_len);
+	if (IS_ERR_OR_NULL(metadata)) {
+		if (net_ratelimit())
+			dev_warn(ep->dev, "Failed to get RX metadata pointer\n");
+
+		dev_kfree_skb_any(skb);
+		DEV_STATS_INC(ndev, rx_dropped);
+		DEV_STATS_INC(ndev, rx_errors);
+		goto submit_new;
+	}
+
+	/* MCDMA metadata: [0] = status, [1] = sideband (TID/TDEST/TUSER), [2..] = app */
+	tuser = metadata[1] & TSN_TUSER_MASK;
+	rx_len = ep->max_frm_size - result->residue;
+
+	if (rx_len > ep->max_frm_size || rx_len < ETH_HLEN) {
+		if (net_ratelimit())
+			dev_warn(ep->dev, "Invalid RX length %zu (max=%u, min=%u)\n",
+				 rx_len, ep->max_frm_size, ETH_HLEN);
+
+		dev_kfree_skb_any(skb);
+		DEV_STATS_INC(ndev, rx_dropped);
+		DEV_STATS_INC(ndev, rx_errors);
+		goto submit_new;
+	}
+
+	port_id = FIELD_GET(TSN_TUSER_PORT_ID_MASK, tuser);
+	if (port_id != TSN_TUSER_PORT_MAC1 && port_id != TSN_TUSER_PORT_MAC2) {
+		if (net_ratelimit())
+			dev_dbg(ep->dev, "RX dropping unexpected TUSER port_id=%u\n",
+				port_id);
+
+		dev_kfree_skb_any(skb);
+		DEV_STATS_INC(ndev, rx_dropped);
+		goto submit_new;
+	}
+
+	skb_put(skb, rx_len);
+	skb->dev = ndev;
+	skb->protocol = eth_type_trans(skb, ndev);
+	skb->ip_summed = CHECKSUM_NONE;
+	__netif_rx(skb);
+
+	DEV_STATS_INC(ndev, rx_packets);
+	DEV_STATS_ADD(ndev, rx_bytes, rx_len);
+
+submit_new:
+	ep_rx_refill(xchan, true);
 }
 
 static netdev_tx_t ep_start_xmit(struct sk_buff *skb, struct net_device *ndev)
@@ -211,6 +398,10 @@ ep_alloc_dma_chan(struct xlnx_tsn_ep *ep, const char *name, bool is_tx,
 	chan->ep = ep;
 	chan->ring_size = ring_size;
 	chan->dma_dev = dmaengine_get_dma_device(chan->chan);
+	if (!is_tx) {
+		spin_lock_init(&chan->rx_lock);
+		timer_setup(&chan->rx_refill_timer, ep_rx_refill_timer, 0);
+	}
 
 	return chan;
 }
@@ -222,8 +413,21 @@ static void ep_free_dma_chan(struct xlnx_tsn_ep_dma_chan *chan)
 	if (!chan)
 		return;
 
-	if (chan->chan)
+	if (chan->chan) {
+		if (!chan->is_tx) {
+			/* ep_stop() sets closing before teardown. Take rx_lock
+			 * so any refill that already passed the closing check
+			 * finishes and no later one submits or arms the timer,
+			 * then shut down the timer so it cannot be rearmed
+			 * before the channel is freed.
+			 */
+			spin_lock_bh(&chan->rx_lock);
+			spin_unlock_bh(&chan->rx_lock);
+			timer_shutdown_sync(&chan->rx_refill_timer);
+		}
+
 		dmaengine_terminate_sync(chan->chan);
+	}
 
 	if (chan->is_tx) {
 		while (chan->ring_tail != chan->ring_head) {
@@ -322,9 +526,19 @@ static int ep_init_dmaengine(struct xlnx_tsn_ep *ep)
 		rx_allocated++;
 	}
 
+	for (i = 0; i < ep->num_rx_queues; i++) {
+		if (!ep_rx_refill(ep->rx_chans[i], false)) {
+			dev_err(ep->dev, "RX channel %d: no descriptors armed\n",
+				i);
+			ret = -ENOMEM;
+			goto err_free_chans;
+		}
+	}
+
 	return 0;
 
 err_free_chans:
+	WRITE_ONCE(ep->closing, true);
 	while (--rx_allocated >= 0)
 		ep_free_dma_chan(ep->rx_chans[rx_allocated]);
 	while (--tx_allocated >= 0)
