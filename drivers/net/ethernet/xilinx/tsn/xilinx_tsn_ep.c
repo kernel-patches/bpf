@@ -6,16 +6,24 @@
  */
 
 #include <linux/bitops.h>
+#include <linux/circ_buf.h>
+#include <linux/dma/xilinx_dma.h>
+#include <linux/dma-mapping.h>
+#include <linux/dmaengine.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
 #include <linux/if_ether.h>
 #include <linux/if_vlan.h>
+#include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/of.h>
 #include <linux/of_net.h>
 #include <linux/platform_device.h>
+#include <linux/scatterlist.h>
+#include <linux/slab.h>
+#include <linux/spinlock.h>
 #include <linux/string.h>
 #include <linux/types.h>
 
@@ -30,6 +38,47 @@
 #define TSN_MAX_VLAN_FRAME_SIZE		(ETH_DATA_LEN + VLAN_ETH_HLEN + \
 					 ETH_FCS_LEN)
 
+#define TX_BD_NUM_DEFAULT		64
+#define RX_BD_NUM_DEFAULT		128
+
+/**
+ * struct skbuf_dma_descriptor - skb container for each in-flight DMA descriptor
+ * @sgl: scatter-gather list backing the DMA mapping
+ * @desc: dmaengine descriptor handle
+ * @dma_address: physical address of the first sgl entry (RX path)
+ * @skb: SKB owning the buffer
+ * @sg_len: number of valid entries in @sgl (TX path)
+ */
+struct skbuf_dma_descriptor {
+	struct scatterlist sgl[MAX_SKB_FRAGS + 1];
+	struct dma_async_tx_descriptor *desc;
+	dma_addr_t dma_address;
+	struct sk_buff *skb;
+	int sg_len;
+};
+
+/**
+ * struct xlnx_tsn_ep_dma_chan - one DMA channel and its SKB ring
+ * @skb_ring: per-slot SKB descriptors
+ * @ep: pointer back to the owning EP instance
+ * @chan: dmaengine channel handle
+ * @dma_dev: device used for DMA mapping (the DMA engine, not the EP)
+ * @ring_head: producer index
+ * @ring_tail: consumer index
+ * @ring_size: number of slots in @skb_ring
+ * @is_tx: true for TX channels, false for RX
+ */
+struct xlnx_tsn_ep_dma_chan {
+	struct skbuf_dma_descriptor **skb_ring;
+	struct xlnx_tsn_ep *ep;
+	struct dma_chan *chan;
+	struct device *dma_dev;
+	u32 ring_head;
+	u32 ring_tail;
+	u32 ring_size;
+	bool is_tx;
+};
+
 /**
  * struct xlnx_tsn_ep - EP MAC private data, embedded in net_device priv area
  * @ndev: the conduit netdev ("ep0" for the first IP instance)
@@ -39,6 +88,9 @@
  * @tx_dma_chan_map: logical TX queue index -> physical DMA channel number
  * @rx_chan_num: RX ring index -> physical DMA channel number
  * @max_frm_size: maximum frame size accepted on RX
+ * @tx_chans: array of TX channels (size @num_tx_queues)
+ * @rx_chans: array of RX channels (size @num_rx_queues)
+ * @closing: set in ndo_stop so the RX completion callback stops re-arming
  */
 struct xlnx_tsn_ep {
 	struct net_device *ndev;
@@ -48,7 +100,18 @@ struct xlnx_tsn_ep {
 	u32 tx_dma_chan_map[TSN_MAX_TX_QUEUE];
 	u32 rx_chan_num[TSN_MAX_RX_QUEUE];
 	u32 max_frm_size;
+
+	struct xlnx_tsn_ep_dma_chan **tx_chans;
+	struct xlnx_tsn_ep_dma_chan **rx_chans;
+
+	bool closing;
 };
+
+static inline struct skbuf_dma_descriptor *
+ep_get_desc(struct xlnx_tsn_ep_dma_chan *xchan, int idx)
+{
+	return xchan->skb_ring[idx];
+}
 
 static netdev_tx_t ep_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
@@ -57,8 +120,22 @@ static netdev_tx_t ep_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	return NETDEV_TX_OK;
 }
 
+static int ep_init_dmaengine(struct xlnx_tsn_ep *ep);
+static void ep_exit_dmaengine(struct xlnx_tsn_ep *ep);
+
 static int ep_open(struct net_device *ndev)
 {
+	struct xlnx_tsn_ep *ep = netdev_priv(ndev);
+	int ret;
+
+	WRITE_ONCE(ep->closing, false);
+
+	ret = ep_init_dmaengine(ep);
+	if (ret) {
+		netdev_err(ndev, "failed to initialize DMA engine\n");
+		return ret;
+	}
+
 	netif_tx_start_all_queues(ndev);
 
 	return 0;
@@ -66,7 +143,11 @@ static int ep_open(struct net_device *ndev)
 
 static int ep_stop(struct net_device *ndev)
 {
+	struct xlnx_tsn_ep *ep = netdev_priv(ndev);
+
 	netif_tx_disable(ndev);
+	WRITE_ONCE(ep->closing, true);
+	ep_exit_dmaengine(ep);
 
 	return 0;
 }
@@ -87,6 +168,196 @@ static const struct net_device_ops ep_netdev_ops = {
 static const struct ethtool_ops ep_ethtool_ops = {
 	.get_drvinfo	= ep_get_drvinfo,
 };
+
+static struct xlnx_tsn_ep_dma_chan *
+ep_alloc_dma_chan(struct xlnx_tsn_ep *ep, const char *name, bool is_tx,
+		  int ring_size)
+{
+	struct xlnx_tsn_ep_dma_chan *chan;
+	struct dma_chan *err_chan;
+	int i;
+
+	chan = kzalloc_obj(*chan);
+	if (!chan)
+		return ERR_PTR(-ENOMEM);
+
+	chan->chan = dma_request_chan(ep->dev, name);
+	if (IS_ERR(chan->chan)) {
+		err_chan = chan->chan;
+		kfree(chan);
+		return ERR_CAST(err_chan);
+	}
+
+	chan->skb_ring = kcalloc(ring_size, sizeof(*chan->skb_ring), GFP_KERNEL);
+	if (!chan->skb_ring) {
+		dma_release_channel(chan->chan);
+		kfree(chan);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	for (i = 0; i < ring_size; i++) {
+		chan->skb_ring[i] = kzalloc_obj(*chan->skb_ring[i]);
+		if (!chan->skb_ring[i]) {
+			while (--i >= 0)
+				kfree(chan->skb_ring[i]);
+			kfree(chan->skb_ring);
+			dma_release_channel(chan->chan);
+			kfree(chan);
+			return ERR_PTR(-ENOMEM);
+		}
+	}
+
+	chan->is_tx = is_tx;
+	chan->ep = ep;
+	chan->ring_size = ring_size;
+	chan->dma_dev = dmaengine_get_dma_device(chan->chan);
+
+	return chan;
+}
+
+static void ep_free_dma_chan(struct xlnx_tsn_ep_dma_chan *chan)
+{
+	int i;
+
+	if (!chan)
+		return;
+
+	if (chan->chan)
+		dmaengine_terminate_sync(chan->chan);
+
+	if (chan->is_tx) {
+		while (chan->ring_tail != chan->ring_head) {
+			struct skbuf_dma_descriptor *skbuf_dma;
+
+			skbuf_dma = chan->skb_ring[chan->ring_tail &
+						  (chan->ring_size - 1)];
+			if (skbuf_dma && skbuf_dma->skb) {
+				dma_unmap_sg(chan->dma_dev, skbuf_dma->sgl,
+					     skbuf_dma->sg_len, DMA_TO_DEVICE);
+				dev_kfree_skb_any(skbuf_dma->skb);
+				skbuf_dma->skb = NULL;
+			}
+			chan->ring_tail++;
+		}
+	}
+
+	if (chan->skb_ring) {
+		for (i = 0; i < chan->ring_size; i++) {
+			struct skbuf_dma_descriptor *skbuf_dma = chan->skb_ring[i];
+
+			if (skbuf_dma && !chan->is_tx && skbuf_dma->skb) {
+				dma_unmap_single(chan->dma_dev,
+						 skbuf_dma->dma_address,
+						 chan->ep->max_frm_size,
+						 DMA_FROM_DEVICE);
+				dev_kfree_skb_any(skbuf_dma->skb);
+			}
+			kfree(chan->skb_ring[i]);
+		}
+		kfree(chan->skb_ring);
+	}
+	if (chan->chan)
+		dma_release_channel(chan->chan);
+
+	kfree(chan);
+}
+
+static void ep_exit_dmaengine(struct xlnx_tsn_ep *ep)
+{
+	int i;
+
+	if (ep->tx_chans) {
+		for (i = 0; i < ep->num_tx_queues; i++)
+			ep_free_dma_chan(ep->tx_chans[i]);
+		kfree(ep->tx_chans);
+		ep->tx_chans = NULL;
+	}
+	if (ep->rx_chans) {
+		for (i = 0; i < ep->num_rx_queues; i++)
+			ep_free_dma_chan(ep->rx_chans[i]);
+		kfree(ep->rx_chans);
+		ep->rx_chans = NULL;
+	}
+}
+
+static int ep_init_dmaengine(struct xlnx_tsn_ep *ep)
+{
+	int tx_allocated = 0, rx_allocated = 0;
+	char name[16];
+	int i, ret;
+
+	ep->tx_chans = kcalloc(ep->num_tx_queues, sizeof(*ep->tx_chans),
+			       GFP_KERNEL);
+	if (!ep->tx_chans)
+		return -ENOMEM;
+
+	ep->rx_chans = kcalloc(ep->num_rx_queues, sizeof(*ep->rx_chans),
+			       GFP_KERNEL);
+	if (!ep->rx_chans) {
+		ret = -ENOMEM;
+		goto err_free_tx;
+	}
+
+	for (i = 0; i < ep->num_tx_queues; i++) {
+		snprintf(name, sizeof(name), "tx_chan%u", ep->tx_dma_chan_map[i]);
+		ep->tx_chans[i] = ep_alloc_dma_chan(ep, name, true,
+						    TX_BD_NUM_DEFAULT);
+		if (IS_ERR(ep->tx_chans[i])) {
+			ret = PTR_ERR(ep->tx_chans[i]);
+			ep->tx_chans[i] = NULL;
+			goto err_free_chans;
+		}
+		tx_allocated++;
+	}
+
+	for (i = 0; i < ep->num_rx_queues; i++) {
+		snprintf(name, sizeof(name), "rx_chan%u", ep->rx_chan_num[i]);
+		ep->rx_chans[i] = ep_alloc_dma_chan(ep, name, false,
+						    RX_BD_NUM_DEFAULT);
+		if (IS_ERR(ep->rx_chans[i])) {
+			ret = PTR_ERR(ep->rx_chans[i]);
+			ep->rx_chans[i] = NULL;
+			goto err_free_chans;
+		}
+		rx_allocated++;
+	}
+
+	return 0;
+
+err_free_chans:
+	while (--rx_allocated >= 0)
+		ep_free_dma_chan(ep->rx_chans[rx_allocated]);
+	while (--tx_allocated >= 0)
+		ep_free_dma_chan(ep->tx_chans[tx_allocated]);
+	kfree(ep->rx_chans);
+	ep->rx_chans = NULL;
+err_free_tx:
+	kfree(ep->tx_chans);
+	ep->tx_chans = NULL;
+	return ret;
+}
+
+static int ep_reset_dma_controller(struct xlnx_tsn_ep *ep)
+{
+	struct xilinx_vdma_config cfg = { .reset = 1 };
+	struct dma_chan *reset_chan;
+	char name[16];
+	int ret;
+
+	snprintf(name, sizeof(name), "tx_chan%u", ep->tx_dma_chan_map[0]);
+	reset_chan = dma_request_chan(ep->dev, name);
+	if (IS_ERR(reset_chan))
+		return dev_err_probe(ep->dev, PTR_ERR(reset_chan),
+				     "failed to request %s for reset\n", name);
+
+	ret = xilinx_vdma_channel_set_config(reset_chan, &cfg);
+	dma_release_channel(reset_chan);
+	if (ret < 0)
+		return dev_err_probe(ep->dev, ret,
+				     "failed to reset DMA controller\n");
+
+	return 0;
+}
 
 /*
  * Parse the "tx-queues-config" child of the EP node. The logical queue
@@ -282,6 +553,16 @@ static int xlnx_tsn_ep_probe(struct platform_device *pdev)
 	}
 	ret = ep_parse_tx_queue_config(ep, txcfg_np, tx_present);
 	of_node_put(txcfg_np);
+	if (ret)
+		goto err_free_ndev;
+
+	/*
+	 * Request one DMA channel at probe time to reset the controller and to
+	 * gate on the MCDMA provider being bound. This keeps -EPROBE_DEFER in
+	 * the probe path, so the netdev is only registered once the provider is
+	 * available and ndo_open never sees a deferral.
+	 */
+	ret = ep_reset_dma_controller(ep);
 	if (ret)
 		goto err_free_ndev;
 

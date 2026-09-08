@@ -6,6 +6,7 @@
 config XILINX_TSN
 	tristate "Xilinx TSN Ethernet driver"
 	depends on OF_ADDRESS
+	depends on XILINX_DMA
 	help
 	  This driver supports the AMD/Xilinx Time-Sensitive Networking
 	  (TSN) Endpoint Ethernet MAC IP. It provides the wrapper device
