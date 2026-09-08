@@ -24,7 +24,6 @@ static u8 rtw_sdio_wait_enough_TxOQT_space(struct adapter *padapter, u8 agg_num)
 
 		if ((++n % 60) == 0) {
 			msleep(1);
-			/* yield(); */
 		}
 	}
 
@@ -103,8 +102,6 @@ query_free_page:
 	rtw_hal_sdio_update_tx_freepage(pri_padapter, PageIdx, pxmitbuf->pg_num);
 
 free_xmitbuf:
-	/* rtw_free_xmitframe(pxmitpriv, pframe); */
-	/* pxmitbuf->priv_data = NULL; */
 	rtw_free_xmitbuf(pxmitpriv, pxmitbuf);
 
 	return _FAIL;
@@ -248,8 +245,6 @@ static s32 xmit_xmitframes(struct adapter *padapter, struct xmit_priv *pxmitpriv
 							rtw_free_xmitframe(pxmitpriv, pframe);
 							pxmitbuf->priv_data = NULL;
 							enqueue_pending_xmitbuf(pxmitpriv, pxmitbuf);
-							/* can not yield under lock */
-							/* yield(); */
 						} else
 							rtw_free_xmitbuf(pxmitpriv, pxmitbuf);
 					}

@@ -171,7 +171,6 @@ static void _InitTxBufferBoundary(struct adapter *padapter)
 {
 	struct registry_priv *pregistrypriv = &padapter->registrypriv;
 
-	/* u16 txdmactrl; */
 	u8 txpktbuf_bndy;
 
 	if (!pregistrypriv->wifi_spec) {

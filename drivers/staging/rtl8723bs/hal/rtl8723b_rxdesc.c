@@ -12,7 +12,6 @@ static void process_rssi(struct adapter *padapter, union recv_frame *prframe)
 	struct rx_pkt_attrib *pattrib = &prframe->u.hdr.attrib;
 	struct signal_stat *signal_stat = &padapter->recvpriv.signal_strength_data;
 
-	/* if (pRfd->Status.bPacketToSelf || pRfd->Status.bPacketBeacon) */
 	{
 		if (signal_stat->update_req) {
 			signal_stat->total_num = 0;
@@ -56,12 +55,7 @@ void rtl8723b_process_phy_info(struct adapter *padapter, void *prframe)
 	/*  Check RSSI */
 	/*  */
 	process_rssi(padapter, precvframe);
-	/*  */
-	/*  Check PWDB. */
-	/*  */
-	/* process_PWDB(padapter, precvframe); */
 
-	/* UpdateRxSignalStatistics8192C(Adapter, pRfd); */
 	/*  */
 	/*  Check EVM */
 	/*  */

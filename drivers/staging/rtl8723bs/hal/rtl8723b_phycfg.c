@@ -67,7 +67,6 @@ void PHY_SetBBReg_8723B(
 	u32 Data
 )
 {
-	/* u16 BBWaitCounter	= 0; */
 	u32 OriginalValue, BitShift;
 
 	if (BitMask != bMaskDWord) { /* if not "double word" write */
@@ -685,7 +684,6 @@ static void PHY_HandleSwChnlAndSetBW8723B(
 	u8 CenterFrequencyIndex1
 )
 {
-	/* static bool		bInitialzed = false; */
 	struct hal_com_data *pHalData = GET_HAL_DATA(Adapter);
 	u8 tmpChannel = pHalData->CurrentChannel;
 	enum channel_width tmpBW = pHalData->CurrentChannelBW;

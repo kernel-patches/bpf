@@ -96,7 +96,6 @@ static void update_recvframe_phyinfo(union recv_frame *precvframe,
 		.is_beacon   = false,
 	};
 
-	/* unsigned long		irqL; */
 	struct sta_priv *pstapriv;
 	struct sta_info *psta;
 
@@ -125,13 +124,10 @@ static void update_recvframe_phyinfo(union recv_frame *precvframe,
 
 	pkt_info.data_rate = pattrib->data_rate;
 
-	/* rtl8723b_query_rx_phy_status(precvframe, pphy_status); */
-	/* spin_lock_bh(&p_hal_data->odm_stainfo_lock); */
 	odm_phy_status_query(&p_hal_data->odmpriv, p_phy_info,
 			   (u8 *)pphy_status, &(pkt_info));
 	if (psta)
 		psta->rssi = pattrib->phy_info.RecvSignalPower;
-	/* spin_unlock_bh(&p_hal_data->odm_stainfo_lock); */
 	precvframe->u.hdr.psta = NULL;
 	if (
 		pkt_info.bssid_match &&
@@ -307,7 +303,6 @@ static void rtl8723bs_recv_tasklet(struct tasklet_struct *t)
 				precvframe->u.hdr.rx_end = skb_end_pointer(pkt_copy);
 
 				recvframe_put(precvframe, skb_len);
-				/* recvframe_pull(precvframe, drvinfo_sz + RXDESC_SIZE); */
 
 				if (p_hal_data->ReceiveConfig & RCR_APPFCS)
 					recvframe_pull_tail(precvframe, IEEE80211_FCS_LEN);
@@ -317,7 +312,6 @@ static void rtl8723bs_recv_tasklet(struct tasklet_struct *t)
 
 				/*  update drv info */
 				if (p_hal_data->ReceiveConfig & RCR_APP_BA_SSN) {
-					/* rtl8723s_update_bassn(padapter, pdrvinfo); */
 					ptr += 4;
 				}
 

@@ -430,9 +430,6 @@ void rtl8723b_InitializeFirmwareVars(struct adapter *padapter)
 
 	/*  Init H2C counter. by tynli. 2009.12.09. */
 	pHalData->LastHMEBoxNum = 0;
-/* pHalData->H2CQueueHead = 0; */
-/* pHalData->H2CQueueTail = 0; */
-/* pHalData->H2CStopInsertQueue = false; */
 }
 
 /*  */
@@ -1043,9 +1040,6 @@ void rtl8723b_init_default_value(struct adapter *padapter)
 
 	/*  init dm default value */
 	pdmpriv->TM_Trigger = 0;/* for IQK */
-/* 	pdmpriv->binitialized = false; */
-/* 	pdmpriv->prv_traffic_idx = 3; */
-/* 	pdmpriv->initialize = 0; */
 
 	pdmpriv->ThermalValue_HP_index = 0;
 	for (i = 0; i < HP_THERMAL_NUM; i++)
@@ -1152,7 +1146,6 @@ void Hal_InitPGData(struct adapter *padapter, u8 *PROMContent)
 void Hal_EfuseParseIDCode(struct adapter *padapter, u8 *hwinfo)
 {
 	struct eeprom_priv *pEEPROM = GET_EEPROM_EFUSE_PRIV(padapter);
-/* 	struct hal_com_data	*pHalData = GET_HAL_DATA(padapter); */
 	u16 EEPROMId;
 
 	/*  Check 0x8129 again for making sure autoload status!! */
@@ -1332,8 +1325,6 @@ void Hal_EfuseParseBTCoexistInfo_8723B(
 		tempval = hwinfo[EEPROM_RF_BT_SETTING_8723B];
 		if (tempval != 0xFF) {
 			pHalData->EEPROMBluetoothAntNum = tempval & BIT(0);
-			/*  EFUSE_0xC3[6] == 0, S1(Main)-RF_PATH_A; */
-			/*  EFUSE_0xC3[6] == 1, S0(Aux)-RF_PATH_B */
 			if (tempval & BIT(6))
 				pHalData->ant_path = RF_PATH_B;
 			else
@@ -1409,7 +1400,6 @@ void Hal_EfuseParseVoltage_8723B(
 {
 	struct eeprom_priv *pEEPROM = GET_EEPROM_EFUSE_PRIV(padapter);
 
-	/* memcpy(pEEPROM->adjuseVoltageVal, &hwinfo[EEPROM_Voltage_ADDR_8723B], 1); */
 	pEEPROM->adjuseVoltageVal = (hwinfo[EEPROM_Voltage_ADDR_8723B] & 0xf0) >> 4;
 }
 
@@ -1490,9 +1480,6 @@ u8 BWMapping_8723B(struct adapter *Adapter, struct pkt_attrib *pattrib)
 			BWSettingOfDesc = 0;
 	} else
 		BWSettingOfDesc = 0;
-
-	/* if (pTcb->bBTTxPacket) */
-	/* 	BWSettingOfDesc = 0; */
 
 	return BWSettingOfDesc;
 }
@@ -1867,7 +1854,6 @@ static void hw_var_set_opmode(struct adapter *padapter, u8 variable, u8 *val)
 
 			/*  disable atim wnd */
 			rtw_write8(padapter, REG_BCN_CTRL, DIS_TSF_UDT|EN_BCN_FUNCTION|DIS_ATIM);
-			/* rtw_write8(padapter, REG_BCN_CTRL, 0x18); */
 		} else if (mode == _HW_STATE_ADHOC_) {
 			ResumeTxBeacon(padapter);
 			rtw_write8(padapter, REG_BCN_CTRL, DIS_TSF_UDT|EN_BCN_FUNCTION|DIS_BCNQ_SUB);
@@ -1887,7 +1873,6 @@ static void hw_var_set_opmode(struct adapter *padapter, u8 variable, u8 *val)
 			/* Beacon Control related register for first time */
 			rtw_write8(padapter, REG_BCNDMATIM, 0x02); /*  2ms */
 
-			/* rtw_write8(padapter, REG_BCN_MAX_ERR, 0xFF); */
 			rtw_write8(padapter, REG_ATIMWND, 0x0a); /*  10ms */
 			rtw_write16(padapter, REG_BCNTCFG, 0x00);
 			rtw_write16(padapter, REG_TBTT_PROHIBIT, 0xff04);
@@ -1901,7 +1886,6 @@ static void hw_var_set_opmode(struct adapter *padapter, u8 variable, u8 *val)
 			rtw_write8(padapter, REG_BCN_CTRL, (DIS_TSF_UDT|EN_BCN_FUNCTION|EN_TXBCN_RPT|DIS_BCNQ_SUB));
 
 			/* SW_BCN_SEL - Port0 */
-			/* rtw_write8(Adapter, REG_DWBCN1_CTRL_8192E+2, rtw_read8(Adapter, REG_DWBCN1_CTRL_8192E+2) & ~BIT4); */
 			rtw_hal_set_hwreg(padapter, HW_VAR_DL_BCN_SEL, NULL);
 
 			/*  select BCN on port 0 */
@@ -1998,8 +1982,6 @@ static void hw_var_set_mlme_disconnect(struct adapter *padapter, u8 variable, u8
 {
 	u8 val8;
 
-	/*  Set RCR to not to receive data frame when NO LINK state */
-	/* rtw_write32(padapter, REG_RCR, rtw_read32(padapter, REG_RCR) & ~RCR_ADF); */
 	/*  reject all data frames */
 	rtw_write16(padapter, REG_RXFLTMAP2, 0);
 
@@ -2085,8 +2067,7 @@ static void hw_var_set_mlme_join(struct adapter *padapter, u8 variable, u8 *val)
 	pEEPROM = GET_EEPROM_EFUSE_PRIV(padapter);
 
 	if (type == 0) { /*  prepare to join */
-		/* enable to rx data frame.Accept all data frame */
-		/* rtw_write32(padapter, REG_RCR, rtw_read32(padapter, REG_RCR)|RCR_ADF); */
+		/* enable to rx data frame */
 		rtw_write16(padapter, REG_RXFLTMAP2, 0xFFFF);
 
 		val32 = rtw_read32(padapter, REG_RCR);
@@ -2164,11 +2145,9 @@ s32 c2h_handler_8723b(struct adapter *padapter, u8 *buf)
 		break;
 
 	case C2H_CCX_TX_RPT:
-/* 			CCX_FwC2HTxRpt(padapter, QueueID, pC2hEvent->payload); */
 		break;
 
 	case C2H_EXT_RA_RPT:
-/* 			C2HExtRaRptHandler(padapter, pC2hEvent->payload, C2hEvent.CmdLen); */
 		break;
 
 	case C2H_HW_INFO_EXCH:
@@ -2182,10 +2161,6 @@ s32 c2h_handler_8723b(struct adapter *padapter, u8 *buf)
 		break;
 	}
 
-	/*  Clear event to notify FW we have read the command. */
-	/*  Note: */
-	/*	If this field isn't clear, the FW won't update the next command message. */
-/* 	rtw_write8(padapter, REG_C2HEVT_CLEAR, C2H_EVT_HOST_CLOSE); */
 exit:
 	return ret;
 }
@@ -2204,11 +2179,9 @@ static void process_c2h_event(struct adapter *padapter, struct c2h_evt_hdr_t *pC
 		break;
 
 	case C2H_CCX_TX_RPT:
-/* 			CCX_FwC2HTxRpt(padapter, QueueID, tmpBuf); */
 		break;
 
 	case C2H_EXT_RA_RPT:
-/* 			C2HExtRaRptHandler(padapter, tmpBuf, C2hEvent.CmdLen); */
 		break;
 
 	case C2H_HW_INFO_EXCH:
@@ -2234,7 +2207,6 @@ void C2HPacketHandler_8723B(struct adapter *padapter, u8 *pbuffer, u16 length)
 	tmpBuf = pbuffer+2;
 
 	process_c2h_event(padapter, &C2hEvent, tmpBuf);
-	/* c2h_handler_8723b(padapter,&C2hEvent); */
 }
 
 void SetHwReg8723B(struct adapter *padapter, u8 variable, u8 *val)
@@ -2344,8 +2316,6 @@ void SetHwReg8723B(struct adapter *padapter, u8 variable, u8 *val)
 			hal_btcoex_ConnectNotify(padapter, false);
 			break;
 		case 2:
-			/*  sta add event callback */
-/* 				rtw_btcoex_MediaStatusNotify(padapter, RT_MEDIA_CONNECT); */
 			break;
 		}
 		break;
@@ -2371,7 +2341,6 @@ void SetHwReg8723B(struct adapter *padapter, u8 variable, u8 *val)
 		break;
 
 	case HW_VAR_RESP_SIFS:
-		/* SIFS_Timer = 0x0a0a0808; */
 		/* RESP_SIFS for CCK */
 		rtw_write8(padapter, REG_RESP_SIFS_CCK, val[0]); /*  SIFS_T2T_CCK (0x08) */
 		rtw_write8(padapter, REG_RESP_SIFS_CCK+1, val[1]); /* SIFS_R2T_CCK(0x08) */
@@ -2386,7 +2355,6 @@ void SetHwReg8723B(struct adapter *padapter, u8 variable, u8 *val)
 			u8 bShortPreamble = *val;
 
 			/*  Joseph marked out for Netgear 3500 TKIP channel 7 issue.(Temporarily) */
-			/* regTmp = (pHalData->nCur40MhzPrimeSC)<<5; */
 			if (bShortPreamble)
 				regTmp |= 0x80;
 			rtw_write8(padapter, REG_RRSR+2, regTmp);
@@ -2405,7 +2373,6 @@ void SetHwReg8723B(struct adapter *padapter, u8 variable, u8 *val)
 				/*  filled id in CAM config 2 byte */
 				if (i == 0) {
 					ulContent |= (ucIndex & 0x03) | ((u16)(ulEncAlgo)<<2);
-					/* ulContent |= CAM_VALID; */
 				} else
 					ulContent = 0;
 
@@ -2413,8 +2380,8 @@ void SetHwReg8723B(struct adapter *padapter, u8 variable, u8 *val)
 				ulCommand = CAM_CONTENT_COUNT*ucIndex+i;
 				ulCommand = ulCommand | CAM_POLLINIG | CAM_WRITE;
 				/*  write content 0 is equal to mark as invalid */
-				rtw_write32(padapter, WCAMI, ulContent);  /* mdelay(40); */
-				rtw_write32(padapter, RWCAM, ulCommand);  /* mdelay(40); */
+				rtw_write32(padapter, WCAMI, ulContent);
+				rtw_write32(padapter, RWCAM, ulCommand);
 			}
 		}
 		break;
@@ -2496,11 +2463,6 @@ void SetHwReg8723B(struct adapter *padapter, u8 variable, u8 *val)
 			if (psmode != PS_MODE_ACTIVE)
 				ODM_RF_Saving(&pHalData->odmpriv, true);
 
-			/* if (psmode != PS_MODE_ACTIVE)	{ */
-			/* 	rtl8723b_set_lowpwr_lps_cmd(padapter, true); */
-			/*  else { */
-			/* 	rtl8723b_set_lowpwr_lps_cmd(padapter, false); */
-			/*  */
 			rtl8723b_set_FwPwrMode_cmd(padapter, psmode);
 		}
 		break;
