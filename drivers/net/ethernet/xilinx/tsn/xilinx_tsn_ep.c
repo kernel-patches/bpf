@@ -29,6 +29,8 @@
 #include <linux/timer.h>
 #include <linux/types.h>
 
+#include <net/dsa.h>
+#include <net/dst_metadata.h>
 #include <net/netdev_queues.h>
 
 #include "xilinx_tsn.h"
@@ -57,6 +59,9 @@
 #define TSN_TUSER_PORT_EP		0x0
 #define TSN_TUSER_PORT_MAC1		0x1
 #define TSN_TUSER_PORT_MAC2		0x2
+
+/* Sized to index port_md[] by TUSER port_id (1 or 2, slot 0 unused) */
+#define XLNX_TSN_EP_PORT_MD_SLOTS	(TSN_TUSER_PORT_MAC2 + 1)
 
 /**
  * struct skbuf_dma_descriptor - skb container for each in-flight DMA descriptor
@@ -114,6 +119,8 @@ struct xlnx_tsn_ep_dma_chan {
  * @tx_chans: array of TX channels (size @num_tx_queues)
  * @rx_chans: array of RX channels (size @num_rx_queues)
  * @closing: set in ndo_stop so the RX completion callback stops re-arming
+ * @port_md: per-TUSER-port METADATA_HW_PORT_MUX entries attached on RX,
+ *	indexed by port_id (1 for MAC1, 2 for MAC2)
  */
 struct xlnx_tsn_ep {
 	struct net_device *ndev;
@@ -128,6 +135,8 @@ struct xlnx_tsn_ep {
 	struct xlnx_tsn_ep_dma_chan **rx_chans;
 
 	bool closing;
+
+	struct metadata_dst *port_md[XLNX_TSN_EP_PORT_MD_SLOTS];
 };
 
 static inline struct skbuf_dma_descriptor *
@@ -292,6 +301,10 @@ static void ep_dma_rx_cb(void *data, const struct dmaengine_result *result)
 	}
 
 	skb_put(skb, rx_len);
+	if (netdev_uses_dsa(ndev)) {
+		dst_hold(&ep->port_md[port_id]->dst);
+		skb_dst_set(skb, &ep->port_md[port_id]->dst);
+	}
 	skb->dev = ndev;
 	skb->protocol = eth_type_trans(skb, ndev);
 	skb->ip_summed = CHECKSUM_NONE;
@@ -854,6 +867,37 @@ static int ep_count_dma_queues(struct device *dev, u32 *out_tx, u32 *out_rx,
 	return 0;
 }
 
+static void ep_free_port_md(struct xlnx_tsn_ep *ep)
+{
+	int i;
+
+	for (i = 0; i < XLNX_TSN_EP_PORT_MD_SLOTS; i++) {
+		if (ep->port_md[i]) {
+			dst_release(&ep->port_md[i]->dst);
+			ep->port_md[i] = NULL;
+		}
+	}
+}
+
+static int ep_alloc_port_md(struct xlnx_tsn_ep *ep)
+{
+	int i;
+
+	for (i = TSN_TUSER_PORT_MAC1; i <= TSN_TUSER_PORT_MAC2; i++) {
+		struct metadata_dst *md;
+
+		md = metadata_dst_alloc(0, METADATA_HW_PORT_MUX, GFP_KERNEL);
+		if (!md) {
+			ep_free_port_md(ep);
+			return -ENOMEM;
+		}
+		md->u.port_info.port_id = i;
+		ep->port_md[i] = md;
+	}
+
+	return 0;
+}
+
 static int xlnx_tsn_ep_probe(struct platform_device *pdev)
 {
 	u32 rx_chan_num[TSN_MAX_RX_QUEUE];
@@ -939,16 +983,24 @@ static int xlnx_tsn_ep_probe(struct platform_device *pdev)
 			 ndev->dev_addr);
 	}
 
+	ret = ep_alloc_port_md(ep);
+	if (ret) {
+		dev_err_probe(dev, ret, "failed to allocate per-port metadata\n");
+		goto err_free_ndev;
+	}
+
 	platform_set_drvdata(pdev, ep);
 
 	ret = register_netdev(ndev);
 	if (ret) {
 		dev_err_probe(dev, ret, "failed to register net device\n");
-		goto err_free_ndev;
+		goto err_free_md;
 	}
 
 	return 0;
 
+err_free_md:
+	ep_free_port_md(ep);
 err_free_ndev:
 	free_netdev(ndev);
 	return ret;
@@ -962,6 +1014,7 @@ static void xlnx_tsn_ep_remove(struct platform_device *pdev)
 		return;
 
 	unregister_netdev(ep->ndev);
+	ep_free_port_md(ep);
 	free_netdev(ep->ndev);
 }
 
