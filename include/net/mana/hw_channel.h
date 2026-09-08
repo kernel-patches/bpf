@@ -164,6 +164,9 @@ struct hwc_wq {
 	u16 queue_depth;
 
 	struct hwc_cq *hwc_cq;
+
+	/* Serializes SQ posting; unused for the RQ. */
+	spinlock_t lock;
 };
 
 struct hwc_caller_ctx {
@@ -189,6 +192,9 @@ struct hwc_caller_ctx {
 	 * so a later or duplicate response is dropped.
 	 */
 	bool responded;
+
+	/* Response-side reference outstanding; protected by lock. */
+	bool resp_pending;
 };
 
 struct hw_channel_context {
@@ -196,6 +202,7 @@ struct hw_channel_context {
 	struct device *dev;
 
 	u16 num_inflight_msg;
+
 	u32 max_req_msg_size;
 
 	u16 hwc_init_q_depth_max;
@@ -208,6 +215,9 @@ struct hw_channel_context {
 	struct hwc_wq *txq;
 	struct hwc_cq *cq;
 
+	/* Admission permits. Timed-out requests retain theirs until a
+	 * response or teardown releases the slot.
+	 */
 	struct semaphore sema;
 	struct gdma_resource inflight_msg_res;
 
@@ -215,8 +225,14 @@ struct hw_channel_context {
 	u32 pf_dest_vrcq_id;
 	u32 hwc_timeout;
 
+	/* Checked after slot acquisition; cleared on teardown to reject sends. */
+	bool channel_up;
+
 	/* PF may own the queue mappings; state lasts only for this context. */
 	bool setup_active;
+
+	/* mana_gd_send_request() callers, including waiters; under hwc_lock. */
+	unsigned int active_senders;
 
 	struct hwc_caller_ctx *caller_ctx;
 };

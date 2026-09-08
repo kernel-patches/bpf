@@ -468,6 +468,15 @@ struct gdma_context {
 	/* Hardware communication channel (HWC) */
 	struct gdma_dev		hwc;
 
+	/* Sender drain; the final wakeup runs under hwc_lock. */
+	wait_queue_head_t	hwc_drain_waitq;
+
+	/* Protects HWC publication, sender references, and short accesses in
+	 * mana_need_log()/mana_serv_reset(). Setup and DMA-region readers
+	 * still require lifecycle ordering. Not all timeout writers use it.
+	 */
+	spinlock_t		hwc_lock;
+
 	/* Azure network adapter */
 	struct gdma_dev		mana;
 
