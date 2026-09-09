@@ -711,7 +711,7 @@ static void codegen_destroy(struct bpf_object *obj, const char *obj_name)
 }
 
 static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *header_guard,
-		     const struct gen_loader_opts *opts)
+		     const struct gen_loader_opts *opts, size_t prog_cnt, size_t map_cnt)
 {
 	struct bpf_load_and_run_opts sopts = {};
 	char sig_buf[MAX_SIG_SIZE];
@@ -746,9 +746,16 @@ static int gen_trace(struct bpf_object *obj, const char *obj_name, const char *h
 			skel = (struct %1$s *)skel_alloc(sizeof(*skel));    \n\
 			if (!skel)					    \n\
 				goto cleanup;				    \n\
-			skel->ctx.sz = (char *)&skel->links - (char *)skel; \n\
 		",
-		obj_name, opts->data_sz);
+		obj_name);
+	if (prog_cnt)
+		printf("\tskel->ctx.sz = (char *)&skel->progs - (char *)skel\n"
+		       "\t\t       + sizeof(skel->progs);\n");
+	else if (map_cnt)
+		printf("\tskel->ctx.sz = (char *)&skel->maps - (char *)skel\n"
+		       "\t\t       + sizeof(skel->maps);\n");
+	else
+		printf("\tskel->ctx.sz = sizeof(skel->ctx);\n");
 	bpf_object__for_each_map(map, obj) {
 		const void *mmap_data = NULL;
 		size_t mmap_size = 0;
@@ -1469,7 +1476,7 @@ static int do_skeleton(int argc, char **argv)
 			goto out;
 	}
 	if (use_loader) {
-		err = gen_trace(obj, obj_name, header_guard, &gen_opts);
+		err = gen_trace(obj, obj_name, header_guard, &gen_opts, prog_cnt, map_cnt);
 		goto out;
 	}
 
