@@ -1831,6 +1831,11 @@ static void phy_detach_internal(struct phy_device *phydev, bool notify_bus)
 		phydev->is_genphy_driven = 0;
 	}
 
+	/* Whatever this attachment did to the interrupt, the bus that
+	 * described it still knows the number. Take it back from there.
+	 */
+	phydev->irq = phydev->mdio.bus->irq[phydev->mdio.addr];
+
 	/* Assert the reset signal */
 	phy_device_reset(phydev, 1);
 
