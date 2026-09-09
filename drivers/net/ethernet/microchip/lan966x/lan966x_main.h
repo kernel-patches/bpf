@@ -586,6 +586,7 @@ void lan966x_fdma_rx_reload(struct lan966x_rx *rx);
 void lan966x_fdma_tx_start(struct lan966x_tx *tx);
 void lan966x_fdma_tx_disable(struct lan966x_tx *tx);
 void lan966x_fdma_wakeup_netdev(struct lan966x *lan966x);
+void lan966x_fdma_tx_disable_netdev(struct lan966x *lan966x);
 int lan966x_fdma_get_max_frame(struct lan966x *lan966x);
 int lan966x_qsys_sw_status(struct lan966x *lan966x);
 
