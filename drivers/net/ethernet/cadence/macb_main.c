@@ -4494,6 +4494,60 @@ static int macb_setup_taprio(struct net_device *netdev,
 	return err;
 }
 
+static int macb_setup_mqprio(struct net_device *netdev,
+			     struct tc_mqprio_qopt_offload *mqprio)
+{
+	struct tc_mqprio_qopt *qopt = &mqprio->qopt;
+	u8 num_tc = qopt->num_tc;
+	int err;
+	u8 i;
+
+	/* Handle reset case early */
+	if (!num_tc) {
+		netdev_reset_tc(netdev);
+		return 0;
+	}
+
+	/* Configure traffic classes */
+	qopt->hw = TC_MQPRIO_HW_OFFLOAD_TCS;
+
+	err = netdev_set_num_tc(netdev, num_tc);
+	if (err)
+		return err;
+
+	for (i = 0; i < num_tc; i++) {
+		err = netdev_set_tc_queue(netdev, i, qopt->count[i],
+					  qopt->offset[i]);
+		if (err)
+			goto err_reset_tc;
+
+		netdev_dbg(netdev, "MQPRIO: TC%d -> queue %u (count=%u)\n",
+			   i, qopt->offset[i], qopt->count[i]);
+	}
+
+	return 0;
+
+err_reset_tc:
+	netdev_reset_tc(netdev);
+	return err;
+}
+
+static int macb_tc_query_caps(struct net_device *netdev,
+			      struct tc_query_caps_base *base)
+{
+	switch (base->type) {
+	case TC_SETUP_QDISC_MQPRIO: {
+		struct tc_mqprio_caps *caps = base->caps;
+
+		caps->validate_queue_counts = true;
+
+		return 0;
+	}
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
 static int macb_setup_tc(struct net_device *netdev, enum tc_setup_type type,
 			 void *type_data)
 {
@@ -4501,6 +4555,9 @@ static int macb_setup_tc(struct net_device *netdev, enum tc_setup_type type,
 
 	if (!netdev || !type_data)
 		return -EINVAL;
+
+	if (type == TC_QUERY_CAPS)
+		return macb_tc_query_caps(netdev, type_data);
 
 	bp = netdev_priv(netdev);
 
@@ -4514,6 +4571,8 @@ static int macb_setup_tc(struct net_device *netdev, enum tc_setup_type type,
 	}
 
 	switch (type) {
+	case TC_SETUP_QDISC_MQPRIO:
+		return macb_setup_mqprio(netdev, type_data);
 	case TC_SETUP_QDISC_TAPRIO:
 		return macb_setup_taprio(netdev, type_data);
 	default:
