@@ -6297,6 +6297,20 @@ static const struct bpf_func_proto bpf_skb_get_xfrm_state_proto = {
 #endif
 
 #if IS_ENABLED(CONFIG_INET) || IS_ENABLED(CONFIG_IPV6)
+/* Take a stable snapshot of the neighbour's link layer address.
+ * neigh_ha_snapshot() can not be used here because it copies dev->addr_len
+ * bytes while params->dmac is only ETH_ALEN long.
+ */
+static void bpf_fib_dmac_snapshot(u8 *dmac, const struct neighbour *neigh)
+{
+	unsigned int seq;
+
+	do {
+		seq = read_seqbegin(&neigh->ha_lock);
+		memcpy(dmac, neigh->ha, ETH_ALEN);
+	} while (read_seqretry(&neigh->ha_lock, seq));
+}
+
 static int bpf_fib_set_fwd_params(struct net_device *dev,
 				  struct bpf_fib_lookup *params,
 				  u32 flags, u32 mtu, u32 in_ifindex)
@@ -6490,7 +6504,7 @@ static int bpf_ipv4_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
 
 	if (!neigh || !(READ_ONCE(neigh->nud_state) & NUD_VALID))
 		return BPF_FIB_LKUP_RET_NO_NEIGH;
-	memcpy(params->dmac, neigh->ha, ETH_ALEN);
+	bpf_fib_dmac_snapshot(params->dmac, neigh);
 	memcpy(params->smac, dev->dev_addr, ETH_ALEN);
 
 set_fwd_params:
@@ -6643,7 +6657,7 @@ static int bpf_ipv6_fib_lookup(struct net *net, struct bpf_fib_lookup *params,
 	neigh = __ipv6_neigh_lookup_noref(dev, dst);
 	if (!neigh || !(READ_ONCE(neigh->nud_state) & NUD_VALID))
 		return BPF_FIB_LKUP_RET_NO_NEIGH;
-	memcpy(params->dmac, neigh->ha, ETH_ALEN);
+	bpf_fib_dmac_snapshot(params->dmac, neigh);
 	memcpy(params->smac, dev->dev_addr, ETH_ALEN);
 
 set_fwd_params:
