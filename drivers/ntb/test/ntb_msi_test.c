@@ -391,13 +391,15 @@ static void ntb_msit_remove(struct ntb_client *client, struct ntb_dev *ntb)
 	int i;
 
 	ntb_link_disable(ntb);
+	ntb_clear_ctx(ntb);
+	cancel_work_sync(&nm->setup_work);
+
 	ntb_db_set_mask(ntb, ntb_db_valid_mask(ntb));
 	ntb_msi_clear_mws(ntb);
 
 	for (i = 0; i < ntb_peer_port_count(ntb); i++)
 		kfree(nm->peers[i].msi_desc);
 
-	ntb_clear_ctx(ntb);
 	ntb_msit_remove_dbgfs(nm);
 }
 
