@@ -88,7 +88,8 @@ LIBOPCODES_LIBS := $(shell \
 	for libs in "-lopcodes" \
 		    "-lopcodes -lbfd" \
 		    "-lopcodes -lbfd -liberty" \
-		    "-lopcodes -lbfd -liberty -lz"; do \
+		    "-lopcodes -lbfd -liberty -lz" \
+		    "-lopcodes -lbfd -liberty -lz -lzstd"; do \
 		echo 'extern void disassemble_init_for_target(void *);' \
 		     'int main(void) { disassemble_init_for_target(0); return 0; }' | \
 			$(HOSTCC) -xc - -o /dev/null $$libs 2>/dev/null && \
