@@ -99,6 +99,10 @@ struct sifive_fu540_macb_mgmt {
 
 #define MACB_MDIO_TIMEOUT	1000000 /* in usecs */
 
+/* CBS port transmit rate factors: 1000/interface_width */
+#define MACB_CBS_PORT_RATE_1G		125	/* 1000/8 for GMII (8-bit) */
+#define MACB_CBS_PORT_RATE_10_100M	250	/* 1000/4 for MII (4-bit) */
+
 /* DMA buffer descriptor might be different size
  * depends on hardware configuration:
  *
@@ -4494,6 +4498,116 @@ static int macb_setup_taprio(struct net_device *netdev,
 	return err;
 }
 
+static int macb_cbs_get_queue_params(struct macb *bp, u8 queue_num,
+				     u32 *enable_bit, u32 *idleslope_reg)
+{
+	/* Queue A is highest priority (num_queues - 1) */
+	if (queue_num == bp->num_queues - 1) {
+		*enable_bit = GEM_BIT(CBS_ENABLE_QUEUE_A);
+		*idleslope_reg = GEM_CBS_IDLESLOPE_Q_A;
+		return 0;
+	}
+
+	/* Queue B is second highest priority (num_queues - 2) */
+	if (queue_num == bp->num_queues - 2) {
+		*enable_bit = GEM_BIT(CBS_ENABLE_QUEUE_B);
+		*idleslope_reg = GEM_CBS_IDLESLOPE_Q_B;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static int macb_cbs_add(struct net_device *netdev,
+			struct tc_cbs_qopt_offload *qopt)
+{
+	u32 enable_bit, idleslope, speed_kbps, ctrl, idleslope_reg;
+	struct ethtool_link_ksettings kset = {};
+	struct macb *bp = netdev_priv(netdev);
+	int err;
+
+	err = macb_cbs_get_queue_params(bp, qopt->queue, &enable_bit, &idleslope_reg);
+	if (err) {
+		netdev_err(netdev, "CBS: Queue %d not eligible (only top 2 queues support CBS)\n",
+			   qopt->queue);
+		return -EINVAL;
+	}
+
+	/* idleslope is calibrated for the current link speed; CBS is not
+	 * reprogrammed on link-speed changes, so it must be reconfigured
+	 * if the link speed changes.
+	 */
+	phylink_ethtool_ksettings_get(bp->phylink, &kset);
+
+	if (!kset.base.speed || kset.base.speed == SPEED_UNKNOWN) {
+		netdev_err(netdev, "CBS: Invalid link speed\n");
+		return -EINVAL;
+	}
+
+	speed_kbps = kset.base.speed * 1000;
+
+	if (qopt->idleslope <= 0 || (u32)qopt->idleslope > speed_kbps) {
+		netdev_err(netdev, "CBS: invalid idleslope %d (must be 1..%u kbps)\n",
+			   qopt->idleslope, speed_kbps);
+		return -EINVAL;
+	}
+
+	/* qopt->idleslope is in kbps; convert to the units the hardware
+	 * register expects:
+	 * - High-speed GEM: fraction of port bandwidth, scaled to the full
+	 *   32-bit register range
+	 * - Standard MACB: the register counts bytes/sec in 1G (8-bit GMII)
+	 *   mode and nibbles/sec in 10/100 (4-bit MII) mode, so scale kbps
+	 *   by 1000/8 (125) or 1000/4 (250) respectively
+	 */
+	if (bp->caps & MACB_CAPS_HIGH_SPEED)
+		idleslope = DIV_ROUND_UP_ULL((u64)qopt->idleslope * U32_MAX, speed_kbps);
+	else
+		idleslope = (u32)qopt->idleslope * (kset.base.speed >= 1000 ?
+					       MACB_CBS_PORT_RATE_1G : MACB_CBS_PORT_RATE_10_100M);
+
+	scoped_guard(spinlock_irqsave, &bp->lock) {
+		/* Disable CBS for the queue before updating idleslope */
+		ctrl = gem_readl(bp, CBS_CONTROL) & ~enable_bit;
+		gem_writel(bp, CBS_CONTROL, ctrl);
+		/* Update idleslope for the queue */
+		bp->macb_reg_writel(bp, idleslope_reg, idleslope);
+		/* Re-enable CBS for the queue with new idleslope */
+		gem_writel(bp, CBS_CONTROL, ctrl | enable_bit);
+	}
+
+	netdev_dbg(netdev, "CBS: Configured queue %d with idleslope 0x%x\n",
+		   qopt->queue, idleslope);
+
+	return 0;
+}
+
+static void macb_cbs_destroy(struct net_device *netdev, u8 queue_num)
+{
+	struct macb *bp = netdev_priv(netdev);
+	u32 enable_bit, idleslope_reg;
+
+	if (macb_cbs_get_queue_params(bp, queue_num, &enable_bit, &idleslope_reg))
+		return;
+
+	scoped_guard(spinlock_irqsave, &bp->lock) {
+		gem_writel(bp, CBS_CONTROL, gem_readl(bp, CBS_CONTROL) & ~enable_bit);
+		bp->macb_reg_writel(bp, idleslope_reg, 0);
+	}
+
+	netdev_dbg(netdev, "CBS: Disabled queue %d\n", queue_num);
+}
+
+static int macb_setup_cbs(struct net_device *netdev,
+			  struct tc_cbs_qopt_offload *qopt)
+{
+	if (qopt->enable)
+		return macb_cbs_add(netdev, qopt);
+
+	macb_cbs_destroy(netdev, qopt->queue);
+	return 0;
+}
+
 static int macb_setup_mqprio(struct net_device *netdev,
 			     struct tc_mqprio_qopt_offload *mqprio)
 {
@@ -4573,6 +4687,8 @@ static int macb_setup_tc(struct net_device *netdev, enum tc_setup_type type,
 	switch (type) {
 	case TC_SETUP_QDISC_MQPRIO:
 		return macb_setup_mqprio(netdev, type_data);
+	case TC_SETUP_QDISC_CBS:
+		return macb_setup_cbs(netdev, type_data);
 	case TC_SETUP_QDISC_TAPRIO:
 		return macb_setup_taprio(netdev, type_data);
 	default:
