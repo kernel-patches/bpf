@@ -500,13 +500,22 @@ TRACE_EVENT(landlock_create_domain,
  *                enforcement time: 1 if set (by a prior
  *                :manpage:`prctl(2)` %PR_SET_NO_NEW_PRIVS or by
  *                %LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS), 0 if the domain
- *                was enforced with %CAP_SYS_ADMIN instead.
+ *                was enforced with %CAP_SYS_ADMIN instead, or without
+ *                either precondition on the BPF exec path (see below).
  *
  * Emitted for each thread sys_landlock_restrict_self() enforces the
  * domain on, in that thread's own context, right after its
  * commit_creds(), so it fires only once the thread is irreversibly
- * enforcing the domain (aborted operations emit none).  Not
- * balanced; every enforcement falls between the domain's
+ * enforcing the domain (aborted operations emit none).  Also emitted
+ * at execve(2)'s point of no return when a BPF-staged policy object
+ * is applied to the execution (see bpf_lsm_policy_apply_bprm()): the
+ * process is single-threaded after de_thread(), so the single event
+ * has @complete == 1 and @process_wide == 1.  On that path,
+ * @no_new_privs == 0 carries no authorization meaning (the authority
+ * is the privilege to attach the BPF program, not
+ * no_new_privs/%CAP_SYS_ADMIN); it only tells the observer that the
+ * confined program can still elevate through future setuid execs.
+ * Not balanced; every enforcement falls between the domain's
  * landlock_create_domain and landlock_free_domain events.
  *
  * @complete == 1 && @process_wide == 1 means the whole process is
