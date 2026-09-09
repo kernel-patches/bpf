@@ -599,7 +599,7 @@ static void txgbe_fdir_filter_restore(struct wx *wx)
 			}
 
 			/* Map the ring onto the absolute queue index */
-			queue = wx->rx_ring[ring]->reg_idx;
+			queue = rcu_dereference_protected(wx->rx_ring[ring], 1)->reg_idx;
 		}
 
 		ret = txgbe_fdir_write_perfect_filter(wx,
