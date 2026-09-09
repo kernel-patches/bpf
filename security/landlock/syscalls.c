@@ -9,7 +9,6 @@
 
 #include <asm/current.h>
 #include <linux/anon_inodes.h>
-#include <linux/bitops.h>
 #include <linux/build_bug.h>
 #include <linux/capability.h>
 #include <linux/cleanup.h>
@@ -31,7 +30,6 @@
 #include <uapi/linux/landlock.h>
 
 #include "cred.h"
-#include "domain.h"
 #include "fs.h"
 #include "limits.h"
 #include "net.h"
@@ -546,10 +544,9 @@ SYSCALL_DEFINE2(landlock_restrict_self, const int, ruleset_fd, const __u32,
 	struct landlock_ruleset *ruleset __free(landlock_put_ruleset) = NULL;
 	struct landlock_domain *new_dom = NULL;
 	struct cred *new_cred;
-	struct landlock_cred_security *new_llcred;
+	struct landlock_restriction restriction;
 	bool process_wide;
-	bool __maybe_unused log_same_exec, log_new_exec, log_subdomains,
-		prev_log_subdomains;
+	int err;
 
 	if (!is_initialized())
 		return -EOPNOTSUPP;
@@ -567,13 +564,6 @@ SYSCALL_DEFINE2(landlock_restrict_self, const int, ruleset_fd, const __u32,
 	    !task_no_new_privs(current) &&
 	    !ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN))
 		return -EPERM;
-
-	/* Translates "off" flag to boolean. */
-	log_same_exec = !(flags & LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF);
-	/* Translates "on" flag to boolean. */
-	log_new_exec = !!(flags & LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON);
-	/* Translates "off" flag to boolean. */
-	log_subdomains = !(flags & LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF);
 
 	/*
 	 * It is allowed to set LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF with
@@ -596,85 +586,29 @@ SYSCALL_DEFINE2(landlock_restrict_self, const int, ruleset_fd, const __u32,
 	if (!new_cred)
 		return -ENOMEM;
 
-	new_llcred = landlock_cred(new_cred);
-
-#ifdef CONFIG_SECURITY_LANDLOCK_LOG
-	prev_log_subdomains = !new_llcred->log_subdomains_off;
-	new_llcred->log_subdomains_off = !prev_log_subdomains ||
-					 !log_subdomains;
-#endif /* CONFIG_SECURITY_LANDLOCK_LOG */
-
 	/*
 	 * The only case when a ruleset may not be set is if
 	 * LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF is set (optionally with
 	 * LANDLOCK_RESTRICT_SELF_TSYNC) and ruleset_fd is -1.  We could
 	 * optimize this case by not calling commit_creds() if this flag was
 	 * already set, but it is not worth the complexity.
+	 *
+	 * There is no possible race condition while copying and manipulating
+	 * the current credentials because they are dedicated per thread.
 	 */
-	if (ruleset) {
-		/*
-		 * There is no possible race condition while copying and
-		 * manipulating the current credentials because they are
-		 * dedicated per thread.
-		 */
-		mutex_lock(&ruleset->lock);
-		new_dom = landlock_merge_ruleset(new_llcred->domain, ruleset);
-		if (IS_ERR(new_dom)) {
-			mutex_unlock(&ruleset->lock);
-			abort_creds(new_cred);
-			return PTR_ERR(new_dom);
-		}
-		/*
-		 * Emits the domain-creation event while @ruleset->lock is still
-		 * held, right after the merge, so an eBPF program attached to
-		 * the tracepoint reads the exact ruleset that was merged into
-		 * the domain: a consistent snapshot that a concurrent
-		 * landlock_add_rule() (which holds the same lock) cannot
-		 * modify.
-		 *
-		 * This must come before the thread-sync wait below.  Holding
-		 * @ruleset->lock across landlock_restrict_sibling_threads()
-		 * would hang: a sibling thread blocked in landlock_add_rule()
-		 * on the same @ruleset->lock cannot run the task_work that
-		 * thread-sync waits for (the lock wait is uninterruptible).
-		 * Emitting here keeps the lock off the thread-sync path.
-		 *
-		 * The trade-off is that the event fires for a domain that a
-		 * later (rare) thread-sync failure aborts.  That path emits the
-		 * matching free_domain event so the create/free pair stays
-		 * balanced (see the thread-sync error path below).
-		 */
-		trace_landlock_create_domain(new_dom, ruleset);
-		mutex_unlock(&ruleset->lock);
-
-#ifdef CONFIG_SECURITY_LANDLOCK_LOG
-		new_dom->hierarchy->log_same_exec = log_same_exec;
-		new_dom->hierarchy->log_new_exec = log_new_exec;
-		/*
-		 * The creation event fired above, so move the domain out of
-		 * LANDLOCK_LOG_UNCOMMITTED: its free_domain event must fire
-		 * too, even if a thread-sync failure aborts it below.  Audit
-		 * logging may still be disabled (DISABLED); tracing observes it
-		 * anyway.
-		 */
-		if ((!log_same_exec && !log_new_exec) || !prev_log_subdomains)
-			new_dom->hierarchy->log_status = LANDLOCK_LOG_DISABLED;
-		else
-			new_dom->hierarchy->log_status = LANDLOCK_LOG_PENDING;
-#endif /* CONFIG_SECURITY_LANDLOCK_LOG */
-
-		/* Replaces the old (prepared) domain. */
-		landlock_put_domain(new_llcred->domain);
-		new_llcred->domain = new_dom;
-
-#ifdef CONFIG_SECURITY_LANDLOCK_LOG
-		new_llcred->domain_exec |= BIT(new_dom->num_layers - 1);
-#endif /* CONFIG_SECURITY_LANDLOCK_LOG */
+	err = landlock_prepare_restriction(landlock_cred(new_cred), ruleset,
+					   flags, &restriction);
+	if (err) {
+		abort_creds(new_cred);
+		return err;
 	}
 
+	new_dom = restriction.domain;
+	landlock_apply_restriction(landlock_cred(new_cred), &restriction);
+
 	if (flags & LANDLOCK_RESTRICT_SELF_TSYNC) {
-		const int err = landlock_restrict_sibling_threads(
-			current_cred(), new_cred, flags);
+		err = landlock_restrict_sibling_threads(current_cred(), new_cred,
+							flags);
 		if (err) {
 			/*
 			 * Thread-sync failed (rare), so the new domain is
