@@ -498,9 +498,12 @@ static int ti_pipe3_init(struct phy *x)
 {
 	struct ti_pipe3 *phy = phy_get_drvdata(x);
 	u32 val;
-	int ret = 0;
+	int ret;
 
-	ti_pipe3_enable_clocks(phy);
+	ret = ti_pipe3_enable_clocks(phy);
+	if (ret)
+		return ret;
+
 	/*
 	 * Set pcie_pcs register to 0x96 for proper functioning of phy
 	 * as recommended in AM572x TRM SPRUHZ6, section 18.5.2.2, table
