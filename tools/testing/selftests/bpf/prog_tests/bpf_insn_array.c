@@ -453,6 +453,263 @@ cleanup:
 	close(map_fd);
 }
 
+#define GOTOX_CNT_AT_LIMIT	1000
+#define GOTOX_LOG_SZ		(256 * 1024)
+
+static const char gotox_limit_msg[] =
+	"number of indirect jump edges in the program exceeds";
+
+static int gotox_jt_create(__u32 first_gotox, __u32 gotox_cnt)
+{
+	/* the run of gotox itself, plus the exit block right after it */
+	const __u32 jt_cnt = gotox_cnt + 1;
+	struct bpf_insn_array_value val = {};
+	int map_fd;
+	__u32 i;
+
+	map_fd = map_create(BPF_MAP_TYPE_INSN_ARRAY, jt_cnt);
+	if (!ASSERT_GE(map_fd, 0, "map_create"))
+		return map_fd;
+
+	for (i = 0; i < jt_cnt; i++) {
+		val.orig_off = first_gotox + i;
+		if (!ASSERT_EQ(bpf_map_update_elem(map_fd, &i, &val, 0), 0,
+			       "bpf_map_update_elem"))
+			goto err;
+	}
+
+	if (!ASSERT_EQ(bpf_map_freeze(map_fd), 0, "bpf_map_freeze"))
+		goto err;
+
+	return map_fd;
+err:
+	close(map_fd);
+	return -1;
+}
+
+static int gotox_prog_load(struct bpf_insn *insns, __u32 insn_cnt,
+			   int *fd_array, __u32 fd_array_cnt, char *log)
+{
+	LIBBPF_OPTS(bpf_prog_load_opts, opts);
+	int prog_fd;
+
+	log[0] = 0;
+	opts.fd_array = fd_array;
+	opts.fd_array_cnt = fd_array_cnt;
+	opts.log_buf = log;
+	opts.log_size = GOTOX_LOG_SZ;
+	opts.log_level = 1;
+
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_XDP, NULL, "GPL", insns, insn_cnt, &opts);
+	if (prog_fd >= 0) {
+		close(prog_fd);
+		return 0;
+	}
+	return prog_fd;
+}
+
+/* Fill in 'r1 = 0; gotox_cnt x gotox r1' at 'insns'. */
+static void gotox_run_fill(struct bpf_insn *insns, __u32 gotox_cnt)
+{
+	__u32 i;
+
+	insns[0] = BPF_MOV64_IMM(BPF_REG_1, 0);
+	for (i = 1; i <= gotox_cnt; i++)
+		insns[i] = BPF_RAW_INSN(BPF_JMP | BPF_JA | BPF_X, BPF_REG_1, 0, 0, 0);
+}
+
+static void check_gotox_limit_hit(const char *log, int err)
+{
+	ASSERT_EQ(err, -E2BIG, "program should have been rejected");
+	ASSERT_HAS_SUBSTR(log, gotox_limit_msg, "verifier log");
+}
+
+static bool try_load_gotox_prog(__u32 gotox_cnt, char *log, int *err)
+{
+	const __u32 insn_cnt = gotox_cnt + 3;
+	struct bpf_insn *insns;
+	bool attempted = false;
+	int map_fd;
+
+	insns = calloc(insn_cnt, sizeof(*insns));
+	if (!ASSERT_OK_PTR(insns, "calloc insns"))
+		return false;
+
+	gotox_run_fill(insns, gotox_cnt);
+	insns[gotox_cnt + 1] = BPF_MOV64_IMM(BPF_REG_0, 0);
+	insns[gotox_cnt + 2] = BPF_EXIT_INSN();
+
+	map_fd = gotox_jt_create(1, gotox_cnt);
+	if (map_fd < 0)
+		goto free_insns;
+
+	*err = gotox_prog_load(insns, insn_cnt, &map_fd, 1, log);
+	close(map_fd);
+	attempted = true;
+free_insns:
+	free(insns);
+	return attempted;
+}
+
+/*
+ * The extra exit target in the jump table makes for gotox_cnt * (gotox_cnt
+ * + 1) edges, hence the program is over the limit by gotox_cnt edges.
+ */
+static void check_too_many_gotox_edges(void)
+{
+	const __u32 gotox_cnt = GOTOX_CNT_AT_LIMIT;
+	char *log;
+	int err;
+
+	log = calloc(1, GOTOX_LOG_SZ);
+	if (!ASSERT_OK_PTR(log, "calloc log"))
+		return;
+
+	if (try_load_gotox_prog(gotox_cnt, log, &err))
+		check_gotox_limit_hit(log, err);
+
+	free(log);
+}
+
+/*
+ * A chain of blocks, where block k loads jt[k] and jumps to it. The jump
+ * table holds the starts of the blocks that follow plus the exit block,
+ * which is gotox_cnt targets for gotox_cnt gotox, so the program sits
+ * exactly at the limit and must still load.
+ */
+#define GOTOX_BLOCK_SZ		4
+
+static void gotox_chain_fill(struct bpf_insn *insns, __u32 gotox_cnt)
+{
+	struct bpf_insn *at;
+	__u32 k;
+
+	for (k = 0; k < gotox_cnt; k++) {
+		at = insns + k * GOTOX_BLOCK_SZ;
+
+		/* r1 = &jt[0], by index 0 into fd_array */
+		at[0] = (struct bpf_insn) {
+			.code = BPF_LD | BPF_DW | BPF_IMM,
+			.dst_reg = BPF_REG_1,
+			.src_reg = BPF_PSEUDO_MAP_IDX_VALUE,
+			.imm = 0,
+		};
+		at[1] = (struct bpf_insn) { .imm = 0 };
+		at[2] = BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, k * 8);
+		at[3] = BPF_RAW_INSN(BPF_JMP | BPF_JA | BPF_X, BPF_REG_1, 0, 0, 0);
+	}
+
+	insns[gotox_cnt * GOTOX_BLOCK_SZ] = BPF_MOV64_IMM(BPF_REG_0, 0);
+	insns[gotox_cnt * GOTOX_BLOCK_SZ + 1] = BPF_EXIT_INSN();
+}
+
+static int gotox_chain_jt_create(__u32 gotox_cnt)
+{
+	struct bpf_insn_array_value val = {};
+	int map_fd;
+	__u32 i;
+
+	map_fd = map_create(BPF_MAP_TYPE_INSN_ARRAY, gotox_cnt);
+	if (!ASSERT_GE(map_fd, 0, "map_create"))
+		return map_fd;
+
+	for (i = 0; i < gotox_cnt; i++) {
+		val.orig_off = (i + 1) * GOTOX_BLOCK_SZ;
+		if (!ASSERT_EQ(bpf_map_update_elem(map_fd, &i, &val, 0), 0,
+			       "bpf_map_update_elem"))
+			goto err;
+	}
+
+	if (!ASSERT_EQ(bpf_map_freeze(map_fd), 0, "bpf_map_freeze"))
+		goto err;
+
+	return map_fd;
+err:
+	close(map_fd);
+	return -1;
+}
+
+static void check_gotox_edges_at_limit(void)
+{
+	const __u32 gotox_cnt = GOTOX_CNT_AT_LIMIT;
+	const __u32 insn_cnt = gotox_cnt * GOTOX_BLOCK_SZ + 2;
+	struct bpf_insn *insns;
+	char *log;
+	int map_fd, err;
+
+	log = calloc(1, GOTOX_LOG_SZ);
+	if (!ASSERT_OK_PTR(log, "calloc log"))
+		return;
+
+	insns = calloc(insn_cnt, sizeof(*insns));
+	if (!ASSERT_OK_PTR(insns, "calloc insns"))
+		goto free_log;
+
+	gotox_chain_fill(insns, gotox_cnt);
+
+	map_fd = gotox_chain_jt_create(gotox_cnt);
+	if (map_fd < 0)
+		goto free_insns;
+
+	err = gotox_prog_load(insns, insn_cnt, &map_fd, 1, log);
+	close(map_fd);
+
+	if (!ASSERT_OK(err, "program at the edge limit should load"))
+		fprintf(stderr, "verifier log: %s\n", log);
+
+free_insns:
+	free(insns);
+free_log:
+	free(log);
+}
+
+static void check_gotox_edges_across_subprogs(void)
+{
+	const __u32 gotox_cnt = GOTOX_CNT_AT_LIMIT * 3 / 4;
+	const __u32 sub_start = gotox_cnt + 3;
+	const __u32 insn_cnt = 2 * (gotox_cnt + 3);
+	int map_fd[2] = { -1, -1 };
+	struct bpf_insn *insns;
+	char *log;
+	int err;
+
+	log = calloc(1, GOTOX_LOG_SZ);
+	if (!ASSERT_OK_PTR(log, "calloc log"))
+		return;
+
+	insns = calloc(insn_cnt, sizeof(*insns));
+	if (!ASSERT_OK_PTR(insns, "calloc insns"))
+		goto free_log;
+
+	gotox_run_fill(insns, gotox_cnt);
+	insns[gotox_cnt + 1] = BPF_RAW_INSN(BPF_JMP | BPF_CALL, 0,
+					    BPF_PSEUDO_CALL, 0,
+					    sub_start - (gotox_cnt + 1) - 1);
+	insns[gotox_cnt + 2] = BPF_EXIT_INSN();
+
+	gotox_run_fill(insns + sub_start, gotox_cnt);
+	insns[sub_start + gotox_cnt + 1] = BPF_MOV64_IMM(BPF_REG_0, 0);
+	insns[sub_start + gotox_cnt + 2] = BPF_EXIT_INSN();
+
+	map_fd[0] = gotox_jt_create(1, gotox_cnt);
+	if (map_fd[0] < 0)
+		goto free_insns;
+	map_fd[1] = gotox_jt_create(sub_start + 1, gotox_cnt);
+	if (map_fd[1] < 0)
+		goto close_maps;
+
+	err = gotox_prog_load(insns, insn_cnt, map_fd, 2, log);
+	check_gotox_limit_hit(log, err);
+
+close_maps:
+	close(map_fd[0]);
+	close(map_fd[1]);
+free_insns:
+	free(insns);
+free_log:
+	free(log);
+}
+
 static void check_bpf_side(void)
 {
 	check_bpf_no_lookup();
@@ -490,6 +747,15 @@ static void __test_bpf_insn_array(void)
 
 	if (test__start_subtest("bpf-side-ops"))
 		check_bpf_side();
+
+	if (test__start_subtest("too-many-gotox-edges"))
+		check_too_many_gotox_edges();
+
+	if (test__start_subtest("gotox-edges-at-limit"))
+		check_gotox_edges_at_limit();
+
+	if (test__start_subtest("gotox-edges-across-subprogs"))
+		check_gotox_edges_across_subprogs();
 }
 #else
 static void __test_bpf_insn_array(void)
