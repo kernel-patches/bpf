@@ -1094,7 +1094,6 @@ void rtw_reset_securitypriv(struct adapter *adapter)
 		/* 802.1x */
 		/*  Added by Albert 2009/02/18 */
 		/*  We have to backup the PMK information for WiFi PMK Caching test item. */
-		/*  */
 		/*  Backup the btkip_countermeasure information. */
 		/*  When the countermeasure is trigger, the driver have to disconnect with AP for 60 seconds. */
 
@@ -1121,7 +1120,6 @@ void rtw_reset_securitypriv(struct adapter *adapter)
 	} else {
 		/* reset values in securitypriv */
 		/* if (adapter->mlmepriv.fw_state & WIFI_STATION_STATE) */
-		/*  */
 		struct security_priv *psec_priv = &adapter->securitypriv;
 
 		psec_priv->dot11_auth_algrthm = dot11_auth_algrthm_open;  /* open system */
@@ -1133,7 +1131,6 @@ void rtw_reset_securitypriv(struct adapter *adapter)
 
 		psec_priv->ndisauthtype = Ndis802_11AuthModeOpen;
 		psec_priv->ndisencryptstatus = Ndis802_11WEPDisabled;
-		/*  */
 	}
 	spin_unlock_bh(&adapter->security_key_mutex);
 }
@@ -1144,7 +1141,6 @@ void rtw_reset_securitypriv(struct adapter *adapter)
 /* if join_res > 0, for (fw_state ==WIFI_STATION_STATE), we check if  "ptarget_sta" & "ptarget_wlan" exist. */
 /* if join_res > 0, for (fw_state ==WIFI_ADHOC_STATE), we only check if "ptarget_wlan" exist. */
 /* if join_res > 0, update "cur_network->network" from "pnetwork->network" if (ptarget_wlan != NULL). */
-/*  */
 void rtw_joinbss_event_prehandle(struct adapter *adapter, u8 *buf)
 {
 	struct sta_info *ptarget_sta = NULL, *pcur_sta = NULL;
@@ -1530,7 +1526,7 @@ void _rtw_join_timeout_handler(struct timer_list *t)
 
 	} else {
 		rtw_indicate_disconnect(adapter);
-		free_scanqueue(mlme_priv);/*  */
+		free_scanqueue(mlme_priv);
 
 		/* indicate disconnect for the case that join_timeout and check_fwstate != FW_LINKED */
 		rtw_cfg80211_indicate_disconnect(adapter);
@@ -2008,13 +2004,11 @@ static int SecIsInPMKIDList(struct adapter *Adapter, u8 *bssid)
 	return -1;
 }
 
-/*  */
 /*  Check the RSN IE length */
 /*  If the RSN IE length <= 20, the RSN IE didn't include the PMKID information */
 /*  0-11th element in the array are the fixed IE */
 /*  12th element in the array is the IE */
 /*  13th element in the array is the IE length */
-/*  */
 
 static int rtw_append_pmkid(struct adapter *Adapter, int pmkid_idx, u8 *ie, uint ie_len)
 {
@@ -2447,16 +2441,12 @@ void rtw_update_ht_cap(struct adapter *adapter, u8 *pie, uint ie_len, u8 channel
 		}
 	}
 
-	/*  */
 	/*  Config SM Power Save setting */
-	/*  */
 	pmlmeinfo->SM_PS =
 		(le16_to_cpu(pmlmeinfo->HT_caps.u.HT_cap_element.HT_caps_info) &
 		 0x0C) >> 2;
 
-	/*  */
 	/*  Config current HT Protection mode. */
-	/*  */
 	pmlmeinfo->HT_protection = pmlmeinfo->HT_info.infos[1] & 0x3;
 }
 

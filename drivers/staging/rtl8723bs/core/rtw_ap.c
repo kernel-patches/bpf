@@ -598,9 +598,7 @@ static void update_hw_ht_param(struct adapter *padapter)
 
 	rtw_hal_set_hwreg(padapter, HW_VAR_AMPDU_FACTOR, (u8 *)(&max_AMPDU_len));
 
-	/*  */
 	/*  Config SM Power Save setting */
-	/*  */
 	pmlmeinfo->SM_PS =
 		(le16_to_cpu(pmlmeinfo->HT_caps.u.HT_cap_element.HT_caps_info) &
 		 0x0C) >> 2;

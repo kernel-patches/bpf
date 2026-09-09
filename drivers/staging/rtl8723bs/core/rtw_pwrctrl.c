@@ -500,10 +500,8 @@ void LeaveAllPowerSaveModeDirect(struct adapter *Adapter)
 	}
 }
 
-/*  */
 /*  Description: Leave all power save mode: LPS, FwLPS, IPS if needed. */
 /*  Move code to function by tynli. 2010.03.26. */
-/*  */
 void LeaveAllPowerSaveMode(struct adapter *Adapter)
 {
 	struct dvobj_priv *dvobj = adapter_to_dvobj(Adapter);

@@ -818,7 +818,6 @@ static signed int ap2sta_data_frame(struct adapter *adapter, union recv_frame *p
 		memcpy(pattrib->ra, pattrib->dst, ETH_ALEN);
 		memcpy(pattrib->ta, pattrib->src, ETH_ALEN);
 
-		/*  */
 		memcpy(pattrib->bssid,  mybssid, ETH_ALEN);
 
 		*psta = rtw_get_stainfo(pstapriv, pattrib->bssid); /*  get sta_info */
@@ -1721,11 +1720,9 @@ static int check_indicate_seq(struct recv_reorder_ctrl *preorder_ctrl, u16 seq_n
 	if (SN_LESS(seq_num, preorder_ctrl->indicate_seq))
 		return false;
 
-	/*  */
 	/*  Sliding window manipulation. Conditions includes: */
 	/*  1. Incoming SeqNum is equal to WinStart =>Window shift 1 */
 	/*  2. Incoming SeqNum is larger than the WinEnd => Window shift N */
-	/*  */
 	if (SN_EQUAL(seq_num, preorder_ctrl->indicate_seq)) {
 		preorder_ctrl->indicate_seq = (preorder_ctrl->indicate_seq + 1) % 4096u;
 
@@ -1931,11 +1928,9 @@ static int recv_indicatepkt_reorder(struct adapter *padapter, union recv_frame *
 	/*  Indication process. */
 	/*  After Packet dropping and Sliding Window shifting as above, we can now just indicate the packets */
 	/*  with the SeqNum smaller than latest WinStart and buffer other packets. */
-	/*  */
 	/*  For Rx Reorder condition: */
 	/*  1. All packets with SeqNum smaller than WinStart => Indicate */
 	/*  2. All packets with SeqNum larger than or equal to WinStart => Buffer it. */
-	/*  */
 
 	if (recv_indicatepkts_in_order(padapter, preorder_ctrl, false)) {
 		_set_timer(&preorder_ctrl->reordering_ctrl_timer, REORDER_WAIT_TIME);

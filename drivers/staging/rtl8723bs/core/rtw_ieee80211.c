@@ -31,9 +31,7 @@ u8 RSN_CIPHER_SUITE_TKIP[] = { 0x00, 0x0f, 0xac, 2 };
 u8 RSN_CIPHER_SUITE_WRAP[] = { 0x00, 0x0f, 0xac, 3 };
 u8 RSN_CIPHER_SUITE_CCMP[] = { 0x00, 0x0f, 0xac, 4 };
 u8 RSN_CIPHER_SUITE_WEP104[] = { 0x00, 0x0f, 0xac, 5 };
-/*  */
 /*  for adhoc-master to generate ie and provide supported-rate to fw */
-/*  */
 
 static u8 WIFI_CCKRATES[] = {
 		(IEEE80211_CCK_RATE_1MB | IEEE80211_BASIC_RATE_MASK),

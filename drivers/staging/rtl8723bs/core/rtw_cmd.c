@@ -1137,9 +1137,7 @@ bool traffic_status_watchdog(struct adapter *padapter, bool from_timer)
 
 	collect_traffic_statistics(padapter);
 
-	/*  */
 	/*  Determine if our traffic is busy now */
-	/*  */
 	if ((check_fwstate(pmlmepriv, _FW_LINKED))
 		/*&& !MgntInitAdapterInProgress(pMgntInfo)*/) {
 		/*  if we raise busy_traffic in last watchdog, using lower threshold. */
