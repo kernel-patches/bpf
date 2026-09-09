@@ -8,7 +8,6 @@
 #include <media/rc-core.h>
 #include <linux/bsearch.h>
 #include <linux/spinlock.h>
-#include <linux/delay.h>
 #include <linux/input.h>
 #include <linux/leds.h>
 #include <linux/slab.h>
@@ -114,8 +113,6 @@ struct rc_map *rc_map_get(const char *name)
 			pr_err("Couldn't load IR keymap %s\n", name);
 			return NULL;
 		}
-		msleep(20);	/* Give some time for IR to register */
-
 		map = seek_rc_map(name);
 	}
 #endif
@@ -1278,7 +1275,6 @@ void ir_raw_load_modules(u64 *protocols)
 			*protocols &= ~proto_names[i].type;
 			continue;
 		}
-		msleep(20);
 		available = ir_raw_get_allowed_protocols();
 		if (!(*protocols & proto_names[i].type & ~available))
 			continue;
