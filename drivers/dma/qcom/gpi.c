@@ -1050,6 +1050,13 @@ static void gpi_process_xfer_compl_event(struct gchan *gchan,
 			return;
 	}
 
+	if (compl_event->code == MSM_GPI_TCE_EOB &&
+	    gchan->protocol == QCOM_GPI_I2C &&
+	    (gpi_desc->tre[gpi_desc->num_tre - 1].dword[3] & TRE_FLAGS_LINK)) {
+		dma_cookie_complete(&vd->tx);
+		goto gpi_free_desc;
+	}
+
 	if (compl_event->code == MSM_GPI_TCE_UNEXP_ERR) {
 		dev_err(gpii->gpi_dev->dev, "Error in Transaction\n");
 		result.result = DMA_TRANS_ABORTED;
@@ -1668,10 +1675,12 @@ static int gpi_create_i2c_tre(struct gchan *chan, struct gpi_desc *desc,
 
 		tre->dword[3] = u32_encode_bits(TRE_TYPE_GO, TRE_FLAGS_TYPE);
 
-		if (i2c->multi_msg)
+		if (i2c->multi_msg) {
+			tre->dword[3] |= u32_encode_bits(1, TRE_FLAGS_IEOB);
 			tre->dword[3] |= u32_encode_bits(1, TRE_FLAGS_LINK);
-		else
+		} else {
 			tre->dword[3] |= u32_encode_bits(1, TRE_FLAGS_CHAIN);
+		}
 	}
 
 	if (i2c->op == I2C_READ || i2c->multi_msg == false) {
