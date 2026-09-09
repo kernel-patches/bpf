@@ -15,12 +15,7 @@ __noinline __u64 take_i128_global(int a, u128 v, int c)
 }
 
 SEC("tc")
-/*
- * The verifier counts one argument register for the __int128 and marks only
- * R1 through R3 at the entry of take_i128_global(), while the compiler passed
- * a in R1, v in R2:R3 and c in R4.
- */
-__failure __msg("R4 !read_ok")
+__success __retval(0)
 int aggregate_arg_int128_c_test(struct __sk_buff *skb)
 {
 	__u64 a = skb->len ^ MIX_A;
