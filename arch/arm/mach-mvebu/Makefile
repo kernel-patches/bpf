@@ -1,6 +1,4 @@
 # SPDX-License-Identifier: GPL-2.0
-ccflags-y := -I$(srctree)/arch/arm/plat-orion/include
-
 obj-$(CONFIG_MACH_MVEBU_ANY)	 += system-controller.o mvebu-soc-id.o
 
 ifeq ($(CONFIG_MACH_MVEBU_V7),y)

@@ -235,8 +235,6 @@ core-y				+= $(patsubst %,arch/arm/mach-%/,$(machine-y))
 # For cleaning
 core-				+= $(patsubst %,arch/arm/mach-%/,$(machine-))
 
-core-$(CONFIG_PLAT_ORION)	+= arch/arm/plat-orion/
-
 libs-y				:= arch/arm/lib/ $(libs-y)
 
 # Default target when executing plain make
