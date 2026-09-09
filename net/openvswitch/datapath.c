@@ -1533,6 +1533,7 @@ static int ovs_flow_cmd_dump(struct sk_buff *skb, struct netlink_callback *cb)
 	}
 
 	ti = rcu_dereference(dp->table.ti);
+	local_bh_disable();
 	for (;;) {
 		struct sw_flow *flow;
 		u32 bucket, obj;
@@ -1552,6 +1553,7 @@ static int ovs_flow_cmd_dump(struct sk_buff *skb, struct netlink_callback *cb)
 		cb->args[0] = bucket;
 		cb->args[1] = obj;
 	}
+	local_bh_enable();
 	rcu_read_unlock();
 	return skb->len;
 }
@@ -2569,6 +2571,7 @@ static int ovs_vport_cmd_dump(struct sk_buff *skb, struct netlink_callback *cb)
 		rcu_read_unlock();
 		return -ENODEV;
 	}
+	local_bh_disable();
 	for (i = bucket; i < DP_VPORT_HASH_BUCKETS; i++) {
 		struct vport *vport;
 
@@ -2589,6 +2592,7 @@ static int ovs_vport_cmd_dump(struct sk_buff *skb, struct netlink_callback *cb)
 		skip = 0;
 	}
 out:
+	local_bh_enable();
 	rcu_read_unlock();
 
 	cb->args[0] = i;
