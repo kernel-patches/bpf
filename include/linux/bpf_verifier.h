@@ -1066,7 +1066,7 @@ static inline bool bpf_ret_reg_pair(struct bpf_verifier_env *env, int subprog)
 }
 
 struct bpf_call_summary {
-	u8 num_params;
+	u8 arg_slot_cnt;
 	bool is_void;
 	bool fastcall;
 };
@@ -1512,6 +1512,7 @@ enum btf_member_kind {
 
 bool btf_struct_is_composed_of(struct bpf_verifier_env *env, const struct btf *btf,
 			       const struct btf_type *t, u32 member_kinds);
+u32 btf_func_arg_align(const struct btf *btf, const struct btf_type *t);
 
 int bpf_find_subprog(struct bpf_verifier_env *env, int off);
 bool bpf_is_throw_kfunc(struct bpf_insn *insn);
