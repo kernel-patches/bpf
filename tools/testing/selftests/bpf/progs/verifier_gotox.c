@@ -318,7 +318,7 @@ __used static int test_subprog(void)
 }
 
 SEC("socket")
-__failure __msg("jump table for insn 4 points outside of the subprog [0,10]")
+__failure __msg("jump table of subprog starting at 0 spans multiple subprogs")
 __naked void jump_table_outside_subprog(void)
 {
 	asm volatile ("						\

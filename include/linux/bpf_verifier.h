@@ -826,6 +826,7 @@ struct bpf_subprog_info {
 	bool keep_fastcall_stack: 1;
 	bool changes_pkt_data: 1;
 	bool might_sleep: 1;
+	bool jt_spans_subprogs: 1;
 	u8 arg_cnt:4;
 
 	enum priv_stack_mode priv_stack_mode;

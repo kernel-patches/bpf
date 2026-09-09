@@ -18188,11 +18188,56 @@ static int indirect_jump_min_max_index(struct bpf_verifier_env *env,
 	return 0;
 }
 
+/* 'jt' is sorted and free of duplicates, see sort_insn_array_uniq() */
+static bool jt_contains(const struct bpf_iarray *jt, u32 target)
+{
+	int l = 0, r = jt->cnt - 1, m;
+
+	while (l <= r) {
+		m = l + (r - l) / 2;
+		if (jt->items[m] == target)
+			return true;
+		if (jt->items[m] < target)
+			l = m + 1;
+		else
+			r = m - 1;
+	}
+	return false;
+}
+
+static int reject_gotox_out_of_subprog(struct bpf_verifier_env *env, u32 target,
+				       u32 subprog_start, u32 subprog_end)
+{
+	verbose(env, "indirect jump from insn %d to %u leaves the subprog [%u,%u)\n",
+		     env->insn_idx, target, subprog_start, subprog_end);
+	bpf_diag_program_structure(
+		env, env->insn_idx, "indirect jump leaves subprogram",
+		"Keep every reachable jump-table target inside the subprogram of the indirect jump.",
+		"Instruction %d can jump indirectly to instruction %u, which is outside its own subprogram [%u,%u).",
+		env->insn_idx, target, subprog_start, subprog_end);
+	return -EINVAL;
+}
+
+static int reject_gotox_without_cfg_edge(struct bpf_verifier_env *env, u32 target)
+{
+	verbose(env, "indirect jump from insn %d to %u is not in the jump table of the subprog\n",
+		     env->insn_idx, target);
+	bpf_diag_program_structure(
+		env, env->insn_idx, "indirect jump target without CFG edge",
+		"Resolve indirect jumps through a jump table whose entries all fall inside the subprogram of the jump.",
+		"Instruction %d can jump indirectly to instruction %u, which is not part of the jump table of its subprogram.",
+		env->insn_idx, target);
+	return -EINVAL;
+}
+
 /* gotox *dst_reg */
 static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
 	struct bpf_verifier_state *other_branch;
+	struct bpf_subprog_info *subprog;
+	u32 subprog_start, subprog_end;
 	struct bpf_reg_state *dst_reg;
+	struct bpf_iarray *jt;
 	struct bpf_map *map;
 	u32 min_index, max_index;
 	int err = 0;
@@ -18233,6 +18278,26 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 		verbose(env, "register R%d doesn't point to any offset in map id=%d\n",
 			     insn->dst_reg, map->id);
 		return -EINVAL;
+	}
+
+	subprog = bpf_find_containing_subprog(env, env->insn_idx);
+	if (verifier_bug_if(!subprog, env, "no subprog contains insn %d", env->insn_idx))
+		return -EFAULT;
+	subprog_start = subprog->start;
+	subprog_end = (subprog + 1)->start;
+
+	jt = env->insn_aux_data[env->insn_idx].jt;
+	if (verifier_bug_if(!jt, env, "no jump table for insn %d", env->insn_idx))
+		return -EFAULT;
+
+	for (i = 0; i < n; i++) {
+		u32 target = env->gotox_tmp_buf->items[i];
+
+		if (target < subprog_start || target >= subprog_end)
+			return reject_gotox_out_of_subprog(env, target, subprog_start,
+							   subprog_end);
+		if (!jt_contains(jt, target))
+			return reject_gotox_without_cfg_edge(env, target);
 	}
 
 	for (i = 0; i < n - 1; i++) {
