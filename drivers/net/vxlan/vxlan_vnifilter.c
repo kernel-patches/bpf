@@ -17,6 +17,14 @@
 
 #include "vxlan_private.h"
 
+/* Maximum number of VNIs a single RTM_NEWTUNNEL or RTM_DELTUNNEL request may
+ * span.  VNI filtering is mainly used on bridged VXLAN devices where the VNI
+ * is derived from the VLAN, so a span wider than the VLAN ID space has no
+ * practical use, while an unbounded span lets one netlink message create up
+ * to 2^24 VNIs under rtnl_lock.
+ */
+#define VXLAN_VNI_FILTER_RANGE_MAX	4096
+
 static inline int vxlan_vni_cmp(struct rhashtable_compare_arg *arg,
 				const void *ptr)
 {
@@ -866,6 +874,17 @@ static int vxlan_process_vni_filter(struct vxlan_dev *vxlan,
 	if (!vni_start && !vni_end) {
 		NL_SET_ERR_MSG_ATTR(extack, nlvnifilter,
 				    "vni start nor end found in vni entry");
+		return -EINVAL;
+	}
+
+	/* Only bound a well-formed range; a start above the end selects no
+	 * VNI at all and is left behaving as before.
+	 */
+	if (vni_end >= vni_start &&
+	    vni_end - vni_start >= VXLAN_VNI_FILTER_RANGE_MAX) {
+		NL_SET_ERR_MSG_ATTR_FMT(extack, nlvnifilter,
+					"VNI range spans more than %u VNIs",
+					VXLAN_VNI_FILTER_RANGE_MAX);
 		return -EINVAL;
 	}
 
