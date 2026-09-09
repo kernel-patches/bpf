@@ -123,10 +123,23 @@ struct ptp_system_timestamp {
  *               reading the lowest bits of the PHC timestamp and the second
  *               reading immediately follows that.
  *
+ * @gettimexattrs64:  Same as @gettimex64, but also fills @att (if not NULL)
+ *                    with the maximum error bound for the returned PHC
+ *                    timestamp in nanoseconds, the timescale for the returned
+ *                    PHC timestamp and the clock's qualitative synchronization
+ *                    status. As for @gettimex64, @sts may be NULL; @att may
+ *                    be NULL independently.
+ *
  * @getcrosststamp:  Reads the current time from the hardware clock and
  *                   system clock simultaneously.
  *                   parameter cts: Contains timestamp (device,system) pair,
  *                   where system time is realtime and monotonic.
+ *
+ * @getcrosststampattrs:  Same as @getcrosststamp, but also fills @att (if not
+ *                        NULL) with the maximum error bound for the returned
+ *                        PHC timestamp in nanoseconds, the timescale for the
+ *                        returned PHC timestamp and the clock's qualitative
+ *                        synchronization status.
  *
  * @settime64:  Set the current time on the hardware clock.
  *              parameter ts: Time value to set.
@@ -209,8 +222,15 @@ struct ptp_clock_info {
 	int (*gettime64)(struct ptp_clock_info *ptp, struct timespec64 *ts);
 	int (*gettimex64)(struct ptp_clock_info *ptp, struct timespec64 *ts,
 			  struct ptp_system_timestamp *sts);
+	int (*gettimexattrs64)(struct ptp_clock_info *ptp,
+			       struct timespec64 *ts,
+			       struct ptp_system_timestamp *sts,
+			       struct ptp_clock_attrs *att);
 	int (*getcrosststamp)(struct ptp_clock_info *ptp,
 			      struct system_device_crosststamp *cts);
+	int (*getcrosststampattrs)(struct ptp_clock_info *ptp,
+				   struct system_device_crosststamp *cts,
+				   struct ptp_clock_attrs *att);
 	int (*settime64)(struct ptp_clock_info *p, const struct timespec64 *ts);
 	int (*getcycles64)(struct ptp_clock_info *ptp, struct timespec64 *ts);
 	int (*getcyclesx64)(struct ptp_clock_info *ptp, struct timespec64 *ts,
