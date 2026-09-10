@@ -356,6 +356,7 @@ struct dml2_core_internal_mode_support_info {
 
 	struct dml2_core_internal_watermarks watermarks;
 	bool dcfclk_support;
+	bool dcfclk_deep_sleep_support;
 	bool qos_bandwidth_support;
 	bool alternate_channel_size_support;
 };

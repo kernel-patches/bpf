@@ -382,6 +382,7 @@ struct dml2_mode_support_info {
 	bool temp_read_or_ppt_support;
 	bool qos_bandwidth_support;
 	bool dcfclk_support;
+	bool dcfclk_deep_sleep_support;
 	bool alternate_channel_size_support;
 	bool EnoughUrgentLatencyHidingSupport;
 	bool DSCSlicesODMModeSupported;

@@ -3434,6 +3434,9 @@ bool dcn6_ms_check_mode_support(
 		goto fail;
 	if (inputs->support.dcfclk_support == false)
 		goto fail;
+	// it is better to increase the state than to clamp dcfclk deep sleep to dcfclk, so we check if the dcfclk deep sleep is less than or equal to dcfclk
+	if (inputs->support.dcfclk_deep_sleep_support == false)
+		goto fail;
 	if (inputs->support.qos_bandwidth_support == false)
 		goto fail;
 	if (inputs->support.global_dram_clock_change_supported == false)
@@ -3679,12 +3682,17 @@ bool dcn6_ms_check_dcfclk_support(
 			&& inputs->DCFCLK <= soc_bb->max_dcfclk_khz / 1000.0
 			&& inputs->DCFCLK >= soc_bb->min_dcfclk_khz / 1000.0;
 
+	// it is better to increase the state than to clamp dcfclk deep sleep to dcfclk, so we check if the dcfclk deep sleep is less than or equal to dcfclk
+	outputs->support.dcfclk_deep_sleep_support = inputs->dcfclk_deepsleep <= inputs->DCFCLK;
+
 	DML_LOG_VERBOSE("outputs->support.dcfclk_support = %s\n", outputs->support.dcfclk_support ? "true" : "false");
+	DML_LOG_VERBOSE("outputs->support.dcfclk_deepsleep_support = %s\n", outputs->support.dcfclk_deep_sleep_support ? "true" : "false");
 
 	DML_LOG_DEBUG_BOOL(outputs->support.dcfclk_support);
+	DML_LOG_DEBUG_BOOL(outputs->support.dcfclk_deep_sleep_support);
 	DML_LOG_FUNC_EXIT();
 
-	return outputs->support.dcfclk_support;
+	return outputs->support.dcfclk_support && outputs->support.dcfclk_deep_sleep_support;
 }
 
 void dcn6_ms_check_alternate_channel_size_support(

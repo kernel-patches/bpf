@@ -13249,6 +13249,8 @@ void dml2_core_calcs_get_informative(const struct dml2_core_internal_display_mod
 	out->informative.mode_support_info.ViewportSizeSupport = mode_lib->ms.support.ViewportSizeSupport;
 	out->informative.mode_support_info.qos_bandwidth_support = mode_lib->ms.support.qos_bandwidth_support;
 	out->informative.mode_support_info.dcfclk_support = mode_lib->ms.support.dcfclk_support;
+	out->informative.mode_support_info.dcfclk_deep_sleep_support = mode_lib->ms.support.dcfclk_deep_sleep_support;
+
 
 	for (k = 0; k < out->display_config.num_planes; k++) {
 

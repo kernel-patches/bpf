@@ -110,7 +110,9 @@ static void dcn6_mp_calculate_pixel_delivery_times(struct dml2_core_calculate_mp
 			inputs->PSCL_THROUGHPUT,
 			inputs->PSCL_THROUGHPUT_CHROMA,
 			inputs->Dppclk,
-			inputs->DCFCLKDeepSleep,
+		// It is unnecessary and circular to use dcfclk_deepsleep here because dcfclk_deepsleep is derived from the line transferr time
+		// dcfclk is a better value here
+			inputs->Dcfclk,
 			inputs->BytePerPixelY,
 			inputs->BytePerPixelC,
 			inputs->req_per_swath_ub_l,
