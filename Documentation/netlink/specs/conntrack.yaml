@@ -72,14 +72,14 @@ definitions:
     type: enum
     entries:
       - none
-      - cloned
+      - closed
       - cookie-wait
       - cookie-echoed
       - established
       - shutdown-sent
-      - shutdown-received
+      - shutdown-recd
       - shutdown-ack-sent
-      - shutdown-heartbeat-sent
+      - heartbeat-sent
   -
     name: nf-ct-status
     type: flags
