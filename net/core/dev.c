@@ -12401,6 +12401,8 @@ static void dev_memory_provider_uninstall(struct net_device *dev)
 
 		__netif_mp_uninstall_rxq(rxq, &rxq->mp_params);
 	}
+
+	net_devmem_uninstall_tx_bindings(dev);
 }
 
 /* devices must be UP and netdev_lock()'d */
