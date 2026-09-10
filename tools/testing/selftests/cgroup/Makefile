@@ -20,8 +20,45 @@ TEST_GEN_PROGS += test_zswap
 
 LOCAL_HDRS += $(selfdir)/clone3/clone3_selftests.h $(selfdir)/pidfd/pidfd.h
 
+# Resolve Clang early so the optional BPF test can be selected.
+ifneq ($(filter %/,$(LLVM)),)
+CLANG ?= $(LLVM)clang
+else
+CLANG ?= clang$(filter -%,$(LLVM))
+endif
+READELF ?= $(CROSS_COMPILE)readelf
+VMLINUX_BTF_PATHS ?= $(if $(O),$(O)/vmlinux)				\
+		     $(if $(KBUILD_OUTPUT),$(KBUILD_OUTPUT)/vmlinux)	\
+		     ../../../../vmlinux				\
+		     /sys/kernel/btf/vmlinux				\
+		     /boot/vmlinux-$(shell uname -r)
+# Ignore ELF images without .BTF; raw sysfs BTF needs no check.
+VMLINUX_BTF ?= $(abspath $(firstword $(foreach v,$(wildcard $(VMLINUX_BTF_PATHS)),\
+		 $(if $(filter /sys/kernel/btf/%,$(v)),$(v),\
+		   $(if $(shell $(READELF) -S "$(v)" 2>/dev/null | grep -F .BTF),$(v))))))
+# Accept either a supplied header or usable BTF.
+HAVE_BPF := $(and $(or $(VMLINUX_H),$(VMLINUX_BTF)),			\
+		  $(shell command -v $(CLANG) 2>/dev/null))
+
+ifneq ($(HAVE_BPF),)
+TEST_GEN_PROGS += test_memcg_stat_cross_cpu
+BPF_SRCS := memcg_stat_cross_cpu.bpf.c
+# Replace lib.mk's link rule below.
+OVERRIDE_TARGETS := 1
+endif
+
 include ../lib.mk
 include lib/libcgroup.mk
+
+ifneq ($(HAVE_BPF),)
+include ../lib.bpf.mk
+
+# Restore lib.mk's rule for non-BPF tests.
+LOCAL_HDRS += $(selfdir)/kselftest_harness.h $(selfdir)/kselftest.h
+$(OUTPUT)/%: %.c $(LOCAL_HDRS)
+	$(call msg,CC,,$@)
+	$(Q)$(LINK.c) $(filter-out $(LOCAL_HDRS),$^) $(LDLIBS) -o $@
+endif
 
 $(OUTPUT)/test_core: $(LIBCGROUP_O)
 $(OUTPUT)/test_cpu: $(LIBCGROUP_O)
@@ -33,3 +70,12 @@ $(OUTPUT)/test_kmem: $(LIBCGROUP_O)
 $(OUTPUT)/test_memcontrol: $(LIBCGROUP_O)
 $(OUTPUT)/test_pids: $(LIBCGROUP_O)
 $(OUTPUT)/test_zswap: $(LIBCGROUP_O)
+
+ifneq ($(HAVE_BPF),)
+# Keep in-tree UAPI headers private to the BPF test.
+$(OUTPUT)/test_memcg_stat_cross_cpu: private CFLAGS += -I$(top_srcdir)/tools/include/uapi
+# Link cgroup_util and the skeleton against the in-tree libbpf.
+$(OUTPUT)/test_memcg_stat_cross_cpu: test_memcg_stat_cross_cpu.c \
+					$(BPF_SKELS) $(LIBCGROUP_O) $(BPFOBJ)
+	$(call bpf_link,$@,$< $(LIBCGROUP_O))
+endif
