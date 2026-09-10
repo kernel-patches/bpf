@@ -202,6 +202,57 @@ l0_%=:							\
 	: __clobber_all);
 }
 
+/*
+ * A range that already fits the field is unchanged by the sign extension.
+ * Both of these straddle zero, so the high bits of smin and smax differ and
+ * the top_s*_value test alone would fall back to the full field range.
+ */
+SEC("socket")
+__description("MOV64SX, S32, negative range is preserved")
+__success __success_unpriv __retval(0)
+__naked void mov64sx_s32_negative_range(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	w0 &= 0xfff;					\
+	r0 -= 0xfff;					\
+	/* r0 is [-4095, 0], already a valid s32 */	\
+	r0 = (s32)r0;					\
+	if r0 s< -0xfff goto l0_%=;			\
+	r0 = 0;						\
+	exit;						\
+l0_%=:							\
+	/* unreachable unless the range was widened */	\
+	r0 /= 0;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("MOV64SX, S8, negative range is preserved")
+__success __success_unpriv __retval(0)
+__naked void mov64sx_s8_negative_range(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	w0 &= 0x3f;					\
+	r0 -= 0x3f;					\
+	/* r0 is [-63, 0], already a valid s8 */	\
+	r0 = (s8)r0;					\
+	if r0 s< -0x3f goto l0_%=;			\
+	r0 = 0;						\
+	exit;						\
+l0_%=:							\
+	/* unreachable unless the range was widened */	\
+	r0 /= 0;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 SEC("socket")
 __description("MOV64SX, S16, R10 Sign Extension")
 __failure __msg("R1 type=scalar expected=fp, pkt, pkt_meta, map_key, map_value, mem, ringbuf_mem, buf, trusted_ptr_")
