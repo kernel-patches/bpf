@@ -530,7 +530,7 @@ attribute-sets:
         name: invalid
         type: u32
         byte-order: big-endian
-        doc: obsolete
+        doc: packets which could not be tracked
       -
         name: ignore
         type: u32
@@ -661,8 +661,8 @@ operations:
         reply:
           value: 0x104
           attributes:
-            - searched
             - found
+            - invalid
             - insert
             - insert-failed
             - drop
