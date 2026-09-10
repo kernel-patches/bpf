@@ -76,6 +76,13 @@ struct bpf_testmod_ops___zeroed testmod_zeroed = {
 	.zeroed_op = (void *)zeroed_op,
 };
 
+struct bpf_testmod_ops___private_bitfield {
+	unsigned int private_bitfield:31;
+};
+
+SEC("?.struct_ops.link")
+struct bpf_testmod_ops___private_bitfield testmod_private_bitfield;
+
 struct bpf_testmod_ops___incompatible {
 	int (*test_1)(void);
 	void (*test_2)(int *a);
