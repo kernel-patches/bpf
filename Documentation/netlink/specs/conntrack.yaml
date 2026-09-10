@@ -315,15 +315,15 @@ attribute-sets:
         type: u32
         byte-order: big-endian
       -
+        name: nat-proto
+        type: nest
+        nested-attributes: nat-proto-attrs
+      -
         name: nat-v6-minip
         type: binary
       -
         name: nat-v6-maxip
         type: binary
-      -
-        name: nat-proto
-        type: nest
-        nested-attributes: nat-proto-attrs
   -
     name: seqadj-attrs
     attributes:
