@@ -350,13 +350,20 @@ static void bnx2x_dcbx_map_nw(struct bnx2x *bp)
 	int i;
 	u32 unmapped = (1 << MAX_PFC_PRIORITIES) - 1; /* all ones */
 	u32 *ttp = bp->dcbx_port_params.app.traffic_type_priority;
-	u32 nw_prio = 1 << ttp[LLFC_TRAFFIC_TYPE_NW];
+	u32 nw_prio;
 	struct bnx2x_dcbx_cos_params *cos_params =
 			bp->dcbx_port_params.ets.cos_params;
 
+	if (ttp[LLFC_TRAFFIC_TYPE_NW] >= MAX_PFC_PRIORITIES)
+		return;
+
+	nw_prio = 1 << ttp[LLFC_TRAFFIC_TYPE_NW];
+
 	/* get unmapped priorities by clearing mapped bits */
-	for (i = 0; i < LLFC_DRIVER_TRAFFIC_TYPE_MAX; i++)
-		unmapped &= ~(1 << ttp[i]);
+	for (i = 0; i < LLFC_DRIVER_TRAFFIC_TYPE_MAX; i++) {
+		if (ttp[i] < MAX_PFC_PRIORITIES)
+			unmapped &= ~(1 << ttp[i]);
+	}
 
 	/* find cos for nw prio and extend it with unmapped */
 	for (i = 0; i < ARRAY_SIZE(bp->dcbx_port_params.ets.cos_params); i++) {
@@ -1871,6 +1878,9 @@ static void bnx2x_dcbx_fw_struct(struct bnx2x *bp,
 
 	/* Fill priority parameters */
 	for (pri = 0; pri < LLFC_DRIVER_TRAFFIC_TYPE_MAX; pri++) {
+		if (ttp[pri] >= MAX_PFC_PRIORITIES)
+			continue;
+
 		tt2cos[pri].priority = ttp[pri];
 		pri_bit = 1 << tt2cos[pri].priority;
 
