@@ -3669,10 +3669,19 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 	mark_stack_slot_scratched(env, spi);
 	if (reg && !(off % BPF_REG_SIZE) && reg->type == SCALAR_VALUE && env->bpf_capable) {
 		bool reg_value_fits;
+		bool subreg_link;
 
 		reg_value_fits = get_reg_width(reg) <= BITS_PER_BYTE * size;
+		/*
+		 * A narrowing spill stores the low 32 bits of the source, so
+		 * the slot is their zero-extension: record a low-32 link
+		 * rather than dropping the relation, as a 32-bit mov does.
+		 * A store never sign-extends, so there is only one kind here.
+		 */
+		subreg_link = !reg_value_fits && size == 4;
+
 		/* Make sure that reg had an ID to build a relation on spill. */
-		if (reg_value_fits)
+		if (reg_value_fits || subreg_link)
 			assign_scalar_id_before_mov(env, reg);
 		save_register_state(env, state, spi, reg, size);
 		if (!reg_value_fits) {
@@ -3682,8 +3691,15 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 			 * it came from.
 			 */
 			coerce_reg_to_size(&state->stack[spi].spilled_ptr, size);
-			/* Break the relation on a narrowing spill. */
-			clear_scalar_id(&state->stack[spi].spilled_ptr);
+			if (subreg_link && reg->id)
+				state->stack[spi].spilled_ptr.subreg = SUBREG_ZEXT;
+			else
+				/*
+				 * Nothing to relate: either the source has no
+				 * id to share, or the store is narrower than
+				 * the 32 bits a link can describe.
+				 */
+				clear_scalar_id(&state->stack[spi].spilled_ptr);
 		}
 	} else if (!reg && !(off % BPF_REG_SIZE) && is_bpf_st_mem(insn) &&
 		   env->bpf_capable) {
