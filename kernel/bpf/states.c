@@ -475,6 +475,7 @@ static bool regs_exact(const struct bpf_reg_state *rold,
 		       struct bpf_idmap *idmap)
 {
 	return memcmp(rold, rcur, offsetof(struct bpf_reg_state, id)) == 0 &&
+	       rold->add_const == rcur->add_const &&
 	       check_ids(rold->id, rcur->id, idmap) &&
 	       check_ids(rold->parent_id, rcur->parent_id, idmap);
 }
