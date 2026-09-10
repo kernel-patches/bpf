@@ -346,6 +346,20 @@ attribute-sets:
         name: secctx-name
         type: string
   -
+    name: timestamp-attrs
+    attributes:
+      -
+        name: start
+        type: u64
+        byte-order: big-endian
+      -
+        name: stop
+        type: u64
+        byte-order: big-endian
+      -
+        name: pad
+        type: pad
+  -
     name: synproxy-attrs
     attributes:
       -
@@ -458,8 +472,8 @@ attribute-sets:
         nested-attributes: secctx-attrs
       -
         name: timestamp
-        type: u64
-        byte-order: big-endian
+        type: nest
+        nested-attributes: timestamp-attrs
       -
         name: mark-mask
         type: u32
