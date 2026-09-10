@@ -464,9 +464,13 @@ l0_%=:	r1 >>= 16;					\
 SEC("raw_tp")
 __log_level(2)
 __success
-__msg("fp-8=0m??scalar()")
-__msg("fp-16=00mm??scalar()")
-__msg("fp-24=00mm???scalar()")
+/*
+ * The slot records what the store put there, not the wider source it came
+ * from, so each scalar is bounded by the size of its spill.
+ */
+__msg("fp-8=0m??scalar(smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))")
+__msg("fp-16=00mm??scalar(smin=smin32=0,smax=umax=smax32=umax32=0xffff,var_off=(0x0; 0xffff))")
+__msg("fp-24=00mm???scalar(smin=smin32=0,smax=umax=smax32=umax32=255,var_off=(0x0; 0xff))")
 __naked void spill_subregs_preserve_stack_zero(void)
 {
 	asm volatile (

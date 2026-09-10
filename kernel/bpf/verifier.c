@@ -3513,6 +3513,31 @@ static void assign_scalar_id_before_mov(struct bpf_verifier_env *env,
 		src_reg->id = ++env->id_gen;
 }
 
+static void coerce_reg_to_size(struct bpf_reg_state *reg, int size)
+{
+	u64 mask;
+
+	/* clear high bits in bit representation */
+	reg->var_off = tnum_cast(reg->var_off, size);
+
+	/* fix arithmetic bounds */
+	mask = ((u64)1 << (size * 8)) - 1;
+	if ((reg_umin(reg) & ~mask) == (reg_umax(reg) & ~mask))
+		reg_set_urange64(reg, reg_umin(reg) & mask, reg_umax(reg) & mask);
+	else
+		reg_set_urange64(reg, 0, mask);
+
+	/*
+	 * If size is smaller than 32bit register the 32bit register
+	 * values are also truncated so we push 64-bit bounds into
+	 * 32-bit bounds. Above were truncated < 32-bits already.
+	 */
+	if (size < 4)
+		__mark_reg32_unbounded(reg);
+
+	reg_bounds_sync(reg);
+}
+
 static void save_register_state(struct bpf_verifier_env *env,
 				struct bpf_func_state *state,
 				int spi, struct bpf_reg_state *reg,
@@ -3650,9 +3675,16 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 		if (reg_value_fits)
 			assign_scalar_id_before_mov(env, reg);
 		save_register_state(env, state, spi, reg, size);
-		/* Break the relation on a narrowing spill. */
-		if (!reg_value_fits)
+		if (!reg_value_fits) {
+			/*
+			 * Only the low @size bytes reach memory, so record
+			 * what the slot holds rather than the wider source
+			 * it came from.
+			 */
+			coerce_reg_to_size(&state->stack[spi].spilled_ptr, size);
+			/* Break the relation on a narrowing spill. */
 			clear_scalar_id(&state->stack[spi].spilled_ptr);
+		}
 	} else if (!reg && !(off % BPF_REG_SIZE) && is_bpf_st_mem(insn) &&
 		   env->bpf_capable) {
 		struct bpf_reg_state *tmp_reg = &env->fake_reg[0];
@@ -5731,30 +5763,6 @@ static void sext_32_to_64(struct bpf_reg_state *reg)
 /* truncate register to smaller size (in bytes)
  * must be called with size < BPF_REG_SIZE
  */
-static void coerce_reg_to_size(struct bpf_reg_state *reg, int size)
-{
-	u64 mask;
-
-	/* clear high bits in bit representation */
-	reg->var_off = tnum_cast(reg->var_off, size);
-
-	/* fix arithmetic bounds */
-	mask = ((u64)1 << (size * 8)) - 1;
-	if ((reg_umin(reg) & ~mask) == (reg_umax(reg) & ~mask))
-		reg_set_urange64(reg, reg_umin(reg) & mask, reg_umax(reg) & mask);
-	else
-		reg_set_urange64(reg, 0, mask);
-
-	/* If size is smaller than 32bit register the 32bit register
-	 * values are also truncated so we push 64-bit bounds into
-	 * 32-bit bounds. Above were truncated < 32-bits already.
-	 */
-	if (size < 4)
-		__mark_reg32_unbounded(reg);
-
-	reg_bounds_sync(reg);
-}
-
 static void set_sext64_default_val(struct bpf_reg_state *reg, int size)
 {
 	if (size == 1) {
