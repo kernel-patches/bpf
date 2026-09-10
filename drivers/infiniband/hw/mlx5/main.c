@@ -3693,6 +3693,16 @@ static int lag_event(struct notifier_block *nb, unsigned long event, void *data)
 			rdma_roce_rescan_port(ibdev, portnum + 1);
 		}
 		break;
+	case MLX5_DRIVER_EVENT_LAG_SPEED_CHANGE: {
+		struct ib_event speed_event = {};
+
+		if (!dev->ib_active)
+			break;
+		speed_event.device = ibdev;
+		speed_event.event = IB_EVENT_DEVICE_SPEED_CHANGE;
+		ib_dispatch_event(&speed_event);
+		break;
+	}
 	default:
 		return NOTIFY_DONE;
 	}

@@ -1503,8 +1503,24 @@ static int mlx5_lag_get_devices_max_speed(struct mlx5_lag *ldev, u32 *max_speed)
 	return 0;
 }
 
+void mlx5_lag_notify_speed_change(struct mlx5_lag *ldev)
+{
+	struct lag_func *pf;
+	int idx;
+
+	idx = mlx5_lag_get_dev_index_by_seq(ldev, MLX5_LAG_P1);
+	if (idx < 0)
+		return;
+	pf = mlx5_lag_pf(ldev, idx);
+	if (!pf)
+		return;
+	blocking_notifier_call_chain(&pf->dev->priv.lag_nh,
+				     MLX5_DRIVER_EVENT_LAG_SPEED_CHANGE, NULL);
+}
+
 void mlx5_lag_update_agg_speed(struct mlx5_lag *ldev)
 {
+	u32 old_speed;
 	u32 speed;
 
 	lockdep_assert_held(&ldev->lock);
@@ -1516,7 +1532,11 @@ void mlx5_lag_update_agg_speed(struct mlx5_lag *ldev)
 	if (!speed && mlx5_lag_get_devices_max_speed(ldev, &speed))
 		return;
 
+	old_speed = ldev->agg_speed_mbps;
 	ldev->agg_speed_mbps = speed;
+
+	if (mlx5_lag_is_roce_lag(ldev) && speed != old_speed)
+		mlx5_lag_notify_speed_change(ldev);
 }
 
 void mlx5_lag_reset_agg_speed(struct mlx5_lag *ldev)
