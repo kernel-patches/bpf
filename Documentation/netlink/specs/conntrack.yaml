@@ -292,6 +292,12 @@ attribute-sets:
         name: help-name
         type: string
         doc: helper name
+      -
+        name: help-info
+        type: binary
+        doc: >-
+          Private data of a user space helper, only present for helpers
+          registered via nfnetlink_cthelper with a non-zero data length.
   -
     name: nat-proto-attrs
     attributes:
