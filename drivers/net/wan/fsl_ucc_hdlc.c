@@ -888,6 +888,10 @@ static int uhdlc_suspend(struct device *dev)
 	if (!netif_running(priv->ndev))
 		return 0;
 
+	priv->ucc_pram_bak = kmalloc_obj(*priv->ucc_pram_bak);
+	if (!priv->ucc_pram_bak)
+		return -ENOMEM;
+
 	netif_device_detach(priv->ndev);
 	napi_disable(&priv->napi);
 
@@ -896,10 +900,6 @@ static int uhdlc_suspend(struct device *dev)
 	/* backup gumr guemr*/
 	priv->gumr = ioread32be(&uf_regs->gumr);
 	priv->guemr = ioread8(&uf_regs->guemr);
-
-	priv->ucc_pram_bak = kmalloc_obj(*priv->ucc_pram_bak);
-	if (!priv->ucc_pram_bak)
-		return -ENOMEM;
 
 	/* backup HDLC parameter */
 	memcpy_fromio(priv->ucc_pram_bak, priv->ucc_pram,
