@@ -2987,6 +2987,14 @@ static int em28xx_v4l2_init(struct em28xx *dev)
 	if (dev->chip_id == CHIP_ID_EM2828X || dev->board.decoder == EM28XX_BUILTIN)
 		v4l2_disable_ioctl(&v4l2->vdev, VIDIOC_ENUM_FRAMESIZES);
 
+	/* initialize videobuf2 stuff */
+	ret = em28xx_vb2_setup(dev);
+	if (ret) {
+		dev_err(&dev->intf->dev,
+			"unable to setup videobuf queues (error=%i).\n", ret);
+		goto unregister_dev;
+	}
+
 	/* register v4l2 video video_device */
 	ret = video_register_device(&v4l2->vdev, VFL_TYPE_VIDEO,
 				    video_nr[dev->devno]);
@@ -3071,9 +3079,6 @@ static int em28xx_v4l2_init(struct em28xx *dev)
 
 	/* Save some power by putting tuner to sleep */
 	v4l2_device_call_all(&v4l2->v4l2_dev, 0, tuner, standby);
-
-	/* initialize videobuf2 stuff */
-	em28xx_vb2_setup(dev);
 
 	dev_info(&dev->intf->dev,
 		 "V4L2 extension successfully initialized\n");
