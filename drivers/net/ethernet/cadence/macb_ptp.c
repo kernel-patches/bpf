@@ -50,7 +50,15 @@ static int gem_tsu_get_time(struct ptp_clock_info *ptp, struct timespec64 *ts,
 
 	spin_lock_irqsave(&bp->tsu_clk_lock, flags);
 	ptp_read_system_prets(sts);
+	/* ptp_read_system_prets() uses smp_rmb() internally,
+	 * which does not guarantee ordering against MMIO reads.
+	 */
+	rmb();
 	first = gem_readl(bp, TN);
+	/* Ensure the PHC read completes before taking
+	 * the post timestamp.
+	 */
+	rmb();
 	ptp_read_system_postts(sts);
 	secl = gem_readl(bp, TSL);
 	sech = gem_readl(bp, TSH);
@@ -62,7 +70,15 @@ static int gem_tsu_get_time(struct ptp_clock_info *ptp, struct timespec64 *ts,
 		 * (assume all done within 1s)
 		 */
 		ptp_read_system_prets(sts);
+		/* ptp_read_system_prets() uses smp_rmb() internally,
+		 * which does not guarantee ordering against MMIO reads.
+		 */
+		rmb();
 		ts->tv_nsec = gem_readl(bp, TN);
+		/* Ensure the PHC read completes before taking
+		 * the post timestamp.
+		 */
+		rmb();
 		ptp_read_system_postts(sts);
 		secl = gem_readl(bp, TSL);
 		sech = gem_readl(bp, TSH);
