@@ -966,4 +966,169 @@ __naked void zext_mov_breaks_add_const_src(void)
 	: __clobber_all);
 }
 
+#ifdef CAN_USE_MOVSX
+
+/*
+ * A 32-bit sign extension keeps the low 32 bits, so narrowing the source
+ * reaches the destination the same way it does for a zero extension. The high
+ * half follows the sign, so the value seen here is negative.
+ */
+SEC("socket")
+__success
+__naked void sext_mov_wide_src(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r7 = (s32)r6;		/* forms the link */		\
+	if w6 != -1 goto 1f;	/* narrows r6, propagates to r7 */ \
+	if r7 == -1 goto 1f;	/* sign-extended, not 0xffffffff */ \
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * r0 = (s32)r0 is how a sign-extended int return lands. src and dst are the
+ * same register, but r0 is already linked, so there is a set for it to stay
+ * in and the narrowing still propagates.
+ */
+SEC("socket")
+__success
+__naked void sext_self_mov_keeps_link(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r7 = r6;		/* r6, r7 linked */		\
+	r7 = (s32)r7;		/* self-mov, keeps the id */	\
+	if w6 != -1 goto 1f;	/* narrows r6, propagates to r7 */ \
+	if r7 == -1 goto 1f;					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * The same self-mov on an unlinked register has nothing to link to, so it
+ * must not mint an id that would leave r6 describing itself.
+ */
+SEC("socket")
+__success __log_level(2)
+/* an id would print as R6=scalar(id=N.lo32sx,smin=... */
+__msg("(bf) r6 = (s32)r6 {{.*}} R6=scalar(smin=")
+__naked void sext_self_mov_no_link(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r6 ^= 0;		/* drop the id */		\
+	r6 = (s32)r6;		/* forms no link */		\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A delta on the branch register is not modelled together with a low-32
+ * link, so the propagation is skipped rather than guessed at.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void sext_no_sync_when_base_has_delta(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r7 = (s32)r6;		/* forms the link */		\
+	r8 = r6;						\
+	r8 += 3;		/* delta on the branch reg */	\
+	if r8 != 3 goto 1f;	/* must not propagate to r7 */	\
+	if r7 == 0 goto 1f;					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * ... and with the link as the branch register the propagation must not run
+ * backwards: a ->subreg register knows nothing about the base's high half, so
+ * narrowing it must leave the rest of the set alone. Were the guard missing,
+ * r8 would be rebuilt as r7 + 3 == 2, treating r7 as if it were the base.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void sext_no_sync_from_subreg_base(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r7 = (s32)r6;		/* forms the link */		\
+	r8 = r6;						\
+	r8 += 3;		/* delta on r8 */		\
+	if r7 != -1 goto 1f;	/* must not propagate to r8 */	\
+	if r8 == 2 goto 1f;	/* taken only if r8 wrongly narrowed */	\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * The two kinds rebuild the high half differently: the same low half reaches
+ * -1 through a sign extension and 0xffffffff through a zero extension, so only
+ * one path clears the guard. As above this checks the outcome -- the differing
+ * ranges keep the states apart on their own.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void sext_kinds_reach_different_values(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r6 &= 1;						\
+	if r6 >= 1 goto 2f;					\
+	/* explored first: r7 is a sign-extended link of r8 */	\
+	call %[bpf_get_prandom_u32];				\
+	r8 = r0;						\
+	r7 = (s32)r8;						\
+	goto 1f;						\
+2:								\
+	/* runtime path: r7 is a zero-extended link of r8 */	\
+	call %[bpf_get_prandom_u32];				\
+	r8 = r0;						\
+	w7 = w8;						\
+1:								\
+	if w8 != -1 goto 3f;					\
+	if r7 == -1 goto 3f;	/* only the sign-extended path */ \
+	r0 /= 0;						\
+3:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+#endif /* CAN_USE_MOVSX */
+
 char _license[] SEC("license") = "GPL";
