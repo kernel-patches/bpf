@@ -800,6 +800,39 @@ static int dynptr_ref_cnt(struct bpf_verifier_env *env, int v_parent_id)
 	return ref_cnt;
 }
 
+static void reparent_dynptr_slices_on_func_exit(struct bpf_verifier_env *env,
+						struct bpf_func_state *callee)
+{
+	struct bpf_verifier_state *vstate = env->cur_state;
+	struct bpf_func_state *state;
+	struct bpf_reg_state *reg;
+	int i;
+
+	for (i = 0; i < callee->allocated_stack / BPF_REG_SIZE; i++) {
+		struct bpf_stack_state *slot = &callee->stack[i];
+		struct bpf_reg_state *dynptr = &slot->spilled_ptr;
+
+		if (slot->slot_type[0] != STACK_DYNPTR ||
+		    !dynptr->dynptr.first_slot ||
+		    !dynptr->parent_id)
+			continue;
+
+		/*
+		 * A callee can spill a slice derived from its local dynptr into
+		 * the caller's stack. The slice then outlives the dynptr id that
+		 * links it to the rest of the object tree. Preserve that link by
+		 * making escaped slices children of the dynptr's parent before
+		 * the callee frame is freed.
+		 */
+		bpf_for_each_reg_in_vstate(vstate, state, reg, ({
+			if (state == callee || reg->parent_id != dynptr->id ||
+			    base_type(reg->type) != PTR_TO_MEM)
+				continue;
+			reg->parent_id = dynptr->parent_id;
+		}));
+	}
+}
+
 static int destroy_if_dynptr_stack_slot(struct bpf_verifier_env *env,
 				        struct bpf_func_state *state, int spi)
 {
@@ -10411,6 +10444,7 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 		print_verifier_state(env, state, caller->frameno, true);
 	}
 	account_processed_insns(env, callee, caller);
+	reparent_dynptr_slices_on_func_exit(env, callee);
 	/* clear everything in the callee. In case of exceptional exits using
 	 * bpf_throw, this will be done by copy_verifier_state for extra frames. */
 	free_func_state(callee);
