@@ -476,6 +476,7 @@ static bool regs_exact(const struct bpf_reg_state *rold,
 {
 	return memcmp(rold, rcur, offsetof(struct bpf_reg_state, id)) == 0 &&
 	       rold->add_const == rcur->add_const &&
+	       rold->subreg == rcur->subreg &&
 	       check_ids(rold->id, rcur->id, idmap) &&
 	       check_ids(rold->parent_id, rcur->parent_id, idmap);
 }
@@ -577,7 +578,8 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		 * linking semantics in sync_linked_regs() (alu32 zero-extends,
 		 * alu64 does not), so pruning across them is unsafe.
 		 */
-		if (rold->id && rold->add_const != rcur->add_const)
+		if (rold->id && (rold->add_const != rcur->add_const ||
+				 rold->subreg != rcur->subreg))
 			return false;
 
 		/* Both have offset linkage: offsets must match */

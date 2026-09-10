@@ -46,6 +46,15 @@ enum bpf_add_const {
 	ADD_CONST_64,		/* ... with a 64-bit ALU op */
 };
 
+/*
+ * Records that a register shares only the low 32 bits of the base of its
+ * ->id set, and how its high bits follow from them.
+ */
+enum bpf_subreg {
+	SUBREG_NONE = 0,
+	SUBREG_ZEXT,		/* high bits are zero (32-bit zero-extending mov) */
+};
+
 struct bpf_reg_state {
 	/* Ordering of fields matters.  See states_equal() */
 	enum bpf_reg_type type;
@@ -173,6 +182,7 @@ struct bpf_reg_state {
 	 * Non-zero only if ->id is.
 	 */
 	enum bpf_add_const add_const:2;
+	enum bpf_subreg subreg:2;
 };
 
 static inline s64 reg_smin(const struct bpf_reg_state *reg)

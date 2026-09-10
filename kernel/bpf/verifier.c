@@ -1912,6 +1912,7 @@ static void __mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 	reg->id = 0;
 	reg->parent_id = 0;
 	reg->add_const = ADD_CONST_NONE;
+	reg->subreg = SUBREG_NONE;
 	___mark_reg_known(reg, imm);
 }
 
@@ -3486,6 +3487,7 @@ static void clear_scalar_id(struct bpf_reg_state *reg)
 	reg->id = 0;
 	reg->delta = 0;
 	reg->add_const = ADD_CONST_NONE;
+	reg->subreg = SUBREG_NONE;
 }
 
 static void assign_scalar_id_before_mov(struct bpf_verifier_env *env,
@@ -3497,6 +3499,8 @@ static void assign_scalar_id_before_mov(struct bpf_verifier_env *env,
 	 * The verifier is processing rX = rY insn and
 	 * rY->id has special linked register already.
 	 * Cleared it, since multiple rX += const are not supported.
+	 * A ->subreg link can be shared: it describes src's own relationship
+	 * to the set, not a delta to unwind.
 	 */
 	if (src_reg->add_const)
 		clear_scalar_id(src_reg);
@@ -16114,15 +16118,22 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 				} else if (src_reg->type == SCALAR_VALUE) {
 					if (insn->off == 0) {
 						bool is_src_reg_u32 = get_reg_width(src_reg) <= 32;
+						/*
+						 * A wide src shares only its low 32 bits. A
+						 * full link would let dst's [0, U32_MAX]
+						 * propagate onto src's unknown high bits, so
+						 * record a low-32-only link instead. A
+						 * self-mov has nothing to link.
+						 */
+						bool subreg_link = !is_src_reg_u32 &&
+								   src_reg != dst_reg;
 
-						if (is_src_reg_u32)
+						if (is_src_reg_u32 || subreg_link)
 							assign_scalar_id_before_mov(env, src_reg);
 						*dst_reg = *src_reg;
-						/* Make sure ID is cleared if src_reg is not in u32
-						 * range otherwise dst_reg min/max could be incorrectly
-						 * propagated into src_reg by sync_linked_regs()
-						 */
-						if (!is_src_reg_u32)
+						if (subreg_link && src_reg->id)
+							dst_reg->subreg = SUBREG_ZEXT;
+						else if (!is_src_reg_u32)
 							clear_scalar_id(dst_reg);
 					} else {
 						/* case: W1 = (s8, s16)W2 */
@@ -16985,6 +16996,23 @@ static void collect_linked_regs(struct bpf_verifier_env *env,
 	}
 }
 
+/*
+ * Set @reg to the zero-extension of @known_reg's low 32 bits: it shares those
+ * bits and its high half is zero. Copy the base to keep its precise low-32
+ * tnum, then re-apply the zext_32_to_64() the 32-bit mov itself used.
+ * @reg->id and ->delta already equal @known_reg's; only ->subreg is its own.
+ */
+static void reconstruct_zext32(struct bpf_reg_state *reg,
+			       struct bpf_reg_state *known_reg)
+{
+	enum bpf_subreg subreg = reg->subreg;
+
+	*reg = *known_reg;
+	reg->subreg = subreg;
+	zext_32_to_64(reg);
+	reg_bounds_sync(reg);
+}
+
 /* For all R in linked_regs, copy known_reg range into R
  * if R->id == known_reg->id.
  */
@@ -17003,6 +17031,27 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 		if (reg->type != SCALAR_VALUE || reg == known_reg)
 			continue;
 		if (reg->id != known_reg->id)
+			continue;
+		/*
+		 * A ->subreg register shares only the base's low 32 bits, so it
+		 * is rebuilt rather than copied. Not modelled together with a
+		 * delta, so skip if either side has one (sound, less precise).
+		 */
+		if (reg->subreg) {
+			if (reg->add_const || known_reg->add_const)
+				continue;
+			reconstruct_zext32(reg, known_reg);
+			if (e->is_reg)
+				mark_reg_scratched(env, e->regno);
+			else
+				mark_stack_slot_scratched(env, e->spi);
+			continue;
+		}
+		/*
+		 * The reverse: known_reg knows only its low 32 bits, which say
+		 * nothing about reg's high half.
+		 */
+		if (known_reg->subreg)
 			continue;
 		/*
 		 * Skip mixed 32/64-bit links: the delta relationship doesn't
