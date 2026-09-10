@@ -2120,6 +2120,17 @@ IO Interface Files
 	parameters are written to, "ctrl" become "user" and the
 	automatic changes are disabled.
 
+	When CONFIG_BLK_CGROUP_IOCOST_BPF is enabled, "model" also accepts
+	the name of a registered iocost_model_ops BPF struct_ops model:
+	"model=<name>" binds the model to the device and the model fully
+	replaces the builtin linear pricing, for every operation including
+	flushes; "model=linear" (or "ctrl=auto/user") restores the builtin
+	model.  Writing an unknown name fails with ENOENT.  Unregistering
+	a model removes its name; devices already bound keep using it
+	until switched back to the builtin model, following the lifetime
+	model of TCP congestion control.  See include/linux/blk-iocost.h
+	for the model interface.
+
 	When "model" is "linear", the following model parameters are
 	defined.
 
