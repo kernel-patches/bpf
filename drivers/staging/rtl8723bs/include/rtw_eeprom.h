@@ -34,14 +34,12 @@
 #define eeprom_cis0_sz	17
 #define eeprom_cis1_sz	50
 
-/*  */
 /*  Customer ID, note that: */
 /*  This variable is initiailzed through EEPROM or registry, */
 /*  however, its definition may be different with that in EEPROM for */
 /*  EEPROM size consideration. So, we have to perform proper translation between them. */
 /*  Besides, CustomerID of registry has precedence of that of EEPROM. */
 /*  defined below. 060703, by rcnjko. */
-/*  */
 enum {
 	RT_CID_DEFAULT = 0,
 	RT_CID_8187_ALPHA0 = 1,

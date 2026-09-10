@@ -209,7 +209,6 @@ struct dvobj_priv {
 	s32	processing_dev_remove;
 
 	/* for local/global synchronization */
-	/*  */
 	spinlock_t	lock;
 	int macid[NUM_STA];
 
@@ -376,9 +375,7 @@ struct adapter {
 #define adapter_to_pwrctl(adapter) (dvobj_to_pwrctl(adapter->dvobj))
 #define adapter_wdev_data(adapter) (&((adapter)->wdev_data))
 
-/*  */
 /*  Function disabled. */
-/*  */
 #define DF_TX_BIT		BIT(0)
 #define DF_RX_BIT		BIT(1)
 #define DF_IO_BIT		BIT(2)

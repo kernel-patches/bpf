@@ -285,8 +285,6 @@ struct recv_frame_hdr {
 
 	void *precvbuf;
 
-
-	/*  */
 	struct sta_info *psta;
 
 	/* for A-MPDU Rx reordering buffer control */

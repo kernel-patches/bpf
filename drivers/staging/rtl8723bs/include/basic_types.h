@@ -25,9 +25,7 @@
  *	3. After read integer from IO.
  */
 
-/*  */
 /*  Byte Swapping routine. */
-/*  */
 #define EF1Byte	(u8)
 
 /* Convert little data endian to host ordering */

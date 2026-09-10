@@ -168,7 +168,6 @@ struct hal_com_data {
 	/*  RF: at most 2 = AB = 0/1 */
 	/*  CCK = 0 OFDM = 1 HT-MCS 0-7 = 2 */
 	s8 TxPwrByRateOffset[MAX_RF_PATH_NUM][TX_PWR_BY_RATE_NUM_RATE];
-	/*  */
 
 	/*  Power Limit Table for 2.4G */
 	s8	TxPwrLimit_2_4G[MAX_REGULATION_NUM]

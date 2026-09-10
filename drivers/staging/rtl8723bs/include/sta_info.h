@@ -188,16 +188,13 @@ struct sta_info {
 	/* ODM_STA_INFO_T */
 	/*  ================ODM Relative Info ======================= */
 	/*  Please be care, dont declare too much structure here. It will cost memory * STA support num. */
-	/*  */
-	/*  */
 	/*  2011/10/20 MH Add for ODM STA info. */
-	/*  */
 	/*  Driver Write */
 	u8 bValid;				/*  record the sta status link or not? */
 	u8 IOTPeer;			/*  Enum value.	HT_IOT_PEER_E */
 	/*  ODM Write */
 	/* 1 PHY_STATUS_INFO */
-	u8 RSSI_Path[4];		/*  */
+	u8 RSSI_Path[4];
 	u8 RSSI_Ave;
 	u8 RXEVM[4];
 	u8 RXSNR[4];
@@ -206,9 +203,7 @@ struct sta_info {
 	/*  ODM Write */
 	/* 1 TX_INFO (may changed by IC) */
 	/* TX_INFO_T		pTxInfo;		 Define in IC folder. Move lower layer. */
-	/*  */
 	/*  ================ODM Relative Info ======================= */
-	/*  */
 
 	/* To store the sequence number of received management frame */
 	u16 rx_mgmt_frame_seq_num;

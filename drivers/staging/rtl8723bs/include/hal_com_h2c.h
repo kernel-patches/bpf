@@ -14,9 +14,7 @@
 #define H2C_MACID_CFG_LEN		7
 #define H2C_RSSI_SETTING_LEN		4
 
-/*  */
 /*     Structure    -------------------------------------------------- */
-/*  */
 struct rsvdpage_loc {
 	u8 LocProbeRsp;
 	u8 LocPsPoll;
