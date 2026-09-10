@@ -390,14 +390,14 @@ enum swizzle_mode_addr3_values {
 	DC_ADDR3_SW_UNKNOWN = DC_ADDR3_SW_MAX
 };
 
-enum dc_gfxversion {
-	DcGfxVersion7 = 0,
-	DcGfxVersion8,
-	DcGfxVersion9,
-	DcGfxVersion10,
-	DcGfxVersion11,
-	DcGfxAddr3,
-	DcGfxVersionUnknown
+enum dc_gfx_addr_version {
+	DcGfxVersion7 = 0x0700,
+	DcGfxVersion8 = 0x0800,
+	DcGfxVersion9 = 0x0900,
+	DcGfxVersion10 = 0x0A00,
+	DcGfxVersion11 = 0x0B00,
+	DcGfxAddr3 = 0x0C00,
+	DcGfxVersionUnknown = 0xFFFF
 };
 
  struct dc_tiling_info {

@@ -217,57 +217,15 @@ static void hubp50_program_tiling(
 	const enum surface_pixel_format pixel_format)
 {
 	(void)pixel_format;
-	/* Tiling address-generation compatibility level programmed into the
-	 * DCSURF_TILING_CONFIG.COMPAT_LEVEL register field:
-	 *   0 - gfx8 bank_height == 1
-	 *   1 - gfx8 bank_height == 2
-	 *   2 - gfx9/10/11
-	 *   5 - gfx addr3
-	 */
-	unsigned int compat_level = 0;
+
 	enum swizzle_mode_values swizzle_mode;
 
-	switch (info->gfxversion) {
-	case DcGfxVersion7:
-	case DcGfxVersion8:
+	ASSERT(info->gfxversion == DcGfxAddr3);
 
-		REG_UPDATE_8(DCSURF_LEGACY_ADDR_CONFIG,
-			LEGACY_NUM_BANKS, info->gfx8.num_banks,
-			BANK_WIDTH, info->gfx8.bank_width,
-			BANK_HEIGHT, info->gfx8.bank_height,
-			MACRO_TILE_ASPECT, info->gfx8.tile_aspect,
-			TILE_SPLIT, info->gfx8.tile_split,
-			MICRO_TILE_MODE_NEW, info->gfx8.tile_mode,
-			PIPE_CONFIG, info->gfx8.pipe_config,
-			ARRAY_MODE, info->gfx8.array_mode);
-		if (info->gfx8.bank_height == 1) {
-			compat_level = 0;
-		} else if (info->gfx8.bank_height == 2) {
-			compat_level = 1;
-		}
-		break;
-
-	case DcGfxVersion9:
-	case DcGfxVersion10:
-	case DcGfxVersion11:
-		REG_UPDATE_4(DCSURF_ADDR_CONFIG,
-			NUM_PIPES, log_2(info->gfx9.num_pipes),
-			PIPE_INTERLEAVE, info->gfx9.pipe_interleave,
-			MAX_COMPRESSED_FRAGS, log_2(info->gfx9.max_compressed_frags),
-			NUM_PKRS, log_2(info->gfx9.num_pkrs));
-		REG_UPDATE(DCSURF_TILING_CONFIG, SW_MODE, info->gfx9.swizzle);
-		compat_level = 2;
-
-		break;
-	case DcGfxAddr3:
-		swizzle_mode = hubp50_addr3_to_swizzle_mode_mapping(info->gfx_addr3.swizzle);
-		REG_UPDATE(DCSURF_TILING_CONFIG, SW_MODE, swizzle_mode);
-		compat_level = 5;
-		break;
-	}
-
-	REG_UPDATE(DCSURF_TILING_CONFIG, COMPAT_LEVEL, compat_level);
+	swizzle_mode = hubp50_addr3_to_swizzle_mode_mapping(info->gfx_addr3.swizzle);
+	REG_UPDATE(DCSURF_TILING_CONFIG, SW_MODE, swizzle_mode);
 }
+
 static void hubp50_program_pixel_format(
 	struct hubp *hubp,
 	enum surface_pixel_format format)
