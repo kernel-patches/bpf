@@ -53,6 +53,7 @@ enum bpf_add_const {
 enum bpf_subreg {
 	SUBREG_NONE = 0,
 	SUBREG_ZEXT,		/* high bits are zero (32-bit zero-extending mov) */
+	SUBREG_SEXT,		/* high bits repeat bit 31 (32-bit sign-extending mov) */
 };
 
 struct bpf_reg_state {

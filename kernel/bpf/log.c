@@ -656,6 +656,8 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		verbose(env, "%+d", reg->delta);
 	if (reg->subreg == SUBREG_ZEXT)
 		verbose(env, ".lo32");
+	else if (reg->subreg == SUBREG_SEXT)
+		verbose(env, ".lo32sx");
 	if (reg->parent_id)
 		verbose_a("parent_id=%d", reg->parent_id);
 	if (type_is_non_owning_ref(reg->type))

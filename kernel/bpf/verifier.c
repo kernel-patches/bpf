@@ -5701,6 +5701,16 @@ static void zext_32_to_64(struct bpf_reg_state *reg)
 	reg_set_urange64(reg, reg_u32_min(reg), reg_u32_max(reg));
 }
 
+/*
+ * The sign-extending counterpart. Signed bounds carry over directly because
+ * sign extension is monotonic over the signed 32-bit range.
+ */
+static void sext_32_to_64(struct bpf_reg_state *reg)
+{
+	reg->var_off = tnum_sext(reg->var_off, 4);
+	reg_set_srange64(reg, reg_s32_min(reg), reg_s32_max(reg));
+}
+
 /* truncate register to smaller size (in bytes)
  * must be called with size < BPF_REG_SIZE
  */
@@ -16118,12 +16128,23 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 						return -EACCES;
 					} else if (src_reg->type == SCALAR_VALUE) {
 						bool no_sext;
+						/*
+						 * A 32-bit sign extension keeps the low 32
+						 * bits, so record a low-32 link as the
+						 * zero-extending mov does. A self-mov
+						 * qualifies only if src is already linked.
+						 */
+						bool subreg_link = (insn->off >> 3) == 4 &&
+								   (src_reg != dst_reg ||
+								    src_reg->id);
 
 						no_sext = reg_umax(src_reg) < (1ULL << (insn->off - 1));
-						if (no_sext)
+						if (no_sext || subreg_link)
 							assign_scalar_id_before_mov(env, src_reg);
 						*dst_reg = *src_reg;
-						if (!no_sext)
+						if (!no_sext && subreg_link && src_reg->id)
+							dst_reg->subreg = SUBREG_SEXT;
+						else if (!no_sext)
 							clear_scalar_id(dst_reg);
 						coerce_reg_to_size_sx(dst_reg, insn->off >> 3);
 					} else {
@@ -17035,6 +17056,23 @@ static void reconstruct_zext32(struct bpf_reg_state *reg,
 	reg_bounds_sync(reg);
 }
 
+/*
+ * The sign-extending counterpart. Note this drives off the base's 32-bit
+ * range, not coerce_reg_to_size_sx(): after a 32-bit compare it is the low
+ * half that has been narrowed, and the 64-bit bounds still describe the
+ * base's high bits, which are not ours.
+ */
+static void reconstruct_sext32(struct bpf_reg_state *reg,
+			       struct bpf_reg_state *known_reg)
+{
+	enum bpf_subreg subreg = reg->subreg;
+
+	*reg = *known_reg;
+	reg->subreg = subreg;
+	sext_32_to_64(reg);
+	reg_bounds_sync(reg);
+}
+
 /* For all R in linked_regs, copy known_reg range into R
  * if R->id == known_reg->id.
  */
@@ -17062,7 +17100,10 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 		if (reg->subreg) {
 			if (reg->add_const || known_reg->add_const)
 				continue;
-			reconstruct_zext32(reg, known_reg);
+			if (reg->subreg == SUBREG_ZEXT)
+				reconstruct_zext32(reg, known_reg);
+			else
+				reconstruct_sext32(reg, known_reg);
 			if (e->is_reg)
 				mark_reg_scratched(env, e->regno);
 			else
