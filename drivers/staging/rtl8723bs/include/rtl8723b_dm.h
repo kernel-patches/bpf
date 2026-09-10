@@ -6,21 +6,13 @@
  ******************************************************************************/
 #ifndef __RTL8723B_DM_H__
 #define __RTL8723B_DM_H__
-/*  */
+
 /*  Description: */
-/*  */
 /*  This file is for 8723B dynamic mechanism only */
-/*  */
-/*  */
-/*  */
 
-/*  */
 /*  structure and define */
-/*  */
 
-/*  */
 /*  function prototype */
-/*  */
 
 void rtl8723b_init_dm_priv(struct adapter *padapter);
 

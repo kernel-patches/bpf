@@ -19,9 +19,7 @@
 #include "Hal8192CPhyReg.h"
 #include "hal_phy_cfg.h"
 
-/*  */
 /* RTL8723B From header */
-/*  */
 
 #define FW_8723B_SIZE          0x8000
 #define FW_8723B_START_ADDRESS 0x1000
@@ -150,9 +148,7 @@ struct rt_firmware_hdr {
 #define EFUSE_ACCESS_ON  0x69 /* For RTL8723 only. */
 #define EFUSE_ACCESS_OFF 0x00 /* For RTL8723 only. */
 
-/*  */
 /* EFUSE for BT definition */
-/*  */
 #define EFUSE_BT_REAL_BANK_CONTENT_LEN 512
 #define EFUSE_BT_REAL_CONTENT_LEN      1536 /* 512*3 */
 #define EFUSE_BT_MAP_LEN               1024 /* 1k bytes */
