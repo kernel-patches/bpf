@@ -966,6 +966,88 @@ __naked void zext_mov_breaks_add_const_src(void)
 	: __clobber_all);
 }
 
+/*
+ * A narrowing fill keeps only the slot's low 32 bits, so a later narrowing of
+ * the spilled value must still reach the filled register. Same relation as a
+ * 32-bit mov from a wide source, with the stack slot as the base.
+ */
+SEC("socket")
+__success
+__naked void zext_fill_narrow_from_wide_spill(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	*(u64 *)(r10 - 8) = r6;	/* slot linked to r6 */		\
+	r2 = *(u32 *)(r10 - 8);	/* narrowing fill, forms the link */ \
+	if w6 != 0 goto 1f;	/* narrows r6, propagates to r2 */ \
+	if r2 == 0 goto 1f;					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A full-width fill of a wide slot is a plain 64-bit equality, not a low-32
+ * link, so it must keep propagating exactly as before.
+ */
+SEC("socket")
+__success
+__naked void zext_fill_full_width_keeps_full_link(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;						\
+	*(u64 *)(r10 - 8) = r6;					\
+	r2 = *(u64 *)(r10 - 8);	/* no narrowing */		\
+	if r6 != 0 goto 1f;					\
+	if r2 == 0 goto 1f;					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A sub-word fill is below the low-32 model, so no link is formed and the
+ * relation is dropped as before.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void zext_fill_byte_forms_no_link(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;						\
+	*(u64 *)(r10 - 8) = r6;					\
+	r2 = *(u8 *)(r10 - 8);	/* 1-byte fill: no link */	\
+	if w6 != 0 goto 1f;					\
+	if r2 == 0 goto 1f;	/* not deduced */		\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 #ifdef CAN_USE_MOVSX
 
 /*
@@ -1120,6 +1202,68 @@ __naked void sext_kinds_reach_different_values(void)
 1:								\
 	if w8 != -1 goto 3f;					\
 	if r7 == -1 goto 3f;	/* only the sign-extended path */ \
+	r0 /= 0;						\
+3:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * The sign-extending counterpart: the filled register is the sign extension of
+ * the slot's low 32 bits, so a narrowing of those bits arrives sign-extended.
+ */
+SEC("socket")
+__success
+__naked void sext_fill_narrow_from_wide_spill(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	*(u64 *)(r10 - 8) = r6;	/* slot linked to r6 */		\
+	r2 = *(s32 *)(r10 - 8);	/* narrowing sx fill */		\
+	if w6 != -1 goto 1f;	/* narrows r6, propagates to r2 */ \
+	if r2 == -1 goto 1f;	/* sign-extended, not 0xffffffff */ \
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * The same, for the two fill kinds off one slot.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void fill_kinds_reach_different_values(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r6 &= 1;						\
+	call %[bpf_get_prandom_u32];				\
+	r8 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r8 |= r0;						\
+	*(u64 *)(r10 - 8) = r8;					\
+	if r6 >= 1 goto 2f;					\
+	r2 = *(s32 *)(r10 - 8);	/* sign-extending fill */	\
+	goto 1f;						\
+2:								\
+	r2 = *(u32 *)(r10 - 8);	/* zero-extending fill */	\
+1:								\
+	if w8 != -1 goto 3f;					\
+	if r2 == -1 goto 3f;	/* only the sign-extending path */ \
 	r0 /= 0;						\
 3:								\
 	r0 = 0;							\
