@@ -5747,6 +5747,7 @@ static void set_sext64_default_val(struct bpf_reg_state *reg, int size)
 static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
 	s64 init_s64_max, init_s64_min, s64_max, s64_min, u64_cval;
+	s64 field_smin, field_smax;
 	u64 top_smax_value, top_smin_value;
 	u64 num_bits = size * 8;
 
@@ -5765,6 +5766,27 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 		reg->r32 = cnum32_from_urange((u32)u64_cval, (u32)u64_cval);
 		return;
 	}
+
+	if (size == 1) {
+		field_smin = S8_MIN;
+		field_smax = S8_MAX;
+	} else if (size == 2) {
+		field_smin = S16_MIN;
+		field_smax = S16_MAX;
+	} else {
+		/* size == 4 */
+		field_smin = S32_MIN;
+		field_smax = S32_MAX;
+	}
+
+	/*
+	 * The range already fits the field, so (sN)v == v for every value the
+	 * register can hold and the sign extension changes nothing. The tests
+	 * below cannot reach this case once smin is negative: a negative smin
+	 * and a non-negative smax never share their high bits.
+	 */
+	if (reg_smin(reg) >= field_smin && reg_smax(reg) <= field_smax)
+		return;
 
 	top_smax_value = ((u64)reg_smax(reg) >> num_bits) << num_bits;
 	top_smin_value = ((u64)reg_smin(reg) >> num_bits) << num_bits;
