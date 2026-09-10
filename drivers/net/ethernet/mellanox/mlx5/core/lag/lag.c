@@ -1413,7 +1413,6 @@ static bool mlx5_lag_should_disable_lag(struct mlx5_lag *ldev, bool do_bond)
 	       ldev->mode != MLX5_LAG_MODE_MPESW;
 }
 
-#ifdef CONFIG_MLX5_ESWITCH
 static int mlx5_lag_get_devices_oper_speed(struct mlx5_lag *ldev,
 					   u32 *sum_speed)
 {
@@ -1496,6 +1495,30 @@ static int mlx5_lag_get_devices_max_speed(struct mlx5_lag *ldev, u32 *max_speed)
 	return 0;
 }
 
+void mlx5_lag_update_agg_speed(struct mlx5_lag *ldev)
+{
+	u32 speed;
+
+	lockdep_assert_held(&ldev->lock);
+
+	if (mlx5_lag_get_devices_oper_speed(ldev, &speed))
+		return;
+
+	/* If speed is not set, use the sum of max speeds of all PFs */
+	if (!speed && mlx5_lag_get_devices_max_speed(ldev, &speed))
+		return;
+
+	ldev->agg_speed_mbps = speed;
+}
+
+void mlx5_lag_reset_agg_speed(struct mlx5_lag *ldev)
+{
+	lockdep_assert_held(&ldev->lock);
+
+	ldev->agg_speed_mbps = 0;
+}
+
+#ifdef CONFIG_MLX5_ESWITCH
 static void mlx5_lag_modify_device_vports_speed(struct mlx5_core_dev *mdev,
 						u32 speed)
 {
@@ -1541,17 +1564,10 @@ void mlx5_lag_set_vports_agg_speed(struct mlx5_lag *ldev)
 	u32 speed;
 	int pf_idx;
 
-	if (ldev->mode == MLX5_LAG_MODE_MPESW) {
-		if (mlx5_lag_get_devices_oper_speed(ldev, &speed))
-			return;
-	} else {
-		speed = ldev->tracker.bond_speed_mbps;
-		if (speed == SPEED_UNKNOWN)
-			return;
-	}
+	mlx5_lag_update_agg_speed(ldev);
+	speed = ldev->agg_speed_mbps;
 
-	/* If speed is not set, use the sum of max speeds of all PFs */
-	if (!speed && mlx5_lag_get_devices_max_speed(ldev, &speed))
+	if (!speed)
 		return;
 
 	speed = speed / MLX5_MAX_TX_SPEED_UNIT;
@@ -1576,6 +1592,7 @@ void mlx5_lag_reset_vports_speed(struct mlx5_lag *ldev)
 	int pf_idx;
 	int ret;
 
+	mlx5_lag_reset_agg_speed(ldev);
 	mlx5_ldev_for_each(pf_idx, 0, ldev) {
 		pf = mlx5_lag_pf(ldev, pf_idx);
 		if (!pf)
@@ -2067,6 +2084,28 @@ static int mlx5_handle_changeinfodata_event(struct mlx5_lag *ldev,
 
 	return 1;
 }
+
+/* Returns speed in Mbps. */
+int mlx5_lag_query_aggregated_speed(struct mlx5_core_dev *mdev, u32 *speed)
+{
+	struct mlx5_lag *ldev;
+	int ret = 0;
+
+	ldev = mlx5_lag_dev(mdev);
+	if (!ldev)
+		return -ENODEV;
+
+	mutex_lock(&ldev->lock);
+	*speed = ldev->agg_speed_mbps;
+	if (*speed == 0)
+		ret = -EINVAL;
+	mutex_unlock(&ldev->lock);
+
+	if (ret == -EINVAL)
+		mlx5_core_dbg(mdev, "aggregated speed is unknown\n");
+	return ret;
+}
+EXPORT_SYMBOL_GPL(mlx5_lag_query_aggregated_speed);
 
 static void mlx5_lag_update_tracker_speed(struct lag_tracker *tracker,
 					  struct net_device *ndev)

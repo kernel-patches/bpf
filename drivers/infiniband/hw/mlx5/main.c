@@ -1654,7 +1654,7 @@ static int mlx5_ib_query_port_speed_from_bond(struct mlx5_ib_dev *dev,
 	u32 bond_speed;
 	int err;
 
-	err = mlx5_lag_query_bond_speed(mdev, &bond_speed);
+	err = mlx5_lag_query_aggregated_speed(mdev, &bond_speed);
 	if (err)
 		return err;
 
