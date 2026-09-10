@@ -3931,7 +3931,8 @@ static void bpf_diag_stack_read_uninit(struct bpf_verifier_env *env, int off, in
 static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 				      /* func where src register points to */
 				      struct bpf_func_state *reg_state,
-				      int off, int size, int dst_regno)
+				      int off, int size, int dst_regno,
+				      bool is_ldsx)
 {
 	struct bpf_verifier_state *vstate = env->cur_state;
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
@@ -3972,18 +3973,34 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 
 			if (size <= spill_size &&
 			    bpf_stack_narrow_access_ok(off, size, spill_size)) {
-				if (env->bpf_capable && size == 4 && spill_size == 4 &&
-				    get_reg_width(reg) <= 32)
+				bool narrowing = get_reg_width(reg) > size * BITS_PER_BYTE;
+				/*
+				 * A narrowing fill keeps only the slot's low 32 bits,
+				 * so record a low-32 link rather than dropping the
+				 * relation, as a 32-bit mov from a wide source does.
+				 * Which kind depends on how the load fills the high
+				 * half, hence is_ldsx.
+				 */
+				bool subreg_link = narrowing && size == 4;
+
+				if (env->bpf_capable && size == 4 &&
+				    (subreg_link || (spill_size == 4 && !narrowing)))
 					/* Ensure stack slot has an ID to build a relation
 					 * with the destination register on fill.
 					 */
 					assign_scalar_id_before_mov(env, reg);
 				state->regs[dst_regno] = *reg;
 
-				/* Break the relation on a narrowing fill.
-				 * coerce_reg_to_size will adjust the boundaries.
-				 */
-				if (get_reg_width(reg) > size * BITS_PER_BYTE)
+				if (subreg_link && reg->id)
+					state->regs[dst_regno].subreg =
+						is_ldsx ? SUBREG_SEXT : SUBREG_ZEXT;
+				else if (narrowing)
+					/*
+					 * Nothing to relate: either the slot has
+					 * no id to share, or the fill is narrower
+					 * than the 32 bits a link can describe.
+					 * coerce_reg_to_size adjusts the bounds.
+					 */
 					clear_scalar_id(&state->regs[dst_regno]);
 			} else {
 				int spill_cnt = 0, zero_cnt = 0;
@@ -4148,7 +4165,7 @@ static int check_stack_read_var_off(struct bpf_verifier_env *env, struct bpf_reg
  */
 static int check_stack_read(struct bpf_verifier_env *env,
 			    struct bpf_reg_state *reg, argno_t ptr_argno, int off, int size,
-			    int dst_regno)
+			    int dst_regno, bool is_ldsx)
 {
 	struct bpf_func_state *state = bpf_func(env, reg);
 	int err;
@@ -4187,7 +4204,7 @@ static int check_stack_read(struct bpf_verifier_env *env,
 	if (!var_off) {
 		off += reg->var_off.value;
 		err = check_stack_read_fixed_off(env, state, off, size,
-						 dst_regno);
+						 dst_regno, is_ldsx);
 	} else {
 		/* Variable offset stack reads need more conservative handling
 		 * than fixed offset ones. Note that dst_regno >= 0 on this
@@ -6632,7 +6649,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 
 		if (t == BPF_READ)
 			err = check_stack_read(env, reg, argno, off, size,
-					       value_regno);
+					       value_regno, is_ldsx);
 		else
 			err = check_stack_write(env, reg, off, size,
 						value_regno, insn_idx);
@@ -6729,13 +6746,15 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 			 * Sign-extension can change the register value relative
 			 * to a scalar it is linked with by id (e.g. a zero-
 			 * extending fill of the same spilled stack slot), thus
-			 * drop the shared id in that case.
+			 * drop the shared id in that case. A ->subreg link is
+			 * the exception: it already records that only the low
+			 * 32 bits are shared, and how the high half follows.
 			 */
 			bool no_sext = reg_umax(&regs[value_regno]) <
 					(1ULL << (size * BITS_PER_BYTE - 1));
 
 			coerce_reg_to_size_sx(&regs[value_regno], size);
-			if (!no_sext)
+			if (!no_sext && !regs[value_regno].subreg)
 				clear_scalar_id(&regs[value_regno]);
 		}
 	}
