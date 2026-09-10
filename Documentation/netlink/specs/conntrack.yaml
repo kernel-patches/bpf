@@ -116,9 +116,11 @@ attribute-sets:
       -
         name: packets-old
         type: u32
+        doc: obsolete
       -
         name: bytes-old
         type: u32
+        doc: obsolete
       -
         name: pad
         type: pad
@@ -465,7 +467,7 @@ attribute-sets:
         nested-attributes: seqadj-attrs
       -
         name: secmark
-        type: binary
+        type: u32
         doc: obsolete
       -
         name: zone
