@@ -2664,7 +2664,7 @@ void dcn6_ms_calculate_hostvm_inefficiency_factor(
 			ip->remote_iommu_outstanding_translations,
 			soc_bb->max_outstanding_reqs,
 			1.0,
-			0.5);
+			soc_bb->hostvm_inefficiency_fraction);
 
 	DML_LOG_DEBUG_DOUBLE(outputs->HostVMInefficiencyFactorPrefetch);
 	DML_LOG_DEBUG_DOUBLE(outputs->HostVMInefficiencyFactor);
