@@ -596,20 +596,18 @@ operations:
             - status
             - protoinfo
             - help
-            - nat-src
-            - nat-dst
             - timeout
             - mark
             - counters-orig
             - counters-reply
             - use
             - id
-            - nat-dst
             - tuple-master
             - seq-adj-orig
             - seq-adj-reply
             - zone
             - secctx
+            - timestamp
             - labels
             - synproxy
       dump:
@@ -632,20 +630,18 @@ operations:
             - status
             - protoinfo
             - help
-            - nat-src
-            - nat-dst
             - timeout
             - mark
             - counters-orig
             - counters-reply
             - use
             - id
-            - nat-dst
             - tuple-master
             - seq-adj-orig
             - seq-adj-reply
             - zone
             - secctx
+            - timestamp
             - labels
             - synproxy
     -
