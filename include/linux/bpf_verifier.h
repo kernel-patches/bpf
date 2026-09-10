@@ -35,6 +35,17 @@ enum bpf_iter_state {
 	BPF_ITER_STATE_DRAINED,
 };
 
+/*
+ * Records that a register is (base + ->delta) within its ->id set:
+ * r1 += 10;   r1 gets ADD_CONST_64 delta
+ * w3 += 10;   r3 gets ADD_CONST_32 delta
+ */
+enum bpf_add_const {
+	ADD_CONST_NONE = 0,
+	ADD_CONST_32,		/* delta was added with a 32-bit ALU op */
+	ADD_CONST_64,		/* ... with a 64-bit ALU op */
+};
+
 struct bpf_reg_state {
 	/* Ordering of fields matters.  See states_equal() */
 	enum bpf_reg_type type;
@@ -136,16 +147,9 @@ struct bpf_reg_state {
 	 * to a specific instance of bpf_iter.
 	 */
 	/*
-	 * Upper bit of ID is used to remember relationship between "linked"
-	 * registers. Example:
+	 * Registers sharing an ->id are "linked":
 	 * r1 = r2;    both will have r1->id == r2->id == N
-	 * r1 += 10;   r1->id == N | BPF_ADD_CONST and r1->delta == 10
-	 * r3 = r2;    both will have r3->id == r2->id == N
-	 * w3 += 10;   r3->id == N | BPF_ADD_CONST32 and r3->delta == 10
 	 */
-#define BPF_ADD_CONST64 (1U << 31)
-#define BPF_ADD_CONST32 (1U << 30)
-#define BPF_ADD_CONST (BPF_ADD_CONST64 | BPF_ADD_CONST32)
 	u32 id;
 	/*
 	 * Tracks the parent object this register was derived from.
@@ -164,6 +168,11 @@ struct bpf_reg_state {
 	u32 frameno;
 	/* if (!precise && SCALAR_VALUE) min/max/tnum don't affect safety */
 	bool precise;
+	/*
+	 * How this register relates to the others sharing its ->id.
+	 * Non-zero only if ->id is.
+	 */
+	enum bpf_add_const add_const:2;
 };
 
 static inline s64 reg_smin(const struct bpf_reg_state *reg)

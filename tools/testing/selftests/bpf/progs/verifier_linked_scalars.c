@@ -349,8 +349,8 @@ l0_%=:							\
 }
 
 /*
- * Test that sync_linked_regs() checks reg->id (the linked target register)
- * for BPF_ADD_CONST32 rather than known_reg->id (the branch register).
+ * Test that sync_linked_regs() checks the linked target register (reg) for
+ * ADD_CONST_32 rather than the branch register (known_reg).
  */
 SEC("socket")
 __success
@@ -360,7 +360,7 @@ __naked void scalars_alu32_zext_linked_reg(void)
 	call %[bpf_get_prandom_u32];				\
 	w6 = w0;		/* r6 in [0, 0xFFFFFFFF] */	\
 	r7 = r6;		/* linked: same id as r6 */	\
-	w7 += 1;		/* alu32: r7.id |= BPF_ADD_CONST32 */ \
+	w7 += 1;		/* ADD_CONST_32 delta */ \
 	r8 = 0xFFFFffff ll;					\
 	if r6 < r8 goto l0_%=;					\
 	/* r6 in [0xFFFFFFFF, 0xFFFFFFFF] */			\
@@ -381,7 +381,7 @@ l0_%=:								\
 
 /*
  * Test that sync_linked_regs() skips propagation when one register used
- * alu32 (BPF_ADD_CONST32) and the other used alu64 (BPF_ADD_CONST64).
+ * alu32 (ADD_CONST_32) and the other used alu64 (ADD_CONST_64).
  * The delta relationship doesn't hold across different ALU widths.
  */
 SEC("socket")
@@ -392,13 +392,13 @@ __naked void scalars_alu32_alu64_cross_type(void)
 	call %[bpf_get_prandom_u32];				\
 	w6 = w0;		/* r6 in [0, 0xFFFFFFFF] */	\
 	r7 = r6;		/* linked: same id as r6 */	\
-	w7 += 1;		/* alu32: BPF_ADD_CONST32, delta = 1 */ \
+	w7 += 1;		/* ADD_CONST_32 delta */ \
 	r8 = r6;		/* linked: same id as r6 */	\
-	r8 += 2;		/* alu64: BPF_ADD_CONST64, delta = 2 */ \
+	r8 += 2;		/* ADD_CONST_64 delta */ \
 	r9 = 0xFFFFffff ll;					\
 	if r7 < r9 goto l0_%=;					\
 	/* r7 = 0xFFFFFFFF */					\
-	/* sync: known_reg=r7 (ADD_CONST32), reg=r8 (ADD_CONST64) */ \
+	/* sync: known_reg=r7 (ADD_CONST_32), reg=r8 (ADD_CONST_64) */ \
 	/* Without fix: r8 = zext(0xFFFFFFFF + 1) = 0 */	\
 	/* With fix: r8 stays [2, 0x100000001] (r8 >= 2) */	\
 	if r8 > 0 goto l1_%=;					\
@@ -416,7 +416,7 @@ l0_%=:								\
 /*
  * Test that regsafe() prevents pruning when two paths reach the same program
  * point with linked registers carrying different ADD_CONST flags (one
- * BPF_ADD_CONST32 from alu32, another BPF_ADD_CONST64 from alu64).
+ * ADD_CONST_32 from alu32, another ADD_CONST_64 from alu64).
  */
 SEC("socket")
 __failure __msg("div by zero")
@@ -431,11 +431,11 @@ __naked void scalars_alu32_alu64_regsafe_pruning(void)
 	call %[bpf_get_prandom_u32];				\
 	if r0 > 0 goto l_pathb_%=;				\
 	/* Path A: alu32 */					\
-	w7 += 1;		/* BPF_ADD_CONST32, delta = 1 */\
+	w7 += 1;		/* ADD_CONST_32 delta */\
 	goto l_merge_%=;					\
 l_pathb_%=:							\
 	/* Path B: alu64 */					\
-	r7 += 1;		/* BPF_ADD_CONST64, delta = 1 */\
+	r7 += 1;		/* ADD_CONST_64 delta */\
 l_merge_%=:							\
 	/* Merge point: regsafe() compares path B against cached path A. */ \
 	/* Narrow r6 to trigger sync_linked_regs for r7 */	\
@@ -593,7 +593,7 @@ l_exit_%=:							\
 }
 
 /*
- * Test that stale delta from a cleared BPF_ADD_CONST does not leak
+ * Test that stale delta from a cleared ADD_CONST_* does not leak
  * through assign_scalar_id_before_mov() into a new id, causing
  * sync_linked_regs() to compute an incorrect offset.
  */
@@ -605,10 +605,10 @@ __naked void scalars_stale_delta_from_cleared_id(void)
 	asm volatile ("						\
 	call %[bpf_get_prandom_u32];				\
 	r6 = r0;		/* r6 unknown, gets id A */	\
-	r6 += 5;		/* id A|ADD_CONST, delta 5 */	\
+	r6 += 5;		/* id A, ADD_CONST_64 delta */	\
 	r6 ^= 0;		/* id cleared; delta stays 5 */	\
 	r8 = r6;		/* new id B, stale delta 5 */	\
-	r8 += 3;		/* id B|ADD_CONST, delta 3 */	\
+	r8 += 3;		/* id B, ADD_CONST_64 delta */	\
 	r9 = r6;		/* id B, stale delta 5 */	\
 	if r9 != 10 goto l_exit_%=;				\
 	/* Bug: r8 = 10+(3-5) = 8; Fix: r8 = 10+(3-0) = 13 */	\
@@ -648,10 +648,10 @@ l_exit_%=:							\
 }
 
 /*
- * Test that regsafe() verifies base_id consistency for BPF_ADD_CONST
+ * Test that regsafe() verifies base_id consistency for ADD_CONST_*
  * linked scalars during state pruning.
  *
- * The false branch (explored first) links R3 to R2 via ADD_CONST.
+ * The false branch (explored first) links R3 to R2 via ADD_CONST_64.
  * The true branch (runtime path) links R3 to R4 (unrelated base_id).
  * At the merge point, pruning must fail because the linkage topology
  * differs.
@@ -675,7 +675,7 @@ __naked void add_const_base_id_pruning(void)
 	r2 = r0;						\
 	r2 &= 0xff;		/* R2 = scalar(id=A) [0,255] */	\
 	r3 = r2;		/* R3 linked to R2 (id=A) */	\
-	r3 += 10;		/* R3 id=A|ADD_CONST, delta=10 */\
+	r3 += 10;		/* ADD_CONST_64 delta */\
 	r6 = 0;							\
 	goto l_merge_%=;					\
 								\
@@ -687,7 +687,7 @@ l_true_%=:							\
 	r4 = r0;						\
 	r4 &= 0xff;		/* R4 = scalar [0,255], id=0 */	\
 	r3 = r4;		/* R3 linked to R4 (new id=C) */\
-	r3 += 10;		/* R3 id=C|ADD_CONST, delta=10 */\
+	r3 += 10;		/* ADD_CONST_64 delta */\
 	r6 = 0;							\
 								\
 l_merge_%=:							\
