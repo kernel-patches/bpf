@@ -1842,9 +1842,14 @@ static int sctp_sendmsg_to_asoc(struct sctp_association *asoc,
 			goto err;
 
 		if (asoc->ep->intl_enable) {
+			bool dead;
+
 			timeo = sock_sndtimeo(sk, 0);
+			sctp_association_hold(asoc);
 			err = sctp_wait_for_connect(asoc, &timeo);
-			if (err) {
+			dead = asoc->base.dead;
+			sctp_association_put(asoc);
+			if (err || dead) {
 				err = -ESRCH;
 				goto err;
 			}
