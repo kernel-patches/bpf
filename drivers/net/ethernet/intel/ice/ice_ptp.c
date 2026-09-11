@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (C) 2021, Intel Corporation. */
 
+#include <linux/rculist.h>
+#include <linux/wait_bit.h>
 #include "ice.h"
 #include "ice_lib.h"
 #include "ice_trace.h"
@@ -676,20 +678,33 @@ skip_ts_read:
 	pf->ptp.tx_hwtstamp_good += tstamp_good;
 }
 
+static void ice_ptp_release_port_rcu(struct kref *ref)
+{
+	wake_up_var(ref);
+}
+
 static void ice_ptp_tx_tstamp_owner(struct ice_pf *pf)
 {
 	struct ice_ptp_port *port;
 
-	mutex_lock(&pf->adapter->ports.lock);
-	list_for_each_entry(port, &pf->adapter->ports.ports, list_node) {
+	rcu_read_lock();
+	list_for_each_entry_rcu(port, &pf->adapter->ports.list, list_node) {
 		struct ice_ptp_tx *tx = &port->tx;
 
-		if (!tx || !tx->init)
+		if (!tx->init)
 			continue;
 
+		if (!kref_get_unless_zero(&port->ref))
+			continue;
+
+		rcu_read_unlock();
+
 		ice_ptp_process_tx_tstamp(tx);
+
+		rcu_read_lock();
+		kref_put(&port->ref, ice_ptp_release_port_rcu);
 	}
-	mutex_unlock(&pf->adapter->ports.lock);
+	rcu_read_unlock();
 }
 
 /**
@@ -811,8 +826,16 @@ ice_ptp_flush_all_tx_tracker(struct ice_pf *pf)
 {
 	struct ice_ptp_port *port;
 
-	list_for_each_entry(port, &pf->adapter->ports.ports, list_node)
+	rcu_read_lock();
+	list_for_each_entry_rcu(port, &pf->adapter->ports.list, list_node) {
+		if (!kref_get_unless_zero(&port->ref))
+			continue;
+		rcu_read_unlock();
 		ice_ptp_flush_tx_tracker(ptp_port_to_pf(port), &port->tx);
+		rcu_read_lock();
+		kref_put(&port->ref, ice_ptp_release_port_rcu);
+	}
+	rcu_read_unlock();
 }
 
 /**
@@ -1288,12 +1311,15 @@ void ice_ptp_link_change(struct ice_pf *pf, bool linkup)
 
 	ptp_port = &pf->ptp.port;
 
+	if (!kref_get_unless_zero(&ptp_port->ref))
+		return;
+
 	/* Update cached link status for this port immediately */
 	ptp_port->link_up = linkup;
 
 	/* Skip HW writes if reset is in progress */
 	if (pf->hw.reset_ongoing)
-		return;
+		goto exit_kref_put;
 
 	if (hw->mac_type == ICE_MAC_GENERIC_3K_E825 &&
 	    test_bit(ICE_FLAG_DPLL, pf->flags)) {
@@ -1336,17 +1362,20 @@ void ice_ptp_link_change(struct ice_pf *pf, bool linkup)
 	case ICE_MAC_E810:
 	case ICE_MAC_E830:
 		/* Do not reconfigure E810 or E830 PHY */
-		return;
+		goto exit_kref_put;
 	case ICE_MAC_GENERIC:
 		ice_ptp_port_phy_restart(ptp_port);
-		return;
+		goto exit_kref_put;
 	case ICE_MAC_GENERIC_3K_E825:
 		if (linkup)
 			ice_ptp_port_phy_restart(ptp_port);
-		return;
+		goto exit_kref_put;
 	default:
 		dev_warn(ice_pf_to_dev(pf), "%s: Unknown PHY type\n", __func__);
 	}
+
+exit_kref_put:
+	kref_put(&ptp_port->ref, ice_ptp_release_port_rcu);
 }
 
 /**
@@ -1427,16 +1456,21 @@ static void ice_ptp_reset_phy_timestamping(struct ice_pf *pf)
  */
 static void ice_ptp_restart_all_phy(struct ice_pf *pf)
 {
-	struct list_head *entry;
+	struct ice_ptp_port *port;
 
-	list_for_each(entry, &pf->adapter->ports.ports) {
-		struct ice_ptp_port *port = list_entry(entry,
-						       struct ice_ptp_port,
-						       list_node);
+	rcu_read_lock();
+	list_for_each_entry_rcu(port, &pf->adapter->ports.list, list_node) {
+		if (!kref_get_unless_zero(&port->ref))
+			continue;
+		rcu_read_unlock();
 
 		if (port->link_up)
 			ice_ptp_port_phy_restart(port);
+
+		rcu_read_lock();
+		kref_put(&port->ref, ice_ptp_release_port_rcu);
 	}
+	rcu_read_unlock();
 }
 
 /**
@@ -2697,19 +2731,19 @@ static bool ice_port_has_timestamps(struct ice_ptp_tx *tx)
 
 static bool ice_any_port_has_timestamps(struct ice_pf *pf)
 {
+	bool have_tstamps = false;
 	struct ice_ptp_port *port;
 
-	scoped_guard(mutex, &pf->adapter->ports.lock) {
-		list_for_each_entry(port, &pf->adapter->ports.ports,
-				    list_node) {
-			struct ice_ptp_tx *tx = &port->tx;
-
-			if (ice_port_has_timestamps(tx))
-				return true;
+	rcu_read_lock();
+	list_for_each_entry_rcu(port, &pf->adapter->ports.list, list_node) {
+		if (ice_port_has_timestamps(&port->tx)) {
+			have_tstamps = true;
+			break;
 		}
 	}
+	rcu_read_unlock();
 
-	return false;
+	return have_tstamps;
 }
 
 bool ice_ptp_tx_tstamps_pending(struct ice_pf *pf)
@@ -2968,13 +3002,15 @@ void ice_ptp_queue_work(struct ice_pf *pf)
 static void ice_ptp_prepare_rebuild_sec(struct ice_pf *pf, bool rebuild,
 					enum ice_reset_req reset_type)
 {
-	struct list_head *entry;
+	struct ice_ptp_port *port;
 
-	list_for_each(entry, &pf->adapter->ports.ports) {
-		struct ice_ptp_port *port = list_entry(entry,
-						       struct ice_ptp_port,
-						       list_node);
+	rcu_read_lock();
+	list_for_each_entry_rcu(port, &pf->adapter->ports.list, list_node) {
 		struct ice_pf *peer_pf = ptp_port_to_pf(port);
+
+		if (!kref_get_unless_zero(&port->ref))
+			continue;
+		rcu_read_unlock();
 
 		if (!ice_is_primary(&peer_pf->hw)) {
 			if (rebuild) {
@@ -2987,7 +3023,11 @@ static void ice_ptp_prepare_rebuild_sec(struct ice_pf *pf, bool rebuild,
 				ice_ptp_prepare_for_reset(peer_pf, reset_type);
 			}
 		}
+
+		rcu_read_lock();
+		kref_put(&port->ref, ice_ptp_release_port_rcu);
 	}
+	rcu_read_unlock();
 }
 
 /**
@@ -3167,11 +3207,11 @@ static int ice_ptp_setup_pf(struct ice_pf *pf)
 		return -ENODEV;
 
 	INIT_LIST_HEAD(&ptp->port.list_node);
-	mutex_lock(&pf->adapter->ports.lock);
+	kref_init(&ptp->port.ref);
 
-	list_add(&ptp->port.list_node,
-		 &pf->adapter->ports.ports);
-	mutex_unlock(&pf->adapter->ports.lock);
+	spin_lock(&pf->adapter->ports.lock);
+	list_add_rcu(&ptp->port.list_node, &pf->adapter->ports.list);
+	spin_unlock(&pf->adapter->ports.lock);
 
 	/* Seed the per-PHY Tx reference clock usage map for this port.
 	 * Only meaningful on E825 (other MAC types don't expose tx-clk
@@ -3194,12 +3234,32 @@ static int ice_ptp_setup_pf(struct ice_pf *pf)
 static void ice_ptp_cleanup_pf(struct ice_pf *pf)
 {
 	struct ice_ptp *ptp = &pf->ptp;
+	struct kref *ref;
 
-	if (pf->hw.mac_type != ICE_MAC_UNKNOWN) {
-		mutex_lock(&pf->adapter->ports.lock);
-		list_del(&ptp->port.list_node);
-		mutex_unlock(&pf->adapter->ports.lock);
-	}
+	if (pf->hw.mac_type == ICE_MAC_UNKNOWN)
+		return;
+
+	/* The PF cannot be removed until there are no more remaining
+	 * outstanding references to the PTP port. To make sure this is true,
+	 * first remove the port from the list, then drop the primary
+	 * reference this PF holds on the port. Once done, wait until all
+	 * existing references are dropped. Finally, synchronize_rcu() to
+	 * ensure that all RCU critical sections that might attempt to
+	 * dereference the port are finished.
+	 */
+
+	spin_lock(&pf->adapter->ports.lock);
+	list_del_rcu(&ptp->port.list_node);
+	spin_unlock(&pf->adapter->ports.lock);
+
+	ref = &ptp->port.ref;
+	kref_put(ref, ice_ptp_release_port_rcu);
+
+	dev_WARN_ONCE(ice_pf_to_dev(pf),
+		      !wait_var_event_timeout(ref, !kref_read(ref), 15 * HZ),
+		      "Timed out waiting for port references to release. Continuing to unload anyways.");
+
+	synchronize_rcu();
 }
 
 /**
