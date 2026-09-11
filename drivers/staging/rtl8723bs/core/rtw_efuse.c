@@ -76,7 +76,7 @@ u8 rtw_efuse_read_1_byte(struct adapter *adapter, u16 address)
 	} else {
 		return 0xFF;
 	}
-} /* rtw_efuse_read_1_byte */
+}
 
 /*  11/16/2008 MH Read one byte from real efuse. */
 u8 rtw_efuse_one_byte_read(struct adapter *padapter, u16 addr, u8 *data)

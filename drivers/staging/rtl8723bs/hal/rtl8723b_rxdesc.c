@@ -23,8 +23,7 @@ static void process_rssi(struct adapter *padapter, union recv_frame *prframe)
 		signal_stat->total_val  += pattrib->phy_info.SignalStrength;
 		signal_stat->avg_val = signal_stat->total_val / signal_stat->total_num;
 	}
-
-} /*  Process_UI_RSSI_8192C */
+}
 
 static void process_link_qual(struct adapter *padapter, union recv_frame *prframe)
 {
@@ -46,7 +45,7 @@ static void process_link_qual(struct adapter *padapter, union recv_frame *prfram
 	signal_stat->total_num++;
 	signal_stat->total_val  += pattrib->phy_info.SignalQuality;
 	signal_stat->avg_val = signal_stat->total_val / signal_stat->total_num;
-} /*  Process_UiLinkQuality8192S */
+}
 
 void rtl8723b_process_phy_info(struct adapter *padapter, void *prframe)
 {

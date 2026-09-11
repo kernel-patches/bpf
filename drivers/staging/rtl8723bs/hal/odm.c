@@ -456,8 +456,7 @@ static void odm_RSSIMonitorCheck(struct dm_odm_t *pDM_Odm)
 		return;
 
 	odm_RSSIMonitorCheckCE(pDM_Odm);
-
-}	/*  odm_RSSIMonitorCheck */
+}
 
 /* 3 ============================================================ */
 /* 3 SW Antenna Diversity */
