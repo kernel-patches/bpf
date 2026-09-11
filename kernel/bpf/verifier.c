@@ -9772,7 +9772,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 	ret = btf_prepare_func_args(env, subprog);
 	if (ret) {
 		if (bpf_in_stack_arg_cnt(sub) > 0) {
-			err = check_outgoing_stack_args(env, caller, sub->arg_cnt,
+			err = check_outgoing_stack_args(env, caller, sub->arg_slot_cnt,
 							bpf_subprog_name(env, subprog),
 							NULL, NULL);
 			if (err)
@@ -9784,7 +9784,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 	func = btf_type_by_id(btf, env->prog->aux->func_info[subprog].type_id);
 	func_proto = btf_type_by_id(btf, func->type);
 	args = btf_params(func_proto);
-	ret = check_outgoing_stack_args(env, caller, sub->arg_cnt,
+	ret = check_outgoing_stack_args(env, caller, sub->arg_slot_cnt,
 					bpf_subprog_name(env, subprog), btf, args);
 	if (ret)
 		return ret;
@@ -9792,7 +9792,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 	/* check that BTF function arguments match actual types that the
 	 * verifier sees.
 	 */
-	for (i = 0; i < sub->arg_cnt; i++) {
+	for (i = 0; i < sub->arg_slot_cnt; i++) {
 		argno_t argno = argno_from_arg(i + 1);
 		struct bpf_reg_state *reg = get_func_arg_reg(caller, regs, i);
 		struct bpf_subprog_arg_info *arg = &sub->args[i];
@@ -19777,13 +19777,14 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 			}
 
 			/* Also ensure the callback only has a single scalar argument. */
-			if (sub->arg_cnt != 1 || sub->args[0].arg_type != ARG_ANYTHING) {
+			if (sub->arg_slot_cnt != 1 || sub->args[0].arg_type != ARG_ANYTHING) {
 				verbose(env, "exception cb only supports single integer argument\n");
 				ret = -EINVAL;
 				goto out;
 			}
 		}
-		for (i = BPF_REG_1; i <= min_t(u32, sub->arg_cnt, MAX_BPF_FUNC_REG_ARGS); i++) {
+		for (i = BPF_REG_1;
+		     i <= min_t(u32, sub->arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS); i++) {
 			arg = &sub->args[i - BPF_REG_1];
 			reg = &regs[i];
 
@@ -19826,7 +19827,8 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 				goto out;
 			}
 		}
-		if (env->prog->type == BPF_PROG_TYPE_EXT && sub->arg_cnt > MAX_BPF_FUNC_REG_ARGS) {
+		if (env->prog->type == BPF_PROG_TYPE_EXT &&
+		    sub->arg_slot_cnt > MAX_BPF_FUNC_REG_ARGS) {
 			verbose(env, "freplace programs with >%d args not supported yet\n",
 				MAX_BPF_FUNC_REG_ARGS);
 			ret = -EINVAL;
@@ -19839,9 +19841,10 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 		 */
 		if (env->prog->aux->func_info_aux) {
 			ret = btf_prepare_func_args(env, 0);
-			if (ret || sub->arg_cnt != 1 || sub->args[0].arg_type != ARG_PTR_TO_CTX) {
+			if (ret || sub->arg_slot_cnt != 1 ||
+			    sub->args[0].arg_type != ARG_PTR_TO_CTX) {
 				env->prog->aux->func_info_aux[0].unreliable = true;
-				sub->arg_cnt = 1;
+				sub->arg_slot_cnt = 1;
 				sub->stack_arg_cnt = 0;
 			}
 		}
