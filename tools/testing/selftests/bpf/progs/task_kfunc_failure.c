@@ -333,7 +333,7 @@ int BPF_PROG(task_access_comm2, struct task_struct *task, u64 clone_flags)
 }
 
 SEC("tp_btf/task_newtask")
-__failure __msg("write into memory")
+__failure __msg("only read is supported")
 int BPF_PROG(task_access_comm3, struct task_struct *task, u64 clone_flags)
 {
 	bpf_probe_read_kernel(task->comm, 16, task->comm);
