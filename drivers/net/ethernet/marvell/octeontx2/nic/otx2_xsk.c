@@ -96,7 +96,7 @@ static void otx2_clean_up_rq(struct otx2_nic *pfvf, int qidx)
 	u64 iova;
 
 	/* If the DOWN flag is set SQs are already freed */
-	if (pfvf->flags & OTX2_FLAG_INTF_DOWN)
+	if (otx2_test_flag(pfvf, OTX2_FLAG_INTF_DOWN))
 		return;
 
 	cq = &qset->cq[qidx];
@@ -172,7 +172,7 @@ int otx2_xsk_wakeup(struct net_device *dev, u32 queue_id, u32 flags)
 	struct otx2_cq_poll *cq_poll = NULL;
 	struct otx2_qset *qset = &pf->qset;
 
-	if (pf->flags & OTX2_FLAG_INTF_DOWN)
+	if (otx2_test_flag(pf, OTX2_FLAG_INTF_DOWN))
 		return -ENETDOWN;
 
 	if (queue_id >= pf->hw.rx_queues || queue_id >= pf->hw.tx_queues)

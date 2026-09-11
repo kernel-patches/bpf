@@ -37,8 +37,7 @@ struct rep_dev {
 	struct delayed_work stats_wrk;
 	struct devlink_port dl_port;
 	struct otx2_flow_config	*flow_cfg;
-#define RVU_REP_VF_INITIALIZED		BIT_ULL(0)
-	u64 flags;
+	unsigned long		flags;
 	u16 rep_id;
 	u16 pcifunc;
 	u8 mac[ETH_ALEN];
