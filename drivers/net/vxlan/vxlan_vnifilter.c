@@ -473,6 +473,7 @@ static const struct nla_policy vni_filter_policy[VXLAN_VNIFILTER_MAX + 1] = {
 static int vxlan_update_default_fdb_entry(struct vxlan_dev *vxlan, __be32 vni,
 					  union vxlan_addr *old_remote_ip,
 					  union vxlan_addr *remote_ip,
+					  bool *fdb_created,
 					  struct netlink_ext_ack *extack)
 {
 	struct vxlan_rdst *dst = &vxlan->default_dst;
@@ -488,7 +489,8 @@ static int vxlan_update_default_fdb_entry(struct vxlan_dev *vxlan, __be32 vni,
 				       vni,
 				       vni,
 				       dst->remote_ifindex,
-				       NTF_SELF, 0, true, NULL, extack);
+				       NTF_SELF, 0, true, fdb_created,
+				       extack);
 		if (err) {
 			spin_unlock_bh(&vxlan->hash_lock);
 			return err;
@@ -512,6 +514,7 @@ static int vxlan_vni_update_group(struct vxlan_dev *vxlan,
 				  struct vxlan_vni_node *vninode,
 				  union vxlan_addr *group,
 				  bool create, bool *changed,
+				  bool *fdb_created,
 				  struct netlink_ext_ack *extack)
 {
 	struct vxlan_net *vn = net_generic(vxlan->net, vxlan_net_id);
@@ -545,7 +548,7 @@ static int vxlan_vni_update_group(struct vxlan_dev *vxlan,
 		return 0;
 
 	ret = vxlan_update_default_fdb_entry(vxlan, vninode->vni,
-					     oldrip, newrip,
+					     oldrip, newrip, fdb_created,
 					     extack);
 	if (ret)
 		goto out;
@@ -599,7 +602,7 @@ int vxlan_vnilist_update_group(struct vxlan_dev *vxlan,
 			ret = vxlan_update_default_fdb_entry(vxlan, vent->vni,
 							     old_remote_ip,
 							     new_remote_ip,
-							     extack);
+							     NULL, extack);
 			if (ret)
 				return ret;
 		}
@@ -655,7 +658,7 @@ static int vxlan_vni_update(struct vxlan_dev *vxlan,
 		return 0;
 
 	ret = vxlan_vni_update_group(vxlan, vninode, group, false, changed,
-				     extack);
+				     NULL, extack);
 	if (ret)
 		return ret;
 
@@ -718,6 +721,8 @@ static void vxlan_vni_free(struct vxlan_vni_node *vninode)
 	kfree(vninode);
 }
 
+static void vxlan_vni_node_rcu_free(struct rcu_head *rcu);
+
 static int vxlan_vni_add(struct vxlan_dev *vxlan,
 			 struct vxlan_vni_group *vg,
 			 u32 vni, union vxlan_addr *group,
@@ -725,6 +730,7 @@ static int vxlan_vni_add(struct vxlan_dev *vxlan,
 {
 	struct vxlan_vni_node *vninode;
 	__be32 v = cpu_to_be32(vni);
+	bool fdb_created = false;
 	bool changed = false;
 	int err = 0;
 
@@ -755,10 +761,47 @@ static int vxlan_vni_add(struct vxlan_dev *vxlan,
 		vxlan_vs_add_del_vninode(vxlan, vninode, false);
 
 	err = vxlan_vni_update_group(vxlan, vninode, group, true, &changed,
-				     extack);
+				     &fdb_created, extack);
+	if (err)
+		goto err_vni_del;
 
 	vxlan_vnifilter_notify(vxlan, vninode, RTM_NEWTUNNEL);
 
+	return 0;
+
+err_vni_del:
+	/* Undo only the default FDB entry this add installed.  An entry that
+	 * was already there, whether added out of band or by another VNI, is
+	 * left alone.
+	 *
+	 * No membership has to be given back: vxlan_igmp_leave() is gated on
+	 * vxlan_addr_multicast(&old_remote_ip), and old_remote_ip is a copy
+	 * of the remote IP of a node this add just allocated, so it is zero.
+	 *
+	 * The address picked below is the one the entry was installed
+	 * against.  If the request carried a group, vxlan_vni_update_group()
+	 * copied it into vninode->remote_ip before the join could fail; if
+	 * it did not, that copy was skipped and the entry went to the device
+	 * default.
+	 */
+	if (fdb_created) {
+		union vxlan_addr *rip = vxlan_addr_any(&vninode->remote_ip) ?
+					&vxlan->default_dst.remote_ip :
+					&vninode->remote_ip;
+
+		spin_lock_bh(&vxlan->hash_lock);
+		__vxlan_fdb_delete(vxlan, all_zeros_mac, *rip,
+				   vxlan->cfg.dst_port, vninode->vni,
+				   vninode->vni,
+				   vxlan->default_dst.remote_ifindex, true);
+		spin_unlock_bh(&vxlan->hash_lock);
+	}
+	rhashtable_remove_fast(&vg->vni_hash, &vninode->vnode,
+			       vxlan_vni_rht_params);
+	__vxlan_vni_del_list(vg, vninode);
+	if (vxlan->dev->flags & IFF_UP)
+		vxlan_vs_add_del_vninode(vxlan, vninode, true);
+	call_rcu(&vninode->rcu, vxlan_vni_node_rcu_free);
 	return err;
 }
 
