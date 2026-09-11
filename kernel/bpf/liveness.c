@@ -8,6 +8,8 @@
 #include <linux/slab.h>
 #include <linux/sort.h>
 
+#include "exception.h"
+
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
 struct per_frame_masks {
@@ -256,6 +258,19 @@ bpf_insn_successors(struct bpf_verifier_env *env, u32 idx)
 	succ = env->succ;
 	succ->cnt = 0;
 
+	/*
+	 * The resume at the end of a cleanup landing pad is a terminator, like
+	 * BPF_EXIT: control goes back to the bpf_throw() walker that called
+	 * the pad, never to the next instruction. Saying otherwise lets the
+	 * postorder walk fall out of the subprogram -- the resume is usually
+	 * its last instruction, everything after it having been swept as
+	 * unreachable -- and the per-subprogram arrays indexed off that walk
+	 * are then read out of bounds.
+	 */
+	if (unlikely(insn->code == (BPF_JMP | BPF_CALL) &&
+		     bpf_is_unwind_resume_kfunc(insn)))
+		return succ;
+
 	opcode_info = &opcode_info_tbl[BPF_CLASS(insn->code) | BPF_OP(insn->code)];
 	insn_sz = bpf_is_ldimm64(insn) ? 2 : 1;
 	if (opcode_info->can_fallthrough)
@@ -263,6 +278,19 @@ bpf_insn_successors(struct bpf_verifier_env *env, u32 idx)
 
 	if (opcode_info->can_jump)
 		succ->items[succ->cnt++] = idx + bpf_jmp_offset(insn) + 1;
+
+	/*
+	 * A call covered by an exception cleanup record can also transfer to
+	 * that record's landing pad. Nothing in the compiler's CFG says so --
+	 * being unreachable is what makes a block a landing pad -- so the edge
+	 * is added here.
+	 */
+	if (unlikely(env->cleanup_info_cnt)) {
+		int pad = bpf_cleanup_pad_of_call(env, idx);
+
+		if (pad >= 0)
+			succ->items[succ->cnt++] = pad;
+	}
 
 	return succ;
 }
