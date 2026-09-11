@@ -28,7 +28,7 @@ FEATURE COMMANDS
 | **bpftool** **feature help**
 |
 | *COMPONENT* := { **kernel** | **dev** *NAME* }
-| *GROUP* := { **prog_types** | **map_types** | **attach_types** | **link_types** | **helpers** }
+| *GROUP* := { **prog_types** | **map_types** | **map_create_flags** | **attach_types** | **link_types** | **helpers** }
 
 DESCRIPTION
 ===========
@@ -68,12 +68,14 @@ bpftool feature probe dev *NAME* [full] [macros [prefix *PREFIX*]]
 
 bpftool feature list_builtins *GROUP*
     List items known to bpftool. These can be BPF program types
-    (**prog_types**), BPF map types (**map_types**), attach types
-    (**attach_types**), link types (**link_types**), or BPF helper functions
-    (**helpers**). The command does not probe the system, but simply lists the
-    elements that bpftool knows from compilation time, as provided from libbpf
-    (for all object types) or from the BPF UAPI header (list of helpers). This
-    can be used in scripts to iterate over BPF types or helpers.
+    (**prog_types**), BPF map types (**map_types**), map creation flags
+    (**map_create_flags**), attach types (**attach_types**), link types
+    (**link_types**), or BPF helper functions (**helpers**). The command does
+    not probe the system, but simply lists the elements that bpftool knows
+    from compilation time, as provided from libbpf (for all object types) or
+    from the BPF UAPI header (helpers and map creation flags). This can be used
+    in scripts to iterate over BPF types, helpers, or the symbolic flags
+    accepted by **map create**.
 
 bpftool feature help
     Print short help message.
