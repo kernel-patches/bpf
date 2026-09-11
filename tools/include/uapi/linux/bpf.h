@@ -2659,6 +2659,10 @@ union bpf_attr {
  * 		checked and segments are recalculated by the GSO/GRO engine.
  * 		The size for GSO target is adapted as well.
  *
+ *		On success, an assigned socket is released if its address
+ *		family is incompatible with the new protocol. Assign a
+ *		compatible socket after translation if required.
+ *
  * 		All values for *flags* are reserved for future usage, and must
  * 		be left at zero.
  *
