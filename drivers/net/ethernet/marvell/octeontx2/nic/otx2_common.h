@@ -490,28 +490,29 @@ struct otx2_nic {
 	u16			tx_max_pktlen;
 	u16			rbsize; /* Receive buffer size */
 
-#define OTX2_FLAG_RX_TSTAMP_ENABLED		BIT_ULL(0)
-#define OTX2_FLAG_TX_TSTAMP_ENABLED		BIT_ULL(1)
-#define OTX2_FLAG_INTF_DOWN			BIT_ULL(2)
-#define OTX2_FLAG_MCAM_ENTRIES_ALLOC		BIT_ULL(3)
-#define OTX2_FLAG_NTUPLE_SUPPORT		BIT_ULL(4)
-#define OTX2_FLAG_UCAST_FLTR_SUPPORT		BIT_ULL(5)
-#define OTX2_FLAG_RX_VLAN_SUPPORT		BIT_ULL(6)
-#define OTX2_FLAG_VF_VLAN_SUPPORT		BIT_ULL(7)
-#define OTX2_FLAG_PF_SHUTDOWN			BIT_ULL(8)
-#define OTX2_FLAG_RX_PAUSE_ENABLED		BIT_ULL(9)
-#define OTX2_FLAG_TX_PAUSE_ENABLED		BIT_ULL(10)
-#define OTX2_FLAG_TC_FLOWER_SUPPORT		BIT_ULL(11)
-#define OTX2_FLAG_TC_MATCHALL_EGRESS_ENABLED	BIT_ULL(12)
-#define OTX2_FLAG_TC_MATCHALL_INGRESS_ENABLED	BIT_ULL(13)
-#define OTX2_FLAG_DMACFLTR_SUPPORT		BIT_ULL(14)
-#define OTX2_FLAG_PTP_ONESTEP_SYNC		BIT_ULL(15)
-#define OTX2_FLAG_ADPTV_INT_COAL_ENABLED BIT_ULL(16)
-#define OTX2_FLAG_TC_MARK_ENABLED		BIT_ULL(17)
-#define OTX2_FLAG_REP_MODE_ENABLED		 BIT_ULL(18)
-#define OTX2_FLAG_PORT_UP			BIT_ULL(19)
-#define OTX2_FLAG_IPSEC_OFFLOAD_ENABLED		BIT_ULL(20)
-	u64			flags;
+#define OTX2_FLAG_RX_TSTAMP_ENABLED		0
+#define OTX2_FLAG_TX_TSTAMP_ENABLED		1
+#define OTX2_FLAG_INTF_DOWN			2
+#define OTX2_FLAG_MCAM_ENTRIES_ALLOC		3
+#define OTX2_FLAG_NTUPLE_SUPPORT		4
+#define OTX2_FLAG_UCAST_FLTR_SUPPORT		5
+#define OTX2_FLAG_RX_VLAN_SUPPORT		6
+#define OTX2_FLAG_VF_VLAN_SUPPORT		7
+#define OTX2_FLAG_PF_SHUTDOWN			8
+#define OTX2_FLAG_RX_PAUSE_ENABLED		9
+#define OTX2_FLAG_TX_PAUSE_ENABLED		10
+#define OTX2_FLAG_TC_FLOWER_SUPPORT		11
+#define OTX2_FLAG_TC_MATCHALL_EGRESS_ENABLED	12
+#define OTX2_FLAG_TC_MATCHALL_INGRESS_ENABLED	13
+#define OTX2_FLAG_DMACFLTR_SUPPORT		14
+#define OTX2_FLAG_PTP_ONESTEP_SYNC		15
+#define OTX2_FLAG_ADPTV_INT_COAL_ENABLED	16
+#define OTX2_FLAG_TC_MARK_ENABLED		17
+#define OTX2_FLAG_REP_MODE_ENABLED		18
+#define OTX2_FLAG_PORT_UP			19
+#define OTX2_FLAG_IPSEC_OFFLOAD_ENABLED		20
+#define OTX2_REP_VF_INITIALIZED			21
+	unsigned long		flags;
 	u64			*cq_op_addr;
 
 	struct bpf_prog		*xdp_prog;
@@ -592,6 +593,34 @@ struct otx2_nic {
 	/* af_xdp zero-copy */
 	unsigned long		*af_xdp_zc_qidx;
 };
+
+static inline void otx2_set_flag(struct otx2_nic *nic, unsigned int flag)
+{
+	set_bit(flag, &nic->flags);
+}
+
+static inline void otx2_clear_flag(struct otx2_nic *nic, unsigned int flag)
+{
+	clear_bit(flag, &nic->flags);
+}
+
+static inline bool otx2_test_flag(struct otx2_nic *nic, unsigned int flag)
+{
+	return test_bit(flag, &nic->flags);
+}
+
+static inline void otx2_sync_flags_from_rep(struct otx2_nic *dst,
+					    unsigned long *src_flags)
+{
+	unsigned int flag;
+
+	for (flag = 0; flag <= OTX2_REP_VF_INITIALIZED; flag++) {
+		if (test_bit(flag, src_flags))
+			set_bit(flag, &dst->flags);
+		else
+			clear_bit(flag, &dst->flags);
+	}
+}
 
 static inline bool is_otx2_lbkvf(struct pci_dev *pdev)
 {
