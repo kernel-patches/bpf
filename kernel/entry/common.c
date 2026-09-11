@@ -141,16 +141,25 @@ static inline bool arch_irqentry_exit_need_resched(void) { return true; }
  * across the context switch so that it is not mistaken for a Tasks RCU
  * quiescent state.  This closes the few-instruction windows at trampoline
  * entry/exit where the trampoline's own increment has not yet run or its
- * decrement already has.
+ * decrement already has.  The interrupted IP is also recorded for the
+ * duration, for conditions that must be re-evaluated at each quiescent-state
+ * decision rather than once here (see rcu_tasks_irq_ip_holds()); nested
+ * irq-exit preemption cannot happen inside preempt_schedule_irq(), so one
+ * slot per task is enough.
  */
 static void irqentry_preempt(struct pt_regs *regs)
 {
+	unsigned long ip = instruction_pointer(regs);
 	bool in_tramp = IS_ENABLED(CONFIG_RCU_TASKS_PREEMPT_QS) &&
-			rcu_tasks_ip_in_trampoline(instruction_pointer(regs));
+			rcu_tasks_ip_in_trampoline(ip);
 
 	if (in_tramp)
 		rcu_tasks_trampoline_enter();
+	if (IS_ENABLED(CONFIG_RCU_TASKS_PREEMPT_QS))
+		rcu_tasks_note_irq_ip(ip);
 	preempt_schedule_irq();
+	if (IS_ENABLED(CONFIG_RCU_TASKS_PREEMPT_QS))
+		rcu_tasks_note_irq_ip(0);
 	if (in_tramp)
 		rcu_tasks_trampoline_exit();
 }

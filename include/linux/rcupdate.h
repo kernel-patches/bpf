@@ -202,6 +202,14 @@ bool arch_rcu_tasks_ip_in_trampoline(unsigned long ip);
  * rcu_tasks_ip_in_trampoline() and holding the count elevated across
  * preempt_schedule_irq() when it matches.
  *
+ * The one non-trampoline user, kprobe jump optimization, waits for tasks
+ * preempted inside ordinary instruction bytes it is about to overwrite.  A
+ * task can be parked there from before the kprobe even existed, so that
+ * cannot be decided once at preemption time: irqentry_preempt() records the
+ * interrupted IP in current->rcu_tasks_irq_ip for the duration of the
+ * preemption and rcu_tasks_irq_ip_holds() checks it at every quiescent-state
+ * decision, locally and from the grace-period kthread.
+ *
  * Only current writes the count and only current (or an interrupt on the same
  * CPU) reads it, so plain accesses suffice.
  */
@@ -225,6 +233,13 @@ static __always_inline void rcu_tasks_trampoline_assert_none(void)
 }
 
 bool rcu_tasks_ip_in_trampoline(unsigned long ip);
+bool rcu_tasks_irq_ip_holds(struct task_struct *t);
+
+/* Record where current is being irq-preempted; 0 once it has resumed. */
+static __always_inline void rcu_tasks_note_irq_ip(unsigned long ip)
+{
+	WRITE_ONCE(current->rcu_tasks_irq_ip, ip);
+}
 
 # define rcu_tasks_classic_qs(t, preempt)				\
 	do {								\
@@ -242,6 +257,7 @@ static inline void rcu_tasks_trampoline_enter(void) { }
 static inline void rcu_tasks_trampoline_exit(void) { }
 static inline void rcu_tasks_trampoline_assert_none(void) { }
 static inline bool rcu_tasks_ip_in_trampoline(unsigned long ip) { return false; }
+static inline void rcu_tasks_note_irq_ip(unsigned long ip) { }
 # endif
 
 #define rcu_tasks_qs(t, preempt) rcu_tasks_classic_qs((t), (preempt))
@@ -262,6 +278,7 @@ static inline void rcu_tasks_trampoline_enter(void) { }
 static inline void rcu_tasks_trampoline_exit(void) { }
 static inline void rcu_tasks_trampoline_assert_none(void) { }
 static inline bool rcu_tasks_ip_in_trampoline(unsigned long ip) { return false; }
+static inline void rcu_tasks_note_irq_ip(unsigned long ip) { }
 #define call_rcu_tasks call_rcu
 #define synchronize_rcu_tasks synchronize_rcu
 static inline void exit_tasks_rcu_start(void) { }

@@ -1127,6 +1127,29 @@ bool rcu_tasks_ip_in_trampoline(unsigned long ip)
 }
 NOKPROBE_SYMBOL(rcu_tasks_ip_in_trampoline);
 
+/**
+ * rcu_tasks_irq_ip_holds - Is @t irq-preempted somewhere that must hold off Tasks RCU?
+ * @t: a task inside preempt_schedule_irq() (t->rcu_tasks_irq_ip != 0), or not
+ *
+ * Unlike trampoline text, which a task can only be interrupted in while the
+ * trampoline exists, the bytes kprobe_optimizer() is about to overwrite with a
+ * jump are ordinary text a task may have been parked in since before the
+ * kprobe was registered, and the optimizer may start waiting while the task is
+ * already switched out.  So this is evaluated against the IP recorded by
+ * irqentry_preempt() at every quiescent-state decision -- each pass through
+ * __schedule() in preempt_schedule_irq()'s loop, and the grace-period
+ * kthread's scans -- rather than once at preemption time.  A task switched out
+ * synchronously cannot have a resume point inside such a window (a call there
+ * returns beyond it), so only the irq-exit IP needs checking.
+ */
+bool rcu_tasks_irq_ip_holds(struct task_struct *t)
+{
+	unsigned long ip = READ_ONCE(t->rcu_tasks_irq_ip);
+
+	return ip && kprobe_in_optimized_region(ip);
+}
+NOKPROBE_SYMBOL(rcu_tasks_irq_ip_holds);
+
 /* See if tasks are still holding out, complain if so. */
 static void check_holdout_task(struct task_struct *t,
 			       bool needreport, bool *firstreport)
