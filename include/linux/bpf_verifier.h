@@ -1066,7 +1066,7 @@ static inline bool bpf_ret_reg_pair(struct bpf_verifier_env *env, int subprog)
 }
 
 struct bpf_call_summary {
-	u8 num_params;
+	u8 arg_slot_cnt;
 	bool is_void;
 	bool fastcall;
 };
