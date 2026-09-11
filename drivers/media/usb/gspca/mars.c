@@ -204,14 +204,14 @@ static int sd_init_controls(struct gspca_dev *gspca_dev)
 			V4L2_CID_SHARPNESS, 0, 2, 1, 1);
 	sd->illum_top = v4l2_ctrl_new_std(hdl, &mars_ctrl_ops,
 			V4L2_CID_ILLUMINATORS_1, 0, 1, 1, 0);
-	sd->illum_top->flags |= V4L2_CTRL_FLAG_UPDATE;
 	sd->illum_bottom = v4l2_ctrl_new_std(hdl, &mars_ctrl_ops,
 			V4L2_CID_ILLUMINATORS_2, 0, 1, 1, 0);
-	sd->illum_bottom->flags |= V4L2_CTRL_FLAG_UPDATE;
 	if (hdl->error) {
 		pr_err("Could not initialize controls\n");
 		return hdl->error;
 	}
+	sd->illum_top->flags |= V4L2_CTRL_FLAG_UPDATE;
+	sd->illum_bottom->flags |= V4L2_CTRL_FLAG_UPDATE;
 	v4l2_ctrl_cluster(2, &sd->illum_top);
 	return 0;
 }
