@@ -11,6 +11,7 @@
 #include <linux/bpf.h>
 #else
 #include <unistd.h>
+#include <sys/param.h>
 #include <sys/syscall.h>
 #include <sys/mman.h>
 #include <linux/keyctl.h>
@@ -138,7 +139,7 @@ static inline void skel_free_map_data(void *p, __u64 addr, size_t sz)
 	 */
 }
 
-static inline void *skel_prep_map_data(const void *val, size_t mmap_sz, size_t val_sz)
+static inline void *skel_prep_map_data(const void *val, size_t val_sz)
 {
 	void *addr;
 
@@ -149,7 +150,7 @@ static inline void *skel_prep_map_data(const void *val, size_t mmap_sz, size_t v
 	return addr;
 }
 
-static inline void *skel_finalize_map_data(__u64 *init_val, size_t mmap_sz, int flags, int fd)
+static inline void *skel_finalize_map_data(__u64 *init_val, size_t val_sz, int flags, int fd)
 {
 	struct bpf_map *map;
 	void *addr = NULL;
@@ -193,13 +194,19 @@ static inline void skel_free(void *p)
 	free(p);
 }
 
-static inline void skel_free_map_data(void *p, __u64 addr, size_t sz)
+static inline size_t skel_map_mmap_sz(size_t sz)
 {
-	munmap(p, sz);
+	return roundup(sz, sysconf(_SC_PAGE_SIZE));
 }
 
-static inline void *skel_prep_map_data(const void *val, size_t mmap_sz, size_t val_sz)
+static inline void skel_free_map_data(void *p, __u64 addr, size_t sz)
 {
+	munmap(p, skel_map_mmap_sz(sz));
+}
+
+static inline void *skel_prep_map_data(const void *val, size_t val_sz)
+{
+	size_t mmap_sz = skel_map_mmap_sz(val_sz);
 	void *addr;
 
 	addr = mmap(NULL, mmap_sz, PROT_READ | PROT_WRITE,
@@ -210,8 +217,9 @@ static inline void *skel_prep_map_data(const void *val, size_t mmap_sz, size_t v
 	return addr;
 }
 
-static inline void *skel_finalize_map_data(__u64 *init_val, size_t mmap_sz, int flags, int fd)
+static inline void *skel_finalize_map_data(__u64 *init_val, size_t val_sz, int flags, int fd)
 {
+	size_t mmap_sz = skel_map_mmap_sz(val_sz);
 	void *addr;
 
 	addr = mmap((void *) (long) *init_val, mmap_sz, flags, MAP_SHARED | MAP_FIXED, fd, 0);
