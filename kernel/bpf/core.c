@@ -292,6 +292,14 @@ void __bpf_prog_free(struct bpf_prog *fp)
 		mutex_destroy(&fp->aux->dst_mutex);
 		mutex_destroy(&fp->aux->st_ops_assoc_mutex);
 		kfree(fp->aux->poke_tab);
+		/*
+		 * Here rather than in bpf_prog_free_deferred(), which only
+		 * sees the main program: a subprogram carries its own slice of
+		 * the cleanup table and is released straight through
+		 * bpf_jit_free(), both on teardown and when jit_subprogs()
+		 * fails partway.
+		 */
+		bpf_cleanup_free_info(fp->aux);
 		kfree(fp->aux);
 	}
 	free_percpu(fp->stats);
@@ -3374,6 +3382,33 @@ bool __weak bpf_jit_supports_private_stack(void)
 
 void __weak arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp), void *cookie)
 {
+}
+
+/*
+ * Can this JIT hand control to an exception cleanup landing pad at run time?
+ * Requires arch_bpf_run_cleanup_pad() below, a JIT that records the native
+ * cleanup table and spills the throwing frame's registers, and a working
+ * arch_bpf_stack_walk(). Without all of that a program carrying a cleanup
+ * table is rejected at load time.
+ */
+bool __weak bpf_jit_supports_cleanup_pads(void)
+{
+	return false;
+}
+
+/*
+ * Run the landing pad at @pad as if it were code of the frame whose frame
+ * pointer is @frame_fp: restore that frame's BPF callee-saved registers from
+ * @spill_base -- the area its callee's prologue spilled them to -- and call
+ * the pad. The pad ends in the bare return the JIT emits for
+ * the pad's bpf_unwind_resume(), so control comes back here.
+ *
+ * The pad runs on the current stack, far below @frame_fp, so nothing it calls
+ * can disturb the frame it is cleaning up after.
+ */
+void __weak arch_bpf_run_cleanup_pad(u64 pad, u64 frame_fp, u64 spill_base)
+{
+	WARN_ON_ONCE(1);
 }
 
 bool __weak bpf_jit_supports_timed_may_goto(void)

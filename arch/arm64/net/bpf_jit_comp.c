@@ -11,6 +11,7 @@
 #include <linux/bitfield.h>
 #include <linux/bpf.h>
 #include <linux/cfi.h>
+#include <linux/bpf_verifier.h>
 #include <linux/filter.h>
 #include <linux/memory.h>
 #include <linux/printk.h>
@@ -75,7 +76,17 @@ static const int bpf2a64[] = {
 	[ARENA_VM_START] = A64_R(28),
 };
 
+/*
+ * The five register pairs push_callee_regs() forces on for a program carrying
+ * a cleanup table. The throw-site spill mirrors this area exactly -- same size,
+ * same slot order -- so arch_bpf_run_cleanup_pad() reads either one the same
+ * way.
+ */
+#define A64_CLEANUP_SPILL_SZ	(5 * 16)
+
 struct jit_ctx {
+	/* Bytes reserved for the throw-site spill; see bpf_cleanup_force_spill(). */
+	u32 throw_spill;
 	const struct bpf_prog *prog;
 	int idx;
 	int epilogue_offset;
@@ -432,7 +443,7 @@ static void push_callee_regs(struct jit_ctx *ctx)
 	 * Callee-saved registers as the exception callback needs to recover
 	 * all ARM64 Callee-saved registers in its epilogue.
 	 */
-	if (ctx->prog->aux->exception_boundary) {
+	if (ctx->prog->aux->exception_boundary || bpf_cleanup_force_spill(ctx->prog)) {
 		emit(A64_PUSH(A64_R(19), A64_R(20), A64_SP), ctx);
 		emit(A64_PUSH(A64_R(21), A64_R(22), A64_SP), ctx);
 		emit(A64_PUSH(A64_R(23), A64_R(24), A64_SP), ctx);
@@ -466,7 +477,8 @@ static void pop_callee_regs(struct jit_ctx *ctx)
 	 * program's stack frame, so recover these extra registers in the above
 	 * two cases.
 	 */
-	if (aux->exception_boundary || aux->exception_cb) {
+	if (aux->exception_boundary || aux->exception_cb ||
+	    bpf_cleanup_force_spill(ctx->prog)) {
 		emit(A64_POP(A64_R(27), A64_R(28), A64_SP), ctx);
 		emit(A64_POP(A64_R(25), A64_R(26), A64_SP), ctx);
 		emit(A64_POP(A64_R(23), A64_R(24), A64_SP), ctx);
@@ -600,6 +612,33 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf)
 		 * 12 registers are on the stack
 		 */
 		emit(A64_SUB_I(1, A64_SP, A64_FP, 96), ctx);
+	}
+
+	/*
+	 * Lowest address of the callee-saved spill area, as an offset from
+	 * this frame's A64_FP: the frame record is at [FP], the tail call
+	 * counter pair below it, then the five register pairs above forced
+	 * on. arch_bpf_run_cleanup_pad() reads the caller's r6-r9 from here.
+	 */
+	if (bpf_cleanup_force_spill(prog)) {
+		prog->aux->cleanup_spill_off = -(16 + A64_CLEANUP_SPILL_SZ);
+		/*
+		 * A frame that calls bpf_throw() spills its own BPF
+		 * callee-saved registers before doing so: it has no BPF callee
+		 * to have spilled them, and it never runs its epilogue, so
+		 * this is the only copy the walker can find.
+		 *
+		 * Reserved immediately below the callee-saved area rather than
+		 * inside the program stack, so that it stays at a fixed
+		 * distance from A64_FP even when the program stack lives
+		 * somewhere else entirely (a private stack). Sized and laid
+		 * out exactly like the prologue's area, so that the walker
+		 * reads both the same way.
+		 */
+		ctx->throw_spill = A64_CLEANUP_SPILL_SZ;
+		emit(A64_SUB_I(1, A64_SP, A64_SP, ctx->throw_spill), ctx);
+		prog->aux->cleanup_throw_spill_off =
+			-(16 + A64_CLEANUP_SPILL_SZ) - ctx->throw_spill;
 	}
 
 	/* Stack must be multiples of 16B */
@@ -1055,6 +1094,9 @@ static void build_epilogue(struct jit_ctx *ctx, bool was_classic)
 	if (ctx->stack_size && !ctx->priv_sp_used)
 		emit(A64_ADD_I(1, A64_SP, A64_SP, ctx->stack_size), ctx);
 
+	if (ctx->throw_spill)
+		emit(A64_ADD_I(1, A64_SP, A64_SP, ctx->throw_spill), ctx);
+
 	pop_callee_regs(ctx);
 
 	emit(A64_POP(A64_ZR, ptr, A64_SP), ctx);
@@ -1325,7 +1367,13 @@ static int build_insn(const struct bpf_verifier_env *env, const struct bpf_insn 
 	int ret;
 	bool sign_extend;
 
-	if (bpf_insn_is_indirect_target(env, ctx->prog, i))
+	/*
+	 * A landing pad needs one too: bpf_throw() reaches it with "br" and a
+	 * pad is not a function entry, so without this BTI faults on the way
+	 * in. One marker covers an instruction that is both.
+	 */
+	if (bpf_insn_is_indirect_target(env, ctx->prog, i) ||
+	    bpf_cleanup_insn_is_pad(ctx->prog, i))
 		emit_bti(A64_BTI_J, ctx);
 
 	switch (code) {
@@ -1689,6 +1737,55 @@ emit_cond_jmp:
 		bool func_addr_fixed;
 		u64 func_addr;
 		u32 cpu_offset;
+
+		if (bpf_cleanup_insn_is_throw(ctx->prog, insn - ctx->prog->insnsi)) {
+			/*
+			 * This frame is about to be unwound and will never run
+			 * its epilogue, so the registers a callee's prologue
+			 * would have spilled for it are about to be lost.
+			 * Write them where the bpf_throw() walker looks; see
+			 * aux->cleanup_throw_spill_off.
+			 *
+			 * The slot order is push_callee_regs()' order, because
+			 * arch_bpf_run_cleanup_pad() reads this area and a
+			 * callee's prologue area with the same offsets. x23
+			 * and x24 occupy the pair at 32 but are not read back
+			 * -- nothing generated touches them -- so they are
+			 * left alone. Only a program that carries a cleanup
+			 * table has any throw site recorded, so ctx->throw_spill
+			 * is nonzero and the area is reserved.
+			 */
+			const s32 off = ctx->prog->aux->cleanup_throw_spill_off;
+
+			/*
+			 * A64_STR64I takes an unsigned scaled offset, so the
+			 * base has to be the bottom of the area rather than
+			 * A64_FP with a negative displacement.
+			 */
+			emit(A64_SUB_I(1, tmp, A64_FP, -off), ctx);
+			emit(A64_STR64I(bpf2a64[PRIVATE_SP], tmp, 0), ctx);
+			emit(A64_STR64I(bpf2a64[ARENA_VM_START], tmp, 8), ctx);
+			emit(A64_STR64I(bpf2a64[BPF_REG_FP], tmp, 16), ctx);
+			emit(A64_STR64I(bpf2a64[TCCNT_PTR], tmp, 24), ctx);
+			emit(A64_STR64I(bpf2a64[BPF_REG_8], tmp, 48), ctx);
+			emit(A64_STR64I(bpf2a64[BPF_REG_9], tmp, 56), ctx);
+			emit(A64_STR64I(bpf2a64[BPF_REG_6], tmp, 64), ctx);
+			emit(A64_STR64I(bpf2a64[BPF_REG_7], tmp, 72), ctx);
+		}
+
+		if (bpf_is_unwind_resume_kfunc(insn)) {
+			/*
+			 * End of an exception cleanup landing pad. The frame
+			 * is not being returned to -- the bpf_throw() walker
+			 * called this pad and is waiting for it -- so hand
+			 * control straight back without running the frame's
+			 * epilogue. x30 is long gone, clobbered by the pad's
+			 * own calls; arch_bpf_run_cleanup_pad() left the
+			 * address in x23, which nothing generated touches.
+			 */
+			emit(A64_BR(A64_R(23)), ctx);
+			break;
+		}
 
 		/* Implement helper call to bpf_get_smp_processor_id() inline */
 		if (insn->src_reg == 0 && insn->imm == BPF_FUNC_get_smp_processor_id) {
@@ -2351,6 +2448,13 @@ skip_init_ctx:
 		 * reasons, expects to point to the next instruction)
 		 */
 		bpf_prog_update_insn_ptrs(prog, ctx.offset, ctx.ro_image);
+
+		/*
+		 * Same byte offsets, consumed by the bpf_throw() frame walker:
+		 * turn the cleanup records into native address ranges now that
+		 * the image is final.
+		 */
+		bpf_cleanup_fill_native_pads(prog, ctx.offset, ctx.ro_image);
 out_off:
 		if (!ro_header && priv_stack_ptr) {
 			free_percpu(priv_stack_ptr);
@@ -3304,6 +3408,15 @@ bool bpf_jit_supports_exceptions(void)
 	 * to walk kernel frames and reach BPF frames in the stack trace.
 	 * ARM64 kernel is always compiled with CONFIG_FRAME_POINTER=y
 	 */
+	return true;
+}
+
+/*
+ * arch_bpf_stack_walk() is unconditional here and the frame pointer is always
+ * available, so the only other requirement is the forced spill above.
+ */
+bool bpf_jit_supports_cleanup_pads(void)
+{
 	return true;
 }
 

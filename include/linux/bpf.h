@@ -1739,6 +1739,65 @@ enum bpf_sig_keyring {
 	BPF_SIG_KEYRING_BPF,
 };
 
+/*
+ * Size of the area a JIT reserves for the throwing frame to spill its own BPF
+ * callee-saved registers into, laid out exactly as a prologue spill so the
+ * walker reads both the same way. Four BPF registers (r6-r9) plus whatever
+ * else the arch pins there.
+ */
+#define BPF_CALLEE_SAVED_SPILL_SZ	(5 * 8)
+
+/*
+ * One exception cleanup region of a JITed (sub)program. @begin and @end
+ * bracket the native code of the covered call sites and @pad is the native
+ * address of the landing pad to run. The walker holds a return address, which
+ * is one instruction past a covered call, so the test is (begin, end].
+ */
+struct bpf_cleanup_pad {
+	u64 begin;
+	u64 end;
+	u64 pad;
+};
+
+#ifdef CONFIG_BPF_SYSCALL
+bool bpf_cleanup_force_spill(const struct bpf_prog *prog);
+const struct bpf_cleanup_pad *bpf_cleanup_pad_for_ip(const struct bpf_prog *prog, u64 ip);
+bool bpf_cleanup_insn_is_pad(const struct bpf_prog *prog, u32 idx);
+bool bpf_cleanup_insn_is_throw(const struct bpf_prog *prog, u32 idx);
+int bpf_cleanup_attach_info(struct bpf_prog_aux *aux, struct bpf_cleanup_info *recs, u32 cnt);
+void bpf_cleanup_fill_native_pads(struct bpf_prog *prog, u32 *addrs, void *image);
+void bpf_cleanup_free_info(struct bpf_prog_aux *aux);
+#else
+static inline bool bpf_cleanup_force_spill(const struct bpf_prog *prog)
+{
+	return false;
+}
+static inline const struct bpf_cleanup_pad *
+bpf_cleanup_pad_for_ip(const struct bpf_prog *prog, u64 ip)
+{
+	return NULL;
+}
+static inline bool bpf_cleanup_insn_is_pad(const struct bpf_prog *prog, u32 idx)
+{
+	return false;
+}
+static inline bool bpf_cleanup_insn_is_throw(const struct bpf_prog *prog, u32 idx)
+{
+	return false;
+}
+static inline int bpf_cleanup_attach_info(struct bpf_prog_aux *aux,
+					  struct bpf_cleanup_info *recs, u32 cnt)
+{
+	return 0;
+}
+static inline void bpf_cleanup_fill_native_pads(struct bpf_prog *prog, u32 *addrs, void *image)
+{
+}
+static inline void bpf_cleanup_free_info(struct bpf_prog_aux *aux)
+{
+}
+#endif
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1819,6 +1878,52 @@ struct bpf_prog_aux {
 	char name[BPF_OBJ_NAME_LEN];
 	u64 (*bpf_exception_cb)(u64 cookie, u64 sp, u64 bp, u64, u64);
 	u16 stack_arg_sp_adjust;
+	/*
+	 * Exception cleanup landing pads for this (sub)program, in the form
+	 * the runtime needs: @cleanup_info holds the compiler's records with
+	 * offsets made relative to this subprogram, and the JIT turns them
+	 * into the native address ranges of @cleanup_pads. @cleanup_spill_off
+	 * is the offset from this frame's frame pointer to where its prologue
+	 * spilled its caller's BPF callee-saved registers, which is what lets
+	 * the walker restore the caller before running the caller's pad.
+	 */
+	struct bpf_cleanup_info *cleanup_info;
+	struct bpf_cleanup_pad *cleanup_pads;
+	/*
+	 * The landing pads' instruction indices, sorted and deduplicated, so
+	 * a JIT walking the program in order can ask whether the instruction
+	 * it is about to emit begins one. Several records may name the same
+	 * pad, so this is not simply a column of @cleanup_info.
+	 */
+	u32 *cleanup_pad_at;
+	/*
+	 * The indices of this (sub)program's bpf_throw() calls, sorted, so the
+	 * JIT can ask whether the call it is about to emit is the one that
+	 * has to spill the throwing frame's registers. It cannot tell from the
+	 * instruction: do_misc_fixups() has resolved insn->imm from the
+	 * kfunc's BTF id to a call offset by the time the JIT runs.
+	 */
+	u32 *cleanup_throw_at;
+	u32 nr_cleanup_info;
+	u32 nr_cleanup_pads;
+	u32 nr_cleanup_pad_at;
+	u32 nr_cleanup_throw_at;
+	s32 cleanup_spill_off;
+	/*
+	 * Offset from a frame's frame pointer to where the JIT spills that
+	 * frame's own BPF callee-saved registers before calling bpf_throw().
+	 * The frame that throws has no BPF callee to have spilled them, and
+	 * it never runs its epilogue, so it writes them itself. Same layout
+	 * as @cleanup_spill_off, so the walker reads both the same way.
+	 */
+	s32 cleanup_throw_spill_off;
+	/*
+	 * Set on every subprogram of a program that carries a cleanup table,
+	 * including those with no records of their own: a frame's prologue
+	 * spill is what lets the walker restore its *caller* before running
+	 * the caller's pad, so the shape has to be uniform.
+	 */
+	bool has_cleanup_table;
 #ifdef CONFIG_SECURITY
 	void *security;
 #endif

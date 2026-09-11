@@ -262,6 +262,14 @@ static void adjust_insn_aux_data(struct bpf_verifier_env *env,
 	}
 
 	/*
+	 * Landing pad indices move with the code they name; see
+	 * bpf_insn_aux_data.cleanup_pad.
+	 */
+	for (i = 0; i < prog_len; i++)
+		if (data[i].cleanup_pad > off + 1)
+			data[i].cleanup_pad += cnt - 1;
+
+	/*
 	 * Last slot instruction could be a newly generated
 	 * BPF_ST/BPF_LDX/BPF_STX, systematically mark it for non-stack access
 	 * if it is not the original instruction, otherwise keep the
@@ -549,6 +557,7 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 	struct bpf_insn_aux_data *aux_data = env->insn_aux_data;
 	unsigned int orig_prog_len = env->prog->len;
 	int err;
+	u32 i;
 
 	if (bpf_prog_is_offloaded(env->prog->aux))
 		bpf_prog_offload_remove_insns(env, off, cnt);
@@ -572,6 +581,11 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 	memmove(aux_data + off,	aux_data + off + cnt,
 		sizeof(*aux_data) * (orig_prog_len - off - cnt));
 	env->insn_aux_data_len -= cnt;
+
+	/* Likewise; a pad is never itself removed, it is a root of every walk. */
+	for (i = 0; i < env->insn_aux_data_len; i++)
+		if (aux_data[i].cleanup_pad > off + cnt)
+			aux_data[i].cleanup_pad -= cnt;
 
 	return 0;
 }
@@ -1095,6 +1109,98 @@ static void bpf_restore_subprog_starts(struct bpf_verifier_env *env, u32 *orig_s
 	env->subprog_info[env->subprog_cnt].start = env->prog->len;
 }
 
+/*
+ * Hand subprogram @sub the indices of its bpf_throw() calls, rebased onto it,
+ * so that its JIT can spill the throwing frame's registers at each one.
+ *
+ * bpf_check_cleanup_exceptions() marked the calls in insn_aux_data before any
+ * pass could move or rewrite them; the marks have been carried along by every
+ * bpf_patch_insn_data() since, and instruction indices are final by now, so
+ * this is the point where the two can be turned into a table.
+ */
+static int cleanup_throw_sites_for_subprog(struct bpf_verifier_env *env, struct bpf_prog *sub,
+					   u32 start, u32 end)
+{
+	u32 i, cnt = 0, *at;
+
+	for (i = start; i < end; i++)
+		if (env->insn_aux_data[i].cleanup_throw_site)
+			cnt++;
+	if (!cnt)
+		return 0;
+
+	at = kvmalloc_array(cnt, sizeof(*at), GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+	if (!at)
+		return -ENOMEM;
+
+	for (i = start, cnt = 0; i < end; i++)
+		if (env->insn_aux_data[i].cleanup_throw_site)
+			at[cnt++] = i - start;
+
+	sub->aux->cleanup_throw_at = at;
+	sub->aux->nr_cleanup_throw_at = cnt;
+	return 0;
+}
+
+/*
+ * Build subprogram @sub's exception cleanup table from the marks
+ * bpf_check_cleanup_exceptions() painted on its call sites, so that the JIT
+ * can turn them into the native address ranges the bpf_throw() walker
+ * searches.
+ *
+ * One record per covered call rather than one per compiler-emitted region:
+ * the walker only ever asks whether a return address belongs to a covered
+ * call, and a per-call range says that exactly, with no offsets to keep in
+ * step with the region's interior.
+ *
+ * @start and @end bracket the subprogram, and the indices are rebased onto it
+ * because that is what the JIT's addrs[] is indexed by.
+ */
+static int cleanup_info_for_subprog(struct bpf_verifier_env *env, struct bpf_prog *sub,
+				    u32 start, u32 end)
+{
+	struct bpf_cleanup_info *recs;
+	u32 i, cnt = 0;
+	int err;
+
+	sub->aux->has_cleanup_table = env->cleanup_info_cnt != 0;
+	if (!env->cleanup_info_cnt)
+		return 0;
+
+	err = cleanup_throw_sites_for_subprog(env, sub, start, end);
+	if (err)
+		return err;
+
+	for (i = start; i < end; i++)
+		if (env->insn_aux_data[i].cleanup_pad)
+			cnt++;
+	if (!cnt)
+		return 0;
+
+	recs = kvmalloc_array(cnt, sizeof(*recs), GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+	if (!recs)
+		return -ENOMEM;
+
+	for (i = start, cnt = 0; i < end; i++) {
+		u32 pad = env->insn_aux_data[i].cleanup_pad;
+
+		if (!pad)
+			continue;
+		pad--;
+		if (verifier_bug_if(pad < start || pad >= end, env,
+				    "insn %u is covered by a landing pad at %u outside its subprog [%u, %u)",
+				    i, pad, start, end)) {
+			kvfree(recs);
+			return -EFAULT;
+		}
+		recs[cnt].begin_off = i - start;
+		recs[cnt].end_off = i - start + 1;
+		recs[cnt].landing_pad_off = pad - start;
+		cnt++;
+	}
+	return bpf_cleanup_attach_info(sub->aux, recs, cnt);
+}
+
 static int jit_subprogs(struct bpf_verifier_env *env)
 {
 	struct bpf_prog *prog = env->prog, **func, *tmp;
@@ -1232,6 +1338,10 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->token = prog->aux->token;
 		if (!i)
 			func[i]->aux->exception_boundary = env->seen_exception;
+		err = cleanup_info_for_subprog(env, func[i], subprog_start,
+					       env->subprog_info[i + 1].start);
+		if (err)
+			goto out_free;
 		func[i] = bpf_int_jit_compile(env, func[i]);
 		if (!func[i]->jited) {
 			err = -ENOTSUPP;
@@ -1336,6 +1446,23 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	prog->aux->bpf_exception_cb = (void *)func[env->exception_callback_subprog]->bpf_func;
 	prog->aux->exception_boundary = func[0]->aux->exception_boundary;
 	prog->aux->stack_arg_sp_adjust = func[0]->aux->stack_arg_sp_adjust;
+	/*
+	 * The main program runs func[0]'s image, but the ksym covering that
+	 * image is the one bpf_prog_load() registers for @prog -- the loop
+	 * above starts at 1 for exactly that reason. So the bpf_throw()
+	 * walker, which finds a frame's (sub)program by looking its return
+	 * address up in the ksym tree, gets @prog here and would find no
+	 * cleanup table on it. Hand over what it needs to dispatch a landing
+	 * pad in the main program's own frame, and to read that frame's
+	 * spilled registers. The table is moved rather than shared, so that
+	 * only one of the two ever frees it.
+	 */
+	prog->aux->cleanup_spill_off = func[0]->aux->cleanup_spill_off;
+	prog->aux->cleanup_throw_spill_off = func[0]->aux->cleanup_throw_spill_off;
+	prog->aux->nr_cleanup_pads = func[0]->aux->nr_cleanup_pads;
+	prog->aux->cleanup_pads = func[0]->aux->cleanup_pads;
+	func[0]->aux->nr_cleanup_pads = 0;
+	func[0]->aux->cleanup_pads = NULL;
 	bpf_prog_jit_attempt_done(prog);
 	return 0;
 out_free:
@@ -1371,8 +1498,13 @@ int bpf_jit_subprogs(struct bpf_verifier_env *env)
 	struct bpf_prog *prog, *orig_prog;
 	u32 *orig_subprog_starts;
 
-	if (env->subprog_cnt <= 1)
-		return 0;
+	if (env->subprog_cnt <= 1) {
+		/*
+		 * One function, so the table already describes it: hand it
+		 * straight over, offsets unchanged.
+		 */
+		return cleanup_info_for_subprog(env, env->prog, 0, env->prog->len);
+	}
 
 	prog = orig_prog = env->prog;
 	if (bpf_prog_need_blind(prog)) {
@@ -1915,6 +2047,15 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 		if (insn->code != (BPF_JMP | BPF_CALL))
 			goto next_insn;
 		if (insn->src_reg == BPF_PSEUDO_CALL)
+			goto next_insn;
+		/*
+		 * The end of an exception cleanup landing pad. Not really a
+		 * call -- the JIT emits a bare return for it -- so nothing
+		 * below applies, and in particular it must not be resolved:
+		 * leaving insn->imm as the kfunc's BTF id is what lets the JIT
+		 * still recognise it with bpf_is_unwind_resume_kfunc().
+		 */
+		if (bpf_is_unwind_resume_kfunc(insn))
 			goto next_insn;
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			ret = bpf_fixup_kfunc_call(env, insn, insn_buf, i + delta, &cnt);
