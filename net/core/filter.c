@@ -4378,6 +4378,13 @@ static bool bpf_xdp_shrink_data(struct xdp_buff *xdp, skb_frag_t *frag,
 	if (mem_type == MEM_TYPE_XSK_BUFF_POOL) {
 		netmem = 0;
 		zc_frag = bpf_xdp_shrink_data_zc(xdp, shrink, tail, release);
+	} else if (xdp_buff_is_frag_pp(xdp)) {
+		/*
+		 * Skb-backed XDP (generic XDP, veth) cow's the frags into a
+		 * page_pool while the rxq stays MEM_TYPE_PAGE_SHARED, so free
+		 * the frag to the pool, not via page_frag_free().
+		 */
+		mem_type = MEM_TYPE_PAGE_POOL;
 	}
 
 	if (release) {
