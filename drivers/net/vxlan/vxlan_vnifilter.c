@@ -488,7 +488,7 @@ static int vxlan_update_default_fdb_entry(struct vxlan_dev *vxlan, __be32 vni,
 				       vni,
 				       vni,
 				       dst->remote_ifindex,
-				       NTF_SELF, 0, true, extack);
+				       NTF_SELF, 0, true, NULL, extack);
 		if (err) {
 			spin_unlock_bh(&vxlan->hash_lock);
 			return err;
