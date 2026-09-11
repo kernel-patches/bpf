@@ -126,9 +126,7 @@ struct coex_sta_8723b_2ant {
 	u8 btInfoExt;
 };
 
-/*  */
 /*  The following is interface which will notify coex module. */
-/*  */
 void EXhalbtc8723b2ant_PowerOnSetting(struct btc_coexist *pBtCoexist);
 void EXhalbtc8723b2ant_InitHwConfig(struct btc_coexist *pBtCoexist, bool bWifiOnly);
 void EXhalbtc8723b2ant_InitCoexDm(struct btc_coexist *pBtCoexist);

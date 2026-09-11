@@ -197,9 +197,8 @@ struct odm_rate_adaptive {
 #define		DM_Type_ByFW			0
 #define		DM_Type_ByDriver		1
 
-/*  */
 /*  Declare for common info */
-/*  */
+
 #define MAX_PATH_NUM_8723B		1
 
 #define IQK_THRESHOLD			8
@@ -262,9 +261,7 @@ struct odm_mac_status_info {
 	u8 test;
 };
 
-/*  */
 /*  2011/10/20 MH Define Common info enum for all team. */
-/*  */
 enum odm_cmninfo_e {
 	/*  Fixed value: */
 
@@ -350,9 +347,7 @@ enum odm_cmninfo_e {
 
 /*  2011/10/20 MH Define ODM support ability.  ODM_CMNINFO_ABILITY */
 enum { /* _ODM_Support_Ability_Definition */
-	/*  */
 	/*  BB ODM section BIT 0-15 */
-	/*  */
 	ODM_BB_DIG			= BIT(0),
 	ODM_BB_RA_MASK			= BIT(1),
 	ODM_BB_DYNAMIC_TXPWR		= BIT(2),
@@ -410,9 +405,7 @@ enum { /* tag_ODM_Fab_Version_Definition */
 	ODM_UMC		=	1,
 };
 
-/*  */
 /*  For example 1T2R (A+AB = BIT0|BIT4|BIT5) */
-/*  */
 enum { /* tag_ODM_RF_Type_Definition */
 	ODM_1T1R	=	0,
 	ODM_1T2R	=	1,
@@ -424,9 +417,7 @@ enum { /* tag_ODM_RF_Type_Definition */
 	ODM_4T4R	=	7,
 };
 
-/*  */
 /*  ODM Dynamic common info value definition */
-/*  */
 
 /*  ODM_CMNINFO_WM_MODE */
 enum { /* tag_Wireless_Mode_Definition */
@@ -531,8 +522,6 @@ struct odm_rf_cal_t { /* ODM_RF_Calibration_Structure */
 	u8 DeltaSwingTableIdx_2GA_P_8188E[DELTA_SWINGIDX_SIZE];
 	u8 DeltaSwingTableIdx_2GA_N_8188E[DELTA_SWINGIDX_SIZE];
 
-	/*  */
-
 	/* for IQK */
 	u32 RegC04;
 	u32 Reg874;
@@ -567,10 +556,8 @@ struct odm_rf_cal_t { /* ODM_RF_Calibration_Structure */
 	u32 TxLOK[2];
 
 };
-/*  */
-/*  ODM Dynamic common info value definition */
-/*  */
 
+/*  ODM Dynamic common info value definition */
 struct fat_t { /* _FAST_ANTENNA_TRAINNING_ */
 	u8 Bssid[6];
 	u8 antsel_rx_keep_0;
@@ -633,9 +620,7 @@ enum phy_reg_pg_type { /* _BASEBAND_CONFIG_PHY_REG_PG_VALUE_TYPE */
 	PHY_REG_PG_EXACT_VALUE = 1
 };
 
-/*  */
 /*  Antenna detection information from single tone mechanism, added by Roger, 2012.11.27. */
-/*  */
 struct ant_detected_info {
 	bool bAntDetected;
 	u32 dBForAntA;
@@ -643,9 +628,7 @@ struct ant_detected_info {
 	u32 dBForAntO;
 };
 
-/*  */
 /*  2011/09/22 MH Copy from SD4 defined structure. We use to support PHY DM integration. */
-/*  */
 struct dm_odm_t { /* DM_Out_Source_Dynamic_Mechanism_Structure */
 	struct adapter *Adapter;		/*  For CE/NIC team */
 	/*  WHen you use Adapter or priv pointer, you must make sure the pointer is ready. */
@@ -668,9 +651,7 @@ struct dm_odm_t { /* DM_Out_Source_Dynamic_Mechanism_Structure */
 
 /* 1  COMMON INFORMATION */
 
-	/*  */
 	/*  Init Value */
-	/*  */
 /* HOOK BEFORE REG INIT----------- */
 	/*  ODM Platform info AP/ADSL/CE/MP = 1/2/3/4 */
 	u8 SupportPlatform;
@@ -708,9 +689,8 @@ struct dm_odm_t { /* DM_Out_Source_Dynamic_Mechanism_Structure */
 	u8 AntDivType;
 /* HOOK BEFORE REG INIT----------- */
 
-	/*  */
 	/*  Dynamic Value */
-	/*  */
+
 /*  POINTER REFERENCE----------- */
 
 	u8 u8_temp;
@@ -830,16 +810,13 @@ struct dm_odm_t { /* DM_Out_Source_Dynamic_Mechanism_Structure */
 	u8 Adaptivity_IGI_upper;
 	u8 NHM_cnt_0;
 
-	/*  */
 	/* 2 Define STA info. */
 	/*  _ODM_STA_INFO */
 	/*  2012/01/12 MH For MP, we need to reduce one array pointer for default port.?? */
 	PSTA_INFO_T pODM_StaInfo[ODM_ASSOCIATE_ENTRY_NUM];
 
-	/*  */
 	/*  2012/02/14 MH Add to share 88E ra with other SW team. */
 	/*  We need to colelct all support abilit to a proper area. */
-	/*  */
 	bool RaSupport88E;
 
 	/*  Define ........... */
@@ -850,9 +827,7 @@ struct dm_odm_t { /* DM_Out_Source_Dynamic_Mechanism_Structure */
 	/*  Latest packet phy info (ODM write) */
 	struct odm_mac_status_info *pMacInfo;
 
-	/*  */
 	/* ODM Structure */
-	/*  */
 	struct fat_t DM_FatTable;
 	struct dig_t DM_DigTable;
 	struct ps_t DM_PSTable;
@@ -869,9 +844,7 @@ struct dm_odm_t { /* DM_Out_Source_Dynamic_Mechanism_Structure */
 	u32 WMMEDCA_BE;
 	struct pathdiv_t DM_PathDiv;
 	/*  Copy from SD4 structure */
-	/*  */
 	/*  ================================================== */
-	/*  */
 
 	/* common */
 
@@ -899,9 +872,7 @@ struct dm_odm_t { /* DM_Out_Source_Dynamic_Mechanism_Structure */
 
 	struct odm_rf_cal_t RFCalibrateInfo;
 
-	/*  */
 	/*  TX power tracking */
-	/*  */
 	u8 BbSwingIdxOfdm[MAX_RF_PATH];
 	u8 BbSwingIdxOfdmCurrent;
 	u8 BbSwingIdxOfdmBase[MAX_RF_PATH];
@@ -924,9 +895,8 @@ struct dm_odm_t { /* DM_Out_Source_Dynamic_Mechanism_Structure */
 	bool Modify_TxAGC_Flag_PathA_CCK;
 
 	s8 KfreeOffset[MAX_RF_PATH];
-	/*  */
+
 	/*  ODM system resource. */
-	/*  */
 
 	/*  ODM relative time. */
 	struct timer_list PathDivSwitchTimer;
@@ -1018,16 +988,12 @@ enum { /* tag_RF_Type_Definition */
 /*  Maximal number of antenna detection mechanism needs to perform, added by Roger, 2011.12.28. */
 #define	MAX_ANTENNA_DETECTION_CNT	10
 
-/*  */
 /*  Extern Global Variables. */
-/*  */
 extern	u32 OFDMSwingTable_New[OFDM_TABLE_SIZE];
 extern	u8 CCKSwingTable_Ch1_Ch13_New[CCK_TABLE_SIZE][8];
 extern	u8 CCKSwingTable_Ch14_New[CCK_TABLE_SIZE][8];
 
-/*  */
 /*  check Sta pointer valid or not */
-/*  */
 #define IS_STA_VALID(pSta)		(pSta)
 /*  20100514 Joseph: Add definition for antenna switching test after link. */
 /*  This indicates two different the steps. */
