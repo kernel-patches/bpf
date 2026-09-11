@@ -8,6 +8,8 @@
 #include <linux/memcontrol.h>
 #include <linux/bpf.h>
 
+#include "internal.h"
+
 __bpf_kfunc_start_defs();
 
 /**
@@ -159,6 +161,74 @@ __bpf_kfunc void bpf_mem_cgroup_flush_stats(struct mem_cgroup *memcg)
 	mem_cgroup_flush_stats(memcg);
 }
 
+/**
+ * bpf_proactive_reclaim - proactively reclaim memory from a memory
+ *                         cgroup
+ * @memcg: the target memory cgroup to reclaim from
+ * @size:  the amount of memory to reclaim, in bytes, clamped to
+ *         MEMCG_CHARGE_BATCH (64 pages)
+ * @swappiness: the reclaim swappiness, in the range
+ *         [MIN_SWAPPINESS, SWAPPINESS_ANON_ONLY], where
+ *         SWAPPINESS_ANON_ONLY means anon-only reclaim, or -1 to use
+ *         the memcg's own swappiness
+ *
+ * Trigger one proactive reclaim pass on @memcg, similar to a write to
+ * memory.reclaim, but without retrying until @size is reached.
+ *
+ * Only the reclaim target is capped: @size is clamped to
+ * MEMCG_CHARGE_BATCH, following the precedent of high_work_func(),
+ * the memory.high workqueue fallback, which bounds each reclaim
+ * request the same way. The actual scanning work and its duration
+ * are not bounded. To reclaim more, call this kfunc repeatedly
+ * instead of passing a larger @size.
+ *
+ * The kfunc can be called directly from a BPF_PROG_TYPE_SYSCALL
+ * program, synchronously in the context of the thread running the
+ * program, or from the bpf_wq and task_work callbacks of a SYSCALL
+ * program, which run in process context and keep the SYSCALL program
+ * type. It is registered for BPF_PROG_TYPE_SYSCALL only, because
+ * generic sleepable programs may run with filesystem locks held or
+ * in NOFS/NOIO contexts, where the reclaim path could deadlock on
+ * those locks via filesystem shrinkers.
+ *
+ * For asynchronous reclaim of more than one batch, driving the
+ * reclaim from a bpf_wq callback is recommended: call this kfunc
+ * once per callback and requeue the same work item for the next
+ * batch, instead of looping inside the callback and monopolizing a
+ * workqueue worker, and give each target memcg its own work item,
+ * as high_work_func() does with one work item per memcg. Whether
+ * to submit the next batch is up to the BPF program, which can stop
+ * at any point, e.g. once the target cgroup is dying.
+ *
+ * Return: The amount of memory reclaimed, in bytes, or 0 if @size is
+ * smaller than a page, or (unsigned long)-1 if @swappiness is out of
+ * range.
+ */
+__bpf_kfunc unsigned long bpf_proactive_reclaim(struct mem_cgroup *memcg,
+						unsigned long size,
+						int swappiness)
+{
+	unsigned long nr_reclaimed;
+	unsigned long nr_pages;
+
+	if (swappiness < -1 || swappiness > SWAPPINESS_ANON_ONLY)
+		return (unsigned long)-1;
+
+	if (size < PAGE_SIZE)
+		return 0;
+
+	nr_pages = min(size / PAGE_SIZE, (unsigned long)MEMCG_CHARGE_BATCH);
+
+	nr_reclaimed = try_to_free_mem_cgroup_pages(memcg, nr_pages,
+						    GFP_KERNEL,
+						    MEMCG_RECLAIM_MAY_SWAP |
+						    MEMCG_RECLAIM_PROACTIVE,
+						    swappiness == -1 ? NULL :
+								       &swappiness);
+
+	return nr_reclaimed * PAGE_SIZE;
+}
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(bpf_memcontrol_kfuncs)
@@ -174,9 +244,18 @@ BTF_ID_FLAGS(func, bpf_mem_cgroup_flush_stats, KF_SLEEPABLE)
 
 BTF_KFUNCS_END(bpf_memcontrol_kfuncs)
 
+BTF_KFUNCS_START(bpf_memcontrol_reclaim_kfuncs)
+BTF_ID_FLAGS(func, bpf_proactive_reclaim, KF_SLEEPABLE)
+BTF_KFUNCS_END(bpf_memcontrol_reclaim_kfuncs)
+
 static const struct btf_kfunc_id_set bpf_memcontrol_kfunc_set = {
 	.owner          = THIS_MODULE,
 	.set            = &bpf_memcontrol_kfuncs,
+};
+
+static const struct btf_kfunc_id_set bpf_memcontrol_reclaim_kfunc_set = {
+	.owner          = THIS_MODULE,
+	.set            = &bpf_memcontrol_reclaim_kfuncs,
 };
 
 static int __init bpf_memcontrol_init(void)
@@ -185,8 +264,15 @@ static int __init bpf_memcontrol_init(void)
 
 	err = register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC,
 					&bpf_memcontrol_kfunc_set);
-	if (err)
+	if (err) {
 		pr_warn("error while registering bpf memcontrol kfuncs: %d", err);
+		return err;
+	}
+
+	err = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
+					&bpf_memcontrol_reclaim_kfunc_set);
+	if (err)
+		pr_warn("error registering bpf reclaim kfuncs: %d", err);
 
 	return err;
 }
