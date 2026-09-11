@@ -252,7 +252,13 @@ over a rather long period of time, but improvements are always welcome!
 	a.	If the updater uses synchronize_rcu_tasks() or
 		call_rcu_tasks(), then the readers must refrain from
 		executing voluntary context switches, that is, from
-		blocking.
+		blocking.  On architectures that select
+		CONFIG_ARCH_HAS_RCU_TASKS_PREEMPT_QS an involuntary
+		context switch is also a quiescent state unless
+		current->rcu_tramp_nesting is non-zero, so a reader
+		there is a trampoline that maintains that count (see
+		rcu_tasks_trampoline_enter()), not an arbitrary
+		stretch of kernel code.
 
 	b.	If the updater uses call_rcu_tasks_trace()
 		or synchronize_rcu_tasks_trace(), then the

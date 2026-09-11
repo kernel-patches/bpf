@@ -2739,13 +2739,27 @@ userspace execution also delimit tasks-RCU read-side critical sections.
 Idle tasks are ignored by Tasks RCU, and Tasks Rude RCU may be used to
 interact with them.
 
-Note well that involuntary context switches are *not* Tasks-RCU quiescent
-states.  After all, in preemptible kernels, a task executing code in a
-trampoline might be preempted.  In this case, the Tasks-RCU grace period
-clearly cannot end until that task resumes and its execution leaves that
-trampoline.  This means, among other things, that cond_resched() does
-not provide a Tasks RCU quiescent state.  (Instead, use rcu_softirq_qs()
-from softirq or rcu_tasks_classic_qs() otherwise.)
+Note well that, by default, involuntary context switches are *not*
+Tasks-RCU quiescent states.  After all, in preemptible kernels, a task
+executing code in a trampoline might be preempted.  In this case, the
+Tasks-RCU grace period clearly cannot end until that task resumes and its
+execution leaves that trampoline.  This means, among other things, that
+cond_resched() does not provide a Tasks RCU quiescent state.  (Instead,
+use rcu_softirq_qs() from softirq or rcu_tasks_classic_qs() otherwise.)
+
+Architectures that select ``CONFIG_ARCH_HAS_RCU_TASKS_PREEMPT_QS`` relax
+this: there, every trampoline whose lifetime Tasks RCU guards (the ftrace
+and BPF trampolines, optprobe slots, out-of-line ftrace direct-call
+trampolines) increments ``current->rcu_tramp_nesting`` before calling out
+and decrements it before returning, and the irq-exit preemption path
+covers the few instructions the counter cannot (see
+rcu_tasks_ip_in_trampoline() and rcu_tasks_irq_ip_holds()).  A task that
+is preempted with that count at zero is therefore known not to be in, or
+called from, any trampoline, and such a preemption *is* a Tasks-RCU
+quiescent state.  The obligation moves to the trampolines: anything that
+relies on synchronize_rcu_tasks() to protect code a task may be preempted
+in must maintain the count (see register_ftrace_direct()), or Tasks RCU
+will not wait for it on those architectures.
 
 The tasks-RCU API is quite compact, consisting only of
 call_rcu_tasks(), synchronize_rcu_tasks(), and

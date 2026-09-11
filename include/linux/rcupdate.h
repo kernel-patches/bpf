@@ -210,6 +210,11 @@ bool arch_rcu_tasks_ip_in_trampoline(unsigned long ip);
  * preemption and rcu_tasks_irq_ip_holds() checks it at every quiescent-state
  * decision, locally and from the grace-period kthread.
  *
+ * With both in place, on architectures that select
+ * ARCH_HAS_RCU_TASKS_PREEMPT_QS, a preemption with rcu_tramp_nesting == 0 is
+ * a Tasks RCU quiescent state, and a CPU-bound kernel thread no longer needs
+ * to volunteer one via cond_resched_tasks_rcu_qs().
+ *
  * Only current writes the count and only current (or an interrupt on the same
  * CPU) reads it, so plain accesses suffice.
  */
@@ -241,9 +246,17 @@ static __always_inline void rcu_tasks_note_irq_ip(unsigned long ip)
 	WRITE_ONCE(current->rcu_tasks_irq_ip, ip);
 }
 
+#ifdef CONFIG_RCU_TASKS_PREEMPT_QS
+#define rcu_tasks_preempt_is_qs(t)					\
+	(!READ_ONCE((t)->rcu_tramp_nesting) && !rcu_tasks_irq_ip_holds(t))
+#else
+#define rcu_tasks_preempt_is_qs(t)	false
+#endif
+
 # define rcu_tasks_classic_qs(t, preempt)				\
 	do {								\
-		if (!(preempt) && READ_ONCE((t)->rcu_tasks_holdout))	\
+		if (READ_ONCE((t)->rcu_tasks_holdout) &&		\
+		    (!(preempt) || rcu_tasks_preempt_is_qs(t)))		\
 			WRITE_ONCE((t)->rcu_tasks_holdout, false);	\
 	} while (0)
 void call_rcu_tasks(struct rcu_head *head, rcu_callback_t func);
