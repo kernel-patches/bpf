@@ -1038,8 +1038,18 @@ static bool rcu_tasks_preempted_qs(struct task_struct *t)
 {
 	return task_call_func(t, rcu_tasks_switched_out_clean, NULL);
 }
+
+/* Make a running holdout pass through __schedule() soon, tick or no tick. */
+static void rcu_tasks_kick_running(struct task_struct *t)
+{
+	int cpu = task_cpu(t);
+
+	if (task_curr(t) && cpu_online(cpu))
+		resched_cpu(cpu);
+}
 #else
 static bool rcu_tasks_preempted_qs(struct task_struct *t) { return false; }
+static void rcu_tasks_kick_running(struct task_struct *t) { }
 #endif
 
 /* Per-task initial processing. */
@@ -1219,6 +1229,7 @@ static void check_holdout_task(struct task_struct *t,
 		return;
 	}
 	rcu_request_urgent_qs_task(t);
+	rcu_tasks_kick_running(t);
 	if (!needreport)
 		return;
 	if (*firstreport) {
