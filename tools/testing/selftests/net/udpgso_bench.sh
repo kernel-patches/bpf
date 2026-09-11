@@ -8,6 +8,8 @@ readonly YELLOW='\033[0;33m'
 readonly RED='\033[0;31m'
 readonly NC='\033[0m' # No Color
 readonly TESTPORT=8000
+# Avoid a multiple of 26 to detect missing payload resets.
+readonly TCP_VERIFY_LEN=$((4 * 1024))
 
 readonly KSFT_PASS=0
 readonly KSFT_FAIL=1
@@ -79,6 +81,31 @@ run_one() {
 	./udpgso_bench_tx -p "$TESTPORT" ${args}
 }
 
+run_tcp_verify_one() {
+	local tcp_rx_pid
+	local i=0
+	local -r timeout=10
+
+	timeout -k 1 30 ./udpgso_bench_rx -p "$TESTPORT" -t -v -l "$TCP_VERIFY_LEN" &
+	tcp_rx_pid=$!
+
+	while [ "$i" -lt "$timeout" ]; do
+		ss -lnHt "sport = :$TESTPORT" | grep -q . && break
+		i=$((i + 1))
+		sleep 1
+	done
+	if [ "$i" -eq "$timeout" ]; then
+		echo "timed out while waiting for udpgso_bench_rx"
+		return 1
+	fi
+
+	timeout -k 1 30 ./udpgso_bench_tx -p "$TESTPORT" "$@" \
+		-t -s "$TCP_VERIFY_LEN" -M 100 || return $?
+
+	# A successful sender does not imply that payload verification passed.
+	wait "$tcp_rx_pid"
+}
+
 run_in_netns() {
 	local -r args=$@
 
@@ -123,6 +150,10 @@ run_tcp() {
 	echo "tcp zerocopy"
 	run_in_netns ${args} -t -z
 
+	echo "tcp verify"
+	./in_netns.sh "$0" __verify_tcp ${args}
+	kselftest_test_exitcode $?
+
 	# excluding for now because test fails intermittently
 	# add -P option to include poll() to reduce possibility of lost messages
 	#echo "tcp zerocopy audit"
@@ -149,6 +180,9 @@ if [[ $# -eq 0 ]]; then
 elif [[ $1 == "__subprocess" ]]; then
 	shift
 	run_one $@
+elif [[ $1 == "__verify_tcp" ]]; then
+	shift
+	run_tcp_verify_one "$@"
 else
 	run_in_netns $@
 fi
