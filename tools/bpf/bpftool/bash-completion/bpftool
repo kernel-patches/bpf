@@ -718,6 +718,10 @@ _bpftool()
                     esac
                     ;;
                 create)
+                    # Keep a flags list together if readline splits at commas.
+                    if [[ $COMP_WORDBREAKS == *,* && ( $cur == , || $prev == , ) ]]; then
+                        _get_comp_words_by_ref -n , cur prev
+                    fi
                     case $prev in
                         $command)
                             _filedir
@@ -729,7 +733,21 @@ _bpftool()
                             COMPREPLY=( $( compgen -W "$BPFTOOL_MAP_CREATE_TYPES" -- "$cur" ) )
                             return 0
                             ;;
-                        key|value|flags|entries)
+                        flags)
+                            compopt -o nospace
+                            local flags="$(bpftool feature list_builtins map_create_flags 2>/dev/null)"
+                            local prefix= flag
+                            # If comma is not a word break, Readline replaces the whole
+                            # word, so preserve the flags before the last comma.
+                            if [[ $cur == *,* && $COMP_WORDBREAKS != *,* ]]; then
+                                prefix="${cur%,*},"
+                            fi
+                            for flag in $(compgen -W "$flags" -- "${cur##*,}"); do
+                                COMPREPLY+=( "${prefix}${flag}" )
+                            done
+                            return 0
+                            ;;
+                        key|value|entries)
                             return 0
                             ;;
                         inner_map)
@@ -1192,7 +1210,7 @@ _bpftool()
                     ;;
                 list_builtins)
                     [[ $prev != "$command" ]] && return 0
-                    COMPREPLY=( $( compgen -W 'prog_types map_types \
+                    COMPREPLY=( $( compgen -W 'prog_types map_types map_create_flags \
                         attach_types link_types helpers' -- "$cur" ) )
                     ;;
                 *)
