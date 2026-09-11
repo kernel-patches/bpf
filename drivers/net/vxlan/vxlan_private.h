@@ -216,8 +216,9 @@ void vxlan_vs_add_vnigrp(struct vxlan_dev *vxlan,
 			 bool ipv6);
 void vxlan_vs_del_vnigrp(struct vxlan_dev *vxlan);
 int vxlan_vnilist_update_group(struct vxlan_dev *vxlan,
-			       union vxlan_addr *old_remote_ip,
-			       union vxlan_addr *new_remote_ip,
+			       const union vxlan_addr *old_remote_ip,
+			       const union vxlan_addr *new_remote_ip,
+			       u32 old_ifindex, u32 new_ifindex,
 			       struct netlink_ext_ack *extack);
 
 
@@ -225,10 +226,10 @@ int vxlan_vnilist_update_group(struct vxlan_dev *vxlan,
 int vxlan_multicast_join(struct vxlan_dev *vxlan);
 int vxlan_multicast_leave(struct vxlan_dev *vxlan);
 bool vxlan_group_used(struct vxlan_net *vn, struct vxlan_dev *dev,
-		      __be32 vni, union vxlan_addr *rip, int rifindex);
-int vxlan_igmp_join(struct vxlan_dev *vxlan, union vxlan_addr *rip,
+		      __be32 vni, const union vxlan_addr *rip, int rifindex);
+int vxlan_igmp_join(struct vxlan_dev *vxlan, const union vxlan_addr *rip,
 		    int rifindex);
-int vxlan_igmp_leave(struct vxlan_dev *vxlan, union vxlan_addr *rip,
+int vxlan_igmp_leave(struct vxlan_dev *vxlan, const union vxlan_addr *rip,
 		     int rifindex);
 
 /* vxlan_mdb.c */
