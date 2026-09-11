@@ -1014,10 +1014,39 @@ static bool rcu_tasks_is_holdout(struct task_struct *t)
 	return true;
 }
 
+#ifdef CONFIG_RCU_TASKS_PREEMPT_QS
+/* task_call_func() callback: is @t switched out with no trampoline in play? */
+static int rcu_tasks_switched_out_clean(struct task_struct *t, void *arg)
+{
+	/*
+	 * With @t pinned, !task_curr() means it last left the CPU through
+	 * __schedule(), so its rcu_tramp_nesting and rcu_tasks_irq_ip are
+	 * stable and ordered before the rq lock we hold.  A task preempted
+	 * from irq exit inside trampoline text has the count held non-zero
+	 * across the switch by irqentry_preempt(), so zero here means neither
+	 * in nor called from a trampoline; rcu_tasks_irq_ip_holds() covers the
+	 * one case that can become true after the task was switched out (a
+	 * kprobe jump-optimization window).  Both clear: already quiescent,
+	 * whether or not it ever runs again.
+	 */
+	return !task_curr(t) && !READ_ONCE(t->rcu_tramp_nesting) &&
+	       !rcu_tasks_irq_ip_holds(t);
+}
+
+/* Is @t, right now, switched out somewhere that is a quiescent state? */
+static bool rcu_tasks_preempted_qs(struct task_struct *t)
+{
+	return task_call_func(t, rcu_tasks_switched_out_clean, NULL);
+}
+#else
+static bool rcu_tasks_preempted_qs(struct task_struct *t) { return false; }
+#endif
+
 /* Per-task initial processing. */
 static void rcu_tasks_pertask(struct task_struct *t, struct list_head *hop)
 {
-	if (t != current && rcu_tasks_is_holdout(t)) {
+	if (t != current && rcu_tasks_is_holdout(t) &&
+	    !rcu_tasks_preempted_qs(t)) {
 		get_task_struct(t);
 		t->rcu_tasks_nvcsw = READ_ONCE(t->nvcsw);
 		WRITE_ONCE(t->rcu_tasks_holdout, true);
@@ -1181,6 +1210,7 @@ static void check_holdout_task(struct task_struct *t,
 	if (!READ_ONCE(t->rcu_tasks_holdout) ||
 	    t->rcu_tasks_nvcsw != READ_ONCE(t->nvcsw) ||
 	    !rcu_tasks_is_holdout(t) ||
+	    rcu_tasks_preempted_qs(t) ||
 	    (IS_ENABLED(CONFIG_NO_HZ_FULL) &&
 	     !is_idle_task(t) && READ_ONCE(t->rcu_tasks_idle_cpu) >= 0)) {
 		WRITE_ONCE(t->rcu_tasks_holdout, false);
