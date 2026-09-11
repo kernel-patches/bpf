@@ -1220,6 +1220,12 @@ static int add_exception_handler(const struct bpf_insn *insn,
 	return 0;
 }
 
+static const struct bpf_jit_arg_abi arm64_arg_abi = {
+	.nr_arg_regs		= 8,
+	.even_reg_align		= true,
+	.even_stack_align	= true,
+};
+
 static const u8 stack_arg_reg[] = { A64_R(5), A64_R(6), A64_R(7) };
 
 #define NR_STACK_ARG_REGS	ARRAY_SIZE(stack_arg_reg)
@@ -1262,19 +1268,20 @@ static void emit_stack_arg_store_imm(s32 imm, s16 bpf_off, const u8 tmp, struct 
  * kern_vm_start. A nullable arg preserves NULL by skipping the add, tested
  * on the truncated value as arena NULL is offset 0.
  */
-static int emit_kfunc_arena_args(struct jit_ctx *ctx, const struct bpf_insn *insn)
+static int emit_kfunc_arena_args(struct jit_ctx *ctx, const struct btf_func_model *fm)
 {
 	const u8 arena_vm_base = bpf2a64[ARENA_VM_START];
-	const struct btf_func_model *fm;
-	int i;
+	int i, slot;
 
-	fm = bpf_jit_find_kfunc_model(ctx->prog, insn);
-	if (!fm)
-		return -EINVAL;
-
-	for (i = 0; i < min_t(int, fm->nr_args, MAX_BPF_FUNC_REG_ARGS); i++) {
-		const u8 reg = bpf2a64[BPF_REG_1 + i];
+	for (i = 0, slot = 0; i < fm->nr_args; i++) {
+		u32 arg_regs = (fm->arg_size[i] + 7) / 8;
 		u8 flags = fm->arg_flags[i];
+		u8 reg;
+
+		if (slot + arg_regs > MAX_BPF_FUNC_REG_ARGS)
+			break;
+		reg = bpf2a64[BPF_REG_1 + slot];
+		slot += arg_regs;
 
 		if (!(flags & BTF_FMODEL_ARENA_ARG))
 			continue;
@@ -1291,6 +1298,41 @@ static int emit_kfunc_arena_args(struct jit_ctx *ctx, const struct bpf_insn *ins
 	}
 
 	return 0;
+}
+
+static bool a64_arg_on_stack(u8 slot)
+{
+	return slot >= arm64_arg_abi.nr_arg_regs;
+}
+
+static s32 a64_arg_stack_off(u8 slot)
+{
+	return (slot - arm64_arg_abi.nr_arg_regs) * sizeof(u64);
+}
+
+static void emit_kfunc_arg_moves(struct jit_ctx *ctx, const struct btf_func_model *fm)
+{
+	struct bpf_jit_arg_move moves[BPF_JIT_MAX_ARG_MOVES];
+	const u8 tmp = bpf2a64[TMP_REG_1];
+	u32 i, n;
+
+	n = bpf_jit_plan_arg_moves(&arm64_arg_abi, fm, moves);
+
+	for (i = 0; i < n; i++) {
+		u8 dst = moves[i].dst, src = moves[i].src, reg;
+
+		if (a64_arg_on_stack(src)) {
+			reg = tmp;
+			emit(A64_LDR64I(reg, A64_SP, a64_arg_stack_off(src)), ctx);
+		} else {
+			reg = src;
+		}
+
+		if (a64_arg_on_stack(dst))
+			emit(A64_STR64I(reg, A64_SP, a64_arg_stack_off(dst)), ctx);
+		else if (reg != dst)
+			emit(A64_MOV(1, dst, reg), ctx);
+	}
 }
 
 /* JITs an eBPF instruction.
@@ -1716,9 +1758,15 @@ emit_cond_jmp:
 		if (ret < 0)
 			return ret;
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
-			ret = emit_kfunc_arena_args(ctx, insn);
+			const struct btf_func_model *fm;
+
+			fm = bpf_jit_find_kfunc_model(ctx->prog, insn);
+			if (!fm)
+				return -EINVAL;
+			ret = emit_kfunc_arena_args(ctx, fm);
 			if (ret < 0)
 				return ret;
+			emit_kfunc_arg_moves(ctx, fm);
 		}
 		emit_call(func_addr, ctx);
 		/*
@@ -2391,6 +2439,11 @@ bool bpf_jit_supports_kfunc_call(void)
 bool bpf_jit_supports_kfunc_ret_reg_pair(void)
 {
 	return true;
+}
+
+const struct bpf_jit_arg_abi *bpf_jit_arg_abi(void)
+{
+	return &arm64_arg_abi;
 }
 
 bool bpf_jit_supports_stack_args(void)
