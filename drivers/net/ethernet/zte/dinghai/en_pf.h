@@ -9,6 +9,8 @@
 
 #include <linux/types.h>
 
+#include "zxdh_irq.h"
+
 #define ZXDH_PF_VENDOR_ID	0x1cf2
 #define ZXDH_PF_DEVICE_ID	0x8040
 #define ZXDH_VF_DEVICE_ID	0x8041
@@ -78,6 +80,7 @@ struct zxdh_core_dev {
 	struct device *device;
 	struct pci_dev *pdev;
 	struct devlink *devlink;
+	struct zxdh_irq_table irq_table;
 	void *priv;
 };
 
@@ -117,5 +120,11 @@ int zxdh_pf_notify_cfg_init(struct zxdh_core_dev *zxdh_dev);
 int zxdh_pf_device_cfg_init(struct zxdh_core_dev *zxdh_dev);
 void zxdh_pf_modern_cfg_uninit(struct zxdh_core_dev *zxdh_dev);
 int zxdh_pf_modern_cfg_init(struct zxdh_core_dev *zxdh_dev);
+
+/* PF IRQ table (en_pf.c) */
+int zxdh_pf_irq_table_init(struct zxdh_core_dev *zxdh_dev);
+int zxdh_pf_irq_table_create(struct zxdh_core_dev *zxdh_dev);
+void zxdh_pf_irq_table_destroy(struct zxdh_core_dev *zxdh_dev);
+struct zxdh_irq *zxdh_pf_async_irq_request(struct zxdh_core_dev *zxdh_dev);
 
 #endif /* __ZXDH_EN_PF_H__ */

@@ -8,6 +8,8 @@
 #include <linux/pci.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
+#include <linux/mm.h>
+#include <linux/slab.h>
 #include <net/devlink.h>
 #include <linux/dma-mapping.h>
 #include "en_pf.h"
@@ -26,6 +28,14 @@ static const struct pci_device_id zxdh_pf_pci_table[] = {
 };
 
 MODULE_DEVICE_TABLE(pci, zxdh_pf_pci_table);
+
+struct zxdh_pf_irq_table {
+	struct zxdh_irq_pool *async_pool;
+};
+
+/* IRQ compaction thresholds of the async pool, in number of queues. */
+#define ZXDH_PF_ASYNC_IRQ_MIN_COMP	0
+#define ZXDH_PF_ASYNC_IRQ_MAX_COMP	7
 
 void *zxdh_core_alloc_priv(struct zxdh_core_dev *zxdh_dev, size_t size)
 {
@@ -464,6 +474,84 @@ static int zxdh_pf_wait_riscv_ready(struct zxdh_core_dev *zxdh_dev)
 	return 0;
 }
 
+static int zxdh_pf_irq_pools_init(struct zxdh_core_dev *zxdh_dev)
+{
+	struct zxdh_pf_irq_table *pf_irq_table = zxdh_dev->irq_table.priv;
+	struct zxdh_irq_pool *pool;
+
+	pool = zxdh_irq_pool_alloc(zxdh_dev, 0, ZXDH_ASYNC_CHANNELS_NUM,
+				   "zxdh_pf_async", ZXDH_PF_ASYNC_IRQ_MIN_COMP,
+				   ZXDH_PF_ASYNC_IRQ_MAX_COMP);
+	if (IS_ERR(pool))
+		return PTR_ERR(pool);
+
+	pf_irq_table->async_pool = pool;
+
+	return 0;
+}
+
+static void zxdh_pf_irq_pools_destroy(struct zxdh_pf_irq_table *pf_irq_table)
+{
+	zxdh_irq_pool_free(pf_irq_table->async_pool);
+}
+
+int zxdh_pf_irq_table_init(struct zxdh_core_dev *zxdh_dev)
+{
+	struct zxdh_irq_table *table = &zxdh_dev->irq_table;
+	struct zxdh_pf_irq_table *priv;
+
+	priv = kvzalloc_obj(*priv, GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+	table->priv = priv;
+
+	return 0;
+}
+
+int zxdh_pf_irq_table_create(struct zxdh_core_dev *zxdh_dev)
+{
+	int total_vec = ZXDH_VQS_CHANNELS_NUM + ZXDH_ASYNC_CHANNELS_NUM +
+			ZXDH_RDMA_CHANNELS_NUM;
+	int err;
+
+	total_vec = pci_alloc_irq_vectors(zxdh_dev->pdev, total_vec, total_vec,
+					  PCI_IRQ_MSIX);
+	if (total_vec < 0) {
+		dev_err(zxdh_dev->device, "pci_alloc_irq_vectors failed: %d\n",
+			total_vec);
+		return total_vec;
+	}
+
+	err = zxdh_pf_irq_pools_init(zxdh_dev);
+	if (err) {
+		dev_err(zxdh_dev->device, "zxdh_pf_irq_pools_init failed: %d\n",
+			err);
+		pci_free_irq_vectors(zxdh_dev->pdev);
+	}
+
+	return err;
+}
+
+void zxdh_pf_irq_table_destroy(struct zxdh_core_dev *zxdh_dev)
+{
+	struct zxdh_irq_table *table = &zxdh_dev->irq_table;
+
+	zxdh_pf_irq_pools_destroy(table->priv);
+	kvfree(table->priv);
+	pci_free_irq_vectors(zxdh_dev->pdev);
+}
+
+struct zxdh_irq *zxdh_pf_async_irq_request(struct zxdh_core_dev *zxdh_dev)
+{
+	struct zxdh_irq_table *table = &zxdh_dev->irq_table;
+	struct zxdh_pf_irq_table *pf_irq_table = table->priv;
+
+	if (!pf_irq_table->async_pool)
+		return NULL;
+
+	return zxdh_get_irq_of_pool(pf_irq_table->async_pool);
+}
+
 static int zxdh_pf_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct zxdh_core_dev *zxdh_dev;
@@ -512,10 +600,24 @@ static int zxdh_pf_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_cfg_init;
 	}
 
+	ret = zxdh_pf_irq_table_init(zxdh_dev);
+	if (ret) {
+		dev_err(&pdev->dev, "zxdh_pf_irq_table_init failed: %d\n", ret);
+		goto err_cfg_init;
+	}
+
+	ret = zxdh_pf_irq_table_create(zxdh_dev);
+	if (ret) {
+		dev_err(&pdev->dev, "zxdh_pf_irq_table_create failed: %d\n", ret);
+		goto err_irq_table;
+	}
+
 	devlink_register(devlink);
 
 	return 0;
 
+err_irq_table:
+	kvfree(zxdh_dev->irq_table.priv);
 err_cfg_init:
 	zxdh_pf_pci_close(zxdh_dev);
 err_pci_init:
@@ -531,6 +633,7 @@ static void zxdh_pf_remove(struct pci_dev *pdev)
 	struct devlink *devlink = priv_to_devlink(zxdh_dev);
 
 	devlink_unregister(devlink);
+	zxdh_pf_irq_table_destroy(zxdh_dev);
 	zxdh_pf_modern_cfg_uninit(zxdh_dev);
 	zxdh_pf_pci_close(zxdh_dev);
 	zxdh_core_free_priv(zxdh_dev);
