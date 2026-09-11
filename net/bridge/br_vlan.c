@@ -468,10 +468,15 @@ static void __vlan_flush(const struct net_bridge *br,
 		vid = vlan->vid;
 		err = __vlan_del(vlan, true);
 		if (err) {
-			br_err(br,
-			       "port %u(%s) failed to delete vlan %d: %pe\n",
-			       (unsigned int) p->port_no, p->dev->name,
-			       vid, ERR_PTR(err));
+			if (p)
+				br_err(br,
+				       "port %u(%s) failed to delete vlan %d: %pe\n",
+				       (unsigned int)p->port_no, p->dev->name,
+				       vid, ERR_PTR(err));
+			else
+				br_err(br,
+				       "failed to delete bridge vlan %d: %pe\n",
+				       vid, ERR_PTR(err));
 		}
 	}
 
