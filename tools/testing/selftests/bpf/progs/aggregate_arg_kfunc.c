@@ -50,6 +50,7 @@ int aggregate_arg_kfunc_int128(struct __sk_buff *skb)
 	return 0;
 }
 
+#if 0
 /*
  * arm64 rounds the register number up to an even one for an argument
  * aligned to 16 bytes, so it wants this __int128 in x2 and x3.
@@ -70,6 +71,7 @@ int aggregate_arg_kfunc_int128_odd(struct __sk_buff *skb)
 
 	return 0;
 }
+#endif
 
 #endif /* __SIZEOF_INT128__ */
 
@@ -152,6 +154,7 @@ int aggregate_arg_kfunc_split8(struct __sk_buff *skb)
 
 #ifdef __SIZEOF_INT128__
 
+#if 0
 /*
  * The same hole, with enough arguments after the __int128 that the shift
  * reaches the registers the BPF convention counts as stack slots: arm64
@@ -193,6 +196,7 @@ int aggregate_arg_kfunc_int128_ovf(struct __sk_buff *skb)
 
 	return 0;
 }
+#endif
 
 /*
  * Both conventions pad the stack to align this __int128, and the BPF

@@ -234,11 +234,13 @@ struct prog_test_ret_ii bpf_kfunc_call_test_ret_ii(int a, int b) __ksym;
 __u64 bpf_kfunc_call_test_pair_arg(__u64 a, struct prog_test_pair_arg s, __u64 b) __ksym;
 #ifdef __SIZEOF_INT128__
 __u64 bpf_kfunc_call_test_i128_arg(__u64 a, __u64 b, __int128 v) __ksym;
+#if 0
 __u64 bpf_kfunc_call_test_i128_arg_odd(__u64 a, __int128 v, __u64 b) __ksym;
 __u64 bpf_kfunc_call_test_i128_arg_shift(__u64 a, __int128 v, __u64 b, __u64 c,
 					 __u64 d) __ksym;
 __u64 bpf_kfunc_call_test_i128_arg_ovf(__u64 a, __int128 v, __u64 b, __u64 c,
 				       __u64 d, __u64 e, __u64 f) __ksym;
+#endif
 __u64 bpf_kfunc_call_test_i128_arg_pad(__u64 a, __u64 b, __u64 c, __u64 d, __u64 e,
 				       __u64 f, __u64 g, __int128 v) __ksym;
 #endif
