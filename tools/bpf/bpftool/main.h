@@ -83,6 +83,7 @@ extern const char *bin_name;
 
 extern json_writer_t *json_wtr;
 extern bool json_output;
+extern bool recursive_dump;
 extern bool show_pinned;
 extern bool show_pids;
 extern bool block_mount;
