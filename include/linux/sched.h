@@ -2105,8 +2105,11 @@ static inline int test_tsk_thread_flag(struct task_struct *tsk, int flag)
 static inline void set_tsk_need_resched(struct task_struct *tsk)
 {
 	if (tracepoint_enabled(sched_set_need_resched_tp) &&
-	    !test_tsk_thread_flag(tsk, TIF_NEED_RESCHED))
+	    !test_tsk_thread_flag(tsk, TIF_NEED_RESCHED)) {
+		set_tsk_thread_flag(tsk, TIF_NEED_RESCHED);
 		__trace_set_need_resched(tsk, TIF_NEED_RESCHED);
+		return;
+	}
 	set_tsk_thread_flag(tsk,TIF_NEED_RESCHED);
 }
 
