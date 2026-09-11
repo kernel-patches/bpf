@@ -223,9 +223,9 @@ static int sd_start(struct gspca_dev *gspca_dev)
 	return 0;
 }
 
-/* called on streamoff with alt==0 and on disconnect */
+/* called before destroy_urbs(): the worker must not outlive urb[0] */
 /* the usb_lock is held at entry - restore on exit */
-static void sd_stop0(struct gspca_dev *gspca_dev)
+static void sd_stopN(struct gspca_dev *gspca_dev)
 {
 	struct usb_fpix *dev = (struct usb_fpix *) gspca_dev;
 
@@ -233,6 +233,17 @@ static void sd_stop0(struct gspca_dev *gspca_dev)
 	mutex_unlock(&gspca_dev->usb_lock);
 	flush_work(&dev->work_struct);
 	mutex_lock(&gspca_dev->usb_lock);
+}
+
+/* gspca_disconnect() frees the URBs without calling any subdriver callback */
+static void sd_disconnect(struct usb_interface *intf)
+{
+	struct usb_fpix *dev = usb_get_intfdata(intf);
+
+	/* let the worker see the device go away, then wait for it */
+	dev->gspca_dev.present = false;
+	flush_work(&dev->work_struct);
+	gspca_disconnect(intf);
 }
 
 /* Table of supported USB devices */
@@ -271,7 +282,7 @@ static const struct sd_desc sd_desc = {
 	.config = sd_config,
 	.init   = sd_init,
 	.start  = sd_start,
-	.stop0  = sd_stop0,
+	.stopN  = sd_stopN,
 };
 
 /* -- device connect -- */
@@ -288,7 +299,7 @@ static struct usb_driver sd_driver = {
 	.name       = MODULE_NAME,
 	.id_table   = device_table,
 	.probe      = sd_probe,
-	.disconnect = gspca_disconnect,
+	.disconnect = sd_disconnect,
 #ifdef CONFIG_PM
 	.suspend = gspca_suspend,
 	.resume  = gspca_resume,
