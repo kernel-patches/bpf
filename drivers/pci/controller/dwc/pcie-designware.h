@@ -271,18 +271,6 @@
 #define MARGINING_MAXLANES			GENMASK(20, 16)
 #define MARGINING_SAMPLE_RATE_TIMING		GENMASK(13, 8)
 #define MARGINING_SAMPLE_RATE_VOLTAGE		GENMASK(5, 0)
-/*
- * iATU Unroll-specific register definitions
- * From 4.80 core version the address translation will be made by unroll
- */
-#define PCIE_ATU_UNR_REGION_CTRL1	0x00
-#define PCIE_ATU_UNR_REGION_CTRL2	0x04
-#define PCIE_ATU_UNR_LOWER_BASE		0x08
-#define PCIE_ATU_UNR_UPPER_BASE		0x0C
-#define PCIE_ATU_UNR_LOWER_LIMIT	0x10
-#define PCIE_ATU_UNR_LOWER_TARGET	0x14
-#define PCIE_ATU_UNR_UPPER_TARGET	0x18
-#define PCIE_ATU_UNR_UPPER_LIMIT	0x20
 
 /*
  * RAS-DES register definitions
