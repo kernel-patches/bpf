@@ -3547,6 +3547,11 @@ BPF_CALL_3(bpf_skb_change_proto, struct sk_buff *, skb, __be16, proto,
 	if (ret)
 		return ret;
 
+	/* Protocol translation can invalidate an earlier socket assignment. */
+	if (skb_sk_is_prefetched(skb) &&
+	    !bpf_sk_assign_family_ok(skb, skb->sk))
+		skb_orphan(skb);
+
 	if (skb_valid_dst(skb))
 		skb_dst_drop(skb);
 
