@@ -8018,6 +8018,29 @@ static int btf_validate_return_type(struct bpf_verifier_env *env, struct btf *bt
 	return -EOPNOTSUPP;
 }
 
+static int btf_check_arg_slots(struct bpf_verifier_log *log, const char *tname,
+			       bool is_global, u32 slot_cnt,
+			       struct bpf_subprog_info *sub)
+{
+	if (slot_cnt <= MAX_BPF_FUNC_REG_ARGS)
+		return 0;
+
+	if (is_global) {
+		bpf_log(log,
+			"global function %s() needs %d > %d argument slots, "
+			"stack args not supported\n",
+			tname, slot_cnt, MAX_BPF_FUNC_REG_ARGS);
+		return -EINVAL;
+	}
+	if (!bpf_jit_supports_stack_args()) {
+		bpf_log(log, "JIT does not support function %s() with %d argument slots\n",
+			tname, slot_cnt);
+		return -EFAULT;
+	}
+	sub->stack_arg_cnt = slot_cnt - MAX_BPF_FUNC_REG_ARGS;
+	return 0;
+}
+
 /* Process BTF of a function to produce high-level expectation of function
  * arguments (like ARG_PTR_TO_CTX, or ARG_PTR_TO_MEM, etc). This information
  * is cached in subprog info for reuse.
@@ -8087,20 +8110,9 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 			MAX_BPF_FUNC_ARGS, tname, nargs);
 		return -EFAULT;
 	}
-	if (nargs > MAX_BPF_FUNC_REG_ARGS) {
-		if (!bpf_jit_supports_stack_args()) {
-			bpf_log(log, "JIT does not support function %s() with %d args\n",
-				tname, nargs);
-			return -EFAULT;
-		}
-		sub->stack_arg_cnt = nargs - MAX_BPF_FUNC_REG_ARGS;
-	}
-
-	if (is_global && nargs > MAX_BPF_FUNC_REG_ARGS) {
-		bpf_log(log, "global function %s has %d > %d args, stack args not supported\n",
-			tname, nargs, MAX_BPF_FUNC_REG_ARGS);
-		return -EINVAL;
-	}
+	err = btf_check_arg_slots(log, tname, is_global, nargs, sub);
+	if (err)
+		return err;
 
 	err = btf_validate_return_type(env, btf, t, subprog, is_global);
 	if (err) {
@@ -8124,6 +8136,9 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	 */
 	for (i = 0, slots_used = 0; i < nargs; i++) {
 		u32 tags = 0;
+
+		if (slots_used >= MAX_BPF_FUNC_ARGS)
+			goto too_many_slots;
 
 		err = btf_scan_decl_tags(env, btf, fn_t, i, is_global, &tags);
 		if (err)
@@ -8253,6 +8268,33 @@ skip_pointer:
 			sub->args[slots_used++].arg_type = ARG_ANYTHING;
 			continue;
 		}
+		if (btf_type_is_struct(t)) {
+			u32 nslots;
+
+			if (!t->size || t->size > 2 * BPF_REG_SIZE) {
+				if (!is_global)
+					return -EINVAL;
+				bpf_log(log,
+					"Arg#%d type %s in %s() has size %u, only 1 to %d bytes "
+					"can be passed by value\n",
+					i, btf_type_str(t), tname, t->size, 2 * BPF_REG_SIZE);
+				return -EINVAL;
+			}
+			if (!btf_struct_is_composed_of(env, btf, t, BTF_MEMBER_SCALAR)) {
+				if (!is_global)
+					return -EINVAL;
+				bpf_log(log, "Arg#%d type %s in %s() is not composed of scalars\n",
+					i, btf_type_str(t), tname);
+				return -EINVAL;
+			}
+
+			nslots = (t->size + BPF_REG_SIZE - 1) / BPF_REG_SIZE;
+			if (slots_used + nslots > MAX_BPF_FUNC_ARGS)
+				goto too_many_slots;
+			while (nslots--)
+				sub->args[slots_used++].arg_type = ARG_ANYTHING;
+			continue;
+		}
 		if (!is_global)
 			return -EINVAL;
 		bpf_log(log, "Arg#%d type %s in %s() is not supported yet.\n",
@@ -8260,11 +8302,21 @@ skip_pointer:
 		return -EINVAL;
 	}
 
+	err = btf_check_arg_slots(log, tname, is_global, slots_used, sub);
+	if (err)
+		return err;
 	sub->arg_slot_cnt = slots_used;
 
 	sub->args_cached = true;
 
 	return 0;
+
+too_many_slots:
+	if (!is_global)
+		return -EINVAL;
+	bpf_log(log, "Arguments of %s() need more than %d argument slots\n",
+		tname, MAX_BPF_FUNC_ARGS);
+	return -EINVAL;
 }
 
 static void btf_type_show(const struct btf *btf, u32 type_id, void *obj,

@@ -9784,6 +9784,8 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 	func = btf_type_by_id(btf, env->prog->aux->func_info[subprog].type_id);
 	func_proto = btf_type_by_id(btf, func->type);
 	args = btf_params(func_proto);
+	if (sub->arg_slot_cnt != btf_type_vlen(func_proto))
+		args = NULL;
 	ret = check_outgoing_stack_args(env, caller, sub->arg_slot_cnt,
 					bpf_subprog_name(env, subprog), btf, args);
 	if (ret)
