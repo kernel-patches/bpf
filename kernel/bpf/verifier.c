@@ -12149,12 +12149,36 @@ bool bpf_is_kfunc_pkt_changing(struct bpf_call_arg_meta *meta)
 	return meta->func_id == special_kfunc_list[KF_bpf_xdp_pull_data];
 }
 
+/*
+ * The slots a parameter takes, from its BTF type. This has to agree with
+ * btf_func_model_arg_slots(), which answers the same from the size the
+ * func model recorded, or the verifier would check an argument at a slot
+ * the JIT does not place it at.
+ */
+static u32 kfunc_arg_slots(const struct btf_type *t)
+{
+	if (btf_type_is_int(t) || btf_type_is_struct(t))
+		return (t->size + BPF_REG_SIZE - 1) / BPF_REG_SIZE;
+	return 1;
+}
+
+static u32 kfunc_proto_slots(const struct btf *btf, const struct btf_type *func_proto)
+{
+	const struct btf_param *args = btf_params(func_proto);
+	u32 i, nargs = btf_type_vlen(func_proto), slots_used = 0;
+
+	for (i = 0; i < nargs; i++)
+		slots_used += kfunc_arg_slots(btf_type_skip_modifiers(btf, args[i].type, NULL));
+
+	return slots_used;
+}
+
 static int
 get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
-		   const struct btf_param *args, int arg, int nargs)
+		   const struct btf_param *args, int arg, int nargs, u32 slot)
 {
 	const struct btf_type *t, *ref_t = NULL;
-	argno_t argno = argno_from_arg(arg + 1);
+	argno_t argno = argno_from_arg(slot + 1);
 	const char *ref_tname = NULL;
 	int arg_type;
 
@@ -12171,6 +12195,23 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 		if (is_kfunc_arg_scalar_with_name(meta->btf, &args[arg], "rdonly_buf_size") ||
 		    is_kfunc_arg_scalar_with_name(meta->btf, &args[arg], "rdwr_buf_size"))
 			return KF_ARG_CONST_ALLOC_SIZE_OR_ZERO;
+		return KF_ARG_ANYTHING;
+	}
+
+	if (btf_type_is_struct(t)) {
+		if (!t->size || t->size > 2 * BPF_REG_SIZE) {
+			verbose(env,
+				"%s type %s has size %u, only 1 to %d bytes "
+				"can be passed by value\n",
+				reg_arg_name(env, argno), btf_type_str(t), t->size,
+				2 * BPF_REG_SIZE);
+			return -EINVAL;
+		}
+		if (!btf_type_is_scalar_struct(env, meta->btf, t)) {
+			verbose(env, "%s type %s is not composed of scalars\n",
+				reg_arg_name(env, argno), btf_type_str(t));
+			return -EINVAL;
+		}
 		return KF_ARG_ANYTHING;
 	}
 
@@ -12289,7 +12330,7 @@ static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg
 {
 	const struct btf *btf = meta->btf;
 	const struct btf_param *args;
-	u32 i, nargs;
+	u32 i, nargs, slots_used;
 	int arg_type;
 
 	args = (const struct btf_param *)(meta->func_proto + 1);
@@ -12305,17 +12346,42 @@ static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg
 		return -ENOTSUPP;
 	}
 
-	for (i = 0; i < nargs; i++) {
+	for (i = 0, slots_used = 0; i < nargs; i++) {
+		const struct btf_type *t;
+		u32 nslots;
+
+		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
+		nslots = kfunc_arg_slots(t);
+		/*
+		 * The calling conventions the JIT has to reconcile do not
+		 * agree on where an argument of more than one eightbyte goes,
+		 * so refuse one until the JIT can say where this arch puts it.
+		 */
+		if (nslots > 1) {
+			verbose(env,
+				"Function %s arg#%d type %s cannot be passed at "
+				"argument slot %d on this architecture\n",
+				meta->func_name, i, btf_type_str(t), slots_used);
+			return -EINVAL;
+		}
+		slots_used += nslots;
+
 		if (is_kfunc_arg_prog_aux(btf, &args[i]) ||
 		    is_kfunc_arg_ignore(btf, &args[i]) ||
 		    is_kfunc_arg_implicit(meta, i))
 			continue;
 
-		arg_type = get_kfunc_arg_type(env, meta, args, i, nargs);
+		arg_type = get_kfunc_arg_type(env, meta, args, i, nargs, slots_used - nslots);
 		if (arg_type < 0)
 			return arg_type;
 
 		proto->arg_type[i] = arg_type;
+	}
+
+	if (slots_used > MAX_BPF_FUNC_REG_ARGS && !bpf_jit_supports_stack_args()) {
+		verbose(env, "JIT does not support kfunc %s() with %d argument slots\n",
+			meta->func_name, slots_used);
+		return -ENOTSUPP;
 	}
 
 	return 0;
@@ -12883,6 +12949,26 @@ static bool check_css_task_iter_allowlist(struct bpf_verifier_env *env)
 	}
 }
 
+/* The argument slot @slot of the call has to hold a scalar. */
+static int check_kfunc_scalar_arg(struct bpf_verifier_env *env, struct bpf_func_state *caller,
+				  struct bpf_reg_state *regs, u32 slot, int insn_idx,
+				  const char *func_name)
+{
+	struct bpf_reg_state *reg = get_func_arg_reg(caller, regs, slot);
+	argno_t argno = argno_from_arg(slot + 1);
+
+	if (reg->type == SCALAR_VALUE)
+		return 0;
+
+	verbose(env, "%s is not a scalar\n", reg_arg_name(env, argno));
+	bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
+			      "Pass an integer scalar value for this argument, not a pointer or resource object.",
+			      "the kfunc expects an integer scalar, but %s is %s",
+			      reg_arg_name(env, argno),
+			      bpf_diag_reg_type_plain(env, reg->type));
+	return -EINVAL;
+}
+
 static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 			    int insn_idx)
 {
@@ -12892,28 +12978,34 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 	const struct btf *btf = meta->btf;
 	const struct btf_param *args;
 	struct btf_record *rec;
-	u32 i, nargs;
+	u32 i, k, nargs, proto_slots, slots_used, prev_slot = 0, nslots = 0;
 	int ret;
 
 	args = (const struct btf_param *)(meta->func_proto + 1);
 	nargs = btf_type_vlen(meta->func_proto);
+	proto_slots = kfunc_proto_slots(btf, meta->func_proto);
 
-	ret = check_outgoing_stack_args(env, caller, nargs, func_name, btf, args);
+	ret = check_outgoing_stack_args(env, caller, proto_slots, func_name, btf,
+					proto_slots == nargs ? args : NULL);
 	if (ret)
 		return ret;
 
 	/* Check that BTF function arguments match actual types that the
 	 * verifier sees.
 	 */
-	for (i = 0; i < nargs; i++) {
-		struct bpf_reg_state *reg = get_func_arg_reg(caller, regs, i);
+	for (i = 0, slots_used = 0; i < nargs;
+	     i++, prev_slot = slots_used, slots_used += nslots) {
+		struct bpf_reg_state *reg = get_func_arg_reg(caller, regs, slots_used);
 		const struct btf_type *t, *ref_t, *resolve_ret;
 		enum bpf_arg_type arg_type = ARG_DONTCARE;
-		argno_t argno = argno_from_arg(i + 1);
+		argno_t argno = argno_from_arg(slots_used + 1);
 		int regno = reg_from_argno(argno);
 		bool btf_id_fixed_off_ok = true;
 		u32 ref_id = args[i].type, type_size;
 		int kf_arg_type = meta->fn->arg_type[i];
+
+		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
+		nslots = kfunc_arg_slots(t);
 
 		if (is_kfunc_arg_prog_aux(btf, &args[i])) {
 			/* Reject repeated use bpf_prog_aux */
@@ -12933,8 +13025,6 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 
 		if (is_kfunc_arg_ignore(btf, &args[i]) || is_kfunc_arg_implicit(meta, i))
 			continue;
-
-		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
 
 		if (btf_type_is_ptr(t)) {
 			ref_t = btf_type_skip_modifiers(btf, t->type, &ref_id);
@@ -12984,6 +13074,17 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			ref_id = *reg2btf_ids[CONST_PTR_TO_MAP];
 			ref_t = btf_type_by_id(btf_vmlinux, ref_id);
 			ref_tname = btf_name_by_offset(btf, ref_t->name_off);
+		}
+
+		/*
+		 * The first slot is checked in below KF_ARG_ANYTHING.
+		 * The rest of it has to be a scalar.
+		 */
+		for (k = 1; k < nslots; k++) {
+			ret = check_kfunc_scalar_arg(env, caller, regs, slots_used + k,
+						     insn_idx, func_name);
+			if (ret)
+				return ret;
 		}
 
 		switch (base_type(kf_arg_type)) {
@@ -13055,15 +13156,10 @@ static int check_kfunc_args(struct bpf_verifier_env *env, struct bpf_call_arg_me
 			}
 			break;
 		case KF_ARG_ANYTHING:
-			if (reg->type != SCALAR_VALUE) {
-				verbose(env, "%s is not a scalar\n", reg_arg_name(env, argno));
-				bpf_diag_call_arg_fmt(env, insn_idx, argno, func_name,
-						      "Pass an integer scalar value for this argument, not a pointer or resource object.",
-						      "the kfunc expects an integer scalar, but %s is %s",
-						      reg_arg_name(env, argno),
-						      bpf_diag_reg_type_plain(env, reg->type));
-				return -EINVAL;
-			}
+			ret = check_kfunc_scalar_arg(env, caller, regs, slots_used,
+						     insn_idx, func_name);
+			if (ret)
+				return ret;
 			break;
 		case KF_ARG_CONST_ALLOC_SIZE_OR_ZERO:
 			if (reg->type != SCALAR_VALUE) {
@@ -13403,9 +13499,9 @@ check_ok:
 			fallthrough;
 		case KF_ARG_MEM_SIZE:
 		{
-			struct bpf_reg_state *buff_reg = get_func_arg_reg(caller, regs, i - 1);
+			struct bpf_reg_state *buff_reg = get_func_arg_reg(caller, regs, prev_slot);
 			struct bpf_reg_state *size_reg = reg;
-			argno_t buff_argno = argno_from_arg(i);
+			argno_t buff_argno = argno_from_arg(prev_slot + 1);
 			enum bpf_mem_size_failure failure;
 
 			if (reg->type != SCALAR_VALUE) {
@@ -13751,7 +13847,7 @@ s64 bpf_kfunc_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_insn *
 	const struct btf_param *args;
 	const struct btf_type *t, *ref_t;
 	const struct btf *btf;
-	u32 nargs, type_size;
+	u32 i, slot, nargs, type_size;
 	s64 size;
 
 	if (bpf_fetch_kfunc_arg_meta(env, insn->imm, insn->off, &meta) < 0)
@@ -13760,23 +13856,32 @@ s64 bpf_kfunc_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_insn *
 	btf = meta.btf;
 	args = btf_params(meta.func_proto);
 	nargs = btf_type_vlen(meta.func_proto);
-	if (arg >= nargs)
+
+	/*
+	 * @arg is an argument slot and a 16-byte parameter takes two of them,
+	 * so walk the parameters to find the one that starts at this slot. A
+	 * slot holding the upper eightbyte of such a parameter belongs to no
+	 * pointer, and neither does a slot past the last parameter.
+	 */
+	for (i = 0, slot = 0; i < nargs && slot < arg; i++)
+		slot += kfunc_arg_slots(btf_type_skip_modifiers(btf, args[i].type, NULL));
+	if (i >= nargs || slot != arg)
 		return 0;
 
-	t = btf_type_skip_modifiers(btf, args[arg].type, NULL);
+	t = btf_type_skip_modifiers(btf, args[i].type, NULL);
 	if (!btf_type_is_ptr(t))
 		return 0;
 
 	/* dynptr: fixed 16-byte on-stack representation */
-	if (is_kfunc_arg_dynptr(btf, &args[arg])) {
+	if (is_kfunc_arg_dynptr(btf, &args[i])) {
 		size = BPF_DYNPTR_SIZE;
 		goto out;
 	}
 
 	/* ptr + __sz/__szk pair: the size follows the pointer */
-	if (arg + 1 < nargs &&
-	    (btf_param_match_suffix(btf, &args[arg + 1], "__sz") ||
-	     btf_param_match_suffix(btf, &args[arg + 1], "__szk"))) {
+	if (i + 1 < nargs &&
+	    (btf_param_match_suffix(btf, &args[i + 1], "__sz") ||
+	     btf_param_match_suffix(btf, &args[i + 1], "__szk"))) {
 		int size_reg = BPF_REG_1 + arg + 1;
 
 		if (size_reg <= MAX_BPF_FUNC_REG_ARGS &&
@@ -13799,7 +13904,7 @@ out:
 	/* KF_ITER_NEW kfuncs initialize the iterator state at arg 0 */
 	if (arg == 0 && meta.kfunc_flags & KF_ITER_NEW)
 		return -size;
-	if (is_kfunc_arg_uninit(btf, &args[arg]))
+	if (is_kfunc_arg_uninit(btf, &args[i]))
 		return -size;
 	return size;
 }
@@ -13992,7 +14097,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	struct bpf_insn_aux_data *insn_aux;
 	const char *operation;
 	int err, insn_idx = *insn_idx_p;
-	u32 i, nargs, ptr_type_id, ret_nregs = 1;
+	u32 i, proto_slots, ptr_type_id, ret_nregs = 1;
 	struct bpf_kfunc_desc *desc;
 	struct btf *desc_btf;
 	int id;
@@ -14418,11 +14523,11 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (bpf_is_kfunc_pkt_changing(&meta))
 		clear_all_pkt_pointers(env);
 
-	nargs = btf_type_vlen(meta.func_proto);
-	if (nargs > MAX_BPF_FUNC_REG_ARGS) {
+	proto_slots = kfunc_proto_slots(desc_btf, meta.func_proto);
+	if (proto_slots > MAX_BPF_FUNC_REG_ARGS) {
 		struct bpf_func_state *caller = cur_func(env);
 		struct bpf_subprog_info *caller_info = &env->subprog_info[caller->subprogno];
-		u16 out_stack_arg_cnt = nargs - MAX_BPF_FUNC_REG_ARGS;
+		u16 out_stack_arg_cnt = proto_slots - MAX_BPF_FUNC_REG_ARGS;
 		u16 stack_arg_cnt = bpf_in_stack_arg_cnt(caller_info) + out_stack_arg_cnt;
 
 		if (stack_arg_cnt > caller_info->stack_arg_cnt)
@@ -17989,7 +18094,7 @@ bool bpf_get_call_summary(struct bpf_verifier_env *env, struct bpf_insn *call,
 		if (err < 0)
 			/* error would be reported later */
 			return false;
-		cs->arg_slot_cnt = btf_type_vlen(meta.func_proto);
+		cs->arg_slot_cnt = kfunc_proto_slots(meta.btf, meta.func_proto);
 		cs->fastcall = meta.kfunc_flags & KF_FASTCALL;
 		cs->is_void = btf_type_is_void(btf_type_by_id(meta.btf, meta.func_proto->type));
 		return true;
