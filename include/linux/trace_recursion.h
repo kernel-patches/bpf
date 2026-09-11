@@ -153,6 +153,17 @@ static __always_inline int trace_test_and_set_recursion(unsigned long ip, unsign
 	current->trace_recursion = val;
 	barrier();
 
+	/*
+	 * Callbacks reached from static trampoline text (return_to_handler,
+	 * the rethook and kretprobe trampolines) do not maintain
+	 * current->rcu_tramp_nesting themselves; they rely on this
+	 * preempt_disable() to keep the task from being preempted, and thus
+	 * from reporting a Tasks RCU quiescent state, while an ftrace_ops or
+	 * its data is in use.  If the preempt_disable() is ever removed from
+	 * the recursion protection, this must rcu_tasks_trampoline_enter()
+	 * here and rcu_tasks_trampoline_exit() in trace_clear_recursion()
+	 * instead.  See CONFIG_RCU_TASKS_PREEMPT_QS.
+	 */
 	preempt_disable_notrace();
 
 	return bit;
