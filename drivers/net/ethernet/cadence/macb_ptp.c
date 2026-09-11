@@ -431,11 +431,9 @@ int gem_set_hwtst(struct net_device *netdev,
 	case HWTSTAMP_TX_OFF:
 		break;
 	case HWTSTAMP_TX_ONESTEP_SYNC:
-		gem_ptp_set_one_step_sync(bp, 1);
 		tx_bd_control = TSTAMP_ALL_FRAMES;
 		break;
 	case HWTSTAMP_TX_ON:
-		gem_ptp_set_one_step_sync(bp, 0);
 		tx_bd_control = TSTAMP_ALL_FRAMES;
 		break;
 	default:
@@ -472,6 +470,11 @@ int gem_set_hwtst(struct net_device *netdev,
 		tstamp_config->rx_filter = HWTSTAMP_FILTER_NONE;
 		return -ERANGE;
 	}
+
+	if (tstamp_config->tx_type == HWTSTAMP_TX_ONESTEP_SYNC)
+		gem_ptp_set_one_step_sync(bp, 1);
+	else if (tstamp_config->tx_type == HWTSTAMP_TX_ON)
+		gem_ptp_set_one_step_sync(bp, 0);
 
 	bp->tstamp_config = *tstamp_config;
 
