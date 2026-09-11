@@ -11,12 +11,6 @@
  *
  * Note:	Provide RF 6052 series relative API.
  *
- * Function:
- *
- * Export:
- *
- * Abbrev:
- *
  * History:
  * Data			Who		Remark
  *
@@ -27,16 +21,6 @@
  ******************************************************************************/
 
 #include <rtl8723b_hal.h>
-
-/*---------------------------Define Local Constant---------------------------*/
-/*---------------------------Define Local Constant---------------------------*/
-
-/*------------------------Define global variable-----------------------------*/
-/*------------------------Define global variable-----------------------------*/
-
-/*------------------------Define local variable------------------------------*/
-/*  2008/11/20 MH For Debug only, RF */
-/*------------------------Define local variable------------------------------*/
 
 /*-----------------------------------------------------------------------------
  * Function:    PHY_RF6052SetBandwidth()
@@ -131,5 +115,3 @@ int PHY_RF6052_Config8723B(struct adapter *Adapter)
 	return phy_RF6052_Config_ParaFile(Adapter);
 
 }
-
-/* End of HalRf6052.c */
