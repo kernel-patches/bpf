@@ -118,6 +118,9 @@ static void otx2_config_sched_shaping(struct otx2_nic *pfvf,
 	/* configure PIR */
 	maxrate = (node->rate > node->ceil) ? node->rate : node->ceil;
 
+	/* 65536 is the kernel-side default burst when HTB does not supply an
+	 * explicit value, not the NIX hardware maximum (CN10K_MAX_BURST_SIZE).
+	 */
 	cfg->regval[*num_regs] =
 		otx2_get_txschq_rate_regval(pfvf, maxrate, 65536);
 	(*num_regs)++;
@@ -1087,6 +1090,14 @@ static int otx2_qos_root_add(struct otx2_nic *pfvf, u16 htb_maj_id, u16 htb_defc
 	netdev_dbg(pfvf->netdev,
 		   "TC_HTB_CREATE: handle=0x%x defcls=0x%x\n",
 		   htb_maj_id, htb_defcls);
+
+	if (pfvf->mqprio.rate_limit) {
+		netdev_err(pfvf->netdev,
+			   "HTB: cannot enable while mqprio bandwidth offload is active\n");
+		NL_SET_ERR_MSG_MOD(extack,
+				   "HTB: cannot enable while mqprio bandwidth offload is active");
+		return -EOPNOTSUPP;
+	}
 
 	root = otx2_qos_alloc_root(pfvf);
 	if (IS_ERR(root)) {
