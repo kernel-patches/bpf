@@ -16,7 +16,7 @@
 #define MIN_SYM_RET  sizeof(EXP_SYM_OUT)
 
 /* The third specifier, %p, is a hashed pointer which changes on every reboot */
-#define EXP_ADDR_OUT "0000000000000000 ffff00000add4e55 "
+#define EXP_ADDR_OUT "ffff00000add4e55 "
 #define EXP_ADDR_RET sizeof(EXP_ADDR_OUT "unknownhashedptr")
 
 #define EXP_STR_OUT  "str1         a  b c      d e longstr"
