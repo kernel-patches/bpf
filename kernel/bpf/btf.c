@@ -7579,6 +7579,9 @@ static u8 __get_arg_fmodel_flags(const struct btf *btf,
 {
 	u8 flags = __get_type_fmodel_flags(t);
 
+	if (btf_func_arg_align(btf, t) > sizeof(u64))
+		flags |= BTF_FMODEL_ALIGN16_ARG;
+
 	if (btf_param_match_suffix(btf, arg, "__arena__nullable"))
 		flags |= BTF_FMODEL_ARENA_ARG | BTF_FMODEL_NULLABLE_ARG;
 	else if (btf_param_match_suffix(btf, arg, "__arena"))

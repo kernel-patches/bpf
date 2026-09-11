@@ -2840,7 +2840,7 @@ static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 }
 
 static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
-			       struct bpf_func_proto *proto);
+			       const struct btf_func_model *fm, struct bpf_func_proto *proto);
 
 int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 {
@@ -2957,7 +2957,7 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	desc = &tab->descs[tab->nr_descs];
 	memset(desc, 0, sizeof(*desc));
 
-	err = gen_kfunc_arg_proto(env, &meta, &desc->proto);
+	err = gen_kfunc_arg_proto(env, &meta, &func_model, &desc->proto);
 	if (err)
 		return err;
 
@@ -12173,6 +12173,58 @@ static u32 kfunc_proto_slots(const struct btf *btf, const struct btf_type *func_
 	return slots_used;
 }
 
+static u32 kfunc_abi_slots(const struct btf_func_model *fm)
+{
+	const struct bpf_jit_arg_abi *abi = bpf_jit_arg_abi();
+	u8 pos_of_slot[MAX_BPF_FUNC_ARG_SLOTS];
+	u32 i, nslots, slots = 0;
+
+	for (i = 0; i < fm->nr_args; i++)
+		slots += btf_func_model_arg_slots(fm, i);
+
+	if (!abi)
+		return slots;
+
+	nslots = bpf_jit_place_args(abi, fm, pos_of_slot);
+	for (i = 0; i < nslots; i++)
+		if (pos_of_slot[i] + 1 > slots)
+			slots = pos_of_slot[i] + 1;
+
+	return slots;
+}
+
+static u32 __btf_func_arg_align(const struct btf *btf, const struct btf_type *t, int rec)
+{
+	const struct btf_member *member;
+	const struct btf_type *mt;
+	u32 align, i;
+
+	while (btf_type_is_array(t))
+		t = btf_type_skip_modifiers(btf, btf_array(t)->type, NULL);
+
+	if (btf_type_is_int(t))
+		return t->size > BPF_REG_SIZE ? t->size : BPF_REG_SIZE;
+	if (!btf_type_is_struct(t))
+		return BPF_REG_SIZE;
+	if (rec >= BTF_MEMBER_MAX_DEPTH)
+		return 0;
+
+	for_each_member(i, t, member) {
+		mt = btf_type_skip_modifiers(btf, member->type, NULL);
+		align = __btf_func_arg_align(btf, mt, rec + 1);
+		if (!align)
+			return 0;
+		if (align > BPF_REG_SIZE)
+			return 2 * BPF_REG_SIZE;
+	}
+	return BPF_REG_SIZE;
+}
+
+u32 btf_func_arg_align(const struct btf *btf, const struct btf_type *t)
+{
+	return __btf_func_arg_align(btf, t, 0);
+}
+
 static int
 get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 		   const struct btf_param *args, int arg, int nargs, u32 slot)
@@ -12326,10 +12378,12 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 }
 
 static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
-			       struct bpf_func_proto *proto)
+			       const struct btf_func_model *fm, struct bpf_func_proto *proto)
 {
+	const struct bpf_jit_arg_abi *abi;
 	const struct btf *btf = meta->btf;
 	const struct btf_param *args;
+	const struct btf_type *t;
 	u32 i, nargs, slots_used;
 	int arg_type;
 
@@ -12347,17 +12401,35 @@ static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg
 	}
 
 	for (i = 0, slots_used = 0; i < nargs; i++) {
-		const struct btf_type *t;
-		u32 nslots;
+		u32 nslots = btf_func_model_arg_slots(fm, i);
 
-		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
-		nslots = kfunc_arg_slots(t);
-		/*
-		 * The calling conventions the JIT has to reconcile do not
-		 * agree on where an argument of more than one eightbyte goes,
-		 * so refuse one until the JIT can say where this arch puts it.
-		 */
 		if (nslots > 1) {
+			t = btf_type_skip_modifiers(btf, args[i].type, NULL);
+			if (!btf_func_arg_align(btf, t)) {
+				verbose(env,
+					"Function %s arg#%d type %s nests structs more than "
+					"%d levels deep\n",
+					meta->func_name, i, btf_type_str(t),
+					BTF_MEMBER_MAX_DEPTH);
+				return -EINVAL;
+			}
+		}
+		slots_used += nslots;
+	}
+
+	if (slots_used > MAX_BPF_FUNC_ARGS) {
+		verbose(env, "Function %s needs %d > %d argument slots\n", meta->func_name,
+			slots_used, MAX_BPF_FUNC_ARGS);
+		return -EINVAL;
+	}
+
+	abi = bpf_jit_arg_abi();
+
+	for (i = 0, slots_used = 0; i < nargs; i++) {
+		u32 nslots = btf_func_model_arg_slots(fm, i);
+
+		if (!abi && nslots > 1) {
+			t = btf_type_skip_modifiers(btf, args[i].type, NULL);
 			verbose(env,
 				"Function %s arg#%d type %s cannot be passed at "
 				"argument slot %d on this architecture\n",
@@ -14523,7 +14595,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (bpf_is_kfunc_pkt_changing(&meta))
 		clear_all_pkt_pointers(env);
 
-	proto_slots = kfunc_proto_slots(desc_btf, meta.func_proto);
+	proto_slots = kfunc_abi_slots(&desc->func_model);
 	if (proto_slots > MAX_BPF_FUNC_REG_ARGS) {
 		struct bpf_func_state *caller = cur_func(env);
 		struct bpf_subprog_info *caller_info = &env->subprog_info[caller->subprogno];
