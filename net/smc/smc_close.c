@@ -130,6 +130,11 @@ void smc_close_active_abort(struct smc_sock *smc)
 	struct sock *sk = &smc->sk;
 	bool release_clcsock = false;
 
+	/*
+	 * Unhash before any branch calls smc_conn_free() and drops lgr/lnk refs;
+	 * the diag reader must not see a hashed socket with freed lgr/lnk.
+	 */
+	sk->sk_prot->unhash(sk);
 	if (sk->sk_state != SMC_INIT && smc->clcsock && smc->clcsock->sk) {
 		sk->sk_err = ECONNABORTED;
 		if (smc->clcsock && smc->clcsock->sk)
@@ -433,6 +438,11 @@ wakeup:
 		sk->sk_state_change(sk);
 		if ((sk->sk_state == SMC_CLOSED) &&
 		    (sock_flag(sk, SOCK_DEAD) || !sk->sk_socket)) {
+			/*
+			 * Unhash before smc_conn_free() drops lgr/lnk refs so the diag
+			 * reader cannot see a hashed socket with freed lgr/lnk.
+			 */
+			sk->sk_prot->unhash(sk);
 			smc_conn_free(conn);
 			if (smc->clcsock)
 				release_clcsock = true;
