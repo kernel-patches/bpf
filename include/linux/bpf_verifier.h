@@ -1518,9 +1518,9 @@ struct bpf_dynptr_desc {
 
 /*
  * The last seen rereferenced object; Updated by update_ref_obj() when a register refers to a
- * referenced object. Used when the helper or kfunc is casting a referenced object, returning
- * allocated memory derived from referenced object or creating a dynptr with a referenced
- * object as parent.
+ * referenced object or another verifier-tracked lifetime anchor. Used when the helper or kfunc
+ * is casting a referenced object, returning allocated memory derived from a referenced object
+ * or creating a dynptr whose backing object has a tracked lifetime.
  */
 struct ref_obj_desc {
 	u32 id;

@@ -238,11 +238,16 @@ static void bpf_map_key_store(struct bpf_insn_aux_data *aux, u64 state)
 			     (poisoned ? BPF_MAP_KEY_POISON : 0ULL);
 }
 
+static void update_ref_obj_id(struct ref_obj_desc *ref_obj, u32 id, u32 parent_id)
+{
+	ref_obj->id = id;
+	ref_obj->parent_id = parent_id;
+	ref_obj->cnt++;
+}
+
 static void update_ref_obj(struct ref_obj_desc *ref_obj, struct bpf_reg_state *reg)
 {
-	ref_obj->id = reg->id;
-	ref_obj->parent_id = reg->parent_id;
-	ref_obj->cnt++;
+	update_ref_obj_id(ref_obj, reg->id, reg->parent_id);
 }
 
 static int validate_ref_obj(struct bpf_verifier_env *env, struct ref_obj_desc *ref_obj)
@@ -977,7 +982,7 @@ static int unmark_stack_slots_iter(struct bpf_verifier_env *env,
 				   struct bpf_reg_state *reg, int nr_slots)
 {
 	struct bpf_func_state *state = bpf_func(env, reg);
-	int spi, i, j;
+	int spi, i, j, err;
 
 	spi = iter_get_spi(env, reg, nr_slots);
 	if (spi < 0)
@@ -987,8 +992,11 @@ static int unmark_stack_slots_iter(struct bpf_verifier_env *env,
 		struct bpf_stack_state *slot = &state->stack[spi - i];
 		struct bpf_reg_state *st = &slot->spilled_ptr;
 
-		if (i == 0)
-			WARN_ON_ONCE(release_reference(env, st->id));
+		if (i == 0) {
+			err = release_reference(env, st->id);
+			if (err)
+				return err;
+		}
 
 		bpf_mark_reg_not_init(env, st);
 
@@ -6143,9 +6151,16 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	}
 
 	if (atype == BPF_READ && value_regno >= 0) {
-		ret = mark_btf_ld_reg(env, regs, value_regno, ret, reg->btf, btf_id, flag);
+		enum bpf_reg_type reg_type = ret;
+		u32 parent_id = reg->parent_id;
+
+		ret = mark_btf_ld_reg(env, regs, value_regno, reg_type,
+				      reg->btf, btf_id, flag);
 		if (ret < 0)
 			return ret;
+		if ((regs[value_regno].type & PTR_TRUSTED) &&
+		    !(regs[value_regno].type & (MEM_RCU | MEM_PERCPU | MEM_USER)))
+			regs[value_regno].parent_id = parent_id;
 	}
 
 	return 0;
@@ -9468,6 +9483,24 @@ static int idstack_pop(struct bpf_idmap *idmap)
 	return idmap->map[--idmap->cnt].old;
 }
 
+static int check_reference_children(struct bpf_verifier_env *env, int parent_id)
+{
+	struct bpf_verifier_state *vstate = env->cur_state;
+	int i;
+
+	for (i = 0; i < vstate->acquired_refs; i++) {
+		if (vstate->refs[i].type != REF_TYPE_PTR)
+			continue;
+		if (vstate->refs[i].parent_id != parent_id)
+			continue;
+		verbose(env, "Leaking reference id=%d alloc_insn=%d. Release it first.\n",
+			vstate->refs[i].id, vstate->refs[i].insn_idx);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 /* Release id and objects derived from it iteratively in a DFS manner */
 static int release_reference(struct bpf_verifier_env *env, int id)
 {
@@ -9477,31 +9510,25 @@ static int release_reference(struct bpf_verifier_env *env, int id)
 	struct bpf_stack_state *stack;
 	struct bpf_func_state *state;
 	struct bpf_reg_state *reg;
-	int i, err;
+	int err;
 
 	idstack->cnt = 0;
 	err = idstack_push(idstack, id);
 	if (err)
 		return err;
 
-	if (find_reference_state(vstate, id)) {
-		err = release_reference_nomark(env, id);
-		WARN_ON_ONCE(err);
-	}
-
 	while ((id = idstack_pop(idstack))) {
 		/*
 		 * Child references are inaccessible after parent is released,
 		 * any child references that exist at this point are a leak.
 		 */
-		for (i = 0; i < vstate->acquired_refs; i++) {
-			if (vstate->refs[i].type != REF_TYPE_PTR)
-				continue;
-			if (vstate->refs[i].parent_id != id)
-				continue;
-			verbose(env, "Leaking reference id=%d alloc_insn=%d. Release it first.\n",
-				vstate->refs[i].id, vstate->refs[i].insn_idx);
-			return -EINVAL;
+		err = check_reference_children(env, id);
+		if (err)
+			return err;
+
+		if (find_reference_state(vstate, id)) {
+			err = release_reference_nomark(env, id);
+			WARN_ON_ONCE(err);
 		}
 
 		bpf_for_each_reg_in_vstate_mask(vstate, state, reg, stack, mask, ({
@@ -9551,6 +9578,33 @@ static void invalidate_non_owning_refs(struct bpf_verifier_env *env)
 			mark_reg_invalid(env, reg);
 		}
 	}));
+}
+
+static int invalidate_iter_owned_btf_ptrs(struct bpf_verifier_env *env, u32 parent_id)
+{
+	struct bpf_func_state *unused;
+	struct bpf_reg_state *reg;
+	int err;
+
+	if (WARN_ON_ONCE(!parent_id))
+		return -EFAULT;
+
+	err = check_reference_children(env, parent_id);
+	if (err)
+		return err;
+
+	/*
+	 * Struct iterators can release the previous element on each next call.
+	 * PTR_TO_MEM iterator results use storage that remains valid until destroy.
+	 */
+	bpf_for_each_reg_in_vstate(env->cur_state, unused, reg, ({
+		if (base_type(reg->type) != PTR_TO_BTF_ID || reg->parent_id != parent_id)
+			continue;
+		bpf_diag_record_scrub(env, reg, BPF_DIAG_MOD_REF_RELEASE);
+		mark_reg_invalid(env, reg);
+	}));
+
+	return 0;
 }
 
 static void invalidate_rcu_protected_refs(struct bpf_verifier_env *env)
@@ -13117,6 +13171,10 @@ check_ok:
 				ret = process_kf_arg_ptr_to_btf_id(env, reg, ref_t, ref_tname, ref_id, meta, i, argno);
 				if (ret < 0)
 					return ret;
+				if (meta->btf == btf_vmlinux &&
+				    meta->func_id == special_kfunc_list[KF_bpf_dynptr_from_file] &&
+				    i == 0 && !reg_is_referenced(env, reg) && reg->parent_id)
+					update_ref_obj_id(&meta->ref_obj, reg->parent_id, 0);
 				break;
 			}
 
@@ -14021,6 +14079,13 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 	}
 
+	if (bpf_is_iter_next_kfunc(&meta) &&
+	    !(get_iter_from_state(env->cur_state, &meta)->type & MEM_RCU)) {
+		err = invalidate_iter_owned_btf_ptrs(env, meta.ref_obj.id);
+		if (err)
+			return err;
+	}
+
 	bpf_diag_record_caller_saved(env, regs);
 	bpf_diag_mod_begin(env, &regs[BPF_REG_0], NULL, BPF_DIAG_MOD_WRITE);
 	for (i = 0; i < CALLER_SAVED_REGS; i++) {
@@ -14131,6 +14196,9 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			regs[BPF_REG_0].btf = desc_btf;
 			regs[BPF_REG_0].type = type;
 			regs[BPF_REG_0].btf_id = ptr_type_id;
+
+			if (bpf_is_iter_next_kfunc(&meta) && !(type & MEM_RCU))
+				regs[BPF_REG_0].parent_id = meta.ref_obj.id;
 		}
 
 		if (is_kfunc_ret_null(&meta)) {
