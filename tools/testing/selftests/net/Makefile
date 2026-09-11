@@ -80,6 +80,7 @@ TEST_PROGS := \
 	reuseport_addr_any.sh \
 	route_hint.sh \
 	route_localnet.sh \
+	rpl_srh_loop.sh \
 	rps_default_mask.sh \
 	rtnetlink.py \
 	rtnetlink.sh \
