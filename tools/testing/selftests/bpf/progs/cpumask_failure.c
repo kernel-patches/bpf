@@ -243,7 +243,7 @@ int BPF_PROG(test_populate_invalid_destination, struct task_struct *task, u64 cl
 }
 
 SEC("tp_btf/task_newtask")
-__failure __msg("leads to invalid memory access")
+__failure __msg("R2 type=scalar expected=fp")
 int BPF_PROG(test_populate_invalid_source, struct task_struct *task, u64 clone_flags)
 {
 	void *garbage = (void *)0x123456;
