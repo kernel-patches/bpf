@@ -23,15 +23,11 @@
 #include <drv_types.h>
 #include <HalPwrSeqCmd.h>
 
-/*  */
 /*  Description: */
 /*  This routine deal with the Power Configuration CMDs parsing for RTL8723/RTL8188E Series IC. */
-/*  */
 /*  Assumption: */
 /*  We should follow specific format which was released from HW SD. */
-/*  */
 /*  2011.07.07, added by Roger. */
-/*  */
 u8 HalPwrSeqCmdParsing(
 	struct adapter *padapter,
 	u8 CutVersion,
@@ -64,10 +60,8 @@ u8 HalPwrSeqCmdParsing(
 			case PWR_CMD_WRITE:
 				offset = GET_PWR_CFG_OFFSET(PwrCfgCmd);
 
-				/*  */
 				/*  <Roger_Notes> We should deal with interface specific address mapping for some interfaces, e.g., SDIO interface */
 				/*  2011.07.07. */
-				/*  */
 				if (GET_PWR_CFG_BASE(PwrCfgCmd) == PWR_BASEADDR_SDIO) {
 					/*  Read Back SDIO Local value */
 					value = SdioLocalCmd52Read1Byte(padapter, offset);

@@ -13,14 +13,11 @@ void ConfigureTxpowerTrack(struct dm_odm_t *pDM_Odm, struct txpwrtrack_cfg *pCon
 	ConfigureTxpowerTrack_8723B(pConfig);
 }
 
-/*  */
 /*  <20121113, Kordan> This function should be called when TxAGC changed. */
 /*  Otherwise the previous compensation is gone, because we record the */
 /*  delta of temperature between two TxPowerTracking watch dogs. */
-/*  */
 /*  NOTE: If Tx BB swing or Tx scaling is varified during run-time, still */
 /*        need to call this function. */
-/*  */
 void ODM_ClearTxPowerTrackingState(struct dm_odm_t *pDM_Odm)
 {
 	struct hal_com_data *pHalData = GET_HAL_DATA(pDM_Odm->Adapter);
@@ -238,10 +235,9 @@ void ODM_TXPowerTrackingCallback_ThermalMeter(struct adapter *Adapter)
 		/* 4 7.2 Configure the Swing Table to adjust Tx Power. */
 
 		pDM_Odm->RFCalibrateInfo.bTxPowerChanged = true; /*  Always true after Tx Power is adjusted by power tracking. */
-		/*  */
 		/*  2012/04/23 MH According to Luke's suggestion, we can not write BB digital */
 		/*  to increase TX power. Otherwise, EVM will be bad. */
-		/*  */
+
 		/*  2012/04/25 MH Add for tx power tracking to set tx power in tx agc for 88E. */
 
 		if (ThermalValue > pHalData->EEPROMThermalMeter) {

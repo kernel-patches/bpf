@@ -109,9 +109,7 @@ static int phy_RF6052_Config_ParaFile(struct adapter *Adapter)
 
 int PHY_RF6052_Config8723B(struct adapter *Adapter)
 {
-	/*  */
 	/*  Config BB and RF */
-	/*  */
 	return phy_RF6052_Config_ParaFile(Adapter);
 
 }

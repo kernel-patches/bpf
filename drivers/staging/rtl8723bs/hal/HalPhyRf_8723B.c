@@ -1005,9 +1005,7 @@ static void _PHY_PathBFillIQKMatrix8723B(
 	}
 }
 
-/*  */
 /*  2011/07/26 MH Add an API for testing IQK fail case. */
-/*  */
 /*  MP Already declare in odm.c */
 
 void ODM_SetIQCbyRFpath(struct dm_odm_t *pDM_Odm, u32 RFpath)

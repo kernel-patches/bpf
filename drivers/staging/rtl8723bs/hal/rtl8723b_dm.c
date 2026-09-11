@@ -12,9 +12,7 @@
 
 /*  Global var */
 
-/*  */
 /*  functions */
-/*  */
 static void Init_ODM_ComInfo_8723b(struct adapter *Adapter)
 {
 
@@ -23,9 +21,7 @@ static void Init_ODM_ComInfo_8723b(struct adapter *Adapter)
 	struct dm_priv *pdmpriv = &pHalData->dmpriv;
 	u8 cut_ver, fab_ver;
 
-	/*  */
 	/*  Init Value */
-	/*  */
 	memset(pDM_Odm, 0, sizeof(*pDM_Odm));
 
 	pDM_Odm->Adapter = Adapter;

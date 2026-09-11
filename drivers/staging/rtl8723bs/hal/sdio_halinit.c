@@ -491,9 +491,7 @@ static void _InitOperationMode(struct adapter *padapter)
 	pmlmeext = &padapter->mlmeextpriv;
 
 	/* 1 This part need to modified according to the rate set we filtered!! */
-	/*  */
 	/*  Set RRSR, RATR, and REG_BWOPMODE registers */
-	/*  */
 	switch (pmlmeext->cur_wireless_mode) {
 	case WIRELESS_MODE_B:
 		regBwOpMode = BW_OPMODE_20MHZ;
@@ -526,9 +524,7 @@ static void _InitInterrupt(struct adapter *padapter)
 	/*  HIMR - turn all off */
 	rtw_write32(padapter, REG_HIMR, 0);
 
-	/*  */
 	/*  Initialize and enable SDIO Host Interrupt. */
-	/*  */
 	InitInterrupt8723BSdio(padapter);
 }
 
@@ -618,9 +614,7 @@ u32 rtl8723bs_hal_init(struct adapter *padapter)
 	ret = PHY_MACConfig8723B(padapter);
 	if (ret != _SUCCESS)
 		return ret;
-	/*  */
 	/* d. Initialize BB related configurations. */
-	/*  */
 	ret = PHY_BBConfig8723B(padapter);
 	if (ret != _SUCCESS)
 		return ret;
@@ -634,9 +628,7 @@ u32 rtl8723bs_hal_init(struct adapter *padapter)
 			return ret;
 	}
 
-	/*  */
 	/*  Joseph Note: Keep RfRegChnlVal for later use. */
-	/*  */
 	pHalData->RfRegChnlVal[0] =
 		PHY_QueryRFReg(padapter, (enum rf_path)0, RF_CHNLBW, bRFRegOffsetMask);
 	pHalData->RfRegChnlVal[1] =
@@ -650,7 +642,6 @@ u32 rtl8723bs_hal_init(struct adapter *padapter)
 	if (ret != _SUCCESS)
 		return _FAIL;
 
-	/*  */
 	_InitQueuePriority(padapter);
 	_InitPageBoundary(padapter);
 	_InitTransferPageSize(padapter);
@@ -683,29 +674,23 @@ u32 rtl8723bs_hal_init(struct adapter *padapter)
 
 	rtl8723b_InitAntenna_Selection(padapter);
 
-	/*  */
 	/*  Disable BAR, suggested by Scott */
 	/*  2010.04.09 add by hpfan */
-	/*  */
 	rtw_write32(padapter, REG_BAR_MODE_CTRL, 0x0201ffff);
 
 	/*  HW SEQ CTRL */
 	/*  set 0x0 to 0xFF by tynli. Default enable HW SEQ NUM. */
 	rtw_write8(padapter, REG_HWSEQ_CTRL, 0xFF);
 
-	/*  */
 	/*  Configure SDIO TxRx Control to enable Rx DMA timer masking. */
 	/*  2010.02.24. */
-	/*  */
 	rtw_write32(padapter, SDIO_LOCAL_BASE | SDIO_REG_TX_CTRL, 0);
 
 	_RfPowerSave(padapter);
 
 	rtl8723b_InitHalDm(padapter);
 
-	/*  */
 	/*  Update current Tx FIFO page status. */
-	/*  */
 	HalQueryTxBufferStatus8723BSdio(padapter);
 	HalQueryTxOQTBufferStatus8723BSdio(padapter);
 	pHalData->SdioTxOQTMaxFreeSpace = pHalData->SdioTxOQTFreeSpace;
@@ -773,12 +758,9 @@ u32 rtl8723bs_hal_init(struct adapter *padapter)
 	return _SUCCESS;
 }
 
-/*  */
 /*  Description: */
 /*	RTL8723e card disable power sequence v003 which suggested by Scott. */
-/*  */
 /*  First created by tynli. 2011.01.28. */
-/*  */
 static void CardDisableRTL8723BSdio(struct adapter *padapter)
 {
 	u8 val;
@@ -923,15 +905,11 @@ void rtl8723bs_interface_configure(struct adapter *padapter)
 	Hal_MappingOutPipe(padapter, pHalData->OutEpNumber);
 }
 
-/*  */
 /*	Description: */
 /*		We should set Efuse cell selection to WiFi cell in default. */
-/*  */
 /*	Assumption: */
 /*		PASSIVE_LEVEL */
-/*  */
 /*	Added by Roger, 2010.11.23. */
-/*  */
 static void _EfuseCellSel(struct adapter *padapter)
 {
 	u32 value32;
@@ -975,10 +953,7 @@ static void _ReadEfuseInfo8723BS(struct adapter *padapter)
 	struct eeprom_priv *pEEPROM = GET_EEPROM_EFUSE_PRIV(padapter);
 	u8 *hwinfo = NULL;
 
-	/*  */
 	/*  This part read and parse the eeprom/efuse content */
-	/*  */
-
 	hwinfo = pEEPROM->efuse_eeprom_data;
 
 	Hal_InitPGData(padapter, hwinfo);
@@ -990,9 +965,7 @@ static void _ReadEfuseInfo8723BS(struct adapter *padapter)
 	Hal_EfuseParseTxPowerInfo_8723B(padapter, hwinfo, pEEPROM->bautoload_fail_flag);
 	Hal_EfuseParseBoardType_8723BS(padapter, hwinfo, pEEPROM->bautoload_fail_flag);
 
-	/*  */
 	/*  Read Bluetooth co-exist and initialize */
-	/*  */
 	Hal_EfuseParsePackageType_8723B(padapter, hwinfo, pEEPROM->bautoload_fail_flag);
 	Hal_EfuseParseBTCoexistInfo_8723B(padapter, hwinfo, pEEPROM->bautoload_fail_flag);
 	Hal_EfuseParseChnlPlan_8723B(padapter, hwinfo, pEEPROM->bautoload_fail_flag);
@@ -1017,14 +990,10 @@ static void _ReadPROMContent(struct adapter *padapter)
 	_ReadEfuseInfo8723BS(padapter);
 }
 
-/*  */
 /*	Description: */
 /*		Read HW adapter information by E-Fuse or EEPROM according CR9346 reported. */
-/*  */
 /*	Assumption: */
 /*		PASSIVE_LEVEL (SDIO interface) */
-/*  */
-/*  */
 static s32 _ReadAdapterInfo8723BS(struct adapter *padapter)
 {
 	u8 val8;
@@ -1138,10 +1107,8 @@ void SetHwRegWithBuf8723B(struct adapter *padapter, u8 variable, u8 *pbuf, int l
 	}
 }
 
-/*  */
 /*	Description: */
 /*		Query setting of specified variable. */
-/*  */
 u8 GetHalDefVar8723BSDIO(
 	struct adapter *Adapter, enum hal_def_variable eVariable, void *pValue
 )

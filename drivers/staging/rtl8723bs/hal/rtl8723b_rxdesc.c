@@ -50,9 +50,7 @@ static void process_link_qual(struct adapter *padapter, union recv_frame *prfram
 void rtl8723b_process_phy_info(struct adapter *padapter, void *prframe)
 {
 	union recv_frame *precvframe = prframe;
-	/*  */
 	/*  Check RSSI */
-	/*  */
 	process_rssi(padapter, precvframe);
 
 	/*  */

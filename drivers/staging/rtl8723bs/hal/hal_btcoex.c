@@ -15,9 +15,7 @@ struct btc_coexist GLBtCoexist;
 static u8 GLBtcWiFiInScanState;
 static u8 GLBtcWiFiInIQKState;
 
-/*  */
 /*		Debug related function */
-/*  */
 static u8 halbtcoutsrc_IsBtCoexistAvailable(struct btc_coexist *pBtCoexist)
 {
 	if (!pBtCoexist->bBinded || !pBtCoexist->Adapter)
@@ -197,11 +195,9 @@ static u32 _halbtcoutsrc_GetWifiLinkStatus(struct adapter *padapter)
 
 static u32 halbtcoutsrc_GetWifiLinkStatus(struct btc_coexist *pBtCoexist)
 {
-	/*  */
 	/*  return value: */
 	/*  [31:16]=> connected port number */
 	/*  [15:0]=> port connected bit define */
-	/*  */
 
 	struct adapter *padapter;
 	u32 retVal;
@@ -539,7 +535,6 @@ static u8 halbtcoutsrc_Set(void *pBtcContext, u8 setType, void *pInBuf)
 	case BTC_SET_ACT_CTRL_8723B_ANT:
 		ret = false;
 		break;
-	/*  */
 	default:
 		ret = false;
 		break;
@@ -548,9 +543,7 @@ static u8 halbtcoutsrc_Set(void *pBtcContext, u8 setType, void *pInBuf)
 	return ret;
 }
 
-/*  */
 /*		IO related function */
-/*  */
 static u8 halbtcoutsrc_Read1Byte(void *pBtcContext, u32 RegAddr)
 {
 	struct btc_coexist *pBtCoexist;
@@ -746,9 +739,7 @@ static void halbtcoutsrc_FillH2cCmd(void *pBtcContext, u8 elementId, u32 cmdLen,
 	rtw_hal_fill_h2c_cmd(padapter, elementId, cmdLen, pCmdBuffer);
 }
 
-/*  */
 /*		Extern functions called by other module */
-/*  */
 static u8 EXhalbtcoutsrc_BindBtCoexWithAdapter(void *padapter)
 {
 	struct btc_coexist *pBtCoexist = &GLBtCoexist;
@@ -1025,10 +1016,8 @@ void EXhalbtcoutsrc_PnpNotify(struct btc_coexist *pBtCoexist, u8 pnpState)
 	if (!halbtcoutsrc_IsBtCoexistAvailable(pBtCoexist))
 		return;
 
-	/*  */
 	/*  currently only 1ant we have to do the notification, */
 	/*  once pnp is notified to sleep state, we have to leave LPS that we can sleep normally. */
-	/*  */
 
 	if (pBtCoexist->boardInfo.btdmAntNum == 1)
 		EXhalbtc8723b1ant_PnpNotify(pBtCoexist, pnpState);
@@ -1061,9 +1050,7 @@ void EXhalbtcoutsrc_SetAntNum(u8 type, u8 antNum)
 	}
 }
 
-/*  */
 /*  Currently used by 8723b only, S0 or S1 */
-/*  */
 void EXhalbtcoutsrc_SetSingleAntPath(u8 singleAntPath)
 {
 	GLBtCoexist.boardInfo.singleAntPath = singleAntPath;

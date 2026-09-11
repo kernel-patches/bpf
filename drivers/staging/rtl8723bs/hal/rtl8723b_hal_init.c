@@ -281,11 +281,8 @@ void rtl8723b_FirmwareSelfReset(struct adapter *padapter)
 	}
 }
 
-/*  */
 /*	Description: */
 /*		Download 8192C firmware code. */
-/*  */
-/*  */
 s32 rtl8723b_FirmwareDownload(struct adapter *padapter, bool  bUsedWoWLANFw)
 {
 	s32 rtStatus = _SUCCESS;
@@ -432,9 +429,7 @@ void rtl8723b_InitializeFirmwareVars(struct adapter *padapter)
 	pHalData->LastHMEBoxNum = 0;
 }
 
-/*  */
 /*				Efuse related code */
-/*  */
 static u8 hal_EfuseSwitchToBank(
 	struct adapter *padapter, u8 bank
 )
@@ -625,9 +620,7 @@ static void hal_ReadEFuse_WiFi(
 	u16 i, total, used;
 	u8 efuse_usage = 0;
 
-	/*  */
 	/*  Do NOT excess total size of EFuse table. Added by Roger, 2008.11.10. */
-	/*  */
 	if ((_offset + _size_byte) > EFUSE_MAX_MAP_LEN)
 		return;
 
@@ -714,9 +707,7 @@ static void hal_ReadEFuse_BT(
 	u16 i, total, used;
 	u8 efuse_usage;
 
-	/*  */
 	/*  Do NOT excess total size of EFuse table. Added by Roger, 2008.11.10. */
-	/*  */
 	if ((_offset + _size_byte) > EFUSE_BT_MAP_LEN)
 		return;
 
@@ -788,9 +779,7 @@ static void hal_ReadEFuse_BT(
 	for (i = 0; i < _size_byte; i++)
 		pbuf[i] = efuseTbl[_offset+i];
 
-	/*  */
 	/*  Calculate Efuse utilization. */
-	/*  */
 	Hal_GetEfuseDefinition(padapter, EFUSE_BT, TYPE_AVAILABLE_EFUSE_BYTES_TOTAL, &total);
 	used = (EFUSE_BT_REAL_BANK_CONTENT_LEN*(bank-1)) + eFuse_Addr - 1;
 	efuse_usage = (u8)((used*100)/total);
@@ -929,23 +918,17 @@ void rtl8723b_SetBeaconRelatedRegisters(struct adapter *padapter)
 
 	bcn_ctrl_reg = REG_BCN_CTRL;
 
-	/*  */
 	/*  ATIM window */
-	/*  */
 	rtw_write16(padapter, REG_ATIMWND, 2);
 
-	/*  */
 	/*  Beacon interval (in unit of TU). */
-	/*  */
 	rtw_write16(padapter, REG_BCN_INTERVAL, pmlmeinfo->bcn_interval);
 
 	rtl8723b_InitBeaconParameters(padapter);
 
 	rtw_write8(padapter, REG_SLOT, 0x09);
 
-	/*  */
 	/*  Reset TSF Timer to zero, added by Roger. 2008.06.24 */
-	/*  */
 	value32 = rtw_read32(padapter, REG_TCR);
 	value32 &= ~TSFRST;
 	rtw_write32(padapter, REG_TCR, value32);
@@ -1078,11 +1061,7 @@ u8 GetEEPROMSize8723B(struct adapter *padapter)
 	return size;
 }
 
-/*  */
-/*  */
 /*  LLT R/W/Init function */
-/*  */
-/*  */
 s32 rtl8723b_InitLLTTable(struct adapter *padapter)
 {
 	unsigned long start, passing_time;
@@ -1438,9 +1417,7 @@ void Hal_EfuseParseThermalMeter_8723B(
 {
 	struct hal_com_data *pHalData = GET_HAL_DATA(padapter);
 
-	/*  */
 	/*  ThermalMeter from EEPROM */
-	/*  */
 	if (!AutoLoadFail)
 		pHalData->EEPROMThermalMeter = PROMContent[EEPROM_THERMAL_METER_8723B];
 	else
@@ -1454,10 +1431,7 @@ void Hal_ReadRFGainOffset(
 	struct adapter *Adapter, u8 *PROMContent, bool AutoloadFail
 )
 {
-	/*  */
 	/*  BB_RF Gain Offset from EEPROM */
-	/*  */
-
 	if (!AutoloadFail) {
 		Adapter->eeprompriv.EEPROMRFGainOffset = PROMContent[EEPROM_RF_GAIN_OFFSET];
 		Adapter->eeprompriv.EEPROMRFGainVal = rtw_efuse_read_1_byte(Adapter,
@@ -1758,12 +1732,10 @@ void rtl8723b_update_txdesc(struct xmit_frame *pxmitframe, u8 *pbuf)
 	rtl8723b_cal_txdesc_chksum(pdesc);
 }
 
-/*  */
 /*  Description: In normal chip, we should send some packet to Hw which will be used by Fw */
 /*			in FW LPS mode. The function is to fill the Tx descriptor of this packets, then */
 /*			Fw can tell Hw to send these packet derectly. */
 /*  Added by tynli. 2009.10.15. */
-/*  */
 /* type1:pspoll, type2:null */
 void rtl8723b_fill_fake_txdesc(
 	struct adapter *padapter,
@@ -1801,9 +1773,7 @@ void rtl8723b_fill_fake_txdesc(
 
 	SET_TX_DESC_TX_RATE_8723B(pDesc, DESC8723B_RATE1M);
 
-	/*  */
 	/*  Encrypt the data frame if under security mode excepct null data. Suggested by CCW. */
-	/*  */
 	if (bDataFrame) {
 		u32 EncAlg = padapter->securitypriv.dot11_privacy_algrthm;
 
