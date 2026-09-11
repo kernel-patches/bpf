@@ -1133,7 +1133,9 @@ static inline size_t fib_rule_nlmsg_size(struct fib_rules_ops *ops,
 			 + nla_total_size(4) /* FRA_SUPPRESS_IFGROUP */
 			 + nla_total_size(4) /* FRA_FWMARK */
 			 + nla_total_size(4) /* FRA_FWMASK */
+			 + nla_total_size(4) /* FRA_GOTO */
 			 + nla_total_size_64bit(8) /* FRA_TUN_ID */
+			 + nla_total_size(1) /* FRA_L3MDEV */
 			 + nla_total_size(sizeof(struct fib_kuid_range))
 			 + nla_total_size(1) /* FRA_PROTOCOL */
 			 + nla_total_size(1) /* FRA_IP_PROTO */
