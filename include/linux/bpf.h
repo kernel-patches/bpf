@@ -874,7 +874,7 @@ enum bpf_type_flag {
 
 /* function argument constraints */
 enum bpf_arg_type {
-	ARG_DONTCARE = 0,	/* unused argument in helper function */
+	ARG_UNUSED = 0,		/* unused argument; terminates argument iteration */
 
 	/* the following constraints used to prototype
 	 * bpf_map_lookup/update/delete_elem() functions
