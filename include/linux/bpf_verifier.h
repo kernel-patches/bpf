@@ -828,7 +828,7 @@ struct bpf_subprog_info {
 	bool keep_fastcall_stack: 1;
 	bool changes_pkt_data: 1;
 	bool might_sleep: 1;
-	u8 arg_cnt:4;
+	u8 arg_slot_cnt:4;
 
 	enum priv_stack_mode priv_stack_mode;
 	struct bpf_subprog_arg_info args[MAX_BPF_FUNC_ARGS];
@@ -838,8 +838,8 @@ struct bpf_subprog_info {
 
 static inline u16 bpf_in_stack_arg_cnt(const struct bpf_subprog_info *sub)
 {
-	if (sub->arg_cnt > MAX_BPF_FUNC_REG_ARGS)
-		return sub->arg_cnt - MAX_BPF_FUNC_REG_ARGS;
+	if (sub->arg_slot_cnt > MAX_BPF_FUNC_REG_ARGS)
+		return sub->arg_slot_cnt - MAX_BPF_FUNC_REG_ARGS;
 	return 0;
 }
 
@@ -1066,7 +1066,7 @@ static inline bool bpf_ret_reg_pair(struct bpf_verifier_env *env, int subprog)
 }
 
 struct bpf_call_summary {
-	u8 num_params;
+	u8 arg_slot_cnt;
 	bool is_void;
 	bool fastcall;
 };
@@ -1512,6 +1512,7 @@ enum btf_member_kind {
 
 bool btf_struct_is_composed_of(struct bpf_verifier_env *env, const struct btf *btf,
 			       const struct btf_type *t, u32 member_kinds);
+u32 btf_func_arg_align(const struct btf *btf, const struct btf_type *t);
 
 int bpf_find_subprog(struct bpf_verifier_env *env, int off);
 bool bpf_is_throw_kfunc(struct bpf_insn *insn);
