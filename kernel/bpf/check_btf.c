@@ -407,6 +407,157 @@ static int check_core_relo(struct bpf_verifier_env *env,
 	return err;
 }
 
+static int cleanup_insn_subprog(struct bpf_verifier_env *env, u32 off)
+{
+	struct bpf_subprog_info *info;
+
+	if (off >= env->prog->len)
+		return -1;
+	info = bpf_find_containing_subprog(env, off);
+	return info ? info - env->subprog_info : -1;
+}
+
+#define MIN_BPF_CLEANUP_INFO_SIZE	12
+#define MAX_CLEANUP_INFO_REC_SIZE	MAX_FUNCINFO_REC_SIZE
+
+static int check_cleanup_info(struct bpf_verifier_env *env,
+			      const union bpf_attr *attr,
+			      bpfptr_t uattr)
+{
+	u32 krec_size = sizeof(struct bpf_cleanup_info);
+	u32 i, nrec, urec_size, min_size, prev_end = 0;
+	struct bpf_cleanup_info *krecord;
+	bpfptr_t urecord;
+	int ret = -EINVAL;
+
+	nrec = attr->cleanup_info_cnt;
+	if (!nrec)
+		return 0;
+	if (nrec > INT_MAX / krec_size)
+		return -EINVAL;
+
+	urec_size = attr->cleanup_info_rec_size;
+	if (urec_size < MIN_BPF_CLEANUP_INFO_SIZE ||
+	    urec_size > MAX_CLEANUP_INFO_REC_SIZE ||
+	    urec_size % sizeof(u32)) {
+		verbose(env, "invalid cleanup info rec size %u\n", urec_size);
+		return -EINVAL;
+	}
+
+	krecord = kvcalloc(nrec, krec_size, GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+	if (!krecord)
+		return -ENOMEM;
+
+	min_size = min_t(u32, krec_size, urec_size);
+	urecord = make_bpfptr(attr->cleanup_info, uattr.is_kernel);
+	for (i = 0; i < nrec; i++) {
+		struct bpf_cleanup_info *rec = &krecord[i];
+		int sb, se, sl;
+
+		ret = bpf_check_uarg_tail_zero(urecord, krec_size, urec_size);
+		if (ret) {
+			if (ret == -E2BIG) {
+				verbose(env, "nonzero tailing record in cleanup info\n");
+				if (copy_to_bpfptr_offset(uattr,
+							  offsetof(union bpf_attr, cleanup_info_rec_size),
+							  &min_size, sizeof(min_size)))
+					ret = -EFAULT;
+			}
+			goto err_free;
+		}
+
+		if (copy_from_bpfptr(rec, urecord, min_size)) {
+			ret = -EFAULT;
+			goto err_free;
+		}
+		bpfptr_add(&urecord, urec_size);
+
+		ret = -EINVAL;
+		if (rec->begin_off >= rec->end_off) {
+			verbose(env, "cleanup_info[%u]: begin %u >= end %u\n", i, rec->begin_off, rec->end_off);
+			goto err_free;
+		}
+		if (i && rec->begin_off < prev_end) {
+			verbose(env,
+				"cleanup_info[%u]: range [%u,%u) is unsorted or overlaps the previous record\n",
+				i, rec->begin_off, rec->end_off);
+			goto err_free;
+		}
+		prev_end = rec->end_off;
+
+		sb = cleanup_insn_subprog(env, rec->begin_off);
+		se = cleanup_insn_subprog(env, rec->end_off - 1);
+		sl = cleanup_insn_subprog(env, rec->landing_pad_off);
+		if (sb < 0 || se < 0 || sl < 0) {
+			verbose(env, "cleanup_info[%u]: offset out of range\n", i);
+			goto err_free;
+		}
+		if (sb != se || sb != sl) {
+			verbose(env, "cleanup_info[%u]: range/landing pad span multiple subprogs\n", i);
+			goto err_free;
+		}
+		/*
+		 * The second half of a 16-byte instruction carries a zero
+		 * opcode and is not an instruction of its own, so no offset
+		 * may name one. end_off is exclusive, so it may also be one
+		 * past the last instruction of the program.
+		 */
+		if (!env->prog->insnsi[rec->begin_off].code ||
+		    !env->prog->insnsi[rec->landing_pad_off].code ||
+		    (rec->end_off < env->prog->len &&
+		     !env->prog->insnsi[rec->end_off].code)) {
+			verbose(env, "cleanup_info[%u]: points at invalid insn\n", i);
+			goto err_free;
+		}
+	}
+
+	/*
+	 * A landing pad may not lie inside a call-site range -- its own, which
+	 * would have it unwind to itself, or any other record's.
+	 *
+	 * cleanup_paint_pads() marks the calls a range covers, so a pad that
+	 * is also a covered call would be both at once: bpf_check_cfg() would
+	 * grow an edge from one pad to another, and both the verifier's walk
+	 * of the unwind and bpf_throw()'s would be told that an exception out
+	 * of a pad transfers to a second pad -- while the first is already
+	 * running with one in flight, which is the nested exception there is
+	 * nowhere to put. Nothing emits this, because LLVM sinks a function's
+	 * pads past every range it emits, and nothing here is prepared to run
+	 * it.
+	 *
+	 * The ranges are sorted and do not overlap by now, so each pad is one
+	 * binary search rather than a scan.
+	 */
+	ret = -EINVAL;
+	for (i = 0; i < nrec; i++) {
+		u32 pad = krecord[i].landing_pad_off;
+		u32 l = 0, r = nrec;
+
+		while (l < r) {
+			u32 m = l + (r - l) / 2;
+
+			if (pad < krecord[m].begin_off) {
+				r = m;
+			} else if (pad >= krecord[m].end_off) {
+				l = m + 1;
+			} else {
+				verbose(env,
+					"cleanup_info[%u]: landing pad %u is inside the call-site range of cleanup_info[%u]\n",
+					i, pad, m);
+				goto err_free;
+			}
+		}
+	}
+
+	env->cleanup_info = krecord;
+	env->cleanup_info_cnt = nrec;
+	return 0;
+
+err_free:
+	kvfree(krecord);
+	return ret;
+}
+
 int bpf_prepare_btf_info(struct bpf_verifier_env *env,
 			 const union bpf_attr *attr,
 			 bpfptr_t uattr)
@@ -440,6 +591,10 @@ int bpf_check_btf_info(struct bpf_verifier_env *env,
 		       bpfptr_t uattr)
 {
 	int err;
+
+	err = check_cleanup_info(env, attr, uattr);
+	if (err)
+		return err;
 
 	if (!attr->func_info_cnt && !attr->line_info_cnt) {
 		if (check_abnormal_return(env))

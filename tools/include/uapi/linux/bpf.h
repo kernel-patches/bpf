@@ -1669,6 +1669,9 @@ union bpf_attr {
 		 * verification.
 		 */
 		__s32		keyring_id;
+		__aligned_u64	cleanup_info;	/* exception cleanup table */
+		__u32		cleanup_info_rec_size; /* userspace bpf_cleanup_info size */
+		__u32		cleanup_info_cnt; /* number of bpf_cleanup_info records */
 	};
 
 	struct { /* anonymous struct used by BPF_OBJ_* commands */
@@ -7586,6 +7589,12 @@ struct bpf_line_info {
 	__u32	file_name_off;
 	__u32	line_off;
 	__u32	line_col;
+};
+
+struct bpf_cleanup_info {
+	__u32	begin_off;
+	__u32	end_off;
+	__u32	landing_pad_off;
 };
 
 struct bpf_spin_lock {

@@ -292,6 +292,14 @@ void __bpf_prog_free(struct bpf_prog *fp)
 		mutex_destroy(&fp->aux->dst_mutex);
 		mutex_destroy(&fp->aux->st_ops_assoc_mutex);
 		kfree(fp->aux->poke_tab);
+		/*
+		 * Here rather than in bpf_prog_free_deferred(), which only
+		 * sees the main program: a subprogram carries its own slice of
+		 * the cleanup table and is released straight through
+		 * bpf_jit_free(), both on teardown and when jit_subprogs()
+		 * fails partway.
+		 */
+		bpf_cleanup_free_info(fp->aux);
 		kfree(fp->aux);
 	}
 	free_percpu(fp->stats);
@@ -2625,13 +2633,37 @@ static bool bpf_prog_select_interpreter(struct bpf_prog *fp)
 	return select_interpreter;
 }
 
-static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
+/*
+ * @err is set only where the load has to fail with a particular error.
+ * Everything else here is a fall back to the interpreter, which is not an
+ * error at all unless the program needed the JIT, and that is the caller's
+ * to decide and report.
+ */
+static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog,
+					     int *err)
 {
 #ifdef CONFIG_BPF_JIT
 	struct bpf_prog *orig_prog;
+	int ret;
 
-	if (!bpf_prog_need_blind(prog))
+	if (!bpf_prog_need_blind(prog)) {
+		/*
+		 * Nothing will move an instruction again, so this is where an
+		 * exception cleanup table can be fixed; see
+		 * bpf_cleanup_attach_main_prog(). Failing that is running out
+		 * of memory or hitting a verifier bug, not the JIT declining
+		 * the program, so say which: a program carrying a table is
+		 * jit_required, and returning it unjited would have the
+		 * caller report every one of them as an unsupported JIT --
+		 * which for this feature is a real outcome of its own.
+		 */
+		ret = bpf_cleanup_attach_main_prog(env, prog);
+		if (ret) {
+			*err = ret;
+			return prog;
+		}
 		return bpf_int_jit_compile(env, prog);
+	}
 
 	orig_prog = prog;
 	prog = bpf_jit_blind_constants(env, prog);
@@ -2641,6 +2673,14 @@ static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struc
 	 */
 	if (IS_ERR(prog))
 		goto out_restore;
+
+	/* Now the instruction indices are final; see above. */
+	ret = bpf_cleanup_attach_main_prog(env, prog);
+	if (ret) {
+		*err = ret;
+		bpf_jit_prog_release_other(orig_prog, prog);
+		goto out_restore;
+	}
 
 	prog = bpf_int_jit_compile(env, prog);
 	if (prog->jited) {
@@ -2681,8 +2721,10 @@ struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env, struct 
 		if (*err)
 			return fp;
 
-		fp = bpf_prog_jit_compile(env, fp);
+		fp = bpf_prog_jit_compile(env, fp, err);
 		bpf_prog_jit_attempt_done(fp);
+		if (*err)
+			return fp;
 		if (!fp->jited && jit_needed) {
 			*err = -ENOTSUPP;
 			return fp;
@@ -3374,6 +3416,33 @@ bool __weak bpf_jit_supports_private_stack(void)
 
 void __weak arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp), void *cookie)
 {
+}
+
+/*
+ * Can this JIT hand control to an exception cleanup landing pad at run time?
+ * Requires arch_bpf_run_cleanup_pad() below, a JIT that records the native
+ * cleanup table and spills the throwing frame's registers, and a working
+ * arch_bpf_stack_walk(). Without all of that a program carrying a cleanup
+ * table is rejected at load time.
+ */
+bool __weak bpf_jit_supports_cleanup_pads(void)
+{
+	return false;
+}
+
+/*
+ * Run the landing pad at @pad as if it were code of the frame whose frame
+ * pointer is @frame_fp: restore that frame's BPF callee-saved registers from
+ * @spill_base -- the area its callee's prologue spilled them to -- and call
+ * the pad. The pad ends in the bare return the JIT emits for
+ * the pad's bpf_unwind_resume(), so control comes back here.
+ *
+ * The pad runs on the current stack, far below @frame_fp, so nothing it calls
+ * can disturb the frame it is cleaning up after.
+ */
+void __weak arch_bpf_run_cleanup_pad(u64 pad, u64 frame_fp, u64 spill_base)
+{
+	WARN_ON_ONCE(1);
 }
 
 bool __weak bpf_jit_supports_timed_may_goto(void)

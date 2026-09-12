@@ -6,6 +6,7 @@
 #include <linux/sort.h>
 
 #include "diagnostics.h"
+#include "exception.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
@@ -158,17 +159,56 @@ static int push_insn(int t, int w, int e, struct bpf_verifier_env *env)
 	return DONE_EXPLORING;
 }
 
+/*
+ * A call covered by an exception cleanup record can also transfer to that
+ * record's landing pad. Being unreachable is what makes a block a landing
+ * pad, so nothing in the compiler's CFG says so and the edge has to be added
+ * here or the pad is reported as dead code.
+ *
+ * Pushed directly rather than through push_insn(), which tracks at most one
+ * branch edge per instruction and a covered bpf2bpf call already has one.
+ * Same approach as visit_gotox_insn().
+ */
+static int visit_cleanup_pad_edge(int t, struct bpf_verifier_env *env)
+{
+	int *insn_stack = env->cfg.insn_stack;
+	int *insn_state = env->cfg.insn_state;
+	int w;
+
+	if (!env->cleanup_info_cnt)
+		return DONE_EXPLORING;
+	w = bpf_cleanup_pad_of_call(env, t);
+	if (w < 0)
+		return DONE_EXPLORING;
+
+	mark_prune_point(env, t);
+	mark_jmp_point(env, w);
+	mark_jump_target(env, w);
+
+	if (insn_state[w])
+		return DONE_EXPLORING;
+	if (env->cfg.cur_stack >= env->prog->len)
+		return -E2BIG;
+	insn_stack[env->cfg.cur_stack++] = w;
+	insn_state[w] |= DISCOVERED;
+	return KEEP_EXPLORING;
+}
+
 static int visit_func_call_insn(int t, struct bpf_insn *insns,
 				struct bpf_verifier_env *env,
 				bool visit_callee)
 {
-	int ret, insn_sz;
+	int ret, insn_sz, pad_ret;
 	int w;
+
+	pad_ret = visit_cleanup_pad_edge(t, env);
+	if (pad_ret < 0)
+		return pad_ret;
 
 	insn_sz = bpf_is_ldimm64(&insns[t]) ? 2 : 1;
 	ret = push_insn(t, t + insn_sz, FALLTHROUGH, env);
 	if (ret)
-		return ret;
+		return ret < 0 || pad_ret != KEEP_EXPLORING ? ret : KEEP_EXPLORING;
 
 	mark_prune_point(env, t + insn_sz);
 	/* when we exit from subprog, we need to record non-linear history */
@@ -180,7 +220,10 @@ static int visit_func_call_insn(int t, struct bpf_insn *insns,
 		merge_callee_effects(env, t, w);
 		ret = push_insn(t, w, BRANCH, env);
 	}
-	return ret;
+	/* The pad edge was newly discovered, so t has to be visited again --
+	 * but never at the cost of dropping an error push_insn() reported.
+	 */
+	return ret < 0 || pad_ret != KEEP_EXPLORING ? ret : KEEP_EXPLORING;
 }
 
 struct bpf_iarray *bpf_iarray_realloc(struct bpf_iarray *old, size_t n_elem)
@@ -477,6 +520,13 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 		return DONE_EXPLORING;
 
 	case BPF_CALL:
+		if (bpf_is_unwind_resume_kfunc(insn))
+			/*
+			 * End of a landing pad. Control goes back to the
+			 * bpf_throw() walker, never to the next instruction,
+			 * so this is a terminator like BPF_EXIT.
+			 */
+			return DONE_EXPLORING;
 		if (bpf_is_async_callback_calling_insn(insn))
 			/* Mark this call insn as a prune point to trigger
 			 * is_state_visited() check before call itself is
@@ -651,6 +701,32 @@ walk_cfg:
 		struct bpf_insn *insn = &env->prog->insnsi[i];
 
 		if (insn_state[i] != EXPLORED) {
+			/*
+			 * A program carrying an exception cleanup table is
+			 * expected to have some: bpf_unwind_resume() ends a
+			 * landing pad, so the rest of the pad's basic block
+			 * is stranded, and so is whatever only that tail
+			 * reaches. Nothing branches to any of it, and
+			 * refusing the program over code its own frontend
+			 * had no way not to emit would be no help to anyone.
+			 *
+			 * A bpf_throw() is not a second source of this,
+			 * though the code after one is just as dead: the
+			 * walk pushes its fall-through like any other
+			 * call's, so the continuation a compiler emits after
+			 * a throw it knows never returns is EXPLORED here
+			 * and reaches the sweep below by the ordinary route.
+			 *
+			 * Leave it to the dead code handling every program
+			 * already gets once do_check() has said what it
+			 * reached -- bpf_opt_remove_dead_code() or
+			 * sanitize_dead_code(). Removing it here instead
+			 * would be pulling instructions out from under the
+			 * absolute indices this walk has just cached, in
+			 * insn_aux_data[].jt and subprog_info[].exit_idx.
+			 */
+			if (env->cleanup_info_cnt)
+				continue;
 			verbose(env, "unreachable insn %d\n", i);
 			bpf_diag_program_structure(
 				env, i, "unreachable instruction",
