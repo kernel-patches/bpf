@@ -15,6 +15,8 @@
 #include <linux/mutex.h>
 #include <linux/rbtree.h>
 #include <linux/refcount.h>
+#include <linux/security.h>
+#include <linux/workqueue.h>
 
 #include "access.h"
 #include "limits.h"
@@ -145,6 +147,16 @@ struct landlock_rules {
 	u32 num_rules;
 };
 
+#ifdef CONFIG_BPF_LSM
+/*
+ * Landlock's lsm_policy_object types.  The namespace is private to
+ * Landlock; 0 stays reserved as "unset".
+ */
+enum landlock_policy_type {
+	LANDLOCK_POLICY_TYPE_RULESET = 1,
+};
+#endif /* CONFIG_BPF_LSM */
+
 /**
  * struct landlock_ruleset - Landlock ruleset
  *
@@ -156,13 +168,22 @@ struct landlock_ruleset {
 	 * @rules: Red-black tree storage for rules.
 	 */
 	struct landlock_rules rules;
+
+#ifdef CONFIG_BPF_LSM
 	/**
-	 * @lock: Protects against concurrent modifications of @rules, if @usage
-	 * is greater than zero.
+	 * @policy_object: Identity under which the ruleset is handed out
+	 * to BPF programs as a referenced kptr: the LSM policy kfuncs
+	 * dispatch back to Landlock through its lsmid.  Kept outside the
+	 * union with @work_free: RCU readers may read its lsmid while a
+	 * queued free waits out the grace period.
 	 */
-	struct mutex lock;
+	struct lsm_policy_object policy_object;
+#endif /* CONFIG_BPF_LSM */
 	/**
-	 * @usage: Number of file descriptors referencing this ruleset.
+	 * @usage: Number of file descriptors referencing this ruleset.  Kept
+	 * outside the union with @work_free: RCU readers may still call
+	 * refcount_inc_not_zero() while a queued free waits out the grace
+	 * period.
 	 */
 	refcount_t usage;
 
@@ -175,22 +196,41 @@ struct landlock_ruleset {
 	 */
 	u32 version;
 	/**
-	 * @id: Unique identifier for this ruleset, used for tracing.
+	 * @id: Unique identifier for this ruleset, used for tracing.  Kept
+	 * outside the union with @work_free: the free_ruleset trace event
+	 * reads it after the free has been queued.
 	 */
 	u64 id;
 #endif /* CONFIG_TRACEPOINTS */
 
-	/**
-	 * @quiet_masks: Stores the quiet flags for an unmerged ruleset.  For a
-	 * merged domain, this is stored in each layer's struct
-	 * landlock_hierarchy instead.
-	 */
-	struct access_masks quiet_masks;
-	/**
-	 * @handled_masks: Contains the subset of filesystem and network actions
-	 * that are handled by this ruleset.
-	 */
-	struct access_masks handled_masks;
+	union {
+		/**
+		 * @work_free: Enables to free a ruleset after an RCU grace
+		 * period, within a lockless section.  This is queued by
+		 * landlock_put_ruleset() when @usage reaches zero.  The
+		 * fields @lock, @quiet_masks and @handled_masks are then
+		 * unused.
+		 */
+		struct rcu_work work_free;
+		struct {
+			/**
+			 * @lock: Protects against concurrent modifications of
+			 * @rules, if @usage is greater than zero.
+			 */
+			struct mutex lock;
+			/**
+			 * @quiet_masks: Stores the quiet flags for an unmerged
+			 * ruleset.  For a merged domain, this is stored in each
+			 * layer's struct landlock_hierarchy instead.
+			 */
+			struct access_masks quiet_masks;
+			/**
+			 * @handled_masks: Contains the subset of filesystem and
+			 * network actions that are handled by this ruleset.
+			 */
+			struct access_masks handled_masks;
+		};
+	};
 };
 
 struct landlock_ruleset *
@@ -213,6 +253,9 @@ int landlock_store_rule(struct landlock_rules *const rules,
 			const size_t num_layers);
 
 void landlock_free_rules(struct landlock_rules *const rules);
+
+struct landlock_ruleset *landlock_get_ruleset_from_fd(const int fd,
+						      const fmode_t mode);
 
 /**
  * landlock_get_rule_root - Get the root of a rule tree by key type
