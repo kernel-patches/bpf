@@ -240,8 +240,8 @@ digital_recv_dep_data_gather(struct nfc_digital_dev *ddev, u8 pfb,
 
 	if (DIGITAL_NFC_DEP_MI_BIT_SET(pfb) && (!ddev->chaining_skb)) {
 		ddev->chaining_skb =
-			nfc_alloc_recv_skb(8 * ddev->local_payload_max,
-					   GFP_KERNEL);
+			digital_skb_alloc(ddev,
+					  8 * ddev->local_payload_max);
 		if (!ddev->chaining_skb) {
 			rc = -ENOMEM;
 			goto error;
@@ -251,9 +251,9 @@ digital_recv_dep_data_gather(struct nfc_digital_dev *ddev, u8 pfb,
 	if (ddev->chaining_skb) {
 		if (resp->len > skb_tailroom(ddev->chaining_skb)) {
 			new_skb = skb_copy_expand(ddev->chaining_skb,
-						  skb_headroom(
-							  ddev->chaining_skb),
-						  8 * ddev->local_payload_max,
+						  ddev->tx_headroom,
+						  8 * ddev->local_payload_max +
+							  ddev->tx_tailroom,
 						  GFP_KERNEL);
 			if (!new_skb) {
 				rc = -ENOMEM;
