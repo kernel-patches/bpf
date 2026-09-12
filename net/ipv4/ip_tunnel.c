@@ -326,6 +326,22 @@ static int ip_tunnel_bind_dev(struct net_device *dev)
 	return mtu;
 }
 
+/* Recompute dev->needed_headroom and dev->mtu after tunnel->hlen changed.
+ *
+ * Both are derived from tunnel->hlen, so they must be recomputed from it
+ * rather than adjusted by the difference: ip_tunnel_bind_dev() is also
+ * called from ndo_init() and from ip_tunnel_update(), and a driver adding
+ * its own delta on top would double count it.
+ */
+void ip_tunnel_refresh_lengths(struct net_device *dev, bool set_mtu)
+{
+	int mtu = ip_tunnel_bind_dev(dev);
+
+	if (set_mtu)
+		WRITE_ONCE(dev->mtu, mtu);
+}
+EXPORT_SYMBOL_GPL(ip_tunnel_refresh_lengths);
+
 static struct ip_tunnel *ip_tunnel_create(struct net *net,
 					  struct ip_tunnel_net *itn,
 					  struct ip_tunnel_parm_kern *parms)

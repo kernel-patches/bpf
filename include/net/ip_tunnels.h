@@ -432,6 +432,7 @@ int ip_tunnel_newlink(struct net *net, struct net_device *dev,
 		      struct nlattr *tb[], struct ip_tunnel_parm_kern *p,
 		      __u32 fwmark);
 void ip_tunnel_setup(struct net_device *dev, unsigned int net_id);
+void ip_tunnel_refresh_lengths(struct net_device *dev, bool set_mtu);
 
 bool ip_tunnel_netlink_encap_parms(struct nlattr *data[],
 				   struct ip_tunnel_encap *encap);
