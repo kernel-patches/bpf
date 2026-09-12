@@ -354,6 +354,26 @@ static void emit_ldx(struct jit_context *ctx, u8 dst, u8 src, s16 off, u8 size)
 	clobber_reg(ctx, dst);
 }
 
+/* Load operation with sign extension: dst = *(signed size *)(src + off) */
+static void emit_ldsx(struct jit_context *ctx, u8 dst, u8 src, s16 off, u8 size)
+{
+	switch (size) {
+	/* Load a byte */
+	case BPF_B:
+		emit(ctx, lb, dst, off, src);
+		break;
+	/* Load a half word */
+	case BPF_H:
+		emit(ctx, lh, dst, off, src);
+		break;
+	/* Load a word */
+	case BPF_W:
+		emit(ctx, lw, dst, off, src);
+		break;
+	}
+	clobber_reg(ctx, dst);
+}
+
 /* Store operation: *(size *)(dst + off) = src */
 static void emit_stx(struct jit_context *ctx, u8 dst, u8 src, s16 off, u8 size)
 {
@@ -826,6 +846,12 @@ int build_insn(const struct bpf_insn *insn, struct jit_context *ctx)
 	case BPF_LDX | BPF_MEM | BPF_B:
 	case BPF_LDX | BPF_MEM | BPF_DW:
 		emit_ldx(ctx, dst, src, off, BPF_SIZE(code));
+		break;
+	/* LDSX: dst = *(signed size *)(src + off) */
+	case BPF_LDX | BPF_MEMSX | BPF_W:
+	case BPF_LDX | BPF_MEMSX | BPF_H:
+	case BPF_LDX | BPF_MEMSX | BPF_B:
+		emit_ldsx(ctx, dst, src, off, BPF_SIZE(code));
 		break;
 	/* ST: *(size *)(dst + off) = imm */
 	case BPF_ST | BPF_MEM | BPF_W:
