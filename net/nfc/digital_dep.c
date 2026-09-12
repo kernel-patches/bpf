@@ -1117,12 +1117,12 @@ static void digital_tg_recv_dep_req(struct nfc_digital_dev *ddev, void *arg,
 	pfb = dep_req->pfb;
 
 	if (DIGITAL_NFC_DEP_DID_BIT_SET(pfb)) {
-		if (ddev->did && (ddev->did == resp->data[3])) {
-			size++;
-		} else {
+		if (resp->len < size + 1 || !ddev->did ||
+		    ddev->did != resp->data[size]) {
 			rc = -EIO;
 			goto exit;
 		}
+		size++;
 	} else if (ddev->did) {
 		rc = -EIO;
 		goto exit;
