@@ -151,26 +151,26 @@ static int squashfs_parse_param(struct fs_context *fc, struct fs_parameter *para
 }
 
 static const struct squashfs_decompressor *supported_squashfs_filesystem(
-	struct fs_context *fc,
+	struct super_block *sb, struct fs_context *fc,
 	short major, short minor, short id)
 {
 	const struct squashfs_decompressor *decompressor;
 
 	if (major < SQUASHFS_MAJOR) {
-		errorf(fc, "Major/Minor mismatch, older Squashfs %d.%d "
-		       "filesystems are unsupported", major, minor);
+		errorf(fc, "Unsupported older Squashfs %d.%d filesystem on %pg",
+		       major, minor, sb->s_bdev);
 		return NULL;
 	} else if (major > SQUASHFS_MAJOR || minor > SQUASHFS_MINOR) {
-		errorf(fc, "Major/Minor mismatch, trying to mount newer "
-		       "%d.%d filesystem", major, minor);
+		errorf(fc, "Major/Minor mismatch, trying to mount newer %d.%d filesystem on %pg",
+		       major, minor, sb->s_bdev);
 		errorf(fc, "Please update your kernel");
 		return NULL;
 	}
 
 	decompressor = squashfs_lookup_decompressor(id);
 	if (!decompressor->supported) {
-		errorf(fc, "Filesystem uses \"%s\" compression. This is not supported",
-		       decompressor->name);
+		errorf(fc, "Filesystem on %pg uses \"%s\" compression. This is not supported",
+		       sb->s_bdev, decompressor->name);
 		return NULL;
 	}
 
@@ -217,7 +217,8 @@ static int squashfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	TRACE("Entered squashfs_fill_superblock\n");
 
 	if (!devblksize) {
-		errorf(fc, "squashfs: unable to set blocksize\n");
+		errorf(fc, "squashfs: unable to set blocksize on %pg\n",
+		       sb->s_bdev);
 		return -EINVAL;
 	}
 
@@ -246,7 +247,8 @@ static int squashfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	sblk = squashfs_read_table(sb, SQUASHFS_START, sizeof(*sblk));
 
 	if (IS_ERR(sblk)) {
-		errorf(fc, "unable to read squashfs_super_block");
+		errorf(fc, "unable to read squashfs_super_block on %pg",
+		       sb->s_bdev);
 		err = PTR_ERR(sblk);
 		sblk = NULL;
 		goto failed_mount;
@@ -271,7 +273,7 @@ static int squashfs_fill_super(struct super_block *sb, struct fs_context *fc)
 
 	/* Check the MAJOR & MINOR versions and lookup compression type */
 	msblk->decompressor = supported_squashfs_filesystem(
-			fc,
+			sb, fc,
 			le16_to_cpu(sblk->s_major),
 			le16_to_cpu(sblk->s_minor),
 			le16_to_cpu(sblk->compression));
@@ -295,8 +297,8 @@ static int squashfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	 * block size (by default 128K).  This is currently not supported.
 	 */
 	if (PAGE_SIZE > msblk->block_size) {
-		errorf(fc, "Page size > filesystem block size (%d).  This is "
-		       "currently not supported!", msblk->block_size);
+		errorf(fc, "Page size > filesystem block size (%d) on %pg is not supported",
+		       msblk->block_size, sb->s_bdev);
 		goto failed_mount;
 	}
 
@@ -355,7 +357,8 @@ static int squashfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	msblk->read_page = squashfs_cache_init("data",
 		SQUASHFS_READ_PAGES, msblk->block_size);
 	if (IS_ERR(msblk->read_page)) {
-		errorf(fc, "Failed to allocate read_page block");
+		errorf(fc, "Failed to allocate read_page block for %pg",
+		       sb->s_bdev);
 		err = PTR_ERR(msblk->read_page);
 		goto failed_mount;
 	}
@@ -394,7 +397,8 @@ static int squashfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	err = squashfs_read_xattr_id_table(sb, msblk->xattr_id_table,
 				&msblk->xattr_table, &msblk->xattr_ids);
 	if (err < 0) {
-		errorf(fc, "unable to read xattr id index table");
+		errorf(fc, "unable to read xattr id index table on %pg",
+		       sb->s_bdev);
 		if (err != -ENOTSUPP)
 			goto failed_mount;
 	}
@@ -405,7 +409,7 @@ allocate_id_index_table:
 	msblk->id_table = squashfs_read_id_index_table(sb,
 		le64_to_cpu(sblk->id_table_start), next_table, msblk->ids);
 	if (IS_ERR(msblk->id_table)) {
-		errorf(fc, "unable to read id index table");
+		errorf(fc, "unable to read id index table on %pg", sb->s_bdev);
 		err = PTR_ERR(msblk->id_table);
 		msblk->id_table = NULL;
 		goto failed_mount;
@@ -421,13 +425,15 @@ allocate_id_index_table:
 	err = squashfs_read_inode_lookup_table(sb, msblk->lookup_table,
 			next_table, msblk->inodes);
 	if (err < 0) {
-		errorf(fc, "unable to read inode lookup table");
+		errorf(fc, "unable to read inode lookup table on %pg",
+		       sb->s_bdev);
 		goto failed_mount;
 	}
 
 	err = squashfs_inode_lookup_start(sb, 1);
 	if (err < 0) {
-		errorf(fc, "unable to read inode lookup table");
+		errorf(fc, "unable to read inode lookup table on %pg",
+		       sb->s_bdev);
 		goto failed_mount;
 	}
 	next_table = msblk->lookup_table_start = err;
@@ -450,13 +456,15 @@ handle_fragments:
 	err = squashfs_read_fragment_index_table(sb, msblk->fragment_table,
 			next_table, fragments);
 	if (err < 0) {
-		errorf(fc, "unable to read fragment index table");
+		errorf(fc, "unable to read fragment index table on %pg",
+		       sb->s_bdev);
 		goto failed_mount;
 	}
 
 	err = squashfs_frag_lookup_start(sb, 0);
 	if (err < 0) {
-		errorf(fc, "unable to read fragment index table");
+		errorf(fc, "unable to read fragment index table on %pg",
+		       sb->s_bdev);
 		goto failed_mount;
 	}
 	next_table = msblk->fragment_table_start = err;
@@ -502,7 +510,7 @@ check_directory_table:
 	return 0;
 
 insanity:
-	errorf(fc, "squashfs image failed sanity check");
+	errorf(fc, "squashfs image on %pg failed sanity check", sb->s_bdev);
 failed_mount:
 	squashfs_cache_delete(msblk->block_cache);
 	squashfs_cache_delete(msblk->fragment_cache);
