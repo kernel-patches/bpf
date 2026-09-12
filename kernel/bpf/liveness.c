@@ -1434,21 +1434,21 @@ static int record_call_access(struct bpf_verifier_env *env,
 {
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
 	struct bpf_call_summary cs;
-	int r, err, num_params = 5;
+	int r, err, arg_slot_cnt = 5;
 
 	if (bpf_pseudo_call(insn))
 		return 0;
 
 	if (bpf_get_call_summary(env, insn, &cs))
-		num_params = cs.num_params;
+		arg_slot_cnt = cs.arg_slot_cnt;
 
-	for (r = BPF_REG_1; r < BPF_REG_1 + min(num_params, MAX_BPF_FUNC_REG_ARGS); r++) {
+	for (r = BPF_REG_1; r < BPF_REG_1 + min(arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS); r++) {
 		err = record_arg_access(env, instance, insn, &at[r], r - 1, insn_idx);
 		if (err)
 			return err;
 	}
 
-	for (r = 0; r < MAX_STACK_ARG_SLOTS && r < num_params - MAX_BPF_FUNC_REG_ARGS; r++) {
+	for (r = 0; r < MAX_STACK_ARG_SLOTS && r < arg_slot_cnt - MAX_BPF_FUNC_REG_ARGS; r++) {
 		err = record_arg_access(env, instance, insn, &at[MAX_BPF_REG + r],
 					r + MAX_BPF_FUNC_REG_ARGS, insn_idx);
 		if (err)
@@ -2199,7 +2199,7 @@ static void compute_insn_live_regs(struct bpf_verifier_env *env,
 			def = ALL_CALLER_SAVED_REGS;
 			use = def & ~BIT(BPF_REG_0);
 			if (bpf_get_call_summary(env, insn, &cs))
-				use = GENMASK(min_t(u8, cs.num_params, MAX_BPF_FUNC_REG_ARGS), 1);
+				use = GENMASK(min_t(u8, cs.arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS), 1);
 			def = mask_widen(def);
 			use = mask_widen(use);
 			break;
