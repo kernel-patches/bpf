@@ -161,7 +161,7 @@ struct rds_connection {
 	 * cancellation from landing on a destroyed workqueue.
 	 */
 	bool			c_destroy_in_prog;
-	struct rds_connection	*c_passive;
+	struct rds_connection __rcu *c_passive;
 	struct rds_transport	*c_trans;
 
 	struct rds_cong_map	*c_lcong;
