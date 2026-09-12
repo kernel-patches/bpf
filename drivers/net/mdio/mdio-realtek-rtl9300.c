@@ -845,6 +845,9 @@ static int otto_emdio_probe_one(struct device *dev, struct otto_emdio_priv *priv
 		return dev_err_probe(dev, -EINVAL,
 				     "illegal (dangling) smi bus number %d\n", mdio_bus);
 
+	if (priv->bus[mdio_bus])
+		return dev_err_probe(dev, -EINVAL, "duplicated smi bus number %d\n", mdio_bus);
+
 	bus = devm_mdiobus_alloc_size(dev, sizeof(*chan));
 	if (!bus)
 		return -ENOMEM;
@@ -867,6 +870,8 @@ static int otto_emdio_probe_one(struct device *dev, struct otto_emdio_priv *priv
 	err = devm_of_mdiobus_register(dev, bus, node);
 	if (err)
 		return dev_err_probe(dev, err, "cannot register MDIO bus\n");
+
+	priv->bus[mdio_bus] = bus;
 
 	return 0;
 }
