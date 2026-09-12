@@ -878,11 +878,11 @@ _bpftool()
                             return 0
                             ;;
                         id)
-                            _bpftool_get_map_ids_for_type perf_event_array
+                            _bpftool_get_map_ids_for_type '"type": "\(perf_event_array\|ringbuf\)"'
                             return 0
                             ;;
                         name)
-                            _bpftool_get_map_names_for_type perf_event_array
+                            _bpftool_get_map_names_for_type '"type": "\(perf_event_array\|ringbuf\)"'
                             return 0
                             ;;
                         cpu)
