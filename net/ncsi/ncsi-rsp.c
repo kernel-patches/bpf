@@ -849,11 +849,19 @@ static int ncsi_rsp_handler_gp(struct ncsi_request *nr)
 	struct ncsi_dev_priv *ndp = nr->ndp;
 	struct ncsi_rsp_gp_pkt *rsp;
 	struct ncsi_channel *nc;
+	unsigned char vlan_cnt;
+	unsigned char mac_cnt;
 	unsigned short enable;
 	unsigned char *pdata;
 	unsigned long flags;
 	void *bitmap;
 	int i;
+
+	/* The fixed part of the response has to be present before any of
+	 * its fields, the table counts included, can be read.
+	 */
+	if (!pskb_may_pull(nr->rsp, offsetof(struct ncsi_rsp_gp_pkt, mac)))
+		return -EINVAL;
 
 	/* Find the channel */
 	rsp = (struct ncsi_rsp_gp_pkt *)skb_network_header(nr->rsp);
@@ -884,13 +892,40 @@ static int ncsi_rsp_handler_gp(struct ncsi_request *nr)
 	nc->modes[NCSI_MODE_AEN].enable = 1;
 	nc->modes[NCSI_MODE_AEN].data[0] = ntohl(rsp->aen_mode);
 
-	/* MAC addresses filter table */
-	pdata = (unsigned char *)rsp + 48;
-	enable = rsp->mac_enable;
+	/* Make the tables the response claims available, then take the
+	 * pointer again: pskb_may_pull() may have moved the data.
+	 */
+	mac_cnt = rsp->mac_cnt;
+	vlan_cnt = rsp->vlan_cnt;
+	if (!pskb_may_pull(nr->rsp, offsetof(struct ncsi_rsp_gp_pkt, mac) +
+				    mac_cnt * ETH_ALEN +
+				    vlan_cnt * sizeof(__be16)))
+		return -EINVAL;
+
+	rsp = (struct ncsi_rsp_gp_pkt *)skb_network_header(nr->rsp);
+
+	/* The filter tables were sized by the Get Capabilities response,
+	 * whose counts are themselves device supplied, so a larger count
+	 * here would write past them. The counts also index the bitmaps
+	 * that track which entries are enabled, so bound them by those
+	 * as well.
+	 */
 	ncmf = &nc->mac_filter;
+	ncvf = &nc->vlan_filter;
+	if (!ncmf->addrs ||
+	    mac_cnt > ncmf->n_uc + ncmf->n_mc + ncmf->n_mixed ||
+	    mac_cnt > BITS_PER_TYPE(ncmf->bitmap))
+		return -EINVAL;
+	if (!ncvf->vids || vlan_cnt > ncvf->n_vids ||
+	    vlan_cnt > BITS_PER_TYPE(ncvf->bitmap))
+		return -EINVAL;
+
+	/* MAC addresses filter table */
+	pdata = (unsigned char *)rsp + offsetof(struct ncsi_rsp_gp_pkt, mac);
+	enable = rsp->mac_enable;
 	spin_lock_irqsave(&nc->lock, flags);
 	bitmap = &ncmf->bitmap;
-	for (i = 0; i < rsp->mac_cnt; i++, pdata += 6) {
+	for (i = 0; i < mac_cnt; i++, pdata += 6) {
 		if (!(enable & (0x1 << i)))
 			clear_bit(i, bitmap);
 		else
@@ -902,10 +937,9 @@ static int ncsi_rsp_handler_gp(struct ncsi_request *nr)
 
 	/* VLAN filter table */
 	enable = ntohs(rsp->vlan_enable);
-	ncvf = &nc->vlan_filter;
 	bitmap = &ncvf->bitmap;
 	spin_lock_irqsave(&nc->lock, flags);
-	for (i = 0; i < rsp->vlan_cnt; i++, pdata += 2) {
+	for (i = 0; i < vlan_cnt; i++, pdata += 2) {
 		if (!(enable & (0x1 << i)))
 			clear_bit(i, bitmap);
 		else
