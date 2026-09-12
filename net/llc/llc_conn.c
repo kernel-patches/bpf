@@ -771,6 +771,36 @@ out:
 	return newsk;
 }
 
+/**
+ *	llc_listener_send_dm - DM reply from a listening socket
+ *	@sap: SAP of the listener
+ *	@skb: received command
+ *	@saddr: source address decoded from @skb
+ *	@f_bit: final bit for the DM response
+ *
+ *	ADM would answer DISC and P=1 commands with DM, but a listener has no
+ *	peer in llc->daddr. Build the reply from the incoming frame instead.
+ */
+static void llc_listener_send_dm(struct llc_sap *sap, struct sk_buff *skb,
+				 const struct llc_addr *saddr, u8 f_bit)
+{
+	struct sk_buff *nskb;
+	int rc;
+
+	nskb = llc_alloc_frame(NULL, skb->dev, LLC_PDU_TYPE_U, 0);
+	if (!nskb)
+		return;
+
+	llc_pdu_header_init(nskb, LLC_PDU_TYPE_U, sap->laddr.lsap,
+			    saddr->lsap, LLC_PDU_RSP);
+	llc_pdu_init_as_dm_rsp(nskb, f_bit);
+	rc = llc_mac_hdr_init(nskb, skb->dev->dev_addr, saddr->mac);
+	if (unlikely(rc))
+		kfree_skb(nskb);
+	else
+		dev_queue_xmit(nskb);
+}
+
 void llc_conn_handler(struct llc_sap *sap, struct sk_buff *skb)
 {
 	struct llc_addr saddr, daddr;
@@ -795,11 +825,26 @@ void llc_conn_handler(struct llc_sap *sap, struct sk_buff *skb)
 	 * in the newly created struct sock private area. -acme
 	 */
 	if (unlikely(sk->sk_state == TCP_LISTEN)) {
-		struct sock *newsk = llc_create_incoming_sock(sk, skb->dev,
-							      &saddr, &daddr);
-		if (!newsk)
+		struct sock *newsk;
+
+		if (!llc_conn_ev_rx_sabme_cmd_pbit_set_x(sk, skb)) {
+			newsk = llc_create_incoming_sock(sk, skb->dev, &saddr,
+							 &daddr);
+			if (!newsk)
+				goto drop_unlock;
+			skb_set_owner_r(skb, newsk);
+		} else {
+			/* Not a passive-open request. */
+			if (!llc_conn_ev_rx_disc_cmd_pbit_set_x(sk, skb)) {
+				u8 f_bit;
+
+				llc_pdu_decode_pf_bit(skb, &f_bit);
+				llc_listener_send_dm(sap, skb, &saddr, f_bit);
+			} else if (!llc_conn_ev_rx_xxx_cmd_pbit_set_1(sk, skb)) {
+				llc_listener_send_dm(sap, skb, &saddr, 1);
+			}
 			goto drop_unlock;
-		skb_set_owner_r(skb, newsk);
+		}
 	} else {
 		/*
 		 * Can't be skb_set_owner_r, this will be done at the
