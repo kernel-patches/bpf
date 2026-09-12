@@ -81,6 +81,14 @@ enum xdp_buff_flags {
 	 * XDP program is not attached.
 	 */
 	XDP_FLAGS_FRAGS_UNREADABLE	= BIT(2),
+	/*
+	 * frags are page_pool memory even though rxq->mem.type is not: a
+	 * skb-backed XDP buff (generic XDP, veth) is cow'd into a page_pool.
+	 * xdp_buff only: an xdp_frame describes its memory with ::mem_type, so
+	 * this is stripped in xdp_update_frame_from_buff() and re-derived from
+	 * ::mem_type in xdp_convert_frame_to_buff().
+	 */
+	XDP_FLAGS_FRAGS_PAGE_POOL	= BIT(3),
 };
 
 struct xdp_buff {
@@ -129,6 +137,16 @@ static __always_inline void xdp_buff_set_frag_pfmemalloc(struct xdp_buff *xdp)
 static __always_inline void xdp_buff_set_frag_unreadable(struct xdp_buff *xdp)
 {
 	xdp->flags |= XDP_FLAGS_FRAGS_UNREADABLE;
+}
+
+static __always_inline void xdp_buff_set_frag_pp(struct xdp_buff *xdp)
+{
+	xdp->flags |= XDP_FLAGS_FRAGS_PAGE_POOL;
+}
+
+static __always_inline bool xdp_buff_is_frag_pp(const struct xdp_buff *xdp)
+{
+	return !!(xdp->flags & XDP_FLAGS_FRAGS_PAGE_POOL);
 }
 
 static __always_inline u32 xdp_buff_get_skb_flags(const struct xdp_buff *xdp)
@@ -394,6 +412,15 @@ void xdp_convert_frame_to_buff(const struct xdp_frame *frame,
 	xdp->data_meta = frame->data - frame->metasize;
 	xdp->frame_sz = frame->frame_sz;
 	xdp->flags = frame->flags;
+	/*
+	 * frame->flags never carries XDP_FLAGS_FRAGS_PAGE_POOL (it is stripped
+	 * in xdp_update_frame_from_buff()); re-derive it from the frame's own
+	 * memory type. veth and devmap rebuild a buff here and run a program
+	 * whose rxq says MEM_TYPE_PAGE_SHARED, so without this a shrink would
+	 * free a page_pool frag through page_frag_free().
+	 */
+	if (frame->mem_type == MEM_TYPE_PAGE_POOL)
+		xdp_buff_set_frag_pp(xdp);
 }
 
 static inline
@@ -420,7 +447,8 @@ int xdp_update_frame_from_buff(const struct xdp_buff *xdp,
 	xdp_frame->headroom = headroom - sizeof(*xdp_frame);
 	xdp_frame->metasize = metasize;
 	xdp_frame->frame_sz = xdp->frame_sz;
-	xdp_frame->flags = xdp->flags;
+	/* XDP_FLAGS_FRAGS_PAGE_POOL is xdp_buff only, don't carry it over */
+	xdp_frame->flags = xdp->flags & ~XDP_FLAGS_FRAGS_PAGE_POOL;
 
 	return 0;
 }
