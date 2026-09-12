@@ -1036,7 +1036,8 @@ static int linker_sanity_check_elf_relos(struct src_obj *obj, struct src_sec *se
 		size_t sym_type = ELF64_R_TYPE(relo->r_info);
 
 		if (sym_type != R_BPF_64_64 && sym_type != R_BPF_64_32 &&
-		    sym_type != R_BPF_64_ABS64 && sym_type != R_BPF_64_ABS32) {
+		    sym_type != R_BPF_64_ABS64 && sym_type != R_BPF_64_ABS32 &&
+		    sym_type != R_BPF_64_NODYLD32) {
 			pr_warn("ELF relo #%d in section #%zu has unexpected type %zu in %s\n",
 				i, sec->sec_idx, sym_type, obj->filename);
 			return -EINVAL;
@@ -2274,6 +2275,40 @@ static int linker_append_elf_relos(struct bpf_linker *linker, struct src_obj *ob
 						insn->imm += sec->dst_off / sizeof(struct bpf_insn);
 					else
 						insn->imm += sec->dst_off;
+				} else if (sym_type == R_BPF_64_NODYLD32 ||
+					   sym_type == R_BPF_64_ABS32) {
+					__u32 *val;
+
+					/* A 32-bit byte offset into another
+					 * section, carried as an implicit
+					 * addend in the data itself. This is
+					 * how a compiler points .bpf_cleanup
+					 * records at the code they describe,
+					 * so shift them by wherever that code
+					 * ended up in the output.
+					 *
+					 * Two spellings of the one thing: LLVM
+					 * emits NODYLD32 for a .long against a
+					 * section symbol, GNU as emits ABS32
+					 * (bpf_reloc_type_lookup() maps
+					 * BFD_RELOC_32 to it), and the value
+					 * they describe is the same.
+					 *
+					 * Unlike the instructions above, this
+					 * value is still in the input object's
+					 * byte order: extend_sec() converts
+					 * executable sections to native order
+					 * on the way in and
+					 * bpf_linker__finalize() converts them
+					 * back, but a data section is carried
+					 * through untouched. Do the arithmetic
+					 * in native order and put it back.
+					 */
+					val = dst_linked_sec->raw_data + dst_rel->r_offset;
+					if (linker->swapped_endian)
+						*val = bswap_32(bswap_32(*val) + sec->dst_off);
+					else
+						*val += sec->dst_off;
 				} else {
 					pr_warn("relocation against STT_SECTION in non-exec section is not supported!\n");
 					return -EINVAL;

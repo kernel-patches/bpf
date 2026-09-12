@@ -1739,6 +1739,121 @@ enum bpf_sig_keyring {
 	BPF_SIG_KEYRING_BPF,
 };
 
+/*
+ * One exception cleanup region of a JITed (sub)program. @begin and @end
+ * bracket the native code of the covered call sites and @pad is the native
+ * address of the landing pad to run. The walker holds a return address, which
+ * is one instruction past a covered call, so the test is (begin, end] -- a
+ * range rather than the single address it could be, so that a JIT emitting
+ * anything else in the same instruction slot cannot move the answer.
+ */
+struct bpf_cleanup_pad {
+	u64 begin;
+	u64 end;
+	u64 pad;
+};
+
+/*
+ * Everything a (sub)program carrying a compiler-emitted exception cleanup
+ * table needs at run time, hung off bpf_prog_aux by one pointer rather than
+ * spread across it: this is a niche feature and bpf_prog_aux is on every BPF
+ * program, so the state exists only for a program that has a table, and
+ * @exc being set is what says so.
+ *
+ * Every subprogram of such a program has one, including a subprogram with no
+ * records of its own: a frame's prologue spill is what lets the walker
+ * restore its *caller* before running the caller's pad, so the shape has to
+ * be uniform.
+ */
+struct bpf_exception_info {
+	/*
+	 * @info holds the compiler's records with offsets made relative to
+	 * this subprogram; the JIT turns them into the native address ranges
+	 * of @pads.
+	 */
+	struct bpf_cleanup_info *info;
+	struct bpf_cleanup_pad *pads;
+	/*
+	 * The landing pads' instruction indices, sorted and deduplicated, so
+	 * a JIT walking the program in order can ask whether the instruction
+	 * it is about to emit begins one. Several records may name the same
+	 * pad, so this is not simply a column of @info.
+	 */
+	u32 *pad_at;
+	/*
+	 * The indices of this (sub)program's bpf_throw() calls, sorted, so the
+	 * JIT can ask whether the call it is about to emit is the one that
+	 * has to spill the throwing frame's registers. It cannot tell from the
+	 * instruction: do_misc_fixups() has resolved insn->imm from the
+	 * kfunc's BTF id to a call offset by the time the JIT runs.
+	 */
+	u32 *throw_at;
+	u32 nr_info;
+	u32 nr_pads;
+	u32 nr_pad_at;
+	u32 nr_throw_at;
+	/*
+	 * Offset from this frame's frame pointer to where its prologue spilled
+	 * its caller's BPF callee-saved registers, which is what lets the
+	 * walker restore the caller before running the caller's pad.
+	 */
+	s32 spill_off;
+	/*
+	 * Offset from a frame's frame pointer to where the JIT spills that
+	 * frame's own BPF callee-saved registers before calling bpf_throw().
+	 * The frame that throws has no BPF callee to have spilled them, and
+	 * it never runs its epilogue, so it writes them itself. Same layout
+	 * as @spill_off, so the walker reads both the same way.
+	 */
+	s32 throw_spill_off;
+};
+
+#ifdef CONFIG_BPF_SYSCALL
+bool bpf_cleanup_force_spill(const struct bpf_prog *prog);
+int bpf_cleanup_alloc_info(struct bpf_prog_aux *aux);
+const struct bpf_cleanup_pad *bpf_cleanup_pad_for_ip(const struct bpf_prog *prog, u64 ip);
+bool bpf_cleanup_insn_is_pad(const struct bpf_prog *prog, u32 idx);
+bool bpf_cleanup_insn_is_throw(const struct bpf_prog *prog, u32 idx);
+int bpf_cleanup_attach_info(struct bpf_prog_aux *aux, struct bpf_cleanup_info *recs, u32 cnt);
+int bpf_cleanup_attach_main_prog(struct bpf_verifier_env *env, struct bpf_prog *prog);
+void bpf_cleanup_fill_native_pads(struct bpf_prog *prog, u32 *addrs, void *image);
+void bpf_cleanup_free_info(struct bpf_prog_aux *aux);
+#else
+static inline bool bpf_cleanup_force_spill(const struct bpf_prog *prog)
+{
+	return false;
+}
+static inline const struct bpf_cleanup_pad *
+bpf_cleanup_pad_for_ip(const struct bpf_prog *prog, u64 ip)
+{
+	return NULL;
+}
+static inline bool bpf_cleanup_insn_is_pad(const struct bpf_prog *prog, u32 idx)
+{
+	return false;
+}
+static inline bool bpf_cleanup_insn_is_throw(const struct bpf_prog *prog, u32 idx)
+{
+	return false;
+}
+static inline int bpf_cleanup_attach_info(struct bpf_prog_aux *aux,
+					  struct bpf_cleanup_info *recs, u32 cnt)
+{
+	return 0;
+}
+static inline int bpf_cleanup_attach_main_prog(struct bpf_verifier_env *env,
+					       struct bpf_prog *prog)
+{
+	return 0;
+}
+static inline void bpf_cleanup_fill_native_pads(struct bpf_prog *prog, u32 *addrs, void *image)
+{
+}
+static inline void bpf_cleanup_free_info(struct bpf_prog_aux *aux)
+{
+}
+#endif
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1819,6 +1934,12 @@ struct bpf_prog_aux {
 	char name[BPF_OBJ_NAME_LEN];
 	u64 (*bpf_exception_cb)(u64 cookie, u64 sp, u64 bp, u64, u64);
 	u16 stack_arg_sp_adjust;
+	/*
+	 * Exception cleanup state, or NULL for a program that carries no
+	 * cleanup table, which is nearly all of them. See
+	 * struct bpf_exception_info.
+	 */
+	struct bpf_exception_info *exc;
 #ifdef CONFIG_SECURITY
 	void *security;
 #endif
