@@ -1360,7 +1360,7 @@ struct netdev_net_notifier {
  *			     u16 flags, struct netlink_ext_ack *extack)
  * int (*ndo_bridge_getlink)(struct sk_buff *skb, u32 pid, u32 seq,
  *			     struct net_device *dev, u32 filter_mask,
- *			     int nlflags)
+ *			     int nlflags, struct netlink_ext_ack *extack)
  * int (*ndo_bridge_dellink)(struct net_device *dev, struct nlmsghdr *nlh,
  *			     u16 flags);
  *
@@ -1659,7 +1659,8 @@ struct net_device_ops {
 						      u32 pid, u32 seq,
 						      struct net_device *dev,
 						      u32 filter_mask,
-						      int nlflags);
+						      int nlflags,
+						      struct netlink_ext_ack *extack);
 	int			(*ndo_bridge_dellink)(struct net_device *dev,
 						      struct nlmsghdr *nlh,
 						      u16 flags);

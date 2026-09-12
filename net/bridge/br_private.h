@@ -2179,7 +2179,7 @@ int br_setlink(struct net_device *dev, struct nlmsghdr *nlmsg, u16 flags,
 	       struct netlink_ext_ack *extack);
 int br_dellink(struct net_device *dev, struct nlmsghdr *nlmsg, u16 flags);
 int br_getlink(struct sk_buff *skb, u32 pid, u32 seq, struct net_device *dev,
-	       u32 filter_mask, int nlflags);
+	       u32 filter_mask, int nlflags, struct netlink_ext_ack *extack);
 int br_process_vlan_info(struct net_bridge *br,
 			 struct net_bridge_port *p, int cmd,
 			 struct bridge_vlan_info *vinfo_curr,

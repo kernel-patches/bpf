@@ -8101,12 +8101,14 @@ int ice_set_rss_hfunc(struct ice_vsi *vsi, u8 hfunc)
  * @dev: the netdev being configured
  * @filter_mask: filter mask passed in
  * @nlflags: netlink flags passed in
+ * @extack: netlink extended ack
  *
  * Return the bridge mode (VEB/VEPA)
  */
 static int
 ice_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
-		   struct net_device *dev, u32 filter_mask, int nlflags)
+		   struct net_device *dev, u32 filter_mask, int nlflags,
+		   struct netlink_ext_ack *extack)
 {
 	struct ice_pf *pf = ice_netdev_to_pf(dev);
 	u16 bmode;
@@ -8114,7 +8116,7 @@ ice_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 	bmode = pf->first_sw->bridge_mode;
 
 	return ndo_dflt_bridge_getlink(skb, pid, seq, dev, bmode, 0, 0, nlflags,
-				       filter_mask, NULL);
+				       filter_mask, NULL, extack);
 }
 
 /**
