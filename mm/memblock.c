@@ -2465,8 +2465,6 @@ static unsigned long __init free_low_memory_core_early(void)
 	return count;
 }
 
-static int reset_managed_pages_done __initdata;
-
 static void __init reset_node_managed_pages(pg_data_t *pgdat)
 {
 	struct zone *z;
@@ -2475,17 +2473,12 @@ static void __init reset_node_managed_pages(pg_data_t *pgdat)
 		atomic_long_set(&z->managed_pages, 0);
 }
 
-void __init reset_all_zones_managed_pages(void)
+static void __init reset_all_zones_managed_pages(void)
 {
 	struct pglist_data *pgdat;
 
-	if (reset_managed_pages_done)
-		return;
-
 	for_each_online_pgdat(pgdat)
 		reset_node_managed_pages(pgdat);
-
-	reset_managed_pages_done = 1;
 }
 
 /**
@@ -2700,15 +2693,10 @@ err_report:
 
 static int __init reserve_mem_init(void)
 {
-	int err;
-
 	if (!kho_is_enabled() || !reserved_mem_count)
 		return 0;
 
-	err = prepare_kho_fdt();
-	if (err)
-		return err;
-	return err;
+	return prepare_kho_fdt();
 }
 late_initcall(reserve_mem_init);
 
@@ -2908,14 +2896,18 @@ static int memblock_debug_show(struct seq_file *m, void *private)
 		else
 			seq_printf(m, "%4c ", 'x');
 		if (reg->flags) {
-			for (j = 0; j < count; j++) {
-				if (reg->flags & (1U << j)) {
-					seq_printf(m, "%s\n", flagname[j]);
-					break;
-				}
+			unsigned int flags = reg->flags;
+			bool first = true;
+
+			for (j = 0; flags; j++, flags >>= 1) {
+				if (!(flags & 1))
+					continue;
+				if (!first)
+					seq_putc(m, '|');
+				seq_puts(m, j < count ? flagname[j] : "UNKNOWN");
+				first = false;
 			}
-			if (j == count)
-				seq_printf(m, "%s\n", "UNKNOWN");
+			seq_putc(m, '\n');
 		} else {
 			seq_printf(m, "%s\n", "NONE");
 		}

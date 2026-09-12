@@ -30,7 +30,6 @@
 #include <linux/mii.h>
 #include <linux/io.h>
 #include <linux/vmalloc.h>
-#include <linux/pagemap.h>
 #include <linux/tcp.h>
 #include <linux/ethtool.h>
 #include <linux/if_vlan.h>
@@ -381,7 +380,7 @@ struct atl1e_rx_page {
 	u8		*addr;   /* receive rage virtual address */
 	dma_addr_t	write_offset_dma;  /* the DMA address which contain the
 					      receive data offset in the page */
-	u32		*write_offset_addr; /* the virtaul address which contain
+	u32		*write_offset_addr; /* the virtual address which contain
 					     the receive data offset in the page */
 	u32		read_offset;       /* the offset where we have read */
 };

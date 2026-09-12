@@ -974,7 +974,8 @@ static void gicv5_cpu_disable_interrupts(void)
 {
 	u64 cr0;
 
-	cr0 = FIELD_PREP(ICC_CR0_EL1_EN, 0);
+	cr0 = read_sysreg_s(SYS_ICC_CR0_EL1);
+	cr0 &= ~ICC_CR0_EL1_EN_MASK;
 	write_sysreg_s(cr0, SYS_ICC_CR0_EL1);
 	isb();
 }
@@ -991,7 +992,8 @@ static void gicv5_cpu_enable_interrupts(void)
 	pcr = FIELD_PREP(ICC_PCR_EL1_PRIORITY, GICV5_IRQ_PRI_MI);
 	write_sysreg_s(pcr, SYS_ICC_PCR_EL1);
 
-	cr0 = FIELD_PREP(ICC_CR0_EL1_EN, 1);
+	cr0 = read_sysreg_s(SYS_ICC_CR0_EL1);
+	cr0 |= ICC_CR0_EL1_EN_MASK;
 	write_sysreg_s(cr0, SYS_ICC_CR0_EL1);
 }
 
@@ -1166,21 +1168,18 @@ static int __init gicv5_init_common(struct fwnode_handle *parent_domain)
 	if (ret)
 		goto out_int;
 
-	ret = set_handle_irq(gicv5_handle_irq);
+	ret = gicv5_irs_enable();
 	if (ret)
 		goto out_int;
 
-	ret = gicv5_irs_enable();
-	if (ret)
-		goto out_handle;
+	if (set_handle_irq(gicv5_handle_irq))
+		panic("GICv5: unable to install root IRQ handler\n");
 
 	gicv5_smp_init();
 
 	gicv5_irs_its_probe();
 	return 0;
 
-out_handle:
-	set_handle_irq(NULL);
 out_int:
 	gicv5_cpu_disable_interrupts();
 	gicv5_free_domains();

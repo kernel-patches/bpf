@@ -7,6 +7,7 @@
 #define FIRMWARE_MT7922		"mediatek/BT_RAM_CODE_MT7922_1_1_hdr.bin"
 #define FIRMWARE_MT7902		"mediatek/BT_RAM_CODE_MT7902_1_1_hdr.bin"
 #define FIRMWARE_MT7961		"mediatek/BT_RAM_CODE_MT7961_1_2_hdr.bin"
+#define FIRMWARE_MT7920		"mediatek/BT_RAM_CODE_MT7961_1a_2_hdr.bin"
 #define FIRMWARE_MT7925		"mediatek/mt7925/BT_RAM_CODE_MT7925_1_1_hdr.bin"
 #define FIRMWARE_MT7927		"mediatek/mt7927/BT_RAM_CODE_MT6639_2_1_hdr.bin"
 
@@ -64,6 +65,15 @@ enum {
 	BTMTK_WMT_ON_UNDONE,
 	BTMTK_WMT_ON_DONE,
 	BTMTK_WMT_ON_PROGRESS,
+};
+
+/* Position of a BTMTK_WMT_PATCH_DWNLD packet within a download sequence,
+ * carried in struct btmtk_wmt_hdr's flag field.
+ */
+enum btmtk_wmt_pkt_flag {
+	BTMTK_WMT_PKT_START = 1,
+	BTMTK_WMT_PKT_CONTINUE = 2,
+	BTMTK_WMT_PKT_END = 3,
 };
 
 struct btmtk_wmt_hdr {
