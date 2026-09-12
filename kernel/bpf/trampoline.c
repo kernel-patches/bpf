@@ -403,6 +403,7 @@ static struct bpf_trampoline *bpf_trampoline_lookup(u64 key, unsigned long ip)
 	refcount_set(&tr->refcnt, 1);
 	for (i = 0; i < BPF_TRAMP_MAX; i++)
 		INIT_HLIST_HEAD(&tr->progs_hlist[i]);
+	INIT_LIST_HEAD(&tr->images);
 out:
 	mutex_unlock(&trampoline_mutex);
 	return tr;
@@ -565,14 +566,21 @@ static void bpf_tramp_image_free(struct bpf_tramp_image *im)
 	arch_free_bpf_trampoline(im->image, im->size);
 	bpf_jit_uncharge_modmem(im->size);
 	percpu_ref_exit(&im->pcref);
+	kfree(im->skips);
 	kfree_rcu(im, rcu);
 }
 
 static void __bpf_tramp_image_put_deferred(struct work_struct *work)
 {
+	struct bpf_trampoline *tr;
 	struct bpf_tramp_image *im;
 
 	im = container_of(work, struct bpf_tramp_image, work);
+	tr = im->tr;
+	trampoline_lock(tr);
+	list_del(&im->list);
+	trampoline_unlock(tr);
+	bpf_trampoline_put(tr);
 	bpf_tramp_image_free(im);
 }
 
@@ -658,7 +666,7 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 	call_rcu_tasks_trace(&im->rcu, __bpf_tramp_image_put_rcu_tasks);
 }
 
-static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size)
+static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size, int nr_progs)
 {
 	struct bpf_tramp_image *im;
 	struct bpf_ksym *ksym;
@@ -668,6 +676,10 @@ static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size)
 	im = kzalloc_obj(*im);
 	if (!im)
 		goto out;
+
+	im->skips = kzalloc_objs(*im->skips, nr_progs);
+	if (!im->skips)
+		goto out_free_im;
 
 	err = bpf_jit_charge_modmem(size);
 	if (err)
@@ -695,9 +707,35 @@ out_free_image:
 out_uncharge:
 	bpf_jit_uncharge_modmem(size);
 out_free_im:
+	kfree(im->skips);
 	kfree(im);
 out:
 	return ERR_PTR(err);
+}
+
+/*
+ * prog was detached and can be freed, but tasks may still be running in images
+ * that call it, sleeping in an earlier prog for example. Patch these images to
+ * jump over prog.
+ */
+static void bpf_trampoline_skip_prog(struct bpf_trampoline *tr, struct bpf_prog *prog)
+{
+	struct bpf_tramp_image *im;
+	int i, err;
+
+	list_for_each_entry(im, &tr->images, list) {
+		for (i = 0; i < im->nr_skips; i++) {
+			struct bpf_tramp_skip *skip = &im->skips[i];
+
+			if (skip->prog != prog)
+				continue;
+			err = bpf_arch_text_poke(skip->nop, BPF_MOD_NOP, BPF_MOD_JUMP,
+						 NULL, skip->target);
+			WARN_ON_ONCE(err);
+			/* not a nop anymore, and prog's address can be reused */
+			skip->prog = NULL;
+		}
+	}
 }
 
 void bpf_trampoline_set_flags(struct bpf_trampoline *tr, u32 flags)
@@ -771,7 +809,7 @@ again:
 		goto out;
 	}
 
-	im = bpf_tramp_image_alloc(tr->key, size);
+	im = bpf_tramp_image_alloc(tr->key, size, total);
 	if (IS_ERR(im)) {
 		err = PTR_ERR(im);
 		goto out;
@@ -806,8 +844,14 @@ again:
 #endif
 
 out_free:
-	if (err)
+	if (err) {
 		bpf_tramp_image_free(im);
+	} else {
+		/* track the image until it is freed, for bpf_trampoline_skip_prog() */
+		refcount_inc(&tr->refcnt);
+		im->tr = tr;
+		list_add(&im->list, &tr->images);
+	}
 out:
 	/* If any error happens, restore previous flags */
 	if (err)
@@ -937,6 +981,7 @@ static void bpf_trampoline_remove_prog(struct bpf_trampoline *tr,
 	}
 	hlist_del_init(&node->tramp_hlist);
 	tr->progs_cnt[kind]--;
+	bpf_trampoline_skip_prog(tr, node->link->prog);
 }
 
 static int __bpf_trampoline_link_prog(struct bpf_tramp_node *node,

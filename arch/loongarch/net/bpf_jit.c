@@ -1696,13 +1696,19 @@ static void restore_stk_args(struct jit_ctx *ctx, int nr_stk_args, int args_off,
 	}
 }
 
-static int invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_node *n,
-			   int args_off, int retval_off, int run_ctx_off, bool save_ret)
+static int invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_image *im,
+			   struct bpf_tramp_node *n, int args_off, int retval_off,
+			   int run_ctx_off, bool save_ret)
 {
-	int ret;
+	int i, ret;
 	u32 *branch;
 	struct bpf_prog *p = n->link->prog;
 	int cookie_off = offsetof(struct bpf_tramp_run_ctx, bpf_cookie);
+	void *skip = ctx->ro_image + ctx->idx;
+
+	/* nops for move_imm+jirl, patched to skip this prog when it is detached */
+	for (i = 0; i < LOONGARCH_LONG_JUMP_NINSNS; i++)
+		emit_insn(ctx, nop);
 
 	if (n->cookie)
 		emit_store_stack_imm64(ctx, LOONGARCH_GPR_T1,
@@ -1755,13 +1761,17 @@ static int invoke_bpf_prog(struct jit_ctx *ctx, struct bpf_tramp_node *n,
 	/* arg3: &run_ctx */
 	emit_insn(ctx, addid, LOONGARCH_GPR_A2, LOONGARCH_GPR_FP, -run_ctx_off);
 	ret = emit_call(ctx, (const u64)bpf_trampoline_exit(p));
+	if (ret)
+		return ret;
 
-	return ret;
+	bpf_tramp_image_add_skip(im, p, skip, ctx->ro_image + ctx->idx);
+	return 0;
 }
 
-static int invoke_bpf(struct jit_ctx *ctx, struct bpf_tramp_nodes *tn,
-		      int args_off, int retval_off, int run_ctx_off,
-		      int func_meta_off, bool save_ret, u64 func_meta, int cookie_off)
+static int invoke_bpf(struct jit_ctx *ctx, struct bpf_tramp_image *im,
+		      struct bpf_tramp_nodes *tn, int args_off, int retval_off,
+		      int run_ctx_off, int func_meta_off, bool save_ret,
+		      u64 func_meta, int cookie_off)
 {
 	int i, cur_cookie = (cookie_off - args_off) / 8;
 
@@ -1774,7 +1784,8 @@ static int invoke_bpf(struct jit_ctx *ctx, struct bpf_tramp_nodes *tn,
 			emit_store_stack_imm64(ctx, LOONGARCH_GPR_T1, -func_meta_off, meta);
 			cur_cookie--;
 		}
-		err = invoke_bpf_prog(ctx, tn->nodes[i], args_off, retval_off, run_ctx_off, save_ret);
+		err = invoke_bpf_prog(ctx, im, tn->nodes[i], args_off, retval_off,
+				      run_ctx_off, save_ret);
 		if (err)
 			return err;
 	}
@@ -2017,7 +2028,7 @@ static int __arch_prepare_bpf_trampoline(struct jit_ctx *ctx, struct bpf_tramp_i
 	}
 
 	if (fentry->nr_nodes) {
-		ret = invoke_bpf(ctx, fentry, args_off, retval_off, run_ctx_off, func_meta_off,
+		ret = invoke_bpf(ctx, im, fentry, args_off, retval_off, run_ctx_off, func_meta_off,
 				 flags & BPF_TRAMP_F_RET_FENTRY_RET, func_meta, cookie_off);
 		if (ret)
 			return ret;
@@ -2029,7 +2040,7 @@ static int __arch_prepare_bpf_trampoline(struct jit_ctx *ctx, struct bpf_tramp_i
 
 		emit_insn(ctx, std, LOONGARCH_GPR_ZERO, LOONGARCH_GPR_FP, -retval_off);
 		for (i = 0; i < fmod_ret->nr_nodes; i++) {
-			ret = invoke_bpf_prog(ctx, fmod_ret->nodes[i],
+			ret = invoke_bpf_prog(ctx, im, fmod_ret->nodes[i],
 					      args_off, retval_off, run_ctx_off, true);
 			if (ret)
 				goto out;
@@ -2068,7 +2079,7 @@ static int __arch_prepare_bpf_trampoline(struct jit_ctx *ctx, struct bpf_tramp_i
 		emit_store_stack_imm64(ctx, LOONGARCH_GPR_T1, -func_meta_off, func_meta);
 
 	if (fexit->nr_nodes) {
-		ret = invoke_bpf(ctx, fexit, args_off, retval_off, run_ctx_off,
+		ret = invoke_bpf(ctx, im, fexit, args_off, retval_off, run_ctx_off,
 				 func_meta_off, false, func_meta, cookie_off);
 		if (ret)
 			goto out;
@@ -2178,7 +2189,7 @@ int arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
 {
 	int ret;
 	struct jit_ctx ctx;
-	struct bpf_tramp_image im;
+	struct bpf_tramp_image im = {};
 
 	ctx.image = NULL;
 	ctx.idx = 0;
