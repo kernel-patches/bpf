@@ -1467,16 +1467,19 @@ exit:
 static void digital_tg_send_atr_res_complete(struct nfc_digital_dev *ddev,
 					     void *arg, struct sk_buff *resp)
 {
-	int offset;
+	unsigned int offset;
 
 	if (IS_ERR(resp)) {
 		digital_poll_next_tech(ddev);
 		return;
 	}
 
-	offset = 2;
-	if (resp->data[0] == DIGITAL_NFC_DEP_NFCA_SOD_SB)
-		offset++;
+	if (!resp->len)
+		goto bad_frame;
+
+	offset = (resp->data[0] == DIGITAL_NFC_DEP_NFCA_SOD_SB) ? 3 : 2;
+	if (resp->len <= offset)
+		goto bad_frame;
 
 	ddev->atn_count = 0;
 
@@ -1484,6 +1487,12 @@ static void digital_tg_send_atr_res_complete(struct nfc_digital_dev *ddev,
 		digital_tg_recv_psl_req(ddev, arg, resp);
 	else
 		digital_tg_recv_dep_req(ddev, arg, resp);
+
+	return;
+
+bad_frame:
+	kfree_skb(resp);
+	digital_poll_next_tech(ddev);
 }
 
 static int digital_tg_send_atr_res(struct nfc_digital_dev *ddev,
