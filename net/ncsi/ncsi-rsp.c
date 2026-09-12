@@ -42,7 +42,14 @@ static int ncsi_validate_rsp_pkt(struct ncsi_request *nr,
 	/* Check NCSI packet header. We don't need validate
 	 * the packet type, which should have been checked
 	 * before calling this function.
+	 *
+	 * The response is not guaranteed to be linear, so make the
+	 * header and the padded payload - the checksum sits in its last
+	 * four bytes - available before taking a pointer into the skb.
 	 */
+	if (!pskb_may_pull(nr->rsp, sizeof(*h) + ALIGN(payload, 4)))
+		return -EINVAL;
+
 	h = (struct ncsi_rsp_pkt_hdr *)skb_network_header(nr->rsp);
 
 	if (h->common.revision != NCSI_PKT_REVISION) {
@@ -1172,6 +1179,7 @@ int ncsi_rcv_rsp(struct sk_buff *skb, struct net_device *dev,
 	struct ncsi_pkt_hdr *hdr;
 	unsigned long flags;
 	int payload, i, ret;
+	unsigned char type;
 
 	/* Find the NCSI device */
 	nd = ncsi_find_dev(orig_dev);
@@ -1181,9 +1189,15 @@ int ncsi_rcv_rsp(struct sk_buff *skb, struct net_device *dev,
 		goto err_free_skb;
 	}
 
+	if (!pskb_may_pull(skb, sizeof(*hdr))) {
+		ret = -EINVAL;
+		goto err_free_skb;
+	}
+
 	/* Check if it is AEN packet */
 	hdr = (struct ncsi_pkt_hdr *)skb_network_header(skb);
-	if (hdr->type == NCSI_PKT_AEN)
+	type = hdr->type;
+	if (type == NCSI_PKT_AEN)
 		return ncsi_aen_handler(ndp, skb);
 
 	/* Find the handler */
@@ -1230,7 +1244,7 @@ int ncsi_rcv_rsp(struct sk_buff *skb, struct net_device *dev,
 	if (ret) {
 		netdev_warn(ndp->ndev.dev,
 			    "NCSI: 'bad' packet ignored for type 0x%x\n",
-			    hdr->type);
+			    type);
 
 		if (nr->flags == NCSI_REQ_FLAG_NETLINK_DRIVEN) {
 			if (ret == -EPERM)
@@ -1250,7 +1264,7 @@ int ncsi_rcv_rsp(struct sk_buff *skb, struct net_device *dev,
 	if (ret)
 		netdev_err(ndp->ndev.dev,
 			   "NCSI: Handler for packet type 0x%x returned %d\n",
-			   hdr->type, ret);
+			   type, ret);
 
 out_netlink:
 	if (nr->flags == NCSI_REQ_FLAG_NETLINK_DRIVEN) {
@@ -1258,7 +1272,7 @@ out_netlink:
 		if (ret) {
 			netdev_err(ndp->ndev.dev,
 				   "NCSI: Netlink handler for packet type 0x%x returned %d\n",
-				   hdr->type, ret);
+				   type, ret);
 		}
 	}
 
