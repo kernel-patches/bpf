@@ -1233,17 +1233,18 @@ static int ipgre_netlink_parms(struct net_device *dev,
 		parms->iph.frag_off = htons(IP_DF);
 	}
 
-	if (data[IFLA_GRE_COLLECT_METADATA]) {
-		t->collect_md = true;
-		if (dev->type == ARPHRD_IPGRE)
-			dev->type = ARPHRD_NONE;
-	}
-
 	if (data[IFLA_GRE_IGNORE_DF]) {
 		if (nla_get_u8(data[IFLA_GRE_IGNORE_DF])
 		  && (parms->iph.frag_off & htons(IP_DF)))
 			return -EINVAL;
 		t->ignore_df = !!nla_get_u8(data[IFLA_GRE_IGNORE_DF]);
+	}
+
+	/* All attributes have been validated, we can change @dev and @t. */
+	if (data[IFLA_GRE_COLLECT_METADATA]) {
+		t->collect_md = true;
+		if (dev->type == ARPHRD_IPGRE)
+			dev->type = ARPHRD_NONE;
 	}
 
 	if (data[IFLA_GRE_FWMARK])
@@ -1259,39 +1260,50 @@ static int erspan_netlink_parms(struct net_device *dev,
 				__u32 *fwmark)
 {
 	struct ip_tunnel *t = netdev_priv(dev);
+	u8 erspan_ver = t->erspan_ver;
+	u32 index = t->index;
+	u16 hwid = t->hwid;
+	u8 dir = t->dir;
 	int err;
+
+	if (!data)
+		return ipgre_netlink_parms(dev, data, tb, parms, fwmark);
+
+	if (data[IFLA_GRE_ERSPAN_VER]) {
+		erspan_ver = nla_get_u8(data[IFLA_GRE_ERSPAN_VER]);
+
+		if (erspan_ver > 2)
+			return -EINVAL;
+	}
+
+	if (erspan_ver == 1) {
+		if (data[IFLA_GRE_ERSPAN_INDEX]) {
+			index = nla_get_u32(data[IFLA_GRE_ERSPAN_INDEX]);
+			if (index & ~INDEX_MASK)
+				return -EINVAL;
+		}
+	} else if (erspan_ver == 2) {
+		if (data[IFLA_GRE_ERSPAN_DIR]) {
+			dir = nla_get_u8(data[IFLA_GRE_ERSPAN_DIR]);
+			if (dir & ~(DIR_MASK >> DIR_OFFSET))
+				return -EINVAL;
+		}
+		if (data[IFLA_GRE_ERSPAN_HWID]) {
+			hwid = nla_get_u16(data[IFLA_GRE_ERSPAN_HWID]);
+			if (hwid & ~(HWID_MASK >> HWID_OFFSET))
+				return -EINVAL;
+		}
+	}
 
 	err = ipgre_netlink_parms(dev, data, tb, parms, fwmark);
 	if (err)
 		return err;
-	if (!data)
-		return 0;
 
-	if (data[IFLA_GRE_ERSPAN_VER]) {
-		t->erspan_ver = nla_get_u8(data[IFLA_GRE_ERSPAN_VER]);
-
-		if (t->erspan_ver > 2)
-			return -EINVAL;
-	}
-
-	if (t->erspan_ver == 1) {
-		if (data[IFLA_GRE_ERSPAN_INDEX]) {
-			t->index = nla_get_u32(data[IFLA_GRE_ERSPAN_INDEX]);
-			if (t->index & ~INDEX_MASK)
-				return -EINVAL;
-		}
-	} else if (t->erspan_ver == 2) {
-		if (data[IFLA_GRE_ERSPAN_DIR]) {
-			t->dir = nla_get_u8(data[IFLA_GRE_ERSPAN_DIR]);
-			if (t->dir & ~(DIR_MASK >> DIR_OFFSET))
-				return -EINVAL;
-		}
-		if (data[IFLA_GRE_ERSPAN_HWID]) {
-			t->hwid = nla_get_u16(data[IFLA_GRE_ERSPAN_HWID]);
-			if (t->hwid & ~(HWID_MASK >> HWID_OFFSET))
-				return -EINVAL;
-		}
-	}
+	/* All attributes have been validated, we can change @t. */
+	t->erspan_ver = erspan_ver;
+	t->index = index;
+	t->hwid = hwid;
+	t->dir = dir;
 
 	return 0;
 }
