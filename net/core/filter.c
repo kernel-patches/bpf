@@ -3491,6 +3491,32 @@ static int bpf_skb_proto_xlat(struct sk_buff *skb, __be16 to_proto)
 	return -ENOTSUPP;
 }
 
+static bool bpf_sk_assign_family_ok(const struct sk_buff *skb,
+				    const struct sock *sk)
+{
+	unsigned short family;
+
+	switch (skb->protocol) {
+	case htons(ETH_P_IP):
+		family = AF_INET;
+		break;
+	case htons(ETH_P_IPV6):
+		family = AF_INET6;
+		break;
+	default:
+		return true;
+	}
+
+	/* Requests inherit the listener family, but have family-specific ops. */
+	if (sk->sk_state == TCP_NEW_SYN_RECV)
+		return inet_reqsk(sk)->rsk_ops->family == family;
+
+	return sk->sk_family == family ||
+	       (family == AF_INET &&
+		sk->sk_family == AF_INET6 &&
+		!ipv6_only_sock(sk));
+}
+
 BPF_CALL_3(bpf_skb_change_proto, struct sk_buff *, skb, __be16, proto,
 	   u64, flags)
 {
@@ -3520,6 +3546,11 @@ BPF_CALL_3(bpf_skb_change_proto, struct sk_buff *, skb, __be16, proto,
 	bpf_compute_data_pointers(skb);
 	if (ret)
 		return ret;
+
+	/* Protocol translation can invalidate an earlier socket assignment. */
+	if (skb_sk_is_prefetched(skb) &&
+	    !bpf_sk_assign_family_ok(skb, skb->sk))
+		skb_orphan(skb);
 
 	if (skb_valid_dst(skb))
 		skb_dst_drop(skb);
@@ -7988,6 +8019,8 @@ BPF_CALL_3(bpf_sk_assign, struct sk_buff *, skb, struct sock *, sk, u64, flags)
 		return -ENETUNREACH;
 	if (sk_unhashed(sk))
 		return -EOPNOTSUPP;
+	if (!bpf_sk_assign_family_ok(skb, sk))
+		return -EAFNOSUPPORT;
 	if (sk_is_refcounted(sk) &&
 	    unlikely(!refcount_inc_not_zero(&sk->sk_refcnt)))
 		return -ENOENT;
@@ -12515,6 +12548,9 @@ __bpf_kfunc int bpf_sk_assign_tcp_reqsk(struct __sk_buff *s, struct sock *sk,
 	net = dev_net(skb->dev);
 	if (net != sock_net(sk))
 		return -ENETUNREACH;
+
+	if (!bpf_sk_assign_family_ok(skb, sk))
+		return -EAFNOSUPPORT;
 
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):
