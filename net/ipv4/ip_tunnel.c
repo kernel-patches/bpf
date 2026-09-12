@@ -911,10 +911,13 @@ static void ip_tunnel_update(struct ip_tunnel_net *itn,
 int ip_tunnel_ctl(struct net_device *dev, struct ip_tunnel_parm_kern *p,
 		  int cmd)
 {
-	int err = 0;
 	struct ip_tunnel *t = netdev_priv(dev);
+	struct ip_tunnel_net *itn;
+	LIST_HEAD(dev_kill_list);
 	struct net *net = t->net;
-	struct ip_tunnel_net *itn = net_generic(net, t->ip_tnl_net_id);
+	int err = 0;
+
+	itn = net_generic(net, t->ip_tnl_net_id);
 
 	switch (cmd) {
 	case SIOCGETTUNNEL:
@@ -998,7 +1001,8 @@ int ip_tunnel_ctl(struct net_device *dev, struct ip_tunnel_parm_kern *p,
 				goto done;
 			dev = t->dev;
 		}
-		unregister_netdevice(dev);
+
+		ip_tunnel_dellink(dev, &dev_kill_list);
 		err = 0;
 		break;
 
@@ -1007,6 +1011,8 @@ int ip_tunnel_ctl(struct net_device *dev, struct ip_tunnel_parm_kern *p,
 	}
 
 done:
+	unregister_netdevice_many(&dev_kill_list);
+
 	return err;
 }
 EXPORT_SYMBOL_GPL(ip_tunnel_ctl);
@@ -1180,7 +1186,7 @@ void ip_tunnel_delete_net(struct net *net, unsigned int id,
 		struct ip_tunnel *t;
 
 		hlist_for_each_entry_safe(t, n, thead, hash_node)
-			unregister_netdevice_queue(t->dev, head);
+			ip_tunnel_dellink(t->dev, head);
 	}
 }
 EXPORT_SYMBOL_GPL(ip_tunnel_delete_net);
@@ -1311,11 +1317,6 @@ EXPORT_SYMBOL_GPL(__ip_tunnel_init);
 void ip_tunnel_uninit(struct net_device *dev)
 {
 	struct ip_tunnel *tunnel = netdev_priv(dev);
-	struct net *net = tunnel->net;
-	struct ip_tunnel_net *itn;
-
-	itn = net_generic(net, tunnel->ip_tnl_net_id);
-	ip_tunnel_del(itn, netdev_priv(dev));
 
 	dst_cache_reset(&tunnel->dst_cache);
 }
