@@ -1282,7 +1282,9 @@ void rds_ib_conn_free(void *arg)
 	lock_ptr = ic->rds_ibdev ? &ic->rds_ibdev->spinlock : &ib_nodev_conns_lock;
 
 	spin_lock_irq(lock_ptr);
-	list_del(&ic->ib_node);
+	/* already unlinked if a transport teardown gathered us first */
+	if (!list_empty(&ic->ib_node))
+		list_del(&ic->ib_node);
 	spin_unlock_irq(lock_ptr);
 
 	rds_ib_recv_free_caches(ic);
