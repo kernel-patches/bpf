@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "semcode": {
+      "command": "semcode-mcp",
+      "args": ["-d", "/ci/.semcode.db"]
+    }
+  }
+}

@@ -1,0 +1,24 @@
+# Kernel splat signatures for check-kernel-splats.sh. A dmesg line matching
+# any of these fails the run.
+#
+# One extended regex per line. `#` comments and blank lines are ignored. This
+# file is required: with no patterns there is no check, so the action fails the
+# run rather than reporting a clean log.
+#
+# `^(\[[^]]*\] *)*` eats the timestamp and the CONFIG_PRINTK_CALLER field, so a
+# pattern holds for `dmesg`, for `dmesg -t` and for both configs.
+
+# `BUG:` covers KASAN, KCSAN, KMSAN and KFENCE. `WARNING:` covers __warn(), and
+# with it lockdep, refcount_t and list corruption, which all print through
+# WARN(). An oops panics the VM (PANIC_ON_OOPS plus panic=-1), which fails the
+# job on its own, so it needs no pattern here.
+^(\[[^]]*\] *)*(BUG|WARNING|UBSAN|Oops)[: ]
+^(\[[^]]*\] *)*kernel BUG at
+
+# kernel/watchdog.c sets pr_fmt, so a lockup line starts with `watchdog: `,
+# not with `BUG:`.
+^(\[[^]]*\] *)*watchdog: .*(soft lockup|hard LOCKUP)
+
+# kernel/rcu/tree.c sets pr_fmt to "rcu: ", which hides the INFO: from an
+# anchored match.
+^(\[[^]]*\] *)*(rcu: )?INFO: (task .* blocked for more than|[_a-z]+ (self-)?detected stall)
