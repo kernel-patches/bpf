@@ -1591,7 +1591,7 @@ struct bpf_call_arg_meta {
 	 * verification logic
 	 *   bpf_obj_drop/bpf_percpu_obj_drop
 	 *     Record the local kptr type to be drop'd
-	 *   bpf_refcount_acquire (via KF_ARG_PTR_TO_REFCOUNTED_KPTR arg type)
+	 *   bpf_refcount_acquire (via ARG_PTR_TO_REFCOUNTED_KPTR arg type)
 	 *     Record the local kptr type to be refcount_incr'd and use
 	 *     arg_owning_ref to determine whether refcount_acquire should be
 	 *     fallible
@@ -1599,7 +1599,6 @@ struct bpf_call_arg_meta {
 	struct btf *arg_btf;
 	u32 arg_btf_id;
 	bool arg_owning_ref;
-	bool arg_prog;
 
 	struct {
 		struct btf_field *field;
