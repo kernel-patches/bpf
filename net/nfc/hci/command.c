@@ -225,10 +225,19 @@ static u8 nfc_hci_create_pipe(struct nfc_hci_dev *hdev, u8 dest_host,
 	if (*result < 0)
 		return NFC_HCI_INVALID_PIPE;
 
+	if (skb->len < sizeof(*resp)) {
+		kfree_skb(skb);
+		*result = -EPROTO;
+		return NFC_HCI_INVALID_PIPE;
+	}
 	resp = (struct hci_create_pipe_resp *)skb->data;
 	pipe = resp->pipe;
 	kfree_skb(skb);
 
+	if (pipe >= NFC_HCI_MAX_PIPES) {
+		*result = -EINVAL;
+		return NFC_HCI_INVALID_PIPE;
+	}
 	pr_debug("pipe created=%d\n", pipe);
 
 	return pipe;
