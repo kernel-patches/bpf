@@ -48,6 +48,7 @@ MAP COMMANDS
 | *DATA* := { [**hex**] *BYTES* }
 | *PROG* := { **id** *PROG_ID* | **pinned** *FILE* | **tag** *PROG_TAG* | **name** *PROG_NAME* }
 | *VALUE* := { *DATA* | *MAP* | *PROG* }
+| *FLAGS* := { integer | **BPF_F_NAME[,BPF_F_NAME...]** }
 | *UPDATE_FLAGS* := { **any** | **exist** | **noexist** }
 | *TYPE* := { **hash** | **array** | **prog_array** | **perf_event_array** | **percpu_hash**
 |     | **percpu_array** | **stack_trace** | **cgroup_array** | **lru_hash**
@@ -76,9 +77,17 @@ bpftool map { show | list }   [*MAP*]
 bpftool map create *FILE* type *TYPE* key *KEY_SIZE* value *VALUE_SIZE*  entries *MAX_ENTRIES* name *NAME* [flags *FLAGS*] [inner_map *MAP*] [offload_dev *NAME*]
     Create a new map with given parameters and pin it to *bpffs* as *FILE*.
 
-    *FLAGS* should be an integer which is the combination of desired flags,
-    e.g. 1024 for **BPF_F_MMAPABLE** (see bpf.h UAPI header for existing
-    flags).
+    *FLAGS* accepts an unsigned 32-bit integer combining the desired flags
+    (decimal, hexadecimal with a **0x** prefix, or octal with a **0** prefix),
+    or a comma-separated list of full, case-sensitive map creation flag names
+    from the bpf.h UAPI header. Use **bpftool feature list_builtins
+    map_create_flags** to list accepted symbolic names. For example, **1024**,
+    **0x400**, and **BPF_F_MMAPABLE** are equivalent. Multiple names are combined
+    with bitwise OR, for example **BPF_F_NO_PREALLOC,BPF_F_RDONLY_PROG**.
+    Repeated names are allowed. Empty list elements, abbreviated names, and
+    lists mixing numbers with names are not accepted. Use **0** for no flags.
+    Numeric values can include bits unknown to bpftool. The kernel checks
+    whether the flags are valid for the requested map type.
 
     To create maps of type array-of-maps or hash-of-maps, the **inner_map**
     keyword must be used to pass an inner map. The kernel needs it to collect

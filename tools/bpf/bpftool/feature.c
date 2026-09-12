@@ -1220,6 +1220,8 @@ static int do_list_builtins(int argc, char **argv)
 		get_name = (const char *(*)(unsigned int))libbpf_bpf_prog_type_str;
 	} else if (is_prefix(*argv, "map_types")) {
 		get_name = (const char *(*)(unsigned int))libbpf_bpf_map_type_str;
+	} else if (is_prefix(*argv, "map_create_flags")) {
+		get_name = map_create_flag_name;
 	} else if (is_prefix(*argv, "attach_types")) {
 		get_name = (const char *(*)(unsigned int))libbpf_bpf_attach_type_str;
 	} else if (is_prefix(*argv, "link_types")) {
@@ -1227,7 +1229,7 @@ static int do_list_builtins(int argc, char **argv)
 	} else if (is_prefix(*argv, "helpers")) {
 		get_name = get_helper_name;
 	} else {
-		p_err("expected 'prog_types', 'map_types', 'attach_types', 'link_types' or 'helpers', got: %s", *argv);
+		p_err("expected 'prog_types', 'map_types', 'map_create_flags', 'attach_types', 'link_types' or 'helpers', got: %s", *argv);
 		return -1;
 	}
 
@@ -1265,7 +1267,8 @@ static int do_help(int argc, char **argv)
 		"       %1$s %2$s help\n"
 		"\n"
 		"       COMPONENT := { kernel | dev NAME }\n"
-		"       GROUP := { prog_types | map_types | attach_types | link_types | helpers }\n"
+		"       GROUP := { prog_types | map_types | map_create_flags |\n"
+		"                  attach_types | link_types | helpers }\n"
 		"       " HELP_SPEC_OPTIONS " }\n"
 		"",
 		bin_name, argv[-2]);
