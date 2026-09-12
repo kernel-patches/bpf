@@ -44,18 +44,19 @@ static void map_batch_update(int map_fd, __u32 max_entries,
 static void map_batch_verify(int *visited, __u32 max_entries,
 			     struct test_lpm_key *keys, int *values)
 {
-	char buff[16] = { 0 };
-	int lower_byte = 0;
-	__u32 i;
+	__u32 i, ipv4, key;
 
 	memset(visited, 0, max_entries * sizeof(*visited));
 	for (i = 0; i < max_entries; i++) {
-		inet_ntop(AF_INET, &keys[i].ipv4, buff, 32);
-		CHECK(sscanf(buff, "192.168.1.%d", &lower_byte) == EOF,
-		      "sscanf()", "error: i %d\n", i);
-		CHECK(lower_byte != values[i], "key/value checking",
-		      "error: i %d key %s value %d\n", i, buff, values[i]);
-		visited[i] = 1;
+		ipv4 = ntohl(keys[i].ipv4.s_addr);
+		key = ipv4 & 0xff;
+		/* Expected keys are 192.168.1.1..max_entries with a /32 prefix. */
+		CHECK(keys[i].prefix != 32 || (ipv4 & 0xffffff00) != 0xc0a80100 ||
+		      key == 0 || key > max_entries, "key checking",
+		      "error: i %u prefix %u ipv4 %#x\n", i, keys[i].prefix, ipv4);
+		CHECK(key != values[i], "key/value checking",
+		      "error: i %u key %u value %d\n", i, key, values[i]);
+		visited[key - 1] = 1;
 	}
 	for (i = 0; i < max_entries; i++) {
 		CHECK(visited[i] != 1, "visited checking",
