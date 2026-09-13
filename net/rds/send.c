@@ -290,6 +290,8 @@ restart:
 			}
 			rm->data.op_active = 1;
 			rm->m_inc.i_conn_path = cp;
+			/* put in rds_message_put() */
+			rds_conn_get(cp->cp_conn);
 			rm->m_inc.i_conn = cp->cp_conn;
 
 			cp->cp_xmit_rm = rm;
@@ -947,6 +949,7 @@ static int rds_send_queue_rm(struct rds_sock *rs, struct rds_connection *conn,
 		/* The code ordering is a little weird, but we're
 		   trying to minimize the time we hold c_lock */
 		rds_message_populate_header(&rm->m_inc.i_hdr, sport, dport, 0);
+		rds_conn_get(conn);	/* put in rds_message_put() */
 		rm->m_inc.i_conn = conn;
 		rm->m_inc.i_conn_path = cp;
 		rds_message_addref(rm);
@@ -1159,13 +1162,14 @@ int rds_sendmsg(struct socket *sock, struct msghdr *msg, size_t payload_len)
 	DECLARE_SOCKADDR(struct sockaddr_in *, usin, msg->msg_name);
 	__be16 dport;
 	struct rds_message *rm = NULL;
-	struct rds_connection *conn;
+	struct rds_connection *conn = NULL;
 	int ret = 0;
 	int queued = 0, allocated_mr = 0;
 	int nonblock = msg->msg_flags & MSG_DONTWAIT;
 	long timeo = sock_sndtimeo(sk, nonblock);
 	struct rds_conn_path *cpath;
 	struct in6_addr daddr;
+	unsigned long flags;
 	__u32 scope_id = 0;
 	size_t rdma_payload_len = 0;
 	bool zcopy = ((msg->msg_flags & MSG_ZEROCOPY) &&
@@ -1340,11 +1344,29 @@ int rds_sendmsg(struct socket *sock, struct msghdr *msg, size_t payload_len)
 	rm->m_daddr = daddr;
 
 	/* rds_conn_create has a spinlock that runs with IRQ off.
-	 * Caching the conn in the socket helps a lot. */
-	if (rs->rs_conn && ipv6_addr_equal(&rs->rs_conn->c_faddr, &daddr) &&
-	    rs->rs_tos == rs->rs_conn->c_tos) {
-		conn = rs->rs_conn;
+	 * Caching the conn in the socket helps a lot.
+	 *
+	 * The cached rs_conn holds a connection reference; take one of
+	 * our own for the duration of this call (dropped on both exit
+	 * paths), so that neither a concurrent sender replacing the
+	 * cache nor rds_conn_destroy() can free the connection under
+	 * us.  A cached connection whose destruction has begun is not
+	 * reused: dropping it here lets the next sendmsg look up or
+	 * create a live one instead of returning -EAGAIN forever.
+	 */
+	spin_lock_irqsave(&rs->rs_lock, flags);
+	conn = rs->rs_conn;
+	if (conn && ipv6_addr_equal(&conn->c_faddr, &daddr) &&
+	    rs->rs_tos == conn->c_tos && !rds_destroy_pending(conn)) {
+		rds_conn_get(conn);
 	} else {
+		conn = NULL;
+	}
+	spin_unlock_irqrestore(&rs->rs_lock, flags);
+
+	if (!conn) {
+		struct rds_connection *old;
+
 		conn = rds_conn_create_outgoing(sock_net(sock->sk),
 						&rs->rs_bound_addr, &daddr,
 						rs->rs_transport, rs->rs_tos,
@@ -1352,9 +1374,17 @@ int rds_sendmsg(struct socket *sock, struct msghdr *msg, size_t payload_len)
 						scope_id);
 		if (IS_ERR(conn)) {
 			ret = PTR_ERR(conn);
+			conn = NULL;
 			goto out;
 		}
+		/* hand the cache its own reference */
+		rds_conn_get(conn);
+		spin_lock_irqsave(&rs->rs_lock, flags);
+		old = rs->rs_conn;
 		rs->rs_conn = conn;
+		spin_unlock_irqrestore(&rs->rs_lock, flags);
+		if (old)
+			rds_conn_put(old);
 	}
 
 	if (conn->c_trans->t_mp_capable) {
@@ -1378,9 +1408,14 @@ int rds_sendmsg(struct socket *sock, struct msghdr *msg, size_t payload_len)
 		 * outstanding.
 		 */
 		if (!test_and_set_bit(RDS_RECONNECT_PENDING,
-				      &conn->c_path[0].cp_flags))
-			queue_delayed_work(conn->c_path[0].cp_wq,
-					   &conn->c_path[0].cp_conn_w, 0);
+				      &conn->c_path[0].cp_flags)) {
+			rcu_read_lock();
+			if (!rds_destroy_pending(conn))
+				queue_delayed_work(conn->c_path[0].cp_wq,
+						   &conn->c_path[0].cp_conn_w,
+						   0);
+			rcu_read_unlock();
+		}
 		rds_send_ping(conn, 0);
 	}
 
@@ -1469,12 +1504,17 @@ int rds_sendmsg(struct socket *sock, struct msghdr *msg, size_t payload_len)
 		kfree(vct.vec[ind].iov);
 	kfree(vct.vec);
 
+	rds_conn_put(conn);
+
 	return payload_len;
 
 out:
 	for (ind = 0; ind < vct.indx; ind++)
 		kfree(vct.vec[ind].iov);
 	kfree(vct.vec);
+
+	if (conn)
+		rds_conn_put(conn);
 
 	/* If the user included a RDMA_MAP cmsg, we allocated a MR on the fly.
 	 * If the sendmsg goes through, we keep the MR. If it fails with EAGAIN
@@ -1522,6 +1562,7 @@ rds_send_probe(struct rds_conn_path *cp, __be16 sport,
 	list_add_tail(&rm->m_conn_item, &cp->cp_send_queue);
 	set_bit(RDS_MSG_ON_CONN, &rm->m_flags);
 	rds_message_addref(rm);
+	rds_conn_get(cp->cp_conn);	/* put in rds_message_put() */
 	rm->m_inc.i_conn = cp->cp_conn;
 	rm->m_inc.i_conn_path = cp;
 

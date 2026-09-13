@@ -141,6 +141,11 @@ The interface exposes these parameters of a netconsole target to userspace:
 	transmit_errors	Number of packet send errors		(read-only)
 	=============== =================================       ============
 
+local_ip is optional: if it is left unset, netconsole derives a source
+address from the egress interface when the target is enabled. Writing any
+value to it, including 0.0.0.0, uses that value verbatim and disables the
+automatic selection.
+
 The "enabled" attribute is also used to control whether the parameters of
 a target can be updated or not -- you can modify the parameters of only
 disabled targets (i.e. if "enabled" is 0).
@@ -176,6 +181,41 @@ You can modify these targets in runtime by creating the following targets::
  mkdir cmdline1
  cat cmdline1/remote_ip
  10.0.0.3
+
+Rate limiting
+-------------
+
+Netconsole hands every console message to every enabled target, so a host that
+logs continuously can saturate the receiving agent. Each target carries a token
+bucket that drops messages once the configured rate is exceeded, controlled by
+two files in the target directory:
+
+        ===================== ================================================
+        ratelimit_interval_ms Length of the accounting interval, in
+                              milliseconds. Zero, the default, sends
+                              everything.
+        ratelimit_burst       Messages allowed per interval. Defaults to
+                              10; zero drops every message once an
+                              interval is set.
+        ===================== ================================================
+
+Unlike most target parameters, both knobs can be written while the target is
+enabled, which is when a flooding target most likely needs them.
+
+The limit is applied per message, not per packet, so a message big enough to be
+split into several `ncfrag` packets is either sent whole or not at all.
+
+Crash output bypasses the bucket. While an oops, BUG() or panic() is in
+progress every message is sent, whatever the limit says, so a small burst
+cannot cost you part of a crash dump.
+
+A drop leaves nothing on the wire. On an extended target it shows up as a gap
+in the sequence number the header carries; a basic target has no such marker.
+
+Capping a target at 500 messages a minute::
+
+  echo 60000 > ratelimit_interval_ms
+  echo 500 > ratelimit_burst
 
 Append User Data
 ----------------
@@ -358,6 +398,9 @@ rate limiting). Thus, a gap in <sequnum> cannot be solely relied upon to
 indicate that a message was dropped during transmission, as it may never have
 been sent via netconsole. The message ID, on the other hand, is only assigned
 to messages that are actually transmitted via netconsole.
+
+A message the target's rate limit discards is dropped before the ID is
+assigned, so those drops leave no gap in the sequence of IDs either.
 
 Example::
 

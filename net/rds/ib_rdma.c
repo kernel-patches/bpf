@@ -168,8 +168,18 @@ void rds_ib_destroy_nodev_conns(void)
 	list_splice(&ib_nodev_conns, &tmp_list);
 	spin_unlock_irq(&ib_nodev_conns_lock);
 
-	list_for_each_entry_safe(ic, _ic, &tmp_list, ib_node)
+	/* rds_conn_destroy() can return before the connection is freed,
+	 * and it is the free - rds_ib_conn_free() - that unlinks ib_node.
+	 * tmp_list lives on this stack frame, so unlink each node before
+	 * its destroy; the free then finds it empty and leaves it alone.
+	 */
+	list_for_each_entry_safe(ic, _ic, &tmp_list, ib_node) {
+		spin_lock_irq(&ib_nodev_conns_lock);
+		list_del_init(&ic->ib_node);
+		spin_unlock_irq(&ib_nodev_conns_lock);
+
 		rds_conn_destroy(ic->conn);
+	}
 }
 
 void rds_ib_get_mr_info(struct rds_ib_device *rds_ibdev, struct rds_info_rdma_connection *iinfo)

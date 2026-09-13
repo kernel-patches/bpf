@@ -208,6 +208,7 @@ static int mana_xdp_set(struct net_device *ndev, struct bpf_prog *prog,
 		if (err) {
 			NL_SET_ERR_MSG_MOD(extack,
 					   "XDP: Insufficient memory for tx/rx re-config");
+			apc->bpf_prog = old_prog;
 			return err;
 		}
 
@@ -253,7 +254,6 @@ err_dealloc_rxbuffs:
 int mana_bpf(struct net_device *ndev, struct netdev_bpf *bpf)
 {
 	struct netlink_ext_ack *extack = bpf->extack;
-	int ret;
 
 	switch (bpf->command) {
 	case XDP_SETUP_PROG:
@@ -262,6 +262,4 @@ int mana_bpf(struct net_device *ndev, struct netdev_bpf *bpf)
 	default:
 		return -EOPNOTSUPP;
 	}
-
-	return ret;
 }

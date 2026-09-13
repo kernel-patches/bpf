@@ -268,6 +268,9 @@ static int iptunnel_pmtud_build_icmp(struct sk_buff *skb, int mtu)
 	eth_header(skb, skb->dev, ntohs(eh.h_proto), eh.h_source, eh.h_dest, 0);
 	skb_reset_mac_header(skb);
 
+	if (skb_valid_dst(skb))
+		skb_dst_drop(skb);
+
 	return skb->len;
 }
 
@@ -370,6 +373,9 @@ static int iptunnel_pmtud_build_icmpv6(struct sk_buff *skb, int mtu)
 
 	eth_header(skb, skb->dev, ntohs(eh.h_proto), eh.h_source, eh.h_dest, 0);
 	skb_reset_mac_header(skb);
+
+	if (skb_valid_dst(skb))
+		skb_dst_drop(skb);
 
 	return skb->len;
 }
@@ -705,6 +711,7 @@ static int ip_tun_build_state(struct net *net, struct nlattr *attr,
 	new_state->type = LWTUNNEL_ENCAP_IP;
 
 	tun_info = lwt_tun_info(new_state);
+	tun_info->options_len = opt_len;
 
 	err = ip_tun_set_opts(tb[LWTUNNEL_IP_OPTS], tun_info, extack);
 	if (err < 0) {
@@ -747,7 +754,6 @@ static int ip_tun_build_state(struct net *net, struct nlattr *attr,
 	}
 
 	tun_info->mode = IP_TUNNEL_INFO_TX;
-	tun_info->options_len = opt_len;
 
 	*ts = new_state;
 
@@ -999,6 +1005,7 @@ static int ip6_tun_build_state(struct net *net, struct nlattr *attr,
 	new_state->type = LWTUNNEL_ENCAP_IP6;
 
 	tun_info = lwt_tun_info(new_state);
+	tun_info->options_len = opt_len;
 
 	err = ip_tun_set_opts(tb[LWTUNNEL_IP6_OPTS], tun_info, extack);
 	if (err < 0) {
@@ -1034,7 +1041,6 @@ static int ip6_tun_build_state(struct net *net, struct nlattr *attr,
 	}
 
 	tun_info->mode = IP_TUNNEL_INFO_TX | IP_TUNNEL_INFO_IPV6;
-	tun_info->options_len = opt_len;
 
 	*ts = new_state;
 

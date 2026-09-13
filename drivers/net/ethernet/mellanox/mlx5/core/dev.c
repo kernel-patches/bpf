@@ -30,6 +30,7 @@
  * SOFTWARE.
  */
 
+#include <linux/bitfield.h>
 #include <linux/mlx5/driver.h>
 #include <linux/mlx5/eswitch.h>
 #include <linux/mlx5/mlx5_ifc_vdpa.h>
@@ -39,6 +40,25 @@
 #include "lag/lag.h"
 
 static DEFINE_IDA(mlx5_adev_ida);
+
+#define MLX5_PCIE_MIN_SPEED_MBPS	(2500)
+
+u32 mlx5_pcie_bandwidth(struct mlx5_core_dev *dev)
+{
+	u16 lnksta;
+	int speed;
+	u32 width;
+
+	if (pcie_capability_read_word(dev->pdev, PCI_EXP_LNKSTA, &lnksta))
+		return 0;
+
+	width = FIELD_GET(PCI_EXP_LNKSTA_NLW, lnksta);
+	speed = pcie_link_speed_mbps(dev->pdev);
+	if (speed < MLX5_PCIE_MIN_SPEED_MBPS)
+		return 0;
+
+	return speed * width;
+}
 
 static bool is_eth_rep_supported(struct mlx5_core_dev *dev)
 {

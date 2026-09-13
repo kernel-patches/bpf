@@ -184,6 +184,9 @@
 #define GEM_DCFG8		0x029C /* Design Config 8 */
 #define GEM_DCFG10		0x02A4 /* Design Config 10 */
 #define GEM_DCFG12		0x02AC /* Design Config 12 */
+#define GEM_CBS_CONTROL		0x04BC /* CBS Control Register */
+#define GEM_CBS_IDLESLOPE_Q_A	0x04C0 /* CBS IdleSlope Queue A */
+#define GEM_CBS_IDLESLOPE_Q_B	0x04C4 /* CBS IdleSlope Queue B */
 #define GEM_ENST_CONTROL	0x0880 /* ENST control register */
 #define GEM_USX_CONTROL		0x0A80 /* High speed PCS control register */
 #define GEM_USX_STATUS		0x0A88 /* High speed PCS status register */
@@ -223,6 +226,12 @@
 #define GEM_ENST_START_TIME(hw_q)	(0x0800 + ((hw_q) << 2))
 #define GEM_ENST_ON_TIME(hw_q)		(0x0820 + ((hw_q) << 2))
 #define GEM_ENST_OFF_TIME(hw_q)		(0x0840 + ((hw_q) << 2))
+
+/* Bitfields in CBS_CONTROL */
+#define GEM_CBS_ENABLE_QUEUE_A_OFFSET	0
+#define GEM_CBS_ENABLE_QUEUE_A_SIZE	1
+#define GEM_CBS_ENABLE_QUEUE_B_OFFSET	1
+#define GEM_CBS_ENABLE_QUEUE_B_SIZE	1
 
 /* Bitfields in ENST_CONTROL */
 #define GEM_ENST_DISABLE_QUEUE_OFFSET	16
@@ -768,7 +777,7 @@
 #define MACB_CAPS_MIIONRGMII			BIT(9)
 #define MACB_CAPS_NEED_TSUCLK			BIT(10)
 #define MACB_CAPS_QUEUE_DISABLE			BIT(11)
-#define MACB_CAPS_QBV				BIT(12)
+#define MACB_CAPS_TC				BIT(12)
 #define MACB_CAPS_PCS				BIT(13)
 #define MACB_CAPS_HIGH_SPEED			BIT(14)
 #define MACB_CAPS_CLK_HW_CHG			BIT(15)

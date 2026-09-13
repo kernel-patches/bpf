@@ -93,9 +93,9 @@ exit:
 	rep->flow_cfg->max_flows = allocated;
 
 	if (allocated) {
-		rep->flags |= OTX2_FLAG_MCAM_ENTRIES_ALLOC;
-		rep->flags |= OTX2_FLAG_NTUPLE_SUPPORT;
-		rep->flags |= OTX2_FLAG_TC_FLOWER_SUPPORT;
+		set_bit(OTX2_FLAG_MCAM_ENTRIES_ALLOC, &rep->flags);
+		set_bit(OTX2_FLAG_NTUPLE_SUPPORT, &rep->flags);
+		set_bit(OTX2_FLAG_TC_FLOWER_SUPPORT, &rep->flags);
 	}
 
 	INIT_LIST_HEAD(&rep->flow_cfg->flow_list);
@@ -109,14 +109,14 @@ static int rvu_rep_setup_tc_cb(enum tc_setup_type type,
 	struct rep_dev *rep = cb_priv;
 	struct otx2_nic *priv = rep->mdev;
 
-	if (!(rep->flags & RVU_REP_VF_INITIALIZED))
+	if (!test_bit(OTX2_REP_VF_INITIALIZED, &rep->flags))
 		return -EINVAL;
 
-	if (!(rep->flags & OTX2_FLAG_TC_FLOWER_SUPPORT))
+	if (!test_bit(OTX2_FLAG_TC_FLOWER_SUPPORT, &rep->flags))
 		rvu_rep_mcam_flow_init(rep);
 
 	priv->netdev = rep->netdev;
-	priv->flags = rep->flags;
+	otx2_sync_flags_from_rep(priv, &rep->flags);
 	priv->pcifunc = rep->pcifunc;
 	priv->flow_cfg = rep->flow_cfg;
 
@@ -303,9 +303,9 @@ static void rvu_rep_state_evt_handler(struct otx2_nic *priv,
 	rep_id = rvu_rep_get_repid(priv, info->pcifunc);
 	rep = priv->reps[rep_id];
 	if (info->evt_data.vf_state)
-		rep->flags |= RVU_REP_VF_INITIALIZED;
+		set_bit(OTX2_REP_VF_INITIALIZED, &rep->flags);
 	else
-		rep->flags &= ~RVU_REP_VF_INITIALIZED;
+		clear_bit(OTX2_REP_VF_INITIALIZED, &rep->flags);
 }
 
 int rvu_event_up_notify(struct otx2_nic *pf, struct rep_event *info)
@@ -382,7 +382,7 @@ static void rvu_rep_get_stats64(struct net_device *dev,
 {
 	struct rep_dev *rep = netdev_priv(dev);
 
-	if (!(rep->flags & RVU_REP_VF_INITIALIZED))
+	if (!test_bit(OTX2_REP_VF_INITIALIZED, &rep->flags))
 		return;
 
 	stats->rx_packets = rep->stats.rx_frames;
@@ -453,7 +453,7 @@ static int rvu_rep_open(struct net_device *dev)
 	struct otx2_nic *priv = rep->mdev;
 	struct rep_event evt = {0};
 
-	if (!(rep->flags & RVU_REP_VF_INITIALIZED))
+	if (!test_bit(OTX2_REP_VF_INITIALIZED, &rep->flags))
 		return 0;
 
 	netif_carrier_on(dev);
@@ -472,7 +472,7 @@ static int rvu_rep_stop(struct net_device *dev)
 	struct otx2_nic *priv = rep->mdev;
 	struct rep_event evt = {0};
 
-	if (!(rep->flags & RVU_REP_VF_INITIALIZED))
+	if (!test_bit(OTX2_REP_VF_INITIALIZED, &rep->flags))
 		return 0;
 
 	netif_carrier_off(dev);
@@ -547,7 +547,7 @@ static int rvu_rep_napi_init(struct otx2_nic *priv,
 		otx2_write64(priv, NIX_LF_CINTX_INT(qidx), BIT_ULL(0));
 		otx2_write64(priv, NIX_LF_CINTX_ENA_W1S(qidx), BIT_ULL(0));
 	}
-	priv->flags &= ~OTX2_FLAG_INTF_DOWN;
+	otx2_clear_flag(priv, OTX2_FLAG_INTF_DOWN);
 	return 0;
 
 err_free_cints:
@@ -632,7 +632,7 @@ void rvu_rep_destroy(struct otx2_nic *priv)
 	int rep_id;
 
 	rvu_eswitch_config(priv, false);
-	priv->flags |= OTX2_FLAG_INTF_DOWN;
+	otx2_set_flag(priv, OTX2_FLAG_INTF_DOWN);
 	rvu_rep_free_cq_rsrc(priv);
 	for (rep_id = 0; rep_id < priv->rep_cnt; rep_id++) {
 		rep = priv->reps[rep_id];
@@ -801,8 +801,8 @@ static int rvu_rep_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	pci_set_drvdata(pdev, priv);
 	priv->pdev = pdev;
 	priv->dev = dev;
-	priv->flags |= OTX2_FLAG_INTF_DOWN;
-	priv->flags |= OTX2_FLAG_REP_MODE_ENABLED;
+	otx2_set_flag(priv, OTX2_FLAG_INTF_DOWN);
+	otx2_set_flag(priv, OTX2_FLAG_REP_MODE_ENABLED);
 
 	hw = &priv->hw;
 	hw->pdev = pdev;
@@ -845,7 +845,7 @@ static void rvu_rep_remove(struct pci_dev *pdev)
 	struct otx2_nic *priv = pci_get_drvdata(pdev);
 
 	otx2_unregister_dl(priv);
-	if (!(priv->flags & OTX2_FLAG_INTF_DOWN))
+	if (!otx2_test_flag(priv, OTX2_FLAG_INTF_DOWN))
 		rvu_rep_destroy(priv);
 	otx2_detach_resources(&priv->mbox);
 	if (priv->hw.lmt_info)

@@ -42,7 +42,14 @@ static int ncsi_validate_rsp_pkt(struct ncsi_request *nr,
 	/* Check NCSI packet header. We don't need validate
 	 * the packet type, which should have been checked
 	 * before calling this function.
+	 *
+	 * The response is not guaranteed to be linear, so make the
+	 * header and the padded payload - the checksum sits in its last
+	 * four bytes - available before taking a pointer into the skb.
 	 */
+	if (!pskb_may_pull(nr->rsp, sizeof(*h) + ALIGN(payload, 4)))
+		return -EINVAL;
+
 	h = (struct ncsi_rsp_pkt_hdr *)skb_network_header(nr->rsp);
 
 	if (h->common.revision != NCSI_PKT_REVISION) {
@@ -842,11 +849,19 @@ static int ncsi_rsp_handler_gp(struct ncsi_request *nr)
 	struct ncsi_dev_priv *ndp = nr->ndp;
 	struct ncsi_rsp_gp_pkt *rsp;
 	struct ncsi_channel *nc;
+	unsigned char vlan_cnt;
+	unsigned char mac_cnt;
 	unsigned short enable;
 	unsigned char *pdata;
 	unsigned long flags;
 	void *bitmap;
 	int i;
+
+	/* The fixed part of the response has to be present before any of
+	 * its fields, the table counts included, can be read.
+	 */
+	if (!pskb_may_pull(nr->rsp, offsetof(struct ncsi_rsp_gp_pkt, mac)))
+		return -EINVAL;
 
 	/* Find the channel */
 	rsp = (struct ncsi_rsp_gp_pkt *)skb_network_header(nr->rsp);
@@ -877,13 +892,40 @@ static int ncsi_rsp_handler_gp(struct ncsi_request *nr)
 	nc->modes[NCSI_MODE_AEN].enable = 1;
 	nc->modes[NCSI_MODE_AEN].data[0] = ntohl(rsp->aen_mode);
 
-	/* MAC addresses filter table */
-	pdata = (unsigned char *)rsp + 48;
-	enable = rsp->mac_enable;
+	/* Make the tables the response claims available, then take the
+	 * pointer again: pskb_may_pull() may have moved the data.
+	 */
+	mac_cnt = rsp->mac_cnt;
+	vlan_cnt = rsp->vlan_cnt;
+	if (!pskb_may_pull(nr->rsp, offsetof(struct ncsi_rsp_gp_pkt, mac) +
+				    mac_cnt * ETH_ALEN +
+				    vlan_cnt * sizeof(__be16)))
+		return -EINVAL;
+
+	rsp = (struct ncsi_rsp_gp_pkt *)skb_network_header(nr->rsp);
+
+	/* The filter tables were sized by the Get Capabilities response,
+	 * whose counts are themselves device supplied, so a larger count
+	 * here would write past them. The counts also index the bitmaps
+	 * that track which entries are enabled, so bound them by those
+	 * as well.
+	 */
 	ncmf = &nc->mac_filter;
+	ncvf = &nc->vlan_filter;
+	if (!ncmf->addrs ||
+	    mac_cnt > ncmf->n_uc + ncmf->n_mc + ncmf->n_mixed ||
+	    mac_cnt > BITS_PER_TYPE(ncmf->bitmap))
+		return -EINVAL;
+	if (!ncvf->vids || vlan_cnt > ncvf->n_vids ||
+	    vlan_cnt > BITS_PER_TYPE(ncvf->bitmap))
+		return -EINVAL;
+
+	/* MAC addresses filter table */
+	pdata = (unsigned char *)rsp + offsetof(struct ncsi_rsp_gp_pkt, mac);
+	enable = rsp->mac_enable;
 	spin_lock_irqsave(&nc->lock, flags);
 	bitmap = &ncmf->bitmap;
-	for (i = 0; i < rsp->mac_cnt; i++, pdata += 6) {
+	for (i = 0; i < mac_cnt; i++, pdata += 6) {
 		if (!(enable & (0x1 << i)))
 			clear_bit(i, bitmap);
 		else
@@ -895,10 +937,9 @@ static int ncsi_rsp_handler_gp(struct ncsi_request *nr)
 
 	/* VLAN filter table */
 	enable = ntohs(rsp->vlan_enable);
-	ncvf = &nc->vlan_filter;
 	bitmap = &ncvf->bitmap;
 	spin_lock_irqsave(&nc->lock, flags);
-	for (i = 0; i < rsp->vlan_cnt; i++, pdata += 2) {
+	for (i = 0; i < vlan_cnt; i++, pdata += 2) {
 		if (!(enable & (0x1 << i)))
 			clear_bit(i, bitmap);
 		else
@@ -1172,6 +1213,7 @@ int ncsi_rcv_rsp(struct sk_buff *skb, struct net_device *dev,
 	struct ncsi_pkt_hdr *hdr;
 	unsigned long flags;
 	int payload, i, ret;
+	unsigned char type;
 
 	/* Find the NCSI device */
 	nd = ncsi_find_dev(orig_dev);
@@ -1181,9 +1223,15 @@ int ncsi_rcv_rsp(struct sk_buff *skb, struct net_device *dev,
 		goto err_free_skb;
 	}
 
+	if (!pskb_may_pull(skb, sizeof(*hdr))) {
+		ret = -EINVAL;
+		goto err_free_skb;
+	}
+
 	/* Check if it is AEN packet */
 	hdr = (struct ncsi_pkt_hdr *)skb_network_header(skb);
-	if (hdr->type == NCSI_PKT_AEN)
+	type = hdr->type;
+	if (type == NCSI_PKT_AEN)
 		return ncsi_aen_handler(ndp, skb);
 
 	/* Find the handler */
@@ -1230,7 +1278,7 @@ int ncsi_rcv_rsp(struct sk_buff *skb, struct net_device *dev,
 	if (ret) {
 		netdev_warn(ndp->ndev.dev,
 			    "NCSI: 'bad' packet ignored for type 0x%x\n",
-			    hdr->type);
+			    type);
 
 		if (nr->flags == NCSI_REQ_FLAG_NETLINK_DRIVEN) {
 			if (ret == -EPERM)
@@ -1250,7 +1298,7 @@ int ncsi_rcv_rsp(struct sk_buff *skb, struct net_device *dev,
 	if (ret)
 		netdev_err(ndp->ndev.dev,
 			   "NCSI: Handler for packet type 0x%x returned %d\n",
-			   hdr->type, ret);
+			   type, ret);
 
 out_netlink:
 	if (nr->flags == NCSI_REQ_FLAG_NETLINK_DRIVEN) {
@@ -1258,7 +1306,7 @@ out_netlink:
 		if (ret) {
 			netdev_err(ndp->ndev.dev,
 				   "NCSI: Netlink handler for packet type 0x%x returned %d\n",
-				   hdr->type, ret);
+				   type, ret);
 		}
 	}
 

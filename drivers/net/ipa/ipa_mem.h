@@ -68,6 +68,7 @@ enum ipa_mem_id {
 	IPA_MEM_STATS_QUOTA_AP,		/* 0 canaries, optional (IPA v4.0+) */
 	IPA_MEM_STATS_TETHERING,	/* 0 canaries, optional (IPA v4.0+) */
 	IPA_MEM_STATS_DROP,		/* 0 canaries, optional (IPA v4.0+) */
+	IPA_MEM_MODEM_STATS_DROP,	/* 0 canaries, optional (IPA v5.0+) */
 	/* The next 7 filter and route statistics regions are optional */
 	IPA_MEM_STATS_V4_FILTER,	/* 0 canaries (IPA v4.0-v4.2) */
 	IPA_MEM_STATS_V6_FILTER,	/* 0 canaries (IPA v4.0-v4.2) */

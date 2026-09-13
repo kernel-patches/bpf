@@ -41,7 +41,7 @@ static int __get_num_vlan_infos(struct net_bridge_vlan_group *vg,
 		if (v->vid == pvid)
 			flags |= BRIDGE_VLAN_INFO_PVID;
 
-		if (v->flags & BRIDGE_VLAN_INFO_UNTAGGED)
+		if (READ_ONCE(v->flags) & BRIDGE_VLAN_INFO_UNTAGGED)
 			flags |= BRIDGE_VLAN_INFO_UNTAGGED;
 
 		if (vid_range_start == 0) {
@@ -81,7 +81,7 @@ static int br_get_num_vlan_infos(struct net_bridge_vlan_group *vg,
 		return 0;
 
 	if (filter_mask & RTEXT_FILTER_BRVLAN)
-		return vg->num_vlans;
+		return READ_ONCE(vg->num_vlans);
 
 	rcu_read_lock();
 	num_vlans = __get_num_vlan_infos(vg, filter_mask);
@@ -385,7 +385,7 @@ static int br_fill_ifvlaninfo_compressed(struct sk_buff *skb,
 		if (v->vid == pvid)
 			flags |= BRIDGE_VLAN_INFO_PVID;
 
-		if (v->flags & BRIDGE_VLAN_INFO_UNTAGGED)
+		if (READ_ONCE(v->flags) & BRIDGE_VLAN_INFO_UNTAGGED)
 			flags |= BRIDGE_VLAN_INFO_UNTAGGED;
 
 		if (vid_range_start == 0) {
@@ -437,7 +437,7 @@ static int br_fill_ifvlaninfo(struct sk_buff *skb,
 		if (v->vid == pvid)
 			vinfo.flags |= BRIDGE_VLAN_INFO_PVID;
 
-		if (v->flags & BRIDGE_VLAN_INFO_UNTAGGED)
+		if (READ_ONCE(v->flags) & BRIDGE_VLAN_INFO_UNTAGGED)
 			vinfo.flags |= BRIDGE_VLAN_INFO_UNTAGGED;
 
 		if (nla_put(skb, IFLA_BRIDGE_VLAN_INFO,
@@ -459,7 +459,7 @@ static int br_fill_ifinfo(struct sk_buff *skb,
 			  const struct net_bridge_port *port,
 			  u32 pid, u32 seq, int event, unsigned int flags,
 			  u32 filter_mask, const struct net_device *dev,
-			  bool getlink)
+			  bool getlink, struct netlink_ext_ack *extack)
 {
 	u8 operstate = netif_running(dev) ? READ_ONCE(dev->operstate) :
 					    IF_OPER_DOWN;
@@ -531,7 +531,7 @@ static int br_fill_ifinfo(struct sk_buff *skb,
 		else
 			vg = br_vlan_group_rcu(br);
 
-		if (!vg || !vg->num_vlans) {
+		if (!vg || !READ_ONCE(vg->num_vlans)) {
 			rcu_read_unlock();
 			goto done;
 		}
@@ -613,6 +613,12 @@ static int br_fill_ifinfo(struct sk_buff *skb,
 
 done:
 	if (af) {
+		if (skb_tail_pointer(skb) - (unsigned char *)af > U16_MAX) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "VLAN information does not fit in one message, use RTM_GETVLAN");
+			nlmsg_cancel(skb, nlh);
+			return -E2BIG;
+		}
 		if (nlmsg_get_pos(skb) - (void *)af > nla_attr_size(0))
 			nla_nest_end(skb, af);
 		else
@@ -654,7 +660,8 @@ void br_info_notify(int event, const struct net_bridge *br,
 	if (skb == NULL)
 		goto errout;
 
-	err = br_fill_ifinfo(skb, port, 0, 0, event, 0, filter, dev, false);
+	err = br_fill_ifinfo(skb, port, 0, 0, event, 0, filter, dev, false,
+			     NULL);
 	if (err < 0) {
 		/* -EMSGSIZE implies BUG in br_nlmsg_size() */
 		WARN_ON(err == -EMSGSIZE);
@@ -680,7 +687,8 @@ void br_ifinfo_notify(int event, const struct net_bridge *br,
  * Dump information about all ports, in response to GETLINK
  */
 int br_getlink(struct sk_buff *skb, u32 pid, u32 seq,
-	       struct net_device *dev, u32 filter_mask, int nlflags)
+	       struct net_device *dev, u32 filter_mask, int nlflags,
+	       struct netlink_ext_ack *extack)
 {
 	struct net_bridge_port *port = br_port_get_rtnl(dev);
 
@@ -692,7 +700,7 @@ int br_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 		return 0;
 
 	return br_fill_ifinfo(skb, port, pid, seq, RTM_NEWLINK, nlflags,
-			      filter_mask, dev, true);
+			      filter_mask, dev, true, extack);
 }
 
 static int br_vlan_info(struct net_bridge *br, struct net_bridge_port *p,

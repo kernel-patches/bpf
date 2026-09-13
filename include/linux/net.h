@@ -70,6 +70,31 @@ static inline int sockopt_init_user(sockopt_t *opt, char __user *optval,
 	return 0;
 }
 
+/*
+ * Grow optval to @size, for the options whose reply is sized by a count the
+ * caller left in optval rather than by optlen. Those write past optlen today
+ * and userspace relies on it.
+ *
+ * Call it before writing through opt->iter_out: it re-anchors the iterator at
+ * the head of optval. Only a user buffer can be longer than the optlen the
+ * caller declared, so a kernel-backed optval is refused with -EINVAL.
+ */
+static inline int sockopt_expand_out(sockopt_t *opt, size_t size)
+{
+	if (size <= iov_iter_count(&opt->iter_out))
+		return 0;
+
+	if (WARN_ON_ONCE(!iter_is_ubuf(&opt->iter_out)))
+		return -EINVAL;
+
+	iov_iter_ubuf(&opt->iter_out, ITER_DEST, opt->iter_out.ubuf, size);
+
+	return 0;
+}
+
+int sockptr_to_sockopt(sockopt_t *opt, sockptr_t optval, sockptr_t optlen,
+		       struct kvec *kvec);
+
 struct poll_table_struct;
 struct pipe_inode_info;
 struct inode;
@@ -166,7 +191,7 @@ struct socket {
 
 	struct file		*file;
 	struct sock		*sk;
-	const struct proto_ops	*ops; /* Might change with IPV6_ADDRFORM or MPTCP. */
+	const struct proto_ops	*ops; /* Might change with MPTCP. */
 
 	struct socket_wq	wq;
 };

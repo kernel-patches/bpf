@@ -52,6 +52,13 @@
 #include <linux/indirect_call_wrapper.h>
 
 
+/* Encode the per-service secure_tcp capability into a connection flag */
+static inline unsigned int ip_vs_conn_secure_tcp_flags(struct ip_vs_service *svc)
+{
+	return (svc->flags & IP_VS_SVC_F_SECURE_TCP) ?
+		IP_VS_CONN_F_SECURE_TCP : 0;
+}
+
 EXPORT_SYMBOL(register_ip_vs_scheduler);
 EXPORT_SYMBOL(unregister_ip_vs_scheduler);
 EXPORT_SYMBOL(ip_vs_proto_name);
@@ -546,7 +553,9 @@ ip_vs_sched_persist(struct ip_vs_service *svc,
 		 * and thus param.pe_data will be destroyed
 		 * when the template expires */
 		ct = ip_vs_conn_new(&param, dest->af, &dest->addr, dport,
-				    IP_VS_CONN_F_TEMPLATE, dest, skb->mark);
+				    IP_VS_CONN_F_TEMPLATE |
+				    ip_vs_conn_secure_tcp_flags(svc), dest,
+				    skb->mark);
 		if (ct == NULL) {
 			kfree(param.pe_data);
 			*ignored = -1;
@@ -567,6 +576,7 @@ ip_vs_sched_persist(struct ip_vs_service *svc,
 	flags = (svc->flags & IP_VS_SVC_F_ONEPACKET
 		 && iph->protocol == IPPROTO_UDP) ?
 		IP_VS_CONN_F_ONE_PACKET : 0;
+	flags |= ip_vs_conn_secure_tcp_flags(svc);
 
 	/*
 	 *    Create a new connection according to the template
@@ -714,6 +724,7 @@ ip_vs_schedule(struct ip_vs_service *svc, struct sk_buff *skb,
 	flags = (svc->flags & IP_VS_SVC_F_ONEPACKET
 		 && iph->protocol == IPPROTO_UDP) ?
 		IP_VS_CONN_F_ONE_PACKET : 0;
+	flags |= ip_vs_conn_secure_tcp_flags(svc);
 
 	/*
 	 *    Create a connection entry.
@@ -779,9 +790,10 @@ int ip_vs_leave(struct ip_vs_service *svc, struct sk_buff *skb,
 	    ip_vs_addr_is_unicast(net, svc->af, &iph->daddr)) {
 		int ret;
 		struct ip_vs_conn *cp;
-		unsigned int flags = (svc->flags & IP_VS_SVC_F_ONEPACKET &&
+		unsigned int flags = ((svc->flags & IP_VS_SVC_F_ONEPACKET &&
 				      iph->protocol == IPPROTO_UDP) ?
-				      IP_VS_CONN_F_ONE_PACKET : 0;
+				      IP_VS_CONN_F_ONE_PACKET : 0) |
+				      ip_vs_conn_secure_tcp_flags(svc);
 		union nf_inet_addr daddr = { .all = { 0, 0, 0, 0 } };
 
 		/* create a new connection entry */
@@ -1350,7 +1362,9 @@ struct ip_vs_conn *ip_vs_new_conn_out(struct ip_vs_service *svc,
 		/* check if template exists and points to the same dest */
 		if (!ct || !ip_vs_check_template(ct, dest)) {
 			ct = ip_vs_conn_new(&param, dest->af, daddr, dport,
-					    IP_VS_CONN_F_TEMPLATE, dest, 0);
+					    IP_VS_CONN_F_TEMPLATE |
+					    ip_vs_conn_secure_tcp_flags(svc),
+					    dest, 0);
 			if (!ct) {
 				kfree(param.pe_data);
 				return NULL;
@@ -1364,6 +1378,7 @@ struct ip_vs_conn *ip_vs_new_conn_out(struct ip_vs_service *svc,
 	/* connection flags */
 	flags = ((svc->flags & IP_VS_SVC_F_ONEPACKET) &&
 		 iph->protocol == IPPROTO_UDP) ? IP_VS_CONN_F_ONE_PACKET : 0;
+	flags |= ip_vs_conn_secure_tcp_flags(svc);
 	/* create connection */
 	ip_vs_conn_fill_param(svc->ipvs, svc->af, iph->protocol,
 			      caddr, cport, vaddr, vport, &param);

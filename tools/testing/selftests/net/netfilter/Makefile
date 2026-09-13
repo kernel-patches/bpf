@@ -2,6 +2,8 @@
 
 top_srcdir = ../../../../..
 
+CFLAGS += $(KHDR_INCLUDES)
+
 HOSTPKG_CONFIG := pkg-config
 MNL_CFLAGS := $(shell $(HOSTPKG_CONFIG) --cflags libmnl 2>/dev/null)
 MNL_LDLIBS := $(shell $(HOSTPKG_CONFIG) --libs libmnl 2>/dev/null || echo -lmnl)
@@ -20,6 +22,7 @@ TEST_PROGS := \
 	conntrack_tcp_unreplied.sh \
 	conntrack_vrf.sh \
 	ipvs.sh \
+	ipvs_secure_tcp.sh \
 	nf_conntrack_packetdrill.sh \
 	nf_nat_edemux.sh \
 	nft_audit.sh \
@@ -50,6 +53,8 @@ TEST_GEN_FILES = \
 	connect_close \
 	conntrack_dump_flush \
 	conntrack_reverse_clash \
+	gen_tcp_probe \
+	ipvs_secure_tcp_mln \
 	nf_queue \
 	sctp_collision \
 	udpclash \
@@ -59,6 +64,9 @@ include ../../lib.mk
 
 $(OUTPUT)/nf_queue: CFLAGS += $(MNL_CFLAGS)
 $(OUTPUT)/nf_queue: LDLIBS += $(MNL_LDLIBS)
+
+$(OUTPUT)/ipvs_secure_tcp_mln: CFLAGS += $(MNL_CFLAGS)
+$(OUTPUT)/ipvs_secure_tcp_mln: LDLIBS += $(MNL_LDLIBS)
 
 $(OUTPUT)/conntrack_dump_flush: CFLAGS += $(MNL_CFLAGS)
 $(OUTPUT)/conntrack_dump_flush: LDLIBS += $(MNL_LDLIBS)

@@ -1154,6 +1154,49 @@ static int dwxgmac2_get_mac_tx_timestamp(struct mac_device_info *hw, u64 *ts)
 	return 0;
 }
 
+void dwxgmac2_timestamp_interrupt(struct stmmac_priv *priv)
+{
+	u32 ts_status, pending_snapshots, acr_value, channel;
+	struct ptp_clock_event event;
+	unsigned long flags;
+	u64 ptp_time;
+	int i;
+
+	/* Read XGMAC_TIMESTAMP_STATUS to get the AUX snapshot
+	 * count.  This read also clears the TSIS bit in
+	 * XGMAC_INT_STATUS.
+	 * TX timestamp polling may have already cleared TSIS
+	 * and AUXTSTRIG, so rely on ATSNS instead.
+	 * TXTSC is cleared by XGMAC_TXTIMESTAMP_SEC, not by
+	 * this register, so there is no conflict.
+	 */
+	ts_status = readl(priv->ioaddr + XGMAC_TIMESTAMP_STATUS);
+
+	if (!(priv->plat->flags & STMMAC_FLAG_EXT_SNAPSHOT_EN))
+		return;
+
+	pending_snapshots = FIELD_GET(XGMAC_TIMESTAMP_ATSNS_MASK, ts_status);
+	if (!pending_snapshots)
+		return;
+
+	acr_value = readl(priv->ptpaddr + PTP_ACR);
+	channel = FIELD_GET(PTP_ACR_MASK, acr_value);
+	if (!channel)
+		return;
+	channel = ilog2(channel);
+
+	for (i = 0; i < pending_snapshots; i++) {
+		read_lock_irqsave(&priv->ptp_lock, flags);
+		stmmac_get_ptptime(priv, priv->ptpaddr, &ptp_time);
+		read_unlock_irqrestore(&priv->ptp_lock, flags);
+
+		event.type = PTP_CLOCK_EXTTS;
+		event.index = channel;
+		event.timestamp = ptp_time;
+		ptp_clock_event(priv->ptp_clock, &event);
+	}
+}
+
 static int dwxgmac2_flex_pps_config(void __iomem *ioaddr, int index,
 				    struct stmmac_pps_cfg *cfg, bool enable,
 				    u32 sub_second_inc, u32 systime_flags)
@@ -1410,22 +1453,6 @@ static int dwxgmac2_config_l4_filter(struct mac_device_info *hw, u32 filter_no,
 	return 0;
 }
 
-static void dwxgmac2_set_arp_offload(struct mac_device_info *hw, bool en,
-				     u32 addr)
-{
-	void __iomem *ioaddr = hw->pcsr;
-	u32 value;
-
-	writel(addr, ioaddr + XGMAC_ARP_ADDR);
-
-	value = readl(ioaddr + XGMAC_RX_CONFIG);
-	if (en)
-		value |= XGMAC_CONFIG_ARPEN;
-	else
-		value &= ~XGMAC_CONFIG_ARPEN;
-	writel(value, ioaddr + XGMAC_RX_CONFIG);
-}
-
 const struct stmmac_ops dwxgmac210_ops = {
 	.core_init = dwxgmac2_core_init,
 	.irq_modify = dwxgmac2_irq_modify,
@@ -1464,7 +1491,6 @@ const struct stmmac_ops dwxgmac210_ops = {
 	.sarc_configure = dwxgmac2_sarc_configure,
 	.config_l3_filter = dwxgmac2_config_l3_filter,
 	.config_l4_filter = dwxgmac2_config_l4_filter,
-	.set_arp_offload = dwxgmac2_set_arp_offload,
 	.fpe_map_preemption_class = dwxgmac3_fpe_map_preemption_class,
 };
 
@@ -1519,7 +1545,6 @@ const struct stmmac_ops dwxlgmac2_ops = {
 	.sarc_configure = dwxgmac2_sarc_configure,
 	.config_l3_filter = dwxgmac2_config_l3_filter,
 	.config_l4_filter = dwxgmac2_config_l4_filter,
-	.set_arp_offload = dwxgmac2_set_arp_offload,
 	.fpe_map_preemption_class = dwxgmac3_fpe_map_preemption_class,
 };
 

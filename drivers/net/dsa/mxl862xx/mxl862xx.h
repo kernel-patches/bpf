@@ -4,7 +4,9 @@
 #define __MXL862XX_H
 
 #include <asm/byteorder.h>
+#include <linux/bitops.h>
 #include <linux/mdio.h>
+#include <linux/mutex.h>
 #include <linux/workqueue.h>
 #include <net/dsa.h>
 
@@ -13,6 +15,10 @@ struct mxl862xx_priv;
 #define MXL862XX_MAX_PORTS		17
 #define MXL862XX_FIRST_SERDES_PORT	9
 #define MXL862XX_SERDES_SLOTS		4
+
+/* mxl862xx_rescue_mode_detect() return codes (negative values are errors) */
+#define MXL862XX_NOT_RESCUE		0
+#define MXL862XX_IN_RESCUE		1
 
 #define MXL862XX_DEFAULT_BRIDGE		0
 #define MXL862XX_MAX_BRIDGES		48
@@ -303,6 +309,10 @@ struct mxl862xx_fw_version {
  *                      flooding)
  * @fw_version:         cached firmware version, populated at probe and
  *                      compared with MXL862XX_FW_VER_MIN()
+ * @asic_id:            chip part number read from the CHIP ID registers,
+ *                      reported as the devlink "asic.id" fixed version
+ * @asic_rev:           chip version read from the CHIP ID registers,
+ *                      reported as the devlink "asic.rev" fixed version
  * @serdes_ports:       SerDes interfaces incl. sub-interfaces in case of
  *                      10G_QXGMII or QSGMII
  * @serdes_refcount:    per-XPCS count of sub-ports enabled by phylink;
@@ -319,6 +329,22 @@ struct mxl862xx_fw_version {
  * @evlan_ingress_size: per-port ingress Extended VLAN block size
  * @evlan_egress_size:  per-port egress Extended VLAN block size
  * @vf_block_size:      per-port VLAN Filter block size
+ * @block_host:         reject firmware API commands (except FW_UPDATE)
+ *                      during a firmware flash
+ * @flash_reading:      let the flash path's own firmware reads through
+ *                      block_host while polling the freshly booted image
+ * @skip_teardown:      discard firmware API commands during the teardown
+ *                      triggered by the post-flash reprobe
+ * @rescue_mode:        switch is in MCUboot; firmware API commands fail fast,
+ *                      only clause-22 SMDIO works. Set from setup() before the
+ *                      switch is registered and cleared under the MDIO bus lock
+ *                      for the benefit of mxl862xx_api_wrap(); other readers
+ *                      only need it to be a stable single flag.
+ * @rescue_ready:       (rescue_mode) loader is at a clean READY and will accept
+ *                      a flash; false while rescue_heal_work is draining
+ * @rescue_failed:      (rescue_mode) the self-heal gave up; the loader needs a
+ *                      power cycle and no flash can be accepted
+ * @rescue_heal_work:   background self-heal draining a wedged download to READY
  * @stats_work:         periodic work item that polls RMON hardware counters
  *                      and accumulates them into 64-bit per-port stats
  */
@@ -326,9 +352,12 @@ struct mxl862xx_priv {
 	struct dsa_switch *ds;
 	struct mdio_device *mdiodev;
 	struct work_struct crc_err_work;
+	struct work_struct rescue_heal_work;
 	unsigned long flags;
 	u16 drop_meter;
 	struct mxl862xx_fw_version fw_version;
+	u16 asic_id;
+	u8 asic_rev;
 	struct mxl862xx_pcs serdes_ports[8];
 	int serdes_refcount[2];
 	struct mutex serdes_lock;
@@ -337,7 +366,15 @@ struct mxl862xx_priv {
 	u16 evlan_ingress_size;
 	u16 evlan_egress_size;
 	u16 vf_block_size;
+	bool block_host;
+	bool flash_reading;
+	bool skip_teardown;
+	bool rescue_mode;
+	bool rescue_ready;
+	bool rescue_failed;
 	struct delayed_work stats_work;
 };
+
+int mxl862xx_wait_ready(struct dsa_switch *ds);
 
 #endif /* __MXL862XX_H */

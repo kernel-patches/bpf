@@ -5277,7 +5277,7 @@ static int mlx5e_xdp(struct net_device *dev, struct netdev_bpf *xdp)
 #ifdef CONFIG_MLX5_ESWITCH
 static int mlx5e_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 				struct net_device *dev, u32 filter_mask,
-				int nlflags)
+				int nlflags, struct netlink_ext_ack *extack)
 {
 	struct mlx5e_priv *priv = netdev_priv(dev);
 	struct mlx5_core_dev *mdev = priv->mdev;
@@ -5288,7 +5288,7 @@ static int mlx5e_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 	mode = setting ? BRIDGE_MODE_VEPA : BRIDGE_MODE_VEB;
 	return ndo_dflt_bridge_getlink(skb, pid, seq, dev,
 				       mode,
-				       0, 0, nlflags, filter_mask, NULL);
+				       0, 0, nlflags, filter_mask, NULL, extack);
 }
 
 static int mlx5e_bridge_setlink(struct net_device *dev, struct nlmsghdr *nlh,

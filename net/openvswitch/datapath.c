@@ -1533,6 +1533,7 @@ static int ovs_flow_cmd_dump(struct sk_buff *skb, struct netlink_callback *cb)
 	}
 
 	ti = rcu_dereference(dp->table.ti);
+	local_bh_disable();
 	for (;;) {
 		struct sw_flow *flow;
 		u32 bucket, obj;
@@ -1552,6 +1553,7 @@ static int ovs_flow_cmd_dump(struct sk_buff *skb, struct netlink_callback *cb)
 		cb->args[0] = bucket;
 		cb->args[1] = obj;
 	}
+	local_bh_enable();
 	rcu_read_unlock();
 	return skb->len;
 }
@@ -1920,6 +1922,10 @@ static int ovs_dp_cmd_new(struct sk_buff *skb, struct genl_info *info)
 	list_add_tail_rcu(&dp->list_node, &ovs_net->dps);
 
 	ovs_unlock();
+
+	/* Start periodic mask rebalancing if it wasn't already. */
+	schedule_delayed_work(&ovs_net->masks_rebalance,
+			      DP_MASKS_REBALANCE_INTERVAL);
 
 	ovs_notify(&dp_datapath_genl_family, reply, info);
 	return 0;
@@ -2565,6 +2571,7 @@ static int ovs_vport_cmd_dump(struct sk_buff *skb, struct netlink_callback *cb)
 		rcu_read_unlock();
 		return -ENODEV;
 	}
+	local_bh_disable();
 	for (i = bucket; i < DP_VPORT_HASH_BUCKETS; i++) {
 		struct vport *vport;
 
@@ -2585,6 +2592,7 @@ static int ovs_vport_cmd_dump(struct sk_buff *skb, struct netlink_callback *cb)
 		skip = 0;
 	}
 out:
+	local_bh_enable();
 	rcu_read_unlock();
 
 	cb->args[0] = i;
@@ -2598,16 +2606,20 @@ static void ovs_dp_masks_rebalance(struct work_struct *work)
 	struct ovs_net *ovs_net = container_of(work, struct ovs_net,
 					       masks_rebalance.work);
 	struct datapath *dp;
+	bool rearm;
 
 	ovs_lock();
 
 	list_for_each_entry(dp, &ovs_net->dps, list_node)
 		ovs_flow_masks_rebalance(&dp->table);
 
+	rearm = !list_empty(&ovs_net->dps);
+
 	ovs_unlock();
 
-	schedule_delayed_work(&ovs_net->masks_rebalance,
-			      msecs_to_jiffies(DP_MASKS_REBALANCE_INTERVAL));
+	if (rearm)
+		schedule_delayed_work(&ovs_net->masks_rebalance,
+				      DP_MASKS_REBALANCE_INTERVAL);
 }
 
 static const struct nla_policy vport_policy[OVS_VPORT_ATTR_MAX + 1] = {
@@ -2713,8 +2725,6 @@ static int __net_init ovs_init_net(struct net *net)
 	if (err)
 		return err;
 
-	schedule_delayed_work(&ovs_net->masks_rebalance,
-			      msecs_to_jiffies(DP_MASKS_REBALANCE_INTERVAL));
 	return 0;
 }
 

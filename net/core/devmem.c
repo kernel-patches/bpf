@@ -77,6 +77,7 @@ void __net_devmem_dmabuf_binding_free(struct work_struct *wq)
 	dma_buf_unmap_attachment_unlocked(binding->attachment, binding->sgt,
 					  binding->direction);
 	dma_buf_detach(binding->dmabuf, binding->attachment);
+	put_device(binding->dma_dev);
 	dma_buf_put(binding->dmabuf);
 	xa_destroy(&binding->bound_rxqs);
 	percpu_ref_exit(&binding->ref);
@@ -151,6 +152,46 @@ void net_devmem_unbind_dmabuf(struct net_devmem_dmabuf_binding *binding)
 	}
 
 	percpu_ref_kill(&binding->ref);
+}
+
+void net_devmem_uninstall_tx_bindings(struct net_device *dev)
+{
+	struct net_devmem_dmabuf_binding *binding;
+	struct net_devmem_dmabuf_binding *found;
+	unsigned long xa_idx;
+
+	/* Unlike RX bindings, TX bindings have no memory provider whose
+	 * uninstall callback can invalidate their net_device pointers.
+	 */
+again:
+	found = NULL;
+	rcu_read_lock();
+	xa_for_each(&net_devmem_dmabuf_bindings, xa_idx, binding) {
+		if (binding->direction != DMA_TO_DEVICE ||
+		    (READ_ONCE(binding->dev) != dev &&
+		     READ_ONCE(binding->vdev) != dev))
+			continue;
+
+		if (!net_devmem_dmabuf_binding_get(binding))
+			continue;
+		found = binding;
+		break;
+	}
+	rcu_read_unlock();
+
+	if (!found)
+		return;
+
+	binding = found;
+	mutex_lock(&binding->lock);
+	if (binding->direction == DMA_TO_DEVICE &&
+	    (binding->dev == dev || binding->vdev == dev)) {
+		WRITE_ONCE(binding->dev, NULL);
+		WRITE_ONCE(binding->vdev, NULL);
+	}
+	mutex_unlock(&binding->lock);
+	net_devmem_dmabuf_binding_put(binding);
+	goto again;
 }
 
 int net_devmem_bind_dmabuf_to_queue(struct net_device *dev, u32 rxq_idx,
@@ -233,12 +274,13 @@ net_devmem_bind_dmabuf(struct net_device *dev, void *vdev,
 
 	binding->dmabuf = dmabuf;
 	binding->direction = direction;
+	binding->dma_dev = get_device(dma_dev);
 
 	binding->attachment = dma_buf_attach(binding->dmabuf, dma_dev);
 	if (IS_ERR(binding->attachment)) {
 		err = PTR_ERR(binding->attachment);
 		NL_SET_ERR_MSG(extack, "Failed to bind dmabuf to device");
-		goto err_exit_ref;
+		goto err_put_dma_dev;
 	}
 
 	binding->sgt = dma_buf_map_attachment_unlocked(binding->attachment,
@@ -347,7 +389,8 @@ err_unmap:
 					  direction);
 err_detach:
 	dma_buf_detach(dmabuf, binding->attachment);
-err_exit_ref:
+err_put_dma_dev:
+	put_device(binding->dma_dev);
 	percpu_ref_exit(&binding->ref);
 err_free_binding:
 	kfree(binding);

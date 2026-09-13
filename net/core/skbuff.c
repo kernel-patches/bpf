@@ -6690,6 +6690,13 @@ int skb_mpls_pop(struct sk_buff *skb, __be16 next_proto, int mac_len,
 	}
 	skb->protocol = next_proto;
 
+	/* The last label is gone, so the inner header recorded by
+	 * skb_mpls_push() no longer describes this packet. Drop it, or a
+	 * later push keeps the stale offset.
+	 */
+	if (!eth_p_mpls(next_proto))
+		skb->inner_protocol = 0;
+
 	return 0;
 }
 EXPORT_SYMBOL_GPL(skb_mpls_pop);
@@ -6825,6 +6832,23 @@ failure:
 }
 EXPORT_SYMBOL(alloc_skb_with_frags);
 
+/* pskb_carve_inside_header() and pskb_carve_inside_nonlinear()
+ * remove the first bytes of a packet and reallocate skb->head.
+ *
+ * Whatever headers were present before the operation are gone,
+ * we must not leave stale offsets, otherwise users of this skb
+ * (skb_dump(), drop_monitor, taps, ...) would read or pull garbage.
+ */
+static void skb_carve_reset_headers(struct sk_buff *skb)
+{
+	skb_unset_mac_header(skb);
+	skb_unset_transport_header(skb);
+	skb_reset_network_header(skb);
+	skb->mac_len = 0;
+	if (skb->ip_summed == CHECKSUM_PARTIAL)
+		skb->ip_summed = CHECKSUM_NONE;
+}
+
 /* carve out the first off bytes from skb when off < headlen */
 static int pskb_carve_inside_header(struct sk_buff *skb, const u32 off,
 				    const int headlen, gfp_t gfp_mask)
@@ -6880,7 +6904,7 @@ static int pskb_carve_inside_header(struct sk_buff *skb, const u32 off,
 	skb->head_frag = 0;
 	skb_set_end_offset(skb, size);
 	skb_set_tail_pointer(skb, skb_headlen(skb));
-	skb_headers_offset_update(skb, 0);
+	skb_carve_reset_headers(skb);
 	skb->cloned = 0;
 	skb->hdr_len = 0;
 	skb->nohdr = 0;
@@ -7020,7 +7044,7 @@ static int pskb_carve_inside_nonlinear(struct sk_buff *skb, const u32 off,
 	skb->data = data;
 	skb_set_end_offset(skb, size);
 	skb_reset_tail_pointer(skb);
-	skb_headers_offset_update(skb, 0);
+	skb_carve_reset_headers(skb);
 	skb->cloned   = 0;
 	skb->hdr_len  = 0;
 	skb->nohdr    = 0;
@@ -7236,16 +7260,23 @@ static void skb_ext_put_sp(struct sec_path *sp)
 {
 	unsigned int i;
 
+	if (!sp->len)
+		return;
+
 	for (i = 0; i < sp->len; i++)
 		xfrm_state_put(sp->xvec[i]);
+	sp->len = 0;
 }
 #endif
 
 #ifdef CONFIG_MCTP_FLOWS
 static void skb_ext_put_mctp(struct mctp_flow *flow)
 {
-	if (flow->key)
-		mctp_key_unref(flow->key);
+	if (!flow->key)
+		return;
+
+	mctp_key_unref(flow->key);
+	flow->key = NULL;
 }
 #endif
 
@@ -7257,15 +7288,20 @@ void __skb_ext_del(struct sk_buff *skb, enum skb_ext_id id)
 	if (skb->active_extensions == 0) {
 		skb->extensions = NULL;
 		__skb_ext_put(ext);
-#ifdef CONFIG_XFRM
-	} else if (id == SKB_EXT_SEC_PATH &&
-		   refcount_read(&ext->refcnt) == 1) {
-		struct sec_path *sp = skb_ext_get_ptr(ext, SKB_EXT_SEC_PATH);
-
-		skb_ext_put_sp(sp);
-		sp->len = 0;
-#endif
+		return;
 	}
+
+	if (refcount_read(&ext->refcnt) > 1)
+		return;
+
+#ifdef CONFIG_XFRM
+	if (id == SKB_EXT_SEC_PATH)
+		skb_ext_put_sp(skb_ext_get_ptr(ext, SKB_EXT_SEC_PATH));
+#endif
+#ifdef CONFIG_MCTP_FLOWS
+	if (id == SKB_EXT_MCTP)
+		skb_ext_put_mctp(skb_ext_get_ptr(ext, SKB_EXT_MCTP));
+#endif
 }
 EXPORT_SYMBOL(__skb_ext_del);
 

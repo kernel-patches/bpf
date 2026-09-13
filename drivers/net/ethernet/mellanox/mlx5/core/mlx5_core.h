@@ -281,6 +281,7 @@ void mlx5_events_cleanup(struct mlx5_core_dev *dev);
 void mlx5_events_start(struct mlx5_core_dev *dev);
 void mlx5_events_stop(struct mlx5_core_dev *dev);
 
+u32 mlx5_pcie_bandwidth(struct mlx5_core_dev *dev);
 int mlx5_adev_idx_alloc(void);
 void mlx5_adev_idx_free(int idx);
 void mlx5_adev_cleanup(struct mlx5_core_dev *dev);

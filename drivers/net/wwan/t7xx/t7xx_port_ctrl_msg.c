@@ -178,22 +178,32 @@ static int control_msg_handler(struct t7xx_port *port, struct sk_buff *skb)
 
 	ctrl_msg_h = (struct ctrl_msg_header *)skb->data;
 	switch (le32_to_cpu(ctrl_msg_h->ctrl_msg_id)) {
-	case CTL_ID_HS2_MSG:
+	case CTL_ID_HS2_MSG: {
+		u32 data_length;
+
 		skb_pull(skb, sizeof(*ctrl_msg_h));
+		data_length = le32_to_cpu(ctrl_msg_h->data_length);
 
 		if (port_conf->rx_ch == PORT_CH_CONTROL_RX ||
 		    port_conf->rx_ch == PORT_CH_AP_CONTROL_RX) {
 			int event = port_conf->rx_ch == PORT_CH_CONTROL_RX ?
 				    FSM_EVENT_MD_HS2 : FSM_EVENT_AP_HS2;
 
-			ret = t7xx_fsm_append_event(ctl, event, skb->data,
-						    le32_to_cpu(ctrl_msg_h->data_length));
-			if (ret)
-				dev_err(port->dev, "Failed to append Handshake 2 event");
+			if (data_length > skb->len) {
+				dev_err(port->dev, "Invalid HS2 message length %u\n",
+					data_length);
+				ret = -EINVAL;
+			} else {
+				ret = t7xx_fsm_append_event(ctl, event, skb->data,
+							    data_length);
+				if (ret)
+					dev_err(port->dev, "Failed to append Handshake 2 event");
+			}
 		}
 
 		dev_kfree_skb_any(skb);
 		break;
+	}
 
 	case CTL_ID_MD_EX:
 	case CTL_ID_MD_EX_ACK:

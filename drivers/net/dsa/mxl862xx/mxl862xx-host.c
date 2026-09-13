@@ -15,6 +15,8 @@
 #include <linux/unaligned.h>
 #include <net/dsa.h>
 #include "mxl862xx.h"
+#include "mxl862xx-cmd.h"
+#include "mxl862xx-fw.h"
 #include "mxl862xx-host.h"
 
 #define CTRL_BUSY_MASK			BIT(15)
@@ -340,6 +342,26 @@ int mxl862xx_api_wrap(struct mxl862xx_priv *priv, u16 cmd, void *_data,
 
 	mutex_lock_nested(&priv->mdiodev->bus->mdio_lock, MDIO_MUTEX_NESTED);
 
+	if (priv->skip_teardown) {
+		ret = read ? -ENODEV : 0;
+		goto out;
+	}
+
+	if (priv->rescue_mode) {
+		ret = -ENODEV;
+		goto out;
+	}
+
+	/* During the post-flash readiness poll block_host stays set, but the
+	 * flash path's own firmware version reads must reach the new image;
+	 * host writes stay blocked so stale resource IDs cannot corrupt it.
+	 */
+	if (priv->block_host && cmd != SYS_MISC_FW_UPDATE &&
+	    !(priv->flash_reading && read)) {
+		ret = -EBUSY;
+		goto out;
+	}
+
 	max = (size + 1) / 2;
 
 	ret = mxl862xx_busy_wait(priv);
@@ -495,12 +517,54 @@ out:
 	return ret;
 }
 
+#define MXL862XX_SMDIO_ADDR_REG		0x1f
+#define MXL862XX_SMDIO_PAGE_MASK	0xfff0
+#define MXL862XX_SMDIO_OFF_MASK		0x000f
+
+/* Paged clause-22 window: the page goes into MII register 0x1f, the low nibble
+ * of addr selects one of the 16 registers within it. Both helpers take the MDIO
+ * bus lock per transaction, so callers must not already hold it -- unlike
+ * mxl862xx_api_wrap(), which holds it across a whole firmware command.
+ */
+int mxl862xx_smdio_read(struct mxl862xx_priv *priv, u32 addr)
+{
+	struct mii_bus *bus = priv->mdiodev->bus;
+	int phy = priv->mdiodev->addr;
+	int ret;
+
+	mutex_lock(&bus->mdio_lock);
+	ret = __mdiobus_write(bus, phy, MXL862XX_SMDIO_ADDR_REG,
+			      addr & MXL862XX_SMDIO_PAGE_MASK);
+	if (ret >= 0)
+		ret = __mdiobus_read(bus, phy, addr & MXL862XX_SMDIO_OFF_MASK);
+	mutex_unlock(&bus->mdio_lock);
+	return ret;
+}
+
+int mxl862xx_smdio_write(struct mxl862xx_priv *priv, u32 addr, u16 val)
+{
+	struct mii_bus *bus = priv->mdiodev->bus;
+	int phy = priv->mdiodev->addr;
+	int ret;
+
+	mutex_lock(&bus->mdio_lock);
+	ret = __mdiobus_write(bus, phy, MXL862XX_SMDIO_ADDR_REG,
+			      addr & MXL862XX_SMDIO_PAGE_MASK);
+	if (ret >= 0)
+		ret = __mdiobus_write(bus, phy, addr & MXL862XX_SMDIO_OFF_MASK,
+				      val);
+	mutex_unlock(&bus->mdio_lock);
+	return ret;
+}
+
 void mxl862xx_host_init(struct mxl862xx_priv *priv)
 {
 	INIT_WORK(&priv->crc_err_work, mxl862xx_crc_err_work_fn);
+	INIT_WORK(&priv->rescue_heal_work, mxl862xx_rescue_heal_work_fn);
 }
 
 void mxl862xx_host_shutdown(struct mxl862xx_priv *priv)
 {
 	cancel_work_sync(&priv->crc_err_work);
+	cancel_work_sync(&priv->rescue_heal_work);
 }

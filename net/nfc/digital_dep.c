@@ -240,8 +240,8 @@ digital_recv_dep_data_gather(struct nfc_digital_dev *ddev, u8 pfb,
 
 	if (DIGITAL_NFC_DEP_MI_BIT_SET(pfb) && (!ddev->chaining_skb)) {
 		ddev->chaining_skb =
-			nfc_alloc_recv_skb(8 * ddev->local_payload_max,
-					   GFP_KERNEL);
+			digital_skb_alloc(ddev,
+					  8 * ddev->local_payload_max);
 		if (!ddev->chaining_skb) {
 			rc = -ENOMEM;
 			goto error;
@@ -251,9 +251,9 @@ digital_recv_dep_data_gather(struct nfc_digital_dev *ddev, u8 pfb,
 	if (ddev->chaining_skb) {
 		if (resp->len > skb_tailroom(ddev->chaining_skb)) {
 			new_skb = skb_copy_expand(ddev->chaining_skb,
-						  skb_headroom(
-							  ddev->chaining_skb),
-						  8 * ddev->local_payload_max,
+						  ddev->tx_headroom,
+						  8 * ddev->local_payload_max +
+							  ddev->tx_tailroom,
 						  GFP_KERNEL);
 			if (!new_skb) {
 				rc = -ENOMEM;
@@ -1117,12 +1117,12 @@ static void digital_tg_recv_dep_req(struct nfc_digital_dev *ddev, void *arg,
 	pfb = dep_req->pfb;
 
 	if (DIGITAL_NFC_DEP_DID_BIT_SET(pfb)) {
-		if (ddev->did && (ddev->did == resp->data[3])) {
-			size++;
-		} else {
+		if (resp->len < size + 1 || !ddev->did ||
+		    ddev->did != resp->data[size]) {
 			rc = -EIO;
 			goto exit;
 		}
+		size++;
 	} else if (ddev->did) {
 		rc = -EIO;
 		goto exit;
@@ -1467,16 +1467,19 @@ exit:
 static void digital_tg_send_atr_res_complete(struct nfc_digital_dev *ddev,
 					     void *arg, struct sk_buff *resp)
 {
-	int offset;
+	unsigned int offset;
 
 	if (IS_ERR(resp)) {
 		digital_poll_next_tech(ddev);
 		return;
 	}
 
-	offset = 2;
-	if (resp->data[0] == DIGITAL_NFC_DEP_NFCA_SOD_SB)
-		offset++;
+	if (!resp->len)
+		goto bad_frame;
+
+	offset = (resp->data[0] == DIGITAL_NFC_DEP_NFCA_SOD_SB) ? 3 : 2;
+	if (resp->len <= offset)
+		goto bad_frame;
 
 	ddev->atn_count = 0;
 
@@ -1484,6 +1487,12 @@ static void digital_tg_send_atr_res_complete(struct nfc_digital_dev *ddev,
 		digital_tg_recv_psl_req(ddev, arg, resp);
 	else
 		digital_tg_recv_dep_req(ddev, arg, resp);
+
+	return;
+
+bad_frame:
+	kfree_skb(resp);
+	digital_poll_next_tech(ddev);
 }
 
 static int digital_tg_send_atr_res(struct nfc_digital_dev *ddev,

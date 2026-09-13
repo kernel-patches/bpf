@@ -371,6 +371,19 @@ vxlan_vnifilter_api()
 	# change vxlan vnifilter flag
 	run_cmd "ip -netns $testns link set dev vxlan-ext1 type vxlan external novnifilter"
 	log_test $? 2 "Cannot unset vnifilter flag on a device"
+
+	# a single request may span at most 4096 vnis
+	run_cmd "bridge -netns $testns vni add dev vxlan-ext1 vni 10000-14095"
+	log_test $? 0 "Add vni range of maximum size"
+
+	run_cmd "bridge -netns $testns vni add dev vxlan-ext1 vni 10000-14096"
+	log_test $? 255 "Cannot add vni range larger than maximum"
+
+	run_cmd "bridge -netns $testns vni del dev vxlan-ext1 vni 10000-14096"
+	log_test $? 255 "Cannot delete vni range larger than maximum"
+
+	run_cmd "bridge -netns $testns vni del dev vxlan-ext1 vni 10000-14095"
+	log_test $? 0 "Delete vni range of maximum size"
 }
 
 # Sanity test vnifilter datapath

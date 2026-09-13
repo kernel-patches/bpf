@@ -376,6 +376,24 @@ struct mii_bus {
 			 int regnum, u16 val);
 	/** @reset: Perform a reset of the bus */
 	int (*reset)(struct mii_bus *bus);
+	/**
+	 * @notify_phy_attach: Perform post-attach handling for MDIO bus
+	 * drivers. Optional and independent of @notify_phy_detach. Called
+	 * in phy_attach_direct() right before phy_resume(). Runs in process
+	 * context, may sleep and may be called with RTNL held. Must not
+	 * acquire or rely on RTNL. Returns 0 on success or negative errno
+	 * on failure. Must unwind its own state on error as attachment is
+	 * aborted.
+	 */
+	int (*notify_phy_attach)(struct phy_device *phydev);
+	/**
+	 * @notify_phy_detach: Perform pre-detach handling for MDIO bus
+	 * drivers. Optional and independent of @notify_phy_attach. Called
+	 * in phy_detach() right after phy_suspend(). Runs in process context,
+	 * may sleep and may be called with RTNL held. Must not acquire or
+	 * rely on RTNL.
+	 */
+	void (*notify_phy_detach)(struct phy_device *phydev);
 
 	/** @stats: Statistic counters per device on the bus */
 	struct mdio_bus_stats stats[PHY_MAX_ADDR];
@@ -582,6 +600,7 @@ struct phy_oatc14_sqi_capability {
  * @wol_enabled: Set to true if the PHY or the attached MAC have Wake-on-LAN
  * 		 enabled.
  * @is_genphy_driven: PHY is driven by one of the generic PHY drivers
+ * @has_sfp_mod_phy: Set true if downstream SFP bus's module contains a PHY
  * @state: State of the PHY for management purposes
  * @dev_flags: Device-specific flags used by the PHY driver.
  *
@@ -594,6 +613,9 @@ struct phy_oatc14_sqi_capability {
  * @phylink: Pointer to phylink instance for this PHY
  * @sfp_bus_attached: Flag indicating whether the SFP bus has been attached
  * @sfp_bus: SFP bus attached to this PHY's fiber port
+ * @sfp_cage_port: The phy_port connected to the downstream SFP cage
+ * @mod_port: phy_port representing the SFP module, if it is phy-less
+ * @upstream_port: phy_port this PHY's MII attaches to, if any
  * @attached_dev: The attached enet driver's device instance ptr
  * @adjust_link: Callback for the enet controller to respond to changes: in the
  *               link state.
@@ -706,6 +728,7 @@ struct phy_device {
 	unsigned irq_rerun:1;
 
 	unsigned default_timestamp:1;
+	unsigned has_sfp_mod_phy:1;
 
 	int rate_matching;
 
@@ -785,6 +808,9 @@ struct phy_device {
 	/* This may be modified under the rtnl lock */
 	bool sfp_bus_attached;
 	struct sfp_bus *sfp_bus;
+	struct phy_port *sfp_cage_port;
+	struct phy_port *mod_port;
+	struct phy_port *upstream_port;
 	struct phylink *phylink;
 	struct net_device *attached_dev;
 	struct mii_timestamper *mii_ts;
@@ -1697,7 +1723,7 @@ static inline bool phy_can_wakeup(struct phy_device *phydev)
  * phy_may_wakeup() - indicate whether PHY has wakeup enabled
  * @phydev: The phy_device struct
  *
- * Returns: true/false depending on the PHY driver's device_set_wakeup_enabled()
+ * Returns: true/false depending on the PHY driver's device_set_wakeup_enable()
  * setting if using the driver model, otherwise the legacy determination.
  */
 bool phy_may_wakeup(struct phy_device *phydev);
@@ -2339,6 +2365,7 @@ int genphy_c45_loopback(struct phy_device *phydev, bool enable, int speed);
 int genphy_c45_pma_resume(struct phy_device *phydev);
 int genphy_c45_pma_suspend(struct phy_device *phydev);
 int genphy_c45_fast_retrain(struct phy_device *phydev, bool enable);
+int genphy_c45_template_testmode(struct phy_device *phydev, int test_mode);
 int genphy_c45_plca_get_cfg(struct phy_device *phydev,
 			    struct phy_plca_cfg *plca_cfg);
 int genphy_c45_plca_set_cfg(struct phy_device *phydev,
@@ -2468,6 +2495,8 @@ int __phy_hwtstamp_set(struct phy_device *phydev,
 		       struct netlink_ext_ack *extack);
 
 struct phy_port *phy_get_sfp_port(struct phy_device *phydev);
+
+void phy_set_upstream_port(struct phy_device *phydev, struct phy_port *port);
 
 /**
  * phy_module_driver() - Helper macro for registering PHY drivers

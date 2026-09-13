@@ -3755,7 +3755,7 @@ static int ql3xxx_probe(struct pci_dev *pdev,
 	static int cards_found;
 	int err;
 
-	err = pci_enable_device(pdev);
+	err = pcim_enable_device(pdev);
 	if (err) {
 		pr_err("%s cannot enable PCI device\n", pci_name(pdev));
 		goto err_out;
@@ -3764,7 +3764,7 @@ static int ql3xxx_probe(struct pci_dev *pdev,
 	err = pci_request_regions(pdev, DRV_NAME);
 	if (err) {
 		pr_err("%s cannot obtain PCI resources\n", pci_name(pdev));
-		goto err_out_disable_pdev;
+		goto err_out;
 	}
 
 	pci_set_master(pdev);
@@ -3891,8 +3891,6 @@ err_out_free_ndev:
 	free_netdev(ndev);
 err_out_free_regions:
 	pci_release_regions(pdev);
-err_out_disable_pdev:
-	pci_disable_device(pdev);
 err_out:
 	return err;
 }

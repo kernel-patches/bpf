@@ -21,6 +21,7 @@
 #include "mxl862xx.h"
 #include "mxl862xx-api.h"
 #include "mxl862xx-cmd.h"
+#include "mxl862xx-fw.h"
 #include "mxl862xx-host.h"
 #include "mxl862xx-phylink.h"
 
@@ -70,6 +71,13 @@ static const struct ethtool_rmon_hist_range mxl862xx_rmon_ranges[] = {
 
 #define MXL862XX_READY_TIMEOUT_MS	10000
 #define MXL862XX_READY_POLL_MS		100
+
+/* Chip ID registers, read via SYS_MISC_REG_RD */
+#define MXL862XX_CHIPID_L		0xc0d28884
+#define MXL862XX_CHIPID_M		0xc0d28888
+#define MXL862XX_CHIPID_L_PNUML		GENMASK(15, 12)
+#define MXL862XX_CHIPID_M_PNUMM		GENMASK(11, 0)
+#define MXL862XX_CHIPID_M_VERSION	GENMASK(14, 12)
 
 #define MXL862XX_TCM_INST_SEL		0xe00
 #define MXL862XX_TCM_CBS		0xe12
@@ -222,7 +230,46 @@ static int mxl862xx_phy_write_c45_mii_bus(struct mii_bus *bus, int addr,
 	return mxl862xx_phy_write_mmd(bus->priv, addr, devadd, regnum, val);
 }
 
-static int mxl862xx_wait_ready(struct dsa_switch *ds)
+/* Read the static chip part number and version from the CHIP ID
+ * registers. Only possible with a running firmware, so the values are
+ * cached at setup and left zero when the switch is in rescue mode.
+ */
+static int mxl862xx_read_chip_id(struct mxl862xx_priv *priv)
+{
+	struct mxl862xx_sys_reg_rw reg = {};
+	u16 chipid_l, chipid_m;
+	int ret;
+
+	reg.addr = cpu_to_le32(MXL862XX_CHIPID_L);
+	ret = MXL862XX_API_READ(priv, SYS_MISC_REG_RD, reg);
+	if (ret)
+		return ret;
+	chipid_l = le32_to_cpu(reg.val);
+
+	reg.addr = cpu_to_le32(MXL862XX_CHIPID_M);
+	ret = MXL862XX_API_READ(priv, SYS_MISC_REG_RD, reg);
+	if (ret)
+		return ret;
+	chipid_m = le32_to_cpu(reg.val);
+
+	priv->asic_id = FIELD_GET(MXL862XX_CHIPID_L_PNUML, chipid_l) |
+			FIELD_GET(MXL862XX_CHIPID_M_PNUMM, chipid_m) << 4;
+	priv->asic_rev = FIELD_GET(MXL862XX_CHIPID_M_VERSION, chipid_m);
+
+	return 0;
+}
+
+/**
+ * mxl862xx_wait_ready - wait for the switch firmware to become operational
+ * @ds: DSA switch instance
+ *
+ * Poll the firmware until it reports its version and accepts
+ * configuration commands, then cache the firmware version and chip ID.
+ * Takes at least two seconds.
+ *
+ * Return: 0 on success or a negative error code.
+ */
+int mxl862xx_wait_ready(struct dsa_switch *ds)
 {
 	struct mxl862xx_sys_fw_image_version ver = {};
 	unsigned long start = jiffies, timeout;
@@ -254,6 +301,11 @@ static int mxl862xx_wait_ready(struct dsa_switch *ds)
 		priv->fw_version.major = ver.iv_major;
 		priv->fw_version.minor = ver.iv_minor;
 		priv->fw_version.revision = le16_to_cpu(ver.iv_revision);
+
+		ret = mxl862xx_read_chip_id(priv);
+		if (ret)
+			dev_warn(ds->dev, "failed to read chip ID: %pe\n",
+				 ERR_PTR(ret));
 		return 0;
 
 not_ready_yet:
@@ -622,20 +674,64 @@ static int mxl862xx_setup(struct dsa_switch *ds)
 	int n_user_ports = 0, max_vlans;
 	int ingress_finals, vid_rules;
 	struct dsa_port *dp;
-	int ret, i;
+	int ret, i, rescue;
 
-	ret = mxl862xx_reset(priv);
-	if (ret)
-		return ret;
+	/* Detect the loader over SB PDI first: it needs no firmware, unlike the
+	 * C45 API (mxl862xx_reset/wait_ready) which spews CRC errors when none
+	 * answers. Touch C45 only once rescue is ruled out.
+	 */
+	rescue = mxl862xx_rescue_mode_detect(priv);
+	if (rescue < 0) {
+		dev_err(ds->dev, "switch state detection failed: %pe\n",
+			ERR_PTR(rescue));
+		return rescue;
+	}
 
-	ret = mxl862xx_wait_ready(ds);
-	if (ret)
-		return ret;
+	if (rescue == MXL862XX_NOT_RESCUE) {
+		ret = mxl862xx_reset(priv);
+		if (ret)
+			return ret;
 
+		ret = mxl862xx_wait_ready(ds);
+		if (ret) {
+			/* the reset may only now have triggered rescue mode */
+			rescue = mxl862xx_rescue_mode_detect(priv);
+			if (rescue < 0) {
+				dev_err(ds->dev,
+					"switch not responding after reset: %pe\n",
+					ERR_PTR(rescue));
+				return rescue;
+			}
+			if (rescue == MXL862XX_NOT_RESCUE)
+				return ret;
+		}
+	}
+
+	priv->rescue_mode = rescue;
+
+	/* Software-only SerDes state, needed before anything can reach phylink,
+	 * including a rescue-mode flash clearing rescue_mode ahead of reprobe.
+	 */
 	mutex_init(&priv->serdes_lock);
 	for (i = 0; i < ARRAY_SIZE(priv->serdes_ports); i++)
 		mxl862xx_setup_pcs(priv, &priv->serdes_ports[i],
 				   i + MXL862XX_FIRST_SERDES_PORT);
+
+	if (priv->rescue_mode) {
+		if (priv->rescue_ready) {
+			dev_warn(ds->dev,
+				 "switch in MCUboot rescue mode, use devlink to flash new firmware\n");
+		} else {
+			/* Drain the wedged download in the background so it
+			 * never holds the devlink lock; info and flash become
+			 * available once ready.
+			 */
+			dev_warn(ds->dev,
+				 "switch in MCUboot with an interrupted download, recovering in background\n");
+			queue_work(system_long_wq, &priv->rescue_heal_work);
+		}
+		return 0;
+	}
 
 	/* Calculate Extended VLAN block sizes.
 	 * With VLAN Filter handling VID membership checks:
@@ -685,10 +781,22 @@ static int mxl862xx_setup(struct dsa_switch *ds)
 	if (ret)
 		return ret;
 
+	ret = mxl862xx_setup_mdio(ds);
+	if (ret)
+		return ret;
+
 	schedule_delayed_work(&priv->stats_work,
 			      MXL862XX_STATS_POLL_INTERVAL);
 
-	return mxl862xx_setup_mdio(ds);
+	return 0;
+}
+
+static void mxl862xx_teardown(struct dsa_switch *ds)
+{
+	struct mxl862xx_priv *priv = ds->priv;
+
+	set_bit(MXL862XX_FLAG_WORK_STOPPED, &priv->flags);
+	disable_delayed_work_sync(&priv->stats_work);
 }
 
 static int mxl862xx_port_state(struct dsa_switch *ds, int port, bool enable)
@@ -715,11 +823,21 @@ static int mxl862xx_port_state(struct dsa_switch *ds, int port, bool enable)
 static int mxl862xx_port_enable(struct dsa_switch *ds, int port,
 				struct phy_device *phydev)
 {
+	struct mxl862xx_priv *priv = ds->priv;
+
+	if (priv->rescue_mode)
+		return 0;
+
 	return mxl862xx_port_state(ds, port, true);
 }
 
 static void mxl862xx_port_disable(struct dsa_switch *ds, int port)
 {
+	struct mxl862xx_priv *priv = ds->priv;
+
+	if (priv->rescue_mode)
+		return;
+
 	if (mxl862xx_port_state(ds, port, false))
 		dev_err(ds->dev, "failed to disable port %d\n", port);
 }
@@ -1337,6 +1455,17 @@ static int mxl862xx_port_setup(struct dsa_switch *ds, int port)
 	bool is_cpu_port = dsa_port_is_cpu(dp);
 	int ret;
 
+	if (dsa_port_is_dsa(dp)) {
+		dev_err(ds->dev, "port %d: DSA links not supported\n", port);
+		return -EOPNOTSUPP;
+	}
+
+	/* DSA reinits failed user ports as unused; shared ports must
+	 * succeed for the tree to register.
+	 */
+	if (priv->rescue_mode)
+		return dsa_port_is_user(dp) ? -ENODEV : 0;
+
 	ret = mxl862xx_port_state(ds, port, false);
 	if (ret)
 		return ret;
@@ -1345,11 +1474,6 @@ static int mxl862xx_port_setup(struct dsa_switch *ds, int port)
 
 	if (dsa_port_is_unused(dp))
 		return 0;
-
-	if (dsa_port_is_dsa(dp)) {
-		dev_err(ds->dev, "port %d: DSA links not supported\n", port);
-		return -EOPNOTSUPP;
-	}
 
 	ret = mxl862xx_configure_sp_tag_proto(ds, port, is_cpu_port);
 	if (ret)
@@ -1572,6 +1696,12 @@ static int mxl862xx_port_mdb_del(struct dsa_switch *ds, int port,
 	ether_addr_copy(qparam.mac, mdb->addr);
 
 	ret = MXL862XX_API_READ(priv, MXL862XX_MAC_TABLEENTRYQUERY, qparam);
+	/* Post-flash teardown or MCUboot: the firmware and its MAC table are
+	 * gone, so there is nothing left to delete. Outside those, -ENODEV is a
+	 * bus error and must be reported.
+	 */
+	if (ret == -ENODEV && (priv->skip_teardown || priv->rescue_mode))
+		return 0;
 	if (ret)
 		return ret;
 
@@ -1627,6 +1757,9 @@ static void mxl862xx_port_stp_state_set(struct dsa_switch *ds, int port,
 	};
 	struct mxl862xx_priv *priv = ds->priv;
 	int ret;
+
+	if (priv->rescue_mode)
+		return;
 
 	switch (state) {
 	case BR_STATE_DISABLED:
@@ -2047,9 +2180,7 @@ static void mxl862xx_get_stats64(struct dsa_switch *ds, int port,
 
 	spin_unlock_bh(&priv->ports[port].stats_lock);
 
-	/* Trigger a fresh poll so the next read sees up-to-date counters.
-	 * No-op if the work is already pending, running, or teardown started.
-	 */
+	/* Trigger a fresh poll so the next read sees up-to-date counters. */
 	if (!test_bit(MXL862XX_FLAG_WORK_STOPPED, &priv->flags))
 		schedule_delayed_work(&priv->stats_work, 0);
 }
@@ -2057,6 +2188,7 @@ static void mxl862xx_get_stats64(struct dsa_switch *ds, int port,
 static const struct dsa_switch_ops mxl862xx_switch_ops = {
 	.get_tag_protocol = mxl862xx_get_tag_protocol,
 	.setup = mxl862xx_setup,
+	.teardown = mxl862xx_teardown,
 	.port_setup = mxl862xx_port_setup,
 	.port_teardown = mxl862xx_port_teardown,
 	.phylink_get_caps = mxl862xx_phylink_get_caps,
@@ -2086,6 +2218,8 @@ static const struct dsa_switch_ops mxl862xx_switch_ops = {
 	.get_pause_stats = mxl862xx_get_pause_stats,
 	.get_rmon_stats = mxl862xx_get_rmon_stats,
 	.get_stats64 = mxl862xx_get_stats64,
+	.devlink_info_get = mxl862xx_devlink_info_get,
+	.devlink_flash_update = mxl862xx_devlink_flash_update,
 };
 
 static int mxl862xx_probe(struct mdio_device *mdiodev)
@@ -2131,7 +2265,6 @@ static int mxl862xx_probe(struct mdio_device *mdiodev)
 	err = dsa_register_switch(ds);
 	if (err) {
 		set_bit(MXL862XX_FLAG_WORK_STOPPED, &priv->flags);
-		cancel_delayed_work_sync(&priv->stats_work);
 		mxl862xx_host_shutdown(priv);
 		for (i = 0; i < MXL862XX_MAX_PORTS; i++)
 			cancel_work_sync(&priv->ports[i].host_flood_work);
@@ -2152,7 +2285,6 @@ static void mxl862xx_remove(struct mdio_device *mdiodev)
 	priv = ds->priv;
 
 	set_bit(MXL862XX_FLAG_WORK_STOPPED, &priv->flags);
-	cancel_delayed_work_sync(&priv->stats_work);
 
 	dsa_unregister_switch(ds);
 
@@ -2181,7 +2313,7 @@ static void mxl862xx_shutdown(struct mdio_device *mdiodev)
 	dsa_switch_shutdown(ds);
 
 	set_bit(MXL862XX_FLAG_WORK_STOPPED, &priv->flags);
-	cancel_delayed_work_sync(&priv->stats_work);
+	disable_delayed_work_sync(&priv->stats_work);
 
 	mxl862xx_host_shutdown(priv);
 
