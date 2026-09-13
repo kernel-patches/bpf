@@ -29,8 +29,6 @@
 /*  Byte Swapping routine. */
 /*  */
 #define EF1Byte	(u8)
-#define EF2Byte		le16_to_cpu
-#define EF4Byte	le32_to_cpu
 
 /* Convert little data endian to host ordering */
 #define EF1BYTE(_val)		\
