@@ -15,16 +15,20 @@
 #include <asm/kprobes.h>
 #include <asm/alternative.h>
 #include <asm/text-patching.h>
-#include <asm/insn.h>
 
 int arch_jump_entry_size(struct jump_entry *entry)
 {
-	struct insn insn = {};
+	const u8 *code = (void *)jump_entry_code(entry);
 
-	insn_decode_kernel(&insn, (void *)jump_entry_code(entry));
-	BUG_ON(insn.length != 2 && insn.length != 5);
+	if (code[0] == JMP8_INSN_OPCODE ||
+	    !memcmp(code, x86_nops[JMP8_INSN_SIZE], JMP8_INSN_SIZE))
+		return JMP8_INSN_SIZE;
 
-	return insn.length;
+	if (code[0] == JMP32_INSN_OPCODE ||
+	    !memcmp(code, x86_nops[JMP32_INSN_SIZE], JMP32_INSN_SIZE))
+		return JMP32_INSN_SIZE;
+
+	BUG();
 }
 
 struct jump_label_patch {
