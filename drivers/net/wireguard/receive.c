@@ -476,9 +476,11 @@ int wg_packet_rx_poll(struct napi_struct *napi, int budget)
 
 next:
 		wg_noise_keypair_put(keypair, false);
-		wg_peer_put(peer);
 		if (unlikely(free))
 			dev_kfree_skb(skb);
+		if (atomic_dec_and_test(&peer->packet_crypt_pending))
+			wake_up_var(&peer->packet_crypt_pending);
+		wg_peer_put(peer);
 
 		if (++work_done >= budget)
 			break;
