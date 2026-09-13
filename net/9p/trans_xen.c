@@ -55,7 +55,7 @@ struct xen_9pfs_front_priv {
 	char *tag;
 	struct p9_client *client;
 
-	struct xen_9pfs_dataring *rings;
+	struct xen_9pfs_dataring rings[XEN_9PFS_NUM_RINGS];
 };
 
 static LIST_HEAD(xen_9pfs_devs);
@@ -279,41 +279,37 @@ static void xen_9pfs_front_free(struct xen_9pfs_front_priv *priv)
 {
 	int i, j;
 
-	if (priv->rings) {
-		for (i = 0; i < XEN_9PFS_NUM_RINGS; i++) {
-			struct xen_9pfs_dataring *ring = &priv->rings[i];
+	for (i = 0; i < XEN_9PFS_NUM_RINGS; i++) {
+		struct xen_9pfs_dataring *ring = &priv->rings[i];
 
-			cancel_work_sync(&ring->work);
+		cancel_work_sync(&ring->work);
 
-			if (!ring->intf)
-				break;
-			if (ring->irq >= 0) {
-				unbind_from_irqhandler(ring->irq, ring);
-				ring->irq = -1;
-			}
-			if (ring->data.in) {
-				for (j = 0; j < (1 << ring->intf->ring_order);
-				     j++) {
-					grant_ref_t ref;
-
-					ref = ring->intf->ref[j];
-					gnttab_end_foreign_access(ref, NULL);
-					ring->intf->ref[j] = INVALID_GRANT_REF;
-				}
-				free_pages_exact(ring->data.in,
-						 1UL << (ring->intf->ring_order +
-							 XEN_PAGE_SHIFT));
-				ring->data.in = NULL;
-				ring->data.out = NULL;
-			}
-			if (ring->ref != INVALID_GRANT_REF) {
-				gnttab_end_foreign_access(ring->ref, NULL);
-				ring->ref = INVALID_GRANT_REF;
-			}
-			free_page((unsigned long)ring->intf);
-			ring->intf = NULL;
+		if (!ring->intf)
+			break;
+		if (ring->irq >= 0) {
+			unbind_from_irqhandler(ring->irq, ring);
+			ring->irq = -1;
 		}
-		kfree(priv->rings);
+		if (ring->data.in) {
+			for (j = 0; j < (1 << ring->intf->ring_order); j++) {
+				grant_ref_t ref;
+
+				ref = ring->intf->ref[j];
+				gnttab_end_foreign_access(ref, NULL);
+				ring->intf->ref[j] = INVALID_GRANT_REF;
+			}
+			free_pages_exact(ring->data.in,
+					 1UL << (ring->intf->ring_order +
+						 XEN_PAGE_SHIFT));
+			ring->data.in = NULL;
+			ring->data.out = NULL;
+		}
+		if (ring->ref != INVALID_GRANT_REF) {
+			gnttab_end_foreign_access(ring->ref, NULL);
+			ring->ref = INVALID_GRANT_REF;
+		}
+		free_page((unsigned long)ring->intf);
+		ring->intf = NULL;
 	}
 	kfree(priv->tag);
 	kfree(priv);
@@ -452,11 +448,6 @@ static int xen_9pfs_front_init(struct xenbus_device *dev)
 	if (!priv)
 		return -ENOMEM;
 	priv->dev = dev;
-	priv->rings = kzalloc_objs(*priv->rings, XEN_9PFS_NUM_RINGS);
-	if (!priv->rings) {
-		kfree(priv);
-		return -ENOMEM;
-	}
 
 	for (i = 0; i < XEN_9PFS_NUM_RINGS; i++) {
 		priv->rings[i].priv = priv;
