@@ -1396,6 +1396,7 @@ static noinline size_t if_nlmsg_size(const struct net_device *dev,
 	       + rtnl_devlink_port_size(dev)
 	       + rtnl_dpll_pin_size()
 	       + nla_total_size(8)  /* IFLA_MAX_PACING_OFFLOAD_HORIZON */
+	       + nla_total_size(4)  /* IFLA_PACING_OFFLOAD */
 	       + nla_total_size(2)  /* IFLA_HEADROOM */
 	       + nla_total_size(2)  /* IFLA_TAILROOM */
 	       + rtnl_dev_parent_size(dev)
@@ -2176,6 +2177,8 @@ static int rtnl_fill_ifinfo(struct sk_buff *skb,
 			READ_ONCE(dev->tso_max_segs)) ||
 	    nla_put_uint(skb, IFLA_MAX_PACING_OFFLOAD_HORIZON,
 			 READ_ONCE(dev->max_pacing_offload_horizon)) ||
+	    nla_put_u32(skb, IFLA_PACING_OFFLOAD,
+			dev->pacing_offload) ||
 #ifdef CONFIG_RPS
 	    nla_put_u32(skb, IFLA_NUM_RX_QUEUES,
 			READ_ONCE(dev->num_rx_queues)) ||
@@ -2287,6 +2290,11 @@ nla_put_failure:
 	return -EMSGSIZE;
 }
 
+static const struct netlink_range_validation txqlen_range = {
+	.min = 0,
+	.max = S16_MAX,
+};
+
 static const struct nla_policy ifla_policy[IFLA_MAX+1] = {
 	[IFLA_UNSPEC]		= { .strict_start_type = IFLA_DPLL_PIN },
 	[IFLA_IFNAME]		= { .type = NLA_STRING, .len = IFNAMSIZ-1 },
@@ -2297,7 +2305,7 @@ static const struct nla_policy ifla_policy[IFLA_MAX+1] = {
 	[IFLA_LINK]		= { .type = NLA_U32 },
 	[IFLA_MASTER]		= { .type = NLA_U32 },
 	[IFLA_CARRIER]		= { .type = NLA_U8 },
-	[IFLA_TXQLEN]		= { .type = NLA_U32 },
+	[IFLA_TXQLEN]		= NLA_POLICY_FULL_RANGE(NLA_U32, &txqlen_range),
 	[IFLA_WEIGHT]		= { .type = NLA_U32 },
 	[IFLA_OPERSTATE]	= { .type = NLA_U8 },
 	[IFLA_LINKMODE]		= { .type = NLA_U8 },
@@ -2344,9 +2352,11 @@ static const struct nla_policy ifla_policy[IFLA_MAX+1] = {
 	[IFLA_ALLMULTI]		= { .type = NLA_REJECT },
 	[IFLA_GSO_IPV4_MAX_SIZE]	= NLA_POLICY_MIN(NLA_U32, MAX_TCP_HEADER + 1),
 	[IFLA_GRO_IPV4_MAX_SIZE]	= { .type = NLA_U32 },
+	[IFLA_MAX_PACING_OFFLOAD_HORIZON] = { .type = NLA_REJECT },
 	[IFLA_NETNS_IMMUTABLE]	= { .type = NLA_REJECT },
 	[IFLA_HEADROOM]		= { .type = NLA_REJECT },
 	[IFLA_TAILROOM]		= { .type = NLA_REJECT },
+	[IFLA_PACING_OFFLOAD]	= NLA_POLICY_MAX(NLA_U32, 1),
 };
 
 static const struct nla_policy ifla_info_policy[IFLA_INFO_MAX+1] = {
@@ -2818,6 +2828,14 @@ static int validate_linkmsg(struct net_device *dev, struct nlattr *tb[],
 	    nla_get_u32(tb[IFLA_GRO_IPV4_MAX_SIZE]) > GRO_MAX_SIZE) {
 		NL_SET_ERR_MSG(extack, "too big gro_ipv4_max_size");
 		return -EINVAL;
+	}
+
+	if (tb[IFLA_PACING_OFFLOAD]) {
+		if (nla_get_u32(tb[IFLA_PACING_OFFLOAD]) &&
+		    !dev->max_pacing_offload_horizon) {
+			NL_SET_ERR_MSG(extack, "pacing offload not supported by device");
+			return -EOPNOTSUPP;
+		}
 	}
 
 	if (tb[IFLA_AF_SPEC]) {
@@ -3333,6 +3351,15 @@ static int do_setlink(const struct sk_buff *skb, struct net_device *dev,
 
 		if (dev->gro_ipv4_max_size ^ gro_max_size) {
 			netif_set_gro_ipv4_max_size(dev, gro_max_size);
+			status |= DO_SETLINK_MODIFIED;
+		}
+	}
+
+	if (tb[IFLA_PACING_OFFLOAD]) {
+		bool val = nla_get_u32(tb[IFLA_PACING_OFFLOAD]);
+
+		if (dev->pacing_offload != val) {
+			dev->pacing_offload = val;
 			status |= DO_SETLINK_MODIFIED;
 		}
 	}
@@ -5393,7 +5420,8 @@ int ndo_dflt_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 			    u32 filter_mask,
 			    int (*vlan_fill)(struct sk_buff *skb,
 					     struct net_device *dev,
-					     u32 filter_mask))
+					     u32 filter_mask),
+			    struct netlink_ext_ack *extack)
 {
 	struct nlmsghdr *nlh;
 	struct ifinfomsg *ifm;
@@ -5569,7 +5597,8 @@ static int rtnl_bridge_getlink(struct sk_buff *skb, struct netlink_callback *cb)
 			if (idx >= cb->args[0]) {
 				err = br_dev->netdev_ops->ndo_bridge_getlink(
 						skb, portid, seq, dev,
-						filter_mask, NLM_F_MULTI);
+						filter_mask, NLM_F_MULTI,
+						cb->extack);
 				if (err < 0 && err != -EOPNOTSUPP) {
 					if (likely(skb->len))
 						break;
@@ -5585,7 +5614,8 @@ static int rtnl_bridge_getlink(struct sk_buff *skb, struct netlink_callback *cb)
 				err = ops->ndo_bridge_getlink(skb, portid,
 							      seq, dev,
 							      filter_mask,
-							      NLM_F_MULTI);
+							      NLM_F_MULTI,
+							      cb->extack);
 				if (err < 0 && err != -EOPNOTSUPP) {
 					if (likely(skb->len))
 						break;
@@ -5619,7 +5649,8 @@ static inline size_t bridge_nlmsg_size(void)
 		+ nla_total_size(sizeof(u16));	/* IFLA_BRIDGE_MODE */
 }
 
-static int rtnl_bridge_notify(struct net_device *dev)
+static int rtnl_bridge_notify(struct net_device *dev,
+			      struct netlink_ext_ack *extack)
 {
 	struct net *net = dev_net(dev);
 	struct sk_buff *skb;
@@ -5634,7 +5665,7 @@ static int rtnl_bridge_notify(struct net_device *dev)
 		goto errout;
 	}
 
-	err = dev->netdev_ops->ndo_bridge_getlink(skb, 0, 0, dev, 0, 0);
+	err = dev->netdev_ops->ndo_bridge_getlink(skb, 0, 0, dev, 0, 0, extack);
 	if (err < 0)
 		goto errout;
 
@@ -5725,7 +5756,7 @@ static int rtnl_bridge_setlink(struct sk_buff *skb, struct nlmsghdr *nlh,
 			/* Generate event to notify upper layer of bridge
 			 * change
 			 */
-			err = rtnl_bridge_notify(dev);
+			err = rtnl_bridge_notify(dev, extack);
 		}
 	}
 
@@ -5800,7 +5831,7 @@ static int rtnl_bridge_dellink(struct sk_buff *skb, struct nlmsghdr *nlh,
 			/* Generate event to notify upper layer of bridge
 			 * change
 			 */
-			err = rtnl_bridge_notify(dev);
+			err = rtnl_bridge_notify(dev, extack);
 		}
 	}
 

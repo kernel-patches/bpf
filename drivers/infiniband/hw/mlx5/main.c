@@ -1654,7 +1654,7 @@ static int mlx5_ib_query_port_speed_from_bond(struct mlx5_ib_dev *dev,
 	u32 bond_speed;
 	int err;
 
-	err = mlx5_lag_query_bond_speed(mdev, &bond_speed);
+	err = mlx5_lag_query_aggregated_speed(mdev, &bond_speed);
 	if (err)
 		return err;
 
@@ -3693,6 +3693,16 @@ static int lag_event(struct notifier_block *nb, unsigned long event, void *data)
 			rdma_roce_rescan_port(ibdev, portnum + 1);
 		}
 		break;
+	case MLX5_DRIVER_EVENT_LAG_SPEED_CHANGE: {
+		struct ib_event speed_event = {};
+
+		if (!dev->ib_active)
+			break;
+		speed_event.device = ibdev;
+		speed_event.event = IB_EVENT_DEVICE_SPEED_CHANGE;
+		ib_dispatch_event(&speed_event);
+		break;
+	}
 	default:
 		return NOTIFY_DONE;
 	}

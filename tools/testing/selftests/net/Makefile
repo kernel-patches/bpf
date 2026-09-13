@@ -25,6 +25,7 @@ TEST_PROGS := \
 	cmsg_so_mark.sh \
 	cmsg_so_priority.sh \
 	cmsg_time.sh \
+	cork_fragsize.py \
 	double_udp_encap.sh \
 	drop_monitor_tests.sh \
 	ecmp_rehash.sh \
@@ -79,6 +80,7 @@ TEST_PROGS := \
 	reuseport_addr_any.sh \
 	route_hint.sh \
 	route_localnet.sh \
+	rpl_srh_loop.sh \
 	rps_default_mask.sh \
 	rtnetlink.py \
 	rtnetlink.sh \

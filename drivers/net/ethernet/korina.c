@@ -1240,7 +1240,7 @@ static int korina_close(struct net_device *dev)
 	struct korina_private *lp = netdev_priv(dev);
 	u32 tmp;
 
-	timer_delete(&lp->media_check_timer);
+	timer_delete_sync(&lp->media_check_timer);
 
 	/* Disable interrupts */
 	disable_irq(lp->rx_irq);

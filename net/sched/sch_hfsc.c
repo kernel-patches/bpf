@@ -1133,6 +1133,7 @@ hfsc_classify(struct sk_buff *skb, struct Qdisc *sch, int *qerr)
 	struct hfsc_class *head, *cl;
 	struct tcf_result res;
 	struct tcf_proto *tcf;
+	unsigned int hops;
 	int result;
 
 	if (TC_H_MAJ(skb->priority ^ sch->handle) == 0 &&
@@ -1142,6 +1143,7 @@ hfsc_classify(struct sk_buff *skb, struct Qdisc *sch, int *qerr)
 
 	*qerr = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
 	head = &q->root;
+	hops = head->level;
 	tcf = rcu_dereference_bh(q->root.filter_list);
 	while (tcf && (result = tcf_classify_qdisc(skb, tcf, &res, false)) >= 0) {
 #ifdef CONFIG_NET_CLS_ACT
@@ -1166,6 +1168,15 @@ hfsc_classify(struct sk_buff *skb, struct Qdisc *sch, int *qerr)
 
 		if (cl->level == 0)
 			return cl; /* hit leaf class */
+
+		/*
+		 * flowid binds skip the level check above, and levels
+		 * drift after bind time, so this walk can cycle.
+		 */
+		if (hops-- == 0) {
+			pr_warn_ratelimited("hfsc: classify loop detected, dropping packet\n");
+			return NULL;
+		}
 
 		/* apply inner filter chain */
 		tcf = rcu_dereference_bh(cl->filter_list);

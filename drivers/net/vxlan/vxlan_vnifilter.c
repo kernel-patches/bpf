@@ -17,6 +17,14 @@
 
 #include "vxlan_private.h"
 
+/* Maximum number of VNIs a single RTM_NEWTUNNEL or RTM_DELTUNNEL request may
+ * span.  VNI filtering is mainly used on bridged VXLAN devices where the VNI
+ * is derived from the VLAN, so a span wider than the VLAN ID space has no
+ * practical use, while an unbounded span lets one netlink message create up
+ * to 2^24 VNIs under rtnl_lock.
+ */
+#define VXLAN_VNI_FILTER_RANGE_MAX	4096
+
 static inline int vxlan_vni_cmp(struct rhashtable_compare_arg *arg,
 				const void *ptr)
 {
@@ -171,13 +179,14 @@ static void vxlan_vnifilter_stats_add(struct vxlan_vni_node *vninode,
 	u64_stats_update_end(&pstats->syncp);
 }
 
-void vxlan_vnifilter_count(struct vxlan_dev *vxlan, __be32 vni,
+void vxlan_vnifilter_count(struct vxlan_dev *vxlan,
+			   const struct vxlan_config *cfg, __be32 vni,
 			   struct vxlan_vni_node *vninode,
 			   int type, unsigned int len)
 {
 	struct vxlan_vni_node *vnode;
 
-	if (!(vxlan->cfg.flags & VXLAN_F_VNIFILTER))
+	if (!(cfg->flags & VXLAN_F_VNIFILTER))
 		return;
 
 	if (vninode) {
@@ -333,22 +342,36 @@ static int vxlan_vnifilter_dump_dev(const struct net_device *dev,
 				    struct sk_buff *skb,
 				    struct netlink_callback *cb)
 {
-	struct vxlan_vni_node *tmp, *v, *vbegin = NULL, *vend = NULL;
+	struct vxlan_vni_node *v, *vbegin = NULL, *vend = NULL;
 	struct vxlan_dev *vxlan = netdev_priv(dev);
 	struct tunnel_msg *new_tmsg, *tmsg;
-	int idx = 0, s_idx = cb->args[1];
+	const struct vxlan_config *cfg;
 	struct vxlan_vni_group *vg;
 	struct nlmsghdr *nlh;
+	int idx = 0, s_idx;
 	bool dump_stats;
 	int err = 0;
 
-	if (!(vxlan->cfg.flags & VXLAN_F_VNIFILTER))
+	if (cb->args[2] != dev->ifindex) {
+		cb->args[1] = 0;
+		cb->args[2] = dev->ifindex;
+	}
+	s_idx = cb->args[1];
+
+	cfg = rcu_dereference(vxlan->cfg);
+	if (!(cfg->flags & VXLAN_F_VNIFILTER)) {
+		cb->args[1] = 0;
+		cb->args[2] = 0;
 		return -EINVAL;
+	}
 
 	/* RCU needed because of the vni locking rules (rcu || rtnl) */
 	vg = rcu_dereference(vxlan->vnigrp);
-	if (!vg || !vg->num_vnis)
+	if (!vg || !vg->num_vnis) {
+		cb->args[1] = 0;
+		cb->args[2] = 0;
 		return 0;
+	}
 
 	tmsg = nlmsg_data(cb->nlh);
 	dump_stats = !!(tmsg->flags & TUNNEL_MSG_FLAG_STATS);
@@ -362,7 +385,7 @@ static int vxlan_vnifilter_dump_dev(const struct net_device *dev,
 	new_tmsg->family = PF_BRIDGE;
 	new_tmsg->ifindex = dev->ifindex;
 
-	list_for_each_entry_safe(v, tmp, &vg->vni_list, vlist) {
+	list_for_each_entry_rcu(v, &vg->vni_list, vlist) {
 		if (idx < s_idx) {
 			idx++;
 			continue;
@@ -394,6 +417,7 @@ update_end:
 	}
 
 	cb->args[1] = err ? idx : 0;
+	cb->args[2] = err ? dev->ifindex : 0;
 
 	nlmsg_end(skb, nlh);
 
@@ -471,23 +495,31 @@ static const struct nla_policy vni_filter_policy[VXLAN_VNIFILTER_MAX + 1] = {
 };
 
 static int vxlan_update_default_fdb_entry(struct vxlan_dev *vxlan, __be32 vni,
-					  union vxlan_addr *old_remote_ip,
-					  union vxlan_addr *remote_ip,
+					  const union vxlan_addr *old_remote_ip,
+					  const union vxlan_addr *remote_ip,
+					  u32 old_ifindex, u32 new_ifindex,
 					  struct netlink_ext_ack *extack)
 {
-	struct vxlan_rdst *dst = &vxlan->default_dst;
+	const struct vxlan_config *cfg = rtnl_dereference(vxlan->cfg);
 	int err = 0;
+
+	if (old_remote_ip && remote_ip &&
+	    vxlan_addr_equal(old_remote_ip, remote_ip) &&
+	    old_ifindex == new_ifindex)
+		return 0;
 
 	spin_lock_bh(&vxlan->hash_lock);
 	if (remote_ip && !vxlan_addr_any(remote_ip)) {
+		union vxlan_addr rip = *remote_ip;
+
 		err = vxlan_fdb_update(vxlan, all_zeros_mac,
-				       remote_ip,
+				       &rip,
 				       NUD_REACHABLE | NUD_PERMANENT,
 				       NLM_F_APPEND | NLM_F_CREATE,
-				       vxlan->cfg.dst_port,
+				       cfg->dst_port,
 				       vni,
 				       vni,
-				       dst->remote_ifindex,
+				       new_ifindex,
 				       NTF_SELF, 0, true, extack);
 		if (err) {
 			spin_unlock_bh(&vxlan->hash_lock);
@@ -498,9 +530,9 @@ static int vxlan_update_default_fdb_entry(struct vxlan_dev *vxlan, __be32 vni,
 	if (old_remote_ip && !vxlan_addr_any(old_remote_ip)) {
 		__vxlan_fdb_delete(vxlan, all_zeros_mac,
 				   *old_remote_ip,
-				   vxlan->cfg.dst_port,
+				   cfg->dst_port,
 				   vni, vni,
-				   dst->remote_ifindex,
+				   old_ifindex,
 				   true);
 	}
 	spin_unlock_bh(&vxlan->hash_lock);
@@ -515,8 +547,8 @@ static int vxlan_vni_update_group(struct vxlan_dev *vxlan,
 				  struct netlink_ext_ack *extack)
 {
 	struct vxlan_net *vn = net_generic(vxlan->net, vxlan_net_id);
-	struct vxlan_rdst *dst = &vxlan->default_dst;
-	union vxlan_addr *newrip = NULL, *oldrip = NULL;
+	const struct vxlan_config *cfg = rtnl_dereference(vxlan->cfg);
+	const union vxlan_addr *newrip = NULL, *oldrip = NULL;
 	union vxlan_addr old_remote_ip;
 	int ret = 0;
 
@@ -528,8 +560,8 @@ static int vxlan_vni_update_group(struct vxlan_dev *vxlan,
 	if (group && !vxlan_addr_any(group)) {
 		newrip = group;
 	} else {
-		if (!vxlan_addr_any(&dst->remote_ip))
-			newrip = &dst->remote_ip;
+		if (!vxlan_addr_any(&cfg->remote_ip))
+			newrip = &cfg->remote_ip;
 	}
 
 	/* if old rip exists, and no newrip,
@@ -546,6 +578,8 @@ static int vxlan_vni_update_group(struct vxlan_dev *vxlan,
 
 	ret = vxlan_update_default_fdb_entry(vxlan, vninode->vni,
 					     oldrip, newrip,
+					     cfg->remote_ifindex,
+					     cfg->remote_ifindex,
 					     extack);
 	if (ret)
 		goto out;
@@ -557,7 +591,7 @@ static int vxlan_vni_update_group(struct vxlan_dev *vxlan,
 		if (vxlan_addr_multicast(&old_remote_ip) &&
 		    !vxlan_group_used(vn, vxlan, vninode->vni,
 				      &old_remote_ip,
-				      vxlan->default_dst.remote_ifindex)) {
+				      cfg->remote_ifindex)) {
 			ret = vxlan_igmp_leave(vxlan, &old_remote_ip,
 					       0);
 			if (ret)
@@ -581,8 +615,9 @@ out:
 }
 
 int vxlan_vnilist_update_group(struct vxlan_dev *vxlan,
-			       union vxlan_addr *old_remote_ip,
-			       union vxlan_addr *new_remote_ip,
+			       const union vxlan_addr *old_remote_ip,
+			       const union vxlan_addr *new_remote_ip,
+			       u32 old_ifindex, u32 new_ifindex,
 			       struct netlink_ext_ack *extack)
 {
 	struct list_head *headp, *hpos;
@@ -599,6 +634,8 @@ int vxlan_vnilist_update_group(struct vxlan_dev *vxlan,
 			ret = vxlan_update_default_fdb_entry(vxlan, vent->vni,
 							     old_remote_ip,
 							     new_remote_ip,
+							     old_ifindex,
+							     new_ifindex,
 							     extack);
 			if (ret)
 				return ret;
@@ -612,20 +649,20 @@ static void vxlan_vni_delete_group(struct vxlan_dev *vxlan,
 				   struct vxlan_vni_node *vninode)
 {
 	struct vxlan_net *vn = net_generic(vxlan->net, vxlan_net_id);
-	struct vxlan_rdst *dst = &vxlan->default_dst;
+	const struct vxlan_config *cfg = rtnl_dereference(vxlan->cfg);
 
 	/* if per vni remote_ip not present, delete the
 	 * default dst remote_ip previously added for this vni
 	 */
 	if (!vxlan_addr_any(&vninode->remote_ip) ||
-	    !vxlan_addr_any(&dst->remote_ip)) {
+	    !vxlan_addr_any(&cfg->remote_ip)) {
 		spin_lock_bh(&vxlan->hash_lock);
 		__vxlan_fdb_delete(vxlan, all_zeros_mac,
 				   (vxlan_addr_any(&vninode->remote_ip) ?
-				   dst->remote_ip : vninode->remote_ip),
-				   vxlan->cfg.dst_port,
+				   cfg->remote_ip : vninode->remote_ip),
+				   cfg->dst_port,
 				   vninode->vni, vninode->vni,
-				   dst->remote_ifindex,
+				   cfg->remote_ifindex,
 				   true);
 		spin_unlock_bh(&vxlan->hash_lock);
 	}
@@ -634,7 +671,7 @@ static void vxlan_vni_delete_group(struct vxlan_dev *vxlan,
 		if (vxlan_addr_multicast(&vninode->remote_ip) &&
 		    !vxlan_group_used(vn, vxlan, vninode->vni,
 				      &vninode->remote_ip,
-				      dst->remote_ifindex)) {
+				      cfg->remote_ifindex)) {
 			vxlan_igmp_leave(vxlan, &vninode->remote_ip, 0);
 		}
 	}
@@ -695,10 +732,11 @@ static struct vxlan_vni_node *vxlan_vni_alloc(struct vxlan_dev *vxlan,
 {
 	struct vxlan_vni_node *vninode;
 
-	vninode = kzalloc_obj(*vninode);
+	vninode = kzalloc_obj(*vninode, GFP_KERNEL_ACCOUNT);
 	if (!vninode)
 		return NULL;
-	vninode->stats = netdev_alloc_pcpu_stats(struct vxlan_vni_stats_pcpu);
+	vninode->stats = __netdev_alloc_pcpu_stats(struct vxlan_vni_stats_pcpu,
+						   GFP_KERNEL_ACCOUNT);
 	if (!vninode->stats) {
 		kfree(vninode);
 		return NULL;
@@ -723,6 +761,7 @@ static int vxlan_vni_add(struct vxlan_dev *vxlan,
 			 u32 vni, union vxlan_addr *group,
 			 struct netlink_ext_ack *extack)
 {
+	const struct vxlan_config *cfg = rtnl_dereference(vxlan->cfg);
 	struct vxlan_vni_node *vninode;
 	__be32 v = cpu_to_be32(vni);
 	bool changed = false;
@@ -731,7 +770,7 @@ static int vxlan_vni_add(struct vxlan_dev *vxlan,
 	if (vxlan_vnifilter_lookup(vxlan, v))
 		return vxlan_vni_update(vxlan, vg, v, group, &changed, extack);
 
-	err = vxlan_vni_in_use(vxlan->net, vxlan, &vxlan->cfg, v);
+	err = vxlan_vni_in_use(vxlan->net, vxlan, cfg, v);
 	if (err) {
 		NL_SET_ERR_MSG(extack, "VNI in use");
 		return err;
@@ -844,6 +883,7 @@ static int vxlan_process_vni_filter(struct vxlan_dev *vxlan,
 				    int cmd, struct netlink_ext_ack *extack)
 {
 	struct nlattr *vattrs[VXLAN_VNIFILTER_ENTRY_MAX + 1];
+	const struct vxlan_config *cfg;
 	u32 vni_start = 0, vni_end = 0;
 	union vxlan_addr group;
 	int err;
@@ -869,6 +909,17 @@ static int vxlan_process_vni_filter(struct vxlan_dev *vxlan,
 		return -EINVAL;
 	}
 
+	/* Only bound a well-formed range; a start above the end selects no
+	 * VNI at all and is left behaving as before.
+	 */
+	if (vni_end >= vni_start &&
+	    vni_end - vni_start >= VXLAN_VNI_FILTER_RANGE_MAX) {
+		NL_SET_ERR_MSG_ATTR_FMT(extack, nlvnifilter,
+					"VNI range spans more than %u VNIs",
+					VXLAN_VNI_FILTER_RANGE_MAX);
+		return -EINVAL;
+	}
+
 	if (vattrs[VXLAN_VNIFILTER_ENTRY_GROUP]) {
 		group.sin.sin_addr.s_addr =
 			nla_get_in_addr(vattrs[VXLAN_VNIFILTER_ENTRY_GROUP]);
@@ -881,7 +932,8 @@ static int vxlan_process_vni_filter(struct vxlan_dev *vxlan,
 		memset(&group, 0, sizeof(group));
 	}
 
-	if (vxlan_addr_multicast(&group) && !vxlan->default_dst.remote_ifindex) {
+	cfg = rtnl_dereference(vxlan->cfg);
+	if (vxlan_addr_multicast(&group) && !cfg->remote_ifindex) {
 		NL_SET_ERR_MSG(extack,
 			       "Local interface required for multicast remote group");
 
@@ -940,6 +992,7 @@ static int vxlan_vnifilter_process(struct sk_buff *skb, struct nlmsghdr *nlh,
 				   struct netlink_ext_ack *extack)
 {
 	struct net *net = sock_net(skb->sk);
+	const struct vxlan_config *cfg;
 	struct tunnel_msg *tmsg;
 	struct vxlan_dev *vxlan;
 	struct net_device *dev;
@@ -964,8 +1017,9 @@ static int vxlan_vnifilter_process(struct sk_buff *skb, struct nlmsghdr *nlh,
 	}
 
 	vxlan = netdev_priv(dev);
+	cfg = rtnl_dereference(vxlan->cfg);
 
-	if (!(vxlan->cfg.flags & VXLAN_F_VNIFILTER))
+	if (!(cfg->flags & VXLAN_F_VNIFILTER))
 		return -EOPNOTSUPP;
 
 	nlmsg_for_each_attr_type(attr, VXLAN_VNIFILTER_ENTRY, nlh,

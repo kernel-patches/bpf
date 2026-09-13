@@ -1714,7 +1714,12 @@ netdev_tx_t wx_xmit_frame(struct sk_buff *skb,
 
 	if (r_idx >= wx->num_tx_queues)
 		r_idx = r_idx % wx->num_tx_queues;
-	tx_ring = wx->tx_ring[r_idx];
+	tx_ring = rcu_dereference(wx->tx_ring[r_idx]);
+
+	if (unlikely(!tx_ring)) {
+		dev_kfree_skb_any(skb);
+		return NETDEV_TX_OK;
+	}
 
 	return wx_xmit_frame_ring(skb, tx_ring);
 }
@@ -2058,26 +2063,26 @@ static bool wx_cache_ring_vmdq(struct wx *wx)
 			/* If we are greater than indices move to next pool */
 			if ((reg_idx & ~vmdq->mask) >= rss->indices)
 				reg_idx = __ALIGN_MASK(reg_idx, ~vmdq->mask);
-			wx->rx_ring[i]->reg_idx = reg_idx;
+			rcu_dereference_protected(wx->rx_ring[i], 1)->reg_idx = reg_idx;
 		}
 		reg_idx = vmdq->offset * __ALIGN_MASK(1, ~vmdq->mask);
 		for (i = 0; i < wx->num_tx_queues; i++, reg_idx++) {
 			/* If we are greater than indices move to next pool */
 			if ((reg_idx & rss->mask) >= rss->indices)
 				reg_idx = __ALIGN_MASK(reg_idx, ~vmdq->mask);
-			wx->tx_ring[i]->reg_idx = reg_idx;
+			rcu_dereference_protected(wx->tx_ring[i], 1)->reg_idx = reg_idx;
 		}
 	} else {
 		/* start at VMDq register offset for SR-IOV enabled setups */
 		reg_idx = vmdq->offset;
 		for (i = 0; i < wx->num_rx_queues; i++)
 			/* If we are greater than indices move to next pool */
-			wx->rx_ring[i]->reg_idx = reg_idx + i;
+			rcu_dereference_protected(wx->rx_ring[i], 1)->reg_idx = reg_idx + i;
 
 		reg_idx = vmdq->offset;
 		for (i = 0; i < wx->num_tx_queues; i++)
 			/* If we are greater than indices move to next pool */
-			wx->tx_ring[i]->reg_idx = reg_idx + i;
+			rcu_dereference_protected(wx->tx_ring[i], 1)->reg_idx = reg_idx + i;
 	}
 
 	return true;
@@ -2098,10 +2103,10 @@ static void wx_cache_ring_rss(struct wx *wx)
 		return;
 
 	for (i = 0; i < wx->num_rx_queues; i++)
-		wx->rx_ring[i]->reg_idx = i;
+		rcu_dereference_protected(wx->rx_ring[i], 1)->reg_idx = i;
 
 	for (i = 0; i < wx->num_tx_queues; i++)
-		wx->tx_ring[i]->reg_idx = i;
+		rcu_dereference_protected(wx->tx_ring[i], 1)->reg_idx = i;
 }
 
 static void wx_add_ring(struct wx_ring *ring, struct wx_ring_container *head)
@@ -2191,7 +2196,7 @@ static int wx_alloc_q_vector(struct wx *wx,
 		ring->queue_index = txr_idx;
 
 		/* assign ring to wx */
-		wx->tx_ring[txr_idx] = ring;
+		rcu_assign_pointer(wx->tx_ring[txr_idx], ring);
 
 		/* update count and index */
 		txr_count--;
@@ -2217,7 +2222,7 @@ static int wx_alloc_q_vector(struct wx *wx,
 		ring->queue_index = rxr_idx;
 
 		/* assign ring to wx */
-		wx->rx_ring[rxr_idx] = ring;
+		rcu_assign_pointer(wx->rx_ring[rxr_idx], ring);
 
 		/* update count and index */
 		rxr_count--;
@@ -2245,10 +2250,10 @@ static void wx_free_q_vector(struct wx *wx, int v_idx)
 	struct wx_ring *ring;
 
 	wx_for_each_ring(ring, q_vector->tx)
-		wx->tx_ring[ring->queue_index] = NULL;
+		rcu_assign_pointer(wx->tx_ring[ring->queue_index], NULL);
 
 	wx_for_each_ring(ring, q_vector->rx)
-		wx->rx_ring[ring->queue_index] = NULL;
+		rcu_assign_pointer(wx->rx_ring[ring->queue_index], NULL);
 
 	wx->q_vector[v_idx] = NULL;
 	netif_napi_del(&q_vector->napi);
@@ -2659,7 +2664,7 @@ void wx_clean_all_rx_rings(struct wx *wx)
 	int i;
 
 	for (i = 0; i < wx->num_rx_queues; i++)
-		wx_clean_rx_ring(wx->rx_ring[i]);
+		wx_clean_rx_ring(rcu_dereference_protected(wx->rx_ring[i], 1));
 }
 EXPORT_SYMBOL(wx_clean_all_rx_rings);
 
@@ -2701,7 +2706,7 @@ static void wx_free_all_rx_resources(struct wx *wx)
 	int i;
 
 	for (i = 0; i < wx->num_rx_queues; i++)
-		wx_free_rx_resources(wx->rx_ring[i]);
+		wx_free_rx_resources(rcu_dereference_protected(wx->rx_ring[i], 1));
 }
 
 /**
@@ -2775,7 +2780,7 @@ void wx_clean_all_tx_rings(struct wx *wx)
 	int i;
 
 	for (i = 0; i < wx->num_tx_queues; i++)
-		wx_clean_tx_ring(wx->tx_ring[i]);
+		wx_clean_tx_ring(rcu_dereference_protected(wx->tx_ring[i], 1));
 }
 EXPORT_SYMBOL(wx_clean_all_tx_rings);
 
@@ -2823,7 +2828,7 @@ static void wx_free_all_tx_resources(struct wx *wx)
 	int i;
 
 	for (i = 0; i < wx->num_tx_queues; i++)
-		wx_free_tx_resources(wx->tx_ring[i]);
+		wx_free_tx_resources(rcu_dereference_protected(wx->tx_ring[i], 1));
 }
 
 void wx_free_resources(struct wx *wx)
@@ -2933,7 +2938,7 @@ static int wx_setup_all_rx_resources(struct wx *wx)
 	int i, err = 0;
 
 	for (i = 0; i < wx->num_rx_queues; i++) {
-		err = wx_setup_rx_resources(wx->rx_ring[i]);
+		err = wx_setup_rx_resources(rcu_dereference_protected(wx->rx_ring[i], 1));
 		if (!err)
 			continue;
 
@@ -2945,7 +2950,7 @@ static int wx_setup_all_rx_resources(struct wx *wx)
 err_setup_rx:
 	/* rewind the index freeing the rings as we go */
 	while (i--)
-		wx_free_rx_resources(wx->rx_ring[i]);
+		wx_free_rx_resources(rcu_dereference_protected(wx->rx_ring[i], 1));
 	return err;
 }
 
@@ -3036,7 +3041,7 @@ static int wx_setup_all_tx_resources(struct wx *wx)
 	int i, err = 0;
 
 	for (i = 0; i < wx->num_tx_queues; i++) {
-		err = wx_setup_tx_resources(wx->tx_ring[i]);
+		err = wx_setup_tx_resources(rcu_dereference_protected(wx->tx_ring[i], 1));
 		if (!err)
 			continue;
 
@@ -3048,7 +3053,7 @@ static int wx_setup_all_tx_resources(struct wx *wx)
 err_setup_tx:
 	/* rewind the index freeing the rings as we go */
 	while (i--)
-		wx_free_tx_resources(wx->tx_ring[i]);
+		wx_free_tx_resources(rcu_dereference_protected(wx->tx_ring[i], 1));
 	return err;
 }
 
@@ -3097,7 +3102,7 @@ void wx_get_stats64(struct net_device *netdev,
 
 	rcu_read_lock();
 	for (i = 0; i < wx->num_rx_queues; i++) {
-		struct wx_ring *ring = READ_ONCE(wx->rx_ring[i]);
+		struct wx_ring *ring = rcu_dereference(wx->rx_ring[i]);
 		u64 bytes, packets;
 		unsigned int start;
 
@@ -3113,7 +3118,7 @@ void wx_get_stats64(struct net_device *netdev,
 	}
 
 	for (i = 0; i < wx->num_tx_queues; i++) {
-		struct wx_ring *ring = READ_ONCE(wx->tx_ring[i]);
+		struct wx_ring *ring = rcu_dereference(wx->tx_ring[i]);
 		u64 bytes, packets;
 		unsigned int start;
 
@@ -3324,7 +3329,7 @@ int wx_set_ring(struct wx *wx, u32 new_tx_count,
 	 */
 	if (new_tx_count != wx->tx_ring_count) {
 		for (i = 0; i < wx->num_tx_queues; i++) {
-			memcpy(&temp_ring[i], wx->tx_ring[i],
+			memcpy(&temp_ring[i], rcu_dereference_protected(wx->tx_ring[i], 1),
 			       sizeof(struct wx_ring));
 
 			temp_ring[i].count = new_tx_count;
@@ -3340,9 +3345,11 @@ int wx_set_ring(struct wx *wx, u32 new_tx_count,
 		}
 
 		for (i = 0; i < wx->num_tx_queues; i++) {
-			wx_free_tx_resources(wx->tx_ring[i]);
+			struct wx_ring *tx_ring = rcu_dereference_protected(wx->tx_ring[i], 1);
 
-			memcpy(wx->tx_ring[i], &temp_ring[i],
+			wx_free_tx_resources(tx_ring);
+
+			memcpy(tx_ring, &temp_ring[i],
 			       sizeof(struct wx_ring));
 		}
 
@@ -3352,7 +3359,7 @@ int wx_set_ring(struct wx *wx, u32 new_tx_count,
 	/* Repeat the process for the Rx rings if needed */
 	if (new_rx_count != wx->rx_ring_count) {
 		for (i = 0; i < wx->num_rx_queues; i++) {
-			memcpy(&temp_ring[i], wx->rx_ring[i],
+			memcpy(&temp_ring[i], rcu_dereference_protected(wx->rx_ring[i], 1),
 			       sizeof(struct wx_ring));
 
 			temp_ring[i].count = new_rx_count;
@@ -3368,8 +3375,10 @@ int wx_set_ring(struct wx *wx, u32 new_tx_count,
 		}
 
 		for (i = 0; i < wx->num_rx_queues; i++) {
-			wx_free_rx_resources(wx->rx_ring[i]);
-			memcpy(wx->rx_ring[i], &temp_ring[i],
+			struct wx_ring *rx_ring = rcu_dereference_protected(wx->rx_ring[i], 1);
+
+			wx_free_rx_resources(rx_ring);
+			memcpy(rx_ring, &temp_ring[i],
 			       sizeof(struct wx_ring));
 		}
 

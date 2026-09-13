@@ -182,6 +182,18 @@ static void rds_message_purge(struct rds_message *rm)
 		kref_put(&rm->atomic.op_rdma_mr->r_kref, __rds_put_mr_final);
 }
 
+static void rds_message_free(struct rds_message *rm)
+{
+	/* get in rds_send_queue_rm(), rds_send_probe() or the congestion
+	 * map path of rds_send_xmit().  Messages that were never queued on
+	 * a connection have no reference to drop.
+	 */
+	if (rm->m_inc.i_conn)
+		rds_conn_put(rm->m_inc.i_conn);
+
+	kfree(rm);
+}
+
 static void rds_message_unpin_worker(struct work_struct *work)
 {
 	struct rds_message *rm = container_of(work, struct rds_message,
@@ -192,7 +204,7 @@ static void rds_message_unpin_worker(struct work_struct *work)
 	if (rm->atomic.op_unpin_deferred)
 		rds_atomic_op_unpin_page(&rm->atomic);
 
-	kfree(rm);
+	rds_message_free(rm);
 }
 
 void rds_message_put(struct rds_message *rm)
@@ -217,7 +229,7 @@ void rds_message_put(struct rds_message *rm)
 			return;
 		}
 
-		kfree(rm);
+		rds_message_free(rm);
 	}
 }
 EXPORT_SYMBOL_GPL(rds_message_put);
@@ -431,7 +443,9 @@ struct rds_message *rds_message_map_pages(unsigned long *page_addrs, unsigned in
 	for (i = 0; i < rm->data.op_nents; ++i) {
 		sg_set_page(&rm->data.op_sg[i],
 				virt_to_page((void *)page_addrs[i]),
-				PAGE_SIZE, 0);
+				i == rm->data.op_nents - 1
+					? total_len - (i * PAGE_SIZE)
+					: PAGE_SIZE, 0);
 	}
 
 	return rm;

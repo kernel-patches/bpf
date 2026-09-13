@@ -222,7 +222,8 @@ extern int ndo_dflt_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 				   u32 filter_mask,
 				   int (*vlan_fill)(struct sk_buff *skb,
 						    struct net_device *dev,
-						    u32 filter_mask));
+						    u32 filter_mask),
+				   struct netlink_ext_ack *extack);
 
 extern void rtnl_offload_xstats_notify(struct net_device *dev);
 

@@ -312,6 +312,10 @@ static void nci_core_conn_create_rsp_packet(struct nci_dev *ndev,
 	pr_debug("status 0x%x\n", status);
 
 	if (status == NCI_STATUS_OK) {
+		if (skb->len < sizeof(*rsp)) {
+			status = NCI_STATUS_SYNTAX_ERROR;
+			goto exit;
+		}
 		rsp = (struct nci_core_conn_create_rsp *)skb->data;
 
 		conn_info = devm_kzalloc(&ndev->nfc_dev->dev,

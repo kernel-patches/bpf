@@ -521,7 +521,7 @@ static void ieee802154_if_setup(struct net_device *dev)
 
 	/* Let hard_header_len set to IEEE802154_MIN_HEADER_LEN. AF_PACKET
 	 * will not send frames without any payload, but ack frames
-	 * has no payload, so substract one that we can send a 3 bytes
+	 * has no payload, so subtract one that we can send a 3 bytes
 	 * frame. The xmit callback assumes at least a hard header where two
 	 * bytes fc and sequence field are set.
 	 */
@@ -694,6 +694,7 @@ void ieee802154_if_remove(struct ieee802154_sub_if_data *sdata)
 	mutex_unlock(&sdata->local->iflist_mtx);
 
 	synchronize_rcu();
+	mac802154_flush_queued_pkts(sdata->local, sdata);
 	unregister_netdevice(sdata->dev);
 }
 
@@ -705,6 +706,11 @@ void ieee802154_remove_interfaces(struct ieee802154_local *local)
 	list_for_each_entry_safe(sdata, tmp, &local->interfaces, list) {
 		list_del_rcu(&sdata->list);
 
+		/* Best-effort: a frame the RX softirq queues for this sdata
+		 * after the flush still pins the netdev, so the
+		 * unregister_netdevice() below waits it out.
+		 */
+		mac802154_flush_queued_pkts(local, sdata);
 		unregister_netdevice(sdata->dev);
 	}
 	mutex_unlock(&local->iflist_mtx);

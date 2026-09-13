@@ -789,23 +789,28 @@ free_skb:
 	return NETDEV_TX_OK;
 }
 
-static void ipgre_link_update(struct net_device *dev, bool set_mtu)
+/* tunnel->hlen depends on tunnel->parms.o_flags and on tunnel->encap_hlen,
+ * both of which ipgre_changelink() can change. Recompute it the way
+ * __gre_tunnel_init() does, then let ip_tunnel_bind_dev() derive the device
+ * lengths from it.
+ *
+ * @old_hlen is only used to tell whether the MTU became stale, never as a
+ * difference to apply, so it can not make the lengths drift. It must be
+ * sampled before ip_tunnel_encap_setup(), which already publishes the new
+ * tunnel->hlen for us.
+ */
+static void ipgre_link_update(struct net_device *dev, bool set_mtu,
+			      int old_hlen)
 {
 	struct ip_tunnel *tunnel = netdev_priv(dev);
-	int len;
 
-	len = tunnel->tun_hlen;
 	tunnel->tun_hlen = gre_calc_hlen(tunnel->parms.o_flags);
-	len = tunnel->tun_hlen - len;
-	tunnel->hlen = tunnel->hlen + len;
+	tunnel->hlen = tunnel->tun_hlen + tunnel->encap_hlen;
 
-	if (dev->header_ops)
-		dev->hard_header_len += len;
-	else
-		dev->needed_headroom += len;
-
-	if (set_mtu)
-		WRITE_ONCE(dev->mtu, max_t(int, dev->mtu - len, 68));
+	/* Only reset a MTU that the header length just invalidated, so that
+	 * a MTU configured by the user survives an unrelated change.
+	 */
+	ip_tunnel_refresh_lengths(dev, set_mtu && tunnel->hlen != old_hlen);
 
 	if (test_bit(IP_TUNNEL_SEQ_BIT, tunnel->parms.o_flags) ||
 	    (test_bit(IP_TUNNEL_CSUM_BIT, tunnel->parms.o_flags) &&
@@ -853,7 +858,7 @@ static int ipgre_tunnel_ctl(struct net_device *dev,
 		ip_tunnel_flags_copy(t->parms.o_flags, p->o_flags);
 
 		if (strcmp(dev->rtnl_link_ops->kind, "erspan"))
-			ipgre_link_update(dev, true);
+			ipgre_link_update(dev, true, t->hlen);
 	}
 
 	i_flags = gre_tnl_flags_to_gre_flags(p->i_flags);
@@ -1084,7 +1089,7 @@ static int __net_init ipgre_init_net(struct net *net)
 static void __net_exit ipgre_exit_rtnl(struct net *net,
 				       struct list_head *dev_to_kill)
 {
-	ip_tunnel_delete_net(net, ipgre_net_id, &ipgre_link_ops, dev_to_kill);
+	ip_tunnel_delete_net(net, ipgre_net_id, dev_to_kill);
 }
 
 static struct pernet_operations ipgre_net_ops = {
@@ -1233,17 +1238,18 @@ static int ipgre_netlink_parms(struct net_device *dev,
 		parms->iph.frag_off = htons(IP_DF);
 	}
 
-	if (data[IFLA_GRE_COLLECT_METADATA]) {
-		t->collect_md = true;
-		if (dev->type == ARPHRD_IPGRE)
-			dev->type = ARPHRD_NONE;
-	}
-
 	if (data[IFLA_GRE_IGNORE_DF]) {
 		if (nla_get_u8(data[IFLA_GRE_IGNORE_DF])
 		  && (parms->iph.frag_off & htons(IP_DF)))
 			return -EINVAL;
 		t->ignore_df = !!nla_get_u8(data[IFLA_GRE_IGNORE_DF]);
+	}
+
+	/* All attributes have been validated, we can change @dev and @t. */
+	if (data[IFLA_GRE_COLLECT_METADATA]) {
+		t->collect_md = true;
+		if (dev->type == ARPHRD_IPGRE)
+			dev->type = ARPHRD_NONE;
 	}
 
 	if (data[IFLA_GRE_FWMARK])
@@ -1259,39 +1265,50 @@ static int erspan_netlink_parms(struct net_device *dev,
 				__u32 *fwmark)
 {
 	struct ip_tunnel *t = netdev_priv(dev);
+	u8 erspan_ver = t->erspan_ver;
+	u32 index = t->index;
+	u16 hwid = t->hwid;
+	u8 dir = t->dir;
 	int err;
+
+	if (!data)
+		return ipgre_netlink_parms(dev, data, tb, parms, fwmark);
+
+	if (data[IFLA_GRE_ERSPAN_VER]) {
+		erspan_ver = nla_get_u8(data[IFLA_GRE_ERSPAN_VER]);
+
+		if (erspan_ver > 2)
+			return -EINVAL;
+	}
+
+	if (erspan_ver == 1) {
+		if (data[IFLA_GRE_ERSPAN_INDEX]) {
+			index = nla_get_u32(data[IFLA_GRE_ERSPAN_INDEX]);
+			if (index & ~INDEX_MASK)
+				return -EINVAL;
+		}
+	} else if (erspan_ver == 2) {
+		if (data[IFLA_GRE_ERSPAN_DIR]) {
+			dir = nla_get_u8(data[IFLA_GRE_ERSPAN_DIR]);
+			if (dir & ~(DIR_MASK >> DIR_OFFSET))
+				return -EINVAL;
+		}
+		if (data[IFLA_GRE_ERSPAN_HWID]) {
+			hwid = nla_get_u16(data[IFLA_GRE_ERSPAN_HWID]);
+			if (hwid & ~(HWID_MASK >> HWID_OFFSET))
+				return -EINVAL;
+		}
+	}
 
 	err = ipgre_netlink_parms(dev, data, tb, parms, fwmark);
 	if (err)
 		return err;
-	if (!data)
-		return 0;
 
-	if (data[IFLA_GRE_ERSPAN_VER]) {
-		t->erspan_ver = nla_get_u8(data[IFLA_GRE_ERSPAN_VER]);
-
-		if (t->erspan_ver > 2)
-			return -EINVAL;
-	}
-
-	if (t->erspan_ver == 1) {
-		if (data[IFLA_GRE_ERSPAN_INDEX]) {
-			t->index = nla_get_u32(data[IFLA_GRE_ERSPAN_INDEX]);
-			if (t->index & ~INDEX_MASK)
-				return -EINVAL;
-		}
-	} else if (t->erspan_ver == 2) {
-		if (data[IFLA_GRE_ERSPAN_DIR]) {
-			t->dir = nla_get_u8(data[IFLA_GRE_ERSPAN_DIR]);
-			if (t->dir & ~(DIR_MASK >> DIR_OFFSET))
-				return -EINVAL;
-		}
-		if (data[IFLA_GRE_ERSPAN_HWID]) {
-			t->hwid = nla_get_u16(data[IFLA_GRE_ERSPAN_HWID]);
-			if (t->hwid & ~(HWID_MASK >> HWID_OFFSET))
-				return -EINVAL;
-		}
-	}
+	/* All attributes have been validated, we can change @t. */
+	t->erspan_ver = erspan_ver;
+	t->index = index;
+	t->hwid = hwid;
+	t->dir = dir;
 
 	return 0;
 }
@@ -1351,18 +1368,43 @@ static const struct net_device_ops gre_tap_netdev_ops = {
 	.ndo_fill_metadata_dst	= gre_fill_metadata_dst,
 };
 
+static void erspan_set_hlen(struct ip_tunnel *tunnel)
+{
+	/* Version 0 uses a 4-byte GRE header, other versions use 8 bytes. */
+	tunnel->tun_hlen = tunnel->erspan_ver == 0 ? 4 : 8;
+
+	tunnel->hlen = tunnel->tun_hlen + tunnel->encap_hlen +
+		       erspan_hdr_len(tunnel->erspan_ver);
+}
+
+/* Both tunnel->erspan_ver and tunnel->encap_hlen can be changed from
+ * erspan_changelink(), and both feed tunnel->hlen. Recompute it, then let
+ * ip_tunnel_bind_dev() derive the device lengths from it.
+ *
+ * As in ipgre_link_update(), @old_hlen only tells whether the MTU became
+ * stale and must be sampled before ip_tunnel_encap_setup(), which
+ * recomputes tunnel->hlen without the ERSPAN part.
+ */
+static void erspan_link_update(struct net_device *dev, bool set_mtu,
+			       int old_hlen)
+{
+	struct ip_tunnel *tunnel = netdev_priv(dev);
+
+	erspan_set_hlen(tunnel);
+
+	/* Only reset a MTU that the header length just invalidated, so that
+	 * a MTU configured by the user survives an unrelated change.
+	 */
+	ip_tunnel_refresh_lengths(dev, set_mtu && tunnel->hlen != old_hlen);
+}
+
 static int erspan_tunnel_init(struct net_device *dev)
 {
 	struct ip_tunnel *tunnel = netdev_priv(dev);
 
-	if (tunnel->erspan_ver == 0)
-		tunnel->tun_hlen = 4; /* 4-byte GRE hdr. */
-	else
-		tunnel->tun_hlen = 8; /* 8-byte GRE hdr. */
+	erspan_set_hlen(tunnel);
 
 	tunnel->parms.iph.protocol = IPPROTO_GRE;
-	tunnel->hlen = tunnel->tun_hlen + tunnel->encap_hlen +
-		       erspan_hdr_len(tunnel->erspan_ver);
 
 	dev->features		|= GRE_FEATURES;
 	dev->hw_features	|= GRE_FEATURES;
@@ -1459,6 +1501,7 @@ static int ipgre_changelink(struct net_device *dev, struct nlattr *tb[],
 	struct ip_tunnel *t = netdev_priv(dev);
 	struct ip_tunnel_parm_kern p;
 	__u32 fwmark = t->fwmark;
+	int old_hlen = t->hlen;
 	int err;
 
 	if (!rtnl_dev_link_net_capable(dev, t->net))
@@ -1470,18 +1513,24 @@ static int ipgre_changelink(struct net_device *dev, struct nlattr *tb[],
 
 	err = ipgre_netlink_parms(dev, data, tb, &p, &fwmark);
 	if (err < 0)
-		return err;
+		goto link_update;
 
 	err = ip_tunnel_changelink(dev, tb, &p, fwmark);
 	if (err < 0)
-		return err;
+		goto link_update;
 
 	ip_tunnel_flags_copy(t->parms.i_flags, p.i_flags);
 	ip_tunnel_flags_copy(t->parms.o_flags, p.o_flags);
 
-	ipgre_link_update(dev, !tb[IFLA_MTU]);
+link_update:
+	/* ipgre_newlink_encap_setup() has published a new encapsulation even
+	 * if the rest of the request failed, so the lengths must be refreshed
+	 * on the error paths as well. This has to come last, because
+	 * ipgre_link_update() needs the flags copied above.
+	 */
+	ipgre_link_update(dev, !tb[IFLA_MTU], old_hlen);
 
-	return 0;
+	return err;
 }
 
 static int erspan_changelink(struct net_device *dev, struct nlattr *tb[],
@@ -1491,6 +1540,7 @@ static int erspan_changelink(struct net_device *dev, struct nlattr *tb[],
 	struct ip_tunnel *t = netdev_priv(dev);
 	struct ip_tunnel_parm_kern p;
 	__u32 fwmark = t->fwmark;
+	int old_hlen = t->hlen;
 	int err;
 
 	if (!rtnl_dev_link_net_capable(dev, t->net))
@@ -1501,6 +1551,16 @@ static int erspan_changelink(struct net_device *dev, struct nlattr *tb[],
 		return err;
 
 	err = erspan_netlink_parms(dev, data, tb, &p, &fwmark);
+
+	/* ipgre_newlink_encap_setup() has published a new encapsulation, and
+	 * erspan_netlink_parms() a new ERSPAN version, both of which change
+	 * the header length. Refresh the lengths before looking at @err:
+	 * erspan_xmit() sizes its push from tunnel->erspan_ver, and both this
+	 * error path and ip_tunnel_changelink() below leave the new
+	 * encapsulation behind.
+	 */
+	erspan_link_update(dev, !tb[IFLA_MTU], old_hlen);
+
 	if (err < 0)
 		return err;
 
@@ -1728,7 +1788,7 @@ static int __net_init ipgre_tap_init_net(struct net *net)
 static void __net_exit ipgre_tap_exit_rtnl(struct net *net,
 					   struct list_head *dev_to_kill)
 {
-	ip_tunnel_delete_net(net, gre_tap_net_id, &ipgre_tap_ops, dev_to_kill);
+	ip_tunnel_delete_net(net, gre_tap_net_id, dev_to_kill);
 }
 
 static struct pernet_operations ipgre_tap_net_ops = {
@@ -1747,7 +1807,7 @@ static int __net_init erspan_init_net(struct net *net)
 static void __net_exit erspan_exit_rtnl(struct net *net,
 					struct list_head *dev_to_kill)
 {
-	ip_tunnel_delete_net(net, erspan_net_id, &erspan_link_ops, dev_to_kill);
+	ip_tunnel_delete_net(net, erspan_net_id, dev_to_kill);
 }
 
 static struct pernet_operations erspan_net_ops = {

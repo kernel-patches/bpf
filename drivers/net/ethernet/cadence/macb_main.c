@@ -99,6 +99,10 @@ struct sifive_fu540_macb_mgmt {
 
 #define MACB_MDIO_TIMEOUT	1000000 /* in usecs */
 
+/* CBS port transmit rate factors: 1000/interface_width */
+#define MACB_CBS_PORT_RATE_1G		125	/* 1000/8 for GMII (8-bit) */
+#define MACB_CBS_PORT_RATE_10_100M	250	/* 1000/4 for MII (4-bit) */
+
 /* DMA buffer descriptor might be different size
  * depends on hardware configuration:
  *
@@ -1163,6 +1167,8 @@ static int macb_mii_init(struct macb *bp)
 	err = macb_mii_probe(bp->netdev);
 	if (err)
 		goto err_out_unregister_bus;
+
+	of_node_put(mdio_np);
 
 	return 0;
 
@@ -4300,9 +4306,9 @@ static int macb_taprio_setup_replace(struct net_device *netdev,
 	u64 total_on_time = 0, start_time_sec = 0, start_time = conf->base_time;
 	u32 configured_queues = 0, speed = 0, start_time_nsec;
 	struct macb_queue_enst_config *enst_queue;
-	struct tc_taprio_sched_entry *entry;
+	struct ethtool_link_ksettings kset = {};
 	struct macb *bp = netdev_priv(netdev);
-	struct ethtool_link_ksettings kset;
+	struct tc_taprio_sched_entry *entry;
 	struct macb_queue *queue;
 	u32 queue_mask;
 	u8 queue_id;
@@ -4329,8 +4335,8 @@ static int macb_taprio_setup_replace(struct net_device *netdev,
 	}
 
 	speed = kset.base.speed;
-	if (unlikely(speed <= 0)) {
-		netdev_err(netdev, "Invalid speed: %d\n", speed);
+	if (unlikely(speed == SPEED_UNKNOWN || !speed)) {
+		netdev_err(netdev, "Invalid speed %d, link-down?\n", speed);
 		return -EINVAL;
 	}
 
@@ -4476,17 +4482,7 @@ static void macb_taprio_destroy(struct net_device *netdev)
 static int macb_setup_taprio(struct net_device *netdev,
 			     struct tc_taprio_qopt_offload *taprio)
 {
-	struct macb *bp = netdev_priv(netdev);
 	int err = 0;
-
-	if (unlikely(!(netdev->hw_features & NETIF_F_HW_TC)))
-		return -EOPNOTSUPP;
-
-	/* Check if Device is in runtime suspend */
-	if (unlikely(pm_runtime_suspended(&bp->pdev->dev))) {
-		netdev_err(netdev, "Device is in runtime suspend\n");
-		return -EOPNOTSUPP;
-	}
 
 	switch (taprio->cmd) {
 	case TAPRIO_CMD_REPLACE:
@@ -4502,13 +4498,197 @@ static int macb_setup_taprio(struct net_device *netdev,
 	return err;
 }
 
+static int macb_cbs_get_queue_params(struct macb *bp, u8 queue_num,
+				     u32 *enable_bit, u32 *idleslope_reg)
+{
+	/* Queue A is highest priority (num_queues - 1) */
+	if (queue_num == bp->num_queues - 1) {
+		*enable_bit = GEM_BIT(CBS_ENABLE_QUEUE_A);
+		*idleslope_reg = GEM_CBS_IDLESLOPE_Q_A;
+		return 0;
+	}
+
+	/* Queue B is second highest priority (num_queues - 2) */
+	if (queue_num == bp->num_queues - 2) {
+		*enable_bit = GEM_BIT(CBS_ENABLE_QUEUE_B);
+		*idleslope_reg = GEM_CBS_IDLESLOPE_Q_B;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static int macb_cbs_add(struct net_device *netdev,
+			struct tc_cbs_qopt_offload *qopt)
+{
+	u32 enable_bit, idleslope, speed_kbps, ctrl, idleslope_reg;
+	struct ethtool_link_ksettings kset = {};
+	struct macb *bp = netdev_priv(netdev);
+	int err;
+
+	err = macb_cbs_get_queue_params(bp, qopt->queue, &enable_bit, &idleslope_reg);
+	if (err) {
+		netdev_err(netdev, "CBS: Queue %d not eligible (only top 2 queues support CBS)\n",
+			   qopt->queue);
+		return -EINVAL;
+	}
+
+	/* idleslope is calibrated for the current link speed; CBS is not
+	 * reprogrammed on link-speed changes, so it must be reconfigured
+	 * if the link speed changes.
+	 */
+	phylink_ethtool_ksettings_get(bp->phylink, &kset);
+
+	if (!kset.base.speed || kset.base.speed == SPEED_UNKNOWN) {
+		netdev_err(netdev, "CBS: Invalid link speed\n");
+		return -EINVAL;
+	}
+
+	speed_kbps = kset.base.speed * 1000;
+
+	if (qopt->idleslope <= 0 || (u32)qopt->idleslope > speed_kbps) {
+		netdev_err(netdev, "CBS: invalid idleslope %d (must be 1..%u kbps)\n",
+			   qopt->idleslope, speed_kbps);
+		return -EINVAL;
+	}
+
+	/* qopt->idleslope is in kbps; convert to the units the hardware
+	 * register expects:
+	 * - High-speed GEM: fraction of port bandwidth, scaled to the full
+	 *   32-bit register range
+	 * - Standard MACB: the register counts bytes/sec in 1G (8-bit GMII)
+	 *   mode and nibbles/sec in 10/100 (4-bit MII) mode, so scale kbps
+	 *   by 1000/8 (125) or 1000/4 (250) respectively
+	 */
+	if (bp->caps & MACB_CAPS_HIGH_SPEED)
+		idleslope = DIV_ROUND_UP_ULL((u64)qopt->idleslope * U32_MAX, speed_kbps);
+	else
+		idleslope = (u32)qopt->idleslope * (kset.base.speed >= 1000 ?
+					       MACB_CBS_PORT_RATE_1G : MACB_CBS_PORT_RATE_10_100M);
+
+	scoped_guard(spinlock_irqsave, &bp->lock) {
+		/* Disable CBS for the queue before updating idleslope */
+		ctrl = gem_readl(bp, CBS_CONTROL) & ~enable_bit;
+		gem_writel(bp, CBS_CONTROL, ctrl);
+		/* Update idleslope for the queue */
+		bp->macb_reg_writel(bp, idleslope_reg, idleslope);
+		/* Re-enable CBS for the queue with new idleslope */
+		gem_writel(bp, CBS_CONTROL, ctrl | enable_bit);
+	}
+
+	netdev_dbg(netdev, "CBS: Configured queue %d with idleslope 0x%x\n",
+		   qopt->queue, idleslope);
+
+	return 0;
+}
+
+static void macb_cbs_destroy(struct net_device *netdev, u8 queue_num)
+{
+	struct macb *bp = netdev_priv(netdev);
+	u32 enable_bit, idleslope_reg;
+
+	if (macb_cbs_get_queue_params(bp, queue_num, &enable_bit, &idleslope_reg))
+		return;
+
+	scoped_guard(spinlock_irqsave, &bp->lock) {
+		gem_writel(bp, CBS_CONTROL, gem_readl(bp, CBS_CONTROL) & ~enable_bit);
+		bp->macb_reg_writel(bp, idleslope_reg, 0);
+	}
+
+	netdev_dbg(netdev, "CBS: Disabled queue %d\n", queue_num);
+}
+
+static int macb_setup_cbs(struct net_device *netdev,
+			  struct tc_cbs_qopt_offload *qopt)
+{
+	if (qopt->enable)
+		return macb_cbs_add(netdev, qopt);
+
+	macb_cbs_destroy(netdev, qopt->queue);
+	return 0;
+}
+
+static int macb_setup_mqprio(struct net_device *netdev,
+			     struct tc_mqprio_qopt_offload *mqprio)
+{
+	struct tc_mqprio_qopt *qopt = &mqprio->qopt;
+	u8 num_tc = qopt->num_tc;
+	int err;
+	u8 i;
+
+	/* Handle reset case early */
+	if (!num_tc) {
+		netdev_reset_tc(netdev);
+		return 0;
+	}
+
+	/* Configure traffic classes */
+	qopt->hw = TC_MQPRIO_HW_OFFLOAD_TCS;
+
+	err = netdev_set_num_tc(netdev, num_tc);
+	if (err)
+		return err;
+
+	for (i = 0; i < num_tc; i++) {
+		err = netdev_set_tc_queue(netdev, i, qopt->count[i],
+					  qopt->offset[i]);
+		if (err)
+			goto err_reset_tc;
+
+		netdev_dbg(netdev, "MQPRIO: TC%d -> queue %u (count=%u)\n",
+			   i, qopt->offset[i], qopt->count[i]);
+	}
+
+	return 0;
+
+err_reset_tc:
+	netdev_reset_tc(netdev);
+	return err;
+}
+
+static int macb_tc_query_caps(struct net_device *netdev,
+			      struct tc_query_caps_base *base)
+{
+	switch (base->type) {
+	case TC_SETUP_QDISC_MQPRIO: {
+		struct tc_mqprio_caps *caps = base->caps;
+
+		caps->validate_queue_counts = true;
+
+		return 0;
+	}
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
 static int macb_setup_tc(struct net_device *netdev, enum tc_setup_type type,
 			 void *type_data)
 {
+	struct macb *bp;
+
 	if (!netdev || !type_data)
 		return -EINVAL;
 
+	if (type == TC_QUERY_CAPS)
+		return macb_tc_query_caps(netdev, type_data);
+
+	bp = netdev_priv(netdev);
+
+	if (unlikely(!(netdev->hw_features & NETIF_F_HW_TC)))
+		return -EOPNOTSUPP;
+
+	/* Check if Device is in runtime suspend */
+	if (unlikely(pm_runtime_suspended(&bp->pdev->dev))) {
+		netdev_err(netdev, "Device is in runtime suspend\n");
+		return -EOPNOTSUPP;
+	}
+
 	switch (type) {
+	case TC_SETUP_QDISC_MQPRIO:
+		return macb_setup_mqprio(netdev, type_data);
+	case TC_SETUP_QDISC_CBS:
+		return macb_setup_cbs(netdev, type_data);
 	case TC_SETUP_QDISC_TAPRIO:
 		return macb_setup_taprio(netdev, type_data);
 	default:
@@ -4823,8 +5003,8 @@ static int macb_init_dflt(struct platform_device *pdev)
 		netdev->hw_features |= NETIF_F_HW_CSUM | NETIF_F_RXCSUM;
 	if (bp->caps & MACB_CAPS_SG_DISABLED)
 		netdev->hw_features &= ~NETIF_F_SG;
-	/* Enable HW_TC if hardware supports QBV */
-	if (bp->caps & MACB_CAPS_QBV)
+	/* Enable TC offload for TSN-capable hardware */
+	if (bp->caps & MACB_CAPS_TC)
 		netdev->hw_features |= NETIF_F_HW_TC;
 
 	netdev->features = netdev->hw_features;
@@ -5380,7 +5560,7 @@ static int fu540_c000_clk_init(struct platform_device *pdev, struct clk **pclk,
 			       struct clk **hclk, struct clk **tx_clk,
 			       struct clk **rx_clk, struct clk **tsu_clk)
 {
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 	int err = 0;
 
 	err = macb_clk_init_dflt(pdev, pclk, hclk, tx_clk, rx_clk, tsu_clk);
@@ -5693,7 +5873,7 @@ static const struct macb_config versal_config = {
 	.caps = MACB_CAPS_GIGABIT_MODE_AVAILABLE | MACB_CAPS_JUMBO |
 		MACB_CAPS_GEM_HAS_PTP | MACB_CAPS_BD_RD_PREFETCH |
 		MACB_CAPS_NEED_TSUCLK | MACB_CAPS_QUEUE_DISABLE |
-		MACB_CAPS_QBV |
+		MACB_CAPS_TC |
 		MACB_CAPS_USRIO_HAS_MII,
 	.dma_burst_length = 16,
 	.init = init_reset_optional,
@@ -5881,6 +6061,7 @@ static int macb_probe(struct platform_device *pdev)
 	}
 	spin_lock_init(&bp->lock);
 	spin_lock_init(&bp->stats_lock);
+	spin_lock_init(&bp->tsu_clk_lock);
 
 	/* setup capabilities */
 	macb_configure_caps(bp, macb_config);
@@ -5976,8 +6157,11 @@ err_out_free_tieoff:
 	macb_free_tieoff(bp);
 
 err_out_unregister_mdio:
-	mdiobus_unregister(bp->mii_bus);
-	mdiobus_free(bp->mii_bus);
+	if (bp->mii_bus) {
+		mdiobus_unregister(bp->mii_bus);
+		mdiobus_free(bp->mii_bus);
+	}
+	phylink_destroy(bp->phylink);
 
 err_out_phy_exit:
 	phy_exit(bp->phy);
@@ -6006,8 +6190,10 @@ static void macb_remove(struct platform_device *pdev)
 		unregister_netdev(netdev);
 		macb_free_tieoff(bp);
 		phy_exit(bp->phy);
-		mdiobus_unregister(bp->mii_bus);
-		mdiobus_free(bp->mii_bus);
+		if (bp->mii_bus) {
+			mdiobus_unregister(bp->mii_bus);
+			mdiobus_free(bp->mii_bus);
+		}
 
 		device_set_wakeup_enable(&bp->pdev->dev, 0);
 		cancel_delayed_work_sync(&bp->tx_lpi_work);

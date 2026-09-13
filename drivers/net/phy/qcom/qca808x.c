@@ -200,8 +200,8 @@ static int qca808x_config_init(struct phy_device *phydev)
 	struct qca808x_priv *priv = phydev->priv;
 	int ret;
 
-	/* Default to LED Active High if active-low not in DT */
-	if (priv->led_polarity_mode == -1) {
+	/* Set LED Active High unless active-low was requested in DT */
+	if (priv->led_polarity_mode != 1) {
 		ret = phy_set_bits_mmd(phydev, MDIO_MMD_AN,
 				       QCA808X_MMD7_LED_POLARITY_CTRL,
 				       QCA808X_LED_ACTIVE_HIGH);
@@ -602,6 +602,9 @@ static int qca808x_led_polarity_set(struct phy_device *phydev, int index,
 		switch (mode) {
 		case PHY_LED_ACTIVE_LOW:
 			active_low = true;
+			break;
+		case PHY_LED_ACTIVE_HIGH:
+			active_low = false;
 			break;
 		default:
 			return -EINVAL;

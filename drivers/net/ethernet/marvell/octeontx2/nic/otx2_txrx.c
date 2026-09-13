@@ -171,7 +171,7 @@ static void otx2_set_rxtstamp(struct otx2_nic *pfvf,
 	u64 timestamp, tsns;
 	int err;
 
-	if (!(pfvf->flags & OTX2_FLAG_RX_TSTAMP_ENABLED))
+	if (!otx2_test_flag(pfvf, OTX2_FLAG_RX_TSTAMP_ENABLED))
 		return;
 
 	timestamp = pfvf->ptp->convert_rx_ptp_tstmp(*(u64 *)data);
@@ -374,13 +374,13 @@ static void otx2_rcv_pkt_handler(struct otx2_nic *pfvf,
 	}
 	otx2_set_rxhash(pfvf, cqe, skb);
 
-	if (!(pfvf->flags & OTX2_FLAG_REP_MODE_ENABLED)) {
+	if (!otx2_test_flag(pfvf, OTX2_FLAG_REP_MODE_ENABLED)) {
 		skb_record_rx_queue(skb, cq->cq_idx);
 		if (pfvf->netdev->features & NETIF_F_RXCSUM)
 			skb->ip_summed = CHECKSUM_UNNECESSARY;
 	}
 
-	if (pfvf->flags & OTX2_FLAG_TC_MARK_ENABLED)
+	if (otx2_test_flag(pfvf, OTX2_FLAG_TC_MARK_ENABLED))
 		skb->mark = parse->match_id;
 
 	skb_mark_for_recycle(skb);
@@ -513,7 +513,7 @@ process_cqe:
 		     ((u64)cq->cq_idx << 32) | processed_cqe);
 
 #if IS_ENABLED(CONFIG_RVU_ESWITCH)
-	if (pfvf->flags & OTX2_FLAG_REP_MODE_ENABLED)
+	if (otx2_test_flag(pfvf, OTX2_FLAG_REP_MODE_ENABLED))
 		ndev = pfvf->reps[qidx]->netdev;
 	else
 #endif
@@ -526,7 +526,7 @@ process_cqe:
 
 		if (qidx >= pfvf->hw.tx_queues)
 			qidx -= pfvf->hw.xdp_queues;
-		if (pfvf->flags & OTX2_FLAG_REP_MODE_ENABLED)
+		if (otx2_test_flag(pfvf, OTX2_FLAG_REP_MODE_ENABLED))
 			qidx = 0;
 		txq = netdev_get_tx_queue(ndev, qidx);
 		netdev_tx_completed_queue(txq, tx_pkts, tx_bytes);
@@ -599,11 +599,11 @@ int otx2_napi_handler(struct napi_struct *napi, int budget)
 
 	if (workdone < budget && napi_complete_done(napi, workdone)) {
 		/* If interface is going down, don't re-enable IRQ */
-		if (pfvf->flags & OTX2_FLAG_INTF_DOWN)
+		if (otx2_test_flag(pfvf, OTX2_FLAG_INTF_DOWN))
 			return workdone;
 
 		/* Adjust irq coalese using net_dim */
-		if (pfvf->flags & OTX2_FLAG_ADPTV_INT_COAL_ENABLED)
+		if (otx2_test_flag(pfvf, OTX2_FLAG_ADPTV_INT_COAL_ENABLED))
 			otx2_adjust_adaptive_coalese(pfvf, cq_poll);
 
 		if (likely(cq))
@@ -1137,7 +1137,7 @@ static void otx2_set_txtstamp(struct otx2_nic *pfvf, struct sk_buff *skb,
 
 	if (unlikely(!skb_shinfo(skb)->gso_size &&
 		     (skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP))) {
-		if (unlikely(pfvf->flags & OTX2_FLAG_PTP_ONESTEP_SYNC &&
+		if (unlikely(otx2_test_flag(pfvf, OTX2_FLAG_PTP_ONESTEP_SYNC) &&
 			     otx2_ptp_is_sync(skb, &ptp_offset, &udp_csum_crt))) {
 			origin_tstamp = (struct ptpv2_tstamp *)
 					((u8 *)skb->data + ptp_offset +

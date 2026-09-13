@@ -5011,7 +5011,7 @@ err:
 
 static int be_ndo_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 				 struct net_device *dev, u32 filter_mask,
-				 int nlflags)
+				 int nlflags, struct netlink_ext_ack *extack)
 {
 	struct be_adapter *adapter = netdev_priv(dev);
 	int status = 0;
@@ -5037,7 +5037,7 @@ static int be_ndo_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 	return ndo_dflt_bridge_getlink(skb, pid, seq, dev,
 				       hsw_mode == PORT_FWD_TYPE_VEPA ?
 				       BRIDGE_MODE_VEPA : BRIDGE_MODE_VEB,
-				       0, 0, nlflags, filter_mask, NULL);
+				       0, 0, nlflags, filter_mask, NULL, extack);
 }
 
 static struct be_cmd_work *be_alloc_work(struct be_adapter *adapter,

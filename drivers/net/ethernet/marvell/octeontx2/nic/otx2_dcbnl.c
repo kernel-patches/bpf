@@ -67,7 +67,7 @@ static int otx2_pfc_txschq_alloc_one(struct otx2_nic *pfvf, u8 prio)
 	if (!req)
 		return -ENOMEM;
 
-	/* Request one schq per level upto max level as configured
+	/* Request one schq per level up to max level as configured
 	 * link config level. These rest of the scheduler can be
 	 * same as hw.txschq_list.
 	 */
@@ -412,6 +412,12 @@ static int otx2_dcbnl_ieee_setpfc(struct net_device *dev, struct ieee_pfc *pfc)
 	struct otx2_nic *pfvf = netdev_priv(dev);
 	u8 old_pfc_en;
 	int err;
+
+	if (pfvf->mqprio.rate_limit && pfc->pfc_en) {
+		netdev_err(dev,
+			   "PFC: cannot enable while mqprio bandwidth offload is active\n");
+		return -EOPNOTSUPP;
+	}
 
 	old_pfc_en = pfvf->pfc_en;
 	pfvf->pfc_en = pfc->pfc_en;

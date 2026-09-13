@@ -50,7 +50,15 @@ static int gem_tsu_get_time(struct ptp_clock_info *ptp, struct timespec64 *ts,
 
 	spin_lock_irqsave(&bp->tsu_clk_lock, flags);
 	ptp_read_system_prets(sts);
+	/* ptp_read_system_prets() uses smp_rmb() internally,
+	 * which does not guarantee ordering against MMIO reads.
+	 */
+	rmb();
 	first = gem_readl(bp, TN);
+	/* Ensure the PHC read completes before taking
+	 * the post timestamp.
+	 */
+	rmb();
 	ptp_read_system_postts(sts);
 	secl = gem_readl(bp, TSL);
 	sech = gem_readl(bp, TSH);
@@ -62,7 +70,15 @@ static int gem_tsu_get_time(struct ptp_clock_info *ptp, struct timespec64 *ts,
 		 * (assume all done within 1s)
 		 */
 		ptp_read_system_prets(sts);
+		/* ptp_read_system_prets() uses smp_rmb() internally,
+		 * which does not guarantee ordering against MMIO reads.
+		 */
+		rmb();
 		ts->tv_nsec = gem_readl(bp, TN);
+		/* Ensure the PHC read completes before taking
+		 * the post timestamp.
+		 */
+		rmb();
 		ptp_read_system_postts(sts);
 		secl = gem_readl(bp, TSL);
 		sech = gem_readl(bp, TSH);
@@ -334,6 +350,7 @@ void gem_ptp_init(struct net_device *netdev)
 	bp->tsu_rate = bp->ptp_info->get_tsu_rate(bp);
 	bp->ptp_clock_info.max_adj = bp->ptp_info->get_ptp_max_adj();
 	gem_ptp_init_timer(bp);
+	gem_ptp_init_tsu(bp);
 	bp->ptp_clock = ptp_clock_register(&bp->ptp_clock_info, &netdev->dev);
 	if (IS_ERR(bp->ptp_clock)) {
 		pr_err("ptp clock register failed: %ld\n",
@@ -344,10 +361,6 @@ void gem_ptp_init(struct net_device *netdev)
 		pr_err("ptp clock register failed\n");
 		return;
 	}
-
-	spin_lock_init(&bp->tsu_clk_lock);
-
-	gem_ptp_init_tsu(bp);
 
 	dev_info(&bp->pdev->dev, "%s ptp clock registered.\n",
 		 GEM_PTP_TIMER_NAME);
@@ -418,11 +431,9 @@ int gem_set_hwtst(struct net_device *netdev,
 	case HWTSTAMP_TX_OFF:
 		break;
 	case HWTSTAMP_TX_ONESTEP_SYNC:
-		gem_ptp_set_one_step_sync(bp, 1);
 		tx_bd_control = TSTAMP_ALL_FRAMES;
 		break;
 	case HWTSTAMP_TX_ON:
-		gem_ptp_set_one_step_sync(bp, 0);
 		tx_bd_control = TSTAMP_ALL_FRAMES;
 		break;
 	default:
@@ -431,10 +442,6 @@ int gem_set_hwtst(struct net_device *netdev,
 
 	switch (tstamp_config->rx_filter) {
 	case HWTSTAMP_FILTER_NONE:
-		break;
-	case HWTSTAMP_FILTER_PTP_V1_L4_SYNC:
-		break;
-	case HWTSTAMP_FILTER_PTP_V1_L4_DELAY_REQ:
 		break;
 	case HWTSTAMP_FILTER_PTP_V2_EVENT:
 	case HWTSTAMP_FILTER_PTP_V2_L2_EVENT:
@@ -450,6 +457,8 @@ int gem_set_hwtst(struct net_device *netdev,
 		regval = macb_readl(bp, NCR);
 		macb_writel(bp, NCR, (regval | MACB_BIT(SRTSM)));
 		break;
+	case HWTSTAMP_FILTER_PTP_V1_L4_SYNC:
+	case HWTSTAMP_FILTER_PTP_V1_L4_DELAY_REQ:
 	case HWTSTAMP_FILTER_PTP_V1_L4_EVENT:
 	case HWTSTAMP_FILTER_ALL:
 		rx_bd_control = TSTAMP_ALL_FRAMES;
@@ -459,6 +468,11 @@ int gem_set_hwtst(struct net_device *netdev,
 		tstamp_config->rx_filter = HWTSTAMP_FILTER_NONE;
 		return -ERANGE;
 	}
+
+	if (tstamp_config->tx_type == HWTSTAMP_TX_ONESTEP_SYNC)
+		gem_ptp_set_one_step_sync(bp, 1);
+	else if (tstamp_config->tx_type == HWTSTAMP_TX_ON)
+		gem_ptp_set_one_step_sync(bp, 0);
 
 	bp->tstamp_config = *tstamp_config;
 

@@ -1490,11 +1490,22 @@ static int phy_sfp_connect_phy(void *upstream, struct phy_device *phy)
 {
 	struct phy_device *phydev = upstream;
 	struct net_device *dev = phydev->attached_dev;
+	int ret;
 
-	if (dev)
-		return phy_link_topo_add_phy(dev, phy, PHY_UPSTREAM_PHY, phydev);
+	phydev->has_sfp_mod_phy = true;
+	phy_set_upstream_port(phy, phydev->sfp_cage_port);
 
-	return 0;
+	/* If we aren't attached to a netdev, we can't add the SFP PHY to its
+	 * topology.
+	 */
+	if (!dev)
+		return 0;
+
+	ret = phy_link_topo_add_phy(dev, phy, PHY_UPSTREAM_PHY, phydev);
+	if (ret)
+		phydev->has_sfp_mod_phy = false;
+
+	return ret;
 }
 
 /**
@@ -1512,8 +1523,12 @@ static void phy_sfp_disconnect_phy(void *upstream, struct phy_device *phy)
 	struct phy_device *phydev = upstream;
 	struct net_device *dev = phydev->attached_dev;
 
+	phydev->has_sfp_mod_phy = false;
+
 	if (dev)
 		phy_link_topo_del_phy(dev, phy);
+
+	phy_set_upstream_port(phy, NULL);
 }
 
 /**
@@ -1617,6 +1632,77 @@ static void phy_sfp_link_down(void *upstream)
 		port->ops->link_down(port);
 }
 
+static int phy_add_sfp_mod_port(struct phy_device *phydev)
+{
+	const struct sfp_module_caps *caps;
+	struct phy_port *port;
+	int ret = 0;
+
+	/* Create mod port */
+	port = phy_port_alloc();
+	if (!port)
+		return -ENOMEM;
+
+	port->active = true;
+
+	caps = sfp_get_module_caps(phydev->sfp_bus);
+
+	phy_caps_linkmode_filter_ifaces(port->supported, caps->link_modes,
+					phydev->sfp_cage_port->interfaces);
+
+	if (phydev->attached_dev) {
+		ret = phy_link_topo_add_port(phydev->attached_dev, port);
+		if (ret) {
+			phy_port_destroy(port);
+			return ret;
+		}
+	}
+
+	/* we don't use phy_add_port() here as the module port isn't a direct
+	 * interface from the PHY, but rather an extension to the sfp-bus, that
+	 * is already represented by its own phy_port
+	 */
+	phydev->mod_port = port;
+
+	port->upstream_port = phydev->sfp_cage_port;
+
+	return 0;
+}
+
+static void phy_del_sfp_mod_port(struct phy_device *phydev)
+{
+	if (!phydev->mod_port)
+		return;
+
+	if (phydev->attached_dev)
+		phy_link_topo_del_port(phydev->attached_dev, phydev->mod_port);
+
+	phy_port_destroy(phydev->mod_port);
+	phydev->mod_port = NULL;
+}
+
+static int phy_sfp_module_start(void *upstream)
+{
+	struct phy_device *phydev = upstream;
+
+	/* If there's a downstream SFP module, and it doesn't contain a PHY
+	 * device, let's create a phy_port to represent that module.
+	 */
+	if (!phydev->has_sfp_mod_phy)
+		return phy_add_sfp_mod_port(phydev);
+
+	return 0;
+}
+
+static void phy_sfp_module_stop(void *upstream)
+{
+	struct phy_device *phydev = upstream;
+
+	/* Called upon module removal or upstream removal */
+	if (!phydev->has_sfp_mod_phy)
+		phy_del_sfp_mod_port(phydev);
+}
+
 static const struct sfp_upstream_ops sfp_phydev_ops = {
 	.attach = phy_sfp_attach,
 	.detach = phy_sfp_detach,
@@ -1626,6 +1712,8 @@ static const struct sfp_upstream_ops sfp_phydev_ops = {
 	.link_down = phy_sfp_link_down,
 	.connect_phy = phy_sfp_connect_phy,
 	.disconnect_phy = phy_sfp_disconnect_phy,
+	.module_start = phy_sfp_module_start,
+	.module_stop = phy_sfp_module_stop,
 };
 
 static int phy_add_port(struct phy_device *phydev, struct phy_port *port)
@@ -1670,16 +1758,19 @@ static void phy_del_port(struct phy_device *phydev, struct phy_port *port)
 
 	list_del(&port->head);
 
+	if (phydev->attached_dev)
+		phy_link_topo_del_port(phydev->attached_dev, port);
+
 	phydev->n_ports--;
 }
 
-static int phy_setup_sfp_port(struct phy_device *phydev)
+static struct phy_port *phy_setup_sfp_port(struct phy_device *phydev)
 {
 	struct phy_port *port = phy_port_alloc();
 	int ret;
 
 	if (!port)
-		return -ENOMEM;
+		return ERR_PTR(-ENOMEM);
 
 	port->parent_type = PHY_PORT_PHY;
 	port->phy = phydev;
@@ -1694,10 +1785,12 @@ static int phy_setup_sfp_port(struct phy_device *phydev)
 	 * when attaching the port to the phydev.
 	 */
 	ret = phy_add_port(phydev, port);
-	if (ret)
+	if (ret) {
 		phy_port_destroy(port);
+		return ERR_PTR(ret);
+	}
 
-	return ret;
+	return port;
 }
 
 /**
@@ -1706,33 +1799,187 @@ static int phy_setup_sfp_port(struct phy_device *phydev)
  */
 static int phy_sfp_probe(struct phy_device *phydev)
 {
+	struct phy_port *port = NULL;
 	struct sfp_bus *bus;
-	int ret = 0;
+	int ret;
 
-	if (phydev->mdio.dev.fwnode) {
-		bus = sfp_bus_find_fwnode(phydev->mdio.dev.fwnode);
-		if (IS_ERR(bus))
-			return PTR_ERR(bus);
+	if (!phydev->mdio.dev.fwnode)
+		return 0;
 
-		phydev->sfp_bus = bus;
+	bus = sfp_bus_find_fwnode(phydev->mdio.dev.fwnode);
+	if (IS_ERR(bus))
+		return PTR_ERR(bus);
 
-		ret = sfp_bus_add_upstream(bus, phydev, &sfp_phydev_ops);
-		sfp_bus_put(bus);
+	phydev->sfp_bus = bus;
 
-		if (ret)
-			phydev->sfp_bus = NULL;
+	if (bus) {
+		port = phy_setup_sfp_port(phydev);
+		if (IS_ERR(port)) {
+			ret = PTR_ERR(port);
+			port = NULL;
+			goto out_sfp;
+		}
 	}
 
-	if (!ret && phydev->sfp_bus)
-		ret = phy_setup_sfp_port(phydev);
+	phydev->sfp_cage_port = port;
+
+	ret = sfp_bus_add_upstream(bus, phydev, &sfp_phydev_ops);
+	if (ret)
+		goto out_port;
+
+	/* sfp_bus_add_upstream() grabs a ref to the sfp bus on success, it's
+	 * safe to release it now.
+	 */
+	sfp_bus_put(bus);
 
 	return ret;
+
+out_port:
+	if (port) {
+		phy_del_port(phydev, port);
+		phy_port_destroy(port);
+		phydev->sfp_cage_port = NULL;
+	}
+out_sfp:
+	sfp_bus_put(bus);
+	phydev->sfp_bus = NULL;
+
+	return ret;
+}
+
+/**
+ * phy_sfp_release - release resources set up by phy_sfp_probe()
+ * @phydev: the PHY device
+ *
+ * Release the SFP resources set up by a successful phy_sfp_probe(). Unregister
+ * the upstream before destroying its phy_port, so SFP upstream callbacks cannot
+ * race with port destruction.
+ */
+static void phy_sfp_release(struct phy_device *phydev)
+{
+	struct phy_port *port, *tmp;
+
+	sfp_bus_del_upstream(phydev->sfp_bus);
+	phydev->sfp_bus = NULL;
+
+	list_for_each_entry_safe(port, tmp, &phydev->ports, head) {
+		if (!port->is_sfp)
+			continue;
+
+		phy_del_port(phydev, port);
+		phy_port_destroy(port);
+	}
 }
 
 static bool phy_drv_supports_irq(const struct phy_driver *phydrv)
 {
 	return phydrv->config_intr && phydrv->handle_interrupt;
 }
+
+/**
+ * phy_detach_internal - detach a PHY device from its network device
+ * @phydev: target phy_device struct
+ * @notify_bus: whether to notify the MDIO bus about the PHY detach
+ *
+ * This detaches the phy device from its network device and the phy
+ * driver, and drops the reference count taken in phy_attach_direct().
+ */
+static void phy_detach_internal(struct phy_device *phydev, bool notify_bus)
+{
+	struct net_device *dev = phydev->attached_dev;
+	struct module *ndev_owner = NULL;
+	struct mii_bus *bus;
+
+	if (phydev->devlink) {
+		device_link_del(phydev->devlink);
+		phydev->devlink = NULL;
+	}
+
+	if (phydev->sysfs_links) {
+		if (dev)
+			sysfs_remove_link(&dev->dev.kobj, "phydev");
+		sysfs_remove_link(&phydev->mdio.dev.kobj, "attached_dev");
+	}
+
+	if (!phydev->attached_dev)
+		sysfs_remove_file(&phydev->mdio.dev.kobj,
+				  &dev_attr_phy_standalone.attr);
+
+	phy_suspend(phydev);
+
+	if (notify_bus && phydev->mdio.bus->notify_phy_detach)
+		phydev->mdio.bus->notify_phy_detach(phydev);
+
+	if (dev) {
+		struct hwtstamp_provider *hwprov;
+
+		/* hwprov may technically be protected by ops lock but
+		 * not for devices with a phydev, see phy_link_topo_add_phy()
+		 */
+		hwprov = rtnl_dereference(dev->hwprov);
+		/* Disable timestamp if it is the one selected */
+		if (hwprov && hwprov->phydev == phydev) {
+			rcu_assign_pointer(dev->hwprov, NULL);
+			kfree_rcu(hwprov, rcu_head);
+		}
+
+		phydev->attached_dev->phydev = NULL;
+		phydev->attached_dev = NULL;
+		phy_link_topo_del_phy(dev, phydev);
+		if (phydev->mod_port)
+			phy_link_topo_del_port(dev, phydev->mod_port);
+	}
+
+	phydev->phy_link_change = NULL;
+	phydev->phylink = NULL;
+
+	if (phydev->mdio.dev.driver)
+		module_put(phydev->mdio.dev.driver->owner);
+
+	/* If the device had no specific driver before (i.e. - it
+	 * was using the generic driver), we unbind the device
+	 * from the generic driver so that there's a chance a
+	 * real driver could be loaded
+	 */
+	if (phydev->is_genphy_driven) {
+		device_release_driver(&phydev->mdio.dev);
+		phydev->is_genphy_driven = 0;
+	}
+
+	/* Whatever this attachment did to the interrupt, the bus that
+	 * described it still knows the number. Take it back from there.
+	 */
+	phydev->irq = phydev->mdio.bus->irq[phydev->mdio.addr];
+
+	/* Assert the reset signal */
+	phy_device_reset(phydev, 1);
+
+	/*
+	 * The phydev might go away on the put_device() below, so avoid
+	 * a use-after-free bug by reading the underlying bus first.
+	 */
+	bus = phydev->mdio.bus;
+
+	put_device(&phydev->mdio.dev);
+	if (dev)
+		ndev_owner = dev->dev.parent->driver->owner;
+	if (ndev_owner != bus->owner)
+		module_put(bus->owner);
+}
+
+/**
+ * phy_detach - detach a PHY device from its network device
+ * @phydev: target phy_device struct
+ *
+ * This detaches the phy device from its network device and the phy
+ * driver, and drops the reference count taken in phy_attach_direct().
+ */
+void phy_detach(struct phy_device *phydev)
+{
+	/* cleanup including bus notification */
+	phy_detach_internal(phydev, true);
+}
+EXPORT_SYMBOL(phy_detach);
 
 /**
  * phy_attach_direct - attach a network device to a given PHY device pointer
@@ -1815,6 +2062,12 @@ int phy_attach_direct(struct net_device *dev, struct phy_device *phydev,
 		err = phy_link_topo_add_phy(dev, phydev, PHY_UPSTREAM_MAC, dev);
 		if (err)
 			goto error;
+
+		if (phydev->mod_port) {
+			err = phy_link_topo_add_port(dev, phydev->mod_port);
+			if (err)
+				goto error;
+		}
 	}
 
 	/* Some Ethernet drivers try to connect to a PHY device before
@@ -1876,6 +2129,12 @@ int phy_attach_direct(struct net_device *dev, struct phy_device *phydev,
 	if (err)
 		goto error;
 
+	if (phydev->mdio.bus->notify_phy_attach) {
+		err = phydev->mdio.bus->notify_phy_attach(phydev);
+		if (err)
+			goto error;
+	}
+
 	phy_resume(phydev);
 
 	/**
@@ -1890,8 +2149,8 @@ int phy_attach_direct(struct net_device *dev, struct phy_device *phydev,
 	return err;
 
 error:
-	/* phy_detach() does all of the cleanup below */
-	phy_detach(phydev);
+	/* phy_detach_internal() does all of the cleanup below */
+	phy_detach_internal(phydev, false);
 	return err;
 
 error_module_put:
@@ -1905,86 +2164,6 @@ error_put_device:
 	return err;
 }
 EXPORT_SYMBOL(phy_attach_direct);
-
-/**
- * phy_detach - detach a PHY device from its network device
- * @phydev: target phy_device struct
- *
- * This detaches the phy device from its network device and the phy
- * driver, and drops the reference count taken in phy_attach_direct().
- */
-void phy_detach(struct phy_device *phydev)
-{
-	struct net_device *dev = phydev->attached_dev;
-	struct module *ndev_owner = NULL;
-	struct mii_bus *bus;
-
-	if (phydev->devlink) {
-		device_link_del(phydev->devlink);
-		phydev->devlink = NULL;
-	}
-
-	if (phydev->sysfs_links) {
-		if (dev)
-			sysfs_remove_link(&dev->dev.kobj, "phydev");
-		sysfs_remove_link(&phydev->mdio.dev.kobj, "attached_dev");
-	}
-
-	if (!phydev->attached_dev)
-		sysfs_remove_file(&phydev->mdio.dev.kobj,
-				  &dev_attr_phy_standalone.attr);
-
-	phy_suspend(phydev);
-	if (dev) {
-		struct hwtstamp_provider *hwprov;
-
-		/* hwprov may technically be protected by ops lock but
-		 * not for devices with a phydev, see phy_link_topo_add_phy()
-		 */
-		hwprov = rtnl_dereference(dev->hwprov);
-		/* Disable timestamp if it is the one selected */
-		if (hwprov && hwprov->phydev == phydev) {
-			rcu_assign_pointer(dev->hwprov, NULL);
-			kfree_rcu(hwprov, rcu_head);
-		}
-
-		phydev->attached_dev->phydev = NULL;
-		phydev->attached_dev = NULL;
-		phy_link_topo_del_phy(dev, phydev);
-	}
-
-	phydev->phy_link_change = NULL;
-	phydev->phylink = NULL;
-
-	if (phydev->mdio.dev.driver)
-		module_put(phydev->mdio.dev.driver->owner);
-
-	/* If the device had no specific driver before (i.e. - it
-	 * was using the generic driver), we unbind the device
-	 * from the generic driver so that there's a chance a
-	 * real driver could be loaded
-	 */
-	if (phydev->is_genphy_driven) {
-		device_release_driver(&phydev->mdio.dev);
-		phydev->is_genphy_driven = 0;
-	}
-
-	/* Assert the reset signal */
-	phy_device_reset(phydev, 1);
-
-	/*
-	 * The phydev might go away on the put_device() below, so avoid
-	 * a use-after-free bug by reading the underlying bus first.
-	 */
-	bus = phydev->mdio.bus;
-
-	put_device(&phydev->mdio.dev);
-	if (dev)
-		ndev_owner = dev->dev.parent->driver->owner;
-	if (ndev_owner != bus->owner)
-		module_put(bus->owner);
-}
-EXPORT_SYMBOL(phy_detach);
 
 int phy_suspend(struct phy_device *phydev)
 {
@@ -3454,6 +3633,7 @@ static int phy_default_setup_single_port(struct phy_device *phydev)
 {
 	struct phy_port *port = phy_port_alloc();
 	unsigned long mode;
+	int ret;
 
 	if (!port)
 		return -ENOMEM;
@@ -3480,9 +3660,11 @@ static int phy_default_setup_single_port(struct phy_device *phydev)
 		port->pairs = max_t(int, port->pairs,
 				    ethtool_linkmode_n_pairs(mode));
 
-	phy_add_port(phydev, port);
+	ret = phy_add_port(phydev, port);
+	if (ret)
+		phy_port_destroy(port);
 
-	return 0;
+	return ret;
 }
 
 static int of_phy_ports(struct phy_device *phydev)
@@ -3547,13 +3729,13 @@ static int phy_setup_ports(struct phy_device *phydev)
 	if (!phydev->is_genphy_driven) {
 		ret = phy_sfp_probe(phydev);
 		if (ret)
-			goto out;
+			goto err_ports;
 	}
 
 	if (phydev->n_ports < phydev->max_n_ports) {
 		ret = phy_default_setup_single_port(phydev);
 		if (ret)
-			goto out;
+			goto err_sfp;
 	}
 
 	linkmode_zero(ports_supported);
@@ -3580,7 +3762,9 @@ static int phy_setup_ports(struct phy_device *phydev)
 
 	return 0;
 
-out:
+err_sfp:
+	phy_sfp_release(phydev);
+err_ports:
 	phy_cleanup_ports(phydev);
 	return ret;
 }
@@ -3603,6 +3787,25 @@ struct phy_port *phy_get_sfp_port(struct phy_device *phydev)
 	return NULL;
 }
 EXPORT_SYMBOL_GPL(phy_get_sfp_port);
+
+/**
+ * phy_set_upstream_port() - Sets the phy_port controlling the MII this PHY is
+ *			     attached to.
+ * @phydev: pointer to the PHY device we set the upstream of.
+ * @port: The phy_port upstream of this PHY, can be NULL.
+ */
+void phy_set_upstream_port(struct phy_device *phydev, struct phy_port *port)
+{
+	struct phy_port *local_port;
+
+	ASSERT_RTNL();
+
+	phydev->upstream_port = port;
+
+	phy_for_each_port(phydev, local_port)
+		local_port->upstream_port = port;
+}
+EXPORT_SYMBOL_GPL(phy_set_upstream_port);
 
 /**
  * fwnode_mdio_find_device - Given a fwnode, find the mdio_device
@@ -3706,7 +3909,7 @@ static int phy_probe(struct device *dev)
 	if (phydev->drv->probe) {
 		err = phydev->drv->probe(phydev);
 		if (err)
-			goto out;
+			goto out_reset;
 	}
 
 	phy_disable_interrupts(phydev);
@@ -3727,7 +3930,7 @@ static int phy_probe(struct device *dev)
 		err = genphy_read_abilities(phydev);
 
 	if (err)
-		goto out;
+		goto out_remove;
 
 	if (!linkmode_test_bit(ETHTOOL_LINK_MODE_Autoneg_BIT,
 			       phydev->supported))
@@ -3744,7 +3947,7 @@ static int phy_probe(struct device *dev)
 
 	err = phy_setup_ports(phydev);
 	if (err)
-		goto out;
+		goto out_remove;
 
 	phy_advertise_supported(phydev);
 
@@ -3753,7 +3956,7 @@ static int phy_probe(struct device *dev)
 	 */
 	err = genphy_c45_read_eee_adv(phydev, phydev->advertising_eee);
 	if (err)
-		goto out;
+		goto out_sfp_release;
 
 	/* Get the EEE modes we want to prohibit. */
 	of_set_phy_eee_broken(phydev);
@@ -3793,9 +3996,6 @@ static int phy_probe(struct device *dev)
 				 phydev->supported);
 	}
 
-	/* Set the state to READY by default */
-	phydev->state = PHY_READY;
-
 	/* Register the PHY LED triggers */
 	if (!phydev->is_on_sfp_module)
 		phy_led_triggers_register(phydev);
@@ -3806,20 +4006,27 @@ static int phy_probe(struct device *dev)
 	if (IS_ENABLED(CONFIG_PHYLIB_LEDS) && !phy_driver_is_genphy(phydev)) {
 		err = of_phy_leds(phydev);
 		if (err)
-			goto out;
+			goto out_unreg_led_triggers;
 	}
+
+	/* Set the state to READY by default */
+	phydev->state = PHY_READY;
 
 	return 0;
 
-out:
-	sfp_bus_del_upstream(phydev->sfp_bus);
-	phydev->sfp_bus = NULL;
-
-	phy_cleanup_ports(phydev);
-
+out_unreg_led_triggers:
 	if (!phydev->is_on_sfp_module)
 		phy_led_triggers_unregister(phydev);
 
+out_sfp_release:
+	phy_sfp_release(phydev);
+	phy_cleanup_ports(phydev);
+
+out_remove:
+	if (phydev->drv->remove)
+		phydev->drv->remove(phydev);
+
+out_reset:
 	/* Re-assert the reset signal on error */
 	phy_device_reset(phydev, 1);
 
@@ -3840,9 +4047,7 @@ static int phy_remove(struct device *dev)
 
 	phydev->state = PHY_DOWN;
 
-	sfp_bus_del_upstream(phydev->sfp_bus);
-	phydev->sfp_bus = NULL;
-
+	phy_sfp_release(phydev);
 	phy_cleanup_ports(phydev);
 
 	if (phydev->drv && phydev->drv->remove)

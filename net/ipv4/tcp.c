@@ -843,7 +843,7 @@ ssize_t tcp_splice_read(struct socket *sock, loff_t *ppos,
 				break;
 			if (sock_flag(sk, SOCK_DONE))
 				break;
-			if (sk->sk_err) {
+			if (READ_ONCE(sk->sk_err)) {
 				ret = sock_error(sk);
 				break;
 			}
@@ -1169,8 +1169,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 			zc = MSG_SPLICE_PAGES;
 	}
 
-	if (!sockc_err && sockc.dmabuf_id &&
-	    (!(flags & MSG_ZEROCOPY) || !sock_flag(sk, SOCK_ZEROCOPY))) {
+	if (!sockc_err && sockc.dmabuf_id && (zc != MSG_ZEROCOPY || !binding)) {
 		err = -EINVAL;
 		goto out_err;
 	}
@@ -1228,7 +1227,7 @@ restart:
 	mss_now = tcp_send_mss(sk, &size_goal, flags);
 
 	err = -EPIPE;
-	if (sk->sk_err || (sk->sk_shutdown & SEND_SHUTDOWN))
+	if (READ_ONCE(sk->sk_err) || (sk->sk_shutdown & SEND_SHUTDOWN))
 		goto do_error;
 
 	while (msg_data_left(msg)) {
@@ -2760,7 +2759,7 @@ static int tcp_recvmsg_locked(struct sock *sk, struct msghdr *msg, size_t len,
 			if (sock_flag(sk, SOCK_DONE))
 				break;
 
-			if (sk->sk_err) {
+			if (READ_ONCE(sk->sk_err)) {
 				copied = sock_error(sk);
 				break;
 			}

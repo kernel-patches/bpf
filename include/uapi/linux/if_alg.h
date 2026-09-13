@@ -14,6 +14,7 @@
 #ifndef _UAPI_LINUX_IF_ALG_H
 #define _UAPI_LINUX_IF_ALG_H
 
+#include <linux/stddef.h>
 #include <linux/types.h>
 
 struct sockaddr_alg {

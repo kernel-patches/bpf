@@ -19,13 +19,13 @@ struct ice_pf;
  *
  * This structure contains data used to maintain a list of adapter ports
  *
- * @ports: list of ports
+ * @list: list of ports
  * @lock: protect access to the ports list
  */
 struct ice_port_list {
-	struct list_head ports;
+	struct list_head list;
 	/* To synchronize the ports list operations */
-	struct mutex lock;
+	spinlock_t lock;
 };
 
 /**

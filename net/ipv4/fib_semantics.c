@@ -610,13 +610,14 @@ static int fib_detect_death(struct fib_info *fi, int order,
 			    int dflt)
 {
 	const struct fib_nh_common *nhc = fib_info_nhc(fi, 0);
-	struct neighbour *n;
+	struct net *net = fi->fib_net;
 	int state = NUD_NONE;
+	struct neighbour *n;
 
 	if (likely(nhc->nhc_gw_family == AF_INET))
-		n = neigh_lookup(&arp_tbl, &nhc->nhc_gw.ipv4, nhc->nhc_dev);
+		n = neigh_lookup(arp_table(net), &nhc->nhc_gw.ipv4, nhc->nhc_dev);
 	else if (IS_ENABLED(CONFIG_IPV6) && nhc->nhc_gw_family == AF_INET6)
-		n = neigh_lookup(&nd_tbl, &nhc->nhc_gw.ipv6, nhc->nhc_dev);
+		n = neigh_lookup(nd_table(net), &nhc->nhc_gw.ipv6, nhc->nhc_dev);
 	else
 		n = NULL;
 
@@ -2204,7 +2205,7 @@ void fib_select_multipath(struct fib_result *res, int hash,
 		    (use_neigh && !fib_good_nh(nexthop_nh)))
 			continue;
 
-		if (saddr && nexthop_nh->nh_saddr == saddr)
+		if (saddr && READ_ONCE(nexthop_nh->nh_saddr) == saddr)
 			nh_score += 2;
 		if (hash <= nh_upper_bound)
 			nh_score++;
