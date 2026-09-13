@@ -1044,62 +1044,79 @@ codegen_progs_skeleton(struct bpf_object *obj, size_t prog_cnt, bool populate_li
 }
 
 static int walk_st_ops_shadow_vars(struct btf *btf, const char *ident,
-				   const struct btf_type *map_type, __u32 map_type_id)
+				   const struct btf_type *map_type)
 {
+	enum st_ops_shadow_kind {
+		ST_OPS_SHADOW_SCALAR,
+		ST_OPS_SHADOW_FUNC_PTR,
+		ST_OPS_SHADOW_OPAQUE,
+	};
 	LIBBPF_OPTS(btf_dump_emit_type_decl_opts, opts, .indent_level = 3);
 	const struct btf_type *member_type;
-	__u32 offset, next_offset = 0;
+	__u64 bitfield_end = 0, map_bits;
+	__u32 bit_offset, bitfield_size;
+	__u32 map_size, offset, next_offset = 0;
 	const struct btf_member *m;
 	struct btf_dump *d = NULL;
 	const char *member_name;
 	__u32 member_type_id;
-	int i, err = 0, n;
-	int size;
+	int align, err = 0, i, max_align = 1, n, size;
+	enum st_ops_shadow_kind shadow_kind;
 
 	d = btf_dump__new(btf, codegen_btf_dump_printf, NULL, NULL);
 	if (!d)
 		return -errno;
 
+	map_size = map_type->size;
+	map_bits = (__u64)map_size * 8;
 	n = btf_vlen(map_type);
 	for (i = 0, m = btf_members(map_type); i < n; i++, m++) {
-		member_type = skip_mods_and_typedefs(btf, m->type, &member_type_id);
 		member_name = btf__name_by_offset(btf, m->name_off);
+		bit_offset = btf_member_bit_offset(map_type, i);
+		bitfield_size = btf_member_bitfield_size(map_type, i);
+		if (bitfield_size) {
+			if ((__u64)bit_offset < bitfield_end ||
+			    (__u64)bit_offset < (__u64)next_offset * 8 ||
+			    bit_offset > map_bits ||
+			    bitfield_size > map_bits - bit_offset) {
+				p_err("Invalid bitfield layout for struct_ops member %s",
+				      member_name);
+				err = -EINVAL;
+				goto out;
+			}
+			bitfield_end = (__u64)bit_offset + bitfield_size;
+			continue;
+		}
 
-		offset = m->offset / 8;
-		if (next_offset < offset)
-			printf("\t\t\tchar __padding_%d[%u];\n", i, offset - next_offset);
+		if (bit_offset % 8 || bit_offset < bitfield_end) {
+			p_err("Invalid offset for struct_ops member %s", member_name);
+			err = -EINVAL;
+			goto out;
+		}
 
+		offset = bit_offset / 8;
+		if (offset < next_offset || offset > map_size) {
+			p_err("Invalid offset for struct_ops member %s", member_name);
+			err = -EINVAL;
+			goto out;
+		}
+
+		member_type = skip_mods_and_typedefs(btf, m->type, &member_type_id);
 		switch (btf_kind(member_type)) {
 		case BTF_KIND_INT:
 		case BTF_KIND_FLOAT:
 		case BTF_KIND_ENUM:
 		case BTF_KIND_ENUM64:
-			/* scalar type */
-			printf("\t\t\t");
-			opts.field_name = member_name;
-			err = btf_dump__emit_type_decl(d, member_type_id, &opts);
-			if (err) {
-				p_err("Failed to emit type declaration for %s: %d", member_name, err);
-				goto out;
-			}
-			printf(";\n");
-
+			shadow_kind = ST_OPS_SHADOW_SCALAR;
 			size = btf__resolve_size(btf, member_type_id);
-			if (size < 0) {
-				p_err("Failed to resolve size of %s: %d\n", member_name, size);
-				err = size;
-				goto out;
-			}
-
-			next_offset = offset + size;
+			align = btf__align_of(btf, member_type_id);
 			break;
 
 		case BTF_KIND_PTR:
 			if (resolve_func_ptr(btf, m->type, NULL)) {
-				/* Function pointer */
-				printf("\t\t\tstruct bpf_program *%s;\n", member_name);
-
-				next_offset = offset + sizeof(void *);
+				shadow_kind = ST_OPS_SHADOW_FUNC_PTR;
+				size = sizeof(void *);
+				align = __alignof__(void *);
 				break;
 			}
 			/* All pointer types are unsupported except for
@@ -1108,34 +1125,64 @@ static int walk_st_ops_shadow_vars(struct btf *btf, const char *ident,
 			fallthrough;
 
 		default:
-			/* Unsupported types
-			 *
-			 * Types other than scalar types and function
-			 * pointers are currently not supported in order to
-			 * prevent conflicts in the generated code caused
-			 * by multiple definitions. For instance, if the
-			 * struct type FOO is used in a struct_ops map,
-			 * bpftool has to generate definitions for FOO,
-			 * which may result in conflicts if FOO is defined
-			 * in different skeleton files.
-			 */
+			shadow_kind = ST_OPS_SHADOW_OPAQUE;
 			size = btf__resolve_size(btf, member_type_id);
-			if (size < 0) {
-				p_err("Failed to resolve size of %s: %d\n", member_name, size);
-				err = size;
-				goto out;
-			}
-			printf("\t\t\tchar __unsupported_%d[%d];\n", i, size);
-
-			next_offset = offset + size;
+			align = 1;
 			break;
 		}
+
+		if (size < 0 || align < 0) {
+			err = size < 0 ? size : align;
+			p_err("Failed to resolve layout of %s: %d", member_name, err);
+			goto out;
+		}
+		if ((__u32)size > map_size - offset ||
+		    (align > 1 && offset % align)) {
+			p_err("Invalid layout for struct_ops member %s", member_name);
+			err = -EINVAL;
+			goto out;
+		}
+
+		if (next_offset < offset)
+			printf("\t\t\tchar __padding_%d[%u];\n", i, offset - next_offset);
+
+		switch (shadow_kind) {
+		case ST_OPS_SHADOW_SCALAR:
+			printf("\t\t\t");
+			opts.field_name = member_name;
+			err = btf_dump__emit_type_decl(d, member_type_id, &opts);
+			if (err) {
+				p_err("Failed to emit type declaration for %s: %d",
+				      member_name, err);
+				goto out;
+			}
+			printf(";\n");
+			break;
+		case ST_OPS_SHADOW_FUNC_PTR:
+			printf("\t\t\tstruct bpf_program *%s;\n", member_name);
+			break;
+		case ST_OPS_SHADOW_OPAQUE:
+			/* Avoid emitting named types that might conflict with
+			 * definitions from other skeletons.
+			 */
+			printf("\t\t\tchar __unsupported_%d[%d];\n", i, size);
+			break;
+		default:
+			__builtin_unreachable();
+		}
+
+		next_offset = offset + size;
+		max_align = max(max_align, align);
+		bitfield_end = 0;
 	}
 
-	/* Cannot fail since it must be a struct type */
-	size = btf__resolve_size(btf, map_type_id);
-	if (next_offset < (__u32)size)
-		printf("\t\t\tchar __padding_end[%u];\n", size - next_offset);
+	if (map_size % max_align) {
+		p_err("Invalid size for struct_ops type %s", ident);
+		err = -EINVAL;
+		goto out;
+	}
+	if (next_offset < map_size)
+		printf("\t\t\tchar __padding_end[%u];\n", map_size - next_offset);
 
 out:
 	btf_dump__free(d);
@@ -1177,7 +1224,7 @@ static int gen_st_ops_shadow_type(const char *obj_name, struct btf *btf, const c
 
 	printf("\t\tstruct %s__%s__%s {\n", obj_name, ident, type_name);
 
-	err = walk_st_ops_shadow_vars(btf, ident, map_type, map_type_id);
+	err = walk_st_ops_shadow_vars(btf, ident, map_type);
 	if (err)
 		return err;
 
