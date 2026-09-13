@@ -1175,6 +1175,7 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 	const struct btf_member *member, *kern_member, *kern_data_member;
 	const struct btf_type *type, *kern_type, *kern_vtype;
 	__u32 i, kern_type_id, kern_vtype_id, kern_data_off;
+	__u32 kern_data_bit_off, kern_data_member_idx;
 	struct bpf_object *obj = map->obj;
 	const struct btf *btf = obj->btf;
 	struct bpf_struct_ops *st_ops;
@@ -1195,6 +1196,25 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 		return err;
 
 	kern_btf = mod_btf ? mod_btf->btf : obj->btf_vmlinux;
+	kern_data_member_idx = kern_data_member - btf_members(kern_vtype);
+	if (btf_member_bitfield_size(kern_vtype, kern_data_member_idx)) {
+		pr_warn("struct_ops init_kern %s: kernel data member is a bitfield\n",
+			map->name);
+		return -ENOTSUP;
+	}
+	kern_data_bit_off = btf_member_bit_offset(kern_vtype, kern_data_member_idx);
+	if (kern_data_bit_off % 8) {
+		pr_warn("struct_ops init_kern %s: kernel data member has a non-byte-aligned offset\n",
+			map->name);
+		return -EINVAL;
+	}
+	kern_data_off = kern_data_bit_off / 8;
+	if (kern_data_off > kern_vtype->size ||
+	    kern_type->size > kern_vtype->size - kern_data_off) {
+		pr_warn("struct_ops init_kern %s: kernel data member is outside the %u-byte kernel value type\n",
+			map->name, kern_vtype->size);
+		return -EINVAL;
+	}
 
 	pr_debug("struct_ops init_kern %s: type_id:%u kern_type_id:%u kern_vtype_id:%u\n",
 		 map->name, st_ops->type_id, kern_type_id, kern_vtype_id);
@@ -1208,29 +1228,50 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 		return -ENOMEM;
 
 	data = st_ops->data;
-	kern_data_off = kern_data_member->offset / 8;
 	kern_data = st_ops->kern_vdata + kern_data_off;
 
 	member = btf_members(type);
 	for (i = 0; i < btf_vlen(type); i++, member++) {
 		const struct btf_type *mtype, *kern_mtype;
-		__u32 mtype_id, kern_mtype_id;
+		__u32 bit_offset, mtype_id, kern_mtype_id;
 		void *mdata, *kern_mdata;
 		struct bpf_program *prog;
 		__s64 msize, kern_msize;
+		__u64 maccess_size;
 		__u32 moff, kern_moff;
 		__u32 kern_member_idx;
 		const char *mname;
 
 		mname = btf__name_by_offset(btf, member->name_off);
-		moff = member->offset / 8;
-		mdata = data + moff;
+		if (btf_member_bitfield_size(type, i)) {
+			pr_warn("struct_ops init_kern %s: local bitfield %s is not supported\n",
+				map->name, mname);
+			return -ENOTSUP;
+		}
+
 		msize = btf__resolve_size(btf, member->type);
 		if (msize < 0) {
 			pr_warn("struct_ops init_kern %s: failed to resolve the size of member %s\n",
 				map->name, mname);
 			return msize;
 		}
+		mtype = skip_mods_and_typedefs(btf, member->type, &mtype_id);
+		maccess_size = msize;
+		if (btf_is_ptr(mtype) && maccess_size < sizeof(prog))
+			maccess_size = sizeof(prog);
+		bit_offset = btf_member_bit_offset(type, i);
+		if (bit_offset % 8) {
+			pr_warn("struct_ops init_kern %s: member %s has a non-byte-aligned offset\n",
+				map->name, mname);
+			return -EINVAL;
+		}
+		moff = bit_offset / 8;
+		if (moff > type->size || maccess_size > type->size - moff) {
+			pr_warn("struct_ops init_kern %s: member %s is outside the %u-byte local struct_ops type\n",
+				map->name, mname, type->size);
+			return -EINVAL;
+		}
+		mdata = data + moff;
 
 		kern_member = find_member_by_name(kern_btf, kern_type, mname);
 		if (!kern_member) {
@@ -1259,17 +1300,33 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 		}
 
 		kern_member_idx = kern_member - btf_members(kern_type);
-		if (btf_member_bitfield_size(type, i) ||
-		    btf_member_bitfield_size(kern_type, kern_member_idx)) {
-			pr_warn("struct_ops init_kern %s: bitfield %s is not supported\n",
+		if (btf_member_bitfield_size(kern_type, kern_member_idx)) {
+			pr_warn("struct_ops init_kern %s: kernel bitfield %s is not supported\n",
 				map->name, mname);
 			return -ENOTSUP;
 		}
 
-		kern_moff = kern_member->offset / 8;
+		kern_msize = btf__resolve_size(kern_btf, kern_member->type);
+		if (kern_msize < 0) {
+			pr_warn("struct_ops init_kern %s: failed to resolve the kernel size of member %s\n",
+				map->name, mname);
+			return kern_msize;
+		}
+		bit_offset = btf_member_bit_offset(kern_type, kern_member_idx);
+		if (bit_offset % 8) {
+			pr_warn("struct_ops init_kern %s: kernel member %s has a non-byte-aligned offset\n",
+				map->name, mname);
+			return -EINVAL;
+		}
+		kern_moff = bit_offset / 8;
+		if (kern_moff > kern_type->size ||
+		    (__u64)kern_msize > kern_type->size - kern_moff) {
+			pr_warn("struct_ops init_kern %s: kernel member %s is outside the %u-byte kernel struct_ops type\n",
+				map->name, mname, kern_type->size);
+			return -EINVAL;
+		}
 		kern_mdata = kern_data + kern_moff;
 
-		mtype = skip_mods_and_typedefs(btf, member->type, &mtype_id);
 		kern_mtype = skip_mods_and_typedefs(kern_btf, kern_member->type,
 						    &kern_mtype_id);
 		if (BTF_INFO_KIND(mtype->info) !=
@@ -1281,7 +1338,7 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 		}
 
 		if (btf_is_ptr(mtype)) {
-			prog = *(void **)mdata;
+			memcpy(&prog, mdata, sizeof(prog));
 			/* just like for !kern_member case above, reset declaratively
 			 * set (at compile time) program's autload to false,
 			 * if user replaced it with another program or NULL
@@ -1352,8 +1409,7 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 			continue;
 		}
 
-		kern_msize = btf__resolve_size(kern_btf, kern_mtype_id);
-		if (kern_msize < 0 || msize != kern_msize) {
+		if (msize != kern_msize) {
 			pr_warn("struct_ops init_kern %s: Error in size of member %s: %zd != %zd(kernel)\n",
 				map->name, mname, (ssize_t)msize,
 				(ssize_t)kern_msize);
