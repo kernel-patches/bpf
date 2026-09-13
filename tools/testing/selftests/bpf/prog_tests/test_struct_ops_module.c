@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2024 Meta Platforms, Inc. and affiliates. */
 #include <test_progs.h>
+#include <bpf/btf.h>
 #include <time.h>
 
 #include <sys/epoll.h>
@@ -147,6 +148,91 @@ static void test_struct_ops_not_zeroed(void)
 	err = struct_ops_module__load(skel);
 	ASSERT_ERR(err, "struct_ops_module_load_not_zeroed_op");
 
+	struct_ops_module__destroy(skel);
+}
+
+static void test_struct_ops_local_bitfield(void)
+{
+	struct struct_ops_module *skel;
+	char *log = NULL;
+	int err;
+
+	skel = struct_ops_module__open();
+	if (!ASSERT_OK_PTR(skel, "struct_ops_module_open_local_bitfield"))
+		return;
+
+	if (!ASSERT_EQ(offsetof(typeof(*skel->struct_ops.testmod_local_bitfield), data),
+		       0, "local_bitfield_data_offset") ||
+	    !ASSERT_EQ(offsetof(typeof(*skel->struct_ops.testmod_local_bitfield), onebyte),
+		       8, "local_bitfield_onebyte_offset"))
+		goto cleanup;
+	if (!ASSERT_EQ(sizeof(*skel->struct_ops.testmod_local_bitfield),
+		       bpf_map__value_size(skel->maps.testmod_local_bitfield),
+		       "local_bitfield_shadow_size"))
+		goto cleanup;
+
+	/* Normal fields around the unsupported bitfield remain accessible. */
+	skel->struct_ops.testmod_local_bitfield->data = 1;
+	skel->struct_ops.testmod_local_bitfield->onebyte = 1;
+
+	err = bpf_map__set_autocreate(skel->maps.testmod_local_bitfield, true);
+	if (!ASSERT_OK(err, "enable_local_bitfield_map"))
+		goto cleanup;
+
+	if (start_libbpf_log_capture())
+		goto cleanup;
+	err = struct_ops_module__load(skel);
+	log = stop_libbpf_log_capture();
+	if (!ASSERT_EQ(err, -ENOTSUP, "struct_ops_module_load_local_bitfield"))
+		goto cleanup;
+	ASSERT_HAS_SUBSTR(log, "local bitfield extra_bitfield is not supported",
+			  "local_bitfield_rejection_log");
+
+cleanup:
+	free(log);
+	struct_ops_module__destroy(skel);
+}
+
+static void test_struct_ops_bad_member_offset(void)
+{
+	struct struct_ops_module *skel;
+	struct btf_member *member;
+	struct btf_type *type;
+	struct btf *btf;
+	char *log = NULL;
+	int err, type_id;
+
+	skel = struct_ops_module__open();
+	if (!ASSERT_OK_PTR(skel, "struct_ops_module_open_bad_offset"))
+		return;
+
+	btf = bpf_object__btf(skel->obj);
+	type_id = btf__find_by_name_kind(btf, "bpf_testmod_ops___bad_offset",
+					 BTF_KIND_STRUCT);
+	if (!ASSERT_GT(type_id, 0, "find_bad_offset_type"))
+		goto cleanup;
+	type = (struct btf_type *)btf__type_by_id(btf, type_id);
+	if (!ASSERT_OK_PTR(type, "get_bad_offset_type"))
+		goto cleanup;
+
+	member = btf_members(type);
+	member->offset = type->size * 8;
+
+	err = bpf_map__set_autocreate(skel->maps.testmod_bad_offset, true);
+	if (!ASSERT_OK(err, "enable_bad_offset_map"))
+		goto cleanup;
+
+	if (start_libbpf_log_capture())
+		goto cleanup;
+	err = struct_ops_module__load(skel);
+	log = stop_libbpf_log_capture();
+	if (!ASSERT_EQ(err, -EINVAL, "struct_ops_module_load_bad_offset"))
+		goto cleanup;
+	ASSERT_HAS_SUBSTR(log, "member extra is outside the 4-byte local struct_ops type",
+			  "bad_offset_rejection_log");
+
+cleanup:
+	free(log);
 	struct_ops_module__destroy(skel);
 }
 
@@ -304,6 +390,10 @@ void serial_test_struct_ops_module(void)
 		test_struct_ops_load();
 	if (test__start_subtest("struct_ops_not_zeroed"))
 		test_struct_ops_not_zeroed();
+	if (test__start_subtest("struct_ops_local_bitfield"))
+		test_struct_ops_local_bitfield();
+	if (test__start_subtest("struct_ops_bad_member_offset"))
+		test_struct_ops_bad_member_offset();
 	if (test__start_subtest("struct_ops_incompatible"))
 		test_struct_ops_incompatible();
 	if (test__start_subtest("struct_ops_null_out_cb"))
@@ -314,4 +404,3 @@ void serial_test_struct_ops_module(void)
 		test_detach_link();
 	RUN_TESTS(unsupported_ops);
 }
-
