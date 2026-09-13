@@ -9955,7 +9955,7 @@ int bpf_program__set_log_buf(struct bpf_program *prog, char *log_buf, size_t log
 {
 	if (log_size && !log_buf)
 		return libbpf_err(-EINVAL);
-	if (prog->log_size > UINT_MAX)
+	if (log_size > UINT_MAX)
 		return libbpf_err(-EINVAL);
 	if (prog->obj->state >= OBJ_LOADED)
 		return libbpf_err(-EBUSY);
