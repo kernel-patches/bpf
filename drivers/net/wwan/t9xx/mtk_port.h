@@ -64,12 +64,20 @@ enum mtk_port_tbl {
 
 enum mtk_port_type {
 	PORT_TYPE_INTERNAL,
+	PORT_TYPE_WWAN,
 	PORT_TYPE_MAX
 };
 
 struct mtk_internal_port {
 	void *arg;
 	int (*recv_cb)(void *arg, struct sk_buff *skb);
+};
+
+struct mtk_wwan_port {
+	/* w_lock protects wwan_port when recv data and disable port at the same time */
+	struct mutex w_lock;
+	int w_type;
+	void *w_port;
 };
 
 struct mtk_port_cfg {
@@ -101,6 +109,7 @@ struct mtk_port {
 	char dev_str[MTK_DEV_STR_LEN];
 	struct mtk_port_mngr *port_mngr;
 	struct mtk_internal_port i_priv;
+	struct mtk_wwan_port w_priv;
 };
 
 struct mtk_port_mngr {

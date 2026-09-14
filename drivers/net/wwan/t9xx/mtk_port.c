@@ -820,6 +820,29 @@ int mtk_port_ch_disable(struct mtk_port *port)
 	return ret;
 }
 
+static int mtk_port_enable_by_type(struct mtk_port_mngr *port_mngr, int tbl_type)
+{
+	struct mtk_port **ports;
+	int ret, idx;
+
+	if (tbl_type < 0 || tbl_type >= PORT_TBL_MAX)
+		return -EINVAL;
+
+	ports = kcalloc(port_mngr->port_cnt, sizeof(struct mtk_port *), GFP_KERNEL);
+	if (!ports)
+		return -ENOMEM;
+
+	ret = radix_tree_gang_lookup(&port_mngr->port_tbl[tbl_type],
+				     (void **)ports, 0, port_mngr->port_cnt);
+	for (idx = 0; idx < ret; idx++) {
+		if (ports[idx]->enable)
+			ports_ops[ports[idx]->info.type]->enable(ports[idx]);
+	}
+
+	kfree(ports);
+	return 0;
+}
+
 static void mtk_port_disable(struct mtk_port_mngr *port_mngr)
 {
 	struct radix_tree_iter iter;
@@ -841,6 +864,7 @@ static void mtk_port_disable(struct mtk_port_mngr *port_mngr)
 void mtk_port_mngr_fsm_state_handler(struct mtk_fsm_param *fsm_param, void *arg)
 {
 	struct mtk_port_mngr *port_mngr;
+	int ret;
 
 	if (!fsm_param || !arg)
 		return;
@@ -850,6 +874,12 @@ void mtk_port_mngr_fsm_state_handler(struct mtk_fsm_param *fsm_param, void *arg)
 	switch (fsm_param->to) {
 	case FSM_STATE_OFF:
 		mtk_port_disable(port_mngr);
+		break;
+	case FSM_STATE_READY:
+		ret = mtk_port_enable_by_type(port_mngr, PORT_TBL_MD);
+		if (ret)
+			dev_err(port_mngr->ctrl_blk->mdev->dev,
+				"Failed to enable MD ports: %d\n", ret);
 		break;
 	default:
 		break;
