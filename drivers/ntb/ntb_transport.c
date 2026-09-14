@@ -244,6 +244,9 @@ struct ntb_transport_ctx {
 	unsigned int qp_count;
 	u64 qp_bitmap;
 	u64 qp_bitmap_free;
+	/* Serialize request updates and peer writes. */
+	spinlock_t up_request_lock;
+	u32 up_request;
 
 	bool use_msi;
 	unsigned int msi_spad_offset;
@@ -976,6 +979,9 @@ static void ntb_transport_link_cleanup(struct ntb_transport_ctx *nt)
 	if (!nt->link_is_up)
 		cancel_delayed_work_sync(&nt->link_work);
 
+	scoped_guard(spinlock, &nt->up_request_lock)
+		nt->up_request = 0;
+
 	for (i = 0; i < nt->mw_count; i++)
 		ntb_free_mw(nt, i);
 
@@ -1113,6 +1119,21 @@ out:
 				      msecs_to_jiffies(NTB_LINK_DOWN_TIMEOUT));
 }
 
+static void ntb_qp_up_request(struct ntb_transport_qp *qp, bool up)
+{
+	struct ntb_transport_ctx *nt = qp->transport;
+
+	guard(spinlock)(&nt->up_request_lock);
+
+	if (up)
+		nt->up_request |= BIT(qp->qp_num);
+	else
+		nt->up_request &= ~BIT(qp->qp_num);
+
+	/* Update the peer's view of our requests. */
+	ntb_peer_spad_write(nt->ndev, PIDX, QP_LINKS, nt->up_request);
+}
+
 static void ntb_qp_link_work(struct work_struct *work)
 {
 	struct ntb_transport_qp *qp = container_of(work,
@@ -1126,7 +1147,7 @@ static void ntb_qp_link_work(struct work_struct *work)
 
 	val = ntb_spad_read(nt->ndev, QP_LINKS);
 
-	ntb_peer_spad_write(nt->ndev, PIDX, QP_LINKS, val | BIT(qp->qp_num));
+	ntb_qp_up_request(qp, true);
 
 	/* query remote spad for qp ready bits */
 	dev_dbg_ratelimited(&pdev->dev, "Remote QP link status = %x\n", val);
@@ -1361,6 +1382,7 @@ static int ntb_transport_probe(struct ntb_client *self, struct ntb_dev *ndev)
 			goto err2;
 	}
 
+	spin_lock_init(&nt->up_request_lock);
 	mutex_init(&nt->link_event_lock);
 	INIT_DELAYED_WORK(&nt->link_work, ntb_transport_link_work);
 	INIT_WORK(&nt->link_cleanup, ntb_transport_link_cleanup_work);
@@ -2412,16 +2434,12 @@ EXPORT_SYMBOL_GPL(ntb_transport_link_up);
  */
 void ntb_transport_link_down(struct ntb_transport_qp *qp)
 {
-	int val;
-
 	if (!qp)
 		return;
 
 	qp->client_ready = false;
 
-	val = ntb_spad_read(qp->ndev, QP_LINKS);
-
-	ntb_peer_spad_write(qp->ndev, PIDX, QP_LINKS, val & ~BIT(qp->qp_num));
+	ntb_qp_up_request(qp, false);
 
 	if (qp->link_is_up)
 		ntb_send_link_down(qp);
