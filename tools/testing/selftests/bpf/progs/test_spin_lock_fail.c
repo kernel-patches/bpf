@@ -14,17 +14,18 @@ struct array_map {
 	__type(key, int);
 	__type(value, struct foo);
 	__uint(max_entries, 1);
-} array_map SEC(".maps");
+} array_map SEC(".maps"), array_map_b SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY_OF_MAPS);
-	__uint(max_entries, 1);
+	__uint(max_entries, 2);
 	__type(key, int);
 	__type(value, int);
 	__array(values, struct array_map);
 } map_of_maps SEC(".maps") = {
 	.values = {
 		[0] = &array_map,
+		[1] = &array_map_b,
 	},
 };
 
@@ -312,6 +313,168 @@ int lock_global_sleepable_subprog_indirect(struct __sk_buff *ctx)
 		ret = global_subprog_calling_sleepable_global(ctx->mark);
 	bpf_spin_unlock(&lockA);
 	return ret;
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 2);
+	__type(key, int);
+	__type(value, struct foo);
+} callback_array_map SEC(".maps");
+
+struct callback_ctx {
+	struct foo *value;
+};
+
+static long lock_different_value(struct bpf_map *map, int *key,
+				 struct foo *value, struct callback_ctx *ctx)
+{
+	bpf_spin_lock(&value->lock);
+	bpf_spin_unlock(&ctx->value->lock);
+	return 0;
+}
+
+static long nest_lock_different_value(struct bpf_map *map, int *key,
+				      struct foo *value, void *data)
+{
+	struct callback_ctx ctx = { .value = value };
+
+	bpf_for_each_map_elem(&callback_array_map, lock_different_value, &ctx, 0);
+	return 0;
+}
+
+SEC("?tc")
+int callback_value_lock_identity(void *ctx)
+{
+	bpf_for_each_map_elem(&callback_array_map, nest_lock_different_value, NULL, 0);
+	return 0;
+}
+
+static long nest_lock_different_inner_value(struct bpf_map *map, int *key,
+					    struct foo *value, void *data)
+{
+	struct callback_ctx ctx = { .value = value };
+	int inner_key = 1;
+	void *inner_map;
+
+	inner_map = bpf_map_lookup_elem(&map_of_maps, &inner_key);
+	if (!inner_map)
+		return 0;
+	bpf_for_each_map_elem(inner_map, lock_different_value, &ctx, 0);
+	return 0;
+}
+
+SEC("?tc")
+int callback_inner_map_value_lock_identity(void *ctx)
+{
+	int inner_key = 0;
+	void *inner_map;
+
+	inner_map = bpf_map_lookup_elem(&map_of_maps, &inner_key);
+	if (!inner_map)
+		return 0;
+	bpf_for_each_map_elem(inner_map, nest_lock_different_inner_value, NULL, 0);
+	return 0;
+}
+
+static long lock_same_value(struct bpf_map *map, int *key,
+			    struct foo *value, void *data)
+{
+	bpf_spin_lock(&value->lock);
+	bpf_spin_unlock(&value->lock);
+	return 0;
+}
+
+static long nest_lock_same_value(struct bpf_map *map, int *key,
+				 struct foo *value, void *data)
+{
+	bpf_for_each_map_elem(&callback_array_map, lock_same_value, NULL, 0);
+	return 0;
+}
+
+SEC("?tc")
+int callback_value_lock_identity_same(void *ctx)
+{
+	bpf_for_each_map_elem(&callback_array_map, nest_lock_same_value, NULL, 0);
+	return 0;
+}
+
+SEC("?tc")
+int callback_single_value_lock_identity_same(void *ctx)
+{
+	bpf_for_each_map_elem(&array_map, lock_same_value, NULL, 0);
+	return 0;
+}
+
+struct async_lock_value {
+	struct bpf_spin_lock lock;
+	struct bpf_timer timer;
+	struct bpf_wq work;
+	struct bpf_task_work task_work;
+	int counter;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 2);
+	__type(key, int);
+	__type(value, struct async_lock_value);
+} async_lock_map SEC(".maps");
+
+/*
+ * Expose the callback value ID in the verifier log, as in lock_id_mapval_preserve().
+ */
+static int async_lock_id_preserve(void *map, int *key, void *data)
+{
+	struct async_lock_value *value = data;
+
+	bpf_spin_lock(&value->lock);
+	value->counter++;
+	bpf_spin_unlock(&value->lock);
+	bpf_this_cpu_ptr(value);
+	return 0;
+}
+
+SEC("?tc")
+int lock_id_timer_preserve(void *ctx)
+{
+	struct async_lock_value *value;
+	int key = 0;
+
+	value = bpf_map_lookup_elem(&async_lock_map, &key);
+	if (value && !bpf_timer_init(&value->timer, &async_lock_map, 1))
+		bpf_timer_set_callback(&value->timer, async_lock_id_preserve);
+	return 0;
+}
+
+SEC("?tc")
+int lock_id_wq_preserve(void *ctx)
+{
+	struct async_lock_value *value;
+	int key = 0;
+
+	value = bpf_map_lookup_elem(&async_lock_map, &key);
+	if (value && !bpf_wq_init(&value->work, &async_lock_map, 0))
+		bpf_wq_set_callback(&value->work, async_lock_id_preserve, 0);
+	return 0;
+}
+
+static int task_work_lock_id_preserve(struct bpf_map *map, void *key, void *data)
+{
+	return async_lock_id_preserve(map, key, data);
+}
+
+SEC("?tc")
+int lock_id_task_work_preserve(void *ctx)
+{
+	struct async_lock_value *value;
+	int key = 0;
+
+	value = bpf_map_lookup_elem(&async_lock_map, &key);
+	if (value)
+		bpf_task_work_schedule_resume(bpf_get_current_task_btf(), &value->task_work,
+					      &async_lock_map, task_work_lock_id_preserve);
+	return 0;
 }
 
 char _license[] SEC("license") = "GPL";
