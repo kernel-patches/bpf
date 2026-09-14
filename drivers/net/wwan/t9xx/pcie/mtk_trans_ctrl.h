@@ -13,6 +13,7 @@
 #include <linux/types.h>
 
 #include "mtk_dev.h"
+#include "mtk_port.h"
 
 #define TRB_SRV_MAX_NUM			(1)
 #define HW_QUE_NUM			(8)
@@ -80,6 +81,7 @@ struct trb_srv {
 };
 
 struct mtk_ctrl_info {
+	struct mtk_ctrl_cfg *ctrl_cfg;
 	const int (*srv_cfg)[HW_QUE_NUM];
 	struct queue_info *queue_info;
 	u32 queue_info_num;

@@ -16,6 +16,7 @@
 #include "mtk_ctrl_plane.h"
 #include "mtk_dev.h"
 #include "mtk_pci.h"
+#include "mtk_port.h"
 #include "mtk_trans_ctrl.h"
 
 static struct mtk_ctrl_info_desc mtk_ctrl_info_tbl[] = {
@@ -156,6 +157,7 @@ static void mtk_ctrl_trb_handler(struct trb_srv *srv, struct trans_list *trans_l
 			break;
 		}
 		trb = (struct trb *)skb->cb;
+		kref_get(&trb->kref);
 
 		switch (trb->cmd) {
 		case TRB_CMD_ENABLE:
@@ -177,8 +179,10 @@ static void mtk_ctrl_trb_handler(struct trb_srv *srv, struct trans_list *trans_l
 					kick = true;
 					break;
 				}
-				if (err == -EAGAIN)
+				if (err == -EAGAIN) {
+					kref_put(&trb->kref, mtk_port_trb_free);
 					return;
+				}
 
 				skb_unlink(skb, skb_list);
 				trb->status = err;
@@ -218,6 +222,8 @@ static void mtk_ctrl_trb_handler(struct trb_srv *srv, struct trans_list *trans_l
 			trans_list->tx_burst_cnt[qno] = 0;
 			kick = false;
 		}
+
+		kref_put(&trb->kref, mtk_port_trb_free);
 
 		loop++;
 	} while (loop < TRB_NUM_PER_ROUND);
@@ -574,7 +580,8 @@ static struct mtk_ctrl_hif_ops pcie_ctrl_ops = {
 	.send_cmd = mtk_pcie_hif_cmd_func,
 };
 
-static void mtk_trans_get_ctrl_info(struct mtk_ctrl_trans *trans, u32 hw_ver)
+static void mtk_trans_get_ctrl_info(struct mtk_ctrl_cfg *cfg,
+				    struct mtk_ctrl_trans *trans, u32 hw_ver)
 {
 	struct mtk_ctrl_info_desc *ctrl_info_desc;
 	struct mtk_ctrl_info *ctrl_info;
@@ -586,6 +593,7 @@ static void mtk_trans_get_ctrl_info(struct mtk_ctrl_trans *trans, u32 hw_ver)
 			continue;
 
 		ctrl_info = ctrl_info_desc->ctrl_info;
+		cfg->port_layer_cfg = ctrl_info->ctrl_cfg->port_layer_cfg;
 		memcpy(trans->srv_cfg, ctrl_info->srv_cfg,
 		       sizeof(int) * NR_CLDMA * HW_QUE_NUM);
 		trans->queue_info = ctrl_info->queue_info;
@@ -598,6 +606,7 @@ int mtk_trans_ctrl_init(struct mtk_md_dev *mdev)
 {
 	struct mtk_ctrl_trans *trans;
 	struct mtk_ctrl_blk *ctrl_blk;
+	struct mtk_ctrl_cfg *cfg;
 	int err;
 
 	trans = devm_kzalloc(mdev->dev, sizeof(*trans), GFP_KERNEL);
@@ -607,15 +616,19 @@ int mtk_trans_ctrl_init(struct mtk_md_dev *mdev)
 	mutex_init(&trans->submit_lock);
 	atomic_set(&trans->available, 0);
 
-	mtk_trans_get_ctrl_info(trans, mdev->hw_ver);
-	if (!trans->queue_info ||
+	cfg = devm_kzalloc(mdev->dev, sizeof(*cfg), GFP_KERNEL);
+	if (!cfg)
+		return -ENOMEM;
+
+	mtk_trans_get_ctrl_info(cfg, trans, mdev->hw_ver);
+	if (!cfg->port_layer_cfg || !trans->queue_info ||
 	    trans->trb_srv_num <= 0 || trans->trb_srv_num > TRB_SRV_MAX_NUM ||
 	    trans->queue_info_num <= 0) {
 		dev_err(mdev->dev, "Failed to get ctrl info!\n");
 		return -EINVAL;
 	}
 
-	err = mtk_ctrl_init(mdev, &pcie_ctrl_ops);
+	err = mtk_ctrl_init(mdev, &pcie_ctrl_ops, cfg);
 	if (err)
 		return err;
 

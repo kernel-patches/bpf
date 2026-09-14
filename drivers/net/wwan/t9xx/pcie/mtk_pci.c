@@ -16,6 +16,8 @@
 #include "mtk_trans_ctrl.h"
 #include "mtk_pci.h"
 #include "mtk_pci_reg.h"
+#include "mtk_port.h"
+#include "mtk_port_io.h"
 
 #define MTK_PCI_TRANSPARENT_ATR_SIZE	(0x3F)
 #define MTK_PCI_MINIMUM_ATR_SIZE	(0x1000)
