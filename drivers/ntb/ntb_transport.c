@@ -1443,7 +1443,8 @@ static void ntb_complete_rxc(struct ntb_transport_qp *qp)
 	while (!list_empty(&qp->rx_post_q)) {
 		entry = list_first_entry(&qp->rx_post_q,
 					 struct ntb_queue_entry, entry);
-		if (!(entry->flags & DESC_DONE_FLAG))
+		/* DONE publishes the entry fields and copied data. */
+		if (!(smp_load_acquire(&entry->flags) & DESC_DONE_FLAG))
 			break;
 
 		entry->rx_hdr->flags = cpu_to_le32(0);
@@ -1496,7 +1497,8 @@ static void ntb_rx_copy_callback(void *data,
 		}
 	}
 
-	entry->flags |= DESC_DONE_FLAG;
+	/* Pair with the acquire load in ntb_complete_rxc(). */
+	smp_store_release(&entry->flags, entry->flags | DESC_DONE_FLAG);
 
 	ntb_complete_rxc(entry->qp);
 }
@@ -1664,7 +1666,8 @@ static int ntb_process_rxc(struct ntb_transport_qp *qp)
 		qp->rx_err_oflow++;
 
 		entry->len = -EIO;
-		entry->flags |= DESC_DONE_FLAG;
+		/* Pair with the acquire load in ntb_complete_rxc(). */
+		smp_store_release(&entry->flags, entry->flags | DESC_DONE_FLAG);
 
 		ntb_complete_rxc(qp);
 	} else {
