@@ -1376,77 +1376,161 @@ cleanup:
 		close(jt_fd);
 }
 
+static void check_gotox_target_prologue_shift(void)
+{
+	struct bpf_insn insns[] = {
+		/* insn 0: gotox target and subprog start */
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		/* may_goto +4 -> exit block, bounds the loop */
+		BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 4, 0),
+		/* r1 = &jt[0] (insns 2 and 3) */
+		BPF_LD_IMM64_RAW(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE, 0),
+		BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, 0), /* r1 = ips[0] */
+		/* insn 5: gotox r1 -> insn 0 */
+		BPF_RAW_INSN(BPF_JMP | BPF_JA | BPF_X, BPF_REG_1, 0, 0, 0),
+		BPF_MOV64_IMM(BPF_REG_0, XDP_PASS), /* insn 6: exit block */
+		BPF_EXIT_INSN(),
+	};
+	LIBBPF_OPTS(bpf_prog_load_opts, opts);
+	struct bpf_insn_array_value val = {};
+	int prog_fd = -1, map_fd;
+	__u32 key = 0;
+
+	map_fd = map_create(BPF_MAP_TYPE_INSN_ARRAY, 1);
+	if (!ASSERT_GE(map_fd, 0, "map_create"))
+		return;
+
+	val.orig_off = 0;
+	if (!ASSERT_EQ(bpf_map_update_elem(map_fd, &key, &val, 0), 0, "bpf_map_update_elem"))
+		goto cleanup;
+	if (!ASSERT_EQ(bpf_map_freeze(map_fd), 0, "bpf_map_freeze"))
+		goto cleanup;
+
+	opts.fd_array = &map_fd;
+	opts.fd_array_cnt = 1;
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_XDP, NULL, "GPL", insns, ARRAY_SIZE(insns), &opts);
+	if (!ASSERT_GE(prog_fd, 0, "bpf(BPF_PROG_LOAD)"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(bpf_map_lookup_elem(map_fd, &key, &val), 0, "bpf_map_lookup_elem"))
+		goto cleanup;
+	ASSERT_NEQ(val.xlated_off, 0, "gotox target retargeted past prepend");
+	ASSERT_NEQ(val.xlated_off, (__u32)-1, "gotox target not INSN_DELETED");
+	ASSERT_NEQ(val.jitted_off, 0, "gotox target has a jitted address");
+cleanup:
+	if (prog_fd >= 0)
+		close(prog_fd);
+	close(map_fd);
+}
+
+static void check_gotox_target_ctx_prologue_shift(void)
+{
+	struct bpf_insn insns[] = {
+		/* insn 0: gotox target and subprog start */
+		BPF_LDX_MEM(BPF_DW, BPF_REG_7, BPF_REG_10, -8),
+		BPF_JMP_IMM(BPF_JEQ, BPF_REG_7, 0x5a5a, 12), /* second visit exits */
+		BPF_ST_MEM(BPF_DW, BPF_REG_10, -8, 0x5a5a),
+		BPF_MOV64_REG(BPF_REG_6, BPF_REG_1), /* r6 = ctx */
+		BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_6, offsetof(struct __sk_buff, data)),
+		BPF_LDX_MEM(BPF_W, BPF_REG_3, BPF_REG_6, offsetof(struct __sk_buff, data_end)),
+		BPF_MOV64_REG(BPF_REG_4, BPF_REG_2),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_4, 1),
+		BPF_JMP_REG(BPF_JGT, BPF_REG_4, BPF_REG_3, 5),
+		/* insn 9: direct packet write -> tc unclone prologue prepended at insn 0 */
+		BPF_ST_MEM(BPF_B, BPF_REG_2, 0, 0),
+		/* r5 = &jt[0] (insns 10 and 11) */
+		BPF_LD_IMM64_RAW(BPF_REG_5, BPF_PSEUDO_MAP_IDX_VALUE, 0),
+		BPF_LDX_MEM(BPF_DW, BPF_REG_5, BPF_REG_5, 0), /* r5 = ips[0] */
+		/* insn 13: gotox r5 -> insn 0 */
+		BPF_RAW_INSN(BPF_JMP | BPF_JA | BPF_X, BPF_REG_5, 0, 0, 0),
+		BPF_MOV64_IMM(BPF_REG_0, 0), /* insn 14: exit block */
+		BPF_EXIT_INSN(),
+	};
+	LIBBPF_OPTS(bpf_prog_load_opts, opts);
+	struct bpf_insn_array_value val = {};
+	int prog_fd = -1, map_fd;
+	__u32 key = 0;
+
+	map_fd = map_create(BPF_MAP_TYPE_INSN_ARRAY, 1);
+	if (!ASSERT_GE(map_fd, 0, "map_create"))
+		return;
+
+	val.orig_off = 0;
+	if (!ASSERT_EQ(bpf_map_update_elem(map_fd, &key, &val, 0), 0, "bpf_map_update_elem"))
+		goto cleanup;
+	if (!ASSERT_EQ(bpf_map_freeze(map_fd), 0, "bpf_map_freeze"))
+		goto cleanup;
+
+	opts.fd_array = &map_fd;
+	opts.fd_array_cnt = 1;
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_SCHED_CLS, NULL, "GPL", insns,
+				ARRAY_SIZE(insns), &opts);
+	if (!ASSERT_GE(prog_fd, 0, "bpf(BPF_PROG_LOAD)"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(bpf_map_lookup_elem(map_fd, &key, &val), 0, "bpf_map_lookup_elem"))
+		goto cleanup;
+	ASSERT_NEQ(val.xlated_off, 0, "gotox target retargeted past prepend");
+	ASSERT_NEQ(val.xlated_off, (__u32)-1, "gotox target not INSN_DELETED");
+	ASSERT_NEQ(val.jitted_off, 0, "gotox target has a jitted address");
+cleanup:
+	if (prog_fd >= 0)
+		close(prog_fd);
+	close(map_fd);
+}
+
 static void __test_bpf_insn_array(void)
 {
 	/* Test if offsets are adjusted properly */
-
 	if (test__start_subtest("one2one"))
 		check_one_to_one_mapping();
-
 	if (test__start_subtest("simple"))
 		check_simple();
-
 	if (test__start_subtest("deletions"))
 		check_deletions();
-
 	if (test__start_subtest("deletions-with-functions"))
 		check_deletions_with_functions();
-
 	if (test__start_subtest("blindness"))
 		check_blindness();
-
 	/* Check all kinds of operations and related restrictions */
-
 	if (test__start_subtest("incorrect-index"))
 		check_incorrect_index();
-
 	if (test__start_subtest("load-unfrozen-map"))
 		check_load_unfrozen_map();
-
 	if (test__start_subtest("no-map-reuse"))
 		check_no_map_reuse();
-
 	if (test__start_subtest("bpf-side-ops"))
 		check_bpf_side();
-
 	if (test__start_subtest("too-many-gotox-edges"))
 		check_too_many_gotox_edges();
-
 	if (test__start_subtest("gotox-edges-at-limit"))
 		check_gotox_edges_at_limit();
-
 	if (test__start_subtest("gotox-edges-across-subprogs"))
 		check_gotox_edges_across_subprogs();
-
 	if (test__start_subtest("gotox-jt-spans-subprogs"))
 		check_gotox_jt_spans_subprogs();
-
 	if (test__start_subtest("gotox-jt-spans-with-own-table"))
 		check_gotox_jt_spans_with_own_table();
-
 	if (test__start_subtest("gotox-target-other-subprog"))
 		check_gotox_target_other_subprog();
-
 	if (test__start_subtest("gotox-jt-per-subprog"))
 		check_gotox_jt_per_subprog();
-
 	if (test__start_subtest("gotox-target-subprog-from-main"))
 		check_gotox_target_subprog_from_main();
-
 	if (test__start_subtest("gotox-index-slice-other-subprog"))
 		check_gotox_index_slice_other_subprog();
-
 	if (test__start_subtest("gotox-target-other-global-subprog"))
 		check_gotox_target_other_global_subprog();
-
 	if (test__start_subtest("gotox-callback-leaves-subprog"))
 		check_gotox_callback_leaves_subprog();
-
 	if (test__start_subtest("gotox-target-nop"))
 		check_gotox_target_nop();
-
 	if (test__start_subtest("insn-array-stale-reuse"))
 		check_insn_array_stale_reuse();
+	if (test__start_subtest("gotox-target-prologue-shift"))
+		check_gotox_target_prologue_shift();
+	if (test__start_subtest("gotox-target-ctx-prologue-shift"))
+		check_gotox_target_ctx_prologue_shift();
 }
 #else
 static void __test_bpf_insn_array(void)
