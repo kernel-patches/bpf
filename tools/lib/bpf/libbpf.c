@@ -6223,7 +6223,8 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 				goto out;
 			}
 
-			err = bpf_core_patch_insn(prog->name, insn, insn_idx, rec, i, &targ_res);
+			err = bpf_core_patch_insn(prog->name, insn, prog->insns_cnt, insn_idx,
+						  rec, i, &targ_res);
 			if (err) {
 				pr_warn("prog '%s': relo #%d: failed to patch insn #%d: %s\n",
 					prog->name, i, insn_idx, errstr(err));

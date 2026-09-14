@@ -87,8 +87,9 @@ int bpf_core_calc_relo_insn(const char *prog_name,
 			    struct bpf_core_relo_res *targ_res);
 
 int bpf_core_patch_insn(const char *prog_name, struct bpf_insn *insn,
-			int insn_idx, const struct bpf_core_relo *relo,
-			int relo_idx, const struct bpf_core_relo_res *res);
+			size_t insn_cnt, int insn_idx,
+			const struct bpf_core_relo *relo, int relo_idx,
+			const struct bpf_core_relo_res *res);
 
 int bpf_core_parse_spec(const char *prog_name, const struct btf *btf,
 		        const struct bpf_core_relo *relo,
