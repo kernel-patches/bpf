@@ -222,6 +222,8 @@ static int ksz_ptp_enable_perout(struct ksz_device *dev,
 		return 0;
 	}
 
+	ptp_data->perout_flags = request->flags;
+	ptp_data->perout_index = request->index;
 	ptp_data->perout_target_time_first.tv_sec  = request->start.sec;
 	ptp_data->perout_target_time_first.tv_nsec = request->start.nsec;
 
@@ -795,8 +797,8 @@ static int ksz_ptp_restart_perout(struct ksz_device *dev)
 	request.start.nsec = next.tv_nsec;
 	request.period.sec  = ptp_data->perout_period.tv_sec;
 	request.period.nsec = ptp_data->perout_period.tv_nsec;
-	request.index = 0;
-	request.flags = 0;
+	request.index = ptp_data->perout_index;
+	request.flags = ptp_data->perout_flags;
 
 	return ksz_ptp_enable_perout(dev, &request, 1);
 }
