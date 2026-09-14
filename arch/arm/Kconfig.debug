@@ -1128,42 +1128,6 @@ choice
 
 		  If unsure, say N.
 
-	config STM32F4_DEBUG_UART
-		bool "Use STM32F4 UART for low-level debug"
-		depends on MACH_STM32F429 || MACH_STM32F469
-		select DEBUG_STM32_UART
-		help
-		  Say Y here if you want kernel low-level debugging support
-		  on STM32F4 based platforms, which default UART is wired on
-		  USART1, but another UART instance can be selected by modifying
-		  CONFIG_DEBUG_UART_PHYS.
-
-		  If unsure, say N.
-
-	config STM32F7_DEBUG_UART
-		bool "Use STM32F7 UART for low-level debug"
-		depends on MACH_STM32F746 || MACH_STM32F769
-		select DEBUG_STM32_UART
-		help
-		  Say Y here if you want kernel low-level debugging support
-		  on STM32F7 based platforms, which default UART is wired on
-		  USART1, but another UART instance can be selected by modifying
-		  CONFIG_DEBUG_UART_PHYS.
-
-		  If unsure, say N.
-
-	config STM32H7_DEBUG_UART
-		bool "Use STM32H7 UART for low-level debug"
-		depends on MACH_STM32H743
-		select DEBUG_STM32_UART
-		help
-		  Say Y here if you want kernel low-level debugging support
-		  on STM32H7 based platforms, which default UART is wired on
-		  USART1, but another UART instance can be selected by modifying
-		  CONFIG_DEBUG_UART_PHYS.
-
-		  If unsure, say N.
-
 	config STM32MP1_DEBUG_UART
 		bool "Use STM32MP1 UART for low-level debug"
 		depends on MACH_STM32MP157
@@ -1541,8 +1505,6 @@ config DEBUG_UART_PHYS
 	default 0x3e000000 if DEBUG_BCM_KONA_UART
 	default 0x3f201000 if DEBUG_BCM2836
 	default 0x40010000 if STM32MP1_DEBUG_UART
-	default 0x40011000 if STM32F4_DEBUG_UART || STM32F7_DEBUG_UART || \
-				STM32H7_DEBUG_UART
 	default 0x40028000 if DEBUG_AT91_SAMV7_USART1
 	default 0x40090000 if DEBUG_LPC32XX
 	default 0x40100000 if DEBUG_PXA_UART1

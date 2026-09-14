@@ -47,12 +47,7 @@ SoC-specific documents
 
    pxa/mfp
 
-   stm32/stm32f746-overview
    stm32/overview
-   stm32/stm32h743-overview
-   stm32/stm32h750-overview
-   stm32/stm32f769-overview
-   stm32/stm32f429-overview
    stm32/stm32mp13-overview
    stm32/stm32mp151-overview
    stm32/stm32mp157-overview
