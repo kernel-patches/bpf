@@ -248,9 +248,12 @@ bpf_insn_successors(struct bpf_verifier_env *env, u32 idx)
 	struct bpf_iarray *succ, *jt;
 	int insn_sz;
 
-	jt = env->insn_aux_data[idx].jt;
-	if (unlikely(jt))
-		return jt;
+	/* All gotox of a subprogram share its jump table, see compute_subprog_jts() */
+	if (unlikely(insn_is_gotox(insn))) {
+		jt = bpf_find_containing_subprog(env, idx)->jt;
+		if (jt)
+			return jt;
+	}
 
 	/* pre-allocated array of size up to 2; reset cnt, as it may have been used already */
 	succ = env->succ;
@@ -263,6 +266,15 @@ bpf_insn_successors(struct bpf_verifier_env *env, u32 idx)
 
 	if (opcode_info->can_jump)
 		succ->items[succ->cnt++] = idx + bpf_jmp_offset(insn) + 1;
+
+	/*
+	 * tail_call upon success and ld_{abs,ind} upon load failure return
+	 * from the subprogram, which is a hidden edge to its exit.
+	 */
+	if (unlikely((bpf_helper_call(insn) && insn->imm == BPF_FUNC_tail_call) ||
+		     (BPF_CLASS(insn->code) == BPF_LD &&
+		      (BPF_MODE(insn->code) == BPF_ABS || BPF_MODE(insn->code) == BPF_IND))))
+		succ->items[succ->cnt++] = bpf_find_containing_subprog(env, idx)->exit_idx;
 
 	return succ;
 }

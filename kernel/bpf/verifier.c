@@ -21477,8 +21477,7 @@ err_prep:
 	release_maps(env);
 	release_btfs(env);
 err_free_env:
-	if (env->insn_aux_data)
-		bpf_clear_insn_aux_data(env, 0, env->insn_aux_data_len);
+	bpf_free_subprog_jts(env);
 	vfree(env->insn_aux_data);
 	kvfree(env->fd_array);
 	bpf_stack_liveness_free(env);
