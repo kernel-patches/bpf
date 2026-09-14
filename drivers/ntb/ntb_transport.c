@@ -47,6 +47,7 @@
  * Contact Information:
  * Jon Mason <jon.mason@intel.com>
  */
+#include <linux/bitfield.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/dmaengine.h>
@@ -169,7 +170,7 @@ struct ntb_transport_qp {
 	unsigned int tx_max_frame;
 
 	void (*rx_handler)(struct ntb_transport_qp *qp, void *qp_data,
-			   void *data, int len);
+			   void *data, int len, unsigned int meta);
 	struct list_head rx_post_q;
 	struct list_head rx_pend_q;
 	struct list_head rx_free_q;
@@ -268,6 +269,9 @@ enum {
 	DESC_DONE_FLAG = BIT(0),
 	LINK_DOWN_FLAG = BIT(1),
 };
+
+/* Reserve the low byte for transport flags. */
+#define DESC_META_MASK		GENMASK(31, 8)
 
 struct ntb_payload_header {
 	__le32 ver;
@@ -1490,17 +1494,20 @@ static void ntb_transport_free(struct ntb_client *self, struct ntb_dev *ndev)
 static void ntb_complete_rxc(struct ntb_transport_qp *qp)
 {
 	struct ntb_queue_entry *entry;
-	void *cb_data;
-	unsigned int len;
 	unsigned long irqflags;
+	unsigned int flags;
+	unsigned int meta;
+	unsigned int len;
+	void *cb_data;
 
 	spin_lock_irqsave(&qp->ntb_rx_q_lock, irqflags);
 
 	while (!list_empty(&qp->rx_post_q)) {
 		entry = list_first_entry(&qp->rx_post_q,
 					 struct ntb_queue_entry, entry);
-		/* DONE publishes the entry fields and copied data. */
-		if (!(smp_load_acquire(&entry->flags) & DESC_DONE_FLAG))
+		/* DONE publishes the entry, payload and client metadata. */
+		flags = smp_load_acquire(&entry->flags);
+		if (!(flags & DESC_DONE_FLAG))
 			break;
 
 		entry->rx_hdr->flags = cpu_to_le32(0);
@@ -1508,13 +1515,14 @@ static void ntb_complete_rxc(struct ntb_transport_qp *qp)
 
 		cb_data = entry->cb_data;
 		len = entry->len;
+		meta = FIELD_GET(DESC_META_MASK, flags);
 
 		list_move_tail(&entry->entry, &qp->rx_free_q);
 
 		spin_unlock_irqrestore(&qp->ntb_rx_q_lock, irqflags);
 
 		if (qp->rx_handler && qp->client_ready)
-			qp->rx_handler(qp, qp->cb_data, cb_data, len);
+			qp->rx_handler(qp, qp->cb_data, cb_data, len, meta);
 
 		spin_lock_irqsave(&qp->ntb_rx_q_lock, irqflags);
 	}
@@ -1714,6 +1722,7 @@ static int ntb_process_rxc(struct ntb_transport_qp *qp)
 
 	entry->rx_hdr = hdr;
 	entry->rx_index = qp->rx_index;
+	WRITE_ONCE(entry->flags, flags & DESC_META_MASK);
 
 	if (len > entry->len) {
 		dev_dbg(&qp->ndev->pdev->dev,
@@ -2396,6 +2405,8 @@ EXPORT_SYMBOL_GPL(ntb_transport_rx_enqueue);
  * @cb: per buffer pointer for callback function to use
  * @data: pointer to data buffer that will be sent
  * @len: length of the data buffer
+ * @meta: 24-bit client metadata to send.
+ *        Out-of-range values return -EINVAL.
  *
  * Enqueue a new transmit buffer onto the transport queue from which a NTB
  * payload will be transmitted.  This assumes that a lock is being held to
@@ -2404,12 +2415,12 @@ EXPORT_SYMBOL_GPL(ntb_transport_rx_enqueue);
  * RETURNS: An appropriate -ERRNO error value on error, or zero for success.
  */
 int ntb_transport_tx_enqueue(struct ntb_transport_qp *qp, void *cb, void *data,
-			     unsigned int len)
+			     unsigned int len, unsigned int meta)
 {
 	struct ntb_queue_entry *entry;
 	int rc;
 
-	if (!qp || !len)
+	if (!qp || !len || meta > FIELD_MAX(DESC_META_MASK))
 		return -EINVAL;
 
 	if (!qp->link_is_up)
@@ -2427,7 +2438,7 @@ int ntb_transport_tx_enqueue(struct ntb_transport_qp *qp, void *cb, void *data,
 	entry->cb_data = cb;
 	entry->buf = data;
 	entry->len = len;
-	entry->flags = 0;
+	entry->flags = FIELD_PREP(DESC_META_MASK, meta);
 	entry->errors = 0;
 	entry->tx_index = 0;
 

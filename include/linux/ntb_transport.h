@@ -64,8 +64,9 @@ int ntb_transport_register_client_dev(char *device_name);
 void ntb_transport_unregister_client_dev(char *device_name);
 
 struct ntb_queue_handlers {
+	/* meta is 24-bit client metadata, zero from legacy peers. */
 	void (*rx_handler)(struct ntb_transport_qp *qp, void *qp_data,
-			   void *data, int len);
+			   void *data, int len, unsigned int meta);
 	void (*tx_handler)(struct ntb_transport_qp *qp, void *qp_data,
 			   void *data, int len);
 	/* peer_caps is 31-bit, zero on link-down or without peer support. */
@@ -81,7 +82,7 @@ void ntb_transport_free_queue(struct ntb_transport_qp *qp);
 int ntb_transport_rx_enqueue(struct ntb_transport_qp *qp, void *cb, void *data,
 			     unsigned int len);
 int ntb_transport_tx_enqueue(struct ntb_transport_qp *qp, void *cb, void *data,
-			     unsigned int len);
+			     unsigned int len, unsigned int meta);
 void *ntb_transport_rx_remove(struct ntb_transport_qp *qp, unsigned int *len);
 void ntb_transport_link_up(struct ntb_transport_qp *qp, u32 local_caps);
 void ntb_transport_link_down(struct ntb_transport_qp *qp);
