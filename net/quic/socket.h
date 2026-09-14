@@ -60,9 +60,26 @@ enum quic_tsq_flags {
 			   QUIC_F_PMTU_DEFERRED |		\
 			   QUIC_F_PACE_DEFERRED)
 
+struct quic_request_sock {
+	struct list_head	list;
+
+	struct quic_conn_id	dcid;
+	struct quic_conn_id	scid;
+	union quic_addr		daddr;
+	union quic_addr		saddr;
+
+	struct quic_conn_id	orig_dcid;
+	u32			version;
+	u8			retry;
+
+	struct sk_buff_head	backlog_list;
+	u32			blen;
+};
+
 struct quic_sock {
 	struct inet_sock		inet;
 	struct list_head		reqs;
+	struct work_struct		work;
 
 	struct quic_data		ticket;
 	struct quic_data		token;
@@ -93,6 +110,11 @@ static inline struct quic_sock *quic_sk(const struct sock *sk)
 static inline struct list_head *quic_reqs(const struct sock *sk)
 {
 	return &quic_sk(sk)->reqs;
+}
+
+static inline struct work_struct *quic_work(const struct sock *sk)
+{
+	return &quic_sk(sk)->work;
 }
 
 static inline struct quic_data *quic_token(const struct sock *sk)
@@ -200,3 +222,21 @@ static inline void quic_set_state(struct sock *sk, int state)
 	inet_sk_set_state(sk, state);
 	sk->sk_state_change(sk);
 }
+
+struct sock *quic_listen_sock_lookup(struct sk_buff *skb, union quic_addr *sa,
+				     union quic_addr *da, struct sock *usk,
+				     struct quic_data *alpns);
+struct sock *quic_sock_lookup(struct sk_buff *skb, union quic_addr *sa,
+			      union quic_addr *da, struct sock *usk,
+			      struct quic_conn_id *dcid);
+
+bool quic_listen_sock_switch(struct sk_buff *skb, struct quic_data *alpns);
+bool quic_accept_sock_exists(struct sock *sk, struct sk_buff *skb);
+
+struct quic_request_sock *quic_request_sock_create(struct sock *sk,
+						   struct quic_conn_id *odcid,
+						   u8 retry, gfp_t gfp);
+int quic_request_sock_backlog_tail(struct sock *sk,
+				   struct quic_request_sock *req,
+				   struct sk_buff *skb);
+struct quic_request_sock *quic_request_sock_lookup(struct sock *sk);
