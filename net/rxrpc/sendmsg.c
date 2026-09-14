@@ -329,13 +329,6 @@ static int rxrpc_send_data(struct rxrpc_sock *rx,
 	bool more = msg->msg_flags & MSG_MORE;
 	int ret, copied = 0;
 
-	if (test_bit(RXRPC_CALL_TX_NO_MORE, &call->flags)) {
-		trace_rxrpc_abort(call->debug_id, rxrpc_sendmsg_late_send,
-				  call->cid, call->call_id, call->rx_consumed,
-				  0, -EPROTO);
-		return -EPROTO;
-	}
-
 	timeo = sock_sndtimeo(sk, msg->msg_flags & MSG_DONTWAIT);
 
 	ret = rxrpc_wait_to_be_connected(call, &timeo);
@@ -352,13 +345,20 @@ static int rxrpc_send_data(struct rxrpc_sock *rx,
 	sk_clear_bit(SOCKWQ_ASYNC_NOSPACE, sk);
 
 reload:
+	if (unlikely(test_bit(RXRPC_CALL_TX_NO_MORE, &call->flags))) {
+		trace_rxrpc_abort(call->debug_id, rxrpc_sendmsg_late_send,
+				  call->cid, call->call_id, call->rx_consumed,
+				  0, -EPROTO);
+		ret = -EPROTO;
+		goto out_unlock;
+	}
+
 	ret = -EPIPE;
 	if (sk->sk_shutdown & SEND_SHUTDOWN)
-		goto maybe_error;
+		goto out_unlock;
 	state = rxrpc_call_state(call);
-	ret = -ESHUTDOWN;
 	if (state >= RXRPC_CALL_COMPLETE)
-		goto maybe_error;
+		goto call_terminated;
 	ret = -EPROTO;
 	if (state != RXRPC_CALL_CLIENT_PRE_SEND &&
 	    state != RXRPC_CALL_CLIENT_SEND_REQUEST &&
@@ -368,7 +368,7 @@ reload:
 		trace_rxrpc_abort(call->debug_id, rxrpc_sendmsg_late_send,
 				  call->cid, call->call_id, call->rx_consumed,
 				  0, -EPROTO);
-		goto maybe_error;
+		goto out_unlock;
 	}
 
 	ret = -EMSGSIZE;
@@ -448,31 +448,73 @@ reload:
 				goto out_unlock;
 			rxrpc_queue_packet(rx, call, txb, notify_end_tx);
 			call->tx_pending = NULL;
+
+			/* At this point, if that was the last packet, it may
+			 * have been transmitted and the reply (client call) or
+			 * final ACK (service call) may have been received,
+			 * completing the call.
+			 */
 		}
 	} while (len > 0 && msg_data_left(msg) > 0);
 
-success:
+	/* Don't check for call completeness here, but leave that to recvmsg or
+	 * a further call to sendmsg().
+	 */
 	ret = copied;
-	if (rxrpc_call_is_complete(call) &&
-	    call->error < 0)
-		ret = call->error;
 out_unlock:
 	mutex_unlock(&call->user_mutex);
+out:
+
+	/* The return value is a bit complicated as we want to avoid returning
+	 * an error if we have queued the final packet.  In descending order of
+	 * preference:
+	 *
+	 * (1) If we queue the last packet: the amount copied (which may be
+	 *     zero).  recvmsg() should be used to collect the result.
+	 *
+	 * (2) If another sendmsg() has already queued the last packet: -EPROTO.
+	 *
+	 * (3) If the send side of the socket is shut down, -EPIPE.
+	 *
+	 * (4) If the call is in the wrong state to transmit: -EPROTO.
+	 *
+	 * (5) If the call has terminated early, likely due to an external
+	 *     event such as being remotely aborted: -ESHUTDOWN.
+	 *
+	 * (6) If some data has been copied by this call: the amount copied
+	 *     (which will be greater than zero).
+	 *
+	 * (7) Any other error.
+	 *
+	 * For (2)-(5), there's no point in continuing with the sendmsg().  The
+	 * app should abort the call (just in case the error came from
+	 * somewhere else) and then use recvmsg() to collect the final result
+	 * of the call.
+	 */
 	_leave(" = %d", ret);
 	return ret;
 
 call_terminated:
-	ret = call->error;
+	ret = -ESHUTDOWN;
 	goto out_unlock;
 
 maybe_error:
-	if (copied)
-		goto success;
+	if (copied) {
+		if (test_bit(RXRPC_CALL_TX_NO_MORE, &call->flags)) {
+			/* If we've get here, we must have slept waiting for space and .
+			 */
+			ret = copied;
+			goto out_unlock;
+		}
+		if (rxrpc_call_is_complete(call))
+			goto call_terminated;
+		ret = copied;
+	}
 	goto out_unlock;
 
 efault:
 	ret = -EFAULT;
-	goto out_unlock;
+	goto maybe_error;
 
 wait_for_space:
 	ret = -EAGAIN;
@@ -495,7 +537,9 @@ wait_for_space:
 	goto reload;
 out_nolock:
 	_leave(" = %d [intr]", ret);
-	return copied ?: ret;
+	if (copied)
+		ret = copied;
+	goto out;
 }
 
 /*
@@ -817,8 +861,6 @@ int rxrpc_kernel_send_data(struct socket *sock, struct rxrpc_call *call,
 
 		ret = rxrpc_send_data(rxrpc_sk(sock->sk), call, msg,
 				      msg_data_left(msg), notify_end_tx);
-		if (ret == -ESHUTDOWN)
-			ret = call->error;
 		if (ret < 0)
 			break;
 		if (msg_data_left(msg) == 0) {
