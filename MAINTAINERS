@@ -3038,18 +3038,6 @@ L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
 S:	Maintained
 F:	arch/arm64/boot/dts/lg/
 
-ARM/LPC18XX ARCHITECTURE
-M:	Vladimir Zapolskiy <vz@mleia.com>
-L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
-S:	Maintained
-F:	Documentation/devicetree/bindings/i2c/nxp,lpc1788-i2c.yaml
-F:	arch/arm/boot/dts/nxp/lpc/lpc43*
-F:	drivers/i2c/busses/i2c-lpc2k.c
-F:	drivers/memory/pl172.c
-F:	drivers/mtd/spi-nor/controllers/nxp-spifi.c
-F:	drivers/rtc/rtc-lpc24xx.c
-N:	lpc18xx
-
 ARM/LPC32XX SOC SUPPORT
 M:	Vladimir Zapolskiy <vz@mleia.com>
 M:	Piotr Wojtaszczyk <piotr.wojtaszczyk@timesys.com>
