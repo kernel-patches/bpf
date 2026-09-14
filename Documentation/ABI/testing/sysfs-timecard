@@ -35,6 +35,10 @@ Description:	(RO, root only) The flags set in the status register of the
 		probe, and reported from that cached value as the fixed
 		"cpld.id" version by devlink dev info.
 
+		New CPLD firmware is programmed with devlink dev flash,
+		selecting the "fw.cpld" component; see
+		Documentation/networking/devlink/ptp_ocp.rst.
+
 What:		/sys/class/timecard/ocpN/available_clock_sources
 Date:		September 2021
 Contact:	Jonathan Lemon <jonathan.lemon@gmail.com>
