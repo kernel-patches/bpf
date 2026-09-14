@@ -878,8 +878,10 @@ The kernel interface functions are as follows:
      exclusively to in-kernel virtual addresses.  msg.msg_flags may be given
      MSG_MORE if there will be subsequent data sends for this call.
 
-     The msg must not specify a destination address, control data or any flags
-     other than MSG_MORE.
+     msg must not specify a destination address, control data or any flags
+     other than MSG_MORE.  The last-packet flag will only be set on the
+     outgoing packet if MSG_MORE is not set and all the data in the iterator is
+     buffered.
 
      notify_end_rx can be NULL or it can be used to specify a function to be
      called when the call changes state to end the Tx phase.  This function is

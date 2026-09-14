@@ -325,6 +325,7 @@ static int rxrpc_send_data(struct rxrpc_sock *rx,
 {
 	struct sock *sk = &rx->sk;
 	enum rxrpc_call_state state;
+	unsigned int rewind_by = 0;
 	long timeo;
 	bool more = msg->msg_flags & MSG_MORE;
 	int ret, copied = 0;
@@ -350,6 +351,13 @@ reload:
 				  call->cid, call->call_id, call->rx_consumed,
 				  0, -EPROTO);
 		ret = -EPROTO;
+		goto out_unlock;
+	}
+	if (unlikely(test_bit(RXRPC_CALL_TX_ERROR, &call->flags))) {
+		trace_rxrpc_abort(call->debug_id, rxrpc_sendmsg_tx_error,
+				  call->cid, call->call_id, call->rx_consumed,
+				  0, -EIO);
+		ret = -EIO;
 		goto out_unlock;
 	}
 
@@ -423,6 +431,7 @@ reload:
 						 copy, &msg->msg_iter))
 				goto efault;
 			_debug("added");
+			rewind_by = copy;
 			txb->space -= copy;
 			txb->len += copy;
 			txb->offset += copy;
@@ -440,14 +449,29 @@ reload:
 		/* add the packet to the send queue if it's now full */
 		if (!txb->space ||
 		    (len == 0 && !more)) {
+			/* Do any required crypto.  If this fails, it could
+			 * have corrupted the txbuf content with a partial
+			 * encrypt.  Assume that ENOMEM is retryable, but
+			 * everything else is terminal.
+			 */
+			ret = call->security->secure_packet(call, txb);
+			if (ret < 0) {
+				/* Assume that ENOMEM here means that the
+				 * encryption hasn't happened yet.  The data is
+				 * aligned to avoid the need for slow buffering
+				 * in the crypto walk.
+				 */
+				if (ret == -ENOMEM)
+					goto maybe_error_rewind;
+				set_bit(RXRPC_CALL_TX_ERROR, &call->flags);
+				goto out;
+			}
+
 			if (len == 0 && !more)
 				txb->flags |= RXRPC_LAST_PACKET;
-
-			ret = call->security->secure_packet(call, txb);
-			if (ret < 0)
-				goto out_unlock;
 			rxrpc_queue_packet(rx, call, txb, notify_end_tx);
 			call->tx_pending = NULL;
+			rewind_by = 0;
 
 			/* At this point, if that was the last packet, it may
 			 * have been transmitted and the reply (client call) or
@@ -474,19 +498,22 @@ out:
 	 *
 	 * (2) If another sendmsg() has already queued the last packet: -EPROTO.
 	 *
-	 * (3) If the send side of the socket is shut down, -EPIPE.
+	 * (3) If an error caused it to be impossible to continue with the
+	 *     call: -EIO.
 	 *
-	 * (4) If the call is in the wrong state to transmit: -EPROTO.
+	 * (4) If the send side of the socket is shut down, -EPIPE.
 	 *
-	 * (5) If the call has terminated early, likely due to an external
+	 * (5) If the call is in the wrong state to transmit: -EPROTO.
+	 *
+	 * (6) If the call has terminated early, likely due to an external
 	 *     event such as being remotely aborted: -ESHUTDOWN.
 	 *
-	 * (6) If some data has been copied by this call: the amount copied
+	 * (7) If some data has been copied by this call: the amount copied
 	 *     (which will be greater than zero).
 	 *
-	 * (7) Any other error.
+	 * (8) Any other error.
 	 *
-	 * For (2)-(5), there's no point in continuing with the sendmsg().  The
+	 * For (2)-(6), there's no point in continuing with the sendmsg().  The
 	 * app should abort the call (just in case the error came from
 	 * somewhere else) and then use recvmsg() to collect the final result
 	 * of the call.
@@ -498,6 +525,22 @@ call_terminated:
 	ret = -ESHUTDOWN;
 	goto out_unlock;
 
+maybe_error_rewind:
+	/* If we got a retryable error after copying all the supplied data into
+	 * the last packet, we need to rewind as much as we can so the caller
+	 * knows they need to retry the sendmsg.
+	 */
+	if (rewind_by && !more && !len) {
+		struct rxrpc_txbuf *txb = call->tx_pending;
+
+		txb->space  += rewind_by;
+		txb->len    -= rewind_by;
+		txb->offset -= rewind_by;
+		copied      -= rewind_by;
+		if (call->tx_total_len != -1)
+			call->tx_total_len += rewind_by;
+		iov_iter_revert(&msg->msg_iter, rewind_by);
+	}
 maybe_error:
 	if (copied) {
 		if (test_bit(RXRPC_CALL_TX_NO_MORE, &call->flags)) {
