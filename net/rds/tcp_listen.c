@@ -278,7 +278,15 @@ int rds_tcp_accept_one(struct rds_tcp_net *rtn)
 	cp = rs_tcp->t_cpath;
 	conn_state = rds_conn_path_state(cp);
 	WARN_ON(conn_state == RDS_CONN_UP);
-	if (conn_state != RDS_CONN_CONNECTING && conn_state != RDS_CONN_ERROR) {
+	/* A connection whose destroy has begun has been quiesced and is
+	 * only waiting for its last reference: its paths sit in
+	 * RDS_CONN_DOWN, which rds_tcp_accept_one_path() happily claims.
+	 * Installing a socket on it would leave sk_user_data pointing
+	 * at a path that is about to be freed.
+	 */
+	if (rds_destroy_pending(conn) ||
+	    (conn_state != RDS_CONN_CONNECTING &&
+	     conn_state != RDS_CONN_ERROR)) {
 		rds_conn_path_drop(cp, 0);
 		goto rst_nsk;
 	}
