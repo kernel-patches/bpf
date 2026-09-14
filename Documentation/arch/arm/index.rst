@@ -48,9 +48,6 @@ SoC-specific documents
 
    pxa/mfp
 
-
-   sa1100/index
-
    stm32/stm32f746-overview
    stm32/overview
    stm32/stm32h743-overview

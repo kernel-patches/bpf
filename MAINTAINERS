@@ -2977,14 +2977,6 @@ F:	arch/arm/boot/dts/hisilicon/
 F:	arch/arm/mach-hisi/
 F:	arch/arm64/boot/dts/hisilicon/
 
-ARM/HP JORNADA 7XX MACHINE SUPPORT
-M:	Kristoffer Ericson <kristoffer.ericson@gmail.com>
-S:	Maintained
-W:	www.jlime.com
-T:	git git://git.kernel.org/pub/scm/linux/kernel/git/kristoffer/linux-hpc.git
-F:	arch/arm/mach-sa1100/include/mach/jornada720.h
-F:	arch/arm/mach-sa1100/jornada720.c
-
 ARM/HPE GXP ARCHITECTURE
 M:	Jean-Marie Verdun <verdun@hpe.com>
 M:	Nick Hawkins <nick.hawkins@hpe.com>

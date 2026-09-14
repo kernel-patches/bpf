@@ -1541,11 +1541,11 @@ config RTC_DRV_EP93XX
 	  will be called rtc-ep93xx.
 
 config RTC_DRV_SA1100
-	tristate "SA11x0/PXA2xx/PXA910"
-	depends on ARCH_SA1100 || ARCH_PXA || ARCH_MMP
+	tristate "PXA2xx/PXA910"
+	depends on ARCH_PXA || ARCH_MMP
 	help
 	  If you say Y here you will get access to the real time clock
-	  built into your SA11x0 or PXA2xx CPU.
+	  built into PXA2xx CPUs.
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called rtc-sa1100.
