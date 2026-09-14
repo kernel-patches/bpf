@@ -143,6 +143,8 @@ int mtk_port_send_data(struct mtk_port *port, void *data, bool blocking, bool fo
 int mtk_port_status_update(struct mtk_md_dev *mdev, void *data, u32 data_len);
 int mtk_port_ch_enable(struct mtk_port *port);
 int mtk_port_ch_disable(struct mtk_port *port);
+void mtk_port_mngr_fsm_state_handler(struct mtk_fsm_param *fsm_param, void *arg);
+void mtk_port_mngr_fsm_state_handler_late(struct mtk_fsm_param *fsm_param, void *arg);
 int mtk_port_mngr_init(struct mtk_ctrl_blk *ctrl_blk, struct mtk_port_cfg *port_cfg, int port_cnt);
 void mtk_port_mngr_exit(struct mtk_ctrl_blk *ctrl_blk);
 void mtk_port_trb_init(struct mtk_port *port, struct trb *trb, enum mtk_trb_cmd_type cmd,

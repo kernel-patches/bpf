@@ -126,6 +126,13 @@ struct cldma_drv_info {
 	struct workqueue_struct *wq;
 	struct cldma_hw_regs *hw_regs;
 	struct cldma_drv_ops *drv_ops;
+	struct work_struct err_work;
+	atomic_t tx_err_qs;
+	atomic_t rx_err_qs;
+	/* a ring could not be quiesced and was leaked on free; skip
+	 * destroying the DMA pools its descriptors still live in
+	 */
+	bool ring_leaked;
 };
 
 struct cldma_drv_ops {

@@ -10,4 +10,5 @@ mtk_t9xx-y := \
 	mtk_dev.o \
 	mtk_ctrl_plane.o \
 	mtk_port.o \
-	mtk_port_io.o
+	mtk_port_io.o \
+	mtk_fsm.o
