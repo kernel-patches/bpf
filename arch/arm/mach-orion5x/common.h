@@ -41,6 +41,25 @@ struct pci_bus;
 struct pci_host_bridge;
 struct pci_sys_data;
 struct pci_dev;
+struct pci_ops;
+struct device;
+
+struct hw_pci {
+	struct pci_ops	*ops;
+	int		nr_controllers;
+	void		**private_data;
+	int		(*setup)(int nr, struct pci_sys_data *);
+	int		(*scan)(int nr, struct pci_host_bridge *);
+	void		(*preinit)(void);
+	void		(*postinit)(void);
+	u8		(*swizzle)(struct pci_dev *dev, u8 *pin);
+	int		(*map_irq)(const struct pci_dev *dev, u8 slot, u8 pin);
+};
+
+/*
+ * Call this with your hw_pci struct to initialise the PCI system.
+ */
+void pci_common_init(struct hw_pci *);
 
 void orion5x_pcie_id(u32 *dev, u32 *rev);
 void orion5x_pci_disable(void);

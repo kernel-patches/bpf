@@ -3,7 +3,6 @@
 #define ASMARM_PCI_H
 
 #ifdef __KERNEL__
-#include <asm/mach/pci.h> /* for pci_sys_data */
 
 extern unsigned long pcibios_min_io;
 #define PCIBIOS_MIN_IO pcibios_min_io

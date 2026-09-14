@@ -32,8 +32,6 @@ Orion family
 	Feroceon 88fr331 (88f51xx) or 88fr531-vd (88f52xx) ARMv5 compatible
   Linux kernel mach directory:
 	arch/arm/mach-orion5x
-  Linux kernel plat directory:
-	arch/arm/plat-orion
 
 Kirkwood family
 ---------------

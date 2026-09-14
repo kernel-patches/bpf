@@ -3087,7 +3087,6 @@ F:	Documentation/devicetree/bindings/soc/dove/
 F:	arch/arm/boot/dts/marvell/dove*
 F:	arch/arm/boot/dts/marvell/orion5x*
 F:	arch/arm/mach-orion5x/
-F:	arch/arm/plat-orion/
 F:	drivers/bus/mvebu-mbus.c
 F:	drivers/soc/dove/
 

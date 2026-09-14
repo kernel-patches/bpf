@@ -1,6 +1,4 @@
 # SPDX-License-Identifier: GPL-2.0
-ccflags-y := -I$(srctree)/arch/arm/plat-orion/include
-
 obj-y				+= common.o pci.o
 
 obj-$(CONFIG_ARCH_ORION5X_DT)		+= board-dt.o

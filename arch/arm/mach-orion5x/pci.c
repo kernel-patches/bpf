@@ -13,10 +13,27 @@
 #include <linux/mbus.h>
 #include <video/vga.h>
 #include <asm/irq.h>
-#include <asm/mach/pci.h>
-#include <plat/pcie.h>
 #include "common.h"
 #include "orion5x.h"
+
+/*
+ * Per-controller structure
+ */
+struct pci_sys_data {
+	struct list_head node;
+	int		busnr;		/* primary bus number			*/
+	u64		mem_offset;	/* bus->cpu memory mapping offset	*/
+	unsigned long	io_offset;	/* bus->cpu IO mapping offset		*/
+	struct pci_bus	*bus;		/* PCI bus				*/
+	struct list_head resources;	/* root bus resources (apertures)       */
+	struct resource io_res;
+	char		io_res_name[12];
+					/* Bridge swizzling			*/
+	u8		(*swizzle)(struct pci_dev *, u8 *);
+					/* IRQ mapping				*/
+	int		(*map_irq)(const struct pci_dev *, u8, u8);
+	void		*private_data;	/* platform controller private data	*/
+};
 
 /*****************************************************************************
  * Orion has one PCIe controller and one PCI controller.
@@ -34,6 +51,217 @@
 /*****************************************************************************
  * PCIe controller
  ****************************************************************************/
+
+/*
+ * PCIe unit register offsets.
+ */
+#define PCIE_DEV_ID_OFF		0x0000
+#define PCIE_CMD_OFF		0x0004
+#define PCIE_DEV_REV_OFF	0x0008
+#define PCIE_BAR_LO_OFF(n)	(0x0010 + ((n) << 3))
+#define PCIE_BAR_HI_OFF(n)	(0x0014 + ((n) << 3))
+#define PCIE_HEADER_LOG_4_OFF	0x0128
+#define PCIE_BAR_CTRL_OFF(n)	(0x1804 + ((n - 1) * 4))
+#define PCIE_WIN04_CTRL_OFF(n)	(0x1820 + ((n) << 4))
+#define PCIE_WIN04_BASE_OFF(n)	(0x1824 + ((n) << 4))
+#define PCIE_WIN04_REMAP_OFF(n)	(0x182c + ((n) << 4))
+#define PCIE_WIN5_CTRL_OFF	0x1880
+#define PCIE_WIN5_BASE_OFF	0x1884
+#define PCIE_WIN5_REMAP_OFF	0x188c
+#define PCIE_CONF_ADDR_OFF	0x18f8
+#define  PCIE_CONF_ADDR_EN		0x80000000
+#define  PCIE_CONF_REG(r)		((((r) & 0xf00) << 16) | ((r) & 0xfc))
+#define  PCIE_CONF_BUS(b)		(((b) & 0xff) << 16)
+#define  PCIE_CONF_DEV(d)		(((d) & 0x1f) << 11)
+#define  PCIE_CONF_FUNC(f)		(((f) & 0x7) << 8)
+#define PCIE_CONF_DATA_OFF	0x18fc
+#define PCIE_MASK_OFF		0x1910
+#define PCIE_CTRL_OFF		0x1a00
+#define  PCIE_CTRL_X1_MODE		0x0001
+#define PCIE_STAT_OFF		0x1a04
+#define  PCIE_STAT_DEV_OFFS		20
+#define  PCIE_STAT_DEV_MASK		0x1f
+#define  PCIE_STAT_BUS_OFFS		8
+#define  PCIE_STAT_BUS_MASK		0xff
+#define  PCIE_STAT_LINK_DOWN		1
+#define PCIE_DEBUG_CTRL         0x1a60
+#define  PCIE_DEBUG_SOFT_RESET		(1<<20)
+
+
+static u32 orion_pcie_dev_id(void __iomem *base)
+{
+	return readl(base + PCIE_DEV_ID_OFF) >> 16;
+}
+
+static u32 orion_pcie_rev(void __iomem *base)
+{
+	return readl(base + PCIE_DEV_REV_OFF) & 0xff;
+}
+
+static int orion_pcie_link_up(void __iomem *base)
+{
+	return !(readl(base + PCIE_STAT_OFF) & PCIE_STAT_LINK_DOWN);
+}
+
+static void __init orion_pcie_set_local_bus_nr(void __iomem *base, int nr)
+{
+	u32 stat;
+
+	stat = readl(base + PCIE_STAT_OFF);
+	stat &= ~(PCIE_STAT_BUS_MASK << PCIE_STAT_BUS_OFFS);
+	stat |= nr << PCIE_STAT_BUS_OFFS;
+	writel(stat, base + PCIE_STAT_OFF);
+}
+
+/*
+ * Setup PCIE BARs and Address Decode Wins:
+ * BAR[0,2] -> disabled, BAR[1] -> covers all DRAM banks
+ * WIN[0-3] -> DRAM bank[0-3]
+ */
+static void __init orion_pcie_setup_wins(void __iomem *base)
+{
+	const struct mbus_dram_target_info *dram;
+	u32 size;
+	int i;
+
+	dram = mv_mbus_dram_info();
+
+	/*
+	 * First, disable and clear BARs and windows.
+	 */
+	for (i = 1; i <= 2; i++) {
+		writel(0, base + PCIE_BAR_CTRL_OFF(i));
+		writel(0, base + PCIE_BAR_LO_OFF(i));
+		writel(0, base + PCIE_BAR_HI_OFF(i));
+	}
+
+	for (i = 0; i < 5; i++) {
+		writel(0, base + PCIE_WIN04_CTRL_OFF(i));
+		writel(0, base + PCIE_WIN04_BASE_OFF(i));
+		writel(0, base + PCIE_WIN04_REMAP_OFF(i));
+	}
+
+	writel(0, base + PCIE_WIN5_CTRL_OFF);
+	writel(0, base + PCIE_WIN5_BASE_OFF);
+	writel(0, base + PCIE_WIN5_REMAP_OFF);
+
+	/*
+	 * Setup windows for DDR banks.  Count total DDR size on the fly.
+	 */
+	size = 0;
+	for (i = 0; i < dram->num_cs; i++) {
+		const struct mbus_dram_window *cs = dram->cs + i;
+
+		writel(cs->base & 0xffff0000, base + PCIE_WIN04_BASE_OFF(i));
+		writel(0, base + PCIE_WIN04_REMAP_OFF(i));
+		writel(((cs->size - 1) & 0xffff0000) |
+			(cs->mbus_attr << 8) |
+			(dram->mbus_dram_target_id << 4) | 1,
+				base + PCIE_WIN04_CTRL_OFF(i));
+
+		size += cs->size;
+	}
+
+	/*
+	 * Round up 'size' to the nearest power of two.
+	 */
+	if ((size & (size - 1)) != 0)
+		size = 1 << fls(size);
+
+	/*
+	 * Setup BAR[1] to all DRAM banks.
+	 */
+	writel(dram->cs[0].base, base + PCIE_BAR_LO_OFF(1));
+	writel(0, base + PCIE_BAR_HI_OFF(1));
+	writel(((size - 1) & 0xffff0000) | 1, base + PCIE_BAR_CTRL_OFF(1));
+}
+
+static void __init orion_pcie_setup(void __iomem *base)
+{
+	u16 cmd;
+	u32 mask;
+
+	/*
+	 * Point PCIe unit MBUS decode windows to DRAM space.
+	 */
+	orion_pcie_setup_wins(base);
+
+	/*
+	 * Master + slave enable.
+	 */
+	cmd = readw(base + PCIE_CMD_OFF);
+	cmd |= PCI_COMMAND_IO;
+	cmd |= PCI_COMMAND_MEMORY;
+	cmd |= PCI_COMMAND_MASTER;
+	writew(cmd, base + PCIE_CMD_OFF);
+
+	/*
+	 * Enable interrupt lines A-D.
+	 */
+	mask = readl(base + PCIE_MASK_OFF);
+	mask |= 0x0f000000;
+	writel(mask, base + PCIE_MASK_OFF);
+}
+
+static int orion_pcie_rd_conf(void __iomem *base, struct pci_bus *bus,
+			      u32 devfn, int where, int size, u32 *val)
+{
+	writel(PCIE_CONF_BUS(bus->number) |
+		PCIE_CONF_DEV(PCI_SLOT(devfn)) |
+		PCIE_CONF_FUNC(PCI_FUNC(devfn)) |
+		PCIE_CONF_REG(where) | PCIE_CONF_ADDR_EN,
+			base + PCIE_CONF_ADDR_OFF);
+
+	*val = readl(base + PCIE_CONF_DATA_OFF);
+
+	if (size == 1)
+		*val = (*val >> (8 * (where & 3))) & 0xff;
+	else if (size == 2)
+		*val = (*val >> (8 * (where & 3))) & 0xffff;
+
+	return PCIBIOS_SUCCESSFUL;
+}
+
+static int orion_pcie_rd_conf_wa(void __iomem *wa_base, struct pci_bus *bus,
+				 u32 devfn, int where, int size, u32 *val)
+{
+	*val = readl(wa_base + (PCIE_CONF_BUS(bus->number) |
+				PCIE_CONF_DEV(PCI_SLOT(devfn)) |
+				PCIE_CONF_FUNC(PCI_FUNC(devfn)) |
+				PCIE_CONF_REG(where)));
+
+	if (size == 1)
+		*val = (*val >> (8 * (where & 3))) & 0xff;
+	else if (size == 2)
+		*val = (*val >> (8 * (where & 3))) & 0xffff;
+
+	return PCIBIOS_SUCCESSFUL;
+}
+
+static int orion_pcie_wr_conf(void __iomem *base, struct pci_bus *bus,
+			      u32 devfn, int where, int size, u32 val)
+{
+	int ret = PCIBIOS_SUCCESSFUL;
+
+	writel(PCIE_CONF_BUS(bus->number) |
+		PCIE_CONF_DEV(PCI_SLOT(devfn)) |
+		PCIE_CONF_FUNC(PCI_FUNC(devfn)) |
+		PCIE_CONF_REG(where) | PCIE_CONF_ADDR_EN,
+			base + PCIE_CONF_ADDR_OFF);
+
+	if (size == 4) {
+		writel(val, base + PCIE_CONF_DATA_OFF);
+	} else if (size == 2) {
+		writew(val, base + PCIE_CONF_DATA_OFF + (where & 3));
+	} else if (size == 1) {
+		writeb(val, base + PCIE_CONF_DATA_OFF + (where & 3));
+	} else {
+		ret = PCIBIOS_BAD_REGISTER_NUMBER;
+	}
+
+	return ret;
+}
+
 #define PCIE_BASE	(ORION5X_PCIE_VIRT_BASE)
 
 void __init orion5x_pcie_id(u32 *dev, u32 *rev)
@@ -597,4 +825,200 @@ int __init orion5x_pci_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 		return IRQ_ORION5X_PCIE0_INT;
 
 	return -1;
+}
+
+static int debug_pci;
+
+char * __init pcibios_setup(char *str)
+{
+	if (!strcmp(str, "debug")) {
+		debug_pci = 1;
+		return NULL;
+	}
+	return str;
+}
+
+/*
+ * Swizzle the device pin each time we cross a bridge.  If a platform does
+ * not provide a swizzle function, we perform the standard PCI swizzling.
+ *
+ * The default swizzling walks up the bus tree one level at a time, applying
+ * the standard swizzle function at each step, stopping when it finds the PCI
+ * root bus.  This will return the slot number of the bridge device on the
+ * root bus and the interrupt pin on that device which should correspond
+ * with the downstream device interrupt.
+ *
+ * Platforms may override this, in which case the slot and pin returned
+ * depend entirely on the platform code.  However, please note that the
+ * PCI standard swizzle is implemented on plug-in cards and Cardbus based
+ * PCI extenders, so it can not be ignored.
+ */
+static u8 pcibios_swizzle(struct pci_dev *dev, u8 *pin)
+{
+	struct pci_sys_data *sys = dev->sysdata;
+	int slot, oldpin = *pin;
+
+	if (sys->swizzle)
+		slot = sys->swizzle(dev, pin);
+	else
+		slot = pci_common_swizzle(dev, pin);
+
+	if (debug_pci)
+		printk("PCI: %s swizzling pin %d => pin %d slot %d\n",
+			pci_name(dev), oldpin, *pin, slot);
+
+	return slot;
+}
+
+/*
+ * Map a slot/pin to an IRQ.
+ */
+static int pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
+{
+	struct pci_sys_data *sys = dev->sysdata;
+	int irq = -1;
+
+	if (sys->map_irq)
+		irq = sys->map_irq(dev, slot, pin);
+
+	if (debug_pci)
+		printk("PCI: %s mapping slot %d pin %d => irq %d\n",
+			pci_name(dev), slot, pin, irq);
+
+	return irq;
+}
+
+static int pcibios_init_resource(int busnr, struct pci_sys_data *sys)
+{
+	int ret;
+	struct resource_entry *window;
+
+	if (list_empty(&sys->resources)) {
+		pci_add_resource_offset(&sys->resources,
+			 &iomem_resource, sys->mem_offset);
+	}
+
+	resource_list_for_each_entry(window, &sys->resources)
+		if (resource_type(window->res) == IORESOURCE_IO)
+			return 0;
+
+	sys->io_res.start = (busnr * SZ_64K) ?  : pcibios_min_io;
+	sys->io_res.end = (busnr + 1) * SZ_64K - 1;
+	sys->io_res.flags = IORESOURCE_IO;
+	sys->io_res.name = sys->io_res_name;
+	sprintf(sys->io_res_name, "PCI%d I/O", busnr);
+
+	ret = request_resource(&ioport_resource, &sys->io_res);
+	if (ret) {
+		pr_err("PCI: unable to allocate I/O port region (%d)\n", ret);
+		return ret;
+	}
+	pci_add_resource_offset(&sys->resources, &sys->io_res,
+				sys->io_offset);
+
+	return 0;
+}
+
+static void pcibios_init_hw(struct device *parent, struct hw_pci *hw,
+			    struct list_head *head)
+{
+	struct pci_sys_data *sys = NULL;
+	int ret;
+	int nr, busnr;
+
+	for (nr = busnr = 0; nr < hw->nr_controllers; nr++) {
+		struct pci_host_bridge *bridge;
+
+		bridge = pci_alloc_host_bridge(sizeof(struct pci_sys_data));
+		if (WARN(!bridge, "PCI: unable to allocate bridge!"))
+			break;
+
+		sys = pci_host_bridge_priv(bridge);
+
+		sys->busnr   = busnr;
+		sys->swizzle = hw->swizzle;
+		sys->map_irq = hw->map_irq;
+		INIT_LIST_HEAD(&sys->resources);
+
+		if (hw->private_data)
+			sys->private_data = hw->private_data[nr];
+
+		ret = hw->setup(nr, sys);
+
+		if (ret > 0) {
+
+			ret = pcibios_init_resource(nr, sys);
+			if (ret)  {
+				pci_free_host_bridge(bridge);
+				break;
+			}
+
+			bridge->map_irq = pcibios_map_irq;
+			bridge->swizzle_irq = pcibios_swizzle;
+
+			if (hw->scan)
+				ret = hw->scan(nr, bridge);
+			else {
+				list_splice_init(&sys->resources,
+						 &bridge->windows);
+				bridge->dev.parent = parent;
+				bridge->sysdata = sys;
+				bridge->busnr = sys->busnr;
+				bridge->ops = hw->ops;
+
+				ret = pci_scan_root_bus_bridge(bridge);
+			}
+
+			if (WARN(ret < 0, "PCI: unable to scan bus!")) {
+				pci_free_host_bridge(bridge);
+				break;
+			}
+
+			sys->bus = bridge->bus;
+
+			busnr = sys->bus->busn_res.end + 1;
+
+			list_add(&sys->node, head);
+		} else {
+			pci_free_host_bridge(bridge);
+			if (ret < 0)
+				break;
+		}
+	}
+}
+
+void pci_common_init(struct hw_pci *hw)
+{
+	struct pci_sys_data *sys;
+	LIST_HEAD(head);
+
+	pci_add_flags(PCI_REASSIGN_ALL_BUS);
+	if (hw->preinit)
+		hw->preinit();
+	pcibios_init_hw(NULL, hw, &head);
+	if (hw->postinit)
+		hw->postinit();
+
+	list_for_each_entry(sys, &head, node) {
+		struct pci_bus *bus = sys->bus;
+
+		/*
+		 * We insert PCI resources into the iomem_resource and
+		 * ioport_resource trees in either pci_bus_claim_resources()
+		 * or pci_bus_assign_resources().
+		 */
+		if (pci_has_flag(PCI_PROBE_ONLY)) {
+			pci_bus_claim_resources(bus);
+		} else {
+			struct pci_bus *child;
+
+			pci_bus_size_bridges(bus);
+			pci_bus_assign_resources(bus);
+
+			list_for_each_entry(child, &bus->children, node)
+				pcie_bus_configure_settings(child);
+		}
+
+		pci_bus_add_devices(bus);
+	}
 }
