@@ -50,6 +50,9 @@ dispatch_hid_bpf_device_event(struct hid_device *hdev, enum hid_report_type type
 	if (!hdev->bpf.device_data)
 		return data;
 
+	if (*size > *buf_size || *size > ctx_kern.ctx.allocated_size)
+		return ERR_PTR(-EINVAL);
+
 	memset(ctx_kern.data, 0, hdev->bpf.allocated_data);
 	memcpy(ctx_kern.data, data, *size);
 
