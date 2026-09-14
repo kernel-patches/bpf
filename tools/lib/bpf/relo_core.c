@@ -1047,17 +1047,6 @@ int bpf_core_patch_insn(const char *prog_name, struct bpf_insn *insn,
 
 	class = BPF_CLASS(insn->code);
 
-	if (res->poison) {
-poison:
-		/* poison second part of ldimm64 to avoid confusing error from
-		 * verifier about "unknown opcode 00"
-		 */
-		if (is_ldimm64_insn(insn))
-			bpf_core_poison_insn(prog_name, relo_idx, insn_idx + 1, insn + 1);
-		bpf_core_poison_insn(prog_name, relo_idx, insn_idx, insn);
-		return 0;
-	}
-
 	orig_val = res->orig_val;
 	new_val = res->new_val;
 
@@ -1066,6 +1055,8 @@ poison:
 	case BPF_ALU64:
 		if (BPF_SRC(insn->code) != BPF_K)
 			return -EINVAL;
+		if (res->poison)
+			goto poison;
 		if (res->validate && insn->imm != orig_val) {
 			pr_warn("prog '%s': relo #%d: unexpected insn #%d (ALU/ALU64) value: got %d, exp %llu -> %llu\n",
 				prog_name, relo_idx,
@@ -1082,6 +1073,8 @@ poison:
 	case BPF_LDX:
 	case BPF_ST:
 	case BPF_STX:
+		if (res->poison)
+			goto poison;
 		if (res->validate && insn->off != orig_val) {
 			pr_warn("prog '%s': relo #%d: unexpected insn #%d (LDX/ST/STX) value: got %d, exp %llu -> %llu\n",
 				prog_name, relo_idx, insn_idx, insn->off, (unsigned long long)orig_val,
@@ -1140,6 +1133,9 @@ poison:
 			return -EINVAL;
 		}
 
+		if (res->poison)
+			goto poison;
+
 		imm = (__u32)insn[0].imm | ((__u64)insn[1].imm << 32);
 		if (res->validate && imm != orig_val) {
 			pr_warn("prog '%s': relo #%d: unexpected insn #%d (LDIMM64) value: got %llu, exp %llu -> %llu\n",
@@ -1163,6 +1159,16 @@ poison:
 		return -EINVAL;
 	}
 
+	return 0;
+
+poison:
+	/*
+	 * Only relocatable instructions reach here. Poison both halves of
+	 * ldimm64 so the verifier reports the bad relocation, not opcode 00.
+	 */
+	if (is_ldimm64_insn(insn))
+		bpf_core_poison_insn(prog_name, relo_idx, insn_idx + 1, insn + 1);
+	bpf_core_poison_insn(prog_name, relo_idx, insn_idx, insn);
 	return 0;
 }
 
