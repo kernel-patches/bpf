@@ -111,10 +111,7 @@ Discovery family
   Core:
 	Feroceon 88fr571-vd ARMv5 compatible
 
-  Linux kernel mach directory:
-	arch/arm/mach-mv78xx0
-  Linux kernel plat directory:
-	arch/arm/plat-orion
+  (not supported in upstream Linux kernel any more)
 
 EBU Armada family
 -----------------
@@ -327,8 +324,7 @@ Dove family (application processor)
 	ARMv7 compatible
 
   Directory:
-	- arch/arm/mach-mvebu (DT enabled platforms)
-        - arch/arm/mach-dove (non-DT enabled platforms)
+	- arch/arm/mach-mvebu
 
 PXA 2xx/3xx/93x/95x family
 --------------------------
@@ -511,10 +507,7 @@ got replaced with licensed ARM Cortex-A cores.
 Long-term plans
 ---------------
 
- * Unify the mach-dove/, mach-mv78xx0/, mach-orion5x/ into the
-   mach-mvebu/ to support all SoCs from the Marvell EBU (Engineering
-   Business Unit) in a single mach-<foo> directory. The plat-orion/
-   would therefore disappear.
+ * Unify mach-orion5x/ and mach-mvebu/.
 
 Credits
 -------

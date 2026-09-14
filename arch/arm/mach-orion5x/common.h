@@ -4,9 +4,6 @@
 
 #include <linux/reboot.h>
 
-struct mv643xx_eth_platform_data;
-struct mv_sata_platform_data;
-
 #define ORION_MBUS_PCIE_MEM_TARGET    0x04
 #define ORION_MBUS_PCIE_MEM_ATTR      0x59
 #define ORION_MBUS_PCIE_IO_TARGET     0x04
@@ -32,21 +29,9 @@ void orion5x_init_early(void);
 void orion5x_init_irq(void);
 void orion5x_init(void);
 void orion5x_id(u32 *dev, u32 *rev, char **dev_name);
-void clk_init(void);
-extern int orion5x_tclk;
-extern void orion5x_timer_init(void);
 
 void orion5x_setup_wins(void);
 
-void orion5x_ehci0_init(void);
-void orion5x_ehci1_init(void);
-void orion5x_eth_init(struct mv643xx_eth_platform_data *eth_data);
-void orion5x_i2c_init(void);
-void orion5x_sata_init(struct mv_sata_platform_data *sata_data);
-void orion5x_spi_init(void);
-void orion5x_uart0_init(void);
-void orion5x_uart1_init(void);
-void orion5x_xor_init(void);
 void orion5x_restart(enum reboot_mode, const char *);
 
 /*

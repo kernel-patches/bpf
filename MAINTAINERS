@@ -3086,8 +3086,6 @@ F:	Documentation/devicetree/bindings/arm/marvell/marvell,orion5x.yaml
 F:	Documentation/devicetree/bindings/soc/dove/
 F:	arch/arm/boot/dts/marvell/dove*
 F:	arch/arm/boot/dts/marvell/orion5x*
-F:	arch/arm/mach-dove/
-F:	arch/arm/mach-mv78xx0/
 F:	arch/arm/mach-orion5x/
 F:	arch/arm/plat-orion/
 F:	drivers/bus/mvebu-mbus.c
@@ -3361,13 +3359,6 @@ R:	s32@nxp.com
 S:	Maintained
 F:	Documentation/devicetree/bindings/net/nxp,s32-dwmac.yaml
 F:	drivers/net/ethernet/stmicro/stmmac/dwmac-s32.c
-
-ARM/Orion SoC/Technologic Systems TS-78xx platform support
-M:	Alexander Clouter <alex@digriz.org.uk>
-L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
-S:	Maintained
-W:	http://www.digriz.org.uk/ts78xx/kernel
-F:	arch/arm/mach-orion5x/ts78xx-*
 
 ARM/QUALCOMM CHROMEBOOK SUPPORT
 R:	cros-qcom-dts-watchers@chromium.org

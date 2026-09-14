@@ -13,7 +13,6 @@
 #include <linux/mbus.h>
 #include <asm/mach/pci.h>
 #include <plat/pcie.h>
-#include <plat/addr-map.h>
 #include <linux/delay.h>
 
 /*

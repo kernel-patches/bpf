@@ -15,7 +15,6 @@
 #include <asm/irq.h>
 #include <asm/mach/pci.h>
 #include <plat/pcie.h>
-#include <plat/addr-map.h>
 #include "common.h"
 #include "orion5x.h"
 
