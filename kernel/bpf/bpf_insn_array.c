@@ -235,7 +235,7 @@ void bpf_insn_array_release(struct bpf_map *map)
 	atomic_set(&insn_array->used, 0);
 }
 
-void bpf_insn_array_adjust(struct bpf_map *map, u32 off, u32 len)
+void bpf_insn_array_adjust(struct bpf_map *map, u32 first, u32 len)
 {
 	struct bpf_insn_array *insn_array = cast_insn_array(map);
 	int i;
@@ -244,7 +244,7 @@ void bpf_insn_array_adjust(struct bpf_map *map, u32 off, u32 len)
 		return;
 
 	for (i = 0; i < map->max_entries; i++) {
-		if (insn_array->values[i].xlated_off <= off)
+		if (insn_array->values[i].xlated_off < first)
 			continue;
 		if (insn_array->values[i].xlated_off == INSN_DELETED)
 			continue;
