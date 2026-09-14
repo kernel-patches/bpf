@@ -64,11 +64,25 @@ int quic_crypto_set_secret(struct quic_crypto *crypto,
 int quic_crypto_set_cipher(struct quic_crypto *crypto, u32 type);
 int quic_crypto_key_update(struct quic_crypto *crypto);
 
+int quic_crypto_encrypt(struct quic_crypto *crypto, struct sk_buff *skb,
+			gfp_t gfp);
+int quic_crypto_decrypt(struct quic_crypto *crypto, struct sk_buff *skb,
+			gfp_t gfp);
+
 int quic_crypto_derive_secret(struct quic_crypto *crypto, void *data, u32 len,
 			      char *label, u8 *srt, u32 srt_len);
 int quic_crypto_initial_keys_install(struct quic_crypto *crypto,
 				     struct quic_conn_id *conn_id,
 				     u32 version, bool is_serv);
 int quic_crypto_set_token_secret(struct quic_crypto *crypto);
+
+int quic_crypto_generate_token(struct quic_crypto *crypto, void *addr,
+			       u32 addrlen, struct quic_conn_id *conn_id,
+			       u8 *token, u32 *tlen);
+int quic_crypto_get_retry_tag(struct quic_crypto *crypto, struct sk_buff *skb,
+			      struct quic_conn_id *odcid, u32 version, u8 *tag);
+int quic_crypto_verify_token(struct quic_crypto *crypto, void *addr,
+			     u32 addrlen, struct quic_conn_id *conn_id,
+			     u8 *token, u32 len);
 
 void quic_crypto_free(struct quic_crypto *crypto);
