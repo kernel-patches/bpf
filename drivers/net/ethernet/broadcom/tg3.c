@@ -17914,12 +17914,13 @@ static int tg3_init_one(struct pci_dev *pdev,
 	}
 
 	err = tg3_get_device_address(tp, addr);
-	if (err) {
-		dev_err(&pdev->dev,
-			"Could not obtain valid ethernet address, aborting\n");
-		goto err_out_apeunmap;
+	if (!err) {
+		eth_hw_addr_set(dev, addr);
+	} else {
+		dev_warn(&pdev->dev,
+			 "Could not obtain valid ethernet address, using a random address\n");
+		eth_hw_addr_random(dev);
 	}
-	eth_hw_addr_set(dev, addr);
 
 	intmbx = MAILBOX_INTERRUPT_0 + TG3_64BIT_REG_LOW;
 	rcvmbx = MAILBOX_RCVRET_CON_IDX_0 + TG3_64BIT_REG_LOW;
