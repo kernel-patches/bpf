@@ -122,15 +122,25 @@ static void ntb_netdev_event_handler(void *data, int link_is_up, u32 peer_caps)
 	ntb_netdev_update_carrier(dev);
 }
 
+static void ntb_netdev_rx_stats_add(struct net_device *ndev,
+				    unsigned int len)
+{
+	struct pcpu_sw_netstats *tstats = this_cpu_ptr(ndev->tstats);
+	unsigned long flags;
+
+	flags = u64_stats_update_begin_irqsave(&tstats->syncp);
+	u64_stats_inc(&tstats->rx_packets);
+	u64_stats_add(&tstats->rx_bytes, len);
+	u64_stats_update_end_irqrestore(&tstats->syncp, flags);
+}
+
 static void ntb_netdev_rx_handler(struct ntb_transport_qp *qp, void *qp_data,
 				  void *data, int len, unsigned int meta)
 {
 	struct ntb_netdev_queue *q = qp_data;
 	struct ntb_netdev *dev = q->ntdev;
-	struct pcpu_sw_netstats *tstats;
 	struct sk_buff *skb, *new_skb;
 	struct net_device *ndev;
-	unsigned long flags;
 	int rc;
 
 	ndev = dev->ndev;
@@ -146,11 +156,7 @@ static void ntb_netdev_rx_handler(struct ntb_transport_qp *qp, void *qp_data,
 		goto enqueue_again;
 	}
 
-	tstats = this_cpu_ptr(ndev->tstats);
-	flags = u64_stats_update_begin_irqsave(&tstats->syncp);
-	u64_stats_inc(&tstats->rx_packets);
-	u64_stats_add(&tstats->rx_bytes, len);
-	u64_stats_update_end_irqrestore(&tstats->syncp, flags);
+	ntb_netdev_rx_stats_add(ndev, len);
 
 	new_skb = netdev_alloc_skb(ndev, ndev->mtu + ETH_HLEN);
 	if (!new_skb) {
