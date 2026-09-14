@@ -854,23 +854,47 @@ static int mtk_pci_dev_init(struct mtk_md_dev *mdev)
 {
 	int ret;
 
-	ret = mtk_trans_ctrl_init(mdev);
+	ret = mtk_fsm_init(mdev);
 	if (ret) {
-		dev_err(mdev->dev, "Failed to initialize control plane: %d\n", ret);
+		dev_err(mdev->dev, "Failed to initialize FSM: %d\n", ret);
 		return ret;
 	}
 
+	ret = mtk_trans_ctrl_init(mdev);
+	if (ret)
+		goto free_fsm;
+
 	return 0;
+free_fsm:
+	mtk_fsm_exit(mdev);
+	return ret;
 }
 
 static void mtk_pci_dev_exit(struct mtk_md_dev *mdev)
 {
+	int ret;
+
+	ret = mtk_fsm_evt_submit(mdev, FSM_EVT_DEV_RM, 0, NULL, 0,
+				 EVT_MODE_BLOCKING | EVT_MODE_TOHEAD);
+	if (ret < 0 || ret == FSM_EVT_RET_FAIL)
+		dev_err(mdev->dev, "FSM DEV_RM failed: %d, forcing cleanup\n", ret);
+	/* Close the event gate and park the FSM thread before the transport
+	 * plane it drives is torn down.
+	 */
+	mtk_fsm_stop(mdev);
 	mtk_trans_ctrl_exit(mdev);
+	mtk_fsm_exit(mdev);
 }
 
 static int mtk_pci_dev_start(struct mtk_md_dev *mdev)
 {
-	return 0;
+	int ret;
+
+	ret = mtk_fsm_evt_submit(mdev, FSM_EVT_DEV_ADD, 0, NULL, 0, 0);
+	if (ret == FSM_EVT_RET_FAIL)
+		return -ENOMEM;
+
+	return mtk_fsm_start(mdev);
 }
 static const struct mtk_dev_ops pci_hw_ops = {
 	.get_dev_state = mtk_pci_get_dev_state,

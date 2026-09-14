@@ -10,6 +10,7 @@
 #include <linux/skbuff.h>
 
 #include "mtk_dev.h"
+#include "mtk_fsm.h"
 
 #define Q_MTU_2K			(0x800)
 #define Q_MTU_3_5K			(0xE00)
@@ -71,6 +72,7 @@ struct mtk_ctrl_hif_ops {
 	int (*init)(struct mtk_md_dev *mdev);
 	int (*exit)(struct mtk_md_dev *mdev);
 	int (*submit_skb)(struct mtk_md_dev *mdev, struct sk_buff *skb, bool force_send);
+	void (*fsm_indication)(struct mtk_md_dev *mdev, struct mtk_fsm_param *param);
 	int (*send_cmd)(struct mtk_md_dev *mdev, int cmd, void *data);
 };
 

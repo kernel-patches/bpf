@@ -714,6 +714,9 @@ int mtk_port_status_update(struct mtk_md_dev *mdev, void *data, u32 data_len)
 	if (unlikely(!mdev || !msg))
 		return -EINVAL;
 
+	if (data_len < sizeof(*msg))
+		return -EPROTO;
+
 	ctrl_blk = mdev->ctrl_blk;
 	port_mngr = ctrl_blk->port_mngr;
 	if (le16_to_cpu(msg->version) != MTK_PORT_ENUM_VER ||
@@ -815,6 +818,69 @@ int mtk_port_ch_disable(struct mtk_port *port)
 	kref_put(&trb->kref, mtk_port_trb_free);
 
 	return ret;
+}
+
+static void mtk_port_disable(struct mtk_port_mngr *port_mngr)
+{
+	struct radix_tree_iter iter;
+	struct mtk_port *port;
+	void __rcu **slot;
+	int tbl_type;
+
+	tbl_type = PORT_TBL_SAP;
+	do {
+		radix_tree_for_each_slot(slot, &port_mngr->port_tbl[tbl_type],
+					 &iter, 0) {
+			MTK_PORT_SEARCH_FROM_RADIX_TREE(port, slot);
+			MTK_PORT_INTERNAL_NODE_CHECK(port, slot, iter);
+			ports_ops[port->info.type]->disable(port);
+		}
+	} while (++tbl_type < PORT_TBL_MAX);
+}
+
+void mtk_port_mngr_fsm_state_handler(struct mtk_fsm_param *fsm_param, void *arg)
+{
+	struct mtk_port_mngr *port_mngr;
+
+	if (!fsm_param || !arg)
+		return;
+
+	port_mngr = arg;
+
+	switch (fsm_param->to) {
+	case FSM_STATE_OFF:
+		mtk_port_disable(port_mngr);
+		break;
+	default:
+		break;
+	}
+}
+
+void mtk_port_mngr_fsm_state_handler_late(struct mtk_fsm_param *fsm_param, void *arg)
+{
+	struct mtk_port_mngr *port_mngr;
+	struct mtk_port *port;
+
+	if (!fsm_param || !arg)
+		return;
+
+	port_mngr = arg;
+
+	switch (fsm_param->to) {
+	case FSM_STATE_BOOTUP:
+		if (fsm_param->fsm_flag & FSM_F_MD_HS_START) {
+			port = mtk_port_search_by_id(port_mngr, CCCI_CONTROL_RX);
+			if (port)
+				ports_ops[port->info.type]->enable(port);
+		} else if (fsm_param->fsm_flag & FSM_F_SAP_HS_START) {
+			port = mtk_port_search_by_id(port_mngr, CCCI_SAP_CONTROL_RX);
+			if (port)
+				ports_ops[port->info.type]->enable(port);
+		}
+		break;
+	default:
+		break;
+	}
 }
 
 int mtk_port_mngr_init(struct mtk_ctrl_blk *ctrl_blk, struct mtk_port_cfg *port_cfg, int port_cnt)
