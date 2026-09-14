@@ -43,7 +43,7 @@ int _rtw_pktfile_read(struct pkt_file *pfile, u8 *rmem, unsigned int rlen)
 	return rlen;
 }
 
-signed int rtw_endofpktfile(struct pkt_file *pfile)
+bool rtw_endofpktfile(struct pkt_file *pfile)
 {
 	if (pfile->pkt_len == 0)
 		return true;
