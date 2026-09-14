@@ -15,7 +15,6 @@
 
 #include "powerdomain.h"
 #include "prm2xxx_3xxx.h"
-#include "prm-regbits-24xx.h"
 #include "clockdomain.h"
 
 /**

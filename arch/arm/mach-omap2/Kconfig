@@ -5,15 +5,6 @@ menu "TI OMAP/AM/DM/DRA Family"
 config OMAP_HWMOD
 	bool
 
-config ARCH_OMAP2
-	bool "TI OMAP2"
-	depends on ARCH_MULTI_V6
-	depends on !SMP
-	select ARCH_OMAP2PLUS
-	select CPU_ARM1136R0
-	select OMAP_HWMOD
-	select SOC_HAS_OMAP2_SDRC
-
 config ARCH_OMAP3
 	bool "TI OMAP3"
 	depends on ARCH_MULTI_V7
@@ -118,7 +109,7 @@ config ARCH_OMAP2PLUS
 	select OMAP_IRQCHIP
 	select CLKSRC_TI_32K
 	help
-	  Systems based on OMAP2, OMAP3, OMAP4 or OMAP5
+	  Systems based on OMAP3, OMAP4 or OMAP5
 
 config OMAP_INTERCONNECT_BARRIER
 	bool
@@ -129,7 +120,7 @@ config ARCH_OMAP
 
 if ARCH_OMAP2PLUS
 
-menu "TI OMAP2/3/4 Specific Features"
+menu "TI OMAP3/4 Specific Features"
 
 config ARCH_OMAP2PLUS_TYPICAL
 	bool "Typical OMAP configuration"
@@ -138,8 +129,7 @@ config ARCH_OMAP2PLUS_TYPICAL
 	select HIGHMEM
 	select I2C
 	select I2C_OMAP
-	select MENELAUS if ARCH_OMAP2
-	select NEON if CPU_V7
+	select NEON
 	select REGULATOR
 	select REGULATOR_FIXED_VOLTAGE
 	select TWL4030_CORE if ARCH_OMAP3 || ARCH_OMAP4
@@ -204,27 +194,7 @@ config OMAP3_L2_AUX_SECURE_SERVICE_SET_ID
 	  PPA routine service ID for setting L2 auxiliary control register.
 
 comment "OMAP Core Type"
-	depends on ARCH_OMAP2
-
-config SOC_OMAP2420
-	bool "OMAP2420 support (DEPRECATED)"
-	depends on ARCH_OMAP2
-	default y
-	select OMAP_DM_SYSTIMER
-	select OMAP_DM_TIMER
-	select SOC_HAS_OMAP2_SDRC
-	help
-	  This SoC is scheduled for removal in early 2027,
-	  since it uses the ARM1136r0 CPU revision.
-
-config SOC_OMAP2430
-	bool "OMAP2430 support (DEPRECATED)"
-	depends on ARCH_OMAP2
-	default y
-	select SOC_HAS_OMAP2_SDRC
-	help
-	  This SoC is scheduled for removal in early 2027,
-	  since it uses the ARM1136r0 CPU revision.
+	depends on ARCH_OMAP3
 
 config SOC_OMAP3430
 	bool "OMAP3430 support"
@@ -237,32 +207,8 @@ config SOC_TI81XX
 	depends on ARCH_OMAP3
 	default y
 
-comment "OMAP Legacy Platform Data Board Type"
-	depends on ARCH_OMAP2PLUS
-
 config MACH_OMAP_GENERIC
 	bool
-
-config MACH_OMAP2_TUSB6010
-	bool
-	depends on ARCH_OMAP2 && SOC_OMAP2420
-	default y if MACH_NOKIA_N8X0
-
-config MACH_NOKIA_N810
-	bool
-
-config MACH_NOKIA_N810_WIMAX
-	bool
-
-config MACH_NOKIA_N8X0
-	bool "Nokia N800/N810 (DEPRECATED)"
-	depends on SOC_OMAP2420
-	default y
-	select MACH_NOKIA_N810
-	select MACH_NOKIA_N810_WIMAX
-	help
-	  This machine is scheduled for removal in early 2027,
-	  since it uses the ARM1136r0 CPU revision.
 
 endmenu
 

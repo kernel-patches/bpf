@@ -19893,7 +19893,6 @@ M:	Jarkko Nikula <jarkko.nikula@bitmer.com>
 L:	linux-sound@vger.kernel.org
 L:	linux-omap@vger.kernel.org
 S:	Maintained
-F:	sound/soc/ti/n810.c
 F:	sound/soc/ti/omap*
 F:	sound/soc/ti/rx51.c
 F:	sound/soc/ti/sdma-pcm.*
@@ -19933,7 +19932,6 @@ M:	Roger Quadros <rogerq@kernel.org>
 M:	Tony Lindgren <tony@atomide.com>
 L:	linux-omap@vger.kernel.org
 S:	Maintained
-F:	arch/arm/mach-omap2/*gpmc*
 F:	drivers/memory/omap-gpmc.c
 
 OMAP GPIO DRIVER
