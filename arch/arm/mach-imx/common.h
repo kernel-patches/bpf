@@ -15,9 +15,7 @@ struct pt_regs;
 struct clk;
 struct device_node;
 
-void mx31_map_io(void);
 void mx35_map_io(void);
-void imx31_init_early(void);
 void imx35_init_early(void);
 void mxc_set_cpu_type(unsigned int type);
 void mxc_restart(enum reboot_mode, const char *);
