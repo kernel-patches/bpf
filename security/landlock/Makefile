@@ -20,3 +20,5 @@ landlock-$(CONFIG_SECURITY_LANDLOCK_LOG) += \
 landlock-$(CONFIG_AUDIT) += audit.o
 
 landlock-$(CONFIG_TRACEPOINTS) += trace.o
+
+landlock-$(CONFIG_BPF_LSM) += bpf.o
