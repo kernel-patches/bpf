@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include "iocost_model.skel.h"
+#include "iocost_ms.skel.h"
 
 /*
  * Write a line to io.cost.model with write(2) and return the errno of
@@ -163,4 +164,37 @@ void serial_test_iocost_model(void)
 		ASSERT_OK(bind_model(dev, "iocost_2x"), "bind_and_readback");
 
 	iocost_model__destroy(skel);
+}
+
+/*
+ * Same check for the multi-stream example model.  Only one model can
+ * be bound to a device at a time; both tests bind and restore, so
+ * they are serial and independent.
+ */
+void serial_test_iocost_model_streams(void)
+{
+	struct iocost_ms *skel;
+	char *dev;
+	int err;
+
+	dev = getenv("IOCOST_TEST_DEV");
+	if (!dev || geteuid() != 0) {
+		test__skip();
+		return;
+	}
+	if (!dev_has_iocost(dev)) {
+		printf("skip: %s has no iocost enabled\n", dev);
+		test__skip();
+		return;
+	}
+
+	skel = iocost_ms__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open_load"))
+		return;
+
+	err = iocost_ms__attach(skel);
+	if (ASSERT_OK(err, "attach"))
+		ASSERT_OK(bind_model(dev, "iocost_ms"), "bind_and_readback");
+
+	iocost_ms__destroy(skel);
 }
