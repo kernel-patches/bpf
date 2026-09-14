@@ -848,6 +848,28 @@ static void mtk_pci_free_irq(struct mtk_md_dev *mdev)
 	pci_free_irq_vectors(pdev);
 }
 
+static int mtk_pci_dev_init(struct mtk_md_dev *mdev)
+{
+	int ret;
+
+	ret = mtk_trans_ctrl_init(mdev);
+	if (ret) {
+		dev_err(mdev->dev, "Failed to initialize control plane: %d\n", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static void mtk_pci_dev_exit(struct mtk_md_dev *mdev)
+{
+	mtk_trans_ctrl_exit(mdev);
+}
+
+static int mtk_pci_dev_start(struct mtk_md_dev *mdev)
+{
+	return 0;
+}
 static const struct mtk_dev_ops pci_hw_ops = {
 	.get_dev_state = mtk_pci_get_dev_state,
 	.ack_dev_state = mtk_pci_ack_dev_state,
@@ -928,6 +950,12 @@ static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (ret)
 		goto free_mhccif;
 
+	ret = mtk_pci_dev_init(mdev);
+	if (ret) {
+		dev_err(mdev->dev, "Failed to init dev.\n");
+		goto free_irq;
+	}
+
 	pci_set_master(pdev);
 	mtk_pci_unmask_irq(mdev, priv->mhccif_irq_id);
 
@@ -948,10 +976,20 @@ static int mtk_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto clear_master;
 	}
 
+	ret = mtk_pci_dev_start(mdev);
+	if (ret) {
+		dev_err(mdev->dev, "Failed to start dev.\n");
+		goto free_saved_state;
+	}
+
 	return 0;
 
+free_saved_state:
+	pci_load_and_free_saved_state(pdev, &priv->saved_state);
 clear_master:
 	pci_clear_master(pdev);
+	mtk_pci_dev_exit(mdev);
+free_irq:
 	mtk_pci_free_irq(mdev);
 free_mhccif:
 	mtk_mhccif_exit(mdev);
@@ -967,6 +1005,8 @@ static void mtk_pci_remove(struct pci_dev *pdev)
 	struct mtk_pci_priv *priv = mdev->hw_priv;
 	struct device *dev = &pdev->dev;
 	int ret;
+
+	mtk_pci_dev_exit(mdev);
 
 	/* Silence every source before tearing anything down. */
 	mtk_pci_mac_write32(priv, REG_IMASK_HOST_MSIX_CLR_GRP0_0, U32_MAX);

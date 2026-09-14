@@ -11,13 +11,14 @@
 /**
  * mtk_ctrl_init() - Initialize the control plane block.
  * @mdev: Pointer to the MTK modem device.
+ * @ops: HIF operations for the control plane.
  *
  * Allocates and initializes the control plane block
  * associated with @mdev.
  *
  * Return: 0 on success, -ENOMEM on allocation failure.
  */
-int mtk_ctrl_init(struct mtk_md_dev *mdev)
+int mtk_ctrl_init(struct mtk_md_dev *mdev, struct mtk_ctrl_hif_ops *ops)
 {
 	struct mtk_ctrl_blk *ctrl_blk;
 
@@ -27,6 +28,7 @@ int mtk_ctrl_init(struct mtk_md_dev *mdev)
 
 	ctrl_blk->mdev = mdev;
 	mdev->ctrl_blk = ctrl_blk;
+	ctrl_blk->ops = ops;
 
 	return 0;
 }
