@@ -29,6 +29,14 @@ static unsigned int tx_stop = 5;
 #define NTB_NETDEV_MAX_QUEUES		64
 #define NTB_NETDEV_DEFAULT_QUEUES	1
 
+/* An ntb_netdev_hdr precedes the packet. */
+#define NTB_NETDEV_META_HDR		BIT(0)
+
+struct ntb_netdev_hdr {
+	__le16 len;		/* Header length in bytes, a multiple of 2. */
+	__le16 flags;
+};
+
 struct ntb_netdev;
 
 struct ntb_netdev_queue {
@@ -83,15 +91,16 @@ static int ntb_netdev_queue_rx_fill(struct net_device *ndev,
 				    struct ntb_netdev_queue *queue)
 {
 	struct sk_buff *skb;
+	unsigned int size;
 	int rc, i;
 
+	size = ndev->mtu + ETH_HLEN + sizeof(struct ntb_netdev_hdr);
 	for (i = 0; i < NTB_RXQ_SIZE; i++) {
-		skb = netdev_alloc_skb(ndev, ndev->mtu + ETH_HLEN);
+		skb = netdev_alloc_skb(ndev, size);
 		if (!skb)
 			return -ENOMEM;
 
-		rc = ntb_transport_rx_enqueue(queue->qp, skb, skb->data,
-					      ndev->mtu + ETH_HLEN);
+		rc = ntb_transport_rx_enqueue(queue->qp, skb, skb->data, size);
 		if (rc) {
 			dev_kfree_skb(skb);
 			return rc;
@@ -137,34 +146,57 @@ static void ntb_netdev_rx_stats_add(struct net_device *ndev,
 static void ntb_netdev_rx_handler(struct ntb_transport_qp *qp, void *qp_data,
 				  void *data, int len, unsigned int meta)
 {
+	const struct ntb_netdev_hdr *hdr = NULL;
 	struct ntb_netdev_queue *q = qp_data;
 	struct ntb_netdev *dev = q->ntdev;
+	unsigned int size, hdr_len = 0;
 	struct sk_buff *skb, *new_skb;
 	struct net_device *ndev;
 	int rc;
 
 	ndev = dev->ndev;
+	size = ndev->mtu + ETH_HLEN + sizeof(*hdr);
 	skb = data;
 	if (!skb)
 		return;
 
 	netdev_dbg(ndev, "%s: %d byte payload received\n", __func__, len);
 
+	/* Validate the frame and optional header lengths. */
 	if (len < ETH_HLEN) {
 		DEV_STATS_INC(ndev, rx_errors);
 		DEV_STATS_INC(ndev, rx_length_errors);
 		goto enqueue_again;
 	}
+	if (meta & NTB_NETDEV_META_HDR) {
+		hdr = (void *)skb->data;
+		hdr_len = le16_to_cpu(hdr->len);
+		if (hdr_len < sizeof(*hdr) || !IS_ALIGNED(hdr_len, 2) ||
+		    hdr_len > len - ETH_HLEN) {
+			DEV_STATS_INC(ndev, rx_errors);
+			DEV_STATS_INC(ndev, rx_length_errors);
+			goto enqueue_again;
+		}
+		len -= hdr_len;
+	}
 
-	ntb_netdev_rx_stats_add(ndev, len);
-
-	new_skb = netdev_alloc_skb(ndev, ndev->mtu + ETH_HLEN);
+	new_skb = netdev_alloc_skb(ndev, size);
 	if (!new_skb) {
+		ntb_netdev_rx_stats_add(ndev, len);
 		DEV_STATS_INC(ndev, rx_dropped);
 		goto enqueue_again;
 	}
 
-	skb_put(skb, len);
+	skb_put(skb, len + hdr_len);
+	if (hdr) {
+		u16 flags = le16_to_cpu(hdr->flags);
+
+		skb_pull(skb, hdr_len);
+		if (flags)
+			goto rx_drop;
+	}
+
+	ntb_netdev_rx_stats_add(ndev, len);
 	skb->protocol = eth_type_trans(skb, ndev);
 	skb->ip_summed = CHECKSUM_NONE;
 	skb_record_rx_queue(skb, q->qid);
@@ -174,12 +206,19 @@ static void ntb_netdev_rx_handler(struct ntb_transport_qp *qp, void *qp_data,
 	skb = new_skb;
 
 enqueue_again:
-	rc = ntb_transport_rx_enqueue(qp, skb, skb->data, ndev->mtu + ETH_HLEN);
+	rc = ntb_transport_rx_enqueue(qp, skb, skb->data, size);
 	if (rc) {
 		dev_kfree_skb_any(skb);
 		DEV_STATS_INC(ndev, rx_errors);
 		DEV_STATS_INC(ndev, rx_fifo_errors);
 	}
+	return;
+
+rx_drop:
+	DEV_STATS_INC(ndev, rx_errors);
+	dev_kfree_skb_any(skb);
+	skb = new_skb;
+	goto enqueue_again;
 }
 
 static int __ntb_netdev_maybe_stop_tx(struct net_device *netdev,
@@ -390,9 +429,11 @@ static int ntb_netdev_change_mtu(struct net_device *ndev, int new_mtu)
 	struct ntb_netdev_queue *queue;
 	struct sk_buff *skb;
 	unsigned int q, i;
+	unsigned int size;
 	int len, rc = 0;
 
-	if (new_mtu > ntb_transport_max_size(dev->queues[0].qp) - ETH_HLEN)
+	size = new_mtu + ETH_HLEN + sizeof(struct ntb_netdev_hdr);
+	if (size > ntb_transport_max_size(dev->queues[0].qp))
 		return -EINVAL;
 
 	if (!netif_running(ndev)) {
@@ -414,8 +455,7 @@ static int ntb_netdev_change_mtu(struct net_device *ndev, int new_mtu)
 				dev_kfree_skb(skb);
 
 			for (; i; i--) {
-				skb = netdev_alloc_skb(ndev,
-						       new_mtu + ETH_HLEN);
+				skb = netdev_alloc_skb(ndev, size);
 				if (!skb) {
 					rc = -ENOMEM;
 					goto err;
@@ -423,8 +463,7 @@ static int ntb_netdev_change_mtu(struct net_device *ndev, int new_mtu)
 
 				rc = ntb_transport_rx_enqueue(queue->qp, skb,
 							      skb->data,
-							      new_mtu +
-							      ETH_HLEN);
+							      size);
 				if (rc) {
 					dev_kfree_skb(skb);
 					goto err;
@@ -673,6 +712,7 @@ static int ntb_netdev_probe(struct device *client_dev)
 
 	ndev->features = NETIF_F_HIGHDMA;
 	ndev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
+	ndev->needed_headroom = sizeof(struct ntb_netdev_hdr);
 
 	ndev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
 
@@ -710,7 +750,8 @@ static int ntb_netdev_probe(struct device *client_dev)
 	if (rc)
 		goto err_free_qps;
 
-	ndev->mtu = ntb_transport_max_size(dev->queues[0].qp) - ETH_HLEN;
+	ndev->mtu = ntb_transport_max_size(dev->queues[0].qp) - ETH_HLEN -
+		    sizeof(struct ntb_netdev_hdr);
 
 	rc = register_netdev(ndev);
 	if (rc)
