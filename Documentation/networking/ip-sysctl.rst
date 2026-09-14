@@ -3811,6 +3811,45 @@ l3mdev_accept - BOOLEAN
 	Default: 1 (enabled)
 
 
+``/proc/sys/net/quic/*`` Variables
+===================================
+
+quic_mem - vector of 3 LONGs: min, pressure, max
+	Number of pages allowed for queueing by all QUIC sockets.
+
+	min: below this number of pages QUIC is not bothered about its
+	memory appetite.
+
+	pressure: when amount of memory allocated by QUIC exceeds this number
+	of pages, QUIC moderates its memory consumption and enters memory
+	pressure mode, which is exited when memory consumption falls
+	under "min".
+
+	max: number of pages allowed for queueing by all QUIC sockets.
+
+	Defaults are calculated at boot time from amount of available
+	memory.
+
+quic_rmem - vector of 3 INTEGERs: min, default, max
+	Only the first value ("min") is used, "default" and "max" are
+	ignored.
+
+	min: Minimal size of receive buffer used by QUIC sockets.
+	It is guaranteed to each QUIC socket, even under moderate memory
+	pressure.
+
+	Default: 4K
+
+quic_wmem - vector of 3 INTEGERs: min, default, max
+	Only the first value ("min") is used, "default" and "max" are
+	ignored.
+
+	min: Amount of memory reserved for send buffers for QUIC sockets.
+	Each QUIC socket has rights to use it due to fact of its birth.
+
+	Default: 4K
+
+
 ``/proc/sys/net/core/*``
 ========================
 
