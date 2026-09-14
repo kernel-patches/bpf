@@ -124,7 +124,8 @@ static void test_early_core_relo(void)
 					       enum_id, access_str_off, 2, true);
 		if (!ASSERT_LT(prog_fd, 0, "poisoned_load"))
 			goto cleanup;
-		ASSERT_HAS_SUBSTR(log, "last insn is not an exit or jmp", "poisoned_load_log");
+		ASSERT_HAS_SUBSTR(log, "trying to relocate unrecognized insn #2",
+				  "poisoned_load_log");
 	}
 
 cleanup:
