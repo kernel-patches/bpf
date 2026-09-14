@@ -1818,6 +1818,10 @@ int phy_attach_direct(struct net_device *dev, struct phy_device *phydev,
 			d->driver = &genphy_driver.mdiodrv.driver;
 
 		phydev->is_genphy_driven = 1;
+	} else if (!phydev->drv) {
+		/* d->driver outlives phydev->drv on unbind, precedes it on bind */
+		err = -EBUSY;
+		goto error_put_device;
 	}
 
 	if (!try_module_get(d->driver->owner)) {
