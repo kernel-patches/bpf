@@ -3,6 +3,8 @@
 
 #include <test_progs.h>
 #include <bpf/btf.h>
+#include <limits.h>
+#include <stdint.h>
 
 #include "test_log_buf.skel.h"
 #include "bpf_util.h"
@@ -267,6 +269,27 @@ cleanup:
 	btf__free(btf);
 }
 
+static void prog_log_buf_size_limit(void)
+{
+#if SIZE_MAX > UINT_MAX
+	struct test_log_buf *skel;
+	char log_buf[1];
+	int err;
+
+	skel = test_log_buf__open();
+	if (!ASSERT_OK_PTR(skel, "skel_open"))
+		return;
+
+	err = bpf_program__set_log_buf(skel->progs.good_prog, log_buf,
+				       (size_t)UINT_MAX + 1);
+	ASSERT_EQ(err, -EINVAL, "set_log_buf_too_big");
+
+	test_log_buf__destroy(skel);
+#else
+	test__skip();
+#endif
+}
+
 void test_log_buf(void)
 {
 	if (test__start_subtest("obj_load_log_buf"))
@@ -275,4 +298,6 @@ void test_log_buf(void)
 		bpf_prog_load_log_buf();
 	if (test__start_subtest("bpf_btf_load_log_buf"))
 		bpf_btf_load_log_buf();
+	if (test__start_subtest("prog_log_buf_size_limit"))
+		prog_log_buf_size_limit();
 }
