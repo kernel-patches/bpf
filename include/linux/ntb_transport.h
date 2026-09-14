@@ -48,6 +48,8 @@
  * Jon Mason <jon.mason@intel.com>
  */
 
+#include <linux/types.h>
+
 struct ntb_transport_qp;
 
 struct ntb_transport_client {
@@ -66,7 +68,8 @@ struct ntb_queue_handlers {
 			   void *data, int len);
 	void (*tx_handler)(struct ntb_transport_qp *qp, void *qp_data,
 			   void *data, int len);
-	void (*event_handler)(void *data, int status);
+	/* peer_caps is 31-bit, zero on link-down or without peer support. */
+	void (*event_handler)(void *data, int status, u32 peer_caps);
 };
 
 unsigned char ntb_transport_qp_num(struct ntb_transport_qp *qp);
@@ -80,7 +83,7 @@ int ntb_transport_rx_enqueue(struct ntb_transport_qp *qp, void *cb, void *data,
 int ntb_transport_tx_enqueue(struct ntb_transport_qp *qp, void *cb, void *data,
 			     unsigned int len);
 void *ntb_transport_rx_remove(struct ntb_transport_qp *qp, unsigned int *len);
-void ntb_transport_link_up(struct ntb_transport_qp *qp);
+void ntb_transport_link_up(struct ntb_transport_qp *qp, u32 local_caps);
 void ntb_transport_link_down(struct ntb_transport_qp *qp);
 bool ntb_transport_link_query(struct ntb_transport_qp *qp);
 unsigned int ntb_transport_tx_free_entry(struct ntb_transport_qp *qp);

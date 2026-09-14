@@ -145,6 +145,8 @@ struct ntb_transport_qp {
 	bool client_ready;
 	bool link_is_up;
 	bool active;
+	u32 local_caps;
+	unsigned int caps_spad;
 
 	u8 qp_num;	/* Only 64 QP's are allowed.  0-63 */
 	u64 qp_bit;
@@ -181,7 +183,7 @@ struct ntb_transport_qp {
 	dma_cookie_t last_cookie;
 	struct tasklet_struct rxc_db_work;
 
-	void (*event_handler)(void *data, int status);
+	void (*event_handler)(void *data, int status, u32 peer_caps);
 	struct delayed_work link_work;
 	struct work_struct link_cleanup;
 
@@ -281,6 +283,9 @@ enum {
 	MW0_SZ_HIGH,
 	MW0_SZ_LOW,
 };
+
+/* One per-QP scratchpad, with the remaining bits owned by the client. */
+#define QP_CAPS_VALID		BIT(31)
 
 #define dev_client_dev(__dev) \
 	container_of((__dev), struct ntb_transport_client_dev, dev)
@@ -937,7 +942,7 @@ static void ntb_qp_link_cleanup(struct ntb_transport_qp *qp)
 	ntb_qp_link_down_reset(qp);
 
 	if (qp->event_handler)
-		qp->event_handler(qp->cb_data, qp->link_is_up);
+		qp->event_handler(qp->cb_data, qp->link_is_up, 0);
 }
 
 static void ntb_qp_link_cleanup_work(struct work_struct *work)
@@ -1141,10 +1146,19 @@ static void ntb_qp_link_work(struct work_struct *work)
 						   link_work.work);
 	struct pci_dev *pdev = qp->ndev->pdev;
 	struct ntb_transport_ctx *nt = qp->transport;
+	u32 peer_caps = 0;
 	int val;
 
 	WARN_ON(!nt->link_is_up);
 
+	/* Pair with the release store in ntb_transport_link_up(). */
+	if (!smp_load_acquire(&qp->client_ready))
+		return;
+
+	/* Publish capabilities before QP readiness. */
+	if (qp->caps_spad)
+		ntb_peer_spad_write(nt->ndev, PIDX, qp->caps_spad,
+				    READ_ONCE(qp->local_caps) | QP_CAPS_VALID);
 	val = ntb_spad_read(nt->ndev, QP_LINKS);
 
 	ntb_qp_up_request(qp, true);
@@ -1154,12 +1168,26 @@ static void ntb_qp_link_work(struct work_struct *work)
 
 	/* See if the remote side is up */
 	if (val & BIT(qp->qp_num)) {
+		if (qp->caps_spad) {
+			u32 caps;
+
+			/*
+			 * Order the readiness read before the capability read
+			 * for memory-backed SPADs.
+			 */
+			dma_rmb();
+			caps = ntb_spad_read(nt->ndev, qp->caps_spad);
+
+			if (caps & QP_CAPS_VALID)
+				peer_caps = caps & ~QP_CAPS_VALID;
+		}
+
 		dev_info(&pdev->dev, "qp %d: Link Up\n", qp->qp_num);
 		qp->link_is_up = true;
 		qp->active = true;
 
 		if (qp->event_handler)
-			qp->event_handler(qp->cb_data, qp->link_is_up);
+			qp->event_handler(qp->cb_data, qp->link_is_up, peer_caps);
 
 		if (qp->active)
 			tasklet_schedule(&qp->rxc_db_work);
@@ -1189,6 +1217,12 @@ static int ntb_transport_init_queue(struct ntb_transport_ctx *nt,
 	qp->ndev = nt->ndev;
 	qp->client_ready = false;
 	qp->event_handler = NULL;
+	/* Reserve MSI slots even when only the peer might use them. */
+	qp->caps_spad = nt->msi_spad_offset + 2 * qp_count + qp_num;
+	if (qp->caps_spad >= ntb_spad_count(nt->ndev))
+		qp->caps_spad = 0;
+	else
+		ntb_spad_write(qp->ndev, qp->caps_spad, 0);
 	ntb_qp_link_context_reset(qp);
 
 	if (mw_num < qp_count % mw_count)
@@ -2409,15 +2443,22 @@ EXPORT_SYMBOL_GPL(ntb_transport_tx_enqueue);
 /**
  * ntb_transport_link_up - Notify NTB transport of client readiness to use queue
  * @qp: NTB transport layer queue to be enabled
+ * @local_caps: Opaque client capabilities in bits 0..30, unchanged until
+ *              ntb_transport_link_down()
  *
  * Notify NTB transport layer of client readiness to use queue
+ *
+ * Exchange capabilities before reporting link-up through event_handler.
+ * Report zero peer capabilities for legacy peers or insufficient scratchpads.
  */
-void ntb_transport_link_up(struct ntb_transport_qp *qp)
+void ntb_transport_link_up(struct ntb_transport_qp *qp, u32 local_caps)
 {
 	if (!qp)
 		return;
 
-	qp->client_ready = true;
+	WRITE_ONCE(qp->local_caps, local_caps & ~QP_CAPS_VALID);
+	/* Publish local_caps before QP link work sees client_ready. */
+	smp_store_release(&qp->client_ready, true);
 
 	if (qp->transport->link_is_up)
 		schedule_delayed_work(&qp->link_work, 0);
@@ -2439,12 +2480,17 @@ void ntb_transport_link_down(struct ntb_transport_qp *qp)
 
 	qp->client_ready = false;
 
+	if (!qp->link_is_up)
+		cancel_delayed_work_sync(&qp->link_work);
+
+	/* Stop advertising capabilities before withdrawing QP readiness. */
+	if (qp->caps_spad)
+		ntb_peer_spad_write(qp->ndev, PIDX, qp->caps_spad, 0);
+
 	ntb_qp_up_request(qp, false);
 
 	if (qp->link_is_up)
 		ntb_send_link_down(qp);
-	else
-		cancel_delayed_work_sync(&qp->link_work);
 }
 EXPORT_SYMBOL_GPL(ntb_transport_link_down);
 

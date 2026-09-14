@@ -101,7 +101,7 @@ static int ntb_netdev_queue_rx_fill(struct net_device *ndev,
 	return 0;
 }
 
-static void ntb_netdev_event_handler(void *data, int link_is_up)
+static void ntb_netdev_event_handler(void *data, int link_is_up, u32 peer_caps)
 {
 	struct ntb_netdev_queue *q = data;
 	struct ntb_netdev *dev = q->ntdev;
@@ -346,7 +346,7 @@ static int ntb_netdev_open(struct net_device *ndev)
 	netif_tx_stop_all_queues(ndev);
 
 	for (q = 0; q < dev->num_queues; q++)
-		ntb_transport_link_up(dev->queues[q].qp);
+		ntb_transport_link_up(dev->queues[q].qp, 0);
 
 	return 0;
 
@@ -430,7 +430,7 @@ static int ntb_netdev_change_mtu(struct net_device *ndev, int new_mtu)
 	WRITE_ONCE(ndev->mtu, new_mtu);
 
 	for (q = 0; q < dev->num_queues; q++)
-		ntb_transport_link_up(dev->queues[q].qp);
+		ntb_transport_link_up(dev->queues[q].qp, 0);
 
 	return 0;
 
@@ -538,7 +538,7 @@ static int ntb_inc_channels(struct net_device *ndev,
 
 	if (running)
 		for (q = old; q < new; q++)
-			ntb_transport_link_up(dev->queues[q].qp);
+			ntb_transport_link_up(dev->queues[q].qp, 0);
 
 	return 0;
 
