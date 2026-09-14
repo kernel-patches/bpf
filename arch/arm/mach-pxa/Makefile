@@ -22,11 +22,3 @@ obj-$(CONFIG_CPU_PXA320)	+= pxa320.o
 obj-$(CONFIG_MACH_PXA25X_DT)	+= pxa-dt.o
 obj-$(CONFIG_MACH_PXA27X_DT)	+= pxa-dt.o
 obj-$(CONFIG_MACH_PXA3XX_DT)	+= pxa-dt.o
-
-# 3rd Party Dev Platforms
-obj-$(CONFIG_ARCH_GUMSTIX)	+= gumstix.o
-obj-$(CONFIG_GUMSTIX_AM200EPD)	+= am200epd.o
-obj-$(CONFIG_GUMSTIX_AM300EPD)	+= am300epd.o
-
-# End-user Products
-obj-$(CONFIG_PXA_SHARP_Cxx00)	+= spitz.o sharpsl_pm.o spitz_pm.o
