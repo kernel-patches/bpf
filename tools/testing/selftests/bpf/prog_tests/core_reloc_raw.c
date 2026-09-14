@@ -50,6 +50,28 @@ static int load_core_relo_insns(int btf_fd, struct bpf_insn *insns, int insn_cnt
 
 static void test_early_core_relo(void)
 {
+	static const char unrecognized[] = "trying to relocate unrecognized insn #2";
+	static const struct {
+		const char *name;
+		struct bpf_insn insns[2];
+		const char *err_msg;
+	} tests[] = {
+		{ "poison_exit", { BPF_EXIT_INSN() }, unrecognized },
+		{ "poison_ja", { BPF_JMP_A(1) }, unrecognized },
+		{ "poison_jmp", { BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 1) }, unrecognized },
+		{ "poison_jmp32", { BPF_JMP32_IMM(BPF_JEQ, BPF_REG_0, 0, 1) }, unrecognized },
+		{ "poison_call", { BPF_EMIT_CALL(BPF_FUNC_get_prandom_u32) }, unrecognized },
+		{ "poison_alu_reg", { BPF_MOV32_REG(BPF_REG_0, BPF_REG_1) }, unrecognized },
+		{ "poison_alu64_reg", { BPF_MOV64_REG(BPF_REG_0, BPF_REG_1) }, unrecognized },
+		{ "poison_ld_abs", { BPF_LD_ABS(BPF_W, 0) },
+		  "insn #2 (LDIMM64) has unexpected form" },
+		{ "poison_alu_imm", { BPF_MOV32_IMM(BPF_REG_0, 0) } },
+		{ "poison_alu64_imm", { BPF_MOV64_IMM(BPF_REG_0, 0) } },
+		{ "poison_ldx", { BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1, 0) } },
+		{ "poison_st", { BPF_ST_MEM(BPF_W, BPF_REG_10, -4, 0) } },
+		{ "poison_stx", { BPF_STX_MEM(BPF_W, BPF_REG_10, BPF_REG_0, -4) } },
+		{ "poison_ldimm64", { BPF_LD_IMM64(BPF_REG_0, 0) } },
+	};
 	struct bpf_insn core_only[] = {
 		BPF_MOV64_IMM(BPF_REG_0, 0),
 		BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 1),
@@ -68,7 +90,7 @@ static void test_early_core_relo(void)
 	struct btf *btf;
 	__u32 raw_btf_size;
 	int access_str_off, btf_fd = -1, enum_id;
-	int int_id, main_id, prog_fd = -1, proto_id, sub_id;
+	int int_id, main_id, prog_fd = -1, proto_id, sub_id, i;
 
 	btf = btf__new_empty();
 	if (!ASSERT_OK_PTR(btf, "btf_new_empty"))
@@ -127,7 +149,49 @@ static void test_early_core_relo(void)
 					       enum_id, access_str_off, 2, true);
 		if (!ASSERT_LT(prog_fd, 0, "poisoned_load"))
 			goto cleanup;
-		ASSERT_HAS_SUBSTR(log, "last insn is not an exit or jmp", "poisoned_load_log");
+		ASSERT_HAS_SUBSTR(log, unrecognized, "poisoned_load_log");
+	}
+
+	for (i = 0; i < ARRAY_SIZE(tests); i++) {
+		struct bpf_insn insns[] = {
+			BPF_MOV64_IMM(BPF_REG_0, 0),
+			BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 2),
+			tests[i].insns[0],
+			BPF_MOV64_IMM(BPF_REG_0, 0),
+			BPF_MOV64_IMM(BPF_REG_0, 0),
+			BPF_EXIT_INSN(),
+		};
+		bool is_ldimm64 = insns[2].code == (BPF_LD | BPF_DW | BPF_IMM);
+		int insn_cnt = ARRAY_SIZE(insns);
+
+		if (!test__start_subtest(tests[i].name))
+			continue;
+		if (is_ldimm64) {
+			insns[3] = tests[i].insns[1];
+		} else {
+			insns[1].off = 1;
+			insns[4] = BPF_EXIT_INSN();
+			insn_cnt--;
+		}
+		prog_fd = load_core_relo_insns(btf_fd, insns, insn_cnt, funcs, 1,
+					       enum_id, access_str_off, 2, false);
+		if (!ASSERT_GE(prog_fd, 0, "control_load"))
+			goto cleanup;
+		close(prog_fd);
+		prog_fd = load_core_relo_insns(btf_fd, insns, insn_cnt, funcs, 1,
+					       enum_id, access_str_off, 2, true);
+		if (!tests[i].err_msg) {
+			ASSERT_GE(prog_fd, 0, "dead_poison_load");
+			ASSERT_HAS_SUBSTR(log, "substituting insn #2", "poison_log");
+			if (is_ldimm64)
+				ASSERT_HAS_SUBSTR(log, "substituting insn #3", "poison_ldimm64_log");
+		} else {
+			ASSERT_LT(prog_fd, 0, "invalid_poison_load");
+			ASSERT_HAS_SUBSTR(log, tests[i].err_msg, "invalid_poison_log");
+			ASSERT_NULL(strstr(log, "substituting insn"), "invalid_poison_substitution");
+		}
+		close(prog_fd);
+		prog_fd = -1;
 	}
 
 cleanup:
