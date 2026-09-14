@@ -3,6 +3,7 @@
 
 #include <linux/if_ether.h>
 #include <linux/bitfield.h>
+#include <linux/pci.h>
 
 #include "rnpgbe.h"
 #include "rnpgbe_mbx.h"
@@ -199,12 +200,235 @@ int mucse_mbx_get_macaddr(struct mucse_hw *hw, int pfvfnum,
 }
 
 /**
- * mucse_fw_irq_handler - Deferred firmware mailbox notification hook
+ * mucse_mbx_phyup - Request that firmware bring the PHY up or down
+ * @hw: pointer to the HW structure
+ * @is_phyup: true for up, false for down
+ *
+ * mucse_mbx_phyup echo fw to change phy status
+ *
+ * Return: 0 on success, negative errno on failure
+ **/
+int mucse_mbx_phyup(struct mucse_hw *hw, bool is_phyup)
+{
+	union mbx_fw_cmd_req_u req = {
+		.r = {
+			.datalen = cpu_to_le16(sizeof(req.r.phy_status) +
+					       MUCSE_MBX_REQ_HDR_LEN),
+			.opcode  = cpu_to_le16(SET_PHY_UP),
+			.phy_status = {
+				.port_mask = cpu_to_le32(BIT(hw->port)),
+				.status  = cpu_to_le32(is_phyup ? 1 : 0),
+			},
+		},
+	};
+	int len, err;
+
+	len = le16_to_cpu(req.r.datalen);
+	mutex_lock(&hw->mbx.lock);
+	err = mucse_write_and_wait_ack_mbx(hw, req.dwords, len);
+	mutex_unlock(&hw->mbx.lock);
+
+	return err;
+}
+
+/**
+ * mucse_mbx_link_report - Configure firmware link-change event reporting
+ * @hw: pointer to the HW structure
+ * @is_report: true for report, false for no
+ *
+ * mucse_mbx_link_report echo fw to change event report state
+ *
+ * Return: 0 on success, negative errno on failure
+ **/
+int mucse_mbx_link_report(struct mucse_hw *hw, bool is_report)
+{
+	union mbx_fw_cmd_req_u req = {
+		.r = {
+			.datalen = cpu_to_le16(sizeof(req.r.report_status) +
+					       MUCSE_MBX_REQ_HDR_LEN),
+			.opcode  = cpu_to_le16(LINK_REPORT_EN),
+			.report_status = {
+				.port_mask = cpu_to_le16(BIT(hw->port)),
+				.status  = cpu_to_le16(is_report ? 1 : 0),
+			},
+		},
+	};
+	int len, err;
+
+	len = le16_to_cpu(req.r.datalen);
+	mutex_lock(&hw->mbx.lock);
+	err = mucse_write_and_wait_ack_mbx(hw, req.dwords, len);
+	mutex_unlock(&hw->mbx.lock);
+
+	return err;
+}
+
+static bool mucse_link_speed_valid(const struct mbx_fw_cmd_req *req)
+{
+	switch (le16_to_cpu(req->link_stat.st.speed)) {
+	case 10:
+	case 100:
+	case 1000:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool mucse_link_is_up(const struct mucse_hw *hw,
+			     const struct mbx_fw_cmd_req *req)
+{
+	return le16_to_cpu(req->link_stat.port_status) & BIT(hw->port);
+}
+
+/**
+ * mucse_update_link_status_reg - update driver speed inf to reg
+ * @hw: pointer to the HW structure
+ * @req: pointer to req data
+ *
+ * Update the driver's link-state snapshot exported to firmware. Firmware
+ * sends a new event when this snapshot differs from the hardware state.
+ * The default snapshot clears the driver-reported fields;
+ * a valid event then repopulates them, including the LLDP status in bit 6.
+ *
+ **/
+static void mucse_update_link_status_reg(struct mucse_hw *hw,
+					 struct mbx_fw_cmd_req *req)
+{
+	u16 status = le16_to_cpu(req->link_stat.st.status);
+	u16 speed = le16_to_cpu(req->link_stat.st.speed);
+	u32 value;
+
+	value = M_DEFAULT_ST;
+
+	if (mucse_link_is_up(hw, req)) {
+		value |= BIT(0);
+		switch (speed) {
+		case 10:
+			value |= (mucse_speed_10 << 8);
+			break;
+		case 100:
+			value |= (mucse_speed_100 << 8);
+			break;
+		case 1000:
+			value |= (mucse_speed_1000 << 8);
+			break;
+		default:
+			break;
+		}
+
+		value |= FIELD_PREP(BIT(4),
+				    !!(req->link_stat.st.flags & DUPLEX_BIT));
+		value |= FIELD_PREP(GENMASK_U32(25, 24),
+				    status & GENMASK(1, 0));
+	} else {
+		value &= ~BIT(0);
+	}
+
+	if (status & ST_STATUS_LLDP_STATUS_MASK)
+		value |= BIT(6);
+	else
+		value &= ~BIT(6);
+
+	mucse_hw_wr32(hw, RNPGBE_LINK_ST, value);
+}
+
+/**
+ * mucse_mbx_fw_req_handler - Handle fw req
+ * @hw: pointer to the HW structure
+ * @req: pointer to req data
+ *
+ * mucse_mbx_fw_req_handler handler fw req, such as a link event req.
+ **/
+static void mucse_mbx_fw_req_handler(struct mucse_hw *hw,
+				     struct mbx_fw_cmd_req *req)
+{
+	struct mucse *mucse = container_of(hw, struct mucse, hw);
+	u32 magic = le32_to_cpu(req->link_stat.port_magic);
+	unsigned long flags;
+
+	if (le16_to_cpu(req->opcode) == LINK_CHANGE_EVT) {
+		u16 speed = le16_to_cpu(req->link_stat.st.speed);
+
+		spin_lock_irqsave(&mucse->link_lock, flags);
+		if (magic != ST_VALID_MAGIC) {
+			/* Do not change the cached state for an invalid event.
+			 * Use an invalid speed encoding to make firmware report
+			 * again.
+			 */
+			mucse_hw_wr32(hw, RNPGBE_LINK_ST, M_INVALID_ST);
+			spin_unlock_irqrestore(&mucse->link_lock, flags);
+			return;
+		}
+
+		if (mucse_link_is_up(hw, req) &&
+		    !mucse_link_speed_valid(req)) {
+			/* Do not acknowledge an invalid speed as valid.
+			 * Keep the snapshot mismatched so firmware retries it.
+			 * Firmware limits link reports to one per 500 ms.
+			 */
+			mucse_hw_wr32(hw, RNPGBE_LINK_ST, M_DEFAULT_ST);
+			spin_unlock_irqrestore(&mucse->link_lock, flags);
+			dev_warn_ratelimited(&hw->pdev->dev,
+					     "unsupported link speed %u Mbps\n",
+					     speed);
+			return;
+		}
+
+		if (test_bit(__MUCSE_DOWN, &mucse->state)) {
+			mucse_update_link_status_reg(hw, req);
+			spin_unlock_irqrestore(&mucse->link_lock, flags);
+			return;
+		}
+
+		if (mucse_link_is_up(hw, req))
+			WRITE_ONCE(hw->link, true);
+		else
+			WRITE_ONCE(hw->link, false);
+
+		WRITE_ONCE(hw->speed, le16_to_cpu(req->link_stat.st.speed));
+		WRITE_ONCE(hw->duplex, req->link_stat.st.flags & DUPLEX_BIT);
+		/* update regs to notify link info is received */
+		mucse_update_link_status_reg(hw, req);
+		atomic_set_release(&mucse->link_pending, 1);
+		/* Run link handling immediately; the service task also remains
+		 * periodically scheduled for future maintenance work.
+		 */
+		mod_delayed_work(system_percpu_wq, &mucse->serv_task, 0);
+		spin_unlock_irqrestore(&mucse->link_lock, flags);
+	}
+}
+
+/**
+ * mucse_fw_handle_event - Handle one pending firmware event
+ * @hw: pointer to the hardware structure
+ **/
+static void mucse_fw_handle_event(struct mucse_hw *hw)
+{
+	union mbx_fw_cmd_req_u msg = {};
+	int err;
+
+	/* try to check and read fw req */
+	mutex_lock(&hw->mbx.lock);
+	err = mucse_check_and_read_mbx(hw, msg.dwords, sizeof(msg));
+	mutex_unlock(&hw->mbx.lock);
+	/* Firmware releases the mailbox lock before raising the interrupt and
+	 * waits for the ACK. A failure is not transient contention to retry.
+	 */
+	if (err)
+		return;
+
+	mucse_mbx_fw_req_handler(hw, &msg.r);
+}
+
+/**
+ * mucse_fw_irq_handler - Handle one pending firmware mailbox event
  * @hw: pointer to the HW structure
  *
- * No asynchronous firmware events are enabled until link status support is
- * added.
+ * Process at most one event per work-item invocation. The caller requeues
+ * mailbox work when a dedicated mailbox interrupt arrives during handling.
  **/
 void mucse_fw_irq_handler(struct mucse_hw *hw)
 {
+	mucse_fw_handle_event(hw);
 }

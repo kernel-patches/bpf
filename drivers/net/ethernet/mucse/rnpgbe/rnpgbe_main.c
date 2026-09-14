@@ -67,6 +67,7 @@ static int rnpgbe_open(struct net_device *netdev)
 	if (test_bit(__MUCSE_AXI_FAULT, &mucse->state))
 		return -EIO;
 
+	netif_carrier_off(netdev);
 	err = rnpgbe_request_irq(mucse);
 	if (err)
 		return err;
@@ -86,9 +87,16 @@ static int rnpgbe_open(struct net_device *netdev)
 	err = rnpgbe_configure(mucse);
 	if (err)
 		goto err_free_rx;
-	rnpgbe_up_complete(mucse);
+	err = rnpgbe_up_complete(mucse);
+	if (err)
+		goto err_down;
 
 	return 0;
+err_down:
+	rnpgbe_down(mucse);
+	rnpgbe_free_all_rx_resources(mucse);
+	rnpgbe_free_all_tx_resources(mucse);
+	goto err_free_irqs;
 err_free_rx:
 	rnpgbe_free_all_rx_resources(mucse);
 err_free_tx:
@@ -252,6 +260,10 @@ static int rnpgbe_add_adapter(struct pci_dev *pdev,
 		goto err_powerdown;
 	}
 
+	INIT_DELAYED_WORK(&mucse->serv_task, rnpgbe_service_task);
+	spin_lock_init(&mucse->link_lock);
+	atomic_set(&mucse->link_pending, 0);
+
 	err = rnpgbe_init_interrupt_scheme(mucse);
 	if (err) {
 		dev_err(&pdev->dev, "init interrupt failed %d\n", err);
@@ -276,6 +288,7 @@ static int rnpgbe_add_adapter(struct pci_dev *pdev,
 		netdev->hw_features |= NETIF_F_HIGHDMA;
 	}
 
+	netif_carrier_off(netdev);
 	err = register_netdev(netdev);
 	if (err)
 		goto err_remove_mbx;

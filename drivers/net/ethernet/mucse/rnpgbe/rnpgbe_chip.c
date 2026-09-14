@@ -66,10 +66,16 @@ int rnpgbe_send_notify(struct mucse_hw *hw,
 		       int mode)
 {
 	int err;
-	/* Keep switch struct to support more modes in the future */
+
 	switch (mode) {
 	case mucse_fw_powerup:
 		err = mucse_mbx_powerup(hw, enable);
+		break;
+	case mucse_fw_portup:
+		err = mucse_mbx_phyup(hw, enable);
+		break;
+	case mucse_fw_link_report_en:
+		err = mucse_mbx_link_report(hw, enable);
 		break;
 	default:
 		err = -EINVAL;
@@ -223,4 +229,31 @@ void rnpgbe_set_rx_mode(struct net_device *netdev)
 
 	mucse_hw_wr32(hw, RNPGBE_RX_MCAST_CTRL, mcast_ctrl);
 	mucse_hw_wr32(hw, RNPGBE_RX_FILTER_CTRL, filter_ctrl);
+}
+
+/**
+ * rnpgbe_set_link - Set the hardware link state
+ * @hw: hw information structure
+ * @linkup: link on or not
+ *
+ * rnpgbe_set_link setup link status
+ *
+ **/
+void rnpgbe_set_link(struct mucse_hw *hw, bool linkup)
+{
+	u32 value = mucse_hw_rd32(hw, GMAC_CONTROL);
+
+	/* The chip-level filter is programmed by ndo_set_rx_mode(). Keep the
+	 * GMAC in receive-all mode so it does not discard frames accepted by
+	 * that filter.
+	 */
+	if (linkup) {
+		mucse_hw_wr32(hw, GMAC_FRAME_FILTER, GMAC_RX_ALL);
+		value |= GMAC_CONTROL_RE;
+		mucse_hw_wr32(hw, GMAC_CONTROL, value);
+	} else {
+		value &= ~GMAC_CONTROL_RE;
+		mucse_hw_wr32(hw, GMAC_CONTROL, value);
+		mucse_hw_wr32(hw, GMAC_FRAME_FILTER, 0);
+	}
 }
