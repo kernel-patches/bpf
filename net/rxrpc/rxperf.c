@@ -538,10 +538,10 @@ static int rxperf_process_call(struct rxperf_call *call)
 	msg.msg_flags = 0;
 	n = rxrpc_kernel_send_data(rxperf_socket, call->rxcall, &msg,
 				   rxperf_notify_end_reply_tx);
-	if (n == -ENOMEM)
+	if (n < 0)
 		rxrpc_kernel_abort_call(rxperf_socket, call->rxcall,
-					RXGEN_SS_MARSHAL, -ENOMEM,
-					rxperf_abort_oom);
+					RXGEN_SS_MARSHAL, n,
+					rxperf_abort_send_error);
 	return n;
 }
 
