@@ -3342,6 +3342,18 @@ static void rtl_disable_exit_l1(struct rtl8169_private *tp)
 
 static void rtl_enable_ltr(struct rtl8169_private *tp)
 {
+	/* The chip must not issue LTR messages unless LTR is enabled for the
+	 * whole path up to the root port. pci_configure_ltr() works that out
+	 * and records the result in pci_dev->ltr_path, which exists only with
+	 * CONFIG_PCIEASPM; without it the PCI core never enables LTR anywhere.
+	 */
+#ifdef CONFIG_PCIEASPM
+	if (!tp->pci_dev->ltr_path)
+		return;
+#else
+	return;
+#endif
+
 	switch (tp->mac_version) {
 	case RTL_GIGA_MAC_VER_80:
 		r8168_mac_ocp_write(tp, 0xcdd0, 0x9003);
