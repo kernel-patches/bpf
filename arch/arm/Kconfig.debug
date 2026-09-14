@@ -324,13 +324,6 @@ choice
 		  Say Y here if you want the debug print routines to direct
 		  their output to UART2 serial port on DaVinci DA8XX devices.
 
-	config DEBUG_DC21285_PORT
-		bool "Kernel low-level debugging messages via footbridge serial port"
-		depends on FOOTBRIDGE
-		help
-		  Say Y here if you want the debug print routines to direct
-		  their output to the serial port in the DC21285 (Footbridge).
-
 	config DEBUG_DIGICOLOR_UA0
 		bool "Kernel low-level debugging messages via Digicolor UA0"
 		depends on ARCH_DIGICOLOR
@@ -345,14 +338,6 @@ choice
 		help
 		  Say Y here if you want kernel low-level debugging support
 		  on Cirrus Logic EP93xx based platforms.
-
-	config DEBUG_FOOTBRIDGE_COM1
-		bool "Kernel low-level debugging messages via footbridge 8250 at PCI COM1"
-		depends on FOOTBRIDGE
-		select DEBUG_UART_8250
-		help
-		  Say Y here if you want the debug print routines to direct
-		  their output to the 8250 at PCI COM1.
 
 	config DEBUG_GEMINI
 		bool "Kernel low-level debugging messages via Cortina Systems Gemini UART"
@@ -1461,7 +1446,7 @@ config DEBUG_STM32_UART
 config DEBUG_UART_FLOW_CONTROL
 	bool "Enable flow control (CTS) for the debug UART"
 	depends on DEBUG_LL
-	default y if DEBUG_FOOTBRIDGE_COM1 || DEBUG_GEMINI || ARCH_RPC
+	default y if DEBUG_GEMINI || ARCH_RPC
 	help
 	  Some UART ports are connected to terminals that will use modem
 	  control signals to indicate whether they are ready to receive text.
@@ -1476,7 +1461,6 @@ config DEBUG_LL_INCLUDE
 	default "debug/at91.S" if DEBUG_AT91_UART
 	default "debug/asm9260.S" if DEBUG_ASM9260_UART
 	default "debug/clps711x.S" if DEBUG_CLPS711X_UART1 || DEBUG_CLPS711X_UART2
-	default "debug/dc21285.S" if DEBUG_DC21285_PORT
 	default "debug/meson.S" if DEBUG_MESON_UARTAO
 	default "debug/pl01x.S" if DEBUG_LL_UART_PL01X || DEBUG_UART_PL01X
 	default "debug/exynos.S" if DEBUG_EXYNOS_UART
@@ -1590,7 +1574,6 @@ config DEBUG_UART_PHYS
 	default 0x4806e000 if DEBUG_OMAP2UART3 || DEBUG_OMAP4UART4
 	default 0x49020000 if DEBUG_OMAP3UART3
 	default 0x49042000 if DEBUG_OMAP3UART4
-	default 0x7c0003f8 if DEBUG_FOOTBRIDGE_COM1
 	default 0x7f005000 if DEBUG_S3C64XX_UART && DEBUG_S3C_UART0
 	default 0x7f005400 if DEBUG_S3C64XX_UART && DEBUG_S3C_UART1
 	default 0x7f005800 if DEBUG_S3C64XX_UART && DEBUG_S3C_UART2
@@ -1748,7 +1731,6 @@ config DEBUG_UART_VIRT
 	default 0xfed64000 if DEBUG_RK29_UART1 || DEBUG_RK3X_UART2
 	default 0xfed68000 if DEBUG_RK29_UART2 || DEBUG_RK3X_UART3
 	default 0xfedc0000 if DEBUG_EP93XX
-	default 0xfee003f8 if DEBUG_FOOTBRIDGE_COM1
 	default 0xfee20000 if DEBUG_NSPIRE_CLASSIC_UART || DEBUG_NSPIRE_CX_UART
 	default 0xfec00000 if ARCH_IXP4XX && !CPU_BIG_ENDIAN
 	default 0xfec00003 if ARCH_IXP4XX && CPU_BIG_ENDIAN
@@ -1771,8 +1753,7 @@ config DEBUG_UART_VIRT
 config DEBUG_UART_8250_SHIFT
 	int "Register offset shift for the 8250 debug UART"
 	depends on DEBUG_LL_UART_8250 || DEBUG_UART_8250
-	default 0 if DEBUG_FOOTBRIDGE_COM1 || DEBUG_BCM_5301X || \
-		DEBUG_BCM_HR2
+	default 0 if DEBUG_BCM_5301X || DEBUG_BCM_HR2
 	default 3 if DEBUG_MSTARV7_PMUART
 	default 2
 
@@ -1798,7 +1779,7 @@ config DEBUG_UART_8250_PALMCHIP
 config DEBUG_UNCOMPRESS
 	bool "Enable decompressor debugging via DEBUG_LL output"
 	depends on !ARCH_MULTIPLATFORM
-	depends on !(ARCH_FOOTBRIDGE || ARCH_RPC)
+	depends on !ARCH_RPC
 	depends on DEBUG_LL && !DEBUG_OMAP2PLUS_UART && \
 		     (!DEBUG_TEGRA_UART || !ZBOOT_ROM) && \
 		     !DEBUG_BRCMSTB_UART && !DEBUG_SEMIHOSTING
@@ -1808,7 +1789,7 @@ config DEBUG_UNCOMPRESS
 
 config UNCOMPRESS_INCLUDE
 	string
-	default "mach/uncompress.h" if ARCH_FOOTBRIDGE || ARCH_RPC
+	default "mach/uncompress.h" if ARCH_RPC
 	default "debug/uncompress.h"
 
 config EARLY_PRINTK

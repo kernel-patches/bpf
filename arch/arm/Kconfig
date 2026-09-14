@@ -55,7 +55,7 @@ config ARM
 	select ARCH_WANT_LD_ORPHAN_WARN
 	select BINFMT_FLAT_ARGVP_ENVP_ON_STACK
 	select BUILDTIME_TABLE_SORT if MMU
-	select COMMON_CLK if !(ARCH_RPC || ARCH_FOOTBRIDGE)
+	select COMMON_CLK if !ARCH_RPC
 	select CLONE_BACKWARDS
 	select CPU_PM if SUSPEND || CPU_IDLE
 	select DCACHE_WORD_ACCESS if HAVE_EFFICIENT_UNALIGNED_ACCESS
@@ -155,13 +155,13 @@ config ARM
 	select PCI_SYSCALL if PCI
 	select PERF_USE_VMALLOC
 	select RTC_LIB
-	select SPARSE_IRQ if !(ARCH_FOOTBRIDGE || ARCH_RPC)
+	select SPARSE_IRQ if !ARCH_RPC
 	select SYS_SUPPORTS_APM_EMULATION
 	select THREAD_INFO_IN_TASK
 	select TIMER_OF if OF
 	select HAVE_ARCH_VMAP_STACK if MMU && ARM_HAS_GROUP_RELOCS
 	select TRACE_IRQFLAGS_SUPPORT if !CPU_V7M
-	select USE_OF if !(ARCH_FOOTBRIDGE || ARCH_RPC)
+	select USE_OF if !ARCH_RPC
 	# Above selects are sorted alphabetically; please add new ones
 	# according to that.  Thanks.
 	help
@@ -295,7 +295,6 @@ config PHYS_OFFSET
 	hex "Physical address of main memory" if MMU
 	depends on !ARM_PATCH_PHYS_VIRT || !AUTO_ZRELADDR
 	default DRAM_BASE if !MMU
-	default 0x00000000 if ARCH_FOOTBRIDGE
 	default 0x10000000 if ARCH_OMAP1 || ARCH_RPC
 	default 0xa0000000 if ARCH_PXA
 	default 0xc0000000 if ARCH_EP93XX
@@ -338,7 +337,7 @@ config ARCH_MMAP_RND_BITS_MAX
 
 config ARCH_MULTIPLATFORM
 	bool "Require kernel to be portable to multiple machines" if EXPERT
-	depends on MMU && !(ARCH_FOOTBRIDGE || ARCH_RPC)
+	depends on MMU && !ARCH_RPC
 	default y
 	help
 	  In general, all Arm machines can be supported in a single
@@ -380,13 +379,9 @@ source "arch/arm/mach-davinci/Kconfig"
 
 source "arch/arm/mach-digicolor/Kconfig"
 
-source "arch/arm/mach-dove/Kconfig"
-
 source "arch/arm/mach-ep93xx/Kconfig"
 
 source "arch/arm/mach-exynos/Kconfig"
-
-source "arch/arm/mach-footbridge/Kconfig"
 
 source "arch/arm/mach-gemini/Kconfig"
 
@@ -1199,7 +1194,7 @@ config ARCH_FLATMEM_ENABLE
 	def_bool !ARCH_RPC
 
 config ARCH_SPARSEMEM_ENABLE
-	def_bool !ARCH_FOOTBRIDGE
+	def_bool y
 	select SPARSEMEM_STATIC if SPARSEMEM
 
 config HIGHMEM
@@ -1599,7 +1594,7 @@ config ARCH_DEFAULT_CRASH_DUMP
 
 config AUTO_ZRELADDR
 	bool "Auto calculation of the decompressed kernel image address" if !ARCH_MULTIPLATFORM
-	default !(ARCH_FOOTBRIDGE || ARCH_RPC)
+	default !ARCH_RPC
 	help
 	  ZRELADDR is the physical address where the decompressed kernel
 	  image will be placed. If AUTO_ZRELADDR is selected, the address

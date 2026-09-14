@@ -19,7 +19,6 @@ add_hex = $(shell printf 0x%x $$(( $(1) + $(2) )) )
 PARAMS_PHYS := $(call add_hex, $(PHYS_OFFSET), 0x100)
 
 # guess an initrd location if possible
-initrd_offset-$(CONFIG_ARCH_FOOTBRIDGE)	+= 0x00800000
 initrd_offset-$(CONFIG_ARCH_RPC)	+= 0x08000000
 INITRD_OFFSET := $(initrd_offset-y)
 ifdef INITRD_OFFSET
