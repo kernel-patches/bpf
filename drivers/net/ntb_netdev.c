@@ -140,7 +140,7 @@ static void ntb_netdev_rx_handler(struct ntb_transport_qp *qp, void *qp_data,
 
 	netdev_dbg(ndev, "%s: %d byte payload received\n", __func__, len);
 
-	if (len < 0) {
+	if (len < ETH_HLEN) {
 		DEV_STATS_INC(ndev, rx_errors);
 		DEV_STATS_INC(ndev, rx_length_errors);
 		goto enqueue_again;
