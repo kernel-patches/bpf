@@ -1242,6 +1242,140 @@ static void check_bpf_side(void)
 	check_bpf_no_lookup();
 }
 
+static void check_gotox_target_nop(void)
+{
+	struct bpf_insn insns[] = {
+		/* r1 = &jt[0] */
+		BPF_LD_IMM64_RAW(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE, 0),
+		BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_1, 0),
+		BPF_RAW_INSN(BPF_JMP | BPF_JA | BPF_X, BPF_REG_1, 0, 0, 0), /* gotox r1 */
+		BPF_JMP_IMM(BPF_JA, 0, 0, 0),		/* insn 4: the nop target */
+		BPF_MOV64_IMM(BPF_REG_0, XDP_PASS),
+		BPF_EXIT_INSN(),
+	};
+	LIBBPF_OPTS(bpf_prog_load_opts, opts);
+	struct bpf_insn_array_value val = {};
+	int prog_fd = -1, map_fd;
+	__u32 key = 0;
+
+	map_fd = map_create(BPF_MAP_TYPE_INSN_ARRAY, 1);
+	if (!ASSERT_GE(map_fd, 0, "map_create"))
+		return;
+
+	val.orig_off = 4;
+	if (!ASSERT_EQ(bpf_map_update_elem(map_fd, &key, &val, 0), 0, "bpf_map_update_elem"))
+		goto cleanup;
+	if (!ASSERT_EQ(bpf_map_freeze(map_fd), 0, "bpf_map_freeze"))
+		goto cleanup;
+
+	opts.fd_array = &map_fd;
+	opts.fd_array_cnt = 1;
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_XDP, NULL, "GPL", insns, ARRAY_SIZE(insns), &opts);
+	if (!ASSERT_GE(prog_fd, 0, "bpf(BPF_PROG_LOAD)"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(bpf_map_lookup_elem(map_fd, &key, &val), 0, "bpf_map_lookup_elem"))
+		goto cleanup;
+	ASSERT_NEQ(val.xlated_off, (__u32)-1, "gotox target must not be INSN_DELETED");
+	ASSERT_NEQ(val.jitted_off, 0, "gotox target must have a jitted address");
+cleanup:
+	if (prog_fd >= 0)
+		close(prog_fd);
+	close(map_fd);
+}
+
+static void check_insn_array_stale_reuse(void)
+{
+	/* helper of a different prog type, to set the prog array's owner */
+	struct bpf_insn sf[] = {
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	/*
+	 * prog1 binds the insn array (entry points at a real insn, so the JIT
+	 * fills it in) and tail calls a prog array whose owner is now a
+	 * different type, which fails in the post-JIT compatibility check.
+	 */
+	struct bpf_insn prog1[] = {
+		BPF_LD_IMM64_RAW(BPF_REG_2, BPF_PSEUDO_MAP_IDX, 1), /* r2 = prog array */
+		BPF_MOV64_IMM(BPF_REG_3, 0),			   /* r3 = index */
+		BPF_EMIT_CALL(BPF_FUNC_tail_call),
+		BPF_MOV64_IMM(BPF_REG_0, XDP_PASS),		   /* insn 4: real entry */
+		BPF_EXIT_INSN(),
+	};
+	/*
+	 * prog2 reuses the insn array as a tracker. Its entry points at a nop
+	 * that the nop pass removes, so the entry becomes INSN_DELETED and the
+	 * JIT skips it -- exactly the slot a stale pointer would linger in.
+	 */
+	struct bpf_insn prog2[] = {
+		BPF_MOV64_IMM(BPF_REG_0, XDP_PASS),
+		BPF_JMP_IMM(BPF_JA, 0, 0, 0),		/* nop */
+		BPF_MOV64_IMM(BPF_REG_0, XDP_PASS),
+		BPF_JMP_IMM(BPF_JA, 0, 0, 0),		/* nop */
+		BPF_JMP_IMM(BPF_JA, 0, 0, 0),		/* insn 4: tracked nop */
+		BPF_MOV64_IMM(BPF_REG_0, XDP_PASS),
+		BPF_EXIT_INSN(),
+	};
+	LIBBPF_OPTS(bpf_prog_load_opts, opts);
+	int jt_fd = -1, pa_fd = -1, sf_fd = -1, prog_fd = -1;
+	struct bpf_insn_array_value val = {};
+	int fd_array[2];
+	__u32 key = 0;
+
+	jt_fd = map_create(BPF_MAP_TYPE_INSN_ARRAY, 1);
+	if (!ASSERT_GE(jt_fd, 0, "insn_array create"))
+		return;
+	val.orig_off = 4;
+	if (!ASSERT_EQ(bpf_map_update_elem(jt_fd, &key, &val, 0), 0, "insn_array update"))
+		goto cleanup;
+	if (!ASSERT_EQ(bpf_map_freeze(jt_fd), 0, "insn_array freeze"))
+		goto cleanup;
+
+	pa_fd = bpf_map_create(BPF_MAP_TYPE_PROG_ARRAY, "pa", 4, 4, 1, NULL);
+	if (!ASSERT_GE(pa_fd, 0, "prog_array create"))
+		goto cleanup;
+	sf_fd = bpf_prog_load(BPF_PROG_TYPE_SOCKET_FILTER, NULL, "GPL", sf, ARRAY_SIZE(sf), NULL);
+	if (!ASSERT_GE(sf_fd, 0, "owner prog load"))
+		goto cleanup;
+	/* insert a non-XDP prog to pin the prog array owner to another type */
+	if (!ASSERT_EQ(bpf_map_update_elem(pa_fd, &key, &sf_fd, 0), 0, "prog_array update"))
+		goto cleanup;
+
+	fd_array[0] = jt_fd;
+	fd_array[1] = pa_fd;
+	opts.fd_array = fd_array;
+	opts.fd_array_cnt = 2;
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_XDP, NULL, "GPL", prog1, ARRAY_SIZE(prog1), &opts);
+	if (!ASSERT_LT(prog_fd, 0, "prog1 must fail the post-JIT tail call check"))
+		goto cleanup;
+
+	/* prog1 reached the JIT before failing, so the entry is now populated */
+	if (!ASSERT_EQ(bpf_map_lookup_elem(jt_fd, &key, &val), 0, "lookup after prog1"))
+		goto cleanup;
+	if (!ASSERT_NEQ(val.jitted_off, 0, "prog1 should have filled the jitted address"))
+		goto cleanup;
+
+	opts.fd_array_cnt = 1;
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_XDP, NULL, "GPL", prog2, ARRAY_SIZE(prog2), &opts);
+	if (!ASSERT_GE(prog_fd, 0, "prog2 reuse load"))
+		goto cleanup;
+
+	if (!ASSERT_EQ(bpf_map_lookup_elem(jt_fd, &key, &val), 0, "lookup after prog2"))
+		goto cleanup;
+	ASSERT_EQ(val.xlated_off, (__u32)-1, "reused entry should be INSN_DELETED");
+	ASSERT_EQ(val.jitted_off, 0, "stale jitted address must be cleared on reuse");
+cleanup:
+	if (prog_fd >= 0)
+		close(prog_fd);
+	if (sf_fd >= 0)
+		close(sf_fd);
+	if (pa_fd >= 0)
+		close(pa_fd);
+	if (jt_fd >= 0)
+		close(jt_fd);
+}
+
 static void __test_bpf_insn_array(void)
 {
 	/* Test if offsets are adjusted properly */
@@ -1307,6 +1441,12 @@ static void __test_bpf_insn_array(void)
 
 	if (test__start_subtest("gotox-callback-leaves-subprog"))
 		check_gotox_callback_leaves_subprog();
+
+	if (test__start_subtest("gotox-target-nop"))
+		check_gotox_target_nop();
+
+	if (test__start_subtest("insn-array-stale-reuse"))
+		check_insn_array_stale_reuse();
 }
 #else
 static void __test_bpf_insn_array(void)
