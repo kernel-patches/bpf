@@ -928,6 +928,19 @@ static int rds_send_queue_rm(struct rds_sock *rs, struct rds_connection *conn,
 	 * and poll() now knows no more data can be sent.
 	 */
 	if (rs->rs_snd_bytes < rds_sk_sndbuf(rs)) {
+		/* rds_conn_path_quiesce() empties cp_send_queue under
+		 * cp_lock once the connection's destroy has begun.  Test
+		 * for that under the same lock, before touching either
+		 * queue: a message added after the purge would hold a
+		 * connection reference nothing ever drops.
+		 */
+		spin_lock(&cp->cp_lock);
+		if (rds_destroy_pending(conn)) {
+			spin_unlock(&cp->cp_lock);
+			*queued = -EAGAIN;
+			goto unlock;
+		}
+
 		rs->rs_snd_bytes += len;
 
 		/* let recv side know we are close to send space exhaustion.
@@ -951,7 +964,6 @@ static int rds_send_queue_rm(struct rds_sock *rs, struct rds_connection *conn,
 		rm->m_inc.i_conn_path = cp;
 		rds_message_addref(rm);
 
-		spin_lock(&cp->cp_lock);
 		rm->m_inc.i_hdr.h_sequence = cpu_to_be64(cp->cp_next_tx_seq++);
 		list_add_tail(&rm->m_conn_item, &cp->cp_send_queue);
 		set_bit(RDS_MSG_ON_CONN, &rm->m_flags);
@@ -964,6 +976,7 @@ static int rds_send_queue_rm(struct rds_sock *rs, struct rds_connection *conn,
 		*queued = 1;
 	}
 
+unlock:
 	spin_unlock_irqrestore(&rs->rs_lock, flags);
 out:
 	return *queued;
@@ -1472,6 +1485,11 @@ int rds_sendmsg(struct socket *sock, struct msghdr *msg, size_t payload_len)
 		ret = timeo;
 		if (ret == 0)
 			ret = -ETIMEDOUT;
+		goto out;
+	}
+	/* rds_send_queue_rm() refused: the connection is being destroyed */
+	if (queued < 0) {
+		ret = queued;
 		goto out;
 	}
 
