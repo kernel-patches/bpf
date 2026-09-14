@@ -1,0 +1,191 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* QUIC kernel implementation
+ * (C) Copyright Red Hat Corp. 2023
+ *
+ * This file is part of the QUIC kernel implementation
+ *
+ * Written or modified by:
+ *    Xin Long <lucien.xin@gmail.com>
+ */
+
+#define QUIC_PATH_MIN_PMTU	1200U
+#define QUIC_PATH_MAX_PMTU	65535U
+
+#define QUIC_MIN_UDP_PAYLOAD	1200
+#define QUIC_MAX_UDP_PAYLOAD	65527
+
+#define QUIC_PATH_ENTROPY_LEN	8
+
+#define QUIC_PMTUD_RAISE_TIMER_FACTOR	30
+
+extern struct workqueue_struct	*quic_wq;
+
+/* Connection Migration State Machine:
+ *
+ * +--------+      recv non-probing, free old path    +----------+
+ * |  NONE  | <-------------------------------------- | SWAPPED  |
+ * +--------+                                         +----------+
+ *      |   ^ \                                            ^
+ *      |    \ \                                           |
+ *      |     \ \   new path detected,                     | recv
+ *      |      \ \  has another DCID,                      | Path
+ *      |       \ \ snd Path Challenge                     | Response
+ *      |        \ -------------------------------         |
+ *      |         ------------------------------- \        |
+ *      | new path detected,            Path     \ \       |
+ *      | has no other DCID,            Challenge \ \      |
+ *      | request a new DCID            failed     \ \     |
+ *      v                                           \ v    |
+ * +----------+                                       +----------+
+ * | PENDING  | ------------------------------------> | PROBING  |
+ * +----------+  recv a new DCID, snd Path Challenge  +----------+
+ */
+enum {
+	QUIC_PATH_ALT_NONE,
+	QUIC_PATH_ALT_PENDING, /* Waiting for new dest conn ID for migration */
+	QUIC_PATH_ALT_PROBING, /* Validating alternate path (PATH_CHALLENGE) */
+	QUIC_PATH_ALT_SWAPPED, /* Alternate path is now active; roles swapped */
+};
+
+struct quic_udp_sock {
+	struct work_struct work; /* Workqueue to destroy UDP tunnel socket */
+	struct hlist_node node;  /* Node in addr-based UDP socket hash table */
+	union quic_addr addr; /* Source addr of underlying UDP tunnel socket */
+	int bind_ifindex;
+	refcount_t refcnt;
+	struct sock *sk; /* Underlying UDP tunnel socket */
+};
+
+struct quic_path {
+	union quic_addr daddr; /* Destination address */
+	union quic_addr saddr; /* Source address */
+
+	/* Wrapped UDP socket for receiving QUIC */
+	struct quic_udp_sock *udp_sk;
+	/* Cached UDP tunnel socket and source addr for RCU access */
+	union quic_addr uaddr;
+	struct sock *usk;
+};
+
+struct quic_path_group {
+	/* Connection ID validation during handshake (rfc9000#section-7.3) */
+	struct quic_conn_id retry_dcid; /* Source CID from Retry packet */
+	struct quic_conn_id orig_dcid;  /* Destination CID from first Initial */
+
+	/* Path validation (rfc9000#section-8.2) */
+	u8 entropy[QUIC_PATH_ENTROPY_LEN]; /* Entropy for PATH_CHALLENGE */
+	struct quic_path path[2]; /* Active path (0) and alternate path (1) */
+	seqcount_t path_seq;      /* Protects path[0] during swap */
+	struct flowi fl;          /* Flow info from routing decisions */
+
+	/* Anti-amplification limit (rfc9000#section-8) */
+	u32 ampl_sndlen; /* Bytes sent before address is validated */
+	u32 ampl_rcvlen; /* Bytes received to lift amplification limit */
+
+	/* MTU discovery handling */
+	struct { /* PLPMTUD probing (rfc8899) */
+		s64 number; /* Packet number used for current probe */
+		u16 pmtu;   /* Confirmed path MTU */
+
+		u16 probe_size; /* Current probe packet size */
+		u16 probe_high; /* Highest failed probe size */
+		u8 probe_count; /* Retry count for current probe_size */
+		u8 state;       /* Probe state machine (rfc8899#section-5.2) */
+	} pl;
+	u32 mtu_info; /* PMTU value from received ICMP, pending apply */
+
+	u32 plpmtud_interval;   /* Time interval for the PLPMTUD probe timer */
+	u32 keepalive_interval; /* Time interval to maintain path liveness */
+
+	u8 ecn_probes;  /* ECN probe counter */
+	u8 validated:1; /* Path validated with PATH_RESPONSE */
+	u8 blocked:1;   /* Blocked by anti-amplification limit */
+	u8 version:1;   /* Version negotiation performed */
+	u8 retry:1;     /* Retry used in initial packet */
+
+	/* Connection Migration (rfc9000#section-9) */
+	u8 disable_saddr_alt:1;	/* Remote disable_active_migration parameter */
+	u8 disable_daddr_alt:1;	/* Local disable_active_migration parameter */
+	u8 pref_addr:1; /* Preferred address offered (rfc9000#section-18.2) */
+	u8 alt_probes;  /* Number of PATH_CHALLENGE probes sent */
+	u8 alt_state;   /* Connection migration state (see above) */
+};
+
+static inline union quic_addr *quic_path_saddr(struct quic_path_group *paths,
+					       u8 path)
+{
+	return &paths->path[path].saddr;
+}
+
+static inline void quic_path_set_saddr(struct quic_path_group *paths, u8 path,
+				       union quic_addr *addr)
+{
+	memcpy(quic_path_saddr(paths, path), addr, sizeof(*addr));
+}
+
+static inline union quic_addr *quic_path_daddr(struct quic_path_group *paths,
+					       u8 path)
+{
+	return &paths->path[path].daddr;
+}
+
+static inline void quic_path_set_daddr(struct quic_path_group *paths, u8 path,
+				       union quic_addr *addr)
+{
+	memcpy(quic_path_daddr(paths, path), addr, sizeof(*addr));
+}
+
+static inline union quic_addr *quic_path_uaddr(struct quic_path_group *paths,
+					       u8 path)
+{
+	return &paths->path[path].uaddr;
+}
+
+static inline struct sock *quic_path_usock(struct quic_path_group *paths,
+					   u8 path)
+{
+	return paths->path[path].usk;
+}
+
+static inline bool quic_path_alt_state(struct quic_path_group *paths, u8 state)
+{
+	return paths->alt_state == state;
+}
+
+static inline void quic_path_set_alt_state(struct quic_path_group *paths,
+					   u8 state)
+{
+	paths->alt_state = state;
+}
+
+/* Returns the destination Connection ID (DCID) used for identifying the
+ * connection.  Per rfc9000#section-7.3, handshake packets are considered part
+ * of the same connection if their DCID matches the one returned here.
+ */
+static inline struct quic_conn_id *
+quic_path_orig_dcid(struct quic_path_group *paths)
+{
+	return paths->retry ? &paths->retry_dcid : &paths->orig_dcid;
+}
+
+void quic_path_init(struct quic_path_group *paths);
+
+bool quic_path_detect_alt(struct quic_path_group *paths, union quic_addr *sa,
+			  union quic_addr *da, struct sock *sk);
+int quic_path_bind(struct sock *sk, struct quic_path_group *paths, u8 path);
+void quic_path_unbind(struct sock *sk, struct quic_path_group *paths, u8 path);
+void quic_path_swap(struct quic_path_group *paths);
+
+u32 quic_path_pl_recv(struct quic_path_group *paths, bool *raise_timer,
+		      bool *complete);
+u32 quic_path_pl_toobig(struct quic_path_group *paths, u32 pmtu,
+			bool *reset_timer);
+u32 quic_path_pl_send(struct quic_path_group *paths, s64 number);
+
+void quic_path_get_param(struct quic_path_group *paths,
+			 struct quic_transport_param *p);
+void quic_path_set_param(struct quic_path_group *paths,
+			 struct quic_transport_param *p);
+bool quic_path_pl_confirm(struct quic_path_group *paths,
+			  s64 largest, s64 smallest);
+void quic_path_pl_reset(struct quic_path_group *paths);
