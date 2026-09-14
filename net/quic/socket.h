@@ -16,6 +16,7 @@
 #include "family.h"
 #include "stream.h"
 #include "connid.h"
+#include "crypto.h"
 #include "path.h"
 #include "cong.h"
 
@@ -45,6 +46,7 @@ struct quic_sock {
 	struct quic_path_group		paths;
 	struct quic_cong		cong;
 	struct quic_pnspace		space[QUIC_PNSPACE_MAX];
+	struct quic_crypto		crypto[QUIC_CRYPTO_MAX];
 };
 
 struct quic6_sock {
@@ -110,6 +112,11 @@ static inline struct quic_cong *quic_cong(const struct sock *sk)
 static inline struct quic_pnspace *quic_pnspace(const struct sock *sk, u8 level)
 {
 	return &quic_sk(sk)->space[level % QUIC_CRYPTO_EARLY];
+}
+
+static inline struct quic_crypto *quic_crypto(const struct sock *sk, u8 level)
+{
+	return &quic_sk(sk)->crypto[level];
 }
 
 static inline bool quic_is_establishing(struct sock *sk)
