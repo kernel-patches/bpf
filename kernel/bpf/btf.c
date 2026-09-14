@@ -9729,7 +9729,7 @@ check_modules:
 }
 
 int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
-		   int relo_idx, void *insn)
+		   int relo_idx, void *insn, size_t insn_cnt)
 {
 	bool need_cands = relo->kind != BPF_CORE_TYPE_ID_LOCAL;
 	struct bpf_core_cand_list cands = {};
@@ -9793,8 +9793,8 @@ int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
 	if (err)
 		goto out;
 
-	err = bpf_core_patch_insn((void *)ctx->log, insn, relo->insn_off / 8, relo, relo_idx,
-				  &targ_res);
+	err = bpf_core_patch_insn((void *)ctx->log, insn, insn_cnt, relo->insn_off / 8,
+				  relo, relo_idx, &targ_res);
 
 out:
 	kfree(specs);

@@ -1046,11 +1046,18 @@ static int insn_bytes_to_bpf_size(__u32 sz)
  * 6. *(T *)(rX + <off>) = <imm>, where T is one of {u8, u16, u32, u64}.
  */
 int bpf_core_patch_insn(const char *prog_name, struct bpf_insn *insn,
-			int insn_idx, const struct bpf_core_relo *relo,
-			int relo_idx, const struct bpf_core_relo_res *res)
+			size_t insn_cnt, int insn_idx,
+			const struct bpf_core_relo *relo, int relo_idx,
+			const struct bpf_core_relo_res *res)
 {
 	__u64 orig_val, new_val;
 	__u8 class;
+
+	if (is_ldimm64_insn(insn) && (size_t)insn_idx + 1 >= insn_cnt) {
+		pr_warn("prog '%s': relo #%d: insn #%d (LDIMM64) is truncated\n",
+			prog_name, relo_idx, insn_idx);
+		return -EINVAL;
+	}
 
 	class = BPF_CLASS(insn->code);
 
