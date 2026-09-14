@@ -32,6 +32,7 @@
 #include <linux/part_stat.h>
 #include "blk.h"
 #include "blk-cgroup.h"
+#include <linux/blk-iocost.h>
 #include "blk-ioprio.h"
 #include "blk-throttle.h"
 
@@ -1341,6 +1342,7 @@ void blkcg_unpin_online(struct cgroup_subsys_state *blkcg_css)
  */
 static void blkcg_css_offline(struct cgroup_subsys_state *css)
 {
+	iocost_notify_blkcg_offline(css_to_blkcg(css));
 	/* this prevents anyone from attaching or migrating to this blkcg */
 	wb_blkcg_offline(css);
 
@@ -1445,6 +1447,7 @@ unlock:
 
 static int blkcg_css_online(struct cgroup_subsys_state *css)
 {
+	iocost_notify_blkcg_online(css_to_blkcg(css));
 	struct blkcg *parent = blkcg_parent(css_to_blkcg(css));
 
 	/*
