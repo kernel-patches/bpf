@@ -93,22 +93,20 @@ static inline void rcu_read_unlock_tasks_trace(struct srcu_ctr __percpu *scp)
  *
  * For more details, please see the documentation for rcu_read_lock().
  */
-static inline void rcu_read_lock_trace(void)
+static __always_inline void rcu_read_lock_trace(void)
 {
 	int n;
 	struct task_struct *t = current;
 
-	rcu_try_lock_acquire(&rcu_tasks_trace_srcu_struct.dep_map);
 	n = READ_ONCE(t->trc_reader_nesting);
 	WRITE_ONCE(t->trc_reader_nesting, n + 1);
-	if (n) {
-		// In case we interrupted a Tasks Trace RCU reader.
-		return;
-	}
-	barrier();  // nesting before scp to protect against interrupt handler.
-	t->trc_reader_scp = __srcu_read_lock_fast(&rcu_tasks_trace_srcu_struct);
-	if (!IS_ENABLED(CONFIG_TASKS_TRACE_RCU_NO_MB))
-		smp_mb(); // Placeholder for more selective ordering
+	if (!n) {
+		barrier();  // nesting before scp to protect against interrupt handler.
+		t->trc_reader_scp = __srcu_read_lock_fast(&rcu_tasks_trace_srcu_struct);
+		if (!IS_ENABLED(CONFIG_TASKS_TRACE_RCU_NO_MB))
+			smp_mb(); // Placeholder for more selective ordering
+	} // Else we interrupted a Tasks Trace RCU reader.
+	rcu_try_lock_acquire(&rcu_tasks_trace_srcu_struct.dep_map);
 }
 
 /**
@@ -120,12 +118,13 @@ static inline void rcu_read_lock_trace(void)
  *
  * For more details, please see the documentation for rcu_read_unlock().
  */
-static inline void rcu_read_unlock_trace(void)
+static __always_inline void rcu_read_unlock_trace(void)
 {
 	int n;
 	struct srcu_ctr __percpu *scp;
 	struct task_struct *t = current;
 
+	srcu_lock_release(&rcu_tasks_trace_srcu_struct.dep_map);
 	n = READ_ONCE(t->trc_reader_nesting) - 1;
 	if (n) {
 		WRITE_ONCE(t->trc_reader_nesting, n);
@@ -137,7 +136,6 @@ static inline void rcu_read_unlock_trace(void)
 			smp_mb(); // Placeholder for more selective ordering
 		__srcu_read_unlock_fast(&rcu_tasks_trace_srcu_struct, scp);
 	}
-	srcu_lock_release(&rcu_tasks_trace_srcu_struct.dep_map);
 }
 
 /**
