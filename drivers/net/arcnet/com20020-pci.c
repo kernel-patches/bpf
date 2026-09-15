@@ -133,7 +133,7 @@ static int com20020pci_probe(struct pci_dev *pdev,
 
 	ret = 0;
 
-	if (pci_enable_device(pdev))
+	if (pcim_enable_device(pdev))
 		return -EIO;
 
 	priv = devm_kzalloc(&pdev->dev, sizeof(struct com20020_priv),
