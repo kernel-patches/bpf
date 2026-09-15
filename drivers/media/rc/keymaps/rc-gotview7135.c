@@ -52,7 +52,7 @@ static struct rc_map_table gotview7135[] = {
 static struct rc_map_list gotview7135_map = {
 	.map = {
 		.scan     = gotview7135,
-		.size     = ARRAY_SIZE(gotview7135),
+		.entries  = ARRAY_SIZE(gotview7135),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_GOTVIEW7135,
 	}

@@ -63,7 +63,7 @@ static struct rc_map_table ct_90405[] = {
 static struct rc_map_list ct_90405_map = {
 	.map = {
 		.scan     = ct_90405,
-		.size     = ARRAY_SIZE(ct_90405),
+		.entries  = ARRAY_SIZE(ct_90405),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_CT_90405,
 	}

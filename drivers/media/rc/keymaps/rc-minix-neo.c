@@ -32,7 +32,7 @@ static struct rc_map_table minix_neo[] = {
 static struct rc_map_list minix_neo_map = {
 	.map = {
 		.scan     = minix_neo,
-		.size     = ARRAY_SIZE(minix_neo),
+		.entries  = ARRAY_SIZE(minix_neo),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_MINIX_NEO,
 	}

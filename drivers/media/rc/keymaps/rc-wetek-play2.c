@@ -70,7 +70,7 @@ static struct rc_map_table wetek_play2[] = {
 static struct rc_map_list wetek_play2_map = {
 	.map = {
 		.scan     = wetek_play2,
-		.size     = ARRAY_SIZE(wetek_play2),
+		.entries  = ARRAY_SIZE(wetek_play2),
 		.rc_proto = RC_PROTO_NECX,
 		.name     = RC_MAP_WETEK_PLAY2,
 	}
