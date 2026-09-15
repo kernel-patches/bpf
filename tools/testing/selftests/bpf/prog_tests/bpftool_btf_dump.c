@@ -57,6 +57,35 @@ static struct btf *mk_btf(void)
 	return btf;
 }
 
+static struct btf *mk_loc_btf(void)
+{
+	struct btf *btf;
+
+	btf = btf__new_empty();
+	if (!ASSERT_OK_PTR(btf, "new_empty"))
+		return NULL;
+
+	btf__add_int(btf, "int", 4, BTF_INT_SIGNED);
+	btf__add_func_proto(btf, 1);
+	btf__add_func_param(btf, "arg1", 1);
+	btf__add_func_param(btf, "arg2", 1);
+	btf__add_func(btf, "foo", BTF_FUNC_STATIC, 2);
+
+	btf__add_loc_param(btf, 4, BTF_LOC_PARAM_REG);
+	btf__add_loc_param_value(btf, 1);
+	btf__add_loc_param(btf, 8, BTF_LOC_PARAM_REG |
+			    BTF_LOC_PARAM_DEREF | BTF_LOC_PARAM_OFFSET);
+	btf__add_loc_param_value(btf, 2);
+	btf__add_loc_param_value(btf, 0x10);
+	btf__add_loc_proto(btf);
+	btf__add_loc_proto_param(btf, 4);
+	btf__add_loc_proto_param(btf, 5);
+	btf__add_locsec(btf, "inline.text");
+	btf__add_locsec_loc(btf, 3, 6, 64);
+
+	return btf;
+}
+
 static int btf_to_tmpfile(const struct btf *btf, char *path)
 {
 	ssize_t written;
@@ -98,6 +127,26 @@ static char *dump_c(const char *btf_path, bool sorted)
 
 	err = get_bpftool_command_output(args, buf, DUMP_BUF_SZ);
 	if (!ASSERT_OK(err, "btf_dump_format_c")) {
+		free(buf);
+		return NULL;
+	}
+
+	return buf;
+}
+
+static char *dump_raw(const char *btf_path)
+{
+	char args[MAX_BPFTOOL_CMD_LEN];
+	char *buf;
+	int err;
+
+	buf = malloc(DUMP_BUF_SZ);
+	if (!ASSERT_OK_PTR(buf, "alloc_dump"))
+		return NULL;
+
+	snprintf(args, sizeof(args), "btf dump file %s", btf_path);
+	err = get_bpftool_command_output(args, buf, DUMP_BUF_SZ);
+	if (!ASSERT_OK(err, "btf_dump_raw")) {
 		free(buf);
 		return NULL;
 	}
@@ -155,6 +204,31 @@ out_dump:
 	free(dump);
 }
 
+static void test_loc_dump(const char *btf_path)
+{
+	const char expected[] =
+		"[1] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED\n"
+		"[2] FUNC_PROTO '(anon)' ret_type_id=1 vlen=2\n"
+		"\t'arg1' type_id=1\n"
+		"\t'arg2' type_id=1\n"
+		"[3] FUNC 'foo' type_id=2 linkage=static\n"
+		"[4] LOC_PARAM '(anon)' size=4 flags=0x8 vlen=1 values='r1'\n"
+		"[5] LOC_PARAM '(anon)' size=8 flags=0x38 vlen=2 values='*(r2 + 0x10)'\n"
+		"[6] LOC_PROTO '(anon)' vlen=2\n"
+		"\ttype_id=4 value='r1'\n"
+		"\ttype_id=5 value='*(r2 + 0x10)'\n"
+		"[7] LOCSEC 'inline.text' vlen=1\n"
+		"\tname='foo' func_type_id=3 loc_proto_type_id=6 offset=64\n";
+	char *dump;
+
+	dump = dump_raw(btf_path);
+	if (!dump)
+		return;
+
+	ASSERT_OK(compare_text_to_expected(dump, expected), "cmp_loc_dump");
+	free(dump);
+}
+
 void test_bpftool_btf_dump(void)
 {
 	char path[PATH_MAX];
@@ -174,5 +248,15 @@ void test_bpftool_btf_dump(void)
 
 	unlink(path);
 out_btf:
+	btf__free(btf);
+
+	btf = mk_loc_btf();
+	if (!btf)
+		return;
+
+	if (!btf_to_tmpfile(btf, path) && test__start_subtest("loc_dump"))
+		test_loc_dump(path);
+
+	unlink(path);
 	btf__free(btf);
 }
