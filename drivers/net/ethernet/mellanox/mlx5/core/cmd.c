@@ -1656,36 +1656,81 @@ static void create_debugfs_files(struct mlx5_core_dev *dev)
 	debugfs_create_file("run", 0200, dbg->dbg_root, dev, &fops);
 }
 
+/* Drain the command interface so that cmd->allowed_opcode and cmd->mode can be
+ * updated without an in flight command straddling the change.  A command that
+ * timed out keeps its index, and with it its semaphore unit, until firmware
+ * completes it - which may never happen - so bound the wait by the command
+ * timeout instead of blocking forever.  Returns the number of cmd->vars.sem
+ * units taken, and reports separately whether the page queue unit was taken;
+ * both have to be handed back by cmd_sem_up_all().
+ */
+static int cmd_sem_down_all(struct mlx5_core_dev *dev, bool *pages_sem)
+{
+	unsigned long end = jiffies + msecs_to_jiffies(mlx5_tout_ms(dev, CMD));
+	struct mlx5_cmd *cmd = &dev->cmd;
+	long left;
+	int i;
+
+	for (i = 0; i < cmd->vars.max_reg_cmds; i++) {
+		left = end - jiffies;
+		if (left <= 0 || down_timeout(&cmd->vars.sem, left))
+			break;
+	}
+
+	left = end - jiffies;
+	*pages_sem = left > 0 && !down_timeout(&cmd->vars.pages_sem, left);
+
+	if (i < cmd->vars.max_reg_cmds)
+		mlx5_core_warn(dev, "command interface did not drain, %d of %d slots still busy\n",
+			       cmd->vars.max_reg_cmds - i, cmd->vars.max_reg_cmds);
+	if (!*pages_sem)
+		mlx5_core_warn(dev, "command interface did not drain, page queue slot still busy\n");
+
+	return i;
+}
+
+static void cmd_sem_up_all(struct mlx5_core_dev *dev, int nr, bool pages_sem)
+{
+	struct mlx5_cmd *cmd = &dev->cmd;
+
+	if (pages_sem)
+		up(&cmd->vars.pages_sem);
+	while (nr--)
+		up(&cmd->vars.sem);
+}
+
 void mlx5_cmd_allowed_opcode(struct mlx5_core_dev *dev, u16 opcode)
 {
 	struct mlx5_cmd *cmd = &dev->cmd;
-	int i;
+	bool pages_sem;
+	int nr;
 
-	for (i = 0; i < cmd->vars.max_reg_cmds; i++)
-		down(&cmd->vars.sem);
-	down(&cmd->vars.pages_sem);
+	nr = cmd_sem_down_all(dev, &pages_sem);
 
-	cmd->allowed_opcode = opcode;
+	/* Narrowing the set is only safe once the interface has drained.
+	 * mlx5_cmd_comp_handler() reads !opcode_allowed() as "no real
+	 * firmware completion is expected" and releases the entry, so
+	 * narrowing while a command is still posted would hand its mailboxes
+	 * back to dev->cmd.pool with firmware still able to write them.
+	 * Widening back to CMD_ALLOWED_OPCODE_ALL is always safe.
+	 */
+	if (opcode == CMD_ALLOWED_OPCODE_ALL ||
+	    (nr == cmd->vars.max_reg_cmds && pages_sem))
+		cmd->allowed_opcode = opcode;
+	else
+		mlx5_core_warn(dev, "leaving command opcodes unrestricted, interface did not drain\n");
 
-	up(&cmd->vars.pages_sem);
-	for (i = 0; i < cmd->vars.max_reg_cmds; i++)
-		up(&cmd->vars.sem);
+	cmd_sem_up_all(dev, nr, pages_sem);
 }
 
 static void mlx5_cmd_change_mod(struct mlx5_core_dev *dev, int mode)
 {
-	struct mlx5_cmd *cmd = &dev->cmd;
-	int i;
+	bool pages_sem;
+	int nr;
 
-	for (i = 0; i < cmd->vars.max_reg_cmds; i++)
-		down(&cmd->vars.sem);
-	down(&cmd->vars.pages_sem);
-
-	cmd->mode = mode;
-
-	up(&cmd->vars.pages_sem);
-	for (i = 0; i < cmd->vars.max_reg_cmds; i++)
-		up(&cmd->vars.sem);
+	nr = cmd_sem_down_all(dev, &pages_sem);
+	dev->cmd.mode = mode;
+	cmd_sem_up_all(dev, nr, pages_sem);
 }
 
 static int cmd_comp_notifier(struct notifier_block *nb,
