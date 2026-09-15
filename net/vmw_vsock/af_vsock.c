@@ -1973,12 +1973,12 @@ static int vsock_listen(struct socket *sock, int backlog)
 		goto out;
 	}
 
-	if (sock->state != SS_UNCONNECTED) {
+	vsk = vsock_sk(sk);
+
+	if (sock->state != SS_UNCONNECTED || vsk->transport) {
 		err = -EINVAL;
 		goto out;
 	}
-
-	vsk = vsock_sk(sk);
 
 	if (!vsock_addr_bound(&vsk->local_addr)) {
 		err = -EINVAL;
