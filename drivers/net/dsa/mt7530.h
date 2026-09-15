@@ -40,6 +40,7 @@ enum mt753x_id {
 /* Register for ARL global control */
 #define MT753X_AGC			0xc
 #define  LOCAL_EN			BIT(7)
+#define  AGC_L2LEN_CHK			BIT(4)
 
 /* Register for MAC forward control */
 #define MT753X_MFC			0x10
@@ -583,6 +584,7 @@ enum mt7531_clk_skew {
 #define MT753X_MTRAP			0x7804
 #define  MT7530_P5_PHY0_SEL		BIT(20)
 #define  MT7530_CHG_TRAP		BIT(16)
+#define  MT7530_LOOP_DET_DISABLE	BIT(14)
 #define  MT7530_P5_MAC_SEL		BIT(13)
 #define  MT7530_P6_DIS			BIT(8)
 #define  MT7530_P5_RGMII_MODE		BIT(7)
@@ -897,6 +899,9 @@ struct mt753x_info {
  * @p5_mode:		Holding the current mode of port 5 of the MT7530 switch
  * @p5_sgmii:		Flag for distinguishing if port 5 of the MT7531 switch
  *			has got SGMII
+ * @is_passthrough:	If this switch is to pass traffic between the upstream
+ *			(CPU) port and a second downstream switch, without
+ *			altering the DSA tag.
  * @irq_domain:		IRQ domain of the switch irq_chip
  * @create_sgmii:	Pointer to function creating SGMII PCS instance(s)
  * @active_cpu_ports:	Holding the active CPU ports
@@ -921,6 +926,7 @@ struct mt7530_priv {
 	bool			p5_sgmii;
 	u8			mirror_rx;
 	u8			mirror_tx;
+	bool			is_passthrough;
 	struct mt7530_port	ports[MT7530_NUM_PORTS];
 	struct mt753x_pcs	pcs[MT7530_NUM_PORTS];
 	/* protect among processes for registers access*/
