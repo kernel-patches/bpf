@@ -281,6 +281,8 @@ int sit9531x_intsync_enable(struct sit9531x_dev *sitdev, u8 src_pll_idx);
 int sit9531x_intsync_disable(struct sit9531x_dev *sitdev, u8 src_pll_idx);
 
 /* ---- Output pulse control ---- */
+int sit9531x_output_esync_program(struct sit9531x_dev *sitdev, u8 out_idx,
+				  u8 pll_idx, u64 carrier, u8 pulse_ctrl);
 int sit9531x_output_pulse_ctrl_set(struct sit9531x_dev *sitdev,
 				   u8 out_idx, u8 pulse_ctrl);
 

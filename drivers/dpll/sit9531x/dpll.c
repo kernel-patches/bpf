@@ -22,8 +22,20 @@
 #include "prop.h"
 #include "regs.h"
 
-#define SIT9531X_ESYNC_FREQ_10MHZ	10000000ULL
+#define SIT9531X_ESYNC_FREQ_1HZ	DPLL_PIN_FREQUENCY_1_HZ
+#define SIT9531X_ESYNC_FREQ_10MHZ	DPLL_PIN_FREQUENCY_10_MHZ
 #define SIT9531X_ESYNC_PULSE_DEFAULT	50
+
+static const struct dpll_pin_frequency sit9531x_esync_ranges[] = {
+	DPLL_PIN_FREQUENCY(0),
+	DPLL_PIN_FREQUENCY(SIT9531X_ESYNC_FREQ_1HZ),
+};
+
+static bool
+sit9531x_dpll_esync_pin_supported(const struct sit9531x_dpll_pin *dpin)
+{
+	return dpin->esync_control;
+}
 
 static bool sit9531x_dpll_is_input_pin(const struct sit9531x_dpll_pin *pin)
 {
@@ -726,6 +738,12 @@ sit9531x_dpll_output_pin_frequency_set(const struct dpll_pin *pin,
 	actual_pll = sitdev->out[dpin->id].pll_idx;
 
 	mutex_lock(&sitdev->multiop_lock);
+	if (dpin->esync_freq) {
+		mutex_unlock(&sitdev->multiop_lock);
+		NL_SET_ERR_MSG(extack,
+			       "Disable embedded sync on this pin before changing frequency");
+		return -EBUSY;
+	}
 	rc = sit9531x_output_freq_set(sitdev, dpin->id, actual_pll,
 				      frequency);
 	mutex_unlock(&sitdev->multiop_lock);
@@ -869,6 +887,138 @@ sit9531x_dpll_output_pin_phase_adjust_set(const struct dpll_pin *pin,
 	return 0;
 }
 
+static int
+sit9531x_dpll_output_pin_esync_get(const struct dpll_pin *pin,
+				   void *pin_priv,
+				   const struct dpll_device *dpll,
+				   void *dpll_priv,
+				   struct dpll_pin_esync *esync,
+				   struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+
+	if (!sit9531x_dpll_esync_pin_supported(dpin))
+		return -EOPNOTSUPP;
+
+	mutex_lock(&sitdev->multiop_lock);
+	esync->range = sit9531x_esync_ranges;
+	esync->range_num = ARRAY_SIZE(sit9531x_esync_ranges);
+	esync->freq = dpin->esync_freq;
+	/*
+	 * The hardware PROG0 byte is programmed with the same literal that the
+	 * ABI reports as pulse percent for the supported 1 Hz mode. When esync
+	 * is disabled, report pulse as zero to avoid implying an active marker.
+	 */
+	esync->pulse = dpin->esync_freq ? SIT9531X_ESYNC_PULSE_DEFAULT : 0;
+	mutex_unlock(&sitdev->multiop_lock);
+
+	return 0;
+}
+
+static int
+sit9531x_dpll_output_pin_esync_set(const struct dpll_pin *pin,
+				   void *pin_priv,
+				   const struct dpll_device *dpll,
+				   void *dpll_priv,
+				   u64 freq,
+				   struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	u8 actual_pll;
+	int rc;
+
+	if (!sit9531x_dpll_esync_pin_supported(dpin)) {
+		NL_SET_ERR_MSG(extack,
+			       "Embedded sync not enabled for this pin");
+		return -EOPNOTSUPP;
+	}
+
+	actual_pll = sitdev->out[dpin->id].pll_idx;
+
+	mutex_lock(&sitdev->multiop_lock);
+
+	if (!freq) {
+		u64 prev_freq = dpin->esync_prev_freq;
+		u8 pulse = SIT9531X_ESYNC_PULSE_DEFAULT;
+
+		if (!dpin->esync_freq) {
+			mutex_unlock(&sitdev->multiop_lock);
+			return 0;
+		}
+		rc = sit9531x_output_pulse_ctrl_set(sitdev, dpin->id, 0);
+		if (!rc && prev_freq)
+			rc = sit9531x_output_freq_set(sitdev, dpin->id, actual_pll, prev_freq);
+		if (rc)
+			sit9531x_output_pulse_ctrl_set(sitdev, dpin->id, pulse);
+		if (!rc)
+			dpin->esync_freq = 0;
+		mutex_unlock(&sitdev->multiop_lock);
+		if (rc)
+			NL_SET_ERR_MSG(extack,
+				       "Failed to turn embedded sync off on this output");
+		return rc;
+	}
+
+	if (freq != SIT9531X_ESYNC_FREQ_1HZ) {
+		mutex_unlock(&sitdev->multiop_lock);
+		NL_SET_ERR_MSG(extack,
+			       "Only 1 Hz embedded-sync frequency is supported");
+		return -EINVAL;
+	}
+
+	if (dpin->esync_freq == SIT9531X_ESYNC_FREQ_1HZ) {
+		mutex_unlock(&sitdev->multiop_lock);
+		return 0;
+	}
+
+	if (!dpin->esync_freq) {
+		/*
+		 * Remember the carrier to restore.  The cached rate is zero
+		 * for an output whose firmware node lists no frequency and
+		 * which has never been set, so read the divider rather than
+		 * leave the output parked on the esync carrier at disable.
+		 */
+		dpin->esync_prev_freq = sitdev->out[dpin->id].freq;
+		if (!dpin->esync_prev_freq)
+			sit9531x_output_freq_get(sitdev, dpin->id,
+						 &dpin->esync_prev_freq);
+	}
+
+	/*
+	 * Carrier, marker and enable go into the device in one programming
+	 * sequence.  Without the pulse generator (PROG0 PULSE_CTRL) the
+	 * output would carry 10 MHz and no marker at all;
+	 * SIT9531X_ESYNC_PULSE_DEFAULT is the duty esync_get advertises for
+	 * the 1 Hz embedded-sync signal.
+	 */
+	rc = sit9531x_output_esync_program(sitdev, dpin->id, actual_pll,
+					   SIT9531X_ESYNC_FREQ_10MHZ,
+					   SIT9531X_ESYNC_PULSE_DEFAULT);
+	if (rc) {
+		sit9531x_output_pulse_ctrl_set(sitdev, dpin->id, 0);
+		if (dpin->esync_prev_freq)
+			sit9531x_output_freq_set(sitdev, dpin->id,
+						 actual_pll,
+						 dpin->esync_prev_freq);
+	}
+
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc) {
+		NL_SET_ERR_MSG(extack,
+			       "Failed to program embedded sync on this output");
+		return rc;
+	}
+
+	dpin->esync_freq = SIT9531X_ESYNC_FREQ_1HZ;
+
+	return 0;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_output_pin_ops = {
 	.direction_get		= sit9531x_dpll_output_pin_direction_get,
 	.frequency_get		= sit9531x_dpll_output_pin_frequency_get,
@@ -877,6 +1027,8 @@ static const struct dpll_pin_ops sit9531x_dpll_output_pin_ops = {
 	.state_on_dpll_set	= sit9531x_dpll_output_pin_state_on_dpll_set,
 	.phase_adjust_get	= sit9531x_dpll_output_pin_phase_adjust_get,
 	.phase_adjust_set	= sit9531x_dpll_output_pin_phase_adjust_set,
+	.esync_get		= sit9531x_dpll_output_pin_esync_get,
+	.esync_set		= sit9531x_dpll_output_pin_esync_set,
 };
 
 const struct dpll_pin_ops *

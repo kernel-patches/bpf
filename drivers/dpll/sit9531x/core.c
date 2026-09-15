@@ -1655,6 +1655,103 @@ int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
 }
 
 /*
+ * sit9531x_output_pulse_write - write an output's PROG0 pulse control
+ *
+ * The caller must already be in the programming state.
+ */
+static int sit9531x_output_pulse_write(struct sit9531x_dev *sitdev, u8 out_idx,
+				       u8 pulse_ctrl)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	u8 slot, page, reg;
+
+	slot = info->clkout_map[out_idx];
+	page = (slot > SIT9531X_PAGE_OUTSYS0_SLOT_MAX) ?
+		SIT9531X_PAGE_OUTSYS1 : SIT9531X_PAGE_OUTSYS0;
+	reg = SIT9531X_OUT_PROG0_BASE +
+	      SIT9531X_OUT_PRG_SLOT_STRIDE * (slot % 6);
+
+	return sit9531x_write_u8(sitdev, SIT9531X_REG(page, reg), pulse_ctrl);
+}
+
+/*
+ * sit9531x_output_esync_program - set carrier, marker and enable at once
+ *
+ * Turning embedded sync on means three things to the output system: the
+ * carrier rate, the pulse generator that puts the marker on it, and the
+ * output enable.  The device takes them all inside one programming state
+ * -- our validated divider sequence writes a whole register group
+ * that way -- so doing them as three sequences would pay the settling
+ * time three times, with the subsystem's device lock held throughout.
+ *
+ * The phase flush stays after the latch: it aligns the output to the
+ * divider the device is running, not to the one it was asked for.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_output_esync_program(struct sit9531x_dev *sitdev, u8 out_idx,
+				  u8 pll_idx, u64 carrier, u8 pulse_ctrl)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	u64 fvco, divo;
+	bool muted;
+	int rc, ret;
+	u8 slot;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	rc = sit9531x_output_divo_calc(sitdev, out_idx, pll_idx, carrier,
+				       &fvco, &divo);
+	if (rc)
+		return rc;
+
+	slot = info->clkout_map[out_idx];
+
+	rc = sit9531x_prg_enter(sitdev);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_output_divo_write(sitdev, out_idx, divo);
+	if (!rc)
+		rc = sit9531x_output_pulse_write(sitdev, out_idx, pulse_ctrl);
+	/*
+	 * Keep the mute the user asked for.  Embedded sync changes what the
+	 * output carries, not whether it is driven, so an output muted
+	 * through pin-state stays muted.
+	 */
+	if (!rc)
+		rc = sit9531x_output_hiz_write(sitdev, slot,
+					       !sitdev->out[out_idx].enabled);
+
+	ret = sit9531x_prg_commit(sitdev);
+	if (ret && !rc)
+		rc = ret;
+
+	if (!sit9531x_output_forced_hiz(sitdev, out_idx, &muted))
+		sitdev->out[out_idx].enabled = !muted;
+
+	if (rc)
+		return rc;
+
+	rc = sit9531x_output_phase_flush(sitdev, pll_idx);
+	if (rc)
+		return rc;
+
+	sitdev->out[out_idx].freq = div64_u64(fvco, divo);
+
+	/*
+	 * The delay registers count VCO cycles against the output period in
+	 * force when they were written, so the carrier change re-times a
+	 * phase adjust the same way a frequency set does.
+	 */
+	if (sitdev->out[out_idx].phase_adj)
+		return sit9531x_output_phase_adjust_set(sitdev, out_idx,
+							sitdev->out[out_idx].phase_adj);
+
+	return 0;
+}
+
+/*
  * sit9531x_output_freq_get - read output clock frequency from hardware
  * @out_idx:	output index (0-N for this chip variant)
  * @frequency:	output frequency in Hz
@@ -1989,6 +2086,50 @@ int sit9531x_clear_notifications(struct sit9531x_dev *sitdev)
 
 	dev_dbg(sitdev->dev, "All notification registers cleared\n");
 	return 0;
+}
+
+/*
+ * sit9531x_output_pulse_ctrl_set - program per-output PULSE_CTRL byte
+ * @out_idx:	logical output index (translated to chip slot internally)
+ * @pulse_ctrl:	8-bit PULSE_CTRL value (PROG0)
+ *
+ * Writes ODRn_PROG0 on the output page (Page 3 for slots 0..5,
+ * Page 4 for slots 6..11) at offset 0x1B + 16 * (slot % 6).
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_output_pulse_ctrl_set(struct sit9531x_dev *sitdev,
+				   u8 out_idx, u8 pulse_ctrl)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	int rc, ret;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (out_idx >= info->num_outputs)
+		return -EINVAL;
+
+	/*
+	 * PROG0 lives in the output system, so like the DIVO and
+	 * PRG_RST_DELAY writes it only takes effect inside the PRG_CMD
+	 * programming state committed to the NVM shadow.
+	 */
+	rc = sit9531x_prg_enter(sitdev);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_output_pulse_write(sitdev, out_idx, pulse_ctrl);
+
+	/*
+	 * Always leave the PRG_CMD state via prg_commit(), even if the write
+	 * failed, so the output loops are re-locked rather than stranded
+	 * unlocked; keep the first error.
+	 */
+	ret = sit9531x_prg_commit(sitdev);
+	if (ret && !rc)
+		rc = ret;
+
+	return rc;
 }
 
 /*

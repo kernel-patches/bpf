@@ -34,7 +34,8 @@ struct sit9531x_dpll_pin {
 	/* in 1/DPLL_PHASE_OFFSET_DIVIDER picosecond units */
 	s64				phase_offset;
 	bool				esync_control;
-	u64				esync_freq;	/* 0 == disabled */
+	u64				esync_freq;	/* 0 == disabled, 1 Hz == enabled */
+	u64				esync_prev_freq;	/* carrier to restore on disable */
 };
 
 /* Per-PLL DPLL device state. */
