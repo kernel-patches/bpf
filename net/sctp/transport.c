@@ -92,6 +92,9 @@ struct sctp_transport *sctp_transport_new(struct net *net,
 {
 	struct sctp_transport *transport;
 
+	if (!sctp_get_af_specific(addr->sa.sa_family))
+		return NULL;
+
 	transport = kzalloc_obj(*transport, gfp);
 	if (!transport)
 		return NULL;
