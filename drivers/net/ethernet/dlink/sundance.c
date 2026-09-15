@@ -510,7 +510,7 @@ static int sundance_probe1(struct pci_dev *pdev,
 	int phy, phy_end, phy_idx = 0;
 	__le16 addr[ETH_ALEN / 2];
 
-	if (pci_enable_device(pdev))
+	if (pcim_enable_device(pdev))
 		return -EIO;
 	pci_set_master(pdev);
 
