@@ -876,24 +876,14 @@ static void init_registers(struct net_device *dev)
 	i |= 0x02;		/* give Rx priority */
 
 	/* Configure the PCI bus bursts and FIFO thresholds.
-	   486: Set 8 longword cache alignment, 8 longword burst.
-	   586: Set 16 longword cache alignment, no burst limit.
+	   Set 16 longword cache alignment, no burst limit.
 	   Cache alignment bits 15:14	     Burst length 13:8
 		0000	<not allowed> 		0000 align to cache	0800 8 longwords
 		4000	8  longwords		0100 1 longword		1000 16 longwords
 		8000	16 longwords		0200 2 longwords	2000 32 longwords
 		C000	32  longwords		0400 4 longwords */
 
-#if defined (__i386__) && !defined(MODULE) && !defined(CONFIG_UML)
-	/* When not a module we can work around broken '486 PCI boards. */
-	if (boot_cpu_data.x86 <= 4) {
-		i |= 0x4800;
-		dev_info(&dev->dev,
-			 "This is a 386/486 PCI system, setting cache alignment to 8 longwords\n");
-	} else {
-		i |= 0xE000;
-	}
-#elif defined(__powerpc__) || defined(__i386__) || defined(__alpha__) || defined(__ia64__) || defined(__x86_64__)
+#if defined(__powerpc__) || defined(__i386__) || defined(__alpha__) || defined(__ia64__) || defined(__x86_64__)
 	i |= 0xE000;
 #elif defined(CONFIG_SPARC) || defined (CONFIG_PARISC) || defined(CONFIG_ARM)
 	i |= 0x4800;
