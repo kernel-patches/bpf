@@ -1549,9 +1549,10 @@ struct ref_obj_desc {
 /*
  * A memory argument a call fills in. The verifier allows the stack to be uninitialized if
  * the range is a known constant. Stack slots are marked as STACK_MISC by check_mem_access().
+ * @slot is the one-based ABI argument slot, or zero when there is no raw memory argument.
  */
 struct arg_raw_mem_desc {
-	u8 regno;
+	u8 slot;
 	int size;
 };
 
@@ -1579,6 +1580,7 @@ struct bpf_call_arg_meta {
 	struct bpf_dynptr_desc dynptr;
 	struct ref_obj_desc ref_obj;
 	struct ret_mem_desc ret_mem;
+	struct arg_raw_mem_desc arg_raw_mem;
 
 	/* Only set by kfunc */
 	bool r0_rdonly;
@@ -1617,7 +1619,6 @@ struct bpf_call_arg_meta {
 	s64 const_map_key;
 	struct btf *ret_btf;
 	struct btf_field *kptr_field;
-	struct arg_raw_mem_desc arg_raw_mem;
 };
 
 int bpf_get_helper_proto(struct bpf_verifier_env *env, int func_id,
