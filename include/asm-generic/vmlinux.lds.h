@@ -571,6 +571,16 @@
 		__cpuidle_text_end = .;					\
 		__noinstr_text_end = .;
 
+/*
+ * C glue called directly from Tasks-RCU-protected trampolines, bounded so
+ * that rcu_tasks_trampoline_text() can recognise it; see __rcu_trampoline.
+ */
+#define RCU_TRAMP_TEXT							\
+		ALIGN_FUNCTION();					\
+		__rcu_tramp_text_start = .;				\
+		*(.text..rcu_tramp)					\
+		__rcu_tramp_text_end = .;
+
 #define TEXT_SPLIT							\
 		__split_text_start = .;					\
 		*(.text.split .text.split.[0-9a-zA-Z_]*)		\
@@ -607,6 +617,7 @@
 		TEXT_HOT						\
 		*(TEXT_MAIN .text.fixup)				\
 		NOINSTR_TEXT						\
+		RCU_TRAMP_TEXT						\
 		*(.ref.text)
 
 /* sched.text is aling to function alignment to secure we have same

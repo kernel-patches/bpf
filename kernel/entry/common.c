@@ -6,6 +6,7 @@
 #include <linux/jump_label.h>
 #include <linux/kmsan.h>
 #include <linux/livepatch.h>
+#include <linux/rcupdate.h>
 #include <linux/resume_user_mode.h>
 #include <linux/tick.h>
 
@@ -141,8 +142,13 @@ void raw_irqentry_exit_cond_resched(struct pt_regs *regs)
 		rcu_irq_exit_check_preempt();
 		if (IS_ENABLED(CONFIG_DEBUG_ENTRY))
 			WARN_ON_ONCE(!on_thread_stack());
-		if (need_resched() && arch_irqentry_exit_need_resched())
+		if (need_resched() && arch_irqentry_exit_need_resched()) {
+			if (IS_ENABLED(CONFIG_TASKS_RCU_TRAMPOLINE_READERS))
+				rcu_tasks_irq_resched_enter(instruction_pointer(regs));
 			preempt_schedule_irq();
+			if (IS_ENABLED(CONFIG_TASKS_RCU_TRAMPOLINE_READERS))
+				rcu_tasks_irq_resched_exit();
+		}
 	}
 }
 #ifdef CONFIG_PREEMPT_DYNAMIC

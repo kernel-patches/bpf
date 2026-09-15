@@ -107,6 +107,28 @@ config TASKS_RCU
 	default NEED_TASKS_RCU && PREEMPTION
 	select IRQ_WORK
 
+config HAVE_RCU_TRAMPOLINE_READERS
+	bool
+	help
+	  Select this if the architecture uses the generic irq entry code and
+	  every trampoline whose lifetime Tasks RCU guards on it (ftrace
+	  trampolines, kprobe out-of-line and optimized-probe slots, BPF
+	  trampolines, out-of-line ftrace direct-call trampolines) enters a
+	  Tasks Trace RCU read-side critical section before calling out of
+	  the trampoline and leaves it before returning, and any core text
+	  that runs on behalf of such a trampoline outside that reader is
+	  reported by arch_rcu_tasks_trampoline_text().  The assembly readers
+	  use the this_cpu_inc() form of SRCU-fast, hence !NEED_SRCU_NMI_SAFE.
+
+config TASKS_RCU_TRAMPOLINE_READERS
+	def_bool TASKS_RCU && HAVE_RCU_TRAMPOLINE_READERS && GENERIC_IRQ_ENTRY && !NEED_SRCU_NMI_SAFE
+	select TASKS_TRACE_RCU
+	help
+	  Implement the Tasks RCU grace period as a per-CPU pass over
+	  context switches and irq-exit reschedules outside trampoline text
+	  plus a Tasks Trace RCU grace period, instead of waiting for every
+	  task to voluntarily context switch.  See kernel/rcu/tasks.h.
+
 config FORCE_TASKS_RUDE_RCU
 	bool "Force selection of Tasks Rude RCU"
 	depends on RCU_EXPERT
