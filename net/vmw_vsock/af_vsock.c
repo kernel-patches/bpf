@@ -1743,6 +1743,12 @@ static int vsock_connect(struct socket *sock, struct sockaddr_unsized *addr,
 			goto out;
 		}
 
+		/* Virtio/PM events are serviced locklessly. */
+		if (READ_ONCE(vsk->peer_shutdown)) {
+			err = -ECONNRESET;
+			goto out;
+		}
+
 		/* Set the remote address that we are connecting to. */
 		memcpy(&vsk->remote_addr, remote_addr,
 		       sizeof(vsk->remote_addr));
