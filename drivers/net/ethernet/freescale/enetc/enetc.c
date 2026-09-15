@@ -1077,6 +1077,19 @@ netdev_tx_t enetc_xmit(struct sk_buff *skb, struct net_device *ndev)
 	u8 udp, msgtype, twostep;
 	u16 offset1, offset2;
 
+	/* Hardware does not support transmit buffer descriptors with a total
+	 * length of less than 16 bytes, or a first buffer size of less than
+	 * 16 bytes.
+	 */
+	if (unlikely(skb_headlen(skb) < ENETC_MIN_BUFF_SIZE &&
+		     skb_linearize(skb))) {
+		dev_kfree_skb_any(skb);
+		return NETDEV_TX_OK;
+	}
+
+	if (eth_skb_pad(skb))
+		return NETDEV_TX_OK;
+
 	/* Mark tx timestamp type on enetc_cb->flag if requires */
 	if ((skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) &&
 	    (priv->active_offloads & ENETC_F_TX_TSTAMP_MASK))
