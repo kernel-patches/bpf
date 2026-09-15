@@ -1007,6 +1007,8 @@ bool __weak arch_rcu_tasks_trampoline_text(unsigned long ip)
  *  - the .text..rcu_tramp section, C glue called directly from such
  *    trampolines before it has entered the reader;
  *  - whatever the architecture adds via arch_rcu_tasks_trampoline_text();
+ *  - the text of a module that hosts an out-of-line ftrace direct-call
+ *    trampoline (see ftrace_direct_mark_module());
  *  - the bytes after a kprobe that a pending jump optimization is about to
  *    overwrite, the one synchronize_rcu_tasks() user with no trampoline.
  *
@@ -1015,6 +1017,8 @@ bool __weak arch_rcu_tasks_trampoline_text(unsigned long ip)
  */
 bool rcu_tasks_trampoline_text(unsigned long ip)
 {
+	bool ret = true;
+
 	if (core_kernel_text(ip)) {
 		if (ip >= (unsigned long)__rcu_tramp_text_start &&
 		    ip <  (unsigned long)__rcu_tramp_text_end)
@@ -1022,9 +1026,20 @@ bool rcu_tasks_trampoline_text(unsigned long ip)
 		return arch_rcu_tasks_trampoline_text(ip) ||
 		       kprobe_in_optimized_region(ip);
 	}
-	if (is_module_text_address(ip))
-		return kprobe_in_optimized_region(ip);
-	return true;
+
+#ifdef CONFIG_MODULES
+	scoped_guard(rcu) {
+		struct module *mod = __module_text_address(ip);
+
+		if (mod) {
+			ret = kprobe_in_optimized_region(ip);
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+			ret = ret || READ_ONCE(mod->ftrace_direct_tramp);
+#endif
+		}
+	}
+#endif
+	return ret;
 }
 NOKPROBE_SYMBOL(rcu_tasks_trampoline_text);
 
