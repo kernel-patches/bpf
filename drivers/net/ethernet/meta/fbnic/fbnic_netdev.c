@@ -702,11 +702,12 @@ static const struct netdev_stat_ops fbnic_stat_ops = {
 	.get_base_stats		= fbnic_get_base_stats,
 };
 
-void fbnic_reset_queues(struct fbnic_net *fbn,
-			unsigned int tx, unsigned int rx)
+static int fbnic_reset_queues(struct fbnic_net *fbn,
+			      unsigned int tx, unsigned int rx)
 {
 	struct fbnic_dev *fbd = fbn->fbd;
 	unsigned int max_napis;
+	int err;
 
 	max_napis = fbd->num_irqs - FBNIC_NON_NAPI_VECTORS;
 
@@ -717,6 +718,14 @@ void fbnic_reset_queues(struct fbnic_net *fbn,
 	fbn->num_rx_queues = rx;
 
 	fbn->num_napi = max(tx, rx);
+
+	err = netif_set_real_num_queues(fbn->netdev, tx, rx);
+	if (err)
+		return err;
+
+	fbnic_reset_indir_tbl(fbn);
+
+	return 0;
 }
 
 /**
@@ -785,9 +794,9 @@ struct net_device *fbnic_netdev_alloc(struct fbnic_dev *fbd)
 	if (default_queues > fbd->max_num_queues)
 		default_queues = fbd->max_num_queues;
 
-	fbnic_reset_queues(fbn, default_queues, default_queues);
+	if (fbnic_reset_queues(fbn, default_queues, default_queues))
+		goto err_free_netdev;
 
-	fbnic_reset_indir_tbl(fbn);
 	fbnic_rss_key_fill(fbn->rss_key);
 	fbnic_rss_init_en_mask(fbn);
 
@@ -832,13 +841,15 @@ struct net_device *fbnic_netdev_alloc(struct fbnic_dev *fbd)
 
 	netif_tx_stop_all_queues(netdev);
 
-	if (fbnic_phylink_create(netdev)) {
-		free_netdev(netdev);
-		fbd->netdev = NULL;
-		return NULL;
-	}
+	if (fbnic_phylink_create(netdev))
+		goto err_free_netdev;
 
 	return netdev;
+
+err_free_netdev:
+	free_netdev(netdev);
+	fbd->netdev = NULL;
+	return NULL;
 }
 
 static int fbnic_dsn_to_mac_addr(u64 dsn, char *addr)

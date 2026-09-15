@@ -470,6 +470,7 @@ static int __fbnic_pm_resume(struct device *dev)
 {
 	struct fbnic_dev *fbd = dev_get_drvdata(dev);
 	struct net_device *netdev = fbd->netdev;
+	unsigned int max_queues, max_napis;
 	void __iomem * const *iomap_table;
 	struct fbnic_net *fbn;
 	int err;
@@ -508,11 +509,16 @@ static int __fbnic_pm_resume(struct device *dev)
 
 	fbn = netdev_priv(netdev);
 
-	/* Reset the queues if needed */
-	fbnic_reset_queues(fbn, fbn->num_tx_queues, fbn->num_rx_queues);
-
 	rtnl_lock();
 	netdev_lock(netdev);
+
+	/* Preserve queue counts, as RX queues may have memory providers bound.
+	 * The RSS table indexes RX queues and remains valid. Rebuild only the
+	 * NAPI layout, sharing vectors if fewer IRQs are available.
+	 */
+	max_napis = fbd->num_irqs - FBNIC_NON_NAPI_VECTORS;
+	max_queues = max(fbn->num_tx_queues, fbn->num_rx_queues);
+	fbn->num_napi = min(max_queues, max_napis);
 
 	if (netif_running(netdev))
 		err = __fbnic_open(fbn);
