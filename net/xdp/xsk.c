@@ -1636,19 +1636,21 @@ static int xsk_bind(struct socket *sock, struct sockaddr_unsized *addr, int addr
 		return -EINVAL;
 
 	rtnl_lock();
+
+	dev = dev_get_by_index(sock_net(sk), sxdp->sxdp_ifindex);
+	if (dev)
+		netdev_lock_ops(dev);
+
 	mutex_lock(&xs->mutex);
 	if (xs->state != XSK_READY) {
 		err = -EBUSY;
 		goto out_release;
 	}
 
-	dev = dev_get_by_index(sock_net(sk), sxdp->sxdp_ifindex);
 	if (!dev) {
 		err = -ENODEV;
 		goto out_release;
 	}
-
-	netdev_lock_ops(dev);
 
 	if (!xs->rx && !xs->tx) {
 		err = -EINVAL;
@@ -1786,18 +1788,20 @@ static int xsk_bind(struct socket *sock, struct sockaddr_unsized *addr, int addr
 	}
 
 out_unlock:
-	if (err) {
-		dev_put(dev);
-	} else {
+	if (!err) {
 		/* Matches smp_rmb() in bind() for shared umem
 		 * sockets, and xsk_is_bound().
 		 */
 		smp_wmb();
 		WRITE_ONCE(xs->state, XSK_BOUND);
 	}
-	netdev_unlock_ops(dev);
 out_release:
 	mutex_unlock(&xs->mutex);
+	if (dev) {
+		netdev_unlock_ops(dev);
+		if (err)
+			dev_put(dev);
+	}
 	rtnl_unlock();
 	return err;
 }
