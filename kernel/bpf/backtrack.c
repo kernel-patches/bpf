@@ -538,27 +538,24 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			from_subprog_call = subseq_idx - 1 >= 0 &&
 					    bpf_pseudo_call(&env->prog->insnsi[subseq_idx - 1]);
 
-			/* Sample the return registers before the callback
-			 * handling below clears R1-R5.
-			 */
 			r0_precise = from_subprog_call && bt_is_reg_set(bt, BPF_REG_0);
 			r2_precise = from_subprog_call && bt_is_reg_set(bt, BPF_REG_2);
 
 			/* Backtracking to a nested function call, 'idx' is a part of
 			 * the inner frame 'subseq_idx' is a part of the outer frame.
-			 * In case of a regular function call, instructions giving
-			 * precision to registers R1-R5 should have been found already.
-			 * In case of a callback, it is ok to have R1-R5 marked for
-			 * backtracking, as these registers are set by the function
-			 * invoking callback.
+			 * In case of a regular function call, the callee defines the
+			 * return registers R0 and R2, so clear them before checking
+			 * that instructions giving precision to registers R1-R5 have
+			 * been found already. R2 is also an argument register, hence
+			 * it has to be cleared before that check.
+			 * In case of a callback from bpf_loop(), R{1,4} in the calling
+			 * frame would be set as precise and that is correct, and R2
+			 * might be a precise helper argument as well, so leave it set.
 			 */
-			if (subseq_idx >= 0 && bpf_calls_callback(env, subseq_idx))
-				for (i = BPF_REG_1; i <= BPF_REG_5; i++)
-					bt_clear_reg(bt, i);
-
 			bt_clear_reg(bt, BPF_REG_0);
-			bt_clear_reg(bt, BPF_REG_2);
-			if (bt_reg_mask(bt) & BPF_REGMASK_ARGS) {
+			if (from_subprog_call)
+				bt_clear_reg(bt, BPF_REG_2);
+			if (from_subprog_call && (bt_reg_mask(bt) & BPF_REGMASK_ARGS)) {
 				verifier_bug(env, "backtracking exit unexpected regs %x",
 					     bt_reg_mask(bt));
 				return -EFAULT;
@@ -596,16 +593,29 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			  */
 		}
 	} else if (class == BPF_LD) {
-		if (!bt_is_reg_set(bt, dreg))
-			return 0;
-		bt_clear_reg(bt, dreg);
 		/* It's ld_imm64 or ld_abs or ld_ind.
 		 * For ld_imm64 no further tracking of precision
 		 * into parent is necessary
 		 */
-		if (mode == BPF_IND || mode == BPF_ABS)
-			/* to be analyzed */
-			return -ENOTSUPP;
+		if (mode == BPF_IMM) {
+			bt_clear_reg(bt, dreg);
+			return 0;
+		}
+		/*
+		 * BPF_{IND,ABS} are modelled as two branches:
+		 * - fallthrough;
+		 * - implicit subprogram exit.
+		 * It is necessary to switch current frame if
+		 * implicit subprogram exit branch is backtracked.
+		 */
+		if (mode == BPF_IND || mode == BPF_ABS) {
+			if (bt_is_reg_set(bt, dreg))
+				return -ENOTSUPP;
+			if (subseq_idx != idx + 1)
+				if (bt_subprog_enter(bt))
+					return -EFAULT;
+			return 0;
+		}
 	}
 	/* Propagate precision marks to linked registers, to account for
 	 * registers marked as precise in this function.

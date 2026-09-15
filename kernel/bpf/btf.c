@@ -2932,14 +2932,29 @@ static void btf_modifier_show(const struct btf *btf,
 	else
 		t = btf_type_skip_modifiers(btf, type_id, NULL);
 
-	btf_type_ops(t)->show(btf, t, type_id, data, bits_offset, show);
+	/*
+	 * A modifier can resolve to void, which has no show op; print a
+	 * placeholder rather than dereferencing NULL.
+	 */
+	if (!btf_type_ops(t))
+		btf_df_show(btf, t, type_id, data, bits_offset, show);
+	else
+		btf_type_ops(t)->show(btf, t, type_id, data, bits_offset, show);
 }
 
 static void btf_var_show(const struct btf *btf, const struct btf_type *t,
 			 u32 type_id, void *data, u8 bits_offset,
 			 struct btf_show *show)
 {
-	t = btf_type_id_resolve(btf, &type_id);
+	/*
+	 * btf_type_id_resolve() dereferences btf->resolved_ids, which is NULL
+	 * for a base BTF (e.g. the vmlinux BTF that bpf_snprintf_btf() uses).
+	 * Resolve the var's type directly in that case.
+	 */
+	if (btf->resolved_ids)
+		t = btf_type_id_resolve(btf, &type_id);
+	else
+		t = btf_type_skip_modifiers(btf, t->type, &type_id);
 
 	btf_type_ops(t)->show(btf, t, type_id, data, bits_offset, show);
 }
@@ -6080,7 +6095,7 @@ static int btf_parse_hdr(struct btf_verifier_env *env)
 	return btf_check_sec_info(env, btf_data_size);
 }
 
-static const char *alloc_obj_fields[] = {
+static const char * const alloc_obj_fields[] = {
 	"bpf_spin_lock",
 	"bpf_list_head",
 	"bpf_list_node",
@@ -6971,6 +6986,10 @@ struct bpf_raw_tp_null_args {
 static const struct bpf_raw_tp_null_args raw_tp_null_args[] = {
 	/* sched */
 	{ "sched_pi_setprio", 0x10 },
+	/*
+	 * do_wait() passes NULL for wait4(-1) and waitid(P_ALL).
+	 */
+	{ "sched_process_wait", 0x1 },
 	/* ... from sched_numa_pair_template event class */
 	{ "sched_stick_numa", 0x100 },
 	{ "sched_swap_numa", 0x100 },
@@ -7031,6 +7050,9 @@ static const struct bpf_raw_tp_null_args raw_tp_null_args[] = {
 	{ "rxrpc_resend", 0x10 },
 	{ "rxrpc_tq", 0x10 },
 	{ "rxrpc_client", 0x1 },
+	/* signal */
+	{ "signal_generate", 0x20 },
+	{ "signal_deliver", 0x20 },
 	/* skb */
 	{"kfree_skb", 0x1000},
 	/* sunrpc */
@@ -7855,6 +7877,9 @@ static u8 __get_arg_fmodel_flags(const struct btf *btf,
 {
 	u8 flags = __get_type_fmodel_flags(t);
 
+	if (btf_func_arg_align(btf, t) > sizeof(u64))
+		flags |= BTF_FMODEL_ALIGN16_ARG;
+
 	if (btf_param_match_suffix(btf, arg, "__arena__nullable"))
 		flags |= BTF_FMODEL_ARENA_ARG | BTF_FMODEL_NULLABLE_ARG;
 	else if (btf_param_match_suffix(btf, arg, "__arena"))
@@ -8294,6 +8319,29 @@ static int btf_validate_return_type(struct bpf_verifier_env *env, struct btf *bt
 	return -EOPNOTSUPP;
 }
 
+static int btf_check_arg_slots(struct bpf_verifier_log *log, const char *tname,
+			       bool is_global, u32 slot_cnt,
+			       struct bpf_subprog_info *sub)
+{
+	if (slot_cnt <= MAX_BPF_FUNC_REG_ARGS)
+		return 0;
+
+	if (is_global) {
+		bpf_log(log,
+			"global function %s() needs %d > %d argument slots, "
+			"stack args not supported\n",
+			tname, slot_cnt, MAX_BPF_FUNC_REG_ARGS);
+		return -EINVAL;
+	}
+	if (!bpf_jit_supports_stack_args()) {
+		bpf_log(log, "JIT does not support function %s() with %d argument slots\n",
+			tname, slot_cnt);
+		return -EFAULT;
+	}
+	sub->stack_arg_cnt = slot_cnt - MAX_BPF_FUNC_REG_ARGS;
+	return 0;
+}
+
 /* Process BTF of a function to produce high-level expectation of function
  * arguments (like ARG_PTR_TO_CTX, or ARG_PTR_TO_MEM, etc). This information
  * is cached in subprog info for reuse.
@@ -8313,7 +8361,7 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	const struct btf_param *args;
 	const struct btf_type *t, *ref_t, *fn_t;
 	int err;
-	u32 i, nargs, btf_id;
+	u32 i, slots_used, nargs, btf_id;
 	const char *tname;
 
 	if (sub->args_cached)
@@ -8357,26 +8405,15 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	}
 	args = (const struct btf_param *)(t + 1);
 	nargs = btf_type_vlen(t);
-	sub->arg_cnt = nargs;
+	sub->arg_slot_cnt = nargs;
 	if (nargs > MAX_BPF_FUNC_ARGS) {
 		bpf_log(log, "kernel supports at most %d parameters, function %s has %d\n",
 			MAX_BPF_FUNC_ARGS, tname, nargs);
 		return -EFAULT;
 	}
-	if (nargs > MAX_BPF_FUNC_REG_ARGS) {
-		if (!bpf_jit_supports_stack_args()) {
-			bpf_log(log, "JIT does not support function %s() with %d args\n",
-				tname, nargs);
-			return -EFAULT;
-		}
-		sub->stack_arg_cnt = nargs - MAX_BPF_FUNC_REG_ARGS;
-	}
-
-	if (is_global && nargs > MAX_BPF_FUNC_REG_ARGS) {
-		bpf_log(log, "global function %s has %d > %d args, stack args not supported\n",
-			tname, nargs, MAX_BPF_FUNC_REG_ARGS);
-		return -EINVAL;
-	}
+	err = btf_check_arg_slots(log, tname, is_global, nargs, sub);
+	if (err)
+		return err;
 
 	err = btf_validate_return_type(env, btf, t, subprog, is_global);
 	if (err) {
@@ -8398,8 +8435,12 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	/* Convert BTF function arguments into verifier types.
 	 * Only PTR_TO_CTX and SCALAR are supported atm.
 	 */
-	for (i = 0; i < nargs; i++) {
+	for (i = 0, slots_used = 0; i < nargs; i++) {
 		u32 tags = 0;
+
+		if (slots_used >= MAX_BPF_FUNC_ARGS)
+			goto too_many_slots;
+
 		err = btf_scan_decl_tags(env, btf, fn_t, i, is_global, &tags);
 		if (err)
 			return err;
@@ -8421,7 +8462,7 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 			    btf_validate_prog_ctx_type(log, btf, t, i, prog_type,
 						       prog->expected_attach_type))
 				return -EINVAL;
-			sub->args[i].arg_type = ARG_PTR_TO_CTX;
+			sub->args[slots_used++].arg_type = ARG_PTR_TO_CTX;
 			continue;
 		}
 		if (btf_is_dynptr_ptr(btf, t)) {
@@ -8429,7 +8470,7 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 				bpf_log(log, "arg#%d has invalid combination of tags\n", i);
 				return -EINVAL;
 			}
-			sub->args[i].arg_type = ARG_PTR_TO_DYNPTR;
+			sub->args[slots_used++].arg_type = ARG_PTR_TO_DYNPTR;
 			continue;
 		}
 		if (tags & ARG_TAG_TRUSTED) {
@@ -8444,10 +8485,11 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 			if (kern_type_id < 0)
 				return kern_type_id;
 
-			sub->args[i].arg_type = ARG_PTR_TO_BTF_ID | PTR_TRUSTED;
+			sub->args[slots_used].arg_type = ARG_PTR_TO_BTF_ID | PTR_TRUSTED;
 			if (tags & ARG_TAG_NULLABLE)
-				sub->args[i].arg_type |= PTR_MAYBE_NULL;
-			sub->args[i].btf_id = kern_type_id;
+				sub->args[slots_used].arg_type |= PTR_MAYBE_NULL;
+			sub->args[slots_used].btf_id = kern_type_id;
+			slots_used++;
 			continue;
 		}
 		if (tags & ARG_TAG_UNTRUSTED) {
@@ -8461,8 +8503,10 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 
 			ref_t = btf_type_skip_modifiers(btf, t->type, NULL);
 			if (btf_type_is_void(ref_t) || btf_type_is_primitive(ref_t)) {
-				sub->args[i].arg_type = ARG_PTR_TO_MEM | MEM_RDONLY | PTR_UNTRUSTED;
-				sub->args[i].mem_size = 0;
+				sub->args[slots_used].arg_type = ARG_PTR_TO_MEM | MEM_RDONLY |
+								 PTR_UNTRUSTED;
+				sub->args[slots_used].mem_size = 0;
+				slots_used++;
 				continue;
 			}
 
@@ -8478,8 +8522,9 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 					i, btf_type_str(ref_t), tname);
 				return -EINVAL;
 			}
-			sub->args[i].arg_type = ARG_PTR_TO_BTF_ID | PTR_UNTRUSTED;
-			sub->args[i].btf_id = kern_type_id;
+			sub->args[slots_used].arg_type = ARG_PTR_TO_BTF_ID | PTR_UNTRUSTED;
+			sub->args[slots_used].btf_id = kern_type_id;
+			slots_used++;
 			continue;
 		}
 		if (tags & ARG_TAG_ARENA) {
@@ -8487,7 +8532,7 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 				bpf_log(log, "arg#%d arena cannot be combined with any other tags\n", i);
 				return -EINVAL;
 			}
-			sub->args[i].arg_type = ARG_PTR_TO_ARENA;
+			sub->args[slots_used++].arg_type = ARG_PTR_TO_ARENA;
 			continue;
 		}
 		if (is_global) { /* generic user data pointer */
@@ -8507,10 +8552,11 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 				return -EINVAL;
 			}
 
-			sub->args[i].arg_type = ARG_PTR_TO_MEM | PTR_MAYBE_NULL;
+			sub->args[slots_used].arg_type = ARG_PTR_TO_MEM | PTR_MAYBE_NULL;
 			if (tags & ARG_TAG_NONNULL)
-				sub->args[i].arg_type &= ~PTR_MAYBE_NULL;
-			sub->args[i].mem_size = mem_size;
+				sub->args[slots_used].arg_type &= ~PTR_MAYBE_NULL;
+			sub->args[slots_used].mem_size = mem_size;
+			slots_used++;
 			continue;
 		}
 
@@ -8519,8 +8565,32 @@ skip_pointer:
 			bpf_log(log, "arg#%d has pointer tag, but is not a pointer type\n", i);
 			return -EINVAL;
 		}
-		if (btf_type_is_int(t) || btf_is_any_enum(t)) {
-			sub->args[i].arg_type = ARG_ANYTHING;
+		if (btf_type_is_int(t) || btf_is_any_enum(t) || btf_type_is_struct(t)) {
+			u32 nslots;
+
+			if (!t->size || t->size > 2 * BPF_REG_SIZE) {
+				if (!is_global)
+					return -EINVAL;
+				bpf_log(log,
+					"Arg#%d type %s in %s() has size %u, only 1 to %d bytes "
+					"can be passed by value\n",
+					i, btf_type_str(t), tname, t->size, 2 * BPF_REG_SIZE);
+				return -EINVAL;
+			}
+			if (btf_type_is_struct(t) &&
+			    !btf_struct_is_composed_of(env, btf, t, BTF_MEMBER_SCALAR)) {
+				if (!is_global)
+					return -EINVAL;
+				bpf_log(log, "Arg#%d type %s in %s() is not composed of scalars\n",
+					i, btf_type_str(t), tname);
+				return -EINVAL;
+			}
+
+			nslots = (t->size + BPF_REG_SIZE - 1) / BPF_REG_SIZE;
+			if (slots_used + nslots > MAX_BPF_FUNC_ARGS)
+				goto too_many_slots;
+			while (nslots--)
+				sub->args[slots_used++].arg_type = ARG_SCALAR;
 			continue;
 		}
 		if (!is_global)
@@ -8530,9 +8600,21 @@ skip_pointer:
 		return -EINVAL;
 	}
 
+	err = btf_check_arg_slots(log, tname, is_global, slots_used, sub);
+	if (err)
+		return err;
+	sub->arg_slot_cnt = slots_used;
+
 	sub->args_cached = true;
 
 	return 0;
+
+too_many_slots:
+	if (!is_global)
+		return -EINVAL;
+	bpf_log(log, "Arguments of %s() need more than %d argument slots\n",
+		tname, MAX_BPF_FUNC_ARGS);
+	return -EINVAL;
 }
 
 static void btf_type_show(const struct btf *btf, u32 type_id, void *obj,
@@ -9042,6 +9124,7 @@ BPF_CALL_4(bpf_btf_find_by_name_kind, char *, name, int, name_sz, u32, kind, int
 const struct bpf_func_proto bpf_btf_find_by_name_kind_proto = {
 	.func		= bpf_btf_find_by_name_kind,
 	.gpl_only	= false,
+	.might_sleep	= true,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
 	.arg2_type	= ARG_MEM_SIZE,
