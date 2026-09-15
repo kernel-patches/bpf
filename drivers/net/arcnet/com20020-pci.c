@@ -243,7 +243,7 @@ static int com20020pci_probe(struct pci_dev *pdev,
 				    GFP_KERNEL);
 		if (!card) {
 			ret = -ENOMEM;
-			goto err_free_arcdev;
+			goto err_unregister_netdev;
 		}
 
 		card->index = i;
@@ -256,14 +256,14 @@ static int com20020pci_probe(struct pci_dev *pdev,
 							dev->dev_id, i);
 			if (!card->tx_led.default_trigger) {
 				ret = -ENOMEM;
-				goto err_free_arcdev;
+				goto err_unregister_netdev;
 			}
 			card->tx_led.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
 							"pci:green:tx:%d-%d",
 							dev->dev_id, i);
 			if (!card->tx_led.name) {
 				ret = -ENOMEM;
-				goto err_free_arcdev;
+				goto err_unregister_netdev;
 			}
 			card->tx_led.dev = &dev->dev;
 			card->recon_led.brightness_set = led_recon_set;
@@ -272,24 +272,24 @@ static int com20020pci_probe(struct pci_dev *pdev,
 							dev->dev_id, i);
 			if (!card->recon_led.default_trigger) {
 				ret = -ENOMEM;
-				goto err_free_arcdev;
+				goto err_unregister_netdev;
 			}
 			card->recon_led.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
 							"pci:red:recon:%d-%d",
 							dev->dev_id, i);
 			if (!card->recon_led.name) {
 				ret = -ENOMEM;
-				goto err_free_arcdev;
+				goto err_unregister_netdev;
 			}
 			card->recon_led.dev = &dev->dev;
 
 			ret = devm_led_classdev_register(&pdev->dev, &card->tx_led);
 			if (ret)
-				goto err_free_arcdev;
+				goto err_unregister_netdev;
 
 			ret = devm_led_classdev_register(&pdev->dev, &card->recon_led);
 			if (ret)
-				goto err_free_arcdev;
+				goto err_unregister_netdev;
 
 			dev_set_drvdata(&dev->dev, card);
 			devm_arcnet_led_init(dev, dev->dev_id, i);
@@ -299,6 +299,9 @@ static int com20020pci_probe(struct pci_dev *pdev,
 		list_add(&card->list, &priv->list_dev);
 		continue;
 
+err_unregister_netdev:
+		unregister_netdev(dev);
+		free_irq(dev->irq, dev);
 err_free_arcdev:
 		free_arcdev(dev);
 		break;
