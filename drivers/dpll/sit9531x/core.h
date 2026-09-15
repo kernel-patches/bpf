@@ -252,6 +252,8 @@ int sit9531x_input_prio_set(struct sit9531x_dev *sitdev, u8 pll_idx,
 			    u8 input_idx, u8 prio);
 int sit9531x_input_prio_get(struct sit9531x_dev *sitdev, u8 pll_idx,
 			    u8 input_idx, u8 *prio);
+bool sit9531x_input_prio_present(struct sit9531x_dev *sitdev,
+				 u8 pll_idx, u8 input_idx);
 int sit9531x_input_prio_remove(struct sit9531x_dev *sitdev, u8 pll_idx,
 			       u8 input_idx);
 int sit9531x_input_prio_add(struct sit9531x_dev *sitdev, u8 pll_idx,
@@ -279,6 +281,7 @@ int sit9531x_clear_notifications(struct sit9531x_dev *sitdev);
 /* ---- INTSYNC (inter-PLL synchronization) ---- */
 int sit9531x_intsync_enable(struct sit9531x_dev *sitdev, u8 src_pll_idx);
 int sit9531x_intsync_disable(struct sit9531x_dev *sitdev, u8 src_pll_idx);
+int sit9531x_intsync_src_detect(struct sit9531x_dev *sitdev);
 
 /* ---- Output pulse control ---- */
 int sit9531x_output_esync_program(struct sit9531x_dev *sitdev, u8 out_idx,
