@@ -65,9 +65,3 @@ obj-$(CONFIG_GREYBUS_SDIO)		+= gb-sdio.o
 obj-$(CONFIG_GREYBUS_SPI)		+= gb-spi.o gb-spilib.o
 obj-$(CONFIG_GREYBUS_UART)		+= gb-uart.o
 obj-$(CONFIG_GREYBUS_USB)		+= gb-usb.o
-
-
-# Greybus Platform driver
-gb-arche-y	:= arche-platform.o arche-apb-ctrl.o
-
-obj-$(CONFIG_GREYBUS_ARCHE)	+= gb-arche.o
