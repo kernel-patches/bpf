@@ -778,13 +778,23 @@ static int pndisc_is_router(const void *pkey,
 	return ret;
 }
 
+static void __ndisc_update(const struct net_device *dev,
+			   struct neighbour *neigh, const u8 *lladdr, u8 new,
+			   u32 flags, bool failed_recovery, u8 icmp6_type,
+			   struct ndisc_options *ndopts)
+{
+	neigh_update(neigh, lladdr, new, flags, 0);
+	/* report ndisc ops about neighbour update */
+	ndisc_ops_update(dev, neigh, flags, failed_recovery, icmp6_type,
+			 ndopts);
+}
+
 void ndisc_update(const struct net_device *dev, struct neighbour *neigh,
 		  const u8 *lladdr, u8 new, u32 flags, u8 icmp6_type,
 		  struct ndisc_options *ndopts)
 {
-	neigh_update(neigh, lladdr, new, flags, 0);
-	/* report ndisc ops about neighbour update */
-	ndisc_ops_update(dev, neigh, flags, icmp6_type, ndopts);
+	__ndisc_update(dev, neigh, lladdr, new, flags, false, icmp6_type,
+		       ndopts);
 }
 
 static enum skb_drop_reason ndisc_recv_ns(struct sk_buff *skb)
@@ -972,14 +982,18 @@ out:
 
 static int accept_untracked_na(struct inet6_dev *idev, struct in6_addr *saddr)
 {
+    /* For any given neighbor IP address, consider it an untracked neighbor if
+     * it is absent from the neighbor cache or if it has a NUD_FAILED entry in
+     * the neighbor cache
+     */
 	switch (READ_ONCE(idev->cnf.accept_untracked_na)) {
-	case 0: /* Don't accept untracked na (absent in neighbor cache) */
+	case 0: /* Reject NAs for untracked neighbours */
 		return 0;
-	case 1: /* Create new entries from na if currently untracked */
+	case 1: /* Accept NAs for untracked neighbours */
 		return 1;
-	case 2: /* Create new entries from untracked na only if saddr is in the
+	case 2: /* Accept NAs for untracked neighbours only if saddr is in the
 		 * same subnet as an address configured on the interface that
-		 * received the na
+		 * received the NA
 		 */
 		return !!ipv6_chk_prefix(saddr, idev->dev);
 	default:
@@ -1001,6 +1015,9 @@ static enum skb_drop_reason ndisc_recv_na(struct sk_buff *skb)
 	struct neigh_table *tbl;
 	struct neighbour *neigh;
 	struct inet6_dev *idev;
+	bool neigh_failed = false;
+	bool neigh_untracked = false;
+	bool accept_untracked = false;
 	u8 *lladdr = NULL;
 	SKB_DR(reason);
 	u8 new_state;
@@ -1067,32 +1084,41 @@ static enum skb_drop_reason ndisc_recv_na(struct sk_buff *skb)
 	neigh = neigh_lookup(tbl, &msg->target, dev);
 
 	/* RFC 9131 updates original Neighbour Discovery RFC 4861.
-	 * NAs with Target LL Address option without a corresponding
-	 * entry in the neighbour cache can now create a STALE neighbour
-	 * cache entry on routers.
+	 * NAs with Target LL Address option can now create a STALE neighbor
+	 * cache entry on routers if the NA does not have a corresponding entry
+	 * in the neighbour cache or has a corresponding FAILED entry.
 	 *
-	 *   entry accept  fwding  solicited        behaviour
-	 * ------- ------  ------  ---------    ----------------------
-	 * present      X       X         0     Set state to STALE
-	 * present      X       X         1     Set state to REACHABLE
-	 *  absent      0       X         X     Do nothing
-	 *  absent      1       0         X     Do nothing
-	 *  absent      1       1         X     Add a new STALE entry
+	 *       entry accept  fwding  solicited        behaviour
+	 * ----------- ------  ------  ---------    ----------------------
+	 *  non-FAILED      X       X         0     Set state to STALE
+	 *  non-FAILED      X       X         1     Set state to REACHABLE
+	 *      FAILED      0       X         X     Do nothing
+	 *      FAILED      1       0         X     Do nothing
+	 *      FAILED      1       1         X     Set state to STALE
+	 *      absent      0       X         X     Do nothing
+	 *      absent      1       0         X     Do nothing
+	 *      absent      1       1         X     Add a new STALE entry
 	 *
 	 * Note that we don't do a (daddr == all-routers-mcast) check.
 	 */
 	new_state = msg->icmph.icmp6_solicited ? NUD_REACHABLE : NUD_STALE;
-	if (!neigh && lladdr && idev && READ_ONCE(idev->cnf.forwarding)) {
-		if (accept_untracked_na(idev, saddr)) {
-			neigh = neigh_create(tbl, &msg->target, dev);
-			new_state = NUD_STALE;
-		}
+	neigh_failed = neigh &&
+		       (READ_ONCE(neigh->nud_state) & NUD_FAILED);
+	neigh_untracked = !neigh || neigh_failed;
+	if (neigh_untracked) {
+		accept_untracked = lladdr && idev &&
+				   READ_ONCE(idev->cnf.forwarding) &&
+				   accept_untracked_na(idev, saddr);
+		new_state = NUD_STALE;
 	}
+	if (!neigh && accept_untracked)
+		neigh = neigh_create(tbl, &msg->target, dev);
 
 	if (neigh && !IS_ERR(neigh)) {
+		u32 update_flags;
 		u8 old_flags = neigh->flags;
 
-		if (READ_ONCE(neigh->nud_state) & NUD_FAILED)
+		if (neigh_untracked && !accept_untracked)
 			goto out;
 
 		/*
@@ -1108,19 +1134,23 @@ static enum skb_drop_reason ndisc_recv_na(struct sk_buff *skb)
 			goto out;
 		}
 
-		ndisc_update(dev, neigh, lladdr,
-			     new_state,
-			     NEIGH_UPDATE_F_WEAK_OVERRIDE|
-			     (msg->icmph.icmp6_override ? NEIGH_UPDATE_F_OVERRIDE : 0)|
-			     NEIGH_UPDATE_F_OVERRIDE_ISROUTER|
-			     (msg->icmph.icmp6_router ? NEIGH_UPDATE_F_ISROUTER : 0),
-			     NDISC_NEIGHBOUR_ADVERTISEMENT, &ndopts);
+		update_flags = NEIGH_UPDATE_F_WEAK_OVERRIDE |
+			       (msg->icmph.icmp6_override ?
+				NEIGH_UPDATE_F_OVERRIDE : 0) |
+			       NEIGH_UPDATE_F_OVERRIDE_ISROUTER |
+			       (msg->icmph.icmp6_router ?
+				NEIGH_UPDATE_F_ISROUTER : 0);
+
+		__ndisc_update(dev, neigh, lladdr,
+			       new_state, update_flags, neigh_failed,
+			       NDISC_NEIGHBOUR_ADVERTISEMENT, &ndopts);
 
 		if ((old_flags & ~neigh->flags) & NTF_ROUTER) {
 			/*
 			 * Change: router to host
 			 */
-			rt6_clean_tohost(dev_net(dev),  saddr);
+			rt6_clean_tohost(net,
+					 neigh_failed ? &msg->target : saddr);
 		}
 		reason = SKB_CONSUMED;
 out:

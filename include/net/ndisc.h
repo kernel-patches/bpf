@@ -154,11 +154,13 @@ void __ndisc_fill_addr_option(struct sk_buff *skb, int type, const void *data,
  *     option parser will take care about that option.
  *
  * void (*update)(const struct net_device *dev, struct neighbour *n,
- *		  u32 flags, u8 icmp6_type,
+ *		  u32 flags, bool failed_recovery, u8 icmp6_type,
  *		  const struct ndisc_options *ndopts):
  *     This function is called when IPv6 ndisc updates the neighbour cache
  *     entry. Additional options which can be updated may be previously
  *     parsed by parse_opts callback and accessible over ndopts parameter.
+ *     failed_recovery indicates that ndisc accepted the packet to recover
+ *     an entry observed in NUD_FAILED.
  *
  * int (*opt_addr_space)(const struct net_device *dev, u8 icmp6_type,
  *			 struct neighbour *neigh, u8 *ha_buf,
@@ -197,7 +199,7 @@ struct ndisc_ops {
 				 struct nd_opt_hdr *nd_opt,
 				 struct ndisc_options *ndopts);
 	void	(*update)(const struct net_device *dev, struct neighbour *n,
-			  u32 flags, u8 icmp6_type,
+			  u32 flags, bool failed_recovery, u8 icmp6_type,
 			  const struct ndisc_options *ndopts);
 	int	(*opt_addr_space)(const struct net_device *dev, u8 icmp6_type,
 				  struct neighbour *neigh, u8 *ha_buf,
@@ -227,12 +229,13 @@ static inline int ndisc_ops_parse_options(const struct net_device *dev,
 }
 
 static inline void ndisc_ops_update(const struct net_device *dev,
-					  struct neighbour *n, u32 flags,
-					  u8 icmp6_type,
-					  const struct ndisc_options *ndopts)
+				    struct neighbour *n, u32 flags,
+				    bool failed_recovery, u8 icmp6_type,
+				    const struct ndisc_options *ndopts)
 {
 	if (dev->ndisc_ops && dev->ndisc_ops->update)
-		dev->ndisc_ops->update(dev, n, flags, icmp6_type, ndopts);
+		dev->ndisc_ops->update(dev, n, flags, failed_recovery,
+				       icmp6_type, ndopts);
 }
 
 static inline int ndisc_ops_opt_addr_space(const struct net_device *dev,
