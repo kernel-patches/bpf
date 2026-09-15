@@ -1714,6 +1714,9 @@ int rvu_mbox_handler_nix_lf_alloc(struct rvu *rvu,
 	if (is_rep_dev(rvu, pcifunc)) {
 		pfvf->tx_chan_base = RVU_SWITCH_LBK_CHAN;
 		pfvf->tx_chan_cnt = 1;
+		/* Setting the TX link as that of LBK */
+		rsp->tx_link = hw->cgx_links;
+		rvu_npc_set_pkind(rvu, NPC_RX_LBK_PKIND, pfvf);
 		goto exit;
 	}
 
@@ -1756,8 +1759,9 @@ free_mem:
 	nix_ctx_free(rvu, pfvf);
 
 exit:
-	/* Set macaddr of this PF/VF */
-	ether_addr_copy(rsp->mac_addr, pfvf->mac_addr);
+	if (!is_rep_dev(rvu, pcifunc))
+		/* Set macaddr of this PF/VF */
+		ether_addr_copy(rsp->mac_addr, pfvf->mac_addr);
 
 	/* set SQB size info */
 	cfg = rvu_read64(rvu, blkaddr, NIX_AF_SQ_CONST);
