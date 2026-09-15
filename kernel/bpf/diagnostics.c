@@ -291,7 +291,7 @@ char *bpf_diag_fmt_buf(struct bpf_verifier_env *env, size_t size)
 	return buf;
 }
 
-const char *bpf_diag_vfmt(struct bpf_verifier_env *env, const char *fmt, va_list args)
+__printf(2, 0) const char *bpf_diag_vfmt(struct bpf_verifier_env *env, const char *fmt, va_list args)
 {
 	va_list copy;
 	char *buf;
@@ -309,7 +309,7 @@ const char *bpf_diag_vfmt(struct bpf_verifier_env *env, const char *fmt, va_list
 	return buf ?: "";
 }
 
-const char *bpf_diag_fmt(struct bpf_verifier_env *env, const char *fmt, ...)
+__printf(2, 3) const char *bpf_diag_fmt(struct bpf_verifier_env *env, const char *fmt, ...)
 {
 	const char *buf;
 	va_list args;
@@ -794,7 +794,7 @@ static void diag_print_insn_context(struct bpf_verifier_env *env, u32 insn_idx,
 	}
 }
 
-static void bpf_diag_source(struct bpf_verifier_env *env, u32 insn_idx, const char *label,
+__printf(4, 5) static void bpf_diag_source(struct bpf_verifier_env *env, u32 insn_idx, const char *label,
 			    const char *fmt, ...)
 {
 	struct bpf_diag_scratch *scratch;
