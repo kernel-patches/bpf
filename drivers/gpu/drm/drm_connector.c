@@ -28,10 +28,10 @@
 #include <drm/drm_file.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_panel.h>
+#include <drm/drm_panel_quirks.h>
 #include <drm/drm_print.h>
 #include <drm/drm_privacy_screen_consumer.h>
 #include <drm/drm_sysfs.h>
-#include <drm/drm_utils.h>
 
 #include <linux/export.h>
 #include <linux/platform_device.h>
