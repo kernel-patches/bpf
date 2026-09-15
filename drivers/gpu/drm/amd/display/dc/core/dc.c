@@ -90,6 +90,8 @@
 #endif
 
 #include "dce/dmub_outbox.h"
+#include "dc_api_dispatch/api_shim.h"
+#include "core2/dc_core2.h"
 
 #define CTX \
 	dc->ctx
@@ -981,6 +983,8 @@ static void dc_destruct(struct dc *dc)
 	kfree(dc->vm_helper);
 	dc->vm_helper = NULL;
 
+	if (TO_DC2(dc)->selection == DC2_SELECTION_CORE2)
+		core2_destruct(dc);
 }
 
 static bool dc_construct_ctx(struct dc *dc,
@@ -1177,6 +1181,10 @@ static bool dc_construct(struct dc *dc,
 		dm_error("%s: failed to create update scratch pool\n", __func__);
 		goto fail;
 	}
+
+	api_shim_construct(dc, init_params);
+	if (TO_DC2(dc)->selection == DC2_SELECTION_CORE2)
+		core2_construct(dc);
 
 	return true;
 
@@ -1564,7 +1572,8 @@ static void disable_vbios_mode_if_required(
 
 struct dc *dc_create(const struct dc_init_data *init_params)
 {
-	struct dc *dc = kvzalloc_obj(*dc);
+	struct dc2 *dc2 = kvzalloc_obj(*dc2);
+	struct dc *dc = dc2 ? &dc2->dc : NULL;
 	unsigned int full_pipe_count;
 
 	if (!dc)
@@ -1612,7 +1621,7 @@ struct dc *dc_create(const struct dc_init_data *init_params)
 
 destruct_dc:
 	dc_destruct(dc);
-	kvfree(dc);
+	kvfree(TO_DC2(dc));
 	return NULL;
 }
 
@@ -1638,7 +1647,7 @@ static void detect_edp_presence(struct dc *dc)
 	}
 }
 
-void dc_hardware_init(struct dc *dc)
+void legacy_hardware_init(struct dc *dc)
 {
 
 	detect_edp_presence(dc);
@@ -1661,7 +1670,7 @@ void dc_deinit_callbacks(struct dc *dc)
 void dc_destroy(struct dc **dc)
 {
 	dc_destruct(*dc);
-	kvfree(*dc);
+	kvfree(TO_DC2(*dc));
 	*dc = NULL;
 }
 
@@ -6675,13 +6684,22 @@ bool dc_is_plane_eligible_for_idle_optimizations(struct dc *dc,
 	return false;
 }
 
-/* cleanup on driver unload */
-void dc_hardware_release(struct dc *dc)
+void legacy_hardware_release(struct dc *dc)
 {
 	dc_mclk_switch_using_fw_based_vblank_stretch_shut_down(dc);
 
 	if (dc->hwss.hardware_release)
 		dc->hwss.hardware_release(dc);
+}
+
+static const struct dc2_funcs dc2_legacy_funcs_table = {
+	.hardware_init = legacy_hardware_init,
+	.hardware_release = legacy_hardware_release,
+};
+
+const struct dc2_funcs *dc2_legacy_funcs(void)
+{
+	return &dc2_legacy_funcs_table;
 }
 
 void dc_mclk_switch_using_fw_based_vblank_stretch_shut_down(struct dc *dc)
