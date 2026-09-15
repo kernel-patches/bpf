@@ -469,10 +469,112 @@ sit9531x_dpll_input_pin_state_on_dpll_set(const struct dpll_pin *pin,
 	return rc;
 }
 
+/*
+ * sit9531x_dpll_input_pin_prio_get - read input pin priority
+ *
+ * Reports the cached slot from sit9531x_input_prio_get().  The cache is
+ * refreshed from hardware at startup and by periodic read-back, so pin-get
+ * reports hardware priority without synchronous per-pin I2C reads.
+ */
+static int
+sit9531x_dpll_input_pin_prio_get(const struct dpll_pin *pin, void *pin_priv,
+				 const struct dpll_device *dpll, void *dpll_priv,
+				 u32 *prio, struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	u8 slot;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_input_prio_get(sitdev, sitdpll->id,
+				     sit9531x_input_hw_src(dpin->id), &slot);
+	mutex_unlock(&sitdev->multiop_lock);
+	if (rc)
+		return rc;
+
+	dpin->prio = slot;
+	*prio = slot;
+	return 0;
+}
+
+/*
+ * sit9531x_dpll_input_pin_prio_set - set input pin priority
+ *
+ * writes input priority table on Page 1 via
+ * core.c sit9531x_input_prio_set().  Forces holdover during update.
+ */
+static int
+sit9531x_dpll_input_pin_prio_set(const struct dpll_pin *pin, void *pin_priv,
+				 const struct dpll_device *dpll, void *dpll_priv,
+				 u32 prio, struct netlink_ext_ack *extack)
+{
+	struct dpll_pin *changed[SIT9531X_MAX_INPUTS + 1];
+	struct sit9531x_dpll_pin *sibling;
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	u8 changed_cnt = 0, hw_src, slot;
+	int get_rc, rc;
+
+	if (dpin->dir != DPLL_PIN_DIRECTION_INPUT) {
+		NL_SET_ERR_MSG(extack, "Priority applies only to input pins");
+		return -EINVAL;
+	}
+
+	if (prio >= SIT9531X_PRIO_MAX_SLOTS) {
+		NL_SET_ERR_MSG(extack, "Priority out of range (0-10)");
+		return -EINVAL;
+	}
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_input_prio_set(sitdev, sitdpll->id,
+				     sit9531x_input_hw_src(dpin->id),
+				     (u8)prio);
+	if (!rc) {
+		list_for_each_entry(sibling, &sitdpll->pins, list) {
+			if (!sit9531x_dpll_is_input_pin(sibling) ||
+			    sit9531x_dpll_is_xo_pin(sibling))
+				continue;
+
+			hw_src = sit9531x_input_hw_src(sibling->id);
+			get_rc = sit9531x_input_prio_get(sitdev, sitdpll->id, hw_src, &slot);
+			if (get_rc)
+				continue;
+
+			if (sibling->prio == slot)
+				continue;
+
+			sibling->prio = slot;
+			if (changed_cnt < ARRAY_SIZE(changed))
+				changed[changed_cnt++] = sibling->dpll_pin;
+		}
+	}
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc == -EINVAL) {
+		NL_SET_ERR_MSG(extack,
+			       "Pin is not a reference of this DPLL; connect it first");
+		return rc;
+	}
+	if (rc) {
+		NL_SET_ERR_MSG(extack, "Failed to set input priority");
+		return rc;
+	}
+
+	while (changed_cnt--)
+		dpll_pin_change_ntf(changed[changed_cnt]);
+
+	return 0;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
 	.direction_get		= sit9531x_dpll_input_pin_direction_get,
 	.state_on_dpll_get	= sit9531x_dpll_input_pin_state_on_dpll_get,
 	.state_on_dpll_set	= sit9531x_dpll_input_pin_state_on_dpll_set,
+	.prio_get		= sit9531x_dpll_input_pin_prio_get,
+	.prio_set		= sit9531x_dpll_input_pin_prio_set,
 };
 
 /*

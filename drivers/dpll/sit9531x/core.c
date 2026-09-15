@@ -521,21 +521,81 @@ bool sit9531x_input_prio_present(struct sit9531x_dev *sitdev, u8 pll_idx,
 }
 
 /*
- * Rebuild a PLL's membership mask from the source codes of its priority
- * table.  The mask is what the pin state getters test, so it is refreshed
- * from exactly the values the table holds -- here after a write, and once
- * per poll from the read-back in sit9531x_chan_state_fetch().
+ * sit9531x_input_prio_get - read an input's priority slot for a PLL
+ * @input_idx:	input source in hardware encoding (see
+ *		sit9531x_input_hw_src())
+ * @prio:	output slot position (0 = highest)
+ *
+ * Reports the last slot this source occupied on this PLL.  The value is
+ * cached from the hardware table read at startup and refreshed after every
+ * table write and poll read-back, so pin-get reflects hardware state without
+ * issuing synchronous register reads per pin.  A source with no known slot
+ * falls back to the lowest-priority valid slot.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_input_prio_get(struct sit9531x_dev *sitdev, u8 pll_idx,
+			    u8 input_idx, u8 *prio)
+{
+	const struct sit9531x_chan *chan;
+	u8 slot;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+	input_idx = sit9531x_prio_src_canon(sitdev, input_idx);
+	if (input_idx >= SIT9531X_PRIO_NUM_SRC)
+		return -EINVAL;
+
+	chan = &sitdev->chan[pll_idx];
+	slot = chan->prio_last[input_idx];
+	if (!slot)
+		slot = SIT9531X_PRIO_MAX_SLOTS;
+
+	*prio = slot - 1;
+
+	return 0;
+}
+
+/*
+ * Refresh a PLL's cached view of its priority table from the source codes
+ * the table holds -- here after a write, and once per poll from the
+ * read-back in sit9531x_chan_state_fetch().
+ *
+ * The membership mask is what the pin state getters test; the per-slot
+ * copy and the last-slot-seen array are what priority get answers from,
+ * so neither costs a register read per pin.
  */
 static void sit9531x_prio_mask_build(struct sit9531x_dev *sitdev, u8 pll_idx,
 				     const u8 *srcs)
 {
+	struct sit9531x_chan *chan = &sitdev->chan[pll_idx];
+	u8 first[SIT9531X_PRIO_NUM_SRC] = { 0 };
 	u16 mask = 0;
-	u8 slot;
+	u8 slot, src, src_canon;
 
-	for (slot = 0; slot < SIT9531X_PRIO_MAX_SLOTS; slot++)
-		mask |= BIT(srcs[slot] & SIT9531X_PRIO_NIBBLE_MASK);
+	for (slot = 0; slot < SIT9531X_PRIO_MAX_SLOTS; slot++) {
+		src = srcs[slot] & SIT9531X_PRIO_NIBBLE_MASK;
+		chan->prio_srcs[slot] = src;
+		src_canon = sit9531x_prio_src_canon(sitdev, src);
+		if (src_canon >= SIT9531X_PRIO_NUM_SRC)
+			continue;
 
-	sitdev->chan[pll_idx].prio_mask = mask;
+		mask |= BIT(src_canon);
+		if (!first[src_canon])
+			first[src_canon] = slot + 1;
+	}
+
+	/*
+	 * Assign unconditionally: a source that has left the table has no
+	 * slot, and leaving its old one behind would keep reporting it as
+	 * listed for as long as the device runs.
+	 */
+	for (src = 0; src < SIT9531X_PRIO_NUM_SRC; src++)
+		chan->prio_last[src] = first[src];
+
+	chan->prio_mask = mask;
 }
 
 /* Attempts to release a forced holdover before reporting it stuck. */
