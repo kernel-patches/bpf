@@ -49,6 +49,9 @@ static const struct mt7530_mib_desc mt7530_mib[] = {
 static int
 mt753x_ctrl_phy_addr(struct mt7530_priv *priv)
 {
+	if (priv->id == ID_EN751221)
+		return 12;
+
 	if (WARN_ON_ONCE(!priv->mdiodev))
 		return 0;
 
@@ -344,12 +347,19 @@ mt7530_setup_port6(struct dsa_switch *ds, phy_interface_t interface)
 	regmap_read(priv->regmap, MT753X_MTRAP, &xtal);
 	xtal &= MT7530_XTAL_MASK;
 
+	/* EN751221 on-die does not report clock speed in MTRAP */
+	if (priv->id == ID_EN751221)
+		xtal = MT7530_XTAL_25MHZ;
+
 	if (xtal == MT7530_XTAL_25MHZ)
 		ssc_delta = 0x57;
 	else
 		ssc_delta = 0x87;
 
-	if (priv->id == ID_MT7621) {
+	if (priv->id == ID_EN751221_EXT || priv->id == ID_EN751221) {
+		/* PLL frequency: 362.5Mhz */
+		ncpo1 = 0x1d00;
+	} else if (priv->id == ID_MT7621) {
 		/* PLL frequency: 125MHz: 1.0GBit */
 		if (xtal == MT7530_XTAL_40MHZ)
 			ncpo1 = 0x0640;
@@ -464,6 +474,251 @@ mt7531_pll_setup(struct mt7530_priv *priv)
 	val |= EN_COREPLL;
 	regmap_write(priv->regmap, MT7531_PLLGP_EN, val);
 	usleep_range(25, 35);
+}
+
+static bool
+en751221_trgmii_cal_ok(struct mt7530_priv *rx, u32 reg)
+{
+	u32 val = 0;
+
+	regmap_read(rx->regmap, reg, &val);
+	regmap_write(rx->regmap, reg, val | EDGE_CHK);
+	regmap_write(rx->regmap, reg, val & ~EDGE_CHK);
+	regmap_read(rx->regmap, reg, &val);
+
+	return FIELD_GET(RD_VALUE_MASK, val) == TGMII_TD_PAT &&
+	       !FIELD_GET(RD_ERR_MASK, val);
+}
+
+static void
+en751221_trgmii_calibrate_direction(struct mt7530_priv *tx,
+				    struct mt7530_priv *rx,
+				    u8 *default_taps)
+{
+	int channel;
+
+	regmap_set_bits(tx->regmap, MT7530_TRGMII_TXCTRL, TRAIN_TXEN);
+
+	/* Put fail pattern on every channel */
+	for (channel = 0; channel < NUM_TRGMII_CTRL; channel++)
+		regmap_update_bits(tx->regmap, EN7530_TRGMII_TD_CTRL(channel),
+				   TGMII_TD_PAT_MASK,
+				   FIELD_PREP(TGMII_TD_PAT_MASK,
+					      TGMII_TD_FAIL_PAT));
+
+	for (channel = 0; channel < NUM_TRGMII_CTRL; channel++) {
+		u32 rx_reg = MT7530_TRGMII_RD(channel);
+		int best_tap = -1, best_range = -1;
+		int first = -1;
+		u8 dac;
+		char log[TD_TAP_MAX + 1];
+
+		/* Put test pattern on correct channel */
+		regmap_update_bits(tx->regmap, EN7530_TRGMII_TD_CTRL(channel),
+				   TGMII_TD_PAT_MASK,
+				   FIELD_PREP(TGMII_TD_PAT_MASK, TGMII_TD_PAT));
+
+		for (dac = 0; dac < TD_TAP_MAX; dac++) {
+			/* Set TAP */
+			regmap_update_bits(rx->regmap, rx_reg, RD_TAP_MASK,
+					   RD_TAP(dac));
+
+			/* Check if we can get a good read */
+			if (en751221_trgmii_cal_ok(rx, rx_reg)) {
+				log[dac] = '+';
+
+				if (first < 0)
+					first = dac;
+
+				if ((dac - first) > best_range) {
+					best_tap = (first + dac) / 2;
+					best_range = dac - first;
+				}
+			} else {
+				log[dac] = '.';
+				first = -1;
+			}
+		}
+
+		log[TD_TAP_MAX] = '\0';
+
+		if (best_tap > -1) {
+			regmap_update_bits(rx->regmap, rx_reg, RD_TAP_MASK,
+					   RD_TAP(best_tap));
+
+			log[best_tap] = 'X';
+
+			dev_info(rx->dev,
+				 "TRGMII lane %d: %s tap %d old %d\n",
+				 channel, log, best_tap, default_taps[channel]);
+		} else {
+			regmap_update_bits(rx->regmap, rx_reg, RD_TAP_MASK,
+					   RD_TAP(default_taps[channel]));
+
+			dev_warn(rx->dev,
+				 "TRGMII lane %d: %s calibration failed, preserving tap %u\n",
+				 channel, log, default_taps[channel]);
+		}
+
+		/* Return channel to failure pattern */
+		regmap_update_bits(tx->regmap, EN7530_TRGMII_TD_CTRL(channel),
+				   TGMII_TD_PAT_MASK,
+				   FIELD_PREP(TGMII_TD_PAT_MASK,
+					      TGMII_TD_FAIL_PAT));
+	}
+
+	regmap_clear_bits(tx->regmap, MT7530_TRGMII_TXCTRL, TRAIN_TXEN);
+}
+
+static void
+en751221_set_tx_drive(struct mt7530_priv *priv, u8 drvp, u8 drvn, u8 clk_drvp,
+		      u8 clk_drvn)
+{
+	int channel;
+
+	/* Tx driving for TRGMII path on SoC */
+	for (channel = 0; channel < NUM_TRGMII_CTRL; channel++)
+		regmap_write(priv->regmap, MT7530_TRGMII_TD_ODT(channel),
+			     TD_DM_DRVP(drvp) | TD_DM_DRVN(drvn));
+
+	/* Undocumented 6th channel, probably drive strength for clock line. */
+	regmap_write(priv->regmap, MT7530_TRGMII_TD_ODT(5), TD_DM_DRVP(clk_drvp) |
+		     TD_DM_DRVN(clk_drvn));
+}
+
+static void
+en751221_trgmii_pair_setup(struct mt7530_priv *ext, int ext_port,
+			   struct mt7530_priv *ondie, int ondie_port)
+{
+	u8 default_taps_ondie[NUM_TRGMII_CTRL];
+	u8 default_taps_ext[NUM_TRGMII_CTRL];
+	u32 mcr_down, mcr_up;
+	int channel;
+	int reg_val;
+
+	/* BOTH: Put interfaces in a downed state */
+	mcr_down = PMCR_IFG_XMIT(PMCR_IFG_XMIT_64) | PMCR_MAC_MODE |
+		   MT7530_FORCE_MODE | PMCR_MAC_RX_EN | PMCR_BACKOFF_EN |
+		   PMCR_BACKPR_EN | PMCR_FORCE_SPEED_1000 | PMCR_FORCE_FDX;
+	regmap_write(ondie->regmap,  MT753X_PMCR_P(ondie_port), mcr_down);
+	regmap_write(ext->regmap, MT753X_PMCR_P(ext_port), mcr_down);
+	usleep_range(5000, 6000);
+
+	/* BOTH: Reset TX */
+	regmap_set_bits(ext->regmap, MT7530_TRGMII_TXCTRL, TX_RST);
+	regmap_set_bits(ondie->regmap, MT7530_TRGMII_TXCTRL, TX_RST);
+	usleep_range(5000, 6000);
+	regmap_clear_bits(ext->regmap, MT7530_TRGMII_TXCTRL, TX_RST);
+	regmap_clear_bits(ondie->regmap, MT7530_TRGMII_TXCTRL, TX_RST);
+
+	/* BOTH: Reset RX controllers down */
+	regmap_set_bits(ext->regmap, MT7530_TRGMII_RCK_CTRL, RX_RST);
+	regmap_set_bits(ondie->regmap, MT7530_TRGMII_RCK_CTRL, RX_RST);
+
+	/* BOTH: Set TX drive strength, MCM uses more */
+	en751221_set_tx_drive(ondie, 8, 8, 7, 7);
+	en751221_set_tx_drive(ext, 11, 11, 15, 15);
+
+	/* BOTH: Reset RX controllers up */
+	regmap_clear_bits(ext->regmap, MT7530_TRGMII_RCK_CTRL, RX_RST);
+	regmap_clear_bits(ondie->regmap, MT7530_TRGMII_RCK_CTRL, RX_RST);
+
+	/* BOTH: Ports up */
+	mcr_up = mcr_down | PMCR_MAC_TX_EN | PMCR_FORCE_LNK;
+	regmap_write(ondie->regmap, MT753X_PMCR_P(ondie_port), mcr_up);
+	regmap_write(ext->regmap, MT753X_PMCR_P(ext_port), mcr_up);
+
+	/* MCM: Set Ext->SoC TX delay to 0 */
+	for (channel = 0; channel < NUM_TRGMII_CTRL; channel++)
+		regmap_clear_bits(ext->regmap, EN7530_TRGMII_TD_CTRL(channel),
+				  TGMII_TD_TAP_MASK);
+
+	/* SOC: ODT */
+	regmap_set_bits(ondie->regmap, MT7530_TRGMII_RCK_RTT,
+			DQS1_GATE | DQS0_GATE | EN751221_B17);
+
+	/* SOC: Undocumented */
+	for (channel = 0; channel < NUM_TRGMII_CTRL; channel++)
+		regmap_write(ondie->regmap,  (0x7a14 + channel * 8),
+			     0x3227700);
+
+	/* MCM: Spread spectrum clock*/
+	core_clear(ext, CORE_PLL_GROUP8, RG_LCDDS_SSC_EN);
+
+	/* BOTH: Zero clock delay */
+	regmap_clear_bits(ext->regmap, MT7530_TRGMII_RCK_CTRL,
+			  DQSI0_TAP_MASK);
+	regmap_clear_bits(ondie->regmap, MT7530_TRGMII_RCK_CTRL,
+			  DQSI0_TAP_MASK);
+
+	/* BOTH: Collect and then zero every RX TAP */
+	for (channel = 0; channel < NUM_TRGMII_CTRL; channel++) {
+		reg_val = 0;
+		regmap_read(ext->regmap, MT7530_TRGMII_RD(channel), &reg_val);
+		default_taps_ext[channel] = FIELD_GET(RD_TAP_MASK, reg_val);
+		regmap_clear_bits(ext->regmap, MT7530_TRGMII_RD(channel),
+				  RD_TAP_MASK);
+
+		reg_val = 0;
+		regmap_read(ondie->regmap, MT7530_TRGMII_RD(channel), &reg_val);
+		default_taps_ondie[channel] = FIELD_GET(RD_TAP_MASK, reg_val);
+		regmap_clear_bits(ondie->regmap, MT7530_TRGMII_RD(channel),
+				  RD_TAP_MASK);
+	}
+
+	en751221_trgmii_calibrate_direction(ondie, ext, default_taps_ondie);
+	en751221_trgmii_calibrate_direction(ext, ondie, default_taps_ext);
+
+	dev_info(ondie->dev, "TRGMII inter-switch link initialized\n");
+}
+
+static void
+mt7530_cal_interswitch_trgmii(struct dsa_port *dp)
+{
+	struct dsa_switch *ds = dp->ds;
+	struct dsa_switch *peer_ds;
+	struct dsa_port *peer_dp;
+	struct mt7530_priv *peer;
+	struct mt7530_priv *priv;
+	struct dsa_link *dl;
+	u32 pmsr = 0;
+
+	priv = ds->priv;
+
+	if (priv->id != ID_EN751221_EXT)
+		return;
+
+	if (dp->type != DSA_PORT_TYPE_DSA)
+		return;
+
+	regmap_read(priv->regmap, MT7530_PMSR_P(dp->index), &pmsr);
+
+	if (!(pmsr & PMSR_LINK))
+		return;
+
+	list_for_each_entry(dl, &ds->dst->rtable, list) {
+		if (dl->dp != dp)
+			continue;
+
+		peer_dp = dl->link_dp;
+
+		if (peer_dp->type != DSA_PORT_TYPE_DSA)
+			continue;
+
+		peer_ds = dl->link_dp->ds;
+
+		if (!of_device_is_compatible(peer_ds->dev->of_node,
+					     "econet,en751221-switch"))
+			continue;
+
+		peer = peer_ds->priv;
+
+		if (peer->id != ID_EN751221)
+			continue;
+
+		en751221_trgmii_pair_setup(priv, dp->index, peer,
+					   peer_dp->index);
+	}
 }
 
 static void
@@ -1408,7 +1663,8 @@ mt7530_port_enable(struct dsa_switch *ds, int port,
 
 	mutex_unlock(&priv->reg_mutex);
 
-	if (priv->id != ID_MT7530 && priv->id != ID_MT7621)
+	if (priv->id != ID_MT7530 && priv->id != ID_MT7621 &&
+	    priv->id != ID_EN751221 && priv->id != ID_EN751221_EXT)
 		return 0;
 
 	if (port == 5)
@@ -1435,7 +1691,8 @@ mt7530_port_disable(struct dsa_switch *ds, int port)
 
 	mutex_unlock(&priv->reg_mutex);
 
-	if (priv->id != ID_MT7530 && priv->id != ID_MT7621)
+	if (priv->id != ID_MT7530 && priv->id != ID_MT7621 &&
+	    priv->id != ID_EN751221 && priv->id != ID_EN751221_EXT)
 		return;
 
 	/* Do not set MT7530_P5_DIS when port 5 is being used for PHY muxing. */
@@ -2560,6 +2817,12 @@ mt7530_setup(struct dsa_switch *ds)
 			   MT7530_CHG_TRAP | MT7530_PHY_INDIRECT_ACCESS,
 			   MT7530_CHG_TRAP);
 
+	/* EN751221 MCM starts on the wrong frequency */
+	if (priv->id == ID_EN751221_EXT)
+		regmap_update_bits(priv->regmap, MT753X_MTRAP,
+				   MT7530_CHG_TRAP | MT7530_CK_SEL,
+				   MT7530_CHG_TRAP);
+
 	if ((val & MT7530_XTAL_MASK) == MT7530_XTAL_40MHZ)
 		mt7530_pll_setup(priv);
 
@@ -2980,6 +3243,44 @@ static void en7528_mac_port_get_caps(struct dsa_switch *ds, int port,
 	}
 }
 
+static void en751221_mac_port_get_caps(struct dsa_switch *ds, int port,
+				       struct phylink_config *config)
+{
+	switch (port) {
+	/* EN751221 ports 0..3 are connected to the integrated FE PHYs. */
+	case 0 ... 3:
+		__set_bit(PHY_INTERFACE_MODE_INTERNAL,
+			  config->supported_interfaces);
+
+		config->mac_capabilities |= MAC_10 | MAC_100;
+		break;
+
+	/* Port 4 is connected to the standalone EN7512/EN7521 GPHY. */
+	case 4:
+		__set_bit(PHY_INTERFACE_MODE_INTERNAL,
+			  config->supported_interfaces);
+
+		config->mac_capabilities |= MAC_10 | MAC_100 | MAC_1000FD;
+		break;
+
+	/* Port 5 is the 1 Gbit/s TRGMII cascade to the external MT7530. */
+	case 5:
+		__set_bit(PHY_INTERFACE_MODE_TRGMII,
+			  config->supported_interfaces);
+
+		config->mac_capabilities |= MAC_1000FD;
+		break;
+
+	/* Port 6 is the 1 Gbit/s CPU link to GDM1. */
+	case 6:
+		__set_bit(PHY_INTERFACE_MODE_INTERNAL,
+			  config->supported_interfaces);
+
+		config->mac_capabilities |= MAC_1000FD;
+		break;
+	}
+}
+
 static void
 mt7530_mac_config(struct dsa_switch *ds, int port, unsigned int mode,
 		  phy_interface_t interface)
@@ -3129,6 +3430,9 @@ static void mt753x_phylink_mac_link_up(struct phylink_config *config,
 	}
 
 	regmap_set_bits(priv->regmap, MT753X_PMCR_P(dp->index), mcr);
+
+	if (interface == PHY_INTERFACE_MODE_TRGMII)
+		mt7530_cal_interswitch_trgmii(dp);
 }
 
 static void mt753x_phylink_mac_disable_tx_lpi(struct phylink_config *config)
@@ -3382,7 +3686,8 @@ mt753x_conduit_state_change(struct dsa_switch *ds,
 	 * interface is up. NOTE: "CPU port" can also mean an upstream DSA link.
 	 */
 	if (priv->id != ID_MT7530 && priv->id != ID_MT7621 &&
-	    priv->id != ID_EN7528)
+	    priv->id != ID_EN7528 && priv->id != ID_EN751221 &&
+	    priv->id != ID_EN751221_EXT)
 		return;
 
 	mask = BIT(cpu_dp->index);
@@ -3669,6 +3974,28 @@ const struct mt753x_info mt753x_table[] = {
 		.phy_read_c45 = mt7531_ind_c45_phy_read,
 		.phy_write_c45 = mt7531_ind_c45_phy_write,
 		.mac_port_get_caps = en7528_mac_port_get_caps,
+	},
+	[ID_EN751221] = {
+		.id = ID_EN751221,
+		.pcs_ops = &mt7530_pcs_ops,
+		.sw_setup = mt7988_setup,
+		.phy_read_c22 = mt7531_ind_c22_phy_read,
+		.phy_write_c22 = mt7531_ind_c22_phy_write,
+		.phy_read_c45 = mt7531_ind_c45_phy_read,
+		.phy_write_c45 = mt7531_ind_c45_phy_write,
+		.mac_port_get_caps = en751221_mac_port_get_caps,
+		.mac_port_config = mt7530_mac_config,
+	},
+	[ID_EN751221_EXT] = {
+		.id = ID_EN751221_EXT,
+		.pcs_ops = &mt7530_pcs_ops,
+		.sw_setup = mt7530_setup,
+		.phy_read_c22 = mt7530_phy_read_c22,
+		.phy_write_c22 = mt7530_phy_write_c22,
+		.phy_read_c45 = mt7530_phy_read_c45,
+		.phy_write_c45 = mt7530_phy_write_c45,
+		.mac_port_get_caps = mt7530_mac_port_get_caps,
+		.mac_port_config = mt7530_mac_config,
 	},
 };
 EXPORT_SYMBOL_GPL(mt753x_table);

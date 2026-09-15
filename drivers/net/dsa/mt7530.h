@@ -24,6 +24,8 @@ enum mt753x_id {
 	ID_EN7581 = 4,
 	ID_AN7583 = 5,
 	ID_EN7528 = 6,
+	ID_EN751221 = 7,
+	ID_EN751221_EXT = 8,
 };
 
 #define	NUM_TRGMII_CTRL			5
@@ -356,6 +358,9 @@ enum mt7530_vlan_port_acc_frm {
 #define MT753X_PMCR_P(x)		(0x3000 + ((x) * 0x100))
 #define  PMCR_IFG_XMIT_MASK		GENMASK(19, 18)
 #define  PMCR_IFG_XMIT(x)		FIELD_PREP(PMCR_IFG_XMIT_MASK, x)
+#define    PMCR_IFG_XMIT_96		0
+#define    PMCR_IFG_XMIT_RAND		1
+#define    PMCR_IFG_XMIT_64		2
 #define  PMCR_EXT_PHY			BIT(17)
 #define  PMCR_MAC_MODE			BIT(16)
 #define  MT7530_FORCE_MODE		BIT(15)
@@ -584,6 +589,7 @@ enum mt7531_clk_skew {
 #define MT753X_MTRAP			0x7804
 #define  MT7530_P5_PHY0_SEL		BIT(20)
 #define  MT7530_CHG_TRAP		BIT(16)
+#define  MT7530_CK_SEL			BIT(15)
 #define  MT7530_LOOP_DET_DISABLE	BIT(14)
 #define  MT7530_P5_MAC_SEL		BIT(13)
 #define  MT7530_P6_DIS			BIT(8)
@@ -601,6 +607,8 @@ enum mt7531_xtal_fsel {
 /* Register for TOP signal control */
 #define MT7530_TOP_SIG_CTRL		0x7808
 #define  TOP_SIG_CTRL_NORMAL		(BIT(17) | BIT(16))
+/* Undocumented */
+#define  TOP_SIG_CTRL_B0		BIT(0)
 
 #define MT7531_TOP_SIG_SR		0x780c
 #define  PAD_DUAL_SGMII_EN		BIT(1)
@@ -647,17 +655,30 @@ enum mt7531_xtal_fsel {
 #define MT7530_TRGMII_RCK_RTT		0x7a04
 #define  DQS1_GATE			BIT(31)
 #define  DQS0_GATE			BIT(30)
+/* Undocumented */
+#define  EN751221_B17			BIT(17)
 
 #define MT7530_TRGMII_RD(x)		(0x7a10 + (x) * 8)
 #define  BSLIP_EN			BIT(31)
 #define  EDGE_CHK			BIT(30)
+#define  RD_VALUE_MASK			GENMASK(23, 16)
+#define  RD_ERR_MASK			GENMASK(11, 8)
 #define  RD_TAP_MASK			GENMASK(6, 0)
 #define  RD_TAP(x)			FIELD_PREP(RD_TAP_MASK, x)
+/* Training does not try anything beyond this */
+#define  TD_TAP_MAX			64
 
 #define MT7530_TRGMII_TXCTRL		0x7a40
 #define  TRAIN_TXEN			BIT(31)
 #define  TXC_INV			BIT(30)
 #define  TX_RST				BIT(28)
+
+#define EN7530_TRGMII_TD_CTRL(x)	(0x7a50 + (x) * 8)
+#define   TGMII_TD_TAP_MASK		GENMASK(11, 8)
+#define   TGMII_TD_PAT_MASK		GENMASK(7, 0)
+/* Use a 01010101 bit pattern */
+#define   TGMII_TD_PAT			0x55
+#define   TGMII_TD_FAIL_PAT		0xaa
 
 #define MT7530_TRGMII_TD_ODT(i)		(0x7a54 + 8 * (i))
 #define  TD_DM_DRVP_MASK		GENMASK(3, 0)
@@ -763,6 +784,9 @@ enum mt7531_xtal_fsel {
 #define  RG_LCCDS_C_MASK		GENMASK(6, 4)
 #define  RG_LCCDS_C(x)			FIELD_PREP(RG_LCCDS_C_MASK, x)
 #define  RG_LCDDS_PCW_NCPO_CHG		BIT(3)
+
+#define CORE_PLL_GROUP8			0x407
+#define  RG_LCDDS_SSC_EN		BIT(10)
 
 #define CORE_PLL_GROUP10		0x409
 #define  RG_LCDDS_SSC_DELTA_MASK	GENMASK(11, 0)
