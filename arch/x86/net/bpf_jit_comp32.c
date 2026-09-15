@@ -266,6 +266,51 @@ static inline void emit_ia32_mov_r64(const bool is64, const u8 dst[],
 		emit_ia32_mov_i(dst_hi, 0, dstk, pprog);
 }
 
+/* dst = sign_extend(src, insn->off) */
+static inline void emit_ia32_movsx_r64(const struct bpf_insn *insn, u8 **pprog,
+				       const struct bpf_prog_aux *aux)
+{
+	const u8 *dst = bpf2ia32[insn->dst_reg];
+	const u8 *src = bpf2ia32[insn->src_reg];
+	bool dstk = insn->dst_reg != BPF_REG_AX;
+	bool sstk = insn->src_reg != BPF_REG_AX;
+	bool is64 = BPF_CLASS(insn->code) == BPF_ALU64;
+	u8 *prog = *pprog;
+	int cnt = 0;
+
+	if (sstk)
+		/* mov eax,dword ptr [ebp+off] */
+		EMIT3(0x8B, add_2reg(0x40, IA32_EBP, IA32_EAX),
+		      STACK_VAR(src_lo));
+	else
+		/* mov eax,src_lo */
+		EMIT2(0x89, add_2reg(0xC0, IA32_EAX, src_lo));
+
+	switch (insn->off) {
+	case 8:
+		/* movsx eax,al */
+		EMIT3(0x0F, 0xBE, 0xC0);
+		break;
+	case 16:
+		/* movsx eax,ax */
+		EMIT3(0x0F, 0xBF, 0xC0);
+		break;
+	case 32:
+		/* EAX already holds the low word; CDQ supplies the high word. */
+		break;
+	}
+
+	emit_ia32_mov_r(dst_lo, IA32_EAX, dstk, false, &prog);
+	if (is64) {
+		EMIT1(0x99); /* cdq */
+		emit_ia32_mov_r(dst_hi, IA32_EDX, dstk, false, &prog);
+	} else if (!aux->verifier_zext) {
+		emit_ia32_mov_i(dst_hi, 0, dstk, &prog);
+	}
+
+	*pprog = prog;
+}
+
 /* Sign extended move */
 static inline void emit_ia32_mov_i64(const bool is64, const u8 dst[],
 				     const u32 val, bool dstk, u8 **pprog)
@@ -1695,6 +1740,12 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 				if (imm32 == 1) {
 					/* Special mov32 for zext. */
 					emit_ia32_mov_i(dst_hi, 0, dstk, &prog);
+					break;
+				}
+				if (insn->off == 8 || insn->off == 16 ||
+				    (is64 && insn->off == 32)) {
+					emit_ia32_movsx_r64(insn, &prog,
+							    bpf_prog->aux);
 					break;
 				}
 				emit_ia32_mov_r64(is64, dst, src, dstk, sstk,
