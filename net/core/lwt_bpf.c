@@ -36,19 +36,88 @@ static inline struct bpf_lwt *bpf_lwt_lwtunnel(struct lwtunnel_state *lwt)
 #define NO_REDIRECT false
 #define CAN_REDIRECT true
 
+static void bpf_lwt_reset_ip_cb(struct sk_buff *skb, __be16 orig_proto,
+				int iif, bool l3slave, bool use_new_proto)
+{
+	__be16 cb_proto = orig_proto;
+
+	if (use_new_proto)
+		cb_proto = skb->protocol;
+
+	if (cb_proto == htons(ETH_P_IP)) {
+		if (orig_proto == htons(ETH_P_IP)) {
+			memset(&IPCB(skb)->opt, 0, sizeof(IPCB(skb)->opt));
+		} else {
+			memset(IPCB(skb), 0, sizeof(*IPCB(skb)));
+			IPCB(skb)->iif = iif;
+			if (l3slave)
+				IPCB(skb)->flags |= IPSKB_L3SLAVE;
+		}
+	} else if (cb_proto == htons(ETH_P_IPV6)) {
+		memset(IP6CB(skb), 0, sizeof(*IP6CB(skb)));
+		IP6CB(skb)->iif = iif;
+		IP6CB(skb)->nhoff = offsetof(struct ipv6hdr, nexthdr);
+		if (l3slave)
+			IP6CB(skb)->flags |= IP6SKB_L3SLAVE;
+	} else if (orig_proto == htons(ETH_P_IP)) {
+		memset(&IPCB(skb)->opt, 0, sizeof(IPCB(skb)->opt));
+	}
+}
+
 static int run_lwt_bpf(struct sk_buff *skb, struct bpf_lwt_prog *lwt,
 		       struct dst_entry *dst, bool can_redirect)
 {
 	struct bpf_net_context __bpf_net_ctx, *bpf_net_ctx;
+	struct bpf_lwt_ip_encap_state nested_lwt_ip_encap_state;
+	struct bpf_redirect_info *ri;
+	bool lwt_ip_encap, nested_lwt_ip_encap, nested_lwt_run;
+	__be16 orig_proto = skb->protocol;
+	bool l3slave = false;
+	int iif = 0;
 	int ret;
+
+	if (orig_proto == htons(ETH_P_IP)) {
+		iif = IPCB(skb)->iif;
+		l3slave = ipv4_l3mdev_skb(IPCB(skb)->flags);
+	} else if (orig_proto == htons(ETH_P_IPV6)) {
+		iif = IP6CB(skb)->iif;
+		l3slave = ipv6_l3mdev_skb(IP6CB(skb)->flags);
+	}
 
 	/* Disabling BH is needed to protect per-CPU bpf_redirect_info between
 	 * BPF prog and skb_do_redirect().
 	 */
 	local_bh_disable();
 	bpf_net_ctx = bpf_net_ctx_set(&__bpf_net_ctx);
+	ri = bpf_net_ctx_get_ri();
+	nested_lwt_run = ri->kern_flags & BPF_RI_F_LWT_RUN;
+	nested_lwt_ip_encap = ri->kern_flags & BPF_RI_F_LWT_IP_ENCAP;
+	if (nested_lwt_run)
+		nested_lwt_ip_encap_state = ri->lwt_ip_encap;
+	ri->kern_flags &= ~BPF_RI_F_LWT_IP_ENCAP;
+	ri->kern_flags |= BPF_RI_F_LWT_RUN;
+	ri->lwt_ip_encap.iif = iif;
+	ri->lwt_ip_encap.cb_proto = orig_proto;
+	ri->lwt_ip_encap.l3slave = l3slave;
+	ri->lwt_ip_encap.cb_access = lwt->prog->cb_access;
 	bpf_compute_data_pointers(skb);
 	ret = bpf_prog_run_save_cb(lwt->prog, skb);
+	lwt_ip_encap = ri->kern_flags & BPF_RI_F_LWT_IP_ENCAP;
+	ri->kern_flags &= ~BPF_RI_F_LWT_IP_ENCAP;
+
+	if (lwt_ip_encap && ri->lwt_ip_encap.cb_access)
+		bpf_lwt_reset_ip_cb(skb, ri->lwt_ip_encap.cb_proto,
+				    ri->lwt_ip_encap.iif,
+				    ri->lwt_ip_encap.l3slave,
+				    (ret == BPF_LWT_REROUTE &&
+				     lwt->prog->type != BPF_PROG_TYPE_LWT_OUT) ||
+				    (ret == BPF_REDIRECT && can_redirect));
+	if (nested_lwt_run)
+		ri->lwt_ip_encap = nested_lwt_ip_encap_state;
+	else
+		ri->kern_flags &= ~BPF_RI_F_LWT_RUN;
+	if (nested_lwt_ip_encap)
+		ri->kern_flags |= BPF_RI_F_LWT_IP_ENCAP;
 
 	switch (ret) {
 	case BPF_OK:
@@ -604,6 +673,7 @@ static int handle_gso_encap(struct sk_buff *skb, bool ipv4, int encap_len)
 
 int bpf_lwt_push_ip_encap(struct sk_buff *skb, void *hdr, u32 len, bool ingress)
 {
+	struct bpf_redirect_info *ri;
 	bool is_udp_tunnel;
 	struct iphdr *iph;
 	bool ipv4;
@@ -657,6 +727,7 @@ int bpf_lwt_push_ip_encap(struct sk_buff *skb, void *hdr, u32 len, bool ingress)
 	memcpy(skb_network_header(skb), hdr, len);
 	bpf_compute_data_pointers(skb);
 	skb_clear_hash(skb);
+	ri = bpf_net_ctx_get_ri();
 
 	if (ipv4) {
 		skb->protocol = htons(ETH_P_IP);
@@ -667,6 +738,16 @@ int bpf_lwt_push_ip_encap(struct sk_buff *skb, void *hdr, u32 len, bool ingress)
 						  iph->ihl);
 	} else {
 		skb->protocol = htons(ETH_P_IPV6);
+	}
+
+	if (ri->kern_flags & BPF_RI_F_LWT_RUN) {
+		ri->kern_flags |= BPF_RI_F_LWT_IP_ENCAP;
+		if (!ri->lwt_ip_encap.cb_access) {
+			bpf_lwt_reset_ip_cb(skb, ri->lwt_ip_encap.cb_proto,
+					    ri->lwt_ip_encap.iif,
+					    ri->lwt_ip_encap.l3slave, true);
+			ri->lwt_ip_encap.cb_proto = skb->protocol;
+		}
 	}
 
 	if (skb_is_gso(skb))
