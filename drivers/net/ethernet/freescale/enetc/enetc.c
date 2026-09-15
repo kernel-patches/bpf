@@ -1813,7 +1813,6 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 	struct skb_shared_info *shinfo;
 	struct enetc_bdr *tx_ring;
 	int xdp_tx_bd_cnt, i, k;
-	int xdp_tx_frm_cnt = 0;
 
 	if (unlikely(test_bit(ENETC_TX_DOWN, &priv->flags) ||
 		     !netif_carrier_ok(ndev)))
@@ -1845,19 +1844,17 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 						    &xdp_redirect_arr[i]);
 			break;
 		}
-
-		xdp_tx_frm_cnt++;
 	}
 
-	if (unlikely((flags & XDP_XMIT_FLUSH) || k != xdp_tx_frm_cnt))
+	if (unlikely(k && ((flags & XDP_XMIT_FLUSH) || k < num_frames)))
 		enetc_update_tx_ring_tail(tx_ring);
 
-	tx_ring->stats.xdp_tx += xdp_tx_frm_cnt;
-	tx_ring->stats.xdp_tx_drops += num_frames - xdp_tx_frm_cnt;
+	tx_ring->stats.xdp_tx += k;
+	tx_ring->stats.xdp_tx_drops += num_frames - k;
 
 	enetc_unlock_mdio();
 
-	return xdp_tx_frm_cnt;
+	return k;
 }
 EXPORT_SYMBOL_GPL(enetc_xdp_xmit);
 
