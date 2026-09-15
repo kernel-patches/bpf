@@ -28,6 +28,7 @@
 
 #include <linux/compiler.h>
 #include <linux/printk.h>
+#include <linux/string_choices.h>
 #include <linux/device.h>
 #include <linux/dynamic_debug.h>
 
@@ -643,6 +644,9 @@ static inline struct device *__drm_to_dev(const struct drm_device *drm)
 
 #define drm_err_ratelimited(drm, fmt, ...)				\
 	__drm_printk((drm), err, _ratelimited, "*ERROR* " fmt, ##__VA_ARGS__)
+
+#define drm_warn_ratelimited(drm, fmt, ...)				\
+	__drm_printk((drm), warn, _ratelimited, fmt, ##__VA_ARGS__)
 
 
 #define drm_dbg_core(drm, fmt, ...)					\

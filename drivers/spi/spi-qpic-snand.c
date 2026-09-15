@@ -765,8 +765,6 @@ static int qcom_spi_read_cw_raw(struct qcom_nand_controller *snandc, u8 *data_bu
 
 	qcom_write_reg_dma(snandc, &snandc->regs->addr0, NAND_ADDR0, 2, 0);
 	qcom_write_reg_dma(snandc, &snandc->regs->cfg0, NAND_DEV0_CFG0, 3, 0);
-	qcom_write_reg_dma(snandc, &snandc->regs->ecc_buf_cfg, NAND_EBI2_ECC_BUF_CFG, 1, 0);
-
 	qcom_write_reg_dma(snandc, &snandc->regs->erased_cw_detect_cfg_clr,
 			   NAND_ERASED_CW_DETECT_CFG, 1, 0);
 	qcom_write_reg_dma(snandc, &snandc->regs->erased_cw_detect_cfg_set,
@@ -1104,8 +1102,6 @@ static void qcom_spi_config_page_write(struct qcom_nand_controller *snandc)
 {
 	qcom_write_reg_dma(snandc, &snandc->regs->addr0, NAND_ADDR0, 2, 0);
 	qcom_write_reg_dma(snandc, &snandc->regs->cfg0, NAND_DEV0_CFG0, 3, 0);
-	qcom_write_reg_dma(snandc, &snandc->regs->ecc_buf_cfg, NAND_EBI2_ECC_BUF_CFG,
-			   1, NAND_BAM_NEXT_SGL);
 }
 
 static void qcom_spi_config_cw_write(struct qcom_nand_controller *snandc)
@@ -1485,7 +1481,7 @@ static int qcom_spi_io_op(struct qcom_nand_controller *snandc, const struct spi_
 
 	if (copy_ftr) {
 		qcom_nandc_dev_to_mem(snandc, true);
-		val = le32_to_cpu(*(__le32 *)snandc->reg_read_buf);
+		val = le32_to_cpu(*snandc->reg_read_buf);
 		val >>= 8;
 		memcpy(op->data.buf.in, &val, snandc->buf_count);
 
@@ -1585,7 +1581,6 @@ static int qcom_spi_probe(struct platform_device *pdev)
 	struct qpic_spi_nand *qspi;
 	struct qpic_ecc *ecc;
 	struct resource *res;
-	const void *dev_data;
 	int ret;
 
 	ecc = devm_kzalloc(dev, sizeof(*ecc), GFP_KERNEL);
@@ -1613,13 +1608,11 @@ static int qcom_spi_probe(struct platform_device *pdev)
 	snandc->qspi->ctlr = ctlr;
 	snandc->qspi->ecc = ecc;
 
-	dev_data = of_device_get_match_data(dev);
-	if (!dev_data) {
+	snandc->props = of_device_get_match_data(dev);
+	if (!snandc->props) {
 		dev_err(&pdev->dev, "failed to get device data\n");
 		return -ENODEV;
 	}
-
-	snandc->props = dev_data;
 
 	snandc->core_clk = devm_clk_get_enabled(dev, "core");
 	if (IS_ERR(snandc->core_clk))

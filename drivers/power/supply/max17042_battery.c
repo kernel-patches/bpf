@@ -1080,7 +1080,7 @@ static int max17042_init_chip(struct max17042_chip *chip)
 		/* update capacity params */
 		max17042_update_capacity_regs(chip);
 
-		/* delay must be atleast 350mS to allow VFSOC
+		/* delay must be at least 350mS to allow VFSOC
 		 * to be calculated from the new configuration
 		 */
 		msleep(350);
@@ -1233,7 +1233,7 @@ static int max17042_parse_dt(struct max17042_chip *chip)
 	if (of_property_read_u32(np, "maxim,over-volt", &prop))
 		chip->vmax = INT_MAX;
 	else
-		chip->vmin = prop;
+		chip->vmax = prop;
 
 	return 0;
 }

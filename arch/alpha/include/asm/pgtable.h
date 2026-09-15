@@ -2,6 +2,7 @@
 #ifndef _ALPHA_PGTABLE_H
 #define _ALPHA_PGTABLE_H
 
+#include <asm/page.h>
 #include <asm-generic/pgtable-nopud.h>
 
 /*
@@ -13,7 +14,6 @@
  */
 #include <linux/mmzone.h>
 
-#include <asm/page.h>
 #include <asm/processor.h>	/* For TASK_SIZE */
 #include <asm/machvec.h>
 #include <asm/setup.h>
@@ -356,13 +356,6 @@ static inline pte_t pte_swp_clear_exclusive(pte_t pte)
 	pte_val(pte) &= ~_PAGE_SWP_EXCLUSIVE;
 	return pte;
 }
-
-#define pte_ERROR(e) \
-	printk("%s:%d: bad pte %016lx.\n", __FILE__, __LINE__, pte_val(e))
-#define pmd_ERROR(e) \
-	printk("%s:%d: bad pmd %016lx.\n", __FILE__, __LINE__, pmd_val(e))
-#define pgd_ERROR(e) \
-	printk("%s:%d: bad pgd %016lx.\n", __FILE__, __LINE__, pgd_val(e))
 
 extern void paging_init(void);
 
