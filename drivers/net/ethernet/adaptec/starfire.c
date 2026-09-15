@@ -638,6 +638,7 @@ static int starfire_init_one(struct pci_dev *pdev,
 	void __iomem *base;
 	int drv_flags, io_size;
 	int boguscnt;
+	int err = -ENODEV;
 
 	if (pci_enable_device (pdev))
 		return -EIO;
@@ -646,12 +647,14 @@ static int starfire_init_one(struct pci_dev *pdev,
 	io_size = pci_resource_len(pdev, 0);
 	if (!ioaddr || ((pci_resource_flags(pdev, 0) & IORESOURCE_MEM) == 0)) {
 		dev_err(d, "no PCI MEM resources, aborting\n");
-		return -ENODEV;
+		goto err_out_disable;
 	}
 
 	dev = alloc_etherdev(sizeof(*np));
-	if (!dev)
-		return -ENOMEM;
+	if (!dev) {
+		err = -ENOMEM;
+		goto err_out_disable;
+	}
 
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
@@ -818,7 +821,9 @@ err_out_free_res:
 	pci_release_regions (pdev);
 err_out_free_netdev:
 	free_netdev(dev);
-	return -ENODEV;
+err_out_disable:
+	pci_disable_device(pdev);
+	return err;
 }
 
 
