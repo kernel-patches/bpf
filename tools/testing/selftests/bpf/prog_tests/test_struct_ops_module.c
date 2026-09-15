@@ -150,6 +150,36 @@ static void test_struct_ops_not_zeroed(void)
 	struct_ops_module__destroy(skel);
 }
 
+static void test_struct_ops_local_bitfield(void)
+{
+	struct struct_ops_module *skel;
+	char *log = NULL;
+	int err;
+
+	skel = struct_ops_module__open();
+	if (!ASSERT_OK_PTR(skel, "struct_ops_module_open_local_bitfield"))
+		return;
+
+	bpf_map__set_autocreate(skel->maps.testmod_zeroed, false);
+	err = bpf_map__set_autocreate(skel->maps.testmod_local_bitfield, true);
+	if (!ASSERT_OK(err, "enable_local_bitfield_map"))
+		goto cleanup;
+
+	if (start_libbpf_log_capture())
+		goto cleanup;
+	err = struct_ops_module__load(skel);
+	log = stop_libbpf_log_capture();
+	if (!ASSERT_EQ(err, -ENOTSUP, "struct_ops_module_load_local_bitfield"))
+		goto cleanup;
+	ASSERT_HAS_SUBSTR(log,
+			  "local bitfield extra_bitfield is not supported",
+			  "local_bitfield_rejection_log");
+
+cleanup:
+	free(log);
+	struct_ops_module__destroy(skel);
+}
+
 /* The signature of an implementation might not match the signature of the
  * function pointer prototype defined in the BPF program. This mismatch
  * should be allowed as long as the behavior of the operator program
@@ -304,6 +334,8 @@ void serial_test_struct_ops_module(void)
 		test_struct_ops_load();
 	if (test__start_subtest("struct_ops_not_zeroed"))
 		test_struct_ops_not_zeroed();
+	if (test__start_subtest("struct_ops_local_bitfield"))
+		test_struct_ops_local_bitfield();
 	if (test__start_subtest("struct_ops_incompatible"))
 		test_struct_ops_incompatible();
 	if (test__start_subtest("struct_ops_null_out_cb"))
