@@ -408,6 +408,7 @@ config DWMAC_LOONGSON
 
 config DWMAC_MOTORCOMM
 	tristate "Motorcomm PCI DWMAC support"
+	default m if MACH_LOONGSON64
 	depends on PCI
 	select MOTORCOMM_PHY
 	select STMMAC_LIBPCI
