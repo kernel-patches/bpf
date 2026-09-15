@@ -1397,6 +1397,7 @@ enum bpf_tramp_prog_type {
 struct bpf_tramp_image {
 	void *image;
 	int size;
+	int nr_progs;		/* see bpf_tramp_image_put() */
 	struct bpf_ksym ksym;
 	struct percpu_ref pcref;
 	void *ip_after_call;

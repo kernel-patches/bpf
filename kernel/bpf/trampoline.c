@@ -601,12 +601,25 @@ static void __bpf_tramp_image_put_rcu_tasks(struct rcu_head *rcu)
 	struct bpf_tramp_image *im;
 
 	im = container_of(rcu, struct bpf_tramp_image, rcu);
-	if (im->ip_after_call)
+	if (im->ip_after_call) {
 		/* the case of fmod_ret/fexit trampoline and CONFIG_PREEMPTION=y */
 		percpu_ref_kill(&im->pcref);
-	else
+	} else if (IS_ENABLED(CONFIG_TASKS_RCU_TRAMPOLINE_READERS) &&
+		   --im->nr_progs > 0) {
+		/*
+		 * fentry-only trampoline on a reader-marked Tasks RCU: each prog
+		 * runs in its own Tasks Trace reader with a few image
+		 * instructions in between, and one rcu tasks grace period only
+		 * guarantees that a task has moved on from the reader (or gap) it
+		 * was in when the grace period started.  A task walking the image
+		 * therefore needs one grace period per prog before the image can
+		 * go; keep requeueing until we have had that many.
+		 */
+		call_rcu_tasks(&im->rcu, __bpf_tramp_image_put_rcu_tasks);
+	} else {
 		/* the case of fentry trampoline */
 		call_rcu_tasks(&im->rcu, __bpf_tramp_image_put_rcu);
+	}
 }
 
 static void bpf_tramp_image_put(struct bpf_tramp_image *im)
@@ -618,6 +631,14 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 	 * rcu tasks to protect trampoline asm not covered by percpu_ref
 	 * (which are few asm insns before __bpf_tramp_enter and
 	 *  after __bpf_tramp_exit)
+	 *
+	 * With CONFIG_TASKS_RCU_TRAMPOLINE_READERS, rcu tasks waits for a task
+	 * in those asm insns because they are trampoline text, and for a task
+	 * inside the glue or a prog because the glue makes it a
+	 * rcu_read_lock_trace reader.  The percpu_ref case is otherwise
+	 * unchanged; the fentry-only case, having no percpu_ref across the
+	 * whole image, takes one rcu tasks grace period per prog, see
+	 * __bpf_tramp_image_put_rcu_tasks().
 	 *
 	 * The trampoline is unreachable before bpf_tramp_image_put().
 	 *
@@ -776,6 +797,7 @@ again:
 		err = PTR_ERR(im);
 		goto out;
 	}
+	im->nr_progs = total;
 
 	err = arch_prepare_bpf_trampoline(im, im->image, im->image + size,
 					  &tr->func.model, tr->flags, tnodes,
@@ -1285,9 +1307,34 @@ static __always_inline u64 notrace bpf_prog_start_time(void)
  * [2..MAX_U64] - execute bpf prog and record execution time.
  *     This is start time.
  */
-static u64 notrace __bpf_prog_enter_recur(struct bpf_prog *prog, struct bpf_tramp_run_ctx *run_ctx)
+/*
+ * Where Tasks RCU is built on reader-marked trampolines
+ * (CONFIG_TASKS_RCU_TRAMPOLINE_READERS), the trampoline image that called the
+ * glue below stays allocated only while the task is a Tasks Trace RCU reader
+ * or is executing text that rcu_tasks_trampoline_text() recognises: the image
+ * itself, or this glue, which is therefore placed in .text..rcu_tramp
+ * (__rcu_trampoline).  Each enter helper takes the reader before anything
+ * that could run out of line and each exit helper drops it last, so from the
+ * image's call to the glue's return the task is always one or the other.  The
+ * sleepable variants already are such readers for their own reasons.
+ */
+static __always_inline void bpf_tramp_read_lock_trace(void)
+{
+	if (IS_ENABLED(CONFIG_TASKS_RCU_TRAMPOLINE_READERS))
+		rcu_read_lock_trace();
+}
+
+static __always_inline void bpf_tramp_read_unlock_trace(void)
+{
+	if (IS_ENABLED(CONFIG_TASKS_RCU_TRAMPOLINE_READERS))
+		rcu_read_unlock_trace();
+}
+
+static u64 notrace __rcu_trampoline
+__bpf_prog_enter_recur(struct bpf_prog *prog, struct bpf_tramp_run_ctx *run_ctx)
 	__acquires(RCU)
 {
+	bpf_tramp_read_lock_trace();
 	rcu_read_lock_dont_migrate();
 
 	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
@@ -1329,8 +1376,8 @@ static __always_inline void notrace update_prog_stats(struct bpf_prog *prog,
 		__update_prog_stats(prog, start);
 }
 
-static void notrace __bpf_prog_exit_recur(struct bpf_prog *prog, u64 start,
-					  struct bpf_tramp_run_ctx *run_ctx)
+static void notrace __rcu_trampoline
+__bpf_prog_exit_recur(struct bpf_prog *prog, u64 start, struct bpf_tramp_run_ctx *run_ctx)
 	__releases(RCU)
 {
 	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
@@ -1338,15 +1385,17 @@ static void notrace __bpf_prog_exit_recur(struct bpf_prog *prog, u64 start,
 	update_prog_stats(prog, start);
 	bpf_prog_put_recursion_context(prog);
 	rcu_read_unlock_migrate();
+	bpf_tramp_read_unlock_trace();
 }
 
-static u64 notrace __bpf_prog_enter_lsm_cgroup(struct bpf_prog *prog,
-					       struct bpf_tramp_run_ctx *run_ctx)
+static u64 notrace __rcu_trampoline
+__bpf_prog_enter_lsm_cgroup(struct bpf_prog *prog, struct bpf_tramp_run_ctx *run_ctx)
 	__acquires(RCU)
 {
 	/* Runtime stats are exported via actual BPF_LSM_CGROUP
 	 * programs, not the shims.
 	 */
+	bpf_tramp_read_lock_trace();
 	rcu_read_lock_dont_migrate();
 
 	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
@@ -1354,17 +1403,18 @@ static u64 notrace __bpf_prog_enter_lsm_cgroup(struct bpf_prog *prog,
 	return NO_START_TIME;
 }
 
-static void notrace __bpf_prog_exit_lsm_cgroup(struct bpf_prog *prog, u64 start,
-					       struct bpf_tramp_run_ctx *run_ctx)
+static void notrace __rcu_trampoline
+__bpf_prog_exit_lsm_cgroup(struct bpf_prog *prog, u64 start, struct bpf_tramp_run_ctx *run_ctx)
 	__releases(RCU)
 {
 	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
 
 	rcu_read_unlock_migrate();
+	bpf_tramp_read_unlock_trace();
 }
 
-u64 notrace __bpf_prog_enter_sleepable_recur(struct bpf_prog *prog,
-					     struct bpf_tramp_run_ctx *run_ctx)
+u64 notrace __rcu_trampoline
+__bpf_prog_enter_sleepable_recur(struct bpf_prog *prog, struct bpf_tramp_run_ctx *run_ctx)
 {
 	rcu_read_lock_trace();
 	migrate_disable();
@@ -1381,8 +1431,9 @@ u64 notrace __bpf_prog_enter_sleepable_recur(struct bpf_prog *prog,
 	return bpf_prog_start_time();
 }
 
-void notrace __bpf_prog_exit_sleepable_recur(struct bpf_prog *prog, u64 start,
-					     struct bpf_tramp_run_ctx *run_ctx)
+void notrace __rcu_trampoline
+__bpf_prog_exit_sleepable_recur(struct bpf_prog *prog, u64 start,
+				struct bpf_tramp_run_ctx *run_ctx)
 {
 	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
 
@@ -1392,8 +1443,8 @@ void notrace __bpf_prog_exit_sleepable_recur(struct bpf_prog *prog, u64 start,
 	rcu_read_unlock_trace();
 }
 
-static u64 notrace __bpf_prog_enter_sleepable(struct bpf_prog *prog,
-					      struct bpf_tramp_run_ctx *run_ctx)
+static u64 notrace __rcu_trampoline
+__bpf_prog_enter_sleepable(struct bpf_prog *prog, struct bpf_tramp_run_ctx *run_ctx)
 {
 	rcu_read_lock_trace();
 	migrate_disable();
@@ -1404,8 +1455,8 @@ static u64 notrace __bpf_prog_enter_sleepable(struct bpf_prog *prog,
 	return bpf_prog_start_time();
 }
 
-static void notrace __bpf_prog_exit_sleepable(struct bpf_prog *prog, u64 start,
-					      struct bpf_tramp_run_ctx *run_ctx)
+static void notrace __rcu_trampoline
+__bpf_prog_exit_sleepable(struct bpf_prog *prog, u64 start, struct bpf_tramp_run_ctx *run_ctx)
 {
 	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
 
@@ -1414,10 +1465,11 @@ static void notrace __bpf_prog_exit_sleepable(struct bpf_prog *prog, u64 start,
 	rcu_read_unlock_trace();
 }
 
-static u64 notrace __bpf_prog_enter(struct bpf_prog *prog,
-				    struct bpf_tramp_run_ctx *run_ctx)
+static u64 notrace __rcu_trampoline
+__bpf_prog_enter(struct bpf_prog *prog, struct bpf_tramp_run_ctx *run_ctx)
 	__acquires(RCU)
 {
+	bpf_tramp_read_lock_trace();
 	rcu_read_lock_dont_migrate();
 
 	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
@@ -1425,24 +1477,33 @@ static u64 notrace __bpf_prog_enter(struct bpf_prog *prog,
 	return bpf_prog_start_time();
 }
 
-static void notrace __bpf_prog_exit(struct bpf_prog *prog, u64 start,
-				    struct bpf_tramp_run_ctx *run_ctx)
+static void notrace __rcu_trampoline
+__bpf_prog_exit(struct bpf_prog *prog, u64 start, struct bpf_tramp_run_ctx *run_ctx)
 	__releases(RCU)
 {
 	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
 
 	update_prog_stats(prog, start);
 	rcu_read_unlock_migrate();
+	bpf_tramp_read_unlock_trace();
 }
 
-void notrace __bpf_tramp_enter(struct bpf_tramp_image *tr)
+/*
+ * The percpu_ref keeps the image alive across the call to the original
+ * function; the reader only has to cover getting and putting it, see above.
+ */
+void notrace __rcu_trampoline __bpf_tramp_enter(struct bpf_tramp_image *tr)
 {
+	bpf_tramp_read_lock_trace();
 	percpu_ref_get(&tr->pcref);
+	bpf_tramp_read_unlock_trace();
 }
 
-void notrace __bpf_tramp_exit(struct bpf_tramp_image *tr)
+void notrace __rcu_trampoline __bpf_tramp_exit(struct bpf_tramp_image *tr)
 {
+	bpf_tramp_read_lock_trace();
 	percpu_ref_put(&tr->pcref);
+	bpf_tramp_read_unlock_trace();
 }
 
 bpf_trampoline_enter_t bpf_trampoline_enter(const struct bpf_prog *prog)
