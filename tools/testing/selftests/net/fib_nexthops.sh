@@ -70,44 +70,7 @@ nsid=100
 
 log_test()
 {
-	local rc=$1
-	local expected=$2
-	local msg="$3"
-
-	if [ ${rc} -eq ${expected} ]; then
-		printf "TEST: %-60s  [ OK ]\n" "${msg}"
-		nsuccess=$((nsuccess+1))
-	else
-		if [[ $rc -eq $ksft_skip ]]; then
-			[[ $ret -eq 0 ]] && ret=$ksft_skip
-			nskip=$((nskip+1))
-			printf "TEST: %-60s  [SKIP]\n" "${msg}"
-		else
-			ret=1
-			nfail=$((nfail+1))
-			printf "TEST: %-60s  [FAIL]\n" "${msg}"
-		fi
-
-		if [ "$VERBOSE" = "1" ]; then
-			echo "    rc=$rc, expected $expected"
-		fi
-
-		if [ "${PAUSE_ON_FAIL}" = "yes" ]; then
-		echo
-			echo "hit enter to continue, 'q' to quit"
-			read a
-			[ "$a" = "q" ] && exit 1
-		fi
-	fi
-
-	if [ "${PAUSE}" = "yes" ]; then
-		echo
-		echo "hit enter to continue, 'q' to quit"
-		read a
-		[ "$a" = "q" ] && exit 1
-	fi
-
-	[ "$VERBOSE" = "1" ] && echo
+	log_test_expected "$1" "$2" "$3"
 }
 
 run_cmd()
@@ -1258,7 +1221,7 @@ ipv6_fcnal_runtime()
 		run_cmd "ip netns exec $me ping -c1 -w$PING_TIMEOUT 2001:db8:101::1"
 		log_test $? 0 "Ping - group blackhole replaced with gateways"
 	else
-		log_test 2 0 "Ping - multipath failed"
+		log_test $rc 0 "Ping - multipath failed"
 	fi
 
 	#
@@ -1915,7 +1878,7 @@ ipv4_fcnal_runtime()
 		run_cmd "ip netns exec $me ping -c1 -w$PING_TIMEOUT 172.16.101.1"
 		log_test $? 0 "Ping - group blackhole replaced with gateways"
 	else
-		log_test 2 0 "Ping - multipath failed"
+		log_test $rc 0 "Ping - multipath failed"
 	fi
 
 	#
@@ -2729,7 +2692,6 @@ done
 if [ "$TESTS" != "none" ]; then
 	printf "\nTests passed: %3d\n" ${nsuccess}
 	printf "Tests failed: %3d\n"   ${nfail}
-	printf "Tests skipped: %2d\n"  ${nskip}
 fi
 
 exit $ret
