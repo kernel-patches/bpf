@@ -1843,7 +1843,6 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 			for (i = 0; i < xdp_tx_bd_cnt; i++)
 				enetc_unmap_tx_buff(tx_ring,
 						    &xdp_redirect_arr[i]);
-			tx_ring->stats.xdp_tx_drops++;
 			break;
 		}
 
@@ -1854,6 +1853,7 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 		enetc_update_tx_ring_tail(tx_ring);
 
 	tx_ring->stats.xdp_tx += xdp_tx_frm_cnt;
+	tx_ring->stats.xdp_tx_drops += num_frames - xdp_tx_frm_cnt;
 
 	enetc_unlock_mdio();
 
