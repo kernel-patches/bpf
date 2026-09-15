@@ -8,6 +8,8 @@
 #include <linux/slab.h>
 #include <linux/sort.h>
 
+#include "exception.h"
+
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
 struct per_frame_masks {
@@ -252,9 +254,12 @@ bpf_insn_successors(struct bpf_verifier_env *env, u32 idx)
 	if (unlikely(jt))
 		return jt;
 
-	/* pre-allocated array of size up to 2; reset cnt, as it may have been used already */
+	/* pre-allocated array of size up to 3; reset cnt, as it may have been used already */
 	succ = env->succ;
 	succ->cnt = 0;
+
+	if (unlikely(bpf_is_unwind_resume_kfunc(insn)))
+		return succ;
 
 	opcode_info = &opcode_info_tbl[BPF_CLASS(insn->code) | BPF_OP(insn->code)];
 	insn_sz = bpf_is_ldimm64(insn) ? 2 : 1;
@@ -263,6 +268,13 @@ bpf_insn_successors(struct bpf_verifier_env *env, u32 idx)
 
 	if (opcode_info->can_jump)
 		succ->items[succ->cnt++] = idx + bpf_jmp_offset(insn) + 1;
+
+	if (unlikely(env->cleanup_info_cnt)) {
+		int pad = bpf_cleanup_pad_of_call(env, idx);
+
+		if (pad >= 0)
+			succ->items[succ->cnt++] = pad;
+	}
 
 	return succ;
 }
@@ -394,9 +406,31 @@ bool bpf_stack_slot_alive(struct bpf_verifier_env *env, u32 frameno, u32 half_sp
 		/* Get callsite from verifier state, not from instance callchain */
 		callsite = q->callsites[i];
 
-		alive = bpf_calls_callback(env, callsite)
-			? is_live_before(instance, callsite, rel, half_spi)
-			: is_live_before(instance, callsite + 1, rel, half_spi);
+		if (bpf_calls_callback(env, callsite)) {
+			alive = is_live_before(instance, callsite, rel, half_spi);
+		} else {
+			alive = is_live_before(instance, callsite + 1, rel, half_spi);
+			/*
+			 * The instruction after the call is not the only place
+			 * control can come back to: a call an exception cleanup
+			 * record covers also resumes at that record's landing
+			 * pad, and a slot the pad is the only reader of is
+			 * alive there and dead everywhere else.
+			 */
+			if (!alive && unlikely(env->cleanup_info_cnt)) {
+				int pad = bpf_cleanup_pad_of_call(env, callsite);
+
+				/*
+				 * A record's range and its pad are in one
+				 * subprogram, checked at load time, so the pad
+				 * is in this instance -- but this indexes an
+				 * array with it, so do not take that on trust.
+				 */
+				if (pad >= 0 &&
+				    (u32)pad - instance->subprog_start < instance->insn_cnt)
+					alive = is_live_before(instance, pad, rel, half_spi);
+			}
+		}
 		if (alive)
 			return true;
 	}

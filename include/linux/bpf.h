@@ -1770,6 +1770,75 @@ enum bpf_sig_keyring {
 	BPF_SIG_KEYRING_BPF,
 };
 
+/*
+ * One cleanup region of a JITed (sub)program: @pad is the landing pad to run
+ * for a return address in (begin, end], the native code of its call sites.
+ */
+struct bpf_cleanup_range {
+	u64 begin;
+	u64 end;
+	u64 pad;
+};
+
+struct bpf_exception_info {
+	struct bpf_cleanup_info *info;
+	/* @info as the native address ranges the JIT filled in. */
+	struct bpf_cleanup_range *ranges;
+	/* Landing pad instruction indices, sorted and deduplicated. */
+	u32 *pad_at;
+	/* bpf_throw() call instruction indices, sorted. */
+	u32 *throw_at;
+	/* One bit per instruction that only runs while unwinding. */
+	unsigned long *pad_body;
+	u32 nr_info;
+	u32 nr_ranges;
+	u32 nr_pad_at;
+	u32 nr_throw_at;
+	u32 nr_pad_body;
+	/* Offset from a frame's FP to the caller's spilled r6-r9. */
+	s32 spill_off;
+	/* Likewise, to the registers a frame spills before calling bpf_throw(). */
+	s32 throw_spill_off;
+};
+
+#ifdef CONFIG_BPF_SYSCALL
+bool bpf_cleanup_force_spill(const struct bpf_prog *prog);
+bool bpf_cleanup_insn_is_pad(const struct bpf_prog *prog, u32 idx);
+bool bpf_cleanup_insn_in_pad(const struct bpf_prog *prog, u32 idx);
+bool bpf_cleanup_insn_is_throw(const struct bpf_prog *prog, u32 idx);
+int bpf_cleanup_attach_main_prog(struct bpf_verifier_env *env, struct bpf_prog *prog);
+void bpf_cleanup_fill_native_ranges(struct bpf_prog *prog, u32 *addrs, void *image);
+void bpf_cleanup_free_info(struct bpf_prog_aux *aux);
+#else
+static inline bool bpf_cleanup_force_spill(const struct bpf_prog *prog)
+{
+	return false;
+}
+static inline bool bpf_cleanup_insn_is_pad(const struct bpf_prog *prog, u32 idx)
+{
+	return false;
+}
+static inline bool bpf_cleanup_insn_in_pad(const struct bpf_prog *prog, u32 idx)
+{
+	return false;
+}
+static inline bool bpf_cleanup_insn_is_throw(const struct bpf_prog *prog, u32 idx)
+{
+	return false;
+}
+static inline int bpf_cleanup_attach_main_prog(struct bpf_verifier_env *env,
+					       struct bpf_prog *prog)
+{
+	return 0;
+}
+static inline void bpf_cleanup_fill_native_ranges(struct bpf_prog *prog, u32 *addrs, void *image)
+{
+}
+static inline void bpf_cleanup_free_info(struct bpf_prog_aux *aux)
+{
+}
+#endif
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1850,6 +1919,7 @@ struct bpf_prog_aux {
 	char name[BPF_OBJ_NAME_LEN];
 	u64 (*bpf_exception_cb)(u64 cookie, u64 sp, u64 bp, u64, u64);
 	u16 stack_arg_sp_adjust;
+	struct bpf_exception_info *exc;
 #ifdef CONFIG_SECURITY
 	void *security;
 #endif

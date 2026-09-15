@@ -31,6 +31,7 @@
 #include <linux/buildid.h>
 
 #include "../../lib/kstrtox.h"
+#include "exception.h"
 
 /* If kernel subsystem is allowing eBPF programs to call this function,
  * inside its own verifier_ops->get_func_proto() callback it should return
@@ -3360,7 +3361,38 @@ struct bpf_throw_ctx {
 	u64 sp;
 	u64 bp;
 	int cnt;
+	const struct bpf_prog *callee;
+	u64 callee_fp;
 };
+
+static void bpf_run_cleanup_pad(struct bpf_throw_ctx *ctx, const struct bpf_prog *prog,
+				u64 ip, u64 fp)
+{
+	const struct bpf_exception_info *exc = prog->aux->exc;
+	const struct bpf_cleanup_range *rec;
+	u64 spill_base;
+
+	if (!exc || !exc->nr_ranges)
+		return;
+	rec = bpf_cleanup_pad_for_ip(prog, ip);
+	if (!rec)
+		return;
+
+	/*
+	 * The callee spilled this frame's registers in its own prologue, and
+	 * it is a subprogram of this same program: bpf_stack_walker() stops at
+	 * the first frame that is not a subprogram, so a tail call target or an
+	 * extension program ends the walk in its own frame rather than becoming
+	 * the callee of the frame above. Its exc is therefore there. The frame
+	 * that called bpf_throw() has no callee and spilled at the throw site.
+	 */
+	if (ctx->callee)
+		spill_base = ctx->callee_fp + ctx->callee->aux->exc->spill_off;
+	else
+		spill_base = fp + exc->throw_spill_off;
+
+	arch_bpf_run_cleanup_pad(rec->pad, fp, spill_base);
+}
 
 static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 {
@@ -3378,6 +3410,11 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	if (!prog)
 		return !ctx->cnt;
 	ctx->cnt++;
+
+	bpf_run_cleanup_pad(ctx, prog, ip, bp);
+	ctx->callee = prog;
+	ctx->callee_fp = bp;
+
 	if (bpf_is_subprog(prog))
 		return true;
 	ctx->aux = prog->aux;
@@ -3405,6 +3442,17 @@ __bpf_kfunc void bpf_throw(u64 cookie)
 	kasan_unpoison_task_stack_below((void *)(long)(ctx.sp ?: ctx.bp));
 	ctx.aux->bpf_exception_cb(cookie, ctx.sp + ctx.aux->stack_arg_sp_adjust, ctx.bp, 0, 0);
 	WARN(1, "A call to BPF exception callback should never return\n");
+}
+
+/*
+ * Terminator of a compiler-emitted cleanup landing pad. The compiler names
+ * this _Unwind_Resume, the base unwind ABI's entry point for carrying an
+ * unwind on once a frame's cleanups have run. To match kernel kfunc
+ * convention, the kernel calls it bpf_unwind_resume and libbpf maps the
+ * compiler's name onto it.
+ */
+__bpf_kfunc void bpf_unwind_resume(void)
+{
 }
 
 __bpf_kfunc int bpf_wq_init(struct bpf_wq *wq, void *p__const_map, unsigned int flags)
@@ -4853,6 +4901,7 @@ BTF_ID_FLAGS(func, bpf_task_get_cgroup1, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_from_vpid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_throw)
+BTF_ID_FLAGS(func, bpf_unwind_resume)
 #ifdef CONFIG_BPF_EVENTS
 BTF_ID_FLAGS(func, bpf_send_signal_task)
 #endif
