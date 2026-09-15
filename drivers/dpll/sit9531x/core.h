@@ -105,6 +105,9 @@ struct sit9531x_ref {
  * @routed:		output is mapped to @pll_idx by the initial
  *			configuration; an unrouted output has no DPLL pin
  * @pll_idx:		PLL driving this output (0-3)
+ * @phase_adj:		phase adjust the delay registers actually realize,
+ *			i.e. the last request quantized to whole VCO cycles
+ *			plus 30 ps fine steps, in the request's sign
  * @label:		board label from DT or default
  */
 struct sit9531x_out {
@@ -114,6 +117,7 @@ struct sit9531x_out {
 	bool		state_stale;
 	bool		routed;
 	u8		pll_idx;
+	s32		phase_adj;
 	const char	*label;
 };
 

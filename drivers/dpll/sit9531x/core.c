@@ -1641,7 +1641,17 @@ int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
 
 	sitdev->out[out_idx].freq = div64_u64(fvco, divo);
 
-	return 0;
+	/*
+	 * The programmed reset delay counts VCO cycles against the output
+	 * period in force when it was written, so a rate change silently
+	 * re-times a previously requested phase adjust.  Re-encode the
+	 * cached picosecond request against the new rate.
+	 */
+	if (sitdev->out[out_idx].phase_adj)
+		rc = sit9531x_output_phase_adjust_set(sitdev, out_idx,
+						      sitdev->out[out_idx].phase_adj);
+
+	return rc;
 }
 
 /*
@@ -1730,6 +1740,206 @@ int sit9531x_output_freq_get(struct sit9531x_dev *sitdev, u8 out_idx,
  * adjustment (advance) is wrapped to (T_out - |phase|) modulo one
  * output period, which is identical for a periodic signal.
  */
+
+int sit9531x_output_phase_adjust_set(struct sit9531x_dev *sitdev,
+				     u8 out_idx, s32 phase_ps)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	u64 abs_ps, fvco, coarse, coarse_ps, rem_ps, t_out_ps;
+	s64 phase_norm_ps = 0;
+	u8 page, base, prog6_val, fine = 0;
+	u8 old_bytes[5], new_bytes[5], i;
+	u8 pll_idx, slot;
+	u64 freq;
+	int rc, ret, rb_rc;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (out_idx >= info->num_outputs)
+		return -EINVAL;
+
+	pll_idx = sitdev->out[out_idx].pll_idx;
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	freq = sitdev->out[out_idx].freq;
+	if (!freq) {
+		/*
+		 * The cache is only seeded by a DT frequency list or an
+		 * earlier get/set; a board without supported-frequencies-hz
+		 * would otherwise get -EINVAL on every phase request forever.
+		 * Read the effective rate back from the divider chain.
+		 */
+		rc = sit9531x_output_freq_get(sitdev, out_idx, &freq);
+		if (rc)
+			return rc;
+		if (!freq)
+			return -EINVAL;
+	}
+
+	rc = sit9531x_get_fvco(sitdev, pll_idx, &fvco);
+	if (rc)
+		return rc == -ENODATA ? -ENODEV : rc;
+
+	t_out_ps = div64_u64(1000000000000ULL, freq);
+	if (!t_out_ps)
+		return -EINVAL;
+
+	/*
+	 * Convert to unsigned absolute delay.  Both signs are folded modulo one
+	 * period: positive delays wrap naturally, negative delays are rendered as
+	 * T_out - |phase|.
+	 */
+	if (phase_ps == 0) {
+		abs_ps = 0;
+	} else if (phase_ps > 0) {
+		abs_ps = (u64)phase_ps;
+		div64_u64_rem(abs_ps, t_out_ps, &abs_ps);
+		phase_norm_ps = abs_ps;
+	} else {
+		u64 advance = (u64)(-(s64)phase_ps);
+
+		/*
+		 * div64_u64_rem() rather than the % operator: a 64-bit
+		 * modulo has no compiler helper on 32-bit targets and
+		 * leaves the module with an undefined __umoddi3.
+		 */
+		div64_u64_rem(advance, t_out_ps, &advance);
+		phase_norm_ps = -(s64)advance;
+		abs_ps = (advance == 0) ? 0 : (t_out_ps - advance);
+	}
+
+	/*
+	 * coarse_cycles = abs_ps * Fvco / 1e12 ps/s.
+	 * mul_u64_u64_div_u64() avoids overflow when abs_ps approaches
+	 * one second of 1 PPS wrap-around.
+	 */
+	coarse = mul_u64_u64_div_u64(abs_ps, fvco, 1000000000000ULL);
+	if (coarse >= (1ULL << SIT9531X_OUT_PRG_COARSE_BITS))
+		return -ERANGE;
+
+	/* Fine delay = round((abs_ps - coarse * vco_period_ps) / 30 ps) */
+	coarse_ps = mul_u64_u64_div_u64(coarse, 1000000000000ULL, fvco);
+	rem_ps = (abs_ps > coarse_ps) ? (abs_ps - coarse_ps) : 0;
+	if (rem_ps) {
+		u64 steps;
+
+		steps = div64_u64(rem_ps + SIT9531X_OUT_PRG_FINE_STEP_PS / 2,
+				  SIT9531X_OUT_PRG_FINE_STEP_PS);
+		if (steps > SIT9531X_OUT_PRG_FINE_MAX)
+			steps = SIT9531X_OUT_PRG_FINE_MAX;
+		fine = (u8)steps;
+	}
+
+	/*
+	 * Map logical output index to the chip's physical output slot.
+	 * On SiT95317 the eight logical outputs land on chip slots
+	 * {0, 3, 4, 5, 7, 8, 9, 11}; on SiT95316 the map is identity.
+	 * Page/base must address the slot, not the logical index.
+	 */
+	slot = info->clkout_map[out_idx];
+	page = (slot > SIT9531X_PAGE_OUTSYS0_SLOT_MAX) ?
+	       SIT9531X_PAGE_OUTSYS1 : SIT9531X_PAGE_OUTSYS0;
+	base = SIT9531X_OUT_PRG_DELAY_BASE +
+	       SIT9531X_OUT_PRG_SLOT_STRIDE * (slot % 6);
+
+	/*
+	 * The PRG_RST_DELAY bytes live in the output system, so the writes
+	 * only take effect when made inside the PRG_CMD programming state and
+	 * committed to the NVM shadow, exactly like sit9531x_output_freq_set().
+	 */
+	rc = sit9531x_prg_enter(sitdev);
+	if (rc)
+		return rc;
+
+	for (i = 0; i < ARRAY_SIZE(old_bytes); i++) {
+		rc = sit9531x_read_u8(sitdev, SIT9531X_REG(page, base + i),
+				      &old_bytes[i]);
+		if (rc)
+			goto commit;
+	}
+
+	/* PROG6 RMW: preserve OPSTG_VCASC_BUMP in [7:5] */
+	prog6_val = old_bytes[0] & SIT9531X_OUT_PRG_OPSTG_MASK;
+	prog6_val |= (fine << SIT9531X_OUT_PRG_FINE_SHIFT) &
+		     SIT9531X_OUT_PRG_FINE_MASK;
+	prog6_val |= (u8)((coarse >> 32) & SIT9531X_OUT_PRG_COARSE_HI_MASK);
+
+	new_bytes[0] = prog6_val;
+	new_bytes[1] = (u8)((coarse >> 24) & 0xFF);
+	new_bytes[2] = (u8)((coarse >> 16) & 0xFF);
+	new_bytes[3] = (u8)((coarse >> 8) & 0xFF);
+	new_bytes[4] = (u8)(coarse & 0xFF);
+
+	for (i = 0; i < ARRAY_SIZE(new_bytes); i++) {
+		rc = sit9531x_write_u8(sitdev,
+				       SIT9531X_REG(page, base + i),
+				       new_bytes[i]);
+		if (rc)
+			goto rollback;
+	}
+
+	goto commit;
+
+rollback:
+	rb_rc = 0;
+	for (i = 0; i < ARRAY_SIZE(old_bytes); i++) {
+		ret = sit9531x_write_u8(sitdev,
+					SIT9531X_REG(page, base + i),
+					old_bytes[i]);
+		if (ret && !rb_rc)
+			rb_rc = ret;
+	}
+	if (rb_rc) {
+		dev_err(sitdev->dev,
+			"out%u: phase-adjust rollback failed (%d), the delay registers are part old and part new\n",
+			out_idx, rb_rc);
+		if (!rc)
+			rc = rb_rc;
+	}
+
+commit:
+	/*
+	 * Always leave the PRG_CMD state via prg_commit(), even on a
+	 * mid-sequence write failure, so the output loops are re-locked rather
+	 * than stranded unlocked; keep the first error.
+	 */
+	ret = sit9531x_prg_commit(sitdev);
+	if (ret && !rc)
+		rc = ret;
+	if (rc)
+		return rc;
+
+	/*
+	 * Restart the output divider phase so the freshly programmed delay is
+	 * applied against a known edge instead of the divider's arbitrary
+	 * running phase.
+	 */
+	rc = sit9531x_output_phase_flush(sitdev, pll_idx);
+	if (rc)
+		return rc;
+
+	/*
+	 * Cache what the registers realize, and only once every step has
+	 * succeeded: the core drops a repeated request with the same value,
+	 * so a cache updated by a failed call would make the retry a no-op.
+	 *
+	 * Quantizing to whole VCO cycles plus 30 ps steps can land a few
+	 * picoseconds past the end of the period, which would wrap the
+	 * subtraction below; one period is the most a delay can be.
+	 */
+	coarse_ps = mul_u64_u64_div_u64(coarse, 1000000000000ULL, fvco);
+	abs_ps = coarse_ps + (u64)fine * SIT9531X_OUT_PRG_FINE_STEP_PS;
+	if (abs_ps > t_out_ps)
+		abs_ps = t_out_ps;
+	if (phase_norm_ps < 0)
+		sitdev->out[out_idx].phase_adj =
+			abs_ps ? -(s32)(t_out_ps - abs_ps) : 0;
+	else
+		sitdev->out[out_idx].phase_adj = (s32)abs_ps;
+
+	return 0;
+}
 
 /*
  * sit9531x_clear_notifications - clear all notification registers
