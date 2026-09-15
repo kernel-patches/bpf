@@ -139,6 +139,7 @@ mt7531_create_sgmii(struct mt7530_priv *priv)
 }
 
 static const struct of_device_id mt7530_of_match[] = {
+	{ .compatible = "econet,en751221", .data = &mt753x_table[ID_EN751221_EXT], },
 	{ .compatible = "mediatek,mt7621", .data = &mt753x_table[ID_MT7621], },
 	{ .compatible = "mediatek,mt7530", .data = &mt753x_table[ID_MT7530], },
 	{ .compatible = "mediatek,mt7531", .data = &mt753x_table[ID_MT7531], },
