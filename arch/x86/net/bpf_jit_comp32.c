@@ -1821,6 +1821,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 		const u8 *src = bpf2ia32[insn->src_reg];
 		const u8 *r0 = bpf2ia32[BPF_REG_0];
 		s64 jmp_offset;
+		s32 ja_off;
 		u8 jmp_cond;
 		int ilen;
 		u8 *func;
@@ -2522,7 +2523,9 @@ emit_cond_jmp_signed:	/* Check the condition for low 32-bit comparison */
 			break;
 		}
 		case BPF_JMP | BPF_JA:
-			if (insn->off == -1)
+		case BPF_JMP32 | BPF_JA:
+			ja_off = BPF_CLASS(code) == BPF_JMP32 ? imm32 : insn->off;
+			if (ja_off == -1)
 				/* -1 jmp instructions will always jump
 				 * backwards two bytes. Explicitly handling
 				 * this case avoids wasting too many passes
@@ -2530,8 +2533,10 @@ emit_cond_jmp_signed:	/* Check the condition for low 32-bit comparison */
 				 * dead code.
 				 */
 				jmp_offset = -2;
+			else if (i + ja_off == -1)
+				jmp_offset = PROLOGUE_SIZE - addrs[i];
 			else
-				jmp_offset = addrs[i + insn->off] - addrs[i];
+				jmp_offset = addrs[i + ja_off] - addrs[i];
 
 			if (!jmp_offset)
 				/* Optimize out nop jumps */
