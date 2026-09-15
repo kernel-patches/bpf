@@ -397,6 +397,84 @@ static int sit9531x_output_forced_hiz(struct sit9531x_dev *sitdev,
 }
 
 /*
+ * Enter the output-system programming state: unlock the debug
+ * registers on Page 3 and issue the PRG_CMD state command.  Register
+ * writes that reconfigure the output system only take effect when
+ * they are made inside this state.
+ */
+static int sit9531x_prg_enter(struct sit9531x_dev *sitdev)
+{
+	int rc;
+
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_OUTSYS_DEBUG,
+			       SIT9531X_DEBUG_UNLOCK_VAL);
+	if (rc)
+		return rc;
+
+	return sit9531x_write_u8(sitdev, SIT9531X_REG_PRG_DIR_GEN,
+				 SIT9531X_PRG_CMD_STATE);
+}
+
+/* Attempts to re-lock the output loops before reporting them open. */
+#define SIT9531X_LOOP_LOCK_TRIES	3
+
+/*
+ * Commit a programming sequence started by sit9531x_prg_enter():
+ * update the NVM shadow and re-lock the loops.  The sleep gives the
+ * hardware its required settling time after the loop-lock command;
+ * it is intentional despite the caller holding multiop_lock, as the
+ * whole NVM + lock sequence must be atomic.
+ */
+static int sit9531x_prg_commit(struct sit9531x_dev *sitdev)
+{
+	int rc, rc2 = 0, rc3;
+	u8 attempt;
+
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_PRG_DIR_GEN,
+			       SIT9531X_UPDATE_NVM);
+
+	/*
+	 * Issue the loop lock even if the update failed.  Callers reach
+	 * this function through a goto so that the chip never stays in
+	 * the PRG_CMD state with its loops open; returning early here
+	 * would defeat that and leave the outputs unlocked until the
+	 * next successful commit.
+	 */
+	/*
+	 * Re-lock the loops.  Leaving them open is worse than any other
+	 * failure this function can report, and nothing else closes them,
+	 * so retry as the priority table does with its own latch.
+	 */
+	for (attempt = 0; attempt < SIT9531X_LOOP_LOCK_TRIES; attempt++) {
+		rc2 = sit9531x_write_u8(sitdev, SIT9531X_REG_PRG_DIR_GEN,
+					SIT9531X_LOOP_LOCK);
+		if (!rc2)
+			break;
+		usleep_range(1000, 2000);
+	}
+	if (rc2)
+		dev_err(sitdev->dev,
+			"output loops left unlocked after programming: %d\n",
+			rc2);
+
+	msleep(100);
+
+	/*
+	 * Put the output-system debug block back the way the device powers
+	 * up.  Its key register unlocks every debug register while it holds
+	 * the unlock value, and each programming sequence writes that value
+	 * itself, so nothing needs it left unlocked in between.
+	 */
+	rc3 = sit9531x_write_u8(sitdev, SIT9531X_REG_OUTSYS_DEBUG,
+				SIT9531X_DEBUG_LOCK_VAL);
+
+	if (rc)
+		return rc;
+
+	return rc2 ? rc2 : rc3;
+}
+
+/*
  * Input priority selection
  *
  * The SiT9531x has an 11-slot priority table per PLL on Page 1.  Each
@@ -908,6 +986,11 @@ int sit9531x_input_prio_add(struct sit9531x_dev *sitdev, u8 pll_idx,
 	return sit9531x_prio_table_commit(sitdev, pll_idx, srcs);
 }
 
+/* Per-slot DIVO base register offsets (6 slots per page) */
+static const u8 clkout_odr_divn_base[] = {
+	0x14, 0x24, 0x34, 0x44, 0x54, 0x64
+};
+
 /* XO doubler register */
 #define SIT9531X_REG_XO2_GENERIC		SIT9531X_REG(0x00, 0x2D)
 #define SIT9531X_XO_DOUBLER_ENB_BIT		7   /* inverted: 0 = enabled */
@@ -920,6 +1003,510 @@ int sit9531x_input_prio_add(struct sit9531x_dev *sitdev, u8 pll_idx,
 
 /* The output divider is a 34-bit field */
 #define SIT9531X_DIVO_MAX			GENMASK_ULL(33, 0)
+
+/*
+ * sit9531x_is_xo_doubler_enabled - check if Fref doubler is active
+ *
+ * Register 0x2D bit 7 is active-low: 0 = doubler enabled, 1 = disabled.
+ *
+ * Return: 1 if enabled, 0 if disabled, <0 on error
+ */
+static int sit9531x_is_xo_doubler_enabled(struct sit9531x_dev *sitdev)
+{
+	u8 val;
+	int rc;
+
+	rc = sit9531x_read_u8(sitdev, SIT9531X_REG_XO2_GENERIC, &val);
+	if (rc)
+		return rc;
+
+	return (~val >> SIT9531X_XO_DOUBLER_ENB_BIT) & 1u;
+}
+
+/*
+ * DIVN as a fixed-point value: int_part plus fracn/fracd, carried with
+ * SIT9531X_DIVN_SCALE steps per unit.  The scale keeps a whole DIVN
+ * well inside s64 while resolving far below the parts-per-trillion the
+ * frequency offset is reported in.
+ */
+static s64 sit9531x_divn_fixed(u32 int_part, s64 fracn, u64 fracd)
+{
+	s64 whole = (s64)int_part * SIT9531X_DIVN_SCALE;
+	u64 frac;
+
+	if (!fracd)
+		return whole;
+
+	frac = mul_u64_u64_div_u64(abs(fracn), SIT9531X_DIVN_SCALE, fracd);
+
+	return fracn < 0 ? whole - (s64)frac : whole + (s64)frac;
+}
+
+/*
+ * sit9531x_divn_static - read the configured DIVN of a PLL
+ * @sitdev:	device pointer
+ * @pll_idx:	PLL index (0-3)
+ * @divn:	result, fixed point as per sit9531x_divn_fixed()
+ *
+ * Reads PLL page regs 0x30 (integer part), 0x32-0x35 (numerator) and
+ * 0x38-0x3B (denominator).  The numerator is a two's complement 32-bit
+ * value, so DIVN can sit below the integer part, and the denominator
+ * register holds the divisor minus one.
+ *
+ * Return: 0 on success, <0 on error
+ */
+static int sit9531x_divn_static(struct sit9531x_dev *sitdev, u8 pll_idx,
+				s64 *divn)
+{
+	u32 int_part, fracn_raw = 0, fracd_raw = 0;
+	int rc, i;
+	u8 v;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DIVN_INT, &v);
+	if (rc)
+		return rc;
+	int_part = v;
+
+	for (i = 3; i >= 0; i--) {
+		rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+					  SIT9531X_PLL_REG_DIVN_NUM + i, &v);
+		if (rc)
+			return rc;
+		fracn_raw = (fracn_raw << 8) | v;
+	}
+
+	for (i = 3; i >= 0; i--) {
+		rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+					  SIT9531X_PLL_REG_DIVN_DEN + i, &v);
+		if (rc)
+			return rc;
+		fracd_raw = (fracd_raw << 8) | v;
+	}
+
+	*divn = sit9531x_divn_fixed(int_part, (s32)fracn_raw,
+				    (u64)fracd_raw + 1);
+
+	return 0;
+}
+
+/*
+ * sit9531x_get_fvco - read VCO frequency from chip's DIVN registers
+ *
+ * Fvco = Fref * DIVN, where DIVN comes from sit9531x_divn_static() and
+ * Fref = xtal_freq << doubler.  DIVN is the steady-state Fvco/Fref
+ * target programmed by the NVM blob and is authoritative in both
+ * free-run and sync modes.
+ *
+ * Return: 0 with *fvco set on success, -ENODATA when DIVN is not
+ * programmed (dormant PLL), or the register access error.  A bus
+ * failure is never folded into the -ENODATA case, so callers can fail
+ * a request instead of acting on a guessed rate.
+ */
+static int sit9531x_get_fvco(struct sit9531x_dev *sitdev, u8 pll_idx,
+			     u64 *fvco)
+{
+	int doubler, rc;
+	s64 divn;
+	u64 fref;
+
+	/*
+	 * DT board-config override: some configs (e.g. an INTSYNC PLL)
+	 * run a VCO that Fref*DIVN does not reproduce.  When the board
+	 * supplies the measured VCO, use it verbatim.
+	 */
+	if (pll_idx < SIT9531X_NUM_PLLS && sitdev->pll_fvco[pll_idx]) {
+		*fvco = sitdev->pll_fvco[pll_idx];
+		return 0;
+	}
+
+	rc = sit9531x_divn_static(sitdev, pll_idx, &divn);
+	if (rc)
+		return rc;
+	if (divn <= 0)
+		return -ENODATA;
+
+	doubler = sit9531x_is_xo_doubler_enabled(sitdev);
+	if (doubler < 0)
+		return doubler;
+
+	fref = (u64)sitdev->xtal_freq << doubler;
+
+	*fvco = mul_u64_u64_div_u64(fref, (u64)divn, SIT9531X_DIVN_SCALE);
+
+	/*
+	 * A DIVN of less than one whole cycle passes the check above and
+	 * still truncates the product to zero.  Callers divide by this, so
+	 * report the unprogrammed divider it describes rather than handing
+	 * back a zero denominator.
+	 */
+	if (!*fvco)
+		return -ENODATA;
+
+	return 0;
+}
+
+/*
+ * sit9531x_output_phase_flush - flush the output phase of a PLL
+ *
+ * Fires the chip's on-demand phase-flush (PHFL) so every output divider
+ * of @pll_idx restarts aligned to the PLL phase.  Without it a rewritten
+ * DIVO keeps counting from an arbitrary point and the output edge lands
+ * with a persistent offset against the tracked reference (only a power
+ * cycle realigned it).
+ *
+ * The sequence mirrors the documented procedure: arm the on-demand PHFL and
+ * latch it with the PLL-page small-change update, then select the
+ * in-register phase trigger on Page 0 and pulse it.  The Page 0 trigger
+ * register is touched read-modify-write so the unrelated OEb bits are
+ * preserved.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+static int sit9531x_output_phase_flush(struct sit9531x_dev *sitdev, u8 pll_idx)
+{
+	u8 ctrl, orig;
+	int rc, ret;
+
+	/* Arm the on-demand phase-flush on the PLL page. */
+	rc = sit9531x_update_pll_u8(sitdev, pll_idx,
+				    SIT9531X_PLL_REG_PHFL_CTRL,
+				    SIT9531X_PLL_PHFL_ON_DEMAND_EN,
+				    SIT9531X_PLL_PHFL_ON_DEMAND_EN);
+	if (rc)
+		return rc;
+
+	/* Latch it with the PLL small-change update. */
+	rc = sit9531x_update_pll_u8(sitdev, pll_idx,
+				    SIT9531X_PLL_REG_SMALL_UPDATE,
+				    SIT9531X_SMALL_UPDATE_CMD,
+				    SIT9531X_SMALL_UPDATE_CMD);
+	if (rc)
+		goto disarm;
+
+	/*
+	 * Select the in-register phase trigger, preserving the OEb bits.
+	 * Remember the original register value (with the trigger de-asserted)
+	 * so the trigger-source select can be restored once the pulse has
+	 * fired.
+	 */
+	rc = sit9531x_read_u8(sitdev, SIT9531X_REG_GPIO_FUNC_CTRL1, &ctrl);
+	if (rc)
+		goto disarm;
+
+	orig = ctrl & ~SIT9531X_DIVO_PHASE_TRIG;
+	ctrl = orig | SIT9531X_DIVO_PHASE_SEL_REG;
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_GPIO_FUNC_CTRL1, ctrl);
+	if (rc)
+		goto disarm;
+
+	/*
+	 * Pulse the phase trigger.  No explicit delay is needed between the
+	 * set and clear writes: each I2C transaction takes far longer than
+	 * any minimum pulse width.
+	 */
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_GPIO_FUNC_CTRL1,
+			       ctrl | SIT9531X_DIVO_PHASE_TRIG);
+
+	/*
+	 * Restore the original trigger-source select.  The pulse above has
+	 * already latched the flush, so a one-shot flush must not leave the
+	 * phase trigger permanently pinned to the in-register source.  This
+	 * runs even when the pulse write failed, otherwise a failed flush
+	 * would keep a hardware trigger source hijacked; the restore error
+	 * is only surfaced when it would not mask the pulse failure.
+	 */
+	ret = sit9531x_write_u8(sitdev, SIT9531X_REG_GPIO_FUNC_CTRL1, orig);
+	if (ret && !rc)
+		rc = ret;
+
+disarm:
+	/*
+	 * Disarm the on-demand flush enable armed above.  Leaving it set
+	 * would let a later assertion of the restored trigger source
+	 * re-flush every output divider of this PLL, which is exactly the
+	 * persistent side effect the one-shot sequence must not have.
+	 */
+	ret = sit9531x_update_pll_u8(sitdev, pll_idx,
+				     SIT9531X_PLL_REG_PHFL_CTRL,
+				     SIT9531X_PLL_PHFL_ON_DEMAND_EN, 0);
+	if (!ret)
+		ret = sit9531x_update_pll_u8(sitdev, pll_idx,
+					     SIT9531X_PLL_REG_SMALL_UPDATE,
+					     SIT9531X_SMALL_UPDATE_CMD,
+					     SIT9531X_SMALL_UPDATE_CMD);
+	if (ret && !rc)
+		rc = ret;
+
+	return rc;
+}
+
+/*
+ * sit9531x_output_divo_calc - work out an output's divider and its VCO
+ *
+ * Separated from the write so a caller that programs more than the
+ * divider in one sequence can compute the value before it enters the
+ * programming state.
+ */
+static int sit9531x_output_divo_calc(struct sit9531x_dev *sitdev, u8 out_idx,
+				     u8 pll_idx, u64 frequency, u64 *fvco_out,
+				     u64 *divo_out)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	u64 fvco, divo, fvco_min, fvco_max;
+	int rc;
+
+	if (out_idx >= info->num_outputs || pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	if (!frequency)
+		return -EINVAL;
+
+	/*
+	 * The core validates the request against the supported ranges with
+	 * the value narrowed to u32 but hands the full u64 down, so a value
+	 * like U32_MAX + 1 Hz validates as 1 Hz.  Reject anything that does
+	 * not fit the narrowed width the validation actually covered.
+	 */
+	if (frequency > U32_MAX)
+		return -EINVAL;
+
+	/* Determine VCO frequency band limits */
+	if (pll_idx == 1 || pll_idx == 3) {
+		/* PLLB, PLLD: high band */
+		fvco_min = SIT9531X_FVCO_HIGHBAND_MIN;
+		fvco_max = SIT9531X_FVCO_HIGHBAND_MAX;
+	} else {
+		/* PLLA, PLLC: low band */
+		fvco_min = SIT9531X_FVCO_LOWBAND_MIN;
+		fvco_max = SIT9531X_FVCO_LOWBAND_MAX;
+	}
+
+	/*
+	 * Read current VCO frequency.  When the board supplies an explicit
+	 * Fvco via "sitime,pll-fvco" the override is the source of truth
+	 * (e.g. a chip variant that runs out of the documented band, or a
+	 * mode like INTSYNC where Fref*DIVN does not reproduce the VCO), so
+	 * skip the band clamp in that case.  A rate read from the device
+	 * is clamped rather than refused: the bands bound what the VCO can
+	 * physically run at, the readback is the only estimate available,
+	 * and refusing would make every output unprogrammable on a part
+	 * whose DIVN registers do not describe the running VCO.  A DT
+	 * override is refused instead, at parse time, because there the
+	 * board is asserting a value it should know.  A VCO that cannot be read fails
+	 * the request: programming a divider from a guessed rate would put
+	 * the output far from what was asked for while reporting success.
+	 */
+	rc = sit9531x_get_fvco(sitdev, pll_idx, &fvco);
+	if (rc)
+		return rc == -ENODATA ? -ENODEV : rc;
+	if (!sitdev->pll_fvco[pll_idx]) {
+		if (fvco < fvco_min)
+			fvco = fvco_min;
+		else if (fvco > fvco_max)
+			fvco = fvco_max;
+	}
+
+	divo = div64_u64(fvco, frequency);
+	if (!divo)
+		return -EINVAL;
+
+	/*
+	 * DIVO is a 34-bit field.  With a band-clamped Fvco this cannot
+	 * overflow, but a DT Fvco override is taken verbatim, so guard the
+	 * field width rather than silently truncating the divider.
+	 */
+	if (divo > SIT9531X_DIVO_MAX)
+		return -EINVAL;
+
+	dev_dbg(sitdev->dev,
+		"out%u: Fvco=%llu freq=%llu DIVO=%llu (effective %llu Hz)\n",
+		out_idx, fvco, frequency, divo, div64_u64(fvco, divo));
+
+	*fvco_out = fvco;
+	*divo_out = divo;
+
+	return 0;
+}
+
+/*
+ * sit9531x_output_divo_write - write the five DIVO bytes of an output
+ *
+ * The caller must already be in the programming state.  Bytes written
+ * before a failure are put back, so the output keeps the divider it had
+ * rather than a mixture of the two.
+ */
+static int sit9531x_output_divo_write(struct sit9531x_dev *sitdev, u8 out_idx,
+				      u64 divo)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	u8 slot, page, base_reg, divo_bytes[5], old_bytes[5], msb_old;
+	int rc, j, rb_rc;
+	u8 written = 0;
+
+	/* Map output index to physical slot */
+	slot = info->clkout_map[out_idx];
+
+	/* Determine page and per-page slot register */
+	if (slot > SIT9531X_PAGE_OUTSYS0_SLOT_MAX)
+		page = SIT9531X_PAGE_OUTSYS1;
+	else
+		page = SIT9531X_PAGE_OUTSYS0;
+	base_reg = clkout_odr_divn_base[slot % 6];
+
+	divo_bytes[0] = (divo >>  0) & 0xFF;
+	divo_bytes[1] = (divo >>  8) & 0xFF;
+	divo_bytes[2] = (divo >> 16) & 0xFF;
+	divo_bytes[3] = (divo >> 24) & 0xFF;
+	divo_bytes[4] = (divo >> 32) & 0x03;  /* only bits [1:0] */
+
+	for (j = 0; j < 5; j++) {
+		rc = sit9531x_read_u8(sitdev,
+				      SIT9531X_REG(page, base_reg - j),
+				      &old_bytes[j]);
+		if (rc)
+			return rc;
+	}
+
+	msb_old = old_bytes[4];
+	divo_bytes[4] |= msb_old & 0xFC;
+
+	for (j = 0; j < 5; j++) {
+		rc = sit9531x_write_u8(sitdev,
+				       SIT9531X_REG(page, base_reg - j),
+				       divo_bytes[j]);
+		if (rc)
+			goto rollback;
+		written++;
+	}
+
+	return 0;
+
+rollback:
+	for (j = 0; j < written; j++) {
+		rb_rc = sit9531x_write_u8(sitdev,
+					  SIT9531X_REG(page, base_reg - j),
+					  old_bytes[j]);
+		if (rb_rc) {
+			dev_err(sitdev->dev,
+				"out%u: DIVO rollback failed (%d), the divider is part old and part new\n",
+				out_idx, rb_rc);
+			if (!rc)
+				rc = rb_rc;
+		}
+	}
+
+	return rc;
+}
+
+int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
+			     u8 pll_idx, u64 frequency)
+{
+	u64 fvco, divo;
+	int rc, ret;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	rc = sit9531x_output_divo_calc(sitdev, out_idx, pll_idx, frequency,
+				       &fvco, &divo);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_prg_enter(sitdev);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_output_divo_write(sitdev, out_idx, divo);
+	/*
+	 * Step 4: NVM update + loop lock.  Always run prg_commit() so the chip
+	 * leaves the PRG_CMD state with the output loops re-locked, even when a
+	 * write above failed; keep the first error to return.  It also carries
+	 * the required post-lock settling sleep.
+	 */
+	ret = sit9531x_prg_commit(sitdev);
+	if (ret && !rc)
+		rc = ret;
+	if (rc)
+		return rc;
+
+	/*
+	 * Step 5: flush the PLL's output phase so the new DIVO starts
+	 * aligned instead of keeping the arbitrary phase the divider
+	 * happened to be at.
+	 */
+	rc = sit9531x_output_phase_flush(sitdev, pll_idx);
+	if (rc)
+		return rc;
+
+	sitdev->out[out_idx].freq = div64_u64(fvco, divo);
+
+	return 0;
+}
+
+/*
+ * sit9531x_output_freq_get - read output clock frequency from hardware
+ * @out_idx:	output index (0-N for this chip variant)
+ * @frequency:	output frequency in Hz
+ *
+ * Reads the 34-bit DIVO divider back from the output system registers
+ * and computes the live output frequency as Fvco / DIVO.  This stays
+ * correct even when the divider was reprogrammed behind the driver's
+ * back (e.g. by a direct-I2C userspace tool), where the cached value
+ * would be stale.
+ *
+ * The cached output state is refreshed with the computed value.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ *
+ * Return: 0 on success, -ENODEV when the output divider or VCO rate
+ *	   is not resolvable, <0 on register access error
+ */
+int sit9531x_output_freq_get(struct sit9531x_dev *sitdev, u8 out_idx,
+			     u64 *frequency)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	u8 slot, page, base_reg, pll_idx, v;
+	u64 fvco, divo = 0;
+	int rc, j;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (out_idx >= info->num_outputs)
+		return -EINVAL;
+
+	pll_idx = sitdev->out[out_idx].pll_idx;
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -ENODEV;
+
+	rc = sit9531x_get_fvco(sitdev, pll_idx, &fvco);
+	if (rc)
+		return rc == -ENODATA ? -ENODEV : rc;
+
+	slot = info->clkout_map[out_idx];
+	if (slot > SIT9531X_PAGE_OUTSYS0_SLOT_MAX)
+		page = SIT9531X_PAGE_OUTSYS1;
+	else
+		page = SIT9531X_PAGE_OUTSYS0;
+	base_reg = clkout_odr_divn_base[slot % 6];
+
+	for (j = 4; j >= 0; j--) {
+		rc = sit9531x_read_u8(sitdev,
+				      SIT9531X_REG(page, base_reg - j), &v);
+		if (rc)
+			return rc;
+		if (j == 4)
+			v &= 0x03;
+		divo = (divo << 8) | v;
+	}
+
+	if (!divo)
+		return -ENODEV;
+
+	*frequency = div64_u64(fvco, divo);
+	sitdev->out[out_idx].freq = *frequency;
+
+	return 0;
+}
 
 /*
  * Phase adjust (PRG_RST_DELAY register-based).
