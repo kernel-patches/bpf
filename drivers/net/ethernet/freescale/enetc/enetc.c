@@ -1838,15 +1838,23 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 	prefetchw(ENETC_TXBD(*tx_ring, tx_ring->next_to_use));
 
 	for (k = 0; k < num_frames; k++) {
-		if (xdp_frame_has_frags(frames[k])) {
-			shinfo = xdp_get_shared_info_from_frame(frames[k]);
+		struct xdp_frame *xdpf = frames[k];
+
+		if (xdp_frame_has_frags(xdpf)) {
+			shinfo = xdp_get_shared_info_from_frame(xdpf);
 			if (unlikely((shinfo->nr_frags + 1) > ENETC_MAX_SKB_FRAGS))
 				break;
 		}
 
+		if (unlikely(xdp_frame_pad(xdpf) ||
+			     xdpf->len < ENETC_MIN_BUFF_SIZE)) {
+			tx_ring->stats.xdp_tx_drops++;
+			break;
+		}
+
 		xdp_tx_bd_cnt = enetc_xdp_frame_to_xdp_tx_swbd(tx_ring,
 							       xdp_redirect_arr,
-							       frames[k]);
+							       xdpf);
 		if (unlikely(xdp_tx_bd_cnt < 0))
 			break;
 

@@ -505,6 +505,29 @@ out:
 	return len;
 }
 
+static inline int xdp_frame_pad(struct xdp_frame *xdpf)
+{
+	unsigned int total_len, pad;
+	void *sinfo;
+
+	total_len = xdp_get_frame_len(xdpf);
+	if (likely(total_len >= ETH_ZLEN))
+		return 0;
+
+	if (unlikely(xdp_frame_has_frags(xdpf)))
+		return -EOPNOTSUPP;
+
+	pad = ETH_ZLEN - total_len;
+	sinfo = xdp_get_shared_info_from_frame(xdpf);
+	if (unlikely(xdpf->data + xdpf->len + pad > sinfo))
+		return -ENOMEM;
+
+	memset(xdpf->data + xdpf->len, 0, pad);
+	xdpf->len += pad;
+
+	return 0;
+}
+
 int __xdp_rxq_info_reg(struct xdp_rxq_info *xdp_rxq,
 		       struct net_device *dev, u32 queue_index,
 		       unsigned int napi_id, u32 frag_size);
