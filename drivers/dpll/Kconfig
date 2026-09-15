@@ -23,6 +23,8 @@ config DPLL_REFCNT_TRACKER
 
 	  If unsure, say N.
 
+source "drivers/dpll/sit9531x/Kconfig"
+
 source "drivers/dpll/zl3073x/Kconfig"
 
 endmenu
