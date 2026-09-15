@@ -346,11 +346,6 @@ fbnic_set_ringparam(struct net_device *netdev, struct ethtool_ringparam *ring,
 	struct fbnic_net *clone;
 	int err;
 
-	ring->rx_pending	= roundup_pow_of_two(ring->rx_pending);
-	ring->rx_mini_pending	= roundup_pow_of_two(ring->rx_mini_pending);
-	ring->rx_jumbo_pending	= roundup_pow_of_two(ring->rx_jumbo_pending);
-	ring->tx_pending	= roundup_pow_of_two(ring->tx_pending);
-
 	/* These are absolute minimums allowing the device and driver to operate
 	 * but not necessarily guarantee reasonable performance. Settings below
 	 * Rx queue size of 128 and BDQs smaller than 64 are likely suboptimal
@@ -379,6 +374,11 @@ fbnic_set_ringparam(struct net_device *netdev, struct ethtool_ringparam *ring,
 				   "Use higher HDS threshold or multi-buf capable program");
 		return -EINVAL;
 	}
+
+	ring->rx_pending	= roundup_pow_of_two(ring->rx_pending);
+	ring->rx_mini_pending	= roundup_pow_of_two(ring->rx_mini_pending);
+	ring->rx_jumbo_pending	= roundup_pow_of_two(ring->rx_jumbo_pending);
+	ring->tx_pending	= roundup_pow_of_two(ring->tx_pending);
 
 	if (!netif_running(netdev)) {
 		fbnic_set_rings(fbn, ring, kernel_ring);
