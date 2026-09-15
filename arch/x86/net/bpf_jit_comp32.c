@@ -1214,6 +1214,89 @@ static inline void emit_ia32_mul_i64(const u8 dst[], const u32 val,
 	*pprog = prog;
 }
 
+static void emit_ia32_ldx(const struct bpf_insn *insn, u8 **pprog,
+			  const struct bpf_prog_aux *aux)
+{
+	const u8 *dst = bpf2ia32[insn->dst_reg];
+	const u8 *src = bpf2ia32[insn->src_reg];
+	bool dstk = insn->dst_reg != BPF_REG_AX;
+	bool sstk = insn->src_reg != BPF_REG_AX;
+	u8 *prog = *pprog;
+	int cnt = 0;
+
+	/* Stage the address in EAX; dst may alias src. */
+	if (sstk)
+		/* mov eax,dword ptr [ebp+off] */
+		EMIT3(0x8B, add_2reg(0x40, IA32_EBP, IA32_EAX),
+		      STACK_VAR(src_lo));
+	else
+		/* mov eax,src_lo */
+		EMIT2(0x8B, add_2reg(0xC0, src_lo, IA32_EAX));
+
+	switch (BPF_SIZE(insn->code)) {
+	case BPF_B:
+		/* movzx edx,byte ptr [eax+off] */
+		EMIT2(0x0F, 0xB6);
+		break;
+	case BPF_H:
+		/* movzx edx,word ptr [eax+off] */
+		EMIT2(0x0F, 0xB7);
+		break;
+	case BPF_W:
+	case BPF_DW:
+		/* mov edx,dword ptr [eax+off] */
+		EMIT1(0x8B);
+		break;
+	}
+
+	if (is_imm8(insn->off))
+		EMIT2(add_2reg(0x40, IA32_EAX, IA32_EDX), insn->off);
+	else
+		EMIT1_off32(add_2reg(0x80, IA32_EAX, IA32_EDX), insn->off);
+
+	if (dstk)
+		/* mov dword ptr [ebp+off],edx */
+		EMIT3(0x89, add_2reg(0x40, IA32_EBP, IA32_EDX),
+		      STACK_VAR(dst_lo));
+	else
+		/* mov dst_lo,edx */
+		EMIT2(0x89, add_2reg(0xC0, dst_lo, IA32_EDX));
+
+	switch (BPF_SIZE(insn->code)) {
+	case BPF_B:
+	case BPF_H:
+	case BPF_W:
+		if (aux->verifier_zext)
+			break;
+		if (dstk) {
+			/* mov dword ptr [ebp+off],0 */
+			EMIT3(0xC7, add_1reg(0x40, IA32_EBP),
+			      STACK_VAR(dst_hi));
+			EMIT(0x0, 4);
+		} else {
+			/* xor dst_hi,dst_hi */
+			EMIT2(0x33, add_2reg(0xC0, dst_hi, dst_hi));
+		}
+		break;
+	case BPF_DW:
+		/* mov edx,dword ptr [eax+off+4] */
+		EMIT2_off32(0x8B, add_2reg(0x80, IA32_EAX, IA32_EDX),
+			    insn->off + 4);
+		if (dstk)
+			/* mov dword ptr [ebp+off],edx */
+			EMIT3(0x89, add_2reg(0x40, IA32_EBP, IA32_EDX),
+			      STACK_VAR(dst_hi));
+		else
+			/* mov dst_hi,edx */
+			EMIT2(0x89, add_2reg(0xC0, dst_hi, IA32_EDX));
+		break;
+	default:
+		break;
+	}
+
+	*pprog = prog;
+}
+
 static int bpf_size_to_x86_bytes(int bpf_size)
 {
 	if (bpf_size == BPF_W)
@@ -2065,70 +2148,7 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 		case BPF_LDX | BPF_MEM | BPF_H:
 		case BPF_LDX | BPF_MEM | BPF_W:
 		case BPF_LDX | BPF_MEM | BPF_DW:
-			if (sstk)
-				/* mov eax,dword ptr [ebp+off] */
-				EMIT3(0x8B, add_2reg(0x40, IA32_EBP, IA32_EAX),
-				      STACK_VAR(src_lo));
-			else
-				/* mov eax,dword ptr [ebp+off] */
-				EMIT2(0x8B, add_2reg(0xC0, src_lo, IA32_EAX));
-
-			switch (BPF_SIZE(code)) {
-			case BPF_B:
-				EMIT2(0x0F, 0xB6); break;
-			case BPF_H:
-				EMIT2(0x0F, 0xB7); break;
-			case BPF_W:
-			case BPF_DW:
-				EMIT(0x8B, 1); break;
-			}
-
-			if (is_imm8(insn->off))
-				EMIT2(add_2reg(0x40, IA32_EAX, IA32_EDX),
-				      insn->off);
-			else
-				EMIT1_off32(add_2reg(0x80, IA32_EAX, IA32_EDX),
-					    insn->off);
-
-			if (dstk)
-				/* mov dword ptr [ebp+off],edx */
-				EMIT3(0x89, add_2reg(0x40, IA32_EBP, IA32_EDX),
-				      STACK_VAR(dst_lo));
-			else
-				/* mov dst_lo,edx */
-				EMIT2(0x89, add_2reg(0xC0, dst_lo, IA32_EDX));
-			switch (BPF_SIZE(code)) {
-			case BPF_B:
-			case BPF_H:
-			case BPF_W:
-				if (bpf_prog->aux->verifier_zext)
-					break;
-				if (dstk) {
-					EMIT3(0xC7, add_1reg(0x40, IA32_EBP),
-					      STACK_VAR(dst_hi));
-					EMIT(0x0, 4);
-				} else {
-					/* xor dst_hi,dst_hi */
-					EMIT2(0x33,
-					      add_2reg(0xC0, dst_hi, dst_hi));
-				}
-				break;
-			case BPF_DW:
-				EMIT2_off32(0x8B,
-					    add_2reg(0x80, IA32_EAX, IA32_EDX),
-					    insn->off + 4);
-				if (dstk)
-					EMIT3(0x89,
-					      add_2reg(0x40, IA32_EBP,
-						       IA32_EDX),
-					      STACK_VAR(dst_hi));
-				else
-					EMIT2(0x89,
-					      add_2reg(0xC0, dst_hi, IA32_EDX));
-				break;
-			default:
-				break;
-			}
+			emit_ia32_ldx(insn, &prog, bpf_prog->aux);
 			break;
 		/* call */
 		case BPF_JMP | BPF_CALL:
