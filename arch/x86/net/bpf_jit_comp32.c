@@ -2037,6 +2037,8 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 			break;
 		/* dst = htobe(dst) */
 		case BPF_ALU | BPF_END | BPF_FROM_BE:
+		/* dst = bswap(dst) */
+		case BPF_ALU64 | BPF_END | BPF_FROM_LE:
 			emit_ia32_to_be_r64(dst, imm32, dstk, &prog,
 					    bpf_prog->aux);
 			break;
