@@ -970,6 +970,9 @@ static inline int rvu_get_pf(struct pci_dev *pdev, u16 pcifunc)
 /* CGX APIs */
 static inline bool is_pf_cgxmapped(struct rvu *rvu, u8 pf)
 {
+	if (!rvu->pf2cgxlmac_map)
+		return false;
+
 	return (pf >= PF_CGXMAP_BASE && pf <= rvu->cgx_mapped_pfs) &&
 		!is_sdp_pf(rvu, rvu_make_pcifunc(rvu->pdev, pf, 0));
 }
