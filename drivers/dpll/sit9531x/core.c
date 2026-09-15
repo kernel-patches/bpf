@@ -2133,6 +2133,154 @@ int sit9531x_output_pulse_ctrl_set(struct sit9531x_dev *sitdev,
 }
 
 /*
+ * sit9531x_phase_offset_read - read phase difference via TDC
+ * @phase_ps:	output phase difference in picoseconds
+ *
+ * Reads the Time-to-Digital Converter (TDC) signed 35-bit code from the
+ * PLL page registers, then converts to picoseconds using the VCO
+ * frequency: phase_diff = tdc_code / fvco.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_phase_offset_read(struct sit9531x_dev *sitdev, u8 pll_idx,
+			       s64 *phase_ps)
+{
+	u64 fvco, mag_ps;
+	s64 tdc_signed;
+	u64 tdc_raw;
+	int rc, lock_rc, i;
+	bool sign;
+	u8 v;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	/* Unlock the debug page so the TDC registers are accessible. */
+	rc = sit9531x_write_pll_u8(sitdev, pll_idx,
+				   SIT9531X_PLL_REG_DEBUG,
+				   SIT9531X_PLL_DEBUG_UNLOCK);
+	if (rc)
+		goto relock;
+
+	/*
+	 * Select the debug clock for taps below 200 kHz, then point the
+	 * readback at the TDC.  Only the one bit is touched: writing the
+	 * modifier register whole would clear the fields belonging to
+	 * other taps.
+	 */
+	rc = sit9531x_update_pll_u8(sitdev, pll_idx,
+				    SIT9531X_PLL_REG_DBG_WRITE_CODE,
+				    SIT9531X_DBG_LOW_FREQ_CLK_BIT,
+				    SIT9531X_DBG_LOW_FREQ_CLK_BIT);
+	if (rc)
+		goto relock;
+	rc = sit9531x_write_pll_u8(sitdev, pll_idx,
+				   SIT9531X_PLL_REG_DBG_READ_CODE,
+				   SIT9531X_DBG_READ_CODE_TDC);
+	if (rc)
+		goto relock;
+
+	/*
+	 * Latch a sample by reading the trigger register.  A single
+	 * read returns the previous latch, so read it three times as
+	 * the documented phase-difference procedure does.
+	 */
+	for (i = 0; i < SIT9531X_DBG_LATCH_READS; i++) {
+		rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+					  SIT9531X_PLL_REG_DBG_TRIGGER, &v);
+		if (rc)
+			goto relock;
+	}
+
+	tdc_raw = 0;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_4, &v);
+	if (rc)
+		goto relock;
+	sign = !!(v & BIT(SIT9531X_TDC_SIGN_BIT));
+	tdc_raw = (u64)(v & SIT9531X_TDC_MAG_HI_MASK) << 32;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_3, &v);
+	if (rc)
+		goto relock;
+	tdc_raw |= (u64)v << 24;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_2, &v);
+	if (rc)
+		goto relock;
+	tdc_raw |= (u64)v << 16;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_1, &v);
+	if (rc)
+		goto relock;
+	tdc_raw |= (u64)v << 8;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_0, &v);
+	if (rc)
+		goto relock;
+	tdc_raw |= v;
+
+	/*
+	 * Apply sign.  Per the register map the sign bit is active-high
+	 * for a positive offset: bit set -> +code, bit clear -> -code.
+	 */
+	tdc_signed = sign ? (s64)tdc_raw : -(s64)tdc_raw;
+
+	/*
+	 * Get VCO frequency for conversion.  -ENODATA means DIVN is not
+	 * programmed (PLL unused on this board) -- skip silently rather
+	 * than spamming the log on every poll cycle.  A register access
+	 * failure is returned as an error, not folded into a fabricated
+	 * 0 ps measurement.
+	 */
+	rc = sit9531x_get_fvco(sitdev, pll_idx, &fvco);
+	if (rc == -ENODATA) {
+		dev_dbg(sitdev->dev, "PLL%c: Fvco unknown, skip TDC\n",
+			'A' + pll_idx);
+		rc = -ENODEV;
+		goto relock;
+	}
+	if (rc)
+		goto relock;
+
+	/*
+	 * phase_diff (seconds) = tdc_code / fvco
+	 * phase_diff (ps) = tdc_code * 1e12 / fvco
+	 *
+	 * mul_u64_u64_div_u64() keeps the exact Hz denominator; dividing
+	 * by whole MHz instead would lose up to ~40 ppm of scale on a
+	 * fractional-DIVN Fvco.
+	 */
+	mag_ps = mul_u64_u64_div_u64(tdc_signed < 0 ? -tdc_signed : tdc_signed,
+				     1000000000000ULL, fvco);
+	*phase_ps = tdc_signed < 0 ? -(s64)mag_ps : (s64)mag_ps;
+
+	rc = 0;
+
+relock:
+	/*
+	 * Close the debug window again.  The key register opens every debug
+	 * register on this PLL while it holds the unlock value, and this read
+	 * runs on every pin-get of a connected input, so leaving it open
+	 * would mean normal monitoring permanently unlocks the block.
+	 */
+	lock_rc = sit9531x_write_pll_u8(sitdev, pll_idx,
+					SIT9531X_PLL_REG_DEBUG,
+					SIT9531X_PLL_DEBUG_LOCK);
+	if (lock_rc && !rc)
+		rc = lock_rc;
+
+	return rc;
+}
+
+/*
  * sit9531x_ref_state_fetch - read input reference status from hardware
  * @index:	logical input index
  *
