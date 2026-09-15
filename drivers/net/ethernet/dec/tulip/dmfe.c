@@ -528,6 +528,7 @@ static void dmfe_remove_one(struct pci_dev *pdev)
 				  TX_BUF_ALLOC * TX_DESC_CNT + 4,
 				  db->buf_pool_ptr, db->buf_pool_dma_ptr);
 		pci_release_regions(pdev);
+		pci_disable_device(pdev);
 		free_netdev(dev);	/* free board information */
 	}
 
