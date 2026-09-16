@@ -149,6 +149,8 @@
 #define MII_88E1318S_PHY_LED_FUNC_ON		(0x9)
 #define MII_88E1318S_PHY_LED_FUNC_HI_Z		(0xa)
 #define MII_88E1318S_PHY_LED_FUNC_BLINK		(0xb)
+#define MII_88E1318S_PHY_LED_POL		0x11
+#define MII_88E1318S_PHY_LED_POL_ACT_HIGH(idx)	(1 << 2 * (idx))
 #define MII_88E1318S_PHY_LED_TCR		0x12
 #define MII_88E1318S_PHY_LED_TCR_FORCE_INT	BIT(15)
 #define MII_88E1318S_PHY_LED_TCR_INTn_ENABLE	BIT(7)
@@ -304,6 +306,8 @@
 #define NB_FIBER_STATS	1
 #define NB_STAT_MAX	3
 
+#define M88E1318S_MAX_LEDS	3
+
 MODULE_DESCRIPTION("Marvell PHY driver");
 MODULE_AUTHOR("Andy Fleming");
 MODULE_LICENSE("GPL");
@@ -354,6 +358,8 @@ struct marvell_priv {
 	u32 step;
 	s8 pair;
 	u8 vct_phase;
+	u16 wol_led_tcr;
+	bool wol_led_armed;
 };
 
 static int marvell_read_page(struct phy_device *phydev)
@@ -1969,6 +1975,7 @@ static void m88e1318_get_wol(struct phy_device *phydev,
 static int m88e1318_set_wol(struct phy_device *phydev,
 			    struct ethtool_wolinfo *wol)
 {
+	struct marvell_priv *priv = phydev->priv;
 	int err = 0, oldpage;
 
 	oldpage = phy_save_page(phydev);
@@ -1999,6 +2006,22 @@ static int m88e1318_set_wol(struct phy_device *phydev,
 		err = marvell_write_page(phydev, MII_MARVELL_LED_PAGE);
 		if (err < 0)
 			goto error;
+
+		/* Remember the LED[2]/INTn mux before forcing the pin to
+		 * INTn, so it can be restored when WoL is disabled again.
+		 * Only save it once, or a re-enable would overwrite the
+		 * value read before WoL was first armed.
+		 */
+		if (!priv->wol_led_armed) {
+			err = __phy_read(phydev, MII_88E1318S_PHY_LED_TCR);
+			if (err < 0)
+				goto error;
+
+			priv->wol_led_tcr = err &
+				(MII_88E1318S_PHY_LED_TCR_INTn_ENABLE |
+				 MII_88E1318S_PHY_LED_TCR_INT_ACTIVE_LOW);
+			priv->wol_led_armed = true;
+		}
 
 		/* Setup LED[2] as interrupt pin (active low) */
 		err = __phy_modify(phydev, MII_88E1318S_PHY_LED_TCR,
@@ -2072,6 +2095,41 @@ static int m88e1318_set_wol(struct phy_device *phydev,
 				   MII_88E1318S_PHY_WOL_CTRL_CLEAR_WOL_STATUS);
 		if (err < 0)
 			goto error;
+	}
+
+	if (!(wol->wolopts & (WAKE_MAGIC | WAKE_PHY))) {
+		/* Fully disabled: undo the WoL interrupt setup done above,
+		 * so a later re-enable starts from a clean state. The
+		 * LED[2]/INTn pin mux is only touched when it was forced
+		 * to INTn here, and is restored to the value read at
+		 * arming time; PHYs serving the MAC interrupt, straps, or
+		 * marvell,reg-init values are left alone.
+		 */
+		err = marvell_write_page(phydev, MII_MARVELL_COPPER_PAGE);
+		if (err < 0)
+			goto error;
+
+		err = __phy_clear_bits(phydev, MII_88E1318S_PHY_CSIER,
+				       MII_88E1318S_PHY_CSIER_WOL_EIE);
+		if (err < 0)
+			goto error;
+
+		if (!priv->wol_led_armed)
+			goto error;
+
+		err = marvell_write_page(phydev, MII_MARVELL_LED_PAGE);
+		if (err < 0)
+			goto error;
+
+		err = __phy_modify(phydev, MII_88E1318S_PHY_LED_TCR,
+				   MII_88E1318S_PHY_LED_TCR_FORCE_INT |
+				   MII_88E1318S_PHY_LED_TCR_INTn_ENABLE |
+				   MII_88E1318S_PHY_LED_TCR_INT_ACTIVE_LOW,
+				   priv->wol_led_tcr);
+		if (err < 0)
+			goto error;
+
+		priv->wol_led_armed = false;
 	}
 
 error:
@@ -3572,7 +3630,7 @@ static int m88e1318_led_hw_control_get(struct phy_device *phydev, u8 index,
 {
 	int mode, reg;
 
-	if (index > 2)
+	if (index >= M88E1318S_MAX_LEDS)
 		return -EINVAL;
 
 	reg = phy_read_paged(phydev, MII_MARVELL_LED_PAGE,
@@ -3583,6 +3641,41 @@ static int m88e1318_led_hw_control_get(struct phy_device *phydev, u8 index,
 	mode = (reg >> (4 * index)) & 0xf;
 
 	return marvell_get_led_rules(index, rules, mode);
+}
+
+static int m88e1318_led_polarity_set(struct phy_device *phydev, int index,
+				     unsigned long modes)
+{
+	bool force_active_low = false, force_active_high = false;
+	u32 mode;
+
+	if (index >= M88E1318S_MAX_LEDS)
+		return -EINVAL;
+
+	for_each_set_bit(mode, &modes, __PHY_LED_MODES_NUM) {
+		switch (mode) {
+		case PHY_LED_ACTIVE_LOW:
+			force_active_low = true;
+			break;
+		case PHY_LED_ACTIVE_HIGH:
+			force_active_high = true;
+			break;
+		default:
+			return -EINVAL;
+		}
+	}
+
+	if (force_active_low)
+		return phy_modify_paged(phydev, MII_MARVELL_LED_PAGE,
+					MII_88E1318S_PHY_LED_POL,
+					MII_88E1318S_PHY_LED_POL_ACT_HIGH(index), 0);
+
+	if (force_active_high)
+		return phy_modify_paged(phydev, MII_MARVELL_LED_PAGE,
+					MII_88E1318S_PHY_LED_POL, 0,
+					MII_88E1318S_PHY_LED_POL_ACT_HIGH(index));
+
+	return -EINVAL;
 }
 
 static int marvell_probe(struct phy_device *phydev)
@@ -3833,6 +3926,7 @@ static struct phy_driver marvell_drivers[] = {
 		.led_hw_is_supported = m88e1318_led_hw_is_supported,
 		.led_hw_control_set = m88e1318_led_hw_control_set,
 		.led_hw_control_get = m88e1318_led_hw_control_get,
+		.led_polarity_set = m88e1318_led_polarity_set,
 	},
 	{
 		.phy_id = MARVELL_PHY_ID_88E1145,
@@ -3947,6 +4041,7 @@ static struct phy_driver marvell_drivers[] = {
 		.led_hw_is_supported = m88e1318_led_hw_is_supported,
 		.led_hw_control_set = m88e1318_led_hw_control_set,
 		.led_hw_control_get = m88e1318_led_hw_control_get,
+		.led_polarity_set = m88e1318_led_polarity_set,
 		.attach_mii_port = m88e1510_attach_mii_port,
 	},
 	{

@@ -93,7 +93,7 @@ err_fib_ht_init:
 err_nexthop_grp_ht_init:
 	rhashtable_destroy(&sw->router->nh_neigh_ht);
 err_nh_neigh_ht_init:
-	return 0;
+	return err;
 }
 
 void prestera_router_hw_fini(struct prestera_switch *sw)

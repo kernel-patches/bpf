@@ -2305,7 +2305,7 @@ skip_mac_set:
 			SLAVE_NL_ERR(bond_dev, slave_dev, extack,
 				     "Slave does not support XDP");
 			res = -EOPNOTSUPP;
-			goto err_sysfs_del;
+			goto err_slave_cnt;
 		}
 	} else if (bond->xdp_prog) {
 		struct netdev_bpf xdp = {
@@ -2319,14 +2319,14 @@ skip_mac_set:
 			SLAVE_NL_ERR(bond_dev, slave_dev, extack,
 				     "Slave has XDP program loaded, please unload before enslaving");
 			res = -EOPNOTSUPP;
-			goto err_sysfs_del;
+			goto err_slave_cnt;
 		}
 
 		res = dev_xdp_propagate(slave_dev, &xdp);
 		if (res < 0) {
 			/* ndo_bpf() sets extack error message */
 			slave_dbg(bond_dev, slave_dev, "Error %d calling ndo_bpf\n", res);
-			goto err_sysfs_del;
+			goto err_slave_cnt;
 		}
 		if (bond->xdp_prog)
 			bpf_prog_inc(bond->xdp_prog);
@@ -2348,6 +2348,9 @@ skip_mac_set:
 	return 0;
 
 /* Undo stages on error */
+err_slave_cnt:
+	WRITE_ONCE(bond->slave_cnt, bond->slave_cnt - 1);
+
 err_sysfs_del:
 	bond_sysfs_slave_del(new_slave);
 
@@ -5233,11 +5236,11 @@ static struct slave *bond_xmit_3ad_xor_slave_get(struct bonding *bond,
 	unsigned int count;
 	u32 hash;
 
-	hash = bond_xmit_hash(bond, skb);
 	count = slaves ? READ_ONCE(slaves->count) : 0;
 	if (unlikely(!count))
 		return NULL;
 
+	hash = bond_xmit_hash(bond, skb);
 	slave = slaves->arr[hash % count];
 	return slave;
 }
@@ -5289,9 +5292,65 @@ static bool bond_should_broadcast_neighbor(struct sk_buff *skb,
 	return false;
 }
 
-/* Use this Xmit function for 3AD as well as XOR modes. The current
- * usable slave array is formed in the control path. The xmit function
- * just calculates hash and sends the packet out.
+/* Called with RCU and bond->mode_lock held. */
+static bool bond_3ad_slave_is_eligible(struct slave *slave)
+{
+	const struct aggregator *agg;
+
+	agg = rcu_dereference(SLAVE_AD_INFO(slave)->port.aggregator);
+	return agg && agg->is_active && bond_slave_can_tx(slave);
+}
+
+/* Called with RCU held when the transmit array has not caught up with
+ * the 802.3ad state machine. Do not enable ports here: use the same
+ * eligibility checks as bond_update_slave_arr().
+ */
+static struct slave *bond_3ad_xmit_fallback(struct bonding *bond, u32 hash)
+{
+	struct slave *selected = NULL;
+	unsigned int eligible = 0;
+	unsigned int target;
+	struct list_head *iter;
+	struct slave *slave;
+
+	/* Netpoll can re-enter TX while the state machine holds mode_lock.
+	 * Keep the existing empty-array drop behavior in that context.
+	 */
+	if (unlikely(netpoll_tx_running(bond->dev)))
+		return NULL;
+
+	/* Aggregator selection temporarily clears all is_active flags. Keep
+	 * both loops under mode_lock to avoid observing that intermediate
+	 * state. The caller's RCU read lock protects the selected slave.
+	 */
+	spin_lock_bh(&bond->mode_lock);
+	bond_for_each_slave_rcu(bond, slave, iter)
+		if (bond_3ad_slave_is_eligible(slave))
+			eligible++;
+
+	if (!eligible)
+		goto out;
+
+	target = hash % eligible;
+	bond_for_each_slave_rcu(bond, slave, iter) {
+		if (!bond_3ad_slave_is_eligible(slave))
+			continue;
+
+		if (!target) {
+			selected = slave;
+			break;
+		}
+		target--;
+	}
+
+out:
+	spin_unlock_bh(&bond->mode_lock);
+	return selected;
+}
+
+/* Use this Xmit function for 3AD as well as XOR modes. The usable slave
+ * array is formed in the control path.  In 3AD mode, fall back to the
+ * current port state while an empty array awaits an update.
  */
 static netdev_tx_t bond_3ad_xor_xmit(struct sk_buff *skb,
 				     struct net_device *dev)
@@ -5302,6 +5361,8 @@ static netdev_tx_t bond_3ad_xor_xmit(struct sk_buff *skb,
 
 	slaves = rcu_dereference(bond->usable_slaves);
 	slave = bond_xmit_3ad_xor_slave_get(bond, skb, slaves);
+	if (unlikely(!slave) && BOND_MODE(bond) == BOND_MODE_8023AD)
+		slave = bond_3ad_xmit_fallback(bond, bond_xmit_hash(bond, skb));
 	if (likely(slave))
 		return bond_dev_queue_xmit(bond, skb, slave->dev);
 

@@ -168,6 +168,14 @@ static const struct qmi_ops ipa_server_ops = {
 	.bye		= ipa_server_bye,
 };
 
+/* True if a QMI request arrived from the modem we are paired with */
+static bool ipa_server_from_modem(const struct ipa_qmi *ipa_qmi,
+				  const struct sockaddr_qrtr *sq)
+{
+	return sq->sq_node == ipa_qmi->modem_sq.sq_node &&
+	       sq->sq_port == ipa_qmi->modem_sq.sq_port;
+}
+
 /* Callback function to handle an INDICATION_REGISTER request message from the
  * modem.  This informs the AP that the modem is now ready to receive the
  * INIT_COMPLETE indication message.
@@ -184,6 +192,13 @@ static void ipa_server_indication_register(struct qmi_handle *qmi,
 
 	ipa_qmi = container_of(qmi, struct ipa_qmi, server_handle);
 	ipa = container_of(ipa_qmi, struct ipa, qmi);
+
+	if (!ipa_server_from_modem(ipa_qmi, sq)) {
+		dev_warn_ratelimited(ipa->dev,
+				     "ignoring QMI request from non-modem sender %u:%u\n",
+				     sq->sq_node, sq->sq_port);
+		return;
+	}
 
 	rsp.rsp.result = QMI_RESULT_SUCCESS_V01;
 	rsp.rsp.error = QMI_ERR_NONE_V01;
@@ -213,6 +228,13 @@ static void ipa_server_driver_init_complete(struct qmi_handle *qmi,
 
 	ipa_qmi = container_of(qmi, struct ipa_qmi, server_handle);
 	ipa = container_of(ipa_qmi, struct ipa, qmi);
+
+	if (!ipa_server_from_modem(ipa_qmi, sq)) {
+		dev_warn_ratelimited(ipa->dev,
+				     "ignoring QMI request from non-modem sender %u:%u\n",
+				     sq->sq_node, sq->sq_port);
+		return;
+	}
 
 	rsp.rsp.result = QMI_RESULT_SUCCESS_V01;
 	rsp.rsp.error = QMI_ERR_NONE_V01;

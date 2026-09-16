@@ -1,0 +1,364 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/xlnx,tsn-endpoint-ethernet-mac.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Xilinx TSN Endpoint Ethernet MAC
+
+description:
+  TSN Endpoint Ethernet MAC IP implements IEEE 802.1 Time-Sensitive
+  Networking (TSN) standards and provides low-latency network connectivity
+  in the Bridged Endpoint configuration. The IP integrates a three-port
+  switch, with two ports connected to the external network and one port
+  connected to an internal endpoint. It also supports GMII/RGMII interfaces
+  for connection to an external PHY, enabling full-duplex operation at
+  100 Mb/s and 1 Gb/s speeds.
+
+maintainers:
+  - Srinivas Neeli <srinivas.neeli@amd.com>
+  - Nagadheeraj Rottela <nagadheeraj.rottela@amd.com>
+
+properties:
+  compatible:
+    const: xlnx,tsn-endpoint-ethernet-mac-3.0
+
+  clocks:
+    items:
+      - description: GTX clock for transmitter logic and RTC
+      - description: GTX 90-degree phase shifted clock for RGMII
+      - description: Host RX FIFO clock
+      - description: Host TX FIFO clock
+      - description: Reference clock for IDELAY control
+      - description: AXI-Lite register interface clock
+
+  clock-names:
+    items:
+      - const: gtx
+      - const: gtx90
+      - const: host_rxfifo
+      - const: host_txfifo
+      - const: ref
+      - const: s_axi
+
+  ranges: true
+
+  '#address-cells':
+    const: 1
+
+  '#size-cells':
+    const: 1
+
+  xlnx,num-priorities:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    minimum: 2
+    maximum: 8
+    description:
+      Number of traffic classes (priorities) configured in the IP.
+      This is an IP configuration parameter that determines the number of
+      priority queues available for QoS scheduling. Traffic classes map to
+      IEEE 802.1Q priority levels (0-7).
+
+patternProperties:
+  "^ethernet@[0-9a-f]+$":
+    type: object
+    $ref: /schemas/net/ethernet-controller.yaml#
+    unevaluatedProperties: false
+    description:
+      Endpoint MAC sub-node. Provides the host-side data path through the
+      DMA channels described by its dmas / dma-names.
+    properties:
+      compatible:
+        const: xlnx,tsn-ep-mac
+
+      reg:
+        maxItems: 1
+
+      dmas:
+        minItems: 2
+        maxItems: 16
+
+      dma-names:
+        minItems: 2
+        maxItems: 16
+        items:
+          pattern: "^(tx|rx)_chan[0-7]$"
+        description: |
+          Names matching the entries in 'dmas', one per DMA channel and in
+          the same order. TX channel names use "tx_chan<N>" and RX channel
+          names use "rx_chan<N>", where N is 0..7. Example: "tx_chan0",
+          "tx_chan1", ..., "rx_chan0", "rx_chan1", ....
+
+      tx-queues-config:
+        type: object
+        additionalProperties: false
+        description:
+          TX queue configuration node that maps IP priority queues to
+          DMA TX channels. The TSN IP supports multiple priority queues for
+          QoS scheduling, and each queue can be connected to a specific DMA
+          channel. This mapping defines which DMA TX channel is used to
+          transmit packets for each priority queue. For example, queue0
+          with xlnx,dma-channel-num set to 5 means priority queue 0 uses
+          tx_chan5 for data transfer.
+
+        patternProperties:
+          "^queue[0-7]$":
+            type: object
+            additionalProperties: false
+
+            description:
+              Each subnode represents a priority queue. The
+              xlnx,dma-channel-num property specifies which DMA TX channel
+              (tx_chan0 to tx_chan7) is connected to this queue for
+              transmitting packets.
+            properties:
+              xlnx,dma-channel-num:
+                $ref: /schemas/types.yaml#/definitions/uint32
+                description:
+                  DMA channel that transmits this priority queue, given as
+                  the N of the tx_chanN entry in dma-names.
+                minimum: 0
+                maximum: 7
+
+            required:
+              - xlnx,dma-channel-num
+
+    required:
+      - compatible
+      - reg
+      - dmas
+      - dma-names
+      - tx-queues-config
+
+  "^switch@[0-9a-f]+$":
+    type: object
+    $ref: /schemas/net/dsa/dsa.yaml#/$defs/ethernet-ports
+    description:
+      Three-port Ethernet switch sub-node. Contains the switch fabric
+      register window and the two per-MAC register windows. Each per-MAC
+      window houses an MDIO controller and a PTP register block at fixed
+      offsets. The IP's per-MAC and PTP-timer interrupts are exposed here.
+
+    properties:
+      compatible:
+        const: xlnx,tsn-switch
+
+      reg:
+        items:
+          - description: Switch fabric register window
+          - description: MAC1 register window (includes MDIO and PTP)
+          - description: MAC2 register window (includes MDIO and PTP)
+
+      reg-names:
+        items:
+          - const: switch
+          - const: mac1
+          - const: mac2
+
+      interrupts:
+        minItems: 7
+        maxItems: 7
+
+      interrupt-names:
+        items:
+          - const: ptp_rx_mac1
+          - const: ptp_tx_mac1
+          - const: mac_irq_mac1
+          - const: ptp_timer
+          - const: ptp_rx_mac2
+          - const: ptp_tx_mac2
+          - const: mac_irq_mac2
+
+      mdio-1:
+        $ref: /schemas/net/mdio.yaml#
+        description:
+          MDIO bus controller for MAC1. Registers reside inside the mac1
+          reg-names window.
+        unevaluatedProperties: false
+
+      mdio-2:
+        $ref: /schemas/net/mdio.yaml#
+        description:
+          MDIO bus controller for MAC2. Registers reside inside the mac2
+          reg-names window.
+        unevaluatedProperties: false
+
+    patternProperties:
+      "^(ethernet-)?ports$":
+        type: object
+        additionalProperties: false
+
+        properties:
+          '#address-cells':
+            const: 1
+
+          '#size-cells':
+            const: 0
+
+          port@0:
+            type: object
+            unevaluatedProperties: true
+            description:
+              CPU port. Wired internally to the endpoint MAC sibling.
+
+            properties:
+              reg:
+                const: 0
+
+              phy-mode:
+                const: internal
+
+            required:
+              - ethernet
+
+        patternProperties:
+          "^port@[1-2]$":
+            type: object
+            unevaluatedProperties: true
+            description:
+              External Ethernet port. port@1 is wired to MAC1 and reached
+              through the mdio-1 bus, port@2 is wired to MAC2 and reached
+              through the mdio-2 bus.
+
+            properties:
+              reg:
+                enum: [1, 2]
+
+              phy-mode:
+                enum:
+                  - gmii
+                  - rgmii
+                  - rgmii-id
+
+            required:
+              - reg
+              - phy-mode
+              - phy-handle
+
+        required:
+          - port@0
+          - port@1
+          - port@2
+
+    required:
+      - compatible
+      - reg
+      - reg-names
+      - interrupts
+      - interrupt-names
+
+    oneOf:
+      - required: [ports]
+      - required: [ethernet-ports]
+
+    unevaluatedProperties: false
+
+additionalProperties: false
+
+required:
+  - compatible
+  - clocks
+  - clock-names
+  - xlnx,num-priorities
+  - ranges
+  - '#address-cells'
+  - '#size-cells'
+
+examples:
+  - |
+    tsn@80040000 {
+        compatible = "xlnx,tsn-endpoint-ethernet-mac-3.0";
+        clocks = <&misc_clk_2>, <&misc_clk_2>, <&misc_clk_1>, <&misc_clk_1>,
+                 <&misc_clk_3>, <&misc_clk_0>;
+        clock-names = "gtx", "gtx90", "host_rxfifo", "host_txfifo",
+                      "ref", "s_axi";
+        xlnx,num-priorities = <8>;
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges = <0x0 0x80040000 0x40000>;
+
+        ep_mac: ethernet@16000 {
+            compatible = "xlnx,tsn-ep-mac";
+            reg = <0x16000 0xa000>;
+            dmas = <&axi_mcdma_0 0>, <&axi_mcdma_0 1>, <&axi_mcdma_0 2>,
+                   <&axi_mcdma_0 3>, <&axi_mcdma_0 4>, <&axi_mcdma_0 5>,
+                   <&axi_mcdma_0 6>, <&axi_mcdma_0 7>, <&axi_mcdma_0 16>,
+                   <&axi_mcdma_0 17>, <&axi_mcdma_0 18>, <&axi_mcdma_0 19>,
+                   <&axi_mcdma_0 20>, <&axi_mcdma_0 21>, <&axi_mcdma_0 22>,
+                   <&axi_mcdma_0 23>;
+            dma-names = "tx_chan0", "tx_chan1", "tx_chan2", "tx_chan3",
+                        "tx_chan4", "tx_chan5", "tx_chan6", "tx_chan7",
+                        "rx_chan0", "rx_chan1", "rx_chan2", "rx_chan3",
+                        "rx_chan4", "rx_chan5", "rx_chan6", "rx_chan7";
+            tx-queues-config {
+                queue0 { xlnx,dma-channel-num = <0x7>; };
+                queue1 { xlnx,dma-channel-num = <0x6>; };
+                queue2 { xlnx,dma-channel-num = <0x5>; };
+                queue3 { xlnx,dma-channel-num = <0x4>; };
+                queue4 { xlnx,dma-channel-num = <0x3>; };
+                queue5 { xlnx,dma-channel-num = <0x2>; };
+                queue6 { xlnx,dma-channel-num = <0x1>; };
+                queue7 { xlnx,dma-channel-num = <0x0>; };
+            };
+        };
+
+        switch@38000 {
+            compatible = "xlnx,tsn-switch";
+            reg = <0x38000 0x8000>,
+                  <0x00000 0x14000>,
+                  <0x20000 0x14000>;
+            reg-names = "switch", "mac1", "mac2";
+
+            interrupt-parent = <&intc>;
+            interrupts = <0 2>, <2 2>, <4 2>, <6 2>,
+                         <1 2>, <3 2>, <5 2>;
+            interrupt-names = "ptp_rx_mac1", "ptp_tx_mac1",
+                              "mac_irq_mac1", "ptp_timer",
+                              "ptp_rx_mac2", "ptp_tx_mac2",
+                              "mac_irq_mac2";
+
+            mdio-1 {
+                #address-cells = <1>;
+                #size-cells = <0>;
+                phy0: ethernet-phy@0 {
+                    reg = <0>;
+                };
+            };
+
+            mdio-2 {
+                #address-cells = <1>;
+                #size-cells = <0>;
+                phy1: ethernet-phy@1 {
+                    reg = <1>;
+                };
+            };
+
+            ethernet-ports {
+                #address-cells = <1>;
+                #size-cells = <0>;
+
+                port@0 {
+                    reg = <0>;
+                    ethernet = <&ep_mac>;
+                    phy-mode = "internal";
+
+                    fixed-link {
+                        speed = <1000>;
+                        full-duplex;
+                    };
+                };
+
+                port@1 {
+                    reg = <1>;
+                    phy-handle = <&phy0>;
+                    phy-mode = "rgmii-id";
+                };
+
+                port@2 {
+                    reg = <2>;
+                    phy-handle = <&phy1>;
+                    phy-mode = "rgmii-id";
+                };
+            };
+        };
+    };

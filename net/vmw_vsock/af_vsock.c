@@ -1712,7 +1712,6 @@ static int vsock_connect(struct socket *sock, struct sockaddr_unsized *addr,
 	long timeout;
 	DEFINE_WAIT(wait);
 
-	err = 0;
 	sk = sock->sk;
 	vsk = vsock_sk(sk);
 
@@ -1741,6 +1740,12 @@ static int vsock_connect(struct socket *sock, struct sockaddr_unsized *addr,
 		if ((sk->sk_state == TCP_LISTEN) ||
 		    vsock_addr_cast(addr, addr_len, &remote_addr) != 0) {
 			err = -EINVAL;
+			goto out;
+		}
+
+		/* Virtio/PM events are serviced locklessly. */
+		if (READ_ONCE(vsk->peer_shutdown)) {
+			err = -ECONNRESET;
 			goto out;
 		}
 
@@ -1834,23 +1839,22 @@ static int vsock_connect(struct socket *sock, struct sockaddr_unsized *addr,
 		timeout = schedule_timeout(timeout);
 		lock_sock(sk);
 
-		/* Connection established. Whatever happens to socket once we
-		 * release it, that's not connect()'s concern. No need to go
+		/* Connection was established. Whatever happens to socket once
+		 * we release it, that's not connect()'s concern. No need to go
 		 * into signal and timeout handling. Call it a day.
 		 *
 		 * Note that allowing to "reset" an already established socket
 		 * here is racy and insecure.
 		 */
-		if (sk->sk_state == TCP_ESTABLISHED)
-			break;
+		if (sk->sk_state == TCP_ESTABLISHED ||
+		    sk->sk_state == TCP_CLOSING) {
+			err = 0;
+			goto out_wait;
+		}
 
 		/* If connection was _not_ established and a signal/timeout came
 		 * to be, we want the socket's state reset. User space may want
 		 * to retry.
-		 *
-		 * sk_state != TCP_ESTABLISHED implies that socket is not on
-		 * vsock_connected_table. We keep the binding and the transport
-		 * assigned.
 		 */
 		if (signal_pending(current) || timeout == 0) {
 			err = timeout == 0 ? -ETIMEDOUT : sock_intr_errno(timeout);
@@ -1874,8 +1878,8 @@ static int vsock_connect(struct socket *sock, struct sockaddr_unsized *addr,
 		prepare_to_wait(sk_sleep(sk), &wait, TASK_INTERRUPTIBLE);
 	}
 
-	err = sock_error(sk);
-	if (err) {
+	if (sk->sk_state != TCP_ESTABLISHED && sk->sk_state != TCP_CLOSING) {
+		err = sock_error(sk);
 		sk->sk_state = TCP_CLOSE;
 		sock->state = SS_UNCONNECTED;
 	}
@@ -1973,12 +1977,12 @@ static int vsock_listen(struct socket *sock, int backlog)
 		goto out;
 	}
 
-	if (sock->state != SS_UNCONNECTED) {
+	vsk = vsock_sk(sk);
+
+	if (sock->state != SS_UNCONNECTED || vsk->transport) {
 		err = -EINVAL;
 		goto out;
 	}
-
-	vsk = vsock_sk(sk);
 
 	if (!vsock_addr_bound(&vsk->local_addr)) {
 		err = -EINVAL;
@@ -2888,6 +2892,7 @@ static int vsock_net_child_mode_string(const struct ctl_table *table, int write,
 	int ret;
 
 	net = container_of(table->data, struct net, vsock.child_ns_mode);
+	new_mode = vsock_net_child_mode(net);
 
 	ret = __vsock_net_mode_string(table, write, buffer, lenp, ppos,
 				      vsock_net_child_mode(net), &new_mode);

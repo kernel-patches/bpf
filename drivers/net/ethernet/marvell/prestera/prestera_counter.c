@@ -342,6 +342,7 @@ static void prestera_counter_stats_work(struct work_struct *work)
 	u32 resched_time = COUNTER_POLL_TIME;
 	u32 count = COUNTER_BULK_SIZE;
 	bool done = false;
+	u32 remaining;
 	int err;
 	u32 i;
 
@@ -368,10 +369,12 @@ static void prestera_counter_stats_work(struct work_struct *work)
 		goto resched;
 	}
 
+	remaining = block->num_counters - counter->total_read;
 	prestera_counter_block_lock(block);
 	err = prestera_hw_counters_get(counter->sw, counter->total_read,
 				       &count, &done,
-				       &block->stats[counter->total_read]);
+				       &block->stats[counter->total_read],
+				       remaining);
 	prestera_counter_block_unlock(block);
 	if (err)
 		goto abort;

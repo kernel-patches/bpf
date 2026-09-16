@@ -184,12 +184,8 @@ static int set_dma_caps(struct pci_dev *pdev)
 
 	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
 	if (err) {
-		dev_warn(&pdev->dev, "Warning: couldn't set 64-bit PCI DMA mask\n");
-		err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
-		if (err) {
-			dev_err(&pdev->dev, "Can't set PCI DMA mask, aborting\n");
-			return err;
-		}
+		dev_err(&pdev->dev, "Can't set PCI DMA mask, aborting\n");
+		return err;
 	}
 
 	dma_set_max_seg_size(&pdev->dev, 2u * 1024 * 1024 * 1024);
@@ -1164,18 +1160,33 @@ stop_health_poll:
 	mlx5_core_disable_hca(dev, 0);
 err_cmd_cleanup:
 	mlx5_cmd_set_state(dev, MLX5_CMDIF_STATE_DOWN);
-	mlx5_cmd_disable(dev);
+	/* Nothing here has confirmed that firmware released the function */
+	mlx5_cmd_disable(dev, false);
 
 	return err;
 }
 
 static void mlx5_function_disable(struct mlx5_core_dev *dev, bool boot)
 {
+	bool fw_stopped;
+
 	mlx5_reclaim_startup_pages(dev);
 	mlx5_stop_health_poll(dev, boot);
-	mlx5_core_disable_hca(dev, 0);
+	/* A DISABLE_HCA that firmware really completed is it acknowledging
+	 * that it has released the function, and so that it is done with the
+	 * buffers the driver gave it.  mlx5_cmd_disable() needs to know,
+	 * because it can only hand command mailboxes back to the DMA pool
+	 * once that holds.
+	 *
+	 * A zero return is not sufficient on its own: mlx5_cmd_check() turns
+	 * the -ENXIO from an interface that is already down into success for
+	 * DISABLE_HCA, deliberately, so that reset flows proceed smoothly.
+	 * That is exactly the case where nothing was posted and firmware
+	 * acknowledged nothing, so require the interface to still be up.
+	 */
+	fw_stopped = !mlx5_core_disable_hca(dev, 0) && !mlx5_cmd_is_down(dev);
 	mlx5_cmd_set_state(dev, MLX5_CMDIF_STATE_DOWN);
-	mlx5_cmd_disable(dev);
+	mlx5_cmd_disable(dev, fw_stopped);
 }
 
 static int mlx5_function_open(struct mlx5_core_dev *dev)

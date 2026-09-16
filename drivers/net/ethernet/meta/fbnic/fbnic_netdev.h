@@ -86,9 +86,6 @@ struct net_device *fbnic_netdev_alloc(struct fbnic_dev *fbd);
 void fbnic_netdev_free(struct fbnic_dev *fbd);
 int fbnic_netdev_register(struct net_device *netdev);
 void fbnic_netdev_unregister(struct net_device *netdev);
-void fbnic_reset_queues(struct fbnic_net *fbn,
-			unsigned int tx, unsigned int rx);
-
 void fbnic_set_ethtool_ops(struct net_device *dev);
 
 int fbnic_ptp_setup(struct fbnic_dev *fbd);

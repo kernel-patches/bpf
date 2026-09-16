@@ -1077,6 +1077,19 @@ netdev_tx_t enetc_xmit(struct sk_buff *skb, struct net_device *ndev)
 	u8 udp, msgtype, twostep;
 	u16 offset1, offset2;
 
+	/* Hardware does not support transmit buffer descriptors with a total
+	 * length of less than 16 bytes, or a first buffer size of less than
+	 * 16 bytes.
+	 */
+	if (unlikely(skb_headlen(skb) < ENETC_MIN_BUFF_SIZE &&
+		     skb_linearize(skb))) {
+		dev_kfree_skb_any(skb);
+		return NETDEV_TX_OK;
+	}
+
+	if (eth_skb_pad(skb))
+		return NETDEV_TX_OK;
+
 	/* Mark tx timestamp type on enetc_cb->flag if requires */
 	if ((skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) &&
 	    (priv->active_offloads & ENETC_F_TX_TSTAMP_MASK))
@@ -1086,6 +1099,11 @@ netdev_tx_t enetc_xmit(struct sk_buff *skb, struct net_device *ndev)
 
 	/* Fall back to two-step timestamp if not one-step Sync packet */
 	if (enetc_cb->flag & ENETC_F_TX_ONESTEP_SYNC_TSTAMP) {
+		if (unlikely(skb_linearize(skb))) {
+			dev_kfree_skb_any(skb);
+			return NETDEV_TX_OK;
+		}
+
 		if (enetc_ptp_parse(skb, &udp, &msgtype, &twostep,
 				    &offset1, &offset2) ||
 		    msgtype != PTP_MSGTYPE_SYNC || twostep != 0) {
@@ -1813,7 +1831,6 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 	struct skb_shared_info *shinfo;
 	struct enetc_bdr *tx_ring;
 	int xdp_tx_bd_cnt, i, k;
-	int xdp_tx_frm_cnt = 0;
 
 	if (unlikely(test_bit(ENETC_TX_DOWN, &priv->flags) ||
 		     !netif_carrier_ok(ndev)))
@@ -1826,15 +1843,23 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 	prefetchw(ENETC_TXBD(*tx_ring, tx_ring->next_to_use));
 
 	for (k = 0; k < num_frames; k++) {
-		if (xdp_frame_has_frags(frames[k])) {
-			shinfo = xdp_get_shared_info_from_frame(frames[k]);
+		struct xdp_frame *xdpf = frames[k];
+
+		if (xdp_frame_has_frags(xdpf)) {
+			shinfo = xdp_get_shared_info_from_frame(xdpf);
 			if (unlikely((shinfo->nr_frags + 1) > ENETC_MAX_SKB_FRAGS))
 				break;
 		}
 
+		if (unlikely(xdp_frame_pad(xdpf) ||
+			     xdpf->len < ENETC_MIN_BUFF_SIZE)) {
+			tx_ring->stats.xdp_tx_drops++;
+			break;
+		}
+
 		xdp_tx_bd_cnt = enetc_xdp_frame_to_xdp_tx_swbd(tx_ring,
 							       xdp_redirect_arr,
-							       frames[k]);
+							       xdpf);
 		if (unlikely(xdp_tx_bd_cnt < 0))
 			break;
 
@@ -1843,21 +1868,19 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 			for (i = 0; i < xdp_tx_bd_cnt; i++)
 				enetc_unmap_tx_buff(tx_ring,
 						    &xdp_redirect_arr[i]);
-			tx_ring->stats.xdp_tx_drops++;
 			break;
 		}
-
-		xdp_tx_frm_cnt++;
 	}
 
-	if (unlikely((flags & XDP_XMIT_FLUSH) || k != xdp_tx_frm_cnt))
+	if (unlikely(k && ((flags & XDP_XMIT_FLUSH) || k < num_frames)))
 		enetc_update_tx_ring_tail(tx_ring);
 
-	tx_ring->stats.xdp_tx += xdp_tx_frm_cnt;
+	tx_ring->stats.xdp_tx += k;
+	tx_ring->stats.xdp_tx_drops += num_frames - k;
 
 	enetc_unlock_mdio();
 
-	return xdp_tx_frm_cnt;
+	return k;
 }
 EXPORT_SYMBOL_GPL(enetc_xdp_xmit);
 
@@ -2630,7 +2653,8 @@ static void enetc_setup_txbdr(struct enetc_hw *hw, struct enetc_bdr *tx_ring)
 	 * adjust sw indexes
 	 */
 	tx_ring->next_to_use = enetc_txbdr_rd(hw, idx, ENETC_TBPIR);
-	tx_ring->next_to_clean = enetc_txbdr_rd(hw, idx, ENETC_TBCIR);
+	tx_ring->next_to_clean = enetc_txbdr_rd(hw, idx, ENETC_TBCIR) &
+				 ENETC_TBCIR_IDX_MASK;
 
 	if (tx_ring->next_to_use != tx_ring->next_to_clean &&
 	    !is_enetc_rev1(si)) {
@@ -2935,11 +2959,31 @@ static void enetc_clear_interrupts(struct enetc_ndev_priv *priv)
 static int enetc_phylink_connect(struct net_device *ndev)
 {
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
+	struct enetc_si *si = priv->si;
 	struct ethtool_keee edata;
 	int err;
 
 	if (!priv->phylink) {
 		/* phy-less mode */
+		if (!si->ops->vf_reg_link_status_notifier)
+			goto carrier_on;
+
+		/* For phy-less VFs on ENETC v4, attempt to register a link
+		 * status notifier with the PF via the VSI-to-PSI messaging
+		 * channel. If registration succeeds, the PF will immediately
+		 * send the current link status and broadcast future link
+		 * transitions; carrier state is then managed in
+		 * enetc_vf_msg_handle_link_status(). If registration fails,
+		 * fall back to the LS1028A behaviour and assert carrier
+		 * unconditionally via netif_carrier_on().
+		 */
+		if (!si->ops->vf_reg_link_status_notifier(si))
+			return 0;
+
+		dev_warn(&ndev->dev,
+			 "Link status notifier registration failed\n");
+
+carrier_on:
 		netif_carrier_on(ndev);
 		return 0;
 	}
@@ -3024,10 +3068,6 @@ int enetc_open(struct net_device *ndev)
 	if (err)
 		goto err_setup_irqs;
 
-	err = enetc_phylink_connect(ndev);
-	if (err)
-		goto err_phy_connect;
-
 	tx_res = enetc_alloc_tx_resources(priv);
 	if (IS_ERR(tx_res)) {
 		err = PTR_ERR(tx_res);
@@ -3040,6 +3080,10 @@ int enetc_open(struct net_device *ndev)
 		goto err_alloc_rx;
 	}
 
+	err = enetc_phylink_connect(ndev);
+	if (err)
+		goto err_phy_connect;
+
 	enetc_tx_onestep_tstamp_init(priv);
 	enetc_assign_tx_resources(priv, tx_res);
 	enetc_assign_rx_resources(priv, rx_res);
@@ -3048,12 +3092,11 @@ int enetc_open(struct net_device *ndev)
 
 	return 0;
 
+err_phy_connect:
+	enetc_free_rx_resources(rx_res, priv->num_rx_rings);
 err_alloc_rx:
 	enetc_free_tx_resources(tx_res, priv->num_tx_rings);
 err_alloc_tx:
-	if (priv->phylink)
-		phylink_disconnect_phy(priv->phylink);
-err_phy_connect:
 	enetc_free_irqs(priv);
 err_setup_irqs:
 	clk_disable_unprepare(priv->ref_clk);
@@ -3086,6 +3129,10 @@ void enetc_stop(struct net_device *ndev)
 		napi_disable(&priv->int_vector[i]->napi);
 	}
 
+	cancel_work_sync(&priv->tx_onestep_tstamp);
+	skb_queue_purge(&priv->tx_skbs);
+	clear_bit_unlock(ENETC_TX_ONESTEP_TSTAMP_IN_PROGRESS, &priv->flags);
+
 	enetc_clear_interrupts(priv);
 }
 EXPORT_SYMBOL_GPL(enetc_stop);
@@ -3093,6 +3140,7 @@ EXPORT_SYMBOL_GPL(enetc_stop);
 int enetc_close(struct net_device *ndev)
 {
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
+	struct enetc_si *si = priv->si;
 
 	enetc_stop(ndev);
 
@@ -3100,6 +3148,20 @@ int enetc_close(struct net_device *ndev)
 		phylink_stop(priv->phylink);
 		phylink_disconnect_phy(priv->phylink);
 	} else {
+		if (!si->ops->vf_unreg_link_status_notifier)
+			goto carrier_off;
+
+		/* No need to check whether the previous registration was
+		 * successful. Sending the deregistration message has no
+		 * impact; the PF side simply clears the corresponding bit
+		 * in link_status_ms_mask for the VF.
+		 */
+		if (!si->ops->vf_unreg_link_status_notifier(si))
+			goto carrier_off;
+
+		dev_warn(&ndev->dev,
+			 "Link status notifier unregistration failed\n");
+carrier_off:
 		netif_carrier_off(ndev);
 	}
 
@@ -3794,6 +3856,13 @@ static const struct enetc_drvdata enetc_vf_data = {
 	.eth_ops = &enetc_vf_ethtool_ops,
 };
 
+static const struct enetc_drvdata enetc4_vf_data = {
+	.sysclk_freq = ENETC_CLK_333M,
+	.tx_csum = true,
+	.max_frags = ENETC4_MAX_SKB_FRAGS,
+	.eth_ops = &enetc_vf_ethtool_ops,
+};
+
 static const struct enetc_platform_info enetc_info[] = {
 	{ .revision = ENETC_REV_1_0,
 	  .dev_id = ENETC_DEV_ID_PF,
@@ -3807,6 +3876,10 @@ static const struct enetc_platform_info enetc_info[] = {
 	  .dev_id = ENETC_DEV_ID_VF,
 	  .data = &enetc_vf_data,
 	},
+	{ .revision = ENETC_REV_4_1,
+	  .dev_id = NXP_ENETC_VF_DEV_ID,
+	  .data = &enetc4_vf_data,
+	},
 	{
 	  .revision = ENETC_REV_4_3,
 	  .dev_id = NXP_ENETC_PPM_DEV_ID,
@@ -3815,6 +3888,10 @@ static const struct enetc_platform_info enetc_info[] = {
 	{ .revision = ENETC_REV_4_3,
 	  .dev_id = NXP_ENETC_PF_DEV_ID,
 	  .data = &enetc4_pf_data,
+	},
+	{ .revision = ENETC_REV_4_3,
+	  .dev_id = NXP_ENETC_VF_DEV_ID,
+	  .data = &enetc4_vf_data,
 	},
 };
 

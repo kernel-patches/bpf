@@ -235,7 +235,8 @@ int prestera_hw_counter_trigger(struct prestera_switch *sw, u32 block_id);
 int prestera_hw_counter_abort(struct prestera_switch *sw);
 int prestera_hw_counters_get(struct prestera_switch *sw, u32 idx,
 			     u32 *len, bool *done,
-			     struct prestera_counter_stats *stats);
+			     struct prestera_counter_stats *stats,
+			     u32 stats_len);
 int prestera_hw_counter_block_get(struct prestera_switch *sw,
 				  u32 client, u32 *block_id, u32 *offset,
 				  u32 *num_counters);

@@ -47,7 +47,8 @@ static int lowpan_ndisc_parse_options(const struct net_device *dev,
 	}
 }
 
-static void lowpan_ndisc_802154_update(struct neighbour *n, u32 flags,
+static void lowpan_ndisc_802154_update(struct neighbour *n,
+				       bool failed_recovery,
 				       u8 icmp6_type,
 				       const struct ndisc_options *ndopts)
 {
@@ -87,20 +88,24 @@ static void lowpan_ndisc_802154_update(struct neighbour *n, u32 flags,
 		ieee802154_be16_to_le16(&neigh->short_addr, lladdr_short);
 		if (!lowpan_802154_is_valid_src_short_addr(neigh->short_addr))
 			neigh->short_addr = cpu_to_le16(IEEE802154_ADDR_SHORT_UNSPEC);
+	} else if (failed_recovery) {
+		neigh->short_addr = cpu_to_le16(IEEE802154_ADDR_SHORT_UNSPEC);
 	}
 	write_unlock_bh(&n->lock);
 }
 
 static void lowpan_ndisc_update(const struct net_device *dev,
-				struct neighbour *n, u32 flags, u8 icmp6_type,
+				struct neighbour *n, u32 flags,
+				bool failed_recovery, u8 icmp6_type,
 				const struct ndisc_options *ndopts)
 {
 	if (!lowpan_is_ll(dev, LOWPAN_LLTYPE_IEEE802154))
 		return;
 
-	/* react on overrides only. TODO check if this is really right. */
-	if (flags & NEIGH_UPDATE_F_OVERRIDE)
-		lowpan_ndisc_802154_update(n, flags, icmp6_type, ndopts);
+	/* React to overrides or accepted FAILED-entry recovery. */
+	if ((flags & NEIGH_UPDATE_F_OVERRIDE) || failed_recovery)
+		lowpan_ndisc_802154_update(n, failed_recovery, icmp6_type,
+					   ndopts);
 }
 
 static int lowpan_ndisc_opt_addr_space(const struct net_device *dev,

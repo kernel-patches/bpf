@@ -80,6 +80,149 @@
 #define PTP_PEROUT_V1_VALID_FLAGS	(0)
 
 /*
+ * Clock status values for struct ptp_clock_attrs.status
+ */
+enum ptp_clock_status {
+	/* Clock synchronization status cannot be reliably determined */
+	PTP_CLOCK_STATUS_UNKNOWN      = 0,
+
+	/* Clock is acquiring synchronization */
+	PTP_CLOCK_STATUS_INITIALIZING = 1,
+
+	/* Clock is synchronized and maintained accurately by the device */
+	PTP_CLOCK_STATUS_SYNCED       = 2,
+
+	/*
+	 * Clock is drifting but remains within acceptable error bounds;
+	 * error_bound is valid and can be trusted.
+	 */
+	PTP_CLOCK_STATUS_HOLDOVER     = 3,
+
+	/*
+	 * Clock is free-running: not currently disciplined toward a reference
+	 * (unlike HOLDOVER), but coasting on a known oscillator. error_bound
+	 * remains valid and can be trusted, and typically grows over time.
+	 */
+	PTP_CLOCK_STATUS_FREE_RUNNING = 4,
+
+	/*
+	 * Clock is considered broken (e.g. the oscillator is faulty or
+	 * abnormally unstable): error_bound cannot be trusted. A clock that is
+	 * merely unsynchronized or resynchronizing should report
+	 * PTP_CLOCK_STATUS_UNKNOWN or PTP_CLOCK_STATUS_INITIALIZING instead.
+	 */
+	PTP_CLOCK_STATUS_UNRELIABLE   = 5
+};
+
+/*
+ * Clock timescale values for struct ptp_clock_attrs.timescale.
+ *
+ * These definitions describe the mathematical properties and reference
+ * epochs of the timescale provided by the PHC.
+ *
+ * Discipline: Describes the frequency/phase steering behavior.
+ * Continuity: Describes whether the timeline is uninterrupted.
+ */
+enum ptp_clock_timescale {
+	/* Unknown or unspecified timescale */
+	PTP_TIMESCALE_UNKNOWN = 0,
+
+	/********************* Absolute Atomic Timescales *********************
+	 * These timescales are continuous, monotonic standards based on atomic
+	 * physics. They do not experience phase jumps.
+	 **********************************************************************/
+
+	/**
+	 * International Atomic Time (TAI)
+	 * Epoch: 1958-01-01 00:00:00.
+	 * Continuity: Strictly monotonic and continuous; no leap seconds.
+	 * Discipline: Primary atomic reference; no phase jumps.
+	 */
+	PTP_TIMESCALE_TAI = 1,
+
+	/**
+	 * Terrestrial Time (TT)
+	 * Epoch: 1958-01-01 00:00:00.
+	 * Continuity: Strictly monotonic and continuous; no leap seconds.
+	 * Discipline: Defined as TAI + 32.184s constant offset.
+	 */
+	PTP_TIMESCALE_TT = 2,
+
+	/**
+	 * Global Positioning System (GPS) Time
+	 * Epoch: 1980-01-06 00:00:00.
+	 * Continuity: Strictly monotonic and continuous; no leap seconds.
+	 * Discipline: Defined by the GPS constellation; fixed offset from TAI.
+	 */
+	PTP_TIMESCALE_GPS = 3,
+
+	/****************** UTC-Based Timescales (Civil Time) *****************
+	 * These timescales are derived from TAI but adjusted to align with
+	 * the Earth's rotation, primarily through leap seconds.
+	 **********************************************************************/
+
+	/**
+	 * Coordinated Universal Time (UTC) - Wall-clock (CLOCK_REALTIME)
+	 * Epoch: 1970-01-01 00:00:00 (Unix epoch).
+	 * Continuity: Discontinuous; subject to 1-second leap second
+	 *             phase jumps.
+	 * Discipline: Frequency steered; incorporates leap second corrections.
+	 *
+	 * Note: Leap-smeared UTC MUST NOT be advertised as PTP_TIMESCALE_UTC.
+	 * Smear algorithms are not standardized and the resulting timescale
+	 * is ambiguous. Implementations using smeared UTC MUST advertise
+	 * PTP_TIMESCALE_UNKNOWN or PTP_TIMESCALE_PROPRIETARY instead.
+	 */
+	PTP_TIMESCALE_UTC = 4,
+
+	/**
+	 * POSIX Time (Unix Time)
+	 * Epoch: 1970-01-01 00:00:00.
+	 * Continuity: Discontinuous; leap seconds handled by
+	 *             repeating/skipping values.
+	 * Discipline: Follows UTC frequency steering and phase jumps.
+	 */
+	PTP_TIMESCALE_POSIX = 5,
+
+	/****************** System-Relative Monotonic Clocks ******************
+	 * These timescales are relative to a system event (like boot)
+	 * and are not synchronized to an external atomic standard.
+	 **********************************************************************/
+
+	/**
+	 * Monotonic System Clock (CLOCK_MONOTONIC)
+	 * Epoch: Arbitrary (System boot time).
+	 * Continuity: Strictly monotonic; no leap seconds.
+	 * Discipline: Frequency steered to match system reference;
+	 *             does not advance during suspend.
+	 */
+	PTP_TIMESCALE_MONOTONIC = 6,
+
+	/**
+	 * Raw Monotonic System Clock (CLOCK_MONOTONIC_RAW)
+	 * Epoch: Arbitrary (System boot time).
+	 * Continuity: Strictly monotonic; no leap seconds.
+	 * Discipline: Raw hardware oscillator; no frequency steering
+	 *             or discipline.
+	 */
+	PTP_TIMESCALE_MONOTONIC_RAW = 7,
+
+	/**
+	 * Boot Time System Clock (CLOCK_BOOTTIME)
+	 * Epoch: Arbitrary (System boot time).
+	 * Continuity: Strictly monotonic and continuous; no leap seconds.
+	 * Discipline: Frequency steered to match system reference;
+	 *             advances during suspend.
+	 */
+	PTP_TIMESCALE_BOOTTIME = 8,
+
+	/********************** Vendor-Specific Timescale *********************/
+
+	/* A proprietary or vendor-specific timescale with custom rules. */
+	PTP_TIMESCALE_PROPRIETARY = 9,
+};
+
+/*
  * struct ptp_clock_time - represents a time value
  *
  * The sign of the seconds field applies to the whole value. The
@@ -94,6 +237,136 @@ struct ptp_clock_time {
 	__u32 reserved;
 };
 
+/*
+ * Hardware counter identifiers for struct ptp_sys_time.sys_counter_id
+ */
+enum ptp_counter_id {
+	/* Counter value not available or type not specified */
+	PTP_COUNTER_UNKNOWN = 0,
+
+	/* x86 Time Stamp Counter (TSC) */
+	PTP_COUNTER_X86_TSC = 1,
+
+	/* ARM Generic Timer virtual counter */
+	PTP_COUNTER_ARM_ARCH = 2,
+};
+
+/* Valid flags for struct ptp_clock_attrs.valid */
+#define PTP_ATTRS_VALID_ERROR_BOUND	(1 << 0)
+#define PTP_ATTRS_VALID_TIMESCALE	(1 << 1)
+#define PTP_ATTRS_VALID_STATUS		(1 << 2)
+
+/**
+ * struct ptp_clock_attrs - quality attributes for a PHC timestamp
+ *
+ * @valid:       Bitmask of PTP_ATTRS_VALID_* indicating which fields
+ *               are populated. Zero means no attributes available.
+ * @error_bound: Maximum error (an upper bound, in nanoseconds) between the
+ *               returned device_time and true time on the advertised
+ *               @timescale; a worst-case bound, not a statistical estimate.
+ *               Valid only when PTP_ATTRS_VALID_ERROR_BOUND is set, and must
+ *               not be trusted when @status is PTP_CLOCK_STATUS_UNKNOWN or
+ *               PTP_CLOCK_STATUS_UNRELIABLE.
+ * @timescale:   Clock timescale (enum ptp_clock_timescale). Valid only
+ *               when PTP_ATTRS_VALID_TIMESCALE is set.
+ * @status:      Synchronization status (enum ptp_clock_status). Valid
+ *               only when PTP_ATTRS_VALID_STATUS is set. Transitions between
+ *               states are device-specific; there are no kernel-defined
+ *               thresholds relating @status to @error_bound.
+ * @rsv:         Reserved for future use, must be zero.
+ */
+struct ptp_clock_attrs {
+	__u32 valid;
+	__u32 error_bound;
+	__u32 timescale;
+	__u32 status;
+	__u32 rsv[4];
+};
+
+/**
+ * struct ptp_sys_time - system time snapshot with counter value
+ *
+ * @sys_time:       System time in nanoseconds (clock selected by request).
+ * @sys_rawtime:    CLOCK_MONOTONIC_RAW time in nanoseconds.
+ * @sys_counter:    Raw clocksource counter value (0 = unavailable).
+ * @sys_counter_id: Identifies the counter (enum ptp_counter_id).
+ * @rsv:            Reserved for future use, must be zero.
+ */
+struct ptp_sys_time {
+	__s64 sys_time;
+	__s64 sys_rawtime;
+	__u64 sys_counter;
+	__u32 sys_counter_id;
+	__u32 rsv;
+};
+
+/**
+ * struct ptp_dev_time - device timestamp with quality attributes
+ *
+ * @device_time: PHC timestamp value.
+ * @attrs:       Quality attributes for this timestamp.
+ */
+struct ptp_dev_time {
+	struct ptp_clock_time device_time;
+	struct ptp_clock_attrs attrs;
+};
+
+/**
+ * struct ptp_timestamp - a complete timestamp sample
+ *
+ * @systime:      System time snapshot; shares storage with @pre_systime,
+ *                used by PTP_SYS_OFFSET_PRECISE_ATTRS.
+ * @pre_systime:  System time read right before the device read, used by
+ *                PTP_SYS_OFFSET_EXTENDED_ATTRS.
+ * @devtime:      Device timestamp with its quality attributes.
+ * @post_systime: System time read right after the device read, used by
+ *                PTP_SYS_OFFSET_EXTENDED_ATTRS.
+ *
+ * For PTP_SYS_OFFSET_EXTENDED_ATTRS: pre_systime and post_systime bracket
+ * the device read (ABA sandwich).
+ * For PTP_SYS_OFFSET_PRECISE_ATTRS: only systime (union with pre_systime)
+ * is meaningful; post_systime is zeroed.
+ */
+struct ptp_timestamp {
+	union {
+		struct ptp_sys_time systime;
+		struct ptp_sys_time pre_systime;
+	};
+	struct ptp_dev_time devtime;
+	struct ptp_sys_time post_systime;
+};
+
+/**
+ * struct ptp_attrs_request - request parameters for attrs ioctls
+ *
+ * @valid:       Bitmask for future request extensions. Must be zero for now.
+ * @clock_id:    Clock base for system timestamps (CLOCK_REALTIME, etc).
+ * @num_samples: Number of timestamp samples requested.
+ *               For PTP_SYS_OFFSET_PRECISE_ATTRS must be 1.
+ * @rsv:         Reserved for future use, must be zero.
+ */
+struct ptp_attrs_request {
+	__u32 valid;
+	__kernel_clockid_t clock_id;
+	__u32 num_samples;
+	__u32 rsv[3];
+};
+
+/**
+ * struct ptp_sys_offset_attrs - unified data structure for attrs ioctls
+ *
+ * @request:    Request parameters (see struct ptp_attrs_request).
+ * @timestamps: Array of returned samples; holds request.num_samples entries.
+ *
+ * Used by both PTP_SYS_OFFSET_EXTENDED_ATTRS and
+ * PTP_SYS_OFFSET_PRECISE_ATTRS. Userspace allocates space for
+ * request.num_samples entries in the timestamps array.
+ */
+struct ptp_sys_offset_attrs {
+	struct ptp_attrs_request request;
+	struct ptp_timestamp timestamps[];
+};
+
 struct ptp_clock_caps {
 	int max_adj;   /* Maximum frequency adjustment in parts per billon. */
 	int n_alarm;   /* Number of programmable alarms. */
@@ -106,7 +379,11 @@ struct ptp_clock_caps {
 	/* Whether the clock supports adjust phase */
 	int adjust_phase;
 	int max_phase_adj; /* Maximum phase adjustment in nanoseconds. */
-	int rsv[11];       /* Reserved for future use. */
+	/* Whether the clock supports extended timestamps with attributes */
+	int extended_attrs;
+	/* Whether the clock supports precise cross-timestamps with attributes */
+	int precise_attrs;
+	int rsv[9];       /* Reserved for future use. */
 };
 
 struct ptp_extts_request {
@@ -252,6 +529,10 @@ struct ptp_pin_desc {
 	_IOWR(PTP_CLK_MAGIC, 21, struct ptp_sys_offset_precise)
 #define PTP_SYS_OFFSET_EXTENDED_CYCLES \
 	_IOWR(PTP_CLK_MAGIC, 22, struct ptp_sys_offset_extended)
+#define PTP_SYS_OFFSET_PRECISE_ATTRS \
+	_IOWR(PTP_CLK_MAGIC, 23, struct ptp_sys_offset_attrs)
+#define PTP_SYS_OFFSET_EXTENDED_ATTRS \
+	_IOWR(PTP_CLK_MAGIC, 24, struct ptp_sys_offset_attrs)
 
 struct ptp_extts_event {
 	struct ptp_clock_time t; /* Time event occurred. */

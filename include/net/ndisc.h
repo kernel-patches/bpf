@@ -67,6 +67,15 @@ struct prefix_info;
 
 extern struct neigh_table nd_tbl;
 
+static inline struct neigh_table *nd_table(struct net *net)
+{
+#if IS_ENABLED(CONFIG_IPV6)
+	if (disable_ipv6_mod)
+		return &nd_tbl;
+#endif
+	return net->neigh_tables[NEIGH_ND_TABLE];
+}
+
 struct nd_msg {
         struct icmp6hdr	icmph;
         struct in6_addr	target;
@@ -145,11 +154,13 @@ void __ndisc_fill_addr_option(struct sk_buff *skb, int type, const void *data,
  *     option parser will take care about that option.
  *
  * void (*update)(const struct net_device *dev, struct neighbour *n,
- *		  u32 flags, u8 icmp6_type,
+ *		  u32 flags, bool failed_recovery, u8 icmp6_type,
  *		  const struct ndisc_options *ndopts):
  *     This function is called when IPv6 ndisc updates the neighbour cache
  *     entry. Additional options which can be updated may be previously
  *     parsed by parse_opts callback and accessible over ndopts parameter.
+ *     failed_recovery indicates that ndisc accepted the packet to recover
+ *     an entry observed in NUD_FAILED.
  *
  * int (*opt_addr_space)(const struct net_device *dev, u8 icmp6_type,
  *			 struct neighbour *neigh, u8 *ha_buf,
@@ -188,7 +199,7 @@ struct ndisc_ops {
 				 struct nd_opt_hdr *nd_opt,
 				 struct ndisc_options *ndopts);
 	void	(*update)(const struct net_device *dev, struct neighbour *n,
-			  u32 flags, u8 icmp6_type,
+			  u32 flags, bool failed_recovery, u8 icmp6_type,
 			  const struct ndisc_options *ndopts);
 	int	(*opt_addr_space)(const struct net_device *dev, u8 icmp6_type,
 				  struct neighbour *neigh, u8 *ha_buf,
@@ -218,12 +229,13 @@ static inline int ndisc_ops_parse_options(const struct net_device *dev,
 }
 
 static inline void ndisc_ops_update(const struct net_device *dev,
-					  struct neighbour *n, u32 flags,
-					  u8 icmp6_type,
-					  const struct ndisc_options *ndopts)
+				    struct neighbour *n, u32 flags,
+				    bool failed_recovery, u8 icmp6_type,
+				    const struct ndisc_options *ndopts)
 {
 	if (dev->ndisc_ops && dev->ndisc_ops->update)
-		dev->ndisc_ops->update(dev, n, flags, icmp6_type, ndopts);
+		dev->ndisc_ops->update(dev, n, flags, failed_recovery,
+				       icmp6_type, ndopts);
 }
 
 static inline int ndisc_ops_opt_addr_space(const struct net_device *dev,
@@ -354,7 +366,9 @@ static inline u32 ndisc_hashfn(const void *pkey, const struct net_device *dev, _
 
 static inline struct neighbour *__ipv6_neigh_lookup_noref(struct net_device *dev, const void *pkey)
 {
-	return ___neigh_lookup_noref(&nd_tbl, neigh_key_eq128, ndisc_hashfn, pkey, dev);
+	struct neigh_table *tbl = nd_table(dev_net(dev));
+
+	return ___neigh_lookup_noref(tbl, neigh_key_eq128, ndisc_hashfn, pkey, dev);
 }
 
 static inline struct neighbour *__ipv6_neigh_lookup(struct net_device *dev, const void *pkey)
@@ -388,8 +402,11 @@ static inline struct neighbour *ip_neigh_gw6(struct net_device *dev,
 	struct neighbour *neigh;
 
 	neigh = __ipv6_neigh_lookup_noref(dev, addr);
-	if (unlikely(!neigh))
-		neigh = __neigh_create(&nd_tbl, addr, dev, false);
+	if (unlikely(!neigh)) {
+		struct neigh_table *tbl = nd_table(dev_net(dev));
+
+		neigh = __neigh_create(tbl, addr, dev, false);
+	}
 
 	return neigh;
 #else

@@ -84,7 +84,7 @@ static u32 mucse_mbx_get_lock_pf(struct mucse_hw *hw)
  * @hw: pointer to the HW structure
  *
  * Pair with mucse_release_mbx_lock_pf()
- * This function maybe used in an irq handler.
+ * All mailbox access runs in process context.
  *
  * Return: 0 on success, negative errno on failure
  **/
@@ -93,11 +93,11 @@ static int mucse_obtain_mbx_lock_pf(struct mucse_hw *hw)
 	struct mucse_mbx_info *mbx = &hw->mbx;
 	u32 val;
 
-	return read_poll_timeout_atomic(mucse_mbx_get_lock_pf,
-					val, val & MUCSE_MBX_PFU,
-					mbx->delay_us,
-					mbx->timeout_us,
-					false, hw);
+	return read_poll_timeout(mucse_mbx_get_lock_pf,
+				 val, val & MUCSE_MBX_PFU,
+				 mbx->delay_us,
+				 mbx->timeout_us,
+				 false, hw);
 }
 
 /**
@@ -246,6 +246,26 @@ int mucse_poll_and_read_mbx(struct mucse_hw *hw, __le32 *msg, u16 size)
 	int err;
 
 	err = mucse_poll_for_msg(hw);
+	if (err)
+		return err;
+
+	return mucse_read_mbx_pf(hw, msg, size);
+}
+
+/**
+ * mucse_check_and_read_mbx - check if there is notification and receive message
+ * @hw: pointer to the HW structure
+ * @msg: the message buffer
+ * @size: length of buffer
+ *
+ * Return: 0 if it successfully received a message notification and
+ * copied it into the receive buffer, negative errno on failure
+ **/
+int mucse_check_and_read_mbx(struct mucse_hw *hw, __le32 *msg, u16 size)
+{
+	int err;
+
+	err = mucse_check_for_msg_pf(hw);
 	if (err)
 		return err;
 

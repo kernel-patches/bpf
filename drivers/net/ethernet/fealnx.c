@@ -839,8 +839,7 @@ static int netdev_open(struct net_device *dev)
 
 	/* Initialize other registers. */
 	/* Configure the PCI bus bursts and FIFO thresholds.
-	   486: Set 8 longword burst.
-	   586: no burst limit.
+	   No burst limit.
 	   Burst length 5:3
 	   0 0 0   1
 	   0 0 1   4
@@ -858,13 +857,7 @@ static int netdev_open(struct net_device *dev)
 #ifdef __BIG_ENDIAN
 	np->bcrvalue |= 0x04;	/* big-endian */
 #endif
-
-#if defined(__i386__) && !defined(MODULE) && !defined(CONFIG_UML)
-	if (boot_cpu_data.x86 <= 4)
-		np->crvalue = 0xa00;
-	else
-#endif
-		np->crvalue = 0xe00;	/* rx 128 burst length */
+	np->crvalue = 0xe00;	/* rx 128 burst length */
 
 
 // 89/12/29 add,

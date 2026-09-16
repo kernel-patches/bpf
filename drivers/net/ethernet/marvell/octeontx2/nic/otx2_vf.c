@@ -297,10 +297,9 @@ static int otx2vf_register_mbox_intr(struct otx2_nic *vf, bool probe_pf)
 
 	err = otx2_sync_mbox_msg(&vf->mbox);
 	if (err) {
-		dev_warn(vf->dev,
-			 "AF not responding to mailbox, deferring probe\n");
 		otx2vf_disable_mbox_intr(vf);
-		return -EPROBE_DEFER;
+		return dev_err_probe(vf->dev, -EPROBE_DEFER,
+			 "AF not responding to mailbox, deferring probe\n");
 	}
 	return 0;
 }
@@ -554,7 +553,7 @@ static int otx2vf_realloc_msix_vectors(struct otx2_nic *vf)
 	int num_vec, err;
 
 	num_vec = hw->nix_msixoff;
-	num_vec += NIX_LF_CINT_VEC_START + hw->max_queues;
+	num_vec += NIX_LF_POISON_VEC + 1;
 
 	otx2vf_disable_mbox_intr(vf);
 	pci_free_irq_vectors(hw->pdev);
@@ -597,7 +596,7 @@ static int otx2vf_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	pci_set_master(pdev);
 
-	qcount = num_online_cpus();
+	qcount = min_t(int, num_online_cpus(), OTX2_MAX_CQ_CNT);
 	qos_txqs = min_t(int, qcount, OTX2_QOS_MAX_LEAF_NODES);
 	netdev = alloc_etherdev_mqs(sizeof(*vf), qcount + qos_txqs, qcount);
 	if (!netdev)
@@ -611,7 +610,7 @@ static int otx2vf_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	vf->dev = dev;
 	vf->iommu_domain = iommu_get_domain_for_dev(dev);
 
-	vf->flags |= OTX2_FLAG_INTF_DOWN;
+	otx2_set_flag(vf, OTX2_FLAG_INTF_DOWN);
 	hw = &vf->hw;
 	hw->pdev = vf->pdev;
 	hw->rx_queues = qcount;
@@ -825,10 +824,10 @@ static void otx2vf_remove(struct pci_dev *pdev)
 	vf = netdev_priv(netdev);
 
 	/* Disable 802.3x pause frames */
-	if (vf->flags & OTX2_FLAG_RX_PAUSE_ENABLED ||
-	    (vf->flags & OTX2_FLAG_TX_PAUSE_ENABLED)) {
-		vf->flags &= ~OTX2_FLAG_RX_PAUSE_ENABLED;
-		vf->flags &= ~OTX2_FLAG_TX_PAUSE_ENABLED;
+	if (otx2_test_flag(vf, OTX2_FLAG_RX_PAUSE_ENABLED) ||
+	    otx2_test_flag(vf, OTX2_FLAG_TX_PAUSE_ENABLED)) {
+		otx2_clear_flag(vf, OTX2_FLAG_RX_PAUSE_ENABLED);
+		otx2_clear_flag(vf, OTX2_FLAG_TX_PAUSE_ENABLED);
 		otx2_config_pause_frm(vf);
 	}
 

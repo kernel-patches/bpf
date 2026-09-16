@@ -235,7 +235,7 @@ static int afs_create_yfs_cm_token(struct sk_buff *challenge,
 	 *	struct RXGK_AuthName	identities<>;
 	 * };
 	 */
-	toksize = keysize + 8 + 4 + 4 + 8 + xdr_len_object(authsize);
+	toksize = keysize + 4 + 8 + 4 + 4 + 8 + xdr_len_object(authsize);
 
 	offset = 0;
 	encsize = crypto_krb5_how_much_buffer(token_krb5, KRB5_ENCRYPT_MODE, toksize, &offset);
