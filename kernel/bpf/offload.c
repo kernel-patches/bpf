@@ -182,6 +182,9 @@ static int __bpf_prog_dev_bound_init(struct bpf_prog *prog, struct net_device *n
 	struct bpf_prog_offload *offload;
 	int err;
 
+	if (READ_ONCE(netdev->reg_state) != NETREG_REGISTERED)
+		return -ENODEV;
+
 	offload = kzalloc_obj(*offload, GFP_USER);
 	if (!offload)
 		return -ENOMEM;
