@@ -47,6 +47,7 @@
  * Contact Information:
  * Jon Mason <jon.mason@intel.com>
  */
+#include <linux/bitfield.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/dmaengine.h>
@@ -132,7 +133,7 @@ struct ntb_queue_entry {
 };
 
 struct ntb_rx_info {
-	unsigned int entry;
+	__le32 entry;
 };
 
 struct ntb_transport_qp {
@@ -145,6 +146,8 @@ struct ntb_transport_qp {
 	bool client_ready;
 	bool link_is_up;
 	bool active;
+	u32 local_caps;
+	unsigned int caps_spad;
 
 	u8 qp_num;	/* Only 64 QP's are allowed.  0-63 */
 	u64 qp_bit;
@@ -167,7 +170,7 @@ struct ntb_transport_qp {
 	unsigned int tx_max_frame;
 
 	void (*rx_handler)(struct ntb_transport_qp *qp, void *qp_data,
-			   void *data, int len);
+			   void *data, int len, unsigned int meta);
 	struct list_head rx_post_q;
 	struct list_head rx_pend_q;
 	struct list_head rx_free_q;
@@ -181,7 +184,7 @@ struct ntb_transport_qp {
 	dma_cookie_t last_cookie;
 	struct tasklet_struct rxc_db_work;
 
-	void (*event_handler)(void *data, int status);
+	void (*event_handler)(void *data, int status, u32 peer_caps);
 	struct delayed_work link_work;
 	struct work_struct link_cleanup;
 
@@ -244,6 +247,9 @@ struct ntb_transport_ctx {
 	unsigned int qp_count;
 	u64 qp_bitmap;
 	u64 qp_bitmap_free;
+	/* Serialize request updates and peer writes. */
+	spinlock_t up_request_lock;
+	u32 up_request;
 
 	bool use_msi;
 	unsigned int msi_spad_offset;
@@ -264,10 +270,13 @@ enum {
 	LINK_DOWN_FLAG = BIT(1),
 };
 
+/* Reserve the low byte for transport flags. */
+#define DESC_META_MASK		GENMASK(31, 8)
+
 struct ntb_payload_header {
-	unsigned int ver;
-	unsigned int len;
-	unsigned int flags;
+	__le32 ver;
+	__le32 len;
+	__le32 flags;
 };
 
 enum {
@@ -278,6 +287,9 @@ enum {
 	MW0_SZ_HIGH,
 	MW0_SZ_LOW,
 };
+
+/* One per-QP scratchpad, with the remaining bits owned by the client. */
+#define QP_CAPS_VALID		BIT(31)
 
 #define dev_client_dev(__dev) \
 	container_of((__dev), struct ntb_transport_client_dev, dev)
@@ -514,7 +526,8 @@ static int ntb_qp_debugfs_stats_show(struct seq_file *s, void *v)
 	seq_printf(s, "tx_err_no_buf - %llu\n", qp->tx_err_no_buf);
 	seq_printf(s, "tx_mw - \t0x%p\n", qp->tx_mw);
 	seq_printf(s, "tx_index (H) - \t%u\n", qp->tx_index);
-	seq_printf(s, "RRI (T) - \t%u\n", qp->remote_rx_info->entry);
+	seq_printf(s, "RRI (T) - \t%u\n",
+		   le32_to_cpu(qp->remote_rx_info->entry));
 	seq_printf(s, "tx_max_entry - \t%u\n", qp->tx_max_entry);
 	seq_printf(s, "free tx - \t%u\n", ntb_transport_tx_free_entry(qp));
 	seq_putc(s, '\n');
@@ -633,7 +646,7 @@ static int ntb_transport_setup_qp_mw(struct ntb_transport_ctx *nt,
 		qp->rx_alloc_entry++;
 	}
 
-	qp->remote_rx_info->entry = qp->rx_max_entry - 1;
+	qp->remote_rx_info->entry = cpu_to_le32(qp->rx_max_entry - 1);
 
 	/* setup the hdr offsets with 0's */
 	for (i = 0; i < qp->rx_max_entry; i++) {
@@ -919,7 +932,7 @@ static void ntb_qp_link_down_reset(struct ntb_transport_qp *qp)
 {
 	ntb_qp_link_context_reset(qp);
 	if (qp->remote_rx_info)
-		qp->remote_rx_info->entry = qp->rx_max_entry - 1;
+		qp->remote_rx_info->entry = cpu_to_le32(qp->rx_max_entry - 1);
 }
 
 static void ntb_qp_link_cleanup(struct ntb_transport_qp *qp)
@@ -933,7 +946,7 @@ static void ntb_qp_link_cleanup(struct ntb_transport_qp *qp)
 	ntb_qp_link_down_reset(qp);
 
 	if (qp->event_handler)
-		qp->event_handler(qp->cb_data, qp->link_is_up);
+		qp->event_handler(qp->cb_data, qp->link_is_up, 0);
 }
 
 static void ntb_qp_link_cleanup_work(struct work_struct *work)
@@ -974,6 +987,9 @@ static void ntb_transport_link_cleanup(struct ntb_transport_ctx *nt)
 
 	if (!nt->link_is_up)
 		cancel_delayed_work_sync(&nt->link_work);
+
+	scoped_guard(spinlock, &nt->up_request_lock)
+		nt->up_request = 0;
 
 	for (i = 0; i < nt->mw_count; i++)
 		ntb_free_mw(nt, i);
@@ -1112,6 +1128,21 @@ out:
 				      msecs_to_jiffies(NTB_LINK_DOWN_TIMEOUT));
 }
 
+static void ntb_qp_up_request(struct ntb_transport_qp *qp, bool up)
+{
+	struct ntb_transport_ctx *nt = qp->transport;
+
+	guard(spinlock)(&nt->up_request_lock);
+
+	if (up)
+		nt->up_request |= BIT(qp->qp_num);
+	else
+		nt->up_request &= ~BIT(qp->qp_num);
+
+	/* Update the peer's view of our requests. */
+	ntb_peer_spad_write(nt->ndev, PIDX, QP_LINKS, nt->up_request);
+}
+
 static void ntb_qp_link_work(struct work_struct *work)
 {
 	struct ntb_transport_qp *qp = container_of(work,
@@ -1119,25 +1150,48 @@ static void ntb_qp_link_work(struct work_struct *work)
 						   link_work.work);
 	struct pci_dev *pdev = qp->ndev->pdev;
 	struct ntb_transport_ctx *nt = qp->transport;
+	u32 peer_caps = 0;
 	int val;
 
 	WARN_ON(!nt->link_is_up);
 
+	/* Pair with the release store in ntb_transport_link_up(). */
+	if (!smp_load_acquire(&qp->client_ready))
+		return;
+
+	/* Publish capabilities before QP readiness. */
+	if (qp->caps_spad)
+		ntb_peer_spad_write(nt->ndev, PIDX, qp->caps_spad,
+				    READ_ONCE(qp->local_caps) | QP_CAPS_VALID);
 	val = ntb_spad_read(nt->ndev, QP_LINKS);
 
-	ntb_peer_spad_write(nt->ndev, PIDX, QP_LINKS, val | BIT(qp->qp_num));
+	ntb_qp_up_request(qp, true);
 
 	/* query remote spad for qp ready bits */
 	dev_dbg_ratelimited(&pdev->dev, "Remote QP link status = %x\n", val);
 
 	/* See if the remote side is up */
 	if (val & BIT(qp->qp_num)) {
+		if (qp->caps_spad) {
+			u32 caps;
+
+			/*
+			 * Order the readiness read before the capability read
+			 * for memory-backed SPADs.
+			 */
+			dma_rmb();
+			caps = ntb_spad_read(nt->ndev, qp->caps_spad);
+
+			if (caps & QP_CAPS_VALID)
+				peer_caps = caps & ~QP_CAPS_VALID;
+		}
+
 		dev_info(&pdev->dev, "qp %d: Link Up\n", qp->qp_num);
 		qp->link_is_up = true;
 		qp->active = true;
 
 		if (qp->event_handler)
-			qp->event_handler(qp->cb_data, qp->link_is_up);
+			qp->event_handler(qp->cb_data, qp->link_is_up, peer_caps);
 
 		if (qp->active)
 			tasklet_schedule(&qp->rxc_db_work);
@@ -1167,6 +1221,12 @@ static int ntb_transport_init_queue(struct ntb_transport_ctx *nt,
 	qp->ndev = nt->ndev;
 	qp->client_ready = false;
 	qp->event_handler = NULL;
+	/* Reserve MSI slots even when only the peer might use them. */
+	qp->caps_spad = nt->msi_spad_offset + 2 * qp_count + qp_num;
+	if (qp->caps_spad >= ntb_spad_count(nt->ndev))
+		qp->caps_spad = 0;
+	else
+		ntb_spad_write(qp->ndev, qp->caps_spad, 0);
 	ntb_qp_link_context_reset(qp);
 
 	if (mw_num < qp_count % mw_count)
@@ -1360,6 +1420,7 @@ static int ntb_transport_probe(struct ntb_client *self, struct ntb_dev *ndev)
 			goto err2;
 	}
 
+	spin_lock_init(&nt->up_request_lock);
 	mutex_init(&nt->link_event_lock);
 	INIT_DELAYED_WORK(&nt->link_work, ntb_transport_link_work);
 	INIT_WORK(&nt->link_cleanup, ntb_transport_link_cleanup_work);
@@ -1433,30 +1494,35 @@ static void ntb_transport_free(struct ntb_client *self, struct ntb_dev *ndev)
 static void ntb_complete_rxc(struct ntb_transport_qp *qp)
 {
 	struct ntb_queue_entry *entry;
-	void *cb_data;
-	unsigned int len;
 	unsigned long irqflags;
+	unsigned int flags;
+	unsigned int meta;
+	unsigned int len;
+	void *cb_data;
 
 	spin_lock_irqsave(&qp->ntb_rx_q_lock, irqflags);
 
 	while (!list_empty(&qp->rx_post_q)) {
 		entry = list_first_entry(&qp->rx_post_q,
 					 struct ntb_queue_entry, entry);
-		if (!(entry->flags & DESC_DONE_FLAG))
+		/* DONE publishes the entry, payload and client metadata. */
+		flags = smp_load_acquire(&entry->flags);
+		if (!(flags & DESC_DONE_FLAG))
 			break;
 
-		entry->rx_hdr->flags = 0;
+		entry->rx_hdr->flags = cpu_to_le32(0);
 		iowrite32(entry->rx_index, &qp->rx_info->entry);
 
 		cb_data = entry->cb_data;
 		len = entry->len;
+		meta = FIELD_GET(DESC_META_MASK, flags);
 
 		list_move_tail(&entry->entry, &qp->rx_free_q);
 
 		spin_unlock_irqrestore(&qp->ntb_rx_q_lock, irqflags);
 
 		if (qp->rx_handler && qp->client_ready)
-			qp->rx_handler(qp, qp->cb_data, cb_data, len);
+			qp->rx_handler(qp, qp->cb_data, cb_data, len, meta);
 
 		spin_lock_irqsave(&qp->ntb_rx_q_lock, irqflags);
 	}
@@ -1495,7 +1561,8 @@ static void ntb_rx_copy_callback(void *data,
 		}
 	}
 
-	entry->flags |= DESC_DONE_FLAG;
+	/* Pair with the acquire load in ntb_complete_rxc(). */
+	smp_store_release(&entry->flags, entry->flags | DESC_DONE_FLAG);
 
 	ntb_complete_rxc(entry->qp);
 }
@@ -1610,30 +1677,38 @@ static int ntb_process_rxc(struct ntb_transport_qp *qp)
 	struct ntb_payload_header *hdr;
 	struct ntb_queue_entry *entry;
 	void *offset;
+	u32 flags;
+	u32 len;
+	u32 ver;
 
 	offset = qp->rx_buff + qp->rx_max_frame * qp->rx_index;
 	hdr = offset + qp->rx_max_frame - sizeof(struct ntb_payload_header);
 
-	dev_dbg(&qp->ndev->pdev->dev, "qp %d: RX ver %u len %d flags %x\n",
-		qp->qp_num, hdr->ver, hdr->len, hdr->flags);
-
-	if (!(hdr->flags & DESC_DONE_FLAG)) {
+	flags = le32_to_cpu(READ_ONCE(hdr->flags));
+	if (!(flags & DESC_DONE_FLAG)) {
 		dev_dbg(&qp->ndev->pdev->dev, "done flag not set\n");
 		qp->rx_ring_empty++;
 		return -EAGAIN;
 	}
 
-	if (hdr->flags & LINK_DOWN_FLAG) {
+	dma_rmb();
+	ver = le32_to_cpu(READ_ONCE(hdr->ver));
+	len = le32_to_cpu(READ_ONCE(hdr->len));
+
+	dev_dbg(&qp->ndev->pdev->dev, "qp %d: RX ver %u len %d flags %x\n",
+		qp->qp_num, ver, len, flags);
+
+	if (flags & LINK_DOWN_FLAG) {
 		dev_dbg(&qp->ndev->pdev->dev, "link down flag set\n");
 		ntb_qp_link_down(qp);
-		hdr->flags = 0;
+		hdr->flags = cpu_to_le32(0);
 		return -EAGAIN;
 	}
 
-	if (hdr->ver != (u32)qp->rx_pkts) {
+	if (ver != (u32)qp->rx_pkts) {
 		dev_dbg(&qp->ndev->pdev->dev,
 			"version mismatch, expected %llu - got %u\n",
-			qp->rx_pkts, hdr->ver);
+			qp->rx_pkts, ver);
 		qp->rx_err_ver++;
 		return -EIO;
 	}
@@ -1647,26 +1722,28 @@ static int ntb_process_rxc(struct ntb_transport_qp *qp)
 
 	entry->rx_hdr = hdr;
 	entry->rx_index = qp->rx_index;
+	WRITE_ONCE(entry->flags, flags & DESC_META_MASK);
 
-	if (hdr->len > entry->len) {
+	if (len > entry->len) {
 		dev_dbg(&qp->ndev->pdev->dev,
 			"receive buffer overflow! Wanted %d got %d\n",
-			hdr->len, entry->len);
+			len, entry->len);
 		qp->rx_err_oflow++;
 
 		entry->len = -EIO;
-		entry->flags |= DESC_DONE_FLAG;
+		/* Pair with the acquire load in ntb_complete_rxc(). */
+		smp_store_release(&entry->flags, entry->flags | DESC_DONE_FLAG);
 
 		ntb_complete_rxc(qp);
 	} else {
 		dev_dbg(&qp->ndev->pdev->dev,
 			"RX OK index %u ver %u size %d into buf size %d\n",
-			qp->rx_index, hdr->ver, hdr->len, entry->len);
+			qp->rx_index, ver, len, entry->len);
 
-		qp->rx_bytes += hdr->len;
+		qp->rx_bytes += len;
 		qp->rx_pkts++;
 
-		entry->len = hdr->len;
+		entry->len = len;
 
 		ntb_async_rx(entry, offset);
 	}
@@ -2328,6 +2405,8 @@ EXPORT_SYMBOL_GPL(ntb_transport_rx_enqueue);
  * @cb: per buffer pointer for callback function to use
  * @data: pointer to data buffer that will be sent
  * @len: length of the data buffer
+ * @meta: 24-bit client metadata to send.
+ *        Out-of-range values return -EINVAL.
  *
  * Enqueue a new transmit buffer onto the transport queue from which a NTB
  * payload will be transmitted.  This assumes that a lock is being held to
@@ -2336,12 +2415,12 @@ EXPORT_SYMBOL_GPL(ntb_transport_rx_enqueue);
  * RETURNS: An appropriate -ERRNO error value on error, or zero for success.
  */
 int ntb_transport_tx_enqueue(struct ntb_transport_qp *qp, void *cb, void *data,
-			     unsigned int len)
+			     unsigned int len, unsigned int meta)
 {
 	struct ntb_queue_entry *entry;
 	int rc;
 
-	if (!qp || !len)
+	if (!qp || !len || meta > FIELD_MAX(DESC_META_MASK))
 		return -EINVAL;
 
 	if (!qp->link_is_up)
@@ -2359,7 +2438,7 @@ int ntb_transport_tx_enqueue(struct ntb_transport_qp *qp, void *cb, void *data,
 	entry->cb_data = cb;
 	entry->buf = data;
 	entry->len = len;
-	entry->flags = 0;
+	entry->flags = FIELD_PREP(DESC_META_MASK, meta);
 	entry->errors = 0;
 	entry->tx_index = 0;
 
@@ -2375,15 +2454,22 @@ EXPORT_SYMBOL_GPL(ntb_transport_tx_enqueue);
 /**
  * ntb_transport_link_up - Notify NTB transport of client readiness to use queue
  * @qp: NTB transport layer queue to be enabled
+ * @local_caps: Opaque client capabilities in bits 0..30, unchanged until
+ *              ntb_transport_link_down()
  *
  * Notify NTB transport layer of client readiness to use queue
+ *
+ * Exchange capabilities before reporting link-up through event_handler.
+ * Report zero peer capabilities for legacy peers or insufficient scratchpads.
  */
-void ntb_transport_link_up(struct ntb_transport_qp *qp)
+void ntb_transport_link_up(struct ntb_transport_qp *qp, u32 local_caps)
 {
 	if (!qp)
 		return;
 
-	qp->client_ready = true;
+	WRITE_ONCE(qp->local_caps, local_caps & ~QP_CAPS_VALID);
+	/* Publish local_caps before QP link work sees client_ready. */
+	smp_store_release(&qp->client_ready, true);
 
 	if (qp->transport->link_is_up)
 		schedule_delayed_work(&qp->link_work, 0);
@@ -2400,21 +2486,22 @@ EXPORT_SYMBOL_GPL(ntb_transport_link_up);
  */
 void ntb_transport_link_down(struct ntb_transport_qp *qp)
 {
-	int val;
-
 	if (!qp)
 		return;
 
 	qp->client_ready = false;
 
-	val = ntb_spad_read(qp->ndev, QP_LINKS);
+	if (!qp->link_is_up)
+		cancel_delayed_work_sync(&qp->link_work);
 
-	ntb_peer_spad_write(qp->ndev, PIDX, QP_LINKS, val & ~BIT(qp->qp_num));
+	/* Stop advertising capabilities before withdrawing QP readiness. */
+	if (qp->caps_spad)
+		ntb_peer_spad_write(qp->ndev, PIDX, qp->caps_spad, 0);
+
+	ntb_qp_up_request(qp, false);
 
 	if (qp->link_is_up)
 		ntb_send_link_down(qp);
-	else
-		cancel_delayed_work_sync(&qp->link_work);
 }
 EXPORT_SYMBOL_GPL(ntb_transport_link_down);
 
@@ -2486,7 +2573,9 @@ EXPORT_SYMBOL_GPL(ntb_transport_max_size);
 unsigned int ntb_transport_tx_free_entry(struct ntb_transport_qp *qp)
 {
 	unsigned int head = qp->tx_index;
-	unsigned int tail = qp->remote_rx_info->entry;
+	unsigned int tail;
+
+	tail = le32_to_cpu(READ_ONCE(qp->remote_rx_info->entry));
 
 	return tail >= head ? tail - head : qp->tx_max_entry + tail - head;
 }

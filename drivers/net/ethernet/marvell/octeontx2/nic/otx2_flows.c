@@ -270,9 +270,9 @@ exit:
 	flow_cfg->max_flows = allocated;
 
 	if (allocated) {
-		pfvf->flags |= OTX2_FLAG_MCAM_ENTRIES_ALLOC;
-		pfvf->flags |= OTX2_FLAG_NTUPLE_SUPPORT;
-		pfvf->flags |= OTX2_FLAG_TC_FLOWER_SUPPORT;
+		otx2_set_flag(pfvf, OTX2_FLAG_MCAM_ENTRIES_ALLOC);
+		otx2_set_flag(pfvf, OTX2_FLAG_NTUPLE_SUPPORT);
+		otx2_set_flag(pfvf, OTX2_FLAG_TC_FLOWER_SUPPORT);
 	}
 
 	if (allocated != count)
@@ -376,7 +376,7 @@ int otx2_mcam_entry_init(struct otx2_nic *pfvf)
 	flow_cfg->unicast_offset = vf_vlan_max_flows;
 	flow_cfg->rx_vlan_offset = flow_cfg->unicast_offset +
 					flow_cfg->ucast_flt_cnt;
-	pfvf->flags |= OTX2_FLAG_UCAST_FLTR_SUPPORT;
+	otx2_set_flag(pfvf, OTX2_FLAG_UCAST_FLTR_SUPPORT);
 
 	/* Check if NPC_DMAC field is supported
 	 * by the mkex profile before setting VLAN support flag.
@@ -401,11 +401,11 @@ int otx2_mcam_entry_init(struct otx2_nic *pfvf)
 	}
 
 	if (frsp->enable) {
-		pfvf->flags |= OTX2_FLAG_RX_VLAN_SUPPORT;
-		pfvf->flags |= OTX2_FLAG_VF_VLAN_SUPPORT;
+		otx2_set_flag(pfvf, OTX2_FLAG_RX_VLAN_SUPPORT);
+		otx2_set_flag(pfvf, OTX2_FLAG_VF_VLAN_SUPPORT);
 	}
 
-	pfvf->flags |= OTX2_FLAG_MCAM_ENTRIES_ALLOC;
+	otx2_set_flag(pfvf, OTX2_FLAG_MCAM_ENTRIES_ALLOC);
 	mutex_unlock(&pfvf->mbox.lock);
 
 	/* Allocate entries for Ntuple filters */
@@ -415,7 +415,7 @@ int otx2_mcam_entry_init(struct otx2_nic *pfvf)
 		return 0;
 	}
 
-	pfvf->flags |= OTX2_FLAG_TC_FLOWER_SUPPORT;
+	otx2_set_flag(pfvf, OTX2_FLAG_TC_FLOWER_SUPPORT);
 
 	refcount_set(&flow_cfg->mark_flows, 1);
 	return 0;
@@ -479,7 +479,7 @@ int otx2_mcam_flow_init(struct otx2_nic *pf)
 		return err;
 
 	/* Check if MCAM entries are allocate or not */
-	if (!(pf->flags & OTX2_FLAG_UCAST_FLTR_SUPPORT))
+	if (!otx2_test_flag(pf, OTX2_FLAG_UCAST_FLTR_SUPPORT))
 		return 0;
 
 	pf->mac_table = devm_kzalloc(pf->dev, sizeof(struct otx2_mac_table)
@@ -501,7 +501,7 @@ int otx2_mcam_flow_init(struct otx2_nic *pf)
 	if (!pf->flow_cfg->bmap_to_dmacindex)
 		return -ENOMEM;
 
-	pf->flags |= OTX2_FLAG_DMACFLTR_SUPPORT;
+	otx2_set_flag(pf, OTX2_FLAG_DMACFLTR_SUPPORT);
 
 	return 0;
 }
@@ -521,7 +521,7 @@ static int otx2_do_add_macfilter(struct otx2_nic *pf, const u8 *mac)
 	struct npc_install_flow_req *req;
 	int err, i;
 
-	if (!(pf->flags & OTX2_FLAG_UCAST_FLTR_SUPPORT))
+	if (!otx2_test_flag(pf, OTX2_FLAG_UCAST_FLTR_SUPPORT))
 		return -ENOMEM;
 
 	/* dont have free mcam entries or uc list is greater than alloted */
@@ -1167,7 +1167,7 @@ static int otx2_is_flow_rule_dmacfilter(struct otx2_nic *pfvf,
 	u64 ring_cookie = fsp->ring_cookie;
 	u32 flow_type;
 
-	if (!(pfvf->flags & OTX2_FLAG_DMACFLTR_SUPPORT))
+	if (!otx2_test_flag(pfvf, OTX2_FLAG_DMACFLTR_SUPPORT))
 		return false;
 
 	flow_type = fsp->flow_type & ~(FLOW_EXT | FLOW_MAC_EXT | FLOW_RSS);
@@ -1364,7 +1364,7 @@ int otx2_add_flow(struct otx2_nic *pfvf, struct ethtool_rxnfc *nfc)
 	}
 
 	ring = ethtool_get_flow_spec_ring(fsp->ring_cookie);
-	if (!(pfvf->flags & OTX2_FLAG_NTUPLE_SUPPORT))
+	if (!otx2_test_flag(pfvf, OTX2_FLAG_NTUPLE_SUPPORT))
 		return -ENOMEM;
 
 	/* Number of queues on a VF can be greater or less than
@@ -1596,7 +1596,7 @@ int otx2_destroy_ntuple_flows(struct otx2_nic *pfvf)
 	struct otx2_flow *iter, *tmp;
 	int err;
 
-	if (!(pfvf->flags & OTX2_FLAG_NTUPLE_SUPPORT))
+	if (!otx2_test_flag(pfvf, OTX2_FLAG_NTUPLE_SUPPORT))
 		return 0;
 
 	if (!flow_cfg->max_flows)
@@ -1629,7 +1629,7 @@ int otx2_destroy_mcam_flows(struct otx2_nic *pfvf)
 	struct otx2_flow *iter, *tmp;
 	int err;
 
-	if (!(pfvf->flags & OTX2_FLAG_MCAM_ENTRIES_ALLOC))
+	if (!otx2_test_flag(pfvf, OTX2_FLAG_MCAM_ENTRIES_ALLOC))
 		return 0;
 
 	/* remove all flows */
@@ -1658,7 +1658,7 @@ int otx2_destroy_mcam_flows(struct otx2_nic *pfvf)
 		return err;
 	}
 
-	pfvf->flags &= ~OTX2_FLAG_MCAM_ENTRIES_ALLOC;
+	otx2_clear_flag(pfvf, OTX2_FLAG_MCAM_ENTRIES_ALLOC);
 	flow_cfg->max_flows = 0;
 	mutex_unlock(&pfvf->mbox.lock);
 
@@ -1721,7 +1721,7 @@ int otx2_enable_rxvlan(struct otx2_nic *pf, bool enable)
 	int err;
 
 	/* Dont have enough mcam entries */
-	if (!(pf->flags & OTX2_FLAG_RX_VLAN_SUPPORT))
+	if (!otx2_test_flag(pf, OTX2_FLAG_RX_VLAN_SUPPORT))
 		return -ENOMEM;
 
 	if (enable) {

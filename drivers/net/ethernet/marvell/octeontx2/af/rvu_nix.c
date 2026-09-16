@@ -331,8 +331,12 @@ static bool is_valid_txschq(struct rvu *rvu, int blkaddr,
 			return true;
 	}
 
-	if (map_func != pcifunc)
+	if (map_func != pcifunc) {
+		dev_err_ratelimited(rvu->dev,
+				    "pcifunc %x map pcifunc %x not equal, lvl=%u schq=%u\n",
+				    pcifunc, map_func, lvl, schq);
 		return false;
+	}
 
 	return true;
 }
@@ -1501,6 +1505,7 @@ int rvu_mbox_handler_nix_cn10k_aq_enq(struct rvu *rvu,
 	return rvu_nix_aq_enq_inst(rvu, (struct nix_aq_enq_req *)req,
 				  (struct nix_aq_enq_rsp *)rsp);
 }
+EXPORT_SYMBOL(rvu_mbox_handler_nix_cn10k_aq_enq);
 
 int rvu_mbox_handler_nix_hwctx_disable(struct rvu *rvu,
 				       struct hwctx_disable_req *req,
@@ -1713,6 +1718,9 @@ int rvu_mbox_handler_nix_lf_alloc(struct rvu *rvu,
 	if (is_rep_dev(rvu, pcifunc)) {
 		pfvf->tx_chan_base = RVU_SWITCH_LBK_CHAN;
 		pfvf->tx_chan_cnt = 1;
+		/* Setting the TX link as that of LBK */
+		rsp->tx_link = hw->cgx_links;
+		rvu_npc_set_pkind(rvu, NPC_RX_LBK_PKIND, pfvf);
 		goto exit;
 	}
 
@@ -1755,8 +1763,9 @@ free_mem:
 	nix_ctx_free(rvu, pfvf);
 
 exit:
-	/* Set macaddr of this PF/VF */
-	ether_addr_copy(rsp->mac_addr, pfvf->mac_addr);
+	if (!is_rep_dev(rvu, pcifunc))
+		/* Set macaddr of this PF/VF */
+		ether_addr_copy(rsp->mac_addr, pfvf->mac_addr);
 
 	/* set SQB size info */
 	cfg = rvu_read64(rvu, blkaddr, NIX_AF_SQ_CONST);
@@ -3107,6 +3116,7 @@ static int nix_tx_vtag_alloc(struct rvu *rvu, int blkaddr,
 	mutex_unlock(&vlan->rsrc_lock);
 
 	regval = size ? vtag : vtag << 32;
+	regval |= (vtag & ~GENMASK_ULL(47, 0)) << 48;
 
 	rvu_write64(rvu, blkaddr,
 		    NIX_AF_TX_VTAG_DEFX_DATA(index), regval);
@@ -4974,7 +4984,7 @@ static void rvu_nix_setup_capabilities(struct rvu *rvu, int blkaddr)
 
 	/* On OcteonTx2 DWRR quantum is directly configured into each of
 	 * the transmit scheduler queues. And PF/VF drivers were free to
-	 * config any value upto 2^24.
+	 * config any value up to 2^24.
 	 * On CN10K, HW is modified, the quantum configuration at scheduler
 	 * queues is in terms of weight. And SW needs to setup a base DWRR MTU
 	 * at NIX_AF_DWRR_RPM_MTU / NIX_AF_DWRR_SDP_MTU. HW will do

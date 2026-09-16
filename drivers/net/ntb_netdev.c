@@ -4,6 +4,7 @@
  */
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
+#include <linux/if_vlan.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/ntb.h>
@@ -29,6 +30,21 @@ static unsigned int tx_stop = 5;
 #define NTB_NETDEV_MAX_QUEUES		64
 #define NTB_NETDEV_DEFAULT_QUEUES	1
 
+#define NTB_NETDEV_CAP_CSUM		BIT(0)
+
+/* An ntb_netdev_hdr precedes the packet. */
+#define NTB_NETDEV_META_HDR		BIT(0)
+
+#define NTB_NETDEV_HDR_F_CSUM		BIT(0)
+
+struct ntb_netdev_hdr {
+	__le16 len;		/* Header length in bytes, a multiple of 2. */
+	__le16 flags;
+	/* From the packet start, excluding this header. */
+	__le16 csum_start;
+	__le16 csum_offset;
+};
+
 struct ntb_netdev;
 
 struct ntb_netdev_queue {
@@ -36,6 +52,7 @@ struct ntb_netdev_queue {
 	struct ntb_transport_qp *qp;
 	struct timer_list tx_timer;
 	u16 qid;
+	bool peer_csum;
 };
 
 struct ntb_netdev {
@@ -83,15 +100,16 @@ static int ntb_netdev_queue_rx_fill(struct net_device *ndev,
 				    struct ntb_netdev_queue *queue)
 {
 	struct sk_buff *skb;
+	unsigned int size;
 	int rc, i;
 
+	size = ndev->mtu + ETH_HLEN + sizeof(struct ntb_netdev_hdr);
 	for (i = 0; i < NTB_RXQ_SIZE; i++) {
-		skb = netdev_alloc_skb(ndev, ndev->mtu + ETH_HLEN);
+		skb = netdev_alloc_skb(ndev, size);
 		if (!skb)
 			return -ENOMEM;
 
-		rc = ntb_transport_rx_enqueue(queue->qp, skb, skb->data,
-					      ndev->mtu + ETH_HLEN);
+		rc = ntb_transport_rx_enqueue(queue->qp, skb, skb->data, size);
 		if (rc) {
 			dev_kfree_skb(skb);
 			return rc;
@@ -101,13 +119,14 @@ static int ntb_netdev_queue_rx_fill(struct net_device *ndev,
 	return 0;
 }
 
-static void ntb_netdev_event_handler(void *data, int link_is_up)
+static void ntb_netdev_event_handler(void *data, int link_is_up, u32 peer_caps)
 {
 	struct ntb_netdev_queue *q = data;
 	struct ntb_netdev *dev = q->ntdev;
 	struct net_device *ndev;
 
 	ndev = dev->ndev;
+	WRITE_ONCE(q->peer_csum, link_is_up && (peer_caps & NTB_NETDEV_CAP_CSUM));
 
 	netdev_dbg(ndev, "Event %x, Link %x, qp %u\n", link_is_up,
 		   ntb_transport_link_query(q->qp), q->qid);
@@ -122,45 +141,87 @@ static void ntb_netdev_event_handler(void *data, int link_is_up)
 	ntb_netdev_update_carrier(dev);
 }
 
-static void ntb_netdev_rx_handler(struct ntb_transport_qp *qp, void *qp_data,
-				  void *data, int len)
+static void ntb_netdev_rx_stats_add(struct net_device *ndev,
+				    unsigned int len)
 {
+	struct pcpu_sw_netstats *tstats = this_cpu_ptr(ndev->tstats);
+	unsigned long flags;
+
+	flags = u64_stats_update_begin_irqsave(&tstats->syncp);
+	u64_stats_inc(&tstats->rx_packets);
+	u64_stats_add(&tstats->rx_bytes, len);
+	u64_stats_update_end_irqrestore(&tstats->syncp, flags);
+}
+
+static void ntb_netdev_rx_handler(struct ntb_transport_qp *qp, void *qp_data,
+				  void *data, int len, unsigned int meta)
+{
+	const struct ntb_netdev_hdr *hdr = NULL;
 	struct ntb_netdev_queue *q = qp_data;
 	struct ntb_netdev *dev = q->ntdev;
-	struct pcpu_sw_netstats *tstats;
+	unsigned int size, hdr_len = 0;
 	struct sk_buff *skb, *new_skb;
 	struct net_device *ndev;
-	unsigned long flags;
 	int rc;
 
 	ndev = dev->ndev;
+	size = ndev->mtu + ETH_HLEN + sizeof(*hdr);
 	skb = data;
 	if (!skb)
 		return;
 
 	netdev_dbg(ndev, "%s: %d byte payload received\n", __func__, len);
 
-	if (len < 0) {
+	/* Validate the frame and optional header lengths. */
+	if (len < ETH_HLEN) {
 		DEV_STATS_INC(ndev, rx_errors);
 		DEV_STATS_INC(ndev, rx_length_errors);
 		goto enqueue_again;
 	}
+	if (meta & NTB_NETDEV_META_HDR) {
+		hdr = (void *)skb->data;
+		hdr_len = le16_to_cpu(hdr->len);
+		if (hdr_len < sizeof(*hdr) || !IS_ALIGNED(hdr_len, 2) ||
+		    hdr_len > len - ETH_HLEN) {
+			DEV_STATS_INC(ndev, rx_errors);
+			DEV_STATS_INC(ndev, rx_length_errors);
+			goto enqueue_again;
+		}
+		len -= hdr_len;
+	}
 
-	tstats = this_cpu_ptr(ndev->tstats);
-	flags = u64_stats_update_begin_irqsave(&tstats->syncp);
-	u64_stats_inc(&tstats->rx_packets);
-	u64_stats_add(&tstats->rx_bytes, len);
-	u64_stats_update_end_irqrestore(&tstats->syncp, flags);
-
-	new_skb = netdev_alloc_skb(ndev, ndev->mtu + ETH_HLEN);
+	new_skb = netdev_alloc_skb(ndev, size);
 	if (!new_skb) {
+		ntb_netdev_rx_stats_add(ndev, len);
 		DEV_STATS_INC(ndev, rx_dropped);
 		goto enqueue_again;
 	}
 
-	skb_put(skb, len);
+	skb_put(skb, len + hdr_len);
+	if (hdr) {
+		u16 offset = le16_to_cpu(hdr->csum_offset);
+		u16 start = le16_to_cpu(hdr->csum_start);
+		u16 flags = le16_to_cpu(hdr->flags);
+
+		skb_pull(skb, hdr_len);
+		if (flags & ~NTB_NETDEV_HDR_F_CSUM)
+			goto rx_drop;
+
+		if (flags & NTB_NETDEV_HDR_F_CSUM) {
+			if (!(ndev->features & NETIF_F_RXCSUM)) {
+				ntb_netdev_rx_stats_add(ndev, len);
+				DEV_STATS_INC(ndev, rx_dropped);
+				goto rx_free;
+			}
+
+			if (start < ETH_HLEN ||
+			    !skb_partial_csum_set(skb, start, offset))
+				goto rx_drop;
+		}
+	}
+
+	ntb_netdev_rx_stats_add(ndev, len);
 	skb->protocol = eth_type_trans(skb, ndev);
-	skb->ip_summed = CHECKSUM_NONE;
 	skb_record_rx_queue(skb, q->qid);
 
 	netif_rx(skb);
@@ -168,12 +229,20 @@ static void ntb_netdev_rx_handler(struct ntb_transport_qp *qp, void *qp_data,
 	skb = new_skb;
 
 enqueue_again:
-	rc = ntb_transport_rx_enqueue(qp, skb, skb->data, ndev->mtu + ETH_HLEN);
+	rc = ntb_transport_rx_enqueue(qp, skb, skb->data, size);
 	if (rc) {
 		dev_kfree_skb_any(skb);
 		DEV_STATS_INC(ndev, rx_errors);
 		DEV_STATS_INC(ndev, rx_fifo_errors);
 	}
+	return;
+
+rx_drop:
+	DEV_STATS_INC(ndev, rx_errors);
+rx_free:
+	dev_kfree_skb_any(skb);
+	skb = new_skb;
+	goto enqueue_again;
 }
 
 static int __ntb_netdev_maybe_stop_tx(struct net_device *netdev,
@@ -271,6 +340,8 @@ static netdev_tx_t ntb_netdev_start_xmit(struct sk_buff *skb,
 	struct ntb_netdev *dev = netdev_priv(ndev);
 	u16 qid = skb_get_queue_mapping(skb);
 	struct ntb_netdev_queue *q;
+	unsigned int hdr_len = 0;
+	unsigned int meta = 0;
 	int rc;
 
 	q = &dev->queues[qid];
@@ -278,7 +349,29 @@ static netdev_tx_t ntb_netdev_start_xmit(struct sk_buff *skb,
 	if (unlikely(ntb_netdev_maybe_stop_tx(ndev, q, tx_stop)))
 		return NETDEV_TX_BUSY;
 
-	rc = ntb_transport_tx_enqueue(q->qp, skb, skb->data, skb->len);
+	if (skb->ip_summed == CHECKSUM_PARTIAL) {
+		if (READ_ONCE(q->peer_csum)) {
+			struct ntb_netdev_hdr hdr = {
+				.len = cpu_to_le16(sizeof(hdr)),
+				.flags = cpu_to_le16(NTB_NETDEV_HDR_F_CSUM),
+			};
+
+			if (skb_cow_head(skb, sizeof(hdr)))
+				goto drop;
+
+			hdr.csum_start = cpu_to_le16(skb_checksum_start_offset(skb));
+			hdr.csum_offset = cpu_to_le16(skb->csum_offset);
+			hdr_len = sizeof(hdr);
+			/* Keep skb->len unchanged for retries and byte accounting. */
+			memcpy(skb->data - hdr_len, &hdr, hdr_len);
+			meta = NTB_NETDEV_META_HDR;
+		} else if (skb_checksum_help(skb)) {
+			goto drop;
+		}
+	}
+
+	rc = ntb_transport_tx_enqueue(q->qp, skb, skb->data - hdr_len,
+				      skb->len + hdr_len, meta);
 	if (rc) {
 		if (rc == -EAGAIN || rc == -EBUSY) {
 			netif_stop_subqueue(ndev, q->qid);
@@ -299,6 +392,28 @@ drop:
 	dev_kfree_skb_any(skb);
 	DEV_STATS_INC(ndev, tx_dropped);
 	return NETDEV_TX_OK;
+}
+
+static netdev_features_t ntb_netdev_features_check(struct sk_buff *skb,
+						   struct net_device *ndev,
+						   netdev_features_t features)
+{
+	if (skb->ip_summed == CHECKSUM_PARTIAL &&
+	    skb_checksum_start_offset(skb) < ETH_HLEN)
+		features &= ~NETIF_F_CSUM_MASK;
+
+	return vlan_features_check(skb, features);
+}
+
+static netdev_features_t ntb_netdev_fix_features(struct net_device *ndev,
+						 netdev_features_t features)
+{
+	/* RX checksum support is exchanged at link-up. */
+	if (netif_running(ndev))
+		features = (features & ~NETIF_F_RXCSUM) |
+			   (ndev->features & NETIF_F_RXCSUM);
+
+	return features;
 }
 
 static void ntb_netdev_tx_timer(struct timer_list *t)
@@ -324,6 +439,16 @@ static void ntb_netdev_tx_timer(struct timer_list *t)
 	}
 }
 
+static void ntb_netdev_link_up(struct ntb_netdev_queue *q)
+{
+	u32 caps = 0;
+
+	WRITE_ONCE(q->peer_csum, false);
+	if (q->ntdev->ndev->features & NETIF_F_RXCSUM)
+		caps = NTB_NETDEV_CAP_CSUM;
+	ntb_transport_link_up(q->qp, caps);
+}
+
 static int ntb_netdev_open(struct net_device *ndev)
 {
 	struct ntb_netdev *dev = netdev_priv(ndev);
@@ -346,7 +471,7 @@ static int ntb_netdev_open(struct net_device *ndev)
 	netif_tx_stop_all_queues(ndev);
 
 	for (q = 0; q < dev->num_queues; q++)
-		ntb_transport_link_up(dev->queues[q].qp);
+		ntb_netdev_link_up(&dev->queues[q]);
 
 	return 0;
 
@@ -375,6 +500,9 @@ static int ntb_netdev_close(struct net_device *ndev)
 		timer_delete_sync(&queue->tx_timer);
 	}
 
+	/* Apply RX checksum changes deferred while the interface was up. */
+	netdev_update_features(ndev);
+
 	return 0;
 }
 
@@ -384,9 +512,11 @@ static int ntb_netdev_change_mtu(struct net_device *ndev, int new_mtu)
 	struct ntb_netdev_queue *queue;
 	struct sk_buff *skb;
 	unsigned int q, i;
+	unsigned int size;
 	int len, rc = 0;
 
-	if (new_mtu > ntb_transport_max_size(dev->queues[0].qp) - ETH_HLEN)
+	size = new_mtu + ETH_HLEN + sizeof(struct ntb_netdev_hdr);
+	if (size > ntb_transport_max_size(dev->queues[0].qp))
 		return -EINVAL;
 
 	if (!netif_running(ndev)) {
@@ -408,8 +538,7 @@ static int ntb_netdev_change_mtu(struct net_device *ndev, int new_mtu)
 				dev_kfree_skb(skb);
 
 			for (; i; i--) {
-				skb = netdev_alloc_skb(ndev,
-						       new_mtu + ETH_HLEN);
+				skb = netdev_alloc_skb(ndev, size);
 				if (!skb) {
 					rc = -ENOMEM;
 					goto err;
@@ -417,8 +546,7 @@ static int ntb_netdev_change_mtu(struct net_device *ndev, int new_mtu)
 
 				rc = ntb_transport_rx_enqueue(queue->qp, skb,
 							      skb->data,
-							      new_mtu +
-							      ETH_HLEN);
+							      size);
 				if (rc) {
 					dev_kfree_skb(skb);
 					goto err;
@@ -430,7 +558,7 @@ static int ntb_netdev_change_mtu(struct net_device *ndev, int new_mtu)
 	WRITE_ONCE(ndev->mtu, new_mtu);
 
 	for (q = 0; q < dev->num_queues; q++)
-		ntb_transport_link_up(dev->queues[q].qp);
+		ntb_netdev_link_up(&dev->queues[q]);
 
 	return 0;
 
@@ -451,6 +579,8 @@ static const struct net_device_ops ntb_netdev_ops = {
 	.ndo_open = ntb_netdev_open,
 	.ndo_stop = ntb_netdev_close,
 	.ndo_start_xmit = ntb_netdev_start_xmit,
+	.ndo_features_check = ntb_netdev_features_check,
+	.ndo_fix_features = ntb_netdev_fix_features,
 	.ndo_change_mtu = ntb_netdev_change_mtu,
 	.ndo_set_mac_address = eth_mac_addr,
 };
@@ -538,7 +668,7 @@ static int ntb_inc_channels(struct net_device *ndev,
 
 	if (running)
 		for (q = old; q < new; q++)
-			ntb_transport_link_up(dev->queues[q].qp);
+			ntb_netdev_link_up(&dev->queues[q]);
 
 	return 0;
 
@@ -667,10 +797,12 @@ static int ntb_netdev_probe(struct device *client_dev)
 
 	ndev->features = NETIF_F_HIGHDMA;
 	ndev->pcpu_stat_type = NETDEV_PCPU_STAT_TSTATS;
+	ndev->needed_headroom = sizeof(struct ntb_netdev_hdr);
 
 	ndev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
 
-	ndev->hw_features = ndev->features;
+	/* Checksum bypass assumes a trusted NTB link, so keep it opt-in. */
+	ndev->hw_features = ndev->features | NETIF_F_HW_CSUM | NETIF_F_RXCSUM;
 	ndev->watchdog_timeo = msecs_to_jiffies(NTB_TX_TIMEOUT_MS);
 
 	eth_random_addr(ndev->perm_addr);
@@ -704,7 +836,8 @@ static int ntb_netdev_probe(struct device *client_dev)
 	if (rc)
 		goto err_free_qps;
 
-	ndev->mtu = ntb_transport_max_size(dev->queues[0].qp) - ETH_HLEN;
+	ndev->mtu = ntb_transport_max_size(dev->queues[0].qp) - ETH_HLEN -
+		    sizeof(struct ntb_netdev_hdr);
 
 	rc = register_netdev(ndev);
 	if (rc)

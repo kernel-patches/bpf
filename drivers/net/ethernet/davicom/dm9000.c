@@ -104,6 +104,7 @@ struct board_info {
 	unsigned int	in_timeout:1;
 	unsigned int	in_suspend:1;
 	unsigned int	wake_supported:1;
+	unsigned int	wake_irq_requested:1;
 
 	enum dm9000_type type;
 
@@ -802,6 +803,9 @@ dm9000_poll_work(struct work_struct *w)
 static void
 dm9000_release_board(struct platform_device *pdev, struct board_info *db)
 {
+	if (db->wake_irq_requested)
+		free_irq(db->irq_wake, db->ndev);
+
 	/* unmap our resources */
 
 	iounmap(db->io_addr);
@@ -1511,7 +1515,11 @@ dm9000_probe(struct platform_device *pdev)
 	}
 
 	db->irq_wake = platform_get_irq_optional(pdev, 1);
-	if (db->irq_wake >= 0) {
+	if (db->irq_wake < 0 && db->irq_wake != -ENXIO) {
+		ret = db->irq_wake;
+		goto out;
+	}
+	if (db->irq_wake > 0) {
 		dev_dbg(db->dev, "wakeup irq %d\n", db->irq_wake);
 
 		ret = request_irq(db->irq_wake, dm9000_wol_interrupt,
@@ -1519,6 +1527,7 @@ dm9000_probe(struct platform_device *pdev)
 		if (ret) {
 			dev_err(db->dev, "cannot get wakeup irq (%d)\n", ret);
 		} else {
+			db->wake_irq_requested = 1;
 
 			/* test to see if irq is really wakeup capable */
 			ret = irq_set_irq_wake(db->irq_wake, 1);

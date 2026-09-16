@@ -1314,8 +1314,12 @@ EXPORT_SYMBOL_GPL(driver_attach);
 /*
  * __device_release_driver() must be called with @dev lock held.
  * When called for a USB interface, @dev->parent lock must be held as well.
+ * @abort_if_blocked gives up the release instead when probing has been
+ * blocked while the locks were dropped; only a caller that may abandon
+ * the unbind altogether can ask for it.
  */
-static void __device_release_driver(struct device *dev, struct device *parent)
+static bool __device_release_driver(struct device *dev, struct device *parent,
+				    bool abort_if_blocked)
 {
 	struct device_driver *drv;
 
@@ -1334,9 +1338,10 @@ static void __device_release_driver(struct device *dev, struct device *parent)
 			 * have released the driver successfully while this one
 			 * was waiting, so check for that.
 			 */
-			if (dev->driver != drv) {
+			if (dev->driver != drv ||
+			    (abort_if_blocked && defer_all_probes)) {
 				pm_runtime_put(dev);
-				return;
+				return false;
 			}
 		}
 
@@ -1359,7 +1364,10 @@ static void __device_release_driver(struct device *dev, struct device *parent)
 
 		bus_notify(dev, BUS_NOTIFY_UNBOUND_DRIVER);
 		kobject_uevent(&dev->kobj, KOBJ_UNBIND);
+		return true;
 	}
+
+	return false;
 }
 
 void device_release_driver_internal(struct device *dev,
@@ -1369,7 +1377,7 @@ void device_release_driver_internal(struct device *dev,
 	__device_driver_lock(dev, parent);
 
 	if (!drv || drv == dev->driver)
-		__device_release_driver(dev, parent);
+		__device_release_driver(dev, parent, false);
 
 	__device_driver_unlock(dev, parent);
 }
@@ -1436,3 +1444,98 @@ void driver_detach(const struct device_driver *drv)
 		put_device(dev);
 	}
 }
+
+struct device_reprobe {
+	struct delayed_work work;
+	const struct device_driver *drv;
+	struct device *dev;
+};
+
+static void device_reprobe_work_fn(struct work_struct *work)
+{
+	struct device_reprobe *rp = container_of(work, struct device_reprobe,
+						 work.work);
+	struct device *dev = rp->dev;
+	bool detached = false;
+	int ret;
+
+	device_lock(dev);
+	/*
+	 * rp->drv is only ever compared, never dereferenced: the driver it
+	 * points to may have been unregistered and freed by now.
+	 * device_shutdown() blocks probing before its walk reaches @dev.
+	 */
+	if (!defer_all_probes && !dev->p->dead && dev->driver == rp->drv)
+		detached = __device_release_driver(dev, NULL, true);
+	device_unlock(dev);
+
+	if (detached) {
+		ret = device_attach(dev);
+		if (ret < 0 && ret != -EPROBE_DEFER)
+			dev_err_probe(dev, ret,
+				      "re-probe failed, device left unbound\n");
+	}
+
+	put_device(dev);
+	kfree(rp);
+}
+
+/**
+ * device_schedule_reprobe - schedule a deferred detach and re-probe
+ * @dev: device to detach and re-probe
+ * @delay_ms: delay in milliseconds before the re-probe runs
+ *
+ * Schedule a detach and re-probe of @dev after @delay_ms milliseconds.
+ * The re-probe is skipped if, by the time the scheduled work runs, the
+ * device has been removed, probing has been blocked for a system
+ * shutdown, or @dev is no longer bound to the driver that was bound at
+ * scheduling time.
+ *
+ * The work function is built-in text, so the bound driver may call this
+ * from its own code without holding a module reference. If the driver
+ * module is unloaded before the work runs, driver unregistration unbinds
+ * @dev first and the scheduled work does nothing.
+ *
+ * Multiple pending re-probes for the same device are individually safe;
+ * a caller that wants at most one pending re-probe must gate scheduling
+ * itself.
+ *
+ * The work is freezable: a re-probe pending across system suspend runs
+ * once the system has resumed.
+ *
+ * Nothing is locked in the caller's context, so this may be called from
+ * any process context, @dev's own device lock held included, but not
+ * from @dev's ->probe(), which the scheduled work would detach.
+ *
+ * Returns: 0 on success, -EINVAL if @dev is not a registered device
+ * bound to a driver or sits on a bus which takes the parent lock to
+ * bind, -ENOMEM on allocation failure.
+ */
+int device_schedule_reprobe(struct device *dev, unsigned int delay_ms)
+{
+	const struct device_driver *drv;
+	struct device_reprobe *rp;
+
+	drv = READ_ONCE(dev->driver);
+	/*
+	 * A bus taking the parent lock would need @dev's parent pinned until
+	 * the work runs, which device_move() can invalidate.
+	 */
+	if (!drv || !dev->bus || dev->bus->need_parent_lock || !dev->p ||
+	    dev->p->dead || !device_is_registered(dev))
+		return -EINVAL;
+
+	rp = kzalloc_obj(*rp);
+	if (!rp)
+		return -ENOMEM;
+
+	rp->dev = get_device(dev);
+	rp->drv = drv;
+
+	INIT_DELAYED_WORK(&rp->work, device_reprobe_work_fn);
+	queue_delayed_work(system_freezable_wq, &rp->work,
+			   msecs_to_jiffies(delay_ms));
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(device_schedule_reprobe);

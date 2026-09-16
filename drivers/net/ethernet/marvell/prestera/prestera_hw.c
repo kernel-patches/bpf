@@ -2305,7 +2305,8 @@ int prestera_hw_counter_abort(struct prestera_switch *sw)
 
 int prestera_hw_counters_get(struct prestera_switch *sw, u32 idx,
 			     u32 *len, bool *done,
-			     struct prestera_counter_stats *stats)
+			     struct prestera_counter_stats *stats,
+			     u32 stats_len)
 {
 	struct prestera_msg_counter_resp *resp;
 	struct prestera_msg_counter_req req = {
@@ -2323,6 +2324,11 @@ int prestera_hw_counters_get(struct prestera_switch *sw, u32 idx,
 			       &req.cmd, sizeof(req), &resp->ret, size);
 	if (err)
 		goto free_buff;
+
+	if (__le32_to_cpu(resp->num_counters) > min(*len, stats_len)) {
+		err = -EINVAL;
+		goto free_buff;
+	}
 
 	for (i = 0; i < __le32_to_cpu(resp->num_counters); i++) {
 		stats[i].packets += __le64_to_cpu(resp->stats[i].packets);

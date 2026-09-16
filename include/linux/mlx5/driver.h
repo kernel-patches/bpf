@@ -829,6 +829,11 @@ typedef void (*mlx5_cmd_cbk_t)(int status, void *context);
 enum {
 	MLX5_CMD_ENT_STATE_PENDING_COMP,
 	MLX5_CMD_ENT_STATE_TIMEDOUT,
+	/* Firmware still owes this entry the reference that a real completion
+	 * would drop.  Consume it with test_and_clear_bit() so that exactly
+	 * one of the possible consumers takes it.
+	 */
+	MLX5_CMD_ENT_STATE_FW_REF,
 };
 
 struct mlx5_cmd_work_ent {
@@ -855,6 +860,7 @@ struct mlx5_cmd_work_ent {
 	u64			ts2;
 	u16			op;
 	bool			polling;
+	bool			own_msgs;
 	/* Track the max comp handlers */
 	refcount_t              refcnt;
 };

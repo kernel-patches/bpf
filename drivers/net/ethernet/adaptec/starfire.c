@@ -634,10 +634,11 @@ static int starfire_init_one(struct pci_dev *pdev,
 	int i, irq, chip_idx = ent->driver_data;
 	struct net_device *dev;
 	u8 addr[ETH_ALEN];
-	long ioaddr;
+	resource_size_t ioaddr;
 	void __iomem *base;
 	int drv_flags, io_size;
 	int boguscnt;
+	int err = -ENODEV;
 
 	if (pci_enable_device (pdev))
 		return -EIO;
@@ -646,12 +647,14 @@ static int starfire_init_one(struct pci_dev *pdev,
 	io_size = pci_resource_len(pdev, 0);
 	if (!ioaddr || ((pci_resource_flags(pdev, 0) & IORESOURCE_MEM) == 0)) {
 		dev_err(d, "no PCI MEM resources, aborting\n");
-		return -ENODEV;
+		goto err_out_disable;
 	}
 
 	dev = alloc_etherdev(sizeof(*np));
-	if (!dev)
-		return -ENOMEM;
+	if (!dev) {
+		err = -ENOMEM;
+		goto err_out_disable;
+	}
 
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
@@ -664,8 +667,8 @@ static int starfire_init_one(struct pci_dev *pdev,
 
 	base = ioremap(ioaddr, io_size);
 	if (!base) {
-		dev_err(d, "cannot remap %#x @ %#lx, aborting\n",
-			io_size, ioaddr);
+		dev_err(d, "cannot remap %#x @ %pa, aborting\n",
+			io_size, &ioaddr);
 		goto err_out_free_res;
 	}
 
@@ -818,7 +821,9 @@ err_out_free_res:
 	pci_release_regions (pdev);
 err_out_free_netdev:
 	free_netdev(dev);
-	return -ENODEV;
+err_out_disable:
+	pci_disable_device(pdev);
+	return err;
 }
 
 

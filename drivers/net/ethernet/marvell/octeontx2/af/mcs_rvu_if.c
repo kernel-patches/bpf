@@ -50,6 +50,8 @@ void rvu_mcs_ptp_cfg(struct rvu *rvu, u8 rpm_id, u8 lmac_id, bool ena)
 	/* CNF10K-B */
 	if (rvu->mcs_blk_cnt > 1) {
 		mcs = mcs_get_pdata(rpm_id);
+		if (!mcs)
+			return;
 		cfg = mcs_reg_read(mcs, MCSX_PEX_RX_SLAVE_PEX_CONFIGURATION);
 		if (ena)
 			cfg |= BIT_ULL(lmac_id);

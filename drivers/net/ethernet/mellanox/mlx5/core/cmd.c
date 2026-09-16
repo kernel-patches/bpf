@@ -185,6 +185,10 @@ static void cmd_free_index(struct mlx5_cmd *cmd, int idx)
 	set_bit(idx, &cmd->vars.bitmask);
 }
 
+static void free_msg(struct mlx5_core_dev *dev, struct mlx5_cmd_msg *msg);
+static void mlx5_free_cmd_msg(struct mlx5_core_dev *dev,
+			      struct mlx5_cmd_msg *msg);
+
 static void cmd_ent_get(struct mlx5_cmd_work_ent *ent)
 {
 	refcount_inc(&ent->refcnt);
@@ -193,7 +197,10 @@ static void cmd_ent_get(struct mlx5_cmd_work_ent *ent)
 static void cmd_ent_put(struct mlx5_cmd_work_ent *ent)
 {
 	struct mlx5_cmd *cmd = ent->cmd;
+	struct mlx5_core_dev *dev;
 	unsigned long flags;
+
+	dev = container_of(cmd, struct mlx5_core_dev, cmd);
 
 	spin_lock_irqsave(&cmd->alloc_lock, flags);
 	if (!refcount_dec_and_test(&ent->refcnt)) {
@@ -206,6 +213,15 @@ static void cmd_ent_put(struct mlx5_cmd_work_ent *ent)
 		up(ent->page_queue ? &cmd->vars.pages_sem : &cmd->vars.sem);
 	}
 	spin_unlock_irqrestore(&cmd->alloc_lock, flags);
+
+	/* These were withheld from dev->cmd.pool because firmware still owned
+	 * them.  Nothing references the entry any more, so whoever dropped the
+	 * last reference has established that firmware is done with them.
+	 */
+	if (ent->own_msgs) {
+		mlx5_free_cmd_msg(dev, ent->out);
+		free_msg(dev, ent->in);
+	}
 
 	cmd_free_ent(ent);
 }
@@ -958,10 +974,6 @@ out:
 	cmd_ent_put(ent); /* for the cmd_ent_get() took on schedule delayed work */
 }
 
-static void free_msg(struct mlx5_core_dev *dev, struct mlx5_cmd_msg *msg);
-static void mlx5_free_cmd_msg(struct mlx5_core_dev *dev,
-			      struct mlx5_cmd_msg *msg);
-
 static bool opcode_allowed(struct mlx5_cmd *cmd, u16 opcode)
 {
 	if (cmd->allowed_opcode == CMD_ALLOWED_OPCODE_ALL)
@@ -1059,9 +1071,19 @@ static void cmd_work_handler(struct work_struct *work)
 
 	if (ent->callback && schedule_delayed_work(&ent->cb_timeout_work, timeout))
 		cmd_ent_get(ent);
-	set_bit(MLX5_CMD_ENT_STATE_PENDING_COMP, &ent->state);
 
 	cmd_ent_get(ent); /* for the _real_ FW event on completion */
+	/* Publish the reference, then its marker, and only then
+	 * MLX5_CMD_ENT_STATE_PENDING_COMP.  Whoever clears PENDING_COMP owns
+	 * the completion, so it has to see FW_REF already set or it will fail
+	 * to drop the reference.  Ordering PENDING_COMP last is what
+	 * guarantees that: mlx5_cmd_trigger_completions() can walk this slot
+	 * as soon as cmd_alloc_index() published it, long before the doorbell.
+	 */
+	set_bit(MLX5_CMD_ENT_STATE_FW_REF, &ent->state);
+	/* order FW_REF before PENDING_COMP, see the comment above */
+	smp_mb__before_atomic();
+	set_bit(MLX5_CMD_ENT_STATE_PENDING_COMP, &ent->state);
 	/* Skip sending command to fw if internal error */
 	if (mlx5_cmd_is_down(dev) || !opcode_allowed(&dev->cmd, ent->op)) {
 		ent->ret = -ENXIO;
@@ -1313,7 +1335,19 @@ static int mlx5_cmd_invoke(struct mlx5_core_dev *dev, struct mlx5_cmd_msg *in,
 		return 0; /* mlx5_cmd_comp_handler() will put(ent) */
 
 	err = wait_func(dev, ent);
-	if (err == -ETIMEDOUT || err == -ECANCELED || err == -EBUSY)
+	if (err == -ETIMEDOUT) {
+		/* The command was posted to firmware and firmware never
+		 * completed it.  Unless the device is already down,
+		 * mlx5_cmd_comp_handler(forced) keeps this entry and its
+		 * queue slot allocated because firmware may still complete
+		 * it, so ent->lay->{in_ptr,out_ptr} keep referencing the
+		 * mailboxes.  Take ownership of them so that cmd_exec()
+		 * cannot hand them back to dev->cmd.pool.
+		 */
+		ent->own_msgs = true;
+		goto out_free;
+	}
+	if (err == -ECANCELED || err == -EBUSY)
 		goto out_free;
 
 	ds = ent->ts2 - ent->ts1;
@@ -1656,36 +1690,81 @@ static void create_debugfs_files(struct mlx5_core_dev *dev)
 	debugfs_create_file("run", 0200, dbg->dbg_root, dev, &fops);
 }
 
+/* Drain the command interface so that cmd->allowed_opcode and cmd->mode can be
+ * updated without an in flight command straddling the change.  A command that
+ * timed out keeps its index, and with it its semaphore unit, until firmware
+ * completes it - which may never happen - so bound the wait by the command
+ * timeout instead of blocking forever.  Returns the number of cmd->vars.sem
+ * units taken, and reports separately whether the page queue unit was taken;
+ * both have to be handed back by cmd_sem_up_all().
+ */
+static int cmd_sem_down_all(struct mlx5_core_dev *dev, bool *pages_sem)
+{
+	unsigned long end = jiffies + msecs_to_jiffies(mlx5_tout_ms(dev, CMD));
+	struct mlx5_cmd *cmd = &dev->cmd;
+	long left;
+	int i;
+
+	for (i = 0; i < cmd->vars.max_reg_cmds; i++) {
+		left = end - jiffies;
+		if (left <= 0 || down_timeout(&cmd->vars.sem, left))
+			break;
+	}
+
+	left = end - jiffies;
+	*pages_sem = left > 0 && !down_timeout(&cmd->vars.pages_sem, left);
+
+	if (i < cmd->vars.max_reg_cmds)
+		mlx5_core_warn(dev, "command interface did not drain, %d of %d slots still busy\n",
+			       cmd->vars.max_reg_cmds - i, cmd->vars.max_reg_cmds);
+	if (!*pages_sem)
+		mlx5_core_warn(dev, "command interface did not drain, page queue slot still busy\n");
+
+	return i;
+}
+
+static void cmd_sem_up_all(struct mlx5_core_dev *dev, int nr, bool pages_sem)
+{
+	struct mlx5_cmd *cmd = &dev->cmd;
+
+	if (pages_sem)
+		up(&cmd->vars.pages_sem);
+	while (nr--)
+		up(&cmd->vars.sem);
+}
+
 void mlx5_cmd_allowed_opcode(struct mlx5_core_dev *dev, u16 opcode)
 {
 	struct mlx5_cmd *cmd = &dev->cmd;
-	int i;
+	bool pages_sem;
+	int nr;
 
-	for (i = 0; i < cmd->vars.max_reg_cmds; i++)
-		down(&cmd->vars.sem);
-	down(&cmd->vars.pages_sem);
+	nr = cmd_sem_down_all(dev, &pages_sem);
 
-	cmd->allowed_opcode = opcode;
+	/* Narrowing the set is only safe once the interface has drained.
+	 * mlx5_cmd_comp_handler() reads !opcode_allowed() as "no real
+	 * firmware completion is expected" and releases the entry, so
+	 * narrowing while a command is still posted would hand its mailboxes
+	 * back to dev->cmd.pool with firmware still able to write them.
+	 * Widening back to CMD_ALLOWED_OPCODE_ALL is always safe.
+	 */
+	if (opcode == CMD_ALLOWED_OPCODE_ALL ||
+	    (nr == cmd->vars.max_reg_cmds && pages_sem))
+		cmd->allowed_opcode = opcode;
+	else
+		mlx5_core_warn(dev, "leaving command opcodes unrestricted, interface did not drain\n");
 
-	up(&cmd->vars.pages_sem);
-	for (i = 0; i < cmd->vars.max_reg_cmds; i++)
-		up(&cmd->vars.sem);
+	cmd_sem_up_all(dev, nr, pages_sem);
 }
 
 static void mlx5_cmd_change_mod(struct mlx5_core_dev *dev, int mode)
 {
-	struct mlx5_cmd *cmd = &dev->cmd;
-	int i;
+	bool pages_sem;
+	int nr;
 
-	for (i = 0; i < cmd->vars.max_reg_cmds; i++)
-		down(&cmd->vars.sem);
-	down(&cmd->vars.pages_sem);
-
-	cmd->mode = mode;
-
-	up(&cmd->vars.pages_sem);
-	for (i = 0; i < cmd->vars.max_reg_cmds; i++)
-		up(&cmd->vars.sem);
+	nr = cmd_sem_down_all(dev, &pages_sem);
+	dev->cmd.mode = mode;
+	cmd_sem_up_all(dev, nr, pages_sem);
 }
 
 static int cmd_comp_notifier(struct notifier_block *nb,
@@ -1765,7 +1844,9 @@ static void mlx5_cmd_comp_handler(struct mlx5_core_dev *dev, u64 vec, bool force
 				if (!forced) {
 					mlx5_core_err(dev, "Command completion arrived after timeout (entry idx = %d).\n",
 						      ent->idx);
-					cmd_ent_put(ent);
+					if (test_and_clear_bit(MLX5_CMD_ENT_STATE_FW_REF,
+							       &ent->state))
+						cmd_ent_put(ent);
 				}
 				continue;
 			}
@@ -1773,9 +1854,11 @@ static void mlx5_cmd_comp_handler(struct mlx5_core_dev *dev, u64 vec, bool force
 			if (ent->callback && cancel_delayed_work(&ent->cb_timeout_work))
 				cmd_ent_put(ent); /* timeout work was canceled */
 
-			if (!forced || /* Real FW completion */
+			if ((!forced || /* Real FW completion */
 			     mlx5_cmd_is_down(dev) || /* No real FW completion is expected */
-			     !opcode_allowed(cmd, ent->op))
+			     !opcode_allowed(cmd, ent->op)) &&
+			    test_and_clear_bit(MLX5_CMD_ENT_STATE_FW_REF,
+					       &ent->state))
 				cmd_ent_put(ent);
 
 			ent->ts2 = ktime_get_ns();
@@ -1816,8 +1899,22 @@ static void mlx5_cmd_comp_handler(struct mlx5_core_dev *dev, u64 vec, bool force
 								 ent->out,
 								 ent->uout_size);
 
-				mlx5_free_cmd_msg(dev, ent->out);
-				free_msg(dev, ent->in);
+				/* Same reasoning as the -ETIMEDOUT path in
+				 * mlx5_cmd_invoke(): when the entry was
+				 * retained just above, firmware may still DMA
+				 * into ent->lay->{in_ptr,out_ptr}, so hand the
+				 * mailboxes to the entry and let its last
+				 * cmd_ent_put() release them.  Otherwise the
+				 * driver has decided firmware is done and they
+				 * go straight back to the pool, as before.
+				 */
+				if (test_bit(MLX5_CMD_ENT_STATE_FW_REF,
+					     &ent->state)) {
+					ent->own_msgs = true;
+				} else {
+					mlx5_free_cmd_msg(dev, ent->out);
+					free_msg(dev, ent->in);
+				}
 
 				/* final consumer is done, release ent */
 				cmd_ent_put(ent);
@@ -2011,6 +2108,10 @@ static int cmd_exec(struct mlx5_core_dev *dev, void *in, int in_size, void *out,
 			      pages_queue, token, force_polling);
 	if (callback && !err)
 		return 0;
+
+	/* The mailboxes are owned by the command entry now */
+	if (err == -ETIMEDOUT)
+		goto out_up;
 
 	if (err > 0) /* Failed in FW, command didn't execute */
 		err = deliv_status_to_err(err);
@@ -2545,12 +2646,86 @@ err_destroy_xa:
 	return err;
 }
 
-void mlx5_cmd_disable(struct mlx5_core_dev *dev)
+/* Retire the entries that timed out and were never completed by firmware.
+ * Each still holds the reference a real completion would have dropped, and
+ * with it a command queue slot, a semaphore unit, its own allocation, and -
+ * since the timeout paths hand mailbox ownership to the entry - blocks of
+ * cmd->pool.  The mailboxes matter most: dma_pool_destroy() checks pool wide
+ * and all or nothing, so one stranded block makes it skip dma_free_coherent()
+ * for every page and then free the descriptors anyway, stranding the whole
+ * command pool - and its IOVA range under an IOMMU - on every teardown.
+ */
+static void cmd_reclaim_stalled_ents(struct mlx5_core_dev *dev, bool fw_stopped)
+{
+	struct mlx5_cmd_work_ent *ent;
+	struct mlx5_cmd *cmd = &dev->cmd;
+	unsigned long flags;
+	int i;
+
+	for (i = 0; i < (1 << cmd->vars.log_sz); i++) {
+		/* Take a reference before dropping alloc_lock, otherwise a
+		 * concurrent last put could free the entry under us.  Holding
+		 * alloc_lock with the bit clear guarantees the refcount has
+		 * not reached zero, because cmd_ent_put() sets that bit under
+		 * the same lock before it frees anything.
+		 */
+		spin_lock_irqsave(&cmd->alloc_lock, flags);
+		ent = test_bit(i, &cmd->vars.bitmask) ? NULL : cmd->ent_arr[i];
+		if (ent)
+			cmd_ent_get(ent);
+		spin_unlock_irqrestore(&cmd->alloc_lock, flags);
+
+		if (!ent)
+			continue;
+
+		/* cb_timeout_work sits on the system workqueue, which the
+		 * flush_workqueue(cmd->wq) above does not cover.  Left queued
+		 * it would run cb_timeout_handler() once the async EQs are
+		 * gone and the caller has destroyed the message cache and the
+		 * pool.  If it was still pending, drop the reference taken
+		 * when it was scheduled.
+		 */
+		if (ent->callback &&
+		    cancel_delayed_work_sync(&ent->cb_timeout_work))
+			cmd_ent_put(ent);
+
+		/* The entry itself is never visible to firmware - the only
+		 * addresses it is ever given are the mailbox and command
+		 * queue DMA addresses - so it can always be retired.  Its
+		 * mailboxes are a different matter: hand those back only once
+		 * firmware has acknowledged it released the function.  If it
+		 * has not, drop ownership without freeing.  dma_pool_destroy()
+		 * then reports the pool busy and skips dma_free_coherent(),
+		 * so the pages stay mapped and are never handed back to the
+		 * allocator; a late write lands there harmlessly.
+		 */
+		if (!fw_stopped)
+			ent->own_msgs = false;
+
+		/* Only drop the firmware reference if it is really owed;
+		 * test_and_clear_bit() makes this safe against a late real
+		 * completion that got there first.
+		 */
+		if (test_and_clear_bit(MLX5_CMD_ENT_STATE_FW_REF, &ent->state)) {
+			mlx5_core_warn(dev, "reclaiming outstanding cmd[%d]: %s(0x%x)\n",
+				       i, mlx5_command_str(ent->op), ent->op);
+			cmd_ent_put(ent);
+		}
+
+		cmd_ent_put(ent);
+	}
+}
+
+void mlx5_cmd_disable(struct mlx5_core_dev *dev, bool fw_stopped)
 {
 	struct mlx5_cmd *cmd = &dev->cmd;
 
 	flush_workqueue(cmd->wq);
 	clean_debug_files(dev);
+	/* Before destroy_msg_cache(): a reclaimed inbox goes back on its cache
+	 * list via free_msg(), and destroy_msg_cache() then frees it.
+	 */
+	cmd_reclaim_stalled_ents(dev, fw_stopped);
 	destroy_msg_cache(dev);
 	free_cmd_page(dev, cmd);
 	dma_pool_destroy(cmd->pool);

@@ -18,9 +18,11 @@
 #include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/mutex.h>
 #include <linux/io.h>
 #include <linux/ioport.h>
 #include <linux/interrupt.h>
+#include <linux/property.h>
 #include <linux/irq.h>
 
 #include "w5100.h"
@@ -124,6 +126,8 @@ MODULE_LICENSE("GPL");
  */
 #define W5500_SIMR		0x0018 /* Socket Interrupt Mask Register */
 #define W5500_RTR		0x0019 /* Retry Time-value Register */
+#define W5500_PHYCFGR		0x002e /* PHY Configuration Register */
+#define   PHYCFGR_LNK		  0x01 /* Link status */
 
 #define W5500_S0_REGS		0x10000
 
@@ -154,6 +158,9 @@ struct w5100_priv {
 	u16 s0_rx_buf_size;
 
 	int irq;
+	int link_irq;
+	/* Protects link state and carrier updates */
+	struct mutex link_lock;
 
 	struct napi_struct napi;
 	struct net_device *ndev;
@@ -345,6 +352,67 @@ static void w5500_memory_configure(struct w5100_priv *priv)
 	}
 }
 
+static int w5500_get_phycfgr_lnk(struct net_device *ndev)
+{
+	struct w5100_priv *priv = netdev_priv(ndev);
+	int ret = w5100_read(priv, W5500_PHYCFGR);
+
+	if (ret < 0) {
+		netif_err(priv, link, ndev,
+			  "failed to read link status: %d\n", ret);
+		return ret;
+	}
+
+	return ret & PHYCFGR_LNK;
+}
+
+static void w5500_report_carrier_state(struct net_device *ndev)
+{
+	struct w5100_priv *priv = netdev_priv(ndev);
+	int state;
+
+	mutex_lock(&priv->link_lock);
+
+	state = w5500_get_phycfgr_lnk(ndev);
+	if (state > 0) {
+		netif_info(priv, link, ndev, "link is up\n");
+		netif_carrier_on(ndev);
+	} else if (state == 0) {
+		netif_info(priv, link, ndev, "link is down\n");
+		netif_carrier_off(ndev);
+	}
+
+	mutex_unlock(&priv->link_lock);
+}
+
+static irqreturn_t w5500_detect_link_interrupt(int irq, void *ndev_instance)
+{
+	struct net_device *ndev = ndev_instance;
+
+	if (netif_running(ndev))
+		w5500_report_carrier_state(ndev);
+
+	return IRQ_HANDLED;
+}
+
+static u32 w5500_get_link(struct net_device *ndev)
+{
+	struct w5100_priv *priv = netdev_priv(ndev);
+	int state;
+
+	if (!netif_device_present(ndev))
+		return netif_carrier_ok(ndev);
+
+	mutex_lock(&priv->link_lock);
+	state = w5500_get_phycfgr_lnk(ndev);
+	mutex_unlock(&priv->link_lock);
+
+	if (state < 0)
+		return netif_carrier_ok(ndev);
+
+	return state > 0;
+}
+
 static int w5100_hw_reset(struct w5100_priv *priv)
 {
 	u32 rtr;
@@ -448,12 +516,23 @@ static void w5100_restart(struct net_device *ndev)
 {
 	struct w5100_priv *priv = netdev_priv(ndev);
 
+	if (!netif_running(ndev))
+		return;
+
+	if (priv->link_irq > 0)
+		disable_irq(priv->link_irq);
+
 	netif_stop_queue(ndev);
 	w5100_hw_reset(priv);
 	w5100_hw_start(priv);
 	ndev->stats.tx_errors++;
 	netif_trans_update(ndev);
 	netif_wake_queue(ndev);
+
+	if (priv->link_irq > 0) {
+		w5500_report_carrier_state(ndev);
+		enable_irq(priv->link_irq);
+	}
 }
 
 static void w5100_restart_work(struct work_struct *work)
@@ -659,6 +738,12 @@ static int w5100_open(struct net_device *ndev)
 	w5100_hw_start(priv);
 	napi_enable(&priv->napi);
 	netif_start_queue(ndev);
+
+	if (priv->link_irq > 0) {
+		w5500_report_carrier_state(ndev);
+		enable_irq(priv->link_irq);
+	}
+
 	return 0;
 }
 
@@ -667,12 +752,30 @@ static int w5100_stop(struct net_device *ndev)
 	struct w5100_priv *priv = netdev_priv(ndev);
 
 	netif_info(priv, ifdown, ndev, "shutting down\n");
+
+	cancel_work_sync(&priv->restart_work);
+
+	if (priv->link_irq > 0) {
+		disable_irq(priv->link_irq);
+		mutex_lock(&priv->link_lock);
+		netif_carrier_off(ndev);
+		mutex_unlock(&priv->link_lock);
+	}
+
 	w5100_hw_close(priv);
-	netif_carrier_off(ndev);
 	netif_stop_queue(ndev);
 	napi_disable(&priv->napi);
 	return 0;
 }
+
+static const struct ethtool_ops w5500_ethtool_ops = {
+	.get_drvinfo		= w5100_get_drvinfo,
+	.get_msglevel		= w5100_get_msglevel,
+	.set_msglevel		= w5100_set_msglevel,
+	.get_link		= w5500_get_link,
+	.get_regs_len		= w5100_get_regs_len,
+	.get_regs		= w5100_get_regs,
+};
 
 static const struct ethtool_ops w5100_ethtool_ops = {
 	.get_drvinfo		= w5100_get_drvinfo,
@@ -721,6 +824,8 @@ int w5100_probe(struct device *dev, const struct w5100_ops *ops,
 	dev_set_drvdata(dev, ndev);
 	priv = netdev_priv(ndev);
 
+	mutex_init(&priv->link_lock);
+
 	switch (ops->chip_id) {
 	case W5100:
 		priv->s0_regs = W5100_S0_REGS;
@@ -745,15 +850,26 @@ int w5100_probe(struct device *dev, const struct w5100_ops *ops,
 		break;
 	default:
 		err = -EINVAL;
-		goto err_register;
+		goto err_mutex;
 	}
 
 	priv->ndev = ndev;
 	priv->ops = ops;
 	priv->irq = irq;
 
+	priv->link_irq = ops->chip_id == W5500 ?
+			 fwnode_irq_get(dev_fwnode(dev), 1) : -EINVAL;
+	if (priv->link_irq == -EPROBE_DEFER) {
+		err = dev_err_probe(dev, priv->link_irq,
+				    "failed to get link irq\n");
+		goto err_mutex;
+	} else if (priv->link_irq < 0 && priv->link_irq != -EINVAL) {
+		dev_warn(dev, "invalid link irq: %d\n", priv->link_irq);
+	}
+
 	ndev->netdev_ops = &w5100_netdev_ops;
-	ndev->ethtool_ops = &w5100_ethtool_ops;
+	ndev->ethtool_ops = ops->chip_id == W5500 ? &w5500_ethtool_ops :
+						    &w5100_ethtool_ops;
 	netif_napi_add_weight(ndev, &priv->napi, w5100_napi_poll, 16);
 
 	/* This chip doesn't support VLAN packets with normal MTU,
@@ -761,15 +877,11 @@ int w5100_probe(struct device *dev, const struct w5100_ops *ops,
 	 */
 	ndev->features |= NETIF_F_VLAN_CHALLENGED;
 
-	err = register_netdev(ndev);
-	if (err < 0)
-		goto err_register;
-
 	priv->xfer_wq = alloc_workqueue("%s", WQ_MEM_RECLAIM | WQ_PERCPU, 0,
-					netdev_name(ndev));
+					dev_name(dev));
 	if (!priv->xfer_wq) {
 		err = -ENOMEM;
-		goto err_wq;
+		goto err_mutex;
 	}
 
 	INIT_WORK(&priv->rx_work, w5100_rx_work);
@@ -795,21 +907,42 @@ int w5100_probe(struct device *dev, const struct w5100_ops *ops,
 	if (ops->may_sleep) {
 		err = request_threaded_irq(priv->irq, NULL, w5100_interrupt,
 					   IRQF_TRIGGER_LOW | IRQF_ONESHOT,
-					   netdev_name(ndev), ndev);
+					   dev_name(dev), ndev);
 	} else {
 		err = request_irq(priv->irq, w5100_interrupt,
-				  IRQF_TRIGGER_LOW, netdev_name(ndev), ndev);
+				  IRQF_TRIGGER_LOW, dev_name(dev), ndev);
 	}
 	if (err)
 		goto err_hw;
 
+	if (priv->link_irq > 0) {
+		err = request_threaded_irq(priv->link_irq, NULL,
+					   w5500_detect_link_interrupt,
+					   IRQF_TRIGGER_RISING |
+					   IRQF_TRIGGER_FALLING |
+					   IRQF_ONESHOT | IRQF_NO_AUTOEN,
+					   "w5100-link", ndev);
+		if (err < 0)
+			goto err_irq;
+
+		netif_carrier_off(ndev);
+	}
+
+	err = register_netdev(ndev);
+	if (err < 0)
+		goto err_link_irq;
+
 	return 0;
 
+err_link_irq:
+	if (priv->link_irq > 0)
+		free_irq(priv->link_irq, ndev);
+err_irq:
+	free_irq(priv->irq, ndev);
 err_hw:
 	destroy_workqueue(priv->xfer_wq);
-err_wq:
-	unregister_netdev(ndev);
-err_register:
+err_mutex:
+	mutex_destroy(&priv->link_lock);
 	free_netdev(ndev);
 	return err;
 }
@@ -820,14 +953,22 @@ void w5100_remove(struct device *dev)
 	struct net_device *ndev = dev_get_drvdata(dev);
 	struct w5100_priv *priv = netdev_priv(ndev);
 
-	w5100_hw_reset(priv);
-	free_irq(priv->irq, ndev);
-
-	flush_work(&priv->setrx_work);
-	flush_work(&priv->restart_work);
-	destroy_workqueue(priv->xfer_wq);
-
 	unregister_netdev(ndev);
+
+	cancel_work_sync(&priv->rx_work);
+	cancel_work_sync(&priv->tx_work);
+	cancel_work_sync(&priv->setrx_work);
+	cancel_work_sync(&priv->restart_work);
+
+	if (priv->link_irq > 0)
+		free_irq(priv->link_irq, ndev);
+
+	free_irq(priv->irq, ndev);
+	w5100_hw_reset(priv);
+
+	destroy_workqueue(priv->xfer_wq);
+	mutex_destroy(&priv->link_lock);
+
 	free_netdev(ndev);
 }
 EXPORT_SYMBOL_GPL(w5100_remove);
@@ -839,8 +980,16 @@ static int w5100_suspend(struct device *dev)
 	struct w5100_priv *priv = netdev_priv(ndev);
 
 	if (netif_running(ndev)) {
-		netif_carrier_off(ndev);
+		if (priv->link_irq > 0) {
+			disable_irq(priv->link_irq);
+			mutex_lock(&priv->link_lock);
+			netif_carrier_off(ndev);
+			mutex_unlock(&priv->link_lock);
+		}
+
 		netif_device_detach(ndev);
+
+		cancel_work_sync(&priv->restart_work);
 
 		w5100_hw_close(priv);
 	}
@@ -857,6 +1006,11 @@ static int w5100_resume(struct device *dev)
 		w5100_hw_start(priv);
 
 		netif_device_attach(ndev);
+
+		if (priv->link_irq > 0) {
+			w5500_report_carrier_state(ndev);
+			enable_irq(priv->link_irq);
+		}
 	}
 	return 0;
 }

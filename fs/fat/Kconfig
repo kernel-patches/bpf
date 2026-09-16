@@ -121,7 +121,6 @@ config FAT_DEFAULT_UTF8
 config FAT_KUNIT_TEST
 	tristate "Unit Tests for FAT filesystems" if !KUNIT_ALL_TESTS
 	depends on KUNIT && FAT_FS
-	default KUNIT_ALL_TESTS
 	help
 	  This builds the FAT KUnit tests
 

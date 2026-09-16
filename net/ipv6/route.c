@@ -40,6 +40,7 @@
 #include <linux/seq_file.h>
 #include <linux/nsproxy.h>
 #include <linux/slab.h>
+#include <linux/hash.h>
 #include <linux/jhash.h>
 #include <linux/siphash.h>
 #include <net/net_namespace.h>
@@ -133,11 +134,27 @@ struct uncached_list {
 	struct list_head	head;
 };
 
-static DEFINE_PER_CPU_ALIGNED(struct uncached_list, rt6_uncached_list);
+#define RT6_UNCACHED_HASH_SIZE	BIT(CONFIG_IPV6_UNCACHED_ROUTE_HASH_BITS)
+
+struct rt6_uncached_table {
+	struct uncached_list buckets[RT6_UNCACHED_HASH_SIZE];
+	/* Routes that must be discoverable through two different devices. */
+	struct uncached_list mismatch;
+};
+
+static DEFINE_PER_CPU_ALIGNED(struct rt6_uncached_table, rt6_uncached_table);
 
 void rt6_uncached_list_add(struct rt6_info *rt)
 {
-	struct uncached_list *ul = raw_cpu_ptr(&rt6_uncached_list);
+	struct rt6_uncached_table *table = raw_cpu_ptr(&rt6_uncached_table);
+	struct net_device *rt_dev = dst_dev(&rt->dst);
+	struct uncached_list *ul;
+
+	if (rt->rt6i_idev && rt->rt6i_idev->dev != rt_dev)
+		ul = &table->mismatch;
+	else
+		ul = &table->buckets[hash_ptr(rt_dev,
+					      CONFIG_IPV6_UNCACHED_ROUTE_HASH_BITS)];
 
 	rt->dst.rt_uncached_list = ul;
 
@@ -157,40 +174,51 @@ void rt6_uncached_list_del(struct rt6_info *rt)
 	}
 }
 
+static void rt6_uncached_list_flush(struct uncached_list *ul,
+				    struct net_device *dev)
+{
+	struct rt6_info *rt, *safe;
+
+	if (list_empty(&ul->head))
+		return;
+
+	spin_lock_bh(&ul->lock);
+	list_for_each_entry_safe(rt, safe, &ul->head, dst.rt_uncached) {
+		struct inet6_dev *rt_idev = rt->rt6i_idev;
+		struct net_device *rt_dev = dst_dev(&rt->dst);
+		bool handled = false;
+
+		if (rt_idev && rt_idev->dev == dev) {
+			rt->rt6i_idev = in6_dev_get(blackhole_netdev);
+			in6_dev_put(rt_idev);
+			handled = true;
+		}
+
+		if (rt_dev == dev) {
+			rt->dst.dev = blackhole_netdev;
+			netdev_ref_replace(rt_dev, blackhole_netdev,
+					   &rt->dst.dev_tracker, GFP_ATOMIC);
+			handled = true;
+		}
+		if (handled)
+			list_del_init(&rt->dst.rt_uncached);
+	}
+	spin_unlock_bh(&ul->lock);
+}
+
 static void rt6_uncached_list_flush_dev(struct net_device *dev)
 {
 	int cpu;
 
 	for_each_possible_cpu(cpu) {
-		struct uncached_list *ul = per_cpu_ptr(&rt6_uncached_list, cpu);
-		struct rt6_info *rt, *safe;
+		struct rt6_uncached_table *table;
+		struct uncached_list *ul;
 
-		if (list_empty(&ul->head))
-			continue;
-
-		spin_lock_bh(&ul->lock);
-		list_for_each_entry_safe(rt, safe, &ul->head, dst.rt_uncached) {
-			struct inet6_dev *rt_idev = rt->rt6i_idev;
-			struct net_device *rt_dev = rt->dst.dev;
-			bool handled = false;
-
-			if (rt_idev && rt_idev->dev == dev) {
-				rt->rt6i_idev = in6_dev_get(blackhole_netdev);
-				in6_dev_put(rt_idev);
-				handled = true;
-			}
-
-			if (rt_dev == dev) {
-				rt->dst.dev = blackhole_netdev;
-				netdev_ref_replace(rt_dev, blackhole_netdev,
-						   &rt->dst.dev_tracker,
-						   GFP_ATOMIC);
-				handled = true;
-			}
-			if (handled)
-				list_del_init(&rt->dst.rt_uncached);
-		}
-		spin_unlock_bh(&ul->lock);
+		table = per_cpu_ptr(&rt6_uncached_table, cpu);
+		ul = &table->buckets[hash_ptr(dev,
+					      CONFIG_IPV6_UNCACHED_ROUTE_HASH_BITS)];
+		rt6_uncached_list_flush(ul, dev);
+		rt6_uncached_list_flush(&table->mismatch, dev);
 	}
 }
 
@@ -217,7 +245,7 @@ struct neighbour *ip6_neigh_lookup(const struct in6_addr *gw,
 	if (n)
 		return n;
 
-	n = neigh_create(&nd_tbl, daddr, dev);
+	n = neigh_create(nd_table(dev_net(dev)), daddr, dev);
 	return IS_ERR(n) ? NULL : n;
 }
 
@@ -4019,6 +4047,7 @@ static int __ip6_del_rt_siblings(struct fib6_info *rt, struct fib6_config *cfg)
 	struct net *net = info->nl_net;
 	struct sk_buff *skb = NULL;
 	struct fib6_table *table;
+	struct fib6_node *fn;
 	int err = -ENOENT;
 
 	if (rt == net->ipv6.fib6_null_entry)
@@ -4026,9 +4055,13 @@ static int __ip6_del_rt_siblings(struct fib6_info *rt, struct fib6_config *cfg)
 	table = rt->fib6_table;
 	spin_lock_bh(&table->tb6_lock);
 
+	fn = rcu_dereference_protected(rt->fib6_node,
+				       lockdep_is_held(&table->tb6_lock));
+	if (!fn)
+		goto out_unlock;
+
 	if (rt->fib6_nsiblings && cfg->fc_delete_all_nh) {
 		struct fib6_info *sibling, *next_sibling;
-		struct fib6_node *fn;
 
 		/* prefer to send a single notification with all hops */
 		skb = nlmsg_new(rt6_nlmsg_size(rt), GFP_ATOMIC);
@@ -4051,8 +4084,6 @@ static int __ip6_del_rt_siblings(struct fib6_info *rt, struct fib6_config *cfg)
 		 * and emit a replace or delete notification, respectively.
 		 */
 		info->skip_notify_kernel = 1;
-		fn = rcu_dereference_protected(rt->fib6_node,
-					    lockdep_is_held(&table->tb6_lock));
 		if (rcu_access_pointer(fn->leaf) == rt) {
 			struct fib6_info *last_sibling, *replace_rt;
 
@@ -4241,6 +4272,7 @@ static int ip6_route_del(struct fib6_config *cfg,
 static void rt6_do_redirect(struct dst_entry *dst, struct sock *sk, struct sk_buff *skb)
 {
 	struct netevent_redirect netevent;
+	struct net_device *dev = skb->dev;
 	struct rt6_info *rt, *nrt = NULL;
 	struct fib6_result res = {};
 	struct ndisc_options ndopts;
@@ -4274,7 +4306,7 @@ static void rt6_do_redirect(struct dst_entry *dst, struct sock *sk, struct sk_bu
 		return;
 	}
 
-	in6_dev = __in6_dev_get(skb->dev);
+	in6_dev = __in6_dev_get(dev);
 	if (!in6_dev)
 		return;
 	if (READ_ONCE(in6_dev->cnf.forwarding) ||
@@ -4286,15 +4318,14 @@ static void rt6_do_redirect(struct dst_entry *dst, struct sock *sk, struct sk_bu
 	 *	first-hop router for the specified ICMP Destination Address.
 	 */
 
-	if (!ndisc_parse_options(skb->dev, msg->opt, optlen, &ndopts)) {
+	if (!ndisc_parse_options(dev, msg->opt, optlen, &ndopts)) {
 		net_dbg_ratelimited("rt6_redirect: invalid ND options\n");
 		return;
 	}
 
 	lladdr = NULL;
 	if (ndopts.nd_opts_tgt_lladdr) {
-		lladdr = ndisc_opt_addr_data(ndopts.nd_opts_tgt_lladdr,
-					     skb->dev);
+		lladdr = ndisc_opt_addr_data(ndopts.nd_opts_tgt_lladdr, dev);
 		if (!lladdr) {
 			net_dbg_ratelimited("rt6_redirect: invalid link-layer address length\n");
 			return;
@@ -4313,7 +4344,7 @@ static void rt6_do_redirect(struct dst_entry *dst, struct sock *sk, struct sk_bu
 	 */
 	dst_confirm_neigh(&rt->dst, &ipv6_hdr(skb)->saddr);
 
-	neigh = __neigh_lookup(&nd_tbl, &msg->target, skb->dev, 1);
+	neigh = __neigh_lookup(nd_table(dev_net(dev)), &msg->target, dev, 1);
 	if (!neigh)
 		return;
 
@@ -4321,7 +4352,7 @@ static void rt6_do_redirect(struct dst_entry *dst, struct sock *sk, struct sk_bu
 	 *	We have finally decided to accept it.
 	 */
 
-	ndisc_update(skb->dev, neigh, lladdr, NUD_STALE,
+	ndisc_update(dev, neigh, lladdr, NUD_STALE,
 		     NEIGH_UPDATE_F_WEAK_OVERRIDE|
 		     NEIGH_UPDATE_F_OVERRIDE|
 		     (on_link ? 0 : (NEIGH_UPDATE_F_OVERRIDE_ISROUTER|
@@ -5042,9 +5073,11 @@ void rt6_sync_down_dev(struct net_device *dev, unsigned long event)
 
 void rt6_disable_ip(struct net_device *dev, unsigned long event)
 {
+	struct net *net = dev_net(dev);
+
 	rt6_sync_down_dev(dev, event);
 	rt6_uncached_list_flush_dev(dev);
-	neigh_ifdown(&nd_tbl, dev);
+	neigh_ifdown(nd_table(net), dev);
 }
 
 struct rt6_mtu_change_arg {
@@ -6982,10 +7015,18 @@ int __init ip6_route_init(void)
 #endif
 
 	for_each_possible_cpu(cpu) {
-		struct uncached_list *ul = per_cpu_ptr(&rt6_uncached_list, cpu);
+		struct rt6_uncached_table *table;
+		int bucket;
 
-		INIT_LIST_HEAD(&ul->head);
-		spin_lock_init(&ul->lock);
+		table = per_cpu_ptr(&rt6_uncached_table, cpu);
+		for (bucket = 0; bucket < RT6_UNCACHED_HASH_SIZE; bucket++) {
+			struct uncached_list *ul = &table->buckets[bucket];
+
+			INIT_LIST_HEAD(&ul->head);
+			spin_lock_init(&ul->lock);
+		}
+		INIT_LIST_HEAD(&table->mismatch.head);
+		spin_lock_init(&table->mismatch.lock);
 	}
 
 out:

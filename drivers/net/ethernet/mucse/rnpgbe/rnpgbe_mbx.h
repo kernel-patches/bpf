@@ -18,4 +18,5 @@ int mucse_write_and_wait_ack_mbx(struct mucse_hw *hw,
 				 const __le32 *msg, u16 size);
 void mucse_init_mbx_params_pf(struct mucse_hw *hw);
 int mucse_poll_and_read_mbx(struct mucse_hw *hw, __le32 *msg, u16 size);
+int mucse_check_and_read_mbx(struct mucse_hw *hw, __le32 *msg, u16 size);
 #endif /* _RNPGBE_MBX_H */

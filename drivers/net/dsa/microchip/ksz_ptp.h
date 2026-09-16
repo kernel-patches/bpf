@@ -31,6 +31,8 @@ struct ksz_ptp_data {
 	enum ksz_ptp_tou_mode tou_mode;
 	struct timespec64 perout_target_time_first;  /* start of first pulse */
 	struct timespec64 perout_period;
+	unsigned int perout_flags;
+	unsigned int perout_index;
 };
 
 int ksz_ptp_clock_register(struct dsa_switch *ds);

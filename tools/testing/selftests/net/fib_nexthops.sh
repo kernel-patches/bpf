@@ -70,44 +70,7 @@ nsid=100
 
 log_test()
 {
-	local rc=$1
-	local expected=$2
-	local msg="$3"
-
-	if [ ${rc} -eq ${expected} ]; then
-		printf "TEST: %-60s  [ OK ]\n" "${msg}"
-		nsuccess=$((nsuccess+1))
-	else
-		if [[ $rc -eq $ksft_skip ]]; then
-			[[ $ret -eq 0 ]] && ret=$ksft_skip
-			nskip=$((nskip+1))
-			printf "TEST: %-60s  [SKIP]\n" "${msg}"
-		else
-			ret=1
-			nfail=$((nfail+1))
-			printf "TEST: %-60s  [FAIL]\n" "${msg}"
-		fi
-
-		if [ "$VERBOSE" = "1" ]; then
-			echo "    rc=$rc, expected $expected"
-		fi
-
-		if [ "${PAUSE_ON_FAIL}" = "yes" ]; then
-		echo
-			echo "hit enter to continue, 'q' to quit"
-			read a
-			[ "$a" = "q" ] && exit 1
-		fi
-	fi
-
-	if [ "${PAUSE}" = "yes" ]; then
-		echo
-		echo "hit enter to continue, 'q' to quit"
-		read a
-		[ "$a" = "q" ] && exit 1
-	fi
-
-	[ "$VERBOSE" = "1" ] && echo
+	log_test_expected "$1" "$2" "$3"
 }
 
 run_cmd()
@@ -533,6 +496,20 @@ ipv6_fdb_grp_fcnal()
 	run_cmd "$BRIDGE fdb add 02:02:00:00:00:14 dev vx10 nhid 61 self"
 	log_test $? 255 "Fdb mac add with nexthop"
 
+	# fdb entries with a nexthop group cannot be aged out
+	run_cmd "$BRIDGE fdb add 02:02:00:00:00:15 dev vx10 nhid 102 self static"
+	log_test $? 0 "Fdb mac add with nexthop group and static state"
+
+	run_cmd "$BRIDGE fdb add 02:02:00:00:00:16 dev vx10 nhid 102 self dynamic"
+	log_test $? 255 "Fdb mac add with nexthop group and dynamic state"
+
+	run_cmd "$BRIDGE fdb add 02:02:00:00:00:17 dev vx10 nhid 102 self"
+	run_cmd "$BRIDGE fdb replace 02:02:00:00:00:17 dev vx10 dst 2001:db8:91::11 self dynamic"
+	log_test $? 255 "Fdb mac replace with nexthop group and dynamic state"
+
+	run_cmd "$BRIDGE fdb append 02:02:00:00:00:17 dev vx10 dst 2001:db8:91::11 self dynamic"
+	log_test $? 255 "Fdb mac append with nexthop group and dynamic state"
+
 	run_cmd "$IP -6 ro add 2001:db8:101::1/128 nhid 66"
 	log_test $? 2 "Route add with fdb nexthop"
 
@@ -668,6 +645,20 @@ ipv4_fdb_grp_fcnal()
 	# fdb nexthops can only reference nexthop groups and not nexthops
 	run_cmd "$BRIDGE fdb add 02:02:00:00:00:14 dev vx10 nhid 12 self"
 	log_test $? 255 "Fdb mac add with nexthop"
+
+	# fdb entries with a nexthop group cannot be aged out
+	run_cmd "$BRIDGE fdb add 02:02:00:00:00:15 dev vx10 nhid 102 self static"
+	log_test $? 0 "Fdb mac add with nexthop group and static state"
+
+	run_cmd "$BRIDGE fdb add 02:02:00:00:00:16 dev vx10 nhid 102 self dynamic"
+	log_test $? 255 "Fdb mac add with nexthop group and dynamic state"
+
+	run_cmd "$BRIDGE fdb add 02:02:00:00:00:17 dev vx10 nhid 102 self"
+	run_cmd "$BRIDGE fdb replace 02:02:00:00:00:17 dev vx10 dst 10.0.0.3 self dynamic"
+	log_test $? 255 "Fdb mac replace with nexthop group and dynamic state"
+
+	run_cmd "$BRIDGE fdb append 02:02:00:00:00:17 dev vx10 dst 10.0.0.3 self dynamic"
+	log_test $? 255 "Fdb mac append with nexthop group and dynamic state"
 
 	run_cmd "$IP ro add 172.16.0.0/22 nhid 16"
 	log_test $? 2 "Route add with fdb nexthop"
@@ -1230,7 +1221,7 @@ ipv6_fcnal_runtime()
 		run_cmd "ip netns exec $me ping -c1 -w$PING_TIMEOUT 2001:db8:101::1"
 		log_test $? 0 "Ping - group blackhole replaced with gateways"
 	else
-		log_test 2 0 "Ping - multipath failed"
+		log_test $rc 0 "Ping - multipath failed"
 	fi
 
 	#
@@ -1887,7 +1878,7 @@ ipv4_fcnal_runtime()
 		run_cmd "ip netns exec $me ping -c1 -w$PING_TIMEOUT 172.16.101.1"
 		log_test $? 0 "Ping - group blackhole replaced with gateways"
 	else
-		log_test 2 0 "Ping - multipath failed"
+		log_test $rc 0 "Ping - multipath failed"
 	fi
 
 	#
@@ -2701,7 +2692,6 @@ done
 if [ "$TESTS" != "none" ]; then
 	printf "\nTests passed: %3d\n" ${nsuccess}
 	printf "Tests failed: %3d\n"   ${nfail}
-	printf "Tests skipped: %2d\n"  ${nskip}
 fi
 
 exit $ret

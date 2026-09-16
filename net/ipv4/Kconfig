@@ -103,6 +103,19 @@ config IP_ROUTE_VERBOSE
 config IP_ROUTE_CLASSID
 	bool
 
+config IP_UNCACHED_ROUTE_HASH_BITS
+	int "IPv4 uncached route hash bits"
+	range 1 10
+	default 6
+	help
+	  This option sets the number of buckets used in the IPv4 uncached
+	  route hash table to 2^IP_UNCACHED_ROUTE_HASH_BITS buckets. The
+	  allowed values select between 2 and 1024 buckets. Larger values
+	  reduce collisions, but each additional bit doubles the per-CPU
+	  memory used by the table.
+
+	  If unsure, use the default of 6 bits (64 buckets).
+
 config IP_PNP
 	bool "IP: kernel level autoconfiguration"
 	help
