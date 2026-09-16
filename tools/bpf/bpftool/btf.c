@@ -51,6 +51,9 @@ static const char * const btf_kind_str[NR_BTF_KINDS] = {
 	[BTF_KIND_DECL_TAG]	= "DECL_TAG",
 	[BTF_KIND_TYPE_TAG]	= "TYPE_TAG",
 	[BTF_KIND_ENUM64]	= "ENUM64",
+	[BTF_KIND_LOC_PARAM]	= "LOC_PARAM",
+	[BTF_KIND_LOC_PROTO]	= "LOC_PROTO",
+	[BTF_KIND_LOCSEC]	= "LOCSEC",
 };
 
 struct sort_datum {
@@ -115,6 +118,83 @@ static const char *btf_str(const struct btf *btf, __u32 off)
 static int btf_kind_safe(int kind)
 {
 	return kind <= BTF_KIND_MAX ? kind : BTF_KIND_UNKN;
+}
+
+static void btf_loc_param_str(const struct btf_type *t, char *str, size_t sz)
+{
+	const struct btf_loc_param *p;
+	__u32 i = 0, vlen;
+	__u64 value;
+	bool negative = false;
+	char regs[32] = {};
+	char num[32] = {};
+	const char *op = "";
+
+	if (!t || !btf_is_loc_param(t)) {
+		snprintf(str, sz, "<invalid>");
+		return;
+	}
+
+	p = btf_loc_param(t);
+	vlen = btf_vlen(t);
+
+	if (p->flags & BTF_LOC_PARAM_REG) {
+		__u32 nregs = (p->flags == BTF_LOC_PARAM_REG) ? vlen : 1;
+
+		if (nregs > vlen) {
+			snprintf(str, sz, "?");
+			return;
+		}
+
+		switch (nregs) {
+		case 2:
+			snprintf(regs, sizeof(regs), "r%u, r%u",
+				 p->values[0], p->values[1]);
+			break;
+		case 1:
+			snprintf(regs, sizeof(regs), "r%u", p->values[0]);
+			break;
+		default:
+			snprintf(regs, sizeof(regs), "?");
+			break;
+		}
+		i += nregs;
+	}
+	if (p->flags & (BTF_LOC_PARAM_CONST|BTF_LOC_PARAM_OFFSET)) {
+		switch (vlen - i) {
+		case 1:
+			value = p->values[i];
+			break;
+		case 2:
+			value = ((__u64)p->values[i + 1] << 32) | p->values[i];
+			break;
+		default:
+			snprintf(num, sizeof(num), "?");
+			goto done;
+		}
+		if ((p->flags & BTF_LOC_PARAM_SIGNED) && t->size &&
+		    t->size <= sizeof(value)) {
+			__u32 bits = t->size * 8;
+
+			if (t->size < sizeof(value))
+				value &= (1ULL << bits) - 1;
+			negative = value & (1ULL << (bits - 1));
+			if (negative)
+				value = t->size == sizeof(value) ? -value :
+					(1ULL << bits) - value;
+		}
+		snprintf(num, sizeof(num), "0x%llx", (unsigned long long)value);
+	}
+	if (num[0])
+		op = regs[0] ? (negative ? " - " : " + ") : negative ? "-" : "";
+
+done:
+	snprintf(str, sz, "%s%s%s%s%s",
+		 p->flags & BTF_LOC_PARAM_DEREF ? "*(" : "",
+		 regs,
+		 op,
+		 num,
+		 p->flags & BTF_LOC_PARAM_DEREF ? ")" : "");
 }
 
 static int dump_btf_type(const struct btf *btf, __u32 id,
@@ -413,6 +493,95 @@ static int dump_btf_type(const struct btf *btf, __u32 id,
 		} else {
 			printf(" type_id=%u component_idx=%d", t->type, tag->component_idx);
 		}
+		break;
+	}
+	case BTF_KIND_LOC_PARAM: {
+		const struct btf_loc_param *p = btf_loc_param(t);
+		__u32 vlen = btf_vlen(t);
+		char param_str[256] = {};
+
+		btf_loc_param_str(t, param_str, sizeof(param_str));
+
+		if (json_output) {
+			jsonw_uint_field(w, "size", t->size);
+			jsonw_uint_field(w, "flags", p->flags);
+			jsonw_uint_field(w, "vlen", vlen);
+			jsonw_string_field(w, "values", param_str);
+		} else {
+			printf(" size=%u flags=0x%x vlen=%u values='%s'", t->size, p->flags, vlen, param_str);
+		}
+		break;
+	}
+	case BTF_KIND_LOC_PROTO: {
+		__u32 *params = btf_loc_proto_params(t);
+		__u16 vlen = btf_vlen(t);
+		int i;
+
+		if (json_output) {
+			jsonw_uint_field(w, "vlen", vlen);
+			jsonw_name(w, "params");
+			jsonw_start_array(w);
+		} else {
+			printf(" vlen=%u", vlen);
+		}
+
+		for (i = 0; i < vlen; i++, params++) {
+			const struct btf_type *p;
+			char param_str[256] = {};
+
+			if (*params) {
+				p = btf__type_by_id(btf, *params);
+				btf_loc_param_str(p, param_str, sizeof(param_str));
+			} else {
+				snprintf(param_str, sizeof(param_str), "<unavailable>");
+			}
+			if (json_output) {
+				jsonw_start_object(w);
+				jsonw_uint_field(w, "type_id", *params);
+				jsonw_string_field(w, "value", param_str);
+				jsonw_end_object(w);
+			} else {
+				printf("\n\ttype_id=%u value='%s'", *params, param_str);
+			}
+		}
+		if (json_output)
+			jsonw_end_array(w);
+		break;
+	}
+
+	case BTF_KIND_LOCSEC: {
+		struct btf_loc *locs = btf_locsec_locs(t);
+		__u32 i, vlen = btf_vlen(t);
+
+		if (json_output) {
+			jsonw_uint_field(w, "vlen", vlen);
+			jsonw_name(w, "locs");
+			jsonw_start_array(w);
+		} else {
+			printf(" vlen=%u", vlen);
+		}
+
+		for (i = 0; i < vlen; i++, locs++) {
+			const struct btf_type *f = btf__type_by_id(btf, locs->func);
+			const char *name = "<invalid>";
+
+			if (f && btf_is_func(f))
+				name = btf_str(btf, f->name_off);
+
+			if (json_output) {
+				jsonw_start_object(w);
+				jsonw_uint_field(w, "func_type_id", locs->func);
+				jsonw_string_field(w, "name", name);
+				jsonw_uint_field(w, "loc_proto_type_id", locs->loc_proto);
+				jsonw_uint_field(w, "offset", locs->offset);
+				jsonw_end_object(w);
+			} else {
+				printf("\n\tname='%s' func_type_id=%u loc_proto_type_id=%u offset=%u",
+				       name, locs->func, locs->loc_proto, locs->offset);
+			}
+		}
+		if (json_output)
+			jsonw_end_array(w);
 		break;
 	}
 	default:
@@ -1545,7 +1714,7 @@ static int do_help(int argc, char **argv)
 		"       " HELP_SPEC_MAP "\n"
 		"       " HELP_SPEC_PROGRAM "\n"
 		"       " HELP_SPEC_OPTIONS " |\n"
-		"                    {-B|--base-btf} }\n"
+		"                    {[{-B|--base-btf} FILE]... }\n"
 		"",
 		bin_name, "btf");
 
