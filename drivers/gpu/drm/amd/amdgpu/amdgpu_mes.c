@@ -133,6 +133,8 @@ int amdgpu_mes_init(struct amdgpu_device *adev)
 {
 	int i, r, num_pipes, num_queues = 0;
 	int num_xcc = adev->gfx.xcc_mask ? NUM_XCC(adev->gfx.xcc_mask) : 1;
+	int max_sdma_pipes = amdgpu_ip_version(adev, GC_HWIP, 0) >= IP_VERSION(13, 0, 0) ?
+		AMDGPU_MES_MAX_SDMA_PIPES : 2;
 	u32 gfx_hqd_mask = amdgpu_mes_get_hqd_mask(adev->gfx.me.num_pipe_per_me,
 				adev->gfx.me.num_queue_per_pipe,
 				adev->gfx.disable_kq ? 0 : adev->gfx.num_gfx_rings);
@@ -190,15 +192,12 @@ int amdgpu_mes_init(struct amdgpu_device *adev)
 
 	num_pipes = adev->sdma.num_inst_per_xcc ?
 		adev->sdma.num_inst_per_xcc : adev->sdma.num_instances;
-	if (num_pipes > AMDGPU_MES_MAX_SDMA_PIPES)
+	if (num_pipes > max_sdma_pipes)
 		dev_warn(adev->dev, "more SDMA pipes than supported by MES! (%d vs %d)\n",
-			 num_pipes, AMDGPU_MES_MAX_SDMA_PIPES);
+			 num_pipes, max_sdma_pipes);
 
-	for (i = 0; i < AMDGPU_MES_MAX_SDMA_PIPES; i++) {
-		if (i >= num_pipes)
-			break;
+	for (i = 0; i < min(num_pipes, max_sdma_pipes); i++)
 		adev->mes.sdma_hqd_mask[i] = 0xfc;
-	}
 
 	dev_info(adev->dev,
 			 "MES: vmid_uq_mask_mmhub 0x%08x, vmid_uq_mask_gfxhub 0x%08x\n",
