@@ -211,9 +211,9 @@ static void channel_remove(struct channel *ch)
 	while (*c) {
 		if (*c == ch) {
 			*c = ch->next;
-			fsm_deltimer(&ch->timer);
+			timer_delete_sync(&ch->timer.tl);
 			if (IS_MPC(ch))
-				fsm_deltimer(&ch->sweep_timer);
+				timer_delete_sync(&ch->sweep_timer.tl);
 
 			kfree_fsm(ch->fsm);
 			clear_normalized_cda(&ch->ccw[4]);
