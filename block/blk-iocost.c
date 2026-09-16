@@ -2244,6 +2244,10 @@ static void ioc_timer_fn(struct timer_list *timer)
 	struct ioc_now now;
 	LIST_HEAD(surpluses);
 	int nr_debtors, nr_shortages = 0, nr_lagging = 0;
+	int nr_active = 0;
+	u32 tick_period_us;
+	u64 tick_vrate, tick_dur;
+	int tick_busy, tick_running;
 	u64 usage_us_sum = 0;
 	u32 ppm_rthr;
 	u32 ppm_wthr;
@@ -2279,6 +2283,8 @@ static void ioc_timer_fn(struct timer_list *timer)
 	list_for_each_entry(iocg, &ioc->active_iocgs, active_list) {
 		u64 vdone, vtime, usage_us;
 		u32 hw_active, hw_inuse;
+
+		nr_active++;
 
 		/*
 		 * Collect unused and wind vtime closer to vnow to prevent
@@ -2441,12 +2447,38 @@ static void ioc_timer_fn(struct timer_list *timer)
 
 	ioc->busy_level = clamp(ioc->busy_level, -1000, 1000);
 
+	/*
+	 * vrate and period_us change right below; snapshot the values
+	 * this period ran in so the tick below reports the period's own
+	 * parameters instead of the next period's.
+	 */
+	tick_period_us = ioc->period_us;
+	tick_vrate = ioc->vtime_base_rate;
+
 	ioc_adjust_base_vrate(ioc, rq_wait_pct, nr_lagging, nr_shortages,
 			      prev_busy_level, missed_ppm);
 
 	ioc_refresh_params(ioc, false);
 
 	ioc_forgive_debts(ioc, usage_us_sum, nr_debtors, &now);
+
+	/*
+	 * Snapshot the state this period ran in before the idle
+	 * transition below wipes it, so the final tick reports the period's
+	 * own busy level (e.g. the saturation that drove the controller
+	 * idle) instead of the cleared one.  usage is normalized by the
+	 * measured period length, captured before ioc_start_period()
+	 * overwrites period_at, the same way the donation loop does.
+	 * Emitted before cur_period is bumped, so the tick carries the
+	 * number of the period it describes.
+	 */
+	tick_busy = ioc->busy_level;
+	tick_running = ioc->running;
+	tick_dur = now.now - ioc->period_at;
+
+	trace_iocost_ioc_tick(ioc, nr_active, usage_us_sum,
+			      tick_period_us, tick_vrate,
+			      tick_busy, tick_running, tick_dur);
 
 	/*
 	 * This period is done.  Move onto the next one.  If nothing's
