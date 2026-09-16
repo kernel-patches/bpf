@@ -6219,9 +6219,25 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	}
 
 	if (atype == BPF_READ && value_regno >= 0) {
+		u32 link_id = 0;
+
+		/*
+		 * A trusted pointer walked from a referenced object is only
+		 * valid while that reference is held. Remember the reference
+		 * id of the source, or the one it inherited, so that
+		 * release_reference() invalidates the loaded register too.
+		 * Read it now, reg may alias regs[value_regno].
+		 */
+		if (ret == PTR_TO_BTF_ID && (flag & PTR_TRUSTED))
+			link_id = reg_is_referenced(env, reg) ? reg->id : reg->parent_id;
+
 		ret = mark_btf_ld_reg(env, regs, value_regno, ret, reg->btf, btf_id, flag);
 		if (ret < 0)
 			return ret;
+
+		/* mark_btf_ld_reg() cleared parent_id, set it afterwards. */
+		if (link_id)
+			regs[value_regno].parent_id = link_id;
 	}
 
 	return 0;
