@@ -100,4 +100,30 @@ int BPF_PROG(inode_rename, struct inode *old_dir, struct dentry *old_dentry,
 	return 0;
 }
 
+SEC("lsm.s/file_open")
+__success
+int BPF_PROG(f_inode_walk_used_before_put_file)
+{
+	struct file *acquired;
+	struct inode *inode;
+	ino_t ino;
+
+	acquired = bpf_get_task_exe_file(bpf_get_current_task_btf());
+	if (!acquired)
+		return 0;
+
+	/*
+	 * f_inode walked from a referenced file can be dereferenced while
+	 * the file reference is held. Only the scalar read from it is used
+	 * after the put.
+	 */
+	inode = acquired->f_inode;
+	ino = inode->i_ino;
+	bpf_put_file(acquired);
+
+	if (ino == 0)
+		return -EACCES;
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

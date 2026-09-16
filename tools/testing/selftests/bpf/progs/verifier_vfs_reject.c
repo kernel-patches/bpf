@@ -173,4 +173,31 @@ int BPF_PROG(inode_rename, struct inode *old_dir, struct dentry *old_dentry,
 		return -EACCES;
 	return 0;
 }
+
+SEC("lsm.s/file_open")
+__failure __msg("invalid mem access 'scalar'")
+int BPF_PROG(f_inode_walk_used_after_put_file)
+{
+	struct file *acquired;
+	struct inode *inode;
+	ino_t ino;
+
+	acquired = bpf_get_task_exe_file(bpf_get_current_task_btf());
+	if (!acquired)
+		return 0;
+
+	/*
+	 * f_inode walked from a referenced file is trusted, but only for
+	 * as long as the file reference is held.
+	 */
+	inode = acquired->f_inode;
+	bpf_put_file(acquired);
+
+	/* The put invalidated inode, it can't be dereferenced anymore. */
+	ino = inode->i_ino;
+	if (ino == 0)
+		return -EACCES;
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
