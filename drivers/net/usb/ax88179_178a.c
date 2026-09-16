@@ -1270,6 +1270,18 @@ static const struct driver_info at_umc2000sp_info = {
 
 static const struct usb_device_id products[] = {
 {
+	/* ASIX AX88179A USB 3.2 1000Mbit Ethernet */
+	USB_DEVICE_VER(0x0b95, 0x1790, 0x0200, 0x0200),
+	.driver_info = (unsigned long)&ax88179a_info,
+}, {
+	/* ASIX AX88772D USB 2.0 100Mbit Ethernet */
+	USB_DEVICE_VER(0x0b95, 0x1790, 0x0300, 0x0300),
+	.driver_info = (unsigned long)&ax88772d_info,
+}, {
+	/* ASIX AX88279 USB 3.2 2500Mbit Ethernet */
+	USB_DEVICE_VER(0x0b95, 0x1790, 0x0400, 0x0400),
+	.driver_info = (unsigned long)&ax88279_info,
+}, {
 	/* ASIX AX88179 10/100/1000 */
 	USB_DEVICE_AND_INTERFACE_INFO(0x0b95, 0x1790, 0xff, 0xff, 0),
 	.driver_info = (unsigned long)&ax88179_info,
