@@ -3164,7 +3164,7 @@ static inline void dev_dstats_tx_dropped(struct net_device *dev)
 })
 
 #define netdev_alloc_pcpu_stats(type)					\
-	__netdev_alloc_pcpu_stats(type, GFP_KERNEL)
+	__netdev_alloc_pcpu_stats(type, GFP_KERNEL_ACCOUNT)
 
 #define devm_netdev_alloc_pcpu_stats(dev, type)				\
 ({									\
