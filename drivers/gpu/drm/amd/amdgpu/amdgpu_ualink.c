@@ -4023,6 +4023,7 @@ int amdgpu_ualink_export_handle(struct drm_device *dev, struct drm_file *filp,
 		if (IS_ERR(exp_xa_node->dmabuf)) {
 			r = PTR_ERR(exp_xa_node->dmabuf);
 			dev_err(adev->dev, "Failed to generate DMABuf for the BO\n");
+			amdgpu_bo_unref(&exp_xa_node->bo);
 			kfree(exp_xa_node);
 			goto out;
 		}
@@ -4036,7 +4037,7 @@ int amdgpu_ualink_export_handle(struct drm_device *dev, struct drm_file *filp,
 		if (r) {
 			dev_err(adev->dev, "Failed to insert exp_xa_node into XA: %d\n", r);
 			dma_buf_put(exp_xa_node->dmabuf);
-			amdgpu_bo_unref(&robj);
+			amdgpu_bo_unref(&exp_xa_node->bo);
 			kfree(exp_xa_node);
 			goto out;
 		}
