@@ -463,6 +463,8 @@ void tcp_init_sock(struct sock *sk)
 
 	tp->tsoffset = 0;
 	tp->rack.reo_wnd_steps = 1;
+	tp->ecn_mode = TCP_ECN_MODE_UNSPEC;
+	tp->ecn_option = TCP_ACCECN_OPTION_UNSPEC;
 
 	sk->sk_write_space = sk_stream_write_space;
 	sock_set_flag(sk, SOCK_USE_WRITE_QUEUE);
@@ -4162,6 +4164,18 @@ ao_parse:
 		tcp_enable_tx_delay(sk, val);
 		WRITE_ONCE(tp->tcp_tx_delay, val);
 		break;
+	case TCP_ECN:
+		if (val != TCP_ECN_MODE_UNSPEC && (val < 0 || val > TCP_ECN_IN_ACCECN_OUT_NOECN))
+			err = -EINVAL;
+		else
+			WRITE_ONCE(tp->ecn_mode, val);
+		break;
+	case TCP_ECN_OPTION:
+		if (val != TCP_ACCECN_OPTION_UNSPEC && (val < 0 || val > TCP_ACCECN_OPTION_PERSIST))
+			err = -EINVAL;
+		else
+			WRITE_ONCE(tp->ecn_option, val);
+		break;
 	default:
 		err = -ENOPROTOOPT;
 		break;
@@ -4844,6 +4858,12 @@ zerocopy_rcv_out:
 	case TCP_DELACK_MAX_US:
 		val = jiffies_to_usecs(READ_ONCE(inet_csk(sk)->icsk_delack_max));
 		break;
+	case TCP_ECN:
+		val = READ_ONCE(tp->ecn_mode);
+		break;
+	case TCP_ECN_OPTION:
+		val = READ_ONCE(tp->ecn_option);
+		break;
 	default:
 		return -ENOPROTOOPT;
 	}
@@ -5258,6 +5278,8 @@ static void __init tcp_struct_check(void)
 	CACHELINE_ASSERT_GROUP_MEMBER(struct tcp_sock, tcp_sock_write_tx, tsorted_sent_queue);
 	CACHELINE_ASSERT_GROUP_MEMBER(struct tcp_sock, tcp_sock_write_tx, highest_sack);
 	CACHELINE_ASSERT_GROUP_MEMBER(struct tcp_sock, tcp_sock_write_tx, ecn_flags);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct tcp_sock, tcp_sock_write_tx, ecn_mode);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct tcp_sock, tcp_sock_write_tx, ecn_option);
 
 	/* TXRX read-write hotpath cache lines */
 	CACHELINE_ASSERT_GROUP_MEMBER(struct tcp_sock, tcp_sock_write_txrx, pred_flags);

@@ -528,6 +528,43 @@ tcp_ecn_fallback - BOOLEAN
 
 	Default: 1 (enabled)
 
+tcp_ecn (socket option) - TCP_ECN
+	Per-socket control of ECN mode, allowing per-connection override of the
+	tcp_ecn sysctl setting. This enables L4S (Low Latency, Low Loss, Scalable
+	Throughput) configuration on a per-socket basis.
+
+	Setting this socket option to any value except 255 will override the
+	system-wide tcp_ecn sysctl for that particular socket. A value of 255
+	(TCP_ECN_MODE_UNSPEC) means use the system default sysctl value.
+
+	Possible values: 0-5 (see tcp_ecn sysctl description above), or 255 to
+	use the system default (sysctl_tcp_ecn).
+
+	Example::
+
+		int val = 3;  /* AccECN mode */
+		setsockopt(fd, SOL_TCP, TCP_ECN, &val, sizeof(val));
+
+	Default: 255 (unspecified - uses tcp_ecn sysctl value)
+
+tcp_ecn_option (socket option) - TCP_ECN_OPTION
+	Per-socket control of Accurate ECN (AccECN) option sending behavior,
+	allowing per-connection override of the tcp_ecn_option sysctl setting.
+
+	Setting this socket option to any value except 255 will override the
+	system-wide tcp_ecn_option sysctl for that particular socket. A value of
+	255 (TCP_ACCECN_OPTION_UNSPEC) means use the system default sysctl value.
+
+	Possible values: 0-3 (see tcp_ecn_option sysctl description above), or 255
+	to use the system default (sysctl_tcp_ecn_option).
+
+	Example::
+
+		int val = 2;  /* Send AccECN option on every packet */
+		setsockopt(fd, SOL_TCP, TCP_ECN_OPTION, &val, sizeof(val));
+
+	Default: 255 (unspecified - uses tcp_ecn_option sysctl value)
+
 tcp_fack - BOOLEAN
 	This is a legacy option, it has no effect anymore.
 

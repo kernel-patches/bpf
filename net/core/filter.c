@@ -5670,6 +5670,8 @@ static int sol_tcp_sockopt(struct sock *sk, int optname,
 	case TCP_NOTSENT_LOWAT:
 	case TCP_SAVE_SYN:
 	case TCP_RTO_MAX_MS:
+	case TCP_ECN:
+	case TCP_ECN_OPTION:
 		if (*optlen != sizeof(int))
 			return -EINVAL;
 		break;

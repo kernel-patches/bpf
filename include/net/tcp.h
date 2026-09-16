@@ -707,12 +707,6 @@ u64 cookie_init_timestamp(struct request_sock *req, u64 now);
 bool cookie_timestamp_decode(const struct net *net,
 			     struct tcp_options_received *opt);
 
-static inline bool cookie_ecn_ok(const struct net *net, const struct dst_entry *dst)
-{
-	return READ_ONCE(net->ipv4.sysctl_tcp_ecn) ||
-		dst_feature(dst, RTAX_FEATURE_ECN);
-}
-
 #if IS_ENABLED(CONFIG_BPF)
 static inline bool cookie_bpf_ok(struct sk_buff *skb)
 {

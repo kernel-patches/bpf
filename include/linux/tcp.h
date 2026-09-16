@@ -289,6 +289,13 @@ struct tcp_sock {
 					 * sacked_out > 0)
 					 */
 	u8	ecn_flags;	/* ECN status bits.			*/
+	u8	ecn_mode;	/* Per-socket ECN mode override
+				 * (TCP_ECN_MODE_UNSPEC = use sysctl)
+				 */
+	u8	ecn_option;	/* Per-socket AccECN option override
+				 * (TCP_ACCECN_OPTION_UNSPEC = use sysctl)
+				 */
+
 	__cacheline_group_end(tcp_sock_write_tx);
 
 	/* TXRX read-write hotpath cache lines */
