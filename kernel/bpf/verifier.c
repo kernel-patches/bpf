@@ -10,6 +10,7 @@
 #include <linux/slab.h>
 #include <linux/bpf.h>
 #include <linux/btf.h>
+#include <linux/bpf_cleanup_abi.h>
 #include <linux/bpf_verifier.h>
 #include <linux/filter.h>
 #include <net/netlink.h>
@@ -1715,6 +1716,7 @@ int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
 		return err;
 	dst_state->speculative = src->speculative;
 	dst_state->in_sleepable = src->in_sleepable;
+	dst_state->unwinding = src->unwinding;
 	dst_state->curframe = src->curframe;
 	dst_state->branches = src->branches;
 	dst_state->parent = src->parent;
@@ -10540,8 +10542,8 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	return 0;
 }
 
-static int process_bpf_exit_full(struct bpf_verifier_env *env,
-				 bool *do_print_state, bool exception_exit);
+static int process_bpf_exit_full(struct bpf_verifier_env *env, bool *do_print_state);
+static int unwind_step(struct bpf_verifier_env *env, u32 callsite, int *insn_idx);
 
 static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			   int *insn_idx)
@@ -10631,7 +10633,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				verbose(env, "failed to push state for global subprog exception path\n");
 				return PTR_ERR(branch);
 			}
-			return process_bpf_exit_full(env, NULL, true);
+			return unwind_step(env, *insn_idx, insn_idx);
 		}
 
 		/* continue with next insn after call */
@@ -14511,7 +14513,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		env->prog->call_session_cookie = true;
 
 	if (bpf_is_throw_kfunc(insn))
-		return process_bpf_exit_full(env, NULL, true);
+		return unwind_step(env, insn_idx, &env->insn_idx);
 
 	return 0;
 }
@@ -18436,9 +18438,75 @@ enum {
 	INSN_IDX_UPDATED = 2,
 };
 
-static int process_bpf_exit_full(struct bpf_verifier_env *env,
-				 bool *do_print_state,
-				 bool exception_exit)
+static u32 unwind_pop_frame(struct bpf_verifier_env *env)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+	struct bpf_func_state *callee = state->frame[state->curframe];
+	u32 callsite = callee->callsite;
+	struct bpf_func_state *caller;
+
+	caller = state->frame[state->curframe - 1];
+	account_processed_insns(env, callee, caller);
+	free_func_state(callee);
+	state->frame[state->curframe--] = NULL;
+	invalidate_outgoing_stack_args(env, caller);
+	return callsite;
+}
+
+static void unwind_enter_pad(struct bpf_verifier_env *env)
+{
+	struct bpf_func_state *frame = cur_func(env);
+
+	clear_caller_saved_regs(env, frame->regs);
+	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	__mark_reg_known(&frame->regs[BPF_REG_0], BPF_PAD_ENTRY_R0);
+}
+
+static int unwind_finish(struct bpf_verifier_env *env)
+{
+	int err = check_resource_leak(env, true, true, "bpf_throw");
+
+	if (err)
+		return err;
+	return PROCESS_BPF_EXIT;
+}
+
+static int unwind_step(struct bpf_verifier_env *env, u32 callsite, int *insn_idx)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+
+	state->unwinding = true;
+	for (;;) {
+		int pad = bpf_cleanup_pad_of_call(env, callsite);
+
+		if (pad >= 0) {
+			unwind_enter_pad(env);
+			*insn_idx = pad;
+			return INSN_IDX_UPDATED;
+		}
+		if (!state->curframe)
+			return unwind_finish(env);
+		callsite = unwind_pop_frame(env);
+	}
+}
+
+static int process_cleanup_resume(struct bpf_verifier_env *env, int *insn_idx)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+
+	/* A pad entered by ordinary control flow. */
+	if (!state->unwinding) {
+		verbose(env,
+			"bpf_unwind_resume() at insn %d reached without an exception in flight\n",
+			*insn_idx);
+		return -EINVAL;
+	}
+	if (!state->curframe)
+		return unwind_finish(env);
+	return unwind_step(env, unwind_pop_frame(env), insn_idx);
+}
+
+static int process_bpf_exit_full(struct bpf_verifier_env *env, bool *do_print_state)
 {
 	struct bpf_func_state *cur_frame = cur_func(env);
 
@@ -18448,24 +18516,10 @@ static int process_bpf_exit_full(struct bpf_verifier_env *env,
 	 * for which reference_state must match caller reference
 	 * state when it exits.
 	 */
-	int err = check_resource_leak(env, exception_exit,
-				      exception_exit || !env->cur_state->curframe,
-				      exception_exit ? "bpf_throw" :
+	int err = check_resource_leak(env, false, !env->cur_state->curframe,
 				      "BPF_EXIT instruction in main prog");
 	if (err)
 		return err;
-
-	/* The side effect of the prepare_func_exit which is
-	 * being skipped is that it frees bpf_func_state.
-	 * Typically, process_bpf_exit will only be hit with
-	 * outermost exit. copy_verifier_state in pop_stack will
-	 * handle freeing of any extra bpf_func_state left over
-	 * from not processing all nested function exits. We
-	 * also skip return code checks as they are not needed
-	 * for exceptional exits.
-	 */
-	if (exception_exit)
-		return PROCESS_BPF_EXIT;
 
 	if (env->cur_state->curframe) {
 		/* exit from nested function */
@@ -18640,6 +18694,8 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 
 		env->jmps_processed++;
 		if (opcode == BPF_CALL) {
+			if (bpf_is_unwind_resume_kfunc(insn))
+				return process_cleanup_resume(env, &env->insn_idx);
 			if (env->cur_state->active_locks) {
 				if ((insn->src_reg == BPF_REG_0 &&
 				     insn->imm != BPF_FUNC_spin_unlock &&
@@ -18673,7 +18729,7 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 				env->insn_idx += insn->imm + 1;
 			return INSN_IDX_UPDATED;
 		} else if (opcode == BPF_EXIT) {
-			return process_bpf_exit_full(env, do_print_state, false);
+			return process_bpf_exit_full(env, do_print_state);
 		}
 		return check_cond_jmp_op(env, insn, &env->insn_idx);
 	}
