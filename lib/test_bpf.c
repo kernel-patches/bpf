@@ -15214,6 +15214,7 @@ err_skb1:
 	__free_page(page[1]);
 err_page1:
 	kfree_skb(skb[0]);
+	return NULL;
 err_skb0:
 	__free_page(page[0]);
 err_page0:
