@@ -8,6 +8,7 @@
 
 #include <linux/bitops.h>
 #include <linux/clk.h>
+#include <linux/devm-helpers.h>
 #include <linux/err.h>
 #include <linux/io.h>
 #include <linux/module.h>
@@ -857,18 +858,6 @@ static int icss_iep_probe(struct platform_device *pdev)
 	if (irq == -EPROBE_DEFER)
 		return irq;
 
-	if (irq > 0) {
-		ret = devm_request_irq(dev, irq, icss_iep_cap_cmp_irq,
-				       IRQF_TRIGGER_HIGH, "iep_cap_cmp", iep);
-		if (ret) {
-			dev_info(iep->dev, "cap_cmp irq request failed: %x\n",
-				 ret);
-		} else {
-			iep->cap_cmp_irq = irq;
-			INIT_WORK(&iep->work, icss_iep_cap_cmp_work);
-		}
-	}
-
 	iep_clk = devm_clk_get(dev, NULL);
 	if (IS_ERR(iep_clk))
 		return PTR_ERR(iep_clk);
@@ -895,8 +884,23 @@ static int icss_iep_probe(struct platform_device *pdev)
 
 	iep->ptp_info = icss_iep_ptp_info;
 	mutex_init(&iep->ptp_clk_mutex);
-	dev_set_drvdata(dev, iep);
 	icss_iep_disable(iep);
+
+	if (irq > 0) {
+		ret = devm_work_autocancel(dev, &iep->work, icss_iep_cap_cmp_work);
+		if (ret)
+			return ret;
+
+		ret = devm_request_irq(dev, irq, icss_iep_cap_cmp_irq,
+				       IRQF_TRIGGER_HIGH, "iep_cap_cmp", iep);
+		if (ret)
+			dev_info(iep->dev, "cap_cmp irq request failed: %x\n",
+				 ret);
+		else
+			iep->cap_cmp_irq = irq;
+	}
+
+	dev_set_drvdata(dev, iep);
 
 	return 0;
 }
