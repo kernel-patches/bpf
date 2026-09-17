@@ -172,6 +172,8 @@ struct ice_aqc_set_port_params {
 #define ICE_AQC_RES_TYPE_FDIR_COUNTER_BLOCK		0x21
 #define ICE_AQC_RES_TYPE_FDIR_GUARANTEED_ENTRIES	0x22
 #define ICE_AQC_RES_TYPE_FDIR_SHARED_ENTRIES		0x23
+#define ICE_AQC_RES_TYPE_ACL_PROF_BLDR_PROFID		0x50
+#define ICE_AQC_RES_TYPE_ACL_PROF_BLDR_TCAM		0x51
 #define ICE_AQC_RES_TYPE_FD_PROF_BLDR_PROFID		0x58
 #define ICE_AQC_RES_TYPE_FD_PROF_BLDR_TCAM		0x59
 #define ICE_AQC_RES_TYPE_HASH_PROF_BLDR_PROFID		0x60
@@ -2176,6 +2178,43 @@ struct ice_acl_act_entry {
 #define ICE_ACL_NUM_ACT_PER_ACT_PAIR 2
 struct ice_aqc_actpair {
 	struct ice_acl_act_entry act[ICE_ACL_NUM_ACT_PER_ACT_PAIR];
+};
+
+/* The first byte of the byte selection base is reserved to keep the
+ * first byte of the field vector where the packet direction info is
+ * available. Thus we should start at index 1 of the field vector to
+ * map its entries to the byte selection base.
+ */
+#define ICE_AQC_ACL_PROF_BYTE_SEL_START_IDX	1
+#define ICE_AQC_ACL_PROF_BYTE_SEL_ELEMS		30
+
+/* Input buffer format for program profile extraction admin command and
+ * response buffer format for query profile admin command is as defined
+ * in struct ice_aqc_acl_prof_generic_frmt
+ */
+
+/* Input buffer format for program profile ranges and query profile ranges
+ * admin commands. Same format is used for response buffer in case of query
+ * profile ranges command
+ */
+struct ice_acl_rng_data {
+	/* The range checker output shall be sent when the value
+	 * related to this range checker is lower than low boundary
+	 */
+	__be16 low_boundary;
+	/* The range checker output shall be sent when the value
+	 * related to this range checker is higher than high boundary
+	 */
+	__be16 high_boundary;
+	/* A value of '0' in bit shall clear the relevant bit input
+	 * to the range checker
+	 */
+	__be16 mask;
+};
+
+#define ICE_AQC_ACL_PROF_RANGES_NUM_CFG 8
+struct ice_aqc_acl_profile_ranges {
+	struct ice_acl_rng_data checker_cfg[ICE_AQC_ACL_PROF_RANGES_NUM_CFG];
 };
 
 /* Program ACL entry (indirect 0x0C20) */

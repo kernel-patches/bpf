@@ -3,6 +3,7 @@
 
 #include "ice_common.h"
 #include "ice_flow.h"
+#include "ice_acl.h"
 #include <net/gre.h>
 
 /* Size of known protocol header fields */
@@ -990,6 +991,43 @@ static int ice_flow_proc_seg_hdrs(struct ice_flow_prof_params *params)
 }
 
 /**
+ * ice_flow_xtract_pkt_flags - Create an extr sequence entry for packet flags
+ * @hw: pointer to the HW struct
+ * @params: information about the flow to be processed
+ * @flags: The value of pkt_flags[x:x] in Rx/Tx MDID metadata.
+ *
+ * Allocate an extraction sequence entries for a DWORD size chunk of the packet
+ * flags.
+ *
+ * Return: 0 on success, negative on error
+ */
+static int ice_flow_xtract_pkt_flags(struct ice_hw *hw,
+				     struct ice_flow_prof_params *params,
+				     enum ice_flex_mdid_pkt_flags flags)
+{
+	u8 fv_words = hw->blk[params->blk].es.fvw;
+	u8 idx;
+
+	/* Make sure the number of extraction sequence entries required does not
+	 * exceed the block's capacity.
+	 */
+	if (params->es_cnt >= fv_words)
+		return -ENOSPC;
+
+	/* some blocks require a reversed field vector layout */
+	if (hw->blk[params->blk].es.reverse)
+		idx = fv_words - params->es_cnt - 1;
+	else
+		idx = params->es_cnt;
+
+	params->es[idx].prot_id = ICE_PROT_META_ID;
+	params->es[idx].off = flags;
+	params->es_cnt++;
+
+	return 0;
+}
+
+/**
  * ice_flow_xtract_fld - Create an extraction sequence entry for the given field
  * @hw: pointer to the HW struct
  * @params: information about the flow to be processed
@@ -1287,6 +1325,16 @@ ice_flow_create_xtrct_seq(struct ice_hw *hw,
 	int status = 0;
 	u8 i;
 
+	/* For ACL, we also need to extract the direction bit (Rx,Tx) data from
+	 * packet flags
+	 */
+	if (params->blk == ICE_BLK_ACL) {
+		status = ice_flow_xtract_pkt_flags(hw, params,
+						   ICE_RX_MDID_PKT_FLAGS_15_0);
+		if (status)
+			return status;
+	}
+
 	for (i = 0; i < prof->segs_cnt; i++) {
 		u64 match = params->prof->segs[i].match;
 		enum ice_flow_field j;
@@ -1306,6 +1354,123 @@ ice_flow_create_xtrct_seq(struct ice_hw *hw,
 	}
 
 	return status;
+}
+
+/**
+ * ice_flow_sel_acl_scen - return specific scenario
+ * @hw: pointer to the hardware structure
+ * @params: information about the flow to be processed
+ *
+ * Return (through @params) the specific scenario based on params.
+ *
+ * Return: 0 on success, negative on error
+ */
+static int ice_flow_sel_acl_scen(struct ice_hw *hw,
+				 struct ice_flow_prof_params *params)
+{
+	/* Find the best-fit scenario for the provided match width */
+	struct ice_acl_scen *cand_scen = NULL, *scen;
+
+	if (!hw->acl_tbl)
+		return -ENOENT;
+
+	/* Loop through each scenario and match against the scenario width
+	 * to select the specific scenario
+	 */
+	list_for_each_entry(scen, &hw->acl_tbl->scens, list_entry)
+		if (scen->eff_width >= params->entry_length &&
+		    (!cand_scen || cand_scen->eff_width > scen->eff_width))
+			cand_scen = scen;
+	if (!cand_scen)
+		return -ENOENT;
+
+	params->prof->cfg.scen = cand_scen;
+
+	return 0;
+}
+
+/**
+ * ice_flow_acl_def_entry_frmt - Determine the layout of flow entries
+ * @params: information about the flow to be processed
+ *
+ * Return: 0 on success, negative on error
+ */
+static int
+ice_flow_acl_def_entry_frmt(struct ice_flow_prof_params *params)
+{
+	u16 index, range_idx = 0;
+
+	index = ICE_AQC_ACL_PROF_BYTE_SEL_START_IDX;
+
+	for (int i = 0; i < params->prof->segs_cnt; i++) {
+		struct ice_flow_seg_info *seg = &params->prof->segs[i];
+		unsigned long match = seg->match;
+		int j;
+
+		for_each_set_bit(j, &match, ICE_FLOW_FIELD_IDX_MAX) {
+			struct ice_flow_fld_info *fld = &seg->fields[j];
+
+			fld->entry.mask = ICE_FLOW_FLD_OFF_INVAL;
+
+			if (fld->type == ICE_FLOW_FLD_TYPE_RANGE) {
+				fld->entry.last = ICE_FLOW_FLD_OFF_INVAL;
+
+				/* Range checking only supported for single
+				 * words
+				 */
+				if (DIV_ROUND_UP(ice_flds_info[j].size +
+						 fld->xtrct.disp,
+						 BITS_PER_BYTE * 2) > 1)
+					return -EINVAL;
+
+				/* Ranges must define low and high values */
+				if (fld->src.val == ICE_FLOW_FLD_OFF_INVAL ||
+				    fld->src.last == ICE_FLOW_FLD_OFF_INVAL)
+					return -EINVAL;
+
+				fld->entry.val = range_idx++;
+			} else {
+				/* Store adjusted byte-length of field for later
+				 * use, taking into account potential
+				 * non-byte-aligned displacement
+				 */
+				fld->entry.last =
+					DIV_ROUND_UP(ice_flds_info[j].size +
+						     (fld->xtrct.disp %
+						      BITS_PER_BYTE),
+						     BITS_PER_BYTE);
+				fld->entry.val = index;
+				index += fld->entry.last;
+			}
+		}
+
+		for (j = 0; j < seg->raws_cnt; j++) {
+			struct ice_flow_seg_fld_raw *raw = &seg->raws[j];
+
+			raw->info.entry.mask = ICE_FLOW_FLD_OFF_INVAL;
+			raw->info.entry.val = index;
+			raw->info.entry.last = raw->info.src.last;
+			index += raw->info.entry.last;
+		}
+	}
+
+	/* Currently only support using the byte selection base, which only
+	 * allows for an effective entry size of 30 bytes. Reject anything
+	 * larger.
+	 */
+	if (index > ICE_AQC_ACL_PROF_BYTE_SEL_ELEMS)
+		return -EINVAL;
+
+	/* Only 8 range checkers per profile, reject anything trying to use
+	 * more
+	 */
+	if (range_idx > ICE_AQC_ACL_PROF_RANGES_NUM_CFG)
+		return -EINVAL;
+
+	/* Store # bytes required for entry for later use */
+	params->entry_length = index - ICE_AQC_ACL_PROF_BYTE_SEL_START_IDX;
+
+	return 0;
 }
 
 /**
@@ -1330,6 +1495,14 @@ ice_flow_proc_segs(struct ice_hw *hw, struct ice_flow_prof_params *params)
 	case ICE_BLK_FD:
 	case ICE_BLK_RSS:
 		status = 0;
+		break;
+	case ICE_BLK_ACL:
+		status = ice_flow_acl_def_entry_frmt(params);
+		if (status)
+			return status;
+		status = ice_flow_sel_acl_scen(hw, params);
+		if (status)
+			return status;
 		break;
 	default:
 		return -EOPNOTSUPP;
