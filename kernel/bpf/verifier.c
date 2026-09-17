@@ -709,7 +709,8 @@ static void mark_dynptr_cb_reg(struct bpf_verifier_env *env,
 }
 
 static int destroy_if_dynptr_stack_slot(struct bpf_verifier_env *env,
-				        struct bpf_func_state *state, int spi);
+					struct bpf_func_state *state, int spi,
+					bool on_func_exit);
 
 static int mark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 				   enum bpf_arg_type arg_type, int insn_idx,
@@ -732,10 +733,10 @@ static int mark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_reg_
 	 * case they do belong to same dynptr, second call won't see slot_type
 	 * as STACK_DYNPTR and will simply skip destruction.
 	 */
-	err = destroy_if_dynptr_stack_slot(env, state, spi);
+	err = destroy_if_dynptr_stack_slot(env, state, spi, false);
 	if (err)
 		return err;
-	err = destroy_if_dynptr_stack_slot(env, state, spi - 1);
+	err = destroy_if_dynptr_stack_slot(env, state, spi - 1, false);
 	if (err)
 		return err;
 
@@ -843,8 +844,34 @@ static int dynptr_ref_cnt(struct bpf_verifier_env *env, int v_parent_id)
 	return ref_cnt;
 }
 
+static int destroy_dynptrs_on_func_exit(struct bpf_verifier_env *env,
+					struct bpf_func_state *callee)
+{
+	int i, err;
+
+	for (i = 0; i < callee->allocated_stack / BPF_REG_SIZE; i++) {
+		struct bpf_stack_state *slot = &callee->stack[i];
+
+		if (slot->slot_type[0] != STACK_DYNPTR ||
+		    !slot->spilled_ptr.dynptr.first_slot)
+			continue;
+
+		/*
+		 * A callee-local dynptr is destroyed when its stack frame goes
+		 * away. Apply the normal stack-slot teardown so references cannot
+		 * be lost and slices derived from that dynptr are invalidated.
+		 */
+		err = destroy_if_dynptr_stack_slot(env, callee, i, true);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 static int destroy_if_dynptr_stack_slot(struct bpf_verifier_env *env,
-				        struct bpf_func_state *state, int spi)
+					struct bpf_func_state *state, int spi,
+					bool on_func_exit)
 {
 	int err = 0;
 
@@ -867,6 +894,15 @@ static int destroy_if_dynptr_stack_slot(struct bpf_verifier_env *env,
 	 */
 	if (dynptr_type_referenced(state->stack[spi].spilled_ptr.dynptr.type) &&
 	    dynptr_ref_cnt(env, state->stack[spi].spilled_ptr.parent_id) <= 1) {
+		if (on_func_exit) {
+			verbose(env, "cannot return with referenced dynptr in callee stack\n");
+			bpf_diag_res(env, env->insn_idx,
+				     "referenced dynptr on function return",
+				     "The departing stack frame contains the last dynptr that can release a referenced resource.",
+				     "Release the referenced resource before returning from this function.");
+			return -EINVAL;
+		}
+
 		verbose(env, "cannot overwrite referenced dynptr\n");
 		bpf_diag_res(
 			env, env->insn_idx, "referenced dynptr overwrite",
@@ -3630,7 +3666,7 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 			env->insn_aux_data[insn_idx].nospec_result = true;
 	}
 
-	err = destroy_if_dynptr_stack_slot(env, state, spi);
+	err = destroy_if_dynptr_stack_slot(env, state, spi, false);
 	if (err)
 		return err;
 
@@ -3750,7 +3786,7 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 		int spi;
 
 		spi = bpf_get_spi(i);
-		err = destroy_if_dynptr_stack_slot(env, state, spi);
+		err = destroy_if_dynptr_stack_slot(env, state, spi, false);
 		if (err)
 			return err;
 	}
@@ -11043,6 +11079,9 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 			bpf_diag_mod_end(env);
 		}
 	}
+	err = destroy_dynptrs_on_func_exit(env, callee);
+	if (err)
+		return err;
 
 	/* for callbacks like bpf_loop or bpf_for_each_map_elem go back to callsite,
 	 * there function call logic would reschedule callback visit. If iteration
