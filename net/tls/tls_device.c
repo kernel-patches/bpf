@@ -1077,6 +1077,15 @@ int tls_set_device_offload(struct sock *sk)
 	ctx = tls_get_ctx(sk);
 	prot = &ctx->prot_info;
 
+	/* A rekey (setsockopt on an already-configured socket) is not
+	 * supported on the device offload path yet; reject it here so the
+	 * caller can decide (propagate the error for a HW connection, or
+	 * re-init software crypto for a SW one). KeyUpdate support replaces
+	 * this guard with real rekey handling.
+	 */
+	if (ctx->tx_conf != TLS_BASE)
+		return -EOPNOTSUPP;
+
 	if (ctx->priv_ctx_tx)
 		return -EEXIST;
 
@@ -1200,6 +1209,15 @@ int tls_set_device_offload_rx(struct sock *sk, struct tls_context *ctx)
 	int rc = 0;
 
 	if (ctx->crypto_recv.info.version != TLS_1_2_VERSION)
+		return -EOPNOTSUPP;
+
+	/* A rekey (setsockopt on an already-configured socket) is not
+	 * supported on the device offload path yet; reject it here so the
+	 * caller can decide (propagate the error for a HW connection, or
+	 * re-init software crypto for a SW one). KeyUpdate support replaces
+	 * this guard with real rekey handling.
+	 */
+	if (ctx->rx_conf != TLS_BASE)
 		return -EOPNOTSUPP;
 
 	netdev = get_netdev_for_sock(sk);
