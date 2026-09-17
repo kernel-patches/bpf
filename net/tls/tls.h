@@ -147,6 +147,18 @@ void tls_strp_abort_strp(struct tls_strparser *strp, int err);
 int init_prot_info(struct tls_prot_info *prot,
 		   const struct tls_crypto_info *crypto_info,
 		   const struct tls_cipher_desc *cipher_desc);
+/* tls_sw_ctx_init() and tls_sw_ctx_finalize() are two halves of installing
+ * a SW crypto context, split so the device path can attach the NIC between
+ * them. finalize() may only be called after an init() that returned 0, and
+ * both must be called with the same tx and new_crypto_info; on a rekey
+ * (new_crypto_info != NULL) the two must also see the same
+ * new_crypto_info->cipher_type. finalize() commits state and cannot fail,
+ * so violating this leaves the context inconsistent without any error.
+ */
+int tls_sw_ctx_init(struct sock *sk, int tx,
+		    struct tls_crypto_info *new_crypto_info);
+void tls_sw_ctx_finalize(struct sock *sk, int tx,
+			 struct tls_crypto_info *new_crypto_info);
 int tls_set_sw_offload(struct sock *sk, int tx,
 		       struct tls_crypto_info *new_crypto_info);
 void tls_update_rx_zc_capable(struct tls_context *tls_ctx);
