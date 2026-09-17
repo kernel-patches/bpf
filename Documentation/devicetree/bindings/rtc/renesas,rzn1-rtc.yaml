@@ -14,14 +14,14 @@ properties:
     oneOf:
       - items:
           - enum:
-              - renesas,r9a06g032-rtc
-          - const: renesas,rzn1-rtc
+              - renesas,r9a06g032-rtc # RZ/N1D
+          - const: renesas,rzn1-rtc   # RZ/N1
 
-      - const: renesas,r9a09g077-rtc
+      - const: renesas,r9a09g077-rtc  # RZ/T2H
 
       - items:
-          - const: renesas,r9a09g087-rtc
-          - const: renesas,r9a09g077-rtc
+          - const: renesas,r9a09g087-rtc  # RZ/N2H
+          - const: renesas,r9a09g077-rtc  # RZ/T2H
 
   reg:
     maxItems: 1
