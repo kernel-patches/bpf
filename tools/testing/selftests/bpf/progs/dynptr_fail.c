@@ -1892,6 +1892,101 @@ int clone_invalidate4(void *ctx)
 	return 0;
 }
 
+static __noinline void clone_slice_in_subprog(struct bpf_dynptr *ptr, int **data)
+{
+	struct bpf_dynptr clone;
+
+	bpf_dynptr_clone(ptr, &clone);
+	*data = bpf_dynptr_data(&clone, 0, sizeof(val));
+}
+
+static __noinline void caller_slice_in_subprog(struct bpf_dynptr *ptr, int **data)
+{
+	struct bpf_dynptr clone;
+
+	*data = bpf_dynptr_data(ptr, 0, sizeof(val));
+	bpf_dynptr_clone(ptr, &clone);
+}
+
+static __noinline void reserve_dynptr_in_subprog(void)
+{
+	struct bpf_dynptr ptr;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, val, 0, &ptr);
+}
+
+/* A subprogram cannot lose the last dynptr that can release a resource. */
+SEC("?raw_tp")
+__failure __msg("cannot return with referenced dynptr")
+int referenced_dynptr_lost_on_subprog_return(void *ctx)
+{
+	reserve_dynptr_in_subprog();
+
+	return 0;
+}
+
+/*
+ * Destroying a local clone on return must not invalidate a slice whose
+ * source dynptr belongs to the caller.
+ */
+SEC("?raw_tp")
+__success
+int caller_dynptr_slice_across_subprog_valid(void *ctx)
+{
+	struct bpf_dynptr ptr;
+	int *data = NULL;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, val, 0, &ptr);
+	caller_slice_in_subprog(&ptr, &data);
+	if (data)
+		*data = 123;
+	bpf_ringbuf_submit_dynptr(&ptr, 0);
+
+	return 0;
+}
+
+/*
+ * A slice that escapes a clone's call frame is invalid once the local
+ * clone is destroyed on return.
+ */
+SEC("?raw_tp")
+__failure __msg("invalid mem access 'scalar'")
+int clone_slice_returned_frame_invalid(void *ctx)
+{
+	struct bpf_dynptr ptr;
+	int *data = NULL;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, val, 0, &ptr);
+	clone_slice_in_subprog(&ptr, &data);
+	if (data)
+		/* this should fail */
+		*data = 123;
+	bpf_ringbuf_submit_dynptr(&ptr, 0);
+
+	return 0;
+}
+
+/*
+ * A slice from a caller-owned dynptr survives the subprogram return, but
+ * releasing the shared reservation must invalidate it.
+ */
+SEC("?raw_tp")
+__failure __msg("invalid mem access 'scalar'")
+int caller_dynptr_slice_release_after_subprog_invalid(void *ctx)
+{
+	struct bpf_dynptr ptr;
+	int *data = NULL;
+
+	bpf_ringbuf_reserve_dynptr(&ringbuf, val, 0, &ptr);
+	caller_slice_in_subprog(&ptr, &data);
+	bpf_ringbuf_submit_dynptr(&ptr, 0);
+	if (data)
+		/* this should fail */
+		*data = 123;
+
+	return 0;
+}
+
 /* Invalidating a dynptr should invalidate any data slices
  * of its parent
  */
