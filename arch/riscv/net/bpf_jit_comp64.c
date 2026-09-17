@@ -197,6 +197,19 @@ static void emit_imm(u8 rd, s64 val, struct rv_jit_context *ctx)
 		emit_addi(rd, rd, lower, ctx);
 }
 
+static void emit_mul(u8 rd, u8 rs, bool is64, s16 off,
+		     struct rv_jit_context *ctx)
+{
+	if (!is64)
+		emit(rv_mulw(rd, rd, rs), ctx);
+	else if (off == BPF_MUL_VARIANT_UHMUL)
+		emit(rv_mulhu(rd, rd, rs), ctx);
+	else if (off == BPF_MUL_VARIANT_SHMUL)
+		emit(rv_mulh(rd, rd, rs), ctx);
+	else
+		emit(rv_mul(rd, rd, rs), ctx);
+}
+
 static void __build_epilogue(bool is_tail_call, struct rv_jit_context *ctx)
 {
 	int stack_adjust = ctx->stack_size, store_offset = stack_adjust - 8;
@@ -1498,7 +1511,7 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 		break;
 	case BPF_ALU | BPF_MUL | BPF_X:
 	case BPF_ALU64 | BPF_MUL | BPF_X:
-		emit(is64 ? rv_mul(rd, rd, rs) : rv_mulw(rd, rd, rs), ctx);
+		emit_mul(rd, rs, is64, off, ctx);
 		if (!is64 && !aux->verifier_zext)
 			emit_zextw(rd, rd, ctx);
 		break;
@@ -1634,8 +1647,7 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 	case BPF_ALU | BPF_MUL | BPF_K:
 	case BPF_ALU64 | BPF_MUL | BPF_K:
 		emit_imm(RV_REG_T1, imm, ctx);
-		emit(is64 ? rv_mul(rd, rd, RV_REG_T1) :
-		     rv_mulw(rd, rd, RV_REG_T1), ctx);
+		emit_mul(rd, RV_REG_T1, is64, off, ctx);
 		if (!is64 && !aux->verifier_zext)
 			emit_zextw(rd, rd, ctx);
 		break;
