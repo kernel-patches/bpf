@@ -6879,16 +6879,22 @@ static const struct bpf_func_proto bpf_xdp_check_mtu_proto = {
 #if IS_ENABLED(CONFIG_IPV6_SEG6_BPF)
 static int bpf_push_seg6_encap(struct sk_buff *skb, u32 type, void *hdr, u32 len)
 {
-	int err;
-	struct ipv6_sr_hdr *srh = (struct ipv6_sr_hdr *)hdr;
+	struct ipv6_sr_hdr *srh;
+	int err = -EINVAL;
+
+	srh = kmemdup(hdr, len, GFP_ATOMIC);
+	if (!srh)
+		return -ENOMEM;
 
 	if (!seg6_validate_srh(srh, len, false))
-		return -EINVAL;
+		goto out;
 
 	switch (type) {
 	case BPF_LWT_ENCAP_SEG6_INLINE:
-		if (skb->protocol != htons(ETH_P_IPV6))
-			return -EBADMSG;
+		if (skb->protocol != htons(ETH_P_IPV6)) {
+			err = -EBADMSG;
+			goto out;
+		}
 
 		err = seg6_do_srh_inline(skb, srh);
 		break;
@@ -6898,16 +6904,19 @@ static int bpf_push_seg6_encap(struct sk_buff *skb, u32 type, void *hdr, u32 len
 		err = seg6_do_srh_encap(skb, srh, IPPROTO_IPV6);
 		break;
 	default:
-		return -EINVAL;
+		goto out;
 	}
 
 	bpf_compute_data_pointers(skb);
 	if (err)
-		return err;
+		goto out;
 
 	skb_set_transport_header(skb, sizeof(struct ipv6hdr));
 
-	return seg6_lookup_nexthop(skb, NULL, 0);
+	err = seg6_lookup_nexthop(skb, NULL, 0);
+out:
+	kfree(srh);
+	return err;
 }
 #endif /* CONFIG_IPV6_SEG6_BPF */
 
