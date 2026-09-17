@@ -851,6 +851,10 @@ enum skb_tstamp_type {
  *		unreadable.
  *	@dst_pending_confirm: need to confirm neighbour
  *	@decrypted: Decrypted SKB
+ *	@decrypt_failed: hardware could not authenticate this skb's TLS payload.
+ *		The payload may have been transformed (XORed) or left as wire
+ *		ciphertext, so software must re-authenticate the record and undo the
+ *		transform on any XORed fragment before it can be decrypted
  *	@slow_gro: state present at GRO time, slower prepare step required
  *	@tstamp_type: When set, skb->tstamp has the
  *		delivery_time clock base of skb->tstamp.
@@ -1025,6 +1029,7 @@ struct sk_buff {
 #endif
 #ifdef CONFIG_SKB_DECRYPTED
 	__u8			decrypted:1;
+	__u8			decrypt_failed:1;
 #endif
 	__u8			slow_gro:1;
 #if IS_ENABLED(CONFIG_IP_SCTP)
@@ -1716,6 +1721,7 @@ static inline void skb_copy_decrypted(struct sk_buff *to,
 {
 #ifdef CONFIG_SKB_DECRYPTED
 	to->decrypted = from->decrypted;
+	to->decrypt_failed = from->decrypt_failed;
 #endif
 }
 
