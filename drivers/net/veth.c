@@ -1247,12 +1247,15 @@ static int veth_napi_enable(struct net_device *dev)
 static void veth_disable_range_safe(struct net_device *dev, int start, int end)
 {
 	struct veth_priv *priv = netdev_priv(dev);
+	int i;
 
 	if (start >= end)
 		return;
 
 	if (priv->_xdp_prog) {
 		veth_napi_del_range(dev, start, end);
+		for (i = start; i < end; i++)
+			rcu_assign_pointer(priv->rq[i].xdp_prog, NULL);
 		veth_disable_xdp_range(dev, start, end, false);
 	} else if (veth_gro_requested(dev)) {
 		veth_napi_del_range(dev, start, end);
@@ -1262,7 +1265,7 @@ static void veth_disable_range_safe(struct net_device *dev, int start, int end)
 static int veth_enable_range_safe(struct net_device *dev, int start, int end)
 {
 	struct veth_priv *priv = netdev_priv(dev);
-	int err;
+	int err, i;
 
 	if (start >= end)
 		return 0;
@@ -1281,6 +1284,9 @@ static int veth_enable_range_safe(struct net_device *dev, int start, int end)
 			veth_disable_xdp_range(dev, start, end, true);
 			return err;
 		}
+		for (i = start; i < end; i++)
+			rcu_assign_pointer(priv->rq[i].xdp_prog,
+					   priv->_xdp_prog);
 	} else if (veth_gro_requested(dev)) {
 		return veth_napi_enable_range(dev, start, end);
 	}
