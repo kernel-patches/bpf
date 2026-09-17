@@ -698,11 +698,14 @@ static bool __bpf_offload_dev_match(struct bpf_prog *prog,
 		return false;
 	if (offload->netdev == netdev)
 		return true;
+	if (!bpf_prog_is_offloaded(prog->aux))
+		return false;
 
 	ondev1 = bpf_offload_find_netdev(offload->netdev);
 	ondev2 = bpf_offload_find_netdev(netdev);
 
-	return ondev1 && ondev2 && ondev1->offdev == ondev2->offdev;
+	return ondev1 && ondev2 && ondev1->offdev &&
+	       ondev1->offdev == ondev2->offdev;
 }
 
 bool bpf_offload_dev_match(struct bpf_prog *prog, struct net_device *netdev)
