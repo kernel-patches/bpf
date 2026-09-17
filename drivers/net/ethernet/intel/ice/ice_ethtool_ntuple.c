@@ -514,7 +514,7 @@ void ice_fdir_replay_flows(struct ice_hw *hw)
 							 prof->vsi_h[0],
 							 prof->vsi_h[j],
 							 prio, prof->fdir_seg,
-							 &entry_h);
+							 NULL, 0, &entry_h);
 				if (err) {
 					dev_err(ice_hw_to_dev(hw), "Could not replay Flow Director, flow type %d\n",
 						flow);
@@ -747,12 +747,12 @@ ice_fdir_set_hw_fltr_rule(struct ice_pf *pf, struct ice_flow_seg_info *seg,
 		return err;
 	err = ice_flow_add_entry(hw, ICE_BLK_FD, prof->id, main_vsi->idx,
 				 main_vsi->idx, ICE_FLOW_PRIO_NORMAL,
-				 seg, &entry1_h);
+				 seg, NULL, 0, &entry1_h);
 	if (err)
 		goto err_prof;
 	err = ice_flow_add_entry(hw, ICE_BLK_FD, prof->id, main_vsi->idx,
 				 ctrl_vsi->idx, ICE_FLOW_PRIO_NORMAL,
-				 seg, &entry2_h);
+				 seg, NULL, 0, &entry2_h);
 	if (err)
 		goto err_entry;
 
@@ -776,7 +776,7 @@ ice_fdir_set_hw_fltr_rule(struct ice_pf *pf, struct ice_flow_seg_info *seg,
 		vsi_h = main_vsi->tc_map_vsi[idx]->idx;
 		err = ice_flow_add_entry(hw, ICE_BLK_FD, prof->id,
 					 main_vsi->idx, vsi_h,
-					 ICE_FLOW_PRIO_NORMAL, seg,
+					 ICE_FLOW_PRIO_NORMAL, seg, NULL, 0,
 					 &entry1_h);
 		if (err) {
 			dev_err(dev, "Could not add Channel VSI %d to flow group\n",
@@ -2037,26 +2037,34 @@ ice_update_ring_dest_vsi(struct ice_vsi *vsi, u16 *dest_vsi, u32 *ring)
 }
 
 /**
- * ice_ntuple_set_input_set - Set the input set for Flow Director
+ * ice_ntuple_set_input_set - Set the input set for specified block
  * @vsi: pointer to target VSI
+ * @blk: filter block to configure
  * @fsp: pointer to ethtool Rx flow specification
  * @input: filter structure
  *
  * Return: 0 on success, negative on failure
  */
-static int
-ice_ntuple_set_input_set(struct ice_vsi *vsi, struct ethtool_rx_flow_spec *fsp,
-			 struct ice_ntuple_fltr *input)
+int ice_ntuple_set_input_set(struct ice_vsi *vsi, enum ice_block blk,
+			     struct ethtool_rx_flow_spec *fsp,
+			     struct ice_ntuple_fltr *input)
 {
 	s16 q_index = ICE_FDIR_NO_QUEUE_IDX;
+	int flow_type, flow_mask;
 	u16 orig_q_index = 0;
 	struct ice_pf *pf;
 	struct ice_hw *hw;
-	int flow_type;
 	u16 dest_vsi;
 	u8 dest_ctl;
 
 	if (!vsi || !fsp || !input)
+		return -EINVAL;
+
+	if (blk == ICE_BLK_FD)
+		flow_mask = FLOW_EXT;
+	else if (blk == ICE_BLK_ACL)
+		flow_mask = FLOW_MAC_EXT;
+	else
 		return -EINVAL;
 
 	pf = vsi->back;
@@ -2070,7 +2078,8 @@ ice_ntuple_set_input_set(struct ice_vsi *vsi, struct ethtool_rx_flow_spec *fsp,
 		u8 vf = ethtool_get_flow_spec_ring_vf(fsp->ring_cookie);
 
 		if (vf) {
-			dev_err(ice_pf_to_dev(pf), "Failed to add filter. Flow director filters are not supported on VF queues.\n");
+			dev_err(ice_pf_to_dev(pf), "Failed to add filter. %s filters are not supported on VF queues.\n",
+				blk == ICE_BLK_FD ? "Flow Director" : "ACL");
 			return -EINVAL;
 		}
 
@@ -2085,7 +2094,7 @@ ice_ntuple_set_input_set(struct ice_vsi *vsi, struct ethtool_rx_flow_spec *fsp,
 
 	input->fltr_id = fsp->location;
 	input->q_index = q_index;
-	flow_type = fsp->flow_type & ~FLOW_EXT;
+	flow_type = fsp->flow_type & ~flow_mask;
 
 	/* Record the original queue index as specified by user.
 	 * with channel configuration 'q_index' becomes relative
@@ -2139,9 +2148,9 @@ ice_ntuple_set_input_set(struct ice_vsi *vsi, struct ethtool_rx_flow_spec *fsp,
 	case TCP_V6_FLOW:
 	case UDP_V6_FLOW:
 	case SCTP_V6_FLOW:
-		memcpy(input->ip.v6.dst_ip, fsp->h_u.usr_ip6_spec.ip6dst,
+		memcpy(input->ip.v6.dst_ip, fsp->h_u.tcp_ip6_spec.ip6dst,
 		       sizeof(struct in6_addr));
-		memcpy(input->ip.v6.src_ip, fsp->h_u.usr_ip6_spec.ip6src,
+		memcpy(input->ip.v6.src_ip, fsp->h_u.tcp_ip6_spec.ip6src,
 		       sizeof(struct in6_addr));
 		input->ip.v6.dst_port = fsp->h_u.tcp_ip6_spec.pdst;
 		input->ip.v6.src_port = fsp->h_u.tcp_ip6_spec.psrc;
@@ -2263,7 +2272,7 @@ int ice_add_ntuple_ethtool(struct ice_vsi *vsi, struct ethtool_rxnfc *cmd)
 	if (!input)
 		return -ENOMEM;
 
-	ret = ice_ntuple_set_input_set(vsi, fsp, input);
+	ret = ice_ntuple_set_input_set(vsi, ICE_BLK_FD, fsp, input);
 	if (ret)
 		goto free_input;
 

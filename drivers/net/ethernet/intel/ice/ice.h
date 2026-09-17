@@ -1027,6 +1027,9 @@ int ice_add_ntuple_ethtool(struct ice_vsi *vsi, struct ethtool_rxnfc *cmd);
 int ice_del_ntuple_ethtool(struct ice_vsi *vsi, struct ethtool_rxnfc *cmd);
 int ice_get_ethtool_fdir_entry(struct ice_hw *hw, struct ethtool_rxnfc *cmd);
 u32 ice_ntuple_get_max_fltr_cnt(struct ice_hw *hw);
+int ice_ntuple_set_input_set(struct ice_vsi *vsi, enum ice_block blk,
+			     struct ethtool_rx_flow_spec *fsp,
+			     struct ice_ntuple_fltr *input);
 int ice_ntuple_l4_proto_to_port(enum ice_flow_seg_hdr l4_proto,
 				enum ice_flow_field *src_port,
 				enum ice_flow_field *dst_port);

@@ -2153,6 +2153,67 @@ struct ice_aqc_acl_scen {
 	u8 act_mem_cfg[ICE_AQC_MAX_ACTION_MEMORIES];
 };
 
+/* Allocate ACL counters (indirect 0x0C16) */
+struct ice_aqc_acl_alloc_counters {
+	/* Amount of contiguous counters requested. Min value is 1 and
+	 * max value is 255
+	 */
+	u8 counter_amount;
+
+	/* Counter type: 'single counter' which can be configured to count
+	 * either bytes or packets
+	 */
+#define ICE_AQC_ACL_CNT_TYPE_SINGLE	0x0
+
+	/* Counter type: 'counter pair' which counts number of bytes and number
+	 * of packets.
+	 */
+#define ICE_AQC_ACL_CNT_TYPE_DUAL	0x1
+	/* requested counter type, single/dual */
+	u8 counters_type;
+
+	/* counter bank allocation shall be 0-3 for 'byte or packet counter' */
+#define ICE_AQC_ACL_MAX_CNT_SINGLE	0x3
+	/* counter bank allocation shall be 0-1 for 'byte and packet counter
+	 * dual'
+	 */
+#define ICE_AQC_ACL_MAX_CNT_DUAL	0x1
+	/* requested counter bank allocation */
+	u8 bank_alloc;
+
+	u8 reserved;
+
+	union {
+		/* Applicable only in case of command */
+		struct {
+			u8 reserved[12];
+		} cmd;
+		/* Applicable only in case of response */
+#define ICE_AQC_ACL_ALLOC_CNT_INVAL	0xFFFF
+		struct {
+			/* Index of first allocated counter. 0xFFFF in case
+			 * of unsuccessful allocation
+			 */
+			__le16 first_counter;
+			/* Index of last allocated counter. 0xFFFF in case
+			 * of unsuccessful allocation
+			 */
+			__le16 last_counter;
+			u8 rsvd[8];
+		} resp;
+	} ops;
+};
+
+/* De-allocate ACL counters (direct 0x0C17) */
+struct ice_aqc_acl_dealloc_counters {
+	__le16 first_counter;
+	__le16 last_counter;
+	/* single/dual */
+	u8 counters_type;
+	u8 bank_alloc;
+	u8 reserved[10];
+};
+
 /* Program ACL actionpair (indirect 0x0C1C) */
 struct ice_aqc_acl_actpair {
 	u8 act_mem_index;
@@ -2163,6 +2224,8 @@ struct ice_aqc_acl_actpair {
 	__le32 addr_high;
 	__le32 addr_low;
 };
+
+#define ICE_RX_PKT_DROP_DROP 0x1
 
 /* Input buffer format for program/query action-pair admin command */
 struct ice_acl_act_entry {
@@ -2186,7 +2249,53 @@ struct ice_aqc_actpair {
  * map its entries to the byte selection base.
  */
 #define ICE_AQC_ACL_PROF_BYTE_SEL_START_IDX	1
+
 #define ICE_AQC_ACL_PROF_BYTE_SEL_ELEMS		30
+#define ICE_AQC_ACL_PROF_WORD_SEL_ELEMS		32
+#define ICE_AQC_ACL_PROF_DWORD_SEL_ELEMS	15
+#define ICE_AQC_ACL_PROF_PF_SCEN_NUM_ELEMS	8
+
+/* Generic format used to describe either input or response buffer
+ * for admin commands related to ACL profile
+ */
+struct ice_aqc_acl_prof_generic_frmt {
+	/* In each byte:
+	 * Bit 0..5 = Byte selection for the byte selection base from the
+	 * extracted fields (expressed as byte offset in extracted fields).
+	 * Applicable values are 0..63
+	 * Bit 6..7 = Reserved
+	 */
+	u8 byte_selection[ICE_AQC_ACL_PROF_BYTE_SEL_ELEMS];
+	/* In each byte:
+	 * Bit 0..4 = Word selection for the word selection base from the
+	 * extracted fields (expressed as word offset in extracted fields).
+	 * Applicable values are 0..31
+	 * Bit 5..7 = Reserved
+	 */
+	u8 word_selection[ICE_AQC_ACL_PROF_WORD_SEL_ELEMS];
+	/* In each byte:
+	 * Bit 0..3 = Double word selection for the double-word selection base
+	 * from the extracted fields (expressed as double-word offset in
+	 * extracted fields).
+	 * Applicable values are 0..15
+	 * Bit 4..7 = Reserved
+	 */
+	u8 dword_selection[ICE_AQC_ACL_PROF_DWORD_SEL_ELEMS];
+	/* Scenario numbers for individual Physical Function's */
+	u8 pf_scenario_num[ICE_AQC_ACL_PROF_PF_SCEN_NUM_ELEMS];
+};
+
+/* Program ACL profile extraction (indirect 0x0C1D)
+ * Program ACL profile ranges (indirect 0x0C1E)
+ * Query ACL profile (indirect 0x0C21)
+ * Query ACL profile ranges (indirect 0x0C22)
+ */
+struct ice_aqc_acl_profile {
+	u8 profile_id; /* Programmed/Updated profile ID */
+	u8 reserved[7];
+	__le32 addr_high;
+	__le32 addr_low;
+};
 
 /* Input buffer format for program profile extraction admin command and
  * response buffer format for query profile admin command is as defined
@@ -2911,9 +3020,13 @@ enum ice_adminq_opc {
 	ice_aqc_opc_dealloc_acl_tbl			= 0x0C11,
 	ice_aqc_opc_alloc_acl_scen			= 0x0C14,
 	ice_aqc_opc_dealloc_acl_scen			= 0x0C15,
+	ice_aqc_opc_alloc_acl_counters			= 0x0C16,
+	ice_aqc_opc_dealloc_acl_counters		= 0x0C17,
 	ice_aqc_opc_update_acl_scen			= 0x0C1B,
 	ice_aqc_opc_program_acl_actpair			= 0x0C1C,
+	ice_aqc_opc_program_acl_prof_extraction		= 0x0C1D,
 	ice_aqc_opc_program_acl_entry			= 0x0C20,
+	ice_aqc_opc_query_acl_prof			= 0x0C21,
 	ice_aqc_opc_query_acl_scen			= 0x0C23,
 
 	/* Tx queue handling commands/events */

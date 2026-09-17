@@ -1261,6 +1261,9 @@ bool ice_fdir_is_dup_fltr(struct ice_hw *hw, struct ice_ntuple_fltr *input)
 	bool ret = false;
 
 	list_for_each_entry(rule, &hw->fdir_list_head, fltr_node) {
+		if (rule->acl_fltr)
+			continue;
+
 		if (rule->flow_type != input->flow_type)
 			continue;
 

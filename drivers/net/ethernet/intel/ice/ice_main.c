@@ -8672,7 +8672,7 @@ static int ice_add_vsi_to_fdir(struct ice_pf *pf, struct ice_vsi *vsi)
 						    prof->prof_id[tun],
 						    prof->vsi_h[0], vsi->idx,
 						    prio, prof->fdir_seg[tun],
-						    &entry_h);
+						    NULL, 0, &entry_h);
 			if (status) {
 				dev_err(dev, "channel VSI idx %d, not able to add to group %d\n",
 					vsi->idx, flow);

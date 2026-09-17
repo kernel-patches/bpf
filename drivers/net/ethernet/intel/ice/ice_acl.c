@@ -136,6 +136,189 @@ int ice_aq_program_actpair(struct ice_hw *hw, u8 act_mem_idx, u16 act_entry_idx,
 }
 
 /**
+ * ice_acl_prof_aq_send - send ACL profile AQ commands
+ * @hw: pointer to the HW struct
+ * @opc: command opcode
+ * @prof_id: profile ID
+ * @buf: ptr to buffer
+ * @cd: pointer to command details structure or NULL
+ *
+ * Return: 0 on success, negative on error
+ */
+static int ice_acl_prof_aq_send(struct ice_hw *hw, u16 opc, u8 prof_id,
+				struct ice_aqc_acl_prof_generic_frmt *buf,
+				struct ice_sq_cd *cd)
+{
+	struct ice_aqc_acl_profile *cmd;
+	struct libie_aq_desc desc;
+
+	ice_fill_dflt_direct_cmd_desc(&desc, opc);
+	cmd = libie_aq_raw(&desc);
+	cmd->profile_id = prof_id;
+
+	if (opc == ice_aqc_opc_program_acl_prof_extraction)
+		desc.flags |= cpu_to_le16(LIBIE_AQ_FLAG_RD);
+
+	return ice_aq_send_cmd(hw, &desc, buf, sizeof(*buf), cd);
+}
+
+/**
+ * ice_prgm_acl_prof_xtrct - program ACL profile extraction sequence
+ * @hw: pointer to the HW struct
+ * @prof_id: profile ID
+ * @buf: ptr to buffer
+ * @cd: pointer to command details structure or NULL
+ *
+ * Program ACL profile extraction (indirect 0x0C1D)
+ *
+ * Return: 0 on success, negative on error
+ */
+int ice_prgm_acl_prof_xtrct(struct ice_hw *hw, u8 prof_id,
+			    struct ice_aqc_acl_prof_generic_frmt *buf,
+			    struct ice_sq_cd *cd)
+{
+	return ice_acl_prof_aq_send(hw, ice_aqc_opc_program_acl_prof_extraction,
+				    prof_id, buf, cd);
+}
+
+/**
+ * ice_query_acl_prof - query ACL profile
+ * @hw: pointer to the HW struct
+ * @prof_id: profile ID
+ * @buf: ptr to buffer (which will contain response of this command)
+ * @cd: pointer to command details structure or NULL
+ *
+ * Query ACL profile (indirect 0x0C21)
+ *
+ * Return: 0 on success, negative on error
+ */
+int ice_query_acl_prof(struct ice_hw *hw, u8 prof_id,
+		       struct ice_aqc_acl_prof_generic_frmt *buf,
+		       struct ice_sq_cd *cd)
+{
+	return ice_acl_prof_aq_send(hw, ice_aqc_opc_query_acl_prof, prof_id,
+				    buf, cd);
+}
+
+/**
+ * ice_aq_acl_cntrs_chk_params - Checks ACL counter parameters
+ * @cntrs: ptr to buffer describing input and output params
+ *
+ * This function checks the counter bank range for counter type and returns
+ * success or failure.
+ *
+ * Return: 0 on success, negative on error
+ */
+static int ice_aq_acl_cntrs_chk_params(struct ice_acl_cntrs *cntrs)
+{
+	int err = 0;
+
+	if (!cntrs->amount)
+		return -EINVAL;
+
+	switch (cntrs->type) {
+	case ICE_AQC_ACL_CNT_TYPE_SINGLE:
+		/* Single counter type - configured to count either bytes
+		 * or packets, the valid values for byte or packet counters
+		 * shall be 0-3.
+		 */
+		if (cntrs->bank > ICE_AQC_ACL_MAX_CNT_SINGLE)
+			err = -EIO;
+		break;
+	case ICE_AQC_ACL_CNT_TYPE_DUAL:
+		/* Pair counter type - counts number of bytes and packets
+		 * The valid values for byte/packet counter duals shall be 0-1
+		 */
+		if (cntrs->bank > ICE_AQC_ACL_MAX_CNT_DUAL)
+			err = -EIO;
+		break;
+	default:
+		err = -EINVAL;
+	}
+
+	return err;
+}
+
+/**
+ * ice_aq_alloc_acl_cntrs - allocate ACL counters
+ * @hw: pointer to the HW struct
+ * @cntrs: ptr to buffer describing input and output params
+ * @cd: pointer to command details structure or NULL
+ *
+ * Allocate ACL counters (indirect 0x0C16). This function attempts to
+ * allocate a contiguous block of counters. In case of failures, caller can
+ * attempt to allocate a smaller chunk. The allocation is considered
+ * unsuccessful if returned counter value is invalid. In this case it returns
+ * an error otherwise success.
+ *
+ * Return: 0 on success, negative on error
+ */
+int ice_aq_alloc_acl_cntrs(struct ice_hw *hw, struct ice_acl_cntrs *cntrs,
+			   struct ice_sq_cd *cd)
+{
+	struct ice_aqc_acl_alloc_counters *cmd;
+	u16 first_cntr, last_cntr;
+	struct libie_aq_desc desc;
+	int err;
+
+	err = ice_aq_acl_cntrs_chk_params(cntrs);
+	if (err)
+		return err;
+
+	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_alloc_acl_counters);
+	cmd = libie_aq_raw(&desc);
+	cmd->counter_amount = cntrs->amount;
+	cmd->counters_type = cntrs->type;
+	cmd->bank_alloc = cntrs->bank;
+
+	err = ice_aq_send_cmd(hw, &desc, NULL, 0, cd);
+	if (err)
+		return err;
+
+	first_cntr = le16_to_cpu(cmd->ops.resp.first_counter);
+	last_cntr = le16_to_cpu(cmd->ops.resp.last_counter);
+
+	if (first_cntr == ICE_AQC_ACL_ALLOC_CNT_INVAL ||
+	    last_cntr == ICE_AQC_ACL_ALLOC_CNT_INVAL)
+		return -EIO;
+
+	cntrs->first_cntr = first_cntr;
+	cntrs->last_cntr = last_cntr;
+
+	return 0;
+}
+
+/**
+ * ice_aq_dealloc_acl_cntrs - deallocate ACL counters
+ * @hw: pointer to the HW struct
+ * @cntrs: ptr to buffer describing input and output params
+ * @cd: pointer to command details structure or NULL
+ *
+ * De-allocate ACL counters (direct 0x0C17)
+ *
+ * Return: 0 on success, negative on error
+ */
+int ice_aq_dealloc_acl_cntrs(struct ice_hw *hw, struct ice_acl_cntrs *cntrs,
+			     struct ice_sq_cd *cd)
+{
+	struct ice_aqc_acl_dealloc_counters *cmd;
+	struct libie_aq_desc desc;
+	int err;
+
+	err = ice_aq_acl_cntrs_chk_params(cntrs);
+	if (err)
+		return err;
+
+	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_dealloc_acl_counters);
+	cmd = libie_aq_raw(&desc);
+	cmd->first_counter = cpu_to_le16(cntrs->first_cntr);
+	cmd->last_counter = cpu_to_le16(cntrs->last_cntr);
+	cmd->counters_type = cntrs->type;
+	cmd->bank_alloc = cntrs->bank;
+	return ice_aq_send_cmd(hw, &desc, NULL, 0, cd);
+}
+
+/**
  * ice_aq_alloc_acl_scen - allocate ACL scenario
  * @hw: pointer to the HW struct
  * @scen_id: memory location to receive allocated scenario ID
