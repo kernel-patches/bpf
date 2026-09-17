@@ -1817,6 +1817,25 @@ static void mpam_reprogram_msc(struct mpam_msc *msc)
 	mutex_unlock(&msc->cfg_lock);
 }
 
+static int mpam_enable_msc_ecr(void *_msc)
+{
+	struct mpam_msc *msc = _msc;
+
+	__mpam_write_reg(msc, MPAMF_ECR, MPAMF_ECR_INTEN);
+
+	return 0;
+}
+
+/* This can run in mpam_disable(), and the interrupt handler on the same CPU */
+static int mpam_disable_msc_ecr(void *_msc)
+{
+	struct mpam_msc *msc = _msc;
+
+	__mpam_write_reg(msc, MPAMF_ECR, 0);
+
+	return 0;
+}
+
 static void _enable_percpu_irq(void *_irq)
 {
 	int *irq = _irq;
@@ -2442,25 +2461,6 @@ static char *mpam_errcode_names[16] = {
 	[MPAM_ERRCODE_RIS_NO_MONITOR]		= "RIS_No_Monitor",
 	[12 ... 15] = "Reserved"
 };
-
-static int mpam_enable_msc_ecr(void *_msc)
-{
-	struct mpam_msc *msc = _msc;
-
-	__mpam_write_reg(msc, MPAMF_ECR, MPAMF_ECR_INTEN);
-
-	return 0;
-}
-
-/* This can run in mpam_disable(), and the interrupt handler on the same CPU */
-static int mpam_disable_msc_ecr(void *_msc)
-{
-	struct mpam_msc *msc = _msc;
-
-	__mpam_write_reg(msc, MPAMF_ECR, 0);
-
-	return 0;
-}
 
 static irqreturn_t __mpam_irq_handler(int irq, struct mpam_msc *msc)
 {
