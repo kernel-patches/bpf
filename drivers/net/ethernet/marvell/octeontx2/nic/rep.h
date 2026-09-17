@@ -16,7 +16,6 @@
 
 #define PCI_DEVID_RVU_REP	0xA0E0
 
-#define RVU_MAX_REP	OTX2_MAX_CQ_CNT
 
 struct rep_stats {
 	u64 rx_bytes;

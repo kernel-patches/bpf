@@ -676,6 +676,7 @@ struct rvu {
 	struct list_head	rep_evtq_head;
 	/* Representor event lock */
 	spinlock_t		rep_evtq_lock;
+	bool			rep_evt_teardown;
 
 	struct ng_rvu           *ng_rvu;
 };
