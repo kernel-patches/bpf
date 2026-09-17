@@ -1573,6 +1573,19 @@ static void an8811hb_remove(struct phy_device *phydev)
 	}
 }
 
+static int an8811hb_suspend(struct phy_device *phydev)
+{
+	int ret;
+
+	clk_save_context();
+
+	ret = phy_modify(phydev, MII_BMCR, 0, BMCR_ANRESTART);
+	if (ret < 0)
+		return ret;
+
+	return genphy_suspend(phydev);
+}
+
 static struct phy_driver en8811h_driver[] = {
 {
 	PHY_ID_MATCH_MODEL(EN8811H_PHY_ID),
@@ -1606,7 +1619,7 @@ static struct phy_driver en8811h_driver[] = {
 	.config_aneg		= en8811h_config_aneg,
 	.read_status		= en8811h_read_status,
 	.resume			= en8811h_resume,
-	.suspend		= en8811h_suspend,
+	.suspend		= an8811hb_suspend,
 	.config_intr		= en8811h_clear_intr,
 	.handle_interrupt	= en8811h_handle_interrupt,
 	.led_hw_is_supported	= en8811h_led_hw_is_supported,
