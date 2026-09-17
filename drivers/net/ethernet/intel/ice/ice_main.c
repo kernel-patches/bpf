@@ -4340,6 +4340,8 @@ static int ice_acl_create_hw(struct ice_pf *pf)
 	struct ice_acl_tbl_params params = {};
 	struct ice_hw *hw = &pf->hw;
 	int divider;
+	u16 scen_id;
+	int err;
 
 	/* Create a single ACL table that consists of src_ip (4 bytes),
 	 * dest_ip (4 bytes), src_port (2 bytes) and dst_port (2 bytes) for a
@@ -4359,7 +4361,20 @@ static int ice_acl_create_hw(struct ice_pf *pf)
 	params.concurr = false;
 	params.num_dep_tbls = 0;
 
-	return ice_acl_create_tbl(hw, &params);
+	err = ice_acl_create_tbl(hw, &params);
+	if (err)
+		return err;
+
+	err = ice_acl_create_scen(hw, params.width, params.depth, &scen_id);
+	if (err)
+		goto destroy_table;
+
+	return 0;
+
+destroy_table:
+	ice_acl_destroy_tbl(hw);
+
+	return err;
 }
 
 /**
@@ -4379,6 +4394,9 @@ static int ice_init_acl(struct ice_pf *pf)
  */
 static void ice_deinit_acl(struct ice_pf *pf)
 {
+	struct ice_hw *hw = &pf->hw;
+
+	ice_acl_rem_flows(hw);
 	ice_acl_destroy_tbl(&pf->hw);
 }
 

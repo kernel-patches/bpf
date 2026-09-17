@@ -1995,6 +1995,8 @@ struct ice_aqc_neigh_dev_req {
 					 ICE_ACL_ENTRY_ALLOC_UNIT)
 #define ICE_AQC_ACL_ALLOC_UNITS		(ICE_AQC_ACL_SLICES * \
 					 ICE_AQC_MAX_TCAM_ALLOC_UNITS)
+#define ICE_ACL_MAX_WIDTH_BYTES		(ICE_AQC_ACL_SLICES * \
+					 ICE_AQC_ACL_KEY_WIDTH_BYTES)
 
 struct ice_aqc_acl_alloc_table {
 	__le16 table_width;
@@ -2069,6 +2071,33 @@ struct ice_aqc_acl_generic {
 	 * otherwise 0xFF
 	 */
 	u8 act_mem[ICE_AQC_MAX_ACTION_MEMORIES];
+};
+
+/* Allocate ACL scenario (indirect 0x0C14). This command doesn't have separate
+ * response buffer since original command buffer gets updated with
+ * 'scen_id' in case of success
+ */
+struct ice_aqc_acl_alloc_scen {
+	union {
+		struct {
+			u8 reserved[8];
+		} cmd;
+		struct {
+			__le16 scen_id;
+			u8 reserved[6];
+		} resp;
+	} ops;
+	__le32 addr_high;
+	__le32 addr_low;
+};
+
+/* De-allocate ACL scenario (direct 0x0C15). This command doesn't need
+ * separate response buffer since nothing to be returned as a response
+ * except status.
+ */
+struct ice_aqc_acl_dealloc_scen {
+	__le16 scen_id;
+	u8 reserved[14];
 };
 
 /* Update ACL scenario (direct 0x0C1B)
@@ -2841,6 +2870,8 @@ enum ice_adminq_opc {
 	/* ACL commands */
 	ice_aqc_opc_alloc_acl_tbl			= 0x0C10,
 	ice_aqc_opc_dealloc_acl_tbl			= 0x0C11,
+	ice_aqc_opc_alloc_acl_scen			= 0x0C14,
+	ice_aqc_opc_dealloc_acl_scen			= 0x0C15,
 	ice_aqc_opc_update_acl_scen			= 0x0C1B,
 	ice_aqc_opc_program_acl_actpair			= 0x0C1C,
 	ice_aqc_opc_program_acl_entry			= 0x0C20,

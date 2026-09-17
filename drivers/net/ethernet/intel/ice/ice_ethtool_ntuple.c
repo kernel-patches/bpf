@@ -229,6 +229,24 @@ release_lock:
 }
 
 /**
+ * ice_ntuple_get_max_fltr_cnt - get max number of allowed filters
+ * @hw: hardware structure containing filter information
+ *
+ * Return: maximum number of allowed filters
+ */
+u32 ice_ntuple_get_max_fltr_cnt(struct ice_hw *hw)
+{
+	int acl_cnt;
+
+	if (hw->dev_caps.num_funcs < 8)
+		acl_cnt = ICE_AQC_ACL_TCAM_DEPTH / ICE_ACL_ENTIRE_SLICE;
+	else
+		acl_cnt = ICE_AQC_ACL_TCAM_DEPTH / ICE_ACL_HALF_SLICE;
+
+	return ice_get_fdir_cnt_all(hw) + acl_cnt;
+}
+
+/**
  * ice_get_fdir_fltr_ids - fill buffer with filter IDs of active filters
  * @hw: hardware structure containing the filter list
  * @cmd: ethtool command data structure
@@ -244,8 +262,8 @@ ice_get_fdir_fltr_ids(struct ice_hw *hw, struct ethtool_rxnfc *cmd,
 	unsigned int cnt = 0;
 	int val = 0;
 
-	/* report total rule count */
-	cmd->data = ice_get_fdir_cnt_all(hw);
+	/* report max rule count */
+	cmd->data = ice_ntuple_get_max_fltr_cnt(hw);
 
 	mutex_lock(&hw->fdir_fltr_lock);
 
@@ -413,6 +431,37 @@ ice_fdir_rem_flow(struct ice_hw *hw, enum ice_block blk,
 		prof->fdir_seg[tun] = NULL;
 	}
 	prof->cnt = 0;
+}
+
+/**
+ * ice_acl_rem_flows - remove ACL flow profiles and all their entries
+ * @hw: hardware structure containing the filter list
+ */
+void ice_acl_rem_flows(struct ice_hw *hw)
+{
+	if (!hw->acl_prof)
+		return;
+
+	for (enum ice_fltr_ptype flow = ICE_FLTR_PTYPE_NONF_NONE;
+	     flow < ICE_FLTR_PTYPE_MAX; flow++) {
+		struct ice_acl_hw_prof *prof;
+		int err;
+
+		flow &= ~FLOW_EXT;
+		prof = hw->acl_prof[flow];
+		if (!prof || !prof->seg)
+			continue;
+
+		err = ice_flow_rem_prof(hw, ICE_BLK_ACL, prof->prof_id);
+		if (err) {
+			dev_err(ice_hw_to_dev(hw), "Could not remove ACL profile, flow type %d\n",
+				flow);
+			continue;
+		}
+
+		kfree(prof->seg);
+		prof->seg = NULL;
+	}
 }
 
 /**
@@ -1589,8 +1638,12 @@ void ice_fdir_replay_fltrs(struct ice_pf *pf)
 	struct ice_hw *hw = &pf->hw;
 
 	list_for_each_entry(f_rule, &hw->fdir_list_head, fltr_node) {
-		int err = ice_fdir_write_all_fltr(pf, f_rule, true);
+		int err;
 
+		if (f_rule->acl_fltr)
+			continue;
+
+		err = ice_fdir_write_all_fltr(pf, f_rule, true);
 		if (err)
 			dev_dbg(ice_pf_to_dev(pf), "Flow Director error %d, could not reprogram filter %d\n",
 				err, f_rule->fltr_id);
@@ -1623,20 +1676,26 @@ int ice_fdir_create_dflt_rules(struct ice_pf *pf)
 }
 
 /**
- * ice_ntuple_update_cntrs - increment or decrement filter counter
+ * ice_ntuple_update_cntrs - increment or decrement FDir/ACL filter counters
  * @hw: pointer to hardware structure
- * @flow: filter flow type
+ * @fltr: filter node
  * @add: true to increment, false to decrement
  */
 static void ice_ntuple_update_cntrs(struct ice_hw *hw,
-				    enum ice_fltr_ptype flow, bool add)
+				    struct ice_ntuple_fltr *fltr, bool add)
 {
+	enum ice_fltr_ptype flow = fltr->flow_type;
 	int incr = add ? 1 : -1;
 
 	hw->ntuple_active_fltr_cnt += incr;
 
-	if (flow == ICE_FLTR_PTYPE_NONF_NONE || flow >= ICE_FLTR_PTYPE_MAX)
+	if (flow == ICE_FLTR_PTYPE_NONF_NONE || flow >= ICE_FLTR_PTYPE_MAX) {
 		ice_debug(hw, ICE_DBG_SW, "Unknown filter type %d\n", flow);
+		return;
+	}
+
+	if (fltr->acl_fltr)
+		hw->acl_fltr_cnt[flow] += incr;
 	else
 		hw->fdir_fltr_cnt[flow] += incr;
 }
@@ -1654,8 +1713,11 @@ void ice_fdir_del_all_fltrs(struct ice_vsi *vsi)
 	struct ice_hw *hw = &pf->hw;
 
 	list_for_each_entry_safe(f_rule, tmp, &hw->fdir_list_head, fltr_node) {
+		if (f_rule->acl_fltr)
+			continue;
+
 		ice_fdir_write_all_fltr(pf, f_rule, false);
-		ice_ntuple_update_cntrs(hw, f_rule->flow_type, false);
+		ice_ntuple_update_cntrs(hw, f_rule, false);
 		list_del(&f_rule->fltr_node);
 		devm_kfree(ice_pf_to_dev(pf), f_rule);
 	}
@@ -1749,7 +1811,7 @@ ice_ntuple_update_list_entry(struct ice_pf *pf, struct ice_ntuple_fltr *input,
 		err = ice_fdir_write_all_fltr(pf, old_fltr, false);
 		if (err)
 			return err;
-		ice_ntuple_update_cntrs(hw, old_fltr->flow_type, false);
+		ice_ntuple_update_cntrs(hw, old_fltr, false);
 		/* update sb-filters count, specific to ring->channel */
 		ice_update_per_q_fltr(vsi, old_fltr->orig_q_index, false);
 		if (!input && !hw->fdir_fltr_cnt[old_fltr->flow_type])
@@ -1765,7 +1827,7 @@ ice_ntuple_update_list_entry(struct ice_pf *pf, struct ice_ntuple_fltr *input,
 	ice_fdir_list_add_fltr(hw, input);
 	/* update sb-filters count, specific to ring->channel */
 	ice_update_per_q_fltr(vsi, input->orig_q_index, true);
-	ice_ntuple_update_cntrs(hw, input->flow_type, true);
+	ice_ntuple_update_cntrs(hw, input, true);
 	return 0;
 }
 
@@ -2033,7 +2095,7 @@ int ice_add_ntuple_ethtool(struct ice_vsi *vsi, struct ethtool_rxnfc *cmd)
 	if (ret)
 		return ret;
 
-	max_location = ice_get_fdir_cnt_all(hw);
+	max_location = ice_ntuple_get_max_fltr_cnt(hw);
 	if (fsp->location >= max_location) {
 		dev_err(dev, "Failed to add filter. The number of ntuple filters or provided location exceed max %d.\n",
 			max_location);
@@ -2084,7 +2146,7 @@ int ice_add_ntuple_ethtool(struct ice_vsi *vsi, struct ethtool_rxnfc *cmd)
 	goto release_lock;
 
 remove_sw_rule:
-	ice_ntuple_update_cntrs(hw, input->flow_type, false);
+	ice_ntuple_update_cntrs(hw, input, false);
 	/* update sb-filters count, specific to ring->channel */
 	ice_update_per_q_fltr(vsi, input->orig_q_index, false);
 	list_del(&input->fltr_node);

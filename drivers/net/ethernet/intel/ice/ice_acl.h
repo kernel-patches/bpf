@@ -102,6 +102,8 @@ struct ice_acl_alloc_tbl {
 
 int ice_acl_create_tbl(struct ice_hw *hw, struct ice_acl_tbl_params *params);
 int ice_acl_destroy_tbl(struct ice_hw *hw);
+int ice_acl_create_scen(struct ice_hw *hw, u16 match_width, u16 num_entries,
+			u16 *scen_id);
 int ice_aq_alloc_acl_tbl(struct ice_hw *hw, struct ice_acl_alloc_tbl *tbl,
 			 struct ice_sq_cd *cd);
 int ice_aq_dealloc_acl_tbl(struct ice_hw *hw, u16 alloc_id,
@@ -113,6 +115,12 @@ int ice_aq_program_acl_entry(struct ice_hw *hw, u8 tcam_idx, u16 entry_idx,
 int ice_aq_program_actpair(struct ice_hw *hw, u8 act_mem_idx, u16 act_entry_idx,
 			   struct ice_aqc_actpair *buf, struct ice_sq_cd *cd);
 int ice_aq_alloc_acl_scen(struct ice_hw *hw, u16 *scen_id,
+			  struct ice_aqc_acl_scen *buf, struct ice_sq_cd *cd);
+int ice_aq_dealloc_acl_scen(struct ice_hw *hw, u16 scen_id,
+			    struct ice_sq_cd *cd);
+int ice_aq_update_acl_scen(struct ice_hw *hw, u16 scen_id,
+			   struct ice_aqc_acl_scen *buf, struct ice_sq_cd *cd);
+int ice_aq_query_acl_scen(struct ice_hw *hw, u16 scen_id,
 			  struct ice_aqc_acl_scen *buf, struct ice_sq_cd *cd);
 
 #endif /* _ICE_ACL_H_ */
