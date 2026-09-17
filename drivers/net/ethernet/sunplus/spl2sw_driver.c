@@ -319,7 +319,7 @@ static struct device_node *spl2sw_get_eth_child_node(struct device_node *ether_n
 
 static int spl2sw_probe(struct platform_device *pdev)
 {
-	struct device_node *eth_ports_np;
+	struct device_node *eth_ports_np __free(device_node) = NULL;
 	struct device_node *port_np;
 	struct spl2sw_common *comm;
 	struct device_node *phy_np;
