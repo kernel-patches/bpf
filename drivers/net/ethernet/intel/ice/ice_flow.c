@@ -1590,6 +1590,23 @@ ice_flow_find_prof_id(struct ice_hw *hw, enum ice_block blk, u64 prof_id)
 }
 
 /**
+ * ice_dealloc_flow_entry - Deallocate flow entry memory
+ * @hw: pointer to the HW struct
+ * @entry: flow entry to be removed
+ */
+static void
+ice_dealloc_flow_entry(struct ice_hw *hw, struct ice_flow_entry *entry)
+{
+	if (!entry)
+		return;
+
+	kfree(entry->entry);
+	kfree(entry->range_buf);
+	kfree(entry->acts);
+	devm_kfree(ice_hw_to_dev(hw), entry);
+}
+
+/**
  * ice_flow_get_hw_prof - return the HW profile for a specific profile ID handle
  * @hw: pointer to the HW struct
  * @blk: classification stage
@@ -1757,11 +1774,7 @@ static int ice_flow_rem_entry_sync(struct ice_hw *hw, enum ice_block blk,
 	}
 
 	list_del(&entry->l_entry);
-
-	kfree(entry->entry);
-	kfree(entry->range_buf);
-	kfree(entry->acts);
-	devm_kfree(ice_hw_to_dev(hw), entry);
+	ice_dealloc_flow_entry(hw, entry);
 
 	return 0;
 }
@@ -2948,10 +2961,7 @@ static int ice_flow_acl_add_scen_entry_sync(struct ice_hw *hw,
 		if (e->acts_cnt && e->acts)
 			ice_flow_acl_free_act_cntr(hw, e->acts, e->acts_cnt);
 		exist->id = e->id;
-		kfree(e->entry);
-		kfree(e->range_buf);
-		kfree(e->acts);
-		devm_kfree(ice_hw_to_dev(hw), e);
+		ice_dealloc_flow_entry(hw, e);
 		*entry = exist;
 	}
 out:
@@ -3075,12 +3085,7 @@ free_cntrs:
 	if (blk == ICE_BLK_ACL && e->acts_cnt && e->acts)
 		ice_flow_acl_free_act_cntr(hw, e->acts, e->acts_cnt);
 dealloc_entry:
-	if (e) {
-		kfree(e->entry);
-		kfree(e->range_buf);
-		kfree(e->acts);
-		devm_kfree(ice_hw_to_dev(hw), e);
-	}
+	ice_dealloc_flow_entry(hw, e);
 
 	return status;
 }
