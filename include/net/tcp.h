@@ -2340,6 +2340,15 @@ static inline void tcp_write_collapse_fence(struct sock *sk)
 {
 	struct sk_buff *skb = tcp_write_queue_tail(sk);
 
+	/* When nothing is queued for transmit, the last skb of the current
+	 * state is the rtx queue tail (its end_seq == snd_nxt == write_seq).
+	 * Fence that instead, otherwise the boundary is left unmarked and a
+	 * later tcp_retrans_try_collapse()/tcp_shift_skb_data() can merge it
+	 * with the first skb of the next state across the fence (they only test
+	 * the tail's EOR, not skb->decrypted).
+	 */
+	if (!skb)
+		skb = tcp_rtx_queue_tail(sk);
 	if (skb)
 		TCP_SKB_CB(skb)->eor = 1;
 }
