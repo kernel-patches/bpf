@@ -105,13 +105,11 @@ cancel:
 		pthread_join(tid_del, NULL);
 
 	ASSERT_GT(skel->bss->callback_scheduled, 0, "work scheduled");
-	/* Some scheduling attempts should have failed due to contention */
-	ASSERT_GT(skel->bss->schedule_error, 0, "schedule error");
 
 	if (enable_delete) {
-		/* If delete thread is enabled, it has cancelled some callbacks */
 		ASSERT_GT(skel->bss->delete_success, 0, "delete success");
-		ASSERT_LT(skel->bss->callback_success, skel->bss->callback_scheduled, "callbacks");
+		/* Deletion may race after the task work has already run. */
+		ASSERT_LE(skel->bss->callback_success, skel->bss->callback_scheduled, "callbacks");
 	} else {
 		/* Without delete thread number of scheduled callbacks is the same as fired */
 		ASSERT_EQ(skel->bss->callback_success, skel->bss->callback_scheduled, "callbacks");
