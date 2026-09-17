@@ -58,6 +58,7 @@ struct mlx5e_macsec_async_work {
 
 struct mlx5e_macsec_sa {
 	bool active;
+	bool macsec_obj_created;
 	u8  assoc_num;
 	u32 macsec_obj_id;
 	u32 enc_key_id;
@@ -331,7 +332,10 @@ static void mlx5e_macsec_cleanup_sa(struct mlx5e_macsec *macsec,
 				    struct net_device *netdev, u32 fs_id)
 {
 	mlx5e_macsec_cleanup_sa_fs(macsec, sa, is_tx, netdev, fs_id);
-	mlx5e_macsec_destroy_object(macsec->mdev, sa->macsec_obj_id);
+	if (sa->macsec_obj_created) {
+		mlx5e_macsec_destroy_object(macsec->mdev, sa->macsec_obj_id);
+		sa->macsec_obj_created = false;
+	}
 }
 
 static int mlx5e_macsec_init_sa_fs(struct macsec_context *ctx,
@@ -396,6 +400,7 @@ static int mlx5e_macsec_init_sa(struct macsec_context *ctx,
 		if (err)
 			goto destroy_macsec_object;
 	}
+	sa->macsec_obj_created = true;
 
 	return 0;
 
