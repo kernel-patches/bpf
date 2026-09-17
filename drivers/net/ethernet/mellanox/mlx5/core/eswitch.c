@@ -3005,21 +3005,22 @@ void mlx5_esw_put(struct mlx5_core_dev *mdev)
 /**
  * mlx5_esw_try_lock() - Take a write lock on esw mode lock.
  * @esw: eswitch device.
+ * @check_users: reject the lock if eswitch users exist.
  *
  * Should be called by esw mode change routine.
  *
  * Return:
- * * 0       - esw mode if successfully locked and refcount is 0.
- * * -EBUSY  - refcount is not 0.
- * * -EINVAL - In the middle of switching mode or lock is already held.
+ * * >= 0    - esw mode if successfully locked.
+ * * -EBUSY  - mode change in progress or users exist with check_users set.
+ * * -EINVAL - lock is already held.
  */
-int mlx5_esw_try_lock(struct mlx5_eswitch *esw)
+int mlx5_esw_try_lock(struct mlx5_eswitch *esw, bool check_users)
 {
 	if (down_write_trylock(&esw->mode_lock) == 0)
 		return -EINVAL;
 
 	if (esw->eswitch_operation_in_progress ||
-	    atomic64_read(&esw->user_count) > 0) {
+	    (check_users && atomic64_read(&esw->user_count) > 0)) {
 		up_write(&esw->mode_lock);
 		return -EBUSY;
 	}
