@@ -1,6 +1,19 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0
 
+# The device under test listens on the veth address of the namespace this
+# script runs in and the tester connects to it, so a firewall on the
+# machine can refuse the control connection:
+#   Failed connecting to the Device Under Test control socket
+# That side of the pair is also always called v1, and cleanup only runs
+# on a signal, so a failed run leaves the device behind and every later
+# run stops in setup.  A namespace of our own has no such rules, and
+# takes the leftovers with it when the test ends.
+if [ -z "${XDP_FEATURES_NETNS:-}" ]; then
+	XDP_FEATURES_NETNS=1 export XDP_FEATURES_NETNS
+	exec unshare -n sh -c 'ip link set lo up; exec "$0" "$@"' "$0" "$@"
+fi
+
 readonly NS="ns1-$(mktemp -u XXXXXX)"
 readonly V0_IP4=10.10.0.11
 readonly V1_IP4=10.10.0.1
