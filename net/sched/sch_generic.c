@@ -285,6 +285,15 @@ static struct sk_buff *dequeue_skb(struct Qdisc *q, bool *validate,
 		*validate = false;
 		if (xfrm_offload(skb))
 			*validate = true;
+		/* A still-cleartext skb of a crypto-offloaded socket was validated
+		 * against that socket's offload state at the time. That state
+		 * (sk->sk_validate_xmit_skb) can change while the skb is parked here
+		 * e.g. a TLS key update or offload teardown, so re-validate it,
+		 * letting the current callback decide how it reaches the wire instead
+		 * of emitting now-unencrypted plaintext.
+		 */
+		if (skb_is_decrypted(skb))
+			*validate = true;
 		/* check the reason of requeuing without tx lock first */
 		txq = skb_get_tx_queue(txq->dev, skb);
 		if (!netif_xmit_frozen_or_stopped(txq)) {
