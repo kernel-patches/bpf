@@ -866,8 +866,16 @@ int tls_device_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 	lock_sock(sk);
 
 	/* Old-key records all ACKed; switch back to HW. */
-	if (test_bit(TLS_TX_REKEY_READY, &tls_ctx->flags))
-		tls_device_complete_rekey(sk, tls_ctx, true, msg->msg_flags);
+	if (test_bit(TLS_TX_REKEY_READY, &tls_ctx->flags)) {
+		rc = tls_device_complete_rekey(sk, tls_ctx, true, msg->msg_flags);
+		/* Non-zero here is the transient -EAGAIN retry,
+		 * the next sendmsg retries. Hard failures return 0 after
+		 * falling back to SW and emit tls_device_complete_rekey_fail
+		 * from the fallback path.
+		 */
+		if (rc)
+			trace_tls_device_complete_rekey_retry(sk);
+	}
 
 	if (tls_device_tx_uses_sw(tls_ctx)) {
 		rc = tls_sw_sendmsg_locked(sk, msg, size);
@@ -1430,10 +1438,15 @@ int tls_device_decrypted(struct sock *sk, struct tls_context *tls_ctx)
 				return 0;
 			}
 
+			trace_tls_device_rekey_reencrypt(sk, rec_start_seq,
+							 ctx->rekey.old_nic_boundary);
+
 			return tls_device_reencrypt_old_key(sk, ctx,
 							    sw_ctx, tls_ctx);
 		}
 
+		trace_tls_device_rekey_done(sk, rec_start_seq,
+					    ctx->rekey.old_nic_boundary);
 		crypto_free_aead(ctx->rekey.old_aead_recv);
 		ctx->rekey.old_aead_recv = NULL;
 
@@ -1890,6 +1903,13 @@ rekey_fallback:
 	TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXDEVICE);
 	TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXSW);
 
+	/* Hard failure: HW rekey gave up and the connection is now pinned to
+	 * SW encryption. The call site only sees the transient -EAGAIN retry
+	 * (rc is not propagated here), so emit the trace from the fallback
+	 * path itself; rc still holds the originating error.
+	 */
+	trace_tls_device_complete_rekey_fail(sk, rc);
+
 	return 0;
 }
 
@@ -2195,11 +2215,21 @@ int tls_set_device_offload_rx(struct sock *sk, struct tls_context *ctx,
 			 * is installed once drain_start crosses rekey.old_nic_boundary.
 			 */
 			context->dev_add_pending = 1;
+			trace_tls_device_rekey_start(sk, drain_start,
+						     context->rekey.old_nic_boundary,
+						     true);
 		} else {
 			struct tcp_sock *tp = tcp_sk(sk);
 			u32 nic_end;
 
 			if (context->rekey.old_aead_recv) {
+				/* Prior rekey's era already drained (drain_start is
+				 * past old_nic_boundary), so retiring its key here
+				 * is a boundary crossing, same as the free in
+				 * tls_device_decrypted(); mark it done.
+				 */
+				trace_tls_device_rekey_done(sk, drain_start,
+							    context->rekey.old_nic_boundary);
 				crypto_free_aead(context->rekey.old_aead_recv);
 				context->rekey.old_aead_recv = NULL;
 			}
@@ -2247,6 +2277,8 @@ int tls_set_device_offload_rx(struct sock *sk, struct tls_context *ctx,
 				context->dev_add_pending = 0;
 				retired_pending = true;
 			}
+			trace_tls_device_rekey_start(sk, drain_start, nic_end,
+						     before(drain_start, nic_end));
 		}
 	}
 
