@@ -211,10 +211,14 @@ enum tls_context_flags {
 	 * to be atomic.
 	 */
 	TLS_TX_SYNC_SCHED = 1,
-	/* tls_dev_del was called for the RX side, device state was released,
-	 * but tls_ctx->netdev might still be kept, because TX-side driver
-	 * resources might not be released yet. Used to prevent the second
-	 * tls_dev_del call in tls_device_down if it happens simultaneously.
+	/* tls_dev_del was called for the RX side, releasing the NIC's RX
+	 * offload context, while tls_ctx->netdev is still kept (TX-side driver
+	 * resources may not be released yet, or a rekey is about to re-add the
+	 * context). Set in that case, and during a rekey before re-add, and
+	 * cleared when tls_dev_add re-establishes the context. Readers use it to
+	 * avoid a second tls_dev_del and to suppress resync while the NIC has no
+	 * key. tls_device_down() sets it too, so the rekey paths can test the bit
+	 * alone.
 	 */
 	TLS_RX_DEV_CLOSED = 2,
 	/* TX HW context has been tls_dev_del()'d (mid-rekey before the re-add,
@@ -239,6 +243,14 @@ enum tls_context_flags {
 	 * avoidance only.
 	 */
 	TLS_TX_REKEY_FLOOR = 7,
+	/* The RX side fell back to SW decryption during a rekey (tls_dev_add()
+	 * failed, or the netdev is gone) and the socket has been moved from the
+	 * TlsCurrRxDevice to the TlsCurrRxSw gauge while rx_conf stays TLS_HW.
+	 * Accounting only: the functional state is TLS_RX_DEV_{DEGRADED,CLOSED}.
+	 * Cleared, moving the socket back, when a later rekey re-adds the NIC
+	 * context. Mirrors TLS_TX_REKEY_FAILED for the close-time decrement.
+	 */
+	TLS_RX_REKEY_FAILED = 8,
 };
 
 struct tls_prot_info {
@@ -359,6 +371,14 @@ struct tls_offload_context_rx {
 	u8 resync_nh_reset:1;
 	/* CORE_NEXT_HINT-only member, but use the hole here */
 	u8 resync_nh_do_now:1;
+	/* tls_dev_add deferred until old key is freed */
+	u8 dev_add_pending:1;
+	struct {
+		struct crypto_aead *old_aead_recv; /* old key AEAD cipher */
+		char old_iv[TLS_MAX_IV_SIZE + TLS_MAX_SALT_SIZE]; /* old key IV */
+		char old_rec_seq[TLS_MAX_REC_SEQ_SIZE]; /* old key TLS record seq */
+		u32 old_nic_boundary; /* TCP seq below which the NIC may have used the old key */
+	} rekey;
 	union {
 		/* TLS_OFFLOAD_SYNC_TYPE_DRIVER_REQ */
 		struct {

@@ -359,8 +359,14 @@ static void tls_sk_proto_cleanup(struct sock *sk,
 		tls_sw_release_resources_rx(sk);
 		TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRRXSW);
 	} else if (ctx->rx_conf == TLS_HW) {
+		bool rekey_failed = test_bit(TLS_RX_REKEY_FAILED, &ctx->flags);
+
 		tls_device_offload_cleanup_rx(sk);
-		TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRRXDEVICE);
+
+		if (rekey_failed)
+			TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRRXSW);
+		else
+			TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRRXDEVICE);
 	}
 }
 
@@ -752,7 +758,8 @@ static int do_tls_setsockopt_conf(struct sock *sk, sockptr_t optval,
 			conf = TLS_SW;
 		}
 	} else {
-		rc = tls_set_device_offload_rx(sk, ctx);
+		rc = tls_set_device_offload_rx(sk, ctx,
+					       update ? crypto_info : NULL);
 		conf = TLS_HW;
 		if (!rc) {
 			if (!update) {
