@@ -1856,8 +1856,14 @@ static int mpam_cpu_online(unsigned int cpu)
 		if (msc->reenable_error_ppi)
 			_enable_percpu_irq(&msc->reenable_error_ppi);
 
-		if (atomic_fetch_inc(&msc->online_refs) == 0)
+		if (atomic_fetch_inc(&msc->online_refs) == 0) {
+			mutex_lock(&msc->error_irq_lock);
+			if (msc->error_irq_hw_enabled)
+				mpam_touch_msc(msc, mpam_enable_msc_ecr, msc);
+			mutex_unlock(&msc->error_irq_lock);
+
 			mpam_reprogram_msc(msc);
+		}
 	}
 
 	if (mpam_resctrl_enabled)
