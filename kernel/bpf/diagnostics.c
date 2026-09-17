@@ -2383,6 +2383,6 @@ static void diag_print_history(struct bpf_verifier_env *env,
 	if (log->first_seq)
 		diag_write(env, "  %llu older causal-history event%s not retained because diagnostic "
 			   "event storage reached capacity\n",
-			   log->first_seq, log->first_seq == 1 ? "" : "s");
+			   log->first_seq, str_plural(log->first_seq));
 	diag_fmt_restore(env, mark);
 }
