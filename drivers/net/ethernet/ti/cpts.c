@@ -714,6 +714,8 @@ static int cpts_of_mux_clk_setup(struct cpts *cpts, struct device_node *node)
 		goto mux_fail;
 	}
 
+	of_node_put(refclk_np);
+
 	return ret;
 
 mux_fail:
