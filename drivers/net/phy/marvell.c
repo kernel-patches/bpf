@@ -427,6 +427,68 @@ static irqreturn_t marvell_handle_interrupt(struct phy_device *phydev)
 	return IRQ_HANDLED;
 }
 
+/*
+ * On the 88E1318S/88E1510, copper page register 0x12 serves two
+ * masters: it is the MII_M1011_IMASK interrupt mask for the generic
+ * Marvell interrupt handling, and m88e1318_set_wol() sets the WoL
+ * interrupt enable bit (MII_88E1318S_PHY_CSIER_WOL_EIE) in it. The
+ * interrupt routines below therefore preserve that bit, so reconfiguring
+ * the PHY interrupts cannot disarm Wake-on-LAN behind the user's back.
+ */
+static int m88e1318_config_intr(struct phy_device *phydev)
+{
+	int val, err;
+
+	val = phy_read(phydev, MII_88E1318S_PHY_CSIER);
+	if (val < 0)
+		return val;
+
+	if (phydev->interrupts == PHY_INTERRUPT_ENABLED) {
+		err = marvell_ack_interrupt(phydev);
+		if (err < 0)
+			return err;
+
+		err = phy_write(phydev, MII_88E1318S_PHY_CSIER,
+				MII_M1011_IMASK_INIT |
+				(val & MII_88E1318S_PHY_CSIER_WOL_EIE));
+	} else {
+		/* Disable the PHY interrupts, but keep WOL_EIE set so an
+		 * armed magic packet still asserts INTn while the
+		 * interface is down or the machine is suspended.
+		 */
+		err = phy_write(phydev, MII_88E1318S_PHY_CSIER,
+				val & MII_88E1318S_PHY_CSIER_WOL_EIE);
+		if (err < 0)
+			return err;
+
+		err = marvell_ack_interrupt(phydev);
+	}
+
+	return err;
+}
+
+static irqreturn_t m88e1318_handle_interrupt(struct phy_device *phydev)
+{
+	int irq_status;
+
+	irq_status = phy_read(phydev, MII_M1011_IEVENT);
+	if (irq_status < 0) {
+		phy_error(phydev);
+		return IRQ_NONE;
+	}
+
+	/* Claim events from the IMASK_INIT set as well as the WoL event
+	 * mirrored from WOL_EIE in the enable register.
+	 */
+	if (!(irq_status & (MII_M1011_IMASK_INIT |
+			    MII_88E1318S_PHY_CSIER_WOL_EIE)))
+		return IRQ_NONE;
+
+	phy_trigger_machine(phydev);
+
+	return IRQ_HANDLED;
+}
+
 static int marvell_set_polarity(struct phy_device *phydev, int polarity)
 {
 	u16 val;
@@ -3871,8 +3933,8 @@ static struct phy_driver marvell_drivers[] = {
 		.config_init = m88e1318_config_init,
 		.config_aneg = m88e1318_config_aneg,
 		.read_status = marvell_read_status,
-		.config_intr = marvell_config_intr,
-		.handle_interrupt = marvell_handle_interrupt,
+		.config_intr = m88e1318_config_intr,
+		.handle_interrupt = m88e1318_handle_interrupt,
 		.get_wol = m88e1318_get_wol,
 		.set_wol = m88e1318_set_wol,
 		.resume = genphy_resume,
@@ -3979,8 +4041,8 @@ static struct phy_driver marvell_drivers[] = {
 		.config_init = m88e1510_config_init,
 		.config_aneg = m88e1510_config_aneg,
 		.read_status = marvell_read_status,
-		.config_intr = marvell_config_intr,
-		.handle_interrupt = marvell_handle_interrupt,
+		.config_intr = m88e1318_config_intr,
+		.handle_interrupt = m88e1318_handle_interrupt,
 		.get_wol = m88e1318_get_wol,
 		.set_wol = m88e1318_set_wol,
 		.resume = m88e1510_resume,
