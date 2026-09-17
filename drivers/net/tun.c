@@ -807,15 +807,16 @@ static int tun_attach(struct tun_struct *tun, struct file *file,
 	 * refcnt.
 	 */
 
+	WRITE_ONCE(tun->numqueues, tun->numqueues + 1);
+	tun_set_real_num_queues(tun);
+
 	/* Publish tfile->tun and tun->tfiles only after we've fully
 	 * initialized tfile; otherwise we risk using half-initialized
 	 * object.
 	 */
 	if (publish_tun)
 		rcu_assign_pointer(tfile->tun, tun);
-	rcu_assign_pointer(tun->tfiles[tun->numqueues], tfile);
-	WRITE_ONCE(tun->numqueues, tun->numqueues + 1);
-	tun_set_real_num_queues(tun);
+	rcu_assign_pointer(tun->tfiles[tun->numqueues - 1], tfile);
 out:
 	return err;
 }
