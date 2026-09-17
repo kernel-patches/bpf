@@ -157,6 +157,9 @@
 #define ICE_SWITCH_FLTR_PRIO_VSI	5
 #define ICE_SWITCH_FLTR_PRIO_QGRP	ICE_SWITCH_FLTR_PRIO_VSI
 
+#define ICE_ACL_ENTIRE_SLICE	1
+#define ICE_ACL_HALF_SLICE	2
+
 /* Macro for each VSI in a PF */
 #define ice_for_each_vsi(pf, i) \
 	for ((i) = 0; (i) < (pf)->num_alloc_vsi; (i)++)

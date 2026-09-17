@@ -303,6 +303,7 @@ struct ice_aqc_vsi_props {
 #define ICE_AQ_VSI_PROP_RXQ_MAP_VALID		BIT(6)
 #define ICE_AQ_VSI_PROP_Q_OPT_VALID		BIT(7)
 #define ICE_AQ_VSI_PROP_OUTER_UP_VALID		BIT(8)
+#define ICE_AQ_VSI_PROP_ACL_VALID		BIT(10)
 #define ICE_AQ_VSI_PROP_FLOW_DIR_VALID		BIT(11)
 #define ICE_AQ_VSI_PROP_PASID_VALID		BIT(12)
 	/* switch section */
@@ -423,8 +424,10 @@ struct ice_aqc_vsi_props {
 	u8 q_opt_reserved[3];
 	/* outer up section */
 	__le32 outer_up_table; /* same structure and defines as ingress tbl */
-	/* section 10 */
-	__le16 sect_10_reserved;
+	/* ACL section */
+	__le16 acl_def_act;
+#define ICE_AQ_VSI_ACL_DEF_RX_PROF_M	GENMASK(3, 0)
+#define ICE_AQ_VSI_ACL_DEF_RX_TABLE_M	GENMASK(7, 4)
 	/* flow director section */
 	__le16 fd_options;
 #define ICE_AQ_VSI_FD_ENABLE			BIT(0)
@@ -1977,6 +1980,199 @@ struct ice_aqc_neigh_dev_req {
 	__le32 addr_low;
 };
 
+/* Allocate ACL table (indirect 0x0C10) */
+#define ICE_AQC_ACL_KEY_WIDTH_BYTES	5
+#define ICE_AQC_ACL_TCAM_DEPTH		512
+#define ICE_ACL_ENTRY_ALLOC_UNIT	64
+#define ICE_AQC_MAX_CONCURRENT_ACL_TBL	15
+#define ICE_AQC_MAX_ACTION_MEMORIES	20
+#define ICE_AQC_ACL_SLICES		16
+#define ICE_AQC_ALLOC_ID_4K		0x1000
+/* The ACL block supports up to 8 actions per a single output. */
+#define ICE_AQC_TBL_MAX_ACTION_PAIRS	4
+
+#define ICE_AQC_MAX_TCAM_ALLOC_UNITS	(ICE_AQC_ACL_TCAM_DEPTH / \
+					 ICE_ACL_ENTRY_ALLOC_UNIT)
+#define ICE_AQC_ACL_ALLOC_UNITS		(ICE_AQC_ACL_SLICES * \
+					 ICE_AQC_MAX_TCAM_ALLOC_UNITS)
+
+struct ice_aqc_acl_alloc_table {
+	__le16 table_width;
+	__le16 table_depth;
+	u8 act_pairs_per_entry;
+	u8 table_type;
+	__le16 reserved;
+	__le32 addr_high;
+	__le32 addr_low;
+};
+
+#define ICE_AQC_CONCURR_ID_INVALID	0xffff
+/* Allocate ACL table command buffer format */
+struct ice_aqc_acl_alloc_table_data {
+	/* Dependent table AllocIDs. Each word in this 15 word array specifies
+	 * a dependent table AllocID according to the amount specified in the
+	 * "table_type" field. All unused words shall be set to
+	 * ICE_AQC_CONCURR_ID_INVALID
+	 */
+	__le16 alloc_ids[ICE_AQC_MAX_CONCURRENT_ACL_TBL];
+};
+
+/* Deallocate ACL table (indirect 0x0C11) */
+
+/* Following structure is common and used in case of deallocation
+ * of ACL table and action-pair
+ */
+struct ice_aqc_acl_tbl_actpair {
+	__le16 alloc_id;
+	u8 reserved[6];
+	__le32 addr_high;
+	__le32 addr_low;
+};
+
+/* This response structure is same in case of alloc/dealloc table,
+ * alloc/dealloc action-pair
+ */
+struct ice_aqc_acl_generic {
+	/* if alloc_id is below 0x1000 then allocation failed due to
+	 * unavailable resources, else this is set by FW to identify
+	 * table allocation
+	 */
+	__le16 alloc_id;
+
+	union {
+		/* to be used only in case of alloc/dealloc table */
+		struct {
+			/* Set to 0xFF for a failed allocation */
+			u8 first_tcam;
+			/* This index shall be set to the value of first_tcam
+			 * for single TCAM block allocation, otherwise set to
+			 * 0xFF for a failed allocation.
+			 */
+			u8 last_tcam;
+		} table;
+		/* reserved in case of alloc/dealloc action-pair */
+		struct {
+			__le16 reserved;
+		} act_pair;
+	} ops;
+
+	/* index of first entry (in both TCAM and action memories),
+	 * otherwise set to 0xFF for a failed allocation
+	 */
+	__le16 first_entry;
+	/* index of last entry (in both TCAM and action memories),
+	 * otherwise set to 0xFF for a failed allocation
+	 */
+	__le16 last_entry;
+
+	/* Each act_mem element specifies the order of the memory
+	 * otherwise 0xFF
+	 */
+	u8 act_mem[ICE_AQC_MAX_ACTION_MEMORIES];
+};
+
+/* Update ACL scenario (direct 0x0C1B)
+ * Query ACL scenario (direct 0x0C23)
+ */
+struct ice_aqc_acl_update_query_scen {
+	__le16 scen_id;
+	u8 reserved[6];
+	__le32 addr_high;
+	__le32 addr_low;
+};
+
+#define ICE_AQC_ACL_BYTE_SEL_BASE		0x20
+#define ICE_AQC_ACL_BYTE_SEL_BASE_PID		0x3E
+#define ICE_AQC_ACL_BYTE_SEL_BASE_PKT_DIR	ICE_AQC_ACL_BYTE_SEL_BASE
+#define ICE_AQC_ACL_BYTE_SEL_BASE_RNG_CHK	0x3F
+
+#define ICE_AQC_ACL_ALLOC_SCE_START_CMP		BIT(0)
+#define ICE_AQC_ACL_ALLOC_SCE_START_SET		BIT(1)
+
+#define ICE_AQC_ACL_SCE_ACT_MEM_EN		BIT(7)
+
+/* Input buffer format in case allocate/update ACL scenario and same format
+ * is used for response buffer in case of query ACL scenario.
+ * NOTE: de-allocate ACL scenario is direct command and doesn't require
+ * "buffer", hence no buffer format.
+ */
+struct ice_aqc_acl_scen {
+	struct {
+		/* Byte [x] selection for the TCAM key. This value must be set
+		 * to 0x0 for unused TCAM.
+		 * Only Bit 6..0 is used in each byte and MSB is reserved
+		 */
+		u8 tcam_select[5];
+		/* TCAM Block entry masking. This value should be set to 0x0 for
+		 * unused TCAM
+		 */
+		u8 chnk_msk;
+		/* Bit 0 : masks TCAM entries 0-63
+		 * Bit 1 : masks TCAM entries 64-127
+		 * Bit 2 to 7 : follow the pattern of bit 0 and 1
+		 */
+		u8 start_cmp_set;
+	} tcam_cfg[ICE_AQC_ACL_SLICES];
+
+	/* Each byte, Bit 6..0: action memory association to a TCAM block,
+	 * otherwise it shall be set to 0x0 for disabled memory action.
+	 * Bit 7 (ICE_AQC_ACL_SCE_ACT_MEM_EN): action memory enable for this
+	 * scenario
+	 */
+	u8 act_mem_cfg[ICE_AQC_MAX_ACTION_MEMORIES];
+};
+
+/* Program ACL actionpair (indirect 0x0C1C) */
+struct ice_aqc_acl_actpair {
+	u8 act_mem_index;
+	u8 reserved;
+	/* Entry index in action memory */
+	__le16 act_entry_index;
+	__le32 reserved2;
+	__le32 addr_high;
+	__le32 addr_low;
+};
+
+/* Input buffer format for program/query action-pair admin command */
+struct ice_acl_act_entry {
+	/* Action priority, values must be between 0..7 */
+	u8 prio;
+	/* Action meta-data identifier. This field should be set to 0x0
+	 * for a NOP action
+	 */
+	u8 mdid;
+	__le16 value;
+};
+
+#define ICE_ACL_NUM_ACT_PER_ACT_PAIR 2
+struct ice_aqc_actpair {
+	struct ice_acl_act_entry act[ICE_ACL_NUM_ACT_PER_ACT_PAIR];
+};
+
+/* Program ACL entry (indirect 0x0C20) */
+struct ice_aqc_acl_entry {
+	u8 tcam_index;
+	u8 reserved;
+	__le16 entry_index;
+	__le32 reserved2;
+	__le32 addr_high;
+	__le32 addr_low;
+};
+
+/* Input buffer format in case of program ACL entry and response buffer format
+ * in case of query ACL entry
+ */
+struct ice_aqc_acl_data {
+	/* Entry key and entry key invert are 40 bits wide.
+	 * Byte 0..4 : entry key and Byte 5..7 are reserved
+	 * Byte 8..12: entry key invert and Byte 13..15 are reserved
+	 */
+	struct {
+		u8 val[5];
+		u8 reserved[3];
+	} entry_key, entry_key_invert;
+};
+
 /* Add Tx LAN Queues (indirect 0x0C30) */
 struct ice_aqc_add_txqs {
 	u8 num_qgrps;
@@ -2641,6 +2837,14 @@ enum ice_adminq_opc {
 
 	/* Sideband Control Interface commands */
 	ice_aqc_opc_neighbour_device_request		= 0x0C00,
+
+	/* ACL commands */
+	ice_aqc_opc_alloc_acl_tbl			= 0x0C10,
+	ice_aqc_opc_dealloc_acl_tbl			= 0x0C11,
+	ice_aqc_opc_update_acl_scen			= 0x0C1B,
+	ice_aqc_opc_program_acl_actpair			= 0x0C1C,
+	ice_aqc_opc_program_acl_entry			= 0x0C20,
+	ice_aqc_opc_query_acl_scen			= 0x0C23,
 
 	/* Tx queue handling commands/events */
 	ice_aqc_opc_add_txqs				= 0x0C30,
