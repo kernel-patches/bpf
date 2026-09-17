@@ -9757,11 +9757,29 @@ int bpf_object__set_kversion(struct bpf_object *obj, __u32 kern_version)
 int bpf_object__gen_loader(struct bpf_object *obj, struct gen_loader_opts *opts)
 {
 	struct bpf_gen *gen;
+	size_t i;
 
 	if (!opts)
 		return libbpf_err(-EFAULT);
 	if (!OPTS_VALID(opts, gen_loader_opts))
 		return libbpf_err(-EINVAL);
+
+	/*
+	 * Manually-loaded programs are not visible to gen_loader (see
+	 * bpf_program__set_load_strategy()'s MANUAL case), and marking a
+	 * program MANUAL happens during bpf_object__open(), before this
+	 * function can ever run, so that guard can never catch it here.
+	 * Reject any pre-existing MANUAL program now, since this is the
+	 * earliest point where both are known.
+	 */
+	for (i = 0; i < obj->nr_programs; i++) {
+		if (obj->programs[i].load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL) {
+			pr_warn("prog '%s': gen_loader does not support manually-loaded programs\n",
+				obj->programs[i].name);
+			return libbpf_err(-EOPNOTSUPP);
+		}
+	}
+
 	gen = calloc(1, sizeof(*gen));
 	if (!gen)
 		return libbpf_err(-ENOMEM);
