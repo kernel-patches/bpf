@@ -1551,9 +1551,9 @@ static int ntb_async_rx_submit(struct ntb_queue_entry *entry, void *offset)
 
 	unmap->from_cnt = 1;
 
-	txd = device->device_prep_dma_memcpy(chan, unmap->addr[1],
-					     unmap->addr[0], len,
-					     DMA_PREP_INTERRUPT);
+	txd = dmaengine_prep_dma_memcpy(chan, unmap->addr[1],
+					unmap->addr[0], len,
+					DMA_PREP_INTERRUPT);
 	if (!txd)
 		goto err_get_unmap;
 
@@ -1883,8 +1883,8 @@ static int ntb_async_tx_submit(struct ntb_transport_qp *qp,
 
 	unmap->to_cnt = 1;
 
-	txd = device->device_prep_dma_memcpy(chan, dest, unmap->addr[0], len,
-					     DMA_PREP_INTERRUPT);
+	txd = dmaengine_prep_dma_memcpy(chan, dest, unmap->addr[0], len,
+					DMA_PREP_INTERRUPT);
 	if (!txd)
 		goto err_get_unmap;
 
