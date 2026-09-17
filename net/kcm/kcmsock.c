@@ -1458,9 +1458,11 @@ no_reserved:
 		mux->psocks_cnt--;
 		spin_unlock_bh(&mux->lock);
 
-		sock_put(csk);
 		fput(csk->sk_socket->file);
 		kmem_cache_free(kcm_psockp, psock);
+		release_sock(csk);
+		sock_put(csk);
+		return;
 	}
 
 	release_sock(csk);
