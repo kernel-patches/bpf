@@ -872,16 +872,25 @@ bpf_object__init_prog(struct bpf_object *obj, struct bpf_program *prog,
 	/* libbpf's convention for SEC("?abc...") is that it's just like
 	 * SEC("abc...") but the corresponding bpf_program starts out with
 	 * autoload set to false.
+	 *
+	 * Similarly, SEC("!abc...") marks the program for manual loading:
+	 * it is skipped by the bulk auto-load pass and must be explicitly
+	 * loaded later via bpf_program__load_manually().
 	 */
 	if (sec_name[0] == '?') {
 		prog->load_strategy = BPF_PROG_LOAD_STRATEGY_DISABLED;
 		/* from now on forget there was ? in section name */
 		sec_name++;
+	} else if (sec_name[0] == '!') {
+		prog->load_strategy = BPF_PROG_LOAD_STRATEGY_MANUAL;
+		/* from now on forget there was ! in section name */
+		sec_name++;
 	} else {
 		prog->load_strategy = BPF_PROG_LOAD_STRATEGY_AUTO;
 	}
 
-	prog->autoattach = true;
+	prog->saved_autoattach = true;
+	prog->autoattach = prog->load_strategy != BPF_PROG_LOAD_STRATEGY_MANUAL;
 
 	/* inherit object's log_level */
 	prog->log_level = obj->log_level;
@@ -15292,7 +15301,7 @@ int bpf_program__set_load_strategy(struct bpf_program *prog, enum bpf_prog_load_
 		 * A gen_loader implementation is being called for autoloaded
 		 * programs and defines its own model for loading BPF programs.
 		 * To pass a BPF program to gen_loader, set the program's load strategy
-		 * to LD_AUTOLOAD.
+		 * to BPF_PROG_LOAD_STRATEGY_AUTO.
 		 */
 		if (obj->gen_loader)
 			return libbpf_err(-EOPNOTSUPP);
