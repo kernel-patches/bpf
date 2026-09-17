@@ -330,6 +330,8 @@ register.
   ADD    0x0    0        dst += src
   SUB    0x1    0        dst -= src
   MUL    0x2    0        dst \*= src
+  UHMUL  0x2    1        unsigned high-half multiplication (``ALU64`` only)
+  SHMUL  0x2    2        signed high-half multiplication (``ALU64`` only)
   DIV    0x3    0        dst = (src != 0) ? (dst / src) : 0
   SDIV   0x3    1        dst = (src == 0) ? 0 : ((src == -1 && dst == LLONG_MIN) ? LLONG_MIN : (dst s/ src))
   OR     0x4    0        dst \|= src
@@ -379,13 +381,33 @@ where '(u32)' indicates that the upper 32 bits are zeroed.
 
   dst = dst ^ imm
 
-Note that most arithmetic instructions have 'offset' set to 0. Only three instructions
-(``SDIV``, ``SMOD``, ``MOVSX``) have a non-zero 'offset'.
+Note that most arithmetic instructions have 'offset' set to 0. The following
+instructions may have a non-zero 'offset':
+
+* ``SDIV`` and ``SMOD``: ``offset == 1`` selects the signed variant.
+* ``MOVSX``: ``offset`` selects the source operand width.
+* ``MUL``: ``offset`` selects the multiplication variant (see below).
 
 Division, multiplication, and modulo operations for ``ALU`` are part
 of the "divmul32" conformance group, and division, multiplication, and
 modulo operations for ``ALU64`` are part of the "divmul64" conformance
 group.
+
+For ``ALU64`` multiplication, ``offset == 1`` selects unsigned
+high-half multiplication (``UHMUL``), and ``offset == 2`` selects
+signed high-half multiplication (``SHMUL``).
+
+For ``X`` mode, ``src64`` is the 64-bit value in ``src_reg``. For
+``K`` mode, ``src64`` is ``imm`` sign-extended from 32 to 64 bits.
+The operations are::
+
+  UHMUL: dst = (u64)(((u128)dst * (u128)(u64)src64) >> 64)
+  SHMUL: dst = (u64)(((s128)(s64)dst * (s128)(s64)src64) >> 64)
+
+For ``ALU`` multiplication, only ``offset == 0`` is valid. For
+``ALU64`` multiplication, offset values other than 0, 1, and 2 are
+reserved.
+
 The division and modulo operations support both unsigned and signed flavors.
 
 For unsigned operations (``DIV`` and ``MOD``), for ``ALU``,
