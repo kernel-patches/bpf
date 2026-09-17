@@ -1238,33 +1238,21 @@ out:
 	return err;
 }
 
-static int mlx5e_macsec_del_secy(struct macsec_context *ctx)
+static void macsec_del_secy(struct mlx5e_macsec *macsec,
+			    struct mlx5e_macsec_device *macsec_device)
 {
-	struct mlx5e_priv *priv = macsec_netdev_priv(ctx->netdev);
-	struct mlx5e_macsec_device *macsec_device;
+	struct net_device *netdev = (struct net_device *)macsec_device->netdev;
 	struct mlx5e_macsec_rx_sc *rx_sc, *tmp;
 	struct mlx5e_macsec_sa *tx_sa;
-	struct mlx5e_macsec *macsec;
 	struct list_head *list;
-	int err = 0;
 	int i;
-
-	mutex_lock(&priv->macsec->lock);
-	macsec = priv->macsec;
-	macsec_device = mlx5e_macsec_get_macsec_device_context(macsec, ctx);
-	if (!macsec_device) {
-		netdev_err(ctx->netdev, "MACsec offload: Failed to find device context\n");
-		err = -EINVAL;
-
-		goto out;
-	}
 
 	for (i = 0; i < MACSEC_NUM_AN; ++i) {
 		tx_sa = macsec_device->tx_sa[i];
 		if (!tx_sa)
 			continue;
 
-		mlx5e_macsec_cleanup_sa(macsec, tx_sa, true, ctx->secy->netdev, 0);
+		mlx5e_macsec_cleanup_sa(macsec, tx_sa, true, netdev, 0);
 		mlx5_destroy_encryption_key(macsec->mdev, tx_sa->enc_key_id);
 		kfree(tx_sa);
 		macsec_device->tx_sa[i] = NULL;
@@ -1272,7 +1260,7 @@ static int mlx5e_macsec_del_secy(struct macsec_context *ctx)
 
 	list = &macsec_device->macsec_rx_sc_list_head;
 	list_for_each_entry_safe(rx_sc, tmp, list, rx_sc_list_element)
-		macsec_del_rxsc_ctx(macsec, rx_sc, ctx->secy->netdev);
+		macsec_del_rxsc_ctx(macsec, rx_sc, netdev);
 
 	kfree(macsec_device->dev_addr);
 	macsec_device->dev_addr = NULL;
@@ -1280,7 +1268,24 @@ static int mlx5e_macsec_del_secy(struct macsec_context *ctx)
 	list_del_rcu(&macsec_device->macsec_device_list_element);
 	--macsec->num_of_devices;
 	kfree(macsec_device);
+}
 
+static int mlx5e_macsec_del_secy(struct macsec_context *ctx)
+{
+	struct mlx5e_priv *priv = macsec_netdev_priv(ctx->netdev);
+	struct mlx5e_macsec *macsec = priv->macsec;
+	struct mlx5e_macsec_device *macsec_device;
+	int err = 0;
+
+	mutex_lock(&macsec->lock);
+	macsec_device = mlx5e_macsec_get_macsec_device_context(macsec, ctx);
+	if (!macsec_device) {
+		netdev_err(ctx->netdev, "MACsec offload: Failed to find device context\n");
+		err = -EINVAL;
+		goto out;
+	}
+
+	macsec_del_secy(macsec, macsec_device);
 out:
 	mutex_unlock(&macsec->lock);
 
@@ -1798,6 +1803,7 @@ err_aso:
 
 void mlx5e_macsec_cleanup(struct mlx5e_priv *priv)
 {
+	struct mlx5e_macsec_device *macsec_device, *tmp;
 	struct mlx5e_macsec *macsec = priv->macsec;
 	struct mlx5_core_dev *mdev = priv->mdev;
 
@@ -1805,9 +1811,20 @@ void mlx5e_macsec_cleanup(struct mlx5e_priv *priv)
 		return;
 
 	mlx5_notifier_unregister(mdev, &macsec->nb);
-	mlx5_macsec_fs_cleanup(mdev->macsec_fs);
 	destroy_workqueue(macsec->wq);
+
+	mutex_lock(&macsec->lock);
+	list_for_each_entry_safe(macsec_device, tmp,
+				 &macsec->macsec_device_list_head,
+				 macsec_device_list_element)
+		macsec_del_secy(macsec, macsec_device);
+	mutex_unlock(&macsec->lock);
+
+	xa_destroy(&macsec->sc_xarray);
+	mlx5_macsec_fs_cleanup(mdev->macsec_fs);
+	mdev->macsec_fs = NULL;
 	mlx5e_macsec_aso_cleanup(&macsec->aso, mdev);
 	mutex_destroy(&macsec->lock);
 	kfree(macsec);
+	priv->macsec = NULL;
 }
