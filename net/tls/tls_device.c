@@ -138,6 +138,41 @@ static struct net_device *get_netdev_for_sock(struct sock *sk)
 	return lowest_dev;
 }
 
+static int tls_device_dev_add_tx(struct sock *sk, struct net_device *netdev,
+				 struct tls_crypto_info *crypto_info,
+				 u32 write_seq)
+{
+	const struct tls_cipher_desc *cipher_desc;
+	char *rec_seq;
+	int rc;
+
+	cipher_desc = get_cipher_desc(crypto_info->cipher_type);
+	DEBUG_NET_WARN_ON_ONCE(!cipher_desc || !cipher_desc->offloadable);
+
+	rc = netdev->tlsdev_ops->tls_dev_add(netdev, sk, TLS_OFFLOAD_CTX_DIR_TX,
+					     crypto_info, write_seq);
+	rec_seq = crypto_info_rec_seq(crypto_info, cipher_desc);
+	trace_tls_device_offload_set(sk, TLS_OFFLOAD_CTX_DIR_TX,
+				     write_seq, rec_seq, rc);
+	return rc;
+}
+
+static void tls_device_commit_start_marker(struct sock *sk,
+					struct tls_offload_context_tx *offload_ctx,
+					struct tls_record_info *start_marker_record)
+{
+	start_marker_record->end_seq = tcp_sk(sk)->write_seq;
+	start_marker_record->len = 0;
+	start_marker_record->num_frags = 0;
+	list_add_tail_rcu(&start_marker_record->list, &offload_ctx->records_list);
+
+	/* TLS offload is greatly simplified if we don't send
+	 * SKBs where only part of the payload needs to be encrypted.
+	 * So mark the last skb in the write queue as end of record.
+	 */
+	tcp_write_collapse_fence(sk);
+}
+
 static void destroy_record(struct tls_record_info *record)
 {
 	int i;
@@ -1071,20 +1106,99 @@ static struct tls_offload_context_tx *alloc_offload_ctx_tx(struct tls_context *c
 	return offload_ctx;
 }
 
-int tls_set_device_offload(struct sock *sk)
+static int tls_set_device_offload_initial(struct sock *sk,
+					  struct tls_context *ctx,
+					  struct net_device *netdev,
+					  struct tls_crypto_info *crypto_info,
+					  const struct tls_cipher_desc *cipher_desc)
 {
+	struct tls_prot_info *prot = &ctx->prot_info;
 	struct tls_record_info *start_marker_record;
 	struct tls_offload_context_tx *offload_ctx;
-	const struct tls_cipher_desc *cipher_desc;
-	struct tls_crypto_info *crypto_info;
-	struct tls_prot_info *prot;
-	struct net_device *netdev;
-	struct tls_context *ctx;
 	char *iv, *rec_seq;
 	int rc;
 
+	iv = crypto_info_iv(crypto_info, cipher_desc);
+	rec_seq = crypto_info_rec_seq(crypto_info, cipher_desc);
+
+	rc = init_prot_info(prot, crypto_info, cipher_desc);
+	if (rc)
+		return rc;
+
+	memcpy(ctx->tx.iv + cipher_desc->salt, iv, cipher_desc->iv);
+	memcpy(ctx->tx.rec_seq, rec_seq, cipher_desc->rec_seq);
+
+	start_marker_record = kmalloc_obj(*start_marker_record);
+	if (!start_marker_record)
+		return -ENOMEM;
+
+	offload_ctx = alloc_offload_ctx_tx(ctx);
+	if (!offload_ctx) {
+		rc = -ENOMEM;
+		goto free_marker_record;
+	}
+
+	rc = tls_sw_fallback_init(sk, offload_ctx, crypto_info);
+	if (rc)
+		goto free_offload_ctx;
+
+	tls_device_commit_start_marker(sk, offload_ctx, start_marker_record);
+
+	clean_acked_data_enable(tcp_sk(sk), &tls_tcp_clean_acked);
+	ctx->push_pending_record = tls_device_push_pending_record;
+
+	/* Avoid offloading if the device is down
+	 * We don't want to offload new flows after
+	 * the NETDEV_DOWN event
+	 *
+	 * device_offload_lock is taken in tls_devices's NETDEV_DOWN
+	 * handler thus protecting from the device going down before
+	 * ctx was added to tls_device_list.
+	 */
+	down_read(&device_offload_lock);
+	if (!(netdev->flags & IFF_UP)) {
+		rc = -EINVAL;
+		goto release_lock;
+	}
+
+	ctx->priv_ctx_tx = offload_ctx;
+	rc = tls_device_dev_add_tx(sk, netdev, crypto_info,
+				   tcp_sk(sk)->write_seq);
+	if (rc)
+		goto release_lock;
+
+	tls_device_attach(ctx, sk, netdev);
+	up_read(&device_offload_lock);
+
+	/* following this assignment tls_is_skb_tx_device_offloaded
+	 * will return true and the context might be accessed
+	 * by the netdev's xmit function.
+	 */
+	smp_store_release(&sk->sk_validate_xmit_skb, tls_validate_xmit_skb);
+
+	return 0;
+
+release_lock:
+	up_read(&device_offload_lock);
+	clean_acked_data_disable(tcp_sk(sk));
+	crypto_free_aead(offload_ctx->aead_send);
+free_offload_ctx:
+	kfree(offload_ctx);
+	ctx->priv_ctx_tx = NULL;
+free_marker_record:
+	kfree(start_marker_record);
+	return rc;
+}
+
+int tls_set_device_offload(struct sock *sk)
+{
+	const struct tls_cipher_desc *cipher_desc;
+	struct tls_crypto_info *crypto_info;
+	struct net_device *netdev;
+	struct tls_context *ctx;
+	int rc;
+
 	ctx = tls_get_ctx(sk);
-	prot = &ctx->prot_info;
 
 	/* A rekey (setsockopt on an already-configured socket) is not
 	 * supported on the device offload path yet; reject it here so the
@@ -1116,90 +1230,9 @@ int tls_set_device_offload(struct sock *sk)
 		goto release_netdev;
 	}
 
-	rc = init_prot_info(prot, crypto_info, cipher_desc);
-	if (rc)
-		goto release_netdev;
+	rc = tls_set_device_offload_initial(sk, ctx, netdev, crypto_info,
+					    cipher_desc);
 
-	iv = crypto_info_iv(crypto_info, cipher_desc);
-	rec_seq = crypto_info_rec_seq(crypto_info, cipher_desc);
-
-	memcpy(ctx->tx.iv + cipher_desc->salt, iv, cipher_desc->iv);
-	memcpy(ctx->tx.rec_seq, rec_seq, cipher_desc->rec_seq);
-
-	start_marker_record = kmalloc_obj(*start_marker_record);
-	if (!start_marker_record) {
-		rc = -ENOMEM;
-		goto release_netdev;
-	}
-
-	offload_ctx = alloc_offload_ctx_tx(ctx);
-	if (!offload_ctx) {
-		rc = -ENOMEM;
-		goto free_marker_record;
-	}
-
-	rc = tls_sw_fallback_init(sk, offload_ctx, crypto_info);
-	if (rc)
-		goto free_offload_ctx;
-
-	start_marker_record->end_seq = tcp_sk(sk)->write_seq;
-	start_marker_record->len = 0;
-	start_marker_record->num_frags = 0;
-	list_add_tail(&start_marker_record->list, &offload_ctx->records_list);
-
-	clean_acked_data_enable(tcp_sk(sk), &tls_tcp_clean_acked);
-	ctx->push_pending_record = tls_device_push_pending_record;
-
-	/* TLS offload is greatly simplified if we don't send
-	 * SKBs where only part of the payload needs to be encrypted.
-	 * So mark the last skb in the write queue as end of record.
-	 */
-	tcp_write_collapse_fence(sk);
-
-	/* Avoid offloading if the device is down
-	 * We don't want to offload new flows after
-	 * the NETDEV_DOWN event
-	 *
-	 * device_offload_lock is taken in tls_devices's NETDEV_DOWN
-	 * handler thus protecting from the device going down before
-	 * ctx was added to tls_device_list.
-	 */
-	down_read(&device_offload_lock);
-	if (!(netdev->flags & IFF_UP)) {
-		rc = -EINVAL;
-		goto release_lock;
-	}
-
-	ctx->priv_ctx_tx = offload_ctx;
-	rc = netdev->tlsdev_ops->tls_dev_add(netdev, sk, TLS_OFFLOAD_CTX_DIR_TX,
-					     &ctx->crypto_send.info,
-					     tcp_sk(sk)->write_seq);
-	trace_tls_device_offload_set(sk, TLS_OFFLOAD_CTX_DIR_TX,
-				     tcp_sk(sk)->write_seq, rec_seq, rc);
-	if (rc)
-		goto release_lock;
-
-	tls_device_attach(ctx, sk, netdev);
-	up_read(&device_offload_lock);
-
-	/* following this assignment tls_is_skb_tx_device_offloaded
-	 * will return true and the context might be accessed
-	 * by the netdev's xmit function.
-	 */
-	smp_store_release(&sk->sk_validate_xmit_skb, tls_validate_xmit_skb);
-	dev_put(netdev);
-
-	return 0;
-
-release_lock:
-	up_read(&device_offload_lock);
-	clean_acked_data_disable(tcp_sk(sk));
-	crypto_free_aead(offload_ctx->aead_send);
-free_offload_ctx:
-	kfree(offload_ctx);
-	ctx->priv_ctx_tx = NULL;
-free_marker_record:
-	kfree(start_marker_record);
 release_netdev:
 	dev_put(netdev);
 	return rc;
