@@ -325,14 +325,22 @@ static bool is_valid_txschq(struct rvu *rvu, int blkaddr,
 		if ((nix_get_tx_link(rvu, map_func) !=
 		     nix_get_tx_link(rvu, pcifunc)) &&
 		     (rvu_get_pf(rvu->pdev, map_func) !=
-				rvu_get_pf(rvu->pdev, pcifunc)))
+				rvu_get_pf(rvu->pdev, pcifunc))) {
+			dev_err(rvu->dev,
+				"Invalid tx link: pcifunc %x map pcifunc %x\n",
+				pcifunc, map_func);
 			return false;
-		else
+		} else {
 			return true;
+		}
 	}
 
-	if (map_func != pcifunc)
+	if (map_func != pcifunc) {
+		dev_err(rvu->dev,
+			"pcifunc %x map pcifunc %x not equal\n", pcifunc,
+			map_func);
 		return false;
+	}
 
 	return true;
 }
