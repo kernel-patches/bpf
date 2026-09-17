@@ -766,7 +766,7 @@ EXPORT_SYMBOL(sock_release);
 
 void __sock_tx_timestamp(__u32 tsflags, __u8 *tx_flags)
 {
-	u8 flags = *tx_flags;
+	u8 flags = READ_ONCE(*tx_flags);
 
 	if (tsflags & SOF_TIMESTAMPING_TX_HARDWARE)
 		flags |= SKBTX_HW_TSTAMP_NOBPF;
@@ -780,7 +780,7 @@ void __sock_tx_timestamp(__u32 tsflags, __u8 *tx_flags)
 	if (tsflags & SOF_TIMESTAMPING_TX_COMPLETION)
 		flags |= SKBTX_COMPLETION_TSTAMP;
 
-	*tx_flags = flags;
+	smp_store_release(tx_flags, flags);
 }
 EXPORT_SYMBOL(__sock_tx_timestamp);
 

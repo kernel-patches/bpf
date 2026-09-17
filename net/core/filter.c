@@ -12604,7 +12604,9 @@ __bpf_kfunc int bpf_sk_assign_tcp_reqsk(struct __sk_buff *s, struct sock *sk,
 __bpf_kfunc int bpf_sock_ops_enable_tx_tstamp(struct bpf_sock_ops_kern *skops,
 					      u64 flags)
 {
+	struct skb_shared_info *shinfo;
 	struct sk_buff *skb;
+	u8 tx_flags;
 
 	if (skops->op != BPF_SOCK_OPS_TSTAMP_SENDMSG_CB)
 		return -EOPNOTSUPP;
@@ -12613,9 +12615,11 @@ __bpf_kfunc int bpf_sock_ops_enable_tx_tstamp(struct bpf_sock_ops_kern *skops,
 		return -EINVAL;
 
 	skb = skops->skb;
-	skb_shinfo(skb)->tx_flags |= SKBTX_BPF;
+	shinfo = skb_shinfo(skb);
+	WRITE_ONCE(shinfo->tskey, TCP_SKB_CB(skb)->seq + skb->len - 1);
 	TCP_SKB_CB(skb)->txstamp_ack |= TSTAMP_ACK_BPF;
-	skb_shinfo(skb)->tskey = TCP_SKB_CB(skb)->seq + skb->len - 1;
+	tx_flags = READ_ONCE(shinfo->tx_flags);
+	smp_store_release(&shinfo->tx_flags, tx_flags | SKBTX_BPF);
 
 	return 0;
 }

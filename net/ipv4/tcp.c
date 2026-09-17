@@ -485,18 +485,21 @@ static void tcp_tx_timestamp(struct sock *sk, struct sockcm_cookie *sockc)
 	struct sk_buff *skb = tcp_write_queue_tail(sk);
 	u32 tsflags = sockc->tsflags;
 
-	if (unlikely(!skb))
+	if (unlikely(!skb)) {
 		skb = skb_rb_last(&sk->tcp_rtx_queue);
+		if (skb && tcp_has_tx_tstamp(skb))
+			return;
+	}
 
 	if (tsflags && skb) {
 		struct skb_shared_info *shinfo = skb_shinfo(skb);
 		struct tcp_skb_cb *tcb = TCP_SKB_CB(skb);
 
-		sock_tx_timestamp(sk, sockc, &shinfo->tx_flags);
+		if (tsflags & SOF_TIMESTAMPING_TX_RECORD_MASK)
+			WRITE_ONCE(shinfo->tskey, tcb->seq + skb->len - 1);
 		if (tsflags & SOF_TIMESTAMPING_TX_ACK)
 			tcb->txstamp_ack |= TSTAMP_ACK_SK;
-		if (tsflags & SOF_TIMESTAMPING_TX_RECORD_MASK)
-			shinfo->tskey = TCP_SKB_CB(skb)->seq + skb->len - 1;
+		sock_tx_timestamp(sk, sockc, &shinfo->tx_flags);
 	}
 
 	if (cgroup_bpf_enabled(CGROUP_SOCK_OPS) &&

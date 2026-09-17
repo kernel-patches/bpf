@@ -5601,7 +5601,7 @@ static void __skb_complete_tx_timestamp(struct sk_buff *skb,
 	serr->opt_stats = opt_stats;
 	serr->header.h4.iif = skb->dev ? skb->dev->ifindex : 0;
 	if (READ_ONCE(sk->sk_tsflags) & SOF_TIMESTAMPING_OPT_ID) {
-		serr->ee.ee_data = skb_shinfo(skb)->tskey;
+		serr->ee.ee_data = READ_ONCE(skb_shinfo(skb)->tskey);
 		if (sk_is_tcp(sk))
 			serr->ee.ee_data -= atomic_read(&sk->sk_tskey);
 	}
@@ -5652,6 +5652,8 @@ void skb_complete_tx_timestamp(struct sk_buff *skb,
 	 */
 	if (likely(refcount_inc_not_zero(&sk->sk_refcnt))) {
 		*skb_hwtstamps(skb) = *hwtstamps;
+		/* Order the tskey read after observing timestamp flags. */
+		(void)smp_load_acquire(&skb_shinfo(skb)->tx_flags);
 		__skb_complete_tx_timestamp(skb, sk, SCM_TSTAMP_SND, false);
 		sock_put(sk);
 		return;
@@ -5663,19 +5665,20 @@ err:
 EXPORT_SYMBOL_GPL(skb_complete_tx_timestamp);
 
 static bool skb_tstamp_tx_report_so_timestamping(struct sk_buff *skb,
+						 u8 tx_flags,
 						 struct skb_shared_hwtstamps *hwtstamps,
 						 int tstype)
 {
 	switch (tstype) {
 	case SCM_TSTAMP_SCHED:
-		return skb_shinfo(skb)->tx_flags & SKBTX_SCHED_TSTAMP;
+		return tx_flags & SKBTX_SCHED_TSTAMP;
 	case SCM_TSTAMP_SND:
-		return skb_shinfo(skb)->tx_flags & (hwtstamps ? SKBTX_HW_TSTAMP_NOBPF :
-						    SKBTX_SW_TSTAMP);
+		return tx_flags & (hwtstamps ? SKBTX_HW_TSTAMP_NOBPF :
+						      SKBTX_SW_TSTAMP);
 	case SCM_TSTAMP_ACK:
 		return TCP_SKB_CB(skb)->txstamp_ack & TSTAMP_ACK_SK;
 	case SCM_TSTAMP_COMPLETION:
-		return skb_shinfo(skb)->tx_flags & SKBTX_COMPLETION_TSTAMP;
+		return tx_flags & SKBTX_COMPLETION_TSTAMP;
 	}
 
 	return false;
@@ -5718,20 +5721,23 @@ void __skb_tstamp_tx(struct sk_buff *orig_skb,
 	struct sk_buff *skb;
 	bool tsonly, opt_stats = false;
 	u32 tsflags;
+	u8 tx_flags;
 
 	if (!sk)
 		return;
 
-	if (skb_shinfo(orig_skb)->tx_flags & SKBTX_BPF)
+	tx_flags = smp_load_acquire(&skb_shinfo(orig_skb)->tx_flags);
+	if (tx_flags & SKBTX_BPF)
 		skb_tstamp_tx_report_bpf_timestamping(orig_skb, hwtstamps,
 						      sk, tstype);
 
-	if (!skb_tstamp_tx_report_so_timestamping(orig_skb, hwtstamps, tstype))
+	if (!skb_tstamp_tx_report_so_timestamping(orig_skb, tx_flags,
+						  hwtstamps, tstype))
 		return;
 
 	tsflags = READ_ONCE(sk->sk_tsflags);
 	if (!hwtstamps && !(tsflags & SOF_TIMESTAMPING_OPT_TX_SWHW) &&
-	    skb_shinfo(orig_skb)->tx_flags & SKBTX_IN_PROGRESS)
+	    tx_flags & SKBTX_IN_PROGRESS)
 		return;
 
 	tsonly = tsflags & SOF_TIMESTAMPING_OPT_TSONLY;
@@ -5760,9 +5766,8 @@ void __skb_tstamp_tx(struct sk_buff *orig_skb,
 		return;
 
 	if (tsonly) {
-		skb_shinfo(skb)->tx_flags |= skb_shinfo(orig_skb)->tx_flags &
-					     SKBTX_ANY_TSTAMP;
-		skb_shinfo(skb)->tskey = skb_shinfo(orig_skb)->tskey;
+		skb_shinfo(skb)->tx_flags |= tx_flags & SKBTX_ANY_TSTAMP;
+		skb_shinfo(skb)->tskey = READ_ONCE(skb_shinfo(orig_skb)->tskey);
 	}
 
 	if (hwtstamps)
