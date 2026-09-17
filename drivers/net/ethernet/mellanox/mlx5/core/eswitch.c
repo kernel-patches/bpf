@@ -3028,18 +3028,6 @@ int mlx5_esw_try_lock(struct mlx5_eswitch *esw, bool check_users)
 	return esw->mode;
 }
 
-int mlx5_esw_lock(struct mlx5_eswitch *esw)
-{
-	down_write(&esw->mode_lock);
-
-	if (esw->eswitch_operation_in_progress) {
-		up_write(&esw->mode_lock);
-		return -EBUSY;
-	}
-
-	return 0;
-}
-
 /**
  * mlx5_esw_unlock() - Release write lock on esw mode lock
  * @esw: eswitch device.
