@@ -16122,9 +16122,10 @@ static struct pci_dev *tg3_find_peer(struct tg3 *tp)
 		pci_dev_put(peer);
 	}
 	/* 5704 can be configured in single-port mode, set peer to
-	 * tp->pdev in that case.
+	 * tp->pdev in that case. The loop can also end on tp->pdev
+	 * itself, whose reference was already dropped above.
 	 */
-	if (!peer) {
+	if (!peer || peer == tp->pdev) {
 		peer = tp->pdev;
 		return peer;
 	}
