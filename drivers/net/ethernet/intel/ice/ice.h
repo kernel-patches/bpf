@@ -1064,6 +1064,8 @@ void ice_aq_prep_for_event(struct ice_pf *pf, struct ice_aq_task *task,
 			   u16 opcode);
 int ice_aq_wait_for_event(struct ice_pf *pf, struct ice_aq_task *task,
 			  unsigned long timeout);
+int ice_ntuple_update_list_entry(struct ice_pf *pf,
+				 struct ice_ntuple_fltr *input, int fltr_idx);
 int ice_open(struct net_device *netdev);
 int ice_open_internal(struct net_device *netdev);
 int ice_stop(struct net_device *netdev);

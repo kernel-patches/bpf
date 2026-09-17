@@ -156,7 +156,8 @@ static int ice_acl_prof_aq_send(struct ice_hw *hw, u16 opc, u8 prof_id,
 	cmd = libie_aq_raw(&desc);
 	cmd->profile_id = prof_id;
 
-	if (opc == ice_aqc_opc_program_acl_prof_extraction)
+	if (opc == ice_aqc_opc_program_acl_prof_extraction ||
+	    opc == ice_aqc_opc_program_acl_prof_ranges)
 		desc.flags |= cpu_to_le16(LIBIE_AQ_FLAG_RD);
 
 	return ice_aq_send_cmd(hw, &desc, buf, sizeof(*buf), cd);
@@ -316,6 +317,56 @@ int ice_aq_dealloc_acl_cntrs(struct ice_hw *hw, struct ice_acl_cntrs *cntrs,
 	cmd->counters_type = cntrs->type;
 	cmd->bank_alloc = cntrs->bank;
 	return ice_aq_send_cmd(hw, &desc, NULL, 0, cd);
+}
+
+/**
+ * ice_prog_acl_prof_ranges - program ACL profile ranges
+ * @hw: pointer to the HW struct
+ * @prof_id: programmed or updated profile ID
+ * @buf: pointer to input buffer
+ * @cd: pointer to command details structure or NULL
+ *
+ * Program ACL profile ranges (indirect 0x0C1E)
+ *
+ * Return: 0 on success, negative on error
+ */
+int ice_prog_acl_prof_ranges(struct ice_hw *hw, u8 prof_id,
+			     struct ice_aqc_acl_profile_ranges *buf,
+			     struct ice_sq_cd *cd)
+{
+	struct ice_aqc_acl_profile *cmd;
+	struct libie_aq_desc desc;
+
+	ice_fill_dflt_direct_cmd_desc(&desc,
+				      ice_aqc_opc_program_acl_prof_ranges);
+	cmd = libie_aq_raw(&desc);
+	cmd->profile_id = prof_id;
+	desc.flags |= cpu_to_le16(LIBIE_AQ_FLAG_RD);
+	return ice_aq_send_cmd(hw, &desc, buf, sizeof(*buf), cd);
+}
+
+/**
+ * ice_query_acl_prof_ranges - query ACL profile ranges
+ * @hw: pointer to the HW struct
+ * @prof_id: programmed or updated profile ID
+ * @buf: pointer to response buffer
+ * @cd: pointer to command details structure or NULL
+ *
+ * Query ACL profile ranges (indirect 0x0C22)
+ *
+ * Return: 0 on success, negative on error
+ */
+int ice_query_acl_prof_ranges(struct ice_hw *hw, u8 prof_id,
+			      struct ice_aqc_acl_profile_ranges *buf,
+			      struct ice_sq_cd *cd)
+{
+	struct ice_aqc_acl_profile *cmd;
+	struct libie_aq_desc desc;
+
+	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_query_acl_prof_ranges);
+	cmd = libie_aq_raw(&desc);
+	cmd->profile_id = prof_id;
+	return ice_aq_send_cmd(hw, &desc, buf, sizeof(*buf), cd);
 }
 
 /**

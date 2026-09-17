@@ -6,6 +6,11 @@
 /* Determine the TCAM index of entry 'e' within the ACL table */
 #define ICE_ACL_TBL_TCAM_IDX(e) ((e) / ICE_AQC_ACL_TCAM_DEPTH)
 
+/* Determine the entry index within the TCAM */
+#define ICE_ACL_TBL_TCAM_ENTRY_IDX(e) ((e) % ICE_AQC_ACL_TCAM_DEPTH)
+
+#define ICE_ACL_SCEN_ENTRY_INVAL 0xFFFF
+
 /**
  * ice_acl_init_entry - initialize ACL entry
  * @scen: pointer to the scenario struct
@@ -27,6 +32,51 @@ static void ice_acl_init_entry(struct ice_acl_scen *scen)
 		scen->num_entry / 4;
 	scen->last_idx[ICE_ACL_PRIO_NORMAL] = scen->num_entry / 4;
 	scen->last_idx[ICE_ACL_PRIO_HIGH] = scen->num_entry / 4 - 1;
+}
+
+/**
+ * ice_acl_scen_assign_entry_idx - find index of an available entry in scenario
+ * @scen: pointer to the scenario struct
+ * @prio: the priority of the flow entry being allocated
+ *
+ * Return: entry index on success, ICE_ACL_SCEN_ENTRY_INVAL on error
+ */
+static u16 ice_acl_scen_assign_entry_idx(struct ice_acl_scen *scen,
+					 enum ice_acl_entry_prio prio)
+{
+	u16 first_idx, last_idx, i;
+	s8 step;
+
+	if (prio >= ICE_ACL_MAX_PRIO)
+		return ICE_ACL_SCEN_ENTRY_INVAL;
+
+	first_idx = scen->first_idx[prio];
+	last_idx = scen->last_idx[prio];
+	step = first_idx <= last_idx ? 1 : -1;
+
+	for (i = first_idx; i != last_idx + step; i += step)
+		if (!test_and_set_bit(i, scen->entry_bitmap))
+			return i;
+
+	return ICE_ACL_SCEN_ENTRY_INVAL;
+}
+
+/**
+ * ice_acl_scen_free_entry_idx - mark an entry as available in a scenario
+ * @scen: pointer to the scenario struct
+ * @idx: the index of the flow entry being de-allocated
+ *
+ * Return: 0 on success, negative on error
+ */
+static int ice_acl_scen_free_entry_idx(struct ice_acl_scen *scen, u16 idx)
+{
+	if (idx >= scen->num_entry)
+		return -EINVAL;
+
+	if (!test_and_clear_bit(idx, scen->entry_bitmap))
+		return -ENOENT;
+
+	return 0;
 }
 
 /**
@@ -886,4 +936,210 @@ int ice_acl_destroy_tbl(struct ice_hw *hw)
 	hw->acl_tbl = NULL;
 
 	return 0;
+}
+
+/**
+ * ice_acl_add_entry - Add a flow entry to ACL scenario
+ * @hw: pointer to the HW struct
+ * @scen: scenario to add the entry to
+ * @prio: priority level of the entry being added
+ * @keys: buffer of the value of the key to be programmed to the ACL entry
+ * @inverts: buffer of the value of the key inverts to be programmed
+ * @acts: pointer to a buffer containing formatted actions
+ * @acts_cnt: indicates the number of actions stored in "acts"
+ * @entry_idx: returned scenario relative index of the added flow entry
+ *
+ * Given an ACL table and a scenario, to add the specified key and key invert
+ * to an available entry in the specified scenario.
+ * The "keys" and "inverts" buffers must be of the size which is the same as
+ * the scenario's width
+ *
+ * Return: 0 on success, negative on error
+ */
+int ice_acl_add_entry(struct ice_hw *hw, struct ice_acl_scen *scen,
+		      enum ice_acl_entry_prio prio, u8 *keys, u8 *inverts,
+		      struct ice_acl_act_entry *acts, u8 acts_cnt,
+		      u16 *entry_idx)
+{
+	u8 entry_tcam, num_cscd, offset;
+	struct ice_aqc_acl_data buf = {};
+	int err = 0;
+	u16 idx;
+
+	if (!scen)
+		return -ENOENT;
+
+	*entry_idx = ice_acl_scen_assign_entry_idx(scen, prio);
+	if (*entry_idx >= scen->num_entry) {
+		*entry_idx = 0;
+		return -ENOSPC;
+	}
+
+	/* Determine number of cascaded TCAMs */
+	num_cscd = DIV_ROUND_UP(scen->width, ICE_AQC_ACL_KEY_WIDTH_BYTES);
+
+	entry_tcam = ICE_ACL_TBL_TCAM_IDX(scen->start);
+	idx = ICE_ACL_TBL_TCAM_ENTRY_IDX(scen->start + *entry_idx);
+
+	for (u8 i = 0; i < num_cscd; i++) {
+		/* If the key spans more than one TCAM in the case of cascaded
+		 * TCAMs, the key and key inverts need to be properly split
+		 * among TCAMs. E.g. bytes 0 - 4 go to an index in the first
+		 * TCAM and bytes 5 - 9 go to the same index in the next TCAM,
+		 * etc. If the entry spans more than one TCAM in a cascaded TCAM
+		 * mode, the programming of the entries in the TCAMs must be in
+		 * reversed order - the TCAM entry of the rightmost TCAM should
+		 * be programmed first; the TCAM entry of the leftmost TCAM
+		 * should be programmed last.
+		 */
+		offset = num_cscd - i - 1;
+		memcpy(&buf.entry_key.val,
+		       &keys[offset * sizeof(buf.entry_key.val)],
+		       sizeof(buf.entry_key.val));
+		memcpy(&buf.entry_key_invert.val,
+		       &inverts[offset * sizeof(buf.entry_key_invert.val)],
+		       sizeof(buf.entry_key_invert.val));
+		err = ice_aq_program_acl_entry(hw, entry_tcam + offset, idx,
+					       &buf, NULL);
+		if (err) {
+			ice_debug(hw, ICE_DBG_ACL, "aq program acl entry failed status: %d\n",
+				  err);
+			goto out;
+		}
+	}
+
+	err = ice_acl_prog_act(hw, scen, acts, acts_cnt, *entry_idx);
+
+out:
+	if (err) {
+		ice_acl_rem_entry(hw, scen, *entry_idx);
+		*entry_idx = 0;
+	}
+
+	return err;
+}
+
+/**
+ * ice_acl_prog_act - Program a scenario's action memory
+ * @hw: pointer to the HW struct
+ * @scen: scenario to add the entry to
+ * @acts: pointer to a buffer containing formatted actions
+ * @acts_cnt: indicates the number of actions stored in "acts"
+ * @entry_idx: scenario relative index of the added flow entry
+ *
+ * Return: 0 on success, negative on error
+ */
+int ice_acl_prog_act(struct ice_hw *hw, struct ice_acl_scen *scen,
+		     struct ice_acl_act_entry *acts, u8 acts_cnt, u16 entry_idx)
+{
+	u8 entry_tcam, num_cscd, i, actx_idx = 0;
+	struct ice_aqc_actpair act_buf = {};
+	int err = 0;
+	u16 idx;
+
+	if (entry_idx >= scen->num_entry)
+		return -ENOSPC;
+
+	/* Determine number of cascaded TCAMs */
+	num_cscd = DIV_ROUND_UP(scen->width, ICE_AQC_ACL_KEY_WIDTH_BYTES);
+
+	entry_tcam = ICE_ACL_TBL_TCAM_IDX(scen->start);
+	idx = ICE_ACL_TBL_TCAM_ENTRY_IDX(scen->start + entry_idx);
+
+	for_each_set_bit(i, scen->act_mem_bitmap, ICE_AQC_MAX_ACTION_MEMORIES) {
+		struct ice_acl_act_mem *mem = &hw->acl_tbl->act_mems[i];
+
+		if (actx_idx >= acts_cnt)
+			break;
+		if (mem->member_of_tcam >= entry_tcam &&
+		    mem->member_of_tcam < entry_tcam + num_cscd) {
+			memcpy(&act_buf.act[0], &acts[actx_idx],
+			       sizeof(struct ice_acl_act_entry));
+
+			if (++actx_idx < acts_cnt) {
+				memcpy(&act_buf.act[1], &acts[actx_idx],
+				       sizeof(struct ice_acl_act_entry));
+			}
+
+			err = ice_aq_program_actpair(hw, i, idx, &act_buf,
+						     NULL);
+			if (err) {
+				ice_debug(hw, ICE_DBG_ACL, "program actpair failed status: %d\n",
+					  err);
+				break;
+			}
+			actx_idx++;
+		}
+	}
+
+	if (!err && actx_idx < acts_cnt)
+		err = -ENOSPC;
+
+	return err;
+}
+
+/**
+ * ice_acl_rem_entry - Remove a flow entry from an ACL scenario
+ * @hw: pointer to the HW struct
+ * @scen: scenario to remove the entry from
+ * @entry_idx: the scenario-relative index of the flow entry being removed
+ *
+ * Return: 0 on success, negative on error
+ */
+int ice_acl_rem_entry(struct ice_hw *hw, struct ice_acl_scen *scen,
+		      u16 entry_idx)
+{
+	struct ice_aqc_actpair act_buf = {};
+	struct ice_aqc_acl_data buf;
+	u8 entry_tcam, num_cscd, i;
+	int err = 0;
+	u16 idx;
+
+	if (!scen)
+		return -ENOENT;
+
+	if (entry_idx >= scen->num_entry)
+		return -ENOSPC;
+
+	if (!test_bit(entry_idx, scen->entry_bitmap))
+		return -ENOENT;
+
+	/* Determine number of cascaded TCAMs */
+	num_cscd = DIV_ROUND_UP(scen->width, ICE_AQC_ACL_KEY_WIDTH_BYTES);
+
+	entry_tcam = ICE_ACL_TBL_TCAM_IDX(scen->start);
+	idx = ICE_ACL_TBL_TCAM_ENTRY_IDX(scen->start + entry_idx);
+
+	/* invalidate the flow entry */
+	memset(&buf, 0, sizeof(buf));
+	for (i = 0; i < num_cscd; i++) {
+		int aq_err = ice_aq_program_acl_entry(hw, entry_tcam + i, idx,
+						      &buf, NULL);
+		if (aq_err) {
+			dev_warn(ice_hw_to_dev(hw), "AQ program ACL entry failed, status: %d\n",
+				 aq_err);
+			err = aq_err;
+		}
+	}
+
+	for_each_set_bit(i, scen->act_mem_bitmap, ICE_AQC_MAX_ACTION_MEMORIES) {
+		struct ice_acl_act_mem *mem = &hw->acl_tbl->act_mems[i];
+
+		if (mem->member_of_tcam >= entry_tcam &&
+		    mem->member_of_tcam < entry_tcam + num_cscd) {
+			/* Invalidate allocated action pairs */
+			int aq_err = ice_aq_program_actpair(hw, i, idx,
+							    &act_buf, NULL);
+			if (aq_err) {
+				dev_warn(ice_hw_to_dev(hw), "AQ program ACL action pair failed, status: %d\n",
+					 aq_err);
+				err = aq_err;
+			}
+		}
+	}
+
+	if (!err)
+		err = ice_acl_scen_free_entry_idx(scen, entry_idx);
+
+	return err;
 }

@@ -328,11 +328,11 @@ int ice_acl_add_rule_ethtool(struct ice_vsi *vsi, struct ethtool_rxnfc *cmd)
 	struct ethtool_rx_flow_spec *fsp;
 	struct ice_acl_hw_prof *hw_prof;
 	struct ice_ntuple_fltr *input;
+	u64 entry_h = 0, old_entry_h;
 	enum ice_fltr_ptype flow;
 	struct device *dev;
 	struct ice_pf *pf;
 	struct ice_hw *hw;
-	u64 entry_h = 0;
 	int err;
 
 	pf = vsi->back;
@@ -371,6 +371,12 @@ int ice_acl_add_rule_ethtool(struct ice_vsi *vsi, struct ethtool_rxnfc *cmd)
 	flow = ice_ethtool_flow_to_fltr(fsp->flow_type & ~FLOW_EXT);
 	hw_prof = hw->acl_prof[flow];
 
+	/* Look up existing HW entry before adding/replacing, so we can
+	 * remove it if the new entry has different match data and a fresh
+	 * TCAM slot was allocated instead of updating in place.
+	 */
+	old_entry_h = ice_flow_find_entry(hw, ICE_BLK_ACL, fsp->location);
+
 	err = ice_flow_add_entry(hw, ICE_BLK_ACL, hw_prof->prof_id,
 				 fsp->location, vsi->idx, ICE_FLOW_PRIO_NORMAL,
 				 input, acts, ICE_ACL_NUM_ACT, &entry_h);
@@ -379,7 +385,30 @@ int ice_acl_add_rule_ethtool(struct ice_vsi *vsi, struct ethtool_rxnfc *cmd)
 		goto free_input;
 	}
 
+	/* If the match data changed, ice_flow_acl_add_scen_entry_sync()
+	 * allocated a new TCAM entry rather than updating in place, leaving
+	 * the old entry still programmed. Remove it.
+	 */
+	if (old_entry_h != ICE_FLOW_ENTRY_HANDLE_INVAL &&
+	    old_entry_h != entry_h) {
+		err = ice_flow_rem_entry(hw, ICE_BLK_ACL, old_entry_h);
+		if (err)
+			goto del_entry;
+	}
+
+	input->acl_fltr = true;
+
+	mutex_lock(&hw->fdir_fltr_lock);
+	/* input struct is added to the HW filter list */
+	err = ice_ntuple_update_list_entry(pf, input, fsp->location);
+	mutex_unlock(&hw->fdir_fltr_lock);
+	if (err)
+		goto del_entry;
+
 	return 0;
+
+del_entry:
+	ice_flow_rem_entry(hw, ICE_BLK_ACL, entry_h);
 
 free_input:
 	kfree(input);

@@ -3025,8 +3025,10 @@ enum ice_adminq_opc {
 	ice_aqc_opc_update_acl_scen			= 0x0C1B,
 	ice_aqc_opc_program_acl_actpair			= 0x0C1C,
 	ice_aqc_opc_program_acl_prof_extraction		= 0x0C1D,
+	ice_aqc_opc_program_acl_prof_ranges		= 0x0C1E,
 	ice_aqc_opc_program_acl_entry			= 0x0C20,
 	ice_aqc_opc_query_acl_prof			= 0x0C21,
+	ice_aqc_opc_query_acl_prof_ranges		= 0x0C22,
 	ice_aqc_opc_query_acl_scen			= 0x0C23,
 
 	/* Tx queue handling commands/events */
