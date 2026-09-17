@@ -345,8 +345,14 @@ static void tls_sk_proto_cleanup(struct sock *sk,
 		tls_sw_release_resources_tx(sk);
 		TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXSW);
 	} else if (ctx->tx_conf == TLS_HW) {
+		bool rekey_failed = test_bit(TLS_TX_REKEY_FAILED, &ctx->flags);
+
 		tls_device_free_resources_tx(sk);
-		TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXDEVICE);
+
+		if (rekey_failed)
+			TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXSW);
+		else
+			TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXDEVICE);
 	}
 
 	if (ctx->rx_conf == TLS_SW) {
@@ -366,6 +372,8 @@ static void tls_sk_proto_close(struct sock *sk, long timeout)
 	bool free_ctx;
 
 	if (ctx->tx_conf == TLS_SW)
+		tls_sw_cancel_work_tx(ctx);
+	else if (ctx->tx_conf == TLS_HW && ctx->rekey.sw_ctx)
 		tls_sw_cancel_work_tx(ctx);
 
 	lock_sock(sk);
@@ -443,8 +451,17 @@ static int do_tls_getsockopt_conf(struct sock *sk, sockopt_t *opt, int tx)
 
 	/* get user crypto info */
 	if (tx) {
-		crypto_info = &ctx->crypto_send.info;
-		cctx = &ctx->tx;
+		/* Select the cipher context via the same accessor the data path
+		 * uses, so getsockopt reports the IV/rec_seq that sendmsg encrypts
+		 * with (the pending rekey's while one is in flight, else the
+		 * active key). crypto_info has no accessor; select it the same way.
+		 * lock_sock is held, so rekey.cipher_ctx cannot change under us.
+		 */
+		cctx = tls_tx_cipher_ctx(ctx);
+		if (ctx->rekey.cipher_ctx)
+			crypto_info = &tls_offload_ctx_tx(ctx)->rekey.crypto_send.info;
+		else
+			crypto_info = &ctx->crypto_send.info;
 	} else {
 		crypto_info = &ctx->crypto_recv.info;
 		cctx = &ctx->rx;
@@ -708,7 +725,7 @@ static int do_tls_setsockopt_conf(struct sock *sk, sockptr_t optval,
 	}
 
 	if (tx) {
-		rc = tls_set_device_offload(sk);
+		rc = tls_set_device_offload(sk, update ? crypto_info : NULL);
 		conf = TLS_HW;
 		if (!rc) {
 			if (!update) {
@@ -785,7 +802,11 @@ static int do_tls_setsockopt_conf(struct sock *sk, sockptr_t optval,
 	return 0;
 
 err_crypto_info:
-	if (update) {
+	/* -EAGAIN is a transient sndbuf-full condition on a non-blocking rekey,
+	 * not a failed KeyUpdate: the old key stays installed and userspace
+	 * retries once the socket is writable, so don't count it as an error.
+	 */
+	if (update && rc != -EAGAIN) {
 		TLS_INC_STATS(sock_net(sk), tx ? LINUX_MIB_TLSTXREKEYERROR
 					       : LINUX_MIB_TLSRXREKEYERROR);
 	}
@@ -878,12 +899,29 @@ static int do_tls_setsockopt(struct sock *sk, int optname, sockptr_t optval,
 
 	switch (optname) {
 	case TLS_TX:
-	case TLS_RX:
+	case TLS_RX: {
+		/* tls_device_sendmsg() holds tx_lock across the lock_sock drop
+		 * in sk_stream_wait_memory() with a half-built open_record
+		 * exposed. A concurrent HW-offload rekey (tls_device_start_rekey())
+		 * would flush that record and swap the key under the sender,
+		 * corrupting record framing. Serialize TX setsockopt against
+		 * the data path with tx_lock, unconditionally for TLS_TX,
+		 * since during initial setup there is no sender contending it.
+		 */
+		bool tx = optname == TLS_TX;
+
+		if (tx) {
+			rc = mutex_lock_interruptible(&tls_get_ctx(sk)->tx_lock);
+			if (rc)
+				break;
+		}
 		lock_sock(sk);
-		rc = do_tls_setsockopt_conf(sk, optval, optlen,
-					    optname == TLS_TX);
+		rc = do_tls_setsockopt_conf(sk, optval, optlen, tx);
 		release_sock(sk);
+		if (tx)
+			mutex_unlock(&tls_get_ctx(sk)->tx_lock);
 		break;
+	}
 	case TLS_TX_ZEROCOPY_RO:
 		lock_sock(sk);
 		rc = do_tls_setsockopt_tx_zc(sk, optval, optlen);

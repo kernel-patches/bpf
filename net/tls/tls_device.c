@@ -57,8 +57,15 @@ static struct page *dummy_page;
 
 static void tls_device_free_ctx(struct tls_context *ctx)
 {
-	if (ctx->tx_conf == TLS_HW)
-		kfree(tls_offload_ctx_tx(ctx));
+	if (ctx->tx_conf == TLS_HW) {
+		struct tls_offload_context_tx *offload_ctx =
+			tls_offload_ctx_tx(ctx);
+
+		kfree(offload_ctx->rekey.start_marker);
+		memzero_explicit(&offload_ctx->rekey,
+				 sizeof(offload_ctx->rekey));
+		kfree(offload_ctx);
+	}
 
 	if (ctx->rx_conf == TLS_HW)
 		kfree(tls_offload_ctx_rx(ctx));
@@ -79,7 +86,9 @@ static void tls_device_tx_del_task(struct work_struct *work)
 	netdev = rcu_dereference_protected(ctx->netdev,
 					   !refcount_read(&ctx->refcount));
 
-	netdev->tlsdev_ops->tls_dev_del(netdev, ctx, TLS_OFFLOAD_CTX_DIR_TX);
+	if (!test_bit(TLS_TX_DEV_CLOSED, &ctx->flags))
+		netdev->tlsdev_ops->tls_dev_del(netdev, ctx,
+						TLS_OFFLOAD_CTX_DIR_TX);
 	dev_put(netdev);
 	ctx->netdev = NULL;
 	tls_device_free_ctx(ctx);
@@ -157,7 +166,10 @@ static int tls_device_dev_add_tx(struct sock *sk, struct net_device *netdev,
 	return rc;
 }
 
-static void tls_device_commit_start_marker(struct sock *sk,
+/* Caller controls locking: initial-offload path is lock-free (pre-publish);
+ * rekey path holds offload_ctx->lock.
+ */
+static void tls_device_add_start_marker(struct sock *sk,
 					struct tls_offload_context_tx *offload_ctx,
 					struct tls_record_info *start_marker_record)
 {
@@ -165,6 +177,13 @@ static void tls_device_commit_start_marker(struct sock *sk,
 	start_marker_record->len = 0;
 	start_marker_record->num_frags = 0;
 	list_add_tail_rcu(&start_marker_record->list, &offload_ctx->records_list);
+}
+
+static void tls_device_commit_start_marker(struct sock *sk,
+					struct tls_offload_context_tx *offload_ctx,
+					struct tls_record_info *start_marker_record)
+{
+	tls_device_add_start_marker(sk, offload_ctx, start_marker_record);
 
 	/* TLS offload is greatly simplified if we don't send
 	 * SKBs where only part of the payload needs to be encrypted.
@@ -192,6 +211,57 @@ static void delete_all_records(struct tls_offload_context_tx *offload_ctx)
 	}
 
 	offload_ctx->retransmit_hint = NULL;
+}
+
+static void tls_device_commit_rekey_marker(struct sock *sk,
+					   struct tls_offload_context_tx *offload_ctx,
+					   struct tls_record_info *start_marker_record)
+{
+	struct tls_record_info *info, *temp;
+	unsigned long flags;
+	__be64 rcd_sn;
+
+	spin_lock_irqsave(&offload_ctx->lock, flags);
+
+	/* The deferred path reaches here with an empty list; the inline
+	 * path may still hold the old start marker (never a real record,
+	 * since tls_has_unacked_records() was false). Only markers are
+	 * ever at the head, so stop at the first non-marker.
+	 */
+	list_for_each_entry_safe(info, temp, &offload_ctx->records_list, list) {
+		if (!tls_record_is_start_marker(info))
+			break;
+		list_del(&info->list);
+		destroy_record(info);
+	}
+	offload_ctx->retransmit_hint = NULL;
+
+	memcpy(&rcd_sn, offload_ctx->rekey.tx.rec_seq, sizeof(rcd_sn));
+	offload_ctx->unacked_record_sn = be64_to_cpu(rcd_sn) - 1;
+
+	tls_device_add_start_marker(sk, offload_ctx, start_marker_record);
+
+	spin_unlock_irqrestore(&offload_ctx->lock, flags);
+
+	tcp_write_collapse_fence(sk);
+}
+
+static bool tls_has_unacked_records(struct tls_offload_context_tx *offload_ctx)
+{
+	struct tls_record_info *info;
+	bool has_unacked = false;
+	unsigned long flags;
+
+	spin_lock_irqsave(&offload_ctx->lock, flags);
+	list_for_each_entry(info, &offload_ctx->records_list, list) {
+		if (!tls_record_is_start_marker(info)) {
+			has_unacked = true;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&offload_ctx->lock, flags);
+
+	return has_unacked;
 }
 
 static void tls_tcp_clean_acked(struct sock *sk, u32 acked_seq)
@@ -222,6 +292,19 @@ static void tls_tcp_clean_acked(struct sock *sk, u32 acked_seq)
 	}
 
 	ctx->unacked_record_sn += deleted_records;
+
+	/* Once all old-key HW records are ACKed, set REKEY_READY to
+	 * let sendmsg know it can finish the rekey and switch back
+	 * to HW offload.
+	 */
+	if (test_bit(TLS_TX_REKEY_PENDING, &tls_ctx->flags) &&
+	    !test_bit(TLS_TX_REKEY_FAILED, &tls_ctx->flags)) {
+		u32 boundary_seq = READ_ONCE(tls_ctx->rekey.boundary_seq);
+
+		if (!before(acked_seq, boundary_seq))
+			set_bit(TLS_TX_REKEY_READY, &tls_ctx->flags);
+	}
+
 	spin_unlock_irqrestore(&ctx->lock, flags);
 }
 
@@ -252,7 +335,15 @@ void tls_device_free_resources_tx(struct sock *sk)
 {
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
 
-	tls_free_partial_record(sk, tls_ctx);
+	if (unlikely(tls_ctx->rekey.sw_ctx))
+		tls_sw_release_resources_tx(sk);
+	else
+		tls_free_partial_record(sk, tls_ctx);
+
+	if (test_bit(TLS_TX_REKEY_PENDING, &tls_ctx->flags)) {
+		TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSTXREKEYABORTED);
+		TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXREKEY);
+	}
 }
 
 void tls_offload_tx_resync_request(struct sock *sk, u32 got_seq, u32 exp_seq)
@@ -462,6 +553,9 @@ static int tls_device_copy_data(void *addr, size_t bytes, struct iov_iter *i)
 	return 0;
 }
 
+static int tls_device_complete_rekey(struct sock *sk, struct tls_context *ctx,
+				     bool deferred, int push_flags);
+
 static int tls_push_data(struct sock *sk,
 			 struct iov_iter *iter,
 			 size_t size, int flags,
@@ -607,17 +701,45 @@ last_record:
 	return rc;
 }
 
+/* True while TX is routed through the temporary SW rekey context: a rekey is in
+ * progress (PENDING) or has failed and the socket stays pinned to SW (FAILED).
+ */
+static bool tls_device_tx_uses_sw(const struct tls_context *ctx)
+{
+	return test_bit(TLS_TX_REKEY_PENDING, &ctx->flags) ||
+	       test_bit(TLS_TX_REKEY_FAILED, &ctx->flags);
+}
+
 int tls_device_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 {
 	unsigned char record_type = TLS_RECORD_TYPE_DATA;
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
 	int rc;
 
+	/* Reject unsupported flags up front. tls_push_data() enforces the same
+	 * set, but during a rekey the send is routed to tls_sw_sendmsg_locked(),
+	 * which is the _locked variant and does not re-check; without this,
+	 * MSG_ZEROCOPY / MSG_OOB etc. would reach tcp_sendmsg_locked() on the
+	 * kernel-owned record pages while PENDING/FAILED.
+	 */
+	if (msg->msg_flags & ~(MSG_MORE | MSG_DONTWAIT | MSG_NOSIGNAL |
+			       MSG_SPLICE_PAGES | MSG_EOR))
+		return -EOPNOTSUPP;
+
 	if (!tls_ctx->zerocopy_sendfile)
 		msg->msg_flags &= ~MSG_SPLICE_PAGES;
 
 	mutex_lock(&tls_ctx->tx_lock);
 	lock_sock(sk);
+
+	/* Old-key records all ACKed; switch back to HW. */
+	if (test_bit(TLS_TX_REKEY_READY, &tls_ctx->flags))
+		tls_device_complete_rekey(sk, tls_ctx, true, msg->msg_flags);
+
+	if (tls_device_tx_uses_sw(tls_ctx)) {
+		rc = tls_sw_sendmsg_locked(sk, msg, size);
+		goto out;
+	}
 
 	if (unlikely(msg->msg_controllen)) {
 		rc = tls_process_cmsg(sk, msg, &record_type);
@@ -647,8 +769,10 @@ void tls_device_splice_eof(struct socket *sock)
 	mutex_lock(&tls_ctx->tx_lock);
 	lock_sock(sk);
 
-	if (tls_is_partially_sent_record(tls_ctx) ||
-	    tls_is_pending_open_record(tls_ctx)) {
+	if (tls_device_tx_uses_sw(tls_ctx)) {
+		tls_sw_splice_eof_locked(sock);
+	} else if (tls_is_partially_sent_record(tls_ctx) ||
+		   tls_is_pending_open_record(tls_ctx)) {
 		iov_iter_bvec(&iter, ITER_SOURCE, NULL, 0, 0);
 		tls_push_data(sk, &iter, 0, 0, TLS_RECORD_TYPE_DATA);
 	}
@@ -719,7 +843,11 @@ EXPORT_SYMBOL(tls_get_record);
 
 static int tls_device_push_pending_record(struct sock *sk, int flags)
 {
+	struct tls_context *tls_ctx = tls_get_ctx(sk);
 	struct iov_iter iter;
+
+	if (tls_device_tx_uses_sw(tls_ctx))
+		return tls_sw_push_pending_record(sk, flags);
 
 	iov_iter_kvec(&iter, ITER_SOURCE, NULL, 0, 0);
 	return tls_push_data(sk, &iter, 0, flags, TLS_RECORD_TYPE_DATA);
@@ -727,6 +855,18 @@ static int tls_device_push_pending_record(struct sock *sk, int flags)
 
 void tls_device_write_space(struct sock *sk, struct tls_context *ctx)
 {
+	if (tls_device_tx_uses_sw(ctx)) {
+		struct tls_offload_context_tx *offload_ctx;
+		unsigned long flags;
+
+		offload_ctx = tls_offload_ctx_tx(ctx);
+		spin_lock_irqsave(&offload_ctx->lock, flags);
+		if (tls_device_tx_uses_sw(ctx))
+			tls_sw_write_space(sk, ctx);
+		spin_unlock_irqrestore(&offload_ctx->lock, flags);
+		return;
+	}
+
 	if (tls_is_partially_sent_record(ctx)) {
 		gfp_t sk_allocation = sk->sk_allocation;
 
@@ -1106,6 +1246,425 @@ static struct tls_offload_context_tx *alloc_offload_ctx_tx(struct tls_context *c
 	return offload_ctx;
 }
 
+/* Build a fresh AEAD tfm for the rekey with the given key, so it can be
+ * swapped in only on success. Re-keying a live tfm in place is not atomic:
+ * a failed crypto_aead_setkey() leaves it with CRYPTO_TFM_NEED_KEY set,
+ * destroying the previous key. Returns an ERR_PTR() on failure.
+ */
+static struct crypto_aead *tls_device_build_rekey_aead(
+				const struct tls_cipher_desc *cipher_desc,
+				char *key, u32 alg_flags)
+{
+	struct crypto_aead *aead;
+	int rc;
+
+	aead = crypto_alloc_aead(cipher_desc->cipher_name, 0, alg_flags);
+	if (IS_ERR(aead))
+		return aead;
+
+	rc = crypto_aead_setkey(aead, key, cipher_desc->key);
+	if (!rc)
+		rc = crypto_aead_setauthsize(aead, cipher_desc->tag);
+	if (rc) {
+		crypto_free_aead(aead);
+		return ERR_PTR(rc);
+	}
+
+	return aead;
+}
+
+static void tls_device_copy_rekey_iv_seq(
+				struct tls_offload_context_tx *offload_ctx,
+				const struct tls_cipher_desc *cipher_desc,
+				char *salt, char *iv, char *rec_seq)
+{
+	memcpy(offload_ctx->rekey.tx.iv, salt, cipher_desc->salt);
+	memcpy(offload_ctx->rekey.tx.iv + cipher_desc->salt, iv,
+	       cipher_desc->iv);
+	memcpy(offload_ctx->rekey.tx.rec_seq, rec_seq, cipher_desc->rec_seq);
+}
+
+static int tls_device_init_rekey_sw(struct sock *sk,
+				    struct tls_context *ctx,
+				    struct tls_offload_context_tx *offload_ctx,
+				    struct tls_crypto_info *new_crypto_info)
+{
+	struct tls_sw_context_tx *sw_ctx = &offload_ctx->rekey.sw;
+	const struct tls_cipher_desc *cipher_desc;
+	char *key;
+	int rc;
+
+	cipher_desc = get_cipher_desc(new_crypto_info->cipher_type);
+	DEBUG_NET_WARN_ON_ONCE(!cipher_desc || !cipher_desc->offloadable);
+
+	memset(sw_ctx, 0, sizeof(*sw_ctx));
+	tls_sw_ctx_tx_init(sk, sw_ctx);
+
+	key = crypto_info_key(new_crypto_info, cipher_desc);
+	sw_ctx->aead_send = tls_device_build_rekey_aead(cipher_desc, key, 0);
+	if (IS_ERR(sw_ctx->aead_send)) {
+		rc = PTR_ERR(sw_ctx->aead_send);
+		sw_ctx->aead_send = NULL;
+		return rc;
+	}
+
+	return 0;
+}
+
+static int tls_device_start_rekey(struct sock *sk,
+				  struct tls_context *ctx,
+				  struct tls_offload_context_tx *offload_ctx,
+				  struct tls_crypto_info *new_crypto_info)
+{
+	bool rekey_pending = test_bit(TLS_TX_REKEY_PENDING, &ctx->flags);
+	bool rekey_failed = test_bit(TLS_TX_REKEY_FAILED, &ctx->flags);
+	const struct tls_cipher_desc *cipher_desc;
+	struct crypto_aead *new_aead, *old_aead;
+	char *key, *iv, *rec_seq, *salt;
+	int push_flags = MSG_NOSIGNAL;
+	unsigned long flags;
+	int rc;
+
+	cipher_desc = get_cipher_desc(new_crypto_info->cipher_type);
+	DEBUG_NET_WARN_ON_ONCE(!cipher_desc || !cipher_desc->offloadable);
+
+	key = crypto_info_key(new_crypto_info, cipher_desc);
+	iv = crypto_info_iv(new_crypto_info, cipher_desc);
+	rec_seq = crypto_info_rec_seq(new_crypto_info, cipher_desc);
+	salt = crypto_info_salt(new_crypto_info, cipher_desc);
+
+	/* The record flushes below hand the open/partially sent HW record to
+	 * TCP and may have to wait for send buffer space. Honour the socket's
+	 * non-blocking mode so an O_NONBLOCK application is not put to sleep
+	 * inside setsockopt(): it gets -EAGAIN and retries once the socket is
+	 * writable. Kernel sockets (no backing file, e.g. nvme-tcp) keep the
+	 * blocking semantics, matching how they call sendmsg().
+	 */
+	if (sk->sk_socket && sk->sk_socket->file &&
+	    (sk->sk_socket->file->f_flags & O_NONBLOCK))
+		push_flags |= MSG_DONTWAIT;
+
+	if (rekey_pending || rekey_failed) {
+		/* Flush any SW open_record before swapping the key. -EINPROGRESS
+		 * means an async AEAD accepted the record for encryption; it is a
+		 * success, waited for by tls_encrypt_async_wait() just below (as
+		 * tls_process_cmsg()/tls_sw_drain_tx() also treat it).
+		 */
+		if (tls_is_pending_open_record(ctx)) {
+			rc = ctx->push_pending_record(sk, push_flags);
+			if (rc < 0 && rc != -EINPROGRESS)
+				return rc;
+		}
+
+		/* Wait for in-flight async encryptions submitted to this tfm
+		 * with the previous key before changing it.
+		 */
+		rc = tls_encrypt_async_wait(&offload_ctx->rekey.sw);
+		if (rc)
+			return rc;
+
+		/* Build the new key into a fresh tfm and swap it in only on
+		 * success; A failed rekey here must leave the SW fallback
+		 * path able to encrypt.
+		 */
+		new_aead = tls_device_build_rekey_aead(cipher_desc, key, 0);
+		if (IS_ERR(new_aead))
+			return PTR_ERR(new_aead);
+
+		old_aead = offload_ctx->rekey.sw.aead_send;
+		offload_ctx->rekey.sw.aead_send = new_aead;
+		crypto_free_aead(old_aead);
+
+		tls_device_copy_rekey_iv_seq(offload_ctx, cipher_desc,
+					     salt, iv, rec_seq);
+
+		if (rekey_failed) {
+			/* Re-arm FAILED -> PENDING under device_offload_lock. The
+			 * PENDING set and FAILED clear are two stores to ctx->flags,
+			 * and tls_device_down() tests !PENDING && !FAILED as two
+			 * separate loads; without the lock those loads could straddle
+			 * the flip and see neither bit, letting tls_device_down()
+			 * install tls_validate_xmit_skb_sw with PENDING set (dropping
+			 * all new-key ciphertext). The lock keeps PENDING || FAILED
+			 * observable throughout. Non-blocking, so no NETDEV_DOWN stall.
+			 */
+			down_read(&device_offload_lock);
+			spin_lock_irqsave(&offload_ctx->lock, flags);
+			WRITE_ONCE(ctx->rekey.boundary_seq, tcp_sk(sk)->snd_una);
+			set_bit(TLS_TX_REKEY_PENDING, &ctx->flags);
+			spin_unlock_irqrestore(&offload_ctx->lock, flags);
+			/* Release pairs with test_bit_acquire() in the validator:
+			 * a TX seeing FAILED clear must see the fresh boundary_seq.
+			 */
+			clear_bit_unlock(TLS_TX_REKEY_FAILED, &ctx->flags);
+			up_read(&device_offload_lock);
+			TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXSW);
+			TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXDEVICE);
+		}
+	} else {
+		/* Drain partially sent record and flush open HW record
+		 * before switching to SW.
+		 */
+		if (tls_is_partially_sent_record(ctx)) {
+			rc = tls_push_partial_record(sk, ctx,
+						     MSG_SENDPAGE_DECRYPTED |
+						     push_flags);
+			if (rc < 0)
+				return rc;
+		}
+		if (tls_is_pending_open_record(ctx)) {
+			rc = ctx->push_pending_record(sk, push_flags);
+			if (rc < 0)
+				return rc;
+		}
+
+		rc = tls_device_init_rekey_sw(sk, ctx, offload_ctx,
+					      new_crypto_info);
+		if (rc)
+			return rc;
+
+		tls_device_copy_rekey_iv_seq(offload_ctx, cipher_desc,
+					     salt, iv, rec_seq);
+
+		/* Publish the rekey under device_offload_lock so that setting
+		 * TLS_TX_REKEY_PENDING and installing the rekey validator is
+		 * atomic against tls_device_down(), which under down_write() tests
+		 * !PENDING and installs tls_validate_xmit_skb_sw. Otherwise the two
+		 * validator stores could interleave to leave PENDING set with the
+		 * SW validator, and every new-key ciphertext (never on the offload
+		 * records_list) would then be dropped by tls_sw_fallback(). The
+		 * blocking flush and crypto_alloc above deliberately run WITHOUT
+		 * this lock, so a stalled peer cannot hold up NETDEV_DOWN (which
+		 * takes down_write() under RTNL) or any other down_read() user.
+		 */
+		down_read(&device_offload_lock);
+
+		/* Prevent a partial record straddling the SW/HW boundary. */
+		tcp_write_collapse_fence(sk);
+
+		WRITE_ONCE(ctx->rekey.sw_ctx, &offload_ctx->rekey.sw);
+		WRITE_ONCE(ctx->rekey.cipher_ctx, &offload_ctx->rekey.tx);
+
+		spin_lock_irqsave(&offload_ctx->lock, flags);
+		WRITE_ONCE(ctx->rekey.boundary_seq, tcp_sk(sk)->write_seq);
+		set_bit(TLS_TX_REKEY_PENDING, &ctx->flags);
+		spin_unlock_irqrestore(&offload_ctx->lock, flags);
+
+		/* Switch to rekey validator; new sends won't use HW offload */
+		smp_store_release(&sk->sk_validate_xmit_skb,
+				  tls_validate_xmit_skb_rekey);
+
+		up_read(&device_offload_lock);
+	}
+
+	unsafe_memcpy(&offload_ctx->rekey.crypto_send.info, new_crypto_info,
+		      cipher_desc->crypto_info,
+		      /* checked in do_tls_setsockopt_conf */);
+	memzero_explicit(new_crypto_info, cipher_desc->crypto_info);
+
+	return 0;
+}
+
+static int tls_device_complete_rekey(struct sock *sk, struct tls_context *ctx,
+				     bool deferred, int push_flags)
+{
+	struct tls_offload_context_tx *offload_ctx = tls_offload_ctx_tx(ctx);
+	struct crypto_aead *new_aead, *old_aead, *old_sw_aead;
+	const struct tls_cipher_desc *cipher_desc;
+	struct net_device *netdev;
+	unsigned long flags;
+	char *key;
+	int rc;
+
+	cipher_desc = get_cipher_desc(offload_ctx->rekey.crypto_send.info.cipher_type);
+	DEBUG_NET_WARN_ON_ONCE(!cipher_desc || !cipher_desc->offloadable);
+
+	DEBUG_NET_WARN_ON_ONCE(!offload_ctx->rekey.start_marker);
+
+	rc = tls_sw_drain_tx(sk, ctx, push_flags);
+	/* -EAGAIN (sndbuf full) and a signal (-EINTR/-ERESTARTSYS from
+	 * sk_stream_wait_memory()) are transient: leave the rekey PENDING and
+	 * retry on the next sendmsg rather than permanently dropping HW offload.
+	 * tls_tx_records() likewise passes these through without aborting.
+	 */
+	if (rc == -EAGAIN || rc == -EINTR || rc == -ERESTARTSYS)
+		return rc;
+	if (rc)
+		goto rekey_fallback;	/* hard failure: fall back to SW */
+
+	down_read(&device_offload_lock);
+
+	netdev = rcu_dereference_protected(ctx->netdev,
+					   lockdep_is_held(&device_offload_lock));
+	if (!netdev) {
+		rc = -ENODEV;
+		goto release_lock;
+	}
+
+	/* Drain in-flight xmit users before tls_dev_del() and before freeing the
+	 * old fallback aead_send: (1) under the rekey validator a decrypted
+	 * straddler may still be inside the driver on the HW context (same swap ->
+	 * synchronize_net -> dev_del order as tls_device_down(), which also keeps a
+	 * decrypted skb from reaching a torn-down context); (2) pre-boundary
+	 * retransmits routed to tls_sw_fallback() read aead_send locklessly. No new
+	 * fallback can start here: every pre-boundary record is ACKed and freed, so
+	 * fill_sg_in() bails.
+	 */
+	synchronize_net();
+
+	if (!test_bit(TLS_TX_DEV_CLOSED, &ctx->flags)) {
+		netdev->tlsdev_ops->tls_dev_del(netdev, ctx,
+						TLS_OFFLOAD_CTX_DIR_TX);
+		set_bit(TLS_TX_DEV_CLOSED, &ctx->flags);
+	}
+
+	/* Build the new SW-fallback key into a fresh tfm and swap it in only
+	 * on success. Doing this while the HW context is torn down
+	 * (TLS_TX_DEV_CLOSED set) means a failure falls into rekey_fallback
+	 * with HW off, so the SW fallback is coherent, same as a dev_add
+	 * failure.
+	 */
+	key = crypto_info_key(&offload_ctx->rekey.crypto_send.info, cipher_desc);
+	new_aead = tls_device_build_rekey_aead(cipher_desc, key, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(new_aead)) {
+		rc = PTR_ERR(new_aead);
+		goto release_lock;
+	}
+
+	/* crypto_send.info.rec_seq is frozen at setsockopt time; the SW context
+	 * advanced rekey.tx.rec_seq for every record it sent, so hand the NIC the
+	 * live record number (mirrors the RX deferred add).
+	 */
+	memcpy(crypto_info_rec_seq(&offload_ctx->rekey.crypto_send.info, cipher_desc),
+	       offload_ctx->rekey.tx.rec_seq, cipher_desc->rec_seq);
+
+	rc = tls_device_dev_add_tx(sk, netdev, &offload_ctx->rekey.crypto_send.info,
+				   tcp_sk(sk)->write_seq);
+	if (rc) {
+		crypto_free_aead(new_aead);
+		goto release_lock;
+	}
+
+	/* Point of no return: HW is live with the new key. Swap in the new
+	 * fallback tfm and drop the old one; the remaining steps cannot fail.
+	 */
+	old_aead = offload_ctx->aead_send;
+	offload_ctx->aead_send = new_aead;
+	crypto_free_aead(old_aead);
+	clear_bit(TLS_TX_DEV_CLOSED, &ctx->flags);
+
+	memcpy(ctx->tx.iv, offload_ctx->rekey.tx.iv,
+	       cipher_desc->salt + cipher_desc->iv);
+	memcpy(ctx->tx.rec_seq, offload_ctx->rekey.tx.rec_seq,
+	       cipher_desc->rec_seq);
+	unsafe_memcpy(&ctx->crypto_send.info,
+		      &offload_ctx->rekey.crypto_send.info,
+		      cipher_desc->crypto_info,
+		      /* checked during rekey setup */);
+
+	/* Start marker: the NIC passes through everything before
+	 * write_seq untouched (it is already SW-encrypted ciphertext),
+	 * same as during initial offload setup. Also drops the stale
+	 * marker and rebases unacked_record_sn so the record-sequence
+	 * bookkeeping stays consistent on the inline path.
+	 */
+	tls_device_commit_rekey_marker(sk, offload_ctx,
+				       offload_ctx->rekey.start_marker);
+
+	old_sw_aead = tls_sw_ctx_tx(ctx)->aead_send;
+
+	spin_lock_irqsave(&offload_ctx->lock, flags);
+	clear_bit(TLS_TX_REKEY_PENDING, &ctx->flags);
+	clear_bit(TLS_TX_REKEY_READY, &ctx->flags);
+	clear_bit(TLS_TX_REKEY_FAILED, &ctx->flags);
+
+	/* Arm the drop floor before restoring the HW validator: from now on
+	 * tls_validate_xmit_skb() drops payload retransmits of fully-ACKed data, so
+	 * a stale clone whose record was purged here does not reach the NIC and trip
+	 * its WARN on the new start marker. The cleartext leak on that path is closed
+	 * separately by the skb_is_decrypted() gate in tls_sw_fallback(); this is
+	 * only WARN avoidance. Set once; stays set for the socket's life.
+	 */
+	set_bit(TLS_TX_REKEY_FLOOR, &ctx->flags);
+
+	/* Switch back to HW offload validator */
+	smp_store_release(&sk->sk_validate_xmit_skb, tls_validate_xmit_skb);
+
+	WRITE_ONCE(ctx->rekey.sw_ctx, NULL);
+	WRITE_ONCE(ctx->rekey.cipher_ctx, NULL);
+	spin_unlock_irqrestore(&offload_ctx->lock, flags);
+
+	memzero_explicit(&offload_ctx->rekey, sizeof(offload_ctx->rekey));
+	crypto_free_aead(old_sw_aead);
+
+	up_read(&device_offload_lock);
+
+	if (deferred)
+		TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXREKEY);
+	TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSTXREKEYOK);
+	return 0;
+
+release_lock:
+	up_read(&device_offload_lock);
+
+rekey_fallback:
+	kfree(offload_ctx->rekey.start_marker);
+	offload_ctx->rekey.start_marker = NULL;
+	spin_lock_irqsave(&offload_ctx->lock, flags);
+	set_bit(TLS_TX_REKEY_FAILED, &ctx->flags);
+	clear_bit(TLS_TX_REKEY_READY, &ctx->flags);
+	clear_bit(TLS_TX_REKEY_PENDING, &ctx->flags);
+	spin_unlock_irqrestore(&offload_ctx->lock, flags);
+	if (deferred)
+		TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXREKEY);
+	TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSTXREKEYFALLBACK);
+	TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXDEVICE);
+	TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXSW);
+
+	return 0;
+}
+
+static int tls_set_device_offload_rekey(struct sock *sk,
+					struct tls_context *ctx,
+					struct tls_crypto_info *new_crypto_info)
+{
+	struct tls_offload_context_tx *offload_ctx = tls_offload_ctx_tx(ctx);
+	bool rekey_pending = test_bit(TLS_TX_REKEY_PENDING, &ctx->flags);
+	bool rekey_failed = test_bit(TLS_TX_REKEY_FAILED, &ctx->flags);
+	bool defer = true;
+	int rc;
+
+	/* Defer the switch back to HW until any in-flight old-key records are
+	 * ACKed. A partially_sent_record needs no separate check: its record is
+	 * on records_list before it is sent (tls_push_record()) and stays there
+	 * until ACKed, so tls_has_unacked_records() already covers it.
+	 */
+	if (!rekey_pending && !rekey_failed)
+		defer = tls_has_unacked_records(offload_ctx) ||
+			tls_is_pending_open_record(ctx);
+
+	if (!offload_ctx->rekey.start_marker) {
+		offload_ctx->rekey.start_marker =
+			kmalloc_obj(*offload_ctx->rekey.start_marker);
+		if (!offload_ctx->rekey.start_marker)
+			return -ENOMEM;
+	}
+
+	rc = tls_device_start_rekey(sk, ctx, offload_ctx, new_crypto_info);
+	if (rc)
+		return rc;
+
+	if (defer) {
+		if (!rekey_pending)
+			TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXREKEY);
+		else
+			TLS_INC_STATS(sock_net(sk), LINUX_MIB_TLSTXREKEYOK);
+		return 0;
+	}
+
+	return tls_device_complete_rekey(sk, ctx, false, 0);
+}
+
 static int tls_set_device_offload_initial(struct sock *sk,
 					  struct tls_context *ctx,
 					  struct net_device *netdev,
@@ -1190,25 +1749,39 @@ free_marker_record:
 	return rc;
 }
 
-int tls_set_device_offload(struct sock *sk)
+int tls_set_device_offload(struct sock *sk,
+			   struct tls_crypto_info *new_crypto_info)
 {
+	struct tls_crypto_info *crypto_info, *src_crypto_info;
 	const struct tls_cipher_desc *cipher_desc;
-	struct tls_crypto_info *crypto_info;
 	struct net_device *netdev;
 	struct tls_context *ctx;
 	int rc;
 
 	ctx = tls_get_ctx(sk);
 
-	/* A rekey (setsockopt on an already-configured socket) is not
-	 * supported on the device offload path yet; reject it here so the
-	 * caller can decide (propagate the error for a HW connection, or
-	 * re-init software crypto for a SW one). KeyUpdate support replaces
-	 * this guard with real rekey handling.
-	 */
-	if (ctx->tx_conf != TLS_BASE)
-		return -EOPNOTSUPP;
+	/* A rekey of a SW-offloaded socket belongs to tls_set_sw_offload(). */
+	if (new_crypto_info && ctx->tx_conf != TLS_HW)
+		return -EINVAL;
 
+	crypto_info = &ctx->crypto_send.info;
+	src_crypto_info = new_crypto_info ?: crypto_info;
+	cipher_desc = get_cipher_desc(src_crypto_info->cipher_type);
+	if (!cipher_desc || !cipher_desc->offloadable)
+		return -EINVAL;
+
+	/* A rekey targets the device already holding the HW TX context
+	 * (ctx->netdev), which can differ from the socket's current route after
+	 * a route change or bond/team failover; tls_set_device_offload_rekey()
+	 * and tls_device_complete_rekey() resolve it from ctx->netdev under
+	 * device_offload_lock. Only the initial install needs the route device.
+	 */
+	if (new_crypto_info)
+		return tls_set_device_offload_rekey(sk, ctx, src_crypto_info);
+
+	/* Initial install: a HW TX context must not already exist, otherwise
+	 * alloc_offload_ctx_tx() below would silently overwrite it.
+	 */
 	if (ctx->priv_ctx_tx)
 		return -EEXIST;
 
@@ -1223,14 +1796,7 @@ int tls_set_device_offload(struct sock *sk)
 		goto release_netdev;
 	}
 
-	crypto_info = &ctx->crypto_send.info;
-	cipher_desc = get_cipher_desc(crypto_info->cipher_type);
-	if (!cipher_desc || !cipher_desc->offloadable) {
-		rc = -EINVAL;
-		goto release_netdev;
-	}
-
-	rc = tls_set_device_offload_initial(sk, ctx, netdev, crypto_info,
+	rc = tls_set_device_offload_initial(sk, ctx, netdev, src_crypto_info,
 					    cipher_desc);
 
 release_netdev:
@@ -1370,10 +1936,16 @@ static int tls_device_down(struct net_device *netdev)
 	spin_unlock_irqrestore(&tls_device_lock, flags);
 
 	list_for_each_entry_safe(ctx, tmp, &list, list)	{
-		/* Stop offloaded TX and switch to the fallback.
-		 * tls_is_skb_tx_device_offloaded will return false.
+		/* Stop offloaded TX and switch to the fallback. For a socket not
+		 * mid-rekey, tls_is_skb_tx_device_offloaded() then returns false; a
+		 * PENDING/FAILED socket keeps the rekey validator (under which only a
+		 * decrypted straddler still offloads), and the synchronize_net()
+		 * below drains any such in-flight skb before tls_dev_del().
 		 */
-		WRITE_ONCE(ctx->sk->sk_validate_xmit_skb, tls_validate_xmit_skb_sw);
+		if (!test_bit(TLS_TX_REKEY_PENDING, &ctx->flags) &&
+		    !test_bit(TLS_TX_REKEY_FAILED, &ctx->flags))
+			WRITE_ONCE(ctx->sk->sk_validate_xmit_skb,
+				   tls_validate_xmit_skb_sw);
 
 		/* Stop the RX and TX resync.
 		 * tls_dev_resync must not be called after tls_dev_del.
@@ -1390,9 +1962,12 @@ static int tls_device_down(struct net_device *netdev)
 		synchronize_net();
 
 		/* Release the offload context on the driver side. */
-		if (ctx->tx_conf == TLS_HW)
+		if (ctx->tx_conf == TLS_HW &&
+		    !test_bit(TLS_TX_DEV_CLOSED, &ctx->flags)) {
 			netdev->tlsdev_ops->tls_dev_del(netdev, ctx,
 							TLS_OFFLOAD_CTX_DIR_TX);
+			set_bit(TLS_TX_DEV_CLOSED, &ctx->flags);
+		}
 		if (ctx->rx_conf == TLS_HW &&
 		    !test_bit(TLS_RX_DEV_CLOSED, &ctx->flags))
 			netdev->tlsdev_ops->tls_dev_del(netdev, ctx,

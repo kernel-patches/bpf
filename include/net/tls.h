@@ -185,6 +185,14 @@ struct tls_offload_context_tx {
 	void (*sk_destruct)(struct sock *sk);
 	struct work_struct destruct_work;
 	struct tls_context *ctx;
+
+	struct {
+		struct tls_sw_context_tx sw;	/* SW context for new key */
+		struct cipher_context tx;	/* IV, rec_seq for new key */
+		union tls_crypto_context crypto_send; /* Crypto for new key */
+		struct tls_record_info *start_marker;
+	} rekey;
+
 	/* The TLS layer reserves room for driver specific state
 	 * Currently the belief is that there is not enough
 	 * driver specific state to justify another layer of indirection
@@ -209,6 +217,28 @@ enum tls_context_flags {
 	 * tls_dev_del call in tls_device_down if it happens simultaneously.
 	 */
 	TLS_RX_DEV_CLOSED = 2,
+	/* TX HW context has been tls_dev_del()'d (mid-rekey before the re-add,
+	 * after a failed re-add, or by tls_device_down()); prevents a second
+	 * tls_dev_del. Cleared when tls_dev_add re-establishes the context.
+	 */
+	TLS_TX_DEV_CLOSED = 3,
+	/* TX rekey is pending, waiting for old-key data to be ACKed.
+	 * While set, new data uses SW path with new key, HW keeps old key
+	 * for retransmissions.
+	 */
+	TLS_TX_REKEY_PENDING = 4,
+	/* All old-key data has been ACKed, ready to install new key in HW. */
+	TLS_TX_REKEY_READY = 5,
+	/* HW rekey failed; TX stays on the SW rekey context until the next
+	 * KeyUpdate re-arms the transition (tls_device_start_rekey()). Also
+	 * stops tls_tcp_clean_acked() from re-setting TLS_TX_REKEY_READY.
+	 */
+	TLS_TX_REKEY_FAILED = 6,
+	/* A rekey has completed on this socket at least once; that arms
+	 * tls_tx_drop_acked_clone() (see its header for the rationale). WARN
+	 * avoidance only.
+	 */
+	TLS_TX_REKEY_FLOOR = 7,
 };
 
 struct tls_prot_info {
@@ -256,6 +286,20 @@ struct tls_context {
 			       * per-type TX fields
 			       */
 	unsigned long flags;
+
+	struct {
+		/* TCP sequence number boundary for pending rekey.
+		 * Packets with seq < this use old key, >= use new key.
+		 */
+		u32 boundary_seq;
+
+		/* SW encryption contexts for the new key, non-NULL only while
+		 * TLS_TX_REKEY_{PENDING,FAILED}; consulted by tls_sw_ctx_tx() and
+		 * tls_tx_cipher_ctx().
+		 */
+		struct tls_sw_context_tx *sw_ctx;
+		struct cipher_context *cipher_ctx;
+	} rekey;
 
 	/* cache cold stuff */
 	struct proto *sk_proto;
@@ -356,15 +400,38 @@ tls_validate_xmit_skb(struct sock *sk, struct net_device *dev,
 struct sk_buff *
 tls_validate_xmit_skb_sw(struct sock *sk, struct net_device *dev,
 			 struct sk_buff *skb);
+struct sk_buff *
+tls_validate_xmit_skb_rekey(struct sock *sk, struct net_device *dev,
+			    struct sk_buff *skb);
 
 static inline bool tls_is_skb_tx_device_offloaded(const struct sk_buff *skb)
 {
 #ifdef CONFIG_TLS_DEVICE
 	struct sock *sk = skb->sk;
+	typeof(sk->sk_validate_xmit_skb) validate;
 
-	return sk && sk_fullsock(sk) &&
-	       (smp_load_acquire(&sk->sk_validate_xmit_skb) ==
-	       &tls_validate_xmit_skb);
+	if (!sk || !sk_fullsock(sk))
+		return false;
+
+	/* Pairs with the smp_store_release() that installs or swaps the
+	 * validator (tls_set_device_offload() / tls_device_start_rekey()): the
+	 * pointer read here is published together with the offload state it
+	 * guards, so a non-NULL validator implies that state is visible.
+	 */
+	validate = smp_load_acquire(&sk->sk_validate_xmit_skb);
+	if (likely(validate == &tls_validate_xmit_skb))
+		return true;
+
+	/* A TX rekey (tls_device_start_rekey()) can swap in the rekey validator
+	 * between this skb's validate_xmit_skb(), where the old validator
+	 * passed it through as HW-offload plaintext, and here. A skb->decrypted
+	 * skb under the rekey validator is therefore that straddler: old-key
+	 * plaintext whose HW context is still installed (tls_dev_del() runs in
+	 * tls_device_complete_rekey() only after a synchronize_net() that drains
+	 * this in-flight xmit), so the NIC must still encrypt it. Everything else
+	 * the rekey validator emits is ciphertext (skb->decrypted == 0).
+	 */
+	return validate == &tls_validate_xmit_skb_rekey && skb_is_decrypted(skb);
 #else
 	return false;
 #endif
@@ -389,12 +456,22 @@ static inline struct tls_sw_context_rx *tls_sw_ctx_rx(
 static inline struct tls_sw_context_tx *tls_sw_ctx_tx(
 		const struct tls_context *tls_ctx)
 {
+	struct tls_sw_context_tx *rekey_ctx = READ_ONCE(tls_ctx->rekey.sw_ctx);
+
+	if (unlikely(rekey_ctx))
+		return rekey_ctx;
+
 	return (struct tls_sw_context_tx *)tls_ctx->priv_ctx_tx;
 }
 
 static inline struct cipher_context *tls_tx_cipher_ctx(
 		const struct tls_context *tls_ctx)
 {
+	struct cipher_context *rekey_ctx = READ_ONCE(tls_ctx->rekey.cipher_ctx);
+
+	if (unlikely(rekey_ctx))
+		return rekey_ctx;
+
 	return (struct cipher_context *)&tls_ctx->tx;
 }
 

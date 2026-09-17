@@ -190,6 +190,14 @@ static void complete_skb(struct sk_buff *nskb, struct sk_buff *skb, int headln)
 
 	skb_copy_header(nskb, skb);
 
+	/* nskb now carries ciphertext, but skb_copy_header() inherited
+	 * skb->decrypted from the plaintext original. Clear it so the bit keeps
+	 * meaning "still-plaintext, needs an encryptor": otherwise a requeued
+	 * nskb would be needlessly re-validated (and re-encrypted) and would trip
+	 * the NIC's decrypted-vs-start-marker WARN.
+	 */
+	nskb->decrypted = 0;
+
 	skb_put(nskb, skb->len);
 	memcpy(nskb->data, skb->data, headln);
 
@@ -396,8 +404,17 @@ static struct sk_buff *tls_sw_fallback(struct sock *sk, struct sk_buff *skb)
 	sg_init_table(sg_out, ARRAY_SIZE(sg_out));
 
 	if (fill_sg_in(sg_in, skb, ctx, &rcd_sn, &sync_size, &resync_sgs)) {
-		/* bypass packets before kernel TLS socket option was set */
-		if (sync_size < 0 && payload_len <= -sync_size)
+		/* Below the record range (start marker / already-freed record).
+		 * Pass through only cleartext that was never offload-encrypted
+		 * (skb->decrypted == 0): genuine pre-TLS bytes sent before the
+		 * socket option was set, or SW-encrypted rekey ciphertext. A
+		 * decrypted=1 skb here is offload-record plaintext whose record was
+		 * purged (e.g. a rekey installed a new start marker above its seq);
+		 * it must never reach the wire in the clear, so continue on and
+		 * drop it (nskb stays NULL).
+		 */
+		if (sync_size < 0 && payload_len <= -sync_size &&
+		    !skb_is_decrypted(skb))
 			nskb = skb_get(skb);
 		goto put_sg;
 	}
@@ -416,11 +433,57 @@ free_orig:
 	return nskb;
 }
 
+/* Post-rekey drop floor. Once a rekey has completed (TLS_TX_REKEY_FLOOR set), a
+ * stale retransmit clone of already-ACKed data may still be dequeued from a
+ * qdisc; if its offload record was purged at completion it now maps to a rekey
+ * start marker. The cleartext leak on that path is closed unconditionally by
+ * the skb_is_decrypted() gate in tls_sw_fallback(); this floor additionally
+ * drops the clone before it reaches the NIC, avoiding the driver's WARN
+ * (mlx5e_ktls_handle_tx_skb() SKIP_NO_DATA) on an otherwise-legitimate race.
+ * Only needed by tls_validate_xmit_skb() (the restored HW-offload validator):
+ * only there can a purged-record clone reach the NIC and hit the new start
+ * marker. Under the rekey/SW validators the only skb the NIC offloads is a
+ * decrypted straddler whose record is still present (no SKIP_NO_DATA), and a
+ * stale clone is dropped by the skb_is_decrypted() gate in tls_sw_fallback().
+ * Such a clone is exactly a payload skb whose end_seq <= snd_una: the peer has
+ * already ACKed that data, so dropping it is always safe. Live/unacked data
+ * (including a legitimate retransmit, or a straddler ending past snd_una) is
+ * never touched; pure ACKs and zero-window probes carry no payload and pass.
+ */
+static bool tls_tx_drop_acked_clone(struct sock *sk, struct sk_buff *skb)
+{
+	int payload_len = skb->len - skb_tcp_all_headers(skb);
+	u32 end_seq;
+
+	if (likely(!test_bit(TLS_TX_REKEY_FLOOR, &tls_get_ctx(sk)->flags)))
+		return false;
+
+	if (payload_len <= 0)
+		return false;
+
+	/* Drop only when the whole payload is already ACKed (end_seq <= snd_una):
+	 * such a skb is purely a stale retransmit clone the peer already has. A
+	 * clone straddling snd_una still carries unacked bytes, so leave it to the
+	 * normal paths (a live record is re-encrypted; a marker/freed-record hit is
+	 * dropped there too). Both the leak (skb_is_decrypted() gate) and the mlx5
+	 * WARN only concern the fully-ACKed case handled here.
+	 */
+	end_seq = ntohl(tcp_hdr(skb)->seq) + payload_len;
+	return !after(end_seq, READ_ONCE(tcp_sk(sk)->snd_una));
+}
+
 struct sk_buff *tls_validate_xmit_skb(struct sock *sk,
 				      struct net_device *dev,
 				      struct sk_buff *skb)
 {
-	if (dev == rcu_dereference_bh(tls_get_ctx(sk)->netdev) ||
+	struct tls_context *tls_ctx = tls_get_ctx(sk);
+
+	if (unlikely(tls_tx_drop_acked_clone(sk, skb))) {
+		kfree_skb(skb);
+		return NULL;
+	}
+
+	if (dev == rcu_dereference_bh(tls_ctx->netdev) ||
 	    netif_is_bond_master(dev))
 		return skb;
 
@@ -434,6 +497,65 @@ struct sk_buff *tls_validate_xmit_skb_sw(struct sock *sk,
 {
 	return tls_sw_fallback(sk, skb);
 }
+
+struct sk_buff *tls_validate_xmit_skb_rekey(struct sock *sk,
+					    struct net_device *dev,
+					    struct sk_buff *skb)
+{
+	struct tls_context *tls_ctx = tls_get_ctx(sk);
+	u32 tcp_seq = ntohl(tcp_hdr(skb)->seq);
+	u32 pivot_seq;
+
+	/* acquire pairs with clear_bit_unlock() on re-arm; makes the refreshed
+	 * boundary_seq visible in the else branch below.
+	 */
+	if (test_bit_acquire(TLS_TX_REKEY_FAILED, &tls_ctx->flags)) {
+		int payload_len = skb->len - skb_tcp_all_headers(skb);
+		u32 snd_una = READ_ONCE(tcp_sk(sk)->snd_una);
+
+		/* FAILED: HW context gone and all old-key plaintext ACKed
+		 * (snd_una >= boundary_seq). seq < boundary_seq is old-key data
+		 * whose records are freed, so tls_sw_fallback() drops it. seq >=
+		 * boundary_seq is SW ciphertext with no record. A retransmit is
+		 * built at seq == snd_una (tcp_trim_head()), so an ACK landing
+		 * before we run can move snd_una past seq while the tail is
+		 * unacked; pivoting on snd_una alone would drop that live data
+		 * and force an RTO. Pass through any non-decrypted skb ending
+		 * past snd_una (mirrors tls_tx_drop_acked_clone()); fully-ACKed
+		 * clones fall to the pivot and are dropped.
+		 */
+		if (payload_len > 0 && !skb_is_decrypted(skb) &&
+		    after(tcp_seq + payload_len, snd_una))
+			return skb;
+
+		pivot_seq = snd_una;
+	} else {
+		/* PENDING: new-key data is SW-encrypted at seq >= boundary_seq;
+		 * old-key data below it is still unacked.
+		 *
+		 * On the first arm, boundary_seq is published by the
+		 * smp_store_release() of sk_validate_xmit_skb in
+		 * tls_device_start_rekey(); the xmit path loads that pointer with a
+		 * plain read (net/core/dev.c), so pair it here with an smp_rmb()
+		 * before reading boundary_seq. A stale boundary_seq (0) would pass an
+		 * unacked old-key plaintext skb through; tls_is_skb_tx_device_offloaded()
+		 * would still HW-encrypt it with the installed old key, so not a leak,
+		 * but the barrier keeps the pivot accurate.
+		 */
+		smp_rmb();
+		pivot_seq = READ_ONCE(tls_ctx->rekey.boundary_seq);
+	}
+
+	/* At or after the pivot: already correctly encrypted, pass through */
+	if (!before(tcp_seq, pivot_seq))
+		return skb;
+
+	/* Below the pivot: retransmit of old data, SW fallback with old key */
+	return tls_sw_fallback(sk, skb);
+}
+
+/* Address taken by tls_is_skb_tx_device_offloaded() in the offload drivers. */
+EXPORT_SYMBOL_GPL(tls_validate_xmit_skb_rekey);
 
 struct sk_buff *tls_encrypt_skb(struct sk_buff *skb)
 {

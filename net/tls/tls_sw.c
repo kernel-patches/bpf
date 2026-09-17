@@ -522,7 +522,7 @@ static void tls_encrypt_done(void *data, int err)
 		complete(&ctx->async_wait.completion);
 }
 
-static int tls_encrypt_async_wait(struct tls_sw_context_tx *ctx)
+int tls_encrypt_async_wait(struct tls_sw_context_tx *ctx)
 {
 	if (!atomic_dec_and_test(&ctx->encrypt_pending))
 		crypto_wait_req(-EINPROGRESS, &ctx->async_wait);
@@ -763,8 +763,7 @@ static int tls_sw_sendmsg_splice(struct sock *sk, struct msghdr *msg,
 	return 0;
 }
 
-static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
-				 size_t size)
+int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 {
 	long timeo = sock_sndtimeo(sk, msg->msg_flags & MSG_DONTWAIT);
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
@@ -2421,6 +2420,31 @@ void tls_sw_ctx_tx_init(struct sock *sk, struct tls_sw_context_tx *sw_ctx)
 	sw_ctx->tx_work.sk = sk;
 }
 
+int tls_sw_drain_tx(struct sock *sk, struct tls_context *ctx, int flags)
+{
+	struct tls_sw_context_tx *sw_ctx = tls_sw_ctx_tx(ctx);
+	int rc;
+
+	flags = (flags & MSG_DONTWAIT) | MSG_NOSIGNAL;
+
+	if (sw_ctx->open_rec)
+		tls_sw_push_pending_record(sk, flags);
+	rc = tls_encrypt_async_wait(sw_ctx);
+	if (rc)
+		return rc;
+	rc = tls_tx_records(sk, flags);
+	if (rc < 0 || tls_is_partially_sent_record(ctx) ||
+	    tls_is_pending_open_record(ctx) ||
+	    !list_empty(&sw_ctx->tx_list))
+		return rc < 0 ? rc : -EAGAIN;
+
+	tls_free_open_rec(sk);
+
+	cancel_delayed_work_sync(&sw_ctx->tx_work.work);
+	clear_bit(BIT_TX_SCHEDULED, &sw_ctx->tx_bitmask);
+	return 0;
+}
+
 static bool tls_is_tx_ready(struct tls_sw_context_tx *ctx)
 {
 	struct tls_rec *rec;
@@ -2609,7 +2633,8 @@ int tls_sw_ctx_init(struct sock *sk, int tx,
 			goto free_aead;
 	}
 
-	ctx->push_pending_record = tls_sw_push_pending_record;
+	if (tx)
+		ctx->push_pending_record = tls_sw_push_pending_record;
 
 	/* setkey is the last operation that could fail during a
 	 * rekey. if it succeeds, we can start modifying the
