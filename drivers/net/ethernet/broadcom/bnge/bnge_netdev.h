@@ -579,4 +579,6 @@ int bnge_alloc_rx_netmem(struct bnge_net *bn, struct bnge_rx_ring_info *rxr,
 			 u16 prod, gfp_t gfp);
 void __bnge_queue_sp_work(struct bnge_net *bn);
 void bnge_copy_hw_masks(u64 *mask_arr, __le64 *hw_mask_arr, int count);
+int bnge_open_core(struct bnge_net *bn);
+void bnge_close_core(struct bnge_net *bn);
 #endif /* _BNGE_NETDEV_H_ */

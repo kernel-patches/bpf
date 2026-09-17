@@ -772,6 +772,9 @@ static void bnge_free_tx_skbs(struct bnge_net *bn)
 	u16 max_idx;
 	int i;
 
+	if (!bn->tx_ring)
+		return;
+
 	max_idx = bn->tx_nr_pages * TX_DESC_CNT;
 	for (i = 0; i < bd->tx_nr_rings; i++) {
 		struct bnge_tx_ring_info *txr = &bn->tx_ring[i];
@@ -882,6 +885,9 @@ static void bnge_free_rx_rings(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
 	int i;
+
+	if (!bn->rx_ring)
+		return;
 
 	bnge_free_tpa_info(bn);
 	for (i = 0; i < bd->rx_nr_rings; i++) {
@@ -1025,6 +1031,9 @@ static void bnge_free_tx_rings(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
 	int i;
+
+	if (!bn->tx_ring)
+		return;
 
 	for (i = 0; i < bd->tx_nr_rings; i++) {
 		struct bnge_tx_ring_info *txr = &bn->tx_ring[i];
@@ -2723,7 +2732,7 @@ static int bnge_hwrm_if_change(struct bnge_dev *bd, bool up)
 	return bnge_hwrm_req_send(bd, req);
 }
 
-static int bnge_open_core(struct bnge_net *bn)
+int bnge_open_core(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
 	int rc;
@@ -2993,9 +3002,13 @@ static void bnge_save_ring_stats(struct bnge_net *bn)
 	}
 }
 
-static void bnge_close_core(struct bnge_net *bn)
+void bnge_close_core(struct bnge_net *bn)
 {
 	struct bnge_dev *bd = bn->bd;
+
+	/* Already torn down (e.g. after a failed open/reconfiguration) */
+	if (!bn->bnapi)
+		return;
 
 	bnge_tx_disable(bn);
 
