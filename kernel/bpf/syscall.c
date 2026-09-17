@@ -602,15 +602,14 @@ static bool can_alloc_pages(void)
 		!IS_ENABLED(CONFIG_PREEMPT_RT);
 }
 
+#define BPF_PAGE_GFP (GFP_KERNEL | __GFP_ZERO | __GFP_ACCOUNT | __GFP_NOWARN)
+
 static struct page *__bpf_alloc_page(int nid)
 {
 	if (!can_alloc_pages())
 		return alloc_pages_nolock(__GFP_ACCOUNT, nid, 0);
 
-	return alloc_pages_node(nid,
-				GFP_KERNEL | __GFP_ZERO | __GFP_ACCOUNT
-				| __GFP_NOWARN,
-				0);
+	return alloc_pages_node(nid, BPF_PAGE_GFP, 0);
 }
 
 int bpf_map_alloc_pages(const struct bpf_map *map, int nid,
@@ -634,6 +633,27 @@ int bpf_map_alloc_pages(const struct bpf_map *map, int nid,
 	}
 
 	return ret;
+}
+
+/*
+ * Allocate a page for map memory with the blocking allocator so it can
+ * reclaim. __GFP_RETRY_MAYFAIL keeps it from invoking the OOM killer: the
+ * page is charged to the map's memcg, which need not be the caller's, so
+ * an OOM there could kill unrelated tasks in the map's cgroup while a
+ * foreign caller could never be its victim.
+ *
+ * bpf_map_alloc_pages() serves arbitrary BPF program context and stays
+ * reentrancy-safe by falling back to the non-blocking allocator. This
+ * helper always blocks, so a sleepable context alone is not enough: the
+ * caller must guarantee it is not already inside the page allocator or
+ * reclaim, where blocking here would reenter mm and deadlock. The only
+ * user is arena_vm_fault(), a userspace page fault in task context.
+ */
+struct page *bpf_map_alloc_page_sleepable(const struct bpf_map *map)
+{
+	might_sleep();
+	return alloc_pages_node(map->numa_node,
+				BPF_PAGE_GFP | __GFP_RETRY_MAYFAIL, 0);
 }
 
 static int btf_field_cmp(const void *a, const void *b)
