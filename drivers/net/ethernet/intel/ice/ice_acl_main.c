@@ -236,6 +236,53 @@ static void ice_acl_set_act_fwd_queue(struct ice_flow_action *action,
 	action->data.acl_act.value = cpu_to_le16(queue_index);
 }
 
+/*
+ * ice_acl_replay_fltrs - replay ACL filters from the SW filter list
+ * @pf: board private structure
+ *
+ * Reprograms ACL TCAM entries after a reset using data preserved in the
+ * SW filter list. Relies on ice_acl_replay_flows() having been called first
+ * to restore the flow profiles.
+ */
+void ice_acl_replay_fltrs(struct ice_pf *pf)
+{
+	struct ice_vsi *vsi = ice_get_main_vsi(pf);
+	struct ice_hw *hw = &pf->hw;
+	struct ice_ntuple_fltr *f_rule;
+
+	if (!vsi)
+		return;
+
+	list_for_each_entry(f_rule, &hw->fdir_list_head, fltr_node) {
+		struct ice_flow_action acts[ICE_ACL_NUM_ACT];
+		struct ice_acl_hw_prof *hw_prof;
+		u64 entry_h = 0;
+		int err;
+
+		if (!f_rule->acl_fltr)
+			continue;
+
+		if (!hw->acl_prof || !hw->acl_prof[f_rule->flow_type])
+			continue;
+
+		hw_prof = hw->acl_prof[f_rule->flow_type];
+
+		memset(&acts, 0, sizeof(acts));
+		if (f_rule->dest_ctl == ICE_FLTR_PRGM_DESC_DEST_DROP_PKT)
+			ice_acl_set_act_drop(&acts[0]);
+		else
+			ice_acl_set_act_fwd_queue(&acts[0], f_rule->q_index);
+
+		err = ice_flow_add_entry(hw, ICE_BLK_ACL, hw_prof->prof_id,
+					 f_rule->fltr_id, vsi->idx,
+					 ICE_FLOW_PRIO_NORMAL, f_rule, acts,
+					 ICE_ACL_NUM_ACT, &entry_h);
+		if (err)
+			dev_warn(ice_pf_to_dev(pf), "Could not reprogram filter %d, status %d\n",
+				 f_rule->fltr_id, err);
+	}
+}
+
 /**
  * ice_acl_comp_rules - compare two ACL filters
  * @a: first ACL filter

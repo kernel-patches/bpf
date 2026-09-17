@@ -18,6 +18,7 @@
 #include "ice_sf_eth.h"
 #include "ice_hwmon.h"
 #include "ice_acl.h"
+#include "ice_acl_main.h"
 /* Including ice_trace.h with CREATE_TRACE_POINTS defined will generate the
  * ice tracepoint functions. This must be done exactly once across the
  * ice driver.
@@ -3947,6 +3948,9 @@ static void ice_set_pf_caps(struct ice_pf *pf)
 				       func_caps->fd_fltr_best_effort);
 	}
 
+	/* ACL is always initially available */
+	set_bit(ICE_FLAG_ACL_ENA, pf->flags);
+
 	clear_bit(ICE_FLAG_PTP_SUPPORTED, pf->flags);
 	if (func_caps->common_cap.ieee_1588)
 		set_bit(ICE_FLAG_PTP_SUPPORTED, pf->flags);
@@ -4368,6 +4372,30 @@ static int ice_acl_create_hw(struct ice_pf *pf)
 	err = ice_acl_create_scen(hw, params.width, params.depth, &scen_id);
 	if (err)
 		goto destroy_table;
+
+	/* Reset profile extraction sequences and range checkers for all
+	 * possible HW profile IDs. The TCAM entries are already zeroed by
+	 * ice_acl_init_tbl() inside ice_acl_create_tbl(), but profile
+	 * extraction and range checker state is separate per-profile HW state
+	 * that survives PF reset, therefore must be brought back to default
+	 * state.
+	 */
+	for (u8 prof_id = 0; prof_id < ICE_ACL_MAX_PROF; prof_id++) {
+		struct ice_aqc_acl_prof_generic_frmt xtrct_buf = {};
+		struct ice_aqc_acl_profile_ranges range_buf = {};
+
+		memset(xtrct_buf.pf_scenario_num, ICE_ACL_INVALID_SCEN,
+		       sizeof(xtrct_buf.pf_scenario_num));
+		err = ice_prgm_acl_prof_xtrct(hw, prof_id, &xtrct_buf, NULL);
+		if (err)
+			dev_warn(ice_pf_to_dev(pf), "Failed to reset profile extraction for profile %u\n",
+				 prof_id);
+
+		ice_prog_acl_prof_ranges(hw, prof_id, &range_buf, NULL);
+		if (err)
+			dev_warn(ice_pf_to_dev(pf), "Failed to reset range checkers for profile %u\n",
+				 prof_id);
+	}
 
 	return 0;
 
@@ -6614,6 +6642,7 @@ ice_set_features(struct net_device *netdev, netdev_features_t features)
 		bool ena = !!(features & NETIF_F_NTUPLE);
 
 		ice_vsi_manage_fdir(vsi, ena);
+		ice_vsi_manage_acl(vsi, ena);
 		ena ? ice_init_arfs(vsi) : ice_clear_arfs(vsi);
 	}
 
@@ -7909,6 +7938,24 @@ static void ice_rebuild(struct ice_pf *pf, enum ice_reset_req reset_type)
 		ice_fdir_replay_fltrs(pf);
 
 		ice_rebuild_arfs(pf);
+	}
+
+	if (test_bit(ICE_FLAG_ACL_ENA, pf->flags)) {
+		/* Clean up the stale HW table SW state left by the reset,
+		 * recreate the HW table and scenario, then replay flow profiles
+		 * from preserved SW state.
+		 */
+		ice_acl_destroy_tbl(hw);
+		if (!ice_acl_create_hw(pf)) {
+			ice_acl_replay_flows(hw);
+			ice_acl_replay_fltrs(pf);
+		} else {
+			dev_err(dev, "Failed to rebuild ACL\n");
+			mutex_lock(&hw->fdir_fltr_lock);
+			if (vsi)
+				ice_acl_del_all_fltrs(vsi);
+			mutex_unlock(&hw->fdir_fltr_lock);
+		}
 	}
 
 	if (vsi && vsi->netdev)

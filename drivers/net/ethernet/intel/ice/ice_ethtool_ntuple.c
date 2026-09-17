@@ -528,6 +528,37 @@ void ice_fdir_replay_flows(struct ice_hw *hw)
 }
 
 /**
+ * ice_acl_replay_flows - replay HW ACL flow profiles
+ * @hw: pointer to HW instance
+ */
+void ice_acl_replay_flows(struct ice_hw *hw)
+{
+	if (!hw->acl_prof)
+		return;
+
+	for (enum ice_fltr_ptype flow = ICE_FLTR_PTYPE_NONF_NONE;
+	     flow < ICE_FLTR_PTYPE_MAX; flow++) {
+		struct ice_flow_prof *hw_prof;
+		struct ice_acl_hw_prof *prof;
+		int err;
+
+		flow &= ~FLOW_EXT;
+		prof = hw->acl_prof[flow];
+		if (!prof || !prof->seg)
+			continue;
+
+		err = ice_flow_add_prof(hw, ICE_BLK_ACL, ICE_FLOW_RX,
+					prof->seg, 1, false, &hw_prof);
+		if (err) {
+			dev_err(ice_hw_to_dev(hw), "Could not replay ACL, flow type %d\n",
+				flow);
+			continue;
+		}
+		prof->prof_id = hw_prof->id;
+	}
+}
+
+/**
  * ice_parse_rx_flow_user_data - deconstruct user-defined data
  * @fsp: pointer to ethtool Rx flow specification
  * @data: pointer to userdef data structure for storage
@@ -1826,6 +1857,28 @@ static int ice_del_acl_ethtool(struct ice_hw *hw, struct ice_ntuple_fltr *fltr)
 }
 
 /**
+ * ice_acl_del_all_fltrs - Delete all ACL filters from the filter list
+ * @vsi: the VSI being changed
+ *
+ * This function needs to be called while holding hw->fdir_fltr_lock
+ */
+void ice_acl_del_all_fltrs(struct ice_vsi *vsi)
+{
+	struct ice_ntuple_fltr *f_rule, *tmp;
+	struct ice_hw *hw = &vsi->back->hw;
+
+	list_for_each_entry_safe(f_rule, tmp, &hw->fdir_list_head, fltr_node) {
+		if (!f_rule->acl_fltr)
+			continue;
+
+		ice_del_acl_ethtool(hw, f_rule);
+		ice_ntuple_update_cntrs(hw, f_rule, false);
+		list_del(&f_rule->fltr_node);
+		kfree(f_rule);
+	}
+}
+
+/**
  * ice_vsi_manage_fdir - turn on/off flow director
  * @vsi: the VSI being changed
  * @ena: boolean value indicating if this is an enable or disable request
@@ -1853,6 +1906,32 @@ void ice_vsi_manage_fdir(struct ice_vsi *vsi, bool ena)
 		     flow++)
 			if (hw->fdir_prof[flow])
 				ice_fdir_rem_flow(hw, ICE_BLK_FD, flow);
+
+release_lock:
+	mutex_unlock(&hw->fdir_fltr_lock);
+}
+
+/**
+ * ice_vsi_manage_acl - turn on/off ACL
+ * @vsi: the VSI being changed
+ * @ena: boolean value indicating if this is an enable or disable request
+ */
+void ice_vsi_manage_acl(struct ice_vsi *vsi, bool ena)
+{
+	struct ice_pf *pf = vsi->back;
+	struct ice_hw *hw = &pf->hw;
+
+	if (ena) {
+		set_bit(ICE_FLAG_ACL_ENA, pf->flags);
+		return;
+	}
+
+	mutex_lock(&hw->fdir_fltr_lock);
+	if (!test_and_clear_bit(ICE_FLAG_ACL_ENA, pf->flags))
+		goto release_lock;
+
+	ice_acl_del_all_fltrs(vsi);
+	ice_acl_rem_flows(hw);
 
 release_lock:
 	mutex_unlock(&hw->fdir_fltr_lock);

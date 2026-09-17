@@ -877,9 +877,10 @@ static int ice_acl_destroy_scen(struct ice_hw *hw, u16 scen_id)
  * ice_acl_destroy_tbl - Destroy a previously created LEM table for ACL
  * @hw: pointer to the HW struct
  *
- * Return: 0 on success, negative on error
+ * Continue on AQ errors so SW state is always cleaned up - e.g. after a reset,
+ * where the HW tables might be already gone.
  */
-int ice_acl_destroy_tbl(struct ice_hw *hw)
+void ice_acl_destroy_tbl(struct ice_hw *hw)
 {
 	struct ice_acl_scen *pos_scen, *tmp_scen;
 	struct ice_aqc_acl_generic resp_buf;
@@ -887,7 +888,7 @@ int ice_acl_destroy_tbl(struct ice_hw *hw)
 	int err;
 
 	if (!hw->acl_tbl)
-		return -ENOENT;
+		return;
 
 	/* Mark all the created scenario's TCAM to stop the packet lookup and
 	 * delete them afterward
@@ -898,44 +899,38 @@ int ice_acl_destroy_tbl(struct ice_hw *hw)
 		if (err) {
 			ice_debug(hw, ICE_DBG_ACL, "ice_aq_query_acl_scen() failed. status: %d\n",
 				  err);
-			return err;
-		}
+		} else {
+			for (int i = 0; i < ICE_AQC_ACL_SLICES; i++) {
+				buf.tcam_cfg[i].chnk_msk = 0;
+				buf.tcam_cfg[i].start_cmp_set =
+						ICE_AQC_ACL_ALLOC_SCE_START_CMP;
+			}
 
-		for (int i = 0; i < ICE_AQC_ACL_SLICES; i++) {
-			buf.tcam_cfg[i].chnk_msk = 0;
-			buf.tcam_cfg[i].start_cmp_set =
-					ICE_AQC_ACL_ALLOC_SCE_START_CMP;
-		}
+			for (int i = 0; i < ICE_AQC_MAX_ACTION_MEMORIES; i++)
+				buf.act_mem_cfg[i] = 0;
 
-		for (int i = 0; i < ICE_AQC_MAX_ACTION_MEMORIES; i++)
-			buf.act_mem_cfg[i] = 0;
-
-		err = ice_aq_update_acl_scen(hw, pos_scen->id, &buf, NULL);
-		if (err) {
-			ice_debug(hw, ICE_DBG_ACL, "ice_aq_update_acl_scen() failed. status: %d\n",
-				  err);
-			return err;
+			err = ice_aq_update_acl_scen(hw, pos_scen->id, &buf,
+						     NULL);
+			if (err)
+				ice_debug(hw, ICE_DBG_ACL, "scenario update failed, status: %d\n",
+					  err);
 		}
 
 		err = ice_acl_destroy_scen(hw, pos_scen->id);
 		if (err) {
-			ice_debug(hw, ICE_DBG_ACL, "deletion of scenario failed. status: %d\n",
+			ice_debug(hw, ICE_DBG_ACL, "deletion of scenario failed, status: %d\n",
 				  err);
-			return err;
 		}
 	}
 
 	err = ice_aq_dealloc_acl_tbl(hw, hw->acl_tbl->id, &resp_buf, NULL);
 	if (err) {
-		ice_debug(hw, ICE_DBG_ACL, "AQ de-allocation of ACL failed. status: %d\n",
+		ice_debug(hw, ICE_DBG_ACL, "AQ de-allocation of ACL failed, status: %d\n",
 			  err);
-		return err;
 	}
 
 	kfree(hw->acl_tbl);
 	hw->acl_tbl = NULL;
-
-	return 0;
 }
 
 /**

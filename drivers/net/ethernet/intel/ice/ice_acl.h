@@ -6,6 +6,9 @@
 
 #include "ice_common.h"
 
+/* Maximum number of ACL HW profiles */
+#define ICE_ACL_MAX_PROF		128
+
 /* Marks a PF scenario slot as unused in the ACL profile extraction table */
 #define ICE_ACL_INVALID_SCEN		0x3f
 
@@ -124,7 +127,7 @@ struct ice_acl_cntrs {
 };
 
 int ice_acl_create_tbl(struct ice_hw *hw, struct ice_acl_tbl_params *params);
-int ice_acl_destroy_tbl(struct ice_hw *hw);
+void ice_acl_destroy_tbl(struct ice_hw *hw);
 int ice_acl_create_scen(struct ice_hw *hw, u16 match_width, u16 num_entries,
 			u16 *scen_id);
 int ice_aq_alloc_acl_tbl(struct ice_hw *hw, struct ice_acl_alloc_tbl *tbl,
