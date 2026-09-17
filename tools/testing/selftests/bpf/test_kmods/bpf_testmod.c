@@ -75,6 +75,16 @@ union bpf_testmod_union_arg_2 {
 	struct bpf_testmod_struct_arg_2 arg;
 };
 
+struct bpf_testmod_oob {
+	__u8 data;
+	union {
+		__u8 redzone_1;
+		__u16 redzone_2;
+		__u32 redzone_4;
+		__u64 redzone_8;
+	};
+};
+
 __bpf_hook_start();
 
 noinline int
@@ -334,6 +344,47 @@ __bpf_kfunc void bpf_kfunc_put_default_trusted_ptr_test(struct prog_test_member 
 	 * semantics. We're simply wanting to simulate a BPF kfunc that takes a
 	 * struct prog_test_member pointer as an argument.
 	 */
+}
+
+#ifdef CONFIG_BPF_JIT_KASAN
+
+extern void kasan_poison(const void *addr, size_t size, u8 value, bool init);
+
+#define KASAN_SLAB_FREE 0xFB
+
+__bpf_kfunc void bpf_kfunc_kasan_poison(void *mem, u32 mem__sz)
+{
+	kasan_poison(mem, mem__sz, KASAN_SLAB_FREE, false);
+}
+
+__bpf_kfunc void bpf_kfunc_kasan_unpoison(void *mem, u32 mem__sz)
+{
+	kasan_poison(mem, mem__sz, 0x00, false);
+}
+#else
+__bpf_kfunc void bpf_kfunc_kasan_poison(void *mem, u32 mem__sz) { }
+__bpf_kfunc void bpf_kfunc_kasan_unpoison(void *mem, u32 mem__sz) { }
+#endif
+
+__bpf_kfunc struct bpf_testmod_oob *bpf_testmod_oob_alloc(void)
+{
+	struct bpf_testmod_oob *p;
+
+	/*
+	 * Only allocate size of data (and so, voluntarily use kmalloc
+	 * instead of kmalloc_obj), not the rest of the structure, so
+	 * that programs under test trying to access the rest of the
+	 * structure trigger OoB accesses
+	 */
+	p = kmalloc(sizeof(p->data), GFP_ATOMIC);
+	if (!p)
+		return NULL;
+	return p;
+}
+
+__bpf_kfunc void bpf_testmod_oob_free(struct bpf_testmod_oob *oob)
+{
+	kfree(oob);
 }
 
 __bpf_kfunc struct bpf_testmod_ctx *
@@ -869,6 +920,10 @@ BTF_ID_FLAGS(func, bpf_testmod_ops3_call_test_arena_stack)
 BTF_ID_FLAGS(func, bpf_testmod_ops3_call_test_arena_multislot)
 BTF_ID_FLAGS(func, bpf_kfunc_get_default_trusted_ptr_test);
 BTF_ID_FLAGS(func, bpf_kfunc_put_default_trusted_ptr_test);
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_poison)
+BTF_ID_FLAGS(func, bpf_kfunc_kasan_unpoison)
+BTF_ID_FLAGS(func, bpf_testmod_oob_alloc, KF_ACQUIRE | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_testmod_oob_free, KF_RELEASE)
 BTF_KFUNCS_END(bpf_testmod_common_kfunc_ids)
 
 BTF_ID_LIST(bpf_testmod_dtor_ids)
@@ -972,6 +1027,55 @@ __bpf_kfunc struct prog_test_ret_pair bpf_kfunc_call_test_ret_fastcall(u64 a, u6
 	struct prog_test_ret_pair r = { .lo = a + b, .hi = a - b };
 
 	return r;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_pair_arg(u64 a, struct prog_test_pair_arg s, u64 b)
+{
+	return a + s.lo * 2 + s.hi * 3 + b * 4;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_i128_arg(u64 a, u64 b, __int128 v)
+{
+	return a + b * 2 + (u64)v * 3 + (u64)((unsigned __int128)v >> 64) * 4;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_i128_arg_pad(u64 a, u64 b, u64 c, u64 d, u64 e,
+						 u64 f, u64 g, __int128 v)
+{
+	return a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 +
+	       (u64)v * 8 + (u64)((unsigned __int128)v >> 64) * 9;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_pair_arg_nofit(u64 a, u64 b, u64 c, u64 d,
+						   struct prog_test_pair_arg s)
+{
+	return a + b * 2 + c * 3 + d * 4 + s.lo * 5 + s.hi * 6;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_pair_arg_tail(u64 a, u64 b, u64 c, u64 d, u64 e,
+						  struct prog_test_pair_arg s, u64 f)
+{
+	return a + b * 2 + c * 3 + d * 4 + e * 5 + s.lo * 6 + s.hi * 7 + f * 8;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_pair_arg_split8(u64 a, u64 b, u64 c, u64 d, u64 e,
+						    u64 f, u64 g,
+						    struct prog_test_pair_arg s)
+{
+	return a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 +
+	       s.lo * 8 + s.hi * 9;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_ptr_arg(struct prog_test_ptr_arg s)
+{
+	return s.x;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_pair_arena_arg(u64 a, u64 b, u64 c,
+						   struct prog_test_pair_arg s,
+						   u64 *f__arena)
+{
+	return a + b + c + s.lo + s.hi + *f__arena;
 }
 
 __bpf_kfunc struct prog_test_ret_ptr bpf_kfunc_call_test_ret_ptr(u64 tag)
@@ -1131,7 +1235,7 @@ __bpf_kfunc u64 bpf_kfunc_call_stack_arg_timer(u64 a, u64 b, u64 c, u64 d, u64 e
 __bpf_kfunc u64 bpf_kfunc_call_stack_arg_big(u64 a, u64 b, u64 c, u64 d, u64 e,
 					     struct prog_test_big_arg s)
 {
-	return a + b + c + d + e + s.a + s.b;
+	return a + b * 2 + c * 3 + d * 4 + e * 5 + s.a * 6 + s.b * 7;
 }
 
 static struct prog_test_ref_kfunc prog_test_struct = {
@@ -1612,6 +1716,14 @@ BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_arr_struct)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_arr2d)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_deep)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_ii)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg_pad)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg_nofit)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg_tail)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg_split8)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_ptr_arg)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arena_arg)
 #endif
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_big)
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg)
@@ -1719,6 +1831,8 @@ static int bpf_dummy_reg(void *kdata, struct bpf_link *link)
 	 */
 	if (ops->test_2)
 		ops->test_2(4, ops->data);
+	if (ops->test_trampoline_stack_args)
+		ops->test_trampoline_stack_args(1, 2, 3, 4, 5, 6, 7, 8, 9999);
 
 	return 0;
 }
@@ -1766,6 +1880,13 @@ bpf_testmod_ops__test_return_ref_kptr(int dummy, struct task_struct *task__ref,
 	return NULL;
 }
 
+static int bpf_testmod_ops__test_trampoline_stack_args(int arg1, int arg2, int arg3,
+						       int arg4, int arg5, int arg6,
+						       int arg7, int arg8, int arg9)
+{
+	return arg9;
+}
+
 static struct bpf_testmod_ops __bpf_testmod_ops = {
 	.test_1 = bpf_testmod_test_1,
 	.test_2 = bpf_testmod_test_2,
@@ -1773,6 +1894,7 @@ static struct bpf_testmod_ops __bpf_testmod_ops = {
 	.test_refcounted = bpf_testmod_ops__test_refcounted,
 	.test_refcounted_multi = bpf_testmod_ops__test_refcounted_multi,
 	.test_return_ref_kptr = bpf_testmod_ops__test_return_ref_kptr,
+	.test_trampoline_stack_args = bpf_testmod_ops__test_trampoline_stack_args,
 };
 
 struct bpf_struct_ops bpf_bpf_testmod_ops = {

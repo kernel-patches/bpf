@@ -180,6 +180,7 @@ verif_scale_xdp_loop
 verifier_arena/check_arena_arg_ret
 verifier_array_access/valid multiple map access into an array using constant without nullness
 verifier_iterating_callbacks/test1
+verifier_kfunc_perfmon
 verifier_lsm/not null checking nullable pointer in bpf_lsm_mmap_file
 verifier_map_in_map/map_ptr_is_never_null_rb
 verifier_map_lookup_refine/mapofmaps_value_as_helper_fixed_mem
