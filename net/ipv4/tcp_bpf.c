@@ -286,7 +286,7 @@ msg_bytes_ready:
 		if (sock_flag(sk, SOCK_DONE))
 			goto out;
 
-		if (sk->sk_err) {
+		if (READ_ONCE(sk->sk_err)) {
 			copied = sock_error(sk);
 			goto out;
 		}
@@ -553,10 +553,9 @@ static int tcp_bpf_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 		bool enospc = false;
 		u32 copy, osize;
 
-		if (sk->sk_err) {
-			err = -sk->sk_err;
+		err = -READ_ONCE(sk->sk_err);
+		if (err)
 			goto out_err;
-		}
 
 		copy = msg_data_left(msg);
 		if (!sk_stream_memory_free(sk))
