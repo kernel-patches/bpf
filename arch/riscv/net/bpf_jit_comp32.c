@@ -1014,6 +1014,9 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 	const s8 *tmp1 = bpf2rv32[TMP_REG_1];
 	const s8 *tmp2 = bpf2rv32[TMP_REG_2];
 
+	if (bpf_insn_is_hmul(insn))
+		goto notsupported;
+
 	switch (code) {
 	case BPF_ALU64 | BPF_MOV | BPF_X:
 		if (insn->off != 0) {
