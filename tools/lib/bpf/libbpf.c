@@ -514,6 +514,11 @@ struct bpf_program {
 	void *line_info;
 	__u32 line_info_rec_size;
 	__u32 line_info_cnt;
+
+	struct bpf_cleanup_info *cleanup_info;
+	__u32 cleanup_info_rec_size;
+	__u32 cleanup_info_cnt;
+
 	__u32 prog_flags;
 	__u8  hash[SHA256_DIGEST_LENGTH];
 
@@ -549,6 +554,7 @@ struct bpf_struct_ops {
 #define STRUCT_OPS_SEC ".struct_ops"
 #define STRUCT_OPS_LINK_SEC ".struct_ops.link"
 #define ARENA_SEC ".addr_space.1"
+#define CLEANUP_SEC ".bpf_cleanup"
 
 enum libbpf_map_type {
 	LIBBPF_MAP_UNSPEC,
@@ -677,6 +683,25 @@ struct elf_sec_desc {
 	Elf_Data *data;
 };
 
+#define CLEANUP_REC_FIELDS	(sizeof(struct bpf_cleanup_info) / sizeof(__u32))
+
+/* Index of each field of struct bpf_cleanup_info, read as an array of __u32. */
+enum {
+	CLEANUP_REC_BEGIN,
+	CLEANUP_REC_END,
+	CLEANUP_REC_PAD,
+};
+
+/* One (begin, end, landing_pad) triple from .bpf_cleanup, with each field
+ * resolved from its relocation to an ELF section plus a section-relative
+ * instruction index. The mapping to final program instruction indices can only
+ * happen after subprogram placement, which differs per main program.
+ */
+struct cleanup_raw_rec {
+	int sec_idx[CLEANUP_REC_FIELDS];
+	size_t insn_idx[CLEANUP_REC_FIELDS];
+};
+
 struct elf_state {
 	int fd;
 	const void *obj_buf;
@@ -696,6 +721,8 @@ struct elf_state {
 	bool has_st_ops;
 	int arena_data_shndx;
 	int jumptables_data_shndx;
+	Elf_Data *cleanup_data;
+	int cleanup_shndx;
 };
 
 struct usdt_manager;
@@ -771,6 +798,9 @@ struct bpf_object {
 	void *jumptables_data;
 	size_t jumptables_data_sz;
 
+	struct cleanup_raw_rec *cleanup_recs;
+	size_t cleanup_rec_cnt;
+
 	struct {
 		struct bpf_program *prog;
 		unsigned int sym_off;
@@ -817,7 +847,10 @@ static void bpf_program__exit(struct bpf_program *prog)
 	zfree(&prog->sec_name);
 	zfree(&prog->insns);
 	zfree(&prog->reloc_desc);
+	zfree(&prog->cleanup_info);
 
+	prog->cleanup_info_rec_size = 0;
+	prog->cleanup_info_cnt = 0;
 	prog->nr_reloc = 0;
 	prog->insns_cnt = 0;
 	prog->sec_idx = -1;
@@ -1559,6 +1592,7 @@ static struct bpf_object *bpf_object__new(const char *path,
 	obj->efile.obj_buf = obj_buf;
 	obj->efile.obj_buf_sz = obj_buf_sz;
 	obj->efile.btf_maps_shndx = -1;
+	obj->efile.cleanup_shndx = -1;
 	obj->kconfig_map_idx = -1;
 	obj->arena_map_idx = -1;
 
@@ -4045,6 +4079,9 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 				sec_desc->shdr = sh;
 				sec_desc->data = data;
 				obj->efile.has_st_ops = true;
+			} else if (strcmp(name, CLEANUP_SEC) == 0) {
+				obj->efile.cleanup_data = data;
+				obj->efile.cleanup_shndx = idx;
 			} else if (strcmp(name, ARENA_SEC) == 0) {
 				obj->efile.arena_data = data;
 				obj->efile.arena_data_shndx = idx;
@@ -4072,6 +4109,7 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 			    strcmp(name, ".rel" STRUCT_OPS_LINK_SEC) &&
 			    strcmp(name, ".rel?" STRUCT_OPS_SEC) &&
 			    strcmp(name, ".rel?" STRUCT_OPS_LINK_SEC) &&
+			    strcmp(name, ".rel" CLEANUP_SEC) &&
 			    strcmp(name, ".rel" MAPS_ELF_SEC)) {
 				pr_info("elf: skipping relo section(%d) %s for section(%d) %s\n",
 					idx, name, targ_sec_idx,
@@ -4850,6 +4888,214 @@ static struct bpf_program *find_prog_by_sec_insn(const struct bpf_object *obj,
 	if (prog->sec_idx == sec_idx && prog_contains_insn(prog, insn_idx))
 		return prog;
 	return NULL;
+}
+
+static int bpf_object__init_cleanup_info(struct bpf_object *obj)
+{
+	Elf_Data *data = obj->efile.cleanup_data;
+	Elf_Data *relo = NULL;
+	size_t i, nrels, nslots, nrecs;
+	struct cleanup_raw_rec *recs;
+	int *slot_sec, ret = 0;
+	size_t *slot_val;
+	const __u32 *vals;
+	bool native;
+
+	if (!data || obj->efile.cleanup_shndx < 0)
+		return 0;
+
+	native = is_native_endianness(obj);
+
+	for (i = 0; i < obj->efile.sec_cnt; i++) {
+		struct elf_sec_desc *sd = &obj->efile.secs[i];
+
+		if (sd->sec_type == SEC_RELO && sd->shdr &&
+		    sd->shdr->sh_info == (Elf64_Word)obj->efile.cleanup_shndx) {
+			relo = sd->data;
+			break;
+		}
+	}
+	if (!relo) {
+		pr_warn("%s present without relocations\n", CLEANUP_SEC);
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+	if (data->d_size % sizeof(struct bpf_cleanup_info)) {
+		pr_warn("%s size %zu is not a multiple of the record size %zu\n",
+			CLEANUP_SEC, data->d_size, sizeof(struct bpf_cleanup_info));
+		return -LIBBPF_ERRNO__FORMAT;
+	}
+
+	vals = data->d_buf;
+	nslots = data->d_size / sizeof(__u32);
+	nrecs = data->d_size / sizeof(struct bpf_cleanup_info);
+
+	slot_sec = calloc(nslots, sizeof(*slot_sec));
+	slot_val = calloc(nslots, sizeof(*slot_val));
+	recs = calloc(nrecs ?: 1, sizeof(*recs));
+	if (!slot_sec || !slot_val || !recs) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	for (i = 0; i < nslots; i++)
+		slot_sec[i] = -1;
+
+	/* One relocation per 4-byte field, naming the section it points into. */
+	nrels = relo->d_size / sizeof(Elf64_Rel);
+	for (i = 0; i < nrels; i++) {
+		Elf64_Rel *rel = elf_rel_by_idx(relo, i);
+		Elf64_Sym *sym = elf_sym_by_idx(obj, ELF64_R_SYM(rel->r_info));
+		size_t type = ELF64_R_TYPE(rel->r_info);
+		size_t slot = rel->r_offset / sizeof(__u32);
+
+		if (type != R_BPF_64_NODYLD32 && type != R_BPF_64_ABS32) {
+			pr_warn("%s: relocation %zu has unexpected type %zu\n",
+				CLEANUP_SEC, i, type);
+			ret = -LIBBPF_ERRNO__FORMAT;
+			goto out;
+		}
+		if (!sym || slot >= nslots || rel->r_offset % sizeof(__u32)) {
+			pr_warn("%s: bad relocation %zu\n", CLEANUP_SEC, i);
+			ret = -LIBBPF_ERRNO__FORMAT;
+			goto out;
+		}
+		slot_sec[slot] = sym->st_shndx;
+		/* The addend lives in the section data, which libelf leaves in
+		 * the object's byte order; a non-section symbol additionally
+		 * contributes its own value.
+		 */
+		slot_val[slot] = (native ? vals[slot] : bswap_32(vals[slot])) +
+				 sym->st_value;
+	}
+
+	for (i = 0; i < nslots; i++) {
+		struct cleanup_raw_rec *rec = &recs[i / CLEANUP_REC_FIELDS];
+		size_t field = i % CLEANUP_REC_FIELDS;
+
+		if (slot_sec[i] < 0) {
+			pr_warn("%s: field %zu has no relocation\n", CLEANUP_SEC, i);
+			ret = -LIBBPF_ERRNO__FORMAT;
+			goto out;
+		}
+		if (slot_val[i] % BPF_INSN_SZ) {
+			pr_warn("%s: field %zu offset %zu is not instruction aligned\n",
+				CLEANUP_SEC, i, slot_val[i]);
+			ret = -LIBBPF_ERRNO__FORMAT;
+			goto out;
+		}
+		rec->sec_idx[field] = slot_sec[i];
+		rec->insn_idx[field] = slot_val[i] / BPF_INSN_SZ;
+	}
+
+	obj->cleanup_recs = recs;
+	obj->cleanup_rec_cnt = nrecs;
+	recs = NULL;
+out:
+	free(recs);
+	free(slot_val);
+	free(slot_sec);
+	return ret;
+}
+
+static int cmp_cleanup_info(const void *a, const void *b)
+{
+	const struct bpf_cleanup_info *x = a, *y = b;
+
+	if (x->begin_off == y->begin_off)
+		return 0;
+	return x->begin_off < y->begin_off ? -1 : 1;
+}
+
+static int bpf_prog_collect_cleanup_info(struct bpf_object *obj,
+					 struct bpf_program *prog)
+{
+	size_t i;
+	int j;
+
+	for (i = 0; i < obj->cleanup_rec_cnt; i++) {
+		struct cleanup_raw_rec *raw = &obj->cleanup_recs[i];
+		struct bpf_program *owner = NULL;
+		struct bpf_cleanup_info ci = {};
+		__u32 *fields = (__u32 *)&ci;
+		void *tmp;
+
+		for (j = 0; j < CLEANUP_REC_FIELDS; j++) {
+			size_t idx = raw->insn_idx[j], final;
+			struct bpf_program *p;
+
+			/* The end of a range is exclusive, so it may name the
+			 * instruction just past the last one of a function,
+			 * which belongs to the next function or to nothing at
+			 * all. Ask about the last instruction the range covers,
+			 * the way the kernel does.
+			 */
+			if (j == CLEANUP_REC_END) {
+				if (!idx) {
+					pr_warn("%s: record %zu is an empty range\n",
+						CLEANUP_SEC, i);
+					return -LIBBPF_ERRNO__FORMAT;
+				}
+				idx--;
+			}
+
+			p = find_prog_by_sec_insn(obj, raw->sec_idx[j], idx);
+			if (!p) {
+				pr_warn("%s: record %zu field %d is not inside a function\n",
+					CLEANUP_SEC, i, j);
+				return -LIBBPF_ERRNO__FORMAT;
+			}
+			if (!owner) {
+				owner = p;
+			} else if (owner != p) {
+				pr_warn("%s: record %zu spans functions '%s' and '%s'\n",
+					CLEANUP_SEC, i, owner->name, p->name);
+				return -LIBBPF_ERRNO__FORMAT;
+			}
+
+			if (owner == prog) {
+				final = raw->insn_idx[j] - prog->sec_insn_off;
+			} else if (prog_is_subprog(obj, owner) && owner->sub_insn_off) {
+				/* sub_insn_off is where this subprogram was
+				 * appended to the main program being relocated;
+				 * zero means it is not part of it.
+				 */
+				final = owner->sub_insn_off +
+					raw->insn_idx[j] - owner->sec_insn_off;
+			} else {
+				owner = NULL;
+				break;
+			}
+			fields[j] = final;
+		}
+		if (!owner)
+			continue;
+
+		tmp = libbpf_reallocarray(prog->cleanup_info, prog->cleanup_info_cnt + 1,
+					  sizeof(*prog->cleanup_info));
+		if (!tmp)
+			return -ENOMEM;
+		prog->cleanup_info = tmp;
+		prog->cleanup_info_rec_size = sizeof(struct bpf_cleanup_info);
+		prog->cleanup_info[prog->cleanup_info_cnt++] = ci;
+
+		pr_debug("prog '%s': cleanup region [%u,%u) -> landing pad %u\n",
+			 prog->name, ci.begin_off, ci.end_off, ci.landing_pad_off);
+	}
+
+	qsort(prog->cleanup_info, prog->cleanup_info_cnt,
+	      sizeof(*prog->cleanup_info), cmp_cleanup_info);
+	for (i = 1; i < prog->cleanup_info_cnt; i++) {
+		struct bpf_cleanup_info *prev = &prog->cleanup_info[i - 1];
+		struct bpf_cleanup_info *cur = &prog->cleanup_info[i];
+
+		if (cur->begin_off < prev->end_off) {
+			pr_warn("prog '%s': overlapping cleanup regions [%u,%u) and [%u,%u)\n",
+				prog->name, prev->begin_off, prev->end_off,
+				cur->begin_off, cur->end_off);
+			return -LIBBPF_ERRNO__FORMAT;
+		}
+	}
+
+	return 0;
 }
 
 static int
@@ -7561,6 +7807,13 @@ static int bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_pat
 					return err;
 			}
 		}
+
+		err = bpf_prog_collect_cleanup_info(obj, prog);
+		if (err) {
+			pr_warn("prog '%s': failed to collect cleanup info: %s\n",
+				prog->name, errstr(err));
+			return err;
+		}
 	}
 	for (i = 0; i < obj->nr_programs; i++) {
 		prog = &obj->programs[i];
@@ -7750,6 +8003,9 @@ static int bpf_object__collect_relos(struct bpf_object *obj)
 			pr_warn("internal error at %d\n", __LINE__);
 			return -LIBBPF_ERRNO__INTERNAL;
 		}
+
+		if (idx == obj->efile.cleanup_shndx)
+			continue;
 
 		if (obj->efile.secs[idx].sec_type == SEC_ST_OPS)
 			err = bpf_object__collect_st_ops_relos(obj, shdr, data);
@@ -8022,6 +8278,11 @@ static int bpf_object_load_prog(struct bpf_object *obj, struct bpf_program *prog
 		load_attr.line_info = prog->line_info;
 		load_attr.line_info_rec_size = prog->line_info_rec_size;
 		load_attr.line_info_cnt = prog->line_info_cnt;
+	}
+	if (prog->cleanup_info_cnt) {
+		load_attr.cleanup_info = prog->cleanup_info;
+		load_attr.cleanup_info_cnt = prog->cleanup_info_cnt;
+		load_attr.cleanup_info_rec_size = prog->cleanup_info_rec_size;
 	}
 	load_attr.log_level = log_level;
 	load_attr.prog_flags = prog->prog_flags;
@@ -8579,6 +8840,7 @@ static struct bpf_object *bpf_object_open(const char *path, const void *obj_buf,
 	err = err ? : bpf_object__init_maps(obj, opts);
 	err = err ? : bpf_object_init_progs(obj, opts);
 	err = err ? : bpf_object__collect_relos(obj);
+	err = err ? : bpf_object__init_cleanup_info(obj);
 	if (err)
 		goto out;
 
@@ -9692,6 +9954,9 @@ void bpf_object__close(struct bpf_object *obj)
 	zfree(&obj->jumptables_data);
 	obj->jumptables_data_sz = 0;
 
+	zfree(&obj->cleanup_recs);
+	obj->cleanup_rec_cnt = 0;
+
 	for (i = 0; i < obj->jumptable_map_cnt; i++)
 		close(obj->jumptable_maps[i].fd);
 	zfree(&obj->jumptable_maps);
@@ -10082,6 +10347,25 @@ int bpf_program__clone(struct bpf_program *prog, const struct bpf_prog_load_opts
 		attr.line_info = info ?: prog->line_info;
 		attr.line_info_cnt = info ? info_cnt : prog->line_info_cnt;
 		attr.line_info_rec_size = info ? info_rec_size : prog->line_info_rec_size;
+	}
+
+	/* exception cleanup table */
+	info = OPTS_GET(opts, cleanup_info, NULL);
+	info_cnt = OPTS_GET(opts, cleanup_info_cnt, 0);
+	info_rec_size = OPTS_GET(opts, cleanup_info_rec_size, 0);
+	if (!!info != !!info_cnt || !!info != !!info_rec_size) {
+		pr_warn("prog '%s': cleanup_info, cleanup_info_cnt, and cleanup_info_rec_size must all be specified or all omitted\n",
+			prog->name);
+		return libbpf_err(-EINVAL);
+	}
+	if (info) {
+		attr.cleanup_info = info;
+		attr.cleanup_info_cnt = info_cnt;
+		attr.cleanup_info_rec_size = info_rec_size;
+	} else if (prog->cleanup_info_cnt) {
+		attr.cleanup_info = prog->cleanup_info;
+		attr.cleanup_info_cnt = prog->cleanup_info_cnt;
+		attr.cleanup_info_rec_size = prog->cleanup_info_rec_size;
 	}
 
 	/* Logging is caller-controlled; no fallback to prog/obj log settings */
