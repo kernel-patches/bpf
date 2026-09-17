@@ -479,9 +479,19 @@ static bool is_ptr_cast_function(enum bpf_func_id func_id)
 		func_id == BPF_FUNC_skc_to_tcp_sock ||
 		func_id == BPF_FUNC_skc_to_tcp6_sock ||
 		func_id == BPF_FUNC_skc_to_udp6_sock ||
-		func_id == BPF_FUNC_skc_to_mptcp_sock ||
 		func_id == BPF_FUNC_skc_to_tcp_timewait_sock ||
 		func_id == BPF_FUNC_skc_to_tcp_request_sock;
+}
+
+/*
+ * bpf_skc_to_mptcp_sock() does not cast its argument. It returns the parent
+ * MPTCP socket of the subflow that was passed in, so the return value must not
+ * inherit the argument's reference, or bpf_sk_release() would put the wrong
+ * socket.
+ */
+static bool is_ptr_derive_function(enum bpf_func_id func_id)
+{
+	return func_id == BPF_FUNC_skc_to_mptcp_sock;
 }
 
 static bool is_sync_callback_calling_kfunc(u32 btf_id);
@@ -11268,6 +11278,14 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		bpf_diag_mod_begin(env, &regs[BPF_REG_0], NULL, BPF_DIAG_MOD_WRITE);
 		regs[BPF_REG_0].type &= ~PTR_MAYBE_NULL;
 		regs[BPF_REG_0].id = meta.ref_obj.id;
+	} else if (is_ptr_derive_function(func_id) &&
+		   find_reference_state(env->cur_state, meta.ref_obj.id)) {
+		err = validate_ref_obj(env, &meta.ref_obj);
+		if (err)
+			return err;
+
+		/* Ensures we don't access the object after a release_reference() */
+		regs[BPF_REG_0].parent_id = meta.ref_obj.id;
 	} else if (is_acquire_function(func_id, meta.map.ptr)) {
 		int id = acquire_reference(env, insn_idx, 0);
 
