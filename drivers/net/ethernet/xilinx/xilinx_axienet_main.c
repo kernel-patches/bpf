@@ -2821,6 +2821,15 @@ static void axienet_dma_err_handler(struct work_struct *work)
 	napi_enable(&lp->napi_rx);
 	napi_enable(&lp->napi_tx);
 	axienet_setoptions(ndev, lp->options);
+
+	/* The ring is empty again, so let the stack transmit.  The queue may
+	 * have been stopped by axienet_start_xmit(); netdev_reset_queue()
+	 * above clears only __QUEUE_STATE_STACK_XOFF, and nothing at all
+	 * without CONFIG_BQL.  Refresh the transmit timestamp first, or the
+	 * watchdog fires again on the next tick.
+	 */
+	netif_trans_update(ndev);
+	netif_wake_queue(ndev);
 }
 
 /**
