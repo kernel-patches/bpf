@@ -462,8 +462,10 @@ LIBBPF_1.8.0 {
 		bpf_program__attach_tracing_multi;
 		bpf_program__clear_flags;
 		bpf_program__clone;
+		bpf_program__load_manually;
 		bpf_program__load_strategy;
 		bpf_program__set_load_strategy;
+		bpf_program__unload_manually;
 		btf__find_by_name_kind_own;
 		btf__new_empty_opts;
 } LIBBPF_1.7.0;

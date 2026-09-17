@@ -378,7 +378,7 @@ LIBBPF_API const char *bpf_program__section_name(const struct bpf_program *prog)
 LIBBPF_API bool bpf_program__autoload(const struct bpf_program *prog);
 LIBBPF_API int bpf_program__set_autoload(struct bpf_program *prog, bool autoload);
 LIBBPF_API bool bpf_program__autoattach(const struct bpf_program *prog);
-LIBBPF_API void bpf_program__set_autoattach(struct bpf_program *prog, bool autoattach);
+LIBBPF_API int bpf_program__set_autoattach(struct bpf_program *prog, bool autoattach);
 
 struct bpf_insn;
 
@@ -2105,10 +2105,12 @@ LIBBPF_API int bpf_program__clone(struct bpf_program *prog, const struct bpf_pro
  *
  * - BPF_PROG_LOAD_STRATEGY_DISABLED: the program is not loaded.
  * - BPF_PROG_LOAD_STRATEGY_AUTO: the program is autoloaded when the bpf_object is loaded.
+ * - BPF_PROG_LOAD_STRATEGY_MANUAL: the program is loaded and attached manually.
  */
 enum bpf_prog_load_strategy {
 	BPF_PROG_LOAD_STRATEGY_DISABLED = 0,
 	BPF_PROG_LOAD_STRATEGY_AUTO,
+	BPF_PROG_LOAD_STRATEGY_MANUAL,
 };
 
 /**
@@ -2132,6 +2134,9 @@ LIBBPF_API int bpf_program__set_load_strategy(struct bpf_program *prog,
  * @return current load strategy of the program
  */
 LIBBPF_API enum bpf_prog_load_strategy bpf_program__load_strategy(const struct bpf_program *prog);
+
+LIBBPF_API int bpf_program__load_manually(struct bpf_program *prog);
+LIBBPF_API int bpf_program__unload_manually(struct bpf_program *prog);
 
 #ifdef __cplusplus
 } /* extern "C" */
