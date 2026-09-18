@@ -572,6 +572,13 @@ static inline void bpf_core_relo_bswap(struct bpf_core_relo *i)
 	i->kind = bswap_32(i->kind);
 }
 
+static inline void bpf_cleanup_info_bswap(struct bpf_cleanup_info *i)
+{
+	i->begin_off = bswap_32(i->begin_off);
+	i->end_off = bswap_32(i->end_off);
+	i->landing_pad_off = bswap_32(i->landing_pad_off);
+}
+
 enum btf_field_iter_kind {
 	BTF_FIELD_ITER_IDS,
 	BTF_FIELD_ITER_STRS,
