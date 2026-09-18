@@ -45,6 +45,14 @@ struct bpf_reg_state {
 	union {
 		/* valid when type == PTR_TO_PACKET */
 		int range;
+		/*
+		 * Inside the callee two registers can be both PTR_TO_STACK like
+		 * R1=fp-8 and R2=fp-8, but one of them points to this function stack
+		 * while another to the caller's stack. To differentiate them 'frameno'
+		 * is used which is an index in bpf_verifier_state->frame[] array
+		 * pointing to bpf_func_state.
+		 */
+		u8 frameno;
 
 		/*
 		 * For CONST_PTR_TO_MAP, PTR_TO_MAP_KEY, PTR_TO_MAP_VALUE and
@@ -155,14 +163,6 @@ struct bpf_reg_state {
 	 * during state comparisons.
 	 */
 	u32 map_uid;
-	/*
-	 * Inside the callee two registers can be both PTR_TO_STACK like
-	 * R1=fp-8 and R2=fp-8, but one of them points to this function stack
-	 * while another to the caller's stack. To differentiate them 'frameno'
-	 * is used which is an index in bpf_verifier_state->frame[] array
-	 * pointing to bpf_func_state.
-	 */
-	u8 frameno;
 	/* if (!precise && SCALAR_VALUE) min/max/tnum don't affect safety */
 	bool precise;
 };
