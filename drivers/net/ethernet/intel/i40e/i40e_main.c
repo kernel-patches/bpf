@@ -11692,11 +11692,13 @@ static void i40e_vsi_clear_rings(struct i40e_vsi *vsi)
 
 	if (vsi->tx_rings && vsi->tx_rings[0]) {
 		for (i = 0; i < vsi->alloc_queue_pairs; i++) {
-			kfree_rcu(vsi->tx_rings[i], rcu);
+			struct i40e_ring *tx_ring = vsi->tx_rings[i];
+
 			WRITE_ONCE(vsi->tx_rings[i], NULL);
 			WRITE_ONCE(vsi->rx_rings[i], NULL);
 			if (vsi->xdp_rings)
 				WRITE_ONCE(vsi->xdp_rings[i], NULL);
+			kfree_rcu(tx_ring, rcu);
 		}
 	}
 }
