@@ -2084,6 +2084,7 @@ static struct sk_buff *bcmgenet_add_tsb(struct net_device *dev,
 
 	skb_push(skb, sizeof(*status));
 	status = (struct status_64 *)skb->data;
+	memset(status, 0, sizeof(*status));
 
 	if (skb->ip_summed  == CHECKSUM_PARTIAL) {
 		ip_ver = skb->protocol;
