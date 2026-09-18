@@ -2111,14 +2111,33 @@ IO Interface Files
 	are defined.
 
 	  =====		================================
-	  ctrl		"auto" or "user"
+	  ctrl		"auto", "user" or "bpf"
 	  model		The cost model in use - "linear"
+			or the name of the bound
+			model
 	  =====		================================
 
 	When "ctrl" is "auto", the kernel may change all parameters
 	dynamically.  When "ctrl" is set to "user" or any other
 	parameters are written to, "ctrl" become "user" and the
 	automatic changes are disabled.
+
+	When CONFIG_BLK_CGROUP_IOCOST_BPF is enabled, a bound model is
+	read back as "ctrl=bpf model=<name>", and writing "ctrl=bpf" is
+	accepted as a no-op so a saved configuration can be restored as-is.
+	"model" also accepts
+	the name of a registered iocost_model_ops BPF struct_ops model:
+	"model=<name>" binds the model to the device and the model fully
+	replaces the builtin linear pricing, for every operation including
+	flushes; "model=linear" (or "ctrl=auto/user") restores the builtin
+	model.  Writing an unknown name fails with ENOENT and nothing is
+	applied.  Unregistering a model removes its name from the
+	registry; devices already bound keep using it, and keep receiving
+	cgroup lifecycle notifications, until switched back to the builtin
+	model, and its name keeps working for writes (so a coefficient-only
+	write does not disturb the binding) until the last device unbinds.
+	See
+	include/linux/blk-iocost.h for the model interface.
 
 	When "model" is "linear", the following model parameters are
 	defined.
