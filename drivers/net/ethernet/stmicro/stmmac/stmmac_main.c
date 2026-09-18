@@ -1079,8 +1079,8 @@ static int stmmac_mac_finish(struct phylink_config *config, unsigned int mode,
 	struct stmmac_priv *priv = netdev_priv(ndev);
 
 	if (priv->plat->mac_finish)
-		priv->plat->mac_finish(ndev, priv->plat->bsp_priv, mode,
-				       interface);
+		return priv->plat->mac_finish(ndev, priv->plat->bsp_priv, mode,
+					     interface);
 
 	return 0;
 }
