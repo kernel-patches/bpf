@@ -177,6 +177,7 @@
 #include <linux/timer.h>
 #include <linux/time64.h>
 #include <linux/parser.h>
+#include <linux/blk-iocost.h>
 #include <linux/sched/signal.h>
 #include <asm/local.h>
 #include <asm/local64.h>
@@ -445,6 +446,11 @@ struct ioc {
 	int				autop_idx;
 	bool				user_qos_params:1;
 	bool				user_cost_model:1;
+
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	/* bound BPF cost model, NULL = builtin linear model */
+	const struct iocost_model_ops	__rcu *model;
+#endif
 };
 
 struct iocg_pcpu_stat {
@@ -2571,10 +2577,28 @@ out:
 
 static u64 calc_vtime_cost(struct bio *bio, struct ioc_gq *iocg, bool is_merge)
 {
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	const struct iocost_model_ops *model;
 	u64 cost;
 
-	calc_vtime_cost_builtin(bio, iocg, is_merge, &cost);
-	return cost;
+	rcu_read_lock();
+	model = rcu_dereference(iocg->ioc->model);
+	if (model) {
+		cost = model->calc_cost(bio->bi_opf, bio->bi_iter.bi_size,
+					bio->bi_iter.bi_sector,
+					iocg_to_blkg(iocg)->blkcg,
+					is_merge ? IOCOST_COST_F_MERGE : 0);
+		rcu_read_unlock();
+		return min(cost, VTIME_PER_SEC);
+	}
+	rcu_read_unlock();
+#endif
+	{
+		u64 cost;
+
+		calc_vtime_cost_builtin(bio, iocg, is_merge, &cost);
+		return cost;
+	}
 }
 
 static void calc_size_vtime_cost_builtin(struct request *rq, struct ioc *ioc,
@@ -2596,10 +2620,28 @@ static void calc_size_vtime_cost_builtin(struct request *rq, struct ioc *ioc,
 
 static u64 calc_size_vtime_cost(struct request *rq, struct ioc *ioc)
 {
-	u64 cost;
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	const struct iocost_model_ops *model;
 
-	calc_size_vtime_cost_builtin(rq, ioc, &cost);
-	return cost;
+	rcu_read_lock();
+	model = rcu_dereference(ioc->model);
+	if (model && rq->bio && rq->bio->bi_blkg) {
+		u64 cost;
+
+		cost = model->calc_cost(rq->cmd_flags, blk_rq_bytes(rq),
+					blk_rq_pos(rq),
+					rq->bio->bi_blkg->blkcg, 0);
+		rcu_read_unlock();
+		return min(cost, VTIME_PER_SEC);
+	}
+	rcu_read_unlock();
+#endif
+	{
+		u64 cost;
+
+		calc_size_vtime_cost_builtin(rq, ioc, &cost);
+		return cost;
+	}
 }
 
 enum over_budget_action {
@@ -2900,6 +2942,19 @@ static void ioc_rqos_exit(struct rq_qos *rqos)
 
 	timer_shutdown_sync(&ioc->timer);
 	free_percpu(ioc->pcpu_stat);
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	{
+		const struct iocost_model_ops *model;
+
+		spin_lock_irq(&ioc->lock);
+		model = rcu_dereference_protected(ioc->model,
+					lockdep_is_held(&ioc->lock));
+		rcu_assign_pointer(ioc->model, NULL);
+		spin_unlock_irq(&ioc->lock);
+		if (model)
+			iocost_bpf_model_put(model);
+	}
+#endif
 	kfree(ioc);
 }
 
@@ -3438,12 +3493,30 @@ static u64 ioc_cost_model_prfill(struct seq_file *sf,
 		return 0;
 
 	spin_lock_irq(&ioc->lock);
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	{
+		const struct iocost_model_ops *model =
+			rcu_dereference_protected(ioc->model,
+					lockdep_is_held(&ioc->lock));
+
+		seq_printf(sf, "%s ctrl=%s model=%s "
+			   "rbps=%llu rseqiops=%llu rrandiops=%llu "
+			   "wbps=%llu wseqiops=%llu wrandiops=%llu\n",
+			   dname, model ? "bpf" :
+				   ioc->user_cost_model ? "user" : "auto",
+			   model ? model->name : "linear",
+			   u[I_LCOEF_RBPS], u[I_LCOEF_RSEQIOPS],
+			   u[I_LCOEF_RRANDIOPS], u[I_LCOEF_WBPS],
+			   u[I_LCOEF_WSEQIOPS], u[I_LCOEF_WRANDIOPS]);
+	}
+#else
 	seq_printf(sf, "%s ctrl=%s model=linear "
 		   "rbps=%llu rseqiops=%llu rrandiops=%llu "
 		   "wbps=%llu wseqiops=%llu wrandiops=%llu\n",
 		   dname, ioc->user_cost_model ? "user" : "auto",
 		   u[I_LCOEF_RBPS], u[I_LCOEF_RSEQIOPS], u[I_LCOEF_RRANDIOPS],
 		   u[I_LCOEF_WBPS], u[I_LCOEF_WSEQIOPS], u[I_LCOEF_WRANDIOPS]);
+#endif
 	spin_unlock_irq(&ioc->lock);
 	return 0;
 }
@@ -3455,6 +3528,48 @@ static int ioc_cost_model_show(struct seq_file *sf, void *v)
 	blkcg_print_blkgs(sf, blkcg, ioc_cost_model_prfill,
 			  &blkcg_policy_iocost, seq_cft(sf)->private, false);
 	return 0;
+}
+
+/*
+ * Resolve the model name and take a reference on the new model before
+ * anything is applied, so a bad name rejects the whole write.  The
+ * registry lookup takes the registration mutex and must stay outside
+ * ioc->lock.  The returned model is per-write state passed back into
+ * ioc_bpf_model_commit(), which performs the pointer swap under
+ * ioc->lock so concurrent writers cannot interleave a half-applied
+ * configuration, and the caller drops the old model's reference
+ * afterwards.
+ */
+static const struct iocost_model_ops *
+ioc_bpf_model_prepare(const char *name)
+{
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	if (!name[0])
+		return NULL;
+	return iocost_bpf_model_get(name);
+#else
+	return name[0] ? ERR_PTR(-ENOENT) : NULL;
+#endif
+}
+
+/*
+ * Swap in the model returned by ioc_bpf_model_prepare().  Called with
+ * ioc->lock held; dropping the old model's reference may sleep, so
+ * the caller does it after releasing the lock.
+ */
+static const struct iocost_model_ops *
+ioc_bpf_model_commit(struct ioc *ioc, const struct iocost_model_ops *new)
+{
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	const struct iocost_model_ops *old;
+
+	old = rcu_dereference_protected(ioc->model,
+					lockdep_is_held(&ioc->lock));
+	rcu_assign_pointer(ioc->model, new);
+	return old;
+#else
+	return NULL;
+#endif
 }
 
 static const match_table_t cost_ctrl_tokens = {
@@ -3482,6 +3597,7 @@ static ssize_t ioc_cost_model_write(struct kernfs_open_file *of, char *input,
 	struct ioc *ioc;
 	u64 u[NR_I_LCOEFS];
 	bool user;
+	char bpf_model[IOCOST_MODEL_NAME_LEN];
 	char *body, *p;
 	int ret;
 
@@ -3512,6 +3628,25 @@ static ssize_t ioc_cost_model_write(struct kernfs_open_file *of, char *input,
 	spin_lock_irq(&ioc->lock);
 	memcpy(u, ioc->params.i_lcoefs, sizeof(u));
 	user = ioc->user_cost_model;
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	{
+		const struct iocost_model_ops *model =
+			rcu_dereference_protected(ioc->model,
+					lockdep_is_held(&ioc->lock));
+
+		/*
+		 * seed from the bound model so a coefficient-only write
+		 * keeps it bound; ctrl=auto/user and model=linear are
+		 * the explicit ways back to the builtin model
+		 */
+		if (model)
+			strscpy(bpf_model, model->name, sizeof(bpf_model));
+		else
+			bpf_model[0] = '\0';
+	}
+#else
+	bpf_model[0] = '\0';
+#endif
 
 	ret = -EINVAL;
 
@@ -3527,17 +3662,27 @@ static ssize_t ioc_cost_model_write(struct kernfs_open_file *of, char *input,
 		switch (match_token(p, cost_ctrl_tokens, args)) {
 		case COST_CTRL:
 			match_strlcpy(buf, &args[0], sizeof(buf));
-			if (!strcmp(buf, "auto"))
+			if (!strcmp(buf, "auto")) {
 				user = false;
-			else if (!strcmp(buf, "user"))
+			} else if (!strcmp(buf, "user")) {
 				user = true;
-			else
+			} else if (!strcmp(buf, "bpf")) {
+				/* readback value; keep the bound model */
+				continue;
+			} else {
 				goto unlock;
+			}
+			/* ctrl=auto/user: explicit return to builtin */
+			bpf_model[0] = '\0';
 			continue;
 		case COST_MODEL:
 			match_strlcpy(buf, &args[0], sizeof(buf));
-			if (strcmp(buf, "linear"))
-				goto unlock;
+			if (!strcmp(buf, "linear")) {
+				/* back to the builtin linear model */
+				bpf_model[0] = '\0';
+				continue;
+			}
+			match_strlcpy(bpf_model, &args[0], sizeof(bpf_model));
 			continue;
 		}
 
@@ -3550,18 +3695,33 @@ static ssize_t ioc_cost_model_write(struct kernfs_open_file *of, char *input,
 		user = true;
 	}
 
-	if (user) {
-		memcpy(ioc->params.i_lcoefs, u, sizeof(u));
-		ioc->user_cost_model = true;
-	} else {
-		ioc->user_cost_model = false;
-	}
-	ioc_refresh_params(ioc, true);
-
 	ret = 0;
 
 unlock:
 	spin_unlock_irq(&ioc->lock);
+
+	/* resolve the name outside ioc->lock; see ioc_bpf_model_prepare() */
+	if (!ret) {
+		const struct iocost_model_ops *new, *old;
+
+		new = ioc_bpf_model_prepare(bpf_model);
+		if (IS_ERR(new)) {
+			ret = PTR_ERR(new);
+		} else {
+			spin_lock_irq(&ioc->lock);
+			if (user) {
+				memcpy(ioc->params.i_lcoefs, u, sizeof(u));
+				ioc->user_cost_model = true;
+			} else {
+				ioc->user_cost_model = false;
+			}
+			ioc_refresh_params(ioc, true);
+			old = ioc_bpf_model_commit(ioc, new);
+			spin_unlock_irq(&ioc->lock);
+			if (IS_ENABLED(CONFIG_BLK_CGROUP_IOCOST_BPF) && old)
+				iocost_bpf_model_put(old);
+		}
+	}
 
 	blk_mq_unquiesce_queue(q);
 	blk_mq_unfreeze_queue(q, memflags);
