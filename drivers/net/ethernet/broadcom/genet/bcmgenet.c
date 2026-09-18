@@ -3729,6 +3729,19 @@ static int bcmgenet_change_carrier(struct net_device *dev, bool new_carrier)
 	return 0;
 }
 
+static int bcmgenet_hwtstamp_get(struct net_device *dev,
+				 struct kernel_hwtstamp_config *cfg)
+{
+	return -EOPNOTSUPP;
+}
+
+static int bcmgenet_hwtstamp_set(struct net_device *dev,
+				 struct kernel_hwtstamp_config *cfg,
+				 struct netlink_ext_ack *extack)
+{
+	return -EOPNOTSUPP;
+}
+
 static const struct net_device_ops bcmgenet_netdev_ops = {
 	.ndo_open		= bcmgenet_open,
 	.ndo_stop		= bcmgenet_close,
@@ -3740,6 +3753,8 @@ static const struct net_device_ops bcmgenet_netdev_ops = {
 	.ndo_set_features	= bcmgenet_set_features,
 	.ndo_get_stats64	= bcmgenet_get_stats64,
 	.ndo_change_carrier	= bcmgenet_change_carrier,
+	.ndo_hwtstamp_get	= bcmgenet_hwtstamp_get,
+	.ndo_hwtstamp_set	= bcmgenet_hwtstamp_set,
 };
 
 /* GENET hardware parameters/characteristics */
