@@ -777,6 +777,7 @@ static void macb_mac_link_down(struct phylink_config *config, unsigned int mode,
 	struct net_device *netdev = to_net_dev(config->dev);
 	struct macb *bp = netdev_priv(netdev);
 	struct macb_queue *queue;
+	unsigned long flags;
 	unsigned int q;
 	u32 ctrl;
 
@@ -786,8 +787,10 @@ static void macb_mac_link_down(struct phylink_config *config, unsigned int mode,
 				     bp->rx_intr_mask | MACB_TX_INT_FLAGS | MACB_BIT(HRESP));
 
 	/* Disable Rx and Tx */
+	spin_lock_irqsave(&bp->lock, flags);
 	ctrl = macb_readl(bp, NCR) & ~(MACB_BIT(RE) | MACB_BIT(TE));
 	macb_writel(bp, NCR, ctrl);
+	spin_unlock_irqrestore(&bp->lock, flags);
 
 	netif_tx_stop_all_queues(netdev);
 }
@@ -940,11 +943,13 @@ static void macb_mac_link_up(struct phylink_config *config,
 	}
 
 	/* Enable Rx and Tx; Enable PTP unicast */
+	spin_lock_irqsave(&bp->lock, flags);
 	ctrl = macb_readl(bp, NCR);
 	if (gem_has_ptp(bp))
 		ctrl |= MACB_BIT(PTPUNI);
 
 	macb_writel(bp, NCR, ctrl | MACB_BIT(RE) | MACB_BIT(TE));
+	spin_unlock_irqrestore(&bp->lock, flags);
 
 	netif_tx_wake_all_queues(netdev);
 }
@@ -1995,6 +2000,7 @@ static void macb_hresp_error_task(struct work_struct *work)
 	struct macb *bp = from_work(bp, work, hresp_err_bh_work);
 	struct net_device *netdev = bp->netdev;
 	struct macb_queue *queue;
+	unsigned long flags;
 	unsigned int q;
 	u32 ctrl;
 
@@ -2003,9 +2009,11 @@ static void macb_hresp_error_task(struct work_struct *work)
 					 MACB_TX_INT_FLAGS |
 					 MACB_BIT(HRESP));
 	}
+	spin_lock_irqsave(&bp->lock, flags);
 	ctrl = macb_readl(bp, NCR);
 	ctrl &= ~(MACB_BIT(RE) | MACB_BIT(TE));
 	macb_writel(bp, NCR, ctrl);
+	spin_unlock_irqrestore(&bp->lock, flags);
 
 	netif_tx_stop_all_queues(netdev);
 	netif_carrier_off(netdev);
@@ -2022,8 +2030,10 @@ static void macb_hresp_error_task(struct work_struct *work)
 			     MACB_TX_INT_FLAGS |
 			     MACB_BIT(HRESP));
 
-	ctrl |= MACB_BIT(RE) | MACB_BIT(TE);
-	macb_writel(bp, NCR, ctrl);
+	spin_lock_irqsave(&bp->lock, flags);
+	ctrl = MACB_BIT(RE) | MACB_BIT(TE);
+	macb_writel(bp, NCR, macb_readl(bp, NCR) | ctrl);
+	spin_unlock_irqrestore(&bp->lock, flags);
 
 	netif_carrier_on(netdev);
 	netif_tx_start_all_queues(netdev);
