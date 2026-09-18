@@ -757,9 +757,11 @@ static ssize_t threaded_show(struct device *dev,
 
 static int modify_napi_threaded(struct net_device *dev, unsigned long val)
 {
+	struct napi_struct *napi;
 	int ret;
 
-	if (list_empty(&dev->napi_list))
+	napi = list_first_entry_or_null(&dev->napi_list, typeof(*napi), dev_list);
+	if (!napi || test_bit(NAPI_STATE_NO_THREADED, &napi->state))
 		return -EOPNOTSUPP;
 
 	if (val != 0 && val != 1)

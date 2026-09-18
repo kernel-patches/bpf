@@ -337,6 +337,9 @@ netdev_nl_napi_set_config(struct napi_struct *napi, struct genl_info *info)
 	if (info->attrs[NETDEV_A_NAPI_THREADED]) {
 		int ret;
 
+		if (test_bit(NAPI_STATE_NO_THREADED, &napi->state))
+			return -EOPNOTSUPP;
+
 		threaded = nla_get_uint(info->attrs[NETDEV_A_NAPI_THREADED]);
 		ret = napi_set_threaded(napi, threaded);
 		if (ret)
