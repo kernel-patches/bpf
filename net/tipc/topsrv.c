@@ -710,15 +710,20 @@ static void tipc_topsrv_stop(struct net *net)
 	cancel_work_sync(&srv->awork);
 
 	spin_lock_bh(&srv->idr_lock);
-	for (id = 0; srv->idr_in_use; id++) {
-		con = idr_find(&srv->conn_idr, id);
-		if (con) {
-			conn_get(con);
+	for (id = 0; srv->idr_in_use;) {
+		con = idr_get_next(&srv->conn_idr, &id);
+		if (!con || !kref_get_unless_zero(&con->kref)) {
 			spin_unlock_bh(&srv->idr_lock);
-			tipc_conn_close(con);
-			conn_put(con);
+			cond_resched();
 			spin_lock_bh(&srv->idr_lock);
+			id = 0;
+			continue;
 		}
+		id++;
+		spin_unlock_bh(&srv->idr_lock);
+		tipc_conn_close(con);
+		conn_put(con);
+		spin_lock_bh(&srv->idr_lock);
 	}
 	__module_get(lsock->ops->owner);
 	__module_get(lsock->sk->sk_prot_creator->owner);
