@@ -27,6 +27,14 @@
 #define LAN865X_REG_CFGPARAM_CTRL 0x00DA
 #define LAN865X_REG_STS2 0x0019
 
+/* PHY interrupt status and mask registers (MDIO_MMD_VEND2). The status bits
+ * are read-to-clear; a mask bit is enabled by writing 0.
+ */
+#define LAN86XX_REG_STS1		0x0018
+#define LAN86XX_REG_IMSK1		0x001C
+
+#define LAN86XX_STS1_PLCA_STS_CHANGED	BIT(11)
+
 /* Collision Detector Control 0 Register */
 #define LAN86XX_REG_COL_DET_CTRL0	0x0087
 #define COL_DET_CTRL0_ENABLE_BIT_MASK	BIT(15)
@@ -458,14 +466,29 @@ static int lan86xx_plca_set_cfg(struct phy_device *phydev,
 	if (ret)
 		return ret;
 
-	if (plca_cfg->enabled)
+	/* phylib dispatches handle_interrupt() only for PHYs with a real IRQ
+	 * number (phy_interrupt_is_valid()). For PHY_POLL and PHY_MAC_INTERRUPT
+	 * handle_interrupt() is never called, so apply the static CDEN write
+	 * here as a baseline on every ethtool PLCA reconfiguration. The
+	 * limitation is that autonomous PLCA mode transitions between ethtool
+	 * reconfigurations are not tracked on such boards.
+	 */
+	if (phy_interrupt_is_valid(phydev))
+		return 0;
+
+	if (plca_cfg->enabled > 0)
 		return phy_modify_mmd(phydev, MDIO_MMD_VEND2,
 				      LAN86XX_REG_COL_DET_CTRL0,
 				      COL_DET_CTRL0_ENABLE_BIT_MASK,
 				      COL_DET_DISABLE);
 
-	return phy_modify_mmd(phydev, MDIO_MMD_VEND2, LAN86XX_REG_COL_DET_CTRL0,
-			      COL_DET_CTRL0_ENABLE_BIT_MASK, COL_DET_ENABLE);
+	if (plca_cfg->enabled == 0)
+		return phy_modify_mmd(phydev, MDIO_MMD_VEND2,
+				      LAN86XX_REG_COL_DET_CTRL0,
+				      COL_DET_CTRL0_ENABLE_BIT_MASK,
+				      COL_DET_ENABLE);
+
+	return 0;
 }
 
 static int lan867x_revd0_config_init(struct phy_device *phydev)
@@ -506,6 +529,111 @@ static int lan86xx_read_status(struct phy_device *phydev)
 	return 0;
 }
 
+/* Read LAN86XX_REG_STS1, which clears the latched status bits on read. */
+static int lan86xx_read_clear_sts1(struct phy_device *phydev)
+{
+	return phy_read_mmd(phydev, MDIO_MMD_VEND2, LAN86XX_REG_STS1);
+}
+
+/* Mask (mask bit = 1) or unmask (mask bit = 0) the given STS1 bits in
+ * IMSK1.
+ */
+static int lan86xx_set_intr_mask(struct phy_device *phydev, u16 mask,
+				 bool enable)
+{
+	if (enable)
+		/* A mask bit of 0 enables the corresponding interrupt. */
+		return phy_clear_bits_mmd(phydev, MDIO_MMD_VEND2,
+					  LAN86XX_REG_IMSK1, mask);
+
+	return phy_set_bits_mmd(phydev, MDIO_MMD_VEND2, LAN86XX_REG_IMSK1,
+				mask);
+}
+
+static int lan86xx_config_intr(struct phy_device *phydev)
+{
+	struct phy_plca_status plca_st;
+	int ret;
+
+	if (phydev->interrupts == PHY_INTERRUPT_ENABLED) {
+		/* Read to clear any pending status before enabling. */
+		ret = lan86xx_read_clear_sts1(phydev);
+		if (ret < 0)
+			return ret;
+
+		/* STS1 may have cleared a PSTC event that occurred while the
+		 * interrupt was masked, so synchronize CDEN with the current
+		 * PLCA state before enabling PSTC.
+		 */
+		ret = genphy_c45_plca_get_status(phydev, &plca_st);
+		if (ret < 0)
+			return ret;
+
+		ret = phy_modify_mmd(phydev, MDIO_MMD_VEND2,
+				     LAN86XX_REG_COL_DET_CTRL0,
+				     COL_DET_CTRL0_ENABLE_BIT_MASK,
+				     plca_st.pst ? COL_DET_DISABLE :
+				     COL_DET_ENABLE);
+		if (ret)
+			return ret;
+
+		return lan86xx_set_intr_mask(phydev,
+					     LAN86XX_STS1_PLCA_STS_CHANGED,
+					     true);
+	}
+
+	ret = lan86xx_set_intr_mask(phydev, LAN86XX_STS1_PLCA_STS_CHANGED,
+				    false);
+	if (ret)
+		return ret;
+
+	/* Read to clear any pending status after disabling. */
+	ret = lan86xx_read_clear_sts1(phydev);
+	return ret < 0 ? ret : 0;
+}
+
+static irqreturn_t lan86xx_handle_interrupt(struct phy_device *phydev)
+{
+	struct phy_plca_status plca_st;
+	irqreturn_t ret_irq = IRQ_NONE;
+	int sts1, ret;
+
+	/* Reading the status register clears the latched event bits. */
+	sts1 = lan86xx_read_clear_sts1(phydev);
+	if (sts1 < 0) {
+		phy_error(phydev);
+		return IRQ_NONE;
+	}
+
+	if (sts1 & LAN86XX_STS1_PLCA_STS_CHANGED) {
+		ret = genphy_c45_plca_get_status(phydev, &plca_st);
+		if (ret < 0) {
+			phy_error(phydev);
+			return IRQ_NONE;
+		}
+
+		/* AN1760/AN1699: disable collision detection in PLCA mode to
+		 * improve signal quality; re-enable it in CSMA/CD mode.
+		 *
+		 * https://www.microchip.com/en-us/application-notes/an1760
+		 * https://www.microchip.com/en-us/application-notes/an1699
+		 */
+		ret = phy_modify_mmd(phydev, MDIO_MMD_VEND2,
+				     LAN86XX_REG_COL_DET_CTRL0,
+				     COL_DET_CTRL0_ENABLE_BIT_MASK,
+				     plca_st.pst ? COL_DET_DISABLE :
+				     COL_DET_ENABLE);
+		if (ret < 0) {
+			phy_error(phydev);
+			return IRQ_NONE;
+		}
+
+		ret_irq = IRQ_HANDLED;
+	}
+
+	return ret_irq;
+}
+
 static struct phy_driver microchip_t1s_driver[] = {
 	{
 		PHY_ID_MATCH_EXACT(PHY_ID_LAN867X_REVB1),
@@ -513,6 +641,8 @@ static struct phy_driver microchip_t1s_driver[] = {
 		.features           = PHY_BASIC_T1S_P2MP_FEATURES,
 		.config_init        = lan867x_revb1_config_init,
 		.read_status        = lan86xx_read_status,
+		.config_intr        = lan86xx_config_intr,
+		.handle_interrupt   = lan86xx_handle_interrupt,
 		.get_plca_cfg	    = genphy_c45_plca_get_cfg,
 		.set_plca_cfg	    = genphy_c45_plca_set_cfg,
 		.get_plca_status    = genphy_c45_plca_get_status,
@@ -523,6 +653,8 @@ static struct phy_driver microchip_t1s_driver[] = {
 		.features           = PHY_BASIC_T1S_P2MP_FEATURES,
 		.config_init        = lan867x_revc_config_init,
 		.read_status        = lan86xx_read_status,
+		.config_intr        = lan86xx_config_intr,
+		.handle_interrupt   = lan86xx_handle_interrupt,
 		.get_plca_cfg	    = genphy_c45_plca_get_cfg,
 		.set_plca_cfg	    = lan86xx_plca_set_cfg,
 		.get_plca_status    = genphy_c45_plca_get_status,
@@ -533,6 +665,8 @@ static struct phy_driver microchip_t1s_driver[] = {
 		.features           = PHY_BASIC_T1S_P2MP_FEATURES,
 		.config_init        = lan867x_revc_config_init,
 		.read_status        = lan86xx_read_status,
+		.config_intr        = lan86xx_config_intr,
+		.handle_interrupt   = lan86xx_handle_interrupt,
 		.get_plca_cfg	    = genphy_c45_plca_get_cfg,
 		.set_plca_cfg	    = lan86xx_plca_set_cfg,
 		.get_plca_status    = genphy_c45_plca_get_status,
@@ -556,6 +690,8 @@ static struct phy_driver microchip_t1s_driver[] = {
 		.features           = PHY_BASIC_T1S_P2MP_FEATURES,
 		.config_init        = lan865x_revb_config_init,
 		.read_status        = lan86xx_read_status,
+		.config_intr        = lan86xx_config_intr,
+		.handle_interrupt   = lan86xx_handle_interrupt,
 		.read_mmd           = genphy_read_mmd_c45,
 		.write_mmd          = genphy_write_mmd_c45,
 		.get_plca_cfg	    = genphy_c45_plca_get_cfg,
