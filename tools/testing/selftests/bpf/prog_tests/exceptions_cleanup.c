@@ -8,6 +8,7 @@
 #include "exceptions_cleanup_freplace.skel.h"
 #include "exceptions_cleanup_pad_freplace.skel.h"
 #include "exceptions_cleanup_ext_table.skel.h"
+#include "exceptions_cleanup_light.lskel.h"
 
 /* foo3 threw: every frame that has a pad ran it. */
 #define PADS_FOO3_THREW \
@@ -168,6 +169,30 @@ static void test_ext_table(struct exceptions_cleanup_shapes *skel)
 	bpf_link__destroy(link);
 out:
 	exceptions_cleanup_ext_table__destroy(fr);
+}
+
+static void test_light_skeleton(void)
+{
+	struct exceptions_cleanup_light_lskel *skel;
+	__u64 ctx = 0;
+	int err;
+
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		    .ctx_in = &ctx,
+		    .ctx_size_in = sizeof(ctx),
+	);
+
+	skel = exceptions_cleanup_light_lskel__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "light open_and_load"))
+		return;
+
+	err = bpf_prog_test_run_opts(skel->progs.entry_light.prog_fd, &topts);
+	if (!ASSERT_OK(err, "run"))
+		goto out;
+	ASSERT_EQ(topts.retval, THROW_COOKIE, "retval");
+	ASSERT_EQ(skel->bss->pads_ran, RAN_LIGHT, "pads_ran");
+out:
+	exceptions_cleanup_light_lskel__destroy(skel);
 }
 
 static void test_shapes(void)
@@ -386,6 +411,9 @@ void test_exceptions_cleanup(void)
 		run(skel, 2, THROW_COOKIE, PADS_FOO2_THREW);
 
 	exceptions_cleanup__destroy(skel);
+
+	if (test__start_subtest("light_skeleton"))
+		test_light_skeleton();
 
 	test_shapes();
 

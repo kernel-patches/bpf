@@ -32,6 +32,9 @@
 #define RAN_RESUME_ALIAS	0x8000
 #define RAN_PAD_TAIL_CALL	0x10000
 
+/* progs/exceptions_cleanup_light.c: the one pad it has. */
+#define RAN_LIGHT		0x1
+
 #define CLEANUP_REC(begin, end, landing_pad)			\
 	".pushsection .bpf_cleanup,\"a\",@progbits;"		\
 	".long " begin ";"					\
