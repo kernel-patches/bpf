@@ -4509,8 +4509,15 @@ enum bpf_task_work_state {
 struct bpf_task_work_ctx {
 	enum bpf_task_work_state state;
 	refcount_t refcnt;
+	/*
+	 * References to task/prog/work in the current scheduling round.  The
+	 * STANDBY -> PENDING transition serializes initialization from zero.
+	 */
+	refcount_t round_refs;
 	struct callback_head work;
 	struct irq_work irq_work;
+	struct irq_work cancel_irq_work;
+	struct irq_work destroy_irq_work;
 	/* bpf_prog that schedules task work */
 	struct bpf_prog *prog;
 	/* task for which callback is scheduled */
@@ -4545,11 +4552,55 @@ static bool bpf_task_work_ctx_tryget(struct bpf_task_work_ctx *ctx)
 	return refcount_inc_not_zero(&ctx->refcnt);
 }
 
-static void bpf_task_work_destroy(struct irq_work *irq_work)
+static void bpf_task_work_round_get(struct bpf_task_work_ctx *ctx)
 {
-	struct bpf_task_work_ctx *ctx = container_of(irq_work, struct bpf_task_work_ctx, irq_work);
+	refcount_inc(&ctx->round_refs);
+}
+
+/*
+ * Pin an active round for cancellation without reviving a round whose last
+ * user has already started resetting the context.
+ */
+static bool bpf_task_work_round_tryget(struct bpf_task_work_ctx *ctx)
+{
+	return refcount_inc_not_zero(&ctx->round_refs);
+}
+
+/*
+ * Once the last reference reaches zero, a canceller cannot join this round.
+ * Reset task/prog before publishing STANDBY, which is the only state from
+ * which a new scheduler can initialize the next round's first reference.
+ */
+static void bpf_task_work_round_put(struct bpf_task_work_ctx *ctx)
+{
+	enum bpf_task_work_state state, old_state;
+
+	if (!refcount_dec_and_test(&ctx->round_refs))
+		return;
 
 	bpf_task_work_ctx_reset(ctx);
+
+	/* FREED is terminal; leave the round permanently closed. */
+	state = READ_ONCE(ctx->state);
+	if (state == BPF_TW_FREED)
+		return;
+	if (WARN_ON_ONCE(state != BPF_TW_PENDING &&
+			 state != BPF_TW_SCHEDULING &&
+			 state != BPF_TW_RUNNING))
+		return;
+
+	old_state = cmpxchg(&ctx->state, state, BPF_TW_STANDBY);
+	if (old_state == BPF_TW_FREED)
+		return;
+	if (WARN_ON_ONCE(old_state != state))
+		return;
+}
+
+static void bpf_task_work_destroy(struct irq_work *irq_work)
+{
+	struct bpf_task_work_ctx *ctx;
+
+	ctx = container_of(irq_work, struct bpf_task_work_ctx, destroy_irq_work);
 	kfree_rcu(ctx, rcu);
 }
 
@@ -4559,23 +4610,24 @@ static void bpf_task_work_ctx_put(struct bpf_task_work_ctx *ctx)
 		return;
 
 	if (irqs_disabled()) {
-		ctx->irq_work = IRQ_WORK_INIT(bpf_task_work_destroy);
-		irq_work_queue(&ctx->irq_work);
+		ctx->destroy_irq_work = IRQ_WORK_INIT(bpf_task_work_destroy);
+		irq_work_queue(&ctx->destroy_irq_work);
 	} else {
-		bpf_task_work_destroy(&ctx->irq_work);
+		bpf_task_work_destroy(&ctx->destroy_irq_work);
 	}
 }
 
 static void bpf_task_work_cancel(struct bpf_task_work_ctx *ctx)
 {
 	/*
-	 * Scheduled task_work callback holds ctx ref, so if we successfully
-	 * cancelled, we put that ref on callback's behalf. If we couldn't
-	 * cancel, callback will inevitably run or has already completed
-	 * running, and it would have taken care of its ctx ref itself.
+	 * The scheduled callback holds both a ctx ref and a round reference.
+	 * Successful cancellation releases both on its behalf.  If the
+	 * work was already claimed, the callback releases them itself.
 	 */
-	if (task_work_cancel(ctx->task, &ctx->work))
+	if (task_work_cancel(ctx->task, &ctx->work)) {
+		bpf_task_work_round_put(ctx);
 		bpf_task_work_ctx_put(ctx);
+	}
 }
 
 static void bpf_task_work_callback(struct callback_head *cb)
@@ -4595,6 +4647,7 @@ static void bpf_task_work_callback(struct callback_head *cb)
 	if (state == BPF_TW_SCHEDULED)
 		state = cmpxchg(&ctx->state, BPF_TW_SCHEDULED, BPF_TW_RUNNING);
 	if (state == BPF_TW_FREED) {
+		bpf_task_work_round_put(ctx);
 		bpf_task_work_ctx_put(ctx);
 		return;
 	}
@@ -4606,9 +4659,7 @@ static void bpf_task_work_callback(struct callback_head *cb)
 			 (u64)(long)ctx->map_val, 0, 0);
 	migrate_enable();
 
-	bpf_task_work_ctx_reset(ctx);
-	(void)cmpxchg(&ctx->state, BPF_TW_RUNNING, BPF_TW_STANDBY);
-
+	bpf_task_work_round_put(ctx);
 	bpf_task_work_ctx_put(ctx);
 }
 
@@ -4621,18 +4672,17 @@ static void bpf_task_work_irq(struct irq_work *irq_work)
 	guard(rcu)();
 
 	if (cmpxchg(&ctx->state, BPF_TW_PENDING, BPF_TW_SCHEDULING) != BPF_TW_PENDING) {
+		bpf_task_work_round_put(ctx);
 		bpf_task_work_ctx_put(ctx);
 		return;
 	}
 
+	/* Publish the callback's reference before task_work_add(). */
+	bpf_task_work_round_get(ctx);
 	err = task_work_add(ctx->task, &ctx->work, ctx->mode);
 	if (err) {
-		bpf_task_work_ctx_reset(ctx);
-		/*
-		 * try to switch back to STANDBY for another task_work reuse, but we might have
-		 * gone to FREED already, which is fine as we already cleaned up after ourselves
-		 */
-		(void)cmpxchg(&ctx->state, BPF_TW_SCHEDULING, BPF_TW_STANDBY);
+		bpf_task_work_round_put(ctx);
+		bpf_task_work_round_put(ctx);
 		bpf_task_work_ctx_put(ctx);
 		return;
 	}
@@ -4647,6 +4697,8 @@ static void bpf_task_work_irq(struct irq_work *irq_work)
 	state = cmpxchg(&ctx->state, BPF_TW_SCHEDULING, BPF_TW_SCHEDULED);
 	if (state == BPF_TW_FREED)
 		bpf_task_work_cancel(ctx); /* clean up if we switched into FREED state */
+
+	bpf_task_work_round_put(ctx);
 }
 
 static struct bpf_task_work_ctx *bpf_task_work_fetch_ctx(struct bpf_task_work *tw,
@@ -4665,6 +4717,7 @@ static struct bpf_task_work_ctx *bpf_task_work_fetch_ctx(struct bpf_task_work *t
 
 	memset(ctx, 0, sizeof(*ctx));
 	refcount_set(&ctx->refcnt, 1); /* map's own ref */
+	refcount_set(&ctx->round_refs, 0);
 	ctx->state = BPF_TW_STANDBY;
 
 	old_ctx = cmpxchg(&twk->ctx, NULL, ctx);
@@ -4704,10 +4757,11 @@ static struct bpf_task_work_ctx *bpf_task_work_acquire_ctx(struct bpf_task_work 
 	}
 
 	if (cmpxchg(&ctx->state, BPF_TW_STANDBY, BPF_TW_PENDING) != BPF_TW_STANDBY) {
-		/* lost acquiring race or map_release_uref() stole it from us, put ref and bail */
+		/* Lost the acquiring race or map deletion made FREED terminal. */
 		bpf_task_work_ctx_put(ctx);
 		return ERR_PTR(-EBUSY);
 	}
+	refcount_set(&ctx->round_refs, 1); /* scheduler's reference */
 
 	/*
 	 * If no process or bpffs is holding a reference to the map, no new callbacks should be
@@ -4715,6 +4769,7 @@ static struct bpf_task_work_ctx *bpf_task_work_acquire_ctx(struct bpf_task_work 
 	 * choice: dropping user references should stop everything.
 	 */
 	if (!atomic64_read(&map->usercnt)) {
+		bpf_task_work_round_put(ctx);
 		/* drop ref we just got for task_work callback itself */
 		bpf_task_work_ctx_put(ctx);
 		/* transfer map's ref into cancel_and_free() */
@@ -4902,12 +4957,14 @@ __bpf_kfunc int bpf_timer_cancel_async(struct bpf_timer *timer)
 
 __bpf_kfunc_end_defs();
 
-static void bpf_task_work_cancel_scheduled(struct irq_work *irq_work)
+static void bpf_task_work_cancel_freed(struct irq_work *irq_work)
 {
-	struct bpf_task_work_ctx *ctx = container_of(irq_work, struct bpf_task_work_ctx, irq_work);
+	struct bpf_task_work_ctx *ctx;
 
-	bpf_task_work_cancel(ctx); /* this might put task_work callback's ref */
-	bpf_task_work_ctx_put(ctx); /* and here we put map's own ref that was transferred to us */
+	ctx = container_of(irq_work, struct bpf_task_work_ctx, cancel_irq_work);
+	bpf_task_work_cancel(ctx);
+	bpf_task_work_round_put(ctx);
+	bpf_task_work_ctx_put(ctx); /* put the map's ref transferred to us */
 }
 
 void bpf_task_work_cancel_and_free(void *val)
@@ -4921,10 +4978,20 @@ void bpf_task_work_cancel_and_free(void *val)
 		return;
 
 	state = xchg(&ctx->state, BPF_TW_FREED);
-	if (state == BPF_TW_SCHEDULED) {
-		/* run in irq_work to avoid locks in NMI */
-		init_irq_work(&ctx->irq_work, bpf_task_work_cancel_scheduled);
-		irq_work_queue(&ctx->irq_work);
+	/*
+	 * SCHEDULED guarantees a callback round user.  After publishing FREED,
+	 * either add the cancellation user before the callback leaves, or lose
+	 * to the last put after the callback has already claimed/completed work.
+	 */
+	if (state == BPF_TW_SCHEDULED &&
+	    bpf_task_work_round_tryget(ctx)) {
+		/*
+		 * A separate irq_work keeps the NMI deletion path atomic-only and
+		 * avoids reinitializing the scheduler's irq_work while it is queued
+		 * or running.  Holding the map ref keeps ctx alive until this runs.
+		 */
+		init_irq_work(&ctx->cancel_irq_work, bpf_task_work_cancel_freed);
+		WARN_ON_ONCE(!irq_work_queue(&ctx->cancel_irq_work));
 		return;
 	}
 
