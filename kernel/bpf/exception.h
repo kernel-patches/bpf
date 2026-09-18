@@ -7,6 +7,7 @@
 
 struct bpf_verifier_env;
 
+int bpf_prepare_cleanup_exceptions(struct bpf_verifier_env *env);
 int bpf_cleanup_pad_of_call(struct bpf_verifier_env *env, u32 idx);
 
 #endif /* _LINUX_BPF_EXCEPTION_H */
