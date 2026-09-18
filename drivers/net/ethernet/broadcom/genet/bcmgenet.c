@@ -3508,14 +3508,14 @@ static void bcmgenet_dump_tx_queue(struct bcmgenet_tx_ring *ring)
 
 	txq = netdev_get_tx_queue(priv->dev, ring->index);
 
-	spin_lock(&ring->lock);
+	spin_lock_bh(&ring->lock);
 	intsts = ~bcmgenet_intrl2_1_readl(priv, INTRL2_CPU_MASK_STATUS);
 	intmsk = 1 << ring->index;
 	c_index = bcmgenet_tdma_ring_readl(priv, ring->index, TDMA_CONS_INDEX);
 	p_index = bcmgenet_tdma_ring_readl(priv, ring->index, TDMA_PROD_INDEX);
 	txq_stopped = netif_tx_queue_stopped(txq);
 	free_bds = ring->free_bds;
-	spin_unlock(&ring->lock);
+	spin_unlock_bh(&ring->lock);
 
 	netif_err(priv, tx_err, priv->dev, "Ring %d queue %d status summary\n"
 		  "TX queue status: %s, interrupts: %s\n"
