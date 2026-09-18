@@ -1445,6 +1445,12 @@ static int stmmac_phylink_setup(struct stmmac_priv *priv)
 		__set_bit(priv->plat->phy_interface,
 			  config->supported_interfaces);
 
+	/* If we have an integrated PCS, add the interfaces it supports. */
+	if (priv->integrated_pcs)
+		phy_interface_or(config->supported_interfaces,
+				 config->supported_interfaces,
+				 priv->integrated_pcs->pcs.supported_interfaces);
+
 	/* If we have an xpcs, it defines which PHY interfaces are supported. */
 	if (priv->hw->xpcs)
 		pcs = xpcs_to_phylink_pcs(priv->hw->xpcs);
