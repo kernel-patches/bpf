@@ -10169,7 +10169,8 @@ static int idstack_pop(struct bpf_idmap *idmap)
 }
 
 /* Release id and objects derived from it iteratively in a DFS manner */
-static int release_reference(struct bpf_verifier_env *env, int id)
+static int __release_reference(struct bpf_verifier_env *env, int id,
+			       enum bpf_diag_mod_reason reason)
 {
 	u32 mask = (1 << STACK_SPILL) | (1 << STACK_DYNPTR);
 	struct bpf_verifier_state *vstate = env->cur_state;
@@ -10224,20 +10225,23 @@ static int release_reference(struct bpf_verifier_env *env, int id)
 
 				if (reg->dynptr.first_slot)
 					dyn_stack--;
-				bpf_diag_record_scrub(env, &dyn_stack[0].spilled_ptr,
-						      BPF_DIAG_MOD_REF_RELEASE);
-				bpf_diag_record_scrub(env, &dyn_stack[1].spilled_ptr,
-						      BPF_DIAG_MOD_REF_RELEASE);
+				bpf_diag_record_scrub(env, &dyn_stack[0].spilled_ptr, reason);
+				bpf_diag_record_scrub(env, &dyn_stack[1].spilled_ptr, reason);
 				invalidate_dynptr(env, dyn_stack);
 				continue;
 			}
-			bpf_diag_record_scrub(env, reg, BPF_DIAG_MOD_REF_RELEASE);
+			bpf_diag_record_scrub(env, reg, reason);
 			if (!stack || stack->slot_type[BPF_REG_SIZE - 1] == STACK_SPILL)
 				mark_reg_invalid(env, reg);
 		}));
 	}
 
 	return 0;
+}
+
+static int release_reference(struct bpf_verifier_env *env, int id)
+{
+	return __release_reference(env, id, BPF_DIAG_MOD_REF_RELEASE);
 }
 
 /* Find the first reference owned by frame @frameno, or 0 if it owns none. */
@@ -10265,7 +10269,7 @@ static int release_frame_reference(struct bpf_verifier_env *env, int id)
 		break;
 	}
 
-	return release_reference(env, id);
+	return __release_reference(env, id, BPF_DIAG_MOD_FRAME_RELEASE);
 }
 
 static void invalidate_non_owning_refs(struct bpf_verifier_env *env)
