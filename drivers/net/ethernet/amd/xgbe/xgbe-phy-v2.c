@@ -11,6 +11,7 @@
 #include <linux/mdio.h>
 #include <linux/phy.h>
 #include <linux/ethtool.h>
+#include <linux/rtnetlink.h>
 
 #include "xgbe.h"
 #include "xgbe-common.h"
@@ -1218,7 +1219,13 @@ static int xgbe_phy_sfp_read_eeprom(struct xgbe_prv_data *pdata)
 		goto put;
 	}
 
-	/* Check for an added or changed SFP */
+	/* Check for an added or changed SFP. Freeing any existing external
+	 * PHY device is deferred to the caller: xgbe_phy_free_phy_device()
+	 * can end up calling back into this driver's MDIO read/write
+	 * routines (via phy_detach() -> phy_suspend()), which take the
+	 * comm ownership mutex themselves, and that mutex is held across
+	 * this call.
+	 */
 	if (memcmp(&phy_data->sfp_eeprom, &sfp_eeprom, sizeof(sfp_eeprom))) {
 		phy_data->sfp_changed = 1;
 
@@ -1226,8 +1233,6 @@ static int xgbe_phy_sfp_read_eeprom(struct xgbe_prv_data *pdata)
 			xgbe_phy_sfp_eeprom_info(pdata, &sfp_eeprom);
 
 		memcpy(&phy_data->sfp_eeprom, &sfp_eeprom, sizeof(sfp_eeprom));
-
-		xgbe_phy_free_phy_device(pdata);
 	} else {
 		phy_data->sfp_changed = 0;
 	}
@@ -1268,7 +1273,45 @@ static void xgbe_phy_sfp_mod_absent(struct xgbe_prv_data *pdata)
 
 	phy_data->sfp_mod_absent = 1;
 	phy_data->sfp_phy_avail = 0;
+	phy_data->sfp_changed = 0;
 	memset(&phy_data->sfp_eeprom, 0, sizeof(phy_data->sfp_eeprom));
+}
+
+/* phy_detach()/phy_device_remove(), called from xgbe_phy_free_phy_device()
+ * below, require RTNL to be held by the caller (phy_detach() itself uses
+ * rtnl_dereference() and phy_link_topo_del_phy()). The callers below run
+ * from the service workqueue with no lock held, so a plain rtnl_lock()
+ * cannot be used here: xgbe_stopdev() (system workqueue) takes rtnl_lock()
+ * and then calls flush_workqueue(pdata->dev_workqueue) inside xgbe_stop(),
+ * which would block waiting for this very (dev_workqueue) work item to
+ * finish - while it is blocked waiting to reacquire RTNL from
+ * xgbe_stopdev(). That is an ABBA deadlock, the same class of bug this
+ * driver just fixed elsewhere.
+ *
+ * Use a non-blocking rtnl_trylock() instead: on contention, skip the
+ * teardown for this poll and let the next service poll (100ms-1s later)
+ * retry it. If the interface is going down concurrently, xgbe_phy_stop()
+ * (phy_impl.stop) frees the PHY itself, under RTNL already held by its
+ * own caller - so nothing is lost by skipping here.
+ */
+static void xgbe_phy_sfp_mod_absent_safe(struct xgbe_prv_data *pdata)
+{
+	if (!rtnl_trylock())
+		return;
+
+	xgbe_phy_sfp_mod_absent(pdata);
+
+	rtnl_unlock();
+}
+
+static void xgbe_phy_free_phy_device_safe(struct xgbe_prv_data *pdata)
+{
+	if (!rtnl_trylock())
+		return;
+
+	xgbe_phy_free_phy_device(pdata);
+
+	rtnl_unlock();
 }
 
 static void xgbe_phy_sfp_reset(struct xgbe_phy_data *phy_data)
@@ -1296,26 +1339,55 @@ static void xgbe_phy_sfp_detect(struct xgbe_prv_data *pdata)
 	/* Read the SFP signals and check for module presence */
 	xgbe_phy_sfp_signals(pdata);
 	if (phy_data->sfp_mod_absent) {
-		xgbe_phy_sfp_mod_absent(pdata);
-		goto put;
+		/* xgbe_phy_sfp_mod_absent() calls xgbe_phy_free_phy_device(),
+		 * which can call back into this driver's MDIO read/write
+		 * routines via phy_detach() -> phy_suspend(). Those routines
+		 * take the comm ownership mutex themselves, so it must be
+		 * released before making this call.
+		 */
+		xgbe_phy_put_comm_ownership(pdata);
+		xgbe_phy_sfp_mod_absent_safe(pdata);
+		goto settings;
 	}
 
 	ret = xgbe_phy_sfp_read_eeprom(pdata);
+	xgbe_phy_put_comm_ownership(pdata);
 	if (ret) {
 		/* Treat any error as if there isn't an SFP plugged in */
 		xgbe_phy_sfp_reset(phy_data);
-		xgbe_phy_sfp_mod_absent(pdata);
-		goto put;
+		xgbe_phy_sfp_mod_absent_safe(pdata);
+		goto settings;
 	}
+
+	/* Same reasoning as above: this must run without the comm
+	 * ownership mutex held.
+	 */
+	if (phy_data->sfp_changed)
+		xgbe_phy_free_phy_device_safe(pdata);
 
 	xgbe_phy_sfp_parse_eeprom(pdata);
 
-	xgbe_phy_sfp_external_phy(pdata);
+	/* Re-acquire ownership for the external PHY access below; it talks
+	 * to the SFP over I2C directly and needs the mutex held again.
+	 */
+	ret = xgbe_phy_get_comm_ownership(pdata);
+	if (!ret) {
+		xgbe_phy_sfp_external_phy(pdata);
+		xgbe_phy_put_comm_ownership(pdata);
+	} else {
+		/* Could not finish bringing up the new module: sfp_changed,
+		 * sfp_eeprom and sfp_base/sfp_speed were already updated
+		 * above for it, but external_phy() (and thus sfp_phy_avail)
+		 * never ran. Fall back to "no module" state instead of
+		 * committing to a half-initialized one - same pattern as
+		 * the read_eeprom() failure path above.
+		 */
+		xgbe_phy_sfp_reset(phy_data);
+		xgbe_phy_sfp_mod_absent_safe(pdata);
+	}
 
-put:
+settings:
 	xgbe_phy_sfp_phy_settings(pdata);
-
-	xgbe_phy_put_comm_ownership(pdata);
 }
 
 static int xgbe_phy_module_eeprom(struct xgbe_prv_data *pdata,
