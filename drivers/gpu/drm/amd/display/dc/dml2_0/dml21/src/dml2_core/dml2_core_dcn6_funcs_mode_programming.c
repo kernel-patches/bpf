@@ -519,26 +519,10 @@ static void dcn6_mp_calculate_dcfclk_deep_sleep_hysteresis(struct dml2_core_calc
 		struct dml2_core_internal_mode_program *states)
 {
 	const struct dml2_core_ip_params *ip = ctx->ip;
-	const struct dml2_utm_soc_bb *soc_bb = ctx->soc_bb;
-	struct dml2_core_internal_mode_program *inputs = states;
 	struct dml2_core_internal_mode_program *outputs = states;
-	const struct dml2_sop_table *sop_table = &soc_bb->sop_table;
-	struct dml2_soc_operating_point max_sop;
-	double min_return_latency_in_DCFCLK_cycles = 0;
-	const long min_return_uclk_cycles = 83;
-	const long min_return_fclk_cycles = 75;
 
-	sop_table->get_max_sop(sop_table, &max_sop);
-	min_return_latency_in_DCFCLK_cycles =
-			(min_return_uclk_cycles / (max_sop.uclk_khz / 1000.0)
-					+ min_return_fclk_cycles / (max_sop.fclk_khz / 1000.0))
-			* inputs->Dcfclk;
-
-	outputs->min_return_latency_in_dcfclk = (unsigned int)min_return_latency_in_DCFCLK_cycles;
-	outputs->dcfclk_deep_sleep_hysteresis = (unsigned int)math_max2(
-			32,
-			(double)ip->pixel_chunk_size_kbytes * 1024 * 3 / 4 / 64
-					- min_return_latency_in_DCFCLK_cycles);
+	outputs->min_return_latency_in_dcfclk = 0;
+	outputs->dcfclk_deep_sleep_hysteresis = (unsigned int)math_max2(32, (double)ip->pixel_chunk_size_kbytes * 1024 * 3 / 4 / 64);
 }
 
 void dcn6_calculate_mode_programming(struct dml2_core_calculate_mp_context *ctx,
@@ -557,8 +541,6 @@ void dcn6_calculate_mode_programming(struct dml2_core_calculate_mp_context *ctx,
 	dcn6_mp_calculate_meta_and_pte_times(ctx, states);
 
 	dcn6_mp_calculate_vm_group_and_request_times(ctx, states);
-
-	dcn6_mp_calculate_vstartup_adjustment(ctx, states);
 
 	dcn6_mp_calculate_max_bandwidth_used(ctx, states);
 
@@ -1394,6 +1376,7 @@ enum dml2_status dml2_core_dcn6_funcs_populate_programming(struct dml2_core_inst
 	dcn6_mp_initialize_from_solution(&mode_lib->mp, solution, core->utm_soc_bb);
 	dcn6_mp_build_calculate_mp_context(calc_mp_ctx, core, solution);
 	dcn6_calculate_mode_programming(calc_mp_ctx, &mode_lib->mp);
+	dcn6_mp_calculate_vstartup_adjustment(calc_mp_ctx, &mode_lib->mp);
 	dcn6_populate_mode_programming(calc_mp_ctx, programming, &mode_lib->scratch, mode_lib, solution, core->utm_soc_bb);
 
 	DML_LOG_DEBUG("%s exit\n", __func__);
