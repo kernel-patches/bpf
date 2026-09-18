@@ -1353,19 +1353,19 @@ static int __cgroup_bpf_query(struct cgroup *cgrp, const union bpf_attr *attr,
 				id = prog->aux->id;
 				if (copy_to_user(prog_ids + i, &id, sizeof(id)))
 					return -EFAULT;
+				if (prog_attach_flags) {
+					flags = cgrp->bpf.flags[atype] |
+						(pl->flags & BPF_F_PREORDER);
+					if (copy_to_user(prog_attach_flags + i,
+							 &flags, sizeof(flags)))
+						return -EFAULT;
+				}
 				if (++i == cnt)
 					break;
 			}
 
-			if (prog_attach_flags) {
-				flags = cgrp->bpf.flags[atype];
-
-				for (i = 0; i < cnt; i++)
-					if (copy_to_user(prog_attach_flags + i,
-							 &flags, sizeof(flags)))
-						return -EFAULT;
+			if (prog_attach_flags)
 				prog_attach_flags += cnt;
-			}
 		}
 
 		prog_ids += cnt;
