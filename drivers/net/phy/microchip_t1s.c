@@ -20,7 +20,8 @@
 
 #define LAN867X_REG_STS2 0x0019
 
-#define LAN867x_RESET_COMPLETE_STS BIT(11)
+#define LAN86XX_STS1_LINK_STS_CHANGED	BIT(13)
+#define LAN867x_RESET_COMPLETE_STS	BIT(11)
 
 #define LAN865X_REG_CFGPARAM_ADDR 0x00D8
 #define LAN865X_REG_CFGPARAM_DATA 0x00D9
@@ -40,6 +41,17 @@
 #define COL_DET_CTRL0_ENABLE_BIT_MASK	BIT(15)
 #define COL_DET_ENABLE			BIT(15)
 #define COL_DET_DISABLE			0x0000
+#define COL_DET_CTRL0_CCMFC_MASK	GENMASK(10, 9)
+/* OA default: collisions gated by PLCA_Status in hardware */
+#define COL_DET_CTRL0_CCMFC_OA_DEFAULT	BIT(9)
+
+/* PLCA Reconciliation Sublayer Control 1 Register (PRSCTL1). Bit 10
+ * controls whether the PHY autonomously falls back to CSMA/CD mode when
+ * no BEACON is observed while PLCA is enabled, versus staying pinned to
+ * PLCA mode regardless of BEACON presence.
+ */
+#define LAN867X_REG_PRSCTL1               0x0035
+#define PRSCTL1_PLCA_FALLB_TO_CSMACD_EN   BIT(10)
 
 /* LAN8670/1/2 Rev.D0 Link Status Selection Register */
 #define LAN867X_REG_LINK_STATUS_CTRL	0x0012
@@ -438,6 +450,40 @@ static int lan867x_revd0_link_active_selection(struct phy_device *phydev,
 			     LAN867X_REG_LINK_STATUS_CTRL, value);
 }
 
+static int lan867x_revd0_fallback_to_csmacd(struct phy_device *phydev)
+{
+	int ret;
+
+	ret = phy_read_mmd(phydev, MDIO_MMD_VEND2, LAN867X_REG_PRSCTL1);
+	if (ret < 0)
+		return ret;
+
+	return !!(ret & PRSCTL1_PLCA_FALLB_TO_CSMACD_EN);
+}
+
+/* When the PHY autonomously falls back to CSMA/CD once BEACONs stop (PRSCTL1
+ * bit 10 set), the hardware fallback already provides correct CSMA/CD
+ * operation; selecting link status from PLCA_STATUS in that case reports
+ * nothing meaningful, since the PHY may already be running CSMA/CD regardless
+ * of the stale PLCA_STATUS value. Force the semaphore (forced-active) source
+ * in that case instead. Only when fallback is disabled - the PHY is pinned
+ * to PLCA mode - does tracking PLCA_STATUS serve its intended purpose.
+ */
+static int lan867x_revd0_update_link_selection(struct phy_device *phydev,
+					       bool plca_operational)
+{
+	int fallback;
+
+	fallback = lan867x_revd0_fallback_to_csmacd(phydev);
+	if (fallback < 0)
+		return fallback;
+
+	if (fallback)
+		return lan867x_revd0_link_active_selection(phydev, false);
+
+	return lan867x_revd0_link_active_selection(phydev, plca_operational);
+}
+
 /* As per LAN8650/1 Rev.B0/B1 AN1760 (Revision F (DS60001760G - June 2024)) and
  * LAN8670/1/2 Rev.C1/C2 AN1699 (Revision E (DS60001699F - June 2024)), under
  * normal operation, the device should be operated in PLCA mode. Disabling
@@ -445,6 +491,11 @@ static int lan867x_revd0_link_active_selection(struct phy_device *phydev,
  * environments or when reflections and other inherent transmission line
  * distortion cause poor signal quality. Collision detection must be re-enabled
  * if the device is configured to operate in CSMA/CD mode.
+ *
+ * LAN867X Rev.D0 has autonomous collision detection gating via CCMFC and
+ * does not toggle CDEN in the interrupt handler. CDEN remains permanently
+ * enabled in config_init(), so no software-driven CDEN toggling is needed
+ * here.
  *
  * AN1760: https://www.microchip.com/en-us/application-notes/an1760
  * AN1699: https://www.microchip.com/en-us/application-notes/an1699
@@ -454,9 +505,12 @@ static int lan86xx_plca_set_cfg(struct phy_device *phydev,
 {
 	int ret;
 
-	/* Link status selection must be configured for LAN8670/1/2 Rev.D0 */
-	if (phydev->phy_id == PHY_ID_LAN867X_REVD0) {
-		ret = lan867x_revd0_link_active_selection(phydev,
+	/* Link status selection must be configured for LAN8670/1/2 Rev.D0.
+	 * Only update link status selection if enabled is explicitly specified
+	 * (not -1, which means "don't change").
+	 */
+	if (phydev->phy_id == PHY_ID_LAN867X_REVD0 && plca_cfg->enabled != -1) {
+		ret = lan867x_revd0_update_link_selection(phydev,
 							  plca_cfg->enabled);
 		if (ret)
 			return ret;
@@ -472,8 +526,12 @@ static int lan86xx_plca_set_cfg(struct phy_device *phydev,
 	 * here as a baseline on every ethtool PLCA reconfiguration. The
 	 * limitation is that autonomous PLCA mode transitions between ethtool
 	 * reconfigurations are not tracked on such boards.
+	 *
+	 * LAN867X Rev.D0 has autonomous collision detection via CCMFC, so skip
+	 * the software CDEN toggling for that revision.
 	 */
-	if (phy_interrupt_is_valid(phydev))
+	if (phy_interrupt_is_valid(phydev) ||
+	    phydev->phy_id == PHY_ID_LAN867X_REVD0)
 		return 0;
 
 	if (plca_cfg->enabled > 0)
@@ -506,6 +564,20 @@ static int lan867x_revd0_config_init(struct phy_device *phydev)
 		if (ret)
 			return ret;
 	}
+
+	/* AN1699: Configure CCMFC (Collision Counting and MAC Forwarding
+	 * Control) to OA default (0x1) so that the hardware autonomously gates
+	 * collision forwarding to the MAC based on the live PLCA_Status:
+	 * collisions are neither counted nor forwarded when PLCA_Status is OK,
+	 * and are counted/forwarded when not OK. This eliminates the need for
+	 * software-driven CDEN toggling. CDEN is enabled by default and remains
+	 * permanently enabled for Rev.D0.
+	 */
+	ret = phy_modify_mmd(phydev, MDIO_MMD_VEND2, LAN86XX_REG_COL_DET_CTRL0,
+			     COL_DET_CTRL0_CCMFC_MASK,
+			     COL_DET_CTRL0_CCMFC_OA_DEFAULT);
+	if (ret)
+		return ret;
 
 	/* Initially the PHY will be in CSMA/CD mode by default. So it is
 	 * required to set the link always active as it doesn't support
@@ -634,6 +706,91 @@ static irqreturn_t lan86xx_handle_interrupt(struct phy_device *phydev)
 	return ret_irq;
 }
 
+static int lan867x_revd0_config_intr(struct phy_device *phydev)
+{
+	u16 mask = LAN86XX_STS1_PLCA_STS_CHANGED |
+		   LAN86XX_STS1_LINK_STS_CHANGED;
+	struct phy_plca_cfg plca_cfg;
+	int sts1, ret;
+
+	if (phydev->interrupts == PHY_INTERRUPT_ENABLED) {
+		/* Read to clear any pending status before enabling. */
+		sts1 = lan86xx_read_clear_sts1(phydev);
+		if (sts1 < 0)
+			return sts1;
+
+		if (sts1 & LAN86XX_STS1_LINK_STS_CHANGED)
+			phy_trigger_machine(phydev);
+
+		/* STS1 may have cleared a pending PSTC while masked, and a
+		 * missed PSTC leaves no trace to key off, so unconditionally
+		 * resync the link-status-selection source from the current
+		 * PLCA enable state and fallback configuration. CDEN is
+		 * never touched here - see lan867x_revd0_config_init().
+		 */
+		ret = genphy_c45_plca_get_cfg(phydev, &plca_cfg);
+		if (ret < 0)
+			return ret;
+
+		ret = lan867x_revd0_update_link_selection(phydev,
+							  plca_cfg.enabled);
+		if (ret < 0)
+			return ret;
+
+		return lan86xx_set_intr_mask(phydev, mask, true);
+	}
+
+	ret = lan86xx_set_intr_mask(phydev, mask, false);
+	if (ret)
+		return ret;
+
+	/* Read to clear any pending status after disabling. */
+	ret = lan86xx_read_clear_sts1(phydev);
+	return ret < 0 ? ret : 0;
+}
+
+static irqreturn_t lan867x_revd0_handle_interrupt(struct phy_device *phydev)
+{
+	irqreturn_t ret_irq = IRQ_NONE;
+	struct phy_plca_cfg plca_cfg;
+	int sts1, ret;
+
+	sts1 = lan86xx_read_clear_sts1(phydev);
+	if (sts1 < 0) {
+		phy_error(phydev);
+		return IRQ_NONE;
+	}
+
+	if (sts1 & LAN86XX_STS1_LINK_STS_CHANGED) {
+		phy_trigger_machine(phydev);
+		ret_irq = IRQ_HANDLED;
+	}
+
+	if (sts1 & LAN86XX_STS1_PLCA_STS_CHANGED) {
+		ret = genphy_c45_plca_get_cfg(phydev, &plca_cfg);
+		if (ret < 0) {
+			phy_error(phydev);
+			return IRQ_NONE;
+		}
+
+		/* lan867x_revd0_update_link_selection() drives the selection
+		 * source from the configured PLCA enable state, forcing
+		 * semaphore mode instead whenever autonomous fallback to
+		 * CSMA/CD is configured (see PRSCTL1 above).
+		 */
+		ret = lan867x_revd0_update_link_selection(phydev,
+							  plca_cfg.enabled);
+		if (ret < 0) {
+			phy_error(phydev);
+			return IRQ_NONE;
+		}
+
+		ret_irq = IRQ_HANDLED;
+	}
+
+	return ret_irq;
+}
+
 static struct phy_driver microchip_t1s_driver[] = {
 	{
 		PHY_ID_MATCH_EXACT(PHY_ID_LAN867X_REVB1),
@@ -676,6 +833,8 @@ static struct phy_driver microchip_t1s_driver[] = {
 		.name               = "LAN867X Rev.D0",
 		.features           = PHY_BASIC_T1S_P2MP_FEATURES,
 		.config_init        = lan867x_revd0_config_init,
+		.config_intr        = lan867x_revd0_config_intr,
+		.handle_interrupt   = lan867x_revd0_handle_interrupt,
 		.get_plca_cfg	    = genphy_c45_plca_get_cfg,
 		.set_plca_cfg	    = lan86xx_plca_set_cfg,
 		.get_plca_status    = genphy_c45_plca_get_status,
