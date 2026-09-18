@@ -376,10 +376,8 @@ __acquires(uhci->lock)
 	 * doesn't work, then we won't get an interrupt when a wakeup event
 	 * occurs.  Thus the suspended root hub needs to be polled.
 	 */
-	if (wakeup_enable && (!int_enable || !egsm_enable))
-		set_bit(HCD_FLAG_POLL_RH, &uhci_to_hcd(uhci)->flags);
-	else
-		clear_bit(HCD_FLAG_POLL_RH, &uhci_to_hcd(uhci)->flags);
+	assign_bit(HCD_FLAG_POLL_RH, &uhci_to_hcd(uhci)->flags,
+		   wakeup_enable && (!int_enable || !egsm_enable));
 
 	uhci_scan_schedule(uhci);
 	uhci_fsbr_off(uhci);

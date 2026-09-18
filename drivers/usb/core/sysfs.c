@@ -1032,10 +1032,7 @@ static ssize_t interface_authorized_default_store(struct device *dev,
 	if (kstrtobool(buf, &val) != 0)
 		return -EINVAL;
 
-	if (val)
-		set_bit(HCD_FLAG_INTF_AUTHORIZED, &hcd->flags);
-	else
-		clear_bit(HCD_FLAG_INTF_AUTHORIZED, &hcd->flags);
+	assign_bit(HCD_FLAG_INTF_AUTHORIZED, &hcd->flags, val);
 
 	return rc;
 }
