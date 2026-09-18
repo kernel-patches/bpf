@@ -162,6 +162,7 @@
 /* Params for validated field */
 #define EM28XX_BOARD_NOT_VALIDATED 1
 #define EM28XX_BOARD_VALIDATED	   0
+#define EM2860_BOARD_STARTECH_SVID2USB23          114
 
 /* Params for em28xx_cmd() audio */
 #define EM28XX_START_AUDIO      1
