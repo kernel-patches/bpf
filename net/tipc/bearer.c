@@ -456,6 +456,13 @@ int tipc_enable_l2_media(struct net *net, struct tipc_bearer *b,
 		return -EINVAL;
 	}
 
+	/* Only one TIPC bearer may be attached to a device at a time */
+	if (rtnl_dereference(dev->tipc_ptr)) {
+		dev_put(dev);
+		pr_warn("Device %s already used by another bearer\n", dev->name);
+		return -EBUSY;
+	}
+
 	/* Associate TIPC bearer with L2 bearer */
 	rcu_assign_pointer(b->media_ptr, dev);
 	b->pt.dev = dev;
