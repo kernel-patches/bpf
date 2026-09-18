@@ -911,17 +911,17 @@ static int fib_encap_match(struct net *net, u16 encap_type,
 			   struct netlink_ext_ack *extack)
 {
 	struct lwtunnel_state *lwtstate;
-	int ret, result = 0;
+	int result;
 
 	if (encap_type == LWTUNNEL_ENCAP_NONE)
 		return 0;
 
-	ret = lwtunnel_build_state(net, encap_type, encap, AF_INET,
-				   cfg, &lwtstate, extack);
-	if (!ret) {
-		result = lwtunnel_cmp_encap(lwtstate, nh->fib_nh_lws);
-		lwtstate_free(lwtstate);
-	}
+	if (lwtunnel_build_state(net, encap_type, encap, AF_INET, cfg,
+				 &lwtstate, extack))
+		return 1;
+
+	result = lwtunnel_cmp_encap(lwtstate, nh->fib_nh_lws);
+	lwtstate_free(lwtstate);
 
 	return result;
 }
