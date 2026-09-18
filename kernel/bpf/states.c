@@ -898,6 +898,10 @@ static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *c
 			break;
 		case REF_TYPE_IRQ:
 			break;
+		case REF_TYPE_FRAME:
+			if (old->refs[i].frameno != cur->refs[i].frameno)
+				return false;
+			break;
 		case REF_TYPE_LOCK:
 		case REF_TYPE_RES_LOCK:
 		case REF_TYPE_RES_LOCK_IRQ:
