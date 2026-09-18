@@ -375,14 +375,42 @@ static void test_global_percpu_data_verifier_log(void)
 	RUN_TESTS(test_global_percpu_data);
 }
 
+static void test_global_percpu_data_iter_fd(int prog_fd, int map_fd, int num_cpus,
+					    bool *run_iter, __u32 *sum)
+{
+	DECLARE_LIBBPF_OPTS(bpf_link_create_opts, opts);
+	union bpf_iter_link_info linfo = {};
+	int link_fd, iter_fd, len;
+	char buf[16];
+
+	linfo.map.map_fd = map_fd;
+	opts.iter_info = &linfo;
+	opts.iter_info_len = sizeof(linfo);
+
+	link_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_ITER, &opts);
+	if (!ASSERT_GE(link_fd, 0, "bpf_link_create"))
+		return;
+
+	iter_fd = bpf_iter_create(link_fd);
+	if (!ASSERT_GE(iter_fd, 0, "bpf_iter_create"))
+		goto out;
+
+	while ((len = read(iter_fd, buf, sizeof(buf))) > 0) {
+		/* no-op */
+	}
+	ASSERT_EQ(len, 0, "read iter");
+	ASSERT_TRUE(*run_iter, "run_iter");
+	ASSERT_EQ(*sum, 0xc0de * num_cpus, "sum");
+
+	close(iter_fd);
+out:
+	close(link_fd);
+}
+
 static void test_global_percpu_data_iter(void)
 {
-	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
 	struct test_global_percpu_data *skel;
-	union bpf_iter_link_info linfo = {};
-	struct bpf_link *link = NULL;
-	int fd, num_cpus, len, err;
-	char buf[16];
+	int num_cpus, err;
 
 	num_cpus = libbpf_num_possible_cpus();
 	if (!ASSERT_GT(num_cpus, 0, "libbpf_num_possible_cpus"))
@@ -395,34 +423,50 @@ static void test_global_percpu_data_iter(void)
 	skel->rodata->num_cpus = num_cpus;
 	skel->rodata->num_off = offsetof(struct test_global_percpu_data__percpu,
 					 struct_data.nums[6]);
-	skel->rodata->elem_sz = roundup(sizeof(struct test_global_percpu_data__percpu), 8);
+	skel->rodata->elem_sz = roundup(sizeof(*skel->percpu), 8);
 	skel->percpu->struct_data.nums[6] = 0xc0de;
 
 	err = test_global_percpu_data__load(skel);
 	if (!ASSERT_OK(err, "test_global_percpu_data__load"))
 		goto out;
 
-	linfo.map.map_fd = bpf_map__fd(skel->maps.percpu);
-	opts.link_info = &linfo;
-	opts.link_info_len = sizeof(linfo);
-	link = bpf_program__attach_iter(skel->progs.dump_percpu_data, &opts);
-	if (!ASSERT_OK_PTR(link, "bpf_program__attach_iter"))
-		goto out;
-
-	fd = bpf_iter_create(bpf_link__fd(link));
-	if (!ASSERT_GE(fd, 0, "bpf_iter_create"))
-		goto out;
-
-	while ((len = read(fd, buf, sizeof(buf))) > 0)
-		do { } while (0);
-	ASSERT_EQ(len, 0, "read iter");
-	ASSERT_TRUE(skel->bss->run_iter, "run_iter");
-	ASSERT_EQ(skel->bss->sum, 0xc0de * num_cpus, "sum");
-
-	close(fd);
+	test_global_percpu_data_iter_fd(bpf_program__fd(skel->progs.dump_percpu_data),
+					bpf_map__fd(skel->maps.percpu),
+					num_cpus, &skel->bss->run_iter,
+					&skel->bss->sum);
 out:
-	bpf_link__destroy(link);
 	test_global_percpu_data__destroy(skel);
+}
+
+static void test_global_percpu_data_iter_lskel(void)
+{
+	struct test_global_percpu_data_lskel *skel;
+	int num_cpus, err;
+
+	num_cpus = libbpf_num_possible_cpus();
+	if (!ASSERT_GT(num_cpus, 0, "libbpf_num_possible_cpus"))
+		return;
+
+	skel = test_global_percpu_data_lskel__open();
+	if (!ASSERT_OK_PTR(skel, "test_global_percpu_data_lskel__open"))
+		return;
+
+	skel->rodata->num_cpus = num_cpus;
+	skel->rodata->num_off = offsetof(struct test_global_percpu_data_lskel__percpu,
+					 struct_data.nums[6]);
+	skel->rodata->elem_sz = roundup(sizeof(*skel->percpu), 8);
+	skel->percpu->struct_data.nums[6] = 0xc0de;
+
+	err = test_global_percpu_data_lskel__load(skel);
+	if (!ASSERT_OK(err, "test_global_percpu_data_lskel__load"))
+		goto out;
+
+	test_global_percpu_data_iter_fd(skel->progs.dump_percpu_data.prog_fd,
+					skel->maps.percpu.map_fd,
+					num_cpus, &skel->bss->run_iter,
+					&skel->bss->sum);
+out:
+	test_global_percpu_data_lskel__destroy(skel);
 }
 
 void test_global_percpu_data(void)
@@ -445,4 +489,6 @@ void test_global_percpu_data(void)
 	test_global_percpu_data_verifier_log();
 	if (test__start_subtest("iter"))
 		test_global_percpu_data_iter();
+	if (test__start_subtest("iter_lskel"))
+		test_global_percpu_data_iter_lskel();
 }
