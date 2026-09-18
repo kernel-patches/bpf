@@ -822,4 +822,45 @@ __naked void bytes_no_leak_init_memory(void)
 	: __clobber_all);
 }
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__uint(map_flags, BPF_F_WRONLY_PROG);
+	__type(key, __u32);
+	__type(value, struct bpf_fib_lookup);
+} map_fib_wo SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct bpf_fib_lookup);
+} map_fib_rw SEC(".maps");
+
+SEC("tc")
+__failure __msg("read from map forbidden")
+int writeonly_sized_input(struct __sk_buff *ctx)
+{
+	struct bpf_fib_lookup *params;
+	__u32 key = 0;
+
+	params = bpf_map_lookup_elem(&map_fib_wo, &key);
+	if (params)
+		bpf_fib_lookup(ctx, params, sizeof(*params), 0);
+	return 0;
+}
+
+SEC("tc")
+__success
+int readwrite_sized_input(struct __sk_buff *ctx)
+{
+	struct bpf_fib_lookup *params;
+	__u32 key = 0;
+
+	params = bpf_map_lookup_elem(&map_fib_rw, &key);
+	if (params)
+		bpf_fib_lookup(ctx, params, sizeof(*params), 0);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
