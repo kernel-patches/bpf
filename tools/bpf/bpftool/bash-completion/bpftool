@@ -1057,7 +1057,7 @@ _bpftool()
                 attach|detach)
                     local BPFTOOL_CGROUP_ATTACH_TYPES="$(bpftool feature list_builtins attach_types 2>/dev/null | \
                         grep '^cgroup_')"
-                    local ATTACH_FLAGS='multi override'
+                    local ATTACH_FLAGS='multi override preorder'
                     # Check for $prev = $command first
                     if [ $prev = $command ]; then
                         _filedir

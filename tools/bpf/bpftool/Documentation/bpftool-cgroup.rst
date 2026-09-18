@@ -45,7 +45,7 @@ CGROUP COMMANDS
 |     **cgroup_unix_recvmsg** | **cgroup_sysctl** |
 |     **cgroup_getsockopt** | **cgroup_setsockopt** |
 |     **cgroup_inet_sock_release** }
-| *ATTACH_FLAGS* := { **multi** | **override** }
+| *ATTACH_FLAGS* := { **multi** | **override** | **preorder** }
 
 DESCRIPTION
 ===========
@@ -75,10 +75,13 @@ bpftool cgroup attach *CGROUP* *ATTACH_TYPE* *PROG* [*ATTACH_FLAGS*]
     Attach program *PROG* to the cgroup *CGROUP* with attach type *ATTACH_TYPE*
     and optional *ATTACH_FLAGS*.
 
-    *ATTACH_FLAGS* can be one of: **override** if a sub-cgroup installs some
+    *ATTACH_FLAGS* can include: **override** if a sub-cgroup installs some
     bpf program, the program in this cgroup yields to sub-cgroup program;
     **multi** if a sub-cgroup installs some bpf program, that cgroup program
-    gets run in addition to the program in this cgroup.
+    gets run in addition to the program in this cgroup;
+    **preorder** requests that this program executes before programs attached
+    further down the cgroup hierarchy during evaluation. **preorder** can be
+    combined with **multi**.
 
     Only one program is allowed to be attached to a cgroup with no attach flags
     or the **override** flag. Attaching another program will release old
