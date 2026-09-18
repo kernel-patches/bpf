@@ -3167,6 +3167,7 @@ static int bcmgenet_init_dma(struct bcmgenet_priv *priv, bool flush_rx)
 	ret = bcmgenet_init_rx_queues(priv->dev);
 	if (ret) {
 		netdev_err(priv->dev, "failed to initialize Rx queues\n");
+		bcmgenet_fini_rx_napi(priv);
 		bcmgenet_free_rx_buffers(priv);
 		bcmgenet_destroy_rx_page_pools(priv);
 		kfree(priv->rx_cbs);
