@@ -261,6 +261,11 @@ static void adjust_insn_aux_data(struct bpf_verifier_env *env,
 		}
 	}
 
+	if (env->cleanup_info_cnt)
+		for (i = 0; i < prog_len; i++)
+			if (data[i].cleanup_pad > off + 1)
+				data[i].cleanup_pad += cnt - 1;
+
 	/*
 	 * Last slot instruction could be a newly generated
 	 * BPF_ST/BPF_LDX/BPF_STX, systematically mark it for non-stack access
@@ -549,6 +554,7 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 	struct bpf_insn_aux_data *aux_data = env->insn_aux_data;
 	unsigned int orig_prog_len = env->prog->len;
 	int err;
+	u32 i;
 
 	if (bpf_prog_is_offloaded(env->prog->aux))
 		bpf_prog_offload_remove_insns(env, off, cnt);
@@ -572,6 +578,17 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 	memmove(aux_data + off,	aux_data + off + cnt,
 		sizeof(*aux_data) * (orig_prog_len - off - cnt));
 	env->insn_aux_data_len -= cnt;
+
+	if (env->cleanup_info_cnt) {
+		for (i = 0; i < env->insn_aux_data_len; i++) {
+			u32 pad = aux_data[i].cleanup_pad;
+
+			if (pad > off + cnt)
+				aux_data[i].cleanup_pad = pad - cnt;
+			else if (pad > off)
+				aux_data[i].cleanup_pad = 0;
+		}
+	}
 
 	return 0;
 }
