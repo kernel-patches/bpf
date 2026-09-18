@@ -745,6 +745,27 @@ finish_field_prepare_next(struct em28xx *dev,
 }
 
 /*
+ * Set the parity of the field that starts with this header.
+ *
+ * Non-interlaced sources, such as the 240p output of classic game consoles,
+ * generate every field with the same parity, so the bridge reports the same
+ * field ID over and over. A top field never arrives and no frame is ever
+ * completed. Detect a repeated field ID and alternate the parity instead, so
+ * consecutive fields are woven into a frame like a genuine interlaced pair.
+ */
+static inline void em28xx_set_field_parity(struct em28xx_v4l2 *v4l2,
+					   int field_id)
+{
+	bool top_field = !(field_id & 1);
+
+	if (field_id == v4l2->last_field_id)
+		top_field = !v4l2->top_field;
+
+	v4l2->last_field_id = field_id;
+	v4l2->top_field = top_field;
+}
+
+/*
  * Process data packet according to the em2710/em2750/em28xx frame data format
  */
 static inline void process_frame_data_em28xx(struct em28xx *dev,
@@ -778,14 +799,14 @@ static inline void process_frame_data_em28xx(struct em28xx *dev,
 			v4l2->capture_type = 0;
 			v4l2->vbi_read = 0;
 			em28xx_isocdbg("VBI START HEADER !!!\n");
-			v4l2->top_field = !(data_pkt[2] & 1);
+			em28xx_set_field_parity(v4l2, data_pkt[2] & 1);
 			data_pkt += 4;
 			data_len -= 4;
 		} else if (data_pkt[0] == 0x22 && data_pkt[1] == 0x5a) {
 			/* Field start (VBI disabled) */
 			v4l2->capture_type = 2;
 			em28xx_isocdbg("VIDEO START HEADER !!!\n");
-			v4l2->top_field = !(data_pkt[2] & 1);
+			em28xx_set_field_parity(v4l2, data_pkt[2] & 1);
 			data_pkt += 4;
 			data_len -= 4;
 		}
@@ -1246,6 +1267,7 @@ int em28xx_start_analog_streaming(struct vb2_queue *vq, unsigned int count)
 		em28xx_wake_i2c(dev);
 
 		v4l2->capture_type = -1;
+		v4l2->last_field_id = -1;
 		rc = em28xx_init_usb_xfer(dev, EM28XX_ANALOG_MODE,
 					  dev->analog_xfer_bulk,
 					  EM28XX_NUM_BUFS,

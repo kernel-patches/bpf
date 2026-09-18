@@ -606,6 +606,7 @@ struct em28xx_v4l2 {
 	/* Capture state tracking */
 	int capture_type;
 	bool top_field;
+	int last_field_id;
 	int vbi_read;
 	unsigned int field_count;
 
