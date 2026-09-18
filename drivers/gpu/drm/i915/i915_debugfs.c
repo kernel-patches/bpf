@@ -179,7 +179,7 @@ i915_debugfs_describe_obj(struct seq_file *m, struct drm_i915_gem_object *obj)
 	struct i915_vma *vma;
 	int pin_count = 0;
 
-	seq_printf(m, "%pK: %c%c%c %8zdKiB %02x %02x %s%s%s",
+	seq_printf(m, "%p: %c%c%c %8zdKiB %02x %02x %s%s%s",
 		   &obj->base,
 		   get_tiling_flag(obj),
 		   get_global_flag(obj),
