@@ -85,7 +85,6 @@ static struct p9_rdir *v9fs_alloc_rdir_buf(struct file *filp, int buflen)
 
 static int v9fs_dir_readdir(struct file *file, struct dir_context *ctx)
 {
-	bool over;
 	struct p9_wstat st;
 	int err = 0;
 	struct p9_fid *fid;
@@ -125,6 +124,9 @@ static int v9fs_dir_readdir(struct file *file, struct dir_context *ctx)
 			rdir->offset = ctx->pos;
 		}
 		while (rdir->head < rdir->tail) {
+			bool over = false;
+			size_t namelen;
+
 			err = p9stat_read(fid->clnt, rdir->buf + rdir->head,
 					  rdir->tail - rdir->head, &st);
 			if (err <= 0) {
@@ -132,8 +134,15 @@ static int v9fs_dir_readdir(struct file *file, struct dir_context *ctx)
 				return -EIO;
 			}
 
-			over = !dir_emit(ctx, st.name, strlen(st.name),
-					QID2INO(&st.qid), dt_type(&st));
+			namelen = strlen(st.name);
+			if (namelen > NAME_MAX) {
+				p9_debug(P9_DEBUG_ERROR,
+					 "skip dentry: name length %zu > NAME_MAX\n",
+					 namelen);
+			} else {
+				over = !dir_emit(ctx, st.name, namelen,
+						 QID2INO(&st.qid), dt_type(&st));
+			}
 			p9stat_free(&st);
 			if (over)
 				return 0;
