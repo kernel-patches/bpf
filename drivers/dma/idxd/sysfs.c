@@ -1095,10 +1095,7 @@ static ssize_t wq_ats_disable_store(struct device *dev, struct device_attribute 
 	if (rc < 0)
 		return rc;
 
-	if (ats_dis)
-		set_bit(WQ_FLAG_ATS_DISABLE, &wq->flags);
-	else
-		clear_bit(WQ_FLAG_ATS_DISABLE, &wq->flags);
+	assign_bit(WQ_FLAG_ATS_DISABLE, &wq->flags, ats_dis);
 
 	return count;
 }
