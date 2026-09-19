@@ -2148,6 +2148,7 @@ struct profile_metric {
 };
 
 static __u64 profile_total_count;
+static int profile_cpu_cnt;
 
 #define MAX_NUM_PROFILE_METRICS 4
 
@@ -2184,7 +2185,7 @@ static int profile_parse_metrics(int argc, char **argv)
 
 static void profile_read_values(struct profiler_bpf *obj)
 {
-	__u32 m, cpu, num_cpu = obj->rodata->num_cpu;
+	__u32 m, cpu, num_cpu = profile_cpu_cnt;
 	int reading_map_fd, count_map_fd;
 	__u64 counts[num_cpu];
 	__u32 key = 0;
@@ -2349,6 +2350,8 @@ static int profile_tgt_fd = -1;
 static char *profile_tgt_name;
 static int *profile_perf_events;
 static int profile_perf_event_cnt;
+static int *profile_cpu_ids;
+static int profile_cpu_id_span;
 
 static void profile_close_perf_events(struct profiler_bpf *obj)
 {
@@ -2358,10 +2361,11 @@ static void profile_close_perf_events(struct profiler_bpf *obj)
 		close(profile_perf_events[i]);
 
 	free(profile_perf_events);
+	profile_perf_events = NULL;
 	profile_perf_event_cnt = 0;
 }
 
-static int profile_open_perf_event(int mid, int cpu, int map_fd)
+static int profile_open_perf_event(int mid, int cpu, int map_key, int map_fd)
 {
 	int pmu_fd;
 
@@ -2371,15 +2375,12 @@ static int profile_open_perf_event(int mid, int cpu, int map_fd)
 		if (errno == ENODEV) {
 			p_info("cpu %d may be offline, skip %s profiling.",
 				cpu, metrics[mid].name);
-			profile_perf_event_cnt++;
 			return 0;
 		}
 		return -1;
 	}
 
-	if (bpf_map_update_elem(map_fd,
-				&profile_perf_event_cnt,
-				&pmu_fd, BPF_ANY) ||
+	if (bpf_map_update_elem(map_fd, &map_key, &pmu_fd, BPF_ANY) ||
 	    ioctl(pmu_fd, PERF_EVENT_IOC_ENABLE, 0)) {
 		close(pmu_fd);
 		return -1;
@@ -2391,11 +2392,11 @@ static int profile_open_perf_event(int mid, int cpu, int map_fd)
 
 static int profile_open_perf_events(struct profiler_bpf *obj)
 {
-	unsigned int cpu, m;
+	unsigned int cpu, m, metric_idx = 0;
 	int map_fd;
 
 	profile_perf_events = calloc(
-		obj->rodata->num_cpu * obj->rodata->num_metric, sizeof(int));
+		profile_cpu_cnt * obj->rodata->num_metric, sizeof(int));
 	if (!profile_perf_events) {
 		p_err("failed to allocate memory for perf_event array: %s",
 		      strerror(errno));
@@ -2410,13 +2411,17 @@ static int profile_open_perf_events(struct profiler_bpf *obj)
 	for (m = 0; m < ARRAY_SIZE(metrics); m++) {
 		if (!metrics[m].selected)
 			continue;
-		for (cpu = 0; cpu < obj->rodata->num_cpu; cpu++) {
-			if (profile_open_perf_event(m, cpu, map_fd)) {
-				p_err("failed to create event %s on cpu %u",
-				      metrics[m].name, cpu);
+		for (cpu = 0; cpu < (unsigned int)profile_cpu_cnt; cpu++) {
+			int cpu_id = profile_cpu_ids[cpu];
+			int map_key = cpu_id + metric_idx * profile_cpu_id_span;
+
+			if (profile_open_perf_event(m, cpu_id, map_key, map_fd)) {
+				p_err("failed to create event %s on cpu %d",
+				      metrics[m].name, cpu_id);
 				return -1;
 			}
 		}
+		metric_idx++;
 	}
 	return 0;
 }
@@ -2430,6 +2435,10 @@ static void profile_print_and_cleanup(void)
 
 	close(profile_tgt_fd);
 	free(profile_tgt_name);
+	free(profile_cpu_ids);
+	profile_cpu_ids = NULL;
+	profile_cpu_cnt = 0;
+	profile_cpu_id_span = 0;
 }
 
 static void int_exit(int signo)
@@ -2440,7 +2449,8 @@ static void int_exit(int signo)
 
 static int do_profile(int argc, char **argv)
 {
-	int num_metric, num_cpu, err = -1;
+	int num_metric, err = -1;
+	int *cpu_ids = NULL;
 	struct bpf_program *prog;
 	unsigned long duration;
 	char *endptr;
@@ -2471,11 +2481,13 @@ static int do_profile(int argc, char **argv)
 	if (num_metric <= 0)
 		goto out;
 
-	num_cpu = libbpf_num_possible_cpus();
-	if (num_cpu <= 0) {
+	profile_cpu_cnt = get_possible_cpu_ids(&cpu_ids);
+	if (profile_cpu_cnt <= 0) {
 		p_err("failed to identify number of CPUs");
 		goto out;
 	}
+	profile_cpu_ids = cpu_ids;
+	profile_cpu_id_span = cpu_ids[profile_cpu_cnt - 1] + 1;
 
 	profile_obj = profiler_bpf__open();
 	if (!profile_obj) {
@@ -2483,11 +2495,12 @@ static int do_profile(int argc, char **argv)
 		goto out;
 	}
 
-	profile_obj->rodata->num_cpu = num_cpu;
 	profile_obj->rodata->num_metric = num_metric;
+	profile_obj->rodata->cpu_id_span = profile_cpu_id_span;
 
 	/* adjust map sizes */
-	bpf_map__set_max_entries(profile_obj->maps.events, num_metric * num_cpu);
+	bpf_map__set_max_entries(profile_obj->maps.events,
+				 num_metric * profile_cpu_id_span);
 	bpf_map__set_max_entries(profile_obj->maps.fentry_readings, num_metric);
 	bpf_map__set_max_entries(profile_obj->maps.accum_readings, num_metric);
 	bpf_map__set_max_entries(profile_obj->maps.counts, 1);
@@ -2534,6 +2547,10 @@ out:
 		profiler_bpf__destroy(profile_obj);
 	close(profile_tgt_fd);
 	free(profile_tgt_name);
+	free(profile_cpu_ids);
+	profile_cpu_ids = NULL;
+	profile_cpu_cnt = 0;
+	profile_cpu_id_span = 0;
 	return err;
 }
 
