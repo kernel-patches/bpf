@@ -459,7 +459,7 @@ static int br_fill_ifinfo(struct sk_buff *skb,
 			  const struct net_bridge_port *port,
 			  u32 pid, u32 seq, int event, unsigned int flags,
 			  u32 filter_mask, const struct net_device *dev,
-			  bool getlink)
+			  bool getlink, struct netlink_ext_ack *extack)
 {
 	u8 operstate = netif_running(dev) ? READ_ONCE(dev->operstate) :
 					    IF_OPER_DOWN;
@@ -588,7 +588,8 @@ static int br_fill_ifinfo(struct sk_buff *skb,
 				goto nla_put_failure;
 		}
 
-		nla_nest_end(skb, cfm_nest);
+		if (nla_nest_end_safe(skb, cfm_nest) < 0)
+			goto nla_nest_too_large;
 	}
 
 	if ((filter_mask & RTEXT_FILTER_MST) &&
@@ -608,19 +609,26 @@ static int br_fill_ifinfo(struct sk_buff *skb,
 		if (err)
 			goto nla_put_failure;
 
-		nla_nest_end(skb, mst_nest);
+		if (nla_nest_end_safe(skb, mst_nest) < 0)
+			goto nla_nest_too_large;
 	}
 
 done:
 	if (af) {
-		if (nlmsg_get_pos(skb) - (void *)af > nla_attr_size(0))
-			nla_nest_end(skb, af);
-		else
+		if (nla_nest_end_safe(skb, af) < 0)
+			goto nla_nest_too_large;
+		if (!nla_len(af))
 			nla_nest_cancel(skb, af);
 	}
 
 	nlmsg_end(skb, nlh);
 	return 0;
+
+nla_nest_too_large:
+	NL_SET_ERR_MSG_MOD(extack,
+			   "AF_SPEC info too large, use per-object dumps (e.g. RTM_GETVLAN)");
+	nlmsg_cancel(skb, nlh);
+	return -E2BIG;
 
 nla_put_failure:
 	nlmsg_cancel(skb, nlh);
@@ -654,7 +662,8 @@ void br_info_notify(int event, const struct net_bridge *br,
 	if (skb == NULL)
 		goto errout;
 
-	err = br_fill_ifinfo(skb, port, 0, 0, event, 0, filter, dev, false);
+	err = br_fill_ifinfo(skb, port, 0, 0, event, 0, filter, dev, false,
+			     NULL);
 	if (err < 0) {
 		/* -EMSGSIZE implies BUG in br_nlmsg_size() */
 		WARN_ON(err == -EMSGSIZE);
@@ -693,7 +702,7 @@ int br_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 		return 0;
 
 	return br_fill_ifinfo(skb, port, pid, seq, RTM_NEWLINK, nlflags,
-			      filter_mask, dev, true);
+			      filter_mask, dev, true, extack);
 }
 
 static int br_vlan_info(struct net_bridge *br, struct net_bridge_port *p,
