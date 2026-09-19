@@ -61,6 +61,8 @@
 #include "intel_cx0_phy.h"
 #include "intel_ddi.h"
 #include "intel_de.h"
+#include "intel_dip.h"
+#include "intel_dip_regs.h"
 #include "intel_display_driver.h"
 #include "intel_display_jiffies.h"
 #include "intel_display_utils.h"
@@ -1274,17 +1276,7 @@ bool intel_dp_can_join(struct intel_dp *intel_dp,
 	if (num_joined_pipes > 1 && !intel_dp_has_joiner(intel_dp))
 		return false;
 
-	switch (num_joined_pipes) {
-	case 1:
-		return true;
-	case 2:
-		return HAS_BIGJOINER(display) ||
-		       HAS_UNCOMPRESSED_JOINER(display);
-	case 4:
-		return HAS_ULTRAJOINER(display);
-	default:
-		return false;
-	}
+	return intel_joiner_valid_primary_pipe_mask(display, num_joined_pipes);
 }
 
 bool intel_dp_dotclk_valid(struct intel_display *display,
@@ -2920,6 +2912,7 @@ intel_dp_compute_link_config(struct intel_encoder *encoder,
 			     struct drm_connector_state *conn_state,
 			     bool respect_downstream_limits)
 {
+	struct intel_display *display = to_intel_display(encoder);
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	struct intel_connector *connector =
 		to_intel_connector(conn_state->connector);
@@ -2934,6 +2927,10 @@ intel_dp_compute_link_config(struct intel_encoder *encoder,
 		return -EINVAL;
 
 	for_each_joiner_candidate(connector, adjusted_mode, num_joined_pipes) {
+		/* If the pipe can't be a joiner primary, skip early. */
+		if (!(intel_joiner_valid_primary_pipe_mask(display, num_joined_pipes) & BIT(crtc->pipe)))
+			continue;
+
 		/*
 		 * NOTE:
 		 * The crtc_state->joiner_pipes should have been set at the end
@@ -3125,6 +3122,7 @@ static void intel_dp_compute_as_sdp(struct intel_dp *intel_dp,
 	struct drm_dp_as_sdp *as_sdp = &crtc_state->infoframes.as_sdp;
 	const struct drm_display_mode *adjusted_mode =
 		&crtc_state->hw.adjusted_mode;
+	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 
 	/*
 	 * #FIXME: SDP/infoframe updates aren’t truly atomic, and with the new
@@ -3142,10 +3140,14 @@ static void intel_dp_compute_as_sdp(struct intel_dp *intel_dp,
 	as_sdp->revision = 0x2;
 	as_sdp->vtotal = intel_vrr_vmin_vtotal(crtc_state);
 
-	if (crtc_state->cmrr.enable) {
+	if (crtc_state->vrr.cmrr.enable) {
 		as_sdp->mode = DP_AS_SDP_FAVT_TRR_REACHED;
 		as_sdp->target_rr = drm_mode_vrefresh(adjusted_mode);
-		as_sdp->target_rr_divider = true;
+
+		if (crtc->force_cmrr.denominator == 1001)
+			as_sdp->target_rr_divider = true;
+		else
+			as_sdp->target_rr_divider = false;
 	} else if (crtc_state->vrr.enable) {
 		as_sdp->mode = DP_AS_SDP_AVT_DYNAMIC_VTOTAL;
 	} else {
@@ -3409,12 +3411,22 @@ intel_dp_audio_compute_config(struct intel_encoder *encoder,
 			      struct intel_crtc_state *pipe_config,
 			      struct drm_connector_state *conn_state)
 {
+	struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
+
 	pipe_config->has_audio =
 		intel_dp_has_audio(encoder, conn_state) &&
 		intel_audio_compute_config(encoder, pipe_config, conn_state);
 
 	pipe_config->sdp_split_enable = pipe_config->has_audio &&
 					intel_dp_is_uhbr(pipe_config);
+
+	/*
+	 * SDP splitting for UHBR audio requires explicit sink capability in
+	 * SST mode, whereas in MST mode it is inherently supported.
+	 */
+	if (pipe_config->sdp_split_enable &&
+	    !intel_crtc_has_type(pipe_config, INTEL_OUTPUT_DP_MST))
+		pipe_config->sdp_split_enable = intel_dp->sst_split_sdp_support;
 }
 
 void
@@ -4129,14 +4141,9 @@ static int intel_dp_pcon_set_frl_mask(int max_frl)
 static int intel_dp_hdmi_sink_max_frl(struct intel_dp *intel_dp)
 {
 	struct intel_connector *connector = intel_dp->attached_connector;
-	const struct drm_display_info *info = &connector->base.display_info;
-	int max_frl_rate;
-	int max_lanes, rate_per_lane;
-	int max_dsc_lanes, dsc_rate_per_lane;
-
-	max_lanes = info->hdmi.max_lanes;
-	rate_per_lane = info->hdmi.max_frl_rate_per_lane;
-	max_frl_rate = max_lanes * rate_per_lane;
+	struct drm_connector *drm_connector = &connector->base;
+	int max_frl_rate = intel_hdmi_sink_max_frl_rate(drm_connector);
+	int dsc_max_frl_rate = intel_hdmi_sink_dsc_max_frl_rate(drm_connector);
 
 	/*
 	 * The sink's DSC max FRL rate only applies to compressed video
@@ -4145,12 +4152,8 @@ static int intel_dp_hdmi_sink_max_frl(struct intel_dp *intel_dp)
 	 * the regular max FRL rate is the limit.
 	 */
 	if (drm_dp_pcon_enc_is_dsc_1_2(intel_dp->pcon_dsc_dpcd) &&
-	    info->hdmi.dsc_cap.v_1p2) {
-		max_dsc_lanes = info->hdmi.dsc_cap.max_lanes;
-		dsc_rate_per_lane = info->hdmi.dsc_cap.max_frl_rate_per_lane;
-		if (max_dsc_lanes && dsc_rate_per_lane)
-			max_frl_rate = min(max_frl_rate, max_dsc_lanes * dsc_rate_per_lane);
-	}
+	    dsc_max_frl_rate)
+		return min(max_frl_rate, dsc_max_frl_rate);
 
 	return max_frl_rate;
 }
@@ -4316,7 +4319,9 @@ intel_dp_pcon_dsc_enc_slices(struct intel_dp *intel_dp,
 	int pcon_max_slices = drm_dp_pcon_dsc_max_slices(intel_dp->pcon_dsc_dpcd);
 	int pcon_max_slice_width = drm_dp_pcon_dsc_max_slice_width(intel_dp->pcon_dsc_dpcd);
 
-	return intel_hdmi_dsc_get_num_slices(crtc_state, pcon_max_slices,
+	return intel_hdmi_dsc_get_num_slices(&crtc_state->hw.adjusted_mode,
+					     crtc_state->output_format,
+					     pcon_max_slices,
 					     pcon_max_slice_width,
 					     hdmi_max_slices, hdmi_throughput);
 }
@@ -4333,9 +4338,10 @@ intel_dp_pcon_dsc_enc_bpp(struct intel_dp *intel_dp,
 	int pcon_fractional_bpp = drm_dp_pcon_dsc_bpp_incr(intel_dp->pcon_dsc_dpcd);
 	int hdmi_max_chunk_bytes =
 		info->hdmi.dsc_cap.total_chunk_kbytes * 1024;
+	int bpc = crtc_state->pipe_bpp / 3;
 
 	return intel_hdmi_dsc_get_bpp(pcon_fractional_bpp, slice_width,
-				      num_slices, output_format, hdmi_all_bpp,
+				      num_slices, output_format, bpc, hdmi_all_bpp,
 				      hdmi_max_chunk_bytes);
 }
 
@@ -4462,14 +4468,23 @@ void intel_dp_configure_protocol_converter(struct intel_dp *intel_dp,
 			    str_enable_disable(tmp));
 }
 
-static bool intel_dp_get_colorimetry_status(struct intel_dp *intel_dp)
+static u8 intel_dp_read_dprx_feature_enum(struct intel_dp *intel_dp)
 {
 	u8 dprx = 0;
 
-	if (drm_dp_dpcd_readb(&intel_dp->aux, DP_DPRX_FEATURE_ENUMERATION_LIST,
-			      &dprx) != 1)
-		return false;
+	drm_dp_dpcd_read_data(&intel_dp->aux, DP_DPRX_FEATURE_ENUMERATION_LIST,
+			      &dprx, sizeof(dprx));
+	return dprx;
+}
+
+static bool intel_dp_get_colorimetry_status(u8 dprx)
+{
 	return dprx & DP_VSC_SDP_EXT_FOR_COLORIMETRY_SUPPORTED;
+}
+
+static bool intel_dp_get_sst_split_sdp_status(u8 dprx)
+{
+	return dprx & DP_SST_SPLIT_SDP_CAP;
 }
 
 static int intel_dp_read_dsc_dpcd(struct drm_dp_aux *aux,
@@ -4766,14 +4781,53 @@ intel_edp_set_sink_rates(struct intel_dp *intel_dp)
 	intel_edp_set_data_override_rates(intel_dp);
 }
 
+static void intel_edp_wake_sink(struct intel_dp *intel_dp)
+{
+	u8 value = 0;
+	int ret;
+
+	/*
+	 * Read the current sink power state. drm_dp_dpcd_read_byte() already
+	 * retries the AUX transaction internally, so a single read suffices.
+	 * First commercial eDP panels are Ver1.0 or 1.1, on which DPCD
+	 * DP_SET_POWER is supported.
+	 */
+	ret = drm_dp_dpcd_read_byte(&intel_dp->aux, DP_SET_POWER, &value);
+
+	/*
+	 * If the AUX read failed the sink may be asleep and not responding,
+	 * or it read back D3; in either case wake it up to D0.
+	 * In case of AUX read failure which is usually a POR case, the
+	 * remaining bits of register 0x600 is set to '0' on POR. So a bare
+	 * write should be fine.
+	 */
+	if (ret < 0 || value == DP_SET_POWER_D3) {
+		value &= ~DP_SET_POWER_MASK;
+		value |= DP_SET_POWER_D0;
+		drm_dp_dpcd_write_byte(&intel_dp->aux, DP_SET_POWER,
+				       value);
+		/* After setting to D0 need a min of 1ms to wake (Spec DP2.1 sec 2.3.1.2) */
+		fsleep(1000);
+		drm_dp_dpcd_write_byte(&intel_dp->aux, DP_SET_POWER,
+				       value);
+	}
+}
+
 static bool
 intel_edp_init_dpcd(struct intel_dp *intel_dp, struct intel_connector *connector)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 	int ret;
+	u8 dprx;
 
 	/* this function is meant to be called only once */
 	drm_WARN_ON(display->drm, intel_dp->dpcd[DP_DPCD_REV] != 0);
+
+	/*
+	 * Spec DP2.1 Section 3.5.2.16 page 966.
+	 * Also if sink is asleep, this will wake the sink.
+	 */
+	intel_edp_wake_sink(intel_dp);
 
 	if (drm_dp_read_dpcd_caps(&intel_dp->aux, intel_dp->dpcd) != 0)
 		return false;
@@ -4782,8 +4836,13 @@ intel_edp_init_dpcd(struct intel_dp *intel_dp, struct intel_connector *connector
 			 drm_dp_is_branch(intel_dp->dpcd));
 	intel_init_dpcd_quirks(intel_dp, &intel_dp->desc.ident);
 
+	dprx = intel_dp_read_dprx_feature_enum(intel_dp);
+
 	intel_dp->colorimetry_support =
-		intel_dp_get_colorimetry_status(intel_dp);
+		intel_dp_get_colorimetry_status(dprx);
+
+	intel_dp->sst_split_sdp_support =
+		intel_dp_get_sst_split_sdp_status(dprx);
 
 	/*
 	 * Read the eDP display control registers.
@@ -4874,13 +4933,20 @@ intel_dp_get_dpcd(struct intel_dp *intel_dp)
 	 * the OUI/ID since we know it won't change.
 	 */
 	if (!intel_dp_is_edp(intel_dp)) {
+		u8 dprx;
+
 		drm_dp_read_desc(&intel_dp->aux, &intel_dp->desc,
 				 drm_dp_is_branch(intel_dp->dpcd));
 
 		intel_init_dpcd_quirks(intel_dp, &intel_dp->desc.ident);
 
+		dprx = intel_dp_read_dprx_feature_enum(intel_dp);
+
 		intel_dp->colorimetry_support =
-			intel_dp_get_colorimetry_status(intel_dp);
+			intel_dp_get_colorimetry_status(dprx);
+
+		intel_dp->sst_split_sdp_support =
+			intel_dp_get_sst_split_sdp_status(dprx);
 
 		intel_dp_update_sink_caps(intel_dp);
 	}
@@ -7298,6 +7364,8 @@ int intel_dp_sdp_compute_config_late(struct intel_crtc_state *crtc_state)
 		return -EINVAL;
 	}
 
+	intel_dip_sdp_tl_compute_config_late(crtc_state);
+
 	return 0;
 }
 
@@ -7320,8 +7388,57 @@ int intel_dp_compute_config_late(struct intel_encoder *encoder,
 }
 
 static
+int intel_dp_get_lines_for_cmn_sdp_tl(u32 type)
+{
+	u32 stagger_val;
+
+	/*
+	 * Since we are using default stagger values similar to the case
+	 * where CMN SDP TL is not set, the different SDP transmission
+	 * lines are:
+	 * base : 2nd line of delayed vblank:
+	 * GMP : 2 + GMP_STAGGER
+	 * VSC_EXT: 2 + VSC_EXT_STAGGER
+	 * VSC : 2
+	 * PPS : 2 + PPS_STAGGER
+	 *
+	 * SDP Setup = 1 + MAX(GMP, VSC_EXT, VSC, PPS setup lines)
+	 *
+	 * For EMP_AS_SDP_TL guardband should be more than vrr.vsync_start.
+	 */
+
+	switch (type) {
+	case DP_SDP_VSC_EXT_VESA:
+	case DP_SDP_VSC_EXT_CEA:
+		stagger_val = VSC_EXT_STAGGER_DEFAULT;
+		break;
+	case HDMI_PACKET_TYPE_GAMUT_METADATA:
+		stagger_val = GMP_STAGGER_DEFAULT;
+		break;
+	case DP_SDP_PPS:
+		stagger_val = PPS_STAGGER_DEFAULT;
+		break;
+	case DP_SDP_VSC:
+		stagger_val = 0;
+		break;
+	default:
+		return 0;
+	}
+
+	return 1 + 2 + stagger_val;
+}
+
+static
 int intel_dp_get_lines_for_sdp(const struct intel_crtc_state *crtc_state, u32 type)
 {
+	struct intel_display *display = to_intel_display(crtc_state);
+
+	if (type == DP_SDP_ADAPTIVE_SYNC)
+		return crtc_state->vrr.vsync_start + 1;
+
+	if (HAS_COMMON_SDP_TL(display))
+		return intel_dp_get_lines_for_cmn_sdp_tl(type);
+
 	switch (type) {
 	case DP_SDP_VSC_EXT_VESA:
 	case DP_SDP_VSC_EXT_CEA:
@@ -7330,8 +7447,8 @@ int intel_dp_get_lines_for_sdp(const struct intel_crtc_state *crtc_state, u32 ty
 		return 8;
 	case DP_SDP_PPS:
 		return 7;
-	case DP_SDP_ADAPTIVE_SYNC:
-		return crtc_state->vrr.vsync_start + 1;
+	case DP_SDP_VSC:
+		return 3;
 	default:
 		break;
 	}
@@ -7360,6 +7477,11 @@ int intel_dp_sdp_min_guardband(const struct intel_crtc_state *crtc_state,
 	    intel_hdmi_infoframe_enable(DP_SDP_ADAPTIVE_SYNC))
 		sdp_guardband = max(sdp_guardband,
 				    intel_dp_get_lines_for_sdp(crtc_state, DP_SDP_ADAPTIVE_SYNC));
+
+	if (crtc_state->infoframes.enable &
+	    intel_hdmi_infoframe_enable(DP_SDP_VSC))
+		sdp_guardband = max(sdp_guardband,
+				    intel_dp_get_lines_for_sdp(crtc_state, DP_SDP_VSC));
 
 	return sdp_guardband;
 }

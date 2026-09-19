@@ -33,6 +33,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/init.h>
+#include <linux/dmi.h>
 #include <linux/io.h>
 #include <linux/ioport.h>
 #include <linux/module.h>
@@ -240,6 +241,35 @@ static u32 sp5100_tco_read_pm_reg32(u8 index)
 	return val;
 }
 
+/*
+ * The Gigabyte GA-78LMT-USB3 firmware programs the legacy SP5100 watchdog
+ * MMIO window at 0xfec000f0. This address lies inside the IOAPIC resource,
+ * so the generic resource reservation fails even though firmware explicitly
+ * assigns the watchdog to this address.
+ *
+ * Keep this exception narrowly scoped to the affected system and firmware
+ * address. Do not relocate or otherwise reprogram the watchdog.
+ */
+#define SP5100_WDT_GA78LMT_MMIO	0xfec000f0
+
+static const struct dmi_system_id sp5100_tco_unreserved_mmio_dmi[] = {
+	{
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Gigabyte Technology Co., Ltd."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "GA-78LMT-USB3"),
+		},
+	},
+	{}
+};
+
+static bool sp5100_tco_allow_unreserved_mmio(struct sp5100_tco *tco,
+					     u32 mmio_addr)
+{
+	return tco->tco_reg_layout == sp5100 &&
+	       mmio_addr == SP5100_WDT_GA78LMT_MMIO &&
+	       dmi_check_system(sp5100_tco_unreserved_mmio_dmi);
+}
+
 static u32 sp5100_tco_request_region(struct device *dev,
 				     u32 mmio_addr,
 				     const char *dev_name)
@@ -259,6 +289,7 @@ static u32 sp5100_tco_prepare_base(struct sp5100_tco *tco,
 				   const char *dev_name)
 {
 	struct device *dev = tco->wdd.parent;
+	bool reserved = false;
 
 	dev_dbg(dev, "Got 0x%08x from SBResource_MMIO register\n", mmio_addr);
 
@@ -266,11 +297,29 @@ static u32 sp5100_tco_prepare_base(struct sp5100_tco *tco,
 		return -ENODEV;
 
 	/* Check for MMIO address and alternate MMIO address conflicts */
-	if (mmio_addr)
-		mmio_addr = sp5100_tco_request_region(dev, mmio_addr, dev_name);
+	if (mmio_addr) {
+		u32 requested_addr;
 
-	if (!mmio_addr && alt_mmio_addr)
-		mmio_addr = sp5100_tco_request_region(dev, alt_mmio_addr, dev_name);
+		requested_addr = sp5100_tco_request_region(dev, mmio_addr,
+							   dev_name);
+		if (requested_addr) {
+			mmio_addr = requested_addr;
+			reserved = true;
+		} else if (sp5100_tco_allow_unreserved_mmio(tco, mmio_addr)) {
+			dev_info(dev,
+				 "Using firmware watchdog MMIO 0x%08x without reserving it\n",
+				 mmio_addr);
+		} else {
+			mmio_addr = 0;
+		}
+	}
+
+	if (!mmio_addr && alt_mmio_addr) {
+		mmio_addr = sp5100_tco_request_region(dev, alt_mmio_addr,
+						      dev_name);
+		if (mmio_addr)
+			reserved = true;
+	}
 
 	if (!mmio_addr) {
 		dev_err(dev, "Failed to reserve MMIO or alternate MMIO region\n");
@@ -280,7 +329,9 @@ static u32 sp5100_tco_prepare_base(struct sp5100_tco *tco,
 	tco->tcobase = devm_ioremap(dev, mmio_addr, SP5100_WDT_MEM_MAP_SIZE);
 	if (!tco->tcobase) {
 		dev_err(dev, "MMIO address 0x%08x failed mapping\n", mmio_addr);
-		devm_release_mem_region(dev, mmio_addr, SP5100_WDT_MEM_MAP_SIZE);
+		if (reserved)
+			devm_release_mem_region(dev, mmio_addr,
+						SP5100_WDT_MEM_MAP_SIZE);
 		return -ENOMEM;
 	}
 
@@ -605,8 +656,10 @@ static int __init sp5100_tco_init(void)
 	pr_info("SP5100/SB800 TCO WatchDog Timer Driver\n");
 
 	err = platform_driver_register(&sp5100_tco_driver);
-	if (err)
+	if (err) {
+		pci_dev_put(sp5100_tco_pci);
 		return err;
+	}
 
 	sp5100_tco_platform_device =
 		platform_device_register_simple(TCO_DRIVER_NAME, -1, NULL, 0);
@@ -619,6 +672,7 @@ static int __init sp5100_tco_init(void)
 
 unreg_platform_driver:
 	platform_driver_unregister(&sp5100_tco_driver);
+	pci_dev_put(sp5100_tco_pci);
 	return err;
 }
 
@@ -626,6 +680,7 @@ static void __exit sp5100_tco_exit(void)
 {
 	platform_device_unregister(sp5100_tco_platform_device);
 	platform_driver_unregister(&sp5100_tco_driver);
+	pci_dev_put(sp5100_tco_pci);
 }
 
 module_init(sp5100_tco_init);

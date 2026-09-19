@@ -70,19 +70,24 @@ __rtrs_get_permit(struct rtrs_clt_sess *clt, enum rtrs_clt_con_type con_type)
 {
 	size_t max_depth = clt->queue_depth;
 	struct rtrs_permit *permit;
-	int bit;
+	unsigned long bit = 0;
 
 	/*
-	 * Adapted from null_blk get_tag(). Callers from different cpus may
-	 * grab the same bit, since find_first_zero_bit is not atomic.
-	 * But then the test_and_set_bit_lock will fail for all the
-	 * callers but one, so that they will loop again.
-	 * This way an explicit spinlock is not required.
+	 * Callers from different CPUs may grab the same bit, since the bitmap
+	 * scan is not atomic. But then the test_and_set_bit_lock() will fail
+	 * for all the callers but one, so that they loop again. This way an
+	 * explicit spinlock is not required. find_next_zero_bit() resumes
+	 * from the last position so that a lost race does not rescan the
+	 * already-set low bits; if it reaches the end, wrap to the beginning
+	 * to exhaust the map and still find a permit freed below the cursor.
 	 */
 	do {
-		bit = find_first_zero_bit(clt->permits_map, max_depth);
-		if (bit >= max_depth)
-			return NULL;
+		bit = find_next_zero_bit(clt->permits_map, max_depth, bit);
+		if (bit >= max_depth) {
+			bit = find_first_zero_bit(clt->permits_map, max_depth);
+			if (bit >= max_depth)
+				return NULL;
+		}
 	} while (test_and_set_bit_lock(bit, clt->permits_map));
 
 	permit = get_permit(clt, bit);
@@ -1732,6 +1737,8 @@ static void destroy_con_cq_qp(struct rtrs_clt_con *con)
 	/*
 	 * Be careful here: destroy_con_cq_qp() can be called even
 	 * create_con_cq_qp() failed, see comments there.
+	 * Caller must set con->destroyed under this lock first so a
+	 * racing ADDR_RESOLVED cannot ib_cq_pool_get() after we PUT/SKIP.
 	 */
 	lockdep_assert_held(&con->con_mutex);
 	rtrs_cq_qp_destroy(&con->c);
@@ -1766,6 +1773,10 @@ static int rtrs_rdma_addr_resolved(struct rtrs_clt_con *con)
 	int err;
 
 	mutex_lock(&con->con_mutex);
+	if (con->destroyed) {
+		mutex_unlock(&con->con_mutex);
+		return -ECONNABORTED;
+	}
 	err = create_con_cq_qp(con);
 	mutex_unlock(&con->con_mutex);
 	if (err) {
@@ -2221,6 +2232,7 @@ static void rtrs_clt_stop_and_destroy_conns(struct rtrs_clt_path *clt_path)
 			break;
 		con = to_clt_con(clt_path->s.con[cid]);
 		mutex_lock(&con->con_mutex);
+		con->destroyed = true;
 		destroy_con_cq_qp(con);
 		mutex_unlock(&con->con_mutex);
 		destroy_cm(con);
@@ -2387,6 +2399,7 @@ destroy:
 		if (con->c.cm_id) {
 			stop_cm(con);
 			mutex_lock(&con->con_mutex);
+			con->destroyed = true;
 			destroy_con_cq_qp(con);
 			mutex_unlock(&con->con_mutex);
 			destroy_cm(con);

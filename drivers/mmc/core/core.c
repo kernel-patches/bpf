@@ -13,7 +13,6 @@
 #include <linux/completion.h>
 #include <linux/device.h>
 #include <linux/delay.h>
-#include <linux/pagemap.h>
 #include <linux/err.h>
 #include <linux/leds.h>
 #include <linux/scatterlist.h>
@@ -1388,7 +1387,7 @@ void mmc_power_off(struct mmc_host *host)
 	 * XO-1.5, require a short delay after poweroff before the card
 	 * can be successfully turned on again.
 	 */
-	mmc_delay(1);
+	mmc_delay_us(host->ios.power_off_delay_us);
 }
 
 void mmc_power_cycle(struct mmc_host *host, u32 ocr)
@@ -2004,7 +2003,7 @@ unsigned int mmc_calc_max_discard(struct mmc_card *card)
 
 	/*
 	 * Without erase_group_def set, MMC erase timeout depends on clock
-	 * frequence which can change.  In that case, the best choice is
+	 * frequency which can change.  In that case, the best choice is
 	 * just the preferred erase size.
 	 */
 	if (mmc_card_mmc(card) && !(card->ext_csd.erase_group_def & 1))

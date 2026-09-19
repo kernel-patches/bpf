@@ -31,8 +31,6 @@
 #define PF_IDLE				0x00000002	/* I am an IDLE thread */
 #define PF_IO_WORKER			0x00000010	/* Task is an IO worker */
 #define PF_WQ_WORKER			0x00000020	/* I'm a workqueue worker */
-#define PF_KCOMPACTD			0x00010000      /* I am kcompactd */
-#define PF_KSWAPD			0x00020000      /* I am kswapd */
 #define PF_KTHREAD			0x00200000	/* I am a kernel thread */
 #define PF_EXITING			0x00000004
 #define CLOCK_MONOTONIC			1
@@ -113,6 +111,7 @@ s32 scx_bpf_this_cid(void) __ksym __weak;
 struct task_struct *scx_bpf_cid_curr(s32 cid) __ksym __weak;
 u32 scx_bpf_nr_cids(void) __ksym __weak;
 u32 scx_bpf_nr_online_cids(void) __ksym __weak;
+const void __arena *scx_bpf_online_cmask(void) __ksym __weak;
 u32 scx_bpf_cidperf_cap(s32 cid) __ksym __weak;
 u32 scx_bpf_cidperf_cur(s32 cid) __ksym __weak;
 s32 scx_bpf_cidperf_set(s32 cid, u32 perf) __ksym __weak;
@@ -306,7 +305,7 @@ BPF_PROG(name, ##args)
  * Similar to MEMBER_VPTR() but is intended for use with arrays where the
  * element count needs to be explicit.
  * It can be used in cases where a global array is defined with an initial
- * size but is intended to be be resized before loading the BPF program.
+ * size but is intended to be resized before loading the BPF program.
  * Without this version of the macro, MEMBER_VPTR() will use the compile time
  * size of the array to compute the max, which will result in rejection by
  * the verifier.

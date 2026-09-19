@@ -187,12 +187,9 @@ static inline void * __init xbc_alloc_mem(size_t size)
 	return memblock_alloc(size, SMP_CACHE_BYTES);
 }
 
-static inline void __init xbc_free_mem(void *addr, size_t size, bool early)
+static inline void __init xbc_free_mem(void *addr, size_t size)
 {
-	if (early)
-		memblock_free(addr, size);
-	else if (addr)
-		memblock_free(addr, size);
+	memblock_free(addr, size);
 }
 
 #else /* !__KERNEL__ */
@@ -202,7 +199,7 @@ static inline void *xbc_alloc_mem(size_t size)
 	return calloc(1, size);
 }
 
-static inline void xbc_free_mem(void *addr, size_t size, bool early)
+static inline void xbc_free_mem(void *addr, size_t size)
 {
 	free(addr);
 }
@@ -836,7 +833,6 @@ static int __init xbc_parse_array(char **__v)
 			return -ENOMEM;
 		*__v = next;
 	} while (c == ',');
-	node->child = 0;
 
 	return c;
 }
@@ -1003,9 +999,30 @@ static int __init xbc_close_brace(char **k, char *n)
 	return __xbc_close_brace(n - 1);
 }
 
+#ifndef __KERNEL__
+/* Sanity check for regression: node indices must be within bounds */
+static int __init xbc_sanity_check_tree(void)
+{
+	int i;
+
+	for (i = 0; i < xbc_node_num; i++) {
+		if (xbc_nodes[i].next >= xbc_node_num) {
+			return xbc_parse_error("No closing brace",
+				xbc_node_get_data(xbc_nodes + i));
+		}
+		if (xbc_nodes[i].child >= xbc_node_num) {
+			return xbc_parse_error("Broken child node",
+				xbc_node_get_data(xbc_nodes + i));
+		}
+	}
+
+	return 0;
+}
+#endif
+
 static int __init xbc_verify_tree(void)
 {
-	int i, depth;
+	int depth;
 	size_t len, wlen;
 	struct xbc_node *n, *m;
 
@@ -1020,17 +1037,6 @@ static int __init xbc_verify_tree(void)
 	if (xbc_node_num == 0) {
 		xbc_parse_error("Empty config", xbc_data);
 		return -ENOENT;
-	}
-
-	for (i = 0; i < xbc_node_num; i++) {
-		if (xbc_nodes[i].next >= xbc_node_num) {
-			return xbc_parse_error("No closing brace",
-				xbc_node_get_data(xbc_nodes + i));
-		}
-		if (xbc_nodes[i].child >= xbc_node_num) {
-			return xbc_parse_error("Broken child node",
-				xbc_node_get_data(xbc_nodes + i));
-		}
 	}
 
 	/* Key tree limitation check */
@@ -1119,24 +1125,30 @@ static int __init xbc_parse_tree(void)
 		}
 	} while (!ret);
 
+	if (!ret) {
+		while (p < xbc_data + xbc_data_size - 1 && *p == '\0')
+			p++;
+		if (p < xbc_data + xbc_data_size - 1)
+			ret = xbc_parse_error("Unexpected data after null character", p);
+	}
+
 	return ret;
 }
 
 /**
- * _xbc_exit() - Clean up all parsed bootconfig
- * @early: Set true if this is called before budy system is initialized.
+ * xbc_exit() - Clean up all parsed bootconfig
  *
  * This clears all data structures of parsed bootconfig on memory.
  * If you need to reuse xbc_init() with new boot config, you can
  * use this.
  */
-void __init _xbc_exit(bool early)
+void __init xbc_exit(void)
 {
-	xbc_free_mem(xbc_data, xbc_data_size, early);
+	xbc_free_mem(xbc_data, xbc_data_size);
 	xbc_data = NULL;
 	xbc_data_size = 0;
 	xbc_node_num = 0;
-	xbc_free_mem(xbc_nodes, sizeof(struct xbc_node) * XBC_NODE_MAX, early);
+	xbc_free_mem(xbc_nodes, sizeof(struct xbc_node) * XBC_NODE_MAX);
 	xbc_nodes = NULL;
 	brace_index = 0;
 }
@@ -1189,20 +1201,24 @@ int __init xbc_init(const char *data, size_t size, const char **emsg, int *epos)
 	if (!xbc_nodes) {
 		if (emsg)
 			*emsg = "Failed to allocate bootconfig nodes";
-		_xbc_exit(true);
+		xbc_exit();
 		return -ENOMEM;
 	}
 
 	ret = xbc_parse_tree();
 	if (!ret)
 		ret = xbc_verify_tree();
+#ifndef __KERNEL__
+	if (!ret)
+		ret = xbc_sanity_check_tree();
+#endif
 
 	if (ret < 0) {
 		if (epos)
 			*epos = xbc_err_pos;
 		if (emsg)
 			*emsg = xbc_err_msg;
-		_xbc_exit(true);
+		xbc_exit();
 	} else {
 		ret = xbc_node_num;
 	}

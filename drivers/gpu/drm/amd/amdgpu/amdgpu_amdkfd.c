@@ -330,7 +330,7 @@ void amdgpu_amdkfd_clear_kfd_mapping(struct amdgpu_device *adev)
 	struct kfd_dev *kfd = adev->kfd.dev;
 	unsigned int i;
 
-	if (!kfd)
+	if (!kfd || !kfd->init_complete)
 		return;
 
 	for (i = 0; i < kfd->num_nodes; i++) {
@@ -727,7 +727,7 @@ int amdgpu_amdkfd_submit_ib(struct amdgpu_device *adev,
 	job->vmid = vmid;
 	job->num_ibs = 1;
 
-	ret = amdgpu_ib_schedule(ring, 1, ib, job, &f);
+	ret = amdgpu_ib_schedule(ring, job, &f);
 
 	if (ret) {
 		drm_err(adev_to_drm(adev), "failed to schedule IB.\n");

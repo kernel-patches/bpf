@@ -49,6 +49,7 @@
 #include "intel_ddi.h"
 #include "intel_ddi_buf_trans.h"
 #include "intel_de.h"
+#include "intel_dip.h"
 #include "intel_display_power.h"
 #include "intel_display_regs.h"
 #include "intel_display_types.h"
@@ -2736,6 +2737,8 @@ static void mtl_ddi_pre_enable_dp(struct intel_atomic_state *state,
 	/* 6.o Configure and enable FEC if needed */
 	intel_ddi_enable_fec(encoder, crtc_state);
 
+	intel_dip_cmn_sdp_transmission_line_enable(crtc_state);
+
 	/* 7.a 128b/132b SST. */
 	if (!is_mst && intel_dp_is_uhbr(crtc_state)) {
 		/* VCPID 1, start slot 0 for 128b/132b, tu slots */
@@ -3123,6 +3126,7 @@ static void intel_ddi_buf_disable(struct intel_encoder *encoder,
 			     DP_TP_CTL_ENABLE, 0);
 	}
 
+	intel_dip_cmn_sdp_transmission_line_disable(crtc_state);
 	intel_ddi_disable_fec(encoder, crtc_state);
 
 	if (DISPLAY_VER(display) < 14)
@@ -4235,6 +4239,7 @@ static void intel_ddi_get_config(struct intel_encoder *encoder,
 	intel_read_dp_sdp(encoder, pipe_config, HDMI_PACKET_TYPE_GAMUT_METADATA);
 	intel_read_dp_sdp(encoder, pipe_config, DP_SDP_VSC);
 	intel_read_dp_sdp(encoder, pipe_config, DP_SDP_ADAPTIVE_SYNC);
+	intel_dip_sdp_transmission_line_get_config(pipe_config);
 
 	intel_audio_codec_get_config(encoder, pipe_config);
 }
@@ -4325,11 +4330,33 @@ static void mtl_ddi_tc_phy_get_config(struct intel_encoder *encoder,
 				       mtl_port_to_pll_id(display, encoder->port));
 }
 
-static void dg2_ddi_get_config(struct intel_encoder *encoder,
-				struct intel_crtc_state *crtc_state)
+static struct intel_dpll *dg2_ddi_get_pll(struct intel_encoder *encoder)
 {
-	intel_mpllb_readout_hw_state(encoder, &crtc_state->dpll_hw_state.mpllb);
-	crtc_state->port_clock = intel_mpllb_calc_port_clock(encoder, &crtc_state->dpll_hw_state.mpllb);
+	struct intel_display *display = to_intel_display(encoder);
+
+	return intel_get_dpll_by_id(display, dg2_port_to_pll_id(encoder->port));
+}
+
+static void dg2_ddi_get_config(struct intel_encoder *encoder,
+			       struct intel_crtc_state *crtc_state)
+{
+	struct icl_port_dpll *port_dpll = &crtc_state->icl_port_dplls[ICL_PORT_DPLL_DEFAULT];
+	struct intel_dpll *pll = dg2_ddi_get_pll(encoder);
+
+	if (pll)
+		intel_ddi_get_clock(encoder, crtc_state, pll);
+
+	/*
+	 * Keep the hw readout robust against unexpected NULL PLL lookups,
+	 * so modeset verify always has intel_dpll populated for DG2.
+	 */
+	if (!crtc_state->intel_dpll) {
+		port_dpll->pll = pll;
+		intel_mpllb_readout_hw_state(encoder, &port_dpll->hw_state.mpllb);
+		icl_set_active_port_dpll(crtc_state, ICL_PORT_DPLL_DEFAULT);
+		crtc_state->port_clock = intel_mpllb_calc_port_clock(encoder,
+								     &port_dpll->hw_state.mpllb);
+	}
 
 	intel_ddi_get_config(encoder, crtc_state);
 }
@@ -4657,8 +4684,8 @@ static int intel_ddi_compute_config_late(struct intel_atomic_state *state,
 
 	if (crtc_state->master_transcoder == crtc_state->cpu_transcoder) {
 		crtc_state->master_transcoder = INVALID_TRANSCODER;
-		crtc_state->sync_mode_slaves_mask =
-			port_sync_transcoders & ~BIT(crtc_state->cpu_transcoder);
+		crtc_state->sync_mode_slaves_mask = port_sync_transcoders &
+			~REG_BIT(crtc_state->cpu_transcoder);
 	}
 
 	return 0;
@@ -5343,8 +5370,6 @@ void intel_ddi_init(struct intel_display *display,
 		else
 			encoder->get_config = mtl_ddi_non_tc_phy_get_config;
 	} else if (display->platform.dg2) {
-		encoder->enable_clock = intel_mpllb_enable;
-		encoder->disable_clock = intel_mpllb_disable;
 		encoder->get_config = dg2_ddi_get_config;
 	} else if (display->platform.alderlake_s) {
 		encoder->enable_clock = adls_ddi_enable_clock;

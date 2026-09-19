@@ -21,6 +21,7 @@
 #include <linux/soundwire/sdw_registers.h>
 #include <linux/slab.h>
 #include <sound/soc-dapm.h>
+#include <sound/sdw.h>
 #include <sound/tlv.h>
 
 #include "rt721-sdca.h"
@@ -141,150 +142,192 @@ io_error:
 
 static void rt721_sdca_dmic_preset(struct rt721_sdca_priv *rt721)
 {
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
-		RT721_MISC_POWER_CTL31, 0x8000);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_ANA_POW_PART,
-		RT721_VREF1_HV_CTRL1, 0xe000);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
-		RT721_MISC_POWER_CTL31, 0x8007);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_ENT_FLOAT_CTL9, 0x2a2a);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_ENT_FLOAT_CTL10, 0x2a00);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_ENT_FLOAT_CTL6, 0x2a2a);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_ENT_FLOAT_CTL5, 0x2626);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_ENT_FLOAT_CTL8, 0x1e00);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_ENT_FLOAT_CTL7, 0x1515);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_CH_FLOAT_CTL3, 0x0304);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_CH_FLOAT_CTL4, 0x0304);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_HDA_LEGACY_CTL1, 0x0000);
-	regmap_write(rt721->regmap,
-		SDW_SDCA_CTL(FUNC_NUM_MIC_ARRAY, RT721_SDCA_ENT_IT26,
-			RT721_SDCA_CTL_VENDOR_DEF, 0), 0x01);
-	regmap_write(rt721->mbq_regmap, 0x5910009, 0x2e01);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_RC_CALIB_CTRL,
-		RT721_RC_CALIB_CTRL0, 0x0b00);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_RC_CALIB_CTRL,
-		RT721_RC_CALIB_CTRL0, 0x0b40);
-	regmap_write(rt721->regmap, 0x2f5c, 0x25);
+	unsigned int mic_func_status;
+	struct device *dev = &rt721->slave->dev;
+
+	regmap_read(rt721->regmap,
+		SDW_SDCA_CTL(FUNC_NUM_MIC_ARRAY, RT721_SDCA_ENT0, RT721_SDCA_CTL_FUNC_STATUS, 0),
+		&mic_func_status);
+	dev_dbg(dev, "%s mic func_status=0x%x\n", __func__, mic_func_status);
+
+	if ((mic_func_status & FUNCTION_NEEDS_INITIALIZATION) || (!rt721->first_hw_init)) {
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
+			RT721_MISC_POWER_CTL31, 0x8000);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_ANA_POW_PART,
+			RT721_VREF1_HV_CTRL1, 0xe000);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
+			RT721_MISC_POWER_CTL31, 0x8007);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_ENT_FLOAT_CTL9, 0x2a2a);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_ENT_FLOAT_CTL10, 0x2a00);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_ENT_FLOAT_CTL6, 0x2a2a);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_ENT_FLOAT_CTL5, 0x2626);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_ENT_FLOAT_CTL8, 0x1e00);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_ENT_FLOAT_CTL7, 0x1515);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_CH_FLOAT_CTL3, 0x0304);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_CH_FLOAT_CTL4, 0x0304);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_HDA_LEGACY_CTL1, 0x0000);
+		regmap_write(rt721->regmap,
+			SDW_SDCA_CTL(FUNC_NUM_MIC_ARRAY, RT721_SDCA_ENT_IT26,
+				RT721_SDCA_CTL_VENDOR_DEF, 0), 0x01);
+		regmap_write(rt721->mbq_regmap, 0x5910009, 0x2e01);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_RC_CALIB_CTRL,
+			RT721_RC_CALIB_CTRL0, 0x0b00);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_RC_CALIB_CTRL,
+			RT721_RC_CALIB_CTRL0, 0x0b40);
+		regmap_write(rt721->regmap, 0x2f5c, 0x25);
+		/* clear flag */
+		regmap_write(rt721->regmap,
+			SDW_SDCA_CTL(FUNC_NUM_MIC_ARRAY, RT721_SDCA_ENT0,
+			RT721_SDCA_CTL_FUNC_STATUS, 0), FUNCTION_NEEDS_INITIALIZATION);
+	}
 }
 
 static void rt721_sdca_amp_preset(struct rt721_sdca_priv *rt721)
 {
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
-		RT721_MISC_POWER_CTL31, 0x8000);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_ANA_POW_PART,
-		RT721_VREF1_HV_CTRL1, 0xe000);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
-		RT721_MISC_POWER_CTL31, 0x8007);
-	regmap_write(rt721->mbq_regmap, 0x5810000, 0x6420);
-	regmap_write(rt721->mbq_regmap, 0x5810000, 0x6421);
-	regmap_write(rt721->mbq_regmap, 0x5810000, 0xe421);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_CH_FLOAT_CTL6, 0x5561);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_REG,
-		RT721_GPIO_PAD_CTRL5, 0x8003);
-	regmap_write(rt721->regmap,
-		SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT_OT23,
-			RT721_SDCA_CTL_VENDOR_DEF, 0), 0x04);
-	regmap_write(rt721->regmap,
-		SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT_PDE23,
-			RT721_SDCA_CTL_FU_MUTE, CH_01), 0x00);
-	regmap_write(rt721->regmap,
-		SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT_PDE23,
-			RT721_SDCA_CTL_FU_MUTE, CH_02), 0x00);
-	regmap_write(rt721->regmap,
-		SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT_FU55,
-			RT721_SDCA_CTL_FU_MUTE, CH_01), 0x00);
-	regmap_write(rt721->regmap,
-		SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT_FU55,
-			RT721_SDCA_CTL_FU_MUTE, CH_02), 0x00);
+	unsigned int amp_func_status;
+	struct device *dev = &rt721->slave->dev;
+
+	regmap_read(rt721->regmap,
+		SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT0, RT721_SDCA_CTL_FUNC_STATUS, 0),
+		&amp_func_status);
+	dev_dbg(dev, "%s amp func_status=0x%x\n", __func__, amp_func_status);
+
+	if ((amp_func_status & FUNCTION_NEEDS_INITIALIZATION) || (!rt721->first_hw_init)) {
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
+			RT721_MISC_POWER_CTL31, 0x8000);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_ANA_POW_PART,
+			RT721_VREF1_HV_CTRL1, 0xe000);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
+			RT721_MISC_POWER_CTL31, 0x8007);
+		regmap_write(rt721->mbq_regmap, 0x5810000, 0x6420);
+		regmap_write(rt721->mbq_regmap, 0x5810000, 0x6421);
+		regmap_write(rt721->mbq_regmap, 0x5810000, 0xe421);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_CH_FLOAT_CTL6, 0x5561);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_REG,
+			RT721_GPIO_PAD_CTRL5, 0x8003);
+		regmap_write(rt721->regmap,
+			SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT_OT23,
+				RT721_SDCA_CTL_VENDOR_DEF, 0), 0x04);
+		regmap_write(rt721->regmap,
+			SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT_PDE23,
+				RT721_SDCA_CTL_FU_MUTE, CH_01), 0x00);
+		regmap_write(rt721->regmap,
+			SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT_PDE23,
+				RT721_SDCA_CTL_FU_MUTE, CH_02), 0x00);
+		regmap_write(rt721->regmap,
+			SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT_FU55,
+				RT721_SDCA_CTL_FU_MUTE, CH_01), 0x00);
+		regmap_write(rt721->regmap,
+			SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT_FU55,
+				RT721_SDCA_CTL_FU_MUTE, CH_02), 0x00);
+		regmap_write(rt721->regmap, 0x2f5d, 0x1);
+		/* clear flag */
+		regmap_write(rt721->regmap,
+			SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT0, RT721_SDCA_CTL_FUNC_STATUS, 0),
+			FUNCTION_NEEDS_INITIALIZATION);
+	}
 }
 
 static void rt721_sdca_jack_preset(struct rt721_sdca_priv *rt721)
 {
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
-		RT721_MISC_POWER_CTL31, 0x8000);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_ANA_POW_PART,
-		RT721_VREF1_HV_CTRL1, 0xe000);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
-		RT721_MISC_POWER_CTL31, 0x8007);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_GE_REL_CTRL1, 0x8011);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_UMP_HID_CTRL3, 0xcf00);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_UMP_HID_CTRL4, 0x000f);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_UMP_HID_CTRL1, 0x1100);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_UMP_HID_CTRL5, 0x0c12);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_JD_CTRL,
-		RT721_JD_1PIN_GAT_CTRL2, 0xc002);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_RC_CALIB_CTRL,
-		RT721_RC_CALIB_CTRL0, 0x0b00);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_RC_CALIB_CTRL,
-		RT721_RC_CALIB_CTRL0, 0x0b40);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
-		RT721_UAJ_TOP_TCON14, 0x3333);
-	regmap_write(rt721->mbq_regmap, 0x5810035, 0x0036);
-	regmap_write(rt721->mbq_regmap, 0x5810030, 0xee00);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_CAP_PORT_CTRL,
-		RT721_HP_AMP_2CH_CAL1, 0x0140);
-	regmap_write(rt721->mbq_regmap, 0x5810000, 0x0021);
-	regmap_write(rt721->mbq_regmap, 0x5810000, 0x8021);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_CAP_PORT_CTRL,
-		RT721_HP_AMP_2CH_CAL18, 0x5522);
-	regmap_write(rt721->mbq_regmap, 0x5b10007, 0x2000);
-	regmap_write(rt721->mbq_regmap, 0x5B10017, 0x1b0f);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_CBJ_CTRL,
-		RT721_CBJ_A0_GAT_CTRL1, 0x2205);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_CAP_PORT_CTRL,
-		RT721_HP_AMP_2CH_CAL4, 0xa105);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
-		RT721_UAJ_TOP_TCON14, 0x3b33);
-	regmap_write(rt721->mbq_regmap, 0x310400, 0x3043);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
-		RT721_UAJ_TOP_TCON14, 0x3f33);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
-		RT721_UAJ_TOP_TCON13, 0x6048);
-	regmap_write(rt721->mbq_regmap, 0x310401, 0x3000);
-	regmap_write(rt721->mbq_regmap, 0x310402, 0x1b00);
-	regmap_write(rt721->mbq_regmap, 0x310300, 0x000f);
-	regmap_write(rt721->mbq_regmap, 0x310301, 0x3000);
-	regmap_write(rt721->mbq_regmap, 0x310302, 0x1b00);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
-		RT721_UAJ_TOP_TCON17, 0x0008);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_DAC_CTRL,
-		RT721_DAC_2CH_CTRL3, 0x55ff);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_DAC_CTRL,
-		RT721_DAC_2CH_CTRL4, 0xcc00);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_ANA_POW_PART,
-		RT721_MBIAS_LV_CTRL2, 0x6677);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_ANA_POW_PART,
-		RT721_VREF2_LV_CTRL1, 0x7600);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_ENT_FLOAT_CTL2, 0x1234);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_ENT_FLOAT_CTL3, 0x3512);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_ENT_FLOAT_CTL1, 0x4040);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_ENT_FLOAT_CTL4, 0x1201);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_BOOST_CTRL,
-		RT721_BST_4CH_TOP_GATING_CTRL1, 0x002a);
-	regmap_write(rt721->regmap, 0x2f58, 0x07);
+	unsigned int jack_func_status;
+	struct device *dev = &rt721->slave->dev;
 
-	regmap_write(rt721->regmap, 0x2f51, 0x00);
-	rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
-		RT721_MISC_CTL, 0x0004);
+	regmap_read(rt721->regmap,
+		SDW_SDCA_CTL(FUNC_NUM_JACK_CODEC, RT721_SDCA_ENT0, RT721_SDCA_CTL_FUNC_STATUS, 0),
+			&jack_func_status);
+	dev_dbg(dev, "%s jack func_status=0x%x\n", __func__, jack_func_status);
+
+	if ((jack_func_status & FUNCTION_NEEDS_INITIALIZATION) || (!rt721->first_hw_init)) {
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
+			RT721_MISC_POWER_CTL31, 0x8000);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_ANA_POW_PART,
+			RT721_VREF1_HV_CTRL1, 0xe000);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
+			RT721_MISC_POWER_CTL31, 0x8007);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_GE_REL_CTRL1, 0x8011);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_UMP_HID_CTRL3, 0xcf00);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_UMP_HID_CTRL4, 0x000f);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_UMP_HID_CTRL1, 0x1100);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_UMP_HID_CTRL5, 0x0c12);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_JD_CTRL,
+			RT721_JD_1PIN_GAT_CTRL2, 0xc002);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_RC_CALIB_CTRL,
+			RT721_RC_CALIB_CTRL0, 0x0b00);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_RC_CALIB_CTRL,
+			RT721_RC_CALIB_CTRL0, 0x0b40);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
+			RT721_UAJ_TOP_TCON14, 0x3333);
+		regmap_write(rt721->mbq_regmap, 0x5810035, 0x0036);
+		regmap_write(rt721->mbq_regmap, 0x5810030, 0xee00);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_CAP_PORT_CTRL,
+			RT721_HP_AMP_2CH_CAL1, 0x0140);
+		regmap_write(rt721->mbq_regmap, 0x5810000, 0x0021);
+		regmap_write(rt721->mbq_regmap, 0x5810000, 0x8021);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_CAP_PORT_CTRL,
+			RT721_HP_AMP_2CH_CAL18, 0x5522);
+		regmap_write(rt721->mbq_regmap, 0x5b10007, 0x2000);
+		regmap_write(rt721->mbq_regmap, 0x5B10017, 0x1b0f);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_CBJ_CTRL,
+			RT721_CBJ_A0_GAT_CTRL1, 0x2205);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_CAP_PORT_CTRL,
+			RT721_HP_AMP_2CH_CAL4, 0xa105);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
+			RT721_UAJ_TOP_TCON14, 0x3b33);
+		regmap_write(rt721->mbq_regmap, 0x310400, 0x3043);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
+			RT721_UAJ_TOP_TCON14, 0x3f33);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
+			RT721_UAJ_TOP_TCON13, 0x6048);
+		regmap_write(rt721->mbq_regmap, 0x310401, 0x3000);
+		regmap_write(rt721->mbq_regmap, 0x310402, 0x1b00);
+		regmap_write(rt721->mbq_regmap, 0x310300, 0x000f);
+		regmap_write(rt721->mbq_regmap, 0x310301, 0x3000);
+		regmap_write(rt721->mbq_regmap, 0x310302, 0x1b00);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_VENDOR_ANA_CTL,
+			RT721_UAJ_TOP_TCON17, 0x0008);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_DAC_CTRL,
+			RT721_DAC_2CH_CTRL3, 0x55ff);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_DAC_CTRL,
+			RT721_DAC_2CH_CTRL4, 0xcc00);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_ANA_POW_PART,
+			RT721_MBIAS_LV_CTRL2, 0x6677);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_ANA_POW_PART,
+			RT721_VREF2_LV_CTRL1, 0x7600);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_ENT_FLOAT_CTL2, 0x1234);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_ENT_FLOAT_CTL3, 0x3512);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_ENT_FLOAT_CTL1, 0x4040);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_ENT_FLOAT_CTL4, 0x1201);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_BOOST_CTRL,
+			RT721_BST_4CH_TOP_GATING_CTRL1, 0x002a);
+		regmap_write(rt721->regmap, 0x2f58, 0x07);
+		regmap_write(rt721->regmap, 0x2f51, 0x00);
+		rt_sdca_index_write(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+			RT721_MISC_CTL, 0x0004);
+		/* clear flag */
+		regmap_write(rt721->regmap,
+			SDW_SDCA_CTL(FUNC_NUM_JACK_CODEC, RT721_SDCA_ENT0,
+			RT721_SDCA_CTL_FUNC_STATUS, 0), FUNCTION_NEEDS_INITIALIZATION);
+	}
 }
 
 static void rt721_sdca_jack_init(struct rt721_sdca_priv *rt721)
@@ -1268,11 +1311,10 @@ static int rt721_sdca_pcm_hw_params(struct snd_pcm_substream *substream,
 {
 	struct snd_soc_component *component = dai->component;
 	struct rt721_sdca_priv *rt721 = snd_soc_component_get_drvdata(component);
-	struct sdw_stream_config stream_config;
+	struct sdw_stream_config stream_config = {0};
 	struct sdw_port_config port_config;
-	enum sdw_data_direction direction;
 	struct sdw_stream_runtime *sdw_stream;
-	int retval, port, num_channels;
+	int retval, port;
 	unsigned int sampling_rate;
 
 	dev_dbg(dai->dev, "%s %s", __func__, dai->name);
@@ -1291,7 +1333,6 @@ static int rt721_sdca_pcm_hw_params(struct snd_pcm_substream *substream,
 	 * RT721_AIF3 with port = 6 for digital-mic capture
 	 */
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		direction = SDW_DATA_DIR_RX;
 		if (dai->id == RT721_AIF1)
 			port = 1;
 		else if (dai->id == RT721_AIF2)
@@ -1299,7 +1340,6 @@ static int rt721_sdca_pcm_hw_params(struct snd_pcm_substream *substream,
 		else
 			return -EINVAL;
 	} else {
-		direction = SDW_DATA_DIR_TX;
 		if (dai->id == RT721_AIF1)
 			port = 2;
 		else if (dai->id == RT721_AIF3)
@@ -1307,13 +1347,9 @@ static int rt721_sdca_pcm_hw_params(struct snd_pcm_substream *substream,
 		else
 			return -EINVAL;
 	}
-	stream_config.frame_rate = params_rate(params);
-	stream_config.ch_count = params_channels(params);
-	stream_config.bps = snd_pcm_format_width(params_format(params));
-	stream_config.direction = direction;
 
-	num_channels = params_channels(params);
-	port_config.ch_mask = GENMASK(num_channels - 1, 0);
+	/* SoundWire specific configuration */
+	snd_sdw_params_to_config(substream, params, &stream_config, &port_config);
 	port_config.num = port;
 
 	retval = sdw_stream_add_slave(rt721->slave, &stream_config,
@@ -1502,6 +1538,15 @@ int rt721_sdca_init(struct device *dev, struct regmap *regmap,
 			&soc_sdca_dev_rt721, rt721_sdca_dai, ARRAY_SIZE(rt721_sdca_dai));
 }
 
+static void rt721_sdca_reset(struct rt721_sdca_priv *rt721)
+{
+	rt_sdca_index_update_bits(rt721->mbq_regmap, RT721_VENDOR_REG,
+		RT721_VD_HIDDEN_CTRL, RT721_HIDDEN_REG_SW_RESET,
+		RT721_HIDDEN_REG_SW_RESET);
+	rt_sdca_index_update_bits(rt721->mbq_regmap, RT721_HDA_SDCA_FLOAT,
+		RT721_HDA_LEGACY_RESET_CTL, 0x1, 0x1);
+}
+
 int rt721_sdca_io_init(struct device *dev, struct sdw_slave *slave)
 {
 	struct rt721_sdca_priv *rt721 = dev_get_drvdata(dev);
@@ -1535,9 +1580,17 @@ int rt721_sdca_io_init(struct device *dev, struct sdw_slave *slave)
 	}
 
 	pm_runtime_get_noresume(&slave->dev);
+
+	if (!rt721->first_hw_init)
+		rt721_sdca_reset(rt721);
+
 	rt721_sdca_dmic_preset(rt721);
 	rt721_sdca_amp_preset(rt721);
 	rt721_sdca_jack_preset(rt721);
+
+	if (rt721->hs_jack && (!rt721->first_hw_init))
+		rt721_sdca_jack_init(rt721);
+
 	if (rt721->first_hw_init) {
 		regcache_cache_bypass(rt721->regmap, false);
 		regcache_mark_dirty(rt721->regmap);

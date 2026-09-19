@@ -665,6 +665,10 @@ static int ssd1307fb_probe(struct i2c_client *client)
 	spin_lock_init(&par->damage_lock);
 
 	par->device_info = device_get_match_data(dev);
+	if (!par->device_info) {
+		ret = -ENODEV;
+		goto fb_alloc_error;
+	}
 
 	par->reset = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_LOW);
 	if (IS_ERR(par->reset)) {
@@ -762,6 +766,8 @@ static int ssd1307fb_probe(struct i2c_client *client)
 	info->screen_buffer = vmem;
 	info->fix.smem_start = __pa(vmem);
 	info->fix.smem_len = vmem_size;
+
+	info->flags = FBINFO_VIRTFB;
 
 	fb_deferred_io_init(info);
 

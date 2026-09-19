@@ -35,7 +35,6 @@
 #include <linux/mm.h>
 #include <linux/mman.h>
 #include <linux/slab.h>
-#include <linux/pagemap.h>
 #include <linux/proc_fs.h>
 #include <linux/swap.h>
 #include <linux/spinlock.h>
@@ -1674,24 +1673,30 @@ static int cred_has_capability(const struct cred *cred,
 	return rc;
 }
 
-/* Check whether a task has a particular permission to an inode.
-   The 'adp' parameter is optional and allows other audit
-   data to be passed (e.g. the dentry). */
+/*
+ * Check whether a SID has a particular permission to an inode.  The 'adp'
+ * parameter is optional and allows other audit data to be passed (e.g. the
+ * dentry).
+ */
+static int inode_sid_has_perm(u32 sid, struct inode *inode, u32 perms,
+			      struct common_audit_data *adp)
+{
+	struct inode_security_struct *isec;
+
+	if (unlikely(IS_PRIVATE(inode)))
+		return 0;
+
+	isec = selinux_inode(inode);
+
+	return avc_has_perm(sid, isec->sid, isec->sclass, perms, adp);
+}
+
 static int inode_has_perm(const struct cred *cred,
 			  struct inode *inode,
 			  u32 perms,
 			  struct common_audit_data *adp)
 {
-	struct inode_security_struct *isec;
-	u32 sid;
-
-	if (unlikely(IS_PRIVATE(inode)))
-		return 0;
-
-	sid = cred_sid(cred);
-	isec = selinux_inode(inode);
-
-	return avc_has_perm(sid, isec->sid, isec->sclass, perms, adp);
+	return inode_sid_has_perm(cred_sid(cred), inode, perms, adp);
 }
 
 /* Same as inode_has_perm, but pass explicit audit data containing
@@ -2157,6 +2162,36 @@ static int selinux_ptrace_traceme(struct task_struct *parent)
 {
 	return avc_has_perm(task_sid_obj(parent), task_sid_obj(current),
 			    SECCLASS_PROCESS, PROCESS__PTRACE, NULL);
+}
+
+/**
+ * selinux_mem_foll_force() - Determine whether /proc/$pid/mem can use FOLL_FORCE
+ * @subject: credentials using which /proc/$pid/mem was opened
+ * @opened_by_owner: whether checks on open() were bypassed because the opener
+ *                   has the same MM as the target
+ *
+ * Decide whether it should be possible to read non-readable VMAs and write
+ * non-writable VMAs via /proc/self/mem.
+ * The @opened_by_owner case only applies to systems configured with
+ * PROC_MEM_FORCE_ALWAYS, and only happens on accesses that are not visible to
+ * selinux_ptrace_access_check() because of the introspection exceptions in
+ * may_access_mm() and __ptrace_may_access().
+ *
+ * This allows a process to overwrite read-only code in its own address space.
+ *
+ * Creating an audit record on denial doesn't make sense here, since we can't
+ * tell whether FOLL_FORCE matters for the accessed VMAs.
+ */
+static int selinux_mem_foll_force(const struct cred *subject, bool opened_by_owner)
+{
+	struct av_decision avd;
+	u32 sid;
+
+	if (!opened_by_owner)
+		return 0;
+	sid = cred_sid(subject);
+
+	return avc_has_perm_noaudit(sid, sid, SECCLASS_PROCESS, PROCESS__PTRACE, 0, &avd);
 }
 
 static int selinux_capget(const struct task_struct *target, kernel_cap_t *effective,
@@ -3074,12 +3109,14 @@ static int selinux_inode_init_security_anon(struct inode *inode,
 			    &ad);
 }
 
-static int selinux_inode_create(struct inode *dir, struct dentry *dentry, umode_t mode)
+static int selinux_inode_create(struct mnt_idmap *idmap, struct inode *dir,
+				struct dentry *dentry, umode_t mode)
 {
 	return may_create(dir, dentry, SECCLASS_FILE);
 }
 
-static int selinux_inode_link(struct dentry *old_dentry, struct inode *dir, struct dentry *new_dentry)
+static int selinux_inode_link(struct mnt_idmap *idmap, struct dentry *old_dentry,
+			      struct inode *dir, struct dentry *new_dentry)
 {
 	return may_link(dir, old_dentry, MAY_LINK);
 }
@@ -3089,12 +3126,14 @@ static int selinux_inode_unlink(struct inode *dir, struct dentry *dentry)
 	return may_link(dir, dentry, MAY_UNLINK);
 }
 
-static int selinux_inode_symlink(struct inode *dir, struct dentry *dentry, const char *name)
+static int selinux_inode_symlink(struct mnt_idmap *idmap, struct inode *dir,
+				 struct dentry *dentry, const char *name)
 {
 	return may_create(dir, dentry, SECCLASS_LNK_FILE);
 }
 
-static int selinux_inode_mkdir(struct inode *dir, struct dentry *dentry, umode_t mask)
+static int selinux_inode_mkdir(struct mnt_idmap *idmap, struct inode *dir,
+			       struct dentry *dentry, umode_t mask)
 {
 	return may_create(dir, dentry, SECCLASS_DIR);
 }
@@ -3104,7 +3143,8 @@ static int selinux_inode_rmdir(struct inode *dir, struct dentry *dentry)
 	return may_link(dir, dentry, MAY_RMDIR);
 }
 
-static int selinux_inode_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t dev)
+static int selinux_inode_mknod(struct mnt_idmap *idmap, struct inode *dir,
+			       struct dentry *dentry, umode_t mode, dev_t dev)
 {
 	return may_create(dir, dentry, inode_mode_to_security_class(mode));
 }
@@ -3236,13 +3276,15 @@ static inline void task_avdcache_update(struct task_security_struct *tsec,
 
 /**
  * selinux_inode_permission - Check if the current task can access an inode
+ * @idmap: idmap of the mount
  * @inode: the inode that is being accessed
  * @requested: the accesses being requested
  *
  * Check if the current task is allowed to access @inode according to
  * @requested.  Returns 0 if allowed, negative values otherwise.
  */
-static int selinux_inode_permission(struct inode *inode, int requested)
+static int selinux_inode_permission(struct mnt_idmap *idmap,
+				    struct inode *inode, int requested)
 {
 	int mask;
 	u32 perms;
@@ -3843,15 +3885,72 @@ static int selinux_file_alloc_security(struct file *file)
 	return 0;
 }
 
+static inline u32 selinux_file_user_sid(const struct file *file)
+{
+	if (unlikely(file->f_mode & FMODE_BACKING))
+		return selinux_backing_file(file)->uf_sid;
+	return selinux_file(file)->sid;
+}
+
 static int selinux_backing_file_alloc(struct file *backing_file,
 				      const struct file *user_file)
 {
 	struct backing_file_security_struct *bfsec;
+	const struct backing_file_security_struct *ubfsec;
+	struct backing_file_security_layer *layer;
+	u32 i;
 
 	bfsec = selinux_backing_file(backing_file);
-	bfsec->uf_sid = selinux_file(user_file)->sid;
+	bfsec->uf_sid = selinux_file_user_sid(user_file);
+	if (!(user_file->f_mode & FMODE_BACKING))
+		return 0;
+
+	ubfsec = selinux_backing_file(user_file);
+	/* a wrapped count would make kmalloc_array() return ZERO_SIZE_PTR */
+	if (unlikely(ubfsec->layer_count == U32_MAX))
+		return -EOVERFLOW;
+
+	/*
+	 * The final VMA only retains the lowest backing file, so record the
+	 * whole chain here rather than in the mmap hook, where concurrent
+	 * mappings would have to be serialized.  Size it dynamically: erofs
+	 * inode sharing adds a backing file without bumping s_stack_depth.
+	 */
+	bfsec->layers = kmalloc_array(ubfsec->layer_count + 1,
+				      sizeof(*bfsec->layers), GFP_KERNEL);
+	if (!bfsec->layers)
+		return -ENOMEM;
+
+	for (i = 0; i < ubfsec->layer_count; i++) {
+		layer = &bfsec->layers[i];
+		*layer = ubfsec->layers[i];
+		path_get(&layer->path);
+	}
+
+	/* f_path, not file_user_path(): this layer, not the top-level file */
+	layer = &bfsec->layers[i];
+	layer->path = user_file->f_path;
+	layer->mounter_sid = cred_sid(user_file->f_cred);
+	layer->fd_sid = selinux_file(user_file)->sid;
+	path_get(&layer->path);
+	bfsec->layer_count = ubfsec->layer_count + 1;
 
 	return 0;
+}
+
+static void selinux_backing_file_free(struct file *backing_file)
+{
+	struct backing_file_security_struct *bfsec;
+
+	/* security_backing_file_free() may be called twice after an error */
+	if (!backing_file_security(backing_file))
+		return;
+
+	bfsec = selinux_backing_file(backing_file);
+	while (bfsec->layer_count)
+		path_put(&bfsec->layers[--bfsec->layer_count].path);
+	kfree(bfsec->layers);
+	bfsec->layers = NULL;
 }
 
 /*
@@ -3859,7 +3958,7 @@ static int selinux_backing_file_alloc(struct file *backing_file,
  * operation to an inode.
  */
 static int ioctl_has_perm(const struct cred *cred, struct file *file,
-		u32 requested, u16 cmd)
+		u32 requested, unsigned int cmd)
 {
 	struct common_audit_data ad;
 	struct file_security_struct *fsec = selinux_file(file);
@@ -3930,14 +4029,14 @@ static int selinux_file_ioctl(struct file *file, unsigned int cmd,
 	case FIOCLEX:
 	case FIONCLEX:
 		if (!selinux_policycap_ioctl_skip_cloexec())
-			error = ioctl_has_perm(cred, file, FILE__IOCTL, (u16) cmd);
+			error = ioctl_has_perm(cred, file, FILE__IOCTL, cmd);
 		break;
 
 	/* default case assumes that the command will go
 	 * to the file's ioctl() function.
 	 */
 	default:
-		error = ioctl_has_perm(cred, file, FILE__IOCTL, (u16) cmd);
+		error = ioctl_has_perm(cred, file, FILE__IOCTL, cmd);
 	}
 	return error;
 }
@@ -3970,6 +4069,53 @@ static int selinux_file_ioctl_compat(struct file *file, unsigned int cmd,
 }
 
 static int default_noexec __ro_after_init;
+
+static u32 file_map_prot_to_av(unsigned long prot, bool shared)
+{
+	u32 av = FILE__READ;
+
+	if (shared && (prot & PROT_WRITE))
+		av |= FILE__WRITE;
+	if (prot & PROT_EXEC)
+		av |= FILE__EXECUTE;
+
+	return av;
+}
+
+static int backing_mounters_has_perm(const struct file *file, u32 av)
+{
+	const struct backing_file_security_struct *bfsec;
+	const struct backing_file_security_layer *layer;
+	struct common_audit_data ad;
+	struct inode *inode;
+	u32 i;
+	int rc;
+
+	if (WARN_ON_ONCE(!(file->f_mode & FMODE_BACKING)))
+		return -EIO;
+
+	bfsec = selinux_backing_file(file);
+	for (i = 0; i < bfsec->layer_count; i++) {
+		layer = &bfsec->layers[i];
+		inode = d_inode(layer->path.dentry);
+
+		ad.type = LSM_AUDIT_DATA_PATH;
+		ad.u.path = layer->path;
+
+		if (layer->mounter_sid != layer->fd_sid) {
+			rc = avc_has_perm(layer->mounter_sid, layer->fd_sid,
+					  SECCLASS_FD, FD__USE, &ad);
+			if (rc)
+				return rc;
+		}
+
+		rc = inode_sid_has_perm(layer->mounter_sid, inode, av, &ad);
+		if (rc)
+			return rc;
+	}
+
+	return 0;
+}
 
 static int __file_map_prot_check(const struct file *file, unsigned long prot,
 				 bool shared, bool mounter_check,
@@ -4004,14 +4150,10 @@ static int __file_map_prot_check(const struct file *file, unsigned long prot,
 	if (file) {
 		const struct cred *cred = mounter_check ?
 				file->f_cred : current_cred();
-		/* "read" always possible, "write" only if shared */
-		u32 av = FILE__READ;
-		if (shared && prot_write)
-			av |= FILE__WRITE;
-		if (prot_exec)
-			av |= FILE__EXECUTE;
 
-		return __file_has_perm(cred, file, av, bf_user_file);
+		return __file_has_perm(cred, file,
+				       file_map_prot_to_av(prot, shared),
+				       bf_user_file);
 	}
 
 	return 0;
@@ -4106,6 +4248,7 @@ static int selinux_file_mprotect(struct vm_area_struct *vma,
 	int rc;
 	const struct cred *cred = current_cred();
 	u32 sid = cred_sid(cred);
+	u32 av;
 	const struct file *file = vma->vm_file;
 	bool backing_file;
 	bool shared = vma->vm_flags & VM_SHARED;
@@ -4149,6 +4292,10 @@ static int selinux_file_mprotect(struct vm_area_struct *vma,
 			if (rc)
 				return rc;
 			if (backing_file) {
+				rc = backing_mounters_has_perm(file,
+							       FILE__EXECMOD);
+				if (rc)
+					return rc;
 				rc = file_has_perm(file->f_cred, file,
 						   FILE__EXECMOD);
 				if (rc)
@@ -4161,6 +4308,10 @@ static int selinux_file_mprotect(struct vm_area_struct *vma,
 	if (rc)
 		return rc;
 	if (backing_file) {
+		av = file_map_prot_to_av(prot, shared);
+		rc = backing_mounters_has_perm(file, av);
+		if (rc)
+			return rc;
 		rc = file_map_prot_check(file, prot, shared, true);
 		if (rc)
 			return rc;
@@ -7549,6 +7700,7 @@ static struct security_hook_list selinux_hooks[] __ro_after_init = {
 
 	LSM_HOOK_INIT(ptrace_access_check, selinux_ptrace_access_check),
 	LSM_HOOK_INIT(ptrace_traceme, selinux_ptrace_traceme),
+	LSM_HOOK_INIT(mem_foll_force, selinux_mem_foll_force),
 	LSM_HOOK_INIT(capget, selinux_capget),
 	LSM_HOOK_INIT(capset, selinux_capset),
 	LSM_HOOK_INIT(capable, selinux_capable),
@@ -7619,6 +7771,7 @@ static struct security_hook_list selinux_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(file_permission, selinux_file_permission),
 	LSM_HOOK_INIT(file_alloc_security, selinux_file_alloc_security),
 	LSM_HOOK_INIT(backing_file_alloc, selinux_backing_file_alloc),
+	LSM_HOOK_INIT(backing_file_free, selinux_backing_file_free),
 	LSM_HOOK_INIT(file_ioctl, selinux_file_ioctl),
 	LSM_HOOK_INIT(file_ioctl_compat, selinux_file_ioctl_compat),
 	LSM_HOOK_INIT(mmap_file, selinux_mmap_file),

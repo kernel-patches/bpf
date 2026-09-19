@@ -67,7 +67,8 @@ static void dcn50_initialize_min_clocks(struct dc *dc)
 		 * audio corruption. Read current DISPCLK from DENTIST and request the same
 		 * freq to ensure that the timing is valid and unchanged.
 		 */
-		clocks->dispclk_khz = dc->clk_mgr->funcs->get_dispclk_from_dentist(dc->clk_mgr);
+		if (dc->clk_mgr->funcs->get_dispclk_from_dentist)
+			clocks->dispclk_khz = dc->clk_mgr->funcs->get_dispclk_from_dentist(dc->clk_mgr);
 	}
 	clocks->ref_dtbclk_khz = dc->clk_mgr->bw_params->clk_table.entries[0].dtbclk_mhz * 1000;
 	clocks->fclk_p_state_change_support = true;
@@ -366,8 +367,7 @@ void dcn50_update_dchubp_dpp_sequence(struct dc *dc,
 		hwss_add_set_cursor_position(seq_state, dc, pipe_ctx);
 
 		/* Step 15: Cursor SDR white level */
-		if (dc->hwss.set_cursor_sdr_white_level)
-			hwss_add_set_cursor_sdr_white_level(seq_state, dc, pipe_ctx);
+		hwss_add_set_cursor_sdr_white_level(seq_state, pipe_ctx);
 	}
 
 	/* Step 16: Gamut remap and output CSC */
@@ -639,7 +639,8 @@ void dcn50_init_hw(struct dc *dc)
 			dc->res_pool->hubbub->funcs->allow_self_refresh_control(dc->res_pool->hubbub,
 					!dc->res_pool->hubbub->ctx->dc->debug.disable_stutter);
 
-		dcn50_initialize_min_clocks(dc);
+		if (dc->clk_mgr && dc->clk_mgr->funcs)
+			dcn50_initialize_min_clocks(dc);
 
 		/* On HW init, allow idle optimizations after pipes have been turned off.
 		 *

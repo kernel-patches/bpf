@@ -45,7 +45,6 @@
 #include <linux/mmc/sdio.h>
 #include <linux/mmc/slot-gpio.h>
 #include <linux/mutex.h>
-#include <linux/pagemap.h>
 #include <linux/platform_data/sh_mmcif.h>
 #include <linux/platform_device.h>
 #include <linux/pm_qos.h>
@@ -1461,6 +1460,7 @@ static int sh_mmcif_probe(struct platform_device *pdev)
 	host->pd = pdev;
 
 	spin_lock_init(&host->lock);
+	mutex_init(&host->thread_lock);
 
 	mmc->ops = &sh_mmcif_ops;
 	sh_mmcif_init_ocr(host);
@@ -1514,8 +1514,6 @@ static int sh_mmcif_probe(struct platform_device *pdev)
 		if (ret)
 			goto err_clk;
 	}
-
-	mutex_init(&host->thread_lock);
 
 	ret = mmc_add_host(mmc);
 	if (ret < 0)

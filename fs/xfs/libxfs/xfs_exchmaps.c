@@ -135,7 +135,6 @@ xmi_has_postop_work(const struct xfs_exchmaps_intent *xmi)
 /* Check all mappings to make sure we can actually exchange them. */
 int
 xfs_exchmaps_check_forks(
-	struct xfs_mount		*mp,
 	const struct xfs_exchmaps_req	*req)
 {
 	struct xfs_ifork		*ifp1, *ifp2;
@@ -395,7 +394,7 @@ xfs_exchmaps_one_step(
 	/*
 	 * Re-add both mappings.  We exchange the file offsets between the two
 	 * maps and add the opposite map, which has the effect of filling the
-	 * logical offsets we just unmapped, but with with the physical mapping
+	 * logical offsets we just unmapped, but with the physical mapping
 	 * information exchanged.
 	 */
 	swap(irec1->br_startoff, irec2->br_startoff);

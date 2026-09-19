@@ -348,7 +348,7 @@ simply of return 1.  Note that all actual eviction work is done by caller after
 As before, clear_inode() must be called exactly once on each call of
 ->evict_inode() (as it used to be for each call of ->delete_inode()).  Unlike
 before, if you are using inode-associated metadata buffers (i.e.
-mark_buffer_dirty_inode()), it's your responsibility to call
+mmb_mark_buffer_dirty()), it's your responsibility to call
 invalidate_inode_buffers() before clear_inode().
 
 NOTE: checking i_nlink in the beginning of ->write_inode() and bailing out
@@ -673,7 +673,7 @@ watch out, since that shortcut is no longer valid.
 they used to - they just take it exclusive.  However, ->lookup() may be
 called with parent locked shared.  Its instances must not
 
-	* use d_instantiate) and d_rehash() separately - use d_add() or
+	* use d_instantiate() and d_rehash() separately - use d_add() or
 	  d_splice_alias() instead.
 	* use d_rehash() alone - call d_add(new_dentry, NULL) instead.
 	* in the unlikely case when (read-only) access to filesystem

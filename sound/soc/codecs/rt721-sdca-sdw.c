@@ -25,16 +25,22 @@ static bool rt721_sdca_readable_register(struct device *dev, unsigned int reg)
 	case 0x2f50:
 	case 0x2f51:
 	case 0x2f58 ... 0x2f5d:
+	case SDW_SDCA_CTL(FUNC_NUM_JACK_CODEC, RT721_SDCA_ENT0,
+		RT721_SDCA_CTL_FUNC_STATUS, 0):
 	case SDW_SDCA_CTL(FUNC_NUM_JACK_CODEC, RT721_SDCA_ENT_XUV,
 		RT721_SDCA_CTL_XUV, 0):
 	case SDW_SDCA_CTL(FUNC_NUM_JACK_CODEC, RT721_SDCA_ENT_GE49,
 		RT721_SDCA_CTL_SELECTED_MODE, 0):
 	case SDW_SDCA_CTL(FUNC_NUM_JACK_CODEC, RT721_SDCA_ENT_GE49,
 		RT721_SDCA_CTL_DETECTED_MODE, 0):
+	case SDW_SDCA_CTL(FUNC_NUM_MIC_ARRAY, RT721_SDCA_ENT0,
+		RT721_SDCA_CTL_FUNC_STATUS, 0):
 	case SDW_SDCA_CTL(FUNC_NUM_HID, RT721_SDCA_ENT_HID01,
 		RT721_SDCA_CTL_HIDTX_CURRENT_OWNER, 0) ... SDW_SDCA_CTL(FUNC_NUM_HID,
 		RT721_SDCA_ENT_HID01, RT721_SDCA_CTL_HIDTX_MESSAGE_LENGTH, 0):
 	case RT721_BUF_ADDR_HID1 ... RT721_BUF_ADDR_HID2:
+	case SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT0,
+		RT721_SDCA_CTL_FUNC_STATUS, 0):
 		return true;
 	default:
 		return false;
@@ -46,14 +52,20 @@ static bool rt721_sdca_volatile_register(struct device *dev, unsigned int reg)
 	switch (reg) {
 	case 0x2f01:
 	case 0x2f51:
+	case SDW_SDCA_CTL(FUNC_NUM_JACK_CODEC, RT721_SDCA_ENT0,
+		RT721_SDCA_CTL_FUNC_STATUS, 0):
 	case SDW_SDCA_CTL(FUNC_NUM_JACK_CODEC, RT721_SDCA_ENT_GE49,
 		RT721_SDCA_CTL_DETECTED_MODE, 0):
 	case SDW_SDCA_CTL(FUNC_NUM_JACK_CODEC, RT721_SDCA_ENT_XUV,
 		RT721_SDCA_CTL_XUV, 0):
+	case SDW_SDCA_CTL(FUNC_NUM_MIC_ARRAY, RT721_SDCA_ENT0,
+		RT721_SDCA_CTL_FUNC_STATUS, 0):
 	case SDW_SDCA_CTL(FUNC_NUM_HID, RT721_SDCA_ENT_HID01,
 		RT721_SDCA_CTL_HIDTX_CURRENT_OWNER, 0) ... SDW_SDCA_CTL(FUNC_NUM_HID,
 		RT721_SDCA_ENT_HID01, RT721_SDCA_CTL_HIDTX_MESSAGE_LENGTH, 0):
 	case RT721_BUF_ADDR_HID1 ... RT721_BUF_ADDR_HID2:
+	case SDW_SDCA_CTL(FUNC_NUM_AMP, RT721_SDCA_ENT0,
+		RT721_SDCA_CTL_FUNC_STATUS, 0):
 		return true;
 	default:
 		return false;
@@ -70,6 +82,7 @@ static bool rt721_sdca_mbq_readable_register(struct device *dev, unsigned int re
 	case 0x0310100:
 	case 0x2000000 ... 0x2000003:
 	case 0x2000013:
+	case 0x2000026:
 	case 0x200002c:
 	case 0x200003c:
 	case 0x2000046:
@@ -142,6 +155,7 @@ static bool rt721_sdca_mbq_volatile_register(struct device *dev, unsigned int re
 	case 0x200000d:
 	case 0x2000019:
 	case 0x2000020:
+	case 0x2000026:
 	case 0x200002c:
 	case 0x2000030:
 	case 0x2000046:
@@ -155,6 +169,7 @@ static bool rt721_sdca_mbq_volatile_register(struct device *dev, unsigned int re
 	case 0x5810039:
 	case 0x5b10018:
 	case 0x5b10019:
+	case 0x6100006:
 		return true;
 	default:
 		return false;
