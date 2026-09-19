@@ -1731,6 +1731,9 @@ static void phy_detach_internal(struct phy_device *phydev, bool notify_bus)
 	if (phydev->mdio.dev.driver)
 		module_put(phydev->mdio.dev.driver->owner);
 
+	/* The release below can hand this field to a probe on another CPU. */
+	phydev->irq = phydev->mdio.bus->irq[phydev->mdio.addr];
+
 	/* If the device had no specific driver before (i.e. - it
 	 * was using the generic driver), we unbind the device
 	 * from the generic driver so that there's a chance a
