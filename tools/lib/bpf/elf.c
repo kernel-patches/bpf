@@ -118,6 +118,11 @@ static int elf_sym_iter_new(struct elf_sym_iter *iter,
 	if (!gelf_getshdr(scn, &sh))
 		return -EINVAL;
 
+	if (!sh.sh_entsize) {
+		pr_warn("elf: symbol table section has zero entry size in '%s'\n", binary_path);
+		return -EINVAL;
+	}
+
 	iter->strtabidx = sh.sh_link;
 	iter->syms = elf_getdata(scn, 0);
 	if (!iter->syms) {
