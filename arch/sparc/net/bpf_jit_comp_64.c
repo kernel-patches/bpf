@@ -901,6 +901,9 @@ static int build_insn(const struct bpf_insn *insn, struct jit_ctx *ctx)
 	const s16 off = insn->off;
 	const s32 imm = insn->imm;
 
+	if (bpf_insn_is_hmul(insn))
+		return -EOPNOTSUPP;
+
 	if (insn->src_reg == BPF_REG_FP)
 		ctx->saw_frame_pointer = true;
 
