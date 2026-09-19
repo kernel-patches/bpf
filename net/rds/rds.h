@@ -161,7 +161,7 @@ struct rds_connection {
 	 * cancellation from landing on a destroyed workqueue.
 	 */
 	bool			c_destroy_in_prog;
-	struct rds_connection	*c_passive;
+	struct rds_connection __rcu *c_passive;
 	struct rds_transport	*c_trans;
 
 	struct rds_cong_map	*c_lcong;
@@ -669,7 +669,9 @@ struct rds_sock {
 
 	/*
 	 * rds_sendmsg caches the conn it used the last time around.
-	 * This helps avoid costly lookups.
+	 * This helps avoid costly lookups.  The cache owns a connection
+	 * reference, dropped when it is replaced or the socket is
+	 * released, and is read and written under rs_lock.
 	 */
 	struct rds_connection	*rs_conn;
 
