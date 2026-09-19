@@ -2250,9 +2250,32 @@ static int vsock_connectible_sendmsg(struct socket *sock, struct msghdr *msg,
 
 	while (total_written < len) {
 		ssize_t written;
+		s64 min_space;
+
+		if (sk->sk_type == SOCK_SEQPACKET) {
+			/* A SEQPACKET message must be delivered atomically, so
+			 * wait until the whole remaining message fits before
+			 * enqueuing.  Otherwise a credit-limited partial send that
+			 * later errors out (e.g. -EINTR) leaves EOM-less fragments
+			 * that the peer merges into the next message.
+			 *
+			 * Reject a message that can never fit up front so the wait
+			 * below cannot block forever (a peer may advertise a small
+			 * buf_alloc); this mirrors the -EMSGSIZE the transport
+			 * returns for an oversized message.
+			 */
+			if (transport->seqpacket_max_size &&
+			    len > transport->seqpacket_max_size(vsk)) {
+				err = -EMSGSIZE;
+				goto out_err;
+			}
+			min_space = len - total_written;
+		} else {
+			min_space = 1;
+		}
 
 		add_wait_queue(sk_sleep(sk), &wait);
-		while (vsock_stream_has_space(vsk) == 0 &&
+		while (vsock_stream_has_space(vsk) < min_space &&
 		       sk->sk_err == 0 &&
 		       !(sk->sk_shutdown & SEND_SHUTDOWN) &&
 		       !(vsk->peer_shutdown & RCV_SHUTDOWN)) {
