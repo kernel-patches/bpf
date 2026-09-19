@@ -2678,6 +2678,10 @@ static ssize_t smk_write_relabel_self(struct file *file, const char __user *buf,
 	if (!smack_privileged(CAP_MAC_ADMIN))
 		return -EPERM;
 
+	/* commit_creds() must act on the caller, not an io_uring worker. */
+	if (current->flags & PF_IO_WORKER)
+		return -EOPNOTSUPP;
+
 	/*
 	 * No partial write.
 	 * Enough data must be present.
