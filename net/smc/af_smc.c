@@ -2946,6 +2946,7 @@ int smc_shutdown(struct socket *sock, int how)
 {
 	struct sock *sk = sock->sk;
 	bool do_shutdown = true;
+	bool passive_close = false;
 	struct smc_sock *smc;
 	int rc = -EINVAL;
 	int old_state;
@@ -2983,7 +2984,7 @@ int smc_shutdown(struct socket *sock, int how)
 		if (sk->sk_shutdown == SHUTDOWN_MASK) {
 			sk->sk_state = SMC_CLOSED;
 			sk->sk_socket->state = SS_UNCONNECTED;
-			sock_put(sk);
+			passive_close = true;
 		}
 		goto out;
 	}
@@ -3014,6 +3015,8 @@ int smc_shutdown(struct socket *sock, int how)
 		sock->state = SS_DISCONNECTING;
 out:
 	release_sock(sk);
+	if (passive_close)
+		sock_put(sk); /* passive closing */
 	return rc ? rc : rc1;
 }
 

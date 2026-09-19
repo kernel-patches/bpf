@@ -22,6 +22,7 @@ enum tcp_ecn_mode {
 	TCP_ECN_IN_ACCECN_OUT_ACCECN = 3,
 	TCP_ECN_IN_ACCECN_OUT_ECN = 4,
 	TCP_ECN_IN_ACCECN_OUT_NOECN = 5,
+	TCP_ECN_MODE_UNSPEC = 255,	/* Use sysctl default (per-socket) */
 };
 
 /* AccECN option sending when AccECN has been successfully negotiated */
@@ -30,7 +31,35 @@ enum tcp_accecn_option {
 	TCP_ACCECN_OPTION_MINIMUM = 1,
 	TCP_ACCECN_OPTION_FULL = 2,
 	TCP_ACCECN_OPTION_PERSIST = 3,
+	TCP_ACCECN_OPTION_UNSPEC = 255,	/* Use sysctl default (per-socket) */
 };
+
+/* Resolve the effective ECN mode: per-socket override or sysctl fallback */
+static inline u8 tcp_ecn_mode_eff(const struct sock *sk)
+{
+	u8 mode = READ_ONCE(tcp_sk(sk)->ecn_mode);
+
+	if (mode == TCP_ECN_MODE_UNSPEC)
+		return READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_ecn);
+	return mode;
+}
+
+/* Resolve the effective AccECN option: per-socket override or sysctl fallback */
+static inline u8 tcp_accecn_option_eff(const struct sock *sk)
+{
+	u8 opt = READ_ONCE(tcp_sk(sk)->ecn_option);
+
+	if (opt == TCP_ACCECN_OPTION_UNSPEC)
+		return READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_ecn_option);
+	return opt;
+}
+
+/* ECN support for SYN cookies: per-socket override or route feature */
+static inline bool cookie_ecn_ok(const struct sock *sk, const struct dst_entry *dst)
+{
+	return tcp_ecn_mode_eff(sk) ||
+		dst_feature(dst, RTAX_FEATURE_ECN);
+}
 
 /* Apply either ECT(0) or ECT(1) based on TCP_CONG_ECT_1_NEGOTIATION flag */
 static inline void INET_ECN_xmit_ect_1_negotiation(struct sock *sk)
@@ -599,7 +628,7 @@ static inline void tcp_ecn_send_syn(struct sock *sk, struct sk_buff *skb)
 	struct tcp_sock *tp = tcp_sk(sk);
 	bool bpf_needs_ecn = tcp_bpf_ca_needs_ecn(sk);
 	bool use_ecn, use_accecn;
-	u8 tcp_ecn = READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_ecn);
+	u8 tcp_ecn = tcp_ecn_mode_eff(sk);
 
 	use_accecn = tcp_ecn == TCP_ECN_IN_ACCECN_OUT_ACCECN ||
 		     tcp_ca_needs_accecn(sk);

@@ -17,6 +17,8 @@
 #include "devlink/port.h"
 #include "ice_sf_eth.h"
 #include "ice_hwmon.h"
+#include "ice_acl.h"
+#include "ice_acl_main.h"
 /* Including ice_trace.h with CREATE_TRACE_POINTS defined will generate the
  * ice tracepoint functions. This must be done exactly once across the
  * ice driver.
@@ -3946,6 +3948,9 @@ static void ice_set_pf_caps(struct ice_pf *pf)
 				       func_caps->fd_fltr_best_effort);
 	}
 
+	/* ACL is always initially available */
+	set_bit(ICE_FLAG_ACL_ENA, pf->flags);
+
 	clear_bit(ICE_FLAG_PTP_SUPPORTED, pf->flags);
 	if (func_caps->common_cap.ieee_1588)
 		set_bit(ICE_FLAG_PTP_SUPPORTED, pf->flags);
@@ -4326,6 +4331,137 @@ static int ice_send_version(struct ice_pf *pf)
 	strscpy((char *)dv.driver_string, UTS_RELEASE,
 		sizeof(dv.driver_string));
 	return ice_aq_send_driver_ver(&pf->hw, &dv, NULL);
+}
+
+/**
+ * ice_acl_create_hw - create ACL HW table and scenario
+ * @pf: ptr to PF device
+ *
+ * Return: 0 on success, negative on error
+ */
+static int ice_acl_create_hw(struct ice_pf *pf)
+{
+	struct ice_acl_tbl_params params = {};
+	struct ice_hw *hw = &pf->hw;
+	int divider;
+	u16 scen_id;
+	int err;
+
+	/* Create a single ACL table that consists of src_ip (4 bytes),
+	 * dest_ip (4 bytes), src_port (2 bytes) and dst_port (2 bytes) for a
+	 * total of 12 bytes (96 bits), hence 120 bit wide keys, i.e. 3 TCAM
+	 * slices. If the NIC contains less than 8 PFs, then each PF will have
+	 * its own TCAM slices. For 8 PFs, a given slice will be shared by 2
+	 * different PFs.
+	 */
+	if (hw->dev_caps.num_funcs < 8)
+		divider = ICE_ACL_ENTIRE_SLICE;
+	else
+		divider = ICE_ACL_HALF_SLICE;
+
+	params.width = ICE_AQC_ACL_KEY_WIDTH_BYTES * 3;
+	params.depth = ICE_AQC_ACL_TCAM_DEPTH / divider;
+	params.entry_act_pairs = 1;
+	params.concurr = false;
+	params.num_dep_tbls = 0;
+
+	err = ice_acl_create_tbl(hw, &params);
+	if (err)
+		return err;
+
+	err = ice_acl_create_scen(hw, params.width, params.depth, &scen_id);
+	if (err)
+		goto destroy_table;
+
+	/* Reset profile extraction sequences and range checkers for all
+	 * possible HW profile IDs. The TCAM entries are already zeroed by
+	 * ice_acl_init_tbl() inside ice_acl_create_tbl(), but profile
+	 * extraction and range checker state is separate per-profile HW state
+	 * that survives PF reset, therefore must be brought back to default
+	 * state.
+	 */
+	for (u8 prof_id = 0; prof_id < ICE_ACL_MAX_PROF; prof_id++) {
+		struct ice_aqc_acl_prof_generic_frmt xtrct_buf = {};
+		struct ice_aqc_acl_profile_ranges range_buf = {};
+
+		memset(xtrct_buf.pf_scenario_num, ICE_ACL_INVALID_SCEN,
+		       sizeof(xtrct_buf.pf_scenario_num));
+		err = ice_prgm_acl_prof_xtrct(hw, prof_id, &xtrct_buf, NULL);
+		if (err)
+			dev_warn(ice_pf_to_dev(pf), "Failed to reset profile extraction for profile %u\n",
+				 prof_id);
+
+		ice_prog_acl_prof_ranges(hw, prof_id, &range_buf, NULL);
+		if (err)
+			dev_warn(ice_pf_to_dev(pf), "Failed to reset range checkers for profile %u\n",
+				 prof_id);
+	}
+
+	return 0;
+
+destroy_table:
+	ice_acl_destroy_tbl(hw);
+
+	return err;
+}
+
+/**
+ * ice_init_acl - initialize the ACL block and allocate necessary structs
+ * @pf: ptr to PF device
+ *
+ * Return: 0 on success, negative on error
+ */
+static int ice_init_acl(struct ice_pf *pf)
+{
+	struct device *dev = ice_pf_to_dev(pf);
+	struct ice_hw *hw = &pf->hw;
+	int err;
+
+	hw->acl_prof = devm_kcalloc(dev, ICE_FLTR_PTYPE_MAX,
+				    sizeof(*hw->acl_prof), GFP_KERNEL);
+	if (!hw->acl_prof)
+		return -ENOMEM;
+
+	err = ice_acl_create_hw(pf);
+	if (err)
+		goto free_acl_prof;
+
+	return 0;
+
+free_acl_prof:
+	devm_kfree(dev, hw->acl_prof);
+	hw->acl_prof = NULL;
+
+	return err;
+}
+
+/**
+ * ice_deinit_acl - unroll the initialization of the ACL block
+ * @pf: ptr to PF device
+ */
+static void ice_deinit_acl(struct ice_pf *pf)
+{
+	struct device *dev = ice_pf_to_dev(pf);
+	struct ice_hw *hw = &pf->hw;
+
+	ice_acl_rem_flows(hw);
+	ice_acl_destroy_tbl(hw);
+
+	if (!hw->acl_prof)
+		return;
+
+	for (int i = 0; i < ICE_FLTR_PTYPE_MAX; i++) {
+		struct ice_acl_hw_prof *hw_prof = hw->acl_prof[i];
+
+		if (!hw_prof)
+			continue;
+
+		kfree(hw_prof->seg);
+		kfree(hw_prof);
+	}
+
+	devm_kfree(dev, hw->acl_prof);
+	hw->acl_prof = NULL;
 }
 
 /**
@@ -4725,6 +4861,14 @@ static void ice_init_features(struct ice_pf *pf)
 	if (ice_is_safe_mode(pf))
 		return;
 
+	/* pf->dplls.lock guards TSPLL/CGU access shared between the DPLL
+	 * subsystem callbacks and the PTP periodic worker's TSPLL monitor.
+	 * Initialize it before ice_ptp_init() so the PTP kworker never sees
+	 * an uninitialized mutex, and destroy it in ice_deinit_features()
+	 * only after ice_ptp_release() has drained the kworker.
+	 */
+	mutex_init(&pf->dplls.lock);
+
 	/* initialize DDP driven features */
 	if (test_bit(ICE_FLAG_PTP_SUPPORTED, pf->flags))
 		ice_ptp_init(pf);
@@ -4739,6 +4883,10 @@ static void ice_init_features(struct ice_pf *pf)
 	/* Note: Flow director init failure is non-fatal to load */
 	if (ice_init_fdir(pf))
 		dev_err(dev, "could not initialize flow director\n");
+
+	/* Note: ACL init failure is non-fatal to load */
+	if (ice_init_acl(pf))
+		dev_err(dev, "Failed to initialize ACL\n");
 
 	/* Note: DCB init failure is non-fatal to load */
 	if (ice_init_pf_dcb(pf, false)) {
@@ -4762,6 +4910,7 @@ static void ice_deinit_features(struct ice_pf *pf)
 	ice_deinit_lag(pf);
 	if (test_bit(ICE_FLAG_DCB_CAPABLE, pf->flags))
 		ice_cfg_lldp_mib_change(&pf->hw, false);
+	ice_deinit_acl(pf);
 	ice_deinit_fdir(pf);
 	if (ice_is_feature_supported(pf, ICE_F_GNSS))
 		ice_gnss_exit(pf);
@@ -4769,6 +4918,7 @@ static void ice_deinit_features(struct ice_pf *pf)
 		ice_ptp_release(pf);
 	if (test_bit(ICE_FLAG_DPLL, pf->flags))
 		ice_dpll_deinit(pf);
+	mutex_destroy(&pf->dplls.lock);
 	if (pf->eswitch_mode == DEVLINK_ESWITCH_MODE_SWITCHDEV)
 		xa_destroy(&pf->eswitch.reprs);
 	ice_hwmon_exit(pf);
@@ -6202,7 +6352,7 @@ ice_fdb_del(struct ndmsg *ndm, __always_unused struct nlattr *tb[],
  *
  * Features that need fixing:
  *	Cannot simultaneously enable CTAG and STAG stripping and/or insertion.
- *	These are mutually exlusive as the VSI context cannot support multiple
+ *	These are mutually exclusive as the VSI context cannot support multiple
  *	VLAN ethertypes simultaneously for stripping and/or insertion. If this
  *	is not done, then default to clearing the requested STAG offload
  *	settings.
@@ -6492,6 +6642,7 @@ ice_set_features(struct net_device *netdev, netdev_features_t features)
 		bool ena = !!(features & NETIF_F_NTUPLE);
 
 		ice_vsi_manage_fdir(vsi, ena);
+		ice_vsi_manage_acl(vsi, ena);
 		ena ? ice_init_arfs(vsi) : ice_clear_arfs(vsi);
 	}
 
@@ -7789,6 +7940,24 @@ static void ice_rebuild(struct ice_pf *pf, enum ice_reset_req reset_type)
 		ice_rebuild_arfs(pf);
 	}
 
+	if (test_bit(ICE_FLAG_ACL_ENA, pf->flags)) {
+		/* Clean up the stale HW table SW state left by the reset,
+		 * recreate the HW table and scenario, then replay flow profiles
+		 * from preserved SW state.
+		 */
+		ice_acl_destroy_tbl(hw);
+		if (!ice_acl_create_hw(pf)) {
+			ice_acl_replay_flows(hw);
+			ice_acl_replay_fltrs(pf);
+		} else {
+			dev_err(dev, "Failed to rebuild ACL\n");
+			mutex_lock(&hw->fdir_fltr_lock);
+			if (vsi)
+				ice_acl_del_all_fltrs(vsi);
+			mutex_unlock(&hw->fdir_fltr_lock);
+		}
+	}
+
 	if (vsi && vsi->netdev)
 		netif_device_attach(vsi->netdev);
 
@@ -8086,12 +8255,14 @@ int ice_set_rss_hfunc(struct ice_vsi *vsi, u8 hfunc)
  * @dev: the netdev being configured
  * @filter_mask: filter mask passed in
  * @nlflags: netlink flags passed in
+ * @extack: netlink extended ack
  *
  * Return the bridge mode (VEB/VEPA)
  */
 static int
 ice_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
-		   struct net_device *dev, u32 filter_mask, int nlflags)
+		   struct net_device *dev, u32 filter_mask, int nlflags,
+		   struct netlink_ext_ack *extack)
 {
 	struct ice_pf *pf = ice_netdev_to_pf(dev);
 	u16 bmode;
@@ -8099,7 +8270,7 @@ ice_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 	bmode = pf->first_sw->bridge_mode;
 
 	return ndo_dflt_bridge_getlink(skb, pid, seq, dev, bmode, 0, 0, nlflags,
-				       filter_mask, NULL);
+				       filter_mask, NULL, extack);
 }
 
 /**
@@ -8550,7 +8721,7 @@ static int ice_add_vsi_to_fdir(struct ice_pf *pf, struct ice_vsi *vsi)
 						    prof->prof_id[tun],
 						    prof->vsi_h[0], vsi->idx,
 						    prio, prof->fdir_seg[tun],
-						    &entry_h);
+						    NULL, 0, &entry_h);
 			if (status) {
 				dev_err(dev, "channel VSI idx %d, not able to add to group %d\n",
 					vsi->idx, flow);

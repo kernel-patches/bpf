@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0+ OR MIT
 
+# Set CC for the io_uring check
+ifeq ($(LLVM)$(CC),cc)
+CC := $(CROSS_COMPILE)gcc
+endif
+
 # Check if io_uring supports zero-copy receive
 HAS_IOURING_ZCRX := $(shell \
 	echo -e '#include <liburing.h>\n' \
@@ -13,10 +18,6 @@ else
 $(warning excluding iouring tests, liburing not installed or too old)
 endif
 
-TEST_GEN_FILES := \
-	$(COND_GEN_FILES) \
-# end of TEST_GEN_FILES
-
 TEST_PROGS = \
 	csum.py \
 	devlink_rate_cross_esw.py \
@@ -27,7 +28,7 @@ TEST_PROGS = \
 	ethtool_mm.sh \
 	ethtool_rmon.sh \
 	ethtool_std_stats.sh \
-	gro_hw.py \
+	gro_stats.py \
 	hw_stats_l3.sh \
 	hw_stats_l3_gre.sh \
 	iou-zcrx.py \
@@ -45,6 +46,7 @@ TEST_PROGS = \
 	rss_drv.py \
 	rss_flow_label.py \
 	rss_input_xfrm.py \
+	tls_hw_offload.py \
 	toeplitz.py \
 	tso.py \
 	userns_devmem.py \
@@ -64,19 +66,22 @@ TEST_FILES := \
 
 TEST_INCLUDES := \
 	$(wildcard lib/py/*.py ../lib/py/*.py) \
-	../../../net/lib.sh \
+	$(wildcard ../../../net/lib/sh/*.sh) \
 	../../../net/forwarding/ipip_lib.sh \
 	../../../net/forwarding/lib.sh \
 	../../../net/forwarding/tc_common.sh \
+	../../../net/lib.sh \
 	#
 
 # YNL files, must be before "include ..lib.mk"
 YNL_GEN_FILES := \
 	ncdevmem \
 	toeplitz \
+	$(COND_GEN_FILES) \
 # end of YNL_GEN_FILES
 TEST_GEN_FILES += $(YNL_GEN_FILES)
 TEST_GEN_FILES += $(patsubst %.c,%.o,$(wildcard *.bpf.c))
+TEST_GEN_FILES += tls_hw_offload
 
 include ../../../lib.mk
 
@@ -91,5 +96,5 @@ include ../../../net/ynl.mk
 include ../../../net/bpf.mk
 
 ifeq ($(HAS_IOURING_ZCRX),y)
-$(OUTPUT)/iou-zcrx: LDLIBS += -luring
+$(OUTPUT)/iou-zcrx: LDLIBS += -luring -lpthread
 endif

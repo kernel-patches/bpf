@@ -2614,6 +2614,8 @@ re_arm:
 			break;
 		}
 	}
+	if (update_slave_arr)
+		WRITE_ONCE(bond->slave_arr_update_pending, true);
 	rcu_read_unlock();
 	spin_unlock_bh(&bond->mode_lock);
 

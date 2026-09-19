@@ -128,7 +128,8 @@ enum {
 #define TCP_CM_INQ		TCP_INQ
 
 #define TCP_TX_DELAY		37	/* delay outgoing packets by XX usec */
-
+#define TCP_ECN			47	/* Per-socket ECN mode (0-5, 255=use sysctl) */
+#define TCP_ECN_OPTION		48	/* Per-socket AccECN option (0-3, 255=use sysctl) */
 
 #define TCP_REPAIR_ON		1
 #define TCP_REPAIR_OFF		0

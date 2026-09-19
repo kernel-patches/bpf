@@ -314,6 +314,15 @@ static void nci_core_conn_create_rsp_packet(struct nci_dev *ndev,
 	if (status == NCI_STATUS_OK) {
 		rsp = (struct nci_core_conn_create_rsp *)skb->data;
 
+		/* A zero payload limit cannot carry any data; reject before
+		 * the conn_info is published. A limit of 1 still works for
+		 * one-byte generic data fragments.
+		 */
+		if (!rsp->max_ctrl_pkt_payload_len) {
+			status = NCI_STATUS_REJECTED;
+			goto exit;
+		}
+
 		conn_info = devm_kzalloc(&ndev->nfc_dev->dev,
 					 sizeof(*conn_info), GFP_KERNEL);
 		if (!conn_info) {

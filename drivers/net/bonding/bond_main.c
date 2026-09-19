@@ -490,7 +490,7 @@ static int bond_ipsec_add_sa(struct net_device *bond_dev,
 	    !real_dev->xfrmdev_ops->xdo_dev_state_add ||
 	    netif_is_bond_master(real_dev)) {
 		NL_SET_ERR_MSG_MOD(extack, "Slave does not support ipsec offload");
-		err = -EINVAL;
+		err = -EOPNOTSUPP;
 		goto out;
 	}
 
@@ -4339,6 +4339,7 @@ void bond_work_cancel_all(struct bonding *bond)
 	cancel_delayed_work_sync(&bond->ad_work);
 	cancel_delayed_work_sync(&bond->mcast_work);
 	cancel_delayed_work_sync(&bond->slave_arr_work);
+	WRITE_ONCE(bond->slave_arr_update_pending, false);
 	cancel_delayed_work_sync(&bond->peer_notify_work);
 }
 
@@ -5093,6 +5094,8 @@ static void bond_slave_arr_handler(struct work_struct *work)
 		pr_warn_ratelimited("Failed to update slave array from WT\n");
 		goto err;
 	}
+	/* bond->wq is ordered, so no newer request can race this clear. */
+	WRITE_ONCE(bond->slave_arr_update_pending, false);
 	return;
 
 err:
@@ -5233,11 +5236,11 @@ static struct slave *bond_xmit_3ad_xor_slave_get(struct bonding *bond,
 	unsigned int count;
 	u32 hash;
 
-	hash = bond_xmit_hash(bond, skb);
 	count = slaves ? READ_ONCE(slaves->count) : 0;
 	if (unlikely(!count))
 		return NULL;
 
+	hash = bond_xmit_hash(bond, skb);
 	slave = slaves->arr[hash % count];
 	return slave;
 }
@@ -5289,9 +5292,67 @@ static bool bond_should_broadcast_neighbor(struct sk_buff *skb,
 	return false;
 }
 
-/* Use this Xmit function for 3AD as well as XOR modes. The current
- * usable slave array is formed in the control path. The xmit function
- * just calculates hash and sends the packet out.
+/* Called with RCU and bond->mode_lock held. */
+static bool bond_3ad_slave_is_eligible(struct slave *slave)
+{
+	const struct aggregator *agg;
+
+	agg = rcu_dereference(SLAVE_AD_INFO(slave)->port.aggregator);
+	return agg && agg->is_active && bond_slave_can_tx(slave);
+}
+
+/* Called with RCU held. */
+static struct slave *bond_3ad_xmit_fallback(struct bonding *bond, u32 hash)
+{
+	struct slave *selected = NULL;
+	unsigned int eligible = 0;
+	unsigned int target;
+	struct list_head *iter;
+	struct slave *slave;
+
+	/* Limit the list walk to the array-update window. */
+	if (!netif_carrier_ok(bond->dev) ||
+	    !READ_ONCE(bond->slave_arr_update_pending))
+		return NULL;
+
+	/* TX may recurse while mode_lock is already held. */
+	if (unlikely(netpoll_tx_running(bond->dev)) ||
+	    !spin_trylock_bh(&bond->mode_lock))
+		return NULL;
+
+	if (!READ_ONCE(bond->slave_arr_update_pending))
+		goto out;
+
+	bond_for_each_slave_rcu(bond, slave, iter)
+		if (bond_3ad_slave_is_eligible(slave))
+			eligible++;
+
+	if (!eligible)
+		goto out;
+
+	target = hash % eligible;
+	bond_for_each_slave_rcu(bond, slave, iter) {
+		if (!bond_3ad_slave_is_eligible(slave))
+			continue;
+
+		if (!selected)
+			selected = slave;
+
+		if (!target) {
+			selected = slave;
+			break;
+		}
+		target--;
+	}
+
+out:
+	spin_unlock_bh(&bond->mode_lock);
+	return selected;
+}
+
+/* Use this Xmit function for 3AD as well as XOR modes. The usable slave
+ * array is formed in the control path. In 3AD mode, fall back to the current
+ * port state while an empty array update is pending.
  */
 static netdev_tx_t bond_3ad_xor_xmit(struct sk_buff *skb,
 				     struct net_device *dev)
@@ -5302,6 +5363,8 @@ static netdev_tx_t bond_3ad_xor_xmit(struct sk_buff *skb,
 
 	slaves = rcu_dereference(bond->usable_slaves);
 	slave = bond_xmit_3ad_xor_slave_get(bond, skb, slaves);
+	if (unlikely(!slave) && BOND_MODE(bond) == BOND_MODE_8023AD)
+		slave = bond_3ad_xmit_fallback(bond, bond_xmit_hash(bond, skb));
 	if (likely(slave))
 		return bond_dev_queue_xmit(bond, skb, slave->dev);
 
@@ -5327,6 +5390,16 @@ static netdev_tx_t bond_xmit_broadcast(struct sk_buff *skb,
 		slaves = rcu_dereference(bond->usable_slaves);
 
 	slaves_count = slaves ? READ_ONCE(slaves->count) : 0;
+	if (!slaves_count && !all_slaves &&
+	    BOND_MODE(bond) == BOND_MODE_8023AD) {
+		struct slave *slave;
+
+		slave = bond_3ad_xmit_fallback(bond,
+					       bond_xmit_hash(bond, skb));
+		if (slave)
+			return bond_dev_queue_xmit(bond, skb, slave->dev);
+	}
+
 	for (i = 0; i < slaves_count; i++) {
 		struct slave *slave = slaves->arr[i];
 		struct sk_buff *skb2;
@@ -5432,6 +5505,10 @@ static struct net_device *bond_xmit_get_slave(struct net_device *master_dev,
 		else
 			slaves = rcu_dereference(bond->usable_slaves);
 		slave = bond_xmit_3ad_xor_slave_get(bond, skb, slaves);
+		if (!slave && !all_slaves &&
+		    BOND_MODE(bond) == BOND_MODE_8023AD)
+			slave = bond_3ad_xmit_fallback(bond,
+						       bond_xmit_hash(bond, skb));
 		break;
 	case BOND_MODE_BROADCAST:
 		break;

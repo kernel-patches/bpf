@@ -2614,7 +2614,7 @@ static u64 i40e_eeprom_test(struct net_device *netdev, u64 *data)
 	netif_info(pf, hw, netdev, "eeprom test\n");
 	*data = i40e_diag_eeprom_test(&pf->hw);
 
-	/* forcebly clear the NVM Update state machine */
+	/* forcibly clear the NVM Update state machine */
 	pf->hw.nvmupd_state = I40E_NVMUPD_STATE_INIT;
 
 	return *data;
@@ -5263,10 +5263,7 @@ static int i40e_set_priv_flags(struct net_device *dev, u32 flags)
 		    test_bit(priv_flag->bitno, orig_flags) != new_val)
 			return -EOPNOTSUPP;
 
-		if (new_val)
-			set_bit(priv_flag->bitno, new_flags);
-		else
-			clear_bit(priv_flag->bitno, new_flags);
+		assign_bit(priv_flag->bitno, new_flags, new_val);
 	}
 
 	if (pf->hw.pf_id != 0)
@@ -5284,10 +5281,7 @@ static int i40e_set_priv_flags(struct net_device *dev, u32 flags)
 		    test_bit(priv_flag->bitno, orig_flags) != new_val)
 			return -EOPNOTSUPP;
 
-		if (new_val)
-			set_bit(priv_flag->bitno, new_flags);
-		else
-			clear_bit(priv_flag->bitno, new_flags);
+		assign_bit(priv_flag->bitno, new_flags, new_val);
 	}
 
 flags_complete:
@@ -5299,6 +5293,13 @@ flags_complete:
 	if (test_bit(I40E_FLAG_VEB_STATS_ENA, changed_flags) ||
 	    test_bit(I40E_FLAG_LEGACY_RX_ENA, changed_flags) ||
 	    test_bit(I40E_FLAG_SOURCE_PRUNING_DIS, changed_flags))
+		reset_needed = BIT(__I40E_PF_RESET_REQUESTED);
+
+	/* Re-enabling ATR requires a reset to update fd_ena in the
+	 * TX queue HW context.
+	 */
+	if (test_bit(I40E_FLAG_FD_ATR_ENA, changed_flags) &&
+	    test_bit(I40E_FLAG_FD_ATR_ENA, new_flags))
 		reset_needed = BIT(__I40E_PF_RESET_REQUESTED);
 
 	/* Before we finalize any flag changes, we need to perform some

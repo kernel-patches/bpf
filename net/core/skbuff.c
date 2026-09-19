@@ -4793,6 +4793,7 @@ struct sk_buff *skb_segment(struct sk_buff *head_skb,
 	struct sk_buff *segs = NULL;
 	struct sk_buff *tail = NULL;
 	struct sk_buff *list_skb = skb_shinfo(head_skb)->frag_list;
+	unsigned int max_segs = SKB_GSO_CB(head_skb)->max_segs;
 	unsigned int mss = skb_shinfo(head_skb)->gso_size;
 	bool gso_by_frags = mss == GSO_BY_FRAGS;
 	unsigned int doffset = head_skb->data - skb_mac_header(head_skb);
@@ -4839,7 +4840,7 @@ struct sk_buff *skb_segment(struct sk_buff *head_skb,
 	csum = !!can_checksum_protocol(features, proto);
 
 	if (sg && csum && !gso_by_frags)  {
-		if (!(features & NETIF_F_GSO_PARTIAL)) {
+		if (!max_segs && !(features & NETIF_F_GSO_PARTIAL)) {
 			struct sk_buff *iter;
 			unsigned int frag_len;
 
@@ -4874,7 +4875,10 @@ struct sk_buff *skb_segment(struct sk_buff *head_skb,
 		 * now.
 		 */
 		DEBUG_NET_WARN_ON_ONCE(len / mss > GSO_MAX_SEGS);
-		partial_segs = min(len / mss, GSO_MAX_SEGS);
+		if (max_segs)
+			partial_segs = min(len / mss, max_segs);
+		else
+			partial_segs = min(len / mss, GSO_MAX_SEGS);
 		if (partial_segs > 1)
 			mss *= partial_segs;
 		else
@@ -4974,6 +4978,12 @@ normal:
 		tail = nskb;
 
 		__copy_skb_header(nskb, head_skb);
+
+		/*
+		 * max_segs is a per-call limit, so output skbs must not
+		 * inherit it from the input skb.
+		 */
+		SKB_GSO_CB(nskb)->max_segs = 0;
 
 		skb_headers_offset_update(nskb, skb_headroom(nskb) - headroom);
 		skb_reset_mac_len(nskb);
@@ -5601,7 +5611,7 @@ static void __skb_complete_tx_timestamp(struct sk_buff *skb,
 	serr->opt_stats = opt_stats;
 	serr->header.h4.iif = skb->dev ? skb->dev->ifindex : 0;
 	if (READ_ONCE(sk->sk_tsflags) & SOF_TIMESTAMPING_OPT_ID) {
-		serr->ee.ee_data = skb_shinfo(skb)->tskey;
+		serr->ee.ee_data = READ_ONCE(skb_shinfo(skb)->tskey);
 		if (sk_is_tcp(sk))
 			serr->ee.ee_data -= atomic_read(&sk->sk_tskey);
 	}
@@ -5652,6 +5662,8 @@ void skb_complete_tx_timestamp(struct sk_buff *skb,
 	 */
 	if (likely(refcount_inc_not_zero(&sk->sk_refcnt))) {
 		*skb_hwtstamps(skb) = *hwtstamps;
+		/* Order the tskey read after observing timestamp flags. */
+		(void)smp_load_acquire(&skb_shinfo(skb)->tx_flags);
 		__skb_complete_tx_timestamp(skb, sk, SCM_TSTAMP_SND, false);
 		sock_put(sk);
 		return;
@@ -5663,19 +5675,20 @@ err:
 EXPORT_SYMBOL_GPL(skb_complete_tx_timestamp);
 
 static bool skb_tstamp_tx_report_so_timestamping(struct sk_buff *skb,
+						 u8 tx_flags,
 						 struct skb_shared_hwtstamps *hwtstamps,
 						 int tstype)
 {
 	switch (tstype) {
 	case SCM_TSTAMP_SCHED:
-		return skb_shinfo(skb)->tx_flags & SKBTX_SCHED_TSTAMP;
+		return tx_flags & SKBTX_SCHED_TSTAMP;
 	case SCM_TSTAMP_SND:
-		return skb_shinfo(skb)->tx_flags & (hwtstamps ? SKBTX_HW_TSTAMP_NOBPF :
-						    SKBTX_SW_TSTAMP);
+		return tx_flags & (hwtstamps ? SKBTX_HW_TSTAMP_NOBPF :
+						      SKBTX_SW_TSTAMP);
 	case SCM_TSTAMP_ACK:
 		return TCP_SKB_CB(skb)->txstamp_ack & TSTAMP_ACK_SK;
 	case SCM_TSTAMP_COMPLETION:
-		return skb_shinfo(skb)->tx_flags & SKBTX_COMPLETION_TSTAMP;
+		return tx_flags & SKBTX_COMPLETION_TSTAMP;
 	}
 
 	return false;
@@ -5718,20 +5731,23 @@ void __skb_tstamp_tx(struct sk_buff *orig_skb,
 	struct sk_buff *skb;
 	bool tsonly, opt_stats = false;
 	u32 tsflags;
+	u8 tx_flags;
 
 	if (!sk)
 		return;
 
-	if (skb_shinfo(orig_skb)->tx_flags & SKBTX_BPF)
+	tx_flags = smp_load_acquire(&skb_shinfo(orig_skb)->tx_flags);
+	if (tx_flags & SKBTX_BPF)
 		skb_tstamp_tx_report_bpf_timestamping(orig_skb, hwtstamps,
 						      sk, tstype);
 
-	if (!skb_tstamp_tx_report_so_timestamping(orig_skb, hwtstamps, tstype))
+	if (!skb_tstamp_tx_report_so_timestamping(orig_skb, tx_flags,
+						  hwtstamps, tstype))
 		return;
 
 	tsflags = READ_ONCE(sk->sk_tsflags);
 	if (!hwtstamps && !(tsflags & SOF_TIMESTAMPING_OPT_TX_SWHW) &&
-	    skb_shinfo(orig_skb)->tx_flags & SKBTX_IN_PROGRESS)
+	    tx_flags & SKBTX_IN_PROGRESS)
 		return;
 
 	tsonly = tsflags & SOF_TIMESTAMPING_OPT_TSONLY;
@@ -5760,9 +5776,8 @@ void __skb_tstamp_tx(struct sk_buff *orig_skb,
 		return;
 
 	if (tsonly) {
-		skb_shinfo(skb)->tx_flags |= skb_shinfo(orig_skb)->tx_flags &
-					     SKBTX_ANY_TSTAMP;
-		skb_shinfo(skb)->tskey = skb_shinfo(orig_skb)->tskey;
+		skb_shinfo(skb)->tx_flags |= tx_flags & SKBTX_ANY_TSTAMP;
+		skb_shinfo(skb)->tskey = READ_ONCE(skb_shinfo(orig_skb)->tskey);
 	}
 
 	if (hwtstamps)
@@ -5977,7 +5992,8 @@ static int skb_checksum_setup_ipv6(struct sk_buff *skb, bool recalculate)
 			err = skb_maybe_pull_tail(skb,
 						  off +
 						  sizeof(struct ipv6_opt_hdr),
-						  MAX_IPV6_HDR_LEN);
+						  off +
+						  sizeof(struct ipv6_opt_hdr));
 			if (err < 0)
 				goto out;
 
@@ -5992,7 +6008,8 @@ static int skb_checksum_setup_ipv6(struct sk_buff *skb, bool recalculate)
 			err = skb_maybe_pull_tail(skb,
 						  off +
 						  sizeof(struct ip_auth_hdr),
-						  MAX_IPV6_HDR_LEN);
+						  off +
+						  sizeof(struct ip_auth_hdr));
 			if (err < 0)
 				goto out;
 
@@ -6007,7 +6024,8 @@ static int skb_checksum_setup_ipv6(struct sk_buff *skb, bool recalculate)
 			err = skb_maybe_pull_tail(skb,
 						  off +
 						  sizeof(struct frag_hdr),
-						  MAX_IPV6_HDR_LEN);
+						  off +
+						  sizeof(struct frag_hdr));
 			if (err < 0)
 				goto out;
 
@@ -6690,6 +6708,13 @@ int skb_mpls_pop(struct sk_buff *skb, __be16 next_proto, int mac_len,
 	}
 	skb->protocol = next_proto;
 
+	/* The last label is gone, so the inner header recorded by
+	 * skb_mpls_push() no longer describes this packet. Drop it, or a
+	 * later push keeps the stale offset.
+	 */
+	if (!eth_p_mpls(next_proto))
+		skb->inner_protocol = 0;
+
 	return 0;
 }
 EXPORT_SYMBOL_GPL(skb_mpls_pop);
@@ -6825,6 +6850,34 @@ failure:
 }
 EXPORT_SYMBOL(alloc_skb_with_frags);
 
+/* pskb_carve_inside_header() and pskb_carve_inside_nonlinear()
+ * remove the first bytes of a packet and reallocate skb->head.
+ *
+ * Whatever headers were present before the operation are gone,
+ * we must not leave stale offsets, otherwise users of this skb
+ * (skb_dump(), drop_monitor, taps, ...) would read or pull garbage.
+ */
+static void skb_carve_reset_headers(struct sk_buff *skb)
+{
+	skb_unset_mac_header(skb);
+	skb_unset_transport_header(skb);
+	skb_reset_network_header(skb);
+	skb->mac_len = 0;
+
+	/* Inner offsets have no "unset" marker, zero them so that
+	 * skb_inner_network_header_was_set() becomes false and no
+	 * consumer mistakes them for a real (and long gone) header.
+	 */
+	skb->inner_mac_header = 0;
+	skb->inner_network_header = 0;
+	skb->inner_transport_header = 0;
+	skb->inner_protocol = 0;
+	skb->encapsulation = 0;
+
+	if (skb->ip_summed == CHECKSUM_PARTIAL)
+		skb->ip_summed = CHECKSUM_NONE;
+}
+
 /* carve out the first off bytes from skb when off < headlen */
 static int pskb_carve_inside_header(struct sk_buff *skb, const u32 off,
 				    const int headlen, gfp_t gfp_mask)
@@ -6880,7 +6933,7 @@ static int pskb_carve_inside_header(struct sk_buff *skb, const u32 off,
 	skb->head_frag = 0;
 	skb_set_end_offset(skb, size);
 	skb_set_tail_pointer(skb, skb_headlen(skb));
-	skb_headers_offset_update(skb, 0);
+	skb_carve_reset_headers(skb);
 	skb->cloned = 0;
 	skb->hdr_len = 0;
 	skb->nohdr = 0;
@@ -7020,7 +7073,7 @@ static int pskb_carve_inside_nonlinear(struct sk_buff *skb, const u32 off,
 	skb->data = data;
 	skb_set_end_offset(skb, size);
 	skb_reset_tail_pointer(skb);
-	skb_headers_offset_update(skb, 0);
+	skb_carve_reset_headers(skb);
 	skb->cloned   = 0;
 	skb->hdr_len  = 0;
 	skb->nohdr    = 0;
@@ -7236,16 +7289,23 @@ static void skb_ext_put_sp(struct sec_path *sp)
 {
 	unsigned int i;
 
+	if (!sp->len)
+		return;
+
 	for (i = 0; i < sp->len; i++)
 		xfrm_state_put(sp->xvec[i]);
+	sp->len = 0;
 }
 #endif
 
 #ifdef CONFIG_MCTP_FLOWS
 static void skb_ext_put_mctp(struct mctp_flow *flow)
 {
-	if (flow->key)
-		mctp_key_unref(flow->key);
+	if (!flow->key)
+		return;
+
+	mctp_key_unref(flow->key);
+	flow->key = NULL;
 }
 #endif
 
@@ -7257,15 +7317,20 @@ void __skb_ext_del(struct sk_buff *skb, enum skb_ext_id id)
 	if (skb->active_extensions == 0) {
 		skb->extensions = NULL;
 		__skb_ext_put(ext);
-#ifdef CONFIG_XFRM
-	} else if (id == SKB_EXT_SEC_PATH &&
-		   refcount_read(&ext->refcnt) == 1) {
-		struct sec_path *sp = skb_ext_get_ptr(ext, SKB_EXT_SEC_PATH);
-
-		skb_ext_put_sp(sp);
-		sp->len = 0;
-#endif
+		return;
 	}
+
+	if (refcount_read(&ext->refcnt) > 1)
+		return;
+
+#ifdef CONFIG_XFRM
+	if (id == SKB_EXT_SEC_PATH)
+		skb_ext_put_sp(skb_ext_get_ptr(ext, SKB_EXT_SEC_PATH));
+#endif
+#ifdef CONFIG_MCTP_FLOWS
+	if (id == SKB_EXT_MCTP)
+		skb_ext_put_mctp(skb_ext_get_ptr(ext, SKB_EXT_MCTP));
+#endif
 }
 EXPORT_SYMBOL(__skb_ext_del);
 

@@ -3371,7 +3371,7 @@ static int rvu_flr_init(struct rvu *rvu)
 	}
 
 	rvu->flr_wq = alloc_workqueue("rvu_afpf_flr",
-				      WQ_HIGHPRI | WQ_MEM_RECLAIM, 0);
+				      WQ_HIGHPRI | WQ_MEM_RECLAIM | WQ_PERCPU, 0);
 	if (!rvu->flr_wq)
 		return -ENOMEM;
 
@@ -3467,8 +3467,6 @@ err_put:
 err:
 	return ret;
 }
-
-#define PCI_DEVID_OCTEONTX2_RVU_AFVF	0xA0F8
 
 static int rvu_enable_sriov(struct rvu *rvu)
 {
@@ -3715,12 +3713,29 @@ err_freemem:
 
 static void rvu_remove(struct pci_dev *pdev)
 {
+	struct workqueue_struct *rep_wq;
 	struct rvu *rvu = pci_get_drvdata(pdev);
 
 	rvu_dbg_exit(rvu);
 	rvu_unregister_dl(rvu);
+
+	/* Block get_rep_cnt() from allocating a new rep_evt_wq. */
+	mutex_lock(&rvu->rsrc_lock);
+	WRITE_ONCE(rvu->rep_evt_teardown, true);
+	rep_wq = rvu->rep_evt_wq;
+	WRITE_ONCE(rvu->rep_evt_wq, NULL);
+	mutex_unlock(&rvu->rsrc_lock);
+
 	rvu_unregister_interrupts(rvu);
 	rvu_flr_wq_destroy(rvu);
+
+	/* Flush both mbox workqueues before destroying rep_wq. */
+	flush_workqueue(rvu->afpf_wq_info.mbox_wq);
+	if (rvu->afvf_wq_info.mbox_wq)
+		flush_workqueue(rvu->afvf_wq_info.mbox_wq);
+	if (rep_wq)
+		destroy_workqueue(rep_wq);
+
 	rvu_cgx_exit(rvu);
 	rvu_fwdata_exit(rvu);
 	rvu_mcs_exit(rvu);

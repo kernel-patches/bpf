@@ -64,6 +64,8 @@ static const struct sockopt_test sol_tcp_tests[] = {
 	{ .opt = TCP_BPF_DELACK_MAX, .new = 30000, .expected = 30000, },
 	{ .opt = TCP_BPF_RTO_MIN, .new = 30000, .expected = 30000, },
 	{ .opt = TCP_RTO_MAX_MS, .new = 2000, .expected = 2000, },
+	{ .opt = TCP_ECN, .new = 3, .expected = 3, .restore = 255, },
+	{ .opt = TCP_ECN_OPTION, .new = 2, .expected = 2, .restore = 255, },
 	{ .opt = 0, },
 };
 

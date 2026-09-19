@@ -16,13 +16,20 @@
 static void tcp_gso_tstamp(struct sk_buff *skb, struct sk_buff *gso_skb,
 			   unsigned int seq, unsigned int mss)
 {
-	u32 flags = skb_shinfo(gso_skb)->tx_flags & SKBTX_ANY_TSTAMP;
-	u32 ts_seq = skb_shinfo(gso_skb)->tskey;
+	struct skb_shared_info *shinfo = skb_shinfo(gso_skb);
+	u32 ts_seq;
+	u8 flags;
 
+	/* Pair with timestamp request publication before copying tskey. */
+	flags = smp_load_acquire(&shinfo->tx_flags) & SKBTX_ANY_TSTAMP;
+	if (!flags)
+		return;
+
+	ts_seq = READ_ONCE(shinfo->tskey);
 	while (skb) {
 		if (before(ts_seq, seq + mss)) {
-			skb_shinfo(skb)->tx_flags |= flags;
 			skb_shinfo(skb)->tskey = ts_seq;
+			skb_shinfo(skb)->tx_flags |= flags;
 			return;
 		}
 
@@ -164,7 +171,8 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 	if (unlikely(skb->len <= mss))
 		goto out;
 
-	if (skb_gso_ok(skb, features | NETIF_F_GSO_ROBUST)) {
+	if (!SKB_GSO_CB(skb)->max_segs &&
+	    skb_gso_ok(skb, features | NETIF_F_GSO_ROBUST)) {
 		/* Packet is from an untrusted source, reset gso_segs. */
 
 		skb_shinfo(skb)->gso_segs = DIV_ROUND_UP(skb->len, mss);
@@ -198,7 +206,8 @@ struct sk_buff *tcp_gso_segment(struct sk_buff *skb,
 	th = tcp_hdr(skb);
 	seq = ntohl(th->seq);
 
-	if (unlikely(skb_shinfo(gso_skb)->tx_flags & SKBTX_ANY_TSTAMP))
+	if (unlikely(READ_ONCE(skb_shinfo(gso_skb)->tx_flags) &
+		     SKBTX_ANY_TSTAMP))
 		tcp_gso_tstamp(segs, gso_skb, seq, mss);
 
 	newcheck = ~csum_fold(csum_add(csum_unfold(th->check), delta));

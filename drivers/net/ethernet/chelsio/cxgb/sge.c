@@ -2052,7 +2052,8 @@ static void espibug_workaround_t204(struct timer_list *t)
 			 * the skb once the DMA has completed.
 			 */
 			skb = skb_get(skb);
-			t1_sge_tx(skb, adapter, 0, adapter->port[i].dev);
+			if (t1_sge_tx(skb, adapter, 0, adapter->port[i].dev))
+				dev_kfree_skb_any(skb);
 		}
 	}
 	mod_timer(&sge->espibug_timer, jiffies + sge->espibug_timeout);

@@ -4,7 +4,14 @@
 
 /* GSO */
 
+#include <linux/if_ether.h>
+#include <linux/if_vlan.h>
+#include <linux/ip.h>
+#include <linux/ipv6.h>
+#include <linux/netdevice.h>
 #include <linux/skbuff.h>
+#include <linux/tcp.h>
+#include <net/gso.h>
 
 static const char hdr[] = "abcdefgh";
 #define GSO_TEST_SIZE 1000
@@ -34,6 +41,9 @@ enum gso_test_nr {
 	GSO_TEST_FRAG_LIST_PURE,
 	GSO_TEST_FRAG_LIST_NON_UNIFORM,
 	GSO_TEST_GSO_BY_FRAGS,
+	GSO_TEST_BOUNDED,
+	GSO_TEST_BOUNDED_MULTI,
+	GSO_TEST_BOUNDED_ONE_MSS,
 };
 
 struct gso_test_case {
@@ -46,10 +56,12 @@ struct gso_test_case {
 	const unsigned int *frags;
 	unsigned int nr_frag_skbs;
 	const unsigned int *frag_skbs;
+	unsigned int max_segs;
 
 	/* output as expected */
 	unsigned int nr_segs;
 	const unsigned int *segs;
+	bool segs_are_gso;
 };
 
 static struct gso_test_case cases[] = {
@@ -134,6 +146,54 @@ static struct gso_test_case cases[] = {
 		.frag_skbs = (const unsigned int[]) { 100, 200, 300, 400 },
 		.nr_segs = 4,
 		.segs = (const unsigned int[]) { 100, 200, 300, 400 },
+	},
+	{
+		.id = GSO_TEST_BOUNDED,
+		.name = "bounded",
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frags = 3,
+		.frags = (const unsigned int[]) {
+			GSO_TEST_SIZE, GSO_TEST_SIZE, 3,
+		},
+		.max_segs = 2,
+		.nr_segs = 2,
+		.segs = (const unsigned int[]) {
+			2 * GSO_TEST_SIZE, GSO_TEST_SIZE + 3,
+		},
+		.segs_are_gso = true,
+	},
+	{
+		.id = GSO_TEST_BOUNDED_MULTI,
+		.name = "bounded_multi",
+		.linear_len = 2 * GSO_TEST_SIZE,
+		.nr_frags = 4,
+		.frags = (const unsigned int[]) {
+			GSO_TEST_SIZE, GSO_TEST_SIZE, GSO_TEST_SIZE, 3,
+		},
+		.max_segs = 2,
+		.nr_segs = 3,
+		.segs = (const unsigned int[]) {
+			2 * GSO_TEST_SIZE, 2 * GSO_TEST_SIZE, GSO_TEST_SIZE + 3,
+		},
+		.segs_are_gso = true,
+	},
+	{
+		/*
+		 * One MSS per skb is what the unbounded path produces, so a
+		 * bound of a single segment must not change the output.
+		 */
+		.id = GSO_TEST_BOUNDED_ONE_MSS,
+		.name = "bounded_one_mss",
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frags = 3,
+		.frags = (const unsigned int[]) {
+			GSO_TEST_SIZE, GSO_TEST_SIZE, 3,
+		},
+		.max_segs = 1,
+		.nr_segs = 4,
+		.segs = (const unsigned int[]) {
+			GSO_TEST_SIZE, GSO_TEST_SIZE, GSO_TEST_SIZE, 3,
+		},
 	},
 };
 
@@ -226,6 +286,7 @@ static void gso_test_func(struct kunit *test)
 	if (tcase->id == GSO_TEST_FRAG_LIST_NON_UNIFORM)
 		features &= ~NETIF_F_SG;
 
+	SKB_GSO_CB(skb)->max_segs = tcase->max_segs;
 	segs = skb_segment(skb, features);
 	if (IS_ERR(segs)) {
 		KUNIT_FAIL(test, "segs error %pe", segs);
@@ -247,6 +308,15 @@ static void gso_test_func(struct kunit *test)
 
 		/* header was copied to all segs */
 		KUNIT_ASSERT_EQ(test, memcmp(skb_mac_header(cur), hdr, sizeof(hdr)), 0);
+		if (tcase->segs_are_gso) {
+			KUNIT_EXPECT_TRUE(test, skb_is_gso(cur));
+			KUNIT_EXPECT_EQ(test, skb_shinfo(cur)->gso_size,
+					GSO_TEST_SIZE);
+			KUNIT_EXPECT_LE(test, skb_shinfo(cur)->gso_segs,
+					tcase->max_segs);
+			KUNIT_EXPECT_FALSE(test, skb_shinfo(cur)->gso_type &
+					 SKB_GSO_PARTIAL);
+		}
 
 		/* last seg can be found through segs->prev pointer */
 		if (!next)
@@ -259,6 +329,177 @@ static void gso_test_func(struct kunit *test)
 
 free_gso_skb:
 	consume_skb(skb);
+}
+
+#define GSO_TCP_HDR_LEN \
+	(ETH_HLEN + sizeof(struct iphdr) + sizeof(struct tcphdr))
+
+static struct sk_buff *gso_tcp_skb_new(unsigned int payload_len)
+{
+	struct sk_buff *skb;
+	struct ethhdr *eth;
+	struct tcphdr *th;
+	struct iphdr *iph;
+
+	skb = alloc_skb(GSO_TCP_HDR_LEN + payload_len, GFP_KERNEL);
+	if (!skb)
+		return NULL;
+	skb_put_zero(skb, GSO_TCP_HDR_LEN + payload_len);
+
+	skb_reset_mac_header(skb);
+	eth = eth_hdr(skb);
+	eth->h_proto = htons(ETH_P_IP);
+	skb->protocol = eth->h_proto;
+
+	skb_set_network_header(skb, ETH_HLEN);
+	iph = ip_hdr(skb);
+	iph->version = 4;
+	iph->ihl = sizeof(*iph) / 4;
+	iph->protocol = IPPROTO_TCP;
+	iph->tot_len = htons(sizeof(*iph) + sizeof(*th) + payload_len);
+
+	skb_set_transport_header(skb, ETH_HLEN + sizeof(*iph));
+	th = tcp_hdr(skb);
+	th->doff = sizeof(*th) / 4;
+
+	skb->ip_summed = CHECKSUM_PARTIAL;
+	skb->csum_start = skb_transport_header(skb) - skb->head;
+	skb->csum_offset = offsetof(struct tcphdr, check);
+	skb_shinfo(skb)->gso_type = SKB_GSO_TCPV4;
+	skb_shinfo(skb)->gso_size = GSO_TEST_SIZE;
+	skb_shinfo(skb)->gso_segs = DIV_ROUND_UP(payload_len, GSO_TEST_SIZE);
+
+	return skb;
+}
+
+static void gso_test_tcp_bounded_segment(struct kunit *test)
+{
+	netdev_features_t features = NETIF_F_SG | NETIF_F_HW_CSUM |
+				     NETIF_F_TSO;
+	const unsigned int payload_len = 3 * GSO_TEST_SIZE + 3;
+	struct sk_buff *skb, *segs, *cur, *next;
+	const unsigned int expected[] = {
+		2 * GSO_TEST_SIZE, GSO_TEST_SIZE + 3,
+	};
+	const unsigned int max_segs = 2;
+	int i = 0;
+
+	skb = gso_tcp_skb_new(payload_len);
+	KUNIT_ASSERT_NOT_NULL(test, skb);
+
+	segs = __skb_gso_segment(skb, features, true, max_segs);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, segs);
+
+	for (cur = segs; cur; cur = next, i++) {
+		next = cur->next;
+
+		KUNIT_ASSERT_LT(test, i, ARRAY_SIZE(expected));
+		KUNIT_EXPECT_EQ(test, cur->len,
+				GSO_TCP_HDR_LEN + expected[i]);
+		KUNIT_EXPECT_TRUE(test, skb_is_gso(cur));
+		KUNIT_EXPECT_EQ(test, skb_shinfo(cur)->gso_size,
+				GSO_TEST_SIZE);
+		KUNIT_EXPECT_LE(test, skb_shinfo(cur)->gso_segs, max_segs);
+
+		consume_skb(cur);
+	}
+
+	KUNIT_EXPECT_EQ(test, i, ARRAY_SIZE(expected));
+	consume_skb(skb);
+}
+
+#define GSO_TCP6_HDR_LEN \
+	(ETH_HLEN + sizeof(struct ipv6hdr) + sizeof(struct tcphdr))
+
+static struct sk_buff *gso_tcp6_skb_new(unsigned int payload_len)
+{
+	struct ipv6hdr *ip6h;
+	struct sk_buff *skb;
+	struct ethhdr *eth;
+	struct tcphdr *th;
+
+	skb = alloc_skb(GSO_TCP6_HDR_LEN + payload_len, GFP_KERNEL);
+	if (!skb)
+		return NULL;
+	skb_put_zero(skb, GSO_TCP6_HDR_LEN + payload_len);
+
+	skb_reset_mac_header(skb);
+	eth = eth_hdr(skb);
+	eth->h_proto = htons(ETH_P_IPV6);
+	skb->protocol = eth->h_proto;
+
+	skb_set_network_header(skb, ETH_HLEN);
+	ip6h = ipv6_hdr(skb);
+	ip6h->version = 6;
+	ip6h->nexthdr = IPPROTO_TCP;
+	ip6h->payload_len = htons(sizeof(*th) + payload_len);
+
+	skb_set_transport_header(skb, ETH_HLEN + sizeof(*ip6h));
+	th = tcp_hdr(skb);
+	th->doff = sizeof(*th) / 4;
+
+	skb->ip_summed = CHECKSUM_PARTIAL;
+	skb->csum_start = skb_transport_header(skb) - skb->head;
+	skb->csum_offset = offsetof(struct tcphdr, check);
+	skb_shinfo(skb)->gso_type = SKB_GSO_TCPV6;
+	skb_shinfo(skb)->gso_size = GSO_TEST_SIZE;
+	skb_shinfo(skb)->gso_segs = DIV_ROUND_UP(payload_len, GSO_TEST_SIZE);
+
+	return skb;
+}
+
+/* The device GSO size limit is per L3 protocol, and it has to survive the
+ * VLAN tag which validate_xmit_vlan() can push inside the skb, because that
+ * tag replaces skb->protocol with the VLAN ethertype.
+ */
+static void gso_test_tcp_limit_l3_proto(struct kunit *test)
+{
+	static const struct net_device_ops dummy_netdev_ops = { };
+	const unsigned int payload_len = 100 * 1024;
+	netdev_features_t features;
+	struct net_device *dev;
+	struct sk_buff *skb;
+
+	dev = alloc_etherdev(0);
+	KUNIT_ASSERT_NOT_NULL(test, dev);
+	dev->netdev_ops = &dummy_netdev_ops;
+	dev->hw_features = NETIF_F_SG | NETIF_F_HW_CSUM | NETIF_F_TSO6;
+	dev->features = dev->hw_features;
+	dev->vlan_features = dev->hw_features;
+
+	skb = gso_tcp6_skb_new(payload_len);
+	KUNIT_ASSERT_NOT_NULL(test, skb);
+	skb->dev = dev;
+
+	/* The skb fits the IPv6 limit but not the IPv4 one. */
+	dev->gso_max_size = GSO_MAX_SIZE;
+	dev->gso_ipv4_max_size = GSO_LEGACY_MAX_SIZE;
+	features = netif_skb_features(skb);
+	KUNIT_EXPECT_TRUE(test, features & NETIF_F_GSO_MASK);
+
+	/* ...and the other way around. */
+	dev->gso_max_size = GSO_LEGACY_MAX_SIZE;
+	dev->gso_ipv4_max_size = GSO_MAX_SIZE;
+	features = netif_skb_features(skb);
+	KUNIT_EXPECT_FALSE(test, features & NETIF_F_GSO_MASK);
+
+	/* Pushing the tag inside must not change either answer. */
+	skb = vlan_insert_tag_set_proto(skb, htons(ETH_P_8021Q), 0);
+	KUNIT_ASSERT_NOT_NULL(test, skb);
+	KUNIT_ASSERT_TRUE(test, skb->protocol == htons(ETH_P_8021Q));
+
+	dev->gso_max_size = GSO_MAX_SIZE;
+	dev->gso_ipv4_max_size = GSO_LEGACY_MAX_SIZE;
+	features = netif_skb_features(skb);
+	KUNIT_EXPECT_TRUE(test, features & NETIF_F_GSO_MASK);
+
+	dev->gso_max_size = GSO_LEGACY_MAX_SIZE;
+	dev->gso_ipv4_max_size = GSO_MAX_SIZE;
+	features = netif_skb_features(skb);
+	KUNIT_EXPECT_FALSE(test, features & NETIF_F_GSO_MASK);
+
+	consume_skb(skb);
+	free_netdev(dev);
 }
 
 /* IP tunnel flags */
@@ -372,6 +613,8 @@ static void ip_tunnel_flags_test_run(struct kunit *test)
 
 static struct kunit_case net_test_cases[] = {
 	KUNIT_CASE_PARAM(gso_test_func, gso_test_gen_params),
+	KUNIT_CASE(gso_test_tcp_bounded_segment),
+	KUNIT_CASE(gso_test_tcp_limit_l3_proto),
 	KUNIT_CASE_PARAM(ip_tunnel_flags_test_run,
 			 ip_tunnel_flags_test_gen_params),
 	{ },

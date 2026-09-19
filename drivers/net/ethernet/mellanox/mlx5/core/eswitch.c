@@ -1040,13 +1040,19 @@ void mlx5_esw_vport_disable(struct mlx5_eswitch *esw, struct mlx5_vport *vport)
 	    (vport->info.ipsec_crypto_enabled || vport->info.ipsec_packet_enabled))
 		esw->enabled_ipsec_vf_count--;
 
+	/* Clear rx-mode before esw_vport_change_handle_locked(): on
+	 * MLX5_VPORT_PROMISC_CHANGE it calls esw_update_vport_mc_promisc()
+	 * when vport->allmulti_rule is set, repopulating mc_list with FDB
+	 * rules that dangle once the FDB is destroyed. NULL allmulti_rule
+	 * here skips that path.
+	 */
+	esw_apply_vport_rx_mode(esw, vport, false, false);
 	/* We don't assume VFs will cleanup after themselves.
 	 * Calling vport change handler while vport is disabled will cleanup
 	 * the vport resources.
 	 */
 	esw_vport_change_handle_locked(vport);
 	vport->enabled_events = 0;
-	esw_apply_vport_rx_mode(esw, vport, false, false);
 	esw_vport_cleanup(esw, vport);
 	esw->enabled_vports--;
 
@@ -2999,38 +3005,27 @@ void mlx5_esw_put(struct mlx5_core_dev *mdev)
 /**
  * mlx5_esw_try_lock() - Take a write lock on esw mode lock.
  * @esw: eswitch device.
+ * @check_users: reject the lock if eswitch users exist.
  *
  * Should be called by esw mode change routine.
  *
  * Return:
- * * 0       - esw mode if successfully locked and refcount is 0.
- * * -EBUSY  - refcount is not 0.
- * * -EINVAL - In the middle of switching mode or lock is already held.
+ * * >= 0    - esw mode if successfully locked.
+ * * -EBUSY  - mode change in progress or users exist with check_users set.
+ * * -EINVAL - lock is already held.
  */
-int mlx5_esw_try_lock(struct mlx5_eswitch *esw)
+int mlx5_esw_try_lock(struct mlx5_eswitch *esw, bool check_users)
 {
 	if (down_write_trylock(&esw->mode_lock) == 0)
 		return -EINVAL;
 
 	if (esw->eswitch_operation_in_progress ||
-	    atomic64_read(&esw->user_count) > 0) {
+	    (check_users && atomic64_read(&esw->user_count) > 0)) {
 		up_write(&esw->mode_lock);
 		return -EBUSY;
 	}
 
 	return esw->mode;
-}
-
-int mlx5_esw_lock(struct mlx5_eswitch *esw)
-{
-	down_write(&esw->mode_lock);
-
-	if (esw->eswitch_operation_in_progress) {
-		up_write(&esw->mode_lock);
-		return -EBUSY;
-	}
-
-	return 0;
 }
 
 /**

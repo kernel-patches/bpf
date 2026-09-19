@@ -602,7 +602,18 @@ void mlx5e_ktls_handle_rx_skb(struct mlx5e_rq *rq, struct sk_buff *skb,
 		stats->tls_resync_req_pkt++;
 		resync_update_sn(rq, skb);
 		break;
-	default: /* CQE_TLS_OFFLOAD_ERROR: */
+	case CQE_TLS_OFFLOAD_ERROR:
+		/* The device could not authenticate the payload. Depending on
+		 * where the failure occurred the bytes may have been transformed
+		 * (XORed) or left as wire ciphertext. Flag it so that, during a
+		 * TLS 1.3 rekey transition, the re-encrypt path undoes the
+		 * transform on any XORed frag of a mixed record while software
+		 * re-authenticates; a non-mixed record stays wire ciphertext and
+		 * is decrypted directly.
+		 */
+		skb->decrypt_failed = 1;
+		fallthrough;
+	default: /* CQE_TLS_OFFLOAD_NOT_DECRYPTED: */
 		stats->tls_err++;
 		break;
 	}

@@ -734,6 +734,9 @@ static int sctp_v6_addr_valid(union sctp_addr *addr,
 {
 	int ret = ipv6_addr_type(&addr->v6.sin6_addr);
 
+	if (sp && sctp_opt2sk(sp)->sk_family != PF_INET6)
+		return 0;
+
 	/* Support v4-mapped-v6 address. */
 	if (ret == IPV6_ADDR_MAPPED) {
 		/* Note: This routine is used in input, so v4-mapped-v6

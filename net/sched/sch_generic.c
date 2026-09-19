@@ -285,6 +285,15 @@ static struct sk_buff *dequeue_skb(struct Qdisc *q, bool *validate,
 		*validate = false;
 		if (xfrm_offload(skb))
 			*validate = true;
+		/* A still-cleartext skb of a crypto-offloaded socket was validated
+		 * against that socket's offload state at the time. That state
+		 * (sk->sk_validate_xmit_skb) can change while the skb is parked here
+		 * e.g. a TLS key update or offload teardown, so re-validate it,
+		 * letting the current callback decide how it reaches the wire instead
+		 * of emitting now-unencrypted plaintext.
+		 */
+		if (skb_is_decrypted(skb))
+			*validate = true;
 		/* check the reason of requeuing without tx lock first */
 		txq = skb_get_tx_queue(txq->dev, skb);
 		if (!netif_xmit_frozen_or_stopped(txq)) {
@@ -1086,21 +1095,21 @@ void qdisc_reset(struct Qdisc *qdisc)
 }
 EXPORT_SYMBOL(qdisc_reset);
 
-void qdisc_free(struct Qdisc *qdisc)
-{
-	if (qdisc_is_percpu_stats(qdisc)) {
-		free_percpu(qdisc->cpu_bstats);
-		free_percpu(qdisc->cpu_qstats);
-	}
-
-	kfree(qdisc);
-}
-
 static void qdisc_free_cb(struct rcu_head *head)
 {
 	struct Qdisc *q = container_of(head, struct Qdisc, rcu);
 
-	qdisc_free(q);
+	if (qdisc_is_percpu_stats(q)) {
+		free_percpu(q->cpu_bstats);
+		free_percpu(q->cpu_qstats);
+	}
+
+	kfree(q);
+}
+
+void qdisc_free_rcu(struct Qdisc *qdisc)
+{
+	call_rcu(&qdisc->rcu, qdisc_free_cb);
 }
 
 static void __qdisc_destroy(struct Qdisc *qdisc)
@@ -1127,7 +1136,7 @@ static void __qdisc_destroy(struct Qdisc *qdisc)
 
 	trace_qdisc_destroy(qdisc);
 
-	call_rcu(&qdisc->rcu, qdisc_free_cb);
+	qdisc_free_rcu(qdisc);
 }
 
 void qdisc_destroy(struct Qdisc *qdisc)

@@ -121,6 +121,22 @@ config MTK_T7XX
 
 	  If unsure, say N.
 
+config MTK_T9XX
+	tristate "MediaTek PCIe 5G WWAN modem T9xx device"
+	depends on PCI && ACPI
+	select MTK_T9XX_PCI
+	help
+	  Enables MediaTek PCIe based 5G WWAN modem (T9xx series) device.
+
+	  To compile this driver as a module, choose M here: the modules will
+	  be called mtk_t9xx and mtk_t9xx_pcie.
+
+	  If unsure, say N.
+
+config MTK_T9XX_PCI
+	tristate
+	depends on PCI
+
 endif # WWAN
 
 endmenu

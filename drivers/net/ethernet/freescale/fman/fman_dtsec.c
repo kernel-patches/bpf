@@ -1499,6 +1499,12 @@ int dtsec_initialization(struct mac_device *mac_dev,
 	dev_info(mac_dev->dev, "FMan dTSEC version: 0x%08x\n",
 		 ioread32be(&dtsec->regs->tsec_id));
 
+	/* The PCS device is registered as long as the FMan device, of which
+	 * mac_dev holds a reference, so the reference taken above is not
+	 * needed anymore.
+	 */
+	put_device(&dtsec->tbidev->dev);
+
 	goto _return;
 
 _return_fm_mac_free:

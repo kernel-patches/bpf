@@ -54,6 +54,7 @@ static inline u32 ice_round_to_num(u32 N, u32 R)
 #define ICE_DBG_RDMA		BIT_ULL(15)
 #define ICE_DBG_PKG		BIT_ULL(16)
 #define ICE_DBG_RES		BIT_ULL(17)
+#define ICE_DBG_ACL		BIT_ULL(18)
 #define ICE_DBG_PTP		BIT_ULL(19)
 #define ICE_DBG_AQ_MSG		BIT_ULL(24)
 #define ICE_DBG_AQ_DESC		BIT_ULL(25)
@@ -261,6 +262,11 @@ struct ice_fd_hw_prof {
 	u64 entry_h[ICE_MAX_FDIR_VSI_PER_FILTER][ICE_FD_HW_SEG_MAX];
 	u16 vsi_h[ICE_MAX_FDIR_VSI_PER_FILTER];
 	u64 prof_id[ICE_FD_HW_SEG_MAX];
+};
+
+struct ice_acl_hw_prof {
+	struct ice_flow_seg_info *seg;
+	u64 prof_id;
 };
 
 /* Common HW capabilities for SW use */
@@ -765,7 +771,6 @@ struct ice_port_info {
 	/* List contain profile ID(s) and other params per layer */
 	struct list_head rl_prof_list[ICE_AQC_TOPO_MAX_LEVEL_NUM];
 	struct ice_qos_cfg qos_cfg;
-	struct xarray sched_node_ids;
 	u8 is_vf:1;
 	u8 is_custom_tx_enabled:1;
 };
@@ -930,6 +935,7 @@ struct ice_hw {
 	u8 sw_entry_point_layer;
 	u16 max_children[ICE_AQC_TOPO_MAX_LEVEL_NUM];
 	struct list_head agg_list;	/* lists all aggregator */
+	struct xarray sched_node_ids;
 
 	struct ice_vsi_ctx *vsi_ctx[ICE_MAX_VSI];
 	u8 evb_veb;		/* true for VEB, false for VEPA */
@@ -1011,6 +1017,10 @@ struct ice_hw {
 	struct udp_tunnel_nic_shared udp_tunnel_shared;
 	struct udp_tunnel_nic_info udp_tunnel_nic;
 
+	struct ice_acl_tbl *acl_tbl;
+	struct ice_acl_hw_prof **acl_prof;
+	u16 acl_fltr_cnt[ICE_FLTR_PTYPE_MAX];
+
 	/* dvm boost update information */
 	struct ice_dvm_table dvm_upd;
 
@@ -1019,8 +1029,8 @@ struct ice_hw {
 	struct mutex fl_profs_locks[ICE_BLK_COUNT];	/* lock fltr profiles */
 	struct list_head fl_profs[ICE_BLK_COUNT];
 
-	/* Flow Director filter info */
-	int fdir_active_fltr;
+	/* ntuple filter info */
+	int ntuple_active_fltr_cnt;
 
 	struct mutex fdir_fltr_lock;	/* protect Flow Director */
 	struct list_head fdir_list_head;

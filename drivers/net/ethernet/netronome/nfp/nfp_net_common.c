@@ -2257,7 +2257,7 @@ static int nfp_net_set_mac_address(struct net_device *netdev, void *addr)
 
 static int nfp_net_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 				  struct net_device *dev, u32 filter_mask,
-				  int nlflags)
+				  int nlflags, struct netlink_ext_ack *extack)
 {
 	struct nfp_net *nn = netdev_priv(dev);
 	u16 mode;
@@ -2269,7 +2269,7 @@ static int nfp_net_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 	       BRIDGE_MODE_VEPA : BRIDGE_MODE_VEB;
 
 	return ndo_dflt_bridge_getlink(skb, pid, seq, dev, mode, 0, 0,
-				       nlflags, filter_mask, NULL);
+				       nlflags, filter_mask, NULL, extack);
 }
 
 static int nfp_net_bridge_setlink(struct net_device *dev, struct nlmsghdr *nlh,

@@ -789,7 +789,7 @@ int dev_fill_forward_path(struct net_device_path_ctx *ctx,
 			goto err_out;
 
 		stack->num_paths++;
-		if (WARN_ON_ONCE(last_dev == ctx->dev))
+		if (last_dev == ctx->dev)
 			goto err_out;
 	}
 
@@ -3834,16 +3834,24 @@ static bool skb_gso_has_extension_hdr(const struct sk_buff *skb)
 			 skb_inner_network_header_len(skb) != sizeof(struct ipv6hdr)));
 }
 
+/*
+ * Does @skb fit the GSO limits of @dev?  The size limit depends on the L3
+ * protocol, which validate_xmit_vlan() replaces with the VLAN ethertype when
+ * it pushes the tag inside the skb, so look behind the tag.
+ */
+static bool gso_within_device_limits(const struct sk_buff *skb,
+				     const struct net_device *dev)
+{
+	return skb_shinfo(skb)->gso_segs <= READ_ONCE(dev->gso_max_segs) &&
+	       skb->len < netif_get_gso_max_size(dev, vlan_get_protocol(skb));
+}
+
 static netdev_features_t gso_features_check(const struct sk_buff *skb,
 					    struct net_device *dev,
-					    netdev_features_t features)
+					    netdev_features_t features,
+					    bool check_limits)
 {
-	u16 gso_segs = skb_shinfo(skb)->gso_segs;
-
-	if (gso_segs > READ_ONCE(dev->gso_max_segs))
-		return features & ~NETIF_F_GSO_MASK;
-
-	if (unlikely(skb->len >= netif_get_gso_max_size(dev, skb)))
+	if (check_limits && !gso_within_device_limits(skb, dev))
 		return features & ~NETIF_F_GSO_MASK;
 
 	if (!skb_shinfo(skb)->gso_type) {
@@ -3892,13 +3900,15 @@ static netdev_features_t gso_features_check(const struct sk_buff *skb,
 	return features;
 }
 
-netdev_features_t netif_skb_features(struct sk_buff *skb)
+static netdev_features_t __netif_skb_features(struct sk_buff *skb,
+					      bool check_gso_limits)
 {
 	struct net_device *dev = skb->dev;
 	netdev_features_t features = dev->features;
 
 	if (skb_is_gso(skb))
-		features = gso_features_check(skb, dev, features);
+		features = gso_features_check(skb, dev, features,
+					      check_gso_limits);
 
 	/* If encapsulation offload request, verify we are testing
 	 * hardware encapsulation features instead of standard
@@ -3921,7 +3931,78 @@ netdev_features_t netif_skb_features(struct sk_buff *skb)
 
 	return harmonize_features(skb, features);
 }
+
+netdev_features_t netif_skb_features(struct sk_buff *skb)
+{
+	return __netif_skb_features(skb, true);
+}
 EXPORT_SYMBOL(netif_skb_features);
+
+static bool skb_can_gso_resegment(struct sk_buff *skb,
+				  netdev_features_t features)
+{
+	__be16 protocol;
+
+	if (!net_gso_ok(features | NETIF_F_GSO_ROBUST,
+			skb_shinfo(skb)->gso_type))
+		return false;
+
+	if (!(features & NETIF_F_SG))
+		return false;
+
+	protocol = skb_network_protocol(skb, NULL);
+	if (!protocol || !can_checksum_protocol(features, protocol))
+		return false;
+
+	/*
+	 * The TCP frag-list path does not carry the bounded segment
+	 * limit through skb_segment_list(). Keep bounded resegmentation
+	 * on the regular skb path until that support is added.
+	 */
+	if (skb_has_frag_list(skb))
+		return false;
+
+	return true;
+}
+
+static unsigned int
+skb_gso_resegment_max_segs(struct sk_buff *skb, struct net_device *dev,
+			   netdev_features_t features)
+{
+	unsigned int mss = skb_shinfo(skb)->gso_size;
+	unsigned int hdr_len, max_segs;
+	unsigned int gso_max_size;
+	struct tcphdr _tcph, *th;
+
+	gso_max_size = netif_get_gso_max_size(dev, vlan_get_protocol(skb));
+
+	if (!skb_is_gso(skb) || !skb_is_gso_tcp(skb) ||
+	    skb->encapsulation || mss == GSO_BY_FRAGS ||
+	    !skb_mac_header_was_set(skb) ||
+	    !skb_transport_header_was_set(skb) ||
+	    !skb_can_gso_resegment(skb, features))
+		return 0;
+
+	th = skb_header_pointer(skb, skb_transport_offset(skb), sizeof(_tcph),
+				&_tcph);
+	if (!th || th->doff < sizeof(*th) / 4)
+		return 0;
+
+	hdr_len = skb_transport_header(skb) - skb_mac_header(skb) +
+		  th->doff * 4;
+	if (gso_max_size <= hdr_len + mss)
+		return 0;
+
+	/*
+	 * gso_within_device_limits() accepts gso_segs == gso_max_segs but
+	 * rejects skb->len >= gso_max_size, so only the size bound needs - 1.
+	 */
+	max_segs = (gso_max_size - hdr_len - 1) / mss;
+	max_segs = min_t(unsigned int, max_segs,
+			 READ_ONCE(dev->gso_max_segs));
+
+	return max_segs > 1 ? max_segs : 0;
+}
 
 static int xmit_one(struct sk_buff *skb, struct net_device *dev,
 		    struct netdev_queue *txq, bool more)
@@ -4071,6 +4152,7 @@ out_free:
  */
 static struct sk_buff *validate_xmit_skb(struct sk_buff *skb, struct net_device *dev, bool *again)
 {
+	unsigned int resegment_max_segs = 0;
 	netdev_features_t features;
 
 	skb = validate_xmit_unreadable_skb(skb, dev);
@@ -4086,10 +4168,29 @@ static struct sk_buff *validate_xmit_skb(struct sk_buff *skb, struct net_device 
 	if (unlikely(!skb))
 		goto out_null;
 
-	if (netif_needs_gso(skb, features)) {
+	/*
+	 * An oversized skb loses its GSO feature bits and is segmented
+	 * down to MSS sized skbs below.  A TCP skb can instead be split
+	 * into GSO skbs which do fit the device, so keep the bits and
+	 * bound the resegmentation.  The features computed without the
+	 * limit checks say whether the device offloads the GSO type at
+	 * all.
+	 */
+	if (skb_is_gso(skb) && skb_is_gso_tcp(skb) && !skb->encapsulation &&
+	    !gso_within_device_limits(skb, dev)) {
+		netdev_features_t offload = __netif_skb_features(skb, false);
+
+		resegment_max_segs =
+			skb_gso_resegment_max_segs(skb, dev, offload);
+		if (resegment_max_segs)
+			features = offload;
+	}
+
+	if (resegment_max_segs || netif_needs_gso(skb, features)) {
 		struct sk_buff *segs;
 
-		segs = skb_gso_segment(skb, features);
+		segs = __skb_gso_segment(skb, features, true,
+					 resegment_max_segs);
 		if (IS_ERR(segs)) {
 			goto out_kfree_skb;
 		} else if (segs) {
@@ -4159,8 +4260,9 @@ EXPORT_SYMBOL_GPL(validate_xmit_skb_list);
 static enum skb_drop_reason qdisc_pkt_len_segs_init(struct sk_buff *skb)
 {
 	struct skb_shared_info *shinfo = skb_shinfo(skb);
-	unsigned int hdr_len, tlen;
+	unsigned int tlen;
 	u16 gso_segs;
+	int hdr_len;
 
 	qdisc_skb_cb(skb)->pkt_len = skb->len;
 	if (!shinfo->gso_size) {
@@ -4182,6 +4284,8 @@ static enum skb_drop_reason qdisc_pkt_len_segs_init(struct sk_buff *skb)
 	} else {
 		hdr_len = skb_inner_transport_offset(skb);
 	}
+	if (unlikely(hdr_len < 0))
+		return SKB_DROP_REASON_SKB_BAD_GSO;
 	/* + transport layer */
 	if (likely(shinfo->gso_type & (SKB_GSO_TCPV4 | SKB_GSO_TCPV6))) {
 		const struct tcphdr *th;
@@ -4828,7 +4932,7 @@ int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 	skb_reset_mac_header(skb);
 	skb_assert_len(skb);
 
-	if (unlikely(skb_shinfo(skb)->tx_flags &
+	if (unlikely(READ_ONCE(skb_shinfo(skb)->tx_flags) &
 		     (SKBTX_SCHED_TSTAMP | SKBTX_BPF)))
 		__skb_tstamp_tx(skb, NULL, NULL, skb->sk, SCM_TSTAMP_SCHED);
 
@@ -9982,7 +10086,7 @@ int netif_change_tx_queue_len(struct net_device *dev, unsigned long new_len)
 	unsigned int orig_len = dev->tx_queue_len;
 	int res;
 
-	if (new_len != (unsigned int)new_len)
+	if (new_len > S16_MAX)
 		return -ERANGE;
 
 	if (new_len != orig_len) {

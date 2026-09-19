@@ -851,6 +851,10 @@ enum skb_tstamp_type {
  *		unreadable.
  *	@dst_pending_confirm: need to confirm neighbour
  *	@decrypted: Decrypted SKB
+ *	@decrypt_failed: hardware could not authenticate this skb's TLS payload.
+ *		The payload may have been transformed (XORed) or left as wire
+ *		ciphertext, so software must re-authenticate the record and undo the
+ *		transform on any XORed fragment before it can be decrypted
  *	@slow_gro: state present at GRO time, slower prepare step required
  *	@tstamp_type: When set, skb->tstamp has the
  *		delivery_time clock base of skb->tstamp.
@@ -1025,6 +1029,7 @@ struct sk_buff {
 #endif
 #ifdef CONFIG_SKB_DECRYPTED
 	__u8			decrypted:1;
+	__u8			decrypt_failed:1;
 #endif
 	__u8			slow_gro:1;
 #if IS_ENABLED(CONFIG_IP_SCTP)
@@ -1716,6 +1721,7 @@ static inline void skb_copy_decrypted(struct sk_buff *to,
 {
 #ifdef CONFIG_SKB_DECRYPTED
 	to->decrypted = from->decrypted;
+	to->decrypt_failed = from->decrypt_failed;
 #endif
 }
 
@@ -1834,22 +1840,6 @@ static inline void skb_zcopy_set(struct sk_buff *skb, struct ubuf_info *uarg,
 	}
 }
 
-static inline void skb_zcopy_set_nouarg(struct sk_buff *skb, void *val)
-{
-	skb_shinfo(skb)->destructor_arg = (void *)((uintptr_t) val | 0x1UL);
-	skb_shinfo(skb)->flags |= SKBFL_ZEROCOPY_FRAG;
-}
-
-static inline bool skb_zcopy_is_nouarg(struct sk_buff *skb)
-{
-	return (uintptr_t) skb_shinfo(skb)->destructor_arg & 0x1UL;
-}
-
-static inline void *skb_zcopy_get_nouarg(struct sk_buff *skb)
-{
-	return (void *)((uintptr_t) skb_shinfo(skb)->destructor_arg & ~0x1UL);
-}
-
 static inline void net_zcopy_put(struct ubuf_info *uarg)
 {
 	if (uarg)
@@ -1872,8 +1862,7 @@ static inline void skb_zcopy_clear(struct sk_buff *skb, bool zerocopy_success)
 	struct ubuf_info *uarg = skb_zcopy(skb);
 
 	if (uarg) {
-		if (!skb_zcopy_is_nouarg(skb))
-			uarg->ops->complete(skb, uarg, zerocopy_success);
+		uarg->ops->complete(skb, uarg, zerocopy_success);
 
 		skb_shinfo(skb)->flags &= ~SKBFL_ALL_ZEROCOPY;
 	}
@@ -4776,7 +4765,8 @@ void skb_tstamp_tx(struct sk_buff *orig_skb,
 static inline void skb_tx_timestamp(struct sk_buff *skb)
 {
 	skb_clone_tx_timestamp(skb);
-	if (skb_shinfo(skb)->tx_flags & (SKBTX_SW_TSTAMP | SKBTX_BPF))
+	if (READ_ONCE(skb_shinfo(skb)->tx_flags) &
+	    (SKBTX_SW_TSTAMP | SKBTX_BPF))
 		skb_tstamp_tx(skb, NULL);
 }
 

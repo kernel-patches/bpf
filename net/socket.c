@@ -766,7 +766,7 @@ EXPORT_SYMBOL(sock_release);
 
 void __sock_tx_timestamp(__u32 tsflags, __u8 *tx_flags)
 {
-	u8 flags = *tx_flags;
+	u8 flags = READ_ONCE(*tx_flags);
 
 	if (tsflags & SOF_TIMESTAMPING_TX_HARDWARE)
 		flags |= SKBTX_HW_TSTAMP_NOBPF;
@@ -780,7 +780,7 @@ void __sock_tx_timestamp(__u32 tsflags, __u8 *tx_flags)
 	if (tsflags & SOF_TIMESTAMPING_TX_COMPLETION)
 		flags |= SKBTX_COMPLETION_TSTAMP;
 
-	*tx_flags = flags;
+	smp_store_release(tx_flags, flags);
 }
 EXPORT_SYMBOL(__sock_tx_timestamp);
 
@@ -1851,10 +1851,7 @@ int __sys_socketpair(int family, int type, int protocol, int __user *usockvec)
 	if (SOCK_NONBLOCK != O_NONBLOCK && (flags & SOCK_NONBLOCK))
 		flags = (flags & ~SOCK_NONBLOCK) | O_NONBLOCK;
 
-	/*
-	 * reserve descriptors and make sure we won't fail
-	 * to return them to userland.
-	 */
+	/* Reserve both descriptors before creating the sockets. */
 	fd1 = get_unused_fd_flags(flags);
 	if (unlikely(fd1 < 0))
 		return fd1;
@@ -1864,14 +1861,6 @@ int __sys_socketpair(int family, int type, int protocol, int __user *usockvec)
 		put_unused_fd(fd1);
 		return fd2;
 	}
-
-	err = put_user(fd1, &usockvec[0]);
-	if (err)
-		goto out;
-
-	err = put_user(fd2, &usockvec[1]);
-	if (err)
-		goto out;
 
 	/*
 	 * Obtain the first socket and check if the underlying protocol
@@ -1912,6 +1901,16 @@ int __sys_socketpair(int family, int type, int protocol, int __user *usockvec)
 	newfile2 = sock_alloc_file(sock2, flags, NULL);
 	if (IS_ERR(newfile2)) {
 		err = PTR_ERR(newfile2);
+		fput(newfile1);
+		goto out;
+	}
+
+	/* Publish the descriptors now that it shouldn't fail. */
+	err = put_user(fd1, &usockvec[0]);
+	if (!err)
+		err = put_user(fd2, &usockvec[1]);
+	if (err) {
+		fput(newfile2);
 		fput(newfile1);
 		goto out;
 	}
@@ -2437,8 +2436,8 @@ INDIRECT_CALLABLE_DECLARE(bool tcp_bpf_bypass_getsockopt(int level,
  * It is important to remember that both iov points to the same data, but,
  * .iter_in is read-only and .iter_out is write-only by the protocol callbacks
  */
-static int sockptr_to_sockopt(sockopt_t *opt, sockptr_t optval,
-			      sockptr_t optlen, struct kvec *kvec)
+int sockptr_to_sockopt(sockopt_t *opt, sockptr_t optval,
+		       sockptr_t optlen, struct kvec *kvec)
 {
 	int koptlen;
 
