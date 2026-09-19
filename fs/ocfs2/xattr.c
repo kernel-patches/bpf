@@ -7524,8 +7524,9 @@ static int ocfs2_initxattrs(struct inode *inode, const struct xattr *xattr_array
 				    GFP_KERNEL);
 		if (!si->value)
 			return -ENOMEM;
-
-		si->name = xattr_array->name;
+		si->name = kstrdup(xattr_array->name, GFP_KERNEL);
+		if (!si->name)
+			return -ENOMEM;
 		si->value_len = xattr_array->value_len;
 		return 0;
 	}
