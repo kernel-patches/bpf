@@ -144,6 +144,7 @@ static int nci_hci_send_data(struct nci_dev *ndev, u8 pipe,
 			     size_t data_len)
 {
 	const struct nci_conn_info *conn_info;
+	u8 max_pkt_payload_len;
 	struct sk_buff *skb;
 	int len, i, r;
 	u8 cb = pipe;
@@ -152,8 +153,20 @@ static int nci_hci_send_data(struct nci_dev *ndev, u8 pipe,
 	if (!conn_info)
 		return -EPROTO;
 
+	/* Snapshot the limit like nci_queue_tx_data_frags() does; the
+	 * conn_info is published before this field is written.
+	 */
+	max_pkt_payload_len = READ_ONCE(conn_info->max_pkt_payload_len);
+
+	/* Below 2 the unsigned fragment arithmetic wraps and the first
+	 * skb_put_data() runs past skb->end; 2 is the smallest working
+	 * limit.
+	 */
+	if (max_pkt_payload_len < 2)
+		return -EPROTO;
+
 	i = 0;
-	skb = nci_skb_alloc(ndev, conn_info->max_pkt_payload_len +
+	skb = nci_skb_alloc(ndev, max_pkt_payload_len +
 			    NCI_DATA_HDR_SIZE, GFP_ATOMIC);
 	if (!skb)
 		return -ENOMEM;
@@ -163,12 +176,11 @@ static int nci_hci_send_data(struct nci_dev *ndev, u8 pipe,
 
 	do {
 		/* If last packet add NCI_HFP_NO_CHAINING */
-		if (i + conn_info->max_pkt_payload_len -
-		    (skb->len + 1) >= data_len) {
+		if (i + max_pkt_payload_len - (skb->len + 1) >= data_len) {
 			cb |= NCI_HFP_NO_CHAINING;
 			len = data_len - i;
 		} else {
-			len = conn_info->max_pkt_payload_len - skb->len - 1;
+			len = max_pkt_payload_len - skb->len - 1;
 		}
 
 		*(u8 *)skb_push(skb, 1) = cb;
@@ -184,7 +196,7 @@ static int nci_hci_send_data(struct nci_dev *ndev, u8 pipe,
 
 		if (i < data_len) {
 			skb = nci_skb_alloc(ndev,
-					    conn_info->max_pkt_payload_len +
+					    max_pkt_payload_len +
 					    NCI_DATA_HDR_SIZE, GFP_ATOMIC);
 			if (!skb)
 				return -ENOMEM;
