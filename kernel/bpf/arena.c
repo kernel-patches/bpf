@@ -76,6 +76,8 @@ struct arena_free_span {
 	struct llist_node node;
 	unsigned long uaddr;
 	u32 page_cnt;
+	/* PTE and TLB teardown complete. */
+	bool publish;
 };
 
 u64 bpf_arena_get_kern_vm_start(struct bpf_arena *arena)
@@ -873,15 +875,13 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 	bpf_map_memcg_enter(&arena->map, &old_memcg, &new_memcg);
 
 	if (!sleepable)
-		goto defer;
+		goto defer_free;
 
 	ret = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
 
 	/* Can't proceed without holding the spinlock so defer the free */
 	if (ret)
-		goto defer;
-
-	range_tree_set(&arena->rt, pgoff, page_cnt);
+		goto defer_free;
 
 	init_llist_head(&free_pages);
 	cdata.arena = arena;
@@ -890,10 +890,9 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 	apply_to_existing_page_range(&init_mm, kaddr, page_cnt << PAGE_SHIFT,
 				     apply_range_clear_cb, &cdata);
 
-	/* drop the lock to do the tlb flush and zap pages */
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 
-	/* ensure no stale TLB entries */
+	/* Ensure no stale kernel translations before publishing the range. */
 	flush_tlb_kernel_range(kaddr, kaddr + (page_cnt * PAGE_SIZE));
 
 	if (page_cnt > 1)
@@ -911,11 +910,17 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 			zap_pages(arena, full_uaddr, 1);
 		__free_page(page);
 	}
+
+	ret = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
+	if (ret)
+		goto defer_publish;
+	range_tree_set(&arena->rt, pgoff, page_cnt);
+	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 
 	return;
 
-defer:
+defer_free:
 	s = kmalloc_nolock(sizeof(struct arena_free_span), __GFP_ACCOUNT, -1);
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 	if (!s)
@@ -928,6 +933,21 @@ defer:
 
 	s->page_cnt = page_cnt;
 	s->uaddr = uaddr;
+	s->publish = false;
+	llist_add(&s->node, &arena->free_spans);
+	irq_work_queue(&arena->free_irq);
+	return;
+
+defer_publish:
+	s = kmalloc_nolock(sizeof(struct arena_free_span), __GFP_ACCOUNT, -1);
+	bpf_map_memcg_exit(old_memcg, new_memcg);
+	if (!s)
+		/* The pages are gone; leaking the unavailable range is safe. */
+		return;
+
+	s->page_cnt = page_cnt;
+	s->uaddr = uaddr;
+	s->publish = true;
 	llist_add(&s->node, &arena->free_spans);
 	irq_work_queue(&arena->free_irq);
 }
@@ -977,7 +997,8 @@ static void arena_free_worker(struct work_struct *work)
 	struct llist_node *list, *pos, *t;
 	struct arena_free_span *s;
 	u64 arena_vm_start, user_vm_start;
-	struct llist_head free_pages;
+	struct llist_head completed_spans, free_pages;
+	struct llist_head publish_spans, teardown_spans;
 	struct clear_range_data cdata;
 	struct page *page;
 	unsigned long full_uaddr;
@@ -991,41 +1012,51 @@ static void arena_free_worker(struct work_struct *work)
 
 	bpf_map_memcg_enter(&arena->map, &old_memcg, &new_memcg);
 
+	init_llist_head(&completed_spans);
 	init_llist_head(&free_pages);
+	init_llist_head(&publish_spans);
+	init_llist_head(&teardown_spans);
 	cdata.arena = arena;
 	cdata.free_pages = &free_pages;
 	arena_vm_start = bpf_arena_get_kern_vm_start(arena);
 	user_vm_start = bpf_arena_get_user_vm_start(arena);
 
 	list = llist_del_all(&arena->free_spans);
-	llist_for_each(pos, list) {
-		s = llist_entry(pos, struct arena_free_span, node);
-		page_cnt = s->page_cnt;
-		kaddr = arena_vm_start + s->uaddr;
-		pgoff = compute_pgoff(arena, s->uaddr);
-
-		/* clear ptes and collect pages in free_pages llist */
-		apply_to_existing_page_range(&init_mm, kaddr, page_cnt << PAGE_SHIFT,
-					     apply_range_clear_cb, &cdata);
-
-		range_tree_set(&arena->rt, pgoff, page_cnt);
-	}
-	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
-
-	/* Iterate the list again without holding spinlock to do the tlb flush and zap_pages */
 	llist_for_each_safe(pos, t, list) {
 		s = llist_entry(pos, struct arena_free_span, node);
 		page_cnt = s->page_cnt;
-		full_uaddr = clear_lo32(user_vm_start) + s->uaddr;
+		pgoff = compute_pgoff(arena, s->uaddr);
+
+		if (s->publish) {
+			range_tree_set(&arena->rt, pgoff, page_cnt);
+			llist_add(&s->node, &completed_spans);
+			continue;
+		}
+
 		kaddr = arena_vm_start + s->uaddr;
+		/* clear ptes and collect pages in free_pages llist */
+		apply_to_existing_page_range(&init_mm, kaddr, page_cnt << PAGE_SHIFT,
+					     apply_range_clear_cb, &cdata);
+		llist_add(&s->node, &teardown_spans);
+	}
+	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 
-		/* ensure no stale TLB entries */
-		flush_tlb_kernel_range(kaddr, kaddr + (page_cnt * PAGE_SIZE));
-
-		/* remove pages from user vmas */
-		zap_pages(arena, full_uaddr, page_cnt);
-
+	llist_for_each_safe(pos, t, __llist_del_all(&completed_spans)) {
+		s = llist_entry(pos, struct arena_free_span, node);
 		kfree_nolock(s);
+	}
+
+	/* Tear ranges down while they are still unavailable to allocation. */
+	llist_for_each_safe(pos, t, __llist_del_all(&teardown_spans)) {
+		s = llist_entry(pos, struct arena_free_span, node);
+		page_cnt = s->page_cnt;
+		kaddr = arena_vm_start + s->uaddr;
+		full_uaddr = clear_lo32(user_vm_start) + s->uaddr;
+
+		flush_tlb_kernel_range(kaddr, kaddr + (page_cnt * PAGE_SIZE));
+		zap_pages(arena, full_uaddr, page_cnt);
+		s->publish = true;
+		llist_add(&s->node, &publish_spans);
 	}
 
 	/* free all pages collected by apply_to_existing_page_range() in the first loop */
@@ -1034,6 +1065,33 @@ static void arena_free_worker(struct work_struct *work)
 		__free_page(page);
 	}
 
+	list = __llist_del_all(&publish_spans);
+	if (!list)
+		goto out;
+
+	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags)) {
+		llist_for_each_safe(pos, t, list) {
+			s = llist_entry(pos, struct arena_free_span, node);
+			llist_add(&s->node, &arena->free_spans);
+		}
+		schedule_work(work);
+		goto out;
+	}
+
+	llist_for_each_safe(pos, t, list) {
+		s = llist_entry(pos, struct arena_free_span, node);
+		pgoff = compute_pgoff(arena, s->uaddr);
+		range_tree_set(&arena->rt, pgoff, s->page_cnt);
+		llist_add(&s->node, &completed_spans);
+	}
+	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+
+	llist_for_each_safe(pos, t, __llist_del_all(&completed_spans)) {
+		s = llist_entry(pos, struct arena_free_span, node);
+		kfree_nolock(s);
+	}
+
+out:
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 }
 
