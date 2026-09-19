@@ -533,6 +533,14 @@ static bool vmci_transport_allow_dgram(struct vsock_sock *vsock, u32 peer_cid)
 {
 	u64 access;
 
+	/* Enforce the per-netns mode first, symmetrically with the send hook
+	 * vmci_transport_dgram_allow(): a socket in a non-global (local) netns
+	 * must not receive datagrams it could never send (this also covers the
+	 * hypervisor CID).
+	 */
+	if (!vsock_net_mode_global(vsock))
+		return false;
+
 	if (VMADDR_CID_HYPERVISOR == peer_cid)
 		return true;
 
