@@ -549,10 +549,9 @@ void ODM_TXPowerTrackingCheck(struct dm_odm_t *pDM_Odm)
 
 		pDM_Odm->RFCalibrateInfo.TM_Trigger = 1;
 		return;
-	} else {
-		ODM_TXPowerTrackingCallback_ThermalMeter(Adapter);
-		pDM_Odm->RFCalibrateInfo.TM_Trigger = 0;
 	}
+	ODM_TXPowerTrackingCallback_ThermalMeter(Adapter);
+	pDM_Odm->RFCalibrateInfo.TM_Trigger = 0;
 }
 
 /* 3 Export Interface */
