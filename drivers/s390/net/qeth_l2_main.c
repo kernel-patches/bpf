@@ -935,7 +935,7 @@ static void qeth_l2_br2dev_put(void)
 
 static int qeth_l2_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 				  struct net_device *dev, u32 filter_mask,
-				  int nlflags)
+				  int nlflags, struct netlink_ext_ack *extack)
 {
 	struct qeth_priv *priv = netdev_priv(dev);
 	struct qeth_card *card = dev->ml_priv;
@@ -949,7 +949,7 @@ static int qeth_l2_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 	return ndo_dflt_bridge_getlink(skb, pid, seq, dev,
 				       mode, priv->brport_features,
 				       priv->brport_hw_features,
-				       nlflags, filter_mask, NULL);
+				       nlflags, filter_mask, NULL, extack);
 }
 
 static const struct nla_policy qeth_brport_policy[IFLA_BRPORT_MAX + 1] = {

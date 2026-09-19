@@ -13152,6 +13152,7 @@ static int i40e_ndo_bridge_setlink(struct net_device *dev,
  * @dev: the netdev being configured
  * @filter_mask: unused
  * @nlflags: netlink flags passed in
+ * @extack: netlink extended ack
  *
  * Return the mode in which the hardware bridge is operating in
  * i.e VEB or VEPA.
@@ -13159,7 +13160,8 @@ static int i40e_ndo_bridge_setlink(struct net_device *dev,
 static int i40e_ndo_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 				   struct net_device *dev,
 				   u32 __always_unused filter_mask,
-				   int nlflags)
+				   int nlflags,
+				   struct netlink_ext_ack *extack)
 {
 	struct i40e_netdev_priv *np = netdev_priv(dev);
 	struct i40e_vsi *vsi = np->vsi;
@@ -13176,7 +13178,7 @@ static int i40e_ndo_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 		return 0;
 
 	return ndo_dflt_bridge_getlink(skb, pid, seq, dev, veb->bridge_mode,
-				       0, 0, nlflags, filter_mask, NULL);
+				       0, 0, nlflags, filter_mask, NULL, extack);
 }
 
 /**
