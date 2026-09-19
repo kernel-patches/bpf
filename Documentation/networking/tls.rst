@@ -314,6 +314,11 @@ TLS implementation exposes the following per-namespace statistics
   number of TX and RX sessions currently installed where NIC handles
   cryptography
 
+- ``TlsCurrTxRekey``, ``TlsCurrRxRekey`` -
+  number of TX and RX sessions currently undergoing a deferred rekey,
+  i.e. a rekey which could not be applied immediately and is waiting for
+  in-flight records to drain before the new key is installed in hardware
+
 - ``TlsTxSw``, ``TlsRxSw`` -
   number of TX and RX sessions opened with host cryptography
 
@@ -344,3 +349,15 @@ TLS implementation exposes the following per-namespace statistics
 - ``TlsRxRekeyReceived`` -
   number of received KeyUpdate handshake messages, requiring userspace
   to provide a new RX key
+
+- ``TlsTxRekeyFallback``, ``TlsRxRekeyFallback`` -
+  number of rekeys on existing sessions for TX and RX which could not be
+  offloaded to the NIC and fell back to software cryptography
+
+- ``TlsTxRekeyAborted``, ``TlsRxRekeyAborted`` -
+  number of deferred rekeys for TX and RX which were still pending when
+  the socket was destroyed, and so never completed. For TX hardware
+  offload this includes senders that sent nothing further after the
+  KeyUpdate, since the switch back to hardware only happens on
+  ``sendmsg()`` (see the Rekey section of
+  Documentation/networking/tls-offload.rst)

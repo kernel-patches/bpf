@@ -1868,6 +1868,8 @@ static int fman_port_probe(struct platform_device *of_dev)
 
 	dev_set_drvdata(&of_dev->dev, port);
 
+	put_device(&fm_pdev->dev);
+
 	return 0;
 
 put_device:

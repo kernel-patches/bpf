@@ -189,6 +189,7 @@ struct mlx5_vport;
 struct mlx5_devlink_port {
 	struct devlink_port dl_port;
 	struct mlx5_vport *vport;
+	struct devlink_health_reporter *vnic_reporter;
 };
 
 static inline void mlx5_devlink_port_init(struct mlx5_devlink_port *dl_port,
@@ -945,8 +946,7 @@ bool mlx5_esw_hold(struct mlx5_core_dev *dev);
 void mlx5_esw_release(struct mlx5_core_dev *dev);
 void mlx5_esw_get(struct mlx5_core_dev *dev);
 void mlx5_esw_put(struct mlx5_core_dev *dev);
-int mlx5_esw_try_lock(struct mlx5_eswitch *esw);
-int mlx5_esw_lock(struct mlx5_eswitch *esw);
+int mlx5_esw_try_lock(struct mlx5_eswitch *esw, bool check_users);
 void mlx5_esw_unlock(struct mlx5_eswitch *esw);
 
 void esw_vport_change_handle_locked(struct mlx5_vport *vport);
@@ -969,7 +969,7 @@ bool mlx5_eswitch_is_peer(struct mlx5_eswitch *esw,
 bool mlx5_eswitch_block_encap(struct mlx5_core_dev *dev, bool from_fdb);
 void mlx5_eswitch_unblock_encap(struct mlx5_core_dev *dev);
 
-int mlx5_eswitch_block_mode(struct mlx5_core_dev *dev);
+int mlx5_eswitch_block_mode(struct mlx5_core_dev *dev, bool check_users);
 void mlx5_eswitch_unblock_mode(struct mlx5_core_dev *dev);
 
 static inline int mlx5_eswitch_num_vfs(struct mlx5_eswitch *esw)
@@ -1080,7 +1080,11 @@ static inline void mlx5_eswitch_unblock_encap(struct mlx5_core_dev *dev)
 {
 }
 
-static inline int mlx5_eswitch_block_mode(struct mlx5_core_dev *dev) { return 0; }
+static inline int mlx5_eswitch_block_mode(struct mlx5_core_dev *dev,
+					  bool check_users)
+{
+	return 0;
+}
 static inline void mlx5_eswitch_unblock_mode(struct mlx5_core_dev *dev) {}
 static inline bool mlx5_eswitch_block_ipsec(struct mlx5_core_dev *dev)
 {

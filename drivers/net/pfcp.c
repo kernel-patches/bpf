@@ -103,27 +103,63 @@ drop:
 	return 0;
 }
 
-static void pfcp_del_sock(struct pfcp_dev *pfcp)
+static struct sock *pfcp_create_sock(struct pfcp_dev *pfcp)
 {
-	udp_tunnel_sock_release(pfcp->sk);
-	pfcp->sk = NULL;
+	struct udp_tunnel_sock_cfg tuncfg = {};
+	struct udp_port_cfg udp_conf = {
+		.local_ip.s_addr	= htonl(INADDR_ANY),
+		.family			= AF_INET,
+	};
+	struct net *net = pfcp->net;
+	struct socket *sock;
+	int err;
+
+	udp_conf.local_udp_port = htons(PFCP_PORT);
+
+	err = udp_sock_create(net, &udp_conf, &sock);
+	if (err)
+		return ERR_PTR(err);
+
+	tuncfg.sk_user_data = pfcp;
+	tuncfg.encap_rcv = pfcp_encap_recv;
+	tuncfg.encap_type = 1;
+
+	setup_udp_tunnel_sock(net, sock->sk, &tuncfg);
+
+	return sock->sk;
 }
 
 static void pfcp_dev_uninit(struct net_device *dev)
 {
 	struct pfcp_dev *pfcp = netdev_priv(dev);
 
+	udp_tunnel_sock_release(pfcp->sk);
+	pfcp->sk = NULL;
+	/* Wait for receive callbacks before destroying their state. */
+	synchronize_net();
 	gro_cells_destroy(&pfcp->gro_cells);
-	pfcp_del_sock(pfcp);
 }
 
 static int pfcp_dev_init(struct net_device *dev)
 {
 	struct pfcp_dev *pfcp = netdev_priv(dev);
+	struct sock *sk;
+	int err;
 
 	pfcp->dev = dev;
 
-	return gro_cells_init(&pfcp->gro_cells, dev);
+	err = gro_cells_init(&pfcp->gro_cells, dev);
+	if (err)
+		return err;
+
+	sk = pfcp_create_sock(pfcp);
+	if (IS_ERR(sk)) {
+		gro_cells_destroy(&pfcp->gro_cells);
+		return PTR_ERR(sk);
+	}
+	pfcp->sk = sk;
+
+	return 0;
 }
 
 static const struct net_device_ops pfcp_netdev_ops = {
@@ -153,39 +189,6 @@ static void pfcp_link_setup(struct net_device *dev)
 	netif_keep_dst(dev);
 }
 
-static struct sock *pfcp_create_sock(struct pfcp_dev *pfcp)
-{
-	struct udp_tunnel_sock_cfg tuncfg = {};
-	struct udp_port_cfg udp_conf = {
-		.local_ip.s_addr	= htonl(INADDR_ANY),
-		.family			= AF_INET,
-	};
-	struct net *net = pfcp->net;
-	struct socket *sock;
-	int err;
-
-	udp_conf.local_udp_port = htons(PFCP_PORT);
-
-	err = udp_sock_create(net, &udp_conf, &sock);
-	if (err)
-		return ERR_PTR(err);
-
-	tuncfg.sk_user_data = pfcp;
-	tuncfg.encap_rcv = pfcp_encap_recv;
-	tuncfg.encap_type = 1;
-
-	setup_udp_tunnel_sock(net, sock->sk, &tuncfg);
-
-	return sock->sk;
-}
-
-static int pfcp_add_sock(struct pfcp_dev *pfcp)
-{
-	pfcp->sk = pfcp_create_sock(pfcp);
-
-	return PTR_ERR_OR_ZERO(pfcp->sk);
-}
-
 static int pfcp_newlink(struct net_device *dev,
 			struct rtnl_newlink_params *params,
 			struct netlink_ext_ack *extack)
@@ -197,16 +200,10 @@ static int pfcp_newlink(struct net_device *dev,
 
 	pfcp->net = link_net;
 
-	err = pfcp_add_sock(pfcp);
-	if (err) {
-		netdev_dbg(dev, "failed to add pfcp socket %d\n", err);
-		goto exit_err;
-	}
-
 	err = register_netdevice(dev);
 	if (err) {
 		netdev_dbg(dev, "failed to register pfcp netdev %d\n", err);
-		goto exit_del_pfcp_sock;
+		goto exit_err;
 	}
 
 	pn = net_generic(link_net, pfcp_net_id);
@@ -219,9 +216,6 @@ static int pfcp_newlink(struct net_device *dev,
 
 	return 0;
 
-exit_del_pfcp_sock:
-	pfcp_del_sock(pfcp);
-	synchronize_rcu();
 exit_err:
 	pfcp->net = NULL;
 	return err;

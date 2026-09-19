@@ -215,6 +215,14 @@ static int llc_ui_release(struct socket *sock)
 		llc_sap_hold(sap);
 		llc_sap_remove_socket(llc->sap, sk);
 		release_sock(sk);
+		/*
+		 * Timers dereference llc->sap.  Cancel them while the sap is
+		 * still held; llc_sk_free() runs after the final sap put and
+		 * would otherwise race with kfree_rcu(sap).  Must run after
+		 * release_sock() to avoid deadlock with bh_lock_sock() in the
+		 * timer callbacks.
+		 */
+		llc_sk_stop_all_timers(sk, true);
 		llc_sap_put(sap);
 	} else {
 		release_sock(sk);

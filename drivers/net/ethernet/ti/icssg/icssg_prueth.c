@@ -357,11 +357,11 @@ static void emac_adjust_link(struct net_device *ndev)
 		}
 		if (!emac->link) {
 			new_state = true;
-			emac->link = 1;
+			WRITE_ONCE(emac->link, 1);
 		}
 	} else if (emac->link) {
 		new_state = true;
-		emac->link = 0;
+		WRITE_ONCE(emac->link, 0);
 
 		/* f/w should support 100 & 1000 */
 		emac->speed = SPEED_1000;
@@ -392,6 +392,8 @@ static void emac_adjust_link(struct net_device *ndev)
 		} else {
 			icssg_set_port_state(emac, ICSSG_EMAC_PORT_DISABLE);
 		}
+
+		icssg_qos_link_state_update(ndev);
 	}
 
 	if (emac->link) {
@@ -1652,6 +1654,7 @@ static const struct net_device_ops emac_netdev_ops = {
 	.ndo_hwtstamp_get = icssg_ndo_get_ts_config,
 	.ndo_hwtstamp_set = icssg_ndo_set_ts_config,
 	.ndo_xsk_wakeup = prueth_xsk_wakeup,
+	.ndo_setup_tc = icssg_qos_ndo_setup_tc,
 };
 
 static int prueth_netdev_init(struct prueth *prueth,
@@ -1685,6 +1688,8 @@ static int prueth_netdev_init(struct prueth *prueth,
 	INIT_WORK(&emac->rx_mode_work, emac_ndo_set_rx_mode_work);
 
 	INIT_DELAYED_WORK(&emac->stats_work, icssg_stats_work_handler);
+
+	icssg_qos_init(ndev);
 
 	ret = pruss_request_mem_region(prueth->pruss,
 				       port == PRUETH_PORT_MII0 ?
@@ -1793,6 +1798,7 @@ static int prueth_netdev_init(struct prueth *prueth,
 free:
 	pruss_release_mem_region(prueth->pruss, &emac->dram);
 free_ndev:
+	mutex_destroy(&emac->qos.iet.fpe_lock);
 	emac->ndev = NULL;
 	prueth->emac[mac] = NULL;
 	free_netdev(ndev);

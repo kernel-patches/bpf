@@ -397,13 +397,23 @@ static void am65_cpsw_switchdev_event_work(struct work_struct *work)
 			   fdb->addr, fdb->vid, fdb->added_by_user,
 			   fdb->offloaded, port_id);
 
-		if (!fdb->added_by_user || fdb->is_local)
+		if (fdb->is_local)
 			break;
 		if (memcmp(port->slave.mac_addr, (u8 *)fdb->addr, ETH_ALEN) == 0)
 			port_id = HOST_PORT_NUM;
 
-		cpsw_ale_del_ucast(cpsw->ale, (u8 *)fdb->addr, port_id,
-				   fdb->vid ? ALE_VLAN : 0, fdb->vid);
+		if (!fdb->added_by_user && !fdb->vid)
+			/* vid=0 here just means "bridge doesn't know the
+			 * real vid" (vlan_filtering=0) -- the dynamic entry
+			 * may be stored under any nonzero vid, or several.
+			 * Delete by (addr, port) instead of guessing a vid.
+			 */
+			cpsw_ale_del_ucast_dynamic_by_port(cpsw->ale,
+							   (u8 *)fdb->addr,
+							   port_id);
+		else
+			cpsw_ale_del_ucast(cpsw->ale, (u8 *)fdb->addr, port_id,
+					   fdb->vid ? ALE_VLAN : 0, fdb->vid);
 		break;
 	default:
 		break;

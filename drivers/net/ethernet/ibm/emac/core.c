@@ -3044,6 +3044,14 @@ static int emac_probe(struct platform_device *ofdev)
 	if (err)
 		goto err_gone;
 
+	if (emac_phy_supports_gige(dev->phy_mode)) {
+		ndev->netdev_ops = &emac_gige_netdev_ops;
+		dev->commac.ops = &emac_commac_sg_ops;
+	} else {
+		ndev->netdev_ops = &emac_netdev_ops;
+	}
+	ndev->ethtool_ops = &emac_ethtool_ops;
+
 	dev->emacp = devm_platform_ioremap_resource(ofdev, 0);
 	if (IS_ERR(dev->emacp)) {
 		err = PTR_ERR(dev->emacp);
@@ -3144,12 +3152,6 @@ static int emac_probe(struct platform_device *ofdev)
 		ndev->features |= ndev->hw_features | NETIF_F_RXCSUM;
 	}
 	ndev->watchdog_timeo = 5 * HZ;
-	if (emac_phy_supports_gige(dev->phy_mode)) {
-		ndev->netdev_ops = &emac_gige_netdev_ops;
-		dev->commac.ops = &emac_commac_sg_ops;
-	} else
-		ndev->netdev_ops = &emac_netdev_ops;
-	ndev->ethtool_ops = &emac_ethtool_ops;
 
 	/* MTU range: 46 - 1500 or whatever is in OF */
 	ndev->min_mtu = EMAC_MIN_MTU;

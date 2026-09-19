@@ -312,11 +312,14 @@ int netdev_nl_napi_get_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 			err = -ENODEV;
 		}
 	} else {
+		unsigned long start_ifindex = ctx->ifindex;
+
 		for_each_netdev_lock_scoped(net, netdev, ctx->ifindex) {
+			if (ctx->ifindex != start_ifindex)
+				ctx->napi_id = 0;
 			err = netdev_nl_napi_dump_one(netdev, skb, info, ctx);
 			if (err < 0)
 				break;
-			ctx->napi_id = 0;
 		}
 	}
 
@@ -333,6 +336,9 @@ netdev_nl_napi_set_config(struct napi_struct *napi, struct genl_info *info)
 
 	if (info->attrs[NETDEV_A_NAPI_THREADED]) {
 		int ret;
+
+		if (test_bit(NAPI_STATE_NO_THREADED, &napi->state))
+			return -EOPNOTSUPP;
 
 		threaded = nla_get_uint(info->attrs[NETDEV_A_NAPI_THREADED]);
 		ret = napi_set_threaded(napi, threaded);
@@ -434,7 +440,7 @@ netdev_nl_queue_fill_lease(struct sk_buff *rsp, struct net_device *netdev,
 nla_put_failure_unlock:
 	rcu_read_unlock();
 nla_put_failure:
-	return -ENOMEM;
+	return -EMSGSIZE;
 }
 
 static int
@@ -636,13 +642,17 @@ int netdev_nl_queue_get_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 			err = -ENODEV;
 		}
 	} else {
+		unsigned long start_ifindex = ctx->ifindex;
+
 		for_each_netdev_lock_ops_compat_scoped(net, netdev,
 						       ctx->ifindex) {
+			if (ctx->ifindex != start_ifindex) {
+				ctx->rxq_idx = 0;
+				ctx->txq_idx = 0;
+			}
 			err = netdev_nl_queue_dump_one(netdev, skb, info, ctx);
 			if (err < 0)
 				break;
-			ctx->rxq_idx = 0;
-			ctx->txq_idx = 0;
 		}
 	}
 
@@ -768,7 +778,7 @@ netdev_nl_stats_by_queue(struct net_device *netdev, struct sk_buff *rsp,
 	const struct netdev_stat_ops *ops = netdev->stat_ops;
 	int i, err;
 
-	if (!(netdev->flags & IFF_UP))
+	if (!netdev->up)
 		return 0;
 
 	i = ctx->rxq_idx;
@@ -788,8 +798,6 @@ netdev_nl_stats_by_queue(struct net_device *netdev, struct sk_buff *rsp,
 		ctx->txq_idx = ++i;
 	}
 
-	ctx->rxq_idx = 0;
-	ctx->txq_idx = 0;
 	return 0;
 }
 
@@ -904,6 +912,7 @@ int netdev_nl_qstats_get_dumpit(struct sk_buff *skb,
 	struct netdev_nl_dump_ctx *ctx = netdev_dump_ctx(cb);
 	const struct genl_info *info = genl_info_dump(cb);
 	struct net *net = sock_net(skb->sk);
+	unsigned long start_ifindex;
 	struct net_device *netdev;
 	unsigned int ifindex;
 	unsigned int scope;
@@ -936,7 +945,13 @@ int netdev_nl_qstats_get_dumpit(struct sk_buff *skb,
 		return err;
 	}
 
+	start_ifindex = ctx->ifindex;
+
 	for_each_netdev_lock_ops_compat_scoped(net, netdev, ctx->ifindex) {
+		if (ctx->ifindex != start_ifindex) {
+			ctx->rxq_idx = 0;
+			ctx->txq_idx = 0;
+		}
 		err = netdev_nl_qstats_get_dump_one(netdev, scope, skb,
 						    info, ctx);
 		if (err < 0)

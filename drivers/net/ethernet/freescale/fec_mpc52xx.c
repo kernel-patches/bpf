@@ -834,13 +834,6 @@ static int mpc52xx_fec_probe(struct platform_device *op)
 		pr_err("Error while parsing device node resource\n");
 		goto err_netdev;
 	}
-	if (resource_size(&mem) < sizeof(struct mpc52xx_fec)) {
-		pr_err("invalid resource size (%lx < %x), check mpc52xx_devices.c\n",
-		       (unsigned long)resource_size(&mem),
-		       sizeof(struct mpc52xx_fec));
-		rv = -EINVAL;
-		goto err_netdev;
-	}
 
 	if (!request_mem_region(mem.start, sizeof(struct mpc52xx_fec),
 				DRIVER_NAME)) {

@@ -3214,6 +3214,7 @@ M:	UNGLinuxDriver@microchip.com
 L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
 S:	Supported
 F:	arch/arm64/boot/dts/microchip/sparx*
+F:	drivers/net/ethernet/microchip/fdma/
 F:	drivers/net/ethernet/microchip/vcap/
 F:	drivers/pinctrl/pinctrl-microchip-sgpio.c
 N:	sparx5
@@ -4020,6 +4021,12 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/net/asix,ax88796c.yaml
 F:	drivers/net/ethernet/asix/ax88796c_*
 
+ASIX AX88179 USB ETHERNET DRIVER
+M:	Birger Koblitz <mail@birger-koblitz.de>
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	drivers/net/usb/ax88179*
+
 ASIX PHY DRIVER [RUST]
 M:	FUJITA Tomonori <fujita.tomonori@gmail.com>
 R:	Trevor Gross <tmgross@umich.edu>
@@ -4512,7 +4519,7 @@ AYANEO PLATFORM EC DRIVER
 M:	Antheas Kapenekakis <lkml@antheas.dev>
 L:	platform-driver-x86@vger.kernel.org
 S:	Maintained
-F:	Documentation/ABI/testing/sysfs-platform-ayaneo
+F:	Documentation/ABI/testing/sysfs-platform-ayaneo-ec
 F:	drivers/platform/x86/ayaneo-ec.c
 
 AZ6007 DVB DRIVER
@@ -7091,13 +7098,6 @@ S:	Maintained
 W:	http://www.chelsio.com
 F:	drivers/net/ethernet/chelsio/cxgb4/
 
-CXGB4 INLINE CRYPTO DRIVER
-M:	Ayush Sawal <ayush.sawal@chelsio.com>
-L:	netdev@vger.kernel.org
-S:	Maintained
-W:	http://www.chelsio.com
-F:	drivers/net/ethernet/chelsio/inline_crypto/
-
 CXGB4 ISCSI DRIVER (CXGB4I)
 M:	Varun Prakash <varun@chelsio.com>
 L:	linux-scsi@vger.kernel.org
@@ -7919,6 +7919,7 @@ S:	Supported
 F:	Documentation/devicetree/bindings/dpll/dpll-device.yaml
 F:	Documentation/devicetree/bindings/dpll/dpll-pin.yaml
 F:	Documentation/driver-api/dpll.rst
+F:	Documentation/netlink/specs/dpll.yaml
 F:	drivers/dpll/
 F:	include/linux/dpll.h
 F:	include/uapi/linux/dpll.h
@@ -9753,6 +9754,15 @@ F:	include/linux/if_bridge.h
 F:	include/uapi/linux/if_bridge.h
 F:	include/linux/netfilter_bridge/
 F:	net/bridge/
+
+ETHERNET PCS SUBSYSTEM
+M:	Christian Marangi <ansuelsmth@gmail.com>
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	Documentation/networking/pcs.rst
+F:	drivers/net/pcs/pcs.c
+F:	include/linux/pcs/pcs-provider.h
+F:	include/linux/pcs/pcs.h
 
 ETHERNET PHY LIBRARY
 M:	Andrew Lunn <andrew@lunn.ch>
@@ -15020,6 +15030,8 @@ M:	Madhavan Srinivasan <maddy@linux.ibm.com>
 R:	Michael Ellerman <mpe@ellerman.id.au>
 R:	Nicholas Piggin <npiggin@gmail.com>
 R:	Christophe Leroy (CS GROUP) <chleroy@kernel.org>
+R:	Ritesh Harjani (IBM) <ritesh.list@gmail.com>
+R:	Shrikanth Hegde <sshegde@linux.ibm.com>
 L:	linuxppc-dev@lists.ozlabs.org
 S:	Supported
 W:	https://github.com/linuxppc/wiki/wiki
@@ -16831,6 +16843,17 @@ L:	netdev@vger.kernel.org
 S:	Supported
 F:	drivers/net/wwan/t7xx/
 
+MEDIATEK T9XX 5G WWAN MODEM DRIVER
+M:	Jack Wu <jackbb_wu@compal.com>
+M:	Robert Yu <robert_yu@compal.com>
+M:	Jeff Chang <Jeff_Chang@compal.com>
+R:	Wen-Zhi Huang <wen-zhi.huang@mediatek.com>
+R:	Shi-Wei Yeh <shi-wei.yeh@mediatek.com>
+R:	Minano Tseng <Minano.tseng@mediatek.com>
+L:	netdev@vger.kernel.org
+S:	Supported
+F:	drivers/net/wwan/t9xx/
+
 MEDIATEK USB3 DRD IP DRIVER
 M:	Chunfeng Yun <chunfeng.yun@mediatek.com>
 L:	linux-usb@vger.kernel.org
@@ -17029,8 +17052,8 @@ MEMBLOCK AND MEMORY MANAGEMENT INITIALIZATION
 M:	Mike Rapoport <rppt@kernel.org>
 L:	linux-mm@kvack.org
 S:	Maintained
-T:	git git://git.kernel.org/pub/scm/linux/kernel/git/rppt/memblock.git for-next
-T:	git git://git.kernel.org/pub/scm/linux/kernel/git/rppt/memblock.git fixes
+T:	git git://git.kernel.org/pub/scm/linux/kernel/git/mm/memblock.git for-next
+T:	git git://git.kernel.org/pub/scm/linux/kernel/git/mm/memblock.git fixes
 F:	Documentation/core-api/boot-time-mm.rst
 F:	include/linux/kho/abi/memblock.h
 F:	include/linux/memblock.h
@@ -17769,6 +17792,7 @@ F:	Documentation/devicetree/bindings/net/dsa/microchip,lan937x.yaml
 F:	drivers/net/dsa/microchip/*
 F:	include/linux/dsa/ksz_common.h
 F:	include/linux/platform_data/microchip-ksz.h
+F:	net/dsa/tag_ks8995.c
 F:	net/dsa/tag_ksz.c
 
 MICROCHIP LAN743X ETHERNET DRIVER
@@ -18415,7 +18439,7 @@ M:	David Yang <mmyangfl@gmail.com>
 L:	netdev@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/net/dsa/motorcomm,yt921x.yaml
-F:	drivers/net/dsa/yt921x.*
+F:	drivers/net/dsa/motorcomm/
 F:	net/dsa/tag_yt921x.c
 
 MOXA SMARTIO/INDUSTIO/INTELLIO SERIAL CARD
@@ -18796,6 +18820,16 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/hwmon/nuvoton,nct7363.yaml
 F:	Documentation/hwmon/nct7363.rst
 F:	drivers/hwmon/nct7363.c
+
+NEBULA-MATRIX ETHERNET DRIVER (nebula-matrix)
+M:	Illusion Wang <illusion.wang@nebula-matrix.com>
+M:	Dimon Zhao <dimon.zhao@nebula-matrix.com>
+M:	Alvin Wang <alvin.wang@nebula-matrix.com>
+M:	Sam Chen <sam.chen@nebula-matrix.com>
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	Documentation/networking/device_drivers/ethernet/nebula-matrix/
+F:	drivers/net/ethernet/nebula-matrix/
 
 NETCONSOLE
 M:	Breno Leitao <leitao@debian.org>
@@ -19252,6 +19286,8 @@ F:	Documentation/networking/tls*
 F:	include/net/tls.h
 F:	include/uapi/linux/tls.h
 F:	net/tls/
+F:	tools/testing/selftests/drivers/net/hw/tls_hw_offload.c
+F:	tools/testing/selftests/drivers/net/hw/tls_hw_offload.py
 F:	tools/testing/selftests/net/tls.c
 
 NETWORKING [SOCKETS]
@@ -20476,6 +20512,7 @@ OPENCOMPUTE PTP CLOCK DRIVER
 M:	Vadim Fedorenko <vadim.fedorenko@linux.dev>
 L:	netdev@vger.kernel.org
 S:	Maintained
+F:	Documentation/networking/devlink/ptp_ocp.rst
 F:	drivers/ptp/ptp_ocp.c
 
 OPENCORES I2C BUS DRIVER
@@ -25334,8 +25371,8 @@ F:	Documentation/networking/timestamping.rst
 F:	include/linux/net_tstamp.h
 F:	include/uapi/linux/net_tstamp.h
 F:	tools/testing/selftests/bpf/*/net_timestamping*
+F:	tools/testing/selftests/drivers/net/so_txtime.*
 F:	tools/testing/selftests/net/*timestamp*
-F:	tools/testing/selftests/net/so_txtime.c
 
 SOEKRIS NET48XX LED SUPPORT
 M:	Chris Boot <bootc@bootc.net>
@@ -27995,6 +28032,12 @@ F:	Documentation/devicetree/bindings/clock/ultrarisc,dp1000-clk.yaml
 F:	drivers/clk/ultrarisc/*
 F:	include/dt-bindings/clock/ultrarisc,dp1000-clk.h
 
+ULTRARISC DP1000 DWMAC GLUE LAYER
+M:	Jia Wang <wangjia@ultrarisc.com>
+S:	Maintained
+F:	Documentation/devicetree/bindings/net/ultrarisc,dp1000-gmac.yaml
+F:	drivers/net/ethernet/stmicro/stmmac/dwmac-ultrarisc.c
+
 ULTRARISC DP1000 PINCTRL DRIVER
 M:	Jia Wang <wangjia@ultrarisc.com>
 L:	linux-gpio@vger.kernel.org
@@ -28607,7 +28650,6 @@ L:	iommu@lists.linux.dev
 S:	Maintained
 F:	Documentation/devicetree/bindings/iommu/verisilicon,iommu.yaml
 F:	drivers/iommu/vsi-iommu.c
-F:	include/linux/vsi-iommu.h
 
 VF610 NAND DRIVER
 M:	Stefan Agner <stefan@agner.ch>
@@ -28867,8 +28909,8 @@ F:	include/uapi/linux/virtio_console.h
 VIRTIO CORE
 M:	"Michael S. Tsirkin" <mst@redhat.com>
 M:	Jason Wang <jasowangio@gmail.com>
+M:	Eugenio Pérez <eperezma@redhat.com>
 R:	Xuan Zhuo <xuanzhuo@linux.alibaba.com>
-R:	Eugenio Pérez <eperezma@redhat.com>
 L:	virtualization@lists.linux.dev
 S:	Maintained
 F:	Documentation/ABI/testing/sysfs-bus-vdpa
@@ -28945,7 +28987,7 @@ F:	include/uapi/linux/virtio_gpu.h
 VIRTIO HOST (VHOST)
 M:	"Michael S. Tsirkin" <mst@redhat.com>
 M:	Jason Wang <jasowangio@gmail.com>
-R:	Eugenio Pérez <eperezma@redhat.com>
+M:	Eugenio Pérez <eperezma@redhat.com>
 L:	kvm@vger.kernel.org
 L:	virtualization@lists.linux.dev
 L:	netdev@vger.kernel.org
@@ -29000,8 +29042,8 @@ F:	include/uapi/linux/virtio_mem.h
 VIRTIO NET DRIVER
 M:	"Michael S. Tsirkin" <mst@redhat.com>
 M:	Jason Wang <jasowangio@gmail.com>
+M:	Eugenio Pérez <eperezma@redhat.com>
 R:	Xuan Zhuo <xuanzhuo@linux.alibaba.com>
-R:	Eugenio Pérez <eperezma@redhat.com>
 L:	netdev@vger.kernel.org
 L:	virtualization@lists.linux.dev
 S:	Maintained
@@ -29016,6 +29058,13 @@ L:	virtualization@lists.linux.dev
 S:	Maintained
 F:	drivers/nvdimm/nd_virtio.c
 F:	drivers/nvdimm/virtio_pmem.c
+
+VIRTIO RNG DRIVER
+M:	Laurent Vivier <lvivier@redhat.com>
+L:	virtualization@lists.linux.dev
+S:	Maintained
+F:	drivers/char/hw_random/virtio-rng.c
+F:	include/uapi/linux/virtio_rng.h
 
 VIRTIO RTC DRIVER
 M:	Peter Hilber <peter.hilber@oss.qualcomm.com>
@@ -29348,7 +29397,7 @@ M:	Guenter Roeck <linux@roeck-us.net>
 L:	linux-watchdog@vger.kernel.org
 S:	Maintained
 W:	http://www.linux-watchdog.org/
-T:	git git://www.linux-watchdog.org/linux-watchdog.git
+T:	git git://git.kernel.org/pub/scm/linux/kernel/git/groeck/linux-staging.git
 F:	Documentation/devicetree/bindings/watchdog/
 F:	Documentation/watchdog/
 F:	drivers/watchdog/
@@ -29423,6 +29472,13 @@ WISTRON LAPTOP BUTTON DRIVER
 M:	Miloslav Trmac <mitr@volny.cz>
 S:	Maintained
 F:	drivers/input/misc/wistron_btns.c
+
+WIZNET W5100 ETHERNET DRIVER
+M:	Arthur Crepin Leblond <arthur@marmottus.net>
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/net/wiznet,w5100.yaml
+F:	drivers/net/ethernet/wiznet/
 
 WMI BINARY MOF DRIVER
 M:	Armin Wolf <W_Armin@gmx.de>

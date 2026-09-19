@@ -4343,7 +4343,7 @@ static int esw_inline_mode_to_devlink(u8 mlx5_mode, u8 *mode)
 	return 0;
 }
 
-int mlx5_eswitch_block_mode(struct mlx5_core_dev *dev)
+int mlx5_eswitch_block_mode(struct mlx5_core_dev *dev, bool check_users)
 {
 	struct mlx5_eswitch *esw = dev->priv.eswitch;
 	int err;
@@ -4351,8 +4351,7 @@ int mlx5_eswitch_block_mode(struct mlx5_core_dev *dev)
 	if (!mlx5_esw_allowed(esw))
 		return 0;
 
-	/* Take TC into account */
-	err = mlx5_esw_try_lock(esw);
+	err = mlx5_esw_try_lock(esw, check_users);
 	if (err < 0)
 		return err;
 
@@ -4485,7 +4484,7 @@ int mlx5_devlink_eswitch_mode_set(struct devlink *devlink, u16 mode,
 		return 0;
 
 	mlx5_lag_disable_change(esw->dev);
-	err = mlx5_esw_try_lock(esw);
+	err = mlx5_esw_try_lock(esw, true);
 	if (err < 0) {
 		NL_SET_ERR_MSG_MOD(extack, "Can't change mode, E-Switch is busy");
 		goto enable_lag;

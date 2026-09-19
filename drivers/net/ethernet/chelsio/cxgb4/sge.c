@@ -1503,12 +1503,13 @@ static netdev_tx_t cxgb4_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 	unsigned int chip_ver;
 	struct adapter *adap;
 
+	pi = netdev_priv(dev);
+	adap = pi->adapter;
+
 	ret = cxgb4_validate_skb(skb, dev, ETH_HLEN);
 	if (ret)
 		goto out_free;
 
-	pi = netdev_priv(dev);
-	adap = pi->adapter;
 	ssi = skb_shinfo(skb);
 #if IS_ENABLED(CONFIG_CHELSIO_IPSEC_INLINE)
 	if (xfrm_offload(skb) && !ssi->gso_size)
@@ -1553,6 +1554,10 @@ static netdev_tx_t cxgb4_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 		dev_err(adap->pdev_dev,
 			"%s: Tx ring %u full while queue awake!\n",
 			dev->name, qidx);
+		if (adap->ptp_tx_skb == skb) {
+			dev_kfree_skb_any(adap->ptp_tx_skb);
+			adap->ptp_tx_skb = NULL;
+		}
 		return NETDEV_TX_BUSY;
 	}
 
@@ -1723,6 +1728,10 @@ static netdev_tx_t cxgb4_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 	return NETDEV_TX_OK;
 
 out_free:
+	if (adap->ptp_tx_skb == skb) {
+		dev_kfree_skb_any(adap->ptp_tx_skb);
+		adap->ptp_tx_skb = NULL;
+	}
 	dev_kfree_skb_any(skb);
 	return NETDEV_TX_OK;
 }

@@ -452,14 +452,25 @@ struct ice_flow_seg_info {
 	struct ice_flow_seg_fld_raw raws[ICE_FLOW_SEG_RAW_FLD_MAX];
 };
 
+#define ICE_FLOW_ACL_MAX_NUM_ACT	2
 /* This structure describes a flow entry, and is tracked only in this file */
 struct ice_flow_entry {
 	struct list_head l_entry;
 
 	u64 id;
 	struct ice_flow_prof *prof;
+	/* Action list */
+	struct ice_flow_action *acts;
+	/* Flow entry's content */
+	void *entry;
+	/* Range buffer (For ACL only) */
+	struct ice_aqc_acl_profile_ranges *range_buf;
 	enum ice_flow_priority priority;
 	u16 vsi_handle;
+	u16 entry_sz;
+	/* Entry index in the ACL's scenario */
+	u16 scen_entry_idx;
+	u8 acts_cnt;
 };
 
 #define ICE_FLOW_ENTRY_HNDL(e)	((u64)(uintptr_t)e)
@@ -482,6 +493,13 @@ struct ice_flow_prof {
 	DECLARE_BITMAP(vsis, ICE_MAX_VSI);
 
 	bool symm; /* Symmetric Hash for RSS */
+
+	union {
+		/* struct sw_recipe */
+		struct ice_acl_scen *scen;
+		/* struct fd */
+		u32 data;
+	} cfg;
 };
 
 struct ice_rss_raw_cfg {
@@ -497,18 +515,37 @@ struct ice_rss_cfg {
 	struct ice_rss_hash_cfg hash;
 };
 
+enum ice_flow_action_type {
+	ICE_FLOW_ACT_NOP,
+	ICE_FLOW_ACT_DROP,
+	ICE_FLOW_ACT_CNTR_PKT,
+	ICE_FLOW_ACT_FWD_QUEUE,
+	ICE_FLOW_ACT_CNTR_BYTES,
+	ICE_FLOW_ACT_CNTR_PKT_BYTES,
+};
+
+struct ice_flow_action {
+	enum ice_flow_action_type type;
+	union {
+		struct ice_acl_act_entry acl_act;
+		u32 dummy;
+	} data;
+};
+
 int
 ice_flow_add_prof(struct ice_hw *hw, enum ice_block blk, enum ice_flow_dir dir,
 		  struct ice_flow_seg_info *segs, u8 segs_cnt,
 		  bool symm, struct ice_flow_prof **prof);
 int ice_flow_rem_prof(struct ice_hw *hw, enum ice_block blk, u64 prof_id);
+u64 ice_flow_find_entry(struct ice_hw *hw, enum ice_block blk, u64 entry_id);
 int
 ice_flow_set_parser_prof(struct ice_hw *hw, u16 dest_vsi, u16 fdir_vsi,
 			 struct ice_parser_profile *prof, enum ice_block blk);
 int
 ice_flow_add_entry(struct ice_hw *hw, enum ice_block blk, u64 prof_id,
 		   u64 entry_id, u16 vsi, enum ice_flow_priority prio,
-		   void *data, u64 *entry_h);
+		   void *data, struct ice_flow_action *acts, u8 acts_cnt,
+		   u64 *entry_h);
 int ice_flow_rem_entry(struct ice_hw *hw, enum ice_block blk, u64 entry_h);
 void
 ice_flow_set_fld(struct ice_flow_seg_info *seg, enum ice_flow_field fld,

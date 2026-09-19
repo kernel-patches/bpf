@@ -37,14 +37,15 @@
 
 #include "tls.h"
 
-static int tls_enc_record(struct aead_request *aead_req,
+static int tls_enc_record(struct tls_context *tls_ctx,
+			  struct aead_request *aead_req,
 			  struct crypto_aead *aead, char *aad,
 			  char *iv, __be64 rcd_sn,
 			  struct scatter_walk *in,
-			  struct scatter_walk *out, int *in_len,
-			  struct tls_prot_info *prot)
+			  struct scatter_walk *out, int *in_len)
 {
 	unsigned char buf[TLS_HEADER_SIZE + TLS_MAX_IV_SIZE];
+	struct tls_prot_info *prot = &tls_ctx->prot_info;
 	const struct tls_cipher_desc *cipher_desc;
 	struct scatterlist sg_in[3];
 	struct scatterlist sg_out[3];
@@ -55,7 +56,7 @@ static int tls_enc_record(struct aead_request *aead_req,
 	cipher_desc = get_cipher_desc(prot->cipher_type);
 	DEBUG_NET_WARN_ON_ONCE(!cipher_desc || !cipher_desc->offloadable);
 
-	buf_size = TLS_HEADER_SIZE + cipher_desc->iv;
+	buf_size = prot->prepend_size;
 	len = min_t(int, *in_len, buf_size);
 
 	memcpy_from_scatterwalk(buf, in, len);
@@ -66,16 +67,27 @@ static int tls_enc_record(struct aead_request *aead_req,
 		return 0;
 
 	len = buf[4] | (buf[3] << 8);
-	len -= cipher_desc->iv;
+	if (prot->version != TLS_1_3_VERSION)
+		len -= cipher_desc->iv;
 
 	tls_make_aad(aad, len - cipher_desc->tag, (char *)&rcd_sn, buf[0], prot);
 
-	memcpy(iv + cipher_desc->salt, buf + TLS_HEADER_SIZE, cipher_desc->iv);
+	if (prot->version == TLS_1_3_VERSION) {
+		void *iv_src = crypto_info_iv(&tls_ctx->crypto_send.info,
+					      cipher_desc);
+
+		memcpy(iv + cipher_desc->salt, iv_src, cipher_desc->iv);
+	} else {
+		memcpy(iv + cipher_desc->salt, buf + TLS_HEADER_SIZE,
+		       cipher_desc->iv);
+	}
+
+	tls_xor_iv_with_seq(prot, iv, (char *)&rcd_sn);
 
 	sg_init_table(sg_in, ARRAY_SIZE(sg_in));
 	sg_init_table(sg_out, ARRAY_SIZE(sg_out));
-	sg_set_buf(sg_in, aad, TLS_AAD_SPACE_SIZE);
-	sg_set_buf(sg_out, aad, TLS_AAD_SPACE_SIZE);
+	sg_set_buf(sg_in, aad, prot->aad_size);
+	sg_set_buf(sg_out, aad, prot->aad_size);
 	scatterwalk_get_sglist(in, sg_in + 1);
 	scatterwalk_get_sglist(out, sg_out + 1);
 
@@ -108,13 +120,6 @@ static int tls_enc_record(struct aead_request *aead_req,
 	return rc;
 }
 
-static void tls_init_aead_request(struct aead_request *aead_req,
-				  struct crypto_aead *aead)
-{
-	aead_request_set_tfm(aead_req, aead);
-	aead_request_set_ad(aead_req, TLS_AAD_SPACE_SIZE);
-}
-
 static struct aead_request *tls_alloc_aead_request(struct crypto_aead *aead,
 						   gfp_t flags)
 {
@@ -124,14 +129,15 @@ static struct aead_request *tls_alloc_aead_request(struct crypto_aead *aead,
 
 	aead_req = kzalloc(req_size, flags);
 	if (aead_req)
-		tls_init_aead_request(aead_req, aead);
+		aead_request_set_tfm(aead_req, aead);
 	return aead_req;
 }
 
-static int tls_enc_records(struct aead_request *aead_req,
+static int tls_enc_records(struct tls_context *tls_ctx,
+			   struct aead_request *aead_req,
 			   struct crypto_aead *aead, struct scatterlist *sg_in,
 			   struct scatterlist *sg_out, char *aad, char *iv,
-			   u64 rcd_sn, int len, struct tls_prot_info *prot)
+			   u64 rcd_sn, int len)
 {
 	struct scatter_walk out, in;
 	int rc;
@@ -140,8 +146,8 @@ static int tls_enc_records(struct aead_request *aead_req,
 	scatterwalk_start(&out, sg_out);
 
 	do {
-		rc = tls_enc_record(aead_req, aead, aad, iv,
-				    cpu_to_be64(rcd_sn), &in, &out, &len, prot);
+		rc = tls_enc_record(tls_ctx, aead_req, aead, aad, iv,
+				    cpu_to_be64(rcd_sn), &in, &out, &len);
 		rcd_sn++;
 
 	} while (rc == 0 && len);
@@ -183,6 +189,14 @@ static void complete_skb(struct sk_buff *nskb, struct sk_buff *skb, int headln)
 	int delta;
 
 	skb_copy_header(nskb, skb);
+
+	/* nskb now carries ciphertext, but skb_copy_header() inherited
+	 * skb->decrypted from the plaintext original. Clear it so the bit keeps
+	 * meaning "still-plaintext, needs an encryptor": otherwise a requeued
+	 * nskb would be needlessly re-validated (and re-encrypted) and would trip
+	 * the NIC's decrypted-vs-start-marker WARN.
+	 */
+	nskb->decrypted = 0;
 
 	skb_put(nskb, skb->len);
 	memcpy(nskb->data, skb->data, headln);
@@ -314,7 +328,10 @@ static struct sk_buff *tls_enc_skb(struct tls_context *tls_ctx,
 	cipher_desc = get_cipher_desc(tls_ctx->crypto_send.info.cipher_type);
 	DEBUG_NET_WARN_ON_ONCE(!cipher_desc || !cipher_desc->offloadable);
 
-	buf_len = cipher_desc->salt + cipher_desc->iv + TLS_AAD_SPACE_SIZE +
+	aead_request_set_ad(aead_req, tls_ctx->prot_info.aad_size);
+
+	buf_len = cipher_desc->salt + cipher_desc->iv +
+		  tls_ctx->prot_info.aad_size +
 		  sync_size + cipher_desc->tag;
 	buf = kmalloc(buf_len, GFP_ATOMIC);
 	if (!buf)
@@ -324,7 +341,7 @@ static struct sk_buff *tls_enc_skb(struct tls_context *tls_ctx,
 	salt = crypto_info_salt(&tls_ctx->crypto_send.info, cipher_desc);
 	memcpy(iv, salt, cipher_desc->salt);
 	aad = buf + cipher_desc->salt + cipher_desc->iv;
-	dummy_buf = aad + TLS_AAD_SPACE_SIZE;
+	dummy_buf = aad + tls_ctx->prot_info.aad_size;
 
 	nskb = alloc_skb(skb_headroom(skb) + skb->len, GFP_ATOMIC);
 	if (!nskb)
@@ -335,9 +352,8 @@ static struct sk_buff *tls_enc_skb(struct tls_context *tls_ctx,
 	fill_sg_out(sg_out, buf, tls_ctx, nskb, tcp_payload_offset,
 		    payload_len, sync_size, dummy_buf);
 
-	if (tls_enc_records(aead_req, ctx->aead_send, sg_in, sg_out, aad, iv,
-			    rcd_sn, sync_size + payload_len,
-			    &tls_ctx->prot_info) < 0)
+	if (tls_enc_records(tls_ctx, aead_req, ctx->aead_send, sg_in, sg_out,
+			    aad, iv, rcd_sn, sync_size + payload_len) < 0)
 		goto free_nskb;
 
 	complete_skb(nskb, skb, tcp_payload_offset);
@@ -388,8 +404,17 @@ static struct sk_buff *tls_sw_fallback(struct sock *sk, struct sk_buff *skb)
 	sg_init_table(sg_out, ARRAY_SIZE(sg_out));
 
 	if (fill_sg_in(sg_in, skb, ctx, &rcd_sn, &sync_size, &resync_sgs)) {
-		/* bypass packets before kernel TLS socket option was set */
-		if (sync_size < 0 && payload_len <= -sync_size)
+		/* Below the record range (start marker / already-freed record).
+		 * Pass through only cleartext that was never offload-encrypted
+		 * (skb->decrypted == 0): genuine pre-TLS bytes sent before the
+		 * socket option was set, or SW-encrypted rekey ciphertext. A
+		 * decrypted=1 skb here is offload-record plaintext whose record was
+		 * purged (e.g. a rekey installed a new start marker above its seq);
+		 * it must never reach the wire in the clear, so continue on and
+		 * drop it (nskb stays NULL).
+		 */
+		if (sync_size < 0 && payload_len <= -sync_size &&
+		    !skb_is_decrypted(skb))
 			nskb = skb_get(skb);
 		goto put_sg;
 	}
@@ -408,11 +433,57 @@ free_orig:
 	return nskb;
 }
 
+/* Post-rekey drop floor. Once a rekey has completed (TLS_TX_REKEY_FLOOR set), a
+ * stale retransmit clone of already-ACKed data may still be dequeued from a
+ * qdisc; if its offload record was purged at completion it now maps to a rekey
+ * start marker. The cleartext leak on that path is closed unconditionally by
+ * the skb_is_decrypted() gate in tls_sw_fallback(); this floor additionally
+ * drops the clone before it reaches the NIC, avoiding the driver's WARN
+ * (mlx5e_ktls_handle_tx_skb() SKIP_NO_DATA) on an otherwise-legitimate race.
+ * Only needed by tls_validate_xmit_skb() (the restored HW-offload validator):
+ * only there can a purged-record clone reach the NIC and hit the new start
+ * marker. Under the rekey/SW validators the only skb the NIC offloads is a
+ * decrypted straddler whose record is still present (no SKIP_NO_DATA), and a
+ * stale clone is dropped by the skb_is_decrypted() gate in tls_sw_fallback().
+ * Such a clone is exactly a payload skb whose end_seq <= snd_una: the peer has
+ * already ACKed that data, so dropping it is always safe. Live/unacked data
+ * (including a legitimate retransmit, or a straddler ending past snd_una) is
+ * never touched; pure ACKs and zero-window probes carry no payload and pass.
+ */
+static bool tls_tx_drop_acked_clone(struct sock *sk, struct sk_buff *skb)
+{
+	int payload_len = skb->len - skb_tcp_all_headers(skb);
+	u32 end_seq;
+
+	if (likely(!test_bit(TLS_TX_REKEY_FLOOR, &tls_get_ctx(sk)->flags)))
+		return false;
+
+	if (payload_len <= 0)
+		return false;
+
+	/* Drop only when the whole payload is already ACKed (end_seq <= snd_una):
+	 * such a skb is purely a stale retransmit clone the peer already has. A
+	 * clone straddling snd_una still carries unacked bytes, so leave it to the
+	 * normal paths (a live record is re-encrypted; a marker/freed-record hit is
+	 * dropped there too). Both the leak (skb_is_decrypted() gate) and the mlx5
+	 * WARN only concern the fully-ACKed case handled here.
+	 */
+	end_seq = ntohl(tcp_hdr(skb)->seq) + payload_len;
+	return !after(end_seq, READ_ONCE(tcp_sk(sk)->snd_una));
+}
+
 struct sk_buff *tls_validate_xmit_skb(struct sock *sk,
 				      struct net_device *dev,
 				      struct sk_buff *skb)
 {
-	if (dev == rcu_dereference_bh(tls_get_ctx(sk)->netdev) ||
+	struct tls_context *tls_ctx = tls_get_ctx(sk);
+
+	if (unlikely(tls_tx_drop_acked_clone(sk, skb))) {
+		kfree_skb(skb);
+		return NULL;
+	}
+
+	if (dev == rcu_dereference_bh(tls_ctx->netdev) ||
 	    netif_is_bond_master(dev))
 		return skb;
 
@@ -426,6 +497,65 @@ struct sk_buff *tls_validate_xmit_skb_sw(struct sock *sk,
 {
 	return tls_sw_fallback(sk, skb);
 }
+
+struct sk_buff *tls_validate_xmit_skb_rekey(struct sock *sk,
+					    struct net_device *dev,
+					    struct sk_buff *skb)
+{
+	struct tls_context *tls_ctx = tls_get_ctx(sk);
+	u32 tcp_seq = ntohl(tcp_hdr(skb)->seq);
+	u32 pivot_seq;
+
+	/* acquire pairs with clear_bit_unlock() on re-arm; makes the refreshed
+	 * boundary_seq visible in the else branch below.
+	 */
+	if (test_bit_acquire(TLS_TX_REKEY_FAILED, &tls_ctx->flags)) {
+		int payload_len = skb->len - skb_tcp_all_headers(skb);
+		u32 snd_una = READ_ONCE(tcp_sk(sk)->snd_una);
+
+		/* FAILED: HW context gone and all old-key plaintext ACKed
+		 * (snd_una >= boundary_seq). seq < boundary_seq is old-key data
+		 * whose records are freed, so tls_sw_fallback() drops it. seq >=
+		 * boundary_seq is SW ciphertext with no record. A retransmit is
+		 * built at seq == snd_una (tcp_trim_head()), so an ACK landing
+		 * before we run can move snd_una past seq while the tail is
+		 * unacked; pivoting on snd_una alone would drop that live data
+		 * and force an RTO. Pass through any non-decrypted skb ending
+		 * past snd_una (mirrors tls_tx_drop_acked_clone()); fully-ACKed
+		 * clones fall to the pivot and are dropped.
+		 */
+		if (payload_len > 0 && !skb_is_decrypted(skb) &&
+		    after(tcp_seq + payload_len, snd_una))
+			return skb;
+
+		pivot_seq = snd_una;
+	} else {
+		/* PENDING: new-key data is SW-encrypted at seq >= boundary_seq;
+		 * old-key data below it is still unacked.
+		 *
+		 * On the first arm, boundary_seq is published by the
+		 * smp_store_release() of sk_validate_xmit_skb in
+		 * tls_device_start_rekey(); the xmit path loads that pointer with a
+		 * plain read (net/core/dev.c), so pair it here with an smp_rmb()
+		 * before reading boundary_seq. A stale boundary_seq (0) would pass an
+		 * unacked old-key plaintext skb through; tls_is_skb_tx_device_offloaded()
+		 * would still HW-encrypt it with the installed old key, so not a leak,
+		 * but the barrier keeps the pivot accurate.
+		 */
+		smp_rmb();
+		pivot_seq = READ_ONCE(tls_ctx->rekey.boundary_seq);
+	}
+
+	/* At or after the pivot: already correctly encrypted, pass through */
+	if (!before(tcp_seq, pivot_seq))
+		return skb;
+
+	/* Below the pivot: retransmit of old data, SW fallback with old key */
+	return tls_sw_fallback(sk, skb);
+}
+
+/* Address taken by tls_is_skb_tx_device_offloaded() in the offload drivers. */
+EXPORT_SYMBOL_GPL(tls_validate_xmit_skb_rekey);
 
 struct sk_buff *tls_encrypt_skb(struct sk_buff *skb)
 {

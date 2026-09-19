@@ -354,6 +354,8 @@ struct marvell_priv {
 	u32 step;
 	s8 pair;
 	u8 vct_phase;
+	u16 wol_led_tcr;
+	bool wol_led_armed;
 };
 
 static int marvell_read_page(struct phy_device *phydev)
@@ -418,6 +420,68 @@ static irqreturn_t marvell_handle_interrupt(struct phy_device *phydev)
 	}
 
 	if (!(irq_status & MII_M1011_IMASK_INIT))
+		return IRQ_NONE;
+
+	phy_trigger_machine(phydev);
+
+	return IRQ_HANDLED;
+}
+
+/*
+ * On the 88E1318S/88E1510, copper page register 0x12 serves two
+ * masters: it is the MII_M1011_IMASK interrupt mask for the generic
+ * Marvell interrupt handling, and m88e1318_set_wol() sets the WoL
+ * interrupt enable bit (MII_88E1318S_PHY_CSIER_WOL_EIE) in it. The
+ * interrupt routines below therefore preserve that bit, so reconfiguring
+ * the PHY interrupts cannot disarm Wake-on-LAN behind the user's back.
+ */
+static int m88e1318_config_intr(struct phy_device *phydev)
+{
+	int val, err;
+
+	val = phy_read(phydev, MII_88E1318S_PHY_CSIER);
+	if (val < 0)
+		return val;
+
+	if (phydev->interrupts == PHY_INTERRUPT_ENABLED) {
+		err = marvell_ack_interrupt(phydev);
+		if (err < 0)
+			return err;
+
+		err = phy_write(phydev, MII_88E1318S_PHY_CSIER,
+				MII_M1011_IMASK_INIT |
+				(val & MII_88E1318S_PHY_CSIER_WOL_EIE));
+	} else {
+		/* Disable the PHY interrupts, but keep WOL_EIE set so an
+		 * armed magic packet still asserts INTn while the
+		 * interface is down or the machine is suspended.
+		 */
+		err = phy_write(phydev, MII_88E1318S_PHY_CSIER,
+				val & MII_88E1318S_PHY_CSIER_WOL_EIE);
+		if (err < 0)
+			return err;
+
+		err = marvell_ack_interrupt(phydev);
+	}
+
+	return err;
+}
+
+static irqreturn_t m88e1318_handle_interrupt(struct phy_device *phydev)
+{
+	int irq_status;
+
+	irq_status = phy_read(phydev, MII_M1011_IEVENT);
+	if (irq_status < 0) {
+		phy_error(phydev);
+		return IRQ_NONE;
+	}
+
+	/* Claim events from the IMASK_INIT set as well as the WoL event
+	 * mirrored from WOL_EIE in the enable register.
+	 */
+	if (!(irq_status & (MII_M1011_IMASK_INIT |
+			    MII_88E1318S_PHY_CSIER_WOL_EIE)))
 		return IRQ_NONE;
 
 	phy_trigger_machine(phydev);
@@ -1969,6 +2033,7 @@ static void m88e1318_get_wol(struct phy_device *phydev,
 static int m88e1318_set_wol(struct phy_device *phydev,
 			    struct ethtool_wolinfo *wol)
 {
+	struct marvell_priv *priv = phydev->priv;
 	int err = 0, oldpage;
 
 	oldpage = phy_save_page(phydev);
@@ -1999,6 +2064,22 @@ static int m88e1318_set_wol(struct phy_device *phydev,
 		err = marvell_write_page(phydev, MII_MARVELL_LED_PAGE);
 		if (err < 0)
 			goto error;
+
+		/* Remember the LED[2]/INTn mux before forcing the pin to
+		 * INTn, so it can be restored when WoL is disabled again.
+		 * Only save it once, or a re-enable would overwrite the
+		 * value read before WoL was first armed.
+		 */
+		if (!priv->wol_led_armed) {
+			err = __phy_read(phydev, MII_88E1318S_PHY_LED_TCR);
+			if (err < 0)
+				goto error;
+
+			priv->wol_led_tcr = err &
+				(MII_88E1318S_PHY_LED_TCR_INTn_ENABLE |
+				 MII_88E1318S_PHY_LED_TCR_INT_ACTIVE_LOW);
+			priv->wol_led_armed = true;
+		}
 
 		/* Setup LED[2] as interrupt pin (active low) */
 		err = __phy_modify(phydev, MII_88E1318S_PHY_LED_TCR,
@@ -2072,6 +2153,41 @@ static int m88e1318_set_wol(struct phy_device *phydev,
 				   MII_88E1318S_PHY_WOL_CTRL_CLEAR_WOL_STATUS);
 		if (err < 0)
 			goto error;
+	}
+
+	if (!(wol->wolopts & (WAKE_MAGIC | WAKE_PHY))) {
+		/* Fully disabled: undo the WoL interrupt setup done above,
+		 * so a later re-enable starts from a clean state. The
+		 * LED[2]/INTn pin mux is only touched when it was forced
+		 * to INTn here, and is restored to the value read at
+		 * arming time; PHYs serving the MAC interrupt, straps, or
+		 * marvell,reg-init values are left alone.
+		 */
+		err = marvell_write_page(phydev, MII_MARVELL_COPPER_PAGE);
+		if (err < 0)
+			goto error;
+
+		err = __phy_clear_bits(phydev, MII_88E1318S_PHY_CSIER,
+				       MII_88E1318S_PHY_CSIER_WOL_EIE);
+		if (err < 0)
+			goto error;
+
+		if (!priv->wol_led_armed)
+			goto error;
+
+		err = marvell_write_page(phydev, MII_MARVELL_LED_PAGE);
+		if (err < 0)
+			goto error;
+
+		err = __phy_modify(phydev, MII_88E1318S_PHY_LED_TCR,
+				   MII_88E1318S_PHY_LED_TCR_FORCE_INT |
+				   MII_88E1318S_PHY_LED_TCR_INTn_ENABLE |
+				   MII_88E1318S_PHY_LED_TCR_INT_ACTIVE_LOW,
+				   priv->wol_led_tcr);
+		if (err < 0)
+			goto error;
+
+		priv->wol_led_armed = false;
 	}
 
 error:
@@ -3817,8 +3933,8 @@ static struct phy_driver marvell_drivers[] = {
 		.config_init = m88e1318_config_init,
 		.config_aneg = m88e1318_config_aneg,
 		.read_status = marvell_read_status,
-		.config_intr = marvell_config_intr,
-		.handle_interrupt = marvell_handle_interrupt,
+		.config_intr = m88e1318_config_intr,
+		.handle_interrupt = m88e1318_handle_interrupt,
 		.get_wol = m88e1318_get_wol,
 		.set_wol = m88e1318_set_wol,
 		.resume = genphy_resume,
@@ -3925,8 +4041,8 @@ static struct phy_driver marvell_drivers[] = {
 		.config_init = m88e1510_config_init,
 		.config_aneg = m88e1510_config_aneg,
 		.read_status = marvell_read_status,
-		.config_intr = marvell_config_intr,
-		.handle_interrupt = marvell_handle_interrupt,
+		.config_intr = m88e1318_config_intr,
+		.handle_interrupt = m88e1318_handle_interrupt,
 		.get_wol = m88e1318_get_wol,
 		.set_wol = m88e1318_set_wol,
 		.resume = m88e1510_resume,

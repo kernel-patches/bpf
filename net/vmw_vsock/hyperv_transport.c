@@ -322,6 +322,15 @@ static void hvs_open_connection(struct vmbus_channel *chan)
 	    (!conn_from_host && sk->sk_state != TCP_SYN_SENT))
 		goto out;
 
+	/* __vsock_release() may have already set sk_shutdown = SHUTDOWN_MASK
+	 * (and, for a listener, flushed the accept queue) while leaving the
+	 * socket in TCP_LISTEN/TCP_SYN_SENT.  Proceeding would enqueue a child
+	 * onto a released listener, or complete a connection on a released
+	 * socket, leaking it and its VMBUS channel.
+	 */
+	if (sk->sk_shutdown == SHUTDOWN_MASK)
+		goto out;
+
 	if (conn_from_host) {
 		if (sk_acceptq_is_full(sk))
 			goto out;

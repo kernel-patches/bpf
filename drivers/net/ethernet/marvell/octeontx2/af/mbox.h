@@ -1777,10 +1777,12 @@ struct ptp_get_cap_rsp {
 	u64 cap;
 };
 
+#define RVU_MAX_REP	64
+
 struct get_rep_cnt_rsp {
 	struct mbox_msghdr hdr;
 	u16 rep_cnt;
-	u16 rep_pf_map[64];
+	u16 rep_pf_map[RVU_MAX_REP];
 	u64 rsvd;
 };
 

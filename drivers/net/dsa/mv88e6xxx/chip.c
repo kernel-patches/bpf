@@ -2438,6 +2438,7 @@ static int mv88e6xxx_get_rxnfc(struct dsa_switch *ds, int port,
 	struct ethtool_rx_flow_spec *fs = &rxnfc->fs;
 	struct mv88e6xxx_chip *chip = ds->priv;
 	struct mv88e6xxx_policy *policy;
+	u32 cnt = 0;
 	int err;
 	int id;
 
@@ -2456,18 +2457,25 @@ static int mv88e6xxx_get_rxnfc(struct dsa_switch *ds, int port,
 	case ETHTOOL_GRXCLSRULE:
 		err = -ENOENT;
 		policy = idr_find(&chip->policies, fs->location);
-		if (policy) {
+		if (policy && policy->port == port) {
 			memcpy(fs, &policy->fs, sizeof(*fs));
 			err = 0;
 		}
 		break;
 	case ETHTOOL_GRXCLSRLALL:
 		rxnfc->data = 0;
-		rxnfc->rule_cnt = 0;
-		idr_for_each_entry(&chip->policies, policy, id)
-			if (policy->port == port)
-				rule_locs[rxnfc->rule_cnt++] = id;
 		err = 0;
+		idr_for_each_entry(&chip->policies, policy, id) {
+			if (policy->port != port)
+				continue;
+			if (cnt == rxnfc->rule_cnt) {
+				err = -EMSGSIZE;
+				break;
+			}
+			rule_locs[cnt++] = id;
+		}
+		if (!err)
+			rxnfc->rule_cnt = cnt;
 		break;
 	default:
 		err = -EOPNOTSUPP;
@@ -2495,8 +2503,9 @@ static int mv88e6xxx_set_rxnfc(struct dsa_switch *ds, int port,
 		break;
 	case ETHTOOL_SRXCLSRLDEL:
 		err = -ENOENT;
-		policy = idr_remove(&chip->policies, fs->location);
-		if (policy) {
+		policy = idr_find(&chip->policies, fs->location);
+		if (policy && policy->port == port) {
+			idr_remove(&chip->policies, fs->location);
 			policy->action = MV88E6XXX_POLICY_ACTION_NORMAL;
 			err = mv88e6xxx_policy_apply(chip, port, policy);
 			devm_kfree(chip->dev, policy);
@@ -7513,7 +7522,7 @@ static const struct of_device_id mv88e6xxx_of_match[] = {
 		.compatible = "marvell,mv88e6250",
 		.data = &mv88e6xxx_table[MV88E6250],
 	},
-	{ /* sentinel */ },
+	{ /* sentinel */ }
 };
 
 MODULE_DEVICE_TABLE(of, mv88e6xxx_of_match);

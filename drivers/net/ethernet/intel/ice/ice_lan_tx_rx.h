@@ -312,6 +312,8 @@ enum ice_flex_mdid_pkt_flags {
 enum ice_flex_rx_mdid {
 	ICE_RX_MDID_FLOW_ID_LOWER	= 5,
 	ICE_RX_MDID_FLOW_ID_HIGH,
+	ICE_MDID_RX_PKT_DROP		= 8,
+	ICE_MDID_RX_DST_Q		= 12,
 	ICE_RX_MDID_SRC_VSI		= 19,
 	ICE_RX_MDID_HASH_LOW		= 56,
 	ICE_RX_MDID_HASH_HIGH,
@@ -320,6 +322,7 @@ enum ice_flex_rx_mdid {
 /* Rx/Tx Flag64 packet flag bits */
 enum ice_flg64_bits {
 	ICE_FLG_PKT_DSI		= 0,
+	ICE_FLG_PKT_DIR		= 4,
 	ICE_FLG_EVLAN_x8100	= 14,
 	ICE_FLG_EVLAN_x9100,
 	ICE_FLG_VLAN_x8100,

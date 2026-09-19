@@ -994,6 +994,19 @@ virtio_transport_seqpacket_enqueue(struct vsock_sock *vsk,
 }
 EXPORT_SYMBOL_GPL(virtio_transport_seqpacket_enqueue);
 
+u32 virtio_transport_seqpacket_max_size(struct vsock_sock *vsk)
+{
+	struct virtio_vsock_sock *vvs = vsk->trans;
+	u32 max_size;
+
+	spin_lock_bh(&vvs->tx_lock);
+	max_size = virtio_transport_tx_buf_size(vvs);
+	spin_unlock_bh(&vvs->tx_lock);
+
+	return max_size;
+}
+EXPORT_SYMBOL_GPL(virtio_transport_seqpacket_max_size);
+
 int
 virtio_transport_dgram_dequeue(struct vsock_sock *vsk,
 			       struct msghdr *msg,

@@ -1556,8 +1556,9 @@ void i40e_ptp_stop(struct i40e_pf *pf)
 	if (pf->ptp_clock) {
 		ptp_clock_unregister(pf->ptp_clock);
 		pf->ptp_clock = NULL;
-		dev_info(&pf->pdev->dev, "%s: removed PHC on %s\n", __func__,
-			 main_vsi->netdev->name);
+		if (main_vsi)
+			dev_info(&pf->pdev->dev, "%s: removed PHC on %s\n", __func__,
+				 main_vsi->netdev->name);
 	}
 
 	if (i40e_is_ptp_pin_dev(&pf->hw)) {

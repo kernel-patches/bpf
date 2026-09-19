@@ -486,8 +486,14 @@ mlxsw_sp_flower_parse_ports_range(struct mlxsw_sp *mlxsw_sp,
 
 		err = mlxsw_sp_port_range_reg_get(mlxsw_sp, &range,
 						  f->common.extack, &prr_index);
-		if (err)
+		if (err) {
+			if (rulei->src_port_range_reg_valid) {
+				mlxsw_sp_port_range_reg_put(mlxsw_sp,
+							    rulei->src_port_range_reg_index);
+				rulei->src_port_range_reg_valid = false;
+			}
 			return err;
+		}
 
 		rulei->dst_port_range_reg_index = prr_index;
 		rulei->dst_port_range_reg_valid = true;

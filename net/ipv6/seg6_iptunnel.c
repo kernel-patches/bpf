@@ -153,7 +153,8 @@ static int __seg6_do_srh_encap(struct sk_buff *skb, struct ipv6_sr_hdr *osrh,
 	hdrlen = (osrh->hdrlen + 1) << 3;
 	tot_len = hdrlen + sizeof(*hdr);
 
-	err = skb_cow_head(skb, tot_len + dst_dev_overhead(cache_dst, skb));
+	err = skb_cow_head(skb, tot_len + max(skb->mac_len,
+					      dst_dev_overhead(cache_dst, skb)));
 	if (unlikely(err))
 		return err;
 
@@ -255,7 +256,8 @@ static int seg6_do_srh_encap_red(struct sk_buff *skb,
 
 	tot_len = red_hdrlen + sizeof(struct ipv6hdr);
 
-	err = skb_cow_head(skb, tot_len + dst_dev_overhead(cache_dst, skb));
+	err = skb_cow_head(skb, tot_len + max(skb->mac_len,
+					      dst_dev_overhead(cache_dst, skb)));
 	if (unlikely(err))
 		return err;
 
@@ -351,7 +353,8 @@ static int __seg6_do_srh_inline(struct sk_buff *skb, struct ipv6_sr_hdr *osrh,
 
 	hdrlen = (osrh->hdrlen + 1) << 3;
 
-	err = skb_cow_head(skb, hdrlen + dst_dev_overhead(cache_dst, skb));
+	err = skb_cow_head(skb, hdrlen + max(skb->mac_len,
+					     dst_dev_overhead(cache_dst, skb)));
 	if (unlikely(err))
 		return err;
 

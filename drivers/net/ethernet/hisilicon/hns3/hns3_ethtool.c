@@ -62,6 +62,7 @@ static const struct hns3_stats hns3_rxq_stats[] = {
 	HNS3_TQP_STAT("non_reuse_pg", non_reuse_pg),
 	HNS3_TQP_STAT("frag_alloc_err", frag_alloc_err),
 	HNS3_TQP_STAT("frag_alloc", frag_alloc),
+	HNS3_TQP_STAT("rx_oom_cnt", rx_oom_cnt),
 };
 
 #define HNS3_PRIV_FLAGS_LEN ARRAY_SIZE(hns3_priv_flags)
@@ -474,10 +475,7 @@ static void hns3_update_limit_promisc_mode(struct net_device *netdev,
 {
 	struct hnae3_handle *handle = hns3_get_handle(netdev);
 
-	if (enable)
-		set_bit(HNAE3_PFLAG_LIMIT_PROMISC, &handle->priv_flags);
-	else
-		clear_bit(HNAE3_PFLAG_LIMIT_PROMISC, &handle->priv_flags);
+	assign_bit(HNAE3_PFLAG_LIMIT_PROMISC, &handle->priv_flags, enable);
 
 	hns3_request_update_promisc_mode(handle);
 }
@@ -1210,10 +1208,7 @@ static int hns3_set_tx_push(struct net_device *netdev, u32 tx_push)
 	netdev_dbg(netdev, "Changing tx push from %s to %s\n",
 		   str_on_off(old_state), str_on_off(tx_push));
 
-	if (tx_push)
-		set_bit(HNS3_NIC_STATE_TX_PUSH_ENABLE, &priv->state);
-	else
-		clear_bit(HNS3_NIC_STATE_TX_PUSH_ENABLE, &priv->state);
+	assign_bit(HNS3_NIC_STATE_TX_PUSH_ENABLE, &priv->state, tx_push);
 
 	return 0;
 }
@@ -1257,6 +1252,7 @@ static int hns3_set_ringparam(struct net_device *ndev,
 	if (if_running)
 		ndev->netdev_ops->ndo_stop(ndev);
 
+	guard(mutex)(&h->dbg_mutex);
 	hns3_change_all_ring_bd_num(priv, new_ringparam.tx_desc_num,
 				    new_ringparam.rx_desc_num);
 	hns3_change_rx_buf_len(ndev, new_ringparam.rx_buf_len);

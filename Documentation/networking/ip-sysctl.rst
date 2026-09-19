@@ -248,7 +248,7 @@ neigh/default/unres_qlen - INTEGER
 
 neigh/default/interval_probe_time_ms - INTEGER
 	The probe interval for neighbor entries with NTF_MANAGED flag,
-	the min value is 1.
+	the min value is 1, and the max value is 86400000 (1 day).
 
 	Default: 5000
 
@@ -527,6 +527,43 @@ tcp_ecn_fallback - BOOLEAN
 	- 1 (enabled)
 
 	Default: 1 (enabled)
+
+tcp_ecn (socket option) - TCP_ECN
+	Per-socket control of ECN mode, allowing per-connection override of the
+	tcp_ecn sysctl setting. This enables L4S (Low Latency, Low Loss, Scalable
+	Throughput) configuration on a per-socket basis.
+
+	Setting this socket option to any value except 255 will override the
+	system-wide tcp_ecn sysctl for that particular socket. A value of 255
+	(TCP_ECN_MODE_UNSPEC) means use the system default sysctl value.
+
+	Possible values: 0-5 (see tcp_ecn sysctl description above), or 255 to
+	use the system default (sysctl_tcp_ecn).
+
+	Example::
+
+		int val = 3;  /* AccECN mode */
+		setsockopt(fd, SOL_TCP, TCP_ECN, &val, sizeof(val));
+
+	Default: 255 (unspecified - uses tcp_ecn sysctl value)
+
+tcp_ecn_option (socket option) - TCP_ECN_OPTION
+	Per-socket control of Accurate ECN (AccECN) option sending behavior,
+	allowing per-connection override of the tcp_ecn_option sysctl setting.
+
+	Setting this socket option to any value except 255 will override the
+	system-wide tcp_ecn_option sysctl for that particular socket. A value of
+	255 (TCP_ACCECN_OPTION_UNSPEC) means use the system default sysctl value.
+
+	Possible values: 0-3 (see tcp_ecn_option sysctl description above), or 255
+	to use the system default (sysctl_tcp_ecn_option).
+
+	Example::
+
+		int val = 2;  /* Send AccECN option on every packet */
+		setsockopt(fd, SOL_TCP, TCP_ECN_OPTION, &val, sizeof(val));
+
+	Default: 255 (unspecified - uses tcp_ecn_option sysctl value)
 
 tcp_fack - BOOLEAN
 	This is a legacy option, it has no effect anymore.
@@ -873,6 +910,8 @@ tcp_rmem - vector of 3 INTEGERs: min, default, max
 	automatic tuning of that socket's receive buffer size, in which
 	case this value is ignored.
 	Default: between 131072 and 32MB, depending on RAM size.
+
+	Each of the three values cannot be set below 4096.
 
 tcp_sack - BOOLEAN
 	Enable select acknowledgments (SACKS).
@@ -3223,18 +3262,19 @@ drop_unsolicited_na - BOOLEAN
 	Default: 0 (disabled).
 
 accept_untracked_na - INTEGER
-	Define behavior for accepting neighbor advertisements from devices that
-	are absent in the neighbor cache:
+	Define behavior for accepting neighbor advertisements for IPv6 addresses
+	that are absent from the neighbor cache or whose entries are in FAILED
+	state:
 
-	- 0 - (default) Do not accept unsolicited and untracked neighbor
-	  advertisements.
+	- 0 - (default) Do not create new neighbor cache entries or update
+	  FAILED entries from neighbor advertisements.
 
-	- 1 - Add a new neighbor cache entry in STALE state for routers on
-	  receiving a neighbor advertisement (either solicited or unsolicited)
-	  with target link-layer address option specified if no neighbor entry
-	  is already present for the advertised IPv6 address. Without this knob,
-	  NAs received for untracked addresses (absent in neighbor cache) are
-	  silently ignored.
+	- 1 - For routers, add a new neighbor cache entry or update an existing
+	  FAILED entry to STALE upon receiving a neighbor advertisement (either
+	  solicited or unsolicited) with the target link-layer address option
+	  specified. Without this knob, NAs received for untracked addresses
+	  (absent from the neighbor cache or in FAILED state) are silently
+	  ignored.
 
 	  This is as per router-side behavior documented in RFC9131.
 
@@ -3249,9 +3289,10 @@ accept_untracked_na - INTEGER
 	  used in conjunction with the ndisc_notify setting on the host to
 	  satisfy this prerequisite.
 
-	- 2 - Extend option (1) to add a new neighbor cache entry only if the
-	  source IP address is in the same subnet as an address configured on
-	  the interface that received the neighbor advertisement.
+	- 2 - Extend option (1) to add a new neighbor cache entry or update a
+	  FAILED entry only if the source IP address is in the same subnet as
+	  an address configured on the interface that received the neighbor
+	  advertisement.
 
 enhanced_dad - BOOLEAN
 	Include a nonce option in the IPv6 neighbor solicitation messages used for

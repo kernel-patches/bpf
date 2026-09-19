@@ -123,15 +123,18 @@ void rds_ib_add_conn(struct rds_ib_device *rds_ibdev, struct rds_connection *con
 {
 	struct rds_ib_connection *ic = conn->c_transport_data;
 
-	/* conn was previously on the nodev_conns_list */
+	/* conn was previously on the nodev_conns_list, unless a teardown
+	 * sweep has claimed it ahead of destroying it: then it is on its
+	 * way out, and its node belongs to the sweep.
+	 */
 	spin_lock_irq(&ib_nodev_conns_lock);
-	BUG_ON(list_empty(&ib_nodev_conns));
-	BUG_ON(list_empty(&ic->ib_node));
-	list_del(&ic->ib_node);
+	if (!ic->i_ib_node_detached) {
+		list_del(&ic->ib_node);
 
-	spin_lock(&rds_ibdev->spinlock);
-	list_add_tail(&ic->ib_node, &rds_ibdev->conn_list);
-	spin_unlock(&rds_ibdev->spinlock);
+		spin_lock(&rds_ibdev->spinlock);
+		list_add_tail(&ic->ib_node, &rds_ibdev->conn_list);
+		spin_unlock(&rds_ibdev->spinlock);
+	}
 	spin_unlock_irq(&ib_nodev_conns_lock);
 
 	ic->rds_ibdev = rds_ibdev;
@@ -142,15 +145,22 @@ void rds_ib_remove_conn(struct rds_ib_device *rds_ibdev, struct rds_connection *
 {
 	struct rds_ib_connection *ic = conn->c_transport_data;
 
-	/* place conn on nodev_conns_list */
+	bool detached;
+
+	/* place conn on nodev_conns_list - unless a teardown sweep has
+	 * claimed it ahead of destroying it, in which case its node
+	 * belongs to the sweep
+	 */
 	spin_lock(&ib_nodev_conns_lock);
 
 	spin_lock_irq(&rds_ibdev->spinlock);
-	BUG_ON(list_empty(&ic->ib_node));
-	list_del(&ic->ib_node);
+	detached = ic->i_ib_node_detached;
+	if (!detached)
+		list_del(&ic->ib_node);
 	spin_unlock_irq(&rds_ibdev->spinlock);
 
-	list_add_tail(&ic->ib_node, &ib_nodev_conns);
+	if (!detached)
+		list_add_tail(&ic->ib_node, &ib_nodev_conns);
 
 	spin_unlock(&ib_nodev_conns_lock);
 
@@ -163,13 +173,40 @@ void rds_ib_destroy_nodev_conns(void)
 	struct rds_ib_connection *ic, *_ic;
 	LIST_HEAD(tmp_list);
 
-	/* avoid calling conn_destroy with irqs off */
+	struct rds_connection *conn;
+
+	/* Gather the connections and take a reference on each, so that
+	 * none is freed under the walk below (a connection destroyed
+	 * earlier, for a protocol version mismatch, can be on this list
+	 * with only a socket's reference still pending).  One whose free
+	 * is already running gets no reference: its free unlinks the
+	 * node itself, under this lock, once we drop it.  Marking the
+	 * node detached claims it for this sweep: rds_ib_add_conn(),
+	 * rds_ib_remove_conn() and rds_ib_conn_free() leave a claimed
+	 * node alone, so the walk over tmp_list below needs no lock.
+	 * Avoid calling conn_destroy with irqs off.
+	 */
 	spin_lock_irq(&ib_nodev_conns_lock);
-	list_splice(&ib_nodev_conns, &tmp_list);
+	list_for_each_entry_safe(ic, _ic, &ib_nodev_conns, ib_node) {
+		if (rds_conn_get_unless_zero(ic->conn)) {
+			ic->i_ib_node_detached = true;
+			list_move_tail(&ic->ib_node, &tmp_list);
+		}
+	}
 	spin_unlock_irq(&ib_nodev_conns_lock);
 
-	list_for_each_entry_safe(ic, _ic, &tmp_list, ib_node)
-		rds_conn_destroy(ic->conn);
+	/* rds_conn_destroy() can return before the connection is freed,
+	 * and it is the free - rds_ib_conn_free() - that would unlink
+	 * ib_node.  tmp_list lives on this stack frame, so take each node
+	 * off it before its destroy; the free then leaves it alone.
+	 */
+	list_for_each_entry_safe(ic, _ic, &tmp_list, ib_node) {
+		conn = ic->conn;
+		list_del_init(&ic->ib_node);
+
+		rds_conn_destroy(conn);
+		rds_conn_put(conn);
+	}
 }
 
 void rds_ib_get_mr_info(struct rds_ib_device *rds_ibdev, struct rds_info_rdma_connection *iinfo)

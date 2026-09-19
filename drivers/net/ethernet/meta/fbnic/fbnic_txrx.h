@@ -4,11 +4,15 @@
 #ifndef _FBNIC_TXRX_H_
 #define _FBNIC_TXRX_H_
 
+#include <linux/bitfield.h>
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
+#include <linux/time64.h>
 #include <linux/types.h>
 #include <linux/u64_stats_sync.h>
 #include <net/xdp.h>
+
+#include "fbnic_csr.h"
 
 struct fbnic_net;
 
@@ -48,6 +52,12 @@ struct fbnic_net;
 #define FBNIC_TX_USECS_DEFAULT		35
 #define FBNIC_RX_USECS_DEFAULT		30
 #define FBNIC_RX_FRAMES_DEFAULT		0
+
+#define FBNIC_RX_CQE_NSECS_MIN		1000
+#define FBNIC_RX_CQE_NSECS_DEFAULT	2000
+#define FBNIC_RX_CQE_NSECS_MAX \
+	((u32)(((u64)FIELD_MAX(FBNIC_QM_RCQ_CTL0_COAL_WAIT) * NSEC_PER_SEC) / \
+	       FBNIC_CLOCK_FREQ))
 
 #define FBNIC_RX_TROOM \
 	SKB_DATA_ALIGN(sizeof(struct skb_shared_info))
@@ -128,9 +138,14 @@ struct fbnic_ring {
 		/* Rx BDQs only */
 		struct page_pool *page_pool;
 
-		/* Deferred_head is used to cache the head for TWQ1 if
+		/* TWQ0 only, index of the meta descriptor of the last packet
+		 * placed in the ring without ringing the doorbell, -1 if the
+		 * doorbell is in sync with the tail.
+		 */
+		s32 deferred_meta;
+
+		/* TCQ only, used to cache the head for TWQ1 if
 		 * an attempt is made to clean TWQ1 with zero napi_budget.
-		 * We do not use it for any other ring.
 		 */
 		s32 deferred_head;
 	};

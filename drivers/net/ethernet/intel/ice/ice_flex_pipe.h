@@ -8,6 +8,8 @@
 
 #define ICE_FDIR_REG_SET_SIZE	4
 
+int ice_set_key(u8 *key, u16 size, u8 *val, u8 *upd, u8 *dc, u8 *nm, u16 off,
+		u16 len);
 int
 ice_acquire_change_lock(struct ice_hw *hw, enum ice_aq_res_access_type access);
 void ice_release_change_lock(struct ice_hw *hw);

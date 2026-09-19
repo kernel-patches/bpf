@@ -262,6 +262,7 @@ static void mlx5e_ipsec_init_macs(struct mlx5e_ipsec_sa_entry *sa_entry,
 	struct net_device *netdev = sa_entry->dev;
 	struct xfrm_state *x = sa_entry->x;
 	struct dst_entry *rt_dst_entry;
+	struct neigh_table *tbl;
 	struct flowi4 fl4 = {};
 	struct flowi6 fl6 = {};
 	struct neighbour *n;
@@ -364,9 +365,10 @@ static void mlx5e_ipsec_init_macs(struct mlx5e_ipsec_sa_entry *sa_entry,
 	return;
 
 neigh:
-	n = neigh_lookup(&arp_tbl, pkey, netdev);
+	tbl = arp_table(dev_net(netdev));
+	n = neigh_lookup(tbl, pkey, netdev);
 	if (!n) {
-		n = neigh_create(&arp_tbl, pkey, netdev);
+		n = neigh_create(tbl, pkey, netdev);
 		if (IS_ERR(n))
 			return;
 		neigh_event_send(n, NULL);
@@ -771,6 +773,7 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 				struct xfrm_state *x,
 				struct netlink_ext_ack *extack)
 {
+	bool is_acq = x->xso.flags & XFRM_DEV_OFFLOAD_FLAG_ACQ;
 	struct mlx5e_ipsec_sa_entry *sa_entry = NULL;
 	bool allow_tunnel_mode = false;
 	struct mlx5e_ipsec *ipsec;
@@ -779,20 +782,30 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 	int err;
 
 	priv = netdev_priv(dev);
-	if (!priv->ipsec)
-		return -EOPNOTSUPP;
+	if (!is_acq) {
+		err = mlx5_eswitch_block_mode(priv->mdev, true);
+		if (err)
+			return err;
+	}
 
 	ipsec = priv->ipsec;
-	gfp = (x->xso.flags & XFRM_DEV_OFFLOAD_FLAG_ACQ) ? GFP_ATOMIC : GFP_KERNEL;
+	if (!ipsec) {
+		err = -EOPNOTSUPP;
+		goto unblock_mode;
+	}
+
+	gfp = is_acq ? GFP_ATOMIC : GFP_KERNEL;
 	sa_entry = kzalloc_obj(*sa_entry, gfp);
-	if (!sa_entry)
-		return -ENOMEM;
+	if (!sa_entry) {
+		err = -ENOMEM;
+		goto unblock_mode;
+	}
 
 	sa_entry->x = x;
 	sa_entry->dev = dev;
 	sa_entry->ipsec = ipsec;
 	/* Check if this SA is originated from acquire flow temporary SA */
-	if (x->xso.flags & XFRM_DEV_OFFLOAD_FLAG_ACQ) {
+	if (is_acq) {
 		x->xso.offload_handle = (unsigned long)sa_entry;
 		return 0;
 	}
@@ -806,10 +819,6 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 		goto err_xfrm;
 	}
 
-	err = mlx5_eswitch_block_mode(priv->mdev);
-	if (err)
-		goto unblock_ipsec;
-
 	if (x->props.mode == XFRM_MODE_TUNNEL &&
 	    x->xso.type == XFRM_DEV_OFFLOAD_PACKET) {
 		allow_tunnel_mode = mlx5e_ipsec_fs_tunnel_allowed(sa_entry);
@@ -817,7 +826,7 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 			NL_SET_ERR_MSG_MOD(extack,
 					   "Packet offload tunnel mode is disabled due to encap settings");
 			err = -EINVAL;
-			goto unblock_mode;
+			goto unblock_ipsec;
 		}
 	}
 
@@ -893,12 +902,13 @@ release_work:
 unblock_encap:
 	if (allow_tunnel_mode)
 		mlx5_eswitch_unblock_encap(priv->mdev);
-unblock_mode:
-	mlx5_eswitch_unblock_mode(priv->mdev);
 unblock_ipsec:
 	mlx5_eswitch_unblock_ipsec(priv->mdev);
 err_xfrm:
 	kfree(sa_entry);
+unblock_mode:
+	if (!is_acq)
+		mlx5_eswitch_unblock_mode(priv->mdev);
 	NL_SET_ERR_MSG_WEAK_MOD(extack, "Device failed to offload this state");
 	return err;
 }
@@ -1266,18 +1276,28 @@ static int mlx5e_xfrm_add_policy(struct xfrm_policy *x,
 	int err;
 
 	priv = netdev_priv(netdev);
+	/* Block esw mode changes until the policy holds its own block. */
+	err = mlx5_eswitch_block_mode(priv->mdev, false);
+	if (err) {
+		NL_SET_ERR_MSG_MOD(extack, "Eswitch busy, can't add policy");
+		return err;
+	}
+
 	if (!priv->ipsec) {
 		NL_SET_ERR_MSG_MOD(extack, "Device doesn't support IPsec packet offload");
-		return -EOPNOTSUPP;
+		err = -EOPNOTSUPP;
+		goto unblock_mode;
 	}
 
 	err = mlx5e_xfrm_validate_policy(priv->mdev, x, extack);
 	if (err)
-		return err;
+		goto unblock_mode;
 
 	pol_entry = kzalloc_obj(*pol_entry);
-	if (!pol_entry)
-		return -ENOMEM;
+	if (!pol_entry) {
+		err = -ENOMEM;
+		goto unblock_mode;
+	}
 
 	pol_entry->x = x;
 	pol_entry->ipsec = priv->ipsec;
@@ -1293,6 +1313,7 @@ static int mlx5e_xfrm_add_policy(struct xfrm_policy *x,
 		goto err_fs;
 
 	x->xdo.offload_handle = (unsigned long)pol_entry;
+	mlx5_eswitch_unblock_mode(priv->mdev);
 	return 0;
 
 err_fs:
@@ -1300,6 +1321,8 @@ err_fs:
 ipsec_busy:
 	kfree(pol_entry);
 	NL_SET_ERR_MSG_MOD(extack, "Device failed to offload this policy");
+unblock_mode:
+	mlx5_eswitch_unblock_mode(priv->mdev);
 	return err;
 }
 

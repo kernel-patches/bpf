@@ -585,6 +585,7 @@ static struct virtio_transport virtio_transport = {
 		.seqpacket_enqueue        = virtio_transport_seqpacket_enqueue,
 		.seqpacket_allow          = virtio_transport_seqpacket_allow,
 		.seqpacket_has_data       = virtio_transport_seqpacket_has_data,
+		.seqpacket_max_size       = virtio_transport_seqpacket_max_size,
 
 		.msgzerocopy_allow        = virtio_transport_msgzerocopy_allow,
 

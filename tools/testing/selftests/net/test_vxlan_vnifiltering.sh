@@ -371,6 +371,40 @@ vxlan_vnifilter_api()
 	# change vxlan vnifilter flag
 	run_cmd "ip -netns $testns link set dev vxlan-ext1 type vxlan external novnifilter"
 	log_test $? 2 "Cannot unset vnifilter flag on a device"
+
+	# a single request may touch at most 4096 vnis in total. bridge(8)
+	# sends one range per message, so these cover the one-entry case; the
+	# total across several entries of one message is not reachable from
+	# iproute2.
+	run_cmd "bridge -netns $testns vni add dev vxlan-ext1 vni 10000-14095"
+	log_test $? 0 "Add vni range of maximum size"
+
+	run_cmd "bridge -netns $testns vni add dev vxlan-ext1 vni 10000-14096"
+	log_test $? 255 "Cannot add vni range larger than maximum"
+
+	# install the one vni past that range as well, so that the oversized
+	# delete below can only fail on the limit and not on a missing vni
+	run_cmd "bridge -netns $testns vni add dev vxlan-ext1 vni 14096"
+	log_test $? 0 "Add the vni past the maximum range"
+
+	run_cmd "bridge -netns $testns vni del dev vxlan-ext1 vni 10000-14096"
+	log_test $? 255 "Cannot delete vni range larger than maximum"
+
+	run_cmd "bridge -netns $testns vni del dev vxlan-ext1 vni 10000-14095"
+	log_test $? 0 "Delete vni range of maximum size"
+
+	run_cmd "bridge -netns $testns vni del dev vxlan-ext1 vni 14096"
+	log_test $? 0 "Delete the vni past the maximum range"
+
+	# the vxlan header carries 24 bits, so a vni above that is rejected
+	run_cmd "bridge -netns $testns vni add dev vxlan-ext1 vni 16777215"
+	log_test $? 0 "Add the highest vni the vxlan header can carry"
+
+	run_cmd "bridge -netns $testns vni del dev vxlan-ext1 vni 16777215"
+	log_test $? 0 "Delete the highest vni the vxlan header can carry"
+
+	run_cmd "bridge -netns $testns vni add dev vxlan-ext1 vni 16777216"
+	log_test $? 255 "Cannot add a vni the vxlan header cannot carry"
 }
 
 # Sanity test vnifilter datapath

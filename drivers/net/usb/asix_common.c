@@ -179,6 +179,13 @@ int asix_rx_fixup_internal(struct usbnet *dev, struct sk_buff *skb,
 				rx->split_head = false;
 				offset += sizeof(u16);
 			} else {
+				if (offset + sizeof(u32) > skb->len) {
+					netdev_err(dev->net, "asix_rx_fixup() Short Data header, offset %d, len %d\n",
+						   offset, skb->len);
+					reset_asix_rx_fixup_info(rx);
+					return 0;
+				}
+
 				rx->header = get_unaligned_le32(skb->data +
 								offset);
 				offset += sizeof(u32);

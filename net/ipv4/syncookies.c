@@ -490,7 +490,7 @@ struct sock *cookie_v4_check(struct sock *sk, struct sk_buff *skb)
 	 */
 	if (!req->syncookie)
 		ireq->rcv_wscale = rcv_wscale;
-	ireq->ecn_ok &= cookie_ecn_ok(net, &rt->dst);
+	ireq->ecn_ok &= cookie_ecn_ok(sk, &rt->dst);
 	treq->accecn_ok = ireq->ecn_ok && cookie_accecn_ok(th);
 
 	ret = tcp_get_cookie_sock(sk, skb, req, &rt->dst);
