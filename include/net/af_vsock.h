@@ -39,10 +39,13 @@ struct vsock_sock {
 	 * modified outsided of socket create or destruct.
 	 */
 	bool trusted;
-	bool cached_peer_allow_dgram;	/* Dgram communication allowed to
-					 * cached peer?
-					 */
-	u32 cached_peer;  /* Context ID of last dgram destination check. */
+	/* Cached dgram access decision for the last peer, packed as
+	 * (cid << 32) | VALID | ALLOW and accessed via READ_ONCE()/
+	 * WRITE_ONCE() so the lockless receive tasklet and the
+	 * lock_sock() send path cannot race to a stale decision.
+	 * See vmci_transport_allow_dgram().
+	 */
+	u64 cached_peer_access;
 	const struct cred *owner;
 	/* Rest are SOCK_STREAM only. */
 	long connect_timeout;

@@ -524,23 +524,38 @@ static bool vmci_transport_is_trusted(struct vsock_sock *vsock, u32 peer_cid)
  * only if it is trusted as described in vmci_transport_is_trusted.
  */
 
+/* Packing for vsk->cached_peer_access. */
+#define VMCI_DGRAM_ACCESS_VALID		BIT_ULL(0)
+#define VMCI_DGRAM_ACCESS_ALLOW		BIT_ULL(1)
+#define VMCI_DGRAM_ACCESS_CID_SHIFT	32
+
 static bool vmci_transport_allow_dgram(struct vsock_sock *vsock, u32 peer_cid)
 {
+	u64 access;
+
 	if (VMADDR_CID_HYPERVISOR == peer_cid)
 		return true;
 
-	if (vsock->cached_peer != peer_cid) {
-		vsock->cached_peer = peer_cid;
-		if (!vmci_transport_is_trusted(vsock, peer_cid) &&
-		    (vmci_context_get_priv_flags(peer_cid) &
-		     VMCI_PRIVILEGE_FLAG_RESTRICTED)) {
-			vsock->cached_peer_allow_dgram = false;
-		} else {
-			vsock->cached_peer_allow_dgram = true;
-		}
-	}
+	/* Cache the trusted/restricted decision for the last peer to avoid the
+	 * O(N) vmci_ctx_get() lookup on every datagram.  Read/update it through
+	 * a single word so a race between the lockless receive tasklet and the
+	 * lock_sock() send path only forces a recompute -- it can never return a
+	 * stale allow for a restricted peer.
+	 */
+	access = READ_ONCE(vsock->cached_peer_access);
+	if ((access & VMCI_DGRAM_ACCESS_VALID) &&
+	    (u32)(access >> VMCI_DGRAM_ACCESS_CID_SHIFT) == peer_cid)
+		return !!(access & VMCI_DGRAM_ACCESS_ALLOW);
 
-	return vsock->cached_peer_allow_dgram;
+	access = VMCI_DGRAM_ACCESS_VALID |
+		 ((u64)peer_cid << VMCI_DGRAM_ACCESS_CID_SHIFT);
+	if (vmci_transport_is_trusted(vsock, peer_cid) ||
+	    !(vmci_context_get_priv_flags(peer_cid) &
+	      VMCI_PRIVILEGE_FLAG_RESTRICTED))
+		access |= VMCI_DGRAM_ACCESS_ALLOW;
+
+	WRITE_ONCE(vsock->cached_peer_access, access);
+	return !!(access & VMCI_DGRAM_ACCESS_ALLOW);
 }
 
 static int
