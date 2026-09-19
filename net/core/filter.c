@@ -231,8 +231,14 @@ static int bpf_skb_load_helper_convert_offset(const struct sk_buff *skb, int off
 	if (likely(offset >= 0))
 		return offset;
 
-	if (offset >= SKF_NET_OFF)
+	if (offset >= SKF_NET_OFF) {
+		if (skb_mac_header_was_set(skb) ?
+		    skb->network_header < skb->mac_header :
+		    (skb_network_offset(skb) < 0 ||
+		     (!skb->protocol && !skb->network_header)))
+			return INT_MIN;
 		return offset - SKF_NET_OFF + skb_network_offset(skb);
+	}
 
 	if (offset >= SKF_LL_OFF && skb_mac_header_was_set(skb))
 		return offset - SKF_LL_OFF + skb_mac_offset(skb);
