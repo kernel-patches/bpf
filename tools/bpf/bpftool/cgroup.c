@@ -56,7 +56,7 @@ static const int cgroup_attach_types[] = {
 };
 
 #define HELP_SPEC_ATTACH_FLAGS						\
-	"ATTACH_FLAGS := { multi | override }"
+	"ATTACH_FLAGS := { multi [ preorder ] | override [ preorder ] | preorder }"
 
 #define HELP_SPEC_ATTACH_TYPES						\
 	"       ATTACH_TYPE := { cgroup_inet_ingress | cgroup_inet_egress |\n" \
@@ -269,6 +269,39 @@ static int show_effective_bpf_progs(int cgroup_fd, enum bpf_attach_type type,
 	return 0;
 }
 
+static const char *format_attach_flags(__u32 attach_flags, char *buf, size_t sz)
+{
+	static const struct {
+		__u32 flag;
+		const char *name;
+	} flags[] = {
+		{ BPF_F_ALLOW_MULTI, "multi" },
+		{ BPF_F_ALLOW_OVERRIDE, "override" },
+		{ BPF_F_PREORDER, "preorder" },
+	};
+	size_t len = 0;
+	size_t i;
+	int n;
+
+	buf[0] = '\0';
+	for (i = 0; i < ARRAY_SIZE(flags); i++) {
+		if (attach_flags & flags[i].flag) {
+			n = snprintf(buf + len, sz - len, "%s%s",
+				     len ? "," : "", flags[i].name);
+			if (n < 0 || (size_t)n >= sz - len)
+				return buf;
+			len += n;
+			attach_flags &= ~flags[i].flag;
+		}
+	}
+
+	if (attach_flags)
+		snprintf(buf + len, sz - len, "%sunknown(%x)",
+			 len ? "," : "", attach_flags);
+
+	return buf;
+}
+
 static int show_attached_bpf_progs(int cgroup_fd, enum bpf_attach_type type,
 				   int level)
 {
@@ -276,7 +309,7 @@ static int show_attached_bpf_progs(int cgroup_fd, enum bpf_attach_type type,
 	__u32 prog_attach_flags[1024] = {0};
 	const char *attach_flags_str;
 	__u32 prog_ids[1024] = {0};
-	char buf[32];
+	char buf[64];
 	__u32 iter;
 	int ret;
 
@@ -296,21 +329,7 @@ static int show_attached_bpf_progs(int cgroup_fd, enum bpf_attach_type type,
 		__u32 attach_flags;
 
 		attach_flags = prog_attach_flags[iter] ?: p.attach_flags;
-
-		switch (attach_flags) {
-		case BPF_F_ALLOW_MULTI:
-			attach_flags_str = "multi";
-			break;
-		case BPF_F_ALLOW_OVERRIDE:
-			attach_flags_str = "override";
-			break;
-		case 0:
-			attach_flags_str = "";
-			break;
-		default:
-			snprintf(buf, sizeof(buf), "unknown(%x)", attach_flags);
-			attach_flags_str = buf;
-		}
+		attach_flags_str = format_attach_flags(attach_flags, buf, sizeof(buf));
 
 		show_bpf_prog(prog_ids[iter], type,
 			      attach_flags_str, level);
@@ -593,6 +612,8 @@ static int do_attach(int argc, char **argv)
 			attach_flags |= BPF_F_ALLOW_MULTI;
 		} else if (is_prefix(argv[i], "override")) {
 			attach_flags |= BPF_F_ALLOW_OVERRIDE;
+		} else if (is_prefix(argv[i], "preorder")) {
+			attach_flags |= BPF_F_PREORDER;
 		} else {
 			p_err("unknown option: %s", argv[i]);
 			goto exit_cgroup;
