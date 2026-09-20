@@ -16,15 +16,15 @@ maintainers:
 properties:
   compatible:
     enum:
-      - amlogic,meson-gx-clk-measure
-      - amlogic,meson8-clk-measure
-      - amlogic,meson8b-clk-measure
+      - amlogic,a1-clk-measure
+      - amlogic,c3-clk-measure
       - amlogic,meson-axg-clk-measure
       - amlogic,meson-g12a-clk-measure
+      - amlogic,meson-gx-clk-measure
       - amlogic,meson-sm1-clk-measure
-      - amlogic,c3-clk-measure
+      - amlogic,meson8-clk-measure
+      - amlogic,meson8b-clk-measure
       - amlogic,s4-clk-measure
-      - amlogic,a1-clk-measure
       - amlogic,t7-clk-measure
 
   reg:
