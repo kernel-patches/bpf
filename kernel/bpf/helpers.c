@@ -31,6 +31,7 @@
 #include <linux/buildid.h>
 
 #include "../../lib/kstrtox.h"
+#include "exception.h"
 
 /* If kernel subsystem is allowing eBPF programs to call this function,
  * inside its own verifier_ops->get_func_proto() callback it should return
@@ -3398,7 +3399,35 @@ struct bpf_throw_ctx {
 	u64 sp;
 	u64 bp;
 	int cnt;
+	const struct bpf_prog *callee;
+	u64 callee_fp;
 };
+
+static void bpf_run_cleanup_pad(struct bpf_throw_ctx *ctx, const struct bpf_prog *prog,
+				u64 ip, u64 fp)
+{
+	const struct bpf_exception_info *exc = prog->aux->exc;
+	const struct bpf_cleanup_range *rec;
+	u64 spill_base;
+
+	if (!exc || !exc->nr_ranges)
+		return;
+	rec = bpf_cleanup_pad_for_ip(prog, ip);
+	if (!rec)
+		return;
+
+	/*
+	 * The callee is always another subprogram of this program -- the walk
+	 * ends at any frame that is not one -- so its prologue spilled these
+	 * registers and its exc is there to say where.
+	 */
+	if (ctx->callee)
+		spill_base = ctx->callee_fp + ctx->callee->aux->exc->spill_off;
+	else
+		spill_base = fp + exc->throw_spill_off;
+
+	arch_bpf_run_cleanup_pad(rec->pad, fp, spill_base);
+}
 
 static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 {
@@ -3416,6 +3445,11 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	if (!prog)
 		return !ctx->cnt;
 	ctx->cnt++;
+
+	bpf_run_cleanup_pad(ctx, prog, ip, bp);
+	ctx->callee = prog;
+	ctx->callee_fp = bp;
+
 	if (bpf_is_subprog(prog))
 		return true;
 	ctx->aux = prog->aux;

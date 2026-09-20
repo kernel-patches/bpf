@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2026 Meta Platforms, Inc. and affiliates. */
+#include <linux/bitmap.h>
 #include <linux/bpf.h>
 #include <linux/btf.h>
 #include <linux/bpf_verifier.h>
@@ -10,6 +11,7 @@
 #include <linux/perf_event.h>
 #include <net/xdp.h>
 #include "disasm.h"
+#include "exception.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
@@ -257,6 +259,14 @@ static void adjust_insn_aux_data(struct bpf_verifier_env *env,
 			data[i].non_stack_access =
 				data[off + cnt - 1].non_stack_access;
 			data[off + cnt - 1].non_stack_access = false;
+			data[i].cleanup_throw_site =
+				data[off + cnt - 1].cleanup_throw_site;
+			data[off + cnt - 1].cleanup_throw_site = false;
+			data[i].cleanup_resume_site =
+				data[off + cnt - 1].cleanup_resume_site;
+			data[off + cnt - 1].cleanup_resume_site = false;
+			data[i].cleanup_pad = data[off + cnt - 1].cleanup_pad;
+			data[off + cnt - 1].cleanup_pad = 0;
 		} else if (bpf_is_mem_insn(insn + i)) {
 			data[i].non_stack_access = true;
 		}
@@ -1114,6 +1124,129 @@ static void bpf_restore_subprog_starts(struct bpf_verifier_env *env, u32 *orig_s
 	env->subprog_info[env->subprog_cnt].start = env->prog->len;
 }
 
+static bool cleanup_kfunc_site(const struct bpf_insn_aux_data *aux, bool resume)
+{
+	return resume ? aux->cleanup_resume_site : aux->cleanup_throw_site;
+}
+
+static int cleanup_kfunc_sites_for_subprog(struct bpf_verifier_env *env, u32 start, u32 end,
+					   bool resume, u32 **at_p, u32 *nr_p)
+{
+	u32 i, cnt = 0, *at;
+
+	for (i = start; i < end; i++)
+		if (cleanup_kfunc_site(&env->insn_aux_data[i], resume))
+			cnt++;
+	if (!cnt)
+		return 0;
+
+	at = kvmalloc_array(cnt, sizeof(*at), GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+	if (!at)
+		return -ENOMEM;
+
+	for (i = start, cnt = 0; i < end; i++) {
+		if (!cleanup_kfunc_site(&env->insn_aux_data[i], resume))
+			continue;
+		at[cnt++] = i - start;
+	}
+
+	*at_p = at;
+	*nr_p = cnt;
+	return 0;
+}
+
+static int cleanup_pad_body_for_subprog(struct bpf_verifier_env *env, struct bpf_prog *sub,
+					u32 start, u32 end)
+{
+	unsigned long *bits;
+	u32 i, cnt = 0;
+
+	for (i = start; i < end; i++)
+		if (env->insn_aux_data[i].in_cleanup_pad)
+			cnt++;
+	if (!cnt)
+		return 0;
+
+	bits = bitmap_zalloc(end - start, GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+	if (!bits)
+		return -ENOMEM;
+
+	for (i = start; i < end; i++)
+		if (env->insn_aux_data[i].in_cleanup_pad)
+			__set_bit(i - start, bits);
+
+	sub->aux->exc->pad_body = bits;
+	sub->aux->exc->nr_pad_body = end - start;
+	return 0;
+}
+
+static int cleanup_info_for_subprog(struct bpf_verifier_env *env, struct bpf_prog *sub,
+				    u32 start, u32 end)
+{
+	struct bpf_cleanup_info *recs;
+	u32 i, cnt = 0;
+	int err;
+
+	if (!env->cleanup_info_cnt)
+		return 0;
+
+	err = bpf_cleanup_alloc_info(sub->aux);
+	if (err)
+		return err;
+
+	err = cleanup_kfunc_sites_for_subprog(env, start, end, false,
+					      &sub->aux->exc->throw_at,
+					      &sub->aux->exc->nr_throw_at);
+	if (err)
+		return err;
+
+	err = cleanup_kfunc_sites_for_subprog(env, start, end, true,
+					      &sub->aux->exc->resume_at,
+					      &sub->aux->exc->nr_resume_at);
+	if (err)
+		return err;
+
+	err = cleanup_pad_body_for_subprog(env, sub, start, end);
+	if (err)
+		return err;
+
+	for (i = start; i < end; i++)
+		if (env->insn_aux_data[i].cleanup_pad)
+			cnt++;
+	if (!cnt)
+		return 0;
+
+	recs = kvmalloc_array(cnt, sizeof(*recs), GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+	if (!recs)
+		return -ENOMEM;
+
+	for (i = start, cnt = 0; i < end; i++) {
+		u32 pad = env->insn_aux_data[i].cleanup_pad;
+
+		if (!pad)
+			continue;
+		pad--;
+		if (verifier_bug_if(pad < start || pad >= end, env,
+				    "insn %u is covered by a landing pad at %u outside its subprog [%u, %u)",
+				    i, pad, start, end)) {
+			kvfree(recs);
+			return -EFAULT;
+		}
+		recs[cnt].begin_off = i - start;
+		recs[cnt].end_off = i - start + 1;
+		recs[cnt].landing_pad_off = pad - start;
+		cnt++;
+	}
+	return bpf_cleanup_attach_info(sub->aux, recs, cnt);
+}
+
+int bpf_cleanup_attach_main_prog(struct bpf_verifier_env *env, struct bpf_prog *prog)
+{
+	if (!env || env->subprog_cnt > 1)
+		return 0;
+	return cleanup_info_for_subprog(env, prog, 0, prog->len);
+}
+
 static int jit_subprogs(struct bpf_verifier_env *env)
 {
 	struct bpf_prog *prog = env->prog, **func, *tmp;
@@ -1251,6 +1384,10 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->token = prog->aux->token;
 		if (!i)
 			func[i]->aux->exception_boundary = env->seen_exception;
+		err = cleanup_info_for_subprog(env, func[i], subprog_start,
+					       subprog_end);
+		if (err)
+			goto out_free;
 		func[i] = bpf_int_jit_compile(env, func[i]);
 		if (!func[i]->jited) {
 			err = -ENOTSUPP;
@@ -1355,6 +1492,8 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	prog->aux->bpf_exception_cb = (void *)func[env->exception_callback_subprog]->bpf_func;
 	prog->aux->exception_boundary = func[0]->aux->exception_boundary;
 	prog->aux->stack_arg_sp_adjust = func[0]->aux->stack_arg_sp_adjust;
+	prog->aux->exc = func[0]->aux->exc;
+	func[0]->aux->exc = NULL;
 	bpf_prog_jit_attempt_done(prog);
 	return 0;
 out_free:
@@ -1934,6 +2073,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 		if (insn->code != (BPF_JMP | BPF_CALL))
 			goto next_insn;
 		if (insn->src_reg == BPF_PSEUDO_CALL)
+			goto next_insn;
+		if (env->insn_aux_data[i + delta].cleanup_resume_site)
 			goto next_insn;
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			ret = bpf_fixup_kfunc_call(env, insn, insn_buf, i + delta, &cnt);
