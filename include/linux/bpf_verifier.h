@@ -683,6 +683,7 @@ struct bpf_insn_aux_data {
 	bool is_iter_next; /* bpf_iter_<type>_next() kfunc call */
 	bool cleanup_throw_site; /* call to bpf_throw() */
 	bool cleanup_resume_site; /* call to bpf_unwind_resume() */
+	bool in_cleanup_pad; /* only runs with an exception in flight */
 	/*
 	 * 1 + the instruction index of the exception cleanup landing pad this
 	 * call site unwinds to, or 0 for none.
