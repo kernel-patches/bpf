@@ -10418,7 +10418,14 @@ bool bpf_program__autoattach(const struct bpf_program *prog)
 	return prog->autoattach;
 }
 
-int bpf_program__set_autoattach(struct bpf_program *prog, bool autoattach)
+COMPAT_VERSION(bpf_program__set_autoattach_deprecated, bpf_program__set_autoattach, LIBBPF_1.0.0)
+void bpf_program__set_autoattach_deprecated(struct bpf_program *prog, bool autoattach)
+{
+	prog->autoattach = autoattach;
+}
+
+DEFAULT_VERSION(bpf_program__set_autoattach_v1_8_0, bpf_program__set_autoattach, LIBBPF_1.8.0)
+int bpf_program__set_autoattach_v1_8_0(struct bpf_program *prog, bool autoattach)
 {
 	if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL)
 		return libbpf_err(-EINVAL);
