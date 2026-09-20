@@ -237,6 +237,7 @@ static const char *CHIP;
 static DEFINE_MUTEX(sb_mutex);		/* Serialize superblock operations */
 
 static DEFINE_SPINLOCK(aio_lock);	/* Protect aio cancellation info */
+static struct workqueue_struct *gadgetfs_wq;
 
 /*----------------------------------------------------------------------*/
 
@@ -514,9 +515,7 @@ static int ep_aio_cancel(struct kiocb *iocb)
 		spin_unlock_irqrestore(&aio_lock, flags);
 		return 0;	/* ep_aio() will call us again if needed */
 	}
-
 	priv->cancel_state = AIO_UNLINKING;
-	spin_unlock_irqrestore(&aio_lock, flags);
 
 	/*
 	 * We are called with the aio core holding iocb's context lock.
@@ -527,7 +526,9 @@ static int ep_aio_cancel(struct kiocb *iocb)
 	 * For this reason, do the dequeue operation in a work routine.
 	 */
 	INIT_WORK(&priv->unlink_work, ep_unlink_worker);
-	schedule_work(&priv->unlink_work);
+	queue_work(gadgetfs_wq, &priv->unlink_work);
+
+	spin_unlock_irqrestore(&aio_lock, flags);
 	return 0;
 }
 
@@ -604,7 +605,7 @@ static void ep_aio_complete(struct usb_ep *ep, struct usb_request *req)
 
 	if (new_req_state == AIO_COMPLETED) {
 		INIT_WORK(&priv->copy_work, ep_user_copy_worker);
-		schedule_work(&priv->copy_work);
+		queue_work(gadgetfs_wq, &priv->copy_work);
 	}
 	if (cancel_state != AIO_UNLINKING) {
 		usb_ep_free_request(ep, req);
@@ -2255,10 +2256,17 @@ static int __init gadgetfs_init (void)
 {
 	int status;
 
+	gadgetfs_wq = alloc_workqueue("gadgetfs", WQ_PERCPU, 0);
+	if (!gadgetfs_wq)
+		return -ENOMEM;
+
 	status = register_filesystem (&gadgetfs_type);
-	if (status == 0)
-		pr_info ("%s: %s, version " DRIVER_VERSION "\n",
-			shortname, driver_desc);
+	if (status) {
+		destroy_workqueue(gadgetfs_wq);
+		return status;
+	}
+
+	pr_info("%s: %s, version " DRIVER_VERSION "\n", shortname, driver_desc);
 	return status;
 }
 module_init (gadgetfs_init);
@@ -2267,6 +2275,7 @@ static void __exit gadgetfs_cleanup (void)
 {
 	pr_debug ("unregister %s\n", shortname);
 	unregister_filesystem (&gadgetfs_type);
+	destroy_workqueue(gadgetfs_wq);
 }
 module_exit (gadgetfs_cleanup);
 
