@@ -900,11 +900,8 @@ impl Process {
 
         let (info_proc, info_node) = {
             let info_init = NodeRefInfo::new(node_ref, handle, self.into());
-            match info.pin_init_with(info_init) {
-                Ok(info) => ListArc::pair_from_pin_unique(info),
-                // error is infallible
-                Err(err) => match err {},
-            }
+            let Ok(info) = info.pin_init_with(info_init);
+            ListArc::pair_from_pin_unique(info)
         };
 
         // Ensure the process is still alive while we insert a new reference.
@@ -1301,14 +1298,8 @@ impl Process {
             return Ok(());
         }
 
-        let death = {
-            let death_init = NodeDeath::new(info.node_ref().node.clone(), self.clone(), cookie);
-            match death.pin_init_with(death_init) {
-                Ok(death) => death,
-                // error is infallible
-                Err(err) => match err {},
-            }
-        };
+        let death_init = NodeDeath::new(info.node_ref().node.clone(), self.clone(), cookie);
+        let Ok(death) = death.pin_init_with(death_init);
 
         // Register the death notification.
         {

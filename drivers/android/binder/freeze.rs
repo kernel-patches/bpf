@@ -75,10 +75,8 @@ impl FreezeMessage {
     }
 
     fn init(ua: UninitFM, cookie: FreezeCookie, pid: i32) -> DLArc<FreezeMessage> {
-        match ua.pin_init_with(DTRWrap::new(FreezeMessage { cookie, pid })) {
-            Ok(msg) => ListArc::from(msg),
-            Err(err) => match err {},
-        }
+        let Ok(msg) = ua.pin_init_with(DTRWrap::new(FreezeMessage { cookie, pid }));
+        ListArc::from(msg)
     }
 }
 
