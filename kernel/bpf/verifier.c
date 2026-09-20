@@ -849,6 +849,31 @@ static int dynptr_ref_cnt(struct bpf_verifier_env *env, int v_parent_id)
 	return ref_cnt;
 }
 
+static int destroy_dynptrs_on_func_exit(struct bpf_verifier_env *env,
+					struct bpf_func_state *callee)
+{
+	int i, err;
+
+	for (i = 0; i < callee->allocated_stack / BPF_REG_SIZE; i++) {
+		struct bpf_stack_state *slot = &callee->stack[i];
+
+		if (slot->slot_type[0] != STACK_DYNPTR ||
+		    !slot->spilled_ptr.dynptr.first_slot)
+			continue;
+
+		/*
+		 * A callee-local dynptr is destroyed when its stack frame goes
+		 * away. Apply the normal stack-slot teardown so references cannot
+		 * be lost and slices derived from that dynptr are invalidated.
+		 */
+		err = destroy_if_dynptr_stack_slot(env, callee, i);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 static int destroy_if_dynptr_stack_slot(struct bpf_verifier_env *env,
 				        struct bpf_func_state *state, int spi)
 {
@@ -11089,6 +11114,9 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 			bpf_diag_mod_end(env);
 		}
 	}
+	err = destroy_dynptrs_on_func_exit(env, callee);
+	if (err)
+		return err;
 
 	/* for callbacks like bpf_loop or bpf_for_each_map_elem go back to callsite,
 	 * there function call logic would reschedule callback visit. If iteration
