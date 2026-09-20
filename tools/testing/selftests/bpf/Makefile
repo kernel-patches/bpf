@@ -539,10 +539,13 @@ ifneq ($(BPF_GCC),)
 # Sys includes come from the *host* gcc, not $(BPF_GCC), as the rule
 # this replaces had it.
 GCC_SYS_INCLUDES := $(call get_sys_includes,gcc,)
+GCC_BPF_CFLAGS := $(filter-out -Wno-microsoft-anon-tag \
+			     -Wno-initializer-overrides,$(BPF_CFLAGS))
 
 $(OUTPUT)/test_progs-bpf_gcc: $(RUNNER_PREREQS) FORCE
 	+$(Q)$(RUNNER_MAKE) RUNNER=test_progs FLAVOR=bpf_gcc TESTS_DIR=prog_tests \
 		BPF_CC='$(BPF_GCC)' BPF_CC_MSG=GCC-BPF				\
+		BPF_CFLAGS='$(GCC_BPF_CFLAGS)'				\
 		BPF_SYS_INCLUDES='$(GCC_SYS_INCLUDES)'				\
 		BPF_CC_FLAGS='-DBPF_NO_PRESERVE_ACCESS_INDEX -Wno-attributes -O2'
 endif
