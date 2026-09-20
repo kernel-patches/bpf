@@ -3,6 +3,7 @@
 
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 #include "bpf_misc.h"
 
 struct val {
@@ -16,6 +17,13 @@ struct {
 	__type(key, int);
 	__type(value, struct val);
 } map_spin_lock SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} perf_event_map SEC(".maps");
 
 SEC("kprobe")
 __description("bpf_ktime_get_coarse_ns is forbidden in BPF_PROG_TYPE_KPROBE")
@@ -163,6 +171,30 @@ l0_%=:	exit;						\
 	  __imm(bpf_spin_lock),
 	  __imm_addr(map_spin_lock)
 	: __clobber_all);
+}
+
+SEC("fentry/skb_tx_error")
+__description("bpf_skb_output is allowed in BPF_TRACE_FENTRY")
+__success
+int BPF_PROG(skb_output_fentry, void *skb)
+{
+	__u64 meta = 0;
+
+	bpf_skb_output(skb, &perf_event_map, BPF_F_CURRENT_CPU,
+		       &meta, sizeof(meta));
+	return 0;
+}
+
+SEC("fexit/skb_tx_error")
+__description("bpf_skb_output is forbidden in BPF_TRACE_FEXIT")
+__failure __msg("program of this type cannot use helper bpf_skb_output")
+int BPF_PROG(skb_output_fexit, void *skb)
+{
+	__u64 meta = 0;
+
+	bpf_skb_output(skb, &perf_event_map, BPF_F_CURRENT_CPU,
+		       &meta, sizeof(meta));
+	return 0;
 }
 
 char _license[] SEC("license") = "GPL";
