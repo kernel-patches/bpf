@@ -23,6 +23,7 @@ dtb-$(CONFIG_SOC_IMX35) += \
 	imx35-eukrea-mbimxsd35-baseboard.dtb \
 	imx35-pdk.dtb
 dtb-$(CONFIG_SOC_IMX50) += \
+	imx50-amazon-yoshi.dtb \
 	imx50-evk.dtb \
 	imx50-kobo-aura.dtb
 dtb-$(CONFIG_SOC_IMX51) += \
