@@ -462,6 +462,7 @@ struct kiocb_priv {
 	unsigned		actual;
 	enum aio_req_state	req_state;
 	enum aio_cancel_state	cancel_state;
+	bool			is_read;
 };
 
 static void ep_unlink_worker(struct work_struct *work)
@@ -578,7 +579,7 @@ static void ep_aio_complete(struct usb_ep *ep, struct usb_request *req)
 	 * don't need to copy anything to userspace, so we can
 	 * complete the aio request immediately.
 	 */
-	if (priv->to_free == NULL || unlikely(req->actual == 0)) {
+	if (!priv->is_read || unlikely(req->actual == 0)) {
 		mmdrop(priv->mm);
 		kfree(req->buf);
 		kfree(priv->to_free);
@@ -745,6 +746,7 @@ ep_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		value = -ENOMEM;
 		if (!priv)
 			goto fail;
+		priv->is_read = true;
 		priv->to_free = dup_iter(&priv->to, to, GFP_KERNEL);
 		if (!iter_is_ubuf(&priv->to) && !priv->to_free) {
 			kfree(priv);
