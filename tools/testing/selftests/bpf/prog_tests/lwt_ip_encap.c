@@ -1,8 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-only
+#include <arpa/inet.h>
+#include <net/if.h>
+#include <linux/icmp.h>
+#include <linux/if_ether.h>
+#include <linux/if_packet.h>
 #include <netinet/in.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
 
 #include "network_helpers.h"
 #include "test_progs.h"
+#include "lwt_ip_encap_stale_cb.skel.h"
+#include "lwt_ip_encap_stale_cb_freplace.skel.h"
 #include "test_lwt_ip_encap.skel.h"
 
 #define BPF_FILE "test_lwt_ip_encap.bpf.o"
@@ -685,4 +694,283 @@ void test_lwt_ip_encap_vxlan_ipv4(void)
 void test_lwt_ip_encap_vxlan_ipv6(void)
 {
 	lwt_ip_encap_vxlan(IPV6_ENCAP);
+}
+
+#define STALE_CB_NETNS "lwt-ip-encap-stale-cb"
+#define STALE_CB_DST "10.9.9.0/24"
+#define STALE_CB_PIN_FMT "/sys/fs/bpf/lwt_ip_encap_stale_cb_%d"
+#define STALE_CB_PKT_LEN 64
+
+static __u16 stale_cb_csum(const void *data, size_t len)
+{
+	const __u16 *word = data;
+	__u32 sum = 0;
+
+	while (len > 1) {
+		sum += *word++;
+		len -= sizeof(*word);
+	}
+	if (len)
+		sum += *(const __u8 *)word;
+	while (sum >> 16)
+		sum = (sum & 0xffff) + (sum >> 16);
+
+	return ~sum;
+}
+
+static int stale_cb_get_mac(const char *ifname, __u8 mac[ETH_ALEN])
+{
+	struct ifreq ifr = {};
+	int fd;
+
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd < 0)
+		return -errno;
+	strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name) - 1);
+	if (ioctl(fd, SIOCGIFHWADDR, &ifr)) {
+		int err = -errno;
+
+		close(fd);
+		return err;
+	}
+	memcpy(mac, ifr.ifr_hwaddr.sa_data, ETH_ALEN);
+	close(fd);
+	return 0;
+}
+
+static int stale_cb_open_packet_socket(int ifindex)
+{
+	struct sockaddr_ll addr = {
+		.sll_family = AF_PACKET,
+		.sll_protocol = htons(ETH_P_ALL),
+		.sll_ifindex = ifindex,
+	};
+	struct timeval timeout = { .tv_sec = 2 };
+	int fd;
+
+	fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+	if (fd < 0)
+		return -errno;
+	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) ||
+	    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout))) {
+		int err = -errno;
+
+		close(fd);
+		return err;
+	}
+
+	return fd;
+}
+
+static int stale_cb_send_packet(int fd, const __u8 src_mac[ETH_ALEN],
+				const __u8 dst_mac[ETH_ALEN])
+{
+	__u8 frame[ETH_HLEN + STALE_CB_PKT_LEN] = {};
+	struct ethhdr *eth = (struct ethhdr *)frame;
+	struct iphdr *iph = (struct iphdr *)(frame + ETH_HLEN);
+	__u8 *opt = (__u8 *)(iph + 1);
+
+	memcpy(eth->h_source, src_mac, ETH_ALEN);
+	memcpy(eth->h_dest, dst_mac, ETH_ALEN);
+	eth->h_proto = htons(ETH_P_IP);
+
+	iph->version = 4;
+	iph->ihl = 7;
+	iph->tos = 8;
+	iph->tot_len = htons(STALE_CB_PKT_LEN);
+	iph->id = htons(0x1234);
+	iph->ttl = 64;
+	iph->protocol = IPPROTO_UDP;
+	iph->saddr = inet_addr("10.0.0.2");
+	iph->daddr = inet_addr("10.9.9.9");
+	opt[0] = IPOPT_RR;
+	opt[1] = 8;
+	opt[2] = 4;
+	iph->check = stale_cb_csum(iph, iph->ihl * 4);
+
+	memset(frame + ETH_HLEN + iph->ihl * 4, 0x41,
+	       STALE_CB_PKT_LEN - iph->ihl * 4);
+	if (send(fd, frame, sizeof(frame), 0) != sizeof(frame))
+		return -errno;
+
+	return 0;
+}
+
+static int stale_cb_icmp_ihl(int fd, __u32 *saddr)
+{
+	__u8 packet[512];
+	ssize_t len;
+
+	while ((len = recv(fd, packet, sizeof(packet), 0)) >= 0) {
+		const struct ethhdr *eth = (const struct ethhdr *)packet;
+		const struct iphdr *iph;
+		const struct icmphdr *icmph;
+		size_t ip_len;
+
+		if (len < ETH_HLEN + sizeof(*iph) ||
+		    eth->h_proto != htons(ETH_P_IP))
+			continue;
+		iph = (const struct iphdr *)(packet + ETH_HLEN);
+		ip_len = iph->ihl * 4;
+		if (iph->ihl < 5 || len < ETH_HLEN + ip_len + sizeof(*icmph) ||
+		    iph->protocol != IPPROTO_ICMP)
+			continue;
+		icmph = (const struct icmphdr *)((const __u8 *)iph + ip_len);
+		if (icmph->type == ICMP_TIME_EXCEEDED) {
+			*saddr = iph->saddr;
+			return iph->ihl;
+		}
+	}
+
+	return -errno;
+}
+
+static void lwt_ip_encap_stale_cb(bool use_freplace, bool use_vrf,
+				  bool pre_encap)
+{
+	LIBBPF_OPTS(bpf_tc_hook, tc_hook,
+		    .attach_point = BPF_TC_INGRESS,
+		   );
+	LIBBPF_OPTS(bpf_tc_opts, tc_opts,
+		    .handle = 1,
+		    .priority = 1,
+		   );
+	struct lwt_ip_encap_stale_cb_freplace *freplace_skel = NULL;
+	struct lwt_ip_encap_stale_cb *skel = NULL;
+	struct bpf_program *target, *replacement;
+	struct bpf_link *freplace_link = NULL;
+	struct netns_obj *netns = NULL;
+	char pin_path[128];
+	__u8 mac0[ETH_ALEN], mac1[ETH_ALEN];
+	__u32 saddr = 0;
+	bool tc_hook_created = false;
+	int ifindex, packet_fd = -1, prog_fd, err, ihl;
+
+	skel = lwt_ip_encap_stale_cb__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load target"))
+		goto out;
+	target = use_freplace ? skel->progs.lwt_in_freplace_target :
+				  skel->progs.lwt_in_direct;
+	prog_fd = bpf_program__fd(target);
+
+	if (use_freplace) {
+		freplace_skel = lwt_ip_encap_stale_cb_freplace__open();
+		if (!ASSERT_OK_PTR(freplace_skel, "open freplace"))
+			goto out;
+		replacement = freplace_skel->progs.replace_add_ip_encap;
+		err = bpf_program__set_attach_target(replacement, prog_fd,
+						     "add_ip_encap");
+		if (!ASSERT_OK(err, "set freplace target"))
+			goto out;
+		err = lwt_ip_encap_stale_cb_freplace__load(freplace_skel);
+		if (!ASSERT_OK(err, "load freplace"))
+			goto out;
+		freplace_link = bpf_program__attach_freplace(replacement, prog_fd,
+							     "add_ip_encap");
+		if (!ASSERT_OK_PTR(freplace_link, "attach freplace"))
+			goto out;
+	}
+
+	snprintf(pin_path, sizeof(pin_path), STALE_CB_PIN_FMT, getpid());
+	unlink(pin_path);
+	err = bpf_program__pin(target, pin_path);
+	if (!ASSERT_OK(err, "pin target"))
+		goto out;
+
+	netns = netns_new(STALE_CB_NETNS, true);
+	if (!ASSERT_OK_PTR(netns, "create netns"))
+		goto out_unpin;
+
+	SYS(out_netns, "ip link add vh0 type veth peer name vh1");
+	if (use_vrf) {
+		SYS(out_netns, "ip link add vrf0 type vrf table 1001");
+		SYS(out_netns, "ip link set vrf0 up");
+		SYS(out_netns, "ip link set vh1 master vrf0");
+		SYS(out_netns, "ip addr add 10.1.0.1/32 dev vrf0");
+		SYS(out_netns, "sysctl -wq net.ipv4.conf.vrf0.rp_filter=0");
+		SYS(out_netns, "sysctl -wq net.ipv4.icmp_errors_use_inbound_ifaddr=1");
+	}
+	SYS(out_netns, "ip link set vh0 up");
+	SYS(out_netns, "ip link set vh1 up");
+	SYS(out_netns, "ip addr add 10.0.0.1/24 dev vh1");
+	SYS(out_netns, "sysctl -wq net.ipv4.ip_forward=1");
+	SYS(out_netns, "sysctl -wq net.ipv4.conf.all.rp_filter=0");
+	SYS(out_netns, "sysctl -wq net.ipv4.conf.vh1.rp_filter=0");
+	SYS(out_netns, "sysctl -wq net.ipv4.conf.all.accept_local=1");
+
+	if (pre_encap) {
+		tc_hook.ifindex = if_nametoindex("vh1");
+		if (!ASSERT_GT(tc_hook.ifindex, 0, "vh1 ifindex"))
+			goto out_netns;
+		err = bpf_tc_hook_create(&tc_hook);
+		if (!ASSERT_OK(err, "create vh1 ingress hook"))
+			goto out_netns;
+		tc_hook_created = true;
+		tc_opts.prog_fd = bpf_program__fd(skel->progs.tc_pre_encap);
+		err = bpf_tc_attach(&tc_hook, &tc_opts);
+		if (!ASSERT_OK(err, "attach pre-encapsulation program"))
+			goto out_netns;
+	}
+
+	if (!ASSERT_OK(stale_cb_get_mac("vh0", mac0), "get vh0 mac") ||
+	    !ASSERT_OK(stale_cb_get_mac("vh1", mac1), "get vh1 mac"))
+		goto out_netns;
+	SYS(out_netns,
+	    "ip neigh replace 10.0.0.2 lladdr %02x:%02x:%02x:%02x:%02x:%02x nud permanent dev vh1",
+	    mac0[0], mac0[1], mac0[2], mac0[3], mac0[4], mac0[5]);
+	SYS(out_netns,
+	    "ip route add %s encap bpf in pinned %s via 10.0.0.2 dev vh1 %s",
+	    STALE_CB_DST, pin_path, use_vrf ? "vrf vrf0" : "");
+
+	ifindex = if_nametoindex("vh0");
+	if (!ASSERT_GT(ifindex, 0, "vh0 ifindex"))
+		goto out_netns;
+	packet_fd = stale_cb_open_packet_socket(ifindex);
+	if (!ASSERT_OK_FD(packet_fd, "open packet socket"))
+		goto out_netns;
+	if (!ASSERT_OK(stale_cb_send_packet(packet_fd, mac0, mac1),
+		       "send crafted packet"))
+		goto out_netns;
+
+	ihl = stale_cb_icmp_ihl(packet_fd, &saddr);
+	if (!ASSERT_EQ(ihl, 5, "ICMP IPv4 header length"))
+		goto out_netns;
+	if (use_vrf && !ASSERT_EQ(saddr, inet_addr("10.0.0.1"),
+				  "ICMP source is ingress slave address"))
+		goto out_netns;
+	if (use_freplace) {
+		ASSERT_TRUE(freplace_skel->bss->freplace_ran, "freplace ran");
+		ASSERT_TRUE(freplace_skel->bss->freplace_cb_zero,
+			    "freplace cb was cleared");
+	} else {
+		ASSERT_TRUE(skel->bss->direct_ran, "direct program ran");
+		ASSERT_TRUE(skel->bss->direct_cb_zero, "direct cb was cleared");
+	}
+
+out_netns:
+	if (packet_fd >= 0)
+		close(packet_fd);
+	if (tc_hook_created)
+		bpf_tc_hook_destroy(&tc_hook);
+	netns_free(netns);
+out_unpin:
+	unlink(pin_path);
+out:
+	bpf_link__destroy(freplace_link);
+	lwt_ip_encap_stale_cb_freplace__destroy(freplace_skel);
+	lwt_ip_encap_stale_cb__destroy(skel);
+}
+
+void test_lwt_ip_encap_stale_cb(void)
+{
+	if (test__start_subtest("direct-cb-access"))
+		lwt_ip_encap_stale_cb(false, false, false);
+	if (test__start_subtest("freplace-cb-access"))
+		lwt_ip_encap_stale_cb(true, false, false);
+	if (test__start_subtest("vrf-direct-cb-access"))
+		lwt_ip_encap_stale_cb(false, true, false);
+	if (test__start_subtest("vrf-freplace-cb-access"))
+		lwt_ip_encap_stale_cb(true, true, false);
+	if (test__start_subtest("already-encapsulated"))
+		lwt_ip_encap_stale_cb(false, false, true);
 }
