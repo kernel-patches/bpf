@@ -23,6 +23,66 @@ static bool insn_is_exc_kfunc(const struct bpf_insn *insn, int kf)
 	       insn->imm == exc_kfunc_list[kf];
 }
 
+static void cleanup_mark_kfunc_sites(struct bpf_verifier_env *env)
+{
+	u32 i;
+
+	for (i = 0; i < env->prog->len; i++) {
+		struct bpf_insn *insn = &env->prog->insnsi[i];
+
+		if (bpf_is_throw_kfunc(insn))
+			env->insn_aux_data[i].cleanup_throw_site = true;
+		else if (insn_is_exc_kfunc(insn, EXC_KF_bpf_unwind_resume))
+			env->insn_aux_data[i].cleanup_resume_site = true;
+	}
+}
+
+static void cleanup_mark_call_sites(struct bpf_verifier_env *env)
+{
+	u32 i, j;
+
+	for (i = 0; i < env->cleanup_info_cnt; i++) {
+		struct bpf_cleanup_info *rec = &env->cleanup_info[i];
+
+		for (j = rec->begin_off; j < rec->end_off; j++) {
+			struct bpf_insn *insn = &env->prog->insnsi[j];
+
+			if (!bpf_pseudo_call(insn) && !bpf_is_throw_kfunc(insn))
+				continue;
+			env->insn_aux_data[j].cleanup_pad = rec->landing_pad_off + 1;
+		}
+	}
+}
+
+int bpf_prepare_cleanup_exceptions(struct bpf_verifier_env *env)
+{
+	if (!env->cleanup_info_cnt)
+		return 0;
+
+	if (bpf_prog_is_offloaded(env->prog->aux)) {
+		verbose(env,
+			"exception cleanup is not supported for offloaded programs\n");
+		return -EINVAL;
+	}
+
+	if (!bpf_jit_supports_cleanup_pads() || !env->prog->jit_requested) {
+		verbose(env,
+			"exception cleanup needs a JIT that can dispatch landing pads\n");
+		return -EOPNOTSUPP;
+	}
+	env->prog->jit_required = 1;
+
+	if (env->exception_callback_subprog) {
+		verbose(env,
+			"exception cleanup table cannot be combined with an exception callback\n");
+		return -EINVAL;
+	}
+
+	cleanup_mark_kfunc_sites(env);
+	cleanup_mark_call_sites(env);
+	return 0;
+}
+
 bool bpf_is_unwind_resume_kfunc(const struct bpf_insn *insn)
 {
 	return insn_is_exc_kfunc(insn, EXC_KF_bpf_unwind_resume);
