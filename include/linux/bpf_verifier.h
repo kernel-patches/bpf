@@ -429,7 +429,8 @@ struct bpf_jmp_history_entry {
 	u32 prev_idx : 20;
 	/* special INSN_F_xxx flags */
 	u32 flags : 4;
-	u32 : 8;
+	u32 unwind_frames : 4;	/* frames the unwind popped to get here */
+	u32 : 4;
 	/*
 	 * additional registers that need precision tracking when this
 	 * jump is backtracked, vector of five 11-bit records
@@ -509,6 +510,8 @@ struct bpf_verifier_state {
 
 	bool speculative;
 	bool in_sleepable;
+	bool unwinding; /* an exception is in flight */
+	u8 unwind_frameno; /* the frame whose landing pad it entered */
 
 	/* first and last insn idx of this verifier state */
 	u32 first_insn_idx;
@@ -991,6 +994,7 @@ struct bpf_verifier_env {
 	} cfg;
 	struct backtrack_state bt;
 	struct bpf_jmp_history_entry *cur_hist_ent;
+	u8 unwind_frames; /* scratch: pops for the insn about to be recorded */
 	/* Per-callsite copy of parent's converged at_stack_in for cross-frame fills. */
 	struct arg_track **callsite_at_stack;
 	u32 pass_cnt; /* number of times do_check() was called */

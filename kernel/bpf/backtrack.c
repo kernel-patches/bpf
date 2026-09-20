@@ -4,6 +4,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/filter.h>
 #include <linux/bitmap.h>
+#include "exception.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
@@ -47,6 +48,7 @@ int bpf_push_jmp_history(struct bpf_verifier_env *env, struct bpf_verifier_state
 	p->flags = insn_flags;
 	p->spi = spi;
 	p->frame = frame;
+	p->unwind_frames = 0;
 	p->linked_regs = linked_regs;
 	cur->jmp_history_cnt = cnt;
 	env->cur_hist_ent = p;
@@ -419,10 +421,12 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 				 * extra instructions from subprog; the next
 				 * instruction after call to global subprog
 				 * should be literally next instruction in
-				 * caller program
+				 * caller program -- or, if the callee threw,
+				 * the landing pad of this call site
 				 */
-				verifier_bug_if(idx + 1 != subseq_idx, env,
-						"extra insn from subprog");
+				verifier_bug_if(idx + 1 != subseq_idx &&
+						bpf_cleanup_pad_of_call(env, idx) != subseq_idx,
+						env, "extra insn from subprog");
 				/* global subprog always sets R0 */
 				bt_clear_reg(bt, BPF_REG_0);
 				/* and if it does not set R2, main pass would catch it */
@@ -888,11 +892,11 @@ int bpf_mark_chain_precision(struct bpf_verifier_env *env,
 		}
 
 		for (i = last_idx;;) {
+			hist = get_jmp_hist_entry(st, history, i);
 			if (skip_first) {
 				err = 0;
 				skip_first = false;
 			} else {
-				hist = get_jmp_hist_entry(st, history, i);
 				err = backtrack_insn(env, i, subseq_idx, hist, bt);
 			}
 			if (err == -ENOTSUPP) {
@@ -909,6 +913,15 @@ int bpf_mark_chain_precision(struct bpf_verifier_env *env,
 				 */
 				return 0;
 			subseq_idx = i;
+			/* An exception unwind reached this insn, a landing
+			 * pad, from a throw or a resume that many frames
+			 * deeper. There is no insn in between to backtrack
+			 * over, so enter those frames here, the way BPF_EXIT
+			 * does one at a time.
+			 */
+			for (fr = 0; hist && fr < hist->unwind_frames; fr++)
+				if (bt_subprog_enter(bt))
+					return -EFAULT;
 			i = get_prev_insn_idx(st, i, &history);
 			if (i == -ENOENT)
 				break;
