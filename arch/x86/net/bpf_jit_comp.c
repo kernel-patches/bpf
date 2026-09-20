@@ -357,6 +357,12 @@ struct jit_context {
 /* Number of bytes that will be skipped on tailcall */
 #define X86_TAIL_CALL_OFFSET	(12 + ENDBR_INSN_SIZE)
 
+/*
+ * Throw-site spill: r15, r14, r13, rbx, r12 low to high, the layout the
+ * prologue's pushes leave, so arch_bpf_run_cleanup_pad() reads both alike.
+ */
+#define X86_CLEANUP_SPILL_SZ	(5 * 8)
+
 static void push_r9(u8 **pprog)
 {
 	u8 *prog = *pprog;
@@ -832,7 +838,7 @@ static void emit_bpf_tail_call_indirect(struct bpf_prog *bpf_prog,
 	/* Inc tail_call_cnt if the slot is populated. */
 	EMIT4(0x48, 0x83, 0x00, 0x01);            /* add qword ptr [rax], 1 */
 
-	if (bpf_prog->aux->exception_boundary) {
+	if (bpf_prog->aux->exception_boundary || bpf_cleanup_force_spill(bpf_prog)) {
 		pop_callee_regs(&prog, all_callee_regs_used);
 		pop_r12(&prog);
 	} else {
@@ -899,7 +905,7 @@ static void emit_bpf_tail_call_direct(struct bpf_prog *bpf_prog,
 	/* Inc tail_call_cnt if the slot is populated. */
 	EMIT4(0x48, 0x83, 0x00, 0x01);                /* add qword ptr [rax], 1 */
 
-	if (bpf_prog->aux->exception_boundary) {
+	if (bpf_prog->aux->exception_boundary || bpf_cleanup_force_spill(bpf_prog)) {
 		pop_callee_regs(&prog, all_callee_regs_used);
 		pop_r12(&prog);
 	} else {
@@ -1977,6 +1983,7 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 	u8 *ip, *prog = temp;
 	u32 stack_depth;
 	int callee_saved_size;
+	u32 throw_spill, prologue_depth;
 	s32 outgoing_arg_base;
 	int err;
 
@@ -2015,7 +2022,10 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 
 	detect_reg_usage(insn, insn_cnt, callee_regs_used);
 
-	emit_prologue(&prog, image, stack_depth,
+	throw_spill = bpf_cleanup_force_spill(bpf_prog) ? X86_CLEANUP_SPILL_SZ : 0;
+	prologue_depth = stack_depth + throw_spill;
+
+	emit_prologue(&prog, image, prologue_depth,
 		      bpf_prog_was_classic(bpf_prog), tail_call_reachable,
 		      bpf_is_subprog(bpf_prog), bpf_prog->aux->exception_cb);
 
@@ -2024,7 +2034,7 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 	/* Exception callback will clobber callee regs for its own use, and
 	 * restore the original callee regs from main prog's stack frame.
 	 */
-	if (bpf_prog->aux->exception_boundary) {
+	if (bpf_prog->aux->exception_boundary || bpf_cleanup_force_spill(bpf_prog)) {
 		/* We also need to save r12, which is not mapped to any BPF
 		 * register, as we throw after entry into the kernel, which may
 		 * overwrite r12.
@@ -2039,9 +2049,10 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 
 	/* Compute callee-saved register area size. */
 	callee_saved_size = 0;
-	if (bpf_prog->aux->exception_boundary || arena_vm_start)
+	if (bpf_prog->aux->exception_boundary || bpf_cleanup_force_spill(bpf_prog) ||
+	    arena_vm_start)
 		callee_saved_size += 8; /* r12 */
-	if (bpf_prog->aux->exception_boundary) {
+	if (bpf_prog->aux->exception_boundary || bpf_cleanup_force_spill(bpf_prog)) {
 		callee_saved_size += 4 * 8; /* rbx, r13, r14, r15 */
 	} else {
 		int j;
@@ -2063,7 +2074,19 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 	 * Note that tail_call_reachable is guaranteed to be false when
 	 * stack args exist, so tcc pushes need not be accounted for.
 	 */
-	outgoing_arg_base = -(round_up(stack_depth, 8) + callee_saved_size);
+	outgoing_arg_base = -(round_up(stack_depth, 8) + throw_spill + callee_saved_size);
+
+	/*
+	 * Lowest address of each spill area, as an offset from rbp; see
+	 * bpf_cleanup_pad.S for the layout. The 16 is the tail call counter
+	 * pair emit_prologue_tail_call() pushes above the callee-saved one.
+	 */
+	if (bpf_cleanup_force_spill(bpf_prog)) {
+		bpf_prog->aux->exc->spill_off = -(round_up(stack_depth, 8) + throw_spill +
+						  (tail_call_reachable ? 16 : 0) +
+						  callee_saved_size);
+		bpf_prog->aux->exc->throw_spill_off = -(round_up(stack_depth, 8) + throw_spill);
+	}
 
 	/*
 	 * Allocate outgoing stack arg area for args 7+ only.
@@ -2110,7 +2133,8 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 				dst_reg = X86_REG_R9;
 		}
 
-		if (bpf_insn_is_indirect_target(env, bpf_prog, i - 1))
+		if (bpf_insn_is_indirect_target(env, bpf_prog, i - 1) ||
+		    bpf_cleanup_insn_is_pad(bpf_prog, i - 1))
 			EMIT_ENDBR();
 
 		ip = image + addrs[i - 1] + (prog - temp);
@@ -2903,9 +2927,27 @@ populate_extable:
 		case BPF_JMP | BPF_CALL: {
 			const struct btf_func_model *fm = NULL;
 
+			if (bpf_cleanup_insn_is_throw(bpf_prog, i - 1)) {
+				/* Spill r6-r9 and r12 where the bpf_throw() walker looks. */
+				s32 off = bpf_prog->aux->exc->throw_spill_off;
+				u8 *spill = prog;
+
+				emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_9, off + 0);
+				emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_8, off + 8);
+				emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_7, off + 16);
+				emit_stx(&prog, BPF_DW, BPF_REG_FP, BPF_REG_6, off + 24);
+				emit_stx(&prog, BPF_DW, BPF_REG_FP, X86_REG_R12, off + 32);
+				ip += prog - spill;
+			}
+
+			if (bpf_cleanup_insn_is_resume(bpf_prog, i - 1)) {
+				emit_return(&prog, image + addrs[i - 1] + (prog - temp));
+				break;
+			}
+
 			func = (u8 *) __bpf_call_base + imm32;
 			if (src_reg == BPF_PSEUDO_CALL && tail_call_reachable) {
-				LOAD_TAIL_CALL_CNT_PTR(stack_depth);
+				LOAD_TAIL_CALL_CNT_PTR(prologue_depth);
 				ip += 7;
 			}
 			if (!imm32)
@@ -2948,13 +2990,13 @@ populate_extable:
 							  &prog,
 							  ip,
 							  callee_regs_used,
-							  stack_depth,
+							  prologue_depth,
 							  ctx);
 			else
 				emit_bpf_tail_call_indirect(bpf_prog,
 							    &prog,
 							    callee_regs_used,
-							    stack_depth,
+							    prologue_depth,
 							    ip,
 							    ctx);
 			break;
@@ -3215,7 +3257,8 @@ emit_jmp:
 			}
 			/* Deallocate outgoing args 7+ area. */
 			emit_add_rsp(&prog, outgoing_rsp);
-			if (bpf_prog->aux->exception_boundary) {
+			if (bpf_prog->aux->exception_boundary ||
+			    bpf_cleanup_force_spill(bpf_prog)) {
 				pop_callee_regs(&prog, all_callee_regs_used);
 				pop_r12(&prog);
 			} else {
@@ -4386,6 +4429,13 @@ out_image:
 		bpf_prog_update_insn_ptrs(prog, addrs, image);
 
 		/*
+		 * Same mapping, consumed by the bpf_throw() frame walker:
+		 * turn the cleanup records into native address ranges now
+		 * that the image is final.
+		 */
+		bpf_cleanup_fill_native_ranges(prog, addrs, image);
+
+		/*
 		 * ctx.prog_offset is used when CFI preambles put code *before*
 		 * the function. See emit_cfi(). For FineIBT specifically this code
 		 * can also be executed and bpf_prog_kallsyms_add() will
@@ -4498,6 +4548,11 @@ bool bpf_jit_supports_exceptions(void)
 	 * call) and BPF frames. Therefore we require ORC unwinder to be enabled
 	 * to walk kernel frames and reach BPF frames in the stack trace.
 	 */
+	return IS_ENABLED(CONFIG_UNWINDER_ORC);
+}
+
+bool bpf_jit_supports_cleanup_pads(void)
+{
 	return IS_ENABLED(CONFIG_UNWINDER_ORC);
 }
 
