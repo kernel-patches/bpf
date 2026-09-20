@@ -77,9 +77,9 @@ override define CLEAN
 	$(Q)$(RM) -r $(TEST_GEN_FILES)
 	$(Q)$(RM) -r $(TEST_KMODS)
 	$(Q)$(RM) -r $(EXTRA_CLEAN)
-	$(Q)$(MAKE) -C test_kmods clean
-	$(Q)$(MAKE) -C libarena clean
-	$(Q)$(MAKE) docs-clean
+	+$(Q)$(MAKE) -C test_kmods clean
+	+$(Q)$(MAKE) -C libarena clean
+	+$(Q)$(MAKE) docs-clean
 endef
 
 # Append build flags before lib.mk's user flags. References to
