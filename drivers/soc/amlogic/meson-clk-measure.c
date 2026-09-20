@@ -1279,6 +1279,12 @@ static const struct msr_reg_offset msr_reg_offset_v2 = {
 	.duty_val = 0x18,
 };
 
+static const struct meson_msr_data clk_msr_a1_data = {
+	.msr_table = (void *)clk_msr_a1,
+	.msr_count = ARRAY_SIZE(clk_msr_a1),
+	.reg = &msr_reg_offset_v2,
+};
+
 static const struct meson_msr_data clk_msr_c3_data = {
 	.msr_table = (void *)clk_msr_c3,
 	.msr_count = ARRAY_SIZE(clk_msr_c3),
@@ -1291,12 +1297,6 @@ static const struct meson_msr_data clk_msr_s4_data = {
 	.reg = &msr_reg_offset_v2,
 };
 
-static const struct meson_msr_data clk_msr_a1_data = {
-	.msr_table = (void *)clk_msr_a1,
-	.msr_count = ARRAY_SIZE(clk_msr_a1),
-	.reg = &msr_reg_offset_v2,
-};
-
 static const struct meson_msr_data clk_msr_t7_data = {
 	.msr_table = (void *)clk_msr_t7,
 	.msr_count = ARRAY_SIZE(clk_msr_t7),
@@ -1305,16 +1305,12 @@ static const struct meson_msr_data clk_msr_t7_data = {
 
 static const struct of_device_id meson_msr_match_table[] = {
 	{
-		.compatible = "amlogic,meson-gx-clk-measure",
-		.data = &clk_msr_gx_data,
+		.compatible = "amlogic,a1-clk-measure",
+		.data = &clk_msr_a1_data,
 	},
 	{
-		.compatible = "amlogic,meson8-clk-measure",
-		.data = &clk_msr_m8_data,
-	},
-	{
-		.compatible = "amlogic,meson8b-clk-measure",
-		.data = &clk_msr_m8_data,
+		.compatible = "amlogic,c3-clk-measure",
+		.data = &clk_msr_c3_data,
 	},
 	{
 		.compatible = "amlogic,meson-axg-clk-measure",
@@ -1325,20 +1321,24 @@ static const struct of_device_id meson_msr_match_table[] = {
 		.data = &clk_msr_g12a_data,
 	},
 	{
+		.compatible = "amlogic,meson-gx-clk-measure",
+		.data = &clk_msr_gx_data,
+	},
+	{
 		.compatible = "amlogic,meson-sm1-clk-measure",
 		.data = &clk_msr_sm1_data,
 	},
 	{
-		.compatible = "amlogic,c3-clk-measure",
-		.data = &clk_msr_c3_data,
+		.compatible = "amlogic,meson8-clk-measure",
+		.data = &clk_msr_m8_data,
+	},
+	{
+		.compatible = "amlogic,meson8b-clk-measure",
+		.data = &clk_msr_m8_data,
 	},
 	{
 		.compatible = "amlogic,s4-clk-measure",
 		.data = &clk_msr_s4_data,
-	},
-	{
-		.compatible = "amlogic,a1-clk-measure",
-		.data = &clk_msr_a1_data,
 	},
 	{
 		.compatible = "amlogic,t7-clk-measure",
