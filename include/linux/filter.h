@@ -1047,16 +1047,17 @@ static inline u32 __bpf_prog_run_save_cb(const struct bpf_prog *prog,
 	const struct sk_buff *skb = ctx;
 	u8 *cb_data = bpf_skb_cb(skb);
 	u8 cb_saved[BPF_SKB_CB_LEN];
+	bool cb_access = READ_ONCE(prog->cb_access);
 	u32 res;
 
-	if (unlikely(prog->cb_access)) {
+	if (unlikely(cb_access)) {
 		memcpy(cb_saved, cb_data, sizeof(cb_saved));
 		memset(cb_data, 0, sizeof(cb_saved));
 	}
 
 	res = bpf_prog_run(prog, skb);
 
-	if (unlikely(prog->cb_access))
+	if (unlikely(cb_access))
 		memcpy(cb_data, cb_saved, sizeof(cb_saved));
 
 	return res;
@@ -1079,7 +1080,7 @@ static inline u32 bpf_prog_run_clear_cb(const struct bpf_prog *prog,
 	u8 *cb_data = bpf_skb_cb(skb);
 	u32 res;
 
-	if (unlikely(prog->cb_access))
+	if (unlikely(READ_ONCE(prog->cb_access)))
 		memset(cb_data, 0, BPF_SKB_CB_LEN);
 
 	res = bpf_prog_run_pin_on_cpu(prog, skb);

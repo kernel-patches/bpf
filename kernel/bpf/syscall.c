@@ -3812,6 +3812,12 @@ static int bpf_tracing_prog_attach(struct bpf_prog *prog,
 	if (err)
 		goto out_unlock;
 
+	if (prog->type == BPF_PROG_TYPE_EXT && READ_ONCE(prog->cb_access)) {
+		WRITE_ONCE(tgt_prog->cb_access, true);
+		/* Drain runs that observed cb_access=false before enabling freplace. */
+		synchronize_rcu();
+	}
+
 	err = bpf_trampoline_link_prog(&link->link.node, tr, tgt_prog);
 	if (err) {
 		bpf_link_cleanup(&link_primer);
