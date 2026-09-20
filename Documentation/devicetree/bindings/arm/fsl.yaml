@@ -186,6 +186,7 @@ properties:
       - description: i.MX50 based Boards
         items:
           - enum:
+              - amazon,yoshi
               - fsl,imx50-evk
               - kobo,aura
           - const: fsl,imx50
