@@ -220,6 +220,24 @@ const struct bpf_func_proto bpf_tcp_ops_get_retval_proto = {
 	.ret_type	= RET_INTEGER,
 };
 
+BPF_CALL_2(bpf_tcp_ops_cb_flags_set, struct sock *, sk, int, argval)
+{
+	int val = argval & BPF_SOCK_OPS_ALL_CB_FLAGS;
+
+	tcp_sk(sk)->bpf_sock_ops_cb_flags = val;
+
+	return argval & ~BPF_SOCK_OPS_ALL_CB_FLAGS;
+}
+
+static const struct bpf_func_proto bpf_tcp_ops_cb_flags_set_proto = {
+	.func		= bpf_tcp_ops_cb_flags_set,
+	.gpl_only	= false,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_PTR_TO_BTF_ID,
+	.arg1_btf_id	= &btf_sock_ids[BTF_SOCK_TYPE_TCP],
+	.arg2_type	= ARG_ANYTHING,
+};
+
 static const struct bpf_func_proto *
 get_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 {
@@ -264,6 +282,15 @@ get_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	case BPF_FUNC_store_hdr_opt:
 		if (moff == offsetof(struct bpf_tcp_ops, write_hdr_opt))
 			return &bpf_tcp_ops_store_hdr_opt_proto;
+		return NULL;
+	case BPF_FUNC_sock_ops_cb_flags_set:
+		if (moff == offsetof(struct bpf_tcp_ops, connect) ||
+		    moff == offsetof(struct bpf_tcp_ops, listen) ||
+		    moff == offsetof(struct bpf_tcp_ops, active_established) ||
+		    moff == offsetof(struct bpf_tcp_ops, passive_established) ||
+		    moff == offsetof(struct bpf_tcp_ops, enqueue_rcvq) ||
+		    moff == offsetof(struct bpf_tcp_ops, dequeue_rcvq))
+			return &bpf_tcp_ops_cb_flags_set_proto;
 		return NULL;
 	default:
 		return bpf_base_func_proto(func_id, prog);
