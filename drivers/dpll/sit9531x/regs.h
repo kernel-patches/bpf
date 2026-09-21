@@ -315,6 +315,9 @@
 #define SIT9531X_PLL_REG_ACTIVE		0x02
 #define SIT9531X_PLL_ACTIVE_BIT		BIT(0)  /* PLL reached active state */
 
+/* PLL EXT page INTSYNC configuration registers */
+#define SIT9531X_PLL_EXT_PAGE(_idx)	(SIT9531X_PAGE_PLLA_EXT + (_idx))
+
 #define SIT9531X_PLL_STATUS_OUTER_DIS	BIT(5)
 
 /*
