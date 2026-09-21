@@ -3182,9 +3182,6 @@ static int ravb_wol_setup(struct net_device *ndev)
 	/* Enable MagicPacket */
 	ravb_modify(ndev, ECMR, ECMR_MPDE, ECMR_MPDE);
 
-	if (priv->info->ccc_gac)
-		ravb_ptp_stop(ndev);
-
 	return enable_irq_wake(priv->emac_irq);
 }
 
@@ -3203,9 +3200,6 @@ static int ravb_wol_restore(struct net_device *ndev)
 	error = ravb_set_config_mode(ndev);
 	if (error)
 		return error;
-
-	if (priv->info->ccc_gac)
-		ravb_ptp_init(ndev, priv->pdev);
 
 	if (info->nc_queues)
 		napi_enable(&priv->napi[RAVB_NC]);
