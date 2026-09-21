@@ -465,6 +465,8 @@ LIBBPF_1.8.0 {
 		bpf_program__clone;
 		bpf_program__load;
 		bpf_program__load_strategy;
+		bpf_program__set_autoattach;
+		bpf_program__set_autoattach_deprecated;
 		bpf_program__set_load_strategy;
 		btf__find_by_name_kind_own;
 		btf__new_empty_opts;
