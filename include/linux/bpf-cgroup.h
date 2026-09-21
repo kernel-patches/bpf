@@ -127,7 +127,7 @@ struct bpf_prog_list {
 
 static inline bool cgroup_bpf_is_struct_ops_atype(enum cgroup_bpf_attach_type atype)
 {
-	return atype == CGROUP_TCP_SOCK_OPS;
+	return atype == CGROUP_TCP_SOCK_OPS || atype == CGROUP_MEMCG_OPS;
 }
 void cgroup_bpf_struct_ops_register(int atype, u32 type_id, void *cfi_stubs, bool mult_trace);
 int cgroup_bpf_struct_ops_attach(struct bpf_map *map, const union bpf_attr *attr);

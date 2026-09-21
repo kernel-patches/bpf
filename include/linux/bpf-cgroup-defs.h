@@ -2,14 +2,6 @@
 #ifndef _BPF_CGROUP_DEFS_H
 #define _BPF_CGROUP_DEFS_H
 
-#ifdef CONFIG_CGROUP_BPF
-
-#include <linux/list.h>
-#include <linux/percpu-refcount.h>
-#include <linux/workqueue.h>
-
-struct bpf_prog_array;
-
 #ifdef CONFIG_BPF_LSM
 /* Maximum number of concurrently attachable per-cgroup LSM hooks. */
 #define CGROUP_LSM_NUM 10
@@ -17,6 +9,10 @@ struct bpf_prog_array;
 #define CGROUP_LSM_NUM 0
 #endif
 
+/*
+ * Plain constants, so a subsystem can name its attach type without
+ * depending on CONFIG_CGROUP_BPF.
+ */
 enum cgroup_bpf_attach_type {
 	CGROUP_BPF_ATTACH_TYPE_INVALID = -1,
 	CGROUP_INET_INGRESS = 0,
@@ -48,10 +44,20 @@ enum cgroup_bpf_attach_type {
 	CGROUP_UNIX_GETSOCKNAME,
 	CGROUP_INET_SOCK_RELEASE,
 	CGROUP_TCP_SOCK_OPS,
+	CGROUP_MEMCG_OPS,
 	CGROUP_LSM_START,
 	CGROUP_LSM_END = CGROUP_LSM_START + CGROUP_LSM_NUM - 1,
 	MAX_CGROUP_BPF_ATTACH_TYPE
 };
+
+#ifdef CONFIG_CGROUP_BPF
+
+#include <linux/list.h>
+#include <linux/percpu-refcount.h>
+#include <linux/workqueue.h>
+
+struct bpf_prog_array;
+
 
 struct cgroup_bpf {
 	/* array of effective progs in this cgroup */

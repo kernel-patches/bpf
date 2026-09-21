@@ -7,6 +7,12 @@
 
 #include <linux/memcontrol.h>
 #include <linux/bpf.h>
+#include <linux/bpf-cgroup.h>
+#include <linux/bpf_memcontrol.h>
+#include <linux/bpf_verifier.h>
+#include <linux/btf_ids.h>
+#include <linux/cgroup.h>
+#include <linux/sched.h>
 
 #include "internal.h"
 
@@ -235,6 +241,100 @@ static const struct btf_kfunc_id_set bpf_memcontrol_reclaim_kfunc_set = {
 	.set            = &bpf_memcontrol_reclaim_kfuncs,
 };
 
+/*
+ * bpf_memcg_ops: memcg policy attached to a cgroup.  A program returns a
+ * request and the kernel acts on it.  Nothing here reclaims or sleeps.
+ */
+
+/* CFI stubs.  A slot points at these while its policy is being detached. */
+static struct bpf_memcg_ops __bpf_memcg_ops = {
+};
+
+static const struct bpf_func_proto *
+bpf_memcg_get_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
+{
+	/*
+	 * The base set is all a policy needs today, and none of it sleeps.
+	 * Anything added here must be safe from the charge path.
+	 */
+	return bpf_base_func_proto(func_id, prog);
+}
+
+static bool bpf_memcg_is_valid_access(int off, int size,
+				      enum bpf_access_type type,
+				      const struct bpf_prog *prog,
+				      struct bpf_insn_access_aux *info)
+{
+	/* The context is read-only. */
+	if (type != BPF_READ)
+		return false;
+
+	return bpf_tracing_btf_ctx_access(off, size, type, prog, info);
+}
+
+static int bpf_memcg_init_member(const struct btf_type *t,
+				 const struct btf_member *member,
+				 void *kdata, const void *udata)
+{
+	/* Mandatory: the core calls it without a NULL check. */
+	return 0;
+}
+
+static int bpf_memcg_check_member(const struct btf_type *t,
+				  const struct btf_member *member,
+				  const struct bpf_prog *prog)
+{
+	/* Members run from the charge path, which cannot sleep. */
+	if (prog->sleepable)
+		return -EINVAL;
+
+	return 0;
+}
+
+static int bpf_memcg_init(struct btf *btf)
+{
+	return 0;
+}
+
+static int bpf_memcg_validate(void *kdata)
+{
+	return 0;
+}
+
+static const struct bpf_verifier_ops bpf_memcg_verifier_ops = {
+	.get_func_proto		= bpf_memcg_get_func_proto,
+	.is_valid_access	= bpf_memcg_is_valid_access,
+};
+
+static struct bpf_struct_ops bpf_memcg_ops_desc = {
+	.verifier_ops	= &bpf_memcg_verifier_ops,
+	.init		= bpf_memcg_init,
+	.init_member	= bpf_memcg_init_member,
+	.check_member	= bpf_memcg_check_member,
+	.validate	= bpf_memcg_validate,
+	.name		= "bpf_memcg_ops",
+	.cgroup_atype	= CGROUP_MEMCG_OPS,
+	.cfi_stubs	= &__bpf_memcg_ops,
+	.owner		= THIS_MODULE,
+	/*
+	 * .reg/.unreg stay NULL: the cgroup layer does attach and detach, and
+	 * registration fails if a cgroup_atype comes with either.
+	 *
+	 * .free_after_mult_rcu_gp stays false while no member sleeps.  A
+	 * sleepable one would also need a tasks-trace RCU version of
+	 * bpf_cgroup_struct_ops_foreach().
+	 */
+};
+
+static int __init bpf_memcg_ops_register(void)
+{
+	/*
+	 * register_bpf_struct_ops() is a no-op without struct_ops support, so
+	 * this needs no guard of its own.
+	 */
+	return register_bpf_struct_ops(&bpf_memcg_ops_desc, bpf_memcg_ops);
+}
+
 static int __init bpf_memcontrol_init(void)
 {
 	int err;
@@ -248,8 +348,14 @@ static int __init bpf_memcontrol_init(void)
 
 	err = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
 					&bpf_memcontrol_reclaim_kfunc_set);
-	if (err)
+	if (err) {
 		pr_warn("error registering bpf reclaim kfuncs: %d\n", err);
+		return err;
+	}
+
+	err = bpf_memcg_ops_register();
+	if (err)
+		pr_warn("error while registering bpf_memcg_ops: %d", err);
 
 	return err;
 }
