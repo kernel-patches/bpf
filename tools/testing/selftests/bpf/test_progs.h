@@ -163,6 +163,7 @@ struct msg {
 			int error_cnt;
 			int skip_cnt;
 			bool have_log;
+			bool force_log;
 			int subtest_num;
 		} test_done;
 		struct {
