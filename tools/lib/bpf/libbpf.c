@@ -8379,6 +8379,15 @@ static void fixup_verifier_log(struct bpf_program *prog, char *buf, size_t buf_s
 	}
 }
 
+/* LLVM terminates a cleanup landing pad with a call to _Unwind_Resume, the
+ * base unwind ABI's entry point for carrying an unwind on once a frame's
+ * cleanups have run. The kernel knows it as bpf_unwind_resume.
+ */
+static const char *kern_extern_name(const char *name)
+{
+	return strcmp(name, "_Unwind_Resume") ? name : "bpf_unwind_resume";
+}
+
 static int bpf_program_record_relos(struct bpf_program *prog)
 {
 	struct bpf_object *obj = prog->obj;
@@ -8395,12 +8404,12 @@ static int bpf_program_record_relos(struct bpf_program *prog)
 				continue;
 			kind = btf_is_var(btf__type_by_id(obj->btf, ext->btf_id)) ?
 				BTF_KIND_VAR : BTF_KIND_FUNC;
-			bpf_gen__record_extern(obj->gen_loader, ext->name,
+			bpf_gen__record_extern(obj->gen_loader, kern_extern_name(ext->name),
 					       ext->is_weak, !ext->ksym.type_id,
 					       true, kind, relo->insn_idx);
 			break;
 		case RELO_EXTERN_CALL:
-			bpf_gen__record_extern(obj->gen_loader, ext->name,
+			bpf_gen__record_extern(obj->gen_loader, kern_extern_name(ext->name),
 					       ext->is_weak, false, false, BTF_KIND_FUNC,
 					       relo->insn_idx);
 			break;
@@ -8876,17 +8885,20 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 	struct module_btf *mod_btf = NULL;
 	const struct btf_type *kern_func;
 	struct btf *kern_btf = NULL;
+	const char *local_name, *kern_name;
 	int ret;
 
 	local_func_proto_id = ext->ksym.type_id;
 
-	kfunc_id = find_ksym_btf_id(obj, ext->essent_name ?: ext->name, BTF_KIND_FUNC, &kern_btf,
-				    &mod_btf);
+	local_name = ext->essent_name ?: ext->name;
+	kern_name = kern_extern_name(local_name);
+
+	kfunc_id = find_ksym_btf_id(obj, kern_name, BTF_KIND_FUNC, &kern_btf, &mod_btf);
 	if (kfunc_id < 0) {
 		if (kfunc_id == -ESRCH && ext->is_weak)
 			return 0;
 		pr_warn("extern (func ksym) '%s': not found in kernel or module BTFs\n",
-			ext->name);
+			kern_name != local_name ? kern_name : ext->name);
 		return kfunc_id;
 	}
 
