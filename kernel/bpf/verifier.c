@@ -7969,13 +7969,15 @@ static bool scalars_exact_for_widen(const struct bpf_reg_state *rold,
 }
 
 static void maybe_widen_reg(struct bpf_verifier_env *env,
-			    struct bpf_reg_state *rold, struct bpf_reg_state *rcur)
+			    const struct bpf_reg_state *rolder,
+			    const struct bpf_reg_state *rold, struct bpf_reg_state *rcur)
 {
-	if (rold->type != SCALAR_VALUE)
+	if (rolder->type != SCALAR_VALUE || rold->type != SCALAR_VALUE)
 		return;
 	if (rold->type != rcur->type)
 		return;
-	if (rold->precise || rcur->precise || scalars_exact_for_widen(rold, rcur))
+	if (rold->precise || rcur->precise ||
+	    scalars_exact_for_widen(rolder, rold) || scalars_exact_for_widen(rold, rcur))
 		return;
 	__mark_reg_unknown(env, rcur);
 }
@@ -7984,26 +7986,37 @@ static int widen_imprecise_scalars(struct bpf_verifier_env *env,
 				   struct bpf_verifier_state *old,
 				   struct bpf_verifier_state *cur)
 {
-	struct bpf_func_state *fold, *fcur;
+	struct bpf_func_state *folder, *fold, *fcur;
+	struct bpf_verifier_state *older;
 	int i, fr, num_slots;
 
+	for (older = old->parent; older; older = older->parent)
+		if (older->insn_idx == old->insn_idx && same_callsites(older, old))
+			break;
+	if (!older)
+		return 0;
+
 	for (fr = old->curframe; fr >= 0; fr--) {
+		folder = older->frame[fr];
 		fold = old->frame[fr];
 		fcur = cur->frame[fr];
 
 		for (i = 0; i < MAX_BPF_REG; i++)
 			maybe_widen_reg(env,
+					&folder->regs[i],
 					&fold->regs[i],
 					&fcur->regs[i]);
 
-		num_slots = min(fold->allocated_stack / BPF_REG_SIZE,
-				fcur->allocated_stack / BPF_REG_SIZE);
+		num_slots = min3(folder->allocated_stack, fold->allocated_stack,
+				 fcur->allocated_stack) / BPF_REG_SIZE;
 		for (i = 0; i < num_slots; i++) {
-			if (!bpf_is_spilled_reg(&fold->stack[i]) ||
+			if (!bpf_is_spilled_reg(&folder->stack[i]) ||
+			    !bpf_is_spilled_reg(&fold->stack[i]) ||
 			    !bpf_is_spilled_reg(&fcur->stack[i]))
 				continue;
 
 			maybe_widen_reg(env,
+					&folder->stack[i].spilled_ptr,
 					&fold->stack[i].spilled_ptr,
 					&fcur->stack[i].spilled_ptr);
 		}
@@ -8090,10 +8103,9 @@ static struct bpf_reg_state *get_iter_from_state(struct bpf_verifier_state *cur_
  *     while (bpf_iter_num_next(&it)) {
  *       if (a == 0) {
  *         a = 1;
- *         i = 7; // Because i changed verifier would forget
- *                // it's range on second loop entry.
+ *         i = 7; // Retain the value across the first change.
  *       } else {
- *         arr[i] = 42; // This would fail to verify.
+ *         arr[i] = 42; // Discover that i needs precision.
  *       }
  *     }
  *     bpf_iter_num_destroy(&it);

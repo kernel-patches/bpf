@@ -90,6 +90,7 @@ int widening(void *unused)
 SEC("?raw_tp")
 __success
 __log_level(2) __log_always
+__msg("processed {{[1-9][0-9]?[0-9]?}} insns")
 int widening_counter(void *unused)
 {
 	struct num_context loop_ctx = { .i = 0 };
@@ -120,7 +121,7 @@ static __naked __used void widening_late_precision_cb(void)
 }
 
 SEC("?raw_tp")
-__failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__success
 __log_level(2) __log_always
 __naked int widening_late_precision(void)
 {
@@ -142,7 +143,7 @@ __naked int widening_late_precision(void)
 }
 
 SEC("?raw_tp")
-__failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__success
 __log_level(2) __log_always
 __naked int widening_late_precision_large_init(void)
 {
@@ -189,7 +190,7 @@ static __naked void widening_delayed_precision_cb(void)
 }
 
 SEC("?raw_tp")
-__failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__failure __msg("invalid read from stack R2 off=-520 size=8")
 __log_level(2) __log_always
 int widening_delayed_precision_unsafe(void *unused)
 {

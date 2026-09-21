@@ -165,6 +165,7 @@ int simplest_loop(void *ctx)
 SEC("?raw_tp")
 __success
 __log_level(2) __log_always
+__msg("processed {{[1-9][0-9]?[0-9]?}} insns")
 __naked int widening_counter(void)
 {
 	asm volatile (
@@ -194,7 +195,7 @@ __naked int widening_counter(void)
 }
 
 SEC("?raw_tp")
-__failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__success
 __log_level(2) __log_always
 __naked int widening_late_precision(void)
 {
@@ -209,6 +210,8 @@ __naked int widening_late_precision(void)
 	 *   }
 	 * }
 	 *
+	 * R7 must retain 7 across the next iter_next call, so that the
+	 * following body can use it as a stack-array index in R1.
 	 */
 	asm volatile (
 		"r6 = 0;"
@@ -248,7 +251,7 @@ __naked int widening_late_precision(void)
 }
 
 SEC("?raw_tp")
-__failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__success
 __log_level(2) __log_always
 __naked int widening_late_precision_large_init(void)
 {
@@ -290,7 +293,7 @@ __naked int widening_late_precision_large_init(void)
 }
 
 SEC("?raw_tp")
-__failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__failure __msg("invalid read from stack R0 off=-520 size=8")
 __log_level(2) __log_always
 __naked int widening_delayed_precision_unsafe(void)
 {
