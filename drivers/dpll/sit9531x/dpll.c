@@ -639,6 +639,50 @@ sit9531x_dpll_input_pin_prio_set(const struct dpll_pin *pin, void *pin_priv,
 }
 
 /*
+ * sit9531x_dpll_input_pin_ffo_get - read the input's frequency offset
+ *
+ * The offset is derived from how far the PLL's running DIVN sits from
+ * its configured one, which only says something about the reference the
+ * PLL is actually tracking.  For every other input there is no
+ * measurement, and -ENODATA leaves the attribute out rather than
+ * reporting the active reference's figure against the wrong pin.
+ */
+static int
+sit9531x_dpll_input_pin_ffo_get(const struct dpll_pin *pin, void *pin_priv,
+				const struct dpll_device *dpll, void *dpll_priv,
+				struct dpll_ffo_param *ffo,
+				struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	enum dpll_pin_state state;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+
+	/*
+	 * Publish FFO only for the input the DPLL is actively tracking.
+	 * selected_ref alone is not enough (free-run, LOL, holdover), so use
+	 * the same CONNECTED criterion as the generic selection-state logic.
+	 */
+	sit9531x_dpll_selection_state_get(sitdev, sitdpll, dpin->id, &state);
+	if (state != DPLL_PIN_STATE_CONNECTED) {
+		mutex_unlock(&sitdev->multiop_lock);
+		return -ENODATA;
+	}
+
+	rc = sit9531x_pll_ffo_ppt(sitdev, sitdpll->id, &ffo->ffo);
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc && rc != -ENODATA)
+		NL_SET_ERR_MSG(extack,
+			       "Failed to measure the frequency offset of the selected reference");
+
+	return rc;
+}
+
+/*
  * sit9531x_dpll_input_pin_phase_offset_get - phase offset of a reference
  *
  * What this reports, and what it deliberately does not:
@@ -763,6 +807,13 @@ static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
 	.prio_get		= sit9531x_dpll_input_pin_prio_get,
 	.prio_set		= sit9531x_dpll_input_pin_prio_set,
 	.phase_offset_get	= sit9531x_dpll_input_pin_phase_offset_get,
+	/*
+	 * The measurement compares the PLL's running feedback divider with
+	 * its configured one, so it describes the device's own reference
+	 * rather than a port rate.
+	 */
+	.supported_ffo		= BIT(DPLL_FFO_PIN_DEVICE),
+	.ffo_get		= sit9531x_dpll_input_pin_ffo_get,
 };
 
 /*

@@ -289,6 +289,7 @@ int sit9531x_clear_notifications(struct sit9531x_dev *sitdev);
 /* ---- INTSYNC (inter-PLL synchronization) ---- */
 
 /* ---- Phase offset (TDC readback) ---- */
+int sit9531x_pll_ffo_ppt(struct sit9531x_dev *sitdev, u8 pll_idx, s64 *ffo);
 int sit9531x_chan_selected_ref_read(struct sit9531x_dev *sitdev, u8 pll_idx,
 				    u8 *ref);
 int sit9531x_phase_offset_read(struct sit9531x_dev *sitdev, u8 pll_idx,
