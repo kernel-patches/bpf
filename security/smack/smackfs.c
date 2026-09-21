@@ -1169,6 +1169,7 @@ static ssize_t smk_write_net4addr(struct file *file, const char __user *buf,
 	struct in_addr mask;
 	unsigned int m;
 	unsigned int masks;
+	unsigned int octet[4];
 	int found;
 	u32 mask_bits = (1<<31);
 	__be32 nsa;
@@ -1198,17 +1199,26 @@ static ssize_t smk_write_net4addr(struct file *file, const char __user *buf,
 		goto free_data_out;
 	}
 
-	rc = sscanf(data, "%hhd.%hhd.%hhd.%hhd/%u %s",
-		&host[0], &host[1], &host[2], &host[3], &masks, smack);
+	rc = sscanf(data, "%u.%u.%u.%u/%u %s",
+		&octet[0], &octet[1], &octet[2], &octet[3], &masks, smack);
 	if (rc != 6) {
-		rc = sscanf(data, "%hhd.%hhd.%hhd.%hhd %s",
-			&host[0], &host[1], &host[2], &host[3], smack);
+		rc = sscanf(data, "%u.%u.%u.%u %s",
+			&octet[0], &octet[1], &octet[2], &octet[3], smack);
 		if (rc != 5) {
 			rc = -EINVAL;
 			goto free_out;
 		}
 		masks = 32;
 	}
+	if (octet[0] > 255 || octet[1] > 255 || octet[2] > 255 ||
+	    octet[3] > 255) {
+		rc = -EINVAL;
+		goto free_out;
+	}
+	host[0] = octet[0];
+	host[1] = octet[1];
+	host[2] = octet[2];
+	host[3] = octet[3];
 	if (masks > BEBITS) {
 		rc = -EINVAL;
 		goto free_out;
