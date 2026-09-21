@@ -126,6 +126,12 @@ struct sit9531x_out {
  * @ho_freeze:		holdover freeze active
  * @ho_valid:		holdover memory acquired, i.e. the holdover window
  *			holds a valid estimate to fall back on
+ * @prio_srcs:		cached copy of the priority table, one source code
+ *			per slot; refreshed together with @prio_mask, so
+ *			priority reads generate no register traffic
+ * @prio_last:		slot each source occupies, plus one (0 = the source
+ *			is not in the table); refreshed from the same scan
+ *			as @prio_mask, so the two never disagree
  * @prio_mask:		bit per hardware source code present in this PLL's
  *			priority table, i.e. the sources it may select.  Read
  *			back from the table by the periodic worker and
@@ -140,6 +146,8 @@ struct sit9531x_chan {
 	bool		inner_lol;
 	bool		ho_freeze;
 	bool		ho_valid;
+	u8		prio_srcs[SIT9531X_PRIO_MAX_SLOTS];
+	u8		prio_last[SIT9531X_PRIO_NUM_SRC];
 	u16		prio_mask;
 };
 
@@ -237,6 +245,8 @@ bool sit9531x_input_prio_present(struct sit9531x_dev *sitdev,
 				 u8 pll_idx, u8 input_idx);
 int sit9531x_input_prio_set(struct sit9531x_dev *sitdev, u8 pll_idx,
 			    u8 input_idx, u8 prio);
+int sit9531x_input_prio_get(struct sit9531x_dev *sitdev, u8 pll_idx,
+			    u8 input_idx, u8 *prio);
 int sit9531x_input_prio_remove(struct sit9531x_dev *sitdev, u8 pll_idx,
 			       u8 input_idx);
 int sit9531x_input_prio_add(struct sit9531x_dev *sitdev, u8 pll_idx,
