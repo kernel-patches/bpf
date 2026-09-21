@@ -739,3 +739,48 @@ void test_lwt_ip_encap_vxlan_ipv6(void)
 {
 	lwt_ip_encap_vxlan(IPV6_ENCAP);
 }
+
+void test_lwt_ip_encap_stale_cb(void)
+{
+	char ns1[NETNS_NAME_SIZE] = NETNS_BASE "-1-";
+	char ns2[NETNS_NAME_SIZE] = NETNS_BASE "-2-";
+	char ns3[NETNS_NAME_SIZE] = NETNS_BASE "-3-";
+	struct test_lwt_ip_encap *skel = NULL;
+
+	if (!ASSERT_OK(create_ns(ns1, NETNS_NAME_SIZE), "create ns1"))
+		goto out;
+	if (!ASSERT_OK(create_ns(ns2, NETNS_NAME_SIZE), "create ns2"))
+		goto out;
+	if (!ASSERT_OK(create_ns(ns3, NETNS_NAME_SIZE), "create ns3"))
+		goto out;
+	if (!ASSERT_OK(setup_network(ns1, ns2, ns3, ""), "setup network"))
+		goto out;
+
+	skel = test_lwt_ip_encap__open();
+	if (!ASSERT_OK_PTR(skel, "open"))
+		goto out;
+	bpf_program__set_autoload(skel->progs.bpf_lwt_encap_gre, false);
+	bpf_program__set_autoload(skel->progs.bpf_lwt_encap_gre6, false);
+	bpf_program__set_autoload(skel->progs.bpf_lwt_encap_vxlan, false);
+	bpf_program__set_autoload(skel->progs.bpf_lwt_encap_vxlan6, false);
+	bpf_program__set_autoload(skel->progs.bpf_lwt_encap_stale, false);
+	if (!ASSERT_OK(test_lwt_ip_encap__load(skel), "load"))
+		goto out;
+	if (!ASSERT_OK(test_lwt_ip_encap__attach(skel), "attach"))
+		goto out;
+
+	SYS(out, "ip -n %s route replace %s/32 encap bpf in obj %s sec encap_stale dev veth3",
+	    ns2, IP4_ADDR_DST, BPF_FILE);
+	skel->bss->stale_cb_seen = false;
+	skel->bss->stale_cb_cleared = false;
+	SYS_NOFAIL("ip netns exec %s ping -q -R -c 1 -W 1 -I veth1 %s >/dev/null 2>&1",
+		   ns1, IP4_ADDR_DST);
+	ASSERT_TRUE(skel->bss->stale_cb_seen, "stale_cb_seen");
+	ASSERT_TRUE(skel->bss->stale_cb_cleared, "stale_cb_cleared");
+
+out:
+	test_lwt_ip_encap__destroy(skel);
+	SYS_NOFAIL("ip netns del %s", ns1);
+	SYS_NOFAIL("ip netns del %s", ns2);
+	SYS_NOFAIL("ip netns del %s", ns3);
+}

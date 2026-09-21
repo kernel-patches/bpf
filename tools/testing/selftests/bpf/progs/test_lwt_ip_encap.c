@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "vmlinux.h"
 #include <string.h>
+#include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_tracing.h>
@@ -9,6 +10,8 @@ struct grehdr {
 	__be16 flags;
 	__be16 protocol;
 };
+
+#define ICMP_TIME_EXCEEDED 11
 
 SEC("encap_gre")
 int bpf_lwt_encap_gre(struct __sk_buff *skb)
@@ -78,6 +81,29 @@ int bpf_lwt_encap_gre6(struct __sk_buff *skb)
 		return BPF_DROP;
 
 	return BPF_LWT_REROUTE;
+}
+
+SEC("encap_stale")
+int bpf_lwt_encap_stale(struct __sk_buff *skb)
+{
+	struct iphdr iph = {};
+
+	/* Exercise CB restore before post-run invalidation. */
+	if (skb->cb[0])
+		return BPF_DROP;
+
+	iph.version = 4;
+	iph.ihl = 5;
+	iph.ttl = 1;
+	iph.protocol = IPPROTO_IPIP;
+	iph.tot_len = bpf_htons(skb->len + sizeof(iph));
+	iph.saddr = bpf_htonl(0xac100264); /* 172.16.2.100 */
+	iph.daddr = bpf_htonl(0xac100464); /* 172.16.4.100 */
+
+	if (bpf_lwt_push_encap(skb, BPF_LWT_ENCAP_IP, &iph, sizeof(iph)))
+		return BPF_DROP;
+
+	return BPF_OK;
 }
 
 #define VXLAN_PORT  4789
@@ -194,6 +220,27 @@ volatile const int tgt_ip_version;
 __u16 transport_hdr = 0;
 __u16 network_hdr = 0;
 bool fexit_triggered = false;
+bool stale_cb_cleared = false;
+bool stale_cb_seen = false;
+
+SEC("fentry/__icmp_send")
+int BPF_PROG(fentry_icmp_send, struct sk_buff *skb, int type, int code,
+	     __be32 info, const struct inet_skb_parm *parm)
+{
+	struct iphdr *iph;
+
+	if (type != ICMP_TIME_EXCEEDED)
+		return 0;
+
+	iph = (void *)BPF_CORE_READ(skb, head) + BPF_CORE_READ(skb, network_header);
+	if (BPF_CORE_READ(iph, daddr) != bpf_htonl(0xac100464))
+		return 0;
+
+	stale_cb_seen = true;
+	stale_cb_cleared = !BPF_CORE_READ(parm, opt.optlen) &&
+			   !BPF_CORE_READ(parm, opt.rr);
+	return 0;
+}
 
 SEC("?fexit/bpf_lwt_push_ip_encap")
 int BPF_PROG(fexit_lwt_push_ip_encap, struct sk_buff *skb, void *hdr, u32 len, bool ingress,
