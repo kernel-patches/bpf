@@ -4598,6 +4598,14 @@ static void bpf_task_work_callback(struct callback_head *cb)
 		bpf_task_work_ctx_put(ctx);
 		return;
 	}
+	if (WARN_ON_ONCE(state != BPF_TW_SCHEDULING &&
+			 state != BPF_TW_SCHEDULED)) {
+		bpf_task_work_ctx_put(ctx);
+		return;
+	}
+
+	/* Do not release this round's resources until its scheduler is done. */
+	irq_work_sync(&ctx->irq_work);
 
 	key = (void *)map_key_from_value(ctx->map, ctx->map_val, &idx);
 
@@ -4624,6 +4632,12 @@ static void bpf_task_work_irq(struct irq_work *irq_work)
 		bpf_task_work_ctx_put(ctx);
 		return;
 	}
+	/*
+	 * Pin the ctx until this handler is done. The callback may observe
+	 * FREED and drop its ref first, and destroy must not reset ctx->task
+	 * before the cancellation attempt below.
+	 */
+	refcount_inc(&ctx->refcnt);
 
 	err = task_work_add(ctx->task, &ctx->work, ctx->mode);
 	if (err) {
@@ -4633,20 +4647,26 @@ static void bpf_task_work_irq(struct irq_work *irq_work)
 		 * gone to FREED already, which is fine as we already cleaned up after ourselves
 		 */
 		(void)cmpxchg(&ctx->state, BPF_TW_SCHEDULING, BPF_TW_STANDBY);
+		/*
+		 * No callback was published, so drop both refs owned by this
+		 * failed round: the callback ref and the scheduler's temporary ref.
+		 */
+		bpf_task_work_ctx_put(ctx);
 		bpf_task_work_ctx_put(ctx);
 		return;
 	}
 
 	/*
-	 * It's technically possible for just scheduled task_work callback to
-	 * complete running by now, going SCHEDULING -> RUNNING and then
-	 * dropping its ctx refcount. Instead of capturing an extra ref just
-	 * to protect below ctx->state access, we rely on rcu_read_lock
-	 * above to prevent kfree_rcu from freeing ctx before we return.
+	 * The callback may already be running on the target task's CPU, but
+	 * it waits for this invocation to finish before resetting task/prog
+	 * or publishing STANDBY, and the temporary reference above keeps the
+	 * ctx alive no matter how the other references are dropped here.
 	 */
 	state = cmpxchg(&ctx->state, BPF_TW_SCHEDULING, BPF_TW_SCHEDULED);
 	if (state == BPF_TW_FREED)
 		bpf_task_work_cancel(ctx); /* clean up if we switched into FREED state */
+
+	bpf_task_work_ctx_put(ctx);
 }
 
 static struct bpf_task_work_ctx *bpf_task_work_fetch_ctx(struct bpf_task_work *tw,
@@ -4666,6 +4686,7 @@ static struct bpf_task_work_ctx *bpf_task_work_fetch_ctx(struct bpf_task_work *t
 	memset(ctx, 0, sizeof(*ctx));
 	refcount_set(&ctx->refcnt, 1); /* map's own ref */
 	ctx->state = BPF_TW_STANDBY;
+	init_irq_work(&ctx->irq_work, bpf_task_work_irq);
 
 	old_ctx = cmpxchg(&twk->ctx, NULL, ctx);
 	if (old_ctx) {
@@ -4684,6 +4705,7 @@ static struct bpf_task_work_ctx *bpf_task_work_acquire_ctx(struct bpf_task_work 
 							   struct bpf_map *map)
 {
 	struct bpf_task_work_ctx *ctx;
+	enum bpf_task_work_state state;
 
 	/*
 	 * Sleepable BPF programs hold rcu_read_lock_trace but not
@@ -4705,6 +4727,19 @@ static struct bpf_task_work_ctx *bpf_task_work_acquire_ctx(struct bpf_task_work 
 
 	if (cmpxchg(&ctx->state, BPF_TW_STANDBY, BPF_TW_PENDING) != BPF_TW_STANDBY) {
 		/* lost acquiring race or map_release_uref() stole it from us, put ref and bail */
+		bpf_task_work_ctx_put(ctx);
+		return ERR_PTR(-EBUSY);
+	}
+	/*
+	 * An add failure publishes STANDBY before its irq_work handler
+	 * returns. Do not let a new round requeue the same irq_work until that
+	 * handler has cleared BUSY. Otherwise two invocations can overlap on
+	 * different CPUs; either tail can clear the shared BUSY bit and let a
+	 * later irq_work_sync() return while the other invocation still runs.
+	 */
+	if (unlikely(irq_work_is_busy(&ctx->irq_work))) {
+		state = cmpxchg(&ctx->state, BPF_TW_PENDING, BPF_TW_STANDBY);
+		WARN_ON_ONCE(state != BPF_TW_PENDING && state != BPF_TW_FREED);
 		bpf_task_work_ctx_put(ctx);
 		return ERR_PTR(-EBUSY);
 	}
@@ -4757,7 +4792,6 @@ static int bpf_task_work_schedule(struct task_struct *task, struct bpf_task_work
 	ctx->map = map;
 	ctx->map_val = (void *)tw - map->record->task_work_off;
 	init_task_work(&ctx->work, bpf_task_work_callback);
-	init_irq_work(&ctx->irq_work, bpf_task_work_irq);
 
 	irq_work_queue(&ctx->irq_work);
 	return 0;
