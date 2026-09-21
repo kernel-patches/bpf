@@ -21919,6 +21919,7 @@ err_free_env:
 	kvfree(env->succ);
 	kvfree(env->gotox_tmp_buf);
 	bpf_diag_free(env);
+	kvfree(env->cleanup_info);
 	kvfree(env);
 	return ret;
 }
