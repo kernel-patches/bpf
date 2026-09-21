@@ -981,13 +981,15 @@ static void cleanup_relos(struct bpf_gen *gen, int insns)
 	cleanup_core_relo(gen);
 }
 
-/* Convert func, line, and core relo info blobs to target endianness */
+/* Convert func, line, core relo and cleanup info blobs to target endianness */
 static void info_blob_bswap(struct bpf_gen *gen, int func_info, int line_info,
-			    int core_relos, struct bpf_prog_load_opts *load_attr)
+			    int core_relos, int cleanup_info,
+			    struct bpf_prog_load_opts *load_attr)
 {
 	struct bpf_func_info *fi = gen->data_start + func_info;
 	struct bpf_line_info *li = gen->data_start + line_info;
 	struct bpf_core_relo *cr = gen->data_start + core_relos;
+	struct bpf_cleanup_info *ci = gen->data_start + cleanup_info;
 	int i;
 
 	for (i = 0; i < load_attr->func_info_cnt; i++)
@@ -998,6 +1000,9 @@ static void info_blob_bswap(struct bpf_gen *gen, int func_info, int line_info,
 
 	for (i = 0; i < gen->core_relo_cnt; i++)
 		bpf_core_relo_bswap(cr++);
+
+	for (i = 0; i < load_attr->cleanup_info_cnt; i++)
+		bpf_cleanup_info_bswap(ci++);
 }
 
 void bpf_gen__prog_load(struct bpf_gen *gen,
@@ -1011,8 +1016,11 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 			       load_attr->line_info_rec_size;
 	int core_relo_tot_sz = gen->core_relo_cnt *
 			       sizeof(struct bpf_core_relo);
+	int cleanup_info_tot_sz = load_attr->cleanup_info_cnt *
+				  load_attr->cleanup_info_rec_size;
 	int prog_load_attr, license_off, insns_off, func_info, line_info, core_relos;
-	int attr_size = offsetofend(union bpf_attr, core_relo_rec_size);
+	int attr_size = offsetofend(union bpf_attr, cleanup_info_cnt);
+	int cleanup_info;
 	union bpf_attr attr;
 
 	memset(&attr, 0, attr_size);
@@ -1061,9 +1069,17 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 		 core_relos, gen->core_relo_cnt,
 		 sizeof(struct bpf_core_relo));
 
+	attr.cleanup_info_rec_size = tgt_endian(load_attr->cleanup_info_rec_size);
+	attr.cleanup_info_cnt = tgt_endian(load_attr->cleanup_info_cnt);
+	cleanup_info = add_data(gen, load_attr->cleanup_info, cleanup_info_tot_sz);
+	pr_debug("gen: prog_load: cleanup_info: off %d cnt %u rec size %u\n",
+		 cleanup_info, load_attr->cleanup_info_cnt,
+		 load_attr->cleanup_info_rec_size);
+
 	/* convert all info blobs to target endianness */
 	if (gen->swapped_endian && !gen->error)
-		info_blob_bswap(gen, func_info, line_info, core_relos, load_attr);
+		info_blob_bswap(gen, func_info, line_info, core_relos, cleanup_info,
+				load_attr);
 
 	libbpf_strlcpy(attr.prog_name, prog_name, sizeof(attr.prog_name));
 	prog_load_attr = add_data(gen, &attr, attr_size);
@@ -1084,6 +1100,11 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 
 	/* populate union bpf_attr with a pointer to core_relos */
 	emit_rel_store(gen, attr_field(prog_load_attr, core_relos), core_relos);
+
+	/* populate union bpf_attr with a pointer to cleanup_info, if there is one */
+	if (load_attr->cleanup_info_cnt)
+		emit_rel_store(gen, attr_field(prog_load_attr, cleanup_info),
+			       cleanup_info);
 
 	/* populate union bpf_attr fd_array with a pointer to data where map_fds are saved */
 	emit_rel_store(gen, attr_field(prog_load_attr, fd_array), gen->fd_array);
