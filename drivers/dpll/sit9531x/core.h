@@ -224,6 +224,7 @@ struct sit9531x_dev {
 	u64			pll_fvco[SIT9531X_NUM_PLLS];
 	u8			out_pll_map[SIT9531X_MAX_OUTPUTS];
 	bool			out_pll_map_valid;
+	u8			out_pll_map_count;
 
 	/* Inter-PLL synchronization state */
 	s8			intsync_src;

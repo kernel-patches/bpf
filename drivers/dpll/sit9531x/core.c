@@ -1695,12 +1695,15 @@ int sit9531x_pll_ffo_ppt(struct sit9531x_dev *sitdev, u8 pll_idx, s64 *ffo)
 }
 
 /*
- * sit9531x_get_fvco - read VCO frequency from chip's DIVN registers
+ * sit9531x_get_fvco - the VCO frequency the driver works from
  *
- * Fvco = Fref * DIVN, where DIVN comes from sit9531x_divn_static() and
- * Fref = xtal_freq << doubler.  DIVN is the steady-state Fvco/Fref
- * target programmed by the NVM blob and is authoritative in both
- * free-run and sync modes.
+ * A board that describes the VCO through "sitime,pll-fvco" is taken at
+ * its word and nothing is read.  Otherwise Fvco = Fref * DIVN, where
+ * DIVN comes from sit9531x_divn_static() and Fref = xtal_freq <<
+ * doubler.  DIVN is the steady-state Fvco/Fref target programmed by the
+ * NVM blob and is authoritative in both free-run and sync modes; the
+ * result is clamped to the band the PLL runs in, so every caller divides
+ * the same number.
  *
  * Return: 0 with *fvco set on success, -ENODATA when DIVN is not
  * programmed (dormant PLL), or the register access error.  A bus
@@ -3239,6 +3242,27 @@ static int sit9531x_out_state_fetch(struct sit9531x_dev *sitdev, u8 index)
 	sitdev->out[index].state_stale = false;
 
 	/*
+	 * DT board-config override: the per-PLL OUTPUT_ENABLE bitmaps
+	 * (0x27/0x28) do not unambiguously express output->PLL routing on
+	 * every config (overlaps, and some outputs routed outside that
+	 * path).  When the board supplies an explicit map, trust it.
+	 */
+	if (sitdev->out_pll_map_valid) {
+		u8 m = sitdev->out_pll_map[index];
+
+		if (m < SIT9531X_NUM_PLLS) {
+			out->pll_idx = m;
+			out->routed = true;
+			out->enabled = !muted;
+		} else {
+			out->pll_idx = 0;
+			out->routed = false;
+			out->enabled = false;
+		}
+		return 0;
+	}
+
+	/*
 	 * The OUT_MAP_LO/HI bitmaps are indexed by the physical slot the
 	 * output occupies on the chip, not by the driver's logical output
 	 * index (translated above via the chip-info clkout_map[]: identity
@@ -4223,6 +4247,126 @@ static u64 sit9531x_derive_clock_id(struct sit9531x_dev *sitdev)
 	return clkid;
 }
 
+/*
+ * Does an Fvco fall in the band the given PLL runs in?
+ *
+ * The two bands are disjoint, and which one applies is fixed per PLL, so a
+ * single envelope from the bottom of the low band to the top of the high
+ * one would accept both the ~1 GHz gap between them and a rate belonging to
+ * the other PLL's band.
+ */
+static bool sit9531x_fvco_in_band(u8 pll_idx, u64 fvco)
+{
+	if (pll_idx == 1 || pll_idx == 3)
+		return fvco >= SIT9531X_FVCO_HIGHBAND_MIN &&
+		       fvco <= SIT9531X_FVCO_HIGHBAND_MAX;
+
+	return fvco >= SIT9531X_FVCO_LOWBAND_MIN &&
+	       fvco <= SIT9531X_FVCO_LOWBAND_MAX;
+}
+
+/*
+ * Board-config overrides for fixed efuse/blob routing the chip registers do
+ * not describe unambiguously.  Absent properties leave pll_fvco[] zeroed
+ * (derive from DIVN) and out_pll_map_valid false (use the OUT_MAP registers).
+ */
+static void sit9531x_parse_board_config(struct sit9531x_dev *sitdev)
+{
+	u32 map[SIT9531X_MAX_OUTPUTS];
+	int n, i, rc;
+
+	if (device_property_present(sitdev->dev, "sitime,pll-fvco")) {
+		/*
+		 * A fixed-count read rejects a short array but accepts a
+		 * long one and drops the surplus, so the count is checked
+		 * here: the property describes four PLLs and an array of
+		 * any other length describes something else.
+		 */
+		rc = device_property_count_u64(sitdev->dev,
+					       "sitime,pll-fvco");
+		if (rc != SIT9531X_NUM_PLLS) {
+			dev_warn(sitdev->dev,
+				 "sitime,pll-fvco needs %d entries, ignoring\n",
+				 SIT9531X_NUM_PLLS);
+			memset(sitdev->pll_fvco, 0, sizeof(sitdev->pll_fvco));
+			goto out_map;
+		}
+
+		rc = device_property_read_u64_array(sitdev->dev,
+						    "sitime,pll-fvco",
+						    sitdev->pll_fvco,
+						    SIT9531X_NUM_PLLS);
+		if (rc) {
+			dev_warn(sitdev->dev,
+				 "invalid sitime,pll-fvco (%d), ignoring\n",
+				 rc);
+			memset(sitdev->pll_fvco, 0, sizeof(sitdev->pll_fvco));
+		}
+
+		/*
+		 * The override is used verbatim by the divider math, so an
+		 * implausible value (units typo, wrong cell count worked
+		 * around with zeros) must not silently misprogram DIVO.
+		 * Anything outside both VCO bands is dropped with a warning
+		 * rather than trusted.
+		 */
+		for (i = 0; i < SIT9531X_NUM_PLLS; i++) {
+			u64 f = sitdev->pll_fvco[i];
+
+			if (f && !sit9531x_fvco_in_band(i, f)) {
+				dev_warn(sitdev->dev,
+					 "PLL%c Fvco override %llu Hz is outside the band that PLL runs in, ignoring\n",
+					 'A' + i, f);
+				sitdev->pll_fvco[i] = 0;
+			}
+		}
+	}
+
+out_map:
+	if (!device_property_present(sitdev->dev, "sitime,output-pll-map"))
+		return;
+
+	/*
+	 * Any 1..MAX_OUTPUTS length is accepted so the 8-output SiT95317 need
+	 * not pad to 12; variant detection has not run yet and entries past
+	 * the detected num_outputs are never indexed.  Trailing entries of a
+	 * short map must read as unmapped rather than 0 (== PLLA), which
+	 * would mark unrouted outputs active in sit9531x_out_state_fetch().
+	 */
+	memset(sitdev->out_pll_map, SIT9531X_OUT_PLL_UNMAPPED,
+	       sizeof(sitdev->out_pll_map));
+
+	n = device_property_count_u32(sitdev->dev, "sitime,output-pll-map");
+	sitdev->out_pll_map_count = (n > 0) ? n : 0;
+	if (n <= 0 || n > SIT9531X_MAX_OUTPUTS ||
+	    device_property_read_u32_array(sitdev->dev, "sitime,output-pll-map",
+					   map, n)) {
+		dev_warn(sitdev->dev,
+			 "invalid sitime,output-pll-map, ignoring\n");
+		return;
+	}
+
+	/*
+	 * The binding allows only 0-3 and 255 per entry.  A stray value
+	 * would silently unroute an output (m >= SIT9531X_NUM_PLLS reads
+	 * as unmapped in sit9531x_out_state_fetch()), so reject the whole
+	 * property loudly instead.
+	 */
+	for (i = 0; i < n; i++) {
+		if (map[i] >= SIT9531X_NUM_PLLS &&
+		    map[i] != SIT9531X_OUT_PLL_UNMAPPED) {
+			dev_warn(sitdev->dev,
+				 "sitime,output-pll-map entry %d is %u (must be 0-3 or 255), ignoring map\n",
+				 i, map[i]);
+			return;
+		}
+	}
+
+	for (i = 0; i < n; i++)
+		sitdev->out_pll_map[i] = map[i];
+	sitdev->out_pll_map_valid = true;
+}
+
 int sit9531x_dev_probe(struct sit9531x_dev *sitdev)
 {
 	struct clk *xtal_clk;
@@ -4267,6 +4411,8 @@ int sit9531x_dev_probe(struct sit9531x_dev *sitdev)
 	if (sitdev->reset_gpio)
 		fsleep(10000);	/* internal boot after release */
 
+	sit9531x_parse_board_config(sitdev);
+
 	rc = sit9531x_read_variant_id(sitdev, &variant_id);
 	if (rc)
 		return rc;
@@ -4276,6 +4422,21 @@ int sit9531x_dev_probe(struct sit9531x_dev *sitdev)
 		return dev_err_probe(sitdev->dev, -ENODEV,
 				     "Unknown variant ID: 0x%02x\n",
 				     variant_id);
+
+	/*
+	 * The map is parsed before the variant is known, so its length can
+	 * only be checked against the part here.  A map that stops short of
+	 * the outputs this variant has leaves the rest reading as unmapped,
+	 * which would drop real output pins; fall back to the routing the
+	 * registers describe instead.
+	 */
+	if (sitdev->out_pll_map_valid &&
+	    sitdev->out_pll_map_count < sitdev->info->num_outputs) {
+		dev_warn(sitdev->dev,
+			 "sitime,output-pll-map has %u of %u outputs, ignoring map\n",
+			 sitdev->out_pll_map_count, sitdev->info->num_outputs);
+		sitdev->out_pll_map_valid = false;
+	}
 
 	sitdev->clock_id = sit9531x_derive_clock_id(sitdev);
 	sitdev->intsync_src = -1;
