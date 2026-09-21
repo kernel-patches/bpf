@@ -292,6 +292,7 @@ void __bpf_prog_free(struct bpf_prog *fp)
 		mutex_destroy(&fp->aux->dst_mutex);
 		mutex_destroy(&fp->aux->st_ops_assoc_mutex);
 		kfree(fp->aux->poke_tab);
+		bpf_cleanup_free_info(fp->aux);
 		kfree(fp->aux);
 	}
 	free_percpu(fp->stats);
@@ -2625,13 +2626,21 @@ static bool bpf_prog_select_interpreter(struct bpf_prog *fp)
 	return select_interpreter;
 }
 
-static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
+static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog,
+					     int *err)
 {
 #ifdef CONFIG_BPF_JIT
 	struct bpf_prog *orig_prog;
+	int ret;
 
-	if (!bpf_prog_need_blind(prog))
+	if (!bpf_prog_need_blind(prog)) {
+		ret = bpf_cleanup_attach_main_prog(env, prog);
+		if (ret) {
+			*err = ret;
+			return prog;
+		}
 		return bpf_int_jit_compile(env, prog);
+	}
 
 	orig_prog = prog;
 	prog = bpf_jit_blind_constants(env, prog);
@@ -2641,6 +2650,13 @@ static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struc
 	 */
 	if (IS_ERR(prog))
 		goto out_restore;
+
+	ret = bpf_cleanup_attach_main_prog(env, prog);
+	if (ret) {
+		*err = ret;
+		bpf_jit_prog_release_other(orig_prog, prog);
+		goto out_restore;
+	}
 
 	prog = bpf_int_jit_compile(env, prog);
 	if (prog->jited) {
@@ -2681,8 +2697,10 @@ struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env, struct 
 		if (*err)
 			return fp;
 
-		fp = bpf_prog_jit_compile(env, fp);
+		fp = bpf_prog_jit_compile(env, fp, err);
 		bpf_prog_jit_attempt_done(fp);
+		if (*err)
+			return fp;
 		if (!fp->jited && jit_needed) {
 			*err = -ENOTSUPP;
 			return fp;
@@ -3478,6 +3496,12 @@ void __weak arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp,
 bool __weak bpf_jit_supports_cleanup_pads(void)
 {
 	return false;
+}
+
+/* Call @pad with the frame pointer @frame_fp and r6-r9 spilled at @spill_base. */
+void __weak arch_bpf_run_cleanup_pad(u64 pad, u64 frame_fp, u64 spill_base)
+{
+	WARN_ON_ONCE(1);
 }
 
 bool __weak bpf_jit_supports_timed_may_goto(void)
