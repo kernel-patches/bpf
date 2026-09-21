@@ -99,6 +99,35 @@ int widening_counter(void *unused)
 	return 0;
 }
 
+static __naked __used void widening_alternating_cb(void)
+{
+	asm volatile (
+		"r1 = *(u64 *)(r2 + 8);"
+		"if r1 == 0 goto 1f;"
+		"r3 = *(u64 *)(r2 + 0);"
+		"r3 += 1;"
+		"*(u64 *)(r2 + 0) = r3;"
+	"1:"
+		"r1 ^= 1;"
+		"*(u64 *)(r2 + 8) = r1;"
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all
+	);
+}
+
+SEC("?raw_tp")
+__success
+__log_level(2) __log_always
+__msg("processed {{[1-9][0-9]?[0-9]?}} insns")
+int widening_alternating_counter(void *unused)
+{
+	struct num_context loop_ctx = { .i = 0, .j = 0 };
+
+	bpf_loop(1000000, widening_alternating_cb, &loop_ctx, 0);
+	return 0;
+}
+
 static __naked __used void widening_late_precision_cb(void)
 {
 	asm volatile (

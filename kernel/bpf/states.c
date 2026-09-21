@@ -1238,9 +1238,12 @@ int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 	struct bpf_verifier_state_list *new_sl;
 	struct bpf_verifier_state_list *sl;
 	struct bpf_verifier_state *cur = env->cur_state, *new;
+	bool callback_widening = cur->callback_widening_pending;
 	bool force_new_state, add_new_state, loop;
-	int n, err, states_cnt = 0;
+	int n, fr, err, states_cnt = 0;
 	struct list_head *pos, *tmp, *head;
+
+	cur->callback_widening_pending = false;
 
 	force_new_state = env->test_state_freq || bpf_is_force_checkpoint(env, insn_idx) ||
 			  /* Avoid accumulating infinitely long jmp history */
@@ -1578,6 +1581,12 @@ miss:
 		return err;
 	}
 	new->insn_idx = insn_idx;
+	if (!callback_widening) {
+		for (fr = 0; fr <= new->curframe; fr++) {
+			new->frame[fr]->widening_regs = 0;
+			new->frame[fr]->widening_stack = 0;
+		}
+	}
 	verifier_bug_if(new->branches != 1, env,
 			"%s:branches_to_explore=%d insn %d",
 			__func__, new->branches, insn_idx);

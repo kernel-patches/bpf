@@ -197,6 +197,42 @@ __naked int widening_counter(void)
 SEC("?raw_tp")
 __success
 __log_level(2) __log_always
+__msg("processed {{[1-9][0-9]?[0-9]?}} insns")
+__naked int widening_alternating_counter(void)
+{
+	asm volatile (
+		"r6 = 0;"
+		"r7 = 0;"
+		"r1 = r10;"
+		"r1 += -8;"
+		"r2 = 0;"
+		"r3 = 1000000;"
+		"call %[bpf_iter_num_new];"
+	"1:"
+		"r1 = r10;"
+		"r1 += -8;"
+		"call %[bpf_iter_num_next];"
+		"if r0 == 0 goto 3f;"
+		"if r7 == 0 goto 2f;"
+		"r6 += 1;"
+	"2:"
+		"r7 ^= 1;"
+		"goto 1b;"
+	"3:"
+		"r1 = r10;"
+		"r1 += -8;"
+		"call %[bpf_iter_num_destroy];"
+		"r0 = 0;"
+		"exit;"
+		:
+		: ITER_HELPERS
+		: __clobber_all
+	);
+}
+
+SEC("?raw_tp")
+__success
+__log_level(2) __log_always
 __naked int widening_late_precision(void)
 {
 	/*

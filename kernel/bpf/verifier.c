@@ -1714,6 +1714,7 @@ int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
 		return err;
 	dst_state->speculative = src->speculative;
 	dst_state->in_sleepable = src->in_sleepable;
+	dst_state->callback_widening_pending = src->callback_widening_pending;
 	dst_state->curframe = src->curframe;
 	dst_state->branches = src->branches;
 	dst_state->parent = src->parent;
@@ -7934,26 +7935,14 @@ static int process_iter_arg(struct bpf_verifier_env *env, struct bpf_reg_state *
 /* Look for a previous loop entry at insn_idx: nearest parent state
  * stopped at insn_idx with callsites matching those in cur->frame.
  */
-static struct bpf_verifier_state *find_prev_entry(struct bpf_verifier_env *env,
-						  struct bpf_verifier_state *cur,
+static struct bpf_verifier_state *find_prev_entry(struct bpf_verifier_state *cur,
 						  int insn_idx)
 {
-	struct bpf_verifier_state_list *sl;
 	struct bpf_verifier_state *st;
-	struct list_head *pos, *head;
 
-	/* Explored states are pushed in stack order, most recent states come first */
-	head = bpf_explored_state(env, insn_idx);
-	list_for_each(pos, head) {
-		sl = container_of(pos, struct bpf_verifier_state_list, node);
-		/* If st->branches != 0 state is a part of current DFS verification path,
-		 * hence cur & st for a loop.
-		 */
-		st = &sl->state;
-		if (st->insn_idx == insn_idx && st->branches && same_callsites(st, cur) &&
-		    st->dfs_depth < cur->dfs_depth)
+	for (st = cur->parent; st; st = st->parent)
+		if (st->insn_idx == insn_idx && same_callsites(st, cur))
 			return st;
-	}
 
 	return NULL;
 }
@@ -7968,60 +7957,55 @@ static bool scalars_exact_for_widen(const struct bpf_reg_state *rold,
 	return !memcmp(rold, rcur, offsetof(struct bpf_reg_state, id));
 }
 
-static void maybe_widen_reg(struct bpf_verifier_env *env,
-			    const struct bpf_reg_state *rolder,
-			    const struct bpf_reg_state *rold, struct bpf_reg_state *rcur)
+/* Report an eligible change, including the first one whose widening is deferred. */
+static bool maybe_widen_reg(struct bpf_verifier_env *env,
+			    const struct bpf_reg_state *rold, struct bpf_reg_state *rcur,
+			    bool consumed)
 {
-	if (rolder->type != SCALAR_VALUE || rold->type != SCALAR_VALUE)
-		return;
-	if (rold->type != rcur->type)
-		return;
-	if (rold->precise || rcur->precise ||
-	    scalars_exact_for_widen(rolder, rold) || scalars_exact_for_widen(rold, rcur))
-		return;
-	__mark_reg_unknown(env, rcur);
+	if (rold->type != SCALAR_VALUE || rcur->type != SCALAR_VALUE)
+		return false;
+	if (rold->precise || rcur->precise || scalars_exact_for_widen(rold, rcur))
+		return false;
+	if (consumed)
+		__mark_reg_unknown(env, rcur);
+	return true;
 }
 
-static int widen_imprecise_scalars(struct bpf_verifier_env *env,
-				   struct bpf_verifier_state *old,
-				   struct bpf_verifier_state *cur)
+static void widen_imprecise_scalars(struct bpf_verifier_env *env,
+				    const struct bpf_verifier_state *old,
+				    struct bpf_verifier_state *cur,
+				    struct bpf_verifier_state *checkpoint)
 {
-	struct bpf_func_state *folder, *fold, *fcur;
-	struct bpf_verifier_state *older;
+	struct bpf_func_state *fcur, *fcheck;
+	const struct bpf_func_state *fold;
+	u64 regs, stack;
 	int i, fr, num_slots;
 
-	for (older = old->parent; older; older = older->parent)
-		if (older->insn_idx == old->insn_idx && same_callsites(older, old))
-			break;
-	if (!older)
-		return 0;
-
 	for (fr = old->curframe; fr >= 0; fr--) {
-		folder = older->frame[fr];
 		fold = old->frame[fr];
 		fcur = cur->frame[fr];
+		fcheck = checkpoint->frame[fr];
+		regs = fold->widening_regs;
+		stack = fold->widening_stack;
 
 		for (i = 0; i < MAX_BPF_REG; i++)
-			maybe_widen_reg(env,
-					&folder->regs[i],
-					&fold->regs[i],
-					&fcur->regs[i]);
+			if (maybe_widen_reg(env, &fold->regs[i], &fcur->regs[i],
+					    regs & BIT_ULL(i)))
+				regs |= BIT_ULL(i);
 
-		num_slots = min3(folder->allocated_stack, fold->allocated_stack,
-				 fcur->allocated_stack) / BPF_REG_SIZE;
+		num_slots = min(fold->allocated_stack, fcur->allocated_stack) / BPF_REG_SIZE;
 		for (i = 0; i < num_slots; i++) {
-			if (!bpf_is_spilled_reg(&folder->stack[i]) ||
-			    !bpf_is_spilled_reg(&fold->stack[i]) ||
+			if (!bpf_is_spilled_reg(&fold->stack[i]) ||
 			    !bpf_is_spilled_reg(&fcur->stack[i]))
 				continue;
 
-			maybe_widen_reg(env,
-					&folder->stack[i].spilled_ptr,
-					&fold->stack[i].spilled_ptr,
-					&fcur->stack[i].spilled_ptr);
+			if (maybe_widen_reg(env, &fold->stack[i].spilled_ptr,
+					    &fcur->stack[i].spilled_ptr, stack & BIT_ULL(i)))
+				stack |= BIT_ULL(i);
 		}
+		fcheck->widening_regs = regs;
+		fcheck->widening_stack = stack;
 	}
-	return 0;
 }
 
 static struct bpf_reg_state *get_iter_from_state(struct bpf_verifier_state *cur_st,
@@ -8141,7 +8125,7 @@ static int process_iter_next_call(struct bpf_verifier_env *env, int insn_idx,
 		 * checkpoint created for cur_st by is_state_visited()
 		 * right at this instruction.
 		 */
-		prev_st = find_prev_entry(env, cur_st->parent, insn_idx);
+		prev_st = find_prev_entry(cur_st->parent, insn_idx);
 		/* branch out active iter state */
 		queued_st = push_stack(env, insn_idx + 1, insn_idx, false);
 		if (IS_ERR(queued_st))
@@ -8151,7 +8135,7 @@ static int process_iter_next_call(struct bpf_verifier_env *env, int insn_idx,
 		queued_iter->iter.state = BPF_ITER_STATE_ACTIVE;
 		queued_iter->iter.depth++;
 		if (prev_st)
-			widen_imprecise_scalars(env, prev_st, queued_st);
+			widen_imprecise_scalars(env, prev_st, queued_st, cur_st->parent);
 
 		queued_fr = queued_st->frame[queued_st->curframe];
 		mark_ptr_not_null_reg(&queued_fr->regs[BPF_REG_0]);
@@ -11108,11 +11092,10 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	 * This is similar to what is done in process_iter_next_call() for open
 	 * coded iterators.
 	 */
-	prev_st = in_callback_fn ? find_prev_entry(env, state, *insn_idx) : NULL;
+	prev_st = in_callback_fn ? find_prev_entry(state, *insn_idx) : NULL;
 	if (prev_st) {
-		err = widen_imprecise_scalars(env, prev_st, state);
-		if (err)
-			return err;
+		widen_imprecise_scalars(env, prev_st, state, state);
+		state->callback_widening_pending = true;
 	}
 	return 0;
 }
@@ -17311,7 +17294,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		struct bpf_verifier_state *cur_st = env->cur_state, *queued_st, *prev_st;
 		int idx = *insn_idx;
 
-		prev_st = find_prev_entry(env, cur_st->parent, idx);
+		prev_st = find_prev_entry(cur_st->parent, idx);
 
 		/* branch out 'fallthrough' insn as a new state to explore */
 		queued_st = push_stack(env, idx + 1, idx, false);
@@ -17320,7 +17303,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 
 		queued_st->may_goto_depth++;
 		if (prev_st)
-			widen_imprecise_scalars(env, prev_st, queued_st);
+			widen_imprecise_scalars(env, prev_st, queued_st, cur_st->parent);
 		*insn_idx += insn->off;
 		return 0;
 	}
