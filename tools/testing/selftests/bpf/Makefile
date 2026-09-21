@@ -663,7 +663,7 @@ EXTRA_CLEAN := $(SCRATCH_DIR) $(HOST_SCRATCH_DIR)			\
 			       liburandom_read.so)			\
 	$(OUTPUT)/FEATURE-DUMP.selftests
 
-.PHONY: docs docs-clean
+.PHONY: docs docs-clean libarena
 
 # Delete partially updated (corrupted) files on error
 .DELETE_ON_ERROR:
@@ -694,5 +694,6 @@ endef
 libarena: $(LIBARENA_SKEL)
 
 ifneq ($(CLANG_HAS_ARENA_ASAN),)
+.PHONY: libarena_asan
 libarena_asan: $(LIBARENA_ASAN_SKEL)
 endif
