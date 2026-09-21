@@ -23,6 +23,7 @@ static const struct mtk_gate_regs ipe_cg_regs = {
 		&mtk_clk_gate_ops_setclr)
 
 static const struct mtk_gate ipe_clks[] = {
+	GATE_DUMMY(CLK_DUMMY, "ipe_dummy"),
 	GATE_IPE(CLK_IPE_LARB7, "ipe_larb7", "ipe_sel", 0),
 	GATE_IPE(CLK_IPE_LARB8, "ipe_larb8", "ipe_sel", 1),
 	GATE_IPE(CLK_IPE_SMI_SUBCOM, "ipe_smi_subcom", "ipe_sel", 2),

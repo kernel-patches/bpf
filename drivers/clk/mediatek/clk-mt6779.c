@@ -1014,6 +1014,7 @@ static const struct mtk_gate infra_clks[] = {
 		    "fufs_sel", 13),
 	GATE_INFRA2(CLK_INFRA_MD32_BCLK, "infra_md32_bclk",
 		    "axi_sel", 14),
+	GATE_DUMMY(CLK_INFRA_SSPM, "infra_sspm_dummy"),
 	GATE_INFRA2(CLK_INFRA_UNIPRO_MBIST, "infra_unipro_mbist",
 		    "axi_sel", 16),
 	GATE_INFRA2(CLK_INFRA_SSPM_BUS_HCLK, "infra_sspm_bus_hclk",
