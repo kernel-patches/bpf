@@ -87,6 +87,114 @@ int widening(void *unused)
 	return choice_arr[loop_ctx.j];
 }
 
+SEC("?raw_tp")
+__success
+int widening_counter(void *unused)
+{
+	struct num_context loop_ctx = { .i = 0 };
+
+	bpf_loop(1000000, widening_cb, &loop_ctx, 0);
+	return 0;
+}
+
+static __naked __used void widening_late_precision_cb(void)
+{
+	asm volatile (
+		"r1 = *(u64 *)(r2 + 8);"
+		"if r1 != 0 goto 1f;"
+		"*(u64 *)(r2 + 8) = 1;"
+		"*(u64 *)(r2 + 0) = 7;"
+		"goto 2f;"
+	"1:"
+		"r1 = *(u64 *)(r2 + 0);"
+		"r1 <<= 2;"
+		"r2 += 16;"
+		"r2 += r1;"
+		"*(u32 *)(r2 + 0) = 42;"
+	"2:"
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all
+	);
+}
+
+SEC("?raw_tp")
+__failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__naked int widening_late_precision(void)
+{
+	asm volatile (
+		"*(u64 *)(r10 - 56) = 0;"
+		"*(u64 *)(r10 - 48) = 0;"
+		"r1 = 10;"
+		"r2 = widening_late_precision_cb ll;"
+		"r3 = r10;"
+		"r3 += -56;"
+		"r4 = 0;"
+		"call %[bpf_loop];"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm(bpf_loop)
+		: __clobber_all
+	);
+}
+
+SEC("?raw_tp")
+__failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__naked int widening_late_precision_large_init(void)
+{
+	asm volatile (
+		"*(u64 *)(r10 - 56) = 1000;"
+		"*(u64 *)(r10 - 48) = 0;"
+		"r1 = 10;"
+		"r2 = widening_late_precision_cb ll;"
+		"r3 = r10;"
+		"r3 += -56;"
+		"r4 = 0;"
+		"call %[bpf_loop];"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm(bpf_loop)
+		: __clobber_all
+	);
+}
+
+static __naked void widening_delayed_precision_cb(void)
+{
+	asm volatile (
+		"r9 = r2;"
+		"*(u64 *)(r10 - 16) = 0;"
+		"r1 = *(u64 *)(r9 + 8);"
+		"if r1 == 42 goto 1f;"
+		"*(u64 *)(r9 + 0) = -520;"
+		"goto 2f;"
+	"1:"
+		"r1 = *(u64 *)(r9 + 0);"
+		"r2 = r10;"
+		"r2 += r1;"
+		"r8 = *(u64 *)(r2 + 0);"
+	"2:"
+		"call %[bpf_get_prandom_u32];"
+		"*(u64 *)(r9 + 8) = r0;"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm(bpf_get_prandom_u32)
+		: __clobber_all
+	);
+}
+
+SEC("?raw_tp")
+__failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+int widening_delayed_precision_unsafe(void *unused)
+{
+	struct num_context loop_ctx = { .i = -16, .j = bpf_get_prandom_u32() };
+
+	bpf_loop(10, widening_delayed_precision_cb, &loop_ctx, 0);
+	return 0;
+}
+
 static int loop_detection_cb(__u32 idx, struct num_context *ctx)
 {
 	for (;;) {}

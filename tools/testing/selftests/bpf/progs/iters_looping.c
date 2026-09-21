@@ -162,6 +162,179 @@ int simplest_loop(void *ctx)
 	return 0;
 }
 
+SEC("?raw_tp")
+__success
+__naked int widening_counter(void)
+{
+	asm volatile (
+		"r6 = 0;"
+		"r1 = r10;"
+		"r1 += -8;"
+		"r2 = 0;"
+		"r3 = 10;"
+		"call %[bpf_iter_num_new];"
+	"1:"
+		"r1 = r10;"
+		"r1 += -8;"
+		"call %[bpf_iter_num_next];"
+		"if r0 == 0 goto 2f;"
+		"r6 += 1;"
+		"goto 1b;"
+	"2:"
+		"r1 = r10;"
+		"r1 += -8;"
+		"call %[bpf_iter_num_destroy];"
+		"r0 = 0;"
+		"exit;"
+		:
+		: ITER_HELPERS
+		: __clobber_all
+	);
+}
+
+SEC("?raw_tp")
+__failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__naked int widening_late_precision(void)
+{
+	/*
+	 * int arr[10], i = 0, a = 0;
+	 * while (bpf_iter_num_next(&it)) {
+	 *   if (a == 0) {
+	 *     a = 1;
+	 *     i = 7;
+	 *   } else {
+	 *     arr[i] = 42;
+	 *   }
+	 * }
+	 *
+	 */
+	asm volatile (
+		"r6 = 0;"
+		"r7 = 0;"
+		"r1 = r10;"
+		"r1 += -8;"
+		"r2 = 0;"
+		"r3 = 10;"
+		"call %[bpf_iter_num_new];"
+	"1:"
+		"r1 = r10;"
+		"r1 += -8;"
+		"call %[bpf_iter_num_next];"
+		"if r0 == 0 goto 3f;"
+		"if r6 != 0 goto 2f;"
+		"r6 = 1;"
+		"r7 = 7;"
+		"goto 1b;"
+	"2:"
+		"r1 = r7;"
+		"r1 <<= 2;"
+		"r2 = r10;"
+		"r2 += -48;"
+		"r2 += r1;"
+		"*(u32 *)(r2 + 0) = 42;"
+		"goto 1b;"
+	"3:"
+		"r1 = r10;"
+		"r1 += -8;"
+		"call %[bpf_iter_num_destroy];"
+		"r0 = 0;"
+		"exit;"
+		:
+		: ITER_HELPERS
+		: __clobber_all
+	);
+}
+
+SEC("?raw_tp")
+__failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__naked int widening_late_precision_large_init(void)
+{
+	asm volatile (
+		"r6 = 0;"
+		"r7 = 1000;"
+		"r1 = r10;"
+		"r1 += -8;"
+		"r2 = 0;"
+		"r3 = 10;"
+		"call %[bpf_iter_num_new];"
+	"1:"
+		"r1 = r10;"
+		"r1 += -8;"
+		"call %[bpf_iter_num_next];"
+		"if r0 == 0 goto 3f;"
+		"if r6 != 0 goto 2f;"
+		"r6 = 1;"
+		"r7 = 7;"
+		"goto 1b;"
+	"2:"
+		"r1 = r7;"
+		"r1 <<= 2;"
+		"r2 = r10;"
+		"r2 += -48;"
+		"r2 += r1;"
+		"*(u32 *)(r2 + 0) = 42;"
+		"goto 1b;"
+	"3:"
+		"r1 = r10;"
+		"r1 += -8;"
+		"call %[bpf_iter_num_destroy];"
+		"r0 = 0;"
+		"exit;"
+		:
+		: ITER_HELPERS
+		: __clobber_all
+	);
+}
+
+SEC("?raw_tp")
+__failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__naked int widening_delayed_precision_unsafe(void)
+{
+	/* The unsafe loop from commit 2793a8b015f7 ("bpf: exact states
+	 * comparison for iterator convergence checks"). Explore the update
+	 * of r7 before the branch that uses it as a stack offset, while read
+	 * and precision marks are still incomplete. Use -520 instead of -32
+	 * to remain unsafe even when uninitialized stack reads are allowed.
+	 */
+	asm volatile (
+		"*(u64 *)(r10 - 16) = 0;"
+		"r7 = -16;"
+		"call %[bpf_get_prandom_u32];"
+		"r6 = r0;"
+		"r1 = r10;"
+		"r1 += -8;"
+		"r2 = 0;"
+		"r3 = 10;"
+		"call %[bpf_iter_num_new];"
+	"1:"
+		"r1 = r10;"
+		"r1 += -8;"
+		"call %[bpf_iter_num_next];"
+		"if r0 == 0 goto 3f;"
+		"if r6 == 42 goto 2f;"
+		"r7 = -520;"
+		"call %[bpf_get_prandom_u32];"
+		"r6 = r0;"
+		"goto 1b;"
+	"2:"
+		"r0 = r10;"
+		"r0 += r7;"
+		"r8 = *(u64 *)(r0 + 0);"
+		"call %[bpf_get_prandom_u32];"
+		"r6 = r0;"
+		"goto 1b;"
+	"3:"
+		"r1 = r10;"
+		"r1 += -8;"
+		"call %[bpf_iter_num_destroy];"
+		"r0 = 0;"
+		"exit;"
+		:
+		: ITER_HELPERS, __imm(bpf_get_prandom_u32)
+		: __clobber_all
+	);
+}
+
 __used
 static void iterator_with_diff_stack_depth(int x)
 {
