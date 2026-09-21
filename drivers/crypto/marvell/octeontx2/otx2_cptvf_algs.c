@@ -883,8 +883,7 @@ static int aead_hmac_init(struct crypto_aead *cipher,
 	ipad = ctx->ipad;
 	opad = ctx->opad;
 
-	memcpy(ipad, ctx->key, authkeylen);
-	memset(ipad + authkeylen, 0, bs - authkeylen);
+	memcpy_and_pad(ipad, bs, ctx->key, authkeylen, 0);
 	memcpy(opad, ipad, bs);
 
 	for (icount = 0; icount < bs; icount++) {
