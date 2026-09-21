@@ -87,6 +87,27 @@ csky_syscall_trace:
 	jbsr	syscall_trace_enter
 	cmpnei	a0, 0
 	bt	1f
+
+#ifdef CONFIG_SECCOMP_FILTER
+	/*
+	 * Ptrace can change the saved syscall number before seccomp sees it.
+	 * Resolve the handler again so dispatch follows the number in pt_regs.
+	 */
+#if defined(__CSKYABIV2__)
+	ldw	syscallid, (sp, PT_REGS3)
+#else
+	ldw	syscallid, (sp, PT_REGS9)
+#endif
+	lrw	r9, __NR_syscalls
+	cmphs	syscallid, r9
+	bt	1f
+	lrw	r9, sys_call_table
+	ixw	r9, syscallid
+	ldw	syscallid, (r9)
+	cmpnei	syscallid, 0
+	bf	1f
+#endif /* CONFIG_SECCOMP_FILTER */
+
 	/* Prepare args before do system call */
 	ldw	a0, (sp, LSAVE_A0)
 	ldw	a1, (sp, LSAVE_A1)
