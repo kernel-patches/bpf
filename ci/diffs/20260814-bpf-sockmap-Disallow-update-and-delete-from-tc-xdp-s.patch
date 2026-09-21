@@ -1,0 +1,92 @@
+From be39165224d03d92a05f62b9ea10eec089365480 Mon Sep 17 00:00:00 2001
+From: Sechang Lim <rhkrqnwk98@gmail.com>
+Date: Tue, 30 Jun 2026 14:54:05 +0000
+Subject: [PATCH] bpf, sockmap: Disallow update and delete from tc, xdp,
+ socket_filter and flow_dissector
+
+sock_map_update_common() and __sock_map_delete() hold stab->lock and call
+sock_map_unref() -> sock_map_del_link(), which takes sk_callback_lock for
+write. That gives the order stab->lock -> sk_callback_lock.
+
+The reverse order comes from the SK_SKB stream parser.
+sk_psock_strp_data_ready() holds sk_callback_lock for read, and after the
+verdict tcp_bpf_strp_read_sock() acks the consumed data inline via
+__tcp_cleanup_rbuf(). The ACK goes out egress, where a sched_cls program
+deletes from the sockmap and takes stab->lock:
+
+  WARNING: possible circular locking dependency detected
+  ------------------------------------------------------
+  syz.9.8824 is trying to acquire lock:
+  (&stab->lock){+.-.}-{3:3}, at: __sock_map_delete net/core/sock_map.c:421
+  but task is already holding lock:
+  (clock-AF_INET){++.-}-{3:3}, at: sk_psock_strp_data_ready net/core/skmsg.c:1173
+
+  -> #1 (clock-AF_INET){++.-}-{3:3}:
+         _raw_write_lock_bh
+         sock_map_del_link net/core/sock_map.c:167
+         sock_map_unref net/core/sock_map.c:184
+         sock_map_update_common net/core/sock_map.c:509
+         sock_map_update_elem_sys net/core/sock_map.c:588
+         map_update_elem kernel/bpf/syscall.c:1805
+
+  -> #0 (&stab->lock){+.-.}-{3:3}:
+         _raw_spin_lock_bh
+         __sock_map_delete net/core/sock_map.c:421
+         sock_map_delete_elem net/core/sock_map.c:452
+         bpf_prog_06044d24140080b6
+         tcx_run net/core/dev.c:4451
+         sch_handle_egress net/core/dev.c:4541
+         __dev_queue_xmit net/core/dev.c:4808
+         ...
+         tcp_bpf_strp_read_sock net/ipv4/tcp_bpf.c:701
+         strp_data_ready net/strparser/strparser.c:402
+         sk_psock_strp_data_ready net/core/skmsg.c:1174
+         tcp_data_queue net/ipv4/tcp_input.c:5661
+
+  Possible unsafe locking scenario:
+
+         CPU0                    CPU1
+         ----                    ----
+    rlock(clock-AF_INET);
+                                 lock(&stab->lock);
+                                 lock(clock-AF_INET);
+    lock(&stab->lock);
+
+   *** DEADLOCK ***
+
+A tc, xdp, socket_filter or flow_dissector program has no reason to
+update or delete a sockmap, and redirect does not go through here. Drop
+them from may_update_sockmap() so the verifier rejects it. It also
+closes the matching sockhash inversion.
+
+Suggested-by: John Fastabend <john.fastabend@gmail.com>
+Signed-off-by: Sechang Lim <rhkrqnwk98@gmail.com>
+Signed-off-by: Daniel Borkmann <daniel@iogearbox.net>
+Reviewed-by: John Fastabend <john.fastabend@gmail.com>
+Reviewed-by: Emil Tsalapatis <emil@etsalapatis.com>
+Link: https://lore.kernel.org/bpf/20260630145410.3648099-2-rhkrqnwk98@gmail.com
+Signed-off-by: Kumar Kartikeya Dwivedi <memxor@gmail.com>
+---
+ kernel/bpf/verifier.c | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/kernel/bpf/verifier.c b/kernel/bpf/verifier.c
+index a0f292635c59..3193b473762b 100644
+--- a/kernel/bpf/verifier.c
++++ b/kernel/bpf/verifier.c
+@@ -8496,12 +8496,7 @@ static bool may_update_sockmap(struct bpf_verifier_env *env, int func_id)
+ 		if (func_id == BPF_FUNC_map_delete_elem)
+ 			return true;
+ 		break;
+-	case BPF_PROG_TYPE_SOCKET_FILTER:
+-	case BPF_PROG_TYPE_SCHED_CLS:
+-	case BPF_PROG_TYPE_SCHED_ACT:
+-	case BPF_PROG_TYPE_XDP:
+ 	case BPF_PROG_TYPE_SK_REUSEPORT:
+-	case BPF_PROG_TYPE_FLOW_DISSECTOR:
+ 	case BPF_PROG_TYPE_SK_LOOKUP:
+ 		return true;
+ 	default:
+-- 
+2.55.0
+
