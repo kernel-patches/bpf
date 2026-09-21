@@ -229,8 +229,18 @@ int sit9531x_update_pll_u8(struct sit9531x_dev *sitdev, u8 pll_idx,
 			   u8 offset, u8 mask, u8 val);
 
 /* ---- Input enable/disable ---- */
+int sit9531x_input_disable(struct sit9531x_dev *sitdev, u8 index);
+int sit9531x_input_enable(struct sit9531x_dev *sitdev, u8 index);
 
 /* ---- Input priority ---- */
+bool sit9531x_input_prio_present(struct sit9531x_dev *sitdev,
+				 u8 pll_idx, u8 input_idx);
+int sit9531x_input_prio_set(struct sit9531x_dev *sitdev, u8 pll_idx,
+			    u8 input_idx, u8 prio);
+int sit9531x_input_prio_remove(struct sit9531x_dev *sitdev, u8 pll_idx,
+			       u8 input_idx);
+int sit9531x_input_prio_add(struct sit9531x_dev *sitdev, u8 pll_idx,
+			    u8 input_idx);
 
 /* ---- Output enable/disable (Hi-Z control) ---- */
 
