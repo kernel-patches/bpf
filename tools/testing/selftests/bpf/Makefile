@@ -558,12 +558,15 @@ TEST_GEN_FILES += $(BPF_OBJS)
 # them (e.g., test.h is using completely pattern), that it's worth just
 # explicitly defining all the rules explicitly.
 verifier/tests.h: verifier/*.c
-	$(Q)( cd verifier/; \
+	$(Q)( set -e; cd verifier/; \
 		  echo '/* Generated header, do not edit */'; \
 		  echo '#ifdef FILL_ARRAY'; \
-		  ls *.c 2> /dev/null | sed -e 's@\(.*\)@#include \"\1\"@'; \
+		  for file in *.c; do \
+			  test -f "$$file"; \
+			  printf '#include "%s"\n' "$$file"; \
+		  done; \
 		  echo '#endif' \
-		) > verifier/tests.h
+		) > $@
 $(OUTPUT)/test_verifier: test_verifier.c verifier/tests.h $(BPFOBJ) | $(OUTPUT)
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) $(LDLIBS) -o $@
