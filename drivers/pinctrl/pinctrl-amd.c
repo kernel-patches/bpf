@@ -1137,28 +1137,31 @@ static struct pinctrl_desc amd_pinctrl_desc = {
 	.owner = THIS_MODULE,
 };
 
-static void amd_get_iomux_res(struct amd_gpio *gpio_dev)
+static void __iomem *amd_get_named_res(struct device *dev, struct platform_device *pdev,
+				       const char *name, resource_size_t minsz)
 {
-	struct pinctrl_desc *desc = &amd_pinctrl_desc;
-	struct device *dev = &gpio_dev->pdev->dev;
+	struct resource *res;
+	void __iomem *base;
 	int index;
 
-	index = device_property_match_string(dev, "pinctrl-resource-names",  "iomux");
+	index = device_property_match_string(dev, "pinctrl-resource-names", name);
 	if (index < 0) {
-		dev_dbg(dev, "iomux not supported\n");
-		goto out_no_pinmux;
+		dev_dbg(dev, "%s not supported\n", name);
+		return NULL;
 	}
 
-	gpio_dev->iomux_base = devm_platform_ioremap_resource(gpio_dev->pdev, index);
-	if (IS_ERR(gpio_dev->iomux_base)) {
-		dev_dbg(dev, "iomux not supported %d io resource\n", index);
-		goto out_no_pinmux;
+	base = devm_platform_get_and_ioremap_resource(pdev, index, &res);
+	if (IS_ERR(base)) {
+		dev_dbg(dev, "%s not supported %d io resource\n", name, index);
+		return NULL;
 	}
 
-	return;
+	if (resource_size(res) < minsz) {
+		dev_err(dev, "%s resource too small\n", name);
+		return NULL;
+	}
 
-out_no_pinmux:
-	desc->pmxops = NULL;
+	return base;
 }
 
 static int amd_gpio_probe(struct platform_device *pdev)
@@ -1213,7 +1216,9 @@ static int amd_gpio_probe(struct platform_device *pdev)
 	gpio_dev->ngroups = ARRAY_SIZE(kerncz_groups);
 
 	amd_pinctrl_desc.name = dev_name(&pdev->dev);
-	amd_get_iomux_res(gpio_dev);
+	gpio_dev->iomux_base = amd_get_named_res(&pdev->dev, pdev, "iomux", 0);
+	if (!gpio_dev->iomux_base)
+		amd_pinctrl_desc.pmxops = NULL;
 	gpio_dev->pctrl = devm_pinctrl_register(&pdev->dev, &amd_pinctrl_desc,
 						gpio_dev);
 	if (IS_ERR(gpio_dev->pctrl)) {
