@@ -799,7 +799,7 @@ static int perf_copy_chunk(struct perf_thread *pthr,
 		goto ret_check_tsync;
 	}
 
-	dma_dev = pthr->dma_chan->device->dev;
+	dma_dev = dmaengine_get_dma_device(pthr->dma_chan);
 
 	if (!is_dma_copy_aligned(pthr->dma_chan->device, offset_in_page(src),
 				 offset_in_page(dst), len))
@@ -868,6 +868,7 @@ static bool perf_dma_filter(struct dma_chan *chan, void *data)
 static int perf_init_test(struct perf_thread *pthr)
 {
 	struct perf_ctx *perf = pthr->perf;
+	struct device *dma_dev;
 	dma_cap_mask_t dma_mask;
 	struct perf_peer *peer = pthr->perf->test_peer;
 
@@ -889,19 +890,20 @@ static int perf_init_test(struct perf_thread *pthr)
 			pthr->tidx);
 		goto err_free;
 	}
+	dma_dev = dmaengine_get_dma_device(pthr->dma_chan);
 	peer->dma_dst_addr =
-		dma_map_resource(pthr->dma_chan->device->dev,
+		dma_map_resource(dma_dev,
 				 peer->out_phys_addr, peer->outbuf_size,
 				 DMA_FROM_DEVICE, 0);
-	if (dma_mapping_error(pthr->dma_chan->device->dev,
+	if (dma_mapping_error(dma_dev,
 			      peer->dma_dst_addr)) {
-		dev_err(pthr->dma_chan->device->dev, "%d: Failed to map DMA addr\n",
+		dev_err(dma_dev, "%d: Failed to map DMA addr\n",
 			pthr->tidx);
 		peer->dma_dst_addr = 0;
 		dma_release_channel(pthr->dma_chan);
 		goto err_free;
 	}
-	dev_dbg(pthr->dma_chan->device->dev, "%d: Map MMIO %pa to DMA addr %pad\n",
+	dev_dbg(dma_dev, "%d: Map MMIO %pa to DMA addr %pad\n",
 			pthr->tidx,
 			&peer->out_phys_addr,
 			&peer->dma_dst_addr);
@@ -1002,7 +1004,7 @@ static void perf_clear_test(struct perf_thread *pthr)
 	 */
 	(void)dmaengine_terminate_sync(pthr->dma_chan);
 	if (pthr->perf->test_peer->dma_dst_addr)
-		dma_unmap_resource(pthr->dma_chan->device->dev,
+		dma_unmap_resource(dmaengine_get_dma_device(pthr->dma_chan),
 				   pthr->perf->test_peer->dma_dst_addr,
 				   pthr->perf->test_peer->outbuf_size,
 				   DMA_FROM_DEVICE, 0);

@@ -1519,6 +1519,7 @@ static int ntb_async_rx_submit(struct ntb_queue_entry *entry, void *offset)
 	struct ntb_transport_qp *qp = entry->qp;
 	struct dma_chan *chan = qp->rx_dma_chan;
 	struct dma_device *device;
+	struct device *dma_dev;
 	size_t pay_off, buff_off, len;
 	struct dmaengine_unmap_data *unmap;
 	dma_cookie_t cookie;
@@ -1526,27 +1527,28 @@ static int ntb_async_rx_submit(struct ntb_queue_entry *entry, void *offset)
 
 	len = entry->len;
 	device = chan->device;
+	dma_dev = dmaengine_get_dma_device(chan);
 	pay_off = (size_t)offset & ~PAGE_MASK;
 	buff_off = (size_t)buf & ~PAGE_MASK;
 
 	if (!is_dma_copy_aligned(device, pay_off, buff_off, len))
 		goto err;
 
-	unmap = dmaengine_get_unmap_data(device->dev, 2, GFP_NOWAIT);
+	unmap = dmaengine_get_unmap_data(dma_dev, 2, GFP_NOWAIT);
 	if (!unmap)
 		goto err;
 
 	unmap->len = len;
-	unmap->addr[0] = dma_map_phys(device->dev, virt_to_phys(offset),
+	unmap->addr[0] = dma_map_phys(dma_dev, virt_to_phys(offset),
 				      len, DMA_TO_DEVICE, 0);
-	if (dma_mapping_error(device->dev, unmap->addr[0]))
+	if (dma_mapping_error(dma_dev, unmap->addr[0]))
 		goto err_get_unmap;
 
 	unmap->to_cnt = 1;
 
-	unmap->addr[1] = dma_map_phys(device->dev, virt_to_phys(buf),
+	unmap->addr[1] = dma_map_phys(dma_dev, virt_to_phys(buf),
 				      len, DMA_FROM_DEVICE, 0);
-	if (dma_mapping_error(device->dev, unmap->addr[1]))
+	if (dma_mapping_error(dma_dev, unmap->addr[1]))
 		goto err_get_unmap;
 
 	unmap->from_cnt = 1;
@@ -1855,6 +1857,7 @@ static int ntb_async_tx_submit(struct ntb_transport_qp *qp,
 {
 	struct dma_async_tx_descriptor *txd;
 	struct dma_chan *chan = qp->tx_dma_chan;
+	struct device *dma_dev = dmaengine_get_dma_device(chan);
 	struct dma_device *device;
 	size_t len = entry->len;
 	void *buf = entry->buf;
@@ -1871,14 +1874,14 @@ static int ntb_async_tx_submit(struct ntb_transport_qp *qp,
 	if (!is_dma_copy_aligned(device, buff_off, dest_off, len))
 		goto err;
 
-	unmap = dmaengine_get_unmap_data(device->dev, 1, GFP_NOWAIT);
+	unmap = dmaengine_get_unmap_data(dma_dev, 1, GFP_NOWAIT);
 	if (!unmap)
 		goto err;
 
 	unmap->len = len;
-	unmap->addr[0] = dma_map_phys(device->dev, virt_to_phys(buf),
+	unmap->addr[0] = dma_map_phys(dma_dev, virt_to_phys(buf),
 				      len, DMA_TO_DEVICE, 0);
-	if (dma_mapping_error(device->dev, unmap->addr[0]))
+	if (dma_mapping_error(dma_dev, unmap->addr[0]))
 		goto err_get_unmap;
 
 	unmap->to_cnt = 1;
@@ -2024,6 +2027,7 @@ ntb_transport_create_queue(void *data, struct device *client_dev,
 	struct ntb_transport_qp *qp;
 	u64 qp_bit;
 	unsigned int free_queue;
+	struct device *tx_dev;
 	dma_cap_mask_t dma_mask;
 	int node;
 	int i;
@@ -2087,11 +2091,12 @@ ntb_transport_create_queue(void *data, struct device *client_dev,
 
 	qp->tx_mw_dma_addr = 0;
 	if (qp->tx_dma_chan) {
+		tx_dev = dmaengine_get_dma_device(qp->tx_dma_chan);
 		qp->tx_mw_dma_addr =
-			dma_map_resource(qp->tx_dma_chan->device->dev,
+			dma_map_resource(tx_dev,
 					 qp->tx_mw_phys, qp->tx_mw_size,
 					 DMA_FROM_DEVICE, 0);
-		if (dma_mapping_error(qp->tx_dma_chan->device->dev,
+		if (dma_mapping_error(tx_dev,
 				      qp->tx_mw_dma_addr)) {
 			qp->tx_mw_dma_addr = 0;
 			goto err1;
@@ -2140,7 +2145,7 @@ err1:
 	while ((entry = ntb_list_rm(&qp->ntb_rx_q_lock, &qp->rx_free_q)))
 		kfree(entry);
 	if (qp->tx_mw_dma_addr)
-		dma_unmap_resource(qp->tx_dma_chan->device->dev,
+		dma_unmap_resource(tx_dev,
 				   qp->tx_mw_dma_addr, qp->tx_mw_size,
 				   DMA_FROM_DEVICE, 0);
 	if (qp->tx_dma_chan)
@@ -2190,7 +2195,7 @@ void ntb_transport_free_queue(struct ntb_transport_qp *qp)
 		dma_sync_wait(chan, qp->last_cookie);
 		dmaengine_terminate_all(chan);
 
-		dma_unmap_resource(chan->device->dev,
+		dma_unmap_resource(dmaengine_get_dma_device(chan),
 				   qp->tx_mw_dma_addr, qp->tx_mw_size,
 				   DMA_FROM_DEVICE, 0);
 
