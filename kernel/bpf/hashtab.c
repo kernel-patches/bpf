@@ -612,6 +612,13 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 		htab->hashrnd = 0;
 	else
 		htab->hashrnd = get_random_u32();
+	/*
+	 * Fold the jhash constant and key length into hashrnd once for the
+	 * fixed-size fast paths instead of doing it on every lookup.
+	 */
+	if (htab->map.key_size == sizeof(u32) ||
+	    htab->map.key_size == sizeof(u64))
+		htab->hashrnd += JHASH_INITVAL + htab->map.key_size;
 
 	htab_init_buckets(htab);
 
@@ -679,9 +686,19 @@ free_htab:
 
 static inline u32 htab_map_hash(const void *key, u32 key_len, u32 hashrnd)
 {
-	if (likely(key_len % 4 == 0))
+	const u32 *k = key;
+	u32 b;
+
+	if (key_len == sizeof(u32))
+		b = 0;
+	else if (key_len == sizeof(u64))
+		b = k[1];
+	else if (likely(key_len % 4 == 0))
 		return jhash2(key, key_len / 4, hashrnd);
-	return jhash(key, key_len, hashrnd);
+	else
+		return jhash(key, key_len, hashrnd);
+
+	return __jhash_nwords(k[0], b, 0, hashrnd);
 }
 
 static inline struct bucket *__select_bucket(struct bpf_htab *htab, u32 hash)
