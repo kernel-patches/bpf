@@ -688,6 +688,7 @@ struct bpf_insn_aux_data {
 	bool is_iter_next; /* bpf_iter_<type>_next() kfunc call */
 	bool cleanup_throw_site; /* call to bpf_throw() */
 	bool cleanup_resume_site; /* call to bpf_unwind_resume() */
+	bool in_cleanup_pad; /* reachable from an exception cleanup landing pad */
 	bool call_with_percpu_alloc_ptr; /* {this,per}_cpu_ptr() with prog percpu alloc */
 	u8 alu_state; /* used in combination with alu_limit */
 	/* true if STX or LDX instruction is a part of a spill/fill
