@@ -868,12 +868,90 @@ sit9531x_dpll_output_pin_state_on_dpll_set(const struct dpll_pin *pin,
 	return rc;
 }
 
+/*
+ * sit9531x_dpll_output_pin_phase_adjust_get - read output phase adjustment
+ *
+ * Returns what the delay registers hold, i.e. the value
+ * sit9531x_output_phase_adjust_set() programmed after quantization, read
+ * from the cache unless a failed request left it unconfirmed.
+ */
+static int
+sit9531x_dpll_output_pin_phase_adjust_get(const struct dpll_pin *pin,
+					  void *pin_priv,
+					  const struct dpll_device *dpll,
+					  void *dpll_priv, s32 *phase_adjust,
+					  struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+	/*
+	 * A request whose writes reached the device but whose commit or
+	 * phase flush failed left the cache describing the delay before it.
+	 * There is no poll of the delay registers to correct that, so read
+	 * them here rather than report a value the output is not using.
+	 */
+	if (sitdev->out[dpin->id].phase_stale) {
+		s32 phase_ps;
+
+		rc = sit9531x_output_phase_read(sitdev, dpin->id, &phase_ps);
+		if (rc) {
+			mutex_unlock(&sitdev->multiop_lock);
+			NL_SET_ERR_MSG(extack,
+				       "Output delay could not be read back");
+			return rc;
+		}
+		sitdev->out[dpin->id].phase_adj = phase_ps;
+		sitdev->out[dpin->id].phase_armed = !!phase_ps;
+		sitdev->out[dpin->id].phase_stale = false;
+	}
+	*phase_adjust = sit9531x_out_state_get(sitdev, dpin->id)->phase_adj;
+	mutex_unlock(&sitdev->multiop_lock);
+
+	return 0;
+}
+
+/*
+ * sit9531x_dpll_output_pin_phase_adjust_set - set output phase adjustment
+ *
+ * Programs the per-output PRG_RST_DELAY registers for deterministic
+ * phase offset; see sit9531x_output_phase_adjust_set() in core.c.
+ */
+static int
+sit9531x_dpll_output_pin_phase_adjust_set(const struct dpll_pin *pin,
+					  void *pin_priv,
+					  const struct dpll_device *dpll,
+					  void *dpll_priv, s32 phase_adjust,
+					  struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_output_phase_adjust_set(sitdev, dpin->id, phase_adjust);
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc) {
+		NL_SET_ERR_MSG(extack, "Phase adjust failed");
+		return rc;
+	}
+
+	return 0;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_output_pin_ops = {
 	.direction_get		= sit9531x_dpll_output_pin_direction_get,
 	.frequency_get		= sit9531x_dpll_output_pin_frequency_get,
 	.frequency_set		= sit9531x_dpll_output_pin_frequency_set,
 	.state_on_dpll_get	= sit9531x_dpll_output_pin_state_on_dpll_get,
 	.state_on_dpll_set	= sit9531x_dpll_output_pin_state_on_dpll_set,
+	.phase_adjust_get	= sit9531x_dpll_output_pin_phase_adjust_get,
+	.phase_adjust_set	= sit9531x_dpll_output_pin_phase_adjust_set,
 };
 
 const struct dpll_pin_ops *

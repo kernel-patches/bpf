@@ -228,6 +228,25 @@ sit9531x_pin_props_get(struct sit9531x_dev *sitdev,
 		props->dpll_props.capabilities =
 			DPLL_PIN_CAPABILITIES_STATE_CAN_CHANGE;
 		curr_freq = sitdev->out[index].freq;
+
+		/*
+		 * Allow phase-adjust over a +/-1 ms window.  The subsystem
+		 * rejects pin_set(phase-adjust, X) when X falls outside
+		 * [min, max], so leaving these at 0 silently blocks every
+		 * netlink call.  1 ms is well beyond the DCO dynamic range
+		 * but costs nothing.  Only outputs get a range: input pins
+		 * have no .phase_adjust_set, and advertising one there would
+		 * promise userspace something every set would refuse.
+		 */
+		/* +/-1 ms, in ps */
+		props->dpll_props.phase_range.min = -1000000000;
+		props->dpll_props.phase_range.max = 1000000000;
+		/*
+		 * The fine step is 30 ps, but requests are accepted at 1 ps
+		 * resolution and rounded to the nearest achievable delay, so
+		 * advertise the request granularity, not the hardware step.
+		 */
+		props->dpll_props.phase_gran = 1;
 	}
 
 	/* Generate package label */
