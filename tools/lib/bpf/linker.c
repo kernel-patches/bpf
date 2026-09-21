@@ -1036,7 +1036,8 @@ static int linker_sanity_check_elf_relos(struct src_obj *obj, struct src_sec *se
 		size_t sym_type = ELF64_R_TYPE(relo->r_info);
 
 		if (sym_type != R_BPF_64_64 && sym_type != R_BPF_64_32 &&
-		    sym_type != R_BPF_64_ABS64 && sym_type != R_BPF_64_ABS32) {
+		    sym_type != R_BPF_64_ABS64 && sym_type != R_BPF_64_ABS32 &&
+		    sym_type != R_BPF_64_NODYLD32) {
 			pr_warn("ELF relo #%d in section #%zu has unexpected type %zu in %s\n",
 				i, sec->sec_idx, sym_type, obj->filename);
 			return -EINVAL;
@@ -2258,6 +2259,7 @@ static int linker_append_elf_relos(struct bpf_linker *linker, struct src_obj *ob
 			if (ELF64_ST_TYPE(src_sym->st_info) == STT_SECTION) {
 				struct src_sec *sec = &obj->secs[src_sym->st_shndx];
 				struct bpf_insn *insn;
+				__u32 *val;
 
 				if (src_linked_sec->shdr->sh_flags & SHF_EXECINSTR) {
 					/* calls to the very first static function inside
@@ -2274,6 +2276,38 @@ static int linker_append_elf_relos(struct bpf_linker *linker, struct src_obj *ob
 						insn->imm += sec->dst_off / sizeof(struct bpf_insn);
 					else
 						insn->imm += sec->dst_off;
+				} else if (sym_type == R_BPF_64_NODYLD32 ||
+					   sym_type == R_BPF_64_ABS32) {
+					/* Two spellings of the one thing: LLVM
+					 * emits NODYLD32 for a .long against a
+					 * section symbol, GNU as emits ABS32
+					 * (bpf_reloc_type_lookup() maps
+					 * BFD_RELOC_32 to it), and the value
+					 * they describe is the same.
+					 */
+
+					/* Only an executable section has its
+					 * r_offset checked, and even there only
+					 * for alignment; SHT_NOBITS has no
+					 * raw_data at all. Bound it here,
+					 * subtracting so it cannot wrap.
+					 */
+					if (!dst_linked_sec->raw_data ||
+					    dst_linked_sec->sec_sz < (int)sizeof(*val) ||
+					    dst_rel->r_offset % sizeof(*val) ||
+					    dst_rel->r_offset >
+					    (size_t)dst_linked_sec->sec_sz - sizeof(*val)) {
+						pr_warn("ELF relo #%d in section #%zu points outside the data of section '%s' in %s\n",
+							j, src_sec->sec_idx,
+							dst_linked_sec->sec_name,
+							obj->filename);
+						return -EINVAL;
+					}
+					val = dst_linked_sec->raw_data + dst_rel->r_offset;
+					if (linker->swapped_endian)
+						*val = bswap_32(bswap_32(*val) + sec->dst_off);
+					else
+						*val += sec->dst_off;
 				} else {
 					pr_warn("relocation against STT_SECTION in non-exec section is not supported!\n");
 					return -EINVAL;
