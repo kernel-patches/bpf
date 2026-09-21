@@ -89,6 +89,7 @@ int widening(void *unused)
 
 SEC("?raw_tp")
 __success
+__log_level(2) __log_always
 int widening_counter(void *unused)
 {
 	struct num_context loop_ctx = { .i = 0 };
@@ -120,6 +121,7 @@ static __naked __used void widening_late_precision_cb(void)
 
 SEC("?raw_tp")
 __failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__log_level(2) __log_always
 __naked int widening_late_precision(void)
 {
 	asm volatile (
@@ -141,6 +143,7 @@ __naked int widening_late_precision(void)
 
 SEC("?raw_tp")
 __failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__log_level(2) __log_always
 __naked int widening_late_precision_large_init(void)
 {
 	asm volatile (
@@ -187,6 +190,7 @@ static __naked void widening_delayed_precision_cb(void)
 
 SEC("?raw_tp")
 __failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__log_level(2) __log_always
 int widening_delayed_precision_unsafe(void *unused)
 {
 	struct num_context loop_ctx = { .i = -16, .j = bpf_get_prandom_u32() };

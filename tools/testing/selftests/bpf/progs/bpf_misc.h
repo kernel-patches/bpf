@@ -112,6 +112,7 @@
  *                   not report OK for coverage it never executed.
  *
  * __log_level       Log level to use for the program, numeric value expected.
+ * __log_always      Print the verifier log.
  *
  * __flag            Adds one flag use for the program, the following values are valid:
  *                   - BPF_F_STRICT_ALIGNMENT;
@@ -152,6 +153,7 @@
 #define __failure_unpriv	__test_tag("test_expect_failure_unpriv")
 #define __success_unpriv	__test_tag("test_expect_success_unpriv")
 #define __log_level(lvl)	__test_tag("test_log_level=" #lvl)
+#define __log_always		__test_tag("test_log_always")
 #define __flag(flag)		__test_tag("test_prog_flags=" #flag)
 #define __retval(val)		__test_tag("test_retval=" XSTR(val))
 #define __retval_unpriv(val)	__test_tag("test_retval_unpriv=" XSTR(val))

@@ -1611,6 +1611,7 @@ static void *dispatch_thread(void *ctx)
 
 			state = &test_states[test_to_run];
 			state->tested = true;
+			state->force_log = msg.test_done.force_log;
 			state->error_cnt = msg.test_done.error_cnt;
 			state->skip_cnt = msg.test_done.skip_cnt;
 			state->sub_succ_cnt = msg.test_done.sub_succ_cnt;
@@ -1957,6 +1958,7 @@ static int worker_main(int sock)
 			memset(&msg, 0, sizeof(msg));
 			msg.type = MSG_TEST_DONE;
 			msg.test_done.num = test_to_run;
+			msg.test_done.force_log = state->force_log;
 			msg.test_done.error_cnt = state->error_cnt;
 			msg.test_done.skip_cnt = state->skip_cnt;
 			msg.test_done.sub_succ_cnt = state->sub_succ_cnt;

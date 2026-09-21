@@ -164,6 +164,7 @@ int simplest_loop(void *ctx)
 
 SEC("?raw_tp")
 __success
+__log_level(2) __log_always
 __naked int widening_counter(void)
 {
 	asm volatile (
@@ -194,6 +195,7 @@ __naked int widening_counter(void)
 
 SEC("?raw_tp")
 __failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__log_level(2) __log_always
 __naked int widening_late_precision(void)
 {
 	/*
@@ -247,6 +249,7 @@ __naked int widening_late_precision(void)
 
 SEC("?raw_tp")
 __failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__log_level(2) __log_always
 __naked int widening_late_precision_large_init(void)
 {
 	asm volatile (
@@ -288,6 +291,7 @@ __naked int widening_late_precision_large_init(void)
 
 SEC("?raw_tp")
 __failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__log_level(2) __log_always
 __naked int widening_delayed_precision_unsafe(void)
 {
 	/* The unsafe loop from commit 2793a8b015f7 ("bpf: exact states
