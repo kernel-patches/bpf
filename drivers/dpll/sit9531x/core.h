@@ -255,6 +255,10 @@ int sit9531x_input_prio_add(struct sit9531x_dev *sitdev, u8 pll_idx,
 /* ---- Output enable/disable (Hi-Z control) ---- */
 
 /* ---- Output frequency ---- */
+int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
+			     u8 pll_idx, u64 frequency);
+int sit9531x_output_freq_get(struct sit9531x_dev *sitdev, u8 out_idx,
+			     u64 *frequency);
 
 /* ---- Output phase adjust (PRG_RST_DELAY register-based) ---- */
 

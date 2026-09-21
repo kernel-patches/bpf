@@ -295,16 +295,34 @@ sit9531x_pin_props_get(struct sit9531x_dev *sitdev,
 	}
 
 	/*
-	 * Seed the runtime ref->freq / out->freq with the first DT-listed
-	 * supported frequency so the netlink frequency_get callback reports
-	 * a sane initial value before any pin_set occurs.  DT lists the
-	 * physically-wired reference frequency for each input pin and the
-	 * default output frequency for each output pin.
+	 * Seed the runtime ref->freq with the first DT-listed supported
+	 * frequency: an input's rate is a board fact the device cannot be
+	 * asked for, so firmware is the only source.  An output is left to
+	 * the read-back below, which knows what the divider is actually
+	 * doing.
 	 */
-	if (num_freqs > 0) {
-		if (dir != DPLL_PIN_DIRECTION_INPUT ||
-		    index != SIT9531X_MAX_INPUTS)
-			curr_freq = freqs[0];
+	if (num_freqs > 0 && dir == DPLL_PIN_DIRECTION_INPUT &&
+	    index != SIT9531X_MAX_INPUTS)
+		curr_freq = freqs[0];
+
+	/*
+	 * An output's current rate is the one its divider produces, so read
+	 * it rather than assume the first entry of a list of the rates the
+	 * board supports is the one in force.  A rate taken from firmware
+	 * that the part is not running would be reported as current and,
+	 * worse, used as the output period the phase adjust quantizes
+	 * against.  An output the configuration does not route has no rate
+	 * to read, which is not an error.
+	 */
+	if (dir == DPLL_PIN_DIRECTION_OUTPUT &&
+	    index < sitdev->info->num_outputs) {
+		u64 hw_freq;
+
+		mutex_lock(&sitdev->multiop_lock);
+		rc = sit9531x_output_freq_get(sitdev, index, &hw_freq);
+		mutex_unlock(&sitdev->multiop_lock);
+		if (!rc)
+			curr_freq = hw_freq;
 	}
 
 skip_fwnode_props:
