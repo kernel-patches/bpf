@@ -246,8 +246,17 @@ static const struct btf_kfunc_id_set bpf_memcontrol_reclaim_kfunc_set = {
  * request and the kernel acts on it.  Nothing here reclaims or sleeps.
  */
 
-/* CFI stubs.  A slot points at these while its policy is being detached. */
+/*
+ * CFI stubs.  These really run: a slot points at them while its policy is
+ * being detached.  Return 0, the identity for the kernel's OR.
+ */
+static u32 high_policy_stub(const struct bpf_memcg_ctx *ctx)
+{
+	return BPF_MEMCG_HIGH_NO_OPINION;
+}
+
 static struct bpf_memcg_ops __bpf_memcg_ops = {
+	.high_policy = high_policy_stub,
 };
 
 static const struct bpf_func_proto *
@@ -325,6 +334,77 @@ static struct bpf_struct_ops bpf_memcg_ops_desc = {
 	 * bpf_cgroup_struct_ops_foreach().
 	 */
 };
+
+static void bpf_memcg_ctx_init(struct bpf_memcg_ctx *ctx,
+			       struct mem_cgroup *memcg,
+			       struct mem_cgroup *over_limit, gfp_t gfp_mask)
+{
+	ctx->memcg = memcg;
+	ctx->memcg_over_limit = over_limit;
+	ctx->task = current;
+	ctx->cgroup_id = cgroup_id(memcg->css.cgroup);
+	ctx->over_limit_cgroup_id = over_limit ?
+		cgroup_id(over_limit->css.cgroup) : 0;
+	ctx->nr_pages_over_high = current->memcg_nr_pages_over_high;
+	ctx->gfp_flags = (__force u32)gfp_mask;
+}
+
+u32 bpf_memcg_high_policy(struct mem_cgroup *memcg,
+			  struct mem_cgroup *over_limit, gfp_t gfp_mask)
+{
+	const struct bpf_prog_array_item *item;
+	const struct bpf_memcg_ops *ops;
+	struct bpf_memcg_ctx ctx;
+	u32 acc = BPF_MEMCG_HIGH_NO_OPINION;
+	struct cgroup *cgrp;
+
+	if (!cgroup_bpf_enabled(CGROUP_MEMCG_OPS))
+		return acc;
+
+	/*
+	 * Only the default hierarchy has a cgroup_bpf, and the static key is
+	 * global, so one policy anywhere turns this on for v1 memcgs too.  A
+	 * v1 memcg still cannot get here, because memory.high and swap.high
+	 * are both v2-only and so it never builds the debt that leads to this
+	 * call.  A hook on a path v1 can reach needs its own cgroup_on_dfl()
+	 * test: a v1 cgroup has no effective array and an uninitialised
+	 * cgrp->bpf.refcnt.
+	 */
+	cgrp = memcg->css.cgroup;
+
+	/*
+	 * A program can allocate and re-enter the charge path.  Skip the
+	 * nested call.  This guards the callbacks only.
+	 */
+	if (current->in_bpf_memcg)
+		return acc;
+	current->in_bpf_memcg = 1;
+
+	rcu_read_lock_dont_migrate();
+
+	/*
+	 * A memcg outlives its cgroup while it has charges, and
+	 * cgroup_bpf_release() frees the arrays when the cgroup goes.
+	 */
+	if (!cgroup_bpf_tryget_live(cgrp))
+		goto out;
+
+	bpf_memcg_ctx_init(&ctx, memcg, over_limit, gfp_mask);
+
+	bpf_cgroup_struct_ops_foreach(ops, item, cgrp, CGROUP_MEMCG_OPS) {
+		if (ops->high_policy)
+			acc |= ops->high_policy(&ctx) &
+			       BPF_MEMCG_HIGH_VALID_MASK;
+	}
+
+	cgroup_bpf_put(cgrp);
+out:
+	rcu_read_unlock_migrate();
+
+	current->in_bpf_memcg = 0;
+
+	return acc;
+}
 
 static int __init bpf_memcg_ops_register(void)
 {

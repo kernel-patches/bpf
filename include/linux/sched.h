@@ -1031,6 +1031,10 @@ struct task_struct {
 #ifdef CONFIG_MEMCG_V1
 	unsigned			in_user_fault:1;
 #endif
+#ifdef CONFIG_MEMCG
+	/* A bpf_memcg_ops program is running; do not recurse into policy */
+	unsigned			in_bpf_memcg:1;
+#endif
 #ifdef CONFIG_LRU_GEN
 	/* whether the LRU algorithm may apply to this access */
 	unsigned			in_lru_fault:1;

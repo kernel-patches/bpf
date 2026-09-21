@@ -5032,6 +5032,7 @@ L:	bpf@vger.kernel.org
 L:	linux-mm@kvack.org
 S:	Maintained
 F:	mm/bpf_memcontrol.c
+F:	include/linux/bpf_memcontrol.h
 
 BPF [MISC]
 L:	bpf@vger.kernel.org

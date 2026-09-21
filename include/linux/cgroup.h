@@ -959,10 +959,17 @@ static inline void cgroup_bpf_put(struct cgroup *cgrp)
 	percpu_ref_put(&cgrp->bpf.refcnt);
 }
 
+/* Fails once the cgroup is gone and its bpf state has been freed. */
+static inline bool cgroup_bpf_tryget_live(struct cgroup *cgrp)
+{
+	return percpu_ref_tryget_live_rcu(&cgrp->bpf.refcnt);
+}
+
 #else /* CONFIG_CGROUP_BPF */
 
 static inline void cgroup_bpf_get(struct cgroup *cgrp) {}
 static inline void cgroup_bpf_put(struct cgroup *cgrp) {}
+static inline bool cgroup_bpf_tryget_live(struct cgroup *cgrp) { return false; }
 
 #endif /* CONFIG_CGROUP_BPF */
 

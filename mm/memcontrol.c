@@ -28,6 +28,7 @@
 #include <linux/cgroup-defs.h>
 #include <linux/page_counter.h>
 #include <linux/memcontrol.h>
+#include <linux/bpf_memcontrol.h>
 #include <linux/cgroup.h>
 #include <linux/cpuset.h>
 #include <linux/sched/mm.h>
@@ -2642,9 +2643,26 @@ out:
 	css_put(&memcg->css);
 }
 
+/*
+ * Ask the attached bpf_memcg_ops whether to skip the inline memory.high
+ * reclaim and throttle.
+ *
+ * @memcg:	the memcg being charged
+ * @over_limit:	first memcg found over memory.high or swap.high, starting at
+ *		the charged one, or NULL if the walk found none
+ */
+static bool bpf_memcg_high_defer(struct mem_cgroup *memcg,
+				 struct mem_cgroup *over_limit, gfp_t gfp_mask)
+{
+	u32 req = bpf_memcg_high_policy(memcg, over_limit, gfp_mask);
+
+	return req & BPF_MEMCG_HIGH_DEFER_INLINE;
+}
+
 static int try_charge_memcg(struct mem_cgroup *memcg, gfp_t gfp_mask,
 			    unsigned int nr_pages)
 {
+	struct mem_cgroup *leaf_memcg = memcg;
 	unsigned int batch = max(MEMCG_CHARGE_BATCH, nr_pages);
 	int nr_retries = MAX_RECLAIM_RETRIES;
 	struct mem_cgroup *mem_over_limit;
@@ -2846,8 +2864,17 @@ done_restock:
 	 */
 	if (current->memcg_nr_pages_over_high > MEMCG_CHARGE_BATCH &&
 	    !(current->flags & PF_MEMALLOC) &&
-	    gfpflags_allow_blocking(gfp_mask))
-		__mem_cgroup_handle_over_high(gfp_mask);
+	    gfpflags_allow_blocking(gfp_mask)) {
+		/*
+		 * The loop above left @memcg as the first memcg it found over
+		 * memory.high or swap.high -- possibly the charged one itself
+		 * -- or NULL if it found none.  Note the debt can be left over
+		 * from an earlier charge, so NULL does not mean no pressure.
+		 * The policy wants the memcg we charged.
+		 */
+		if (!bpf_memcg_high_defer(leaf_memcg, memcg, gfp_mask))
+			__mem_cgroup_handle_over_high(gfp_mask);
+	}
 	return 0;
 }
 

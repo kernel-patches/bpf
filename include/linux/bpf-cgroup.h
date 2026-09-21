@@ -517,6 +517,9 @@ static inline int cgroup_bpf_struct_ops_attach(struct bpf_map *map,
 
 #define cgroup_bpf_enabled(atype) (0)
 #define cgroup_bpf_enabled_runtime(atype) (0)
+/* Nothing can be attached, so the walk has nothing to walk. */
+#define bpf_cgroup_struct_ops_foreach(var, item, cgrp, atype)		\
+	for ((void)(cgrp), (item) = NULL, (var) = NULL; 0; )
 #define BPF_CGROUP_RUN_SA_PROG_LOCK(sk, uaddr, uaddrlen, atype, t_ctx) ({ 0; })
 #define BPF_CGROUP_RUN_SA_PROG(sk, uaddr, uaddrlen, atype) ({ 0; })
 #define BPF_CGROUP_PRE_CONNECT_ENABLED(sk) (0)
