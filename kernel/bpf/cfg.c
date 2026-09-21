@@ -640,6 +640,7 @@ int bpf_check_cfg(struct bpf_verifier_env *env)
 	int insn_cnt = env->prog->len;
 	int *insn_stack, *insn_state;
 	int ex_insn_beg, i, ret = 0;
+	u32 pad_idx = 0;
 
 	insn_state = env->cfg.insn_state = kvzalloc_objs(int, insn_cnt,
 							 GFP_KERNEL_ACCOUNT);
@@ -693,6 +694,22 @@ walk_cfg:
 		insn_stack[0] = ex_insn_beg;
 		env->cfg.cur_stack = 1;
 		goto walk_cfg;
+	}
+
+	/*
+	 * A landing pad no call site was marked with -- a record whose range
+	 * holds no bpf2bpf call and no bpf_throw() -- is reached by nothing.
+	 * Walk it from here, and let the dead code sweep remove it.
+	 */
+	while (pad_idx < env->cleanup_info_cnt) {
+		u32 pad = env->cleanup_info[pad_idx++].landing_pad_off;
+
+		if (insn_state[pad] != EXPLORED) {
+			insn_state[pad] = DISCOVERED;
+			insn_stack[0] = pad;
+			env->cfg.cur_stack = 1;
+			goto walk_cfg;
+		}
 	}
 
 	for (i = 0; i < insn_cnt; i++) {
