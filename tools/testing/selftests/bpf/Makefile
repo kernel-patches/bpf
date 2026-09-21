@@ -509,42 +509,39 @@ FLAVOR :=
 BINARY := test_progs
 BPF_CC := $(CLANG)
 BPF_CC_MSG := CLNG-BPF
-BPF_SYS_INCLUDES := $(CLANG_SYS_INCLUDES)
-BPF_CC_FLAGS := -O2 $(BPF_TARGET_ENDIAN) -mcpu=v3
-BPF_DEFINES := -DENABLE_ATOMICS_TESTS
+CLANG_BPF_FLAGS := $(CLANG_SYS_INCLUDES) -O2 $(BPF_TARGET_ENDIAN)
+BPF_CC_FLAGS := $(CLANG_BPF_FLAGS) -DENABLE_ATOMICS_TESTS -mcpu=v3
 include Makefile.skel
 
 DEFAULT_RUNNER_ARGS := RUNNER=test_progs FLAVOR= TESTS_DIR=prog_tests	\
 	BPF_CC='$(BPF_CC)' BPF_CC_MSG=$(BPF_CC_MSG)			\
-	BPF_SYS_INCLUDES='$(BPF_SYS_INCLUDES)'				\
-	BPF_CC_FLAGS='$(BPF_CC_FLAGS)' BPF_DEFINES=$(BPF_DEFINES)
-CLANG_RUNNER_ARGS := BPF_CC='$(CLANG)' BPF_CC_MSG=CLNG-BPF		\
-	BPF_SYS_INCLUDES='$(CLANG_SYS_INCLUDES)'
+	BPF_CC_FLAGS='$(BPF_CC_FLAGS)'
+CLANG_RUNNER_ARGS := BPF_CC='$(CLANG)' BPF_CC_MSG=CLNG-BPF
 
 $(OUTPUT)/test_progs: $(RUNNER_PREREQS) $(BPF_OBJS) $(ALL_SKELS) FORCE
 	+$(Q)$(RUNNER_MAKE) $(DEFAULT_RUNNER_ARGS)
 
 $(OUTPUT)/test_progs-no_alu32: $(RUNNER_PREREQS) FORCE
 	+$(Q)$(RUNNER_MAKE) RUNNER=test_progs FLAVOR=no_alu32 TESTS_DIR=prog_tests \
-		$(CLANG_RUNNER_ARGS) BPF_CC_FLAGS='-O2 $(BPF_TARGET_ENDIAN) -mcpu=v2'
+		$(CLANG_RUNNER_ARGS) BPF_CC_FLAGS='$(CLANG_BPF_FLAGS) -mcpu=v2'
 
 ifneq ($(CLANG_CPUV4),)
 $(OUTPUT)/test_progs-cpuv4: $(RUNNER_PREREQS) FORCE
 	+$(Q)$(RUNNER_MAKE) RUNNER=test_progs FLAVOR=cpuv4 TESTS_DIR=prog_tests \
-		$(CLANG_RUNNER_ARGS) BPF_CC_FLAGS='-O2 $(BPF_TARGET_ENDIAN) -mcpu=v4' \
-		BPF_DEFINES=-DENABLE_ATOMICS_TESTS
+		$(CLANG_RUNNER_ARGS) \
+		BPF_CC_FLAGS='$(CLANG_BPF_FLAGS) -DENABLE_ATOMICS_TESTS -mcpu=v4'
 endif
 
 ifneq ($(BPF_GCC),)
 # Sys includes come from the *host* gcc, not $(BPF_GCC), as the rule
 # this replaces had it.
-GCC_SYS_INCLUDES := $(call get_sys_includes,gcc,)
+GCC_BPF_FLAGS := $(call get_sys_includes,gcc,) \
+		 -DBPF_NO_PRESERVE_ACCESS_INDEX -Wno-attributes -O2
 
 $(OUTPUT)/test_progs-bpf_gcc: $(RUNNER_PREREQS) FORCE
 	+$(Q)$(RUNNER_MAKE) RUNNER=test_progs FLAVOR=bpf_gcc TESTS_DIR=prog_tests \
 		BPF_CC='$(BPF_GCC)' BPF_CC_MSG=GCC-BPF				\
-		BPF_SYS_INCLUDES='$(GCC_SYS_INCLUDES)'				\
-		BPF_CC_FLAGS='-DBPF_NO_PRESERVE_ACCESS_INDEX -Wno-attributes -O2'
+		BPF_CC_FLAGS='$(GCC_BPF_FLAGS)'
 endif
 
 # test_maps compiles map_tests/*.c against the default flavor's skeletons

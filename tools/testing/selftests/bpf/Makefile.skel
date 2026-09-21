@@ -9,9 +9,7 @@
 #   BINARY           runner binary name, for build-log messages
 #   BPF_CC           BPF compiler
 #   BPF_CC_MSG       build-log tag (CLNG-BPF/GCC-BPF)
-#   BPF_CC_FLAGS     per-flavor compiler flags
-#   BPF_SYS_INCLUDES system include flags for $(BPF_CC)
-#   BPF_DEFINES      extra defines (-DENABLE_ATOMICS_TESTS)
+#   BPF_CC_FLAGS     per-flavor compiler flags, includes and defines
 
 # BPF objects and skeletons
 
@@ -82,7 +80,7 @@ progs/btf_dump_test_case_packing.c-bpf_gcc-CFLAGS := -Wno-error
 progs/btf_dump_test_case_padding.c-bpf_gcc-CFLAGS := -Wno-error
 progs/btf_dump_test_case_syntax.c-bpf_gcc-CFLAGS := -Wno-error
 
-cmd_bpf_compile = $(BPF_CC) $(BPF_CFLAGS) $(BPF_SYS_INCLUDES) $(BPF_DEFINES) \
+cmd_bpf_compile = $(BPF_CC) $(BPF_CFLAGS) \
 	$($<-CFLAGS) $($<-$(FLAVOR)-CFLAGS) $(BPF_CC_FLAGS) -c $< -o $@ $(call skip_on_fail,BPF)
 
 $(BPF_OBJS): $(RDIR)/%.bpf.o: progs/%.c progs/*.h			\
