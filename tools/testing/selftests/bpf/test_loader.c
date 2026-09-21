@@ -71,6 +71,7 @@ struct test_spec {
 	int load_mask;
 	int linear_sz;
 	const char *skip_reason;
+	bool log_always;
 	bool auxiliary;
 	bool valid;
 };
@@ -552,6 +553,8 @@ static int parse_test_spec(struct test_loader *tester,
 			err = parse_int(val, &spec->log_level, "test log level");
 			if (err)
 				goto cleanup;
+		} else if (strcmp(s, "test_log_always") == 0) {
+			spec->log_always = true;
 		} else if ((val = str_has_pfx(s, "test_prog_flags="))) {
 			clear = val[0] == '!';
 			if (clear)
@@ -750,7 +753,7 @@ static void prepare_case(struct test_loader *tester,
 {
 	int min_log_level = 0;
 
-	if (env.verbosity > VERBOSE_NONE)
+	if (spec->log_always || env.verbosity > VERBOSE_NONE)
 		min_log_level = 1;
 	if (env.verbosity > VERBOSE_VERY)
 		min_log_level = 2;
@@ -1404,6 +1407,8 @@ void run_subtest(struct test_loader *tester,
 		bpf_program__set_autoload(tprog_iter, should_load);
 	}
 
+	if (spec->log_always)
+		test__force_log();
 	prepare_case(tester, spec, tobj, tprog);
 
 	/* By default bpf_object__load() automatically creates all
@@ -1417,7 +1422,7 @@ void run_subtest(struct test_loader *tester,
 	err = bpf_object__load(tobj);
 	if (subspec->expect_failure) {
 		if (!ASSERT_ERR(err, "unexpected_load_success")) {
-			emit_verifier_log(tester->log_buf, false /*force*/);
+			emit_verifier_log(tester->log_buf, spec->log_always);
 			goto tobj_cleanup;
 		}
 	} else {
@@ -1426,7 +1431,7 @@ void run_subtest(struct test_loader *tester,
 			goto tobj_cleanup;
 		}
 	}
-	emit_verifier_log(tester->log_buf, false /*force*/);
+	emit_verifier_log(tester->log_buf, spec->log_always);
 	validate_msgs(tester->log_buf, &subspec->expect_msgs, emit_verifier_log);
 
 	/* Restore capabilities because the kernel will silently ignore requests

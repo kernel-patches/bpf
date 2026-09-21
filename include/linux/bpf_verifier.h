@@ -388,6 +388,9 @@ struct bpf_func_state {
 	/* Instructions processed in this frame and callees on the current path. */
 	u32 insns_subtotal;
 
+	u64 widening_regs;
+	u64 widening_stack;
+
 	/* The following fields should be last. See copy_func_state() */
 	/* The state of the stack. Each element of the array describes BPF_REG_SIZE
 	 * (i.e. 8) bytes worth of stack memory.
@@ -439,6 +442,7 @@ struct bpf_jmp_history_entry {
 
 static_assert(MAX_CALL_FRAMES <= (1 << 4));
 static_assert(MAX_BPF_STACK / 8 <= (1 << 6));
+static_assert(MAX_BPF_REG <= 64);
 
 /* Maximum number of bpf_reg_state objects that can exist at once */
 #define MAX_STACK_ARG_SLOTS (MAX_BPF_FUNC_ARGS - MAX_BPF_FUNC_REG_ARGS)
@@ -509,6 +513,8 @@ struct bpf_verifier_state {
 
 	bool speculative;
 	bool in_sleepable;
+
+	bool callback_widening_pending;
 
 	/* first and last insn idx of this verifier state */
 	u32 first_insn_idx;

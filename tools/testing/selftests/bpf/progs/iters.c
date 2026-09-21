@@ -878,7 +878,7 @@ __naked int delayed_read_mark(void)
 
 SEC("?raw_tp")
 __failure
-__msg("math between fp pointer and register with unbounded")
+__msg("misaligned stack access off -33+0 size 8")
 __naked int delayed_precision_mark(void)
 {
 	/* This is equivalent to C program below.
@@ -957,7 +957,7 @@ __naked int delayed_precision_mark(void)
 
 SEC("?raw_tp")
 __failure
-__msg("math between fp pointer and register with unbounded")
+__msg("misaligned stack access off -25+0 size 8")
 __flag(BPF_F_TEST_STATE_FREQ)
 __naked int loop_state_deps1(void)
 {
@@ -1082,7 +1082,7 @@ __naked int loop_state_deps1(void)
 
 SEC("?raw_tp")
 __failure
-__msg("math between fp pointer and register with unbounded")
+__msg("misaligned stack access off -25+0 size 8")
 __flag(BPF_F_TEST_STATE_FREQ)
 __naked int loop_state_deps2(void)
 {
@@ -1259,7 +1259,7 @@ __naked int loop_state_deps2(void)
 
 SEC("?raw_tp")
 __failure
-__msg("math between fp pointer and register with unbounded")
+__msg("misaligned stack access off -25+0 size 8")
 __flag(BPF_F_TEST_STATE_FREQ)
 __naked int loop_state_deps3(void)
 {
@@ -2015,7 +2015,7 @@ static int loop1_wrapper(void)
  */
 SEC("raw_tp")
 __flag(BPF_F_TEST_STATE_FREQ)
-__failure __msg("math between fp pointer and register with unbounded min value is not allowed")
+__failure __msg("misaligned stack access off -31+0 size 8")
 __naked void absent_mark_in_the_middle_state4(void)
 {
 	/*
