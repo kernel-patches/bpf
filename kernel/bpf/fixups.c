@@ -256,6 +256,12 @@ static void adjust_insn_aux_data(struct bpf_verifier_env *env,
 			data[i].non_stack_access =
 				data[off + cnt - 1].non_stack_access;
 			data[off + cnt - 1].non_stack_access = false;
+			data[i].cleanup_throw_site =
+				data[off + cnt - 1].cleanup_throw_site;
+			data[off + cnt - 1].cleanup_throw_site = false;
+			data[i].cleanup_resume_site =
+				data[off + cnt - 1].cleanup_resume_site;
+			data[off + cnt - 1].cleanup_resume_site = false;
 			data[i].cleanup_pad = data[off + cnt - 1].cleanup_pad;
 			data[off + cnt - 1].cleanup_pad = 0;
 		} else if (bpf_is_mem_insn(insn + i)) {
