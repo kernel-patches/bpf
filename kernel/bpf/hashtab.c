@@ -612,6 +612,13 @@ static struct bpf_map *htab_map_alloc(union bpf_attr *attr)
 		htab->hashrnd = 0;
 	else
 		htab->hashrnd = get_random_u32();
+	/*
+	 * Fold the jhash constant and key length into hashrnd once for the
+	 * fixed-size fast paths instead of doing it on every lookup.
+	 */
+	if (htab->map.key_size == sizeof(u32) ||
+	    htab->map.key_size == sizeof(u64))
+		htab->hashrnd += JHASH_INITVAL + htab->map.key_size;
 
 	htab_init_buckets(htab);
 
@@ -679,9 +686,19 @@ free_htab:
 
 static inline u32 htab_map_hash(const void *key, u32 key_len, u32 hashrnd)
 {
-	if (likely(key_len % 4 == 0))
+	const u32 *k = key;
+	u32 b;
+
+	if (key_len == sizeof(u32))
+		b = 0;
+	else if (key_len == sizeof(u64))
+		b = k[1];
+	else if (likely(key_len % 4 == 0))
 		return jhash2(key, key_len / 4, hashrnd);
-	return jhash(key, key_len, hashrnd);
+	else
+		return jhash(key, key_len, hashrnd);
+
+	return __jhash_nwords(k[0], b, 0, hashrnd);
 }
 
 static inline struct bucket *__select_bucket(struct bpf_htab *htab, u32 hash)
@@ -735,16 +752,14 @@ again:
  * The return value is adjusted by BPF instructions
  * in htab_map_gen_lookup().
  */
-static void *__htab_map_lookup_elem(struct bpf_map *map, void *key)
+static __always_inline void *__htab_lookup(struct bpf_map *map, void *key, u32 key_size)
 {
 	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
 	struct hlist_nulls_head *head;
 	struct htab_elem *l;
-	u32 hash, key_size;
+	u32 hash;
 
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
-
-	key_size = map->key_size;
 
 	hash = htab_map_hash(key, key_size, htab->hashrnd);
 
@@ -753,6 +768,21 @@ static void *__htab_map_lookup_elem(struct bpf_map *map, void *key)
 	l = lookup_nulls_elem_raw(head, hash, key, key_size, htab->n_buckets);
 
 	return l;
+}
+
+static void *__htab_map_lookup_elem(struct bpf_map *map, void *key)
+{
+	return __htab_lookup(map, key, map->key_size);
+}
+
+static void *__htab_map_lookup_elem_u32(struct bpf_map *map, void *key)
+{
+	return __htab_lookup(map, key, sizeof(u32));
+}
+
+static void *__htab_map_lookup_elem_u64(struct bpf_map *map, void *key)
+{
+	return __htab_lookup(map, key, sizeof(u64));
 }
 
 static void *htab_map_lookup_elem(struct bpf_map *map, void *key)
@@ -783,7 +813,12 @@ static int htab_map_gen_lookup(struct bpf_map *map, struct bpf_insn *insn_buf)
 
 	BUILD_BUG_ON(!__same_type(&__htab_map_lookup_elem,
 		     (void *(*)(struct bpf_map *map, void *key))NULL));
-	*insn++ = BPF_EMIT_CALL(__htab_map_lookup_elem);
+	if (map->key_size == sizeof(u32))
+		*insn++ = BPF_EMIT_CALL(__htab_map_lookup_elem_u32);
+	else if (map->key_size == sizeof(u64))
+		*insn++ = BPF_EMIT_CALL(__htab_map_lookup_elem_u64);
+	else
+		*insn++ = BPF_EMIT_CALL(__htab_map_lookup_elem);
 	*insn++ = BPF_JMP_IMM(BPF_JEQ, ret, 0, 1);
 	*insn++ = BPF_ALU64_IMM(BPF_ADD, ret,
 				offsetof(struct htab_elem, key) +
