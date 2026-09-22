@@ -50,6 +50,23 @@ token_context_lock_instance(RCU, RCU_BH);
 /* Exported common interfaces */
 void call_rcu(struct rcu_head *head, rcu_callback_t func);
 void rcu_barrier_tasks(void);
+
+/*
+ * Trampoline-reader Tasks RCU (CONFIG_TASKS_RCU_TRAMPOLINE_READERS), see
+ * kernel/rcu/tasks.h.  rcu_tasks_irq_resched_enter()/_exit() bracket the
+ * irq-exit preemption; rcu_tasks_trampoline_text() and the arch_ override
+ * classify an interrupted IP; rcu_tasks_wait_irq_preempted() lets a caller
+ * wait out tasks already preempted somewhere it is about to make unsafe.
+ */
+void rcu_tasks_irq_resched_enter(unsigned long ip);
+void rcu_tasks_irq_resched_exit(void);
+bool rcu_tasks_trampoline_text(unsigned long ip);
+bool arch_rcu_tasks_trampoline_text(unsigned long ip);
+#ifdef CONFIG_TASKS_RCU_TRAMPOLINE_READERS
+void rcu_tasks_wait_irq_preempted(bool (*inside)(unsigned long ip));
+#else
+static inline void rcu_tasks_wait_irq_preempted(bool (*inside)(unsigned long ip)) { }
+#endif
 void synchronize_rcu(void);
 
 /*
@@ -180,11 +197,16 @@ static inline void rcu_nocb_flush_deferred_wakeup(void) { }
 #ifdef CONFIG_TASKS_RCU_GENERIC
 
 # ifdef CONFIG_TASKS_RCU
-# define rcu_tasks_classic_qs(t, preempt)				\
+#  ifdef CONFIG_TASKS_RCU_TRAMPOLINE_READERS
+void rcu_tasks_note_qs(struct task_struct *t, bool preempt);
+#  define rcu_tasks_classic_qs(t, preempt) rcu_tasks_note_qs((t), (preempt))
+#  else
+#  define rcu_tasks_classic_qs(t, preempt)				\
 	do {								\
 		if (!(preempt) && READ_ONCE((t)->rcu_tasks_holdout))	\
 			WRITE_ONCE((t)->rcu_tasks_holdout, false);	\
 	} while (0)
+#  endif
 void call_rcu_tasks(struct rcu_head *head, rcu_callback_t func);
 void synchronize_rcu_tasks(void);
 void rcu_tasks_torture_stats_print(char *tt, char *tf);
