@@ -2801,7 +2801,7 @@ static int __maybe_unused bcm_sysport_resume(struct device *d)
 		return ret;
 	}
 
-	if (priv->wolopts)
+	if (device_may_wakeup(d) && priv->wolopts)
 		clk_disable_unprepare(priv->wol_clk);
 
 	umac_reset(priv);
