@@ -74,7 +74,14 @@ struct bpf_cpu_map_entry {
 
 	struct completion kthread_running;
 	struct rcu_work free_work;
+
+	struct list_head list;
+	wait_queue_head_t drain_wq;
+	u32 drain_left; /* frames to consume, see cpu_map_netdev_event() */
 };
+
+static LIST_HEAD(cpu_map_list);
+static DEFINE_MUTEX(cpu_map_mutex);
 
 struct bpf_cpu_map {
 	struct bpf_map map;
@@ -136,6 +143,12 @@ static void __cpu_map_ring_cleanup(struct ptr_ring *ring)
 	}
 }
 
+/* cpumap to cpumap redirect, the target ring may be done draining already */
+static bool cpu_map_dev_unregistering(const struct net_device *dev)
+{
+	return unlikely(READ_ONCE(dev->reg_state) != NETREG_REGISTERED);
+}
+
 static u32 cpu_map_bpf_prog_run_skb(struct bpf_cpu_map_entry *rcpu,
 				    void **skbs, u32 skb_n,
 				    struct xdp_cpumap_stats *stats)
@@ -153,6 +166,11 @@ static u32 cpu_map_bpf_prog_run_skb(struct bpf_cpu_map_entry *rcpu,
 			skbs[pass++] = skb;
 			break;
 		case XDP_REDIRECT:
+			if (cpu_map_dev_unregistering(skb->dev)) {
+				kfree_skb(skb);
+				stats->drop++;
+				break;
+			}
 			err = xdp_do_generic_redirect(skb->dev, skb, &xdp,
 						      rcpu->prog);
 			if (unlikely(err)) {
@@ -213,6 +231,11 @@ static int cpu_map_bpf_prog_run_xdp(struct bpf_cpu_map_entry *rcpu,
 			}
 			break;
 		case XDP_REDIRECT:
+			if (cpu_map_dev_unregistering(xdpf->dev_rx)) {
+				xdp_return_frame(xdpf);
+				stats->drop++;
+				break;
+			}
 			err = xdp_do_redirect(xdpf->dev_rx, &xdp,
 					      rcpu->prog);
 			if (unlikely(err)) {
@@ -310,14 +333,16 @@ static int cpu_map_kthread_run(void *data)
 		struct cpu_map_ret ret = { };
 		void *frames[CPUMAP_BATCH];
 		void *skbs[CPUMAP_BATCH];
-		u32 i, n, m;
+		bool drained = false;
+		u32 i, n, m, left;
 		bool empty;
 
 		/* Release CPU reschedule checks */
 		if (__ptr_ring_empty(rcpu->queue)) {
 			set_current_state(TASK_INTERRUPTIBLE);
 			/* Recheck to avoid lost wake-up */
-			if (__ptr_ring_empty(rcpu->queue)) {
+			if (__ptr_ring_empty(rcpu->queue) &&
+			    !READ_ONCE(rcpu->drain_left)) {
 				schedule();
 				sched = 1;
 				last_qs = jiffies;
@@ -398,9 +423,22 @@ stats:
 		/* Flush either every 64 packets or in case of empty ring */
 		packets += n;
 		empty = __ptr_ring_empty(rcpu->queue);
-		if (packets >= NAPI_POLL_WEIGHT || empty) {
-			cpu_map_gro_flush(rcpu, empty);
+		left = READ_ONCE(rcpu->drain_left);
+		if (unlikely(left)) {
+			/* We are draining, drained is true on the last round */
+			left -= min(n, left);
+			drained = empty || !left;
+			if (!drained)
+				WRITE_ONCE(rcpu->drain_left, left);
+		}
+		if (packets >= NAPI_POLL_WEIGHT || empty || drained) {
+			cpu_map_gro_flush(rcpu, empty || drained);
 			packets = 0;
+		}
+		/* Only report back once GRO is flushed too */
+		if (unlikely(drained)) {
+			WRITE_ONCE(rcpu->drain_left, 0);
+			wake_up(&rcpu->drain_wq);
 		}
 
 		local_bh_enable(); /* resched point, may call do_softirq() */
@@ -473,6 +511,7 @@ __cpu_map_entry_alloc(struct bpf_map *map, struct bpf_cpumap_val *value,
 	rcpu->map_id = map->id;
 	rcpu->value.qsize  = value->qsize;
 	gro_init(&rcpu->gro);
+	init_waitqueue_head(&rcpu->drain_wq);
 
 	if (fd > 0) {
 		err = __cpu_map_load_bpf_program(rcpu, map, fd);
@@ -499,6 +538,10 @@ __cpu_map_entry_alloc(struct bpf_map *map, struct bpf_cpumap_val *value,
 	 * will be handled by the kthread before kthread_stop() returns.
 	 */
 	wait_for_completion(&rcpu->kthread_running);
+
+	mutex_lock(&cpu_map_mutex);
+	list_add_tail(&rcpu->list, &cpu_map_list);
+	mutex_unlock(&cpu_map_mutex);
 
 	return rcpu;
 
@@ -530,9 +573,13 @@ static void __cpu_map_entry_free(struct work_struct *work)
 
 	/* kthread_stop will wake_up_process and wait for it to complete.
 	 * cpu_map_kthread_run() makes sure the pointer ring is empty
-	 * before exiting.
+	 * before exiting. Under the mutex, so the notifier sees either the
+	 * frames or no entry.
 	 */
+	mutex_lock(&cpu_map_mutex);
 	kthread_stop(rcpu->kthread);
+	list_del(&rcpu->list);
+	mutex_unlock(&cpu_map_mutex);
 
 	if (rcpu->prog)
 		bpf_prog_put(rcpu->prog);
@@ -832,3 +879,39 @@ void __cpu_map_flush(struct list_head *flush_list)
 		wake_up_process(bq->obj->kthread);
 	}
 }
+
+/* Frames in the ring and skbs in GRO hold a raw pointer to the ingress
+ * device, make every kthread consume them before the device is freed.
+ */
+static int cpu_map_netdev_event(struct notifier_block *nb,
+				unsigned long event, void *ptr)
+{
+	struct bpf_cpu_map_entry *rcpu;
+
+	if (event != NETDEV_UNREGISTER)
+		return NOTIFY_OK;
+
+	mutex_lock(&cpu_map_mutex);
+	list_for_each_entry(rcpu, &cpu_map_list, list) {
+		/* the whole ring, plus a batch already pulled out */
+		WRITE_ONCE(rcpu->drain_left, rcpu->queue->size + CPUMAP_BATCH);
+		wake_up_process(rcpu->kthread);
+	}
+	list_for_each_entry(rcpu, &cpu_map_list, list)
+		wait_event(rcpu->drain_wq, !READ_ONCE(rcpu->drain_left));
+	mutex_unlock(&cpu_map_mutex);
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block cpu_map_notifier = {
+	.notifier_call = cpu_map_netdev_event,
+};
+
+static int __init cpu_map_init(void)
+{
+	register_netdevice_notifier(&cpu_map_notifier);
+
+	return 0;
+}
+subsys_initcall(cpu_map_init);
