@@ -6553,19 +6553,19 @@ static int create_func_ptr_map(struct bpf_object *obj, struct bpf_program *prog,
 		    obj->func_ptr_maps[i].map_idx == map_idx)
 			return obj->func_ptr_maps[i].fd;
 
-	if (obj->gen_loader) {
-		pr_warn("prog '%s': map '%s': pointers to functions in data are not supported by light skeleton\n",
-			prog->name, map->name);
-		return -ENOTSUP;
-	}
-
 	data = malloc(value_size);
 	if (!data)
 		return -ENOMEM;
 
-	/* the content of the map is final, it's frozen already */
+	/*
+	 * The content of the map is final, it's frozen already. There is no map
+	 * when light skeleton is generated, but there is what it's created with.
+	 */
 	if (map->mmaped) {
 		memcpy(data, map->mmaped, value_size);
+	} else if (obj->gen_loader) {
+		err = -EINVAL;
+		goto err_free;
 	} else if (bpf_map_lookup_elem(map->fd, &zero, data)) {
 		err = -errno;
 		pr_warn("prog '%s': map '%s': failed to read the content: %s\n",
@@ -6595,6 +6595,9 @@ static int create_func_ptr_map(struct bpf_object *obj, struct bpf_program *prog,
 		} else {
 			val = (__u64)prog->subprogs[j].sub_insn_off * BPF_INSN_SZ;
 		}
+		/* light skeleton can be generated for a target of another endianness */
+		if (!is_native_endianness(obj))
+			val = bswap_64(val);
 		memcpy(data + ptrs[i].sec_off, &val, sizeof(val));
 	}
 
@@ -6610,6 +6613,8 @@ static int create_func_ptr_map(struct bpf_object *obj, struct bpf_program *prog,
 		if (j < cnt && ptrs[j].sec_off == i)
 			continue;
 		memcpy(&val, data + i, sizeof(val));
+		if (!is_native_endianness(obj))
+			val = bswap_64(val);
 		if (!val || val % BPF_INSN_SZ)
 			continue;
 		for (k = 0; k < prog->subprog_cnt; k++) {
@@ -6619,6 +6624,30 @@ static int create_func_ptr_map(struct bpf_object *obj, struct bpf_program *prog,
 				prog->name, map->name, (unsigned long long)val, i);
 			break;
 		}
+	}
+
+	if (obj->gen_loader) {
+		__u32 *ptr_offs = calloc(cnt, sizeof(*ptr_offs));
+		__u64 *ptr_vals = calloc(cnt, sizeof(*ptr_vals));
+
+		if (!ptr_offs || !ptr_vals) {
+			free(ptr_offs);
+			free(ptr_vals);
+			err = -ENOMEM;
+			goto err_free;
+		}
+		for (i = 0; i < cnt; i++) {
+			ptr_offs[i] = ptrs[i].sec_off;
+			memcpy(&ptr_vals[i], data + ptrs[i].sec_off, sizeof(val));
+			if (!is_native_endianness(obj))
+				ptr_vals[i] = bswap_64(ptr_vals[i]);
+		}
+		/* it's an index in fd_array of the loader, not an fd */
+		map_fd = bpf_gen__func_ptr_map_create(obj->gen_loader, map->name, map_idx, data,
+						      value_size, ptr_offs, ptr_vals, cnt);
+		free(ptr_offs);
+		free(ptr_vals);
+		goto done;
 	}
 
 	map_fd = bpf_map_create(BPF_MAP_TYPE_ARRAY, map->name, sizeof(int), value_size, 1, &opts);
@@ -6634,6 +6663,7 @@ static int create_func_ptr_map(struct bpf_object *obj, struct bpf_program *prog,
 		err = -errno;
 		goto err_close;
 	}
+done:
 
 	tmp = libbpf_reallocarray(obj->func_ptr_maps, obj->func_ptr_map_cnt + 1,
 				  sizeof(*obj->func_ptr_maps));
@@ -6653,7 +6683,8 @@ static int create_func_ptr_map(struct bpf_object *obj, struct bpf_program *prog,
 	return map_fd;
 
 err_close:
-	close(map_fd);
+	if (!obj->gen_loader)
+		close(map_fd);
 err_free:
 	free(data);
 	return err;
@@ -6706,7 +6737,8 @@ bpf_object__relocate_data(struct bpf_object *obj, struct bpf_program *prog)
 						prog->name, i, map->name);
 					return map_fd;
 				}
-				insn[0].src_reg = BPF_PSEUDO_MAP_VALUE;
+				insn[0].src_reg = obj->gen_loader ? BPF_PSEUDO_MAP_IDX_VALUE :
+								    BPF_PSEUDO_MAP_VALUE;
 				insn[0].imm = map_fd;
 			} else if (obj->gen_loader) {
 				insn[0].src_reg = BPF_PSEUDO_MAP_IDX_VALUE;
@@ -9583,8 +9615,17 @@ static int bpf_object_load(struct bpf_object *obj, int extra_log_level, const ch
 	 * permit cross-endian creation of "light skeleton".
 	 */
 	if (obj->gen_loader) {
+		int nr_func_ptr_maps = 0, nr_progs = 0, i;
+
+		/* every program may get a copy of every map with pointers to functions */
+		for (i = 0; i < obj->nr_maps; i++)
+			if (obj->maps[i].autocreate && obj->maps[i].func_ptr_cnt)
+				nr_func_ptr_maps++;
+		for (i = 0; i < obj->nr_programs; i++)
+			if (obj->programs[i].autoload && !prog_is_subprog(obj, &obj->programs[i]))
+				nr_progs++;
 		bpf_gen__init(obj->gen_loader, obj->log_level | extra_log_level,
-			      obj->nr_programs, obj->nr_maps);
+			      obj->nr_programs, obj->nr_maps, nr_func_ptr_maps * nr_progs);
 	} else if (!is_native_endianness(obj)) {
 		pr_warn("object '%s': loading non-native endianness is unsupported\n", obj->name);
 		return libbpf_err(-LIBBPF_ERRNO__ENDIAN);
@@ -10125,7 +10166,8 @@ void bpf_object__close(struct bpf_object *obj)
 	zfree(&obj->jumptable_maps);
 
 	for (i = 0; i < obj->func_ptr_map_cnt; i++)
-		close(obj->func_ptr_maps[i].fd);
+		if (!obj->gen_loader)
+			close(obj->func_ptr_maps[i].fd);
 	zfree(&obj->func_ptr_maps);
 	zfree(&obj->func_ptrs);
 
