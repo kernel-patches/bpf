@@ -236,7 +236,7 @@ help:
 static netdev_tx_t bcmasp_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct bcmasp_intf *intf = netdev_priv(dev);
-	unsigned int total_bytes, size;
+	unsigned int total_bytes, size, min_size;
 	int spb_index, nr_frags, i, j;
 	struct bcmasp_tx_cb *txcb;
 	dma_addr_t mapping, valid;
@@ -267,8 +267,12 @@ static netdev_tx_t bcmasp_xmit(struct sk_buff *skb, struct net_device *dev)
 	for (i = 0; i <= nr_frags; i++) {
 		if (!i) {
 			size = skb_headlen(skb);
-			if (!nr_frags && size < (ETH_ZLEN + ETH_FCS_LEN)) {
-				if (skb_put_padto(skb, ETH_ZLEN + ETH_FCS_LEN))
+			min_size = ETH_ZLEN + ETH_FCS_LEN;
+			if (csum_hw)
+				min_size += sizeof(struct bcmasp_pkt_offload);
+
+			if (!nr_frags && size < min_size) {
+				if (skb_put_padto(skb, min_size))
 					return NETDEV_TX_OK;
 				size = skb->len;
 			}
