@@ -1248,6 +1248,9 @@ static int bpf_object_adjust_struct_ops_autoload(struct bpf_object *obj)
 		prog = &obj->programs[i];
 		if (prog->type != BPF_PROG_TYPE_STRUCT_OPS)
 			continue;
+		/* an explicit MANUAL choice is never overridden by map autocreate */
+		if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL)
+			continue;
 
 		for (j = 0; j < obj->nr_maps; ++j) {
 			const struct btf_type *type;
@@ -9340,6 +9343,21 @@ static int bpf_object_init_progs(struct bpf_object *obj, const struct bpf_object
 		prog->type = prog->sec_def->prog_type;
 		prog->expected_attach_type = prog->sec_def->expected_attach_type;
 
+		/*
+		 * struct_ops programs declared SEC("!...") are rejected
+		 * here at declarative parse time for manual loading.
+		 * bpf_program__set_load_strategy() does allow MANUAL for struct_ops
+		 * via its imperative API, but only as a narrow accommodation for
+		 * veristat, which needs to verify each program in isolation
+		 * without ever calling bpf_object__load().
+		 */
+		if (prog->type == BPF_PROG_TYPE_STRUCT_OPS &&
+		    prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL) {
+			pr_warn("prog '%s': struct_ops programs do not support manual loading\n",
+				prog->name);
+			return -EINVAL;
+		}
+
 		/* sec_def can have custom callback which should be called
 		 * after bpf_program is initialized to adjust its properties
 		 */
@@ -9931,7 +9949,7 @@ static int bpf_object__resolve_externs(struct bpf_object *obj,
 	return 0;
 }
 
-static void bpf_map_prepare_vdata(const struct bpf_map *map)
+static int bpf_map_prepare_vdata(const struct bpf_map *map)
 {
 	const struct btf_type *type;
 	struct bpf_struct_ops *st_ops;
@@ -9947,16 +9965,32 @@ static void bpf_map_prepare_vdata(const struct bpf_map *map)
 		if (!prog)
 			continue;
 
+		/*
+		 * Manual struct_ops programs don't get along well with manual
+		 * loading: all the progs belonging to the same struct_ops must
+		 * load and unload together, which is the opposite of the manual
+		 * load concept.
+		 * Still, we allow manual progs here as long as they were loaded
+		 * before this step, but unloading them later will cause severe bugs.
+		 */
+		if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL && prog->fd < 0) {
+			pr_warn("map '%s': struct_ops member prog '%s' is MANUAL but not loaded\n",
+				map->name, prog->name);
+			return -EINVAL;
+		}
+
 		prog_fd = bpf_program__fd(prog);
 		kern_data = st_ops->kern_vdata + st_ops->kern_func_off[i];
 		*(unsigned long *)kern_data = prog_fd;
 	}
+
+	return 0;
 }
 
 static int bpf_object_prepare_struct_ops(struct bpf_object *obj)
 {
 	struct bpf_map *map;
-	int i;
+	int i, err;
 
 	for (i = 0; i < obj->nr_maps; i++) {
 		map = &obj->maps[i];
@@ -9967,7 +10001,9 @@ static int bpf_object_prepare_struct_ops(struct bpf_object *obj)
 		if (!map->autocreate)
 			continue;
 
-		bpf_map_prepare_vdata(map);
+		err = bpf_map_prepare_vdata(map);
+		if (err)
+			return err;
 	}
 
 	return 0;
@@ -10941,7 +10977,13 @@ __u32 bpf_program__log_level(const struct bpf_program *prog)
 
 int bpf_program__set_log_level(struct bpf_program *prog, __u32 log_level)
 {
-	if (prog->obj->state >= OBJ_LOADED)
+	/*
+	 * Here and below, OBJ_LOADED is not a relevant restriction for
+	 * manual programs as those can load after the bpf object is
+	 * already loaded.
+	 */
+	if (prog->obj->state >= OBJ_LOADED &&
+	    prog->load_strategy != BPF_PROG_LOAD_STRATEGY_MANUAL)
 		return libbpf_err(-EBUSY);
 
 	prog->log_level = log_level;
@@ -10960,7 +11002,8 @@ int bpf_program__set_log_buf(struct bpf_program *prog, char *log_buf, size_t log
 		return libbpf_err(-EINVAL);
 	if (log_size > UINT_MAX)
 		return libbpf_err(-EINVAL);
-	if (prog->obj->state >= OBJ_LOADED)
+	if (prog->obj->state >= OBJ_LOADED &&
+	    prog->load_strategy != BPF_PROG_LOAD_STRATEGY_MANUAL)
 		return libbpf_err(-EBUSY);
 
 	prog->log_buf = log_buf;
