@@ -51,5 +51,4 @@ void nbl_common_destroy_wq(struct nbl_common_info *common);
 int nbl_common_create_wq(struct nbl_common_info *common);
 int nbl_common_func_id_to_rel_pf_id(struct nbl_common_info *common, u32 pf_id,
 				    u32 *rel_pf_id);
-
 #endif

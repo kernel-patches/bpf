@@ -50,4 +50,3 @@ int nbl_common_func_id_to_rel_pf_id(struct nbl_common_info *common, u32 pf_id,
 	*rel_pf_id = pf_id - common->mgt_pf;
 	return 0;
 }
-
