@@ -6,6 +6,7 @@
 #include <linux/sort.h>
 
 #include "diagnostics.h"
+#include "exception.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
@@ -158,17 +159,64 @@ static int push_insn(int t, int w, int e, struct bpf_verifier_env *env)
 	return DONE_EXPLORING;
 }
 
+static int visit_cleanup_pad_edge(int t, struct bpf_verifier_env *env)
+{
+	int *insn_stack = env->cfg.insn_stack;
+	int *insn_state = env->cfg.insn_state;
+	int w;
+
+	if (!env->cleanup_info_cnt)
+		return DONE_EXPLORING;
+	w = bpf_cleanup_pad_of_call(env, t);
+	if (w < 0)
+		return DONE_EXPLORING;
+
+	/*
+	 * @t is a call that may branch here, and @w is the target of that
+	 * branch, so both are prune points. @w especially: every covered call
+	 * site in a region unwinds to the same pad, and without a prune point
+	 * at its head the verifier walks the pad again for each of them.
+	 */
+	mark_prune_point(env, t);
+	mark_prune_point(env, w);
+	mark_jmp_point(env, w);
+	mark_jump_target(env, w);
+
+	if (insn_state[w])
+		return DONE_EXPLORING;
+	if (env->cfg.cur_stack >= env->prog->len)
+		return -E2BIG;
+	insn_stack[env->cfg.cur_stack++] = w;
+	insn_state[w] |= DISCOVERED;
+	return KEEP_EXPLORING;
+}
+
+static int merge_visit_ret(int a, int b)
+{
+	if (a < 0)
+		return a;
+	if (b < 0)
+		return b;
+	if (a == KEEP_EXPLORING || b == KEEP_EXPLORING)
+		return KEEP_EXPLORING;
+	return DONE_EXPLORING;
+}
+
 static int visit_func_call_insn(int t, struct bpf_insn *insns,
 				struct bpf_verifier_env *env,
 				bool visit_callee)
 {
-	int ret, insn_sz;
+	int ret, insn_sz, pad_ret;
 	int w;
+
+	pad_ret = visit_cleanup_pad_edge(t, env);
+	if (pad_ret < 0)
+		return pad_ret;
 
 	insn_sz = bpf_is_ldimm64(&insns[t]) ? 2 : 1;
 	ret = push_insn(t, t + insn_sz, FALLTHROUGH, env);
 	if (ret)
-		return ret;
+		return merge_visit_ret(pad_ret, ret);
 
 	mark_prune_point(env, t + insn_sz);
 	/* when we exit from subprog, we need to record non-linear history */
@@ -180,7 +228,7 @@ static int visit_func_call_insn(int t, struct bpf_insn *insns,
 		merge_callee_effects(env, t, w);
 		ret = push_insn(t, w, BRANCH, env);
 	}
-	return ret;
+	return merge_visit_ret(pad_ret, ret);
 }
 
 struct bpf_iarray *bpf_iarray_realloc(struct bpf_iarray *old, size_t n_elem)
@@ -592,6 +640,7 @@ int bpf_check_cfg(struct bpf_verifier_env *env)
 	int insn_cnt = env->prog->len;
 	int *insn_stack, *insn_state;
 	int ex_insn_beg, i, ret = 0;
+	u32 pad_idx = 0;
 
 	insn_state = env->cfg.insn_state = kvzalloc_objs(int, insn_cnt,
 							 GFP_KERNEL_ACCOUNT);
@@ -645,6 +694,22 @@ walk_cfg:
 		insn_stack[0] = ex_insn_beg;
 		env->cfg.cur_stack = 1;
 		goto walk_cfg;
+	}
+
+	/*
+	 * A landing pad no call site was marked with -- a record whose range
+	 * holds no bpf2bpf call and no bpf_throw() -- is reached by nothing.
+	 * Walk it from here, and let the dead code sweep remove it.
+	 */
+	while (pad_idx < env->cleanup_info_cnt) {
+		u32 pad = env->cleanup_info[pad_idx++].landing_pad_off;
+
+		if (insn_state[pad] != EXPLORED) {
+			insn_state[pad] = DISCOVERED;
+			insn_stack[0] = pad;
+			env->cfg.cur_stack = 1;
+			goto walk_cfg;
+		}
 	}
 
 	for (i = 0; i < insn_cnt; i++) {

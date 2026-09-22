@@ -10,6 +10,7 @@
 #include <linux/slab.h>
 #include <linux/bpf.h>
 #include <linux/btf.h>
+#include <linux/bpf_cleanup_abi.h>
 #include <linux/bpf_verifier.h>
 #include <linux/filter.h>
 #include <net/netlink.h>
@@ -37,6 +38,7 @@
 
 #include "diagnostics.h"
 #include "disasm.h"
+#include "exception.h"
 
 static const struct bpf_verifier_ops * const bpf_verifier_ops[] = {
 #define BPF_PROG_TYPE(_id, _name, prog_ctx_type, kern_ctx_type) \
@@ -1720,6 +1722,8 @@ int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
 		return err;
 	dst_state->speculative = src->speculative;
 	dst_state->in_sleepable = src->in_sleepable;
+	dst_state->unwinding = src->unwinding;
+	dst_state->unwind_frameno = src->unwind_frameno;
 	dst_state->curframe = src->curframe;
 	dst_state->branches = src->branches;
 	dst_state->parent = src->parent;
@@ -5593,6 +5597,17 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 			break;
 		}
 	}
+
+	/*
+	 * A pad rebuilds its frame from a spill area, and on x86-64 a private
+	 * stack's frame pointer lives in r9, which no spill area holds.
+	 * Refused on every arch rather than just that one. The subprograms
+	 * below are then checked against MAX_BPF_STACK together rather than
+	 * one at a time, so this can turn a program that would have loaded
+	 * with a private stack into one that is too deep.
+	 */
+	if (env->cleanup_info_cnt)
+		priv_stack_mode = NO_PRIV_STACK;
 
 	if (priv_stack_mode == PRIV_STACK_UNKNOWN)
 		priv_stack_mode = bpf_enable_priv_stack(env->prog);
@@ -10530,6 +10545,10 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	 * callbacks
 	 */
 	env->subprog_info[subprog].is_cb = true;
+	err = bpf_cleanup_check_callback(env, subprog);
+	if (err)
+		return err;
+
 	if (bpf_pseudo_kfunc_call(insn) &&
 	    !is_callback_calling_kfunc(insn->imm)) {
 		verifier_bug(env, "kfunc %s#%d not marked as callback-calling",
@@ -10581,8 +10600,8 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	return 0;
 }
 
-static int process_bpf_exit_full(struct bpf_verifier_env *env,
-				 bool *do_print_state, bool exception_exit);
+static int process_bpf_exit_full(struct bpf_verifier_env *env, bool *do_print_state);
+static int unwind_step(struct bpf_verifier_env *env, u32 callsite, int *insn_idx);
 
 static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			   int *insn_idx)
@@ -10672,7 +10691,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				verbose(env, "failed to push state for global subprog exception path\n");
 				return PTR_ERR(branch);
 			}
-			return process_bpf_exit_full(env, NULL, true);
+			return unwind_step(env, *insn_idx, insn_idx);
 		}
 
 		/* continue with next insn after call */
@@ -14580,7 +14599,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		env->prog->call_session_cookie = true;
 
 	if (bpf_is_throw_kfunc(insn))
-		return process_bpf_exit_full(env, NULL, true);
+		return unwind_step(env, insn_idx, &env->insn_idx);
 
 	return 0;
 }
@@ -18505,9 +18524,108 @@ enum {
 	INSN_IDX_UPDATED = 2,
 };
 
-static int process_bpf_exit_full(struct bpf_verifier_env *env,
-				 bool *do_print_state,
-				 bool exception_exit)
+static u32 unwind_pop_frame(struct bpf_verifier_env *env)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+	struct bpf_func_state *callee = state->frame[state->curframe];
+	u32 callsite = callee->callsite;
+	struct bpf_func_state *caller;
+
+	caller = state->frame[state->curframe - 1];
+	account_processed_insns(env, callee, caller);
+	free_func_state(callee);
+	state->frame[state->curframe--] = NULL;
+	invalidate_outgoing_stack_args(env, caller);
+	return callsite;
+}
+
+/*
+ * A pad runs with its frame's stack and callee-saved registers, which the
+ * walker puts back, nothing in the caller-saved ones, and r0 as the arch
+ * dispatchers leave it.
+ */
+static void unwind_enter_pad(struct bpf_verifier_env *env)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+	struct bpf_func_state *frame = cur_func(env);
+
+	state->unwind_frameno = state->curframe;
+	clear_caller_saved_regs(env, frame->regs);
+	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	__mark_reg_known(&frame->regs[BPF_REG_0], BPF_PAD_ENTRY_R0);
+}
+
+static int unwind_finish(struct bpf_verifier_env *env)
+{
+	int err = check_resource_leak(env, true, true, "bpf_throw");
+
+	if (err)
+		return err;
+	return PROCESS_BPF_EXIT;
+}
+
+static int unwind_step(struct bpf_verifier_env *env, u32 callsite, int *insn_idx)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+	u8 popped = 0;
+
+	state->unwinding = true;
+	for (;;) {
+		int pad = bpf_cleanup_pad_of_call(env, callsite);
+
+		if (pad >= 0) {
+			unwind_enter_pad(env);
+			/*
+			 * The edge from @callsite to the pad crosses @popped
+			 * frames, and nothing in the instruction stream says
+			 * so. Record it for mark_chain_precision(), which has
+			 * to walk back through the same frames.
+			 */
+			env->unwind_frames = popped;
+			*insn_idx = pad;
+			return INSN_IDX_UPDATED;
+		}
+		if (!state->curframe)
+			return unwind_finish(env);
+		callsite = unwind_pop_frame(env);
+		popped++;
+	}
+}
+
+static int process_cleanup_resume(struct bpf_verifier_env *env, int *insn_idx)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+	int err;
+
+	if (!state->unwinding) {
+		verbose(env,
+			"bpf_unwind_resume() at insn %d reached without an exception in flight\n",
+			*insn_idx);
+		return -EINVAL;
+	}
+	/*
+	 * The shape this refuses: a pad calls a subprogram that has a landing
+	 * pad of its own and reaches it by ordinary control flow, so the
+	 * resume in it is in a pad body by every static measure. A JIT lowers
+	 * a resume as the way back out of a pad, which reaches the walker only
+	 * from the frame whose pad the walker called.
+	 */
+	if (state->curframe != state->unwind_frameno) {
+		verbose(env,
+			"bpf_unwind_resume() at insn %d is in frame %d, not frame %d whose landing pad the exception entered\n",
+			*insn_idx, state->curframe, state->unwind_frameno);
+		return -EINVAL;
+	}
+	if (!state->curframe)
+		return unwind_finish(env);
+	err = unwind_step(env, unwind_pop_frame(env), insn_idx);
+	/* unwind_step() counted the frames it popped, not the one popped here. */
+	if (err == INSN_IDX_UPDATED)
+		env->unwind_frames++;
+	return err;
+}
+
+static int process_bpf_exit_full(struct bpf_verifier_env *env, bool *do_print_state)
 {
 	struct bpf_func_state *cur_frame = cur_func(env);
 
@@ -18517,24 +18635,10 @@ static int process_bpf_exit_full(struct bpf_verifier_env *env,
 	 * for which reference_state must match caller reference
 	 * state when it exits.
 	 */
-	int err = check_resource_leak(env, exception_exit,
-				      exception_exit || !env->cur_state->curframe,
-				      exception_exit ? "bpf_throw" :
+	int err = check_resource_leak(env, false, !env->cur_state->curframe,
 				      "BPF_EXIT instruction in main prog");
 	if (err)
 		return err;
-
-	/* The side effect of the prepare_func_exit which is
-	 * being skipped is that it frees bpf_func_state.
-	 * Typically, process_bpf_exit will only be hit with
-	 * outermost exit. copy_verifier_state in pop_stack will
-	 * handle freeing of any extra bpf_func_state left over
-	 * from not processing all nested function exits. We
-	 * also skip return code checks as they are not needed
-	 * for exceptional exits.
-	 */
-	if (exception_exit)
-		return PROCESS_BPF_EXIT;
 
 	if (env->cur_state->curframe) {
 		/* exit from nested function */
@@ -18709,6 +18813,8 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 
 		env->jmps_processed++;
 		if (opcode == BPF_CALL) {
+			if (bpf_is_unwind_resume_kfunc(insn))
+				return process_cleanup_resume(env, &env->insn_idx);
 			if (env->cur_state->active_locks) {
 				if ((insn->src_reg == BPF_REG_0 &&
 				     insn->imm != BPF_FUNC_spin_unlock &&
@@ -18742,7 +18848,7 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 				env->insn_idx += insn->imm + 1;
 			return INSN_IDX_UPDATED;
 		} else if (opcode == BPF_EXIT) {
-			return process_bpf_exit_full(env, do_print_state, false);
+			return process_bpf_exit_full(env, do_print_state);
 		}
 		return check_cond_jmp_op(env, insn, &env->insn_idx);
 	}
@@ -18783,6 +18889,9 @@ static int do_check(struct bpf_verifier_env *env)
 
 		/* reset current history entry on each new instruction */
 		env->cur_hist_ent = NULL;
+		/* frames the unwind popped to reach this insn, if it is a pad */
+		env->cur_unwind_frames = env->unwind_frames;
+		env->unwind_frames = 0;
 
 		env->prev_insn_idx = prev_insn_idx;
 		if (env->insn_idx >= insn_cnt) {
@@ -18846,7 +18955,17 @@ static int do_check(struct bpf_verifier_env *env)
 			}
 		}
 
-		if (bpf_is_jmp_point(env, env->insn_idx)) {
+		/*
+		 * The entry pushed here is the only record of how many frames
+		 * the unwind popped to reach this insn, which the backtrack in
+		 * mark_chain_precision() needs to follow the same edge. A pad
+		 * is already a jump point; the second test only guards against
+		 * it ever ceasing to be one. bpf_push_jmp_history() stamps the
+		 * count on the entry it creates, so the prune path in
+		 * bpf_is_state_visited(), which pushes one of its own, records
+		 * it too.
+		 */
+		if (bpf_is_jmp_point(env, env->insn_idx) || env->cur_unwind_frames) {
 			err = bpf_push_jmp_history(env, state, 0, 0, 0, 0);
 			if (err)
 				return err;
@@ -21712,6 +21831,11 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
+	/* The CFG needs an edge from a call in a cleanup range to its pad. */
+	ret = bpf_prepare_cleanup_exceptions(env);
+	if (ret < 0)
+		goto skip_full_check;
+
 	/* Validate instructions and resolve the program's referenced resources. */
 	ret = check_and_resolve_insns(env);
 	if (ret < 0)
@@ -21729,6 +21853,10 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	}
 
 	ret = bpf_check_cfg(env);
+	if (ret < 0)
+		goto skip_full_check;
+
+	ret = bpf_check_cleanup_exceptions(env);
 	if (ret < 0)
 		goto skip_full_check;
 
@@ -21919,6 +22047,7 @@ err_free_env:
 	kvfree(env->succ);
 	kvfree(env->gotox_tmp_buf);
 	bpf_diag_free(env);
+	kvfree(env->cleanup_info);
 	kvfree(env);
 	return ret;
 }
