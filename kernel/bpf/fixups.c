@@ -361,6 +361,7 @@ struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
 	adjust_insn_aux_data(env, new_prog, off, len, &original_insn);
 	adjust_subprog_starts(env, off, len);
 	adjust_insn_arrays(env, off, len);
+	bpf_adjust_func_ptrs(env, off, len);
 	adjust_poke_descs(new_prog, off, len);
 	return new_prog;
 }
@@ -558,6 +559,9 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 	err = bpf_remove_insns(env->prog, off, cnt);
 	if (err)
 		return err;
+
+	/* before subprogs are adjusted, since it looks at them */
+	bpf_adjust_func_ptrs_after_remove(env, off, cnt);
 
 	err = adjust_subprog_starts_after_remove(env, off, cnt);
 	if (err)
@@ -1283,6 +1287,57 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 			goto out_free;
 		}
 		cond_resched();
+	}
+
+	/*
+	 * The addresses of all functions are final. Replace the offsets of
+	 * functions with them in the maps of the program, see
+	 * resolve_func_ptrs(). The program must be the only user of such map.
+	 * From now on no other program can use it, see bpf_map_claim().
+	 */
+	for (i = 0; i < env->func_ptr_cnt; i++) {
+		struct bpf_func_ptr *ptr = &env->func_ptrs[i];
+		unsigned long me = (unsigned long)prog->aux;
+		u64 addr, old, new = 0;
+
+		/* pointers are sorted by map */
+		if ((!i || ptr->map != ptr[-1].map) &&
+		    cmpxchg(&ptr->map->user, me, me | BPF_MAP_USER_PATCHED) != me) {
+			verbose(env, "map '%s' is used by another program\n", ptr->map->name);
+			err = -EBUSY;
+			goto out_free;
+		}
+
+		/* it's the address of the value of the map whatever the offset is */
+		err = ptr->map->ops->map_direct_value_addr(ptr->map, &addr, 0);
+		if (verifier_bug_if(err, env, "no value of map '%s'", ptr->map->name)) {
+			err = -EFAULT;
+			goto out_free;
+		}
+		addr += ptr->map_off;
+
+		if (ptr->xlated_off != BPF_FUNC_PTR_DELETED) {
+			subprog = bpf_find_subprog(env, ptr->xlated_off);
+			if (verifier_bug_if(subprog <= 0, env, "no function at insn %u",
+					    ptr->xlated_off)) {
+				err = -EFAULT;
+				goto out_free;
+			}
+			new = (unsigned long)func[subprog]->bpf_func;
+		} else if (verifier_bug_if(ptr->used, env, "function of map '%s' offset %u is removed",
+					   ptr->map->name, ptr->map_off)) {
+			/* the program that reads the pointer might call the function */
+			err = -EFAULT;
+			goto out_free;
+		}
+		/* else the function is dead code, nothing calls it, the pointer is NULL */
+
+		old = (u64)ptr->orig_off * sizeof(struct bpf_insn);
+		if (verifier_bug_if(cmpxchg64((u64 *)(unsigned long)addr, old, new) != old, env,
+				    "map '%s' offset %u changed", ptr->map->name, ptr->map_off)) {
+			err = -EFAULT;
+			goto out_free;
+		}
 	}
 
 	/*
