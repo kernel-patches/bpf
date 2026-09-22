@@ -16,11 +16,13 @@ enum {
 
 struct nbl_interface {
 	struct nbl_hw_ops_tbl *hw_ops_tbl;
+	struct nbl_resource_ops_tbl *resource_ops_tbl;
 	struct nbl_channel_ops_tbl *channel_ops_tbl;
 };
 
 struct nbl_core {
 	struct nbl_hw_mgt *hw_mgt;
+	struct nbl_resource_mgt *res_mgt;
 	struct nbl_channel_mgt *chan_mgt;
 };
 

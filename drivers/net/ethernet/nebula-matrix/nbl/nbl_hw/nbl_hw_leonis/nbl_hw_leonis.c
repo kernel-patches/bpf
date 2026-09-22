@@ -104,6 +104,32 @@ static void nbl_hw_rd_regs_lock(struct nbl_hw_mgt *hw_mgt, u64 reg, u32 *data,
 	spin_unlock(&hw_mgt->reg_lock);
 }
 
+/*
+ * Only call this when has_ctrl=true, which maps enough space
+ * (bar_len - 8192) to cover NBL_HW_DUMMY_REG (0x1300904).
+ * The flow/design guarantees this is only called in the
+ * has_ctrl path.
+ */
+static void nbl_flush_writes(struct nbl_hw_mgt *hw_mgt)
+{
+	nbl_hw_rd32(hw_mgt, NBL_HW_DUMMY_REG);
+}
+
+/*
+ * Registers reset to zero after cold boot / FLR / bus reset. Firmware
+ * programs valid values before driver probe, so zero is only seen on
+ * hardware fault or register read failure. Initialize data=0 to guard
+ * against nbl_hw_read_mbx_regs() early-return on bounds-check failure.
+ */
+static void nbl_hw_get_fw_eth_map(struct nbl_hw_mgt *hw_mgt, u32 *eth_map)
+{
+	u32 data = 0;
+
+	nbl_hw_read_mbx_regs(hw_mgt, NBL_FW_BOARD_DW6_OFFSET, &data,
+			     sizeof(data));
+	*eth_map = FIELD_GET(NBL_FW_BOARD_DW6_ETH_BITMAP_MASK, data);
+}
+
 static void nbl_hw_update_mailbox_queue_tail_ptr(struct nbl_hw_mgt *hw_mgt,
 						 u16 tail_ptr, u8 txrx)
 {
@@ -188,6 +214,15 @@ static void nbl_hw_get_host_pf_mask(struct nbl_hw_mgt *hw_mgt, u32 *pf_mask)
 			    sizeof(*pf_mask));
 }
 
+static void nbl_hw_get_real_bus(struct nbl_hw_mgt *hw_mgt, u8 *bus)
+{
+	u32 data = 0;
+
+	nbl_hw_rd_regs_lock(hw_mgt, NBL_PCIE_HOST_TL_CFG_BUSDEV, &data,
+			    sizeof(data));
+	*bus = FIELD_GET(NBL_PCIE_BUS_MASK, data);
+}
+
 static void nbl_hw_cfg_mailbox_qinfo(struct nbl_hw_mgt *hw_mgt, u16 func_id,
 				     u8 bus, u8 devid, u8 function)
 {
@@ -218,15 +253,41 @@ static void nbl_hw_cfg_mailbox_qinfo(struct nbl_hw_mgt *hw_mgt, u16 func_id,
 	spin_unlock(&hw_mgt->reg_lock);
 }
 
+/*
+ * Registers reset to zero after cold boot / FLR / bus reset. Firmware
+ * programs valid values before driver probe, so zero is only seen on
+ * hardware fault or register read failure. Initialize data=0 to guard
+ * against nbl_hw_read_mbx_regs() early-return on bounds-check failure.
+ */
+static void nbl_hw_get_board_info(struct nbl_hw_mgt *hw_mgt,
+				  struct nbl_board_port_info *board_info)
+{
+	u32 data = 0;
+
+	nbl_hw_read_mbx_regs(hw_mgt, NBL_FW_BOARD_DW3_OFFSET, &data,
+			     sizeof(data));
+	board_info->eth_num = FIELD_GET(NBL_FW_BOARD_DW3_PORT_NUM_MASK, data);
+	board_info->eth_speed =
+		FIELD_GET(NBL_FW_BOARD_DW3_PORT_SPEED_MASK, data);
+	board_info->p4_version =
+		FIELD_GET(NBL_FW_BOARD_DW3_P4_VERSION_MASK, data);
+}
+
 static struct nbl_hw_ops hw_ops = {
+	.flush_write = nbl_flush_writes,
+
 	.update_mailbox_queue_tail_ptr = nbl_hw_update_mailbox_queue_tail_ptr,
 	.config_mailbox_rxq = nbl_hw_config_mailbox_rxq,
 	.config_mailbox_txq = nbl_hw_config_mailbox_txq,
 	.stop_mailbox_rxq = nbl_hw_stop_mailbox_rxq,
 	.stop_mailbox_txq = nbl_hw_stop_mailbox_txq,
 	.get_host_pf_mask = nbl_hw_get_host_pf_mask,
+	.get_real_bus = nbl_hw_get_real_bus,
+
 	.cfg_mailbox_qinfo = nbl_hw_cfg_mailbox_qinfo,
 
+	.get_fw_eth_map = nbl_hw_get_fw_eth_map,
+	.get_board_info = nbl_hw_get_board_info,
 };
 
 /* Structure starts here, adding an op should not modify anything below */
@@ -254,10 +315,12 @@ static struct nbl_hw_ops_tbl *nbl_hw_setup_ops(struct nbl_common_info *common,
 	hw_ops_tbl = devm_kzalloc(dev, sizeof(*hw_ops_tbl), GFP_KERNEL);
 	if (!hw_ops_tbl)
 		return ERR_PTR(-ENOMEM);
-	if (!hw_ops.update_mailbox_queue_tail_ptr ||
+	if (!hw_ops.flush_write || !hw_ops.update_mailbox_queue_tail_ptr ||
 	    !hw_ops.config_mailbox_rxq || !hw_ops.config_mailbox_txq ||
 	    !hw_ops.stop_mailbox_rxq || !hw_ops.stop_mailbox_txq ||
-	    !hw_ops.get_host_pf_mask || !hw_ops.cfg_mailbox_qinfo)
+	    !hw_ops.get_host_pf_mask || !hw_ops.get_real_bus ||
+	    !hw_ops.cfg_mailbox_qinfo ||
+	    !hw_ops.get_fw_eth_map || !hw_ops.get_board_info)
 		return ERR_PTR(-EINVAL);
 	hw_ops_tbl->ops = &hw_ops;
 	hw_ops_tbl->priv = hw_mgt;

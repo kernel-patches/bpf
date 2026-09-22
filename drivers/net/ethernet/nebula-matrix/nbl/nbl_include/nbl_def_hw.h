@@ -8,9 +8,11 @@
 
 #include <linux/types.h>
 
+struct nbl_board_port_info;
 struct nbl_hw_mgt;
 struct nbl_adapter;
 struct nbl_hw_ops {
+	void (*flush_write)(struct nbl_hw_mgt *hw_mgt);
 	void (*update_mailbox_queue_tail_ptr)(struct nbl_hw_mgt *hw_mgt,
 					      u16 tail_ptr, u8 txrx);
 	void (*config_mailbox_rxq)(struct nbl_hw_mgt *hw_mgt,
@@ -39,9 +41,22 @@ struct nbl_hw_ops {
 	 * get_board_info()->eth_num.
 	 */
 	void (*get_host_pf_mask)(struct nbl_hw_mgt *hw_mgt, u32 *pf_mask);
+	void (*get_real_bus)(struct nbl_hw_mgt *hw_mgt, u8 *bus);
 
 	void (*cfg_mailbox_qinfo)(struct nbl_hw_mgt *hw_mgt, u16 func_id,
 				  u8 bus, u8 devid, u8 function);
+	void (*get_fw_eth_map)(struct nbl_hw_mgt *hw_mgt, u32 *eth_map);
+	/**
+	 * get_board_info - Fetch board info from firmware
+	 * @hw_mgt: hardware management context
+	 * @board_info: output pointer for board info structure
+	 *
+	 * Firmware contract: board_info.eth_num MUST equal the number of
+	 * unmasked PFs from get_host_pf_mask(). See get_host_pf_mask for
+	 * details.
+	 */
+	void (*get_board_info)(struct nbl_hw_mgt *hw_mgt,
+			       struct nbl_board_port_info *board_info);
 };
 
 struct nbl_hw_ops_tbl {
