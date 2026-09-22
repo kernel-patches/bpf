@@ -232,7 +232,8 @@ struct amt_relay_headers {
 } __packed;
 
 struct amt_skb_cb {
-	struct amt_tunnel_list *tunnel;
+	__be32			tunnel_ip4;
+	__be16			tunnel_port;
 };
 
 struct amt_tunnel_list {
