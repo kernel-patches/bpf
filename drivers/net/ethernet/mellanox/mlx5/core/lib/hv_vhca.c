@@ -228,7 +228,10 @@ void mlx5_hv_vhca_cleanup(struct mlx5_hv_vhca *hv_vhca)
 	if (!hv_vhca)
 		return;
 
+	mutex_lock(&hv_vhca->agents_lock);
 	agent = hv_vhca->agents[MLX5_HV_VHCA_AGENT_CONTROL];
+	mutex_unlock(&hv_vhca->agents_lock);
+
 	if (agent)
 		mlx5_hv_vhca_control_agent_destroy(agent);
 
@@ -270,11 +273,12 @@ mlx5_hv_vhca_agent_create(struct mlx5_hv_vhca *hv_vhca,
 		mutex_unlock(&hv_vhca->agents_lock);
 		return ERR_PTR(-EINVAL);
 	}
-	mutex_unlock(&hv_vhca->agents_lock);
 
 	agent = kzalloc_obj(*agent);
-	if (!agent)
+	if (!agent) {
+		mutex_unlock(&hv_vhca->agents_lock);
 		return ERR_PTR(-ENOMEM);
+	}
 
 	agent->type      = type;
 	agent->hv_vhca   = hv_vhca;
@@ -286,7 +290,6 @@ mlx5_hv_vhca_agent_create(struct mlx5_hv_vhca *hv_vhca,
 	if (ctx_update)
 		WRITE_ONCE(*ctx_update, agent);
 
-	mutex_lock(&hv_vhca->agents_lock);
 	hv_vhca->agents[type] = agent;
 	mutex_unlock(&hv_vhca->agents_lock);
 
