@@ -2273,7 +2273,7 @@ static u16 bcm_sysport_select_queue(struct net_device *dev, struct sk_buff *skb,
 	struct bcm_sysport_priv *priv = netdev_priv(dev);
 	u16 queue = skb_get_queue_mapping(skb);
 	struct bcm_sysport_tx_ring *tx_ring;
-	unsigned int q, port;
+	unsigned int q, port, index;
 
 	if (!netdev_uses_dsa(dev))
 		return netdev_pick_tx(dev, skb, NULL);
@@ -2281,8 +2281,11 @@ static u16 bcm_sysport_select_queue(struct net_device *dev, struct sk_buff *skb,
 	/* DSA tagging layer will have configured the correct queue */
 	q = BRCM_TAG_GET_QUEUE(queue);
 	port = BRCM_TAG_GET_PORT(queue);
-	tx_ring = priv->ring_map[q + port * priv->per_port_num_tx_queues];
+	index = q + port * priv->per_port_num_tx_queues;
+	if (unlikely(index >= ARRAY_SIZE(priv->ring_map)))
+		return netdev_pick_tx(dev, skb, NULL);
 
+	tx_ring = priv->ring_map[index];
 	if (unlikely(!tx_ring))
 		return netdev_pick_tx(dev, skb, NULL);
 
@@ -2329,7 +2332,8 @@ static int bcm_sysport_map_queues(struct net_device *dev,
 	 */
 	if (priv->is_lite)
 		netif_set_real_num_tx_queues(slave_dev,
-					     slave_dev->num_tx_queues / 2);
+					     max_t(unsigned int, 1,
+						   slave_dev->num_tx_queues / 2));
 
 	num_tx_queues = slave_dev->real_num_tx_queues;
 
@@ -2352,7 +2356,8 @@ static int bcm_sysport_map_queues(struct net_device *dev,
 		ring->switch_queue = qp;
 		ring->switch_port = port;
 		ring->inspect = true;
-		priv->ring_map[qp + port * num_tx_queues] = ring;
+		if (qp + port * num_tx_queues < ARRAY_SIZE(priv->ring_map))
+			priv->ring_map[qp + port * num_tx_queues] = ring;
 		qp++;
 	}
 
@@ -2383,7 +2388,8 @@ static int bcm_sysport_unmap_queues(struct net_device *dev,
 
 		ring->inspect = false;
 		qp = ring->switch_queue;
-		priv->ring_map[qp + port * num_tx_queues] = NULL;
+		if (qp + port * num_tx_queues < ARRAY_SIZE(priv->ring_map))
+			priv->ring_map[qp + port * num_tx_queues] = NULL;
 	}
 
 	return 0;
