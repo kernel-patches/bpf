@@ -92,6 +92,12 @@ static inline void rcu_read_unlock_tasks_trace(struct srcu_ctr __percpu *scp)
  * the all the other tasks exit their critical sections.
  *
  * For more details, please see the documentation for rcu_read_lock().
+ *
+ * CONFIG_HAVE_RCU_TRAMPOLINE_READERS architectures open-code this pair in
+ * their ftrace and BPF trampolines (arch/x86/kernel/ftrace_64.S,
+ * arch/x86/kernel/kprobes/opt.c, arch/x86/net/bpf_jit_comp.c,
+ * arch/arm64/kernel/entry-ftrace.S, arch/arm64/net/bpf_jit_comp.c,
+ * samples/ftrace/ftrace-direct.h); changes here need to be mirrored there.
  */
 static inline void rcu_read_lock_trace(void)
 {
