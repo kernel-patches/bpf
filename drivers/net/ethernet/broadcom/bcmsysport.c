@@ -2315,6 +2315,7 @@ static int bcm_sysport_map_queues(struct net_device *dev,
 	struct bcm_sysport_tx_ring *ring;
 	unsigned int num_tx_queues;
 	unsigned int q, qp, port;
+	u32 reg;
 
 	/* We can't be setting up queue inspection for non directly attached
 	 * switches
@@ -2350,14 +2351,21 @@ static int bcm_sysport_map_queues(struct net_device *dev,
 		if (ring->inspect)
 			continue;
 
-		/* Just remember the mapping actual programming done
-		 * during bcm_sysport_init_tx_ring
-		 */
 		ring->switch_queue = qp;
 		ring->switch_port = port;
 		ring->inspect = true;
 		if (qp + port * num_tx_queues < ARRAY_SIZE(priv->ring_map))
 			priv->ring_map[qp + port * num_tx_queues] = ring;
+
+		if (netif_running(dev)) {
+			reg = tdma_readl(priv, TDMA_DESC_RING_MAPPING(q));
+			reg &= ~(RING_QID_MASK |
+				 RING_PORT_ID_MASK << RING_PORT_ID_SHIFT |
+				 RING_IGNORE_STATUS);
+			reg |= (qp & RING_QID_MASK);
+			reg |= (port << RING_PORT_ID_SHIFT);
+			tdma_writel(priv, reg, TDMA_DESC_RING_MAPPING(q));
+		}
 		qp++;
 	}
 
@@ -2372,6 +2380,7 @@ static int bcm_sysport_unmap_queues(struct net_device *dev,
 	struct bcm_sysport_tx_ring *ring;
 	unsigned int num_tx_queues;
 	unsigned int q, qp, port;
+	u32 reg;
 
 	port = dp->index;
 
@@ -2390,6 +2399,14 @@ static int bcm_sysport_unmap_queues(struct net_device *dev,
 		qp = ring->switch_queue;
 		if (qp + port * num_tx_queues < ARRAY_SIZE(priv->ring_map))
 			priv->ring_map[qp + port * num_tx_queues] = NULL;
+
+		if (netif_running(dev)) {
+			reg = tdma_readl(priv, TDMA_DESC_RING_MAPPING(q));
+			reg &= ~(RING_QID_MASK |
+				 RING_PORT_ID_MASK << RING_PORT_ID_SHIFT);
+			reg |= RING_IGNORE_STATUS;
+			tdma_writel(priv, reg, TDMA_DESC_RING_MAPPING(q));
+		}
 	}
 
 	return 0;
