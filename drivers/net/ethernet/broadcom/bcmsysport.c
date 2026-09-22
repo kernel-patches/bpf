@@ -1198,12 +1198,12 @@ static void bcm_sysport_poll_controller(struct net_device *dev)
 	struct bcm_sysport_priv *priv = netdev_priv(dev);
 
 	disable_irq(priv->irq0);
-	bcm_sysport_rx_isr(priv->irq0, priv);
+	bcm_sysport_rx_isr(priv->irq0, dev);
 	enable_irq(priv->irq0);
 
 	if (!priv->is_lite) {
 		disable_irq(priv->irq1);
-		bcm_sysport_tx_isr(priv->irq1, priv);
+		bcm_sysport_tx_isr(priv->irq1, dev);
 		enable_irq(priv->irq1);
 	}
 }
