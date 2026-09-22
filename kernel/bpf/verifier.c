@@ -707,11 +707,15 @@ static void mark_dynptr_stack_regs(struct bpf_verifier_env *env,
 	__mark_dynptr_reg(sreg2, type, false, id, parent_id);
 }
 
-static void mark_dynptr_cb_reg(struct bpf_verifier_env *env,
-			       struct bpf_reg_state *reg,
+/*
+ * A callback dynptr argument is valid only until the frame is popped, so
+ * setup_func_entry() assigns its id along with the frame reference.
+ */
+static void mark_dynptr_cb_reg(struct bpf_func_state *callee, u32 regno,
 			       enum bpf_dynptr_type type)
 {
-	__mark_dynptr_reg(reg, type, true, ++env->id_gen, 0);
+	__mark_dynptr_reg(&callee->regs[regno], type, true, 0, 0);
+	mark_frame_scoped_arg(callee, regno);
 }
 
 static int destroy_if_dynptr_stack_slot(struct bpf_verifier_env *env,
@@ -10962,7 +10966,7 @@ static int set_user_ringbuf_callback_state(struct bpf_verifier_env *env,
 	 * callback_fn(const struct bpf_dynptr_t* dynptr, void *callback_ctx);
 	 */
 	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_0]);
-	mark_dynptr_cb_reg(env, &callee->regs[BPF_REG_1], BPF_DYNPTR_TYPE_LOCAL);
+	mark_dynptr_cb_reg(callee, BPF_REG_1, BPF_DYNPTR_TYPE_LOCAL);
 	callee->regs[BPF_REG_2] = caller->regs[BPF_REG_3];
 
 	/* unused */
