@@ -716,10 +716,10 @@ static struct ip_tunnel_info *skb_tunnel_info_txcheck(struct sk_buff *skb)
 	return tun_info;
 }
 
-static netdev_tx_t __gre6_xmit(struct sk_buff *skb,
-			       struct net_device *dev, __u8 dsfield,
-			       struct flowi6 *fl6, int encap_limit,
-			       __u32 *pmtu, __be16 proto)
+static enum skb_drop_reason __gre6_xmit(struct sk_buff *skb,
+					struct net_device *dev, __u8 dsfield,
+					struct flowi6 *fl6, int encap_limit,
+					__u32 *pmtu, __be16 proto)
 {
 	struct ip6_tnl *tunnel = netdev_priv(dev);
 	IP_TUNNEL_DECLARE_FLAGS(flags);
@@ -744,7 +744,7 @@ static netdev_tx_t __gre6_xmit(struct sk_buff *skb,
 		tun_info = skb_tunnel_info_txcheck(skb);
 		if (IS_ERR(tun_info) ||
 		    unlikely(ip_tunnel_info_af(tun_info) != AF_INET6))
-			return -EINVAL;
+			return SKB_DROP_REASON_TUNNEL_TXINFO;
 
 		key = &tun_info->key;
 		memset(fl6, 0, sizeof(*fl6));
@@ -763,7 +763,7 @@ static netdev_tx_t __gre6_xmit(struct sk_buff *skb,
 		tun_hlen = gre_calc_hlen(flags);
 
 		if (skb_cow_head(skb, dev->needed_headroom ?: tun_hlen + tunnel->encap_hlen))
-			return -ENOMEM;
+			return SKB_DROP_REASON_NOMEM;
 
 		gre_build_header(skb, tun_hlen,
 				 flags, protocol,
@@ -774,7 +774,7 @@ static netdev_tx_t __gre6_xmit(struct sk_buff *skb,
 
 	} else {
 		if (skb_cow_head(skb, dev->needed_headroom ?: tunnel->hlen))
-			return -ENOMEM;
+			return SKB_DROP_REASON_NOMEM;
 
 		ip_tunnel_flags_copy(flags, tunnel->parms.o_flags);
 
@@ -789,9 +789,11 @@ static netdev_tx_t __gre6_xmit(struct sk_buff *skb,
 			    NEXTHDR_GRE);
 }
 
-static inline int ip6gre_xmit_ipv4(struct sk_buff *skb, struct net_device *dev)
+static inline enum skb_drop_reason ip6gre_xmit_ipv4(struct sk_buff *skb,
+						    struct net_device *dev)
 {
 	struct ip6_tnl *t = netdev_priv(dev);
+	enum skb_drop_reason reason;
 	int encap_limit = -1;
 	struct flowi6 fl6;
 	__u8 dsfield = 0;
@@ -807,54 +809,56 @@ static inline int ip6gre_xmit_ipv4(struct sk_buff *skb, struct net_device *dev)
 	err = gre_handle_offloads(skb, test_bit(IP_TUNNEL_CSUM_BIT,
 						t->parms.o_flags));
 	if (err)
-		return -1;
+		return SKB_DROP_REASON_NOMEM;
 
-	err = __gre6_xmit(skb, dev, dsfield, &fl6, encap_limit, &mtu,
-			  skb->protocol);
-	if (err != 0) {
+	reason = __gre6_xmit(skb, dev, dsfield, &fl6, encap_limit, &mtu,
+			     skb->protocol);
+	if (reason) {
 		/* XXX: send ICMP error even if DF is not set. */
-		if (err == -EMSGSIZE)
+		if (reason == SKB_DROP_REASON_PKT_TOO_BIG)
 			icmp_ndo_send(skb, ICMP_DEST_UNREACH, ICMP_FRAG_NEEDED,
 				      htonl(mtu));
-		return -1;
+		return reason;
 	}
 
-	return 0;
+	return SKB_NOT_DROPPED_YET;
 }
 
-static inline int ip6gre_xmit_ipv6(struct sk_buff *skb, struct net_device *dev)
+static inline enum skb_drop_reason ip6gre_xmit_ipv6(struct sk_buff *skb,
+						    struct net_device *dev)
 {
 	struct ip6_tnl *t = netdev_priv(dev);
 	struct ipv6hdr *ipv6h = ipv6_hdr(skb);
+	enum skb_drop_reason reason;
 	int encap_limit = -1;
 	struct flowi6 fl6;
 	__u8 dsfield = 0;
 	__u32 mtu;
-	int err;
 
 	if (ipv6_addr_equal(&t->parms.raddr, &ipv6h->saddr))
-		return -1;
+		return SKB_DROP_REASON_RECURSION_LIMIT;
 
 	if (!t->parms.collect_md &&
 	    prepare_ip6gre_xmit_ipv6(skb, dev, &fl6, &dsfield, &encap_limit))
-		return -1;
+		return SKB_DROP_REASON_IPV6_BAD_EXTHDR;
 
 	if (gre_handle_offloads(skb, test_bit(IP_TUNNEL_CSUM_BIT,
 					      t->parms.o_flags)))
-		return -1;
+		return SKB_DROP_REASON_NOMEM;
 
-	err = __gre6_xmit(skb, dev, dsfield, &fl6, encap_limit,
-			  &mtu, skb->protocol);
-	if (err != 0) {
-		if (err == -EMSGSIZE)
+	reason = __gre6_xmit(skb, dev, dsfield, &fl6, encap_limit,
+			     &mtu, skb->protocol);
+	if (reason) {
+		if (reason == SKB_DROP_REASON_PKT_TOO_BIG)
 			icmpv6_ndo_send(skb, ICMPV6_PKT_TOOBIG, 0, mtu);
-		return -1;
+		return reason;
 	}
 
-	return 0;
+	return SKB_NOT_DROPPED_YET;
 }
 
-static int ip6gre_xmit_other(struct sk_buff *skb, struct net_device *dev)
+static enum skb_drop_reason ip6gre_xmit_other(struct sk_buff *skb,
+					      struct net_device *dev)
 {
 	struct ip6_tnl *t = netdev_priv(dev);
 	int encap_limit = -1;
@@ -870,25 +874,28 @@ static int ip6gre_xmit_other(struct sk_buff *skb, struct net_device *dev)
 	err = gre_handle_offloads(skb, test_bit(IP_TUNNEL_CSUM_BIT,
 						t->parms.o_flags));
 	if (err)
-		return err;
-	err = __gre6_xmit(skb, dev, dsfield, &fl6, encap_limit, &mtu, skb->protocol);
+		return SKB_DROP_REASON_NOMEM;
 
-	return err;
+	return __gre6_xmit(skb, dev, dsfield, &fl6, encap_limit, &mtu,
+			   skb->protocol);
 }
 
 static netdev_tx_t ip6gre_tunnel_xmit(struct sk_buff *skb,
 	struct net_device *dev)
 {
+	enum skb_drop_reason reason = SKB_DROP_REASON_NOT_SPECIFIED;
 	struct ip_tunnel_info *tun_info = NULL;
 	struct ip6_tnl *t = netdev_priv(dev);
 	__be16 payload_protocol;
-	int ret;
 
-	if (!pskb_inet_may_pull(skb))
+	reason = pskb_inet_may_pull_reason(skb);
+	if (reason)
 		goto tx_err;
 
-	if (!ip6_tnl_xmit_ctl(t, &t->parms.laddr, &t->parms.raddr))
+	if (!ip6_tnl_xmit_ctl(t, &t->parms.laddr, &t->parms.raddr)) {
+		reason = SKB_DROP_REASON_DEV_READY;
 		goto tx_err;
+	}
 
 	if (t->parms.collect_md)
 		tun_info = skb_tunnel_info_txcheck(skb);
@@ -896,17 +903,17 @@ static netdev_tx_t ip6gre_tunnel_xmit(struct sk_buff *skb,
 	payload_protocol = skb_protocol(skb, true);
 	switch (payload_protocol) {
 	case htons(ETH_P_IP):
-		ret = ip6gre_xmit_ipv4(skb, dev);
+		reason = ip6gre_xmit_ipv4(skb, dev);
 		break;
 	case htons(ETH_P_IPV6):
-		ret = ip6gre_xmit_ipv6(skb, dev);
+		reason = ip6gre_xmit_ipv6(skb, dev);
 		break;
 	default:
-		ret = ip6gre_xmit_other(skb, dev);
+		reason = ip6gre_xmit_other(skb, dev);
 		break;
 	}
 
-	if (ret < 0)
+	if (reason)
 		goto tx_err;
 
 	return NETDEV_TX_OK;
@@ -915,13 +922,14 @@ tx_err:
 	if (!IS_ERR(tun_info))
 		DEV_STATS_INC(dev, tx_errors);
 	DEV_STATS_INC(dev, tx_dropped);
-	kfree_skb(skb);
+	kfree_skb_reason(skb, reason);
 	return NETDEV_TX_OK;
 }
 
 static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 					 struct net_device *dev)
 {
+	enum skb_drop_reason reason = SKB_DROP_REASON_NOT_SPECIFIED;
 	struct ip_tunnel_info *tun_info = NULL;
 	struct ip6_tnl *t = netdev_priv(dev);
 	struct dst_entry *dst = skb_dst(skb);
@@ -930,23 +938,29 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 	int encap_limit = -1;
 	__u8 dsfield = false;
 	struct flowi6 fl6;
-	int err = -EINVAL;
 	__be16 proto;
 	__u32 mtu;
 	int nhoff;
 
-	if (!pskb_inet_may_pull(skb))
+	reason = pskb_inet_may_pull_reason(skb);
+	if (reason)
 		goto tx_err;
 
-	if (!ip6_tnl_xmit_ctl(t, &t->parms.laddr, &t->parms.raddr))
+	if (!ip6_tnl_xmit_ctl(t, &t->parms.laddr, &t->parms.raddr)) {
+		reason = SKB_DROP_REASON_DEV_READY;
 		goto tx_err;
+	}
 
-	if (gre_handle_offloads(skb, false))
+	if (gre_handle_offloads(skb, false)) {
+		reason = SKB_DROP_REASON_NOMEM;
 		goto tx_err;
+	}
 
 	if (skb->len > dev->mtu + dev->hard_header_len) {
-		if (pskb_trim(skb, dev->mtu + dev->hard_header_len))
+		if (pskb_trim(skb, dev->mtu + dev->hard_header_len)) {
+			reason = SKB_DROP_REASON_NOMEM;
 			goto tx_err;
+		}
 		truncate = true;
 	}
 
@@ -966,8 +980,10 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 			truncate = true;
 	}
 
-	if (skb_cow_head(skb, dev->needed_headroom ?: t->hlen))
+	if (skb_cow_head(skb, dev->needed_headroom ?: t->hlen)) {
+		reason = SKB_DROP_REASON_NOMEM;
 		goto tx_err;
+	}
 
 	IPCB(skb)->flags = 0;
 
@@ -981,8 +997,10 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 
 		tun_info = skb_tunnel_info_txcheck(skb);
 		if (IS_ERR(tun_info) ||
-		    unlikely(ip_tunnel_info_af(tun_info) != AF_INET6))
+		    unlikely(ip_tunnel_info_af(tun_info) != AF_INET6)) {
+			reason = SKB_DROP_REASON_TUNNEL_TXINFO;
 			goto tx_err;
+		}
 
 		key = &tun_info->key;
 		memset(&fl6, 0, sizeof(fl6));
@@ -994,10 +1012,14 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 
 		dsfield = key->tos;
 		if (!test_bit(IP_TUNNEL_ERSPAN_OPT_BIT,
-			      tun_info->key.tun_flags))
+			      tun_info->key.tun_flags)) {
+			reason = SKB_DROP_REASON_TUNNEL_TXINFO;
 			goto tx_err;
-		if (tun_info->options_len < sizeof(*md))
+		}
+		if (tun_info->options_len < sizeof(*md)) {
+			reason = SKB_DROP_REASON_TUNNEL_TXINFO;
 			goto tx_err;
+		}
 		md = ip_tunnel_info_opts(tun_info);
 
 		tun_id = tunnel_id_to_key32(key->tun_id);
@@ -1015,6 +1037,7 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 					       truncate, false);
 			proto = htons(ETH_P_ERSPAN2);
 		} else {
+			reason = SKB_DROP_REASON_UNHANDLED_PROTO;
 			goto tx_err;
 		}
 	} else {
@@ -1025,11 +1048,16 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 						 &dsfield, &encap_limit);
 			break;
 		case htons(ETH_P_IPV6):
-			if (ipv6_addr_equal(&t->parms.raddr, &ipv6_hdr(skb)->saddr))
+			if (ipv6_addr_equal(&t->parms.raddr,
+					    &ipv6_hdr(skb)->saddr)) {
+				reason = SKB_DROP_REASON_RECURSION_LIMIT;
 				goto tx_err;
+			}
 			if (prepare_ip6gre_xmit_ipv6(skb, dev, &fl6,
-						     &dsfield, &encap_limit))
+						     &dsfield, &encap_limit)) {
+				reason = SKB_DROP_REASON_IPV6_BAD_EXTHDR;
 				goto tx_err;
+			}
 			break;
 		default:
 			memcpy(&fl6, &t->fl.u.ip6, sizeof(fl6));
@@ -1048,6 +1076,7 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 					       truncate, false);
 			proto = htons(ETH_P_ERSPAN2);
 		} else {
+			reason = SKB_DROP_REASON_UNHANDLED_PROTO;
 			goto tx_err;
 		}
 
@@ -1065,11 +1094,11 @@ static netdev_tx_t ip6erspan_tunnel_xmit(struct sk_buff *skb,
 		if (dst_mtu(dst) > mtu)
 			dst->ops->update_pmtu(dst, NULL, skb, mtu, false);
 	}
-	err = ip6_tnl_xmit(skb, dev, dsfield, &fl6, encap_limit, &mtu,
-			   NEXTHDR_GRE);
-	if (err != 0) {
+	reason = ip6_tnl_xmit(skb, dev, dsfield, &fl6, encap_limit, &mtu,
+			      NEXTHDR_GRE);
+	if (reason) {
 		/* XXX: send ICMP error even if DF is not set. */
-		if (err == -EMSGSIZE) {
+		if (reason == SKB_DROP_REASON_PKT_TOO_BIG) {
 			if (skb->protocol == htons(ETH_P_IP))
 				icmp_ndo_send(skb, ICMP_DEST_UNREACH,
 					      ICMP_FRAG_NEEDED, htonl(mtu));
@@ -1085,7 +1114,7 @@ tx_err:
 	if (!IS_ERR(tun_info))
 		DEV_STATS_INC(dev, tx_errors);
 	DEV_STATS_INC(dev, tx_dropped);
-	kfree_skb(skb);
+	kfree_skb_reason(skb, reason);
 	return NETDEV_TX_OK;
 }
 
