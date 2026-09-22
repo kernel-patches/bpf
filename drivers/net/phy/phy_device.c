@@ -1941,6 +1941,8 @@ error:
 
 error_module_put:
 	module_put(d->driver->owner);
+	/* The NULL below lets phy_probe() write this field. */
+	phydev->irq = bus->irq[phydev->mdio.addr];
 	phydev->is_genphy_driven = 0;
 	d->driver = NULL;
 error_put_device:
