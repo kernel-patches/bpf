@@ -312,6 +312,18 @@ v9fs_vfs_atomic_open_dotl(struct inode *dir, struct dentry *dentry,
 	v9fs_fid_add(dentry, &fid);
 	d_instantiate(dentry, inode);
 
+	if (!S_ISREG(inode->i_mode)) {
+		/*
+		 * Not a regular file.  The unopened fid is already on the
+		 * dentry.  Clunk the opened create fid and let the VFS call
+		 * ->open.
+		 */
+		p9_fid_put(ofid);
+		ofid = NULL;
+		file->f_mode |= FMODE_CREATED;
+		err = finish_no_open(file, NULL);
+		goto out;
+	}
 	/* Since we are opening a file, assign the open fid to the file */
 	err = finish_open(file, dentry, generic_file_open);
 	if (err)
