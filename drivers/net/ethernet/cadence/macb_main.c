@@ -1025,6 +1025,7 @@ static int macb_mii_probe(struct net_device *netdev)
 	struct macb *bp = netdev_priv(netdev);
 
 	bp->phylink_sgmii_pcs.ops = &macb_phylink_pcs_ops;
+	bp->phylink_sgmii_pcs.poll = true;
 	bp->phylink_usx_pcs.ops = &macb_phylink_usx_pcs_ops;
 
 	bp->phylink_config.dev = &netdev->dev;
