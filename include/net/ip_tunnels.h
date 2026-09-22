@@ -614,8 +614,17 @@ static inline u8 ip_tunnel_ecn_encap(u8 tos, const struct iphdr *iph,
 	return INET_ECN_encapsulate(tos, inner);
 }
 
-int __iptunnel_pull_header(struct sk_buff *skb, int hdr_len,
-			   __be16 inner_proto, bool raw_proto, bool xnet);
+enum skb_drop_reason
+__iptunnel_pull_header_reason(struct sk_buff *skb, int hdr_len,
+			      __be16 inner_proto, bool raw_proto, bool xnet);
+
+static inline int __iptunnel_pull_header(struct sk_buff *skb, int hdr_len,
+					 __be16 inner_proto, bool raw_proto,
+					 bool xnet)
+{
+	return __iptunnel_pull_header_reason(skb, hdr_len, inner_proto,
+					     raw_proto, xnet) ? -ENOMEM : 0;
+}
 
 static inline int iptunnel_pull_header(struct sk_buff *skb, int hdr_len,
 				       __be16 inner_proto, bool xnet)
