@@ -79,7 +79,7 @@ static int tcp_parse_descriptor(struct tcp_autolowat_cb *cb,
 		goto disable; /* FIN. */
 	if (copy_len > RPC_DESC_SIZE)
 		goto disable; /* always false, only for verifier. */
-	if (cb->rpc_desc_buf + cb->rpc_desc_buff_len >= &cb->rpc_desc_buf[RPC_DESC_SIZE])
+	if (cb->rpc_desc_buff_len >= RPC_DESC_SIZE)
 		goto disable; /* always false, only for verifier. */
 
 	err = bpf_dynptr_read(cb->rpc_desc_buf + cb->rpc_desc_buff_len,
