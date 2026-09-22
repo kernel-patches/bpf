@@ -2233,6 +2233,9 @@ static void diag_print_mod(struct bpf_verifier_env *env, const struct bpf_diag_h
 								   "resource release invalidated "
 								   "this value";
 		break;
+	case BPF_DIAG_MOD_FRAME_RELEASE:
+		reason = "the callback that owned this value returned";
+		break;
 	case BPF_DIAG_MOD_PKT_DATA_CHANGE:
 		reason = "packet data may have moved";
 		break;
