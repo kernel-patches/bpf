@@ -12,8 +12,8 @@ struct {
 	const char *err_msg;
 } cb_refs_tests[] = {
 	{ "underflow_prog", "R1 type=scalar expected=ptr_, trusted_ptr_, rcu_ptr_" },
-	{ "leak_prog", "Unreleased reference id=4 alloc_insn=3" }, /* alloc_insn=3{2,3} */
-	{ "nested_cb", "Unreleased reference id=4 alloc_insn=2" }, /* alloc_insn=2{4,5} */
+	{ "leak_prog", "Unreleased reference id=5 alloc_insn=3" }, /* alloc_insn=3{2,3} */
+	{ "nested_cb", "Unreleased reference id=5 alloc_insn=2" }, /* alloc_insn=2{4,5} */
 	{ "non_cb_transfer_ref", "Unreleased reference id=4 alloc_insn=1" }, /* alloc_insn=1{1,2} */
 };
 

@@ -707,11 +707,15 @@ static void mark_dynptr_stack_regs(struct bpf_verifier_env *env,
 	__mark_dynptr_reg(sreg2, type, false, id, parent_id);
 }
 
-static void mark_dynptr_cb_reg(struct bpf_verifier_env *env,
-			       struct bpf_reg_state *reg,
+/*
+ * A callback dynptr argument is valid only until the frame is popped, so
+ * setup_func_entry() assigns its id along with the frame reference.
+ */
+static void mark_dynptr_cb_reg(struct bpf_func_state *callee, u32 regno,
 			       enum bpf_dynptr_type type)
 {
-	__mark_dynptr_reg(reg, type, true, ++env->id_gen, 0);
+	__mark_dynptr_reg(&callee->regs[regno], type, true, 0, 0);
+	mark_frame_scoped_arg(callee, regno);
 }
 
 static int destroy_if_dynptr_stack_slot(struct bpf_verifier_env *env,
@@ -1474,14 +1478,13 @@ static int grow_stack_arg_slots(struct bpf_verifier_env *env,
 	return 0;
 }
 
-/* Acquire a pointer id from the env and update the state->refs to include
- * this new pointer reference.
- * On success, returns a valid pointer id to associate with the register
- * On failure, returns a negative errno.
+/* Append an entry to @state->refs and record the instruction that created it.
+ * The caller fills in the type and the id.
+ * On success, returns the new entry. On failure, returns NULL.
  */
-static struct bpf_reference_state *acquire_reference_state(struct bpf_verifier_env *env, int insn_idx)
+static struct bpf_reference_state *__acquire_reference_state(struct bpf_verifier_state *state,
+							     int insn_idx)
 {
-	struct bpf_verifier_state *state = env->cur_state;
 	int new_ofs = state->acquired_refs;
 	int err;
 
@@ -1491,6 +1494,12 @@ static struct bpf_reference_state *acquire_reference_state(struct bpf_verifier_e
 	state->refs[new_ofs].insn_idx = insn_idx;
 
 	return &state->refs[new_ofs];
+}
+
+static struct bpf_reference_state *acquire_reference_state(struct bpf_verifier_env *env,
+							   int insn_idx)
+{
+	return __acquire_reference_state(env->cur_state, insn_idx);
 }
 
 static int acquire_reference(struct bpf_verifier_env *env, int insn_idx, int parent_id)
@@ -1505,6 +1514,31 @@ static int acquire_reference(struct bpf_verifier_env *env, int insn_idx, int par
 	s->parent_id = parent_id;
 	bpf_diag_record_ref_acquire(env, insn_idx, s->id);
 	return s->id;
+}
+
+/* Acquire a reference owned by frame @frameno of @state */
+static int acquire_frame_reference(struct bpf_verifier_env *env, struct bpf_verifier_state *state,
+				   int insn_idx, u32 frameno)
+{
+	struct bpf_reference_state *s;
+
+	s = __acquire_reference_state(state, insn_idx);
+	if (!s)
+		return -ENOMEM;
+	s->type = REF_TYPE_FRAME;
+	s->id = ++env->id_gen;
+	s->frameno = frameno;
+	return s->id;
+}
+
+/*
+ * Declare that @regno in @callee holds a value that stops being valid once the
+ * frame is popped. setup_func_entry() turns each declaration into a frame-owned
+ * reference.
+ */
+void mark_frame_scoped_arg(struct bpf_func_state *callee, u32 regno)
+{
+	callee->frame_scoped_args |= BIT(regno);
 }
 
 static int acquire_lock_state(struct bpf_verifier_env *env, int insn_idx, enum ref_state_type type,
@@ -10135,7 +10169,8 @@ static int idstack_pop(struct bpf_idmap *idmap)
 }
 
 /* Release id and objects derived from it iteratively in a DFS manner */
-static int release_reference(struct bpf_verifier_env *env, int id)
+static int __release_reference(struct bpf_verifier_env *env, int id,
+			       enum bpf_diag_mod_reason reason)
 {
 	u32 mask = (1 << STACK_SPILL) | (1 << STACK_DYNPTR);
 	struct bpf_verifier_state *vstate = env->cur_state;
@@ -10175,7 +10210,7 @@ static int release_reference(struct bpf_verifier_env *env, int id)
 				continue;
 
 			/* Free objects derived from the current object */
-			if (reg->parent_id == id) {
+			if (reg->parent_id == id && reg->id != id) {
 				err = idstack_push(idstack, reg->id);
 				if (err)
 					return err;
@@ -10190,20 +10225,51 @@ static int release_reference(struct bpf_verifier_env *env, int id)
 
 				if (reg->dynptr.first_slot)
 					dyn_stack--;
-				bpf_diag_record_scrub(env, &dyn_stack[0].spilled_ptr,
-						      BPF_DIAG_MOD_REF_RELEASE);
-				bpf_diag_record_scrub(env, &dyn_stack[1].spilled_ptr,
-						      BPF_DIAG_MOD_REF_RELEASE);
+				bpf_diag_record_scrub(env, &dyn_stack[0].spilled_ptr, reason);
+				bpf_diag_record_scrub(env, &dyn_stack[1].spilled_ptr, reason);
 				invalidate_dynptr(env, dyn_stack);
 				continue;
 			}
-			bpf_diag_record_scrub(env, reg, BPF_DIAG_MOD_REF_RELEASE);
+			bpf_diag_record_scrub(env, reg, reason);
 			if (!stack || stack->slot_type[BPF_REG_SIZE - 1] == STACK_SPILL)
 				mark_reg_invalid(env, reg);
 		}));
 	}
 
 	return 0;
+}
+
+static int release_reference(struct bpf_verifier_env *env, int id)
+{
+	return __release_reference(env, id, BPF_DIAG_MOD_REF_RELEASE);
+}
+
+/* Find the first reference owned by frame @frameno, or 0 if it owns none. */
+static u32 frame_reference_id(struct bpf_verifier_state *state, u32 frameno)
+{
+	int i;
+
+	for (i = 0; i < state->acquired_refs; i++)
+		if (state->refs[i].type == REF_TYPE_FRAME &&
+		    state->refs[i].frameno == frameno)
+			return state->refs[i].id;
+
+	return 0;
+}
+
+static int release_frame_reference(struct bpf_verifier_env *env, int id)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+	int i;
+
+	for (i = 0; i < state->acquired_refs; i++) {
+		if (state->refs[i].type != REF_TYPE_FRAME || state->refs[i].id != id)
+			continue;
+		release_reference_state(state, i);
+		break;
+	}
+
+	return __release_reference(env, id, BPF_DIAG_MOD_FRAME_RELEASE);
 }
 
 static void invalidate_non_owning_refs(struct bpf_verifier_env *env)
@@ -10301,7 +10367,8 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 			    struct bpf_verifier_state *state)
 {
 	struct bpf_func_state *caller, *callee;
-	int err;
+	u16 scoped_args;
+	int err, regno;
 
 	if (state->curframe + 1 >= MAX_CALL_FRAMES) {
 		verbose(env, "the call stack of %d frames is too deep\n",
@@ -10332,6 +10399,30 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	err = set_callee_state_cb(env, caller, callee, callsite);
 	if (err)
 		goto err_out;
+
+	scoped_args = callee->frame_scoped_args;
+	callee->frame_scoped_args = 0;
+	for (regno = 0; regno < MAX_BPF_REG; regno++) {
+		int id;
+
+		if (!(scoped_args & BIT(regno)))
+			continue;
+
+		id = acquire_frame_reference(env, state, callsite, callee->frameno);
+		if (id < 0) {
+			err = id;
+			goto err_out;
+		}
+		/*
+		 * The value is its own lifetime anchor: there is no associated
+		 * object to borrow from, only the frame. parent_id = id here
+		 * covers both possible derived references:
+		 *  - through the id (e.g. dynptr slice)
+		 *  - through parent_id (e.g. dynptr clone)
+		 */
+		callee->regs[regno].id = id;
+		callee->regs[regno].parent_id = id;
+	}
 
 	/* only increment it after check_reg_arg() finished */
 	state->curframe++;
@@ -10559,6 +10650,10 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 		err = set_callee_state_cb(env, caller, callee, insn_idx);
 		if (err)
 			return err;
+
+		if (verifier_bug_if(callee->frame_scoped_args, env,
+				    "frame-scoped argument declared for async callback"))
+			return -EFAULT;
 
 		return 0;
 	}
@@ -10875,7 +10970,7 @@ static int set_user_ringbuf_callback_state(struct bpf_verifier_env *env,
 	 * callback_fn(const struct bpf_dynptr_t* dynptr, void *callback_ctx);
 	 */
 	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_0]);
-	mark_dynptr_cb_reg(env, &callee->regs[BPF_REG_1], BPF_DYNPTR_TYPE_LOCAL);
+	mark_dynptr_cb_reg(callee, BPF_REG_1, BPF_DYNPTR_TYPE_LOCAL);
 	callee->regs[BPF_REG_2] = caller->regs[BPF_REG_3];
 
 	/* unused */
@@ -11033,7 +11128,7 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	struct bpf_func_state *caller, *callee;
 	struct bpf_reg_state *r0;
 	bool in_callback_fn;
-	u32 i, nregs;
+	u32 i, nregs, id;
 	int err;
 
 	callee = state->frame[state->curframe];
@@ -11106,6 +11201,17 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 		verbose(env, "to caller at %d:\n", *insn_idx);
 		print_verifier_state(env, state, caller->frameno, true);
 	}
+
+	/*
+	 * Values the caller only guaranteed for the duration of the call stop
+	 * being valid here.
+	 */
+	while ((id = frame_reference_id(state, callee->frameno))) {
+		err = release_frame_reference(env, id);
+		if (err)
+			return err;
+	}
+
 	account_processed_insns(env, callee, caller);
 	/* clear everything in the callee. In case of exceptional exits using
 	 * bpf_throw, this will be done by copy_verifier_state for extra frames. */
@@ -11283,6 +11389,11 @@ static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exi
 		return 0;
 
 	for (i = 0; i < state->acquired_refs; i++) {
+		if (!exception_exit && state->refs[i].type == REF_TYPE_FRAME) {
+			verifier_bug(env, "frame %u reference id=%d alive at program exit",
+				     state->refs[i].frameno, state->refs[i].id);
+			return -EFAULT;
+		}
 		if (state->refs[i].type != REF_TYPE_PTR)
 			continue;
 		/* Allow struct_ops programs to return a referenced kptr back to
