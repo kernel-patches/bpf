@@ -164,6 +164,13 @@ scx_simple can be run in either global weighted vtime mode, or FIFO mode.
 Though very simple, in limited scenarios, this scheduler can perform reasonably
 well on single-socket systems with a unified L3 cache.
 
+## scx_priority
+
+A dual-queue priority scheduler that separates latency-sensitive and interactive
+tasks from normal/batch tasks. Tasks with higher priority (nice < 0) are queued
+to a dedicated high-priority DSQ with boosted time slices and drained first upon
+dispatch.
+
 ## scx_qmap
 
 Another simple, yet slightly more complex scheduler that provides an example of
