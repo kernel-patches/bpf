@@ -181,7 +181,12 @@ static void const_reg_xfer(struct bpf_verifier_env *env, struct const_arg_info *
 		int off = src->val + insn->off;
 		u64 val = 0;
 
+		/*
+		 * Values of insn_array map are addresses of jitted instructions,
+		 * which are not known until the program is jitted.
+		 */
 		if (!bpf_map_is_rdonly(map) || !map->ops->map_direct_value_addr ||
+		    map->map_type == BPF_MAP_TYPE_INSN_ARRAY ||
 		    off < 0 || off + size > map->value_size ||
 		    bpf_map_direct_read(map, off, size, &val, is_ldsx)) {
 			*dst = unknown;
